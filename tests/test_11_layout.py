@@ -73,8 +73,18 @@ def test_crear_cuerpo_importados_aplica_zona_a_todo_el_cuerpo(db, almacen):
 
 
 def test_crear_cuerpo_rechaza_zona_invalida(db, almacen):
+    # AVERIAS es zona válida desde 2026-09-03 (ver test_crear_cuerpo_averias_*
+    # abajo) — GENERAL sigue sin poder armarse por Mecanismo A, es el bucket
+    # sin clasificar que solo escribe el sync de Siesa.
     with pytest.raises(ValueError, match='tipo_zona debe ser una de'):
-        svc.crear_cuerpo(almacen.id, 'A', 1, 1, 1, 'AVERIAS')
+        svc.crear_cuerpo(almacen.id, 'A', 1, 1, 1, 'GENERAL')
+
+
+def test_crear_cuerpo_averias_aplica_zona_a_todo_el_cuerpo(db, almacen):
+    creadas = svc.crear_cuerpo(almacen.id, 'A', 1, 1, 2, 'AVERIAS')
+    codigos = sorted(u.codigo for u in creadas)
+    assert codigos == ['AVE-A1-C01-E01-H01', 'AVE-A1-C01-E02-H01']
+    assert all(u.tipo_zona == 'AVERIAS' for u in creadas)
 
 
 def test_crear_cuerpo_crea_varios_huecos_por_entrepano(db, almacen):
@@ -164,13 +174,17 @@ def test_editar_cuerpo_conserva_tipo_mueble_al_remodular(db, almacen):
     assert creadas[0].tipo == 'vitrina'
 
 
-def test_crear_ubicacion_averias_numera_secuencial(db, almacen):
-    a1 = svc.crear_ubicacion_averias(almacen.id)
-    a2 = svc.crear_ubicacion_averias(almacen.id)
-    assert a1.codigo == 'AVE1'
-    assert a2.codigo == 'AVE2'
-    assert a1.tipo_zona == 'AVERIAS'
-    assert a1.origen == 'MANUAL'
+def test_crear_cuerpo_averias_estiba_tiene_ubicacion_real(db, almacen):
+    # Antes (retirado 2026-09-03) AVERIAS se creaba anónima (AVE1, AVE2...,
+    # sin pasillo). El averiado es dinero trazable y muchas veces se
+    # devuelve — necesita dirección física real, igual que cualquier otra
+    # zona, no un simple contador.
+    ub = svc.crear_cuerpo(almacen.id, 'A', 1, 1, 1, 'AVERIAS', tipo_mueble='estiba')[0]
+    assert ub.codigo == 'AVE-A1-EST01'
+    assert ub.tipo_zona == 'AVERIAS'
+    assert ub.tipo == 'estiba'
+    assert ub.pasillo == 'A' and ub.fila == 1
+    assert ub.origen == 'MANUAL'
 
 
 def test_asignar_producto_picking_ok(db, almacen, producto):

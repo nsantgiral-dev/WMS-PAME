@@ -10,9 +10,16 @@ real (JWT incluido), no contra el servicio en aislamiento.
 
 El caso que más importa demostrar: una vitrina/estiba con pasillo asignado
 participa en el orden de recorrido físico igual que un pasillo real — no cae
-al fondo de la cola como GENERAL/AVERIAS (ver PickingService.orden_ruta_fisica,
+al fondo de la cola como GENERAL (ver PickingService.orden_ruta_fisica,
 nullslast() por eje). Es la tensión que motivó el diseño (ver conversación:
 "ruteo físico vs. presentación").
+
+AVERIAS entró al mismo mecanismo el 2026-09-03 — se retiró la creación
+anónima (AVE1, AVE2..., sin pasillo) porque el averiado es dinero trazable y
+muchas veces se devuelve. Los tests de esa sección verifican tanto la
+creación con ubicación real como el efecto en
+PickingService._ubicacion_averias_disponible(), que dejó de parsear un
+número de serie del código (ya no existe) y ahora ordena por fecha_creacion.
 """
 import pytest
 from app.extensions import db as _db
@@ -143,25 +150,32 @@ def test_e2e_vitrina_participa_en_orden_de_ruta_fisica_no_va_siempre_al_final(cl
     por pasillo/fila/cuerpo/nivel/hueco con nullslast() — cualquier ubicación
     SIN pasillo cae siempre al final. Una vitrina/estiba creada con este
     mecanismo SÍ tiene pasillo (aquí 'B', entre el pasillo real 'A' y el
-    AVERIAS numerado sin pasillo), así que debe intercalarse en la ruta según
-    su posición, no quedar relegada como GENERAL/AVERIAS.
+    bucket GENERAL sin pasillo, que solo escribe el sync de Siesa), así que
+    debe intercalarse en la ruta según su posición, no quedar relegada.
+
+    AVERIAS ya no sirve como control de "sin pasillo": desde 2026-09-03
+    también entra por este mismo mecanismo y siempre trae dirección real
+    (ver test_crear_cuerpo_averias_estiba_tiene_ubicacion_real en
+    test_11_layout.py) — GENERAL es hoy el único ejemplo real de ubicación sin
+    dirección física en este almacén.
     """
     # Cuerpo real de estantería en pasillo A
     cuerpo = _crear_cuerpo_http(client, jwt_token_admin, almacen.id, pasillo='A').get_json()['ubicaciones'][0]
     # Vitrina en pasillo B (después de A en el orden de recorrido)
     vitrina = _crear_cuerpo_http(client, jwt_token_admin, almacen.id, pasillo='B', tipo_mueble='vitrina').get_json()['ubicaciones'][0]
-    # AVERIAS numerada — sin pasillo, debe seguir cayendo al final
-    averias = client.post(
-        f'/api/almacenes/{almacen.id}/ubicaciones/averias', json={},
-        headers={'Authorization': f'Bearer {jwt_token_admin}'},
-    ).get_json()
-    ub_averias = Ubicacion.query.filter_by(codigo=averias['codigo']).first()
-    assert ub_averias.pasillo is None  # confirma la premisa del test
+    # Bucket GENERAL — sin pasillo, debe seguir cayendo al final (mismo bucket que escribe ubicaciones_sync_service)
+    ub_general = Ubicacion(
+        codigo='SIESA-GENERAL', almacen_id=almacen.id, tipo_zona='GENERAL',
+        origen='SIESA', activo=True,
+    )
+    _db.session.add(ub_general)
+    _db.session.commit()
+    assert ub_general.pasillo is None  # confirma la premisa del test
 
     # Una TareaPicking real por cada ubicación, creadas fuera de orden a propósito
     _db.session.add_all([
-        TareaPicking(codigo='PICK-E2E-AVERIAS', producto_id=producto.id, cantidad_solicitada=1,
-                     ubicacion_id=ub_averias.id, almacen_id=almacen.id, estado='PENDIENTE'),
+        TareaPicking(codigo='PICK-E2E-GENERAL', producto_id=producto.id, cantidad_solicitada=1,
+                     ubicacion_id=ub_general.id, almacen_id=almacen.id, estado='PENDIENTE'),
         TareaPicking(codigo='PICK-E2E-VITRINA', producto_id=producto.id, cantidad_solicitada=1,
                      ubicacion_id=vitrina['id'], almacen_id=almacen.id, estado='PENDIENTE'),
         TareaPicking(codigo='PICK-E2E-CUERPO', producto_id=producto.id, cantidad_solicitada=1,
@@ -178,8 +192,8 @@ def test_e2e_vitrina_participa_en_orden_de_ruta_fisica_no_va_siempre_al_final(cl
     )
     codigos_en_orden = [t.codigo for t in fila_ordenada]
 
-    # Pasillo A (Cuerpo real) antes que pasillo B (vitrina) antes que sin-pasillo (AVERIAS al final).
-    assert codigos_en_orden == ['PICK-E2E-CUERPO', 'PICK-E2E-VITRINA', 'PICK-E2E-AVERIAS']
+    # Pasillo A (Cuerpo real) antes que pasillo B (vitrina) antes que sin-pasillo (GENERAL al final).
+    assert codigos_en_orden == ['PICK-E2E-CUERPO', 'PICK-E2E-VITRINA', 'PICK-E2E-GENERAL']
 
 
 def test_e2e_editar_cuerpo_sobre_vitrina_conserva_codigo_y_tipo_por_http(client, jwt_token_admin, almacen):
@@ -203,3 +217,54 @@ def test_e2e_rechaza_tipo_mueble_invalido_por_http(client, jwt_token_admin, alma
     resp = _crear_cuerpo_http(client, jwt_token_admin, almacen.id, tipo_mueble='exhibidor')
     assert resp.status_code == 400
     assert 'tipo_mueble' in resp.get_json()['error']
+
+
+# ── AVERIAS con ubicación real (retirada la creación anónima, 2026-09-03) ────
+
+def test_e2e_crear_averias_por_http_ya_no_existe_endpoint_anonimo(client, jwt_token_admin, almacen):
+    resp = client.post(
+        f'/api/almacenes/{almacen.id}/ubicaciones/averias', json={},
+        headers={'Authorization': f'Bearer {jwt_token_admin}'},
+    )
+    assert resp.status_code == 404
+
+
+def test_e2e_crear_averias_por_http_exige_pasillo_como_cualquier_zona(client, jwt_token_admin, almacen):
+    resp = _crear_cuerpo_http(
+        client, jwt_token_admin, almacen.id,
+        pasillo='D', tipo_zona='AVERIAS', tipo_mueble='estiba',
+    )
+    assert resp.status_code == 201, resp.get_json()
+    ub = resp.get_json()['ubicaciones'][0]
+    assert ub['codigo'] == 'AVE-D1-EST01'
+    assert ub['tipo_zona'] == 'AVERIAS'
+    assert ub['pasillo'] == 'D'
+
+    layout_resp = client.get(
+        f'/api/almacenes/{almacen.id}/layout',
+        headers={'Authorization': f'Bearer {jwt_token_admin}'},
+    )
+    encontrada = next(u for u in layout_resp.get_json()['ubicaciones'] if u['codigo'] == 'AVE-D1-EST01')
+    assert encontrada['pasillo'] == 'D'  # trazable: se sabe exactamente dónde quedó lo averiado
+
+
+def test_e2e_averia_registrada_durante_picking_va_a_la_averias_mas_antigua(client, jwt_token_admin, almacen, producto):
+    """
+    Simula lo que pasa cuando un operario marca mercancía averiada durante el
+    picking: PickingService._ubicacion_averias_disponible() elige la AVERIAS
+    más antigua con cupo. Antes ordenaba parseando el número al final del
+    código (AVE1, AVE2...); ahora que el código es AVE-{pasillo}...-EST{n}
+    (sin número de serie), el orden pasó a fecha_creacion — este test prueba
+    que sigue eligiendo la más vieja primero, no que empatan todas en 0.
+    """
+    vieja = _crear_cuerpo_http(
+        client, jwt_token_admin, almacen.id, pasillo='D', tipo_zona='AVERIAS', tipo_mueble='estiba',
+    ).get_json()['ubicaciones'][0]
+    nueva = _crear_cuerpo_http(
+        client, jwt_token_admin, almacen.id, pasillo='E', tipo_zona='AVERIAS', tipo_mueble='estiba',
+    ).get_json()['ubicaciones'][0]
+
+    elegida = PickingService._ubicacion_averias_disponible(almacen.id, cantidad_necesaria=5)
+    assert elegida is not None
+    assert elegida.id == vieja['id']
+    assert elegida.id != nueva['id']

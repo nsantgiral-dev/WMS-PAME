@@ -168,7 +168,7 @@ def crear_cuerpo(id):
     bloque. Un Cuerpo es 100% de una sola Zona (tipo_zona) — PICKING, RESERVA e
     IMPORTADOS se arman como Cuerpos separados, no mezclados por Nivel dentro del mismo Cuerpo.
     Payload: { pasillo, fila, cuerpo, cantidad_entrepanos, tipo_zona, huecos_por_nivel?, tipo_mueble? }
-    tipo_zona debe ser PICKING, RESERVA o IMPORTADOS. huecos_por_nivel es una lista de N
+    tipo_zona debe ser PICKING, RESERVA, AVERIAS o IMPORTADOS. huecos_por_nivel es una lista de N
     enteros (uno por entrepaño, N=cantidad_entrepanos, en orden de Nivel 1..N);
     si no viene, cada entrepaño nace con 1 hueco.
     tipo_mueble (default 'estanteria') puede ser 'vitrina' o 'estiba' — mueble
@@ -390,18 +390,6 @@ def eliminar_ubicacion(ubicacion_id):
         return jsonify(resultado), 200
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
-
-
-@almacenes_bp.route('/<int:id>/ubicaciones/averias', methods=['POST'])
-@jwt_required()
-def crear_averias(id):
-    """Crea la siguiente ubicación AVERIAS disponible (AVE1, AVE2...)."""
-    if not _es_admin_o_jefe():
-        return jsonify({'error': 'Solo admin o jefe de almacén'}), 403
-    Almacen.query.get_or_404(id)
-    data = request.get_json() or {}
-    ub = layout_service.crear_ubicacion_averias(id, data.get('capacidad_maxima'))
-    return jsonify(ub.to_dict()), 201
 
 
 @almacenes_bp.route('/ubicaciones/<int:ubicacion_id>', methods=['PATCH'])

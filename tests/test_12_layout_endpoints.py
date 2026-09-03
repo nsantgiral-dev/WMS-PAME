@@ -64,9 +64,11 @@ def test_crear_cuerpo_endpoint_reserva(client, jwt_token_admin, almacen):
 
 
 def test_crear_cuerpo_endpoint_rechaza_zona_invalida(client, jwt_token_admin, almacen):
+    # AVERIAS es zona válida desde 2026-09-03 — GENERAL sigue sin poder
+    # armarse por este endpoint, es el bucket sin clasificar del sync de Siesa.
     resp = client.post(
         f'/api/almacenes/{almacen.id}/ubicaciones/cuerpo',
-        json={'pasillo': 'A', 'fila': 1, 'cuerpo': 1, 'cantidad_entrepanos': 1, 'tipo_zona': 'AVERIAS'},
+        json={'pasillo': 'A', 'fila': 1, 'cuerpo': 1, 'cantidad_entrepanos': 1, 'tipo_zona': 'GENERAL'},
         headers={'Authorization': f'Bearer {jwt_token_admin}'},
     )
     assert resp.status_code == 400
@@ -108,14 +110,24 @@ def test_crear_cuerpo_rechaza_fila_invalida(client, jwt_token_admin, almacen):
     assert 'fila' in resp.get_json()['error']
 
 
-def test_crear_averias_endpoint(client, jwt_token_admin, almacen):
+def test_crear_cuerpo_endpoint_averias_exige_ubicacion_real(client, jwt_token_admin, almacen):
+    # AVERIAS entra por el mismo endpoint que Picking/Reserva/Importados desde
+    # 2026-09-03 — ya no existe /ubicaciones/averias (creación anónima AVE1,
+    # AVE2... sin pasillo).
     resp = client.post(
-        f'/api/almacenes/{almacen.id}/ubicaciones/averias',
-        json={},
+        f'/api/almacenes/{almacen.id}/ubicaciones/cuerpo',
+        json={
+            'pasillo': 'A', 'fila': 1, 'cuerpo': 1, 'cantidad_entrepanos': 1,
+            'tipo_zona': 'AVERIAS', 'tipo_mueble': 'estiba',
+        },
         headers={'Authorization': f'Bearer {jwt_token_admin}'},
     )
     assert resp.status_code == 201
-    assert resp.get_json()['codigo'] == 'AVE1'
+    ubs = resp.get_json()['ubicaciones']
+    assert len(ubs) == 1
+    assert ubs[0]['codigo'] == 'AVE-A1-EST01'
+    assert ubs[0]['tipo_zona'] == 'AVERIAS'
+    assert ubs[0]['pasillo'] == 'A'
 
 
 def test_asignar_y_reclasificar_endpoint(client, jwt_token_admin, almacen, producto):

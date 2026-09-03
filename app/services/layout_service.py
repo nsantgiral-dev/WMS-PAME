@@ -11,11 +11,17 @@ Dirección física de 5 ejes: Pasillo -> Fila (1/2, lado del pasillo) -> Cuerpo
 Piezas:
   1. letras_disponibles()   — pasillos: A-Z y luego AA, AB... (revelado progresivo)
   2. crear_cuerpo()         — Mecanismo A: entrepaños+huecos de un Cuerpo, en bloque,
-                              con Zona sugerida por Nivel (piso->PICKING, alto->RESERVA)
-  3. crear_ubicacion_averias() — AVE1, AVE2... numeradas, fuera de la grilla pasillo/fila
-  4. asignar_producto()     — Mecanismo B: bind ubicación↔SKU, con la regla 1:1 en PICKING/IMPORTADOS
-  5. reclasificar_ubicacion() — cambiar zona/capacidad/activo/slot, con guardarraíles
-  6. importar_excel()       — Mecanismo A, opción masiva (reusa asignar_producto)
+                              con Zona sugerida por Nivel (piso->PICKING, alto->RESERVA).
+                              AVERIAS entra por el mismo mecanismo desde 2026-09-03 —
+                              antes se creaba anónima (AVE1, AVE2..., sin pasillo real);
+                              se retiró porque el averiado es dinero trazable y
+                              muchas veces se devuelve — necesita ubicación real, no
+                              un contador. Ver _ubicacion_averias_disponible() en
+                              picking_service.py, el único consumidor automático (solo
+                              LEE ubicaciones existentes, nunca crea una).
+  3. asignar_producto()     — Mecanismo B: bind ubicación↔SKU, con la regla 1:1 en PICKING/IMPORTADOS
+  4. reclasificar_ubicacion() — cambiar zona/capacidad/activo/slot, con guardarraíles
+  5. importar_excel()       — Mecanismo A, opción masiva (reusa asignar_producto)
 
 editar_fila()/eliminar_fila() operan sobre el campo legado 'estante' (fila
 plana previa a este rediseño) — siguen intactas para gestionar en bloque las
@@ -102,7 +108,7 @@ def letras_disponibles(almacen_id: int, minimo_a_mostrar: int = 5):
 
 ZONAS_VALIDAS = ('PICKING', 'RESERVA', 'AVERIAS', 'IMPORTADOS')
 _PREFIJO_ZONA = {'PICKING': 'PIK', 'RESERVA': 'RES', 'AVERIAS': 'AVE', 'IMPORTADOS': 'IMP'}
-_ZONAS_CUERPO = ('PICKING', 'RESERVA', 'IMPORTADOS')  # zonas que se arman con Mecanismo A (Cuerpo completo)
+_ZONAS_CUERPO = ('PICKING', 'RESERVA', 'AVERIAS', 'IMPORTADOS')  # zonas que se arman con Mecanismo A (Cuerpo completo)
 # Zonas donde el Hueco nunca se comparte: 1 SKU <-> 1 ubicación, pool de
 # exclusividad independiente por zona (un SKU puede tener a la vez un slot en
 # PICKING y otro en IMPORTADOS — no compiten entre sí, cada zona es su propia
@@ -140,10 +146,14 @@ def crear_cuerpo(almacen_id: int, pasillo: str, fila: int, cuerpo: int,
     cada Hueco se amarran después, uno por uno, con asignar_producto().
 
     Un Cuerpo es 100% de una sola Zona (tipo_zona) — todos sus Entrepaños la
-    heredan. PICKING, RESERVA e IMPORTADOS se arman como Cuerpos separados
-    (Crear picking / Crear reserva / Crear importados en el front), no
-    mezclados por Nivel dentro del mismo Cuerpo: así cada Cuerpo se revisa
-    completo en una sola pestaña de zona.
+    heredan. PICKING, RESERVA, AVERIAS e IMPORTADOS se arman como Cuerpos
+    separados (Crear picking / Crear reserva / Crear avería / Crear
+    importados en el front), no mezclados por Nivel dentro del mismo Cuerpo:
+    así cada Cuerpo se revisa completo en una sola pestaña de zona. AVERIAS
+    entró aquí el 2026-09-03 — antes se creaba anónima (AVE1, AVE2..., sin
+    pasillo real, ver historial de este módulo); el averiado es dinero
+    trazable y muchas veces se devuelve, así que necesita ubicación real
+    igual que cualquier otra zona, no un simple contador.
 
     tipo_mueble='vitrina'/'estiba' arma un mueble suelto de una sola posición
     en vez de un Cuerpo de estantería: fuerza cantidad_entrepanos=1 y
@@ -612,38 +622,6 @@ def eliminar_fila(almacen_id: int, pasillo: str, fila: int, forzar: bool = False
         'eliminadas': eliminadas,
         'bloqueadas': bloqueadas,
     }
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-# 3. AVERIAS — numeradas (AVE1, AVE2...), fuera de la grilla pasillo/fila
-# ──────────────────────────────────────────────────────────────────────────────
-
-def crear_ubicacion_averias(almacen_id: int, capacidad_maxima: int = None):
-    """Crea la siguiente ubicación AVERIAS disponible (AVE1, AVE2...)."""
-    existentes = Ubicacion.query.filter_by(
-        almacen_id=almacen_id, tipo_zona='AVERIAS'
-    ).all()
-
-    numeros = []
-    for ub in existentes:
-        m = re.match(r'^AVE(\d+)$', ub.codigo, re.IGNORECASE)
-        if m:
-            numeros.append(int(m.group(1)))
-    siguiente = (max(numeros) + 1) if numeros else 1
-    codigo = f'AVE{siguiente}'
-
-    ub = Ubicacion(
-        codigo=codigo,
-        almacen_id=almacen_id,
-        tipo_zona='AVERIAS',
-        tipo='estanteria',
-        capacidad_maxima=capacidad_maxima,
-        origen='MANUAL',
-        activo=True,
-    )
-    db.session.add(ub)
-    db.session.commit()
-    return ub
 
 
 # ──────────────────────────────────────────────────────────────────────────────

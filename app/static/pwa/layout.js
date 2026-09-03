@@ -301,11 +301,14 @@ let _layoutCuerpoTipoMueble = 'estanteria'; // 'estanteria' | 'vitrina' | 'estib
 
 const _TIPO_MUEBLE_LABEL = { estanteria: 'Cuerpo', vitrina: 'Vitrina', estiba: 'Estiba' };
 // Vitrinas solo tienen sentido en PICKING (mueble de exhibición al que el
-// operario pickea directo); estibas en el suelo aplican a PICKING y RESERVA;
-// IMPORTADOS no tiene ninguna reportada hoy — solo Cuerpo de estantería.
+// operario pickea directo); estibas en el suelo aplican a PICKING, RESERVA y
+// AVERIAS; IMPORTADOS no tiene ninguna reportada hoy — solo Cuerpo de estantería.
 const _TIPOS_MUEBLE_POR_ZONA = {
   PICKING: ['estanteria', 'vitrina', 'estiba'],
   RESERVA: ['estanteria', 'estiba'],
+  // Sin vitrina: AVERIAS es un área de cuarentena, no de exhibición — solo
+  // estantería real o estiba en el piso, igual que RESERVA.
+  AVERIAS: ['estanteria', 'estiba'],
   IMPORTADOS: ['estanteria'],
 };
 
@@ -818,18 +821,11 @@ async function layoutGuardarEliminarFila(forzar) {
   }
 }
 
-// ── AVERIAS numeradas ─────────────────────────────────────────────────────
-
-/** Create the next numbered AVERIAS ubicacion for the current almacen. */
-async function layoutCrearAverias() {
-  try {
-    const d = await post(`/api/almacenes/${ALMACEN_ID}/ubicaciones/averias`, {});
-    alerta(`${d.codigo} creada`, 'ok');
-    layoutCargarUbicaciones();
-  } catch (e) {
-    alerta(e.message || 'Error creando la ubicación de averías', 'error');
-  }
-}
+// AVERIAS ya no tiene mecanismo propio de creación — entra por
+// layoutAbrirModalCuerpo('AVERIAS'), el mismo wizard de Picking/Reserva/
+// Importados (ver _TIPOS_MUEBLE_POR_ZONA.AVERIAS). Antes se creaba anónima
+// (AVE1, AVE2..., sin pasillo real) — se retiró el 2026-09-03: el averiado
+// es dinero trazable y muchas veces se devuelve, necesita ubicación real.
 
 // ── Modal: Asignar SKU (Mecanismo B) ─────────────────────────────────────────
 

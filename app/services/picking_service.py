@@ -22,21 +22,21 @@ class PickingService:
     def _ubicacion_averias_disponible(almacen_id: int, cantidad_necesaria: int):
         """
         Recorre las ubicaciones AVERIAS del almacén en orden de llenado
-        (AVE1, AVE2...) y devuelve la primera con capacidad disponible.
-        Si ninguna tiene capacidad_maxima configurada, no bloquea el registro
-        de la avería — usa la primera del orden como respaldo.
+        (la más antigua primero) y devuelve la primera con capacidad
+        disponible. Si ninguna tiene capacidad_maxima configurada, no bloquea
+        el registro de la avería — usa la primera del orden como respaldo.
+
+        Orden por fecha_creacion, no por el código: desde que AVERIAS se crea
+        con dirección física real (layout_service.crear_cuerpo(), ver
+        layout_service.py) el código ya no trae un número de serie al final
+        (era 'AVE1', 'AVE2'...; ahora es 'AVE-A1-C01-E01-H01' o
+        'AVE-A1-EST01') — parsear un sufijo numérico que ya no existe habría
+        dejado esta función sin orden real (todo empataría en 0).
         """
-        import re
-
-        def _orden(ub):
-            m = re.match(r'^AVE(\d+)', ub.codigo, re.IGNORECASE)
-            return (int(m.group(1)) if m else 0, ub.codigo)
-
-        candidatas = sorted(
-            Ubicacion.query.filter_by(
-                almacen_id=almacen_id, tipo_zona='AVERIAS', activo=True
-            ).all(),
-            key=_orden,
+        candidatas = (
+            Ubicacion.query.filter_by(almacen_id=almacen_id, tipo_zona='AVERIAS', activo=True)
+            .order_by(Ubicacion.fecha_creacion.asc())
+            .all()
         )
 
         for ub in candidatas:
