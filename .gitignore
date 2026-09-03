@@ -48,3 +48,11 @@ migrations/versions/__pycache__/
 
 # venv paralelo para validar contra el Python de produccion (3.12)
 venv312/
+
+# ── Borradores y respaldos locales (2026-09-02) ──────────────────────────────
+# `scratch_refactor.py` reescribe `app/__init__.py` y estuvo 300+ líneas en la
+# raíz sin que ningún patrón lo cubriera: los de arriba son `/fix_`, `/debug_`,
+# `/diag_`, `/reset_`, `/check_` — ninguno hace match con `scratch_`. Un
+# `git add -A` lo habria commiteado. Lo encontró la auditoría, no una corrida.
+/scratch_*.py
+*.bak

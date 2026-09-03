@@ -11,6 +11,7 @@ advertencia NUEVA y real. Eso se arregló declarando el filtro en pytest.ini.
 Este archivo evita que la deuda siga creciendo mientras tanto.
 """
 import os
+import pathlib
 import re
 
 import pytest
@@ -133,10 +134,29 @@ class TestNadaCriticoQuedaFueraDelRepo:
         return set(out.stdout.split())
 
     def test_todo_scripts_esta_en_el_repo(self):
-        """scripts/ es código versionado, no borrador local."""
+        """scripts/ es código versionado, no borrador local.
+
+        **Recursivo y no solo `.py`, desde el 2026-09-02.** La versión anterior
+        hacía `os.listdir` sobre la raíz de `scripts/` y filtraba por extensión,
+        así que no veía dos cosas:
+
+        · `scripts/mutacion/*.py` — un subdirectorio entero;
+        · `scripts/verificar_flota_postgres.sh`, que llevaba días en disco y
+          fuera del repo **sin que este guard dijera nada**.
+
+        El enunciado del test era «scripts/ es código versionado» y lo que medía
+        era «los `.py` de primer nivel». Es la misma forma que `_BODEGA_CO_MAP`:
+        el detector con la lista de sitios escrita a mano no ve el sitio nuevo.
+        Lo destapó agregar un subdirectorio, no una corrida.
+        """
         tracked = self._tracked()
-        en_disco = {f'scripts/{a}' for a in os.listdir(os.path.join(_RAIZ, 'scripts'))
-                    if a.endswith('.py')}
+        raiz = pathlib.Path(_RAIZ)
+        en_disco = {
+            str(f.relative_to(raiz))
+            for f in (raiz / 'scripts').rglob('*')
+            if f.is_file() and f.suffix in ('.py', '.sh')
+            and '__pycache__' not in f.parts
+        }
         fuera = sorted(en_disco - tracked)
         assert not fuera, (
             f'\n{len(fuera)} script(s) existen en disco pero NO en el repo:\n'

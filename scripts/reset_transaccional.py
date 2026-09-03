@@ -61,6 +61,18 @@ OPERATIVAS = [
     'devoluciones_cliente',
     'items_packing',
     'bultos',
+    # `entregas_geo` apunta a `recaudos_entrega`, así que va ANTES — misma
+    # forma que ya costó tres veces (`devoluciones_cliente`, `sesiones_conteo`,
+    # las cuatro de flota): el DELETE del padre falla por FK y el `except` del
+    # bucle lo imprime como un aviso entre otros.
+    #
+    # **Es operativa, y su maestro NO.** Una fila de acá dice «el camión estuvo
+    # en este punto el día que se hizo esta entrega de prueba»: es registro del
+    # ensayo, como las lecturas de odómetro. `clientes_geo` —dónde queda cada
+    # tienda— está en PROTEGIDAS_MAESTRAS, y por eso son dos tablas: si fueran
+    # una sola, el corte obligaría a elegir entre borrar el ensayo y conservar
+    # el activo, y cualquiera de las dos elecciones está mal.
+    'entregas_geo',
     'recaudos_entrega',
     'tareas_packing',
     # `sesiones_conteo` apunta a `tareas_picking` (la tarea que genera un
@@ -93,6 +105,101 @@ OPERATIVAS = [
     # ya compensaba este orden deshabilitando triggers en Postgres; con el
     # orden correcto ese apaño queda de más, pero se conserva —quitarlo el día
     # del corte es una decisión aparte.
+    # Orden por FK, hijos antes que padres. Las cuatro de abajo llegaron el
+    # 2026-09-02 y **las encontró el trinquete, no una corrida**: entraron a
+    # los modelos sin pasar por ninguna lista, y una tabla sin clasificar
+    # sobrevive al corte con los datos del ensayo. Es el tercer episodio de la
+    # misma forma (antes: `devoluciones_cliente` y `sesiones_conteo`).
+    #
+    # `flota_respuesta_item` apunta a `flota_inspeccion` Y a `flota_hallazgo`;
+    # `flota_tanqueo` a `flota_gasto`. Los cuatro apuntan además a
+    # `flota_lectura_odometro`, que se vacía más abajo.
+    'flota_respuesta_item',
+    'flota_inspeccion',
+    # ── Taller (agregado 2026-09-02, fase 2) ───────────────────────────────
+    # `flota_intervencion` apunta a `flota_gasto` Y a `flota_orden_trabajo`, así
+    # que va antes que las dos. `flota_orden_trabajo` apunta a `flota_hallazgo`
+    # y a `flota_lectura_odometro`, así que va antes que ésas.
+    #
+    # Es el mismo orden por FK que ya costó tres veces en este archivo
+    # (`devoluciones_cliente`, `sesiones_conteo`, las cuatro de flota del
+    # 2026-09-02): el DELETE del padre falla por clave foránea, el `except` del
+    # bucle lo imprime como un aviso más, y el corte termina a medias.
+    #
+    # Las dos son OPERATIVAS y no expediente: una visita al taller durante el
+    # ensayo es un registro de la prueba. El expediente del vehículo son la
+    # ficha y los documentos, que siguen protegidos abajo.
+    'flota_intervencion',
+    # ── Llantas (agregado 2026-09-02, fase 4) ──────────────────────────────
+    # **La clasificación se pensó tabla por tabla, y las dos NO van juntas.**
+    #
+    # `flota_montaje_llanta` es OPERATIVA: cada fila dice «esta llanta estuvo en
+    # esta posición de este camión entre estos dos kilometrajes», y los
+    # kilometrajes del ensayo son del ensayo. Se vacía.
+    #
+    # `flota_llanta` es MAESTRA y está abajo, en PROTEGIDAS_MAESTRAS. **No es
+    # registro de una prueba: es un activo comprado que existe físicamente.** El
+    # día después del corte las 24 llantas siguen atornilladas a los camiones, y
+    # su código —lo único que las distingue de otras cinco iguales— está marcado
+    # en el caucho. Borrarlas obliga a recorrer el patio leyendo flancos, que es
+    # el mismo argumento por el que `flota_ficha_tecnica` está protegida: la
+    # segunda vez nadie la hace.
+    #
+    # La consecuencia de partirlas se declara en vez de disimularse: después del
+    # corte las llantas quedan en el catálogo y **sin montaje**, o sea que el
+    # sistema dirá que ninguna está puesta. Eso NO queda en silencio — es
+    # exactamente lo que cuenta `posiciones_sin_llanta` en `/flota/health` y lo
+    # que pinta el bloque de salud del tablero, y volver a registrarlas son 24
+    # formularios cortos con el código ya en la lista. La alternativa —proteger
+    # las dos— dejaría montajes del ensayo apuntando a lecturas de odómetro
+    # borradas, que es un hueco silencioso contra un número visible.
+    #
+    # Va ANTES que `flota_gasto` (apunta a él por `gasto_id`), que
+    # `flota_lectura_odometro` (dos FK, regla 3) y que `flota_llanta`.
+    'flota_montaje_llanta',
+    'flota_tanqueo',
+    'flota_gasto',
+    'flota_orden_trabajo',
+    # `flota_hallazgo` PRIMERO: apunta a `flota_lectura_odometro` (regla 3,
+    # NOT NULL) y a `flota_custodia`, las dos de abajo. Es la misma forma que
+    # ya costó dos veces —`devoluciones_cliente` y `sesiones_conteo`—: el
+    # DELETE del padre falla por FK, el `except` del bucle lo imprime como un
+    # aviso entre otros, y el corte termina a medias.
+    #
+    # Y es operativa, no expediente: los daños del ensayo son daños de
+    # vehículos que se estaban probando. El expediente del vehículo son la
+    # ficha y los documentos, que siguen protegidos abajo.
+    'flota_hallazgo',
+    # ── Preventivo (agregado 2026-09-02, fase 3) ───────────────────────────
+    # **Las dos tablas se clasificaron por separado y no cayeron del mismo
+    # lado.** La pregunta es una sola: ¿esto es registro del ensayo, o es algo
+    # que el día después del corte sigue siendo cierto del vehículo?
+    #
+    # `flota_ejecucion_tarea` es OPERATIVA y va acá. Cada fila dice «esta tarea
+    # se hizo a este kilometraje», y **cuelga de `flota_lectura_odometro` con
+    # FK NOT NULL** (regla 3), que se vacía cuatro líneas más abajo. No hay
+    # forma de conservarla: protegerla dejaría cada ejecución apuntando a una
+    # lectura que ya no existe, que es un hueco silencioso — exactamente el
+    # error que este archivo lleva pagando cuatro veces. Su ancla es del
+    # ensayo, así que ella también lo es.
+    #
+    # La consecuencia se declara en vez de disimularse: después del corte todas
+    # las tareas vuelven a `sin_linea_base` y el sistema dice, correctamente,
+    # que no sabe cuándo se hizo el último cambio. Eso NO queda en silencio —
+    # es lo que cuenta `tareas_sin_linea_base` en `/flota/health` y lo que
+    # pinta el bloque de salud del tablero.
+    #
+    # `flota_plan_tarea` es MAESTRA y está abajo. **No es registro de una
+    # prueba: es una propiedad del vehículo** —«esta correa se cambia cada
+    # 60.000 km»— y el día después del corte sigue siendo cierta. Se siembra
+    # desde la ficha, que también está protegida, pero re-sembrarla recupera
+    # solo las filas de origen `ficha`: el intervalo que alguien averiguó
+    # llamando al concesionario está en las de origen `manual` y no se puede
+    # reconstruir de ninguna parte. Es el mismo argumento de
+    # `flota_ficha_tecnica`: la segunda vez nadie la hace.
+    #
+    # Va ANTES que `flota_lectura_odometro` por la FK.
+    'flota_ejecucion_tarea',
     'flota_lectura_odometro',
     'flota_foto',
     'flota_custodia',
@@ -148,6 +255,47 @@ PROTEGIDAS_MAESTRAS = {
     # inspecciones viejas apuntando a ítems que ya no existen.
     'flota_ficha_tecnica', 'flota_documento_vehiculo',
     'flota_plantilla_inspeccion', 'flota_item_inspeccion',
+    # `flota_llanta` es un **activo comprado que existe físicamente**, no un
+    # registro del ensayo: el día después del corte las 24 llantas siguen
+    # atornilladas a los camiones, y su código está marcado en el caucho.
+    # Borrarlas obliga a recorrer el patio leyendo flancos — el mismo argumento
+    # de la ficha técnica, y la segunda vez nadie la hace.
+    #
+    # Su tabla de MONTAJES sí es operativa y sí se vacía (ver arriba): dónde
+    # estuvo puesta cada llanta durante la prueba es registro de la prueba. La
+    # asimetría es deliberada y su consecuencia es visible, no silenciosa —
+    # `posiciones_sin_llanta` en el health cuenta exactamente los montajes que
+    # hay que volver a registrar.
+    'flota_llanta',
+    # `flota_plan_tarea` es una **propiedad del vehículo**, no un registro del
+    # ensayo: «esta correa se cambia cada 60.000 km» sigue siendo cierto el día
+    # después del corte. Es la misma naturaleza que la ficha de la que se
+    # siembra, y está protegida por el mismo motivo.
+    #
+    # Re-sembrar desde la ficha recupera las filas de origen `ficha` — pero NO
+    # las de origen `manual`: el intervalo del aceite que alguien averiguó
+    # llamando al concesionario no está en ninguna columna de la ficha y no se
+    # puede reconstruir de ninguna parte.
+    #
+    # Su tabla de EJECUCIONES sí es operativa y sí se vacía (ver arriba):
+    # cuelga de `flota_lectura_odometro` con FK NOT NULL y esa se vacía, así
+    # que conservarla dejaría cada ejecución apuntando a una lectura que ya no
+    # existe. La consecuencia —todas las tareas vuelven a `sin_linea_base`— la
+    # cuenta `tareas_sin_linea_base` en el health, y por eso es visible en vez
+    # de silenciosa.
+    'flota_plan_tarea',
+    # Dónde queda cada tienda. **Es el activo que tarda tres meses en
+    # construirse**, no un registro del ensayo: cada fila es la mediana de las
+    # veces que un conductor tocó «Estoy aquí» parado en la puerta de un
+    # cliente, y no hay forma de recuperarla salvo volver a recorrer las rutas.
+    # El WMS no tiene direcciones de clientes (`pedidos_sync_service` lee
+    # códigos de municipio, no calles) y las tres ciudades tienen 72, 10 y ~31
+    # números de casa mapeados: no existe ninguna API con la que rehacer esto.
+    #
+    # Es exactamente el caso que `precios_realizados` documenta más arriba —
+    # borrarla no rompe nada visible y devuelve el sistema al estado anterior
+    # sin que nadie lo note.
+    'clientes_geo',
 }
 
 CANONES = ['docs/canon_florencia.json', 'docs/canon_PLANTILLA.json',

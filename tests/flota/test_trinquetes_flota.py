@@ -291,6 +291,59 @@ _EXENTOS_POR_REGLA = ('/flota/health', '/flota/avisos/entrega')
 _PWA = os.path.join(_RAIZ, 'app', 'static', 'pwa')
 
 
+def _sin_comentarios(fuente: str) -> str:
+    """El código del PWA sin sus comentarios. Máquina de estados, no regex.
+
+    QUÉ AFIRMA lo que devuelve: que cada carácter que queda estaba en una
+    posición ejecutable o en una cadena literal.
+
+    QUÉ NO AFIRMA: que sea JavaScript válido. Es un tamiz para buscar URLs, no
+    un parser — no le pidas balancear llaves.
+
+    Un `re.sub(r'//.*', '', ...)` destruiría `'https://api…'` dentro de una
+    cadena y produciría falsos huérfanos, que es peor que el agujero que viene
+    a tapar: un guard que grita sobre rutas sanas se termina desactivando.
+
+    Las cadenas se CONSERVAN a propósito. Una URL vive en una cadena
+    (`fetch('/flota/…')`) y ahí sí es código. Lo que se tira es la prosa.
+    """
+    salida = []
+    i, n = 0, len(fuente)
+    cadena = None          # comilla que abrió la cadena en curso, o None
+    while i < n:
+        c = fuente[i]
+        if cadena is not None:
+            salida.append(c)
+            if c == '\\' and i + 1 < n:      # escape: el siguiente no cierra
+                salida.append(fuente[i + 1])
+                i += 2
+                continue
+            if c == cadena:
+                cadena = None
+            i += 1
+            continue
+        if c in ('"', "'", '`'):
+            cadena = c
+            salida.append(c)
+            i += 1
+            continue
+        if c == '/' and i + 1 < n and fuente[i + 1] == '/':
+            while i < n and fuente[i] != '\n':
+                i += 1
+            continue
+        if c == '/' and i + 1 < n and fuente[i + 1] == '*':
+            fin = fuente.find('*/', i + 2)
+            i = n if fin == -1 else fin + 2
+            continue
+        if fuente.startswith('<!--', i):
+            fin = fuente.find('-->', i + 4)
+            i = n if fin == -1 else fin + 3
+            continue
+        salida.append(c)
+        i += 1
+    return ''.join(salida)
+
+
 class TestTrinqueteEndpointsSinConsumidor:
 
     def _rutas_de_flota(self, app):
@@ -300,10 +353,27 @@ class TestTrinqueteEndpointsSinConsumidor:
         assert '/flota/health' in self._rutas_de_flota(app)
 
     def test_ningun_endpoint_de_flota_sin_consumidor(self, app):
+        """TRINQUETE 5 — cada endpoint aparece en CÓDIGO del PWA, no en prosa.
+
+        **El blob se limpia de comentarios, y esa línea costó descubrirla.**
+        Hasta el 2026-09-02 se concatenaba el texto crudo de los `.js`, así que
+        un comentario que nombrara la URL bastaba para declararla consumida. Se
+        destapó mutando la URL de tanqueos a una construida con `+ verbo`: la
+        mutación **sobrevivió**, porque un comentario del propio autor decía
+        `/flota/tanqueos` y satisfacía al guard.
+
+        Es la **octava** aparición del mismo patrón en este repo —un detector de
+        texto que se atrapa en su propia prosa— y no era el defecto de una ruta:
+        valía para las 24 de flota. Cualquiera podía quedar «consumida» desde un
+        comentario.
+
+        Ver `_sin_comentarios`: hay una máquina de estados y no un regex, porque
+        `'https://…'` dentro de una cadena no es un comentario de línea.
+        """
         blob = ''
         for a in os.listdir(_PWA):
             if a.endswith(('.js', '.html')):
-                blob += _leer(os.path.join(_PWA, a))
+                blob += _sin_comentarios(_leer(os.path.join(_PWA, a)))
 
         huerfanos = []
         for ruta in self._rutas_de_flota(app):
@@ -704,7 +774,14 @@ class TestTrinqueteResetConoceAFlota:
         from flota.adaptadores import modelos as m
         return {M.__table__.name for M in (
             m.Foto, m.FichaTecnica, m.DocumentoVehiculo, m.LecturaOdometro,
-            m.Custodia, m.PlantillaInspeccion, m.ItemInspeccion)}
+            m.Custodia, m.PlantillaInspeccion, m.ItemInspeccion,
+            # Llantas (2026-09-02). **Las dos, y clasificadas distinto**: el
+            # montaje es registro de operación y se vacía; la llanta es un
+            # activo comprado que existe físicamente y se protege. La
+            # clasificación concreta la afirma `tests/flota/test_llantas.py`,
+            # porque este trinquete solo exige que estén en ALGUNA lista — y
+            # estar en la equivocada es el error que ya costó tres veces.
+            m.Llanta, m.MontajeLlanta)}
 
     def test_toda_tabla_de_flota_esta_clasificada_en_el_reset(self, app):
         reset = _leer(self._RESET)
@@ -984,3 +1061,62 @@ class TestLosTestsUsanElMismoRelojQueElSistema:
         assert not _detecta("f = dia_operativo() + timedelta(days=20)\n")
         # Y no confunde una CADENA que menciona el patrón con una llamada.
         assert not _detecta("aviso = 'no uses date.today() acá'\n")
+
+
+class TestElLimpiadorDeComentariosSeMide:
+    """El arreglo del trinquete 5, probado en las dos direcciones.
+
+    Un limpiador roto se rompe de dos formas opuestas y las dos son caras:
+
+    · **Limpia de menos** → el agujero sigue abierto y un comentario declara
+      una ruta consumida. Es el defecto que se está tapando.
+    · **Limpia de más** → destruye `'https://…'` dentro de una cadena, aparecen
+      huérfanos falsos, y un guard que grita sobre rutas sanas se termina
+      desactivando. Es cómo se pierde un trinquete sin borrarlo.
+    """
+
+    def test_un_comentario_de_linea_desaparece(self):
+        assert '/flota/x' not in _sin_comentarios("const a = 1; // usa /flota/x")
+
+    def test_un_comentario_de_bloque_desaparece(self):
+        assert '/flota/x' not in _sin_comentarios("/* llama a /flota/x */ f()")
+
+    def test_un_comentario_html_desaparece(self):
+        assert '/flota/x' not in _sin_comentarios("<!-- /flota/x --><div></div>")
+
+    def test_una_URL_EN_CODIGO_sobrevive(self):
+        """La otra dirección. Sin esto, un limpiador que devolviera cadena vacía
+        pasaría los tres tests de arriba."""
+        assert '/flota/x' in _sin_comentarios("fetch('/flota/x')")
+
+    def test_https_dentro_de_una_cadena_NO_se_come(self):
+        """`//` de un protocolo no abre un comentario. Un `re.sub(r'//.*')`
+        se traga el resto de la línea y produce huérfanos falsos."""
+        limpio = _sin_comentarios("fetch('https://api/flota/x' + id)")
+        assert 'https://api/flota/x' in limpio
+
+    def test_un_apostrofe_escapado_no_cierra_la_cadena(self):
+        limpio = _sin_comentarios(r"const s = 'no\'cierra'; fetch('/flota/x')")
+        assert '/flota/x' in limpio
+
+    def test_una_barra_de_division_no_es_un_comentario(self):
+        assert 'a / b' in _sin_comentarios('const c = a / b; // nota')
+
+
+class TestElTrinquete5YaNoSeSatisfaceConProsa:
+    """MUTACIÓN — la que destapó el agujero, convertida en trinquete.
+
+    Se le quita al PWA **en memoria** la única invocación real de una ruta,
+    dejando solo un comentario que la nombra, y se exige que el guard la vea
+    caer. Antes del 2026-09-02 no caía: el comentario bastaba.
+    """
+
+    def test_una_ruta_que_solo_vive_en_un_comentario_cae_como_huerfana(self):
+        codigo = "fetch(API + '/flota/hallazgos/' + id + '/aplazar')"
+        prosa = "// el botón pega contra /flota/hallazgos/<id>/aplazar"
+
+        # Con la invocación real, el trozo está.
+        assert '/aplazar' in _sin_comentarios(codigo)
+        # Reemplazada por el comentario, ya no — que es lo que hace que el
+        # guard la reporte como huérfana en vez de darla por consumida.
+        assert '/aplazar' not in _sin_comentarios(prosa)
