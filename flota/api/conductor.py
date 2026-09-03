@@ -47,6 +47,73 @@ def _conductor_del_token():
     return Conductor.query.filter_by(usuario_id=uid, activo=True).first()
 
 
+def _estado_del_vehiculo(vehiculo_id):
+    """Lo que el conductor tiene que saber ANTES de arrancar.
+
+    QUÉ AFIRMA: lo que el sistema sabe hoy del vehículo — daños vivos, si la
+    inspección de hoy se hizo y con qué veredicto, y papeles vencidos.
+
+    QUÉ NO AFIRMA: que el camión pueda o no salir. **Esto informa, no bloquea**
+    — es la secuencia obligatoria del módulo (medir, corregir, imponer) y el
+    criterio de la regla 1: dejar un camión en el patio por una pantalla es cómo
+    la operación desmonta el sistema en 48 horas. Lo que hace es que el
+    conductor no pueda decir «no sabía».
+
+    `None` cuando no hay vehículo: no es «está todo bien», es que no hay a qué
+    mirarle el estado (regla 4).
+    """
+    if vehiculo_id is None:
+        return None
+
+    from datetime import datetime
+
+    from app.utils.fecha import dia_operativo
+    from flota.adaptadores import hallazgos as dom_hallazgos
+    from flota.adaptadores.modelos import DocumentoVehiculo, Inspeccion
+    from flota.dominio.hallazgo import vencido
+    from flota.dominio.inspeccion import habilita_despacho
+
+    ahora = datetime.utcnow()
+    abiertos = dom_hallazgos.abiertos_de(vehiculo_id)
+
+    # La inspección de HOY en día operativo, no en UTC: a las 8 p.m. de Colombia
+    # ya es mañana en UTC, y el conductor del turno de la tarde vería «no la
+    # hiciste» sobre la que acaba de contestar.
+    hoy = dia_operativo()
+    insp = (Inspeccion.query
+            .filter_by(vehiculo_id=vehiculo_id, dia=hoy)
+            .order_by(Inspeccion.respondida_ts.desc()).first())
+
+    vencidos = [d for d in DocumentoVehiculo.query.filter_by(
+        vehiculo_id=vehiculo_id, estado='vigente').all()
+        if d.fecha_vencimiento is not None
+        and (d.fecha_vencimiento - hoy).days < 0]
+
+    return {
+        'hallazgos_abiertos': len(abiertos),
+        'hallazgos_vencidos': sum(1 for h in abiertos
+                                  if vencido(h.a_dominio(), ahora)),
+        # El más grave que tiene vivo, para poder nombrarlo en una línea.
+        'hallazgo_peor': (
+            {'criticidad': abiertos[0].criticidad,
+             'descripcion': abiertos[0].descripcion,
+             'vencido': vencido(abiertos[0].a_dominio(), ahora)}
+            if abiertos else None),
+        'inspeccion_de_hoy': (
+            {'hecha': True, 'veredicto': insp.veredicto,
+             # **El consumidor que le faltaba.** `habilita_despacho` se
+             # calculaba, se publicaba en la respuesta de la inspección, y su
+             # único lector era un mensaje que desaparecía. Acá le llega a quien
+             # tiene que decidir si arranca.
+             'habilita_despacho': habilita_despacho(insp.veredicto)}
+            if insp is not None else {'hecha': False, 'veredicto': None,
+                                      'habilita_despacho': None}),
+        'documentos_vencidos': [
+            {'tipo': d.tipo, 'vencio': d.fecha_vencimiento.isoformat()}
+            for d in vencidos],
+    }
+
+
 @conductor_bp.route('/conductor/mi-turno', methods=['GET'])
 @jwt_required()
 @exige(Roles.LECTURA_FLOTA, 'ver tu turno')
@@ -107,6 +174,18 @@ def mi_turno():
 
     return jsonify({
         'conductor': {'id': conductor.id, 'nombre': conductor.nombre},
+        # Qué le pasa AL CAMIÓN, no solo qué camión es.
+        #
+        # Hasta el 2026-09-03 esta respuesta traía ocho campos —quién sos, qué
+        # placa, cuántos kilómetros— y **nada del estado del vehículo**. El
+        # conductor escribía en el sistema y el sistema no le contestaba: no se
+        # enteraba de un daño bloqueante vencido que él mismo había reportado,
+        # ni de una tecnomecánica vencida, ni de si ya había hecho la inspección
+        # de hoy.
+        #
+        # El encargado sí veía los contadores agregados en su tablero. El que
+        # está parado al lado del camión a las 5 a.m. veía su placa.
+        'estado_vehiculo': _estado_del_vehiculo(turno.vehiculo_id),
         'origen': turno.origen.value,
         'vehiculo_id': turno.vehiculo_id,
         'placa': turno.placa,

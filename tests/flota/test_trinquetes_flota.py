@@ -1175,3 +1175,147 @@ class TestElTrinquete5YaNoSeSatisfaceConProsa:
         # Reemplazada por el comentario, ya no — que es lo que hace que el
         # guard la reporte como huérfana en vez de darla por consumida.
         assert '/aplazar' not in _sin_comentarios(prosa)
+
+
+class TestNadaSeMideSinLector:
+    """TRINQUETE — la firma del módulo, convertida en build rojo.
+
+    Un barrido por AST el 2026-09-03 contó tres formas del mismo defecto en
+    `flota/`: **11 de 95 claves** que la API devuelve y ningún JS lee, **7
+    funciones públicas** sin caller de producción, y 0 columnas huérfanas.
+
+    Es el patrón que este módulo lleva una semana pagando —`flota_hallazgo` con
+    153 líneas de dominio y cero callers, `distribucion_km_cambio` cargado y sin
+    lector, 12 campos del health que nadie pintaba— y cada vez se encontró a
+    mano, después, con una auditoría.
+
+    Las dos listas de abajo son **la deuda declarada**, no una exención cómoda:
+    cada entrada dice por qué sigue ahí. Lo que el trinquete impide es que
+    **crezcan sin que nadie lo note**, que es como llegaron a 11 y a 7.
+    """
+
+    #: Claves que la API devuelve y el PWA legítimamente no pinta.
+    _CLAVES_SIN_PANTALLA = {
+        'cruzado': 'estado interno del aviso; lo consume el barrido, no una persona',
+        'custodia_id': 'identificador para cruzar, no un dato de pantalla',
+        'ejecucion_id': 'idem — lo usa el siguiente POST, no un ojo',
+        'piden_taller': 'el preventivo todavía no tiene pantalla de detalle (tanda 3)',
+        'plantilla': 'metadato de qué catálogo se usó; útil para auditar, no para el turno',
+        'requiere_confirmacion': (
+            'DEUDA REAL: el PWA re-deriva esto de `origen === "ruta"` en vez de '
+            'leerlo. Una política, dos copias — la del servidor es la que manda '
+            'y la que diverge es la de la pantalla.'),
+        'verificada_por_usuario_id': 'quién verificó; se ve en la cola, no en el turno',
+        'verificada_ts': 'idem',
+    }
+
+    #: Funciones públicas sin caller de producción, con su motivo.
+    _SIN_CALLER = {
+        'dias_en_palabras': (
+            'la plantilla `flota_hallazgo_vencido` no está aprobada en Meta — '
+            'deuda de aprobación externa, no de código'),
+        'huecos_de_cobertura': 'DEUDA REAL: el invariante se calcula y nadie lo pregunta',
+        'validar_cardinalidad': 'DEUDA REAL: idem',
+        'validar_integridad_de_clase': 'DEUDA REAL: es la regla 7 y no la impone nadie',
+        'validar_paternidad': 'DEUDA REAL: es la regla 7 y no la impone nadie',
+        'promedio_del_indicador': (
+            'DEUDA REAL: tiene canon propio '
+            '(docs/flota/canones/dias_hallazgo_abierto.md) y no se publica'),
+        'fuente_es_blanda': 'DEUDA REAL: distingue una procedencia estimada y nadie pregunta',
+    }
+
+    def _js(self):
+        import os
+        return ''.join(
+            _sin_comentarios(_leer(os.path.join(_PWA, a)))
+            for a in os.listdir(_PWA) if a.endswith(('.js', '.html')))
+
+    def test_ninguna_clave_nueva_de_la_API_queda_sin_lector(self):
+        import ast
+        import glob
+        import os
+
+        js = self._js()
+        mudas = {}
+        for ruta in glob.glob(os.path.join(_RAIZ, 'flota', 'api', '*.py')):
+            arbol = ast.parse(open(ruta, encoding='utf-8').read())
+            for n in ast.walk(arbol):
+                if not (isinstance(n, ast.Call)
+                        and getattr(n.func, 'id', '') == 'jsonify'):
+                    continue
+                for a in n.args:
+                    if not isinstance(a, ast.Dict):
+                        continue
+                    for k in a.keys:
+                        if not (isinstance(k, ast.Constant)
+                                and isinstance(k.value, str)):
+                            continue
+                        # `error`, `detalle` y `motivo` los pinta el helper
+                        # genérico de errores, no un consumidor por nombre.
+                        if k.value in ('error', 'detalle', 'motivo'):
+                            continue
+                        if k.value in self._CLAVES_SIN_PANTALLA:
+                            continue
+                        if k.value not in js:
+                            mudas.setdefault(k.value, os.path.basename(ruta))
+        assert not mudas, (
+            '\n'.join(f'  · {k}  ({v})' for k, v in sorted(mudas.items()))
+            + '\n\nUna clave que el servidor calcula y la pantalla no lee es '
+              'trabajo hecho para nadie. Si de verdad no debe pintarse, agregala '
+              'a `_CLAVES_SIN_PANTALLA` CON SU MOTIVO — la lista es deuda '
+              'declarada, no una exención cómoda.')
+
+    def test_ninguna_funcion_publica_nueva_queda_sin_caller(self):
+        import ast
+        import glob
+        import os
+        import re
+
+        prod = ''.join(
+            open(f, encoding='utf-8').read()
+            for f in glob.glob(os.path.join(_RAIZ, 'flota', '**', '*.py'),
+                               recursive=True)
+            + glob.glob(os.path.join(_RAIZ, 'app', '**', '*.py'), recursive=True)
+            if '__pycache__' not in f)
+        js = self._js()
+
+        huerfanas = []
+        for ruta in glob.glob(os.path.join(_RAIZ, 'flota', '**', '*.py'),
+                              recursive=True):
+            if '__pycache__' in ruta:
+                continue
+            arbol = ast.parse(open(ruta, encoding='utf-8').read())
+            for n in arbol.body:
+                if not isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    continue
+                if n.name.startswith('_') or n.name in self._SIN_CALLER:
+                    continue
+                # Las vistas las llama Flask por el `url_map`, no por nombre.
+                if any('route' in ast.unparse(d) for d in n.decorator_list):
+                    continue
+                usos = len(re.findall(rf'\b{re.escape(n.name)}\s*\(', prod))
+                if usos <= 1 and n.name not in js:
+                    huerfanas.append(
+                        f'{os.path.relpath(ruta, _RAIZ)}::{n.name}')
+        assert not huerfanas, (
+            '\n'.join(f'  · {h}' for h in sorted(huerfanas))
+            + '\n\nCódigo correcto, probado y que nadie llama. Conectalo o '
+              'borralo; si hay una razón para que espere, va a `_SIN_CALLER` '
+              'CON SU MOTIVO y su condición de disparo.')
+
+    def test_las_dos_listas_solo_nombran_cosas_que_existen(self):
+        """Una exención que nombra algo inexistente no exime nada, y nadie la
+        revisa. Es lo que pasó con tres deudas de `ESTADO.md` que seguían
+        escritas después de resolverse."""
+        import glob
+        import os
+        import re
+
+        fuente = ''.join(
+            open(f, encoding='utf-8').read()
+            for f in glob.glob(os.path.join(_RAIZ, 'flota', '**', '*.py'),
+                               recursive=True) if '__pycache__' not in f)
+        fantasmas = [n for n in self._SIN_CALLER
+                     if not re.search(rf'def {re.escape(n)}\s*\(', fuente)]
+        assert not fantasmas, (
+            f'`_SIN_CALLER` nombra funciones que ya no existen: {fantasmas}')

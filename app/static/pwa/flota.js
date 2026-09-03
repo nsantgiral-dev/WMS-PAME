@@ -846,8 +846,20 @@ async function flotaEnviarOdometro() {
   const placa = flotaPlacaDelFormulario('od-guardar', 'od-error');
   if (!placa) return;
   try {
-    await flotaRegistrarOdometro(placa, km, origen, motivo);
-    alerta('Lectura registrada ✓', 'exito');
+    // **El retorno se lee.** Hasta el 2026-09-03 esta línea era
+    // `await flotaRegistrarOdometro(...)` sin asignar: el endpoint devolvía
+    // `confianza` y `motivo_dudosa` —se esmeró en calcularlos— y la pantalla
+    // decía «✓» en verde y los tiraba. El conductor se iba convencido de que
+    // su número quedó firme, y quedaba dudoso: fuera del CPK hasta que alguien
+    // pase por la cola de verificación con una foto que él pudo haber sacado
+    // ahí mismo, parado al lado del camión.
+    const guardada = await flotaRegistrarOdometro(placa, km, origen, motivo);
+    if (guardada && guardada.confianza === 'dudosa') {
+      alerta(`Lectura registrada, pero queda DUDOSA: ${guardada.motivo_dudosa}`,
+             'advertencia');
+    } else {
+      alerta('Lectura registrada ✓', 'exito');
+    }
     flotaAbrirOdometro(FLOTA_PLACA);
   } catch (e) {
     err.textContent = e.message;
@@ -1953,6 +1965,79 @@ async function flotaCondCargar() {
   flotaCondRender();
 }
 
+/** El texto de un error de la API, con lo que el servidor se esmeró en decir.
+ *
+ * Un 403 de flota trae `tu_rol` y `roles_permitidos` — el docstring de `exige`
+ * dice por qué: *«El 403 dice qué hace falta, no solo que no. Un "sin permiso"
+ * pelado deja a quien lo recibe sin saber a quién pedirle qué, y termina en un
+ * mensaje de WhatsApp al desarrollador.»*
+ *
+ * **Y terminaba ahí igual**, porque la pantalla mostraba solo `error`. El
+ * servidor lo decía y nadie lo leía.
+ */
+function flotaMensajeDeError(d) {
+  if (!d) return 'Error sin detalle';
+  let txt = d.error || d.detalle || 'Error sin detalle';
+  if (d.tu_rol || d.roles_permitidos) {
+    txt += ` — tu rol es «${d.tu_rol || 'sin sesión'}»`;
+    if (d.roles_permitidos && d.roles_permitidos.length) {
+      txt += `; esto lo hace ${d.roles_permitidos.join(' o ')}`;
+    }
+  }
+  return txt;
+}
+
+/** Lo que le pasa al camión, dicho antes de que lo agarre.
+ *
+ * Va ARRIBA de los botones y no escondido en un submenú: el conductor abre esta
+ * pantalla dos minutos a las 5 a.m., y un dato que exige un toque más no existe.
+ *
+ * **Informa, no bloquea.** Es la secuencia obligatoria del módulo —medir,
+ * corregir, imponer— y la regla 1: dejar un camión en el patio por una pantalla
+ * es cómo la operación desmonta el sistema en 48 horas. Lo que cierra es la
+ * frase «no sabía».
+ *
+ * Devuelve vacío cuando no hay nada que decir, igual que los bloques del
+ * tablero del encargado: una línea que siempre aparece se deja de leer.
+ */
+function flotaCondEstado(e) {
+  if (!e) return '';
+  const lineas = [];
+
+  if (e.hallazgos_vencidos > 0) {
+    lineas.push(['var(--red)',
+      `${e.hallazgos_vencidos} daño(s) pasados de su fecha límite`]);
+  } else if (e.hallazgos_abiertos > 0) {
+    lineas.push(['var(--yellow)', `${e.hallazgos_abiertos} daño(s) abiertos`]);
+  }
+  // El peor, con su nombre: un contador dice cuántos, no cuál mirar.
+  if (e.hallazgo_peor) {
+    lineas.push([e.hallazgo_peor.vencido ? 'var(--red)' : 'var(--tx2)',
+      `${e.hallazgo_peor.criticidad}: ${e.hallazgo_peor.descripcion}`]);
+  }
+
+  (e.documentos_vencidos || []).forEach(d => {
+    lineas.push(['var(--red)', `${d.tipo} VENCIDO desde ${d.vencio}`]);
+  });
+
+  const i = e.inspeccion_de_hoy || {};
+  if (!i.hecha) {
+    lineas.push(['var(--yellow)', 'Falta la inspección de hoy']);
+  } else if (i.habilita_despacho === false) {
+    // `habilita_despacho` tenía un solo lector —un mensaje que desaparecía— y
+    // ahora le llega a quien decide si arranca.
+    lineas.push(['var(--red)',
+      `Inspección de hoy: ${i.veredicto} · NO habilita despacho`]);
+  }
+
+  if (!lineas.length) return '';
+  return `<div style="margin:6px 0 10px;padding:8px 10px;border-left:3px solid var(--red);
+      background:rgba(255,255,255,.03);border-radius:4px">
+    ${lineas.map(([c, txt]) =>
+      `<div style="color:${c};font-size:13px;line-height:1.5">${txt}</div>`).join('')}
+  </div>`;
+}
+
 /** Dibuja el bloque según de dónde salió la placa. */
 function flotaCondRender() {
   const el = document.getElementById('cond-flota');
@@ -2018,6 +2103,7 @@ function flotaCondRender() {
         <button class="btn-flota" style="padding:6px 12px;font-size:13px"
                 onclick="flotaCondMisReportes()">Mis turnos</button>
       </div>
+      ${flotaCondEstado(d.estado_vehiculo)}
       <div id="cond-flota-form"></div>
     </div>`;
     return;
@@ -2026,7 +2112,7 @@ function flotaCondRender() {
   // Sin turno abierto sí ocupa espacio: recibir el vehículo es lo primero que
   // hay que hacer, antes del manifiesto de ruta.
   el.innerHTML = `<div class="flota-veh">
-    ${cabeza}${lista}
+    ${cabeza}${flotaCondEstado(d.estado_vehiculo)}${lista}
     <div style="display:flex;gap:6px;margin-top:12px">
       <button class="btn-primary" style="flex:2;margin-top:0" onclick="flotaCondAbrirRecibo()">
         Recibir turno</button>
@@ -2476,7 +2562,7 @@ async function flotaBarrerAvisos() {
       headers: { Authorization: 'Bearer ' + TOKEN },
     });
     const d = await r.json();
-    if (!r.ok) { alerta(d.error || 'No se pudo', 'error'); return; }
+    if (!r.ok) { alerta(flotaMensajeDeError(d), 'error'); return; }
     if (d.motivo) { alerta(d.motivo, 'advertencia'); return; }
     alerta(`Revisados ${d.revisados} · en ventana ${d.en_ventana} · ` +
            `enviados ${d.enviados} · ya avisados ${d.ya_avisados}` +
@@ -2629,7 +2715,7 @@ async function flotaReportarDano(conAcciones) {
       }),
     });
     const d = await r.json();
-    if (!r.ok) { err.textContent = d.error || 'No se pudo reportar'; return; }
+    if (!r.ok) { err.textContent = flotaMensajeDeError(d); return; }
     alerta('Daño registrado ✓', 'exito');
     await flotaRenderDanos(conAcciones);
   } catch (e) {
@@ -2666,7 +2752,7 @@ async function flotaAccionHallazgo(id, verbo, cuerpo) {
       body: JSON.stringify(cuerpo || {}),
     });
     const d = await r.json();
-    if (!r.ok) { alerta(d.error || 'No se pudo', 'error'); return; }
+    if (!r.ok) { alerta(flotaMensajeDeError(d), 'error'); return; }
     alerta('Listo ✓', 'exito');
     await flotaRenderDanos(true);
   } catch (e) {
