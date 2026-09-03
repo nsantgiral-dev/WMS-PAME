@@ -807,7 +807,8 @@ async function cargarPedidos() {
     ]);
     SIESA_PEDIDOS = siesa.pedidos || [];
     const _g = p => p.siesa_triggered ? 2 : (p.packing_estado === 'VERIFICADO' && !p.siesa_triggered) ? 3 : (p.picking_iniciado || p.packing_estado) ? 1 : 0;
-    SIESA_PEDIDOS.sort((a, b) => _g(a) - _g(b));
+    const _num = p => parseInt(String(p.numero_pedido).replace(/\D/g, ''), 10) || 0;
+    SIESA_PEDIDOS.sort((a, b) => _g(a) - _g(b) || _num(b) - _num(a));
 
     const tabsEl = document.getElementById('ped-tabs');
 
