@@ -1055,6 +1055,9 @@ const FLOTA_OPCIONES = {
   transmision_final:  ['sin_dato', 'cadena', 'correa', 'cardan'],
   distribucion_fuente: ['sin_dato', 'manual_fabricante', 'concesionario', 'placa_motor', 'taller', 'estimado'],
   frenos_fuente:       ['sin_dato', 'manual_fabricante', 'concesionario', 'placa_motor', 'taller', 'estimado'],
+  // Mismo vocabulario que las otras dos procedencias: es el `FUENTE` del
+  // dominio, y `sin_dato` va PRIMERO — ninguna opción viene marcada.
+  capacidad_tanque_fuente: ['sin_dato', 'manual_fabricante', 'concesionario', 'placa_motor', 'taller', 'estimado'],
 };
 
 /** Un <select> cuya primera opción es siempre `sin_dato` — ningún default optimista. */
@@ -1145,6 +1148,18 @@ async function flotaAbrirFicha(placa) {
     <input id="fi-medida_llanta" value="${v('medida_llanta')}"
            placeholder="ej. 195R15C — está impresa en el flanco"
            style="width:100%;padding:6px">
+    <label>Capacidad del tanque (galones)</label>
+    <input type="number" step="0.01" id="fi-capacidad_tanque_galones"
+           value="${v('capacidad_tanque_galones')}"
+           placeholder="ej. 15 — está en el manual, o se mide llenándolo desde vacío"
+           style="width:100%;padding:6px">
+    <label>¿De dónde salió ese número?</label>
+    ${flotaSelect('capacidad_tanque_fuente', d.ficha.capacidad_tanque_fuente)}
+    <p style="font-size:12px;color:var(--tx2);margin:4px 0 0">
+      Es lo único que hace posible detectar un tanqueo por encima de lo que
+      cabe: un tanque de 15 galones que recibe 22 no es un error de medición.
+      Sin este dato el sistema no puede revisarlo, y lo dice en vez de suponerlo.</p>
+
     <label>Norma de emisiones</label>
     <input id="fi-norma_emisiones" value="${v('norma_emisiones')}"
            placeholder="ej. Euro IV · Euro V — va en la tarjeta de propiedad"
@@ -1180,6 +1195,14 @@ async function flotaGuardarFicha() {
   ['aceite_motor_litros', 'distribucion_km_cambio'].forEach(c => {
     if (val(c).trim()) campos[c] = parseFloat(val(c));
   });
+  // La capacidad viaja SIEMPRE con su procedencia, nunca sola: el CHECK
+  // `ck_flota_capacidad_tanque_con_procedencia` exige el par, y mandar uno
+  // solo devuelve 409. Un número sin fuente se lee como si alguien lo hubiera
+  // verificado — el mismo criterio que ya rige para distribución y frenos.
+  campos.capacidad_tanque_fuente = val('capacidad_tanque_fuente');
+  if (val('capacidad_tanque_galones').trim()) {
+    campos.capacidad_tanque_galones = parseFloat(val('capacidad_tanque_galones'));
+  }
 
   // El mismo aviso que el CHECK de la base, dicho antes de perder el formulario.
   if (campos.distribucion !== 'sin_dato' && campos.distribucion_fuente === 'sin_dato') {
@@ -1189,6 +1212,18 @@ async function flotaGuardarFicha() {
   }
   if (campos.sistema_frenos !== 'sin_dato' && campos.frenos_fuente === 'sin_dato') {
     err.textContent = 'Si sabés el sistema de frenos, decí de dónde salió el dato.';
+    return;
+  }
+  const _capacidad = campos.capacidad_tanque_galones;
+  const _capFuente = campos.capacidad_tanque_fuente;
+  if (_capacidad !== undefined && _capFuente === 'sin_dato') {
+    err.textContent = 'Si sabés la capacidad del tanque, decí de dónde salió. ' +
+      'Un número sin procedencia se lee como si alguien lo hubiera verificado.';
+    return;
+  }
+  if (_capacidad === undefined && _capFuente !== 'sin_dato') {
+    err.textContent = 'Pusiste una procedencia sin capacidad. Si no sabés cuántos ' +
+      'galones caben, dejá la fuente en «sin_dato»: no saber es una respuesta.';
     return;
   }
 
@@ -1752,6 +1787,79 @@ async function flotaBloqueSalud() {
         : 'Ningún vehículo tiene dos lecturas vigentes con las que medirlo, ' +
           'así que los días que faltan para cada mantenimiento salen «sin ' +
           'dato». No es cero: es que no se puede calcular todavía.']);
+  }
+
+  // ── Los doce campos que se medían y no leía nadie (2026-09-03) ────────
+  //
+  // `/flota/health` publicaba 44 campos y la pantalla pintaba 32. Los otros
+  // doce eran **captura sin lector**: el mismo defecto que este bloque existe
+  // para cerrar, cometido dentro de él. Once venían de la tanda 1 y uno
+  // —`lecturas_ts_duplicado`— se agregó el 2026-09-01 y nació mudo.
+  //
+  // Van agrupados por lo que significan y no apilados: un tablero que suelta
+  // doce números seguidos se deja de mirar, que es la lección de los 639
+  // avisos conocidos.
+
+  // Custodia: quién responde por cada camión, y qué falta para poder decirlo.
+  if (h.vehiculos_sin_custodia_activa > 0) {
+    filas.push(['red', `${h.vehiculos_sin_custodia_activa} vehículo(s) sin responsable ahora mismo`,
+      'Nadie tiene la custodia. Si aparece un golpe hoy, no hay a quién preguntarle qué pasó.']);
+  }
+  if (h.custodias_cerradas_forzadas > 0) {
+    filas.push(['yellow', `${h.custodias_cerradas_forzadas} turno(s) cerrados sin la firma del custodio`,
+      'Mide conducta, no fallas: alguien cerró el turno de otro sin fotos de cierre, ' +
+      'y el turno siguiente arrancó sin nada con qué comparar.']);
+  }
+  if (h.custodias_pendiente_sede > 0) {
+    filas.push(['yellow', `${h.custodias_pendiente_sede} custodia(s) con la sede sin resolver`,
+      'El vehículo quedó en una sede que el WMS todavía no tiene como fila.']);
+  }
+  if (h.custodias_sin_foto_completa > 0) {
+    filas.push(['tx2', `${h.custodias_sin_foto_completa} turno(s) sin el juego completo de fotos`,
+      'No bloquea la salida a propósito — un camión no se queda en el patio por una foto. ' +
+      'Pero sin las dos puntas no hay con qué atribuir un daño.']);
+  }
+
+  // Papeles y cuentas: lo que hace falta para que el sistema sepa de quién habla.
+  if (h.conductores_activos_sin_cuenta > 0) {
+    filas.push(['yellow', `${h.conductores_activos_sin_cuenta} conductor(es) activos sin cuenta de usuario`,
+      'Sin cuenta no pueden recibir su propio turno ni reportar un daño con su nombre: ' +
+      'el sistema no puede distinguirlos de alguien que dice serlo.']);
+  }
+  if (h.documentos_por_vencer_30d > 0) {
+    filas.push(['tx2', `${h.documentos_por_vencer_30d} documento(s) vencen dentro de 30 días`,
+      'Todavía hay tiempo. Una cita de tecnomecánica en Neiva tarda unos quince días.']);
+  }
+  if (h.fotos_pendiente_evidencia > 0) {
+    filas.push(['yellow', `${h.fotos_pendiente_evidencia} foto(s) que el almacén no pudo guardar`,
+      'La fila quedó marcada en vez de fingir que el archivo existe. No hay evidencia detrás.']);
+  }
+
+  // Odómetro: el ruido que hay que poder contar antes de calcular sobre la serie.
+  if (h.lecturas_ts_duplicado > 0) {
+    filas.push(['tx2', `${h.lecturas_ts_duplicado} lectura(s) comparten vehículo y segundo con otra`,
+      'Vienen de reintentos. No rompen nada hoy, pero el orden de la serie se ' +
+      'resuelve por hora y un empate es ruido sobre el que después se calcula el CPK.']);
+  }
+
+  // Cobertura del levantamiento: cuánto del expediente está hecho.
+  if (h.vehiculos_activos > 0 && h.fichas_completas < h.vehiculos_activos) {
+    filas.push(['tx2', `${h.fichas_completas} de ${h.vehiculos_activos} fichas técnicas completas`,
+      'Lo que falta de la ficha apaga lo que cuelga de ella: sin capacidad de tanque no ' +
+      'hay control de sobre-tanqueo, y sin kilometraje de correa no hay preventivo.']);
+  }
+  if (h.rutas_historicas_sin_placa > 0) {
+    filas.push(['tx2', `${h.rutas_historicas_sin_placa} ruta(s) históricas sin placa`,
+      'No se pueden atribuir a ningún vehículo, así que no entran a ningún costo por kilómetro.']);
+  }
+
+  // Y de qué mundo salen todos los números de arriba. Va AL FINAL y siempre
+  // que no sean datos reales: un tablero de QA que no dice que es de QA es
+  // peor que ninguno — es el incidente de las ocho horas escribiendo en la
+  // base equivocada, con otra cara.
+  if (h.datos_reales === false) {
+    filas.push(['yellow', `Estos números NO son de la operación real (${h.ambiente || 'ambiente sin declarar'})`,
+      'Sirven para probar la pantalla, no para decidir nada.']);
   }
 
   if (!filas.length) return '';

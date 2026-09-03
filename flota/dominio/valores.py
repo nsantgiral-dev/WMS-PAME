@@ -90,6 +90,31 @@ class Confianza(str, Enum):
     VERIFICADA = 'verificada'
 
 
+def palabra_de_confianza(marca) -> str:
+    """La marca de confianza como la palabra que va a leer una persona.
+
+    **`str()` no sirve para esto.** `Confianza` hereda de `str` y de `Enum`, y
+    en Python 3.11 `str(Confianza.DUDOSA)` devuelve `'Confianza.DUDOSA'` — el
+    repr de Python, no el valor. `SIN_DATO` sí es una cadena y `str()` sobre ella
+    es un no-op, así que la equivocación es invisible mientras el único caso
+    probado sea el de un vehículo sin lecturas.
+
+    Eso es exactamente lo que pasó: `flota/adaptadores/gastos.py::_tramo_de` ya
+    tenía la conversión bien hecha **con este mismo comentario escrito al lado**,
+    y otros dos sitios —`medicion.km_dia_por_vehiculo` y
+    `api/preventivo._ritmo_json`— publicaban `str(marca)`. El health devolvía
+    `"Confianza.DECLARADA"` en `km_dia_por_vehiculo` y `"declarada"` en
+    `cpk_mes`, **en el mismo JSON**, y `flota.js` imprimía el primero tal cual en
+    el panel de salud. Los tests no lo veían porque los tres que leen `marca`
+    contra el endpoint real usan un vehículo sin lecturas, donde la marca es
+    `SIN_DATO`.
+
+    La lección escrita en un comentario protege un sitio; una función con nombre
+    protege la política (regla 0 del WMS, corolario «una política, una función»).
+    """
+    return marca.value if isinstance(marca, Confianza) else str(marca)
+
+
 #: Orígenes que el endpoint de **lectura suelta** puede registrar hoy.
 #:
 #: El enum de arriba nombra los seis gestos que existen en el modelo. Este

@@ -36,6 +36,23 @@ _EDITABLES = (
     'medida_llanta', 'tiene_furgon', 'km_inicial', 'km_inicial_ts',
     'distribucion_fuente', 'distribucion_verificado_ts',
     'frenos_fuente', 'frenos_verificado_ts',
+    # ── La capacidad del tanque (agregada el 2026-09-03) ──────────────────
+    #
+    # Las columnas existen desde m018 **con su CHECK de procedencia**, y este
+    # PUT no las aceptaba: contestaba 201 con la capacidad en el cuerpo y
+    # guardaba NULL. Falla en silencio, que es la peor forma — quien la cargó
+    # se va convencido de que quedó.
+    #
+    # La consecuencia no era cosmética: `excede_capacidad` es **el único
+    # detector de sobre-tanqueo que no necesita umbral ni canon** —un tanque de
+    # 15 galones que recibe 22 no es error de medición— y sin capacidad en la
+    # ficha devuelve `SIN_DATO`, o sea que **no podía disparar nunca en
+    # producción**. El detector estaba construido, probado y ciego.
+    #
+    # El par número↔procedencia lo impone `ck_flota_capacidad_tanque_con_procedencia`
+    # y el `except` de abajo lo traduce a 409 con el nombre del constraint: una
+    # capacidad sin fuente se lee como si alguien la hubiera verificado.
+    'capacidad_tanque_galones', 'capacidad_tanque_fuente',
 )
 
 

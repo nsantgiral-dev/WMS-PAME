@@ -48,7 +48,7 @@ from typing import List, Optional, Sequence, Tuple, Union
 
 from flota.dominio.odometro import confianza_del_tramo
 from flota.dominio.valores import (MAX_POSICIONES_LLANTA, SIN_DATO, Confianza,
-                                   Lectura)
+                                   Lectura, palabra_de_confianza)
 
 
 # ── El tercer estado (regla 4) ───────────────────────────────────────────────
@@ -195,7 +195,9 @@ def km_del_montaje(
     # convertiría un error en un dato plausible.
     if km < 0:                                # pragma: no cover — el CHECK lo impide
         return SIN_DATO, SIN_DATO
-    return km, marca.value if isinstance(marca, Confianza) else str(marca)
+    # `palabra_de_confianza` y no la conversión escrita acá: era la CUARTA
+    # copia de la misma política, y dos de las cuatro estaban mal.
+    return km, palabra_de_confianza(marca)
 
 
 def km_acumulado(tramos: Sequence[Tuple[Union[int, str], str]]

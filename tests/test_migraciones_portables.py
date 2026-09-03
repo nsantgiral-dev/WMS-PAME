@@ -33,7 +33,7 @@ _SUFIJOS_BOOLEANOS = ('_triggered', '_enviado', '_activo', '_completa',
 
 
 def _sql_crudo(fuente: str) -> list:
-    """El SQL de los `op.execute(...)`, **leído por AST**.
+    r"""El SQL de los `op.execute(...)`, **leído por AST**.
 
     Ahí es donde el dialecto importa: los `batch_alter_table` los traduce
     Alembic; el SQL crudo no lo traduce nadie.

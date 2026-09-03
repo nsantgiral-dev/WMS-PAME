@@ -70,6 +70,15 @@ def _json(h: Hallazgo, ahora) -> dict:
         'linea_base': h.linea_base,
         'lectura_id': h.lectura_id,
         'custodia_id': h.custodia_id,
+        # De qué ítem de la inspección nació, o `null` si lo escribió alguien a
+        # mano. La columna existe con su FK desde que la inspección diaria hace
+        # nacer hallazgos (2026-09-02) y **este endpoint no la publicaba**: el
+        # POST de la inspección devuelve `hallazgos: [{item_id, nombre, …}]` y
+        # esta lista —que es la que alguien abre mañana— no tenía con qué decir
+        # que «Sudado de aceite» salió del preoperacional y no del teclado de
+        # alguien. Los otros dos vínculos del hallazgo (`lectura_id`,
+        # `custodia_id`) ya viajaban; faltaba el tercero.
+        'item_id': h.item_id,
         'vencido': vencido(dom, ahora),
         'dias_abierto': dias_transcurridos(dom, ahora),
         # Se publica para que la pantalla no tenga que deducirlo de

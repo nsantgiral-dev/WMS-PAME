@@ -1126,7 +1126,7 @@ class MedidorSQL:
         """
         from app.models.vehiculo import Vehiculo
         from flota.adaptadores.preventivo import ritmo_de
-        from flota.dominio.valores import SIN_DATO
+        from flota.dominio.valores import SIN_DATO, palabra_de_confianza
 
         if not _tabla_existe('flota_lectura_odometro'):
             return None
@@ -1141,7 +1141,15 @@ class MedidorSQL:
                 # `SIN_DATO` ya es una cadena y pasa entero, que es el punto.
                 'km_dia': str(round(r.km_dia, 2)) if r.km_dia is not SIN_DATO
                           else str(r.km_dia),
-                'marca': str(r.marca),
+                # `palabra_de_confianza` y no `str(...)`: `Confianza` hereda de
+                # `str` y de `Enum`, y en 3.11 `str(Confianza.DECLARADA)` es
+                # `'Confianza.DECLARADA'`. Este campo publicaba eso mientras
+                # `cpk_mes` —del mismo JSON— publicaba `'declarada'`, y
+                # `flota.js:1745` lo imprimía tal cual en el panel de salud.
+                # No lo veía nadie porque el único test que lee esta marca usa
+                # un vehículo sin lecturas, donde vale `sin_dato` y `str()` es
+                # un no-op. Lo destapó el día completo, que sí deja lecturas.
+                'marca': palabra_de_confianza(r.marca),
                 'n': r.n,
                 'dias': str(round(r.dias, 1)) if r.dias is not SIN_DATO
                         else str(r.dias),

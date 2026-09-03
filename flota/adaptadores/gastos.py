@@ -99,7 +99,8 @@ from flota.dominio import costos
 from flota.dominio import odometro as dom_odo
 from flota.dominio.costos import SIN_DATO
 from flota.dominio.errores import ErrorFlota, PermisoInsuficiente
-from flota.dominio.valores import Confianza, OrigenLectura
+from flota.dominio.valores import (Lectura, OrigenLectura,
+                                   palabra_de_confianza)
 
 
 class GastoInvalido(ErrorFlota):
@@ -650,11 +651,12 @@ def _tramo_de(lecturas: List[LecturaOdometro]):
     bajo = min(lecturas, key=lambda l: (l.valor_km, l.ts, l.id))
     alto = max(lecturas, key=lambda l: (l.valor_km, l.ts, l.id))
     marca = dom_odo.confianza_del_tramo(bajo.a_dominio(), alto.a_dominio())
-    # `.value` y no `str(...)`: `str()` sobre un enum de Python 3.11 devuelve
-    # `'Confianza.DUDOSA'`, y eso llegaría al tablero tal cual. SIN_DATO ya es
-    # una cadena y pasa entero.
-    return alto.valor_km - bajo.valor_km, (
-        marca.value if isinstance(marca, Confianza) else marca)
+    # `palabra_de_confianza` y no `str(...)`: `str()` sobre un enum de Python
+    # 3.11 devuelve `'Confianza.DUDOSA'`, y eso llegaría al tablero tal cual.
+    # La conversión vivía acá, escrita a mano, y **otros dos sitios la tenían
+    # mal** (`medicion.km_dia_por_vehiculo`, `api/preventivo._ritmo_json`).
+    # Un comentario protege un sitio; una función con nombre protege la política.
+    return alto.valor_km - bajo.valor_km, palabra_de_confianza(marca)
 
 
 def cpk_de(vehiculo_id: int, desde: date, hasta: date) -> dict:
@@ -708,9 +710,33 @@ def cpk_de(vehiculo_id: int, desde: date, hasta: date) -> dict:
     # única franja del día en que la fecha UTC y la de Bogotá coinciden. Es la
     # regla 5 del WMS —una fecha que alguien LEE como día va en Bogotá— violada
     # en código escrito esta misma semana.
-    lecturas = [l for l in LecturaOdometro.query
-                .filter_by(vehiculo_id=vehiculo_id).all()
-                if desde <= _dia_operativo_de(l.ts) <= hasta]
+    # ── Solo las lecturas VIGENTES, y la ventana en día operativo ────────
+    #
+    # `vigentes_tras_la_ultima_correccion` ya existe desde el 2026-09-01 y la
+    # consumían el traspaso y el odómetro; **el CPK no la aplicaba**. Tomaba el
+    # mínimo y el máximo de TODAS las lecturas de la ventana, incluida la que
+    # una corrección había superseído.
+    #
+    # Medido sobre el THP696 real —16.697.948 km de un salto, corregidos
+    # después a 55.349—: el tablero publicaba `cpk: "0.00"` con
+    # `marca: "verificada"` y `km: 16.642.599`. **Un tablero que dice «$0,00 por
+    # kilómetro, verificado» sobre el camión más caro de la flota es peor que
+    # uno vacío: tiene autoridad.** El CPK real del mes es ~$4.780/km sobre 251
+    # km vigentes.
+    #
+    # El filtro de vigencia va ANTES del de ventana: una corrección de hoy
+    # supersede lecturas de la ventana pasada, y filtrar primero por fecha la
+    # dejaría fuera del cálculo que la invalida.
+    _todas = LecturaOdometro.query.filter_by(vehiculo_id=vehiculo_id).all()
+    _vigentes, _ = dom_odo.vigentes_tras_la_ultima_correccion([
+        Lectura(valor_km=l.valor_km, ts=l.ts, origen=OrigenLectura(l.origen),
+                autor_usuario_id=l.autor_usuario_id,
+                motivo_correccion=l.motivo_correccion)
+        for l in _todas])
+    _claves = {(v.valor_km, v.ts) for v in _vigentes}
+    lecturas = [l for l in _todas
+                if (l.valor_km, l.ts) in _claves
+                and desde <= _dia_operativo_de(l.ts) <= hasta]
     # Una sola lectura no delimita un tramo, y cero lecturas tampoco. **No es 0
     # km recorridos**: es que no se puede medir el tramo, y el dominio traduce
     # eso a `sin_dato` en vez de a un CPK con denominador inventado.

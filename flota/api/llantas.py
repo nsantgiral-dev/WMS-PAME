@@ -45,6 +45,7 @@ from flota.adaptadores.modelos import MontajeLlanta
 from flota.api._permisos import MAESTROS_FLOTA, exige
 from flota.dominio import llantas as dom
 from flota.dominio.errores import ErrorFlota
+from flota.dominio.valores import palabra_de_confianza
 
 llantas_bp = Blueprint('flota_llantas', __name__)
 
@@ -86,7 +87,9 @@ def _json_montaje(m: MontajeLlanta) -> dict:
         'km_inicio': m.lectura_inicio.valor_km,
         'km_fin': (m.lectura_fin.valor_km if m.lectura_fin is not None else None),
         'km': str(km),
-        'km_marca': str(marca),
+        # `palabra_de_confianza` y no `str(...)`: en Python 3.11
+        # `str(Confianza.DECLARADA)` devuelve `'Confianza.DECLARADA'`.
+        'km_marca': palabra_de_confianza(marca),
         'motivo_desmontaje': m.motivo_desmontaje,
         'gasto_id': m.gasto_id,
         'observacion': m.observacion,
@@ -110,7 +113,9 @@ def _json_llanta(ll) -> dict:
         'marca': ll.marca,
         'medida': ll.medida,
         'km_acumulado': str(km),
-        'km_marca': str(marca),
+        # `palabra_de_confianza` y no `str(...)`: en Python 3.11
+        # `str(Confianza.DECLARADA)` devuelve `'Confianza.DECLARADA'`.
+        'km_marca': palabra_de_confianza(marca),
         'montajes': len(historia),
         'ultimo_motivo': (ultimo.motivo_desmontaje if ultimo is not None
                           else None),

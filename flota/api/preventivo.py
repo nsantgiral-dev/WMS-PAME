@@ -64,8 +64,17 @@ def _ritmo_json(ritmo) -> dict:
     y sobre cuarenta de tres meses son dos números distintos, y sin ellos quien
     lo lea no puede distinguirlos. `marca` es la confianza del tramo, calculada
     por `confianza_del_tramo` y no reimplementada acá.
+
+    `marca` sale por `palabra_de_confianza` y no por `str()`: `Confianza` hereda
+    de `str` y de `Enum`, y en Python 3.11 `str(Confianza.DECLARADA)` devuelve
+    `'Confianza.DECLARADA'`. Con un vehículo sin lecturas la marca es `sin_dato`
+    —una cadena— y `str()` es un no-op, que es por lo que este campo se publicó
+    mal desde el día uno sin que ningún test lo viera.
     """
-    return {'km_dia': _numero(ritmo.km_dia), 'marca': str(ritmo.marca),
+    from flota.dominio.valores import palabra_de_confianza
+
+    return {'km_dia': _numero(ritmo.km_dia),
+            'marca': palabra_de_confianza(ritmo.marca),
             'n': ritmo.n, 'dias': _numero(ritmo.dias), 'motivo': ritmo.motivo}
 
 

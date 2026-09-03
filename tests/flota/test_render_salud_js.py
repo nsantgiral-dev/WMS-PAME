@@ -342,3 +342,100 @@ class TestElTiempoDeLlenadoEsUnHechoNoUnaAlarma:
         html = _pintar(tmp_path, _sano(segundos_llenado_30d={
             'n': 0, 'minimo': None, 'mediana': None, 'nota': 'ninguna'}))
         assert html == ''
+
+
+class TestNingunCampoDelHealthQuedaMudo:
+    """TRINQUETE — el defecto que este archivo existe para cerrar, medido.
+
+    El 2026-09-03 `/flota/health` publicaba **44 campos** y la pantalla pintaba
+    **32**. Los otros doce se medían, se serializaban, viajaban por la red… y no
+    los leía nadie. Es *captura sin lector*: el mismo patrón que este módulo
+    lleva una semana persiguiendo, cometido dentro del bloque escrito para
+    cerrarlo.
+
+    Once venían de la tanda 1. Uno —`lecturas_ts_duplicado`— se agregó el
+    2026-09-01, en la misma tanda que arreglaba este patrón, y nació mudo.
+
+    **Sin este test la lista crece sola**, porque agregar un campo al health es
+    una línea y pintarlo son seis. Y el que la agrega no es el que la mira.
+    """
+
+    def _campos_declarados(self):
+        import ast
+        arbol = ast.parse((RAIZ / 'flota' / 'api' / 'health.py').read_text(
+            encoding='utf-8'))
+        for n in ast.walk(arbol):
+            if (isinstance(n, ast.Assign)
+                    and any(getattr(t, 'id', '') == '_CAMPOS' for t in n.targets)):
+                return [e.value for e in n.value.elts]
+        raise AssertionError('no se encontró `_CAMPOS` en flota/api/health.py')
+
+    def test_todo_campo_publicado_se_nombra_en_el_PWA(self):
+        """Por nombre y no por comportamiento: probar los 44 pintando cada uno
+        sería un test por campo y nadie lo mantendría. Esto es el piso — que
+        exista el consumidor. Las clases de arriba prueban que lo pintado dice
+        lo correcto."""
+        js = FLOTA_JS.read_text(encoding='utf-8')
+        mudos = [c for c in self._campos_declarados() if c not in js]
+        assert not mudos, (
+            f'\n{len(mudos)} campo(s) del health que nadie lee:\n'
+            + '\n'.join(f'  · {c}' for c in mudos)
+            + '\n\nUn número que se mide y no se muestra es trabajo hecho para '
+              'nadie. Si de verdad no debe pintarse, la pregunta no es «dónde lo '
+              'pongo» sino QUÉ DECISIÓN DEBERÍA ESTAR INFORMANDO.')
+
+    def test_el_detector_ve_un_campo_mudo_de_verdad(self):
+        """La otra dirección. Un detector que no sabe reconocer un campo mudo
+        devuelve lista vacía sobre un tablero ciego, y eso se lee como «está
+        todo pintado»."""
+        js = FLOTA_JS.read_text(encoding='utf-8')
+        assert 'campo_que_nadie_pinta_jamas' not in js
+
+
+class TestLosDoceQueEstabanMudos:
+    """Que además DIGAN algo, no solo que aparezcan."""
+
+    def test_un_vehiculo_sin_responsable_sale_en_rojo(self, tmp_path):
+        html = _pintar(tmp_path, _sano(vehiculos_sin_custodia_activa=2))
+        assert '2 vehículo(s) sin responsable' in html
+        assert 'var(--red)' in html
+
+    def test_el_cierre_forzado_se_nombra_como_conducta(self, tmp_path):
+        """Regla 2: el sistema anota un hecho, no imputa. Dice que alguien cerró
+        el turno de otro sin firma — no dice que hizo mal."""
+        html = _pintar(tmp_path, _sano(custodias_cerradas_forzadas=1))
+        assert 'sin la firma del custodio' in html
+        assert 'conducta' in html
+
+    def test_el_conductor_sin_cuenta_dice_la_consecuencia(self, tmp_path):
+        html = _pintar(tmp_path, _sano(conductores_activos_sin_cuenta=3))
+        assert '3 conductor(es)' in html
+        assert 'no puede distinguirlos' in html
+
+    def test_las_lecturas_del_mismo_segundo_se_cuentan_sin_alarmar(self, tmp_path):
+        """Es ruido medido, no una falla: se publica el hecho sin umbral."""
+        html = _pintar(tmp_path, _sano(lecturas_ts_duplicado=20))
+        assert '20 lectura(s)' in html
+        assert 'var(--red)' not in html
+
+    def test_la_cobertura_de_fichas_se_lee_como_fracción(self, tmp_path):
+        html = _pintar(tmp_path, _sano(vehiculos_activos=6, fichas_completas=2))
+        assert '2 de 6 fichas' in html
+
+    def test_una_flota_con_las_fichas_completas_no_pinta_esa_linea(self, tmp_path):
+        """La otra dirección: el contador no puede gritar cuando está todo."""
+        html = _pintar(tmp_path, _sano(vehiculos_activos=6, fichas_completas=6))
+        assert 'fichas técnicas completas' not in html
+
+    def test_un_tablero_de_QA_lo_dice(self, tmp_path):
+        """**El más importante de los doce.** Un tablero que no declara que sus
+        números son de prueba se lee como si fueran de la operación — y ese es
+        el incidente de las ocho horas escribiendo en la base equivocada, con
+        otra cara."""
+        html = _pintar(tmp_path, _sano(datos_reales=False, ambiente='qa'))
+        assert 'NO son de la operación real' in html
+        assert 'qa' in html
+
+    def test_y_en_produccion_no_ensucia_el_tablero(self, tmp_path):
+        html = _pintar(tmp_path, _sano(datos_reales=True, ambiente='produccion'))
+        assert 'NO son de la operación real' not in html

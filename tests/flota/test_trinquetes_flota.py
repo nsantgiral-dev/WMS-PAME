@@ -13,6 +13,7 @@ respuesta es arreglar el código, no subir el tope.
 """
 import ast
 import os
+import pathlib
 import re
 import warnings
 
@@ -638,28 +639,82 @@ class TestTrinqueteMotorDeProduccion:
 
 class TestTrinqueteAdvertencias:
 
-    def test_importar_flota_no_emite_advertencias(self):
-        import importlib
+    #: Los módulos de flota que se importan en un intérprete limpio.
+    _MODULOS = (
+        'flota.dominio.valores', 'flota.dominio.odometro',
+        'flota.dominio.custodia', 'flota.dominio.fotos',
+        'flota.dominio.errores', 'flota.puertos',
+    )
 
-        modulos = [
-            'flota.dominio.valores',
-            'flota.dominio.odometro',
-            'flota.dominio.custodia',
-            'flota.dominio.fotos',
-            'flota.dominio.errores',
-            'flota.puertos',
-        ]
-        with warnings.catch_warnings(record=True) as capturadas:
-            warnings.simplefilter('always')
-            for m in modulos:
-                importlib.reload(importlib.import_module(m))
+    def test_importar_flota_no_emite_advertencias(self):
+        """En un SUBPROCESO, no con `importlib.reload`.
+
+        **La versión anterior envenenaba la sesión entera.** Recargaba
+        `flota.dominio.valores`, lo que crea un `SIN_DATO` NUEVO — mientras cada
+        módulo que hizo `from flota.dominio.valores import SIN_DATO` sigue
+        apuntando al viejo. A partir de ahí, en esa sesión, hay **dos**
+        singletons y toda comparación por identidad miente.
+
+        Se veía así, tres corridas seguidas y siempre igual:
+
+            assert SIN_DATO is SIN_DATO      ← dos objetos distintos
+
+        y el test que la sufría (`excede_capacidad(...) is SIN_DATO`) pasaba
+        solo y fallaba en conjunto. Lo encontró la bisección, no una corrida.
+
+        Un subproceso contesta la MISMA pregunta —«¿importar flota emite
+        advertencias?»— sobre un intérprete de verdad limpio, que es lo que la
+        pregunta significa, y no toca el estado de nadie. Es la misma técnica
+        que el repo ya usa para ejecutar el JS real en Node.
+        """
+        import json
+        import subprocess
+        import sys
+
+        guion = (
+            'import warnings, json, sys\n'
+            'with warnings.catch_warnings(record=True) as c:\n'
+            '    warnings.simplefilter("always")\n'
+            + ''.join(f'    import {m}\n' for m in self._MODULOS) +
+            'print(json.dumps([f"{w.category.__name__}: {w.message}" for w in c]))\n'
+        )
+        r = subprocess.run([sys.executable, '-c', guion], cwd=_RAIZ,
+                           capture_output=True, text=True, timeout=120)
+        assert r.returncode == 0, f'importar flota reventó:\n{r.stderr[-800:]}'
+        capturadas = json.loads(r.stdout.strip().split('\n')[-1])
 
         assert not capturadas, (
             '\nAdvertencias al importar flota:\n'
-            + '\n'.join(f'  · {w.category.__name__}: {w.message}' for w in capturadas)
+            + '\n'.join(f'  · {w}' for w in capturadas)
             + '\n\nEl tope es 0 y se silencia con razón y fecha en pytest.ini, '
               'nunca con un ignore desnudo.'
         )
+
+    def test_ningun_test_recarga_un_modulo_de_produccion(self):
+        """TRINQUETE — la lección, para que no vuelva por otra puerta.
+
+        `importlib.reload` sobre un módulo de producción rompe la identidad de
+        todo singleton que otros módulos hayan importado por nombre, **y el daño
+        lo sufre el test siguiente, no el que recarga**. Es la peor forma de
+        contaminación: el que falla no es el culpable.
+        """
+        import ast
+
+        malas = []
+        for py in sorted(pathlib.Path(_RAIZ, 'tests').rglob('test_*.py')):
+            try:
+                arbol = ast.parse(py.read_text(encoding='utf-8'))
+            except SyntaxError:
+                continue
+            for n in ast.walk(arbol):
+                if (isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+                        and n.func.attr == 'reload'):
+                    malas.append(f'{py.relative_to(_RAIZ)}:{n.lineno}')
+        assert not malas, (
+            '\n'.join(malas)
+            + '\n\nHacé la comprobación en un subproceso: contesta la misma '
+              'pregunta sobre un intérprete limpio y no le rompe la identidad '
+              'de los singletons al resto de la sesión.')
 
 
 class TestPlacaSiempreVisible:
