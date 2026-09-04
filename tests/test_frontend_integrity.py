@@ -764,9 +764,6 @@ DEUDA_SIN_UI = {
     '/api/conteo/<int:id>/registrar':
         'ORIGEN DEL AJUSTE DE INVENTARIO sin consumidor. El conteo se registra '
         'desde el flujo móvil. Es la más delicada de las once.',
-    '/api/conteo/<int:id>/tarea':
-        'Detalle de una tarea de conteo. La pantalla trae el detalle en el '
-        'listado.',
     '/api/despacho_parcial/<int:packing_id>/despachar':
         'SEGUNDA PUERTA al cierre de packing (244328→142945→142943). El cierre '
         'real pasa por PackingService.cerrar_packing. BORRAR.',
