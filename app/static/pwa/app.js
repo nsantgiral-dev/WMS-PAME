@@ -115,6 +115,11 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 });
 
+// Pestañas del panel admin que un `supervisor` no puede usar en el backend
+// (siempre 403), así que tampoco se muestran. Ver el bloque `esSupervisor`
+// dentro de `mostrarSegunRol()`.
+const _TABS_OCULTAS_SUPERVISOR = ['tab-usuarios', 'tab-muelle', 'tab-liquidacion'];
+
 /**
  * Route user to the correct screen and start timers based on their role.
  * @param {string} rol - User role (admin, operario, recepcionista, conductor, tienda, compras, etc.).
@@ -126,6 +131,7 @@ function mostrarSegunRol(rol) {
   // el procedimiento dice que ve el tablero y no aprueba, y dejarle a la vista
   // pestañas que el backend le va a negar con 403 enseña a ignorar errores.
   const soloFlota = rol === 'control_flota';
+  const esSupervisor = rol === 'supervisor';
   const esRecepcion = rol === 'recepcionista';
   const esConductor = rol === 'conductor';
   const esTienda = rol === 'tienda';
@@ -168,6 +174,20 @@ function mostrarSegunRol(rol) {
     }
     pantalla('pantalla-admin');
     if (OPERARIO) actualizarUI(OPERARIO);
+    if (esSupervisor) {
+      // Cosmético: el backend ya bloquea estas acciones con 403 para
+      // supervisor (Usuarios exige admin puro en auth.py; Muelle exige
+      // admin/jefe_almacen en requisiciones.py; Liquidación exige admin
+      // puro en rutas.py). Esto solo evita que la pestaña quede ahí sin
+      // servir para nada — si algún día cambia el guard del backend y
+      // nadie actualiza esta lista, la pestaña queda mal escondida o mal
+      // mostrada sin que nada avise.
+      _TABS_OCULTAS_SUPERVISOR.forEach(id => {
+        document.querySelectorAll(`.nav-tab[onclick*="${id}"]`).forEach(el => {
+          el.style.display = 'none';
+        });
+      });
+    }
     cargarAdmin();
     TIMER_ADMIN = setInterval(() => cargarAdmin(true), 30000);
   } else if (esRecepcion) {
