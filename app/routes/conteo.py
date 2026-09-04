@@ -117,6 +117,28 @@ def mis_tareas():
     }), 200
 
 
+@conteo_bp.route('/definitivos', methods=['GET'])
+@jwt_required()
+def listar_definitivos():
+    """
+    Cola de "Conteo Definitivo" — sesiones CC1≠CC2 esperando el CC3 que
+    rompe el empate. Solo supervisor/admin/jefe_almacén: el CC3 nace sin
+    asignar a propósito (`ConteoService._crear_conteo_verificacion`) y este
+    es el único lugar donde alguien lo puede tomar.
+    """
+    from app.models.usuario import Usuario
+    try:
+        uid = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
+    u = db.session.get(Usuario, uid)
+    if not u or u.rol not in Roles.SUPERVISION:
+        return jsonify({'error': 'Sin permiso para ver la cola de conteo definitivo'}), 403
+    almacen_id = request.args.get('almacen_id', type=int)
+    pendientes = ConteoService.listar_definitivos(almacen_id=almacen_id)
+    return jsonify({'pendientes': pendientes, 'total': len(pendientes)}), 200
+
+
 @conteo_bp.route('/<int:id>/tarea', methods=['GET'])
 @jwt_required()
 def obtener_tarea(id):

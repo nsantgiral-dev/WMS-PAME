@@ -2175,3 +2175,74 @@ Requisiciones → buscar por referencia).
 también hace falta configurarlo explícitamente en Railway (producción), o si
 alcanza con el nuevo default de código — no se pudo verificar las variables de
 entorno reales de Railway desde esta sesión.
+
+---
+
+## Conteo cíclico real (sobrante/faltante) + Conteo Definitivo (CC3) hecho por supervisor (2026-09-04)
+
+Dos pruebas reales de ajuste de inventario (142951) contra Siesa QA, más
+una feature nueva sobre el flujo de tercer conteo.
+
+### Bug encontrado: `SIESA_TIPO_DOCTO_AJUSTE=AFI` (debía ser `ADI`)
+
+El `.env` local genérico traía `AFI` para `SIESA_TIPO_DOCTO_AJUSTE` — Siesa
+QA lo rechazó: `"El tipo de documento no esta autorizado para moverse en la
+clase de importación"` (mismo síntoma que el bug DC→NI). Verificado en
+Railway (producción) que el valor real es `ADI` — coincide con el fallback
+del código, pero no había que asumirlo sin comprobar. Agregado explícito a
+`.env.qa` para no depender de qué traiga el `.env` genérico.
+
+### Prueba 1 — sobrante y faltante, CC1==CC2 ("verdad de bodega", ajuste automático)
+
+| Escenario | SKU | Siesa antes | Conteo (CC1=CC2) | Siesa después | WMS después |
+|---|---|---|---|---|---|
+| Sobrante | PAPELSP6948 (NB1) | 631 | 641 | 641 ✅ | 641 ✅ |
+| Faltante | PAPELSP9218 (NB1) | 3570 | 3560 | 3560 ✅ | 3560 ✅ |
+
+Ambos con `codigo:0` reales tras corregir `ADI`. Costo también verificado
+(`f400_costo_prom_uni`/`_tot` recalculados por Siesa, no solo cantidad).
+Script: `scripts/qa_conteo_ciclico_real.py`.
+
+### Feature nueva — Conteo Definitivo (CC3) lo hace un supervisor, no un picker automático
+
+Hasta ahora, cuando CC1≠CC2, `_crear_conteo_verificacion()` corría la
+MISMA búsqueda de "otro picker" para crear CC2 y CC3 — el único filtro era
+`!= operario_de_CC2`. En un equipo chico (2-3 pickers) el CC3 podía
+tocarle de vuelta al mismo operario que hizo CC1, rompiendo el
+double-blind justo en el conteo que DEFINE el ajuste (CC3 es autoritativo
+sin importar si coincide con CC1 o CC2).
+
+**Decisión 2026-09-04:** CC3 nace sin `operario_id` y espera en una cola
+nueva, solo visible para `Roles.SUPERVISION` (admin/supervisor/jefe_almacén):
+
+- `GET /api/conteo/definitivos` — lista los CC3 pendientes. Vista ciega
+  (`to_dict_operario()`): ni existencia_siesa ni lo que contaron CC1/CC2
+  se exponen — el punto de CC3 es que sea independiente de los otros dos.
+- Pantalla nueva en el PWA: **Inventario Cíclico → pestaña "🎯 Definitivo"**
+  (`app/static/pwa/conteo.js`, `index.html`). Mismo lenguaje visual que el
+  conteo ciego de `picking.js` (contador grande, escaneo con cámara,
+  confirmar/manual) pero aislada — no toca `TAREA_ACTUAL` ni `pedirTarea()`
+  de picking.js, que pertenecen a la pantalla del operario. Reutiliza el
+  mismo contrato de API que ya usa picking (`/api/mobile/escanear`,
+  `/api/mobile/confirmar` con `tipo='CONTEO'`).
+- `registrar_conteo()` ahora devuelve `raiz_id` cuando CC3 resuelve en
+  DESCUADRE — la pantalla lo necesita para apuntar el
+  `PUT /api/conteo/<raiz_id>/ajustar` a CC1 (la raíz), no a CC3 mismo.
+
+Tests: `tests/test_conteo_definitivo.py` (5, todos verdes) — cubre que CC3
+nace sin asignar, que la cola es ciega, que un operario normal no puede
+verla (403), y el flujo completo autoasignación→escaneo→confirmación.
+
+### Prueba 2 — Conteo Definitivo real de punta a punta
+
+SKU `PAPELSP9830` (NB1). CC1=1786, CC2=1776 (discordantes a propósito),
+CC3=1789 (definitivo — no coincide con ninguno de los dos, y no tiene que
+hacerlo). Recorrido por los endpoints reales de la pantalla nueva
+(`/api/conteo/definitivos` → `/api/conteo/<id>/tarea` →
+`/api/mobile/escanear` ×N → `/api/mobile/confirmar` →
+`PUT /api/conteo/<raiz_id>/ajustar`), aprobado por un usuario con rol
+`supervisor` (`aprobador_id` real, no `AUTO`).
+
+Resultado: Siesa 1781→**1789** (`codigo:0` real), WMS local→**1789** —
+ambos alineados con el conteo definitivo del supervisor. Script:
+`scripts/qa_conteo_definitivo_real.py`.

@@ -93,8 +93,8 @@ async function guardarConfigBodega() {
  */
 function invSubtab(nombre) {
   _INV_SUBTAB = nombre;
-  const tabs = { conteos: 'inv-tab-conteos', abc: 'inv-tab-abc', datos: 'inv-tab-datos' };
-  const panels = { conteos: 'inv-panel-conteos', abc: 'inv-panel-abc', datos: 'inv-panel-datos' };
+  const tabs = { conteos: 'inv-tab-conteos', abc: 'inv-tab-abc', datos: 'inv-tab-datos', definitivo: 'inv-tab-definitivo' };
+  const panels = { conteos: 'inv-panel-conteos', abc: 'inv-panel-abc', datos: 'inv-panel-datos', definitivo: 'inv-panel-definitivo' };
   Object.entries(tabs).forEach(([k, id]) => {
     const el = document.getElementById(id);
     if (!el) return;
@@ -110,6 +110,20 @@ function invSubtab(nombre) {
   if (nombre === 'conteos') cargarConteos();
   else if (nombre === 'abc') cargarResumenAbc();
   else if (nombre === 'datos') kardexCargarPanel();
+  else if (nombre === 'definitivo') cargarConteoDefinitivos();
+}
+
+/** Refresca el contador de la pestaña "Definitivo" sin cambiar de subtab —
+ * llamado desde el refresco general del dashboard admin. */
+async function actualizarBadgeDefinitivos() {
+  const badge = document.getElementById('inv-tab-definitivo-badge');
+  if (!badge) return;
+  try {
+    const d = await get('/api/conteo/definitivos');
+    const n = d.total || 0;
+    badge.textContent = n;
+    badge.style.display = n > 0 ? 'inline' : 'none';
+  } catch (_) { /* silencioso — no es crítico */ }
 }
 
 let _CONTEO_PAGE = 1;
@@ -1067,5 +1081,235 @@ async function conteoConfirmarAjuste() {
   } finally {
     if (btn) { btn.disabled = false; btn.textContent = 'Confirmar → SIESA'; }
   }
+}
+
+
+// ══════════════════════════════════════════════════════════════════════════
+// CONTEO DEFINITIVO (CC3) — pantalla de supervisor, escaneo + confirmación.
+//
+// CC1 y CC2 no coincidieron: el CC3 nace SIN operario asignado
+// (ConteoService._crear_conteo_verificacion, 2026-09-04) y espera acá.
+// Reutiliza el mismo contrato que ya usa picking.js para conteo ciego
+// (/api/mobile/escanear, /api/mobile/confirmar con tipo='CONTEO') pero con
+// su propia UI aislada — no toca TAREA_ACTUAL ni pedirTarea() de
+// picking.js, que pertenecen a la pantalla del operario, no a la del
+// supervisor en el panel admin.
+// ══════════════════════════════════════════════════════════════════════════
+
+let DEF_TAREA_ACTUAL = null;
+
+/** Carga la cola de conteos definitivos pendientes (CC1≠CC2, sin resolver). */
+async function cargarConteoDefinitivos() {
+  const el = document.getElementById('inv-definitivo-lista');
+  if (!el) return;
+  el.innerHTML = '<div style="text-align:center;padding:30px;color:var(--tx3);">Cargando…</div>';
+  try {
+    const d = await get('/api/conteo/definitivos');
+    const pend = d.pendientes || [];
+    const badge = document.getElementById('inv-tab-definitivo-badge');
+    if (badge) {
+      badge.textContent = pend.length;
+      badge.style.display = pend.length > 0 ? 'inline' : 'none';
+    }
+    if (!pend.length) {
+      el.innerHTML = '<div style="text-align:center;padding:40px 20px;color:var(--tx3);">Sin conteos definitivos pendientes ✓</div>';
+      return;
+    }
+    el.innerHTML = pend.map(s => `
+      <div style="background:var(--bg-s);border:1px solid var(--brd);border-radius:12px;padding:14px;margin-bottom:10px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+          <span style="font-size:11px;font-weight:700;color:#f59e0b;background:rgba(120,53,15,.35);padding:2px 8px;border-radius:8px;">CC1 ≠ CC2</span>
+          <span style="font-size:11px;color:var(--tx3);">${s.almacen_nombre || ''}</span>
+        </div>
+        <div style="font-size:15px;font-weight:700;color:var(--tx);">${s.producto_nombre || s.producto_codigo || '—'}</div>
+        <div style="font-size:13px;color:var(--tx3);">${s.producto_codigo || ''} · Ubicación ${s.ubicacion_codigo || '—'}</div>
+        <div style="font-size:11px;color:var(--tx3);margin-top:4px;">${s.operario_nombre ? `En proceso por ${s.operario_nombre}` : 'Sin asignar — tómalo vos'}</div>
+        <button onclick="defAbrirConteo(${s.id})" style="width:100%;margin-top:10px;padding:12px;background:var(--pm);color:#fff;border:none;border-radius:10px;font-size:14px;font-weight:700;cursor:pointer;">🎯 Contar ahora</button>
+      </div>`).join('');
+  } catch (e) {
+    el.innerHTML = '<div style="text-align:center;padding:30px;color:#ef4444;">Error cargando la cola</div>';
+  }
+}
+
+/** Abre el modal de conteo definitivo para una sesión CC3 — se auto-asigna al supervisor. */
+async function defAbrirConteo(id) {
+  try {
+    const t = await get(`/api/conteo/${id}/tarea`);
+    DEF_TAREA_ACTUAL = {
+      id: t.id,
+      producto_codigo: t.producto_codigo,
+      producto_nombre: t.producto_nombre,
+      ubicacion: t.ubicacion_codigo,
+      maneja_lote: t.maneja_lote,
+      contado: 0,
+    };
+    document.getElementById('def-modal').style.display = 'flex';
+    _defRender();
+  } catch (e) {
+    alerta('No se pudo abrir el conteo — ' + (e.message || 'error de conexión'), 'error');
+  }
+}
+
+/** Renderiza el HUD de conteo ciego definitivo (mismo lenguaje visual que picking.js). */
+function _defRender() {
+  const t = DEF_TAREA_ACTUAL;
+  if (!t) return;
+  const puedeCamara = OPERARIO && OPERARIO.puede_usar_camara;
+  document.getElementById('def-modal-contenido').innerHTML = `
+    <div style="background:#78350f;color:#fcd34d;border-radius:12px;padding:10px 16px;font-size:18px;font-weight:700;text-align:center;margin-bottom:16px;">🎯 CONTEO DEFINITIVO</div>
+
+    <div style="background:#000;border:1px solid #222;border-radius:16px;padding:20px;margin-bottom:12px;">
+      <div style="font-size:13px;color:#666;">UBICACIÓN</div>
+      <div style="font-size:44px;font-weight:900;letter-spacing:2px;color:#fff;">${t.ubicacion || '—'}</div>
+    </div>
+
+    <div style="background:#111;border-radius:16px;padding:16px;margin-bottom:12px;">
+      <div style="font-size:13px;color:#666;">PRODUCTO</div>
+      <div style="font-size:20px;font-weight:700;color:#fff;">${t.producto_nombre || '—'}</div>
+      <div style="font-size:15px;color:#aaa;font-weight:400;">${t.producto_codigo || ''}</div>
+    </div>
+
+    <div style="background:#1a1a1a;border-radius:16px;padding:20px;margin-bottom:12px;text-align:center;">
+      <div style="font-size:13px;color:#666;">CONTEO CIEGO — DEFINITIVO</div>
+      <div id="def-contador" style="font-size:64px;font-weight:900;color:#fff;">${t.contado}</div>
+      <div style="font-size:13px;color:#555;margin-top:6px;">Rompe el empate entre el 1er y 2do conteo — tampoco los ves</div>
+    </div>
+
+    ${puedeCamara ? `
+    <button onclick="defAbrirCamara()" style="width:100%;padding:14px;font-size:17px;background:#fff;color:#000;border:2px solid #000;border-radius:12px;cursor:pointer;margin-bottom:10px;">
+      📷 Escanear con cámara
+    </button>
+    <div id="def-camara-box" style="display:none;margin-bottom:10px;">
+      <div id="def-lector-qr" style="border-radius:12px;overflow:hidden;"></div>
+      <button onclick="cerrarCamara('def-camara-box')" style="width:100%;padding:10px;margin-top:6px;font-size:15px;background:#333;color:#fff;border:none;border-radius:10px;cursor:pointer;">Cerrar cámara</button>
+    </div>` : ''}
+
+    <button id="def-btn-ok" onclick="defConfirmar()" style="width:100%;padding:20px;font-size:22px;font-weight:700;background:#16a34a;color:#fff;border:none;border-radius:16px;cursor:pointer;margin-bottom:10px;">
+      ✓ Confirmar conteo definitivo
+    </button>
+
+    <button onclick="defConfirmarManual()" style="width:100%;padding:14px;font-size:15px;font-weight:600;background:#1a2a1a;color:#4ade80;border:1px solid #166534;border-radius:12px;cursor:pointer;margin-bottom:10px;">
+      ✓ Confirmar conteo manual
+    </button>
+
+    <button onclick="defCerrarModal()" style="width:100%;padding:14px;font-size:15px;font-weight:600;background:#1a1a1a;color:#aaa;border:1px solid #333;border-radius:12px;cursor:pointer;">
+      Cerrar sin confirmar
+    </button>`;
+}
+
+/** Abre la cámara del navegador con su propia caja (aislada de picking.js). */
+async function defAbrirCamara() {
+  await abrirCamara('def-lector-qr', 'def-camara-box', defProcesarScan);
+}
+
+/** Procesa un código escaneado: mismo contrato que picking.js para CONTEO
+ * (valida contra el producto en el servidor, incrementa cantidad_fisica). */
+async function defProcesarScan(codigo) {
+  if (!DEF_TAREA_ACTUAL) return;
+  try {
+    const r = await post('/api/mobile/escanear', {
+      tarea_id: DEF_TAREA_ACTUAL.id, tipo: 'CONTEO', codigo, cantidad: 1,
+    });
+    if (r.error) {
+      beepError();
+      alerta(typeof r.error === 'object' ? r.error.mensaje : r.error, 'error');
+      return;
+    }
+    beepOk();
+    DEF_TAREA_ACTUAL.contado = r.cantidad_contada;
+    const el = document.getElementById('def-contador');
+    if (el) el.textContent = DEF_TAREA_ACTUAL.contado;
+  } catch (e) {
+    beepError();
+    alerta(e.status ? e.message : 'Error de conexión', 'error');
+  }
+}
+
+/** Confirma sin escáner — el supervisor contó físicamente y escribe el número. */
+async function defConfirmarManual() {
+  if (!DEF_TAREA_ACTUAL) return;
+  const cantStr = prompt('¿Cuántas unidades contaste físicamente?');
+  if (cantStr === null) return;
+  const cant = parseInt(cantStr, 10);
+  if (isNaN(cant) || cant < 0) {
+    alerta('Cantidad inválida', 'error');
+    return;
+  }
+  DEF_TAREA_ACTUAL.contado = cant;
+  const el = document.getElementById('def-contador');
+  if (el) el.textContent = cant;
+  await defConfirmar();
+}
+
+/** Envía el conteo definitivo al backend — dispara la propagación a la raíz (CC1). */
+async function defConfirmar() {
+  if (!DEF_TAREA_ACTUAL) return;
+  const btn = document.getElementById('def-btn-ok');
+  if (btn) { btn.textContent = 'Confirmando...'; btn.disabled = true; }
+  try {
+    const r = await post('/api/mobile/confirmar', {
+      tarea_id: DEF_TAREA_ACTUAL.id, tipo: 'CONTEO', items_escaneados: [],
+    });
+    if (r.error) {
+      alerta(typeof r.error === 'object' ? r.error.mensaje : r.error, 'error');
+      if (btn) { btn.textContent = '✓ Confirmar conteo definitivo'; btn.disabled = false; }
+      return;
+    }
+    beepDone();
+    _defMostrarResultado(r);
+  } catch (e) {
+    alerta(e.status ? e.message : 'Error de conexión', 'error');
+    if (btn) { btn.textContent = '✓ Confirmar conteo definitivo'; btn.disabled = false; }
+  }
+}
+
+/** Muestra el resultado (MATCH con Siesa, o DESCUADRE definitivo pendiente de aprobar). */
+function _defMostrarResultado(r) {
+  const esMatch = r.resultado === 'MATCH';
+  const cont = document.getElementById('def-modal-contenido');
+  if (!cont) return;
+  cont.innerHTML = `
+    <div style="text-align:center;padding:30px 10px;">
+      <div style="font-size:64px;">${esMatch ? '✅' : '⚠️'}</div>
+      <div style="font-size:22px;font-weight:900;color:${esMatch ? '#22C55E' : '#FBBF24'};margin-top:10px;">
+        ${esMatch ? 'Coincide con Siesa' : 'Conteo definitivo registrado'}
+      </div>
+      <div style="font-size:14px;color:#aaa;margin-top:8px;line-height:1.5;">${r.mensaje || ''}</div>
+      ${(!esMatch && r.raiz_id) ? `
+      <button onclick="defAprobarAjuste(${r.raiz_id})" style="width:100%;margin-top:20px;padding:16px;font-size:16px;font-weight:700;background:var(--pm);color:#fff;border:none;border-radius:12px;cursor:pointer;">
+        Aprobar ajuste ahora → Siesa
+      </button>
+      <div style="font-size:11px;color:#666;margin-top:8px;">O revísalo después desde Conteos → Acción</div>` : ''}
+      <button onclick="defCerrarModal()" style="width:100%;margin-top:12px;padding:14px;font-size:14px;background:#1a1a1a;color:#aaa;border:1px solid #333;border-radius:12px;cursor:pointer;">
+        Cerrar
+      </button>
+    </div>`;
+}
+
+/** Aprueba el ajuste ya mismo (PUT /api/conteo/<raiz_id>/ajustar) — dispara el POST real a Siesa vía DLQ. */
+async function defAprobarAjuste(raizId) {
+  try {
+    const r = await fetch(API + `/api/conteo/${raizId}/ajustar`, {
+      method: 'PUT',
+      headers: { Authorization: 'Bearer ' + TOKEN },
+    });
+    const d = await r.json();
+    if (r.ok) {
+      alerta(`Ajuste ${d.motivo_codigo || ''} encolado a Siesa`, 'exito');
+      defCerrarModal();
+    } else {
+      alerta(d.error || 'Error al aprobar el ajuste', 'error');
+    }
+  } catch (e) {
+    alerta('Error de conexión', 'error');
+  }
+}
+
+/** Cierra el modal de conteo definitivo y refresca la cola. */
+function defCerrarModal() {
+  const modal = document.getElementById('def-modal');
+  if (modal) modal.style.display = 'none';
+  DEF_TAREA_ACTUAL = null;
+  cargarConteoDefinitivos();
 }
 
