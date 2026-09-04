@@ -356,14 +356,17 @@ class DespachoParialService:
             raise ValueError('Tarea sin tipo_docto/consec_docto — imposible facturar')
 
         if tarea.siesa_triggered:
-            # Por RM, no por pedido — mismo motivo que el chequeo de abajo (un
-            # segundo parcial del mismo pedido vería la FE del primero y se
-            # marcaría hecho sin facturar su propia remisión). Además,
-            # `get_factura_desde_pedido` depende de la consulta dinámica
-            # `papeleriamedellin_monitos_facturas_wms`, que no existe
-            # registrada en Connekta (verificado en vivo contra QA,
-            # 2026-08-14) — abortaba con 401 antes de poder recuperar nada.
-            facturas_check = connekta.get_factura_desde_remision(tarea.rm_tipo, tarea.rm_consec)
+            # Por PEDIDO, no por RM — cambiado 2026-09-04, ver la nota larga
+            # más abajo: `get_factura_desde_remision` filtra por campos
+            # `f460_*` que **no existen** en la API real de Siesa (confirmado
+            # en vivo contra QA descargando el esquema completo de una
+            # factura real — ni un solo campo `f460_*` aparece). No hay forma
+            # de preguntarle a Siesa "¿esta REMISIÓN puntual ya tiene
+            # factura?" — solo "¿este PEDIDO ya tiene alguna factura?"
+            # (`f430_consec_docto`, vía `get_factura_desde_pedido`, ya
+            # arreglada el mismo día — apuntaba a una consulta dinámica
+            # inexistente).
+            facturas_check = connekta.get_factura_desde_pedido(tipo_docto, consec_docto)
             if facturas_check:
                 raise ValueError(f'Tarea {tarea.id} ya procesada — FE confirmada en Siesa')
             logger.warning(
@@ -385,19 +388,28 @@ class DespachoParialService:
                 'Usar POST /facturar-rm-manual con el número de RM visible en Siesa.'
             )
 
-        # Anti-duplicado FE — **por REMISIÓN, no por pedido**.
+        # Anti-duplicado FE — **por PEDIDO** (cambiado 2026-09-04).
         #
-        # Lo que se está por hacer es facturar ESTA remisión. Preguntar si el
-        # PEDIDO tiene alguna factura responde otra cosa: en un segundo
-        # despacho parcial del mismo pedido, la FE del primer parcial hace que
-        # el guard diga «ya existe» y la tarea se marque hecha **sin facturar
-        # la segunda remisión**. Inventario afuera sin documento fiscal, que es
-        # el mismo daño que el `[]` de los compromisos.
+        # Hasta hoy este guard preguntaba por REMISIÓN (`get_factura_desde_
+        # remision`, filtro `f460_*`) a propósito: preguntar por el PEDIDO
+        # tiene un riesgo real conocido — en un segundo despacho parcial del
+        # mismo pedido, la FE del primer parcial haría que el guard diga «ya
+        # existe» y la tarea se marque hecha **sin facturar la segunda
+        # remisión**. Inventario afuera sin documento fiscal.
         #
-        # `get_factura_desde_remision` filtra por `f460_*` —la RM dentro de
-        # RelacionDoctos— y es la pregunta correcta. Estaba escrita, probada y
-        # **sin un solo caller**.
-        facturas_existentes = connekta.get_factura_desde_remision(tipo_rm, consec_rm)
+        # Se cambia igual porque, verificado en vivo contra Siesa QA
+        # (2026-09-04, descargando el esquema completo y real de una factura
+        # existente): `API_v2_Ventas_Facturas_DesdePedido` **no expone
+        # ningún campo `f460_*`** — ni uno solo, en ninguna fila. La pregunta
+        # "¿esta remisión puntual ya tiene factura?" no tiene forma de
+        # hacerse hoy contra esta API; `f460_id_tipo_docto`/`f460_consec_
+        # docto` nunca fueron campos reales. Decisión explícita del usuario:
+        # aceptar el riesgo (real pero acotado a pedidos con más de un
+        # despacho parcial) a cambio de un guard que sí funciona contra Siesa
+        # real, en vez de uno teóricamente más preciso que siempre fallaba.
+        # Si el caso de doble parcial se vuelve real, hay que resolverlo
+        # entonces — no hay hoy una consulta Siesa que lo resuelva mejor.
+        facturas_existentes = connekta.get_factura_desde_pedido(tipo_docto, consec_docto)
         if facturas_existentes:
             logger.info('[FACTURAR_RM] tarea=%s FE ya existe — marcando done', tarea.id)
             return DespachoParialService._persistir_resultado(
@@ -431,8 +443,10 @@ class DespachoParialService:
         tipo_docto   = tarea.tipo_docto_pedido_siesa
         consec_docto = tarea.consec_docto_pedido_siesa
 
-        # Anti-duplicado FE — por REMISIÓN (ver `facturar_remision_existente`).
-        facturas = connekta.get_factura_desde_remision(tipo_rm, consec_rm)
+        # Anti-duplicado FE — por PEDIDO (ver la nota larga en
+        # `facturar_remision_existente`, 2026-09-04: `f460_*` no existe en la
+        # API real de Siesa, no hay forma de preguntar por la remisión).
+        facturas = connekta.get_factura_desde_pedido(tipo_docto, consec_docto)
         if facturas:
             return DespachoParialService._persistir_resultado(
                 tarea, f'{tipo_rm}-{consec_rm}',

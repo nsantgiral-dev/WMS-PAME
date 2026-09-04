@@ -238,7 +238,18 @@ class ConnektaGateway:
         # Tipo documento recibo de caja en Siesa
         self.tipo_docto_recibo_caja   = os.getenv('SIESA_TIPO_DOCTO_RECIBO_CAJA', 'RC')
         # Tipo documento de causación en Siesa (retenciones)
-        self.tipo_docto_docto_contable = os.getenv('SIESA_TIPO_DOCTO_DOCTO_CONTABLE', 'DC')
+        # Default 'NI' — no 'DC'. 'DC' nunca se verificó contra el maestro
+        # real de Siesa (confirmado 2026-09-04: en este Siesa, 'DC' es
+        # "Documento de Causación" de COMPRAS, sin ningún origen habilitado
+        # del lado de Cuentas por Cobrar). 'NI' (Nota de legalización) es el
+        # tipo ya probado en producción para este mismo conector (142882,
+        # clase 30) por el proyecto hermano gestor-cartera-pame — ver su
+        # CLAUDE.md, entrada RC1 (26-ago-2026): documento 004-NI-7 Aprobado,
+        # con retención + base gravable, cruzando cartera real. Mismo Siesa
+        # (F_CIA=1), mismo conector, mismo problema ("El tipo de documento no
+        # está autorizado para moverse en la clase de importación") probado
+        # antes con 'RC' y resuelto con 'NI'.
+        self.tipo_docto_docto_contable = os.getenv('SIESA_TIPO_DOCTO_DOCTO_CONTABLE', 'NI')
         # Causal de devolución (f470_id_causal_devol, char(2)) — campo opcional
         # (nullable en el spec, no aparece en la lista de obligatorios que Siesa
         # exige en 'Movimientos'; el propio flujo manual de Siesa lo deja en
@@ -803,6 +814,28 @@ class ConnektaGateway:
                 retry_after = r.headers.get('Retry-After', '300')
                 logger.warning(f'[CONNEKTA] GET {nombre_api}: rate-limit (429) — Retry-After={retry_after}s')
                 raise Exception(f'Connekta rate-limit (429) — reintento en {retry_after}s')
+            if r.status_code == 400:
+                # `API_v2_Ventas_Facturas_DesdePedido` (confirmado en vivo
+                # contra Siesa QA, 2026-09-04) reporta "sin resultados" como
+                # HTTP 400 con codigo=1 — no como 200 + lista vacía. Es una
+                # convención de esta API, no un error real: sin distinguirla
+                # acá, cualquier consulta que legítimamente no encuentre nada
+                # (ej. `get_factura_desde_pedido` en el caso normal — la
+                # mayoría de pedidos no tienen FE todavía) se ve idéntica a un
+                # fallo de red, y el guard fail-fast de FE duplicada aborta el
+                # cierre siempre, no solo cuando de verdad hay un problema.
+                try:
+                    _body_400 = r.json()
+                except ValueError:
+                    _body_400 = {}
+                _detalle_400 = str(_body_400.get('detalle') or '').lower()
+                if _body_400.get('codigo') == 1 and 'no se encontraron registros' in _detalle_400:
+                    logger.info(
+                        f'[CONNEKTA] GET {nombre_api}: sin resultados '
+                        '(400 "no encontrados" — vacío, no error)')
+                    self._cb_record_success()
+                    return {'codigo': 0, 'mensaje': 'Transacción Exitosa (sin resultados)',
+                            'detalle': {'Table': []}}
             r.raise_for_status()
             data = r.json()
             if isinstance(data, dict):
@@ -1017,7 +1050,16 @@ class ConnektaGateway:
                 f"f350_id_co = {_lit(self.centro_op)} "
                 f"AND f430_consec_docto = {consec_int}"
             )
-            res = self._get('papeleriamedellin_monitos_facturas_wms', {
+            # `papeleriamedellin_monitos_facturas_wms` (consulta dinámica
+            # custom) NO está registrada en Connekta — confirmado 401 en vivo
+            # contra Siesa QA (2026-08-14 y otra vez 2026-09-04). La API
+            # estándar ya registrada `API_v2_Ventas_Facturas_DesdePedido`
+            # acepta el mismo filtro por `f430_consec_docto` (verificado en
+            # vivo, 2026-09-04) — es la misma que ya usan
+            # `get_rowids_factura`/`get_factura_desde_remision`, solo que acá
+            # se filtra por el PEDIDO en vez de por la FE o la RM (todavía no
+            # existen en el momento en que este precheck corre).
+            res = self._get('API_v2_Ventas_Facturas_DesdePedido', {
                 'paginacion': 'numPag=1|tamPag=50',
                 'parametros': parametros,
             })
@@ -3383,24 +3425,41 @@ class ConnektaGateway:
 
     def get_consec_rit_by_referencia(self, codigo_solicitud: str) -> int | None:
         """
-        Recovery: API_v2_Inventarios_RequisicionesParaTransferir filtrada por f440_referencia.
-        Retorna f440_consec_docto de la RIT creada para este traslado.
+        Recovery: consulta dinámica (Connekta → Consultas Dinámicas)
+        `api_tecnocedi_requisiciones_traslado`, filtrada en memoria por
+        f440_referencia. Retorna f440_consec_docto de la RIT creada para
+        este traslado.
+
+        `API_v2_Inventarios_RequisicionesParaTransferir` (nombre anterior,
+        por analogía v1→v2 con el conector POST 174646) nunca existió en
+        Connekta — daba 401 indistinguible de un problema de permisos
+        (2026-09-04, ver CLAUDE.md "Los 12 traslados inter-bodega reales").
+        El nombre real se encontró en Siesa QA → Administración → Permisos
+        servicios → buscador de consultas dinámicas del usuario.
+
+        Es consulta DINÁMICA, no estándar: va por `url_get_dinamico`
+        (`ejecutarconsulta`) y sin `parametros` — las consultas dinámicas
+        custom de este ambiente no soportan filtro en tiempo real (mismo
+        hallazgo que `get_terceros_contacto`/`get_vendedor_contacto`), así
+        que se trae la página y se filtra acá.
+
+        Nombres de campo (`f440_referencia`, `f440_consec_docto`) asumidos
+        iguales a los del payload POST de 174646 (misma tabla t440) — sin
+        verificar contra una respuesta real: el 401 de permisos (issue
+        abierto, ver CLAUDE.md) bloqueó ver el schema real en vivo.
         """
         try:
             res = self._get(
-                'API_v2_Inventarios_RequisicionesParaTransferir',
-                params_extra={
-                    'paginacion': 'numPag=1|tamPag=5',
-                    'parametros': (
-                        f"f440_id_co = {_lit(self.centro_op)}"
-                        f" AND f440_referencia = {_lit(codigo_solicitud)}"
-                    ),
-                },
+                'api_tecnocedi_requisiciones_traslado',
+                params_extra={'paginacion': 'numPag=1|tamPag=100'},
+                url=self.url_get_dinamico,
             )
             rows = (
                 res.get('detalle', {}).get('Table') or
                 res.get('detalle', {}).get('Datos') or []
             )
+            rows = [r for r in rows
+                    if str(r.get('f440_referencia', '')).strip() == str(codigo_solicitud).strip()]
             if rows:
                 consec = rows[0].get('f440_consec_docto')
                 return int(consec) if consec else None
@@ -3602,27 +3661,32 @@ class ConnektaGateway:
         """
         API_custom_TercerosContacto (ID 8232) — Connekta Consultas Dinámicas.
         JOIN T200 × T015: devuelve clientes activos con celular, teléfono y email.
+        Sin filtro por NIT del lado de Siesa — verificado en vivo (2026-09-01):
+        la consulta responde "el query a ejecutar no maneja parametros" ante
+        cualquier `parametros`, aunque el Asistente la muestre con esa opción.
+        `nit` filtra en memoria sobre la ÚNICA página ya traída — no busca en
+        las otras (son 52 páginas de 100, ~5100 registros; recorrerlas todas
+        en cada llamada sería caro para lo que hoy es un endpoint de debug).
         Parámetros opcionales:
-          nit       — filtra por NIT exacto
+          nit       — filtra en memoria sobre `pagina` (no busca otras páginas)
           pagina    — número de página (paginación Connekta)
           tam_pagina — registros por página (máx 100 recomendado)
         Retorna lista de dicts con: f200_id, f200_nit, f200_razon_social,
           f200_nombres, f200_apellido1, f200_apellido2,
           f015_celular, f015_telefono, f015_email
         """
-        parametros_extra = f"t200.f200_nit = {_lit(nit)}" if nit else None
         try:
             res = self._get(
                 'papeleriamedellin_API_custom_TercerosContacto',
-                params_extra={
-                    'paginacion': f'numPag={pagina}|tamPag={tam_pagina}',
-                    **(({'parametros': parametros_extra}) if parametros_extra else {}),
-                },
+                params_extra={'paginacion': f'numPag={pagina}|tamPag={tam_pagina}'},
+                url=self.url_get_dinamico,
             )
             rows = (
                 res.get('detalle', {}).get('Table') or
                 res.get('detalle', {}).get('Datos') or []
             )
+            if nit:
+                rows = [r for r in rows if str(r.get('f200_nit', '')).strip() == str(nit).strip()]
             logger.info('[CONNEKTA] get_terceros_contacto: %d registros (pag %d)', len(rows), pagina)
             return rows
         except Exception as e:

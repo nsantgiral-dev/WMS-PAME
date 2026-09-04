@@ -12,6 +12,12 @@ build/
 # Entorno
 .env
 .env.local
+.env.qa
+.env.*
+
+# Bases SQLite aisladas de pruebas manuales contra Siesa QA — nunca la
+# Postgres real, ver scripts/qa_verificar_conexion.py.
+scripts/*.db
 
 # Mac
 .DS_Store

@@ -1361,6 +1361,7 @@ def _procesar_recaudo(recaudo: RecaudoEntrega, notas_base: str,
     # Obtener NIT del cliente desde la tarea
     # El NIT viene del pedido original — buscar en PedidoSiesa
     tercero_nit, sucursal = _obtener_tercero(tarea)
+    co_factura, cuenta_cxc, un_cxc = _resolver_cuenta_cxc(tarea, tipo_docto_fe, consec_fe)
 
     estado = recaudo.estado_entrega
     forma_pago = (recaudo.forma_pago or '').upper()
@@ -1437,6 +1438,9 @@ def _procesar_recaudo(recaudo: RecaudoEntrega, notas_base: str,
                 notas=f'{notas_base} | PARCIAL contado — cobro',
                 admin_id=admin_id,
                 depende_de_nc=True,
+                co_factura=co_factura,
+                cuenta_cxc=cuenta_cxc,
+                unidad_negocio=un_cxc,
             )
             resultado['rc'] = 1
 
@@ -1447,6 +1451,9 @@ def _procesar_recaudo(recaudo: RecaudoEntrega, notas_base: str,
                 tercero_nit, sucursal,
                 notas=f'{notas_base} | Retención {recaudo.motivo_descuento}',
                 admin_id=admin_id,
+                co_factura=co_factura,
+                cuenta_cxc=cuenta_cxc,
+                unidad_negocio=un_cxc,
             )
             resultado['dc'] = 1
 
@@ -1525,6 +1532,9 @@ def _procesar_recaudo(recaudo: RecaudoEntrega, notas_base: str,
                 tercero_nit, sucursal, monto_rc, forma_pago,
                 notas=f'{notas_base} | ENTREGADO contado',
                 admin_id=admin_id,
+                co_factura=co_factura,
+                cuenta_cxc=cuenta_cxc,
+                unidad_negocio=un_cxc,
             )
             resultado['rc'] = 1
 
@@ -1534,6 +1544,9 @@ def _procesar_recaudo(recaudo: RecaudoEntrega, notas_base: str,
                 tercero_nit, sucursal,
                 notas=f'{notas_base} | Retención {recaudo.motivo_descuento}',
                 admin_id=admin_id,
+                co_factura=co_factura,
+                cuenta_cxc=cuenta_cxc,
+                unidad_negocio=un_cxc,
             )
             resultado['dc'] = 1
 
@@ -1568,6 +1581,50 @@ def _obtener_tercero(tarea) -> tuple:
         tarea.tipo_docto_pedido_siesa, tarea.consec_docto_pedido_siesa
     )
     return '', '001'
+
+
+def _resolver_cuenta_cxc(tarea, tipo_docto_fe, consec_fe) -> tuple:
+    """(co_factura, cuenta_cxc, un_cxc) reales desde Siesa — o ('', '', '') si
+    no se pudo resolver.
+
+    Extraída de `registrar_cobro_recaudo` (2026-09-04). `_procesar_recaudo`
+    (el botón masivo "Liquidar Ruta", el mismo que usa el administrador en
+    producción) nunca llamaba esto — mandaba el Recibo de Caja con cuenta y
+    Unidad de Negocio vacías, cayendo al fallback fijo del conector
+    (`SIESA_CXC_AUXILIAR` + UN por defecto), casi nunca la cuenta real del
+    cliente. Confirmado en vivo contra Siesa QA real (PD1125, PD1450,
+    2026-09-04): rechazo con "el auxiliar de caja maneja una U.N. diferente
+    a la del documento" + "El documento de cruce no existe" — el mismo par
+    de mensajes que ya había costado el caso real PD1411/FE-1416
+    (2026-08-18), corregido entonces solo en `registrar_cobro_recaudo`, sin
+    llegar nunca al botón masivo. Ver Regla 0 del CLAUDE.md — una pregunta,
+    dos sitios, diverge.
+    """
+    from app.services.connekta_gateway import connekta
+    co_factura = cuenta_cxc = un_cxc = ''
+    try:
+        cabecera = connekta.get_pedido_cabecera(
+            tarea.tipo_docto_pedido_siesa, tarea.consec_docto_pedido_siesa)
+        if not cabecera:
+            return co_factura, cuenta_cxc, un_cxc
+        co_factura = cabecera.get('f430_id_co', '') or ''
+        nit = cabecera.get('f200_id_pedido_fact', '') or ''
+        if not nit:
+            return co_factura, cuenta_cxc, un_cxc
+        cxc_data = connekta.get_cxc_general(nit)
+        from app.services import cxc_cruce as _cx
+        fila_cxc = _cx.fila_de_la_factura(
+            cxc_data, tarea.tipo_docto_pedido_siesa, tarea.consec_docto_pedido_siesa,
+            tipo_docto_fe, consec_fe)
+        if fila_cxc:
+            cuenta_cxc = fila_cxc.get('f253_id', '') or ''
+            un_cxc = fila_cxc.get('f353_id_un_cruce', '') or ''
+    except Exception as e:
+        logger.warning(
+            '[LIQUIDACION] _resolver_cuenta_cxc falló para tarea %s: %s',
+            tarea.id, e
+        )
+    return co_factura, cuenta_cxc, un_cxc
 
 
 def _crear_devolucion_pendiente(recaudo: RecaudoEntrega, tarea, tipo_docto_fe: str,
