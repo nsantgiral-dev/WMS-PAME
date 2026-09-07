@@ -211,6 +211,137 @@ class TestDispensador:
 
         assert resultado is None
 
+    @staticmethod
+    def _crear_otro_operario(db, almacen, email):
+        from app.models.usuario import Usuario
+        from werkzeug.security import generate_password_hash
+        u = Usuario(nombre='Otro Operario', email=email,
+                    password_hash=generate_password_hash('test123'),
+                    rol='operario', almacen_id=almacen.id, activo=True)
+        db.session.add(u)
+        db.session.commit()
+        return u
+
+    def test_pedido_chico_queda_pegado_al_primer_operario(self, app, db, mobile_setup, producto2):
+        """
+        Pedido con 2 líneas (< PEDIDO_LINEAS_PARALELIZABLE, default 4): el
+        operario que toma la primera línea se queda con el pedido — otro
+        operario no puede tomar la segunda línea mientras la primera siga
+        sin terminar. Partir un pedido chico entre varios pickers no gana
+        velocidad real y sí le suma coordinación al empaque.
+        """
+        from app.services.mobile_service import MobileService
+
+        s = mobile_setup
+        otro = self._crear_otro_operario(db, s['almacen'], 'otro_chico@test.com')
+
+        linea1 = _crear_tarea(db, s['producto'], s['ubicacion'], s['almacen'],
+                               referencia_documento='PD-CHICO')
+        linea2 = _crear_tarea(db, producto2, s['ubicacion'], s['almacen'],
+                               referencia_documento='PD-CHICO')
+
+        resultado_a = MobileService.get_tarea_actual(s['usuario'].id)
+        assert resultado_a['id'] == linea1.id
+
+        resultado_b = MobileService.get_tarea_actual(otro.id)
+        assert resultado_b is None, (
+            'la línea 2 de un pedido chico no debe ofrecerse a otro operario '
+            'mientras la línea 1 la tenga alguien más')
+
+        db.session.refresh(linea2)
+        assert linea2.operario_id is None
+
+    def test_pedido_chico_libera_la_segunda_linea_al_mismo_operario(self, app, db, mobile_setup, producto2):
+        """El "pegado" es al operario, no un bloqueo total — el mismo
+        operario que tiene la línea 1 sigue recibiendo las demás líneas de
+        su propio pedido chico al terminarlas (mismo criterio que ya prueba
+        test_dispensador_continua_mismo_documento_pese_a_orden_fisico)."""
+        from datetime import datetime as _dt
+        from app.services.mobile_service import MobileService
+
+        s = mobile_setup
+        _crear_tarea(
+            db, s['producto'], s['ubicacion'], s['almacen'],
+            referencia_documento='PD-CHICO-2', estado=EstadoPicking.COMPLETADO,
+            operario_id=s['usuario'].id, cantidad_recogida=10,
+            fecha_completado=_dt.utcnow(),
+        )
+        linea2 = _crear_tarea(db, producto2, s['ubicacion'], s['almacen'],
+                               referencia_documento='PD-CHICO-2')
+
+        resultado = MobileService.get_tarea_actual(s['usuario'].id)
+
+        assert resultado['id'] == linea2.id
+
+    def test_pedido_grande_se_reparte_entre_varios_operarios(self, app, db, mobile_setup, producto2):
+        """Pedido con >= PEDIDO_LINEAS_PARALELIZABLE líneas (4 por defecto):
+        dos operarios distintos SÍ pueden tomar líneas distintas del mismo
+        pedido al mismo tiempo — acá sí conviene paralelizar."""
+        from app.models.producto import Producto
+        from app.services.mobile_service import MobileService
+
+        s = mobile_setup
+        otro = self._crear_otro_operario(db, s['almacen'], 'otro_grande@test.com')
+        prod3 = Producto(codigo='PROD-003', nombre='Cuaderno', codigo_siesa='PROD-003', activo=True)
+        prod4 = Producto(codigo='PROD-004', nombre='Borrador', codigo_siesa='PROD-004', activo=True)
+        db.session.add_all([prod3, prod4])
+        db.session.commit()
+
+        _crear_tarea(db, s['producto'], s['ubicacion'], s['almacen'], referencia_documento='PD-GRANDE')
+        _crear_tarea(db, producto2, s['ubicacion'], s['almacen'], referencia_documento='PD-GRANDE')
+        _crear_tarea(db, prod3, s['ubicacion'], s['almacen'], referencia_documento='PD-GRANDE')
+        _crear_tarea(db, prod4, s['ubicacion'], s['almacen'], referencia_documento='PD-GRANDE')
+
+        resultado_a = MobileService.get_tarea_actual(s['usuario'].id)
+        resultado_b = MobileService.get_tarea_actual(otro.id)
+
+        assert resultado_a is not None and resultado_b is not None
+        assert resultado_a['referencia'] == 'PD-GRANDE'
+        assert resultado_b['referencia'] == 'PD-GRANDE'
+        assert resultado_a['id'] != resultado_b['id']
+
+    def test_umbral_de_paralelizacion_es_configurable(self, app, db, mobile_setup, producto2, monkeypatch):
+        """PEDIDO_LINEAS_PARALELIZABLE se puede bajar (ej. a 2) y un pedido de
+        2 líneas pasa a tratarse como grande — se reparte igual que uno de 4+."""
+        import app.services.mobile_service as mobile_service_mod
+        from app.services.mobile_service import MobileService
+
+        monkeypatch.setattr(mobile_service_mod, 'PEDIDO_LINEAS_PARALELIZABLE', 2)
+
+        s = mobile_setup
+        otro = self._crear_otro_operario(db, s['almacen'], 'otro_umbral@test.com')
+
+        _crear_tarea(db, s['producto'], s['ubicacion'], s['almacen'], referencia_documento='PD-DOS')
+        _crear_tarea(db, producto2, s['ubicacion'], s['almacen'], referencia_documento='PD-DOS')
+
+        resultado_a = MobileService.get_tarea_actual(s['usuario'].id)
+        resultado_b = MobileService.get_tarea_actual(otro.id)
+
+        assert resultado_a is not None and resultado_b is not None
+        assert resultado_a['id'] != resultado_b['id']
+
+    def test_traslado_no_aplica_regla_de_pedido_chico(self, app, db, mobile_setup, producto2):
+        """La regla de "pedido chico pegajoso" es solo para PEDIDO — un
+        TRASLADO con pocas líneas se sigue repartiendo libre entre cualquier
+        picker, sin importar el umbral."""
+        from app.services.mobile_service import MobileService
+
+        s = mobile_setup
+        otro = self._crear_otro_operario(db, s['almacen'], 'otro_traslado@test.com')
+
+        _crear_tarea(db, s['producto'], s['ubicacion'], s['almacen'],
+                     tipo_documento='TRASLADO', referencia_documento='ST-CHICO',
+                     bodega_origen_siesa=s['almacen'].bodega_siesa_id)
+        _crear_tarea(db, producto2, s['ubicacion'], s['almacen'],
+                     tipo_documento='TRASLADO', referencia_documento='ST-CHICO',
+                     bodega_origen_siesa=s['almacen'].bodega_siesa_id)
+
+        resultado_a = MobileService.get_tarea_actual(s['usuario'].id)
+        resultado_b = MobileService.get_tarea_actual(otro.id)
+
+        assert resultado_a is not None and resultado_b is not None
+        assert resultado_a['id'] != resultado_b['id']
+
 
 class TestProcesarEscaneo:
 

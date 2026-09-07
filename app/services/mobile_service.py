@@ -4,9 +4,20 @@ Dispensador automático de tareas — el operario pide trabajo, el sistema asign
 """
 
 import logging
+import os
 import threading
 from datetime import datetime, date, time as dtime
 from app.extensions import db
+
+# Un pedido con MENOS líneas (SKU distintos) que esto es "chico": una vez que
+# un operario toma su primera línea, las demás quedan pegadas a ese mismo
+# operario — nadie más puede tomarlas hasta que las termine (o un admin
+# reabra el pedido). Evita partir pedidos pequeños entre varios pickers, que
+# no gana velocidad real y sí le suma coordinación al empaque (esperar al
+# más lento de varios). Un pedido con ESTA cantidad de líneas o más sigue
+# repartiéndose libre entre cualquier picker disponible — ahí sí conviene
+# paralelizar. Solo aplica a PEDIDO, nunca a TRASLADO.
+PEDIDO_LINEAS_PARALELIZABLE = int(os.environ.get('PEDIDO_LINEAS_PARALELIZABLE', '4'))
 
 # Debounce de scans: evita doble-conteo cuando la red cae después del commit
 # y la PWA reintenta el mismo scan. Cache por (tarea_id, tipo, codigo) → (ts, resultado).
@@ -220,6 +231,42 @@ class MobileService:
                     TareaPicking.bodega_origen_siesa == _bodega_propia,
                 )
             )
+
+        # Pedido chico (< PEDIDO_LINEAS_PARALELIZABLE líneas = SKU distintos) ya
+        # tocado por OTRO operario -> esta fila no es candidata para mí. "Líneas"
+        # se cuenta sobre TODAS las TareaPicking del documento sin importar su
+        # estado (el tamaño original del pedido no cambia porque una línea ya
+        # se completó). TRASLADO nunca entra aquí — solo PEDIDO (tipo_documento
+        # NULL cuenta como PEDIDO, igual que en _orden_dispatch más abajo).
+        from sqlalchemy.orm import aliased as _aliased
+        _TP_otra = _aliased(TareaPicking)
+        _es_pedido = db.or_(
+            TareaPicking.tipo_documento == 'PEDIDO',
+            TareaPicking.tipo_documento.is_(None),
+        )
+        _lineas_del_doc = (
+            db.session.query(db.func.count(db.func.distinct(_TP_otra.producto_id)))
+            .filter(_TP_otra.referencia_documento == TareaPicking.referencia_documento)
+            .correlate(TareaPicking)
+            .scalar_subquery()
+        )
+        _otro_operario_ya_lo_tiene = (
+            db.session.query(_TP_otra.id)
+            .filter(
+                _TP_otra.referencia_documento == TareaPicking.referencia_documento,
+                _TP_otra.operario_id.isnot(None),
+                _TP_otra.operario_id != operario_id,
+            )
+            .correlate(TareaPicking)
+            .exists()
+        )
+        _filtros_base.append(
+            db.or_(
+                db.not_(_es_pedido),
+                _lineas_del_doc >= PEDIDO_LINEAS_PARALELIZABLE,
+                db.not_(_otro_operario_ya_lo_tiene),
+            )
+        )
 
         # Orden real de despacho — reutiliza PickingService.orden_ruta_fisica()
         # en vez de duplicarlo: una sola fuente de verdad de qué es "cerca".
