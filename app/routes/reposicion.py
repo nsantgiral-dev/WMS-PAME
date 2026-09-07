@@ -302,7 +302,10 @@ def listar_ubicaciones_picking():
     if not u or u.rol not in Roles.GESTION:
         return jsonify({'error': 'Sin permiso'}), 403
     almacen_id = request.args.get('almacen_id', type=int)
-    q = Ubicacion.query.filter(Ubicacion.tipo_zona == 'PICKING', Ubicacion.activo == True)
+    from sqlalchemy.orm import joinedload
+    q = (Ubicacion.query
+         .options(joinedload(Ubicacion.producto_asignado))
+         .filter(Ubicacion.tipo_zona == 'PICKING', Ubicacion.activo == True))
     if almacen_id:
         q = q.filter(Ubicacion.almacen_id == almacen_id)
 
@@ -332,17 +335,27 @@ def listar_ubicaciones_picking():
         d['productos_count'] = len(inventarios)
         d['limites_configurados'] = ub.stock_minimo is not None and ub.stock_maximo is not None
 
-        # SKU dominante (el que tiene más stock en esta ubicación)
+        # `producto_asignado_*` (ya viene en ub.to_dict()) es la asignación
+        # deliberada de Layout — la fuente autoritativa de "qué SKU va en
+        # este hueco". `inventario_detectado` es lo que UbicacionProducto
+        # dice que hay físicamente ahora — puede divergir: un residuo de
+        # cantidad=0 de una carga vieja, o stock de un producto que nunca
+        # se asignó en Layout. Antes esta ruta mostraba el inventario COMO
+        # SI fuera la asignación (confundía "hay un registro acá" con
+        # "esto fue decidido"), y Layout contaba huecos "sin asignar" que
+        # Reposición mostraba con SKU y nombre — mismo hueco, dos
+        # respuestas distintas a la misma pregunta.
+        d['inventario_detectado'] = None
         if inventarios:
             inv_top = max(inventarios, key=lambda i: i.cantidad or 0)
-            prod = prods_map.get(inv_top.producto_id)
-            d['sku_asignado'] = {
-                'id': inv_top.producto_id,
-                'codigo': prod.codigo if prod else None,
-                'nombre': prod.nombre if prod else None,
-            }
-        else:
-            d['sku_asignado'] = None
+            if inv_top.producto_id != ub.producto_asignado_id:
+                prod = prods_map.get(inv_top.producto_id)
+                d['inventario_detectado'] = {
+                    'id': inv_top.producto_id,
+                    'codigo': prod.codigo if prod else None,
+                    'nombre': prod.nombre if prod else None,
+                    'cantidad': inv_top.cantidad,
+                }
 
         resultado.append(d)
 

@@ -77,6 +77,49 @@ class TestVerificarStockPicking:
         tarea = TareaReposicion.query.first()
         assert tarea.cantidad_unidades == 170  # 200 - 30
 
+    def test_no_repone_producto_equivocado_en_hueco_asignado(
+            self, app, db, inv_picking, inv_reserva, lpn_activo,
+            ub_picking, producto, producto2, almacen):
+        """
+        ub_picking está asignado en Layout a producto2, pero inv_picking
+        (fixture) tiene inventario de `producto` — el motor no debe reponer
+        el SKU equivocado dentro del hueco de otro, aunque esté bajo mínimo.
+        """
+        from app.services.reposicion_service import verificar_stock_picking
+        from app.models.tarea_reposicion import TareaReposicion
+
+        ub_picking.producto_asignado_id = producto2.id
+        db.session.commit()
+
+        generadas = verificar_stock_picking(almacen_id=almacen.id)
+
+        assert generadas == 0
+        assert TareaReposicion.query.count() == 0
+
+    def test_genera_tarea_para_hueco_asignado_sin_ninguna_fila_de_inventario(
+            self, app, db, lpn_activo, ub_picking, producto, almacen):
+        """
+        Hueco asignado en Layout a `producto` pero sin NINGUNA fila
+        UbicacionProducto todavía (recién asignado y vacío) — invisible
+        para la pasada A (no hay de dónde partir). La pasada B lo trata
+        como stock_actual=0 y genera la tarea igual.
+        """
+        from app.services.reposicion_service import verificar_stock_picking
+        from app.models.tarea_reposicion import TareaReposicion
+        from app.models.inventario import UbicacionProducto
+
+        ub_picking.producto_asignado_id = producto.id
+        db.session.commit()
+        assert UbicacionProducto.query.filter_by(ubicacion_id=ub_picking.id).count() == 0
+
+        generadas = verificar_stock_picking(almacen_id=almacen.id)
+
+        assert generadas == 1
+        tarea = TareaReposicion.query.filter_by(producto_id=producto.id).first()
+        assert tarea is not None
+        assert tarea.ubicacion_picking_id == ub_picking.id
+        assert tarea.cantidad_unidades == 200  # stock_maximo(200) - 0, tope LPN 1240
+
 
 class TestAsignacionAbastecedor:
 

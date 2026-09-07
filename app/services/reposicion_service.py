@@ -107,11 +107,94 @@ def configurar_umbral(ubicacion_id: int, stock_minimo=_NOTSET, stock_maximo=_NOT
 # 1. Verificación de stock y generación de tareas
 # ──────────────────────────────────────────────────────────────────────────────
 
+def _generar_tarea_si_hace_falta(ub_picking: Ubicacion, producto_id: int, stock_actual: int) -> bool:
+    """
+    Núcleo compartido de generación: dado un hueco PICKING + producto +
+    stock ya calculado, crea la TareaReposicion si hace falta y hay LPN
+    disponible. Usado por las dos pasadas de verificar_stock_picking() —
+    la que recorre inventario existente y la que cubre huecos asignados
+    en Layout sin ninguna fila de inventario todavía (ver más abajo).
+    """
+    if stock_actual >= ub_picking.stock_minimo:
+        return False  # bien — no hace falta reponer
+
+    # ¿Ya existe tarea activa para este (ubicacion_picking, producto)?
+    ya_existe = TareaReposicion.query.filter(
+        TareaReposicion.ubicacion_picking_id == ub_picking.id,
+        TareaReposicion.producto_id == producto_id,
+        TareaReposicion.estado.in_(['PENDIENTE', 'EN_PROCESO']),
+    ).first()
+    if ya_existe:
+        return False
+
+    # ¿Hay LPN disponible en alguna ubicacion RESERVA del mismo almacén?
+    lpn_candidato = LPN.query.join(
+        Ubicacion, Ubicacion.id == LPN.ubicacion_id
+    ).filter(
+        LPN.producto_id == producto_id,
+        LPN.almacen_id == ub_picking.almacen_id,
+        LPN.estado == EstadoLPN.ACTIVO,
+        Ubicacion.tipo_zona == 'RESERVA',
+    ).order_by(LPN.fecha_creacion.asc()).first()  # FIFO
+
+    if not lpn_candidato:
+        logger.warning(
+            f'[REPOSICION] Sin LPN disponible para producto {producto_id} '
+            f'en RESERVA almacén {ub_picking.almacen_id} — picking {ub_picking.codigo} bajo mínimo'
+        )
+        return False
+
+    # Cuántas unidades reponer: llenar hasta stock_maximo si está definido.
+    # `or` trataría un stock_maximo=0 configurado a mano como "no
+    # definido" (0 es falsy) y calcularía stock_minimo*3 en su lugar —
+    # divergencia silenciosa entre lo que el modal "Configurar" muestra
+    # guardado y lo que el motor realmente repone.
+    stock_maximo = (ub_picking.stock_maximo if ub_picking.stock_maximo is not None
+                     else ub_picking.stock_minimo * 3)
+    cantidad_a_reponer = stock_maximo - stock_actual
+    cantidad_a_reponer = min(cantidad_a_reponer, lpn_candidato.cantidad_actual)
+
+    tarea = TareaReposicion(
+        codigo=TareaReposicion.generar_codigo(),
+        producto_id=producto_id,
+        almacen_id=ub_picking.almacen_id,
+        cantidad_unidades=cantidad_a_reponer,
+        ubicacion_reserva_id=lpn_candidato.ubicacion_id,
+        ubicacion_picking_id=ub_picking.id,
+        lpn_id=lpn_candidato.id,
+        estado='PENDIENTE',
+    )
+    db.session.add(tarea)
+    logger.info(
+        f'[REPOSICION] TareaReposicion {tarea.codigo} generada — '
+        f'producto {producto_id} | {ub_picking.codigo} | LPN {lpn_candidato.codigo} | '
+        f'{cantidad_a_reponer} UNDs'
+    )
+    return True
+
+
 def verificar_stock_picking(almacen_id: int = None):
     """
     Escanea todas las ubicaciones PICKING con stock_minimo definido.
     Para cada una donde stock_actual < stock_minimo, crea una TareaReposicion
     si no existe ya una activa.
+
+    Dos pasadas, ambas conscientes de Ubicacion.producto_asignado_id (la
+    asignación deliberada de Layout — "qué SKU va en este hueco", distinta
+    de UbicacionProducto, que es el registro de qué hay físicamente ahora):
+
+      A) Recorre el inventario (UbicacionProducto) que ya existe — el caso
+         de siempre. Si el hueco SÍ tiene asignación en Layout y la fila de
+         inventario es de OTRO producto, se omite: no tiene sentido reponer
+         el SKU equivocado dentro de un hueco que Layout dice que es de
+         otro — sería instalar ahí lo que nadie decidió que fuera. Un hueco
+         sin asignación en Layout se procesa igual que antes (compatibilidad
+         con ubicaciones nunca migradas al mecanismo de asignación).
+      B) Huecos asignados en Layout que NO tienen ninguna fila de
+         inventario para ese producto — invisibles para la pasada A porque
+         no hay UbicacionProducto de la que partir. Antes esto significaba
+         que un hueco recién asignado y vaciado del todo nunca disparaba
+         reposición hasta que alguien lo pickeara primero.
 
     Llamar: después de confirmar picking + en el scheduler nocturno.
     """
@@ -133,66 +216,44 @@ def verificar_stock_picking(almacen_id: int = None):
         registros = q.all()
     generadas = 0
 
+    # ── Pasada A: inventario existente ──────────────────────────────────
     for inv in registros:
         ub_picking = inv.ubicacion
-        stock_actual = inv.cantidad - (inv.reservado or 0)
 
-        if stock_actual >= ub_picking.stock_minimo:
-            continue  # bien — no hace falta reponer
-
-        # ¿Ya existe tarea activa para este (ubicacion_picking, producto)?
-        ya_existe = TareaReposicion.query.filter(
-            TareaReposicion.ubicacion_picking_id == ub_picking.id,
-            TareaReposicion.producto_id == inv.producto_id,
-            TareaReposicion.estado.in_(['PENDIENTE', 'EN_PROCESO']),
-        ).first()
-        if ya_existe:
-            continue
-
-        # ¿Hay LPN disponible en alguna ubicacion RESERVA del mismo almacén?
-        lpn_candidato = LPN.query.join(
-            Ubicacion, Ubicacion.id == LPN.ubicacion_id
-        ).filter(
-            LPN.producto_id == inv.producto_id,
-            LPN.almacen_id == ub_picking.almacen_id,
-            LPN.estado == EstadoLPN.ACTIVO,
-            Ubicacion.tipo_zona == 'RESERVA',
-        ).order_by(LPN.fecha_creacion.asc()).first()  # FIFO
-
-        if not lpn_candidato:
+        if (ub_picking.producto_asignado_id is not None
+                and ub_picking.producto_asignado_id != inv.producto_id):
             logger.warning(
-                f'[REPOSICION] Sin LPN disponible para producto {inv.producto_id} '
-                f'en RESERVA almacén {ub_picking.almacen_id} — picking {ub_picking.codigo} bajo mínimo'
+                f'[REPOSICION] {ub_picking.codigo} asignado en Layout a producto '
+                f'{ub_picking.producto_asignado_id}, pero tiene inventario de '
+                f'{inv.producto_id} (cant={inv.cantidad}) — no se repone el SKU '
+                f'equivocado dentro del hueco de otro'
             )
             continue
 
-        # Cuántas unidades reponer: llenar hasta stock_maximo si está definido.
-        # `or` trataría un stock_maximo=0 configurado a mano como "no
-        # definido" (0 es falsy) y calcularía stock_minimo*3 en su lugar —
-        # divergencia silenciosa entre lo que el modal "Configurar" muestra
-        # guardado y lo que el motor realmente repone.
-        stock_maximo = (ub_picking.stock_maximo if ub_picking.stock_maximo is not None
-                         else ub_picking.stock_minimo * 3)
-        cantidad_a_reponer = stock_maximo - stock_actual
-        cantidad_a_reponer = min(cantidad_a_reponer, lpn_candidato.cantidad_actual)
+        stock_actual = inv.cantidad - (inv.reservado or 0)
+        if _generar_tarea_si_hace_falta(ub_picking, inv.producto_id, stock_actual):
+            generadas += 1
 
-        tarea = TareaReposicion(
-            codigo=TareaReposicion.generar_codigo(),
-            producto_id=inv.producto_id,
-            almacen_id=ub_picking.almacen_id,
-            cantidad_unidades=cantidad_a_reponer,
-            ubicacion_reserva_id=lpn_candidato.ubicacion_id,
-            ubicacion_picking_id=ub_picking.id,
-            lpn_id=lpn_candidato.id,
-            estado='PENDIENTE',
-        )
-        db.session.add(tarea)
-        generadas += 1
-        logger.info(
-            f'[REPOSICION] TareaReposicion {tarea.codigo} generada — '
-            f'producto {inv.producto_id} | {ub_picking.codigo} | LPN {lpn_candidato.codigo} | '
-            f'{cantidad_a_reponer} UNDs'
-        )
+    # ── Pasada B: huecos asignados en Layout sin fila de inventario ────
+    qb = (Ubicacion.query
+          .filter(
+              Ubicacion.tipo_zona == 'PICKING',
+              Ubicacion.stock_minimo.isnot(None),
+              Ubicacion.activo == True,
+              Ubicacion.producto_asignado_id.isnot(None),
+          ))
+    if almacen_id:
+        qb = qb.filter(Ubicacion.almacen_id == almacen_id)
+
+    for ub_picking in qb.all():
+        tiene_fila = UbicacionProducto.query.filter_by(
+            ubicacion_id=ub_picking.id,
+            producto_id=ub_picking.producto_asignado_id,
+        ).first()
+        if tiene_fila:
+            continue  # ya cubierto por la pasada A
+        if _generar_tarea_si_hace_falta(ub_picking, ub_picking.producto_asignado_id, 0):
+            generadas += 1
 
     if generadas:
         db.session.commit()

@@ -77,8 +77,19 @@ async function repCargarUbicaciones() {
       const minimo    = u.stock_minimo;
       const maximo    = u.stock_maximo;
       const sinLimite = minimo == null;
-      const sku       = u.sku_asignado;
-      const skuLabel  = sku ? `${sku.codigo} — ${sku.nombre}` : null;
+      // Fuente autoritativa: la asignación de Layout (producto_asignado_*),
+      // no "qué UbicacionProducto tiene más cantidad" — ese es un registro
+      // de inventario, no una decisión de qué va en el hueco, y puede
+      // existir con cantidad=0 (residuo viejo) en un hueco que Layout
+      // todavía cuenta como sin asignar.
+      const skuLabel = u.producto_asignado_codigo
+        ? `${u.producto_asignado_codigo} — ${u.producto_asignado_nombre || ''}`
+        : null;
+      // Inventario detectado que no coincide con la asignación (o existe sin
+      // que el hueco esté asignado en Layout) — anomalía a revisar, no el
+      // dato principal.
+      const inv = u.inventario_detectado;
+      const invLabel = inv ? `${inv.codigo || '?'} — ${inv.nombre || '?'} (${inv.cantidad})` : null;
 
       // Semáforo
       let color, label, pct = 0;
@@ -103,8 +114,12 @@ async function repCargarUbicaciones() {
             <div>
               <div style="font-size:16px;font-weight:800;font-family:monospace;color:var(--tx);">${u.codigo}</div>
               ${skuLabel
-                ? `<div style="font-size:11px;color:#60a5fa;margin-top:3px;font-weight:600;">📦 ${skuLabel}</div>`
-                : `<div style="font-size:11px;color:#555;margin-top:3px;">Sin producto asignado</div>`
+                ? `<div style="font-size:11px;color:#60a5fa;margin-top:3px;font-weight:600;">📦 ${skuLabel} <span style="color:#555;font-weight:400;">· SKU asignado (Layout)</span></div>`
+                : `<div style="font-size:11px;color:#555;margin-top:3px;">Sin SKU asignado en Layout</div>`
+              }
+              ${invLabel
+                ? `<div style="font-size:11px;color:#f59e0b;margin-top:3px;">⚠ Inventario detectado sin coincidir: ${invLabel}</div>`
+                : ''
               }
             </div>
             <div style="display:flex;align-items:center;gap:8px;">
