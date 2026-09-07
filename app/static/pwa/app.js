@@ -475,6 +475,53 @@ async function login() {
 function actualizarUI(op) {
   ['op-nombre','admin-nombre','rec-nombre','abast-nombre','emp-nombre'].forEach(id => { const el = document.getElementById(id); if (el) el.textContent = op.nombre; });
   ['op-rol','admin-rol'].forEach(id => { const el = document.getElementById(id); if (el) el.textContent = op.rol; });
+  // Botón "🧭 Layout" en las pantallas de picking/packing — solo para quien
+  // tiene el flag puede_organizar_layout (admin/jefe ya entra por su propio
+  // panel, no necesita este atajo).
+  const _mostrarBtnLayout = !!op.puede_organizar_layout;
+  ['btn-layout-operario', 'btn-layout-empacador'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.style.display = _mostrarBtnLayout ? 'inline-flex' : 'none';
+  });
+}
+
+// Rol (operario/empacador) desde el que se entró a Layout vía el botón de
+// arriba — layoutVolverDesdeOperario() lo usa para saber a qué pantalla
+// devolver. null cuando no se entró por ese atajo (ej. admin/jefe normal).
+let _LAYOUT_ROL_ORIGEN = null;
+
+/** Operario/empacador con puede_organizar_layout entra a Layout sin dejar de ser quien es. */
+function layoutAbrirDesdeOperario() {
+  _LAYOUT_ROL_ORIGEN = OPERARIO?.rol || 'operario';
+  pararTimers();
+  pantalla('pantalla-admin');
+  actualizarUI(OPERARIO);
+  document.querySelectorAll('.nav-tab').forEach(el => {
+    if (!(el.getAttribute('onclick') || '').includes('tab-layout')) el.style.display = 'none';
+  });
+  const btnVolver = document.getElementById('btn-volver-layout-operario');
+  if (btnVolver) btnVolver.style.display = 'inline-flex';
+  tab('tab-layout');
+}
+
+/** Vuelve a la pantalla de picking o packing de la que se entró a Layout. */
+function layoutVolverDesdeOperario() {
+  document.querySelectorAll('.nav-tab').forEach(el => { el.style.display = ''; });
+  const btnVolver = document.getElementById('btn-volver-layout-operario');
+  if (btnVolver) btnVolver.style.display = 'none';
+  const rolOrigen = _LAYOUT_ROL_ORIGEN;
+  _LAYOUT_ROL_ORIGEN = null;
+  if (rolOrigen === 'empacador' || rolOrigen === 'packer_traslado') {
+    pantalla('pantalla-empacador');
+    actualizarUI(OPERARIO);
+    empCargarTareas();
+    TIMER_OPERARIO = setInterval(empCargarTareas, 20000);
+  } else {
+    pantalla('pantalla-operario');
+    actualizarUI(OPERARIO);
+    pedirTarea();
+    TIMER_OPERARIO = setInterval(() => { if (!TAREA_ACTUAL) pedirTarea(); }, 5000);
+  }
 }
 
 /**
@@ -1202,7 +1249,8 @@ async function cargarOperarios() {
       const op = metricas[u.id] || { total_tareas: 0, pickings_completados: 0, packings_completados: 0, conteos_completados: 0, reposiciones_completadas: 0, tarea_actual: null };
       const badges = [u.puede_picar && '<span style="background:#1e40af;color:#fff;border-radius:4px;padding:1px 5px;font-size:10px;">Picker</span>',
                       u.puede_empacar && '<span style="background:#6b21a8;color:#fff;border-radius:4px;padding:1px 5px;font-size:10px;">Empacador</span>',
-                      u.puede_abastecer && '<span style="background:#7c2d12;color:#fed7aa;border-radius:4px;padding:1px 5px;font-size:10px;">Abastecedor</span>'].filter(Boolean).join(' ');
+                      u.puede_abastecer && '<span style="background:#7c2d12;color:#fed7aa;border-radius:4px;padding:1px 5px;font-size:10px;">Abastecedor</span>',
+                      u.puede_organizar_layout && '<span style="background:#1e3a5f;color:#93c5fd;border-radius:4px;padding:1px 5px;font-size:10px;">Layout</span>'].filter(Boolean).join(' ');
       const color = op.total_tareas > 0 ? (i === 0 ? '#4ade80' : '#fff') : '#555';
       return `
       <div class="tabla-card">
@@ -2263,6 +2311,7 @@ async function cargarUsuarios() {
                 ${u.puede_picar ? `<span style="font-size:11px;font-weight:600;color:#60a5fa;background:#1e3a5f;padding:2px 8px;border-radius:8px;">Picker</span>` : ''}
                 ${u.puede_empacar ? `<span style="font-size:11px;font-weight:600;color:#c084fc;background:#1a0a2e;padding:2px 8px;border-radius:8px;">Empacador</span>` : ''}
                 ${u.puede_abastecer ? `<span style="font-size:11px;font-weight:600;color:#fed7aa;background:#7c2d12;padding:2px 8px;border-radius:8px;">Abastecedor</span>` : ''}
+                ${u.puede_organizar_layout ? `<span style="font-size:11px;font-weight:600;color:#93c5fd;background:#1e3a5f;padding:2px 8px;border-radius:8px;">Layout</span>` : ''}
               </div>
             </div>
             <button onclick="editarUsuario(${u.id})"
@@ -2394,6 +2443,13 @@ function _formUsuario(u = {}) {
             <div style="font-size:11px;color:#555;">Puede mover pacas de zona RESERVA a zona PICKING</div>
           </div>
         </label>
+        <label style="display:flex;align-items:center;gap:12px;cursor:pointer;margin-bottom:10px;">
+          <input type="checkbox" id="u-puede-organizar-layout" ${u.puede_organizar_layout?'checked':''} style="width:20px;height:20px;accent-color:#60a5fa;">
+          <div>
+            <div style="font-size:14px;font-weight:600;color:#60a5fa;">Organiza Layout</div>
+            <div style="font-size:11px;color:#555;">Puede crear ubicaciones y registrar SKU en Layout (no editar/eliminar/reclasificar)</div>
+          </div>
+        </label>
         <label style="display:flex;align-items:center;gap:12px;cursor:pointer;">
           <input type="checkbox" id="u-puede-camara" ${u.puede_usar_camara!==false?'checked':''} style="width:20px;height:20px;accent-color:#34d399;">
           <div>
@@ -2459,6 +2515,7 @@ async function _guardarUsuario(uid) {
   const puedePicar      = document.getElementById('u-puede-picar')?.checked;
   const puedeEmpacar    = document.getElementById('u-puede-empacar')?.checked;
   const puedeAbastecer  = document.getElementById('u-puede-abastecer')?.checked || false;
+  const puedeOrganizarLayout = document.getElementById('u-puede-organizar-layout')?.checked || false;
   const puedeCamara     = document.getElementById('u-puede-camara')?.checked ?? true;
   const capacidadConteo = puedePicar ? parseInt(document.getElementById('u-capacidad-conteo')?.value || '15', 10) : null;
   const conductorCedula   = rol === 'conductor' ? (document.getElementById('u-conductor-cedula')?.value.trim() || '') : null;
@@ -2472,7 +2529,8 @@ async function _guardarUsuario(uid) {
 
   const payload = {
     nombre, rol, puede_picar: puedePicar, puede_empacar: puedeEmpacar,
-    puede_abastecer: puedeAbastecer, puede_usar_camara: puedeCamara,
+    puede_abastecer: puedeAbastecer, puede_organizar_layout: puedeOrganizarLayout,
+    puede_usar_camara: puedeCamara,
     capacidad_diaria_conteo: capacidadConteo === null ? null : (isNaN(capacidadConteo) ? 15 : Math.max(0, capacidadConteo)),
     bodega_siesa_id: bodegaSiesaId, nombre_punto_venta: nombrePv,
     ...(rol === 'conductor' && { cedula: conductorCedula, telefono: conductorTelefono })

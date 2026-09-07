@@ -130,6 +130,31 @@ def _es_personal_almacen():
     return u if u and u.activo and u.rol not in (Roles.CONDUCTOR, Roles.TIENDA) else None
 
 
+def _puede_organizar_layout():
+    """Retorna el usuario si puede crear cuerpos/huecos y asignar SKU en Layout.
+
+    Dos caminos: admin/jefe_almacen (control total del módulo, sin cambios) o
+    cualquier operario/empacador con el flag `puede_organizar_layout=True` —
+    mismo patrón que `puede_abastecer`/`puede_picar`/`puede_empacar`: una
+    capacidad que se activa por persona, no un rol nuevo.
+
+    Ojo: esto NO es lo mismo que "puede todo en Layout". Solo cubre crear
+    cuerpo (POST) y asignar SKU (POST asignar) — editar, reclasificar, eliminar
+    e importar Excel siguen exclusivos de `_es_admin_o_jefe()` en cada endpoint
+    de `almacenes.py`. Un picker con el flag puede sumar ubicaciones y
+    registrar qué SKU va en cada hueco; no puede borrar ni reestructurar lo
+    que ya existe.
+    """
+    try:
+        uid = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return None
+    u = Usuario.query.get(uid)
+    if not u or not u.activo:
+        return None
+    return u if u.rol in Roles.ALMACEN or bool(u.puede_organizar_layout) else None
+
+
 def _es_compras():
     """Retorna el usuario si tiene acceso a paneles de compras."""
     try:

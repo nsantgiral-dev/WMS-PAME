@@ -955,7 +955,12 @@
         <div class="operario-nombre" id="op-nombre">—</div>
         <div class="operario-rol" id="op-rol">—</div>
       </div>
-      <button class="btn-logout" onclick="salir()">Salir</button>
+      <div style="display:flex;align-items:center;gap:10px;">
+        <button id="btn-layout-operario" onclick="layoutAbrirDesdeOperario()" style="display:none;background:none;border:1px solid #1e3a5f;color:#60a5fa;font-size:12px;font-weight:700;padding:7px 12px;border-radius:20px;cursor:pointer;">
+          🧭 Layout
+        </button>
+        <button class="btn-logout" onclick="salir()">Salir</button>
+      </div>
     </div>
     <div id="contenido-tarea">
       <div style="text-align:center;padding:60px 20px;color:#666;">Cargando...</div>
@@ -968,6 +973,9 @@
       <div class="header-logo"><img src="/static/pwa/logo-white.png" alt="Papelería Medellín WMS"></div>
       <div style="display:flex;align-items:center;gap:10px;">
         <span id="conexion-status-admin" style="font-size:13px;color:#22c55e;">● Online</span>
+        <button id="btn-volver-layout-operario" onclick="layoutVolverDesdeOperario()" style="display:none;background:none;border:1px solid var(--brd-b,#4a5568);color:var(--tx,#e2e8f0);font-size:12px;font-weight:700;padding:8px 12px;border-radius:8px;cursor:pointer;">
+          ← Volver
+        </button>
         <button id="btn-theme" onclick="toggleTheme()" title="Cambiar tema" style="background:none;border:1px solid var(--brd-b,#4a5568);color:var(--tx,#e2e8f0);font-size:18px;width:36px;height:36px;border-radius:8px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;line-height:1;padding:0;">🌙</button>
         <button class="btn-logout" onclick="salir()">Salir</button>
       </div>
@@ -2675,6 +2683,9 @@
       <div id="emp-modo-titulo" style="position:absolute;left:50%;top:100%;transform:translate(-50%,8px);white-space:nowrap;text-align:center;font-size:21px;font-weight:800;color:var(--tx);letter-spacing:.2px;"></div>
       <div style="display:flex;align-items:center;gap:10px;">
         <span id="emp-nombre" style="font-size:13px;color:#666;"></span>
+        <button id="btn-layout-empacador" onclick="layoutAbrirDesdeOperario()" style="display:none;background:none;border:1px solid #1e3a5f;color:#60a5fa;font-size:12px;font-weight:700;padding:7px 12px;border-radius:20px;cursor:pointer;">
+          🧭 Layout
+        </button>
         <button class="btn-logout" onclick="salir()">Salir</button>
       </div>
     </div>

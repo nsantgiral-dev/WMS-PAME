@@ -327,6 +327,33 @@ def jwt_token_abastecedor(app, usuario_abastecedor):
         return create_access_token(identity=str(usuario_abastecedor.id))
 
 
+@pytest.fixture
+def usuario_organiza_layout(db, almacen):
+    """Usuario operario con permiso puede_organizar_layout=True."""
+    from app.models.usuario import Usuario
+    from werkzeug.security import generate_password_hash
+    u = Usuario(
+        nombre='Organiza Layout Test',
+        email='organiza_layout@test.com',
+        password_hash=generate_password_hash('test123'),
+        rol='operario',
+        almacen_id=almacen.id,
+        activo=True,
+        puede_organizar_layout=True,
+    )
+    db.session.add(u)
+    db.session.commit()
+    return u
+
+
+@pytest.fixture
+def jwt_token_organiza_layout(app, usuario_organiza_layout):
+    """Token JWT para usuario operario con puede_organizar_layout=True."""
+    from flask_jwt_extended import create_access_token
+    with app.app_context():
+        return create_access_token(identity=str(usuario_organiza_layout.id))
+
+
 def hoy_operativo():
     """El día de HOY como lo ve el código, no como lo ve el contenedor.
 

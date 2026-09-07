@@ -38,6 +38,19 @@ function _layoutColorZona(zona) {
 }
 
 /**
+ * true solo para admin/jefe_almacen — quien tiene control total del módulo.
+ * Un operario/empacador con puede_organizar_layout=True puede crear cuerpo y
+ * asignar SKU (el backend ya lo permite, ver almacenes.py), pero editar,
+ * reclasificar, eliminar e importar Excel siguen bloqueados server-side —
+ * esta función es solo para OCULTAR esos botones en la UI y no enseñarle a
+ * alguien a ignorar un 403 (mismo criterio que ya aplica el comentario de
+ * `soloFlota` en app.js).
+ */
+function _layoutEsAdminCompleto() {
+  return ['admin', 'jefe_almacen'].includes(OPERARIO?.rol);
+}
+
+/**
  * Switch the active zone tab and re-render ubicaciones for that zone.
  * @param {string} zona - Zone key: 'PICKING', 'RESERVA', 'AVERIAS', or 'GENERAL'.
  */
@@ -77,6 +90,12 @@ function layoutSubtab(sec) {
 
 /** Entry point to load the layout module with the current sub-tab. */
 async function cargarLayout() {
+  // Importar Excel es poblamiento masivo — sigue exclusivo de admin/jefe
+  // (guard real en almacenes.py); ocultar el sub-tab evita que alguien con
+  // puede_organizar_layout lo encuentre solo para toparse con un 403.
+  const _tabImportar = document.getElementById('layout-sub-importar');
+  if (_tabImportar) _tabImportar.style.display = _layoutEsAdminCompleto() ? '' : 'none';
+  if (!_layoutEsAdminCompleto() && _layoutSubActual === 'importar') _layoutSubActual = 'ubicaciones';
   layoutSubtab(_layoutSubActual);
 }
 
@@ -117,6 +136,7 @@ function _layoutRenderUbicacionCard(u) {
           style="flex:1;min-width:90px;padding:8px;background:var(--bg);border:1px solid var(--brd);border-radius:6px;color:var(--tx2);font-size:12px;cursor:pointer;">
           Asignar SKU
         </button>
+        ${_layoutEsAdminCompleto() ? `
         <button onclick="layoutAbrirModalEditarUbicacion(${u.id})"
           style="flex:1;min-width:90px;padding:8px;background:var(--bg);border:1px solid var(--brd);border-radius:6px;color:var(--tx2);font-size:12px;cursor:pointer;">
           Editar
@@ -128,7 +148,7 @@ function _layoutRenderUbicacionCard(u) {
         <button onclick="layoutAbrirModalReclasificar(${u.id})"
           style="flex:1;min-width:90px;padding:8px;background:var(--bg);border:1px solid var(--brd);border-radius:6px;color:var(--tx2);font-size:12px;cursor:pointer;">
           Reclasificar
-        </button>
+        </button>` : ''}
       </div>
     </div>`;
 }
@@ -233,6 +253,7 @@ function layoutRenderUbicaciones() {
       html += `
         <div style="display:flex;justify-content:space-between;align-items:center;background:var(--bg-s2);border-radius:8px;padding:8px 12px;margin:16px 0 8px;">
           <div style="font-size:12px;font-weight:700;color:var(--tx2);">Fila ${codigoFila} · ${_layoutZonaActual} · ${g.items.length} posición(es)</div>
+          ${_layoutEsAdminCompleto() ? `
           <div style="display:flex;gap:6px;">
             <button onclick="layoutAbrirModalEditarFila('${g.pasillo}','${g.estante}')"
               style="padding:5px 10px;background:var(--bg);border:1px solid var(--brd);border-radius:6px;color:var(--tx2);font-size:11px;cursor:pointer;">
@@ -242,7 +263,7 @@ function layoutRenderUbicaciones() {
               style="padding:5px 10px;background:var(--bg);border:1px solid #7f1d1d;border-radius:6px;color:#f87171;font-size:11px;cursor:pointer;">
               🗑 Eliminar
             </button>
-          </div>
+          </div>` : ''}
         </div>`;
       g.items.forEach(u => { html += _layoutRenderUbicacionCard(u); });
     } else if (g.tipo === 'cuerpo') {
@@ -1152,6 +1173,12 @@ function layoutAbrirModalCuerpoDetalle(pasillo, fila, cuerpo) {
   document.getElementById('layout-cuerpo-detalle-editar').onclick      = () => layoutAbrirModalEditarCuerpo(pasillo, fila, cuerpo, nivelesEnZona.length);
   document.getElementById('layout-cuerpo-detalle-reclasificar').onclick = () => layoutAbrirModalReclasificarCuerpo(pasillo, fila, cuerpo, zonaCuerpo);
   document.getElementById('layout-cuerpo-detalle-eliminar').onclick    = () => layoutEliminarCuerpo(pasillo, fila, cuerpo);
+  // Editar/Reclasificar/Eliminar: el backend los sigue negando (403) a quien
+  // solo tiene puede_organizar_layout — ocultarlos acá evita enseñarle a
+  // ignorar ese error.
+  const _esAdminLayout = _layoutEsAdminCompleto();
+  ['layout-cuerpo-detalle-editar', 'layout-cuerpo-detalle-reclasificar', 'layout-cuerpo-detalle-eliminar']
+    .forEach(id => { const el = document.getElementById(id); if (el) el.style.display = _esAdminLayout ? '' : 'none'; });
 
   let body = '';
   nivelesEnZona.forEach((nivel, idx) => {

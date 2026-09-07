@@ -82,6 +82,7 @@ def register():
         puede_picar=data.get('puede_picar', True),
         puede_empacar=data.get('puede_empacar', False),
         puede_abastecer=data.get('puede_abastecer', False),
+        puede_organizar_layout=data.get('puede_organizar_layout', False),
         capacidad_diaria_conteo=_cap,
         bodega_siesa_id=data.get('bodega_siesa_id'),
         siesa_co_id=data.get('siesa_co_id'),
@@ -166,6 +167,8 @@ def actualizar_usuario(uid):
         usuario.puede_empacar = bool(data['puede_empacar'])
     if 'puede_abastecer' in data:
         usuario.puede_abastecer = bool(data['puede_abastecer'])
+    if 'puede_organizar_layout' in data:
+        usuario.puede_organizar_layout = bool(data['puede_organizar_layout'])
     if 'capacidad_diaria_conteo' in data:
         cap = data['capacidad_diaria_conteo']
         try:

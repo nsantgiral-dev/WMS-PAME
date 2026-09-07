@@ -11,7 +11,7 @@ almacenes_bp = Blueprint('almacenes', __name__)
 
 from app.routes._auth_helpers import (_solo_admin, _es_personal_almacen,
                                        _es_admin_o_jefe, _es_control_flota,
-                                       _lee_flota)
+                                       _lee_flota, _puede_organizar_layout)
 
 @almacenes_bp.route('/', methods=['GET'])
 @jwt_required()
@@ -153,8 +153,8 @@ def crear_ubicacion(id):
 @jwt_required()
 def pasillos_disponibles(id):
     """Letras de pasillo aún no usadas en este almacén — A-Z, luego AA, AB..."""
-    if not _es_admin_o_jefe():
-        return jsonify({'error': 'Solo admin o jefe de almacén'}), 403
+    if not _puede_organizar_layout():
+        return jsonify({'error': 'Sin permiso para organizar Layout'}), 403
     Almacen.query.get_or_404(id)
     cantidad = request.args.get('cantidad', 5, type=int)
     return jsonify({'letras': layout_service.letras_disponibles(id, cantidad)}), 200
@@ -173,9 +173,14 @@ def crear_cuerpo(id):
     si no viene, cada entrepaño nace con 1 hueco.
     tipo_mueble (default 'estanteria') puede ser 'vitrina' o 'estiba' — mueble
     de una sola posición, sin niveles reales (fuerza cantidad_entrepanos=1).
+
+    Abierto también a operarios/empacadores con puede_organizar_layout=True
+    (2026-09-07) — crear cuerpo es la mitad "física" de organizar Layout, la
+    otra mitad es asignar SKU (ver asignar_ubicacion). Editar/reclasificar/
+    eliminar un cuerpo ya existente sigue exclusivo de admin/jefe.
     """
-    if not _es_admin_o_jefe():
-        return jsonify({'error': 'Solo admin o jefe de almacén'}), 403
+    if not _puede_organizar_layout():
+        return jsonify({'error': 'Sin permiso para organizar Layout'}), 403
     Almacen.query.get_or_404(id)
     data = request.get_json() or {}
     campos = ('pasillo', 'fila', 'cuerpo', 'cantidad_entrepanos', 'tipo_zona')
@@ -426,10 +431,14 @@ def asignar_ubicacion(ubicacion_id):
     (ver asignar_producto). stock_minimo es el gatillo de reposición — se
     configura acá mismo para no depender de un segundo paso manual en
     Reposición → Configurar.
+
+    Abierto también a operarios/empacadores con puede_organizar_layout=True
+    (2026-09-07) — registrar qué SKU va en cada hueco es la mitad "digital"
+    de organizar Layout, la otra mitad es crear el cuerpo (ver crear_cuerpo).
     """
-    usuario = _es_admin_o_jefe()
+    usuario = _puede_organizar_layout()
     if not usuario:
-        return jsonify({'error': 'Solo admin o jefe de almacén'}), 403
+        return jsonify({'error': 'Sin permiso para organizar Layout'}), 403
     data = request.get_json() or {}
     if not data.get('producto_id') or data.get('cantidad') is None:
         return jsonify({'error': 'producto_id y cantidad son requeridos'}), 400
