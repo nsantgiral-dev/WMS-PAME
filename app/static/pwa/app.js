@@ -118,7 +118,10 @@ document.addEventListener('DOMContentLoaded', () => {
 // Pestañas del panel admin que un `supervisor` no puede usar en el backend
 // (siempre 403), así que tampoco se muestran. Ver el bloque `esSupervisor`
 // dentro de `mostrarSegunRol()`.
-const _TABS_OCULTAS_SUPERVISOR = ['tab-usuarios', 'tab-muelle', 'tab-liquidacion'];
+// 'tab-compras' agregado 2026-09-07: compras.py exige Roles.COMPRAS_ROLES
+// (admin/jefe_almacen/gerente/compras) en cada endpoint — supervisor nunca
+// estuvo en ese grupo y la pestaña quedaba viva mostrando error.
+const _TABS_OCULTAS_SUPERVISOR = ['tab-usuarios', 'tab-muelle', 'tab-liquidacion', 'tab-compras'];
 
 /**
  * Route user to the correct screen and start timers based on their role.
