@@ -3,7 +3,6 @@ Test 03 — Motor de Reabastecimiento RESERVA → PICKING.
 Flujo completo: detección de mínimo → asignación → confirmación → LPN CONSUMIDO.
 """
 import pytest
-import unittest.mock as mock
 
 
 class TestVerificarStockPicking:
@@ -65,17 +64,46 @@ class TestVerificarStockPicking:
         assert generadas == 0
         assert TareaReposicion.query.count() == 0
 
-    def test_cantidad_a_reponer_llena_hasta_maximo(self, app, db,
-                                                    inv_picking, inv_reserva,
-                                                    lpn_activo, ub_picking, almacen):
-        """30 en PICKING, max=200 → cantidad_unidades = min(1240, 200-30) = 170."""
+    def test_cantidad_a_reponer_es_el_lpn_entero_cuando_cabe(self, app, db,
+                                                              inv_picking, inv_reserva,
+                                                              lpn_activo, ub_picking, almacen):
+        """
+        "Romper la paca" es atómico -- confirmar_reposicion() mueve
+        lpn.cantidad_actual completo, nunca una fracción (no existe consumo
+        parcial de LPN en el repo). cantidad_unidades en la TAREA tiene que
+        prometer exactamente eso, no un recorte a stock_maximo-stock_actual
+        que después no ocurre de verdad: aquí caben los 1240 UNDs (max=2000,
+        disponible=2000-30=1970 >= 1240), así que la tarea promete 1240.
+        """
         from app.services.reposicion_service import verificar_stock_picking
         from app.models.tarea_reposicion import TareaReposicion
 
         verificar_stock_picking(almacen_id=almacen.id)
 
         tarea = TareaReposicion.query.first()
-        assert tarea.cantidad_unidades == 170  # 200 - 30
+        assert tarea.cantidad_unidades == 1240
+        assert tarea.lpn_id == lpn_activo.id
+
+    def test_no_genera_tarea_si_ningun_lpn_cabe_en_la_capacidad_restante(
+            self, app, db, inv_picking, inv_reserva, lpn_activo, ub_picking, almacen):
+        """
+        Encontrado en vivo (2026-09-07): un LPN real de 1240 UNDs contra un
+        hueco de capacidad 100 se rompia igual y dejaba el hueco con 12x su
+        capacidad declarada -- confirmar_reposicion() no parte LPNs, los
+        mueve enteros. La correccion vive en la ELECCION del candidato: si
+        ningun LPN activo cabe en `disponible`, no se genera tarea (no se
+        recorta la cantidad para que "quepa" en el papel).
+        """
+        from app.services.reposicion_service import verificar_stock_picking
+        from app.models.tarea_reposicion import TareaReposicion
+
+        ub_picking.stock_maximo = 100  # disponible = 100-30 = 70 < 1240 (el LPN)
+        db.session.commit()
+
+        generadas = verificar_stock_picking(almacen_id=almacen.id)
+
+        assert generadas == 0
+        assert TareaReposicion.query.count() == 0
 
     def test_no_repone_producto_equivocado_en_hueco_asignado(
             self, app, db, inv_picking, inv_reserva, lpn_activo,
@@ -118,7 +146,7 @@ class TestVerificarStockPicking:
         tarea = TareaReposicion.query.filter_by(producto_id=producto.id).first()
         assert tarea is not None
         assert tarea.ubicacion_picking_id == ub_picking.id
-        assert tarea.cantidad_unidades == 200  # stock_maximo(200) - 0, tope LPN 1240
+        assert tarea.cantidad_unidades == 1240  # LPN entero -- cabe en disponible=2000-0
 
 
 class TestAsignacionAbastecedor:
@@ -163,6 +191,8 @@ class TestConfirmarReposicion:
         """
         El flujo dorado: confirmar reposición actualiza todo correctamente.
         LPN → CONSUMIDO, stock PICKING += 1240, TareaReposicion → COMPLETADA.
+        100% WMS — sin Siesa de por medio (RESERVA y PICKING son la misma
+        bodega, ver docstring de confirmar_reposicion, 2026-09-07).
         """
         from app.services.reposicion_service import confirmar_reposicion
         from app.models.lpn import LPN
@@ -172,13 +202,11 @@ class TestConfirmarReposicion:
         tarea_dict = self._setup_tarea(app, db, inv_picking, inv_reserva,
                                         lpn_activo, almacen, usuario)
 
-        # Mockear la DLQ para no llamar a Siesa
-        with mock.patch('app.services.reposicion_service._encolar_siesa_job'):
-            resultado = confirmar_reposicion(
-                tarea_id=tarea_dict['id'],
-                abastecedor_id=usuario.id,
-                lpn_codigo_escaneado='LPN-0000001',
-            )
+        resultado = confirmar_reposicion(
+            tarea_id=tarea_dict['id'],
+            abastecedor_id=usuario.id,
+            lpn_codigo_escaneado='LPN-0000001',
+        )
 
         assert resultado['ok'] is True
 

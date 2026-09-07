@@ -226,37 +226,13 @@ class TestNoSeSellaComoFrescoLoViejo:
 
 
 # ── I · el campo que el 173066 omitía ────────────────────────────────────
-
-class TestEl173066MandaTodoSuSpec:
-
-    def test_no_falta_ningun_campo_del_spec(self):
-        import pathlib
-        import re
-        import zipfile
-        from html import unescape
-
-        raiz = pathlib.Path(__file__).resolve().parents[1]
-        spec = raiz / 'docs' / 'siesa-specs' / '173066 - API_v1_Inventarios_Comercial_TransferenciaDirecta.docx'
-        xml = zipfile.ZipFile(spec).read('word/document.xml').decode('utf-8')
-        txt = unescape(re.sub(r'<[^>]+>', '', re.sub(r'</w:p>', '\n', xml)))
-        campos = [re.match(r'"([A-Za-z0-9_]+)":', l.strip()).group(1)
-                  for l in txt.split('\n') if re.match(r'\s*"([A-Za-z0-9_]+)":', l)]
-
-        gw = raiz.joinpath('app/services/connekta_gateway.py').read_text(encoding='utf-8')
-        i = gw.find('def transferir_entre_ubicaciones')
-        cuerpo = gw[i:gw.find('\n    def ', i + 10)]
-        # La sección `f479_*` (seriales/garantía) no la manda ninguno de los
-        # tres conectores hermanos — es consistente, no un olvido.
-        faltan = [c for c in campos
-                  if f"'{c}'" not in cuerpo and not c.startswith('f479_')]
-        assert not faltan, f'173066 omite campos de su spec: {faltan}'
-
-    def test_lo_manda_igual_que_sus_hermanos(self):
-        import pathlib
-        gw = (pathlib.Path(__file__).resolve().parents[1] / 'app' / 'services'
-              / 'connekta_gateway.py').read_text(encoding='utf-8')
-        for fn in ('transferir_entre_ubicaciones', 'transferencia_transito_salida',
-                   'transferencia_transito_entrada'):
-            i = gw.find(f'def {fn}')
-            cuerpo = gw[i:gw.find('\n    def ', i + 10)]
-            assert "'f470_rowid_movto': 0" in cuerpo, fn
+#
+# TestEl173066MandaTodoSuSpec verificaba transferir_entre_ubicaciones()
+# (conector 173066 para RESERVA→PICKING) contra su spec DOCX. Se retiró
+# 2026-09-07 junto con la función: esa transferencia era siempre intra-bodega
+# (misma bodega Siesa en origen y destino — NB1 no tiene sub-bodegas internas,
+# es organización 100% del WMS), así que no había ningún documento real que
+# declarar, y probado en vivo contra Siesa QA el mismo día ni siquiera pasaba
+# la validación de tamaño de registro. transferencia_directa() —la función
+# hermana que sí sigue en uso, traslados reales inter-bodega— no tiene test
+# de spec en este archivo.

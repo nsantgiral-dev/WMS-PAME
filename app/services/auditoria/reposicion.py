@@ -1,5 +1,5 @@
 """
-Invariantes de reposición: RESERVA → PICKING (conector 173066).
+Invariantes de reposición: RESERVA → PICKING.
 
 ## Por qué este flujo se equivoca distinto
 
@@ -12,16 +12,19 @@ de PICKING, no encuentra lo que el sistema dice que hay, y **reporta un
 faltante que en realidad está en RESERVA**. Ahí ya nadie relaciona las dos
 cosas.
 
-## Lo que hace que sea especialmente fácil de romper
+## Lo que YA NO aplica (2026-09-07)
 
-`transferir_entre_ubicaciones` (173066) **no es idempotente en Siesa**: si el
-primer intento llegó y se reintenta, se crea un doble movimiento. El DLQ lo
-sabe y aborta el reintento (`TRANSFERENCIA_UBICACIONES` es el único job que
-hace eso). Ese diseño solo funciona si nadie más dispara la transferencia por
-otra vía — y `/api/reposicion/<id>/confirmar` fue una de las rutas huérfanas
-que apareció al cambiar el trinquete a adyacencia.
+Hasta acá el módulo tenía dos invariantes más (REP-01/REP-02) sobre el envío
+a Siesa del conector 173066 — retirado: RESERVA y PICKING son la misma
+bodega Siesa (NB1 no tiene sub-bodegas internas, es organización 100% del
+WMS), así que no hay ningún documento real que declarar, y 173066 además
+resultó no idempotente y, probado en vivo, ni pasaba la validación de tamaño
+de registro de Siesa. `confirmar_reposicion()` ya no encola nada — los
+invariantes que vigilaban ese envío se volvieron sobre un riesgo que dejó de
+existir, así que se borraron con él en vez de quedar en verde permanente
+sobre código que ya no corre.
 """
-from app.services.auditoria.base import _AUDITORIA_TRUNCADA,  AVISA, BLOQUEA, OBSERVA, Hallazgo, invariante
+from app.services.auditoria.base import _AUDITORIA_TRUNCADA, AVISA, BLOQUEA, OBSERVA, Hallazgo, invariante
 
 
 def _tareas(estados=None, limite=2000):
@@ -45,104 +48,6 @@ def _tareas(estados=None, limite=2000):
     if len(filas) >= limite:
         _AUDITORIA_TRUNCADA.add(f'{__name__}:{limite}')
     return filas
-
-
-@invariante(
-    codigo='REP-01',
-    flujo='reposicion',
-    frontera='confirmación → Siesa',
-    consecuencia='El WMS movió el stock entre ubicaciones y Siesa no. Las dos '
-                 'bases suman igual y las dos ubicaciones dicen cosas '
-                 'distintas — ningún cuadre global lo ve.',
-    severidad=BLOQUEA,
-    detector_ciego='tests/flujo/test_flujo_conteo.py::TestDetectorReposicion::test_ve_una_completada_que_no_llego_a_siesa',
-)
-def una_reposicion_completada_llego_a_siesa(ctx=None):
-    """El total no cambia, así que este descuadre es invisible para cualquier
-    verificación por sumas. Solo aparece cuando un picker va a PICKING y no
-    encuentra lo que el sistema dice."""
-    return [
-        Hallazgo(
-            referencia=t.codigo or f'reposicion#{t.id}',
-            detalle=f'COMPLETADA sin envío a Siesa · {t.unidades_movidas} und '
-                    f'de RESERVA a PICKING',
-            datos={'producto_id': t.producto_id, 'almacen_id': t.almacen_id},
-        )
-        for t in _tareas(('COMPLETADA',))
-        if not t.siesa_enviado
-    ]
-
-
-@invariante(
-    codigo='REP-02',
-    flujo='reposicion',
-    frontera='confirmación → Siesa',
-    consecuencia='Una reposición con más de un envío a Siesa. **173066 NO es '
-                 'idempotente**: el segundo movimiento vacía la ubicación de '
-                 'RESERVA otra vez y el inventario del WMS no lo refleja.',
-    severidad=BLOQUEA,
-    detector_ciego='tests/flujo/test_flujo_conteo.py::TestDetectorReposicion::test_ve_el_doble_envio',
-)
-def ninguna_reposicion_se_envia_dos_veces(ctx=None):
-    """El riesgo que este flujo declara, y que nadie vigilaba.
-
-    ## Qué medía antes, y por qué no podía fallar
-
-    La versión anterior pedía `siesa_enviado AND estado != 'COMPLETADA'`. Pero
-    `siesa_enviado = True` se escribe en **un solo sitio** —dentro del
-    post-COMPLETADO del job (`siesa_job_service.py`)— y ese post solo existe si
-    `confirmar_reposicion` ya puso `estado = COMPLETADA` en la misma
-    transacción. Y `routes/reposicion.py` rechaza cualquier cambio de estado
-    posterior.
-
-    **No había estado alcanzable que lo disparara.** Un BLOQUEA en verde
-    permanente sobre una propiedad que la vía feliz satisface por construcción.
-
-    ## Qué mide ahora
-
-    Lo que el docstring del módulo declara como el peligro real: el 173066
-    **duplica el movimiento si se reintenta**, y el DLQ aborta el reintento por
-    eso —es el único job que lo hace—. Ese diseño solo funciona si nadie más
-    dispara la transferencia por otra vía, y
-    `/api/reposicion/<id>/confirmar` fue una de las rutas huérfanas que apareció
-    al cambiar el trinquete a adyacencia.
-
-    Dos señales, las dos por la cola y no por la bandera:
-
-      · más de un job terminado por tarea — el movimiento salió dos veces;
-      · un job con reintentos Y error — el aborto del DLQ pudo llegar tarde.
-    """
-    from app.models.siesa_job import EstadoSiesaJob, SiesaJob
-
-    out = []
-    for t in _tareas():
-        jobs = SiesaJob.query.filter_by(
-            tipo='TRANSFERENCIA_UBICACIONES',
-            referencia_tipo='TareaReposicion', referencia_id=t.id,
-        ).all()
-        completados = [j for j in jobs if j.estado == EstadoSiesaJob.COMPLETADO]
-        if len(completados) > 1:
-            out.append(Hallazgo(
-                referencia=t.codigo or f'reposicion#{t.id}',
-                detalle=f'{len(completados)} envíos completados a Siesa para una '
-                        f'sola reposición de {t.unidades_movidas} und — 173066 '
-                        f'no es idempotente',
-                datos={'jobs': [j.id for j in completados],
-                       'producto_id': t.producto_id},
-            ))
-            continue
-        # Un reintento sobre un POST que pudo haber llegado: la Regla 3 y el
-        # aborto del DLQ existen para esto, y si dejó rastro hay que mirarlo.
-        sospechosos = [j for j in jobs if (j.intentos or 0) > 1 and j.error_ultimo]
-        if sospechosos:
-            out.append(Hallazgo(
-                referencia=t.codigo or f'reposicion#{t.id}',
-                detalle=f'reintentado {sospechosos[0].intentos} vez(ces) tras un '
-                        f'error — el 173066 pudo haber entrado igual',
-                datos={'job': sospechosos[0].id,
-                       'error': (sospechosos[0].error_ultimo or '')[:120]},
-            ))
-    return out
 
 
 @invariante(
@@ -175,7 +80,7 @@ def no_se_mueve_mas_de_lo_pedido(ctx=None):
     flujo='reposicion',
     frontera='tarea → ubicaciones',
     consecuencia='Origen y destino son la misma ubicación: el movimiento no '
-                 'repone nada y en Siesa queda un traslado a sí mismo.',
+                 'repone nada, solo genera ruido en el historial.',
     severidad=AVISA,
     detector_ciego='tests/flujo/test_flujo_conteo.py::TestDetectorReposicion::test_ve_origen_igual_a_destino',
 )

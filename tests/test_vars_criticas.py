@@ -77,9 +77,18 @@ class TestElCatalogoEstaCompleto:
 
     def test_el_detector_no_esta_ciego(self):
         """Si el AST dejara de encontrar guards, el trinquete pasaría vacío
-        para siempre y nadie lo notaría."""
-        assert len(_vars_en_guards(_GATEWAY)) >= 15, (
-            'el detector encontró menos guards de los que había el 2026-08-08 '
+        para siempre y nadie lo notaría.
+
+        Piso baja de 15 a 14 el 2026-09-07: se retiró
+        transferir_entre_ubicaciones() (conector 173066 para RESERVA→PICKING,
+        siempre intra-bodega — sin documento real que declarar, ver
+        reposicion_service.confirmar_reposicion) junto con su guard de
+        SIESA_MOTIVO_TRASLADO. La variable sigue vigente — la comparte
+        transferencia_directa(), que sí sigue en uso — así que no es un
+        guard real perdido, es uno de menos porque hay una función de menos.
+        """
+        assert len(_vars_en_guards(_GATEWAY)) >= 14, (
+            'el detector encontró menos guards de los que había el 2026-09-07 '
             '— o se borraron guards reales, o el patrón dejó de funcionar')
 
     def test_ninguna_entrada_fantasma(self):

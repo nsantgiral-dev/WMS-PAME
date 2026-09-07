@@ -2661,96 +2661,15 @@ class ConnektaGateway:
             params['parametros'] = f"f150_id = {_lit(bodega_id)}"
         return self._get(api_name, params)
 
-    def transferir_entre_ubicaciones(self, bodega_id: str, ubicacion_origen: str,
-                                      ubicacion_destino: str, referencia_item: str,
-                                      cantidad: int, nota: str = '',
-                                      centro_op: str = None):
-        """
-        Conector 173066 (TransferenciaDirecta) — traslado interno en UN SOLO PASO
-        entre ubicaciones dentro de la MISMA bodega (RESERVA → PICKING).
-
-        Reemplaza al 173076 (TransitoSalida) que requería dos pasos y bodega de tránsito.
-        Siesa requiere que la bodega tenga "Maneja multi ubicaciones" activo.
-
-        Schema certificado (docx oficial 173066):
-          Documentos: f350_* + f450_id_bodega_salida/entrada (misma bodega)
-          Movimientos: f470_id_ubicacion_aux (origen) + f470_id_ubicacion_aux_ent (destino)
-          Sin f450_docto_alterno (eso es exclusivo de 173076).
-        """
-        if not self.motivo_traslado:
-            raise ValueError(
-                'SIESA_MOTIVO_TRASLADO no configurado — requerido para transferencias internas 173066'
-            )
-        fecha_hoy = self._fecha_hoy_bogota()
-        tipo_docto = self.tipo_docto_traslado or 'TRA'
-        _centro_op = centro_op or self.centro_op
-
-        payload = {
-            'Inicial': [{'F_CIA': int(self.id_cia_siesa)}],
-            'Documentos': [{
-                'F_CIA': int(self.id_cia_siesa),
-                'F_CONSEC_AUTO_REG': 1,
-                'f350_id_co': _centro_op,
-                'f350_id_tipo_docto': tipo_docto,
-                'f350_consec_docto': 0,
-                'f350_fecha': fecha_hoy,
-                'f350_id_tercero': self.nit_empresa or None,  # [C4] None en vez de '' — spec 173066
-                'f350_ind_estado': 1,
-                'f350_ind_impresion': 0,  # [M1] consistente con transferencia_directa (mismo conector)
-                'f350_notas': nota[:200] if nota else '',
-                'f450_id_bodega_salida': bodega_id,
-                'f450_id_bodega_entrada': bodega_id,  # misma bodega — traslado interno
-            }],
-            'Movimientos': [{
-                'F_CIA': int(self.id_cia_siesa),
-                'f470_id_co': _centro_op,
-                'f470_id_tipo_docto': tipo_docto,
-                'f470_consec_docto': 0,
-                'f470_nro_registro': 1,
-                'f470_id_bodega': bodega_id,
-                'f470_id_ubicacion_aux': ubicacion_origen,       # origen (ej. RES-01-A)
-                'f470_id_lote': None,                            # Dep — si ítem maneja lotes
-                'f470_id_motivo': self.motivo_traslado,
-                'f470_id_co_movto': _centro_op,
-                'f470_id_ccosto_movto': None,                    # Dep — si cuenta contable exige ccosto
-                'f470_id_proyecto': None,
-                'f470_id_unidad_medida': self.uom_default or 'UND',
-                'f470_cant_base': round(float(cantidad), 4),
-                'f470_cant_2': None,                             # Dep — unidad adicional
-                'f470_costo_prom_uni': None,                     # Dep — costo unitario
-                'f470_notas': None,
-                # Typo intencional: 'varible' — nombre exacto del spec 173066 (pos 487, 2000 chars).
-                # Sin este campo el registro plano queda 2000 bytes más corto y Siesa
-                # malinterpreta todos los campos posteriores (ubicacion_aux_ent, item, etc.).
-                'f470_desc_varible': '',
-                'f470_id_ubicacion_aux_ent': ubicacion_destino,  # destino (ej. PIK-01-B)
-                'f470_id_lote_ent': None,
-                'f470_id_item': None,                            # Dep — usamos referencia_item
-                'f470_referencia_item': referencia_item,
-                'f470_codigo_barras': None,
-                'f470_id_ext1_detalle': None,
-                'f470_id_ext2_detalle': None,
-                'f470_id_un_movto': self.unidad_negocio,
-                # Último campo del spec, y el único que este conector omitía.
-                # Sus dos hermanos —173076 y 173079— lo mandan en `0`, que acá
-                # es relleno: no hay renglón de origen que referenciar.
-                #
-                # NOTA para la pregunta abierta sobre el mapeo por nombre vs
-                # por posición: **173066 venía corriendo en producción sin este
-                # campo**. Si el plano fuera estrictamente posicional por orden
-                # de claves, omitir el último habría acortado el registro y
-                # Siesa lo habría rechazado. No lo hizo. Es evidencia —no
-                # prueba— de que Connekta mapea por nombre.
-                'f470_rowid_movto': 0,
-            }],
-            'Final': [{'F_CIA': int(self.id_cia_siesa)}],
-        }
-
-        return self._post(
-            self.conector_transferencia_directa,
-            'API_v1_Inventarios_Comercial_TransferenciaDirecta',
-            payload,
-        )
+    # transferir_entre_ubicaciones() (conector 173066 para RESERVA→PICKING) se
+    # retiró 2026-09-07: ambas ubicaciones son la misma bodega Siesa (NB1 no
+    # tiene sub-bodegas para picking/reserva), así que no había ningún
+    # documento real que declarar. Probado en vivo contra Siesa QA el mismo
+    # día: rechazado por tamaño de registro (2658 vs 2700 exigidos) — nunca
+    # se había ejercido contra Siesa real antes de esa prueba, pese al
+    # comentario que afirmaba lo contrario. transferencia_directa() más abajo
+    # es la función hermana que SÍ sigue en uso — traslados reales
+    # inter-bodega, donde origen y destino son bodegas Siesa distintas.
 
     # Límite de página de Connekta para API_v2_Inventarios_InvFecha.
     # tamPag=120+ devuelve alerta "registros exceden el permitido"; 100 es el máximo seguro.

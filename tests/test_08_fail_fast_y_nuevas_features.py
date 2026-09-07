@@ -239,53 +239,9 @@ class TestUbicacionHuerfanaModelo:
         db.session.rollback()
 
 
-class TestConector173066:
-    """Verifica que transferir_entre_ubicaciones usa 173066, no 173076."""
-
-    def test_usa_conector_transferencia_directa(self):
-        from app.services.connekta_gateway import connekta
-        # El gateway debe apuntar a 173066 para transferencias entre ubicaciones
-        assert connekta.conector_transferencia_directa in ('173066',)
-
-    def test_payload_no_tiene_docto_alterno(self):
-        """f450_docto_alterno es exclusivo de 173076 — NO debe aparecer en 173066."""
-        from app.services.connekta_gateway import connekta
-
-        calls = []
-
-        def fake_post(conector, nombre, payload):
-            calls.append({'conector': conector, 'payload': payload})
-            return {'ok': True}
-
-        with mock.patch.object(connekta, '_post', side_effect=fake_post):
-            connekta.transferir_entre_ubicaciones(
-                bodega_id='NB1',
-                ubicacion_origen='RES-01-A',
-                ubicacion_destino='PIK-01-B',
-                referencia_item='PROD-001',
-                cantidad=100,
-                nota='Test reposición',
-            )
-
-        assert len(calls) == 1
-        call = calls[0]
-
-        # Conector correcto
-        assert call['conector'] == connekta.conector_transferencia_directa
-
-        # Documentos deben usar f350_* (no f470_* en header)
-        doc = call['payload']['Documentos'][0]
-        assert 'f350_id_co' in doc
-        assert 'f450_id_bodega_salida' in doc
-        assert 'f450_id_bodega_entrada' in doc
-        # Misma bodega salida y entrada
-        assert doc['f450_id_bodega_salida'] == 'NB1'
-        assert doc['f450_id_bodega_entrada'] == 'NB1'
-        # Sin f450_docto_alterno (exclusivo de 173076)
-        assert 'f450_docto_alterno' not in doc
-
-        # Movimientos con ubicaciones correctas
-        mov = call['payload']['Movimientos'][0]
-        assert mov['f470_id_ubicacion_aux'] == 'RES-01-A'
-        assert mov['f470_id_ubicacion_aux_ent'] == 'PIK-01-B'
-        assert mov['f470_cant_base'] == 100
+# TestConector173066 (transferir_entre_ubicaciones, RESERVA→PICKING) se
+# retiró 2026-09-07 junto con la función: esa transferencia era siempre
+# intra-bodega (misma bodega Siesa en las dos puntas), así que no había
+# ningún documento real que declarar. connekta.conector_transferencia_directa
+# sigue en uso por transferencia_directa() (traslados reales inter-bodega,
+# ver siesa_traslado_adapter.py) — sin test propio en este archivo.

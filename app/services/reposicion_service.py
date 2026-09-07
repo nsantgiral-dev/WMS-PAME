@@ -8,15 +8,22 @@ Responsabilidades:
                                    init_scheduler() (§5 más abajo)
   2. asignar_tarea()            — el abastecedor pide trabajo, el sistema asigna
   3. confirmar_reposicion()     — Abastecedor escanea LPN + confirma → "rompe la paca"
-                                   → LPN CONSUMIDO + stock PICKING actualizado
-                                   → job Siesa conector 173076 (tránsito entre ubicaciones)
+                                   → LPN CONSUMIDO + stock PICKING actualizado.
+                                   100% WMS, nunca toca Siesa (ver docstring de
+                                   la función — RESERVA y PICKING son la misma
+                                   bodega Siesa, no hay documento real que enviar)
   4. configurar_umbral()        — única función que valida y escribe
                                    stock_minimo/stock_maximo/secuencia_ruteo de
                                    una ubicación (la usan esta ruta y Layout)
 
 Reglas:
   - Solo ubicaciones tipo_zona='PICKING' disparan alertas (RESERVA y GENERAL nunca)
-  - Solo LPNs ACTIVO en la ubicacion_reserva del mismo almacen son candidatos
+  - Solo LPNs ACTIVO en la ubicacion_reserva del mismo almacen son candidatos,
+    y solo si su cantidad_actual cabe en lo que falta para stock_maximo —
+    "romper la paca" es atómico (confirmar_reposicion mueve el LPN entero,
+    no existe consumo parcial en ningún caller de LPN.consumir() del repo),
+    así que un LPN candidato no se "recorta" para que quepa: si ninguno cabe,
+    no se genera tarea (ver 2026-09-07 más abajo).
   - Si hay TareaReposicion PENDIENTE/EN_PROCESO para esa (ubicacion_picking, producto)
     no se crea duplicada
 """
@@ -127,38 +134,68 @@ def _generar_tarea_si_hace_falta(ub_picking: Ubicacion, producto_id: int, stock_
     if ya_existe:
         return False
 
-    # ¿Hay LPN disponible en alguna ubicacion RESERVA del mismo almacén?
+    # Cuánto cabe todavía en el hueco — hay que saberlo ANTES de elegir el
+    # LPN, no después. `or` trataría un stock_maximo=0 configurado a mano
+    # como "no definido" (0 es falsy) y calcularía stock_minimo*3 en su
+    # lugar — divergencia silenciosa entre lo que el modal "Configurar"
+    # muestra guardado y lo que el motor realmente repone.
+    stock_maximo = (ub_picking.stock_maximo if ub_picking.stock_maximo is not None
+                     else ub_picking.stock_minimo * 3)
+    disponible = stock_maximo - stock_actual
+
+    # ¿Hay LPN disponible en alguna ubicacion RESERVA del mismo almacén QUE
+    # QUEPA en lo que falta? "Romper la paca" es atómico — no existe (ni en
+    # este modelo ni en ningún caller de LPN.consumir() del repo) un
+    # consumo parcial que deje el resto del LPN activo. confirmar_reposicion()
+    # mueve TODO lpn.cantidad_actual a PICKING; un LPN más grande que
+    # `disponible` desbordaría capacidad_maxima del hueco sin que nada lo
+    # note — se descubrió así, con un LPN real de 1240 UNDs contra un hueco
+    # de capacidad 100 (2026-09-07). Filtrar acá, no capar la cantidad
+    # después, es lo que evita ese desborde: un LPN que no cabe no es
+    # candidato, punto — no se "recorta" su cantidad para que quepa,
+    # porque eso no es lo que va a pasar físicamente.
     lpn_candidato = LPN.query.join(
         Ubicacion, Ubicacion.id == LPN.ubicacion_id
     ).filter(
         LPN.producto_id == producto_id,
         LPN.almacen_id == ub_picking.almacen_id,
         LPN.estado == EstadoLPN.ACTIVO,
+        LPN.cantidad_actual <= disponible,
         Ubicacion.tipo_zona == 'RESERVA',
-    ).order_by(LPN.fecha_creacion.asc()).first()  # FIFO
+    ).order_by(LPN.fecha_creacion.asc()).first()  # FIFO, entre los que caben
 
     if not lpn_candidato:
-        logger.warning(
-            f'[REPOSICION] Sin LPN disponible para producto {producto_id} '
-            f'en RESERVA almacén {ub_picking.almacen_id} — picking {ub_picking.codigo} bajo mínimo'
-        )
+        # Distinguir "no hay ningún LPN" de "hay, pero ninguno cabe" — son
+        # diagnósticos distintos y el segundo no se resuelve esperando que
+        # llegue un LPN nuevo, se resuelve con uno más chico o ampliando el
+        # hueco.
+        hay_alguno = LPN.query.join(
+            Ubicacion, Ubicacion.id == LPN.ubicacion_id
+        ).filter(
+            LPN.producto_id == producto_id,
+            LPN.almacen_id == ub_picking.almacen_id,
+            LPN.estado == EstadoLPN.ACTIVO,
+            Ubicacion.tipo_zona == 'RESERVA',
+        ).first()
+        if hay_alguno:
+            logger.warning(
+                f'[REPOSICION] Hay LPN(s) de producto {producto_id} en RESERVA '
+                f'almacén {ub_picking.almacen_id}, pero ninguno cabe en los '
+                f'{disponible} UNDs disponibles de {ub_picking.codigo} '
+                f'(capacidad {stock_maximo}) — se necesita un LPN más chico'
+            )
+        else:
+            logger.warning(
+                f'[REPOSICION] Sin LPN disponible para producto {producto_id} '
+                f'en RESERVA almacén {ub_picking.almacen_id} — picking {ub_picking.codigo} bajo mínimo'
+            )
         return False
-
-    # Cuántas unidades reponer: llenar hasta stock_maximo si está definido.
-    # `or` trataría un stock_maximo=0 configurado a mano como "no
-    # definido" (0 es falsy) y calcularía stock_minimo*3 en su lugar —
-    # divergencia silenciosa entre lo que el modal "Configurar" muestra
-    # guardado y lo que el motor realmente repone.
-    stock_maximo = (ub_picking.stock_maximo if ub_picking.stock_maximo is not None
-                     else ub_picking.stock_minimo * 3)
-    cantidad_a_reponer = stock_maximo - stock_actual
-    cantidad_a_reponer = min(cantidad_a_reponer, lpn_candidato.cantidad_actual)
 
     tarea = TareaReposicion(
         codigo=TareaReposicion.generar_codigo(),
         producto_id=producto_id,
         almacen_id=ub_picking.almacen_id,
-        cantidad_unidades=cantidad_a_reponer,
+        cantidad_unidades=lpn_candidato.cantidad_actual,
         ubicacion_reserva_id=lpn_candidato.ubicacion_id,
         ubicacion_picking_id=ub_picking.id,
         lpn_id=lpn_candidato.id,
@@ -168,7 +205,7 @@ def _generar_tarea_si_hace_falta(ub_picking: Ubicacion, producto_id: int, stock_
     logger.info(
         f'[REPOSICION] TareaReposicion {tarea.codigo} generada — '
         f'producto {producto_id} | {ub_picking.codigo} | LPN {lpn_candidato.codigo} | '
-        f'{cantidad_a_reponer} UNDs'
+        f'{lpn_candidato.cantidad_actual} UNDs'
     )
     return True
 
@@ -320,8 +357,19 @@ def confirmar_reposicion(tarea_id: int, abastecedor_id: int, lpn_codigo_escanead
       b) LPN → CONSUMIDO
       c) Suma cantidad_actual del LPN al inventario de la ubicacion PICKING
       d) Registra MovimientoInventario tipo='REPOSICION'
-      e) Dispara job async a Siesa (conector 173076 — tránsito salida entre ubicaciones)
-      f) Dispara verificar_stock_picking() para detectar nueva necesidad
+      e) Dispara verificar_stock_picking() para detectar nueva necesidad
+
+    100% WMS — nunca toca Siesa (decisión 2026-09-07). RESERVA y PICKING son
+    zonas físicas dentro de UNA MISMA bodega Siesa (NB1 no tiene sub-bodegas
+    para "picking" ni "reserva" — eso es organización interna del WMS, ver
+    el subtítulo de Layout: "Las ubicaciones se crean y clasifican 100% en
+    el WMS"). El total de la bodega en Siesa no cambia con este movimiento,
+    así que no hay ningún documento real que declarar — antes se posteaba
+    igual al conector 173066 (TransferenciaDirecta, mismo bodega origen y
+    destino), que además resultó no ser idempotente en Siesa (un reintento
+    duplicaba el movimiento) y, al probarlo en vivo, ni siquiera pasaba la
+    validación de tamaño de registro del propio Siesa. Se retiró: menos
+    superficie, menos riesgo, y refleja lo que el movimiento realmente es.
     """
     tarea = TareaReposicion.query.get(tarea_id)
     if not tarea:
@@ -384,15 +432,11 @@ def confirmar_reposicion(tarea_id: int, abastecedor_id: int, lpn_codigo_escanead
         idempotency_key=f'REP-{tarea.id}-{lpn.id}',
     ))
 
-    # e) Cerrar tarea
+    # e) Cerrar tarea — sin job Siesa: ver docstring, RESERVA→PICKING es
+    # 100% WMS, no existe documento real que postear.
     tarea.estado = EstadoReposicion.COMPLETADA
     tarea.unidades_movidas = unidades
     tarea.fecha_completada = datetime.utcnow()
-
-    # f) Encolar job Siesa ANTES del commit — P8: el SiesaJob debe ser atómico con el
-    # cambio de estado. Si el commit falla o Railway reinicia entre dos commits separados,
-    # el job queda sin crear y Siesa nunca se entera del movimiento RESERVA→PICKING.
-    _encolar_siesa_job(tarea, lpn, unidades)
 
     # Pre-capturar datos antes del commit — expire_on_commit invalida relaciones lazy
     _ub_codigo = tarea.ubicacion_picking.codigo if tarea.ubicacion_picking else '?'
@@ -412,75 +456,6 @@ def confirmar_reposicion(tarea_id: int, abastecedor_id: int, lpn_codigo_escanead
         'mensaje': f'Reposición completada — {unidades} UNDs de {lpn.codigo} ahora en {_ub_codigo}',
         'tarea': _tarea_dict,
     }
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-# 4. Job Siesa — encolar en DLQ (reintentos automáticos, alerta si falla 3 veces)
-# ──────────────────────────────────────────────────────────────────────────────
-
-def _encolar_siesa_job(tarea: TareaReposicion, lpn: LPN, unidades: int):
-    """
-    Encola la transferencia de ubicaciones en la Dead Letter Queue.
-    El scheduler la ejecuta en los próximos 5 min.
-    Si falla, reintenta con backoff exponencial (5→15→45 min).
-    Tras 3 fallos: alerta roja en dashboard admin.
-    """
-    from app.services.siesa_job_service import encolar_transferencia_ubicaciones
-    from app.models.ubicacion import Ubicacion as _Ub
-    from app.models.almacen import Almacen
-
-    ub_reserva = _Ub.query.get(tarea.ubicacion_reserva_id)
-    ub_picking = _Ub.query.get(tarea.ubicacion_picking_id)
-    producto = tarea.producto
-
-    if not ub_reserva or not ub_picking or not producto:
-        logger.error(f'[REPOSICION DLQ] Datos incompletos para job — no se encola')
-        tarea.notas = (tarea.notas or '') + ' | SIESA: datos incompletos, job no creado'
-        return
-
-    # Validar codigo_siesa explícitamente — Siesa rechaza códigos WMS internos.
-    item_codigo = getattr(producto, 'codigo_siesa', None)
-    if not item_codigo:
-        logger.critical(
-            f'[REPOSICION DLQ] Producto {producto.id} ({producto.codigo}) sin codigo_siesa '
-            f'— job NO creado. Siesa NO se enteró de este movimiento RESERVA→PICKING. '
-            f'Configura codigo_siesa en el producto para activar la transferencia automática.'
-        )
-        tarea.notas = (tarea.notas or '') + f' | SIESA: producto {producto.codigo} sin codigo_siesa — transferencia NO enviada'
-        tarea.siesa_enviado = False
-        return
-
-    # Resolver bodega dinámicamente desde el almacén de la tarea
-    almacen = Almacen.query.get(tarea.almacen_id)
-    bodega_siesa = almacen.bodega_siesa_id if almacen else None
-    centro_op_siesa = almacen.centro_op_siesa if almacen else None
-
-    if not bodega_siesa:
-        logger.critical(
-            f'[REPOSICION DLQ] Almacén {tarea.almacen_id} sin bodega_siesa_id — '
-            f'job NO creado. Configura bodega_siesa_id en el almacén.'
-        )
-        tarea.notas = (tarea.notas or '') + f' | SIESA: almacén sin bodega_siesa_id — transferencia NO enviada'
-        tarea.siesa_enviado = False
-        return
-
-    job = encolar_transferencia_ubicaciones(
-        bodega_id=bodega_siesa,
-        ubicacion_origen=ub_reserva.codigo,
-        ubicacion_destino=ub_picking.codigo,
-        referencia_item=item_codigo,
-        cantidad=unidades,
-        nota=f'Reposición WMS {tarea.codigo} — LPN {lpn.codigo}',
-        centro_op=centro_op_siesa,
-        referencia_tipo='TareaReposicion',
-        referencia_id=tarea.id,
-    )
-    # No hacer commit aquí — el commit lo hace el caller (confirmar_reposicion) de forma atómica
-    # con el cambio de estado de la tarea (P8: SiesaJob atómico con cambio de estado).
-    logger.info(
-        f'[REPOSICION DLQ] Job {job.id} preparado para {tarea.codigo} '
-        f'— bodega={bodega_siesa} centro_op={centro_op_siesa}'
-    )
 
 
 def liberar_tareas_zombi(timeout_horas: int = 2):

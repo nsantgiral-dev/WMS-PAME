@@ -9,8 +9,14 @@ Si Connekta rechaza (periodo cerrado, ítem bloqueado, timeout):
   - Tras 3 fallos → estado=FALLIDO → alerta roja en dashboard admin
 
 Tipos de job implementados:
-  TRANSFERENCIA_UBICACIONES → conector 173076 (RESERVA → PICKING)
   (extensible: agregar nuevo tipo + handler en _ejecutar_job)
+
+  TRANSFERENCIA_UBICACIONES (conector 173066, RESERVA→PICKING) se retiró
+  2026-09-07: ambas ubicaciones son la misma bodega Siesa (NB1 no tiene
+  sub-bodegas para picking/reserva, eso es organización interna del WMS),
+  así que no había ningún documento real que declarar — y encima 173066
+  no es idempotente en Siesa. reposicion_service.confirmar_reposicion() ya
+  no encola nada, queda 100% en el WMS.
 """
 
 import json
@@ -24,37 +30,6 @@ from app.models.conteo import EstadoConteo
 from app.utils.fecha import fecha_hoy_bogota
 
 logger = logging.getLogger(__name__)
-
-
-def encolar_transferencia_ubicaciones(
-    bodega_id: str,
-    ubicacion_origen: str,
-    ubicacion_destino: str,
-    referencia_item: str,
-    cantidad: int,
-    nota: str = '',
-    centro_op: str = None,
-    referencia_tipo: str = None,
-    referencia_id: int = None,
-) -> SiesaJob:
-    """
-    Encola una transferencia entre ubicaciones (conector 173066).
-    El caller hace commit.
-    """
-    return SiesaJob.encolar(
-        tipo='TRANSFERENCIA_UBICACIONES',
-        payload={
-            'bodega_id': bodega_id,
-            'ubicacion_origen': ubicacion_origen,
-            'ubicacion_destino': ubicacion_destino,
-            'referencia_item': referencia_item,
-            'cantidad': cantidad,
-            'nota': nota,
-            'centro_op': centro_op,
-        },
-        referencia_tipo=referencia_tipo,
-        referencia_id=referencia_id,
-    )
 
 
 def procesar_jobs_pendientes(app=None):
@@ -474,34 +449,6 @@ def _ejecutar_job(job: SiesaJob) -> dict:
     """Despacha el job al handler correcto según su tipo."""
     from app.services.connekta_gateway import connekta
     payload = job.get_payload()
-
-    if job.tipo == 'TRANSFERENCIA_UBICACIONES':
-        # P4: transferencias no son idempotentes en Siesa. Si el primer intento llegó
-        # (timeout de red) y reintentamos, creamos un doble movimiento de inventario.
-        # Solución conservadora: abortar el reintento y dejar que la reconciliación nocturna
-        # detecte la discrepancia, en lugar de arriesgar duplicar el traslado en Siesa.
-        # NOTA: usamos error_ultimo (no intentos) porque el stuck-sweep incrementa intentos
-        # sin llamar a Siesa — un job interrumpido por Railway tendría intentos>0 pero
-        # error_ultimo vacío (nunca se ejecutó realmente).
-        if job.intentos > 0 and job.error_ultimo:
-            logger.warning(
-                f'[DLQ] TRANSFERENCIA_UBICACIONES job={job.id} intento={job.intentos + 1} '
-                f'abortado por riesgo de duplicado — la reconciliación nocturna detectará '
-                f'la discrepancia si el primer intento falló realmente.'
-            )
-            job.max_intentos = job.intentos  # fuerza FALLIDO en el ciclo siguiente
-            raise Exception(
-                'Reintento abortado: transferencia no idempotente — revisar manualmente en Siesa'
-            )
-        return connekta.transferir_entre_ubicaciones(
-            bodega_id=payload['bodega_id'],
-            ubicacion_origen=payload['ubicacion_origen'],
-            ubicacion_destino=payload['ubicacion_destino'],
-            referencia_item=payload['referencia_item'],
-            cantidad=payload['cantidad'],
-            nota=payload.get('nota', ''),
-            centro_op=payload.get('centro_op'),
-        )
 
     if job.tipo == 'DESPACHO_F470':
         # Idempotencia: si un intento anterior llegó a Siesa (siesa_triggered=True),

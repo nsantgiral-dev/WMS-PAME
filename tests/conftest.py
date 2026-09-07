@@ -181,8 +181,12 @@ def ub_reserva(db, almacen):
 @pytest.fixture
 def ub_picking(db, almacen):
     from app.models.ubicacion import Ubicacion
+    # stock_maximo=2000, no 200: tiene que caber el LPN de 1240 UNDs de
+    # lpn_activo entero -- "romper la paca" es atómico (ver
+    # reposicion_service._generar_tarea_si_hace_falta, 2026-09-07), un LPN
+    # que no cabe en la capacidad restante simplemente no es candidato.
     u = Ubicacion(codigo='PIK-01-A', almacen_id=almacen.id,
-                  tipo_zona='PICKING', stock_minimo=50, stock_maximo=200,
+                  tipo_zona='PICKING', stock_minimo=50, stock_maximo=2000,
                   secuencia_ruteo=1, activo=True)
     db.session.add(u)
     db.session.commit()
