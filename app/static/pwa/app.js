@@ -166,6 +166,12 @@ function mostrarSegunRol(rol) {
     cargarRutasConductor();
     TIMER_OPERARIO = setInterval(cargarRutasConductor, 30000);
   } else if (esAdmin) {
+    // Reset SIEMPRE antes de aplicar el ocultamiento de este rol: login()
+    // llama mostrarSegunRol() sin recargar la página, así que el DOM puede
+    // traer pestañas escondidas por la sesión anterior (supervisor,
+    // control_flota) — sin este reset, un admin que entra justo después de
+    // un supervisor hereda sus pestañas ocultas hasta que alguien recarga.
+    document.querySelectorAll('.nav-tab').forEach(el => { el.style.display = ''; });
     if (soloFlota) {
       pantalla('pantalla-admin');
       if (OPERARIO) actualizarUI(OPERARIO);
