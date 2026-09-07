@@ -166,8 +166,13 @@ def verificar_stock_picking(almacen_id: int = None):
             )
             continue
 
-        # Cuántas unidades reponer: llenar hasta stock_maximo si está definido
-        stock_maximo = ub_picking.stock_maximo or (ub_picking.stock_minimo * 3)
+        # Cuántas unidades reponer: llenar hasta stock_maximo si está definido.
+        # `or` trataría un stock_maximo=0 configurado a mano como "no
+        # definido" (0 es falsy) y calcularía stock_minimo*3 en su lugar —
+        # divergencia silenciosa entre lo que el modal "Configurar" muestra
+        # guardado y lo que el motor realmente repone.
+        stock_maximo = (ub_picking.stock_maximo if ub_picking.stock_maximo is not None
+                         else ub_picking.stock_minimo * 3)
         cantidad_a_reponer = stock_maximo - stock_actual
         cantidad_a_reponer = min(cantidad_a_reponer, lpn_candidato.cantidad_actual)
 
