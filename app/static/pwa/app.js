@@ -524,7 +524,7 @@ async function cargarAdmin(desdeTimer = false) {
 
 /** @param {string} id - Tab element ID to activate (e.g. 'tab-dashboard'). */
 function tab(id) {
-  const TABS = ['tab-dashboard','tab-pedidos','tab-requisiciones','tab-traslados','tab-bodega','tab-operarios','tab-usuarios','tab-stock','tab-connekta','tab-muelle','tab-rutas','tab-inventario','tab-reposicion','tab-liquidacion','tab-layout','tab-compras','tab-etiquetas','tab-vigia','tab-flota'];
+  const TABS = ['tab-dashboard','tab-pedidos','tab-requisiciones','tab-traslados','tab-bodega','tab-operarios','tab-usuarios','tab-stock','tab-connekta','tab-muelle','tab-rutas','tab-inventario','tab-liquidacion','tab-layout','tab-reposicion','tab-compras','tab-etiquetas','tab-vigia','tab-flota'];
   TABS.forEach(t => {
     const el = document.getElementById(t);
     if (el) el.style.display = t === id ? 'block' : 'none';
