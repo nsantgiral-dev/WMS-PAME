@@ -2955,7 +2955,11 @@
        automático a TRASLADO por bodega_siesa_id. -->
 
   <!-- Modal configurar límites de ubicación PICKING -->
-  <div id="modal-rep-limites" style="display:none;position:fixed;inset:0;background:#000000cc;z-index:200;align-items:center;justify-content:center;padding:16px;">
+  <!-- z-index 210, no 200: este modal puede abrirse DESDE ADENTRO de
+       modal-rep-cuerpo-detalle (también 200) — con el mismo z-index el que
+       viene después en el DOM pinta encima y se come los clics del más
+       chico (confirmado con Playwright: "Guardar" quedaba interceptado). -->
+  <div id="modal-rep-limites" style="display:none;position:fixed;inset:0;background:#000000cc;z-index:210;align-items:center;justify-content:center;padding:16px;">
     <div style="background:var(--bg-s);border:1px solid var(--brd);border-radius:16px;padding:20px;width:100%;max-width:360px;">
       <div style="font-size:15px;font-weight:700;margin-bottom:4px;">Configurar límites</div>
       <div id="rep-modal-ub-nombre" style="font-size:13px;font-weight:700;color:var(--tx);font-family:monospace;margin-bottom:4px;"></div>
@@ -2983,6 +2987,26 @@
           Cancelar
         </button>
       </div>
+    </div>
+  </div>
+
+  <!-- Modal Reposición: detalle de Cuerpo — huecos agrupados por entrepaño,
+       mismo patrón que modal-layout-cuerpo-detalle en Layout, sin la fila de
+       acciones (Esquema/Etiquetas/Editar/Reclasificar/Eliminar son de Layout,
+       no de Reposición). -->
+  <div id="modal-rep-cuerpo-detalle" style="display:none;position:fixed;inset:0;background:#000000cc;z-index:200;align-items:flex-start;justify-content:center;padding:6vh 16px;overflow-y:auto;">
+    <div style="background:var(--bg-s);border:1px solid var(--brd);border-radius:16px;width:100%;max-width:620px;max-height:88vh;display:flex;flex-direction:column;overflow:hidden;">
+      <div style="background:linear-gradient(135deg,var(--pm),#166473);padding:18px 20px;display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-shrink:0;">
+        <div>
+          <div id="rep-cuerpo-detalle-codigo" style="font-size:18px;font-weight:900;color:#fff;font-family:monospace;"></div>
+          <div id="rep-cuerpo-detalle-sub" style="font-size:12px;color:#ffffffcc;margin-top:3px;font-weight:700;"></div>
+        </div>
+        <button onclick="repCerrarModalCuerpoDetalle()"
+          style="width:30px;height:30px;border-radius:8px;border:none;cursor:pointer;flex-shrink:0;background:#ffffff29;color:#fff;font-size:15px;">
+          ✕
+        </button>
+      </div>
+      <div id="rep-cuerpo-detalle-body" style="padding:6px 20px 20px;overflow-y:auto;"></div>
     </div>
   </div>
 

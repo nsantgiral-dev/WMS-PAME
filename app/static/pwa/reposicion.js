@@ -5,6 +5,8 @@
 
 let _repSubActual = 'ubicaciones';
 let _repModalUbId = null;
+let _repUbicacionesCache = [];
+let _repCuerpoDetalleActual = null;  // {pasillo, fila, cuerpo} del popup abierto, o null
 
 // ── Navegación interna ────────────────────────────────────────────────────────
 
@@ -53,107 +55,222 @@ async function cargarReposicion() {
 
 // ── SECCIÓN 1: Ubicaciones PICKING ───────────────────────────────────────────
 
-/** Fetch and render all PICKING-type ubicaciones with stock semaphore indicators. */
+/** Código del Cuerpo (PREFIJO-PASILLOFILA-CNN) a partir del código completo de
+ * un hueco — misma derivación que _layoutCodigoCuerpo en layout.js (Regla 0:
+ * una política, una función; acá vive su propia copia porque reposicion.js
+ * no depende de layout.js). */
+function _repCodigoCuerpo(codigo) {
+  return codigo.split('-').slice(0, 3).join('-');
+}
+
+/** Build the HTML card for a single PICKING ubicacion with its semaphore + "Configurar". */
+function _repRenderUbicacionCard(u) {
+  const actual    = u.stock_actual ?? 0;
+  const minimo    = u.stock_minimo;
+  const maximo    = u.stock_maximo;
+  const sinLimite = minimo == null;
+  // Fuente autoritativa: la asignación de Layout (producto_asignado_*), no
+  // "qué UbicacionProducto tiene más cantidad" — ese es un registro de
+  // inventario, no una decisión de qué va en el hueco, y puede existir con
+  // cantidad=0 (residuo viejo) en un hueco que Layout todavía cuenta como
+  // sin asignar.
+  const skuLabel = u.producto_asignado_codigo
+    ? `${u.producto_asignado_codigo} — ${u.producto_asignado_nombre || ''}`
+    : null;
+  // Inventario detectado que no coincide con la asignación (o existe sin que
+  // el hueco esté asignado en Layout) — anomalía a revisar, no el dato principal.
+  const inv = u.inventario_detectado;
+  const invLabel = inv ? `${inv.codigo || '?'} — ${inv.nombre || '?'} (${inv.cantidad})` : null;
+
+  // Semáforo
+  let color, label, pct = 0;
+  if (sinLimite) {
+    color = '#555'; label = 'Sin límite';
+  } else if (actual < minimo) {
+    color = '#ef4444'; label = 'Crítico';
+    pct = Math.min(100, Math.round((actual / minimo) * 100));
+  } else if (actual < minimo * 1.3) {
+    color = '#f59e0b'; label = 'Alerta';
+    pct = maximo ? Math.min(100, Math.round((actual / maximo) * 100)) : 60;
+  } else {
+    color = '#22c55e'; label = 'OK';
+    pct = maximo ? Math.min(100, Math.round((actual / maximo) * 100)) : 80;
+  }
+
+  const skuEsc = skuLabel ? skuLabel.replace(/'/g, "\\'") : '';
+
+  return `
+    <div class="tabla-card" style="margin-bottom:10px;">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px;">
+        <div>
+          <div style="font-size:16px;font-weight:800;font-family:monospace;color:var(--tx);">${u.codigo}</div>
+          ${skuLabel
+            ? `<div style="font-size:11px;color:#60a5fa;margin-top:3px;font-weight:600;">📦 ${skuLabel} <span style="color:#555;font-weight:400;">· SKU asignado (Layout)</span></div>`
+            : `<div style="font-size:11px;color:#555;margin-top:3px;">Sin SKU asignado en Layout</div>`
+          }
+          ${invLabel
+            ? `<div style="font-size:11px;color:#f59e0b;margin-top:3px;">⚠ Inventario detectado sin coincidir: ${invLabel}</div>`
+            : ''
+          }
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;">
+          <span style="font-size:11px;font-weight:700;color:${color};background:${color}22;padding:3px 8px;border-radius:20px;">${label}</span>
+          <button onclick="repAbrirModal(${u.id}, '${u.codigo}', '${minimo ?? ''}', '${maximo ?? ''}', '${u.secuencia_ruteo ?? ''}', '${skuEsc}')"
+            style="padding:5px 10px;background:var(--bg);border:1px solid var(--brd);border-radius:6px;color:var(--tx2);font-size:11px;cursor:pointer;">
+            Configurar
+          </button>
+        </div>
+      </div>
+
+      <!-- Barra de stock -->
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">
+        <div style="flex:1;background:var(--brd);border-radius:6px;height:8px;overflow:hidden;">
+          <div style="width:${sinLimite ? 0 : pct}%;height:100%;background:${color};border-radius:6px;transition:width .3s;"></div>
+        </div>
+        <div style="font-size:13px;font-weight:700;color:var(--tx);min-width:36px;text-align:right;">${actual}</div>
+      </div>
+
+      <!-- Límites -->
+      <div style="display:flex;gap:16px;font-size:11px;color:var(--tx3);">
+        ${sinLimite
+          ? `<span style="color:#f59e0b;">⚠ Sin mínimo/máximo — toca "Configurar" para activar reposición</span>`
+          : `<span>Mín <strong style="color:var(--tx);">${minimo}</strong></span>
+             <span>Máx <strong style="color:var(--tx);">${maximo ?? '—'}</strong></span>
+             ${u.secuencia_ruteo != null ? `<span>Seq <strong style="color:var(--tx);">${u.secuencia_ruteo}</strong></span>` : ''}
+             <span style="color:#22c55e;">✓ Motor activo</span>`
+        }
+      </div>
+    </div>`;
+}
+
+/** Fetch all PICKING-type ubicaciones and render them grouped by Cuerpo. */
 async function repCargarUbicaciones() {
   const el = document.getElementById('rep-lista-ubicaciones');
   if (!el) return;
   el.innerHTML = '<div style="text-align:center;padding:30px;color:#555;">Cargando...</div>';
   try {
     const d = await get('/api/reposicion/ubicaciones');
-    const ubs = d.ubicaciones || [];
-
-    if (!ubs.length) {
-      el.innerHTML = `
-        <div style="text-align:center;padding:40px;color:#555;">
-          <div style="font-size:32px;margin-bottom:12px;opacity:0.4;">📍</div>
-          <div style="font-size:15px;font-weight:600;">Sin ubicaciones PICKING registradas</div>
-          <div style="font-size:12px;margin-top:6px;">Haz sync desde Siesa para importar ubicaciones PIK-*</div>
-        </div>`;
-      return;
-    }
-
-    el.innerHTML = ubs.map(u => {
-      const actual    = u.stock_actual ?? 0;
-      const minimo    = u.stock_minimo;
-      const maximo    = u.stock_maximo;
-      const sinLimite = minimo == null;
-      // Fuente autoritativa: la asignación de Layout (producto_asignado_*),
-      // no "qué UbicacionProducto tiene más cantidad" — ese es un registro
-      // de inventario, no una decisión de qué va en el hueco, y puede
-      // existir con cantidad=0 (residuo viejo) en un hueco que Layout
-      // todavía cuenta como sin asignar.
-      const skuLabel = u.producto_asignado_codigo
-        ? `${u.producto_asignado_codigo} — ${u.producto_asignado_nombre || ''}`
-        : null;
-      // Inventario detectado que no coincide con la asignación (o existe sin
-      // que el hueco esté asignado en Layout) — anomalía a revisar, no el
-      // dato principal.
-      const inv = u.inventario_detectado;
-      const invLabel = inv ? `${inv.codigo || '?'} — ${inv.nombre || '?'} (${inv.cantidad})` : null;
-
-      // Semáforo
-      let color, label, pct = 0;
-      if (sinLimite) {
-        color = '#555'; label = 'Sin límite';
-      } else if (actual < minimo) {
-        color = '#ef4444'; label = 'Crítico';
-        pct = Math.min(100, Math.round((actual / minimo) * 100));
-      } else if (actual < minimo * 1.3) {
-        color = '#f59e0b'; label = 'Alerta';
-        pct = maximo ? Math.min(100, Math.round((actual / maximo) * 100)) : 60;
-      } else {
-        color = '#22c55e'; label = 'OK';
-        pct = maximo ? Math.min(100, Math.round((actual / maximo) * 100)) : 80;
-      }
-
-      const skuEsc = skuLabel ? skuLabel.replace(/'/g, "\\'") : '';
-
-      return `
-        <div class="tabla-card" style="margin-bottom:10px;">
-          <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px;">
-            <div>
-              <div style="font-size:16px;font-weight:800;font-family:monospace;color:var(--tx);">${u.codigo}</div>
-              ${skuLabel
-                ? `<div style="font-size:11px;color:#60a5fa;margin-top:3px;font-weight:600;">📦 ${skuLabel} <span style="color:#555;font-weight:400;">· SKU asignado (Layout)</span></div>`
-                : `<div style="font-size:11px;color:#555;margin-top:3px;">Sin SKU asignado en Layout</div>`
-              }
-              ${invLabel
-                ? `<div style="font-size:11px;color:#f59e0b;margin-top:3px;">⚠ Inventario detectado sin coincidir: ${invLabel}</div>`
-                : ''
-              }
-            </div>
-            <div style="display:flex;align-items:center;gap:8px;">
-              <span style="font-size:11px;font-weight:700;color:${color};background:${color}22;padding:3px 8px;border-radius:20px;">${label}</span>
-              <button onclick="repAbrirModal(${u.id}, '${u.codigo}', ${minimo ?? ''}, ${maximo ?? ''}, ${u.secuencia_ruteo ?? ''}, '${skuEsc}')"
-                style="padding:5px 10px;background:var(--bg);border:1px solid var(--brd);border-radius:6px;color:var(--tx2);font-size:11px;cursor:pointer;">
-                Configurar
-              </button>
-            </div>
-          </div>
-
-          <!-- Barra de stock -->
-          <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">
-            <div style="flex:1;background:var(--brd);border-radius:6px;height:8px;overflow:hidden;">
-              <div style="width:${sinLimite ? 0 : pct}%;height:100%;background:${color};border-radius:6px;transition:width .3s;"></div>
-            </div>
-            <div style="font-size:13px;font-weight:700;color:var(--tx);min-width:36px;text-align:right;">${actual}</div>
-          </div>
-
-          <!-- Límites -->
-          <div style="display:flex;gap:16px;font-size:11px;color:var(--tx3);">
-            ${sinLimite
-              ? `<span style="color:#f59e0b;">⚠ Sin mínimo/máximo — toca "Configurar" para activar reposición</span>`
-              : `<span>Mín <strong style="color:var(--tx);">${minimo}</strong></span>
-                 <span>Máx <strong style="color:var(--tx);">${maximo ?? '—'}</strong></span>
-                 ${u.secuencia_ruteo != null ? `<span>Seq <strong style="color:var(--tx);">${u.secuencia_ruteo}</strong></span>` : ''}
-                 <span style="color:#22c55e;">✓ Motor activo</span>`
-            }
-          </div>
-        </div>`;
-    }).join('');
+    _repUbicacionesCache = d.ubicaciones || [];
+    repRenderUbicaciones();
   } catch (e) {
     el.innerHTML = '<div style="text-align:center;padding:30px;color:#ef4444;">Error cargando ubicaciones</div>';
   }
+}
+
+// Agrupa igual que Layout (layoutRenderUbicaciones): Cuerpo (pasillo/fila/
+// cuerpo, mecanismo nuevo) colapsado en una tarjeta con popup de detalle;
+// fila legada y ubicaciones sueltas se muestran directo, sin agrupar — así
+// un almacén con huecos en cualquiera de los dos mecanismos se ve bien.
+// Antes esta pantalla listaba las 23 ubicaciones de un mismo Cuerpo una por
+// una — con varios Cuerpos era puro scroll para encontrar un hueco.
+/** Render the cached PICKING ubicaciones grouped by Cuerpo, mirroring Layout. */
+function repRenderUbicaciones() {
+  const el = document.getElementById('rep-lista-ubicaciones');
+  if (!el) return;
+
+  const ubs = _repUbicacionesCache;
+  if (!ubs.length) {
+    el.innerHTML = `
+      <div style="text-align:center;padding:40px;color:#555;">
+        <div style="font-size:32px;margin-bottom:12px;opacity:0.4;">📍</div>
+        <div style="font-size:15px;font-weight:600;">Sin ubicaciones PICKING registradas</div>
+        <div style="font-size:12px;margin-top:6px;">Haz sync desde Siesa para importar ubicaciones PIK-*</div>
+      </div>`;
+    return;
+  }
+
+  const grupos = [];
+  const cuerposPorClave = new Map();
+  ubs.forEach(u => {
+    if (u.pasillo != null && u.fila != null && u.cuerpo != null) {
+      const clave = `${u.pasillo}|${u.fila}|${u.cuerpo}`;
+      let g = cuerposPorClave.get(clave);
+      if (!g) {
+        g = { tipo: 'cuerpo', pasillo: u.pasillo, fila: u.fila, cuerpo: u.cuerpo, items: [] };
+        cuerposPorClave.set(clave, g);
+        grupos.push(g);
+      }
+      g.items.push(u);
+    } else {
+      grupos.push({ tipo: 'suelta', items: [u] });
+    }
+  });
+  grupos.forEach(g => g.items.sort((a, b) => a.codigo.localeCompare(b.codigo)));
+  grupos.sort((a, b) => a.items[0].codigo.localeCompare(b.items[0].codigo));
+
+  let html = '';
+  grupos.forEach(g => {
+    if (g.tipo !== 'cuerpo') {
+      g.items.forEach(u => { html += _repRenderUbicacionCard(u); });
+      return;
+    }
+    const codigoCuerpo = _repCodigoCuerpo(g.items[0].codigo);
+    const total       = g.items.length;
+    const sinLimiteN   = g.items.filter(u => u.stock_minimo == null).length;
+    const criticosN    = g.items.filter(u => u.stock_minimo != null && (u.stock_actual ?? 0) < u.stock_minimo).length;
+    const configurados = total - sinLimiteN;
+    const pct = total ? Math.round((configurados / total) * 100) : 0;
+    const chip = criticosN > 0
+      ? `<span class="badge badge-red">${criticosN} crítico(s)</span>`
+      : sinLimiteN > 0
+        ? `<span class="badge badge-yellow">${sinLimiteN} sin configurar</span>`
+        : `<span class="badge badge-green">Completo</span>`;
+    html += `
+      <button onclick="repAbrirModalCuerpoDetalle('${g.pasillo}', ${g.fila}, ${g.cuerpo})"
+        class="tabla-card" style="display:flex;align-items:center;gap:12px;width:100%;text-align:left;
+        margin-top:10px;cursor:pointer;font:inherit;color:inherit;">
+        <svg width="17" height="17" viewBox="0 0 20 20" fill="none" style="flex-shrink:0;color:var(--tx3);">
+          <path d="M7 4l6 6-6 6" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        <div style="min-width:120px;font-size:15px;font-weight:800;font-family:monospace;color:var(--tx);">${codigoCuerpo}</div>
+        <div style="flex:1;min-width:140px;">
+          <div style="font-size:12px;font-weight:700;color:var(--tx2);"><b style="color:var(--tx);">${configurados}</b> de ${total} con reposición activa</div>
+          <div style="height:5px;border-radius:3px;background:var(--bg-s2);overflow:hidden;margin-top:4px;">
+            <span style="display:block;height:100%;border-radius:3px;background:var(--green,#16a34a);width:${pct}%;"></span>
+          </div>
+        </div>
+        ${chip}
+      </button>`;
+  });
+
+  el.innerHTML = html;
+}
+
+/** Open the Cuerpo detail popup — huecos de este Cuerpo agrupados por entrepaño. */
+function repAbrirModalCuerpoDetalle(pasillo, fila, cuerpo) {
+  const huecos = _repUbicacionesCache.filter(u =>
+    u.pasillo === pasillo && u.fila === fila && u.cuerpo === cuerpo
+  );
+  if (!huecos.length) return;
+
+  _repCuerpoDetalleActual = { pasillo, fila, cuerpo };
+  const codigoCuerpo = _repCodigoCuerpo(huecos[0].codigo);
+  const sinLimiteN = huecos.filter(u => u.stock_minimo == null).length;
+  document.getElementById('rep-cuerpo-detalle-codigo').textContent = codigoCuerpo;
+  document.getElementById('rep-cuerpo-detalle-sub').textContent =
+    `${huecos.length} hueco(s) · ${sinLimiteN ? sinLimiteN + ' sin configurar' : 'todos con reposición activa'}`;
+
+  const niveles = [...new Set(huecos.map(u => u.nivel))].sort((a, b) => (a ?? 0) - (b ?? 0));
+  let body = '';
+  niveles.forEach(nivel => {
+    const hs = huecos.filter(u => u.nivel === nivel).sort((a, b) => (a.hueco ?? 0) - (b.hueco ?? 0));
+    const sinLimiteEnt = hs.filter(u => u.stock_minimo == null).length;
+    if (nivel != null) {
+      body += `
+        <div style="font-size:12px;font-weight:700;color:var(--tx2);margin:14px 0 8px;">
+          Entrepaño ${nivel} <span style="font-weight:400;color:var(--tx3);">· ${hs.length} hueco(s)${sinLimiteEnt ? ' · ' + sinLimiteEnt + ' sin configurar' : ''}</span>
+        </div>`;
+    }
+    hs.forEach(u => { body += _repRenderUbicacionCard(u); });
+  });
+  document.getElementById('rep-cuerpo-detalle-body').innerHTML = body;
+
+  document.getElementById('modal-rep-cuerpo-detalle').style.display = 'flex';
+}
+
+function repCerrarModalCuerpoDetalle() {
+  document.getElementById('modal-rep-cuerpo-detalle').style.display = 'none';
+  _repCuerpoDetalleActual = null;
 }
 
 // Modal configurar límites
@@ -210,7 +327,14 @@ async function repGuardarLimites() {
     if (r.ok && d.ok) {
       alerta('Límites guardados', 'ok');
       repCerrarModal();
-      repCargarUbicaciones();
+      await repCargarUbicaciones();
+      // Si el "Configurar" se abrió desde dentro del popup de Cuerpo, ese
+      // popup sigue abierto detrás del modal chico y quedaría con datos
+      // viejos si no se refresca también.
+      if (_repCuerpoDetalleActual) {
+        const { pasillo, fila, cuerpo } = _repCuerpoDetalleActual;
+        repAbrirModalCuerpoDetalle(pasillo, fila, cuerpo);
+      }
     } else {
       alerta(d.error || 'Error guardando', 'error');
     }
