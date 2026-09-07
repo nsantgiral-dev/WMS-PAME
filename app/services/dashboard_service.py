@@ -137,6 +137,23 @@ class DashboardService:
         conteos_descuadre  = c_row.descuadre
         conteos_match_hoy  = c_row.match_hoy
 
+        # CC3 ("Conteo Definitivo") esperando que un supervisor lo tome —
+        # mismo criterio que ConteoService.listar_definitivos(). El CC1==CC2
+        # va a TERCER_CONTEO (no SEGUNDO_CONTEO ni DESCUADRE), así que
+        # `conteos_descuadre` de arriba no lo ve: sin este contador aparte,
+        # un CC3 podía quedar esperando indefinidamente sin ninguna señal en
+        # el dashboard — semáforo en verde con el trabajo bloqueado.
+        from sqlalchemy.orm import aliased as _aliased_origen
+        _origen_cc3 = _aliased_origen(SesionConteo)
+        conteos_definitivos = db.session.query(func.count(SesionConteo.id)).join(
+            _origen_cc3, SesionConteo.sesion_origen_id == _origen_cc3.id
+        ).filter(
+            SesionConteo.almacen_id == almacen_id,
+            SesionConteo.es_segundo_conteo.is_(True),
+            _origen_cc3.es_segundo_conteo.is_(True),
+            SesionConteo.estado.in_(['PENDIENTE', 'EN_PROCESO']),
+        ).scalar() or 0
+
         # --- ALERTAS DE STOCK — misma lógica que alertas_stock() ---
         stock_sub = db.session.query(
             UbicacionProducto.producto_id,
@@ -177,7 +194,8 @@ class DashboardService:
             'conteo': {
                 'pendientes': conteos_pendientes,
                 'en_descuadre': conteos_descuadre,
-                'match_hoy': conteos_match_hoy
+                'match_hoy': conteos_match_hoy,
+                'definitivos_pendientes': conteos_definitivos
             },
             'alertas': {
                 'productos_bajo_minimo': productos_bajo_minimo,

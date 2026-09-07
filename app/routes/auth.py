@@ -7,7 +7,7 @@ from app.models.usuario import Usuario
 auth_bp = Blueprint('auth', __name__)
 
 
-from app.routes._auth_helpers import _solo_admin, Roles  # noqa: F401
+from app.routes._auth_helpers import _solo_admin, _es_gestion, Roles  # noqa: F401
 
 _ROLES_VALIDOS = (
     Roles.ADMIN, Roles.SUPERVISOR, Roles.JEFE_ALMACEN, Roles.GERENTE,
@@ -117,9 +117,20 @@ def register():
 @auth_bp.route('/usuarios', methods=['GET'])
 @jwt_required()
 def listar_usuarios():
-    """Lista todos los usuarios activos — solo admin."""
-    if not _solo_admin():
-        return jsonify({'error': 'Solo un administrador puede ver la lista de usuarios'}), 403
+    """Lista todos los usuarios activos — lectura, roles de gestión.
+
+    Ampliado de solo-admin (2026-09-07): el tab "Operarios" del PWA ya está
+    visible para supervisor/jefe_almacen (`_TABS_OCULTAS_SUPERVISOR` solo
+    oculta `tab-usuarios`, no éste), y `cargarOperarios()` depende de este
+    mismo endpoint para armar la lista — sin el ensanche, el 403 tumbaba el
+    `Promise.all` entero y la pantalla mostraba "Error". Mismo endpoint
+    también lo usan en silencio el panel de asignación batch de conteo y el
+    selector de responsable al cerrar una alarma del Vigía, ambos ya
+    accesibles a estos roles. `to_dict()` no expone password_hash — es
+    lectura segura. Editar sigue siendo solo admin (`PUT` abajo, sin tocar).
+    """
+    if not _es_gestion():
+        return jsonify({'error': 'Sin permiso para ver la lista de usuarios'}), 403
     usuarios = Usuario.query.filter_by(activo=True).order_by(Usuario.nombre).all()
     return jsonify({'usuarios': [u.to_dict() for u in usuarios]}), 200
 

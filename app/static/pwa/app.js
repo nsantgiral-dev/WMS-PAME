@@ -486,6 +486,10 @@ function salir(porExpiracion = false) {
  * @param {boolean} [desdeTimer=false] - True when called from the 30s polling timer.
  */
 async function cargarAdmin(desdeTimer = false) {
+  // Badge de "🎯 Definitivo" (Inventario) — se refresca en cada tick sin
+  // importar la pestaña activa, igual que kpi-definitivos en el Dashboard,
+  // para que un supervisor lo vea llegar aunque esté parado en otra pantalla.
+  actualizarBadgeDefinitivos();
   if (TAB === 'tab-dashboard') await cargarDashboard();
   else if (TAB === 'tab-pedidos') await cargarPedidos();
   else if (TAB === 'tab-requisiciones') await cargarRequisiciones();
@@ -599,6 +603,11 @@ async function cargarDashboard() {
     const cardAud = document.getElementById('kpi-card-auditorias');
     if (cardAud) cardAud.style.borderColor = nAud > 0 ? '#7f1d1d' : '';
 
+    const nDef = k.conteo.definitivos_pendientes || 0;
+    set('kpi-definitivos', nDef);
+    const cardDef = document.getElementById('kpi-card-definitivos');
+    if (cardDef) cardDef.style.borderColor = nDef > 0 ? '#78350f' : '';
+
     // ── Semáforo de módulos ────────────────────────────────────────
     _semaforo('sem-picking',
       k.picking.total_activo > 0 ? 'verde' : 'gris',
@@ -610,8 +619,9 @@ async function cargarDashboard() {
       rutasActivas > 0 ? 'amarillo' : (rutas.entregadas_hoy > 0 ? 'verde' : 'gris'),
       rutasActivas + ' en marcha');
     _semaforo('sem-conteos',
-      k.conteo.en_descuadre > 0 ? 'rojo' : (k.conteo.pendientes > 0 ? 'verde' : 'gris'),
-      k.conteo.en_descuadre > 0 ? k.conteo.en_descuadre + ' descuadres' : k.conteo.pendientes + ' pendientes');
+      (k.conteo.en_descuadre > 0 || nDef > 0) ? 'rojo' : (k.conteo.pendientes > 0 ? 'verde' : 'gris'),
+      nDef > 0 ? nDef + ' definitivo(s) pendiente(s)'
+        : (k.conteo.en_descuadre > 0 ? k.conteo.en_descuadre + ' descuadres' : k.conteo.pendientes + ' pendientes'));
     _semaforo('sem-recepciones',
       k.recepcion.confirmadas_hoy > 0 ? 'verde' : 'gris',
       k.recepcion.confirmadas_hoy + ' hoy');
