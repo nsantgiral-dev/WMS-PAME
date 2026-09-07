@@ -139,14 +139,21 @@ def verificar_stock():
 @reposicion_bp.route('/pendientes', methods=['GET'])
 @jwt_required()
 def pendientes():
-    """Lista tareas filtradas por estado (admin / jefe de almacén)."""
+    """Lista tareas filtradas por estado — lectura, roles de gestión.
+
+    Ampliado de ALMACEN a GESTION (2026-09-07): respalda la pestaña "Tareas"
+    de la pantalla Reposición, que el PWA ya muestra a supervisor/gerente
+    (no está en `_TABS_OCULTAS_SUPERVISOR`) — con el guard viejo el 403
+    dejaba la pestaña en "Error cargando ubicaciones"/tareas para esos
+    roles. Solo lectura; cancelar/sync/verificar-stock siguen en ALMACEN.
+    """
     try:
         usuario_id = int(get_jwt_identity())
     except (TypeError, ValueError):
         return jsonify({'error': 'Token inválido'}), 401
     usuario = Usuario.query.get(usuario_id)
-    if not usuario or usuario.rol not in Roles.ALMACEN:
-        return jsonify({'error': 'Solo admin o jefe de almacén puede ver todas las tareas'}), 403
+    if not usuario or usuario.rol not in Roles.GESTION:
+        return jsonify({'error': 'Sin permiso para ver las tareas de reposición'}), 403
     estado = request.args.get('estado', '').upper()
     estados_validos = {
         EstadoReposicion.PENDIENTE, EstadoReposicion.EN_PROCESO,
@@ -283,15 +290,16 @@ def configurar_limites(ubicacion_id):
 @jwt_required()
 def listar_ubicaciones_picking():
     """
-    Lista ubicaciones PICKING con sus límites configurados.
-    El admin ve aquí qué zonas tienen min/max y cuáles faltan por configurar.
+    Lista ubicaciones PICKING con sus límites configurados — lectura, roles
+    de gestión. Respalda la pestaña "Ubicaciones" de Reposición; ver la nota
+    en `pendientes()` sobre por qué se amplió de ALMACEN.
     """
     try:
         uid = int(get_jwt_identity())
     except (TypeError, ValueError):
         return jsonify({'error': 'Token inválido'}), 401
     u = Usuario.query.get(uid)
-    if not u or u.rol not in Roles.ALMACEN:
+    if not u or u.rol not in Roles.GESTION:
         return jsonify({'error': 'Sin permiso'}), 403
     almacen_id = request.args.get('almacen_id', type=int)
     q = Ubicacion.query.filter(Ubicacion.tipo_zona == 'PICKING', Ubicacion.activo == True)
@@ -354,13 +362,16 @@ def listar_ubicaciones_picking():
 @reposicion_bp.route('/ubicaciones-huerfanas', methods=['GET'])
 @jwt_required()
 def ubicaciones_huerfanas():
-    """Lista ubicaciones en cuarentena (prefijo inválido detectado en sync Siesa)."""
+    """Lista ubicaciones en cuarentena (prefijo inválido detectado en sync
+    Siesa) — lectura, roles de gestión. Respalda la pestaña "Huérfanas" de
+    Reposición; ver la nota en `pendientes()` sobre por qué se amplió de
+    ALMACEN."""
     try:
         uid = int(get_jwt_identity())
     except (TypeError, ValueError):
         return jsonify({'error': 'Token inválido'}), 401
     u = Usuario.query.get(uid)
-    if not u or u.rol not in Roles.ALMACEN:
+    if not u or u.rol not in Roles.GESTION:
         return jsonify({'error': 'Sin permiso'}), 403
     items = UbicacionHuerfana.query.order_by(
         UbicacionHuerfana.veces_detectada.desc(),
