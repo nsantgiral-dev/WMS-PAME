@@ -912,30 +912,6 @@ DEUDA_SIN_UI = {
     '/api/vigia/backtest/florencia':
         'Test canónico de reproducción. Mismo caso: se dispara desde el arnés de '
         'certificación, no desde el panel.',
-
-    # ── Tablero BI, backend sin UI todavía (2026-09-08) ────────────────────
-    # Entrega explícitamente en fases: capas backend (modelo → captura →
-    # agregación → API) primero, verificadas contra Postgres real; UI del
-    # tablero es un commit posterior, una vez los números estén cruzados
-    # contra la fuente. No es deuda heredada — es la fase actual del plan.
-    '/api/dashboard/bi/pedidos-despachados':
-        'Métrica 1 del tablero BI (pedidos despachados). Backend verificado con '
-        'tests y contra producción; el panel que lo consuma se conecta en la '
-        'siguiente fase, junto con las demás métricas del tablero.',
-    '/api/dashboard/bi/pedidos-despachados/detalle':
-        'Drill-down paginado de la métrica 1. Misma fase pendiente que el KPI '
-        'agregado: sin UI hasta que se conecte el panel del tablero.',
-    '/api/dashboard/bi/pedidos-pendientes':
-        'Métrica 3 del tablero BI (fill rate y motivo de no despacho). Backend '
-        'verificado; sin UI hasta la siguiente fase del tablero.',
-    '/api/dashboard/bi/pedidos-pendientes/detalle':
-        'Drill-down paginado de la métrica 3, misma fase pendiente que el KPI.',
-    '/api/dashboard/bi/venta-perdida':
-        'Métrica 5 del tablero BI (venta perdida por agotados $). Depende del '
-        'evento eventos_stock_agotado, hacia adelante desde este deploy; sin UI '
-        'hasta la siguiente fase del tablero.',
-    '/api/dashboard/bi/venta-perdida/detalle':
-        'Drill-down paginado de la métrica 5, misma fase pendiente que el KPI.',
 }
 
 # Inventario heredado, sin clasificar. No fabricamos razones que no conocemos:

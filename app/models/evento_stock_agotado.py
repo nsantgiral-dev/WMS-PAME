@@ -62,6 +62,8 @@ class EventoStockAgotado(db.Model):
             'id': self.id,
             'tarea_picking_id': self.tarea_picking_id,
             'producto_id': self.producto_id,
+            'producto_codigo': self.producto.codigo if self.producto else None,
+            'producto_nombre': self.producto.nombre if self.producto else None,
             'almacen_id': self.almacen_id,
             'pedido_siesa_ref': self.pedido_siesa_ref,
             'tipo_documento': self.tipo_documento,

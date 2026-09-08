@@ -101,3 +101,18 @@ class TestListarVentaPerdidaDetalle:
         pagina = listar_venta_perdida_detalle(almacen.id, hoy, hoy, page=1, per_page=2)
         assert pagina.total == 3
         assert len(pagina.items) == 2
+
+    def test_to_dict_incluye_codigo_y_nombre_del_producto(self, app, db, almacen, producto, ub_picking):
+        """to_dict() se usa directo en el endpoint /detalle — sin esto la tabla
+        de la UI solo tendría producto_id, inútil para un humano."""
+        from app.utils.fecha import inicio_del_dia_utc
+        from tests.conftest import hoy_operativo
+        hoy = hoy_operativo()
+        cuando = inicio_del_dia_utc(hoy) + timedelta(hours=8)
+        t = _tarea_picking(almacen, producto, ub_picking, 'TP-VP-DICT')
+        _evento(t, producto, almacen, cuando)
+
+        pagina = listar_venta_perdida_detalle(almacen.id, hoy, hoy, page=1, per_page=10)
+        d = pagina.items[0].to_dict()
+        assert d['producto_codigo'] == producto.codigo
+        assert d['producto_nombre'] == producto.nombre

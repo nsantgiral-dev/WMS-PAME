@@ -993,6 +993,7 @@
     <!-- Tabs -->
     <div class="admin-nav">
       <div class="nav-tab active" onclick="tab('tab-dashboard')">📈 Dashboard</div>
+      <div class="nav-tab" onclick="tab('tab-bi')">📊 Tablero BI</div>
       <div class="nav-tab" onclick="tab('tab-pedidos')">🛍️ Pedidos</div>
       <div class="nav-tab" onclick="tab('tab-requisiciones')">📋 Requisiciones</div>
       <div class="nav-tab" onclick="tab('tab-traslados')">🏪 Traslados</div>
@@ -1113,6 +1114,38 @@
       <div class="tabla-card" id="movimientos-recientes">
         <div class="tabla-titulo">Últimos movimientos</div>
         <div style="color:#555;font-size:13px;">Cargando...</div>
+      </div>
+    </div>
+
+    <!-- Tablero BI — métricas 1 (pedidos despachados), 3 (pendientes/fill rate),
+         5 (venta perdida $). Solo NB1 (ALMACEN_ID fijo). Sin comparativo de
+         período anterior ni export en esta entrega. -->
+    <div id="tab-bi" class="admin-content" style="display:none;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px;">
+        <div style="font-size:16px;font-weight:700;">Tablero BI</div>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+          <label for="bi-fecha-desde" style="font-size:12px;color:var(--tx3);">Desde</label>
+          <input type="date" id="bi-fecha-desde"
+            style="padding:8px 12px;background:var(--bg-s);border:1px solid var(--brd);border-radius:8px;color:var(--tx);font-size:13px;">
+          <label for="bi-fecha-hasta" style="font-size:12px;color:var(--tx3);">Hasta</label>
+          <input type="date" id="bi-fecha-hasta"
+            style="padding:8px 12px;background:var(--bg-s);border:1px solid var(--brd);border-radius:8px;color:var(--tx);font-size:13px;">
+          <button onclick="biFiltrar()"
+            style="padding:8px 14px;background:var(--pm);border:none;border-radius:8px;color:#fff;font-size:13px;font-weight:700;cursor:pointer;">
+            Filtrar
+          </button>
+        </div>
+      </div>
+
+      <div id="bi-tabs" class="subtabs"></div>
+
+      <div id="bi-kpi" style="margin-bottom:4px;">Cargando...</div>
+      <div id="bi-desglose"></div>
+
+      <div class="tabla-card">
+        <div class="tabla-titulo" id="bi-detalle-titulo">Detalle</div>
+        <div id="bi-detalle-lista">Cargando...</div>
+        <div id="bi-detalle-paginacion" style="display:flex;justify-content:space-between;align-items:center;padding:12px 0;"></div>
       </div>
     </div>
 
@@ -3511,6 +3544,7 @@
   <script src="/static/pwa/compras_ia.js?v=20260726c"></script>
   <script src="/static/pwa/kardex.js?v=20260727c"></script>
   <script src="/static/pwa/temporada.js?v=20260727b"></script>
+  <script src="/static/pwa/tablero_bi.js?v=20260908a"></script>
   <script>
     setInterval(() => {
       const cola = JSON.parse(localStorage.getItem('wms_cola_offline') || '[]');

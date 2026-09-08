@@ -547,6 +547,10 @@ async function cargarAdmin(desdeTimer = false) {
   // para que un supervisor lo vea llegar aunque esté parado en otra pantalla.
   actualizarBadgeDefinitivos();
   if (TAB === 'tab-dashboard') await cargarDashboard();
+  // Tablero BI: agregación sobre rango de fechas, no "lo de hoy" — un refresco
+  // de 30s reseteando la página del detalle en medio de que alguien la revisa
+  // no aporta nada. Solo carga al entrar manualmente, mismo criterio que Layout.
+  else if (TAB === 'tab-bi') { if (!desdeTimer) await cargarBI(); }
   else if (TAB === 'tab-pedidos') await cargarPedidos();
   else if (TAB === 'tab-requisiciones') await cargarRequisiciones();
   else if (TAB === 'tab-bodega') await cargarTareasBodega();
@@ -571,7 +575,7 @@ async function cargarAdmin(desdeTimer = false) {
 
 /** @param {string} id - Tab element ID to activate (e.g. 'tab-dashboard'). */
 function tab(id) {
-  const TABS = ['tab-dashboard','tab-pedidos','tab-requisiciones','tab-traslados','tab-bodega','tab-operarios','tab-usuarios','tab-stock','tab-connekta','tab-muelle','tab-rutas','tab-inventario','tab-liquidacion','tab-layout','tab-reposicion','tab-compras','tab-etiquetas','tab-vigia','tab-flota'];
+  const TABS = ['tab-dashboard','tab-bi','tab-pedidos','tab-requisiciones','tab-traslados','tab-bodega','tab-operarios','tab-usuarios','tab-stock','tab-connekta','tab-muelle','tab-rutas','tab-inventario','tab-liquidacion','tab-layout','tab-reposicion','tab-compras','tab-etiquetas','tab-vigia','tab-flota'];
   TABS.forEach(t => {
     const el = document.getElementById(t);
     if (el) el.style.display = t === id ? 'block' : 'none';
