@@ -13,9 +13,11 @@ LA FRONTERA
 
   Tablas ANALÍTICAS  → NUNCA se tocan.
     serie_vigia, alarma_vigia, kardex_movimientos, stock_diario,
-    juicios_temporada. Sin las 26 semanas de referencia el CUSUM queda ciego
-    ~6 meses y se pierde la alarma de Florencia — la primera certificada.
-    TSB, ROP y newsvendor consumen esa misma historia.
+    juicios_temporada, eventos_stock_agotado. Sin las 26 semanas de
+    referencia el CUSUM queda ciego ~6 meses y se pierde la alarma de
+    Florencia — la primera certificada. TSB, ROP y newsvendor consumen esa
+    misma historia. eventos_stock_agotado es del mismo tipo: evento hacia
+    adelante para el tablero BI, sin forma de reconstruirse si se borra.
 
   Tablas MAESTRAS    → NUNCA se tocan.
     Productos, ubicaciones, usuarios, proveedores, acuerdos, vehículos, y el
@@ -132,6 +134,11 @@ PROTEGIDAS_ANALITICAS = {
     'kardex_movimientos': 'historia de demanda que alimenta los 4 modelos',
     'stock_diario': 'denominador de la descensura',
     'juicios_temporada': 'juicio humano registrado, no recalculable',
+    # Snapshot del tablero BI (SKU agotado / venta perdida $). Evento hacia
+    # adelante — se registra en el instante en que un picking se bloquea por
+    # FALTANTE. Borrarlo en un corte pierde ese histórico sin forma de
+    # reconstruirlo, ni desde Siesa ni desde ningún otro lado.
+    'eventos_stock_agotado': 'evento hacia adelante del tablero BI, no reconstruible',
 }
 
 PROTEGIDAS_MAESTRAS = {
