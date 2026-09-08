@@ -177,6 +177,49 @@ def bi_pedidos_pendientes_detalle():
         return jsonify({'error': str(e)}), 500
 
 
+@dashboard_bp.route('/bi/venta-perdida', methods=['GET'])
+@jwt_required()
+def bi_venta_perdida():
+    if not _es_gestion():
+        return jsonify({'error': 'Sin permiso'}), 403
+    almacen_id = request.args.get('almacen_id', type=int)
+    if not almacen_id:
+        return jsonify({'error': 'almacen_id es requerido'}), 400
+    fecha_desde, fecha_hasta = _rango_fechas_desde_query()
+    try:
+        from app.services.metricas.venta_perdida import calcular_venta_perdida
+        resultado = calcular_venta_perdida(almacen_id, fecha_desde, fecha_hasta)
+        return jsonify(resultado), 200
+    except Exception as e:
+        logger.exception(f'[DASHBOARD] bi_venta_perdida almacen={almacen_id}')
+        return jsonify({'error': str(e)}), 500
+
+
+@dashboard_bp.route('/bi/venta-perdida/detalle', methods=['GET'])
+@jwt_required()
+def bi_venta_perdida_detalle():
+    if not _es_gestion():
+        return jsonify({'error': 'Sin permiso'}), 403
+    almacen_id = request.args.get('almacen_id', type=int)
+    if not almacen_id:
+        return jsonify({'error': 'almacen_id es requerido'}), 400
+    fecha_desde, fecha_hasta = _rango_fechas_desde_query()
+    page = request.args.get('page', 1, type=int)
+    per_page = request.args.get('per_page', 50, type=int)
+    try:
+        from app.services.metricas.venta_perdida import listar_venta_perdida_detalle
+        pagina = listar_venta_perdida_detalle(almacen_id, fecha_desde, fecha_hasta, page, per_page)
+        return jsonify({
+            'items': [e.to_dict() for e in pagina.items],
+            'total': pagina.total,
+            'page': pagina.page,
+            'per_page': pagina.per_page,
+        }), 200
+    except Exception as e:
+        logger.exception(f'[DASHBOARD] bi_venta_perdida_detalle almacen={almacen_id}')
+        return jsonify({'error': str(e)}), 500
+
+
 @dashboard_bp.route('/resumen-completo', methods=['GET'])
 @jwt_required()
 def resumen_completo():

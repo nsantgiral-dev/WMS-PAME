@@ -113,3 +113,47 @@ class TestBiPedidosPendientesDetalle:
         assert resp.status_code == 200
         data = resp.get_json()
         assert data == {'items': [], 'total': 0, 'page': 1, 'per_page': 50}
+
+
+class TestBiVentaPerdida:
+
+    def test_sin_token_401(self, client):
+        resp = client.get('/api/dashboard/bi/venta-perdida')
+        assert resp.status_code == 401
+
+    def test_sin_almacen_id_400(self, client, jwt_token_admin):
+        resp = client.get(
+            '/api/dashboard/bi/venta-perdida',
+            headers={'Authorization': f'Bearer {jwt_token_admin}'},
+        )
+        assert resp.status_code == 400
+
+    def test_operario_sin_permiso_403(self, client, jwt_token, almacen):
+        resp = client.get(
+            f'/api/dashboard/bi/venta-perdida?almacen_id={almacen.id}',
+            headers={'Authorization': f'Bearer {jwt_token}'},
+        )
+        assert resp.status_code == 403
+
+    def test_admin_retorna_kpi_agregado(self, client, jwt_token_admin, almacen):
+        resp = client.get(
+            f'/api/dashboard/bi/venta-perdida?almacen_id={almacen.id}',
+            headers={'Authorization': f'Bearer {jwt_token_admin}'},
+        )
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert set(data.keys()) == {'venta_perdida_total', 'por_categoria', 'por_dia',
+                                     'fecha_desde', 'fecha_hasta'}
+        assert data['venta_perdida_total'] == 0.0
+
+
+class TestBiVentaPerdidaDetalle:
+
+    def test_admin_retorna_pagina_vacia(self, client, jwt_token_admin, almacen):
+        resp = client.get(
+            f'/api/dashboard/bi/venta-perdida/detalle?almacen_id={almacen.id}',
+            headers={'Authorization': f'Bearer {jwt_token_admin}'},
+        )
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data == {'items': [], 'total': 0, 'page': 1, 'per_page': 50}
