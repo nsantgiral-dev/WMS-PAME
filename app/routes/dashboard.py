@@ -139,6 +139,44 @@ def bi_pedidos_despachados_detalle():
         return jsonify({'error': str(e)}), 500
 
 
+@dashboard_bp.route('/bi/pedidos-pendientes', methods=['GET'])
+@jwt_required()
+def bi_pedidos_pendientes():
+    if not _es_gestion():
+        return jsonify({'error': 'Sin permiso'}), 403
+    almacen_id = request.args.get('almacen_id', type=int)
+    if not almacen_id:
+        return jsonify({'error': 'almacen_id es requerido'}), 400
+    fecha_desde, fecha_hasta = _rango_fechas_desde_query()
+    try:
+        from app.services.metricas.pedidos_pendientes import calcular_pedidos_pendientes
+        resultado = calcular_pedidos_pendientes(almacen_id, fecha_desde, fecha_hasta)
+        return jsonify(resultado), 200
+    except Exception as e:
+        logger.exception(f'[DASHBOARD] bi_pedidos_pendientes almacen={almacen_id}')
+        return jsonify({'error': str(e)}), 500
+
+
+@dashboard_bp.route('/bi/pedidos-pendientes/detalle', methods=['GET'])
+@jwt_required()
+def bi_pedidos_pendientes_detalle():
+    if not _es_gestion():
+        return jsonify({'error': 'Sin permiso'}), 403
+    almacen_id = request.args.get('almacen_id', type=int)
+    if not almacen_id:
+        return jsonify({'error': 'almacen_id es requerido'}), 400
+    fecha_desde, fecha_hasta = _rango_fechas_desde_query()
+    page = request.args.get('page', 1, type=int)
+    per_page = request.args.get('per_page', 50, type=int)
+    try:
+        from app.services.metricas.pedidos_pendientes import listar_pedidos_pendientes_detalle
+        resultado = listar_pedidos_pendientes_detalle(almacen_id, fecha_desde, fecha_hasta, page, per_page)
+        return jsonify(resultado), 200
+    except Exception as e:
+        logger.exception(f'[DASHBOARD] bi_pedidos_pendientes_detalle almacen={almacen_id}')
+        return jsonify({'error': str(e)}), 500
+
+
 @dashboard_bp.route('/resumen-completo', methods=['GET'])
 @jwt_required()
 def resumen_completo():

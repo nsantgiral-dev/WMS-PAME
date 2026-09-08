@@ -70,3 +70,46 @@ class TestBiPedidosDespachadosDetalle:
             headers={'Authorization': f'Bearer {jwt_token}'},
         )
         assert resp.status_code == 403
+
+
+class TestBiPedidosPendientes:
+
+    def test_sin_token_401(self, client):
+        resp = client.get('/api/dashboard/bi/pedidos-pendientes')
+        assert resp.status_code == 401
+
+    def test_sin_almacen_id_400(self, client, jwt_token_admin):
+        resp = client.get(
+            '/api/dashboard/bi/pedidos-pendientes',
+            headers={'Authorization': f'Bearer {jwt_token_admin}'},
+        )
+        assert resp.status_code == 400
+
+    def test_operario_sin_permiso_403(self, client, jwt_token, almacen):
+        resp = client.get(
+            f'/api/dashboard/bi/pedidos-pendientes?almacen_id={almacen.id}',
+            headers={'Authorization': f'Bearer {jwt_token}'},
+        )
+        assert resp.status_code == 403
+
+    def test_admin_retorna_kpi_agregado(self, client, jwt_token_admin, almacen):
+        resp = client.get(
+            f'/api/dashboard/bi/pedidos-pendientes?almacen_id={almacen.id}',
+            headers={'Authorization': f'Bearer {jwt_token_admin}'},
+        )
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert set(data.keys()) == {'lineas_pendientes', 'fill_rate', 'por_motivo',
+                                     'fecha_desde', 'fecha_hasta'}
+
+
+class TestBiPedidosPendientesDetalle:
+
+    def test_admin_retorna_pagina_vacia(self, client, jwt_token_admin, almacen):
+        resp = client.get(
+            f'/api/dashboard/bi/pedidos-pendientes/detalle?almacen_id={almacen.id}',
+            headers={'Authorization': f'Bearer {jwt_token_admin}'},
+        )
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data == {'items': [], 'total': 0, 'page': 1, 'per_page': 50}
