@@ -79,7 +79,23 @@ def inicio_del_dia_utc(dia=None) -> datetime:
     return medianoche_local.astimezone(ZoneInfo('UTC')).replace(tzinfo=None)
 
 
+def rango_dia_operativo_utc(fecha_desde, fecha_hasta) -> tuple:
+    """Cotas UTC naive para filtrar una columna `datetime` por un rango de
+    días operativos Bogotá — `(inicio, fin)`, con `fin` EXCLUSIVO (medianoche
+    del día siguiente a `fecha_hasta`).
+
+    Mismo criterio que ya usa `RutaService.listar_rutas` para rango de
+    fechas, adaptado a columnas `datetime` (no `Date`): comparar `>=`/`<=`
+    directo contra `fecha_hasta` perdería las horas de ese día, porque la
+    columna guarda hora además de fecha.
+    """
+    if fecha_hasta < fecha_desde:
+        fecha_desde, fecha_hasta = fecha_hasta, fecha_desde
+    return inicio_del_dia_utc(fecha_desde), inicio_del_dia_utc(fecha_hasta + timedelta(days=1))
+
+
 __all__ = [
     'TZ_BOGOTA', 'ahora_bogota', 'fecha_hoy_bogota', 'fecha_iso_bogota',
     'fecha_bogota_mas', 'dia_operativo', 'inicio_del_dia_utc',
+    'rango_dia_operativo_utc',
 ]
