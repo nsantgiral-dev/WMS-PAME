@@ -9,8 +9,11 @@ el resto de la suite de picking.
 """
 import pytest
 
+from app.extensions import db
 from app.services.picking_service import PickingService
+from app.services.eventos_agotado_service import registrar_evento_agotado
 from app.models.evento_stock_agotado import EventoStockAgotado
+from app.models.picking import TareaPicking
 
 
 @pytest.fixture
@@ -104,3 +107,51 @@ class TestRegistraEventoSoloEnAgotadoReal:
         )
         ev = EventoStockAgotado.query.one()
         assert float(ev.precio_venta_capturado) == 0
+
+
+class TestRegistrarEventoAgotadoAislado:
+    """Unitario directo de `eventos_agotado_service.registrar_evento_agotado`,
+    sin pasar por picking_service — la función es pura y se puede probar
+    con una TareaPicking construida a mano."""
+
+    def test_cantidad_faltante_cero_no_agrega_nada(self, app, db, picking_setup):
+        s = picking_setup
+        tarea = TareaPicking(
+            codigo='TP-AISLADO-0', producto_id=s['producto'].id, cantidad_solicitada=5,
+            ubicacion_id=s['ubicacion'].id, almacen_id=s['almacen'].id,
+        )
+        db.session.add(tarea)
+        db.session.commit()
+
+        resultado = registrar_evento_agotado(tarea, cantidad_faltante=0)
+        assert resultado is None
+        assert EventoStockAgotado.query.count() == 0
+
+    def test_agrega_evento_con_los_campos_del_producto_y_la_tarea(self, app, db, picking_setup):
+        s = picking_setup
+        s['producto'].precio_venta = 250.0
+        s['producto'].categoria = 'OFICINA'
+        s['producto'].clasificacion_abc = 'B'
+        db.session.commit()
+
+        tarea = TareaPicking(
+            codigo='TP-AISLADO-1', producto_id=s['producto'].id, cantidad_solicitada=8,
+            ubicacion_id=s['ubicacion'].id, almacen_id=s['almacen'].id,
+            referencia_documento='PD-AISLADO', tipo_documento='PEDIDO',
+        )
+        db.session.add(tarea)
+        db.session.commit()
+
+        evento = registrar_evento_agotado(tarea, cantidad_faltante=4)
+        db.session.commit()
+
+        assert evento is not None
+        assert evento.tarea_picking_id == tarea.id
+        assert evento.producto_id == s['producto'].id
+        assert evento.almacen_id == s['almacen'].id
+        assert evento.pedido_siesa_ref == 'PD-AISLADO'
+        assert evento.tipo_documento == 'PEDIDO'
+        assert evento.cantidad_faltante == 4
+        assert float(evento.precio_venta_capturado) == 250.0
+        assert evento.categoria_producto == 'OFICINA'
+        assert evento.clasificacion_abc == 'B'
