@@ -751,6 +751,15 @@ class PickingService:
         tarea.motivo_bloqueo = motivo
         tarea.observaciones_bloqueo = observaciones
 
+        # Snapshot para el tablero BI (métricas "SKU agotado" / "venta perdida $")
+        # — solo agotado físico real, no el rechazo previo de Siesa (BACKORDER_SIESA
+        # se dispara en bloquear_por_backorder_siesa(), antes de que nadie camine).
+        # Misma transacción que el bloqueo: si el commit de abajo falla, no queda
+        # un evento huérfano sin su tarea.
+        if motivo == 'FALTANTE' and cantidad_faltante > 0:
+            from app.services.eventos_agotado_service import registrar_evento_agotado
+            registrar_evento_agotado(tarea, cantidad_faltante)
+
         # Capturar referencia antes del commit
         _ref_doc_rp = tarea.referencia_documento
 
