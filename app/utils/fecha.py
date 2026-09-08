@@ -79,6 +79,19 @@ def inicio_del_dia_utc(dia=None) -> datetime:
     return medianoche_local.astimezone(ZoneInfo('UTC')).replace(tzinfo=None)
 
 
+def dia_operativo_de(momento_utc: datetime) -> 'datetime.date':
+    """La operación inversa de `inicio_del_dia_utc`: dado un timestamp UTC
+    **naive** guardado en una columna del WMS, a qué día operativo Bogotá
+    pertenece.
+
+    Para agrupar "por día" (tendencias del tablero BI) — agrupar por
+    `func.date()` directo sobre la columna UTC cruda cometería el mismo
+    error de fondo que ya documenta este módulo: un evento de las 7-11:59
+    p.m. Colombia cae en la fecha UTC del día siguiente.
+    """
+    return momento_utc.replace(tzinfo=ZoneInfo('UTC')).astimezone(TZ_BOGOTA).date()
+
+
 def rango_dia_operativo_utc(fecha_desde, fecha_hasta) -> tuple:
     """Cotas UTC naive para filtrar una columna `datetime` por un rango de
     días operativos Bogotá — `(inicio, fin)`, con `fin` EXCLUSIVO (medianoche
@@ -97,5 +110,5 @@ def rango_dia_operativo_utc(fecha_desde, fecha_hasta) -> tuple:
 __all__ = [
     'TZ_BOGOTA', 'ahora_bogota', 'fecha_hoy_bogota', 'fecha_iso_bogota',
     'fecha_bogota_mas', 'dia_operativo', 'inicio_del_dia_utc',
-    'rango_dia_operativo_utc',
+    'dia_operativo_de', 'rango_dia_operativo_utc',
 ]

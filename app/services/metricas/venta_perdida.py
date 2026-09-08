@@ -18,7 +18,7 @@ from sqlalchemy import func
 
 from app.extensions import db
 from app.models.evento_stock_agotado import EventoStockAgotado
-from app.utils.fecha import rango_dia_operativo_utc
+from app.utils.fecha import rango_dia_operativo_utc, dia_operativo_de
 
 
 def calcular_venta_perdida(almacen_id: int, fecha_desde: date, fecha_hasta: date) -> dict:
@@ -41,10 +41,17 @@ def calcular_venta_perdida(almacen_id: int, fecha_desde: date, fecha_hasta: date
     ).filter(*filtros).group_by(EventoStockAgotado.categoria_producto).all()
     por_categoria = {(cat or 'Sin categoría'): float(v or 0) for cat, v in por_categoria_rows}
 
-    por_dia_rows = db.session.query(
-        func.date(EventoStockAgotado.creado_en), monto
-    ).filter(*filtros).group_by(func.date(EventoStockAgotado.creado_en)).all()
-    por_dia = {str(d): float(v or 0) for d, v in por_dia_rows}
+    # Agrupado en Python con dia_operativo_de(), no `func.date()` sobre la
+    # columna UTC cruda — un evento de las 7-11:59 p.m. Colombia cae en la
+    # fecha UTC del día siguiente (Regla 5 del proyecto).
+    por_dia: dict = {}
+    filas = db.session.query(
+        EventoStockAgotado.creado_en, EventoStockAgotado.cantidad_faltante,
+        EventoStockAgotado.precio_venta_capturado,
+    ).filter(*filtros).all()
+    for creado_en, cantidad, precio in filas:
+        clave = dia_operativo_de(creado_en).isoformat()
+        por_dia[clave] = por_dia.get(clave, 0) + float(cantidad or 0) * float(precio or 0)
 
     return {
         'venta_perdida_total': float(total or 0),

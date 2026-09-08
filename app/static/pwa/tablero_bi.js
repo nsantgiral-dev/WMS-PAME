@@ -1,18 +1,19 @@
 /**
- * Tablero BI — consume /api/dashboard/bi/*.
+ * Tablero BI — consume /api/dashboard/bi/*. Sección dentro de Dashboard
+ * (no un tab aparte), se refresca junto con el resto del dashboard.
  *
  * Métricas 1 (pedidos despachados), 3 (pendientes/fill rate) y 5 (venta
  * perdida $). Fijo sobre ALMACEN_ID (NB1, igual que el resto del dashboard
  * admin — no hay selector de bodega en ninguna pantalla de este panel).
  *
  * Alcance explícito de esta entrega: sin comparativo de período anterior,
- * sin export, sin refresco automático — se carga al entrar al tab o al
- * cambiar de filtro/página, nunca en el timer de 30s (mismo criterio que
- * Layout/Vigia/Flota en cargarAdmin()).
+ * sin export — sí hay tendencia por día (Chart.js, mismo patrón que
+ * graficaTendencia() en app.js) usando `por_dia` de cada endpoint.
  */
 
 let _BI_SUBTAB = 'despachados';
 let _BI_DET_PAGE = 1;
+let BI_CHART = null;
 
 const BI_SUBTABS = [
   { key: 'despachados', label: 'Despachados' },
@@ -96,6 +97,45 @@ function biPaginacionHTML(total, page, perPage) {
     </div>`;
 }
 
+/**
+ * Dibuja la tendencia por día (barra), mismo patrón que graficaTendencia()
+ * en app.js: destruir la instancia previa antes de recrear, si no el canvas
+ * se re-crea encima del viejo y filtra memoria en cada refresco de 30s.
+ */
+function biRenderChart(porDia, label, color) {
+  const canvas = document.getElementById('bi-chart');
+  const tituloEl = document.getElementById('bi-chart-titulo');
+  if (!canvas) return;
+  if (tituloEl) tituloEl.textContent = label;
+
+  const fechas = Object.keys(porDia || {}).sort();
+  if (BI_CHART) { BI_CHART.destroy(); BI_CHART = null; }
+
+  if (!fechas.length) {
+    canvas.style.display = 'none';
+    return;
+  }
+  canvas.style.display = 'block';
+  const valores = fechas.map(f => porDia[f]);
+
+  BI_CHART = new Chart(canvas, {
+    type: 'bar',
+    data: {
+      labels: fechas,
+      datasets: [{ label, data: valores, backgroundColor: color, borderRadius: 4 }],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { ticks: { color: '#7A96B0' }, grid: { display: false } },
+        y: { ticks: { color: '#7A96B0' }, beginAtZero: true, grid: { color: '#1a1a1a' } },
+      },
+    },
+  });
+}
+
 function biErrorHTML(mensaje, reintentarFn) {
   return `<div style="text-align:center;padding:20px;color:#ef4444;">${mensaje}<br>
     <button onclick="${reintentarFn}" style="margin-top:8px;padding:6px 12px;background:var(--bg-s);border:1px solid var(--brd);border-radius:8px;color:var(--tx);cursor:pointer;">Reintentar</button></div>`;
@@ -137,6 +177,7 @@ async function biCargarDespachados() {
         <div class="kpi-card"><div class="kpi-valor">${biMoneda(kpi.valor_total)}</div><div class="kpi-label">Valor total</div></div>
       </div>
       ${biUltimaActualizacion()}`;
+    biRenderChart(kpi.por_dia, 'Valor despachado por día', '#2BAAB8');
 
     listaEl.innerHTML = det.items.length ? det.items.map(t => `
       <div class="tabla-fila">
@@ -152,6 +193,7 @@ async function biCargarDespachados() {
   } catch (e) {
     kpiEl.innerHTML = biErrorHTML(e.message || 'Error cargando el KPI', 'biCargarDespachados()');
     listaEl.innerHTML = '';
+    biRenderChart({}, 'Valor despachado por día', '#2BAAB8');
   }
 }
 
@@ -186,6 +228,7 @@ async function biCargarPendientes() {
       </div>
       ${biUltimaActualizacion()}`;
     descEl.innerHTML = biBadges(kpi.por_motivo);
+    biRenderChart(kpi.por_dia, 'Líneas pendientes por día', '#F59E0B');
 
     listaEl.innerHTML = det.items.length ? det.items.map(p => `
       <div class="tabla-fila">
@@ -201,6 +244,7 @@ async function biCargarPendientes() {
   } catch (e) {
     kpiEl.innerHTML = biErrorHTML(e.message || 'Error cargando el KPI', 'biCargarPendientes()');
     listaEl.innerHTML = '';
+    biRenderChart({}, 'Líneas pendientes por día', '#F59E0B');
   }
 }
 
@@ -233,6 +277,7 @@ async function biCargarVentaPerdida() {
     descEl.innerHTML = biBadges(
       Object.fromEntries(Object.entries(kpi.por_categoria || {}).map(([k, v]) => [k, biMoneda(v)]))
     );
+    biRenderChart(kpi.por_dia, 'Venta perdida $ por día', '#F87171');
 
     listaEl.innerHTML = det.items.length ? det.items.map(ev => `
       <div class="tabla-fila">
@@ -251,5 +296,6 @@ async function biCargarVentaPerdida() {
   } catch (e) {
     kpiEl.innerHTML = biErrorHTML(e.message || 'Error cargando el KPI', 'biCargarVentaPerdida()');
     listaEl.innerHTML = '';
+    biRenderChart({}, 'Venta perdida $ por día', '#F87171');
   }
 }

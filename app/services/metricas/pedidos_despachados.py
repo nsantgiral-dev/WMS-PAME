@@ -19,7 +19,7 @@ from sqlalchemy import func
 
 from app.extensions import db
 from app.models.packing import TareaPacking, ItemPacking
-from app.utils.fecha import rango_dia_operativo_utc
+from app.utils.fecha import rango_dia_operativo_utc, dia_operativo_de
 
 
 def calcular_pedidos_despachados(almacen_id: int, fecha_desde: date, fecha_hasta: date) -> dict:
@@ -41,11 +41,22 @@ def calcular_pedidos_despachados(almacen_id: int, fecha_desde: date, fecha_hasta
         func.coalesce(func.sum(ItemPacking.cantidad_real), 0),
     ).join(TareaPacking, ItemPacking.tarea_id == TareaPacking.id).filter(*filtros).one()
 
+    # Agrupado en Python, no `func.date()` sobre la columna UTC cruda — un
+    # despacho de las 7-11:59 p.m. Colombia cae en la fecha UTC del día
+    # siguiente (Regla 5 del proyecto). Solo trae fecha_despachado/valor_factura,
+    # no las tareas completas.
+    por_dia: dict = {}
+    filas = db.session.query(TareaPacking.fecha_despachado, TareaPacking.valor_factura).filter(*filtros).all()
+    for fecha_desp, valor in filas:
+        clave = dia_operativo_de(fecha_desp).isoformat()
+        por_dia[clave] = por_dia.get(clave, 0) + float(valor or 0)
+
     return {
         'pedidos': int(pedidos or 0),
         'lineas': int(lineas or 0),
         'unidades': int(unidades or 0),
         'valor_total': float(valor_total or 0),
+        'por_dia': por_dia,
         'fecha_desde': fecha_desde.isoformat(),
         'fecha_hasta': fecha_hasta.isoformat(),
     }

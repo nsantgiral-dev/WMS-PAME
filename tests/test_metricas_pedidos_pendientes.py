@@ -64,6 +64,7 @@ class TestCalcularPedidosPendientes:
         # remisionado = (10-4) + (10-0) = 16; pedido = 20 → fill_rate = 0.8
         assert resultado['fill_rate'] == pytest.approx(0.8)
         assert resultado['lineas_pendientes'] == 1  # solo PD-A tiene pendiente > 0
+        assert resultado['por_dia'] == {'2026-08-10': 1}
 
     def test_excluye_estado_anulado(self, app, db, almacen):
         from datetime import date

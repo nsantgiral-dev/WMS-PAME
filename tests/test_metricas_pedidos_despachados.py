@@ -36,7 +36,7 @@ class TestCalcularPedidosDespachados:
         hoy = hoy_operativo()
         resultado = calcular_pedidos_despachados(almacen.id, hoy, hoy)
         assert resultado == {
-            'pedidos': 0, 'lineas': 0, 'unidades': 0, 'valor_total': 0.0,
+            'pedidos': 0, 'lineas': 0, 'unidades': 0, 'valor_total': 0.0, 'por_dia': {},
             'fecha_desde': hoy.isoformat(), 'fecha_hasta': hoy.isoformat(),
         }
 
@@ -53,6 +53,7 @@ class TestCalcularPedidosDespachados:
         assert resultado['lineas'] == 2
         assert resultado['unidades'] == 18  # 9 + 9
         assert resultado['valor_total'] == 4000.0
+        assert resultado['por_dia'] == {hoy.isoformat(): 4000.0}
 
     def test_excluye_fuera_de_rango_y_otro_almacen(self, app, db, almacen, producto):
         from app.models.almacen import Almacen

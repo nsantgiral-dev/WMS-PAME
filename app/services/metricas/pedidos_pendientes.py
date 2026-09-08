@@ -94,14 +94,20 @@ def calcular_pedidos_pendientes(almacen_id: int, fecha_desde: date, fecha_hasta:
     motivos_map = _motivos_por_pedido_producto({p.numero_pedido for p in pendientes})
 
     por_motivo = {}
+    por_dia = {}
     for p in pendientes:
         motivo = mapear_motivo(motivos_map.get((p.numero_pedido, p.producto_id)))
         por_motivo[motivo] = por_motivo.get(motivo, 0) + 1
+        fecha_ent = _parse_fecha_entrega(p.fecha_entrega)
+        if fecha_ent:
+            clave = fecha_ent.isoformat()
+            por_dia[clave] = por_dia.get(clave, 0) + 1
 
     return {
         'lineas_pendientes': len(pendientes),
         'fill_rate': fill_rate,
         'por_motivo': por_motivo,
+        'por_dia': por_dia,
         'fecha_desde': fecha_desde.isoformat(),
         'fecha_hasta': fecha_hasta.isoformat(),
     }
