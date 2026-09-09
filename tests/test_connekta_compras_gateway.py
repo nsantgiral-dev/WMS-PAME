@@ -13,7 +13,7 @@ import pytest
 from app.services.connekta_compras_gateway import ConnektaComprasGateway
 
 
-def test_usa_la_config_del_core_no_una_copia(app):
+def test_usa_la_config_del_core_no_una_copia(app, monkeypatch):
     """El core no se copia — es la misma instancia. Mutar el core después
     de crear el gateway de dominio debe verse reflejado (mismo patrón que
     usa test_09_guards_criticos.py mutando connekta.tipo_docto_entrada_oc)."""
@@ -23,7 +23,7 @@ def test_usa_la_config_del_core_no_una_copia(app):
         gw_compras = ConnektaComprasGateway(connekta)
         assert gw_compras._core is connekta
 
-        connekta.tipo_docto_entrada_oc = ''
+        monkeypatch.setattr(connekta, 'tipo_docto_entrada_oc', '')
         with pytest.raises(ValueError, match='SIESA_TIPO_DOCTO_ENTRADA_OC'):
             gw_compras.confirmar_entrada_compras(
                 id_co_oc='003', tipo_docto_oc='OC', consec_docto_oc='100',
@@ -31,7 +31,7 @@ def test_usa_la_config_del_core_no_una_copia(app):
                 proveedor_id='900123456', sucursal_prov='001',
             )
 
-        connekta.tipo_docto_entrada_oc = 'EA'
+        monkeypatch.setattr(connekta, 'tipo_docto_entrada_oc', 'EA')
         with pytest.raises(ValueError, match='proveedor_id es None'):
             gw_compras.confirmar_entrada_compras(
                 id_co_oc='003', tipo_docto_oc='OC', consec_docto_oc='100',

@@ -87,10 +87,16 @@ class TestElDespachoNoSeMarcaSinDocumento:
 
     def test_la_consulta_no_puede_volver_a_devolver_vacio_ante_error(self):
         """Trinquete sobre la causa. Si alguien reintroduce el `return []` en el
-        `except`, esta rama vuelve a marcar despachos sin documento fiscal."""
+        `except`, esta rama vuelve a marcar despachos sin documento fiscal.
+
+        `get_compromisos_pedido` se movió a `connekta_consultas_gateway.py`
+        el 2026-09-09 (deuda de tamaño, paso 5) — `connekta_gateway.py`
+        conserva solo un delegado delgado sin el `raise`, así que el guard
+        apunta a donde vive la lógica real.
+        """
         import pathlib
         fuente = (pathlib.Path(__file__).resolve().parents[1] / 'app' / 'services'
-                  / 'connekta_gateway.py').read_text(encoding='utf-8')
+                  / 'connekta_consultas_gateway.py').read_text(encoding='utf-8')
         i = fuente.find('def get_compromisos_pedido')
         j = fuente.find('\n    def ', i + 10)
         cuerpo = fuente[i:j]

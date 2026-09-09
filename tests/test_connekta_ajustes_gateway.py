@@ -52,7 +52,7 @@ class TestEnviarAjusteInventario:
         with app.app_context():
             from app.services.connekta_gateway import connekta
 
-            connekta.tipo_docto_ajuste = 'ADI'
+            monkeypatch.setattr(connekta, 'tipo_docto_ajuste', 'ADI')
             capturado = {}
 
             def _fake_post(conector, nombre, payload):
