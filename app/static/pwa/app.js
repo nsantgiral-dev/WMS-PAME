@@ -2273,8 +2273,13 @@ async function iniciarDespachoDesdeSiesa(idx) {
 // ADMIN — Gestión de usuarios (tab-usuarios)
 // ─────────────────────────────────────────────────────────────
 
+// 'NB1' se mantiene en este mapa a propósito (tests/test_bodegas_coherentes.py
+// exige que todo mapa de nombres liste las 9 bodegas operadas, sin excepción,
+// para no repetir el bug de mapas divergentes de 2026-08-10/14) aunque
+// `cargarUsuarios()` ya no la consulte — ver el comentario junto a `clave`
+// más abajo. Etiquetada igual que la pestaña con la que se fusiona.
 const _USR_NOMBRES_BOD = {
-  'NB1':'Bodega Principal','NC1':'Neiva Centro','NS1':'Neiva Sur Principal',
+  'NB1':'Centro de Distribución','NC1':'Neiva Centro','NS1':'Neiva Sur Principal',
   'NS2':'Neiva Sur Fundación (parqueo licitaciones)',
   'FC1':'Florencia Centro','PC1':'Pitalito Centro','PT1':'Pitalito Terminal',
   'FF1':'Feria Florencia','FN1':'Santa Lucía Plaza','FP1':'Feria Pitalito',
@@ -2297,7 +2302,14 @@ async function cargarUsuarios() {
     }
     const grupos = {};
     usuarios.forEach(u => {
-      const clave = u.bodega_siesa_id || '_CD';
+      // 'NB1' explícito y sin bodega_siesa_id son la MISMA bodega (Centro de
+      // Distribución/Bodega Neiva, la única que tiene almacén NB1 en la BD) —
+      // antes de 2026-09-09 caían en pestañas separadas ("Centro de
+      // Distribución (NB1)" vs "Bodega Principal (NB1)") solo porque unos
+      // usuarios (ej. Recepcionista, que sí lo necesita para filtrar
+      // traslados) tienen el campo puesto a mano y el resto no. Unificar acá
+      // no toca ningún dato — bodega_siesa_id sigue intacto para quien lo usa.
+      const clave = (u.bodega_siesa_id && u.bodega_siesa_id !== 'NB1') ? u.bodega_siesa_id : '_CD';
       if (!grupos[clave]) grupos[clave] = [];
       grupos[clave].push(u);
     });

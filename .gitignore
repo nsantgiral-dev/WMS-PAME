@@ -15,6 +15,9 @@ build/
 .env.qa
 .env.*
 
+# Overrides personales de Claude Code (permisos locales, no de equipo)
+.claude/settings.local.json
+
 # Bases SQLite aisladas de pruebas manuales contra Siesa QA — nunca la
 # Postgres real, ver scripts/qa_verificar_conexion.py.
 scripts/*.db
