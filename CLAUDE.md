@@ -2264,9 +2264,10 @@ puros), `connekta_circuit_breaker.py` (`ConnektaCircuitBreaker`),
 `connekta_compras_gateway.py` (`ConnektaComprasGateway`),
 `connekta_ajustes_gateway.py` (`ConnektaAjustesGateway`),
 `connekta_consultas_gateway.py` (`ConnektaConsultasGateway`, 29 métodos en
-3 sub-lotes — el dominio más grande). Pendientes: Traslados, Facturación,
-NC/Liquidación (los dos últimos, deliberadamente al final por ser los más
-delicados).
+3 sub-lotes — el dominio más grande), `connekta_traslados_gateway.py`
+(`ConnektaTrasladosGateway`, 10 métodos — RIT/STS/ETS/transferencia
+directa). Pendientes: Facturación, NC/Liquidación (deliberadamente al
+final por ser los más delicados).
 
 Cada extracción se probó primero con la suite (pytest + tests directos de
 la clase nueva) y luego, para los dominios que hablan con Siesa, con un
@@ -2317,3 +2318,41 @@ disfrazarse de regresión del código.
 **Variables agregadas a `.env.qa` (2026-09-09, no son secretos, solo
 config de negocio):** `SIESA_TIPO_DOCTO_ENTRADA_OC=EA`,
 `SIESA_NIT_EMPRESA=52430291`.
+
+**Traslados, verificado real (2026-09-09) — corrección de proceso
+importante:** el usuario aclaró que en este ambiente el flujo real de
+traslados **no pasa por RIT** — `crear_requisicion_traslado` (174646),
+`compromisos_desde_requisicion` (174720) y `transferencia_desde_requisicion`
+(174930) no se usan en producción; el flujo real es STS (173076) directo
+seguido de ETS (173079). La prueba real se ajustó a eso.
+
+Se movieron las mismas 10 unidades de `PAPELSP9218` en cadena por las 10
+bodegas operadas (`BODEGAS_OPERADAS`, ver `tests/test_bodegas_coherentes.py`),
+en dos tramos porque el primero se topó con un estado real de datos:
+
+- Tramo 1: `NB1→NS1→NS2→NC1→FC1→PC1` (5 saltos, 10 documentos, todos
+  `codigo:0`). Se detuvo en `PC1→PT1`: Siesa rechazó por *"Item sin
+  cantidad disponible, Faltante Inv.: -30"* — PC1 ya tenía 152 unidades en
+  "salida sin confirmar" + 8 comprometidas que excedían su existencia
+  **antes** de este traslado. Es un estado de datos preexistente en Siesa
+  QA, no una regresión del código: `_post` lanzó la excepción limpiamente,
+  sin dejar nada a medias.
+- Tramo 2 (arrancando de nuevo desde NB1 para evitar PC1 como origen):
+  `NB1→PT1→FF1→FN1→FP1` (4 saltos, 8 documentos, todos `codigo:0`).
+
+Total: **9 saltos, 18 documentos reales (STS+ETS) en Siesa QA, todos
+`codigo:0`**, las 10 bodegas cubiertas como origen y/o destino al menos
+una vez. En **los 18 documentos** Siesa no devolvió el consecutivo
+parseable en la respuesta directa (`{'codigo': 0, 'mensaje': 'Transacción
+Exitosa', 'detalle': 'Importacion exitosa'}`, sin tabla) — así que el
+camino de recovery (`get_consec_salida_transito_by_alterno`,
+`get_consec_entrada_transito_by_alterno`) se ejercitó de verdad en el
+100% de los casos, no solo en el unit test. El ítem interno del WMS
+`0017368` que se pensó usar primero no existe en el catálogo de Siesa QA
+bajo ninguna variante de formato (verificado con `buscar_item_por_referencia`
+antes de escribir nada) — se usó `PAPELSP9218` en su lugar, ya confirmado
+en catálogo por la prueba de Compras.
+
+Script: `scripts/qa_traslados_gateway_real.py` (`--si-de-verdad`,
+`--desde-salto N` para reanudar, `--cadena A,B,C` para override de ruta —
+usado para el tramo 2).
