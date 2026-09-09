@@ -2246,3 +2246,74 @@ hacerlo). Recorrido por los endpoints reales de la pantalla nueva
 Resultado: Siesa 1781→**1789** (`codigo:0` real), WMS local→**1789** —
 ambos alineados con el conteo definitivo del supervisor. Script:
 `scripts/qa_conteo_definitivo_real.py`.
+
+---
+
+## Refactor de tamaño de `connekta_gateway.py` — dominios extraídos, verificados en vivo contra Siesa QA (2026-09-09)
+
+`connekta_gateway.py` era un God Object de 4693 líneas / 85 métodos. Se
+viene partiendo por dominio en módulos hermanos, todos con el mismo patrón:
+la clase de dominio recibe `self` (la instancia completa de
+`ConnektaGateway`) como `core` — no duplica config, y `ConnektaGateway`
+conserva cada método original como delegado delgado (misma firma, mismo
+comportamiento) para que ningún caller (código o tests) cambie.
+
+Extraídos y verificados con la suite completa (2864 passing) más pruebas
+reales contra Siesa QA: `app/utils/siesa_formato.py` (helpers de formato
+puros), `connekta_circuit_breaker.py` (`ConnektaCircuitBreaker`),
+`connekta_compras_gateway.py` (`ConnektaComprasGateway`),
+`connekta_ajustes_gateway.py` (`ConnektaAjustesGateway`),
+`connekta_consultas_gateway.py` (`ConnektaConsultasGateway`, 29 métodos en
+3 sub-lotes — el dominio más grande). Pendientes: Traslados, Facturación,
+NC/Liquidación (los dos últimos, deliberadamente al final por ser los más
+delicados).
+
+Cada extracción se probó primero con la suite (pytest + tests directos de
+la clase nueva) y luego, para los dominios que hablan con Siesa, con un
+script real contra Siesa QA (`scripts/qa_consultas_gateway_real.py`,
+`scripts/qa_ajustes_gateway_real.py`, `scripts/qa_compras_gateway_real.py`)
+— todos con `.env.qa`, base local aislada, y `MODO_ENSAYO` desactivado
+solo dentro del proceso del script (nunca en el archivo) porque `.env.qa`
+lo trae `true` por seguridad.
+
+**Consultas, verificado real (2026-09-09):** los 3 sub-lotes responden
+igual que antes del refactor — 215 pedidos pendientes, 3988 SKUs únicos de
+stock en NB1, 100 vendedores, 100 terceros, catálogo real. Único "fallo"
+encontrado (`get_ubicaciones_siesa`): no es del código — `API_v2_Ubicaciones`
+devuelve 0 filas en Siesa QA ahora mismo **incluso sin ningún filtro**,
+confirmado con un `_get` crudo por fuera del gateway. Es estado de datos
+de Siesa QA, no una regresión.
+
+**Ajustes, verificado real (2026-09-09):** los dos POST de 142951
+(`enviar_ajuste_inventario` AJ-ENT +1, `transferir_a_averias` -1) sobre
+`PAPELSP9830`/NB1 respondieron `codigo:0`, con el stock real verificado
+antes/durante/después: 1785 → 1786 → 1785 — impacto neto cero, diseñado a
+propósito para probar los dos POST sin dejar el inventario real alterado.
+
+**Compras, verificado real (2026-09-09) — dos hallazgos de negocio nuevos,
+no bugs de código:** `confirmar_entrada_compras` (142948) probado contra
+una OC vieja (003-OC-4, 2024-03-08, nunca antes recibida) reveló que
+`f451_id_tercero_comprador` no estaba resolviéndose porque ni `.env.qa` ni
+`.env` traían `SIESA_NIT_EMPRESA` — se agregó (`52430291`, confirmado por
+el usuario). Contra esa misma OC vieja Siesa igual rechazó con *"el
+tercero comprador no es el de la OC"* — la OC de 2024 tiene el comprador
+vacío, y el NIT de la empresa no es lo que Siesa espera ahí. Se resolvió
+usando una OC **fresca**, creada por el usuario para la prueba (**OC67**,
+003-OC-67, DISPAPELES SAS, ítem PAPELSP9218, comprador real FIGUEROA
+ANACONA NELLY CARMENSA/52430291) — con eso el único campo que faltaba fue
+`num_docto_referencia` (**obligatorio para 142948 en este ambiente,** no
+documentado antes — se pasó `"OC-67"`). Con comprador real +
+`num_docto_referencia` + `fecha_entrega` igual a la de la OC: `codigo:0`,
+`f421_cant_entrada` 0→20 (pedido completo), `f421_ind_estado` 1→3
+(Cumplido).
+
+**Regla operativa para pruebas reales futuras de este refactor (y en
+general):** no reusar pedidos/OCs/documentos viejos que ya estén en un
+estado ambiguo o incompleto (comprador vacío, ya parcialmente procesados)
+— el usuario crea datos frescos en Siesa QA a pedido, sin excepción,
+porque un dato viejo puede fallar por su propio estado histórico y
+disfrazarse de regresión del código.
+
+**Variables agregadas a `.env.qa` (2026-09-09, no son secretos, solo
+config de negocio):** `SIESA_TIPO_DOCTO_ENTRADA_OC=EA`,
+`SIESA_NIT_EMPRESA=52430291`.
