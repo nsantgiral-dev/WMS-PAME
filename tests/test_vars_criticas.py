@@ -32,23 +32,34 @@ _RAIZ = Path(__file__).resolve().parents[1]
 _GATEWAY = _RAIZ / 'app' / 'services' / 'connekta_gateway.py'
 _HEALTH = _RAIZ / 'app' / 'routes' / 'health.py'
 
+#: La deuda de tamaño de connekta_gateway.py se viene resolviendo (2026-09-09)
+#: sacando dominios a módulos hermanos (connekta_circuit_breaker.py,
+#: connekta_compras_gateway.py...) — todos con el prefijo `connekta_`. Un
+#: guard real que se mueve a uno de esos archivos sigue siendo un guard real;
+#: escanear solo `connekta_gateway.py` lo volvería invisible el día que se
+#: mueva, exactamente el punto ciego que el mapa de bodegas ya enseñó una vez
+#: (medir una copia cuando la propiedad es "todo el árbol"). Por eso
+#: `_vars_en_guards` recorre toda la familia, no un único archivo.
+_GATEWAY_FAMILIA = sorted((_RAIZ / 'app' / 'services').glob('connekta_*.py'))
 
-def _vars_en_guards(archivo: Path) -> dict:
-    """Variables `SIESA_*` nombradas dentro de un `raise`. Nombre → línea.
+
+def _vars_en_guards(*archivos: Path) -> dict:
+    """Variables `SIESA_*` nombradas dentro de un `raise`. Nombre → (archivo, línea).
 
     Por AST y no por regex sobre el archivo entero: un comentario que MENCIONA
     una variable no es un guard, y contarlo obligaría a declarar variables que
     no fallan — ruido en un canal que solo sirve si se puede leer entero.
     """
-    arbol = ast.parse(archivo.read_text(encoding='utf-8'))
     salida = {}
-    for nodo in ast.walk(arbol):
-        if not isinstance(nodo, ast.Raise) or nodo.exc is None:
-            continue
-        for sub in ast.walk(nodo.exc):
-            if isinstance(sub, ast.Constant) and isinstance(sub.value, str):
-                for nombre in re.findall(r'SIESA_[A-Z_]+', sub.value):
-                    salida.setdefault(nombre, nodo.lineno)
+    for archivo in archivos:
+        arbol = ast.parse(archivo.read_text(encoding='utf-8'))
+        for nodo in ast.walk(arbol):
+            if not isinstance(nodo, ast.Raise) or nodo.exc is None:
+                continue
+            for sub in ast.walk(nodo.exc):
+                if isinstance(sub, ast.Constant) and isinstance(sub.value, str):
+                    for nombre in re.findall(r'SIESA_[A-Z_]+', sub.value):
+                        salida.setdefault(nombre, (archivo.name, nodo.lineno))
     return salida
 
 
@@ -63,13 +74,13 @@ class TestElCatalogoEstaCompleto:
         cíclico entre abril y junio de 2026.
         """
         declaradas = {v.nombre for v in vc.VARS_CRITICAS}
-        en_guards = _vars_en_guards(_GATEWAY)
-        sin_declarar = {n: l for n, l in en_guards.items() if n not in declaradas}
+        en_guards = _vars_en_guards(*_GATEWAY_FAMILIA)
+        sin_declarar = {n: al for n, al in en_guards.items() if n not in declaradas}
         assert not sin_declarar, (
             '\nVariables que hacen fallar al gateway y NO están en '
             '`app/services/vars_criticas.py`:\n'
-            + '\n'.join(f'  · {n}  (connekta_gateway.py:{l})'
-                        for n, l in sorted(sin_declarar.items()))
+            + '\n'.join(f'  · {n}  ({archivo}:{l})'
+                        for n, (archivo, l) in sorted(sin_declarar.items()))
             + '\n\nCada una puede reventar en producción con /api/health/siesa '
               'diciendo `ok`. Agregala al catálogo con qué rompe — y si su '
               'guard solo dispara cuando la API no trae el dato, marcala '
@@ -86,8 +97,13 @@ class TestElCatalogoEstaCompleto:
         SIESA_MOTIVO_TRASLADO. La variable sigue vigente — la comparte
         transferencia_directa(), que sí sigue en uso — así que no es un
         guard real perdido, es uno de menos porque hay una función de menos.
+
+        2026-09-09: el escaneo pasó de un solo archivo a toda la familia
+        `connekta_*.py` (ver `_GATEWAY_FAMILIA`) — la extracción de dominios
+        de `connekta_gateway.py` mueve guards reales a archivos hermanos, y
+        no son guards perdidos solo porque cambiaron de archivo.
         """
-        assert len(_vars_en_guards(_GATEWAY)) >= 14, (
+        assert len(_vars_en_guards(*_GATEWAY_FAMILIA)) >= 14, (
             'el detector encontró menos guards de los que había el 2026-09-07 '
             '— o se borraron guards reales, o el patrón dejó de funcionar')
 
