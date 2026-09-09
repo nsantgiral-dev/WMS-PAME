@@ -547,8 +547,9 @@ class ConnektaGateway:
     def _fmt_valor(v) -> str:
         """Formato DecimalConSigno requerido por Siesa: +000000000000000.0000 (21 chars).
         Spec: signo(1) + enteros(15) + punto(1) + decimales(4) = 21 chars exactos."""
-        signo = '+' if v >= 0 else '-'
-        return f'{signo}{abs(v):020.4f}'
+        from app.utils.siesa_formato import fmt_valor
+
+        return fmt_valor(v)
 
     @staticmethod
     def _fmt_decimal_sin_signo(v, enteros: int, decimales: int = 4) -> str:
@@ -557,8 +558,9 @@ class ConnektaGateway:
         UnoEE de Generic Transfer: estos campos NO se auto-rellenan como los
         de tipo Entero/FIJO — hay que mandarlos ya formateados al ancho exacto
         o el registro plano queda corto (Siesa lo rechaza por tamaño)."""
-        ancho = enteros + 1 + decimales
-        return f'{abs(float(v)):0{ancho}.{decimales}f}'
+        from app.utils.siesa_formato import fmt_decimal_sin_signo
+
+        return fmt_decimal_sin_signo(v, enteros, decimales)
 
     @staticmethod
     def _verificar_partida_doble_dc(payload: dict) -> None:
@@ -574,26 +576,9 @@ class ConnektaGateway:
         conector: un descuadre de un peso lo rechaza Siesa después de 30 a 60
         segundos y con el documento a medio camino, no antes de intentarlo.
         """
-        from decimal import Decimal
+        from app.utils.siesa_formato import verificar_partida_doble_dc
 
-        def total(seccion: str, campo: str) -> Decimal:
-            return sum(
-                (Decimal(m[campo].lstrip('+')) for m in payload.get(seccion, ())),
-                Decimal('0'),
-            )
-
-        debitos = total('Movimientocontable', 'F351_VALOR_DB') + total(
-            'MovimientoCxC', 'F351_VALOR_DB')
-        creditos = total('Movimientocontable', 'F351_VALOR_CR') + total(
-            'MovimientoCxC', 'F351_VALOR_CR')
-
-        if debitos != creditos:
-            raise ValueError(
-                f'DocumentoContable (142882) no cuadra: débitos ${debitos:,} '
-                f'contra créditos ${creditos:,} (diferencia '
-                f'${debitos - creditos:,}). No se manda — Siesa lo rechazaría '
-                'con el documento a medio camino.'
-            )
+        verificar_partida_doble_dc(payload)
 
     # ── Circuit Breaker Methods ───────────────────────────────────────────────
 
@@ -724,14 +709,9 @@ class ConnektaGateway:
     @staticmethod
     def _safe_int_env(var_name: str, default: int) -> int:
         """Parse int env var safely — logs warning and falls back to default on bad value."""
-        raw = os.getenv(var_name, '')
-        if not raw:
-            return default
-        try:
-            return int(raw)
-        except (ValueError, TypeError):
-            logger.warning(f'[CONNEKTA] {var_name}={raw!r} no es numérico — usando default {default}')
-            return default
+        from app.utils.siesa_formato import safe_int_env
+
+        return safe_int_env(var_name, default)
 
     @property
     def headers(self):
