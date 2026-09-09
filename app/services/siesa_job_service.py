@@ -1487,6 +1487,13 @@ def _post_completado(job: SiesaJob):
     if not job.referencia_tipo or not job.referencia_id:
         return
     if job.referencia_tipo == 'TareaReposicion':
+        # RAMA MUERTA (documentada 2026-09-09, no eliminada): reposición
+        # RESERVA→PICKING es 100% WMS desde el commit 9447464 y ya no crea
+        # ningún SiesaJob con este referencia_tipo (confirmado por grep en
+        # todo el repo) — este bloque nunca se ejecuta hoy. Se deja sin
+        # borrar porque no hace daño y documenta de dónde salían
+        # `siesa_job_id`/`siesa_enviado` en `TareaReposicion`, por si algún
+        # día se retoma ese flujo.
         from app.models.tarea_reposicion import TareaReposicion
         tarea = TareaReposicion.query.get(job.referencia_id)
         if tarea:

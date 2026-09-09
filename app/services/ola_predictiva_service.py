@@ -115,22 +115,6 @@ def pre_verificar_ola(items: list, almacen_id: int) -> dict:
     }
 
 
-def _stock_disponible_picking(producto_id: int, almacen_id: int) -> int:
-    """Suma el stock disponible (cantidad - reservado) en todas las ubicaciones PICKING."""
-    registros = (
-        UbicacionProducto.query
-        .join(Ubicacion, Ubicacion.id == UbicacionProducto.ubicacion_id)
-        .filter(
-            UbicacionProducto.producto_id == producto_id,
-            Ubicacion.almacen_id == almacen_id,
-            Ubicacion.tipo_zona == 'PICKING',
-            Ubicacion.activo == True,
-        )
-        .all()
-    )
-    return sum(max(0, r.cantidad - (r.reservado or 0)) for r in registros)
-
-
 def _pre_reponer(producto_id: int, almacen_id: int, deficit: int) -> int:
     """
     Genera TareaReposicion preventivas para cubrir el déficit.

@@ -188,7 +188,10 @@ class PackingService:
             )
 
         item.cantidad_real = cantidad_real
-        item.verificado = item.cantidad_real is not None
+        # verificado = True solo al alcanzar/superar lo esperado — igual que
+        # mobile_service.confirmar_tarea. Antes era `is not None`, que marcaba
+        # el ítem como listo tras el primer escaneo aunque faltaran unidades.
+        item.verificado = item.cantidad_real >= item.cantidad_esperada
         if lote:
             item.lote = lote
 

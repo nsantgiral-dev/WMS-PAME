@@ -429,7 +429,12 @@ async function repCargarTareas() {
                 Cancelar
               </button>` : ''
             }
-            ${t.siesa_enviado ? `<span style="font-size:11px;color:#22c55e;">✓ Siesa</span>` : (t.estado === 'COMPLETADA' ? `<span style="font-size:11px;color:#f59e0b;">⏳ Pendiente Siesa</span>` : '')}
+            <!-- Badge "Siesa" retirado (2026-09-09): reposición RESERVA→PICKING es 100% WMS
+                 desde el commit 9447464, nunca dispara job a Siesa — t.siesa_enviado nunca
+                 se pone en true, así que el badge mostraba "⏳ Pendiente Siesa" para siempre
+                 en toda tarea COMPLETADA. Columnas/rama muerta quedan documentadas en
+                 tarea_reposicion.py y siesa_job_service.py, sin migración por ahora. -->
+            ${t.siesa_enviado ? `<span style="font-size:11px;color:#22c55e;">✓ Siesa</span>` : ''}
           </div>
         </div>`;
     }).join('');
