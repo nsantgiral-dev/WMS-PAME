@@ -254,14 +254,22 @@ class TestLosDosFallbacksApuntanAlMismoLado:
         assert cp.cobra_en_la_puerta('', CONTADO, '') is None
 
     def test_el_gateway_usa_la_misma_funcion(self):
-        """Por AST. Un `or` suelto acá es exactamente cómo divergieron."""
+        """Por AST. Un `or` suelto acá es exactamente cómo divergieron.
+
+        `cond_pago_efectiva` la llama `trigger_factura_desde_remision`, que
+        vive en `connekta_facturacion_gateway.py` desde el 2026-09-09 (paso 7
+        de la deuda de tamaño) — se escanea toda la familia `connekta_*.py`,
+        no solo el gateway, para no volver a romperse en la próxima extracción.
+        """
         import ast
         import pathlib
-        arbol = ast.parse(pathlib.Path('app/services/connekta_gateway.py').read_text())
-        llamadas = {
-            n.func.attr for n in ast.walk(arbol)
-            if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
-        }
+        llamadas = set()
+        for archivo in sorted((pathlib.Path('app') / 'services').glob('connekta_*.py')):
+            arbol = ast.parse(archivo.read_text(encoding='utf-8'))
+            llamadas |= {
+                n.func.attr for n in ast.walk(arbol)
+                if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+            }
         assert 'cond_pago_efectiva' in llamadas, (
             'el gateway volvió a resolver el fallback por su cuenta — es el '
             'mismo patrón que hizo divergir la pantalla del documento')

@@ -84,8 +84,10 @@ class TestUnaSolaPolitica:
 
     from pathlib import Path
     _RAIZ = Path(__file__).resolve().parents[1]
+    # connekta_gateway.py -> connekta_facturacion_gateway.py el 2026-09-09
+    # (paso 7 de la deuda de tamaño): ahí vive ahora la lectura de cond_pago.
     _ARCHIVOS = ['app/services/ruta_service.py',
-                 'app/services/connekta_gateway.py']
+                 'app/services/connekta_facturacion_gateway.py']
 
     def test_nadie_vuelve_a_leer_el_vacio_por_su_cuenta(self):
         import re
@@ -409,8 +411,11 @@ class TestElHuecoNoSeTapaConElCodigoDeContado:
     inventario ya descargado.
     """
 
+    # trigger_factura_desde_remision se movió a connekta_facturacion_gateway.py
+    # el 2026-09-09 (paso 7 de la deuda de tamaño) — ahí lee `core.X`, no
+    # `self.X` (mismo patrón que el resto de dominios extraídos).
     _GW = __import__('pathlib').Path(__file__).resolve().parents[1] / \
-        'app' / 'services' / 'connekta_gateway.py'
+        'app' / 'services' / 'connekta_facturacion_gateway.py'
 
     @pytest.fixture(scope='class')
     def fuente(self):
@@ -420,9 +425,9 @@ class TestElHuecoNoSeTapaConElCodigoDeContado:
         return t[i:j]
 
     def test_el_fallback_es_la_condicion_de_ruta(self, fuente):
-        assert 'self.cond_pago_ruta' in fuente, (
+        assert 'core.cond_pago_ruta' in fuente, (
             'el hueco de f430_id_cond_pago volvió a taparse con otra cosa')
-        assert 'or self.cond_pago_ventas or None' not in fuente, (
+        assert 'or core.cond_pago_ventas or None' not in fuente, (
             '\nEl fallback volvió al código de CONTADO (`cond_pago_ventas`).\n'
             'Eso emite una FE que Siesa no aprueba — con la remisión ya hecha '
             'y el inventario ya descargado. Usar `cond_pago_ruta`.')

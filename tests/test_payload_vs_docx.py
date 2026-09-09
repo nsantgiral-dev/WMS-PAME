@@ -67,6 +67,9 @@ import pytest
 _RAIZ = Path(__file__).resolve().parents[1]
 _SPECS = _RAIZ / 'docs' / 'siesa-specs'
 _GATEWAY = _RAIZ / 'app' / 'services' / 'connekta_gateway.py'
+#: trigger_factura_desde_remision se movió a este archivo el 2026-09-09
+#: (paso 7 de la deuda de tamaño) — ConnektaGateway solo conserva un delegado.
+_FACTURACION = _RAIZ / 'app' / 'services' / 'connekta_facturacion_gateway.py'
 
 
 def _plantilla_docx(nombre_archivo: str) -> dict:
@@ -449,9 +452,9 @@ class TestFacturaDesdeRemision142943:
 
     @pytest.fixture(scope='class')
     def fuente(self):
-        t = _GATEWAY.read_text(encoding='utf-8')
+        t = _FACTURACION.read_text(encoding='utf-8')
         i = t.find('    def trigger_factura_desde_remision')
-        assert i != -1, 'no existe trigger_factura_desde_remision — ¿se renombró?'
+        assert i != -1, 'no existe trigger_factura_desde_remision — ¿se renombró o se movió?'
         j = t.find('\n    def ', i + 10)
         return t[i:j if j > 0 else len(t)]
 
