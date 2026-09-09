@@ -2249,25 +2249,52 @@ ambos alineados con el conteo definitivo del supervisor. Script:
 
 ---
 
-## Refactor de tamaño de `connekta_gateway.py` — dominios extraídos, verificados en vivo contra Siesa QA (2026-09-09)
+## Refactor de tamaño de `connekta_gateway.py` — COMPLETO, 8/8 dominios extraídos (2026-09-09)
 
-`connekta_gateway.py` era un God Object de 4693 líneas / 85 métodos. Se
-viene partiendo por dominio en módulos hermanos, todos con el mismo patrón:
-la clase de dominio recibe `self` (la instancia completa de
-`ConnektaGateway`) como `core` — no duplica config, y `ConnektaGateway`
-conserva cada método original como delegado delgado (misma firma, mismo
-comportamiento) para que ningún caller (código o tests) cambie.
+`connekta_gateway.py` era un God Object de 4693 líneas / 85 métodos.
+Terminó en **1489 líneas** (68% de reducción) partido en 8 módulos
+hermanos, todos con el mismo patrón: la clase de dominio recibe `self` (la
+instancia completa de `ConnektaGateway`) como `core` — no duplica config,
+y `ConnektaGateway` conserva cada método original como delegado delgado
+(misma firma, mismo comportamiento, incluidas las `@property`) para que
+ningún caller (código o tests) cambie.
 
-Extraídos y verificados con la suite completa (2864 passing) más pruebas
-reales contra Siesa QA: `app/utils/siesa_formato.py` (helpers de formato
-puros), `connekta_circuit_breaker.py` (`ConnektaCircuitBreaker`),
-`connekta_compras_gateway.py` (`ConnektaComprasGateway`),
-`connekta_ajustes_gateway.py` (`ConnektaAjustesGateway`),
-`connekta_consultas_gateway.py` (`ConnektaConsultasGateway`, 29 métodos en
-3 sub-lotes — el dominio más grande), `connekta_traslados_gateway.py`
-(`ConnektaTrasladosGateway`, 10 métodos — RIT/STS/ETS/transferencia
-directa). Pendientes: Facturación, NC/Liquidación (deliberadamente al
-final por ser los más delicados).
+Los 8 dominios, en orden de extracción: `app/utils/siesa_formato.py`
+(helpers de formato puros), `connekta_circuit_breaker.py`
+(`ConnektaCircuitBreaker`), `connekta_compras_gateway.py`
+(`ConnektaComprasGateway`), `connekta_ajustes_gateway.py`
+(`ConnektaAjustesGateway`), `connekta_consultas_gateway.py`
+(`ConnektaConsultasGateway`, 29 métodos en 3 sub-lotes — el más grande),
+`connekta_traslados_gateway.py` (`ConnektaTrasladosGateway`, 10 métodos —
+RIT/STS/ETS/transferencia directa), `connekta_facturacion_gateway.py`
+(`ConnektaFacturacionGateway`, 4 métodos — comprometer pedido/despacho/
+factura/factura desde remisión) y `connekta_liquidacion_gateway.py`
+(`ConnektaLiquidacionGateway`, 11 miembros — NC 142946/251126/251546,
+recibo de caja 142888, documento contable 142882 — el más delicado,
+dejado para el final a propósito).
+
+Verificado con la suite completa (2926 passing) en cada paso, más pruebas
+reales contra Siesa QA para Consultas, Ajustes, Compras y Traslados (ver
+más abajo). Facturación y Liquidación se extrajeron con la suite completa
+pero SIN prueba real contra Siesa — el usuario pausó las pruebas reales
+después de cerrar Traslados (2026-09-09) para seguir con la refactorización
+en paralelo; pendiente retomar si se necesita verificación en vivo de esos
+dos últimos dominios antes de un eventual push a producción.
+
+**Lección de esta última extracción, para la próxima vez que se toque
+código con tests que usan `unittest.mock.patch.object` sobre el `connekta`
+singleton:** parchear un MÉTODO (no un valor de config) con
+`monkeypatch.setattr(connekta, 'nombre_metodo', fn)` dentro de un test dejó
+un atributo de INSTANCIA permanente en `connekta.__dict__` tras el
+teardown — pytest restaura con `setattr(obj, name, original)`, no
+`delattr`, cuando el valor original venía heredado de la clase. Ese
+sombreado de instancia sobrevivía al test y volvía sordos los parches por
+CLASE (`patch.object(type(connekta), ...)` o `patch.object(ConnektaGateway,
+...)`) que corrían en tests de OTRO archivo después, en la misma sesión de
+pytest — solo visible corriendo la suite completa, no el archivo nuevo
+aislado. Fix: cuando el test necesita stubear un método (no un atributo de
+config), parchear la CLASE (`monkeypatch.setattr(ConnektaGateway, 'x',
+lambda self: ...)`), nunca la instancia `connekta`.
 
 Cada extracción se probó primero con la suite (pytest + tests directos de
 la clase nueva) y luego, para los dominios que hablan con Siesa, con un
