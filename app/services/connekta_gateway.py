@@ -22,8 +22,6 @@ Diccionario real Siesa confirmado:
 """
 import os
 import logging
-import threading
-import time
 import requests
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -457,14 +455,13 @@ class ConnektaGateway:
         # ── Circuit Breaker ──────────────────────────────────────────────
         # Detecta caída de Connekta/Siesa y entra en modo degradado automáticamente.
         # CLOSED (normal) → OPEN (5 fallos en 5 min) → HALF_OPEN (probe cada 60s) → CLOSED
-        self._cb_lock = threading.Lock()
-        self._cb_state = 'CLOSED'           # CLOSED | OPEN | HALF_OPEN
-        self._cb_failures = []              # timestamps de fallos recientes
-        self._cb_opened_at = None           # cuándo se abrió el circuit
-        self._cb_last_probe = time.monotonic()  # monotonic timestamp del último probe
-        self._CB_FAILURE_THRESHOLD = 5      # fallos para trip
-        self._CB_WINDOW_SECONDS = 300       # ventana de 5 minutos
-        self._CB_PROBE_INTERVAL = 60        # probe cada 60s en OPEN
+        # Estado real en `ConnektaCircuitBreaker` (connekta_circuit_breaker.py) —
+        # las propiedades _cb_*/_CB_* de abajo son compatibilidad hacia atrás,
+        # ver ese módulo.
+        from app.services.connekta_circuit_breaker import ConnektaCircuitBreaker
+
+        self._circuit = ConnektaCircuitBreaker(
+            failure_threshold=5, window_seconds=300, probe_interval=60)
 
         # MODO_ENSAYO: credenciales reales, GETs reales, POSTs bloqueados en servidor.
         # Activar con variable de entorno MODO_ENSAYO=true en Railway para pruebas UX.
@@ -491,6 +488,69 @@ class ConnektaGateway:
                     '[CONNEKTA] %s [%s] — %s Rompe: %s',
                     _p['variable'], _p['estado'], _p['detalle'], _p['rompe'],
                 )
+
+    # ── Compatibilidad con el circuit breaker extraído ────────────────────
+    # `siesa_job_service.py` lee `connekta._cb_state` directo, y la suite de
+    # tests del circuit breaker muta estos atributos a mano para forzar
+    # escenarios (`gw._cb_state = 'OPEN'`, `gw._CB_PROBE_INTERVAL = 0.1`...).
+    # Estas propiedades delegan a `self._circuit` sin que ningún caller note
+    # el cambio — ni siquiera los que escriben, no solo los que leen.
+
+    @property
+    def _cb_state(self):
+        return self._circuit.state
+
+    @_cb_state.setter
+    def _cb_state(self, value):
+        self._circuit.state = value
+
+    @property
+    def _cb_failures(self):
+        return self._circuit.failures
+
+    @_cb_failures.setter
+    def _cb_failures(self, value):
+        self._circuit.failures = value
+
+    @property
+    def _cb_opened_at(self):
+        return self._circuit.opened_at
+
+    @_cb_opened_at.setter
+    def _cb_opened_at(self, value):
+        self._circuit.opened_at = value
+
+    @property
+    def _cb_last_probe(self):
+        return self._circuit.last_probe
+
+    @_cb_last_probe.setter
+    def _cb_last_probe(self, value):
+        self._circuit.last_probe = value
+
+    @property
+    def _CB_FAILURE_THRESHOLD(self):
+        return self._circuit.failure_threshold
+
+    @_CB_FAILURE_THRESHOLD.setter
+    def _CB_FAILURE_THRESHOLD(self, value):
+        self._circuit.failure_threshold = value
+
+    @property
+    def _CB_WINDOW_SECONDS(self):
+        return self._circuit.window_seconds
+
+    @_CB_WINDOW_SECONDS.setter
+    def _CB_WINDOW_SECONDS(self, value):
+        self._circuit.window_seconds = value
+
+    @property
+    def _CB_PROBE_INTERVAL(self):
+        return self._circuit.probe_interval
+
+    @_CB_PROBE_INTERVAL.setter
+    def _CB_PROBE_INTERVAL(self, value):
+        self._circuit.probe_interval = value
 
     @staticmethod
     def _ahora_bogota() -> datetime:
@@ -584,77 +644,17 @@ class ConnektaGateway:
 
     def _cb_record_failure(self):
         """Registra un fallo. Si alcanza el threshold, trip a OPEN."""
-        now = time.monotonic()
-        with self._cb_lock:
-            self._cb_failures.append(now)
-            # Limpiar fallos fuera de la ventana
-            cutoff = now - self._CB_WINDOW_SECONDS
-            self._cb_failures = [t for t in self._cb_failures if t > cutoff]
-
-            # Un probe que falla vuelve a OPEN. Sin esto el estado se quedaba
-            # en HALF_OPEN —donde TODO se niega— y el breaker no volvía a
-            # intentar nunca: la caída de Siesa se convertía en una caída
-            # permanente del gateway hasta reiniciar el proceso.
-            #
-            # Es el camino NORMAL de un circuit breaker: abre, prueba, sigue
-            # caído. Que ese camino lo trabara volvía inútil todo el mecanismo.
-            if self._cb_state == 'HALF_OPEN':
-                self._cb_state = 'OPEN'
-                logger.warning(
-                    '[CONNEKTA CB] probe falló — vuelve a OPEN, reintento en %ds',
-                    self._CB_PROBE_INTERVAL)
-                return
-
-            if len(self._cb_failures) >= self._CB_FAILURE_THRESHOLD and self._cb_state == 'CLOSED':
-                self._cb_state = 'OPEN'
-                self._cb_opened_at = datetime.now(_TZ_BOGOTA).isoformat()
-                logger.critical(
-                    '[CONNEKTA CB] CIRCUIT OPEN — %d fallos en %ds. '
-                    'Siesa no disponible. DLQ pausado. Probe cada %ds.',
-                    len(self._cb_failures), self._CB_WINDOW_SECONDS, self._CB_PROBE_INTERVAL
-                )
-                self._cb_trip_alert()
+        self._circuit.record_failure(on_trip=self._cb_trip_alert)
 
     def _cb_record_success(self):
         """Registra un éxito. Si estamos en HALF_OPEN, cierra el circuit."""
-        with self._cb_lock:
-            if self._cb_state == 'HALF_OPEN':
-                self._cb_state = 'CLOSED'
-                self._cb_failures.clear()
-                self._cb_opened_at = None
-                logger.info('[CONNEKTA CB] CIRCUIT CLOSED — Siesa recuperado. DLQ reanudado.')
-            elif self._cb_state == 'CLOSED':
-                # Éxito en operación normal — limpiar fallos acumulados
-                self._cb_failures.clear()
+        self._circuit.record_success()
 
     def _cb_consumir_permiso(self) -> bool:
-        """Pide permiso para UNA llamada HTTP. **Consume estado.**
-
-        Se llamaba `_cb_should_allow`: un nombre de pregunta para un método que
-        MUTA — transiciona OPEN → HALF_OPEN y gasta el único probe permitido.
-        Con ese nombre, `_get()` la llamaba dos veces y un comentario decía
-        "redundante para claridad".
-
-        No era redundante: la primera llamada gastaba el probe y devolvía True,
-        la segunda veía HALF_OPEN y devolvía False. **La llamada HTTP nunca
-        salía**, y el breaker quedaba en HALF_OPEN para siempre.
-
-        Se llama EXACTAMENTE UNA VEZ por intento.
-        """
-        with self._cb_lock:
-            if self._cb_state == 'CLOSED':
-                return True
-            if self._cb_state == 'OPEN':
-                # ¿Ya pasó el intervalo de probe?
-                now = time.monotonic()
-                if now - self._cb_last_probe >= self._CB_PROBE_INTERVAL:
-                    self._cb_state = 'HALF_OPEN'
-                    self._cb_last_probe = now
-                    logger.info('[CONNEKTA CB] HALF_OPEN — enviando probe a Siesa')
-                    return True
-                return False
-            # HALF_OPEN — ya se permitió una llamada, bloquear las demás
-            return False
+        """Pide permiso para UNA llamada HTTP. **Consume estado.** Se llama
+        EXACTAMENTE UNA VEZ por intento — ver el docstring completo en
+        `ConnektaCircuitBreaker.consumir_permiso`."""
+        return self._circuit.consumir_permiso()
 
     def _cb_trip_alert(self):
         """Alerta inmediata cuando el circuit se abre (CLOSED → OPEN)."""
@@ -695,16 +695,7 @@ class ConnektaGateway:
 
     def circuit_state(self) -> dict:
         """Estado actual del circuit breaker para health check y dashboard."""
-        with self._cb_lock:
-            now = time.monotonic()
-            cutoff = now - self._CB_WINDOW_SECONDS
-            recent = len([t for t in self._cb_failures if t > cutoff])
-            return {
-                'state': self._cb_state,
-                'failures_recent': recent,
-                'failure_threshold': self._CB_FAILURE_THRESHOLD,
-                'opened_at': self._cb_opened_at,
-            }
+        return self._circuit.snapshot()
 
     @staticmethod
     def _safe_int_env(var_name: str, default: int) -> int:
