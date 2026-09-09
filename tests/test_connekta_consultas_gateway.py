@@ -1,16 +1,20 @@
 """
 Tests directos de ConnektaConsultasGateway (app/services/connekta_consultas_gateway.py),
 extraído de ConnektaGateway el 2026-09-09 (paso 5 de la deuda de tamaño,
-en dos sub-lotes: bodegas/ubicaciones/stock, y pedidos/FE/catálogo/OC/
-compromisos — el dominio Consultas es grande y se extrae por partes, ver
-el docstring del módulo).
+en tres sub-lotes: bodegas/ubicaciones/stock, pedidos/FE/catálogo/OC/
+compromisos, y terceros/facturas/CxC — el dominio Consultas es grande y
+se extrae por partes, ver el docstring del módulo. Dominio completo con
+el tercer sub-lote).
 
 tests/test_alertas_dedup.py ya cubre `_fetch_stock_pages` a fondo, y
 tests/test_puertas_factura_duplicada.py, test_cond_pago.py,
-test_recepcion_service.py y otros (238 tests en total) ya ejercen el
-segundo sub-lote de punta a punta vía el singleton `connekta` — esto
-agrega cobertura directa adicional de la clase aislada.
+test_liquidacion.py, test_recepcion_service.py y otros (453+ tests en
+total) ya ejercen el segundo y tercer sub-lote de punta a punta vía el
+singleton `connekta` — esto agrega cobertura directa adicional de la
+clase aislada.
 """
+import pytest
+
 from app.services.connekta_consultas_gateway import ConnektaConsultasGateway
 
 
@@ -103,3 +107,73 @@ def test_get_pedido_rowid_map_usa_llamada_intra_dominio(app, monkeypatch):
         )
         mapa = connekta.get_pedido_rowid_map('PD', '123')
         assert mapa == {'PAPELSP9218': 555}
+
+
+def test_get_rowids_factura_arma_el_filtro_y_exige_datos(app, monkeypatch):
+    with app.app_context():
+        from app.services.connekta_gateway import connekta
+
+        monkeypatch.setattr(connekta, 'modo_simulacion', False)
+        capturado = {}
+
+        def _fake_get(nombre_api, params=None, **kw):
+            capturado['params'] = params
+            return {'detalle': {'Table': [{'f470_rowid': 1}]}}
+
+        monkeypatch.setattr(connekta, '_get', _fake_get)
+        rows = connekta.get_rowids_factura('FEW', '1470')
+        assert rows == [{'f470_rowid': 1}]
+        assert '1470' in capturado['params']['parametros']
+
+
+def test_get_rowids_factura_sin_tipo_docto_lanza_valueerror(app, monkeypatch):
+    with app.app_context():
+        from app.services.connekta_gateway import connekta
+
+        monkeypatch.setattr(connekta, 'modo_simulacion', False)
+        with pytest.raises(ValueError, match='tipo_docto_fe requerido'):
+            connekta.get_rowids_factura('', '1470')
+
+
+def test_get_vencimiento_factura_cae_a_fallback_si_no_hay_fecha(app, monkeypatch):
+    with app.app_context():
+        from app.services.connekta_gateway import connekta
+
+        monkeypatch.setattr(connekta, 'modo_simulacion', False)
+        monkeypatch.setattr(connekta, '_get', lambda *a, **kw: {'detalle': {'Table': []}})
+        resultado = connekta.get_vencimiento_factura('FEW', '1470')
+        assert len(resultado) == 8 and resultado.isdigit()
+
+
+def test_get_cxc_general_filtra_por_nit(app, monkeypatch):
+    with app.app_context():
+        from app.services.connekta_gateway import connekta
+
+        monkeypatch.setattr(connekta, 'modo_simulacion', False)
+        capturado = {}
+
+        def _fake_get(nombre_api, params=None, **kw):
+            capturado['params'] = params
+            return {'detalle': {'Table': [{'f253_id': '13050501'}]}}
+
+        monkeypatch.setattr(connekta, '_get', _fake_get)
+        rows = connekta.get_cxc_general('1000124053')
+        assert rows == [{'f253_id': '13050501'}]
+        assert '1000124053' in capturado['params']['parametros']
+
+
+def test_get_terceros_contacto_y_get_vendedor_contacto_delegan(app, monkeypatch):
+    with app.app_context():
+        from app.services.connekta_gateway import connekta
+
+        monkeypatch.setattr(
+            connekta, '_get',
+            lambda *a, **kw: {'detalle': {'Datos': [{'f200_nit': '900123456'}]}},
+        )
+        assert connekta.get_terceros_contacto(nit='900123456') == [{'f200_nit': '900123456'}]
+
+        monkeypatch.setattr(
+            connekta, '_get',
+            lambda *a, **kw: {'detalle': {'Datos': [{'codigo_vendedor': 'V1'}]}},
+        )
+        assert connekta.get_vendedor_contacto(codigo='V1') == [{'codigo_vendedor': 'V1'}]

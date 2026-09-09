@@ -24,10 +24,7 @@ import os
 import logging
 import requests
 from datetime import datetime
-from zoneinfo import ZoneInfo
 from app.services.siesa_filtro import lit as _lit
-
-_TZ_BOGOTA = ZoneInfo('America/Bogota')
 
 logger = logging.getLogger(__name__)
 
@@ -2466,132 +2463,23 @@ class ConnektaGateway:
 
     def get_terceros_contacto(self, nit: str = None, pagina: int = 1,
                               tam_pagina: int = 100) -> list[dict]:
-        """
-        API_custom_TercerosContacto (ID 8232) — Connekta Consultas Dinámicas.
-        JOIN T200 × T015: devuelve clientes activos con celular, teléfono y email.
-        Sin filtro por NIT del lado de Siesa — verificado en vivo (2026-09-01):
-        la consulta responde "el query a ejecutar no maneja parametros" ante
-        cualquier `parametros`, aunque el Asistente la muestre con esa opción.
-        `nit` filtra en memoria sobre la ÚNICA página ya traída — no busca en
-        las otras (son 52 páginas de 100, ~5100 registros; recorrerlas todas
-        en cada llamada sería caro para lo que hoy es un endpoint de debug).
-        Parámetros opcionales:
-          nit       — filtra en memoria sobre `pagina` (no busca otras páginas)
-          pagina    — número de página (paginación Connekta)
-          tam_pagina — registros por página (máx 100 recomendado)
-        Retorna lista de dicts con: f200_id, f200_nit, f200_razon_social,
-          f200_nombres, f200_apellido1, f200_apellido2,
-          f015_celular, f015_telefono, f015_email
-        """
-        try:
-            res = self._get(
-                'papeleriamedellin_API_custom_TercerosContacto',
-                params_extra={'paginacion': f'numPag={pagina}|tamPag={tam_pagina}'},
-                url=self.url_get_dinamico,
-            )
-            rows = (
-                res.get('detalle', {}).get('Table') or
-                res.get('detalle', {}).get('Datos') or []
-            )
-            if nit:
-                rows = [r for r in rows if str(r.get('f200_nit', '')).strip() == str(nit).strip()]
-            logger.info('[CONNEKTA] get_terceros_contacto: %d registros (pag %d)', len(rows), pagina)
-            return rows
-        except Exception as e:
-            logger.warning('[CONNEKTA] get_terceros_contacto(nit=%s): %s', nit, e)
-            return []
+        """Clientes activos con celular/teléfono/email (Consultas Dinámicas).
+        Delegado — ver `ConnektaConsultasGateway.get_terceros_contacto`."""
+        return self._consultas.get_terceros_contacto(nit=nit, pagina=pagina, tam_pagina=tam_pagina)
 
     def get_vendedor_contacto(self, codigo: str = None) -> list[dict]:
-        """
-        papeleriamedellin_WMS_Vendedor_Contacto — Connekta Consultas Dinámicas.
-        JOIN T210 (vendedores) x T200 (terceros) x T015 (contactos): nombre y
-        teléfono real de cada vendedor. Verificado en vivo (2026-09-01):
-        solo 100 filas — se trae completa en una sola página. Sin filtro en
-        tiempo real: las consultas dinámicas custom de este ambiente no
-        soportan `parametros` (mismo hallazgo que `get_terceros_contacto`).
-        `codigo` filtra en memoria sobre la página ya traída.
-        Retorna lista de dicts con: codigo_vendedor, f200_nit,
-          f200_razon_social, f200_nombres, f200_apellido1, f200_apellido2,
-          f015_telefono, f015_email
-        """
-        try:
-            res = self._get(
-                'papeleriamedellin_WMS_Vendedor_Contacto',
-                params_extra={'paginacion': 'numPag=1|tamPag=100'},
-                url=self.url_get_dinamico,
-            )
-            rows = (
-                res.get('detalle', {}).get('Table') or
-                res.get('detalle', {}).get('Datos') or []
-            )
-            if codigo:
-                rows = [r for r in rows
-                        if str(r.get('codigo_vendedor', '')).strip() == str(codigo).strip()]
-            logger.info('[CONNEKTA] get_vendedor_contacto: %d registros', len(rows))
-            return rows
-        except Exception as e:
-            logger.warning('[CONNEKTA] get_vendedor_contacto(codigo=%s): %s', codigo, e)
-            return []
-
+        """Nombre y teléfono real de cada vendedor. Delegado — ver
+        `ConnektaConsultasGateway.get_vendedor_contacto`."""
+        return self._consultas.get_vendedor_contacto(codigo=codigo)
 
     # ==========================================
     # Liquidación de ruta — conectores financieros
     # ==========================================
 
     def get_rowids_factura(self, tipo_docto_fe: str, consec_fe) -> list:
-        """
-        GET API_v2_Ventas_Facturas_DesdePedido — obtiene f470_rowid por línea de factura.
-        Se necesita para 142946 (NotaFactura): cada movimiento requiere f470_rowid_movto
-        que vincula la nota crédito al renglón exacto de la factura original.
-        Retorna lista de dicts con al menos: f470_rowid, f120_referencia, f470_cant_base,
-        f470_id_unidad_medida, f150_id (bodega).
-        """
-        if self.modo_simulacion:
-            return []
-
-        if not tipo_docto_fe or not str(tipo_docto_fe).strip():
-            raise ValueError('tipo_docto_fe requerido para obtener f470_rowid')
-
-        try:
-            consec_int = int(consec_fe) if str(consec_fe).isdigit() else consec_fe
-            # tamPag=100 — regla #10: valores mayores (200 confirmado, no
-            # solo >=500) hacen que Siesa rechace la consulta entera con una
-            # fila {'alerta': ...} en vez de datos. Eso ahora lo levanta
-            # `_exigir_datos`; antes se descartaba en silencio y dejaba
-            # "0 líneas" sin explicación.
-            _filtro = (
-                f"f350_id_co = {_lit(self.centro_op)} "
-                f"AND f350_id_tipo_docto = {_lit(tipo_docto_fe)} "
-                f"AND f350_consec_docto = {consec_int}"
-            )
-            res = self._get('API_v2_Ventas_Facturas_DesdePedido', {
-                'paginacion': 'numPag=1|tamPag=100',
-                'parametros': _filtro,
-            })
-            rows_crudas = res.get('detalle', {}).get('Table', [])
-            # Este sitio ya lo hacía bien, pero **a mano**: era la sexta
-            # copia y la tercera forma distinta de la misma pregunta. Así es
-            # como dos de las otras cinco terminaron degradando.
-            rows = _exigir_datos(
-                rows_crudas, f'get_rowids_factura FE {tipo_docto_fe}-{consec_fe}',
-                _filtro)
-            if rows:
-                logger.info(
-                    '[CONNEKTA] get_rowids_factura: FE %s-%s → %d líneas, keys=%s',
-                    tipo_docto_fe, consec_fe, len(rows), list(rows[0].keys())
-                )
-            else:
-                logger.warning(
-                    '[CONNEKTA] get_rowids_factura: FE %s-%s → 0 líneas',
-                    tipo_docto_fe, consec_fe
-                )
-            return rows
-        except Exception as e:
-            logger.error('[CONNEKTA] get_rowids_factura falló: %s', e)
-            raise Exception(
-                f'No se pudo obtener rowids de FE {tipo_docto_fe}-{consec_fe}: {e}. '
-                'Sin rowids no se puede crear nota crédito.'
-            )
+        """f470_rowid por línea de factura, para 142946. Delegado — ver
+        `ConnektaConsultasGateway.get_rowids_factura`."""
+        return self._consultas.get_rowids_factura(tipo_docto_fe, consec_fe)
 
     def _build_transportador_vacio(self) -> dict:
         """
@@ -2746,68 +2634,14 @@ class ConnektaGateway:
         )
 
     def get_vencimiento_factura(self, tipo_docto_fe: str, consec_fe) -> str:
-        """
-        GET API_v2_CxC_General — saldo y fecha de vencimiento reales de la
-        factura (f353_fecha_vcto), para F353_FECHA_VCTO en el cruce de
-        251126. Fallback (fecha de hoy + 30 días) si no se encuentra —
-        no es un campo bloqueante para el cruce (verificado en vivo
-        2026-07-31), así que no vale la pena fallar duro por esto.
-        """
-        from datetime import timedelta
-        fallback = (datetime.now(_TZ_BOGOTA) + timedelta(days=30)).strftime('%Y%m%d')
-        if self.modo_simulacion:
-            return fallback
-        try:
-            consec_int = int(consec_fe) if str(consec_fe).isdigit() else consec_fe
-            res = self._get('API_v2_CxC_General', {
-                'paginacion': 'numPag=1|tamPag=5',
-                'parametros': (
-                    f"f353_id_co_cruce = {_lit(self.centro_op)} "
-                    f"AND f353_id_tipo_docto_cruce = {_lit(tipo_docto_fe)} "
-                    f"AND f353_consec_docto_cruce = {consec_int}"
-                ),
-            })
-            rows = res.get('detalle', {}).get('Table', [])
-            fecha = rows[0].get('f353_fecha_vcto') if rows else None
-            if not fecha:
-                return fallback
-            return fecha[:10].replace('-', '')
-        except Exception as e:
-            logger.warning(
-                '[CONNEKTA] get_vencimiento_factura(%s-%s) falló, usando fallback: %s',
-                tipo_docto_fe, consec_fe, e
-            )
-            return fallback
+        """Saldo y fecha de vencimiento reales de la factura, para el cruce
+        de 251126. Delegado — ver `ConnektaConsultasGateway.get_vencimiento_factura`."""
+        return self._consultas.get_vencimiento_factura(tipo_docto_fe, consec_fe)
 
     def get_cxc_general(self, nit: str) -> list:
-        """
-        GET API_v2_CxC_General filtrado por tercero (f200_id) — todas las
-        filas de cartera de ese cliente. Cada fila trae su propio f253_id
-        real (auxiliar de cruce, Regla #11 del CLAUDE.md: nunca hardcodear,
-        propagar desde acá) y saldo (f353_total_db/f353_total_cr).
-
-        El f253_id PUEDE variar entre facturas del mismo cliente —
-        verificado en vivo 2026-08-11 (NIT 1000124053: 9 filas con
-        f253_id='13050501', 2 filas con '13050502'). El caller debe
-        matchear por f353_id_tipo_docto_cruce/f353_consec_docto_cruce de la
-        factura específica, nunca asumir que la primera fila es "el"
-        auxiliar del tercero.
-
-        Nota de alias (2026-08-11): el campo real de NIT en esta respuesta
-        es f200_id, NO f350_id_tercero (ese no existe acá) — mismo patrón
-        de aliases reales-vs-spec ya documentado para get_pedido_cabecera.
-        """
-        if self.modo_simulacion or not nit:
-            return []
-        try:
-            res = self._get('API_v2_CxC_General', {
-                'paginacion': 'numPag=1|tamPag=100',
-                'parametros': f"f200_id = {_lit(nit)}",
-            })
-            return res.get('detalle', {}).get('Table', [])
-        except Exception as e:
-            logger.warning('[CONNEKTA] get_cxc_general(%s) falló: %s', nit, e)
-            return []
+        """Cartera completa de un tercero. Delegado — ver
+        `ConnektaConsultasGateway.get_cxc_general`."""
+        return self._consultas.get_cxc_general(nit)
 
     def trigger_nota_factura_crear_cruzar(self, tipo_docto_fe: str, consec_fe,
                                            lineas: list, valor_cruce: float,
