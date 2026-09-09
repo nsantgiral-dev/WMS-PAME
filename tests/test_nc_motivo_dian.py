@@ -574,13 +574,18 @@ class TestVerificarLaConsultaAntesDeEncender:
 
     def test_las_columnas_que_exige_son_las_que_el_gateway_usa(self):
         """TRINQUETE — si el gateway empieza a leer otra columna y esta lista
-        no se mueve, el verificador aprueba una consulta que no sirve."""
+        no se mueve, el verificador aprueba una consulta que no sirve.
+
+        `get_consec_nc_creada` se movió a `ConnektaLiquidacionGateway` el
+        2026-09-09 (paso 8 de la deuda de tamaño) — `ConnektaGateway` solo
+        conserva un delegado de 3 líneas.
+        """
         import inspect
 
         from app.routes.health import _COLUMNAS_NC_CONSECUTIVO
-        from app.services.connekta_gateway import ConnektaGateway
+        from app.services.connekta_liquidacion_gateway import ConnektaLiquidacionGateway
 
-        fuente = inspect.getsource(ConnektaGateway.get_consec_nc_creada)
+        fuente = inspect.getsource(ConnektaLiquidacionGateway.get_consec_nc_creada)
         for col in ('f350_id_co', 'f350_id_tipo_docto', 'f350_ind_estado',
                     'f350_fecha', 'f350_rowid', 'f350_consec_docto'):
             assert col in fuente

@@ -70,6 +70,12 @@ _GATEWAY = _RAIZ / 'app' / 'services' / 'connekta_gateway.py'
 #: trigger_factura_desde_remision se movió a este archivo el 2026-09-09
 #: (paso 7 de la deuda de tamaño) — ConnektaGateway solo conserva un delegado.
 _FACTURACION = _RAIZ / 'app' / 'services' / 'connekta_facturacion_gateway.py'
+#: trigger_recibo_caja, trigger_documento_contable, trigger_nota_factura,
+#: trigger_nota_factura_crear_cruzar, _build_header_docto_ventas_nc y
+#: _build_transportador_vacio se movieron a este archivo el 2026-09-09
+#: (paso 8, último, de la deuda de tamaño) — ConnektaGateway solo conserva
+#: un delegado de cada uno.
+_LIQUIDACION = _RAIZ / 'app' / 'services' / 'connekta_liquidacion_gateway.py'
 
 
 def _plantilla_docx(nombre_archivo: str) -> dict:
@@ -180,7 +186,7 @@ class TestReciboCaja142888:
 
     @pytest.fixture(scope='class')
     def fuente(self):
-        t = _GATEWAY.read_text(encoding='utf-8')
+        t = _LIQUIDACION.read_text(encoding='utf-8')
         i = t.find('    def trigger_recibo_caja')
         j = t.find('    def trigger_documento_contable')
         assert i != -1 and j > i
@@ -247,7 +253,7 @@ class TestDocumentoContable142882:
 
     @pytest.fixture(scope='class')
     def fuente(self):
-        t = _GATEWAY.read_text(encoding='utf-8')
+        t = _LIQUIDACION.read_text(encoding='utf-8')
         i = t.find('    def trigger_documento_contable')
         assert i != -1
         return t[i:i + 14000]
@@ -312,7 +318,7 @@ class TestNotaCredito251126:
 
     @pytest.fixture(scope='class')
     def fuente(self):
-        t = _GATEWAY.read_text(encoding='utf-8')
+        t = _LIQUIDACION.read_text(encoding='utf-8')
 
         def cuerpo(nombre):
             i = t.find(f'    def {nombre}')
@@ -376,7 +382,7 @@ class TestNotaFactura142946:
 
     @pytest.fixture(scope='class')
     def fuente(self):
-        t = _GATEWAY.read_text(encoding='utf-8')
+        t = _LIQUIDACION.read_text(encoding='utf-8')
 
         def cuerpo(nombre):
             i = t.find(f'    def {nombre}')
@@ -513,7 +519,7 @@ class TestElDetectorNoEstaCiego:
         assert len(spec['CxC']) == 15
 
     def test_el_lector_de_dicts_encuentra_campos(self):
-        fuente = _GATEWAY.read_text(encoding='utf-8')
+        fuente = _LIQUIDACION.read_text(encoding='utf-8')
         i = fuente.find('    def trigger_recibo_caja')
         assert len(_campos_del_dict(fuente[i:], 'header')) >= 33
 
