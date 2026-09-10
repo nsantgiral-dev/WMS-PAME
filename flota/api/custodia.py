@@ -126,7 +126,7 @@ def custodia_activa(placa):
 
 @custodia_bp.route('/custodia/vehiculo-de-conductor/<int:conductor_id>', methods=['GET'])
 @jwt_required()
-@exige(Roles.LECTURA_FLOTA, 'ver el vehículo de un conductor')
+@exige(Roles.VISTA_FLOTA, 'ver el vehículo de OTRO conductor')
 def vehiculo_de_conductor(conductor_id):
     """Qué vehículo tiene HOY este conductor, para quien programa por él.
 
@@ -245,7 +245,7 @@ def fotos_de_custodia(custodia_id):
 
 @custodia_bp.route('/custodia/fuera-de-sede', methods=['GET'])
 @jwt_required()
-@exige(Roles.LECTURA_FLOTA, 'ver los vehiculos fuera de sede')
+@exige(Roles.VISTA_FLOTA, 'ver los vehiculos fuera de sede')
 def fuera_de_sede():
     """Vehículos que están pasando la noche fuera del control de la empresa.
 
@@ -284,7 +284,7 @@ def fuera_de_sede():
 
 @custodia_bp.route('/custodia/cierres-forzados', methods=['GET'])
 @jwt_required()
-@exige(Roles.LECTURA_FLOTA, 'ver los cierres forzados')
+@exige(Roles.VISTA_FLOTA, 'ver los cierres forzados de toda la flota')
 def cierres_forzados():
     """Turnos cerrados sin la firma del custodio anterior, con nombre.
 

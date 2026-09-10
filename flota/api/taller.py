@@ -48,7 +48,7 @@ from app.utils.fecha import dia_operativo
 from flota.adaptadores import taller as adaptador
 from flota.adaptadores.gastos import numero_legible
 from flota.adaptadores.modelos import OrdenTrabajo
-from flota.api._permisos import MAESTROS_FLOTA, exige
+from flota.api._permisos import DECIDE_FLOTA, MAESTROS_FLOTA, exige
 from flota.api._tiempo import iso_utc
 from flota.dominio import costos
 from flota.dominio import taller as dom
@@ -165,7 +165,7 @@ def listar(placa):
 
 @taller_bp.route('/ordenes', methods=['POST'])
 @jwt_required()
-@exige(MAESTROS_FLOTA, 'abrir una orden de trabajo')
+@exige(DECIDE_FLOTA, 'abrir una orden de trabajo')
 def abrir():
     """Manda el camión al taller.
 
@@ -261,7 +261,7 @@ def registrar_intervencion(orden_id):
 
 @taller_bp.route('/ordenes/<int:orden_id>/cerrar', methods=['POST'])
 @jwt_required()
-@exige(MAESTROS_FLOTA, 'cerrar una orden de trabajo')
+@exige(DECIDE_FLOTA, 'cerrar una orden de trabajo')
 def cerrar(orden_id):
     """El vehículo volvió del taller. Puede cerrar el daño que la abrió.
 
@@ -288,7 +288,7 @@ def cerrar(orden_id):
 
 @taller_bp.route('/ordenes/<int:orden_id>/anular', methods=['POST'])
 @jwt_required()
-@exige(MAESTROS_FLOTA, 'anular una orden de trabajo')
+@exige(DECIDE_FLOTA, 'anular una orden de trabajo')
 def anular(orden_id):
     """La visita no ocurrió. Exige motivo escrito y **no toca el hallazgo**.
 

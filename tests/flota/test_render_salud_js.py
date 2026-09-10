@@ -96,6 +96,10 @@ const ctx = {
 ctx.globalThis = ctx;
 ctx.window.document = doc;
 vm.createContext(ctx);
+// `util.js` va PRIMERO y se carga de verdad, no se stubbea: `esc()` es lo
+// que este arnés tiene que poder ver fallar.
+vm.runInContext(fs.readFileSync(FLOTAJS.replace(/[^/]+$/, 'util.js'), 'utf-8'),
+                ctx, { filename: 'util.js' });
 vm.runInContext(fs.readFileSync(FLOTAJS, 'utf-8'), ctx, { filename: 'flota.js' });
 
 (async () => {
@@ -370,15 +374,42 @@ class TestNingunCampoDelHealthQuedaMudo:
                 return [e.value for e in n.value.elts]
         raise AssertionError('no se encontró `_CAMPOS` en flota/api/health.py')
 
+    #: Los archivos donde puede vivir un consumidor legítimo del health.
+    #:
+    #: **Es `flota*.js` y no `*.js`, y el glob se eligió midiendo.** El
+    #: 2026-09-04, al partir la analítica en un archivo aparte, hizo falta que
+    #: el trinquete viera más de un archivo. La opción cómoda era leer todo el
+    #: PWA; se midió antes de tomarla, y de los 44 campos **uno** —`ambiente`—
+    #: ya aparece en `app.js` por motivos que nada tienen que ver con flota.
+    #: Con `*.js` ese campo quedaba satisfecho por casualidad y el trinquete
+    #: dejaba de vigilarlo, sin que nada se pusiera rojo.
+    #:
+    #: Ensanchar un detector para que pase el cambio propio es cómo se apaga un
+    #: detector. La propiedad que importa es «alguna pantalla DE FLOTA lo lee»,
+    #: y `flota*.js` es el glob que la mide.
+    _GLOB_CONSUMIDORES = 'flota*.js'
+
+    def _js_de_flota(self):
+        pwa = RAIZ / 'app' / 'static' / 'pwa'
+        archivos = sorted(pwa.glob(self._GLOB_CONSUMIDORES))
+        assert archivos, (
+            f'el glob {self._GLOB_CONSUMIDORES!r} no resolvió a ningún archivo '
+            f'en {pwa}. Un detector que no lee nada declara todo mudo o todo '
+            f'pintado según el sentido de la comparación; en los dos casos '
+            f'dejó de medir.')
+        return {a.name: a.read_text(encoding='utf-8') for a in archivos}
+
     def test_todo_campo_publicado_se_nombra_en_el_PWA(self):
         """Por nombre y no por comportamiento: probar los 44 pintando cada uno
         sería un test por campo y nadie lo mantendría. Esto es el piso — que
         exista el consumidor. Las clases de arriba prueban que lo pintado dice
         lo correcto."""
-        js = FLOTA_JS.read_text(encoding='utf-8')
-        mudos = [c for c in self._campos_declarados() if c not in js]
+        fuentes = self._js_de_flota()
+        mudos = [c for c in self._campos_declarados()
+                 if not any(c in js for js in fuentes.values())]
         assert not mudos, (
-            f'\n{len(mudos)} campo(s) del health que nadie lee:\n'
+            f'\n{len(mudos)} campo(s) del health que nadie lee '
+            f'(buscados en {", ".join(sorted(fuentes))}):\n'
             + '\n'.join(f'  · {c}' for c in mudos)
             + '\n\nUn número que se mide y no se muestra es trabajo hecho para '
               'nadie. Si de verdad no debe pintarse, la pregunta no es «dónde lo '
@@ -387,9 +418,102 @@ class TestNingunCampoDelHealthQuedaMudo:
     def test_el_detector_ve_un_campo_mudo_de_verdad(self):
         """La otra dirección. Un detector que no sabe reconocer un campo mudo
         devuelve lista vacía sobre un tablero ciego, y eso se lee como «está
-        todo pintado»."""
-        js = FLOTA_JS.read_text(encoding='utf-8')
-        assert 'campo_que_nadie_pinta_jamas' not in js
+        todo pintado».
+
+        Se comprueba contra **todos** los archivos del glob, no contra uno: al
+        ensanchar el detector, un canario que solo mira `flota.js` seguiría en
+        verde aunque el resto del glob dejara de leerse.
+        """
+        fuentes = self._js_de_flota()
+        for nombre, js in fuentes.items():
+            assert 'campo_que_nadie_pinta_jamas' not in js, nombre
+
+    #: Campos del health que aparecen en un `.js` AJENO a flota, por motivos
+    #: que nada tienen que ver con el health. Medido el 2026-09-04.
+    #:
+    #: Existe para que la exención cueste escribirla. Un `if nombre == 'app.js':
+    #: continue` habría eximido el archivo entero, y mañana un campo nuevo se
+    #: colaría ahí sin que nada se pusiera rojo — que es la forma exacta del
+    #: defecto que este trinquete persigue.
+    _COLISIONES_CONOCIDAS = {
+        ('app.js', 'ambiente'): (
+            'app.js usa la palabra `ambiente` para el banner global de '
+            'QA/producción, que existía antes que el health de flota. No es un '
+            'lector de `/flota/health`.'),
+    }
+
+    def _colisiones_nuevas(self, campos, ajenos):
+        """Las colisiones que NO están declaradas. Pura, para poder probarla.
+
+        Recibe `{archivo: texto}` en vez de leer el disco porque la propiedad
+        que importa —«la exención es por (archivo, campo), no por archivo»— no
+        se puede ejercer contra el repo real: hoy la única colisión existente es
+        justamente la declarada, así que un `a != 'app.js'` da el mismo
+        resultado y el test no notaría el cambio. Con la función separada se le
+        pueden dar dos campos colados en el mismo archivo.
+        """
+        return sorted(
+            (a, c) for a, texto in ajenos.items() for c in sorted(campos)
+            if c in texto and (a, c) not in self._COLISIONES_CONOCIDAS)
+
+    def test_el_glob_no_barre_archivos_ajenos_a_flota(self):
+        """El otro modo de romper esto, y es el que casi ocurre.
+
+        Ensanchar a `*.js` haría que `ambiente` —que aparece en `app.js` por
+        motivos ajenos— quedara satisfecho sin que ninguna pantalla de flota lo
+        lea: el trinquete seguiría verde habiendo dejado de vigilar ese campo.
+
+        Este test no fija el glob: fija **cuánto se está pagando por él**. Una
+        colisión nueva lo pone rojo y obliga a declararla o a angostar el glob.
+        """
+        pwa = RAIZ / 'app' / 'static' / 'pwa'
+        del_glob = {a.name for a in pwa.glob(self._GLOB_CONSUMIDORES)}
+        ajenos = {a.name: a.read_text(encoding='utf-8')
+                  for a in pwa.glob('*.js') if a.name not in del_glob}
+        assert ajenos, 'el PWA tiene más JS que el de flota; algo se movió'
+
+        nuevas = self._colisiones_nuevas(set(self._campos_declarados()), ajenos)
+        assert not nuevas, (
+            '\nCampos del health que aparecen en un JS ajeno a flota y no '
+            'estaban declarados:\n'
+            + '\n'.join(f'  · {c}  ({a})' for a, c in nuevas)
+            + '\n\nSi ese archivo NO es un lector del health, agregalo a '
+              '`_COLISIONES_CONOCIDAS` con su motivo. Si SÍ lo es, el glob '
+              '`_GLOB_CONSUMIDORES` se quedó corto.')
+
+    def test_la_exencion_es_por_campo_y_NO_por_archivo(self):
+        """La propiedad que la mutación M7 destapó que no estaba probada.
+
+        Eximir `app.js` entero y eximir el par `(app.js, ambiente)` dan hoy el
+        mismo resultado —es la única colisión que existe—, así que contra el
+        repo real los dos son indistinguibles. Y no son lo mismo: con el archivo
+        eximido, un campo del health que mañana aparezca en `app.js` se cuela
+        sin que nada se ponga rojo, que es la forma exacta del defecto que este
+        trinquete persigue.
+
+        Se ejerce con un mundo sintético: el mismo archivo, un campo declarado
+        y otro que no.
+        """
+        ajenos = {'app.js': 'const ambiente = 1; const cpk_mes = 2;'}
+        nuevas = self._colisiones_nuevas({'ambiente', 'cpk_mes'}, ajenos)
+        assert nuevas == [('app.js', 'cpk_mes')], (
+            f'la exención está operando por archivo y no por campo: {nuevas}. '
+            f'`ambiente` está declarado en `_COLISIONES_CONOCIDAS`; `cpk_mes` '
+            f'no, y tiene que salir.')
+
+    def test_las_colisiones_declaradas_siguen_siendo_ciertas(self):
+        """Una exención que dejó de aplicar es una exención que tapa algo.
+
+        Si `app.js` deja de nombrar `ambiente`, la entrada sobra — y una lista
+        de exenciones que solo crece termina eximiendo lo que ya no existe.
+        """
+        pwa = RAIZ / 'app' / 'static' / 'pwa'
+        for (archivo, campo), motivo in self._COLISIONES_CONOCIDAS.items():
+            ruta = pwa / archivo
+            assert ruta.exists(), f'{archivo} ya no existe; sobra la exención'
+            assert campo in ruta.read_text(encoding='utf-8'), (
+                f'{archivo} ya no nombra {campo!r}: la exención dejó de aplicar '
+                f'y hay que borrarla. Motivo declarado: {motivo}')
 
 
 class TestLosDoceQueEstabanMudos:

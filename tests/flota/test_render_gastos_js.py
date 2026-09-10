@@ -214,6 +214,10 @@ const ctx = {
 ctx.globalThis = ctx;
 ctx.window.document = doc;
 vm.createContext(ctx);
+// `util.js` va PRIMERO y se carga de verdad, no se stubbea: `esc()` es lo
+// que este arnés tiene que poder ver fallar.
+vm.runInContext(fs.readFileSync(FLOTAJS.replace(/[^/]+$/, 'util.js'), 'utf-8'),
+                ctx, { filename: 'util.js' });
 vm.runInContext(fs.readFileSync(FLOTAJS, 'utf-8'), ctx, { filename: 'flota.js' });
 
 (async () => {
@@ -250,6 +254,7 @@ def _payload(**extra):
     base = {
         'placa': 'TGZ653', 'desde': '2026-03-01', 'hasta': '2026-03-31',
         'gastos': [], 'cpk': '840.00', 'cpk_marca': 'declarada',
+        'cpk_motivo': None, 'lecturas_en_ventana': 4,
         'pesos_imputados': '840000.00', 'km_recorridos': 1000,
         'rendimiento_km_galon': '24.00',
         'capacidad_tanque_galones': '15.00',
@@ -277,15 +282,57 @@ class TestElCPKSeVeConSusInsumos:
         assert 'declarada' in html
 
     def test_sin_dato_por_falta_de_gastos_lo_dice_con_el_motivo(self, tmp_path):
-        html = _expediente(tmp_path, _payload(cpk='sin_dato', km_recorridos=800))
+        html = _expediente(tmp_path, _payload(
+            cpk='sin_dato', km_recorridos=800, lecturas_en_ventana=4,
+            cpk_motivo='ningún gasto registrado contra este vehículo. '
+                       'No es que sea gratis: es que nadie ha cargado una factura.'))
         assert 'sin dato' in html
-        assert 'no es que no haya costado nada' in html.lower()
+        assert 'nadie ha cargado una factura' in html
 
     def test_sin_dato_por_falta_de_kilometros_da_OTRO_motivo(self, tmp_path):
-        """Los dos `sin_dato` del canon no son el mismo, y quien lo lee tiene
-        que saber qué le falta: registrar un gasto o registrar un odómetro."""
-        html = _expediente(tmp_path, _payload(cpk='sin_dato', km_recorridos=0))
-        assert 'no se sabe cuántos kilómetros' in html
+        """Los `sin_dato` del canon no son el mismo, y quien lo lee tiene que
+        saber qué le falta: registrar un gasto, registrar un odómetro, o
+        verificar el que ya se registró."""
+        html = _expediente(tmp_path, _payload(
+            cpk='sin_dato', km_recorridos=0, lecturas_en_ventana=1,
+            cpk_motivo='menos de dos lecturas de odómetro dentro del mes: no '
+                       'hay tramo que dividir. Se resuelve registrando kilometraje.'))
+        assert 'registrando kilometraje' in html
+        assert 'factura' not in html.split('Registrar un gasto')[0]
+
+    def test_la_pantalla_NO_re_deriva_el_motivo_del_CPK(self, tmp_path):
+        """La otra dirección, y es la que atrapa el defecto real.
+
+        Hasta el 2026-09-04 esta pantalla adivinaba el motivo con
+        `km_recorridos > 0` y solo distinguía dos de los cuatro casos — **y los
+        confundía**: un vehículo con dos lecturas dudosas tiene km > 0, así que
+        la pantalla decía «no hay ningún gasto registrado» sobre un vehículo que
+        sí tenía gastos, y mandaba a cargar una factura ya cargada.
+
+        Con los MISMOS kilómetros y dos motivos distintos, el texto tiene que
+        cambiar. Si alguien reintroduce la derivación en el navegador, los dos
+        renders salen iguales y esto se pone rojo.
+        """
+        km = 800
+        uno = _expediente(tmp_path, _payload(
+            cpk='sin_dato', km_recorridos=km, lecturas_en_ventana=2,
+            cpk_motivo='los dos extremos del tramo son dudosos: ninguno se '
+                       'verificó contra su foto. Se resuelve verificando kilometrajes.'))
+        otro = _expediente(tmp_path, _payload(
+            cpk='sin_dato', km_recorridos=km, lecturas_en_ventana=4,
+            cpk_motivo='ningún gasto registrado contra este vehículo. '
+                       'No es que sea gratis: es que nadie ha cargado una factura.'))
+        assert 'verificando kilometrajes' in uno
+        assert 'nadie ha cargado una factura' in otro
+        assert uno != otro, (
+            'con el mismo `km_recorridos` y distinto `cpk_motivo` la pantalla '
+            'pintó lo mismo: está derivando el motivo en el navegador otra vez')
+
+    def test_el_CPK_con_cifra_declara_cuantas_lecturas_lo_sostienen(self, tmp_path):
+        """Regla 13 a nivel de fila. Un CPK sobre dos lecturas y uno sobre
+        veinte no se leen igual, y desde el número no se distinguen."""
+        html = _expediente(tmp_path, _payload(lecturas_en_ventana=7))
+        assert '7 lectura(s)' in html
 
     def test_dice_que_NO_se_compara_con_otro_vehiculo(self, tmp_path):
         html = _expediente(tmp_path, _payload())

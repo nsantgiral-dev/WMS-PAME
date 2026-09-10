@@ -42,10 +42,12 @@ from app.routes._auth_helpers import Roles
 from app.utils.fecha import dia_operativo
 from flota.adaptadores import gastos as adaptador
 from flota.adaptadores.gastos import numero_legible
+from flota.adaptadores.medicion import _motivo_cpk
 from flota.adaptadores.modelos import Gasto
 from flota.api._permisos import MAESTROS_FLOTA, exige
 from flota.dominio import costos
 from flota.dominio.errores import ErrorFlota, PermisoInsuficiente
+from flota.dominio.valores import palabra_de_confianza
 
 gastos_bp = Blueprint('flota_gastos', __name__)
 
@@ -163,9 +165,17 @@ def listar(placa):
         # y este va a un tablero: quien lo mire tiene que poder rehacer la
         # división.
         'cpk': numero_legible(cpk['cpk']),
-        'cpk_marca': str(cpk['marca']),
+        # `palabra_de_confianza` y no `str()`: hoy es un no-op porque la marca
+        # ya viene convertida, y se cambia igual — el día que vuelva a ser un
+        # `Confianza`, `str()` publicaría `'Confianza.DUDOSA'` en la pantalla.
+        'cpk_marca': palabra_de_confianza(cpk['marca']),
+        # El MISMO motivo que publica el tablero (`medicion._motivo_cpk`), no
+        # una segunda explicación escrita acá. Dos textos para la misma causa
+        # divergen, y el que diverge es el que menos gente lee.
+        'cpk_motivo': _motivo_cpk(cpk),
         'pesos_imputados': numero_legible(cpk['pesos']),
         'km_recorridos': cpk['km'],
+        'lecturas_en_ventana': cpk['lecturas'],
         'rendimiento_km_galon': numero_legible(adaptador.rendimiento_de(vehiculo.id)),
         # La capacidad viaja para que la pantalla pueda decir POR QUÉ un tanqueo
         # salió `sin_dato` en vez de dejar el hueco sin explicación.

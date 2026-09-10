@@ -28,10 +28,14 @@ logger = logging.getLogger(__name__)
 
 # ── Envío de email via Resend API ─────────────────────────────────────────────
 
-def _config_resend() -> dict | None:
-    """Lee env vars de Resend. Retorna None si no están configuradas."""
+def _config_resend(dest_override: str | None = None) -> dict | None:
+    """Lee env vars de Resend. Retorna None si no están configuradas.
+
+    `dest_override` permite que un remitente distinto declare SUS destinatarios
+    en vez de heredar la lista global. Ver `enviar_email`.
+    """
     api_key = os.getenv('RESEND_API_KEY', '').strip()
-    dest    = os.getenv('ALERTA_EMAIL_DEST', '').strip()
+    dest    = (dest_override or os.getenv('ALERTA_EMAIL_DEST', '')).strip()
 
     if not all([api_key, dest]):
         return None
@@ -48,12 +52,33 @@ def _config_resend() -> dict | None:
     }
 
 
-def enviar_email(asunto: str, cuerpo_html: str, cuerpo_texto: str) -> bool:
+def enviar_email(asunto: str, cuerpo_html: str, cuerpo_texto: str,
+                 dest: str | None = None) -> bool:
     """
     Envía un email via Resend API (HTTPS — no SMTP).
     Retorna True si se envió, False si faltó config o hubo error.
+
+    ## `dest` — quién lo recibe, y por qué hizo falta el parámetro
+
+    Hasta el 2026-09-04 los destinatarios salían **siempre** de
+    `ALERTA_EMAIL_DEST`, la lista global cuyo destinatario documentado es el
+    Jefe de Bodega (ver el encabezado de este módulo). Con cuatro alertas de
+    inventario eso era correcto: todas van a la misma persona.
+
+    El reporte semanal de flota va a otras dos —control de flota y quien decide
+    el gasto—, y sin este parámetro se habría mandado **con éxito, a quien no
+    es**: `resp.status_code == 200`, log de «email enviado», y el reporte en la
+    bandeja equivocada durante meses. Es la falla que devuelve algo
+    indistinguible del éxito.
+
+    `dest=None` conserva el comportamiento de los cuatro llamadores existentes
+    —heredan la lista global— y **no es un default peligroso**: la lista global
+    es la respuesta correcta para ellos, no un relleno. Quien necesite otra la
+    declara; quien no pase nada, sigue igual.
+
+    Coma-separado, igual formato que la variable de entorno.
     """
-    cfg = _config_resend()
+    cfg = _config_resend(dest)
     if not cfg:
         logger.warning('[ALERTAS] Resend no configurado — email omitido. '
                        'Agrega RESEND_API_KEY y ALERTA_EMAIL_DEST en Railway.')
@@ -89,14 +114,15 @@ def enviar_email(asunto: str, cuerpo_html: str, cuerpo_texto: str) -> bool:
         raise
 
 
-def _enviar_email_con_dlq(asunto: str, cuerpo_html: str, cuerpo_texto: str, tipo_alerta: str):
+def _enviar_email_con_dlq(asunto: str, cuerpo_html: str, cuerpo_texto: str,
+                          tipo_alerta: str, dest: str | None = None):
     """
     Wrapper sobre enviar_email que encola un SiesaJob(ALERTA_EMAIL) cuando Resend falla.
     El job queda visible en la queue del WMS y dispara logger.critical en el próximo DLQ run,
     evitando que la falla de alertas pase completamente desapercibida (SF_JOB_SILENCIOSO).
     """
     try:
-        enviar_email(asunto, cuerpo_html, cuerpo_texto)
+        enviar_email(asunto, cuerpo_html, cuerpo_texto, dest)
     except Exception as e:
         logger.critical(
             f'[ALERTAS] enviar_email falló para "{tipo_alerta}" — encolando en DLQ: {e}'

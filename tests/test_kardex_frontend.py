@@ -1,3 +1,4 @@
+import re
 """
 Los tres números del kardex que decidían plata sin que nadie los pudiera mirar.
 
@@ -184,7 +185,12 @@ class TestLaEvidenciaDeLaDemandaCorregida:
 
     def test_la_procedencia_es_lo_que_se_toca(self):
         js = _js('compras_ia.js')
-        assert "repoVerEvidencia('${it.referencia}', 'rep-ev-${i}')" in js
+        # `esc(x)` se normaliza a `x`: desde el 2026-09-09 la PWA escapa el
+        # dato antes de pintarlo, y este detector afirma QUÉ CAMPO viaja, no
+        # cómo se escribe. Sin esto, envolver un campo rompe un test que no
+        # tiene nada que ver con lo que se cambió.
+        _sin_esc = lambda s: re.sub(r'esc\(([^()]*)\)', r'\1', s)
+        assert "repoVerEvidencia('${it.referencia}', 'rep-ev-${i}')" in _sin_esc(js)
 
     def test_hay_una_fila_donde_desplegarla(self):
         js = _js('compras_ia.js')

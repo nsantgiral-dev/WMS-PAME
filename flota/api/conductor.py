@@ -47,6 +47,77 @@ def _conductor_del_token():
     return Conductor.query.filter_by(usuario_id=uid, activo=True).first()
 
 
+def _preventivo_urgente(vehiculo_id):
+    """Las tareas del plan que ya vencieron. Vacío si el preventivo no corre.
+
+    QUÉ AFIRMA: que esas tareas pasaron su kilometraje.
+
+    QUÉ NO AFIRMA: que el vehículo no pueda salir. Informa (regla 1).
+
+    Una tarea **sin línea base** —nunca ejecutada— no entra: no está al día ni
+    vencida, y decirle al conductor que «venció» algo que nadie hizo nunca es
+    inventarle una deuda. El health la cuenta aparte como
+    `tareas_sin_linea_base`.
+    """
+    from flota.adaptadores import preventivo
+    from flota.dominio.preventivo import EstadoTarea
+
+    try:
+        plan = preventivo.diagnostico_de(vehiculo_id)
+    except Exception:
+        # Regla 5 al revés: si el preventivo revienta, el conductor tiene que
+        # poder recibir su turno igual. Se degrada a "no hay nada que decir",
+        # NO a "está todo bien" — la diferencia la lleva el health, que sí
+        # falla ruidosamente cuando una medición no se puede hacer.
+        return []
+    return [d for d in plan if d.get('estado') == EstadoTarea.VENCIDA]
+
+
+def _rendimiento_del_turno(vehiculo_id):
+    """El km/galón del vehículo del turno, o por qué todavía no se muestra.
+
+    **Tres estados, no dos.** «Hay número y se puede sostener», «hay número y
+    todavía no» y «no hay número» se corrigen distinto: el primero no necesita
+    nada, el segundo solo necesita que pase el tiempo, y el tercero necesita que
+    alguien marque el tanque al tanquear. Colapsar los dos últimos haría que un
+    vehículo midiendo desde hace un mes se viera igual que uno que nadie tanqueó
+    nunca.
+
+    Cuando `publicable` es `False` **el número no viaja**. No es prudencia
+    excesiva: el que lo lee es la persona cuya conducción se está midiendo, y un
+    `18 km/gal` sobre dos ventanas de la misma semana es ruido con su nombre
+    encima. El panel de control de flota sí lo ve, con su advertencia; acá no.
+
+    Sin vehículo asignado devuelve `None` — no un dict con ceros. «No tenés
+    camión hoy» no es «tu camión rinde 0».
+    """
+    if vehiculo_id is None:
+        return None
+    from flota.adaptadores.gastos import numero_legible, rendimiento_publicable_de
+
+    r = rendimiento_publicable_de(vehiculo_id)
+    return {
+        'km_galon': (numero_legible(r['km_galon']) if r['publicable']
+                     else str(SIN_DATO)),
+        'publicable': r['publicable'],
+        'motivo': r['motivo'],
+        # Los dos viajan SIEMPRE, publicable o no: son la condición 2 del dueño
+        # y son lo que separa una medición de un promedio con autoridad
+        # prestada.
+        'ventanas': r['ventanas'],
+        'tanqueos_fuera_por_parcial': r['tanqueos_fuera_por_parcial'],
+        'dias_historia': r['dias_historia'],
+        'base': ('kilómetros y galones sumados sobre las ventanas de tanque '
+                 'lleno a tanque lleno de ESTE vehículo'),
+        # Lo que el número NO afirma, en la pantalla y no en un instructivo
+        # aparte. Es la regla 2: el sistema dice cuánto rindió el camión, no
+        # quién lo manejó.
+        'no_afirma': ('Mide el VEHÍCULO, no a quien maneja. Una ruta con más '
+                      'montaña, un filtro tapado y un sifón dan el mismo '
+                      'número.'),
+    }
+
+
 def _estado_del_vehiculo(vehiculo_id):
     """Lo que el conductor tiene que saber ANTES de arrancar.
 
@@ -108,6 +179,19 @@ def _estado_del_vehiculo(vehiculo_id):
              'habilita_despacho': habilita_despacho(insp.veredicto)}
             if insp is not None else {'hecha': False, 'veredicto': None,
                                       'habilita_despacho': None}),
+        # Preventivo: **lo que necesita SABER, no una pantalla para navegar.**
+        #
+        # `GET /flota/preventivo/<placa>` autoriza al conductor y solo lo ofrece
+        # el panel del encargado. La pregunta correcta no era «¿le doy la
+        # pantalla?» sino qué necesita: su panel dura dos minutos a las 5 a.m. y
+        # no es un navegador de expedientes. Necesita saber que la correa está
+        # vencida, no poder recorrer nueve tareas.
+        #
+        # Una correa que revienta en motor de interferencia es motor nuevo, y
+        # `distribucion_km_cambio` llevaba meses en la base sin un solo lector.
+        'preventivo_vencido': [
+            {'tarea': d['tarea'], 'faltan_km': d.get('faltan_km')}
+            for d in _preventivo_urgente(vehiculo_id)],
         'documentos_vencidos': [
             {'tipo': d.tipo, 'vencio': d.fecha_vencimiento.isoformat()}
             for d in vencidos],
@@ -186,6 +270,26 @@ def mi_turno():
         # El encargado sí veía los contadores agregados en su tablero. El que
         # está parado al lado del camión a las 5 a.m. veía su placa.
         'estado_vehiculo': _estado_del_vehiculo(turno.vehiculo_id),
+        # Rendimiento km/galón — el número que su ficha de procedimiento le
+        # promete desde el 2026-08-04 (`piso-conductor.md:149`) y que el sistema
+        # le negaba.
+        #
+        # **km/galón y NO el CPK.** El CPK divide por pesos que él no controla
+        # —pólizas, impuestos, multas, una entrada a taller— y un número que
+        # alguien no puede mover es un número que aprende a ignorar. Los
+        # kilómetros por galón sí son lo que su conducción mueve.
+        #
+        # Las cuatro condiciones del dueño, y dónde se cumple cada una:
+        #
+        #   · agregado del VEHÍCULO, no de la persona → la firma de
+        #     `rendimiento_publicable` no recibe conductor y no debe recibirlo
+        #     nunca (regla 2, comprobada por `inspect.signature`);
+        #   · declara sobre cuántas ventanas y cuántos tanqueos quedaron fuera
+        #     → viajan `ventanas` y `tanqueos_fuera_por_parcial`;
+        #   · sin ranking ni comparación entre personas → esto devuelve UN
+        #     vehículo, el del turno. No hay forma de pedir una lista;
+        #   · ≥6 ventanas y ≥60 días → `publicable`, con su motivo.
+        'rendimiento': _rendimiento_del_turno(turno.vehiculo_id),
         'origen': turno.origen.value,
         'vehiculo_id': turno.vehiculo_id,
         'placa': turno.placa,

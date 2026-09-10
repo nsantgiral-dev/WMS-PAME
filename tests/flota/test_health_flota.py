@@ -7,12 +7,18 @@ afirmación sobre la flota, `null` es una afirmación sobre el sistema. Un 0 por
 defecto las colapsa y convierte el tablero en decoración con autoridad.
 """
 from flota.adaptadores.medicion import MedidorSQL
-from flota.api.health import _CAMPOS
+from flota.api.health import _CAMPOS, _CAMPOS_SIN_TABLA
 
 # Las cinco tablas de la tanda 1 ya existen: los doce campos se miden.
 # `null` queda reservado para su único significado — la fuente no existe todavía —
 # y eso se prueba aparte, quitándole la tabla al medidor.
-_CAMPOS_MEDIDOS = tuple(c for c in _CAMPOS if c not in ('ambiente', 'datos_reales'))
+#: La lista vive en `flota/api/health.py`, junto a `_CAMPOS`, y NO acá.
+#: Estaba escrita dos veces —también inline en `test_mundos_incompletos.py`—
+#: y agregar un campo exento exigía acordarse de los dos sitios.
+#: `TestLaProcedenciaNoDependeDeNingunaTabla` es lo que impide que la
+#: exención sea un pase libre: el campo tiene que ganársela.
+
+_CAMPOS_MEDIDOS = tuple(c for c in _CAMPOS if c not in _CAMPOS_SIN_TABLA)
 
 
 def _get(client, token):
@@ -135,3 +141,50 @@ class TestAmbienteNoDiverge:
         """Regla 0 aplicada al aviso: se apaga con una afirmación, no con una ausencia."""
         cuerpo = _get(client, jwt_token_admin).get_json()
         assert cuerpo['datos_reales'] is (cuerpo['ambiente'] == 'produccion')
+
+
+class TestLaProcedenciaNoDependeDeNingunaTabla:
+    """El campo tiene que GANARSE su exención, no recibirla.
+
+    `procedencia` está en `_EXENTOS_DE_MEDIR`, así que
+    `test_sin_fuente_el_campo_vale_null_y_jamas_cero` no lo mira. Sin esta
+    clase, la exención sería un pase libre: el día que alguien le agregue un
+    conteo de tablas, el campo empezaría a reventar —o peor, a devolver ceros—
+    sin que nada se pusiera rojo.
+
+    La justificación de la exención es que mide el SISTEMA y no la flota. Esto
+    la comprueba: sin una sola tabla, sigue contestando entero.
+    """
+
+    def test_sin_ninguna_tabla_sigue_contestando_entero(self, app, monkeypatch):
+        import flota.adaptadores.medicion as med
+
+        monkeypatch.setattr(med, '_tabla_existe', lambda nombre: False)
+        with app.app_context():
+            p = med.MedidorSQL().procedencia_del_tablero()
+        assert set(p) == {'ambiente', 'datos_reales', 'dia_operativo',
+                          'calculado_ts'}
+        assert p['ambiente'] and p['dia_operativo'] and p['calculado_ts']
+
+    def test_el_instante_declara_su_huso_y_es_el_de_Bogota(self, app):
+        """Regla 5 del WMS. Un tablero que dice «calculado a las 21:30» sin
+        decir de qué huso se lee mal exactamente en la franja en que UTC ya
+        cambió de día — que es la franja en que se cierra el turno de la tarde.
+        """
+        from datetime import datetime
+
+        with app.app_context():
+            ts = datetime.fromisoformat(
+                MedidorSQL().procedencia_del_tablero()['calculado_ts'])
+        assert ts.tzinfo is not None, 'el instante salió sin huso'
+        assert ts.utcoffset().total_seconds() == -5 * 3600
+
+    def test_el_dia_operativo_es_el_MISMO_que_usan_los_demas_campos(self, app):
+        """Si el encabezado dijera un día y las ventanas otro, el tablero se
+        contradice consigo mismo en la franja de las 7 p.m. — y las dos
+        respuestas se ven igual de plausibles."""
+        import flota.adaptadores.medicion as med
+
+        with app.app_context():
+            assert (med.MedidorSQL().procedencia_del_tablero()['dia_operativo']
+                    == med._hoy().isoformat())

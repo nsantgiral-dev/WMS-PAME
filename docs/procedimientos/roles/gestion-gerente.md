@@ -22,6 +22,28 @@
 | Capital inmovilizado y desbloqueo de SKUs | `COMPRAS_ROLES` |
 | Tablero del Vigía (alarmas de desplome operativo) | `GESTION` |
 | Ver todos los paneles | `GESTION` |
+| Ver la analítica de flota | `VISTA_FLOTA` — **ver abajo: no decidís sobre ella** |
+
+---
+
+## Flota: la ves, y no decidís sobre ella
+
+**Ninguna decisión de flota es tuya, y eso es deliberado.** Aparecés en
+`VISTA_FLOTA` porque tu ficha dice «ver todos los paneles» y el costo por
+kilómetro es plata — pero la decisión mensual sobre el gasto de flota está
+asignada a `admin`, no a este rol.
+
+Lo que ves ahí es contexto, no una bandeja de entrada. Si esperás encontrar algo
+que atender, no lo hay; si querés entender por qué un camión cuesta lo que
+cuesta, está todo.
+
+> Esto queda escrito porque un rol que abre un tablero, no encuentra nada que
+> decidir y nadie le dijo que era así, deja de abrirlo — y arrastra al tablero.
+> `docs/procedimientos/README.md` dice que ninguna ficha puede prometer lo que
+> el sistema niega; callar por qué tenés un acceso es la otra mitad.
+
+**Si esto cambia** —si en algún momento la decisión de gasto de flota pasa a
+gerencia—, se escribe acá y se saca de `gestion-admin.md`. En un solo sitio.
 
 ---
 

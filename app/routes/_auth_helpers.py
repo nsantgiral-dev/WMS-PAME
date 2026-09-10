@@ -42,7 +42,33 @@ class Roles:
     # fue el bug: `control_flota` se agregó a `Roles` y a la pantalla, y los
     # tres guards siguieron con su lista propia. Yesid entró, vio su pestaña y
     # recibió "Sin permiso para listar vehículos".
+    #: **Operar un turno sobre UN vehículo.** El conductor entra porque el turno
+    #: es suyo: recibe, inspecciona, reporta un daño, tanquea, entrega.
+    #:
+    #: El nombre dice `LECTURA` y autoriza escrituras —traspaso, odómetro,
+    #: inspección, hallazgo, tanqueo—. Se conserva porque lo consumen
+    #: `rutas.py` y `almacenes.py` fuera de flota, y renombrarlo en el mismo
+    #: cambio que reparte permisos mezclaría dos decisiones. Queda anotado como
+    #: nombre que miente, con su condición: el día que flota sea el único
+    #: consumidor, pasa a llamarse `TURNO_FLOTA`.
     LECTURA_FLOTA  = GESTION + (CONDUCTOR, CONTROL_FLOTA)
+
+    #: **Ver la flota ENTERA.** Sin el conductor, y esa ausencia es el punto.
+    #:
+    #: Hasta el 2026-09-03 los tableros de flota completa —avisos, vehículos
+    #: fuera de sede, cierres forzados, y el vehículo de OTRO conductor— pedían
+    #: `LECTURA_FLOTA`, así que cualquier conductor podía consultarlos. Ninguna
+    #: pantalla se los ofrecía, pero la API contestaba.
+    #:
+    #: `cierres-forzados` es el caso que lo vuelve concreto: el propio módulo lo
+    #: describe como *«mide conducta, no fallas»*. Un conductor no tiene por qué
+    #: leer el registro de conducta de sus compañeros, y el permiso no puede ser
+    #: más ancho que el gesto.
+    #:
+    #: No lo vio ningún trinquete porque todos miden **presencia** de
+    #: `exige(...)` o que el rol declarado entre y el no declarado no —ninguno
+    #: pregunta si el rol declarado DEBERÍA estar en la tupla.
+    VISTA_FLOTA    = GESTION + (CONTROL_FLOTA,)
 
 
 def _puede_empacar(usuario) -> bool:

@@ -82,7 +82,7 @@ def _serializar(placa, ficha):
 
 @ficha_bp.route('/vehiculo/<placa>/ficha', methods=['GET'])
 @jwt_required()
-@exige(Roles.LECTURA_FLOTA, 'ver la ficha tecnica')
+@exige(Roles.VISTA_FLOTA, 'ver la ficha tecnica')
 def obtener_ficha(placa):
     try:
         vehiculo = _vehiculo(placa)

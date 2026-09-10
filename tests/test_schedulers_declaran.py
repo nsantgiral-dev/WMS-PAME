@@ -65,6 +65,11 @@ REGISTRADOS_EXTERNOS = {
     # segundo interruptor en el scheduler daría dos sitios donde apagar lo
     # mismo, y el segundo se olvida.
     'flota.adaptadores.preventivo': 'init_scheduler',
+    # El reporte de los lunes (2026-09-04). Mismo criterio de interruptor
+    # único: vive dentro de `enviar_reporte_semanal`, y el scheduler lo
+    # consulta para no arrancar — pero no es un segundo interruptor, es el
+    # mismo leído desde afuera.
+    'flota.adaptadores.reporte_semanal': 'init_scheduler',
 }
 
 

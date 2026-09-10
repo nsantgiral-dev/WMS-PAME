@@ -43,6 +43,10 @@ const cargar = f => {
   vm.runInThisContext(src, { filename: f });
 };
 const RAIZ = require('path').resolve(__dirname, '..', '..');
+// `util.js` primero: define `esc()`, que usan todos los módulos al pintar.
+// Se carga de verdad y no se stubbea — un `esc` falso volvería los tests
+// de escapado en tests del stub.
+cargar(RAIZ + '/app/static/pwa/util.js');
 cargar(RAIZ + '/app/static/pwa/compras_ia.js');
 cargar(RAIZ + '/app/static/pwa/rutas.js');
 

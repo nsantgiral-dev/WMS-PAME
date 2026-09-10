@@ -48,7 +48,7 @@ al recibir y quedó fotografiado, es del turno anterior. Sin foto, es discutible
 ```
 5:00  RECIBIR TURNO
       · odómetro + foto del tablero
-      · 13 fotos: 7 caras + una por llanta
+      · 7 caras + una por llanta (son 11, 13 o 10 según el camión)
       · quedás como responsable del vehículo
 
       RUTA
@@ -60,11 +60,19 @@ al recibir y quedó fotografiado, es del turno anterior. Sin foto, es discutible
       · declarás DÓNDE QUEDA el vehículo
 ```
 
-**Por qué 13 al recibir y 4 al entregar:** recibir es exhaustivo porque te
-protege a vos —estás asumiendo el vehículo—. Entregar es rápido porque cierra el
-reloj y detecta un golpe nuevo. Si la entrega pidiera 13 fotos a las 6 p.m., a la
-tercera semana serían 13 fotos del piso, y eso es peor que no tener nada: parece
-registro y no lo es.
+**Cuántas son, exactamente:** el sistema arma el formulario contra la ficha
+técnica del camión —7 caras fijas más una por cada posición de llanta—, así que
+el número cambia: 11, 13 o 10. Este documento decía «13» como si fuera
+constante; es el caso de un camión de seis posiciones. Si el vehículo todavía no
+tiene ficha, la pantalla usa un supuesto por tipo **y te dice que es un
+supuesto**: un default silencioso haría que un camión de 6 posiciones pidiera 4
+fotos y nadie notara las dos que faltan.
+
+**Por qué exhaustivo al recibir y 4 al entregar:** recibir te protege a vos
+—estás asumiendo el vehículo—. Entregar es rápido porque cierra el reloj y
+detecta un golpe nuevo. Si la entrega pidiera trece fotos a las 6 p.m., a la
+tercera semana serían trece fotos del piso, y eso es peor que no tener nada:
+parece registro y no lo es.
 
 **El botón "cómo estaba"** te muestra la foto de cuando lo recibiste, para que
 saques la de cierre desde el mismo ángulo. Sin el mismo encuadre, las dos fotos
@@ -144,10 +152,30 @@ el que no, tiene su palabra.
 
 | Señal | Dónde se ve |
 |---|---|
-| Turnos cerrados completos (con sus 4 fotos) | Tablero de control de flota |
-| Turnos que te cerraron a la fuerza | Si aparecen, es que te fuiste sin cerrar |
-| Rendimiento km/galón del vehículo | Tanqueo — *tanda 2* |
-| Recaudo cuadrado | Liquidación |
+| Turnos cerrados completos (con sus fotos) `health:custodias_sin_foto_completa` | Tablero de control de flota |
+| Turnos que te cerraron a la fuerza `health:custodias_cerradas_forzadas` | Si aparecen, es que te fuiste sin cerrar |
+| **Rendimiento km/galón del vehículo** `health:rendimiento_por_vehiculo` | En tu pantalla, debajo del estado del camión |
+| Recaudo cuadrado `sin_sistema` | Liquidación — no sale del tablero de flota |
+
+### El km/galón, y qué NO es
+
+Aparece solo cuando hay con qué sostenerlo: **seis ventanas de tanque lleno a
+tanque lleno y sesenta días de historia**. Antes de eso dice «midiendo todavía»
+y cuántas ventanas faltan. No es cautela burocrática — con dos ventanas, un solo
+viaje cargado a Florencia mueve el número lo suficiente para que parezca que
+cambió algo.
+
+Y dice al lado sobre cuántas ventanas se calculó y **cuántos tanqueos quedaron
+fuera** por no estar marcados «lleno». Un tanqueo sin marcar no empeora la
+medición: la impide.
+
+> **Mide el vehículo, no a vos.** Una ruta con más montaña, un filtro tapado y
+> un sifón dan exactamente el mismo número. No hay ranking de conductores, no
+> existe una lista comparando personas, y no se va a construir.
+
+**No vas a ver el costo por kilómetro**, y no es por ocultarlo: el CPK divide
+por pólizas, impuestos y multas que vos no controlás. Un número que no podés
+mover es un número que se aprende a ignorar.
 
 ---
 
@@ -155,8 +183,8 @@ el que no, tiene su palabra.
 
 | Día | Qué hace | Se verifica con |
 |---|---|---|
-| 1 | Acompaña una ruta completa. **Se le explica que las fotos lo protegen a él.** | Puede explicar por qué 13 al recibir y 4 al entregar |
-| 2 | Recibe y entrega turno acompañado | Las 13 fotos, cronometrado |
+| 1 | Acompaña una ruta completa. **Se le explica que las fotos lo protegen a él.** | Puede explicar por qué exhaustivo al recibir y 4 al entregar |
+| 2 | Recibe y entrega turno acompañado | Las fotos que pida SU camión, cronometrado |
 | 3 | **Fallos provocados**: sin señal, daño preexistente, cliente ausente | Resuelve 3 de 4 |
 | 4 | Ruta corta solo | Turno cerrado completo |
 | 5 | Ruta completa | Sin cierres forzados |

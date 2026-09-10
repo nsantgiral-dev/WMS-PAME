@@ -147,7 +147,93 @@ def promedio_del_indicador(hallazgos: Sequence[Hallazgo]) -> Union[float, str]:
     return sum(dias) / len(dias)
 
 
+def juicio_de(h: Hallazgo, ahora: datetime) -> dict:
+    """Todo lo que el canon puede decir de UN hallazgo, de una sola pasada.
+
+    Devuelve `entra`, y si entra, los dos números que el canon **prohíbe
+    mezclar**: `dias` (duración cerrada, `dias_hallazgo_abierto`) y `dias_lleva`
+    (antigüedad viva, `dias_transcurridos`). Uno mide riesgo terminado y el otro
+    riesgo corriendo; sumarlos o promediarlos juntos es exactamente lo que el
+    punto 6 del canon prohíbe.
+
+    Un hallazgo que NO entra al indicador devuelve `entra: False` y ningún
+    número — no `0`, no `None` en un campo numérico. Pedirle días a uno de línea
+    base es una pregunta mal hecha, y `dias_hallazgo_abierto` levanta por eso.
+    """
+    if not entra_al_indicador(h):
+        return {
+            'entra': False,
+            'criticidad': h.criticidad,
+            'estado': h.estado,
+            # El motivo de la exclusión, no solo el hecho. «No entra» sin decir
+            # por qué se lee como un bug del tablero.
+            'motivo_fuera': ('es de línea base: la primera inspección levanta lo '
+                             'que ya había, sin responsable y sin reloj'
+                             if h.linea_base else
+                             f'está {h.estado}: no se resolvió, se determinó '
+                             f'que no había nada que resolver'),
+        }
+    return {
+        'entra': True,
+        'criticidad': h.criticidad,
+        'estado': h.estado,
+        'dias': dias_hallazgo_abierto(h),
+        'dias_lleva': dias_transcurridos(h, ahora),
+        'vencido': vencido(h, ahora),
+        'aplazado_veces': h.aplazado_veces,
+    }
+
+
+def indicador_dias_abierto(hallazgos: Sequence[Hallazgo],
+                           ahora: datetime) -> dict:
+    """El indicador **despromediado**: primero los casos, después el promedio.
+
+    `docs/procedimientos/roles/especialista-control-flota.md:119` promete «Días
+    promedio de hallazgo abierto» como señal de desempeño. El canon existe desde
+    el 2026-08-03, `promedio_del_indicador` existe desde el mismo día — y **no
+    tenía un solo caller de producción**, declarado como deuda en
+    `tests/flota/test_trinquetes_flota.py`. Esta función es ese caller.
+
+    ## Por qué el promedio va último y nunca solo
+
+    Con seis vehículos y un puñado de hallazgos, el promedio es el resumen menos
+    informativo que se puede publicar: no dice a qué camión llamar. Y el canon
+    ya prohíbe compararlo entre zonas —los tiempos de taller y de repuesto son
+    distintos en Neiva, Pitalito y Florencia—, así que un promedio suelto no
+    sirve ni para lo único para lo que suele servir un promedio.
+
+    Se publica igual, porque la ficha de rol lo promete, pero **con su `n` al
+    lado y detrás de la enumeración**. Un promedio de 2 casos y uno de 200 son
+    el mismo número con distinta autoridad.
+
+    ## `n_fuera` es el denominador, y por eso está
+
+    Un indicador que solo reporta lo que mira devuelve «0 días promedio» sobre
+    una flota con veinte hallazgos de línea base, y eso se lee como «no hay
+    demoras». El que lee tiene que ver cuántos quedaron afuera y por qué —es la
+    misma lección de `SIN_CUBRIR` en la auditoría de invariantes: el denominador
+    tiene que ser visible.
+
+    `juicios` sale **en el mismo orden** que `hallazgos`, para que el adaptador
+    pueda pegarle la placa sin que el dominio tenga que conocerla.
+    """
+    juicios = [juicio_de(h, ahora) for h in hallazgos]
+    entran = [h for h in hallazgos if entra_al_indicador(h)]
+    cerrados = [h for h in entran if h.cerrado_ts is not None]
+    return {
+        'juicios': juicios,
+        # El promedio sale de `promedio_del_indicador`, no de un `sum/len`
+        # escrito acá: la política de qué entra ya está escrita una vez, y la
+        # copia sería la que diverge (regla 0).
+        'promedio_dias': promedio_del_indicador(entran),
+        'n': len(cerrados),
+        'n_abiertos': len(entran) - len(cerrados),
+        'n_fuera': len(hallazgos) - len(entran),
+        'n_vencidos': sum(1 for h in entran if vencido(h, ahora)),
+    }
+
 __all__ = [
     'EstadoHallazgo', 'Hallazgo', 'entra_al_indicador', 'dias_hallazgo_abierto',
-    'dias_transcurridos', 'vencido', 'promedio_del_indicador', 'SIN_DATO',
+    'dias_transcurridos', 'vencido', 'promedio_del_indicador',
+    'juicio_de', 'indicador_dias_abierto', 'SIN_DATO',
 ]

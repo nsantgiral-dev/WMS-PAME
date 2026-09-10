@@ -46,13 +46,21 @@ def mundo(db, almacen):
     tienda = Usuario(nombre='Tienda HZ', email='hz_tienda@test.com',
                      password_hash=generate_password_hash('x'), rol='tienda',
                      almacen_id=almacen.id, activo=True)
-    db.session.add_all([veh, cond, flota, tienda])
+    # Desde el 2026-09-09 el desenlace del daño es `DECIDE_FLOTA` (gestión), no
+    # `MAESTROS_FLOTA`. Sin este usuario, los tests que cierran para poder
+    # probar OTRA cosa se quedan sin actor y el archivo mide la puerta en vez de
+    # lo que quería medir.
+    jefe = Usuario(nombre='Gestion HZ', email='hz_admin@test.com',
+                   password_hash=generate_password_hash('x'), rol='admin',
+                   almacen_id=almacen.id, activo=True)
+    db.session.add_all([veh, cond, flota, tienda, jefe])
     db.session.commit()
     return {
         'placa': veh.placa,
         't_cond': create_access_token(identity=str(cond.id)),
         't_flota': create_access_token(identity=str(flota.id)),
         't_tienda': create_access_token(identity=str(tienda.id)),
+        't_gestion': create_access_token(identity=str(jefe.id)),
         'db': db,
     }
 
@@ -105,15 +113,54 @@ class TestQuienPuedeQue:
                         json={'motivo': 'después'}, headers=_auth(mundo['t_cond']))
         assert r.status_code == 403
 
-    def test_control_de_flota_SI_cierra(self, client, mundo):
+    def test_gestion_SI_cierra(self, client, mundo):
         """La otra dirección. Sin esto, un `exige()` que rechazara a todo el
-        mundo pasaría los tres tests de arriba."""
+        mundo pasaría los tres tests de arriba.
+
+        **El actor cambió el 2026-09-09 y el test no se borró.** Se llamaba
+        `test_control_de_flota_SI_cierra` y afirmaba justo lo que ahora está
+        prohibido; borrarlo habría dejado la mitad positiva sin nadie, que es
+        exactamente el agujero contra el que este test se escribió.
+        """
         h = _reportar(client, mundo['t_cond'], mundo['placa']).get_json()
         r = client.post(f"/flota/hallazgos/{h['id']}/cerrar",
                         json={'nota': 'se cambió el retenedor'},
-                        headers=_auth(mundo['t_flota']))
+                        headers=_auth(mundo['t_gestion']))
         assert r.status_code == 200, r.get_json()
         assert r.get_json()['estado'] == 'cerrado'
+
+    def test_control_de_flota_NO_cierra_lo_que_lo_mide(self, client, mundo):
+        """La regla 11, un nivel más arriba que el conductor.
+
+        `dias_hallazgo_abierto` y `hallazgos_vencidos` son dos de las cinco
+        señales con las que la ficha de control de flota dice que se mide al
+        rol (`especialista-control-flota.md:112`). Con el botón de cerrar en su
+        mano, la forma barata de bajar las dos es de un clic — y el registro
+        queda impecable.
+
+        Su procedimiento decía esto desde el 2026-08-04 («no aprobás órdenes de
+        trabajo ni gastos») **y afirmaba que el código lo imponía**. No lo
+        imponía: `MAESTROS_FLOTA` lo incluía desde que la tupla gateaba otros
+        dos endpoints.
+        """
+        h = _reportar(client, mundo['t_cond'], mundo['placa']).get_json()
+        for verbo, cuerpo in (('cerrar', {}),
+                              ('descartar', {'motivo': 'nada'}),
+                              ('aplazar', {'motivo': 'después'})):
+            r = client.post(f"/flota/hallazgos/{h['id']}/{verbo}", json=cuerpo,
+                            headers=_auth(mundo['t_flota']))
+            assert r.status_code == 403, (verbo, r.get_json())
+            assert r.get_json()['tu_rol'] == 'control_flota'
+
+    def test_control_de_flota_SIGUE_reportando_y_leyendo(self, client, mundo):
+        """La contraparte, y no es adorno: un cambio de permisos que se pasa de
+        largo deja al rol sin poder hacer su trabajo, y eso no se nota hasta que
+        alguien lo intenta. Reportar el daño y leer el expediente son suyos."""
+        r = _reportar(client, mundo['t_flota'], mundo['placa'])
+        assert r.status_code == 201, r.get_json()
+        d = client.get(f"/flota/hallazgos/{mundo['placa']}",
+                       headers=_auth(mundo['t_flota']))
+        assert d.status_code == 200
 
     def test_un_usuario_de_tienda_no_toca_nada_de_flota(self, client, mundo):
         """El agujero que el review encontró en agosto: hasta el 2026-08-03
@@ -163,12 +210,12 @@ class TestLaFronteraNoAflojaNada:
         """El adaptador lo exige; la frontera no lo puede aflojar."""
         h = _reportar(client, mundo['t_flota'], mundo['placa']).get_json()
         r = client.post(f"/flota/hallazgos/{h['id']}/descartar", json={},
-                        headers=_auth(mundo['t_flota']))
+                        headers=_auth(mundo['t_gestion']))
         assert r.status_code == 409
 
     def test_un_id_inexistente_no_devuelve_200(self, client, mundo):
         r = client.post('/flota/hallazgos/99999/cerrar', json={},
-                        headers=_auth(mundo['t_flota']))
+                        headers=_auth(mundo['t_gestion']))
         assert r.status_code == 409
         assert '99999' in r.get_json()['error']
 
@@ -198,7 +245,7 @@ class TestLoQuePublicaLaLista:
     def test_por_defecto_solo_los_abiertos(self, client, mundo):
         h = _reportar(client, mundo['t_flota'], mundo['placa']).get_json()
         client.post(f"/flota/hallazgos/{h['id']}/cerrar", json={},
-                    headers=_auth(mundo['t_flota']))
+                    headers=_auth(mundo['t_gestion']))
         d = client.get(f"/flota/hallazgos/{mundo['placa']}",
                        headers=_auth(mundo['t_flota'])).get_json()
         assert d['hallazgos'] == []
@@ -208,7 +255,7 @@ class TestLoQuePublicaLaLista:
         pasaría igual y el histórico sería inalcanzable."""
         h = _reportar(client, mundo['t_flota'], mundo['placa']).get_json()
         client.post(f"/flota/hallazgos/{h['id']}/cerrar", json={},
-                    headers=_auth(mundo['t_flota']))
+                    headers=_auth(mundo['t_gestion']))
         d = client.get(f"/flota/hallazgos/{mundo['placa']}?todos=1",
                        headers=_auth(mundo['t_flota'])).get_json()
         assert [x['estado'] for x in d['hallazgos']] == ['cerrado']
@@ -272,7 +319,7 @@ class TestElHealthLosCuenta:
     def test_lo_cerrado_deja_de_contar_en_los_dos(self, client, mundo):
         h = _reportar(client, mundo['t_flota'], mundo['placa']).get_json()
         client.post(f"/flota/hallazgos/{h['id']}/cerrar", json={},
-                    headers=_auth(mundo['t_flota']))
+                    headers=_auth(mundo['t_gestion']))
         d = self._health(client, mundo)
         assert d['hallazgos_abiertos'] == 0
         assert d['hallazgos_vencidos'] == 0
@@ -283,5 +330,102 @@ class TestElHealthLosCuenta:
         verdad no era nada, dejarlo abierto es ruido."""
         h = _reportar(client, mundo['t_flota'], mundo['placa']).get_json()
         client.post(f"/flota/hallazgos/{h['id']}/descartar",
-                    json={'motivo': 'era barro'}, headers=_auth(mundo['t_flota']))
+                    json={'motivo': 'era barro'}, headers=_auth(mundo['t_gestion']))
         assert self._health(client, mundo)['hallazgos_abiertos'] == 0
+
+
+class TestElIndicadorSeMideYNoSeInventa:
+    """`MedidorSQL.dias_hallazgo_abierto` — el caller que
+    `promedio_del_indicador` no tuvo durante un mes.
+
+    Estuvo declarado como deuda en `test_trinquetes_flota.py::_SIN_CALLER` desde
+    el 2026-08-03: canon cerrado, función escrita y probada, y
+    `especialista-control-flota.md:119` prometiéndola como señal de desempeño de
+    un rol. La ficha prometía un número que ninguna pantalla mostraba, que es lo
+    que `docs/procedimientos/README.md:16` prohíbe.
+    """
+
+    def test_sin_hallazgos_el_promedio_es_sin_dato_CON_motivo_y_no_cero(
+            self, app, db, mundo):
+        """Un promedio de cero elementos no es cero: es que no hay nada que
+        promediar. En un tablero las dos cosas se leen distinto — «0 días» dice
+        que todo se resuelve al instante."""
+        from flota.adaptadores.medicion import MedidorSQL
+
+        d = MedidorSQL().dias_hallazgo_abierto()
+        assert d['promedio_dias'] == 'sin_dato'
+        assert d['n'] == 0
+        assert d['motivo'], 'un sin_dato sin motivo no manda a nadie a hacer nada'
+        assert d['casos'] == []
+
+    def test_un_daño_reportado_SIN_CUSTODIA_nace_de_linea_base_y_queda_fuera(
+            self, client, db, mundo):
+        """No es un detalle del test: es **el estado de la operación hoy**.
+
+        `reportar` deriva `linea_base` de la custodia
+        (`hallazgos.py:230`): sin custodia activa, el daño se registra como
+        preexistente —nace sin responsable y sin reloj, porque nadie estaba
+        respondiendo por el vehículo cuando apareció—. Con cero custodias
+        registradas, **todos** los hallazgos caerían fuera del indicador.
+
+        Por eso `n_fuera` viaja. Sin él, esa flota reportaría «0 días promedio»
+        y se leería como «no hay demoras» en vez de «no se está midiendo nada»
+        — la lección de `SIN_CUBRIR` en la auditoría de flujos: el denominador
+        tiene que ser visible.
+        """
+        from flota.adaptadores.medicion import MedidorSQL
+
+        _reportar(client, mundo['t_cond'], mundo['placa'])
+        d = MedidorSQL().dias_hallazgo_abierto()
+        assert d['n_fuera'] == 1 and d['n_abiertos'] == 0 and d['n'] == 0
+        fuera = d['casos'][0]
+        assert fuera['placa'] == mundo['placa'] and fuera['entra'] is False
+        assert 'línea base' in fuera['motivo_fuera']
+        # Y no trae números: pedirle días a uno de línea base es una pregunta
+        # mal hecha, y un número como respuesta se acabaría promediando.
+        assert 'dias' not in fuera and 'dias_lleva' not in fuera
+
+    def test_el_que_SI_entra_sale_con_su_placa_y_su_reloj_corriendo(
+            self, client, db, mundo):
+        """La otra dirección de la anterior. Sin este test, el indicador podría
+        estar dejando TODO afuera y `n_fuera` se leería como correcto.
+
+        Despromediar es enumerar: el promedio no dice a qué camión llamar.
+        """
+        from flota.adaptadores.medicion import MedidorSQL
+        from flota.adaptadores.modelos import Hallazgo
+
+        _reportar(client, mundo['t_cond'], mundo['placa'])
+        # Se simula el caso normal —daño encontrado con el vehículo bajo
+        # custodia— sin montar media custodia: lo que el indicador mira es esta
+        # columna, y es la que la derivación de `reportar` escribe.
+        Hallazgo.query.first().linea_base = False
+        db.session.commit()
+
+        d = MedidorSQL().dias_hallazgo_abierto()
+        assert [c['placa'] for c in d['casos']] == [mundo['placa']]
+        caso = d['casos'][0]
+        assert caso['entra'] is True and caso['estado'] == 'abierto'
+        # Abierto: `dias_lleva` es el reloj vivo y `dias` es la palabra, nunca 0.
+        assert caso['dias_lleva'] == 0 and caso['dias'] == 'sin_dato'
+        assert d['n'] == 0 and d['n_abiertos'] == 1 and d['n_fuera'] == 0
+
+    def test_la_fila_declara_su_base_igual_que_el_CPK(self, app, db, mundo):
+        """Regla 13. Una fila se copia sola a un correo y ahí llega sin la
+        cabecera que la explicaba."""
+        from flota.adaptadores.medicion import MedidorSQL
+
+        d = MedidorSQL().dias_hallazgo_abierto()
+        assert d['base'].strip() and d['etiqueta'].strip()
+        assert 'línea base' in d['base'], (
+            'la base tiene que decir QUÉ entra al indicador, no solo de dónde '
+            'salen los datos: el canon §6 excluye tres clases')
+
+    def test_sin_la_tabla_devuelve_None_y_no_un_dict_vacio(self, app, monkeypatch):
+        """`None` es «no hay de dónde saberlo»; un dict con listas vacías sería
+        «se miró y no hay nada». Son afirmaciones distintas."""
+        import flota.adaptadores.medicion as med
+
+        monkeypatch.setattr(med, '_tabla_existe', lambda n: False)
+        with app.app_context():
+            assert med.MedidorSQL().dias_hallazgo_abierto() is None

@@ -417,6 +417,114 @@ def ventanas_lleno_a_lleno(tanqueos: Sequence[dict]) -> list:
     return ventanas
 
 
+#: Cuántas ventanas y cuántos días de historia hace falta antes de mostrarle el
+#: número al conductor.
+#:
+#: **No son umbrales de desempeño**: no dicen si 24 km/gal está bien. Dicen
+#: cuándo el número deja de ser ruido. Con dos ventanas, un solo viaje cargado a
+#: Florencia mueve el promedio lo suficiente para que alguien crea que cambió
+#: algo — y el que lo va a leer es la persona cuya conducción se está midiendo.
+#:
+#: Los dos a la vez y no uno u otro: seis ventanas en una semana son seis
+#: tanqueos de la misma ruta, y sesenta días con dos ventanas son dos datos.
+MIN_VENTANAS_PUBLICABLE = 6
+MIN_DIAS_PUBLICABLE = 60
+
+
+def tanqueos_fuera_de_ventana(tanqueos: Sequence[dict]) -> int:
+    """Cuántos tanqueos NO entraron a ninguna ventana lleno-a-lleno.
+
+    `ventanas_lleno_a_lleno` los descarta **en silencio**, y ese silencio es un
+    problema cuando el número se le muestra a una persona: un rendimiento
+    calculado sobre 3 de 20 tanqueos y uno calculado sobre 19 de 20 se ven
+    idénticos, y el primero no significa nada.
+
+    Los de afuera son los anteriores al primer lleno y los posteriores al
+    último: entre dos llenos, los parciales SÍ cuentan —esos galones se quemaron
+    dentro del tramo— y por eso no se descuentan acá.
+
+    Es la condición 2 de las cuatro que el dueño puso para mostrárselo al
+    conductor: **declarar cuántos quedaron fuera por parciales**.
+    """
+    llenos = [i for i, t in enumerate(tanqueos) if t['tanque'] == 'lleno']
+    if len(llenos) < 2:
+        # Sin dos llenos no hay ninguna ventana, así que están TODOS afuera.
+        # Devolver 0 acá diría «no se perdió ninguno», que es lo contrario.
+        return len(tanqueos)
+    return len(tanqueos) - (llenos[-1] - llenos[0] + 1)
+
+
+def rendimiento_publicable(
+    tanqueos: Sequence[dict],
+    *,
+    dias_historia: int,
+    min_ventanas: int = MIN_VENTANAS_PUBLICABLE,
+    min_dias: int = MIN_DIAS_PUBLICABLE,
+) -> dict:
+    """El rendimiento **con todo lo que hace falta para decidir si mostrarlo**.
+
+    Acá viven las cuatro condiciones que el dueño puso para que el conductor vea
+    este número, y viven acá y no en el endpoint por el corolario de la regla 0:
+    si el umbral se escribe en `flota/api/conductor.py` y otra vez en el panel de
+    admin, divergen — y la que va a divergir es la del conductor, que es la que
+    nadie revisa.
+
+    | Condición | Cómo queda garantizada |
+    |---|---|
+    | Agregado del **vehículo**, no de la persona | la firma no recibe conductor, y `tests/flota/test_costos.py` lo comprueba por `inspect.signature` |
+    | Declara **sobre cuántas ventanas** y cuántos tanqueos quedaron fuera | `ventanas` y `tanqueos_fuera_por_parcial` |
+    | **Sin ranking** | devuelve UN vehículo; no hay forma de pedir una lista |
+    | **≥6 ventanas y ≥60 días** | `publicable`, con su `motivo` |
+
+    ## `publicable: False` NO es `sin_dato`
+
+    Son tres estados y no dos: hay un número y se puede mostrar; hay un número y
+    **todavía no** se puede sostener; y no hay número. Colapsar los dos últimos
+    haría que un vehículo midiendo desde hace un mes se viera igual que uno que
+    nadie tanqueó nunca — y el primero no necesita que nadie haga nada, solo que
+    pase el tiempo.
+
+    Por eso `km_galon` viaja siempre que exista, aunque `publicable` sea `False`:
+    el panel de control de flota **sí** lo muestra (con su advertencia), y la
+    pantalla del conductor no. Quién lo pinta lo decide cada frontera; qué se
+    puede sostener lo decide esta función, una sola vez.
+    """
+    ventanas = ventanas_lleno_a_lleno(tanqueos)
+    fuera = tanqueos_fuera_de_ventana(tanqueos)
+    km = sum(v['km'] for v in ventanas)
+    galones = sum((v['galones'] for v in ventanas), Decimal('0'))
+    valor = (Decimal(km) / galones) if (ventanas and galones > 0) else SIN_DATO
+
+    if valor is SIN_DATO:
+        motivo = (f'ninguna ventana de tanque lleno a tanque lleno todavía. '
+                  f'Hacen falta dos tanqueos marcados «lleno»; hay '
+                  f'{len(tanqueos)} tanqueo(s) registrado(s).')
+    elif len(ventanas) < min_ventanas:
+        motivo = (f'{len(ventanas)} ventana(s) de {min_ventanas}. Con menos, un '
+                  f'solo viaje cargado mueve el número lo suficiente para que '
+                  f'parezca que cambió algo.')
+    elif dias_historia < min_dias:
+        motivo = (f'{dias_historia} día(s) de historia de {min_dias}. Seis '
+                  f'ventanas de la misma semana son seis tanqueos de la misma '
+                  f'ruta, no seis mediciones.')
+    else:
+        motivo = None
+
+    return {
+        'km_galon': valor,
+        'publicable': motivo is None,
+        'motivo': motivo,
+        'ventanas': len(ventanas),
+        'tanqueos': len(tanqueos),
+        'tanqueos_fuera_por_parcial': fuera,
+        'km': km,
+        'galones': galones,
+        'dias_historia': dias_historia,
+        'min_ventanas': min_ventanas,
+        'min_dias': min_dias,
+    }
+
+
 def rendimiento_km_galon(tanqueos: Sequence[dict]) -> Union[Decimal, str]:
     """Rendimiento del vehículo sobre todas sus ventanas lleno-a-lleno.
 
@@ -441,15 +549,14 @@ def rendimiento_km_galon(tanqueos: Sequence[dict]) -> Union[Decimal, str]:
 
     Sin ninguna ventana devuelve `SIN_DATO`. Nunca cero: cero km/gal sería un
     camión que no se mueve gastando combustible.
+
+    **Envoltorio de una línea sobre `rendimiento_publicable`**, y no una segunda
+    cuenta. Las dos existían por separado durante veinte minutos y la agregación
+    estaba escrita dos veces; con eso, el día que alguien cambie de suma-y-divide
+    a promedio-de-razones, el expediente y la pantalla del conductor publicarían
+    números distintos del mismo vehículo y no habría forma de saber cuál creer.
     """
-    ventanas = ventanas_lleno_a_lleno(tanqueos)
-    if not ventanas:
-        return SIN_DATO
-    km = sum(v['km'] for v in ventanas)
-    galones = sum((v['galones'] for v in ventanas), Decimal('0'))
-    if galones <= 0:                        # pragma: no cover — filtrado arriba
-        return SIN_DATO
-    return Decimal(km) / galones
+    return rendimiento_publicable(tanqueos, dias_historia=0)['km_galon']
 
 
 __all__ = [
@@ -458,5 +565,7 @@ __all__ = [
     'ESTADOS_TANQUE', 'MARCAS_TRAMO', 'exige_periodo', 'dias_del_periodo',
     'imputar_a_ventana', 'costo_por_kilometro', 'precio_por_galon',
     'excede_capacidad', 'ventanas_lleno_a_lleno', 'rendimiento_km_galon',
+    'rendimiento_publicable', 'tanqueos_fuera_de_ventana',
+    'MIN_VENTANAS_PUBLICABLE', 'MIN_DIAS_PUBLICABLE',
     'CalculoImposible', 'SIN_DATO',
 ]

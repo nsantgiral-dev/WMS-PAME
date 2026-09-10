@@ -50,6 +50,8 @@ const ctx = {
 };
 ctx.globalThis = ctx;
 vm.createContext(ctx);
+vm.runInContext(fs.readFileSync(RUTASJS.replace(/[^/]+$/, 'util.js'), 'utf-8'),
+                ctx, { filename: 'util.js' });
 vm.runInContext(fs.readFileSync(RUTASJS, 'utf-8'), ctx, { filename: 'rutas.js' });
 
 if (typeof ctx._condBloqueNavegacion !== 'function') {

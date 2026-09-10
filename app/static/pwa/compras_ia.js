@@ -45,7 +45,7 @@ function _renderAcuerdos(el, data, calendario) {
     html += '<div style="font-size:12px;font-weight:700;color:var(--yellow);margin-bottom:6px;">Acuerdos por vencer</div>';
     for (const a of calendario.por_vencer) {
       html += `<div style="font-size:11px;color:var(--tx);margin-left:8px;">
-        ${a.proveedor_nombre || '?'} — vence ${a.vigencia_hasta} (${a.dias_para_vencer}d)
+        ${esc(a.proveedor_nombre || '?')} — vence ${esc(a.vigencia_hasta)} (${esc(a.dias_para_vencer)}d)
       </div>`;
     }
     html += '</div>';
@@ -57,7 +57,7 @@ function _renderAcuerdos(el, data, calendario) {
     html += '<div style="font-size:12px;font-weight:700;color:var(--blue);margin-bottom:6px;">Candidatos a acuerdo marco</div>';
     for (const c of calendario.candidatos_acuerdo.slice(0, 5)) {
       html += `<div style="font-size:11px;color:var(--tx);margin-left:8px;">
-        ${c.referencia} ${c.nombre} — cotizado ${c.cotizaciones_trimestre}x este trimestre sin acuerdo
+        ${esc(c.referencia)} ${esc(c.nombre)} — cotizado ${esc(c.cotizaciones_trimestre)}x este trimestre sin acuerdo
       </div>`;
     }
     html += '</div>';
@@ -73,10 +73,10 @@ function _renderAcuerdos(el, data, calendario) {
       const color = a.dias_para_vencer < 21 ? 'var(--yellow)' : 'var(--green)';
       html += `<div style="background:var(--bg-s);border:1px solid var(--brd);border-radius:6px;padding:8px 12px;display:flex;justify-content:space-between;align-items:center;">
         <div>
-          <span style="font-size:12px;font-weight:600;color:var(--tx);">${a.proveedor_nombre || '?'}</span>
+          <span style="font-size:12px;font-weight:600;color:var(--tx);">${esc(a.proveedor_nombre || '?')}</span>
           <span style="font-size:11px;color:var(--tx3);margin-left:8px;">$${Number(a.precio_unitario).toLocaleString('es-CO')}</span>
         </div>
-        <span style="font-size:10px;color:${color};">${a.dias_para_vencer}d restantes</span>
+        <span style="font-size:10px;color:${color};">${esc(a.dias_para_vencer)}d restantes</span>
       </div>`;
     }
     html += '</div>';
@@ -123,14 +123,14 @@ function _selectorContenedor(propuesta) {
 
   const botones = ARMADOR_TIPOS.map(t => {
     const activo = t.tipo === ARMADOR_TIPO;
-    return `<button onclick="compCargarArmador('${t.tipo}')"
+    return `<button onclick="compCargarArmador('${esc(t.tipo)}')"
       style="padding:6px 12px;border-radius:6px;cursor:pointer;font-size:12px;
              border:1px solid ${activo ? 'var(--pm)' : 'var(--brd)'};
              background:${activo ? 'var(--pm)' : 'transparent'};
              color:${activo ? '#fff' : 'var(--tx3)'};
              font-weight:${activo ? '700' : '400'};">
-      ${t.etiqueta}
-      <span style="opacity:.75;font-size:10px;"> ${t.cbm_util} CBM</span>
+      ${esc(t.etiqueta)}
+      <span style="opacity:.75;font-size:10px;"> ${esc(t.cbm_util)} CBM</span>
     </button>`;
   }).join('');
 
@@ -139,7 +139,7 @@ function _selectorContenedor(propuesta) {
     <div style="font-size:11px;font-weight:700;color:var(--tx3);margin-bottom:6px;">Contenedor a traer</div>
     <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">${botones}</div>
     ${sel ? `<div style="font-size:10px;color:var(--tx3);margin-top:6px;">
-      CBM útil ${sel.cbm_util} · objetivo de armado ${sel.cbm_objetivo} (90%) · payload ${sel.payload_kg.toLocaleString('es-CO')} kg
+      CBM útil ${esc(sel.cbm_util)} · objetivo de armado ${esc(sel.cbm_objetivo)} (90%) · payload ${sel.payload_kg.toLocaleString('es-CO')} kg
     </div>` : ''}
   </div>`;
 }
@@ -149,10 +149,10 @@ function _selectorContenedor(propuesta) {
 function _procedenciaSigmaLt(s) {
   if (!s) return '';
   if (s.fuente === 'MEDIDO') {
-    return `<span style="color:var(--green);"> · σ medido sobre ${s.n} contenedores</span>`;
+    return `<span style="color:var(--green);"> · σ medido sobre ${esc(s.n)} contenedores</span>`;
   }
   const faltan = Math.max(0, 6 - (s.n || 0));
-  return `<span style="color:var(--yellow);"> · σ=${s.sigma_lt}d supuesto, no medido`
+  return `<span style="color:var(--yellow);"> · σ=${esc(s.sigma_lt)}d supuesto, no medido`
        + ` — faltan ${faltan} contenedor(es) con fechas completas</span>`;
 }
 
@@ -173,20 +173,20 @@ function _tablaDeficitChina(rop) {
     <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px;margin-bottom:6px;">
       <span style="font-size:12px;font-weight:700;color:var(--tx);">Déficit China — qué pide entrar al contenedor</span>
       <span style="font-size:10px;color:var(--tx3);">
-        LT ${ch.lt_dias}d · σ ${ch.sigma_lt}d (${ch.sigma_lt_fuente}) · R ${ch.r_dias}d
+        LT ${esc(ch.lt_dias)}d · σ ${esc(ch.sigma_lt)}d (${esc(ch.sigma_lt_fuente)}) · R ${esc(ch.r_dias)}d
       </span>
     </div>`;
 
   if (d.skus_censurados) {
     html += `<div style="background:#F8717122;border:1px solid var(--red);border-radius:8px;padding:8px 10px;margin-bottom:8px;font-size:11px;color:var(--red);">
-      <strong>${d.skus_censurados} SKU(s) con demanda CENSURADA</strong> — sin StockDiario, el cálculo
+      <strong>${esc(d.skus_censurados)} SKU(s) con demanda CENSURADA</strong> — sin StockDiario, el cálculo
       subestima. Correr <em>Reconstruir stock diario</em> en Inventario › Datos antes de decidir.
     </div>`;
   }
   if (d.multiplicador && d.multiplicador !== 1) {
     html += `<div style="font-size:11px;color:var(--tx3);margin-bottom:8px;">
       Colchón: $${''}${(d.safety_stock_antes || 0).toLocaleString('es-CO')} u → ${(d.safety_stock_despues || 0).toLocaleString('es-CO')} u
-      (<strong>${d.multiplicador}×</strong> por la fórmula §M0.4)${d.topados_por_cobertura ? ` · ${d.topados_por_cobertura} topado(s) por cobertura máx.` : ''}
+      (<strong>${esc(d.multiplicador)}×</strong> por la fórmula §M0.4)${d.topados_por_cobertura ? ` · ${esc(d.topados_por_cobertura)} topado(s) por cobertura máx.` : ''}
     </div>`;
   }
 
@@ -214,20 +214,20 @@ function _tablaDeficitChina(rop) {
       ? 'CENSURADA · sin StockDiario'
       : `${it.dias_con_stock}d con stock · +${Math.round((fc - 1) * 100)}%`;
     html += `<tr style="border-bottom:1px solid var(--brd);text-align:right;">
-      <td style="text-align:left;padding:5px;color:var(--tx);font-weight:600;">${it.referencia}</td>
-      <td style="padding:5px;color:var(--tx);">${it.d_avg_diaria}/d
-        <span style="color:var(--tx3);font-size:10px;"> σ ${it.sigma_d_diaria}</span></td>
+      <td style="text-align:left;padding:5px;color:var(--tx);font-weight:600;">${esc(it.referencia)}</td>
+      <td style="padding:5px;color:var(--tx);">${esc(it.d_avg_diaria)}/d
+        <span style="color:var(--tx3);font-size:10px;"> σ ${esc(it.sigma_d_diaria)}</span></td>
       <td style="padding:5px;color:${procColor};font-size:10px;">${proc}</td>
-      <td style="padding:5px;color:var(--tx3);">${it.posicion}</td>
-      <td style="padding:5px;color:var(--tx);">${it.s_objetivo}${it.topado_por_cobertura ? ' <span style="color:var(--yellow);" title="topado por cobertura máxima">▲</span>' : ''}</td>
-      <td style="padding:5px;color:var(--pm);font-weight:700;">${it.deficit}</td>
-      <td style="padding:5px;color:var(--tx3);font-size:10px;">${it.ss_formula_anterior} → ${it.safety_stock}</td>
+      <td style="padding:5px;color:var(--tx3);">${esc(it.posicion)}</td>
+      <td style="padding:5px;color:var(--tx);">${esc(it.s_objetivo)}${it.topado_por_cobertura ? ' <span style="color:var(--yellow);" title="topado por cobertura máxima">▲</span>' : ''}</td>
+      <td style="padding:5px;color:var(--pm);font-weight:700;">${esc(it.deficit)}</td>
+      <td style="padding:5px;color:var(--tx3);font-size:10px;">${esc(it.ss_formula_anterior)} → ${esc(it.safety_stock)}</td>
     </tr>`;
   }
   html += `</tbody></table></div>
     <div style="font-size:10px;color:var(--tx3);margin-top:6px;">
-      ▲ = topado por cobertura máxima (${rop.cobertura_max_dias}d). σ_d: ${rop.estimador_sigma_d}.
-      Fórmula: ${rop.formula}
+      ▲ = topado por cobertura máxima (${esc(rop.cobertura_max_dias)}d). σ_d: ${esc(rop.estimador_sigma_d)}.
+      Fórmula: ${esc(rop.formula)}
     </div></div>`;
   return html;
 }
@@ -241,7 +241,7 @@ function _renderArmador(el, propuesta, g5, sigma, rop) {
     <span style="font-size:12px;font-weight:700;padding:4px 10px;border-radius:4px;background:${modoColor}22;color:${modoColor};">
       ${propuesta.modo === 'SHADOW' ? 'SHADOW — fichas al ' + propuesta.cobertura_fichas_pct + '%' : 'ACTIVO'}
     </span>
-    <span style="font-size:11px;color:var(--tx3);">Gatillo: ${propuesta.gatillo}</span>
+    <span style="font-size:11px;color:var(--tx3);">Gatillo: ${esc(propuesta.gatillo)}</span>
   </div>`;
 
   // Compuertas G5
@@ -252,7 +252,7 @@ function _renderArmador(el, propuesta, g5, sigma, rop) {
     const ok = v.ok;
     html += `<span style="font-size:10px;padding:3px 8px;border-radius:4px;
       background:${ok ? 'var(--green)22' : 'var(--red)22'};color:${ok ? 'var(--green)' : 'var(--red)'};">
-      ${ok ? '●' : '○'} ${v.nombre}
+      ${ok ? '●' : '○'} ${esc(v.nombre)}
     </span>`;
   }
   html += '</div>';
@@ -281,8 +281,8 @@ function _renderArmador(el, propuesta, g5, sigma, rop) {
   // Ventana de llegada
   if (propuesta.ventana_llegada) {
     html += `<div style="font-size:11px;color:var(--tx3);margin-bottom:12px;">
-      Ventana estimada: ${propuesta.ventana_llegada.desde} a ${propuesta.ventana_llegada.hasta}
-      <br>${propuesta.ventana_llegada.nota}${_procedenciaSigmaLt(sigma)}
+      Ventana estimada: ${esc(propuesta.ventana_llegada.desde)} a ${esc(propuesta.ventana_llegada.hasta)}
+      <br>${esc(propuesta.ventana_llegada.nota)}${_procedenciaSigmaLt(sigma)}
     </div>`;
   }
 
@@ -304,22 +304,22 @@ function _renderArmador(el, propuesta, g5, sigma, rop) {
       const margen = isRelleno && item.margen_por_cbm !== undefined
         ? `<div style="font-size:10px;color:${sup ? 'var(--yellow)' : 'var(--green)'};">
              ${item.margen_por_cbm_rango
-               ? `margen/CBM ${item.margen_por_cbm_rango[0]}–${item.margen_por_cbm_rango[1]}`
-               : `margen/CBM ${item.margen_por_cbm}`}
-             <span style="color:var(--tx3);">· ${item.margen_fuente || 'SIN_COSTO'}</span>
+               ? `margen/CBM ${esc(item.margen_por_cbm_rango[0])}–${esc(item.margen_por_cbm_rango[1])}`
+               : `margen/CBM ${esc(item.margen_por_cbm)}`}
+             <span style="color:var(--tx3);">· ${esc(item.margen_fuente || 'SIN_COSTO')}</span>
              ${sup ? '<b> · supuesto</b>' : ''}
            </div>`
         : '';
       html += `<div style="background:var(--bg-s);border:${border};border-radius:6px;padding:6px 10px;margin-bottom:3px;
         display:flex;justify-content:space-between;align-items:center;font-size:11px;">
         <div>
-          <span style="color:var(--tx);">${item.referencia}</span>
-          <span style="color:var(--tx3);margin-left:6px;">${item.cajas} cajas</span>
+          <span style="color:var(--tx);">${esc(item.referencia)}</span>
+          <span style="color:var(--tx3);margin-left:6px;">${esc(item.cajas)} cajas</span>
           ${isRelleno ? '<span style="color:var(--blue);margin-left:4px;font-size:9px;">RELLENO</span>' : ''}
           ${margen}
         </div>
         <div style="text-align:right;color:var(--tx3);">
-          ${item.cbm} CBM | ${item.peso_kg} kg
+          ${esc(item.cbm)} CBM | ${esc(item.peso_kg)} kg
         </div>
       </div>`;
     }
@@ -336,7 +336,7 @@ function _renderArmador(el, propuesta, g5, sigma, rop) {
     html += `<div style="margin-top:10px;padding:8px 10px;border-radius:6px;font-size:11px;
       background:var(--bg-s);border-left:3px solid ${grave ? 'var(--red)' : 'var(--yellow)'};">
       <b>Sobre qué datos se armó esto</b><br>
-      ${cob.con_costo}/${cob.total_skus} SKU con costo de alguna fuente
+      ${esc(cob.con_costo)}/${esc(cob.total_skus)} SKU con costo de alguna fuente
       ${sinCosto ? ` · <span style="color:var(--red)">${sinCosto} sin costo de ninguna</span>` : ''}
       ${supuestos ? ` · ${supuestos} con precio supuesto` : ''}
       ${grave ? '<br><b style="color:var(--red)">Más de la mitad del ranking no tiene costo: el orden no es una decisión informada.</b>' : ''}
@@ -346,7 +346,7 @@ function _renderArmador(el, propuesta, g5, sigma, rop) {
   // Excluidos
   if (propuesta.excluidos && propuesta.excluidos.length > 0) {
     html += `<div style="margin-top:10px;font-size:11px;color:var(--tx3);">
-      ${propuesta.excluidos.length} SKUs excluidos (sin ficha o estimado)
+      ${esc(propuesta.excluidos.length)} SKUs excluidos (sin ficha o estimado)
     </div>`;
   }
 
@@ -407,7 +407,7 @@ function _renderDeriva(el, data) {
     html += `<div style="color:var(--tx3);padding:20px;text-align:center;font-size:13px;
       background:var(--bg-s);border:1px dashed var(--brd);border-radius:8px;">
       <div style="font-weight:700;margin-bottom:4px;">No se comparó nada</div>
-      ${data.nota}</div>`;
+      ${esc(data.nota)}</div>`;
   } else if (n === 0) {
     html += '<div style="color:var(--green);padding:20px;text-align:center;font-size:13px;">Sin derivas detectadas — precios facturados coinciden con acuerdos.</div>';
   } else {
@@ -417,13 +417,13 @@ function _renderDeriva(el, data) {
       html += `<div style="background:var(--bg-s);border:1px solid var(--brd);border-radius:6px;padding:8px 12px;margin-bottom:4px;">
         <div style="display:flex;justify-content:space-between;align-items:center;">
           <div>
-            <span style="font-size:12px;color:var(--tx);">${d.referencia}</span>
-            <span style="font-size:10px;color:var(--tx3);margin-left:6px;">${d.nombre}</span>
+            <span style="font-size:12px;color:var(--tx);">${esc(d.referencia)}</span>
+            <span style="font-size:10px;color:var(--tx3);margin-left:6px;">${esc(d.nombre)}</span>
           </div>
-          <span style="font-size:13px;font-weight:700;color:${color};">${d.diferencia_pct > 0 ? '+' : ''}${d.diferencia_pct}%</span>
+          <span style="font-size:13px;font-weight:700;color:${color};">${d.diferencia_pct > 0 ? '+' : ''}${esc(d.diferencia_pct)}%</span>
         </div>
         <div style="font-size:10px;color:var(--tx3);margin-top:2px;">
-          Pactado: $${d.precio_pactado.toLocaleString('es-CO')} | Facturado: $${d.precio_facturado.toLocaleString('es-CO')} | ${d.proveedor_factura}
+          Pactado: $${d.precio_pactado.toLocaleString('es-CO')} | Facturado: $${d.precio_facturado.toLocaleString('es-CO')} | ${esc(d.proveedor_factura)}
         </div>
       </div>`;
     }
@@ -455,14 +455,14 @@ async function _cargarClasificacionSB(el) {
       html += _compKpi(info.cantidad, cuad, colors[cuad] || 'var(--tx)');
     }
     html += '</div>';
-    html += `<div style="font-size:11px;color:var(--tx3);margin-bottom:8px;">${r.total_clasificados} SKUs clasificados | ${r.estacionales_excluidos} estacionales excluidos</div>`;
+    html += `<div style="font-size:11px;color:var(--tx3);margin-bottom:8px;">${esc(r.total_clasificados)} SKUs clasificados | ${esc(r.estacionales_excluidos)} estacionales excluidos</div>`;
     if (r.clasificacion) {
       html += '<div style="max-height:400px;overflow-y:auto;">';
       for (const c of r.clasificacion.slice(0, 50)) {
         const colors = { SUAVE: 'var(--green)', ERRATICA: 'var(--yellow)', INTERMITENTE: 'var(--blue)', GRUMOSA: 'var(--red)' };
-        html += `<div style="background:var(--bg-s);border-left:3px solid ${colors[c.cuadrante] || 'var(--brd)'};padding:6px 10px;margin-bottom:2px;font-size:11px;display:flex;justify-content:space-between;">
-          <span style="color:var(--tx);">${c.referencia} <span style="color:var(--tx3);">${c.cuadrante}</span></span>
-          <span style="color:var(--tx3);">ADI=${c.adi} CV2=${c.cv2} | ${c.demanda_total} uds</span>
+        html += `<div style="background:var(--bg-s);border-left:3px solid ${esc(colors[c.cuadrante] || 'var(--brd)')};padding:6px 10px;margin-bottom:2px;font-size:11px;display:flex;justify-content:space-between;">
+          <span style="color:var(--tx);">${esc(c.referencia)} <span style="color:var(--tx3);">${esc(c.cuadrante)}</span></span>
+          <span style="color:var(--tx3);">ADI=${esc(c.adi)} CV2=${esc(c.cv2)} | ${esc(c.demanda_total)} uds</span>
         </div>`;
       }
       html += '</div>';
@@ -489,19 +489,19 @@ async function _cargarTSB(el) {
         <span style="font-weight:400;font-size:10px;color:var(--tx3);"> — no es la compuerta</span>
       </div>
       <div style="font-size:11px;color:var(--tx3);line-height:1.7;">
-        ${b.evaluados || 0} de ${b.n_minimo || 100} SKUs mínimos ·
-        gana en <strong>${b.porcentaje_tsb_gana || 0}%</strong>
+        ${esc(b.evaluados || 0)} de ${b.n_minimo || 100} SKUs mínimos ·
+        gana en <strong>${esc(b.porcentaje_tsb_gana || 0)}%</strong>
         (IC95 ${(b.ic95_victorias || [0, 0])[0]}–${(b.ic95_victorias || [0, 0])[1]}%)
-        · ponderado por valor: <strong>${b.porcentaje_ponderado_por_valor || 0}%</strong>
+        · ponderado por valor: <strong>${esc(b.porcentaje_ponderado_por_valor || 0)}%</strong>
         ${b.azar_descartado ? '' : '<span style="color:var(--yellow);"> · azar NO descartado</span>'}
       </div>
-      <div style="font-size:11px;color:var(--tx3);margin-top:6px;">${b._por_que_no || ''}</div>
+      <div style="font-size:11px;color:var(--tx3);margin-top:6px;">${esc(b._por_que_no || '')}</div>
       <div style="font-size:11px;color:var(--yellow);margin-top:6px;">
-        <strong>Compuerta real:</strong> ${b.compuerta_real || ''}
+        <strong>Compuerta real:</strong> ${esc(b.compuerta_real || '')}
       </div>
-      <div style="font-size:10px;color:var(--tx3);margin-top:4px;">${r.sigma_d_del_rop || ''}</div>
+      <div style="font-size:10px;color:var(--tx3);margin-top:4px;">${esc(r.sigma_d_del_rop || '')}</div>
       <div style="font-size:10px;color:var(--tx3);margin-top:6px;">
-        ${b.metrica || ''}<br>${r.demanda || ''}
+        ${esc(b.metrica || '')}<br>${esc(r.demanda || '')}
       </div>
     </div>`;
 
@@ -529,13 +529,13 @@ async function _cargarTSB(el) {
         const gana = p.tsb_mejor === true;
         html += `<tr style="border-bottom:1px solid var(--brd);text-align:right;">
           <td style="text-align:left;padding:5px;color:var(--tx);font-weight:600;">
-            ${gana ? '<span style="color:var(--green);">● </span>' : ''}${p.referencia}
+            ${gana ? '<span style="color:var(--green);">● </span>' : ''}${esc(p.referencia)}
           </td>
-          <td style="padding:5px;color:var(--tx);">${p.tsb_semanal}</td>
-          <td style="padding:5px;color:var(--tx3);">${p.media_movil_8sem}</td>
+          <td style="padding:5px;color:var(--tx);">${esc(p.tsb_semanal)}</td>
+          <td style="padding:5px;color:var(--tx3);">${esc(p.media_movil_8sem)}</td>
           <td style="padding:5px;color:${gana ? 'var(--green)' : 'var(--tx3)'};font-weight:${gana ? '700' : '400'};">${p.mase_tsb ?? '—'}</td>
           <td style="padding:5px;color:var(--tx3);">${p.mase_mm8 ?? '—'}</td>
-          <td style="padding:5px;color:var(--tx3);">${p.semanas} (${p.semanas_test} test)</td>
+          <td style="padding:5px;color:var(--tx3);">${esc(p.semanas)} (${esc(p.semanas_test)} test)</td>
         </tr>`;
       }
       html += `</tbody></table></div>
@@ -622,7 +622,7 @@ function _renderNacional(el, rop) {
 
   let html = `<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px;margin-bottom:10px;">
     <span style="font-size:13px;font-weight:700;color:var(--tx);">Reposición nacional</span>
-    <span style="font-size:10px;color:var(--tx3);">LT ${nac.lt_dias}d · σ_LT ${nac.sigma_lt}d · revisión continua (R=0)</span>
+    <span style="font-size:10px;color:var(--tx3);">LT ${esc(nac.lt_dias)}d · σ_LT ${esc(nac.sigma_lt)}d · revisión continua (R=0)</span>
   </div>`;
 
   html += `<div style="display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-bottom:12px;">
@@ -632,7 +632,7 @@ function _renderNacional(el, rop) {
 
   if (d.skus_censurados) {
     html += `<div style="background:#F8717122;border:1px solid var(--red);border-radius:8px;padding:8px 10px;margin-bottom:10px;font-size:11px;color:var(--red);">
-      <strong>${d.skus_censurados} SKU(s) con demanda CENSURADA</strong> — sin StockDiario el cálculo
+      <strong>${esc(d.skus_censurados)} SKU(s) con demanda CENSURADA</strong> — sin StockDiario el cálculo
       subestima. Correr <em>Reconstruir stock diario</em> en Inventario › Datos.
     </div>`;
   }
@@ -663,24 +663,24 @@ function _renderNacional(el, rop) {
     html += `<tr style="border-bottom:1px solid var(--brd);text-align:right;
       background:${it.bajo_rop ? '#F8717111' : 'transparent'};">
       <td style="text-align:left;padding:5px;color:var(--tx);font-weight:600;">
-        ${it.bajo_rop ? '<span style="color:var(--red);">● </span>' : ''}${it.referencia}
+        ${it.bajo_rop ? '<span style="color:var(--red);">● </span>' : ''}${esc(it.referencia)}
       </td>
-      <td style="padding:5px;color:var(--tx);">${it.d_avg_diaria}/d
-        <span style="color:var(--tx3);font-size:10px;"> σ ${it.sigma_d_diaria}</span></td>
+      <td style="padding:5px;color:var(--tx);">${esc(it.d_avg_diaria)}/d
+        <span style="color:var(--tx3);font-size:10px;"> σ ${esc(it.sigma_d_diaria)}</span></td>
       <td style="padding:5px;color:${procColor};font-size:10px;">
-        <span onclick="repoVerEvidencia('${it.referencia}', 'rep-ev-${i}')"
+        <span onclick="repoVerEvidencia('${esc(it.referencia)}', 'rep-ev-${i}')"
               title="Ver qué días estuvo agotado — la evidencia de esta corrección"
               style="cursor:pointer;text-decoration:underline dotted;">${proc}</span></td>
-      <td style="padding:5px;color:var(--tx3);">${it.stock_actual}</td>
-      <td style="padding:5px;color:var(--tx);font-weight:700;">${it.rop}</td>
-      <td style="padding:5px;color:${it.cobertura_dias < 7 ? 'var(--red)' : 'var(--tx3)'};">${it.cobertura_dias}d</td>
-      <td style="padding:5px;color:var(--tx3);font-size:10px;">${it.ss_formula_anterior} → ${it.safety_stock}</td>
+      <td style="padding:5px;color:var(--tx3);">${esc(it.stock_actual)}</td>
+      <td style="padding:5px;color:var(--tx);font-weight:700;">${esc(it.rop)}</td>
+      <td style="padding:5px;color:${it.cobertura_dias < 7 ? 'var(--red)' : 'var(--tx3)'};">${esc(it.cobertura_dias)}d</td>
+      <td style="padding:5px;color:var(--tx3);font-size:10px;">${esc(it.ss_formula_anterior)} → ${esc(it.safety_stock)}</td>
     </tr>
     <tr id="rep-ev-${i}" data-abierto="0"></tr>`;
   });
   html += `</tbody></table></div>
     <div style="font-size:10px;color:var(--tx3);margin-top:8px;line-height:1.6;">
-      ● = bajo punto de reorden. σ_d: ${rop.estimador_sigma_d}.<br>
+      ● = bajo punto de reorden. σ_d: ${esc(rop.estimador_sigma_d)}.<br>
       Provisional: la pantalla definitiva fusiona esto con bloqueos y precio de acuerdo vigente —
       se diseña con el Dueño de Compras, porque nadie ha ejecutado ese flujo todavía.
     </div>`;
@@ -719,7 +719,7 @@ async function preciosBuscarProducto() {
     _PRECIOS_PRODUCTO = prod;
     await preciosRenderComparador();
   } catch (e) {
-    el.innerHTML = `<p style="color:var(--red);font-size:12px;">${e.message}</p>`;
+    el.innerHTML = `<p style="color:var(--red);font-size:12px;">${esc(e.message)}</p>`;
   }
 }
 
@@ -737,12 +737,12 @@ async function preciosRenderComparador() {
   if (Array.isArray(provs)) _PRECIOS_PROVEEDORES = provs;
 
   const filas = cmp._error
-    ? `<p style="color:var(--red);font-size:12px;">${cmp._error}</p>`
+    ? `<p style="color:var(--red);font-size:12px;">${esc(cmp._error)}</p>`
     : ((cmp.precios || []).length
         ? (cmp.precios || []).map(x => `
             <div class="tabla-fila">
               <span class="tabla-nombre" style="font-size:12px;">
-                ${x.proveedor}
+                ${esc(x.proveedor)}
                 <span style="color:var(--tx3);"> · ${x.fuente || x.tipo || ''}</span>
               </span>
               <span style="font-size:13px;font-weight:700;">$${(x.precio || 0).toLocaleString('es-CO')}</span>
@@ -753,7 +753,7 @@ async function preciosRenderComparador() {
 
   el.innerHTML = `
     <div class="tabla-card">
-      <div class="tabla-titulo">${p.codigo_siesa} · ${p.nombre || ''}</div>
+      <div class="tabla-titulo">${esc(p.codigo_siesa)} · ${esc(p.nombre || '')}</div>
       ${filas}
       <hr style="border-color:var(--brd);margin:12px 0;">
       <div style="font-size:12px;font-weight:700;margin-bottom:6px;">Registrar una cotización</div>
@@ -761,7 +761,7 @@ async function preciosRenderComparador() {
         <select id="precio-prov" style="padding:6px;border-radius:6px;border:1px solid var(--brd);background:var(--bg);color:var(--tx);font-size:12px;">
           <option value="">— proveedor —</option>
           ${(_PRECIOS_PROVEEDORES || []).map(v =>
-            `<option value="${v.id}">${v.nombre}</option>`).join('')}
+            `<option value="${esc(v.id)}">${esc(v.nombre)}</option>`).join('')}
         </select>
         <input id="precio-valor" type="number" step="0.01" placeholder="precio unitario"
                style="padding:6px;border-radius:6px;border:1px solid var(--brd);background:var(--bg);color:var(--tx);font-size:12px;">
@@ -843,7 +843,7 @@ async function modelosSemaforoKardex() {
   } catch (e) {
     // No se puede afirmar que sea confiable si no se pudo preguntar.
     el.innerHTML = `<div style="border:1px solid var(--yellow);border-radius:8px;padding:8px 10px;margin-bottom:10px;font-size:11px;color:var(--yellow);">
-      No se pudo verificar la completitud del kardex (${e.message}). Los modelos
+      No se pudo verificar la completitud del kardex (${esc(e.message)}). Los modelos
       de abajo pueden estar calculados sobre una serie incompleta.</div>`;
     return;
   }
@@ -889,7 +889,7 @@ async function repoVerEvidencia(referencia, idFila) {
   try {
     d = await get('/api/kardex/stock-diario?referencia=' + encodeURIComponent(referencia));
   } catch (e) {
-    fila.innerHTML = `<td colspan="7" style="padding:8px;color:var(--red);font-size:11px;">${e.message}</td>`;
+    fila.innerHTML = `<td colspan="7" style="padding:8px;color:var(--red);font-size:11px;">${esc(e.message)}</td>`;
     return;
   }
 
@@ -942,12 +942,12 @@ async function repoVerEvidencia(referencia, idFila) {
   fila.innerHTML = `<td colspan="7" style="padding:10px;background:var(--bg-s);">
     <div style="font-size:11px;color:var(--tx2);line-height:1.7;">
       <b style="color:var(--tx);">${referencia}</b> —
-      ${dias.length} día-bodega registrado(s) ·
+      ${esc(dias.length)} día-bodega registrado(s) ·
       ${fechas.length ? _d(fechas[0]) + ' → ' + _d(fechas[fechas.length - 1]) : '—'} ·
       bodega(s): ${bodegas.join(', ')}<br>
       <span style="color:${sinStock.length ? 'var(--red)' : 'var(--green)'};">
-        ${sinStock.length} día-bodega SIN stock</span>
-      ${tramos.length ? ` en ${tramos.length} racha(s)` : ''}
+        ${esc(sinStock.length)} día-bodega SIN stock</span>
+      ${tramos.length ? ` en ${esc(tramos.length)} racha(s)` : ''}
       ${truncado ? `<div style="color:var(--yellow);margin-top:4px;">
         La consulta devuelve máximo 365 filas y llegó al tope: con varias bodegas
         esto <b>no cubre el año entero</b>. Lo que ves es la parte más reciente,
@@ -955,7 +955,7 @@ async function repoVerEvidencia(referencia, idFila) {
     </div>
     ${tramos.length ? `<div style="margin-top:8px;display:flex;flex-wrap:wrap;gap:6px;">
       ${tramos.slice(0, 12).map(t => `<span style="background:#F8717122;border:1px solid var(--red);border-radius:6px;padding:3px 8px;font-size:10px;color:var(--red);">
-        ${t.bodega}: ${_d(t.desde)}${t.desde === t.hasta ? '' : '–' + _d(t.hasta)}
+        ${esc(t.bodega)}: ${_d(t.desde)}${t.desde === t.hasta ? '' : '–' + _d(t.hasta)}
         <b>(${_largo(t)}d)</b></span>`).join('')}
       ${tramos.length > 12 ? `<span style="font-size:10px;color:var(--tx3);align-self:center;">+${tramos.length - 12} racha(s) más</span>` : ''}
     </div>` : `<div style="margin-top:6px;font-size:11px;color:var(--green);">

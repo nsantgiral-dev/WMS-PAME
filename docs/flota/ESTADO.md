@@ -1953,6 +1953,280 @@ pueden saber:
 3. **Si el ×10 marca operación sana.** El umbral está justificado y no medido:
    el primer mes de lecturas reales es el que lo confirma o lo corrige.
 
-Y una cuarta que no depende de nadie: **la migración no está encadenada**, así
-que en producción esta columna todavía no existe. Hasta que el CTO la encadene,
-todo esto corre solo contra SQLite.
+~~Y una cuarta que no depende de nadie: la migración no está encadenada.~~
+**RESUELTO el 2026-09-02**: `m019flotaconfianza` está en la cadena entre m018 y
+m020, verificada contra PostgreSQL real ida y vuelta y con el backfill corriendo
+sobre filas sembradas (3 sin foto → `dudosa` con motivo, 1 con foto →
+`declarada`).
+
+> **La línea tachada costó un razonamiento el 2026-09-03.** Un análisis del tab
+> de analíticas la citó como hecho vigente para concluir que la columna no
+> existe en producción. Su conclusión de fondo era correcta por otra vía —sin
+> fotos, los dos extremos de cualquier tramo nacen `dudosa` y el CPK sale
+> `sin_dato`—, pero **una deuda que sobrevive a su resolución no es un detalle
+> de prolijidad: es una premisa falsa que alguien va a usar.** Es la cuarta vez
+> que pasa en este documento. Se tacha en vez de borrarse para que el episodio
+> quede.
+
+---
+
+## La interfaz contra el trabajo que dice servir (2026-09-09)
+
+Tres defectos del tab de flota, encontrados **leyendo la pantalla renderizada
+contra los procedimientos de los roles**, no el código contra sí mismo. Los tres
+tienen la misma forma: la superficie estaba construida y probada, y lo que
+faltaba era la correspondencia con el trabajo de alguien.
+
+### 1. El panel que el CPK prometía por escrito y no existía
+
+`flotaAnCPK` decía **en pantalla**: *«Para «¿qué camión se come la plata?» está
+el panel de pesos por mes»*. Un grep del repo entero devolvía dos apariciones de
+la frase: la promesa, y `gestion-admin.md:81`, que manda al `admin` a esa misma
+pregunta una vez al mes. **Cero implementaciones.**
+
+La única decisión de plata del módulo —asignada explícitamente a `admin`, no a
+control de flota— era la única sin pantalla. Y el dato ya viajaba:
+`cpk_mes[].pesos` estaba en el payload y nadie lo pintaba.
+
+**`flotaAnPesosMes`** ordena de mayor a menor, que es la comparación entre
+vehículos que el canon **sí** autoriza (§3 prohíbe la del CPK porque mediría la
+composición del parque; los pesos son plata que salió). Y es el primer consumidor
+de `hubo_gastos`, que viajaba desde el 2026-09-04 sin que ninguna pantalla lo
+distinguiera:
+
+| `hubo_gastos` | `pesos` | Cómo se pinta |
+|---|---|---|
+| `false` | 0 | **Fuera del orden**, en su propio grupo. Metido en la lista saldría de último, o sea coronado como el camión más barato de la flota — la lectura exacta que el canon §6 existe para impedir |
+| `true` | 0 | `$0 · ningún gasto cayó en el mes`, dentro del orden. Es un cero medido |
+
+El total declara siempre sobre cuántos vehículos se calculó. Un total sobre 2 de
+6 que no lo dice es el número que alguien lleva a una reunión creyendo que es la
+flota entera.
+
+### 2. Yesid no aprobaba nada, salvo en el código
+
+`especialista-control-flota.md:38` decía —y su pie decía *«verificado contra
+`flota/api/_permisos.py`», 2026-08-04*—:
+
+> El procedimiento FLO-PR-01 dice que ves el tablero y escalás, pero **no
+> aprobás órdenes de trabajo ni gastos**.
+
+`MAESTROS_FLOTA` lo dejaba **registrar gastos, abrir, cerrar, anular y facturar
+órdenes de trabajo, y cerrar, descartar y aplazar hallazgos**. Y `flota.js` no
+filtraba un solo botón por rol: los nueve del expediente se pintaban para todos.
+
+**Nadie escribió nunca que Yesid pudiera.** Los tres motivos anotados en este
+documento para elegir esa tupla —líneas 1256, 1257 y 1502— dicen los tres lo
+mismo: *«no el conductor»*. La tupla se eligió por su borde inferior; el superior
+vino gratis. Cuando se creó gateaba dos endpoints —ficha y documentos— y su
+nombre los describía; al 2026-09-09 gateaba **25 pares ruta×método**, contados
+contra `url_map` el mismo día. (El primer borrador de esta entrada decía
+«veintiuno», de memoria. Se contó antes de publicarlo — regla 13.)
+
+> **Verificar contra el nombre de una tupla no es verificar.** El pie del
+> documento decía «verificado» y lo estaba —el 2026-08-04—. Taller (2026-09-01) y
+> gastos (2026-09-02) colgaron de la misma tupla sin que nadie se preguntara por
+> este borde. Hay que verificar contra **lo que la tupla gatea hoy**, y por eso
+> el pie nuevo apunta a la matriz rol × endpoint, que lo ejerce por HTTP.
+
+Y el motivo que no se puede negociar, que es **la regla 11 un nivel más arriba**:
+`dias_hallazgo_abierto` y `hallazgos_vencidos` son dos de las cinco señales con
+las que la ficha dice que se mide al rol. La regla 11 pregunta cómo maximiza una
+métrica quien no quiere hacer el trabajo; la respuesta era de un clic —
+«Reparado», «No era nada», «Aplazar 7 días»— y el registro quedaba impecable.
+**Quien es medido por un contador no puede tener el botón que lo baja.**
+
+**`DECIDE_FLOTA = tuple(Roles.GESTION)`**, y la frontera es *registrar* contra
+*decidir*:
+
+| Sigue siendo suyo (registro) | Ya no (decisión) |
+|---|---|
+| Ficha, documentos, odómetro y su verificación | Abrir una orden de trabajo |
+| Registrar un gasto y la factura de una reparación | Cerrar o anular una orden |
+| Registrar qué se hizo en la visita al taller | Cerrar, descartar o aplazar un daño |
+| Reportar un daño; preventivo; llantas | |
+
+Costo operativo medido: **cero hoy** — no hay una sola orden de trabajo ni un
+solo hallazgo en la base. El costo futuro es real y es el precio de la regla:
+para mandar un camión al taller, escala. Que es lo que su ficha dice que hace.
+
+En la pantalla, los gestos negados no se esconden a secas: dicen a quién le toca.
+Un formulario que desaparece sin explicación es indistinguible de uno que se
+rompió.
+
+### 3. Cinco señales, y cuatro sin placa o al fondo
+
+El criterio 1 de `flota_analitica.js` dice que **no hay un panel que muestre un
+solo número**. Cinco lo incumplían, y dos de esos cinco son señales del rol:
+«2 documentos vencidos» no dice a cuál camión, y *«persigue lo vencido»* es la
+definición escrita del trabajo. Había que abrir los seis expedientes.
+
+Dos enumeraciones nuevas —`documentos_por_vehiculo` y `custodias_por_vehiculo`—
+y **los cinco contadores derivan de ellas**. No es prolijidad: el predicado de
+«sin foto completa» tiene cuatro entradas (ficha, tipo, ángulos, posiciones de
+llanta) y escrito dos veces diverge sin que nada se ponga rojo, porque los dos
+siguen devolviendo un entero plausible. Una política, una función.
+
+Y el orden: cuatro de las cinco señales caían en los paneles 11, 13 y 14 de 14,
+mientras arriba iban seis paneles de `sin dato`. **Las dos cosas eran ciertas y
+ninguna estaba mal** — el orden de abajo es de *dependencia* (cada panel dice qué
+gesto enciende el siguiente) y es un orden para quien construye. Faltaba el de
+quien opera, y por eso el arreglo es un índice arriba —«El recorrido de la
+semana»— y no un reordenamiento que habría roto el argumento del otro.
+
+### Lo que se aprendió construyéndolo, y no planeándolo
+
+- **Un memo por instancia es un cache igual.** Los cinco contadores derivados
+  invitaban a memoizar la lista. Tres tests de `test_medicion_t1.py` —que miden,
+  escriben y vuelven a medir sobre la misma instancia— lo cazaron en el primer
+  intento: devolvía el estado de antes de la última escritura. **Un medidor que
+  cachea deja de medir y sigue contestando 200.** Se quitó — y en la revisión se
+  atacó la causa en vez del síntoma (ver abajo).
+- **Una justificación puede ser falsa aunque el código sea correcto.** El
+  docstring de `documentos_por_vehiculo` afirmaba que un papel puede estar
+  vencido y no encontrado a la vez. **No puede**: lo prohíbe el CHECK
+  `ck_flota_doc_estado_coherente`. El código estaba bien y el motivo escrito era
+  inventado — que es peor que no escribirlo, porque el siguiente lo va a creer.
+  Corregido, y la disyunción quedó como test contra la base en vez de como
+  supuesto de un comentario.
+- **El trinquete de degradación silenciosa atrapó código escrito el mismo día**:
+  un `placas.get(id, f'#{id}')` habría publicado `#12` con cara de placa donde
+  hay una FK rota, y el panel habría mandado a buscar un camión inexistente.
+- **Un test que afirma lo contrario de la política nueva no se borra.**
+  `test_control_de_flota_SI_cierra` existía como la mitad positiva —«sin esto, un
+  `exige()` que rechazara a todo el mundo pasaría los tres tests de arriba»—.
+  Borrarlo habría dejado esa mitad sin nadie. Cambió de actor y conservó su
+  motivo escrito.
+
+### Verificación
+
+- **5235 tests en verde**, cero fallos (5210 tras el cambio, +25 entre la revisión y la barrida de escapado). Los 51 errores son los de siempre:
+  `FLOTA_TEST_PG_URL` sin definir, que este repo hace fallar ruidosamente en vez
+  de saltar.
+- La matriz rol × endpoint **ejerce el cambio por HTTP en las dos direcciones**
+  sin una línea de test nueva: lee la tupla del closure vivo. Recuento contra
+  `url_map` el 2026-09-09: **6** pares ruta×método bajo `DECIDE_FLOTA` (4 roles),
+  **25** bajo `MAESTROS_FLOTA` (5 roles), 12 con otras tuplas o guard propio —
+  43 en total bajo `/flota`.
+- El trinquete `TestLaUIYElBackendDicenLoMismo` se probó por mutación: ensanchar
+  la lista del JS a `control_flota` lo pone rojo en dos tests, y restaurarlo lo
+  devuelve a verde.
+- Los tres paneles nuevos y los dos enumerados se **renderizaron con el arnés de
+  Node** contra payloads con datos y vacíos, y las pantallas de taller y daños se
+  renderizaron **con los dos roles** para ver las dos versiones.
+
+### La revisión de lo anterior, el mismo día
+
+Repasado contra la pantalla y contra los procedimientos, no contra sí mismo.
+Cinco hallazgos: tres de este mismo cambio, dos anteriores.
+
+**El índice restaba dos denominadores distintos.** «Fichas técnicas sin
+completar» salía de `vehiculos_activos - fichas_completas`. Los dos números
+existen y el health los publica, pero **no comparten denominador**:
+`fichas_completas` cuenta fichas completas de TODOS los vehículos y
+`vehiculos_activos` solo los activos. Un vehículo dado de baja con la ficha
+completa hacía la resta negativa: *«-1 fichas técnicas sin completar»*. Es el
+defecto exacto contra el que advierte el comentario de `cpk_mes` en
+`medicion.py` —tres denominadores que se calculan distinto—, cometido a tres
+semanas de haberlo leído. Ahora se cuenta de `cobertura_por_vehiculo`, la misma
+lista que pinta el panel al que el renglón manda. Regresión verificada por
+mutación: devolver la resta lo pone rojo.
+
+**Y recalculaba en el cliente un número que ya viajaba.** «Daños que pasaron su
+fecha límite» filtraba `dias_hallazgo_abierto.casos` en JavaScript teniendo
+`n_vencidos` en el mismo payload, calculado por el dominio. Daba el mismo
+número, pero **solo por accidente**: los casos que no entran al indicador no
+traen la clave `vencido`, así que el filtro los descartaba sin saberlo. Dos
+implementaciones del mismo número, una apoyada en una omisión del serializador.
+
+**El N+1, medido y arreglado sin cachear.** `custodias_por_vehiculo` hacía un
+COUNT por custodia y **corre 3 veces por petición** (`documentos_por_vehiculo`,
+4). Medido sobre SQLite con 6 vehículos, health completo de 49 campos:
+
+| Custodias | Antes | Después |
+|---|---|---|
+| 26 (producción hoy) | 61 ms | 53 ms |
+| 200 | 128 ms | 55 ms |
+| 1.000 | 465 ms | 113 ms |
+| 4.400 (≈ un año de uso) | ~2 s | **244 ms** |
+
+Seis vehículos con dos turnos diarios producen ~4.400 custodias al año. Se
+reemplazaron los COUNT por una consulta agrupada; **no se volvió al cache**, que
+era el síntoma. `TestLaEnumeracionNoEscalaEnConsultas` cuenta sentencias SQL y
+no milisegundos —un umbral de tiempo en CI mide la máquina— y se verificó por
+mutación: devolver el N+1 lo pone rojo.
+
+**Un cuarto, ajeno y latente, cerrado igual.** `flotaAnInspeccion` hacía
+`h.segundos_llenado_30d || {}`, y con el campo en `null` publicaba *«Mediana de
+llenado: undefineds sobre undefined inspección(es)»* — basura con autoridad, que
+es peor que un hueco. **No era alcanzable**, y por una coincidencia:
+`segundos_llenado_30d` y `vehiculos_sin_inspeccion_hoy` guardan la misma tabla,
+así que el guard del panel cortaba antes. Eso es un acuerdo entre dos campos, no
+un invariante — el día que uno gane una dependencia que el otro no tiene, se
+publica. Los dos tests que existían no lo veían: uno corre sobre un payload
+completo y el otro sobre uno vacío, y el defecto vive **entre** los dos mundos.
+Se cerró, y el test nuevo barre los **diez campos estructurados** del payload
+poniéndolos en `null` de a uno contra un health por lo demás poblado.
+
+**Y la que quedaba: el texto del conductor ejecutándose en la pantalla de
+gestión.** Se cerró el mismo día. Está contado acá porque nació de este módulo,
+pero **el arreglo es de toda la PWA** y la regla vive en `CLAUDE.md`.
+
+`POST /flota/custodia/traspaso` es `LECTURA_FLOTA`: el conductor escribe el
+motivo de un cierre forzado, y ese texto lo pinta el panel de Custodia, que solo
+ven gestión y control de flota. Del rol con menos permisos del módulo a la
+sesión de los que más tienen.
+
+Se descartaron los dos atajos, y por qué importa:
+
+| Atajo | Por qué no |
+|---|---|
+| Sanear el HTML ya armado | Esta app pone sus propios `onclick=` en la misma cadena que los datos. Después de concatenar no se distingue el marcado propio del inyectado: un saneador que borre manejadores inline mata la interfaz, y uno que los respete deja pasar el ataque |
+| Escapar la respuesta en `get()` | Corrompe el dato. Un texto que se edita y se reenvía viajaría con `&lt;` adentro y **se guardaría así**. El escape pertenece al sitio donde el dato se vuelve HTML |
+
+Queda `esc()` en `app/static/pwa/util.js` —archivo propio y no dentro de
+`app.js` porque los arneses de Node stubbean lo que viene de ahí, y un `esc`
+stubbeado convierte todo test de escapado en un test del stub— aplicado a
+**1.265 interpolaciones en 19 archivos**.
+
+### Lo que la barrida enseñó, y no estaba en el plan
+
+- **El transformador se creía completo y no lo era.** Reportó «194 envueltas» y
+  el ataque real **pasaba entero**: el motivo vive en una plantilla anidada
+  dentro de un ternario, y el barrido solo miraba el nivel de arriba. Se
+  descubrió **ejecutando el render con una carga real**, no contando cambios.
+  Un número de cambios aplicados no es una medida de cobertura.
+- **El escáner se desincronizaba con los literales de expresión regular.**
+  `replace(/'/g, "…")` se leía como el inicio de una cadena y el escáner perdía
+  el hilo del resto del archivo: `reposicion.js`, `tienda.js` y `traslados.js`
+  reportaron **cero** interpolaciones. No es que no tuvieran — es que dejó de
+  verlas, y el cero se lee igual que «acá no hay nada que hacer». Otras 110
+  aparecieron al arreglarlo.
+- **Escapar en la variable compartida habría roto un `onclick`.** En
+  `reposicion.js`, `skuLabel` va a dos sitios: al HTML y a un
+  `onclick="fn('${...}')"` que hace su propio escapado de comillas. Envolver la
+  variable dejaba el segundo sin comillas que escapar y rompía el gesto. Se
+  escapó en el sumidero, no en la fuente.
+
+### Lo que NO cubre, medido y declarado
+
+| Hueco | Sitios | Por qué queda |
+|---|---|---|
+| HTML armado por concatenación con `+` | 75 | El barrido solo entiende literales de plantilla |
+| Dato dentro de JS dentro de un atributo (`onclick="fn('${x}')"`) | 206 | **`esc` no protege ahí**: el navegador decodifica las entidades del atributo antes de que el JS corra, así que un `&#39;` vuelve a ser `'` y rompe la cadena igual. No empeora (sin `esc` rompía idéntico) pero tampoco arregla — necesitan pasar un id y buscar el dato, no el texto |
+| Identificadores sueltos (`${cuerpo}`, `${filas}`) | — | Pueden ser marcado ya construido; envolverlos rompe la pantalla. Se revisan a mano |
+
+Los tres están en el docstring del guard, no solo acá: **una limitación que solo
+vive en un documento se lee como cobertura el día que alguien mire el test.**
+
+### Lo que sigue sin ejercerse
+
+Todo. **Nadie ha registrado un gasto real, ni abierto una orden, ni reportado un
+daño.** Los tres paneles nuevos están hoy en «esperando el primer registro», que
+es exactamente lo que este tab existe para mostrar — y el motivo por el que la
+regla 12 sigue pendiente sobre las cinco superficies anteriores.
+
+`documentos_por_vehiculo` y `custodias_por_vehiculo` **sí** tienen con qué
+encenderse hoy: hay documentos y custodias en producción. Son las dos primeras
+enumeraciones del tab que van a mostrar filas reales sin que nadie haga nada
+nuevo, y por eso son las que primero van a decir si el formato sirve.

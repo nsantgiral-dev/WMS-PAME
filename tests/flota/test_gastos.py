@@ -916,7 +916,12 @@ class TestElHealthCuentaLaPlata:
         d = client.get('/flota/health', headers=_auth(mundo['t_flota'])).get_json()
         assert d['gastos_sin_documento'] == 0
         assert d['tanqueos_sobre_capacidad'] == 0
-        assert d['cpk_mes'] == []
+        # `cpk_mes` ya NO es `[]` sin gastos: enumera los vehículos activos con
+        # su motivo. Un `[]` es indistinguible de «no hay nada que reportar», y
+        # con cero filas en `flota_gasto` —el estado de hoy— escondía el
+        # tablero entero en vez de esconder renglones vacíos.
+        assert d['cpk_mes'] != []
+        assert all(f['cpk'] == 'sin_dato' and f['motivo'] for f in d['cpk_mes'])
 
     def test_cuenta_los_gastos_sin_documento_y_NO_los_que_lo_tienen(
             self, app, db, mundo):
@@ -955,17 +960,170 @@ class TestElHealthCuentaLaPlata:
         assert medidor.tanqueos_sobre_capacidad() == 0
         assert medidor.tanqueos_sin_capacidad_declarada() == 1
 
-    def test_el_cpk_del_mes_sale_por_vehiculo_y_solo_de_los_que_tienen_gastos(
+    def test_el_cpk_del_mes_sale_por_vehiculo_y_de_TODOS_los_activos(
             self, app, db, mundo):
         """Una lista y no un promedio de flota: el canon §3 dice que el CPK no
-        compara vehículos. Y los vehículos sin un peso registrado **no salen con
-        cero**: no salen."""
+        compara vehículos.
+
+        Y salen **todos** los activos, no solo los que tienen gastos. Hasta el
+        2026-09-04 se filtraban, con el motivo escrito de que meterlos
+        «llenaría el tablero de renglones vacíos». El vehículo del que nadie
+        registró nada es justo el caso a atender, y esconderlo lo vuelve
+        invisible: «no aparece» y «no costó nada» se leen igual.
+        """
         from flota.adaptadores.medicion import MedidorSQL
 
         _tanquear(mundo, km=100000)
         filas = MedidorSQL().cpk_mes()
-        assert [f['placa'] for f in filas] == [mundo['placa']]
-        assert 'cpk' in filas[0] and 'pesos' in filas[0] and 'km' in filas[0]
+        placas = [f['placa'] for f in filas]
+        assert mundo['placa'] in placas
+        assert len(placas) > 1, (
+            'el vehículo sin gastos del mundo desapareció de la lista: es el '
+            'defecto que este test existe para impedir')
+        assert placas == sorted(placas), 'el orden por placa es el que estabiliza la tabla'
+        for f in filas:
+            assert 'cpk' in f and 'pesos' in f and 'km' in f
+            # Regla 13: cada fila con su base y su ventana, no la página.
+            assert f['base'] and f['desde'] and f['hasta']
+            # Los dos ceros del canon §6 se distinguen desde la fila.
+            assert isinstance(f['hubo_gastos'], bool)
+
+    def test_el_vehiculo_sin_gastos_dice_POR_QUE_no_tiene_cifra(
+            self, app, db, mundo):
+        """Un `sin_dato` sin motivo manda a mirar tres cosas para descubrir
+        cuál. Los tres caminos a `SIN_DATO` se corrigen llamando a personas
+        distintas: contabilidad, el conductor, o control de flota."""
+        from flota.adaptadores.medicion import MedidorSQL
+
+        _tanquear(mundo, km=100000)
+        sin_cifra = [f for f in MedidorSQL().cpk_mes() if f['cpk'] == 'sin_dato']
+        assert sin_cifra, 'el mundo tiene vehículos sin gastos; alguno debe salir sin cifra'
+        for f in sin_cifra:
+            assert f['motivo'], f'{f["placa"]} salió sin_dato y sin decir por qué'
+            assert 'no está clasificado' not in f['motivo'], (
+                f'{f["placa"]}: apareció un camino a sin_dato que `_motivo_cpk` '
+                f'no nombra — {f["motivo"]}')
+
+    def test_el_motivo_distingue_sin_lecturas_de_extremos_dudosos(self):
+        """`_tramo_de` devuelve `SIN_DATO` en dos casos que NO son el mismo, y
+        se arreglan distinto: uno registrando kilometraje, el otro verificando
+        el que ya se registró. Decirle «verificá» a quien no registró ninguno
+        lo manda a hacer el trabajo equivocado."""
+        from flota.adaptadores.medicion import _motivo_cpk
+        from flota.dominio.valores import SIN_DATO
+
+        sin_lecturas = _motivo_cpk({'cpk': SIN_DATO, 'marca': SIN_DATO, 'km': 0,
+                                    'hubo_gastos': False, 'lecturas': 0})
+        dos_dudosas = _motivo_cpk({'cpk': SIN_DATO, 'marca': SIN_DATO, 'km': 300,
+                                   'hubo_gastos': True, 'lecturas': 2})
+        assert sin_lecturas != dos_dudosas
+        assert 'registrando kilometraje' in sin_lecturas
+        assert 'verificando kilometrajes' in dos_dudosas
+
+    def test_el_motivo_sigue_el_ORDEN_de_costo_por_kilometro(self):
+        """Un vehículo puede tener dos causas a la vez. `costo_por_kilometro`
+        evalúa la marca primero, y si acá se preguntara en otro orden se
+        publicaría un motivo que no es el que produjo el `sin_dato`."""
+        from flota.adaptadores.medicion import _motivo_cpk
+        from flota.dominio.valores import SIN_DATO
+
+        # Sin gastos Y con el tramo dudoso: gana el tramo, igual que en la
+        # función que tomó la decisión.
+        m = _motivo_cpk({'cpk': SIN_DATO, 'marca': SIN_DATO, 'km': 300,
+                         'hubo_gastos': False, 'lecturas': 2})
+        assert 'extremos del tramo' in m and 'ningún gasto' not in m
+
+
+class TestElCPKViajaConSuProcedencia:
+    """Regla 13, y ya no depende de que alguien se acuerde de escribirla.
+
+    Las filas se arman con `flota.dominio.procedencia.Cifra`, que **se niega a
+    construirse** sin base, sin ventana o con un `sin_dato` mudo. Antes las
+    cinco claves se escribían a mano, y las que se escriben a mano son las que
+    se olvidan en el campo número seis.
+    """
+
+    def test_cada_fila_trae_base_ventana_y_n(self, app, db, mundo):
+        from flota.adaptadores.medicion import MedidorSQL
+
+        _tanquear(mundo, km=100000)
+        for f in MedidorSQL().cpk_mes():
+            faltan = {'cpk', 'base', 'desde', 'hasta', 'etiqueta', 'n',
+                      'motivo'} - set(f)
+            assert not faltan, f'{f["placa"]} publica un CPK sin {faltan}'
+            assert f['base'].strip() and f['etiqueta'].strip()
+            assert isinstance(f['n'], int) and f['n'] >= 0
+
+    def test_el_n_son_las_lecturas_que_sostienen_el_tramo(self, app, db, mundo):
+        """Un CPK sobre dos lecturas y uno sobre veinte no se leen igual, y
+        desde el número no se distinguen. `n` es lo único que los separa — es
+        literalmente el despromediado a nivel de fila."""
+        from flota.adaptadores.gastos import cpk_de
+        from flota.adaptadores.medicion import MedidorSQL, _hoy
+
+        _tanquear(mundo, km=100000)
+        _tanquear(mundo, km=100392, ts=datetime(2026, 3, 15, 10, 0))
+        hoy = _hoy()
+        fila = next(f for f in MedidorSQL().cpk_mes()
+                    if f['placa'] == mundo['placa'])
+        assert fila['n'] == cpk_de(mundo['vehiculo_id'],
+                                   hoy.replace(day=1), hoy)['lecturas']
+
+    def test_una_cifra_sin_dato_NO_se_puede_publicar_muda(self):
+        """El invariante que sostiene todo lo anterior, ejercido directo: si
+        `_motivo_cpk` devolviera `None` sobre un `sin_dato`, la fila no se
+        construye — revienta acá y no llega al tablero."""
+        from datetime import date
+
+        import pytest as _pytest
+
+        from flota.dominio.procedencia import (Cifra, ProcedenciaInvalida,
+                                               mes_en_curso_de)
+
+        with _pytest.raises(ProcedenciaInvalida, match='POR QUÉ'):
+            Cifra(valor='sin_dato', base='pesos ÷ km',
+                  ventana=mes_en_curso_de(date(2026, 9, 4)), n=0)
+
+
+class TestElFormateoNoRompeLaIdentidadDelHueco:
+    """`numero_legible` devolvía `str(valor)`, y `str()` sobre una subclase de
+    `str` produce un `str` plano: `numero_legible(SIN_DATO) is SIN_DATO` daba
+    `False`.
+
+    El dominio compara `SIN_DATO` **por identidad** —hay doce `is SIN_DATO` en
+    el repo—, así que cualquiera de esos checks colocado después del formateo
+    deja de disparar en silencio y el hueco se publica como si fuera un número.
+
+    Auditado el 2026-09-04: no había ninguno en esa posición. El arreglo va
+    igual, porque el defecto no está en los doce sitios sino en el formateador,
+    y el que intercale un `numero_legible` mañana no va a saber que tiene que
+    mirar.
+    """
+
+    def test_el_sin_dato_sobrevive_al_formateo_como_el_MISMO_objeto(self):
+        from flota.adaptadores.gastos import numero_legible
+        from flota.dominio.valores import SIN_DATO
+
+        assert numero_legible(SIN_DATO) is SIN_DATO
+
+    def test_y_sigue_siendo_la_palabra_que_la_pantalla_espera(self):
+        """La otra dirección: preservar la identidad no puede haber cambiado lo
+        que se serializa. En JSON tiene que seguir saliendo `"sin_dato"`."""
+        import json
+
+        from flota.adaptadores.gastos import numero_legible
+        from flota.dominio.valores import SIN_DATO
+
+        assert json.dumps(numero_legible(SIN_DATO)) == '"sin_dato"'
+
+    def test_los_numeros_de_verdad_siguen_formateándose(self):
+        """Y no se rompió el caso normal, que es el 99% de las llamadas."""
+        from decimal import Decimal
+
+        from flota.adaptadores.gastos import numero_legible
+
+        assert numero_legible(Decimal('14000')) == '14000.00'
+        assert 'E+' not in numero_legible(Decimal('168000') / Decimal('12'))
 
     def test_el_cpk_no_sale_en_notacion_cientifica(self, app, db, mundo):
         """`1.400E+4` en un tablero no es un número: es un error de lectura

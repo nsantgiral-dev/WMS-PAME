@@ -863,22 +863,41 @@ class TestCeroDeTodo:
     def test_sin_la_tabla_el_campo_vale_null_y_jamas_cero(self, app, monkeypatch):
         """El otro lado de la distinción, ejercido quitándole la fuente al medidor."""
         import flota.adaptadores.medicion as med
-        from flota.api.health import _CAMPOS
+        from flota.api.health import _CAMPOS, _CAMPOS_SIN_TABLA
 
+        # La lista de exentos se IMPORTA. Estaba escrita a mano acá —
+        # `('ambiente', 'datos_reales')`— y también en `test_health_flota.py`:
+        # dos copias de la misma política, y agregar un campo exento exigía
+        # acordarse de las dos. El 2026-09-04 se agregó uno y este test fue el
+        # que lo dijo, con el otro ya en verde.
         monkeypatch.setattr(med, '_tabla_existe', lambda nombre: False)
         medidor = med.MedidorSQL()
         with app.app_context():
             for campo in _CAMPOS:
-                if campo in ('ambiente', 'datos_reales'):
+                if campo in _CAMPOS_SIN_TABLA:
                     continue
                 assert getattr(medidor, campo)() is None, campo
 
-    def test_un_vehiculo_sin_nada_no_entra_al_cpk_del_tablero(
+    def test_un_vehiculo_sin_nada_SI_entra_al_cpk_y_dice_por_que(
             self, client, db, almacen):
-        """Meterlo con `sin_dato` llenaría el tablero de renglones vacíos el
-        primer mes — que es cómo un tablero se deja de mirar."""
+        """Invertido el 2026-09-04, y el motivo viejo era el que estaba mal.
+
+        Decía: *«meterlo con `sin_dato` llenaría el tablero de renglones vacíos
+        el primer mes — que es cómo un tablero se deja de mirar»*. Con cero
+        filas en `flota_gasto`, que es el estado real, el filtro no escondía
+        renglones vacíos: devolvía `[]` y **escondía el tablero entero**. Y un
+        `[]` la pantalla lo lee igual que «no hay nada que reportar».
+
+        El vehículo del que nadie registró nada es exactamente el caso a
+        atender. Lo que evita el renglón vacío no es esconderlo: es que traiga
+        el motivo y el gesto que lo enciende.
+        """
         _vehiculo(db, 'VACIO1')
-        assert MedidorSQL().cpk_mes() == []
+        filas = MedidorSQL().cpk_mes()
+        assert [f['placa'] for f in filas] == ['VACIO1']
+        assert filas[0]['cpk'] == 'sin_dato'
+        assert filas[0]['hubo_gastos'] is False
+        assert filas[0]['motivo'], 'un sin_dato sin motivo no manda a nadie a hacer nada'
 
 
 # ══════════════════════════════════════════════════════════════════════════

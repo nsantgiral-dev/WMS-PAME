@@ -52,6 +52,11 @@ _PWA = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
 PANTALLAS = [
     ('flota.js',      'flotaCond',  ['conductor']),
     ('flota.js',      None,         ['admin', 'control_flota']),
+    # Sub-tab de Flota, no pantalla propia: los mismos roles que abren el tab.
+    # `conductor` NO está — la analítica de costos no es una pregunta del turno,
+    # y un CPK visible en su pantalla está a un paso de leerse como una medida
+    # suya, que es lo que la regla 2 del módulo prohíbe.
+    ('flota_analitica.js', None,    ['admin', 'control_flota']),
     ('rutas.js',      'condCargar', ['conductor']),
     ('rutas.js',      'condVer',    ['conductor']),
     ('rutas.js',      None,         ['admin']),

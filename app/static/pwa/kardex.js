@@ -66,7 +66,7 @@ function _kardexRender(el, estado) {
   if (enCurso) {
     html += `<div style="font-size:12px;color:var(--yellow);margin-top:10px;">● En curso — el detalle queda en los logs de Railway.</div>`;
   } else if (r && r.error) {
-    html += `<div style="font-size:12px;color:var(--red);margin-top:10px;">Última descarga falló: ${r.error}</div>`;
+    html += `<div style="font-size:12px;color:var(--red);margin-top:10px;">Última descarga falló: ${esc(r.error)}</div>`;
   } else if (r) {
     // Una descarga PARCIAL es un fallo, no un aviso. Antes las tres formas de
     // terminar —fin, timeout, excepción— daban el mismo mensaje verde.
@@ -79,21 +79,21 @@ function _kardexRender(el, estado) {
       </div>
       <div style="font-size:11px;color:var(--tx3);line-height:1.7;">
         ${(r.total_descargados || 0).toLocaleString('es-CO')} movimientos ·
-        páginas ${r.pagina_inicial || 1}–${r.pagina_final || 0} ·
-        ${r.errores || 0} errores · ${r.segundos || 0}s
+        páginas ${r.pagina_inicial || 1}–${esc(r.pagina_final || 0)} ·
+        ${esc(r.errores || 0)} errores · ${esc(r.segundos || 0)}s
         ${r.duplicados_omitidos ? '· <strong>' + r.duplicados_omitidos.toLocaleString('es-CO') + ' duplicados omitidos</strong>' : ''}<br>
         ${r.total_declarado_por_siesa != null
           ? '<strong>Siesa declara:</strong> ' + r.total_declarado_por_siesa.toLocaleString('es-CO') + ' registros<br>' : ''}
-        <strong>Pedido:</strong> ${rp.desde || '—'} → ${rp.hasta || '—'}<br>
-        <strong>Traído:</strong> ${rt.desde || '—'} → ${rt.hasta || '—'}
+        <strong>Pedido:</strong> ${esc(rp.desde || '—')} → ${esc(rp.hasta || '—')}<br>
+        <strong>Traído:</strong> ${esc(rt.desde || '—')} → ${esc(rt.hasta || '—')}
       </div>
-      ${r.detalle_estado ? `<div style="font-size:11px;color:${col};margin-top:6px;">${r.detalle_estado}</div>` : ''}
-      ${r.advertencia ? `<div style="font-size:11px;color:var(--red);margin-top:6px;font-weight:700;">${r.advertencia}</div>` : ''}
+      ${r.detalle_estado ? `<div style="font-size:11px;color:${col};margin-top:6px;">${esc(r.detalle_estado)}</div>` : ''}
+      ${r.advertencia ? `<div style="font-size:11px;color:var(--red);margin-top:6px;font-weight:700;">${esc(r.advertencia)}</div>` : ''}
       ${_kardexPerfil(r.perfil_mensual)}
-      ${r._supuesto_de_reanudacion ? `<div style="font-size:10px;color:var(--yellow);margin-top:6px;">${r._supuesto_de_reanudacion}</div>` : ''}
-      ${r.reanudar_desde ? `<button onclick="kardexDescargar(${r.reanudar_desde})"
+      ${r._supuesto_de_reanudacion ? `<div style="font-size:10px;color:var(--yellow);margin-top:6px;">${esc(r._supuesto_de_reanudacion)}</div>` : ''}
+      ${r.reanudar_desde ? `<button onclick="kardexDescargar(${esc(r.reanudar_desde)})"
         style="margin-top:8px;padding:6px 12px;border:none;border-radius:6px;background:var(--red);color:#fff;font-size:12px;font-weight:700;cursor:pointer;">
-        Reanudar desde la página ${r.reanudar_desde}
+        Reanudar desde la página ${esc(r.reanudar_desde)}
       </button>` : ''}
     </div>`;
   } else {
@@ -163,7 +163,7 @@ function _kardexPerfil(p) {
   const barras = p.meses.map(m => {
     const h = Math.max(3, Math.round(m.filas / max * 46));
     const col = m.sospechoso ? 'var(--red)' : 'var(--pm)';
-    return `<div title="${m.mes}: ${m.filas.toLocaleString('es-CO')} filas"
+    return `<div title="${esc(m.mes)}: ${m.filas.toLocaleString('es-CO')} filas"
       style="flex:1;min-width:6px;height:${h}px;background:${col};border-radius:2px 2px 0 0;"></div>`;
   }).join('');
 
@@ -175,7 +175,7 @@ function _kardexPerfil(p) {
     </div>
     <div style="display:flex;gap:2px;align-items:flex-end;height:50px;">${barras}</div>
     <div style="display:flex;justify-content:space-between;font-size:9px;color:var(--tx3);margin-top:3px;">
-      <span>${p.meses[0].mes}</span><span>${p.meses[p.meses.length - 1].mes}</span>
+      <span>${esc(p.meses[0].mes)}</span><span>${esc(p.meses[p.meses.length - 1].mes)}</span>
     </div>
     <div style="font-size:11px;color:${col};margin-top:6px;">
       ${limpio
@@ -220,24 +220,24 @@ async function kardexProbarPaginacion() {
   try {
     const r = await post('/api/kardex/probar-paginacion', { pagina: 50, espera_s: 90 });
     if (!out) return;
-    if (r.error) { out.innerHTML = `<div style="font-size:11px;color:var(--red);">${r.error}</div>`; return; }
+    if (r.error) { out.innerHTML = `<div style="font-size:11px;color:var(--red);">${esc(r.error)}</div>`; return; }
     const ok = r.se_puede_paginar;
     const col = ok ? (r.causa_probable === 'DERIVA_POR_INSERCION' ? 'var(--yellow)' : 'var(--green)') : 'var(--red)';
     const corto = Object.keys(r).find(k => k.startsWith('iguales_tras_') && k !== 'iguales_tras_5s');
     out.innerHTML = `<div style="margin-top:8px;border:1px solid ${col};border-radius:8px;padding:10px;">
       <div style="font-size:13px;font-weight:700;color:${col};">
-        ${ok ? 'Paginación USABLE' : 'Paginación NO USABLE'} — ${r.causa_probable}
+        ${ok ? 'Paginación USABLE' : 'Paginación NO USABLE'} — ${esc(r.causa_probable)}
       </div>
       <div style="font-size:11px;color:var(--tx3);margin-top:6px;line-height:1.7;">
-        Página ${r.pagina}, ${r.filas} filas.<br>
-        Tras <strong>5s</strong>: ${r.iguales_tras_5s}/${r.filas} en la misma posición
+        Página ${esc(r.pagina)}, ${esc(r.filas)} filas.<br>
+        Tras <strong>5s</strong>: ${esc(r.iguales_tras_5s)}/${esc(r.filas)} en la misma posición
         ${r.estable_corto ? '<span style="color:var(--green);">(estable)</span>' : '<span style="color:var(--red);">(ya cambió)</span>'}<br>
-        Tras <strong>90s</strong>: ${r[corto] ?? '—'}/${r.filas}
+        Tras <strong>90s</strong>: ${r[corto] ?? '—'}/${esc(r.filas)}
         ${r.estable_largo ? '<span style="color:var(--green);">(estable)</span>' : '<span style="color:var(--red);">(cambió)</span>'}<br>
-        Solape con la página siguiente: <strong>${r.solape_con_pagina_siguiente}</strong> filas
+        Solape con la página siguiente: <strong>${esc(r.solape_con_pagina_siguiente)}</strong> filas
         ${r.solape_con_pagina_siguiente ? '<span style="color:var(--red);"> — páginas contiguas no deberían compartir ninguna</span>' : ''}
       </div>
-      <div style="font-size:11px;color:${col};margin-top:8px;">${r.veredicto}</div>
+      <div style="font-size:11px;color:${col};margin-top:8px;">${esc(r.veredicto)}</div>
     </div>`;
   } catch (e) {
     if (out) out.innerHTML = `<div style="font-size:11px;color:var(--red);">${e.message || e}</div>`;
@@ -323,7 +323,7 @@ async function kardexReconstruir(forzar) {
     const esRechazoPorCalidad = !!(d.por_que || d.override || d.estado_descarga);
     if (r.status === 409 && !esRechazoPorCalidad) {
       out.innerHTML = `<div style="border:1px solid var(--yellow);border-radius:8px;padding:10px;font-size:12px;color:var(--yellow);">
-        ${d.error || 'Hay una descarga en curso.'}
+        ${esc(d.error || 'Hay una descarga en curso.')}
         <div style="color:var(--tx3);margin-top:4px;">Reconstruir ahora usaría datos a medias. Esperá a que termine.</div></div>`;
       return;
     }
@@ -333,10 +333,10 @@ async function kardexReconstruir(forzar) {
       // entender qué está saltando.
       out.innerHTML = `<div style="border:1px solid var(--red);border-radius:8px;padding:10px;">
         <div style="font-size:12px;font-weight:700;color:var(--red);margin-bottom:6px;">
-          ${d.error || 'No se pudo reconstruir'}</div>
-        ${d.estado_descarga ? `<div style="font-size:11px;color:var(--tx3);">Última descarga: <b>${d.estado_descarga}</b></div>` : ''}
-        ${d.por_que ? `<div style="font-size:11px;color:var(--tx2);margin-top:6px;">${d.por_que}</div>` : ''}
-        ${d.que_hacer ? `<div style="font-size:11px;color:var(--tx2);margin-top:6px;"><b>Qué hacer:</b> ${d.que_hacer}</div>` : ''}
+          ${esc(d.error || 'No se pudo reconstruir')}</div>
+        ${d.estado_descarga ? `<div style="font-size:11px;color:var(--tx3);">Última descarga: <b>${esc(d.estado_descarga)}</b></div>` : ''}
+        ${d.por_que ? `<div style="font-size:11px;color:var(--tx2);margin-top:6px;">${esc(d.por_que)}</div>` : ''}
+        ${d.que_hacer ? `<div style="font-size:11px;color:var(--tx2);margin-top:6px;"><b>Qué hacer:</b> ${esc(d.que_hacer)}</div>` : ''}
         ${forzar ? '' : `<button onclick="kardexReconstruirForzar()"
           style="margin-top:10px;padding:6px 12px;border:1px solid var(--red);border-radius:6px;background:transparent;color:var(--red);font-size:11px;font-weight:700;cursor:pointer;">
           Reconstruir igual (queda registrado)</button>`}
@@ -351,7 +351,7 @@ async function kardexReconstruir(forzar) {
       ${forzar ? '<div style="color:var(--yellow);margin-top:6px;font-size:11px;">Se forzó sobre una descarga incompleta — la demanda censurada de este cálculo puede estar inventada.</div>' : ''}
     </div>`;
   } catch (e) {
-    out.innerHTML = `<div style="font-size:12px;color:var(--red);">Sin conexión: ${e.message}</div>`;
+    out.innerHTML = `<div style="font-size:12px;color:var(--red);">Sin conexión: ${esc(e.message)}</div>`;
   }
 }
 
@@ -390,7 +390,7 @@ async function kardexReconciliar() {
   try {
     d = await get('/api/kardex/reconciliar?meses=12');
   } catch (e) {
-    out.innerHTML = `<div style="font-size:12px;color:var(--red);">${e.message}</div>`;
+    out.innerHTML = `<div style="font-size:12px;color:var(--red);">${esc(e.message)}</div>`;
     return;
   }
 
@@ -409,7 +409,7 @@ async function kardexReconciliar() {
 
   if (!ok) {
     html += `<div style="font-size:11px;color:var(--red);margin-top:8px;line-height:1.6;">
-      <b>${sinClasificar.length} concepto(s) sin clasificar.</b> Cada uno es un
+      <b>${esc(sinClasificar.length)} concepto(s) sin clasificar.</b> Cada uno es un
       movimiento que el sistema no sabe si es demanda. Omitirlos deja un agujero
       que ningún modelo va a reportar — hay que agregarlos a
       <code>CONCEPTO_DEFINICION</code> antes de calcular nada.
@@ -425,19 +425,19 @@ async function kardexReconciliar() {
   if (ventas.length) {
     html += `<details style="margin-top:10px;">
       <summary style="font-size:11px;color:var(--pm);cursor:pointer;">
-        Unidades vendidas según el kardex (${ventas.length} fila(s)) — para cruzar contra Siesa
+        Unidades vendidas según el kardex (${esc(ventas.length)} fila(s)) — para cruzar contra Siesa
       </summary>
-      <div style="font-size:11px;color:var(--tx2);margin:6px 0;">${d.instruccion || ''}</div>
+      <div style="font-size:11px;color:var(--tx2);margin:6px 0;">${esc(d.instruccion || '')}</div>
       <div style="max-height:260px;overflow:auto;">
       <table style="width:100%;border-collapse:collapse;font-size:11px;">
         <thead><tr style="color:var(--tx3);text-align:right;border-bottom:1px solid var(--brd);">
           <th style="text-align:left;padding:4px;">Mes</th><th style="padding:4px;">Bodega</th>
           <th style="padding:4px;">Unidades</th><th style="padding:4px;">Registros</th></tr></thead>
         <tbody>${ventas.map(v => `<tr style="text-align:right;border-bottom:1px solid var(--brd);">
-          <td style="text-align:left;padding:4px;color:var(--tx);">${v.mes}</td>
-          <td style="padding:4px;color:var(--tx3);">${v.bodega}</td>
+          <td style="text-align:left;padding:4px;color:var(--tx);">${esc(v.mes)}</td>
+          <td style="padding:4px;color:var(--tx3);">${esc(v.bodega)}</td>
           <td style="padding:4px;color:var(--tx);">${Math.round(v.unidades_vendidas).toLocaleString('es-CO')}</td>
-          <td style="padding:4px;color:var(--tx3);">${v.registros}</td></tr>`).join('')}
+          <td style="padding:4px;color:var(--tx3);">${esc(v.registros)}</td></tr>`).join('')}
         </tbody></table></div></details>`;
   }
 

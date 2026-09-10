@@ -84,16 +84,16 @@ function _tempCoberturaCosto(c) {
   const f = c.por_fuente || {};
   return `<div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--brd);font-size:11px;color:var(--tx3);line-height:1.7;">
     <strong>Origen del costo:</strong>
-    acuerdo vigente ${f.ACUERDO_VIGENTE || 0} ·
-    cotización ${f.COTIZACION || 0} ·
-    promedio kardex ${f.KARDEX_PROMEDIO || 0} ·
-    maestro ${f.MAESTRO || 0} ·
-    sin costo ${f.SIN_COSTO || 0}<br>
+    acuerdo vigente ${esc(f.ACUERDO_VIGENTE || 0)} ·
+    cotización ${esc(f.COTIZACION || 0)} ·
+    promedio kardex ${esc(f.KARDEX_PROMEDIO || 0)} ·
+    maestro ${esc(f.MAESTRO || 0)} ·
+    sin costo ${esc(f.SIN_COSTO || 0)}<br>
     <span style="color:${c.pct_hacia_adelante >= 50 ? 'var(--green)' : 'var(--yellow)'};">
-      ${c.pct_hacia_adelante}% con costo <strong>hacia adelante</strong> (la plata que se va a gastar)
+      ${esc(c.pct_hacia_adelante)}% con costo <strong>hacia adelante</strong> (la plata que se va a gastar)
     </span>
-    ${c.costo_anejo ? ` · <span style="color:var(--yellow);">${c.costo_anejo} con costo añejo (+180d)</span>` : ''}
-    ${c.advertencia_precio ? `<br><span style="color:var(--yellow);">${c.advertencia_precio}</span>` : ''}
+    ${c.costo_anejo ? ` · <span style="color:var(--yellow);">${esc(c.costo_anejo)} con costo añejo (+180d)</span>` : ''}
+    ${c.advertencia_precio ? `<br><span style="color:var(--yellow);">${esc(c.advertencia_precio)}</span>` : ''}
   </div>`;
 }
 
@@ -106,7 +106,7 @@ function _tempFuenteCosto(f) {
     MAESTRO: ['maestro', 'var(--tx3)'],
   };
   const [txt, col] = etiquetas[f.fuente_costo] || ['—', 'var(--tx3)'];
-  const anejo = f.costo_anejo ? ` <span title="costo de hace ${f.dias_antiguedad_costo} días" style="color:var(--yellow);">▲</span>` : '';
+  const anejo = f.costo_anejo ? ` <span title="costo de hace ${esc(f.dias_antiguedad_costo)} días" style="color:var(--yellow);">▲</span>` : '';
   const sup = f.precio_es_supuesto
     ? ` <span title="Cu con margen ${Math.round((f.margen_supuesto || 0) * 100)}% SUPUESTO sobre precio — ±10 puntos mueven Q* ~24%" style="color:var(--yellow);">≈${Math.round((f.margen_supuesto || 0) * 100)}%</span>`
     : '';
@@ -116,7 +116,7 @@ function _tempFuenteCosto(f) {
 function _tempRender(el, d) {
   if (!el) return;
   if (d.error) {
-    el.innerHTML = `<div style="padding:20px;color:var(--yellow);font-size:12px;">${d.error}</div>`;
+    el.innerHTML = `<div style="padding:20px;color:var(--yellow);font-size:12px;">${esc(d.error)}</div>`;
     return;
   }
 
@@ -129,14 +129,14 @@ function _tempRender(el, d) {
   const colorCob = pct >= 80 ? 'var(--green)' : (pct >= 50 ? 'var(--yellow)' : 'var(--red)');
   html += `<div style="border:1px solid ${colorCob};border-radius:10px;padding:12px;margin-bottom:14px;">
     <div style="font-size:13px;font-weight:700;color:${colorCob};margin-bottom:6px;">
-      El modelo cubre ${cob.cubiertos_por_modelo || 0} de ${cob.skus_temporada || 0} SKUs de temporada (${pct}%)
+      El modelo cubre ${esc(cob.cubiertos_por_modelo || 0)} de ${esc(cob.skus_temporada || 0)} SKUs de temporada (${pct}%)
     </div>
     <div style="font-size:11px;color:var(--tx3);line-height:1.7;">
-      Excluidos por costo fantasma: <strong>${cob.excluidos_costo_fantasma || 0}</strong> ·
-      por lista negra: <strong>${cob.excluidos_lista_negra || 0}</strong> ·
-      sin producto: <strong>${cob.excluidos_sin_producto || 0}</strong>
+      Excluidos por costo fantasma: <strong>${esc(cob.excluidos_costo_fantasma || 0)}</strong> ·
+      por lista negra: <strong>${esc(cob.excluidos_lista_negra || 0)}</strong> ·
+      sin producto: <strong>${esc(cob.excluidos_sin_producto || 0)}</strong>
     </div>
-    ${cob.advertencia ? `<div style="font-size:11px;color:${colorCob};margin-top:6px;">${cob.advertencia}</div>` : ''}
+    ${cob.advertencia ? `<div style="font-size:11px;color:${colorCob};margin-top:6px;">${esc(cob.advertencia)}</div>` : ''}
     ${_tempCoberturaCosto(cob.costo)}
   </div>`;
 
@@ -207,7 +207,7 @@ function _tempRender(el, d) {
       Exportar acta (PDF)
     </button>
     <span style="font-size:11px;color:var(--tx3);">
-      ${conParalela} de ${filas.length} filas con cifra de la lista paralela.
+      ${conParalela} de ${esc(filas.length)} filas con cifra de la lista paralela.
     </span>
   </div>`;
 
@@ -237,18 +237,18 @@ function _tempRender(el, d) {
       : (f._difU > 0 ? 'var(--yellow)' : (f._difU < 0 ? 'var(--green)' : 'var(--tx3)'));
     html += `<tr style="border-bottom:1px solid var(--brd);text-align:right;">
       <td style="text-align:left;padding:6px;">
-        <div style="color:var(--tx);font-weight:600;">${f.referencia}</div>
-        <div style="color:var(--tx3);font-size:10px;">${(f.nombre || '').slice(0, 42)}</div>
+        <div style="color:var(--tx);font-weight:600;">${esc(f.referencia)}</div>
+        <div style="color:var(--tx3);font-size:10px;">${esc((f.nombre || '').slice(0, 42))}</div>
       </td>
-      <td style="padding:6px;color:${alerta ? 'var(--yellow)' : 'var(--tx3)'};" title="${f.distribucion || ''}">
-        ${f.n_temporadas}${alerta ? ' ⚠' : ''}
+      <td style="padding:6px;color:${alerta ? 'var(--yellow)' : 'var(--tx3)'};" title="${esc(f.distribucion || '')}">
+        ${esc(f.n_temporadas)}${alerta ? ' ⚠' : ''}
       </td>
       <td style="padding:6px;font-size:10px;">${_tempFuenteCosto(f)}</td>
-      <td style="padding:6px;color:var(--tx3);">${f.demanda_esperada}</td>
+      <td style="padding:6px;color:var(--tx3);">${esc(f.demanda_esperada)}</td>
       <td style="padding:6px;color:var(--tx);font-weight:700;">${_tempQ(f)}</td>
       <td style="padding:6px;">
         <input type="number" value="${f._p != null ? f._p : ''}" placeholder="—"
-          onchange="temporadaSetParalela('${f.referencia}', this.value)"
+          onchange="temporadaSetParalela('${esc(f.referencia)}', this.value)"
           style="width:70px;padding:3px;text-align:right;background:var(--bg);border:1px solid var(--brd);border-radius:4px;color:var(--tx);font-size:11px;">
       </td>
       <td style="padding:6px;color:${difColor};font-weight:700;">
@@ -294,10 +294,10 @@ function temporadaExportar() {
     invP += q * (f.costo_unitario || 0);
     const dU = p != null ? p - f.q_optimo : '';
     return `<tr>
-      <td>${f.referencia}</td><td>${(f.nombre || '')}</td>
-      <td class="n">${f.n_temporadas}</td>
-      <td class="n">${f.demanda_esperada}</td>
-      <td class="n"><b>${f.q_optimo}</b></td>
+      <td>${esc(f.referencia)}</td><td>${esc((f.nombre || ''))}</td>
+      <td class="n">${esc(f.n_temporadas)}</td>
+      <td class="n">${esc(f.demanda_esperada)}</td>
+      <td class="n"><b>${esc(f.q_optimo)}</b></td>
       <td class="n">${p != null ? p : '—'}</td>
       <td class="n">${dU !== '' ? (dU > 0 ? '+' + dU : dU) : '—'}</td>
     </tr>`;
@@ -330,9 +330,9 @@ function temporadaExportar() {
     <h1>Pedido de temporada escolar — acta de comité</h1>
     <div class="sub">Generado ${sello} · Papelería Medellín</div>
     <div class="box">
-      <b>Cobertura del modelo:</b> ${cob.cubiertos_por_modelo || 0} de ${cob.skus_temporada || 0} SKUs (${cob.pct_cubierto || 0}%).
-      Excluidos: ${cob.excluidos_costo_fantasma || 0} por costo no confiable,
-      ${cob.excluidos_lista_negra || 0} por lista negra.
+      <b>Cobertura del modelo:</b> ${esc(cob.cubiertos_por_modelo || 0)} de ${esc(cob.skus_temporada || 0)} SKUs (${esc(cob.pct_cubierto || 0)}%).
+      Excluidos: ${esc(cob.excluidos_costo_fantasma || 0)} por costo no confiable,
+      ${esc(cob.excluidos_lista_negra || 0)} por lista negra.
       El resto de la decisión se toma sin modelo.<br>
       <b>Método:</b> newsvendor sobre demanda descensurada por días con stock.
       Ratio crítico por SKU (Cu = precio − costo; Co = costo × capital+liquidación).<br>

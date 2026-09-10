@@ -15,7 +15,7 @@ async function cargarInventario() {
       if (r.ok) {
         _INV_ALMACENES = await r.json();
         const opts = _INV_ALMACENES.map(a =>
-          `<option value="${a.id}">${a.nombre}${a.bodega_siesa_id ? ` (${a.bodega_siesa_id})` : ''}</option>`
+          `<option value="${esc(a.id)}">${esc(a.nombre)}${a.bodega_siesa_id ? ` (${esc(a.bodega_siesa_id)})` : ''}</option>`
         ).join('');
         const sel = document.getElementById('inv-abc-almacen');
         if (sel) sel.innerHTML = opts;
@@ -171,7 +171,7 @@ function _renderCardAccion(s) {
   const coinciden = hijo && !cc2Pendiente && hijo.cantidad_fisica != null && hijo.cantidad_fisica === s.cantidad_fisica;
   const bordColor = s.estado === 'DESCUADRE' ? '#7F1D1D' : s.estado === 'TERCER_CONTEO' ? '#7F4010' : '#164F5A';
   const badgeColor = s.estado === 'DESCUADRE' ? '#7F1D1D' : s.estado === 'TERCER_CONTEO' ? '#92400E' : '#1E8395';
-  const dif = s.diferencia != null ? (s.diferencia > 0 ? `+${s.diferencia}` : `${s.diferencia}`) : '?';
+  const dif = s.diferencia != null ? (s.diferencia > 0 ? `+${esc(s.diferencia)}` : `${s.diferencia}`) : '?';
   const difCol = (s.diferencia || 0) > 0 ? '#22C55E' : '#F87171';
   const mostrarOmitir = ['SEGUNDO_CONTEO','TERCER_CONTEO'].includes(s.estado) && hijoPendiente;
   const btnTexto = hijoPendiente
@@ -194,37 +194,37 @@ function _renderCardAccion(s) {
       <div style="font-size:9px;color:#415A70;font-weight:700;text-transform:uppercase;margin-bottom:3px;">2do Conteo</div>
       ${hijo && !cc2Pendiente
         ? `<div style="font-size:20px;font-weight:800;color:${coinciden?'#22C55E':'#F87171'};line-height:1;">${hijo.cantidad_fisica != null ? hijo.cantidad_fisica : '—'}</div>
-           <div style="font-size:9px;color:#415A70;margin-top:2px;">${hijo.operario_nombre || (hijo.operario_id ? `Op #${hijo.operario_id}` : '—')}</div>`
+           <div style="font-size:9px;color:#415A70;margin-top:2px;">${hijo.operario_nombre || (hijo.operario_id ? `Op #${esc(hijo.operario_id)}` : '—')}</div>`
         : `<div style="font-size:16px;color:#415A70;padding:2px 0;">⏳</div>
-           <div style="font-size:9px;color:#415A70;margin-top:2px;">${hijo ? (hijo.operario_nombre || (hijo.operario_id ? `Op #${hijo.operario_id}` : 'asignado')) : 'sin asignar'}</div>`}`;
+           <div style="font-size:9px;color:#415A70;margin-top:2px;">${hijo ? (hijo.operario_nombre || (hijo.operario_id ? `Op #${esc(hijo.operario_id)}` : 'asignado')) : 'sin asignar'}</div>`}`;
   }
 
   return `<div style="background:#121C26;border:1px solid ${bordColor};border-radius:12px;padding:14px;margin-bottom:10px;">
     <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px;">
       <div style="flex:1;min-width:0;">
-        <div style="font-size:13px;font-weight:700;">${s.producto_codigo || '—'}${_tipoTag(s)}${s.clasificacion_abc ? `<span style="background:#1C2B3A;color:#FBBF24;font-size:9px;font-weight:700;padding:1px 5px;border-radius:6px;margin-left:4px;">ABC-${s.clasificacion_abc}</span>` : ''}</div>
-        <div style="font-size:11px;color:#415A70;margin-top:1px;">${s.producto_nombre || ''}</div>
-        <div style="font-size:11px;color:#415A70;margin-top:1px;">📍 ${s.ubicacion_codigo || '—'}</div>
+        <div style="font-size:13px;font-weight:700;">${esc(s.producto_codigo || '—')}${_tipoTag(s)}${s.clasificacion_abc ? `<span style="background:#1C2B3A;color:#FBBF24;font-size:9px;font-weight:700;padding:1px 5px;border-radius:6px;margin-left:4px;">ABC-${esc(s.clasificacion_abc)}</span>` : ''}</div>
+        <div style="font-size:11px;color:#415A70;margin-top:1px;">${esc(s.producto_nombre || '')}</div>
+        <div style="font-size:11px;color:#415A70;margin-top:1px;">📍 ${esc(s.ubicacion_codigo || '—')}</div>
       </div>
-      <span style="background:${badgeColor};color:#fff;font-size:10px;font-weight:700;padding:2px 8px;border-radius:8px;white-space:nowrap;flex-shrink:0;margin-left:8px;">${s.estado}</span>
+      <span style="background:${badgeColor};color:#fff;font-size:10px;font-weight:700;padding:2px 8px;border-radius:8px;white-space:nowrap;flex-shrink:0;margin-left:8px;">${esc(s.estado)}</span>
     </div>
 
     <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;background:#0B1117;border-radius:8px;padding:10px;margin-bottom:10px;text-align:center;">
       <div>
         <div style="font-size:9px;color:#415A70;font-weight:700;text-transform:uppercase;margin-bottom:3px;">Siesa</div>
         <div style="font-size:20px;font-weight:800;color:#60A5FA;line-height:1;">${s.existencia_siesa != null ? s.existencia_siesa : '—'}</div>
-        <div style="font-size:9px;color:#415A70;margin-top:2px;">${s.bodega_siesa_id || 'stock'}</div>
+        <div style="font-size:9px;color:#415A70;margin-top:2px;">${esc(s.bodega_siesa_id || 'stock')}</div>
       </div>
       <div style="border-left:1px solid #1C2B3A;border-right:1px solid #1C2B3A;">
         <div style="font-size:9px;color:#415A70;font-weight:700;text-transform:uppercase;margin-bottom:3px;">1er Conteo</div>
         <div style="font-size:20px;font-weight:800;color:#FBBF24;line-height:1;">${s.cantidad_fisica != null ? s.cantidad_fisica : '—'}</div>
-        <div style="font-size:9px;color:#415A70;margin-top:2px;">${s.operario_id ? `Op #${s.operario_id}` : '—'}</div>
+        <div style="font-size:9px;color:#415A70;margin-top:2px;">${s.operario_id ? `Op #${esc(s.operario_id)}` : '—'}</div>
       </div>
       <div>${col3Html}</div>
     </div>
 
     <div style="display:flex;justify-content:space-between;align-items:center;font-size:11px;color:#415A70;margin-bottom:10px;">
-      <span>Δ <span style="color:${difCol};font-weight:700;">${dif} uds</span>${s.motivo_codigo ? ` · <span style="color:${s.motivo_codigo==='AJ-ENT'?'#22C55E':'#F87171'};">${s.motivo_codigo}</span>` : ''}</span>
+      <span>Δ <span style="color:${difCol};font-weight:700;">${dif} uds</span>${s.motivo_codigo ? ` · <span style="color:${s.motivo_codigo==='AJ-ENT'?'#22C55E':'#F87171'};">${esc(s.motivo_codigo)}</span>` : ''}</span>
       ${s.estado === 'DESCUADRE' && coinciden
         ? `<span style="color:#22C55E;font-size:10px;">✓ CC1==CC2 confirmado</span>`
         : s.estado === 'DESCUADRE' && !coinciden && hijo && !cc2Pendiente
@@ -238,7 +238,7 @@ function _renderCardAccion(s) {
              style="padding:8px 10px;background:var(--bg-input);color:var(--tx2);border:1px solid var(--brd);border-radius:8px;font-size:12px;cursor:pointer;">✏</button>`
         : ''}
       ${mostrarOmitir
-        ? `<button onclick="conteoOmitirSegundo(${s.id})"
+        ? `<button onclick="conteoOmitirSegundo(${esc(s.id)})"
              title="Saltar CC2/CC3 y mover a DESCUADRE para revisión admin"
              style="padding:8px 10px;background:none;border:1px solid #415A70;color:#415A70;border-radius:8px;font-size:11px;cursor:pointer;white-space:nowrap;">Omitir CC2</button>`
         : ''}
@@ -247,9 +247,9 @@ function _renderCardAccion(s) {
         style="flex:2;padding:8px;background:${puedeAjustar?'#1E8395':'var(--bg-input)'};color:${puedeAjustar?'#fff':'var(--tx3)'};border:${puedeAjustar?'none':'1px solid var(--brd)'};border-radius:8px;font-size:12px;font-weight:700;cursor:${puedeAjustar?'pointer':'not-allowed'};min-width:120px;">
         ${btnTexto}
       </button>
-      <button onclick="conteoCancelar(${s.id})" style="padding:8px;background:none;border:1px solid #7F1D1D;color:#F87171;border-radius:8px;font-size:11px;cursor:pointer;">✕</button>
+      <button onclick="conteoCancelar(${esc(s.id)})" style="padding:8px;background:none;border:1px solid #7F1D1D;color:#F87171;border-radius:8px;font-size:11px;cursor:pointer;">✕</button>
     </div>
-    ${s.editado_en ? `<div style="font-size:10px;color:#415A70;margin-top:6px;">✏ Editado: ${s.motivo_edicion}</div>` : ''}
+    ${s.editado_en ? `<div style="font-size:10px;color:#415A70;margin-top:6px;">✏ Editado: ${esc(s.motivo_edicion)}</div>` : ''}
   </div>`;
 }
 
@@ -263,14 +263,14 @@ function _renderCardProgreso(s) {
   return `<div style="background:#121C26;border:1px solid #1C2B3A;border-radius:10px;padding:12px;margin-bottom:6px;">
     <div style="display:flex;justify-content:space-between;align-items:flex-start;">
       <div style="flex:1;min-width:0;">
-        <div style="font-size:12px;font-weight:700;">${s.producto_codigo || '—'}${_tipoTag(s)}</div>
-        <div style="font-size:11px;color:#415A70;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${s.producto_nombre || ''}</div>
-        <div style="font-size:11px;color:#415A70;margin-top:2px;">📍 ${s.ubicacion_codigo || '—'}${s.operario_id ? ` · 👤 Op #${s.operario_id}` : ''}</div>
+        <div style="font-size:12px;font-weight:700;">${esc(s.producto_codigo || '—')}${_tipoTag(s)}</div>
+        <div style="font-size:11px;color:#415A70;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(s.producto_nombre || '')}</div>
+        <div style="font-size:11px;color:#415A70;margin-top:2px;">📍 ${esc(s.ubicacion_codigo || '—')}${s.operario_id ? ` · 👤 Op #${esc(s.operario_id)}` : ''}</div>
       </div>
       <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px;flex-shrink:0;margin-left:8px;">
-        ${s.clasificacion_abc ? `<span style="background:#1C2B3A;color:#FBBF24;font-size:9px;font-weight:700;padding:1px 5px;border-radius:6px;">ABC-${s.clasificacion_abc}</span>` : ''}
-        <span style="background:${col};color:#fff;font-size:10px;font-weight:700;padding:2px 8px;border-radius:8px;">${s.estado}</span>
-        <button onclick="conteoCancelar(${s.id})" style="background:none;border:1px solid #7F1D1D;color:#F87171;font-size:9px;padding:1px 6px;border-radius:6px;cursor:pointer;">Cancelar</button>
+        ${s.clasificacion_abc ? `<span style="background:#1C2B3A;color:#FBBF24;font-size:9px;font-weight:700;padding:1px 5px;border-radius:6px;">ABC-${esc(s.clasificacion_abc)}</span>` : ''}
+        <span style="background:${col};color:#fff;font-size:10px;font-weight:700;padding:2px 8px;border-radius:8px;">${esc(s.estado)}</span>
+        <button onclick="conteoCancelar(${esc(s.id)})" style="background:none;border:1px solid #7F1D1D;color:#F87171;font-size:9px;padding:1px 6px;border-radius:6px;cursor:pointer;">Cancelar</button>
       </div>
     </div>
   </div>`;
@@ -284,21 +284,21 @@ function _renderCardProgreso(s) {
 function _renderCardResuelto(s) {
   const colMap = { MATCH:'#14532D', AJUSTADO:'#14532D', AJUSTANDO:'#7F1D1D', CANCELADO:'#253A4A' };
   const col = colMap[s.estado] || '#253A4A';
-  const dif = s.diferencia != null ? (s.diferencia > 0 ? `+${s.diferencia}` : `${s.diferencia}`) : null;
+  const dif = s.diferencia != null ? (s.diferencia > 0 ? `+${esc(s.diferencia)}` : `${s.diferencia}`) : null;
   const difCol = (s.diferencia || 0) > 0 ? '#22C55E' : (s.diferencia || 0) < 0 ? '#F87171' : '#415A70';
   return `<div style="background:#0B1117;border:1px solid #1C2B3A;border-radius:10px;padding:12px;margin-bottom:6px;">
     <div style="display:flex;justify-content:space-between;align-items:flex-start;">
       <div style="flex:1;min-width:0;">
-        <div style="font-size:12px;font-weight:700;color:#415A70;">${s.producto_codigo || '—'}</div>
-        <div style="font-size:11px;color:#415A70;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${s.producto_nombre || ''}</div>
-        <div style="font-size:11px;color:#415A70;margin-top:1px;">📍 ${s.ubicacion_codigo || '—'}</div>
+        <div style="font-size:12px;font-weight:700;color:#415A70;">${esc(s.producto_codigo || '—')}</div>
+        <div style="font-size:11px;color:#415A70;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(s.producto_nombre || '')}</div>
+        <div style="font-size:11px;color:#415A70;margin-top:1px;">📍 ${esc(s.ubicacion_codigo || '—')}</div>
       </div>
       <div style="display:flex;flex-direction:column;align-items:flex-end;gap:3px;flex-shrink:0;margin-left:8px;">
-        <span style="background:${col};color:#fff;font-size:10px;font-weight:700;padding:2px 8px;border-radius:8px;">${s.estado}</span>
+        <span style="background:${col};color:#fff;font-size:10px;font-weight:700;padding:2px 8px;border-radius:8px;">${esc(s.estado)}</span>
         ${dif ? `<span style="color:${difCol};font-size:11px;font-weight:700;">Δ ${dif}</span>` : ''}
       </div>
     </div>
-    ${s.aprobador_nombre ? `<div style="font-size:10px;color:#415A70;margin-top:4px;">✓ ${s.aprobador_nombre}</div>` : ''}
+    ${s.aprobador_nombre ? `<div style="font-size:10px;color:#415A70;margin-top:4px;">✓ ${esc(s.aprobador_nombre)}</div>` : ''}
   </div>`;
 }
 
@@ -486,7 +486,7 @@ async function conteoMostrarAsignar() {
   const sel = document.getElementById('conteo-asignar-operario');
   if (sel) {
     sel.innerHTML = _CONTEO_OPERARIOS.map(u =>
-      `<option value="${u.id}">${u.nombre || u.usuario} (${u.rol})</option>`
+      `<option value="${esc(u.id)}">${u.nombre || u.usuario} (${esc(u.rol)})</option>`
     ).join('');
   }
   panel.style.display = 'block';
@@ -690,14 +690,14 @@ async function cargarResumenAbc() {
         ${items.map(it => {
           const total = dist[it.clase]?.total_productos ?? '—';
           return `
-          <div style="background:${it.bg};border:1px solid ${it.border};border-radius:10px;padding:14px;text-align:center;">
-            <div style="font-size:22px;font-weight:900;color:${it.col};">${total}</div>
-            <div style="font-size:11px;font-weight:700;color:${it.col};">Clase ${it.clase}</div>
-            <div style="font-size:10px;color:#666;margin-top:2px;">${it.desc}</div>
+          <div style="background:${esc(it.bg)};border:1px solid ${esc(it.border)};border-radius:10px;padding:14px;text-align:center;">
+            <div style="font-size:22px;font-weight:900;color:${esc(it.col)};">${total}</div>
+            <div style="font-size:11px;font-weight:700;color:${esc(it.col)};">Clase ${esc(it.clase)}</div>
+            <div style="font-size:10px;color:#666;margin-top:2px;">${esc(it.desc)}</div>
           </div>`;
         }).join('')}
       </div>
-      <div style="font-size:11px;color:#555;text-align:right;">Fuente: ${d.fuente || 'WMS'}</div>`;
+      <div style="font-size:11px;color:#555;text-align:right;">Fuente: ${esc(d.fuente || 'WMS')}</div>`;
   } catch (e) {
     resumenEl.innerHTML = '<div style="color:#ef4444;font-size:12px;">Error cargando resumen</div>';
   }
@@ -826,14 +826,14 @@ function conteoAbrirEdicion(s) {
     const hijo = s.segundo_conteo;
     infoDiv.innerHTML = `
       <div style="font-size:12px;color:#888;margin-bottom:10px;">
-        <b>${s.producto_codigo || '—'}</b> · ${s.producto_nombre || ''}<br>
-        📍 ${s.ubicacion_codigo || s.ubicacion_id || '—'}${s.clasificacion_abc ? ` · ABC-${s.clasificacion_abc}` : ''}<br>
+        <b>${esc(s.producto_codigo || '—')}</b> · ${esc(s.producto_nombre || '')}<br>
+        📍 ${s.ubicacion_codigo || s.ubicacion_id || '—'}${s.clasificacion_abc ? ` · ABC-${esc(s.clasificacion_abc)}` : ''}<br>
         <span style="display:inline-flex;gap:12px;margin-top:4px;">
-          ${s.existencia_siesa != null ? `<span>Siesa <b style="color:#60a5fa;">${s.existencia_siesa}</b></span>` : '<span style="color:#374151;">Sin ref. Siesa</span>'}
-          ${s.cantidad_fisica != null ? `<span>1er conteo <b style="color:#f59e0b;">${s.cantidad_fisica}</b></span>` : ''}
-          ${hijo?.cantidad_fisica != null ? `<span>2do conteo <b style="color:${hijo.cantidad_fisica===s.cantidad_fisica?'#4ade80':'#f87171'};">${hijo.cantidad_fisica}</b></span>` : ''}
+          ${s.existencia_siesa != null ? `<span>Siesa <b style="color:#60a5fa;">${esc(s.existencia_siesa)}</b></span>` : '<span style="color:#374151;">Sin ref. Siesa</span>'}
+          ${s.cantidad_fisica != null ? `<span>1er conteo <b style="color:#f59e0b;">${esc(s.cantidad_fisica)}</b></span>` : ''}
+          ${hijo?.cantidad_fisica != null ? `<span>2do conteo <b style="color:${hijo.cantidad_fisica===s.cantidad_fisica?'#4ade80':'#f87171'};">${esc(hijo.cantidad_fisica)}</b></span>` : ''}
         </span>
-        ${s.editado_en ? `<br><span style="color:#f59e0b;">Última edición: ${s.motivo_edicion}</span>` : ''}
+        ${s.editado_en ? `<br><span style="color:#f59e0b;">Última edición: ${esc(s.motivo_edicion)}</span>` : ''}
       </div>`;
   }
   const motivoInput = document.getElementById('conteo-edit-motivo');
@@ -896,7 +896,7 @@ async function subirCsvAbc(input) {
 
   label.style.borderColor = '#555';
   label.style.color = '#aaa';
-  label.innerHTML = `⏳ Procesando ${archivo.name}... <input type="file" id="abc-csv-input" accept=".csv,.xlsx,.xls,.txt" style="display:none;" onchange="subirCsvAbc(this)">`;
+  label.innerHTML = `⏳ Procesando ${esc(archivo.name)}... <input type="file" id="abc-csv-input" accept=".csv,.xlsx,.xls,.txt" style="display:none;" onchange="subirCsvAbc(this)">`;
   res.style.color = '#888';
   res.textContent = 'Subiendo archivo...';
 
@@ -920,7 +920,7 @@ async function subirCsvAbc(input) {
       res.textContent = msg;
       label.style.borderColor = '#166534';
       label.style.color = '#4ade80';
-      label.innerHTML = `✓ ${archivo.name} cargado <input type="file" id="abc-csv-input" accept=".csv,.xlsx,.xls,.txt" style="display:none;" onchange="subirCsvAbc(this)">`;
+      label.innerHTML = `✓ ${esc(archivo.name)} cargado <input type="file" id="abc-csv-input" accept=".csv,.xlsx,.xls,.txt" style="display:none;" onchange="subirCsvAbc(this)">`;
 
       if (d.no_encontrados > 0) {
         res.textContent += ` · ${d.no_encontrados} refs no encontradas en WMS`;
@@ -999,8 +999,8 @@ function conteoAbrirAjuste(s) {
 
   info.innerHTML = `
     <div style="margin-bottom:10px;">
-      <div style="font-size:13px;font-weight:700;color:#e2e8f0;">${s.producto_codigo || '—'} · ${s.producto_nombre || ''}</div>
-      <div style="font-size:11px;color:#4b5563;margin-top:1px;">📍 ${s.ubicacion_codigo || '—'} · Bodega: <span style="color:#60a5fa;font-weight:700;">${bodega}</span></div>
+      <div style="font-size:13px;font-weight:700;color:#e2e8f0;">${esc(s.producto_codigo || '—')} · ${esc(s.producto_nombre || '')}</div>
+      <div style="font-size:11px;color:#4b5563;margin-top:1px;">📍 ${esc(s.ubicacion_codigo || '—')} · Bodega: <span style="color:#60a5fa;font-weight:700;">${bodega}</span></div>
     </div>
     <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-bottom:12px;text-align:center;">
       <div>

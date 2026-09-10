@@ -138,9 +138,16 @@ MUTACIONES = [
     # sobrevive porque no cambia nada NO es un hueco de tests, y confundir las
     # dos cosas lleva a escribir un test que afirma una diferencia inexistente.
     # En su lugar va la de abajo, que sí cambia el número.
+    # ⚠ ANCLA REPARADA el 2026-09-04. La anterior era
+    # `if desde <= l.ts.date() <= hasta]`, y **dejó de existir el 2026-09-02**,
+    # cuando el arreglo de la ventana UTC la cambió por `_dia_operativo_de`.
+    # Desde ese día esta mutación no se aplicaba: el arnés la reportaba
+    # `NO SE JUZGÓ` y nadie leyó esa línea. Una mutación cuya ancla no calza no
+    # dice «sobrevivió» ni «murió» — no dice nada, y eso se lee como todo bien.
+    # Es exactamente por esto que el tercer estado existe.
     ('los kilómetros del CPK salen de toda la historia, no de la ventana',
-     ADA, "                if desde <= l.ts.date() <= hasta]",
-     "                if True]",
+     ADA, "                and desde <= _dia_operativo_de(l.ts) <= hasta]",
+     "                ]",
      [T_GASTOS]),
 
     ('el tanqueo escribe el gasto en su propia transacción',
@@ -196,9 +203,20 @@ MUTACIONES = [
      JS, "  if (cpk && cpk.length) {", "  if (false && cpk && cpk.length) {",
      [T_RENDER]),
 
+    # ⚠ ANCLA REPARADA el 2026-09-04. La anterior era solo la línea del
+    # `<option>`, que en su momento era única y hoy aparece **tres veces** en
+    # `flota.js` — el archivo creció con los selects de taller y de llantas. El
+    # arnés la reportaba `NO SE JUZGÓ` por ambigüedad, que es lo correcto:
+    # mutar la primera de tres habría medido el select equivocado y dado por
+    # muerta una propiedad que nadie probó.
+    #
+    # El ancla incluye ahora la línea siguiente, que solo existe en el select
+    # del tanque.
     ('el estado del tanque viene con «lleno» premarcado',
-     JS, '<option value="" selected>— elegí una —</option>',
-     '<option value="">— elegí una —</option>',
+     JS, '<option value="" selected>— elegí una —</option>\n'
+         '        ${opciones(d.estados_tanque)}',
+     '<option value="">— elegí una —</option>\n'
+         '        ${opciones(d.estados_tanque)}',
      [T_RENDER]),
 
     ('la fila del tanqueo excedido deja de explicar y solo señala',
@@ -215,6 +233,56 @@ MUTACIONES = [
      JS, "const FLOTA_TANQUEO_URL = '/flota/tanqueos';",
      "const FLOTA_TANQUEO_URL = '/flota/' + 'tanq' + 'ueos';",
      [T_TRINQ]),
+
+    # ── Los cuatro del arreglo de `cpk_mes` (2026-09-04) ─────────────────
+    #
+    # Los tres primeros restauran el comportamiento anterior, uno por uno. Es
+    # la única forma de saber que los tests nuevos miden las TRES cosas y no
+    # una sola: un test que solo cuente filas mata la primera y sobrevive a las
+    # otras dos.
+
+    ('cpk_mes vuelve a filtrar por los vehículos con gasto',
+     MED,
+     "        for v in (Vehiculo.query.filter(Vehiculo.activo.is_(True))\n"
+     "                  .order_by(Vehiculo.placa).all()):\n"
+     "            r = cpk_de(v.id, desde, hoy)",
+     "        from flota.adaptadores.modelos import Gasto\n"
+     "        _cg = {g.vehiculo_id for g in db.session.query(Gasto.vehiculo_id)}\n"
+     "        for v in (Vehiculo.query.filter(Vehiculo.id.in_(_cg))\n"
+     "                  .order_by(Vehiculo.placa).all()):\n"
+     "            r = cpk_de(v.id, desde, hoy)",
+     [T_GASTOS]),
+
+    ('cpk_mes vuelve a devolver [] cuando nadie registró ningún gasto',
+     MED,
+     "        salida = []\n"
+     "        # Mismo predicado que `vehiculos_activos()`",
+     "        salida = []\n"
+     "        from flota.adaptadores.modelos import Gasto\n"
+     "        if not db.session.query(Gasto.vehiculo_id).first():\n"
+     "            return []\n"
+     "        # Mismo predicado que `vehiculos_activos()`",
+     [T_GASTOS]),
+
+    ('la fila del CPK deja de decir POR QUÉ no hay cifra',
+     MED, "                'motivo': _motivo_cpk(r),", "                'motivo': None,",
+     [T_GASTOS]),
+
+    # Y ésta es la que importa de verdad: que el motivo sea el CORRECTO, no
+    # que exista. `_motivo_cpk` puede devolver siempre una cadena no vacía y
+    # estar mintiendo — es el defecto que tenía el JS, que adivinaba con
+    # `km_recorridos > 0` y llamaba «sin gastos» a un tramo dudoso.
+    ('el motivo confunde «sin lecturas» con «extremos dudosos»',
+     MED,
+     "        if r['lecturas'] < 2:",
+     "        if False:",
+     [T_GASTOS]),
+
+    ('el expediente vuelve a adivinar el motivo del CPK en el navegador',
+     JS,
+     "    ? `<b>sin dato</b> — ${d.cpk_motivo || 'no se declaró el motivo.'}`",
+     "    ? `<b>sin dato</b> — ${d.km_recorridos > 0 ? 'no hay gasto' : 'no hay km'}`",
+     [T_TRINQ, T_RENDER]),
 ]
 
 _RESUMEN = re.compile(

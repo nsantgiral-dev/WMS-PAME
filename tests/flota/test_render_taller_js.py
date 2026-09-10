@@ -158,6 +158,10 @@ const ctx = {
 ctx.globalThis = ctx;
 ctx.window.document = doc;
 vm.createContext(ctx);
+// `util.js` va PRIMERO y se carga de verdad, no se stubbea: `esc()` es lo
+// que este arnés tiene que poder ver fallar.
+vm.runInContext(fs.readFileSync(FLOTAJS.replace(/[^/]+$/, 'util.js'), 'utf-8'),
+                ctx, { filename: 'util.js' });
 vm.runInContext(fs.readFileSync(FLOTAJS, 'utf-8'), ctx, { filename: 'flota.js' });
 
 (async () => {
@@ -165,6 +169,11 @@ vm.runInContext(fs.readFileSync(FLOTAJS, 'utf-8'), ctx, { filename: 'flota.js' }
   // contexto, así que asignarla desde fuera crearía otra variable y la pantalla
   // seguiría viendo `null`. Se asigna corriendo un script en el mismo contexto.
   vm.runInContext('FLOTA_PLACA = ' + JSON.stringify(GUION.placa) + ';', ctx);
+  // `OPERARIO` lo declara `app.js` con `let` y esta pantalla lo lee para saber
+  // si quien mira DECIDE o solo REGISTRA. Sin asignarlo, `flotaDecide()` da
+  // `false` y el arnés probaría para siempre la pantalla del que no decide —
+  // silenciosamente, y con los tests en verde.
+  vm.runInContext('OPERARIO = ' + JSON.stringify(GUION.operario) + ';', ctx);
   await ctx.flotaRenderTaller();
   // El sistema elegido se simula moviendo el `value` del selector y volviendo a
   // llamar al filtro, que es exactamente lo que hace el `onchange`.
@@ -180,14 +189,20 @@ vm.runInContext(fs.readFileSync(FLOTAJS, 'utf-8'), ctx, { filename: 'flota.js' }
 """
 
 
-def _correr(tmp_path, payload, sistema=None) -> dict:
-    """Corre `flotaRenderTaller()` del `flota.js` real y devuelve lo pintado."""
+def _correr(tmp_path, payload, sistema=None, rol='admin') -> dict:
+    """Corre `flotaRenderTaller()` del `flota.js` real y devuelve lo pintado.
+
+    `rol` por defecto es `admin` —el que decide— porque es lo que este archivo
+    venía probando antes de que el eje existiera. Dejarlo en el que NO decide
+    habría hecho pasar los tests viejos midiendo otra pantalla.
+    """
     if not shutil.which('node'):
         pytest.skip('node no disponible en este entorno')
     h = tmp_path / 'h.mjs'
     h.write_text(HARNESS, encoding='utf-8')
     g = tmp_path / 'g.json'
     g.write_text(json.dumps({'placa': 'TGZ653', 'sistema': sistema,
+                             'operario': {'rol': rol, 'nombre': 'quien sea'},
                              'rutas': {'/flota/ordenes/': payload}}),
                  encoding='utf-8')
     proc = subprocess.run(['node', str(h), str(FLOTA_JS), str(g)],
@@ -436,3 +451,46 @@ class TestLasURLVanEnterasYNoConcatenadas:
     def test_ninguna_se_arma_con_el_verbo_por_variable(self):
         js = FLOTA_JS.read_text(encoding='utf-8')
         assert '/flota/ordenes/${id}/${' not in js
+
+
+class TestLaPantallaNoOfreceLoQueElBackendNiega:
+    """El gesto que termina en 403 no se pinta — y lo que sigue siendo suyo, sí.
+
+    Desde el 2026-09-09 abrir, cerrar y anular una orden son `DECIDE_FLOTA`
+    (gestión). Esconder el botón **no es el control de acceso** —ese vive en el
+    backend y lo ejerce la matriz rol × endpoint por HTTP—; es que dejarle a la
+    vista un gesto que el sistema le va a negar **enseña a ignorar los errores**,
+    que es la misma razón por la que a este rol se le esconden las otras
+    pestañas (`especialista-control-flota.md:18`).
+
+    Las dos direcciones, porque un `flotaDecide()` que devolviera `false` a todo
+    el mundo dejaría la mitad de arriba en verde.
+    """
+
+    def _con_una_abierta(self, tmp_path, rol):
+        o = _orden(estado='abierta', intervenciones=[])
+        return _correr(tmp_path, {'ordenes': [o], 'sistemas': ['frenos'],
+                                  'tipos': ['correctiva'], 'garantias': []},
+                       rol=rol)['html']
+
+    def test_control_de_flota_no_ve_los_verbos_de_decision(self, tmp_path):
+        html = self._con_una_abierta(tmp_path, 'control_flota')
+        for gesto in ('Abrir orden', 'Volvió del taller', 'Anular'):
+            assert gesto not in html, f'le ofreció «{gesto}» y el backend lo niega'
+
+    def test_y_le_dice_a_quien_le_toca_en_vez_de_dejar_un_hueco(self, tmp_path):
+        """Un formulario que desaparece sin explicación es indistinguible de uno
+        que se rompió. El gesto que reemplaza al botón es «escalá»."""
+        html = self._con_una_abierta(tmp_path, 'control_flota')
+        assert 'lo decide gestión' in html
+
+    def test_pero_SIGUE_viendo_lo_que_es_registro(self, tmp_path):
+        """La mitad que un recorte de permisos se lleva por delante sin que
+        nadie se entere: registrar qué se hizo sigue siendo suyo."""
+        html = self._con_una_abierta(tmp_path, 'control_flota')
+        assert 'Registrar un trabajo de esta visita' in html
+
+    def test_gestion_SI_los_ve(self, tmp_path):
+        html = self._con_una_abierta(tmp_path, 'admin')
+        for gesto in ('Abrir orden', 'Volvió del taller', 'Anular'):
+            assert gesto in html, f'a gestión le falta «{gesto}»'

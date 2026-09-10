@@ -12,6 +12,7 @@
 ## Arquitectura JS (Frontend)
 
 ```
+util.js                         Base sin dependencias. Hoy solo `esc()`. Carga PRIMERO
 app.js          (2,294 líneas)  Core: auth, helpers, dashboard, camera, admin
 picking.js        (747)         Escaneo operario, confirmación
 packing.js        (865)         Empacador HUD, bultos, etiquetas
@@ -27,11 +28,12 @@ etiquetas.js      (110)         Impresión de etiquetas
 vigia.js          (513)         Panel CUSUM, alarmas, carga de series
 compras_ia.js     (394)         Acuerdos marco, Armador, deriva, inteligencia inventario
 flota.js        (2,198)         Custodia de vehículos, ficha, documentos, avisos, daños
+flota_analitica.js              Sub-tab de analítica de flota (15 paneles, sin canvas)
 kardex.js         (446)         Motor kardex
 temporada.js      (365)         Temporada escolar
 ```
 
-Orden de carga: app → picking → packing → recepcion → rutas → traslados → conteo → reposicion → liquidacion → layout → tienda → etiquetas → vigia → compras_ia → kardex → temporada → flota. Todas las funciones son globales. Cross-module calls son runtime (onclick), nunca parse-time.
+Orden de carga: util → app → picking → packing → recepcion → rutas → traslados → conteo → reposicion → liquidacion → layout → tienda → etiquetas → vigia → compras_ia → kardex → temporada → flota → flota_analitica. Todas las funciones son globales. Cross-module calls son runtime (onclick), nunca parse-time.
 
 La lista autoritativa del orden real es el `SHELL` de `app/static/pwa/sw.js` —
 es la que el service worker cachea. Si esta tabla y ese arreglo divergen, el
@@ -74,6 +76,49 @@ Buscar aquí antes de darlos por inexistentes:
 | `invSubtab()` | `conteo.js:94` | `compras_ia.js` (inteligencia inventario) |
 
 ---
+
+### Todo dato que se pinta va con `esc()` (2026-09-09)
+
+**La PWA arma su HTML con literales de plantilla y lo asigna a `innerHTML`.**
+Cualquier texto que escribió una persona —una descripción, un motivo, el nombre
+de un producto— se envuelve en `esc(...)` de `util.js` antes de interpolarlo.
+
+El caso concreto: `POST /flota/custodia/traspaso` es `LECTURA_FLOTA`, o sea que
+**el conductor escribe** el motivo de un cierre forzado, y ese texto se pinta en
+la pantalla de gestión. Del rol con menos permisos a la sesión del que más
+tiene. Hoy hay `esc()` en **1.265 interpolaciones de 19 archivos**, y el guard
+`TestNingunDatoLlegaCrudoAlInnerHTML` (`tests/test_frontend_integrity.py`)
+impide que entre una nueva sin escapar.
+
+**Los dos atajos que NO sirven, para no volver a proponerlos:**
+
+- **Sanear el HTML ya armado.** Esta app pone sus propios `onclick=` en la misma
+  cadena que los datos. Después de concatenar no se distingue el marcado propio
+  del inyectado: un saneador que borre manejadores inline mata la interfaz, y
+  uno que los respete deja pasar el ataque.
+- **Escapar la respuesta en `get()`.** Corrompe el dato: un texto que se edita y
+  se reenvía viajaría con `&lt;` adentro y se guardaría así. El escape pertenece
+  al sitio donde el dato se vuelve HTML, no al sitio donde llega.
+
+**`esc()` vive en `util.js` y no en `app.js`** porque los arneses de Node
+stubbean lo que viene de `app.js` (`get`, `horaColombia`, `alerta`). Un `esc`
+stubbeado convierte todos los tests de escapado en tests del stub: verde con la
+función real rota. Todo arnés nuevo tiene que cargar `util.js` de verdad.
+
+**Lo que el guard NO cubre**, medido el 2026-09-09 y escrito para que nadie lo
+suponga cubierto:
+
+| Hueco | Sitios |
+|---|---|
+| HTML armado por concatenación con `+` | 75 |
+| Dato dentro de JS dentro de un atributo — `onclick="fn('${x}')"` | 206 |
+| Identificadores sueltos (`${cuerpo}`): pueden ser marcado construido | — |
+
+El segundo merece su renglón: **`esc` no protege ahí y no puede**. El navegador
+decodifica las entidades del atributo antes de que el JS corra, así que un
+`&#39;` vuelve a ser `'` y rompe la cadena igual. No empeora nada —sin `esc`
+rompía idéntico— pero el arreglo es otro: pasar un id y buscar el dato, no el
+texto.
 
 ## Mapa de Conectores Siesa
 

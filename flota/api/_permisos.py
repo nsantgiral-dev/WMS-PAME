@@ -38,8 +38,58 @@ from flask_jwt_extended import get_jwt_identity
 from app.models.usuario import Usuario
 from app.routes._auth_helpers import Roles
 
-#: Maestros del vehículo: ficha y documentos. NO incluye conductor.
+#: **Registro** del vehículo: escribir lo que pasó. NO incluye conductor.
+#:
+#: Nació el 2026-08-03 gateando dos endpoints —ficha y documentos— y su nombre
+#: describía esos dos: «maestros del vehículo». Al 2026-09-09 gatea **25 pares
+#: ruta×método** (contados contra `url_map`, no recordados), porque taller
+#: (2026-09-01) y gastos (2026-09-02) colgaron de la tupla que ya existía. Los tres motivos escritos en ESTADO.md para elegirla —1256, 1257 y
+#: 1502— dicen lo mismo: **«no el conductor»**. Ninguno se preguntó por el otro
+#: borde, y así el nombre siguió prometiendo dos endpoints mientras el alcance
+#: se multiplicaba por diez.
+#:
+#: Lo que autoriza hoy, dicho entero: ficha, documentos, verificar un odómetro
+#: dudoso, registrar un gasto, registrar la factura de una orden, registrar una
+#: intervención, sembrar y ejecutar preventivo, dar de alta y montar llantas,
+#: barrer avisos. **Todo eso es registro: consignar un hecho que ya ocurrió.**
+#:
+#: Lo que NO autoriza está en `DECIDE_FLOTA`, y la frontera es esa: registrar un
+#: hecho contra decidir uno.
 MAESTROS_FLOTA = tuple(Roles.GESTION) + (Roles.CONTROL_FLOTA,)
+
+#: **Decisión**: cerrar el ciclo de un daño o de una visita al taller.
+#:
+#: `GESTION` a secas — control de flota queda **fuera**, y es el único sitio del
+#: módulo donde queda fuera de algo que MAESTROS_FLOTA le daba.
+#:
+#: Dos motivos, y el segundo es el que no se puede negociar:
+#:
+#: 1. Su procedimiento lo dice literal desde el 2026-08-04: *«ves el tablero y
+#:    escalás, pero no aprobás órdenes de trabajo ni gastos»*
+#:    (`especialista-control-flota.md:38`). El código decía lo contrario y el
+#:    documento afirmaba que el código lo imponía — el desfase exacto que ese
+#:    mismo párrafo nombra como «lo que vuelve decorativo un procedimiento».
+#:
+#: 2. **Es la regla 11 un nivel más arriba.** `dias_hallazgo_abierto` y
+#:    `hallazgos_vencidos` son dos de las cinco señales con las que se mide a
+#:    control de flota (`especialista-control-flota.md:112`, *«Cómo se sabe que
+#:    lo estás haciendo bien»*). La regla 11 pregunta cómo maximiza una métrica
+#:    quien no quiere hacer el trabajo; acá la respuesta era de un clic:
+#:    «Reparado», «No era nada», «Aplazar 7 días». Aplazar no para el reloj de
+#:    los días abiertos, pero sí borra el «vencido», que es justo lo que su
+#:    ficha le manda perseguir. **Quien es medido por un contador no puede tener
+#:    el botón que lo baja.**
+#:
+#: Lo que sigue pudiendo hacer: ver todo, reportar el daño, registrar el gasto y
+#: la factura de la reparación. Lo que ya no: mandar el camión al taller, darlo
+#: por vuelto, anular la visita, y cerrar, descartar o aplazar el daño.
+#:
+#: El costo operativo está medido y es cero hoy: al 2026-09-09 no hay una sola
+#: orden de trabajo ni un solo hallazgo en la base (ESTADO.md:1164, 1429). El
+#: costo futuro es real y es el precio de la regla: para mandar un camión al
+#: taller, control de flota escala a gestión — que es literalmente lo que su
+#: ficha dice que hace («no ordena: señala plazos vencidos y escala»).
+DECIDE_FLOTA = tuple(Roles.GESTION)
 
 
 def _usuario():

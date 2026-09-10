@@ -28,7 +28,7 @@ avisos_bp = Blueprint('flota_avisos', __name__)
 
 @avisos_bp.route('/avisos', methods=['GET'])
 @jwt_required()
-@exige(Roles.LECTURA_FLOTA, 'ver los avisos')
+@exige(Roles.VISTA_FLOTA, 'ver los avisos de toda la flota')
 def listar_avisos():
     """Qué se mandó, a quién, y si llegó.
 

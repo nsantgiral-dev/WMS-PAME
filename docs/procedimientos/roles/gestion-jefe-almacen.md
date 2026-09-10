@@ -71,6 +71,26 @@ acostumbran.
 
 ---
 
+## Flota: acceso sin decisión — deuda declarada
+
+Estás en `VISTA_FLOTA` y ves el tab de analítica de flota. **No tenés ninguna
+decisión de flota asignada**, ni en este documento ni en ningún otro: tu única
+relación con el módulo es poder ver cédulas y teléfonos de conductores, que es
+un dato personal y no una decisión.
+
+O sea que el acceso está y la razón no. Se deja como está —quitártelo sería un
+cambio que nadie pidió, y podría romperle el día a alguien mañana— pero **con
+fecha**:
+
+> **Condición de disparo:** si al 2026-12-04 nadie con este rol abrió el tab de
+> analítica de flota, se quita `jefe_almacen` de `VISTA_FLOTA` y se borra esta
+> sección. Si sí lo abrió, la pregunta pasa a ser para qué, y esa respuesta se
+> escribe acá como decisión.
+
+Una deuda sin fecha no es una deuda: es una nota que nadie vuelve a leer.
+
+---
+
 ## Cómo se sabe que lo estás haciendo bien
 
 | Señal | Qué dice |

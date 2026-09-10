@@ -49,7 +49,7 @@ async function pedirTarea() {
       <div style="text-align:center;padding:40px 20px;">
         <div style="font-size:40px;">⚠️</div>
         <div style="font-size:16px;font-weight:700;color:#f87171;margin-top:12px;">Error al cargar tareas</div>
-        <div style="font-size:13px;color:#666;margin-top:6px;">${e.message || 'Error de conexión'}</div>
+        <div style="font-size:13px;color:#666;margin-top:6px;">${esc(e.message || 'Error de conexión')}</div>
         <button onclick="pedirTarea()" style="margin-top:16px;padding:12px 24px;background:#1e3a5f;color:#93c5fd;border:none;border-radius:10px;font-size:14px;font-weight:700;cursor:pointer;">
           🔄 Reintentar
         </button>
@@ -98,7 +98,7 @@ function renderTarea(t) {
     : esConteo
       ? `<div style="background:#1a1a1a;border-radius:16px;padding:20px;margin-bottom:12px;text-align:center;">
           <div style="font-size:13px;color:#666;">CONTEO CIEGO</div>
-          <div id="contador" style="font-size:64px;font-weight:900;">${t.cantidad_escaneada || 0}</div>
+          <div id="contador" style="font-size:64px;font-weight:900;">${esc(t.cantidad_escaneada || 0)}</div>
           <div style="font-size:13px;color:#555;margin-top:6px;">Cuenta sin ver cantidad esperada</div>
         </div>`
       : `<div style="background:#1a1a1a;border-radius:16px;padding:20px;margin-bottom:12px;text-align:center;">
@@ -119,17 +119,17 @@ function renderTarea(t) {
 
   document.getElementById('contenido-tarea').innerHTML = `
     <div style="padding:16px;${_acentoTipoDoc}">
-      <div style="background:${color};color:#fff;border-radius:12px;padding:10px 16px;font-size:20px;font-weight:700;text-align:center;margin-bottom:16px;display:flex;align-items:center;justify-content:center;">${t.tipo}${esPicking ? _etiquetaTipoDoc : ''}</div>
+      <div style="background:${color};color:#fff;border-radius:12px;padding:10px 16px;font-size:20px;font-weight:700;text-align:center;margin-bottom:16px;display:flex;align-items:center;justify-content:center;">${esc(t.tipo)}${esPicking ? _etiquetaTipoDoc : ''}</div>
 
       <div style="background:#000;border:1px solid #222;border-radius:16px;padding:20px;margin-bottom:12px;">
         <div style="font-size:13px;color:#666;">UBICACIÓN</div>
-        <div style="font-size:44px;font-weight:900;letter-spacing:2px;">${t.ubicacion}</div>
+        <div style="font-size:44px;font-weight:900;letter-spacing:2px;">${esc(t.ubicacion)}</div>
       </div>
 
       <div style="background:#111;border-radius:16px;padding:16px;margin-bottom:12px;">
         <div style="font-size:13px;color:#666;">PRODUCTO</div>
-        <div style="font-size:26px;font-weight:700;">${t.producto_codigo}</div>
-        <div style="font-size:15px;color:#aaa;">${t.producto_nombre}</div>
+        <div style="font-size:26px;font-weight:700;">${esc(t.producto_codigo)}</div>
+        <div style="font-size:15px;color:#aaa;">${esc(t.producto_nombre)}</div>
       </div>
 
       ${esPicking && t.producto_id ? `
@@ -159,12 +159,12 @@ function renderTarea(t) {
       </button>
 
       ${!esConteo ? `
-      <button onclick="confirmarManual(${t.id}, ${t.cantidad_requerida})"
+      <button onclick="confirmarManual(${esc(t.id)}, ${esc(t.cantidad_requerida)})"
         style="width:100%;padding:14px;font-size:15px;font-weight:600;background:#1a2a1a;color:#4ade80;border:1px solid #166534;border-radius:12px;cursor:pointer;margin-bottom:10px;">
         ✓ Confirmar conteo manual
       </button>` : ''}
 
-      <button onclick="reportarProblema(${t.id})"
+      <button onclick="reportarProblema(${esc(t.id)})"
         style="width:100%;padding:14px;font-size:15px;font-weight:600;background:#7f1d1d;color:#f87171;border:none;border-radius:12px;cursor:pointer;">
         ⚠ Reportar problema
       </button>
@@ -173,17 +173,17 @@ function renderTarea(t) {
       <div style="background:#0a1628;border:1px solid #1e3a5f;border-radius:12px;padding:10px 14px;margin-top:8px;display:flex;align-items:center;gap:10px;">
         <span style="font-size:18px;">🏪</span>
         <div>
-          ${t.cliente ? `<div style="font-size:14px;font-weight:700;color:#60a5fa;">${t.cliente}</div>` : ''}
-          ${t.referencia ? `<div style="font-size:11px;color:#3b82f6;">Pedido ${t.referencia}</div>` : ''}
+          ${t.cliente ? `<div style="font-size:14px;font-weight:700;color:#60a5fa;">${esc(t.cliente)}</div>` : ''}
+          ${t.referencia ? `<div style="font-size:11px;color:#3b82f6;">Pedido ${esc(t.referencia)}</div>` : ''}
         </div>
       </div>` : ''}
 
       ${t.conteo_intercalado ? `
       <div style="background:#1c1a0a;border:1px solid #b45309;border-radius:12px;padding:14px;margin-top:12px;">
         <div style="font-size:12px;color:#f59e0b;font-weight:700;margin-bottom:4px;">📊 CONTEO PENDIENTE AQUÍ</div>
-        <div style="font-size:14px;font-weight:700;color:#fde68a;">${t.conteo_intercalado.producto_codigo}</div>
-        <div style="font-size:12px;color:#d97706;">${t.conteo_intercalado.producto_nombre}</div>
-        <div style="font-size:11px;color:#78350f;margin-top:4px;">Clase ${t.conteo_intercalado.clasificacion} · Hazlo al terminar el picking</div>
+        <div style="font-size:14px;font-weight:700;color:#fde68a;">${esc(t.conteo_intercalado.producto_codigo)}</div>
+        <div style="font-size:12px;color:#d97706;">${esc(t.conteo_intercalado.producto_nombre)}</div>
+        <div style="font-size:11px;color:#78350f;margin-top:4px;">Clase ${esc(t.conteo_intercalado.clasificacion)} · Hazlo al terminar el picking</div>
       </div>` : ''}
     </div>`;
 
@@ -439,10 +439,10 @@ function _actualizarContadorPicking(r) {
 function _modalAmbiguedadPicking(codigo, empaques) {
   // empaques: array de ProductoEmpaque.to_dict() — incluye producto_codigo
   const opciones = empaques.map(e => `
-    <button onclick="_elegirEmpaquePicking('${e.producto_codigo || e.referencia_item}', ${e.factor_conversion}, '${e.unidad_medida}', this.closest('.modal-ambig'))"
+    <button onclick="_elegirEmpaquePicking('${e.producto_codigo || e.referencia_item}', ${esc(e.factor_conversion)}, '${esc(e.unidad_medida)}', this.closest('.modal-ambig'))"
       style="width:100%;padding:16px;font-size:18px;font-weight:700;background:#1a1a1a;color:#fff;border:1px solid #333;border-radius:12px;cursor:pointer;margin-bottom:8px;">
-      ${e.unidad_medida} — ${e.factor_conversion} und
-      <div style="font-size:12px;color:#666;font-weight:400;margin-top:2px;">${e.producto_nombre || ''}</div>
+      ${esc(e.unidad_medida)} — ${esc(e.factor_conversion)} und
+      <div style="font-size:12px;color:#666;font-weight:400;margin-top:2px;">${esc(e.producto_nombre || '')}</div>
     </button>`).join('');
 
   const modal = document.createElement('div');
@@ -566,12 +566,12 @@ function _modalEtiquetaCanasto(canasto) {
     const bloque = `
       <div class="etiqueta-canasto">
         <div class="ec-titulo">CANASTO — PICKING PAME</div>
-        <div class="ec-pedido">${canasto.pedido}</div>
-        <div class="ec-cliente">${canasto.cliente || '—'}</div>
+        <div class="ec-pedido">${esc(canasto.pedido)}</div>
+        <div class="ec-cliente">${esc(canasto.cliente || '—')}</div>
         <div class="ec-items">
-          <div class="ec-item"><span class="ec-ref">${canasto.ref}</span><span class="ec-cant">${canasto.cantidad} uds</span></div>
+          <div class="ec-item"><span class="ec-ref">${esc(canasto.ref)}</span><span class="ec-cant">${esc(canasto.cantidad)} uds</span></div>
         </div>
-        <div class="ec-footer">Operario: ${canasto.operario} · ${hoy}</div>
+        <div class="ec-footer">Operario: ${esc(canasto.operario)} · ${hoy}</div>
       </div>`;
     const area = document.getElementById('print-area');
     area.innerHTML = bloque.repeat(copias);

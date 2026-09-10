@@ -20,6 +20,35 @@
  * que no se puede verificar contra su foto es una declaración sin respaldo.
  */
 
+/** Los roles que **deciden** el desenlace de un daño o de una visita al taller.
+ *
+ * Espejo de `Roles.GESTION` y de `DECIDE_FLOTA` en `flota/api/_permisos.py`.
+ * Control de flota NO está: ve todo, reporta el daño, registra el gasto y la
+ * factura — pero no manda el camión al taller ni cierra el hallazgo, porque
+ * `dias_hallazgo_abierto` y `hallazgos_vencidos` son dos de las cinco señales
+ * con las que se lo mide, y quien es medido por un contador no puede tener el
+ * botón que lo baja (regla 11, un nivel más arriba).
+ *
+ * **Está duplicada del backend y eso es un riesgo declarado**, no un descuido:
+ * no hay un `/me` que devuelva permisos, y derivarla de otro lado sería
+ * inventar una segunda fuente igual. La divergencia la atrapa un trinquete —
+ * `tests/flota/test_permisos_flota.py::TestLaUIYElBackendDicenLoMismo` compara
+ * esta lista contra `Roles.GESTION` y falla si alguien mueve una sola.
+ *
+ * Esconder el botón NO es el control de acceso: el guard vive en el backend y
+ * la matriz rol × endpoint lo ejerce por HTTP. Esto existe porque dejarle a la
+ * vista un gesto que el sistema le va a negar con 403 **enseña a ignorar los
+ * errores**, que es la razón por la que a este rol se le esconden las otras
+ * pestañas (`especialista-control-flota.md:18`).
+ */
+const FLOTA_ROLES_DECIDEN = ['admin', 'gerente', 'jefe_almacen', 'supervisor'];
+
+/** ¿Este usuario decide el desenlace, o solo lo registra? */
+function flotaDecide() {
+  const u = (typeof OPERARIO !== 'undefined' && OPERARIO) ? OPERARIO : null;
+  return !!u && FLOTA_ROLES_DECIDEN.includes(u.rol);
+}
+
 let FLOTA_PLACA = null;
 let FLOTA_ESTADO = null;      // respuesta de /custodia/activa
 let FLOTA_FOTOS = {};         // angulo → dataURL comprimido
@@ -134,7 +163,7 @@ async function flotaLlenarSedes(idSelect) {
       return;
     }
     sel.innerHTML = vacia + lista.map(a =>
-      `<option value="${a.id}">${a.codigo} · ${a.nombre}</option>`).join('');
+      `<option value="${esc(a.id)}">${esc(a.codigo)} · ${esc(a.nombre)}</option>`).join('');
   } catch (e) {
     // Ruidoso: la custodia va a quedar `pendiente_sede` y quien entrega tiene
     // que saber por qué, no descubrirlo en el health la semana que viene.
@@ -150,7 +179,7 @@ function flotaNotaLlantas() {
   const fuente = FLOTA_ESTADO.posiciones_llanta_fuente;
   if (fuente === 'ficha') return '';
   const razon = fuente === 'tipo'
-    ? `deducidas del tipo <b>${FLOTA_ESTADO.tipo || 'del vehículo'}</b>`
+    ? `deducidas del tipo <b>${esc(FLOTA_ESTADO.tipo || 'del vehículo')}</b>`
     : 'un supuesto — no se pudo deducir del tipo';
   return `<p style="color:var(--yellow);font-size:12px;margin:4px 0">
     ${n} posiciones de llanta: ${razon}, no de la ficha técnica.
@@ -184,17 +213,17 @@ async function cargarFlota() {
       'vehículos se hacen en <b>Rutas → Vehículos</b>. Acá vive el expediente de cada uno.</p><div>';
     vehiculos.forEach(v => {
       html += `<div class="flota-veh">
-        <div class="flota-placa">${v.placa}</div>
-        <div class="flota-tipo">${v.tipo}${v.capacidad_kg ? ' · ' + v.capacidad_kg + ' kg' : ''}</div>
-        <button class="btn-flota" onclick="flotaAbrirRecibo('${v.placa}')">Recibo de turno</button>
-        <button class="btn-flota" onclick="flotaAbrirFicha('${v.placa}')">Ficha técnica</button>
-        <button class="btn-flota" onclick="flotaAbrirOdometro('${v.placa}')">Odómetro</button>
-        <button class="btn-flota" onclick="flotaAbrirDocumentos('${v.placa}')">Documentos</button>
-        <button class="btn-flota" onclick="flotaAbrirDanos('${v.placa}')">Daños</button>
-        <button class="btn-flota" onclick="flotaAbrirGastos('${v.placa}')">Gastos</button>
-        <button class="btn-flota" onclick="flotaAbrirTaller('${v.placa}')">Taller</button>
-        <button class="btn-flota" onclick="flotaAbrirLlantas('${v.placa}')">Llantas</button>
-        <button class="btn-flota" onclick="flotaAbrirPreventivo('${v.placa}')">Preventivo</button>
+        <div class="flota-placa">${esc(v.placa)}</div>
+        <div class="flota-tipo">${esc(v.tipo)}${v.capacidad_kg ? ' · ' + v.capacidad_kg + ' kg' : ''}</div>
+        <button class="btn-flota" onclick="flotaAbrirRecibo('${esc(v.placa)}')">Recibo de turno</button>
+        <button class="btn-flota" onclick="flotaAbrirFicha('${esc(v.placa)}')">Ficha técnica</button>
+        <button class="btn-flota" onclick="flotaAbrirOdometro('${esc(v.placa)}')">Odómetro</button>
+        <button class="btn-flota" onclick="flotaAbrirDocumentos('${esc(v.placa)}')">Documentos</button>
+        <button class="btn-flota" onclick="flotaAbrirDanos('${esc(v.placa)}')">Daños</button>
+        <button class="btn-flota" onclick="flotaAbrirGastos('${esc(v.placa)}')">Gastos</button>
+        <button class="btn-flota" onclick="flotaAbrirTaller('${esc(v.placa)}')">Taller</button>
+        <button class="btn-flota" onclick="flotaAbrirLlantas('${esc(v.placa)}')">Llantas</button>
+        <button class="btn-flota" onclick="flotaAbrirPreventivo('${esc(v.placa)}')">Preventivo</button>
       </div>`;
     });
     html += '</div></div>';
@@ -202,7 +231,7 @@ async function cargarFlota() {
     flotaAsegurarModal();
   } catch (e) {
     cont.innerHTML = `<div class="tabla-card" style="color:var(--red)">
-      No se pudo cargar la flota: ${e.message}</div>`;
+      No se pudo cargar la flota: ${esc(e.message)}</div>`;
   }
 }
 
@@ -318,7 +347,7 @@ async function flotaAbrirRecibo(placa) {
   try {
     FLOTA_ESTADO = await get('/flota/custodia/activa/' + encodeURIComponent(placa));
   } catch (e) {
-    el.innerHTML = `<div class="tabla-card" style="color:var(--red)">${e.message}</div>`;
+    el.innerHTML = `<div class="tabla-card" style="color:var(--red)">${esc(e.message)}</div>`;
     return;
   }
   // Los ángulos los decide el SERVIDOR contra la ficha de este vehículo. Si la
@@ -343,9 +372,9 @@ function flotaRenderRecibo() {
 
   let html = `<div class="tabla-card">
     <p>Último odómetro registrado: ${kmTexto}</p>
-    <p>${c ? `Viene de: custodia #${c.id} (desde ${horaColombia(c.inicio_ts)})
+    <p>${c ? `Viene de: custodia #${esc(c.id)} (desde ${horaColombia(c.inicio_ts)})
               <button class="btn-flota" style="padding:2px 8px;font-size:12px"
-                      onclick="flotaVerFotosDeCustodia(${c.id})">ver sus fotos</button>`
+                      onclick="flotaVerFotosDeCustodia(${esc(c.id)})">ver sus fotos</button>`
            : '<b>Arranque en frío</b> — primera custodia. Lo que se registre acá nace como preexistente, sin responsable.'}</p>
 
     <label>Odómetro ahora (km)</label>
@@ -412,7 +441,7 @@ async function flotaCambiarTipoCustodio() {
     det.innerHTML = '<select id="flota-conductor">' +
       lista.map(c => {
         const id = identidadConductor(c, lista);
-        return `<option value="${c.id}">${c.nombre}${id ? ' · ' + id : ''}</option>`;
+        return `<option value="${esc(c.id)}">${esc(c.nombre)}${id ? ' · ' + id : ''}</option>`;
       }).join('') +
       '</select>';
   } else {
@@ -459,10 +488,10 @@ async function flotaCapturarTablero() {
   const aviso = document.getElementById('flota-tablero-ok');
   if (Math.max(r.ancho, r.alto) < 1600) {
     // No se rechaza: se declara. Bloquear acá deja el camión en el patio.
-    aviso.innerHTML = `<span style="color:var(--yellow)">✓ ${r.ancho}×${r.alto} — por debajo de
+    aviso.innerHTML = `<span style="color:var(--yellow)">✓ ${esc(r.ancho)}×${esc(r.alto)} — por debajo de
       1600 px: queda como <b>pendiente_evidencia</b></span>`;
   } else {
-    aviso.innerHTML = `<span style="color:var(--green)">✓ ${r.ancho}×${r.alto}</span>`;
+    aviso.innerHTML = `<span style="color:var(--green)">✓ ${esc(r.ancho)}×${esc(r.alto)}</span>`;
   }
 }
 
@@ -592,7 +621,7 @@ async function flotaVerFoto(fotoId, titulo) {
     const blob = await r.blob();
     flotaPintarFoto(cont, URL.createObjectURL(blob), blob.size, titulo, blob.type);
   } catch (e) {
-    cont.innerHTML = `<p style="color:var(--red)">Sin conexión: ${e.message}</p>`;
+    cont.innerHTML = `<p style="color:var(--red)">Sin conexión: ${esc(e.message)}</p>`;
   }
 }
 
@@ -615,10 +644,10 @@ async function flotaVerFotosDeCustodia(custodiaId) {
         return `<li style="color:var(--red)">${flotaNombreAngulo(a)} —
           se registró pero <b>el archivo no se guardó</b></li>`;
       }
-      return `<li>${flotaNombreAngulo(a)} · ${f.ancho}×${f.alto} ·
+      return `<li>${flotaNombreAngulo(a)} · ${esc(f.ancho)}×${esc(f.alto)} ·
         ${Math.round(f.bytes / 1024)} KB
         <button class="btn-flota" style="padding:2px 8px;font-size:12px"
-                onclick="flotaVerFoto(${f.id}, '${flotaNombreAngulo(a)}')">ver</button></li>`;
+                onclick="flotaVerFoto(${esc(f.id)}, '${flotaNombreAngulo(a)}')">ver</button></li>`;
     }).join('');
 
     if (sinAngulo.length) {
@@ -628,7 +657,7 @@ async function flotaVerFotosDeCustodia(custodiaId) {
       const tablero = sinAngulo.filter(f => f.clase === 'foto_dato');
       const resto = sinAngulo.filter(f => f.clase !== 'foto_dato');
       filas += `<li style="color:var(--tx2);margin-top:6px">
-        ${sinAngulo.length} foto(s) <b>sin ángulo</b> — se guardaron antes de que
+        ${esc(sinAngulo.length)} foto(s) <b>sin ángulo</b> — se guardaron antes de que
         el sistema registrara cuál era cuál. No se puede saber a qué parte del
         vehículo corresponden, y adivinarlo por el orden sería inventar.</li>`;
       if (tablero.length) {
@@ -636,13 +665,13 @@ async function flotaVerFotosDeCustodia(custodiaId) {
           Salvo el <b>tablero</b>: es la única <code>foto_dato</code> del recibo,
           y la clase sí quedó guardada.
           ${tablero.map(f => `<button class="btn-flota" style="padding:2px 8px;font-size:12px"
-              onclick="flotaVerFoto(${f.id}, 'tablero — el del odómetro')">
-              ver tablero (${f.ancho}×${f.alto})</button>`).join(' ')}</li>`;
+              onclick="flotaVerFoto(${esc(f.id)}, 'tablero — el del odómetro')">
+              ver tablero (${esc(f.ancho)}×${esc(f.alto)})</button>`).join(' ')}</li>`;
       }
       if (resto.length) {
         filas += `<li style="color:var(--tx2);margin-top:4px">Las otras:
           ${resto.map(f => `<button class="btn-flota" style="padding:2px 8px;font-size:12px"
-              onclick="flotaVerFoto(${f.id}, 'sin ángulo')">#${f.id}</button>`).join(' ')}</li>`;
+              onclick="flotaVerFoto(${esc(f.id)}, 'sin ángulo')">#${esc(f.id)}</button>`).join(' ')}</li>`;
       }
     }
 
@@ -651,7 +680,7 @@ async function flotaVerFotosDeCustodia(custodiaId) {
       <div id="flota-visor" style="margin-top:12px"></div>
     </div>`;
   } catch (e) {
-    el.innerHTML = `<div class="tabla-card" style="color:var(--red)">${e.message}</div>`;
+    el.innerHTML = `<div class="tabla-card" style="color:var(--red)">${esc(e.message)}</div>`;
   }
 }
 
@@ -947,7 +976,7 @@ async function flotaRenderVerificacion() {
     d = await get(FLOTA_DUDOSAS_URL);
   } catch (e) {
     cont.innerHTML = `<div class="tabla-card" style="color:var(--red)">
-      No se pudo cargar la cola: ${e.message}</div>`;
+      No se pudo cargar la cola: ${esc(e.message)}</div>`;
     return;
   }
   const pendientes = (d && d.pendientes) || [];
@@ -983,22 +1012,22 @@ async function flotaRenderVerificacion() {
 function flotaFilaDudosa(p) {
   const foto = p.tiene_foto
     ? `<button class="btn-flota" style="padding:4px 10px;font-size:12px"
-               onclick="flotaVerFoto(${p.foto_id}, 'Tablero de ${p.placa}')">Ver la foto</button>`
+               onclick="flotaVerFoto(${esc(p.foto_id)}, 'Tablero de ${esc(p.placa)}')">Ver la foto</button>`
     : `<span style="color:var(--yellow);font-size:12px">sin foto del tablero —
          confirmarla es tu palabra, no la de una foto</span>`;
   return `<li style="margin-bottom:14px;border-left:2px solid var(--bd);padding-left:10px">
     <div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap">
       <b style="font-size:20px">${Number(p.valor_km).toLocaleString('es-CO')} km</b>
-      <span class="flota-placa" style="font-size:15px">${p.placa}</span>
-      <span style="font-size:12px;color:var(--tx2)">${horaColombia(p.ts)} · ${p.origen}</span>
+      <span class="flota-placa" style="font-size:15px">${esc(p.placa)}</span>
+      <span style="font-size:12px;color:var(--tx2)">${horaColombia(p.ts)} · ${esc(p.origen)}</span>
     </div>
-    <div style="font-size:12px;color:var(--yellow);margin:2px 0 6px">${p.motivo || ''}</div>
+    <div style="font-size:12px;color:var(--yellow);margin:2px 0 6px">${esc(p.motivo || '')}</div>
     <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
       ${foto}
       <button class="btn-flota" style="padding:4px 10px;font-size:12px"
-              onclick="flotaConfirmarKm(${p.lectura_id})">Confirmar</button>
+              onclick="flotaConfirmarKm(${esc(p.lectura_id)})">Confirmar</button>
       <button class="btn-flota" style="padding:4px 10px;font-size:12px"
-              onclick="flotaCorregirKm('${p.placa}', ${p.valor_km})">Corregir</button>
+              onclick="flotaCorregirKm('${esc(p.placa)}', ${esc(p.valor_km)})">Corregir</button>
     </div>
   </li>`;
 }
@@ -1089,7 +1118,7 @@ async function flotaAbrirFicha(placa) {
   try {
     d = await get('/flota/vehiculo/' + encodeURIComponent(placa) + '/ficha');
   } catch (e) {
-    el.innerHTML = `<div class="tabla-card" style="color:var(--red)">${e.message}</div>`;
+    el.innerHTML = `<div class="tabla-card" style="color:var(--red)">${esc(e.message)}</div>`;
     return;
   }
   const f = d.ficha || {};
@@ -1274,13 +1303,13 @@ async function flotaAbrirDocumentos(placa) {
   try {
     d = await get('/flota/vehiculo/' + encodeURIComponent(placa) + '/documentos');
   } catch (e) {
-    el.innerHTML = `<div class="tabla-card" style="color:var(--red)">${e.message}</div>`;
+    el.innerHTML = `<div class="tabla-card" style="color:var(--red)">${esc(e.message)}</div>`;
     return;
   }
 
   let filas = d.documentos.map(x => {
     if (x.estado === 'no_encontrado') {
-      return `<li style="color:var(--red)"><b>${x.tipo}</b> — NO ENCONTRADO
+      return `<li style="color:var(--red)"><b>${esc(x.tipo)}</b> — NO ENCONTRADO
         · hallazgo bloqueante</li>`;
     }
     // La tarjeta de propiedad NO vence: acredita titularidad mientras el
@@ -1304,9 +1333,9 @@ async function flotaAbrirDocumentos(placa) {
       foto = ' · <span style="color:var(--red)">archivo NO guardado</span>';
     } else {
       foto = ` · <button class="btn-flota" style="padding:2px 8px;font-size:12px"
-             onclick="flotaVerFoto(${a.id}, '${x.tipo}')">ver ${a.es_pdf ? 'PDF' : 'imagen'}</button>`;
+             onclick="flotaVerFoto(${esc(a.id)}, '${esc(x.tipo)}')">ver ${a.es_pdf ? 'PDF' : 'imagen'}</button>`;
     }
-    return `<li style="color:${color}"><b>${x.tipo}</b> ${x.numero} · ${x.entidad}
+    return `<li style="color:${color}"><b>${esc(x.tipo)}</b> ${esc(x.numero)} · ${esc(x.entidad)}
       ${x.vence ? '· ' + x.fecha_vencimiento + ' ' : ''}— ${nota}${foto}</li>`;
   }).join('');
   if (!filas) filas = '<li style="color:var(--tx2)">Ninguno registrado todavía.</li>';
@@ -1438,13 +1467,13 @@ async function flotaCapturarDocumento(input) {
       : await flotaComprimir(f, 'foto_dato');
   } catch (e) {
     FLOTA_FOTO_DOC = null;
-    aviso.innerHTML = `<span style="color:var(--red)">No se pudo leer el archivo: ${e.message}</span>`;
+    aviso.innerHTML = `<span style="color:var(--red)">No se pudo leer el archivo: ${esc(e.message)}</span>`;
     return;
   }
   const r = FLOTA_FOTO_DOC;
   aviso.innerHTML = r.ancho
-    ? `<span style="color:var(--green)">✓ ${r.ancho}×${r.alto}</span>`
-    : `<span style="color:var(--green)">✓ ${f.name} · ${Math.round(f.size / 1024)} KB</span>`;
+    ? `<span style="color:var(--green)">✓ ${esc(r.ancho)}×${esc(r.alto)}</span>`
+    : `<span style="color:var(--green)">✓ ${esc(f.name)} · ${Math.round(f.size / 1024)} KB</span>`;
 }
 
 /** Valida y guarda el documento. */
@@ -1896,15 +1925,15 @@ async function flotaBloqueFueraDeSede() {
   const filas = d.fuera_de_sede || [];
   if (!filas.length) return '';
   return `<div class="tabla-card" style="border-left:3px solid var(--yellow)">
-    <h3 style="color:var(--yellow)">Fuera de sede ahora (${filas.length})</h3>
+    <h3 style="color:var(--yellow)">Fuera de sede ahora (${esc(filas.length)})</h3>
     <p style="font-size:13px;color:var(--tx2)">Estos vehículos <b>no están en un
     patio de la empresa</b>. La custodia sigue en la persona que los tiene — no
     pasó a ninguna sede, porque ninguna sede los vio.</p>
     <ul style="line-height:1.6">${filas.map(f => `
       <li style="margin-bottom:8px">
-        <b>${f.placa}</b> — responde <b>${f.responde}</b>, desde ${horaColombia(f.desde)}
-        · ${f.km} km<br>
-        <span style="color:var(--tx2)">${f.motivo || 'sin motivo escrito'}</span>
+        <b>${esc(f.placa)}</b> — responde <b>${esc(f.responde)}</b>, desde ${horaColombia(f.desde)}
+        · ${esc(f.km)} km<br>
+        <span style="color:var(--tx2)">${esc(f.motivo || 'sin motivo escrito')}</span>
       </li>`).join('')}</ul>
   </div>`;
 }
@@ -1920,12 +1949,12 @@ async function flotaBloqueForzados() {
   if (!cierres.length) return '';
   const filas = cierres.map(c => `
     <li style="margin-bottom:8px">
-      <b>${c.placa}</b> — lo tenía <b>${c.lo_tenia}</b>, lo cerró ${c.forzado_por}
+      <b>${esc(c.placa)}</b> — lo tenía <b>${esc(c.lo_tenia)}</b>, lo cerró ${esc(c.forzado_por)}
       el ${horaColombia(c.cuando)}<br>
-      <span style="color:var(--tx2)">${c.motivo || ''}</span>
+      <span style="color:var(--tx2)">${esc(c.motivo || '')}</span>
     </li>`).join('');
   return `<div class="tabla-card" style="border-left:3px solid var(--red)">
-    <h3 style="color:var(--red)">Turnos cerrados a la fuerza (${cierres.length})</h3>
+    <h3 style="color:var(--red)">Turnos cerrados a la fuerza (${esc(cierres.length)})</h3>
     <p style="font-size:13px;color:var(--tx2)">Sin firma del custodio anterior y sin
     fotos de cierre: el turno siguiente arrancó sin nada con qué comparar.
     <b>Si este bloque crece, el problema no es el sistema — es que no se está
@@ -1987,6 +2016,37 @@ function flotaMensajeDeError(d) {
   return txt;
 }
 
+/** Tanqueo y lectura suelta, desde la pantalla del CONDUCTOR.
+ *
+ * Los dos endpoints piden `LECTURA_FLOTA` —el permiso se escribió para él, con
+ * el argumento «el que tanquea es el que maneja»— y hasta el 2026-09-03 vivían
+ * SOLO en el panel del encargado. O sea: el que tiene la factura en la mano no
+ * podía cargarla, y quien podía no estaba en la estación.
+ *
+ * No lo veía el trinquete de rutas huérfanas porque el endpoint **sí** tenía
+ * consumidor: el del escritorio. La forma es más fina que «endpoint sin
+ * pantalla» — es **un permiso más ancho que el gesto que la pantalla ofrece**,
+ * y por eso hizo falta un detector nuevo que cruza los roles que el endpoint
+ * autoriza contra los roles que pueden llegar al botón.
+ *
+ * Reusa `flotaAbrirGastos` y `flotaAbrirOdometro`: la pantalla es la misma, lo
+ * que faltaba era la puerta. Una segunda copia del formulario sería la que
+ * diverja el día que cambie el CHECK del tanque.
+ */
+function flotaCondTanquear() {
+  const placa = (FLOTA_COND && FLOTA_COND.placa) || FLOTA_PLACA;
+  if (!placa) { alerta('Primero recibí el turno.', 'advertencia'); return; }
+  FLOTA_PLACA = placa;
+  flotaAbrirGastos(placa);
+}
+
+function flotaCondOdometro() {
+  const placa = (FLOTA_COND && FLOTA_COND.placa) || FLOTA_PLACA;
+  if (!placa) { alerta('Primero recibí el turno.', 'advertencia'); return; }
+  FLOTA_PLACA = placa;
+  flotaAbrirOdometro(placa);
+}
+
 /** Lo que le pasa al camión, dicho antes de que lo agarre.
  *
  * Va ARRIBA de los botones y no escondido en un submenú: el conductor abre esta
@@ -2000,6 +2060,45 @@ function flotaMensajeDeError(d) {
  * Devuelve vacío cuando no hay nada que decir, igual que los bloques del
  * tablero del encargado: una línea que siempre aparece se deja de leer.
  */
+/** El km/galón del camión que el conductor tiene hoy.
+ *
+ * `piso-conductor.md:149` lo promete como señal de que está haciendo bien el
+ * trabajo desde el 2026-08-04, y el sistema se lo negaba —
+ * `docs/procedimientos/README.md:16` dice que ningún procedimiento puede
+ * prometer lo que el sistema niega.
+ *
+ * **Sin semáforo y sin meta.** No hay una sola medición de esta flota con la
+ * que fijar un techo, y un umbral escrito hoy sería a ojo (regla 13). Se dice
+ * cuánto rindió; si está bien o mal lo decide alguien con datos, dentro de unos
+ * meses.
+ *
+ * Y se dice, en la pantalla y no en un instructivo aparte, **lo que el número
+ * no afirma**: mide el vehículo, no a quien maneja. Una ruta con más montaña,
+ * un filtro tapado y un sifón dan exactamente el mismo número.
+ */
+function flotaCondRendimiento(r) {
+  if (!r) return '';   // sin camión asignado hoy: no hay nada que medir
+  // `publicable: false` NO se pinta como un hueco vacío: se pinta como una
+  // medición en curso, con lo que falta. Un vehículo midiendo desde hace un mes
+  // y uno que nadie tanqueó nunca se corrigen distinto — el primero solo
+  // necesita que pase el tiempo.
+  const cuerpo = r.publicable
+    ? `<b style="font-size:18px">${esc(r.km_galon)} km/galón</b>
+       <div style="font-size:12px;color:var(--tx2);margin-top:2px">
+         sobre ${esc(r.ventanas)} ventana(s) de tanque lleno a tanque lleno,
+         ${esc(r.dias_historia)} día(s) de historia${
+           r.tanqueos_fuera_por_parcial
+             ? ` · ${esc(r.tanqueos_fuera_por_parcial)} tanqueo(s) quedaron fuera por no estar marcados «lleno»`
+             : ''}</div>`
+    : `<b style="color:var(--tx2)">Midiendo todavía</b>
+       <div style="font-size:12px;color:var(--tx2);margin-top:2px">${esc(r.motivo)}</div>`;
+  return `<div class="tabla-card" style="margin-top:10px">
+    <div style="font-size:13px;color:var(--tx2);margin-bottom:4px">Rendimiento del vehículo</div>
+    ${cuerpo}
+    <div style="font-size:11px;color:var(--tx2);margin-top:6px">${esc(r.no_afirma)}</div>
+  </div>`;
+}
+
 function flotaCondEstado(e) {
   if (!e) return '';
   const lineas = [];
@@ -2050,10 +2149,10 @@ function flotaCondRender() {
   // vehículo" que "creemos que es este": la segunda pide mirar la placa.
   let cabeza;
   if (d.origen === 'custodia') {
-    cabeza = `<div class="flota-placa">${d.placa}</div>
+    cabeza = `<div class="flota-placa">${esc(d.placa)}</div>
       <div style="color:var(--green);font-size:13px">Tu turno está abierto · ${km}</div>`;
   } else if (d.origen === 'ruta') {
-    cabeza = `<div class="flota-placa">${d.placa}</div>
+    cabeza = `<div class="flota-placa">${esc(d.placa)}</div>
       <div style="color:var(--yellow);font-size:13px">Según tu ruta de hoy.
       <b>Confirmá que la placa es la del camión que tenés enfrente.</b> · ${km}</div>`;
   } else {
@@ -2091,7 +2190,7 @@ function flotaCondRender() {
   if (d.tiene_turno_abierto) {
     el.innerHTML = `<div class="flota-veh" style="padding:10px 14px">
       <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-        <span style="font-size:17px;font-weight:800;letter-spacing:.05em">🚚 ${d.placa}</span>
+        <span style="font-size:17px;font-weight:800;letter-spacing:.05em">🚚 ${esc(d.placa)}</span>
         <span style="color:var(--green);font-size:13px">turno abierto · ${km}</span>
         <span style="flex:1"></span>
         <button class="btn-primary" style="padding:6px 12px;font-size:13px;margin-top:0"
@@ -2101,9 +2200,14 @@ function flotaCondRender() {
         <button class="btn-flota" style="padding:6px 12px;font-size:13px"
                 onclick="flotaCondReportarDano()">Reportar daño</button>
         <button class="btn-flota" style="padding:6px 12px;font-size:13px"
+                onclick="flotaCondTanquear()">Tanqueo</button>
+        <button class="btn-flota" style="padding:6px 12px;font-size:13px"
+                onclick="flotaCondOdometro()">Odómetro</button>
+        <button class="btn-flota" style="padding:6px 12px;font-size:13px"
                 onclick="flotaCondMisReportes()">Mis turnos</button>
       </div>
       ${flotaCondEstado(d.estado_vehiculo)}
+      ${flotaCondRendimiento(d.rendimiento)}
       <div id="cond-flota-form"></div>
     </div>`;
     return;
@@ -2129,15 +2233,15 @@ function flotaCondListaCandidatos() {
       // El mensaje nombra a la persona. Un 409 crudo deja al conductor
       // mirando el celular en el patio sin saber a quién llamar.
       return `<div style="padding:10px;margin:4px 0;border:1px solid var(--rbg);border-radius:8px;opacity:.75">
-        <b>${c.placa}</b> · ${c.tipo}<br>
-        <span style="color:var(--red);font-size:12px">Lo tiene ${c.ocupado_por}.
+        <b>${esc(c.placa)}</b> · ${esc(c.tipo)}<br>
+        <span style="color:var(--red);font-size:12px">Lo tiene ${esc(c.ocupado_por)}.
         Si lo vas a recibir vos, tiene que cerrar su turno primero.</span>
       </div>`;
     }
     const sel = c.vehiculo_id === FLOTA_COND_ELEGIDO;
-    return `<button class="btn-flota ${sel ? 'ok' : ''}" onclick="flotaCondElegir(${c.vehiculo_id})"
+    return `<button class="btn-flota ${sel ? 'ok' : ''}" onclick="flotaCondElegir(${esc(c.vehiculo_id)})"
       style="display:block;width:100%;text-align:left">
-      ${sel ? '✓ ' : ''}<b style="font-size:19px;letter-spacing:.05em">${c.placa}</b> · ${c.tipo}</button>`;
+      ${sel ? '✓ ' : ''}<b style="font-size:19px;letter-spacing:.05em">${esc(c.placa)}</b> · ${esc(c.tipo)}</button>`;
   }).join('') + '</div>';
 }
 
@@ -2260,7 +2364,7 @@ async function flotaCondAbrirEntrega() {
               onclick="document.getElementById('flota-f-${a}').click()">${flotaNombreAngulo(a)}</button>
       ${FLOTA_REFERENCIA[a] ? `<div><button class="btn-flota"
            style="padding:1px 6px;font-size:11px;margin-top:2px"
-           onclick="flotaVerFoto(${FLOTA_REFERENCIA[a]}, 'así estaba al recibir — ${flotaNombreAngulo(a)}')"
+           onclick="flotaVerFoto(${esc(FLOTA_REFERENCIA[a])}, 'así estaba al recibir — ${flotaNombreAngulo(a)}')"
            >cómo estaba</button></div>` : ''}
     </div>`).join('');
 
@@ -2448,7 +2552,7 @@ async function flotaCondMisReportes() {
   try {
     d = await get('/flota/conductor/mis-reportes');
   } catch (e) {
-    el.innerHTML = `<div style="color:var(--red);padding:12px">${e.message}</div>`;
+    el.innerHTML = `<div style="color:var(--red);padding:12px">${esc(e.message)}</div>`;
     return;
   }
   const turnos = d.turnos || [];
@@ -2467,14 +2571,14 @@ async function flotaCondMisReportes() {
   turnos.forEach(t => {
     const cuando = horaColombia(t.inicio);
     if (t.cerrado_a_la_fuerza) {
-      filas.push(`<li style="color:var(--red)"><b>${t.placa}</b> ${cuando} —
-        <b>te cerraron el turno</b>: ${t.motivo_del_cierre_forzado || 'sin motivo'}</li>`);
+      filas.push(`<li style="color:var(--red)"><b>${esc(t.placa)}</b> ${cuando} —
+        <b>te cerraron el turno</b>: ${esc(t.motivo_del_cierre_forzado || 'sin motivo')}</li>`);
     } else if (t.abierto) {
-      filas.push(`<li style="color:var(--green)"><b>${t.placa}</b> ${cuando} — abierto ahora</li>`);
+      filas.push(`<li style="color:var(--green)"><b>${esc(t.placa)}</b> ${cuando} — abierto ahora</li>`);
     } else if ((t.km_fin - t.km_inicio) === 0) {
       vacios++;   // se cuentan, no se listan
     } else {
-      filas.push(`<li><b>${t.placa}</b> ${cuando} — cerrado · ${t.km_fin - t.km_inicio} km</li>`);
+      filas.push(`<li><b>${esc(t.placa)}</b> ${cuando} — cerrado · ${t.km_fin - t.km_inicio} km</li>`);
     }
   });
   if (vacios) {
@@ -2523,13 +2627,13 @@ async function flotaBloqueAvisos() {
     try { params = JSON.parse(a.parametros).join(' · '); } catch (e) {}
     return `<li${a.simulado ? ' style="opacity:.6"' : ''}>
       ${a.simulado ? '<b style="color:var(--yellow)">[SIMULADO]</b> ' : ''}
-      ${a.telefono} — ${params} · ${estado(a)}
-      ${a.detalle ? `<br><small style="color:var(--red)">${a.detalle}</small>` : ''}</li>`;
+      ${esc(a.telefono)} — ${params} · ${estado(a)}
+      ${a.detalle ? `<br><small style="color:var(--red)">${esc(a.detalle)}</small>` : ''}</li>`;
   }).join('');
   if (!filas) filas = '<li style="color:var(--tx2)">Ninguno todavía.</li>';
 
   const alarma = d.sin_confirmar_6h > 0
-    ? `<p style="color:var(--red)"><b>${d.sin_confirmar_6h} aviso(s) salieron hace más de
+    ? `<p style="color:var(--red)"><b>${esc(d.sin_confirmar_6h)} aviso(s) salieron hace más de
        6 horas y nunca confirmaron entrega.</b> El proveedor los aceptó y no hay
        evidencia de que hayan llegado — que es el modo de fallo que este registro
        existe para hacer visible.</p>`
@@ -2587,7 +2691,7 @@ async function flotaBarrerAvisos() {
 function flotaChipCriticidad(c) {
   const COLOR = { bloqueante: 'var(--red)', mayor: 'var(--yellow)', menor: 'var(--tx2)' };
   return `<span style="font-size:11px;font-weight:700;text-transform:uppercase;
-    color:${COLOR[c]};border:1px solid ${COLOR[c]};border-radius:6px;padding:1px 6px">${c}</span>`;
+    color:${esc(COLOR[c])};border:1px solid ${esc(COLOR[c])};border-radius:6px;padding:1px 6px">${c}</span>`;
 }
 
 /** Una fila de daño, con lo que hace falta para decidir qué hacer con ella.
@@ -2602,7 +2706,7 @@ function flotaFilaHallazgo(h, conAcciones) {
     ? `<span style="color:var(--red);font-weight:700">VENCIDO</span> · `
     : '';
   const aplazos = h.aplazado_veces > 0
-    ? ` · <span style="color:var(--yellow)">aplazado ${h.aplazado_veces}×</span>`
+    ? ` · <span style="color:var(--yellow)">aplazado ${esc(h.aplazado_veces)}×</span>`
     : '';
   // Se dice por qué no cuenta, en vez de esconderlo. Un hallazgo de línea base
   // se ve igual de abierto que cualquiera y hay que arreglarlo igual — lo que
@@ -2610,27 +2714,27 @@ function flotaFilaHallazgo(h, conAcciones) {
   const base = h.linea_base
     ? ` · <span style="color:var(--tx2)" title="Estaba antes de que alguien recibiera el vehículo: se arregla igual, pero no le cuenta a nadie">preexistente</span>`
     : '';
-  const acciones = (abierto && conAcciones) ? `
+  const acciones = (abierto && conAcciones && flotaDecide()) ? `
     <div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap">
       <button class="btn-flota" style="padding:4px 10px;font-size:12px"
-              onclick="flotaCerrarHallazgo(${h.id})">Reparado</button>
+              onclick="flotaCerrarHallazgo(${esc(h.id)})">Reparado</button>
       <button class="btn-flota" style="padding:4px 10px;font-size:12px"
-              onclick="flotaAplazarHallazgo(${h.id})">Aplazar 7 días</button>
+              onclick="flotaAplazarHallazgo(${esc(h.id)})">Aplazar 7 días</button>
       <button class="btn-flota" style="padding:4px 10px;font-size:12px"
-              onclick="flotaDescartarHallazgo(${h.id})">No era nada</button>
+              onclick="flotaDescartarHallazgo(${esc(h.id)})">No era nada</button>
     </div>` : '';
   const desenlace = abierto ? '' :
     `<div style="font-size:12px;color:var(--tx2);margin-top:4px">
-       ${h.estado} · ${h.cerrado_ts ? horaColombia(h.cerrado_ts) : 'sin fecha'}
+       ${esc(h.estado)} · ${h.cerrado_ts ? horaColombia(h.cerrado_ts) : 'sin fecha'}
        ${h.motivo_cierre ? '· ' + h.motivo_cierre : ''}</div>`;
 
   return `<li style="margin-bottom:12px;border-left:2px solid var(--bd);padding-left:10px">
     <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
       ${flotaChipCriticidad(h.criticidad)}
-      <b>${h.descripcion}</b>
+      <b>${esc(h.descripcion)}</b>
     </div>
     <div style="font-size:12px;color:var(--tx2);margin-top:2px">
-      ${alerta_}lleva ${h.dias_abierto} día(s) · límite ${horaColombia(h.fecha_limite)}${aplazos}${base}
+      ${alerta_}lleva ${esc(h.dias_abierto)} día(s) · límite ${horaColombia(h.fecha_limite)}${aplazos}${base}
     </div>
     ${desenlace}${acciones}
   </li>`;
@@ -2655,7 +2759,7 @@ async function flotaRenderDanos(conAcciones) {
     d = await get('/flota/hallazgos/' + encodeURIComponent(FLOTA_PLACA));
   } catch (e) {
     cont.innerHTML = `<div class="tabla-card" style="color:var(--red)">
-      No se pudieron cargar los daños: ${e.message}</div>`;
+      No se pudieron cargar los daños: ${esc(e.message)}</div>`;
     return;
   }
   const lista = (d.hallazgos || []).length
@@ -2665,11 +2769,24 @@ async function flotaRenderDanos(conAcciones) {
 
   const encabezado = d.vencidos
     ? `<div style="color:var(--red);font-weight:700;margin-bottom:8px">
-         ${d.vencidos} de ${d.abiertos} pasaron su fecha límite</div>`
+         ${esc(d.vencidos)} de ${esc(d.abiertos)} pasaron su fecha límite</div>`
+    : '';
+
+  // Va UNA vez arriba de la lista y no en cada fila: repetida seis veces es
+  // ruido, y el ruido es cómo un renglón deja de leerse. Se pinta solo en la
+  // pantalla donde los botones existirían — al conductor no le falta nada.
+  const escalar = (conAcciones && !flotaDecide())
+    ? `<div style="font-size:12px;color:var(--tx2);margin-bottom:8px;
+                   border-left:3px solid var(--brd);padding-left:8px">
+         <b>Cerrar, aplazar o descartar un daño lo decide gestión.</b> Los días
+         que un daño lleva abierto y los que pasaron su fecha límite son dos de
+         las señales con las que se mide a control de flota — el botón que las
+         baja no puede ser suyo. Lo que sí: reportarlo acá abajo, y escalar el
+         que venza.</div>`
     : '';
 
   cont.innerHTML = `<div class="tabla-card">
-    ${encabezado}${lista}
+    ${encabezado}${escalar}${lista}
   </div>
   <div class="tabla-card">
     <div class="tabla-titulo">Reportar un daño</div>
@@ -2847,7 +2964,7 @@ async function flotaCondInspeccion() {
     FLOTA_INSP = await get('/flota/inspeccion/items/' + encodeURIComponent(FLOTA_PLACA));
   } catch (e) {
     cont.innerHTML = `<div class="tabla-card" style="color:var(--red)">
-      No se pudo cargar la inspección: ${e.message}</div>`;
+      No se pudo cargar la inspección: ${esc(e.message)}</div>`;
     return;
   }
   // Estado nuevo en cada apertura. Heredar lo marcado del vehículo anterior
@@ -2881,35 +2998,35 @@ function flotaCondInspeccionHTML() {
   // reales— pero quien abre tiene que saber que ya hay una: sin esto, la
   // pantalla invita a repetir la inspección hasta que dé apto.
   const previas = ya.length ? `<div class="tabla-card">
-    <div class="tabla-titulo">Hoy ya se inspeccionó ${ya.length} vez(ces)</div>
+    <div class="tabla-titulo">Hoy ya se inspeccionó ${esc(ya.length)} vez(ces)</div>
     <ul style="line-height:1.6;padding-left:18px">${ya.map(i => `
-      <li><b>${i.veredicto}</b> · ${i.items_esperados - i.items_sin_dato} de
-      ${i.items_esperados} contestados · ${i.segundos_llenado}s</li>`).join('')}</ul>
+      <li><b>${esc(i.veredicto)}</b> · ${i.items_esperados - i.items_sin_dato} de
+      ${esc(i.items_esperados)} contestados · ${esc(i.segundos_llenado)}s</li>`).join('')}</ul>
     <p style="font-size:12px;color:var(--tx2);margin:6px 0 0">Los daños que ya
     nacieron no se borran: una segunda inspección no los tapa.</p>
   </div>` : '';
 
   const filas = items.map(i => `
-    <li id="insp-item-${i.item_id}" style="margin-bottom:14px;border-left:3px solid ${
+    <li id="insp-item-${esc(i.item_id)}" style="margin-bottom:14px;border-left:3px solid ${
       i.bloqueante ? 'var(--red)' : 'var(--bd)'};padding-left:10px">
       <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-        <span style="color:var(--tx2);font-size:13px">${i.orden_mostrado}.</span>
-        <b style="font-size:15px">${i.nombre}</b>
+        <span style="color:var(--tx2);font-size:13px">${esc(i.orden_mostrado)}.</span>
+        <b style="font-size:15px">${esc(i.nombre)}</b>
         ${flotaChipCriticidad(i.criticidad)}
       </div>
-      <div style="font-size:13px;color:var(--tx2);margin:2px 0 6px">${i.gesto}</div>
-      <div id="insp-ctrl-${i.item_id}">${flotaCondControlesItem(i)}</div>
+      <div style="font-size:13px;color:var(--tx2);margin:2px 0 6px">${esc(i.gesto)}</div>
+      <div id="insp-ctrl-${esc(i.item_id)}">${flotaCondControlesItem(i)}</div>
     </li>`).join('');
 
   return `${previas}
   <div class="tabla-card">
-    <div class="tabla-titulo">${items.length} ítems · ${d ? d.bloqueantes : 0} bloqueantes</div>
+    <div class="tabla-titulo">${esc(items.length)} ítems · ${d ? d.bloqueantes : 0} bloqueantes</div>
     <p style="font-size:13px;color:var(--tx2);margin:0 0 4px">
       Los primeros ${d ? d.bloqueantes : 0} deciden si el camión sale hoy. El resto
       cambia de orden cada día a propósito: es para que se lean, no para que se
       recuerden.</p>
     <p id="insp-faltan" style="font-size:13px;color:var(--yellow);margin:0">
-      Faltan ${faltan} de ${items.length}</p>
+      Faltan ${faltan} de ${esc(items.length)}</p>
   </div>
   <div class="tabla-card">
     <ul style="list-style:none;padding:0;margin:0">${filas}</ul>
@@ -2944,18 +3061,18 @@ function flotaCondInspeccionHTML() {
 function flotaCondControlesItem(item) {
   const r = FLOTA_INSP_RESP[item.item_id];
   const nota = r === 'no_apto' ? `
-    <input id="insp-nota-${item.item_id}" style="width:100%;padding:6px;margin-top:6px"
-           value="${FLOTA_INSP_NOTA[item.item_id] || ''}"
-           oninput="flotaCondNotaItem(${item.item_id}, this.value)"
+    <input id="insp-nota-${esc(item.item_id)}" style="width:100%;padding:6px;margin-top:6px"
+           value="${esc(FLOTA_INSP_NOTA[item.item_id] || '')}"
+           oninput="flotaCondNotaItem(${esc(item.item_id)}, this.value)"
            placeholder="¿Cuál, dónde, qué tan grande? (opcional)">
     <div style="font-size:12px;color:var(--tx2);margin-top:4px">
-      Queda un daño abierto con ${item.dias_de_plazo} día(s) de plazo. Lo cierra
+      Queda un daño abierto con ${esc(item.dias_de_plazo)} día(s) de plazo. Lo cierra
       quien lo repara, no vos.</div>` : '';
   return `<div style="display:flex;gap:8px">
       <button class="btn-flota ${r === 'optimo' ? 'ok' : ''}" style="flex:1"
-              onclick="flotaCondMarcarItem(${item.item_id}, 'optimo')">Bien</button>
+              onclick="flotaCondMarcarItem(${esc(item.item_id)}, 'optimo')">Bien</button>
       <button class="btn-flota ${r === 'no_apto' ? 'ok' : ''}" style="flex:1"
-              onclick="flotaCondMarcarItem(${item.item_id}, 'no_apto')">Mal</button>
+              onclick="flotaCondMarcarItem(${esc(item.item_id)}, 'no_apto')">Mal</button>
     </div>${nota}`;
 }
 
@@ -3118,7 +3235,7 @@ function flotaFilaGasto(g) {
   if (tq) {
     const aviso = tq.excede_capacidad === true
       ? `<div style="color:var(--red);font-size:12px;margin-top:2px">
-           ${tq.galones} galones sobre un tanque declarado más chico —
+           ${esc(tq.galones)} galones sobre un tanque declarado más chico —
            la capacidad de la ficha y este registro no pueden ser los dos
            ciertos. Hay que mirar cuál de los dos está mal.</div>`
       : (tq.excede_capacidad === 'sin_dato'
@@ -3127,21 +3244,21 @@ function flotaFilaGasto(g) {
              revisar</b>. No es que esté bien.</div>`
         : '');
     extra = `<div style="font-size:12px;color:var(--tx2)">
-        ${tq.galones} gal · ${flotaPesos(tq.precio_galon)}/gal · ${tq.estacion}
-        · tanque <b>${tq.tanque}</b></div>${aviso}`;
+        ${esc(tq.galones)} gal · ${flotaPesos(tq.precio_galon)}/gal · ${esc(tq.estacion)}
+        · tanque <b>${esc(tq.tanque)}</b></div>${aviso}`;
   }
   const periodo = g.cubre_periodo
-    ? `<div style="font-size:12px;color:var(--tx2)">cubre ${g.periodo_desde}
-         → ${g.periodo_hasta} · se reparte por día, no cae entero en un mes</div>`
+    ? `<div style="font-size:12px;color:var(--tx2)">cubre ${esc(g.periodo_desde)}
+         → ${esc(g.periodo_hasta)} · se reparte por día, no cae entero en un mes</div>`
     : '';
   const doc = g.documento_numero
     ? `doc ${g.documento_numero}`
     : `<span style="color:var(--yellow)">sin documento — no se puede cruzar
          con la causación</span>`;
   return `<li style="margin-bottom:12px;border-left:2px solid var(--bd);padding-left:10px">
-    <div><b>${g.categoria}</b> · ${flotaPesos(g.valor)} · ${g.fecha}</div>
-    <div style="font-size:12px;color:var(--tx2)">${g.proveedor} · ${doc}
-      · ${g.km} km · origen ${g.origen_costo}</div>
+    <div><b>${esc(g.categoria)}</b> · ${flotaPesos(g.valor)} · ${esc(g.fecha)}</div>
+    <div style="font-size:12px;color:var(--tx2)">${esc(g.proveedor)} · ${doc}
+      · ${esc(g.km)} km · origen ${esc(g.origen_costo)}</div>
     ${periodo}${extra}
   </li>`;
 }
@@ -3160,7 +3277,7 @@ async function flotaRenderGastos() {
     d = await get(FLOTA_GASTO_URL + '/' + encodeURIComponent(FLOTA_PLACA));
   } catch (e) {
     cont.innerHTML = `<div class="tabla-card" style="color:var(--red)">
-      No se pudieron cargar los gastos: ${e.message}</div>`;
+      No se pudieron cargar los gastos: ${esc(e.message)}</div>`;
     return;
   }
 
@@ -3169,18 +3286,28 @@ async function flotaRenderGastos() {
     campo: d.categorias_de_campo || [],
   };
 
+  // El motivo lo dice el SERVIDOR (`cpk_motivo`), no se re-deriva acá.
+  //
+  // Hasta el 2026-09-04 esta línea lo adivinaba con `d.km_recorridos > 0`, y
+  // con eso solo distinguía dos de los cuatro casos — **y los confundía**: un
+  // vehículo con dos lecturas dudosas y kilómetros recorridos tiene km > 0, así
+  // que la pantalla decía «no hay ningún gasto registrado» sobre un vehículo
+  // que sí tenía gastos. El texto era una afirmación falsa sobre contabilidad,
+  // y mandaba a cargar una factura que ya estaba cargada.
+  //
+  // Una política, una función: `medicion._motivo_cpk` decide, los dos lectores
+  // —este expediente y el tablero— muestran lo mismo.
   const cpk = d.cpk === 'sin_dato'
-    ? `<b>sin dato</b> — ${d.km_recorridos > 0
-        ? 'no hay ningún gasto registrado sobre este vehículo. No es que no haya costado nada.'
-        : 'no hay dos lecturas de odómetro en la ventana: no se sabe cuántos kilómetros recorrió.'}`
+    ? `<b>sin dato</b> — ${esc(d.cpk_motivo || 'no se declaró el motivo.')}`
     : `<b>${flotaPesos(d.cpk)} por kilómetro</b>
        <span style="color:var(--tx2)">= ${flotaPesos(d.pesos_imputados)}
-       ÷ ${d.km_recorridos.toLocaleString('es-CO')} km · odómetro ${d.cpk_marca}</span>`;
+       ÷ ${d.km_recorridos.toLocaleString('es-CO')} km · odómetro ${esc(d.cpk_marca)}
+       · ${esc(d.lecturas_en_ventana)} lectura(s) en la ventana</span>`;
   const rend = d.rendimiento_km_galon === 'sin_dato'
     ? '<span style="color:var(--tx2)">sin dato — hacen falta dos tanqueos con ' +
       '<b>tanque lleno</b>. Entre llenos, lo que entró al tanque es lo que se ' +
       'gastó; sobre un parcial, el número mide lo que quedaba adentro.</span>'
-    : `<b>${d.rendimiento_km_galon} km/galón</b>`;
+    : `<b>${esc(d.rendimiento_km_galon)} km/galón</b>`;
 
   const lista = (d.gastos || []).length
     ? `<ul style="list-style:none;padding:0">${d.gastos.map(g => flotaFilaGasto(g)).join('')}</ul>`
@@ -3189,7 +3316,7 @@ async function flotaRenderGastos() {
   const opciones = (arr) => arr.map(c => `<option value="${c}">${c}</option>`).join('');
 
   cont.innerHTML = `<div class="tabla-card">
-    <div class="tabla-titulo">Costo por kilómetro · ${d.desde} a ${d.hasta}</div>
+    <div class="tabla-titulo">Costo por kilómetro · ${esc(d.desde)} a ${esc(d.hasta)}</div>
     <p style="margin:4px 0">${cpk}</p>
     <p style="margin:4px 0">Rendimiento: ${rend}</p>
     <p style="font-size:12px;color:var(--tx2);margin:6px 0 0">
@@ -3251,7 +3378,7 @@ async function flotaRenderGastos() {
         <b>«No sé» es una respuesta válida.</b></p>
       ${d.capacidad_tanque_galones
         ? `<p style="font-size:12px;color:var(--tx2);margin:4px 0 0">
-             Tanque declarado en la ficha: ${d.capacidad_tanque_galones} galones.</p>`
+             Tanque declarado en la ficha: ${esc(d.capacidad_tanque_galones)} galones.</p>`
         : `<p style="font-size:12px;color:var(--yellow);margin:4px 0 0">
              La ficha no dice cuántos galones caben, así que nada va a poder
              revisar este registro contra la capacidad.</p>`}
@@ -3460,7 +3587,7 @@ function flotaTextoVigencia(g) {
  */
 function flotaFilaGarantia(g) {
   return `<li style="margin-bottom:8px">
-    <b>${g.sistema}</b>${g.descripcion ? ' · ' + g.descripcion : ''}
+    <b>${esc(g.sistema)}</b>${g.descripcion ? ' · ' + g.descripcion : ''}
     <div style="font-size:12px;color:var(--tx2)">${flotaTextoVigencia(g)}</div>
   </li>`;
 }
@@ -3476,7 +3603,7 @@ function flotaFilaTrabajo(t) {
       ? 'la factura dice que no trae garantía'
       : 'no se preguntó si traía garantía — que no es lo mismo que no tenerla');
   return `<li style="margin-bottom:8px">
-    <b>${t.sistema}</b>${t.descripcion ? ' · ' + t.descripcion : ''}
+    <b>${esc(t.sistema)}</b>${t.descripcion ? ' · ' + t.descripcion : ''}
     <div style="font-size:12px;color:var(--tx2)">${gar}</div>
     <div style="font-size:12px;color:var(--tx2)">${factura}</div>
   </li>`;
@@ -3493,28 +3620,31 @@ function flotaFilaOrden(o) {
          así: cerrarla dejaría una visita al taller sin registro de qué se hizo.
          Si de verdad no se hizo nada, se anula con motivo escrito.</p>`;
 
+  // El formulario de trabajos va SIEMPRE: registrar qué se hizo es registro y
+  // control de flota lo conserva. Lo que se condiciona son los dos verbos que
+  // cierran el ciclo de la visita.
   const acciones = abierta ? `
-    <div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap">
+    ${flotaDecide() ? `<div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap">
       <button class="btn-flota" style="padding:4px 10px;font-size:12px"
-              id="cerrar-ot-${o.id}"
-              onclick="flotaCerrarOT(${o.id}, ${o.hallazgo_id !== null})">Volvió del taller</button>
+              id="cerrar-ot-${esc(o.id)}"
+              onclick="flotaCerrarOT(${esc(o.id)}, ${o.hallazgo_id !== null})">Volvió del taller</button>
       <button class="btn-flota" style="padding:4px 10px;font-size:12px"
-              id="anular-ot-${o.id}"
-              onclick="flotaAnularOT(${o.id})">Anular</button>
-    </div>
+              id="anular-ot-${esc(o.id)}"
+              onclick="flotaAnularOT(${esc(o.id)})">Anular</button>
+    </div>` : ''}
     ${flotaFormTrabajo(o.id)}` : '';
 
   const factura = (!abierta && o.sin_factura > 0)
     ? flotaFormFactura(o) : '';
 
   const desenlace = abierta ? '' :
-    `<div style="font-size:12px;color:var(--tx2)">${o.estado} ·
+    `<div style="font-size:12px;color:var(--tx2)">${esc(o.estado)} ·
        ${o.cerrada_ts ? horaColombia(o.cerrada_ts) : 'sin fecha'}
        ${o.motivo_cierre ? '· ' + o.motivo_cierre : ''}</div>`;
 
   return `<li style="margin-bottom:14px;border-left:2px solid var(--bd);padding-left:10px">
-    <div><b>${o.tipo}</b> · ${o.taller} · ${o.km} km</div>
-    <div style="font-size:13px">${o.descripcion}</div>
+    <div><b>${esc(o.tipo)}</b> · ${esc(o.taller)} · ${esc(o.km)} km</div>
+    <div style="font-size:13px">${esc(o.descripcion)}</div>
     <div style="font-size:12px;color:var(--tx2)">
       abierta ${horaColombia(o.abierta_ts)}
       ${o.hallazgo_id !== null ? ' · nació del daño ' + o.hallazgo_id : ''}</div>
@@ -3579,8 +3709,8 @@ function flotaFormFactura(o) {
   const pendientes = (o.intervenciones || []).filter(t => t.gasto_id === null);
   const casillas = pendientes.map(t => `
     <label style="display:block;font-weight:400">
-      <input type="checkbox" checked id="fa-${o.id}-i-${t.intervencion_id}"
-             data-interv="${t.intervencion_id}"> ${t.sistema}
+      <input type="checkbox" checked id="fa-${esc(o.id)}-i-${esc(t.intervencion_id)}"
+             data-interv="${esc(t.intervencion_id)}"> ${esc(t.sistema)}
       ${t.descripcion ? '· ' + t.descripcion : ''}
     </label>`).join('');
   const cats = (FLOTA_TALLER.categorias || [])
@@ -3593,24 +3723,24 @@ function flotaFormFactura(o) {
       Qué trabajos cubre. Una factura puede cubrir unos y no otros.</p>
     ${casillas}
     <label>Qué clase de gasto es</label>
-    <select id="fa-${o.id}-cat" style="width:100%;padding:6px">${cats}</select>
+    <select id="fa-${esc(o.id)}-cat" style="width:100%;padding:6px">${cats}</select>
     <label>Fecha de la factura</label>
-    <input type="date" id="fa-${o.id}-fecha" style="width:100%;padding:6px">
+    <input type="date" id="fa-${esc(o.id)}-fecha" style="width:100%;padding:6px">
     <label>Valor total (pesos)</label>
-    <input type="number" id="fa-${o.id}-valor" inputmode="numeric" style="width:100%;padding:6px;font-size:18px">
+    <input type="number" id="fa-${esc(o.id)}-valor" inputmode="numeric" style="width:100%;padding:6px;font-size:18px">
     <label>A quién se le pagó</label>
-    <input id="fa-${o.id}-prov" style="width:100%;padding:6px" placeholder="Ej: Taller Los Andes">
+    <input id="fa-${esc(o.id)}-prov" style="width:100%;padding:6px" placeholder="Ej: Taller Los Andes">
     <label>De dónde salió la plata</label>
-    <select id="fa-${o.id}-origen" style="width:100%;padding:6px">${orgs}</select>
+    <select id="fa-${esc(o.id)}-origen" style="width:100%;padding:6px">${orgs}</select>
     <label>Número de factura <span style="color:var(--tx2)">(opcional)</span></label>
-    <input id="fa-${o.id}-doc" style="width:100%;padding:6px" placeholder="Sin esto no se puede cruzar con Siesa">
+    <input id="fa-${esc(o.id)}-doc" style="width:100%;padding:6px" placeholder="Sin esto no se puede cruzar con Siesa">
     <p style="font-size:12px;color:var(--tx2);margin:4px 0 0">
       El kilometraje no se pide: el gasto se ancla al odómetro con el que el
       camión entró al taller, que es cuando el trabajo se hizo.</p>
     <button class="btn-primary" style="margin-top:10px;width:100%"
-            onclick="flotaGuardarFacturaOT(${o.id})"
-            id="fa-${o.id}-guardar" data-placa="${FLOTA_PLACA}">Registrar factura</button>
-    <div id="fa-${o.id}-error" style="color:var(--red);margin-top:8px"></div>
+            onclick="flotaGuardarFacturaOT(${esc(o.id)})"
+            id="fa-${esc(o.id)}-guardar" data-placa="${FLOTA_PLACA}">Registrar factura</button>
+    <div id="fa-${esc(o.id)}-error" style="color:var(--red);margin-top:8px"></div>
   </div>`;
 }
 
@@ -3622,7 +3752,7 @@ async function flotaRenderTaller() {
     d = await get(FLOTA_OT_URL.listar(encodeURIComponent(FLOTA_PLACA)));
   } catch (e) {
     cont.innerHTML = `<div class="tabla-card" style="color:var(--red)">
-      No se pudo cargar el taller: ${e.message}</div>`;
+      No se pudo cargar el taller: ${esc(e.message)}</div>`;
     return;
   }
 
@@ -3657,7 +3787,18 @@ async function flotaRenderTaller() {
   const tipos = (d.tipos || [])
     .map(t => `<option value="${t}">${t}</option>`).join('');
 
-  cont.innerHTML = `<div class="tabla-card">
+  // Mandar el camión al taller compromete plata: es decisión, no registro.
+  // Quien no decide ve por qué y a quién le toca, en vez de un formulario que
+  // el backend le va a rechazar con 403 después de llenarlo entero.
+  const formAbrir = !flotaDecide() ? `<div class="tabla-card">
+    <div class="tabla-titulo">Abrir una orden de trabajo</div>
+    <p style="font-size:13px;color:var(--tx2);margin:6px 0 0">
+      <b>Mandar un camión al taller lo decide gestión.</b> Control de flota
+      señala el daño y escala; la orden la abre quien decide sobre plata.</p>
+    <p style="font-size:12px;color:var(--tx2);margin:6px 0 0">
+      Lo que sí podés hacer acá: registrar los trabajos y la factura de las
+      órdenes que ya existen, más abajo.</p>
+  </div>` : `<div class="tabla-card">
     <div class="tabla-titulo">Abrir una orden de trabajo</div>
     <label>Por qué entra</label>
     <select id="ot-tipo" style="width:100%;padding:6px">${tipos}</select>
@@ -3679,7 +3820,9 @@ async function flotaRenderTaller() {
             onclick="flotaAbrirOT()" id="ot-guardar"
             data-placa="${FLOTA_PLACA}">Abrir orden</button>
     <div id="ot-error" style="color:var(--red);margin-top:8px"></div>
-  </div>
+  </div>`;
+
+  cont.innerHTML = `${formAbrir}
   <div class="tabla-card">
     <div class="tabla-titulo">Órdenes de este vehículo</div>
     ${ordenes}
@@ -3704,8 +3847,8 @@ function flotaTallerSistemaCambio() {
   const vivas = (FLOTA_TALLER.garantias || []).filter(g => g.sistema === sel.value);
   if (!vivas.length) { cont.innerHTML = ''; return; }
   cont.innerHTML = `<div style="border-left:3px solid var(--yellow);padding:8px;margin:8px 0">
-    <b style="color:var(--yellow)">Este vehículo tiene ${vivas.length}
-      reparación(es) de ${sel.value} todavía en garantía</b>
+    <b style="color:var(--yellow)">Este vehículo tiene ${esc(vivas.length)}
+      reparación(es) de ${esc(sel.value)} todavía en garantía</b>
     <ul style="list-style:none;padding:0;margin:6px 0">${
       vivas.map(g => flotaFilaGarantia(g)).join('')}</ul>
     <div style="font-size:12px;color:var(--tx2)">
@@ -3923,8 +4066,8 @@ function flotaKmLlanta(km, marca) {
 /** Una fila de montaje: qué llanta, en qué posición, desde cuándo y por qué salió. */
 function flotaFilaMontaje(m) {
   const estado = m.vigente
-    ? `<b style="color:var(--green,var(--tx2))">montada</b> desde ${m.inicio.slice(0, 10)}`
-    : `${m.inicio.slice(0, 10)} → ${String(m.fin).slice(0, 10)} · salió por <b>${m.motivo_desmontaje}</b>`;
+    ? `<b style="color:var(--green,var(--tx2))">montada</b> desde ${esc(m.inicio.slice(0, 10))}`
+    : `${esc(m.inicio.slice(0, 10))} → ${String(m.fin).slice(0, 10)} · salió por <b>${esc(m.motivo_desmontaje)}</b>`;
   // `desgaste_irregular` se marca porque es la única respuesta que NO habla de
   // la llanta: habla del eje. Una llanta que murió por desalineación y una que
   // cumplió su vida se ven iguales en la lista si esto no se dice.
@@ -3938,15 +4081,15 @@ function flotaFilaMontaje(m) {
     ? ` · factura registrada`
     : ` · <span style="color:var(--tx2)">sin gasto asociado (rotación)</span>`;
   return `<li style="margin-bottom:12px;border-left:2px solid var(--bd);padding-left:10px">
-    <div><b>Posición ${m.posicion}</b> · llanta <b>${m.codigo}</b>
-      <span style="font-size:12px;color:var(--tx2)">${m.marca_llanta} ${m.medida}</span></div>
+    <div><b>Posición ${esc(m.posicion)}</b> · llanta <b>${esc(m.codigo)}</b>
+      <span style="font-size:12px;color:var(--tx2)">${esc(m.marca_llanta)} ${esc(m.medida)}</span></div>
     <div style="font-size:12px;color:var(--tx2)">${estado}${doc}</div>
     <div style="font-size:12px;color:var(--tx2)">
       ${m.km_inicio.toLocaleString('es-CO')} km${m.km_fin === null ? '' : ' → ' + m.km_fin.toLocaleString('es-CO') + ' km'}
       · ${flotaKmLlanta(m.km, m.km_marca)}</div>
     ${aviso}
     ${m.vigente ? `<button class="btn-flota" style="padding:2px 8px;font-size:12px;margin-top:4px"
-        onclick="flotaAbrirDesmontaje(${m.id}, '${m.codigo}', ${m.posicion})">Desmontar</button>` : ''}
+        onclick="flotaAbrirDesmontaje(${esc(m.id)}, '${esc(m.codigo)}', ${esc(m.posicion)})">Desmontar</button>` : ''}
   </li>`;
 }
 
@@ -3964,7 +4107,7 @@ async function flotaRenderLlantas() {
     d = await get(FLOTA_LLANTA_URL + '/' + encodeURIComponent(FLOTA_PLACA));
   } catch (e) {
     cont.innerHTML = `<div class="tabla-card" style="color:var(--red)">
-      No se pudieron cargar las llantas: ${e.message}</div>`;
+      No se pudieron cargar las llantas: ${esc(e.message)}</div>`;
     return;
   }
 
@@ -3985,14 +4128,14 @@ async function flotaRenderLlantas() {
            <span style="font-size:12px;color:var(--tx2)">Casi siempre quiere
            decir que la llanta está puesta y nadie la registró, no que el camión
            ande sin rueda.</span></p>`
-      : `<p style="color:var(--tx2)">Las ${d.posiciones_declaradas} posiciones
+      : `<p style="color:var(--tx2)">Las ${esc(d.posiciones_declaradas)} posiciones
            tienen su llanta registrada.</p>`);
 
   const vida = (d.km_por_posicion || []).length
     ? `<ul style="list-style:none;padding:0;font-size:13px">${d.km_por_posicion.map(p => `
-        <li>Posición <b>${p.posicion}</b>: ${p.n} vida(s) medida(s)
+        <li>Posición <b>${esc(p.posicion)}</b>: ${esc(p.n)} vida(s) medida(s)
           ${p.mediana_km === 'sin_dato'
-            ? `<span style="color:var(--tx2)">— faltan ${p.faltan} para poder
+            ? `<span style="color:var(--tx2)">— faltan ${esc(p.faltan)} para poder
                  decir cuánto dura. Con menos, una sola pinchada parte la
                  mediana a la mitad.</span>`
             : `— mediana <b>${Number(p.mediana_km).toLocaleString('es-CO')} km</b>`}
@@ -4007,7 +4150,7 @@ async function flotaRenderLlantas() {
     : '<p style="color:var(--tx2)">Sin montajes registrados.</p>';
 
   const disponibles = (d.disponibles || []).map(ll =>
-    `<option value="${ll.id}">${ll.codigo} · ${ll.medida}${ll.ultimo_motivo ? ' · salió por ' + ll.ultimo_motivo : ''}</option>`
+    `<option value="${esc(ll.id)}">${esc(ll.codigo)} · ${esc(ll.medida)}${ll.ultimo_motivo ? ' · salió por ' + ll.ultimo_motivo : ''}</option>`
   ).join('');
 
   cont.innerHTML = `<div class="tabla-card">
@@ -4294,7 +4437,7 @@ function flotaFilaTarea(t) {
     ? `<span style="color:var(--yellow)">sin intervalo declarado</span>`
     : `cada ${Number(t.intervalo_km).toLocaleString('es-CO')} km` +
       ` <span style="color:var(--${t.fuente_blanda ? 'yellow' : 'tx2'})">` +
-      `(fuente: ${t.fuente}${t.fuente_blanda ? ' — no es documental' : ''})</span>`;
+      `(fuente: ${esc(t.fuente)}${t.fuente_blanda ? ' — no es documental' : ''})</span>`;
   const ultima = t.ultima_ejecucion_km === 'sin_dato'
     ? 'nunca registrada'
     : `última a ${Number(t.ultima_ejecucion_km).toLocaleString('es-CO')} km`;
@@ -4302,14 +4445,14 @@ function flotaFilaTarea(t) {
     ? ' · intervalo escrito a mano: la siembra desde la ficha no lo pisa'
     : '';
   return `<li style="margin-bottom:12px;border-left:2px solid var(--bd);padding-left:10px">
-    <div><b>${t.nombre}</b> — <span style="color:var(--${color})">${texto}</span></div>
+    <div><b>${esc(t.nombre)}</b> — <span style="color:var(--${color})">${texto}</span></div>
     <div style="font-size:12px;color:var(--tx2)">${intervalo} · ${ultima}${km}${dias}${manual}</div>
-    ${t.nota ? `<div style="font-size:12px;color:var(--tx2)">${t.nota}</div>` : ''}
+    ${t.nota ? `<div style="font-size:12px;color:var(--tx2)">${esc(t.nota)}</div>` : ''}
     <div style="margin-top:6px">
-      <button class="btn-flota" id="prev-hecho-${t.plan_id}"
-              onclick="flotaRegistrarEjecucion(${t.plan_id})">Se hizo</button>
+      <button class="btn-flota" id="prev-hecho-${esc(t.plan_id)}"
+              onclick="flotaRegistrarEjecucion(${esc(t.plan_id)})">Se hizo</button>
       <button class="btn-flota"
-              onclick="flotaFijarIntervalo(${t.plan_id})">Fijar intervalo</button>
+              onclick="flotaFijarIntervalo(${esc(t.plan_id)})">Fijar intervalo</button>
     </div>
   </li>`;
 }
@@ -4322,7 +4465,7 @@ async function flotaRenderPreventivo() {
     d = await get('/flota/preventivo/' + FLOTA_PLACA);
   } catch (e) {
     cont.innerHTML = `<div class="tabla-card" style="color:var(--red)">
-      No se pudo cargar el plan: ${e.message}</div>`;
+      No se pudo cargar el plan: ${esc(e.message)}</div>`;
     return;
   }
   FLOTA_PREV = d;
@@ -4333,9 +4476,9 @@ async function flotaRenderPreventivo() {
   const r = d.ritmo;
   const ritmo = r.km_dia === 'sin_dato'
     ? `<p style="color:var(--yellow);font-size:13px">Ritmo de uso: <b>sin dato</b>
-       — ${r.motivo}. Sin él, «faltan 500 km» no se puede traducir a días.</p>`
-    : `<p style="font-size:13px;color:var(--tx2)">Ritmo de uso: <b>${r.km_dia} km/día</b>
-       (${r.marca}, ${r.n} lecturas sobre ${r.dias} días). Es lo que convierte
+       — ${esc(r.motivo)}. Sin él, «faltan 500 km» no se puede traducir a días.</p>`
+    : `<p style="font-size:13px;color:var(--tx2)">Ritmo de uso: <b>${esc(r.km_dia)} km/día</b>
+       (${esc(r.marca)}, ${esc(r.n)} lecturas sobre ${esc(r.dias)} días). Es lo que convierte
        los kilómetros que faltan en días. No se compara con otro vehículo.</p>`;
 
   const tareas = d.tareas || [];
@@ -4349,10 +4492,10 @@ async function flotaRenderPreventivo() {
 
   cont.innerHTML = `
     <div class="tabla-card">
-      <h3>Mantenimiento preventivo · ${d.placa}</h3>
+      <h3>Mantenimiento preventivo · ${esc(d.placa)}</h3>
       ${ritmo}
       <p style="font-size:12px;color:var(--tx2)">«Llega pronto» significa dentro
-      de <b>${d.dias_aviso} días</b> al ritmo medido de este vehículo. Es el único
+      de <b>${esc(d.dias_aviso)} días</b> al ritmo medido de este vehículo. Es el único
       número elegido de esta pantalla: los kilómetros los pone el fabricante.</p>
       ${lista}
       <div style="margin-top:12px">

@@ -485,7 +485,10 @@ async function cargarAdmin(desdeTimer = false) {
   else if (TAB === 'tab-layout') { if (!desdeTimer) await cargarLayout(); }
   else if (TAB === 'tab-compras') await cargarCompras();
   else if (TAB === 'tab-vigia') { if (!desdeTimer) await cargarVigia(); }
-  else if (TAB === 'tab-flota') { if (!desdeTimer) await cargarFlota(); }
+  // `flotaEntrar` y no `cargarFlota`: despacha al sub-tab que el usuario dejó
+  // abierto. Sin esto, cada F5 rebota a Expedientes — y `control_flota`, que va
+  // a vivir en Analítica, vuelve a la pantalla equivocada todas las veces.
+  else if (TAB === 'tab-flota') { if (!desdeTimer) await flotaEntrar(); }
 }
 
 /** @param {string} id - Tab element ID to activate (e.g. 'tab-dashboard'). */
@@ -534,9 +537,9 @@ async function cargarFranjaAmbiente() {
   if (d.estado === 'DECLARADO') {
     const u = d.ultima_declaracion || {};
     cont.innerHTML = `<div style="padding:6px 12px;background:#064e3b;color:#d1fae5;
-      font-size:11px;">Ambiente contrastado por <b>${u.declarado_por_nombre || '—'}</b>
-      el ${(u.declarado_en || '').slice(0, 10)} · ${u.concepto || ''}
-      (WMS ${u.cifra_wms} vs ${u.fuente_externa}: ${u.cifra_externa})</div>`;
+      font-size:11px;">Ambiente contrastado por <b>${esc(u.declarado_por_nombre || '—')}</b>
+      el ${esc((u.declarado_en || '').slice(0, 10))} · ${esc(u.concepto || '')}
+      (WMS ${esc(u.cifra_wms)} vs ${esc(u.fuente_externa)}: ${esc(u.cifra_externa)})</div>`;
     return;
   }
   cont.innerHTML = `<div style="padding:10px 12px;background:#7f1d1d;color:#fff;font-size:12px;">
@@ -620,8 +623,8 @@ async function cargarDashboard() {
           const pct = Math.min(100, Math.round(o.total_tareas / Math.max(...ops.map(x => x.total_tareas)) * 100));
           return `<div style="margin-bottom:8px;">
             <div style="display:flex;justify-content:space-between;margin-bottom:3px;">
-              <span style="color:#aaa;font-size:12px;">${o.nombre}</span>
-              <span style="color:#666;font-size:11px;">Pick:${o.pickings_completados} · Pack:${o.packings_completados} · Cont:${o.conteos_completados}</span>
+              <span style="color:#aaa;font-size:12px;">${esc(o.nombre)}</span>
+              <span style="color:#666;font-size:11px;">Pick:${esc(o.pickings_completados)} · Pack:${esc(o.packings_completados)} · Cont:${esc(o.conteos_completados)}</span>
             </div>
             <div style="background:#1a1a1a;border-radius:4px;height:5px;">
               <div style="background:#3b82f6;width:${pct}%;height:5px;border-radius:4px;"></div>
@@ -664,8 +667,8 @@ async function cargarDashboard() {
         const todos = [...(tr.criticos || []), ...(tr.alertas || [])];
         lista.innerHTML = todos.slice(0, 5).map(t =>
           `<div style="padding:6px 0;border-bottom:1px solid #1e3a5f;display:flex;justify-content:space-between;">
-            <span style="color:#cbd5e1;">${t.codigo} → ${t.nombre_punto_venta || t.bodega_destino}</span>
-            <span style="color:${t.horas_en_transito > 24 ? '#fb923c' : '#60a5fa'};font-weight:700;">${t.horas_en_transito}h</span>
+            <span style="color:#cbd5e1;">${esc(t.codigo)} → ${t.nombre_punto_venta || t.bodega_destino}</span>
+            <span style="color:${t.horas_en_transito > 24 ? '#fb923c' : '#60a5fa'};font-weight:700;">${esc(t.horas_en_transito)}h</span>
           </div>`
         ).join('');
       }
@@ -732,8 +735,8 @@ function movimientos(lista) {
     const s = esEntrada ? '+' : (m.cantidad > 0 ? '-' : '');
     const fechaStr = m.fecha && !m.fecha.endsWith('Z') ? m.fecha + 'Z' : m.fecha;
     const h = new Date(fechaStr).toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Bogota' });
-    const doc = m.numero_documento ? `<div style="font-size:10px;color:#444;">${m.numero_documento}</div>` : '';
-    return `<div class="tabla-fila"><div><div class="tabla-nombre">${m.tipo}</div><div style="font-size:11px;color:#555;">${h}</div>${doc}</div><div style="color:${c};font-weight:700;">${s}${m.cantidad}</div></div>`;
+    const doc = m.numero_documento ? `<div style="font-size:10px;color:#444;">${esc(m.numero_documento)}</div>` : '';
+    return `<div class="tabla-fila"><div><div class="tabla-nombre">${esc(m.tipo)}</div><div style="font-size:11px;color:#555;">${h}</div>${doc}</div><div style="color:${c};font-weight:700;">${s}${esc(m.cantidad)}</div></div>`;
   }).join('');
 }
 
@@ -853,17 +856,17 @@ async function cargarPedidos() {
                     + 'padding:5px 8px;border-radius:6px;font-size:11px;'
                     + 'font-weight:600;cursor:pointer;margin-top:6px;';
           const btnRemision = p.packing_id
-            ? `<button onclick="imprimirRemisionAdmin(${p.packing_id})" style="${_bt}">
+            ? `<button onclick="imprimirRemisionAdmin(${esc(p.packing_id)})" style="${_bt}">
                 🖨 Remisión
                </button>
-               <button onclick="imprimirFacturaAdmin(${p.packing_id})" style="${_bt}">
+               <button onclick="imprimirFacturaAdmin(${esc(p.packing_id)})" style="${_bt}">
                 🖨 Factura
                </button>`
             : '';
           accionBtn = `<div style="flex-shrink:0;background:#0d1a0d;color:#4ade80;border:1px solid #166534;padding:8px 12px;border-radius:8px;font-size:12px;font-weight:700;text-align:center;">✓ Despachado<br>en Siesa${btnRemision}</div>`;
         } else if (p.packing_estado === 'EN_PROCESO') {
           // Empacador verificando en mesa — admin puede entrar a ayudar/probar
-          accionBtn = `<button onclick="empIniciarHUD(${p.packing_id})"
+          accionBtn = `<button onclick="empIniciarHUD(${esc(p.packing_id)})"
             style="flex-shrink:0;background:#1a0a2e;color:#c084fc;border:1px solid #4c1d95;padding:8px 12px;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;text-align:center;">
             Packing<br>🔄 Abrir
           </button>`;
@@ -872,7 +875,7 @@ async function cargarPedidos() {
           accionBtn = p.packing_id
             ? `<div style="flex-shrink:0;display:flex;flex-direction:column;gap:4px;align-items:stretch;">
                 <div style="background:#2d0a0a;color:#fca5a5;border:1px solid #7f1d1d;padding:6px 10px;border-radius:6px;font-size:11px;font-weight:700;text-align:center;">⚠ Error Siesa</div>
-                <button onclick="facturarRemisionExistente(${p.packing_id})"
+                <button onclick="facturarRemisionExistente(${esc(p.packing_id)})"
                   style="background:#7c2d12;color:#fed7aa;border:1px solid #c2410c;padding:6px 10px;border-radius:6px;font-size:11px;font-weight:700;cursor:pointer;text-align:center;">
                   🧾 Facturar Remisión
                 </button>
@@ -880,14 +883,14 @@ async function cargarPedidos() {
             : `<div style="flex-shrink:0;background:#2d0a0a;color:#fca5a5;border:1px solid #7f1d1d;padding:8px 12px;border-radius:8px;font-size:12px;font-weight:700;text-align:center;">⚠ Error<br>Siesa</div>`;
         } else if (p.picking_completado) {
           // Picking listo — admin puede abrir directamente el packing
-          accionBtn = `<button onclick="empIniciarHUD(${p.packing_id})"
+          accionBtn = `<button onclick="empIniciarHUD(${esc(p.packing_id)})"
             style="flex-shrink:0;background:#1c1400;color:#fbbf24;border:1px solid #78350f;padding:8px 12px;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;text-align:center;">
             Packing<br>pendiente ▶
           </button>`;
         } else if (p.picking_iniciado) {
           // Operario recogiendo
           accionBtn = `<div style="flex-shrink:0;background:#1a1a2a;color:#93c5fd;border:1px solid #1e3a5f;padding:8px 12px;border-radius:8px;font-size:12px;font-weight:700;text-align:center;">
-            En picking<br>${p.picking_progreso || ''}
+            En picking<br>${esc(p.picking_progreso || '')}
           </div>`;
         } else {
           // Sin tareas — listo para despachar
@@ -901,9 +904,9 @@ async function cargarPedidos() {
           <div class="tabla-card">
             <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">
               <div style="min-width:0;">
-                <div style="font-size:15px;font-weight:700;">${p.numero_pedido}</div>
-                <div style="font-size:12px;color:#666;margin-top:2px;">${p.cliente || 'Sin cliente'}</div>
-                <div style="font-size:11px;color:#444;margin-top:2px;">${p.items.length} producto(s) · ${totalUds} uds</div>
+                <div style="font-size:15px;font-weight:700;">${esc(p.numero_pedido)}</div>
+                <div style="font-size:12px;color:#666;margin-top:2px;">${esc(p.cliente || 'Sin cliente')}</div>
+                <div style="font-size:11px;color:#444;margin-top:2px;">${esc(p.items.length)} producto(s) · ${totalUds} uds</div>
                 ${sinProd ? `<div style="font-size:11px;color:#d97706;margin-top:2px;">⚠ ${sinProd} sin registrar en WMS</div>` : ''}
               </div>
               ${accionBtn}
@@ -1021,7 +1024,7 @@ function _renderTareasBodegaHTML(tareas) {
     let html = '';
     grupos.forEach(({ label, color, tareas: ts }) => {
       if (!ts.length) return;
-      html += `<div style="font-size:11px;font-weight:700;color:${color};text-transform:uppercase;letter-spacing:.8px;padding:10px 0 5px;border-bottom:1px solid #222;margin-bottom:8px;">${label} · ${ts.length}</div>`;
+      html += `<div style="font-size:11px;font-weight:700;color:${color};text-transform:uppercase;letter-spacing:.8px;padding:10px 0 5px;border-bottom:1px solid #222;margin-bottom:8px;">${label} · ${esc(ts.length)}</div>`;
       html += ts.map(t => `
         <div class="tabla-card" style="${t.estado==='BLOQUEADO'?'border-color:#7f1d1d;background:#110a0a;':''}">
           <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">
@@ -1030,7 +1033,7 @@ function _renderTareasBodegaHTML(tareas) {
                 <span style="font-size:14px;font-weight:600;">${t.producto_nombre || t.producto_codigo}</span>
                 ${t.tipo_documento === 'TRASLADO' ? '<span style="font-size:10px;font-weight:700;padding:2px 7px;border-radius:10px;background:#1e3a5f;color:#60a5fa;letter-spacing:.5px;">🔄 TRANSFERENCIA</span>' : ''}
               </div>
-              <div style="font-size:12px;color:#666;margin-top:2px;">${t.referencia_documento || t.codigo} · ${t.ubicacion_codigo || '—'}</div>
+              <div style="font-size:12px;color:#666;margin-top:2px;">${t.referencia_documento || t.codigo} · ${esc(t.ubicacion_codigo || '—')}</div>
               <div style="font-size:11px;color:#444;margin-top:2px;">${
                 t.operario_id
                   ? '👤 En proceso'
@@ -1039,23 +1042,23 @@ function _renderTareasBodegaHTML(tareas) {
                     : '⏳ En cola'
               }</div>
               ${t.estado === 'BLOQUEADO' && t.observaciones_bloqueo
-                ? `<div style="font-size:11px;color:#ef4444;margin-top:3px;font-style:italic;">"${t.observaciones_bloqueo}"</div>`
+                ? `<div style="font-size:11px;color:#ef4444;margin-top:3px;font-style:italic;">"${esc(t.observaciones_bloqueo)}"</div>`
                 : ''}
             </div>
             <div style="text-align:right;flex-shrink:0;">
-              <span class="badge ${t.estado==='EN_PROCESO'?'badge-blue':t.estado==='BLOQUEADO'?'badge-red':'badge-yellow'}">${t.estado}</span>
-              <div style="font-size:20px;font-weight:800;margin-top:4px;">${t.cantidad_recogida||0}/${t.cantidad_solicitada}</div>
+              <span class="badge ${t.estado==='EN_PROCESO'?'badge-blue':t.estado==='BLOQUEADO'?'badge-red':'badge-yellow'}">${esc(t.estado)}</span>
+              <div style="font-size:20px;font-weight:800;margin-top:4px;">${esc(t.cantidad_recogida||0)}/${esc(t.cantidad_solicitada)}</div>
             </div>
           </div>
           ${t.estado === 'BLOQUEADO' ? `
           <div style="margin-top:10px;padding-top:10px;border-top:1px solid #2a1010;">
-            <button onclick="auditoriaMostrarPanel(${t.id})"
+            <button onclick="auditoriaMostrarPanel(${esc(t.id)})"
               style="width:100%;padding:9px;background:#1a1a2a;color:#a78bfa;border:1px solid #2d1b69;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;">
               🔍 Auditoría
             </button>
-            <div id="auditoria-panel-${t.id}" style="display:none;margin-top:10px;">
+            <div id="auditoria-panel-${esc(t.id)}" style="display:none;margin-top:10px;">
               <div style="font-size:11px;color:#888;margin-bottom:8px;">¿Qué encontraste físicamente?</div>
-              <select id="auditoria-resultado-${t.id}"
+              <select id="auditoria-resultado-${esc(t.id)}"
                 style="width:100%;padding:10px;background:#0d0d0d;border:1px solid #333;border-radius:8px;color:#fff;font-size:13px;margin-bottom:8px;">
                 <option value="">— Selecciona resultado —</option>
                 <option value="ENCONTRADO_COMPLETO">✅ Encontrado completo (error del operario)</option>
@@ -1067,23 +1070,23 @@ function _renderTareasBodegaHTML(tareas) {
               <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;">
                 <div>
                   <div style="font-size:11px;color:#666;margin-bottom:4px;">Cant. hallada</div>
-                  <input id="auditoria-cantidad-${t.id}" type="number" min="0" value="0"
+                  <input id="auditoria-cantidad-${esc(t.id)}" type="number" min="0" value="0"
                     style="width:100%;padding:9px;background:#0d0d0d;border:1px solid #333;border-radius:8px;color:#fff;font-size:13px;box-sizing:border-box;">
                 </div>
                 <div>
                   <div style="font-size:11px;color:#666;margin-bottom:4px;">Ubicación hallada</div>
-                  <input id="auditoria-ubicacion-${t.id}" type="text" placeholder="Ej: A-01-02"
+                  <input id="auditoria-ubicacion-${esc(t.id)}" type="text" placeholder="Ej: A-01-02"
                     style="width:100%;padding:9px;background:#0d0d0d;border:1px solid #333;border-radius:8px;color:#fff;font-size:13px;box-sizing:border-box;">
                 </div>
               </div>
-              <textarea id="auditoria-obs-${t.id}" placeholder="Observaciones (opcional)..."
+              <textarea id="auditoria-obs-${esc(t.id)}" placeholder="Observaciones (opcional)..."
                 style="width:100%;padding:9px;background:#0d0d0d;border:1px solid #333;border-radius:8px;color:#fff;font-size:12px;resize:vertical;min-height:56px;box-sizing:border-box;margin-bottom:8px;"></textarea>
               <div style="display:flex;gap:8px;">
-                <button onclick="auditoriaCancelarPanel(${t.id})"
+                <button onclick="auditoriaCancelarPanel(${esc(t.id)})"
                   style="flex:1;padding:9px;background:#1a1a1a;border:1px solid #333;color:#aaa;border-radius:8px;font-size:12px;cursor:pointer;">
                   Cancelar
                 </button>
-                <button onclick="auditoriaGuardar(${t.id})"
+                <button onclick="auditoriaGuardar(${esc(t.id)})"
                   style="flex:2;padding:9px;background:#a78bfa;color:#000;border:none;border-radius:8px;font-size:12px;font-weight:800;cursor:pointer;">
                   Guardar auditoría →
                 </button>
@@ -1127,9 +1130,9 @@ async function cargarOperarios() {
       <div class="tabla-card">
         <div style="display:flex;justify-content:space-between;align-items:center;">
           <div>
-            <div style="font-size:14px;font-weight:600;">${u.nombre}</div>
-            <div style="font-size:11px;color:#555;margin-bottom:2px;">${u.rol} ${badges}</div>
-            <div style="font-size:11px;color:#444;">Pick:${op.pickings_completados} Pack:${op.packings_completados} Conteos:${op.conteos_completados}</div>
+            <div style="font-size:14px;font-weight:600;">${esc(u.nombre)}</div>
+            <div style="font-size:11px;color:#555;margin-bottom:2px;">${esc(u.rol)} ${badges}</div>
+            <div style="font-size:11px;color:#444;">Pick:${esc(op.pickings_completados)} Pack:${esc(op.packings_completados)} Conteos:${esc(op.conteos_completados)}</div>
             ${u.puede_picar && u.capacidad_diaria_conteo != null ? (() => {
               const cap = u.capacidad_diaria_conteo;
               const hoy = op.conteos_hoy || 0;
@@ -1144,7 +1147,7 @@ async function cargarOperarios() {
             })() : ''}
           </div>
           <div style="text-align:right;">
-            <div style="font-size:28px;font-weight:800;color:${color}">${op.total_tareas}</div>
+            <div style="font-size:28px;font-weight:800;color:${color}">${esc(op.total_tareas)}</div>
             <div style="font-size:10px;color:#555;">tareas 7d</div>
           </div>
         </div>
@@ -1165,11 +1168,11 @@ async function cargarStock() {
       el.innerHTML = d.alertas.map(a => `
       <div class="tabla-card">
         <div style="display:flex;justify-content:space-between;align-items:center;">
-          <div><div style="font-size:13px;font-weight:600;">${a.nombre}</div><div style="font-size:11px;color:#555;">${a.codigo} · Clase ${a.clasificacion_abc||'—'}</div></div>
+          <div><div style="font-size:13px;font-weight:600;">${esc(a.nombre)}</div><div style="font-size:11px;color:#555;">${esc(a.codigo)} · Clase ${esc(a.clasificacion_abc||'—')}</div></div>
           <div style="text-align:right;">
-            <span class="badge ${a.urgencia==='CRITICO'?'badge-red':'badge-yellow'}">${a.urgencia}</span>
-            <div style="font-size:20px;font-weight:800;color:${a.urgencia==='CRITICO'?'#f87171':'#facc15'}">${a.stock_actual}</div>
-            <div style="font-size:10px;color:#555;">mín:${a.stock_minimo}</div>
+            <span class="badge ${a.urgencia==='CRITICO'?'badge-red':'badge-yellow'}">${esc(a.urgencia)}</span>
+            <div style="font-size:20px;font-weight:800;color:${a.urgencia==='CRITICO'?'#f87171':'#facc15'}">${esc(a.stock_actual)}</div>
+            <div style="font-size:10px;color:#555;">mín:${esc(a.stock_minimo)}</div>
           </div>
         </div>
       </div>`).join('');
@@ -1198,19 +1201,19 @@ async function cargarCatalogo(pag) {
     el.innerHTML = d.productos.map(p => `
       <div class="tabla-fila">
         <div>
-          <div style="font-size:13px;font-weight:600;">${p.nombre}</div>
-          <div style="font-size:11px;color:#555;">${p.codigo}${p.codigo_siesa && p.codigo_siesa !== p.codigo ? ' · Siesa: ' + p.codigo_siesa : ''} · Clase ${p.clasificacion_abc || '—'}</div>
+          <div style="font-size:13px;font-weight:600;">${esc(p.nombre)}</div>
+          <div style="font-size:11px;color:#555;">${esc(p.codigo)}${p.codigo_siesa && p.codigo_siesa !== p.codigo ? ' · Siesa: ' + p.codigo_siesa : ''} · Clase ${esc(p.clasificacion_abc || '—')}</div>
         </div>
         <div style="text-align:right;">
-          <div style="font-size:16px;font-weight:700;color:${p.stock_total > 0 ? '#4ade80' : '#555'}">${p.stock_total}</div>
-          <div style="font-size:10px;color:#555;">${p.unidad_medida || 'UND'}</div>
+          <div style="font-size:16px;font-weight:700;color:${p.stock_total > 0 ? '#4ade80' : '#555'}">${esc(p.stock_total)}</div>
+          <div style="font-size:10px;color:#555;">${esc(p.unidad_medida || 'UND')}</div>
         </div>
       </div>`).join('');
     // Paginación
     if (pagEl && d.paginas > 1) {
       let btns = '';
       if (_catalogoPag > 1) btns += `<button onclick="cargarCatalogo(${_catalogoPag - 1})" style="padding:6px 12px;background:#222;border:1px solid #333;color:#aaa;border-radius:6px;cursor:pointer;">◀</button>`;
-      btns += `<span style="font-size:12px;color:#555;align-self:center;">${_catalogoPag} / ${d.paginas}</span>`;
+      btns += `<span style="font-size:12px;color:#555;align-self:center;">${_catalogoPag} / ${esc(d.paginas)}</span>`;
       if (_catalogoPag < d.paginas) btns += `<button onclick="cargarCatalogo(${_catalogoPag + 1})" style="padding:6px 12px;background:#222;border:1px solid #333;color:#aaa;border-radius:6px;cursor:pointer;">▶</button>`;
       pagEl.innerHTML = btns;
     } else if (pagEl) pagEl.innerHTML = '';
@@ -1242,7 +1245,7 @@ async function cargarConnekta() {
     let color, estado, detalle;
     if (d.modo_datos === 'datos_de_prueba') {
       color = '#f87171'; estado = 'DATOS DE PRUEBA';
-      detalle = `Siesa apunta a <b>${d.siesa_host || '?'}</b> — nada de lo que se `
+      detalle = `Siesa apunta a <b>${esc(d.siesa_host || '?')}</b> — nada de lo que se `
         + 'envíe llega al Siesa real. NO usar estos números para decidir.';
     } else if (d.modo_datos === 'simulacion') {
       color = '#facc15'; estado = 'SIMULACIÓN';
@@ -1269,8 +1272,8 @@ async function cargarConnekta() {
         <div class="tabla-fila"><span class="tabla-nombre">Credenciales</span><span class="badge ${d.credenciales_configuradas?'badge-green':'badge-red'}">${d.credenciales_configuradas?'✓ Activas':'✗ Faltan'}</span></div>
         <div class="tabla-fila"><span class="tabla-nombre">GETs (lectura)</span><span class="badge ${!d.modo_simulacion?'badge-green':'badge-yellow'}">${!d.modo_simulacion?'✓ Real':'Simulado'}</span></div>
         <div class="tabla-fila"><span class="tabla-nombre">POSTs (escritura)</span><span class="badge ${(!d.modo_simulacion&&!d.modo_ensayo)?'badge-green':d.modo_ensayo?'badge-yellow':'badge-red'}">${(!d.modo_simulacion&&!d.modo_ensayo)?'✓ Activos':d.modo_ensayo?'Bloqueados (ensayo)':'Simulados'}</span></div>
-        <div class="tabla-fila"><span class="tabla-nombre">Bodega</span><span style="font-size:13px;color:#aaa;">${d.bodega||'—'}</span></div>
-        <div class="tabla-fila"><span class="tabla-nombre">CO</span><span style="font-size:13px;color:#aaa;">${d.centro_operacion||'—'}</span></div>
+        <div class="tabla-fila"><span class="tabla-nombre">Bodega</span><span style="font-size:13px;color:#aaa;">${esc(d.bodega||'—')}</span></div>
+        <div class="tabla-fila"><span class="tabla-nombre">CO</span><span style="font-size:13px;color:#aaa;">${esc(d.centro_operacion||'—')}</span></div>
       </div>
       <button id="btn-setup-inicial" onclick="setupInicial()"
         style="width:100%;margin-top:12px;padding:14px;background:#1e3a5f;color:#93c5fd;border:none;border-radius:10px;font-size:14px;font-weight:700;cursor:pointer;">
@@ -1414,7 +1417,7 @@ async function barcodesCobertura() {
   try {
     d = await get('/api/productos/sin-codigo-barras?per_page=20');
   } catch (e) {
-    el.innerHTML = `<span style="color:#f87171;">No se pudo consultar: ${e.message}</span>`;
+    el.innerHTML = `<span style="color:#f87171;">No se pudo consultar: ${esc(e.message)}</span>`;
     return;
   }
   const c = d.cobertura || {};
@@ -1425,20 +1428,20 @@ async function barcodesCobertura() {
   }
   const muestra = (d.productos || [])
     .map(p => `<div style="padding:2px 0;border-bottom:1px solid #1a1a1a;">
-      <code style="color:#93c5fd;">${p.codigo}</code> ${p.nombre || ''}</div>`)
+      <code style="color:#93c5fd;">${esc(p.codigo)}</code> ${esc(p.nombre || '')}</div>`)
     .join('');
   el.innerHTML = `
     <div style="color:#e5e5e5;margin-bottom:6px;">
       <strong>${c.con_codigo_barras.toLocaleString('es-CO')}</strong> de
       <strong>${c.productos_activos.toLocaleString('es-CO')}</strong> se pueden escanear
-      (${c.porcentaje}%).
+      (${esc(c.porcentaje)}%).
     </div>
     <div style="color:${c.sin_codigo_barras ? '#fbbf24' : '#4ade80'};margin-bottom:8px;">
       ${c.sin_codigo_barras.toLocaleString('es-CO')} hay que teclearlos a mano.
     </div>
     ${d.total ? `<div style="max-height:180px;overflow:auto;font-size:11px;">${muestra}</div>
     <div style="margin-top:6px;font-size:11px;color:#666;">
-      Mostrando ${d.productos.length} de ${d.total.toLocaleString('es-CO')} ·
+      Mostrando ${esc(d.productos.length)} de ${d.total.toLocaleString('es-CO')} ·
       <a href="#" onclick="barcodesDescargarFaltantes();return false;"
          style="color:#93c5fd;">bajar la lista completa (CSV)</a>
     </div>` : ''}`;
@@ -1605,21 +1608,21 @@ async function verReconciliacion() {
             + (b.contraparte_wms ? ` — ${b.contraparte_wms.descripcion}`
                + (b.contraparte_wms.unidades != null ? ` (${b.contraparte_wms.unidades} und en el WMS, sin cuadrar)` : '')
                : '')
-            + (b.justificacion ? `<br>${b.justificacion}` : ''), color);
+            + (b.justificacion ? `<br>${esc(b.justificacion)}` : ''), color);
 
           // Lo IMPREVISTO: naranja, y es lo que dejó el veredicto en ámbar.
           const bloqueNoComparable = noCompImprev ? `
             <div style="font-size:12px;color:#fb923c;margin:12px 0 6px;">
               No se puede comparar y nadie lo previó — ${noCompImprev} SKU (no es «cuadra»):</div>
             ${(nc.almacenes_sin_bodega_siesa || []).map(a => filaNoComparable(
-                `Almacén ${a.almacen} sin bodega Siesa asignada`,
-                `${a.skus} SKU · ${a.unidades} und — no se sabe contra qué bodega comparar`)).join('')}
+                `Almacén ${esc(a.almacen)} sin bodega Siesa asignada`,
+                `${esc(a.skus)} SKU · ${esc(a.unidades)} und — no se sabe contra qué bodega comparar`)).join('')}
             ${(nc.bodegas_wms_sin_datos_siesa || []).map(b => filaNoComparable(
-                `${b.bodega}: el WMS tiene stock y Siesa no reportó nada`,
-                `${b.skus_wms} SKU · ${b.unidades_wms} und`)).join('')}
+                `${esc(b.bodega)}: el WMS tiene stock y Siesa no reportó nada`,
+                `${esc(b.skus_wms)} SKU · ${esc(b.unidades_wms)} und`)).join('')}
             ${imprevistas.map(b => filaBodegaSinAlmacen(b)).join('')}
             ${nc.skus_siesa_sin_producto_wms ? filaNoComparable(
-                `${nc.skus_siesa_sin_producto_wms} SKU de Siesa sin producto en el catálogo WMS`,
+                `${esc(nc.skus_siesa_sin_producto_wms)} SKU de Siesa sin producto en el catálogo WMS`,
                 'no hay contra qué compararlos — falta sincronizar catálogo') : ''}` : '';
 
           // Lo PREVISTO: gris, y con el motivo escrito. No descalificar no es
@@ -1636,33 +1639,33 @@ async function verReconciliacion() {
               Cuadre por bodega (SKU que coinciden / SKU comparados):</div>
             ${porBodega.map(b => `
               <div class="tabla-fila" style="font-size:12px;">
-                <div><div style="font-weight:600;">${b.bodega}</div>
+                <div><div style="font-weight:600;">${esc(b.bodega)}</div>
                      <div style="color:#555;">${b.comparable ? (b.discrepancias + ' diferencia(s)') : b.motivo}</div></div>
                 <div style="text-align:right;">
                   <span style="color:${b.comparable ? (b.cuadre_pct === 100 ? '#4ade80' : '#facc15') : (b.esperado ? '#94a3b8' : '#fb923c')};font-weight:700;">
                     ${b.comparable ? (b.cuadran + '/' + b.denominador + ' · ' + (b.cuadre_pct === null ? '—' : b.cuadre_pct + '%'))
                       : (b.esperado ? 'no comparable (previsto)' : 'no comparable')}</span>
-                  <div style="color:#555;font-size:11px;">WMS ${b.unidades_wms} und · Siesa ${b.unidades_siesa} und</div>
+                  <div style="color:#555;font-size:11px;">WMS ${esc(b.unidades_wms)} und · Siesa ${esc(b.unidades_siesa)} und</div>
                 </div>
               </div>`).join('')}
             ${bloqueNoComparable}
             ${bloquePrevisto}
             <div style="font-size:11px;color:#555;margin:12px 0 6px;">
-              Cobertura de catálogo: ${r.cobertura_pct}% (${r.total_productos_wms} productos con stock en el WMS
-              de ${r.total_productos_siesa} que Siesa reporta)</div>
+              Cobertura de catálogo: ${esc(r.cobertura_pct)}% (${esc(r.total_productos_wms)} productos con stock en el WMS
+              de ${esc(r.total_productos_siesa)} que Siesa reporta)</div>
             ${r.total_discrepancias ? `
             <div style="font-size:12px;color:#555;margin:12px 0 6px;">Top diferencias (WMS vs Siesa):</div>
             ${r.discrepancias.slice(0,20).map(x => `
               <div class="tabla-fila" style="font-size:12px;">
                 <div>
-                  <div style="font-weight:600;">${x.nombre}</div>
-                  <div style="color:#555;">${x.codigo} · ${x.bodega || '—'}</div>
+                  <div style="font-weight:600;">${esc(x.nombre)}</div>
+                  <div style="color:#555;">${esc(x.codigo)} · ${esc(x.bodega || '—')}</div>
                 </div>
                 <div style="text-align:right;">
-                  <span style="color:${x.diferencia > 0 ? '#4ade80' : '#f87171'}">WMS: ${x.stock_wms}</span>
+                  <span style="color:${x.diferencia > 0 ? '#4ade80' : '#f87171'}">WMS: ${esc(x.stock_wms)}</span>
                   <span style="color:#555;margin:0 4px;">·</span>
-                  <span style="color:#93c5fd;">Siesa: ${x.stock_siesa}</span>
-                  <div style="color:${x.diferencia > 0 ? '#4ade80':'#f87171'};font-size:11px;">${x.diferencia > 0 ? '+' : ''}${x.diferencia}</div>
+                  <span style="color:#93c5fd;">Siesa: ${esc(x.stock_siesa)}</span>
+                  <div style="color:${x.diferencia > 0 ? '#4ade80':'#f87171'};font-size:11px;">${x.diferencia > 0 ? '+' : ''}${esc(x.diferencia)}</div>
                 </div>
               </div>`).join('')}` : ''}`;
         } else { res.textContent = '⏳ Comparando WMS vs Siesa...'; }
@@ -1830,12 +1833,12 @@ async function cargarAuditoriasUrgentes() {
     el.innerHTML = tareas.map(t => `
         <div style="background:#111;border:1px solid #7f1d1d;border-radius:12px;padding:14px;margin-bottom:8px;">
           <div style="margin-bottom:8px;">
-            <div style="font-size:13px;font-weight:700;color:#f87171;">${t.codigo}</div>
-            <div style="font-size:11px;color:#555;margin-top:2px;">${t.producto_nombre || ''} · ${t.ubicacion_codigo || ''}</div>
-            <div style="font-size:10px;color:#444;margin-top:1px;">Pedido ${t.referencia_documento || '—'} · pedía ${t.cantidad_solicitada} uds</div>
+            <div style="font-size:13px;font-weight:700;color:#f87171;">${esc(t.codigo)}</div>
+            <div style="font-size:11px;color:#555;margin-top:2px;">${esc(t.producto_nombre || '')} · ${esc(t.ubicacion_codigo || '')}</div>
+            <div style="font-size:10px;color:#444;margin-top:1px;">Pedido ${esc(t.referencia_documento || '—')} · pedía ${esc(t.cantidad_solicitada)} uds</div>
             ${t.motivo_bloqueo ? `<div style="font-size:10px;color:#b45309;margin-top:1px;">Motivo: ${MOTIVOS[t.motivo_bloqueo] || t.motivo_bloqueo}</div>` : ''}
           </div>
-          <select id="da-resultado-${t.id}"
+          <select id="da-resultado-${esc(t.id)}"
             style="width:100%;padding:9px;margin-bottom:6px;background:#0a0a0a;border:1px solid #333;color:#ccc;border-radius:8px;font-size:12px;">
             <option value="">¿Qué encontraste al verificar?</option>
             <option value="NO_ENCONTRADO">Confirmo: agotado — no hay nada</option>
@@ -1844,9 +1847,9 @@ async function cargarAuditoriasUrgentes() {
             <option value="AVERIA">Está averiado</option>
             <option value="DISCREPANCIA_SIESA">Discrepancia con Siesa — ajusto manual</option>
           </select>
-          <input id="da-cantidad-${t.id}" type="number" min="0" placeholder="Cantidad hallada"
+          <input id="da-cantidad-${esc(t.id)}" type="number" min="0" placeholder="Cantidad hallada"
             style="width:100%;padding:9px;margin-bottom:8px;background:#0a0a0a;border:1px solid #333;color:#ccc;border-radius:8px;font-size:12px;box-sizing:border-box;">
-          <button onclick="dashAuditarTarea(${t.id})"
+          <button onclick="dashAuditarTarea(${esc(t.id)})"
             style="width:100%;padding:11px;background:#7f1d1d;color:#fca5a5;border:1px solid #f87171;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">
             ✓ Confirmar auditoría
           </button>
@@ -2342,16 +2345,16 @@ async function cargarUsuarios() {
         <div class="tabla-card" style="margin-bottom:10px;">
           <div style="display:flex;justify-content:space-between;align-items:flex-start;">
             <div>
-              <div style="font-size:15px;font-weight:700;">${u.nombre}</div>
-              <div style="font-size:12px;color:#555;margin-top:2px;">${u.email}</div>
+              <div style="font-size:15px;font-weight:700;">${esc(u.nombre)}</div>
+              <div style="font-size:12px;color:#555;margin-top:2px;">${esc(u.email)}</div>
               <div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap;">
-                <span style="font-size:11px;font-weight:600;color:${rolColor};background:#1a1a1a;padding:2px 8px;border-radius:8px;">${u.rol}</span>
+                <span style="font-size:11px;font-weight:600;color:${rolColor};background:#1a1a1a;padding:2px 8px;border-radius:8px;">${esc(u.rol)}</span>
                 ${u.puede_picar ? `<span style="font-size:11px;font-weight:600;color:#60a5fa;background:#1e3a5f;padding:2px 8px;border-radius:8px;">Picker</span>` : ''}
                 ${u.puede_empacar ? `<span style="font-size:11px;font-weight:600;color:#c084fc;background:#1a0a2e;padding:2px 8px;border-radius:8px;">Empacador</span>` : ''}
                 ${u.puede_abastecer ? `<span style="font-size:11px;font-weight:600;color:#fed7aa;background:#7c2d12;padding:2px 8px;border-radius:8px;">Abastecedor</span>` : ''}
               </div>
             </div>
-            <button onclick="editarUsuario(${u.id})"
+            <button onclick="editarUsuario(${esc(u.id)})"
               style="background:#222;border:1px solid #333;color:#fff;padding:6px 12px;border-radius:8px;font-size:12px;cursor:pointer;flex-shrink:0;">
               Editar
             </button>
@@ -2376,7 +2379,7 @@ function renderUsuariosTabsYLista() {
   if (!tabsEl || !el) return;
 
   tabsEl.innerHTML = USUARIOS_GRUPOS.map(g =>
-    `<div class="subtab${g.clave === USUARIOS_TAB_ACTIVA ? ' active' : ''}" onclick="usuariosCambiarTab('${g.clave}')">${g.titulo} · ${g.count}</div>`
+    `<div class="subtab${g.clave === USUARIOS_TAB_ACTIVA ? ' active' : ''}" onclick="usuariosCambiarTab('${esc(g.clave)}')">${esc(g.titulo)} · ${esc(g.count)}</div>`
   ).join('');
 
   const activo = USUARIOS_GRUPOS.find(g => g.clave === USUARIOS_TAB_ACTIVA);
@@ -2399,9 +2402,9 @@ function _formUsuario(u = {}) {
   return `
     <div style="font-size:15px;font-weight:700;margin-bottom:16px;">${u.id ? 'Editar usuario' : 'Nuevo usuario'}</div>
     <div style="display:flex;flex-direction:column;gap:12px;">
-      <input id="u-nombre" placeholder="Nombre completo" value="${u.nombre || ''}"
+      <input id="u-nombre" placeholder="Nombre completo" value="${esc(u.nombre || '')}"
         style="padding:12px;background:#1a1a1a;border:1px solid #333;border-radius:8px;color:#fff;font-size:14px;">
-      <input id="u-email" placeholder="email@empresa.com" value="${u.email || ''}" type="email" ${u.id ? 'readonly style="opacity:0.5;"' : ''}
+      <input id="u-email" placeholder="email@empresa.com" value="${esc(u.email || '')}" type="email" ${u.id ? 'readonly style="opacity:0.5;"' : ''}
         style="padding:12px;background:#1a1a1a;border:1px solid #333;border-radius:8px;color:#fff;font-size:14px;">
       <input id="u-password" placeholder="${u.id ? 'Nueva contraseña (dejar vacío para no cambiar)' : 'Contraseña'}" type="password"
         style="padding:12px;background:#1a1a1a;border:1px solid #333;border-radius:8px;color:#fff;font-size:14px;">
@@ -2429,12 +2432,12 @@ function _formUsuario(u = {}) {
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
           <div>
             <div style="font-size:11px;color:#888;margin-bottom:5px;">Cédula *</div>
-            <input id="u-conductor-cedula" type="text" placeholder="12345678" value="${u.conductor_cedula || ''}"
+            <input id="u-conductor-cedula" type="text" placeholder="12345678" value="${esc(u.conductor_cedula || '')}"
               style="width:100%;padding:10px;background:#0d0d0d;border:1px solid #333;border-radius:8px;color:#fff;font-size:14px;box-sizing:border-box;">
           </div>
           <div>
             <div style="font-size:11px;color:#888;margin-bottom:5px;">Teléfono</div>
-            <input id="u-conductor-telefono" type="tel" placeholder="3001234567" value="${u.conductor_telefono || ''}"
+            <input id="u-conductor-telefono" type="tel" placeholder="3001234567" value="${esc(u.conductor_telefono || '')}"
               style="width:100%;padding:10px;background:#0d0d0d;border:1px solid #333;border-radius:8px;color:#fff;font-size:14px;box-sizing:border-box;">
           </div>
         </div>
@@ -2455,7 +2458,7 @@ function _formUsuario(u = {}) {
           <option value="FN1" ${u.bodega_siesa_id==='FN1'?'selected':''}>FN1 — Santa Lucía Plaza</option>
           <option value="FP1" ${u.bodega_siesa_id==='FP1'?'selected':''}>FP1 — Feria Pitalito</option>
         </select>
-        <input id="u-nombre-pv" type="hidden" value="${u.nombre_punto_venta || ''}">
+        <input id="u-nombre-pv" type="hidden" value="${esc(u.nombre_punto_venta || '')}">
       </div>
       <div style="background:#1a1a1a;border:1px solid #333;border-radius:8px;padding:14px;">
         <div style="font-size:12px;font-weight:600;color:#aaa;margin-bottom:12px;text-transform:uppercase;letter-spacing:0.05em;">Capacidades operativas</div>
@@ -2496,7 +2499,7 @@ function _formUsuario(u = {}) {
         </div>
       </div>
       <div style="display:flex;gap:8px;">
-        <button onclick="_guardarUsuario(${u.id || 'null'})"
+        <button onclick="_guardarUsuario(${esc(u.id || 'null')})"
           style="flex:1;padding:14px;background:#fff;color:#000;border:none;border-radius:10px;font-size:15px;font-weight:700;cursor:pointer;">
           ${u.id ? 'Guardar cambios' : 'Crear usuario'}
         </button>
@@ -2802,7 +2805,7 @@ async function siesaRecuperacionCargar() {
 
   const bloque = (titulo, datos, render) => datos._error
     ? `<div class="tabla-fila"><span class="tabla-nombre">${titulo}</span>
-         <span style="color:var(--red);font-size:12px;">no se pudo consultar: ${datos._error}</span></div>`
+         <span style="color:var(--red);font-size:12px;">no se pudo consultar: ${esc(datos._error)}</span></div>`
     : render(datos);
 
   // Los cuatro semáforos de sincronización. `/api/siesa/monitor` los calculaba
@@ -2824,8 +2827,8 @@ async function siesaRecuperacionCargar() {
       <div class="tabla-fila">
         <span class="tabla-nombre" style="font-size:12px;">${nombre}<br>
           <span style="color:var(--tx3);font-size:11px;">${nota}</span></span>
-        <span style="color:${COLOR_SEMAFORO[m.estado] || 'var(--tx3)'};font-weight:700;font-size:12px;">
-          ${m.estado}</span>
+        <span style="color:${esc(COLOR_SEMAFORO[m.estado] || 'var(--tx3)')};font-weight:700;font-size:12px;">
+          ${esc(m.estado)}</span>
       </div>`;
   };
 
@@ -2849,8 +2852,8 @@ async function siesaRecuperacionCargar() {
         return js.slice(0, 10).map(j => `
           <div class="tabla-fila" style="align-items:flex-start;">
             <span class="tabla-nombre" style="font-size:12px;">
-              <b>${j.tipo || '?'}</b> #${j.id}<br>
-              <span style="color:var(--tx3);font-size:11px;">${(j.ultimo_error || '').slice(0, 90)}</span>
+              <b>${esc(j.tipo || '?')}</b> #${esc(j.id)}<br>
+              <span style="color:var(--tx3);font-size:11px;">${esc((j.ultimo_error || '').slice(0, 90))}</span>
             </span>
           </div>`).join('');
       })}
@@ -2962,14 +2965,14 @@ async function siesaVerCompromisos() {
       return;
     }
     out.innerHTML = `<div style="font-size:12px;">
-      <p style="margin:0 0 6px;color:var(--tx2);">Pedido <b>${r.pedido || ''}</b> —
-        ${filas.length} línea(s) comprometida(s) en Siesa:</p>
+      <p style="margin:0 0 6px;color:var(--tx2);">Pedido <b>${esc(r.pedido || '')}</b> —
+        ${esc(filas.length)} línea(s) comprometida(s) en Siesa:</p>
       ${filas.map(f => `<div class="tabla-fila">
-          <span class="tabla-nombre">${f.f120_referencia || '?'}</span>
+          <span class="tabla-nombre">${esc(f.f120_referencia || '?')}</span>
           <span>${f.f400_cant_comprometida_1 ?? '—'}</span>
         </div>`).join('')}</div>`;
   } catch (e) {
-    out.innerHTML = `<p style="color:var(--red);font-size:12px;">${e.message}</p>`;
+    out.innerHTML = `<p style="color:var(--red);font-size:12px;">${esc(e.message)}</p>`;
   }
 }
 
@@ -2999,9 +3002,9 @@ Si esa remisión ya estaba facturada, queda una ` +
     const r = await post(`/api/despacho_parcial/${id}/facturar-rm-manual`,
                          { tipo_rm: tipo, consec_rm: consec });
     out.innerHTML = `<p style="color:var(--green);font-size:12px;">
-      ${r.mensaje || 'Factura creada'} ${r.consec_fe ? '· FE ' + r.consec_fe : ''}</p>`;
+      ${esc(r.mensaje || 'Factura creada')} ${r.consec_fe ? '· FE ' + r.consec_fe : ''}</p>`;
   } catch (e) {
-    out.innerHTML = `<p style="color:var(--red);font-size:12px;">${e.message}</p>`;
+    out.innerHTML = `<p style="color:var(--red);font-size:12px;">${esc(e.message)}</p>`;
   }
 }
 
@@ -3016,7 +3019,7 @@ async function siesaRecuperarPackingTraslados() {
     out.innerHTML = `<p style="color:${n ? 'var(--green)' : 'var(--tx2)'};font-size:12px;">
       ${n ? `${n} packing(s) recreado(s)` : 'No había traslados sin packing'}</p>`;
   } catch (e) {
-    out.innerHTML = `<p style="color:var(--red);font-size:12px;">${e.message}</p>`;
+    out.innerHTML = `<p style="color:var(--red);font-size:12px;">${esc(e.message)}</p>`;
   }
 }
 
@@ -3036,9 +3039,9 @@ Esto NO es parte del flujo normal de traslados. ` +
   try {
     const r = await post(`/api/traslados/${id}/reintentar-siesa`, {});
     out.innerHTML = `<p style="color:var(--green);font-size:12px;">
-      ${r.mensaje || 'Requisición creada'} ${r.consecutivo ? '· ' + r.consecutivo : ''}</p>`;
+      ${esc(r.mensaje || 'Requisición creada')} ${r.consecutivo ? '· ' + r.consecutivo : ''}</p>`;
   } catch (e) {
-    out.innerHTML = `<p style="color:var(--red);font-size:12px;">${e.message}</p>`;
+    out.innerHTML = `<p style="color:var(--red);font-size:12px;">${esc(e.message)}</p>`;
   }
 }
 
@@ -3062,9 +3065,9 @@ async function siesaReconciliarPacking() {
   try {
     const r = await post(`/api/packing/${id}/reconciliar`, {});
     out.innerHTML = `<p style="color:var(--green);font-size:12px;">
-      ${r.mensaje || 'Reconciliada'}</p>`;
+      ${esc(r.mensaje || 'Reconciliada')}</p>`;
   } catch (e) {
-    out.innerHTML = `<p style="color:var(--red);font-size:12px;">${e.message}</p>`;
+    out.innerHTML = `<p style="color:var(--red);font-size:12px;">${esc(e.message)}</p>`;
   }
 }
 
@@ -3078,7 +3081,7 @@ async function siesaVerRemision() {
     out.innerHTML = `<pre style="font-size:11px;white-space:pre-wrap;color:var(--tx2);
       max-height:220px;overflow:auto;">${JSON.stringify(r, null, 2)}</pre>`;
   } catch (e) {
-    out.innerHTML = `<p style="color:var(--red);font-size:12px;">${e.message}</p>`;
+    out.innerHTML = `<p style="color:var(--red);font-size:12px;">${esc(e.message)}</p>`;
   }
 }
 
@@ -3113,7 +3116,7 @@ async function mapeoUnidadesCargar() {
 
   if (mapeos._error) {
     el.innerHTML = `<div class="tabla-card" style="color:var(--red)">
-      No se pudo cargar el mapeo: ${mapeos._error}</div>`;
+      No se pudo cargar el mapeo: ${esc(mapeos._error)}</div>`;
     return;
   }
 
@@ -3126,16 +3129,16 @@ async function mapeoUnidadesCargar() {
     const vacio = !(m.unidad_negocio_id || '').trim();
     return `<div class="tabla-fila" style="align-items:center;gap:8px;">
       <span class="tabla-nombre" style="flex:1;font-size:13px;">
-        <b>${m.tipo_inv_siesa}</b>
-        <span style="display:block;font-size:11px;color:var(--tx3);">${m.descripcion || ''}</span>
+        <b>${esc(m.tipo_inv_siesa)}</b>
+        <span style="display:block;font-size:11px;color:var(--tx3);">${esc(m.descripcion || '')}</span>
       </span>
-      <input id="mu-${m.id}" value="${m.unidad_negocio_id || ''}"
+      <input id="mu-${esc(m.id)}" value="${esc(m.unidad_negocio_id || '')}"
              placeholder="unidad" maxlength="10"
              style="width:90px;padding:5px;border-radius:6px;font-size:13px;
                     border:1px solid ${vacio ? 'var(--red)' : 'var(--brd)'};
                     background:var(--bg);color:var(--tx);">
       <button class="btn-flota" style="padding:4px 10px;font-size:12px;"
-              onclick="mapeoUnidadesGuardar(${m.id})">Guardar</button>
+              onclick="mapeoUnidadesGuardar(${esc(m.id)})">Guardar</button>
     </div>`;
   };
 
@@ -3154,7 +3157,7 @@ async function mapeoUnidadesCargar() {
         <div style="border-left:3px solid var(--red);padding:8px 10px;margin-bottom:10px;
                     background:var(--bg-s);border-radius:6px;">
           <b style="color:var(--red);font-size:13px;">
-            ${pendientes.length} tipo(s) sin asignar</b>
+            ${esc(pendientes.length)} tipo(s) sin asignar</b>
           <p style="font-size:11px;color:var(--tx2);margin:4px 0 0;">
             El sync los descubrió solo. Mientras estén vacíos, cualquier traslado
             que incluya uno de sus productos falla al aprobar.
@@ -3169,7 +3172,7 @@ async function mapeoUnidadesCargar() {
 
       ${bloqueados === null
         ? `<p style="font-size:11px;color:var(--tx3);margin-top:10px;">
-             No se pudo consultar cuántos productos están sin unidad: ${diag._error}</p>`
+             No se pudo consultar cuántos productos están sin unidad: ${esc(diag._error)}</p>`
         : bloqueados > 0
           ? `<p style="font-size:12px;color:var(--yellow);margin-top:10px;">
                <b>${bloqueados} producto(s) activos sin unidad de negocio.</b>
@@ -3239,7 +3242,7 @@ async function syncEstadosCargar() {
       </p>
       ${datos.map(x => {
         if (x._error) return `<div class="tabla-fila">
-          <span class="tabla-nombre" style="font-size:12.5px;">${x.nombre}</span>
+          <span class="tabla-nombre" style="font-size:12.5px;">${esc(x.nombre)}</span>
           <span style="font-size:11px;color:var(--red);">no se pudo consultar</span></div>`;
         const d = x.d || {};
         const err = d.ultimo_error;
@@ -3299,20 +3302,20 @@ async function cargarAuditoriaFlujo() {
       const roto = r.total > 0 || r.error;
       const color = roto ? (sev[r.severidad] || '#6b7280') : '#16a34a';
       const detalle = r.error
-        ? `<div style="color:#f87171;font-size:11px;">no se pudo evaluar: ${r.error}</div>`
+        ? `<div style="color:#f87171;font-size:11px;">no se pudo evaluar: ${esc(r.error)}</div>`
         : (r.hallazgos || []).slice(0, 5).map(h =>
             `<div style="font-size:11px;color:var(--tx3);padding-left:8px;">
-               · <b>${h.referencia}</b> — ${h.detalle}</div>`).join('');
+               · <b>${esc(h.referencia)}</b> — ${esc(h.detalle)}</div>`).join('');
       return `
         <div style="padding:8px 0;border-bottom:1px solid var(--brd);">
           <div style="display:flex;align-items:center;gap:8px;">
             <span style="width:8px;height:8px;border-radius:50%;background:${color};flex:none;"></span>
-            <b style="font-size:12px;">${r.codigo}</b>
-            <span style="font-size:11px;color:var(--tx3);">${r.frontera}</span>
+            <b style="font-size:12px;">${esc(r.codigo)}</b>
+            <span style="font-size:11px;color:var(--tx3);">${esc(r.frontera)}</span>
             <span style="margin-left:auto;font-size:11px;color:${color};font-weight:700;">
               ${r.error ? 'ERROR' : (r.total || 0)}</span>
           </div>
-          ${roto ? `<div style="font-size:11px;color:var(--tx2);margin:4px 0 2px 16px;">${r.consecuencia}</div>` : ''}
+          ${roto ? `<div style="font-size:11px;color:var(--tx2);margin:4px 0 2px 16px;">${esc(r.consecuencia)}</div>` : ''}
           ${detalle}
           ${r.truncado ? '<div style="font-size:10px;color:var(--tx3);padding-left:8px;">(mostrando los primeros 100)</div>' : ''}
         </div>`;
@@ -3335,7 +3338,7 @@ async function cargarAuditoriaFlujo() {
                   margin-bottom:10px;font-size:11px;color:var(--tx2);">
         <b style="color:#f59e0b;">Universo parcial — no le creas al 0</b>
         <div style="margin-top:4px;">
-          ${truncadas.length} consulta(s) chocaron con su tope de filas: los
+          ${esc(truncadas.length)} consulta(s) chocaron con su tope de filas: los
           hallazgos de abajo salen de una muestra, no de todo. Subí el tope
           antes de dar esto por limpio.</div>
         ${truncadas.map(t => `<div style="padding-left:8px;">· <code>${t}</code></div>`).join('')}
@@ -3345,10 +3348,10 @@ async function cargarAuditoriaFlujo() {
       <div class="tabla-card">
         <div class="tabla-titulo">Auditoría de flujo
           <span style="font-size:11px;font-weight:400;color:var(--tx3);">
-            · ${d.invariantes_corridos} invariantes · ${bloq} hallazgo(s) bloqueante(s)
+            · ${esc(d.invariantes_corridos)} invariantes · ${bloq} hallazgo(s) bloqueante(s)
             · <span title="hora de esta corrida">${hora}</span></span>
         </div>
-        <div style="font-size:11px;color:var(--tx3);margin-bottom:8px;">${d.nota || ''}</div>
+        <div style="font-size:11px;color:var(--tx3);margin-bottom:8px;">${esc(d.nota || '')}</div>
         ${bloqueTruncadas}
         ${filas}
         <button onclick="cargarAuditoriaFlujo()"
@@ -3383,7 +3386,7 @@ async function skusSinEanEmpaque() {
     const top = (d.skus || []).slice(0, 10)
       .map(s => `${s.codigo_siesa || s.codigo} · x${s.factor_conversion}${s.clasificacion_abc ? ' · ' + s.clasificacion_abc : ''}`)
       .join('<br>');
-    el.innerHTML = `<b style="color:#fbbf24;">${d.total}</b> SKU sin EAN de empaque` +
+    el.innerHTML = `<b style="color:#fbbf24;">${esc(d.total)}</b> SKU sin EAN de empaque` +
       (d.truncado ? ' (lista truncada en 500)' : '') +
       `<div style="margin-top:6px;line-height:1.5;">${top}</div>` +
       (d.total > 10 ? `<div style="margin-top:4px;color:#555;">…y ${d.total - 10} más</div>` : '');

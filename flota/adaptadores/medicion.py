@@ -15,6 +15,7 @@ Eso es la regla 5, y es exactamente el `except Exception: pass` de
 from datetime import date as _date
 from datetime import datetime as _datetime
 from datetime import timedelta as _timedelta
+from sqlalchemy import func as _func
 from typing import List, Optional
 
 from sqlalchemy import inspect as _inspect
@@ -66,6 +67,56 @@ def _tabla_existe(nombre: str) -> bool:
 def _contar(consulta) -> int:
     """Ejecuta un COUNT. Si falla, levanta — no devuelve cero."""
     return consulta.count()
+
+
+def _motivo_cpk(r: dict) -> Optional[str]:
+    """Por qué ESTE CPK no se pudo calcular. `None` cuando sí se pudo.
+
+    Los caminos de `costo_por_kilometro` a `SIN_DATO` (canon §6) devuelven todos
+    el mismo valor y **se corrigen llamando a personas distintas**: uno con una
+    factura de contabilidad, otro con una lectura de odómetro del conductor, el
+    tercero con una verificación contra la foto que hace control de flota. Un
+    `sin_dato` sin motivo manda a mirar los tres para descubrir cuál — que es
+    exactamente cómo se aprendió a ignorar los 639 avisos conocidos.
+
+    ## El orden es el de `costo_por_kilometro`, y eso no es cosmético
+
+    `costos.py:308-319` evalúa `marca == SIN_DATO` → `km <= 0` → `not
+    hubo_gastos`. Un vehículo puede tener dos de esas mal a la vez, y si acá se
+    preguntara en otro orden se publicaría un motivo que **no es el que produjo
+    el `sin_dato`**. Es la regla 0 en miniatura: la explicación de una decisión
+    tiene que seguir a la decisión, no re-derivarla por su cuenta.
+
+    ## `marca is SIN_DATO` tiene DOS causas y se separan con `lecturas`
+
+    `_tramo_de` (`gastos.py:644`) devuelve `SIN_DATO` tanto con menos de dos
+    lecturas —donde no hay tramo que juzgar— como con dos extremos dudosos.
+    Decirle «verificá el kilometraje» a quien no registró ninguno lo manda a
+    hacer el trabajo equivocado, así que `cpk_de` publica `lecturas` para poder
+    separarlas.
+    """
+    from flota.dominio.valores import SIN_DATO
+
+    if r['cpk'] is not SIN_DATO:
+        return None
+    if r['marca'] is SIN_DATO:
+        if r['lecturas'] < 2:
+            return ('menos de dos lecturas de odómetro dentro del mes: no hay '
+                    'tramo que dividir. Se resuelve registrando kilometraje.')
+        return ('los dos extremos del tramo son dudosos: ninguno se verificó '
+                'contra su foto. Se resuelve verificando kilometrajes.')
+    if r['km'] <= 0:
+        return ('el odómetro no avanzó dentro del mes: la primera y la última '
+                'lectura marcan lo mismo, así que no hay entre qué dividir.')
+    if not r['hubo_gastos']:
+        return ('ningún gasto registrado contra este vehículo. No es que sea '
+                'gratis: es que nadie ha cargado una factura.')
+    # Los de arriba son los únicos caminos de `costo_por_kilometro` a
+    # `SIN_DATO`. Si se llega acá apareció uno nuevo, y hay que nombrarlo — no
+    # devolver `None`, que la pantalla leería como «sí se pudo calcular». Un
+    # motivo feo es información; el silencio es evidencia falsa.
+    return ('no se pudo calcular y el motivo no está clasificado: apareció un '
+            'camino nuevo en `costo_por_kilometro` que nadie nombró acá.')
 
 
 class MedidorSQL:
@@ -192,6 +243,209 @@ class MedidorSQL:
             for atributo in ficha.atributos_sin_dato()
         )
 
+    # ── Analítica despromediada (2026-09-04) ─────────────────────────────
+    #
+    # Los contadores de arriba contestan «¿cuántos?». Estos contestan «¿cuál?»,
+    # y con seis vehículos esa es la única pregunta que se puede contestar
+    # honestamente: un p90 de seis datos es el máximo con otro nombre, y las
+    # bisagras de un boxplot de seis SON dos camiones con placa.
+    #
+    # Salen TODOS los vehículos activos, incluidos los que no tienen nada — es
+    # la misma decisión de `cpk_mes` y de `km_dia_por_vehiculo`, por el mismo
+    # motivo: el que no tiene nada registrado es el caso a atender, y esconderlo
+    # lo vuelve invisible.
+
+    def procedencia_del_tablero(self) -> dict:
+        """De qué mundo salen los números de este tablero, y de qué día.
+
+        No mide ninguna tabla de flota —mide el sistema— y por eso está exento
+        de la regla «`None` si falta la tabla», junto con `ambiente` y
+        `datos_reales`. Forzarle esa regla lo volvería mentira.
+
+        Existe porque la regla 13 se cumple a nivel de página además de a nivel
+        de fila: `rutas_historicas_sin_placa` valió 0 en una SQLite vacía y se
+        leyó como «todas las rutas tienen placa» **dos veces**, la segunda
+        después de la advertencia. La defensa no es leer con más cuidado.
+
+        `calculado_ts` va en Bogotá **con su offset explícito** (regla 5 del
+        WMS): un tablero que dice «calculado a las 21:30» sin decir de qué huso
+        se lee mal exactamente en la franja en que UTC ya cambió de día, que es
+        la franja en la que se cierra el turno de la tarde.
+        """
+        from app.utils.fecha import ahora_bogota
+
+        return {
+            'ambiente': self.ambiente(),
+            'datos_reales': self.datos_reales(),
+            'dia_operativo': _hoy().isoformat(),
+            'calculado_ts': ahora_bogota().isoformat(),
+        }
+
+    def lecturas_por_vehiculo(self) -> Optional[List[dict]]:
+        """El kilómetro de cada camión: cuántas lecturas, y cuánto se le cree.
+
+        **Es el único panel con datos hoy, y por eso va primero**: mientras esté
+        en rojo, el CPK, el km/día y el km-por-llanta salen `sin_dato` por
+        diseño. Es también la única métrica cuyo tablero es a la vez el trabajo
+        — mirarla y arreglarla son el mismo gesto.
+
+        Despromediado hacia adentro y no entre camiones: cada fila compara al
+        vehículo **consigo mismo** (cuántas de sus lecturas tienen foto, cuántas
+        siguen contando tras la última corrección). Un porcentaje de flota sobre
+        26 lecturas escondería que las cuatro de un camión son todas dudosas.
+
+        `vigentes` sale de `vigentes_tras_la_ultima_correccion`, la misma
+        política que usan el CPK y el traspaso — **no un `WHERE` escrito acá**.
+        La copia del tablero sería la que diverge, y sería la que decide si un
+        número se publica (regla 0).
+        """
+        from app.models.vehiculo import Vehiculo
+        from flota.adaptadores.modelos import LecturaOdometro
+        from flota.dominio import odometro as dom_odo
+        from flota.dominio.procedencia import Ventana
+        from flota.dominio.valores import Confianza, Lectura, OrigenLectura
+
+        if not (_tabla_existe('flota_lectura_odometro')
+                and _tabla_existe('vehiculos')):
+            return None
+
+        filas = []
+        for v in (Vehiculo.query.filter(Vehiculo.activo.is_(True))
+                  .order_by(Vehiculo.placa).all()):
+            todas = (LecturaOdometro.query
+                     .filter_by(vehiculo_id=v.id)
+                     .order_by(LecturaOdometro.ts, LecturaOdometro.id).all())
+            vigentes, _ = dom_odo.vigentes_tras_la_ultima_correccion([
+                Lectura(valor_km=l.valor_km, ts=l.ts,
+                        origen=OrigenLectura(l.origen),
+                        autor_usuario_id=l.autor_usuario_id,
+                        motivo_correccion=l.motivo_correccion)
+                for l in todas])
+            # Los tres estados van SEPARADOS y ninguno se suma a otro: se
+            # atienden distinto. `verificada` es trabajo hecho, `dudosa` es
+            # trabajo pendiente, `declarada` es lo normal y no hay nada que
+            # hacerle. Un solo total escondería cuál de los tres creció.
+            por_confianza = {c.value: 0 for c in Confianza}
+            for l in todas:
+                if l.confianza in por_confianza:
+                    por_confianza[l.confianza] += 1
+            filas.append({
+                'placa': v.placa,
+                'n': len(todas),
+                'con_foto': sum(1 for l in todas if l.foto_id is not None),
+                'vigentes': len(vigentes),
+                'por_confianza': por_confianza,
+                'primera': todas[0].ts.date().isoformat() if todas else None,
+                'ultima': todas[-1].ts.date().isoformat() if todas else None,
+                # `motivo` y no un hueco mudo: un camión con cero lecturas y uno
+                # con cuatro dudosas salen los dos sin CPK, y se arreglan
+                # distinto.
+                'motivo': (None if todas else
+                           'ninguna lectura de odómetro registrada. Nace en el '
+                           'recibo de turno, con la foto del tablero.'),
+                # La base va en CADA fila y no una vez para la lista, aunque se
+                # repita seis veces: una fila se copia sola a un WhatsApp o a un
+                # correo, y ahí llega sin la cabecera que la explicaba.
+                'base': 'lecturas de odómetro registradas contra este vehículo',
+                'etiqueta': 'toda la historia registrada',
+            })
+        return filas
+
+    def rendimiento_por_vehiculo(self) -> Optional[List[dict]]:
+        """Los km/galón de cada camión, **con si ya se pueden sostener**.
+
+        Es el mismo cálculo que ve el conductor (`rendimiento_publicable_de`),
+        con una diferencia deliberada de frontera: acá el número viaja **aunque
+        `publicable` sea False**, y allá no.
+
+        No es una inconsistencia: es que las dos pantallas contestan preguntas
+        distintas. La del conductor contesta «¿cómo vengo?», y un número que no
+        se sostiene, con su nombre encima, es ruido que él no puede corregir. La
+        de control de flota contesta «¿ya se puede medir esto?», y para eso hace
+        falta ver el número provisional junto a lo que le falta.
+
+        Qué se puede sostener lo decide **una sola función** (regla 0); quién lo
+        pinta lo decide cada frontera.
+
+        Y no hay ranking ni promedio de flota, acá tampoco: un motocarro y un
+        NHR no rinden igual y la diferencia no dice nada. Es una lista ordenada
+        por placa, no por rendimiento — ordenarla por el número la convertiría
+        en un ranking sin que nadie lo hubiera decidido.
+        """
+        from app.models.vehiculo import Vehiculo
+        from flota.adaptadores.gastos import (numero_legible,
+                                              rendimiento_publicable_de)
+
+        if not (_tabla_existe('flota_tanqueo') and _tabla_existe('vehiculos')):
+            return None
+        salida = []
+        for v in (Vehiculo.query.filter(Vehiculo.activo.is_(True))
+                  .order_by(Vehiculo.placa).all()):
+            r = rendimiento_publicable_de(v.id)
+            salida.append({
+                'placa': v.placa,
+                'km_galon': numero_legible(r['km_galon'], 2),
+                'publicable': r['publicable'],
+                'motivo': r['motivo'],
+                'ventanas': r['ventanas'],
+                'tanqueos': r['tanqueos'],
+                'tanqueos_fuera_por_parcial': r['tanqueos_fuera_por_parcial'],
+                'dias_historia': r['dias_historia'],
+                'base': ('kilómetros y galones sumados sobre las ventanas de '
+                         'tanque lleno a tanque lleno de este vehículo'),
+                'etiqueta': 'toda la historia registrada',
+            })
+        return salida
+
+    def cobertura_por_vehiculo(self) -> Optional[List[dict]]:
+        """Qué le falta a cada camión para poder medirse. **El índice del tab.**
+
+        Una grilla de seis filas y no un «73% de cobertura»: con seis vehículos
+        el porcentaje es estrictamente MENOS información que la lista, porque
+        el porcentaje no dice a cuál llamar.
+
+        Cada celda es la condición de existencia de un número aguas abajo, y por
+        eso el panel se lee como una lista de trabajo y no como un diagnóstico:
+        sin `capacidad_tanque` no hay detector de sobre-tanqueo, sin
+        `posiciones_llanta` no hay vida de llanta, sin `intervalos` no hay
+        preventivo por kilómetro.
+
+        `None` en una celda significa «no se pudo mirar porque falta la tabla»,
+        y **no se colapsa a `False`**: un parque entero sin ficha levantada se
+        vería idéntico a uno impecable, que es cómo un detector se apaga sin que
+        nadie lo note.
+        """
+        from app.models.vehiculo import Vehiculo
+        from flota.adaptadores.modelos import (DocumentoVehiculo, FichaTecnica,
+                                               LecturaOdometro)
+
+        if not _tabla_existe('vehiculos'):
+            return None
+        hay_ficha = _tabla_existe('flota_ficha_tecnica')
+        hay_doc = _tabla_existe('flota_documento_vehiculo')
+        hay_lect = _tabla_existe('flota_lectura_odometro')
+
+        fichas = ({f.vehiculo_id: f for f in FichaTecnica.query.all()}
+                  if hay_ficha else {})
+        salida = []
+        for v in (Vehiculo.query.filter(Vehiculo.activo.is_(True))
+                  .order_by(Vehiculo.placa).all()):
+            f = fichas.get(v.id)
+            salida.append({
+                'placa': v.placa,
+                'ficha': None if not hay_ficha else (f is not None),
+                'ficha_completa': None if not hay_ficha else bool(f and f.completa()),
+                'capacidad_tanque': (None if not hay_ficha else
+                                     bool(f and f.capacidad_tanque_galones)),
+                'posiciones_llanta': (None if not hay_ficha else
+                                      bool(f and f.posiciones_llanta)),
+                'documentos': (None if not hay_doc else bool(
+                    DocumentoVehiculo.query.filter_by(vehiculo_id=v.id).first())),
+                'lecturas': (None if not hay_lect else bool(
+                    LecturaOdometro.query.filter_by(vehiculo_id=v.id).first())),
+            })
+        return salida
+
     def vehiculos_sin_custodia_activa(self) -> Optional[int]:
         """Vehículos activos sin nadie que responda por ellos ahora mismo."""
         from app.models.vehiculo import Vehiculo
@@ -230,75 +484,132 @@ class MedidorSQL:
             Custodia.custodio_estado == 'pendiente_sede'
         ))
 
-    def custodias_cerradas_forzadas(self) -> Optional[int]:
-        """Turnos cerrados sin la firma del custodio anterior.
+    def custodias_por_vehiculo(self) -> Optional[List[dict]]:
+        """Los turnos que piden trabajo, **con placa**. Una fila por custodia.
 
-        No mide un fallo del sistema: mide una conducta. **Si este número sube,
-        el problema no es que se pueda forzar — es que los conductores no están
-        cerrando turno**, y la corrección es esa, no seguir forzando.
+        Dos de las cinco señales con las que se mide a control de flota
+        —`custodias_cerradas_forzadas` y `custodias_sin_foto_completa`— salían
+        como un número pelado. *«Si crece, nadie está cerrando turno»* es
+        accionable; *«3»* no dice a qué camión ni a qué turno, y perseguirlo
+        obligaba a abrir los seis expedientes.
 
-        Cada uno de estos deja un turno siguiente sin fotos de cierre con qué
-        comparar. Ocho en un mes significa ocho vehículos cuyo próximo daño no
-        se le puede atribuir a nadie.
+        Los dos contadores derivan de esta lista por el mismo motivo que los de
+        documentos: el predicado de «sin foto completa» es un recorrido con
+        cuatro entradas —ficha, tipo de vehículo, ángulos y posiciones de
+        llanta— y escrito dos veces diverge sin que nadie lo note, porque los
+        dos siguen devolviendo un entero plausible.
+
+        **El `elif` es load-bearing y se conserva:** una custodia con las dos
+        mitades incompletas cuenta UNA vez, no dos. `sin_foto_completa` mide
+        turnos, no mitades. La fila dice cuál falta en `mitad`, que es lo que
+        hacía falta para poder ir a arreglarlo.
         """
-        from flota.adaptadores.modelos import Custodia
-
-        if not _tabla_existe('flota_custodia'):
-            return None
-        return _contar(Custodia.query.filter(Custodia.cierre_forzado.is_(True)))
-
-    def custodias_sin_foto_completa(self) -> Optional[int]:
-        """Custodias a las que les faltan fotos de las ocho del recibo de turno.
-
-        Cuenta las abiertas sin sus 8 de inicio y las cerradas sin sus 8 de fin.
-        Una custodia con 7 fotos no es "casi completa": el ángulo que falta es
-        justo el que se va a discutir.
-        """
-        from flota.adaptadores.modelos import Custodia, Foto
+        from app.models.vehiculo import Vehiculo
+        from flota.adaptadores.modelos import Custodia, FichaTecnica, Foto
+        from flota.dominio.valores import angulos_de_custodia, posiciones_llanta
 
         if not _tabla_existe('flota_custodia') or not _tabla_existe('flota_foto'):
             return None
 
-        def _cuantas(entidad_tipo, custodia_id):
-            return _contar(Foto.query.filter(
-                Foto.entidad_tipo == entidad_tipo,
-                Foto.entidad_id == custodia_id,
-            ))
-
-        # **Cuántas fotos pide el sistema NO es una constante.** El servidor le
-        # arma al conductor `angulos_de_custodia(posiciones_llanta)`: 11 en un
-        # furgón (4 llantas), 13 en un camión o NHR (6), 10 en un motocarro.
-        # Medir contra 8 daba por completa una custodia con 9 de 13 — y lo que
-        # falta son **posiciones de llanta**, que es justo donde está la tuerca
-        # floja o la herida de flanco que el registro existe para atribuir.
-        #
-        # El 8 venía del modelo viejo, cuando `llantas` era UNA foto para todas
-        # las ruedas; la migración de ángulo lo cambió a una por posición y esto
-        # no se actualizó. El test tampoco lo vio: importaba la misma constante,
-        # así que afirmaba la implementación en vez de la regla.
-        from app.models.vehiculo import Vehiculo
-        from flota.adaptadores.modelos import FichaTecnica
-        from flota.dominio.valores import angulos_de_custodia, posiciones_llanta
-
         fichas = {f.vehiculo_id: f.posiciones_llanta
                   for f in FichaTecnica.query.all()} if _tabla_existe('flota_ficha_tecnica') else {}
-        # Acceso directo: `Vehiculo.tipo` es NOT NULL, y la regla 5 de este
-        # módulo prohíbe degradar hacia algo que se parezca al éxito. Un
-        # default acá haría caer el resolutor al fallback en silencio.
-        tipos = {v.id: v.tipo for v in Vehiculo.query.all()}
+        vehiculos = {v.id: v for v in Vehiculo.query.all()}
+        custodias = Custodia.query.all()
+
+        # ── Las fotos, en UNA consulta agrupada y no una por custodia ────
+        #
+        # La versión anterior hacía un COUNT por custodia (dos con la mitad de
+        # cierre). Medido el 2026-09-09 sobre SQLite con 6 vehículos: el health
+        # completo tardaba 61 ms con 26 custodias, 128 con 200 y 465 con 1000 —
+        # lineal, y esta función corre **3 veces por petición** (la publica el
+        # health y la consultan sus dos contadores derivados).
+        #
+        # Seis vehículos con dos turnos diarios producen ~4.400 custodias al
+        # año, o sea ~2 s por petición dentro de doce meses. No es un problema
+        # hoy y por eso no se cacheó —un medidor que cachea deja de medir—: se
+        # quitó el N+1, que es la causa y no el síntoma.
+        conteos = {(t, c.id): 0
+                   for c in custodias
+                   for t in ('custodia_inicio', 'custodia_fin')}
+        if custodias:
+            for tipo, cid, n in (Foto.query
+                                 .with_entities(Foto.entidad_tipo, Foto.entidad_id,
+                                                _func.count(Foto.id))
+                                 .filter(Foto.entidad_tipo.in_(
+                                     ('custodia_inicio', 'custodia_fin')))
+                                 .group_by(Foto.entidad_tipo, Foto.entidad_id)
+                                 .all()):
+                # Solo las custodias vivas: una foto colgada de un id que ya no
+                # existe no debe crear una entrada fantasma.
+                if (tipo, cid) in conteos:
+                    conteos[(tipo, cid)] = n
+
+        def _cuantas(entidad_tipo, custodia_id):
+            # Indexado y no `.get(k, 0)`: el diccionario se sembró en cero para
+            # TODAS las custodias, así que una clave ausente es un bug de esta
+            # función, no una custodia sin fotos.
+            return conteos[(entidad_tipo, custodia_id)]
 
         def _exigidas(vehiculo_id):
-            n, _fuente = posiciones_llanta(fichas.get(vehiculo_id), tipos.get(vehiculo_id))
+            # `fichas.get(...)` sin default sí es legítimo: «este vehículo no
+            # tiene ficha» es un estado real y `posiciones_llanta` lo resuelve
+            # con el supuesto por tipo, diciendo que es un supuesto. Lo que no
+            # se admite es inventar el vehículo.
+            n, _fuente = posiciones_llanta(fichas.get(vehiculo_id),
+                                           vehiculos[vehiculo_id].tipo)
             return len(angulos_de_custodia(n))
 
-        incompletas = 0
-        for c in Custodia.query.all():
+        salida = []
+        for c in custodias:
             exigidas = _exigidas(c.vehiculo_id)
-            if _cuantas('custodia_inicio', c.id) < exigidas:
-                incompletas += 1
-            elif c.fin_ts is not None and _cuantas('custodia_fin', c.id) < exigidas:
-                incompletas += 1
-        return incompletas
+            inicio = _cuantas('custodia_inicio', c.id)
+            mitad, tiene = None, None
+            if inicio < exigidas:
+                mitad, tiene = 'inicio', inicio
+            elif c.fin_ts is not None:
+                fin = _cuantas('custodia_fin', c.id)
+                if fin < exigidas:
+                    mitad, tiene = 'fin', fin
+            forzada = bool(c.cierre_forzado)
+            if mitad is None and not forzada:
+                continue
+            salida.append({
+                # Mismo criterio que en documentos: sin respaldo silencioso.
+                'placa': vehiculos[c.vehiculo_id].placa,
+                'custodia_id': c.id,
+                'inicio_ts': c.inicio_ts.isoformat() if c.inicio_ts else None,
+                'fin_ts': c.fin_ts.isoformat() if c.fin_ts else None,
+                'abierta': c.fin_ts is None,
+                'cierre_forzado': forzada,
+                'cierre_forzado_motivo': c.cierre_forzado_motivo,
+                'sin_foto_completa': mitad is not None,
+                'mitad_incompleta': mitad,
+                'fotos': tiene,
+                'fotos_exigidas': exigidas if mitad is not None else None,
+                'base': 'custodias registradas contra el vehículo',
+                'etiqueta': 'toda la historia registrada',
+            })
+        return sorted(salida, key=lambda f: (f['placa'], f['custodia_id']))
+
+    def custodias_cerradas_forzadas(self) -> Optional[int]:
+        """Turnos que cerró alguien que no era el custodio, sin fotos de cierre.
+
+        **No mide una falla del sistema: mide una conducta.** Si crece, el
+        problema no es el software — es que nadie está cerrando turno.
+        """
+        filas = self.custodias_por_vehiculo()
+        return None if filas is None else sum(1 for f in filas
+                                              if f['cierre_forzado'])
+
+    def custodias_sin_foto_completa(self) -> Optional[int]:
+        """Turnos sin el juego completo de fotos exigido por su ficha.
+
+        Sin fotos comparables, un golpe nuevo no se le puede atribuir a nadie —
+        ni al conductor ni al turno anterior.
+        """
+        filas = self.custodias_por_vehiculo()
+        return None if filas is None else sum(1 for f in filas
+                                              if f['sin_foto_completa'])
 
     def fotos_pendiente_evidencia(self) -> Optional[int]:
         """Fotos cuya compresión falló y quedaron declaradas rotas. Nunca `pass`."""
@@ -308,32 +619,120 @@ class MedidorSQL:
             return None
         return _contar(Foto.query.filter(Foto.estado == 'pendiente_evidencia'))
 
-    def documentos_no_encontrados(self) -> Optional[int]:
-        """Documentos que se buscaron y NO aparecieron.
+    def documentos_por_vehiculo(self) -> Optional[List[dict]]:
+        """Los papeles que piden trabajo, **con placa**. Una fila por documento.
 
-        Contador aparte de `documentos_vencidos` a propósito: son dos
-        afirmaciones distintas. "Vencido" es un papel que existe y caducó;
-        "no encontrado" es que nadie pudo mostrar el papel. Sumarlos esconde el
-        segundo, que es el más grave — un camión rodando sin SOAT localizable.
+        ## Por qué existe, y por qué los tres contadores derivan de acá
 
-        Y sin este contador desaparecerían de los dos: sus fechas son NULL, y
-        `fecha_vencimiento < hoy` no matchea NULL. Un cero silencioso.
+        `documentos_vencidos` decía «1» y no decía de cuál camión. El trabajo
+        escrito de control de flota es *«persigue lo vencido»*
+        (`especialista-control-flota.md`), y un contador sin placa no dice a
+        quién llamar — hay que abrir los seis expedientes a mano para saberlo.
+        Es el criterio 1 del tab de analítica («ninguna cifra sin su
+        enumeración al lado») incumplido en el panel donde más se nota.
+
+        No se memoiza, y se intentó: un `MedidorSQL` reusado devolvía la lista
+        de antes de la última escritura, y tres tests de `test_medicion_t1.py`
+        —que miden, escriben y vuelven a medir sobre la misma instancia— lo
+        cazaron en el primer intento. Un medidor que cachea deja de medir y
+        sigue contestando 200, que es el defecto que este módulo entero existe
+        para no tener. Sobre seis vehículos el recorrido no se nota.
+
+        Los tres contadores **se calculan de esta lista** y no con su propio
+        `filter`. Escritos dos veces, el día que alguien cambie «30 días» o
+        agregue el filtro por vehículo activo, el número del tablero y la lista
+        de abajo dejan de decir lo mismo — y no hay forma de saber cuál creer
+        (regla 0 del WMS, corolario «una política, una función»).
+
+        ## Tres banderas y no una categoría
+
+        Las tres son disjuntas **hoy**, y no por esta función: lo impone el
+        CHECK `ck_flota_doc_estado_coherente`, que exige `fecha_vencimiento IS
+        NULL` cuando el estado es `no_encontrado`. O sea que un papel no puede
+        estar vencido y no encontrado al mismo tiempo.
+
+        Aun así van tres banderas y no un campo `clase`, por dos motivos:
+
+        1. **Mapean uno a uno contra los tres contadores**, que es lo que hace
+           la derivación verificable de un vistazo. Con un `clase` haría falta
+           una tabla de traducción, y una traducción es donde un cambio futuro
+           reclasifica en silencio sin que ningún test se ponga rojo.
+        2. La disyunción vive en la base, no acá. Si mañana el CHECK se
+           relaja —un `no_encontrado` al que se le quiera conservar la fecha—
+           esta función sigue contando bien y la fila lo dice; con un `clase`
+           habría que elegir una y el otro contador bajaría solo.
+
+        `tests/flota/test_medicion_t1.py` afirma la disyunción contra la base
+        real, en vez de dejarla como un supuesto de este comentario.
+
+        ## Alcance heredado, y declarado
+
+        **No filtra por vehículo activo**, porque los tres contadores tampoco lo
+        hacían y cambiarlo acá movería sus números sin que nadie lo pidiera. La
+        consecuencia es nueva y visible: la lista puede nombrar la placa de un
+        vehículo dado de baja, y mandar a perseguir el SOAT de un camión que no
+        rueda. Queda escrito para que sea una decisión y no un descubrimiento —
+        si se filtra, se filtran los cuatro a la vez.
+
+        Los tres se atienden distinto y por eso no se suman: *vencido* es un
+        camión que no debería estar rodando, *por vencer* es una cita que hay
+        que sacar, y *no encontrado* es un papel que hay que buscar
+        (`ESPECIFICACION_T1.md:264`).
         """
+        from app.models.vehiculo import Vehiculo
         from flota.adaptadores.modelos import DocumentoVehiculo
 
         if not _tabla_existe('flota_documento_vehiculo'):
             return None
-        return _contar(DocumentoVehiculo.query.filter(
-            DocumentoVehiculo.estado == 'no_encontrado'))
+        hoy = _hoy()
+        limite = hoy + _timedelta(days=30)
+        placas = {v.id: v.placa for v in Vehiculo.query.all()}
+        salida = []
+        for d in DocumentoVehiculo.query.all():
+            vence = d.fecha_vencimiento
+            # `vence is None` no es «no vence»: es que nadie escribió la fecha.
+            # No se cuenta como vencido ni como al día — es el papel que hay que
+            # ir a mirar, y sale por la bandera de `no_encontrado` si lo está.
+            vencido = vence is not None and vence < hoy
+            por_vencer = vence is not None and hoy <= vence <= limite
+            no_encontrado = d.estado == 'no_encontrado'
+            if not (vencido or por_vencer or no_encontrado):
+                continue
+            salida.append({
+                # Indexado y no `.get(..., default)`: `placas` trae TODOS los
+                # vehículos y la columna tiene FK, así que una placa ausente es
+                # una FK rota, no un dato que falta. Un `'#12'` de respaldo se
+                # publicaría con cara de placa y el panel mandaría a buscar un
+                # camión que no existe (regla 5).
+                'placa': placas[d.vehiculo_id],
+                'tipo': d.tipo,
+                'estado': d.estado,
+                'vence': vence.isoformat() if vence else None,
+                # Firmado: negativo = ya venció hace tantos días. El signo es la
+                # diferencia entre «sacá la cita» y «bajá el camión».
+                'dias': (vence - hoy).days if vence else None,
+                'vencido': vencido,
+                'por_vencer_30d': por_vencer,
+                'no_encontrado': no_encontrado,
+                'base': 'documentos registrados contra el vehículo',
+                'etiqueta': 'estado al día de hoy',
+            })
+        # Lo peor primero: el más vencido arriba. Los que no tienen fecha van al
+        # final, y no de primeros por un `None` que ordena raro.
+        return sorted(salida, key=lambda f: (f['dias'] is None, f['dias'] or 0))
+
+    def _cuantos_documentos(self, bandera) -> Optional[int]:
+        filas = self.documentos_por_vehiculo()
+        return None if filas is None else sum(1 for f in filas if f[bandera])
+
+    def documentos_no_encontrados(self) -> Optional[int]:
+        """Papeles que nadie pudo mostrar. Aparte de los vencidos a propósito:
+        uno se renueva y el otro se busca, y sumarlos esconde el segundo."""
+        return self._cuantos_documentos('no_encontrado')
 
     def documentos_vencidos(self) -> Optional[int]:
-        from flota.adaptadores.modelos import DocumentoVehiculo
-
-        if not _tabla_existe('flota_documento_vehiculo'):
-            return None
-        return _contar(DocumentoVehiculo.query.filter(
-            DocumentoVehiculo.fecha_vencimiento < _hoy()
-        ))
+        """Papeles caducados. El vehículo no debería salir."""
+        return self._cuantos_documentos('vencido')
 
     def documentos_por_vencer_30d(self) -> Optional[int]:
         """Vigentes que vencen dentro de 30 días. NO incluye los ya vencidos.
@@ -342,15 +741,7 @@ class MedidorSQL:
         plazo, "vencido" es un camión que no debería estar rodando. Sumarlos
         esconde el segundo dentro del primero.
         """
-        from flota.adaptadores.modelos import DocumentoVehiculo
-
-        if not _tabla_existe('flota_documento_vehiculo'):
-            return None
-        hoy = _hoy()
-        return _contar(DocumentoVehiculo.query.filter(
-            DocumentoVehiculo.fecha_vencimiento >= hoy,
-            DocumentoVehiculo.fecha_vencimiento <= hoy + _timedelta(days=30),
-        ))
+        return self._cuantos_documentos('por_vencer_30d')
 
     # ── Odómetro ─────────────────────────────────────────────────────────────
     #
@@ -611,6 +1002,80 @@ class MedidorSQL:
         abiertos = Hallazgo.query.filter_by(estado=EstadoHallazgo.ABIERTO).all()
         return sum(1 for h in abiertos if vencido(h.a_dominio(), ahora))
 
+    def dias_hallazgo_abierto(self) -> Optional[dict]:
+        """Cuánto tarda un daño en resolverse, **caso por caso y con placa**.
+
+        `docs/procedimientos/roles/especialista-control-flota.md:119` promete
+        «Días promedio de hallazgo abierto» como señal de desempeño de ese rol.
+        El canon existe desde el 2026-08-03
+        (`docs/flota/canones/dias_hallazgo_abierto.md`), `promedio_del_indicador`
+        se escribió ese mismo día — y **no tenía un solo caller de producción**:
+        figuraba en la lista de deuda declarada de
+        `tests/flota/test_trinquetes_flota.py`. La ficha prometía un número que
+        ninguna pantalla mostraba, que es justo lo que
+        `docs/procedimientos/README.md:16` prohíbe.
+
+        Este campo es ese caller, y sale despromediado: primero la lista de
+        casos con su placa, después el promedio con su `n`. Con un puñado de
+        hallazgos el promedio no dice a qué camión llamar, y el canon ya prohíbe
+        compararlo entre zonas.
+
+        `n_fuera` viaja porque es el denominador: un indicador que solo reporta
+        lo que mira devolvería «0 días promedio» sobre una flota con veinte
+        hallazgos de línea base, y eso se lee como «no hay demoras».
+
+        Los dos números que el canon prohíbe mezclar salen separados por fila:
+        `dias` es duración cerrada, `dias_lleva` es antigüedad viva. El aviso de
+        WhatsApp usa el segundo; el indicador usa el primero.
+        """
+        from datetime import datetime
+
+        from app.models.vehiculo import Vehiculo
+        from flota.adaptadores.modelos import Hallazgo
+        from flota.dominio.hallazgo import indicador_dias_abierto
+        from flota.dominio.valores import SIN_DATO
+
+        if not _tabla_existe('flota_hallazgo'):
+            return None
+        filas = (db.session.query(Hallazgo, Vehiculo.placa)
+                 .join(Vehiculo, Vehiculo.id == Hallazgo.vehiculo_id)
+                 .order_by(Hallazgo.reportado_ts, Hallazgo.id).all())
+        # El juicio lo emite el dominio de una sola pasada, y `juicios` vuelve
+        # EN EL MISMO ORDEN — así el adaptador le pega la placa sin que el
+        # dominio tenga que conocerla.
+        r = indicador_dias_abierto([h.a_dominio() for h, _ in filas],
+                                   datetime.utcnow())
+        casos = []
+        for (h, placa), j in zip(filas, r['juicios']):
+            caso = {'placa': placa, 'reportado': h.reportado_ts.date().isoformat()}
+            caso.update(j)
+            # `dias` sale como palabra cuando el hallazgo sigue abierto: un 0 ahí
+            # diría «se resolvió al instante».
+            if j.get('dias') is SIN_DATO:
+                caso['dias'] = str(SIN_DATO)
+            casos.append(caso)
+
+        promedio = r['promedio_dias']
+        return {
+            'casos': casos,
+            # El promedio SIEMPRE con su n al lado, y detrás de los casos. Un
+            # promedio de 2 y uno de 200 son el mismo número con distinta
+            # autoridad.
+            'promedio_dias': (str(SIN_DATO) if promedio is SIN_DATO
+                              else round(float(promedio), 1)),
+            'n': r['n'],
+            'n_abiertos': r['n_abiertos'],
+            'n_vencidos': r['n_vencidos'],
+            'n_fuera': r['n_fuera'],
+            'motivo': (None if r['n'] else
+                       'ningún hallazgo cerrado todavía: no hay duración que '
+                       'promediar. El indicador nace al cerrar el primer daño '
+                       'con su odómetro y su evidencia.'),
+            'base': ('hallazgos que entran al indicador — sin línea base, sin '
+                     'descartados y sin no_aplica (canon §6)'),
+            'etiqueta': 'toda la historia registrada',
+        }
+
     # ── Inspección diaria (2026-09-02) ───────────────────────────────────
     #
     # `flota_inspeccion` nació ayer con su adaptador y **sin un solo lector**:
@@ -796,17 +1261,38 @@ class MedidorSQL:
         return self._tanqueos_juzgados()[1]
 
     def cpk_mes(self) -> Optional[List[dict]]:
-        """El costo por kilómetro del mes en curso, por vehículo. **Un hecho.**
+        """El costo por kilómetro del mes en curso. **Un hecho, de los seis.**
 
         Una lista y no un promedio de flota: el canon
         (`docs/flota/canones/costo_por_kilometro.md` §3) dice que el CPK **no
         compara vehículos**, y promediar el de un NHR con el de un motocarro
         mide la composición del parque, no la operación.
 
-        Solo aparecen los vehículos con algún gasto registrado. Los demás no
-        valen cero —«nadie registró nada» no es «no costó nada»— y meterlos con
-        `sin_dato` llenaría el tablero de renglones vacíos el primer mes, que es
-        cómo un tablero se deja de mirar.
+        ## Sale TODO vehículo activo, incluido el que no tiene un solo gasto
+
+        Hasta el 2026-09-04 esto filtraba `Vehiculo.id.in_(con_gasto)` y encima
+        devolvía `[]` temprano si nadie había registrado nada en toda la tabla.
+        El motivo escrito era que meter a los demás *«llenaría el tablero de
+        renglones vacíos el primer mes, que es cómo un tablero se deja de
+        mirar»*.
+
+        Ese motivo era falso por dos razones, y las dos se midieron:
+
+        · **Con cero filas en `flota_gasto` —que es el estado de hoy— el filtro
+          no escondía renglones vacíos: escondía el tablero entero.** El campo
+          salía `[]`, que la pantalla lee igual que «no hay nada que reportar».
+        · **El vehículo del que nadie registró nada ES el caso a atender.** Con
+          seis vehículos, «no aparece» y «no costó nada» se leen igual, y el
+          primero se corrige con una llamada.
+
+        `km_dia_por_vehiculo`, en este mismo archivo, ya había tomado la
+        decisión contraria y su docstring se contrastaba explícitamente con
+        éste llamando a la diferencia «deliberada». El archivo se contradecía
+        consigo mismo; ahora no.
+
+        `hubo_gastos` viaja porque separa **los dos ceros del canon** (§6):
+        `False` es «nadie registró nada» y `True` con `pesos = 0` es un cero
+        medido. `cpk_de` ya lo devolvía y esta función lo tiraba.
 
         El mes se calcula con `dia_operativo()`: el 31 a las 8 p.m. de Colombia,
         `date.today()` en Railway ya es del mes siguiente y esto reportaría «el
@@ -814,28 +1300,57 @@ class MedidorSQL:
         """
         from app.models.vehiculo import Vehiculo
         from flota.adaptadores.gastos import cpk_de, numero_legible
-        from flota.adaptadores.modelos import Gasto
+        from flota.dominio.procedencia import Cifra, mes_en_curso_de
+        from flota.dominio.valores import palabra_de_confianza
 
         if not _tabla_existe('flota_gasto'):
             return None
         hoy = _hoy()
-        desde = hoy.replace(day=1)
-        con_gasto = {g.vehiculo_id for g in db.session.query(Gasto.vehiculo_id)}
-        if not con_gasto:
-            return []
+        # La ventana la nombra el dominio. Escribir `hoy.replace(day=1)` acá y
+        # otra vez en el próximo campo es cómo el mes del tablero y el mes del
+        # expediente terminan siendo dos meses distintos.
+        ventana = mes_en_curso_de(hoy)
+        desde = ventana.desde
 
         salida = []
-        for v in (Vehiculo.query.filter(Vehiculo.id.in_(con_gasto))
+        # Mismo predicado que `vehiculos_activos()` y que `km_dia_por_vehiculo`:
+        # la columna es nullable, y tres denominadores que se calculan distinto
+        # hacen que el tablero diga «6 de 6» donde el health dice otra cosa.
+        for v in (Vehiculo.query.filter(Vehiculo.activo.is_(True))
                   .order_by(Vehiculo.placa).all()):
             r = cpk_de(v.id, desde, hoy)
-            salida.append({
-                'placa': v.placa,
+            # Regla 13 por construcción, no por disciplina: `Cifra` se niega a
+            # existir sin base, sin ventana y sin `n`, y **se niega a llevar un
+            # `sin_dato` sin motivo**. Escribir esas cinco claves a mano es lo
+            # que se venía haciendo, y lo que se olvida en el campo número seis.
+            #
+            # `n` son las lecturas del tramo: un CPK sobre dos lecturas y uno
+            # sobre veinte no se leen igual, y desde el número no se distinguen.
+            cifra = Cifra(
                 # El número **con sus dos insumos**: un CPK suelto no se puede
                 # auditar, y éste va a un tablero.
-                'cpk': numero_legible(r['cpk']),
-                'marca': str(r['marca']),
+                valor=numero_legible(r['cpk']),
+                base=('gastos registrados contra el vehículo, con el de '
+                      'período repartido por día calendario'),
+                ventana=ventana,
+                n=r['lecturas'],
+                motivo=_motivo_cpk(r))
+            salida.append({
+                'placa': v.placa,
+                # `clave_valor='cpk'`: el campo ya se publicaba con ese nombre y
+                # la pantalla lo lee así. Renombrarlo a `valor` por uniformidad
+                # rompería el expediente y sus tests por una razón estética.
+                **cifra.a_json('cpk'),
+                # `palabra_de_confianza` y no `str()`: hoy `costo_por_kilometro`
+                # ya devuelve una cadena, así que `str()` es un no-op y esto NO
+                # arregla un bug vivo. Se cambia porque el día que la marca
+                # vuelva a ser un `Confianza`, `str()` publicaría
+                # `'Confianza.DUDOSA'` — que es exactamente lo que pasó en
+                # `km_dia_por_vehiculo` y para lo que existe esta función.
+                'marca': palabra_de_confianza(r['marca']),
                 'pesos': numero_legible(r['pesos']),
                 'km': r['km'],
+                'hubo_gastos': r['hubo_gastos'],
             })
         return salida
 

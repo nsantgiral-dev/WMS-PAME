@@ -171,6 +171,13 @@ FUERA_DEL_RELOJ = {
     'flota.dominio.odometro': 'solo tipos y funciones puras — recibe `ahora`, no lo lee',
     'flota.dominio.valores': 'solo tipos y enums',
     'flota.api._tiempo': 'formatea un instante recibido; no lo produce',
+    # El reporte semanal (2026-09-04): cron de los lunes, no participa del día
+    # del conductor. Y **recibe `dia` y `ahora` por parámetro** —
+    # `armar_reporte(dia=..., ahora=...)`— así que su ventana se barre pasándole
+    # el instante, que es estrictamente mejor que parchear un global: no hay
+    # forma de que corra con la hora de la máquina sin que el test lo elija.
+    'flota.adaptadores.reporte_semanal': (
+        'cron de los lunes; recibe `dia` y `ahora` por parámetro y no los lee'),
 }
 
 

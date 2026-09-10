@@ -64,6 +64,53 @@ que hacer.
 
 ---
 
+## La decisión mensual sobre el gasto de flota
+
+**El costo por kilómetro es tuyo.** No del especialista de control de flota:
+él lleva el registro, señala lo vencido y escala — y su ficha dice, en el código
+y en el papel, que **no aprueba nada**. La decisión de qué se hace con un camión
+que cuesta el doble que el resto la toma quien decide sobre plata.
+
+Dónde: **Flota → Analítica**, una vez al mes. Son **dos paneles y contestan
+preguntas distintas**, uno debajo del otro:
+
+| Panel | Contesta | Se compara entre vehículos |
+|---|---|---|
+| **Costo por kilómetro** | ¿este camión se encareció? | **No.** Un NHR y un motocarro no cuestan igual |
+| **Pesos por mes** | ¿cuál se come la plata? | **Sí**, y es la única del tab que se puede: son pesos que salieron |
+
+En *Pesos por mes*, un vehículo **sin un solo gasto registrado va aparte y no
+entra al orden**. Metido en la lista con sus $0 saldría de último, es decir
+coronado como el más barato de la flota — y el total dice siempre sobre cuántos
+vehículos se calculó, porque un total sobre 2 de 6 que no lo declara es el
+número que se lleva a una reunión creyendo que es la flota entera.
+
+Tres cosas que el número **no** dice, y conviene tenerlas presentes antes de
+decidir sobre ellas:
+
+- **No compara vehículos.** Un NHR y un motocarro no cuestan igual, y la
+  diferencia mide la composición del parque, no la operación. Para «¿qué camión
+  se come la plata?» la pregunta se contesta en el panel de **Pesos por mes**,
+  justo debajo, no en el CPK.
+- **No es el costo de tener el camión.** Es lo que se registró: sin
+  depreciación, sin financiación, sin el tiempo de quien lo gestiona.
+- **No explica una subida.** Un filtro tapado, un mes con más montaña y un
+  precio de galón distinto producen el mismo movimiento.
+
+Y un vehículo puede salir **sin cifra**. Cuando pasa, la fila dice cuál de las
+tres causas fue —nadie cargó una factura, el odómetro no se puede sostener, o no
+hay dos lecturas en el mes— porque las tres se corrigen llamando a alguien
+distinto. **Un mes entero sin cifra no significa que la flota sea gratis:
+significa que no se está registrando.**
+
+### El reporte de los lunes
+
+Cinco minutos, y es el compromiso del que depende todo lo demás. Si a la tercera
+semana no se lee, control de flota deja de mandarlo — y ahí muere el sistema,
+igual que en noviembre, y otra vez sin que la herramienta tenga nada que ver.
+
+---
+
 ## Cuando algo falla
 
 ### Siesa rechaza todos los documentos de un tipo

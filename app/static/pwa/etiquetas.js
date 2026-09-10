@@ -35,7 +35,7 @@ async function etqBuscarProducto() {
       prod = await get('/api/siesa/producto-siesa-vivo/' + encodeURIComponent(codigo));
       enVivo = true;
     } catch (eVivo) {
-      resultado.innerHTML = `<div style="text-align:center;padding:20px;color:#dc2626;">${eVivo.message}</div>`;
+      resultado.innerHTML = `<div style="text-align:center;padding:20px;color:#dc2626;">${esc(eVivo.message)}</div>`;
       return;
     }
   }
@@ -57,8 +57,8 @@ async function etqBuscarProducto() {
   resultado.innerHTML = `
     <div style="background:var(--bg-s);border:1px solid var(--brd);border-radius:10px;padding:16px;max-width:320px;">
       ${enVivo ? '<div style="font-size:11px;color:#f59e0b;font-weight:700;margin-bottom:6px;">🔴 EN VIVO — aún no sincronizado en el catálogo local</div>' : ''}
-      <div style="font-size:14px;font-weight:700;margin-bottom:4px;">${prod.nombre || ''}</div>
-      <div style="font-size:12px;color:var(--tx3);margin-bottom:2px;">Referencia Siesa: ${prod.codigo_siesa}</div>
+      <div style="font-size:14px;font-weight:700;margin-bottom:4px;">${esc(prod.nombre || '')}</div>
+      <div style="font-size:12px;color:var(--tx3);margin-bottom:2px;">Referencia Siesa: ${esc(prod.codigo_siesa)}</div>
       <div style="font-size:12px;color:var(--tx3);margin-bottom:10px;">
         ${esReferenciaFallback
           ? '<span style="color:#d97706;">Sin EAN en Siesa — se imprimirá la referencia interna</span>'
@@ -98,8 +98,8 @@ function etqImprimir() {
     <div class="etiqueta-lpn">
       <div class="el-titulo">PRODUCTO — PAPELERÍA MEDELLÍN</div>
       <svg id="${uid}"></svg>
-      <div class="el-codigo">${prod.codigo_para_barra}</div>
-      <div class="el-producto">${prod.nombre || ''}</div>
+      <div class="el-codigo">${esc(prod.codigo_para_barra)}</div>
+      <div class="el-producto">${esc(prod.nombre || '')}</div>
       <div class="el-fecha">${hoy}</div>
     </div>`;
 

@@ -743,3 +743,54 @@ class TestNingunDefaultSilencioso:
                  if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
                  and n.func.attr == 'get' and len(n.args) == 2]
         assert len(malos) == 1
+
+
+class TestSinDosLlenosEstanTODOSAfuera:
+    """La rama que la mutación del 2026-09-04 destapó sin cubrir.
+
+    `tanqueos_fuera_de_ventana` devuelve `len(tanqueos)` cuando hay menos de dos
+    llenos: sin dos extremos no hay ninguna ventana, así que **ninguno de los
+    tanqueos entró a una**. Devolver 0 ahí diría «no se perdió ninguno», que es
+    exactamente lo contrario.
+
+    Sobrevivió a la primera corrida porque el test que sí existía sembraba siete
+    llenos y nunca llegaba a esta rama — un caso límite probado solo por su lado
+    ancho.
+    """
+
+    @staticmethod
+    def _t(tanque, km):
+        from decimal import Decimal
+        return {'km': km, 'galones': Decimal('10'), 'tanque': tanque}
+
+    def test_con_UN_lleno_y_dos_parciales_estan_los_tres_afuera(self):
+        from flota.dominio.costos import tanqueos_fuera_de_ventana
+
+        tanqueos = [self._t('parcial', 100), self._t('lleno', 500),
+                    self._t('parcial', 900)]
+        assert tanqueos_fuera_de_ventana(tanqueos) == 3
+
+    def test_sin_ningun_lleno_tambien(self):
+        from flota.dominio.costos import tanqueos_fuera_de_ventana
+
+        assert tanqueos_fuera_de_ventana(
+            [self._t('parcial', 100), self._t('sin_dato', 500)]) == 2
+
+    def test_y_con_una_lista_vacia_no_se_pierde_ninguno(self):
+        """La otra dirección: cero tanqueos son cero perdidos, no «todos»."""
+        from flota.dominio.costos import tanqueos_fuera_de_ventana
+
+        assert tanqueos_fuera_de_ventana([]) == 0
+
+    def test_con_DOS_llenos_solo_quedan_fuera_los_de_los_extremos(self):
+        """Y la dirección que ya funcionaba, junto a la otra para que se lean
+        como el par que son: entre dos llenos, los parciales SÍ cuentan — esos
+        galones se quemaron dentro del tramo."""
+        from flota.dominio.costos import tanqueos_fuera_de_ventana
+
+        tanqueos = [self._t('parcial', 100),   # antes del primer lleno → fuera
+                    self._t('lleno', 500),
+                    self._t('parcial', 700),   # entre llenos → DENTRO
+                    self._t('lleno', 900),
+                    self._t('parcial', 1100)]  # después del último → fuera
+        assert tanqueos_fuera_de_ventana(tanqueos) == 2

@@ -87,13 +87,19 @@ def _plan_id(mundo, tipo):
 
 class TestElConductorVeElPlanYNoLoEscribe:
 
-    def test_el_conductor_puede_ver_el_plan(self, client, mundo):
-        """Es la información que decide si sale a ruta. Un daño en la correa lo
-        paga el que va manejando."""
+    # Que la información LE LLEGUE se afirma donde vive el fixture con el
+    # conductor vinculado a su ficha:
+    # `test_el_conductor_ve_su_camion.py::test_ve_el_preventivo_vencido`.
+    # Acá el sujeto es quién puede qué, y meter la otra mitad a la fuerza
+    # obligaría a duplicar medio mundo de pruebas — que es como divergen.
+
+    def test_y_el_plan_COMPLETO_es_de_escritorio(self, client, mundo):
+        """La otra dirección: el que gestiona mantenimientos sí lo abre entero."""
         _sembrar(client, mundo)
-        r = client.get(f'/flota/preventivo/{mundo["placa"]}',
-                       headers=_auth(mundo['t_cond']))
-        assert r.status_code == 200
+        assert client.get(f'/flota/preventivo/{mundo["placa"]}',
+                          headers=_auth(mundo['t_cond'])).status_code == 403
+        assert client.get(f'/flota/preventivo/{mundo["placa"]}',
+                          headers=_auth(mundo['t_flota'])).status_code == 200
 
     def test_el_conductor_NO_puede_declarar_que_una_tarea_se_hizo(self, client, mundo):
         """**Regla 11.** Si el que se beneficia de que no salga en rojo es el

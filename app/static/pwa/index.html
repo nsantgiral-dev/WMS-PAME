@@ -2389,9 +2389,22 @@
       <div id="etq-resultado"></div>
     </div>
 
-    <!-- Vigia CUSUM -->
+    <!-- Flota — expedientes y analítica.
+         La barra de sub-tabs va ESTÁTICA y no generada por JS, por dos
+         motivos: el `onclick` en el HTML hace de `flotaSubtab` una raíz del
+         grafo de alcance (si dependiera de que `cargarFlota` la llame, el
+         guard de rutas huérfanas la contaría muerta), y la barra se ve aunque
+         `/flota/health` devuelva 500 — si dependiera de la carga, un health
+         caído dejaría al rol sin forma de llegar a ningún lado. -->
     <div id="tab-flota" class="admin-content" style="display:none;">
+      <div style="display:flex;gap:4px;margin-bottom:12px;">
+        <div id="flota-sub-operacion" onclick="flotaSubtab('operacion')"
+             style="padding:6px 14px;border-radius:6px;cursor:pointer;font-size:13px;">Expedientes</div>
+        <div id="flota-sub-analitica" onclick="flotaSubtab('analitica')"
+             style="padding:6px 14px;border-radius:6px;cursor:pointer;font-size:13px;">Analítica</div>
+      </div>
       <div id="flota-contenido"></div>
+      <div id="flota-analitica" style="display:none;"></div>
     </div>
 
     <div id="tab-vigia" class="admin-content" style="display:none;">
@@ -3385,23 +3398,25 @@
   <!-- Área de impresión de etiquetas — visible solo al imprimir -->
   <div id="print-area"></div>
 
-  <script src="/static/pwa/app.js?v=20260726a"></script>
-  <script src="/static/pwa/picking.js?v=20260720a"></script>
-  <script src="/static/pwa/packing.js?v=20260720a"></script>
-  <script src="/static/pwa/recepcion.js?v=20260813b"></script>
-  <script src="/static/pwa/rutas.js?v=20260813a"></script>
-  <script src="/static/pwa/traslados.js?v=20260720a"></script>
-  <script src="/static/pwa/conteo.js?v=20260726a"></script>
-  <script src="/static/pwa/reposicion.js?v=20260720a"></script>
-  <script src="/static/pwa/liquidacion.js?v=20260813a"></script>
-  <script src="/static/pwa/layout.js?v=20260813a"></script>
-  <script src="/static/pwa/tienda.js?v=20260721a"></script>
-  <script src="/static/pwa/etiquetas.js?v=20260710a"></script>
-  <script src="/static/pwa/vigia.js?v=20260724b"></script>
-  <script src="/static/pwa/flota.js?v=20260803c"></script>
-  <script src="/static/pwa/compras_ia.js?v=20260726c"></script>
-  <script src="/static/pwa/kardex.js?v=20260727c"></script>
-  <script src="/static/pwa/temporada.js?v=20260727b"></script>
+  <script src="/static/pwa/util.js?v=20260909a"></script>
+  <script src="/static/pwa/app.js?v=20260909a"></script>
+  <script src="/static/pwa/picking.js?v=20260909a"></script>
+  <script src="/static/pwa/packing.js?v=20260909a"></script>
+  <script src="/static/pwa/recepcion.js?v=20260909a"></script>
+  <script src="/static/pwa/rutas.js?v=20260909a"></script>
+  <script src="/static/pwa/traslados.js?v=20260909a"></script>
+  <script src="/static/pwa/conteo.js?v=20260909a"></script>
+  <script src="/static/pwa/reposicion.js?v=20260909a"></script>
+  <script src="/static/pwa/liquidacion.js?v=20260909a"></script>
+  <script src="/static/pwa/layout.js?v=20260909a"></script>
+  <script src="/static/pwa/tienda.js?v=20260909a"></script>
+  <script src="/static/pwa/etiquetas.js?v=20260909a"></script>
+  <script src="/static/pwa/vigia.js?v=20260909a"></script>
+  <script src="/static/pwa/flota.js?v=20260909a"></script>
+  <script src="/static/pwa/flota_analitica.js?v=20260909a"></script>
+  <script src="/static/pwa/compras_ia.js?v=20260909a"></script>
+  <script src="/static/pwa/kardex.js?v=20260909a"></script>
+  <script src="/static/pwa/temporada.js?v=20260909a"></script>
   <script>
     setInterval(() => {
       const cola = JSON.parse(localStorage.getItem('wms_cola_offline') || '[]');

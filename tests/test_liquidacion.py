@@ -1,3 +1,4 @@
+import re
 """
 Tier 4 — Tests de negocio: flujos de liquidación (_procesar_recaudo).
 Valida que cada combinación estado_entrega × forma_pago dispara los
@@ -767,7 +768,9 @@ class TestLaDecisionDelDescuentoViveEnLaTarjeta:
         return self._JS.read_text(encoding='utf-8')
 
     def test_la_tarjeta_pinta_la_decision_antes_del_boton(self):
-        fuente = self._fuente()
+        # Ver la nota de `_sin_esc` más abajo: el orden que se afirma es el de
+        # los dos gestos, no el de los caracteres.
+        fuente = re.sub(r'esc\(([^()]*)\)', r'\1', self._fuente())
         i = fuente.find('_liqBloqueRetencion(ruta.id')
         assert i != -1, (
             '\nLa lista dejó de pintar el bloque de decisión del descuento. '

@@ -314,3 +314,201 @@ class TestCustodiasPendienteSede:
         antes = medidor.vehiculos_sin_custodia_activa()
         _custodia(mundo, inicio=0, pendiente_sede=True)
         assert medidor.vehiculos_sin_custodia_activa() == antes - 1
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# Las enumeraciones — «cuántos» y «cuáles» no pueden dejar de coincidir
+# ══════════════════════════════════════════════════════════════════════════
+
+class TestLosContadoresDerivanDeLaLista:
+    """Cinco contadores que antes tenían su propio `filter` ahora se calculan de
+    dos enumeraciones. La propiedad que hay que sostener es que **no se pueden
+    separar**: si el número y la lista dejan de decir lo mismo, no hay forma de
+    saber cuál creer, y el que decide mira el número mientras el que trabaja
+    mira la lista.
+
+    No alcanza con probar que el contador da bien: eso pasaría con las dos
+    implementaciones separadas y divergiendo. Se prueba la **identidad** entre
+    el contador y la longitud del filtro sobre la lista, que es lo que el
+    refactor compró.
+    """
+
+    def test_documentos_el_numero_ES_la_longitud_de_la_lista(self, mundo):
+        _documento(mundo, vence_en_dias=-30)
+        _documento(mundo, vence_en_dias=-2)
+        _documento(mundo, vence_en_dias=10)
+        _documento(mundo, vence_en_dias=200)      # ni vencido ni por vencer
+        m = MedidorSQL()
+        filas = m.documentos_por_vehiculo()
+        assert m.documentos_vencidos() == sum(1 for f in filas if f['vencido'])
+        assert m.documentos_vencidos() == 2
+        assert (m.documentos_por_vencer_30d()
+                == sum(1 for f in filas if f['por_vencer_30d']) == 1)
+        # El de 200 días no está al día *ni* pide trabajo: no entra a la lista.
+        assert len(filas) == 3
+
+    def test_la_base_PROHIBE_que_un_papel_este_vencido_y_no_encontrado(self, mundo):
+        """El supuesto en el que descansan las tres banderas, afirmado contra la
+        base y no dejado en un comentario.
+
+        Se intentó escribir el caso «no encontrado y además vencido» para probar
+        que contaba en los dos contadores. **No se puede construir**: el CHECK
+        `ck_flota_doc_estado_coherente` exige `fecha_vencimiento IS NULL` cuando
+        el estado es `no_encontrado`. Un papel que nadie pudo mostrar no tiene
+        fecha que juzgar — es coherente.
+
+        Queda escrito como test porque la disyunción es de la BASE y no del
+        medidor: si el CHECK se relaja, este test se pone rojo y quien lo relaje
+        va a tener que decidir a mano qué hacen los dos contadores, en vez de
+        descubrirlo por un número que se movió.
+        """
+        import sqlalchemy.exc
+
+        d = _documento(mundo, vence_en_dias=-5)
+        d.estado = 'no_encontrado'
+        with pytest.raises(sqlalchemy.exc.IntegrityError):
+            mundo['db'].session.commit()
+        mundo['db'].session.rollback()
+
+    def test_un_no_encontrado_SIN_fecha_entra_solo_a_su_contador(self, mundo):
+        """La forma que la base sí admite. Confirma que las banderas de la fila
+        y los contadores siguen diciendo lo mismo en el caso real."""
+        from flota.adaptadores.modelos import DocumentoVehiculo
+
+        mundo['db'].session.add(DocumentoVehiculo(
+            vehiculo_id=mundo['vehiculo'].id, tipo='poliza_rc',
+            estado='no_encontrado', numero=None, entidad=None,
+            fecha_expedicion=None, fecha_vencimiento=None))
+        mundo['db'].session.commit()
+
+        m = MedidorSQL()
+        fila = m.documentos_por_vehiculo()[0]
+        assert (fila['no_encontrado'], fila['vencido'], fila['por_vencer_30d']) \
+            == (True, False, False)
+        assert m.documentos_no_encontrados() == 1
+        assert m.documentos_vencidos() == 0
+
+    def test_la_fila_trae_la_placa_que_es_para_lo_que_existe(self, mundo):
+        """Sin la placa el número no dice a quién llamar, y «persigue lo
+        vencido» es la definición escrita del trabajo del rol."""
+        _documento(mundo, vence_en_dias=-1)
+        fila = MedidorSQL().documentos_por_vehiculo()[0]
+        assert fila['placa'] == mundo['vehiculo'].placa
+        assert fila['dias'] < 0, 'el signo separa «sacá la cita» de «bajá el camión»'
+        assert fila['base'] and fila['etiqueta'], 'regla 13: cada fila, no la página'
+
+    def test_lo_peor_va_primero(self, mundo):
+        _documento(mundo, vence_en_dias=-1)
+        _documento(mundo, vence_en_dias=-40)
+        assert [f['dias'] for f in MedidorSQL().documentos_por_vehiculo()] == [-40, -1]
+
+    def test_custodias_el_numero_ES_la_longitud_de_la_lista(self, mundo):
+        _custodia(mundo, inicio=0, fin=60)
+        # El id se lee ANTES de mutar: leerlo después dispara un autoflush con
+        # `cierre_forzado` ya en `True` y el autor todavía en `NULL`, que es
+        # justo el estado que el CHECK rechaza.
+        uid = mundo['usuario'].id
+        c = _custodia(mundo, inicio=120, fin=180)
+        # Los tres campos juntos: `ck_flota_cierre_forzado_declarado` rechaza un
+        # forzado anónimo, y con razón — quedaría el rastro de que pasó algo
+        # raro y ninguna forma de saber quién ni por qué.
+        c.cierre_forzado_por_usuario_id = uid
+        c.cierre_forzado_motivo = 'el conductor no volvió'
+        c.cierre_forzado = True
+        mundo['db'].session.commit()
+
+        m = MedidorSQL()
+        filas = m.custodias_por_vehiculo()
+        assert (m.custodias_cerradas_forzadas()
+                == sum(1 for f in filas if f['cierre_forzado']) == 1)
+        assert (m.custodias_sin_foto_completa()
+                == sum(1 for f in filas if f['sin_foto_completa']))
+        forzada = next(f for f in filas if f['cierre_forzado'])
+        assert forzada['placa'] == mundo['vehiculo'].placa
+        assert forzada['cierre_forzado_motivo'] == 'el conductor no volvió'
+
+    def test_una_custodia_con_las_DOS_mitades_incompletas_cuenta_UNA_vez(self, mundo):
+        """El `elif` del predicado original, conservado y ahora afirmado.
+
+        `custodias_sin_foto_completa` mide **turnos**, no mitades. Sin este
+        test, alguien que «arregle» el `elif` a un `if` duplica el número sin
+        que nada se ponga rojo — y el contador pasa a medir otra cosa con el
+        mismo nombre.
+        """
+        _custodia(mundo, inicio=0, fin=60)      # cero fotos en las dos mitades
+        m = MedidorSQL()
+        assert m.custodias_sin_foto_completa() == 1
+        filas = [f for f in m.custodias_por_vehiculo() if f['sin_foto_completa']]
+        assert len(filas) == 1
+        assert filas[0]['mitad_incompleta'] == 'inicio', (
+            'con las dos incompletas se reporta la primera, que es la que hay '
+            'que arreglar antes')
+
+    def test_una_custodia_sana_no_entra_a_la_lista(self, mundo):
+        """La otra dirección. Una lista que devolviera todas las custodias
+        pasaría los tests de arriba y convertiría el panel en un volcado."""
+        m = MedidorSQL()
+        assert m.custodias_por_vehiculo() == []
+        assert m.custodias_cerradas_forzadas() == 0
+
+
+class TestLaEnumeracionNoEscalaEnConsultas:
+    """El N+1 no vuelve por descuido: se cuentan las consultas, no el tiempo.
+
+    `custodias_por_vehiculo` hacía un COUNT por custodia y **corre 3 veces por
+    petición** de health (la publica como campo y la consultan sus dos
+    contadores derivados). Medido el 2026-09-09 sobre SQLite con 6 vehículos:
+    61 ms con 26 custodias, 128 con 200, 465 con 1000. Seis vehículos con dos
+    turnos diarios producen ~4.400 custodias al año — dos segundos por petición
+    dentro de doce meses.
+
+    Se arregló quitando el N+1 y **no cacheando**: un medidor que cachea deja de
+    medir y sigue contestando 200. Tras el cambio: 53 ms con 26, 113 con 1000,
+    244 con 4.400.
+
+    El test cuenta sentencias y no milisegundos a propósito. Un umbral de tiempo
+    en CI mide la máquina; el número de consultas mide lo que se rompió.
+    """
+
+    def _contando(self, fn):
+        from sqlalchemy import event
+
+        from app.extensions import db
+
+        sentencias = []
+
+        def espia(conn, cursor, sql, params, contexto, muchos):
+            sentencias.append(sql)
+
+        event.listen(db.engine, 'before_cursor_execute', espia)
+        try:
+            fn()
+        finally:
+            event.remove(db.engine, 'before_cursor_execute', espia)
+        return sentencias
+
+    def test_el_numero_de_consultas_NO_crece_con_las_custodias(self, mundo):
+        """La afirmación es de forma, no de magnitud: con cinco veces más
+        custodias, el mismo número de consultas."""
+        for k in range(3):
+            _custodia(mundo, inicio=k * 100, fin=k * 100 + 50)
+        pocas = len(self._contando(lambda: MedidorSQL().custodias_por_vehiculo()))
+
+        for k in range(3, 15):
+            _custodia(mundo, inicio=k * 100, fin=k * 100 + 50)
+        muchas = len(self._contando(lambda: MedidorSQL().custodias_por_vehiculo()))
+
+        assert pocas == muchas, (
+            f'con 3 custodias hizo {pocas} consultas y con 15 hizo {muchas}: '
+            f'volvió el N+1')
+
+    def test_y_sigue_contando_bien_despues_de_agrupar(self, mundo):
+        """La otra dirección. Una consulta agrupada mal escrita da un número
+        estable y equivocado, que es peor que uno lento."""
+        for k in range(4):
+            _custodia(mundo, inicio=k * 100, fin=k * 100 + 50)
+        m = MedidorSQL()
+        # Cero fotos en todas: las cuatro están incompletas por el lado de inicio.
+        assert m.custodias_sin_foto_completa() == 4
+        assert all(f['mitad_incompleta'] == 'inicio'
+                   for f in m.custodias_por_vehiculo())

@@ -89,10 +89,24 @@ class TestScriptIntegrity:
         missing = on_disk - loaded
         assert not missing, f'Archivos JS no cargados en HTML: {missing}'
 
-    def test_app_js_loads_first(self):
-        """app.js debe ser el primer script (define globals que todos usan)."""
+    #: La capa base, en orden. Definen globales que el resto usa.
+    #:
+    #: `util.js` se sumó el 2026-09-09 y va ANTES que `app.js`: es la capa sin
+    #: dependencias —hoy solo `esc()`— y `app.js` ya depende de ella. Hoy el
+    #: orden entre las dos no se nota porque nadie llama a `esc` en tiempo de
+    #: carga; se fija igual, porque el día que alguien lo haga el fallo sería
+    #: un `esc is not defined` en producción y en ningún test.
+    BASE = ['util.js', 'app.js']
+
+    def test_la_capa_base_carga_primero_y_en_orden(self):
+        """Antes decía «app.js debe ser el primer script» y protegía la misma
+        propiedad con un solo nombre. Se generalizó al sumarse `util.js`: ahora
+        fija DOS posiciones, no una, así que es más estricto y no menos."""
         scripts = self._script_tags_in_html()
-        assert scripts[0] == 'app.js', f'Primer script es {scripts[0]}, debe ser app.js'
+        assert scripts[:len(self.BASE)] == self.BASE, (
+            f'Los primeros scripts son {scripts[:len(self.BASE)]}, '
+            f'deben ser {self.BASE} — la capa base define globales que el '
+            f'resto usa.')
 
     def test_no_duplicate_scripts(self):
         """No hay script tags duplicados."""
@@ -1468,3 +1482,187 @@ class TestMotivoDeRechazoNoChocaDeId:
         i = src.index('function condActualizarMotivoVisible')
         bloque = src[i:i + 400]
         assert "getElementById('cond-motivo-descuento-wrap')" in bloque
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# Nivel 5: dato de usuario que llega crudo al `innerHTML`
+# ══════════════════════════════════════════════════════════════════════════
+#
+# La PWA arma su HTML con literales de plantilla. Cualquier texto que una
+# persona escribió —el motivo de un cierre forzado, la descripción de un daño,
+# el nombre de un producto— viajaba crudo hasta ahí.
+#
+# El caso que lo destapó: `POST /flota/custodia/traspaso` es `LECTURA_FLOTA`,
+# o sea que **el conductor escribe** el motivo del cierre forzado, y ese texto
+# se pinta en la pantalla de gestión. De la cuenta con menos permisos del
+# módulo a la que más tiene.
+#
+# ## Por qué el guard mira la INTERPOLACIÓN y no el `innerHTML`
+#
+# Porque después de concatenar ya no se distingue el marcado propio del
+# inyectado: esta app pone sus `onclick=` en la misma cadena que los datos. Un
+# saneador del HTML ya armado que borre manejadores inline mata la interfaz, y
+# uno que los respete deja pasar el ataque. Hay que escapar antes.
+#
+# ## Lo que NO cubre, dicho para que nadie lo suponga cubierto
+#
+# 1. **Identificadores sueltos** (`${cuerpo}`, `${filas}`): pueden ser marcado
+#    ya construido y envolverlos rompería la pantalla. Se revisan a mano.
+# 2. **HTML armado por concatenación** con `+`. Quedan sitios así en la PWA.
+# 3. **Dato dentro de JS dentro de un atributo** —`onclick="abrir('${x}')"`—:
+#    el navegador decodifica las entidades antes de que el JS corra, así que
+#    escapar no protege ahí. Necesitan otra cosa.
+#
+# Los tres están medidos y declarados en `docs/flota/ESTADO.md`. Este guard
+# cubre el sumidero principal, no todos.
+
+_DATO_INTERPOLADO = re.compile(
+    r"^\(?[A-Za-z_$][\w$]*(\.[A-Za-z_$][\w$]*|\[[^\]\[]+\])+"
+    r"(\s*\|\|\s*(''|\"\"|'[^']*'|\"[^\"]*\"|0))?\)?"
+    r"(\.(slice|trim|toUpperCase|toLowerCase|padStart|padEnd)\([^()]*\))*$")
+_TIENE_TAG = re.compile(r'<[a-zA-Z/!]')
+
+
+def _spans_plantilla(t):
+    """(inicio, fin) de cada literal de plantilla de primer nivel.
+
+    Salta comentarios, cadenas y **literales de expresión regular**. Lo último
+    no es un detalle: sin eso, `replace(/\'/g, "…")` se lee como el inicio de
+    una cadena y el escáner pierde el hilo del resto del archivo. La primera
+    versión de este barrido reportó CERO interpolaciones en `reposicion.js`,
+    `tienda.js` y `traslados.js` por ese motivo — no es que no tuvieran, es que
+    dejó de verlas. Un escáner que se desincroniza da un verde tranquilizador.
+    """
+    out, i, n = [], 0, len(t)
+    while i < n:
+        c = t[i]
+        if c == '\\':
+            i += 2; continue
+        if c == '/' and i + 1 < n and t[i + 1] == '/':
+            i = t.find('\n', i); i = n if i < 0 else i; continue
+        if c == '/' and i + 1 < n and t[i + 1] == '*':
+            i = t.find('*/', i); i = n if i < 0 else i + 2; continue
+        if c == '/':
+            k = i - 1
+            while k >= 0 and t[k] in ' \t\n\r':
+                k -= 1
+            previo = t[k] if k >= 0 else '('
+            if not (previo.isalnum() or previo in '_$)]'):
+                j, clase = i + 1, False
+                while j < n:
+                    if t[j] == '\\': j += 2; continue
+                    if t[j] == '[': clase = True
+                    elif t[j] == ']': clase = False
+                    elif t[j] == '/' and not clase: break
+                    elif t[j] == '\n': j = i; break
+                    j += 1
+                if j > i:
+                    i = j + 1; continue
+        if c in '"\'':
+            j = i + 1
+            while j < n:
+                if t[j] == '\\': j += 2; continue
+                if t[j] == c: break
+                j += 1
+            i = j + 1; continue
+        if c == '`':
+            prof, j = 0, i + 1
+            while j < n:
+                if t[j] == '\\': j += 2; continue
+                if t[j] == '`' and prof == 0: break
+                if t[j] == '$' and j + 1 < n and t[j + 1] == '{':
+                    prof += 1; j += 2; continue
+                if t[j] == '}' and prof: prof -= 1
+                j += 1
+            out.append((i, j)); i = j + 1; continue
+        i += 1
+    return out
+
+
+def _interpolaciones(t, base=0):
+    out, i, n = [], 0, len(t)
+    while True:
+        i = t.find('${', i)
+        if i < 0:
+            return out
+        prof, j = 1, i + 2
+        while j < n and prof:
+            if t[j] == '{': prof += 1
+            elif t[j] == '}': prof -= 1
+            j += 1
+        out.append((base + i, t[i + 2:j - 1]))
+        i = j
+
+
+def _crudos(texto):
+    """Interpolaciones de dato **sin `esc()`** dentro de HTML, a cualquier
+    profundidad.
+
+    La recursión no es opcional: el ataque real —el motivo del cierre forzado—
+    vive en una plantilla anidada dentro de un ternario, y la primera versión
+    del barrido, que solo miraba el nivel de arriba, lo dejaba pasar entero.
+    Se descubrió ejecutando el render con una carga real, no contando cambios.
+
+    Y una plantilla anidada SIN `<tag>` propio igual está en contexto HTML: se
+    concatena dentro de la de afuera.
+    """
+    fuera = []
+
+    def recorrer(cuerpo, base):
+        for pos, expr in _interpolaciones(cuerpo, base):
+            e = expr.strip()
+            if _DATO_INTERPOLADO.match(e) and '`' not in e:
+                fuera.append((pos, e))
+            else:
+                recorrer(expr, pos + 2)
+
+    for ini, fin in _spans_plantilla(texto):
+        cuerpo = texto[ini + 1:fin]
+        if _TIENE_TAG.search(cuerpo):
+            recorrer(cuerpo, ini + 1)
+    return fuera
+
+
+class TestNingunDatoLlegaCrudoAlInnerHTML:
+    """El sumidero principal, cerrado y con trinquete."""
+
+    def test_toda_la_pwa_escapa_el_dato_que_pinta(self):
+        violaciones = []
+        for nombre in _all_js_files():
+            if nombre in ('sw.js', 'util.js'):
+                continue
+            texto = _read(nombre)
+            for pos, expr in _crudos(texto):
+                linea = texto[:pos].count('\n') + 1
+                violaciones.append(f'{nombre}:{linea} — ${{{expr}}}')
+        assert not violaciones, (
+            '\n' + '\n'.join(f'  · {v}' for v in violaciones[:40])
+            + f'\n\n{len(violaciones)} interpolación(es) de dato sin `esc()` '
+              'dentro de HTML.\n'
+              'Un texto que escribió una persona con menos permisos termina '
+              'ejecutándose\nen la sesión de una con más. Se envuelve en '
+              '`esc(...)`; si de verdad es\nmarcado construido a propósito, '
+              'se asigna a una variable y se interpola\ncomo identificador '
+              'suelto, que este guard no toca.')
+
+    def test_el_guard_atrapa_un_dato_crudo_de_verdad(self):
+        """Meta-test. Un escáner que se desincroniza devuelve cero y parece
+        verde — ya pasó con los literales de expresión regular."""
+        assert _crudos('const x = `<div>${d.motivo}</div>`;')
+        assert not _crudos('const x = `<div>${esc(d.motivo)}</div>`;')
+
+    def test_el_guard_ve_DENTRO_de_las_plantillas_anidadas(self):
+        """La forma exacta del ataque que pasó la primera versión."""
+        crudo = ("const p = `<span>x</span>${f.motivo ? `: «${f.motivo}»` : ''}`;")
+        assert _crudos(crudo), 'un ternario con plantilla adentro lo esconde'
+
+    def test_el_guard_NO_toca_las_URL(self):
+        """Escapar una ruta la corrompe. Solo se mira lo que produce marcado."""
+        assert not _crudos("await get(`/flota/hallazgos/${d.placa}`);")
+
+    def test_el_guard_sobrevive_a_un_literal_de_regex(self):
+        """`reposicion.js`, `tienda.js` y `traslados.js` reportaron cero por
+        esto: el escáner leía `/'/g` como el inicio de una cadena."""
+        fuente = ("const a = s.replace(/'/g, \"x\");\n"
+                  "const b = `<div>${d.nombre}</div>`;")
+        assert _crudos(fuente), 'el escáner se desincronizó con el regex'

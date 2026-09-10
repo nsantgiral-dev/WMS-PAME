@@ -99,7 +99,12 @@ class TestReanudacion:
     def test_el_panel_ofrece_reanudar(self):
         js = _src('app/static/pwa/kardex.js')
         assert 'reanudar_desde' in js
-        assert 'kardexDescargar(r.reanudar_desde)' in js.replace('${', '').replace('}', '')
+        # `esc(x)` se normaliza a `x`: desde el 2026-09-09 la PWA escapa el
+        # dato antes de pintarlo, y este detector afirma QUÉ CAMPO viaja, no
+        # cómo se escribe. Sin esto, envolver un campo rompe un test que no
+        # tiene nada que ver con lo que se cambió.
+        _sin_esc = lambda s: re.sub(r'esc\(([^()]*)\)', r'\1', s)
+        assert 'kardexDescargar(r.reanudar_desde)' in _sin_esc(js).replace('${', '').replace('}', '')
 
 
 class TestAvisoOperativo:

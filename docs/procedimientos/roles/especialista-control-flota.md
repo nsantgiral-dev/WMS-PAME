@@ -29,7 +29,10 @@ va a negar con 403 enseña a ignorar los errores.
 | Registrar **documentos** (SOAT, RTM, póliza, tarjeta) | |
 | Ver todos los turnos, custodias y fotos | |
 | Ver el tablero: hallazgos, cierres forzados, **vehículos fuera de sede** | |
-| Registrar lecturas de odómetro | |
+| Registrar lecturas de odómetro, y verificar las dudosas | |
+| **Registrar** un gasto y la factura de una reparación | Sos el dueño del registro: consignar lo que ya pasó es tuyo |
+| **Registrar** qué se hizo en una visita al taller | La orden la abre gestión; lo que se hizo adentro lo registrás vos |
+| Reportar un daño | Reportar es de todos. El desenlace no |
 
 ---
 
@@ -42,6 +45,31 @@ va a negar con 403 enseña a ignorar los errores.
 > sobre liquidación, traslados y configuración de Siesa — y el documento diría
 > una cosa mientras el sistema permite otra. Ese desfase es lo que vuelve
 > decorativo un procedimiento.
+
+### La frontera exacta: registrar sí, decidir no
+
+| No podés | Quién lo hace |
+|---|---|
+| Abrir una orden de trabajo (mandar el camión al taller) | Gestión |
+| Cerrar o anular una orden de trabajo | Gestión |
+| Cerrar, descartar o aplazar un daño | Gestión |
+
+Los tres comprometen plata o cierran un ciclo. Los tres se piden **escalando**,
+que es literalmente lo que tu ficha dice que hacés: *no ordenás, señalás plazos
+vencidos y escalás*. En la pantalla no vas a ver esos botones — no por adorno:
+dejarte a la vista un gesto que el sistema te va a negar con 403 **enseña a
+ignorar los errores**, que es la misma razón por la que se te esconden las otras
+pestañas.
+
+> **Por qué el desenlace del daño tampoco es tuyo, aunque sea registro.**
+> «Días de hallazgo abierto» y «hallazgos vencidos» son **dos de las cinco
+> señales con las que se mide si estás haciendo bien este trabajo** (más abajo).
+> La regla 11 del módulo pregunta cómo maximiza una métrica quien no quiere
+> hacer el trabajo; con el botón «Reparado» en la mano, la respuesta es de un
+> clic y el registro queda impecable. **Quien es medido por un contador no puede
+> tener el botón que lo baja.** No es desconfianza en vos: es que un indicador
+> que su propio responsable puede cerrar no mide nada, y el que pierde es el que
+> lo persigue.
 
 **Tu autoridad no viene de aprobar. Viene de que el sistema calcula los plazos
 por regla** y vos los hacés visibles. Un hallazgo bloqueante vence el mismo día,
@@ -110,13 +138,24 @@ Es un hallazgo bloqueante: mismo día. No es negociable con el sistema.
 
 ## Cómo se sabe que lo estás haciendo bien
 
-| Señal | Qué dice |
-|---|---|
-| Fichas técnicas cargadas / vehículos activos | Debería llegar a 100% |
-| Turnos completos (13 fotos) / turnos abiertos | |
-| **Cierres forzados por semana** | Si crece, el problema no es el sistema |
-| Documentos vencidos sin gestionar | |
-| Días promedio de hallazgo abierto | |
+| Señal | Qué dice | Dónde |
+|---|---|---|
+| Fichas técnicas completas `health:fichas_completas` | Debería llegar a 100%. Una ficha creada con todo en `sin_dato` es una fila, no un dato | Flota → Analítica → *Lo que la ficha no dice* |
+| Custodias sin las fotos completas `health:custodias_sin_foto_completa` | Sin fotos comparables, un golpe nuevo no se le puede atribuir a nadie — ni al conductor ni al turno anterior | Flota → Analítica → *Custodia* |
+| **Cierres forzados por semana** `health:custodias_cerradas_forzadas` | Si crece, el problema no es el sistema: es que nadie está cerrando turno | Flota → Analítica → *Custodia* |
+| Documentos vencidos `health:documentos_vencidos` | El vehículo no debería salir. Aparte van los que vencen en 30 días y los que nadie cargó — se corrigen distinto | Flota → Analítica → *Papeles* |
+| Días de hallazgo abierto `health:dias_hallazgo_abierto` | Mide **riesgo real, no gestión**: el reloj para cuando el vehículo vuelve reparado, no al aprobar la orden. **No se compara entre zonas** — los tiempos de repuesto de Neiva, Pitalito y Florencia son distintos, y un promedio comparado mediría geografía | Flota → Analítica → *Días de hallazgo abierto* |
+
+> Los cinco salen **despromediados**: primero la lista de casos con placa,
+> después el agregado con su `n`. Con seis vehículos, un promedio no dice a qué
+> camión llamar — y es lo único que hace falta saber para hacer algo.
+
+### Cada cuánto
+
+**Una vez por semana, unos 30 minutos.** El tablero está armado para eso: los
+paneles que necesitan trabajo van arriba, y el primero —la calidad del
+kilómetro— es el único cuyo tablero es a la vez el trabajo. Mientras esté en
+rojo, el costo por kilómetro y la vida de llanta salen sin dato por diseño.
 
 ---
 
@@ -142,4 +181,13 @@ forzados durante un mes** — que significa que la operación adoptó el
 procedimiento, no que el sistema lo obligó.
 
 ---
-*Última revisión: 2026-08-04 · Verificado contra `flota/api/_permisos.py`*
+*Última revisión: 2026-09-09 · Verificado contra `flota/api/_permisos.py` y
+contra la matriz rol × endpoint, que la ejerce por HTTP
+(`tests/flota/test_matriz_roles_endpoints.py`).*
+
+> La revisión del 2026-08-04 decía «verificado» y lo estaba: `MAESTROS_FLOTA`
+> gateaba entonces dos endpoints —ficha y documentos—. Taller (2026-09-01) y
+> gastos (2026-09-02) colgaron de la misma tupla sin que nadie se preguntara por
+> este borde, y durante ocho días este documento afirmó que el código imponía
+> algo que el código permitía. **Verificar contra el nombre de una tupla no es
+> verificar: hay que verificar contra lo que la tupla gatea hoy.**

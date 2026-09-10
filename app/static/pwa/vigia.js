@@ -58,9 +58,9 @@ function _vigiaRenderPanel(el, data, salud) {
       <div style="font-weight:700;color:var(--red);font-size:13px;margin-bottom:6px;">G0 — Datos desactualizados</div>`;
     for (const c of (salud.conectores || [])) {
       if (!c.ok) {
-        const latencia = c.latencia_horas != null ? `${c.latencia_horas}h` : `${c.latencia_dias}d`;
+        const latencia = c.latencia_horas != null ? `${esc(c.latencia_horas)}h` : `${esc(c.latencia_dias)}d`;
         html += `<div style="font-size:12px;color:var(--tx);margin-left:8px;">
-          <span style="color:var(--red);">●</span> ${c.nombre}: ultima sync hace ${latencia}
+          <span style="color:var(--red);">●</span> ${esc(c.nombre)}: ultima sync hace ${latencia}
         </div>`;
       }
     }
@@ -76,7 +76,7 @@ function _vigiaRenderPanel(el, data, salud) {
   html += _vigiaBadgeResumen(nAlarmas, 'ALARMA', 'var(--red)');
   html += _vigiaBadgeResumen(nAvisos, 'AVISO', 'var(--yellow)');
   html += `<div style="flex:1;text-align:right;color:var(--tx3);font-size:12px;align-self:center;">
-    ${total_series} series | ${coKeys.length} C.O.s
+    ${total_series} series | ${esc(coKeys.length)} C.O.s
   </div>`;
   html += '</div>';
 
@@ -92,12 +92,12 @@ function _vigiaRenderPanel(el, data, salud) {
       const dir = a.tipo === 'BAJA' ? '↓' : '↑';
       html += `<div style="background:var(--bg-s);border:${border};border-radius:8px;padding:10px 14px;display:flex;justify-content:space-between;align-items:center;">
         <div>
-          <span style="color:${color};font-weight:700;font-size:13px;">${a.severidad} ${dir}</span>
-          <span style="color:var(--tx);font-size:13px;margin-left:8px;">${a.serie}</span>
-          <span style="color:var(--tx3);font-size:11px;margin-left:8px;">${a.semana}</span>
+          <span style="color:${color};font-weight:700;font-size:13px;">${esc(a.severidad)} ${dir}</span>
+          <span style="color:var(--tx);font-size:13px;margin-left:8px;">${esc(a.serie)}</span>
+          <span style="color:var(--tx3);font-size:11px;margin-left:8px;">${esc(a.semana)}</span>
           <span style="color:var(--tx3);font-size:11px;margin-left:4px;">S=${a.s_valor.toFixed(1)}</span>
         </div>
-        <button onclick="vigiaAbrirCerrar(${a.id}, '${a.severidad}')"
+        <button onclick="vigiaAbrirCerrar(${esc(a.id)}, '${esc(a.severidad)}')"
           style="padding:6px 14px;background:${color};border:none;border-radius:6px;color:#fff;font-size:11px;font-weight:700;cursor:pointer;">
           Cerrar
         </button>
@@ -124,9 +124,9 @@ function _vigiaRenderPanel(el, data, salud) {
             html += `<div style="display:flex;align-items:center;gap:8px;padding:8px;margin:2px 0;border-radius:6px;
               background:var(--bg);border:1px dashed var(--brd);opacity:0.7;">
               <span style="color:var(--tx3);font-size:16px;">○</span>
-              <span style="font-size:12px;">${_VIGIA_TIPO_ICON[tipo]}</span>
+              <span style="font-size:12px;">${esc(_VIGIA_TIPO_ICON[tipo])}</span>
               <div style="flex:1;">
-                <div style="font-size:12px;font-weight:600;color:var(--tx3);">${_VIGIA_TIPO_LABEL[tipo]}</div>
+                <div style="font-size:12px;font-weight:600;color:var(--tx3);">${esc(_VIGIA_TIPO_LABEL[tipo])}</div>
                 <div style="font-size:10px;color:var(--yellow);">Pendiente de conector Generic Transfer (Nelly)</div>
               </div>
             </div>`;
@@ -138,18 +138,18 @@ function _vigiaRenderPanel(el, data, salud) {
         const dotColor = hasAlarma ? 'var(--red)' : (hasAviso ? 'var(--yellow)' : 'var(--green)');
         const isActive = _VIGIA_SERIE_ACTIVA === s.serie;
 
-        html += `<div onclick="vigiaSeleccionarSerie('${s.serie}')"
+        html += `<div onclick="vigiaSeleccionarSerie('${esc(s.serie)}')"
           style="display:flex;align-items:center;gap:8px;padding:8px;margin:2px 0;border-radius:6px;cursor:pointer;
             background:${isActive ? 'var(--pm)22' : 'transparent'};border:${isActive ? '1px solid var(--pm)' : '1px solid transparent'};">
           <span style="color:${dotColor};font-size:16px;">●</span>
-          <span style="font-size:12px;">${_VIGIA_TIPO_ICON[tipo] || ''}</span>
+          <span style="font-size:12px;">${esc(_VIGIA_TIPO_ICON[tipo] || '')}</span>
           <div style="flex:1;">
             <div style="font-size:12px;font-weight:600;color:var(--tx);">${_VIGIA_TIPO_LABEL[tipo] || tipo}</div>
-            <div style="font-size:10px;color:var(--tx3);">${_VIGIA_TIPO_DESC[tipo] || ''}</div>
+            <div style="font-size:10px;color:var(--tx3);">${esc(_VIGIA_TIPO_DESC[tipo] || '')}</div>
           </div>
           <div style="text-align:right;">
-            <div style="font-size:11px;color:var(--tx3);">${s.semanas} sem</div>
-            <div style="font-size:10px;color:var(--tx3);">${s.desde || '?'} a ${s.hasta || '?'}</div>
+            <div style="font-size:11px;color:var(--tx3);">${esc(s.semanas)} sem</div>
+            <div style="font-size:10px;color:var(--tx3);">${esc(s.desde || '?')} a ${esc(s.hasta || '?')}</div>
           </div>
         </div>`;
       }
@@ -267,14 +267,14 @@ async function vigiaSeleccionarSerie(nombre) {
 
     if (r.error) {
       const stats = document.getElementById('vigia-chart-stats');
-      if (stats) stats.innerHTML = `<span style="color:var(--red);">${r.error}</span>`;
+      if (stats) stats.innerHTML = `<span style="color:var(--red);">${esc(r.error)}</span>`;
       return;
     }
 
     _vigiaGraficar(r);
   } catch (e) {
     const stats = document.getElementById('vigia-chart-stats');
-    if (stats) stats.innerHTML = `<span style="color:var(--red);">Error: ${e.message}</span>`;
+    if (stats) stats.innerHTML = `<span style="color:var(--red);">Error: ${esc(e.message)}</span>`;
   }
 }
 
@@ -393,11 +393,11 @@ function _vigiaGraficar(resultado) {
     stats.innerHTML = `
       <span>mu=${Number(resultado.mu_ref).toLocaleString('es-CO')} |
       sigma=${Number(resultado.sigma_ref).toLocaleString('es-CO')} |
-      k=${resultado.k} |
-      h_aviso=${resultado.h_aviso} |
-      h_alarma=${resultado.h_alarma} |
-      ${resultado.semanas} semanas |
-      ${alarmas.length} puntos con alarma</span>
+      k=${esc(resultado.k)} |
+      h_aviso=${esc(resultado.h_aviso)} |
+      h_alarma=${esc(resultado.h_alarma)} |
+      ${esc(resultado.semanas)} semanas |
+      ${esc(alarmas.length)} puntos con alarma</span>
       ${ultimaSemana ? `<br>Ultima semana: S+=${ultimaSemana.s_plus.toFixed(2)}, S-=${ultimaSemana.s_minus.toFixed(2)}` : ''}
     `;
   }
@@ -428,12 +428,12 @@ async function vigiaAbrirCerrar(alarmaId, severidad) {
       const usuarios = r.usuarios || r || [];
       for (const u of usuarios) {
         if (['admin', 'gerente', 'jefe_almacen', 'supervisor'].includes(u.rol)) {
-          sel.innerHTML += `<option value="${u.id}">${u.nombre} (${u.rol})</option>`;
+          sel.innerHTML += `<option value="${esc(u.id)}">${esc(u.nombre)} (${esc(u.rol)})</option>`;
         }
       }
     } catch (e) {
       // Si falla, el usuario actual queda como default
-      sel.innerHTML += `<option value="${OPERARIO.id}" selected>${OPERARIO.nombre}</option>`;
+      sel.innerHTML += `<option value="${esc(OPERARIO.id)}" selected>${esc(OPERARIO.nombre)}</option>`;
     }
   }
 }
@@ -548,24 +548,24 @@ async function vigiaCompararIngesta() {
 
   try {
     const r = await post(`/api/vigia/ingesta/facturacion?comparar=true`, { semana });
-    if (r.error) { caja.innerHTML = `<p style="color:var(--red)">${r.error}</p>`; return; }
+    if (r.error) { caja.innerHTML = `<p style="color:var(--red)">${esc(r.error)}</p>`; return; }
 
     const filas = (r.filas || []).map(f => {
       const color = f.estado === 'OK' ? 'var(--green)'
                   : f.estado === 'DIFIERE' ? 'var(--red)' : 'var(--tx3)';
       return `<li style="color:${color}">
         <b>${f.serie || f.co}</b> — vivo ${f.vivo ?? '—'} · histórico ${f.historico ?? '—'}
-        ${f.desvio_pct != null ? ` · ${f.desvio_pct > 0 ? '+' : ''}${f.desvio_pct}%` : ''}
-        <span style="color:var(--tx3)">${f.estado}</span></li>`;
+        ${f.desvio_pct != null ? ` · ${f.desvio_pct > 0 ? '+' : ''}${esc(f.desvio_pct)}%` : ''}
+        <span style="color:var(--tx3)">${esc(f.estado)}</span></li>`;
     }).join('');
 
     caja.innerHTML = `
-      <div class="tabla-titulo">Ingesta vs línea base — semana ${r.semana}</div>
+      <div class="tabla-titulo">Ingesta vs línea base — semana ${esc(r.semana)}</div>
       <p style="font-size:13px;color:${r.apto_para_encender ? 'var(--green)' : 'var(--red)'}">
         <b>${r.apto_para_encender
               ? 'Coincide: la ingesta viva reproduce la histórica.'
               : 'NO coincide todavía.'}</b><br>
-        ${r.coinciden} iguales · ${r.difieren} difieren · ${r.sin_linea_base} sin base
+        ${esc(r.coinciden)} iguales · ${esc(r.difieren)} difieren · ${esc(r.sin_linea_base)} sin base
       </p>
       ${r.apto_para_encender ? '' :
         `<p style="font-size:12px;color:var(--yellow)">Encender el cron con series
@@ -574,6 +574,6 @@ async function vigiaCompararIngesta() {
          <code>VIGIA_INGESTA_FACTURACION=true</code>.</p>`}
       <ul style="line-height:1.7;font-size:12.5px">${filas}</ul>`;
   } catch (e) {
-    caja.innerHTML = `<p style="color:var(--red)">${e.message}</p>`;
+    caja.innerHTML = `<p style="color:var(--red)">${esc(e.message)}</p>`;
   }
 }

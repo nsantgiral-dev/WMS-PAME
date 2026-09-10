@@ -47,8 +47,8 @@ function tiendaIniciar() {
   if (sel) {
     const opciones = _BODEGAS_ORIGEN.filter(b => b.id !== miTienda);
     sel.innerHTML = opciones.map(b =>
-      `<option value="${b.id}" data-nombre="${b.nombre}"
-        style="background:#0d2137;color:#fff;">${b.nombre} (${b.id})</option>`
+      `<option value="${esc(b.id)}" data-nombre="${esc(b.nombre)}"
+        style="background:#0d2137;color:#fff;">${esc(b.nombre)} (${esc(b.id)})</option>`
     ).join('');
     // Pre-seleccionar NB1 como origen por defecto
     const porDefecto = opciones.find(b => b.id === 'NB1') || opciones[0];
@@ -111,14 +111,14 @@ async function tiendaCargarSolicitudes() {
       return `
       <div style="background:#111;border:1px solid #222;border-radius:12px;padding:14px;margin-bottom:10px;">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
-          <div style="font-size:13px;font-weight:700;">${s.codigo}</div>
-          <span style="background:${col};color:#fff;font-size:10px;font-weight:700;padding:3px 8px;border-radius:8px;">${s.estado}</span>
+          <div style="font-size:13px;font-weight:700;">${esc(s.codigo)}</div>
+          <span style="background:${col};color:#fff;font-size:10px;font-weight:700;padding:3px 8px;border-radius:8px;">${esc(s.estado)}</span>
         </div>
-        <div style="font-size:11px;color:#666;">${s.total_items} ítem${s.total_items !== 1 ? 's' : ''} · ${s.fecha_creacion ? new Date(s.fecha_creacion).toLocaleDateString('es-CO') : ''}</div>
-        ${s.motivo_rechazo ? `<div style="font-size:11px;color:#f87171;margin-top:4px;">Motivo: ${s.motivo_rechazo}</div>` : ''}
+        <div style="font-size:11px;color:#666;">${esc(s.total_items)} ítem${s.total_items !== 1 ? 's' : ''} · ${s.fecha_creacion ? new Date(s.fecha_creacion).toLocaleDateString('es-CO') : ''}</div>
+        ${s.motivo_rechazo ? `<div style="font-size:11px;color:#f87171;margin-top:4px;">Motivo: ${esc(s.motivo_rechazo)}</div>` : ''}
         ${s.estado === 'BORRADOR' ? `
         <div style="display:flex;gap:8px;margin-top:10px;">
-          <button onclick="tiendaEnviarSolicitudId(${s.id})"
+          <button onclick="tiendaEnviarSolicitudId(${esc(s.id)})"
             style="flex:1;padding:10px;background:#1d4ed8;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">
             Enviar al almacén
           </button>
@@ -247,7 +247,7 @@ function tiendaRenderStock() {
         style="padding:7px 14px;background:#222;color:${_TIENDA_PAGINA===totalPags?'#444':'#fff'};border:none;border-radius:8px;font-size:13px;cursor:pointer;">Sig →</button>
     </div>
     <div style="text-align:center;font-size:11px;color:#555;margin-bottom:10px;">
-      ${filtrado.length} productos · página ${_TIENDA_PAGINA} de ${totalPags}
+      ${esc(filtrado.length)} productos · página ${_TIENDA_PAGINA} de ${totalPags}
     </div>` : '';
 
   el.innerHTML = navHtml + pagina.map(item => {
@@ -257,14 +257,14 @@ function tiendaRenderStock() {
     return `
     <div style="background:#111;border:1px solid ${enCarrito?'#4ade80':'#222'};border-radius:10px;padding:12px;margin-bottom:8px;display:flex;align-items:center;gap:12px;">
       <div style="flex:1;min-width:0;">
-        <div style="font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${item.nombre || '—'}</div>
-        <div style="font-size:11px;color:#666;">${item.codigo_siesa || ''} · Disponible: <span style="color:#4ade80;font-weight:700;">${item.disponible}</span></div>
+        <div style="font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(item.nombre || '—')}</div>
+        <div style="font-size:11px;color:#666;">${esc(item.codigo_siesa || '')} · Disponible: <span style="color:#4ade80;font-weight:700;">${esc(item.disponible)}</span></div>
       </div>
       <div style="display:flex;align-items:center;gap:6px;flex-shrink:0;">
-        <input type="number" min="1" max="${item.disponible}" value="${enCarrito?.cantidad || 1}"
+        <input type="number" min="1" max="${esc(item.disponible)}" value="${enCarrito?.cantidad || 1}"
           id="${qid}"
           style="width:56px;padding:7px;background:#000;border:1px solid #333;border-radius:6px;color:#fff;font-size:13px;text-align:center;">
-        <button onclick="tiendaAgregarCarrito('${item.codigo_siesa}','${nombreEsc}',${item.disponible},${item.producto_id||'null'})"
+        <button onclick="tiendaAgregarCarrito('${esc(item.codigo_siesa)}','${nombreEsc}',${esc(item.disponible)},${esc(item.producto_id||'null')})"
           style="padding:8px 12px;background:${enCarrito?'#4ade80':'#fff'};color:#000;border:none;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;">
           ${enCarrito ? '✓' : '+'}
         </button>
@@ -304,9 +304,9 @@ function tiendaActualizarCarrito() {
   header.style.display = 'block';
   itemsEl.innerHTML = _TIENDA_CARRITO.map(c =>
     `<div style="display:flex;justify-content:space-between;padding:3px 0;">
-      <span>${c.nombre}</span>
-      <span style="color:#4ade80;font-weight:700;">${c.cantidad} und
-        <button onclick="tiendaQuitarCarrito('${c.codigo_siesa}')" style="background:none;border:none;color:#ef4444;cursor:pointer;font-size:11px;margin-left:4px;">✕</button>
+      <span>${esc(c.nombre)}</span>
+      <span style="color:#4ade80;font-weight:700;">${esc(c.cantidad)} und
+        <button onclick="tiendaQuitarCarrito('${esc(c.codigo_siesa)}')" style="background:none;border:none;color:#ef4444;cursor:pointer;font-size:11px;margin-left:4px;">✕</button>
       </span>
     </div>`
   ).join('');
@@ -414,17 +414,17 @@ async function tiendaCargarRecibir() {
       return `
       <div style="background:#0a1a0a;border:1px solid #166534;border-radius:12px;padding:14px;margin-bottom:10px;">
         <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px;">
-          <div style="font-size:14px;font-weight:700;">${s.codigo}</div>
-          <div style="font-size:11px;color:#4ade80;font-weight:600;">${s.bodega_origen_siesa || ''}</div>
+          <div style="font-size:14px;font-weight:700;">${esc(s.codigo)}</div>
+          <div style="font-size:11px;color:#4ade80;font-weight:600;">${esc(s.bodega_origen_siesa || '')}</div>
         </div>
-        <div style="font-size:12px;color:#4ade80;margin-bottom:8px;">📦 ${s.total_items} ítem${s.total_items !== 1 ? 's' : ''} · ${totalEsperado} und esperadas</div>
+        <div style="font-size:12px;color:#4ade80;margin-bottom:8px;">📦 ${esc(s.total_items)} ítem${s.total_items !== 1 ? 's' : ''} · ${totalEsperado} und esperadas</div>
         ${(s.items || []).slice(0, 3).map(i => `
           <div style="font-size:11px;color:#aaa;padding:2px 0;">
             ${i.producto_nombre || i.producto_codigo} · ${i.cantidad_enviada || i.cantidad_aprobada || i.cantidad_solicitada} und
           </div>
         `).join('')}
         ${(s.items || []).length > 3 ? `<div style="font-size:11px;color:#555;padding:2px 0;">+ ${s.items.length - 3} más...</div>` : ''}
-        <button onclick="tiendaAbrirPickingTraslado(${s.id})"
+        <button onclick="tiendaAbrirPickingTraslado(${esc(s.id)})"
           style="width:100%;padding:13px;margin-top:12px;background:#1E8395;color:#fff;border:none;border-radius:10px;font-size:15px;font-weight:700;cursor:pointer;">
           📋 Contar productos
         </button>
@@ -485,8 +485,8 @@ function _tiendaRenderPickingTraslado() {
           ← Volver
         </button>
         <div style="min-width:0;">
-          <div style="font-size:16px;font-weight:800;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${s.codigo}</div>
-          <div style="font-size:12px;color:#666;">Desde ${s.bodega_origen_siesa || '—'} → ${s.bodega_destino_siesa || '—'}</div>
+          <div style="font-size:16px;font-weight:800;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(s.codigo)}</div>
+          <div style="font-size:12px;color:#666;">Desde ${esc(s.bodega_origen_siesa || '—')} → ${esc(s.bodega_destino_siesa || '—')}</div>
         </div>
       </div>
 
@@ -531,7 +531,7 @@ function _tiendaRenderItemsPickingTraslado(items) {
     const completo = contado >= esperado;
     const pct = esperado > 0 ? Math.min((contado / esperado) * 100, 100) : 0;
     return `
-      <div id="tienda-item-pick-${i.producto_id}"
+      <div id="tienda-item-pick-${esc(i.producto_id)}"
         style="background:${completo ? '#0d1a0d' : '#111'};border:1px solid ${completo ? '#166534' : '#222'};border-radius:12px;padding:14px;margin-bottom:8px;">
         <div style="display:flex;justify-content:space-between;align-items:center;">
           <div style="min-width:0;flex:1;">
@@ -539,13 +539,13 @@ function _tiendaRenderItemsPickingTraslado(items) {
             <div style="font-size:11px;color:#555;margin-top:2px;">${i.producto_codigo_siesa || i.producto_codigo}</div>
           </div>
           <div style="display:flex;align-items:center;gap:8px;flex-shrink:0;padding-left:8px;">
-            <button onclick="tiendaContarItem(${i.producto_id}, -1)"
+            <button onclick="tiendaContarItem(${esc(i.producto_id)}, -1)"
               style="width:34px;height:34px;background:#222;border:1px solid #333;color:#fff;border-radius:8px;font-size:20px;font-weight:700;cursor:pointer;line-height:1;">−</button>
             <div style="text-align:center;min-width:54px;">
               <div style="font-size:26px;font-weight:900;line-height:1;color:${completo ? '#4ade80' : '#fff'};">${contado}</div>
               <div style="font-size:10px;color:#6b7280;">/ ${esperado}</div>
             </div>
-            <button onclick="tiendaContarItem(${i.producto_id}, 1)"
+            <button onclick="tiendaContarItem(${esc(i.producto_id)}, 1)"
               style="width:34px;height:34px;background:#1E8395;border:none;color:#fff;border-radius:8px;font-size:20px;font-weight:700;cursor:pointer;line-height:1;">+</button>
           </div>
         </div>
@@ -743,8 +743,8 @@ async function tiendaOCCargar() {
       if (wmsEstado === 'CONFIRMADA') {
         return `
           <div style="background:#111;border:1px solid #222;border-radius:12px;padding:14px;margin-bottom:10px;opacity:0.6;">
-            <div style="font-size:16px;font-weight:800;">OC: ${oc.numero_oc}</div>
-            <div style="font-size:12px;color:#888;margin-bottom:8px;">${oc.proveedor || 'Sin proveedor'} · ${oc.items.length} productos · ${totalUds} uds</div>
+            <div style="font-size:16px;font-weight:800;">OC: ${esc(oc.numero_oc)}</div>
+            <div style="font-size:12px;color:#888;margin-bottom:8px;">${esc(oc.proveedor || 'Sin proveedor')} · ${esc(oc.items.length)} productos · ${totalUds} uds</div>
             <div style="padding:10px;background:#0d1a0d;border-radius:8px;font-size:14px;font-weight:700;color:#4ade80;text-align:center;">
               Recepcionada en WMS
             </div>
@@ -754,11 +754,11 @@ async function tiendaOCCargar() {
       const enProceso = wmsEstado === 'EN_PROCESO' && oc.recepcion_wms_id;
       const btnLabel = enProceso ? 'Continuar recepción' : 'Iniciar recepción';
       const btnBg = enProceso ? '#1d4ed8' : '#1E8395';
-      const btnClick = enProceso ? `tiendaOCContinuar(${oc.recepcion_wms_id})` : `tiendaOCIniciar(${i})`;
+      const btnClick = enProceso ? `tiendaOCContinuar(${esc(oc.recepcion_wms_id)})` : `tiendaOCIniciar(${i})`;
       return `
         <div style="background:#111;border:1px solid #222;border-radius:12px;padding:14px;margin-bottom:10px;">
-          <div style="font-size:16px;font-weight:800;">OC: ${oc.numero_oc}</div>
-          <div style="font-size:12px;color:#888;margin-bottom:4px;">${oc.proveedor || 'Sin proveedor'} · ${oc.items.length} productos · ${totalUds} uds</div>
+          <div style="font-size:16px;font-weight:800;">OC: ${esc(oc.numero_oc)}</div>
+          <div style="font-size:12px;color:#888;margin-bottom:4px;">${esc(oc.proveedor || 'Sin proveedor')} · ${esc(oc.items.length)} productos · ${totalUds} uds</div>
           ${sinProd ? `<div style="font-size:11px;color:#f59e0b;margin-bottom:4px;">${sinProd} producto(s) sin registrar en WMS</div>` : ''}
           <button onclick="${btnClick}"
             style="width:100%;padding:14px;margin-top:8px;background:${btnBg};color:#fff;border:none;border-radius:10px;font-size:15px;font-weight:700;cursor:pointer;">
@@ -837,8 +837,8 @@ function _tiendaOCRenderScan() {
           ← Volver
         </button>
         <div style="min-width:0;">
-          <div style="font-size:16px;font-weight:800;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">OC: ${rec.numero_oc_siesa}</div>
-          <div style="font-size:12px;color:#666;">${rec.proveedor_nombre || ''}</div>
+          <div style="font-size:16px;font-weight:800;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">OC: ${esc(rec.numero_oc_siesa)}</div>
+          <div style="font-size:12px;color:#666;">${esc(rec.proveedor_nombre || '')}</div>
         </div>
       </div>
 
@@ -908,10 +908,10 @@ function _tiendaOCRenderItems(items) {
                 <span style="background:#4c1d95;color:#a78bfa;font-size:10px;font-weight:700;padding:2px 7px;border-radius:20px;">🎁 BONO</span>
                 <div style="font-size:14px;font-weight:600;color:#a78bfa;">${it.producto_nombre || it.producto_codigo}</div>
               </div>
-              <div style="font-size:11px;color:#555;margin-top:2px;">${it.producto_codigo}</div>
+              <div style="font-size:11px;color:#555;margin-top:2px;">${esc(it.producto_codigo)}</div>
             </div>
             <div style="text-align:right;flex-shrink:0;padding-left:8px;">
-              <div style="font-size:28px;font-weight:900;color:#a78bfa;">${it.cantidad_recibida}</div>
+              <div style="font-size:28px;font-weight:900;color:#a78bfa;">${esc(it.cantidad_recibida)}</div>
               <div style="font-size:10px;color:#6b7280;">und recibidas</div>
             </div>
           </div>
@@ -928,11 +928,11 @@ function _tiendaOCRenderItems(items) {
     const contadorDerecha = modoEmpaque ? `
       <div style="text-align:right;flex-shrink:0;padding-left:8px;">
         <div style="font-size:42px;font-weight:900;line-height:1;color:${completo ? '#4ade80' : '#fff'};">${empaques}</div>
-        <div style="font-size:13px;font-weight:700;color:${completo ? '#4ade80' : '#facc15'};">${it.cantidad_recibida}/${it.cantidad_ordenada} und</div>
+        <div style="font-size:13px;font-weight:700;color:${completo ? '#4ade80' : '#facc15'};">${esc(it.cantidad_recibida)}/${esc(it.cantidad_ordenada)} und</div>
         <div style="font-size:10px;color:#6b7280;">${unidadEmpaque} · ×${factor}</div>
       </div>` : `
       <div style="text-align:right;flex-shrink:0;padding-left:8px;">
-        <div style="font-size:28px;font-weight:900;color:${completo ? '#4ade80' : '#fff'};">${it.cantidad_recibida}/${it.cantidad_ordenada}</div>
+        <div style="font-size:28px;font-weight:900;color:${completo ? '#4ade80' : '#fff'};">${esc(it.cantidad_recibida)}/${esc(it.cantidad_ordenada)}</div>
       </div>`;
 
     return `
@@ -940,7 +940,7 @@ function _tiendaOCRenderItems(items) {
         <div style="display:flex;justify-content:space-between;align-items:center;">
           <div style="min-width:0;flex:1;">
             <div style="font-size:14px;font-weight:600;color:${completo ? '#4ade80' : '#fff'};">${it.producto_nombre || it.producto_codigo}</div>
-            <div style="font-size:11px;color:#555;">${it.producto_codigo}</div>
+            <div style="font-size:11px;color:#555;">${esc(it.producto_codigo)}</div>
           </div>
           ${contadorDerecha}
         </div>

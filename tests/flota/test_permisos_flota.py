@@ -174,14 +174,52 @@ class TestLaOperacionDelTurnoSigueAbiertaAlConductor:
     funcionar y nadie lo nota hasta las 5 a.m.
     """
 
-    @pytest.mark.parametrize('ruta', [
-        '/flota/custodia/activa/PRM100',
-        '/flota/custodia/fuera-de-sede',
-        '/flota/custodia/cierres-forzados',
-    ])
+    @pytest.mark.parametrize('ruta', ['/flota/custodia/activa/PRM100'])
     def test_el_conductor_lee_lo_de_su_turno(self, app, db, client, vehiculo, ruta):
+        """**Lo de SU turno**, y la lista se acortó el 2026-09-03.
+
+        Hasta ese día este test parametrizaba además `/flota/custodia/fuera-de-sede`
+        y `/flota/custodia/cierres-forzados`, que son de la FLOTA ENTERA. El
+        nombre del test decía «lo de su turno» y dos de sus tres rutas no lo
+        eran: el test afirmaba con su nombre una cosa y medía otra.
+
+        Que un conductor pudiera leerlas no lo vio ningún trinquete, porque
+        todos miden **presencia** de `exige(...)`, o que el rol declarado entre
+        y el no declarado no — ninguno pregunta si el rol declarado DEBERÍA
+        estar en la tupla. Lo encontró un detector nuevo que cruza los roles que
+        el endpoint autoriza contra los roles que pueden llegar al botón.
+        """
         t = _token(app, db, 'conductor')
         assert client.get(ruta, headers=_auth(t)).status_code != 403
+
+    @pytest.mark.parametrize('ruta', [
+        '/flota/custodia/fuera-de-sede',
+        '/flota/custodia/cierres-forzados',
+        '/flota/avisos',
+    ])
+    def test_el_conductor_NO_lee_la_flota_entera(self, app, db, client,
+                                                 vehiculo, ruta):
+        """La otra mitad, que faltaba: el permiso no puede ser más ancho que el
+        gesto que la pantalla ofrece.
+
+        `cierres-forzados` es el caso que lo vuelve concreto — el propio módulo
+        lo describe como *«mide conducta, no fallas»*. Un conductor no tiene por
+        qué leer el registro de conducta de sus compañeros, y ninguna pantalla
+        se lo ofrecía: la API contestaba igual.
+        """
+        t = _token(app, db, 'conductor')
+        r = client.get(ruta, headers=_auth(t))
+        assert r.status_code == 403, (
+            f'{ruta} le contestó {r.status_code} a un conductor')
+        assert r.get_json()['tu_rol'] == 'conductor'
+
+    def test_pero_control_de_flota_SI_la_lee(self, app, db, client, vehiculo):
+        """Y la dirección contraria: estrechar no puede haber cerrado la puerta
+        de quien sí tiene que ver la flota entera."""
+        t = _token(app, db, 'control_flota')
+        for ruta in ('/flota/custodia/fuera-de-sede',
+                     '/flota/custodia/cierres-forzados', '/flota/avisos'):
+            assert client.get(ruta, headers=_auth(t)).status_code != 403, ruta
 
     def test_el_conductor_registra_odometro(self, app, db, client, vehiculo):
         t = _token(app, db, 'conductor')
@@ -255,3 +293,198 @@ class TestElGuardDeSecretoNoEsUnaPuertaAbierta:
                            else getattr(f, 'id', ''))
         assert 'route' in nombres
         assert not {'exige', 'exige_secreto'} & set(nombres)
+
+
+def _roles_de(vf):
+    """La tupla que `@exige(...)` recibió, del closure del decorador.
+
+    Del objeto vivo y no del AST: importa con qué tupla quedó montada la ruta,
+    no qué nombre se escribió en el archivo.
+    """
+    fn = vf
+    for _ in range(12):
+        celdas = getattr(fn, '__closure__', None) or ()
+        nombres = getattr(getattr(fn, '__code__', None), 'co_freevars', ())
+        d = {}
+        for n, c in zip(nombres, celdas):
+            try:
+                d[n] = c.cell_contents
+            except ValueError:      # celda vacía — recursión aún sin cerrar
+                pass
+        if 'roles' in d:
+            return tuple(d['roles'])
+        fn = getattr(fn, '__wrapped__', None)
+        if fn is None:
+            return None
+    return None
+
+
+class TestElPermisoNoPuedeSerMasAnchoQueElGesto:
+    """TRINQUETE — la tercera forma, y ningún guard anterior la veía.
+
+    Los que ya existen miden:
+
+      · `test_permisos_flota` — **presencia** de `exige(...)`. Proxy: afirma que
+        hay decorador, no que la tupla sea la correcta.
+      · `test_matriz_roles_endpoints` — que el rol declarado entre y el no
+        declarado reciba 403. Verifica que el decorador FUNCIONE, no que su
+        tupla esté BIEN.
+
+    Ninguno pregunta **si el rol declarado debería estar ahí**. Por eso, hasta
+    el 2026-09-03, cualquier conductor podía consultar los avisos de toda la
+    flota, dónde duerme cada camión, y `cierres-forzados` — que el propio módulo
+    describe como *«mide conducta, no fallas»*. Ninguna pantalla se lo ofrecía;
+    la API contestaba igual.
+
+    La regla que se impone acá: **si un rol puede llamar a un endpoint, alguna
+    pantalla suya tiene que ofrecerle ese gesto.** Un permiso que ninguna vista
+    ejerce es superficie que nadie usa y alguien puede.
+    """
+
+    #: Endpoints que un rol autoriza sin que su pantalla los ofrezca, con el
+    #: motivo. **Vacía a propósito**: cada entrada que se agregue es una
+    #: decisión que alguien tiene que poder defender por escrito.
+    _ANCHOS_ACEPTADOS: dict = {}
+
+    def _funciones_del_pwa(self):
+        import re
+
+        import pathlib as _pl
+        js = (_pl.Path(__file__).resolve().parents[2]
+              / 'app' / 'static' / 'pwa' / 'flota.js').read_text(encoding='utf-8')
+        funcs = {}
+        for m in re.finditer(r'^(?:async )?function (\w+)', js, re.M):
+            prof, i = 0, js.find('{', m.end())
+            while i < len(js):
+                if js[i] == '{':
+                    prof += 1
+                elif js[i] == '}':
+                    prof -= 1
+                    if prof == 0:
+                        break
+                i += 1
+            funcs[m.group(1)] = js[m.start():i + 1]
+        return js, funcs
+
+    def _alcanzable_por_el_conductor(self, fn, funcs, visto=None):
+        """Colgada del bloque `flotaCond*`, directa o transitivamente."""
+        import re
+
+        visto = visto or set()
+        if fn in visto:
+            return False
+        visto.add(fn)
+        if fn.startswith('flotaCond'):
+            return True
+        for otra, cuerpo in funcs.items():
+            if otra != fn and re.search(rf'\b{re.escape(fn)}\s*\(', cuerpo):
+                if self._alcanzable_por_el_conductor(otra, funcs, visto):
+                    return True
+        return False
+
+    def test_ningun_endpoint_autoriza_al_conductor_sin_ofrecerselo(self, app):
+        import re
+
+        from app.routes._auth_helpers import Roles
+
+        js, funcs = self._funciones_del_pwa()
+        anchos = []
+        for r in app.url_map.iter_rules():
+            ruta = str(r.rule)
+            if not ruta.startswith('/flota') or ruta in self._ANCHOS_ACEPTADOS:
+                continue
+            roles = _roles_de(app.view_functions[r.endpoint])
+            if not roles or Roles.CONDUCTOR not in roles:
+                continue
+
+            trozo = [s for s in re.split(r'<[^>]+>', ruta)
+                     if s.strip('/')][-1].rstrip('/')
+            # Las URL izadas a constantes de módulo no viven dentro de ninguna
+            # función: buscarlas solo en los cuerpos declara huérfano lo que
+            # está bien cableado. Es el punto ciego que ya costó un falso
+            # positivo — se resuelve la constante a su nombre.
+            nombres = [m.group(1) for m in re.finditer(
+                rf"const (\w+)\s*=\s*'{re.escape(trozo)}'", js)]
+            llamadoras = [f for f, c in funcs.items()
+                          if trozo in c or any(n in c for n in nombres)]
+            if not any(self._alcanzable_por_el_conductor(f, funcs)
+                       for f in llamadoras):
+                anchos.append(ruta)
+
+        assert not anchos, (
+            '\n'.join(f'  · {a}' for a in sorted(anchos))
+            + '\n\nEstos endpoints autorizan al conductor y ninguna pantalla '
+              'suya se los ofrece. Dos salidas, y hay que elegir una: dale el '
+              'botón, o sacale el rol de la tupla. Si hay una razón para dejarlo '
+              'así, va a `_ANCHOS_ACEPTADOS` CON SU MOTIVO — la lista nace vacía '
+              'porque cada entrada es una decisión que alguien tiene que poder '
+              'defender.')
+
+    def test_el_detector_ve_un_permiso_ancho_de_verdad(self, app):
+        """La otra dirección. Un detector que no sabe reconocer la forma
+        devuelve lista vacía sobre un sistema abierto, y eso se lee como «está
+        todo bien» — que es exactamente cómo los otros dos guards no lo vieron.
+        """
+        js, funcs = self._funciones_del_pwa()
+        assert self._alcanzable_por_el_conductor('flotaCondInspeccion', funcs)
+        assert not self._alcanzable_por_el_conductor('flotaAbrirFicha', funcs), (
+            'la ficha se abre desde el panel del encargado; si el detector la '
+            'da por alcanzable desde el conductor, no distingue nada')
+
+
+class TestLaUIYElBackendDicenLoMismo:
+    """La lista de roles que decide está escrita **dos veces**: en Python y en
+    `flota.js`. No hay un `/me` que devuelva permisos, así que la pantalla no
+    tiene de dónde derivarla — y una segunda fuente sería igual de inventada.
+
+    La duplicación se acepta y se vigila. Es el corolario de la regla 0 del WMS
+    («una política, una función») aplicado al caso en que la función no se puede
+    unificar: si no se puede tener una sola copia, hay que tener un test que
+    falle cuando las dos dejen de decir lo mismo.
+
+    Lo que este trinquete NO es: control de acceso. Ese vive en `@exige` y lo
+    ejerce por HTTP la matriz rol × endpoint. Acá solo se compara texto.
+    """
+
+    #: Dónde vive la copia del cliente.
+    _JS = 'app/static/pwa/flota.js'
+
+    def _lista_del_js(self):
+        import pathlib as _p
+        import re as _re
+
+        fuente = _p.Path(self._JS).read_text(encoding='utf-8')
+        m = _re.search(r'const FLOTA_ROLES_DECIDEN = \[([^\]]*)\]', fuente)
+        assert m, ('no existe `FLOTA_ROLES_DECIDEN` en flota.js. Si se renombró, '
+                   'este trinquete dejó de comparar nada — arreglar el nombre '
+                   'acá, no borrar el test.')
+        return tuple(sorted(_re.findall(r"'([a-z_]+)'", m.group(1))))
+
+    def test_la_lista_del_js_es_exactamente_DECIDE_FLOTA(self):
+        from flota.api._permisos import DECIDE_FLOTA
+
+        assert self._lista_del_js() == tuple(sorted(DECIDE_FLOTA)), (
+            'la pantalla y el backend no dicen lo mismo sobre quién decide. '
+            'La que manda es la del backend; la que la gente ve es la otra.')
+
+    def test_control_de_flota_NO_esta_en_ninguna_de_las_dos(self):
+        """La afirmación concreta, escrita aparte del `==`.
+
+        Un `DECIDE_FLOTA` que alguien ensanchara «para destrabar» seguiría
+        pasando el test de arriba mientras las dos copias crecieran juntas.
+        """
+        from app.routes._auth_helpers import Roles
+        from flota.api._permisos import DECIDE_FLOTA
+
+        assert Roles.CONTROL_FLOTA not in DECIDE_FLOTA
+        assert Roles.CONTROL_FLOTA not in self._lista_del_js()
+        assert Roles.CONDUCTOR not in DECIDE_FLOTA
+
+    def test_pero_SIGUE_en_MAESTROS_porque_el_registro_es_suyo(self):
+        """El otro borde. Un recorte que se pasara de largo dejaría al rol sin
+        poder hacer su trabajo, y eso no se nota hasta que alguien lo intenta —
+        el mismo motivo por el que existen las dos direcciones en la matriz."""
+        from app.routes._auth_helpers import Roles
+        from flota.api._permisos import MAESTROS_FLOTA
+
+        assert Roles.CONTROL_FLOTA in MAESTROS_FLOTA

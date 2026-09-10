@@ -92,10 +92,10 @@ function _renderTrasladoCard(s) {
 
   const itemsResumen = (s.items || []).map(i => {
     const aprobado = i.cantidad_aprobada && i.cantidad_aprobada !== i.cantidad_solicitada
-      ? ` <span style="color:#f59e0b;">(aprobado: ${i.cantidad_aprobada})</span>` : '';
+      ? ` <span style="color:#f59e0b;">(aprobado: ${esc(i.cantidad_aprobada)})</span>` : '';
     const enviado = i.cantidad_enviada > 0
-      ? ` <span style="color:#4ade80;">→ enviado: ${i.cantidad_enviada}</span>` : '';
-    return `<div style="font-size:11px;color:#666;">${i.producto_codigo || i.producto_nombre} · ${i.cantidad_solicitada} und${aprobado}${enviado}</div>`;
+      ? ` <span style="color:#4ade80;">→ enviado: ${esc(i.cantidad_enviada)}</span>` : '';
+    return `<div style="font-size:11px;color:#666;">${i.producto_codigo || i.producto_nombre} · ${esc(i.cantidad_solicitada)} und${aprobado}${enviado}</div>`;
   }).join('');
 
   // Barra de progreso picking
@@ -107,7 +107,7 @@ function _renderTrasladoCard(s) {
     pickingInfo = `
       <div style="margin:8px 0 4px;">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
-          <span style="font-size:10px;color:#888;">Picking: ${pp.completadas}/${pp.total} tareas</span>
+          <span style="font-size:10px;color:#888;">Picking: ${esc(pp.completadas)}/${esc(pp.total)} tareas</span>
           <span style="font-size:10px;color:${barColor};font-weight:700;">${pct}%</span>
         </div>
         <div style="height:4px;background:#222;border-radius:4px;overflow:hidden;">
@@ -121,21 +121,21 @@ function _renderTrasladoCard(s) {
   const acciones = [];
 
   if (s.estado === 'ENVIADA') {
-    acciones.push(`<button onclick="trasAprobar(${s.id})" style="flex:1;padding:10px;background:#166534;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">Aprobar y asignar</button>`);
-    acciones.push(`<button onclick="trasRechazar(${s.id})" style="padding:10px 12px;background:#7f1d1d;color:#fff;border:none;border-radius:8px;font-size:13px;cursor:pointer;">Rechazar</button>`);
+    acciones.push(`<button onclick="trasAprobar(${esc(s.id)})" style="flex:1;padding:10px;background:#166534;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">Aprobar y asignar</button>`);
+    acciones.push(`<button onclick="trasRechazar(${esc(s.id)})" style="padding:10px 12px;background:#7f1d1d;color:#fff;border:none;border-radius:8px;font-size:13px;cursor:pointer;">Rechazar</button>`);
   }
 
   if (s.estado === 'EN_PICKING') {
     const pickingCompleto = pp && !pp.sin_tareas && pp.completadas === pp.total && pp.total > 0;
     if (pickingCompleto) {
       // Picking formal completo → confirmar y avanzar a PREPARADO
-      acciones.push(`<button onclick="trasConfirmarRecogida(${s.id})" style="flex:1;padding:10px;background:#166534;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">✅ Confirmar recogida</button>`);
+      acciones.push(`<button onclick="trasConfirmarRecogida(${esc(s.id)})" style="flex:1;padding:10px;background:#166534;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">✅ Confirmar recogida</button>`);
     } else {
       // Picking en proceso o manual → forzar confirmación o despachar directo
-      acciones.push(`<button onclick="trasConfirmarRecogida(${s.id})" style="flex:1;padding:10px;background:#1e3a5f;color:#60a5fa;border:1px solid #1e3a5f;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;">Confirmar recogida manual</button>`);
+      acciones.push(`<button onclick="trasConfirmarRecogida(${esc(s.id)})" style="flex:1;padding:10px;background:#1e3a5f;color:#60a5fa;border:1px solid #1e3a5f;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;">Confirmar recogida manual</button>`);
     }
-    acciones.push(`<button onclick="trasDespacharDirecto(${s.id})" style="padding:10px 10px;background:#78350f;color:#fbbf24;border:1px solid #92400e;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;">Despachar ⚡</button>`);
-    acciones.push(`<button onclick="trasReasignarOperario(${s.id})" style="padding:10px 10px;background:#1a1a1a;color:#aaa;border:1px solid #333;border-radius:8px;font-size:11px;cursor:pointer;">↺ Operario</button>`);
+    acciones.push(`<button onclick="trasDespacharDirecto(${esc(s.id)})" style="padding:10px 10px;background:#78350f;color:#fbbf24;border:1px solid #92400e;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;">Despachar ⚡</button>`);
+    acciones.push(`<button onclick="trasReasignarOperario(${esc(s.id)})" style="padding:10px 10px;background:#1a1a1a;color:#aaa;border:1px solid #333;border-radius:8px;font-size:11px;cursor:pointer;">↺ Operario</button>`);
   }
 
   if (s.estado === 'PREPARADO') {
@@ -143,9 +143,9 @@ function _renderTrasladoCard(s) {
     if (packDespachado) {
       acciones.push(`<div style="flex:1;padding:10px;color:#9ca3af;font-size:12px;text-align:center;background:#1a1a1a;border:1px solid #374151;border-radius:8px;">⏳ Despacho en proceso...</div>`);
     } else {
-      acciones.push(`<button onclick="trasDespachar(${s.id})" style="flex:1;padding:10px;background:#b45309;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">🚛 Despachar</button>`);
+      acciones.push(`<button onclick="trasDespachar(${esc(s.id)})" style="flex:1;padding:10px;background:#b45309;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">🚛 Despachar</button>`);
     }
-    acciones.push(`<button onclick="trasVerLPNs(${s.id})" style="padding:10px 10px;background:#1a1a1a;color:#a78bfa;border:1px solid #4c1d95;border-radius:8px;font-size:11px;cursor:pointer;">📦 LPNs</button>`);
+    acciones.push(`<button onclick="trasVerLPNs(${esc(s.id)})" style="padding:10px 10px;background:#1a1a1a;color:#a78bfa;border:1px solid #4c1d95;border-radius:8px;font-size:11px;cursor:pointer;">📦 LPNs</button>`);
   }
 
   if (s.estado === 'EN_TRANSITO') {
@@ -182,13 +182,13 @@ function _renderTrasladoCard(s) {
     && ['EN_TRANSITO', 'ENTREGADA'].includes(s.estado);
 
   if (faltaSalida) {
-    recuperacion.push(`<button onclick="trasReintentarDespachoSiesa(${s.id})" style="padding:8px 10px;background:#7f1d1d;color:#fecaca;border:1px solid #991b1b;border-radius:8px;font-size:11px;font-weight:700;cursor:pointer;">↻ Reintentar despacho (STS)</button>`);
+    recuperacion.push(`<button onclick="trasReintentarDespachoSiesa(${esc(s.id)})" style="padding:8px 10px;background:#7f1d1d;color:#fecaca;border:1px solid #991b1b;border-radius:8px;font-size:11px;font-weight:700;cursor:pointer;">↻ Reintentar despacho (STS)</button>`);
   }
   if (faltaEntrada) {
-    recuperacion.push(`<button onclick="trasReintentarRecepcionSiesa(${s.id})" style="padding:8px 10px;background:#7f1d1d;color:#fecaca;border:1px solid #991b1b;border-radius:8px;font-size:11px;font-weight:700;cursor:pointer;">↻ Reintentar recepción (ETS)</button>`);
+    recuperacion.push(`<button onclick="trasReintentarRecepcionSiesa(${esc(s.id)})" style="padding:8px 10px;background:#7f1d1d;color:#fecaca;border:1px solid #991b1b;border-radius:8px;font-size:11px;font-weight:700;cursor:pointer;">↻ Reintentar recepción (ETS)</button>`);
   }
   if (s.estado === 'EN_TRANSITO') {
-    recuperacion.push(`<button onclick="trasRevertir(${s.id})" style="padding:8px 10px;background:#1a1a1a;color:#fbbf24;border:1px solid #92400e;border-radius:8px;font-size:11px;font-weight:700;cursor:pointer;">↩ Revertir traslado</button>`);
+    recuperacion.push(`<button onclick="trasRevertir(${esc(s.id)})" style="padding:8px 10px;background:#1a1a1a;color:#fbbf24;border:1px solid #92400e;border-radius:8px;font-size:11px;font-weight:700;cursor:pointer;">↩ Revertir traslado</button>`);
   }
 
   const bloqueRecuperacion = recuperacion.length ? `
@@ -200,22 +200,22 @@ function _renderTrasladoCard(s) {
     </div>` : '';
 
   const operarioTag = s.operario_nombre
-    ? `<div style="font-size:11px;color:#7c3aed;margin-bottom:6px;">👷 ${s.operario_nombre}${s.estado==='PREPARADO' ? ' · Listo para despachar' : s.estado==='EN_PICKING' ? ' · Recogiendo' : ''}</div>`
+    ? `<div style="font-size:11px;color:#7c3aed;margin-bottom:6px;">👷 ${esc(s.operario_nombre)}${s.estado==='PREPARADO' ? ' · Listo para despachar' : s.estado==='EN_PICKING' ? ' · Recogiendo' : ''}</div>`
     : (s.estado === 'EN_PICKING' ? `<div style="font-size:11px;color:#f59e0b;margin-bottom:6px;">⚠ Sin operario asignado</div>` : '');
 
   return `
   <div style="background:#111;border:1px solid ${s.estado==='EN_PICKING' && pp?.sin_tareas ? '#78350f' : '#222'};border-radius:12px;padding:14px;margin-bottom:10px;">
     <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px;">
       <div>
-        <div style="font-size:13px;font-weight:700;">${s.codigo}</div>
+        <div style="font-size:13px;font-weight:700;">${esc(s.codigo)}</div>
         <div style="font-size:11px;color:#555;margin-top:2px;">${s.nombre_punto_venta || s.bodega_destino_siesa} · ${fecha} ${alertaAntiguedad}</div>
       </div>
-      <span style="background:${col};color:#fff;font-size:10px;font-weight:700;padding:3px 8px;border-radius:8px;white-space:nowrap;">${s.estado}</span>
+      <span style="background:${col};color:#fff;font-size:10px;font-weight:700;padding:3px 8px;border-radius:8px;white-space:nowrap;">${esc(s.estado)}</span>
     </div>
     <div style="margin-bottom:6px;">${itemsResumen}</div>
     ${pickingInfo}
     ${operarioTag}
-    ${s.siesa_error ? `<div style="font-size:10px;color:#f87171;margin-bottom:8px;">⚠ Siesa: ${s.siesa_error}</div>` : ''}
+    ${s.siesa_error ? `<div style="font-size:10px;color:#f87171;margin-bottom:8px;">⚠ Siesa: ${esc(s.siesa_error)}</div>` : ''}
     ${acciones.length ? `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:10px;">${acciones.join('')}</div>` : ''}
     ${bloqueRecuperacion}
   </div>`;
@@ -239,7 +239,7 @@ function adminPedirIniciar() {
   if (!sel) return;
   const opciones = _BODEGAS_ORIGEN.filter(b => b.id !== 'NB1');
   sel.innerHTML = opciones.map(b =>
-    `<option value="${b.id}" data-nombre="${b.nombre}" style="background:#0d2137;color:#fff;">${b.nombre} (${b.id})</option>`
+    `<option value="${esc(b.id)}" data-nombre="${esc(b.nombre)}" style="background:#0d2137;color:#fff;">${esc(b.nombre)} (${esc(b.id)})</option>`
   ).join('');
   const def = opciones[0];
   if (def) {
@@ -349,7 +349,7 @@ function adminPedirRenderStock() {
     <button onclick="adminPedirIrPagina(${_AP_PAGINA-1})" ${_AP_PAGINA===1?'disabled':''} style="padding:7px 14px;background:#222;color:${_AP_PAGINA===1?'#444':'#fff'};border:none;border-radius:8px;font-size:13px;cursor:pointer;">← Ant</button>
     <div style="display:flex;gap:4px;flex-wrap:wrap;justify-content:center;">${nums.join('')}</div>
     <button onclick="adminPedirIrPagina(${_AP_PAGINA+1})" ${_AP_PAGINA===totalPags?'disabled':''} style="padding:7px 14px;background:#222;color:${_AP_PAGINA===totalPags?'#444':'#fff'};border:none;border-radius:8px;font-size:13px;cursor:pointer;">Sig →</button>
-  </div><div style="text-align:center;font-size:11px;color:#555;margin-bottom:10px;">${filtrado.length} productos · pág ${_AP_PAGINA}/${totalPags}</div>` : '';
+  </div><div style="text-align:center;font-size:11px;color:#555;margin-bottom:10px;">${esc(filtrado.length)} productos · pág ${_AP_PAGINA}/${totalPags}</div>` : '';
 
   el.innerHTML = nav + pagina.map(item => {
     const enCarrito = _AP_CARRITO.find(c => c.codigo_siesa === item.codigo_siesa);
@@ -357,13 +357,13 @@ function adminPedirRenderStock() {
     const nombreEsc = (item.nombre || '').replace(/\\/g,'\\\\').replace(/'/g,"\\'");
     return `<div style="background:#111;border:1px solid ${enCarrito?'#4ade80':'#222'};border-radius:10px;padding:12px;margin-bottom:8px;display:flex;align-items:center;gap:12px;">
       <div style="flex:1;min-width:0;">
-        <div style="font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${item.nombre||'—'}</div>
-        <div style="font-size:11px;color:#666;">${item.codigo_siesa||''} · Disponible: <span style="color:#4ade80;font-weight:700;">${item.disponible}</span></div>
+        <div style="font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(item.nombre||'—')}</div>
+        <div style="font-size:11px;color:#666;">${esc(item.codigo_siesa||'')} · Disponible: <span style="color:#4ade80;font-weight:700;">${esc(item.disponible)}</span></div>
       </div>
       <div style="display:flex;align-items:center;gap:6px;flex-shrink:0;">
-        <input type="number" min="1" max="${item.disponible}" value="${enCarrito?.cantidad||1}" id="${qid}"
+        <input type="number" min="1" max="${esc(item.disponible)}" value="${enCarrito?.cantidad||1}" id="${qid}"
           style="width:56px;padding:7px;background:#000;border:1px solid #333;border-radius:6px;color:#fff;font-size:13px;text-align:center;">
-        <button onclick="adminPedirAgregarCarrito('${item.codigo_siesa}','${nombreEsc}',${item.disponible},${item.producto_id||'null'})"
+        <button onclick="adminPedirAgregarCarrito('${esc(item.codigo_siesa)}','${nombreEsc}',${esc(item.disponible)},${esc(item.producto_id||'null')})"
           style="padding:8px 12px;background:${enCarrito?'#4ade80':'#fff'};color:#000;border:none;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;">${enCarrito?'✓':'+'}</button>
       </div>
     </div>`;
@@ -397,9 +397,9 @@ function adminPedirActualizarCarrito() {
   header.style.display = 'block';
   items.innerHTML = _AP_CARRITO.map(c =>
     `<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--brd);">
-      <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;color:var(--tx);">${c.nombre}</span>
-      <span style="flex-shrink:0;color:#4ade80;font-weight:700;font-size:13px;">${c.cantidad}</span>
-      <button onclick="adminPedirQuitarCarrito('${c.codigo_siesa}')" style="flex-shrink:0;background:none;border:none;color:#ef4444;cursor:pointer;font-size:13px;padding:2px 4px;">✕</button>
+      <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;color:var(--tx);">${esc(c.nombre)}</span>
+      <span style="flex-shrink:0;color:#4ade80;font-weight:700;font-size:13px;">${esc(c.cantidad)}</span>
+      <button onclick="adminPedirQuitarCarrito('${esc(c.codigo_siesa)}')" style="flex-shrink:0;background:none;border:none;color:#ef4444;cursor:pointer;font-size:13px;padding:2px 4px;">✕</button>
     </div>`
   ).join('');
 }
@@ -463,7 +463,7 @@ async function cargarTrasladosOperario() {
     }
     contenedor.innerHTML = `
       <div style="font-size:12px;font-weight:700;color:#7c3aed;margin-bottom:10px;text-transform:uppercase;letter-spacing:1px;">
-        Traslados asignados a ti (${traslados.length})
+        Traslados asignados a ti (${esc(traslados.length)})
       </div>
       ${traslados.map(t => _renderTrasladoOperario(t)).join('')}`;
   } catch (e) {
@@ -479,16 +479,16 @@ async function cargarTrasladosOperario() {
 function _renderTrasladoOperario(t) {
   const itemsHtml = (t.items || []).map(i => {
     const cant = i.cantidad_aprobada || i.cantidad_solicitada;
-    return `<div style="font-size:12px;color:#aaa;">${i.producto_codigo} — <b style="color:#fff;">${cant} und</b></div>`;
+    return `<div style="font-size:12px;color:#aaa;">${esc(i.producto_codigo)} — <b style="color:#fff;">${cant} und</b></div>`;
   }).join('');
   return `
     <div style="background:#0d0d1a;border:1px solid #7c3aed;border-radius:12px;padding:14px;margin-bottom:10px;">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
-        <div style="font-size:13px;font-weight:700;">${t.codigo}</div>
+        <div style="font-size:13px;font-weight:700;">${esc(t.codigo)}</div>
         <span style="font-size:11px;color:#7c3aed;">${t.nombre_punto_venta || t.bodega_destino_siesa}</span>
       </div>
       <div style="margin-bottom:10px;">${itemsHtml}</div>
-      <button onclick="trasConfirmarRecogida(${t.id})"
+      <button onclick="trasConfirmarRecogida(${esc(t.id)})"
         style="width:100%;padding:12px;background:#7c3aed;color:#fff;border:none;border-radius:8px;font-size:14px;font-weight:700;cursor:pointer;">
         Confirmar recogida
       </button>
@@ -534,7 +534,7 @@ async function trasReasignarOperario(id) {
   const operarios = operariosData.operarios || [];
   if (!operarios.length) { alerta('No hay operarios disponibles', 'advertencia'); return; }
 
-  const opciones = operarios.map(o => `<option value="${o.id}">${o.nombre}</option>`).join('');
+  const opciones = operarios.map(o => `<option value="${esc(o.id)}">${esc(o.nombre)}</option>`).join('');
   const modal = document.createElement('div');
   modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:900;display:flex;align-items:center;justify-content:center;';
   modal.innerHTML = `
@@ -580,19 +580,19 @@ async function trasAprobar(id) {
   const filasItems = items.map(i => `
     <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
       <div style="flex:1;font-size:12px;">
-        <div style="font-weight:600;">${i.producto_codigo}</div>
-        <div style="color:#666;font-size:11px;">Solicitado: ${i.cantidad_solicitada} · Disp. Siesa: ${i.disponible_siesa ?? '—'}</div>
+        <div style="font-weight:600;">${esc(i.producto_codigo)}</div>
+        <div style="color:#666;font-size:11px;">Solicitado: ${esc(i.cantidad_solicitada)} · Disp. Siesa: ${i.disponible_siesa ?? '—'}</div>
       </div>
       <div style="display:flex;align-items:center;gap:4px;">
         <label style="font-size:11px;color:#999;">Aprobar:</label>
-        <input type="number" id="apr-${i.id}" value="${i.cantidad_solicitada}" min="0"
+        <input type="number" id="apr-${esc(i.id)}" value="${esc(i.cantidad_solicitada)}" min="0"
           style="width:70px;padding:6px;background:#1a1a1a;border:1px solid #333;border-radius:6px;color:#fff;font-size:13px;text-align:center;">
       </div>
     </div>
   `).join('');
 
   const opcioneOperarios = operarios.length
-    ? `<option value="">Sin asignar (admin recoge)</option>` + operarios.map(o => `<option value="${o.id}">${o.nombre}</option>`).join('')
+    ? `<option value="">Sin asignar (admin recoge)</option>` + operarios.map(o => `<option value="${esc(o.id)}">${esc(o.nombre)}</option>`).join('')
     : `<option value="">No hay operarios disponibles</option>`;
 
   const modal = document.createElement('div');
@@ -678,10 +678,10 @@ async function trasVerLPNs(id) {
     ? lpns.map(l => `
         <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid #1a1a1a;">
           <div>
-            <div style="font-size:13px;font-weight:700;color:#a78bfa;">${l.codigo}</div>
-            <div style="font-size:11px;color:#666;">${l.producto_codigo} — ${l.cantidad_actual} und</div>
+            <div style="font-size:13px;font-weight:700;color:#a78bfa;">${esc(l.codigo)}</div>
+            <div style="font-size:11px;color:#666;">${esc(l.producto_codigo)} — ${esc(l.cantidad_actual)} und</div>
           </div>
-          <span style="font-size:10px;font-weight:700;color:${estadoColor[l.estado]||'#fff'};">${l.estado}</span>
+          <span style="font-size:10px;font-weight:700;color:${esc(estadoColor[l.estado]||'#fff')};">${esc(l.estado)}</span>
         </div>`).join('')
     : '<div style="color:#555;text-align:center;padding:20px;">Sin LPNs vinculados a este traslado</div>';
 
@@ -690,7 +690,7 @@ async function trasVerLPNs(id) {
   modal.innerHTML = `
     <div style="background:#0a0a0a;border-top:2px solid #7c3aed;border-radius:20px 20px 0 0;padding:24px;width:100%;max-height:75vh;overflow-y:auto;">
       <div style="font-size:16px;font-weight:700;color:#a78bfa;margin-bottom:4px;">📦 LPNs — Traslado #${id}</div>
-      <div style="font-size:12px;color:#555;margin-bottom:16px;">${lpns.length} paca(s)/caja(s) vinculadas</div>
+      <div style="font-size:12px;color:#555;margin-bottom:16px;">${esc(lpns.length)} paca(s)/caja(s) vinculadas</div>
       ${filas}
       <button onclick="this.closest('[style*=fixed]').remove()"
         style="width:100%;padding:14px;margin-top:16px;background:#111;color:#666;border:1px solid #222;border-radius:10px;cursor:pointer;font-size:14px;">
@@ -892,7 +892,7 @@ function _renderRequisicionCard(r) {
   const itemsHtml = items.slice(0, 4).map(i =>
     `<div style="display:flex;justify-content:space-between;font-size:11px;color:var(--tx3);padding:2px 0;">
       <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:70%;">${i.producto_nombre || i.producto_codigo_siesa || '—'}</span>
-      <span style="font-weight:600;color:var(--tx2);">${i.cantidad_solicitada}</span>
+      <span style="font-weight:600;color:var(--tx2);">${esc(i.cantidad_solicitada)}</span>
     </div>`
   ).join('');
   const masItems = items.length > 4
@@ -902,17 +902,17 @@ function _renderRequisicionCard(r) {
   const accionBtn =
     r.estado === 'ENVIADA'
       ? `<div style="display:flex;gap:6px;flex-wrap:wrap;">
-           <button onclick="reqRechazar(${r.id})"
+           <button onclick="reqRechazar(${esc(r.id)})"
              style="padding:8px 14px;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;
                     background:#dc2626;color:#fff;border:none;">
              ✕ Rechazar
            </button>
-           <button onclick="reqEditarAprobar(${r.id})"
+           <button onclick="reqEditarAprobar(${esc(r.id)})"
              style="padding:8px 14px;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;
                     background:#1d4ed8;color:#fff;border:none;">
              ✏ Editar
            </button>
-           <button onclick="aprobarRequisicion(${r.id})"
+           <button onclick="aprobarRequisicion(${esc(r.id)})"
              style="padding:8px 14px;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;
                     background:#16a34a;color:#fff;border:none;">
              ✓ Aprobar
@@ -923,10 +923,10 @@ function _renderRequisicionCard(r) {
     : r.estado === 'EN_PACKING'
       ? `<div style="text-align:right;">
            <span style="font-size:12px;color:#ea580c;font-weight:600;">📦 Empacando en ${_reqNombreBodega(r.bodega_origen_siesa)}...</span>
-           ${r.packing_info ? `<div style="font-size:10px;color:#6b7280;margin-top:2px;">${r.packing_info.codigo} · ${r.packing_info.empacador || 'sin asignar'}</div>` : ''}
+           ${r.packing_info ? `<div style="font-size:10px;color:#6b7280;margin-top:2px;">${esc(r.packing_info.codigo)} · ${esc(r.packing_info.empacador || 'sin asignar')}</div>` : ''}
          </div>`
     : r.estado === 'PREPARADO'
-      ? `<button onclick="despacharRequisicion(${r.id})"
+      ? `<button onclick="despacharRequisicion(${esc(r.id)})"
            style="padding:8px 16px;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;
                   background:#111;color:#fff;border:1px solid #111;">
            🚚 Despachar
@@ -941,29 +941,29 @@ function _renderRequisicionCard(r) {
     <div style="background:var(--bg-s);border:1px solid var(--brd);border-radius:12px;padding:14px;margin-bottom:10px;">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px;">
         <div>
-          <div style="font-size:13px;font-weight:700;color:var(--tx1);">${r.codigo}</div>
+          <div style="font-size:13px;font-weight:700;color:var(--tx1);">${esc(r.codigo)}</div>
           <div style="display:flex;align-items:center;gap:5px;margin-top:4px;flex-wrap:wrap;">
             <span style="font-size:11px;font-weight:600;padding:2px 7px;border-radius:4px;background:#1e3a5f;color:#93c5fd;">
               📦 ${_reqNombreBodega(r.bodega_origen_siesa)}
             </span>
             <span style="font-size:12px;color:var(--tx3);">→</span>
             <span style="font-size:11px;font-weight:600;padding:2px 7px;border-radius:4px;background:#431407;color:#fb923c;">
-              🏪 ${r.nombre_punto_venta ? `${r.nombre_punto_venta} (${r.bodega_destino_siesa || ''})` : _reqNombreBodega(r.bodega_destino_siesa)}
+              🏪 ${r.nombre_punto_venta ? `${esc(r.nombre_punto_venta)} (${esc(r.bodega_destino_siesa || '')})` : _reqNombreBodega(r.bodega_destino_siesa)}
             </span>
           </div>
           <div style="font-size:11px;color:var(--tx3);margin-top:3px;">
-            Solicita: <strong style="color:var(--tx2);">${r.solicitante_nombre || '—'}</strong> · ${fecha}
+            Solicita: <strong style="color:var(--tx2);">${esc(r.solicitante_nombre || '—')}</strong> · ${fecha}
           </div>
         </div>
         <span style="font-size:11px;font-weight:600;padding:3px 9px;border-radius:20px;
-                     color:${badge.color};background:${badge.bg};">
-          ${badge.label}
+                     color:${esc(badge.color)};background:${esc(badge.bg)};">
+          ${esc(badge.label)}
         </span>
       </div>
       <div style="background:var(--bg-s2);border-radius:8px;padding:8px;margin-bottom:10px;">
         ${itemsHtml}${masItems}
         <div style="font-size:11px;color:var(--tx3);margin-top:4px;border-top:1px solid var(--brd);padding-top:4px;">
-          ${items.length} producto${items.length !== 1 ? 's' : ''} · ${totalUnd} unidades
+          ${esc(items.length)} producto${items.length !== 1 ? 's' : ''} · ${totalUnd} unidades
         </div>
       </div>
       <div style="display:flex;justify-content:flex-end;">
@@ -1040,18 +1040,18 @@ async function reqEditarAprobar(id) {
     <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
       <div style="flex:1;font-size:12px;">
         <div style="font-weight:600;">${i.producto_nombre || i.producto_codigo}</div>
-        <div style="color:#666;font-size:11px;">Solicitado: ${i.cantidad_solicitada} · Disp. Siesa: ${i.disponible_siesa ?? '—'}</div>
+        <div style="color:#666;font-size:11px;">Solicitado: ${esc(i.cantidad_solicitada)} · Disp. Siesa: ${i.disponible_siesa ?? '—'}</div>
       </div>
       <div style="display:flex;align-items:center;gap:4px;">
         <label style="font-size:11px;color:#999;">Aprobar:</label>
-        <input type="number" id="req-apr-${i.id}" value="${i.cantidad_solicitada}" min="0"
+        <input type="number" id="req-apr-${esc(i.id)}" value="${esc(i.cantidad_solicitada)}" min="0"
           style="width:70px;padding:6px;background:#1a1a1a;border:1px solid #333;border-radius:6px;color:#fff;font-size:13px;text-align:center;">
       </div>
     </div>
   `).join('');
 
   const opcionesOperarios = operarios.length
-    ? `<option value="">Sin asignar (admin recoge)</option>` + operarios.map(o => `<option value="${o.id}">${o.nombre}</option>`).join('')
+    ? `<option value="">Sin asignar (admin recoge)</option>` + operarios.map(o => `<option value="${esc(o.id)}">${esc(o.nombre)}</option>`).join('')
     : `<option value="">No hay operarios disponibles</option>`;
 
   const modal = document.createElement('div');
@@ -1163,13 +1163,13 @@ async function trasPickerCargarCola() {
     el.innerHTML = solicitudes.map(s => {
       const items = s.items || [];
       const totalUnd = items.reduce((a, i) => a + (i.cantidad_aprobada || i.cantidad_solicitada || 0), 0);
-      return `<div onclick="trasPickerAbrirHUD(${s.id})" style="background:#111;border:1px solid #222;border-radius:12px;padding:14px;margin-bottom:10px;cursor:pointer;">
+      return `<div onclick="trasPickerAbrirHUD(${esc(s.id)})" style="background:#111;border:1px solid #222;border-radius:12px;padding:14px;margin-bottom:10px;cursor:pointer;">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
-          <div style="font-size:15px;font-weight:700;color:#fff;">${s.codigo}</div>
+          <div style="font-size:15px;font-weight:700;color:#fff;">${esc(s.codigo)}</div>
           <span style="font-size:11px;font-weight:600;padding:3px 9px;border-radius:20px;background:#dbeafe;color:#2563eb;">🔍 En picking</span>
         </div>
         <div style="font-size:12px;color:#666;margin-bottom:4px;">${s.nombre_punto_venta || s.bodega_destino_siesa}</div>
-        <div style="font-size:12px;color:#666;">${items.length} producto(s) · ${totalUnd} uds</div>
+        <div style="font-size:12px;color:#666;">${esc(items.length)} producto(s) · ${totalUnd} uds</div>
       </div>`;
     }).join('');
   } catch (e) {
@@ -1317,9 +1317,9 @@ async function trasPackerCargarCola() {
     el.innerHTML = '<div style="font-size:11px;font-weight:600;color:#718096;padding:16px 16px 8px;text-transform:uppercase;">TAREAS DE EMPAQUE</div>' +
       solicitudes.map(s => {
         const items = s.items || [];
-        return `<div onclick="trasPackerAbrirHUD(${s.id})" style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:16px;margin:0 12px 10px;cursor:pointer;box-shadow:0 1px 3px rgba(0,0,0,.06);">
-          <div style="font-size:16px;font-weight:700;color:#1a202c;margin-bottom:4px;">${s.codigo}</div>
-          <div style="font-size:13px;color:#718096;margin-bottom:8px;">${items.length} producto(s) · 0/${items.length} verificados</div>
+        return `<div onclick="trasPackerAbrirHUD(${esc(s.id)})" style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:16px;margin:0 12px 10px;cursor:pointer;box-shadow:0 1px 3px rgba(0,0,0,.06);">
+          <div style="font-size:16px;font-weight:700;color:#1a202c;margin-bottom:4px;">${esc(s.codigo)}</div>
+          <div style="font-size:13px;color:#718096;margin-bottom:8px;">${esc(items.length)} producto(s) · 0/${esc(items.length)} verificados</div>
           <span style="font-size:11px;font-weight:600;padding:3px 9px;border-radius:20px;background:#fff7ed;color:#ea580c;">Pendiente</span>
         </div>`;
       }).join('');

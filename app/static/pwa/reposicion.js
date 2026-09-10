@@ -101,7 +101,7 @@ async function repCargarUbicaciones() {
         <div class="tabla-card" style="margin-bottom:10px;">
           <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px;">
             <div>
-              <div style="font-size:16px;font-weight:800;font-family:monospace;color:var(--tx);">${u.codigo}</div>
+              <div style="font-size:16px;font-weight:800;font-family:monospace;color:var(--tx);">${esc(u.codigo)}</div>
               ${skuLabel
                 ? `<div style="font-size:11px;color:#60a5fa;margin-top:3px;font-weight:600;">📦 ${skuLabel}</div>`
                 : `<div style="font-size:11px;color:#555;margin-top:3px;">Sin producto asignado</div>`
@@ -109,7 +109,7 @@ async function repCargarUbicaciones() {
             </div>
             <div style="display:flex;align-items:center;gap:8px;">
               <span style="font-size:11px;font-weight:700;color:${color};background:${color}22;padding:3px 8px;border-radius:20px;">${label}</span>
-              <button onclick="repAbrirModal(${u.id}, '${u.codigo}', ${minimo ?? ''}, ${maximo ?? ''}, ${u.secuencia_ruteo ?? ''}, '${skuEsc}')"
+              <button onclick="repAbrirModal(${esc(u.id)}, '${esc(u.codigo)}', ${minimo ?? ''}, ${maximo ?? ''}, ${u.secuencia_ruteo ?? ''}, '${skuEsc}')"
                 style="padding:5px 10px;background:var(--bg);border:1px solid var(--brd);border-radius:6px;color:var(--tx2);font-size:11px;cursor:pointer;">
                 Configurar
               </button>
@@ -130,7 +130,7 @@ async function repCargarUbicaciones() {
               ? `<span style="color:#f59e0b;">⚠ Sin mínimo/máximo — toca "Configurar" para activar reposición</span>`
               : `<span>Mín <strong style="color:var(--tx);">${minimo}</strong></span>
                  <span>Máx <strong style="color:var(--tx);">${maximo ?? '—'}</strong></span>
-                 ${u.secuencia_ruteo != null ? `<span>Seq <strong style="color:var(--tx);">${u.secuencia_ruteo}</strong></span>` : ''}
+                 ${u.secuencia_ruteo != null ? `<span>Seq <strong style="color:var(--tx);">${esc(u.secuencia_ruteo)}</strong></span>` : ''}
                  <span style="color:#22c55e;">✓ Motor activo</span>`
             }
           </div>
@@ -267,25 +267,25 @@ async function repCargarTareas() {
         <div class="tabla-card" style="margin-bottom:10px;">
           <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px;">
             <div>
-              <div style="font-size:13px;font-weight:700;font-family:monospace;color:var(--tx);">${t.codigo}</div>
+              <div style="font-size:13px;font-weight:700;font-family:monospace;color:var(--tx);">${esc(t.codigo)}</div>
               <div style="font-size:12px;color:var(--tx3);margin-top:2px;">${fecha}</div>
             </div>
-            <span style="font-size:11px;font-weight:700;color:${color};background:${color}22;padding:3px 8px;border-radius:20px;">${t.estado}</span>
+            <span style="font-size:11px;font-weight:700;color:${color};background:${color}22;padding:3px 8px;border-radius:20px;">${esc(t.estado)}</span>
           </div>
 
           <div style="font-size:13px;font-weight:600;color:var(--tx);margin-bottom:6px;">${t.producto_nombre || t.producto_codigo || '—'}</div>
 
           <div style="display:flex;gap:6px;align-items:center;margin-bottom:8px;flex-wrap:wrap;">
-            <span style="font-size:12px;font-family:monospace;background:#166534;color:#4ade80;padding:3px 8px;border-radius:6px;">${t.ubicacion_reserva || '—'}</span>
+            <span style="font-size:12px;font-family:monospace;background:#166534;color:#4ade80;padding:3px 8px;border-radius:6px;">${esc(t.ubicacion_reserva || '—')}</span>
             <span style="font-size:14px;color:#555;">→</span>
-            <span style="font-size:12px;font-family:monospace;background:#1e3a5f;color:#60a5fa;padding:3px 8px;border-radius:6px;">${t.ubicacion_picking || '—'}</span>
-            <span style="font-size:12px;color:var(--tx3);">${t.cantidad_unidades} uds</span>
+            <span style="font-size:12px;font-family:monospace;background:#1e3a5f;color:#60a5fa;padding:3px 8px;border-radius:6px;">${esc(t.ubicacion_picking || '—')}</span>
+            <span style="font-size:12px;color:var(--tx3);">${esc(t.cantidad_unidades)} uds</span>
           </div>
 
           <div style="display:flex;gap:6px;justify-content:flex-end;">
-            ${t.lpn_codigo ? `<span style="font-size:11px;color:#555;font-family:monospace;">LPN: ${t.lpn_codigo}</span>` : ''}
+            ${t.lpn_codigo ? `<span style="font-size:11px;color:#555;font-family:monospace;">LPN: ${esc(t.lpn_codigo)}</span>` : ''}
             ${(t.estado === 'PENDIENTE' || t.estado === 'EN_PROCESO') ? `
-              <button onclick="repCancelarTarea(${t.id}, '${t.codigo}')"
+              <button onclick="repCancelarTarea(${esc(t.id)}, '${esc(t.codigo)}')"
                 style="padding:5px 10px;background:var(--bg);border:1px solid #7f1d1d;border-radius:6px;color:#f87171;font-size:11px;cursor:pointer;">
                 Cancelar
               </button>` : ''
@@ -340,7 +340,7 @@ async function repCargarHuerfanas() {
     }
 
     el.innerHTML = `
-      <div style="font-size:12px;color:#f59e0b;margin-bottom:10px;font-weight:600;">${items.length} ubicación${items.length > 1 ? 'es' : ''} requiere${items.length === 1 ? '' : 'n'} corrección en Siesa</div>
+      <div style="font-size:12px;color:#f59e0b;margin-bottom:10px;font-weight:600;">${esc(items.length)} ubicación${items.length > 1 ? 'es' : ''} requiere${items.length === 1 ? '' : 'n'} corrección en Siesa</div>
       ${items.map(h => {
         const ultima = h.fecha_ultima_vez ? new Date(h.fecha_ultima_vez).toLocaleString('es-CO', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' }) : '—';
         return `
@@ -422,28 +422,28 @@ function _repJobCard(j, mostrarReintentar) {
     <div class="tabla-card" style="margin-bottom:10px;${j.estado === 'FALLIDO' ? 'border-left:3px solid #ef4444;' : ''}">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px;">
         <div>
-          <div style="font-size:12px;font-weight:700;color:var(--tx);">${j.tipo || '—'}</div>
+          <div style="font-size:12px;font-weight:700;color:var(--tx);">${esc(j.tipo || '—')}</div>
           <div style="font-size:11px;color:var(--tx3);margin-top:2px;">${fecha}</div>
         </div>
         <div style="display:flex;align-items:center;gap:6px;">
-          <span style="font-size:11px;color:#666;">${j.intentos || 0}/${j.max_intentos || 3} intentos</span>
-          <span style="font-size:11px;font-weight:700;color:${color};background:${color}22;padding:3px 8px;border-radius:20px;">${j.estado}</span>
+          <span style="font-size:11px;color:#666;">${esc(j.intentos || 0)}/${j.max_intentos || 3} intentos</span>
+          <span style="font-size:11px;font-weight:700;color:${color};background:${color}22;padding:3px 8px;border-radius:20px;">${esc(j.estado)}</span>
         </div>
       </div>
       ${j.error_ultimo ? `
         <div style="font-size:11px;color:#f87171;background:#7f1d1d22;padding:6px 8px;border-radius:6px;margin-bottom:8px;font-family:monospace;word-break:break-all;">
-          ${j.error_ultimo.slice(0, 200)}
+          ${esc(j.error_ultimo.slice(0, 200))}
         </div>` : ''
       }
       ${proximo && j.estado === 'PENDIENTE' ? `
         <div style="font-size:11px;color:#f59e0b;margin-bottom:8px;">Próximo intento: ${proximo}</div>` : ''
       }
       ${j.referencia_tipo ? `
-        <div style="font-size:11px;color:var(--tx3);">Ref: ${j.referencia_tipo} #${j.referencia_id || '—'}</div>` : ''
+        <div style="font-size:11px;color:var(--tx3);">Ref: ${esc(j.referencia_tipo)} #${esc(j.referencia_id || '—')}</div>` : ''
       }
       ${mostrarReintentar ? `
         <div style="display:flex;justify-content:flex-end;margin-top:8px;">
-          <button onclick="repReintentar(${j.id})"
+          <button onclick="repReintentar(${esc(j.id)})"
             style="padding:6px 14px;background:var(--pm);border:none;border-radius:6px;color:#fff;font-size:12px;font-weight:700;cursor:pointer;">
             Reintentar ahora
           </button>

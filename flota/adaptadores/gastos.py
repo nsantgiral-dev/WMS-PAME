@@ -559,8 +559,20 @@ def numero_legible(valor, decimales: int = 2) -> str:
     Redondea a centavos **solo para mostrar**. La aritmética no se toca: el
     canon fija tolerancia cero y esto formatea un renglón, no calcula un CPK.
     """
+    # `return valor` y NO `return str(valor)`, y la diferencia es la identidad.
+    #
+    # `SIN_DATO` es una subclase de `str`, y `str()` sobre una subclase devuelve
+    # un **`str` plano**: `numero_legible(SIN_DATO) is SIN_DATO` daba `False`.
+    # El dominio compara `SIN_DATO` por identidad —hay doce `is SIN_DATO` en el
+    # repo—, así que cualquiera de esos checks colocado después de este formateo
+    # **deja de disparar en silencio**, y el hueco se publica como si fuera un
+    # número.
+    #
+    # Auditado el 2026-09-04: hoy no hay ninguno en esa posición. Se arregla
+    # igual, porque el defecto no está en los doce sitios sino acá — y el que
+    # intercale un `numero_legible` mañana no va a saber que tiene que mirar.
     if isinstance(valor, str):          # SIN_DATO y cualquier otra palabra
-        return str(valor)
+        return valor
     paso = Decimal(1).scaleb(-decimales)
     return str(Decimal(valor).quantize(paso, rounding=ROUND_HALF_UP))
 
@@ -746,8 +758,19 @@ def cpk_de(vehiculo_id: int, desde: date, hasta: date) -> dict:
         pesos_imputados=pesos, km_recorridos=km,
         hubo_gastos=bool(gastos), marca_tramo=marca_tramo)
 
+    # ── `lecturas` viaja porque `SIN_DATO` acá significa DOS cosas ───────
+    #
+    # `_tramo_de` devuelve `(0, SIN_DATO)` con menos de dos lecturas **y**
+    # `(km, SIN_DATO)` cuando los dos extremos son dudosos. `costo_por_kilometro`
+    # traduce las dos al mismo `sin_dato`, y desde el retorno de esta función no
+    # se distinguían — pero se corrigen distinto: la primera registrando
+    # kilometraje, la segunda verificándolo contra la foto.
+    #
+    # Sin este campo, un tablero que explique el `sin_dato` tiene que adivinar
+    # cuál de las dos fue, y va a mandar a la mitad de la gente a hacer el
+    # trabajo equivocado. Es el mismo motivo por el que `hubo_gastos` viaja.
     return {'cpk': valor, 'marca': marca, 'pesos': pesos, 'km': km,
-            'hubo_gastos': bool(gastos)}
+            'hubo_gastos': bool(gastos), 'lecturas': len(lecturas)}
 
 
 def rendimiento_de(vehiculo_id: int) -> Union[Decimal, str]:
@@ -759,7 +782,29 @@ def rendimiento_de(vehiculo_id: int) -> Union[Decimal, str]:
     return costos.rendimiento_km_galon(tanqueos_de(vehiculo_id))
 
 
+def rendimiento_publicable_de(vehiculo_id: int) -> dict:
+    """El rendimiento **y si ya se puede sostener**, para un vehículo.
+
+    Es lo que la pantalla del conductor necesita: el número solo no alcanza,
+    porque `24 km/gal` sobre dos ventanas de la misma semana y `24 km/gal` sobre
+    doce ventanas de tres meses se ven idénticos y no significan lo mismo.
+
+    `dias_historia` sale de la **primera y la última fecha de tanqueo**, no de
+    la antigüedad del vehículo: lo que importa es sobre cuánto tiempo se midió,
+    no cuánto tiempo lleva el camión en la flota. Un camión de tres años con dos
+    tanqueos registrados esta semana tiene dos días de historia medida.
+
+    La firma no recibe conductor, igual que `rendimiento_de` y por el mismo
+    motivo — la regla 2 escrita en el tipo, no en un comentario.
+    """
+    filas = tanqueos_de(vehiculo_id)
+    fechas = [f['fecha'] for f in filas if f.get('fecha') is not None]
+    dias = (max(fechas) - min(fechas)).days if len(fechas) >= 2 else 0
+    return costos.rendimiento_publicable(filas, dias_historia=dias)
+
+
 __all__ = ['registrar_gasto', 'registrar_tanqueo', 'cpk_de', 'rendimiento_de',
+           'rendimiento_publicable_de',
            'numero_legible',
            'tanqueos_de', 'capacidad_de_tanque', 'excede_capacidad_de',
            'es_de_campo', 'ORIGEN_DE_LECTURA', 'GastoInvalido', 'SIN_DATO']

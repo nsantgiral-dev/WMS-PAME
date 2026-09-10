@@ -93,6 +93,10 @@ const ctx = {
 ctx.globalThis = ctx;
 ctx.window.document = doc;
 vm.createContext(ctx);
+// `util.js` va PRIMERO y se carga de verdad, no se stubbea: `esc()` es lo
+// que este arnés tiene que poder ver fallar.
+vm.runInContext(fs.readFileSync(FLOTAJS.replace(/[^/]+$/, 'util.js'), 'utf-8'),
+                ctx, { filename: 'util.js' });
 vm.runInContext(fs.readFileSync(FLOTAJS, 'utf-8'), ctx, { filename: 'flota.js' });
 
 (async () => {

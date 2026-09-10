@@ -390,6 +390,16 @@ def create_app():
                 # 05:30 y no 06:00: el barrido de avisos corre a las 06:00 y lee
                 # el plan. Al revés, el aviso del día miraría el plan de ayer.
                 ('flota.adaptadores.preventivo',            'init_scheduler',          '[FLOTA_PREVENTIVO]'),
+                # El reporte de tres líneas de los lunes. Especificado el
+                # 2026-08-01 y con cero líneas de código hasta el 2026-09-04.
+                # Nace apagado por `FLOTA_REPORTE_SEMANAL`, y **no manda nada
+                # sin `FLOTA_REPORTE_DEST`**: caer a `ALERTA_EMAIL_DEST` haría
+                # que el tablero de flota llegara al Jefe de Bodega con status
+                # 200 y log de «enviado» — la falla indistinguible del éxito.
+                #
+                # 06:15 y no 05:30 ni 06:00: esas dos son de Vigía/preventivo y
+                # del barrido de avisos, y este reporte lee un plan ya barrido.
+                ('flota.adaptadores.reporte_semanal',       'init_scheduler',          '[FLOTA_REPORTE_SEMANAL]'),
             ]
             for _mod_path, _fn_name, _tag in _scheduler_pesados:
                 _registrar_scheduler(app, _il, _app_logger, _mod_path, _fn_name, _tag)

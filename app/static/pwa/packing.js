@@ -131,19 +131,19 @@ function empRenderListaTareas() {
         const label = pedidoAnulado ? '🚫 PEDIDO ANULADO EN SIESA' : bloqueado ? 'Esperando picking' : siesaFallo ? '⚠ Reintentar Siesa' : enProceso ? 'En proceso' : 'Pendiente';
         const anulado_banner = pedidoAnulado ? `
           <div style="margin-top:10px;background:var(--rbg);border:1px solid var(--rbrd);border-radius:8px;padding:10px 12px;">
-            <div style="font-size:12px;font-weight:700;color:var(--red);margin-bottom:4px;">🚫 Pedido anulado en Siesa (estado ${t.pedido_estado_siesa_detectado || '9'})</div>
+            <div style="font-size:12px;font-weight:700;color:var(--red);margin-bottom:4px;">🚫 Pedido anulado en Siesa (estado ${esc(t.pedido_estado_siesa_detectado || '9')})</div>
             <div style="font-size:11px;color:var(--tx2);line-height:1.4;">
               El área comercial anuló este pedido en el ERP.<br>
               <strong>Acción:</strong> ${_puedeCancelarPacking ? 'Cancelar este packing y esperar el nuevo pedido clonado.' : 'Avisa a tu supervisor para que cancele este packing.'}
             </div>
             ${_puedeCancelarPacking ? `
-            <button onclick="event.stopPropagation();empCancelarPacking(${t.id})"
+            <button onclick="event.stopPropagation();empCancelarPacking(${esc(t.id)})"
               style="margin-top:8px;width:100%;padding:8px;background:var(--red);border:none;color:#fff;border-radius:8px;cursor:pointer;font-size:12px;font-weight:700;">
               Cancelar packing
             </button>` : ''}
           </div>` : '';
         const limpiarBtn = siesaFallo ? `
-          <button onclick="event.stopPropagation();empLimpiarSiesa(${t.id})"
+          <button onclick="event.stopPropagation();empLimpiarSiesa(${esc(t.id)})"
             style="margin-top:8px;width:100%;padding:8px;background:#1a1a1a;border:1px solid #444;color:#aaa;border-radius:8px;cursor:pointer;font-size:12px;">
             🗑 Limpiar bultos y redeclarar piezas
           </button>` : '';
@@ -153,16 +153,16 @@ function empRenderListaTareas() {
           ? `<span style="font-size:10px;font-weight:700;padding:2px 8px;border-radius:10px;background:#431407;color:#fb923c;letter-spacing:.5px;margin-left:8px;">TRASLADO</span>`
           : `<span style="font-size:10px;font-weight:700;padding:2px 8px;border-radius:10px;background:#1e3a5f;color:#93c5fd;letter-spacing:.5px;margin-left:8px;">PEDIDO</span>`;
         const destinoHtml = esTraslado && t.tienda_destino
-          ? `<div style="font-size:11px;color:#fb923c;margin-top:2px;">→ ${t.tienda_destino}</div>` : '';
+          ? `<div style="font-size:11px;color:#fb923c;margin-top:2px;">→ ${esc(t.tienda_destino)}</div>` : '';
         // Franja lateral: naranja = traslado, azul = pedido — mismo lenguaje de color del badge,
         // solo se omite si la tarjeta ya tiene su propio borde de error (pedido anulado).
         const acentoLateral = `border-left:4px solid ${esTraslado ? '#c2410c' : '#1d4ed8'};`;
         return `
-        <div class="emp-task-card" onclick="${(bloqueado || pedidoAnulado) ? '' : `empIniciarHUD(${t.id})`}"
+        <div class="emp-task-card" onclick="${(bloqueado || pedidoAnulado) ? '' : `empIniciarHUD(${esc(t.id)})`}"
           style="${(bloqueado || pedidoAnulado) ? 'cursor:default;' : 'cursor:pointer;'}${pedidoAnulado ? 'border:2px solid var(--red);' : acentoLateral}">
           <div class="emp-task-pedido" style="display:flex;align-items:center;">${refDisplay}${etiquetaHtml}</div>
           ${destinoHtml}
-          <div class="emp-task-sub">${total} producto(s) · ${t.items_verificados || 0}/${total} verificados</div>
+          <div class="emp-task-sub">${total} producto(s) · ${esc(t.items_verificados || 0)}/${total} verificados</div>
           ${total > 0 ? `<div style="margin-top:10px;background:#1a1a1a;border-radius:8px;height:6px;overflow:hidden;">
             <div style="height:100%;background:#4ade80;width:${pct}%;border-radius:8px;transition:width 0.3s;"></div>
           </div>` : ''}
@@ -523,9 +523,9 @@ function empFlash(color, mensaje) {
 function _modalAmbiguedadPackingEmp(codigo, ambiguos) {
   // ambiguos: array de ProductoEmpaque.to_dict()
   const opciones = ambiguos.map(e => `
-    <button onclick="_elegirEmpaquePacking('${codigo}', '${e.producto_codigo || ''}', ${e.factor_conversion}, '${e.unidad_medida}', this.closest('.modal-ambig-emp'))"
+    <button onclick="_elegirEmpaquePacking('${codigo}', '${esc(e.producto_codigo || '')}', ${esc(e.factor_conversion)}, '${esc(e.unidad_medida)}', this.closest('.modal-ambig-emp'))"
       style="width:100%;padding:16px;font-size:18px;font-weight:700;background:#1a1a1a;color:#fff;border:1px solid #333;border-radius:12px;cursor:pointer;margin-bottom:8px;">
-      ${e.unidad_medida} — ${e.factor_conversion} und
+      ${esc(e.unidad_medida)} — ${esc(e.factor_conversion)} und
       <div style="font-size:12px;color:#666;font-weight:400;margin-top:2px;">${e.producto_nombre || e.referencia_item || ''}</div>
     </button>`).join('');
 
@@ -657,9 +657,9 @@ function bultosRenderLineas() {
   }
   el.innerHTML = _BULTOS_LINEAS.map((l, i) => `
     <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;">
-      <div style="flex:1;font-size:14px;font-weight:600;">${l.tipo}</div>
+      <div style="flex:1;font-size:14px;font-weight:600;">${esc(l.tipo)}</div>
       <button onclick="bultosAjustarCantidad(${i},-1)" style="width:32px;height:32px;background:#222;border:1px solid #333;color:#fff;border-radius:6px;cursor:pointer;font-size:18px;">−</button>
-      <div style="min-width:28px;text-align:center;font-size:17px;font-weight:700;">${l.cantidad}</div>
+      <div style="min-width:28px;text-align:center;font-size:17px;font-weight:700;">${esc(l.cantidad)}</div>
       <button onclick="bultosAjustarCantidad(${i},1)" style="width:32px;height:32px;background:#222;border:1px solid #333;color:#fff;border-radius:6px;cursor:pointer;font-size:18px;">+</button>
       <button onclick="bultosEliminarLinea(${i})" style="width:32px;height:32px;background:#1a1a1a;border:1px solid #333;color:#ef4444;border-radius:6px;cursor:pointer;font-size:14px;">✕</button>
     </div>`).join('');
@@ -798,9 +798,9 @@ function imprimirEtiquetaLPN(lpn, productoNombre) {
     <div class="etiqueta-lpn">
       <div class="el-titulo">BODEGA — PACA / CAJA</div>
       <svg id="${uid}"></svg>
-      <div class="el-codigo">${lpn.codigo}</div>
+      <div class="el-codigo">${esc(lpn.codigo)}</div>
       <div class="el-producto">${productoNombre || lpn.producto_nombre || ''}</div>
-      <div class="el-cantidad">${lpn.cantidad_actual} UND</div>
+      <div class="el-cantidad">${esc(lpn.cantidad_actual)} UND</div>
       <div class="el-fecha">${hoy}</div>
     </div>`;
 
@@ -824,12 +824,12 @@ function empImprimirEtiquetas(bultos, meta) {
 
   area.innerHTML = bultos.map(b => `
     <div class="etiqueta-print">
-      <div class="ep-pedido">${meta.numero_pedido || ''}</div>
-      <div class="ep-cliente">${meta.cliente || ''}</div>
-      <div class="ep-municipio">${meta.municipio || ''}</div>
-      <svg id="bc-${b.id}"></svg>
-      <div class="ep-codigo">${b.codigo_barras}</div>
-      <div class="ep-pieza">${b.tipo} ${b.numero} de ${b.total}</div>
+      <div class="ep-pedido">${esc(meta.numero_pedido || '')}</div>
+      <div class="ep-cliente">${esc(meta.cliente || '')}</div>
+      <div class="ep-municipio">${esc(meta.municipio || '')}</div>
+      <svg id="bc-${esc(b.id)}"></svg>
+      <div class="ep-codigo">${esc(b.codigo_barras)}</div>
+      <div class="ep-pieza">${esc(b.tipo)} ${esc(b.numero)} de ${esc(b.total)}</div>
     </div>`).join('');
 
   // Renderizar códigos de barras antes de imprimir

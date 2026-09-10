@@ -80,7 +80,7 @@ def _ritmo_json(ritmo) -> dict:
 
 @preventivo_bp.route('/preventivo/<placa>', methods=['GET'])
 @jwt_required()
-@exige(Roles.LECTURA_FLOTA, 'ver el plan preventivo de un vehículo')
+@exige(Roles.VISTA_FLOTA, 'ver el plan preventivo completo')
 def ver_plan(placa):
     """El plan del vehículo, cada tarea con su estado y sus insumos.
 

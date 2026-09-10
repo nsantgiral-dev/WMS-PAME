@@ -59,7 +59,12 @@ def mundo(db, almacen):
     tienda = Usuario(nombre='Tienda INE', email='ine_tienda@test.com',
                      password_hash=generate_password_hash('x'), rol='tienda',
                      almacen_id=almacen.id, activo=True)
-    db.session.add_all([veh, sin_catalogo, cond, flota, tienda])
+    # Cerrar un daño es `DECIDE_FLOTA` desde el 2026-09-09: la mitad «quien sí
+    # puede, puede» de este archivo necesita un actor de gestión.
+    jefe = Usuario(nombre='Gestion INE', email='ine_gestion@test.com',
+                   password_hash=generate_password_hash('x'), rol='admin',
+                   almacen_id=almacen.id, activo=True)
+    db.session.add_all([veh, sin_catalogo, cond, flota, tienda, jefe])
     db.session.commit()
     catalogo.sembrar(db)
     return {
@@ -69,6 +74,7 @@ def mundo(db, almacen):
         't_cond': create_access_token(identity=str(cond.id)),
         't_flota': create_access_token(identity=str(flota.id)),
         't_tienda': create_access_token(identity=str(tienda.id)),
+        't_gestion': create_access_token(identity=str(jefe.id)),
         'usuario_conductor_id': cond.id,
         'db': db,
     }
@@ -163,10 +169,12 @@ class TestQuienPuedeQue:
         assert cerrar.status_code == 403
         assert cerrar.get_json()['tu_rol'] == 'conductor'
 
-        # Y la otra dirección: quien sí puede, puede.
+        # Y la otra dirección: quien sí puede, puede. Es gestión desde el
+        # 2026-09-09 — control de flota tampoco cierra, porque los días de
+        # hallazgo abierto son una de las señales que lo miden a él.
         assert client.post(f'/flota/hallazgos/{hallazgo_id}/cerrar',
                            json={'nota': 'se cambió la pastilla'},
-                           headers=_auth(mundo['t_flota'])).status_code == 200
+                           headers=_auth(mundo['t_gestion'])).status_code == 200
 
 
 class TestLoQuePublicaLaListaDelDia:

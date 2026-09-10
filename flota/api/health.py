@@ -30,6 +30,29 @@ flota_bp = Blueprint('flota', __name__)
 _CAMPOS = (
     'ambiente',
     'datos_reales',
+    # ── Analítica despromediada (2026-09-04) ─────────────────────────────
+    #
+    # Los contadores de este archivo contestan «¿cuántos?». Estos tres
+    # contestan «¿cuál?», que con seis vehículos es la única pregunta que se
+    # puede contestar honestamente — un p90 de seis datos es el máximo con otro
+    # nombre, y las bisagras de un boxplot de seis son dos camiones con placa.
+    #
+    # `procedencia_del_tablero` va JUNTO a `ambiente` y `datos_reales`, y exento
+    # de la regla «`None` si falta la tabla» por la misma razón que ellos: mide
+    # el sistema, no una tabla de flota. Existe porque la regla 13 también
+    # aplica a la página y no solo a la fila — `rutas_historicas_sin_placa`
+    # valió 0 en una SQLite vacía y se leyó como «todas las rutas tienen placa»
+    # dos veces, la segunda después de la advertencia.
+    #
+    # Se llamaba `procedencia` a secas durante veinte minutos. El trinquete de
+    # colisiones lo rechazó: esa palabra ya aparece en `compras_ia.js`,
+    # `kardex.js` y `rutas.js` por motivos ajenos. Declarar tres exenciones
+    # habría sido más corto y peor — un nombre que choca con tres módulos que no
+    # tienen nada que ver va a volver a chocar, y cada choque gasta una
+    # exención que después nadie revisa.
+    'procedencia_del_tablero',
+    'cobertura_por_vehiculo',
+    'lecturas_por_vehiculo',
     'vehiculos_activos',
     'fichas_completas',
     'atributos_sin_dato',
@@ -37,11 +60,29 @@ _CAMPOS = (
     'custodias_pendiente_sede',
     'custodias_cerradas_forzadas',
     'custodias_sin_foto_completa',
+    # ── Las dos enumeraciones que faltaban (2026-09-09) ──────────────────
+    #
+    # `custodias_cerradas_forzadas` y `custodias_sin_foto_completa` son dos de
+    # las cinco señales con las que la ficha de control de flota dice que se
+    # mide al rol, y las dos salían como un entero pelado. «3» no dice a qué
+    # camión llamar; con seis vehículos, despromediar es enumerar.
+    #
+    # Los dos contadores de arriba **derivan de esta lista** — una política, una
+    # función. El predicado de «sin foto completa» tiene cuatro entradas (ficha,
+    # tipo, ángulos, posiciones de llanta) y escrito dos veces diverge sin que
+    # nadie lo note: los dos siguen devolviendo un entero plausible.
+    'custodias_por_vehiculo',
     'fotos_pendiente_evidencia',
     'conductores_activos_sin_cuenta',
     'documentos_no_encontrados',
     'documentos_vencidos',
     'documentos_por_vencer_30d',
+    # Los tres de arriba derivan de esta lista, por lo mismo. La fila lleva tres
+    # banderas y no una categoría: mapean uno a uno contra los tres contadores,
+    # que es lo que hace la derivación verificable sin una tabla de traducción
+    # en el medio. Son disjuntas hoy porque lo impone un CHECK de la base
+    # (`ck_flota_doc_estado_coherente`), no esta función.
+    'documentos_por_vehiculo',
     'rutas_historicas_sin_placa',
     # ── Odómetro (2026-09-01) ────────────────────────────────────────────
     # El health no tenía ni un campo del odómetro, y por eso nada avisó de lo
@@ -69,8 +110,17 @@ _CAMPOS = (
     # La tabla nace en esta misma tanda y su pantalla es por vehículo. Sin
     # estos dos campos, saber si hay un daño vencido exige abrir los seis
     # expedientes de a uno, y eso nadie lo hace el martes.
+    #
+    # `dias_hallazgo_abierto` (2026-09-04) es el tercero y **cierra un desfase
+    # documental**: `especialista-control-flota.md:119` lo promete como señal de
+    # desempeño de ese rol desde el 2026-08-04, el canon existe desde el 08-03, y
+    # ninguna pantalla lo mostraba. Sale despromediado —los casos con placa
+    # primero, el promedio con su `n` después— porque con un puñado de hallazgos
+    # el promedio no dice a qué camión llamar, y el canon prohíbe compararlo
+    # entre zonas.
     'hallazgos_abiertos',
     'hallazgos_vencidos',
+    'dias_hallazgo_abierto',
     # ── Inspección diaria (2026-09-02) ───────────────────────────────────
     # La tabla y su adaptador nacieron ayer sin un solo lector. Los tres
     # contestan preguntas distintas y por eso no se suman: cuántos camiones
@@ -96,6 +146,16 @@ _CAMPOS = (
     'tanqueos_sin_capacidad_declarada',
     'gastos_sin_documento',
     'cpk_mes',
+    # `rendimiento_por_vehiculo` (2026-09-04) cierra el segundo desfase
+    # documental: `piso-conductor.md:149` promete «Rendimiento km/galón del
+    # vehículo» desde el 2026-08-04 y el sistema se lo negaba.
+    #
+    # Publica el número **aunque no sea publicable**, con lo que le falta. La
+    # pantalla del conductor NO lo hace, y la diferencia es deliberada: él
+    # pregunta «¿cómo vengo?» y un número que no se sostiene, con su nombre
+    # encima, es ruido que no puede corregir; control de flota pregunta «¿ya se
+    # puede medir esto?» y necesita ver el provisional.
+    'rendimiento_por_vehiculo',
     # ── Taller y garantía (2026-09-02) ───────────────────────────────────
     # `flota_orden_trabajo` y `flota_intervencion` nacen con sus medidas.
     #
@@ -172,6 +232,20 @@ _CAMPOS = (
 )
 
 
+#: Los campos que NO miden una tabla de flota: miden el sistema.
+#:
+#: Están exentos de la regla «`None` cuando falta la tabla», y forzársela los
+#: volvería mentira — un `ambiente: null` diría «no sé a qué base apunto», que
+#: es falso y peor que cualquier respuesta.
+#:
+#: **Vive acá, junto a `_CAMPOS`, y no en los tests.** Estaba escrita dos veces
+#: —`tests/flota/test_health_flota.py` y `tests/flota/test_mundos_incompletos.py`,
+#: esta última inline como tupla literal—, así que agregar un campo exento
+#: exigía acordarse de los dos sitios. El 2026-09-04 no me acordé, y el segundo
+#: test fue el que lo dijo. Una política, una función.
+_CAMPOS_SIN_TABLA = ('ambiente', 'datos_reales', 'procedencia_del_tablero')
+
+
 @flota_bp.route('/health', methods=['GET'])
 @jwt_required()
 def flota_health():
@@ -198,4 +272,4 @@ def flota_health():
     return jsonify({campo: getattr(medidor, campo)() for campo in _CAMPOS}), 200
 
 
-__all__ = ['flota_bp', '_CAMPOS']
+__all__ = ['flota_bp', '_CAMPOS', '_CAMPOS_SIN_TABLA']

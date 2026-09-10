@@ -85,7 +85,7 @@ async function liqCargarDesglose() {
   try {
     d = await get('/api/rutas/liquidacion/desglose');
   } catch (e) {
-    el.innerHTML = `<span style="color:var(--red);font-size:12px;">No se pudo consultar: ${e.message}</span>`;
+    el.innerHTML = `<span style="color:var(--red);font-size:12px;">No se pudo consultar: ${esc(e.message)}</span>`;
     return;
   }
   const r = d.recaudos || {};
@@ -101,27 +101,27 @@ async function liqCargarDesglose() {
         <span>${n} · ${Math.round(100 * n / r.total)}%</span></div>`).join('');
   el.innerHTML = `
     <div class="tabla-card">
-      <div class="tabla-titulo">Entregas por forma de pago y estado (${r.total})</div>
+      <div class="tabla-titulo">Entregas por forma de pago y estado (${esc(r.total)})</div>
       ${filas}
       <p style="font-size:11px;color:var(--tx3);margin:8px 0 0;">
-        <b>${r.parcial_o_rechazado}</b> parciales o rechazadas
-        (${r.pct_parcial_o_rechazado}%) — es la frecuencia con que haría falta
+        <b>${esc(r.parcial_o_rechazado)}</b> parciales o rechazadas
+        (${esc(r.pct_parcial_o_rechazado)}%) — es la frecuencia con que haría falta
         devolver mercancía al camión.
       </p>
     </div>
     <div class="tabla-card" style="margin-top:12px;">
       <div class="tabla-titulo">Rutas entregadas sin liquidar</div>
       <div class="tabla-fila"><span class="tabla-nombre">Cuántas</span>
-        <span class="badge ${z.rutas_entregadas_sin_liquidar ? 'badge-yellow' : 'badge-green'}">${z.rutas_entregadas_sin_liquidar}</span></div>
+        <span class="badge ${z.rutas_entregadas_sin_liquidar ? 'badge-yellow' : 'badge-green'}">${esc(z.rutas_entregadas_sin_liquidar)}</span></div>
       <div class="tabla-fila"><span class="tabla-nombre">Días máximo</span><span>${z.dias_max ?? '—'}</span></div>
       <div class="tabla-fila"><span class="tabla-nombre">Días promedio</span><span>${z.dias_promedio ?? '—'}</span></div>
-      <p style="font-size:11px;color:var(--tx3);margin:8px 0 0;">${z.nota || ''}</p>
+      <p style="font-size:11px;color:var(--tx3);margin:8px 0 0;">${esc(z.nota || '')}</p>
     </div>
     <div class="tabla-card" style="margin-top:12px;">
       <div class="tabla-titulo">Facturas emitidas como contado por dato faltante</div>
       <div class="tabla-fila"><span class="tabla-nombre">Veces</span>
-        <span class="badge ${c.alertas ? 'badge-red' : 'badge-green'}">${c.alertas}</span></div>
-      <p style="font-size:11px;color:var(--tx3);margin:8px 0 0;">${c.nota || ''}</p>
+        <span class="badge ${c.alertas ? 'badge-red' : 'badge-green'}">${esc(c.alertas)}</span></div>
+      <p style="font-size:11px;color:var(--tx3);margin:8px 0 0;">${esc(c.nota || '')}</p>
     </div>`;
 }
 
@@ -211,15 +211,15 @@ function _liqRutaCard(r, esLiquidada) {
 
   return `
     <div class="tabla-card" style="margin-bottom:10px;border-left:3px solid ${color};cursor:pointer;"
-         onclick="liqAbrirRuta(${r.id})">
+         onclick="liqAbrirRuta(${esc(r.id)})">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;">
         <div>
-          <div style="font-size:14px;font-weight:700;color:var(--tx);">Ruta #${r.id}</div>
+          <div style="font-size:14px;font-weight:700;color:var(--tx);">Ruta #${esc(r.id)}</div>
           <div style="font-size:12px;color:var(--tx3);margin-top:2px;">
-            ${r.conductor_nombre} · ${r.vehiculo_placa || '—'}
+            ${esc(r.conductor_nombre)} · ${esc(r.vehiculo_placa || '—')}
           </div>
           <div style="font-size:11px;color:var(--tx3);">
-            ${r.ruta_maestra_nombre || r.tipo_ruta} · ${r.total_paradas || 0} paradas
+            ${r.ruta_maestra_nombre || r.tipo_ruta} · ${esc(r.total_paradas || 0)} paradas
           </div>
         </div>
         <div style="text-align:right;">
@@ -227,7 +227,7 @@ function _liqRutaCard(r, esLiquidada) {
             ${_liqFmt(r.total_recaudado)}
           </div>
           <div style="font-size:11px;color:var(--tx3);margin-top:2px;">
-            ${r.paradas_entregadas || 0} ok · ${r.paradas_parciales || 0} parcial · ${r.paradas_rechazadas || 0} rech.
+            ${esc(r.paradas_entregadas || 0)} ok · ${esc(r.paradas_parciales || 0)} parcial · ${esc(r.paradas_rechazadas || 0)} rech.
           </div>
         </div>
       </div>
@@ -285,23 +285,23 @@ function _liqJobCard(j, mostrarReintentar) {
     <div class="tabla-card" style="margin-bottom:10px;${j.estado === 'FALLIDO' ? 'border-left:3px solid #ef4444;' : ''}">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px;">
         <div>
-          <div style="font-size:12px;font-weight:700;color:var(--tx);">${j.tipo || '—'}</div>
+          <div style="font-size:12px;font-weight:700;color:var(--tx);">${esc(j.tipo || '—')}</div>
           <div style="font-size:11px;color:var(--tx3);margin-top:2px;">${fecha}</div>
         </div>
         <div style="display:flex;align-items:center;gap:6px;">
-          <span style="font-size:11px;color:#666;">${j.intentos || 0}/${j.max_intentos || 3}</span>
-          <span style="font-size:11px;font-weight:700;color:${color};background:${color}22;padding:3px 8px;border-radius:20px;">${j.estado}</span>
+          <span style="font-size:11px;color:#666;">${esc(j.intentos || 0)}/${j.max_intentos || 3}</span>
+          <span style="font-size:11px;font-weight:700;color:${color};background:${color}22;padding:3px 8px;border-radius:20px;">${esc(j.estado)}</span>
         </div>
       </div>
       ${j.error_ultimo ? `
         <div style="font-size:11px;color:#f87171;background:#7f1d1d22;padding:6px 8px;border-radius:6px;margin-bottom:8px;font-family:monospace;word-break:break-all;">
-          ${j.error_ultimo.slice(0, 200)}
+          ${esc(j.error_ultimo.slice(0, 200))}
         </div>` : ''}
       ${j.referencia_tipo ? `
-        <div style="font-size:11px;color:var(--tx3);">Ref: ${j.referencia_tipo} #${j.referencia_id || '—'}</div>` : ''}
+        <div style="font-size:11px;color:var(--tx3);">Ref: ${esc(j.referencia_tipo)} #${esc(j.referencia_id || '—')}</div>` : ''}
       ${mostrarReintentar ? `
         <div style="display:flex;justify-content:flex-end;margin-top:8px;">
-          <button onclick="repReintentar(${j.id})"
+          <button onclick="repReintentar(${esc(j.id)})"
             style="padding:6px 14px;background:var(--pm);border:none;border-radius:6px;color:#fff;font-size:12px;font-weight:700;cursor:pointer;">
             Reintentar
           </button>
@@ -454,11 +454,11 @@ function _liqBloqueRetencion(rutaId, rec, factura) {
         Es lo que el cliente dijo en la puerta — nadie lo ha verificado. ¿Le correspondía ese descuento?
       </div>
       <div style="display:flex;gap:8px;">
-        <button onclick="liqConfirmarRetencion(${rutaId}, ${rec.id}, true)"
+        <button onclick="liqConfirmarRetencion(${rutaId}, ${esc(rec.id)}, true)"
           style="flex:1;padding:10px;background:#14532d;color:#4ade80;border:none;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;">
           ✓ Sí le correspondía
         </button>
-        <button onclick="liqConfirmarRetencion(${rutaId}, ${rec.id}, false)"
+        <button onclick="liqConfirmarRetencion(${rutaId}, ${esc(rec.id)}, false)"
           style="flex:1;padding:10px;background:#450a0a;color:#f87171;border:none;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;">
           ✗ No le correspondía
         </button>
@@ -476,8 +476,8 @@ function _liqRenderDetalle() {
 
   let html = `
     <div style="margin-bottom:16px;">
-      <div style="font-size:14px;font-weight:700;">Ruta #${ruta.id} · ${ruta.conductor_nombre}</div>
-      <div style="font-size:12px;color:var(--tx3);">${ruta.vehiculo_placa || '—'} · ${ruta.ruta_maestra_nombre || ruta.tipo_ruta}</div>
+      <div style="font-size:14px;font-weight:700;">Ruta #${esc(ruta.id)} · ${esc(ruta.conductor_nombre)}</div>
+      <div style="font-size:12px;color:var(--tx3);">${esc(ruta.vehiculo_placa || '—')} · ${ruta.ruta_maestra_nombre || ruta.tipo_ruta}</div>
       ${esLiquidada ? '<div style="font-size:12px;color:#4ade80;font-weight:700;margin-top:4px;">LIQUIDADA</div>' : ''}
     </div>`;
 
@@ -505,8 +505,8 @@ function _liqRenderDetalle() {
       <div style="background:var(--bg-s);border:1px solid var(--brd);border-radius:10px;padding:12px;margin-bottom:10px;">
         <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px;">
           <div>
-            <div style="font-size:13px;font-weight:700;color:var(--tx);">${rec.numero_pedido || '—'}</div>
-            <div style="font-size:11px;color:var(--tx3);">${rec.cliente || '—'}</div>
+            <div style="font-size:13px;font-weight:700;color:var(--tx);">${esc(rec.numero_pedido || '—')}</div>
+            <div style="font-size:11px;color:var(--tx3);">${esc(rec.cliente || '—')}</div>
           </div>
           <div style="text-align:right;">
             <span style="font-size:12px;font-weight:700;color:${colorEstado};">${estado}</span>
@@ -540,12 +540,12 @@ function _liqRenderDetalle() {
             ${esLiquidada ? '' : '<div style="color:var(--tx3);font-weight:700;text-align:right;">Devuelto</div>'}
             ${rec.items_entregados.map((it, itIdx) => `
               <div style="color:var(--tx2);">${it.nombre || it.codigo}</div>
-              <div style="color:var(--tx3);text-align:right;">${it.cantidad_pedida}</div>
-              <div style="color:#4ade80;text-align:right;">${it.cantidad_entregada}</div>
+              <div style="color:var(--tx3);text-align:right;">${esc(it.cantidad_pedida)}</div>
+              <div style="color:#4ade80;text-align:right;">${esc(it.cantidad_entregada)}</div>
               ${esLiquidada ? '' : `
                 <div style="text-align:right;">
-                  <input type="number" id="liq-dev-${rec.id}-${itIdx}" value="${it.cantidad_devuelta || 0}"
-                    min="0" max="${it.cantidad_pedida}" step="1"
+                  <input type="number" id="liq-dev-${esc(rec.id)}-${itIdx}" value="${esc(it.cantidad_devuelta || 0)}"
+                    min="0" max="${esc(it.cantidad_pedida)}" step="1"
                     style="width:50px;padding:2px 4px;background:var(--bg);border:1px solid var(--brd);border-radius:4px;color:#f87171;font-size:12px;text-align:right;font-weight:700;">
                 </div>`}
             `).join('')}
@@ -560,7 +560,7 @@ function _liqRenderDetalle() {
       html += `
         <div style="margin-bottom:8px;padding:8px;background:#3a1616;border-radius:8px;border-left:3px solid #f87171;">
           <div style="font-size:10px;color:#f87171;font-weight:700;margin-bottom:4px;">ENTREGADO SIN PAGO</div>
-          <div style="font-size:12px;color:#fca5a5;">${rec.observaciones || 'Sin detalle registrado'}</div>
+          <div style="font-size:12px;color:#fca5a5;">${esc(rec.observaciones || 'Sin detalle registrado')}</div>
           <div style="font-size:11px;color:var(--tx3);margin-top:6px;">
             La mercancía quedó con el cliente y no se cobró. No genera nota
             crédito ni recibo de caja — la factura queda abierta en cartera.
@@ -572,7 +572,7 @@ function _liqRenderDetalle() {
       html += `
         <div style="margin-bottom:8px;">
           <div style="font-size:10px;color:#f87171;font-weight:700;margin-bottom:4px;">RECHAZO TOTAL</div>
-          <div style="font-size:12px;color:#fca5a5;">${rec.observaciones || 'Sin motivo registrado'}</div>
+          <div style="font-size:12px;color:#fca5a5;">${esc(rec.observaciones || 'Sin motivo registrado')}</div>
           ${factura ? `<div style="font-size:11px;color:var(--tx3);margin-top:4px;">NCE por: ${_liqFmt(factura.total_neto)} (total factura)</div>` : ''}
         </div>`;
     }
@@ -601,7 +601,7 @@ function _liqRenderDetalle() {
         if (rec.devolucion_pendiente) {
           html += `
             <div style="text-align:center;padding:8px;color:#93c5fd;font-size:12px;font-weight:700;margin-top:8px;background:#0f2a3f;border-radius:8px;">
-              🔵 Enviado a Devoluciones (${rec.devolucion_pendiente.codigo}) — pendiente de que recepción confirme
+              🔵 Enviado a Devoluciones (${esc(rec.devolucion_pendiente.codigo)}) — pendiente de que recepción confirme
             </div>`;
         } else {
           html += `
@@ -638,7 +638,7 @@ function _liqRenderDetalle() {
         const trabado = _liqRetencionTraba(rec);
         html += !trabado
           ? `
-          <button onclick="liqToggleCobro(${ruta.id}, ${rec.id})"
+          <button onclick="liqToggleCobro(${esc(ruta.id)}, ${esc(rec.id)})"
             style="width:100%;margin-top:8px;padding:12px;background:#14532d;color:#4ade80;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">
             Registrar Cobro (RC)
           </button>`
@@ -652,7 +652,7 @@ function _liqRenderDetalle() {
           <div style="font-size:11px;color:var(--tx3);margin-top:6px;text-align:center;">
             Se encola de una vez — Siesa lo recibe cuando la NC de la devolucion dispare.
           </div>` : ''}
-          <div id="liq-cobro-panel-${rec.id}" style="display:none;"></div>`;
+          <div id="liq-cobro-panel-${esc(rec.id)}" style="display:none;"></div>`;
       }
       if (esCred) {
         html += '<div style="text-align:center;padding:8px;color:#60a5fa;font-size:12px;font-weight:700;margin-top:8px;background:#1e3a5f22;border-radius:8px;">A Cartera — sin acción requerida</div>';
@@ -677,7 +677,7 @@ function _liqRenderDetalle() {
           Paso 1: Confirma el cuadre financiero en WMS.<br>
           Paso 2: Después de liquidar, documenta NC/RC/DC por parada.
         </div>
-        <button onclick="liqLiquidarWMS(${ruta.id})"
+        <button onclick="liqLiquidarWMS(${esc(ruta.id)})"
           style="width:100%;padding:16px;background:#14532d;color:#4ade80;border:none;border-radius:10px;font-size:15px;font-weight:800;cursor:pointer;">
           💰 LIQUIDAR EN WMS
         </button>
@@ -707,7 +707,7 @@ function _liqRenderRetenciones(recaudoId, baseGravable) {
 
   rets.forEach((r, i) => {
     html += `
-      <div style="color:var(--tx2);">${r.nombre} <span style="color:var(--tx3);">${r.puc}</span></div>
+      <div style="color:var(--tx2);">${esc(r.nombre)} <span style="color:var(--tx3);">${esc(r.puc)}</span></div>
       <div style="color:var(--tx3);text-align:right;">${_liqFmt(r.base)}</div>
       <div style="color:var(--tx3);text-align:right;">${r.tasa < 0.01 ? (r.tasa * 1000).toFixed(2) + '‰' : (r.tasa * 100).toFixed(1) + '%'}</div>
       <div style="color:#c084fc;text-align:right;font-weight:700;">${_liqFmt(r.valor)}</div>
@@ -857,7 +857,7 @@ async function _liqRenderPanelCobro(rutaId, recaudoId) {
         </div>`;
     } else {
       html += `<input type="hidden" id="liq-monto-${recaudoId}" value="${mDefault}">`;
-      html += `<div style="font-size:12px;color:var(--tx2);margin-bottom:8px;">Monto: ${_liqFmt(mDefault)} · CO: ${df.co_factura || '—'} · CxC: ${df.cuenta_cxc || 'fallback'}</div>`;
+      html += `<div style="font-size:12px;color:var(--tx2);margin-bottom:8px;">Monto: ${_liqFmt(mDefault)} · CO: ${esc(df.co_factura || '—')} · CxC: ${esc(df.cuenta_cxc || 'fallback')}</div>`;
     }
 
     // Estado del descuento declarado en campo. La DECISION ya no vive acá:
@@ -889,8 +889,8 @@ async function _liqRenderPanelCobro(rutaId, recaudoId) {
       const deshabilitarla = esLaSugerida && retencionConfirmada !== true;
       html += `
         <label style="display:flex;align-items:center;gap:8px;padding:4px 0;font-size:12px;color:${deshabilitarla ? 'var(--tx3)' : 'var(--tx2)'};cursor:${deshabilitarla ? 'not-allowed' : 'pointer'};">
-          <input type="checkbox" class="liq-ret-check-${recaudoId}" value="${ret.tipo}" ${marcarla ? 'checked' : ''} ${deshabilitarla ? 'disabled' : ''} onchange="liqPreviewCobro(${recaudoId})">
-          ${ret.nombre} — ${_liqFmt(ret.monto_estimado)} <span style="color:var(--tx3);">(base ${_liqFmt(ret.base)})</span>
+          <input type="checkbox" class="liq-ret-check-${recaudoId}" value="${esc(ret.tipo)}" ${marcarla ? 'checked' : ''} ${deshabilitarla ? 'disabled' : ''} onchange="liqPreviewCobro(${recaudoId})">
+          ${esc(ret.nombre)} — ${_liqFmt(ret.monto_estimado)} <span style="color:var(--tx3);">(base ${_liqFmt(ret.base)})</span>
         </label>`;
     });
 
@@ -916,7 +916,7 @@ async function _liqRenderPanelCobro(rutaId, recaudoId) {
     // _liqActualizarBloqueoRetencion antes de pintar el preview de RC.
     liqPreviewCobro(recaudoId);
   } catch (e) {
-    panel.innerHTML = `<div style="padding:12px;color:#ef4444;">${e.message || 'Error obteniendo preview'}</div>`;
+    panel.innerHTML = `<div style="padding:12px;color:#ef4444;">${esc(e.message || 'Error obteniendo preview')}</div>`;
   }
 }
 
@@ -1043,7 +1043,7 @@ function liqPreviewCobro(recaudoId) {
     const ret = retsDisp.find(r => r.tipo === chk.value);
     if (ret) {
       totalRet += ret.monto_estimado;
-      detalleHtml += `<div style="color:#c084fc;">• DC ${ret.nombre}: ${_liqFmt(ret.monto_estimado)} → PUC ${ret.puc}</div>`;
+      detalleHtml += `<div style="color:#c084fc;">• DC ${esc(ret.nombre)}: ${_liqFmt(ret.monto_estimado)} → PUC ${esc(ret.puc)}</div>`;
     }
   });
 
@@ -1156,11 +1156,11 @@ function _liqRenderReconciliacion(d, previo) {
     </div>`;
 
   const fugas = (d.fugas || []).map(f => f.medible
-    ? `<tr><td style="padding:6px;">${f.causa}</td>
-         <td style="padding:6px;text-align:right;font-weight:700;color:${f.documentos ? '#f87171' : '#4ade80'};">${f.documentos}</td>
+    ? `<tr><td style="padding:6px;">${esc(f.causa)}</td>
+         <td style="padding:6px;text-align:right;font-weight:700;color:${f.documentos ? '#f87171' : '#4ade80'};">${esc(f.documentos)}</td>
          <td style="padding:6px;text-align:right;color:#9ca3af;">${$(f.valor)}</td></tr>`
-    : `<tr><td style="padding:6px;color:#6b7280;">${f.causa}</td>
-         <td colspan="2" style="padding:6px;text-align:right;color:#6b7280;font-style:italic;">no medible — ${f.nota}</td></tr>`
+    : `<tr><td style="padding:6px;color:#6b7280;">${esc(f.causa)}</td>
+         <td colspan="2" style="padding:6px;text-align:right;color:#6b7280;font-style:italic;">no medible — ${esc(f.nota)}</td></tr>`
   ).join('');
 
   // Qué parada, y por qué. Un contador de ciclos rotos que sube sin decir
@@ -1181,7 +1181,7 @@ function _liqRenderReconciliacion(d, previo) {
         ? `factura ${$(x.esperado)} · cobró ${$(x.cobrado)} · falta ${$(x.faltante)}`
         : `esperado ${$(x.esperado)} · cobrado ${$(x.cobrado)}`;
     return `<tr>
-      <td style="padding:6px;color:#9ca3af;">Parada ${x.tarea_id}</td>
+      <td style="padding:6px;color:#9ca3af;">Parada ${esc(x.tarea_id)}</td>
       <td style="padding:6px;color:${color};">${txt}</td>
       <td style="padding:6px;text-align:right;color:#9ca3af;font-size:12px;">${cifras}</td></tr>`;
   }).join('');
@@ -1203,10 +1203,10 @@ function _liqRenderReconciliacion(d, previo) {
 
   return `
     <div style="padding:4px 0 16px;">
-      <h3 style="margin:0 0 4px;">Reconciliación · ruta ${d.ruta_id}</h3>
+      <h3 style="margin:0 0 4px;">Reconciliación · ruta ${esc(d.ruta_id)}</h3>
       <div style="font-size:12px;color:#9ca3af;margin-bottom:14px;">
-        Cubre ${d.cobertura.tramos_medibles} de ${d.cobertura.tramos_totales} tramos.
-        ${d.paradas_sin_condicion ? `· ${d.paradas_sin_condicion} parada(s) sin condición de pago, fuera del denominador` : ''}
+        Cubre ${esc(d.cobertura.tramos_medibles)} de ${esc(d.cobertura.tramos_totales)} tramos.
+        ${d.paradas_sin_condicion ? `· ${esc(d.paradas_sin_condicion)} parada(s) sin condición de pago, fuera del denominador` : ''}
       </div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px;">
         ${col('Debían cobrarse', c.debian_cobrarse || {})}
@@ -1223,7 +1223,7 @@ function _liqRenderReconciliacion(d, previo) {
       </table>
       ${paradasRotas}
       <div style="margin-top:14px;padding:10px;border-radius:8px;background:#111827;font-size:13px;">
-        Ciclos rotos: <b>${d.ciclos_rotos}</b>
+        Ciclos rotos: <b>${esc(d.ciclos_rotos)}</b>
         ${d.tasa_ciclos_rotos == null ? '' : ` · ${(d.tasa_ciclos_rotos * 100).toFixed(2)}% (vara: ${(d.vara * 100).toFixed(2)}%)`}
         — ${veredicto}
       </div>

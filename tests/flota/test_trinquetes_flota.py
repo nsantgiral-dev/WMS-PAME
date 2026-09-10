@@ -1218,9 +1218,16 @@ class TestNadaSeMideSinLector:
         'validar_cardinalidad': 'DEUDA REAL: idem',
         'validar_integridad_de_clase': 'DEUDA REAL: es la regla 7 y no la impone nadie',
         'validar_paternidad': 'DEUDA REAL: es la regla 7 y no la impone nadie',
-        'promedio_del_indicador': (
-            'DEUDA REAL: tiene canon propio '
-            '(docs/flota/canones/dias_hallazgo_abierto.md) y no se publica'),
+        # `promedio_del_indicador` SALIÓ de esta lista el 2026-09-04. Su caller
+        # es `MedidorSQL.dias_hallazgo_abierto`, vía
+        # `flota.dominio.hallazgo.indicador_dias_abierto`.
+        #
+        # Estuvo acá desde el 2026-08-03: canon cerrado, función escrita,
+        # probada, y prometida por `especialista-control-flota.md:119` como
+        # señal de desempeño de un rol. Un mes de una ficha prometiendo un
+        # número que ninguna pantalla mostraba.
+        #
+        # La feature nueva fue **usarla**, no escribir otra (regla 12).
         'fuente_es_blanda': 'DEUDA REAL: distingue una procedencia estimada y nadie pregunta',
     }
 

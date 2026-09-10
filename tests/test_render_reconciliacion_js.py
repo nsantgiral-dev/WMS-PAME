@@ -99,6 +99,10 @@ const ctx = {
 ctx.globalThis = ctx;
 ctx.window.document = doc;
 vm.createContext(ctx);
+// `util.js` va primero y se carga de verdad: `esc()` es lo que este arnés
+// tiene que poder ver fallar, y un stub lo volvería un test del stub.
+vm.runInContext(fs.readFileSync(APPJS.replace(/[^/]+$/, 'util.js'), 'utf-8'),
+                ctx, { filename: 'util.js' });
 vm.runInContext(fs.readFileSync(APPJS, 'utf-8'), ctx, { filename: 'app.js' });
 
 (async () => {

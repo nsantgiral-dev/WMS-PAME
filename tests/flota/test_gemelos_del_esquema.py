@@ -43,6 +43,20 @@ import uuid
 
 import pytest
 import sqlalchemy as sa
+# Los dos se usaban y **no se importaban**: el archivo entero reventaba con
+# `NameError: name 'Config' is not defined` en cuanto se le daba una base.
+# Detectado el 2026-09-04, al correr la suite de PostgreSQL con
+# `FLOTA_TEST_PG_URL` puesta por primera vez desde que se escribió.
+#
+# El diseño aguantó: este archivo se niega a saltarse cuando falta la variable
+# —«un skip silencioso deja el gemelo de producción sin comparar con nadie»— y
+# un `NameError` es más ruidoso que un skip. Pero entre el 2026-09-02 y hoy, el
+# detector que encontró los dos triggers que faltaban en producción **no podía
+# correr**, y sin la variable puesta eso se veía igual que «no configurado».
+from pathlib import Path
+
+#: La raíz del repo — el `cwd` desde el que corre `flask db upgrade`.
+RAIZ = Path(__file__).resolve().parents[2]
 
 pytestmark = pytest.mark.postgres
 
@@ -135,6 +149,34 @@ def _mantenimiento(url):
         url.set(database='postgres'), isolation_level='AUTOCOMMIT')
 
 
+def _registrar_todos_los_modelos():
+    """Puebla `db.metadata` recorriendo los módulos, no con una lista a mano.
+
+    Dos cosas que no se pueden hacer acá, y las dos se probaron:
+
+    · **Pedir el fixture `app`.** Funciona en aislamiento y revienta en la suite
+      completa: otro archivo de PostgreSQL repunta la app al motor de PG, y un
+      listener de `connect` propio de SQLite se cae con
+      `'psycopg2.extensions.connection' object has no attribute
+      'create_function'`. Este fixture no puede depender del estado que dejó
+      otro archivo.
+    · **Escribir la lista de imports.** Ya se quedó corta al primer intento:
+      `tareas_packing.solicitud_id` apunta a `solicitudes_traslado`, que
+      `app.models` no reexporta. Es el detector con la lista de sitios escrita a
+      mano, que no ve el sitio nuevo.
+
+    Recorrer el paquete no se queda corto: un modelo nuevo entra solo.
+    """
+    import importlib
+    import pkgutil
+
+    import app.models as _paquete
+
+    for info in pkgutil.iter_modules(_paquete.__path__):
+        importlib.import_module(f'app.models.{info.name}')
+    importlib.import_module('flota.adaptadores.modelos')
+
+
 @pytest.fixture(scope='module')
 def gemelos():
     """Las dos bases hermanas: una por `create_all`, otra por `upgrade`.
@@ -157,17 +199,53 @@ def gemelos():
         c.execute(sa.text(f'CREATE DATABASE "{b}"'))
     try:
         # ── A: el esquema que ve la suite ────────────────────────────────
+        #
+        # Los modelos se IMPORTAN antes de `create_all`. `db.metadata` solo
+        # conoce las tablas cuyos módulos alguien importó, y este fixture es de
+        # módulo: puede correr antes de que la app de los tests haya cargado
+        # nada. Sin esto, el lado A sale VACÍO y la comparación reporta que
+        # producción tiene 7 triggers de más — que se lee como una divergencia
+        # gravísima y es un detector midiendo la nada.
+        #
+        # Es el mismo defecto que `flota/api/__init__.py:14-18` documenta para
+        # el arranque: «un modelo que nadie importa no existe para el
+        # `create_all()` de los tests ni para el autogenerate de Alembic, y esa
+        # es la forma más silenciosa de que una tabla no llegue a producción».
+        _registrar_todos_los_modelos()
         from app.extensions import db as _db
         motor_a = sa.create_engine(url.set(database=a))
         _db.metadata.create_all(motor_a)
         motor_a.dispose()
 
         # ── B: el esquema que ve producción ──────────────────────────────
-        cfg = Config('migrations/alembic.ini')
-        cfg.set_main_option('script_location', 'migrations')
-        cfg.set_main_option('sqlalchemy.url',
-                            str(url.set(database=b)).replace('%', '%%'))
-        command.upgrade(cfg, 'head')
+        #
+        # **En un subproceso, y no con `command.upgrade` en proceso.**
+        #
+        # `migrations/env.py:21` usa `current_app.extensions['migrate']`, así
+        # que correr alembic acá adentro exige un contexto de Flask que este
+        # fixture no tiene — y montarlo pondría a la app de los tests a hablarle
+        # a una base que no es la suya.
+        #
+        # El subproceso levanta su propia app contra `DATABASE_URL`, que es
+        # exactamente lo que hace Railway en el release. Es el mismo criterio
+        # que ya se usó para aislar la contaminación de `create_app()`:
+        # enumerar fuera de proceso.
+        #
+        # Los imports `subprocess` y `sys` ya estaban en este fixture, sin uso:
+        # la conversión estaba empezada y quedó a medias, con `Config` y
+        # `command` sin importar. Ver la nota de los imports del archivo.
+        entorno = {**os.environ,
+                   'DATABASE_URL': str(url.set(database=b)),
+                   'HEAVY_SCHEDULERS': 'false',
+                   'WORKER_SKIP_ESSENTIAL': 'true'}
+        r = subprocess.run(
+            [sys.executable, '-m', 'flask', 'db', 'upgrade'],
+            cwd=str(RAIZ), capture_output=True, text=True, timeout=300,
+            env={**entorno, 'FLASK_APP': 'run.py'})
+        assert r.returncode == 0, (
+            '`flask db upgrade` falló sobre la base gemela — o sea que las '
+            'migraciones no llegan a head desde cero, que es lo que corre en '
+            f'cada deploy:\n{r.stdout[-2000:]}\n{r.stderr[-2000:]}')
 
         yield (url.set(database=a), url.set(database=b))
     finally:
@@ -282,8 +360,6 @@ class TestElPuntoCiegoQueLoDejoPasar:
     """
 
     def test_la_suite_de_postgres_construye_con_create_all(self):
-        from pathlib import Path
-
         fuente = (Path(__file__).parent / 'test_constraints_postgres.py'
                   ).read_text(encoding='utf-8')
         assert 'create_all' in fuente, (

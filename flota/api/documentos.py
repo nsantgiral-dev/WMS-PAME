@@ -89,7 +89,7 @@ def _serializar(d):
 
 @documentos_bp.route('/vehiculo/<placa>/documentos', methods=['GET'])
 @jwt_required()
-@exige(Roles.LECTURA_FLOTA, 'ver los documentos')
+@exige(Roles.VISTA_FLOTA, 'ver el expediente de documentos')
 def listar_documentos(placa):
     try:
         vehiculo = _vehiculo(placa)

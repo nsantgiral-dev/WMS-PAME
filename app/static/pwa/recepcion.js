@@ -106,8 +106,8 @@ function renderListaRecepciones(siesa, dbRecs, confirmadas) {
       if (wmsEstado === 'CONFIRMADA') {
         return `
           <div class="rec-card" style="opacity:0.6;">
-            <div class="rec-titulo">OC: ${oc.numero_oc}</div>
-            <div class="rec-sub">${oc.proveedor || 'Sin proveedor'} · ${oc.items.length} productos · ${totalUds} uds</div>
+            <div class="rec-titulo">OC: ${esc(oc.numero_oc)}</div>
+            <div class="rec-sub">${esc(oc.proveedor || 'Sin proveedor')} · ${esc(oc.items.length)} productos · ${totalUds} uds</div>
             <div style="margin-top:10px;padding:10px;background:#0d1a0d;border-radius:8px;font-size:14px;font-weight:700;color:#4ade80;text-align:center;">
               ✓ Recepcionada en WMS — pendiente actualización en Siesa
             </div>
@@ -117,8 +117,8 @@ function renderListaRecepciones(siesa, dbRecs, confirmadas) {
       if (wmsEstado === 'EN_PROCESO') {
         return `
           <div class="rec-card">
-            <div class="rec-titulo">OC: ${oc.numero_oc}</div>
-            <div class="rec-sub">${oc.proveedor || 'Sin proveedor'} · ${oc.items.length} productos · ${totalUds} uds</div>
+            <div class="rec-titulo">OC: ${esc(oc.numero_oc)}</div>
+            <div class="rec-sub">${esc(oc.proveedor || 'Sin proveedor')} · ${esc(oc.items.length)} productos · ${totalUds} uds</div>
             <button onclick="crearRecepcionDesdeSiesa(${i})"
               style="width:100%;margin-top:12px;padding:14px;font-size:17px;font-weight:700;background:#1d4ed8;color:#fff;border:none;border-radius:10px;cursor:pointer;">
               Continuar recepción
@@ -128,8 +128,8 @@ function renderListaRecepciones(siesa, dbRecs, confirmadas) {
 
       return `
         <div class="rec-card">
-          <div class="rec-titulo">OC: ${oc.numero_oc}</div>
-          <div class="rec-sub">${oc.proveedor || 'Sin proveedor'} · ${oc.items.length} productos · ${totalUds} uds</div>
+          <div class="rec-titulo">OC: ${esc(oc.numero_oc)}</div>
+          <div class="rec-sub">${esc(oc.proveedor || 'Sin proveedor')} · ${esc(oc.items.length)} productos · ${totalUds} uds</div>
           ${sinProd ? `<div style="font-size:11px;color:#d97706;margin-top:4px;">⚠ ${sinProd} producto(s) no registrado(s) en WMS</div>` : ''}
           <button onclick="crearRecepcionDesdeSiesa(${i})"
             style="width:100%;margin-top:12px;padding:14px;font-size:17px;font-weight:700;background:#fff;color:#000;border:none;border-radius:10px;cursor:pointer;">
@@ -148,10 +148,10 @@ function renderListaRecepciones(siesa, dbRecs, confirmadas) {
   if (dbRecs.length) {
     htmlProceso = dbRecs.map(r => `
       <div class="rec-card">
-        <div class="rec-titulo">OC: ${r.numero_oc_siesa}</div>
-        <div class="rec-sub">${r.proveedor_nombre || 'Sin proveedor'}</div>
-        <div style="margin-top:6px;font-size:13px;color:#666;">${r.items_escaneados} / ${r.total_items} ítems escaneados</div>
-        <button onclick="continuarRecepcion(${r.id})"
+        <div class="rec-titulo">OC: ${esc(r.numero_oc_siesa)}</div>
+        <div class="rec-sub">${esc(r.proveedor_nombre || 'Sin proveedor')}</div>
+        <div style="margin-top:6px;font-size:13px;color:#666;">${esc(r.items_escaneados)} / ${esc(r.total_items)} ítems escaneados</div>
+        <button onclick="continuarRecepcion(${esc(r.id)})"
           style="width:100%;margin-top:10px;padding:13px;font-size:16px;font-weight:700;background:#1d4ed8;color:#fff;border:none;border-radius:10px;cursor:pointer;">
           Continuar escaneo
         </button>
@@ -176,16 +176,16 @@ function renderListaRecepciones(siesa, dbRecs, confirmadas) {
         : `<span style="color:#f59e0b;font-size:11px;font-weight:700;">⏳ Pendiente en Siesa</span>`;
       const itemsHtml = (r.items || []).map(it => `
         <div style="display:flex;justify-content:space-between;padding:3px 0;border-bottom:1px solid #222;font-size:11px;">
-          <span style="color:#ccc;">${it.producto_codigo || ''}</span>
-          <span style="color:#888;">OC: ${it.cantidad_ordenada} → Rec: <strong style="color:${it.es_exceso ? '#f59e0b' : it.es_faltante ? '#3b82f6' : '#4ade80'};">${it.cantidad_recibida}</strong></span>
+          <span style="color:#ccc;">${esc(it.producto_codigo || '')}</span>
+          <span style="color:#888;">OC: ${esc(it.cantidad_ordenada)} → Rec: <strong style="color:${it.es_exceso ? '#f59e0b' : it.es_faltante ? '#3b82f6' : '#4ade80'};">${esc(it.cantidad_recibida)}</strong></span>
         </div>`).join('');
       return `
         <div class="rec-card">
           <div style="display:flex;justify-content:space-between;align-items:center;">
-            <div class="rec-titulo">OC: ${r.numero_oc_siesa}</div>
+            <div class="rec-titulo">OC: ${esc(r.numero_oc_siesa)}</div>
             <span style="font-size:11px;color:#666;">${fecha}</span>
           </div>
-          <div class="rec-sub">${r.proveedor_nombre || 'Sin proveedor'} · ${r.total_items} ítem(s)${r.es_parcial ? ' · <span style="color:#f59e0b;">PARCIAL</span>' : ''}</div>
+          <div class="rec-sub">${esc(r.proveedor_nombre || 'Sin proveedor')} · ${esc(r.total_items)} ítem(s)${r.es_parcial ? ' · <span style="color:#f59e0b;">PARCIAL</span>' : ''}</div>
           <div style="margin-top:8px;">${siesaBadge}</div>
           <div style="margin-top:8px;background:#111;border-radius:8px;padding:6px 8px;max-height:150px;overflow-y:auto;">${itemsHtml}</div>
         </div>`;
@@ -284,8 +284,8 @@ function renderEscaneoRecepcion(rec) {
           ← Volver
         </button>
         <div style="min-width:0;">
-          <div style="font-size:16px;font-weight:800;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">OC: ${rec.numero_oc_siesa}</div>
-          <div style="font-size:12px;color:#666;">${rec.proveedor_nombre || ''}</div>
+          <div style="font-size:16px;font-weight:800;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">OC: ${esc(rec.numero_oc_siesa)}</div>
+          <div style="font-size:12px;color:#666;">${esc(rec.proveedor_nombre || '')}</div>
         </div>
       </div>
 
@@ -344,7 +344,7 @@ function renderItemsRecepcion(items) {
 
     if (esBono) {
       return `
-        <div id="item-rec-${it.producto_id}"
+        <div id="item-rec-${esc(it.producto_id)}"
           style="background:#0d0d1a;border:1px solid #4c1d95;border-radius:12px;padding:14px;margin-bottom:8px;">
           <div style="display:flex;justify-content:space-between;align-items:center;">
             <div style="min-width:0;flex:1;">
@@ -352,10 +352,10 @@ function renderItemsRecepcion(items) {
                 <span style="background:#4c1d95;color:#a78bfa;font-size:10px;font-weight:700;padding:2px 7px;border-radius:20px;">🎁 BONO</span>
                 <div style="font-size:14px;font-weight:600;color:#a78bfa;">${it.producto_nombre || it.producto_codigo}</div>
               </div>
-              <div style="font-size:11px;color:#555;margin-top:2px;">${it.producto_codigo}</div>
+              <div style="font-size:11px;color:#555;margin-top:2px;">${esc(it.producto_codigo)}</div>
             </div>
             <div style="text-align:right;flex-shrink:0;padding-left:8px;">
-              <div style="font-size:28px;font-weight:900;color:#a78bfa;">${it.cantidad_recibida}</div>
+              <div style="font-size:28px;font-weight:900;color:#a78bfa;">${esc(it.cantidad_recibida)}</div>
               <div style="font-size:10px;color:#6b7280;">und recibidas</div>
             </div>
           </div>
@@ -372,20 +372,20 @@ function renderItemsRecepcion(items) {
     const contadorDerecha = modoEmpaque ? `
       <div style="text-align:right;flex-shrink:0;padding-left:8px;">
         <div style="font-size:42px;font-weight:900;line-height:1;color:${completo ? '#4ade80' : '#fff'};">${empaques}</div>
-        <div style="font-size:13px;font-weight:700;color:${completo ? '#4ade80' : '#facc15'};">${it.cantidad_recibida}/${it.cantidad_ordenada} und</div>
+        <div style="font-size:13px;font-weight:700;color:${completo ? '#4ade80' : '#facc15'};">${esc(it.cantidad_recibida)}/${esc(it.cantidad_ordenada)} und</div>
         <div style="font-size:10px;color:#6b7280;">${unidadEmpaque} · ×${factor}</div>
       </div>` : `
       <div style="text-align:right;flex-shrink:0;padding-left:8px;">
-        <div style="font-size:28px;font-weight:900;color:${completo ? '#4ade80' : '#fff'};">${it.cantidad_recibida}/${it.cantidad_ordenada}</div>
+        <div style="font-size:28px;font-weight:900;color:${completo ? '#4ade80' : '#fff'};">${esc(it.cantidad_recibida)}/${esc(it.cantidad_ordenada)}</div>
       </div>`;
 
     return `
-      <div id="item-rec-${it.producto_id}"
+      <div id="item-rec-${esc(it.producto_id)}"
         style="background:${completo ? '#0d1a0d' : '#111'};border:1px solid ${completo ? '#166534' : '#222'};border-radius:12px;padding:14px;margin-bottom:8px;">
         <div style="display:flex;justify-content:space-between;align-items:center;">
           <div style="min-width:0;flex:1;">
             <div style="font-size:14px;font-weight:600;color:${completo ? '#4ade80' : '#fff'};">${it.producto_nombre || it.producto_codigo}</div>
-            <div style="font-size:11px;color:#555;">${it.producto_codigo}</div>
+            <div style="font-size:11px;color:#555;">${esc(it.producto_codigo)}</div>
             ${it.destino === 'CROSS_DOCK' ? '<div style="font-size:11px;color:#60a5fa;margin-top:4px;">↔ CROSS-DOCK</div>' : ''}
           </div>
           ${contadorDerecha}
@@ -435,7 +435,7 @@ async function procesarScanRecepcion(codigo) {
         const factor = prod.factor_conversion || 1;
         esEmp = await _confirmarModal(
           '¿Unidad o caja?',
-          `Este código no distingue: <strong>${prod.nombre}</strong> se compra ` +
+          `Este código no distingue: <strong>${esc(prod.nombre)}</strong> se compra ` +
           `por caja de <strong>${factor}</strong>, pero el código escaneado ` +
           `sirve para las dos.<br><br>¿Qué tenés en la mano?`,
           `Caja de ${factor}`, '1 unidad'
@@ -685,12 +685,12 @@ function _modalAmbiguedadRecepcion(codigo, ambiguos) {
   // El mismo código de barras corresponde a múltiples niveles de empaque
   // El operario debe decir qué está escaneando
   const opciones = ambiguos.map((e, i) => `
-    <button onclick="_elegirEmpaque('${codigo}',${e.producto_id},${e.factor_conversion},'${e.unidad_medida}',this.closest('.modal-rec'))"
+    <button onclick="_elegirEmpaque('${codigo}',${esc(e.producto_id)},${esc(e.factor_conversion)},'${esc(e.unidad_medida)}',this.closest('.modal-rec'))"
       style="width:100%;padding:14px;margin-bottom:8px;background:#1a1a1a;border:1px solid #333;
              color:#fff;border-radius:10px;cursor:pointer;font-size:15px;text-align:left;">
-      <span style="font-size:22px;font-weight:900;">${e.factor_conversion}</span>
-      <span style="color:#9ca3af;margin-left:6px;">${e.unidad_medida}</span>
-      <span style="color:#6b7280;font-size:12px;margin-left:8px;">(×${e.factor_conversion} und)</span>
+      <span style="font-size:22px;font-weight:900;">${esc(e.factor_conversion)}</span>
+      <span style="color:#9ca3af;margin-left:6px;">${esc(e.unidad_medida)}</span>
+      <span style="color:#6b7280;font-size:12px;margin-left:8px;">(×${esc(e.factor_conversion)} und)</span>
     </button>`).join('');
 
   const modal = document.createElement('div');
@@ -760,10 +760,10 @@ async function _buscarProductoModal(q) {
     if (!el) return;
     if (!productos.length) { el.innerHTML = '<div style="color:#6b7280;padding:10px;font-size:13px;">Sin resultados</div>'; return; }
     el.innerHTML = productos.map(p => `
-      <button onclick="_seleccionarProductoManual(${p.id},'${(p.nombre||'').replace(/'/g,"\\'")}',this.closest('.modal-rec'))"
+      <button onclick="_seleccionarProductoManual(${esc(p.id)},'${(p.nombre||'').replace(/'/g,"\\'")}',this.closest('.modal-rec'))"
         style="width:100%;padding:12px;margin-bottom:6px;background:#1a1a1a;border:1px solid #333;color:#fff;border-radius:8px;cursor:pointer;text-align:left;">
-        <div style="font-size:14px;font-weight:600;">${p.nombre}</div>
-        <div style="font-size:11px;color:#6b7280;">${p.codigo}</div>
+        <div style="font-size:14px;font-weight:600;">${esc(p.nombre)}</div>
+        <div style="font-size:11px;color:#6b7280;">${esc(p.codigo)}</div>
       </button>`).join('');
   }, 350);
 }
@@ -927,16 +927,16 @@ async function recepCargarTraslados(silencioso = false) {
       return `
       <div style="background:#0a1a0a;border:1px solid #166534;border-radius:12px;padding:14px;margin-bottom:10px;">
         <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px;">
-          <div style="font-size:15px;font-weight:800;">${s.codigo}</div>
-          <div style="font-size:11px;color:#4ade80;font-weight:600;">Desde ${s.bodega_origen_siesa || '—'}</div>
+          <div style="font-size:15px;font-weight:800;">${esc(s.codigo)}</div>
+          <div style="font-size:11px;color:#4ade80;font-weight:600;">Desde ${esc(s.bodega_origen_siesa || '—')}</div>
         </div>
-        <div style="font-size:12px;color:#4ade80;margin-bottom:8px;">📦 ${s.total_items} ítem${s.total_items !== 1 ? 's' : ''} · ${totalEsp} und esperadas</div>
+        <div style="font-size:12px;color:#4ade80;margin-bottom:8px;">📦 ${esc(s.total_items)} ítem${s.total_items !== 1 ? 's' : ''} · ${totalEsp} und esperadas</div>
         ${(s.items || []).slice(0, 3).map(i => `
           <div style="font-size:11px;color:#aaa;padding:2px 0;">
             ${i.producto_nombre || i.producto_codigo} · ${i.cantidad_enviada || i.cantidad_aprobada || i.cantidad_solicitada || 0} und
           </div>`).join('')}
         ${(s.items || []).length > 3 ? `<div style="font-size:11px;color:#555;padding:2px 0;">+ ${s.items.length - 3} más...</div>` : ''}
-        <button onclick="recepAbrirConteoTraslado(${s.id})"
+        <button onclick="recepAbrirConteoTraslado(${esc(s.id)})"
           style="width:100%;padding:13px;margin-top:12px;background:#1E8395;color:#fff;border:none;border-radius:10px;font-size:15px;font-weight:700;cursor:pointer;">
           📋 Contar productos
         </button>
@@ -987,8 +987,8 @@ function _recepRenderPickingTraslado() {
           ← Volver
         </button>
         <div style="min-width:0;">
-          <div style="font-size:16px;font-weight:800;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${s.codigo}</div>
-          <div style="font-size:12px;color:#666;">Desde ${s.bodega_origen_siesa || '—'} → ${s.bodega_destino_siesa || '—'}</div>
+          <div style="font-size:16px;font-weight:800;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(s.codigo)}</div>
+          <div style="font-size:12px;color:#666;">Desde ${esc(s.bodega_origen_siesa || '—')} → ${esc(s.bodega_destino_siesa || '—')}</div>
         </div>
       </div>
 
@@ -1033,7 +1033,7 @@ function _recepRenderItemsTraslado(items) {
     const completo = contado >= esperado;
     const pct = esperado > 0 ? Math.min((contado / esperado) * 100, 100) : 0;
     return `
-      <div id="rec-tras-item-${i.producto_id}"
+      <div id="rec-tras-item-${esc(i.producto_id)}"
         style="background:${completo ? '#0d1a0d' : '#111'};border:1px solid ${completo ? '#166534' : '#222'};border-radius:12px;padding:14px;margin-bottom:8px;">
         <div style="display:flex;justify-content:space-between;align-items:center;">
           <div style="min-width:0;flex:1;">
@@ -1041,13 +1041,13 @@ function _recepRenderItemsTraslado(items) {
             <div style="font-size:11px;color:#555;margin-top:2px;">${i.producto_codigo_siesa || i.producto_codigo}</div>
           </div>
           <div style="display:flex;align-items:center;gap:8px;flex-shrink:0;padding-left:8px;">
-            <button onclick="recepContarItem(${i.producto_id}, -1)"
+            <button onclick="recepContarItem(${esc(i.producto_id)}, -1)"
               style="width:34px;height:34px;background:#222;border:1px solid #333;color:#fff;border-radius:8px;font-size:20px;font-weight:700;cursor:pointer;line-height:1;">−</button>
             <div style="text-align:center;min-width:54px;">
               <div style="font-size:26px;font-weight:900;line-height:1;color:${completo ? '#4ade80' : '#fff'};">${contado}</div>
               <div style="font-size:10px;color:#6b7280;">/ ${esperado}</div>
             </div>
-            <button onclick="recepContarItem(${i.producto_id}, 1)"
+            <button onclick="recepContarItem(${esc(i.producto_id)}, 1)"
               style="width:34px;height:34px;background:#1E8395;border:none;color:#fff;border-radius:8px;font-size:20px;font-weight:700;cursor:pointer;line-height:1;">+</button>
           </div>
         </div>
@@ -1217,13 +1217,13 @@ async function cargarDevoluciones(silencioso = false) {
 
     if (rechazados.length) {
       html += `<div style="font-size:12px;font-weight:600;color:#f87171;padding:4px 0 8px;border-bottom:1px solid #2a1010;margin-bottom:10px;">
-        🔴 ${rechazados.length} BULTO${rechazados.length !== 1 ? 'S' : ''} RECHAZADO${rechazados.length !== 1 ? 'S' : ''} — RE-INGRESAR A BODEGA
+        🔴 ${esc(rechazados.length)} BULTO${rechazados.length !== 1 ? 'S' : ''} RECHAZADO${rechazados.length !== 1 ? 'S' : ''} — RE-INGRESAR A BODEGA
       </div>`;
       html += rechazados.map(b => `
         <div class="rec-card" style="border-color:#7f1d1d;background:#1a0d0d;">
-          <div class="rec-titulo" style="font-size:16px;color:#f87171;">${b.codigo_barras}</div>
-          <div class="rec-sub">${b.tipo} ${b.numero}/${b.total} · ${b.numero_pedido} · ${b.cliente || '—'}</div>
-          <div style="margin-top:6px;font-size:12px;color:#f87171;">Motivo: ${b.motivo_rechazo || 'Sin especificar'}</div>
+          <div class="rec-titulo" style="font-size:16px;color:#f87171;">${esc(b.codigo_barras)}</div>
+          <div class="rec-sub">${esc(b.tipo)} ${esc(b.numero)}/${esc(b.total)} · ${esc(b.numero_pedido)} · ${esc(b.cliente || '—')}</div>
+          <div style="margin-top:6px;font-size:12px;color:#f87171;">Motivo: ${esc(b.motivo_rechazo || 'Sin especificar')}</div>
           <div style="margin-top:10px;padding:10px;background:#2a1010;border-radius:8px;font-size:12px;color:#f87171;">
             📦 Ubicar físicamente en bodega
           </div>
@@ -1282,21 +1282,21 @@ async function cargarPendientesDeRuta() {
 
     cont.innerHTML = `
       <div style="font-size:12px;font-weight:600;color:var(--pm);padding:4px 0 8px;border-bottom:1px solid var(--brd);margin-bottom:10px;">
-        🔵 ${pendientes.length} DEVOLUCIÓN${pendientes.length !== 1 ? 'ES' : ''} DE RUTA PENDIENTE${pendientes.length !== 1 ? 'S' : ''} DE CONFIRMAR
+        🔵 ${esc(pendientes.length)} DEVOLUCIÓN${pendientes.length !== 1 ? 'ES' : ''} DE RUTA PENDIENTE${pendientes.length !== 1 ? 'S' : ''} DE CONFIRMAR
       </div>` +
       pendientes.map(d => `
-        <div class="rec-card" style="margin-bottom:8px;cursor:pointer;" onclick="abrirPendienteDeRuta(${d.id})">
+        <div class="rec-card" style="margin-bottom:8px;cursor:pointer;" onclick="abrirPendienteDeRuta(${esc(d.id)})">
           <div style="display:flex;justify-content:space-between;align-items:flex-start;">
             <div>
-              <div class="rec-titulo" style="font-size:14px;color:var(--tx);">${d.numero_pedido_siesa || '—'}</div>
-              <div class="rec-sub">${d.cliente || 'Cliente sin nombre'}</div>
+              <div class="rec-titulo" style="font-size:14px;color:var(--tx);">${esc(d.numero_pedido_siesa || '—')}</div>
+              <div class="rec-sub">${esc(d.cliente || 'Cliente sin nombre')}</div>
             </div>
             <span class="badge ${d.es_total ? 'badge-red' : 'badge-green'}">
               ${d.es_total ? 'DEVOLUCIÓN TOTAL' : 'DEVOLUCIÓN PARCIAL'}
             </span>
           </div>
           <div style="margin-top:8px;font-size:12px;color:var(--tx2);">
-            ${d.lineas.length} referencia${d.lineas.length !== 1 ? 's' : ''} · toca para verificar y confirmar
+            ${esc(d.lineas.length)} referencia${d.lineas.length !== 1 ? 's' : ''} · toca para verificar y confirmar
           </div>
         </div>`).join('');
   } catch (e) {
@@ -1328,16 +1328,16 @@ async function cargarPendientesAprobacionNC() {
 
     cont.innerHTML = `
       <div style="font-size:12px;font-weight:600;color:#fbbf24;padding:4px 0 8px;border-bottom:1px solid #2a2210;margin:16px 0 10px;">
-        🟡 ${pendientes.length} NC PENDIENTE${pendientes.length !== 1 ? 'S' : ''} DE APROBAR EN SIESA
+        🟡 ${esc(pendientes.length)} NC PENDIENTE${pendientes.length !== 1 ? 'S' : ''} DE APROBAR EN SIESA
       </div>` +
       pendientes.map(d => `
         <div class="rec-card" style="border-color:#78350f;background:#1a1408;margin-bottom:8px;">
-          <div class="rec-titulo" style="font-size:14px;color:#fde68a;">${d.codigo} — ${d.numero_pedido_siesa || '—'}</div>
-          <div class="rec-sub" style="color:#d4a94f;">${d.cliente || 'Cliente sin nombre'} · FE ${d.tipo_docto_fe}-${d.consec_fe}</div>
+          <div class="rec-titulo" style="font-size:14px;color:#fde68a;">${esc(d.codigo)} — ${esc(d.numero_pedido_siesa || '—')}</div>
+          <div class="rec-sub" style="color:#d4a94f;">${esc(d.cliente || 'Cliente sin nombre')} · FE ${esc(d.tipo_docto_fe)}-${esc(d.consec_fe)}</div>
           <div style="margin-top:4px;font-size:11px;color:#a08650;">
             NC creada en Siesa: ${d.siesa_nc_triggered_at ? new Date(d.siesa_nc_triggered_at).toLocaleString('es-CO') : '—'}
           </div>
-          <button onclick="marcarNCAprobada(${d.id})"
+          <button onclick="marcarNCAprobada(${esc(d.id)})"
             style="margin-top:10px;width:100%;padding:10px;background:#78350f;color:#fbbf24;border:none;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;">
             Ya la aprobé y crucé en Siesa
           </button>
@@ -1399,11 +1399,11 @@ function renderLineasDevolucion(datos) {
 
   const filas = (datos.lineas || []).map((l, i) => `
     <div class="rec-card" style="margin-bottom:10px;">
-      <div style="font-size:16px;font-weight:700;">${l.producto_nombre}</div>
-      <div style="font-size:12px;color:#666;margin-bottom:8px;">${l.producto_codigo} · Facturado: ${l.cantidad_facturada}</div>
+      <div style="font-size:16px;font-weight:700;">${esc(l.producto_nombre)}</div>
+      <div style="font-size:12px;color:#666;margin-bottom:8px;">${esc(l.producto_codigo)} · Facturado: ${esc(l.cantidad_facturada)}</div>
       <div style="display:flex;align-items:center;gap:10px;">
         <span style="font-size:12px;color:#aaa;">Devuelto:</span>
-        <input id="cant-dev-${i}" type="number" min="0" max="${l.cantidad_facturada}" step="1" value="${l.cantidad_devuelta || 0}"
+        <input id="cant-dev-${i}" type="number" min="0" max="${esc(l.cantidad_facturada)}" step="1" value="${esc(l.cantidad_devuelta || 0)}"
           style="width:90px;padding:10px;background:#111;border:1px solid #333;border-radius:8px;color:#fff;font-size:16px;text-align:center;" />
         <label style="display:flex;align-items:center;gap:6px;font-size:13px;color:#f87171;cursor:pointer;margin-left:auto;">
           <input id="averiado-dev-${i}" type="checkbox" style="width:18px;height:18px;" ${l.es_averiado ? 'checked' : ''} /> Averiado
@@ -1417,7 +1417,7 @@ function renderLineasDevolucion(datos) {
         style="background:#222;border:1px solid #333;color:#fff;padding:8px 14px;border-radius:8px;cursor:pointer;font-size:14px;">
         ← Volver
       </button>
-      <span style="font-size:14px;font-weight:700;">Pedido ${datos.numero_pedido_siesa} · ${datos.cliente || '—'}</span>
+      <span style="font-size:14px;font-weight:700;">Pedido ${esc(datos.numero_pedido_siesa)} · ${esc(datos.cliente || '—')}</span>
     </div>
 
     ${esPendienteDeRuta ? `
@@ -1776,7 +1776,7 @@ function _compRenderVelocityList(el, items, meta) {
        </div>`
     : '';
 
-  html += `<div style="font-size:11px;color:var(--tx3);margin-bottom:8px;">${items.length} productos con movimiento</div>`;
+  html += `<div style="font-size:11px;color:var(--tx3);margin-bottom:8px;">${esc(items.length)} productos con movimiento</div>`;
 
   html += '<div style="display:flex;flex-direction:column;gap:6px;">';
   for (const it of items) {
@@ -1784,14 +1784,14 @@ function _compRenderVelocityList(el, items, meta) {
     const alertaBg = it.alerta ? 'background:#110a0a;border-color:#7f1d1d;' : '';
     html += `<div style="background:var(--bg-s);border:1px solid var(--brd);border-radius:10px;padding:10px 12px;${alertaBg}">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
-        <div style="font-size:13px;font-weight:700;color:var(--tx);">${it.codigo}</div>
-        <span style="font-size:11px;font-weight:800;color:${abcColor};background:${abcColor}22;padding:2px 8px;border-radius:6px;">${it.abc}</span>
+        <div style="font-size:13px;font-weight:700;color:var(--tx);">${esc(it.codigo)}</div>
+        <span style="font-size:11px;font-weight:800;color:${abcColor};background:${abcColor}22;padding:2px 8px;border-radius:6px;">${esc(it.abc)}</span>
       </div>
-      <div style="font-size:11px;color:var(--tx3);margin-bottom:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${it.nombre}</div>
+      <div style="font-size:11px;color:var(--tx3);margin-bottom:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(it.nombre)}</div>
       <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:4px;font-size:11px;">
-        <div><span style="color:var(--tx3);">Picks/día</span><br><strong style="color:var(--tx);">${it.picks_dia}</strong></div>
-        <div><span style="color:var(--tx3);">Total período</span><br><strong style="color:var(--tx);">${it.picks_periodo}</strong></div>
-        <div><span style="color:var(--tx3);">Stock PICK</span><br><strong style="color:var(--tx);">${it.stock_picking}</strong></div>
+        <div><span style="color:var(--tx3);">Picks/día</span><br><strong style="color:var(--tx);">${esc(it.picks_dia)}</strong></div>
+        <div><span style="color:var(--tx3);">Total período</span><br><strong style="color:var(--tx);">${esc(it.picks_periodo)}</strong></div>
+        <div><span style="color:var(--tx3);">Stock PICK</span><br><strong style="color:var(--tx);">${esc(it.stock_picking)}</strong></div>
         <div><span style="color:var(--tx3);">Días stock</span><br><strong style="color:${it.dias_stock_estimado < 15 ? '#ef4444' : it.dias_stock_estimado < 30 ? '#f59e0b' : 'var(--tx)'};">${it.dias_stock_estimado >= 999 ? '∞' : it.dias_stock_estimado}</strong></div>
       </div>
     </div>`;
@@ -1834,15 +1834,15 @@ async function compCargarDock(prefix) {
     if (isP2) {
       html += `<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:14px;">
         <div style="background:var(--bg-s);border:1px solid var(--brd);border-radius:10px;padding:12px;text-align:center;">
-          <div style="font-size:22px;font-weight:800;color:#ef4444;">${r.total_recepciones_con_problema || 0}</div>
+          <div style="font-size:22px;font-weight:800;color:#ef4444;">${esc(r.total_recepciones_con_problema || 0)}</div>
           <div style="font-size:11px;color:var(--tx3);">Con problema</div>
         </div>
         <div style="background:var(--bg-s);border:1px solid var(--brd);border-radius:10px;padding:12px;text-align:center;">
-          <div style="font-size:22px;font-weight:800;color:#f59e0b;">${r.total_excesos || 0}</div>
+          <div style="font-size:22px;font-weight:800;color:#f59e0b;">${esc(r.total_excesos || 0)}</div>
           <div style="font-size:11px;color:var(--tx3);">Excesos</div>
         </div>
         <div style="background:var(--bg-s);border:1px solid var(--brd);border-radius:10px;padding:12px;text-align:center;">
-          <div style="font-size:22px;font-weight:800;color:#3b82f6;">${r.total_faltantes || 0}</div>
+          <div style="font-size:22px;font-weight:800;color:#3b82f6;">${esc(r.total_faltantes || 0)}</div>
           <div style="font-size:11px;color:var(--tx3);">Faltantes</div>
         </div>
       </div>`;
@@ -1860,15 +1860,15 @@ async function compCargarDock(prefix) {
           const difColor = it.tipo_problema === 'EXCESO' ? '#f59e0b' : '#3b82f6';
           const difSign = it.diferencia > 0 ? '+' : '';
           itemsHtml += `<div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid var(--brd);font-size:12px;">
-            <span style="color:var(--tx);">${it.producto_codigo} — ${(it.producto_nombre||'').substring(0,30)}</span>
-            <span style="color:${difColor};font-weight:700;">${difSign}${it.diferencia} (${it.tipo_problema})</span>
+            <span style="color:var(--tx);">${esc(it.producto_codigo)} — ${(it.producto_nombre||'').substring(0,30)}</span>
+            <span style="color:${difColor};font-weight:700;">${difSign}${esc(it.diferencia)} (${esc(it.tipo_problema)})</span>
           </div>`;
         }
         html += `<div style="background:var(--bg-s);border:1px solid var(--brd);border-radius:10px;padding:12px;">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
             <div>
-              <span style="font-size:13px;font-weight:700;color:var(--tx);">OC ${rec.oc_siesa}</span>
-              <span style="font-size:11px;color:var(--tx3);margin-left:8px;">${rec.codigo}</span>
+              <span style="font-size:13px;font-weight:700;color:var(--tx);">OC ${esc(rec.oc_siesa)}</span>
+              <span style="font-size:11px;color:var(--tx3);margin-left:8px;">${esc(rec.codigo)}</span>
             </div>
             <span style="font-size:11px;color:var(--tx3);">${fecha}</span>
           </div>
@@ -1876,7 +1876,7 @@ async function compCargarDock(prefix) {
           <div style="background:var(--bg-s2);border-radius:8px;padding:6px 8px;">
             ${itemsHtml}
           </div>
-          <div style="font-size:11px;color:var(--tx3);margin-top:4px;">${rec.total_problemas} item(s) con discrepancia</div>
+          <div style="font-size:11px;color:var(--tx3);margin-top:4px;">${esc(rec.total_problemas)} item(s) con discrepancia</div>
         </div>`;
       }
       html += '</div>';
@@ -1916,11 +1916,11 @@ async function compCargarCuarentena(prefix) {
     if (isP2) {
       html += `<div style="display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-bottom:14px;">
         <div style="background:#110a0a;border:1px solid #7f1d1d;border-radius:10px;padding:14px;text-align:center;">
-          <div style="font-size:26px;font-weight:800;color:#f87171;">${r.pendientes || 0}</div>
+          <div style="font-size:26px;font-weight:800;color:#f87171;">${esc(r.pendientes || 0)}</div>
           <div style="font-size:11px;color:#fca5a5;">Pendientes de gestión</div>
         </div>
         <div style="background:var(--bg-s);border:1px solid var(--brd);border-radius:10px;padding:14px;text-align:center;">
-          <div style="font-size:26px;font-weight:800;color:var(--tx);">${r.total_productos_en_averias || 0}</div>
+          <div style="font-size:26px;font-weight:800;color:var(--tx);">${esc(r.total_productos_en_averias || 0)}</div>
           <div style="font-size:11px;color:var(--tx3);">Productos en zona averías</div>
         </div>
       </div>`;
@@ -1933,8 +1933,8 @@ async function compCargarCuarentena(prefix) {
       html += '<div style="display:flex;flex-direction:column;gap:4px;margin-bottom:16px;">';
       for (const s of stock) {
         html += `<div style="display:flex;justify-content:space-between;background:var(--bg-s);border:1px solid var(--brd);border-radius:8px;padding:8px 12px;">
-          <div style="font-size:12px;"><strong>${s.producto_codigo}</strong> — ${(s.producto_nombre||'').substring(0,35)}</div>
-          <div style="font-size:14px;font-weight:800;color:#ef4444;">${s.cantidad_averiada} UND</div>
+          <div style="font-size:12px;"><strong>${esc(s.producto_codigo)}</strong> — ${(s.producto_nombre||'').substring(0,35)}</div>
+          <div style="font-size:14px;font-weight:800;color:#ef4444;">${esc(s.cantidad_averiada)} UND</div>
         </div>`;
       }
       html += '</div>';
@@ -1943,7 +1943,7 @@ async function compCargarCuarentena(prefix) {
     // Tareas averiadas
     const devs = r.devoluciones_averiadas || [];
     if (devs.length) {
-      html += `<div style="font-size:13px;font-weight:700;color:var(--tx);margin-bottom:8px;">Devoluciones averiadas (${devs.length})</div>`;
+      html += `<div style="font-size:13px;font-weight:700;color:var(--tx);margin-bottom:8px;">Devoluciones averiadas (${esc(devs.length)})</div>`;
       html += '<div style="display:flex;flex-direction:column;gap:6px;">';
       for (const d of devs) {
         const estadoColor = d.estado === 'PENDIENTE' ? '#f59e0b' : d.estado === 'EN_PROCESO' ? '#3b82f6' : d.estado === 'COMPLETADO' ? '#22c55e' : '#555';
@@ -1952,14 +1952,14 @@ async function compCargarCuarentena(prefix) {
         html += `<div style="background:var(--bg-s);border:1px solid var(--brd);border-radius:10px;padding:10px 12px;">
           <div style="display:flex;justify-content:space-between;align-items:center;">
             <div>
-              <span style="font-size:13px;font-weight:700;color:var(--tx);">${d.codigo}</span>
-              <span style="font-size:11px;color:${estadoColor};margin-left:8px;font-weight:700;">${d.estado}</span>
+              <span style="font-size:13px;font-weight:700;color:var(--tx);">${esc(d.codigo)}</span>
+              <span style="font-size:11px;color:${estadoColor};margin-left:8px;font-weight:700;">${esc(d.estado)}</span>
               ${siesa}
             </div>
-            <span style="font-size:12px;font-weight:700;color:${diasColor};">${d.dias_sin_gestion}d</span>
+            <span style="font-size:12px;font-weight:700;color:${diasColor};">${esc(d.dias_sin_gestion)}d</span>
           </div>
-          <div style="font-size:12px;color:var(--tx2);margin-top:4px;">${d.producto_codigo || '—'} — ${(d.producto_nombre||'').substring(0,35)}</div>
-          <div style="font-size:11px;color:var(--tx3);margin-top:2px;">${d.cantidad} UND${d.observaciones ? ' · ' + d.observaciones.substring(0,60) : ''}</div>
+          <div style="font-size:12px;color:var(--tx2);margin-top:4px;">${esc(d.producto_codigo || '—')} — ${(d.producto_nombre||'').substring(0,35)}</div>
+          <div style="font-size:11px;color:var(--tx3);margin-top:2px;">${esc(d.cantidad)} UND${d.observaciones ? ' · ' + d.observaciones.substring(0,60) : ''}</div>
         </div>`;
       }
       html += '</div>';
@@ -2028,7 +2028,7 @@ async function compCargarAudit(prefix) {
       return;
     }
 
-    let html = `<div style="font-size:11px;color:var(--tx3);margin-bottom:8px;">${resultados.length} recepción(es) encontradas</div>`;
+    let html = `<div style="font-size:11px;color:var(--tx3);margin-bottom:8px;">${esc(resultados.length)} recepción(es) encontradas</div>`;
     html += '<div style="display:flex;flex-direction:column;gap:8px;">';
 
     for (const rec of resultados) {
@@ -2039,33 +2039,33 @@ async function compCargarAudit(prefix) {
       let itemsHtml = '';
       for (const it of (rec.items || [])) {
         const difColor = it.es_exceso ? '#f59e0b' : it.es_faltante ? '#3b82f6' : '#22c55e';
-        const difText = it.diferencia !== 0 ? ` (${it.diferencia > 0 ? '+' : ''}${it.diferencia})` : '';
+        const difText = it.diferencia !== 0 ? ` (${it.diferencia > 0 ? '+' : ''}${esc(it.diferencia)})` : '';
         itemsHtml += `<div style="display:flex;justify-content:space-between;padding:3px 0;border-bottom:1px solid var(--brd);font-size:11px;">
-          <span style="color:var(--tx);">${it.producto_codigo}${it.tipo === 'BONIFICACION' ? ' <span style="color:#8b5cf6;">BONIF</span>' : ''}</span>
-          <span>OC: ${it.cantidad_ordenada} → Rec: <strong style="color:${difColor};">${it.cantidad_recibida}${difText}</strong></span>
+          <span style="color:var(--tx);">${esc(it.producto_codigo)}${it.tipo === 'BONIFICACION' ? ' <span style="color:#8b5cf6;">BONIF</span>' : ''}</span>
+          <span>OC: ${esc(it.cantidad_ordenada)} → Rec: <strong style="color:${difColor};">${esc(it.cantidad_recibida)}${difText}</strong></span>
         </div>`;
       }
 
       html += `<div style="background:var(--bg-s);border:1px solid var(--brd);border-radius:10px;padding:12px;">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
           <div>
-            <span style="font-size:13px;font-weight:700;color:var(--tx);">OC ${rec.oc_siesa}</span>
-            <span style="font-size:11px;color:${estadoColor};margin-left:8px;font-weight:700;">${rec.estado}</span>
+            <span style="font-size:13px;font-weight:700;color:var(--tx);">OC ${esc(rec.oc_siesa)}</span>
+            <span style="font-size:11px;color:${estadoColor};margin-left:8px;font-weight:700;">${esc(rec.estado)}</span>
             ${siesa}
           </div>
           <span style="font-size:11px;color:var(--tx3);">${fecha}</span>
         </div>
         <div style="font-size:12px;color:var(--tx2);margin-bottom:2px;">${rec.proveedor_nombre || rec.proveedor_codigo || '—'}</div>
         <div style="font-size:11px;color:var(--tx3);margin-bottom:6px;">
-          Recepcionista: <strong>${rec.recepcionista || '—'}</strong>
-          · Remisión: ${rec.remision || '—'}
-          · ${rec.codigo}
+          Recepcionista: <strong>${esc(rec.recepcionista || '—')}</strong>
+          · Remisión: ${esc(rec.remision || '—')}
+          · ${esc(rec.codigo)}
           ${rec.es_parcial ? ' · <span style="color:#f59e0b;">PARCIAL</span>' : ''}
         </div>
         <div style="background:var(--bg-s2);border-radius:8px;padding:6px 8px;max-height:200px;overflow-y:auto;">
           ${itemsHtml}
         </div>
-        <div style="font-size:11px;color:var(--tx3);margin-top:4px;">${rec.total_items} item(s)</div>
+        <div style="font-size:11px;color:var(--tx3);margin-top:4px;">${esc(rec.total_items)} item(s)</div>
       </div>`;
     }
     html += '</div>';
@@ -2096,7 +2096,7 @@ async function compCargarBloqueos() {
         <div style="background:#110a0a;border:1px solid #7f1d1d;border-radius:12px;padding:16px;margin-bottom:16px;text-align:center;">
           <div style="font-size:11px;color:#fca5a5;text-transform:uppercase;font-weight:700;margin-bottom:4px;">Capital inmovilizado en cadáveres</div>
           <div style="font-size:28px;font-weight:800;color:#f87171;">${_liqFmtComp(d.total_inmovilizado)}</div>
-          <div style="font-size:12px;color:#fca5a5;margin-top:4px;">${d.total_skus} SKU${d.total_skus !== 1 ? 's' : ''} bloqueado${d.total_skus !== 1 ? 's' : ''}</div>
+          <div style="font-size:12px;color:#fca5a5;margin-top:4px;">${esc(d.total_skus)} SKU${d.total_skus !== 1 ? 's' : ''} bloqueado${d.total_skus !== 1 ? 's' : ''}</div>
         </div>`;
     }
 
@@ -2111,17 +2111,17 @@ async function compCargarBloqueos() {
         <div style="background:var(--bg-s);border:1px solid ${idx < 3 ? '#7f1d1d' : 'var(--brd)'};border-radius:10px;padding:12px;margin-bottom:8px;">
           <div style="display:flex;justify-content:space-between;align-items:flex-start;">
             <div>
-              <div style="font-size:13px;font-weight:700;color:var(--tx);">${it.codigo}</div>
-              <div style="font-size:11px;color:var(--tx3);margin-top:2px;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${it.nombre}</div>
+              <div style="font-size:13px;font-weight:700;color:var(--tx);">${esc(it.codigo)}</div>
+              <div style="font-size:11px;color:var(--tx3);margin-top:2px;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(it.nombre)}</div>
             </div>
             <div style="text-align:right;">
               <div style="font-size:14px;font-weight:800;color:#f87171;">${_liqFmtComp(it.capital_inmovilizado)}</div>
-              <div style="font-size:10px;color:var(--tx3);">${it.stock} UND × ${_liqFmtComp(it.costo_unitario)}</div>
+              <div style="font-size:10px;color:var(--tx3);">${esc(it.stock)} UND × ${_liqFmtComp(it.costo_unitario)}</div>
             </div>
           </div>
           <div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px;">
-            <span style="font-size:10px;padding:2px 8px;border-radius:20px;background:#7f1d1d33;color:#fca5a5;font-weight:700;">${it.motivo}</span>
-            <button onclick="compDesbloquear(${it.bloqueo_id},'${it.codigo}')"
+            <span style="font-size:10px;padding:2px 8px;border-radius:20px;background:#7f1d1d33;color:#fca5a5;font-weight:700;">${esc(it.motivo)}</span>
+            <button onclick="compDesbloquear(${esc(it.bloqueo_id)},'${esc(it.codigo)}')"
               style="padding:4px 10px;background:var(--bg);border:1px solid var(--brd);border-radius:6px;color:var(--tx3);font-size:11px;cursor:pointer;">
               Solicitar desbloqueo
             </button>
@@ -2133,7 +2133,7 @@ async function compCargarBloqueos() {
     // Cargar fugas
     compCargarFugas();
   } catch (e) {
-    lista.innerHTML = `<div style="color:#ef4444;text-align:center;padding:20px;">${e.message || 'Error cargando bloqueos'}</div>`;
+    lista.innerHTML = `<div style="color:#ef4444;text-align:center;padding:20px;">${esc(e.message || 'Error cargando bloqueos')}</div>`;
   }
 }
 
@@ -2190,8 +2190,8 @@ async function compCargarFugas() {
     el.innerHTML = fugas.map(f => `
       <div style="display:flex;justify-content:space-between;padding:8px;background:#78350f22;border:1px solid #78350f;border-radius:8px;margin-bottom:6px;font-size:12px;">
         <div>
-          <strong style="color:#fbbf24;">${f.producto_codigo}</strong> — ${f.producto_nombre || '—'}
-          <div style="font-size:11px;color:var(--tx3);">OC: ${f.oc_siesa || '—'} · Prov: ${f.proveedor || '—'} · ${f.cantidad_recibida} UND</div>
+          <strong style="color:#fbbf24;">${esc(f.producto_codigo)}</strong> — ${esc(f.producto_nombre || '—')}
+          <div style="font-size:11px;color:var(--tx3);">OC: ${esc(f.oc_siesa || '—')} · Prov: ${esc(f.proveedor || '—')} · ${esc(f.cantidad_recibida)} UND</div>
         </div>
         <span style="color:var(--tx3);font-size:11px;white-space:nowrap;">${new Date(f.fecha).toLocaleDateString('es-CO')}</span>
       </div>`).join('');

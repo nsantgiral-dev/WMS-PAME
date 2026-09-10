@@ -58,14 +58,22 @@ def mundo(db, almacen):
     tienda = Usuario(nombre='Tienda TLR', email='tlr_tienda@test.com',
                      password_hash=generate_password_hash('x'), rol='tienda',
                      almacen_id=almacen.id, activo=True)
-    db.session.add_all([veh, virgen, cond, flota, tienda])
+    # Desde el 2026-09-09 abrir, cerrar y anular una orden son `DECIDE_FLOTA`
+    # (gestión): mandar un camión al taller compromete plata. Registrar el
+    # trabajo y la factura siguen siendo de control de flota.
+    jefe = Usuario(nombre='Gestion TLR', email='tlr_gestion@test.com',
+                   password_hash=generate_password_hash('x'), rol='admin',
+                   almacen_id=almacen.id, activo=True)
+    db.session.add_all([veh, virgen, cond, flota, tienda, jefe])
     db.session.commit()
     return {
         'vehiculo_id': veh.id, 'placa': veh.placa,
         'virgen_id': virgen.id, 'placa_virgen': virgen.placa,
         'usuario_id': flota.id,
+        'usuario_gestion_id': jefe.id,
         't_cond': create_access_token(identity=str(cond.id)),
         't_flota': create_access_token(identity=str(flota.id)),
+        't_gestion': create_access_token(identity=str(jefe.id)),
         't_tienda': create_access_token(identity=str(tienda.id)),
         'db': db,
     }
@@ -877,7 +885,7 @@ class TestLaRespuestaDelListado:
 class TestLosVerbosPorHTTP:
 
     def test_abrir_cerrar_y_facturar_de_punta_a_punta(self, app, client, mundo):
-        t = _auth(mundo['t_flota'])
+        t = _auth(mundo['t_gestion'])
         r = client.post('/flota/ordenes', headers=t,
                         json={'placa': mundo['placa'], 'tipo': 'correctiva',
                               'taller': 'Taller Los Andes',
@@ -912,7 +920,7 @@ class TestLosVerbosPorHTTP:
     def test_anular_por_http_exige_motivo(self, app, client, mundo):
         o = _abrir(mundo)
         r = client.post(f'/flota/ordenes/{o.id}/anular',
-                        headers=_auth(mundo['t_flota']), json={})
+                        headers=_auth(mundo['t_gestion']), json={})
         assert r.status_code == 409
         assert 'motivo escrito' in r.get_json()['error']
 
@@ -920,25 +928,67 @@ class TestLosVerbosPorHTTP:
                                                            mundo):
         o = _abrir(mundo)
         r = client.post(f'/flota/ordenes/{o.id}/cerrar',
-                        headers=_auth(mundo['t_flota']), json={})
+                        headers=_auth(mundo['t_gestion']), json={})
         assert r.status_code == 409
 
     def test_una_orden_inexistente_da_409_y_no_500(self, app, client, mundo):
         r = client.post('/flota/ordenes/999999/cerrar',
-                        headers=_auth(mundo['t_flota']), json={})
+                        headers=_auth(mundo['t_gestion']), json={})
         assert r.status_code == 409
 
     def test_el_usuario_sale_del_TOKEN_y_no_del_cuerpo(self, app, client, mundo):
-        r = client.post('/flota/ordenes', headers=_auth(mundo['t_flota']),
+        r = client.post('/flota/ordenes', headers=_auth(mundo['t_gestion']),
                         json={'placa': mundo['placa'], 'tipo': 'correctiva',
                               'taller': 'T', 'descripcion': 'x', 'km': 100000,
                               'abierta_por_usuario_id': 999999})
-        assert r.get_json()['abierta_por_usuario_id'] == mundo['usuario_id']
+        assert r.get_json()['abierta_por_usuario_id'] == mundo['usuario_gestion_id']
 
 
 # ══════════════════════════════════════════════════════════════════════════
 # El health — las tres medidas nacen con la tabla
 # ══════════════════════════════════════════════════════════════════════════
+
+    def test_control_de_flota_NO_manda_el_camion_al_taller(self, app, client,
+                                                           mundo):
+        """La dirección nueva (2026-09-09). Abrir, cerrar y anular una visita
+        comprometen plata: son decisión, no registro.
+
+        Su ficha lo decía desde el 2026-08-04 —«no aprobás órdenes de trabajo ni
+        gastos»— y afirmaba que el código lo imponía. No lo imponía.
+        """
+        o = _abrir(mundo)
+        t = _auth(mundo['t_flota'])
+        assert client.post('/flota/ordenes', headers=t, json={
+            'placa': mundo['placa'], 'tipo': 'correctiva', 'taller': 'T',
+            'descripcion': 'x', 'km': 100000}).status_code == 403
+        assert client.post(f'/flota/ordenes/{o.id}/cerrar', headers=t,
+                           json={}).status_code == 403
+        assert client.post(f'/flota/ordenes/{o.id}/anular', headers=t,
+                           json={'motivo': 'no fue'}).status_code == 403
+
+    def test_pero_SIGUE_registrando_el_trabajo_y_la_factura(self, app, client,
+                                                            mundo):
+        """La contraparte. Un recorte de permisos sin esta mitad deja al rol sin
+        poder hacer su trabajo y nadie se entera hasta que lo intenta — es el
+        mismo motivo por el que existe `test_gestion_SI_cierra`."""
+        o = _abrir(mundo)
+        t = _auth(mundo['t_flota'])
+        r = client.post(f'/flota/ordenes/{o.id}/intervenciones', headers=t,
+                        json={'sistema': 'embrague',
+                              'garantia_declarada': 'no'})
+        assert r.status_code == 201, r.get_json()
+        iid = r.get_json()['intervencion_id']
+
+        client.post(f'/flota/ordenes/{o.id}/cerrar',
+                    headers=_auth(mundo['t_gestion']), json={})
+        r = client.post(f'/flota/ordenes/{o.id}/factura', headers=t,
+                        json={'intervenciones': [iid],
+                              'categoria': 'mantenimiento',
+                              'fecha': '2026-04-30', 'valor': '1200000',
+                              'proveedor': 'Taller Los Andes',
+                              'origen_costo': 'credito_proveedor'})
+        assert r.status_code == 201, r.get_json()
+
 
 class TestLaMedidaNaceConLaTabla:
     """`flota_lectura_odometro` vivió un mes con cero campos en el health y por

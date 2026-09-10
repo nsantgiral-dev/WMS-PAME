@@ -26,7 +26,7 @@ from app.models.vehiculo import Vehiculo
 from app.routes._auth_helpers import Roles
 from flota.adaptadores import hallazgos as adaptador
 from flota.adaptadores.modelos import Hallazgo
-from flota.api._permisos import MAESTROS_FLOTA, exige
+from flota.api._permisos import DECIDE_FLOTA, MAESTROS_FLOTA, exige
 from flota.api._tiempo import iso_utc
 from flota.dominio.errores import ErrorFlota
 from flota.dominio.hallazgo import (EstadoHallazgo, dias_transcurridos,
@@ -167,7 +167,7 @@ def reportar():
 
 @hallazgos_bp.route('/hallazgos/<int:hallazgo_id>/cerrar', methods=['POST'])
 @jwt_required()
-@exige(MAESTROS_FLOTA, 'cerrar un daño')
+@exige(DECIDE_FLOTA, 'cerrar un daño')
 def cerrar(hallazgo_id):
     """El vehículo volvió reparado. Para el reloj del indicador."""
     datos = request.get_json(silent=True) or {}
@@ -182,7 +182,7 @@ def cerrar(hallazgo_id):
 
 @hallazgos_bp.route('/hallazgos/<int:hallazgo_id>/descartar', methods=['POST'])
 @jwt_required()
-@exige(MAESTROS_FLOTA, 'descartar un daño')
+@exige(DECIDE_FLOTA, 'descartar un daño')
 def descartar(hallazgo_id):
     """No era un daño. Exige motivo escrito."""
     datos = request.get_json(silent=True) or {}
@@ -198,7 +198,7 @@ def descartar(hallazgo_id):
 
 @hallazgos_bp.route('/hallazgos/<int:hallazgo_id>/aplazar', methods=['POST'])
 @jwt_required()
-@exige(MAESTROS_FLOTA, 'aplazar un daño')
+@exige(DECIDE_FLOTA, 'aplazar un daño')
 def aplazar(hallazgo_id):
     """Corre el plazo y deja el contador subiendo. No borra el tiempo abierto."""
     datos = request.get_json(silent=True) or {}
