@@ -833,6 +833,21 @@ class ConnektaLiquidacionGateway:
         un = unidad_negocio or core.unidad_negocio or '99'
         ajuste_abs = abs(float(ajuste_valor or 0))
 
+        # Autorretención (1355950X, "AUTORRETENCION_ICA_*" — la empresa se
+        # retiene a sí misma sobre su propia venta) vs. retención normal
+        # (1355150X/1355180X — el CLIENTE le retiene a la empresa). Verificado
+        # en vivo contra Siesa QA (2026-09-10, lote de 16 pedidos): el mismo
+        # payload que funciona con `codigo:0` para retefuente/reteIVA/ICA a
+        # favor (con tercero en la línea de retención) es rechazado para las
+        # cuentas de autorretención con "Movimiento contable: El movimiento
+        # no debe traer un tercero asignado. Auxiliar: 13559501" — porque esa
+        # línea no es una cuenta por cobrar a un tercero específico, es un
+        # auxiliar fiscal interno. La línea de MovimientoCxC (el cruce contra
+        # la factura de ESE cliente) sigue llevando tercero siempre — el
+        # rechazo fue puntual sobre Movimientocontable.
+        es_autorretencion = str(cuenta_puc).startswith('135595')
+        tercero_movto = '' if es_autorretencion else tercero_nit
+
         notas_doc = notas[:2000] if notas else ''
         if ajuste_abs:
             _nota_ajuste = f' | Ajuste al peso -${ajuste_abs:,.2f}'
@@ -880,7 +895,7 @@ class ConnektaLiquidacionGateway:
                 'F350_ID_TIPO_DOCTO': core.tipo_docto_docto_contable,
                 'F350_CONSEC_DOCTO': 0,
                 'F351_ID_AUXILIAR': cuenta_puc,
-                'F351_ID_TERCERO': tercero_nit,
+                'F351_ID_TERCERO': tercero_movto,
                 'F351_ID_CO_MOV': co,
                 'F351_ID_UN': un,
                 'F351_ID_CCOSTO': '',
