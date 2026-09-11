@@ -284,7 +284,12 @@ function _renderCardProgreso(s) {
       <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px;flex-shrink:0;margin-left:8px;">
         ${s.clasificacion_abc ? `<span style="background:#1C2B3A;color:#FBBF24;font-size:9px;font-weight:700;padding:1px 5px;border-radius:6px;">ABC-${s.clasificacion_abc}</span>` : ''}
         <span style="background:${col};color:#fff;font-size:10px;font-weight:700;padding:2px 8px;border-radius:8px;">${s.estado}</span>
-        <button onclick="conteoCancelar(${s.id})" style="background:none;border:1px solid #7F1D1D;color:#F87171;font-size:9px;padding:1px 6px;border-radius:6px;cursor:pointer;">Cancelar</button>
+        <div style="display:flex;gap:4px;">
+          <button onclick="conteoAbrirEdicion(${JSON.stringify(s).replace(/"/g,'&quot;')})"
+            title="Reasignar operario / corregir conteo"
+            style="background:var(--bg-input);border:1px solid var(--brd);color:var(--tx2);font-size:9px;padding:1px 6px;border-radius:6px;cursor:pointer;">✏</button>
+          <button onclick="conteoCancelar(${s.id})" style="background:none;border:1px solid #7F1D1D;color:#F87171;font-size:9px;padding:1px 6px;border-radius:6px;cursor:pointer;">Cancelar</button>
+        </div>
       </div>
     </div>
   </div>`;
