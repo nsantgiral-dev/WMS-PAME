@@ -165,6 +165,27 @@ class TestCrearConteoManual:
             'debe quedar PENDIENTE-pero-asignado, no EN_PROCESO — el operario '
             'todavía tiene que abrir la tarea (obtener_tarea_operario) para arrancarla')
 
+    def test_operario_forzado_pasa_a_en_proceso_al_abrirla(self, db, almacen, producto, ub_picking, inv_picking, usuario):
+        """Bug encontrado probando la feature: `obtener_tarea_operario` solo
+        transicionaba PENDIENTE→EN_PROCESO cuando operario_id venía en None.
+        Con una sesión pre-asignada (operario_id ya puesto por
+        crear_conteo_manual o por asignar-lote), el operario la abría, la
+        contaba, y quedaba viéndose PENDIENTE para siempre — fecha_inicio
+        nunca se registraba."""
+        from app.services.conteo_service import ConteoService
+        from app.models.conteo import SesionConteo, EstadoConteo
+
+        creado = ConteoService.crear_conteo_manual(almacen.id, producto.codigo, operario_id=usuario.id)
+        cc1_id = SesionConteo.query.filter_by(codigo=creado['codigos'][0]).first().id
+
+        ConteoService.obtener_tarea_operario(cc1_id, usuario.id)
+
+        sesion = SesionConteo.query.get(cc1_id)
+        assert sesion.estado == EstadoConteo.EN_PROCESO, (
+            f'se quedó en {sesion.estado} — la transición PENDIENTE→EN_PROCESO '
+            f'no ocurrió para una sesión pre-asignada')
+        assert sesion.fecha_inicio is not None
+
     def test_crear_conteo_manual_operario_inexistente(self, db, almacen, producto, ub_picking, inv_picking):
         from app.services.conteo_service import ConteoService
 

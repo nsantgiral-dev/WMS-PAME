@@ -37,8 +37,14 @@ class ConteoService:
 
         ConteoService.verificar_puede_tomar_definitivo(sesion, operario_id)
 
-        # Asignar operario si no tiene
-        if not sesion.operario_id:
+        # PENDIENTE → EN_PROCESO al abrirla — sin importar si YA tenía dueño.
+        # `crear_conteo_manual(operario_id=...)` y `asignar-lote` pre-asignan
+        # operario_id dejando estado=PENDIENTE ("asignada pero no iniciada",
+        # el mismo patrón que ya usan las tareas DIARIO_ABC). Comprobar
+        # `not sesion.operario_id` acá dejaba esas sesiones sin transición
+        # nunca: el operario asignado la abría, la contaba, y la sesión
+        # seguía viéndose PENDIENTE — fecha_inicio nunca se registraba.
+        if sesion.estado == EstadoConteo.PENDIENTE:
             sesion.operario_id = operario_id
             sesion.estado = EstadoConteo.EN_PROCESO
             sesion.fecha_inicio = datetime.utcnow()
