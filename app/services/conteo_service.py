@@ -35,6 +35,8 @@ class ConteoService:
         if sesion.estado not in ['PENDIENTE', 'EN_PROCESO']:
             raise ValueError(f'Tarea en estado {sesion.estado} — no disponible')
 
+        ConteoService.verificar_puede_tomar_definitivo(sesion, operario_id)
+
         # Asignar operario si no tiene
         if not sesion.operario_id:
             sesion.operario_id = operario_id
@@ -48,6 +50,38 @@ class ConteoService:
 
         # Retornar SOLO vista ciega — sin cantidad esperada
         return sesion.to_dict_operario()
+
+    @staticmethod
+    def _es_conteo_definitivo(sesion: SesionConteo) -> bool:
+        """True si `sesion` es un CC3 — su padre (CC2) es a su vez es_segundo_conteo."""
+        if not (sesion.es_segundo_conteo and sesion.sesion_origen_id):
+            return False
+        origen = db.session.get(SesionConteo, sesion.sesion_origen_id)
+        return bool(origen and origen.es_segundo_conteo)
+
+    @staticmethod
+    def verificar_puede_tomar_definitivo(sesion: SesionConteo, operario_id: int) -> None:
+        """El CC3 nace SIN operario a propósito (`_crear_conteo_verificacion`)
+        — lo toma un supervisor desde `/api/conteo/definitivos`, nunca un
+        picker automático (decisión 2026-09-04). Sin este chequeo, cualquier
+        operario de almacén podía saltarse esa cola llamando directo a
+        `GET /api/conteo/<id>/tarea` o a `/api/mobile/escanear` con el
+        sesion_id del CC3 — la ruta que lista la cola ya exige
+        `Roles.SUPERVISION`, pero nada exigía lo mismo al TOMARLO.
+
+        No hace nada si la sesión ya tiene dueño (ese caso lo cubre el
+        chequeo de ownership de cada caller) ni si no es un CC3.
+        """
+        if sesion.operario_id or not ConteoService._es_conteo_definitivo(sesion):
+            return
+        from app.models.usuario import Usuario
+        from app.routes._auth_helpers import Roles
+        operario = db.session.get(Usuario, operario_id)
+        if not operario or operario.rol not in Roles.SUPERVISION:
+            raise ValueError(
+                'El conteo definitivo (CC3) solo lo puede tomar un supervisor, '
+                'admin o jefe de almacén'
+            )
 
     @staticmethod
     def registrar_conteo(
@@ -75,6 +109,7 @@ class ConteoService:
             raise ValueError('Esta tarea no está asignada a ti')
         if sesion_pre.maneja_lote and not lote_id:
             raise ValueError('Este producto maneja lotes. El campo lote_id es obligatorio.')
+        ConteoService.verificar_puede_tomar_definitivo(sesion_pre, operario_id)
 
         # Siesa es la fuente de verdad. Se consulta antes del lock para no
         # mantener la transacción abierta durante la llamada HTTP.
@@ -126,6 +161,9 @@ class ConteoService:
             raise ValueError(f'No se puede registrar conteo en estado {sesion.estado}')
         if sesion.operario_id and sesion.operario_id != operario_id:
             raise ValueError('Esta tarea no está asignada a ti')
+        # Re-verificado bajo lock: sesion_pre y sesion son lecturas distintas —
+        # el mismo criterio que ya aplican estado y ownership dos líneas arriba.
+        ConteoService.verificar_puede_tomar_definitivo(sesion, operario_id)
 
         sesion.operario_id = operario_id
         sesion.cantidad_fisica = cantidad_fisica

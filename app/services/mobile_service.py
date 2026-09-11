@@ -922,6 +922,11 @@ class MobileService:
                 raise ValueError('Esta sesión de conteo no está asignada a ti')
             if sesion.estado not in (EstadoConteo.PENDIENTE, EstadoConteo.EN_PROCESO):
                 raise ValueError(f'No se puede escanear en un conteo con estado {sesion.estado}')
+            # CC3 (conteo definitivo) nace sin dueño a propósito — sin este
+            # chequeo, cualquier operario podía "tomarlo" escaneando directo
+            # aquí sin pasar por /api/conteo/definitivos, que sí exige
+            # supervisor/admin/jefe_almacén.
+            ConteoService.verificar_puede_tomar_definitivo(sesion, operario_id)
 
             producto = sesion.producto
             if codigo_limpio not in MobileService._codigos_validos(producto):

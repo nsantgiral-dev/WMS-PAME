@@ -118,6 +118,42 @@ class TestColaDeDefinitivos:
         assert r.status_code == 403
 
 
+class TestSoloSupervisorPuedeTomarlo:
+    """La cola (`/api/conteo/definitivos`) ya exigía `Roles.SUPERVISION` para
+    LISTAR. Antes del fix 2026-09-11 nada exigía lo mismo para TOMAR el CC3
+    si alguien se saltaba la cola y llamaba directo a `/tarea` o a
+    `/api/mobile/escanear` con el sesion_id — el ownership check pasaba
+    porque `operario_id` todavía era `None` (nadie lo había reclamado)."""
+
+    def test_un_operario_normal_no_puede_autoasignarse_via_tarea(self, app, db, client, mundo):
+        with app.app_context():
+            tok = create_access_token(identity=str(mundo['picker_a'].id))
+        from app.models.conteo import SesionConteo
+        _, cc3_id = _crear_discordancia(mundo)
+
+        r = client.get(f'/api/conteo/{cc3_id}/tarea', headers=_auth(tok))
+        assert r.status_code == 400, r.get_json()
+        assert 'supervisor' in r.get_json()['error'].lower()
+
+        cc3 = db.session.get(SesionConteo, cc3_id)
+        assert cc3.operario_id is None, 'el picker quedó asignado igual — el guard no bloqueó nada'
+
+    def test_un_operario_normal_no_puede_escanear_el_cc3_sin_dueno(self, app, db, client, mundo):
+        with app.app_context():
+            tok = create_access_token(identity=str(mundo['picker_a'].id))
+        from app.models.conteo import SesionConteo
+        _, cc3_id = _crear_discordancia(mundo)
+
+        r = client.post('/api/mobile/escanear', json={
+            'tarea_id': cc3_id, 'tipo': 'CONTEO', 'codigo': 'CC3ITEM', 'cantidad': 1,
+        }, headers=_auth(tok))
+        assert r.status_code == 400, r.get_json()
+        assert 'supervisor' in r.get_json()['error'].lower()
+
+        cc3 = db.session.get(SesionConteo, cc3_id)
+        assert cc3.cantidad_fisica is None, 'el escaneo no autorizado igual escribió cantidad_fisica'
+
+
 class TestFlujoCompletoDelSupervisor:
 
     def test_autoasignacion_escaneo_y_confirmacion(self, app, db, client, mundo):
