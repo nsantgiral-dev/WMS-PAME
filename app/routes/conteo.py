@@ -323,21 +323,35 @@ def limpiar_pendientes_abc():
 @jwt_required()
 def crear_conteo_manual():
     """
-    Admin crea una tarea de conteo manual por código de producto.
+    Admin o supervisor crea una tarea de conteo manual por código de producto.
     Útil para verificar un producto específico o generar conteos por marca
     antes de una OC.
+
+    operario_id (opcional): fuerza el CC1 a un operario específico en vez de
+    dejarlo sin asignar para el dispatcher automático — ver
+    ConteoService.crear_conteo_manual.
     """
-    if not _solo_admin():
-        return jsonify({'error': 'Solo admin puede crear conteos manuales'}), 403
+    from app.models.usuario import Usuario
+    try:
+        uid = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
+    u = Usuario.query.get(uid)
+    if not u or u.rol not in Roles.LEAD:
+        return jsonify({'error': 'Solo admin o supervisor puede crear conteos manuales'}), 403
     data = request.get_json() or {}
 
     almacen_id = data.get('almacen_id')
     producto_codigo = (data.get('producto_codigo') or '').strip()
+    operario_id = data.get('operario_id')
     if not almacen_id or not producto_codigo:
         return jsonify({'error': 'almacen_id y producto_codigo son requeridos'}), 400
 
     try:
-        resultado = ConteoService.crear_conteo_manual(almacen_id, producto_codigo)
+        resultado = ConteoService.crear_conteo_manual(
+            almacen_id, producto_codigo,
+            operario_id=int(operario_id) if operario_id else None,
+        )
         return jsonify(resultado), 201
     except ValueError as e:
         return jsonify({'error': str(e)}), 404

@@ -65,6 +65,66 @@ def sesion_pendiente(db, almacen, producto, ub_picking, inv_picking):
 # Tests
 # ---------------------------------------------------------------------------
 
+class TestRutaConteoManualPermiso:
+    """POST /api/conteo/manual amplió de admin-only a Roles.LEAD (admin+supervisor)
+    — mismo grupo que ya usan editar/ajustar/asignar-lote sobre conteos."""
+
+    def test_supervisor_puede_crear_conteo_manual(self, app, db, client, almacen, producto, ub_picking, inv_picking):
+        from flask_jwt_extended import create_access_token
+        from werkzeug.security import generate_password_hash
+        from app.models.usuario import Usuario
+
+        sup = Usuario(nombre='Sup Test', email='sup-manual@test.com',
+                      password_hash=generate_password_hash('x'), rol='supervisor',
+                      almacen_id=almacen.id, activo=True)
+        db.session.add(sup)
+        db.session.commit()
+        with app.app_context():
+            tok = create_access_token(identity=str(sup.id))
+
+        r = client.post('/api/conteo/manual', json={
+            'almacen_id': almacen.id, 'producto_codigo': producto.codigo,
+        }, headers={'Authorization': f'Bearer {tok}'})
+        assert r.status_code == 201, r.get_json()
+
+    def test_operario_no_puede_crear_conteo_manual(self, app, db, client, almacen, producto, ub_picking, inv_picking, usuario):
+        from flask_jwt_extended import create_access_token
+        with app.app_context():
+            tok = create_access_token(identity=str(usuario.id))
+
+        r = client.post('/api/conteo/manual', json={
+            'almacen_id': almacen.id, 'producto_codigo': producto.codigo,
+        }, headers={'Authorization': f'Bearer {tok}'})
+        assert r.status_code == 403
+
+    def test_supervisor_puede_forzar_operario_via_api(self, app, db, client, almacen, producto, ub_picking, inv_picking, usuario):
+        """El caso que motivó el cambio: supervisor crea el conteo y ya lo deja
+        asignado a un operario específico para el primer conteo (CC1)."""
+        from flask_jwt_extended import create_access_token
+        from werkzeug.security import generate_password_hash
+        from app.models.usuario import Usuario
+        from app.models.conteo import SesionConteo
+
+        sup = Usuario(nombre='Sup Test 2', email='sup-manual-2@test.com',
+                      password_hash=generate_password_hash('x'), rol='supervisor',
+                      almacen_id=almacen.id, activo=True)
+        db.session.add(sup)
+        db.session.commit()
+        with app.app_context():
+            tok = create_access_token(identity=str(sup.id))
+
+        r = client.post('/api/conteo/manual', json={
+            'almacen_id': almacen.id, 'producto_codigo': producto.codigo,
+            'operario_id': usuario.id,
+        }, headers={'Authorization': f'Bearer {tok}'})
+        assert r.status_code == 201, r.get_json()
+        body = r.get_json()
+        assert body['operario_id'] == usuario.id
+
+        sesion = db.session.get(SesionConteo, SesionConteo.query.filter_by(codigo=body['codigos'][0]).first().id)
+        assert sesion.operario_id == usuario.id
+
+
 class TestCrearConteoManual:
 
     def test_crear_conteo_manual(self, db, almacen, producto, ub_picking, inv_picking):
@@ -87,6 +147,29 @@ class TestCrearConteoManual:
         assert sesion.almacen_id == almacen.id
         assert sesion.producto_id == producto.id
         assert sesion.producto_codigo_siesa == producto.codigo_siesa
+
+    def test_crear_conteo_manual_fuerza_operario(self, db, almacen, producto, ub_picking, inv_picking, usuario):
+        """operario_id fuerza el CC1 a ese operario — queda PENDIENTE-pero-asignado,
+        mismo patrón que las tareas DIARIO_ABC pre-asignadas."""
+        from app.services.conteo_service import ConteoService
+        from app.models.conteo import SesionConteo
+
+        result = ConteoService.crear_conteo_manual(almacen.id, producto.codigo, operario_id=usuario.id)
+
+        assert result['operario_id'] == usuario.id
+        assert result['operario_nombre'] == usuario.nombre
+
+        sesion = SesionConteo.query.filter_by(codigo=result['codigos'][0]).first()
+        assert sesion.operario_id == usuario.id
+        assert sesion.estado == 'PENDIENTE', (
+            'debe quedar PENDIENTE-pero-asignado, no EN_PROCESO — el operario '
+            'todavía tiene que abrir la tarea (obtener_tarea_operario) para arrancarla')
+
+    def test_crear_conteo_manual_operario_inexistente(self, db, almacen, producto, ub_picking, inv_picking):
+        from app.services.conteo_service import ConteoService
+
+        with pytest.raises(ValueError, match='no encontrado o inactivo'):
+            ConteoService.crear_conteo_manual(almacen.id, producto.codigo, operario_id=999999)
 
     def test_crear_conteo_no_duplica(self, db, almacen, producto, ub_picking, inv_picking):
         """If an active session already exists for the same product+ubicacion, skip it."""

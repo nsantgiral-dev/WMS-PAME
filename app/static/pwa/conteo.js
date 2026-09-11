@@ -481,25 +481,30 @@ async function conteoExportar() {
 
 let _CONTEO_OPERARIOS = [];
 
+/** Carga (una vez) la lista de operarios activos — usada por el panel de
+ * asignación en lote y por el selector de "forzar operario" del conteo manual. */
+async function _cargarOperariosConteo() {
+  if (_CONTEO_OPERARIOS.length > 0) return _CONTEO_OPERARIOS;
+  try {
+    const r = await fetch(API + '/api/auth/usuarios', { headers: { Authorization: 'Bearer ' + TOKEN } });
+    if (r.ok) {
+      const todos = await r.json();
+      _CONTEO_OPERARIOS = (todos.usuarios || todos || []).filter(u =>
+        u.activo && ['operario', 'jefe_almacen'].includes(u.rol)
+      );
+    }
+  } catch (e) { /* silencioso */ }
+  return _CONTEO_OPERARIOS;
+}
+
 /** Show the batch-assign panel and load available operarios. */
 async function conteoMostrarAsignar() {
   const panel = document.getElementById('conteo-asignar-panel');
   if (!panel) return;
-  // Cargar operarios del almacén
-  if (_CONTEO_OPERARIOS.length === 0) {
-    try {
-      const r = await fetch(API + '/api/auth/usuarios', { headers: { Authorization: 'Bearer ' + TOKEN } });
-      if (r.ok) {
-        const todos = await r.json();
-        _CONTEO_OPERARIOS = (todos.usuarios || todos || []).filter(u =>
-          u.activo && ['operario', 'jefe_almacen'].includes(u.rol)
-        );
-      }
-    } catch (e) { /* silencioso */ }
-  }
+  const operarios = await _cargarOperariosConteo();
   const sel = document.getElementById('conteo-asignar-operario');
   if (sel) {
-    sel.innerHTML = _CONTEO_OPERARIOS.map(u =>
+    sel.innerHTML = operarios.map(u =>
       `<option value="${u.id}">${u.nombre || u.usuario} (${u.rol})</option>`
     ).join('');
   }
@@ -641,9 +646,15 @@ async function cargarConteos(page) {
   }
 }
 
-/** Show the manual conteo creation form and focus the code input. */
-function conteosMostrarFormManual() {
+/** Show the manual conteo creation form, load operarios, and focus the code input. */
+async function conteosMostrarFormManual() {
   document.getElementById('conteo-form-manual').style.display = 'block';
+  const operarios = await _cargarOperariosConteo();
+  const selOp = document.getElementById('conteo-manual-operario');
+  if (selOp) {
+    selOp.innerHTML = '<option value="">Auto-asignar (el que lo tome primero)</option>' +
+      operarios.map(u => `<option value="${u.id}">${u.nombre || u.usuario} (${u.rol})</option>`).join('');
+  }
   document.getElementById('conteo-manual-codigo').focus();
 }
 /** Hide the manual conteo form and clear its inputs. */
@@ -652,26 +663,31 @@ function conteosOcultarFormManual() {
   document.getElementById('conteo-manual-codigo').value = '';
   document.getElementById('conteo-manual-error').textContent = '';
 }
-/** Create a manual conteo task for a specific product code and almacen. */
+/** Create a manual conteo task for a specific product code and almacen —
+ * opcionalmente forzando a qué operario le cae el primer conteo (CC1). */
 async function crearConteoManual() {
   const almacenId = document.getElementById('conteo-manual-almacen')?.value;
   const codigo = document.getElementById('conteo-manual-codigo')?.value.trim().toUpperCase();
+  const operarioId = document.getElementById('conteo-manual-operario')?.value;
   const errorEl = document.getElementById('conteo-manual-error');
   errorEl.textContent = '';
   if (!codigo) { errorEl.textContent = 'Ingresa el código del producto'; return; }
   if (!almacenId) { errorEl.textContent = 'Selecciona un almacén'; return; }
   try {
+    const body = { almacen_id: parseInt(almacenId), producto_codigo: codigo };
+    if (operarioId) body.operario_id = parseInt(operarioId);
     const r = await fetch(API + '/api/conteo/manual', {
       method: 'POST',
       headers: { Authorization: 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ almacen_id: parseInt(almacenId), producto_codigo: codigo }),
+      body: JSON.stringify(body),
     });
     const d = await r.json();
     if (r.ok) {
       if (d.tareas_creadas === 0) {
         errorEl.textContent = d.omitidas_ya_activas > 0 ? 'Ya existe un conteo activo para este producto' : 'Producto sin stock en este almacén';
       } else {
-        alerta(`Conteo creado para ${d.producto_nombre || codigo}`, 'exito');
+        const destino = d.operario_nombre ? ` — asignado a ${d.operario_nombre}` : '';
+        alerta(`Conteo creado para ${d.producto_nombre || codigo}${destino}`, 'exito');
         conteosOcultarFormManual();
         await cargarConteos(1);
       }

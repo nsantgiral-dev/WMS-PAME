@@ -1688,6 +1688,10 @@
         <input id="conteo-manual-codigo" type="text" placeholder="Código producto (ej: PAPEL001)"
           autocomplete="off" autocorrect="off" autocapitalize="characters"
           style="width:100%;padding:10px;background:var(--bg-input);border:1px solid var(--brd);border-radius:8px;color:var(--tx);font-size:14px;margin-bottom:8px;box-sizing:border-box;">
+        <select id="conteo-manual-operario" title="Forzar a quién le cae el primer conteo (CC1) — opcional"
+          style="width:100%;padding:10px;background:var(--bg-input);border:1px solid var(--brd);border-radius:8px;color:var(--tx);font-size:14px;margin-bottom:8px;">
+          <option value="">Auto-asignar (el que lo tome primero)</option>
+        </select>
         <div id="conteo-manual-error" style="color:#ef4444;font-size:12px;min-height:16px;margin-bottom:8px;"></div>
         <div style="display:flex;gap:8px;">
           <button onclick="conteosOcultarFormManual()" style="flex:1;padding:10px;background:var(--bg-input);border:1px solid var(--brd);color:var(--tx2);border-radius:8px;font-size:13px;cursor:pointer;">Cancelar</button>

@@ -854,15 +854,25 @@ class ConteoService:
         return sesion
 
     @staticmethod
-    def crear_conteo_manual(almacen_id: int, producto_codigo: str) -> dict:
+    def crear_conteo_manual(almacen_id: int, producto_codigo: str, operario_id: int = None) -> dict:
         """
         Crea sesiones de conteo manual para todas las ubicaciones donde hay stock
         del producto en el almacén. Omite ubicaciones con conteo activo.
+
+        operario_id (opcional): fuerza el CC1 a ese operario específico —
+        mismo estado PENDIENTE-pero-asignado que ya usan las tareas DIARIO_ABC
+        (`obtener_tarea_operario` lo pasa a EN_PROCESO cuando el operario abre
+        la tarea). Sin esto, la sesión queda sin dueño para el dispatcher
+        automático (`_next_conteo_tienda`), que la reparte a quien la pida
+        primero. El CC2, si CC1 sale discordante, lo sigue eligiendo
+        `_crear_conteo_verificacion` — este parámetro solo controla CC1.
+
         Retorna dict con tareas_creadas, omitidas_ya_activas, producto_nombre, codigos.
         """
         from app.models.producto import Producto
         from app.models.inventario import UbicacionProducto
         from app.models.ubicacion import Ubicacion
+        from app.models.usuario import Usuario
 
         codigo = producto_codigo.strip().upper()
         producto = Producto.query.filter(
@@ -870,6 +880,12 @@ class ConteoService:
         ).first()
         if not producto:
             raise ValueError(f'Producto {codigo} no encontrado')
+
+        operario_forzado = None
+        if operario_id is not None:
+            operario_forzado = db.session.get(Usuario, operario_id)
+            if not operario_forzado or not operario_forzado.activo:
+                raise ValueError(f'Operario {operario_id} no encontrado o inactivo')
 
         registros = (
             UbicacionProducto.query
@@ -911,7 +927,8 @@ class ConteoService:
                 producto_id=producto.id,
                 producto_codigo_siesa=producto.codigo_siesa,
                 maneja_lote=False,
-                estado='PENDIENTE'
+                estado='PENDIENTE',
+                operario_id=operario_forzado.id if operario_forzado else None,
             )
             db.session.add(sesion)
             creadas.append(sesion_codigo)
@@ -928,6 +945,8 @@ class ConteoService:
             'producto': codigo,
             'producto_nombre': producto.nombre or '',
             'codigos': creadas,
+            'operario_id': operario_forzado.id if operario_forzado else None,
+            'operario_nombre': operario_forzado.nombre if operario_forzado else None,
         }
 
     @staticmethod
