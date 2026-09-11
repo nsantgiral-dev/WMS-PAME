@@ -912,6 +912,17 @@ class MobileService:
             if not sesion:
                 raise ValueError('Sesión de conteo no encontrada')
 
+            # Ownership + estado — mismo criterio que `ConteoService.registrar_conteo`
+            # y `reportar_problema` (routes/mobile.py). Sin esto, cualquier operario
+            # de almacén podía escanear hacia el sesion_id de OTRO (rompiendo el
+            # double-blind de CC2/CC3) o hacia una sesión ya cerrada (MATCH,
+            # DESCUADRE, AJUSTADO — ya enviada a Siesa), sobrescribiendo
+            # cantidad_fisica en silencio.
+            if sesion.operario_id and sesion.operario_id != operario_id:
+                raise ValueError('Esta sesión de conteo no está asignada a ti')
+            if sesion.estado not in (EstadoConteo.PENDIENTE, EstadoConteo.EN_PROCESO):
+                raise ValueError(f'No se puede escanear en un conteo con estado {sesion.estado}')
+
             producto = sesion.producto
             if codigo_limpio not in MobileService._codigos_validos(producto):
                 raise ValueError(f'Producto incorrecto — escanea {producto.codigo}')

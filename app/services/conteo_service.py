@@ -207,27 +207,58 @@ class ConteoService:
 
                 if cc1_cantidad is not None and cantidad_fisica == cc1_cantidad:
                     # CC1 == CC2: "verdad de bodega" — ajuste automático sin esperar admin
-                    if origen and origen.estado == EstadoConteo.SEGUNDO_CONTEO:
+                    debe_auto_encolar = bool(origen and origen.estado == EstadoConteo.SEGUNDO_CONTEO)
+                    if debe_auto_encolar:
                         origen.estado = EstadoConteo.DESCUADRE
+
+                    # Comitear y SOLTAR el lock de `sesion` (with_for_update, línea
+                    # ~119) ANTES de llamar a Siesa. `_encolar_ajuste_fisico` hace
+                    # una consulta HTTP — sostenerla con la fila bloqueada deja la
+                    # conexión (y con el timeout de ~30s de Siesa, Regla 14) atada
+                    # durante toda la llamada, justo lo que el resto de esta
+                    # función evita a propósito para `existencia_ref` (línea ~79).
+                    try:
+                        db.session.commit()
+                    except Exception as e:
+                        db.session.rollback()
+                        raise ValueError(f'Error al marcar DESCUADRE: {e}')
+
+                    auto_encolado = False
+                    error_auto_encolado = None
+                    if debe_auto_encolar:
                         try:
                             ConteoService._encolar_ajuste_fisico(origen, aprobador_id=None)
+                            db.session.commit()
+                            auto_encolado = True
                             logger.warning(
                                 f'[CONTEO] CC2 confirma CC1 ({cc1_cantidad} uds) — '
                                 f'padre {origen.codigo} → AJUSTANDO (auto)'
                             )
                         except Exception as e_enq:
+                            db.session.rollback()
+                            error_auto_encolado = str(e_enq)
                             logger.error(
                                 f'[CONTEO] Error al auto-encolar ajuste CC1==CC2 '
                                 f'para sesion {origen.id}: {e_enq} — queda en DESCUADRE para revisión admin'
                             )
-                    try:
-                        db.session.commit()
-                    except Exception as e:
-                        db.session.rollback()
-                        raise ValueError(f'Error al marcar DESCUADRE y encolar ajuste: {e}')
+
+                    # El mensaje refleja lo que de verdad pasó — antes decía
+                    # "encolado automáticamente" incluso cuando la excepción se
+                    # tragaba en el `except` de arriba y nada llegaba a la DLQ.
+                    if auto_encolado:
+                        mensaje = 'Ambos conteos coinciden — ajuste encolado automáticamente'
+                    elif debe_auto_encolar:
+                        mensaje = (
+                            'Ambos conteos coinciden — el ajuste automático falló '
+                            f'({error_auto_encolado}); queda en DESCUADRE para aprobación manual'
+                        )
+                    else:
+                        mensaje = 'Ambos conteos coinciden — queda en DESCUADRE para aprobación manual'
+
                     return {
                         'resultado': 'DESCUADRE',
-                        'mensaje': 'Ambos conteos coinciden — ajuste encolado automáticamente',
+                        'mensaje': mensaje,
+                        'auto_encolado': auto_encolado,
                         'sesion_id': sesion.id,
                     }
 
