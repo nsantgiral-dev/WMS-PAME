@@ -1679,19 +1679,19 @@
       </div>
 
       <!-- Form conteo manual (oculto por defecto) -->
-      <div id="conteo-form-manual" style="display:none;background:#111;border:1px solid #2d1b69;border-radius:12px;padding:14px;margin-bottom:12px;">
-        <div style="font-size:13px;font-weight:700;color:#a78bfa;margin-bottom:10px;">Crear conteo manual</div>
+      <div id="conteo-form-manual" style="display:none;background:var(--bg-s);border:1px solid var(--brd);border-radius:12px;padding:14px;margin-bottom:12px;">
+        <div style="font-size:13px;font-weight:700;color:var(--pm);margin-bottom:10px;">Crear conteo manual</div>
         <select id="conteo-manual-almacen"
-          style="width:100%;padding:10px;background:#000;border:1px solid #333;border-radius:8px;color:#fff;font-size:14px;margin-bottom:8px;">
+          style="width:100%;padding:10px;background:var(--bg-input);border:1px solid var(--brd);border-radius:8px;color:var(--tx);font-size:14px;margin-bottom:8px;">
           <option value="">Cargando almacenes...</option>
         </select>
         <input id="conteo-manual-codigo" type="text" placeholder="Código producto (ej: PAPEL001)"
           autocomplete="off" autocorrect="off" autocapitalize="characters"
-          style="width:100%;padding:10px;background:#000;border:1px solid #333;border-radius:8px;color:#fff;font-size:14px;margin-bottom:8px;box-sizing:border-box;">
+          style="width:100%;padding:10px;background:var(--bg-input);border:1px solid var(--brd);border-radius:8px;color:var(--tx);font-size:14px;margin-bottom:8px;box-sizing:border-box;">
         <div id="conteo-manual-error" style="color:#ef4444;font-size:12px;min-height:16px;margin-bottom:8px;"></div>
         <div style="display:flex;gap:8px;">
-          <button onclick="conteosOcultarFormManual()" style="flex:1;padding:10px;background:#1a1a1a;border:1px solid #333;color:#aaa;border-radius:8px;font-size:13px;cursor:pointer;">Cancelar</button>
-          <button onclick="crearConteoManual()" style="flex:2;padding:10px;background:#a78bfa;color:#000;border:none;border-radius:8px;font-size:13px;font-weight:800;cursor:pointer;">Crear Conteo →</button>
+          <button onclick="conteosOcultarFormManual()" style="flex:1;padding:10px;background:var(--bg-input);border:1px solid var(--brd);color:var(--tx2);border-radius:8px;font-size:13px;cursor:pointer;">Cancelar</button>
+          <button onclick="crearConteoManual()" style="flex:2;padding:10px;background:var(--pm);color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:800;cursor:pointer;">Crear Conteo →</button>
         </div>
       </div>
 
