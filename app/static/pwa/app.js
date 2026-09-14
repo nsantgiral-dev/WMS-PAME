@@ -121,7 +121,10 @@ document.addEventListener('DOMContentLoaded', () => {
 // 'tab-compras' agregado 2026-09-07: compras.py exige Roles.COMPRAS_ROLES
 // (admin/jefe_almacen/gerente/compras) en cada endpoint — supervisor nunca
 // estuvo en ese grupo y la pestaña quedaba viva mostrando error.
-const _TABS_OCULTAS_SUPERVISOR = ['tab-usuarios', 'tab-muelle', 'tab-liquidacion', 'tab-compras'];
+// 'tab-dashboard' agregado 2026-09-14: el supervisor ahora aterriza en
+// Pedidos (ver bloque esSupervisor) — el Dashboard es visión gerencial
+// general, no la pantalla de trabajo diaria de quien también apoya picking.
+const _TABS_OCULTAS_SUPERVISOR = ['tab-usuarios', 'tab-muelle', 'tab-liquidacion', 'tab-compras', 'tab-dashboard'];
 
 /**
  * Route user to the correct screen and start timers based on their role.
@@ -172,7 +175,7 @@ function mostrarSegunRol(rol) {
     // control_flota) — sin este reset, un admin que entra justo después de
     // un supervisor hereda sus pestañas ocultas hasta que alguien recarga.
     document.querySelectorAll('.nav-tab').forEach(el => { el.style.display = ''; });
-    const btnModoOp = document.getElementById('btn-modo-operario-supervisor');
+    const btnModoOp = document.getElementById('nav-modo-operario-supervisor');
     if (btnModoOp) btnModoOp.style.display = 'none';
     if (soloFlota) {
       pantalla('pantalla-admin');
@@ -200,11 +203,18 @@ function mostrarSegunRol(rol) {
       });
       // Modo Operario (2026-09-14) — exclusivo de NB1: el backend
       // (get_tarea_actual) corta en seco a cualquier supervisor de otra
-      // bodega, así que el botón ni se muestra ahí — evita un botón que
-      // lleva a una pantalla vacía por diseño.
+      // bodega, así que el ítem del menú ni se muestra ahí — evita un
+      // enlace que lleva a una pantalla vacía por diseño.
       if (btnModoOp && OPERARIO?.almacen_bodega_siesa_id === 'NB1') {
-        btnModoOp.style.display = 'inline-flex';
+        btnModoOp.style.display = 'block';
       }
+      // Dashboard queda oculto para este rol (arriba, _TABS_OCULTAS_SUPERVISOR)
+      // — aterriza en Pedidos, su pantalla de trabajo real. tab() ya llama
+      // cargarAdmin() una vez; el timer de abajo sigue haciendo falta para
+      // el refresco periódico que el otro branch arma después del if.
+      tab('tab-pedidos');
+      TIMER_ADMIN = setInterval(() => cargarAdmin(true), 30000);
+      return;
     }
     cargarAdmin();
     TIMER_ADMIN = setInterval(() => cargarAdmin(true), 30000);

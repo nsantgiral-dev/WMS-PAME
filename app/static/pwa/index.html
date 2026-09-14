@@ -979,9 +979,6 @@
         <button id="btn-volver-layout-operario" onclick="layoutVolverDesdeOperario()" style="display:none;background:none;border:1px solid var(--brd-b,#4a5568);color:var(--tx,#e2e8f0);font-size:12px;font-weight:700;padding:8px 12px;border-radius:8px;cursor:pointer;">
           ← Volver
         </button>
-        <button id="btn-modo-operario-supervisor" onclick="supervisorEntrarModoOperario()" style="display:none;background:none;border:1px solid var(--brd-b,#4a5568);color:var(--tx,#e2e8f0);font-size:12px;font-weight:700;padding:8px 12px;border-radius:8px;cursor:pointer;">
-          🧰 Modo Operario
-        </button>
         <button id="btn-theme" onclick="toggleTheme()" title="Cambiar tema" style="background:none;border:1px solid var(--brd-b,#4a5568);color:var(--tx,#e2e8f0);font-size:18px;width:36px;height:36px;border-radius:8px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;line-height:1;padding:0;">🌙</button>
         <button class="btn-logout" onclick="salir()">Salir</button>
       </div>
@@ -1018,6 +1015,13 @@
       <div class="nav-tab" onclick="tab('tab-vigia')">👁️ Vigia</div>
       <div class="nav-tab" onclick="tab('tab-flota')">🚚 Flota</div>
       <div class="nav-tab" onclick="tab('tab-manuales')">📘 Manual de Usuario</div>
+      <!-- Modo Operario del supervisor — SIEMPRE al final de la lista de .nav-tab:
+           tab() hace match por índice (document.querySelectorAll('.nav-tab')[i]
+           contra un arreglo fijo de ids) y este ítem no participa de ese arreglo
+           porque no cambia de pestaña, navega a otra pantalla. Insertarlo en
+           cualquier otra posición correría el índice de todos los .nav-tab
+           siguientes y rompería el resaltado de "activo" de esos tabs. -->
+      <div id="nav-modo-operario-supervisor" class="nav-tab" style="display:none;" onclick="supervisorEntrarModoOperario()">🧰 Modo Operario</div>
     </div>
 
     <!-- Contenido principal scrollable -->
@@ -3564,7 +3568,7 @@
   <!-- Área de impresión de etiquetas — visible solo al imprimir -->
   <div id="print-area"></div>
 
-  <script src="/static/pwa/app.js?v=20260914b"></script>
+  <script src="/static/pwa/app.js?v=20260914c"></script>
   <script src="/static/pwa/picking.js?v=20260914a"></script>
   <script src="/static/pwa/packing.js?v=20260720a"></script>
   <script src="/static/pwa/recepcion.js?v=20260813b"></script>
