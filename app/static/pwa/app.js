@@ -292,6 +292,22 @@ function guardarOffline(datos) {
   alerta('Sin WiFi — guardado para sincronizar', 'advertencia');
 }
 
+// e.key depende del layout de teclado ACTIVO (SO + firmware del lector).
+// Un lector configurado para US emulando sobre un Windows en Español
+// Latinoamérica transmite el guion como apóstrofe — confirmado en vivo
+// (2026-09-14): "BN-10" llegaba como "BN'10", incluso después de
+// reprogramar el lector con el código de barras "Spanish Keyboard" del
+// manual (esa vía de hardware quedó agotada, seguía fallando igual).
+// e.code identifica la TECLA FÍSICA, no el carácter que el layout le
+// asigna — es inmune a cualquier desacople lector/SO. Solo hace falta
+// mapear los símbolos que de verdad difieren entre layouts; letras y
+// dígitos ya llegan bien vía e.key en todos los layouts latinos probados.
+const SCANNER_CODE_A_CHAR = {
+  Minus: '-', Equal: '=', BracketLeft: '[', BracketRight: ']',
+  Backslash: '\\', Semicolon: ';', Quote: "'", Backquote: '`',
+  Comma: ',', Period: '.', Slash: '/',
+};
+
 /** Initialize laser/Bluetooth scanner input listener with keystroke buffering. */
 function scannerLaser() {
   const inp = document.getElementById('scanner-input');
@@ -319,10 +335,13 @@ function scannerLaser() {
       SCANNER_BUFFER = '';
       clearTimeout(SCANNER_TIMER);
       if (cod) procesarScan(cod);
-    } else if (e.key && e.key.length === 1) {
-      SCANNER_BUFFER += e.key;
-      clearTimeout(SCANNER_TIMER);
-      SCANNER_TIMER = setTimeout(() => { SCANNER_BUFFER = ''; }, 150);
+    } else {
+      const ch = SCANNER_CODE_A_CHAR[e.code] || (e.key && e.key.length === 1 ? e.key : null);
+      if (ch) {
+        SCANNER_BUFFER += ch;
+        clearTimeout(SCANNER_TIMER);
+        SCANNER_TIMER = setTimeout(() => { SCANNER_BUFFER = ''; }, 150);
+      }
     }
   });
 }
