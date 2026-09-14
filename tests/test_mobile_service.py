@@ -343,6 +343,90 @@ class TestDispensador:
         assert resultado_a['id'] != resultado_b['id']
 
 
+class TestDispensadorSupervisor:
+    """Modo Operario del supervisor (2026-09-14): apoya picking/reposición
+    en NB1, nunca conteo cíclico (sería juez y parte del Conteo Definitivo
+    que él mismo resuelve), y queda cortado en seco fuera de NB1."""
+
+    @staticmethod
+    def _crear_supervisor(db, almacen_id, email='supervisor_test@test.com', **overrides):
+        from app.models.usuario import Usuario
+        from werkzeug.security import generate_password_hash
+        defaults = dict(
+            nombre='Supervisor Test', email=email,
+            password_hash=generate_password_hash('test123'),
+            rol='supervisor', almacen_id=almacen_id, activo=True,
+        )
+        defaults.update(overrides)
+        u = Usuario(**defaults)
+        db.session.add(u)
+        db.session.commit()
+        return u
+
+    def test_supervisor_en_nb1_recibe_picking(self, app, db, mobile_setup):
+        """almacen fixture ya es bodega NB1 — el supervisor debe recibir
+        picking de pedidos igual que un operario cualquiera."""
+        from app.services.mobile_service import MobileService
+        s = mobile_setup
+        sup = self._crear_supervisor(db, s['almacen'].id)
+
+        tarea = _crear_tarea(db, s['producto'], s['ubicacion'], s['almacen'])
+        resultado = MobileService.get_tarea_actual(sup.id)
+
+        assert resultado is not None
+        assert resultado['id'] == tarea.id
+        assert resultado['tipo'] == 'PICKING'
+
+    def test_supervisor_nunca_recibe_conteo_ciclico(self, app, db, mobile_setup):
+        """Sin picking ni reposición pendiente, pero SÍ hay un conteo cíclico
+        PENDIENTE sin dueño: el supervisor no debe recibirlo (a diferencia
+        de un operario normal, que sí lo tomaría) — no puede ser juez y
+        parte de su propio Conteo Definitivo."""
+        from app.services.mobile_service import MobileService
+        from app.models.conteo import SesionConteo
+        s = mobile_setup
+        sup = self._crear_supervisor(db, s['almacen'].id)
+
+        db.session.add(SesionConteo(
+            codigo='CC-TEST-SUPERVISOR', tipo='DIARIO_ABC', clasificacion_abc='B',
+            ubicacion_id=s['ubicacion'].id, almacen_id=s['almacen'].id,
+            producto_id=s['producto'].id, producto_codigo_siesa=s['producto'].codigo_siesa,
+            maneja_lote=False, estado='PENDIENTE', operario_id=None,
+        ))
+        db.session.commit()
+
+        resultado_supervisor = MobileService.get_tarea_actual(sup.id)
+        assert resultado_supervisor is None
+
+        # Contraste: el mismo conteo SÍ se lo entrega a un operario normal.
+        resultado_operario = MobileService.get_tarea_actual(s['usuario'].id)
+        assert resultado_operario is not None
+        assert resultado_operario['tipo'] == 'CONTEO'
+
+    def test_supervisor_fuera_de_nb1_no_recibe_nada(self, app, db, mobile_setup):
+        """Un supervisor cuyo almacén NO es NB1 queda cortado en seco —
+        aunque haya picking pendiente ahí, get_tarea_actual devuelve None."""
+        from app.models.almacen import Almacen
+        from app.services.mobile_service import MobileService
+        s = mobile_setup
+
+        otra_bodega = Almacen(codigo='ALM-NC1-TEST', nombre='Neiva Centro Test',
+                               bodega_siesa_id='NC1', activo=True)
+        db.session.add(otra_bodega)
+        db.session.commit()
+        sup = self._crear_supervisor(db, otra_bodega.id, email='supervisor_nc1@test.com')
+
+        from app.models.ubicacion import Ubicacion
+        ub_nc1 = Ubicacion(codigo='PIK-NC1-A', almacen_id=otra_bodega.id,
+                            tipo_zona='PICKING', secuencia_ruteo=1, activo=True)
+        db.session.add(ub_nc1)
+        db.session.commit()
+        _crear_tarea(db, s['producto'], ub_nc1, otra_bodega)
+
+        resultado = MobileService.get_tarea_actual(sup.id)
+        assert resultado is None
+
+
 class TestProcesarEscaneo:
 
     def test_scan_producto_correcto(self, app, db, mobile_setup):

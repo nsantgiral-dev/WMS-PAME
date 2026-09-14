@@ -16,6 +16,21 @@ _ROLES_VALIDOS = (
     Roles.CONTROL_FLOTA,
 )
 
+def _usuario_dict_con_bodega(usuario):
+    """to_dict() + almacen_bodega_siesa_id -- el frontend necesita saber si
+    el almacén del usuario es NB1 (ej. para mostrarle al supervisor el botón
+    de Modo Operario, exclusivo de esa bodega) sin tener que cargar el
+    catálogo completo de almacenes solo para esa pregunta."""
+    d = usuario.to_dict()
+    bodega = None
+    if usuario.almacen_id:
+        from app.models.almacen import Almacen
+        alm = db.session.get(Almacen, usuario.almacen_id)
+        bodega = alm.bodega_siesa_id if alm else None
+    d['almacen_bodega_siesa_id'] = bodega
+    return d
+
+
 @auth_bp.route('/login', methods=['POST'])
 def login():
     data = request.get_json()
@@ -32,7 +47,7 @@ def login():
 
     return jsonify({
         'token': token,
-        'usuario': usuario.to_dict()
+        'usuario': _usuario_dict_con_bodega(usuario)
     }), 200
 
 
@@ -46,7 +61,7 @@ def me():
     usuario = Usuario.query.get(usuario_id)
     if not usuario or not usuario.activo:
         return jsonify({'error': 'Usuario no encontrado'}), 404
-    return jsonify(usuario.to_dict()), 200
+    return jsonify(_usuario_dict_con_bodega(usuario)), 200
 
 
 @auth_bp.route('/register', methods=['POST'])

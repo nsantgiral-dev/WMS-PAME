@@ -959,6 +959,9 @@
         <button id="btn-layout-operario" onclick="layoutAbrirDesdeOperario()" style="display:none;background:none;border:1px solid #1e3a5f;color:#60a5fa;font-size:12px;font-weight:700;padding:7px 12px;border-radius:20px;cursor:pointer;">
           🧭 Layout
         </button>
+        <button id="btn-volver-admin-supervisor" onclick="supervisorVolverAdmin()" style="display:none;background:none;border:1px solid #1e3a5f;color:#60a5fa;font-size:12px;font-weight:700;padding:7px 12px;border-radius:20px;cursor:pointer;">
+          ← Volver a Admin
+        </button>
         <button class="btn-logout" onclick="salir()">Salir</button>
       </div>
     </div>
@@ -975,6 +978,9 @@
         <span id="conexion-status-admin" style="font-size:13px;color:#22c55e;">● Online</span>
         <button id="btn-volver-layout-operario" onclick="layoutVolverDesdeOperario()" style="display:none;background:none;border:1px solid var(--brd-b,#4a5568);color:var(--tx,#e2e8f0);font-size:12px;font-weight:700;padding:8px 12px;border-radius:8px;cursor:pointer;">
           ← Volver
+        </button>
+        <button id="btn-modo-operario-supervisor" onclick="supervisorEntrarModoOperario()" style="display:none;background:none;border:1px solid var(--brd-b,#4a5568);color:var(--tx,#e2e8f0);font-size:12px;font-weight:700;padding:8px 12px;border-radius:8px;cursor:pointer;">
+          🧰 Modo Operario
         </button>
         <button id="btn-theme" onclick="toggleTheme()" title="Cambiar tema" style="background:none;border:1px solid var(--brd-b,#4a5568);color:var(--tx,#e2e8f0);font-size:18px;width:36px;height:36px;border-radius:8px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;line-height:1;padding:0;">🌙</button>
         <button class="btn-logout" onclick="salir()">Salir</button>
@@ -3558,7 +3564,7 @@
   <!-- Área de impresión de etiquetas — visible solo al imprimir -->
   <div id="print-area"></div>
 
-  <script src="/static/pwa/app.js?v=20260914a"></script>
+  <script src="/static/pwa/app.js?v=20260914b"></script>
   <script src="/static/pwa/picking.js?v=20260914a"></script>
   <script src="/static/pwa/packing.js?v=20260720a"></script>
   <script src="/static/pwa/recepcion.js?v=20260813b"></script>

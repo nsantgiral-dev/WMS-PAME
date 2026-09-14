@@ -172,6 +172,8 @@ function mostrarSegunRol(rol) {
     // control_flota) — sin este reset, un admin que entra justo después de
     // un supervisor hereda sus pestañas ocultas hasta que alguien recarga.
     document.querySelectorAll('.nav-tab').forEach(el => { el.style.display = ''; });
+    const btnModoOp = document.getElementById('btn-modo-operario-supervisor');
+    if (btnModoOp) btnModoOp.style.display = 'none';
     if (soloFlota) {
       pantalla('pantalla-admin');
       if (OPERARIO) actualizarUI(OPERARIO);
@@ -196,6 +198,13 @@ function mostrarSegunRol(rol) {
           el.style.display = 'none';
         });
       });
+      // Modo Operario (2026-09-14) — exclusivo de NB1: el backend
+      // (get_tarea_actual) corta en seco a cualquier supervisor de otra
+      // bodega, así que el botón ni se muestra ahí — evita un botón que
+      // lleva a una pantalla vacía por diseño.
+      if (btnModoOp && OPERARIO?.almacen_bodega_siesa_id === 'NB1') {
+        btnModoOp.style.display = 'inline-flex';
+      }
     }
     cargarAdmin();
     TIMER_ADMIN = setInterval(() => cargarAdmin(true), 30000);
@@ -541,6 +550,31 @@ function layoutVolverDesdeOperario() {
     pedirTarea();
     TIMER_OPERARIO = setInterval(() => { if (!TAREA_ACTUAL) pedirTarea(); }, 5000);
   }
+}
+
+/**
+ * Modo Operario del supervisor (2026-09-14) — apoya picking de
+ * pedidos/traslados y reposición en NB1, sin salir de su misma sesión.
+ * Nunca conteo cíclico: get_tarea_actual ya lo excluye server-side (sería
+ * juez y parte, siendo quien resuelve el Conteo Definitivo). El botón que
+ * llama a esta función solo se muestra si almacen_bodega_siesa_id es NB1
+ * (mostrarSegunRol) — igual, el backend lo corta en seco si no lo es.
+ */
+function supervisorEntrarModoOperario() {
+  pararTimers();
+  pantalla('pantalla-operario');
+  actualizarUI(OPERARIO);
+  const btnVolver = document.getElementById('btn-volver-admin-supervisor');
+  if (btnVolver) btnVolver.style.display = 'inline-flex';
+  pedirTarea();
+  TIMER_OPERARIO = setInterval(() => { if (!TAREA_ACTUAL) pedirTarea(); }, 5000);
+}
+
+/** Vuelve del Modo Operario al panel admin del supervisor. */
+function supervisorVolverAdmin() {
+  const btnVolver = document.getElementById('btn-volver-admin-supervisor');
+  if (btnVolver) btnVolver.style.display = 'none';
+  mostrarSegunRol(OPERARIO.rol);
 }
 
 /**

@@ -210,6 +210,18 @@ class MobileService:
             _almacen_propio = _Alm.query.get(_u_pick.almacen_id)
             _bodega_propia = _almacen_propio.bodega_siesa_id if _almacen_propio else None
 
+        # Modo operativo del supervisor (2026-09-14) — apoya picking de
+        # pedidos/traslados y reposición, EXCLUSIVO de NB1 (única bodega con
+        # zonas RESERVA/PICKING físicas, ver Reposición Micro). Nunca conteo
+        # cíclico: el supervisor ya resuelve el Conteo Definitivo (CC3) cuando
+        # CC1≠CC2 — si también pudiera contar CC1/CC2, sería juez y parte de
+        # su propio desempate. La exclusión de conteo vive más abajo; acá solo
+        # se corta en seco a cualquier supervisor fuera de NB1, para que el
+        # alcance no dependa de que ninguna otra bodega tenga tareas que darle.
+        _es_supervisor = bool(_u_pick and _u_pick.rol == 'supervisor')
+        if _es_supervisor and _bodega_propia != 'NB1':
+            return None
+
         # Subquery: IDs de ubicaciones permitidas para pickers (no RESERVA)
         _ids_validos = db.session.query(Ubicacion.id).filter(
             Ubicacion.tipo_zona.in_(['PICKING', 'GENERAL'])
@@ -328,8 +340,12 @@ class MobileService:
                 if rep:
                     return rep
 
-            # Roles de tienda/traslado nunca reciben conteos cíclicos — solo NB1
-            if not _solo_traslado:
+            # Roles de tienda/traslado nunca reciben conteos cíclicos — solo NB1.
+            # Tampoco el supervisor en modo operativo (ver guarda de arriba):
+            # apoya picking/traslado (arriba) y reposición (justo arriba), pero
+            # el conteo cíclico regular sigue siendo exclusivo de operarios —
+            # ver la nota "juez y parte" en la guarda de NB1 más arriba.
+            if not _solo_traslado and not _es_supervisor:
                 # Retomar el conteo propio en curso (pospuesto arriba porque un
                 # picking/traslado nuevo tiene prioridad). Ya no hay nada pendiente,
                 # así que se le devuelve tal cual quedó, con lo ya contado intacto.
@@ -368,6 +384,12 @@ class MobileService:
                 resultado = MobileService.get_tareas_operario(operario_id)
                 if resultado['tareas']:
                     return resultado['tareas'][0]
+                return None
+
+            # Supervisor sin picking ni reposición pendiente: nada más que
+            # ofrecerle. Nunca cae al bloque de abajo (limpieza de conteos de
+            # otra bodega) — es exclusivo de roles de tienda/traslado.
+            if _es_supervisor:
                 return None
 
             # Liberar conteos de OTRA bodega asignados erróneamente.
