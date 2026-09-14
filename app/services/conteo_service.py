@@ -863,7 +863,15 @@ class ConteoService:
     def crear_conteo_manual(almacen_id: int, producto_codigo: str, operario_id: int = None) -> dict:
         """
         Crea sesiones de conteo manual para todas las ubicaciones donde hay stock
-        del producto en el almacén. Omite ubicaciones con conteo activo.
+        del producto en el almacén.
+
+        Si una ubicación ya tiene una sesión PENDIENTE (creada por el barrido
+        DIARIO_ABC u otro conteo manual, pero nadie la ha abierto todavía), la
+        reclama en vez de omitirla: le reasigna el operario forzado y la cuenta
+        como parte del resultado. Solo se omite (`omitidas_ya_activas`) una
+        ubicación cuyo conteo YA está siendo contado de verdad —
+        EN_PROCESO o SEGUNDO_CONTEO — porque ahí sí hay trabajo físico en
+        marcha que no se puede pisar a ciegas.
 
         operario_id (opcional): fuerza el CC1 a ese operario específico —
         mismo estado PENDIENTE-pero-asignado que ya usan las tareas DIARIO_ABC
@@ -873,7 +881,19 @@ class ConteoService:
         primero. El CC2, si CC1 sale discordante, lo sigue eligiendo
         `_crear_conteo_verificacion` — este parámetro solo controla CC1.
 
-        Retorna dict con tareas_creadas, omitidas_ya_activas, producto_nombre, codigos.
+        Si el operario forzado ya tiene OTRO conteo cíclico EN_PROCESO (uno
+        de un SKU distinto), ese se pausa — mismo patrón que
+        `liberar_tareas_zombi`: vuelve a PENDIENTE, sin dueño, con
+        `cantidad_fisica`/`fecha_inicio` en None — para que el conteo forzado
+        sea lo próximo que el dispensador (`get_tarea_actual`) le entregue, en
+        vez de seguir devolviéndole el que ya tenía en curso. Nunca se pausa
+        un picking, packing o traslado activo — solo otro conteo: interrumpir
+        una operación física en curso (bultos ya escaneados, LPN abierto) es
+        un riesgo distinto, y ese conteo simplemente espera su turno en la
+        cola normal del operario.
+
+        Retorna dict con tareas_creadas, tareas_reclamadas, omitidas_ya_activas,
+        producto_nombre, codigos.
         """
         from app.models.producto import Producto
         from app.models.inventario import UbicacionProducto
@@ -906,8 +926,8 @@ class ConteoService:
 
         # Pre-cargar sesiones activas en una sola query — evita N+1 en el loop
         ubicacion_ids = [r.ubicacion_id for r in registros]
-        activos_set = {
-            s.ubicacion_id
+        activas_por_ubicacion = {
+            s.ubicacion_id: s
             for s in SesionConteo.query.filter(
                 SesionConteo.producto_id == producto.id,
                 SesionConteo.ubicacion_id.in_(ubicacion_ids),
@@ -916,12 +936,21 @@ class ConteoService:
         }
 
         creadas = []
+        reclamadas = []
         omitidas = 0
         from app.utils.fecha import fecha_hoy_bogota
         hoy = fecha_hoy_bogota()
         for reg in registros:
-            if reg.ubicacion_id in activos_set:
-                omitidas += 1
+            existente = activas_por_ubicacion.get(reg.ubicacion_id)
+            if existente:
+                # Sin operario forzado no hay nada que reclamar — mismo
+                # comportamiento de siempre (evita duplicar sobre un PENDIENTE
+                # que ya espera a que alguien lo tome).
+                if existente.estado != EstadoConteo.PENDIENTE or not operario_forzado:
+                    omitidas += 1
+                    continue
+                existente.operario_id = operario_forzado.id
+                reclamadas.append(existente.codigo)
                 continue
             sesion_codigo = f'CC-MANUAL-{hoy}-{str(uuid.uuid4())[:6].upper()}'
             sesion = SesionConteo(
@@ -939,6 +968,26 @@ class ConteoService:
             db.session.add(sesion)
             creadas.append(sesion_codigo)
 
+        # Pausar el otro conteo EN_PROCESO del operario forzado (si tiene uno) —
+        # solo si de verdad le vamos a asignar algo nuevo, y solo si ese conteo
+        # en curso es de OTRA ubicación (si ya es la misma, no hay nada que
+        # pausar: es el conteo que ya le íbamos a reclamar arriba).
+        if operario_forzado and (creadas or reclamadas):
+            en_proceso_otro = SesionConteo.query.filter(
+                SesionConteo.operario_id == operario_forzado.id,
+                SesionConteo.estado == EstadoConteo.EN_PROCESO,
+                ~SesionConteo.ubicacion_id.in_(ubicacion_ids),
+            ).all()
+            for s in en_proceso_otro:
+                logger.info(
+                    f'[CONTEO MANUAL] Pausando sesión {s.codigo} (id={s.id}) EN_PROCESO '
+                    f'del operario #{operario_forzado.id} — reemplazada por conteo forzado de {codigo}'
+                )
+                s.estado = EstadoConteo.PENDIENTE
+                s.operario_id = None
+                s.fecha_inicio = None
+                s.cantidad_fisica = None
+
         try:
             db.session.commit()
         except Exception as e_commit:
@@ -946,11 +995,13 @@ class ConteoService:
             raise ValueError(f'Error al crear sesiones de conteo manual: {e_commit}') from e_commit
 
         return {
-            'tareas_creadas': len(creadas),
+            'tareas_creadas': len(creadas) + len(reclamadas),
+            'tareas_nuevas': len(creadas),
+            'tareas_reclamadas': len(reclamadas),
             'omitidas_ya_activas': omitidas,
             'producto': codigo,
             'producto_nombre': producto.nombre or '',
-            'codigos': creadas,
+            'codigos': creadas + reclamadas,
             'operario_id': operario_forzado.id if operario_forzado else None,
             'operario_nombre': operario_forzado.nombre if operario_forzado else None,
         }

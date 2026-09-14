@@ -213,6 +213,108 @@ class TestCrearConteoManual:
         ).count()
         assert total == 1
 
+    def test_crear_conteo_manual_reclama_pendiente_al_forzar_operario(
+        self, db, almacen, producto, ub_picking, inv_picking, usuario,
+    ):
+        """Una sesión PENDIENTE sin dueño (ej. generada por el barrido
+        DIARIO_ABC, nadie la ha abierto) no debe bloquear un conteo manual
+        forzado a un operario específico — se reclama en vez de omitirse,
+        sin crear una segunda sesión para la misma ubicación."""
+        from app.services.conteo_service import ConteoService
+        from app.models.conteo import SesionConteo
+
+        # Sesión PENDIENTE preexistente, sin operario (ej. DIARIO_ABC)
+        primero = ConteoService.crear_conteo_manual(almacen.id, producto.codigo)
+        assert primero['tareas_creadas'] == 1
+        sesion_id = SesionConteo.query.filter_by(codigo=primero['codigos'][0]).first().id
+
+        # Forzar operario sobre el mismo producto/almacén
+        resultado = ConteoService.crear_conteo_manual(almacen.id, producto.codigo, operario_id=usuario.id)
+
+        assert resultado['tareas_creadas'] == 1
+        assert resultado['tareas_reclamadas'] == 1
+        assert resultado['tareas_nuevas'] == 0
+        assert resultado['omitidas_ya_activas'] == 0
+        assert resultado['codigos'] == [primero['codigos'][0]]
+
+        sesion = SesionConteo.query.get(sesion_id)
+        assert sesion.operario_id == usuario.id
+        assert sesion.estado == 'PENDIENTE'
+
+        # Sigue siendo una sola sesión — no se duplicó
+        total = SesionConteo.query.filter_by(
+            producto_id=producto.id,
+            ubicacion_id=ub_picking.id,
+        ).count()
+        assert total == 1
+
+    def test_crear_conteo_manual_pausa_otro_en_proceso_del_operario_forzado(
+        self, db, almacen, producto, producto2, ub_picking, ub_general, inv_picking, usuario,
+    ):
+        """Si el operario forzado ya está contando OTRO SKU (EN_PROCESO), el
+        conteo manual forzado debe pausarlo — vuelve a PENDIENTE sin dueño,
+        mismo patrón que liberar_tareas_zombi — para que el dispensador le
+        entregue el conteo forzado en vez de seguir devolviéndole el viejo."""
+        from app.services.conteo_service import ConteoService
+        from app.models.conteo import SesionConteo, EstadoConteo
+        from app.models.inventario import UbicacionProducto
+
+        # Carlos ya está a mitad de un conteo de otro SKU en otra ubicación
+        otro = SesionConteo(
+            codigo='CC-OTRO-EN-PROCESO', tipo='DIARIO_ABC',
+            clasificacion_abc='B', ubicacion_id=ub_general.id, almacen_id=almacen.id,
+            producto_id=producto2.id, producto_codigo_siesa=producto2.codigo_siesa,
+            maneja_lote=False, estado=EstadoConteo.EN_PROCESO,
+            operario_id=usuario.id, fecha_inicio=datetime.utcnow(),
+        )
+        db.session.add(otro)
+        db.session.add(UbicacionProducto(
+            ubicacion_id=ub_general.id, producto_id=producto2.id,
+            cantidad=10, reservado=0, bloqueado=0,
+        ))
+        db.session.commit()
+
+        resultado = ConteoService.crear_conteo_manual(almacen.id, producto.codigo, operario_id=usuario.id)
+        assert resultado['tareas_creadas'] == 1
+        assert resultado['operario_id'] == usuario.id
+
+        pausado = SesionConteo.query.filter_by(codigo='CC-OTRO-EN-PROCESO').first()
+        assert pausado.estado == EstadoConteo.PENDIENTE
+        assert pausado.operario_id is None
+        assert pausado.fecha_inicio is None
+
+        nuevo = SesionConteo.query.filter_by(codigo=resultado['codigos'][0]).first()
+        assert nuevo.operario_id == usuario.id
+        assert nuevo.estado == 'PENDIENTE'
+
+    def test_crear_conteo_manual_no_pausa_picking_activo(
+        self, db, almacen, producto, ub_picking, inv_picking, usuario,
+    ):
+        """Forzar un conteo manual NUNCA toca un picking/packing/traslado
+        activo del operario — solo pausa otro conteo cíclico. Interrumpir una
+        operación física en curso (bultos escaneados, LPN abierto) es un
+        riesgo distinto que esta feature no debe tocar."""
+        from app.services.conteo_service import ConteoService
+        from app.models.picking import TareaPicking
+
+        picking = TareaPicking(
+            codigo='PICK-NO-PAUSA-001',
+            operario_id=usuario.id, producto_id=producto.id,
+            ubicacion_id=ub_picking.id, almacen_id=almacen.id,
+            cantidad_solicitada=5, cantidad_recogida=2,
+            estado='EN_PROCESO', prioridad=1,
+        )
+        db.session.add(picking)
+        db.session.commit()
+        picking_id = picking.id
+
+        ConteoService.crear_conteo_manual(almacen.id, producto.codigo, operario_id=usuario.id)
+
+        picking = db.session.get(TareaPicking, picking_id)
+        assert picking.estado == 'EN_PROCESO'
+        assert picking.operario_id == usuario.id
+        assert picking.cantidad_recogida == 2
+
 
 class TestRegistrarConteo:
 
