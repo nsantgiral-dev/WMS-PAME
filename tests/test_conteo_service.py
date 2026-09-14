@@ -186,6 +186,20 @@ class TestCrearConteoManual:
             f'no ocurrió para una sesión pre-asignada')
         assert sesion.fecha_inicio is not None
 
+    def test_crear_conteo_manual_busca_por_codigo_de_barras(self, db, almacen, producto, ub_picking, inv_picking):
+        """El campo del admin puede escanear/pegar el código de barras
+        directamente (no solo la referencia) — mismo criterio que ya usa
+        `_codigos_validos` en el escaneo real del operario."""
+        from app.services.conteo_service import ConteoService
+
+        producto.codigo_barras = 'BN-77'
+        db.session.commit()
+
+        resultado = ConteoService.crear_conteo_manual(almacen.id, 'bn-77')
+        assert resultado['tareas_creadas'] == 1
+        assert resultado['producto'] == 'BN-77'
+        assert resultado['producto_nombre'] == producto.nombre
+
     def test_crear_conteo_manual_operario_inexistente(self, db, almacen, producto, ub_picking, inv_picking):
         from app.services.conteo_service import ConteoService
 

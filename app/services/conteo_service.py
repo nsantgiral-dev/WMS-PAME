@@ -902,7 +902,12 @@ class ConteoService:
 
         codigo = producto_codigo.strip().upper()
         producto = Producto.query.filter(
-            db.or_(Producto.codigo_siesa == codigo, Producto.codigo == codigo)
+            db.or_(
+                Producto.codigo_siesa == codigo,
+                Producto.codigo == codigo,
+                db.func.upper(Producto.codigo_barras) == codigo,
+                db.func.upper(Producto.codigo_barras_empaque) == codigo,
+            )
         ).first()
         if not producto:
             raise ValueError(f'Producto {codigo} no encontrado')

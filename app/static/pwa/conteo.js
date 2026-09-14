@@ -667,6 +667,72 @@ function conteosOcultarFormManual() {
   document.getElementById('conteo-form-manual').style.display = 'none';
   document.getElementById('conteo-manual-codigo').value = '';
   document.getElementById('conteo-manual-error').textContent = '';
+  conteoManualOcultarSugerencias();
+}
+
+let _CONTEO_MANUAL_BUSCAR_TIMER = null;
+
+/** Escapa texto para insertarlo como HTML — evita que un nombre de
+ * producto con `<`, `>`, `&`, comillas, etc. rompa el marcado o inyecte. */
+function _conteoManualEscapeHtml(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, ch => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  })[ch]);
+}
+
+/** Autocompletado del campo "Código producto" en Crear conteo manual —
+ * busca por código, nombre O código de barras (GET /api/productos/ ya
+ * soporta los tres, mismo endpoint que usa el catálogo general). Elegir
+ * una sugerencia rellena el campo con la referencia real; seguir
+ * escribiendo un código exacto sin elegir nada sigue funcionando igual
+ * que antes (crearConteoManual lo resuelve server-side). */
+function conteoManualBuscarProducto(valor) {
+  clearTimeout(_CONTEO_MANUAL_BUSCAR_TIMER);
+  const q = (valor || '').trim();
+  const box = document.getElementById('conteo-manual-sugerencias');
+  if (!box) return;
+  if (q.length < 2) { box.style.display = 'none'; box.innerHTML = ''; return; }
+
+  _CONTEO_MANUAL_BUSCAR_TIMER = setTimeout(async () => {
+    let productos = [];
+    try {
+      const d = await get('/api/productos/?q=' + encodeURIComponent(q) + '&per_page=8');
+      productos = d.productos || [];
+    } catch (e) {
+      box.style.display = 'none';
+      return;
+    }
+    if (!productos.length) {
+      box.innerHTML = '<div style="padding:10px 12px;font-size:13px;color:var(--tx3);">Sin resultados</div>';
+      box.style.display = 'block';
+      return;
+    }
+    box.innerHTML = productos.map(p => {
+      const codigo = _conteoManualEscapeHtml(p.codigo);
+      const nombre = _conteoManualEscapeHtml(p.nombre || '');
+      const barras = p.codigo_barras ? ' · ' + _conteoManualEscapeHtml(p.codigo_barras) : '';
+      return `
+        <div onclick="conteoManualElegirProducto(this.dataset.codigo)" data-codigo="${codigo}"
+          style="padding:8px 12px;cursor:pointer;border-bottom:1px solid var(--brd);font-size:13px;"
+          onmouseover="this.style.background='var(--bg-input)'" onmouseout="this.style.background=''">
+          <div style="font-weight:700;color:var(--tx);">${codigo}${barras}</div>
+          <div style="color:var(--tx3);font-size:12px;">${nombre}</div>
+        </div>`;
+    }).join('');
+    box.style.display = 'block';
+  }, 250);
+}
+
+/** Selecciona una sugerencia — rellena el campo con la referencia real del producto. */
+function conteoManualElegirProducto(codigo) {
+  const input = document.getElementById('conteo-manual-codigo');
+  if (input) input.value = codigo;
+  conteoManualOcultarSugerencias();
+}
+
+function conteoManualOcultarSugerencias() {
+  const box = document.getElementById('conteo-manual-sugerencias');
+  if (box) { box.style.display = 'none'; box.innerHTML = ''; }
 }
 /** Create a manual conteo task for a specific product code and almacen —
  * opcionalmente forzando a qué operario le cae el primer conteo (CC1). */
