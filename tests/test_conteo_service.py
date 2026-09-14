@@ -249,27 +249,38 @@ class TestCrearConteoManual:
         assert total == 1
 
     def test_crear_conteo_manual_pausa_otro_en_proceso_del_operario_forzado(
-        self, db, almacen, producto, producto2, ub_picking, ub_general, inv_picking, usuario,
+        self, db, almacen, producto, producto2, ub_picking, inv_picking, usuario,
     ):
         """Si el operario forzado ya está contando OTRO SKU (EN_PROCESO), el
         conteo manual forzado debe pausarlo — vuelve a PENDIENTE sin dueño,
         mismo patrón que liberar_tareas_zombi — para que el dispensador le
-        entregue el conteo forzado en vez de seguir devolviéndole el viejo."""
+        entregue el conteo forzado en vez de seguir devolviéndole el viejo.
+
+        La sesión "otro" vive en la MISMA ubicación que el producto forzado
+        (`ub_picking`) a propósito — replica el caso real de producción
+        (2026-09-14): dos SKUs distintos comparten `SIESA-GENERAL` como
+        ubicación genérica, y una versión anterior de este fix excluía por
+        `ubicacion_id` en vez de por identidad de sesión, así que el
+        EN_PROCESO de un SKU distinto en la misma ubicación sobrevivía sin
+        pausarse. Un test con ubicaciones distintas para "producto" y
+        "producto2" no habría detectado ese bug — es la lección de este
+        mismo repo sobre guards que miden una propiedad que la vía sana ya
+        satisface por construcción."""
         from app.services.conteo_service import ConteoService
         from app.models.conteo import SesionConteo, EstadoConteo
         from app.models.inventario import UbicacionProducto
 
-        # Carlos ya está a mitad de un conteo de otro SKU en otra ubicación
+        # Carlos ya está a mitad de un conteo de OTRO SKU en la MISMA ubicación
         otro = SesionConteo(
             codigo='CC-OTRO-EN-PROCESO', tipo='DIARIO_ABC',
-            clasificacion_abc='B', ubicacion_id=ub_general.id, almacen_id=almacen.id,
+            clasificacion_abc='B', ubicacion_id=ub_picking.id, almacen_id=almacen.id,
             producto_id=producto2.id, producto_codigo_siesa=producto2.codigo_siesa,
             maneja_lote=False, estado=EstadoConteo.EN_PROCESO,
             operario_id=usuario.id, fecha_inicio=datetime.utcnow(),
         )
         db.session.add(otro)
         db.session.add(UbicacionProducto(
-            ubicacion_id=ub_general.id, producto_id=producto2.id,
+            ubicacion_id=ub_picking.id, producto_id=producto2.id,
             cantidad=10, reservado=0, bloqueado=0,
         ))
         db.session.commit()

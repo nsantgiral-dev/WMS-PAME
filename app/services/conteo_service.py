@@ -969,14 +969,21 @@ class ConteoService:
             creadas.append(sesion_codigo)
 
         # Pausar el otro conteo EN_PROCESO del operario forzado (si tiene uno) —
-        # solo si de verdad le vamos a asignar algo nuevo, y solo si ese conteo
-        # en curso es de OTRA ubicación (si ya es la misma, no hay nada que
-        # pausar: es el conteo que ya le íbamos a reclamar arriba).
+        # solo si de verdad le vamos a asignar algo nuevo. No hace falta excluir
+        # lo que acabamos de crear/reclamar: ambas ramas de arriba solo dejan
+        # sesiones en PENDIENTE (nunca EN_PROCESO), así que no pueden aparecer
+        # en esta consulta.
+        #
+        # Versión anterior excluía por ubicacion_id — incorrecto: ubicaciones
+        # genéricas como SIESA-GENERAL las comparten productos distintos, así
+        # que un EN_PROCESO de OTRO SKU en la misma ubicación quedaba sin
+        # pausar por error (bug real, encontrado en vivo 2026-09-14 — dos
+        # sesiones de SKUs distintos en ubicacion_id=20, la del operario
+        # forzado sobrevivía intacta).
         if operario_forzado and (creadas or reclamadas):
             en_proceso_otro = SesionConteo.query.filter(
                 SesionConteo.operario_id == operario_forzado.id,
                 SesionConteo.estado == EstadoConteo.EN_PROCESO,
-                ~SesionConteo.ubicacion_id.in_(ubicacion_ids),
             ).all()
             for s in en_proceso_otro:
                 logger.info(
