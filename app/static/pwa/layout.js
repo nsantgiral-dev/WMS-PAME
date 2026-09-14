@@ -38,6 +38,19 @@ function _layoutColorZona(zona) {
 }
 
 /**
+ * true solo para admin/jefe_almacen — quien tiene control total del módulo.
+ * Un operario/empacador con puede_organizar_layout=True puede crear cuerpo y
+ * asignar SKU (el backend ya lo permite, ver almacenes.py), pero editar,
+ * reclasificar, eliminar e importar Excel siguen bloqueados server-side —
+ * esta función es solo para OCULTAR esos botones en la UI y no enseñarle a
+ * alguien a ignorar un 403 (mismo criterio que ya aplica el comentario de
+ * `soloFlota` en app.js).
+ */
+function _layoutEsAdminCompleto() {
+  return ['admin', 'jefe_almacen'].includes(OPERARIO?.rol);
+}
+
+/**
  * Switch the active zone tab and re-render ubicaciones for that zone.
  * @param {string} zona - Zone key: 'PICKING', 'RESERVA', 'AVERIAS', or 'GENERAL'.
  */
@@ -66,8 +79,10 @@ function layoutSubtab(sec) {
     if (!cont || !btn) return;
     const activo = s === sec;
     cont.style.display = activo ? 'block' : 'none';
-    btn.style.background = activo ? 'var(--pm)' : 'transparent';
-    btn.style.color = activo ? '#fff' : 'var(--tx3)';
+    // Tabs reales (subrayado), no segmented control — Ubicaciones e Importar
+    // Excel son pantallas distintas, no una misma vista filtrada de dos formas.
+    btn.style.color = activo ? 'var(--pm)' : 'var(--tx3)';
+    btn.style.borderBottomColor = activo ? 'var(--pm)' : 'transparent';
     btn.style.fontWeight = activo ? '700' : '400';
   });
   if (sec === 'ubicaciones') layoutCargarUbicaciones();
@@ -75,6 +90,12 @@ function layoutSubtab(sec) {
 
 /** Entry point to load the layout module with the current sub-tab. */
 async function cargarLayout() {
+  // Importar Excel es poblamiento masivo — sigue exclusivo de admin/jefe
+  // (guard real en almacenes.py); ocultar el sub-tab evita que alguien con
+  // puede_organizar_layout lo encuentre solo para toparse con un 403.
+  const _tabImportar = document.getElementById('layout-sub-importar');
+  if (_tabImportar) _tabImportar.style.display = _layoutEsAdminCompleto() ? '' : 'none';
+  if (!_layoutEsAdminCompleto() && _layoutSubActual === 'importar') _layoutSubActual = 'ubicaciones';
   layoutSubtab(_layoutSubActual);
 }
 
@@ -83,11 +104,14 @@ async function cargarLayout() {
  * @param {Object} u - Ubicacion object with code, zone, stock, and product data.
  * @returns {string} HTML string for the ubicacion card.
  */
+const _TIPO_MUEBLE_BADGE = { vitrina: '🗄 Vitrina', estiba: '📦 Estiba' };
+
 function _layoutRenderUbicacionCard(u) {
   const color = _layoutColorZona(u.tipo_zona);
   const skuLabel = u.producto_asignado_codigo
     ? `📦 ${u.producto_asignado_codigo}${u.producto_asignado_nombre ? ' — ' + u.producto_asignado_nombre : ''}`
     : (u.tipo_zona === 'PICKING' ? 'Sin SKU asignado' : null);
+  const badgeMueble = _TIPO_MUEBLE_BADGE[u.tipo];
 
   return `
     <div class="tabla-card" style="margin-bottom:10px;">
@@ -98,6 +122,7 @@ function _layoutRenderUbicacionCard(u) {
         </div>
         <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;justify-content:flex-end;">
           <span style="font-size:11px;font-weight:700;color:${color};background:${color}22;padding:3px 8px;border-radius:20px;">${esc(u.tipo_zona)}</span>
+          ${badgeMueble ? `<span style="font-size:10px;font-weight:700;color:var(--tx3);background:var(--bg-s2);padding:3px 8px;border-radius:20px;">${badgeMueble}</span>` : ''}
           ${!u.activo ? `<span style="font-size:10px;color:#888;background:#88888822;padding:3px 8px;border-radius:20px;">INACTIVA</span>` : ''}
         </div>
       </div>
@@ -107,10 +132,11 @@ function _layoutRenderUbicacionCard(u) {
         <span style="color:#666;">${u.origen === 'MANUAL' ? 'WMS' : 'Siesa'}</span>
       </div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;">
-        <button onclick="layoutAbrirModalAsignar(${esc(u.id)}, '${esc(u.codigo)}', '${esc(u.tipo_zona)}')"
+        <button onclick="layoutAbrirModalAsignar(${esc(u.id)}, '${esc(u.codigo)}', '${esc(u.tipo_zona)}', ${u.capacidad_maxima ?? 'null'})"
           style="flex:1;min-width:90px;padding:8px;background:var(--bg);border:1px solid var(--brd);border-radius:6px;color:var(--tx2);font-size:12px;cursor:pointer;">
           Asignar SKU
         </button>
+        ${_layoutEsAdminCompleto() ? `
         <button onclick="layoutAbrirModalEditarUbicacion(${esc(u.id)})"
           style="flex:1;min-width:90px;padding:8px;background:var(--bg);border:1px solid var(--brd);border-radius:6px;color:var(--tx2);font-size:12px;cursor:pointer;">
           Editar
@@ -122,7 +148,7 @@ function _layoutRenderUbicacionCard(u) {
         <button onclick="layoutAbrirModalReclasificar(${esc(u.id)})"
           style="flex:1;min-width:90px;padding:8px;background:var(--bg);border:1px solid var(--brd);border-radius:6px;color:var(--tx2);font-size:12px;cursor:pointer;">
           Reclasificar
-        </button>
+        </button>` : ''}
       </div>
     </div>`;
 }
@@ -173,11 +199,17 @@ function layoutRenderUbicaciones() {
   const ts = u => u.fecha_creacion ? new Date(u.fecha_creacion).getTime() : 0;
 
   // legado: fila plana (estante) — mecanismo anterior al rediseño de 5 ejes.
-  // cuerpo: Cuerpo -> Entrepaño (nivel) -> Huecos — mecanismo nuevo (Mecanismo A).
-  //         un Cuerpo puede tener entrepaños en varias zonas; al filtrar `items`
-  //         por zona antes de agrupar, cada grupo de cuerpo queda ya con solo
-  //         los entrepaños de la pestaña activa.
-  // suelta: AVERIAS/GENERAL sin dirección física de cuerpo, una por grupo.
+  // cuerpo: Cuerpo -> Entrepaño (nivel) -> Huecos — mecanismo nuevo (Mecanismo A),
+  //         SOLO para tipo='estanteria'. Un Cuerpo puede tener entrepaños en
+  //         varias zonas; al filtrar `items` por zona antes de agrupar, cada
+  //         grupo de cuerpo queda ya con solo los entrepaños de la pestaña activa.
+  // suelta: AVERIAS/GENERAL (sin dirección física) Y también vitrina/estiba
+  //         — estas SÍ tienen pasillo/fila/cuerpo (lo necesitan para el orden
+  //         de ruta física de picking, ver orden_ruta_fisica() en
+  //         picking_service.py), pero son de una sola posición: agruparlas
+  //         como "Cuerpo" las mostraría detrás de un click con lenguaje de
+  //         "Entrepaño" que no aplica. El criterio de agrupación es tipo de
+  //         mueble, no presencia de los ejes físicos.
   const grupos = [];
   const filasPorClave = new Map();
   const cuerposPorClave = new Map();
@@ -192,7 +224,7 @@ function layoutRenderUbicaciones() {
         grupos.push(g);
       }
       g.items.push(u);
-    } else if (u.pasillo && u.fila != null && u.cuerpo != null) {
+    } else if (u.pasillo && u.fila != null && u.cuerpo != null && (u.tipo || 'estanteria') === 'estanteria') {
       const clave = `${u.pasillo}|${u.fila}|${u.cuerpo}`;
       let g = cuerposPorClave.get(clave);
       if (!g) {
@@ -221,6 +253,7 @@ function layoutRenderUbicaciones() {
       html += `
         <div style="display:flex;justify-content:space-between;align-items:center;background:var(--bg-s2);border-radius:8px;padding:8px 12px;margin:16px 0 8px;">
           <div style="font-size:12px;font-weight:700;color:var(--tx2);">Fila ${codigoFila} · ${_layoutZonaActual} · ${esc(g.items.length)} posición(es)</div>
+          ${_layoutEsAdminCompleto() ? `
           <div style="display:flex;gap:6px;">
             <button onclick="layoutAbrirModalEditarFila('${esc(g.pasillo)}','${esc(g.estante)}')"
               style="padding:5px 10px;background:var(--bg);border:1px solid var(--brd);border-radius:6px;color:var(--tx2);font-size:11px;cursor:pointer;">
@@ -230,46 +263,39 @@ function layoutRenderUbicaciones() {
               style="padding:5px 10px;background:var(--bg);border:1px solid #7f1d1d;border-radius:6px;color:#f87171;font-size:11px;cursor:pointer;">
               🗑 Eliminar
             </button>
-          </div>
+          </div>` : ''}
         </div>`;
       g.items.forEach(u => { html += _layoutRenderUbicacionCard(u); });
     } else if (g.tipo === 'cuerpo') {
       // Nomenclatura real del código: {PREFIJO_ZONA}-{PASILLO}{FILA}-C{CUERPO} — ej. PIK-A1-C01.
+      // Fila colapsada — el detalle (entrepaños + acciones del cuerpo) vive en
+      // modal-layout-cuerpo-detalle (layoutAbrirModalCuerpoDetalle). Antes cada
+      // cuerpo mostraba sus entrepaños siempre expandidos; con 20+ cuerpos por
+      // zona era puro scroll para encontrar uno solo.
       const codigoCuerpo = _layoutCodigoCuerpo(g.items[0].codigo);
-      const nivelesEnZona = [...g.niveles.keys()].sort((a, b) => a - b);
-      const idsCuerpoCsv = g.items.map(u => u.id).join(',');
-      const zonaCuerpo = g.items[0].tipo_zona; // un cuerpo es 100% de una sola zona
-      let cuerpoHtml = `
-        <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:14px;flex-wrap:wrap;">
-          <div style="font-size:20px;font-weight:800;font-family:monospace;color:var(--tx);">${codigoCuerpo}</div>
-          <div style="display:flex;gap:6px;flex-wrap:wrap;">
-            <button onclick="layoutAbrirModalEsquemaCuerpo('${idsCuerpoCsv}')"
-              style="padding:7px 10px;background:var(--bg);border:1px solid var(--brd);border-radius:6px;color:var(--tx2);font-size:11px;font-weight:700;cursor:pointer;">
-              📐 Esquema
-            </button>
-            <button onclick="layoutImprimirEtiquetasCuerpo('${idsCuerpoCsv}')"
-              style="padding:7px 10px;background:var(--bg);border:1px solid var(--brd);border-radius:6px;color:var(--tx2);font-size:11px;font-weight:700;cursor:pointer;">
-              🖨 Etiquetas
-            </button>
-            <button onclick="layoutAbrirModalEditarCuerpo('${esc(g.pasillo)}', ${esc(g.fila)}, ${esc(g.cuerpo)}, ${esc(nivelesEnZona.length)})"
-              style="padding:7px 10px;background:var(--bg);border:1px solid var(--brd);border-radius:6px;color:var(--tx2);font-size:11px;font-weight:700;cursor:pointer;">
-              ✏ Editar
-            </button>
-            <button onclick="layoutAbrirModalReclasificarCuerpo('${esc(g.pasillo)}', ${esc(g.fila)}, ${esc(g.cuerpo)}, '${zonaCuerpo}')"
-              style="padding:7px 10px;background:var(--bg);border:1px solid var(--brd);border-radius:6px;color:var(--tx2);font-size:11px;font-weight:700;cursor:pointer;">
-              ⇄ Reclasificar
-            </button>
-            <button onclick="layoutEliminarCuerpo('${esc(g.pasillo)}', ${esc(g.fila)}, ${esc(g.cuerpo)})"
-              style="padding:7px 10px;background:var(--bg);border:1px solid #7f1d1d;border-radius:6px;color:#f87171;font-size:11px;font-weight:700;cursor:pointer;">
-              🗑 Eliminar
-            </button>
+      const total = g.items.length;
+      const sinAsignar = g.items.filter(u => !u.producto_asignado_codigo).length;
+      const asignados = total - sinAsignar;
+      const pct = total ? Math.round((asignados / total) * 100) : 0;
+      const chip = sinAsignar === 0
+        ? `<span class="badge badge-green">Completo</span>`
+        : `<span class="badge badge-yellow">${sinAsignar} sin asignar</span>`;
+      html += `
+        <button onclick="layoutAbrirModalCuerpoDetalle('${esc(g.pasillo)}', ${esc(g.fila)}, ${esc(g.cuerpo)})"
+          class="tabla-card" style="display:flex;align-items:center;gap:12px;width:100%;text-align:left;
+          margin-top:10px;cursor:pointer;font:inherit;color:inherit;">
+          <svg width="17" height="17" viewBox="0 0 20 20" fill="none" style="flex-shrink:0;color:var(--tx3);">
+            <path d="M7 4l6 6-6 6" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          <div style="min-width:120px;font-size:15px;font-weight:800;font-family:monospace;color:var(--tx);">${codigoCuerpo}</div>
+          <div style="flex:1;min-width:140px;">
+            <div style="font-size:12px;font-weight:700;color:var(--tx2);"><b style="color:var(--tx);">${asignados}</b> de ${total} huecos asignados</div>
+            <div style="height:5px;border-radius:3px;background:var(--bg-s2);overflow:hidden;margin-top:4px;">
+              <span style="display:block;height:100%;border-radius:3px;background:var(--green,#16a34a);width:${pct}%;"></span>
+            </div>
           </div>
-        </div>`;
-      nivelesEnZona.forEach((nivel, idx) => {
-        const huecos = g.niveles.get(nivel).sort((a, b) => a.hueco - b.hueco);
-        cuerpoHtml += _layoutRenderEntrepanoSeccion(huecos, idx === 0);
-      });
-      html += `<div class="tabla-card" style="margin-top:16px;">${cuerpoHtml}</div>`;
+          ${chip}
+        </button>`;
     } else {
       g.items.forEach(u => { html += _layoutRenderUbicacionCard(u); });
     }
@@ -292,6 +318,78 @@ function layoutRenderUbicaciones() {
 
 let _layoutCuerpoZona = 'PICKING';
 let _layoutCuerpoHuecosPrevios = null; // huecosPorNivel del último cuerpo creado, para "repetir"
+let _layoutCuerpoTipoMueble = 'estanteria'; // 'estanteria' | 'vitrina' | 'estiba' — ver layoutCuerpoSetTipoMueble()
+
+const _TIPO_MUEBLE_LABEL = { estanteria: 'Cuerpo', vitrina: 'Vitrina', estiba: 'Estiba' };
+// Vitrinas solo tienen sentido en PICKING (mueble de exhibición al que el
+// operario pickea directo); estibas en el suelo aplican a PICKING, RESERVA y
+// AVERIAS; IMPORTADOS no tiene ninguna reportada hoy — solo Cuerpo de estantería.
+const _TIPOS_MUEBLE_POR_ZONA = {
+  PICKING: ['estanteria', 'vitrina', 'estiba'],
+  RESERVA: ['estanteria', 'estiba'],
+  // Sin vitrina: AVERIAS es un área de cuarentena, no de exhibición — solo
+  // estantería real o estiba en el piso, igual que RESERVA.
+  AVERIAS: ['estanteria', 'estiba'],
+  IMPORTADOS: ['estanteria'],
+};
+
+/** Toggle which tipo_mueble is selected in the crear-cuerpo wizard and adjust step-1 fields accordingly. */
+function layoutCuerpoSetTipoMueble(tipo) {
+  _layoutCuerpoTipoMueble = tipo;
+  ['estanteria', 'vitrina', 'estiba'].forEach(t => {
+    const btn = document.getElementById(`layout-cuerpo-tipo-${t}`);
+    if (!btn) return;
+    const activo = t === tipo;
+    btn.style.background = activo ? 'var(--pm)' : 'var(--bg)';
+    btn.style.color = activo ? '#fff' : 'var(--tx2)';
+  });
+  const esMuebleSuelto = tipo !== 'estanteria';
+  const wrapEntrepanos = document.getElementById('layout-cuerpo-entrepanos-wrap');
+  if (wrapEntrepanos) wrapEntrepanos.style.display = esMuebleSuelto ? 'none' : 'block';
+  const btnSiguiente = document.getElementById('layout-cuerpo-btn-siguiente');
+  if (btnSiguiente) btnSiguiente.textContent = esMuebleSuelto ? 'Crear' : 'Siguiente';
+  const hint = document.getElementById('layout-cuerpo-zona-hint');
+  if (hint) {
+    hint.textContent = esMuebleSuelto
+      ? `${_TIPO_MUEBLE_LABEL[tipo]} de una sola posición, zona ${_layoutCuerpoZona} — no se subdivide en entrepaños.`
+      : `El entrepaño 1 es el más bajo (piso) y sube desde ahí. Todo este Cuerpo queda en zona ${_layoutCuerpoZona}.`;
+  }
+}
+
+/** Submit a single-position mueble suelto (vitrina/estiba) directly, skipping the entrepaños/huecos step. */
+async function layoutCuerpoCrearMuebleSuelto() {
+  const pasillo = document.getElementById('layout-cuerpo-pasillo').value;
+  const fila = parseInt(document.getElementById('layout-cuerpo-fila').value);
+  const cuerpo = parseInt(document.getElementById('layout-cuerpo-numero').value);
+
+  if (!pasillo || isNaN(fila) || isNaN(cuerpo)) {
+    alerta('Completa pasillo, fila y número', 'error');
+    return;
+  }
+
+  try {
+    const payload = {
+      pasillo, fila, cuerpo, cantidad_entrepanos: 1, tipo_zona: _layoutCuerpoZona,
+      huecos_por_nivel: [1], tipo_mueble: _layoutCuerpoTipoMueble,
+    };
+    await post(`/api/almacenes/${ALMACEN_ID}/ubicaciones/cuerpo`, payload);
+    const label = _TIPO_MUEBLE_LABEL[_layoutCuerpoTipoMueble];
+    alerta(`${label} ${pasillo}${fila}-${String(cuerpo).padStart(2, '0')} (${_layoutCuerpoZona}) creada`, 'ok');
+    layoutCerrarModalCuerpo();
+    layoutCargarUbicaciones();
+  } catch (e) {
+    alerta(e.message || `Error creando la ${_TIPO_MUEBLE_LABEL[_layoutCuerpoTipoMueble].toLowerCase()}`, 'error');
+  }
+}
+
+/** Dispatch step-1 "continue": full wizard (paso 2) for estanteria, direct submit for mueble suelto. */
+function layoutCuerpoPaso1Continuar() {
+  if (_layoutCuerpoTipoMueble === 'estanteria') {
+    layoutCuerpoIrAPaso2();
+  } else {
+    layoutCuerpoCrearMuebleSuelto();
+  }
+}
 
 /** Open the 2-step wizard modal to create a full cuerpo (body) with entrepanos and huecos. */
 async function layoutAbrirModalCuerpo(zona) {
@@ -299,10 +397,14 @@ async function layoutAbrirModalCuerpo(zona) {
   if (!m) return;
   _layoutCuerpoZona = zona;
 
-  document.getElementById('layout-cuerpo-titulo').textContent =
-    zona === 'RESERVA' ? 'Crear Cuerpo — RESERVA' : 'Crear Cuerpo — PICKING';
-  document.getElementById('layout-cuerpo-zona-hint').textContent =
-    `El entrepaño 1 es el más bajo (piso) y sube desde ahí. Todo este Cuerpo queda en zona ${zona}.`;
+  document.getElementById('layout-cuerpo-titulo').textContent = `Crear ubicación — ${zona}`;
+
+  const tiposPermitidos = _TIPOS_MUEBLE_POR_ZONA[zona] || ['estanteria'];
+  ['estanteria', 'vitrina', 'estiba'].forEach(t => {
+    const btn = document.getElementById(`layout-cuerpo-tipo-${t}`);
+    if (btn) btn.style.display = tiposPermitidos.includes(t) ? '' : 'none';
+  });
+  layoutCuerpoSetTipoMueble('estanteria');
 
   const existentes = [...new Set(_layoutUbicacionesCache.map(u => u.pasillo).filter(Boolean))].sort();
   let disponibles = [];
@@ -740,18 +842,11 @@ async function layoutGuardarEliminarFila(forzar) {
   }
 }
 
-// ── AVERIAS numeradas ─────────────────────────────────────────────────────
-
-/** Create the next numbered AVERIAS ubicacion for the current almacen. */
-async function layoutCrearAverias() {
-  try {
-    const d = await post(`/api/almacenes/${ALMACEN_ID}/ubicaciones/averias`, {});
-    alerta(`${d.codigo} creada`, 'ok');
-    layoutCargarUbicaciones();
-  } catch (e) {
-    alerta(e.message || 'Error creando la ubicación de averías', 'error');
-  }
-}
+// AVERIAS ya no tiene mecanismo propio de creación — entra por
+// layoutAbrirModalCuerpo('AVERIAS'), el mismo wizard de Picking/Reserva/
+// Importados (ver _TIPOS_MUEBLE_POR_ZONA.AVERIAS). Antes se creaba anónima
+// (AVE1, AVE2..., sin pasillo real) — se retiró el 2026-09-03: el averiado
+// es dinero trazable y muchas veces se devuelve, necesita ubicación real.
 
 // ── Modal: Asignar SKU (Mecanismo B) ─────────────────────────────────────────
 
@@ -760,8 +855,9 @@ async function layoutCrearAverias() {
  * @param {number} ubId - Ubicacion ID.
  * @param {string} codigo - Ubicacion code for display.
  * @param {string} tipoZona - Zone type to conditionally show capacity input.
+ * @param {?number} capacidadActual - Capacidad ya guardada en el hueco, si la hay.
  */
-function layoutAbrirModalAsignar(ubId, codigo, tipoZona) {
+function layoutAbrirModalAsignar(ubId, codigo, tipoZona, capacidadActual) {
   _layoutUbAsignarId = ubId;
   _layoutProductoId = null;
   const m = document.getElementById('modal-layout-asignar');
@@ -773,7 +869,14 @@ function layoutAbrirModalAsignar(ubId, codigo, tipoZona) {
   const capWrap = document.getElementById('layout-asignar-capacidad-wrap');
   if (capWrap) {
     capWrap.style.display = _ZONAS_SLOT_UNICO.includes(tipoZona) ? 'block' : 'none';
-    document.getElementById('layout-asignar-capacidad').value = '';
+    document.getElementById('layout-asignar-capacidad').value = capacidadActual ?? '';
+    document.getElementById('layout-asignar-minimo').value = '';
+    const capLabel = document.getElementById('layout-asignar-capacidad-label');
+    if (capLabel) {
+      capLabel.textContent = (capacidadActual == null)
+        ? 'Capacidad máxima del hueco — obligatoria, este hueco todavía no tiene una'
+        : 'Capacidad máxima del hueco (ya configurada, opcional cambiarla)';
+    }
   }
   m.style.display = 'flex';
   setTimeout(() => document.getElementById('layout-asignar-codigo')?.focus(), 50);
@@ -820,10 +923,13 @@ async function layoutConfirmarAsignar() {
 
   const capRaw = document.getElementById('layout-asignar-capacidad')?.value;
   const capacidad_maxima = capRaw ? parseInt(capRaw) : null;
+  const minRaw = document.getElementById('layout-asignar-minimo')?.value;
+  const stock_minimo = minRaw ? parseInt(minRaw) : null;
 
   try {
     const payload = { producto_id: _layoutProductoId, cantidad };
     if (capacidad_maxima !== null && !isNaN(capacidad_maxima)) payload.capacidad_maxima = capacidad_maxima;
+    if (stock_minimo !== null && !isNaN(stock_minimo)) payload.stock_minimo = stock_minimo;
     const d = await post(`/api/almacenes/ubicaciones/${_layoutUbAsignarId}/asignar`, payload);
     alerta(`${d.producto_codigo} asignado — total ${d.cantidad_total} UNDs`, 'ok');
     layoutCerrarModalAsignar();
@@ -1038,6 +1144,56 @@ async function layoutImportarExcel(btn) {
 }
 
 
+// ── Modal: Detalle de Cuerpo (popup flotante) ────────────────────────────────
+// La fila de la lista (layoutRenderUbicaciones) solo colapsa/expande el
+// contenedor visual — este modal recalcula los huecos del cuerpo desde
+// _layoutUbicacionesCache en vez de guardar una copia aparte, para no
+// arriesgar que el popup muestre un estado viejo si el cache se refrescó
+// entre que se pintó la lista y que se abrió el cuerpo.
+function layoutAbrirModalCuerpoDetalle(pasillo, fila, cuerpo) {
+  const huecos = _layoutUbicacionesCache.filter(u =>
+    u.pasillo === pasillo && u.fila === fila && u.cuerpo === cuerpo && u.tipo_zona === _layoutZonaActual
+  );
+  if (!huecos.length) return;
+
+  const codigoCuerpo = _layoutCodigoCuerpo(huecos[0].codigo);
+  const zonaCuerpo = huecos[0].tipo_zona; // un cuerpo es 100% de una sola zona
+  const idsCuerpoCsv = huecos.map(u => u.id).join(',');
+  const sinAsignar = huecos.filter(u => !u.producto_asignado_codigo).length;
+  const nivelesEnZona = [...new Set(huecos.map(u => u.nivel))].sort((a, b) => a - b);
+
+  document.getElementById('layout-cuerpo-detalle-codigo').textContent = codigoCuerpo;
+  document.getElementById('layout-cuerpo-detalle-sub').textContent =
+    `${zonaCuerpo} · ${huecos.length} hueco(s) · ${sinAsignar ? sinAsignar + ' sin asignar' : 'todos asignados'}`;
+
+  // Mismos handlers que ya existían en el header siempre-expandido — solo
+  // se movieron adentro del modal, ningún comportamiento nuevo.
+  document.getElementById('layout-cuerpo-detalle-esquema').onclick     = () => layoutAbrirModalEsquemaCuerpo(idsCuerpoCsv);
+  document.getElementById('layout-cuerpo-detalle-etiquetas').onclick   = () => layoutImprimirEtiquetasCuerpo(idsCuerpoCsv);
+  document.getElementById('layout-cuerpo-detalle-editar').onclick      = () => layoutAbrirModalEditarCuerpo(pasillo, fila, cuerpo, nivelesEnZona.length);
+  document.getElementById('layout-cuerpo-detalle-reclasificar').onclick = () => layoutAbrirModalReclasificarCuerpo(pasillo, fila, cuerpo, zonaCuerpo);
+  document.getElementById('layout-cuerpo-detalle-eliminar').onclick    = () => layoutEliminarCuerpo(pasillo, fila, cuerpo);
+  // Editar/Reclasificar/Eliminar: el backend los sigue negando (403) a quien
+  // solo tiene puede_organizar_layout — ocultarlos acá evita enseñarle a
+  // ignorar ese error.
+  const _esAdminLayout = _layoutEsAdminCompleto();
+  ['layout-cuerpo-detalle-editar', 'layout-cuerpo-detalle-reclasificar', 'layout-cuerpo-detalle-eliminar']
+    .forEach(id => { const el = document.getElementById(id); if (el) el.style.display = _esAdminLayout ? '' : 'none'; });
+
+  let body = '';
+  nivelesEnZona.forEach((nivel, idx) => {
+    const hs = huecos.filter(u => u.nivel === nivel).sort((a, b) => a.hueco - b.hueco);
+    body += _layoutRenderEntrepanoSeccion(hs, idx === 0);
+  });
+  document.getElementById('layout-cuerpo-detalle-body').innerHTML = body;
+
+  document.getElementById('modal-layout-cuerpo-detalle').style.display = 'flex';
+}
+
+function layoutCerrarModalCuerpoDetalle() {
+  document.getElementById('modal-layout-cuerpo-detalle').style.display = 'none';
+}
+
 // ── Entrepaño: render, asignar SKU batch, ver detalle, imprimir ─────────────
 // Post-modularización: gestión de entrepaños como unidad. Movidas desde app.js.
 // _layoutCuerpoZona se declara arriba, junto al wizard de Crear Cuerpo.
@@ -1049,27 +1205,43 @@ let _layoutAsignarEntEditando = new Set(); // ids de hueco con SKU ya asignado q
 
 function _layoutRenderEntrepanoSeccion(huecos, esPrimero) {
   const zona = huecos[0].tipo_zona;
-  const color = _layoutColorZona(zona);
   const nivel = huecos[0].nivel;
   const idsCsv = huecos.map(u => u.id).join(',');
   const sinAsignar = huecos.filter(u => !u.producto_asignado_codigo).length;
-  const subtitulo = sinAsignar
-    ? `${huecos.length} hueco(s) · ${sinAsignar} sin SKU asignado`
-    : `${huecos.length} hueco(s) · todos asignados`;
+  const ok = sinAsignar === 0;
+  const subtitulo = ok
+    ? `${huecos.length} hueco(s) · todos asignados`
+    : `${huecos.length} hueco(s) · ${sinAsignar} sin SKU asignado`;
+  // Estado en la forma del bloque (icono + borde + fondo tenue), no solo en
+  // el color de un texto de 11px — y "Asignar SKU" solo se ve como acción
+  // principal donde de verdad falta algo (antes era teal sólido en los 5
+  // entrepaños aunque ya estuvieran completos). La zona ya no se repite acá:
+  // el popup que llama a esta función (layoutAbrirModalCuerpoDetalle) ya la
+  // muestra una vez en el título — un cuerpo es 100% de una sola zona.
+  const asignarBtnStyle = ok
+    ? 'background:transparent;color:var(--pm);border:1px solid var(--brd);'
+    : 'background:var(--pm);color:#fff;border:none;';
   return `
-    <div style="${esPrimero ? '' : 'border-top:1px solid var(--brd);margin-top:14px;padding-top:14px;'}">
-      <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px;">
-        <div>
-          <div style="font-size:15px;font-weight:800;color:var(--tx);">Entrepaño ${nivel}</div>
-          <div style="font-size:11px;color:${sinAsignar ? '#555' : '#60a5fa'};margin-top:3px;font-weight:600;">${subtitulo}</div>
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;
+      padding:11px 14px;border-radius:10px;border-left:3px solid ${ok ? 'transparent' : 'var(--warn,#d97706)'};
+      background:${ok ? 'transparent' : 'color-mix(in srgb, var(--warn,#d97706) 7%, var(--bg-s))'};
+      ${esPrimero ? '' : 'margin-top:6px;'}">
+      <div style="display:flex;align-items:center;gap:11px;min-width:0;">
+        <span style="width:24px;height:24px;border-radius:50%;flex-shrink:0;display:flex;align-items:center;
+          justify-content:center;font-size:12px;font-weight:900;
+          background:${ok ? 'var(--gbg,#DCFCE7)' : 'var(--warn-bg,#FEF3C7)'};
+          color:${ok ? 'var(--green,#16a34a)' : 'var(--warn,#d97706)'};">${ok ? '✓' : '!'}</span>
+        <div style="min-width:0;">
+          <div style="font-size:13.5px;font-weight:800;color:var(--tx);">Entrepaño ${nivel}</div>
+          <div style="font-size:11.5px;margin-top:1px;font-weight:${ok ? 600 : 700};
+            color:${ok ? 'var(--tx3)' : 'var(--warn,#d97706)'};font-variant-numeric:tabular-nums;">${subtitulo}</div>
         </div>
-        <span style="font-size:11px;font-weight:700;color:${color};background:${color}22;padding:3px 8px;border-radius:20px;">${zona}</span>
       </div>
-      <div style="display:flex;gap:8px;flex-wrap:wrap;">
+      <div style="display:flex;gap:6px;flex-shrink:0;">
         <button onclick="layoutAbrirModalAsignarEntrepano('${idsCsv}', '${zona}')"
-          style="flex:1;min-width:120px;padding:10px;background:var(--pm);border:none;border-radius:6px;color:#fff;font-size:12px;font-weight:700;cursor:pointer;">Asignar SKU</button>
+          style="padding:8px 12px;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap;${asignarBtnStyle}">Asignar SKU</button>
         <button onclick="layoutAbrirModalVerEntrepano('${idsCsv}')"
-          style="flex:1;min-width:90px;padding:10px;background:var(--bg);border:1px solid var(--brd);border-radius:6px;color:var(--tx2);font-size:12px;cursor:pointer;">Ver</button>
+          style="padding:8px 12px;background:transparent;border:1px solid var(--brd);border-radius:6px;color:var(--tx2);font-size:12px;cursor:pointer;">Ver</button>
       </div>
     </div>`;
 }
@@ -1152,7 +1324,11 @@ function _layoutAsignarEntFilaEdicion(u, huecoLabel, zona) {
           onkeydown="if(event.key==='Enter'){event.preventDefault();layoutAsignarEntSiguiente(${esc(u.id)});}"
           style="width:64px;padding:9px;background:var(--bg);border:1px solid var(--brd);border-radius:6px;color:var(--tx);font-size:13px;text-align:center;box-sizing:border-box;">
       </div>
-      ${_ZONAS_SLOT_UNICO.includes(zona) ? `<input id="layout-asignar-ent-capacidad-${esc(u.id)}" type="number" min="0" placeholder="Capacidad máxima (opcional)" value="${u.capacidad_maxima ?? ''}" style="width:100%;margin-top:6px;padding:8px;background:var(--bg);border:1px solid var(--brd);border-radius:6px;color:var(--tx);font-size:12px;box-sizing:border-box;">` : ''}
+      ${_ZONAS_SLOT_UNICO.includes(zona) ? `
+      <div style="display:flex;gap:6px;margin-top:6px;">
+        <input id="layout-asignar-ent-capacidad-${esc(u.id)}" type="number" min="0" placeholder="${u.capacidad_maxima != null ? 'Capacidad máxima (ya configurada)' : 'Capacidad máxima — obligatoria'}" value="${u.capacidad_maxima ?? ''}" style="flex:1;min-width:0;padding:8px;background:var(--bg);border:1px solid var(--brd);border-radius:6px;color:var(--tx);font-size:12px;box-sizing:border-box;">
+        <input id="layout-asignar-ent-minimo-${esc(u.id)}" type="number" min="0" placeholder="Mínimo reposición (opcional)" value="${u.stock_minimo ?? ''}" title="Bajo este número, Reposición genera tarea de reabastecimiento desde RESERVA" style="flex:1;min-width:0;padding:8px;background:var(--bg);border:1px solid var(--brd);border-radius:6px;color:var(--tx);font-size:12px;box-sizing:border-box;">
+      </div>` : ''}
     </div>`;
 }
 
@@ -1228,9 +1404,12 @@ async function layoutConfirmarAsignarEntrepano() {
     }
     const capRaw = document.getElementById(`layout-asignar-ent-capacidad-${u.id}`)?.value;
     const capacidad_maxima = capRaw ? parseInt(capRaw) : null;
+    const minRaw = document.getElementById(`layout-asignar-ent-minimo-${u.id}`)?.value;
+    const stock_minimo = minRaw ? parseInt(minRaw) : null;
     try {
       const payload = { producto_id: productoId, cantidad };
       if (capacidad_maxima !== null && !isNaN(capacidad_maxima)) payload.capacidad_maxima = capacidad_maxima;
+      if (stock_minimo !== null && !isNaN(stock_minimo)) payload.stock_minimo = stock_minimo;
       await post(`/api/almacenes/ubicaciones/${u.id}/asignar`, payload);
       ok++;
     } catch (e) { errores.push(`${u.codigo.split('-').pop()}: ${e.message || 'error'}`); }

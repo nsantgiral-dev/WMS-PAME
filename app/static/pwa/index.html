@@ -955,7 +955,12 @@
         <div class="operario-nombre" id="op-nombre">—</div>
         <div class="operario-rol" id="op-rol">—</div>
       </div>
-      <button class="btn-logout" onclick="salir()">Salir</button>
+      <div style="display:flex;align-items:center;gap:10px;">
+        <button id="btn-layout-operario" onclick="layoutAbrirDesdeOperario()" style="display:none;background:none;border:1px solid #1e3a5f;color:#60a5fa;font-size:12px;font-weight:700;padding:7px 12px;border-radius:20px;cursor:pointer;">
+          🧭 Layout
+        </button>
+        <button class="btn-logout" onclick="salir()">Salir</button>
+      </div>
     </div>
     <div id="contenido-tarea">
       <div style="text-align:center;padding:60px 20px;color:#666;">Cargando...</div>
@@ -968,6 +973,9 @@
       <div class="header-logo"><img src="/static/pwa/logo-white.png" alt="Papelería Medellín WMS"></div>
       <div style="display:flex;align-items:center;gap:10px;">
         <span id="conexion-status-admin" style="font-size:13px;color:#22c55e;">● Online</span>
+        <button id="btn-volver-layout-operario" onclick="layoutVolverDesdeOperario()" style="display:none;background:none;border:1px solid var(--brd-b,#4a5568);color:var(--tx,#e2e8f0);font-size:12px;font-weight:700;padding:8px 12px;border-radius:8px;cursor:pointer;">
+          ← Volver
+        </button>
         <button id="btn-theme" onclick="toggleTheme()" title="Cambiar tema" style="background:none;border:1px solid var(--brd-b,#4a5568);color:var(--tx,#e2e8f0);font-size:18px;width:36px;height:36px;border-radius:8px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;line-height:1;padding:0;">🌙</button>
         <button class="btn-logout" onclick="salir()">Salir</button>
       </div>
@@ -996,13 +1004,14 @@
       <div class="nav-tab" onclick="tab('tab-muelle')">🚛 Muelle</div>
       <div class="nav-tab" onclick="tab('tab-rutas')">🗺️ Rutas</div>
       <div class="nav-tab" onclick="tab('tab-inventario')">📊 Inventario</div>
-      <div class="nav-tab" onclick="tab('tab-reposicion')">📦 Reposición</div>
       <div class="nav-tab" onclick="tab('tab-liquidacion')">💰 Liquidación</div>
       <div class="nav-tab" onclick="tab('tab-layout')">🧭 Layout</div>
+      <div class="nav-tab" onclick="tab('tab-reposicion')">📦 Reposición</div>
       <div class="nav-tab" onclick="tab('tab-compras')">🛒 Compras</div>
       <div class="nav-tab" onclick="tab('tab-etiquetas')">🏷️ Etiquetas</div>
       <div class="nav-tab" onclick="tab('tab-vigia')">👁️ Vigia</div>
       <div class="nav-tab" onclick="tab('tab-flota')">🚚 Flota</div>
+      <div class="nav-tab" onclick="tab('tab-manuales')">📘 Manual de Usuario</div>
     </div>
 
     <!-- Contenido principal scrollable -->
@@ -1016,7 +1025,7 @@
            estado tranquilo. Ver app/services/ambiente.py -->
       <div id="franja-ambiente" style="margin-bottom:12px;border-radius:8px;overflow:hidden;"></div>
 
-      <!-- Fila 1: KPIs principales (6 tarjetas) -->
+      <!-- Fila 1: KPIs principales (7 tarjetas) -->
       <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:14px;">
         <div class="kpi-card" style="cursor:pointer;" onclick="tab('tab-pedidos')">
           <div class="kpi-valor" id="kpi-pick-pend">—</div>
@@ -1044,6 +1053,11 @@
         <div class="kpi-card" id="kpi-card-auditorias" style="cursor:pointer;" onclick="tab('tab-inventario')">
           <div class="kpi-valor" id="kpi-auditorias">—</div>
           <div class="kpi-label">Auditorías urgentes</div>
+        </div>
+        <div class="kpi-card" id="kpi-card-definitivos" style="cursor:pointer;" onclick="tab('tab-inventario'); invSubtab('definitivo');">
+          <div class="kpi-valor" id="kpi-definitivos">—</div>
+          <div class="kpi-label">Conteo definitivo (CC3)</div>
+          <div class="kpi-sub">CC1≠CC2 — esperando supervisor</div>
         </div>
       </div>
 
@@ -1074,30 +1088,6 @@
         <div style="position:relative;height:180px;"><canvas id="chart-tendencia"></canvas></div>
       </div>
 
-      <!-- Alertas activas (colapsadas, solo cuando hay datos) -->
-      <div id="dashboard-tareas-bloqueadas" style="display:none;background:var(--rbg);border:1px solid var(--rbrd);border-radius:14px;padding:14px;margin-bottom:10px;">
-        <div style="display:flex;justify-content:space-between;align-items:center;">
-          <div>
-            <div style="font-size:14px;font-weight:800;color:var(--red);">🔴 Pedidos Bloqueados</div>
-            <div style="font-size:11px;color:var(--tx2);margin-top:2px;">Operario reportó novedad — requieren decisión del jefe</div>
-          </div>
-          <span id="bloq-count" style="background:var(--rbrd);color:var(--red);font-size:20px;font-weight:800;padding:4px 14px;border-radius:10px;">0</span>
-        </div>
-        <button onclick="tab('tab-pedidos')" style="width:100%;margin-top:10px;padding:9px;background:var(--rbg);border:1px solid var(--rbrd);color:var(--red);border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">Ver tareas bloqueadas →</button>
-      </div>
-
-      <div id="dashboard-auditorias-urgentes" style="display:none;background:var(--rbg);border:1px solid var(--rbrd);border-radius:14px;padding:16px;margin-bottom:10px;">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
-          <div>
-            <div style="font-size:15px;font-weight:800;color:#f87171;">🚨 Auditorías Urgentes</div>
-            <div style="font-size:11px;color:#7f1d1d;margin-top:2px;">Excepciones de picking sin resolver — verifica y confirma directamente</div>
-          </div>
-          <span id="aud-urgentes-count" style="background:#7f1d1d;color:#fca5a5;font-size:20px;font-weight:800;padding:4px 14px;border-radius:10px;">0</span>
-        </div>
-        <div id="lista-auditorias-urgentes"><div style="color:#555;font-size:12px;">Cargando...</div></div>
-        <button onclick="_refreshBtn(event, cargarAuditoriasUrgentes)" style="width:100%;margin-top:8px;padding:8px;background:#111;border:1px solid #333;color:#666;border-radius:8px;font-size:12px;cursor:pointer;">↻ Actualizar</button>
-      </div>
-
       <div id="dashboard-traslados-riesgo" style="display:none;background:#0a0e11;border:1px solid #1e3a5f;border-radius:14px;padding:14px;margin-bottom:10px;">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
           <div>
@@ -1124,6 +1114,44 @@
       <div class="tabla-card" id="movimientos-recientes">
         <div class="tabla-titulo">Últimos movimientos</div>
         <div style="color:#555;font-size:13px;">Cargando...</div>
+      </div>
+
+      <!-- Tablero BI — métricas 1 (pedidos despachados), 3 (pendientes/fill
+           rate), 5 (venta perdida $). Dentro de Dashboard, no un tab aparte.
+           Solo NB1 (ALMACEN_ID fijo). Sin comparativo de período anterior ni
+           export en esta entrega. -->
+      <div style="background:#0d0d0d;border:1px solid #1a1a1a;border-radius:14px;padding:14px;margin-top:10px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px;">
+          <div style="font-size:12px;font-weight:700;color:#555;text-transform:uppercase;letter-spacing:1px;">Tablero BI</div>
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+            <label for="bi-fecha-desde" style="font-size:12px;color:var(--tx3);">Desde</label>
+            <input type="date" id="bi-fecha-desde"
+              style="padding:8px 12px;background:var(--bg-s);border:1px solid var(--brd);border-radius:8px;color:var(--tx);font-size:13px;">
+            <label for="bi-fecha-hasta" style="font-size:12px;color:var(--tx3);">Hasta</label>
+            <input type="date" id="bi-fecha-hasta"
+              style="padding:8px 12px;background:var(--bg-s);border:1px solid var(--brd);border-radius:8px;color:var(--tx);font-size:13px;">
+            <button onclick="biFiltrar()"
+              style="padding:8px 14px;background:var(--pm);border:none;border-radius:8px;color:#fff;font-size:13px;font-weight:700;cursor:pointer;">
+              Filtrar
+            </button>
+          </div>
+        </div>
+
+        <div id="bi-tabs" class="subtabs"></div>
+
+        <div id="bi-kpi" style="margin-bottom:4px;">Cargando...</div>
+        <div id="bi-desglose"></div>
+
+        <div class="chart-container" style="margin-bottom:12px;">
+          <div class="chart-titulo" id="bi-chart-titulo">Tendencia</div>
+          <div style="position:relative;height:220px;"><canvas id="bi-chart"></canvas></div>
+        </div>
+
+        <div class="tabla-card">
+          <div class="tabla-titulo" id="bi-detalle-titulo">Detalle</div>
+          <div id="bi-detalle-lista">Cargando...</div>
+          <div id="bi-detalle-paginacion" style="display:flex;justify-content:space-between;align-items:center;padding:12px 0;"></div>
+        </div>
       </div>
     </div>
 
@@ -1271,55 +1299,55 @@
     <!-- MONITOR DE MUELLE -->
     <div id="tab-muelle" class="admin-content" style="display:none;">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
-        <div style="font-size:16px;font-weight:700;">🚛 Monitor de Muelle</div>
+        <div style="font-size:18px;font-weight:700;">🚛 Monitor de Muelle</div>
         <div style="display:flex;align-items:center;gap:10px;">
           <!-- El manifiesto es el papel que va con el conductor y contra el que
                firma el cliente. El endpoint existía sin botón. -->
           <button onclick="muelleImprimirManifiesto()"
-            style="padding:8px 14px;background:var(--bg-input);border:1px solid var(--brd-b);color:var(--tx2);border-radius:8px;font-size:13px;cursor:pointer;white-space:nowrap;">
+            style="padding:8px 14px;background:var(--bg-input);border:1px solid var(--brd-b);color:var(--tx2);border-radius:8px;font-size:14px;cursor:pointer;white-space:nowrap;">
             🖨 Manifiesto
           </button>
-          <div id="muelle-contador" style="font-size:12px;color:#666;"></div>
+          <div id="muelle-contador" style="font-size:13px;color:#666;"></div>
         </div>
       </div>
 
       <!-- Ruta activa -->
       <div style="background:var(--bg-s);border:1px solid var(--brd);border-radius:12px;padding:14px;margin-bottom:12px;">
-        <div style="font-size:12px;color:#666;margin-bottom:8px;text-transform:uppercase;letter-spacing:.05em;">Ruta activa (opcional)</div>
+        <div style="font-size:13px;color:#666;margin-bottom:8px;text-transform:uppercase;letter-spacing:.05em;">Ruta activa (opcional)</div>
         <div style="display:flex;gap:8px;align-items:center;">
           <select id="muelle-ruta-select" onchange="muelleSeleccionarRuta(this.value)"
-            style="flex:1;padding:10px;background:#000;border:2px solid #333;border-radius:8px;color:#fff;font-size:14px;">
+            style="flex:1;padding:10px;background:#000;border:2px solid #333;border-radius:8px;color:#fff;font-size:15px;">
             <option value="">— Sin ruta (solo registrar) —</option>
           </select>
-          <button onclick="tab('tab-rutas')" style="padding:10px 14px;background:var(--bg-input);border:1px solid var(--brd-b);color:var(--tx2);border-radius:8px;font-size:13px;cursor:pointer;white-space:nowrap;">+ Nueva</button>
+          <button onclick="tab('tab-rutas')" style="padding:10px 14px;background:var(--bg-input);border:1px solid var(--brd-b);color:var(--tx2);border-radius:8px;font-size:14px;cursor:pointer;white-space:nowrap;">+ Nueva</button>
         </div>
-        <div id="muelle-ruta-info" style="font-size:11px;color:#555;margin-top:6px;min-height:16px;"></div>
+        <div id="muelle-ruta-info" style="font-size:12px;color:#555;margin-top:6px;min-height:16px;"></div>
       </div>
 
       <!-- Scan-to-Truck -->
       <div style="background:var(--bg-s);border:2px solid var(--pm-border);border-radius:12px;padding:14px;margin-bottom:16px;">
-        <div id="muelle-scan-label" style="font-size:12px;color:#666;margin-bottom:8px;text-transform:uppercase;letter-spacing:.05em;">Confirmar carga física — escanear código de caja</div>
+        <div id="muelle-scan-label" style="font-size:13px;color:#666;margin-bottom:8px;text-transform:uppercase;letter-spacing:.05em;">Confirmar carga física — escanear código de caja</div>
         <!-- Botón cámara visible en móvil -->
         <button id="muelle-scan-activar" onclick="abrirCamaraMuelle()"
-          style="display:none;width:100%;padding:18px;background:#000;border:2px dashed #1E8395;border-radius:10px;color:#1E8395;font-size:15px;font-weight:700;cursor:pointer;margin-bottom:8px;">
+          style="display:none;width:100%;padding:18px;background:#000;border:2px dashed #1E8395;border-radius:10px;color:#1E8395;font-size:16px;font-weight:700;cursor:pointer;margin-bottom:8px;">
           📷 Escanear con cámara
         </button>
         <div id="camara-box-muelle" style="display:none;margin-bottom:8px;">
           <div id="lector-qr-muelle" style="border-radius:10px;overflow:hidden;"></div>
           <button onclick="cerrarCamara('camara-box-muelle')"
-            style="width:100%;margin-top:6px;padding:10px;background:#111;border:1px solid #333;color:#aaa;border-radius:8px;font-size:13px;cursor:pointer;">
+            style="width:100%;margin-top:6px;padding:10px;background:#111;border:1px solid #333;color:#aaa;border-radius:8px;font-size:14px;cursor:pointer;">
             Cerrar cámara
           </button>
         </div>
         <div id="muelle-scan-campo" style="display:flex;gap:8px;">
           <input id="muelle-scan-input" type="text" placeholder="Escanea o escribe código..." autocomplete="off"
-            style="flex:1;padding:12px;font-size:15px;background:#000;border:2px solid #333;border-radius:8px;color:#fff;outline:none;"
+            style="flex:1;padding:12px;font-size:16px;background:#000;border:2px solid #333;border-radius:8px;color:#fff;outline:none;"
             onkeydown="if(event.key==='Enter'){ muelleCargarCaja(); }"
             onblur="muelleScanBlur()"
             oninput="this.value=this.value.toUpperCase()">
-          <button onclick="muelleCargarCaja()" style="padding:12px 16px;background:var(--pm);color:#fff;border:none;border-radius:8px;font-weight:700;font-size:15px;cursor:pointer;">✓</button>
+          <button onclick="muelleCargarCaja()" style="padding:12px 16px;background:var(--pm);color:#fff;border:none;border-radius:8px;font-weight:700;font-size:16px;cursor:pointer;">✓</button>
         </div>
-        <div id="muelle-scan-feedback" style="font-size:13px;margin-top:8px;min-height:20px;"></div>
+        <div id="muelle-scan-feedback" style="font-size:14px;margin-top:8px;min-height:20px;"></div>
       </div>
 
       <!-- Lista agrupada por destino -->
@@ -1579,6 +1607,10 @@
         style="flex:1;padding:10px;font-size:13px;text-align:center;cursor:pointer;color:var(--tx3);">
         🗄️ Datos
       </div>
+      <div id="inv-tab-definitivo" onclick="invSubtab('definitivo')"
+        style="flex:1;padding:10px;font-size:13px;text-align:center;cursor:pointer;color:var(--tx3);">
+        🎯 Definitivo <span id="inv-tab-definitivo-badge" style="display:none;background:#78350f;color:#fcd34d;border-radius:10px;padding:1px 6px;font-size:10px;margin-left:2px;"></span>
+      </div>
     </div>
 
     <!-- Panel Conteos -->
@@ -1674,6 +1706,27 @@
 
       <div id="inv-conteos-lista" style="min-height:60px;"></div>
       <div id="inv-conteos-paginacion" style="display:flex;justify-content:space-between;align-items:center;padding:12px 0;"></div>
+    </div>
+
+    <!-- Panel Conteo Definitivo (CC3) -->
+    <div id="inv-panel-definitivo" style="display:none;">
+      <div style="background:var(--bg-s);border:1px solid var(--brd);border-radius:10px;padding:12px 14px;margin-bottom:14px;">
+        <div style="font-size:13px;font-weight:700;color:var(--tx);margin-bottom:4px;">🎯 Conteo Definitivo</div>
+        <div style="font-size:12px;color:var(--tx3);line-height:1.5;">
+          Acá caen los conteos donde el 1er y 2do conteo NO coincidieron entre sí.
+          Este tercer conteo lo hace un supervisor — es el que rompe el empate y
+          define el ajuste. Sigue siendo ciego: tampoco ves cuánto contaron los
+          dos anteriores.
+        </div>
+      </div>
+      <div id="inv-definitivo-lista" style="min-height:60px;"></div>
+    </div>
+
+    <!-- Modal Conteo Definitivo — escaneo + confirmación -->
+    <div id="def-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.92);z-index:9999;align-items:center;justify-content:center;padding:16px;">
+      <div style="background:#000;border-radius:16px;width:100%;max-width:420px;max-height:92vh;overflow-y:auto;">
+        <div id="def-modal-contenido" style="padding:16px;"></div>
+      </div>
     </div>
 
     <!-- Panel ABC -->
@@ -1931,15 +1984,8 @@
     <div style="font-size:16px;font-weight:700;margin-bottom:4px;">💰 Liquidación Financiera</div>
     <div style="font-size:12px;color:var(--tx3);margin-bottom:16px;">Cuadre financiero de rutas — el Líder verifica plata, devoluciones y retenciones. Un click dispara NCE/RC/DC en Siesa.</div>
 
-    <!-- KPIs rápidos -->
-    <div id="liq-kpis" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-bottom:16px;"></div>
-    <!-- Desglose: contado/crédito, parcial/rechazado, rezago de liquidación y
-         facturas emitidas como contado por dato faltante. Los tres números que
-         decidían el rediseño de facturación y que no se podían sacar de
-         ninguna pantalla. -->
-    <div id="liq-desglose" style="margin-bottom:16px;"></div>
-
-    <!-- Filtro de fecha (rango) -->
+    <!-- Filtro de fecha (rango) — arriba, junto con las pestañas, para no
+         tener que bajar toda la pantalla hasta la lista accionable. -->
     <div style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap;align-items:center;">
       <label for="liq-fecha-desde" style="font-size:12px;color:var(--tx3);">Desde</label>
       <input type="date" id="liq-fecha-desde"
@@ -2006,6 +2052,15 @@
       </div>
     </div>
 
+    <!-- KPIs rápidos — debajo de la lista accionable: son contexto, no lo
+         primero que hace falta ver o con lo que se interactúa. -->
+    <div id="liq-kpis" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-bottom:16px;margin-top:24px;"></div>
+    <!-- Desglose: contado/crédito, parcial/rechazado, rezago de liquidación y
+         facturas emitidas como contado por dato faltante. Los tres números que
+         decidían el rediseño de facturación y que no se podían sacar de
+         ninguna pantalla. -->
+    <div id="liq-desglose" style="margin-bottom:16px;"></div>
+
     <!-- ── MODAL: DETALLE DE RUTA PARA LIQUIDAR ───────────────────── -->
     <div id="liq-modal-ruta" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.85);z-index:2000;overflow-y:auto;">
       <div style="max-width:600px;margin:20px auto;padding:20px;background:var(--bg);border-radius:16px;min-height:80vh;">
@@ -2037,40 +2092,50 @@
       Las ubicaciones se crean y clasifican 100% en el WMS — pasillos, filas y zonas no dependen de Siesa.
     </div>
 
-    <!-- Sub-nav de secciones -->
-    <div style="display:flex;gap:0;background:var(--bg-s);border:1px solid var(--brd);border-radius:10px;overflow:hidden;margin-bottom:16px;flex-wrap:wrap;">
+    <!-- Sub-nav de secciones — tabs reales, no segmented control: "Ubicaciones"
+         e "Importar Excel" muestran contenido totalmente distinto (lista vs.
+         carga de archivo), no una misma vista filtrada de dos formas. -->
+    <div style="display:flex;gap:0;border-bottom:1px solid var(--brd);margin-bottom:16px;">
       <div id="layout-sub-ubicaciones" onclick="layoutSubtab('ubicaciones')"
-        style="flex:1;min-width:100px;padding:10px 6px;font-size:12px;font-weight:700;text-align:center;cursor:pointer;background:var(--pm);color:#fff;">
+        style="padding:9px 4px;margin-right:20px;font-size:13px;font-weight:700;cursor:pointer;color:var(--pm);border-bottom:2px solid var(--pm);">
         Ubicaciones
       </div>
       <div id="layout-sub-importar" onclick="layoutSubtab('importar')"
-        style="flex:1;min-width:100px;padding:10px 6px;font-size:12px;text-align:center;cursor:pointer;color:var(--tx3);">
+        style="padding:9px 4px;margin-right:20px;font-size:13px;cursor:pointer;color:var(--tx3);border-bottom:2px solid transparent;">
         Importar Excel
       </div>
     </div>
 
     <!-- ── SECCIÓN: UBICACIONES ─────────────────────────────────────── -->
     <div id="layout-sec-ubicaciones">
-      <div style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap;">
-        <button onclick="layoutAbrirModalCuerpo('PICKING')"
-          style="padding:10px 16px;background:var(--pm);border:none;border-radius:8px;color:#fff;font-size:13px;font-weight:700;cursor:pointer;">
-          + Crear picking
-        </button>
-        <button onclick="layoutAbrirModalCuerpo('RESERVA')"
-          style="padding:10px 16px;background:#22c55e;border:none;border-radius:8px;color:#fff;font-size:13px;font-weight:700;cursor:pointer;">
-          + Crear reserva
-        </button>
-        <button onclick="layoutAbrirModalCuerpo('IMPORTADOS')"
-          style="padding:10px 16px;background:#f59e0b;border:none;border-radius:8px;color:#fff;font-size:13px;font-weight:700;cursor:pointer;">
-          + Crear importados
-        </button>
-        <button onclick="layoutCrearAverias()"
-          style="padding:10px 16px;background:var(--bg-s);border:1px solid var(--brd);border-radius:8px;color:var(--tx2);font-size:13px;cursor:pointer;">
-          + Ubicación AVERIAS
-        </button>
-        <button onclick="layoutCargarUbicaciones()"
-          style="padding:10px 16px;background:var(--bg-s);border:1px solid var(--brd);border-radius:8px;color:var(--tx2);font-size:13px;cursor:pointer;">
-          Actualizar
+      <!-- Las 4 formas de crear ubicación son la acción menos frecuente de la
+           pantalla (setup) — antes eran 3 botones sólidos de colores distintos
+           compitiendo entre sí y con el resto de la pantalla. Agrupadas con un
+           solo borde compartido leen como una familia, no como 3 CTAs sueltos;
+           el punto de color reemplaza el fondo sólido. "Actualizar" es una
+           acción distinta (refrescar, no crear) y queda aparte. -->
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;gap:10px;flex-wrap:wrap;">
+        <div style="display:inline-flex;border:1px solid var(--brd);border-radius:8px;overflow:hidden;flex-wrap:wrap;">
+          <button onclick="layoutAbrirModalCuerpo('PICKING')"
+            style="display:flex;align-items:center;gap:7px;padding:9px 13px;background:var(--bg-s);border:none;border-right:1px solid var(--brd);color:var(--tx2);font-size:12.5px;font-weight:700;cursor:pointer;">
+            <span style="width:7px;height:7px;border-radius:50%;background:#2563eb;flex-shrink:0;"></span>+ Picking
+          </button>
+          <button onclick="layoutAbrirModalCuerpo('RESERVA')"
+            style="display:flex;align-items:center;gap:7px;padding:9px 13px;background:var(--bg-s);border:none;border-right:1px solid var(--brd);color:var(--tx2);font-size:12.5px;font-weight:700;cursor:pointer;">
+            <span style="width:7px;height:7px;border-radius:50%;background:#22c55e;flex-shrink:0;"></span>+ Reserva
+          </button>
+          <button onclick="layoutAbrirModalCuerpo('IMPORTADOS')"
+            style="display:flex;align-items:center;gap:7px;padding:9px 13px;background:var(--bg-s);border:none;border-right:1px solid var(--brd);color:var(--tx2);font-size:12.5px;font-weight:700;cursor:pointer;">
+            <span style="width:7px;height:7px;border-radius:50%;background:#f59e0b;flex-shrink:0;"></span>+ Importados
+          </button>
+          <button onclick="layoutAbrirModalCuerpo('AVERIAS')"
+            style="display:flex;align-items:center;gap:7px;padding:9px 13px;background:var(--bg-s);border:none;color:var(--tx2);font-size:12.5px;font-weight:700;cursor:pointer;">
+            <span style="width:7px;height:7px;border-radius:50%;background:#ef4444;flex-shrink:0;"></span>+ Avería
+          </button>
+        </div>
+        <button onclick="layoutCargarUbicaciones()" title="Actualizar"
+          style="width:34px;height:34px;flex-shrink:0;background:var(--bg-s);border:1px solid var(--brd);border-radius:8px;color:var(--tx2);font-size:15px;cursor:pointer;">
+          ↻
         </button>
       </div>
 
@@ -2416,6 +2481,22 @@
       <div id="vigia-container"></div>
     </div>
 
+    <!-- Manual de Usuario — un PDF por rol, generado a partir del flujo real
+         de la PWA (no aspiracional). Archivos estáticos en
+         app/static/manuales/, sin backend nuevo: Ver abre el PDF en una
+         pestaña nueva (el navegador lo renderiza solo), Descargar fuerza la
+         descarga con el atributo download. -->
+    <div id="tab-manuales" class="admin-content" style="display:none;">
+      <div style="font-size:16px;font-weight:700;margin-bottom:4px;">📘 Manual de Usuario</div>
+      <div style="font-size:12px;color:var(--tx3);margin-bottom:14px;">
+        Guía de uso de la aplicación, un documento por rol.
+      </div>
+      <div class="tabla-card">
+        <div class="tabla-titulo">Manuales disponibles</div>
+        <div id="manuales-lista">Cargando...</div>
+      </div>
+    </div>
+
     </div><!-- /admin-main -->
     </div><!-- /admin-body -->
   </div><!-- /pantalla-admin -->
@@ -2562,6 +2643,7 @@
           title="Actualizar stock desde Siesa"
           style="padding:11px 14px;background:#111;border:1px solid #333;border-radius:10px;color:#fff;font-size:18px;cursor:pointer;flex-shrink:0;line-height:1;">↻</button>
       </div>
+      <div id="tienda-stock-frescura" style="margin-bottom:10px;"></div>
       <div id="tienda-stock-lista">
         <div style="text-align:center;padding:30px;color:#555;">Cargando stock disponible...</div>
       </div>
@@ -2675,9 +2757,12 @@
   <div id="pantalla-empacador">
     <div class="emp-header">
       <div class="emp-header-logo"><img src="/static/pwa/logo-white.png" alt="Papelería Medellín WMS"></div>
-      <div id="emp-modo-titulo" style="position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);white-space:nowrap;text-align:center;font-size:21px;font-weight:800;color:var(--tx);letter-spacing:.2px;"></div>
+      <div id="emp-modo-titulo" style="position:absolute;left:50%;top:100%;transform:translate(-50%,8px);white-space:nowrap;text-align:center;font-size:21px;font-weight:800;color:var(--tx);letter-spacing:.2px;"></div>
       <div style="display:flex;align-items:center;gap:10px;">
         <span id="emp-nombre" style="font-size:13px;color:#666;"></span>
+        <button id="btn-layout-empacador" onclick="layoutAbrirDesdeOperario()" style="display:none;background:none;border:1px solid #1e3a5f;color:#60a5fa;font-size:12px;font-weight:700;padding:7px 12px;border-radius:20px;cursor:pointer;">
+          🧭 Layout
+        </button>
         <button class="btn-logout" onclick="salir()">Salir</button>
       </div>
     </div>
@@ -2958,7 +3043,11 @@
        automático a TRASLADO por bodega_siesa_id. -->
 
   <!-- Modal configurar límites de ubicación PICKING -->
-  <div id="modal-rep-limites" style="display:none;position:fixed;inset:0;background:#000000cc;z-index:200;align-items:center;justify-content:center;padding:16px;">
+  <!-- z-index 210, no 200: este modal puede abrirse DESDE ADENTRO de
+       modal-rep-cuerpo-detalle (también 200) — con el mismo z-index el que
+       viene después en el DOM pinta encima y se come los clics del más
+       chico (confirmado con Playwright: "Guardar" quedaba interceptado). -->
+  <div id="modal-rep-limites" style="display:none;position:fixed;inset:0;background:#000000cc;z-index:210;align-items:center;justify-content:center;padding:16px;">
     <div style="background:var(--bg-s);border:1px solid var(--brd);border-radius:16px;padding:20px;width:100%;max-width:360px;">
       <div style="font-size:15px;font-weight:700;margin-bottom:4px;">Configurar límites</div>
       <div id="rep-modal-ub-nombre" style="font-size:13px;font-weight:700;color:var(--tx);font-family:monospace;margin-bottom:4px;"></div>
@@ -2989,6 +3078,26 @@
     </div>
   </div>
 
+  <!-- Modal Reposición: detalle de Cuerpo — huecos agrupados por entrepaño,
+       mismo patrón que modal-layout-cuerpo-detalle en Layout, sin la fila de
+       acciones (Esquema/Etiquetas/Editar/Reclasificar/Eliminar son de Layout,
+       no de Reposición). -->
+  <div id="modal-rep-cuerpo-detalle" style="display:none;position:fixed;inset:0;background:#000000cc;z-index:200;align-items:flex-start;justify-content:center;padding:6vh 16px;overflow-y:auto;">
+    <div style="background:var(--bg-s);border:1px solid var(--brd);border-radius:16px;width:100%;max-width:620px;max-height:88vh;display:flex;flex-direction:column;overflow:hidden;">
+      <div style="background:linear-gradient(135deg,var(--pm),#166473);padding:18px 20px;display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-shrink:0;">
+        <div>
+          <div id="rep-cuerpo-detalle-codigo" style="font-size:18px;font-weight:900;color:#fff;font-family:monospace;"></div>
+          <div id="rep-cuerpo-detalle-sub" style="font-size:12px;color:#ffffffcc;margin-top:3px;font-weight:700;"></div>
+        </div>
+        <button onclick="repCerrarModalCuerpoDetalle()"
+          style="width:30px;height:30px;border-radius:8px;border:none;cursor:pointer;flex-shrink:0;background:#ffffff29;color:#fff;font-size:15px;">
+          ✕
+        </button>
+      </div>
+      <div id="rep-cuerpo-detalle-body" style="padding:6px 20px 20px;overflow-y:auto;"></div>
+    </div>
+  </div>
+
   <!-- Modal Layout: Crear ubicación — Cuerpo completo (Mecanismo A), wizard de 2 pasos -->
   <div id="modal-layout-cuerpo" style="display:none;position:fixed;inset:0;background:#000000cc;z-index:200;align-items:center;justify-content:center;padding:16px;">
     <div style="background:var(--bg-s);border:1px solid var(--brd);border-radius:16px;padding:20px;width:100%;max-width:380px;max-height:90vh;overflow-y:auto;">
@@ -2997,6 +3106,22 @@
 
       <!-- Paso 1: dirección del cuerpo -->
       <div id="layout-cuerpo-paso1">
+        <label style="font-size:12px;color:var(--tx3);display:block;margin-bottom:4px;">Tipo de mueble</label>
+        <div style="display:flex;gap:6px;margin-bottom:12px;">
+          <button type="button" id="layout-cuerpo-tipo-estanteria" onclick="layoutCuerpoSetTipoMueble('estanteria')"
+            style="flex:1;padding:9px 6px;background:var(--pm);border:1px solid var(--brd);border-radius:8px;color:#fff;font-size:12px;font-weight:700;cursor:pointer;">
+            Estantería
+          </button>
+          <button type="button" id="layout-cuerpo-tipo-vitrina" onclick="layoutCuerpoSetTipoMueble('vitrina')"
+            style="flex:1;padding:9px 6px;background:var(--bg);border:1px solid var(--brd);border-radius:8px;color:var(--tx2);font-size:12px;font-weight:700;cursor:pointer;">
+            Vitrina
+          </button>
+          <button type="button" id="layout-cuerpo-tipo-estiba" onclick="layoutCuerpoSetTipoMueble('estiba')"
+            style="flex:1;padding:9px 6px;background:var(--bg);border:1px solid var(--brd);border-radius:8px;color:var(--tx2);font-size:12px;font-weight:700;cursor:pointer;">
+            Estiba
+          </button>
+        </div>
+
         <label style="font-size:12px;color:var(--tx3);display:block;margin-bottom:4px;">Pasillo</label>
         <select id="layout-cuerpo-pasillo"
           style="width:100%;padding:12px;background:var(--bg);border:1px solid var(--brd);border-radius:8px;color:var(--tx);font-size:15px;box-sizing:border-box;margin-bottom:12px;">
@@ -3013,9 +3138,11 @@
         <input id="layout-cuerpo-numero" type="number" min="1" placeholder="ej. 3"
           style="width:100%;padding:12px;background:var(--bg);border:1px solid var(--brd);border-radius:8px;color:var(--tx);font-size:15px;box-sizing:border-box;margin-bottom:12px;">
 
-        <label style="font-size:12px;color:var(--tx3);display:block;margin-bottom:4px;">Cantidad de entrepaños</label>
-        <input id="layout-cuerpo-entrepanos" type="number" min="1" placeholder="ej. 4"
-          style="width:100%;padding:12px;background:var(--bg);border:1px solid var(--brd);border-radius:8px;color:var(--tx);font-size:15px;box-sizing:border-box;margin-bottom:4px;">
+        <div id="layout-cuerpo-entrepanos-wrap">
+          <label style="font-size:12px;color:var(--tx3);display:block;margin-bottom:4px;">Cantidad de entrepaños</label>
+          <input id="layout-cuerpo-entrepanos" type="number" min="1" placeholder="ej. 4"
+            style="width:100%;padding:12px;background:var(--bg);border:1px solid var(--brd);border-radius:8px;color:var(--tx);font-size:15px;box-sizing:border-box;margin-bottom:4px;">
+        </div>
         <div id="layout-cuerpo-zona-hint" style="font-size:11px;color:var(--tx3);margin-bottom:16px;">El entrepaño 1 es el más bajo (piso) y sube desde ahí.</div>
 
         <button id="layout-cuerpo-btn-repetir" onclick="layoutRepetirCuerpoAnterior()" style="display:none;width:100%;padding:9px;margin-bottom:12px;background:transparent;border:1px dashed var(--brd);border-radius:8px;color:var(--tx3);font-size:12px;cursor:pointer;">
@@ -3023,7 +3150,7 @@
         </button>
 
         <div style="display:flex;gap:8px;">
-          <button onclick="layoutCuerpoIrAPaso2()"
+          <button id="layout-cuerpo-btn-siguiente" onclick="layoutCuerpoPaso1Continuar()"
             style="flex:1;padding:13px;background:var(--pm);border:none;border-radius:10px;color:#fff;font-size:14px;font-weight:700;cursor:pointer;">
             Siguiente
           </button>
@@ -3234,8 +3361,12 @@
       <!-- Solo aplica en huecos PICKING/IMPORTADOS: ahí el hueco nunca se comparte con otro SKU,
            así que "capacidad del hueco" y "capacidad para este SKU" son lo mismo. -->
       <div id="layout-asignar-capacidad-wrap" style="display:none;">
-        <label style="font-size:12px;color:var(--tx3);display:block;margin-bottom:4px;">Capacidad máxima del hueco (opcional)</label>
+        <label id="layout-asignar-capacidad-label" style="font-size:12px;color:var(--tx3);display:block;margin-bottom:4px;">Capacidad máxima del hueco</label>
         <input id="layout-asignar-capacidad" type="number" min="0" placeholder="Cuántas unidades de este SKU caben aquí"
+          style="width:100%;padding:12px;background:var(--bg);border:1px solid var(--brd);border-radius:8px;color:var(--tx);font-size:15px;box-sizing:border-box;margin-bottom:12px;">
+
+        <label style="font-size:12px;color:var(--tx3);display:block;margin-bottom:4px;">Mínimo de reposición (opcional)</label>
+        <input id="layout-asignar-minimo" type="number" min="0" placeholder="Bajo este número, Reposición pide reponer desde RESERVA"
           style="width:100%;padding:12px;background:var(--bg);border:1px solid var(--brd);border-radius:8px;color:var(--tx);font-size:15px;box-sizing:border-box;margin-bottom:16px;">
       </div>
 
@@ -3249,6 +3380,48 @@
           Cancelar
         </button>
       </div>
+    </div>
+  </div>
+
+  <!-- Modal Layout: Detalle de Cuerpo — la lista solo muestra la fila resumen;
+       este popup trae los entrepaños y las acciones del cuerpo (Esquema,
+       Etiquetas, Editar, Reclasificar, Eliminar) que antes vivían siempre
+       expandidas en la pantalla. -->
+  <div id="modal-layout-cuerpo-detalle" style="display:none;position:fixed;inset:0;background:#000000cc;z-index:200;align-items:flex-start;justify-content:center;padding:6vh 16px;overflow-y:auto;">
+    <div style="background:var(--bg-s);border:1px solid var(--brd);border-radius:16px;width:100%;max-width:620px;max-height:88vh;display:flex;flex-direction:column;overflow:hidden;">
+      <div style="background:linear-gradient(135deg,var(--pm),#166473);padding:18px 20px;display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-shrink:0;">
+        <div>
+          <div id="layout-cuerpo-detalle-codigo" style="font-size:18px;font-weight:900;color:#fff;font-family:monospace;"></div>
+          <div id="layout-cuerpo-detalle-sub" style="font-size:12px;color:#ffffffcc;margin-top:3px;font-weight:700;"></div>
+        </div>
+        <button onclick="layoutCerrarModalCuerpoDetalle()"
+          style="width:30px;height:30px;border-radius:8px;border:none;cursor:pointer;flex-shrink:0;background:#ffffff29;color:#fff;font-size:15px;">
+          ✕
+        </button>
+      </div>
+      <div style="display:flex;gap:8px;padding:12px 20px;border-bottom:1px solid var(--brd);flex-wrap:wrap;flex-shrink:0;">
+        <button id="layout-cuerpo-detalle-esquema"
+          style="padding:7px 10px;background:var(--bg);border:1px solid var(--brd);border-radius:6px;color:var(--tx2);font-size:11px;font-weight:700;cursor:pointer;">
+          📐 Esquema
+        </button>
+        <button id="layout-cuerpo-detalle-etiquetas"
+          style="padding:7px 10px;background:var(--bg);border:1px solid var(--brd);border-radius:6px;color:var(--tx2);font-size:11px;font-weight:700;cursor:pointer;">
+          🖨 Etiquetas
+        </button>
+        <button id="layout-cuerpo-detalle-editar"
+          style="padding:7px 10px;background:var(--bg);border:1px solid var(--brd);border-radius:6px;color:var(--tx2);font-size:11px;font-weight:700;cursor:pointer;">
+          ✏ Editar
+        </button>
+        <button id="layout-cuerpo-detalle-reclasificar"
+          style="padding:7px 10px;background:var(--bg);border:1px solid var(--brd);border-radius:6px;color:var(--tx2);font-size:11px;font-weight:700;cursor:pointer;">
+          ⇄ Reclasificar
+        </button>
+        <button id="layout-cuerpo-detalle-eliminar"
+          style="padding:7px 10px;background:var(--bg);border:1px solid #7f1d1d;border-radius:6px;color:#f87171;font-size:11px;font-weight:700;cursor:pointer;margin-left:auto;">
+          🗑 Eliminar
+        </button>
+      </div>
+      <div id="layout-cuerpo-detalle-body" style="padding:6px 20px 20px;overflow-y:auto;"></div>
     </div>
   </div>
 
@@ -3398,25 +3571,27 @@
   <!-- Área de impresión de etiquetas — visible solo al imprimir -->
   <div id="print-area"></div>
 
-  <script src="/static/pwa/util.js?v=20260909a"></script>
-  <script src="/static/pwa/app.js?v=20260909a"></script>
-  <script src="/static/pwa/picking.js?v=20260909a"></script>
-  <script src="/static/pwa/packing.js?v=20260909a"></script>
-  <script src="/static/pwa/recepcion.js?v=20260909a"></script>
-  <script src="/static/pwa/rutas.js?v=20260909a"></script>
-  <script src="/static/pwa/traslados.js?v=20260909a"></script>
-  <script src="/static/pwa/conteo.js?v=20260909a"></script>
-  <script src="/static/pwa/reposicion.js?v=20260909a"></script>
-  <script src="/static/pwa/liquidacion.js?v=20260909a"></script>
-  <script src="/static/pwa/layout.js?v=20260909a"></script>
-  <script src="/static/pwa/tienda.js?v=20260909a"></script>
-  <script src="/static/pwa/etiquetas.js?v=20260909a"></script>
-  <script src="/static/pwa/vigia.js?v=20260909a"></script>
-  <script src="/static/pwa/flota.js?v=20260909a"></script>
-  <script src="/static/pwa/flota_analitica.js?v=20260909a"></script>
-  <script src="/static/pwa/compras_ia.js?v=20260909a"></script>
-  <script src="/static/pwa/kardex.js?v=20260909a"></script>
-  <script src="/static/pwa/temporada.js?v=20260909a"></script>
+  <script src="/static/pwa/util.js?v=20260911a"></script>
+  <script src="/static/pwa/app.js?v=20260911a"></script>
+  <script src="/static/pwa/picking.js?v=20260911a"></script>
+  <script src="/static/pwa/packing.js?v=20260911a"></script>
+  <script src="/static/pwa/recepcion.js?v=20260911a"></script>
+  <script src="/static/pwa/rutas.js?v=20260911a"></script>
+  <script src="/static/pwa/traslados.js?v=20260911a"></script>
+  <script src="/static/pwa/conteo.js?v=20260911a"></script>
+  <script src="/static/pwa/reposicion.js?v=20260911a"></script>
+  <script src="/static/pwa/liquidacion.js?v=20260911a"></script>
+  <script src="/static/pwa/layout.js?v=20260911a"></script>
+  <script src="/static/pwa/tienda.js?v=20260911a"></script>
+  <script src="/static/pwa/etiquetas.js?v=20260911a"></script>
+  <script src="/static/pwa/vigia.js?v=20260911a"></script>
+  <script src="/static/pwa/flota.js?v=20260911a"></script>
+  <script src="/static/pwa/compras_ia.js?v=20260911a"></script>
+  <script src="/static/pwa/kardex.js?v=20260911a"></script>
+  <script src="/static/pwa/temporada.js?v=20260911a"></script>
+  <script src="/static/pwa/tablero_bi.js?v=20260911a"></script>
+  <script src="/static/pwa/manuales.js?v=20260911a"></script>
+  <script src="/static/pwa/flota_analitica.js?v=20260911a"></script>
   <script>
     setInterval(() => {
       const cola = JSON.parse(localStorage.getItem('wms_cola_offline') || '[]');

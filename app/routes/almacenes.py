@@ -11,7 +11,7 @@ almacenes_bp = Blueprint('almacenes', __name__)
 
 from app.routes._auth_helpers import (_solo_admin, _es_personal_almacen,
                                        _es_admin_o_jefe, _es_control_flota,
-                                       _lee_flota)
+                                       _lee_flota, _puede_organizar_layout)
 
 @almacenes_bp.route('/', methods=['GET'])
 @jwt_required()
@@ -120,8 +120,8 @@ def crear_ubicacion(id):
     if not data or not data.get('codigo'):
         return jsonify({'error': 'Codigo requerido'}), 400
 
-    if Ubicacion.query.filter_by(codigo=data['codigo']).first():
-        return jsonify({'error': 'El codigo ya existe'}), 409
+    if Ubicacion.query.filter_by(codigo=data['codigo'], almacen_id=almacen.id).first():
+        return jsonify({'error': 'El codigo ya existe en este almacén'}), 409
 
     tipo_zona = data.get('tipo_zona')
     if tipo_zona is not None and tipo_zona not in (*layout_service.ZONAS_VALIDAS, 'GENERAL'):
@@ -153,8 +153,8 @@ def crear_ubicacion(id):
 @jwt_required()
 def pasillos_disponibles(id):
     """Letras de pasillo aún no usadas en este almacén — A-Z, luego AA, AB..."""
-    if not _es_admin_o_jefe():
-        return jsonify({'error': 'Solo admin o jefe de almacén'}), 403
+    if not _puede_organizar_layout():
+        return jsonify({'error': 'Sin permiso para organizar Layout'}), 403
     Almacen.query.get_or_404(id)
     cantidad = request.args.get('cantidad', 5, type=int)
     return jsonify({'letras': layout_service.letras_disponibles(id, cantidad)}), 200
@@ -167,13 +167,20 @@ def crear_cuerpo(id):
     Mecanismo A: crea un Cuerpo completo — sus Entrepaños (Nivel) y Huecos, en
     bloque. Un Cuerpo es 100% de una sola Zona (tipo_zona) — PICKING, RESERVA e
     IMPORTADOS se arman como Cuerpos separados, no mezclados por Nivel dentro del mismo Cuerpo.
-    Payload: { pasillo, fila, cuerpo, cantidad_entrepanos, tipo_zona, huecos_por_nivel? }
-    tipo_zona debe ser PICKING, RESERVA o IMPORTADOS. huecos_por_nivel es una lista de N
+    Payload: { pasillo, fila, cuerpo, cantidad_entrepanos, tipo_zona, huecos_por_nivel?, tipo_mueble? }
+    tipo_zona debe ser PICKING, RESERVA, AVERIAS o IMPORTADOS. huecos_por_nivel es una lista de N
     enteros (uno por entrepaño, N=cantidad_entrepanos, en orden de Nivel 1..N);
     si no viene, cada entrepaño nace con 1 hueco.
+    tipo_mueble (default 'estanteria') puede ser 'vitrina' o 'estiba' — mueble
+    de una sola posición, sin niveles reales (fuerza cantidad_entrepanos=1).
+
+    Abierto también a operarios/empacadores con puede_organizar_layout=True
+    (2026-09-07) — crear cuerpo es la mitad "física" de organizar Layout, la
+    otra mitad es asignar SKU (ver asignar_ubicacion). Editar/reclasificar/
+    eliminar un cuerpo ya existente sigue exclusivo de admin/jefe.
     """
-    if not _es_admin_o_jefe():
-        return jsonify({'error': 'Solo admin o jefe de almacén'}), 403
+    if not _puede_organizar_layout():
+        return jsonify({'error': 'Sin permiso para organizar Layout'}), 403
     Almacen.query.get_or_404(id)
     data = request.get_json() or {}
     campos = ('pasillo', 'fila', 'cuerpo', 'cantidad_entrepanos', 'tipo_zona')
@@ -191,6 +198,7 @@ def crear_cuerpo(id):
             cantidad_entrepanos=int(data['cantidad_entrepanos']),
             tipo_zona=data['tipo_zona'],
             huecos_por_nivel=huecos_por_nivel,
+            tipo_mueble=data.get('tipo_mueble', 'estanteria'),
         )
         return jsonify({'ubicaciones': [u.to_dict() for u in creadas]}), 201
     except ValueError as e:
@@ -389,18 +397,6 @@ def eliminar_ubicacion(ubicacion_id):
         return jsonify({'error': str(e)}), 400
 
 
-@almacenes_bp.route('/<int:id>/ubicaciones/averias', methods=['POST'])
-@jwt_required()
-def crear_averias(id):
-    """Crea la siguiente ubicación AVERIAS disponible (AVE1, AVE2...)."""
-    if not _es_admin_o_jefe():
-        return jsonify({'error': 'Solo admin o jefe de almacén'}), 403
-    Almacen.query.get_or_404(id)
-    data = request.get_json() or {}
-    ub = layout_service.crear_ubicacion_averias(id, data.get('capacidad_maxima'))
-    return jsonify(ub.to_dict()), 201
-
-
 @almacenes_bp.route('/ubicaciones/<int:ubicacion_id>', methods=['PATCH'])
 @jwt_required()
 def reclasificar_ubicacion(ubicacion_id):
@@ -430,23 +426,32 @@ def reclasificar_ubicacion(ubicacion_id):
 def asignar_ubicacion(ubicacion_id):
     """
     Mecanismo B: amarra un SKU a una ubicación y suma la cantidad contada.
-    Payload: { producto_id, cantidad, capacidad_maxima? }
-    capacidad_maxima solo se acepta si la ubicación es PICKING (ver asignar_producto).
+    Payload: { producto_id, cantidad, capacidad_maxima?, stock_minimo? }
+    capacidad_maxima y stock_minimo solo se aceptan si la ubicación es PICKING
+    (ver asignar_producto). stock_minimo es el gatillo de reposición — se
+    configura acá mismo para no depender de un segundo paso manual en
+    Reposición → Configurar.
+
+    Abierto también a operarios/empacadores con puede_organizar_layout=True
+    (2026-09-07) — registrar qué SKU va en cada hueco es la mitad "digital"
+    de organizar Layout, la otra mitad es crear el cuerpo (ver crear_cuerpo).
     """
-    usuario = _es_admin_o_jefe()
+    usuario = _puede_organizar_layout()
     if not usuario:
-        return jsonify({'error': 'Solo admin o jefe de almacén'}), 403
+        return jsonify({'error': 'Sin permiso para organizar Layout'}), 403
     data = request.get_json() or {}
     if not data.get('producto_id') or data.get('cantidad') is None:
         return jsonify({'error': 'producto_id y cantidad son requeridos'}), 400
     try:
         capacidad_maxima = data.get('capacidad_maxima')
+        stock_minimo = data.get('stock_minimo')
         resultado = layout_service.asignar_producto(
             ubicacion_id=ubicacion_id,
             producto_id=int(data['producto_id']),
             cantidad=int(data['cantidad']),
             usuario_id=usuario.id,
             capacidad_maxima=int(capacidad_maxima) if capacidad_maxima is not None else None,
+            stock_minimo=int(stock_minimo) if stock_minimo is not None else None,
         )
         return jsonify(resultado), 200
     except ValueError as e:

@@ -131,8 +131,19 @@ class PackingService:
 
     @staticmethod
     def iniciar(tarea_id: int, empacador_id: int):
-        """Empacador toma la tarea."""
-        tarea = TareaPacking.query.get(tarea_id)
+        """
+        Empacador toma la tarea.
+
+        with_for_update(): sin este lock, dos empacadores haciendo clic en la
+        misma card casi al tiempo pasaban los dos el check de abajo (ambos
+        leían PENDIENTE antes de que cualquiera confirmara) y el commit que
+        llegaba último pisaba en silencio el empacador_id del primero — los
+        dos recibían 200 OK, uno de los dos quedaba "dueño" de una tarea que
+        cree tener pero ya no es suya. TareaPicking ya resolvía esto mismo con
+        with_for_update(skip_locked=True) en el dispensador; TareaPacking
+        nunca lo había heredado.
+        """
+        tarea = TareaPacking.query.filter_by(id=tarea_id).with_for_update().first()
         if not tarea:
             raise ValueError('Tarea no encontrada')
         # [29] Verificar que el pedido no fue anulado en Siesa antes de iniciar
@@ -177,7 +188,10 @@ class PackingService:
             )
 
         item.cantidad_real = cantidad_real
-        item.verificado = item.cantidad_real is not None
+        # verificado = True solo al alcanzar/superar lo esperado — igual que
+        # mobile_service.confirmar_tarea. Antes era `is not None`, que marcaba
+        # el ítem como listo tras el primer escaneo aunque faltaran unidades.
+        item.verificado = item.cantidad_real >= item.cantidad_esperada
         if lote:
             item.lote = lote
 

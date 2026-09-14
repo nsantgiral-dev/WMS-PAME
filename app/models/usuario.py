@@ -18,6 +18,10 @@ class Usuario(db.Model):
     puede_picar = db.Column(db.Boolean, default=True)
     puede_empacar = db.Column(db.Boolean, default=False)
     puede_abastecer = db.Column(db.Boolean, default=False)  # abastecedor RESERVA→PICKING
+    # Crear cuerpo/hueco y asignar SKU en Layout (no edición/reclasificación/
+    # eliminación/import masivo — eso sigue exclusivo de admin/jefe_almacen,
+    # ver _puede_organizar_layout en app/routes/_auth_helpers.py)
+    puede_organizar_layout = db.Column(db.Boolean, default=False)
     # Límite de conteos cíclicos intercalados por día (0 = sin límite)
     capacidad_diaria_conteo = db.Column(db.Integer, default=15, nullable=False)
 
@@ -46,6 +50,7 @@ class Usuario(db.Model):
             'puede_picar': self.puede_picar if self.puede_picar is not None else True,
             'puede_empacar': self.puede_empacar or False,
             'puede_abastecer': self.puede_abastecer or False,
+            'puede_organizar_layout': self.puede_organizar_layout or False,
             'capacidad_diaria_conteo': self.capacidad_diaria_conteo if self.capacidad_diaria_conteo is not None else 15,
             'bodega_siesa_id': self.bodega_siesa_id,
             'siesa_co_id': self.siesa_co_id,

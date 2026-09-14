@@ -64,9 +64,11 @@ def test_crear_cuerpo_endpoint_reserva(client, jwt_token_admin, almacen):
 
 
 def test_crear_cuerpo_endpoint_rechaza_zona_invalida(client, jwt_token_admin, almacen):
+    # AVERIAS es zona válida desde 2026-09-03 — GENERAL sigue sin poder
+    # armarse por este endpoint, es el bucket sin clasificar del sync de Siesa.
     resp = client.post(
         f'/api/almacenes/{almacen.id}/ubicaciones/cuerpo',
-        json={'pasillo': 'A', 'fila': 1, 'cuerpo': 1, 'cantidad_entrepanos': 1, 'tipo_zona': 'AVERIAS'},
+        json={'pasillo': 'A', 'fila': 1, 'cuerpo': 1, 'cantidad_entrepanos': 1, 'tipo_zona': 'GENERAL'},
         headers={'Authorization': f'Bearer {jwt_token_admin}'},
     )
     assert resp.status_code == 400
@@ -108,14 +110,24 @@ def test_crear_cuerpo_rechaza_fila_invalida(client, jwt_token_admin, almacen):
     assert 'fila' in resp.get_json()['error']
 
 
-def test_crear_averias_endpoint(client, jwt_token_admin, almacen):
+def test_crear_cuerpo_endpoint_averias_exige_ubicacion_real(client, jwt_token_admin, almacen):
+    # AVERIAS entra por el mismo endpoint que Picking/Reserva/Importados desde
+    # 2026-09-03 — ya no existe /ubicaciones/averias (creación anónima AVE1,
+    # AVE2... sin pasillo).
     resp = client.post(
-        f'/api/almacenes/{almacen.id}/ubicaciones/averias',
-        json={},
+        f'/api/almacenes/{almacen.id}/ubicaciones/cuerpo',
+        json={
+            'pasillo': 'A', 'fila': 1, 'cuerpo': 1, 'cantidad_entrepanos': 1,
+            'tipo_zona': 'AVERIAS', 'tipo_mueble': 'estiba',
+        },
         headers={'Authorization': f'Bearer {jwt_token_admin}'},
     )
     assert resp.status_code == 201
-    assert resp.get_json()['codigo'] == 'AVE1'
+    ubs = resp.get_json()['ubicaciones']
+    assert len(ubs) == 1
+    assert ubs[0]['codigo'] == 'AVE-A1-EST01'
+    assert ubs[0]['tipo_zona'] == 'AVERIAS'
+    assert ubs[0]['pasillo'] == 'A'
 
 
 def test_asignar_y_reclasificar_endpoint(client, jwt_token_admin, almacen, producto):
@@ -128,7 +140,7 @@ def test_asignar_y_reclasificar_endpoint(client, jwt_token_admin, almacen, produ
 
     r2 = client.post(
         f'/api/almacenes/ubicaciones/{ub_id}/asignar',
-        json={'producto_id': producto.id, 'cantidad': 40},
+        json={'producto_id': producto.id, 'cantidad': 40, 'capacidad_maxima': 100},
         headers={'Authorization': f'Bearer {jwt_token_admin}'},
     )
     assert r2.status_code == 200
@@ -174,6 +186,140 @@ def test_asignar_endpoint_capacidad_maxima_solo_picking(client, jwt_token_admin,
     )
     assert r3.status_code == 400
     assert 'capacidad_maxima solo aplica a Huecos PICKING' in r3.get_json()['error']
+
+
+class TestPuedeOrganizarLayout:
+    """
+    2026-09-07 — operarios/empacadores con puede_organizar_layout=True pueden
+    apoyar la creación de ubicaciones PICKING y el registro de SKU (mismo
+    patrón que puede_abastecer: capacidad por persona, no un rol nuevo). Lo
+    que NO se les abre — editar, reclasificar, eliminar, importar Excel —
+    sigue exclusivo de admin/jefe_almacen.
+    """
+
+    def test_crear_cuerpo_con_el_flag(self, client, jwt_token_organiza_layout, almacen):
+        resp = client.post(
+            f'/api/almacenes/{almacen.id}/ubicaciones/cuerpo',
+            json={'pasillo': 'A', 'fila': 1, 'cuerpo': 1, 'cantidad_entrepanos': 1, 'tipo_zona': 'PICKING'},
+            headers={'Authorization': f'Bearer {jwt_token_organiza_layout}'},
+        )
+        assert resp.status_code == 201
+
+    def test_pasillos_disponibles_con_el_flag(self, client, jwt_token_organiza_layout, almacen):
+        resp = client.get(
+            f'/api/almacenes/{almacen.id}/pasillos-disponibles?cantidad=3',
+            headers={'Authorization': f'Bearer {jwt_token_organiza_layout}'},
+        )
+        assert resp.status_code == 200
+
+    def test_asignar_sku_con_el_flag(self, client, jwt_token_admin, jwt_token_organiza_layout, almacen, producto):
+        r1 = client.post(
+            f'/api/almacenes/{almacen.id}/ubicaciones/cuerpo',
+            json={'pasillo': 'A', 'fila': 1, 'cuerpo': 1, 'cantidad_entrepanos': 1, 'tipo_zona': 'PICKING'},
+            headers={'Authorization': f'Bearer {jwt_token_admin}'},
+        )
+        ub_id = r1.get_json()['ubicaciones'][0]['id']
+
+        resp = client.post(
+            f'/api/almacenes/ubicaciones/{ub_id}/asignar',
+            json={'producto_id': producto.id, 'cantidad': 40, 'capacidad_maxima': 100},
+            headers={'Authorization': f'Bearer {jwt_token_organiza_layout}'},
+        )
+        assert resp.status_code == 200
+        assert resp.get_json()['cantidad_total'] == 40
+
+    def test_editar_cuerpo_rechaza_con_solo_el_flag(self, client, jwt_token_admin, jwt_token_organiza_layout, almacen):
+        client.post(
+            f'/api/almacenes/{almacen.id}/ubicaciones/cuerpo',
+            json={'pasillo': 'A', 'fila': 1, 'cuerpo': 1, 'cantidad_entrepanos': 1, 'tipo_zona': 'PICKING'},
+            headers={'Authorization': f'Bearer {jwt_token_admin}'},
+        )
+        resp = client.put(
+            f'/api/almacenes/{almacen.id}/ubicaciones/cuerpo',
+            json={'pasillo': 'A', 'fila': 1, 'cuerpo': 1, 'cantidad_entrepanos': 2},
+            headers={'Authorization': f'Bearer {jwt_token_organiza_layout}'},
+        )
+        assert resp.status_code == 403
+
+    def test_reclasificar_cuerpo_rechaza_con_solo_el_flag(self, client, jwt_token_admin, jwt_token_organiza_layout, almacen):
+        client.post(
+            f'/api/almacenes/{almacen.id}/ubicaciones/cuerpo',
+            json={'pasillo': 'A', 'fila': 1, 'cuerpo': 1, 'cantidad_entrepanos': 1, 'tipo_zona': 'PICKING'},
+            headers={'Authorization': f'Bearer {jwt_token_admin}'},
+        )
+        resp = client.patch(
+            f'/api/almacenes/{almacen.id}/ubicaciones/cuerpo',
+            json={'pasillo': 'A', 'fila': 1, 'cuerpo': 1, 'tipo_zona': 'RESERVA'},
+            headers={'Authorization': f'Bearer {jwt_token_organiza_layout}'},
+        )
+        assert resp.status_code == 403
+
+    def test_eliminar_cuerpo_rechaza_con_solo_el_flag(self, client, jwt_token_admin, jwt_token_organiza_layout, almacen):
+        client.post(
+            f'/api/almacenes/{almacen.id}/ubicaciones/cuerpo',
+            json={'pasillo': 'A', 'fila': 1, 'cuerpo': 1, 'cantidad_entrepanos': 1, 'tipo_zona': 'PICKING'},
+            headers={'Authorization': f'Bearer {jwt_token_admin}'},
+        )
+        resp = client.delete(
+            f'/api/almacenes/{almacen.id}/ubicaciones/cuerpo',
+            json={'pasillo': 'A', 'fila': 1, 'cuerpo': 1},
+            headers={'Authorization': f'Bearer {jwt_token_organiza_layout}'},
+        )
+        assert resp.status_code == 403
+
+    def test_reclasificar_ubicacion_individual_rechaza_con_solo_el_flag(
+        self, client, jwt_token_admin, jwt_token_organiza_layout, almacen,
+    ):
+        r1 = client.post(
+            f'/api/almacenes/{almacen.id}/ubicaciones/cuerpo',
+            json={'pasillo': 'A', 'fila': 1, 'cuerpo': 1, 'cantidad_entrepanos': 1, 'tipo_zona': 'PICKING'},
+            headers={'Authorization': f'Bearer {jwt_token_admin}'},
+        )
+        ub_id = r1.get_json()['ubicaciones'][0]['id']
+        resp = client.patch(
+            f'/api/almacenes/ubicaciones/{ub_id}',
+            json={'tipo_zona': 'RESERVA'},
+            headers={'Authorization': f'Bearer {jwt_token_organiza_layout}'},
+        )
+        assert resp.status_code == 403
+
+    def test_eliminar_ubicacion_individual_rechaza_con_solo_el_flag(
+        self, client, jwt_token_admin, jwt_token_organiza_layout, almacen,
+    ):
+        r1 = client.post(
+            f'/api/almacenes/{almacen.id}/ubicaciones/cuerpo',
+            json={'pasillo': 'A', 'fila': 1, 'cuerpo': 1, 'cantidad_entrepanos': 1, 'tipo_zona': 'PICKING'},
+            headers={'Authorization': f'Bearer {jwt_token_admin}'},
+        )
+        ub_id = r1.get_json()['ubicaciones'][0]['id']
+        resp = client.delete(
+            f'/api/almacenes/ubicaciones/{ub_id}',
+            headers={'Authorization': f'Bearer {jwt_token_organiza_layout}'},
+        )
+        assert resp.status_code == 403
+
+    def test_importar_excel_rechaza_con_solo_el_flag(self, client, jwt_token_organiza_layout, almacen):
+        wb = Workbook()
+        buf = io.BytesIO()
+        wb.save(buf)
+        buf.seek(0)
+        resp = client.post(
+            f'/api/almacenes/{almacen.id}/ubicaciones/importar',
+            data={'archivo': (buf, 'test.xlsx')},
+            headers={'Authorization': f'Bearer {jwt_token_organiza_layout}'},
+            content_type='multipart/form-data',
+        )
+        assert resp.status_code == 403
+
+    def test_operario_sin_el_flag_sigue_sin_poder_crear_cuerpo(self, client, jwt_token, almacen):
+        """El flag es opt-in — un operario normal (sin puede_organizar_layout)
+        no gana este permiso solo por existir."""
+        resp = client.post(
+            f'/api/almacenes/{almacen.id}/ubicaciones/cuerpo',
+            json={'pasillo': 'A', 'fila': 1, 'cuerpo': 1, 'cantidad_entrepanos': 1, 'tipo_zona': 'PICKING'},
+            headers={'Authorization': f'Bearer {jwt_token}'},
+        )
+        assert resp.status_code == 403
 
 
 def test_editar_fila_endpoint(client, jwt_token_admin, almacen):
@@ -243,7 +389,7 @@ def test_eliminar_fila_bloquea_con_stock_endpoint(client, jwt_token_admin, almac
     ub = _crear_legacy_fila(almacen.id, 'A', 1, 1, 'PICKING')[0]
     client.post(
         f'/api/almacenes/ubicaciones/{ub.id}/asignar',
-        json={'producto_id': producto.id, 'cantidad': 10},
+        json={'producto_id': producto.id, 'cantidad': 10, 'capacidad_maxima': 50},
         headers={'Authorization': f'Bearer {jwt_token_admin}'},
     )
 
@@ -303,7 +449,7 @@ def test_eliminar_ubicacion_individual_bloquea_con_stock(client, jwt_token_admin
     ub_id = r1.get_json()['ubicaciones'][0]['id']
     client.post(
         f'/api/almacenes/ubicaciones/{ub_id}/asignar',
-        json={'producto_id': producto.id, 'cantidad': 10},
+        json={'producto_id': producto.id, 'cantidad': 10, 'capacidad_maxima': 50},
         headers={'Authorization': f'Bearer {jwt_token_admin}'},
     )
 
@@ -341,9 +487,9 @@ def test_importar_excel_endpoint(client, jwt_token_admin, almacen, producto):
 
     wb = Workbook()
     ws = wb.active
-    ws.append(['ubicacion_codigo', 'producto_codigo', 'cantidad'])
-    ws.append([codigo_ub, producto.codigo, 100])
-    ws.append(['NO-EXISTE', producto.codigo, 5])
+    ws.append(['ubicacion_codigo', 'producto_codigo', 'cantidad', 'capacidad_maxima'])
+    ws.append([codigo_ub, producto.codigo, 100, 200])
+    ws.append(['NO-EXISTE', producto.codigo, 5, 200])
     buf = io.BytesIO()
     wb.save(buf)
     buf.seek(0)
@@ -426,7 +572,7 @@ def test_eliminar_cuerpo_endpoint_bloquea_con_stock(client, jwt_token_admin, alm
     ub_id = r1.get_json()['ubicaciones'][0]['id']
     client.post(
         f'/api/almacenes/ubicaciones/{ub_id}/asignar',
-        json={'producto_id': producto.id, 'cantidad': 10},
+        json={'producto_id': producto.id, 'cantidad': 10, 'capacidad_maxima': 50},
         headers={'Authorization': f'Bearer {jwt_token_admin}'},
     )
 

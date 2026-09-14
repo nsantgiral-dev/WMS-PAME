@@ -127,12 +127,32 @@ class TestEsperarNoGastaReintento:
         assert 'raise DependenciaPendiente' in fuente[i:i + 500]
 
 
-# ── J · el guard anti-duplicado, por remisión ────────────────────────────
+# ── J · el guard anti-duplicado, revertido de remisión a pedido ──────────
 
-class TestElGuardPreguntaPorLaRemision:
-    """Preguntar «¿el PEDIDO tiene FE?» antes de facturar una remisión hace que
-    el **segundo despacho parcial** se marque hecho sin factura: la FE del
-    primer parcial contesta que sí."""
+class TestElGuardPreguntaPorElPedido:
+    """Historia completa, para que nadie revierta esto sin leerla:
+
+    2026-08-13: el guard preguntaba «¿el PEDIDO tiene FE?» antes de facturar
+    una remisión — bug real, porque en un segundo despacho parcial del mismo
+    pedido la FE del primer parcial contesta que sí y la tarea se marca hecha
+    sin facturar su propia remisión. Se cambió a preguntar por REMISIÓN
+    (`get_factura_desde_remision`, filtro `f460_id_tipo_docto`/`f460_consec_
+    docto`) — más preciso en teoría.
+
+    2026-09-04: probado en vivo contra Siesa QA, ese cambio resultó estar
+    parado sobre campos que **no existen** — se descargó el esquema completo
+    y real de una factura ya emitida (`API_v2_Ventas_Facturas_DesdePedido`,
+    pedido PD1352/FEW-1466) y ningún campo `f460_*` aparece en ninguna fila,
+    tampoco en el spec oficial. La pregunta «¿esta remisión puntual ya tiene
+    factura?» no tiene forma de hacérsele a esta API hoy. Vuelto a preguntar
+    por PEDIDO (`get_factura_desde_pedido`, ya con su propio fix del mismo
+    día — apuntaba a una consulta dinámica inexistente) — decisión explícita
+    del usuario: acepta el riesgo real pero acotado del 2026-08-13 (pedidos
+    con más de un despacho parcial) a cambio de un guard que sí funciona
+    contra Siesa real. Si ese caso se vuelve real, no hay hoy una consulta
+    Siesa mejor con la que resolverlo — hay que ver ese caso puntual cuando
+    aparezca.
+    """
 
     @staticmethod
     def _cuerpo(nombre):
@@ -145,20 +165,12 @@ class TestElGuardPreguntaPorLaRemision:
 
     @pytest.mark.parametrize('fn', ['facturar_remision_existente',
                                     'facturar_rm_con_consec'])
-    def test_usa_el_guard_de_remision(self, fn):
+    def test_usa_el_guard_de_pedido(self, fn):
         cuerpo = self._cuerpo(fn)
-        assert 'get_factura_desde_remision' in cuerpo, (
-            f'{fn} volvió a preguntar por el pedido: el segundo parcial se '
-            f'marcaría hecho sin facturar su remisión')
-
-    def test_el_guard_correcto_ya_no_esta_huerfano(self):
-        """Existía, estaba probado y no lo llamaba nadie."""
-        import pathlib
-        raiz = pathlib.Path(__file__).resolve().parents[1]
-        usos = sum(
-            raiz.joinpath(r).read_text(encoding='utf-8').count('get_factura_desde_remision(')
-            for r in ('app/services/despacho_parcial_service.py',))
-        assert usos >= 2
+        assert 'get_factura_desde_pedido(' in cuerpo, (
+            f'{fn} dejó de preguntar por el pedido — con eso, el precheck '
+            f'vuelve a depender de f460_* (get_factura_desde_remision), que '
+            f'no existe en la API real de Siesa (verificado 2026-09-04)')
 
 
 # ── K · un barrido incompleto no borra ───────────────────────────────────
@@ -214,37 +226,13 @@ class TestNoSeSellaComoFrescoLoViejo:
 
 
 # ── I · el campo que el 173066 omitía ────────────────────────────────────
-
-class TestEl173066MandaTodoSuSpec:
-
-    def test_no_falta_ningun_campo_del_spec(self):
-        import pathlib
-        import re
-        import zipfile
-        from html import unescape
-
-        raiz = pathlib.Path(__file__).resolve().parents[1]
-        spec = raiz / 'docs' / 'siesa-specs' / '173066 - API_v1_Inventarios_Comercial_TransferenciaDirecta.docx'
-        xml = zipfile.ZipFile(spec).read('word/document.xml').decode('utf-8')
-        txt = unescape(re.sub(r'<[^>]+>', '', re.sub(r'</w:p>', '\n', xml)))
-        campos = [re.match(r'"([A-Za-z0-9_]+)":', l.strip()).group(1)
-                  for l in txt.split('\n') if re.match(r'\s*"([A-Za-z0-9_]+)":', l)]
-
-        gw = raiz.joinpath('app/services/connekta_gateway.py').read_text(encoding='utf-8')
-        i = gw.find('def transferir_entre_ubicaciones')
-        cuerpo = gw[i:gw.find('\n    def ', i + 10)]
-        # La sección `f479_*` (seriales/garantía) no la manda ninguno de los
-        # tres conectores hermanos — es consistente, no un olvido.
-        faltan = [c for c in campos
-                  if f"'{c}'" not in cuerpo and not c.startswith('f479_')]
-        assert not faltan, f'173066 omite campos de su spec: {faltan}'
-
-    def test_lo_manda_igual_que_sus_hermanos(self):
-        import pathlib
-        gw = (pathlib.Path(__file__).resolve().parents[1] / 'app' / 'services'
-              / 'connekta_gateway.py').read_text(encoding='utf-8')
-        for fn in ('transferir_entre_ubicaciones', 'transferencia_transito_salida',
-                   'transferencia_transito_entrada'):
-            i = gw.find(f'def {fn}')
-            cuerpo = gw[i:gw.find('\n    def ', i + 10)]
-            assert "'f470_rowid_movto': 0" in cuerpo, fn
+#
+# TestEl173066MandaTodoSuSpec verificaba transferir_entre_ubicaciones()
+# (conector 173066 para RESERVA→PICKING) contra su spec DOCX. Se retiró
+# 2026-09-07 junto con la función: esa transferencia era siempre intra-bodega
+# (misma bodega Siesa en origen y destino — NB1 no tiene sub-bodegas internas,
+# es organización 100% del WMS), así que no había ningún documento real que
+# declarar, y probado en vivo contra Siesa QA el mismo día ni siquiera pasaba
+# la validación de tamaño de registro. transferencia_directa() —la función
+# hermana que sí sigue en uso, traslados reales inter-bodega— no tiene test
+# de spec en este archivo.

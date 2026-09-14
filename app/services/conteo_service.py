@@ -196,6 +196,9 @@ class ConteoService:
                         'resultado': 'DESCUADRE',
                         'mensaje': 'Tercer conteo registrado — el administrador debe revisar y aprobar el ajuste',
                         'sesion_id': sesion.id,
+                        # id de CC1 (la raíz) — quien llama necesita este id para
+                        # PUT /api/conteo/<raiz_id>/ajustar, no el de CC3 mismo.
+                        'raiz_id': raiz.id if raiz else None,
                     }
 
                 # CC2 no cuadra con Siesa — comparar CC1 vs CC2
@@ -348,8 +351,8 @@ class ConteoService:
     @staticmethod
     def _crear_conteo_verificacion(sesion_origen: SesionConteo, operario_excluido: int):
         """
-        Crea CC2 o CC3 asignado a un operario diferente al excluido (double-blind).
-        sesion_origen: CC1 para CC2, CC2 para CC3.
+        Crea CC2 (asignado a otro operario, double-blind) o CC3 (sin asignar —
+        ver más abajo). sesion_origen: CC1 para CC2, CC2 para CC3.
         """
         numero = 3 if (sesion_origen.es_segundo_conteo) else 2
         codigo = f'CC{numero}-{_ahora_bogota().strftime("%Y%m%d%H%M%S")}-{str(uuid.uuid4())[:6].upper()}'
@@ -367,6 +370,24 @@ class ConteoService:
             es_segundo_conteo=True,
             sesion_origen_id=sesion_origen.id
         )
+
+        # CC3 (el "conteo definitivo"): NO se empareja con otro picker. Antes
+        # esta función corría exactamente la misma búsqueda para CC2 y CC3, y
+        # el único filtro era `!= operario_excluido` (el de CC2) — nada
+        # impedía que le tocara de vuelta al mismo operario que hizo CC1 en un
+        # equipo chico, rompiendo el doble-ciego justo en el conteo que
+        # DEFINE el ajuste. Ahora CC3 nace sin operario_id y aparece en
+        # `/api/conteo/definitivos` — decisión 2026-09-04: lo hace un
+        # supervisor desde la pestaña "Conteo Definitivo", nunca un picker
+        # automático.
+        if numero == 3:
+            db.session.add(segundo)
+            logger.warning(
+                '[CONTEO] CC3 %s creado SIN ASIGNAR — espera en la cola de '
+                'Conteo Definitivo (solo supervisor/admin/jefe_almacén)',
+                segundo.codigo,
+            )
+            return segundo
 
         from app.models.usuario import Usuario
         from sqlalchemy import or_ as _or, and_ as _and
@@ -458,6 +479,44 @@ class ConteoService:
         # No commit aquí — el caller (registrar_conteo) hace un único commit
         # que incluye tanto el estado SEGUNDO_CONTEO del padre como este hijo.
         return segundo
+
+    @staticmethod
+    def listar_definitivos(almacen_id: int = None) -> list:
+        """
+        Cola de "Conteo Definitivo" (CC3): sesiones donde CC1 y CC2 NO
+        coincidieron y esperan el conteo que rompe el empate. Nace sin
+        operario asignado (ver `_crear_conteo_verificacion`) — un
+        supervisor la toma desde acá, nunca un picker automático.
+
+        Vista ciega (`to_dict_operario`): quien va a hacer el conteo
+        definitivo tampoco puede ver cuánto contaron CC1 y CC2 — mostrarle
+        esos números rompería el double-blind justo en el conteo que
+        DEFINE el ajuste, exactamente el caso que más lo necesita.
+        """
+        from sqlalchemy.orm import aliased
+        origen = aliased(SesionConteo)
+        query = (
+            SesionConteo.query
+            .join(origen, SesionConteo.sesion_origen_id == origen.id)
+            .filter(
+                SesionConteo.es_segundo_conteo.is_(True),
+                origen.es_segundo_conteo.is_(True),
+                SesionConteo.estado.in_(['PENDIENTE', 'EN_PROCESO']),
+            )
+        )
+        if almacen_id:
+            query = query.filter(SesionConteo.almacen_id == almacen_id)
+        return [
+            {
+                **s.to_dict_operario(),
+                'almacen_id': s.almacen_id,
+                'almacen_nombre': s.almacen.nombre if s.almacen else None,
+                'operario_id': s.operario_id,
+                'operario_nombre': s.operario.nombre if s.operario else None,
+                'fecha_creacion': s.fecha_creacion.isoformat() if s.fecha_creacion else None,
+            }
+            for s in query.order_by(SesionConteo.fecha_creacion).all()
+        ]
 
     @staticmethod
     def _encolar_ajuste_fisico(sesion: SesionConteo, aprobador_id: int = None) -> None:

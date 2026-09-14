@@ -45,6 +45,15 @@ class TareaReposicion(db.Model):
 
     # Resultado
     unidades_movidas = db.Column(db.Integer, nullable=True)
+    # DEUDA DE ESQUEMA (documentada 2026-09-09, no eliminada): describen el
+    # flujo viejo que disparaba el conector 173066 al completar la tarea.
+    # Reposición RESERVA→PICKING es 100% WMS desde el commit 9447464 — nada
+    # en el repo crea ya un SiesaJob con referencia_tipo='TareaReposicion'
+    # (confirmado por grep), así que estos dos campos nunca se escriben en la
+    # práctica. El handler que los escribiría sigue en
+    # `siesa_job_service._post_completado()`, también documentado como muerto.
+    # Se dejan sin migración a propósito — bajo riesgo, sin impacto visible
+    # (el badge que los leía en `reposicion.js` ya se quitó).
     siesa_job_id = db.Column(db.String(50), nullable=True)
     siesa_enviado = db.Column(db.Boolean, nullable=False, default=False)
 

@@ -74,7 +74,20 @@ from alembic import op
 import sqlalchemy as sa
 
 revision = 'm016binaveriadossintipozona'
-down_revision = 'm015nombresindiceskardex'
+# ── Re-encadenada en el merge con main del 2026-09-11 ──────────────────────
+#
+# Nació colgando de `m015nombresindiceskardex`, y main numeró su propia
+# `m016ubicacioncodigoporalmacen` desde el MISMO padre. Los archivos no chocan
+# —tienen nombres distintos— así que git los mergea limpio y el defecto solo
+# aparece al desplegar: **dos heads, y `alembic upgrade head` falla**.
+#
+# La cadena de main va primero porque sus migraciones ya corrieron en
+# producción; las de flota se enganchan detrás de su última.
+#
+# El número del nombre queda mintiendo (una «m016» que corre después de una
+# «m019»). Renombrar la revisión sería peor: el id viaja en `alembic_version`
+# y estas cuatro ya corrieron en las bases de prueba. Queda anotado acá.
+down_revision = 'm019eventosstockagotado'
 branch_labels = None
 depends_on = None
 

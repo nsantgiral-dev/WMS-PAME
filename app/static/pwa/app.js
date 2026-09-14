@@ -115,6 +115,14 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 });
 
+// Pestañas del panel admin que un `supervisor` no puede usar en el backend
+// (siempre 403), así que tampoco se muestran. Ver el bloque `esSupervisor`
+// dentro de `mostrarSegunRol()`.
+// 'tab-compras' agregado 2026-09-07: compras.py exige Roles.COMPRAS_ROLES
+// (admin/jefe_almacen/gerente/compras) en cada endpoint — supervisor nunca
+// estuvo en ese grupo y la pestaña quedaba viva mostrando error.
+const _TABS_OCULTAS_SUPERVISOR = ['tab-usuarios', 'tab-muelle', 'tab-liquidacion', 'tab-compras'];
+
 /**
  * Route user to the correct screen and start timers based on their role.
  * @param {string} rol - User role (admin, operario, recepcionista, conductor, tienda, compras, etc.).
@@ -126,6 +134,7 @@ function mostrarSegunRol(rol) {
   // el procedimiento dice que ve el tablero y no aprueba, y dejarle a la vista
   // pestañas que el backend le va a negar con 403 enseña a ignorar errores.
   const soloFlota = rol === 'control_flota';
+  const esSupervisor = rol === 'supervisor';
   const esRecepcion = rol === 'recepcionista';
   const esConductor = rol === 'conductor';
   const esTienda = rol === 'tienda';
@@ -157,6 +166,12 @@ function mostrarSegunRol(rol) {
     cargarRutasConductor();
     TIMER_OPERARIO = setInterval(cargarRutasConductor, 30000);
   } else if (esAdmin) {
+    // Reset SIEMPRE antes de aplicar el ocultamiento de este rol: login()
+    // llama mostrarSegunRol() sin recargar la página, así que el DOM puede
+    // traer pestañas escondidas por la sesión anterior (supervisor,
+    // control_flota) — sin este reset, un admin que entra justo después de
+    // un supervisor hereda sus pestañas ocultas hasta que alguien recarga.
+    document.querySelectorAll('.nav-tab').forEach(el => { el.style.display = ''; });
     if (soloFlota) {
       pantalla('pantalla-admin');
       if (OPERARIO) actualizarUI(OPERARIO);
@@ -168,6 +183,20 @@ function mostrarSegunRol(rol) {
     }
     pantalla('pantalla-admin');
     if (OPERARIO) actualizarUI(OPERARIO);
+    if (esSupervisor) {
+      // Cosmético: el backend ya bloquea estas acciones con 403 para
+      // supervisor (Usuarios exige admin puro en auth.py; Muelle exige
+      // admin/jefe_almacen en requisiciones.py; Liquidación exige admin
+      // puro en rutas.py). Esto solo evita que la pestaña quede ahí sin
+      // servir para nada — si algún día cambia el guard del backend y
+      // nadie actualiza esta lista, la pestaña queda mal escondida o mal
+      // mostrada sin que nada avise.
+      _TABS_OCULTAS_SUPERVISOR.forEach(id => {
+        document.querySelectorAll(`.nav-tab[onclick*="${id}"]`).forEach(el => {
+          el.style.display = 'none';
+        });
+      });
+    }
     cargarAdmin();
     TIMER_ADMIN = setInterval(() => cargarAdmin(true), 30000);
   } else if (esRecepcion) {
@@ -203,7 +232,8 @@ function mostrarSegunRol(rol) {
     empCargarTareas();
     TIMER_OPERARIO = setInterval(empCargarTareas, 20000);
   } else if (puedeAbastecer && (puedePicar || puedeEmpacar)) {
-    // Rol dual: picker/empacador + abastecedor → picker por defecto, botón para cambiar
+    // Rol dual: picker/empacador + abastecedor → picker por defecto; Reposición
+    // entra sola como nivel 2 de la cola unificada (pedirTarea), sin botón de modo.
     pantalla('pantalla-operario');
     if (OPERARIO) actualizarUI(OPERARIO);
     pedirTarea();
@@ -445,6 +475,53 @@ async function login() {
 function actualizarUI(op) {
   ['op-nombre','admin-nombre','rec-nombre','abast-nombre','emp-nombre'].forEach(id => { const el = document.getElementById(id); if (el) el.textContent = op.nombre; });
   ['op-rol','admin-rol'].forEach(id => { const el = document.getElementById(id); if (el) el.textContent = op.rol; });
+  // Botón "🧭 Layout" en las pantallas de picking/packing — solo para quien
+  // tiene el flag puede_organizar_layout (admin/jefe ya entra por su propio
+  // panel, no necesita este atajo).
+  const _mostrarBtnLayout = !!op.puede_organizar_layout;
+  ['btn-layout-operario', 'btn-layout-empacador'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.style.display = _mostrarBtnLayout ? 'inline-flex' : 'none';
+  });
+}
+
+// Rol (operario/empacador) desde el que se entró a Layout vía el botón de
+// arriba — layoutVolverDesdeOperario() lo usa para saber a qué pantalla
+// devolver. null cuando no se entró por ese atajo (ej. admin/jefe normal).
+let _LAYOUT_ROL_ORIGEN = null;
+
+/** Operario/empacador con puede_organizar_layout entra a Layout sin dejar de ser quien es. */
+function layoutAbrirDesdeOperario() {
+  _LAYOUT_ROL_ORIGEN = OPERARIO?.rol || 'operario';
+  pararTimers();
+  pantalla('pantalla-admin');
+  actualizarUI(OPERARIO);
+  document.querySelectorAll('.nav-tab').forEach(el => {
+    if (!(el.getAttribute('onclick') || '').includes('tab-layout')) el.style.display = 'none';
+  });
+  const btnVolver = document.getElementById('btn-volver-layout-operario');
+  if (btnVolver) btnVolver.style.display = 'inline-flex';
+  tab('tab-layout');
+}
+
+/** Vuelve a la pantalla de picking o packing de la que se entró a Layout. */
+function layoutVolverDesdeOperario() {
+  document.querySelectorAll('.nav-tab').forEach(el => { el.style.display = ''; });
+  const btnVolver = document.getElementById('btn-volver-layout-operario');
+  if (btnVolver) btnVolver.style.display = 'none';
+  const rolOrigen = _LAYOUT_ROL_ORIGEN;
+  _LAYOUT_ROL_ORIGEN = null;
+  if (rolOrigen === 'empacador' || rolOrigen === 'packer_traslado') {
+    pantalla('pantalla-empacador');
+    actualizarUI(OPERARIO);
+    empCargarTareas();
+    TIMER_OPERARIO = setInterval(empCargarTareas, 20000);
+  } else {
+    pantalla('pantalla-operario');
+    actualizarUI(OPERARIO);
+    pedirTarea();
+    TIMER_OPERARIO = setInterval(() => { if (!TAREA_ACTUAL) pedirTarea(); }, 5000);
+  }
 }
 
 /**
@@ -465,6 +542,10 @@ function salir(porExpiracion = false) {
  * @param {boolean} [desdeTimer=false] - True when called from the 30s polling timer.
  */
 async function cargarAdmin(desdeTimer = false) {
+  // Badge de "🎯 Definitivo" (Inventario) — se refresca en cada tick sin
+  // importar la pestaña activa, igual que kpi-definitivos en el Dashboard,
+  // para que un supervisor lo vea llegar aunque esté parado en otra pantalla.
+  actualizarBadgeDefinitivos();
   if (TAB === 'tab-dashboard') await cargarDashboard();
   else if (TAB === 'tab-pedidos') await cargarPedidos();
   else if (TAB === 'tab-requisiciones') await cargarRequisiciones();
@@ -489,11 +570,13 @@ async function cargarAdmin(desdeTimer = false) {
   // abierto. Sin esto, cada F5 rebota a Expedientes — y `control_flota`, que va
   // a vivir en Analítica, vuelve a la pantalla equivocada todas las veces.
   else if (TAB === 'tab-flota') { if (!desdeTimer) await flotaEntrar(); }
+  // Manual de Usuario: lista estática, no hay nada que refrescar cada 30s.
+  else if (TAB === 'tab-manuales') { if (!desdeTimer) cargarManuales(); }
 }
 
 /** @param {string} id - Tab element ID to activate (e.g. 'tab-dashboard'). */
 function tab(id) {
-  const TABS = ['tab-dashboard','tab-pedidos','tab-requisiciones','tab-traslados','tab-bodega','tab-operarios','tab-usuarios','tab-stock','tab-connekta','tab-muelle','tab-rutas','tab-inventario','tab-reposicion','tab-liquidacion','tab-layout','tab-compras','tab-etiquetas','tab-vigia','tab-flota'];
+  const TABS = ['tab-dashboard','tab-pedidos','tab-requisiciones','tab-traslados','tab-bodega','tab-operarios','tab-usuarios','tab-stock','tab-connekta','tab-muelle','tab-rutas','tab-inventario','tab-liquidacion','tab-layout','tab-reposicion','tab-compras','tab-etiquetas','tab-vigia','tab-flota','tab-manuales'];
   TABS.forEach(t => {
     const el = document.getElementById(t);
     if (el) el.style.display = t === id ? 'block' : 'none';
@@ -581,6 +664,11 @@ async function cargarDashboard() {
     const cardAud = document.getElementById('kpi-card-auditorias');
     if (cardAud) cardAud.style.borderColor = nAud > 0 ? '#7f1d1d' : '';
 
+    const nDef = k.conteo.definitivos_pendientes || 0;
+    set('kpi-definitivos', nDef);
+    const cardDef = document.getElementById('kpi-card-definitivos');
+    if (cardDef) cardDef.style.borderColor = nDef > 0 ? '#78350f' : '';
+
     // ── Semáforo de módulos ────────────────────────────────────────
     _semaforo('sem-picking',
       k.picking.total_activo > 0 ? 'verde' : 'gris',
@@ -592,8 +680,9 @@ async function cargarDashboard() {
       rutasActivas > 0 ? 'amarillo' : (rutas.entregadas_hoy > 0 ? 'verde' : 'gris'),
       rutasActivas + ' en marcha');
     _semaforo('sem-conteos',
-      k.conteo.en_descuadre > 0 ? 'rojo' : (k.conteo.pendientes > 0 ? 'verde' : 'gris'),
-      k.conteo.en_descuadre > 0 ? k.conteo.en_descuadre + ' descuadres' : k.conteo.pendientes + ' pendientes');
+      (k.conteo.en_descuadre > 0 || nDef > 0) ? 'rojo' : (k.conteo.pendientes > 0 ? 'verde' : 'gris'),
+      nDef > 0 ? nDef + ' definitivo(s) pendiente(s)'
+        : (k.conteo.en_descuadre > 0 ? k.conteo.en_descuadre + ' descuadres' : k.conteo.pendientes + ' pendientes'));
     _semaforo('sem-recepciones',
       k.recepcion.confirmadas_hoy > 0 ? 'verde' : 'gris',
       k.recepcion.confirmadas_hoy + ' hoy');
@@ -638,20 +727,6 @@ async function cargarDashboard() {
     movimientos(d.movimientos_recientes.movimientos);
 
     // ── Alertas (solo si hay datos) ────────────────────────────────
-    const nBloq = d.tareas_bloqueadas || 0;
-    const bloqEl = document.getElementById('dashboard-tareas-bloqueadas');
-    if (bloqEl) {
-      bloqEl.style.display = nBloq > 0 ? 'block' : 'none';
-      const b = document.getElementById('bloq-count');
-      if (b) b.textContent = nBloq;
-    }
-    const audEl = document.getElementById('dashboard-auditorias-urgentes');
-    if (audEl) {
-      audEl.style.display = nAud > 0 ? 'block' : 'none';
-      const badge = document.getElementById('aud-urgentes-count');
-      if (badge) badge.textContent = nAud;
-      if (nAud > 0) cargarAuditoriasUrgentes();
-    }
     const tr = d.traslados_en_riesgo || {};
     const nCriticos = tr.total_critico || 0;
     const nAlertas  = tr.total_alerta  || 0;
@@ -673,6 +748,11 @@ async function cargarDashboard() {
         ).join('');
       }
     }
+
+    // ── Tablero BI (métricas 1, 3, 5) — sección propia dentro de Dashboard,
+    // con su propio try/catch interno por widget (cargarBI en tablero_bi.js);
+    // si falla, no debe tumbar lo que ya se pintó arriba.
+    if (typeof cargarBI === 'function') await cargarBI();
   } catch (e) { console.error('[Dashboard]', e); }
 }
 
@@ -823,7 +903,8 @@ async function cargarPedidos() {
     ]);
     SIESA_PEDIDOS = siesa.pedidos || [];
     const _g = p => p.siesa_triggered ? 2 : (p.packing_estado === 'VERIFICADO' && !p.siesa_triggered) ? 3 : (p.picking_iniciado || p.packing_estado) ? 1 : 0;
-    SIESA_PEDIDOS.sort((a, b) => _g(a) - _g(b));
+    const _num = p => parseInt(String(p.numero_pedido).replace(/\D/g, ''), 10) || 0;
+    SIESA_PEDIDOS.sort((a, b) => _g(a) - _g(b) || _num(b) - _num(a));
 
     const tabsEl = document.getElementById('ped-tabs');
 
@@ -1009,7 +1090,8 @@ function _renderTareasBodegaHTML(tareas) {
       UBICACION_VACIA:    '📦 Ubicación vacía',
       FALTANTE:           '📉 Agotado',
       MERCANCIA_AVERIADA: '🚫 Mercancía averiada',
-      PRODUCTO_INCORRECTO:'❌ Producto incorrecto'
+      PRODUCTO_INCORRECTO:'❌ Producto incorrecto',
+      BACKORDER_SIESA:    '🔒 Sin backorder en Siesa'
     };
     const porEstado = { BLOQUEADO: [], EN_PROCESO: [], PENDIENTE: [] };
     tareas.forEach(t => {
@@ -1021,84 +1103,137 @@ function _renderTareasBodegaHTML(tareas) {
       { label: '🔵 En proceso', color: '#93c5fd', tareas: porEstado.EN_PROCESO },
       { label: '⏳ En cola',    color: '#aaa',    tareas: porEstado.PENDIENTE  },
     ];
+    // Una línea/producto por tarea, pero varias tareas pueden ser del mismo
+    // pedido (ej. dos referencias bloqueadas del mismo PD). Agrupar por
+    // pedido evita que el mismo PD aparezca repetido como si fueran envíos
+    // distintos — una tarjeta por pedido, una fila por línea adentro, cada
+    // línea con su propio botón/panel de auditoría (id sigue siendo t.id,
+    // porque la decisión de auditoría es por línea, no por pedido entero).
+    const _lineaHTML = (t, esPrimera) => `
+      <div style="padding:10px 0;${esPrimera ? '' : 'border-top:1px solid #222;'}">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">
+          <div style="flex:1;min-width:0;">
+            <span style="font-size:14px;font-weight:600;">${t.producto_nombre || t.producto_codigo}</span>
+            <div style="font-size:12px;color:#666;margin-top:2px;">${esc(t.ubicacion_codigo || '—')}</div>
+            <div style="font-size:11px;color:#444;margin-top:2px;">${
+              t.operario_id
+                ? '👤 En proceso'
+                : t.estado === 'BLOQUEADO'
+                  ? '🔴 Bloqueado — ' + (MOTIVO_LABEL[t.motivo_bloqueo] || t.motivo_bloqueo || 'novedad reportada')
+                  : '⏳ En cola'
+            }</div>
+            ${t.estado === 'BLOQUEADO' && t.observaciones_bloqueo
+              ? `<div style="font-size:11px;color:#ef4444;margin-top:3px;font-style:italic;">"${esc(t.observaciones_bloqueo)}"</div>`
+              : ''}
+          </div>
+          <div style="text-align:right;flex-shrink:0;">
+            <span class="badge ${t.estado==='EN_PROCESO'?'badge-blue':t.estado==='BLOQUEADO'?'badge-red':'badge-yellow'}">${esc(t.estado)}</span>
+            <div style="font-size:20px;font-weight:800;margin-top:4px;">${esc(t.cantidad_recogida||0)}/${esc(t.cantidad_solicitada)}</div>
+          </div>
+        </div>
+        ${t.estado === 'BLOQUEADO' ? `
+        <div style="margin-top:10px;padding-top:10px;border-top:1px solid #2a1010;">
+          <button onclick="auditoriaMostrarPanel(${esc(t.id)})"
+            style="width:100%;padding:9px;background:#1a1a2a;color:#a78bfa;border:1px solid #2d1b69;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;">
+            🔍 Auditoría
+          </button>
+          <div id="auditoria-panel-${esc(t.id)}" style="display:none;margin-top:10px;">
+            <div style="font-size:11px;color:#888;margin-bottom:8px;">¿Qué encontraste físicamente?</div>
+            <select id="auditoria-resultado-${esc(t.id)}"
+              style="width:100%;padding:10px;background:#0d0d0d;border:1px solid #333;border-radius:8px;color:#fff;font-size:13px;margin-bottom:8px;">
+              <option value="">— Selecciona resultado —</option>
+              <option value="ENCONTRADO_COMPLETO">✅ Encontrado completo (error del operario)</option>
+              <option value="ENCONTRADO_PARCIAL">📉 Encontrado parcial</option>
+              <option value="NO_ENCONTRADO">❌ No encontrado — faltante confirmado</option>
+              <option value="AVERIA">🚫 Mercancía averiada</option>
+              <option value="DISCREPANCIA_SIESA">⚠️ Discrepancia Siesa (existe en sistema, no en físico)</option>
+            </select>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;">
+              <div>
+                <div style="font-size:11px;color:#666;margin-bottom:4px;">Cant. hallada</div>
+                <input id="auditoria-cantidad-${esc(t.id)}" type="number" min="0" value="0"
+                  style="width:100%;padding:9px;background:#0d0d0d;border:1px solid #333;border-radius:8px;color:#fff;font-size:13px;box-sizing:border-box;">
+              </div>
+              <div>
+                <div style="font-size:11px;color:#666;margin-bottom:4px;">Ubicación hallada</div>
+                <input id="auditoria-ubicacion-${esc(t.id)}" type="text" placeholder="Ej: A-01-02"
+                  style="width:100%;padding:9px;background:#0d0d0d;border:1px solid #333;border-radius:8px;color:#fff;font-size:13px;box-sizing:border-box;">
+              </div>
+            </div>
+            <textarea id="auditoria-obs-${esc(t.id)}" placeholder="Observaciones (opcional)..."
+              style="width:100%;padding:9px;background:#0d0d0d;border:1px solid #333;border-radius:8px;color:#fff;font-size:12px;resize:vertical;min-height:56px;box-sizing:border-box;margin-bottom:8px;"></textarea>
+            <div style="display:flex;gap:8px;">
+              <button onclick="auditoriaCancelarPanel(${esc(t.id)})"
+                style="flex:1;padding:9px;background:#1a1a1a;border:1px solid #333;color:#aaa;border-radius:8px;font-size:12px;cursor:pointer;">
+                Cancelar
+              </button>
+              <button onclick="auditoriaGuardar(${esc(t.id)})"
+                style="flex:2;padding:9px;background:#a78bfa;color:#000;border:none;border-radius:8px;font-size:12px;font-weight:800;cursor:pointer;">
+                Guardar auditoría →
+              </button>
+            </div>
+          </div>
+        </div>` : ''}
+      </div>`;
+
     let html = '';
     grupos.forEach(({ label, color, tareas: ts }) => {
       if (!ts.length) return;
-      html += `<div style="font-size:11px;font-weight:700;color:${color};text-transform:uppercase;letter-spacing:.8px;padding:10px 0 5px;border-bottom:1px solid #222;margin-bottom:8px;">${label} · ${esc(ts.length)}</div>`;
-      html += ts.map(t => `
-        <div class="tabla-card" style="${t.estado==='BLOQUEADO'?'border-color:#7f1d1d;background:#110a0a;':''}">
-          <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">
-            <div style="flex:1;min-width:0;">
-              <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
-                <span style="font-size:14px;font-weight:600;">${t.producto_nombre || t.producto_codigo}</span>
-                ${t.tipo_documento === 'TRASLADO' ? '<span style="font-size:10px;font-weight:700;padding:2px 7px;border-radius:10px;background:#1e3a5f;color:#60a5fa;letter-spacing:.5px;">🔄 TRANSFERENCIA</span>' : ''}
-              </div>
-              <div style="font-size:12px;color:#666;margin-top:2px;">${t.referencia_documento || t.codigo} · ${esc(t.ubicacion_codigo || '—')}</div>
-              <div style="font-size:11px;color:#444;margin-top:2px;">${
-                t.operario_id
-                  ? '👤 En proceso'
-                  : t.estado === 'BLOQUEADO'
-                    ? '🔴 Bloqueado — ' + (MOTIVO_LABEL[t.motivo_bloqueo] || t.motivo_bloqueo || 'novedad reportada')
-                    : '⏳ En cola'
-              }</div>
-              ${t.estado === 'BLOQUEADO' && t.observaciones_bloqueo
-                ? `<div style="font-size:11px;color:#ef4444;margin-top:3px;font-style:italic;">"${esc(t.observaciones_bloqueo)}"</div>`
-                : ''}
-            </div>
-            <div style="text-align:right;flex-shrink:0;">
-              <span class="badge ${t.estado==='EN_PROCESO'?'badge-blue':t.estado==='BLOQUEADO'?'badge-red':'badge-yellow'}">${esc(t.estado)}</span>
-              <div style="font-size:20px;font-weight:800;margin-top:4px;">${esc(t.cantidad_recogida||0)}/${esc(t.cantidad_solicitada)}</div>
-            </div>
+
+      const porPedido = new Map();
+      ts.forEach(t => {
+        const key = `${t.referencia_documento || t.codigo}`;
+        if (!porPedido.has(key)) porPedido.set(key, []);
+        porPedido.get(key).push(t);
+      });
+
+      html += `<div style="font-size:11px;font-weight:700;color:${color};text-transform:uppercase;letter-spacing:.8px;padding:10px 0 5px;border-bottom:1px solid #222;margin-bottom:8px;">${label} · ${esc(ts.length)} línea${ts.length!==1?'s':''} · ${esc(porPedido.size)} pedido${porPedido.size!==1?'s':''}</div>`;
+
+      html += Array.from(porPedido.entries()).map(([pedido, items]) => {
+        const hayBloqueada = items.some(t => t.estado === 'BLOQUEADO');
+        const esTraslado = items[0].tipo_documento === 'TRASLADO';
+        return `
+        <div class="tabla-card" style="${hayBloqueada?'border-color:#7f1d1d;background:#110a0a;':''}">
+          <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:2px;">
+            <span style="font-size:14px;font-weight:700;">${pedido}</span>
+            ${esTraslado ? '<span style="font-size:10px;font-weight:700;padding:2px 7px;border-radius:10px;background:#1e3a5f;color:#60a5fa;letter-spacing:.5px;">🔄 TRANSFERENCIA</span>' : ''}
+            <span style="font-size:11px;color:#555;">· ${esc(items.length)} línea${items.length!==1?'s':''}</span>
           </div>
-          ${t.estado === 'BLOQUEADO' ? `
-          <div style="margin-top:10px;padding-top:10px;border-top:1px solid #2a1010;">
-            <button onclick="auditoriaMostrarPanel(${esc(t.id)})"
-              style="width:100%;padding:9px;background:#1a1a2a;color:#a78bfa;border:1px solid #2d1b69;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;">
-              🔍 Auditoría
-            </button>
-            <div id="auditoria-panel-${esc(t.id)}" style="display:none;margin-top:10px;">
-              <div style="font-size:11px;color:#888;margin-bottom:8px;">¿Qué encontraste físicamente?</div>
-              <select id="auditoria-resultado-${esc(t.id)}"
-                style="width:100%;padding:10px;background:#0d0d0d;border:1px solid #333;border-radius:8px;color:#fff;font-size:13px;margin-bottom:8px;">
-                <option value="">— Selecciona resultado —</option>
-                <option value="ENCONTRADO_COMPLETO">✅ Encontrado completo (error del operario)</option>
-                <option value="ENCONTRADO_PARCIAL">📉 Encontrado parcial</option>
-                <option value="NO_ENCONTRADO">❌ No encontrado — faltante confirmado</option>
-                <option value="AVERIA">🚫 Mercancía averiada</option>
-                <option value="DISCREPANCIA_SIESA">⚠️ Discrepancia Siesa (existe en sistema, no en físico)</option>
-              </select>
-              <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;">
-                <div>
-                  <div style="font-size:11px;color:#666;margin-bottom:4px;">Cant. hallada</div>
-                  <input id="auditoria-cantidad-${esc(t.id)}" type="number" min="0" value="0"
-                    style="width:100%;padding:9px;background:#0d0d0d;border:1px solid #333;border-radius:8px;color:#fff;font-size:13px;box-sizing:border-box;">
-                </div>
-                <div>
-                  <div style="font-size:11px;color:#666;margin-bottom:4px;">Ubicación hallada</div>
-                  <input id="auditoria-ubicacion-${esc(t.id)}" type="text" placeholder="Ej: A-01-02"
-                    style="width:100%;padding:9px;background:#0d0d0d;border:1px solid #333;border-radius:8px;color:#fff;font-size:13px;box-sizing:border-box;">
-                </div>
-              </div>
-              <textarea id="auditoria-obs-${esc(t.id)}" placeholder="Observaciones (opcional)..."
-                style="width:100%;padding:9px;background:#0d0d0d;border:1px solid #333;border-radius:8px;color:#fff;font-size:12px;resize:vertical;min-height:56px;box-sizing:border-box;margin-bottom:8px;"></textarea>
-              <div style="display:flex;gap:8px;">
-                <button onclick="auditoriaCancelarPanel(${esc(t.id)})"
-                  style="flex:1;padding:9px;background:#1a1a1a;border:1px solid #333;color:#aaa;border-radius:8px;font-size:12px;cursor:pointer;">
-                  Cancelar
-                </button>
-                <button onclick="auditoriaGuardar(${esc(t.id)})"
-                  style="flex:2;padding:9px;background:#a78bfa;color:#000;border:none;border-radius:8px;font-size:12px;font-weight:800;cursor:pointer;">
-                  Guardar auditoría →
-                </button>
-              </div>
-            </div>
-          </div>` : ''}
-        </div>`).join('');
+          ${items.map((t, i) => _lineaHTML(t, i === 0)).join('')}
+        </div>`;
+      }).join('');
     });
     return html;
   } catch (e) {
     return '<div style="color:#ef4444;text-align:center;">Error mostrando tareas de bodega</div>';
   }
+}
+
+/**
+ * Renderiza la línea "Ahora: ..." de la tarjeta de operario — snapshot en
+ * vivo de `tarea_actual` (viene de /api/dashboard/productividad, refrescado
+ * cada 30s por TIMER_ADMIN mientras la pestaña Operarios esté abierta).
+ * @param {{tipo:string, tipo_documento?:string, referencia:string, ubicacion:string, producto:?string, minutos_en_tarea:?number}|null} t
+ */
+function _tareaActualHTML(t) {
+  if (!t) {
+    return `<div style="font-size:11px;color:#3a3a3a;margin-bottom:4px;">⚪ Sin tarea asignada</div>`;
+  }
+  const COLORES = { PICKING: '#1d4ed8', REPOSICION: '#c2410c', CONTEO: '#b45309', PACKING: '#7c3aed' };
+  const color = COLORES[t.tipo] || '#555';
+  const min = t.minutos_en_tarea;
+  // Mismo umbral que ConteoService/reposicion_service.liberar_tareas_zombi (2h) —
+  // si lleva más que eso en la misma tarea, probablemente está atascado, no trabajando.
+  const punto = min != null && min >= 120 ? '🔴' : '🟢';
+  const tiempo = min == null ? '' : min < 1 ? ' · recién' : ` · hace ${min} min`;
+  const etiqueta = t.tipo === 'PICKING'
+    ? `PICKING · ${t.tipo_documento === 'TRASLADO' ? 'Traslado' : 'Pedido'} ${t.referencia || ''}`
+    : `${t.tipo}${t.referencia ? ' · ' + t.referencia : ''}`;
+  const detalle = [t.ubicacion, t.producto].filter(Boolean).join(' · ');
+  return `
+    <div style="font-size:11px;font-weight:700;color:${color};margin-bottom:1px;">${punto} Ahora: ${etiqueta}</div>
+    ${detalle ? `<div style="font-size:10px;color:#555;margin-bottom:4px;">${detalle}${tiempo}</div>` : ''}
+  `;
 }
 
 /** Fetch and render operator list with 7-day productivity metrics. */
@@ -1121,10 +1256,11 @@ async function cargarOperarios() {
     todos.sort((a, b) => (metricas[b.id]?.total_tareas || 0) - (metricas[a.id]?.total_tareas || 0));
 
     el.innerHTML = todos.map((u, i) => {
-      const op = metricas[u.id] || { total_tareas: 0, pickings_completados: 0, packings_completados: 0, conteos_completados: 0 };
+      const op = metricas[u.id] || { total_tareas: 0, pickings_completados: 0, packings_completados: 0, conteos_completados: 0, reposiciones_completadas: 0, tarea_actual: null };
       const badges = [u.puede_picar && '<span style="background:#1e40af;color:#fff;border-radius:4px;padding:1px 5px;font-size:10px;">Picker</span>',
                       u.puede_empacar && '<span style="background:#6b21a8;color:#fff;border-radius:4px;padding:1px 5px;font-size:10px;">Empacador</span>',
-                      u.puede_abastecer && '<span style="background:#7c2d12;color:#fed7aa;border-radius:4px;padding:1px 5px;font-size:10px;">Abastecedor</span>'].filter(Boolean).join(' ');
+                      u.puede_abastecer && '<span style="background:#7c2d12;color:#fed7aa;border-radius:4px;padding:1px 5px;font-size:10px;">Abastecedor</span>',
+                      u.puede_organizar_layout && '<span style="background:#1e3a5f;color:#93c5fd;border-radius:4px;padding:1px 5px;font-size:10px;">Layout</span>'].filter(Boolean).join(' ');
       const color = op.total_tareas > 0 ? (i === 0 ? '#4ade80' : '#fff') : '#555';
       return `
       <div class="tabla-card">
@@ -1132,7 +1268,8 @@ async function cargarOperarios() {
           <div>
             <div style="font-size:14px;font-weight:600;">${esc(u.nombre)}</div>
             <div style="font-size:11px;color:#555;margin-bottom:2px;">${esc(u.rol)} ${badges}</div>
-            <div style="font-size:11px;color:#444;">Pick:${esc(op.pickings_completados)} Pack:${esc(op.packings_completados)} Conteos:${esc(op.conteos_completados)}</div>
+            ${_tareaActualHTML(op.tarea_actual)}
+            <div style="font-size:11px;color:#444;">Pick:${esc(op.pickings_completados)} Pack:${esc(op.packings_completados)} Repo:${esc(op.reposiciones_completadas || 0)} Conteos:${esc(op.conteos_completados)}</div>
             ${u.puede_picar && u.capacidad_diaria_conteo != null ? (() => {
               const cap = u.capacidad_diaria_conteo;
               const hoy = op.conteos_hoy || 0;
@@ -2307,8 +2444,13 @@ async function iniciarDespachoDesdeSiesa(idx) {
 // ADMIN — Gestión de usuarios (tab-usuarios)
 // ─────────────────────────────────────────────────────────────
 
+// 'NB1' se mantiene en este mapa a propósito (tests/test_bodegas_coherentes.py
+// exige que todo mapa de nombres liste las 9 bodegas operadas, sin excepción,
+// para no repetir el bug de mapas divergentes de 2026-08-10/14) aunque
+// `cargarUsuarios()` ya no la consulte — ver el comentario junto a `clave`
+// más abajo. Etiquetada igual que la pestaña con la que se fusiona.
 const _USR_NOMBRES_BOD = {
-  'NB1':'Bodega Principal','NC1':'Neiva Centro','NS1':'Neiva Sur Principal',
+  'NB1':'Centro de Distribución','NC1':'Neiva Centro','NS1':'Neiva Sur Principal',
   'NS2':'Neiva Sur Fundación (parqueo licitaciones)',
   'FC1':'Florencia Centro','PC1':'Pitalito Centro','PT1':'Pitalito Terminal',
   'FF1':'Feria Florencia','FN1':'Santa Lucía Plaza','FP1':'Feria Pitalito',
@@ -2331,7 +2473,14 @@ async function cargarUsuarios() {
     }
     const grupos = {};
     usuarios.forEach(u => {
-      const clave = u.bodega_siesa_id || '_CD';
+      // 'NB1' explícito y sin bodega_siesa_id son la MISMA bodega (Centro de
+      // Distribución/Bodega Neiva, la única que tiene almacén NB1 en la BD) —
+      // antes de 2026-09-09 caían en pestañas separadas ("Centro de
+      // Distribución (NB1)" vs "Bodega Principal (NB1)") solo porque unos
+      // usuarios (ej. Recepcionista, que sí lo necesita para filtrar
+      // traslados) tienen el campo puesto a mano y el resto no. Unificar acá
+      // no toca ningún dato — bodega_siesa_id sigue intacto para quien lo usa.
+      const clave = (u.bodega_siesa_id && u.bodega_siesa_id !== 'NB1') ? u.bodega_siesa_id : '_CD';
       if (!grupos[clave]) grupos[clave] = [];
       grupos[clave].push(u);
     });
@@ -2352,6 +2501,7 @@ async function cargarUsuarios() {
                 ${u.puede_picar ? `<span style="font-size:11px;font-weight:600;color:#60a5fa;background:#1e3a5f;padding:2px 8px;border-radius:8px;">Picker</span>` : ''}
                 ${u.puede_empacar ? `<span style="font-size:11px;font-weight:600;color:#c084fc;background:#1a0a2e;padding:2px 8px;border-radius:8px;">Empacador</span>` : ''}
                 ${u.puede_abastecer ? `<span style="font-size:11px;font-weight:600;color:#fed7aa;background:#7c2d12;padding:2px 8px;border-radius:8px;">Abastecedor</span>` : ''}
+                ${u.puede_organizar_layout ? `<span style="font-size:11px;font-weight:600;color:#93c5fd;background:#1e3a5f;padding:2px 8px;border-radius:8px;">Layout</span>` : ''}
               </div>
             </div>
             <button onclick="editarUsuario(${esc(u.id)})"
@@ -2483,6 +2633,13 @@ function _formUsuario(u = {}) {
             <div style="font-size:11px;color:#555;">Puede mover pacas de zona RESERVA a zona PICKING</div>
           </div>
         </label>
+        <label style="display:flex;align-items:center;gap:12px;cursor:pointer;margin-bottom:10px;">
+          <input type="checkbox" id="u-puede-organizar-layout" ${u.puede_organizar_layout?'checked':''} style="width:20px;height:20px;accent-color:#60a5fa;">
+          <div>
+            <div style="font-size:14px;font-weight:600;color:#60a5fa;">Organiza Layout</div>
+            <div style="font-size:11px;color:#555;">Puede crear ubicaciones y registrar SKU en Layout (no editar/eliminar/reclasificar)</div>
+          </div>
+        </label>
         <label style="display:flex;align-items:center;gap:12px;cursor:pointer;">
           <input type="checkbox" id="u-puede-camara" ${u.puede_usar_camara!==false?'checked':''} style="width:20px;height:20px;accent-color:#34d399;">
           <div>
@@ -2548,6 +2705,7 @@ async function _guardarUsuario(uid) {
   const puedePicar      = document.getElementById('u-puede-picar')?.checked;
   const puedeEmpacar    = document.getElementById('u-puede-empacar')?.checked;
   const puedeAbastecer  = document.getElementById('u-puede-abastecer')?.checked || false;
+  const puedeOrganizarLayout = document.getElementById('u-puede-organizar-layout')?.checked || false;
   const puedeCamara     = document.getElementById('u-puede-camara')?.checked ?? true;
   const capacidadConteo = puedePicar ? parseInt(document.getElementById('u-capacidad-conteo')?.value || '15', 10) : null;
   const conductorCedula   = rol === 'conductor' ? (document.getElementById('u-conductor-cedula')?.value.trim() || '') : null;
@@ -2561,7 +2719,8 @@ async function _guardarUsuario(uid) {
 
   const payload = {
     nombre, rol, puede_picar: puedePicar, puede_empacar: puedeEmpacar,
-    puede_abastecer: puedeAbastecer, puede_usar_camara: puedeCamara,
+    puede_abastecer: puedeAbastecer, puede_organizar_layout: puedeOrganizarLayout,
+    puede_usar_camara: puedeCamara,
     capacidad_diaria_conteo: capacidadConteo === null ? null : (isNaN(capacidadConteo) ? 15 : Math.max(0, capacidadConteo)),
     bodega_siesa_id: bodegaSiesaId, nombre_punto_venta: nombrePv,
     ...(rol === 'conductor' && { cedula: conductorCedula, telefono: conductorTelefono })

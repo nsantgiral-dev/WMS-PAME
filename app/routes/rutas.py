@@ -581,6 +581,38 @@ def confirmar_retencion_recaudo(ruta_id, recaudo_id):
     return jsonify({'recaudo': resultado}), 200
 
 
+@rutas_bp.route('/<int:ruta_id>/recaudos/<int:recaudo_id>/corregir-monto', methods=['POST'])
+@jwt_required()
+def corregir_monto_recaudo(ruta_id, recaudo_id):
+    """Corrige monto_cobrado cuando el número que declaró el conductor
+    resultó estar mal (no un faltante real — un dato de origen incorrecto),
+    para cuando la ruta ya pasó de EN_TRANSITO y `confirmar_parada` ya no
+    permite editarlo. Ver LiquidacionService.corregir_monto_declarado."""
+    if not _es_admin_o_jefe():
+        return jsonify({'error': 'Solo admin o jefe puede corregir el monto declarado'}), 403
+    uid = _uid()
+    if not uid:
+        return jsonify({'error': 'Token inválido'}), 401
+    from app.models.recaudo_entrega import RecaudoEntrega
+    recaudo = RecaudoEntrega.query.get(recaudo_id)
+    if not recaudo or recaudo.ruta_id != ruta_id:
+        return jsonify({'error': 'Recaudo no pertenece a esta ruta'}), 404
+    data = request.get_json() or {}
+    try:
+        from app.services.liquidacion_service import LiquidacionService
+        resultado = LiquidacionService.corregir_monto_declarado(
+            recaudo_id,
+            nuevo_monto=data.get('monto'),
+            razon=data.get('razon', ''),
+            admin_id=uid,
+        )
+    except LookupError as e:
+        return jsonify({'error': str(e)}), 404
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    return jsonify({'recaudo': resultado}), 200
+
+
 @rutas_bp.route('/<int:ruta_id>/recaudos/<int:recaudo_id>/registrar-cobro', methods=['POST'])
 @jwt_required()
 def registrar_cobro_recaudo(ruta_id, recaudo_id):
@@ -602,6 +634,9 @@ def registrar_cobro_recaudo(ruta_id, recaudo_id):
             admin_id=uid,
             retenciones=data.get('retenciones', []),
             monto_override=data.get('monto_override'),
+            ajuste_valor=data.get('ajuste_valor', 0) or 0,
+            ajuste_es_sobrante=bool(data.get('ajuste_es_sobrante', False)),
+            ajuste_razon=data.get('ajuste_razon', '') or '',
         )
     except LookupError as e:
         return jsonify({'error': str(e)}), 404
@@ -1030,7 +1065,7 @@ def liquidacion_dashboard():
         return jsonify({'error': 'Solo admin o jefe de almacén puede ver el dashboard de liquidación'}), 403
 
     from datetime import date as _date
-    from sqlalchemy import func, or_
+    from sqlalchemy import and_, func, or_
     from sqlalchemy.orm import selectinload, joinedload
     from app.models.bulto import Bulto
     from app.models.recaudo_entrega import RecaudoEntrega
@@ -1060,8 +1095,23 @@ def liquidacion_dashboard():
                  joinedload(RutaDespacho.vehiculo),
                  joinedload(RutaDespacho.ruta_maestra),
              )
-             .filter(RutaDespacho.fecha_programada >= fecha_desde)
-             .filter(RutaDespacho.fecha_programada <= fecha_hasta)
+             # `fecha_programada IS NULL` cuenta como "siempre dentro del
+             # rango", no como "nunca" — que es lo que un `>=`/`<=` normal le
+             # hace a NULL en SQL. `crear_ruta()` (ruta ad-hoc del muelle, sin
+             # RutaMaestra) la dejaba sin asignar, y esta consulta la
+             # descartaba en silencio para CUALQUIER rango de fechas: una
+             # ruta ya despachada y con recaudos reales quedaba invisible
+             # para liquidar, sin que ningún filtro la recuperara. Ahora
+             # `crear_ruta()` la asigna (Regla 0), pero esto se queda como
+             # red de seguridad para lo que ya quedó huérfano en producción y
+             # para cualquier otro camino de creación que se le olvide.
+             .filter(or_(
+                 RutaDespacho.fecha_programada.is_(None),
+                 and_(
+                     RutaDespacho.fecha_programada >= fecha_desde,
+                     RutaDespacho.fecha_programada <= fecha_hasta,
+                 ),
+             ))
              .filter(or_(
                  RutaDespacho.estado == 'ENTREGADA',
                  RutaDespacho.estado_financiero != 'PENDIENTE',
@@ -1121,7 +1171,15 @@ def liquidacion_dashboard():
             fp = (r.forma_pago or '').upper()
             if fp == 'EFECTIVO':
                 total_efectivo += monto
-            elif fp == 'TRANSFERENCIA':
+            # `TRANSFERENCIA` a secas (retrocompatible) + los medios
+            # específicos por banco (TRANSFERENCIA_BANCOLOMBIA_AH, etc.,
+            # alineados con `MedioPago` de gestor-cartera-pame) + TARJETA —
+            # todo lo que no es efectivo ni crédito cae en este bucket. Un
+            # `==` fijo contra el string viejo dejaba de contar cualquier
+            # medio nuevo sin que nada avisara — el monto seguía sumando a
+            # `ruta_recaudado`/`total_recaudado`, solo desaparecía del
+            # desglose por medio.
+            elif fp.startswith('TRANSFERENCIA') or fp in ('CONSIGNACION', 'TARJETA'):
                 total_transferencia += monto
             elif fp == 'CREDITO':
                 total_credito += monto

@@ -330,6 +330,16 @@ def create_app():
         resultado = ejecutar_sync()
         click.echo(resultado)
 
+    # ── CLI: flask poblar-stock-minimo-abc ──────────────────────────────────
+    @app.cli.command('poblar-stock-minimo-abc')
+    @click.option('--dry-run', is_flag=True, default=False,
+                  help='Calcula y muestra el resultado sin escribir nada')
+    def cmd_poblar_stock_minimo_abc(dry_run):
+        """Deriva Producto.stock_minimo (NULL) desde clasificacion_abc + stock WMS actual."""
+        from app.services.abc_service import ABCService
+        resultado = ABCService.poblar_stock_minimo_desde_abc(dry_run=dry_run)
+        click.echo(resultado)
+
     # ── Schedulers ─────────────────────────────────────────────────────────
     # Arquitectura: web server corre DLQ + pedidos. Worker separado corre
     # los pesados (sync, inventory, prewarm). Nunca compiten por la DB.
@@ -356,6 +366,12 @@ def create_app():
                 # (serie, semana), así que repetirlo no ensucia nada. Va aquí y no en
                 # _scheduler_pesados para que no dependa de HEAVY_SCHEDULERS=true.
                 ('app.services.vigia_service',              'init_scheduler',          '[VIGIA_SCHEDULER]'),
+                # Esencial: sin este barrido, un hueco PICKING que baja de mínimo por
+                # un conteo/devolución/traslado (no un picking) no genera
+                # TareaReposicion hasta que alguien entre a revisar a mano. El
+                # docstring de reposicion_service.py llevaba tiempo diciendo que
+                # este scheduler existía — no era cierto hasta ahora.
+                ('app.services.reposicion_service',         'init_scheduler',          '[REPOSICION_SCHEDULER]'),
             ]
             for _mod_path, _fn_name, _tag in _scheduler_esenciales:
                 _registrar_scheduler(app, _il, _app_logger, _mod_path, _fn_name, _tag)

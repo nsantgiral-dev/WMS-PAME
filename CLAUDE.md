@@ -141,7 +141,7 @@ texto.
 | 251126 | NotaCredito CrearCruzar | Crea la NC **y cruza cartera** en un solo POST | Devolución de Cliente confirmada por recepción **y** Liquidación de ruta (mismo conector para las dos desde `07cb5df`) | NOTA_CREDITO_DEVOLUCION_CLIENTE, NOTA_CREDITO_FACTURA | `trigger_nota_factura_crear_cruzar()` |
 | 251546 | NotaCredito MotivoDIAN | Segundo POST: fija el motivo DIAN sobre la NC ya creada | Encadenado tras `NOTA_CREDITO_DEVOLUCION_CLIENTE` | MOTIVO_DIAN_NC | `trigger_motivo_dian_nc()` |
 | 142888 | ReciboCaja (RC) | Registro de cobro del conductor | Liquidación: CONTADO | RECIBO_CAJA | `trigger_recibo_caja()` |
-| 142882 | DocumentoContable (DC) | Retenciones tributarias | Liquidación: con retención | DOCUMENTO_CONTABLE_RET | `trigger_documento_contable()` |
+| 142882 | DocumentoContable, tipo **NI** (Nota de legalización) | Retenciones tributarias | Liquidación: con retención | DOCUMENTO_CONTABLE_RET | `trigger_documento_contable()` |
 
 ### Consulta (GET)
 
@@ -180,6 +180,7 @@ recibe por parámetro.
 > `docs/siesa-specs/`. El resto se codificó descubriendo campos contra la API
 > viva. Ver «Specs DOCX del Consultor → Cobertura del lado LECTURA» antes de
 > tocar cualquier conector de esta tabla.
+| papeleriamedellin_WMS_Vendedor_Contacto | `get_vendedor_contacto()` | Nombre + teléfono real del asesor (JOIN T210×T200×T015), para mostrárselo al conductor en pago parcial |
 
 ---
 
@@ -215,7 +216,7 @@ recibe por parámetro.
 | `SIESA_TIPO_DOCTO_REMISION` | `''` | RM | 142945 |
 | `SIESA_TIPO_DOCTO_NOTA_CREDITO` | `NCE` | NC | 142946 |
 | `SIESA_TIPO_DOCTO_RECIBO_CAJA` | `RC` | 13 | 142888 |
-| `SIESA_TIPO_DOCTO_DOCTO_CONTABLE` | `DC` | 30 | 142882 |
+| `SIESA_TIPO_DOCTO_DOCTO_CONTABLE` | `NI` (cambiado 2026-09-04, era `DC`) | 30 | 142882 |
 | `SIESA_TIPO_DOCTO_ENTRADA_OC` | `''` | EO | 142948 |
 | `SIESA_TIPO_DOCTO_AJUSTE` | `ADI` | 63 | 142951 (ajustes) |
 | `SIESA_TIPO_DOCTO_TRASLADO` | `TRA` | 67 | 142951 (averías), 173066 |
@@ -1611,6 +1612,167 @@ a propósito y exigir que lo vea. Sin eso `0 hallazgos` no significa nada.
 
 ---
 
+## Reposición Micro — RESERVA→PICKING (2026-08-27)
+
+Reposición **micro** es la única que queda en el módulo — la macro (alerta
+diaria a Compras por stock total del almacén, sin importar layout físico) se
+retiró el mismo día: `verificar_y_alertar_stock_macro()` y
+`_enviar_alerta_stock_macro()` salieron de `alertas_service.py` completas, sin
+dejar código huérfano. Micro trabaja a nivel de hueco físico, no de
+referencia — son cosas distintas, no una versión reducida de la otra.
+
+### Es 100% cálculo local — cero Siesa
+
+La decisión de "¿hay que reponer este hueco?" nunca consulta Siesa. Vive
+entera en `UbicacionProducto` (una fila por hueco × SKU) y dos campos:
+`cantidad` (lo físico contado ahí) y `reservado` (comprometido a un
+pedido/traslado, todavía no sacado). Reposición mira
+`disponible = cantidad - reservado`, no `cantidad` cruda — así reacciona
+desde el momento en que un pedido **compromete** el hueco, no cuando el
+operario efectivamente lo vacía.
+
+El descuento pasa en dos tiempos, no uno:
+
+1. **Al crear la tarea de picking** (`PickingService.crear_tareas()`, FEFO)
+   — reserva: `reg.reservado += cantidad`. Antes de que el operario camine.
+2. **Al confirmar** (`confirmar_picking()`) — descuento real:
+   `reg.cantidad -= cantidad_recogida`, reserva liberada.
+
+Siesa se entera después y solo para contabilidad — `confirmar_reposicion()`
+dispara el job 173076 (tránsito entre ubicaciones) una vez el WMS ya decidió
+y ejecutó, nunca antes.
+
+### Tres disparadores, no uno
+
+| Disparador | Corre | Por qué |
+|---|---|---|
+| Reactivo | Tras cada picking confirmado (`mobile_service.confirmar_tarea`, hilo background) | El caso normal |
+| Predictivo (`ola_predictiva_service.pre_verificar_ola`) | **Antes** de crear las tareas de picking, cruza demanda total de la ola contra `disponible` | Evita que el picker llegue y encuentre el hueco en 0 porque un pedido grande lo vació entre que se generó la ola y que el picker llegó — el Abastecedor ya va en camino mientras el picker empieza |
+| Barrido cada 30 min (`reposicion_service.init_scheduler`) | Periódico | Cubre stock que bajó por otro camino: conteo cíclico, devolución, traslado |
+
+Los tres alimentan la misma comparación (`stock_actual < Ubicacion.stock_minimo`,
+configurado desde Layout vía `configurar_umbral()` — única función que
+escribe ese campo, la use Reposición o Layout al asignar un SKU) y el mismo
+destino: `TareaReposicion`.
+
+### Cola unificada de dispensación
+
+Reposición dejó de ser una pantalla aparte con botón manual — se integró
+como nivel 2 de la misma cola que ya reparte Picking
+(`mobile_service.get_tarea_actual()`):
+
+```
+1. Pedido / Traslado   (TareaPicking)
+2. Reposición          (TareaReposicion — solo si puede_abastecer)
+3. Conteo cíclico      (SesionConteo)
+```
+
+Orden por criticidad de negocio, no por antigüedad: un hueco PICKING vacío
+bloquea el próximo pedido que se pueda pickear de ahí, así que pesa más que
+Conteo (higiene de inventario, puede esperar sin que nada se detenga por
+eso). Pedido/Traslado le siguen ganando a Reposición porque interrumpir una
+salida en curso para ir a reponer un hueco que hoy nadie está pickeando no
+se justifica.
+
+El botón manual "Cambiar a modo Abastecedor" (`abastVerificarBotonModo` en
+`reposicion.js`) nunca se conectó a nada — quedó como código muerto, borrado
+el mismo día que se integró la cola unificada. La pantalla dedicada del
+abastecedor puro (`puede_abastecer && !puede_picar && !puede_empacar`, login
+directo a `abastIniciar()`) sigue existiendo para quien solo hace
+reposición; el HUD de escaneo (`abastMostrarHUD`) se reutiliza sin cambios
+para los dos caminos — la bandera `ABAST_UNIFICADO` decide a dónde vuelve
+`abastCerrarHUD()` al terminar.
+
+### Exclusivo de NB1
+
+Solo NB1 (Bodega CD) tiene huecos PICKING/RESERVA configurados en Layout —
+verificado en BD (2026-08-27): NS1/NC1/PC1/FC1 solo tienen zona GENERAL.
+Ningún filtro de almacén en el dispensador (`get_tarea_abastecedor`,
+`siguiente_tarea_para`) es necesario hoy por esto — es inerte, no
+corregido; si algún día se activa layout PICKING/RESERVA en otro almacén,
+ese es el momento de revisarlo.
+
+### Bugs encontrados y corregidos en la revisión (2026-08-27)
+
+1. **Choque de advisory lock 2015** —
+   `reposicion_service._barrido_stock_picking` (patrón crudo
+   `pg_try_advisory_lock`) y `abc_service._liberar_zombis` (vía
+   `app/utils/lock.advisory_lock`) usaban el mismo número. Dos jobs
+   **distintos** compartiendo lock se vuelven mutuamente excluyentes sin que
+   nadie lo quisiera — cuando coinciden en la misma ventana de 30 min, uno se
+   salta el ciclo en silencio, y el log no distingue "otro worker corriendo
+   esto mismo" de "un job completamente distinto lo tiene". Reposición migró
+   a `advisory_lock(2016, 'reposicion_barrido')`.
+2. **Reposición zombi sin liberar** — una `TareaReposicion` EN_PROCESO
+   abandonada (LPN mal escaneado, app cerrada a medio camino) no tenía
+   liberación por timeout, a diferencia de Conteo
+   (`ConteoService.liberar_tareas_zombi`). Sin esto, ni otro abastecedor
+   podía tomarla (`get_tarea_abastecedor` solo busca `abastecedor_id=None`)
+   ni el mismo la volvía a ver hasta vaciar su cola de Pedido/Traslado — más
+   consecuente ahora que la cola está unificada. `reposicion_service.
+   liberar_tareas_zombi(timeout_horas=2)`, misma forma que la de Conteo,
+   corre en el mismo barrido de 30 min. `lpn_id` no se toca: se fijó al
+   crear la tarea, no al tomarla, y el LPN sigue ACTIVO.
+3. **`reclasificar_ubicacion()` no bloqueaba con reposición viva** — un
+   hueco PICKING con stock=0 (el estado normal de "espera reposición") y una
+   `TareaReposicion` PENDIENTE apuntándole podía reclasificarse o
+   desactivarse, porque el guardarraíl solo miraba `stock > 0` y stock=0 no
+   lo dispara. Ahora bloquea igual que el guardarraíl de stock, no solo
+   advierte — `capacidad_maxima` sola sigue permitida con tareas vivas, no
+   interrumpe nada físico.
+4. **Toast de confirmación con dato vacío** — `abastConfirmarScan()` leía
+   `d.unidades_movidas` en la raíz de la respuesta de
+   `POST /api/reposicion/confirmar`; el campo vive anidado en
+   `d.tarea.unidades_movidas`. Cosmético — el toast decía "Reposición
+   completada — uds a PIK-XX" sin número.
+
+---
+
+## Teléfono del asesor en pago parcial (2026-09-01)
+
+El conductor no tenía cómo contactar al vendedor que tomó el pedido al
+registrar un pago parcial. `f200_razon_social_vendedor` (nombre) ya viaja en
+`API_v2_Ventas_Facturas_DesdePedido` — usado hace tiempo en la FE — pero esa
+API no trae teléfono, y el maestro de vendedores (`t210_mm_vendedores`) tampoco
+lo tiene directo: hay que unirlo con `t200_mm_terceros`
+(`f210_rowid_tercero = f200_rowid`) y de ahí con `t015_mm_contactos`
+(`f200_rowid_contacto = f015_rowid`), que sí trae `f015_telefono`. Verificado
+en vivo contra Siesa QA con un caso real (Camacho Zapata, NIT 1117492941) antes
+de registrar la consulta.
+
+Nueva consulta dinámica `papeleriamedellin_WMS_Vendedor_Contacto` (armada por
+el usuario vía Generic Transfer, mismo mecanismo que
+`papeleriamedellin_pame_descubrir_tablas`), JOIN de las tres tablas —
+100 vendedores en total, cabe en una sola página (`tamPag=100`). **Sin filtro
+por parámetro**: las consultas dinámicas custom de este ambiente no aceptan
+`parametros` en tiempo real (mismo hallazgo ya documentado en
+`get_terceros_contacto`) — se trae la lista completa una vez por carga de ruta
+y se cruza en memoria por código de vendedor.
+
+`get_vendedor_contacto()` en `connekta_gateway.py`. El código de vendedor
+(`f200_id_vendedor`) ya venía en la respuesta que usa
+`RutaService._valor_y_cond_pago()` (vía `get_rowids_factura`) — no hizo falta
+una llamada extra a Siesa por tarea, solo leer un campo que no se estaba
+leyendo. `listar_paradas()` carga el mapa de vendedores una sola vez por ruta
+y lo cruza por tarea; si el pedido quedó con vendedor `Generico` (dato de
+prueba, no de negocio) el código simplemente no cruza con ningún vendedor real
+y el frontend no muestra el bloque — sin inventar nombre ni teléfono (Regla 0).
+
+**Bug encontrado de paso**: la rama sin FE resuelta de `_valor_y_cond_pago`
+devolvía una tupla de 3 valores (`return None, None, {}`) mientras el único
+caller desempaquetaba 4 — cualquier tarea sin FE habría reventado
+`listar_paradas` con `ValueError`. `base_gravable`/`iva_factura` se agregaron
+en paralelo, en otro cambio, a la misma tupla; el merge de los dos dejó 7
+valores en total, `codigo_vendedor` al final. Los tests de `test_cond_pago.py`
+que la desempaquetaban se actualizaron a la aridad nueva.
+
+Pendiente de ver en la app real: si el `f200_id_vendedor` de pedidos nuevos
+(no los de prueba usados para verificar) trae el código real y no `Generico`
+— eso depende de cómo se estén creando los pedidos en Siesa, no de este
+cambio.
+
+---
+
 ## Pendientes del WMS
 
 `docs/pendientes_wms.md` — la lista viva, contrastada contra BK-OPS-01 v2.1
@@ -2028,3 +2190,405 @@ bloquee algo: **el rediseño de facturar en la liquidación se retiró el
 2026-08-13.** Con la factura emitida siempre antes de la entrega, «FE por lo
 entregado» y la devolución de remisión dejan de hacer falta — el rechazo se
 resuelve con nota crédito contra una factura que ya existe.
+
+## RESUELTO 2026-09-04 — ciclo completo probado en vivo contra Siesa QA real, tres bugs reales encontrados y corregidos
+
+Primera vez que el ciclo entero (Pedido → Picking → Packing → Despacho →
+Muelle → Ruta → Conductor entrega → Liquidación) corrió de punta a punta
+con POSTs **reales** contra Siesa QA, no simulados. Se hizo con 7 pedidos
+reales (`PD1113`, `PD1450`, `PD1451`, `PD1454`, `PD1455`, `PD1456`, más la
+recepción de `OC66`), usando una base SQLite local aislada por corrida
+(nunca la Postgres de producción) y `.env.qa` para las credenciales. El
+ejercicio destapó tres bugs reales que ninguna prueba simulada podía ver
+—exactamente el patrón que ya describía `test_liquidacion_de_punta_a_punta.py`—
+más una configuración de Siesa que faltaba habilitar.
+
+### Bug 1 — `get_factura_desde_pedido()` apuntaba a una consulta que no existe
+
+Ya documentado como hallazgo el 2026-08-14 (ver el bloque `get_factura_desde_pedido`
+más arriba en este archivo), pero nunca corregido en el sitio que de verdad
+bloqueaba: el precheck de `pedido_closer.py` (el cierre normal de **cualquier**
+pedido completo). `papeleriamedellin_monitos_facturas_wms` no está registrada en
+Connekta → 401 → cierre abortado, siempre, no solo en el caso raro. Corregido:
+usa la API estándar `API_v2_Ventas_Facturas_DesdePedido` (la misma que ya usan
+`get_rowids_factura`/`get_factura_desde_remision`), filtrando por
+`f430_consec_docto` — verificado en vivo que ese filtro sí funciona ahí.
+
+### Bug 2 — "sin resultados" es HTTP 400 en Siesa, no 200 con lista vacía
+
+Confirmado en vivo: cuando `API_v2_Ventas_Facturas_DesdePedido` no encuentra
+nada, Siesa responde `HTTP 400` con `{"codigo":1,"detalle":"No se encontraron
+registros, por favor verifique."}` — no un `200` con `Table: []`. `_get()`
+hacía `r.raise_for_status()` antes de mirar el cuerpo, así que este caso
+—el más común, la mayoría de pedidos no tienen FE todavía— era indistinguible
+de un fallo de red real. Corregido: `_get()` detecta este patrón exacto
+(`codigo=1` + `"no se encontraron registros"` en el detalle) y devuelve una
+respuesta vacía normal, sin tocar el resto del manejo de errores.
+
+### Bug 3 — el botón masivo de Liquidación mandaba el Recibo de Caja con cuenta y UN vacías
+
+El más grave de los tres, y el que de verdad bloqueaba el dinero. Ya se había
+encontrado y corregido una vez —caso real PD1411/FE-1416, 2026-08-18— pero
+**solo en `registrar_cobro_recaudo`** (el botón "Registrar Cobro" por parada).
+`_procesar_recaudo` (la función detrás de `LiquidacionService.
+liquidar_ruta_siesa`, el botón masivo **"Liquidar Ruta"** — el que usa el
+administrador en producción) nunca resolvía `cuenta_cxc`/`unidad_negocio`
+contra Siesa: los mandaba vacíos, y el conector caía al fallback fijo
+(`SIESA_CXC_AUXILIAR`, UN por defecto), casi nunca la cuenta real del
+cliente. Rechazo real de Siesa, dos veces, contra dos pedidos distintos
+(PD1125 y PD1450): *"el auxiliar de caja maneja una U.N. diferente a la del
+documento"* + *"El documento de cruce no existe"* — el mismo par de mensajes
+de PD1411/FE-1416, en el otro camino de código.
+
+Corregido extrayendo la resolución a `_resolver_cuenta_cxc()` (función nueva,
+`liquidacion_service.py`) y llamándola también desde `_procesar_recaudo`,
+que ahora pasa `co_factura`/`cuenta_cxc`/`unidad_negocio` reales a
+`_encolar_recibo_caja()` y `_encolar_documento_contable()`. `registrar_cobro_recaudo`
+no se tocó — ya lo hacía bien.
+
+**Detalle operativo importante, medido hoy:** la cartera (`API_v2_CxC_General`)
+tarda en indexar una FE recién creada — no está claro cuánto exactamente (en un
+caso tardó minutos, en otro fue instantáneo), pero **más de lo que documenta la
+Regla 20** (esa regla es sobre el documento en sí, no sobre su indexación en
+cartera). Si el RC se intenta antes de que la fila aparezca en `get_cxc_general`,
+`cuenta_cxc`/`unidad_negocio` vuelven vacíos y el RC se rechaza igual —no por
+el bug ya corregido, sino porque el dato todavía no existe del lado de Siesa—.
+El DLQ ya reintenta solo con backoff, así que no hace falta nada manual; solo
+hay que saber que un RC fallando en el primer minuto después de facturar no es
+necesariamente un bug.
+
+### Configuración — `SIESA_TIPO_DOCTO_DOCTO_CONTABLE` estaba en `DC`, nunca verificado, y `DC` es de compras
+
+El default de código (`connekta_gateway.py`) era `'DC'` desde que se escribió
+esa línea — **nunca confirmado contra el maestro real de Siesa**, ni en este
+repo ni en Railway (verificado: ninguna de las dos variables de entorno lo
+sobreescribe). Al facturar la primera retención real, Siesa rechazó con *"El
+tipo de documento no está autorizado para moverse en la clase de
+importación"*. Revisando el maestro en Siesa Desktop (Maestros → Documentos →
+Tipos de documentos → `DC`): está configurado como **"Documento de Causación"**,
+familia **"05 COMPRAS"**, con **cero** orígenes habilitados del lado de
+Cuentas por Cobrar — es un tipo de documento del lado de compras (egresos a
+proveedores), no del lado de ventas (retención que un cliente aplica sobre lo
+que le paga a la empresa).
+
+La corrección la trajo el proyecto hermano `gestor-cartera-pame`
+(`C:\Users\SSJUAN03\Desktop\gestor-cartera-pame`, mismo Siesa, `F_CIA=1`): su
+CLAUDE.md documenta la entrada **RC1** (26-ago-2026) probando exactamente este
+mismo conector (142882, clase 30) con tipo `RC` — mismo rechazo, palabra por
+palabra. La solución que sí quedó en producción usa tipo de documento **`NI`**
+(Nota de legalización) — ver `src/gestor_cartera/infraestructura/siesa/
+retencion_payload.py`, `TIPO_DOCTO_NC = os.environ.get("SIESA_RET_TIPO_DOCTO",
+"NI")` — con evidencia real: documento `004-NI-7`, **Aprobado**, ReteIVA con
+base gravable, cartera cruzada.
+
+Cambiado el default de `SIESA_TIPO_DOCTO_DOCTO_CONTABLE` de `'DC'` a `'NI'`.
+Verificado en vivo el mismo día contra Siesa QA real, 3 casos (PD1454
+RETEFUENTE_2.5, PD1455 RETEIVA, PD1456 ICA_4X1000): `codigo:0 — Transacción
+Exitosa` en los tres.
+
+### Resultado, verificado en vivo, siete casos reales
+
+| Pedido | Escenario | RM | FE | Muelle→Ruta | RC | NC | DC |
+|---|---|---|---|---|---|---|---|
+| PD1113 | Completo (contado) | RM-1565 | FEW-1470 | — (prueba solo de despacho) | — | — | — |
+| PD1450 | Completo (crédito) | RM-1567 | FEW-1472 | ✅ | ✅ | — | — |
+| PD1451 | Parcial | RM-1568 | FEW-1473 | ✅ | ✅ | ✅ | — |
+| PD1454 | Motivo RETEFUENTE_2.5 | RM-1569 | FEW-1474 | ✅ | ✅ | — | ✅ |
+| PD1455 | Motivo RETEIVA | RM-1570 | FEW-1475 | ✅ | ✅ | — | ✅ |
+| PD1456 | Motivo ICA_4X1000 | RM-1571 | FEW-1476 | ✅ | ✅ | — | ✅ |
+
+Más `OC66` (Recepción, DISPAPELES SAS): parcial 90/100, `142948` real,
+`codigo:0`, verificado también el costeo promedio ponderado en el inventario
+real de Siesa (no solo la cantidad).
+
+Suite completa sin regresiones en las tres corridas del día (mismos ~51
+fallos preexistentes, cero nuevos). Arnés de pruebas simuladas para la
+matriz completa de escenarios: `tests/flujo/test_e2e_ciclo_completo_liquidacion.py`
+(22 escenarios, incluido el muelle real de punta a punta).
+
+---
+
+## Los 12 traslados inter-bodega reales (2026-09-04) — RIT bloqueada por permisos, STS/ETS limpios
+
+Prueba real contra Siesa QA de los 12 traslados posibles entre las 4 bodegas
+principales (NB1, NS1, NC1, PC1 — un traslado por par ordenado, las dos
+direcciones). Script: `scripts/qa_traslado_real.py <ORIGEN> <DESTINO>
+--disparar-real --si-de-verdad`. Ítem usado: `PAPELSP6948`, 5 unidades cada
+uno.
+
+**12/12 terminaron en `ENTREGADA`** — STS (173076/174930) y ETS (173079)
+reales, `codigo:0` en los 24 POSTs (2 por traslado). Verificado que el
+costo también se mueve, no solo la cantidad: `get_stock_bodega()` (que usa
+`API_v2_Inventarios_InvFecha`) devuelve `f400_costo_prom_uni` /
+`f400_costo_prom_tot` poblados y distintos por bodega para `PAPELSP6948`
+tras el traslado NB1↔NS1 (costeo promedio ponderado independiente por
+bodega — normal en Siesa, no es un bug).
+
+### Bug encontrado: `get_consec_rit_by_referencia` usaba una consulta que no existe
+
+`connekta_gateway.py` llamaba a `API_v2_Inventarios_RequisicionesParaTransferir`
+por la URL de consulta **estándar** (`ejecutarconsultaestandar`) para leer de
+vuelta el consecutivo del RIT recién creado. Esa consulta nunca existió en
+Connekta — nombrada por analogía v1→v2 con el conector POST (174646 es
+`API_v1_..._RequisicionesParaTransferir`), igual que el bug de
+`papeleriamedellin_monitos_facturas_wms` (ver más arriba, 2026-09-04): un
+nombre no registrado da 401, indistinguible de un problema de permisos.
+
+El usuario revisó Siesa QA → Administración → Permisos servicios →
+Generador de consultas y encontró el nombre real, registrado como
+**consulta dinámica** (no estándar): `api_tecnocedi_requisiciones_traslado`.
+
+**Corregido en el código** (`get_consec_rit_by_referencia`): nombre correcto
++ `url=self.url_get_dinamico` (`ejecutarconsulta`, no `ejecutarconsultaestandar`)
++ sin `parametros` (las consultas dinámicas custom de este ambiente no los
+soportan, mismo hallazgo que `get_terceros_contacto`/`get_vendedor_contacto`
+— se trae la página y se filtra en memoria).
+
+### Sin resolver: 401 persiste incluso con nombre y permiso correctos — aceptado como no-bloqueante, no se sigue persiguiendo
+
+Con el nombre correcto, la consulta **sigue dando 401** — `"No autorizado...
+verifique si tiene permisos asignados a la consulta dinamica"` — aunque se
+confirmó `api_tecnocedi_requisiciones_traslado` marcado para **dos** usuarios
+candidatos en la grilla de permisos (Santiago Giraldo y WMS WMS; no quedó
+claro cuál de los dos está realmente ligado al `CONNEKTA_IKEY` de `.env.qa`).
+Hipótesis no descartada: el JWT (`CONNEKTA_ITOKEN`) trae los permisos
+"horneados" desde el momento en que se generó, y no se refrescan solo por
+cambiar el checkbox en la grilla — haría falta regenerar el token. **El
+usuario decidió no tocar el IKEY/token por riesgo de romper otras
+integraciones que dependan de él.**
+
+**Decisión (2026-09-04): no se sigue persiguiendo este 401.** El RIT es un
+documento de solicitud/reserva — no mueve inventario ni valor, eso lo hacen
+STS/ETS (que ya funcionan sin depender del RIT, verificado en los 12
+traslados). El WMS ya es la fuente de verdad operativa de quién solicitó y
+aprobó cada traslado (visible para operario/administrador ahí mismo, sin
+pasar por Siesa). La única razón real para arreglar esto sería que alguien
+en contabilidad/inventario consulte el módulo "Requisiciones" de Siesa
+directamente — si nadie lo hace, es cosmético. El código ya lo trata como
+best-effort/no-bloqueante (`TrasladoService` sigue el flujo aunque
+`get_consec_rit_by_referencia` falle) — eso no cambia. Si en el futuro se
+confirma que sí se usa esa pantalla de Siesa, retomar desde acá: nombre y
+URL de la consulta ya están corregidos en `get_consec_rit_by_referencia`,
+falta solo resolver el permiso (probablemente token nuevo).
+
+**Efecto práctico en los 12 traslados:** la RIT (174646) se postea bien
+(`codigo:0`) pero queda huérfana (WMS no puede leer su consecutivo →
+Compromisos 174720 se omite → el despacho sigue por el fallback directo a
+STS). Exactamente el patrón ya documentado en "Las 28 requisiciones
+huérfanas" (2026-08-14), pero esa vez la causa era timing (Regla 20) y esta
+vez es permisos. **Las 12 RIT (una por cada `ST-20260904-*` de la corrida)
+quedaron huérfanas en Siesa QA y deben cerrarse a mano** (Inventarios →
+Requisiciones → buscar por referencia).
+
+**Pendiente, no bloqueante:** confirmar si `SIESA_TIPO_DOCTO_DOCTO_CONTABLE=NI`
+también hace falta configurarlo explícitamente en Railway (producción), o si
+alcanza con el nuevo default de código — no se pudo verificar las variables de
+entorno reales de Railway desde esta sesión.
+
+---
+
+## Conteo cíclico real (sobrante/faltante) + Conteo Definitivo (CC3) hecho por supervisor (2026-09-04)
+
+Dos pruebas reales de ajuste de inventario (142951) contra Siesa QA, más
+una feature nueva sobre el flujo de tercer conteo.
+
+### Bug encontrado: `SIESA_TIPO_DOCTO_AJUSTE=AFI` (debía ser `ADI`)
+
+El `.env` local genérico traía `AFI` para `SIESA_TIPO_DOCTO_AJUSTE` — Siesa
+QA lo rechazó: `"El tipo de documento no esta autorizado para moverse en la
+clase de importación"` (mismo síntoma que el bug DC→NI). Verificado en
+Railway (producción) que el valor real es `ADI` — coincide con el fallback
+del código, pero no había que asumirlo sin comprobar. Agregado explícito a
+`.env.qa` para no depender de qué traiga el `.env` genérico.
+
+### Prueba 1 — sobrante y faltante, CC1==CC2 ("verdad de bodega", ajuste automático)
+
+| Escenario | SKU | Siesa antes | Conteo (CC1=CC2) | Siesa después | WMS después |
+|---|---|---|---|---|---|
+| Sobrante | PAPELSP6948 (NB1) | 631 | 641 | 641 ✅ | 641 ✅ |
+| Faltante | PAPELSP9218 (NB1) | 3570 | 3560 | 3560 ✅ | 3560 ✅ |
+
+Ambos con `codigo:0` reales tras corregir `ADI`. Costo también verificado
+(`f400_costo_prom_uni`/`_tot` recalculados por Siesa, no solo cantidad).
+Script: `scripts/qa_conteo_ciclico_real.py`.
+
+### Feature nueva — Conteo Definitivo (CC3) lo hace un supervisor, no un picker automático
+
+Hasta ahora, cuando CC1≠CC2, `_crear_conteo_verificacion()` corría la
+MISMA búsqueda de "otro picker" para crear CC2 y CC3 — el único filtro era
+`!= operario_de_CC2`. En un equipo chico (2-3 pickers) el CC3 podía
+tocarle de vuelta al mismo operario que hizo CC1, rompiendo el
+double-blind justo en el conteo que DEFINE el ajuste (CC3 es autoritativo
+sin importar si coincide con CC1 o CC2).
+
+**Decisión 2026-09-04:** CC3 nace sin `operario_id` y espera en una cola
+nueva, solo visible para `Roles.SUPERVISION` (admin/supervisor/jefe_almacén):
+
+- `GET /api/conteo/definitivos` — lista los CC3 pendientes. Vista ciega
+  (`to_dict_operario()`): ni existencia_siesa ni lo que contaron CC1/CC2
+  se exponen — el punto de CC3 es que sea independiente de los otros dos.
+- Pantalla nueva en el PWA: **Inventario Cíclico → pestaña "🎯 Definitivo"**
+  (`app/static/pwa/conteo.js`, `index.html`). Mismo lenguaje visual que el
+  conteo ciego de `picking.js` (contador grande, escaneo con cámara,
+  confirmar/manual) pero aislada — no toca `TAREA_ACTUAL` ni `pedirTarea()`
+  de picking.js, que pertenecen a la pantalla del operario. Reutiliza el
+  mismo contrato de API que ya usa picking (`/api/mobile/escanear`,
+  `/api/mobile/confirmar` con `tipo='CONTEO'`).
+- `registrar_conteo()` ahora devuelve `raiz_id` cuando CC3 resuelve en
+  DESCUADRE — la pantalla lo necesita para apuntar el
+  `PUT /api/conteo/<raiz_id>/ajustar` a CC1 (la raíz), no a CC3 mismo.
+
+Tests: `tests/test_conteo_definitivo.py` (5, todos verdes) — cubre que CC3
+nace sin asignar, que la cola es ciega, que un operario normal no puede
+verla (403), y el flujo completo autoasignación→escaneo→confirmación.
+
+### Prueba 2 — Conteo Definitivo real de punta a punta
+
+SKU `PAPELSP9830` (NB1). CC1=1786, CC2=1776 (discordantes a propósito),
+CC3=1789 (definitivo — no coincide con ninguno de los dos, y no tiene que
+hacerlo). Recorrido por los endpoints reales de la pantalla nueva
+(`/api/conteo/definitivos` → `/api/conteo/<id>/tarea` →
+`/api/mobile/escanear` ×N → `/api/mobile/confirmar` →
+`PUT /api/conteo/<raiz_id>/ajustar`), aprobado por un usuario con rol
+`supervisor` (`aprobador_id` real, no `AUTO`).
+
+Resultado: Siesa 1781→**1789** (`codigo:0` real), WMS local→**1789** —
+ambos alineados con el conteo definitivo del supervisor. Script:
+`scripts/qa_conteo_definitivo_real.py`.
+
+---
+
+## Refactor de tamaño de `connekta_gateway.py` — COMPLETO, 8/8 dominios extraídos (2026-09-09)
+
+`connekta_gateway.py` era un God Object de 4693 líneas / 85 métodos.
+Terminó en **1489 líneas** (68% de reducción) partido en 8 módulos
+hermanos, todos con el mismo patrón: la clase de dominio recibe `self` (la
+instancia completa de `ConnektaGateway`) como `core` — no duplica config,
+y `ConnektaGateway` conserva cada método original como delegado delgado
+(misma firma, mismo comportamiento, incluidas las `@property`) para que
+ningún caller (código o tests) cambie.
+
+Los 8 dominios, en orden de extracción: `app/utils/siesa_formato.py`
+(helpers de formato puros), `connekta_circuit_breaker.py`
+(`ConnektaCircuitBreaker`), `connekta_compras_gateway.py`
+(`ConnektaComprasGateway`), `connekta_ajustes_gateway.py`
+(`ConnektaAjustesGateway`), `connekta_consultas_gateway.py`
+(`ConnektaConsultasGateway`, 29 métodos en 3 sub-lotes — el más grande),
+`connekta_traslados_gateway.py` (`ConnektaTrasladosGateway`, 10 métodos —
+RIT/STS/ETS/transferencia directa), `connekta_facturacion_gateway.py`
+(`ConnektaFacturacionGateway`, 4 métodos — comprometer pedido/despacho/
+factura/factura desde remisión) y `connekta_liquidacion_gateway.py`
+(`ConnektaLiquidacionGateway`, 11 miembros — NC 142946/251126/251546,
+recibo de caja 142888, documento contable 142882 — el más delicado,
+dejado para el final a propósito).
+
+Verificado con la suite completa (2926 passing) en cada paso, más pruebas
+reales contra Siesa QA para Consultas, Ajustes, Compras y Traslados (ver
+más abajo). Facturación y Liquidación se extrajeron con la suite completa
+pero SIN prueba real contra Siesa — el usuario pausó las pruebas reales
+después de cerrar Traslados (2026-09-09) para seguir con la refactorización
+en paralelo; pendiente retomar si se necesita verificación en vivo de esos
+dos últimos dominios antes de un eventual push a producción.
+
+**Lección de esta última extracción, para la próxima vez que se toque
+código con tests que usan `unittest.mock.patch.object` sobre el `connekta`
+singleton:** parchear un MÉTODO (no un valor de config) con
+`monkeypatch.setattr(connekta, 'nombre_metodo', fn)` dentro de un test dejó
+un atributo de INSTANCIA permanente en `connekta.__dict__` tras el
+teardown — pytest restaura con `setattr(obj, name, original)`, no
+`delattr`, cuando el valor original venía heredado de la clase. Ese
+sombreado de instancia sobrevivía al test y volvía sordos los parches por
+CLASE (`patch.object(type(connekta), ...)` o `patch.object(ConnektaGateway,
+...)`) que corrían en tests de OTRO archivo después, en la misma sesión de
+pytest — solo visible corriendo la suite completa, no el archivo nuevo
+aislado. Fix: cuando el test necesita stubear un método (no un atributo de
+config), parchear la CLASE (`monkeypatch.setattr(ConnektaGateway, 'x',
+lambda self: ...)`), nunca la instancia `connekta`.
+
+Cada extracción se probó primero con la suite (pytest + tests directos de
+la clase nueva) y luego, para los dominios que hablan con Siesa, con un
+script real contra Siesa QA (`scripts/qa_consultas_gateway_real.py`,
+`scripts/qa_ajustes_gateway_real.py`, `scripts/qa_compras_gateway_real.py`)
+— todos con `.env.qa`, base local aislada, y `MODO_ENSAYO` desactivado
+solo dentro del proceso del script (nunca en el archivo) porque `.env.qa`
+lo trae `true` por seguridad.
+
+**Consultas, verificado real (2026-09-09):** los 3 sub-lotes responden
+igual que antes del refactor — 215 pedidos pendientes, 3988 SKUs únicos de
+stock en NB1, 100 vendedores, 100 terceros, catálogo real. Único "fallo"
+encontrado (`get_ubicaciones_siesa`): no es del código — `API_v2_Ubicaciones`
+devuelve 0 filas en Siesa QA ahora mismo **incluso sin ningún filtro**,
+confirmado con un `_get` crudo por fuera del gateway. Es estado de datos
+de Siesa QA, no una regresión.
+
+**Ajustes, verificado real (2026-09-09):** los dos POST de 142951
+(`enviar_ajuste_inventario` AJ-ENT +1, `transferir_a_averias` -1) sobre
+`PAPELSP9830`/NB1 respondieron `codigo:0`, con el stock real verificado
+antes/durante/después: 1785 → 1786 → 1785 — impacto neto cero, diseñado a
+propósito para probar los dos POST sin dejar el inventario real alterado.
+
+**Compras, verificado real (2026-09-09) — dos hallazgos de negocio nuevos,
+no bugs de código:** `confirmar_entrada_compras` (142948) probado contra
+una OC vieja (003-OC-4, 2024-03-08, nunca antes recibida) reveló que
+`f451_id_tercero_comprador` no estaba resolviéndose porque ni `.env.qa` ni
+`.env` traían `SIESA_NIT_EMPRESA` — se agregó (`52430291`, confirmado por
+el usuario). Contra esa misma OC vieja Siesa igual rechazó con *"el
+tercero comprador no es el de la OC"* — la OC de 2024 tiene el comprador
+vacío, y el NIT de la empresa no es lo que Siesa espera ahí. Se resolvió
+usando una OC **fresca**, creada por el usuario para la prueba (**OC67**,
+003-OC-67, DISPAPELES SAS, ítem PAPELSP9218, comprador real FIGUEROA
+ANACONA NELLY CARMENSA/52430291) — con eso el único campo que faltaba fue
+`num_docto_referencia` (**obligatorio para 142948 en este ambiente,** no
+documentado antes — se pasó `"OC-67"`). Con comprador real +
+`num_docto_referencia` + `fecha_entrega` igual a la de la OC: `codigo:0`,
+`f421_cant_entrada` 0→20 (pedido completo), `f421_ind_estado` 1→3
+(Cumplido).
+
+**Regla operativa para pruebas reales futuras de este refactor (y en
+general):** no reusar pedidos/OCs/documentos viejos que ya estén en un
+estado ambiguo o incompleto (comprador vacío, ya parcialmente procesados)
+— el usuario crea datos frescos en Siesa QA a pedido, sin excepción,
+porque un dato viejo puede fallar por su propio estado histórico y
+disfrazarse de regresión del código.
+
+**Variables agregadas a `.env.qa` (2026-09-09, no son secretos, solo
+config de negocio):** `SIESA_TIPO_DOCTO_ENTRADA_OC=EA`,
+`SIESA_NIT_EMPRESA=52430291`.
+
+**Traslados, verificado real (2026-09-09) — corrección de proceso
+importante:** el usuario aclaró que en este ambiente el flujo real de
+traslados **no pasa por RIT** — `crear_requisicion_traslado` (174646),
+`compromisos_desde_requisicion` (174720) y `transferencia_desde_requisicion`
+(174930) no se usan en producción; el flujo real es STS (173076) directo
+seguido de ETS (173079). La prueba real se ajustó a eso.
+
+Se movieron las mismas 10 unidades de `PAPELSP9218` en cadena por las 10
+bodegas operadas (`BODEGAS_OPERADAS`, ver `tests/test_bodegas_coherentes.py`),
+en dos tramos porque el primero se topó con un estado real de datos:
+
+- Tramo 1: `NB1→NS1→NS2→NC1→FC1→PC1` (5 saltos, 10 documentos, todos
+  `codigo:0`). Se detuvo en `PC1→PT1`: Siesa rechazó por *"Item sin
+  cantidad disponible, Faltante Inv.: -30"* — PC1 ya tenía 152 unidades en
+  "salida sin confirmar" + 8 comprometidas que excedían su existencia
+  **antes** de este traslado. Es un estado de datos preexistente en Siesa
+  QA, no una regresión del código: `_post` lanzó la excepción limpiamente,
+  sin dejar nada a medias.
+- Tramo 2 (arrancando de nuevo desde NB1 para evitar PC1 como origen):
+  `NB1→PT1→FF1→FN1→FP1` (4 saltos, 8 documentos, todos `codigo:0`).
+
+Total: **9 saltos, 18 documentos reales (STS+ETS) en Siesa QA, todos
+`codigo:0`**, las 10 bodegas cubiertas como origen y/o destino al menos
+una vez. En **los 18 documentos** Siesa no devolvió el consecutivo
+parseable en la respuesta directa (`{'codigo': 0, 'mensaje': 'Transacción
+Exitosa', 'detalle': 'Importacion exitosa'}`, sin tabla) — así que el
+camino de recovery (`get_consec_salida_transito_by_alterno`,
+`get_consec_entrada_transito_by_alterno`) se ejercitó de verdad en el
+100% de los casos, no solo en el unit test. El ítem interno del WMS
+`0017368` que se pensó usar primero no existe en el catálogo de Siesa QA
+bajo ninguna variante de formato (verificado con `buscar_item_por_referencia`
+antes de escribir nada) — se usó `PAPELSP9218` en su lugar, ya confirmado
+en catálogo por la prueba de Compras.
+
+Script: `scripts/qa_traslados_gateway_real.py` (`--si-de-verdad`,
+`--desde-salto N` para reanudar, `--cadena A,B,C` para override de ruta —
+usado para el tramo 2).

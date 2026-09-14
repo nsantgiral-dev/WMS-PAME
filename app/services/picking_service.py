@@ -127,31 +127,47 @@ class PickingService:
     def _ubicacion_averias_disponible(almacen_id: int, cantidad_necesaria: int):
         """
         Recorre las ubicaciones AVERIAS del almacén en orden de llenado
-        (AVE1, AVE2...) y devuelve la primera con capacidad disponible.
-        Si ninguna tiene capacidad_maxima configurada, no bloquea el registro
-        de la avería — usa la primera del orden como respaldo.
+        (la más antigua primero) y devuelve la primera con capacidad
+        disponible. Si ninguna tiene capacidad_maxima configurada, no bloquea
+        el registro de la avería — usa la primera del orden como respaldo.
 
-        Los códigos que no son `AVE<n>` van AL FINAL, no al principio. Antes
-        ordenaban con clave 0 —delante de AVE1— y eso no se notaba porque el
-        único código no-AVE de esta zona (`AVERIADOS`, el bin de devoluciones)
-        no estaba marcado como AVERIAS y por lo tanto nunca era candidato. Al
-        marcarlo, la avería de una auditoría de picking habría empezado a caer
-        en el bin de devoluciones en vez de AVE1, en silencio y sin que nadie lo
-        hubiera pedido. El destino de hoy se conserva.
+        Orden por `fecha_creacion`, no por el código: desde que AVERIAS se crea
+        con dirección física real (`layout_service.crear_cuerpo()`) el código ya
+        no trae un número de serie al final (era 'AVE1', 'AVE2'...; ahora es
+        'AVE-A1-C01-E01-H01' o 'AVE-A1-EST01') — parsear un sufijo numérico que
+        ya no existe habría dejado esta función sin orden real.
+
+        ── El bin de devoluciones queda FUERA, y es un defecto del merge ──
+
+        `AVERIADOS` es el bin donde `devolucion_cliente_service` deja lo que
+        vuelve roto de un cliente. Hasta el merge del 2026-09-11 no era
+        candidato acá **por accidente**: no estaba marcado como AVERIAS. La
+        migración `m016` lo marcó, y el orden por `fecha_creacion` lo pone
+        primero (existe desde mucho antes que los bins de cuerpo) — y como se
+        creó sin `capacidad_maxima`, el `return` temprano lo entregaría
+        **incondicionalmente**.
+
+        O sea: la avería que un operario reporta en una auditoría de picking
+        habría empezado a caer en el bin de devoluciones de cliente, en
+        silencio y sin que nadie lo pidiera. El defecto **no está en ninguno de
+        los dos lados**: aparece al juntarlos, porque cada uno quitó la mitad
+        de la protección del otro.
+
+        Se excluye por código, que es lo que conserva el destino de hoy. Es la
+        misma intención que la rama de flota documentaba con su orden por
+        regex, re-implementada sobre el cimiento nuevo. **Si se decide que una
+        avería de picking SÍ puede caer ahí, se quita esta línea** — pero que
+        sea una decisión, no un efecto colateral.
         """
-        import re
-
-        def _orden(ub):
-            m = re.match(r'^AVE(\d+)', ub.codigo, re.IGNORECASE)
-            return (int(m.group(1)) if m else float('inf'), ub.codigo)
-
-        candidatas = sorted(
+        candidatas = (
             Ubicacion.query.filter(
                 Ubicacion.almacen_id == almacen_id,
                 filtro_ubicacion_averias(),
                 Ubicacion.activo.is_(True),
-            ).all(),
-            key=_orden,
+                Ubicacion.codigo != 'AVERIADOS',
+            )
+            .order_by(Ubicacion.fecha_creacion.asc())
+            .all()
         )
 
         for ub in candidatas:
@@ -195,8 +211,24 @@ class PickingService:
         de meses atrás: "antigüedad" no es lo mismo que "ubicación real".
         GENERAL sigue sirviendo de respaldo automático si el hueco real no
         alcanza a cubrir toda la cantidad pedida.
+
+        Cross-Dock (`Ubicacion.tipo == 'cross_dock'`) va PRIMERO, antes que
+        cualquier otra cosa — es mercancía que `recepcion_service._decidir_destino`
+        ya enrutó ahí precisamente porque existía una TareaPicking PENDIENTE
+        para ese producto: existe para cumplir un pedido ya en curso, no para
+        quedarse en el estante. Antes de esta regla, `tipo_zona == 'GENERAL'`
+        trataba Cross-Dock igual que SIESA-GENERAL y el desempate por
+        `fecha_ingreso` casi siempre lo dejaba último — mientras
+        SIESA-GENERAL tuviera con qué cubrir la demanda normal (y la Carga
+        Inicial lo repone completo en cada sync), Cross-Dock nunca se tocaba:
+        verificado en producción, 4,068 unidades en 10 SKUs quietas ahí desde
+        marzo/junio sin que ninguna tarea de picking las haya usado.
         """
-        _prioridad_zona = case((Ubicacion.tipo_zona == 'GENERAL', 1), else_=0)
+        _prioridad_zona = case(
+            (Ubicacion.tipo == 'cross_dock', 0),
+            (Ubicacion.tipo_zona == 'GENERAL', 2),
+            else_=1,
+        )
 
         registros = (
             UbicacionProducto.query
@@ -867,6 +899,15 @@ class PickingService:
         tarea.motivo_bloqueo = motivo
         tarea.observaciones_bloqueo = observaciones
 
+        # Snapshot para el tablero BI (métricas "SKU agotado" / "venta perdida $")
+        # — solo agotado físico real, no el rechazo previo de Siesa (BACKORDER_SIESA
+        # se dispara en bloquear_por_backorder_siesa(), antes de que nadie camine).
+        # Misma transacción que el bloqueo: si el commit de abajo falla, no queda
+        # un evento huérfano sin su tarea.
+        if motivo == 'FALTANTE' and cantidad_faltante > 0:
+            from app.services.eventos_agotado_service import registrar_evento_agotado
+            registrar_evento_agotado(tarea, cantidad_faltante)
+
         # Capturar referencia antes del commit
         _ref_doc_rp = tarea.referencia_documento
 
@@ -894,3 +935,41 @@ class PickingService:
             'cantidad_encontrada': cantidad_encontrada,
             'cantidad_faltante': cantidad_faltante,
         }
+
+    @staticmethod
+    def bloquear_por_backorder_siesa(tareas: list, detalle: str = None) -> None:
+        """
+        Bloquea tareas recién creadas (aún PENDIENTE, sin operario) porque
+        Siesa no comprometió esa línea del pedido — ver
+        `backorder_service.referencias_comprometidas_por_siesa`.
+
+        Reutiliza el mismo ciclo BLOQUEADO → auditar_tarea() que ya existe
+        para "el operario no lo encontró" (`reportar_problema`), en vez de
+        una tabla nueva: mueve reservado→bloqueado exactamente igual, y
+        `auditar_tarea(resultado='DISCREPANCIA_SIESA')` ya sabe descongelarlo
+        y cancelar la tarea — esa opción existía desde antes precisamente
+        para "hay una discrepancia con Siesa, ajustar allá manualmente".
+
+        La diferencia con `reportar_problema` es la fuente: ahí el operario
+        caminó y no lo encontró; acá Siesa lo canceló ANTES de que el
+        operario llegara a intentarlo — el físico puede seguir estando en el
+        estante, solo que Siesa no lo va a facturar en este pedido.
+        """
+        for tarea in tareas:
+            reg = UbicacionProducto.query.filter_by(
+                ubicacion_id=tarea.ubicacion_id,
+                producto_id=tarea.producto_id,
+            ).with_for_update().first()
+            if reg:
+                cant = tarea.cantidad_solicitada
+                reg.bloqueado = reg.bloqueado + cant
+                reg.reservado = max(0, reg.reservado - cant)
+
+            tarea.estado = EstadoPicking.BLOQUEADO
+            tarea.operario_id = None
+            tarea.motivo_bloqueo = 'BACKORDER_SIESA'
+            tarea.observaciones_bloqueo = detalle or (
+                'Siesa no comprometió esta línea del pedido (backorder) — '
+                'no se pickeó, el físico puede seguir disponible para otro pedido.'
+            )
+        db.session.commit()

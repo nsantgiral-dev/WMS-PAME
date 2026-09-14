@@ -11,11 +11,17 @@ Dirección física de 5 ejes: Pasillo -> Fila (1/2, lado del pasillo) -> Cuerpo
 Piezas:
   1. letras_disponibles()   — pasillos: A-Z y luego AA, AB... (revelado progresivo)
   2. crear_cuerpo()         — Mecanismo A: entrepaños+huecos de un Cuerpo, en bloque,
-                              con Zona sugerida por Nivel (piso->PICKING, alto->RESERVA)
-  3. crear_ubicacion_averias() — AVE1, AVE2... numeradas, fuera de la grilla pasillo/fila
-  4. asignar_producto()     — Mecanismo B: bind ubicación↔SKU, con la regla 1:1 en PICKING/IMPORTADOS
-  5. reclasificar_ubicacion() — cambiar zona/capacidad/activo/slot, con guardarraíles
-  6. importar_excel()       — Mecanismo A, opción masiva (reusa asignar_producto)
+                              con Zona sugerida por Nivel (piso->PICKING, alto->RESERVA).
+                              AVERIAS entra por el mismo mecanismo desde 2026-09-03 —
+                              antes se creaba anónima (AVE1, AVE2..., sin pasillo real);
+                              se retiró porque el averiado es dinero trazable y
+                              muchas veces se devuelve — necesita ubicación real, no
+                              un contador. Ver _ubicacion_averias_disponible() en
+                              picking_service.py, el único consumidor automático (solo
+                              LEE ubicaciones existentes, nunca crea una).
+  3. asignar_producto()     — Mecanismo B: bind ubicación↔SKU, con la regla 1:1 en PICKING/IMPORTADOS
+  4. reclasificar_ubicacion() — cambiar zona/capacidad/activo/slot, con guardarraíles
+  5. importar_excel()       — Mecanismo A, opción masiva (reusa asignar_producto)
 
 editar_fila()/eliminar_fila() operan sobre el campo legado 'estante' (fila
 plana previa a este rediseño) — siguen intactas para gestionar en bloque las
@@ -102,16 +108,32 @@ def letras_disponibles(almacen_id: int, minimo_a_mostrar: int = 5):
 
 ZONAS_VALIDAS = ('PICKING', 'RESERVA', 'AVERIAS', 'IMPORTADOS')
 _PREFIJO_ZONA = {'PICKING': 'PIK', 'RESERVA': 'RES', 'AVERIAS': 'AVE', 'IMPORTADOS': 'IMP'}
-_ZONAS_CUERPO = ('PICKING', 'RESERVA', 'IMPORTADOS')  # zonas que se arman con Mecanismo A (Cuerpo completo)
+_ZONAS_CUERPO = ('PICKING', 'RESERVA', 'AVERIAS', 'IMPORTADOS')  # zonas que se arman con Mecanismo A (Cuerpo completo)
 # Zonas donde el Hueco nunca se comparte: 1 SKU <-> 1 ubicación, pool de
 # exclusividad independiente por zona (un SKU puede tener a la vez un slot en
 # PICKING y otro en IMPORTADOS — no compiten entre sí, cada zona es su propia
 # regla 1:1). RESERVA/AVERIAS quedan fuera: ahí N:N es libre.
 _ZONAS_SLOT_UNICO = ('PICKING', 'IMPORTADOS')
 
+# Tipo de mueble físico dentro de un Cuerpo — no confundir con tipo_zona (la
+# función operativa: PICKING/RESERVA/AVERIAS/IMPORTADOS). 'estanteria' es el
+# Cuerpo multi-nivel de siempre (Mecanismo A tal cual). 'vitrina'/'estiba' son
+# un mueble de una sola posición (vitrina de exhibición o pallet en el piso)
+# que no tiene pasillos reales de estantería detrás — pero sigue viviendo en
+# la grilla pasillo/fila/cuerpo a propósito: así hereda el orden de ruta
+# física de picking_service.orden_ruta_fisica() (que manda al final cualquier
+# ubicación sin pasillo asignado — correcto para AVERIAS/GENERAL, pero
+# rompería el recorrido real del operario si una vitrina/estiba que sí es una
+# posición de picking quedara siempre de última). Antes de esto, `tipo` vivía
+# en la tabla sin usarse nunca (siempre 'estanteria', en los dos mecanismos de
+# creación) — no fue necesaria ninguna migración para activarlo.
+_TIPOS_MUEBLE = ('estanteria', 'vitrina', 'estiba')
+_SUFIJO_MUEBLE = {'vitrina': 'VIT', 'estiba': 'EST'}
+
 
 def crear_cuerpo(almacen_id: int, pasillo: str, fila: int, cuerpo: int,
-                 cantidad_entrepanos: int, tipo_zona: str, huecos_por_nivel: list = None):
+                 cantidad_entrepanos: int, tipo_zona: str, huecos_por_nivel: list = None,
+                 tipo_mueble: str = 'estanteria'):
     """
     Crea un Cuerpo completo de una vez: sus N Entrepaños (Nivel 1 = piso, subiendo)
     y, dentro de cada Entrepaño, sus Huecos. huecos_por_nivel es una lista de N
@@ -124,18 +146,37 @@ def crear_cuerpo(almacen_id: int, pasillo: str, fila: int, cuerpo: int,
     cada Hueco se amarran después, uno por uno, con asignar_producto().
 
     Un Cuerpo es 100% de una sola Zona (tipo_zona) — todos sus Entrepaños la
-    heredan. PICKING, RESERVA e IMPORTADOS se arman como Cuerpos separados
-    (Crear picking / Crear reserva / Crear importados en el front), no
-    mezclados por Nivel dentro del mismo Cuerpo: así cada Cuerpo se revisa
-    completo en una sola pestaña de zona.
+    heredan. PICKING, RESERVA, AVERIAS e IMPORTADOS se arman como Cuerpos
+    separados (Crear picking / Crear reserva / Crear avería / Crear
+    importados en el front), no mezclados por Nivel dentro del mismo Cuerpo:
+    así cada Cuerpo se revisa completo en una sola pestaña de zona. AVERIAS
+    entró aquí el 2026-09-03 — antes se creaba anónima (AVE1, AVE2..., sin
+    pasillo real, ver historial de este módulo); el averiado es dinero
+    trazable y muchas veces se devuelve, así que necesita ubicación real
+    igual que cualquier otra zona, no un simple contador.
+
+    tipo_mueble='vitrina'/'estiba' arma un mueble suelto de una sola posición
+    en vez de un Cuerpo de estantería: fuerza cantidad_entrepanos=1 y
+    huecos_por_nivel=[1] sin importar lo que llegue (ver _TIPOS_MUEBLE), y el
+    código generado usa un sufijo propio (VIT/EST) en vez de E{nivel}-H{hueco}
+    — para que no se lea como una bahía de estantería con niveles que no
+    existen.
 
     Dirección física: Pasillo -> Fila (1/2, lado del pasillo) -> Cuerpo (bahía)
     -> Nivel (entrepaño) -> Hueco.
-    Código generado: {PREFIJO}-{PASILLO}{FILA}-C{CUERPO:02d}-E{NIVEL:02d}-H{HUECO:02d}
+    Código generado (estanteria): {PREFIJO}-{PASILLO}{FILA}-C{CUERPO:02d}-E{NIVEL:02d}-H{HUECO:02d}
     ej. PIK-A1-C03-E02-H01 — la letra por eje (C/E/H = Cuerpo/Entrepaño/Hueco)
     evita confundir Cuerpo con Nivel al leer el código (antes eran dos dígitos
     seguidos, indistinguibles sin memorizar la posición).
+    Código generado (vitrina/estiba): {PREFIJO}-{PASILLO}{FILA}-{VIT|EST}{CUERPO:02d}
+    ej. PIK-A1-VIT03.
     """
+    if tipo_mueble not in _TIPOS_MUEBLE:
+        raise ValueError(f'tipo_mueble debe ser una de {_TIPOS_MUEBLE}')
+    if tipo_mueble != 'estanteria':
+        cantidad_entrepanos = 1
+        huecos_por_nivel = [1]
+
     if fila not in (1, 2):
         raise ValueError('fila debe ser 1 o 2 — cada pasillo tiene exactamente 2 filas')
     if cuerpo < 1:
@@ -160,7 +201,10 @@ def crear_cuerpo(almacen_id: int, pasillo: str, fila: int, cuerpo: int,
     creadas = []
     for nivel in range(1, cantidad_entrepanos + 1):
         for hueco in range(1, huecos_por_nivel[nivel - 1] + 1):
-            codigo = f'{prefijo}-{pasillo}{fila}-C{cuerpo:02d}-E{nivel:02d}-H{hueco:02d}'
+            if tipo_mueble == 'estanteria':
+                codigo = f'{prefijo}-{pasillo}{fila}-C{cuerpo:02d}-E{nivel:02d}-H{hueco:02d}'
+            else:
+                codigo = f'{prefijo}-{pasillo}{fila}-{_SUFIJO_MUEBLE[tipo_mueble]}{cuerpo:02d}'
             if Ubicacion.query.filter_by(codigo=codigo).first():
                 raise ValueError(f'La ubicación {codigo} ya existe')
 
@@ -173,7 +217,7 @@ def crear_cuerpo(almacen_id: int, pasillo: str, fila: int, cuerpo: int,
                 nivel=nivel,
                 hueco=hueco,
                 tipo_zona=tipo_zona,
-                tipo='estanteria',
+                tipo=tipo_mueble,
                 origen='MANUAL',
                 activo=True,
             )
@@ -581,38 +625,6 @@ def eliminar_fila(almacen_id: int, pasillo: str, fila: int, forzar: bool = False
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 3. AVERIAS — numeradas (AVE1, AVE2...), fuera de la grilla pasillo/fila
-# ──────────────────────────────────────────────────────────────────────────────
-
-def crear_ubicacion_averias(almacen_id: int, capacidad_maxima: int = None):
-    """Crea la siguiente ubicación AVERIAS disponible (AVE1, AVE2...)."""
-    existentes = Ubicacion.query.filter_by(
-        almacen_id=almacen_id, tipo_zona='AVERIAS'
-    ).all()
-
-    numeros = []
-    for ub in existentes:
-        m = re.match(r'^AVE(\d+)$', ub.codigo, re.IGNORECASE)
-        if m:
-            numeros.append(int(m.group(1)))
-    siguiente = (max(numeros) + 1) if numeros else 1
-    codigo = f'AVE{siguiente}'
-
-    ub = Ubicacion(
-        codigo=codigo,
-        almacen_id=almacen_id,
-        tipo_zona='AVERIAS',
-        tipo='estanteria',
-        capacidad_maxima=capacidad_maxima,
-        origen='MANUAL',
-        activo=True,
-    )
-    db.session.add(ub)
-    db.session.commit()
-    return ub
-
-
-# ──────────────────────────────────────────────────────────────────────────────
 # 4. Mecanismo B — asignar(ubicacion_id, producto_id, cantidad)
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -720,9 +732,13 @@ def editar_cuerpo(almacen_id: int, pasillo: str, fila: int, cuerpo: int,
     de "Editar": corregir la modulación después de empezar a asignar SKUs, no
     solo antes. El stock tampoco bloquea (se traspasa); solo el historial de
     operación física real bloquea.
+
+    Conserva también el tipo_mueble original (estanteria/vitrina/estiba) —
+    igual que la zona, remodular estructura no cambia qué clase de mueble es.
     """
     ubicaciones = _ubicaciones_de_cuerpo(almacen_id, pasillo, fila, cuerpo)
     tipo_zona = ubicaciones[0].tipo_zona  # un cuerpo es 100% de una sola zona
+    tipo_mueble = ubicaciones[0].tipo or 'estanteria'
 
     if cantidad_entrepanos < 1:
         raise ValueError('cantidad_entrepanos debe ser mayor a 0')
@@ -775,16 +791,16 @@ def editar_cuerpo(almacen_id: int, pasillo: str, fila: int, cuerpo: int,
         db.session.delete(ub)
     db.session.flush()
 
-    # Reconstruir desde cero con la nueva numeración (misma zona) — commitea al final
+    # Reconstruir desde cero con la nueva numeración (misma zona, mismo tipo de mueble) — commitea al final
     return crear_cuerpo(
         almacen_id=almacen_id, pasillo=pasillo, fila=fila, cuerpo=cuerpo,
         cantidad_entrepanos=cantidad_entrepanos, tipo_zona=tipo_zona,
-        huecos_por_nivel=huecos_por_nivel,
+        huecos_por_nivel=huecos_por_nivel, tipo_mueble=tipo_mueble,
     )
 
 
 def asignar_producto(ubicacion_id: int, producto_id: int, cantidad: int, usuario_id: int = None,
-                     capacidad_maxima: int = None):
+                     capacidad_maxima: int = None, stock_minimo: int = None):
     """
     Amarra un SKU a una ubicación y suma la cantidad contada.
 
@@ -796,11 +812,31 @@ def asignar_producto(ubicacion_id: int, producto_id: int, cantidad: int, usuario
     liberar el slot primero (ver reclasificar_ubicacion).
     En RESERVA/AVERIAS no hay restricción — N:N libre.
 
-    capacidad_maxima (opcional) solo aplica en PICKING/IMPORTADOS: como ahí el
-    Hueco nunca se comparte con otro SKU, "capacidad del Hueco" y "capacidad
-    para este SKU" son la misma cosa. En RESERVA/AVERIAS un Hueco puede tener
+    capacidad_maxima solo aplica en PICKING/IMPORTADOS: como ahí el Hueco
+    nunca se comparte con otro SKU, "capacidad del Hueco" y "capacidad para
+    este SKU" son la misma cosa. En RESERVA/AVERIAS un Hueco puede tener
     varios SKUs a la vez, así que un solo valor de capacidad por Hueco no
     representa nada — se rechaza para no pisar silenciosamente el dato.
+
+    Es OBLIGATORIA la primera vez que se asigna un SKU a un Hueco PICKING/
+    IMPORTADOS (si el Hueco todavía no tiene una) — en asignaciones
+    posteriores al mismo Hueco ya no hace falta repetirla, la que quedó
+    guardada sigue rigiendo. Y la cantidad total (lo que ya había + lo
+    nuevo) nunca puede superarla: verificado en producción (2026-08-26) que
+    sin esta regla, un lote de asignaciones dejó `capacidad_maxima=100` como
+    relleno en 9 huecos por igual, y dos de ellos terminaron con 200 y 400
+    unidades contadas — una capacidad que no medía nada.
+
+    stock_minimo (opcional, mismo alcance que capacidad_maxima) es el gatillo
+    que lee reposicion_service.verificar_stock_picking() — sin este dato el
+    hueco nunca genera TareaReposicion sin importar qué tan vacío quede.
+    Antes había que asignarlo acá y volver a Reposición → Configurar a
+    escribirlo por separado; ahora se hace en el mismo paso, delegando en
+    reposicion_service.configurar_umbral() — Layout no valida ni escribe
+    estos campos directamente, solo le pasa el dato a quien es dueño de esa
+    regla (si capacidad_maxima también viene, se ofrece como techo por
+    defecto de stock_maximo cuando la ubicación no tiene uno propio; ver
+    esa función para el porqué).
     """
     if cantidad <= 0:
         raise ValueError('cantidad debe ser mayor a 0')
@@ -821,7 +857,18 @@ def asignar_producto(ubicacion_id: int, producto_id: int, cantidad: int, usuario
             f'RESERVA/AVERIAS el Hueco puede compartirse entre varios SKUs'
         )
 
+    # Fila de inventario del hueco — se necesita ANTES de validar la capacidad,
+    # para saber cuánto ya había contado y no solo lo que se suma ahora.
+    reg = UbicacionProducto.query.filter_by(
+        ubicacion_id=ubicacion_id, producto_id=producto_id, lote=None,
+    ).with_for_update().first()
+    saldo_antes = reg.cantidad if reg else 0
+
     if ubicacion.tipo_zona in _ZONAS_SLOT_UNICO:
+        # Los conflictos de slot (más específicos y bloqueantes) van antes que
+        # la exigencia de capacidad — si la asignación de todas formas iba a
+        # fallar por "ya está asignada" o "ya tiene otro slot", ese es el
+        # error que hay que ver, no uno de capacidad que tapa el real.
         if ubicacion.producto_asignado_id and ubicacion.producto_asignado_id != producto_id:
             otro = Producto.query.get(ubicacion.producto_asignado_id)
             raise ValueError(
@@ -839,15 +886,41 @@ def asignar_producto(ubicacion_id: int, producto_id: int, cantidad: int, usuario
                 f'{producto.codigo} ya tiene un slot de {ubicacion.tipo_zona} asignado en {otra_ub.codigo} '
                 f'— libéralo antes de asignar uno nuevo'
             )
+
+        capacidad_efectiva = capacidad_maxima if capacidad_maxima is not None else ubicacion.capacidad_maxima
+        if capacidad_efectiva is None:
+            raise ValueError(
+                f'{ubicacion.codigo} no tiene capacidad_maxima — es obligatoria la primera vez '
+                f'que se asigna un SKU a un Hueco {"/".join(_ZONAS_SLOT_UNICO)} (¿cuántas unidades '
+                f'de {producto.codigo} caben ahí?)'
+            )
+        cantidad_total = saldo_antes + cantidad
+        if cantidad_total > capacidad_efectiva:
+            raise ValueError(
+                f'{ubicacion.codigo}: {cantidad_total} unidades ({saldo_antes} ya contadas + {cantidad} '
+                f'nuevas) exceden la capacidad_maxima de {capacidad_efectiva} — o la cantidad está mal, '
+                f'o el hueco necesita una capacidad_maxima mayor'
+            )
+
         ubicacion.producto_asignado_id = producto_id
 
     if capacidad_maxima is not None:
-        ubicacion.capacidad_maxima = capacidad_maxima
+        ubicacion.capacidad_maxima = capacidad_maxima  # dato propio de Layout: cuánto cabe físicamente
 
-    reg = UbicacionProducto.query.filter_by(
-        ubicacion_id=ubicacion_id, producto_id=producto_id, lote=None,
-    ).with_for_update().first()
+    if stock_minimo is not None or capacidad_maxima is not None:
+        # Layout no conoce las reglas de Reposición (zona válida, mínimo ≤
+        # máximo, cuándo usar capacidad_maxima como techo por defecto) —
+        # se las delega a quien es dueño de ellas. Ver configurar_umbral().
+        from app.services import reposicion_service as _reposicion
+        umbral_kwargs = {}
+        if stock_minimo is not None:
+            umbral_kwargs['stock_minimo'] = stock_minimo
+        if capacidad_maxima is not None:
+            umbral_kwargs['capacidad_referencia'] = capacidad_maxima
+        _reposicion.configurar_umbral(ubicacion.id, **umbral_kwargs)
 
+    # `reg`/`saldo_antes` ya se obtuvieron arriba, antes de validar la
+    # capacidad — no se vuelven a pedir acá.
     if not reg:
         reg = UbicacionProducto(
             ubicacion_id=ubicacion_id, producto_id=producto_id, cantidad=0,
@@ -856,7 +929,6 @@ def asignar_producto(ubicacion_id: int, producto_id: int, cantidad: int, usuario
         db.session.add(reg)
         db.session.flush()
 
-    saldo_antes = reg.cantidad
     reg.cantidad += cantidad
     reg.row_version += 1
 
@@ -909,8 +981,16 @@ def reclasificar_ubicacion(ubicacion_id: int, tipo_zona: str = None,
     Guardarraíles:
       - No reclasifica zona ni desactiva si hay stock activo (cantidad > 0) —
         hay que mover ese stock antes.
-      - Avisa (no bloquea) si hay TareaPicking/TareaReposicion PENDIENTE/EN_PROCESO
-        apuntando a esta ubicación.
+      - Tampoco si hay TareaPicking/TareaReposicion PENDIENTE/EN_PROCESO
+        apuntando a esta ubicación — mismo nivel que el guardarraíl de
+        stock, no solo aviso. Un hueco PICKING con stock=0 y una
+        TareaReposicion PENDIENTE es exactamente el estado normal de "espera
+        reposición": el guardarraíl de stock por sí solo no lo cubre porque
+        stock=0 no dispara `stock > 0`. Sin este bloqueo, reclasificar o
+        desactivar ese hueco a medio camino dejaba a confirmar_reposicion()
+        escribiendo inventario en una ubicación que ya cambió de zona.
+      - capacidad_maxima solo (sin cambio de zona ni desactivación) no exige
+        nada de esto — ajustar cuánto cabe no interrumpe una tarea en curso.
     """
     ubicacion = Ubicacion.query.get(ubicacion_id)
     if not ubicacion:
@@ -924,6 +1004,29 @@ def reclasificar_ubicacion(ubicacion_id: int, tipo_zona: str = None,
         raise ValueError(
             f'{ubicacion.codigo} tiene {stock} unidades activas — muévelas antes de '
             f'reclasificar o desactivar esta ubicación'
+        )
+
+    tareas_picking = TareaPicking.query.filter_by(
+        ubicacion_id=ubicacion_id
+    ).filter(TareaPicking.estado.in_(['PENDIENTE', 'EN_PROCESO'])).count()
+
+    tareas_reposicion = TareaReposicion.query.filter(
+        db.or_(
+            TareaReposicion.ubicacion_picking_id == ubicacion_id,
+            TareaReposicion.ubicacion_reserva_id == ubicacion_id,
+        ),
+        TareaReposicion.estado.in_(['PENDIENTE', 'EN_PROCESO']),
+    ).count()
+
+    if (cambia_zona or desactiva) and (tareas_picking or tareas_reposicion):
+        partes = []
+        if tareas_picking:
+            partes.append(f'{tareas_picking} tarea(s) de Picking')
+        if tareas_reposicion:
+            partes.append(f'{tareas_reposicion} tarea(s) de Reposición')
+        raise ValueError(
+            f'{ubicacion.codigo} tiene {" y ".join(partes)} pendiente(s) — '
+            f'complétalas o cancélalas antes de reclasificar o desactivar esta ubicación'
         )
 
     if liberar_slot:
@@ -943,20 +1046,11 @@ def reclasificar_ubicacion(ubicacion_id: int, tipo_zona: str = None,
     if activo is not None:
         ubicacion.activo = activo
 
+    # capacidad_maxima-only: cambio permitido con tareas vivas (ver docstring),
+    # pero sigue siendo información útil para quien lo edita.
     advertencias = []
-    tareas_picking = TareaPicking.query.filter_by(
-        ubicacion_id=ubicacion_id
-    ).filter(TareaPicking.estado.in_(['PENDIENTE', 'EN_PROCESO'])).count()
     if tareas_picking:
         advertencias.append(f'{tareas_picking} tarea(s) de Picking pendiente(s) en esta ubicación')
-
-    tareas_reposicion = TareaReposicion.query.filter(
-        db.or_(
-            TareaReposicion.ubicacion_picking_id == ubicacion_id,
-            TareaReposicion.ubicacion_reserva_id == ubicacion_id,
-        ),
-        TareaReposicion.estado.in_(['PENDIENTE', 'EN_PROCESO']),
-    ).count()
     if tareas_reposicion:
         advertencias.append(f'{tareas_reposicion} tarea(s) de Reposición pendiente(s) en esta ubicación')
 
@@ -970,7 +1064,9 @@ def reclasificar_ubicacion(ubicacion_id: int, tipo_zona: str = None,
 
 def importar_excel(almacen_id: int, file_stream, usuario_id: int = None):
     """
-    Carga masiva: columnas ubicacion_codigo | producto_codigo | cantidad.
+    Carga masiva: columnas ubicacion_codigo | producto_codigo | cantidad |
+    capacidad_maxima (4ta columna, opcional salvo la primera vez que la fila
+    asigna un SKU a un hueco PICKING/IMPORTADOS — ver asignar_producto()).
     No aborta en la primera fila mala — reporta éxito/error fila por fila,
     igual que necesita una migración de miles de SKUs desde SIESA-GENERAL.
     """
@@ -987,6 +1083,7 @@ def importar_excel(almacen_id: int, file_stream, usuario_id: int = None):
             continue
         try:
             codigo_ub, codigo_prod, cantidad = fila[0], fila[1], fila[2]
+            capacidad_maxima = fila[3] if len(fila) > 3 else None
             if not codigo_ub or not codigo_prod or cantidad is None:
                 raise ValueError('faltan columnas (ubicacion_codigo, producto_codigo, cantidad)')
 
@@ -1000,7 +1097,10 @@ def importar_excel(almacen_id: int, file_stream, usuario_id: int = None):
             if not producto:
                 raise ValueError(f'producto "{codigo_prod}" no existe')
 
-            asignar_producto(ubicacion.id, producto.id, int(cantidad), usuario_id)
+            asignar_producto(
+                ubicacion.id, producto.id, int(cantidad), usuario_id,
+                capacidad_maxima=int(capacidad_maxima) if capacidad_maxima is not None else None,
+            )
             resultados['ok'] += 1
         except Exception as e:
             resultados['errores'].append({'fila': i, 'error': str(e)})

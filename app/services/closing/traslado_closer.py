@@ -205,10 +205,24 @@ class TrasladoPackingCloser(IPackingCloser):
         return items
 
     def _encolar_job_traslado(self, tarea_id: int, solicitud, items_comp: list):
+        # Sin RIT no se bloquea: el ejecutor de DESPACHO_TRASLADO
+        # (siesa_job_service.py) ya sabe despachar sin ella —
+        # `consec_rit=None` cae a 173076 directo (registrar_salida_transito),
+        # el mismo fallback que TrasladoService.despachar() usaba antes de
+        # unificar el cierre de PD y ST en este closer. El payload de abajo
+        # ya trae 'items'/'bodega_origen'/'bodega_destino', que es todo lo
+        # que ese fallback necesita — bloquear acá exigía más de lo que el
+        # job de verdad requiere.
+        #
+        # Si el RIT 174646 sí fue aceptado por Siesa pero el WMS no pudo leer
+        # su consecutivo (huérfana — ver CLAUDE.md "Las 28 requisiciones
+        # huérfanas"), esa RIT queda suelta en Siesa para cerrar a mano; no
+        # bloquea el movimiento real, que sale por el STS directo.
         if not solicitud.siesa_requisicion_consec:
-            raise ValueError(
-                f'Traslado {solicitud.codigo} sin siesa_requisicion_consec — '
-                f'RIT 174646 no completada, no se puede encolar DESPACHO_TRASLADO'
+            logger.warning(
+                '[TRASLADO_CLOSER] %s sin siesa_requisicion_consec — '
+                'DESPACHO_TRASLADO usará 173076 directo (sin RIT)',
+                solicitud.codigo,
             )
         # Incluir COMPLETADO en el filtro: si el DLQ ya procesó el job pero
         # siesa_triggered no se persistió (crash entre commit y post_completado),

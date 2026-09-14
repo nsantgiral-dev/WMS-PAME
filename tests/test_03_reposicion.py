@@ -3,7 +3,6 @@ Test 03 — Motor de Reabastecimiento RESERVA → PICKING.
 Flujo completo: detección de mínimo → asignación → confirmación → LPN CONSUMIDO.
 """
 import pytest
-import unittest.mock as mock
 
 
 class TestVerificarStockPicking:
@@ -65,17 +64,89 @@ class TestVerificarStockPicking:
         assert generadas == 0
         assert TareaReposicion.query.count() == 0
 
-    def test_cantidad_a_reponer_llena_hasta_maximo(self, app, db,
-                                                    inv_picking, inv_reserva,
-                                                    lpn_activo, ub_picking, almacen):
-        """30 en PICKING, max=200 → cantidad_unidades = min(1240, 200-30) = 170."""
+    def test_cantidad_a_reponer_es_el_lpn_entero_cuando_cabe(self, app, db,
+                                                              inv_picking, inv_reserva,
+                                                              lpn_activo, ub_picking, almacen):
+        """
+        "Romper la paca" es atómico -- confirmar_reposicion() mueve
+        lpn.cantidad_actual completo, nunca una fracción (no existe consumo
+        parcial de LPN en el repo). cantidad_unidades en la TAREA tiene que
+        prometer exactamente eso, no un recorte a stock_maximo-stock_actual
+        que después no ocurre de verdad: aquí caben los 1240 UNDs (max=2000,
+        disponible=2000-30=1970 >= 1240), así que la tarea promete 1240.
+        """
         from app.services.reposicion_service import verificar_stock_picking
         from app.models.tarea_reposicion import TareaReposicion
 
         verificar_stock_picking(almacen_id=almacen.id)
 
         tarea = TareaReposicion.query.first()
-        assert tarea.cantidad_unidades == 170  # 200 - 30
+        assert tarea.cantidad_unidades == 1240
+        assert tarea.lpn_id == lpn_activo.id
+
+    def test_no_genera_tarea_si_ningun_lpn_cabe_en_la_capacidad_restante(
+            self, app, db, inv_picking, inv_reserva, lpn_activo, ub_picking, almacen):
+        """
+        Encontrado en vivo (2026-09-07): un LPN real de 1240 UNDs contra un
+        hueco de capacidad 100 se rompia igual y dejaba el hueco con 12x su
+        capacidad declarada -- confirmar_reposicion() no parte LPNs, los
+        mueve enteros. La correccion vive en la ELECCION del candidato: si
+        ningun LPN activo cabe en `disponible`, no se genera tarea (no se
+        recorta la cantidad para que "quepa" en el papel).
+        """
+        from app.services.reposicion_service import verificar_stock_picking
+        from app.models.tarea_reposicion import TareaReposicion
+
+        ub_picking.stock_maximo = 100  # disponible = 100-30 = 70 < 1240 (el LPN)
+        db.session.commit()
+
+        generadas = verificar_stock_picking(almacen_id=almacen.id)
+
+        assert generadas == 0
+        assert TareaReposicion.query.count() == 0
+
+    def test_no_repone_producto_equivocado_en_hueco_asignado(
+            self, app, db, inv_picking, inv_reserva, lpn_activo,
+            ub_picking, producto, producto2, almacen):
+        """
+        ub_picking está asignado en Layout a producto2, pero inv_picking
+        (fixture) tiene inventario de `producto` — el motor no debe reponer
+        el SKU equivocado dentro del hueco de otro, aunque esté bajo mínimo.
+        """
+        from app.services.reposicion_service import verificar_stock_picking
+        from app.models.tarea_reposicion import TareaReposicion
+
+        ub_picking.producto_asignado_id = producto2.id
+        db.session.commit()
+
+        generadas = verificar_stock_picking(almacen_id=almacen.id)
+
+        assert generadas == 0
+        assert TareaReposicion.query.count() == 0
+
+    def test_genera_tarea_para_hueco_asignado_sin_ninguna_fila_de_inventario(
+            self, app, db, lpn_activo, ub_picking, producto, almacen):
+        """
+        Hueco asignado en Layout a `producto` pero sin NINGUNA fila
+        UbicacionProducto todavía (recién asignado y vacío) — invisible
+        para la pasada A (no hay de dónde partir). La pasada B lo trata
+        como stock_actual=0 y genera la tarea igual.
+        """
+        from app.services.reposicion_service import verificar_stock_picking
+        from app.models.tarea_reposicion import TareaReposicion
+        from app.models.inventario import UbicacionProducto
+
+        ub_picking.producto_asignado_id = producto.id
+        db.session.commit()
+        assert UbicacionProducto.query.filter_by(ubicacion_id=ub_picking.id).count() == 0
+
+        generadas = verificar_stock_picking(almacen_id=almacen.id)
+
+        assert generadas == 1
+        tarea = TareaReposicion.query.filter_by(producto_id=producto.id).first()
+        assert tarea is not None
+        assert tarea.ubicacion_picking_id == ub_picking.id
+        assert tarea.cantidad_unidades == 1240  # LPN entero -- cabe en disponible=2000-0
 
 
 class TestAsignacionAbastecedor:
@@ -120,6 +191,8 @@ class TestConfirmarReposicion:
         """
         El flujo dorado: confirmar reposición actualiza todo correctamente.
         LPN → CONSUMIDO, stock PICKING += 1240, TareaReposicion → COMPLETADA.
+        100% WMS — sin Siesa de por medio (RESERVA y PICKING son la misma
+        bodega, ver docstring de confirmar_reposicion, 2026-09-07).
         """
         from app.services.reposicion_service import confirmar_reposicion
         from app.models.lpn import LPN
@@ -129,13 +202,11 @@ class TestConfirmarReposicion:
         tarea_dict = self._setup_tarea(app, db, inv_picking, inv_reserva,
                                         lpn_activo, almacen, usuario)
 
-        # Mockear la DLQ para no llamar a Siesa
-        with mock.patch('app.services.reposicion_service._encolar_siesa_job'):
-            resultado = confirmar_reposicion(
-                tarea_id=tarea_dict['id'],
-                abastecedor_id=usuario.id,
-                lpn_codigo_escaneado='LPN-0000001',
-            )
+        resultado = confirmar_reposicion(
+            tarea_id=tarea_dict['id'],
+            abastecedor_id=usuario.id,
+            lpn_codigo_escaneado='LPN-0000001',
+        )
 
         assert resultado['ok'] is True
 
@@ -179,3 +250,50 @@ class TestConfirmarReposicion:
                 tarea_id=tarea_dict['id'],
                 abastecedor_id=9999,  # otro usuario
             )
+
+
+class TestLiberarTareasZombi:
+
+    def test_libera_en_proceso_vieja(self, app, db, inv_picking, inv_reserva,
+                                      lpn_activo, almacen, usuario):
+        """EN_PROCESO hace >2h sin progreso — se libera a PENDIENTE, sin
+        abastecedor, para que alguien (el mismo u otro) la vuelva a tomar."""
+        from datetime import datetime, timedelta
+        from app.services.reposicion_service import (
+            verificar_stock_picking, get_tarea_abastecedor, liberar_tareas_zombi,
+        )
+        from app.models.tarea_reposicion import TareaReposicion
+
+        verificar_stock_picking(almacen_id=almacen.id)
+        tarea_dict = get_tarea_abastecedor(usuario.id)
+
+        tarea = TareaReposicion.query.get(tarea_dict['id'])
+        tarea.fecha_inicio = datetime.utcnow() - timedelta(hours=3)
+        db.session.commit()
+
+        liberadas = liberar_tareas_zombi(timeout_horas=2)
+
+        assert liberadas == 1
+        db.session.refresh(tarea)
+        assert tarea.estado == 'PENDIENTE'
+        assert tarea.abastecedor_id is None
+        assert tarea.fecha_inicio is None
+        # El LPN no se tocó — nadie lo consumió, sigue disponible para retomar
+        assert tarea.lpn_id == lpn_activo.id
+
+    def test_no_libera_en_proceso_reciente(self, app, db, inv_picking, inv_reserva,
+                                            lpn_activo, almacen, usuario):
+        from app.services.reposicion_service import (
+            verificar_stock_picking, get_tarea_abastecedor, liberar_tareas_zombi,
+        )
+        from app.models.tarea_reposicion import TareaReposicion
+
+        verificar_stock_picking(almacen_id=almacen.id)
+        tarea_dict = get_tarea_abastecedor(usuario.id)
+
+        liberadas = liberar_tareas_zombi(timeout_horas=2)
+
+        assert liberadas == 0
+        tarea = TareaReposicion.query.get(tarea_dict['id'])
+        assert tarea.estado == 'EN_PROCESO'
+        assert tarea.abastecedor_id == usuario.id

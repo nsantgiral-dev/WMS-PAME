@@ -40,6 +40,13 @@ async function pedirTarea() {
         </div>`;
       return;
     }
+    if (d.tipo === 'REPOSICION') {
+      // Nivel 2 de la cola unificada (entre Traslado y Conteo) — reutiliza el
+      // HUD de escaneo del abastecedor, ya construido, en vez de un render propio.
+      TAREA_ACTUAL = d;
+      pickingReponerAhora(d);
+      return;
+    }
     TAREA_ACTUAL = d;
     renderTarea(d);
   } catch (e) {
@@ -80,6 +87,15 @@ function renderTarea(t) {
   const req          = t.cantidad_requerida || 0;
   const pkgsReq      = factor > 1 ? Math.ceil(req / factor) : req;
   const sueltas      = factor > 1 ? unds % factor : 0;
+
+  // "Disponible en Siesa" (PD1447, 2026-09-02): lo que Siesa seguía
+  // comprometiendo para este pedido al momento de crear la tarea — foto de
+  // ese instante, no en vivo (ver disponible_siesa en TareaPicking). `null`
+  // = no se consultó (traslado, tarea manual) — no se muestra nada, nunca
+  // se inventa un número.
+  const dispSiesa = (esPicking && t.disponible_siesa !== null && t.disponible_siesa !== undefined)
+    ? Number(t.disponible_siesa) : null;
+  const dispInsuficiente = dispSiesa !== null && dispSiesa < req;
 
   const htmlContador = tieneEmpaque
     ? `<div style="background:#1a1a1a;border-radius:16px;padding:16px 20px;margin-bottom:12px;">
@@ -128,9 +144,16 @@ function renderTarea(t) {
 
       <div style="background:#111;border-radius:16px;padding:16px;margin-bottom:12px;">
         <div style="font-size:13px;color:#666;">PRODUCTO</div>
-        <div style="font-size:26px;font-weight:700;">${esc(t.producto_codigo)}</div>
-        <div style="font-size:15px;color:#aaa;">${esc(t.producto_nombre)}</div>
+        <div style="font-size:20px;font-weight:700;">${esc(t.producto_nombre)}</div>
+        <div style="font-size:15px;color:#aaa;font-weight:400;">${esc(t.producto_codigo)}</div>
       </div>
+
+      ${dispSiesa !== null ? `
+      <div style="background:${dispInsuficiente ? '#2a1005' : '#0a1a0a'};border:1px solid ${dispInsuficiente ? '#b45309' : '#166534'};border-radius:12px;padding:12px 14px;margin-bottom:12px;text-align:center;">
+        <div style="font-size:11px;color:${dispInsuficiente ? '#fbbf24' : '#4ade80'};font-weight:700;letter-spacing:.5px;">${dispInsuficiente ? '⚠ ' : ''}DISPONIBLE EN SIESA PARA ESTE PEDIDO</div>
+        <div style="font-size:20px;font-weight:800;color:#fff;margin-top:2px;">${dispSiesa} de ${req}</div>
+        ${dispInsuficiente ? `<div style="font-size:11px;color:#d97706;margin-top:2px;">Siesa podría no facturar todo — puede quedar pendiente</div>` : ''}
+      </div>` : ''}
 
       ${esPicking && t.producto_id ? `
       <div id="card-descomposicion" style="background:#0a1a0a;border:2px solid #166534;border-radius:16px;padding:16px;margin-bottom:12px;text-align:center;">

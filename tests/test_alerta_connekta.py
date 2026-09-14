@@ -154,3 +154,41 @@ class TestLosSitiosVivosLevantan:
         assert 'rechazó la consulta' in str(e.value) or \
                'No se pudo' in str(e.value), (
             f'{metodo} se comió el rechazo y devolvió algo que parece datos')
+
+    def test_get_detalle_factura_rechazo_en_rm_no_impide_el_intento_por_pedido(
+            self, monkeypatch):
+        """Visto en vivo el 2026-08-20: Siesa rechaza el filtro por RM
+        (f460_id_tipo_docto/f460_consec_docto) para remisiones cuya FE sí
+        existe — el intento por pedido (f430_consec_docto) la trae completa.
+        Sin este fallback, `resolver_fe` nunca llegaba al intento 2 y
+        `listar_paradas` se quedaba sin la FE (antes del fix del unpack,
+        directamente con un 500)."""
+        from app.services.connekta_gateway import connekta
+        monkeypatch.setattr(connekta, 'modo_simulacion', False)
+
+        _FE_REAL = [{'f350_id_tipo_docto': 'FE', 'f350_consec_docto': 1424,
+                     'f430_consec_docto': 1421}]
+
+        def _get_falso(consulta, params):
+            if 'f460_id_tipo_docto' in params['parametros']:
+                return {'detalle': {'Table': _SOBRE}}  # RM rechazado
+            return {'detalle': {'Table': _FE_REAL}}     # pedido sí funciona
+
+        monkeypatch.setattr(connekta, '_get', _get_falso)
+
+        filas = connekta.get_detalle_factura('RM', 1543, consec_pedido=1421)
+        assert filas == _FE_REAL
+
+    def test_get_detalle_factura_sin_consec_pedido_no_traga_el_rechazo(
+            self, monkeypatch):
+        """Sin un segundo intento que lo reemplace, el rechazo del RM sí
+        tiene que seguir subiendo — tragárselo lo convertiría en "no hay
+        nada" para un caller que nunca pasó consec_pedido."""
+        from app.services.connekta_gateway import connekta
+        monkeypatch.setattr(connekta, 'modo_simulacion', False)
+        monkeypatch.setattr(connekta, '_get',
+                            lambda *a, **k: {'detalle': {'Table': _SOBRE}})
+
+        with pytest.raises(Exception) as e:
+            connekta.get_detalle_factura('RM', 1543)
+        assert 'rechazó la consulta' in str(e.value)

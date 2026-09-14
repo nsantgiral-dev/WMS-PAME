@@ -332,20 +332,45 @@ class TestDesempateDeterminista:
         assert valores == {'A': None}
         assert diag['ambiguas'] == 1
 
-    def test_tarea_sin_fe_devuelve_cuatro_elementos(self, app, db, almacen):
+    def test_tarea_sin_fe_devuelve_la_tupla_COMPLETA(self, app, db, almacen):
         """Encontrado de paso, en el camino de salida temprana: cuando no hay
-        FE resoluble, `_valor_y_cond_pago` devolvía una tupla de **3** mientras
-        sus dos callers desempaquetan **4**. No es un valor mal calculado, es
+        FE resoluble, `_valor_y_cond_pago` devolvía una tupla corta mientras
+        sus callers desempaquetan la larga. No es un valor mal calculado, es
         un `ValueError` que se lleva la lista de paradas entera — y le toca
         justo a la tarea sin factura, que es el caso que el `None` de
-        `es_contado` existe para atender sin romper nada."""
+        `es_contado` existe para atender sin romper nada.
+
+        **La aridad pasó de 4 a 7 en el merge con main del 2026-09-11** (base
+        gravable, IVA y código de vendedor). El test se renombró con ella: se
+        llamaba `..._cuatro_elementos` y habría quedado mintiendo en el nombre,
+        que es como un test deja de decir lo que verifica.
+
+        Se afirma contra la aridad REAL de la función, no contra un 7 escrito
+        a mano: así el día que entre un octavo campo, lo que falla es el
+        `return` que se olvidó —no este test—, que es la advertencia que main
+        dejó escrita en el docstring («cualquier campo nuevo va en LOS TRES»).
+        """
+        import ast
+        import inspect
+        import textwrap
         from app.services.ruta_service import RutaService
 
         with patch('app.services.fe_resolver.resolver_fe_o_none',
                    return_value=(None, None)):
-            valor, contado, valores, crudo = \
-                RutaService._valor_y_cond_pago(object())
-        assert (valor, contado, valores, crudo) == (None, None, {}, None)
+            salida = RutaService._valor_y_cond_pago(object())
+
+        arbol = ast.parse(textwrap.dedent(
+            inspect.getsource(RutaService._valor_y_cond_pago)))
+        aridades = {len(n.value.elts) for n in ast.walk(arbol)
+                    if isinstance(n, ast.Return) and isinstance(n.value, ast.Tuple)}
+        assert len(aridades) == 1, (
+            f'los `return` de la función no coinciden en aridad: {aridades}. '
+            f'Es el defecto que su propio docstring advierte: «cualquier campo '
+            f'nuevo va en LOS TRES».')
+        assert len(salida) == aridades.pop()
+        assert salida[:4] == (None, None, {}, None), (
+            'los cuatro primeros son el contrato viejo y no se mueven: los '
+            'callers de la lista de paradas los leen por posición')
 
     def test_lineas_sin_cantidad_no_entran_ni_al_conteo(self):
         f = self._f()

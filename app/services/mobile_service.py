@@ -4,9 +4,20 @@ Dispensador automático de tareas — el operario pide trabajo, el sistema asign
 """
 
 import logging
+import os
 import threading
 from datetime import datetime, date, time as dtime
 from app.extensions import db
+
+# Un pedido con MENOS líneas (SKU distintos) que esto es "chico": una vez que
+# un operario toma su primera línea, las demás quedan pegadas a ese mismo
+# operario — nadie más puede tomarlas hasta que las termine (o un admin
+# reabra el pedido). Evita partir pedidos pequeños entre varios pickers, que
+# no gana velocidad real y sí le suma coordinación al empaque (esperar al
+# más lento de varios). Un pedido con ESTA cantidad de líneas o más sigue
+# repartiéndose libre entre cualquier picker disponible — ahí sí conviene
+# paralelizar. Solo aplica a PEDIDO, nunca a TRASLADO.
+PEDIDO_LINEAS_PARALELIZABLE = int(os.environ.get('PEDIDO_LINEAS_PARALELIZABLE', '4'))
 
 # Debounce de scans: evita doble-conteo cuando la red cae después del commit
 # y la PWA reintenta el mismo scan. Cache por (tarea_id, tipo, codigo) → (ts, resultado).
@@ -162,6 +173,7 @@ class MobileService:
                 'estado': tarea_activa.estado,
                 'referencia': tarea_activa.referencia_documento,
                 'lote': tarea_activa.lote,
+                'disponible_siesa': float(tarea_activa.disponible_siesa) if tarea_activa.disponible_siesa is not None else None,
             }
 
         # Tomar siguiente tarea de la cola global — más prioritaria y más antigua.
@@ -220,6 +232,42 @@ class MobileService:
                 )
             )
 
+        # Pedido chico (< PEDIDO_LINEAS_PARALELIZABLE líneas = SKU distintos) ya
+        # tocado por OTRO operario -> esta fila no es candidata para mí. "Líneas"
+        # se cuenta sobre TODAS las TareaPicking del documento sin importar su
+        # estado (el tamaño original del pedido no cambia porque una línea ya
+        # se completó). TRASLADO nunca entra aquí — solo PEDIDO (tipo_documento
+        # NULL cuenta como PEDIDO, igual que en _orden_dispatch más abajo).
+        from sqlalchemy.orm import aliased as _aliased
+        _TP_otra = _aliased(TareaPicking)
+        _es_pedido = db.or_(
+            TareaPicking.tipo_documento == 'PEDIDO',
+            TareaPicking.tipo_documento.is_(None),
+        )
+        _lineas_del_doc = (
+            db.session.query(db.func.count(db.func.distinct(_TP_otra.producto_id)))
+            .filter(_TP_otra.referencia_documento == TareaPicking.referencia_documento)
+            .correlate(TareaPicking)
+            .scalar_subquery()
+        )
+        _otro_operario_ya_lo_tiene = (
+            db.session.query(_TP_otra.id)
+            .filter(
+                _TP_otra.referencia_documento == TareaPicking.referencia_documento,
+                _TP_otra.operario_id.isnot(None),
+                _TP_otra.operario_id != operario_id,
+            )
+            .correlate(TareaPicking)
+            .exists()
+        )
+        _filtros_base.append(
+            db.or_(
+                db.not_(_es_pedido),
+                _lineas_del_doc >= PEDIDO_LINEAS_PARALELIZABLE,
+                db.not_(_otro_operario_ya_lo_tiene),
+            )
+        )
+
         # Orden real de despacho — reutiliza PickingService.orden_ruta_fisica()
         # en vez de duplicarlo: una sola fuente de verdad de qué es "cerca".
         # PD (PEDIDO) antes que ST (TRASLADO), luego prioridad, luego el
@@ -265,6 +313,21 @@ class MobileService:
             )
 
         if not tarea:
+            # Reposición RESERVA→PICKING — nivel 2 de la cola unificada, entre
+            # Pedido/Traslado (arriba) y Conteo cíclico (abajo): un hueco
+            # PICKING vacío bloquea el próximo pedido/traslado que se pueda
+            # pickear de ahí, así que pesa más que el conteo (higiene de
+            # inventario, puede esperar). Gateado por puede_abastecer — RESERVA
+            # es zona exclusiva de Abastecedor (ver REGLA ESTRICTA arriba);
+            # roles de tienda/traslado nunca la reciben, igual que Conteo.
+            # Reutiliza get_tarea_abastecedor() — misma función que ya usa la
+            # pantalla dedicada del abastecedor puro, Regla 0.
+            if not _solo_traslado and _u_pick and _u_pick.puede_abastecer:
+                from app.services.reposicion_service import get_tarea_abastecedor as _get_rep
+                rep = _get_rep(operario_id)
+                if rep:
+                    return rep
+
             # Roles de tienda/traslado nunca reciben conteos cíclicos — solo NB1
             if not _solo_traslado:
                 # Retomar el conteo propio en curso (pospuesto arriba porque un
@@ -436,6 +499,7 @@ class MobileService:
         _tarea_referencia = tarea.referencia_documento
         _tarea_lote = tarea.lote
         _tarea_tipo_documento = tarea.tipo_documento or 'PEDIDO'
+        _tarea_disponible_siesa = float(tarea.disponible_siesa) if tarea.disponible_siesa is not None else None
 
         # Asignar picking al operario
         tarea.operario_id = operario_id
@@ -464,6 +528,7 @@ class MobileService:
             'referencia': _tarea_referencia,
             'lote': _tarea_lote,
             'conteo_intercalado': conteo_intercalado,
+            'disponible_siesa': _tarea_disponible_siesa,
         }
         return resultado
 

@@ -24,6 +24,7 @@ const _BODEGAS_ORIGEN = [
 let _TIENDA_SUBTAB = 'solicitudes';
 let _TIENDA_STOCK = [];          // cache del stock de la bodega origen seleccionada
 let _TIENDA_STOCK_ESTADO = 'cargando'; // 'cargando' | 'listo' | 'error'
+let _TIENDA_STOCK_META = { fuente: null, actualizado_en: null }; // de dónde y de cuándo es el stock mostrado
 let _TIENDA_CARRITO = []; // [{producto_id, codigo_siesa, nombre, cantidad, disponible}]
 let _TIENDA_ORIGEN = { id: 'NB1', nombre: 'Bodega Principal' }; // bodega fuente del pedido
 
@@ -138,11 +139,53 @@ async function tiendaCargarStock() {
     const bodega = _TIENDA_ORIGEN.id || 'NB1';
     const d = await get(`/api/traslados/stock-disponible?bodega=${bodega}`);
     _TIENDA_STOCK = (d.items || []).filter(i => i.producto_id && i.disponible > 0);
+    _TIENDA_STOCK_META = { fuente: d.fuente || null, actualizado_en: d.actualizado_en || null };
     _TIENDA_STOCK_ESTADO = 'listo';
   } catch (e) {
+    _TIENDA_STOCK_META = { fuente: null, actualizado_en: null };
     _TIENDA_STOCK_ESTADO = 'error';
   }
   if (_TIENDA_SUBTAB === 'nueva') tiendaRenderStock();
+}
+
+/**
+ * Badge de frescura sobre la lista de "Pedir": de dónde salió el stock
+ * mostrado (Siesa en vivo, respaldo local, o físico WMS) y hace cuánto.
+ * Existe porque el backend puede caer en cascada (Siesa en vivo → snapshot
+ * en BD → físico WMS) sin que la pantalla lo distinga — y sobre un número
+ * viejo sin avisar, la tienda arma un pedido creyendo que es de ahora mismo.
+ */
+function tiendaRenderFrescura() {
+  const el = document.getElementById('tienda-stock-frescura');
+  if (!el) return;
+  if (_TIENDA_STOCK_ESTADO !== 'listo' || !_TIENDA_STOCK_META.fuente) {
+    el.innerHTML = '';
+    return;
+  }
+
+  const { fuente, actualizado_en } = _TIENDA_STOCK_META;
+  let minutos = null;
+  if (actualizado_en) {
+    const ms = Date.now() - new Date(actualizado_en).getTime();
+    if (!isNaN(ms)) minutos = Math.max(0, Math.round(ms / 60000));
+  }
+
+  const ROTULOS = {
+    siesa: 'Stock Siesa',
+    siesa_bd_snapshot: 'Respaldo local — Siesa no respondió al último refresco',
+    wms_fallback: 'Físico WMS — Siesa no disponible',
+    sin_dato: 'Sin datos de stock',
+  };
+  const esAntiguo = fuente !== 'siesa' || (minutos !== null && minutos > 15);
+  const color = esAntiguo ? '#f59e0b' : '#4ade80';
+  const rotulo = ROTULOS[fuente] || fuente;
+  const tiempo = minutos === null ? '' : (minutos < 1 ? ' · hace instantes' : ` · hace ${minutos} min`);
+
+  el.innerHTML = `
+    <div style="display:flex;align-items:center;gap:6px;font-size:11px;color:${color};">
+      <span style="width:7px;height:7px;border-radius:50%;background:${color};flex-shrink:0;"></span>
+      <span>${rotulo}${tiempo}</span>
+    </div>`;
 }
 
 /** Refresh stock from the server for the tienda request form. */
@@ -185,6 +228,7 @@ function tiendaIrPagina(p) {
 
 /** Render the current page of tienda stock list with cart controls. */
 function tiendaRenderStock() {
+  tiendaRenderFrescura();
   const el = document.getElementById('tienda-stock-lista');
   if (!el) return;
   if (_TIENDA_STOCK_ESTADO === 'cargando') {

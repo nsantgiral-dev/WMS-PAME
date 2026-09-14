@@ -82,10 +82,13 @@ EXCEPCIONES = {
     # escribir `zona='CUARENTENA', tipo='cuarentena'` da 2, coincide con lo
     # declarado y el trinquete queda verde. Un permiso rancio no caduca solo.
     'app/services/layout_service.py': (
-        4,
-        '2026-08-20 · catálogo de zonas (`ZONAS_VALIDAS`, `_PREFIJO_ZONA`) y el '
-        'escritor `crear_ubicacion_averias`, que sí marca `tipo_zona` bien. '
-        'Debe tomar la constante de la política. No es de este agente.'
+        3,
+        '2026-08-20 · catálogo de zonas (`ZONAS_VALIDAS`, `_PREFIJO_ZONA`, '
+        '`_ZONAS_CUERPO`). Debe tomar la constante de la política. '
+        '2026-09-11 · bajó de 4 a 3 en el merge con main: se retiró '
+        '`crear_ubicacion_averias` y AVERIAS pasa a crearse por `crear_cuerpo()`, '
+        'así que el escritor que contaba la cuarta ya no existe. La lista solo '
+        'encoge — si vuelve a subir, hay una política nueva escrita aparte.'
     ),
     'app/services/ubicaciones_sync_service.py': (
         1,

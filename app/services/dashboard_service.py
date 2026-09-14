@@ -222,6 +222,23 @@ class DashboardService:
         conteos_descuadre  = c_row.descuadre
         conteos_match_hoy  = c_row.match_hoy
 
+        # CC3 ("Conteo Definitivo") esperando que un supervisor lo tome —
+        # mismo criterio que ConteoService.listar_definitivos(). El CC1==CC2
+        # va a TERCER_CONTEO (no SEGUNDO_CONTEO ni DESCUADRE), así que
+        # `conteos_descuadre` de arriba no lo ve: sin este contador aparte,
+        # un CC3 podía quedar esperando indefinidamente sin ninguna señal en
+        # el dashboard — semáforo en verde con el trabajo bloqueado.
+        from sqlalchemy.orm import aliased as _aliased_origen
+        _origen_cc3 = _aliased_origen(SesionConteo)
+        conteos_definitivos = db.session.query(func.count(SesionConteo.id)).join(
+            _origen_cc3, SesionConteo.sesion_origen_id == _origen_cc3.id
+        ).filter(
+            SesionConteo.almacen_id == almacen_id,
+            SesionConteo.es_segundo_conteo.is_(True),
+            _origen_cc3.es_segundo_conteo.is_(True),
+            SesionConteo.estado.in_(['PENDIENTE', 'EN_PROCESO']),
+        ).scalar() or 0
+
         # --- ALERTAS DE STOCK ---
         # LA MISMA consulta que alertas_stock(), no «la misma lógica»: acá
         # había una copia, y las copias divergen. El KPI del tablero y la lista
@@ -249,7 +266,8 @@ class DashboardService:
             'conteo': {
                 'pendientes': conteos_pendientes,
                 'en_descuadre': conteos_descuadre,
-                'match_hoy': conteos_match_hoy
+                'match_hoy': conteos_match_hoy,
+                'definitivos_pendientes': conteos_definitivos
             },
             'alertas': {
                 'productos_bajo_minimo': productos_bajo_minimo,
@@ -260,7 +278,10 @@ class DashboardService:
 
     @staticmethod
     def productividad_operarios(almacen_id: int, dias: int = 7):
-        """Productividad por operario en los últimos N días."""
+        """Productividad por operario en los últimos N días, más qué está
+        haciendo cada uno ahora mismo (tarea_actual — snapshot EN_PROCESO)."""
+        from app.models.tarea_reposicion import TareaReposicion
+
         fecha_inicio = datetime.utcnow() - timedelta(days=dias)
 
         operarios = Usuario.query.filter(
@@ -333,12 +354,138 @@ class DashboardService:
             ).group_by(SesionConteo.operario_id).all()
         }
 
+        reposiciones_por_op = {
+            row.abastecedor_id: row.cnt
+            for row in db.session.query(
+                TareaReposicion.abastecedor_id,
+                func.count(TareaReposicion.id).label('cnt')
+            ).filter(
+                TareaReposicion.abastecedor_id.in_(operario_ids),
+                TareaReposicion.estado == 'COMPLETADA',
+                TareaReposicion.fecha_completada >= fecha_inicio
+            ).group_by(TareaReposicion.abastecedor_id).all()
+        }
+
+        # --- Actividad en vivo — snapshot de la tarea EN_PROCESO de cada operario ---
+        # Reutiliza el mismo poll de 30s que ya trae `cargarOperarios()` (TIMER_ADMIN
+        # en app.js) — no es un timer nuevo, es un campo más en la misma respuesta.
+        picking_activo = {
+            row.operario_id: row
+            for row in db.session.query(
+                TareaPicking.operario_id,
+                TareaPicking.tipo_documento,
+                TareaPicking.referencia_documento,
+                TareaPicking.fecha_inicio,
+                Ubicacion.codigo.label('ubicacion_codigo'),
+                Producto.nombre.label('producto_nombre'),
+            ).outerjoin(Ubicacion, TareaPicking.ubicacion_id == Ubicacion.id)
+             .outerjoin(Producto, TareaPicking.producto_id == Producto.id)
+             .filter(
+                TareaPicking.operario_id.in_(operario_ids),
+                TareaPicking.estado == 'EN_PROCESO',
+            ).all()
+        }
+        conteo_activo = {
+            row.operario_id: row
+            for row in db.session.query(
+                SesionConteo.operario_id,
+                SesionConteo.codigo,
+                SesionConteo.fecha_inicio,
+                Ubicacion.codigo.label('ubicacion_codigo'),
+                Producto.nombre.label('producto_nombre'),
+            ).outerjoin(Ubicacion, SesionConteo.ubicacion_id == Ubicacion.id)
+             .outerjoin(Producto, SesionConteo.producto_id == Producto.id)
+             .filter(
+                SesionConteo.operario_id.in_(operario_ids),
+                SesionConteo.estado == 'EN_PROCESO',
+            ).all()
+        }
+        reposicion_activa = {
+            row.abastecedor_id: row
+            for row in db.session.query(
+                TareaReposicion.abastecedor_id,
+                TareaReposicion.codigo,
+                TareaReposicion.fecha_inicio,
+                Ubicacion.codigo.label('ubicacion_codigo'),
+                Producto.nombre.label('producto_nombre'),
+            ).outerjoin(Ubicacion, TareaReposicion.ubicacion_picking_id == Ubicacion.id)
+             .outerjoin(Producto, TareaReposicion.producto_id == Producto.id)
+             .filter(
+                TareaReposicion.abastecedor_id.in_(operario_ids),
+                TareaReposicion.estado == 'EN_PROCESO',
+            ).all()
+        }
+        packing_activo = {
+            row.empacador_id: row
+            for row in db.session.query(
+                TareaPacking.empacador_id,
+                TareaPacking.numero_pedido_siesa,
+                TareaPacking.fecha_inicio,
+            ).filter(
+                TareaPacking.empacador_id.in_(operario_ids),
+                TareaPacking.estado == 'EN_PROCESO',
+            ).all()
+        }
+
+        ahora = datetime.utcnow()
+
+        def _minutos(fecha_inicio_tarea):
+            if not fecha_inicio_tarea:
+                return None
+            return max(0, int((ahora - fecha_inicio_tarea).total_seconds() // 60))
+
+        def _tarea_actual(operario_id):
+            """Precedencia PICKING > REPOSICION > CONTEO > PACKING — un operario
+            solo puede estar EN_PROCESO en un tipo a la vez salvo el caso borde
+            de traer un conteo intercalado pausado (mobile_service.get_tarea_actual);
+            ese caso ya se resuelve solo porque el conteo no vuelve a EN_PROCESO
+            hasta que se retoma."""
+            p = picking_activo.get(operario_id)
+            if p:
+                return {
+                    'tipo': 'PICKING',
+                    'tipo_documento': p.tipo_documento or 'PEDIDO',
+                    'referencia': p.referencia_documento,
+                    'ubicacion': p.ubicacion_codigo,
+                    'producto': p.producto_nombre,
+                    'minutos_en_tarea': _minutos(p.fecha_inicio),
+                }
+            r = reposicion_activa.get(operario_id)
+            if r:
+                return {
+                    'tipo': 'REPOSICION',
+                    'referencia': r.codigo,
+                    'ubicacion': r.ubicacion_codigo,
+                    'producto': r.producto_nombre,
+                    'minutos_en_tarea': _minutos(r.fecha_inicio),
+                }
+            c = conteo_activo.get(operario_id)
+            if c:
+                return {
+                    'tipo': 'CONTEO',
+                    'referencia': c.codigo,
+                    'ubicacion': c.ubicacion_codigo,
+                    'producto': c.producto_nombre,
+                    'minutos_en_tarea': _minutos(c.fecha_inicio),
+                }
+            pk = packing_activo.get(operario_id)
+            if pk:
+                return {
+                    'tipo': 'PACKING',
+                    'referencia': pk.numero_pedido_siesa,
+                    'ubicacion': 'ZONA PACKING',
+                    'producto': None,
+                    'minutos_en_tarea': _minutos(pk.fecha_inicio),
+                }
+            return None
+
         resultado = []
         for operario in operarios:
             pickings = pickings_por_op.get(operario.id, 0)
             packings = packings_por_op.get(operario.id, 0)
             conteos = conteos_por_op.get(operario.id, 0)
             conteos_hoy = conteos_hoy_por_op.get(operario.id, 0)
+            reposiciones = reposiciones_por_op.get(operario.id, 0)
             resultado.append({
                 'operario_id': operario.id,
                 'nombre': operario.nombre,
@@ -347,8 +494,10 @@ class DashboardService:
                 'packings_completados': packings,
                 'conteos_completados': conteos,
                 'conteos_hoy': conteos_hoy,
+                'reposiciones_completadas': reposiciones,
                 'capacidad_diaria_conteo': operario.capacidad_diaria_conteo if operario.capacidad_diaria_conteo is not None else 15,
-                'total_tareas': pickings + packings + conteos
+                'total_tareas': pickings + packings + conteos + reposiciones,
+                'tarea_actual': _tarea_actual(operario.id),
             })
 
         resultado.sort(key=lambda x: x['total_tareas'], reverse=True)

@@ -1383,7 +1383,7 @@ async function buscarPedidoDevolucion() {
  * Renderiza la tabla de líneas facturadas para contar físicamente la devolución.
  * @param {Object} datos - Resultado de GET /api/devoluciones/pedido/<numero>:
  *   tarea_packing_id, numero_pedido_siesa, cliente, almacen_id, tipo_docto_fe,
- *   consec_fe, lineas[{producto_id, producto_codigo, producto_nombre,
+ *   consec_fe, lineas[{producto_id, producto_codigo, producto_nombre, codigo_barras,
  *   codigo_siesa, cantidad_facturada, f470_id_unidad_medida, f150_id_bodega, f470_rowid}]
  */
 function renderLineasDevolucion(datos) {
@@ -1427,6 +1427,26 @@ function renderLineasDevolucion(datos) {
     ` : `
     <div style="font-size:12px;color:#666;margin-bottom:10px;">Cuenta cuánto trajo el conductor de cada línea — deja en 0 lo que no se devolvió</div>
     `}
+
+    <div style="background:#111;border-radius:10px;padding:12px;margin-bottom:12px;">
+      <div style="font-size:12px;color:#666;text-align:center;margin-bottom:10px;">Escanea cada unidad devuelta — suma 1 a la línea, hasta el tope facturado</div>
+      <button onclick="abrirCamara('lector-qr-dev','camara-box-dev', cod => { cerrarCamara('camara-box-dev'); procesarScanDevolucion(cod); })"
+        style="width:100%;padding:13px;font-size:16px;background:#fff;color:#000;border:2px solid #000;border-radius:10px;cursor:pointer;margin-bottom:8px;">
+        📷 Escanear con cámara
+      </button>
+      <div id="camara-box-dev" style="display:none;margin-bottom:8px;">
+        <div id="lector-qr-dev" style="border-radius:10px;overflow:hidden;"></div>
+        <button onclick="cerrarCamara('camara-box-dev')" style="width:100%;padding:9px;margin-top:6px;font-size:14px;background:#333;color:#fff;border:none;border-radius:8px;cursor:pointer;">Cerrar cámara</button>
+      </div>
+      <div style="display:flex;gap:8px;">
+        <input id="dev-codigo-manual" type="text" placeholder="O escribe / pega el código aquí"
+          style="flex:1;padding:10px;background:#0d0d0d;border:1px solid #333;border-radius:8px;color:#fff;font-size:14px;"
+          onkeydown="if(event.key==='Enter'){ const v=this.value.trim(); if(v){ procesarScanDevolucion(v); this.value=''; } }"
+          autocomplete="off" autocorrect="off" spellcheck="false">
+        <button onclick="const v=document.getElementById('dev-codigo-manual').value.trim();if(v){procesarScanDevolucion(v);document.getElementById('dev-codigo-manual').value='';}"
+          style="padding:10px 14px;background:#1d4ed8;color:#fff;border:none;border-radius:8px;font-size:18px;cursor:pointer;">↵</button>
+      </div>
+    </div>
 
     ${filas}
 
@@ -1577,7 +1597,8 @@ async function procesarScanDevolucion(codigo) {
   const datos = DEVOLUCION_ACTUAL;
   if (!datos || !datos.lineas) return;
   const cod = (codigo || '').trim();
-  const idx = datos.lineas.findIndex(l => l.codigo_siesa === cod || l.producto_codigo === cod);
+  const idx = datos.lineas.findIndex(l =>
+    l.codigo_barras === cod || l.codigo_siesa === cod || l.producto_codigo === cod);
   if (idx === -1) { alerta('Código no corresponde a ninguna línea de este pedido', 'advertencia'); return; }
 
   const inp = document.getElementById(`cant-dev-${idx}`);

@@ -181,8 +181,12 @@ def ub_reserva(db, almacen):
 @pytest.fixture
 def ub_picking(db, almacen):
     from app.models.ubicacion import Ubicacion
+    # stock_maximo=2000, no 200: tiene que caber el LPN de 1240 UNDs de
+    # lpn_activo entero -- "romper la paca" es atómico (ver
+    # reposicion_service._generar_tarea_si_hace_falta, 2026-09-07), un LPN
+    # que no cabe en la capacidad restante simplemente no es candidato.
     u = Ubicacion(codigo='PIK-01-A', almacen_id=almacen.id,
-                  tipo_zona='PICKING', stock_minimo=50, stock_maximo=200,
+                  tipo_zona='PICKING', stock_minimo=50, stock_maximo=2000,
                   secuencia_ruteo=1, activo=True)
     db.session.add(u)
     db.session.commit()
@@ -321,6 +325,33 @@ def jwt_token_abastecedor(app, usuario_abastecedor):
     from flask_jwt_extended import create_access_token
     with app.app_context():
         return create_access_token(identity=str(usuario_abastecedor.id))
+
+
+@pytest.fixture
+def usuario_organiza_layout(db, almacen):
+    """Usuario operario con permiso puede_organizar_layout=True."""
+    from app.models.usuario import Usuario
+    from werkzeug.security import generate_password_hash
+    u = Usuario(
+        nombre='Organiza Layout Test',
+        email='organiza_layout@test.com',
+        password_hash=generate_password_hash('test123'),
+        rol='operario',
+        almacen_id=almacen.id,
+        activo=True,
+        puede_organizar_layout=True,
+    )
+    db.session.add(u)
+    db.session.commit()
+    return u
+
+
+@pytest.fixture
+def jwt_token_organiza_layout(app, usuario_organiza_layout):
+    """Token JWT para usuario operario con puede_organizar_layout=True."""
+    from flask_jwt_extended import create_access_token
+    with app.app_context():
+        return create_access_token(identity=str(usuario_organiza_layout.id))
 
 
 def hoy_operativo():

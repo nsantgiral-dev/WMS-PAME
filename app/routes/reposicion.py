@@ -30,7 +30,7 @@ from app.routes._auth_helpers import _es_admin_o_jefe, Roles
 from app.services.alertas_service import enviar_email, _config_resend
 from app.services.connekta_gateway import connekta
 from app.services.ola_predictiva_service import pre_verificar_ola as _verificar
-from app.services.reposicion_service import confirmar_reposicion, get_tarea_abastecedor, get_tareas_abastecedor, verificar_stock_picking
+from app.services.reposicion_service import confirmar_reposicion, configurar_umbral, get_tarea_abastecedor, get_tareas_abastecedor, verificar_stock_picking
 from app.services.siesa_job_service import get_jobs_fallidos, reintentar_job as _reintentar
 from app.services.ubicaciones_sync_service import get_estado, sync_ubicaciones_desde_siesa
 
@@ -139,14 +139,21 @@ def verificar_stock():
 @reposicion_bp.route('/pendientes', methods=['GET'])
 @jwt_required()
 def pendientes():
-    """Lista tareas filtradas por estado (admin / jefe de almacén)."""
+    """Lista tareas filtradas por estado — lectura, roles de gestión.
+
+    Ampliado de ALMACEN a GESTION (2026-09-07): respalda la pestaña "Tareas"
+    de la pantalla Reposición, que el PWA ya muestra a supervisor/gerente
+    (no está en `_TABS_OCULTAS_SUPERVISOR`) — con el guard viejo el 403
+    dejaba la pestaña en "Error cargando ubicaciones"/tareas para esos
+    roles. Solo lectura; cancelar/sync/verificar-stock siguen en ALMACEN.
+    """
     try:
         usuario_id = int(get_jwt_identity())
     except (TypeError, ValueError):
         return jsonify({'error': 'Token inválido'}), 401
     usuario = Usuario.query.get(usuario_id)
-    if not usuario or usuario.rol not in Roles.ALMACEN:
-        return jsonify({'error': 'Solo admin o jefe de almacén puede ver todas las tareas'}), 403
+    if not usuario or usuario.rol not in Roles.GESTION:
+        return jsonify({'error': 'Sin permiso para ver las tareas de reposición'}), 403
     estado = request.args.get('estado', '').upper()
     estados_validos = {
         EstadoReposicion.PENDIENTE, EstadoReposicion.EN_PROCESO,
@@ -248,24 +255,32 @@ def configurar_limites(ubicacion_id):
     El jefe de bodega los ajusta aquí.
 
     Payload: { stock_minimo, stock_maximo, secuencia_ruteo (opcional) }
+    La validación (zona, signo, mínimo ≤ máximo) vive en
+    reposicion_service.configurar_umbral — única función que la aplica,
+    la use esta ruta o Layout al asignar un SKU.
     """
     if not _es_admin_o_jefe():
         return jsonify({'error': 'Solo admin o jefe de almacén pueden configurar límites'}), 403
 
-    ub = Ubicacion.query.get(ubicacion_id)
-    if not ub:
+    if not Ubicacion.query.get(ubicacion_id):
         return jsonify({'error': f'Ubicación {ubicacion_id} no encontrada'}), 404
 
     data = request.get_json() or {}
+    kwargs = {}
     try:
         if 'stock_minimo' in data:
-            ub.stock_minimo = int(data['stock_minimo']) if data['stock_minimo'] is not None else None
+            kwargs['stock_minimo'] = int(data['stock_minimo']) if data['stock_minimo'] is not None else None
         if 'stock_maximo' in data:
-            ub.stock_maximo = int(data['stock_maximo']) if data['stock_maximo'] is not None else None
+            kwargs['stock_maximo'] = int(data['stock_maximo']) if data['stock_maximo'] is not None else None
         if 'secuencia_ruteo' in data:
-            ub.secuencia_ruteo = int(data['secuencia_ruteo']) if data['secuencia_ruteo'] is not None else None
+            kwargs['secuencia_ruteo'] = int(data['secuencia_ruteo']) if data['secuencia_ruteo'] is not None else None
     except (TypeError, ValueError) as e:
         return jsonify({'error': f'Valor numérico inválido: {e}'}), 400
+
+    try:
+        ub = configurar_umbral(ubicacion_id, **kwargs)
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
 
     db.session.commit()
     return jsonify({'ok': True, 'ubicacion': ub.to_dict()}), 200
@@ -275,18 +290,22 @@ def configurar_limites(ubicacion_id):
 @jwt_required()
 def listar_ubicaciones_picking():
     """
-    Lista ubicaciones PICKING con sus límites configurados.
-    El admin ve aquí qué zonas tienen min/max y cuáles faltan por configurar.
+    Lista ubicaciones PICKING con sus límites configurados — lectura, roles
+    de gestión. Respalda la pestaña "Ubicaciones" de Reposición; ver la nota
+    en `pendientes()` sobre por qué se amplió de ALMACEN.
     """
     try:
         uid = int(get_jwt_identity())
     except (TypeError, ValueError):
         return jsonify({'error': 'Token inválido'}), 401
     u = Usuario.query.get(uid)
-    if not u or u.rol not in Roles.ALMACEN:
+    if not u or u.rol not in Roles.GESTION:
         return jsonify({'error': 'Sin permiso'}), 403
     almacen_id = request.args.get('almacen_id', type=int)
-    q = Ubicacion.query.filter(Ubicacion.tipo_zona == 'PICKING', Ubicacion.activo == True)
+    from sqlalchemy.orm import joinedload
+    q = (Ubicacion.query
+         .options(joinedload(Ubicacion.producto_asignado))
+         .filter(Ubicacion.tipo_zona == 'PICKING', Ubicacion.activo == True))
     if almacen_id:
         q = q.filter(Ubicacion.almacen_id == almacen_id)
 
@@ -316,17 +335,27 @@ def listar_ubicaciones_picking():
         d['productos_count'] = len(inventarios)
         d['limites_configurados'] = ub.stock_minimo is not None and ub.stock_maximo is not None
 
-        # SKU dominante (el que tiene más stock en esta ubicación)
+        # `producto_asignado_*` (ya viene en ub.to_dict()) es la asignación
+        # deliberada de Layout — la fuente autoritativa de "qué SKU va en
+        # este hueco". `inventario_detectado` es lo que UbicacionProducto
+        # dice que hay físicamente ahora — puede divergir: un residuo de
+        # cantidad=0 de una carga vieja, o stock de un producto que nunca
+        # se asignó en Layout. Antes esta ruta mostraba el inventario COMO
+        # SI fuera la asignación (confundía "hay un registro acá" con
+        # "esto fue decidido"), y Layout contaba huecos "sin asignar" que
+        # Reposición mostraba con SKU y nombre — mismo hueco, dos
+        # respuestas distintas a la misma pregunta.
+        d['inventario_detectado'] = None
         if inventarios:
             inv_top = max(inventarios, key=lambda i: i.cantidad or 0)
-            prod = prods_map.get(inv_top.producto_id)
-            d['sku_asignado'] = {
-                'id': inv_top.producto_id,
-                'codigo': prod.codigo if prod else None,
-                'nombre': prod.nombre if prod else None,
-            }
-        else:
-            d['sku_asignado'] = None
+            if inv_top.producto_id != ub.producto_asignado_id:
+                prod = prods_map.get(inv_top.producto_id)
+                d['inventario_detectado'] = {
+                    'id': inv_top.producto_id,
+                    'codigo': prod.codigo if prod else None,
+                    'nombre': prod.nombre if prod else None,
+                    'cantidad': inv_top.cantidad,
+                }
 
         resultado.append(d)
 
@@ -346,13 +375,16 @@ def listar_ubicaciones_picking():
 @reposicion_bp.route('/ubicaciones-huerfanas', methods=['GET'])
 @jwt_required()
 def ubicaciones_huerfanas():
-    """Lista ubicaciones en cuarentena (prefijo inválido detectado en sync Siesa)."""
+    """Lista ubicaciones en cuarentena (prefijo inválido detectado en sync
+    Siesa) — lectura, roles de gestión. Respalda la pestaña "Huérfanas" de
+    Reposición; ver la nota en `pendientes()` sobre por qué se amplió de
+    ALMACEN."""
     try:
         uid = int(get_jwt_identity())
     except (TypeError, ValueError):
         return jsonify({'error': 'Token inválido'}), 401
     u = Usuario.query.get(uid)
-    if not u or u.rol not in Roles.ALMACEN:
+    if not u or u.rol not in Roles.GESTION:
         return jsonify({'error': 'Sin permiso'}), 403
     items = UbicacionHuerfana.query.order_by(
         UbicacionHuerfana.veces_detectada.desc(),

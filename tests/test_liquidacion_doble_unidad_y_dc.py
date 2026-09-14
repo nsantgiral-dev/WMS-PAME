@@ -505,13 +505,34 @@ class TestDCQueSiEncola:
     """**La otra dirección.** Una retención que sí encola sigue contando 1 y
     devolviendo exactamente lo mismo que antes del arreglo."""
 
-    def test_monto_declarado_encola_y_cuenta_uno(self, app, db, recaudo_liq):
+    def test_retencion_que_cuadra_encola_y_cuenta_uno(self, app, db, recaudo_liq):
+        """Se llamaba `test_monto_declarado_...` y el nombre dejó de ser cierto
+        en el merge con main del 2026-09-11.
+
+        Antes, el monto del documento contable salía de lo que el conductor
+        **declaró**. Main lo cambió a **recalcularlo siempre contra Siesa**, con
+        su razón escrita: el estimado de pantalla es una vista previa que puede
+        quedar desactualizada, y un ReteIVA mal calculado ya costó ~6× una vez.
+        Lo declarado quedó como traza en el log.
+
+        La propiedad que este test protege no cambió —una retención que sí
+        encola cuenta 1 y no declara errores— pero el fixture tenía que
+        volverse coherente: se siembran las líneas de Siesa de las que sale el
+        21.008,40 y el recaudo declara el **neto** (1.000.000 − 21.008,40), que
+        es lo que el conductor cobra de verdad cuando hay retención. Con el
+        millón redondo levanta el guard nuevo de main, y hace bien.
+        """
         from app.models.siesa_job import SiesaJob
 
-        recaudo = recaudo_liq(estado='ENTREGADO', pago='EFECTIVO', monto=1000000,
+        recaudo = recaudo_liq(estado='ENTREGADO', pago='EFECTIVO',
+                              monto=978991.60,
                               motivo_desc='RETEFUENTE_2.5', monto_desc=21008.40)
 
-        resultado = _procesar(recaudo, db)
+        with patch('app.services.connekta_gateway.connekta.get_rowids_factura',
+                   return_value=[{'f470_vlr_bruto': 840336, 'f470_vlr_imp': 159664,
+                                  'f470_vlr_neto': 1000000, 'f120_referencia': 'REF001',
+                                  'f470_rowid': 'R1'}]):
+            resultado = _procesar(recaudo, db)
 
         jobs = SiesaJob.query.filter_by(
             referencia_id=recaudo.id, tipo='DOCUMENTO_CONTABLE_RET').all()
@@ -527,7 +548,12 @@ class TestDCQueSiEncola:
         reteIVA sobre el IVA real (159.664 × 0.15), no sobre lo cobrado."""
         from app.models.siesa_job import SiesaJob
 
-        recaudo = recaudo_liq(estado='ENTREGADO', pago='EFECTIVO', monto=1000000,
+        # 976.050,40 = 1.000.000 − 23.949,60 (la RETEIVA sobre el IVA real).
+        # El conductor cobra el neto: declarar el millón redondo levanta
+        # `_validar_diferencia_declarada`, el guard que main agregó para que el
+        # monto del RC no salga de un número que nadie comparó contra Siesa.
+        recaudo = recaudo_liq(estado='ENTREGADO', pago='EFECTIVO',
+                              monto=976050.40,
                               motivo_desc='RETEIVA', monto_desc=0)
 
         with patch('app.services.connekta_gateway.connekta.get_rowids_factura',

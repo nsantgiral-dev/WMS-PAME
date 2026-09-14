@@ -158,6 +158,84 @@ class TestAbcService:
         assert isinstance(result, list)
 
 
+class TestPoblarStockMinimoDesdeABC:
+    """
+    Verificado en producción (2026-08-26): de 26,294 productos, CERO están en
+    NULL — 26,286 están en 0 (default de columna) y 8 tienen un valor real.
+    El filtro tiene que mirar 0, no solo NULL, o no toca nada en producción.
+    """
+
+    def _ubicacion_general(self, db, almacen):
+        from app.models.ubicacion import Ubicacion
+        ub = Ubicacion(codigo='SIESA-GENERAL', almacen_id=almacen.id,
+                        tipo_zona='GENERAL', tipo='estanteria', activo=True, origen='SIESA')
+        db.session.add(ub)
+        db.session.commit()
+        return ub
+
+    def test_deriva_por_clase_y_respeta_piso_de_1(self, app, db, almacen, producto, producto2):
+        from app.models.inventario import UbicacionProducto
+        from app.services.abc_service import ABCService
+
+        ub = self._ubicacion_general(db, almacen)
+        producto.clasificacion_abc = 'A'
+        producto2.clasificacion_abc = 'C'
+        db.session.add(UbicacionProducto(ubicacion_id=ub.id, producto_id=producto.id, cantidad=4479))
+        db.session.add(UbicacionProducto(ubicacion_id=ub.id, producto_id=producto2.id, cantidad=3))
+        db.session.commit()
+
+        r = ABCService.poblar_stock_minimo_desde_abc()
+
+        db.session.refresh(producto)
+        db.session.refresh(producto2)
+        assert producto.stock_minimo == round(4479 * 0.20)
+        assert producto2.stock_minimo == 1, 'stock chico debe subir al piso de 1, nunca quedar en 0'
+        assert r['actualizados'] == 2
+
+    def test_no_pisa_stock_minimo_ya_configurado(self, app, db, almacen, producto):
+        from app.models.inventario import UbicacionProducto
+        from app.services.abc_service import ABCService
+
+        ub = self._ubicacion_general(db, almacen)
+        producto.clasificacion_abc = 'A'
+        producto.stock_minimo = 999
+        db.session.add(UbicacionProducto(ubicacion_id=ub.id, producto_id=producto.id, cantidad=4479))
+        db.session.commit()
+
+        ABCService.poblar_stock_minimo_desde_abc()
+
+        db.session.refresh(producto)
+        assert producto.stock_minimo == 999
+
+    def test_sin_stock_wms_se_omite_sin_inventar_un_numero(self, app, db, almacen, producto):
+        from app.services.abc_service import ABCService
+
+        producto.clasificacion_abc = 'B'
+        db.session.commit()
+
+        r = ABCService.poblar_stock_minimo_desde_abc()
+
+        db.session.refresh(producto)
+        assert producto.stock_minimo == 0
+        assert r['sin_stock_omitidos'] == 1
+        assert r['actualizados'] == 0
+
+    def test_dry_run_no_escribe_nada(self, app, db, almacen, producto):
+        from app.models.inventario import UbicacionProducto
+        from app.services.abc_service import ABCService
+
+        ub = self._ubicacion_general(db, almacen)
+        producto.clasificacion_abc = 'A'
+        db.session.add(UbicacionProducto(ubicacion_id=ub.id, producto_id=producto.id, cantidad=100))
+        db.session.commit()
+
+        r = ABCService.poblar_stock_minimo_desde_abc(dry_run=True)
+
+        db.session.refresh(producto)
+        assert producto.stock_minimo == 0
+        assert r['actualizados'] == 1
+
+
 # ═══════════════════════════════════════════════════════════════════
 # DASHBOARD — KPIs operativos
 # Cisne negro: KPI incorrecto lleva a decisión operativa equivocada

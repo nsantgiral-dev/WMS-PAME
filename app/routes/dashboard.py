@@ -1,11 +1,28 @@
 import logging
+from datetime import date as _date
+
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required
 from app.routes._auth_helpers import _es_admin_o_jefe, _es_gestion
 from app.services.dashboard_service import DashboardService
+from app.utils.fecha import dia_operativo
 
 dashboard_bp = Blueprint('dashboard', __name__)
 logger = logging.getLogger(__name__)
+
+
+def _rango_fechas_desde_query():
+    """`fecha_desde`/`fecha_hasta` (ISO, opcionales) → objetos `date`, default
+    a "solo hoy" (día operativo Bogotá) si no vienen — mismo criterio que ya
+    usa `RutaService.listar_rutas`. El parseo vive en la ruta a propósito:
+    las funciones de `app/services/metricas/` son puras y no conocen `request`.
+    """
+    hoy = dia_operativo()
+    fecha_desde_str = request.args.get('fecha_desde')
+    fecha_hasta_str = request.args.get('fecha_hasta')
+    fecha_desde = _date.fromisoformat(fecha_desde_str) if fecha_desde_str else hoy
+    fecha_hasta = _date.fromisoformat(fecha_hasta_str) if fecha_hasta_str else fecha_desde
+    return fecha_desde, fecha_hasta
 
 
 @dashboard_bp.route('/kpis', methods=['GET'])
@@ -74,6 +91,135 @@ def alertas_stock():
         return jsonify({'error': str(e)}), 500
 
 
+# ───────────────────────── Tablero BI ─────────────────────────
+# fecha_desde/fecha_hasta (ISO, opcionales, default "hoy") vía
+# _rango_fechas_desde_query(). Sin caché ni comparativo de período anterior
+# en esta entrega — decisión explícita (ver plan de implementación).
+
+@dashboard_bp.route('/bi/pedidos-despachados', methods=['GET'])
+@jwt_required()
+def bi_pedidos_despachados():
+    if not _es_gestion():
+        return jsonify({'error': 'Sin permiso'}), 403
+    almacen_id = request.args.get('almacen_id', type=int)
+    if not almacen_id:
+        return jsonify({'error': 'almacen_id es requerido'}), 400
+    fecha_desde, fecha_hasta = _rango_fechas_desde_query()
+    try:
+        from app.services.metricas.pedidos_despachados import calcular_pedidos_despachados
+        resultado = calcular_pedidos_despachados(almacen_id, fecha_desde, fecha_hasta)
+        return jsonify(resultado), 200
+    except Exception as e:
+        logger.exception(f'[DASHBOARD] bi_pedidos_despachados almacen={almacen_id}')
+        return jsonify({'error': str(e)}), 500
+
+
+@dashboard_bp.route('/bi/pedidos-despachados/detalle', methods=['GET'])
+@jwt_required()
+def bi_pedidos_despachados_detalle():
+    if not _es_gestion():
+        return jsonify({'error': 'Sin permiso'}), 403
+    almacen_id = request.args.get('almacen_id', type=int)
+    if not almacen_id:
+        return jsonify({'error': 'almacen_id es requerido'}), 400
+    fecha_desde, fecha_hasta = _rango_fechas_desde_query()
+    page = request.args.get('page', 1, type=int)
+    per_page = request.args.get('per_page', 50, type=int)
+    try:
+        from app.services.metricas.pedidos_despachados import listar_pedidos_despachados_detalle
+        pagina = listar_pedidos_despachados_detalle(almacen_id, fecha_desde, fecha_hasta, page, per_page)
+        return jsonify({
+            'items': [t.to_dict() for t in pagina.items],
+            'total': pagina.total,
+            'page': pagina.page,
+            'per_page': pagina.per_page,
+        }), 200
+    except Exception as e:
+        logger.exception(f'[DASHBOARD] bi_pedidos_despachados_detalle almacen={almacen_id}')
+        return jsonify({'error': str(e)}), 500
+
+
+@dashboard_bp.route('/bi/pedidos-pendientes', methods=['GET'])
+@jwt_required()
+def bi_pedidos_pendientes():
+    if not _es_gestion():
+        return jsonify({'error': 'Sin permiso'}), 403
+    almacen_id = request.args.get('almacen_id', type=int)
+    if not almacen_id:
+        return jsonify({'error': 'almacen_id es requerido'}), 400
+    fecha_desde, fecha_hasta = _rango_fechas_desde_query()
+    try:
+        from app.services.metricas.pedidos_pendientes import calcular_pedidos_pendientes
+        resultado = calcular_pedidos_pendientes(almacen_id, fecha_desde, fecha_hasta)
+        return jsonify(resultado), 200
+    except Exception as e:
+        logger.exception(f'[DASHBOARD] bi_pedidos_pendientes almacen={almacen_id}')
+        return jsonify({'error': str(e)}), 500
+
+
+@dashboard_bp.route('/bi/pedidos-pendientes/detalle', methods=['GET'])
+@jwt_required()
+def bi_pedidos_pendientes_detalle():
+    if not _es_gestion():
+        return jsonify({'error': 'Sin permiso'}), 403
+    almacen_id = request.args.get('almacen_id', type=int)
+    if not almacen_id:
+        return jsonify({'error': 'almacen_id es requerido'}), 400
+    fecha_desde, fecha_hasta = _rango_fechas_desde_query()
+    page = request.args.get('page', 1, type=int)
+    per_page = request.args.get('per_page', 50, type=int)
+    try:
+        from app.services.metricas.pedidos_pendientes import listar_pedidos_pendientes_detalle
+        resultado = listar_pedidos_pendientes_detalle(almacen_id, fecha_desde, fecha_hasta, page, per_page)
+        return jsonify(resultado), 200
+    except Exception as e:
+        logger.exception(f'[DASHBOARD] bi_pedidos_pendientes_detalle almacen={almacen_id}')
+        return jsonify({'error': str(e)}), 500
+
+
+@dashboard_bp.route('/bi/venta-perdida', methods=['GET'])
+@jwt_required()
+def bi_venta_perdida():
+    if not _es_gestion():
+        return jsonify({'error': 'Sin permiso'}), 403
+    almacen_id = request.args.get('almacen_id', type=int)
+    if not almacen_id:
+        return jsonify({'error': 'almacen_id es requerido'}), 400
+    fecha_desde, fecha_hasta = _rango_fechas_desde_query()
+    try:
+        from app.services.metricas.venta_perdida import calcular_venta_perdida
+        resultado = calcular_venta_perdida(almacen_id, fecha_desde, fecha_hasta)
+        return jsonify(resultado), 200
+    except Exception as e:
+        logger.exception(f'[DASHBOARD] bi_venta_perdida almacen={almacen_id}')
+        return jsonify({'error': str(e)}), 500
+
+
+@dashboard_bp.route('/bi/venta-perdida/detalle', methods=['GET'])
+@jwt_required()
+def bi_venta_perdida_detalle():
+    if not _es_gestion():
+        return jsonify({'error': 'Sin permiso'}), 403
+    almacen_id = request.args.get('almacen_id', type=int)
+    if not almacen_id:
+        return jsonify({'error': 'almacen_id es requerido'}), 400
+    fecha_desde, fecha_hasta = _rango_fechas_desde_query()
+    page = request.args.get('page', 1, type=int)
+    per_page = request.args.get('per_page', 50, type=int)
+    try:
+        from app.services.metricas.venta_perdida import listar_venta_perdida_detalle
+        pagina = listar_venta_perdida_detalle(almacen_id, fecha_desde, fecha_hasta, page, per_page)
+        return jsonify({
+            'items': [e.to_dict() for e in pagina.items],
+            'total': pagina.total,
+            'page': pagina.page,
+            'per_page': pagina.per_page,
+        }), 200
+    except Exception as e:
+        logger.exception(f'[DASHBOARD] bi_venta_perdida_detalle almacen={almacen_id}')
+        return jsonify({'error': str(e)}), 500
+
+
 @dashboard_bp.route('/resumen-completo', methods=['GET'])
 @jwt_required()
 def resumen_completo():
@@ -87,7 +233,6 @@ def resumen_completo():
     if not almacen_id:
         return jsonify({'error': 'almacen_id es requerido'}), 400
     from app.models.conteo import SesionConteo
-    from app.models.picking import TareaPicking
     from app.services.traslado_monitor_service import get_resumen_alertas
     from app.services.dashboard_service import _tendencia_7d
     import logging as _log
@@ -118,19 +263,12 @@ def resumen_completo():
         logger.exception('[DASHBOARD] auditorias_urgentes query falló')
         auditorias_urgentes = None
 
-    try:
-        tareas_bloqueadas = TareaPicking.query.filter_by(estado='BLOQUEADO', almacen_id=almacen_id).count()
-    except Exception:
-        logger.exception('[DASHBOARD] tareas_bloqueadas query falló')
-        tareas_bloqueadas = None
-
     return jsonify({
         'kpis': kpis,
         'productividad': productividad,
         'alertas_stock': alertas,
         'movimientos_recientes': movimientos,
         'auditorias_urgentes': auditorias_urgentes,
-        'tareas_bloqueadas': tareas_bloqueadas,
         'traslados_en_riesgo': traslados_riesgo,
         'traslados': traslados_rutas['traslados'],
         'rutas': traslados_rutas['rutas'],

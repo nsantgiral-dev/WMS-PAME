@@ -73,8 +73,18 @@ def test_crear_cuerpo_importados_aplica_zona_a_todo_el_cuerpo(db, almacen):
 
 
 def test_crear_cuerpo_rechaza_zona_invalida(db, almacen):
+    # AVERIAS es zona válida desde 2026-09-03 (ver test_crear_cuerpo_averias_*
+    # abajo) — GENERAL sigue sin poder armarse por Mecanismo A, es el bucket
+    # sin clasificar que solo escribe el sync de Siesa.
     with pytest.raises(ValueError, match='tipo_zona debe ser una de'):
-        svc.crear_cuerpo(almacen.id, 'A', 1, 1, 1, 'AVERIAS')
+        svc.crear_cuerpo(almacen.id, 'A', 1, 1, 1, 'GENERAL')
+
+
+def test_crear_cuerpo_averias_aplica_zona_a_todo_el_cuerpo(db, almacen):
+    creadas = svc.crear_cuerpo(almacen.id, 'A', 1, 1, 2, 'AVERIAS')
+    codigos = sorted(u.codigo for u in creadas)
+    assert codigos == ['AVE-A1-C01-E01-H01', 'AVE-A1-C01-E02-H01']
+    assert all(u.tipo_zona == 'AVERIAS' for u in creadas)
 
 
 def test_crear_cuerpo_crea_varios_huecos_por_entrepano(db, almacen):
@@ -121,27 +131,100 @@ def test_crear_cuerpo_rechaza_codigo_duplicado(db, almacen):
         svc.crear_cuerpo(almacen.id, 'A', 1, 3, 2, 'PICKING')
 
 
-def test_crear_ubicacion_averias_numera_secuencial(db, almacen):
-    a1 = svc.crear_ubicacion_averias(almacen.id)
-    a2 = svc.crear_ubicacion_averias(almacen.id)
-    assert a1.codigo == 'AVE1'
-    assert a2.codigo == 'AVE2'
-    assert a1.tipo_zona == 'AVERIAS'
-    assert a1.origen == 'MANUAL'
+def test_crear_cuerpo_tipo_mueble_estanteria_por_defecto(db, almacen):
+    creadas = svc.crear_cuerpo(almacen.id, 'A', 1, 1, 2, 'PICKING')
+    assert all(u.tipo == 'estanteria' for u in creadas)
+
+
+def test_crear_cuerpo_vitrina_es_una_sola_posicion_con_codigo_propio(db, almacen):
+    creadas = svc.crear_cuerpo(almacen.id, 'A', 1, 1, 4, 'PICKING',
+                                huecos_por_nivel=[3, 2, 1, 1], tipo_mueble='vitrina')
+    # cantidad_entrepanos/huecos_por_nivel se ignoran y se fuerza 1x1 — el
+    # payload del wizard puede llegar con basura ahí (campos ocultos en la
+    # UI) y el backend no puede confiar en que el cliente los mandó en 1.
+    assert len(creadas) == 1
+    ub = creadas[0]
+    assert ub.codigo == 'PIK-A1-VIT01'
+    assert ub.tipo == 'vitrina'
+    assert ub.tipo_zona == 'PICKING'
+    assert ub.fila == 1 and ub.cuerpo == 1 and ub.nivel == 1 and ub.hueco == 1
+
+
+def test_crear_cuerpo_estiba_en_reserva_codigo_propio(db, almacen):
+    ub = svc.crear_cuerpo(almacen.id, 'B', 2, 5, 1, 'RESERVA', tipo_mueble='estiba')[0]
+    assert ub.codigo == 'RES-B2-EST05'
+    assert ub.tipo == 'estiba'
+    assert ub.tipo_zona == 'RESERVA'
+
+
+def test_crear_cuerpo_rechaza_tipo_mueble_invalido(db, almacen):
+    with pytest.raises(ValueError, match='tipo_mueble debe ser una de'):
+        svc.crear_cuerpo(almacen.id, 'A', 1, 1, 1, 'PICKING', tipo_mueble='mostrador')
+
+
+def test_editar_cuerpo_conserva_tipo_mueble_al_remodular(db, almacen):
+    svc.crear_cuerpo(almacen.id, 'A', 1, 1, 1, 'PICKING', tipo_mueble='vitrina')
+    # Remodular una vitrina sigue produciendo 1x1 con su código propio —
+    # aunque el caller pida más entrepaños/huecos, editar_cuerpo delega en
+    # crear_cuerpo() con el tipo_mueble original, que fuerza 1x1 igual que
+    # en la creación.
+    creadas = svc.editar_cuerpo(almacen.id, 'A', 1, 1, cantidad_entrepanos=3, huecos_por_nivel=[2, 2, 2])
+    assert len(creadas) == 1
+    assert creadas[0].codigo == 'PIK-A1-VIT01'
+    assert creadas[0].tipo == 'vitrina'
+
+
+def test_crear_cuerpo_averias_estiba_tiene_ubicacion_real(db, almacen):
+    # Antes (retirado 2026-09-03) AVERIAS se creaba anónima (AVE1, AVE2...,
+    # sin pasillo). El averiado es dinero trazable y muchas veces se
+    # devuelve — necesita dirección física real, igual que cualquier otra
+    # zona, no un simple contador.
+    ub = svc.crear_cuerpo(almacen.id, 'A', 1, 1, 1, 'AVERIAS', tipo_mueble='estiba')[0]
+    assert ub.codigo == 'AVE-A1-EST01'
+    assert ub.tipo_zona == 'AVERIAS'
+    assert ub.tipo == 'estiba'
+    assert ub.pasillo == 'A' and ub.fila == 1
+    assert ub.origen == 'MANUAL'
 
 
 def test_asignar_producto_picking_ok(db, almacen, producto):
     ub = svc.crear_cuerpo(almacen.id, 'A', 1, 1, 1, 'PICKING')[0]
-    resultado = svc.asignar_producto(ub.id, producto.id, 50)
+    resultado = svc.asignar_producto(ub.id, producto.id, 50, capacidad_maxima=100)
     assert resultado['cantidad_total'] == 50
 
     ub_refrescada = Ubicacion.query.get(ub.id)
     assert ub_refrescada.producto_asignado_id == producto.id
 
 
+def test_asignar_producto_picking_sin_capacidad_maxima_rechaza(db, almacen, producto):
+    """capacidad_maxima es obligatoria la primera vez que un hueco PICKING/
+    IMPORTADOS recibe un SKU — verificado en producción (2026-08-26): sin
+    esto, un lote de asignaciones dejó capacidad_maxima=100 de relleno en 9
+    huecos por igual y dos terminaron con más cantidad de la que esa
+    capacidad permitía."""
+    ub = svc.crear_cuerpo(almacen.id, 'A', 1, 1, 1, 'PICKING')[0]
+    with pytest.raises(ValueError, match='capacidad_maxima'):
+        svc.asignar_producto(ub.id, producto.id, 50)
+
+
+def test_asignar_producto_picking_rechaza_cantidad_mayor_a_capacidad(db, almacen, producto):
+    ub = svc.crear_cuerpo(almacen.id, 'A', 1, 1, 1, 'PICKING')[0]
+    with pytest.raises(ValueError, match='exceden la capacidad_maxima'):
+        svc.asignar_producto(ub.id, producto.id, 150, capacidad_maxima=100)
+
+
+def test_asignar_producto_picking_rechaza_acumulado_mayor_a_capacidad(db, almacen, producto):
+    ub = svc.crear_cuerpo(almacen.id, 'A', 1, 1, 1, 'PICKING')[0]
+    svc.asignar_producto(ub.id, producto.id, 90, capacidad_maxima=100)
+    # 90 ya contadas + 20 nuevas = 110 > 100, aunque cada llamada por separado
+    # hubiera cabido — lo que importa es el acumulado real en el hueco.
+    with pytest.raises(ValueError, match='exceden la capacidad_maxima'):
+        svc.asignar_producto(ub.id, producto.id, 20)
+
+
 def test_asignar_producto_picking_rechaza_ubicacion_ocupada(db, almacen, producto, producto2):
     ub = svc.crear_cuerpo(almacen.id, 'A', 1, 1, 1, 'PICKING')[0]
-    svc.asignar_producto(ub.id, producto.id, 50)
+    svc.asignar_producto(ub.id, producto.id, 50, capacidad_maxima=100)
 
     with pytest.raises(ValueError, match='ya está asignada'):
         svc.asignar_producto(ub.id, producto2.id, 10)
@@ -150,15 +233,19 @@ def test_asignar_producto_picking_rechaza_ubicacion_ocupada(db, almacen, product
 def test_asignar_producto_picking_rechaza_producto_con_otro_slot(db, almacen, producto):
     ub1 = svc.crear_cuerpo(almacen.id, 'A', 1, 1, 1, 'PICKING')[0]
     ub2 = svc.crear_cuerpo(almacen.id, 'B', 1, 1, 1, 'PICKING')[0]
-    svc.asignar_producto(ub1.id, producto.id, 50)
+    svc.asignar_producto(ub1.id, producto.id, 50, capacidad_maxima=100)
 
+    # El conflicto de slot se ve ANTES que la exigencia de capacidad en ub2
+    # (que tampoco tiene una) — es el error más específico, no uno tapado
+    # por el otro.
     with pytest.raises(ValueError, match='ya tiene un slot'):
         svc.asignar_producto(ub2.id, producto.id, 10)
 
 
 def test_asignar_producto_picking_permite_sumar_al_mismo_slot(db, almacen, producto):
     ub = svc.crear_cuerpo(almacen.id, 'A', 1, 1, 1, 'PICKING')[0]
-    svc.asignar_producto(ub.id, producto.id, 50)
+    svc.asignar_producto(ub.id, producto.id, 50, capacidad_maxima=100)
+    # La segunda llamada no repite capacidad_maxima — ya quedó guardada en el hueco.
     resultado = svc.asignar_producto(ub.id, producto.id, 20)
     assert resultado['cantidad_total'] == 70
 
@@ -191,14 +278,14 @@ def test_asignar_producto_reserva_sin_restriccion_1a1(db, almacen, producto):
 
 def test_asignar_producto_importados_ok(db, almacen, producto):
     ub = svc.crear_cuerpo(almacen.id, 'A', 1, 1, 1, 'IMPORTADOS')[0]
-    resultado = svc.asignar_producto(ub.id, producto.id, 30)
+    resultado = svc.asignar_producto(ub.id, producto.id, 30, capacidad_maxima=60)
     assert resultado['cantidad_total'] == 30
     assert Ubicacion.query.get(ub.id).producto_asignado_id == producto.id
 
 
 def test_asignar_producto_importados_rechaza_ubicacion_ocupada(db, almacen, producto, producto2):
     ub = svc.crear_cuerpo(almacen.id, 'A', 1, 1, 1, 'IMPORTADOS')[0]
-    svc.asignar_producto(ub.id, producto.id, 30)
+    svc.asignar_producto(ub.id, producto.id, 30, capacidad_maxima=60)
     with pytest.raises(ValueError, match='ya está asignada'):
         svc.asignar_producto(ub.id, producto2.id, 10)
 
@@ -206,7 +293,7 @@ def test_asignar_producto_importados_rechaza_ubicacion_ocupada(db, almacen, prod
 def test_asignar_producto_importados_rechaza_producto_con_otro_slot(db, almacen, producto):
     ub1 = svc.crear_cuerpo(almacen.id, 'A', 1, 1, 1, 'IMPORTADOS')[0]
     ub2 = svc.crear_cuerpo(almacen.id, 'B', 1, 1, 1, 'IMPORTADOS')[0]
-    svc.asignar_producto(ub1.id, producto.id, 30)
+    svc.asignar_producto(ub1.id, producto.id, 30, capacidad_maxima=60)
     with pytest.raises(ValueError, match='ya tiene un slot de IMPORTADOS'):
         svc.asignar_producto(ub2.id, producto.id, 10)
 
@@ -223,8 +310,8 @@ def test_asignar_producto_picking_e_importados_son_pools_independientes(db, alma
     contra las demás zonas de slot único."""
     ub_pik = svc.crear_cuerpo(almacen.id, 'A', 1, 1, 1, 'PICKING')[0]
     ub_imp = svc.crear_cuerpo(almacen.id, 'B', 1, 1, 1, 'IMPORTADOS')[0]
-    svc.asignar_producto(ub_pik.id, producto.id, 50)
-    svc.asignar_producto(ub_imp.id, producto.id, 20)  # no debe fallar
+    svc.asignar_producto(ub_pik.id, producto.id, 50, capacidad_maxima=100)
+    svc.asignar_producto(ub_imp.id, producto.id, 20, capacidad_maxima=50)  # no debe fallar
     assert Ubicacion.query.get(ub_pik.id).producto_asignado_id == producto.id
     assert Ubicacion.query.get(ub_imp.id).producto_asignado_id == producto.id
 
@@ -258,7 +345,7 @@ def test_asignar_producto_traspasa_desde_siesa_general_en_nb1_co003(db, almacen,
     general = _crear_general_con_stock(almacen.id, producto.id, 200)
 
     ub = svc.crear_cuerpo(almacen.id, 'A', 1, 1, 1, 'PICKING')[0]
-    svc.asignar_producto(ub.id, producto.id, 50)
+    svc.asignar_producto(ub.id, producto.id, 50, capacidad_maxima=100)
 
     assert UbicacionProducto.query.filter_by(
         ubicacion_id=general.id, producto_id=producto.id
@@ -274,7 +361,7 @@ def test_asignar_producto_traspaso_no_bloquea_si_general_insuficiente(db, almace
     general = _crear_general_con_stock(almacen.id, producto.id, 10)
 
     ub = svc.crear_cuerpo(almacen.id, 'A', 1, 1, 1, 'PICKING')[0]
-    resultado = svc.asignar_producto(ub.id, producto.id, 50)
+    resultado = svc.asignar_producto(ub.id, producto.id, 50, capacidad_maxima=100)
 
     # No bloquea aunque pida más de lo que hay en SIESA-GENERAL: la cantidad
     # asignada al hueco es la informada por el jefe de bodega (50), no la
@@ -291,7 +378,7 @@ def test_asignar_producto_no_traspasa_fuera_de_nb1_co003(db, almacen, producto):
     general = _crear_general_con_stock(almacen.id, producto.id, 200)
 
     ub = svc.crear_cuerpo(almacen.id, 'A', 1, 1, 1, 'PICKING')[0]
-    svc.asignar_producto(ub.id, producto.id, 50)
+    svc.asignar_producto(ub.id, producto.id, 50, capacidad_maxima=100)
 
     assert UbicacionProducto.query.filter_by(
         ubicacion_id=general.id, producto_id=producto.id
@@ -300,7 +387,7 @@ def test_asignar_producto_no_traspasa_fuera_de_nb1_co003(db, almacen, producto):
 
 def test_reclasificar_bloquea_con_stock_activo(db, almacen, producto):
     ub = svc.crear_cuerpo(almacen.id, 'A', 1, 1, 1, 'PICKING')[0]
-    svc.asignar_producto(ub.id, producto.id, 50)
+    svc.asignar_producto(ub.id, producto.id, 50, capacidad_maxima=100)
 
     with pytest.raises(ValueError, match='unidades activas'):
         svc.reclasificar_ubicacion(ub.id, tipo_zona='RESERVA')
@@ -312,9 +399,42 @@ def test_reclasificar_permite_sin_stock(db, almacen):
     assert resultado['ubicacion']['tipo_zona'] == 'RESERVA'
 
 
+def test_reclasificar_bloquea_con_reposicion_pendiente(db, almacen, producto):
+    """Hueco PICKING con stock=0 (no dispara el guardarraíl de stock) pero con
+    una TareaReposicion PENDIENTE viva — es exactamente el estado normal de
+    "espera reposición" y reclasificar/desactivar debe bloquear igual que el
+    stock activo, no solo advertir."""
+    from app.models.tarea_reposicion import TareaReposicion
+
+    ub_picking = svc.crear_cuerpo(almacen.id, 'A', 1, 1, 1, 'PICKING')[0]
+    ub_reserva = svc.crear_cuerpo(almacen.id, 'B', 1, 1, 1, 'RESERVA')[0]
+    tarea = TareaReposicion(
+        codigo='REP-0000001',
+        producto_id=producto.id,
+        almacen_id=almacen.id,
+        cantidad_unidades=10,
+        ubicacion_reserva_id=ub_reserva.id,
+        ubicacion_picking_id=ub_picking.id,
+        estado='PENDIENTE',
+    )
+    db.session.add(tarea)
+    db.session.commit()
+
+    with pytest.raises(ValueError, match='Reposición'):
+        svc.reclasificar_ubicacion(ub_picking.id, tipo_zona='RESERVA')
+
+    with pytest.raises(ValueError, match='Reposición'):
+        svc.reclasificar_ubicacion(ub_picking.id, activo=False)
+
+    # capacidad_maxima sola sigue permitida con la tarea viva — no interrumpe nada
+    resultado = svc.reclasificar_ubicacion(ub_picking.id, capacidad_maxima=80)
+    assert resultado['ubicacion']['capacidad_maxima'] == 80
+    assert 'Reposición' in resultado['advertencias'][0]
+
+
 def test_reclasificar_liberar_slot_bloquea_con_stock(db, almacen, producto):
     ub = svc.crear_cuerpo(almacen.id, 'A', 1, 1, 1, 'PICKING')[0]
-    svc.asignar_producto(ub.id, producto.id, 50)
+    svc.asignar_producto(ub.id, producto.id, 50, capacidad_maxima=100)
 
     with pytest.raises(ValueError, match='no se puede'):
         svc.reclasificar_ubicacion(ub.id, liberar_slot=True)
@@ -329,7 +449,7 @@ def test_eliminar_ubicacion_individual_borra_nunca_usada(db, almacen):
 
 def test_eliminar_ubicacion_individual_bloquea_con_stock(db, almacen, producto):
     ub = svc.crear_cuerpo(almacen.id, 'A', 1, 1, 1, 'PICKING')[0]
-    svc.asignar_producto(ub.id, producto.id, 50)
+    svc.asignar_producto(ub.id, producto.id, 50, capacidad_maxima=100)
 
     with pytest.raises(ValueError, match='stock activo'):
         svc.eliminar_ubicacion(ub.id)
@@ -377,7 +497,7 @@ def test_eliminar_ubicacion_individual_forzar_borra_sesion_conteo(db, almacen, p
 def test_eliminar_ubicacion_individual_forzar_ignora_stock_y_borra_historial(db, almacen, producto):
     from app.models.picking import TareaPicking
     ub = svc.crear_cuerpo(almacen.id, 'A', 1, 1, 1, 'PICKING')[0]
-    svc.asignar_producto(ub.id, producto.id, 50)
+    svc.asignar_producto(ub.id, producto.id, 50, capacidad_maxima=100)
     tarea = TareaPicking(
         codigo='PICK-TEST-FORZAR-1', producto_id=producto.id, cantidad_solicitada=5,
         ubicacion_id=ub.id, almacen_id=almacen.id, estado='COMPLETADO',
@@ -627,7 +747,7 @@ def test_editar_fila_cambia_zona_de_todas_las_posiciones(db, almacen):
 
 def test_editar_fila_no_aborta_lote_si_una_posicion_tiene_stock(db, almacen, producto):
     creadas = _crear_legacy(almacen.id, 'A', 1, 3, 'PICKING')
-    svc.asignar_producto(creadas[0].id, producto.id, 50)  # solo la posición 01 tiene stock
+    svc.asignar_producto(creadas[0].id, producto.id, 50, capacidad_maxima=100)  # solo la posición 01 tiene stock
 
     resultado = svc.editar_fila(almacen.id, 'A', 1, tipo_zona='RESERVA')
 
@@ -666,7 +786,7 @@ def test_eliminar_fila_borra_posiciones_nunca_usadas(db, almacen):
 
 def test_eliminar_fila_bloquea_con_stock_activo(db, almacen, producto):
     creadas = _crear_legacy(almacen.id, 'A', 1, 2, 'PICKING')
-    svc.asignar_producto(creadas[0].id, producto.id, 50)
+    svc.asignar_producto(creadas[0].id, producto.id, 50, capacidad_maxima=100)
 
     resultado = svc.eliminar_fila(almacen.id, 'A', 1)
 
@@ -679,7 +799,7 @@ def test_eliminar_fila_bloquea_con_stock_activo(db, almacen, producto):
 
 def test_eliminar_fila_bloquea_por_historial_aunque_stock_sea_cero(db, almacen, producto):
     creadas = _crear_legacy(almacen.id, 'A', 1, 1, 'PICKING')
-    svc.asignar_producto(creadas[0].id, producto.id, 50)
+    svc.asignar_producto(creadas[0].id, producto.id, 50, capacidad_maxima=100)
     # Vaciar el stock a 0 pero el MovimientoInventario del asignar_producto queda como historial
     from app.extensions import db as _db
     from app.models.inventario import UbicacionProducto
@@ -739,7 +859,7 @@ def test_eliminar_fila_rechaza_fila_inexistente(db, almacen):
 
 def test_editar_cuerpo_remodula_cantidad_de_entrepanos_y_huecos(db, almacen, producto):
     viejas = svc.crear_cuerpo(almacen.id, 'A', 1, 1, 2, 'PICKING')  # 2 entrepaños, 1 hueco c/u
-    svc.asignar_producto(viejas[0].id, producto.id, 20)  # E01-H01 con SKU asignado
+    svc.asignar_producto(viejas[0].id, producto.id, 20, capacidad_maxima=100)  # E01-H01 con SKU asignado
 
     creadas = svc.editar_cuerpo(almacen.id, 'A', 1, 1, cantidad_entrepanos=3,
                                  huecos_por_nivel=[1, 2, 1])
@@ -758,7 +878,7 @@ def test_editar_cuerpo_remodula_cantidad_de_entrepanos_y_huecos(db, almacen, pro
 
 def test_editar_cuerpo_devuelve_stock_a_siesa_general_antes_de_borrar(db, almacen, producto):
     ub = svc.crear_cuerpo(almacen.id, 'A', 1, 1, 1, 'PICKING')[0]
-    svc.asignar_producto(ub.id, producto.id, 40)
+    svc.asignar_producto(ub.id, producto.id, 40, capacidad_maxima=100)
 
     svc.editar_cuerpo(almacen.id, 'A', 1, 1, cantidad_entrepanos=2)
 
@@ -812,7 +932,7 @@ def test_eliminar_cuerpo_borra_todo_si_nunca_se_uso(db, almacen):
 
 def test_eliminar_cuerpo_todo_o_nada_bloquea_completo_si_un_hueco_tiene_stock(db, almacen, producto):
     creadas = svc.crear_cuerpo(almacen.id, 'A', 1, 1, 2, 'PICKING')
-    svc.asignar_producto(creadas[0].id, producto.id, 10)  # solo el primer hueco tiene stock
+    svc.asignar_producto(creadas[0].id, producto.id, 10, capacidad_maxima=100)  # solo el primer hueco tiene stock
 
     with pytest.raises(ValueError, match='No se puede eliminar el cuerpo'):
         svc.eliminar_cuerpo(almacen.id, 'A', 1, 1)
@@ -826,7 +946,7 @@ def test_eliminar_cuerpo_todo_o_nada_bloquea_completo_si_un_hueco_tiene_stock(db
 def test_eliminar_cuerpo_forzar_borra_pese_a_stock_y_tarea_picking(db, almacen, producto):
     from app.models.picking import TareaPicking
     creadas = svc.crear_cuerpo(almacen.id, 'A', 1, 1, 2, 'PICKING')
-    svc.asignar_producto(creadas[0].id, producto.id, 10)
+    svc.asignar_producto(creadas[0].id, producto.id, 10, capacidad_maxima=100)
     tarea = TareaPicking(
         codigo='PICK-TEST-FORZAR-3', producto_id=producto.id, cantidad_solicitada=5,
         ubicacion_id=creadas[1].id, almacen_id=almacen.id, estado='COMPLETADO',

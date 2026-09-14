@@ -24,6 +24,7 @@ from app.extensions import db
 from app.models.conteo import SesionConteo
 from app.models.producto import Producto
 from app.models.ubicacion import Ubicacion
+from app.models.inventario import UbicacionProducto
 from app.models.producto_clasificacion_abc import ProductoClasificacionABC
 from app.services.connekta_gateway import connekta
 from app.utils.fecha import ahora_bogota as _ahora_bogota
@@ -36,6 +37,12 @@ FRECUENCIA_DIAS = {'A': 15, 'B': 90, 'C': 180}
 # Watchdog: picks en 7 días que disparan override a clase A
 WATCHDOG_UMBRAL = {'B': 25, 'C': 10}
 WATCHDOG_VENTANA_DIAS = 7
+
+# stock_minimo derivado = % del stock WMS actual de esa referencia, por clase.
+# Más severo en A a propósito: alta rotación, agotarse ahí cuesta más caro que
+# en C. Decisión de negocio (2026-08-26), no un número técnico — ver
+# poblar_stock_minimo_desde_abc().
+PORCENTAJE_STOCK_MINIMO_ABC = {'A': 0.20, 'B': 0.12, 'C': 0.08}
 
 
 class ABCService:
@@ -130,6 +137,99 @@ class ABCService:
             db.session.rollback()
             logger.error(f'[ABC] Error sincronizando desde Siesa: {e}')
             raise
+
+    @staticmethod
+    def poblar_stock_minimo_desde_abc(porcentajes: dict = None, dry_run: bool = False) -> dict:
+        """
+        Deriva Producto.stock_minimo = round(stock_wms_total × porcentaje_de_su_clase).
+
+        stock_wms_total es la MISMA suma que usa DashboardService.alertas_stock()
+        (todas las ubicaciones del WMS para ese producto) — el umbral se ancla en
+        la misma métrica contra la que después se compara; si usara otra base
+        (ej. existencia Siesa), el corte no significaría lo mismo en los dos lados.
+
+        Porcentajes por clase — decisión de negocio (2026-08-26), confirmada con
+        el usuario: A=20%, B=12%, C=8%. Más severo en A porque agotarse ahí
+        cuesta más caro (alta rotación); C tolera un colchón proporcionalmente
+        más chico.
+
+        Reglas:
+          - NO pisa un stock_minimo ya configurado — solo llena productos en
+            NULL o en 0. El propio modelo (`Producto.stock_minimo = Column(...,
+            default=0)`) usa 0 como valor de columna cuando nadie lo especifica
+            — verificado en producción el 2026-08-26: de 26,294 productos,
+            CERO están en NULL, 26,286 están en 0 y 8 tienen un valor real. Un
+            filtro que solo mirara `IS NULL` no habría tocado ninguno. `0` es
+            además el mismo valor que `alertas_stock()` ya trata como "sin
+            umbral" (su filtro es `stock_minimo > 0`), así que tratarlo aquí
+            como "no configurado" es consistente con esa semántica existente,
+            no una nueva.
+          - Productos sin ubicación con stock (total WMS = 0) se OMITEN, no se
+            ponen en 0 ni en un valor inventado — sin un stock real de dónde
+            partir, cualquier número sería fabricado (Regla 0: ante dato
+            ausente, declarar, no inventar). Vuelven contados aparte en
+            `sin_stock_omitidos` para que quien lo pida decida a mano si alguno
+            necesita un mínimo aunque hoy esté en cero.
+          - Piso de 1 unidad: con stock chico (ej. 3 unidades clase C, 8% = 0.24)
+            redondear a 0 dejaría `stock_minimo=0`, que el propio filtro de
+            alertas_stock() (`Producto.stock_minimo > 0`) excluye para siempre
+            — un SKU real con algo de stock quedaría invisible sin que nadie lo
+            note. Se sube a 1 como piso.
+
+        dry_run=True calcula y devuelve el resultado sin escribir nada — para
+        revisar el impacto (cuántos, y con qué números) antes de aplicar.
+        """
+        porcentajes = porcentajes or PORCENTAJE_STOCK_MINIMO_ABC
+
+        stock_por_producto = {
+            row.producto_id: int(row.total)
+            for row in (
+                db.session.query(
+                    UbicacionProducto.producto_id,
+                    func.sum(UbicacionProducto.cantidad).label('total')
+                )
+                .group_by(UbicacionProducto.producto_id)
+                .all()
+            )
+        }
+
+        candidatos = Producto.query.filter(
+            db.or_(Producto.stock_minimo.is_(None), Producto.stock_minimo == 0),
+            Producto.clasificacion_abc.in_(list(porcentajes.keys())),
+            Producto.activo == True,
+        ).all()
+
+        actualizados = 0
+        sin_stock_omitidos = 0
+        detalle_por_clase = {c: 0 for c in porcentajes}
+
+        for p in candidatos:
+            stock_total = stock_por_producto.get(p.id, 0)
+            if stock_total <= 0:
+                sin_stock_omitidos += 1
+                continue
+            pct = porcentajes.get(p.clasificacion_abc, 0)
+            nuevo_minimo = max(1, round(stock_total * pct))
+            if not dry_run:
+                p.stock_minimo = nuevo_minimo
+            actualizados += 1
+            detalle_por_clase[p.clasificacion_abc] = detalle_por_clase.get(p.clasificacion_abc, 0) + 1
+
+        if not dry_run:
+            db.session.commit()
+            logger.info(
+                f'[ABC] stock_minimo poblado: {actualizados} productos '
+                f'({sin_stock_omitidos} omitidos por no tener stock WMS)'
+            )
+
+        return {
+            'dry_run': dry_run,
+            'actualizados': actualizados,
+            'sin_stock_omitidos': sin_stock_omitidos,
+            'total_candidatos': len(candidatos),
+            'por_clase': detalle_por_clase,
+            'porcentajes_usados': porcentajes,
+        }
 
     @staticmethod
     def watchdog_anomalias(almacen_id: int) -> list:

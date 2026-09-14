@@ -36,13 +36,22 @@ class TareaPicking(db.Model):
     # Estado
     estado = db.Column(db.String(20), default='PENDIENTE', nullable=False)
     prioridad = db.Column(db.Integer, default=1)
-    motivo_bloqueo = db.Column(db.String(50))  # UBICACION_VACIA|FALTANTE|MERCANCIA_AVERIADA|PRODUCTO_INCORRECTO
+    motivo_bloqueo = db.Column(db.String(50))  # UBICACION_VACIA|FALTANTE|MERCANCIA_AVERIADA|PRODUCTO_INCORRECTO|BACKORDER_SIESA
     observaciones_bloqueo = db.Column(db.Text)
 
     # Referencia origen
     referencia_documento = db.Column(db.String(50))
     tipo_documento = db.Column(db.String(30))   # 'PEDIDO' | 'TRASLADO'
     bodega_origen_siesa = db.Column(db.String(20))  # scoping multi-bodega
+
+    #: Cuánto seguía comprometido en Siesa (`f405_cant_por_remisionar_base`,
+    #: ver `backorder_service.compromisos_por_siesa`) para esta línea del
+    #: pedido, al momento de crear la tarea — se muestra al operario mientras
+    #: cuenta ("disponible X de Y") para que sepa ANTES de terminar si Siesa
+    #: va a poder facturarlo, no después de que lo rechace.
+    #: `NULL` = no se consultó (traslado, tarea manual, o Siesa no respondió
+    #: ese ciclo) — nunca se inventa un número (Regla 0).
+    disponible_siesa = db.Column(db.Numeric(12, 2), nullable=True)
 
     # Auditoría (rellena el admin cuando investiga una tarea BLOQUEADA)
     auditoria_resultado      = db.Column(db.String(30))   # ENCONTRADO_COMPLETO|ENCONTRADO_PARCIAL|NO_ENCONTRADO|AVERIA|DISCREPANCIA_SIESA

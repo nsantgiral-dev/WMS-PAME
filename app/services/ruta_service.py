@@ -35,7 +35,26 @@ class FormaPago:
     CHEQUE        = 'CHEQUE'
     CREDITO       = 'CREDITO'
     EXENTO        = 'EXENTO'
-    VALIDOS       = (EFECTIVO, TRANSFERENCIA, CHEQUE, CREDITO, EXENTO)
+    TARJETA       = 'TARJETA'
+    #: Medios bancarios específicos — alineados 1:1 con `_forma_pago_map` de
+    #: `connekta_gateway.py` y con `_FORMAS_PAGO_COBRO` de `rutas.js`. Antes
+    #: de esto, `TRANSFERENCIA` a secas era el único medio bancario que el
+    #: conductor podía declarar; el `<select>` se desglosó por banco pero
+    #: esta validación se quedó con la lista vieja, y el conductor no podía
+    #: confirmar ninguna parada pagada por transferencia (`forma_pago
+    #: inválido`, rechazado en el servidor pese a venir de una opción real
+    #: de la pantalla).
+    TRANSFERENCIAS_BANCO = (
+        'TRANSFERENCIA_BANCOLOMBIA_AH', 'TRANSFERENCIA_BANCOLOMBIA_CTE',
+        'TRANSFERENCIA_BBVA', 'TRANSFERENCIA_BOGOTA',
+        'TRANSFERENCIA_AGRARIO_AH', 'TRANSFERENCIA_AGRARIO_CTE',
+        'TRANSFERENCIA_DAVIVIENDA', 'TRANSFERENCIA_IHO_CTE',
+    )
+    #: `CONSIGNACION` es el otro sinónimo retrocompatible de `_forma_pago_map`
+    #: (no vive en el `<select>` actual, pero un `RecaudoEntrega` viejo o una
+    #: reedición pueden seguir mandándolo).
+    VALIDOS = (EFECTIVO, TRANSFERENCIA, 'CONSIGNACION', TARJETA, CHEQUE,
+               CREDITO, EXENTO) + TRANSFERENCIAS_BANCO
 
 
 class RutaService:
@@ -338,17 +357,32 @@ class RutaService:
             q = q.filter_by(vehiculo_id=vehiculo_id)
         if estado:
             q = q.filter_by(estado=estado)
-        # Rango de fechas (default: hoy si no se especifica)
+        # Rango de fechas (default: hoy si no se especifica).
+        #
+        # `fecha_programada IS NULL` cuenta como "siempre visible", no como
+        # "nunca" — que es lo que `>=`/`<=`/`==` normales le hacen a NULL en
+        # SQL. `crear_ruta()` (ad-hoc, sin RutaMaestra) podía dejarla sin
+        # asignar, y con un filtro estricto esa ruta no aparecía en NINGÚN
+        # rango de fechas posible, ni siquiera uno amplio a propósito. Con
+        # `crear_ruta()` ya asignándola (Regla 0), esto queda como red de
+        # seguridad para lo que quedó huérfano en producción.
         if fecha_desde or fecha_hasta:
             fd = _date.fromisoformat(fecha_desde) if fecha_desde else _dia_operativo()
             fh = _date.fromisoformat(fecha_hasta) if fecha_hasta else fd
             if fh < fd:
                 fd, fh = fh, fd
-            q = q.filter(RutaDespacho.fecha_programada >= fd,
-                         RutaDespacho.fecha_programada <= fh)
+            q = q.filter(db.or_(
+                RutaDespacho.fecha_programada.is_(None),
+                db.and_(RutaDespacho.fecha_programada >= fd,
+                        RutaDespacho.fecha_programada <= fh),
+            ))
         else:
-            # Sin filtro explícito → solo hoy para no cargar todo el histórico
-            q = q.filter(RutaDespacho.fecha_programada == _dia_operativo())
+            # Sin filtro explícito → hoy (+ huérfanas sin fecha) para no
+            # cargar todo el histórico.
+            q = q.filter(db.or_(
+                RutaDespacho.fecha_programada.is_(None),
+                RutaDespacho.fecha_programada == _dia_operativo(),
+            ))
         return q.paginate(page=page, per_page=50, error_out=False)
 
     @staticmethod
@@ -372,6 +406,17 @@ class RutaService:
             tipo_ruta=data['tipo_ruta'],
             notas=data.get('notas', '').strip() or None,
             estado=EstadoRutaDespacho.EN_CARGUE,
+            # A diferencia de `programar_viaje` (desde RutaMaestra, exige la
+            # fecha), esta ruta ad-hoc del muelle nunca traía una — quedaba
+            # `fecha_programada IS NULL` para siempre (nada la asigna después:
+            # `cerrar_ruta`/`entregar_ruta` solo tocan `fecha_cierre`/
+            # `fecha_entregada`). Cualquier consulta filtrada por rango de
+            # fechas —el dashboard de Liquidación, el panel de Rutas sin
+            # filtro explícito— excluye NULL por construcción en SQL: la ruta
+            # quedaba invisible para liquidar sin importar qué fecha se
+            # pidiera. `_dia_operativo()` (Bogotá, Regla 5) porque es el día
+            # en que se despachó de verdad.
+            fecha_programada=_dia_operativo(),
         )
         db.session.add(ruta)
         db.session.flush()
@@ -616,6 +661,28 @@ class RutaService:
         # cachea entero en el dispositivo (ver condAbrirParadas en rutas.js),
         # así que esto es lo único que necesita conectividad; la confirmación
         # de cada parada ya funciona offline sin volver a tocar Siesa.
+        # Vendedores — una sola llamada para toda la ruta (100 filas fijas,
+        # no una por tarea). Si Siesa no responde, el mapa queda vacío y
+        # cada tarea simplemente no muestra el bloque de asesor.
+        from app.services.connekta_gateway import connekta as _connekta_vend
+        vendedores_map: dict = {}
+        try:
+            for v in _connekta_vend.get_vendedor_contacto():
+                cod = str(v.get('codigo_vendedor', '')).strip()
+                if not cod:
+                    continue
+                nombre = ' '.join(filter(None, [
+                    str(v.get('f200_nombres', '') or '').strip(),
+                    str(v.get('f200_apellido1', '') or '').strip(),
+                    str(v.get('f200_apellido2', '') or '').strip(),
+                ])).strip()
+                vendedores_map[cod] = {
+                    'nombre': nombre or str(v.get('f200_razon_social', '') or '').strip() or None,
+                    'telefono': str(v.get('f015_telefono', '') or '').strip() or None,
+                }
+        except Exception as e:
+            logger.warning('[RUTAS] no se pudo cargar vendedores_contacto: %s', e)
+
         # Base y numerador de la medición que se publica abajo: de cuántas
         # referencias se pudo sacar un unitario y cuántas quedaron sin poder
         # desambiguar. Se acumulan sobre TODAS las paradas de la ruta porque la
@@ -625,7 +692,11 @@ class RutaService:
         for tid, p in tareas_map.items():
             t = p.pop('_tarea')
             _diag = {'valoradas': 0, 'ambiguas': 0, 'referencias': []}
-            valor_factura, es_contado, valores_ref, cond_pago_crudo = \
+            # Siete elementos desde el merge con main (2026-09-11): los tres
+            # últimos son suyos —base gravable, IVA y código de vendedor— y no
+            # tocan ningún campo del reparto por referencia.
+            (valor_factura, es_contado, valores_ref, cond_pago_crudo,
+             base_gravable, iva_factura, codigo_vendedor) = \
                 RutaService._valor_y_cond_pago(t, diagnostico=_diag)
             _refs_valoradas += _diag['valoradas']
             _refs_ambiguas  += _diag['ambiguas']
@@ -637,10 +708,19 @@ class RutaService:
             p['referencias_ambiguas']  = _diag['ambiguas']
             _ambiguas = set(_diag['referencias'])
             p['valor_factura'] = valor_factura
+            # Desglose informativo (base + IVA = valor_factura) para que la
+            # pantalla del conductor lo muestre igual que en la factura real.
+            # `None` si Siesa no respondió — el frontend ya sabe caer al total
+            # solo cuando falta cualquiera de los dos.
+            p['base_gravable'] = base_gravable
+            p['iva_factura']   = iva_factura
             p['es_contado']    = es_contado
             # `''` = Siesa respondió sin condición. `None` = no se pudo
             # preguntar. Son cosas distintas y colapsarlas fue el defecto.
             p['cond_pago']     = cond_pago_crudo
+            _vend = vendedores_map.get(str(codigo_vendedor or '').strip()) or {}
+            p['vendedor_nombre']   = _vend.get('nombre')
+            p['vendedor_telefono'] = _vend.get('telefono')
             # El modo lo calculaba `rutas.js` y se descartaba: el desglose
             # sabía qué eligió el conductor, no qué opciones tenía enfrente.
             from app.services import cond_pago as _cpm
@@ -851,12 +931,33 @@ class RutaService:
 
     @staticmethod
     def _valor_y_cond_pago(tarea, diagnostico: dict = None) -> tuple:
-        """`(valor_factura, es_contado, valores_por_referencia)` de la FE real
-        de una tarea. Cualquiera puede salir `None`/`{}` si Siesa no responde
-        — nunca levanta. Alimenta el toggle Pago Total/Parcial del conductor
-        y el recálculo en vivo cuando ajusta cantidades entregadas; si falta
-        el dato, el frontend cae al campo libre de siempre (sin bloquear la
+        """`(valor_factura, es_contado, valores_por_referencia, cond_pago_crudo,
+        base_gravable, iva, codigo_vendedor)` de la FE real de una tarea.
+        Cualquiera puede salir `None`/`{}` si Siesa no responde — nunca
+        levanta. Alimenta el toggle Pago Total/Parcial del conductor y el
+        recálculo en vivo cuando ajusta cantidades entregadas; si falta el
+        dato, el frontend cae al campo libre de siempre (sin bloquear la
         pantalla).
+
+        `base_gravable`/`iva`: suma de `f470_vlr_bruto`/`f470_vlr_imp` de las
+        mismas líneas que ya se leen para `valor_factura` — sin consulta
+        extra. Existen solo para que la pantalla del conductor pueda mostrar
+        el desglose real de la factura (base + IVA = total), no para decidir
+        nada — `valor_factura` (el neto) sigue siendo el único valor que
+        gobierna el cobro.
+
+        `codigo_vendedor`: `f200_id_vendedor` crudo de la FE (viene en la
+        misma respuesta que ya trae `get_rowids_factura`, sin llamada extra
+        a Siesa). El caller lo cruza contra `get_vendedor_contacto()` para
+        mostrarle al conductor nombre y teléfono del asesor. Puede ser
+        `"Generico"` en pedidos donde Siesa no asignó vendedor real — ese
+        código no cruza con ningún vendedor real y el frontend simplemente
+        no muestra el bloque.
+
+        ⚠️ Esta función tiene tres `return` — uno de ellos ya se rompió antes
+        (ver `tests/test_cond_pago.py::TestSalidaAntesDeConsultarSiesa`, "quedó
+        con 3 valores en vez de 4") por editar dos y olvidar el tercero.
+        Cualquier campo nuevo va en LOS TRES.
 
         `es_contado`: `True` | `False` | **`None` cuando no se sabe**.
 
@@ -908,15 +1009,20 @@ class RutaService:
 
         tipo_fe, consec_fe = resolver_fe_o_none(tarea)
         if not tipo_fe or not consec_fe:
-            # Cuatro elementos, no tres. Este `return` devolvía una tupla de 3
-            # mientras los dos callers desempaquetan 4: una tarea sin FE
-            # resoluble reventaba con `ValueError: not enough values to
+            # Siete elementos, no tres. Este `return` devolvía una tupla
+            # corta mientras los callers desempaquetan la larga: una tarea sin
+            # FE resoluble reventaba con `ValueError: not enough values to
             # unpack` y se llevaba la lista de paradas ENTERA — el camino que
             # el `None` de `es_contado` existe justamente para no romper.
-            return None, None, {}, None
+            # Main arregló el mismo bug por su cuenta (`0b398e8`) y después
+            # amplió la tupla a siete; se toma la suya.
+            return None, None, {}, None, None, None, None
 
         valor_factura = None
+        base_gravable = None
+        iva_factura = None
         valores_por_referencia = {}
+        codigo_vendedor = None
         diag = {'valoradas': 0, 'ambiguas': 0, 'referencias': []}
         # Unidad con la que el WMS maneja cada referencia. Se indexa por las
         # dos formas del código (Siesa e interna) porque el consumidor
@@ -941,6 +1047,15 @@ class RutaService:
                 # de abajo: es el dato sano de esta función. Que el unitario de
                 # una referencia se declare desconocido no puede alterarlo.
                 valor_factura = round(sum(float(ln.get('f470_vlr_neto', 0)) for ln in lineas), 2)
+                base_gravable = round(sum(float(ln.get('f470_vlr_bruto', 0)) for ln in lineas), 2)
+                iva_factura = round(sum(float(ln.get('f470_vlr_imp', 0)) for ln in lineas), 2)
+                # `f200_id_vendedor` es el NIT del vendedor, no su código — nunca
+                # cruza con `get_vendedor_contacto()` (que llave por `codigo_vendedor`,
+                # ej. '002'). El código real es `f210_codigo_vendedor`. Verificado en
+                # vivo 2026-09-02 con PD1447/FE-1444 (vendedor real, no "Generico"):
+                # f200_id_vendedor='53051164' (NIT) vs f210_codigo_vendedor='002 '
+                # (coincide con el maestro — FIGUEROA ANACONA LEIDA YOANA).
+                codigo_vendedor = str(lineas[0].get('f210_codigo_vendedor') or '').strip() or None
                 valores_por_referencia, diag = \
                     RutaService._unitarios_por_referencia(lineas, _uom_wms)
                 if diag['ambiguas']:
@@ -1001,7 +1116,10 @@ class RutaService:
                     _cp0.cobra_en_la_puerta(
                         tarea.cond_pago, connekta.cond_pago_ventas, connekta.cond_pago_ruta),
                     valores_por_referencia,
-                    tarea.cond_pago)
+                    tarea.cond_pago,
+                    base_gravable,
+                    iva_factura,
+                    codigo_vendedor)
         try:
             cabecera = connekta.get_pedido_cabecera(
                 tarea.tipo_docto_pedido_siesa, tarea.consec_docto_pedido_siesa)
@@ -1030,7 +1148,8 @@ class RutaService:
         except Exception as e:
             logger.warning('[RUTAS] cond_pago falló para tarea %s: %s', tarea.id, e)
 
-        return valor_factura, es_contado, valores_por_referencia, cond_pago_crudo
+        return (valor_factura, es_contado, valores_por_referencia, cond_pago_crudo,
+                base_gravable, iva_factura, codigo_vendedor)
 
     @staticmethod
     def confirmar_parada(ruta_id: int, tarea_id: int, usuario_id: int, data: dict) -> tuple:
@@ -1195,10 +1314,21 @@ class RutaService:
             # inventario que este estado vino a impedir. Lo que falta es el
             # pago, y eso lo dice `estado_entrega`, no el bulto.
             bultos_rechazados_ids = []
-        # PARCIAL no exige seleccionar bultos rechazados — la devolución se
-        # rastrea por referencia (items_entregados), no por bulto completo.
-        # Los bultos de esta tarea quedan ENTREGADO (el checklist de "bulto
-        # rechazado" es exclusivo de RECHAZADO).
+        # PARCIAL no EXIGE seleccionar bultos rechazados — la devolución se
+        # rastrea por referencia (items_entregados), no por bulto completo, y
+        # sin selección los bultos de esta tarea quedan ENTREGADO.
+        #
+        # Pero si el conductor SÍ marca alguno ("BULTOS CON DEVOLUCIÓN" en la
+        # pantalla, opcional, solo visible cuando hay ítems devueltos) ese
+        # bulto entra por acá igual que en RECHAZADO — es la misma casilla de
+        # `bultos_rechazados`, y el bloque de abajo no distingue el estado.
+        # No es una contradicción: a nivel de bulto solo existe ENTREGADO/
+        # RECHAZADO, nunca "parcial", y la caja física no se puede separar en
+        # la puerta — marcarla dice «esta caja concreta vuelve completa a
+        # bodega para que ahí la abran y cuenten», no «todo lo que traía se
+        # devolvió» (eso lo sigue definiendo `items_entregados`). Entra a la
+        # cola de reingreso (`bultos_rechazados()`) igual que un RECHAZADO
+        # total.
 
         ahora = datetime.utcnow()
         ids_rechazados_set = set(bultos_rechazados_ids)
@@ -1353,7 +1483,8 @@ class RutaService:
         tareas = ruta.tareas_unicas()
         recaudos_map = {r.tarea_id: r for r in ruta.recaudos}
         paradas = []
-        totales = {'EFECTIVO': 0, 'TRANSFERENCIA': 0, 'CHEQUE': 0, 'CREDITO': 0, 'EXENTO': 0}
+        totales = {'EFECTIVO': 0, 'TRANSFERENCIA': 0, 'TARJETA': 0, 'CHEQUE': 0,
+                   'CREDITO': 0, 'EXENTO': 0}
         sin_gestionar = 0
 
         for t in tareas:
@@ -1378,7 +1509,15 @@ class RutaService:
             paradas.append(parada)
             if r:
                 fp = (r.forma_pago or '').upper()
-                if fp in totales:
+                # Mismo criterio que `liquidacion_dashboard` (rutas.py): un
+                # `==` fijo contra `'TRANSFERENCIA'` dejaba de bucketizar
+                # cualquier medio por banco (`TRANSFERENCIA_BANCOLOMBIA_AH`,
+                # etc.) — el monto seguía sumando a `total_recaudado()`
+                # (agnóstico de forma_pago), solo desaparecía de este
+                # desglose por medio.
+                if fp.startswith('TRANSFERENCIA') or fp == 'CONSIGNACION':
+                    totales['TRANSFERENCIA'] += float(r.monto_cobrado or 0)
+                elif fp in totales:
                     totales[fp] += float(r.monto_cobrado or 0)
             else:
                 sin_gestionar += 1

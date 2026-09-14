@@ -9,8 +9,14 @@ Si Connekta rechaza (periodo cerrado, ítem bloqueado, timeout):
   - Tras 3 fallos → estado=FALLIDO → alerta roja en dashboard admin
 
 Tipos de job implementados:
-  TRANSFERENCIA_UBICACIONES → conector 173076 (RESERVA → PICKING)
   (extensible: agregar nuevo tipo + handler en _ejecutar_job)
+
+  TRANSFERENCIA_UBICACIONES (conector 173066, RESERVA→PICKING) se retiró
+  2026-09-07: ambas ubicaciones son la misma bodega Siesa (NB1 no tiene
+  sub-bodegas para picking/reserva, eso es organización interna del WMS),
+  así que no había ningún documento real que declarar — y encima 173066
+  no es idempotente en Siesa. reposicion_service.confirmar_reposicion() ya
+  no encola nada, queda 100% en el WMS.
 """
 
 import json
@@ -24,37 +30,6 @@ from app.models.conteo import EstadoConteo
 from app.utils.fecha import fecha_hoy_bogota
 
 logger = logging.getLogger(__name__)
-
-
-def encolar_transferencia_ubicaciones(
-    bodega_id: str,
-    ubicacion_origen: str,
-    ubicacion_destino: str,
-    referencia_item: str,
-    cantidad: int,
-    nota: str = '',
-    centro_op: str = None,
-    referencia_tipo: str = None,
-    referencia_id: int = None,
-) -> SiesaJob:
-    """
-    Encola una transferencia entre ubicaciones (conector 173066).
-    El caller hace commit.
-    """
-    return SiesaJob.encolar(
-        tipo='TRANSFERENCIA_UBICACIONES',
-        payload={
-            'bodega_id': bodega_id,
-            'ubicacion_origen': ubicacion_origen,
-            'ubicacion_destino': ubicacion_destino,
-            'referencia_item': referencia_item,
-            'cantidad': cantidad,
-            'nota': nota,
-            'centro_op': centro_op,
-        },
-        referencia_tipo=referencia_tipo,
-        referencia_id=referencia_id,
-    )
 
 
 def procesar_jobs_pendientes(app=None):
@@ -96,7 +71,18 @@ class DependenciaPendiente(Exception):
     de «un contador, dos significados» que ya costó las banderas de
     idempotencia. El precedente estaba al lado: `ConnektaCircuitOpenError`
     tampoco gasta reintento.
+
+    `espera_minutos` (default 30, el caso de arriba — recepción física,
+    horas) es la excepción, no la regla: DC esperando su RC, o una RIT
+    esperando el consecutivo que 174646 le va a poner, resuelven en el mismo
+    ciclo del DLQ (segundos, la propia liquidación los encadena). 30 minutos
+    ahí no evita nada — solo hace que una NI ya destrabada tarde media hora
+    en salir sin ninguna razón real detrás.
     """
+
+    def __init__(self, mensaje: str, espera_minutos: int = 30):
+        super().__init__(mensaje)
+        self.espera_minutos = espera_minutos
 
 
 _ADVISORY_LOCK_DLQ = 2007  # evita thundering herd cuando Siesa se recupera y hay N workers
@@ -252,7 +238,8 @@ def _run_dlq_jobs():
                 # en 6 horas esperando una recepción que ocurre mañana, y el
                 # cobro no entra nunca.
                 job.estado = EstadoSiesaJob.PENDIENTE
-                job.proximo_intento = datetime.utcnow() + timedelta(minutes=30)
+                job.proximo_intento = datetime.utcnow() + timedelta(
+                    minutes=getattr(e, 'espera_minutos', 30))
                 job.error_ultimo = str(e)[:2000]
                 db.session.commit()
                 logger.info('[DLQ] Job %s en espera: %s', job.id, e)
@@ -647,34 +634,6 @@ def _ejecutar_job(job: SiesaJob) -> dict:
     """Despacha el job al handler correcto según su tipo."""
     from app.services.connekta_gateway import connekta
     payload = job.get_payload()
-
-    if job.tipo == 'TRANSFERENCIA_UBICACIONES':
-        # P4: transferencias no son idempotentes en Siesa. Si el primer intento llegó
-        # (timeout de red) y reintentamos, creamos un doble movimiento de inventario.
-        # Solución conservadora: abortar el reintento y dejar que la reconciliación nocturna
-        # detecte la discrepancia, en lugar de arriesgar duplicar el traslado en Siesa.
-        # NOTA: usamos error_ultimo (no intentos) porque el stuck-sweep incrementa intentos
-        # sin llamar a Siesa — un job interrumpido por Railway tendría intentos>0 pero
-        # error_ultimo vacío (nunca se ejecutó realmente).
-        if job.intentos > 0 and job.error_ultimo:
-            logger.warning(
-                f'[DLQ] TRANSFERENCIA_UBICACIONES job={job.id} intento={job.intentos + 1} '
-                f'abortado por riesgo de duplicado — la reconciliación nocturna detectará '
-                f'la discrepancia si el primer intento falló realmente.'
-            )
-            job.max_intentos = job.intentos  # fuerza FALLIDO en el ciclo siguiente
-            raise Exception(
-                'Reintento abortado: transferencia no idempotente — revisar manualmente en Siesa'
-            )
-        return connekta.transferir_entre_ubicaciones(
-            bodega_id=payload['bodega_id'],
-            ubicacion_origen=payload['ubicacion_origen'],
-            ubicacion_destino=payload['ubicacion_destino'],
-            referencia_item=payload['referencia_item'],
-            cantidad=payload['cantidad'],
-            nota=payload.get('nota', ''),
-            centro_op=payload.get('centro_op'),
-        )
 
     if job.tipo == 'DESPACHO_F470':
         # Idempotencia: si un intento anterior llegó a Siesa (siesa_triggered=True),
@@ -1519,17 +1478,22 @@ def _ejecutar_job(job: SiesaJob) -> dict:
                 f'devolución. Sigue pendiente.'
             )
 
-        # Re-read monto: si el recaudo fue editado post-enqueue, usar el valor actual
+        # El monto ya viene calculado por la lógica de negocio real
+        # (`registrar_cobro_recaudo`/`_procesar_recaudo`): para ENTREGADO es
+        # el neto de Siesa menos retenciones, no `recaudo.monto_cobrado` —
+        # ese campo es lo que el conductor declaró en la puerta, un dato
+        # independiente para detectar discrepancias (ver
+        # `confirmar_retencion`), no la fuente de lo que hay que cobrar.
+        #
+        # Job 483 (recaudo 22, PD1425, ruta 23, 2026-08-21): acá había un
+        # "re-lectura" que comparaba el monto del payload ($60.151,97,
+        # correcto) contra `monto_cobrado` ($50.000, el dato crudo del
+        # conductor) y, al no coincidir, pisaba el correcto con el crudo —
+        # asumiendo que cualquier diferencia significaba que alguien editó
+        # el recaudo después de encolar el job. La diferencia era
+        # intencional (retención + neto real de Siesa), no una edición, y
+        # el RC salió a Siesa por $10.151,97 de menos.
         monto_payload = float(payload['monto'])
-        if recaudo:
-            monto_actual = float(recaudo.monto_cobrado or 0)
-            if abs(monto_actual - monto_payload) > 1 and monto_actual > 0:
-                logger.warning(
-                    '[DLQ] RECIBO_CAJA job=%s: monto payload=%.2f difiere de '
-                    'monto_cobrado actual=%.2f — usando actual',
-                    job.id, monto_payload, monto_actual
-                )
-                monto_payload = monto_actual
 
         # Pre-flight: ¿la factura que vamos a pagar ya quedó sin saldo?
         # (cross-flow WMS↔Cartera — alguien más ya la cruzó por otra vía)
@@ -1566,6 +1530,8 @@ def _ejecutar_job(job: SiesaJob) -> dict:
                 cuenta_cxc=payload.get('cuenta_cxc', ''),
                 unidad_negocio=payload.get('unidad_negocio', ''),
                 notas=payload.get('notas', ''),
+                ajuste_valor=float(payload.get('ajuste_valor') or 0),
+                ajuste_es_sobrante=bool(payload.get('ajuste_es_sobrante', False)),
             )
         except Exception as _e_post:
             # POST falló — verificar el saldo real antes de revertir (Regla #3:
@@ -1635,9 +1601,13 @@ def _ejecutar_job(job: SiesaJob) -> dict:
         # Si el RC no pasó aún, el cruce CxC del NI puede fallar porque
         # Siesa no ha reducido el saldo por el cash todavía.
         if recaudo and not recaudo.siesa_rc_triggered:
+            # Espera corta: el RC de este mismo recaudo suele resolverse en
+            # el mismo ciclo del DLQ (segundos) — no es la recepción física
+            # de horas/días que sí justifica el default de 30 min.
             raise DependenciaPendiente(
                 f'DOCUMENTO_CONTABLE_RET job={job.id}: DC espera el RC del '
-                f'recaudo {recaudo.id}. Sigue pendiente.'
+                f'recaudo {recaudo.id}. Sigue pendiente.',
+                espera_minutos=2,
             )
 
         # Pre-flag: cerrar crash window (misma lógica que RC), por cuenta.
@@ -1656,7 +1626,10 @@ def _ejecutar_job(job: SiesaJob) -> dict:
                 consec_fe=payload['consec_fe'],
                 co_factura=payload.get('co_factura', ''),
                 cuenta_cxc=payload.get('cuenta_cxc', ''),
+                unidad_negocio=payload.get('unidad_negocio', ''),
                 notas=payload.get('notas', ''),
+                ajuste_valor=float(payload.get('ajuste_valor') or 0),
+                ajuste_razon=payload.get('ajuste_razon', ''),
             )
         except Exception as _e_post:
             if recaudo and _puc:
@@ -1704,9 +1677,13 @@ def _ejecutar_job(job: SiesaJob) -> dict:
                     'motivo': f'ya despachado (STS {s.siesa_salida_consec}) — '
                               f'la RIT queda suelta, no se toca'}
         if not s.siesa_requisicion_consec:
+            # Espera corta: 174646 corre en el mismo ciclo del DLQ, no es
+            # una espera de horas como la recepción física.
             raise DependenciaPendiente(
                 f'{s.codigo}: la RIT todavía no tiene consecutivo — '
-                f'esperar a que 174646 lo resuelva')
+                f'esperar a que 174646 lo resuelva',
+                espera_minutos=2,
+            )
 
         siesa_traslado.registrar_compromisos(
             consec_rit=s.siesa_requisicion_consec,
@@ -1731,6 +1708,13 @@ def _post_completado(job: SiesaJob):
     if not job.referencia_tipo or not job.referencia_id:
         return
     if job.referencia_tipo == 'TareaReposicion':
+        # RAMA MUERTA (documentada 2026-09-09, no eliminada): reposición
+        # RESERVA→PICKING es 100% WMS desde el commit 9447464 y ya no crea
+        # ningún SiesaJob con este referencia_tipo (confirmado por grep en
+        # todo el repo) — este bloque nunca se ejecuta hoy. Se deja sin
+        # borrar porque no hace daño y documenta de dónde salían
+        # `siesa_job_id`/`siesa_enviado` en `TareaReposicion`, por si algún
+        # día se retoma ese flujo.
         from app.models.tarea_reposicion import TareaReposicion
         tarea = TareaReposicion.query.get(job.referencia_id)
         if tarea:

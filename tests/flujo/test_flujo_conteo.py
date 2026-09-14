@@ -178,47 +178,12 @@ class TestReposicionSana:
 
 class TestDetectorReposicion:
     """El descuadre de este flujo es invisible para cualquier cuadre por sumas:
-    el total no cambia, se mueve de una ubicación a otra."""
+    el total no cambia, se mueve de una ubicación a otra.
 
-    def test_ve_una_completada_que_no_llego_a_siesa(self, db, reposicion):
-        reposicion.siesa_enviado = False
-        db.session.commit()
-        assert _rep('REP-01')['total'] == 1
-
-    def _job(self, db, reposicion, estado, intentos=0, error=None):
-        from app.models.siesa_job import SiesaJob
-        j = SiesaJob(tipo='TRANSFERENCIA_UBICACIONES', estado=estado,
-                     referencia_tipo='TareaReposicion', referencia_id=reposicion.id,
-                     intentos=intentos, error_ultimo=error)
-        j.payload = '{}'
-        db.session.add(j)
-        db.session.commit()
-        return j
-
-    def test_ve_el_doble_envio(self, db, reposicion):
-        """El riesgo que este flujo declara: **173066 no es idempotente**, así
-        que dos jobs completados son dos movimientos en Siesa y uno solo en el
-        WMS.
-
-        La versión anterior de REP-02 pedía `siesa_enviado AND estado !=
-        COMPLETADA` — y no había estado alcanzable que lo cumpliera: la bandera
-        solo se escribe DENTRO del post-COMPLETADO. Un BLOQUEA en verde
-        permanente sobre el único peligro que el módulo nombra.
-        """
-        self._job(db, reposicion, 'COMPLETADO')
-        assert _rep('REP-02')['total'] == 0
-        self._job(db, reposicion, 'COMPLETADO')
-        assert _rep('REP-02')['total'] == 1
-
-    def test_ve_un_reintento_sobre_un_post_que_pudo_entrar(self, db, reposicion):
-        """La Regla 3 y el aborto del DLQ existen por esto; si dejó rastro, hay
-        que mirarlo."""
-        self._job(db, reposicion, 'FALLIDO', intentos=2, error='timeout')
-        assert _rep('REP-02')['total'] == 1
-
-    def test_un_envio_limpio_no_avisa(self, db, reposicion):
-        self._job(db, reposicion, 'COMPLETADO')
-        assert _rep('REP-02')['total'] == 0
+    REP-01/REP-02 (envío a Siesa del 173066) se retiraron 2026-09-07 junto
+    con el propio envío — RESERVA y PICKING son la misma bodega Siesa, no
+    hay documento real que declarar. Sus tests vivían acá; se borraron con
+    ellos."""
 
     def test_ve_que_se_movio_mas_de_lo_pedido(self, db, reposicion):
         reposicion.unidades_movidas = 80      # pedidas: 50
@@ -238,6 +203,5 @@ class TestDetectorReposicion:
 
     def test_cuenta_las_que_estan_en_curso(self, db, reposicion):
         reposicion.estado = 'EN_PROCESO'
-        reposicion.siesa_enviado = False
         db.session.commit()
         assert _rep('REP-05')['total'] == 1

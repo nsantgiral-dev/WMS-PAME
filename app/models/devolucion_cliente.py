@@ -176,6 +176,7 @@ class LineaDevolucionCliente(db.Model):
             'producto_id': self.producto_id,
             'producto_codigo': self.producto.codigo if self.producto else None,
             'producto_nombre': self.producto.nombre if self.producto else None,
+            'codigo_barras': self.producto.codigo_barras if self.producto else None,
             'codigo_siesa': self.codigo_siesa,
             'cantidad_facturada': float(self.cantidad_facturada or 0),
             'cantidad_devuelta': float(self.cantidad_devuelta or 0),

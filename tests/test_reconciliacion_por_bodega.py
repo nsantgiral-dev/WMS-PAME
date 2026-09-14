@@ -110,8 +110,9 @@ def _reconciliar(app, monkeypatch, siesa_por_bodega: dict) -> dict:
     # El guard anti-respuesta-parcial exige ≥50 SKU — es correcto en producción
     # y no tiene nada que ver con lo que este archivo mide. `raising=False` para
     # que el mismo test corra contra la versión de antes, donde no existía.
-    monkeypatch.setattr(inv, '_verificar_respuesta_no_parcial',
-                        lambda _inventario: None, raising=False)
+    monkeypatch.setattr(
+        inv, '_verificar_respuesta_no_parcial',
+        lambda _inventario, _bod=None, _almacen_id=None: None, raising=False)
 
     inv._estado_reconciliacion['ultimo_resultado'] = None
     inv._estado_reconciliacion['ultimo_error'] = None

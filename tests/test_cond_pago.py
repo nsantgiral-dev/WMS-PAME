@@ -84,8 +84,10 @@ class TestUnaSolaPolitica:
 
     from pathlib import Path
     _RAIZ = Path(__file__).resolve().parents[1]
+    # connekta_gateway.py -> connekta_facturacion_gateway.py el 2026-09-09
+    # (paso 7 de la deuda de tamaño): ahí vive ahora la lectura de cond_pago.
     _ARCHIVOS = ['app/services/ruta_service.py',
-                 'app/services/connekta_gateway.py']
+                 'app/services/connekta_facturacion_gateway.py']
 
     def test_nadie_vuelve_a_leer_el_vacio_por_su_cuenta(self):
         import re
@@ -141,7 +143,7 @@ class TestRutaServiceNoAfirmaContado:
         monkeypatch.setattr(connekta, 'get_pedido_cabecera',
                             lambda *a, **k: {'f430_id_cond_pago': ''}, raising=False)
 
-        _, es_contado, _, crudo = rs.RutaService._valor_y_cond_pago(_Tarea())
+        _, es_contado, _, crudo, _, _, _ = rs.RutaService._valor_y_cond_pago(_Tarea())
         assert crudo == '', (
             'el campo crudo tiene que viajar: `es_contado` lo deriva esta '
             'misma función y no sirve para verificar el supuesto que la gobierna')
@@ -168,9 +170,45 @@ class TestRutaServiceNoAfirmaContado:
         monkeypatch.setattr(connekta, 'get_pedido_cabecera',
                             lambda *a, **k: {'f430_id_cond_pago': 'C01'}, raising=False)
 
-        _, es_contado, _, crudo = rs.RutaService._valor_y_cond_pago(_Tarea())
+        _, es_contado, _, crudo, _, _, _ = rs.RutaService._valor_y_cond_pago(_Tarea())
         assert es_contado is True
         assert crudo == 'C01', 'el crudo permite distinguir C01 de un vacío'
+
+    def test_sigue_devolviendo_7_valores_sin_fe_resuelta(self, monkeypatch):
+        """`resolver_fe_o_none` da `(None, None)` cuando la FE todavía no
+        existe (pedido sin facturar) — la salida temprana de
+        `_valor_y_cond_pago` para ese caso quedó con 3 valores en vez de 4
+        cuando se agregó `cond_pago_crudo` a los otros dos `return` (y no a
+        este). Rompía `listar_paradas` con `ValueError: not enough values to
+        unpack` — toda la pantalla de paradas del conductor, 500, para
+        cualquier ruta con un pedido sin FE resuelta todavía. Ahora son 7 (se
+        agregó `base_gravable`/`iva` para el desglose de la factura, y
+        `codigo_vendedor` para mostrarle al conductor el asesor del pedido) —
+        el mismo riesgo, en los mismos tres `return`."""
+        from app.services import ruta_service as rs
+        from app.services.connekta_gateway import connekta
+
+        class _Tarea:
+            id = 1
+            rm_tipo, rm_consec = 'RS', 7
+            tipo_docto_pedido_siesa = 'PD'
+            consec_docto_pedido_siesa = '999'
+
+        monkeypatch.setattr(connekta, 'modo_simulacion', False, raising=False)
+        # Sin filas que matcheen → resolver_fe levanta FENoEncontrada →
+        # resolver_fe_o_none devuelve (None, None) → la rama que fallaba.
+        monkeypatch.setattr(connekta, 'get_detalle_factura', lambda **kw: [], raising=False)
+
+        resultado = rs.RutaService._valor_y_cond_pago(_Tarea())
+        assert len(resultado) == 7
+        valor_factura, es_contado, valores_ref, crudo, base_gravable, iva, codigo_vendedor = resultado
+        assert valor_factura is None
+        assert es_contado is None
+        assert valores_ref == {}
+        assert crudo is None
+        assert base_gravable is None
+        assert iva is None
+        assert codigo_vendedor is None
 
 
 class TestElCrudoDistingueLoQueElDerivadoColapsa:
@@ -205,14 +243,14 @@ class TestElCrudoDistingueLoQueElDerivadoColapsa:
         return rs.RutaService._valor_y_cond_pago(self._Tarea())
 
     def test_siesa_responde_sin_condicion(self, monkeypatch):
-        _, es_contado, _, crudo = self._correr(
+        _, es_contado, _, crudo, _, _, _ = self._correr(
             monkeypatch, lambda *a, **k: {'f430_id_cond_pago': ''})
         assert crudo == '' and es_contado is None
 
     def test_siesa_no_responde(self, monkeypatch):
         def _explota(*a, **k):
             raise Exception('Connekta caído')
-        _, es_contado, _, crudo = self._correr(monkeypatch, _explota)
+        _, es_contado, _, crudo, _, _, _ = self._correr(monkeypatch, _explota)
         assert crudo is None, 'sin consulta no hay dato crudo — no es lo mismo que vacío'
         assert es_contado is None
 
@@ -302,7 +340,7 @@ class TestLaCondicionQuedaAnotadaEnLaTarea:
         self._preparar(
             monkeypatch,
             lambda *a, **k: (_ for _ in ()).throw(AssertionError('volvió a preguntar')))
-        _, es_contado, _, crudo = rs.RutaService._valor_y_cond_pago(t)
+        _, es_contado, _, crudo, _, _, _ = rs.RutaService._valor_y_cond_pago(t)
         assert crudo == 'C01' and es_contado is True
 
     def test_lo_anotado_vacio_no_dispara_otra_consulta(self, monkeypatch):
@@ -316,7 +354,7 @@ class TestLaCondicionQuedaAnotadaEnLaTarea:
         self._preparar(
             monkeypatch,
             lambda *a, **k: (_ for _ in ()).throw(AssertionError('volvió a preguntar')))
-        _, es_contado, _, crudo = rs.RutaService._valor_y_cond_pago(t)
+        _, es_contado, _, crudo, _, _, _ = rs.RutaService._valor_y_cond_pago(t)
         assert crudo == '' and es_contado is None
 
 
@@ -373,8 +411,11 @@ class TestElHuecoNoSeTapaConElCodigoDeContado:
     inventario ya descargado.
     """
 
+    # trigger_factura_desde_remision se movió a connekta_facturacion_gateway.py
+    # el 2026-09-09 (paso 7 de la deuda de tamaño) — ahí lee `core.X`, no
+    # `self.X` (mismo patrón que el resto de dominios extraídos).
     _GW = __import__('pathlib').Path(__file__).resolve().parents[1] / \
-        'app' / 'services' / 'connekta_gateway.py'
+        'app' / 'services' / 'connekta_facturacion_gateway.py'
 
     @pytest.fixture(scope='class')
     def fuente(self):
@@ -384,9 +425,9 @@ class TestElHuecoNoSeTapaConElCodigoDeContado:
         return t[i:j]
 
     def test_el_fallback_es_la_condicion_de_ruta(self, fuente):
-        assert 'self.cond_pago_ruta' in fuente, (
+        assert 'core.cond_pago_ruta' in fuente, (
             'el hueco de f430_id_cond_pago volvió a taparse con otra cosa')
-        assert 'or self.cond_pago_ventas or None' not in fuente, (
+        assert 'or core.cond_pago_ventas or None' not in fuente, (
             '\nEl fallback volvió al código de CONTADO (`cond_pago_ventas`).\n'
             'Eso emite una FE que Siesa no aprueba — con la remisión ya hecha '
             'y el inventario ya descargado. Usar `cond_pago_ruta`.')
@@ -574,7 +615,7 @@ class TestLaPantallaDelConductorReconoceLaCondicionDeRuta:
                             lambda *a, **k: (_ for _ in ()).throw(
                                 AssertionError('volvió a preguntar')), raising=False)
 
-        _, cobra, _, crudo = rs.RutaService._valor_y_cond_pago(self._Tarea())
+        _, cobra, _, crudo, _, _, _ = rs.RutaService._valor_y_cond_pago(self._Tarea())
         assert crudo == 'C02'
         assert cobra is True, (
             'C02 anotado tiene que pedir cobro en la pantalla del conductor, '

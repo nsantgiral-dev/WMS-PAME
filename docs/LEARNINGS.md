@@ -2,6 +2,14 @@
 
 > Referencia para construir herramientas con IA sin repetir errores.
 > Compilado: 2026-07-22 | 25 incidentes | 6 decisiones arquitectónicas | 10 lecciones core
+> Auditado contra el código real el 2026-09-09 (sin cambios de código, solo
+> verificación): 23 de 25 siguen exactamente como están descritos. 2 quedaron
+> corregidos in situ (1.14, 5.2) porque el mecanismo real hoy es más preciso
+> que la descripción original — ninguno se borró, los dos siguen vigentes como
+> regla, solo se actualizó el "cómo" para que coincida con el código actual.
+> El detalle día a día posterior a esta fecha de compilación vive en
+> `CLAUDE.md` — este documento es el resumen estable, no se le pega cada
+> incidente nuevo uno por uno.
 
 ---
 
@@ -77,6 +85,14 @@
 ### 1.14 Anti-Duplicado FE — Fail-Fast si API Falla (ALTO)
 **Qué pasó**: Si GET API 45 fallaba con timeout, código permitía POST sin verificar → FE duplicada.
 **Regla**: Si consulta de pre-check falla → BLOQUEAR POST. No asumir que está OK.
+**Actualizado 2026-09-09**: la regla sigue firme para fallas reales (timeout,
+red, 5xx), pero se descubrió en vivo (2026-09-04) un tercer caso que no es
+falla: Siesa responde **HTTP 400** con `"No se encontraron registros"` cuando
+la factura simplemente no existe todavía — el caso más común, no una
+excepción. Tratarlo como fallo bloqueaba el cierre normal de cualquier pedido
+sin FE previa. Hoy `_get()` distingue ese patrón exacto y lo trata como
+"sin resultados", no como error — la regla de bloquear POST sigue aplicando
+solo a fallas genuinas de la API, no a un "no encontrado" legítimo.
 
 ---
 
@@ -145,6 +161,16 @@
 ### 5.2 Cross-Flow WMS ↔ Gestor Cartera (ALTO)
 **Qué pasó**: Dos sistemas pueden crear RC para la misma factura. Sin coordinación → RC duplicado.
 **Regla**: Pre-flight API 21 antes de POST 142888. Si ya existe RC del mismo cliente+monto+fecha → marcar como completado sin enviar.
+**Verificado 2026-09-09**: el pre-flight existe y sigue activo, pero no por
+cliente+monto+fecha — quedó implementado mirando el **saldo real de la
+factura en cartera** (`_factura_saldada_en_siesa()` en `siesa_job_service.py`,
+apoyado en `services/cxc_cruce.py` vía `API_v2_CxC_General`, la misma "API 21"
+de la regla original). Corre en dos momentos: antes del POST de 142888 (si la
+factura ya quedó saldada por otra vía, se marca completado sin enviar) y
+también después de un POST que lanzó excepción (para distinguir un timeout
+que sí entró de uno que no). Devuelve `True`/`False`/`None` — ante `None`
+("no pude verificar") no reintenta, para no arriesgar el duplicado que este
+incidente describe.
 
 ### 5.3 Liquidación Fire-and-Forget (ALTO)
 **Qué pasó**: Click "Liquidar" disparaba NC+RC+DC automáticamente sin verificar retenciones, sin preview, sin datos contables reales.

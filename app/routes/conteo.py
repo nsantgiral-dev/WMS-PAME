@@ -117,6 +117,28 @@ def mis_tareas():
     }), 200
 
 
+@conteo_bp.route('/definitivos', methods=['GET'])
+@jwt_required()
+def listar_definitivos():
+    """
+    Cola de "Conteo Definitivo" — sesiones CC1≠CC2 esperando el CC3 que
+    rompe el empate. Solo supervisor/admin/jefe_almacén: el CC3 nace sin
+    asignar a propósito (`ConteoService._crear_conteo_verificacion`) y este
+    es el único lugar donde alguien lo puede tomar.
+    """
+    from app.models.usuario import Usuario
+    try:
+        uid = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
+    u = db.session.get(Usuario, uid)
+    if not u or u.rol not in Roles.SUPERVISION:
+        return jsonify({'error': 'Sin permiso para ver la cola de conteo definitivo'}), 403
+    almacen_id = request.args.get('almacen_id', type=int)
+    pendientes = ConteoService.listar_definitivos(almacen_id=almacen_id)
+    return jsonify({'pendientes': pendientes, 'total': len(pendientes)}), 200
+
+
 @conteo_bp.route('/<int:id>/tarea', methods=['GET'])
 @jwt_required()
 def obtener_tarea(id):
@@ -218,40 +240,6 @@ def confirmar_ajuste(id):
     except Exception as e:
         logger.exception(f'[CONTEO] Error inesperado en confirmar_ajuste sesion={id}')
         return jsonify({'error': str(e)}), 500
-
-
-@conteo_bp.route('/auditorias-urgentes', methods=['GET'])
-@jwt_required()
-def auditorias_urgentes():
-    """
-    Tareas de picking BLOQUEADAS pendientes de que el admin/supervisor las
-    audite directamente (ver PickingService.auditar_tarea). Reemplaza el
-    conteo doble-ciego para excepciones puntuales de picking — el admin
-    confirma si el producto está realmente agotado (el pedido sigue parcial)
-    o si estaba mal ubicado (se completa la línea), sin esperar turno de
-    otro operario en la cola de conteo cíclico.
-    """
-    from app.models.usuario import Usuario
-    from app.models.picking import TareaPicking
-    from sqlalchemy.orm import selectinload as _sl
-    try:
-        uid = int(get_jwt_identity())
-    except (TypeError, ValueError):
-        return jsonify({'error': 'Token inválido'}), 401
-    usuario = Usuario.query.get(uid)
-    if not usuario or usuario.rol not in Roles.SUPERVISION:
-        return jsonify({'error': 'Solo admin o supervisor puede ver las auditorías urgentes'}), 403
-    almacen_id = request.args.get('almacen_id', type=int)
-    q = (TareaPicking.query
-         .options(_sl(TareaPicking.producto), _sl(TareaPicking.ubicacion))
-         .filter(TareaPicking.estado == 'BLOQUEADO'))
-    if almacen_id:
-        q = q.filter_by(almacen_id=almacen_id)
-    tareas = q.order_by(TareaPicking.fecha_creacion.desc()).all()
-    return jsonify({
-        'auditorias': [t.to_dict() for t in tareas],
-        'total': len(tareas),
-    }), 200
 
 
 @conteo_bp.route('/abc/generar-tareas', methods=['POST'])
