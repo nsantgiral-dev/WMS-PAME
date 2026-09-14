@@ -557,6 +557,28 @@ def reclasificar_cuerpo(almacen_id: int, pasillo: str, fila: int, cuerpo: int,
     """
     ubicaciones = _ubicaciones_de_cuerpo(almacen_id, pasillo, fila, cuerpo)
 
+    # ── Primer pase: ¿hay algún hueco con mercancía NO VENDIBLE? ─────────
+    #
+    # El lote no aborta a propósito —un hueco bloqueado no debe impedir
+    # reclasificar los demás, y eso está probado— pero esa tolerancia tiene un
+    # borde que nadie miró: si el hueco bloqueado guarda AVERIAS, el cuerpo
+    # queda de zona MIXTA, y `editar_cuerpo` lee la zona de un hueco cualquiera
+    # y reconstruye todo el cuerpo en esa zona. Dos clics de admin, sin un solo
+    # error, y la mercancía dañada sale al bucket vendible con el cuerpo ya
+    # renombrado a PICKING.
+    #
+    # Para stock vendible se conserva el comportamiento de siempre: bloquea ese
+    # hueco y sigue. Solo la mercancía que no se puede vender aborta el lote.
+    no_vendible = {ub.codigo: _motivo_stock_no_reubicable(ub.id)
+                   for ub in ubicaciones
+                   if _motivo_stock_no_reubicable(ub.id)}
+    if no_vendible and (tipo_zona is not None or activo is False):
+        detalle = '; '.join(f'{c}: {m}' for c, m in no_vendible.items())
+        raise ValueError(
+            f'no se reclasificó ningún hueco: {detalle}. Reclasificar solo una '
+            f'parte dejaría el cuerpo con huecos de dos zonas, y remodularlo '
+            f'después mandaría esa mercancía al bucket vendible.')
+
     actualizadas = []
     bloqueadas = {}
     advertencias = []
@@ -737,7 +759,17 @@ def editar_cuerpo(almacen_id: int, pasillo: str, fila: int, cuerpo: int,
     igual que la zona, remodular estructura no cambia qué clase de mueble es.
     """
     ubicaciones = _ubicaciones_de_cuerpo(almacen_id, pasillo, fila, cuerpo)
-    tipo_zona = ubicaciones[0].tipo_zona  # un cuerpo es 100% de una sola zona
+    # `reclasificar_cuerpo` puede dejar un cuerpo a medio reclasificar (bloquea
+    # el hueco con stock y sigue con los demás), y entonces esto leería la zona
+    # de un hueco cualquiera y reconstruiría TODO el cuerpo en esa zona. Es el
+    # camino por el que un cuerpo de averías se convierte en PICKING sin que
+    # nadie lo decida. Se verifica en vez de suponerlo.
+    zonas = {u.tipo_zona for u in ubicaciones}
+    if len(zonas) > 1:
+        raise ValueError(
+            f'el cuerpo tiene huecos de más de una zona ({", ".join(sorted(z or "?" for z in zonas))}) '
+            f'— reclasificá el cuerpo completo antes de remodularlo')
+    tipo_zona = ubicaciones[0].tipo_zona
     tipo_mueble = ubicaciones[0].tipo or 'estanteria'
 
     if cantidad_entrepanos < 1:
@@ -754,6 +786,10 @@ def editar_cuerpo(almacen_id: int, pasillo: str, fila: int, cuerpo: int,
     bloqueados = []
     for ub in ubicaciones:
         motivo = _motivo_historial_operativo_real(ub.id)
+        if motivo is None:
+            # Segunda pregunta, la que faltaba: no «¿trabajó alguien acá?»
+            # sino «¿hay algo acá que no se pueda vender?».
+            motivo = _motivo_stock_no_reubicable(ub.id)
         if motivo:
             bloqueados.append(f'{ub.codigo}: {motivo}')
     if bloqueados:
@@ -965,6 +1001,46 @@ def asignar_producto(ubicacion_id: int, producto_id: int, cantidad: int, usuario
 # ──────────────────────────────────────────────────────────────────────────────
 # 5. Reclasificación — con guardarraíles
 # ──────────────────────────────────────────────────────────────────────────────
+
+def _motivo_stock_no_reubicable(ubicacion_id: int) -> str | None:
+    """El stock que NO se puede verter a `SIESA-GENERAL`: el de una zona que no
+    es vendible.
+
+    ## El agujero que cierra
+
+    `editar_cuerpo` traspasa el stock de cada hueco a `SIESA-GENERAL` antes de
+    borrarlo, y `_traspasar_hacia_general` crea ese bucket con
+    `tipo_zona='GENERAL'` — o sea **vendible**. Remodular un cuerpo de averías
+    devolvía la mercancía dañada al FEFO, sin un error, sin aviso, y con un
+    movimiento cuyo texto es cierto y no menciona la avería.
+
+    El guard que había (`_motivo_historial_operativo_real`) pregunta *«¿alguien
+    trabajó acá?»* — tareas de picking, reposición, conteo, movimientos. Un bin
+    de averías que solo recibió una avería de auditoría **no tiene nada de eso**:
+    hasta el 2026-09-14 el movimiento se escribía contra el hueco de ORIGEN. Así
+    que el guard lo veía limpio. Nunca preguntó *«¿hay algo acá?»*, que es la
+    pregunta que importa cuando lo que hay no se puede vender.
+
+    ## Por qué pregunta por `tipo_zona` y no por el prefijo del código
+
+    Porque el código miente: `reclasificar_cuerpo` puede dejar huecos `AVE-*`
+    con `tipo_zona='PICKING'`. Y quién es vendible no se decide acá — se le
+    pregunta a la política única de `picking_service`. La copia de esa condición
+    es exactamente lo que ya dejó salir al FEFO el bin `AVERIADOS`.
+    """
+    from app.services.picking_service import es_ubicacion_vendible
+
+    ub = Ubicacion.query.get(ubicacion_id)
+    if ub is None or es_ubicacion_vendible(ub):
+        return None
+    stock = _stock_activo(ubicacion_id)
+    if stock <= 0:
+        return None
+    return (f'tiene {stock} unidad(es) en una zona no vendible '
+            f'({ub.tipo_zona}) — vaciálo primero (Inventario → Ajuste) o '
+            f'reclasificá el cuerpo a inactivo. Remodularlo mandaría esa '
+            f'mercancía al bucket vendible.')
+
 
 def _stock_activo(ubicacion_id: int) -> int:
     return db.session.query(

@@ -123,6 +123,83 @@ def campos_ubicacion_averias() -> dict:
 
 class PickingService:
 
+    #: El bin de respaldo, mismo literal que `_UBICACION_AVERIADOS` de
+    #: `devolucion_cliente_service`. Se escribe acá porque este módulo es el
+    #: canónico de la política y está exento del barrido de literales de zona
+    #: (`tests/test_politica_vendible_unica.py`); ponerlo en otro archivo de
+    #: `app/` pondría rojo ese trinquete.
+    _CODIGO_BIN_AVERIAS_RESPALDO = 'AVERIADOS'
+
+    @staticmethod
+    def _destino_averias_garantizado(almacen_id: int, cantidad: int):
+        """Destino OBLIGATORIO para mercancía que se declara averiada.
+
+        Devuelve `(ubicacion, degradada)` y **nunca `None`**, que es el punto
+        entero de esta función.
+
+        ## Por qué existe
+
+        `auditar_tarea` restaba del origen aunque `_ubicacion_averias_disponible`
+        devolviera `None`, y escribía un movimiento que decía «trasladada a zona
+        AVERIAS». Sin destino eso no es un traslado: es una **pérdida de
+        inventario con un registro que miente**, y salía con HTTP 200. El caso
+        se daba justo en el almacén que todavía no armó su zona de averías en el
+        layout — o sea, el estado previo a que alguien la arme.
+
+        ## La cascada, y por qué en este orden
+
+        1. **`AVE-*` del layout.** Es la preferencia y no se negocia: tiene
+           dirección física, que es lo que permite ir a buscar la caja. La
+           decisión es del 2026-09-03 y su motivo está escrito: *«el averiado es
+           dinero trazable y muchas veces se devuelve»*.
+        2. **El bin `AVERIADOS`, DECLARADO como degradación.** Un destino con
+           menos trazabilidad es peor que uno con dirección física, y mejor que
+           perder las unidades. El motivo del movimiento dice que se degradó;
+           un respaldo silencioso sería la mitad del defecto original.
+        3. **Si no existe, se crea.** La asimetría que causaba el defecto era
+           que el escritor de devoluciones crea su bin y el de picking solo
+           leía. Acá se cierra.
+
+        `_ubicacion_averias_disponible` **no cambia de contrato**: sigue
+        significando «un bin del layout con cupo, o `None`». Meterle el respaldo
+        adentro borraría la diferencia entre destino correcto y degradado justo
+        donde su docstring documenta que excluir `AVERIADOS` fue una decisión.
+        """
+        ub = PickingService._ubicacion_averias_disponible(almacen_id, cantidad)
+        if ub:
+            return ub, False
+
+        codigo = PickingService._CODIGO_BIN_AVERIAS_RESPALDO
+        ub = Ubicacion.query.filter_by(codigo=codigo,
+                                       almacen_id=almacen_id).first()
+        if ub:
+            # Misma red que el escritor vivo de devoluciones: si el bin quedó
+            # marcado vendible (el defecto que `m016` vino a corregir), se
+            # repara antes de meterle mercancía dañada.
+            if es_ubicacion_vendible(ub):
+                for campo, valor in campos_ubicacion_averias().items():
+                    setattr(ub, campo, valor)
+                logger.warning(
+                    '[AUDITORIA] %s estaba marcada como vendible — corregida '
+                    'antes de recibir mercancía averiada', ub.codigo)
+            return ub, True
+
+        # `flush()` desnudo, SIN el `try/except: rollback()` del escritor vivo:
+        # ese rollback es de sesión completa y acá se llevaría por delante el
+        # `reg.bloqueado` ya descongelado, dejando una tarea CANCELADA con el
+        # inventario todavía congelado. Si el INSERT choca, que la excepción
+        # suba y revierta la transacción entera — estado consistente, aunque feo.
+        ub = Ubicacion(codigo=codigo, almacen_id=almacen_id, activo=True,
+                       **campos_ubicacion_averias())
+        db.session.add(ub)
+        db.session.flush()
+        logger.warning(
+            '[AUDITORIA] almacén %s no tiene ninguna ubicación AVERIAS del '
+            'layout — se creó el bin de respaldo %s. Armá la zona de averías '
+            'en Layout para que la avería tenga dirección física.',
+            almacen_id, codigo)
+        return ub, True
+
     @staticmethod
     def _ubicacion_averias_disponible(almacen_id: int, cantidad_necesaria: int):
         """
@@ -759,29 +836,70 @@ class PickingService:
 
         elif resultado == 'AVERIA':
             if reg and cantidad_hallada > 0:
-                averia_ub = PickingService._ubicacion_averias_disponible(
-                    tarea.almacen_id, cantidad_hallada
-                )
-                if averia_ub:
-                    reg_averia = UbicacionProducto.query.filter_by(
-                        ubicacion_id=averia_ub.id, producto_id=tarea.producto_id
-                    ).first()
-                    if reg_averia:
-                        reg_averia.cantidad += cantidad_hallada
-                    else:
-                        db.session.add(UbicacionProducto(
-                            ubicacion_id=averia_ub.id,
-                            producto_id=tarea.producto_id,
-                            cantidad=cantidad_hallada,
-                        ))
-                reg.cantidad = max(0, reg.cantidad - cantidad_hallada)
+                # ── Conservación: no se mueve más de lo que hay ──────────
+                #
+                # `cantidad_hallada` viene del formulario sin validar contra el
+                # stock real. Con 50 sobre un origen de 10, el `max(0, ...)` de
+                # abajo clampeaba el origen a 0 y el destino acreditaba 50:
+                # cuarenta unidades averiadas **inventadas**. Se mueve lo que
+                # existe y la diferencia se declara en el motivo.
+                a_mover = min(cantidad_hallada, reg.cantidad)
+                recortado = cantidad_hallada - a_mover
+
+                # A partir de acá el destino EXISTE. Sin destino no se resta:
+                # eso sería una pérdida, no un traslado.
+                averia_ub, degradada = PickingService._destino_averias_garantizado(
+                    tarea.almacen_id, a_mover)
+
+                reg_averia = UbicacionProducto.query.filter_by(
+                    ubicacion_id=averia_ub.id, producto_id=tarea.producto_id
+                ).first()
+                if reg_averia:
+                    reg_averia.cantidad += a_mover
+                else:
+                    db.session.add(UbicacionProducto(
+                        ubicacion_id=averia_ub.id,
+                        producto_id=tarea.producto_id,
+                        cantidad=a_mover,
+                        # Lote y vencimiento viajan con la mercancía: se perdían
+                        # en el traslado, y son lo que permite saber de qué
+                        # entrada venía la caja rota.
+                        lote=reg.lote,
+                        fecha_vencimiento=reg.fecha_vencimiento,
+                    ))
+
+                reg.cantidad = max(0, reg.cantidad - a_mover)
+
+                detalle = (f' (SIN zona AVERIAS de layout en el almacén — '
+                           f'degradado al bin {averia_ub.codigo})' if degradada
+                           else f' → {averia_ub.codigo}')
+                if recortado:
+                    detalle += (f'. Se declararon {cantidad_hallada} pero el '
+                                f'origen solo tenía {a_mover}')
+                base = (f'Auditoría tarea {tarea.codigo}: mercancía averiada '
+                        f'trasladada a zona AVERIAS')
+                motivo = (base + detalle)[:200]
+
                 db.session.add(MovimientoInventario(
                     producto_id=tarea.producto_id,
                     ubicacion_id=tarea.ubicacion_id,
                     almacen_id=tarea.almacen_id,
                     tipo='AJUSTE_AUDITORIA',
-                    cantidad=-cantidad_hallada,
-                    motivo=f'Auditoría tarea {tarea.codigo}: mercancía averiada trasladada a zona AVERIAS',
+                    cantidad=-a_mover,
+                    motivo=motivo,
+                    numero_documento=tarea.referencia_documento,
+                    usuario_id=admin_id,
+                ))
+                # La pata que faltaba incluso en el camino feliz: el destino no
+                # tenía ningún movimiento. Un traslado de una sola pata no es un
+                # traslado — es un ajuste que miente sobre a dónde fue.
+                db.session.add(MovimientoInventario(
+                    producto_id=tarea.producto_id,
+                    ubicacion_id=averia_ub.id,
+                    almacen_id=tarea.almacen_id,
+                    tipo='AJUSTE_AUDITORIA',
+                    cantidad=a_mover,
+                    motivo=motivo,
                     numero_documento=tarea.referencia_documento,
                     usuario_id=admin_id,
                 ))

@@ -511,6 +511,44 @@ Configurar en Siesa: Maestros asociados > Medios de pago > "Cnta. bancaria"
 
 ---
 
+## Cómo se cierra un defecto acá (2026-09-14)
+
+**Arreglar el caso no cierra el defecto. Cierra la instancia.** La regla de este
+repo es que un error no puede volver dos veces, y eso exige tres cosas, en este
+orden:
+
+1. **Nombrar la CLASE, no el caso.** «La avería de picking restaba sin destino»
+   es el caso. La clase es *«se resta inventario sin declarar a dónde fue»*, y
+   en `app/` había **diez** sitios que restan. El arreglo es del caso; el
+   trinquete es de la clase.
+
+2. **Un trinquete con inventario declarado.** No una heurística que adivine —
+   un guard con falsos positivos se termina desactivando, y eso es peor que no
+   tenerlo. La forma que funciona en este repo: una lista de sitios conocidos
+   con su motivo escrito, y tres tests — que la lista **no crezca** sin
+   decisión, que **solo encoja**, y que cada entrada **diga por qué**.
+   Ver `tests/test_inventario_no_se_resta_sin_destino.py`.
+
+3. **Meta-tests que prueben que el guard muerde.** Un escáner que se
+   desincroniza devuelve cero, y **un cero se lee igual que «acá no hay nada que
+   hacer»**. Todo trinquete nuevo lleva:
+   - la forma que debe detectar (y las dos escrituras de la misma operación:
+     `x -= n` y `x = max(0, x - n)` son la misma y una regex ve solo una);
+   - la que **NO** debe marcar — un detector que marca todo prueba la mitad;
+   - un **piso mínimo** (`assert total >= N`) que se pone rojo si el escáner se
+     rompe, en vez de reportar cero tranquilamente.
+
+**Y la mutación es obligatoria, con su propia verificación.** Se rompe la
+propiedad, se comprueba que el test se pone rojo, se restaura. Antes de correr,
+**verificar que la mutación quitó de verdad lo que se cree**: el 2026-09-14 una
+mutación no puso rojo nada porque cortó media cadena y la palabra que el test
+buscaba vivía en la otra línea. El verde era de la mutación, no del código.
+
+> **Contar cambios no es medir cobertura.** Ese mismo día, un barrido reportó
+> «194 interpolaciones envueltas» mientras el ataque real pasaba entero. El
+> número era cierto y no medía la propiedad. Después de barrer, **ejecutar la
+> carga real y mirar el resultado**, no el diff.
+
 ## Reglas Inquebrantables
 
 0. **ANTE DATO AUSENTE, FALLAR HACIA EL LADO CONSERVADOR Y DECLARARLO.**
