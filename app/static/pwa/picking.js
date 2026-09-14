@@ -324,6 +324,13 @@ async function procesarScan(codigo) {
   if (EMP_TAREA && document.getElementById('emp-hud')?.classList.contains('activo')) {
     await empProcesarEscaneo(codigo); return;
   }
+  // Conteo Definitivo (CC3) — modal de supervisor (conteo.js), aislado de
+  // TAREA_ACTUAL a propósito. Antes solo la cámara llegaba a defProcesarScan
+  // (defAbrirCamara la llama directo); el lector físico/láser pasa siempre
+  // por este dispatcher, así que sin esta rama el conteo definitivo no
+  // registraba nada con el lector — llegaba hasta el `if (!TAREA_ACTUAL)
+  // return;` de abajo y se detenía en silencio.
+  if (DEF_TAREA_ACTUAL) { await defProcesarScan(codigo); return; }
   if (!TAREA_ACTUAL) return;
   vibrar(); flash();
 
