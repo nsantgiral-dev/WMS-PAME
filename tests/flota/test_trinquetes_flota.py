@@ -674,8 +674,11 @@ class TestTrinqueteSistemaDeDiseno:
         html = _leer(self._HTML)
         i = html.index('.btn-flota')
         assert 'min-height: 48px' in html[i:i + 400]
-        assert '@media (max-width: 480px)' in html
-        movil = html[html.index('@media (max-width: 480px)'):][:500]
+        # Breakpoint móvil real del archivo: 767px (extendido desde 480px en
+        # otra sesión). Ver CLAUDE.md — un literal viejo aquí queda ciego al
+        # cambio real sin que nada lo avise hasta que algo más lo tropieza.
+        assert '@media (max-width: 767px)' in html
+        movil = html[html.index('@media (max-width: 767px)'):][:500]
         assert 'min-height: 54px' in movil, 'en celular los botones no crecen'
 
     def test_la_placa_manda_en_tamano(self):
