@@ -771,17 +771,35 @@ class TrasladoService:
         ).all()
         ubicacion_por_producto = {t.producto_id: t.ubicacion_id for t in tareas_ok if t.ubicacion_id}
 
-        # Ubicacion general del almacen origen (fallback de retorno)
+        # Ubicacion general del almacen origen (fallback de retorno).
+        #
+        # Se busca el bucket `SIESA-GENERAL` por su código, y solo si no existe
+        # se cae al bin vendible más antiguo. Antes era `order_by(id).first()`
+        # sin más: el nombre decía «general» pero lo que elegía era «el más
+        # viejo del almacén». Si el bin de averías era el más antiguo —y lo es
+        # en cualquier almacén donde se armó la zona antes que el resto— una
+        # reversa metía mercancía BUENA dentro de él, y salía del FEFO sin que
+        # nadie lo pidiera.
+        from app.services.picking_service import filtro_ubicacion_vendible
+        _vendibles_del_almacen = Ubicacion.query.filter(
+            Ubicacion.almacen_id == almacen.id,
+            Ubicacion.activo.is_(True),
+            filtro_ubicacion_vendible(),
+        )
         ub_general = (
-            Ubicacion.query
-            .filter_by(almacen_id=almacen.id, activo=True)
-            .order_by(Ubicacion.id.asc())
-            .first()
+            _vendibles_del_almacen
+            .filter(Ubicacion.codigo == Ubicacion.CODIGO_GENERAL).first()
+            or _vendibles_del_almacen.order_by(Ubicacion.id.asc()).first()
         )
         if not ub_general:
+            # El mensaje nombra la condición REAL. Un almacén cuya única
+            # ubicación activa sea la zona de averías llega hasta acá, y decirle
+            # «no tiene ubicaciones» mandaría a crear una que ya existe.
             raise ValueError(
-                f'Almacen {s.bodega_origen_siesa} no tiene ubicaciones activas. '
-                f'Crea al menos una ubicacion antes de revertir.'
+                f'Almacen {s.bodega_origen_siesa} no tiene ninguna ubicacion '
+                f'vendible activa donde devolver la mercancia (la zona de '
+                f'averias no sirve como destino de una reversa). '
+                f'Crea al menos una ubicacion vendible antes de revertir.'
             )
 
         # ── Devolver inventario por ítem ──────────────────────────────────
@@ -1273,7 +1291,19 @@ class TrasladoService:
 
         # Bins que pertenecen al almacén origen — se arma una sola vez.
         from app.models.ubicacion import Ubicacion
-        _ubis_del_almacen = db.select(Ubicacion.id).where(Ubicacion.almacen_id == almacen.id)
+        from app.services.picking_service import filtro_ubicacion_vendible
+        # El recorte es por almacén Y por zona. La dimensión almacén se agregó
+        # primero (ver el comentario de la consulta, más abajo) porque el
+        # `order_by` ascendente vaciaba los bins más pequeños de la red; la
+        # dimensión zona quedó sin cubrir y tiene exactamente la misma forma:
+        # un bin de averías acumula pocas unidades, así que encabeza el orden.
+        # Sin este filtro, despachar un traslado se lleva la mercancía dañada
+        # como buena y la firma `SALIDA_TRASLADO`, que no menciona la avería.
+        # La política vive en `picking_service` — acá no se copia el literal.
+        _ubis_del_almacen = db.select(Ubicacion.id).where(
+            Ubicacion.almacen_id == almacen.id,
+            filtro_ubicacion_vendible(),
+        )
 
         for item in solicitud.items:
             # Usar la cantidad que el operario confirma haber enviado.
@@ -1647,6 +1677,8 @@ class TrasladoService:
         from app.models.inventario import UbicacionProducto
         from app.models.almacen import Almacen
         from app.models.ubicacion import Ubicacion
+        from app.services.picking_service import (
+            filtro_ubicacion_vendible as _filtro_vendible_stock_wms)
 
         bod = bodega_id or BODEGA_ORIGEN_DEFAULT
         _ahora = datetime.utcnow().isoformat()
@@ -1661,7 +1693,12 @@ class TrasladoService:
                 db.func.sum(UbicacionProducto.reservado).label('reservado'),
             )
             .join(Ubicacion, UbicacionProducto.ubicacion_id == Ubicacion.id)
-            .filter(Ubicacion.almacen_id == almacen.id, UbicacionProducto.cantidad > 0)
+            # Mismo criterio que el descuento: lo averiado no se ofrece como
+            # disponible. Si se ofreciera, la tienda pediría algo que el FEFO
+            # después no puede surtir.
+            .filter(Ubicacion.almacen_id == almacen.id,
+                    _filtro_vendible_stock_wms(),
+                    UbicacionProducto.cantidad > 0)
             .group_by(UbicacionProducto.producto_id)
             .all()
         )

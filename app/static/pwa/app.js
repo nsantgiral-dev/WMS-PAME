@@ -1342,7 +1342,8 @@ async function cargarCatalogo(pag) {
           <div style="font-size:11px;color:#555;">${esc(p.codigo)}${p.codigo_siesa && p.codigo_siesa !== p.codigo ? ' · Siesa: ' + p.codigo_siesa : ''} · Clase ${esc(p.clasificacion_abc || '—')}</div>
         </div>
         <div style="text-align:right;">
-          <div style="font-size:16px;font-weight:700;color:${p.stock_total > 0 ? '#4ade80' : '#555'}">${esc(p.stock_total)}</div>
+          <div style="font-size:16px;font-weight:700;color:${p.stock_vendible > 0 ? '#4ade80' : (p.stock_total > 0 ? '#fbbf24' : '#555')}">${esc(p.stock_total)}</div>
+          ${p.stock_averiado > 0 ? `<div style="font-size:10px;color:#fbbf24;">${esc(p.stock_averiado)} averiadas</div>` : ''}
           <div style="font-size:10px;color:#555;">${esc(p.unidad_medida || 'UND')}</div>
         </div>
       </div>`).join('');

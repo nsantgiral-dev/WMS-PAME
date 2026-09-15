@@ -179,6 +179,8 @@ class ABCService:
         dry_run=True calcula y devuelve el resultado sin escribir nada — para
         revisar el impacto (cuántos, y con qué números) antes de aplicar.
         """
+        from app.services.picking_service import (
+            filtro_ubicacion_vendible as _filtro_vendible_abc)
         porcentajes = porcentajes or PORCENTAJE_STOCK_MINIMO_ABC
 
         stock_por_producto = {
@@ -188,6 +190,18 @@ class ABCService:
                     UbicacionProducto.producto_id,
                     func.sum(UbicacionProducto.cantidad).label('total')
                 )
+                # El docstring de arriba promete que esta es «la MISMA suma que
+                # DashboardService.alertas_stock()». Esa suma filtra por
+                # `filtro_ubicacion_vendible()` y ésta no lo hacía: no tenía ni
+                # join a `Ubicacion`. El umbral quedaba anclado en una base que
+                # incluye las averías y se comparaba después contra una que las
+                # excluye — el corte dejaba de significar lo mismo en los dos
+                # lados, que es exactamente lo que el docstring dice que no
+                # puede pasar. Con cero bins de averías en producción (medido el
+                # 2026-09-14) las dos bases dan idéntico; el join las mantiene
+                # idénticas el día que dejen de darlo.
+                .join(Ubicacion, Ubicacion.id == UbicacionProducto.ubicacion_id)
+                .filter(_filtro_vendible_abc())
                 .group_by(UbicacionProducto.producto_id)
                 .all()
             )

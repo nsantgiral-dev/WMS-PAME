@@ -36,12 +36,48 @@ class Producto(db.Model):
 
     @property
     def stock_total(self):
-        """Fuente única de verdad: suma de todas las ubicaciones."""
+        """Suma de TODAS las ubicaciones — vendibles y averiadas.
+
+        Es el total físico y por eso incluye la zona de averías. NO es la
+        respuesta a «¿cuánto puedo vender?»: para eso está `stock_vendible`.
+        Quien muestre este número debe mostrar `stock_averiado` al lado, o
+        estará afirmando que la mercancía rota es buena.
+        """
         return sum(u.cantidad for u in self.ubicaciones if u.cantidad > 0)
 
     @property
+    def stock_averiado(self):
+        """Parte del total que está en zona de averías.
+
+        Pregunta por la política canónica (`picking_service`) en vez de repetir
+        el literal de la zona — el trinquete `test_politica_vendible_unica`
+        prohíbe la copia, pero lo que rompió acá fue no preguntar en absoluto.
+        """
+        from app.services.picking_service import es_ubicacion_vendible
+        return sum(u.cantidad for u in self.ubicaciones
+                   if u.cantidad > 0 and not es_ubicacion_vendible(u.ubicacion))
+
+    @property
+    def stock_vendible(self):
+        """La parte que SÍ se puede vender.
+
+        Se calcula preguntando la política en positivo, no restando — misma
+        forma que `filtro_ubicacion_vendible()` y `filtro_ubicacion_averias()`,
+        que son las dos direcciones de la misma pregunta y por eso no pueden
+        divergir. Que `vendible + averiado == total` sale de que cada fila cae
+        de un lado o del otro, no de una resta que habría que mantener.
+        """
+        from app.services.picking_service import es_ubicacion_vendible
+        return sum(u.cantidad for u in self.ubicaciones
+                   if u.cantidad > 0 and es_ubicacion_vendible(u.ubicacion))
+
+    @property
     def stock_disponible(self):
-        """Stock total menos reservado."""
+        """Stock total menos reservado y bloqueado, en TODAS las zonas.
+
+        Comparte el sesgo de `stock_total`: es un eje distinto (compromisos),
+        no la pregunta de si se puede vender.
+        """
         return sum(u.cantidad_disponible() for u in self.ubicaciones)
 
     def to_dict(self):
@@ -67,6 +103,8 @@ class Producto(db.Model):
             'origen': self.origen,
             'marca_siesa': self.marca_siesa,
             'stock_total': self.stock_total,
+            'stock_averiado': self.stock_averiado,
+            'stock_vendible': self.stock_vendible,
             'stock_disponible': self.stock_disponible,
             'activo': self.activo
         }
