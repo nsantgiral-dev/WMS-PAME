@@ -38,6 +38,17 @@ class RecepcionService:
         items: [{'producto_id', 'cantidad_ordenada', 'tolerancia_exceso_pct'}]
         Solo acepta OCs en estado Aprobado — validar antes de llamar este método.
         """
+        # Advisory lock transaccional (3003, misma serie que LPN.generar_codigo
+        # 3001 y TareaReposicion 3002): la fila que este check busca todavía no
+        # existe la primera vez, así que un lock DE FILA no alcanza — sin este
+        # lock, dos "Iniciar recepción" casi simultáneos sobre la misma OC (dos
+        # usuarios de tienda, o un doble-tap con red lenta) pasan el check
+        # ambos y crean dos recepciones, que si ambas se confirman disparan dos
+        # ENTRADA_OC duplicadas en Siesa. Se libera solo al terminar la
+        # transacción (commit del caller o de este mismo método más abajo).
+        from sqlalchemy import text as _text
+        db.session.execute(_text('SELECT pg_advisory_xact_lock(:k)'), {'k': 3003})
+
         filtro = {'numero_oc_siesa': numero_oc_siesa}
         if co_oc_siesa:
             filtro['co_oc_siesa'] = co_oc_siesa
@@ -98,12 +109,18 @@ class RecepcionService:
     def escanear_producto(recepcion_id: int, producto_id: int,
                           cantidad: int, lote: str = None,
                           fecha_vencimiento=None, es_empaque: bool = False,
-                          es_bonificacion: bool = False):
+                          es_bonificacion: bool = False, scan_id: str = None):
         """
         Recepción ciega — el operario escanea sin ver cantidades esperadas.
         El sistema valida excesos en tiempo real y bloquea si supera tolerancia.
         Si es_bonificacion=True y el producto no está en la OC, se registra como
         ítem adicional con motivo 04 (Obsequio/Bonificación, $0, no afecta costo promedio).
+
+        `scan_id`: UUID generado por el cliente para este escaneo puntual. El
+        andén de recepción es la zona con peor wifi de toda la bodega — si la
+        respuesta se pierde por un corte de red, el frontend reintenta con el
+        MISMO scan_id. Sin esto, ese reintento sumaba la unidad dos veces
+        aunque el primer POST sí hubiera llegado.
         """
         import os
         recepcion = RecepcionMercancia.query.get(recepcion_id)
@@ -112,10 +129,32 @@ class RecepcionService:
         if recepcion.estado != 'EN_PROCESO':
             raise ValueError('La recepción no está en proceso')
 
+        # [C1] with_for_update() serializa dos escaneos casi simultáneos del
+        # mismo producto (dos sesiones del mismo recepcionista tras perder la
+        # conexión, o dos operarios en la misma OC) — sin esto es un
+        # read-modify-write clásico y se puede perder una unidad contada.
         item = ItemRecepcion.query.filter_by(
             recepcion_id=recepcion_id,
             producto_id=producto_id
-        ).first()
+        ).with_for_update().first()
+
+        # Reintento del mismo escaneo ya aplicado — responder con el estado
+        # actual sin volver a sumar. `item` puede no existir todavía (primer
+        # escaneo de una bonificación); en ese caso no hay nada que deduplicar.
+        if item and scan_id and item.ultimo_scan_id == scan_id:
+            destino_info = {
+                'destino': item.destino,
+                'ubicacion_id': item.ubicacion_id,
+                'ubicacion_cross_dock_id': item.ubicacion_cross_dock_id,
+            }
+            return {
+                'item': item.to_dict(),
+                'destino': destino_info,
+                'alerta': f'EXCESO: {item.diferencia()} unidades de más' if item.es_exceso() else None,
+                'items_pendientes': sum(
+                    1 for i in recepcion.items if i.cantidad_recibida == 0
+                )
+            }
 
         if not item:
             if not es_bonificacion:
@@ -168,6 +207,8 @@ class RecepcionService:
 
         item.cantidad_recibida = nueva_cantidad
         item.empaques_escaneados = nuevos_empaques
+        if scan_id:
+            item.ultimo_scan_id = scan_id
         if lote:
             item.lote = lote
         if fecha_vencimiento:

@@ -1294,7 +1294,7 @@ async function defAbrirCamara() {
 async function defProcesarScan(codigo) {
   if (!DEF_TAREA_ACTUAL) return;
   try {
-    const r = await post('/api/mobile/escanear', {
+    const r = await postConReintento('/api/mobile/escanear', {
       tarea_id: DEF_TAREA_ACTUAL.id, tipo: 'CONTEO', codigo, cantidad: 1,
     });
     if (r.error) {
@@ -1333,10 +1333,9 @@ async function defConfirmar() {
   if (!DEF_TAREA_ACTUAL) return;
   const btn = document.getElementById('def-btn-ok');
   if (btn) { btn.textContent = 'Confirmando...'; btn.disabled = true; }
+  const payload = { tarea_id: DEF_TAREA_ACTUAL.id, tipo: 'CONTEO', items_escaneados: [] };
   try {
-    const r = await post('/api/mobile/confirmar', {
-      tarea_id: DEF_TAREA_ACTUAL.id, tipo: 'CONTEO', items_escaneados: [],
-    });
+    const r = await post('/api/mobile/confirmar', payload);
     if (r.error) {
       alerta(typeof r.error === 'object' ? r.error.mensaje : r.error, 'error');
       if (btn) { btn.textContent = '✓ Confirmar conteo definitivo'; btn.disabled = false; }
@@ -1345,8 +1344,15 @@ async function defConfirmar() {
     beepDone();
     _defMostrarResultado(r);
   } catch (e) {
-    alerta(e.status ? e.message : 'Error de conexión', 'error');
-    if (btn) { btn.textContent = '✓ Confirmar conteo definitivo'; btn.disabled = false; }
+    if (e.status) {
+      // Error del servidor (400/500) — mostrar mensaje real, no guardar offline
+      alerta(e.message || 'Error al confirmar', 'error');
+      if (btn) { btn.textContent = '✓ Confirmar conteo definitivo'; btn.disabled = false; }
+    } else {
+      // Error de red real — guardar para sincronizar cuando haya WiFi (mismo patrón que picking.js)
+      guardarOffline(payload);
+      defCerrarModal();
+    }
   }
 }
 

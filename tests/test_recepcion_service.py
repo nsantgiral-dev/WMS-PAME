@@ -116,6 +116,47 @@ class TestEscanearProducto:
         with pytest.raises(ValueError):
             RecepcionService.escanear_producto(rec.id, s['producto'].id, 12)
 
+    def test_escanear_mismo_scan_id_no_duplica(self, app, db, recepcion_setup):
+        """Reintento con el mismo scan_id (timeout de wifi de andén, respuesta
+        perdida) no debe volver a sumar la cantidad."""
+        s = recepcion_setup
+        from app.services.recepcion_service import RecepcionService
+        from app.models.recepcion import ItemRecepcion
+
+        rec = _crear_recepcion(db, s['almacen'].id, s['producto'].id)
+        RecepcionService.iniciar(rec.id, s['usuario'].id)
+
+        RecepcionService.escanear_producto(rec.id, s['producto'].id, 3, scan_id='scan-abc-123')
+        # Reintento idéntico — mismo scan_id, como si el cliente no hubiera
+        # visto la respuesta del primer POST y reintentara.
+        resultado = RecepcionService.escanear_producto(
+            rec.id, s['producto'].id, 3, scan_id='scan-abc-123'
+        )
+
+        item = ItemRecepcion.query.filter_by(
+            recepcion_id=rec.id, producto_id=s['producto'].id
+        ).first()
+        assert item.cantidad_recibida == 3, 'el reintento con el mismo scan_id no debe sumar de nuevo'
+        assert resultado['item']['cantidad_recibida'] == 3
+
+    def test_escanear_scan_id_distinto_si_acumula(self, app, db, recepcion_setup):
+        """Dos escaneos reales (scan_id distinto) sí deben acumularse — la
+        idempotencia no debe convertirse en un tope accidental."""
+        s = recepcion_setup
+        from app.services.recepcion_service import RecepcionService
+        from app.models.recepcion import ItemRecepcion
+
+        rec = _crear_recepcion(db, s['almacen'].id, s['producto'].id)
+        RecepcionService.iniciar(rec.id, s['usuario'].id)
+
+        RecepcionService.escanear_producto(rec.id, s['producto'].id, 3, scan_id='scan-1')
+        RecepcionService.escanear_producto(rec.id, s['producto'].id, 4, scan_id='scan-2')
+
+        item = ItemRecepcion.query.filter_by(
+            recepcion_id=rec.id, producto_id=s['producto'].id
+        ).first()
+        assert item.cantidad_recibida == 7
+
 
 # ═══════════════════════════════════════════════════════════════════
 # 3. Confirmar recepcion — stock increment + SiesaJob

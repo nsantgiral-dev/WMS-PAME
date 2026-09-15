@@ -170,7 +170,7 @@ async function biCargarDespachados() {
     ]);
 
     kpiEl.innerHTML = `
-      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:6px;">
+      <div class="kpi-grid" style="margin-bottom:6px;">
         <div class="kpi-card"><div class="kpi-valor">${kpi.pedidos}</div><div class="kpi-label">Pedidos</div></div>
         <div class="kpi-card"><div class="kpi-valor">${kpi.lineas}</div><div class="kpi-label">Líneas</div></div>
         <div class="kpi-card"><div class="kpi-valor">${kpi.unidades}</div><div class="kpi-label">Unidades</div></div>

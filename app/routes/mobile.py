@@ -147,6 +147,122 @@ def confirmar_tarea():
         return jsonify({'error': str(e)}), 500
 
 
+def _sync_cerrar_packing(operario_id, item):
+    """Cierre de caja de packing (dispara Siesa) — acción distinta al
+    confirmar_tarea genérico: necesita bultos_data y el mismo guard de
+    ownership que ya tiene la ruta HTTP directa."""
+    from app.extensions import db
+    from app.models.usuario import Usuario
+    from app.models.packing import TareaPacking
+    from app.routes._auth_helpers import _puede_empacar, Roles as _R
+    from app.services.packing_service import PackingService
+    u = db.session.get(Usuario, operario_id)
+    if not u or not _puede_empacar(u):
+        return False, 'No autorizado'
+    tarea_chk = db.session.get(TareaPacking, item.get('tarea_id'))
+    if tarea_chk and tarea_chk.empacador_id and tarea_chk.empacador_id != operario_id \
+            and u.rol not in _R.SUPERVISION:
+        return False, 'No puedes cerrar una tarea asignada a otro empacador'
+    resultado = PackingService.cerrar_packing_resultado(
+        tarea_id=item['tarea_id'],
+        bultos_data=item.get('bultos', []),
+        usuario_id=operario_id,
+    )
+    return True, resultado
+
+
+def _sync_reposicion_confirmar(operario_id, item):
+    """Confirmación de reposición (RESERVA→PICKING) — no pasa por
+    confirmar_tarea genérico (nunca lo soportó pese a que _TIPOS_ALMACEN lo
+    lista); 100% WMS, nunca toca Siesa, y el guard de estado en
+    confirmar_reposicion ya la hace segura de reintentar."""
+    from app.extensions import db
+    from app.models.usuario import Usuario
+    from app.routes._auth_helpers import Roles as _R
+    from app.services.reposicion_service import confirmar_reposicion
+    u = db.session.get(Usuario, operario_id)
+    if not u or (not u.puede_abastecer and u.rol not in _R.SUPERVISION):
+        return False, 'Sin permiso — se requiere permiso de abastecedor'
+    resultado = confirmar_reposicion(
+        tarea_id=item['tarea_id'],
+        abastecedor_id=operario_id,
+        lpn_codigo_escaneado=item.get('lpn_codigo'),
+    )
+    return True, resultado
+
+
+def _sync_picking_escanear(operario_id, item):
+    """Escaneo individual de picking — a diferencia de confirmar_tarea (una
+    vez por tarea), esto se llama una vez por código escaneado. Solo se
+    encola cuando el frontend ya mandó total_acumulado (idempotente)."""
+    rechazo = _verificar_rol_para_tipo(operario_id, 'PICKING')
+    if rechazo:
+        return False, 'Sin permiso para tipo PICKING'
+    resultado = MobileService.procesar_escaneo(
+        operario_id=operario_id,
+        tarea_id=item['tarea_id'],
+        tipo='PICKING',
+        codigo=item['codigo'],
+        cantidad=item.get('cantidad', 1),
+        lpn_codigo=item.get('lpn_codigo'),
+        total_acumulado=item.get('total_acumulado'),
+    )
+    return True, resultado
+
+
+def _sync_packing_escanear(operario_id, item):
+    """Escaneo individual de packing — mismo patrón que picking_escanear."""
+    rechazo = _verificar_rol_para_tipo(operario_id, 'PACKING')
+    if rechazo:
+        return False, 'Sin permiso para tipo PACKING'
+    resultado = MobileService.procesar_escaneo(
+        operario_id=operario_id,
+        tarea_id=item['tarea_id'],
+        tipo='PACKING',
+        codigo=item['codigo'],
+        cantidad=item.get('cantidad', 1),
+        total_acumulado=item.get('total_acumulado'),
+    )
+    return True, resultado
+
+
+def _sync_recepcion_escanear(operario_id, item):
+    """Escaneo de recepción — recepcion.js no pasa por el sistema genérico
+    (tiene su propia ruta, con su propio scan_id). Segura de
+    reintentar/encolar gracias al scan_id que deduplica en
+    RecepcionService.escanear_producto."""
+    from app.routes.recepcion import _es_recepcion_autorizado
+    from app.services.recepcion_service import RecepcionService
+    if not _es_recepcion_autorizado():
+        return False, 'Sin permiso para escanear productos en recepción'
+    resultado = RecepcionService.escanear_producto(
+        recepcion_id=item['recepcion_id'],
+        producto_id=item['producto_id'],
+        cantidad=item['cantidad'],
+        es_empaque=item.get('es_empaque', False),
+        es_bonificacion=item.get('es_bonificacion', False),
+        scan_id=item.get('scan_id'),
+    )
+    return True, resultado
+
+
+# Registro de acciones de /sync — una 5ª rama futura no puede olvidar el
+# formato de respuesta (tarea_id/_qid/accion/exito/resultado|error): cada
+# handler solo decide permiso + llamada al servicio, devolviendo
+# (exito: bool, resultado_o_mensaje_error); el loop arma la entrada una
+# sola vez, en un solo lugar.
+_SYNC_HANDLERS = {
+    'cerrar_packing': _sync_cerrar_packing,
+    'reposicion_confirmar': _sync_reposicion_confirmar,
+    'picking_escanear': _sync_picking_escanear,
+    'packing_escanear': _sync_packing_escanear,
+    'recepcion_escanear': _sync_recepcion_escanear,
+}
+
+# accion → campo del item que identifica la fila en `resultados` (default 'tarea_id')
+_SYNC_ID_FIELD = {'recepcion_escanear': 'recepcion_id'}
+
+
 @mobile_bp.route('/sync', methods=['POST'])
 @jwt_required()
 def sync_offline():
@@ -160,12 +276,27 @@ def sync_offline():
 
     resultados = []
     for item in cola:
+        qid = item.get('_qid')
+        accion = item.get('accion')
         try:
+            handler = _SYNC_HANDLERS.get(accion)
+            if handler:
+                exito, payload = handler(operario_id, item)
+                entrada = {
+                    'tarea_id': item.get(_SYNC_ID_FIELD.get(accion, 'tarea_id')),
+                    '_qid': qid, 'accion': accion,
+                    'exito': exito,
+                }
+                entrada['resultado' if exito else 'error'] = payload
+                resultados.append(entrada)
+                continue
+
             rechazo = _verificar_rol_para_tipo(operario_id, item.get('tipo', ''))
             if rechazo:
                 resp_body, status_code = rechazo
                 resultados.append({
                     'tarea_id': item.get('tarea_id'),
+                    '_qid': qid,
                     'exito': False,
                     'error': f'Sin permiso para tipo {item.get("tipo")}'
                 })
@@ -178,15 +309,18 @@ def sync_offline():
             )
             resultados.append({
                 'tarea_id': item['tarea_id'],
+                '_qid': qid,
                 'exito': True,
                 'resultado': resultado
             })
         except Exception as e:
             current_app.logger.error(
-                f'[MOBILE] /sync error en tarea {item.get("tarea_id")}: {e}', exc_info=True
+                f'[MOBILE] /sync error en tarea {item.get("tarea_id")} (accion={accion}): {e}', exc_info=True
             )
             resultados.append({
-                'tarea_id': item['tarea_id'],
+                'tarea_id': item.get('tarea_id'),
+                '_qid': qid,
+                'accion': accion,
                 'exito': False,
                 'error': str(e)
             })

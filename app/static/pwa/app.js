@@ -292,23 +292,203 @@ function monitorRed() {
   update();
 }
 
-/** Send queued offline actions to the server and clear the local queue on success. */
+/**
+ * Send queued offline actions to the server. Solo se quitan de la cola los ítems
+ * que el servidor confirmó — uno que falle (ej. rechazado por regla de negocio)
+ * se queda encolado para el próximo intento en vez de perderse junto con los que
+ * sí sincronizaron.
+ */
 async function syncOffline() {
+  if (!COLA_OFFLINE.length) return;
   try {
     const r = await post('/api/mobile/sync', { cola: COLA_OFFLINE });
-    if (r.sincronizados > 0) {
-      COLA_OFFLINE = [];
-      localStorage.setItem('wms_cola_offline', '[]');
-      alerta('✓ ' + r.sincronizados + ' tarea(s) sincronizadas', 'exito');
-    }
+    const resultados = r.resultados || [];
+    const qidsExitosos = new Set(resultados.filter(x => x.exito).map(x => x._qid));
+    COLA_OFFLINE = COLA_OFFLINE.filter(item => !qidsExitosos.has(item._qid));
+    localStorage.setItem('wms_cola_offline', JSON.stringify(COLA_OFFLINE));
+    if (r.sincronizados > 0) alerta('✓ ' + r.sincronizados + ' tarea(s) sincronizadas', 'exito');
+    // Avisar al módulo dueño de cada acción puntual (ej. packing.js espera a
+    // cerrar_packing para imprimir la etiqueta e quitar el bloqueo de pantalla).
+    resultados.filter(x => x.exito && x.accion).forEach(x => {
+      const cb = window['onSync_' + x.accion];
+      if (typeof cb === 'function') cb(x.resultado);
+    });
   } catch (e) {}
 }
 
-/** @param {Object} datos - Action payload to enqueue for later sync. */
+/** @param {Object} datos - Action payload to enqueue for later sync. @returns {Object} el ítem encolado (incluye `_qid`) */
 function guardarOffline(datos) {
-  COLA_OFFLINE.push({ ...datos, ts: Date.now() });
+  const item = { ...datos, ts: Date.now(), _qid: `${Date.now()}_${Math.random().toString(36).slice(2, 8)}` };
+  COLA_OFFLINE.push(item);
   localStorage.setItem('wms_cola_offline', JSON.stringify(COLA_OFFLINE));
   alerta('Sin WiFi — guardado para sincronizar', 'advertencia');
+  return item;
+}
+
+/**
+ * POST con reintento automático ante corte de red real (no ante error del servidor).
+ * Pensado para escaneos individuales: el backend no tiene forma de "encolarlos" como
+ * hace `/api/mobile/sync` con una confirmación completa, así que la única resiliencia
+ * posible aquí es reintentar antes de que el operario pierda el escaneo.
+ * @param {string} url
+ * @param {Object} payload
+ * @param {number} [intentos=2] - reintentos adicionales tras el primer intento fallido
+ * @param {number} [esperaMs=600] - pausa entre reintentos
+ */
+/** Id de escaneo para deduplicar reintentos server-side — no necesita ser criptográficamente fuerte. */
+function generarScanId() {
+  if (window.crypto?.randomUUID) return crypto.randomUUID();
+  return 'scan-' + Date.now() + '-' + Math.random().toString(36).slice(2, 10);
+}
+
+async function postConReintento(url, payload, intentos = 2, esperaMs = 600) {
+  for (let i = 0; ; i++) {
+    try {
+      return await post(url, payload);
+    } catch (e) {
+      if (e.status || i >= intentos) throw e; // error del servidor, o sin reintentos restantes
+      await new Promise(res => setTimeout(res, esperaMs));
+    }
+  }
+}
+
+/**
+ * Modal propio para capturar una cantidad numérica — reemplaza `prompt()`.
+ * Teclado numérico garantizado (`inputmode="numeric"`), valida el rango
+ * antes de dejar confirmar (no substituye silenciosamente un valor inválido
+ * como hacía `parseInt(x) || default`), y con un solo paso en vez de
+ * encadenar `prompt()` + `confirm()`.
+ * @param {string} titulo
+ * @param {string} mensajeHtml - se inserta tal cual, permite HTML simple
+ * @param {Object} [opts]
+ * @param {number} [opts.min=1]
+ * @param {number} [opts.max]
+ * @param {number|string} [opts.valorInicial='']
+ * @param {string} [opts.textoConfirmar='Confirmar']
+ * @param {string} [opts.textoCancelar='Cancelar']
+ * @returns {Promise<number|null>} la cantidad, o null si se canceló
+ */
+function _modalCantidad(titulo, mensajeHtml, opts = {}) {
+  const {
+    min = 1, max, valorInicial = '',
+    textoConfirmar = 'Confirmar', textoCancelar = 'Cancelar',
+  } = opts;
+  return new Promise(resolve => {
+    const overlay = document.createElement('div');
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.92);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px;';
+    overlay.innerHTML = `
+      <div style="background:#111;border-radius:16px;padding:24px;width:100%;max-width:360px;border:1px solid #333;">
+        <div style="font-size:18px;font-weight:800;color:#fff;margin-bottom:10px;">${titulo}</div>
+        <div style="font-size:14px;color:#aaa;margin-bottom:16px;line-height:1.5;">${mensajeHtml}</div>
+        <input id="_mc-input" type="number" inputmode="numeric"
+          ${min != null ? `min="${min}"` : ''} ${max != null ? `max="${max}"` : ''} value="${valorInicial}"
+          style="width:100%;padding:14px;font-size:22px;font-weight:700;background:#000;border:2px solid #333;border-radius:10px;color:#fff;text-align:center;margin-bottom:6px;box-sizing:border-box;">
+        <div id="_mc-error" style="font-size:12px;color:#ef4444;min-height:16px;margin-bottom:10px;"></div>
+        <div style="display:flex;gap:10px;">
+          <button id="_mc-no" style="flex:1;padding:14px;background:#1a1a1a;color:#aaa;border:1px solid #333;border-radius:10px;font-size:14px;font-weight:700;cursor:pointer;">${textoCancelar}</button>
+          <button id="_mc-si" style="flex:1;padding:14px;background:var(--pm);color:#fff;border:none;border-radius:10px;font-size:14px;font-weight:700;cursor:pointer;">${textoConfirmar}</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    const input = overlay.querySelector('#_mc-input');
+    const errEl = overlay.querySelector('#_mc-error');
+    const cerrar = valor => { overlay.remove(); resolve(valor); };
+    const intentarConfirmar = () => {
+      const val = parseInt(input.value, 10);
+      if (isNaN(val) || val < min || (max != null && val > max)) {
+        errEl.textContent = max != null ? `Debe ser un número entre ${min} y ${max}` : `Debe ser un número desde ${min}`;
+        input.focus();
+        return;
+      }
+      cerrar(val);
+    };
+    overlay.querySelector('#_mc-si').onclick = intentarConfirmar;
+    overlay.querySelector('#_mc-no').onclick = () => cerrar(null);
+    input.addEventListener('keydown', e => { if (e.key === 'Enter') intentarConfirmar(); });
+    input.focus();
+    input.select();
+  });
+}
+
+/**
+ * Modal de confirmación compartido — reemplazo de `confirm()` nativo, que en
+ * iOS/Android bloquea el hilo con un diálogo del sistema operativo (no
+ * estilizable, texto largo se corta) en vez de la UI de la app.
+ * @param {string} mensajeHtml
+ * @param {{titulo?:string, textoConfirmar?:string, textoCancelar?:string, peligro?:boolean}} [opts]
+ * @returns {Promise<boolean>}
+ */
+function _modalConfirmar(mensajeHtml, opts = {}) {
+  const {
+    titulo = '¿Confirmar?', textoConfirmar = 'Confirmar', textoCancelar = 'Cancelar',
+    peligro = false,
+  } = opts;
+  return new Promise(resolve => {
+    const overlay = document.createElement('div');
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.92);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px;';
+    overlay.innerHTML = `
+      <div style="background:#111;border-radius:16px;padding:24px;width:100%;max-width:400px;border:1px solid #333;max-height:80vh;overflow-y:auto;">
+        <div style="font-size:17px;font-weight:800;color:#fff;margin-bottom:10px;">${titulo}</div>
+        <div style="font-size:14px;color:#ccc;margin-bottom:20px;line-height:1.5;white-space:pre-line;">${mensajeHtml}</div>
+        <div style="display:flex;gap:10px;">
+          <button id="_mconf-no" style="flex:1;padding:14px;background:#1a1a1a;color:#aaa;border:1px solid #333;border-radius:10px;font-size:14px;font-weight:700;cursor:pointer;">${textoCancelar}</button>
+          <button id="_mconf-si" style="flex:1;padding:14px;background:${peligro ? '#7f1d1d' : 'var(--pm)'};color:#fff;border:none;border-radius:10px;font-size:14px;font-weight:700;cursor:pointer;">${textoConfirmar}</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    const cerrar = valor => { overlay.remove(); resolve(valor); };
+    overlay.querySelector('#_mconf-si').onclick = () => cerrar(true);
+    overlay.querySelector('#_mconf-no').onclick = () => cerrar(false);
+  });
+}
+
+/**
+ * Resuelve qué representa un código escaneado contra `/api/empaques/scan/` —
+ * compartido entre picking (`_procesarScanPicking`) y packing
+ * (`empProcesarEscaneo`), que hasta ahora reimplementaban la misma
+ * interpretación GS1/EAN/LPN por separado: un fix en un lado no llegaba
+ * al otro (ver CLAUDE.md sobre `identidadConductor`, mismo patrón de riesgo).
+ *
+ * `EAN_BASE` siempre trae `factor:1` desde el backend (scan_barcode() en
+ * empaques_service.py solo lo devuelve cuando `factor_conversion == 1`), así
+ * que tratarlo igual que GS1_UNICO no cambia ningún resultado — solo unifica
+ * el camino.
+ *
+ * @param {string} codigo
+ * @returns {Promise<{tipo:string, codigoParaBackend:string, cantidad:number,
+ *   lpnCodigo:string|null, unidad:string|null, ambiguos:Array|null}>}
+ */
+async function resolverEscaneoEmpaque(codigo) {
+  let scan;
+  try {
+    scan = await get(`/api/empaques/scan/${encodeURIComponent(codigo)}`);
+  } catch (_) {
+    scan = { tipo: 'NO_ENCONTRADO' };
+  }
+  const tipo = scan.tipo || 'NO_ENCONTRADO';
+
+  if (tipo === 'GS1_AMBIGUO') {
+    return { tipo, ambiguos: scan.ambiguos || [] };
+  }
+
+  let codigoParaBackend = codigo;  // default: código de producto base (EAN-13 en productos.codigo_barras)
+  let cantidad = 1;
+  let unidad = null;
+  let lpnCodigo = null;
+
+  if ((tipo === 'GS1_UNICO' || tipo === 'EAN_BASE') && scan.producto?.codigo) {
+    codigoParaBackend = scan.producto.codigo;
+    cantidad = scan.factor || 1;
+    unidad = scan.empaque?.unidad_medida || null;
+  } else if (tipo === 'LPN' && scan.producto?.codigo) {
+    codigoParaBackend = scan.producto.codigo;
+    cantidad = scan.factor || 1;  // scan.factor = lpn.cantidad_actual
+    lpnCodigo = codigo;           // 'LPN-XXXXXXX' original
+    unidad = scan.empaque?.unidad_medida || null;
+  }
+  // NO_ENCONTRADO → enviar código original, el backend da error descriptivo
+
+  return { tipo, codigoParaBackend, cantidad, lpnCodigo, unidad, ambiguos: null };
 }
 
 // e.key depende del layout de teclado ACTIVO (SO + firmware del lector).
@@ -408,6 +588,32 @@ async function get(url) {
   } finally { clearTimeout(timer); }
 }
 
+/**
+ * Deshabilita el botón que disparó el evento mientras `fn()` corre — evita
+ * doble-tap en wifi/datos inestables (latencias de 2-5s son comunes en
+ * bodega): sin esto, un toque sin reacción visible invita a tocar de nuevo,
+ * disparando la misma acción dos veces. El backend suele validar estado y
+ * evitar corrupción de datos, pero el operario igual ve una petición extra,
+ * un toast confuso, o corre contra ese mismo guard del servidor.
+ * @param {Event} event - el evento del onclick (pasar literalmente `event` en el call-site)
+ * @param {Function} fn - función (async o no) a ejecutar
+ * @param {string} [textoOcupado] - texto a mostrar en el botón mientras corre
+ */
+async function conBotonOcupado(event, fn, textoOcupado) {
+  const btn = event?.currentTarget || event?.target;
+  if (!btn) { await fn(); return; }
+  const origTexto = btn.textContent;
+  const origDisabled = btn.disabled;
+  btn.disabled = true;
+  if (textoOcupado) btn.textContent = textoOcupado;
+  try {
+    await fn();
+  } finally {
+    btn.disabled = origDisabled;
+    if (textoOcupado) btn.textContent = origTexto;
+  }
+}
+
 /** Ejecuta fn() dando feedback visual al botón que disparó el evento. */
 async function _refreshBtn(event, fn) {
   const btn = event.currentTarget || event.target;
@@ -433,12 +639,24 @@ async function _refreshBtn(event, fn) {
  * @returns {Promise<Object>} Parsed JSON response.
  */
 async function post(url, body) {
-  const r = await fetch(API + url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + TOKEN },
-    body: JSON.stringify(body)
-  });
-  return _checkResp(r);
+  const ctrl = new AbortController();
+  // 25s, no 15s como get(): varias rutas detrás de post()/put() disparan Siesa
+  // (packing, liquidación) y /api/mobile/confirmar ya devuelve 503+retry_after
+  // cuando Siesa está genuinamente lenta — este timeout es el respaldo para el
+  // caso en que ni siquiera esa respuesta rápida llega.
+  const timer = setTimeout(() => ctrl.abort(), 25000);
+  try {
+    const r = await fetch(API + url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + TOKEN },
+      body: JSON.stringify(body),
+      signal: ctrl.signal
+    });
+    return _checkResp(r);
+  } catch (e) {
+    if (e.name === 'AbortError') throw new Error('Tiempo de espera agotado — intenta de nuevo');
+    throw e;
+  } finally { clearTimeout(timer); }
 }
 
 /**
@@ -448,12 +666,20 @@ async function post(url, body) {
  * @returns {Promise<Object>} Parsed JSON response.
  */
 async function put(url, body = {}) {
-  const r = await fetch(API + url, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + TOKEN },
-    body: JSON.stringify(body)
-  });
-  return _checkResp(r);
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 25000);
+  try {
+    const r = await fetch(API + url, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + TOKEN },
+      body: JSON.stringify(body),
+      signal: ctrl.signal
+    });
+    return _checkResp(r);
+  } catch (e) {
+    if (e.name === 'AbortError') throw new Error('Tiempo de espera agotado — intenta de nuevo');
+    throw e;
+  } finally { clearTimeout(timer); }
 }
 
 /** Authenticate user with email/password, store token, and route to role screen. */
@@ -884,11 +1110,10 @@ function movimientos(lista) {
 async function reabrirTareaPicking(id) {
   if (!confirm('¿Reabrir esta tarea al pool de picking? El operario que llegue a esa ubicación la tomará de nuevo.')) return;
   try {
-    const r = await fetch(API + `/api/picking/${id}/reabrir`, { method: 'PUT', headers: { Authorization: 'Bearer ' + TOKEN } });
-    const d = await r.json();
-    if (r.ok) { alerta('Tarea reabierta al pool ✓', 'exito'); await cargarTareasBodega(); }
-    else alerta(d.error || 'Error al reabrir', 'error');
-  } catch (e) { alerta('Error de conexión', 'error'); }
+    await put(`/api/picking/${id}/reabrir`);
+    alerta('Tarea reabierta al pool ✓', 'exito');
+    await cargarTareasBodega();
+  } catch (e) { alerta(e.message || 'Error al reabrir', 'error'); }
 }
 
 /** @param {number} id - Picking task ID to cancel (prompts for reason). */
@@ -897,15 +1122,10 @@ async function cancelarTareaPicking(id) {
   if (!motivo || !motivo.trim()) return;
   if (!confirm(`¿Cancelar esta tarea de picking? El pedido del cliente quedará incompleto.`)) return;
   try {
-    const r = await fetch(API + `/api/picking/${id}/cancelar`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + TOKEN },
-      body: JSON.stringify({ motivo })
-    });
-    const d = await r.json();
-    if (r.ok) { alerta('Tarea cancelada', 'advertencia'); await cargarTareasBodega(); }
-    else alerta(d.error || 'Error al cancelar', 'error');
-  } catch (e) { alerta('Error de conexión', 'error'); }
+    await put(`/api/picking/${id}/cancelar`, { motivo });
+    alerta('Tarea cancelada', 'advertencia');
+    await cargarTareasBodega();
+  } catch (e) { alerta(e.message || 'Error al cancelar', 'error'); }
 }
 
 /** @param {number} id - Task ID whose inline audit form to show. */
@@ -928,24 +1148,15 @@ async function auditoriaGuardar(id) {
   if (!resultado) { alerta('Selecciona un resultado antes de guardar', 'error'); return; }
 
   try {
-    const r = await fetch(API + `/api/picking/${id}/auditar`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + TOKEN },
-      body: JSON.stringify({
-        resultado,
-        cantidad_hallada: cantidadHallada,
-        ubicacion_hallada: ubicacion || null,
-        observaciones: observaciones || null,
-      }),
+    await post(`/api/picking/${id}/auditar`, {
+      resultado,
+      cantidad_hallada: cantidadHallada,
+      ubicacion_hallada: ubicacion || null,
+      observaciones: observaciones || null,
     });
-    const d = await r.json();
-    if (r.ok) {
-      alerta('Auditoría registrada ✓', 'exito');
-      await cargarTareasBodega();
-    } else {
-      alerta(d.error || 'Error al guardar auditoría', 'error');
-    }
-  } catch (e) { alerta('Error de conexión', 'error'); }
+    alerta('Auditoría registrada ✓', 'exito');
+    await cargarTareasBodega();
+  } catch (e) { alerta(e.message || 'Error al guardar auditoría', 'error'); }
 }
 
 /** Fetch Siesa orders and render grouped pedidos list with action buttons. */
@@ -1825,7 +2036,20 @@ async function abrirCamara(lectorDivId = 'lector-qr', boxDivId = 'camara-box', o
   _SCAN_LAST_TS = 0;
 
   if (!window.Quagga) {
-    await loadScript('https://cdn.jsdelivr.net/npm/@ericblade/quagga2@1.8.2/dist/quagga.min.js');
+    // Vendorizada localmente (igual que JsBarcode) y cacheada por sw.js —
+    // antes se descargaba de cdn.jsdelivr.net en caliente, un origen externo
+    // que el propio service worker rechaza cachear, así que la primera
+    // apertura de cámara con wifi caída fallaba sin ningún aviso.
+    try {
+      await loadScript('/static/vendor/quagga2.min.js?v=1.8.2');
+    } catch (e) {
+      CAMARA_ACTIVA = false;
+      _QUAGGA_BOX = null;
+      _QUAGGA_CB = null;
+      box.style.display = 'none';
+      alerta('No se pudo activar la cámara — usa el ingreso manual del código', 'error');
+      return;
+    }
   }
 
   const esMobil = /Mobi|Android|iPhone/i.test(navigator.userAgent);
@@ -1860,7 +2084,18 @@ async function abrirCamara(lectorDivId = 'lector-qr', boxDivId = 'camara-box', o
     }, err => {
       if (err) {
         console.error('Quagga init:', err);
-        alerta('No se pudo activar la cámara', 'error');
+        const nombre = err.name || (err.message && /NotAllowed|Permission denied/i.test(err.message) ? 'NotAllowedError' : '');
+        let msg;
+        if (nombre === 'NotAllowedError') {
+          msg = 'Cámara bloqueada — habilita el permiso de cámara para este sitio en el navegador y vuelve a intentar';
+        } else if (nombre === 'NotFoundError' || nombre === 'OverconstrainedError') {
+          msg = 'No se encontró una cámara disponible en este dispositivo';
+        } else if (nombre === 'NotReadableError') {
+          msg = 'La cámara está siendo usada por otra app — ciérrala e intenta de nuevo';
+        } else {
+          msg = 'No se pudo activar la cámara — usa el ingreso manual del código';
+        }
+        alerta(msg, 'error');
         cerrarCamara(boxDivId);
         resolve(); return;
       }
@@ -1877,6 +2112,36 @@ async function abrirCamara(lectorDivId = 'lector-qr', boxDivId = 'camara-box', o
       target.style.position = 'relative';
       target.style.overflow = 'hidden';
       target.style.borderRadius = '10px';
+      target.style.touchAction = 'none'; // evita que un pellizco sobre el visor dispare el zoom global de la página
+
+      // Linterna para poca luz (bodega/muelle de noche) — solo donde el
+      // hardware la expone (Android/Chrome vía getUserMedia torch constraint).
+      // iOS Safari no soporta esta capability desde web: sin el botón ahí,
+      // no es un bug, es el navegador.
+      try {
+        const track = Quagga.CameraAccess.getActiveTrack();
+        const caps = track && track.getCapabilities ? track.getCapabilities() : null;
+        if (caps && caps.torch) {
+          let torchOn = false;
+          const btnTorch = document.createElement('button');
+          btnTorch.type = 'button';
+          btnTorch.textContent = '🔦';
+          btnTorch.title = 'Linterna';
+          btnTorch.style.cssText = 'position:absolute;top:8px;right:8px;z-index:5;width:44px;height:44px;border-radius:50%;border:none;background:#000000aa;color:#fff;font-size:18px;cursor:pointer;';
+          btnTorch.onclick = async () => {
+            torchOn = !torchOn;
+            try {
+              await track.applyConstraints({ advanced: [{ torch: torchOn }] });
+              btnTorch.style.background = torchOn ? '#f59e0bcc' : '#000000aa';
+            } catch (e) {
+              console.error('Torch:', e);
+            }
+          };
+          target.appendChild(btnTorch);
+        }
+      } catch (e) {
+        // getActiveTrack/getCapabilities no soportados en este navegador — sin control de torch
+      }
 
       resolve();
     });

@@ -55,11 +55,11 @@ function muelleRenderGrupos(grupos) {
         </div>
         <div style="display:flex;gap:4px;">
           ${gi > 0
-            ? `<button onclick="muelleMoverGrupo(${gi},-1)" style="background:#222;border:1px solid #333;color:#fff;width:28px;height:28px;border-radius:6px;cursor:pointer;font-size:14px;">↑</button>`
-            : `<div style="width:28px;"></div>`}
+            ? `<button onclick="muelleMoverGrupo(${gi},-1)" style="background:#222;border:1px solid #333;color:#fff;width:44px;height:44px;border-radius:6px;cursor:pointer;font-size:14px;">↑</button>`
+            : `<div style="width:44px;"></div>`}
           ${gi < grupos.length - 1
-            ? `<button onclick="muelleMoverGrupo(${gi},1)" style="background:#222;border:1px solid #333;color:#fff;width:28px;height:28px;border-radius:6px;cursor:pointer;font-size:14px;">↓</button>`
-            : `<div style="width:28px;"></div>`}
+            ? `<button onclick="muelleMoverGrupo(${gi},1)" style="background:#222;border:1px solid #333;color:#fff;width:44px;height:44px;border-radius:6px;cursor:pointer;font-size:14px;">↓</button>`
+            : `<div style="width:44px;"></div>`}
         </div>
         <div style="font-size:11px;color:#444;min-width:40px;text-align:right;">
           Carga<br>#${gi + 1}
@@ -140,7 +140,7 @@ async function cargarRutaSelector() {
   if (!esMobile) return;
   const btnActivar = document.getElementById('muelle-scan-activar');
   const campo      = document.getElementById('muelle-scan-campo');
-  if (btnActivar) btnActivar.style.display = 'block';
+  if (btnActivar) btnActivar.style.display = (OPERARIO && OPERARIO.puede_usar_camara) ? 'block' : 'none';
   if (campo)      campo.style.display      = 'none';
 })();
 
@@ -331,7 +331,7 @@ async function cargarMuelleConRuta(rutaId) {
     html += `
       <div style="background:#0a1a0a;border:1px solid #166534;border-radius:12px;padding:14px;margin-bottom:16px;text-align:center;">
         <div style="font-size:14px;color:#4ade80;font-weight:700;margin-bottom:8px;">✓ Los ${totalConf} bulto${totalConf !== 1 ? 's' : ''} de esta ruta ya están cargados</div>
-        <button onclick="muelleConfirmarCargueCompleto(${rutaId})"
+        <button onclick="conBotonOcupado(event, () => muelleConfirmarCargueCompleto(${rutaId}))"
           style="width:100%;padding:14px;background:#14532d;color:#4ade80;border:none;border-radius:10px;font-size:16px;font-weight:800;cursor:pointer;">
           🚛 Confirmar cargue completo — Ruta lista para salir
         </button>
@@ -432,11 +432,11 @@ function _htmlGrupoRuta(grupo, gi, totalGrupos, rutaId) {
         </div>
         <div style="display:flex;gap:4px;">
           ${gi > 0
-            ? `<button onclick="rutaMoverGrupo(${gi},-1,${rutaId})" style="background:#222;border:1px solid #333;color:#fff;width:28px;height:28px;border-radius:6px;cursor:pointer;font-size:14px;">↑</button>`
-            : `<div style="width:28px;"></div>`}
+            ? `<button onclick="rutaMoverGrupo(${gi},-1,${rutaId})" style="background:#222;border:1px solid #333;color:#fff;width:44px;height:44px;border-radius:6px;cursor:pointer;font-size:14px;">↑</button>`
+            : `<div style="width:44px;"></div>`}
           ${gi < totalGrupos - 1
-            ? `<button onclick="rutaMoverGrupo(${gi},1,${rutaId})" style="background:#222;border:1px solid #333;color:#fff;width:28px;height:28px;border-radius:6px;cursor:pointer;font-size:14px;">↓</button>`
-            : `<div style="width:28px;"></div>`}
+            ? `<button onclick="rutaMoverGrupo(${gi},1,${rutaId})" style="background:#222;border:1px solid #333;color:#fff;width:44px;height:44px;border-radius:6px;cursor:pointer;font-size:14px;">↓</button>`
+            : `<div style="width:44px;"></div>`}
         </div>
         <div style="font-size:12px;color:#444;text-align:right;min-width:40px;">Parada<br>#${gi + 1}</div>
       </div>
@@ -477,7 +477,7 @@ function _htmlGrupoPendiente(grupo, rutaId) {
           <div style="font-size:16px;font-weight:800;color:#b45309;">📍 ${grupo.destino}</div>
           <div style="font-size:13px;color:#555;margin-top:2px;">${grupo.total} bulto${grupo.total !== 1 ? 's' : ''}</div>
         </div>
-        <button onclick="muelleAsignar(null,'${numeroPedido}')"
+        <button onclick="conBotonOcupado(event, () => muelleAsignar(null,'${numeroPedido}'))"
           style="background:#fff;color:#000;border:none;padding:8px 14px;border-radius:8px;font-size:14px;font-weight:700;cursor:pointer;white-space:nowrap;">
           + Todo el pedido
         </button>
@@ -489,7 +489,7 @@ function _htmlGrupoPendiente(grupo, rutaId) {
             <span style="font-size:12px;color:#999;margin-left:8px;">${b.tipo} ${b.numero}/${b.total}</span>
             ${b.cliente ? `<span style="font-size:12px;color:#999;margin-left:8px;">· ${b.cliente}</span>` : ''}
           </div>
-          <button onclick="muelleAsignar(${b.id},null)"
+          <button onclick="conBotonOcupado(event, () => muelleAsignar(${b.id},null))"
             style="background:#1a1a1a;color:#ccc;border:1px solid #333;padding:4px 10px;border-radius:6px;font-size:13px;cursor:pointer;">
             + Solo esta
           </button>
@@ -706,10 +706,10 @@ function rutaCard(r) {
     : new Date(r.fecha_creacion).toLocaleString('es-CO', { month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' });
 
   const btnIniciar = r.estado === 'PROGRAMADO'
-    ? `<button onclick="rutaIniciar(${r.id})" style="flex:1;padding:10px;background:#2d1b69;color:#a78bfa;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">▶ Iniciar Cargue</button>`
+    ? `<button onclick="conBotonOcupado(event, () => rutaIniciar(${r.id}))" style="flex:1;padding:10px;background:#2d1b69;color:#a78bfa;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">▶ Iniciar Cargue</button>`
     : '';
   const btnCerrar = r.estado === 'EN_CARGUE'
-    ? `<button onclick="rutaCerrar(${r.id})" style="flex:1;padding:10px;background:#1e3a5f;color:#60a5fa;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">🚛 Salió</button>`
+    ? `<button onclick="conBotonOcupado(event, () => rutaCerrar(${r.id}))" style="flex:1;padding:10px;background:#1e3a5f;color:#60a5fa;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">🚛 Salió</button>`
     : '';
   // EN_TRANSITO: estado informativo — solo el conductor marca como entregada desde su app
   const btnEntregar = r.estado === 'EN_TRANSITO'
@@ -722,7 +722,7 @@ function rutaCard(r) {
     ? `<button onclick="rutaVerPlanilla(${r.id})" style="flex:1;padding:10px;background:#1a1a2a;color:#a78bfa;border:1px solid #2d1b69;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">💰 Planilla${r.estado_financiero === 'LIQUIDADA' ? ' ✓' : ''}</button>`
     : '';
   const btnForzarCierre = r.estado === 'EN_TRANSITO'
-    ? `<button onclick="rutaForzarCierre(${r.id})" style="flex:1;padding:10px;background:#110a00;color:#f59e0b;border:1px solid #78350f;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;">⚡ Forzar cierre</button>`
+    ? `<button onclick="conBotonOcupado(event, () => rutaForzarCierre(${r.id}))" style="flex:1;padding:10px;background:#110a00;color:#f59e0b;border:1px solid #78350f;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;">⚡ Forzar cierre</button>`
     : '';
 
   return `
@@ -1782,7 +1782,7 @@ async function cargarRutasConductor() {
     if (cached !== null) {
       _COND_RUTAS = cached;
     } else if (!_COND_RUTA_ACTIVA) {
-      el.innerHTML = '<div style="color:#ef4444;text-align:center;padding:40px;">Sin conexión y sin datos en caché. Abre la app con señal primero.</div>';
+      el.innerHTML = '<div style="color:#b91c1c;text-align:center;padding:40px;">Sin conexión y sin datos en caché. Abre la app con señal primero.</div>';
       return;
     }
   }
@@ -1800,9 +1800,9 @@ async function cargarRutasConductor() {
   if (!_COND_RUTAS.length) {
     el.innerHTML = `<div style="text-align:center;padding:80px 20px;">
       <div style="font-size:60px;">✅</div>
-      <div style="font-size:20px;font-weight:700;color:#4ade80;margin-top:16px;">Sin rutas en tránsito</div>
-      <div style="font-size:13px;color:#555;margin-top:8px;">El jefe de almacén te asignará una cuando salgas</div>
-      <button onclick="cargarRutasConductor()" style="margin-top:24px;padding:14px 28px;background:#1a1a1a;border:1px solid #333;color:#fff;border-radius:12px;font-size:15px;cursor:pointer;">🔄 Actualizar</button>
+      <div style="font-size:20px;font-weight:700;color:#16a34a;margin-top:16px;">Sin rutas en tránsito</div>
+      <div style="font-size:13px;color:#6b7280;margin-top:8px;">El jefe de almacén te asignará una cuando salgas</div>
+      <button onclick="cargarRutasConductor()" style="margin-top:24px;padding:14px 28px;background:#1d4ed8;border:none;color:#fff;border-radius:12px;font-size:15px;cursor:pointer;">🔄 Actualizar</button>
     </div>`;
     return;
   }
@@ -1810,10 +1810,10 @@ async function cargarRutasConductor() {
   el.innerHTML = _COND_RUTAS.map((r) => {
     const totalBultos = r.total_bultos || 0;
     return `
-      <div style="background:#111;border:2px solid #1e3a5f;border-radius:16px;padding:20px;margin-bottom:12px;">
-        <div style="font-size:18px;font-weight:800;color:#60a5fa;margin-bottom:4px;">🚛 Ruta #${r.id}</div>
-        <div style="font-size:14px;color:#ccc;margin-bottom:12px;">${r.ruta_maestra_nombre || r.tipo_ruta} · ${r.vehiculo_placa || 'Sin vehículo'}</div>
-        <div style="font-size:12px;color:#555;margin-bottom:16px;">${totalBultos} bulto${totalBultos !== 1 ? 's' : ''}</div>
+      <div style="background:#fff;border:2px solid #bfdbfe;border-radius:16px;padding:20px;margin-bottom:12px;box-shadow:0 1px 3px rgba(0,0,0,.06);">
+        <div style="font-size:18px;font-weight:800;color:#1d4ed8;margin-bottom:4px;">🚛 Ruta #${r.id}</div>
+        <div style="font-size:14px;color:#374151;margin-bottom:12px;">${r.ruta_maestra_nombre || r.tipo_ruta} · ${r.vehiculo_placa || 'Sin vehículo'}</div>
+        <div style="font-size:12px;color:#6b7280;margin-bottom:16px;">${totalBultos} bulto${totalBultos !== 1 ? 's' : ''}</div>
         <button onclick="condAbrirParadas(${r.id})"
           style="width:100%;padding:18px;background:#1d4ed8;color:#fff;border:none;border-radius:12px;font-size:18px;font-weight:800;cursor:pointer;letter-spacing:0.02em;">
           📦 Ver Paradas y Cobros
@@ -1830,7 +1830,7 @@ async function cargarRutasConductor() {
  */
 async function condAbrirParadas(rutaId) {
   const el = document.getElementById('cond-contenido');
-  el.innerHTML = '<div style="text-align:center;padding:60px;color:#555;">Cargando paradas...</div>';
+  el.innerHTML = '<div style="text-align:center;padding:60px;color:#6b7280;">Cargando paradas...</div>';
   let data = null;
   try {
     // `navigator.onLine` NO confirma internet real — solo dice si el
@@ -1848,7 +1848,7 @@ async function condAbrirParadas(rutaId) {
   } catch (e) {
     data = await _condDB.get('paradas_' + rutaId);
     if (!data) {
-      el.innerHTML = '<div style="color:#ef4444;text-align:center;padding:40px;">Sin conexión y sin datos en caché para esta ruta.</div>';
+      el.innerHTML = '<div style="color:#b91c1c;text-align:center;padding:40px;">Sin conexión y sin datos en caché para esta ruta.</div>';
       return;
     }
   }
@@ -1884,14 +1884,14 @@ function _condRenderParadas(d) {
 
   let html = `
     <div style="margin-bottom:16px;display:flex;justify-content:space-between;align-items:center;">
-      <button onclick="cargarRutasConductor()" style="background:none;border:none;color:#666;font-size:14px;cursor:pointer;padding:0;">← Volver</button>
-      <span style="font-size:13px;color:#555;">${gestionadas}/${total} gestionadas</span>
+      <button onclick="cargarRutasConductor()" style="background:none;border:none;color:#6b7280;font-size:14px;cursor:pointer;padding:0;">← Volver</button>
+      <span style="font-size:13px;color:#6b7280;">${gestionadas}/${total} gestionadas</span>
     </div>
-    <div style="background:#111;border:1px solid #1e3a5f;border-radius:14px;padding:14px;margin-bottom:16px;">
-      <div style="font-size:14px;color:#aaa;">Ruta #${_COND_RUTA_ACTIVA.id} · <span style="color:${todasGestionadas ? '#4ade80' : '#facc15'};font-weight:700;">${todasGestionadas ? 'Lista para cerrar' : 'En curso'}</span></div>
+    <div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:14px;padding:14px;margin-bottom:16px;">
+      <div style="font-size:14px;color:#374151;">Ruta #${_COND_RUTA_ACTIVA.id} · <span style="color:${todasGestionadas ? '#16a34a' : '#b45309'};font-weight:700;">${todasGestionadas ? 'Lista para cerrar' : 'En curso'}</span></div>
       <div style="display:flex;gap:16px;margin-top:10px;">
-        <div style="text-align:center;"><div style="font-size:24px;font-weight:800;color:#4ade80;">${gestionadas}</div><div style="font-size:10px;color:#555;">GESTIONADAS</div></div>
-        <div style="text-align:center;"><div style="font-size:24px;font-weight:800;color:#555;">${total - gestionadas}</div><div style="font-size:10px;color:#555;">PENDIENTES</div></div>
+        <div style="text-align:center;"><div style="font-size:24px;font-weight:800;color:#16a34a;">${gestionadas}</div><div style="font-size:10px;color:#6b7280;">GESTIONADAS</div></div>
+        <div style="text-align:center;"><div style="font-size:24px;font-weight:800;color:#6b7280;">${total - gestionadas}</div><div style="font-size:10px;color:#6b7280;">PENDIENTES</div></div>
       </div>
     </div>`;
 
@@ -1926,7 +1926,7 @@ function _condRenderParadas(d) {
     html += `
       <div style="position:sticky;bottom:16px;margin-top:12px;">
         <button onclick="condCerrarRuta()"
-          style="width:100%;padding:20px;background:#166534;color:#4ade80;border:none;border-radius:14px;font-size:18px;font-weight:800;cursor:pointer;">
+          style="width:100%;padding:20px;background:#16a34a;color:#fff;border:none;border-radius:14px;font-size:18px;font-weight:800;cursor:pointer;">
           ✅ Cerrar Ruta — Todo Gestionado
         </button>
       </div>`;
@@ -1974,10 +1974,10 @@ function _condItemsAjustados() {
 function _condDesgloseHTML(p) {
   if (p.base_gravable == null || p.iva_factura == null) return '';
   return `
-    <div style="display:flex;justify-content:space-between;font-size:15px;color:#aaa;margin-bottom:4px;">
+    <div style="display:flex;justify-content:space-between;font-size:15px;color:#6b7280;margin-bottom:4px;">
       <span>Base</span><span>$${Number(p.base_gravable).toLocaleString('es-CO')}</span>
     </div>
-    <div style="display:flex;justify-content:space-between;font-size:15px;color:#aaa;margin-bottom:8px;padding-bottom:8px;border-bottom:1px solid #333;">
+    <div style="display:flex;justify-content:space-between;font-size:15px;color:#6b7280;margin-bottom:8px;padding-bottom:8px;border-bottom:1px solid #e5e7eb;">
       <span>IVA</span><span>$${Number(p.iva_factura).toLocaleString('es-CO')}</span>
     </div>`;
 }
@@ -2061,41 +2061,41 @@ function _condRenderFormParada() {
 
   el.innerHTML = `
     <div style="margin-bottom:16px;display:flex;justify-content:space-between;align-items:center;">
-      <button onclick="condVolverAParadas()" style="background:none;border:none;color:#666;font-size:14px;cursor:pointer;padding:0;">← Paradas</button>
-      ${r ? `<span style="font-size:11px;color:#555;">Editando confirmación</span>` : ''}
+      <button onclick="condVolverAParadas()" style="background:none;border:none;color:#6b7280;font-size:14px;cursor:pointer;padding:0;">← Paradas</button>
+      ${r ? `<span style="font-size:11px;color:#6b7280;">Editando confirmación</span>` : ''}
     </div>
 
-    <div style="background:#111;border:1px solid #333;border-radius:14px;padding:14px;margin-bottom:16px;">
-      <div style="font-size:16px;font-weight:800;color:#fff;">${p.cliente}</div>
-      <div style="font-size:13px;color:#aaa;margin-top:4px;">📍 ${p.municipio}</div>
-      <div style="font-size:12px;color:#555;margin-top:2px;">${p.numero_pedido} · ${p.bultos.length} bulto${p.bultos.length !== 1 ? 's' : ''}</div>
+    <div style="background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:14px;margin-bottom:16px;">
+      <div style="font-size:16px;font-weight:800;color:#111827;">${p.cliente}</div>
+      <div style="font-size:13px;color:#374151;margin-top:4px;">📍 ${p.municipio}</div>
+      <div style="font-size:12px;color:#9ca3af;margin-top:2px;">${p.numero_pedido} · ${p.bultos.length} bulto${p.bultos.length !== 1 ? 's' : ''}</div>
     </div>
 
     ${(p.vendedor_nombre || p.vendedor_telefono) ? `
-    <div style="background:#0B1117;border:1px solid #1e3a5f;border-radius:12px;padding:10px 14px;margin-bottom:16px;display:flex;align-items:center;gap:10px;">
+    <div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:12px;padding:10px 14px;margin-bottom:16px;display:flex;align-items:center;gap:10px;">
       <span style="font-size:18px;">🧑‍💼</span>
       <div>
-        <div style="font-size:10px;color:#60a5fa;font-weight:700;letter-spacing:.5px;">ASESOR DEL PEDIDO</div>
-        <div style="font-size:14px;font-weight:700;color:#fff;">${p.vendedor_nombre || '—'}</div>
-        ${p.vendedor_telefono ? `<a href="tel:${p.vendedor_telefono}" style="color:#4ade80;font-size:13px;text-decoration:none;">📞 ${p.vendedor_telefono}</a>` : ''}
+        <div style="font-size:10px;color:#1d4ed8;font-weight:700;letter-spacing:.5px;">ASESOR DEL PEDIDO</div>
+        <div style="font-size:14px;font-weight:700;color:#111827;">${p.vendedor_nombre || '—'}</div>
+        ${p.vendedor_telefono ? `<a href="tel:${p.vendedor_telefono}" style="color:#16a34a;font-size:13px;text-decoration:none;">📞 ${p.vendedor_telefono}</a>` : ''}
       </div>
     </div>
     ` : ''}
 
     <div style="margin-bottom:14px;">
-      <label style="font-size:12px;color:#aaa;font-weight:700;display:block;margin-bottom:8px;">RESULTADO</label>
+      <label style="font-size:12px;color:#374151;font-weight:700;display:block;margin-bottom:8px;">RESULTADO</label>
       <div style="display:flex;gap:6px;" id="cond-estado-btns">
         ${['ENTREGADO','RECHAZADO'].map(e => `
           <button onclick="condSelEstado('${e}')"
             id="cond-estado-${e}"
-            style="flex:1;padding:14px 4px;border-radius:10px;font-size:13px;font-weight:700;cursor:pointer;border:2px solid ${e===estadoUi ? (e==='ENTREGADO'?'#16a34a':'#dc2626') : '#ddd'};background:${e===estadoUi ? (e==='ENTREGADO'?'#f0fdf4':'#fef2f2') : '#fff'};color:${e===estadoUi ? (e==='ENTREGADO'?'#15803d':'#b91c1c') : '#aaa'};">
+            style="flex:1;padding:14px 4px;border-radius:10px;font-size:13px;font-weight:700;cursor:pointer;border:2px solid ${e===estadoUi ? (e==='ENTREGADO'?'#16a34a':'#dc2626') : '#d1d5db'};background:${e===estadoUi ? (e==='ENTREGADO'?'#f0fdf4':'#fef2f2') : '#fff'};color:${e===estadoUi ? (e==='ENTREGADO'?'#15803d':'#b91c1c') : '#6b7280'};">
             ${e === 'ENTREGADO' ? '✓ Entregado' : '✗ Rechazado'}
           </button>`).join('')}
       </div>
     </div>
 
     <div id="cond-bultos-rechazo" style="margin-bottom:14px;display:${estadoUi === 'RECHAZADO' ? 'block' : 'none'};">
-      <label style="font-size:12px;color:#555;font-weight:700;display:block;margin-bottom:8px;">BULTOS RECHAZADOS</label>
+      <label style="font-size:12px;color:#374151;font-weight:700;display:block;margin-bottom:8px;">BULTOS RECHAZADOS</label>
       ${p.bultos.map(b => `
         <label style="display:flex;align-items:center;gap:10px;padding:10px;background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;margin-bottom:6px;cursor:pointer;">
           <input type="checkbox" value="${b.id}" ${rechazadosActuales.includes(b.id) ? 'checked' : ''}
@@ -2105,7 +2105,7 @@ function _condRenderFormParada() {
     </div>
 
     <div id="cond-items-parcial" style="margin-bottom:14px;display:${estadoUi === 'ENTREGADO' ? 'block' : 'none'};">
-      <label style="font-size:12px;color:#555;font-weight:700;display:block;margin-bottom:8px;">REFERENCIAS</label>
+      <label style="font-size:12px;color:#374151;font-weight:700;display:block;margin-bottom:8px;">REFERENCIAS</label>
       <div style="font-size:11px;color:#9ca3af;margin-bottom:10px;">Precargadas con la cantidad del pedido. Ajusta solo si algo no se entregó — lo que baje queda como devolución.</div>
       ${(p.items && p.items.length ? p.items : []).map((it, idx) => {
         const pedido = it.cantidad_pedida || 0;
@@ -2142,7 +2142,7 @@ function _condRenderFormParada() {
     </div>
 
     <div id="cond-bultos-devolucion" style="margin-bottom:14px;display:none;">
-      <label style="font-size:12px;color:#555;font-weight:700;display:block;margin-bottom:8px;">BULTOS CON DEVOLUCIÓN</label>
+      <label style="font-size:12px;color:#374151;font-weight:700;display:block;margin-bottom:8px;">BULTOS CON DEVOLUCIÓN</label>
       <div style="font-size:11px;color:#9ca3af;margin-bottom:10px;">Opcional — en cuál caja/bulto físico va lo que vuelve a bodega.</div>
       ${p.bultos.map(b => `
         <label style="display:flex;align-items:center;gap:10px;padding:10px;background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;margin-bottom:6px;cursor:pointer;">
@@ -2156,77 +2156,77 @@ function _condRenderFormParada() {
       ${modoPago === 'CREDITO' ? `
       ${hayValorConocido ? `
       <div id="cond-valorfactura-wrap" style="margin-bottom:14px;">
-        <label style="font-size:12px;color:#aaa;font-weight:700;display:block;margin-bottom:8px;">VALOR FACTURA</label>
-        <div id="cond-valorfactura-monto" style="padding:14px;background:#1a1a1a;border:1px solid #333;border-radius:10px;">
+        <label style="font-size:12px;color:#374151;font-weight:700;display:block;margin-bottom:8px;">VALOR FACTURA</label>
+        <div id="cond-valorfactura-monto" style="padding:14px;background:#f9fafb;border:1px solid #e5e7eb;border-radius:10px;">
           ${_condDesgloseHTML(p)}
-          <div id="cond-valorfactura-total" style="font-size:20px;font-weight:800;color:#4ade80;">$${Number(p.valor_factura).toLocaleString('es-CO')}</div>
+          <div id="cond-valorfactura-total" style="font-size:20px;font-weight:800;color:#16a34a;">$${Number(p.valor_factura).toLocaleString('es-CO')}</div>
         </div>
       </div>
       ` : ''}
-      <div style="margin-bottom:14px;padding:14px;background:#1a1a1a;border:1px solid #333;border-radius:10px;font-size:13px;color:#aaa;display:flex;align-items:center;gap:10px;">
+      <div style="margin-bottom:14px;padding:14px;background:#f9fafb;border:1px solid #e5e7eb;border-radius:10px;font-size:13px;color:#374151;display:flex;align-items:center;gap:10px;">
         💳 Pedido a crédito — no se cobra en la entrega. La cartera se gestiona aparte.
       </div>
       ` : `
       ${modoPago === 'DINAMICO' ? `
       <div id="cond-valorfactura-wrap" style="margin-bottom:14px;">
-        <label style="font-size:12px;color:#aaa;font-weight:700;display:block;margin-bottom:8px;">VALOR A COBRAR</label>
-        <div id="cond-valorfactura-monto" style="padding:14px;background:#1a1a1a;border:1px solid #333;border-radius:10px;">
+        <label style="font-size:12px;color:#374151;font-weight:700;display:block;margin-bottom:8px;">VALOR A COBRAR</label>
+        <div id="cond-valorfactura-monto" style="padding:14px;background:#f9fafb;border:1px solid #e5e7eb;border-radius:10px;">
           ${_condDesgloseHTML(p)}
-          <div id="cond-valorfactura-total" style="font-size:20px;font-weight:800;color:#4ade80;">$${Number(p.valor_factura).toLocaleString('es-CO')}</div>
+          <div id="cond-valorfactura-total" style="font-size:20px;font-weight:800;color:#16a34a;">$${Number(p.valor_factura).toLocaleString('es-CO')}</div>
         </div>
       </div>
 
       <div id="cond-pago-toggle-wrap" style="margin-bottom:14px;">
-        <label style="font-size:12px;color:#aaa;font-weight:700;display:block;margin-bottom:8px;">PAGO</label>
+        <label style="font-size:12px;color:#374151;font-weight:700;display:block;margin-bottom:8px;">PAGO</label>
         <div style="display:flex;gap:6px;">
           <button type="button" onclick="condSelTipoPago('TOTAL')" id="cond-tipopago-TOTAL"
-            style="flex:1;padding:14px 4px;border-radius:10px;font-size:13px;font-weight:700;cursor:pointer;border:2px solid #ddd;background:#fff;color:#aaa;">
+            style="flex:1;padding:14px 4px;border-radius:10px;font-size:13px;font-weight:700;cursor:pointer;border:2px solid #d1d5db;background:#fff;color:#6b7280;">
             ✓ Pago Total
           </button>
           <button type="button" onclick="condSelTipoPago('PARCIAL')" id="cond-tipopago-PARCIAL"
-            style="flex:1;padding:14px 4px;border-radius:10px;font-size:13px;font-weight:700;cursor:pointer;border:2px solid #ddd;background:#fff;color:#aaa;">
+            style="flex:1;padding:14px 4px;border-radius:10px;font-size:13px;font-weight:700;cursor:pointer;border:2px solid #d1d5db;background:#fff;color:#6b7280;">
             ⚠ Pago Parcial
           </button>
         </div>
       </div>
 
       <div id="cond-parcial-detalle" style="margin-bottom:14px;display:none;">
-        <label style="font-size:12px;color:#aaa;font-weight:700;display:block;margin-bottom:8px;">MONTO PAGADO ($)</label>
+        <label style="font-size:12px;color:#374151;font-weight:700;display:block;margin-bottom:8px;">MONTO PAGADO ($)</label>
         <input type="number" id="cond-monto-parcial" value="${motivoActual ? montoActual : ''}" min="0" max="${Math.floor(p.valor_factura)}" step="1"
           oninput="condActualizarMotivoVisible()"
-          style="width:100%;padding:14px;background:#1a1a1a;border:1px solid #333;color:#fff;border-radius:10px;font-size:18px;font-weight:700;box-sizing:border-box;">
+          style="width:100%;padding:14px;background:#fff;border:2px solid #d1d5db;color:#111827;border-radius:10px;font-size:18px;font-weight:700;box-sizing:border-box;">
 
         <div id="cond-motivo-descuento-wrap" style="margin-top:12px;display:none;">
-          <label style="font-size:12px;color:#aaa;font-weight:700;display:block;margin-bottom:8px;">MOTIVO DEL DESCUENTO</label>
+          <label style="font-size:12px;color:#374151;font-weight:700;display:block;margin-bottom:8px;">MOTIVO DEL DESCUENTO</label>
           <select id="cond-motivo-descuento" onchange="condActualizarPreviewDescuento()"
-            style="width:100%;padding:14px;background:#1a1a1a;border:1px solid #333;color:#fff;border-radius:10px;font-size:15px;">
+            style="width:100%;padding:14px;background:#fff;border:1px solid #d1d5db;color:#111827;border-radius:10px;font-size:15px;">
             <option value="">— Seleccionar —</option>
             ${_COND_RETENCIONES.map(ret =>
               `<option value="${ret.tipo}" ${ret.tipo===motivoActual?'selected':''}>${ret.nombre}</option>`
             ).join('')}
           </select>
-          <div id="cond-motivo-descuento-preview" style="margin-top:8px;font-size:13px;color:#aaa;"></div>
+          <div id="cond-motivo-descuento-preview" style="margin-top:8px;font-size:13px;color:#6b7280;"></div>
           ${(p.vendedor_nombre || p.vendedor_telefono) ? `
-          <div style="margin-top:10px;padding:12px;background:#451a03;border:1px solid #d97706;border-radius:10px;">
-            <div style="font-size:12px;color:#fbbf24;font-weight:700;margin-bottom:6px;">⚠ Comunícate con el vendedor para validar este pago parcial</div>
-            <div style="font-size:14px;color:#fff;font-weight:700;">${p.vendedor_nombre || '—'}</div>
-            ${p.vendedor_telefono ? `<a href="tel:${p.vendedor_telefono}" style="display:inline-block;margin-top:4px;color:#4ade80;font-size:14px;text-decoration:none;">📞 ${p.vendedor_telefono}</a>` : ''}
+          <div style="margin-top:10px;padding:12px;background:#fffbeb;border:1px solid #d97706;border-radius:10px;">
+            <div style="font-size:12px;color:#92400e;font-weight:700;margin-bottom:6px;">⚠ Comunícate con el vendedor para validar este pago parcial</div>
+            <div style="font-size:14px;color:#111827;font-weight:700;">${p.vendedor_nombre || '—'}</div>
+            ${p.vendedor_telefono ? `<a href="tel:${p.vendedor_telefono}" style="display:inline-block;margin-top:4px;color:#16a34a;font-size:14px;text-decoration:none;">📞 ${p.vendedor_telefono}</a>` : ''}
           </div>
           ` : ''}
         </div>
       </div>
       ` : `
       <div id="cond-monto-wrap" style="margin-bottom:14px;">
-        <label style="font-size:12px;color:#aaa;font-weight:700;display:block;margin-bottom:8px;">MONTO COBRADO ($)</label>
+        <label style="font-size:12px;color:#374151;font-weight:700;display:block;margin-bottom:8px;">MONTO COBRADO ($)</label>
         <input type="number" id="cond-monto" value="${montoActual}" min="0" step="100"
-          style="width:100%;padding:14px;background:#1a1a1a;border:1px solid #333;color:#fff;border-radius:10px;font-size:18px;font-weight:700;box-sizing:border-box;">
+          style="width:100%;padding:14px;background:#fff;border:2px solid #d1d5db;color:#111827;border-radius:10px;font-size:18px;font-weight:700;box-sizing:border-box;">
       </div>
       `}
 
       <div id="cond-forma-pago-wrap" style="margin-bottom:14px;">
-        <label style="font-size:12px;color:#aaa;font-weight:700;display:block;margin-bottom:8px;">FORMA DE PAGO</label>
+        <label style="font-size:12px;color:#374151;font-weight:700;display:block;margin-bottom:8px;">FORMA DE PAGO</label>
         <select id="cond-forma-pago"
-          style="width:100%;padding:14px;background:#1a1a1a;border:1px solid #333;color:#fff;border-radius:10px;font-size:15px;">
+          style="width:100%;padding:14px;background:#fff;border:1px solid #d1d5db;color:#111827;border-radius:10px;font-size:15px;">
           <option value="">— Seleccionar —</option>
           ${_FORMAS_PAGO_COBRO.map(f =>
             `<option value="${f.v}" ${f.v===formaActual?'selected':''}>${f.l}</option>`
@@ -2243,27 +2243,27 @@ function _condRenderFormParada() {
          services/motivos_rechazo.py, para no tener dos listas.
          Sin backticks: esto vive DENTRO de un template literal. -->
     <div id="cond-motivo-wrap" style="margin-bottom:14px;display:${estadoUi === 'RECHAZADO' ? 'block' : 'none'};">
-      <label style="font-size:12px;color:#aaa;font-weight:700;display:block;margin-bottom:8px;">MOTIVO DEL RECHAZO *</label>
+      <label style="font-size:12px;color:#374151;font-weight:700;display:block;margin-bottom:8px;">MOTIVO DEL RECHAZO *</label>
       <select id="cond-motivo"
-        style="width:100%;padding:12px;background:#1a1a1a;border:1px solid #333;color:#fff;border-radius:10px;font-size:14px;box-sizing:border-box;">
+        style="width:100%;padding:12px;background:#fff;border:1px solid #d1d5db;color:#111827;border-radius:10px;font-size:14px;box-sizing:border-box;">
         <option value="">— Elegí el motivo —</option>
         ${(_COND_MOTIVOS || []).map(m => `
         <option value="${m.codigo}" ${motivoRechazoActual === m.codigo ? 'selected' : ''}>${m.etiqueta}</option>`).join('')}
       </select>
-      <p id="cond-motivo-aviso" style="font-size:11px;color:#fbbf24;margin:6px 0 0;display:none;">
+      <p id="cond-motivo-aviso" style="font-size:11px;color:#b45309;margin:6px 0 0;display:none;">
         La mercancía se queda con el cliente. El inventario NO vuelve al camión.
       </p>
     </div>
 
     <div style="margin-bottom:14px;">
-      <label style="font-size:12px;color:#aaa;font-weight:700;display:block;margin-bottom:8px;">OBSERVACIONES</label>
+      <label style="font-size:12px;color:#374151;font-weight:700;display:block;margin-bottom:8px;">OBSERVACIONES</label>
       <textarea id="cond-obs" rows="2"
-        style="width:100%;padding:12px;background:#1a1a1a;border:1px solid #333;color:#fff;border-radius:10px;font-size:14px;resize:none;box-sizing:border-box;"
+        style="width:100%;padding:12px;background:#fff;border:1px solid #d1d5db;color:#111827;border-radius:10px;font-size:14px;resize:none;box-sizing:border-box;"
         placeholder="Ej: Cliente solicitó factura electrónica...">${obsActual}</textarea>
     </div>
 
     <div style="margin-bottom:20px;">
-      <label style="font-size:12px;color:#aaa;font-weight:700;display:block;margin-bottom:8px;">FOTO EVIDENCIA <span style="color:#555;font-weight:400;">(opcional)</span></label>
+      <label style="font-size:12px;color:#374151;font-weight:700;display:block;margin-bottom:8px;">FOTO EVIDENCIA <span style="color:#9ca3af;font-weight:400;">(opcional)</span></label>
       <input type="file" id="cond-foto" accept="image/*" capture="environment"
         style="display:none;" onchange="condPrevisualizarFoto()">
       <button type="button" onclick="document.getElementById('cond-foto').click()"
@@ -2277,7 +2277,7 @@ function _condRenderFormParada() {
           ✕ Quitar foto
         </button>
       </div>
-      ${r && r.foto_entrega ? `<div style="margin-top:8px;font-size:11px;color:#4ade80;">✓ Foto guardada — toma una nueva para reemplazarla</div>` : ''}
+      ${r && r.foto_entrega ? `<div style="margin-top:8px;font-size:11px;color:#16a34a;">✓ Foto guardada — toma una nueva para reemplazarla</div>` : ''}
     </div>
 
     <div style="position:sticky;bottom:16px;">
@@ -2344,9 +2344,9 @@ function condSelTipoPago(tipo) {
     const btn = document.getElementById('cond-tipopago-' + t);
     if (!btn) return;
     const activo = t === tipo;
-    btn.style.borderColor = activo ? (t === 'TOTAL' ? '#16a34a' : '#d97706') : '#ddd';
+    btn.style.borderColor = activo ? (t === 'TOTAL' ? '#16a34a' : '#d97706') : '#d1d5db';
     btn.style.background  = activo ? (t === 'TOTAL' ? '#f0fdf4' : '#fffbeb') : '#fff';
-    btn.style.color       = activo ? (t === 'TOTAL' ? '#15803d' : '#b45309') : '#aaa';
+    btn.style.color       = activo ? (t === 'TOTAL' ? '#15803d' : '#b45309') : '#6b7280';
   });
 
   const detalle = document.getElementById('cond-parcial-detalle');
@@ -2394,12 +2394,12 @@ function condActualizarPreviewDescuento() {
   const baseGravable = p.base_gravable;
   const iva = p.iva_factura;
   if (!ret || !ret.tasa || baseGravable == null || iva == null) {
-    prev.innerHTML = '<span style="color:#f59e0b;">No se pudo calcular el valor estimado — falta el desglose de Siesa para esta factura.</span>';
+    prev.innerHTML = '<span style="color:#b45309;">No se pudo calcular el valor estimado — falta el desglose de Siesa para esta factura.</span>';
     return;
   }
   const base = tipo === 'RETEIVA' ? iva : baseGravable;
   const valor = Math.round(base * ret.tasa * 100) / 100;
-  let html = `Descuento estimado: <strong style="color:#4ade80;">${_condFmt(valor)}</strong>` +
+  let html = `Descuento estimado: <strong style="color:#16a34a;">${_condFmt(valor)}</strong>` +
     ` (${(ret.tasa * 100).toLocaleString('es-CO', {maximumFractionDigits: 3})}% sobre ${_condFmt(base)})`;
 
   // Total con el descuento ya aplicado — lo que de verdad debería cobrar el
@@ -2410,7 +2410,7 @@ function condActualizarPreviewDescuento() {
   if (p.valor_factura != null) {
     const totalConDescuento = Math.max(0, Math.round((p.valor_factura - valor) * 100) / 100);
     html += `<div style="margin-top:4px;">Total a cobrar con descuento: ` +
-      `<strong style="color:#4ade80;">${_condFmt(totalConDescuento)}</strong></div>`;
+      `<strong style="color:#16a34a;">${_condFmt(totalConDescuento)}</strong></div>`;
   }
   prev.innerHTML = html;
 }
@@ -2444,7 +2444,7 @@ function condSelEstado(estado) {
     if (!btn) return;
     const activo = e === estado;
     const colores = { ENTREGADO: ['#16a34a','#f0fdf4','#15803d'], RECHAZADO: ['#dc2626','#fef2f2','#b91c1c'] };
-    const [borde, fondo, texto] = activo ? colores[e] : ['#ddd','#fff','#aaa'];
+    const [borde, fondo, texto] = activo ? colores[e] : ['#d1d5db','#fff','#6b7280'];
     btn.style.borderColor = borde;
     btn.style.background  = fondo;
     btn.style.color       = texto;
@@ -2801,6 +2801,10 @@ async function condSyncQueue() {
   const syncBtn    = document.getElementById('cond-sync-btn');
   if (syncBtn) syncBtn.disabled = true;
 
+  // Un ítem con error NO debe congelar los demás — pueden ser entregas reales
+  // ya hechas, detrás en la cola, con el conductor sin ningún camino para
+  // desbloquearlas salvo que ese primer ítem por fin sincronice solo.
+  const fallidos = [];
   for (let i = 0; i < items.length; i++) {
     const item = items[i];
     if (syncStatus)
@@ -2820,15 +2824,21 @@ async function condSyncQueue() {
       }
       await _condDB.dequeue(item.id);
     } catch (e) {
-      _COND_SYNCING = false;
-      await _condActualizarBarras();
-      alerta(`Error al sincronizar: ${e.message}`, 'error');
-      return;
+      fallidos.push({ item, error: e.message });
+      // No return: sigue con el resto de la cola en vez de trabarla entera.
     }
   }
 
   _COND_SYNCING = false;
-  alerta('✓ Sincronización completa', 'exito');
+  if (fallidos.length) {
+    alerta(
+      `${items.length - fallidos.length} de ${items.length} sincronizadas — ` +
+      `${fallidos.length} con error, siguen en cola: ${fallidos[0].error}`,
+      'advertencia'
+    );
+  } else {
+    alerta('✓ Sincronización completa', 'exito');
+  }
   await _condActualizarBarras();
 
   // Recargar datos frescos del servidor
@@ -2985,7 +2995,7 @@ async function _cargarPlanilla(id) {
     if (d.sin_gestionar === 0 && d.estado_financiero !== 'LIQUIDADA') {
       html += `
         <div style="position:sticky;bottom:0;padding-top:12px;background:var(--bg,#0a0a0a);">
-          <button onclick="rutaLiquidar(${ruta.id})"
+          <button onclick="conBotonOcupado(event, () => rutaLiquidar(${ruta.id}))"
             style="width:100%;padding:18px;background:#14532d;color:#4ade80;border:none;border-radius:12px;font-size:16px;font-weight:800;cursor:pointer;">
             Liquidar Ruta — ${fmt(total)}
           </button>
@@ -3003,7 +3013,7 @@ async function _cargarPlanilla(id) {
       if (hayPendientesSiesa) {
         html += `
           <div style="position:sticky;bottom:0;padding-top:12px;background:var(--bg,#0a0a0a);">
-            <button onclick="rutaLiquidarSiesa(${ruta.id})"
+            <button onclick="conBotonOcupado(event, () => rutaLiquidarSiesa(${ruta.id}))"
               style="width:100%;padding:18px;background:#1e3a5f;color:#60a5fa;border:none;border-radius:12px;font-size:16px;font-weight:800;cursor:pointer;">
               Enviar a Siesa (NC/RC/DC)
             </button>

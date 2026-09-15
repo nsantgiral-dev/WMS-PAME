@@ -121,7 +121,7 @@ function _renderTrasladoCard(s) {
   const acciones = [];
 
   if (s.estado === 'ENVIADA') {
-    acciones.push(`<button onclick="trasAprobar(${s.id})" style="flex:1;padding:10px;background:#166534;color:#fff;border:none;border-radius:8px;font-size:17px;font-weight:700;cursor:pointer;">Aprobar y asignar</button>`);
+    acciones.push(`<button onclick="conBotonOcupado(event, () => trasAprobar(${s.id}))" style="flex:1;padding:10px;background:#166534;color:#fff;border:none;border-radius:8px;font-size:17px;font-weight:700;cursor:pointer;">Aprobar y asignar</button>`);
     acciones.push(`<button onclick="trasRechazar(${s.id})" style="padding:10px 12px;background:#7f1d1d;color:#fff;border:none;border-radius:8px;font-size:17px;cursor:pointer;">Rechazar</button>`);
   }
 
@@ -143,7 +143,7 @@ function _renderTrasladoCard(s) {
     if (packDespachado) {
       acciones.push(`<div style="flex:1;padding:10px;color:#9ca3af;font-size:16px;text-align:center;background:#1a1a1a;border:1px solid #374151;border-radius:8px;">⏳ Despacho en proceso...</div>`);
     } else {
-      acciones.push(`<button onclick="trasDespachar(${s.id})" style="flex:1;padding:10px;background:#b45309;color:#fff;border:none;border-radius:8px;font-size:17px;font-weight:700;cursor:pointer;">🚛 Despachar</button>`);
+      acciones.push(`<button onclick="conBotonOcupado(event, () => trasDespachar(${s.id}))" style="flex:1;padding:10px;background:#b45309;color:#fff;border:none;border-radius:8px;font-size:17px;font-weight:700;cursor:pointer;">🚛 Despachar</button>`);
     }
     acciones.push(`<button onclick="trasVerLPNs(${s.id})" style="padding:10px 10px;background:#1a1a1a;color:#a78bfa;border:1px solid #4c1d95;border-radius:8px;font-size:15px;cursor:pointer;">📦 LPNs</button>`);
   }
@@ -481,7 +481,7 @@ async function cargarTrasladosOperario() {
       </div>
       ${traslados.map(t => _renderTrasladoOperario(t)).join('')}`;
   } catch (e) {
-    contenedor.innerHTML = '';
+    contenedor.innerHTML = '<div style="text-align:center;padding:20px;color:#ef4444;font-size:12px;">Error cargando tus traslados — desliza para reintentar</div>';
   }
 }
 
@@ -550,9 +550,9 @@ async function trasReasignarOperario(id) {
 
   const opciones = operarios.map(o => `<option value="${o.id}">${o.nombre}</option>`).join('');
   const modal = document.createElement('div');
-  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:900;display:flex;align-items:center;justify-content:center;';
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:900;display:flex;align-items:center;justify-content:center;padding:20px;';
   modal.innerHTML = `
-    <div style="background:#111;border:1px solid #333;border-radius:16px;padding:24px;width:320px;">
+    <div style="background:#111;border:1px solid #333;border-radius:16px;padding:24px;width:100%;max-width:440px;">
       <div style="font-size:15px;font-weight:700;margin-bottom:16px;">↺ Reasignar operario</div>
       <select id="modal-nuevo-operario" style="width:100%;padding:10px;background:#1a1a1a;border:1px solid #333;border-radius:8px;color:#fff;font-size:14px;margin-bottom:16px;">
         ${opciones}
@@ -776,10 +776,12 @@ async function trasRevertir(id) {
 async function trasReintentarRecepcionSiesa(id) {
   if (!confirm(
     '¿Reintentar el registro de entrada en Siesa (ETS 173079)?\n\n'
-    + 'Solo si la recepción física ya se confirmó Y verificaste en Siesa que el '
-    + 'documento NO existe.\n\n'
-    + '⚠ Si ya existía, quedan DOS ENTRADAS DUPLICADAS y el inventario de la '
-    + 'bodega destino sube el doble. Anularla es un ajuste a mano en Siesa.')) return;
+    + 'El sistema ya verifica automáticamente en Siesa si el documento existe '
+    + 'antes de reenviar. Solo llega hasta acá si esa verificación no encontró '
+    + 'nada — pero si el documento SÍ existía y Siesa no devolvió un '
+    + 'consecutivo legible, reintentar deja DOS ENTRADAS DUPLICADAS y el '
+    + 'inventario de la bodega destino sube el doble. Anularla es un ajuste a '
+    + 'mano en Siesa.')) return;
   try {
     const r = await fetch(API + `/api/traslados/${id}/reintentar-recepcion`, {
       method: 'POST',
@@ -799,10 +801,12 @@ async function trasReintentarRecepcionSiesa(id) {
 async function trasReintentarDespachoSiesa(id) {
   if (!confirm(
     '¿Reintentar la salida en tránsito en Siesa (STS 173076/174930)?\n\n'
-    + 'No mueve el estado del traslado. Verificá primero en Siesa que el '
-    + 'documento NO exista.\n\n'
-    + '⚠ Si ya existía, quedan DOS SALIDAS DUPLICADAS y la bodega origen '
-    + 'descarga el doble — puede quedar en negativo.')) return;
+    + 'El sistema ya verifica automáticamente en Siesa si el documento existe '
+    + 'antes de reenviar. Solo llega hasta acá si esa verificación no encontró '
+    + 'nada — pero si el documento SÍ existía y Siesa no devolvió un '
+    + 'consecutivo legible, reintentar deja DOS SALIDAS DUPLICADAS y la '
+    + 'bodega origen descarga el doble, puede quedar en negativo.\n\n'
+    + 'No mueve el estado del traslado.')) return;
   try {
     const r = await fetch(API + `/api/traslados/${id}/reintentar-despacho`, {
       method: 'POST',
@@ -1163,6 +1167,20 @@ async function confirmarPackingTraslado(id) {
 
 let TRAS_PICK = null;
 
+// El HUD de picking de traslados puede tener docenas de ítems y no tocaba el
+// backend hasta el POST final — un refresh o que Android recicle la pestaña
+// de fondo borraba toda la sesión sin aviso. Se persiste `idx`/`counts` en
+// localStorage en cada cambio (desde _trasPickerRenderHUD, que ya se llama
+// después de cualquier mutación) y se restaura al reabrir el mismo traslado.
+const _trasPickKey = id => 'wms_tras_pick_' + id;
+function _trasGuardarPick() {
+  if (!TRAS_PICK) return;
+  try { localStorage.setItem(_trasPickKey(TRAS_PICK.solicitudId), JSON.stringify({ idx: TRAS_PICK.idx, counts: TRAS_PICK.counts })); } catch (_) {}
+}
+function _trasLimpiarPick(id) {
+  try { localStorage.removeItem(_trasPickKey(id)); } catch (_) {}
+}
+
 /** Fetch and render the transfer picking queue for the store picker. */
 async function trasPickerCargarCola() {
   const el = document.getElementById('tpick-lista');
@@ -1198,6 +1216,20 @@ async function trasPickerAbrirHUD(solicitudId) {
     if (!d.items || !d.items.length) { alerta('Sin ítems para pickear', 'error'); return; }
     TRAS_PICK = { solicitudId, codigo: d.codigo, items: d.items, idx: 0, counts: {} };
     for (const it of d.items) TRAS_PICK.counts[it.item_id] = it.cantidad_recogida || 0;
+    // Restaurar progreso local si la pestaña se recicló a mitad de este picking.
+    try {
+      const guardado = localStorage.getItem(_trasPickKey(solicitudId));
+      if (guardado) {
+        const previo = JSON.parse(guardado);
+        Object.keys(previo.counts || {}).forEach(itemId => {
+          if (itemId in TRAS_PICK.counts) {
+            TRAS_PICK.counts[itemId] = Math.max(TRAS_PICK.counts[itemId], previo.counts[itemId] || 0);
+          }
+        });
+        if (Number.isInteger(previo.idx) && previo.idx >= 0 && previo.idx < d.items.length) TRAS_PICK.idx = previo.idx;
+        alerta('Se restauró el progreso pendiente de este picking', 'info');
+      }
+    } catch (_) {}
     _trasPickerRenderHUD();
     document.getElementById('tpick-hud').style.display = 'block';
   } catch (e) { alerta('Error cargando traslado', 'error'); }
@@ -1228,6 +1260,7 @@ function _trasPickerRenderHUD() {
     btnSig.textContent = esUltimo ? '✓ Confirmar picking' : '→ Siguiente ítem';
     btnSig.style.background = (esUltimo && cant >= req) ? '#16a34a' : '#7c3aed';
   }
+  _trasGuardarPick();
 }
 
 /** @param {number} delta - Amount to add/subtract from the current transfer picking item count. */
@@ -1245,7 +1278,7 @@ async function trasPickerScan(codigo) {
   vibrar();
   if (item.tarea_picking_id) {
     try {
-      const r = await post('/api/mobile/escanear', { codigo, tarea_id: item.tarea_picking_id, tipo: 'PICKING' });
+      const r = await postConReintento('/api/mobile/escanear', { codigo, tarea_id: item.tarea_picking_id, tipo: 'PICKING' });
       if (r.error) { beepError(); alerta(typeof r.error === 'object' ? r.error.mensaje : r.error, 'error'); return; }
       TRAS_PICK.counts[item.item_id] = r.cantidad_actual;
       _trasPickerRenderHUD();
@@ -1285,24 +1318,19 @@ async function _trasPickerConfirmar() {
   const { solicitudId, items, counts } = TRAS_PICK;
   const items_confirmados = items.map(i => ({ id: i.item_id, cantidad_confirmada: counts[i.item_id] || 0 }));
   try {
-    const r = await fetch(API + `/api/traslados/${solicitudId}/confirmar-picking`, {
-      method: 'POST',
-      headers: { Authorization: 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ items_confirmados })
-    });
-    const d = await r.json();
-    if (!r.ok) { alerta(d.error || 'Error al confirmar picking', 'error'); return; }
+    await postConReintento(`/api/traslados/${solicitudId}/confirmar-picking`, { items_confirmados });
     beepDone();
     alerta('Picking confirmado ✓ — empaque pendiente', 'exito');
     trasPickerPausarHUD();
     await trasPickerCargarCola();
-  } catch (e) { alerta('Error de conexión', 'error'); }
+  } catch (e) { alerta(e.message || 'Error al confirmar picking', 'error'); }
 }
 
 /** Pause the transfer picker HUD and return to the queue. */
 function trasPickerPausarHUD() {
   cerrarCamara('tpick-cambox');
   document.getElementById('tpick-hud').style.display = 'none';
+  if (TRAS_PICK) _trasLimpiarPick(TRAS_PICK.solicitudId);
   TRAS_PICK = null;
 }
 
@@ -1316,6 +1344,18 @@ function trasPickerProblema() {
 // PACKER TRASLADO
 
 let TRAS_PACK = null;
+
+// Mismo motivo que TRAS_PICK arriba — TRAS_PACK es 100% local hasta el POST
+// final, así que sin esto un refresh o pestaña reciclada perdía toda la
+// verificación de empaque de un traslado.
+const _trasPackKey = id => 'wms_tras_pack_' + id;
+function _trasGuardarPack() {
+  if (!TRAS_PACK) return;
+  try { localStorage.setItem(_trasPackKey(TRAS_PACK.solicitudId), JSON.stringify({ counts: TRAS_PACK.counts })); } catch (_) {}
+}
+function _trasLimpiarPack(id) {
+  try { localStorage.removeItem(_trasPackKey(id)); } catch (_) {}
+}
 
 /** Fetch and render the transfer packing queue for the store packer. */
 async function trasPackerCargarCola() {
@@ -1349,6 +1389,17 @@ async function trasPackerAbrirHUD(solicitudId) {
     if (!d.items || !d.items.length) { alerta('Sin ítems para verificar', 'error'); return; }
     TRAS_PACK = { solicitudId, codigo: d.codigo, items: d.items, idx: 0, counts: {} };
     for (const it of d.items) TRAS_PACK.counts[it.item_id] = 0;
+    // Restaurar progreso local si la pestaña se recicló a mitad de esta verificación.
+    try {
+      const guardado = localStorage.getItem(_trasPackKey(solicitudId));
+      if (guardado) {
+        const previo = JSON.parse(guardado);
+        Object.keys(previo.counts || {}).forEach(itemId => {
+          if (itemId in TRAS_PACK.counts) TRAS_PACK.counts[itemId] = previo.counts[itemId] || 0;
+        });
+        alerta('Se restauró el progreso pendiente de esta verificación', 'info');
+      }
+    } catch (_) {}
     _trasPackerRenderHUD();
     document.getElementById('tpack-hud').style.display = 'flex';
   } catch (e) { alerta('Error cargando traslado', 'error'); }
@@ -1380,6 +1431,7 @@ function _trasPackerRenderHUD() {
     btnConf.textContent      = todoListo ? 'Confirmar empaque ✓' : '→ Siguiente';
     btnConf.style.background = todoListo ? '#16a34a' : '#0d9488';
   }
+  _trasGuardarPack();
 }
 
 /** @param {number} delta - Amount to add/subtract from the current transfer packing item count. */
@@ -1416,24 +1468,19 @@ async function trasPackerSiguiente() {
 async function _trasPackerConfirmar() {
   if (!TRAS_PACK) return;
   try {
-    const r = await fetch(API + '/api/traslados/' + TRAS_PACK.solicitudId + '/confirmar-packing', {
-      method: 'POST',
-      headers: { Authorization: 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
-      body: JSON.stringify({})
-    });
-    const d = await r.json();
-    if (!r.ok) { alerta(d.error || 'Error al confirmar empaque', 'error'); return; }
+    await postConReintento('/api/traslados/' + TRAS_PACK.solicitudId + '/confirmar-packing', {});
     beepDone();
     alerta('Empaque verificado — listo para despachar ✓', 'exito');
     trasPackerPausarHUD();
     await trasPackerCargarCola();
-  } catch (e) { alerta('Error de conexión', 'error'); }
+  } catch (e) { alerta(e.message || 'Error al confirmar empaque', 'error'); }
 }
 
 /** Pause the transfer packer HUD and return to the queue. */
 function trasPackerPausarHUD() {
   cerrarCamara('tpack-cambox');
   document.getElementById('tpack-hud').style.display = 'none';
+  if (TRAS_PACK) _trasLimpiarPack(TRAS_PACK.solicitudId);
   TRAS_PACK = null;
 }
 

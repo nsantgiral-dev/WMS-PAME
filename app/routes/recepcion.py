@@ -129,7 +129,8 @@ def escanear_producto(id):
             lote=data.get('lote'),
             fecha_vencimiento=data.get('fecha_vencimiento'),
             es_empaque=data.get('es_empaque', False),
-            es_bonificacion=data.get('es_bonificacion', False)
+            es_bonificacion=data.get('es_bonificacion', False),
+            scan_id=data.get('scan_id')
         )
         return jsonify(resultado), 200
     except ValueError as e:
@@ -166,7 +167,7 @@ def confirmar_recepcion(id):
                     fuga = BloqueoRecompraService.registrar_fuga(
                         producto_id=item.producto_id,
                         recepcion_id=recepcion.id,
-                        oc_siesa=recepcion.oc_siesa or '',
+                        oc_siesa=recepcion.numero_oc_siesa or '',
                         proveedor=recepcion.proveedor_codigo or '',
                         cantidad=int(item.cantidad_recibida or 0),
                     )

@@ -33,7 +33,7 @@ function _renderAcuerdos(el, data, calendario) {
   let html = '';
 
   // KPIs
-  html += '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:14px;">';
+  html += '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:8px;margin-bottom:14px;">';
   html += _compKpi(total, 'Acuerdos vigentes', 'var(--green)');
   html += _compKpi(resumen.acuerdos_por_vencer, 'Por vencer', 'var(--yellow)');
   html += _compKpi(resumen.candidatos_nuevo_acuerdo, 'Candidatos', 'var(--blue)');
@@ -271,7 +271,7 @@ function _renderArmador(el, propuesta, g5, sigma, rop) {
   html += '</div>';
 
   // Resumen
-  html += `<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-bottom:12px;">`;
+  html += `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:6px;margin-bottom:12px;">`;
   html += _compKpi(propuesta.total_items, 'Items total', 'var(--tx)');
   html += _compKpi(propuesta.items_deficit, 'Por deficit', 'var(--red)');
   html += _compKpi(propuesta.items_relleno, 'Relleno', 'var(--blue)');
@@ -389,7 +389,7 @@ function _renderDeriva(el, data) {
   const n = data.total || 0;
   const sobre = data.sobrecostos || 0;
 
-  html += '<div style="display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-bottom:14px;">';
+  html += '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:8px;margin-bottom:14px;">';
   html += _compKpi(n, 'Derivas detectadas', n > 0 ? 'var(--red)' : 'var(--green)');
   html += _compKpi(sobre, 'Sobrecostos', sobre > 0 ? 'var(--red)' : 'var(--green)');
   html += '</div>';
@@ -449,7 +449,7 @@ async function _cargarClasificacionSB(el) {
   try {
     const r = await get('/api/kardex/clasificacion-sb?meses=12');
     let html = '';
-    html += '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-bottom:12px;">';
+    html += '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:6px;margin-bottom:12px;">';
     for (const [cuad, info] of Object.entries(r.resumen || {})) {
       const colors = { SUAVE: 'var(--green)', ERRATICA: 'var(--yellow)', INTERMITENTE: 'var(--blue)', GRUMOSA: 'var(--red)' };
       html += _compKpi(info.cantidad, cuad, colors[cuad] || 'var(--tx)');
@@ -505,7 +505,7 @@ async function _cargarTSB(el) {
       </div>
     </div>`;
 
-    html += '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:12px;">';
+    html += '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:8px;margin-bottom:12px;">';
     html += _compKpi(r.total || 0, 'SKUs pronosticados', 'var(--pm)');
     html += _compKpi(b.tsb_gana || 0, 'TSB gana a MM8', 'var(--green)');
     html += _compKpi((b.porcentaje_tsb_gana || 0) + '%', 'Win rate', ok ? 'var(--green)' : 'var(--yellow)');
@@ -625,7 +625,7 @@ function _renderNacional(el, rop) {
     <span style="font-size:10px;color:var(--tx3);">LT ${nac.lt_dias}d · σ_LT ${nac.sigma_lt}d · revisión continua (R=0)</span>
   </div>`;
 
-  html += `<div style="display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-bottom:12px;">
+  html += `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:8px;margin-bottom:12px;">
     ${_compKpi(nac.bajo_rop || 0, 'Bajo punto de reorden', (nac.bajo_rop || 0) > 0 ? 'var(--red)' : 'var(--green)')}
     ${_compKpi(nac.total || 0, 'SKUs nacionales', 'var(--tx)')}
   </div>`;

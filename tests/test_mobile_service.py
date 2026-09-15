@@ -552,6 +552,40 @@ class TestProcesarEscaneo:
         db.session.refresh(tarea)
         assert tarea.cantidad_recogida == 3
 
+    def test_scan_mismo_total_acumulado_fuera_del_debounce_no_duplica(self, app, db, mobile_setup):
+        """La idempotencia real es `max(total_acumulado, cantidad_recogida)`, no
+        solo el cache de debounce — un replay diferido (cola offline, el
+        cache ya expiró o cayó en otro worker) tampoco debe duplicar."""
+        s = mobile_setup
+        from app.services.mobile_service import MobileService, _SCAN_DEBOUNCE
+
+        tarea = _crear_tarea(
+            db, s['producto'], s['ubicacion'], s['almacen'],
+            cantidad_solicitada=10,
+            cantidad_recogida=0,
+            estado=EstadoPicking.EN_PROCESO,
+            operario_id=s['usuario'].id,
+        )
+
+        _SCAN_DEBOUNCE.clear()
+        MobileService.procesar_escaneo(
+            operario_id=s['usuario'].id, tarea_id=tarea.id, tipo='PICKING',
+            codigo=s['producto'].codigo, cantidad=1, total_acumulado=3,
+        )
+
+        # Simula un replay diferido: el cache de debounce ya no tiene esta
+        # entrada (como pasaría en una cola offline que sincroniza minutos
+        # después, o en un worker distinto de Gunicorn).
+        _SCAN_DEBOUNCE.clear()
+        resultado = MobileService.procesar_escaneo(
+            operario_id=s['usuario'].id, tarea_id=tarea.id, tipo='PICKING',
+            codigo=s['producto'].codigo, cantidad=1, total_acumulado=3,
+        )
+
+        assert resultado['cantidad_actual'] == 3
+        db.session.refresh(tarea)
+        assert tarea.cantidad_recogida == 3, 'un replay diferido con el mismo total_acumulado no debe sumar de nuevo'
+
 
 class TestConfirmarTarea:
 

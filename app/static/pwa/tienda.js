@@ -888,6 +888,7 @@ function _tiendaOCRenderScan() {
 
       <div style="background:#111;border-radius:10px;padding:12px;margin-bottom:12px;">
         <div style="font-size:12px;color:#666;text-align:center;margin-bottom:10px;">Escanea unidad, caja o paca — el sistema calcula las unidades</div>
+        ${OPERARIO && OPERARIO.puede_usar_camara ? `
         <button onclick="abrirCamara('lector-qr-toc','camara-box-toc', cod => { cerrarCamara('camara-box-toc'); tiendaOCProcesarScan(cod); })"
           style="width:100%;padding:13px;font-size:16px;background:#fff;color:#000;border:2px solid #000;border-radius:10px;cursor:pointer;margin-bottom:8px;">
           📷 Escanear con cámara
@@ -895,7 +896,7 @@ function _tiendaOCRenderScan() {
         <div id="camara-box-toc" style="display:none;margin-bottom:8px;">
           <div id="lector-qr-toc" style="border-radius:10px;overflow:hidden;"></div>
           <button onclick="cerrarCamara('camara-box-toc')" style="width:100%;padding:9px;margin-top:6px;font-size:14px;background:#333;color:#fff;border:none;border-radius:8px;cursor:pointer;">Cerrar cámara</button>
-        </div>
+        </div>` : ''}
         <div style="display:flex;gap:8px;margin-bottom:8px;">
           <input id="toc-codigo-manual" type="text" placeholder="O escribe / pega el código aquí"
             style="flex:1;padding:10px;background:#0d0d0d;border:1px solid #333;border-radius:8px;color:#fff;font-size:14px;"

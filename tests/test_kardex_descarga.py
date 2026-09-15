@@ -193,14 +193,14 @@ class TestReconstruirDenyByDefault:
         assert 'OVERRIDE' in src, 'el override debe dejar rastro en el log'
 
     def test_rechaza_si_hay_descarga_en_curso(self, app, db, client, jwt_token_admin):
-        from app.routes.kardex import _kardex_descarga_estado
-        _kardex_descarga_estado['en_curso'] = True
-        try:
-            resp = client.post('/api/kardex/reconstruir', json={},
-                               headers={'Authorization': f'Bearer {jwt_token_admin}'})
-            assert resp.status_code == 409
-        finally:
-            _kardex_descarga_estado['en_curso'] = False
+        # El estado vive en `registros_sync` (tipo='kardex'), no en un dict en
+        # memoria — se simula "en curso" abriendo un registro sin cerrarlo,
+        # igual que haría el hilo de background a mitad de una descarga real.
+        from app.services import registro_sync_service as reg
+        reg.abrir('kardex')
+        resp = client.post('/api/kardex/reconstruir', json={},
+                           headers={'Authorization': f'Bearer {jwt_token_admin}'})
+        assert resp.status_code == 409
 
 
 class TestSupuestoDeReanudacion:

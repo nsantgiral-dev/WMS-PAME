@@ -288,13 +288,13 @@ async function _generarLPNEnPicking() {
   const factor     = btn._factor || 1;
   const unidad     = btn._unidad || 'PACA';
 
-  const cantStr = prompt(
-    `Paca sin etiqueta detectada.\n` +
-    `¿Cuántas unidades tiene esta ${unidad}?\n` +
-    `(Factor estándar: ${factor} und)`
+  const cantidad = await _modalCantidad(
+    'Paca sin etiqueta',
+    `¿Cuántas unidades tiene esta <strong>${unidad}</strong>?<br>` +
+    `<span style="color:#666;font-size:12px;">Factor estándar: ${factor} und</span>`,
+    { min: 1, valorInicial: factor, textoConfirmar: 'Generar etiqueta' }
   );
-  if (cantStr === null) return;
-  const cantidad = parseInt(cantStr) || factor;
+  if (cantidad === null) return;
 
   try {
     const r = await post('/api/empaques/lpn/generar', {
@@ -342,7 +342,7 @@ async function procesarScan(codigo) {
 
   // Otros tipos (CONTEO, PACKING) — flujo original
   try {
-    const r = await post('/api/mobile/escanear', {
+    const r = await postConReintento('/api/mobile/escanear', {
       tarea_id: TAREA_ACTUAL.id,
       tipo: TAREA_ACTUAL.tipo,
       codigo,
@@ -361,60 +361,70 @@ async function procesarScan(codigo) {
  * @returns {Promise<{exito: boolean, cantidad_actual: number, cantidad_requerida: number, completado: boolean, es_empaque: boolean}>}
  */
 async function _procesarScanPicking(codigo) {
-  // 1. Preguntar al sistema qué es este código
-  let scan;
-  try {
-    scan = await get(`/api/empaques/scan/${encodeURIComponent(codigo)}`);
-  } catch (_) {
-    scan = { tipo: 'NO_ENCONTRADO' };
-  }
+  // Resolución de código compartida con packing (ver app.js) — el backend
+  // PICKING valida por producto.codigo/codigo_siesa/codigo_barras, nunca
+  // acepta un DUN-14 o código LPN directamente.
+  const scan = await resolverEscaneoEmpaque(codigo);
 
-  const tipo = scan.tipo || 'NO_ENCONTRADO';
-
-  if (tipo === 'GS1_AMBIGUO') {
+  if (scan.tipo === 'GS1_AMBIGUO') {
     _modalAmbiguedadPicking(codigo, scan.ambiguos || []);
     return;
   }
 
-  // Resolver código de producto y cantidad según tipo de código escaneado.
-  // El backend PICKING valida por producto.codigo / codigo_siesa / codigo_barras —
-  // nunca acepta un DUN-14 o código LPN directamente.
-  let codigoParaBackend = codigo;  // default: código de producto base (EAN-13 en productos.codigo_barras)
-  let cantidad = 1;
+  const { codigoParaBackend, cantidad, lpnCodigo, unidad } = scan;
   let etiqueta = '';
-
-  if ((tipo === 'GS1_UNICO' || tipo === 'EAN_BASE') && scan.producto?.codigo) {
-    codigoParaBackend = scan.producto.codigo;
-    cantidad = scan.factor || 1;
-    if (cantidad > 1) {
-      const unidad = scan.empaque?.unidad_medida || 'EMPAQUE';
-      etiqueta = ` (+${cantidad} und — ${unidad})`;
-    }
-  } else if (tipo === 'LPN' && scan.producto?.codigo) {
-    codigoParaBackend = scan.producto.codigo;
-    cantidad = scan.factor || 1;  // scan.factor = lpn.cantidad_actual
+  if (scan.tipo === 'LPN') {
     etiqueta = ` (LPN: ${cantidad} und)`;
+  } else if (cantidad > 1) {
+    etiqueta = ` (+${cantidad} und — ${unidad || 'EMPAQUE'})`;
   }
-  // NO_ENCONTRADO → enviar codigo original, el backend dará error descriptivo
 
-  // Incluir lpn_codigo cuando es un LPN — el backend lo vincula al traslado si aplica
   // GS1/EAN/LPN: el frontend ya conoce las unidades reales → usar modo idempotente.
   // NO_ENCONTRADO (barcode empaque directo): el frontend no conoce el factor → el backend
   // aplica factor_conversion con +=; no enviar total_acumulado en ese caso.
-  const _scanResuelto = tipo !== 'NO_ENCONTRADO';
+  const _scanResuelto = scan.tipo !== 'NO_ENCONTRADO';
   if (_scanResuelto) _pickingTotal += cantidad;
-  const payload = { tarea_id: TAREA_ACTUAL.id, tipo: 'PICKING', codigo: codigoParaBackend, cantidad };
-  if (tipo === 'LPN') payload.lpn_codigo = codigo;  // 'LPN-XXXXXXX' original
+  // accion: solo la lee /api/mobile/sync si esto termina encolado offline;
+  // el endpoint /escanear en vivo la ignora sin problema.
+  const payload = { accion: 'picking_escanear', tarea_id: TAREA_ACTUAL.id, tipo: 'PICKING', codigo: codigoParaBackend, cantidad };
+  if (lpnCodigo) payload.lpn_codigo = lpnCodigo;  // 'LPN-XXXXXXX' original
   if (_scanResuelto) payload.total_acumulado = _pickingTotal;
 
   try {
-    const r = await post('/api/mobile/escanear', payload);
+    const r = await postConReintento('/api/mobile/escanear', payload);
     if (r.error) { beepError(); if (_scanResuelto) _pickingTotal -= cantidad; alerta(typeof r.error === 'object' ? r.error.mensaje : r.error, 'error'); return; }
     beepOk();
     _pickingTotal = r.cantidad_actual;  // siempre sincronizar con verdad del servidor
     if (etiqueta) alerta(`Registrado${etiqueta}`, 'exito');
     _actualizarContadorPicking(r);
-  } catch (e) { beepError(); if (_scanResuelto) _pickingTotal -= cantidad; alerta(e.status ? e.message : 'Error de conexión', 'error'); }
+  } catch (e) {
+    if (e.status) {
+      // Error del servidor (400/500) — no encolar, el contador optimista no aplicó
+      beepError(); if (_scanResuelto) _pickingTotal -= cantidad; alerta(e.message, 'error'); return;
+    }
+    if (_scanResuelto) {
+      // Corte de red real y el scan es idempotente (total_acumulado fija el
+      // total, no lo suma — reproducirlo después no duplica). Encolar y
+      // confiar en que aplicará: revertir aquí invitaría a re-escanear el
+      // mismo código y esta vez sí duplicar contra el que ya quedó en cola.
+      guardarOffline(payload);
+      beepOk();
+      const requerida = TAREA_ACTUAL.cantidad_requerida || 0;
+      const completadoLocal = _pickingTotal >= requerida;
+      _actualizarContadorPicking({
+        cantidad_actual: _pickingTotal,
+        cantidad_requerida: requerida,
+        completado: completadoLocal,
+        puede_confirmar: completadoLocal,
+      });
+    } else {
+      // NO_ENCONTRADO: el backend suma con += (no es idempotente) — encolarlo
+      // arriesgaría duplicar si el POST original sí había llegado. Revertir
+      // y dejar que el operario reintente el mismo código a propósito.
+      beepError();
+      alerta('Sin conexión — reintenta escaneando de nuevo', 'error');
+    }
+  }
 }
 
 /**
@@ -496,7 +506,7 @@ async function _elegirEmpaquePicking(productoCodigo, factor, unidad, modal) {
   // productoCodigo ya es el código del producto (no el DUN-14) — el backend lo acepta
   if (modal) modal.remove();
   try {
-    const r = await post('/api/mobile/escanear', {
+    const r = await postConReintento('/api/mobile/escanear', {
       tarea_id: TAREA_ACTUAL.id,
       tipo: 'PICKING',
       codigo: productoCodigo,
@@ -674,14 +684,13 @@ async function _reportarFaltanteInfo(tareaId, cantRecogida, cantSolicitada) {
  * @param {number} cantMax - Cantidad máxima permitida
  */
 async function confirmarManual(tareaId, cantMax) {
-  const cantStr = prompt(`¿Cuántas unidades encontraste físicamente? (máx. ${cantMax})`);
-  if (cantStr === null) return;
-  const cant = parseInt(cantStr, 10);
-  if (isNaN(cant) || cant <= 0 || cant > cantMax) {
-    alerta(`Cantidad inválida — debe ser entre 1 y ${cantMax}. Si no hay stock usa "Reportar problema".`, 'error');
-    return;
-  }
-  if (!confirm(`¿Confirmar ${cant} unidades recogidas manualmente?`)) return;
+  const cant = await _modalCantidad(
+    'Confirmación manual',
+    `¿Cuántas unidades encontraste físicamente? (máx. ${cantMax})<br>` +
+    `<span style="color:#666;font-size:12px;">Si no hay stock usa "Reportar problema" en vez de esto.</span>`,
+    { min: 1, max: cantMax, textoConfirmar: 'Confirmar recogida' }
+  );
+  if (cant === null) return;
   const payload = {
     tarea_id: tareaId,
     tipo: TAREA_ACTUAL?.tipo,

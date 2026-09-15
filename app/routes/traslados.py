@@ -594,6 +594,7 @@ def reintentar_despacho(id):
     from app.models.traslado import SolicitudTraslado
     from app.extensions import db
     from app.services.connekta_gateway import connekta
+    from app.services.siesa_traslado_adapter import siesa_traslado
     s = SolicitudTraslado.query.get_or_404(id)
     if s.estado not in ('EN_TRANSITO', 'ENTREGADA'):
         return jsonify({'error': f'Solo se puede reintentar despacho en EN_TRANSITO o ENTREGADA (estado: {s.estado})'}), 400
@@ -602,6 +603,21 @@ def reintentar_despacho(id):
     # vez del origen y se cargaba otra vez a la bodega de tránsito.
     if s.siesa_salida_consec:
         return jsonify({'error': f'173076 ya registrado (consec={s.siesa_salida_consec})'}), 400
+
+    # Verificar ANTES de reenviar — mismo motivo que ya tiene reintentar-recepcion:
+    # un intento previo puede haber recibido 200 de Siesa sin un consecutivo
+    # parseable en la respuesta. Sin este chequeo, reintentar sobre uno de esos
+    # casos manda un 173076 SEGUNDO y descarga el origen dos veces.
+    consec_existente = siesa_traslado.recuperar_consec_salida(s.codigo)
+    if consec_existente:
+        s.siesa_salida_consec = consec_existente
+        s.siesa_error = None
+        db.session.commit()
+        return jsonify({
+            'ok': True,
+            'recuperado_sin_reenvio': True,
+            'solicitud': s.to_dict(),
+        }), 200
 
     # Usar cantidad_enviada (lo que salió físicamente) para consistencia con el despacho original
     items_payload = [
@@ -643,8 +659,11 @@ def reintentar_despacho(id):
                 # esta ruta no la hacía, borraba `siesa_error` y respondía
                 # `ok: True` — y el botón del PWA se muestra justamente cuando
                 # `siesa_salida_consec` está vacío, así que seguía ahí y cada
-                # clic emitía otro STS.
-                from app.services import siesa_traslado
+                # clic emitía otro STS. (`siesa_traslado` ya está importado
+                # arriba, en el chequeo proactivo — este import local tenía
+                # además la ruta equivocada, `app.services` en vez de
+                # `app.services.siesa_traslado_adapter`, y nunca se ejecutó
+                # con éxito.)
                 logger.warning(
                     '[TRASLADO] %s: consecutivo null en respuesta 173076 — '
                     'intentando recovery', s.codigo)

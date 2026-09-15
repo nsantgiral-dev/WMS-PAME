@@ -737,6 +737,10 @@ function abastMostrarHUD(tarea) {
   if (!hud) return;
   if (cont) cont.style.display = 'none';
   hud.style.display = 'flex';
+  // Mismo gate que picking.js/conteo.js/packing.js: respetar si un admin le
+  // revocó la cámara a este operario.
+  const _btnCamAbast = document.getElementById('abast-btn-camara');
+  if (_btnCamAbast) _btnCamAbast.style.display = (OPERARIO && OPERARIO.puede_usar_camara) ? '' : 'none';
   document.getElementById('abast-hud-paso').textContent = 'Tarea de reposición';
   document.getElementById('abast-hud-instruccion').textContent = 'Busca la paca en la zona de reserva';
   document.getElementById('abast-hud-sub').textContent =
@@ -794,7 +798,12 @@ async function abastConfirmarScan() {
       if (inp) { inp.value = ''; inp.focus(); }
     }
   } catch (e) {
-    alerta('Error de conexión', 'error');
+    // Corte de red real — encolar para sincronizar cuando vuelva la señal.
+    // Seguro de reintentar: confirmar_reposicion rechaza una tarea que ya
+    // no está EN_PROCESO en vez de duplicar el movimiento de inventario.
+    guardarOffline({ accion: 'reposicion_confirmar', tarea_id: ABAST_TAREA.id, lpn_codigo: lpn_escaneado });
+    ABAST_TAREA = null;
+    setTimeout(abastCerrarHUD, 800);
   } finally {
     if (btn) { btn.disabled = false; btn.textContent = 'Confirmar entrega'; }
   }
