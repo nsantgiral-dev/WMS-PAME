@@ -208,14 +208,25 @@ def dock_lock():
             if item.tipo == 'BONIFICACION':
                 continue
 
-            if item.es_exceso() or item.es_faltante():
+            _averiadas = item.cantidad_averiada or 0
+
+            # La avería entra a esta lista aunque NO haya faltante ni exceso.
+            # Sin esto, una entrega completa con mercancía rota no aparece en
+            # ningún lado del lado de compras: `es_faltante()` es falso porque
+            # el proveedor sí mandó la cantidad, y el panel de cuarentena mide
+            # stock por producto, sin el vínculo con la OC ni con el proveedor.
+            # La auxiliar que tiene que llamar a reclamar se quedaba sin saber.
+            if item.es_exceso() or item.es_faltante() or _averiadas > 0:
                 tiene_problema = True
                 dif = item.diferencia()
-                tipo_problema = 'EXCESO' if dif > 0 else 'FALTANTE'
+                if _averiadas > 0 and dif == 0:
+                    tipo_problema = 'AVERIADO'
+                else:
+                    tipo_problema = 'EXCESO' if dif > 0 else 'FALTANTE'
 
                 if dif > 0:
                     total_excesos += 1
-                else:
+                elif dif < 0:
                     total_faltantes += 1
 
                 items_problema.append({
@@ -224,6 +235,8 @@ def dock_lock():
                     'producto_nombre': item.producto.nombre if item.producto else None,
                     'cantidad_ordenada': item.cantidad_ordenada,
                     'cantidad_recibida': item.cantidad_recibida,
+                    'cantidad_averiada': _averiadas,
+                    'motivo_averia': item.motivo_averia,
                     'diferencia': dif,
                     'tipo_problema': tipo_problema,
                     'abc': item.producto.clasificacion_abc if item.producto else None,

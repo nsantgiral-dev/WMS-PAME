@@ -123,14 +123,40 @@ class ItemRecepcion(db.Model):
     cantidad_recibida = db.Column(db.Integer, default=0)   # siempre en unidades sueltas
     empaques_escaneados = db.Column(db.Integer, default=0) # cajas/pacas contadas
 
-    # Decisión de ubicación
-    # INVENTARIO, CROSS_DOCK, BLOQUEADO
+    # Decisión de ubicación: INVENTARIO | CROSS_DOCK
+    #
+    # El comentario original declaraba además un tercer valor, 'BLOQUEADO', que
+    # NINGÚN camino de código escribió nunca — un casillero hecho y vacío que
+    # prometía «esta mercancía está retenida». Se retira del comentario en vez
+    # de dejarlo: un valor que solo existe en la documentación hace que el
+    # siguiente lector construya sobre algo que no está.
+    #
+    # La avería, que es lo que ese valor parecía querer representar, NO se
+    # modela como destino del ítem: un ítem puede llegar parcialmente roto, así
+    # que vive en `cantidad_averiada` y el reparto lo hace
+    # `confirmar_recepcion`.
     destino = db.Column(db.String(20), default='INVENTARIO')
     ubicacion_id = db.Column(db.Integer, db.ForeignKey('ubicaciones.id'), nullable=True)
     ubicacion_cross_dock_id = db.Column(db.Integer, db.ForeignKey('ubicaciones.id'), nullable=True)
 
     # Estado del ítem
     ingresado_inventario = db.Column(db.Boolean, default=False)
+
+    #: De lo recibido, cuánto llegó AVERIADO. Es un subconjunto de
+    #: `cantidad_recibida`, no una resta: la mercancía entró físicamente y entró
+    #: a la OC en Siesa (lo que viaja al 142948 es `cantidad_recibida`).
+    #:
+    #: Se cuenta porque el proceso del negocio lo presupone: «si dan nota
+    #: crédito se da de baja, o si no se devuelve» — una NC reversa una entrada,
+    #: y devolver exige tenerlo. Los dos desenlaces dan por hecho que entró.
+    #:
+    #: Quien prefiera NO ingresarla sigue teniendo el camino de siempre:
+    #: contar de menos. Esta columna agrega una capacidad, no quita la otra.
+    cantidad_averiada = db.Column(db.Integer, default=0, nullable=False,
+                                  server_default='0')
+    #: Por qué llegó averiado. Sin esto la avería es un número sin historia y la
+    #: auxiliar de compras no tiene con qué reclamarle al proveedor.
+    motivo_averia = db.Column(db.String(200))
 
     # Tipo de ítem: OC = viene en la orden | BONIFICACION = adicional del proveedor ($0)
     tipo = db.Column(db.String(20), default='OC', nullable=False)
@@ -145,6 +171,22 @@ class ItemRecepcion(db.Model):
     ubicacion = db.relationship('Ubicacion', foreign_keys=[ubicacion_id], lazy=True)
     ubicacion_cross_dock = db.relationship('Ubicacion',
                                            foreign_keys=[ubicacion_cross_dock_id], lazy=True)
+
+    __table_args__ = (
+        # La avería no puede exceder lo recibido: si lo hiciera, el reparto de
+        # `confirmar_recepcion` dejaría cantidad negativa en el destino bueno y
+        # el CHECK `ck_cantidad_no_negativa` de UbicacionProducto reventaría
+        # DESPUÉS, con la recepción a medio confirmar.
+        db.CheckConstraint('cantidad_averiada >= 0',
+                           name='ck_item_recepcion_averiada_no_negativa'),
+        db.CheckConstraint('cantidad_averiada <= cantidad_recibida',
+                           name='ck_item_recepcion_averiada_subconjunto'),
+    )
+
+    def cantidad_buena(self):
+        """Lo recibido que NO está averiado. Por construcción, lo bueno más lo
+        averiado es siempre lo recibido: el reparto no puede perder unidades."""
+        return self.cantidad_recibida - (self.cantidad_averiada or 0)
 
     def cantidad_maxima_permitida(self):
         if self.tipo == 'BONIFICACION':
@@ -176,6 +218,9 @@ class ItemRecepcion(db.Model):
             'clasificacion_abc': self.producto.clasificacion_abc if self.producto else None,
             'cantidad_ordenada': self.cantidad_ordenada,
             'cantidad_recibida': self.cantidad_recibida,
+            'cantidad_averiada': self.cantidad_averiada or 0,
+            'cantidad_buena': self.cantidad_buena(),
+            'motivo_averia': self.motivo_averia,
             'empaques_escaneados': self.empaques_escaneados or 0,
             'cantidad_maxima_permitida': self.cantidad_maxima_permitida(),
             'tolerancia_exceso_pct': self.tolerancia_exceso_pct,

@@ -110,6 +110,32 @@ def iniciar_recepcion(id):
         return jsonify({'error': str(e)}), 400
 
 
+@recepcion_bp.route('/<int:id>/averia', methods=['POST'])
+@jwt_required()
+def declarar_averia(id):
+    """Declara cuántas de las unidades YA contadas llegaron averiadas.
+
+    Puerta separada del escaneo porque el recepcionista cuenta rápido con la
+    pistola y revisa después. La regla es la misma —vive en
+    `RecepcionService._aplicar_averia`— pero el gesto es otro.
+    """
+    if not _es_recepcion_autorizado():
+        return jsonify({'error': 'Sin permiso para declarar averías en recepción'}), 403
+    data = request.get_json() or {}
+    for campo in ('producto_id', 'cantidad_averiada'):
+        if campo not in data:
+            return jsonify({'error': f'Campo requerido: {campo}'}), 400
+    try:
+        return jsonify(RecepcionService.declarar_averia(
+            recepcion_id=id,
+            producto_id=data['producto_id'],
+            cantidad_averiada=data['cantidad_averiada'],
+            motivo=data.get('motivo'),
+        )), 200
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+
+
 @recepcion_bp.route('/<int:id>/escanear', methods=['POST'])
 @jwt_required()
 def escanear_producto(id):
@@ -129,7 +155,9 @@ def escanear_producto(id):
             lote=data.get('lote'),
             fecha_vencimiento=data.get('fecha_vencimiento'),
             es_empaque=data.get('es_empaque', False),
-            es_bonificacion=data.get('es_bonificacion', False)
+            es_bonificacion=data.get('es_bonificacion', False),
+            cantidad_averiada=data.get('cantidad_averiada', 0),
+            motivo_averia=data.get('motivo_averia')
         )
         return jsonify(resultado), 200
     except ValueError as e:

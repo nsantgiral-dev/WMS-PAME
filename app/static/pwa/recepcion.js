@@ -368,6 +368,7 @@ function renderItemsRecepcion(items) {
     const empaques = it.empaques_escaneados || 0;
     const unidadEmpaque = (it.unidad_empaque || '').trim() || 'emp';
     const modoEmpaque = factor > 1;
+    const averiada = it.cantidad_averiada || 0;
 
     const contadorDerecha = modoEmpaque ? `
       <div style="text-align:right;flex-shrink:0;padding-left:8px;">
@@ -393,8 +394,71 @@ function renderItemsRecepcion(items) {
         <div style="height:5px;background:#222;border-radius:3px;margin-top:8px;">
           <div style="height:100%;background:${completo ? '#16a34a' : '#2563eb'};border-radius:3px;width:${pct}%;transition:width 0.3s;"></div>
         </div>
+        ${averiada > 0 ? `
+        <div style="margin-top:8px;padding:8px;background:#2a1a00;border:1px solid #92400e;border-radius:8px;">
+          <div style="font-size:12px;font-weight:700;color:#fbbf24;">⚠ ${esc(averiada)} averiada(s) de ${esc(it.cantidad_recibida)}</div>
+          ${it.motivo_averia ? `<div style="font-size:11px;color:#a16207;margin-top:2px;">${esc(it.motivo_averia)}</div>` : ''}
+          <div style="font-size:10px;color:#6b7280;margin-top:3px;">van a la zona de averías, no al inventario vendible</div>
+        </div>` : ''}
+        ${it.cantidad_recibida > 0 ? `
+        <button onclick="recepAbrirAveria(${esc(it.producto_id)})"
+          style="margin-top:8px;width:100%;padding:8px;background:#1c1c1c;border:1px solid #92400e;color:#fbbf24;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;">
+          ⚠ ${averiada > 0 ? 'Declarar más averiadas' : 'Declarar avería'}
+        </button>` : ''}
       </div>`;
   }).join('');
+}
+
+/**
+ * Declara cuantas de las unidades YA contadas llegaron averiadas.
+ *
+ * Puerta separada del escaneo a proposito: el recepcionista cuenta rapido con
+ * la pistola y revisa despues. La regla de validacion es una sola y vive en el
+ * backend (`RecepcionService._aplicar_averia`) — aca solo se pide el dato.
+ *
+ * @param {number} productoId - Producto sobre el que se declara la averia
+ */
+async function recepAbrirAveria(productoId) {
+  const it = (RECEPCION_ACTUAL?.items || []).find(i => i.producto_id === productoId);
+  if (!it) return;
+  const restante = it.cantidad_recibida - (it.cantidad_averiada || 0);
+
+  const cant = prompt(
+    `¿Cuántas de las ${it.cantidad_recibida} recibidas llegaron averiadas?\n` +
+    `(quedan ${restante} sin declarar)`, '');
+  if (cant === null) return;
+  const n = parseInt(cant, 10);
+  if (!Number.isFinite(n) || n <= 0) {
+    toast('Cantidad inválida', 'error');
+    return;
+  }
+
+  const motivo = prompt(
+    '¿Por qué? La auxiliar de compras necesita esto para reclamarle al proveedor.\n' +
+    'Ej: cajas mojadas, estiba volcada, empaque roto de fábrica', '');
+  if (motivo === null) return;
+
+  let r;
+  try {
+    r = await post('/api/recepcion/' + RECEPCION_ACTUAL.id + '/averia', {
+      producto_id: productoId,
+      cantidad_averiada: n,
+      motivo: motivo || null,
+    });
+  } catch (e) {
+    alerta((e.body && e.body.error) || 'No se pudo declarar la avería', 'error');
+    return;
+  }
+
+  // Mismo refresco que el escaneo: se pisa el ítem en memoria y se repinta la
+  // lista. No se recarga la recepción entera — el operario tiene la pistola en
+  // la mano y una recarga le mueve la pantalla debajo.
+  const idx = RECEPCION_ACTUAL.items.findIndex(i => i.producto_id === productoId);
+  if (idx >= 0) RECEPCION_ACTUAL.items[idx] = r.item;
+  const lista = document.getElementById('items-rec-list');
+  if (lista) lista.innerHTML = renderItemsRecepcion(RECEPCION_ACTUAL.items);
+  alerta(`${n} unidad(es) declarada(s) como averiada(s) — van a la zona de averías`,
+         'advertencia');
 }
 
 /**

@@ -98,7 +98,8 @@ class RecepcionService:
     def escanear_producto(recepcion_id: int, producto_id: int,
                           cantidad: int, lote: str = None,
                           fecha_vencimiento=None, es_empaque: bool = False,
-                          es_bonificacion: bool = False):
+                          es_bonificacion: bool = False,
+                          cantidad_averiada: int = 0, motivo_averia: str = None):
         """
         Recepción ciega — el operario escanea sin ver cantidades esperadas.
         El sistema valida excesos en tiempo real y bloquea si supera tolerancia.
@@ -168,6 +169,16 @@ class RecepcionService:
 
         item.cantidad_recibida = nueva_cantidad
         item.empaques_escaneados = nuevos_empaques
+
+        # La avería tiene UNA sola regla, en `_aplicar_averia`. El escaneo la
+        # delega en vez de repetirla: el recepcionista puede declararla con la
+        # pistola en la mano o después de contar, y las dos puertas tienen que
+        # validar igual. Dos copias del mismo chequeo divergen — este repo ya
+        # pagó esa factura.
+        if cantidad_averiada or motivo_averia:
+            RecepcionService._aplicar_averia(
+                item, int(cantidad_averiada or 0), motivo_averia,
+                tope_del_gesto=cantidad)
         if lote:
             item.lote = lote
         if fecha_vencimiento:
@@ -184,6 +195,9 @@ class RecepcionService:
         item.ubicacion_cross_dock_id = destino_info.get('ubicacion_cross_dock_id')
 
         alerta = None
+        if item.cantidad_averiada:
+            alerta = (f'AVERIADAS: {item.cantidad_averiada} de {item.cantidad_recibida} '
+                      f'unidades — van a la zona de averías, no al inventario vendible')
         if item.es_exceso():
             alerta = f'EXCESO: {item.diferencia()} unidades de más'
         elif destino_info['destino'] == 'CROSS_DOCK':
@@ -199,6 +213,84 @@ class RecepcionService:
                 1 for i in recepcion.items if i.cantidad_recibida == 0
             )
         }
+
+    @staticmethod
+    def _aplicar_averia(item, cantidad_averiada: int, motivo: str,
+                        tope_del_gesto: int = None):
+        """
+        Suma avería a un ítem ya escaneado. **Única implementación de la regla.**
+
+        `tope_del_gesto` acota la declaración al escaneo que la acompaña: decir
+        «5 averiadas» dentro de un escaneo de 3 unidades no es un error de
+        acumulado, es un error de dedo, y conviene decirlo con ese lenguaje.
+
+        El tope duro siempre es `cantidad_recibida`: la avería es un subconjunto
+        de lo recibido. El CHECK homónimo en Postgres es el guard de última
+        instancia; esto existe para que el mensaje llegue al operario y no como
+        un 500 al confirmar media hora después.
+        """
+        n = int(cantidad_averiada or 0)
+        if n < 0:
+            raise ValueError('La cantidad averiada no puede ser negativa.')
+        if tope_del_gesto is not None and n > tope_del_gesto:
+            raise ValueError(
+                f'Se declararon {n} averiadas de un escaneo de {tope_del_gesto} '
+                f'unidades. La avería es parte de lo recibido, no algo aparte.')
+
+        acumulada = (item.cantidad_averiada or 0) + n
+        if acumulada > item.cantidad_recibida:
+            raise ValueError(
+                f'Se llevan {acumulada} unidades averiadas declaradas y solo se '
+                f'recibieron {item.cantidad_recibida}. La avería no puede ser '
+                f'más que lo que llegó.')
+        item.cantidad_averiada = acumulada
+
+        if motivo:
+            # Los motivos de declaraciones sucesivas se concatenan en vez de
+            # pisarse: dos averías del mismo SKU tienen dos causas, y la
+            # auxiliar de compras necesita las dos para reclamarle al proveedor.
+            previo = (item.motivo_averia or '').strip()
+            nuevo = motivo.strip()
+            item.motivo_averia = (
+                f'{previo} · {nuevo}' if previo and nuevo not in previo
+                else (nuevo or previo)
+            )[:200]
+        return item
+
+    @staticmethod
+    def declarar_averia(recepcion_id: int, producto_id: int,
+                        cantidad_averiada: int, motivo: str = None):
+        """
+        Declara avería sobre un ítem YA contado — la puerta que usa la pantalla.
+
+        Separada del escaneo a propósito: el recepcionista cuenta rápido con la
+        pistola y revisa después. Obligarlo a saber en el instante de cada
+        disparo cuántas de ESE disparo están rotas es pedirle que haga dos
+        trabajos a la vez.
+        """
+        # `db.session.get` y no el API legado de consulta: el trinquete de
+        # deuda cuenta esas llamadas por texto y su tope SOLO puede bajar
+        # (nombrar la forma vieja acá, aunque sea para descartarla, la suma).
+        recepcion = db.session.get(RecepcionMercancia, recepcion_id)
+        if not recepcion:
+            raise ValueError('Recepción no encontrada')
+        if recepcion.estado == 'CONFIRMADA':
+            raise ValueError(
+                'La recepción ya fue confirmada: la mercancía entró al '
+                'inventario y la avería tiene que resolverse desde Inventario, '
+                'no reescribiendo la recepción.')
+
+        item = next((i for i in recepcion.items if i.producto_id == producto_id), None)
+        if not item:
+            raise ValueError('Ese producto no está en esta recepción')
+        if item.cantidad_recibida <= 0:
+            raise ValueError(
+                'No se puede declarar avería sobre un producto que todavía no '
+                'se contó. Escanealo primero.')
+
+        RecepcionService._aplicar_averia(item, cantidad_averiada, motivo)
+        db.session.commit()
+        return {'item': item.to_dict()}
 
     @staticmethod
     def _decidir_destino(producto_id: int, almacen_id: int, cantidad: int):
@@ -265,9 +357,19 @@ class RecepcionService:
         ).first()
 
         if not ubicacion:
-            ubicacion = Ubicacion.query.filter_by(
-                almacen_id=almacen_id,
-                activo=True
+            # El fallback tomaba CUALQUIER ubicación activa del almacén. Con una
+            # zona de averías armada, eso puede aterrizar mercancía BUENA de una
+            # recepción dentro del bin de averías: sale del FEFO en el acto y
+            # nadie se entera, porque la recepción cerró en verde.
+            #
+            # Es la misma forma que el descuento de traslados y el retorno de la
+            # reversa —un fallback que no pregunta la zona— en un sitio que el
+            # trinquete de sumas no cubre, porque acá no se suma: se ELIGE.
+            from app.services.picking_service import filtro_ubicacion_vendible
+            ubicacion = Ubicacion.query.filter(
+                Ubicacion.almacen_id == almacen_id,
+                Ubicacion.activo.is_(True),
+                filtro_ubicacion_vendible(),
             ).first()
 
         return ubicacion
@@ -526,15 +628,27 @@ class RecepcionService:
             if item.destino == 'CROSS_DOCK':
                 tiene_cross_dock = True
 
-            if destino_ubicacion_id and item.cantidad_recibida > 0:
+            # Reparto: lo bueno al destino normal, lo averiado a la zona de
+            # averías. La suma de los dos es SIEMPRE `cantidad_recibida` — no se
+            # pierde una unidad entre las dos ramas, y el CHECK
+            # `ck_item_recepcion_averiada_subconjunto` garantiza que
+            # `cantidad_buena()` no pueda salir negativa.
+            _averiadas = item.cantidad_averiada or 0
+            _buenas = item.cantidad_buena()
+
+            def _ingresar(ubicacion_id, cantidad, sufijo_clave, motivo_texto):
+                """Suma `cantidad` al bin y firma el movimiento. Devuelve True si
+                escribió algo."""
+                if not ubicacion_id or cantidad <= 0:
+                    return False
                 reg = UbicacionProducto.query.filter_by(
-                    ubicacion_id=destino_ubicacion_id,
+                    ubicacion_id=ubicacion_id,
                     producto_id=item.producto_id
                 ).with_for_update().first()
 
                 if not reg:
                     reg = UbicacionProducto(
-                        ubicacion_id=destino_ubicacion_id,
+                        ubicacion_id=ubicacion_id,
                         producto_id=item.producto_id,
                         cantidad=0,
                         lote=item.lote,
@@ -545,23 +659,47 @@ class RecepcionService:
                     db.session.flush()
 
                 saldo_antes = reg.cantidad
-                reg.cantidad += item.cantidad_recibida
+                reg.cantidad += cantidad
                 reg.row_version += 1
 
-                movimiento = MovimientoInventario(
+                db.session.add(MovimientoInventario(
                     producto_id=item.producto_id,
-                    ubicacion_id=destino_ubicacion_id,
+                    ubicacion_id=ubicacion_id,
                     almacen_id=recepcion.almacen_id,
                     tipo='ENTRADA',
-                    cantidad=item.cantidad_recibida,
+                    cantidad=cantidad,
                     saldo_antes=saldo_antes,
                     saldo_despues=reg.cantidad,
-                    motivo=f'Recepción {recepcion.codigo} - OC {recepcion.numero_oc_siesa}',
+                    motivo=motivo_texto,
                     numero_documento=recepcion.numero_oc_siesa,
                     usuario_id=recepcion.recepcionista_id,
-                    idempotency_key=f'REC-{recepcion.id}-{item.producto_id}'
+                    idempotency_key=f'REC{sufijo_clave}-{recepcion.id}-{item.producto_id}'
+                ))
+                return True
+
+            _entro = _ingresar(
+                destino_ubicacion_id, _buenas, '',
+                f'Recepción {recepcion.codigo} - OC {recepcion.numero_oc_siesa}')
+
+            if _averiadas > 0:
+                # La política del destino de averías vive en `picking_service` y
+                # se consulta, no se copia: la cascada nunca devuelve None, así
+                # que la avería SIEMPRE tiene dónde aterrizar aunque el almacén
+                # no tenga la zona armada — y en ese caso lo declara.
+                from app.services.picking_service import PickingService
+                ub_ave, degradada = PickingService._destino_averias_garantizado(
+                    recepcion.almacen_id, _averiadas)
+                _motivo = (
+                    f'Recepción {recepcion.codigo} - OC {recepcion.numero_oc_siesa} '
+                    f'— AVERIADO EN RECEPCIÓN: {item.motivo_averia or "sin motivo declarado"}'
                 )
-                db.session.add(movimiento)
+                if degradada:
+                    _motivo += ' (sin zona de averías en el layout)'
+                _entro = _ingresar(
+                    ub_ave.id if ub_ave else None, _averiadas, '-AVE',
+                    _motivo[:200]) or _entro
+
+            if _entro:
                 item.ingresado_inventario = True
 
         recepcion.es_parcial = tiene_faltantes
