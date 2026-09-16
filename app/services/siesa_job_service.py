@@ -326,6 +326,125 @@ def _run_dlq_jobs():
 _BACKOFF_LABELS = ['5 min', '15 min', '45 min']
 
 
+def encolar_traslado_averias(movimiento, codigo_siesa: str, cantidad: int,
+                             bodega_del_almacen: str, referencia: str) -> bool:
+    """Encola UN traslado NB1→AV1 anclado en el movimiento que registró la avería.
+
+    Núcleo único del encolado: recepción y auditoría de picking entran por acá.
+    Dos copias del guard de bodega divergirían, y la que divergiera emitiría
+    documentos con la bodega equivocada — que Siesa acepta y nadie ve hasta que
+    el saldo no cuadra, sin causa a la vista.
+
+    Devuelve True si encoló. NO hace commit — lo hace el caller.
+
+    ## El guard de bodega
+
+    `transferir_a_averias` emite con la bodega de salida **cableada** a
+    `CONNEKTA_BODEGA` y CO fijo. Para un almacén de otra bodega el documento
+    diría que la mercancía salió de donde nunca estuvo. Se declara en el log y
+    no se emite: Regla 0, fallar conservador Y decirlo.
+    """
+    from app.services.connekta_gateway import connekta
+
+    if not codigo_siesa:
+        logger.warning(
+            '[AVERIAS] %s: sin codigo_siesa — no se puede mover a %s. Queda en '
+            'la zona de averías del WMS y Siesa lo sigue contando como vendible.',
+            referencia, connekta.bodega_averias)
+        return False
+
+    if bodega_del_almacen != connekta.bodega:
+        logger.warning(
+            '[AVERIAS] %s: %s unidad(es) de %s en la bodega %s, pero el conector '
+            '142951 solo sabe emitir %s→%s. NO se encola — un documento con la '
+            'bodega equivocada descuadra sin dejar causa. Resolver a mano en Siesa.',
+            referencia, cantidad, codigo_siesa, bodega_del_almacen,
+            connekta.bodega, connekta.bodega_averias)
+        return False
+
+    if movimiento is None or movimiento.siesa_sync == 'ENVIADO':
+        return False
+
+    # Dedup: un job vivo para el mismo movimiento ya cubre este traslado.
+    ya = SiesaJob.query.filter(
+        SiesaJob.tipo == 'TRASLADO_AVERIAS',
+        SiesaJob.referencia_tipo == 'movimiento_averia',
+        SiesaJob.referencia_id == movimiento.id,
+        SiesaJob.estado.in_(EstadoSiesaJob.ACTIVOS),
+    ).first()
+    if ya:
+        return False
+
+    SiesaJob.encolar(
+        'TRASLADO_AVERIAS',
+        {
+            'movimiento_id': movimiento.id,
+            'item_codigo': codigo_siesa,
+            'cantidad': int(cantidad),
+            'referencia': referencia[:200],
+        },
+        referencia_tipo='movimiento_averia',
+        referencia_id=movimiento.id,
+    )
+    return True
+
+
+def _encolar_averias_de_recepcion(rec) -> int:
+    """Encola un traslado NB1→AV1 por cada ítem de la recepción que llegó roto.
+
+    Devuelve cuántos encoló. NO hace commit — lo hace el caller.
+
+    ## El guard de bodega, y por qué no se puede saltar
+
+    `transferir_a_averias` emite con la bodega de salida **cableada** a
+    `CONNEKTA_BODEGA` (NB1) y CO fijo 003. Para una recepción de otro almacén,
+    el documento diría que la mercancía salió de NB1 — una bodega donde nunca
+    estuvo. Siesa lo aceptaría y el descuadre aparecería después, sin causa
+    visible.
+
+    Así que se encola SOLO para el almacén cuya bodega Siesa es la del
+    conector, y para los demás se declara en el log en vez de emitir un
+    documento falso. Regla 0: fallar hacia el lado conservador Y decirlo.
+    """
+    from app.models.inventario import MovimientoInventario as _MovInv
+    # `connekta` se importa acá adentro, igual que en `_ejecutar_job`: el módulo
+    # no lo tiene a nivel superior y tomarlo de otro lado abriría una segunda
+    # referencia al mismo singleton.
+    from app.services.connekta_gateway import connekta
+
+    almacen = getattr(rec, 'almacen', None)
+    bodega_rec = getattr(almacen, 'bodega_siesa_id', None) if almacen else None
+    encolados = 0
+
+    for item in rec.items:
+        averiadas = getattr(item, 'cantidad_averiada', 0) or 0
+        if averiadas <= 0:
+            continue
+
+        # El chequeo de `codigo_siesa` NO se repite acá: lo hace
+        # `encolar_traslado_averias`, que es el núcleo. Estuvo duplicado un rato
+        # y lo delató el conteo de anclas de una mutación — dos copias del mismo
+        # guard son dos cosas que pueden divergir.
+        codigo_siesa = (getattr(item.producto, 'codigo_siesa', '') or '').strip()
+
+        mov = _MovInv.query.filter_by(
+            idempotency_key=f'REC-AVE-{rec.id}-{item.producto_id}').first()
+        if mov is None:
+            logger.warning(
+                '[AVERIAS] recepción %s ítem %s: no se encontró el movimiento de '
+                'avería — sin ancla no se encola, para no mover stock en Siesa '
+                'sin respaldo en el kardex del WMS.', rec.id, item.producto_id)
+            continue
+
+        if encolar_traslado_averias(
+                movimiento=mov, codigo_siesa=codigo_siesa, cantidad=averiadas,
+                bodega_del_almacen=bodega_rec,
+                referencia=f'Avería en recepción {rec.codigo} · OC {rec.numero_oc_siesa}'):
+            encolados += 1
+
+    return encolados
+
+
 def _marcar_motivo_dian_manual(job: SiesaJob, error_msg: str):
     """Un MOTIVO_DIAN_NC agotado devuelve el paso a contabilidad, por escrito.
 
@@ -740,9 +859,83 @@ def _ejecutar_job(job: SiesaJob) -> dict:
                         f'siesa_triggered no persiste: {_e2}. '
                         f'Recepción {rec.id} en riesgo de duplicado contable.'
                     )
+
+        # ── Avisarle a Siesa de lo que llegó roto ────────────────────────
+        #
+        # Se encola ACÁ y no al confirmar la recepción, por orden: el traslado
+        # NB1→AV1 descuenta de NB1, y esas unidades solo existen en NB1 después
+        # de que esta entrada por OC aterrizó. Encolarlo antes sería pedirle a
+        # Siesa que mueva stock que todavía no tiene. Mismo patrón que
+        # MOTIVO_DIAN_NC, que se encola desde adentro del job que lo habilita.
+        if rec and not resultado.get('modo_ensayo'):
+            try:
+                _encolar_averias_de_recepcion(rec)
+                db.session.commit()
+            except Exception as _e_ave:
+                db.session.rollback()
+                logger.error(
+                    '[DLQ] ENTRADA_OC job=%s: la entrada quedó BIEN en Siesa pero '
+                    'no se pudo encolar el traslado a averías de la recepción %s: '
+                    '%s. La mercancía rota sigue contada como vendible en Siesa.',
+                    job.id, rec.id, _e_ave)
         return resultado
 
     if job.tipo == 'TRASLADO_AVERIAS':
+        # ── Ancla de idempotencia: el MOVIMIENTO que registró la avería ──
+        #
+        # La idempotencia de este handler colgaba SOLO de `TareaDevolucion`, y
+        # esa tabla está DEPRECATED desde el 2026-07-28 sin ningún escritor
+        # vivo. Consecuencia: un job encolado desde cualquier otro camino caía
+        # en «tarea no existe» y **devolvía éxito sin llamar a Siesa** — el
+        # traslado a AV1 nunca ocurría y nada lo decía.
+        #
+        # El ancla nueva es `MovimientoInventario.siesa_sync`, un campo que
+        # existía desde el principio con default 'PENDIENTE' y que NADIE leía
+        # jamás. Es el hecho durable: si el movimiento está, la avería ocurrió;
+        # si dice ENVIADO, Siesa ya se enteró.
+        _mov_id = payload.get('movimiento_id')
+        if _mov_id:
+            from app.models.inventario import MovimientoInventario as _MovInv
+            _mov = db.session.get(_MovInv, _mov_id)
+            if _mov is None:
+                logger.warning(
+                    '[DLQ] TRASLADO_AVERIAS job=%s: movimiento_id=%s no existe — '
+                    'no se llama a Siesa para no mover stock sin respaldo.',
+                    job.id, _mov_id)
+                return {'idempotente': True, 'sin_movimiento': True}
+            if _mov.siesa_sync == 'ENVIADO':
+                logger.info(
+                    '[DLQ] TRASLADO_AVERIAS job=%s: movimiento %s ya marcado '
+                    'ENVIADO — omitido.', job.id, _mov.id)
+                return {'idempotente': True, 'movimiento_id': _mov.id}
+
+            _item_codigo = payload.get('item_codigo')
+            if not _item_codigo:
+                raise ValueError(
+                    f'TRASLADO_AVERIAS job={job.id}: item_codigo faltante — '
+                    f'Siesa no acepta el documento sin referencia del ítem.')
+
+            _res = connekta.transferir_a_averias(
+                item_codigo=_item_codigo,
+                cantidad=payload['cantidad'],
+                referencia=payload.get('referencia', ''),
+            )
+            # En modo ensayo el POST se bloquea del lado del servidor: no hubo
+            # traslado real, así que el movimiento NO se marca — o el reintento
+            # quedaría bloqueado por una idempotencia que no respalda nada.
+            if not _res.get('modo_ensayo'):
+                try:
+                    _mov.siesa_sync = 'ENVIADO'
+                    db.session.commit()
+                except Exception as _e:
+                    db.session.rollback()
+                    logger.critical(
+                        '[DLQ] TRASLADO_AVERIAS job=%s: Siesa OK pero no se pudo '
+                        'marcar el movimiento %s — riesgo de traslado duplicado '
+                        'NB1→AV1 (el saldo de NB1 puede quedar negativo): %s',
+                        job.id, _mov.id, _e)
+            return _res
+
         from app.models.devolucion import TareaDevolucion as _TareaDev
         tarea_dev = _TareaDev.query.get(payload.get('tarea_id'))
 

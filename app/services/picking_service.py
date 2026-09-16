@@ -893,7 +893,7 @@ class PickingService:
                 # La pata que faltaba incluso en el camino feliz: el destino no
                 # tenía ningún movimiento. Un traslado de una sola pata no es un
                 # traslado — es un ajuste que miente sobre a dónde fue.
-                db.session.add(MovimientoInventario(
+                mov_destino = MovimientoInventario(
                     producto_id=tarea.producto_id,
                     ubicacion_id=averia_ub.id,
                     almacen_id=tarea.almacen_id,
@@ -902,7 +902,46 @@ class PickingService:
                     motivo=motivo,
                     numero_documento=tarea.referencia_documento,
                     usuario_id=admin_id,
-                ))
+                    # Clave estable: es el ancla de idempotencia del traslado a
+                    # Siesa. Sin ella, un reintento de la DLQ movería el stock
+                    # dos veces y el saldo de la bodega puede quedar negativo.
+                    idempotency_key=f'AUD-AVE-{tarea.id}',
+                )
+                db.session.add(mov_destino)
+                db.session.flush()
+
+                # ── Avisarle a Siesa ────────────────────────────────────────
+                #
+                # Sin esto la avería se queda dentro del WMS: sale del FEFO pero
+                # Siesa la sigue contando como existencia vendible de la bodega,
+                # así que un vendedor puede venderla y el pedido llega después
+                # sin con qué surtirlo.
+                #
+                # A diferencia de la recepción, acá NO hay que esperar a ningún
+                # documento previo: las unidades ya están en la bodega para
+                # Siesa. Se encola en el acto.
+                try:
+                    from app.models.almacen import Almacen as _Alm
+                    from app.services.siesa_job_service import (
+                        encolar_traslado_averias as _encolar_ave)
+                    _alm = db.session.get(_Alm, tarea.almacen_id)
+                    _prod = tarea.producto
+                    _encolar_ave(
+                        movimiento=mov_destino,
+                        codigo_siesa=(getattr(_prod, 'codigo_siesa', '') or '').strip(),
+                        cantidad=a_mover,
+                        bodega_del_almacen=getattr(_alm, 'bodega_siesa_id', None),
+                        referencia=f'Avería detectada en picking · tarea {tarea.codigo}',
+                    )
+                except Exception as _e_ave:
+                    # El stock ya se movió en el WMS y eso no se revierte por un
+                    # fallo al encolar: se declara y la avería queda sin avisar
+                    # a Siesa, que es el estado de siempre, no uno peor.
+                    logger.error(
+                        '[PICKING] tarea %s: avería registrada en el WMS pero no '
+                        'se pudo encolar el traslado a averías en Siesa: %s. '
+                        'La mercancía rota sigue contada como vendible en Siesa.',
+                        tarea.codigo, _e_ave)
 
         elif resultado == 'DISCREPANCIA_SIESA':
             pass  # admin ajustará manualmente en Siesa; solo registramos
