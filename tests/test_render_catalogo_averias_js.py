@@ -80,3 +80,25 @@ def test_el_texto_libre_de_la_fila_va_escapado(tmp_path):
                                    unidad_medida='<img src=x onerror=alert(1)>')])
     assert '<img src=x' not in html, html
     assert '&lt;img' in html
+
+
+def _sin_campo(p, campo):
+    d = dict(p); d.pop(campo, None); return d
+
+
+def test_payload_viejo_sin_stock_vendible_no_miente(tmp_path):
+    """Modo de fallo: `undefined > 0` es false, así que un backend que no manda
+    `stock_vendible` caía a ámbar —«hay stock pero nada vendible»— SIN la línea
+    que lo explica. Fallaba hacia afirmar algo falso, no hacia neutro."""
+    html = _catalogo(tmp_path, [_sin_campo(
+        _p(stock_total=40, stock_averiado=0, stock_vendible=40), 'stock_vendible')])
+    assert '#4ade80' in html, html
+    assert '#fbbf24' not in html
+
+
+def test_con_stock_vendible_en_cero_si_va_ambar(tmp_path):
+    """Dirección contraria: el fallback no puede tapar el caso real."""
+    html = _catalogo(tmp_path, [_p(stock_total=12, stock_averiado=12,
+                                   stock_vendible=0)])
+    assert '#fbbf24' in html
+    assert '12 averiadas' in html

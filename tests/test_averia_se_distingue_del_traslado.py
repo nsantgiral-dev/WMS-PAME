@@ -88,3 +88,18 @@ def test_el_resto_del_documento_no_cambia(monkeypatch):
     # La AV1 de PRODUCCIÓN no maneja lotes: `None` es el valor correcto.
     assert m['f470_id_lote'] is None
     assert m['f470_id_lote_ent'] is None
+
+
+def test_el_diagnostico_delata_la_variable_sin_poner(monkeypatch):
+    """El fallback tapaba su propia ausencia: el diagnóstico reportaba '01'
+    tanto si la variable estaba puesta como si no. Era la única clave del
+    bloque sin su `NO CONFIGURADO`."""
+    gw, _ = _gateway(monkeypatch, None, motivo_traslado='01')
+    texto = str(gw._core.estado()['traslados_config']['motivo_averia'])
+    assert 'SIN CONFIGURAR' in texto, texto
+
+
+def test_configurada_el_diagnostico_no_grita(monkeypatch):
+    """Dirección contraria: puesta, se reporta limpia."""
+    gw, _ = _gateway(monkeypatch, '02', motivo_traslado='01')
+    assert gw._core.estado()['traslados_config']['motivo_averia'] == '02'

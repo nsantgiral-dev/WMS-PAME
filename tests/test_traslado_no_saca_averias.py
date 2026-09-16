@@ -163,7 +163,7 @@ def test_reversa_no_devuelve_mercancia_buena_al_bin_de_averias(db, almacen, prod
     """El bin de averías se crea PRIMERO, así que tiene el `id` más bajo del
     almacén — que es como `ub_general` elegía."""
     ave = _bin(db, almacen, 'AVE-A1-C01-E01-H01', 'AVERIAS')
-    gen = _bin(db, almacen, Ubicacion.CODIGO_GENERAL, 'GENERAL')
+    gen = _bin(db, almacen, 'PIK-B1-C01-E01-H01', 'PICKING')
     assert ave.id < gen.id, 'la premisa del test: averías es el bin más antiguo'
 
     s = _solicitud(db, almacen, producto, 7, usuario_admin, codigo='ST-REV-01')

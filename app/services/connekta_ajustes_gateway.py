@@ -158,7 +158,9 @@ class ConnektaAjustesGateway:
         """
         142951 → API_v1_Inventarios_Comercial_DocumentoInv
         Traslado físico NB1 → AV1 cuando el recepcionista marca mercancía como averiada.
-        Usa SIESA_TIPO_DOCTO_TRASLADO (TRA) y SIESA_MOTIVO_TRASLADO (01).
+        Usa SIESA_TIPO_DOCTO_TRASLADO (TRA) y SIESA_MOTIVO_AVERIA — que cae a
+        SIESA_MOTIVO_TRASLADO si no está configurada, y entonces el documento
+        es indistinguible de un traslado ordinario.
         Siesa mueve el stock entre bodegas — vendedores ya no ven las unidades averiadas.
         """
         core = self._core

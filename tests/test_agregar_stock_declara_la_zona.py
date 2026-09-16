@@ -1,41 +1,52 @@
 """Trinquete: **toda suma de stock en ubicación declara qué hace con la zona de averías.**
 
-## El hueco que este archivo cierra
+## El hueco que cierra
 
-Ya existe `test_politica_vendible_unica.py`: prohíbe que el literal `'AVERIAS'`
-aparezca fuera de `picking_service`. Atrapa a quien **copia mal** la política.
+`test_politica_vendible_unica.py` prohíbe que el literal `'AVERIAS'` aparezca
+fuera de `picking_service`: atrapa a quien **copia mal** la política. No atrapa a
+quien **nunca la consulta**, y por ahí pasaron cuatro sitios —el descuento de
+traslados, el catálogo de «Pedir desde», `Producto.stock_total` y la base del
+umbral de mínimos—. Ninguno usaba el literal: simplemente no hacían la pregunta.
 
-No atrapa a quien **nunca la consulta**. Y por ahí pasaron cuatro sitios:
+## Qué mide EXACTAMENTE, y qué no
 
-  · `traslado_service._descontar_inventario_wms` — el descuento al despachar
-    ordenaba por cantidad ascendente sin mirar zona, así que el bin de averías
-    (pocas unidades) era el primero en vaciarse hacia otra bodega;
-  · `traslado_service._get_stock_wms` — ofrecía lo averiado como disponible;
-  · `Producto.stock_total` — sumaba averías en el número del catálogo, en la
-    misma pantalla donde la alerta de mínimos sí las excluye;
-  · `abc_service.poblar_stock_minimo_desde_abc` — anclaba el umbral en una base
-    que incluye averías, contra una alerta que las excluye, mientras su propio
-    docstring prometía que las dos bases eran la misma.
+Este archivo existió un día en una versión que medía dos proxies, y las dos
+estaban rotas el mismo día que se escribió. Queda anotado porque la forma del
+error importa más que el error:
 
-Ninguno usaba el literal. Todos eran invisibles para el trinquete anterior,
-porque el defecto no era decir algo distinto: era **no decir nada**.
+  · **la suma** se detectaba buscando las subcadenas `u.cantidad` / `up.cantidad`
+    en el texto del argumento. `app/routes/reposicion.py` suma
+    `sum((i.cantidad or 0) for i in inventarios)` sobre filas de
+    `UbicacionProducto` — invisible, porque la variable se llama `i`. Y al
+    revés, `Producto.stock_disponible` entraba en la lista por accidente:
+    `u.cantidad_disponible()` **contiene** `u.cantidad`.
+  · **la declaración** se detectaba con `nombre in ast.unparse(fn)`, que incluye
+    docstrings e imports sin usar. Una función que mencionara la política en su
+    docstring y no la aplicara salía del radar en silencio — que es la dirección
+    peligrosa, porque un falso «muda» molesta y un falso «declara» tapa.
 
-## Qué exige
+Hoy mide, por AST:
 
-Cada función de `app/` que sume `UbicacionProducto.cantidad` tiene que, o bien
-referirse a la política (`filtro_ubicacion_vendible` / `filtro_ubicacion_averias`
-/ `es_ubicacion_vendible`), o bien estar declarada abajo con **razón y fecha**.
+  · **suma de stock** = una llamada a `sum` / `.sum()` en cuyo argumento hay un
+    atributo llamado `cantidad` exacto. Si el objeto es un modelo que sabemos
+    que NO es stock en ubicación (`OTROS_MODELOS`), se descarta; si no se puede
+    resolver el tipo —`i.cantidad`, `reg.cantidad`— **se incluye**. Sobre-incluir
+    cuesta una fila de declaración; sub-incluir cuesta un defecto invisible.
+  · **declara** = la política se **llama**, resolviendo los alias de cualquier
+    `from ... import X as Y` del módulo o de la función.
 
-Declarar no es eximir: la mayoría de las declaraciones dicen «acá sumar todas
-las zonas es lo correcto, y por esto». Lo que el trinquete impide es que un
-sitio nuevo se sume a la lista sin que nadie haya pensado la pregunta.
+Lo que sigue sin ver, declarado para que nadie lea cobertura total donde no la
+hay: acumuladores (`t += fila.cantidad`), `functools.reduce`, SQL crudo en
+`db.text`, y sumas construidas en una variable intermedia. Cada una tiene su
+meta-test en rojo — abajo, marcadas como `xfail`: son huecos conocidos, no
+sorpresas.
 
-## Por AST, y en las dos direcciones
+## Declarar no es eximir
 
-El scanner está parametrizado por directorio para que los meta-tests lo
-ejerciten **a él**, no a un parche sobre él. Se prueba que dispara sobre una
-suma nueva y muda, que NO dispara sobre una que declara, y que un piso de
-sitios conocidos se rompe si el scanner deja de ver.
+La mayoría de las filas dicen «acá sumar todas las zonas es lo correcto, y por
+esto». Lo que el trinquete impide es que un sitio nuevo entre sin que nadie haya
+hecho la pregunta. Y **la lista solo puede encoger**: un sitio que empieza a
+consultar la política obliga a borrar su fila.
 """
 import ast
 import pathlib
@@ -44,85 +55,146 @@ import pytest
 
 RAIZ = pathlib.Path(__file__).resolve().parents[1]
 
-POLITICA = ('filtro_ubicacion_vendible', 'filtro_ubicacion_averias',
-            'es_ubicacion_vendible')
+POLITICA = {'filtro_ubicacion_vendible', 'filtro_ubicacion_averias',
+            'es_ubicacion_vendible'}
 
-#: Sumas de stock que NO consultan la política, cada una con su razón y su
-#: fecha. Clave: 'ruta/relativa.py::nombre_funcion'.
+#: Modelos cuyo `.cantidad` NO es stock en una ubicación. Se reconocen por
+#: nombre porque es lo único que el AST puede resolver sin ejecutar nada.
+OTROS_MODELOS = {
+    'KardexMovimiento', 'MovimientoInventario', 'ItemPacking', 'ItemEnTransito',
+    'TareaPicking', 'ItemRecepcion', 'EventoStockAgotado', 'LPN',
+    'TareaReposicion', 'ItemSolicitudTraslado', 'LineaDevolucionCliente',
+}
+
+#: Sumas de stock que NO consultan la política, con razón y fecha.
+#: Clave: 'ruta/relativa.py::nombre_funcion'.
 DECLARADAS = {
     'app/models/producto.py::stock_total': (
-        '2026-09-14 · es el total FÍSICO a propósito: incluye averías porque '
-        'eso es lo que hay. `stock_averiado` y `stock_vendible` viven al lado '
-        'y `to_dict()` expone las tres, así que el número ya no viaja solo.'),
-    'app/models/producto.py::stock_disponible': (
-        '2026-09-14 · eje distinto (cantidad menos reservado y bloqueado), no '
-        'el de zona. Abarca todas las zonas igual que `stock_total`.'),
+        '2026-09-14 · es el total FÍSICO a propósito: incluye averías porque eso '
+        'es lo que hay. El arreglo no fue filtrarlo —un «total» que no es el '
+        'total miente en la otra dirección— sino declarar la composición: '
+        '`stock_averiado` y `stock_vendible` viven al lado y `to_dict()` expone '
+        'las tres, así que el número ya no viaja solo.'),
     'app/routes/almacenes.py::layout_completo': (
         '2026-09-14 · pinta qué hay en cada hueco del layout. Ocultar el bin de '
         'averías sería el defecto, no el arreglo.'),
-    'app/routes/compras.py::velocity_abc': (
-        '2026-09-14 · la cifra que compara es de `MovimientoInventario`; el '
-        'stock en ubicación entra solo como referencia de existencia actual.'),
     'app/routes/compras.py::cuarentena': (
-        '2026-09-14 · lee SOLO la zona de averías, con el literal a mano. Está '
-        'declarada también en `test_politica_vendible_unica` — migrarla a '
+        '2026-09-14 · lee SOLO la zona de averías, con el literal a mano. '
+        'Declarada también en `test_politica_vendible_unica` — migrarla a '
         '`filtro_ubicacion_averias()` borra las dos filas a la vez.'),
+    'app/routes/compras.py::velocity_abc': (
+        '2026-09-16 · selecciona positivamente `Ubicacion.tipo_zona == '
+        "'PICKING'` (`app/routes/compras.py:110`), así que averías queda fuera "
+        'por construcción. CORREGIDA: la razón anterior decía que el stock era '
+        '«solo referencia», y es falso — alimenta `dias_stock` y de ahí '
+        '`es_alerta` (`:132`, `:135`). La exención se sostiene por el filtro, '
+        'no por ser decorativa.'),
+    'app/routes/reposicion.py::listar_ubicaciones_picking': (
+        "2026-09-16 · filtra `Ubicacion.tipo_zona == 'PICKING'` "
+        '(`app/routes/reposicion.py:308`): averías fuera por construcción. '
+        'AGREGADA al corregir el scanner — la versión anterior no la veía '
+        'porque la variable del comprehension se llama `i` y no `u`.'),
     'app/services/auditoria/inventario.py::_saldos_actuales': (
         '2026-09-14 · invariante de auditoría: tiene que ver TODO el stock, '
         'incluido el averiado. Un auditor con puntos ciegos no audita.'),
-    'app/services/auditoria/inventario.py::_leer': (
-        '2026-09-14 · misma razón que `_saldos_actuales`.'),
     'app/services/bloqueo_recompra_service.py::poblar_lista_inicial': (
-        '2026-09-14 · el stock alimenta la decisión de bloquear un SKU para '
-        'recompra. La función entera tiene un problema mayor y anterior a la '
-        'zona: su regla de 365 días corre sobre menos de seis meses de '
-        'historia. No se toca hasta resolver eso.'),
+        '2026-09-16 · la zona SÍ importa acá y la exención es un aplazamiento, '
+        'no una absolución: `stock_map` suma todas las zonas y decide qué SKU '
+        'entra a la lista de bloqueo, así que un SKU con todo su stock en '
+        'averías se bloquearía por «tener stock» que no se puede vender — la '
+        'misma clase que el defecto del Armador. No se toca porque la función '
+        'tiene un problema anterior y mayor: su corte de 365 días '
+        '(`bloqueo_recompra_service.py:39`) corre sobre el histórico que haya, '
+        'y cuánto hay NO está medido en este repo.'),
     'app/services/bloqueo_recompra_service.py::vista_capital_inmovilizado': (
-        '2026-09-14 · multiplica el stock por `producto.costo_unitario`, campo '
-        'que no existe en el modelo, así que el total sale siempre en 0. '
-        'Filtrar la zona no cambiaría un cero.'),
+        '2026-09-16 · el capital sale siempre 0 porque multiplica por '
+        '`producto.costo_unitario`, campo que no existe en `Producto` — el '
+        '`hasattr` da False. Pero CORREGIDA: la función también publica '
+        "`'stock'` por SKU, que sí se pinta y sí es ciego a la zona. La razón "
+        'anterior hablaba solo del dinero y callaba el número que viaja.'),
+    'app/services/inventario_siesa_service.py::_cuarentena_wms': (
+        '2026-09-14 · lee SOLO la cuarentena, con el OR de tres señales '
+        'legadas. Declarada también en `test_politica_vendible_unica`.'),
     'app/services/inventario_siesa_service.py::_run_carga_inicial': (
-        '2026-09-14 · es el escritor del sync: reparte lo que Siesa reporta '
-        'para la bodega entera. La zona la deciden los bins, no esta suma.'),
+        '2026-09-16 · CORREGIDA: la razón anterior describía otra línea. La '
+        'suma es `_stock_en_ubicaciones_reales`, que agrupa el stock de todos '
+        'los bins del almacén EXCEPTO `SIESA-GENERAL` para restarlo de lo que '
+        'se escribe en ese bucket y no duplicarlo. Incluye el bin de averías, '
+        'que vive en el mismo almacén — o sea que sí decide sobre la zona, y '
+        'decide netearlas. Es coherente con `_stock_wms_por_bodega`: Siesa las '
+        'tiene dentro de la bodega mientras nadie las mueva a AV1.'),
     'app/services/inventario_siesa_service.py::_stock_wms_por_bodega': (
         '2026-09-14 · la reconciliación compara bodega contra bodega. Filtrar '
         'averías acá rompería el cuadre a propósito: Siesa las tiene dentro de '
         'la misma bodega mientras nadie las mueva a AV1.'),
-    'app/services/inventario_siesa_service.py::_cuarentena_wms': (
-        '2026-09-14 · lee SOLO la cuarentena, con el OR de tres señales '
-        'legadas. Declarada también en `test_politica_vendible_unica`.'),
     'app/services/layout_service.py::_stock_activo': (
         '2026-09-14 · guard de remodulación: pregunta «¿este hueco tiene algo?» '
         'y la respuesta no puede depender de la zona. Quién puede moverse lo '
         'decide `_motivo_stock_no_reubicable`, que sí consulta la política.'),
     'app/services/ola_predictiva_service.py::pre_verificar_ola': (
-        "2026-09-14 · selecciona positivamente `tipo_zona == 'PICKING'`, así "
-        'que averías queda fuera por construcción, no por omisión.'),
+        "2026-09-14 · selecciona positivamente `tipo_zona == 'PICKING'` "
+        '(`ola_predictiva_service.py:62`), así que averías queda fuera por '
+        'construcción, no por omisión.'),
 }
 
-#: Piso de sitios que el scanner tiene que seguir viendo. Si baja, el scanner
-#: se rompió — y un scanner roto sale en verde igual que uno que no encuentra
-#: nada.
-PISO_SITIOS = 18
+#: Piso EXACTO, no holgado. Una versión anterior lo dejó tres por debajo del
+#: real y una mutación plausible —saltarse dos archivos— se comía la holgura
+#: dejando los cuatro tests en verde.
+PISO_SITIOS = 20
 
 
-def _suma_de_stock(fn: ast.AST):
-    """Devuelve la expresión sumada si la función suma stock en ubicación."""
-    for n in ast.walk(fn):
-        if isinstance(n, ast.Call) and (
-            (isinstance(n.func, ast.Attribute) and n.func.attr == 'sum')
-            or (isinstance(n.func, ast.Name) and n.func.id == 'sum')
-        ):
-            for a in n.args:
-                src = ast.unparse(a)
-                if ('UbicacionProducto.cantidad' in src
-                        or 'u.cantidad' in src or 'up.cantidad' in src):
-                    return src
+# ── El scanner ─────────────────────────────────────────────────────────────
+
+def _cantidad_de_stock(nodo):
+    """La expresión sumada, si es `cantidad` de algo que puede ser stock."""
+    for n in ast.walk(nodo):
+        if isinstance(n, ast.Attribute) and n.attr == 'cantidad':
+            v = n.value
+            if isinstance(v, ast.Name) and v.id in OTROS_MODELOS:
+                continue
+            return ast.unparse(n)
     return None
 
 
+def _suma_de_stock(fn):
+    for n in ast.walk(fn):
+        es_sum = (
+            (isinstance(n.func, ast.Attribute) and n.func.attr == 'sum')
+            or (isinstance(n.func, ast.Name) and n.func.id == 'sum')
+        ) if isinstance(n, ast.Call) else False
+        if es_sum:
+            for a in n.args:
+                expr = _cantidad_de_stock(a)
+                if expr:
+                    return expr
+    return None
+
+
+def _alias_de_politica(*ambitos):
+    """Canónicos + alias de cualquier `from ... import X as Y` en el ámbito."""
+    nombres = set(POLITICA)
+    for amb in ambitos:
+        for n in ast.walk(amb):
+            if isinstance(n, ast.ImportFrom):
+                for a in n.names:
+                    if a.name in POLITICA and a.asname:
+                        nombres.add(a.asname)
+    return nombres
+
+
+def _llama_politica(fn, nombres):
+    """La política se LLAMA. Un import sin usar o un docstring no cuentan."""
+    for n in ast.walk(fn):
+        if isinstance(n, ast.Call):
+            f = n.func
+            nom = (f.id if isinstance(f, ast.Name)
+                   else f.attr if isinstance(f, ast.Attribute) else None)
+            if nom in nombres:
+                return True
+    return False
+
+
 def _sitios(base: pathlib.Path = None):
-    """Todas las funciones que suman stock, con su clave y si declaran."""
     base = base or (RAIZ / 'app')
     raiz_rel = base.parent if base.name == 'app' else base
     hallados = {}
@@ -131,14 +203,23 @@ def _sitios(base: pathlib.Path = None):
             arbol = ast.parse(f.read_text(encoding='utf-8'))
         except (SyntaxError, UnicodeDecodeError):
             continue
+        del_modulo = _alias_de_politica(arbol)
+        # Un closure no se cuenta aparte de la función que lo contiene.
+        anidadas = {
+            id(h)
+            for n in ast.walk(arbol)
+            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+            for h in ast.walk(n)
+            if isinstance(h, (ast.FunctionDef, ast.AsyncFunctionDef)) and h is not n
+        }
         for n in ast.walk(arbol):
             if not isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 continue
-            if _suma_de_stock(n) is None:
+            if id(n) in anidadas or _suma_de_stock(n) is None:
                 continue
-            cuerpo = ast.unparse(n)
             clave = f'{f.relative_to(raiz_rel).as_posix()}::{n.name}'
-            hallados[clave] = any(p in cuerpo for p in POLITICA)
+            hallados[clave] = _llama_politica(
+                n, del_modulo | _alias_de_politica(n))
     return hallados
 
 
@@ -149,103 +230,183 @@ def test_ninguna_suma_de_stock_es_muda_sin_declararlo():
     sin_declarar = sorted(mudas - set(DECLARADAS))
     assert not sin_declarar, (
         'Estas funciones suman stock en ubicación y no dicen qué hacen con la '
-        'zona de averías. O consultan la política '
-        '(`filtro_ubicacion_vendible()` / `filtro_ubicacion_averias()` / '
-        '`es_ubicacion_vendible()`), o se agregan a DECLARADAS con razón y '
-        f'fecha:\n  ' + '\n  '.join(sin_declarar))
+        'zona de averías. O llaman a la política, o se agregan a DECLARADAS '
+        'con razón y fecha:\n  ' + '\n  '.join(sin_declarar))
 
 
 def test_la_lista_de_declaradas_solo_encoge():
-    """Trinquete propiamente dicho. Una fila sobra en dos casos, y los dos
-    obligan a borrarla:
-
-      · el sitio ya consulta la política — se migró, la excepción cumplió;
-      · el sitio ya no existe.
-
-    Sin esto la lista solo crece, y una lista que solo crece no es un trinquete:
-    es un permiso con formato de tabla."""
+    """Una fila sobra en dos casos, y los dos obligan a borrarla: el sitio ya
+    consulta la política, o el sitio ya no existe. Sin esto la lista solo crece,
+    y una lista que solo crece no es un trinquete: es un permiso tabulado."""
     sitios = _sitios()
-    ya_migradas = sorted(k for k, declara in sitios.items()
-                         if declara and k in DECLARADAS)
+    ya_migradas = sorted(k for k, d in sitios.items() if d and k in DECLARADAS)
     desaparecidas = sorted(set(DECLARADAS) - set(sitios))
     assert not ya_migradas, (
-        'Estas ya consultan la política y su fila en DECLARADAS sobra — '
-        'borrala:\n  ' + '\n  '.join(ya_migradas))
+        'Ya consultan la política; su fila sobra:\n  ' + '\n  '.join(ya_migradas))
     assert not desaparecidas, (
-        'Declaraciones que no apuntan a ninguna función existente:\n  '
-        + '\n  '.join(desaparecidas))
+        'No apuntan a ninguna función existente:\n  ' + '\n  '.join(desaparecidas))
 
 
-def test_toda_declaracion_tiene_fecha():
-    sin_fecha = sorted(k for k, razon in DECLARADAS.items()
-                       if not razon.strip()[:4].isdigit())
-    assert not sin_fecha, (
-        'Una excepción sin fecha no se puede caducar:\n  ' + '\n  '.join(sin_fecha))
+def test_toda_declaracion_tiene_fecha_y_razon():
+    malas = sorted(
+        k for k, r in DECLARADAS.items()
+        if not r.strip().startswith('2026-') or len(r.strip()) < 60)
+    assert not malas, (
+        'Una excepción sin fecha ISO o sin razón de verdad no se puede '
+        'caducar ni discutir:\n  ' + '\n  '.join(malas))
 
 
 def test_el_piso_de_sitios_se_sostiene():
-    """Si el scanner deja de ver, este número cae y el trinquete queda en verde
-    sobre nada."""
     total = len(_sitios())
     assert total >= PISO_SITIOS, (
-        f'el scanner encontró {total} sitios, menos que el piso {PISO_SITIOS} — '
-        'probablemente dejó de reconocer una forma de suma')
+        f'el scanner encontró {total}, menos que el piso {PISO_SITIOS} — dejó '
+        'de reconocer alguna forma de suma')
 
 
-# ── Meta-tests: el scanner, en las dos direcciones ─────────────────────────
+# ── Meta-tests: el scanner real, en las dos direcciones ────────────────────
 
-def _arbol_falso(tmp_path, nombre: str, codigo: str) -> pathlib.Path:
-    app = tmp_path / 'app' / 'services'
-    app.mkdir(parents=True, exist_ok=True)
-    (app / nombre).write_text(codigo, encoding='utf-8')
+def _arbol(tmp_path, codigo, sub='services', nombre='nuevo.py'):
+    d = tmp_path / 'app' / sub
+    d.mkdir(parents=True, exist_ok=True)
+    (d / nombre).write_text(codigo, encoding='utf-8')
     return tmp_path / 'app'
 
 
-def test_el_scanner_ve_una_suma_orm_muda(tmp_path):
-    base = _arbol_falso(tmp_path, 'nuevo.py', '''
-from sqlalchemy import func
-def total_por_producto():
-    return db.session.query(func.sum(UbicacionProducto.cantidad)).all()
+@pytest.mark.parametrize('cuerpo,clave', [
+    ('return db.session.query(func.sum(UbicacionProducto.cantidad)).all()', 'orm'),
+    ('return sum(u.cantidad for u in regs)', 'python-u'),
+    ('return sum((i.cantidad or 0) for i in inventarios)', 'python-i'),
+    ('return sum(reg.cantidad for reg in regs)', 'python-reg'),
+    ('return db.session.query(func.coalesce(func.sum(UbicacionProducto.cantidad), 0)).scalar()', 'coalesce'),
+    ('return q.with_entities(func.sum(UbicacionProducto.cantidad)).scalar()', 'with_entities'),
+])
+def test_el_scanner_ve_la_suma(tmp_path, cuerpo, clave):
+    base = _arbol(tmp_path, f'def total():\n    {cuerpo}\n')
+    assert _sitios(base) == {'app/services/nuevo.py::total': False}, clave
+
+
+@pytest.mark.parametrize('cuerpo', [
+    'return db.session.query(func.sum(KardexMovimiento.cantidad)).all()',
+    'return sum(i.cantidad_real for i in items)',
+    'return sum(u.cantidad_disponible() for u in self.ubicaciones)',
+    'return sum(t.cantidad_recogida for t in tareas)',
+    'return db.session.query(func.sum(ItemPacking.cantidad)).all()',
+])
+def test_el_scanner_no_dispara_sobre_otras_sumas(tmp_path, cuerpo):
+    base = _arbol(tmp_path, f'def total():\n    {cuerpo}\n')
+    assert _sitios(base) == {}
+
+
+def test_el_scanner_no_lee_comentarios_ni_docstrings_como_suma(tmp_path):
+    base = _arbol(tmp_path, '''
+def documenta():
+    """No suma func.sum(UbicacionProducto.cantidad) — lo explica."""
+    # tampoco acá: sum(u.cantidad for u in regs)
+    return 0
 ''')
-    assert _sitios(base) == {'app/services/nuevo.py::total_por_producto': False}
+    assert _sitios(base) == {}
 
 
-def test_el_scanner_ve_una_suma_python_muda(tmp_path):
-    base = _arbol_falso(tmp_path, 'nuevo.py', '''
-def total(regs):
-    return sum(u.cantidad for u in regs)
+# ── La mitad que exime: sus negativos, que es donde estaba el hueco ───────
+
+def test_declarar_exige_llamar_no_mencionar(tmp_path):
+    """Un docstring que nombra la política NO declara. Era el hueco: un falso
+    «declara» saca el sitio del radar sin dejar rastro en DECLARADAS."""
+    base = _arbol(tmp_path, '''
+from sqlalchemy import func
+def total():
+    """OJO: esta suma NO usa filtro_ubicacion_vendible()."""
+    return db.session.query(func.sum(UbicacionProducto.cantidad)).all()
 ''')
     assert _sitios(base) == {'app/services/nuevo.py::total': False}
 
 
-def test_el_scanner_reconoce_que_declara(tmp_path):
-    """Dirección contraria: no puede marcar como muda una que sí consulta."""
-    base = _arbol_falso(tmp_path, 'nuevo.py', '''
+def test_un_import_sin_usar_no_declara(tmp_path):
+    base = _arbol(tmp_path, '''
 from sqlalchemy import func
 from app.services.picking_service import filtro_ubicacion_vendible
-def total_vendible():
+def total():
+    return db.session.query(func.sum(UbicacionProducto.cantidad)).all()
+''')
+    assert _sitios(base) == {'app/services/nuevo.py::total': False}
+
+
+def test_llamar_la_politica_si_declara(tmp_path):
+    base = _arbol(tmp_path, '''
+from sqlalchemy import func
+from app.services.picking_service import filtro_ubicacion_vendible
+def total():
     return (db.session.query(func.sum(UbicacionProducto.cantidad))
             .filter(filtro_ubicacion_vendible()).all())
 ''')
-    assert _sitios(base) == {'app/services/nuevo.py::total_vendible': True}
+    assert _sitios(base) == {'app/services/nuevo.py::total': True}
 
 
-def test_el_scanner_no_dispara_sobre_otras_sumas(tmp_path):
-    """No puede confundir el kardex ni el packing con stock en ubicación."""
-    base = _arbol_falso(tmp_path, 'nuevo.py', '''
+def test_un_alias_del_import_tambien_declara(tmp_path):
+    """`_get_stock_wms` importa la política con alias. Sin resolverlo, el
+    scanner la marcaba muda y empujaba a declarar un sitio que sí pregunta."""
+    base = _arbol(tmp_path, '''
 from sqlalchemy import func
-def demanda():
-    return db.session.query(func.sum(KardexMovimiento.cantidad)).all()
-def empacado(items):
-    return sum(i.cantidad_real for i in items)
+from app.services.picking_service import filtro_ubicacion_vendible as _vend
+def total():
+    return (db.session.query(func.sum(UbicacionProducto.cantidad))
+            .filter(_vend()).all())
 ''')
-    assert _sitios(base) == {}
+    assert _sitios(base) == {'app/services/nuevo.py::total': True}
 
 
-def test_el_scanner_no_lee_docstrings(tmp_path):
-    base = _arbol_falso(tmp_path, 'nuevo.py', '''
-def documenta():
-    """Esta función NO suma func.sum(UbicacionProducto.cantidad) — lo explica."""
-    return 0
+def test_un_closure_no_se_cuenta_aparte_de_su_contenedora(tmp_path):
+    base = _arbol(tmp_path, '''
+from sqlalchemy import func
+def contenedora():
+    def _leer():
+        return db.session.query(func.sum(UbicacionProducto.cantidad)).all()
+    return _leer()
 ''')
-    assert _sitios(base) == {}
+    assert _sitios(base) == {'app/services/nuevo.py::contenedora': False}
+
+
+def test_el_scanner_alcanza_modelos_y_rutas(tmp_path):
+    """5 de las 13 filas viven fuera de `app/services/`."""
+    base = _arbol(tmp_path, 'def total(regs):\n    return sum(u.cantidad for u in regs)\n',
+                  sub='routes', nombre='x.py')
+    assert _sitios(base) == {'app/routes/x.py::total': False}
+
+
+# ── Huecos CONOCIDOS del scanner, declarados en rojo ──────────────────────
+# No son sorpresas: son las formas que este detector NO sabe ver. Cada xfail
+# es una promesa de que, si alguien las enseña, el test se pone verde y hay
+# que quitarle el marcador — no una excusa para no mirarlas.
+
+@pytest.mark.xfail(reason='hueco conocido: acumulador, no llamada a sum()',
+                   strict=True)
+def test_hueco_acumulador(tmp_path):
+    base = _arbol(tmp_path, '''
+def total(regs):
+    t = 0
+    for u in regs:
+        t += u.cantidad
+    return t
+''')
+    assert _sitios(base) == {'app/services/nuevo.py::total': False}
+
+
+@pytest.mark.xfail(reason='hueco conocido: SQL crudo en db.text', strict=True)
+def test_hueco_sql_crudo(tmp_path):
+    base = _arbol(tmp_path, '''
+def total():
+    return db.session.execute(
+        db.text('SELECT SUM(cantidad) FROM ubicaciones_productos')).scalar()
+''')
+    assert _sitios(base) == {'app/services/nuevo.py::total': False}
+
+
+@pytest.mark.xfail(reason='hueco conocido: la suma pasa por una variable',
+                   strict=True)
+def test_hueco_variable_intermedia(tmp_path):
+    base = _arbol(tmp_path, '''
+def total(regs):
+    cantidades = [u.cantidad for u in regs]
+    return sum(cantidades)
+''')
+    assert _sitios(base) == {'app/services/nuevo.py::total': False}

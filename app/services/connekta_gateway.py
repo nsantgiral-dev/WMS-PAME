@@ -420,7 +420,14 @@ class ConnektaGateway:
         # El maestro "Conceptos y Motivos" de Siesa puede tener un código distinto al de traslados
         # normales. Verificar: Maestros Asociados → Conceptos y Motivos → código para averías.
         # Si no se configura, cae al motivo_traslado genérico (puede causar rechazo en Siesa).
-        self.motivo_averia = os.getenv('SIESA_MOTIVO_AVERIA', '') or self.motivo_traslado
+        _mot_ave = os.getenv('SIESA_MOTIVO_AVERIA', '')
+        #: True cuando la variable NO está puesta y el motivo cae al de
+        #: traslado. Sin esta bandera el diagnóstico reporta el valor
+        #: resuelto ('01') y «sin configurar» se lee igual que
+        #: «configurada» — la única clave del bloque donde el fallback
+        #: tapaba su propia ausencia.
+        self.motivo_averia_por_defecto = not _mot_ave
+        self.motivo_averia = _mot_ave or self.motivo_traslado
         # Motivos para ajuste físico ADI (Clase 63, Concepto 603) en PAME:
         # '01' = Entrada Ajuste (Sobrante), '02' = Salida Ajuste (Faltante).
         # Verificar en Siesa: Inventarios → Maestros → Conceptos y Motivos → Concepto 603.
@@ -1352,7 +1359,10 @@ class ConnektaGateway:
                 'req_solicitante': self.req_solicitante or 'NO CONFIGURADO',
                 'bodega_transito': self.bodega_transito or 'NO CONFIGURADO',
                 'motivo_traslado': self.motivo_traslado,
-                'motivo_averia': self.motivo_averia,
+                'motivo_averia': (
+                    f'{self.motivo_averia} (SIN CONFIGURAR — cae a motivo_traslado, '
+                    f'el documento de avería es indistinguible de un traslado)'
+                    if self.motivo_averia_por_defecto else self.motivo_averia),
                 'unidad_negocio': self.unidad_negocio or 'NO CONFIGURADO (Siesa hereda de bodega)',
             },
             'apis_get': {

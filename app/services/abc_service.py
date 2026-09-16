@@ -200,6 +200,15 @@ class ABCService:
                 # puede pasar. Con cero bins de averías en producción (medido el
                 # 2026-09-14) las dos bases dan idéntico; el join las mantiene
                 # idénticas el día que dejen de darlo.
+                #
+                # Lo que este join NO arregla, y hay que decirlo: la alerta
+                # filtra además por almacén (`dashboard_service.py:85`) y esta
+                # suma no — agrega la red entera. El umbral que se escribe es
+                # una columna única de `Producto`, así que no puede ser por
+                # almacén sin cambiar el modelo. Con stock repartido, el umbral
+                # queda por encima de lo que un almacén puede tener y el SKU
+                # entra en «bajo mínimo» de forma permanente. Es el mismo eje de
+                # al lado del defecto de la zona, y sigue abierto.
                 .join(Ubicacion, Ubicacion.id == UbicacionProducto.ubicacion_id)
                 .filter(_filtro_vendible_abc())
                 .group_by(UbicacionProducto.producto_id)

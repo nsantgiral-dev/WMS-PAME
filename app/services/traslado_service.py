@@ -771,25 +771,29 @@ class TrasladoService:
         ).all()
         ubicacion_por_producto = {t.producto_id: t.ubicacion_id for t in tareas_ok if t.ubicacion_id}
 
-        # Ubicacion general del almacen origen (fallback de retorno).
+        # Bin de retorno del almacén origen (fallback).
         #
-        # Se busca el bucket `SIESA-GENERAL` por su código, y solo si no existe
-        # se cae al bin vendible más antiguo. Antes era `order_by(id).first()`
-        # sin más: el nombre decía «general» pero lo que elegía era «el más
-        # viejo del almacén». Si el bin de averías era el más antiguo —y lo es
-        # en cualquier almacén donde se armó la zona antes que el resto— una
-        # reversa metía mercancía BUENA dentro de él, y salía del FEFO sin que
-        # nadie lo pidiera.
+        # Único cambio respecto del original: se excluye la zona de averías. Si
+        # el bin de averías fuera el más antiguo del almacén —y lo es en
+        # cualquiera donde se arme la zona antes que el resto— una reversa
+        # metería mercancía BUENA dentro de él, y saldría del FEFO sin que nadie
+        # lo pidiera.
+        #
+        # Lo que NO se cambia acá, a propósito: `ub_general` no elige un bucket
+        # «general», elige **el bin vendible más antiguo**, que hoy en el
+        # almacén 1 es CROSS-DOCK. El nombre miente desde antes de esta tanda.
+        # Arreglarlo cambia a dónde vuelve la mercancía de TODAS las reversas y
+        # merece su propia decisión, no viajar de polizón en un filtro de zona.
         from app.services.picking_service import filtro_ubicacion_vendible
-        _vendibles_del_almacen = Ubicacion.query.filter(
-            Ubicacion.almacen_id == almacen.id,
-            Ubicacion.activo.is_(True),
-            filtro_ubicacion_vendible(),
-        )
         ub_general = (
-            _vendibles_del_almacen
-            .filter(Ubicacion.codigo == Ubicacion.CODIGO_GENERAL).first()
-            or _vendibles_del_almacen.order_by(Ubicacion.id.asc()).first()
+            Ubicacion.query
+            .filter(
+                Ubicacion.almacen_id == almacen.id,
+                Ubicacion.activo.is_(True),
+                filtro_ubicacion_vendible(),
+            )
+            .order_by(Ubicacion.id.asc())
+            .first()
         )
         if not ub_general:
             # El mensaje nombra la condición REAL. Un almacén cuya única
@@ -1339,8 +1343,12 @@ class TrasladoService:
                 .with_for_update()
                 .all()
             )
-            # Con el filtro puesto, `saldo_antes`/`saldo_despues` pasan a ser el
-            # saldo del almacén origen. Es lo correcto y no lo era antes: el
+            # `saldo_antes`/`saldo_despues` son el saldo VENDIBLE del almacén
+            # origen — no el saldo de la bodega, desde que la consulta excluye
+            # la zona de averías. Un kardex que declara un saldo más chico que
+            # el de su bodega; se deja así porque el movimiento que firma es una
+            # salida de stock vendible, pero el número no es intercambiable con
+            # el de la reconciliación, que sí cuenta todas las zonas. Es lo correcto y no lo era antes: el
             # movimiento va firmado con `almacen_id=almacen.id`, así que el
             # kardex de esa bodega venía declarando un saldo que incluía stock
             # de otras.
