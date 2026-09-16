@@ -1033,7 +1033,13 @@ class TrasladoService:
         # Las pacas físicas viajaron y se recibieron en el punto de venta.
         # Se marcan CONSUMIDO porque al ingresar al PV se abren (no tienen LPN propio allá).
         try:
-            from app.models.lpn import LPN
+            # `EstadoLPN` TAMBIÉN va acá. Estaba importado solo dentro de
+            # `despachar()` —un `from ... import` dentro de una función crea
+            # un nombre local de ESA función— así que la línea de abajo
+            # lanzaba NameError, el `except Exception` se lo tragaba con un
+            # warning, y los LPN de un traslado recibido se quedaban en
+            # 'EN_TRANSITO' para siempre. El error no daba error.
+            from app.models.lpn import LPN, EstadoLPN
             now_utc = datetime.utcnow()
             for lpn in LPN.query.filter_by(traslado_id=s.id, estado='EN_TRANSITO').all():
                 lpn.estado = EstadoLPN.CONSUMIDO

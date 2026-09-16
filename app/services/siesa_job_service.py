@@ -1257,6 +1257,15 @@ def _ejecutar_job(job: SiesaJob) -> dict:
                 consec_rec = _st.recuperar_consec_salida(solicitud.codigo)
                 solicitud.siesa_salida_consec = consec_rec
             solicitud.estado = EstadoTraslado.EN_TRANSITO
+            # `fecha_despacho` se escribía SOLO en `TrasladoService.despachar`
+            # (el botón del admin). Este camino —cierre de packing → DLQ— la
+            # dejaba en NULL, y `traslado_monitor_service` filtra por
+            # `fecha_despacho <= limite`: un NULL nunca entra, así que el
+            # monitor de traslados estancados era CIEGO a todo lo despachado
+            # por el empacador. TRA-30 los reportaba como «en tránsito sin
+            # fecha de despacho» sin que nadie supiera por qué.
+            if solicitud.fecha_despacho is None:
+                solicitud.fecha_despacho = datetime.utcnow()
             solicitud.siesa_error = None
             from app.extensions import db as _db
             _db.session.commit()

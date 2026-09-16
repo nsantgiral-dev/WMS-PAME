@@ -253,6 +253,38 @@ _BODEGAS_SERVICIO = ['AV1', 'TRA1']
 _BODEGAS_INVENTARIO = _BODEGAS_PV + _BODEGAS_SERVICIO
 
 
+def bins_administrados_por_el_sync(almacen_id: int, excluir_ubicacion_id=None):
+    """Los bins cuyo saldo el sync de Siesa PUEDE escribir, restar o cerear.
+
+    Son los vendibles. La zona de averías queda fuera, y no es un detalle:
+
+    · **Restar.** El sync resta de `SIESA-GENERAL` lo que ya vive en bins
+      reales, para no duplicarlo. Desde que la avería se traslada a AV1
+      (`siesa_job_service.encolar_traslado_averias`), Siesa deja de contarla en
+      la bodega — así que seguir restándola deja el bucket vendible
+      **subvaluado** por esa cantidad.
+
+    · **Cerear.** El bulk zero pone `cantidad = 0` **sin escribir ningún
+      MovimientoInventario**. Un bin de averías cuyo SKU Siesa ya no reporta en
+      la bodega —porque sus unidades están en AV1— queda fuera de la protección
+      por producto, y el cron del día siguiente lo borra en silencio. La
+      mercancía rota desaparece del WMS sin una línea de kardex que lo diga.
+
+    La contrapartida, declarada: entre que se registra la avería y que el job
+    la mueve a AV1, Siesa todavía la cuenta en la bodega y el sync ya no la
+    resta, así que `SIESA-GENERAL` queda momentáneamente alto. Es transitorio y
+    se corrige solo en la siguiente corrida; lo otro era permanente y mudo.
+    """
+    from app.services.picking_service import filtro_ubicacion_vendible
+    q = Ubicacion.query.filter(
+        Ubicacion.almacen_id == almacen_id,
+        filtro_ubicacion_vendible(),
+    )
+    if excluir_ubicacion_id is not None:
+        q = q.filter(Ubicacion.id != excluir_ubicacion_id)
+    return q
+
+
 def _descargar_una_pasada_custom():
     """Una pasada completa de la consulta custom. Retorna dict {bodega: {codigo: {...}}}."""
     import time as _time
@@ -836,6 +868,8 @@ def _run_carga_inicial(app, bodega: str = None):
             # exactos por la corrida de Carga Inicial de hoy (PAPELSL153: 400
             # unidades de más, ni una de más ni de menos que lo que había en
             # su hueco PIK-C2-C01-E02-H03).
+            from app.services.picking_service import (
+                filtro_ubicacion_vendible as _filtro_vendible_sync)
             _stock_en_ubicaciones_reales: dict = {
                 row.producto_id: int(row.total)
                 for row in (
@@ -847,6 +881,11 @@ def _run_carga_inicial(app, bodega: str = None):
                     .filter(
                         Ubicacion.almacen_id == almacen.id,
                         UbicacionProducto.ubicacion_id != ub_general.id,
+                        # La zona de averías NO se resta: desde que sus unidades
+                        # se trasladan a AV1, Siesa deja de contarlas en esta
+                        # bodega. Seguir restándolas deja el bucket vendible
+                        # subvaluado. Ver `bins_administrados_por_el_sync`.
+                        _filtro_vendible_sync(),
                         UbicacionProducto.lote.is_(None),
                     )
                     .group_by(UbicacionProducto.producto_id)
@@ -890,7 +929,11 @@ def _run_carga_inicial(app, bodega: str = None):
             # Precalcular sets para el bulk zero diferido (se ejecuta AL FINAL del loop)
             # El zero se mueve al final para evitar que un reinicio de Railway deje
             # productos en 0 cuando solo se commiteó el primer lote y el proceso murió.
-            _ubs_almacen_ids = {ub.id for ub in _mapa_ubicaciones.values()}
+            # Solo los bins que el sync administra. La zona de averías queda
+            # fuera: el zero no escribe kardex, así que borrarla sería hacer
+            # desaparecer mercancía rota sin dejar rastro.
+            _ubs_almacen_ids = {
+                u.id for u in bins_administrados_por_el_sync(almacen.id)}
             _excluir_ub_ids = {uid for ubs in _ajustes_recientes.values() for uid in ubs}
             _ubs_a_zero = _ubs_almacen_ids - _excluir_ub_ids
             _prod_ids_ya_hoy: set = set()

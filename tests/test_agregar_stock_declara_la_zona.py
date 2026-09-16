@@ -41,6 +41,14 @@ hay: acumuladores (`t += fila.cantidad`), `functools.reduce`, SQL crudo en
 meta-test en rojo — abajo, marcadas como `xfail`: son huecos conocidos, no
 sorpresas.
 
+## Una fila que se fue, y es el trinquete funcionando
+
+`_run_carga_inicial` estuvo declarada con la razón «netea las averías contra el
+bucket vendible». El 2026-09-16, al conectarse el aviso a Siesa, esa decisión
+dejó de ser correcta —con las unidades en AV1, Siesa ya no las cuenta en la
+bodega— y la función pasó a consultar la política. El trinquete exigió borrar
+su fila. Escribir la razón fue lo que hizo visible que había que cambiarla.
+
 ## Declarar no es eximir
 
 La mayoría de las filas dicen «acá sumar todas las zonas es lo correcto, y por
@@ -115,14 +123,6 @@ DECLARADAS = {
     'app/services/inventario_siesa_service.py::_cuarentena_wms': (
         '2026-09-14 · lee SOLO la cuarentena, con el OR de tres señales '
         'legadas. Declarada también en `test_politica_vendible_unica`.'),
-    'app/services/inventario_siesa_service.py::_run_carga_inicial': (
-        '2026-09-16 · CORREGIDA: la razón anterior describía otra línea. La '
-        'suma es `_stock_en_ubicaciones_reales`, que agrupa el stock de todos '
-        'los bins del almacén EXCEPTO `SIESA-GENERAL` para restarlo de lo que '
-        'se escribe en ese bucket y no duplicarlo. Incluye el bin de averías, '
-        'que vive en el mismo almacén — o sea que sí decide sobre la zona, y '
-        'decide netearlas. Es coherente con `_stock_wms_por_bodega`: Siesa las '
-        'tiene dentro de la bodega mientras nadie las mueva a AV1.'),
     'app/services/inventario_siesa_service.py::_stock_wms_por_bodega': (
         '2026-09-14 · la reconciliación compara bodega contra bodega. Filtrar '
         'averías acá rompería el cuadre a propósito: Siesa las tiene dentro de '
