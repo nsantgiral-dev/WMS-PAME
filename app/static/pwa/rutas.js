@@ -1874,7 +1874,7 @@ function _condRenderParadas(d) {
   if (todasGestionadas) {
     html += `
       <div style="position:sticky;bottom:16px;margin-top:12px;">
-        <button onclick="conBotonOcupado(event, condCerrarRuta)"
+        <button onclick="conBotonOcupado(event, () => condCerrarRuta())"
           style="width:100%;padding:20px;background:#16a34a;color:#fff;border:none;border-radius:14px;font-size:18px;font-weight:800;cursor:pointer;">
           ✅ Cerrar Ruta — Todo Gestionado
         </button>
