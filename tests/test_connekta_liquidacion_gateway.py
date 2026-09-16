@@ -43,15 +43,15 @@ class TestTriggerNotaFactura:
 
     def test_payload_arma_header_transportador_y_movimientos(self, app, monkeypatch):
         with app.app_context():
-            from app.services.connekta_gateway import connekta
+            from app.services.connekta_gateway import connekta, ConnektaGateway
 
             capturado = {}
 
-            def _fake_post(conector, nombre, payload, url=None, extra_params=None):
+            def _fake_post(self, conector, nombre, payload, url=None, extra_params=None):
                 capturado['payload'] = payload
                 return {'codigo': 0}
 
-            monkeypatch.setattr(connekta, '_post', _fake_post)
+            monkeypatch.setattr(ConnektaGateway, '_post', _fake_post)
             connekta.trigger_nota_factura('FEW', '100', [{
                 'f120_referencia': 'P001', 'f470_cant_base': 3,
                 'f470_rowid_movto': 55,
@@ -78,16 +78,16 @@ class TestTriggerNotaFacturaCrearCruzar:
 
     def test_payload_incluye_cuotas_cxc_con_el_valor_de_cruce(self, app, monkeypatch):
         with app.app_context():
-            from app.services.connekta_gateway import connekta
+            from app.services.connekta_gateway import connekta, ConnektaGateway
 
             monkeypatch.setattr(connekta, 'get_vencimiento_factura', lambda t, c: '20260930')
             capturado = {}
 
-            def _fake_post(conector, nombre, payload, url=None, extra_params=None):
+            def _fake_post(self, conector, nombre, payload, url=None, extra_params=None):
                 capturado['payload'] = payload
                 return {'codigo': 0}
 
-            monkeypatch.setattr(connekta, '_post', _fake_post)
+            monkeypatch.setattr(ConnektaGateway, '_post', _fake_post)
             connekta.trigger_nota_factura_crear_cruzar('FEW', '100', [{
                 'f120_referencia': 'P001', 'f470_cant_base': 2,
                 'f470_rowid_movto': 77,
@@ -207,16 +207,16 @@ class TestFilasNcEncabezadoYConsecutivos:
 class TestTriggerMotivoDianNc:
     def test_payload_referencia_la_nc_y_el_concepto(self, app, monkeypatch):
         with app.app_context():
-            from app.services.connekta_gateway import connekta
+            from app.services.connekta_gateway import connekta, ConnektaGateway
 
             monkeypatch.setattr(connekta, 'concepto_dian_nc', '1')
             capturado = {}
 
-            def _fake_post(conector, nombre, payload, url=None, extra_params=None):
+            def _fake_post(self, conector, nombre, payload, url=None, extra_params=None):
                 capturado['payload'] = payload
                 return {'codigo': 0}
 
-            monkeypatch.setattr(connekta, '_post', _fake_post)
+            monkeypatch.setattr(ConnektaGateway, '_post', _fake_post)
             connekta.trigger_motivo_dian_nc(57, concepto='3')
 
             entidad = capturado['payload']['Entidades dinámicas'][0]
@@ -250,15 +250,15 @@ class TestTriggerReciboCaja:
 
     def test_sin_ajuste_cr_es_el_monto_completo(self, app, monkeypatch):
         with app.app_context():
-            from app.services.connekta_gateway import connekta
+            from app.services.connekta_gateway import connekta, ConnektaGateway
 
             capturado = {}
 
-            def _fake_post(conector, nombre, payload):
+            def _fake_post(self, conector, nombre, payload):
                 capturado['payload'] = payload
                 return {'codigo': 0}
 
-            monkeypatch.setattr(connekta, '_post', _fake_post)
+            monkeypatch.setattr(ConnektaGateway, '_post', _fake_post)
             connekta.trigger_recibo_caja('900123', '001', 1000.0, 'EFECTIVO', 'FEW', '1')
 
             cxc = capturado['payload']['CxC'][0]
@@ -269,15 +269,15 @@ class TestTriggerReciboCaja:
 
     def test_ajuste_faltante_resta_del_cr_y_declara_aprovecha(self, app, monkeypatch):
         with app.app_context():
-            from app.services.connekta_gateway import connekta
+            from app.services.connekta_gateway import connekta, ConnektaGateway
 
             capturado = {}
 
-            def _fake_post(conector, nombre, payload):
+            def _fake_post(self, conector, nombre, payload):
                 capturado['payload'] = payload
                 return {'codigo': 0}
 
-            monkeypatch.setattr(connekta, '_post', _fake_post)
+            monkeypatch.setattr(ConnektaGateway, '_post', _fake_post)
             connekta.trigger_recibo_caja('900123', '001', 1000.0, 'EFECTIVO', 'FEW', '1',
                                           ajuste_valor=100.0, ajuste_es_sobrante=False)
 
@@ -287,15 +287,15 @@ class TestTriggerReciboCaja:
 
     def test_ajuste_sobrante_sube_el_ingreso_y_declara_otro_ingreso(self, app, monkeypatch):
         with app.app_context():
-            from app.services.connekta_gateway import connekta
+            from app.services.connekta_gateway import connekta, ConnektaGateway
 
             capturado = {}
 
-            def _fake_post(conector, nombre, payload):
+            def _fake_post(self, conector, nombre, payload):
                 capturado['payload'] = payload
                 return {'codigo': 0}
 
-            monkeypatch.setattr(connekta, '_post', _fake_post)
+            monkeypatch.setattr(ConnektaGateway, '_post', _fake_post)
             connekta.trigger_recibo_caja('900123', '001', 1000.0, 'EFECTIVO', 'FEW', '1',
                                           ajuste_valor=50.0, ajuste_es_sobrante=True)
 
@@ -319,27 +319,27 @@ class TestTriggerDocumentoContable:
 
     def test_verifica_partida_doble(self, app, monkeypatch):
         with app.app_context():
-            from app.services.connekta_gateway import connekta
+            from app.services.connekta_gateway import connekta, ConnektaGateway
 
             llamado = {}
             monkeypatch.setattr(connekta, '_verificar_partida_doble_dc',
                                  lambda payload: llamado.setdefault('payload', payload))
-            monkeypatch.setattr(connekta, '_post', lambda *a, **k: {'codigo': 0})
+            monkeypatch.setattr(ConnektaGateway, '_post', lambda *a, **k: {'codigo': 0})
             connekta.trigger_documento_contable(
                 '900123', '001', '13551501', 500.0, 5000.0, 'FEW', '1')
             assert 'payload' in llamado, 'debe verificar partida doble antes de enviar'
 
     def test_ajuste_agrega_segunda_linea_de_movimiento_contable(self, app, monkeypatch):
         with app.app_context():
-            from app.services.connekta_gateway import connekta
+            from app.services.connekta_gateway import connekta, ConnektaGateway
 
             capturado = {}
 
-            def _fake_post(conector, nombre, payload):
+            def _fake_post(self, conector, nombre, payload):
                 capturado['payload'] = payload
                 return {'codigo': 0}
 
-            monkeypatch.setattr(connekta, '_post', _fake_post)
+            monkeypatch.setattr(ConnektaGateway, '_post', _fake_post)
             connekta.trigger_documento_contable(
                 '900123', '001', '13551501', 500.0, 5000.0, 'FEW', '1',
                 ajuste_valor=30.0, ajuste_razon='faltante en ruta')

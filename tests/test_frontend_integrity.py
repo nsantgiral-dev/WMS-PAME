@@ -811,12 +811,15 @@ DEUDA_SIN_UI = {
         'que NO EXISTE en index.html — verificado por grep: cero apariciones. La '
         'función retorna en la primera línea aunque alguien la llamara.',
     '/api/rutas/usuarios-conductores':
-        'Poblaba el selector del formulario de alta de conductor. Verificado: los '
-        'ids que toca (conductores-form, cond-form-usuario, cond-form-error) no '
-        'existen en index.html, así que conductoresMostrarForm reventaría en su '
-        'primera línea. Costo real: **no hay forma de dar de alta un conductor '
-        'desde la PWA** — la pantalla solo lista, activa/desactiva y crea la '
-        'cuenta PWA de uno ya existente. Alta = INSERT a mano en la base.',
+        'Poblaba el selector del formulario de alta directa de conductor '
+        '(conductoresCrear/conductoresMostrarForm/conductoresCancelarForm, '
+        'borradas de rutas.js el 2026-09-16 tras verificar que no era un '
+        'formulario a medio construir). El alta real vive en el módulo '
+        'Usuarios con rol=conductor: auth.py:111-120 y :205-220 crean/'
+        'sincronizan el Conductor (nombre, cédula, teléfono, usuario_id) al '
+        'crear o editar ese Usuario — index.html:1518 ya lo documenta en la '
+        'propia pantalla. Un segundo alta que no vincula usuario_id habría '
+        'sido la política duplicada que la Regla 0 prohíbe.',
     '/api/picking/<int:id>/cancelar':
         'Cancelar una tarea de picking con motivo. Verificado: cancelarTareaPicking '
         '(app.js:690) no se referencia en ningún onclick ni HTML. Lo que la '

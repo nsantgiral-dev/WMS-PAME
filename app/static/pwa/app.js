@@ -273,6 +273,7 @@ function pararTimers() {
   clearInterval(TIMER_OPERARIO);
   clearInterval(TIMER_REC);
   if (typeof COMP_TIMER !== 'undefined') clearInterval(COMP_TIMER);
+  if (typeof ABAST_TIMER !== 'undefined') clearInterval(ABAST_TIMER);
   RECEPCION_ACTUAL = null;
   DEVOLUCION_ACTUAL = null;
 }
@@ -439,6 +440,54 @@ function _modalConfirmar(mensajeHtml, opts = {}) {
     const cerrar = valor => { overlay.remove(); resolve(valor); };
     overlay.querySelector('#_mconf-si').onclick = () => cerrar(true);
     overlay.querySelector('#_mconf-no').onclick = () => cerrar(false);
+  });
+}
+
+/**
+ * Modal propio para capturar texto libre — reemplaza `prompt()` para motivos,
+ * observaciones, etc. Mismo patrón que `_modalCantidad`/`_modalConfirmar`.
+ * @param {string} titulo
+ * @param {string} mensajeHtml
+ * @param {{obligatorio?:boolean, valorInicial?:string, placeholder?:string, textoConfirmar?:string, textoCancelar?:string}} [opts]
+ * @returns {Promise<string|null>} el texto, o null si se canceló
+ */
+function _modalTexto(titulo, mensajeHtml, opts = {}) {
+  const {
+    obligatorio = true, valorInicial = '', placeholder = '',
+    textoConfirmar = 'Confirmar', textoCancelar = 'Cancelar',
+  } = opts;
+  return new Promise(resolve => {
+    const overlay = document.createElement('div');
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.92);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px;';
+    overlay.innerHTML = `
+      <div style="background:#111;border-radius:16px;padding:24px;width:100%;max-width:400px;border:1px solid #333;">
+        <div style="font-size:18px;font-weight:800;color:#fff;margin-bottom:10px;">${titulo}</div>
+        <div style="font-size:14px;color:#aaa;margin-bottom:16px;line-height:1.5;">${mensajeHtml}</div>
+        <textarea id="_mt-input" placeholder="${placeholder}" rows="3"
+          style="width:100%;padding:12px;font-size:15px;background:#000;border:2px solid #333;border-radius:10px;color:#fff;margin-bottom:6px;box-sizing:border-box;font-family:inherit;resize:vertical;">${valorInicial}</textarea>
+        <div id="_mt-error" style="font-size:12px;color:#ef4444;min-height:16px;margin-bottom:10px;"></div>
+        <div style="display:flex;gap:10px;">
+          <button id="_mt-no" style="flex:1;padding:14px;background:#1a1a1a;color:#aaa;border:1px solid #333;border-radius:10px;font-size:14px;font-weight:700;cursor:pointer;">${textoCancelar}</button>
+          <button id="_mt-si" style="flex:1;padding:14px;background:var(--pm);color:#fff;border:none;border-radius:10px;font-size:14px;font-weight:700;cursor:pointer;">${textoConfirmar}</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    const input = overlay.querySelector('#_mt-input');
+    const errEl = overlay.querySelector('#_mt-error');
+    const cerrar = valor => { overlay.remove(); resolve(valor); };
+    const intentarConfirmar = () => {
+      const val = input.value.trim();
+      if (obligatorio && !val) {
+        errEl.textContent = 'Este campo es obligatorio';
+        input.focus();
+        return;
+      }
+      cerrar(val);
+    };
+    overlay.querySelector('#_mt-si').onclick = intentarConfirmar;
+    overlay.querySelector('#_mt-no').onclick = () => cerrar(null);
+    input.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); intentarConfirmar(); } });
+    input.focus();
   });
 }
 
@@ -680,6 +729,73 @@ async function put(url, body = {}) {
     if (e.name === 'AbortError') throw new Error('Tiempo de espera agotado — intenta de nuevo');
     throw e;
   } finally { clearTimeout(timer); }
+}
+
+/**
+ * fetch() autenticado con timeout — para los pocos casos que get()/post()/put()
+ * no cubren: cuerpo de respuesta que no es JSON (blob de un CSV) o un método
+ * que esos tres no soportan (PATCH). Devuelve la `Response` cruda sin
+ * parsear — a propósito, porque `_checkResp()` asume JSON y estos casos no
+ * lo son. Mismo timeout/abort que `get()`/`post()`/`put()`, para no
+ * reinventar esa parte cada vez (ver hallazgo: `fetch()` crudo bypassa los
+ * helpers centralizados — no repetir el mismo patrón con otro nombre).
+ * @param {string} url - Ruta de la API (relativa al origen).
+ * @param {RequestInit} [options] - Igual que `fetch()` (method, headers, body...).
+ * @param {number} [timeoutMs=25000]
+ * @returns {Promise<Response>}
+ */
+async function _fetchConTimeout(url, options = {}, timeoutMs = 25000) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    return await fetch(API + url, {
+      ...options,
+      headers: { Authorization: 'Bearer ' + TOKEN, ...(options.headers || {}) },
+      signal: ctrl.signal,
+    });
+  } catch (e) {
+    if (e.name === 'AbortError') throw new Error('Tiempo de espera agotado — intenta de nuevo');
+    throw e;
+  } finally { clearTimeout(timer); }
+}
+
+/**
+ * Sube un archivo (multipart/form-data) reportando progreso real de subida.
+ * Único helper de transporte que usa `XMLHttpRequest` en vez de `fetch()`:
+ * es el único de los dos que expone `upload.onprogress` — `fetch()` no lo
+ * tiene. El resto de la lógica (headers, timeout, parseo de error) es la
+ * misma política que `post()`/`put()`, para que un cambio ahí no diverja del
+ * resto de los helpers (Regla 0 corolario: una política, una función).
+ * @param {string} url - Ruta de la API (relativa al origen).
+ * @param {FormData} formData - Archivo(s) a subir.
+ * @param {(pct:number)=>void} [onProgress] - Callback con el % de subida (0-100).
+ * @param {number} [timeoutMs=90000] - Timeout total, más largo que post()/put()
+ *   porque el archivo puede tardar en subir Y el servidor puede procesarlo
+ *   síncrono después de recibirlo.
+ * @returns {Promise<Object>} Cuerpo JSON de la respuesta.
+ */
+function subirArchivoConProgreso(url, formData, onProgress, timeoutMs = 90000) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', API + url);
+    xhr.setRequestHeader('Authorization', 'Bearer ' + TOKEN);
+    xhr.timeout = timeoutMs;
+    if (onProgress) {
+      xhr.upload.onprogress = (ev) => {
+        if (ev.lengthComputable) onProgress(Math.round((ev.loaded / ev.total) * 100));
+      };
+    }
+    xhr.onload = () => {
+      let body;
+      try { body = JSON.parse(xhr.responseText); } catch (_) { body = {}; }
+      if (xhr.status === 401) { salir(true); reject(new Error('401')); return; }
+      if (xhr.status >= 200 && xhr.status < 300) resolve(body);
+      else reject(new Error(body.error || `Error ${xhr.status}`));
+    };
+    xhr.ontimeout = () => reject(new Error('Tiempo de espera agotado — intenta de nuevo'));
+    xhr.onerror = () => reject(new Error('Error de conexión'));
+    xhr.send(formData);
+  });
 }
 
 /** Authenticate user with email/password, store token, and route to role screen. */
@@ -1108,7 +1224,7 @@ function movimientos(lista) {
 
 /** @param {number} id - Picking task ID to reopen back into the pool. */
 async function reabrirTareaPicking(id) {
-  if (!confirm('¿Reabrir esta tarea al pool de picking? El operario que llegue a esa ubicación la tomará de nuevo.')) return;
+  if (!await _modalConfirmar('¿Reabrir esta tarea al pool de picking? El operario que llegue a esa ubicación la tomará de nuevo.', { titulo: 'Reabrir tarea' })) return;
   try {
     await put(`/api/picking/${id}/reabrir`);
     alerta('Tarea reabierta al pool ✓', 'exito');
@@ -1118,9 +1234,9 @@ async function reabrirTareaPicking(id) {
 
 /** @param {number} id - Picking task ID to cancel (prompts for reason). */
 async function cancelarTareaPicking(id) {
-  const motivo = prompt('Motivo de cancelación (obligatorio):');
-  if (!motivo || !motivo.trim()) return;
-  if (!confirm(`¿Cancelar esta tarea de picking? El pedido del cliente quedará incompleto.`)) return;
+  const motivo = await _modalTexto('Cancelar tarea', 'Motivo de cancelación (obligatorio):');
+  if (!motivo) return;
+  if (!await _modalConfirmar('¿Cancelar esta tarea de picking? El pedido del cliente quedará incompleto.', { titulo: 'Confirmar cancelación', peligro: true })) return;
   try {
     await put(`/api/picking/${id}/cancelar`, { motivo });
     alerta('Tarea cancelada', 'advertencia');
@@ -1858,8 +1974,7 @@ async function barcodesCobertura() {
 /** Baja el CSV de los que no se pueden escanear, para repartirlo en bodega. */
 async function barcodesDescargarFaltantes() {
   try {
-    const r = await fetch(API + '/api/productos/sin-codigo-barras?formato=csv',
-                          { headers: { Authorization: 'Bearer ' + TOKEN } });
+    const r = await _fetchConTimeout('/api/productos/sin-codigo-barras?formato=csv');
     if (!r.ok) { alerta('No se pudo bajar la lista', 'error'); return; }
     const blob = await r.blob();
     const url = URL.createObjectURL(blob);
@@ -2106,6 +2221,12 @@ async function abrirCamara(lectorDivId = 'lector-qr', boxDivId = 'camara-box', o
       const video = target.querySelector('video');
       if (video) {
         video.style.cssText = 'width:100%;height:260px;object-fit:cover;display:block;border-radius:10px;';
+        // Forzado explícito — iOS Safari puede ignorar el atributo si Quagga
+        // solo lo fija vía propiedad JS después de insertar el <video>.
+        video.setAttribute('playsinline', '');
+        video.setAttribute('muted', '');
+        video.playsInline = true;
+        video.muted = true;
       }
       const cvs = target.querySelector('canvas');
       if (cvs) cvs.style.cssText = 'position:absolute;top:0;left:0;width:100%;height:100%;';
@@ -3318,13 +3439,11 @@ async function siesaReintentarTraslado() {
   const id = parseInt(document.getElementById('rec-traslado-id')?.value, 10);
   const out = document.getElementById('rec-traslado-resultado');
   if (!Number.isFinite(id)) { alerta('Poné el ID de la solicitud', 'error'); return; }
-  if (!confirm(`Se va a crear una REQUISICIÓN formal (174646) en Siesa para la ` +
-               `solicitud ${id}.
-
-Esto NO es parte del flujo normal de traslados. ` +
-               `Solo hacelo si el consultor de Siesa lo pidió.
-
-¿Continuar?`)) return;
+  if (!await _modalConfirmar(
+    `Se va a crear una REQUISICIÓN formal (174646) en Siesa para la solicitud ${id}.\n\n` +
+    `Esto NO es parte del flujo normal de traslados. Solo hacelo si el consultor de Siesa lo pidió.`,
+    { titulo: '¿Continuar?', peligro: true }
+  )) return;
   out.innerHTML = '<p style="color:var(--tx3);font-size:12px;">Enviando…</p>';
   try {
     const r = await post(`/api/traslados/${id}/reintentar-siesa`, {});

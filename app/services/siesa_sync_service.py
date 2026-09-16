@@ -6,6 +6,7 @@ Para evitar timeout de gunicorn (30 seg), el sync manual corre en hilo de fondo
 y el endpoint retorna inmediatamente con el estado.
 """
 import logging
+import os
 import threading
 from datetime import datetime, timezone
 from app.extensions import db

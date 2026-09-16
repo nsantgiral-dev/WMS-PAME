@@ -763,9 +763,9 @@ async function preciosRenderComparador() {
           ${(_PRECIOS_PROVEEDORES || []).map(v =>
             `<option value="${v.id}">${v.nombre}</option>`).join('')}
         </select>
-        <input id="precio-valor" type="number" step="0.01" placeholder="precio unitario"
+        <input id="precio-valor" type="number" inputmode="decimal" step="0.01" placeholder="precio unitario"
                style="padding:6px;border-radius:6px;border:1px solid var(--brd);background:var(--bg);color:var(--tx);font-size:12px;">
-        <input id="precio-cant" type="number" placeholder="cantidad cotizada"
+        <input id="precio-cant" type="number" inputmode="numeric" placeholder="cantidad cotizada"
                style="padding:6px;border-radius:6px;border:1px solid var(--brd);background:var(--bg);color:var(--tx);font-size:12px;">
         <input id="precio-quien" placeholder="quién cotizó"
                style="padding:6px;border-radius:6px;border:1px solid var(--brd);background:var(--bg);color:var(--tx);font-size:12px;">

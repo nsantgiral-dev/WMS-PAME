@@ -50,15 +50,15 @@ class TestCrearRequisicionTraslado:
 
     def test_payload_arma_documentos_y_movimientos(self, app, monkeypatch):
         with app.app_context():
-            from app.services.connekta_gateway import connekta
+            from app.services.connekta_gateway import connekta, ConnektaGateway
 
             capturado = {}
 
-            def _fake_post(conector, nombre, payload, url=None, extra_params=None):
+            def _fake_post(self, conector, nombre, payload, url=None, extra_params=None):
                 capturado['payload'] = payload
                 return {'codigo': 0}
 
-            monkeypatch.setattr(connekta, '_post', _fake_post)
+            monkeypatch.setattr(ConnektaGateway, '_post', _fake_post)
             connekta.crear_requisicion_traslado(
                 'NB1', 'NC1', [{'codigo_siesa': 'PAPELSP9218', 'cantidad': 5}], 'ST-20260909-1')
 
@@ -82,15 +82,15 @@ class TestComprosimosDesdeRequisicion:
 
     def test_filtra_items_sin_codigo_o_cantidad_cero(self, app, monkeypatch):
         with app.app_context():
-            from app.services.connekta_gateway import connekta
+            from app.services.connekta_gateway import connekta, ConnektaGateway
 
             capturado = {}
 
-            def _fake_post(conector, nombre, payload):
+            def _fake_post(self, conector, nombre, payload):
                 capturado['payload'] = payload
                 return {'codigo': 0}
 
-            monkeypatch.setattr(connekta, '_post', _fake_post)
+            monkeypatch.setattr(ConnektaGateway, '_post', _fake_post)
             connekta.compromisos_desde_requisicion(
                 42, 'NB1', 'NC1',
                 [
@@ -119,15 +119,15 @@ class TestTransferenciaTransitoSalida:
         """f450_id_bodega_entrada debe ser bodega_destino (validación 62485 del ETS
         exige que coincida con lo que el STS registró)."""
         with app.app_context():
-            from app.services.connekta_gateway import connekta
+            from app.services.connekta_gateway import connekta, ConnektaGateway
 
             capturado = {}
 
-            def _fake_post(conector, nombre, payload, url=None, extra_params=None):
+            def _fake_post(self, conector, nombre, payload, url=None, extra_params=None):
                 capturado['payload'] = payload
                 return {'codigo': 0}
 
-            monkeypatch.setattr(connekta, '_post', _fake_post)
+            monkeypatch.setattr(ConnektaGateway, '_post', _fake_post)
             connekta.transferencia_transito_salida(
                 'NB1', 'TRA1', [{'codigo_siesa': 'PAPELSP9218', 'cantidad': 5}], 'ST-1',
                 bodega_destino='NC1')
@@ -139,15 +139,15 @@ class TestTransferenciaTransitoSalida:
     def test_desc_varible_es_string_vacio_no_none(self, app, monkeypatch):
         """DEBE ser '' — None omite el campo y Siesa rechaza por tamaño de registro."""
         with app.app_context():
-            from app.services.connekta_gateway import connekta
+            from app.services.connekta_gateway import connekta, ConnektaGateway
 
             capturado = {}
 
-            def _fake_post(conector, nombre, payload, url=None, extra_params=None):
+            def _fake_post(self, conector, nombre, payload, url=None, extra_params=None):
                 capturado['payload'] = payload
                 return {'codigo': 0}
 
-            monkeypatch.setattr(connekta, '_post', _fake_post)
+            monkeypatch.setattr(ConnektaGateway, '_post', _fake_post)
             connekta.transferencia_transito_salida(
                 'NB1', 'TRA1', [{'codigo_siesa': 'PAPELSP9218', 'cantidad': 5}], 'ST-1')
 
@@ -169,15 +169,15 @@ class TestTransferenciaTransitoEntrada:
         """Regresión del bug del commit 1344c7a: f450_id_bodega_salida y
         f470_id_bodega deben ser bodega_origen, NUNCA bodega_transito."""
         with app.app_context():
-            from app.services.connekta_gateway import connekta
+            from app.services.connekta_gateway import connekta, ConnektaGateway
 
             capturado = {}
 
-            def _fake_post(conector, nombre, payload, url=None, extra_params=None):
+            def _fake_post(self, conector, nombre, payload, url=None, extra_params=None):
                 capturado['payload'] = payload
                 return {'codigo': 0}
 
-            monkeypatch.setattr(connekta, '_post', _fake_post)
+            monkeypatch.setattr(ConnektaGateway, '_post', _fake_post)
             connekta.transferencia_transito_entrada(
                 'TRA1', 'NC1', [{'codigo_siesa': 'PAPELSP9218', 'cantidad': 5}], 'ST-1',
                 consec_salida=53, bodega_origen='NB1')
@@ -299,15 +299,15 @@ class TestTransferenciaDirecta:
     def test_payload_sin_docto_alterno_ni_referencia_a_base(self, app, monkeypatch):
         """spec 173066 no tiene f450_docto_alterno/f350_id_co_base — no deben aparecer."""
         with app.app_context():
-            from app.services.connekta_gateway import connekta
+            from app.services.connekta_gateway import connekta, ConnektaGateway
 
             capturado = {}
 
-            def _fake_post(conector, nombre, payload):
+            def _fake_post(self, conector, nombre, payload):
                 capturado['payload'] = payload
                 return {'codigo': 0}
 
-            monkeypatch.setattr(connekta, '_post', _fake_post)
+            monkeypatch.setattr(ConnektaGateway, '_post', _fake_post)
             connekta.transferencia_directa(
                 'NB1', 'NC1', [{'codigo_siesa': 'PAPELSP9218', 'cantidad': 5}], 'ST-1')
 
@@ -329,15 +329,15 @@ class TestTransferenciaDesdeRequisicion:
 
     def test_payload_referencia_la_rit_por_consec(self, app, monkeypatch):
         with app.app_context():
-            from app.services.connekta_gateway import connekta
+            from app.services.connekta_gateway import connekta, ConnektaGateway
 
             capturado = {}
 
-            def _fake_post(conector, nombre, payload):
+            def _fake_post(self, conector, nombre, payload):
                 capturado['payload'] = payload
                 return {'codigo': 0}
 
-            monkeypatch.setattr(connekta, '_post', _fake_post)
+            monkeypatch.setattr(ConnektaGateway, '_post', _fake_post)
             connekta.transferencia_desde_requisicion(42)
 
             doc = capturado['payload']['Documentos'][0]

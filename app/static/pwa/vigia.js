@@ -209,6 +209,12 @@ function _vigiaRenderPanel(el, data, salud) {
         Cargar TXT
       </button>
     </div>
+    <div id="vigia-txt-progreso-wrap" style="display:none;margin-top:8px;">
+      <div style="height:6px;background:var(--bg);border-radius:3px;overflow:hidden;">
+        <div id="vigia-txt-progreso-barra" style="height:100%;width:0%;background:var(--pm);transition:width 0.15s;"></div>
+      </div>
+      <div id="vigia-txt-progreso-texto" style="font-size:11px;color:var(--tx3);margin-top:4px;">Subiendo…</div>
+    </div>
     <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:10px;">
       <button onclick="vigiaAlimentarPicking()"
         style="padding:8px 16px;background:transparent;border:1px solid var(--pm);border-radius:8px;color:var(--pm);font-size:12px;font-weight:700;cursor:pointer;">
@@ -260,10 +266,7 @@ async function vigiaSeleccionarSerie(nombre) {
 
   // Ejecutar CUSUM y graficar
   try {
-    const r = await (await fetch(API + '/api/vigia/ejecutar/' + nombre, {
-      method: 'POST',
-      headers: { Authorization: 'Bearer ' + TOKEN },
-    })).json();
+    const r = await post('/api/vigia/ejecutar/' + nombre, {});
 
     if (r.error) {
       const stats = document.getElementById('vigia-chart-stats');
@@ -455,11 +458,8 @@ async function vigiaConfirmarCierre() {
   }
 
   try {
-    const r = await (await fetch(API + '/api/vigia/alarmas/' + _VIGIA_ALARMA_CERRAR.id + '/cerrar', {
-      method: 'POST',
-      headers: { Authorization: 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ causa, responsable_id: responsableId ? parseInt(responsableId) : null }),
-    })).json();
+    const r = await post('/api/vigia/alarmas/' + _VIGIA_ALARMA_CERRAR.id + '/cerrar',
+      { causa, responsable_id: responsableId ? parseInt(responsableId) : null });
 
     if (r.error) {
       alerta(r.error, 'error');
@@ -485,14 +485,21 @@ async function vigiaCargarTxt() {
   const formData = new FormData();
   formData.append('archivo', fileInput.files[0]);
 
+  const wrap  = document.getElementById('vigia-txt-progreso-wrap');
+  const barra = document.getElementById('vigia-txt-progreso-barra');
+  const texto = document.getElementById('vigia-txt-progreso-texto');
+  if (wrap) wrap.style.display = 'block';
+  if (barra) barra.style.width = '0%';
+  if (texto) texto.textContent = 'Subiendo…';
+
   try {
-    alerta('Cargando archivo...', 'advertencia');
-    const r = await fetch(API + '/api/vigia/cargar-txt', {
-      method: 'POST',
-      headers: { Authorization: 'Bearer ' + TOKEN },
-      body: formData,
+    // El transporte (XHR + progreso) vive en subirArchivoConProgreso() (app.js) —
+    // acá solo queda pintar la barra y decidir qué hacer con el resultado.
+    const d = await subirArchivoConProgreso('/api/vigia/cargar-txt', formData, (pct) => {
+      if (barra) barra.style.width = pct + '%';
+      if (texto) texto.textContent = pct < 100 ? `Subiendo… ${pct}%` : 'Procesando en el servidor…';
     });
-    const d = await r.json();
+
     if (d.error) {
       alerta(d.error, 'error');
       return;
@@ -501,7 +508,9 @@ async function vigiaCargarTxt() {
     fileInput.value = '';
     cargarVigia();
   } catch (e) {
-    alerta('Error: ' + (e.message || e), 'error');
+    alerta(e.message || 'Error al cargar el archivo', 'error');
+  } finally {
+    if (wrap) wrap.style.display = 'none';
   }
 }
 
@@ -534,10 +543,8 @@ async function vigiaAlimentarPicking() {
  * sentido después de ver que coincide.
  */
 async function vigiaCompararIngesta() {
-  const semana = prompt(
-    'Lunes de una semana YA cargada por el TXT (YYYY-MM-DD).\n\n' +
-    'Se calcula esa semana con la fuente viva y se compara con la histórica.\n' +
-    'No se escribe nada.');
+  const semana = await _modalTexto('Verificar ingesta',
+    'Lunes de una semana YA cargada por el TXT (YYYY-MM-DD). Se calcula esa semana con la fuente viva y se compara con la histórica. No se escribe nada.');
   if (!semana) return;
 
   const el = document.getElementById('vigia-contenido') || document.body;

@@ -451,7 +451,7 @@ function _htmlGrupoRuta(grupo, gi, totalGrupos, rutaId) {
                 <div style="font-size:12px;color:#777;">${b.tipo} · pieza ${b.numero}/${b.total}</div>
               </div>
               <div style="display:flex;align-items:center;gap:8px;">
-                ${!conf ? `<button onclick="muelleDesasignar(${b.id})" title="Quitar de la ruta" style="background:none;border:none;color:#444;font-size:18px;cursor:pointer;line-height:1;padding:4px;">×</button>` : ''}
+                ${!conf ? `<button onclick="conBotonOcupado(event, () => muelleDesasignar(${b.id}))" title="Quitar de la ruta" style="background:none;border:none;color:#444;font-size:18px;cursor:pointer;line-height:1;padding:4px;">×</button>` : ''}
                 <span style="background:${conf ? '#14532d' : '#451a03'};color:${conf ? '#4ade80' : '#f59e0b'};font-size:11px;padding:3px 10px;border-radius:20px;font-weight:700;white-space:nowrap;">
                   ${conf ? '✓ Cargado' : '⏳ Pendiente'}
                 </span>
@@ -1175,11 +1175,11 @@ async function cargarListaMaestras() {
               style="padding:5px 10px;background:#1a1a2a;border:1px solid #2d1b69;color:#a78bfa;border-radius:6px;font-size:11px;font-weight:700;cursor:pointer;">
               ✏ Editar
             </button>
-            <button onclick="maestraToggle(${m.id},${!m.activa})"
+            <button onclick="conBotonOcupado(event, () => maestraToggle(${m.id},${!m.activa}))"
               style="padding:5px 10px;background:#1a1a1a;border:1px solid #333;color:#aaa;border-radius:6px;font-size:11px;cursor:pointer;">
               ${m.activa ? 'Desactivar' : 'Activar'}
             </button>
-            <button onclick="maestraEliminar(${m.id},${JSON.stringify(m.nombre)})"
+            <button onclick="conBotonOcupado(event, () => maestraEliminar(${m.id},${JSON.stringify(m.nombre)}))"
               style="padding:5px 10px;background:#1a0000;border:1px solid #5c1a1a;color:#f87171;border-radius:6px;font-size:11px;cursor:pointer;">
               🗑
             </button>
@@ -1490,7 +1490,7 @@ async function cargarListaVehiculos() {
           <span class="badge ${v.activo ? 'badge-green' : 'badge-red'}">
             ${v.activo ? 'ACTIVO' : 'INACTIVO'}</span>
         </div>
-        <button class="btn-flota" onclick="vehiculoToggle(${v.id}, ${!v.activo})">
+        <button class="btn-flota" onclick="conBotonOcupado(event, () => vehiculoToggle(${v.id}, ${!v.activo}))">
           ${v.activo ? 'Desactivar' : 'Activar'}</button>
         ${v.activo ? `<button class="btn-flota" onclick="verExpedienteVehiculo('${v.placa}')">
           Ver expediente →</button>` : ''}
@@ -1604,11 +1604,11 @@ async function cargarListaConductores() {
             : '<span style="background:#3f1515;color:#f87171;padding:3px 8px;border-radius:8px;font-size:10px;font-weight:700;height:fit-content;">INACTIVO</span>'}
         </div>
         <div style="display:flex;gap:6px;">
-          <button onclick="conductorToggle(${c.id}, ${!c.activo})"
+          <button onclick="conBotonOcupado(event, () => conductorToggle(${c.id}, ${!c.activo}))"
             style="flex:1;padding:8px;background:#1a1a1a;border:1px solid #333;color:#aaa;border-radius:8px;font-size:12px;cursor:pointer;">
             ${c.activo ? 'Desactivar' : 'Activar'}
           </button>
-          ${c.usuario_email ? '' : `<button onclick="conductorCrearCuenta(${c.id}, '${c.nombre.replace(/'/g, "\\'")}')"
+          ${c.usuario_email ? '' : `<button onclick="conBotonOcupado(event, () => conductorCrearCuenta(${c.id}, '${c.nombre.replace(/'/g, "\\'")}'))"
             style="flex:1;padding:8px;background:#1e3a5f;border:1px solid #2563eb;color:#93c5fd;border-radius:8px;font-size:12px;cursor:pointer;">
             Crear cuenta PWA
           </button>`}
@@ -1617,57 +1617,6 @@ async function cargarListaConductores() {
   } catch (e) {
     el.innerHTML = '<div style="color:#ef4444;text-align:center;">Error cargando conductores</div>';
   }
-}
-
-/** Muestra el formulario de registro de conductor y carga usuarios disponibles. */
-async function conductoresMostrarForm() {
-  document.getElementById('conductores-form').style.display = 'block';
-  document.getElementById('conductores-form-error').textContent = '';
-  // Cargar usuarios con rol conductor para el selector
-  try {
-    const d = await get('/api/rutas/usuarios-conductores');
-    const sel = document.getElementById('cond-form-usuario');
-    if (sel) {
-      sel.innerHTML = '<option value="">Sin cuenta (solo flota)</option>' +
-        (d.usuarios || []).map(u => `<option value="${u.id}">${u.nombre} (${u.email})</option>`).join('');
-    }
-  } catch (_) {}
-}
-
-/** Oculta el formulario de registro de conductor. */
-function conductoresCancelarForm() {
-  document.getElementById('conductores-form').style.display = 'none';
-}
-
-/** Valida y crea un nuevo conductor en el servidor. */
-async function conductoresCrear() {
-  const errorEl  = document.getElementById('conductores-form-error');
-  const nombre     = document.getElementById('cond-form-nombre')?.value.trim();
-  const cedula     = document.getElementById('cond-form-cedula')?.value.trim();
-  const telefono   = document.getElementById('cond-form-telefono')?.value.trim();
-  const usuarioId  = document.getElementById('cond-form-usuario')?.value || null;
-  errorEl.textContent = '';
-
-  if (!nombre) { errorEl.textContent = 'El nombre es requerido'; return; }
-  if (!cedula) { errorEl.textContent = 'La cédula es requerida'; return; }
-
-  try {
-    const r = await fetch(API + '/api/rutas/conductores', {
-      method: 'POST',
-      headers: { Authorization: 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ nombre, cedula, telefono: telefono || null, usuario_id: usuarioId ? parseInt(usuarioId) : null }),
-    });
-    const d = await r.json();
-    if (r.ok) {
-      conductoresCancelarForm();
-      ['cond-form-nombre','cond-form-cedula','cond-form-telefono'].forEach(id => {
-        const el = document.getElementById(id); if (el) el.value = '';
-      });
-      await cargarListaConductores();
-    } else {
-      errorEl.textContent = d.error || 'Error al guardar conductor';
-    }
-  } catch (e) { errorEl.textContent = 'Error de conexión'; }
 }
 
 /**
@@ -1925,7 +1874,7 @@ function _condRenderParadas(d) {
   if (todasGestionadas) {
     html += `
       <div style="position:sticky;bottom:16px;margin-top:12px;">
-        <button onclick="condCerrarRuta()"
+        <button onclick="conBotonOcupado(event, condCerrarRuta)"
           style="width:100%;padding:20px;background:#16a34a;color:#fff;border:none;border-radius:14px;font-size:18px;font-weight:800;cursor:pointer;">
           ✅ Cerrar Ruta — Todo Gestionado
         </button>
@@ -3093,9 +3042,9 @@ function cerrarModalPlanilla() {
  * de rutas del conductor se queda donde estaba.
  */
 async function conductorCrearCuenta(id, nombre) {
-  const email = prompt(`Correo para la cuenta de ${nombre}:`);
+  const email = await _modalTexto('Crear cuenta', `Correo para la cuenta de ${nombre}:`);
   if (!email) return;
-  const password = prompt('Contraseña inicial (el conductor la usa para entrar):');
+  const password = await _modalTexto('Crear cuenta', 'Contraseña inicial (el conductor la usa para entrar):');
   if (!password) return;
   try {
     const r = await fetch(API + '/api/rutas/conductores/' + id + '/cuenta', {

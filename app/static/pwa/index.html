@@ -992,7 +992,7 @@
       <div class="header-logo"><img src="/static/pwa/logo-white.png" alt="Papelería Medellín WMS"></div>
       <div style="display:flex;align-items:center;gap:12px;">
         <span id="conexion-status" style="font-size:13px;color:#22c55e;">● Online</span>
-        <button onclick="_refreshBtn(event, pedirTarea)" style="background:none;border:none;color:#fff;font-size:20px;cursor:pointer;">↻</button>
+        <button onclick="_refreshBtn(event, pedirTarea)" style="background:none;border:none;color:#fff;font-size:20px;cursor:pointer;padding:10px;min-width:44px;min-height:44px;">↻</button>
       </div>
     </div>
     <div class="operario-bar">
@@ -1489,7 +1489,7 @@
           <div id="rutas-form-error" style="color:#ef4444;font-size:12px;min-height:18px;margin-bottom:10px;"></div>
           <div style="display:flex;gap:8px;">
             <button onclick="rutasCancelarForm()" style="flex:1;padding:13px;background:#1a1a1a;border:1px solid #333;color:#fff;border-radius:10px;font-size:14px;cursor:pointer;">Cancelar</button>
-            <button onclick="rutasProgramar()" style="flex:2;padding:13px;background:var(--pm);color:#fff;border:none;border-radius:10px;font-size:14px;font-weight:700;cursor:pointer;">Programar viaje →</button>
+            <button onclick="conBotonOcupado(event, rutasProgramar)" style="flex:2;padding:13px;background:var(--pm);color:#fff;border:none;border-radius:10px;font-size:14px;font-weight:700;cursor:pointer;">Programar viaje →</button>
           </div>
         </div>
 
@@ -1629,7 +1629,7 @@
           <div id="vehiculos-form-error" style="color:#ef4444;font-size:12px;min-height:18px;margin-bottom:10px;"></div>
           <div style="display:flex;gap:8px;">
             <button onclick="vehiculosCancelarForm()" style="flex:1;padding:13px;background:#1a1a1a;border:1px solid #333;color:#fff;border-radius:10px;font-size:14px;cursor:pointer;">Cancelar</button>
-            <button onclick="vehiculosCrear()" style="flex:2;padding:13px;background:var(--pm);color:#fff;border:none;border-radius:10px;font-size:14px;font-weight:700;cursor:pointer;">Guardar →</button>
+            <button onclick="conBotonOcupado(event, vehiculosCrear)" style="flex:2;padding:13px;background:var(--pm);color:#fff;border:none;border-radius:10px;font-size:14px;font-weight:700;cursor:pointer;">Guardar →</button>
           </div>
         </div>
 
@@ -2670,7 +2670,7 @@
       <div id="tienda-carrito-header" style="display:none;background:var(--bg-s);border:1px solid var(--pm-border);border-radius:14px;padding:14px;margin-bottom:12px;">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
           <div style="font-size:14px;font-weight:700;">Carrito</div>
-          <button onclick="tiendaEnviarSolicitud()"
+          <button onclick="tiendaEnviarSolicitud(event)"
             style="background:var(--pm);color:#fff;border:none;padding:8px 16px;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">
             Enviar Traslado →
           </button>

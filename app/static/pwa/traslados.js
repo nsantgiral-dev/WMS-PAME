@@ -236,6 +236,10 @@ function _renderTrasladoCard(s) {
 }
 
 // ── Admin Pedir — solicitar traslado hacia NB1 ──────────────────
+// _AP_STOCK guarda solo la PÁGINA actual — el catálogo completo de una
+// bodega (~4000 SKU, ver CLAUDE.md) no se manda entero al celular. Filtro y
+// paginación viven en el servidor (`/api/traslados/stock-disponible`), sobre
+// el mismo cache de Siesa que ya existía; acá solo se pide la página.
 let _AP_STOCK = [];
 let _AP_STOCK_ESTADO = 'idle';
 let _AP_CARRITO = [];
@@ -243,6 +247,9 @@ let _AP_ORIGEN = null;
 let _AP_FILTRO = '';
 let _AP_PAGINA = 1;
 const _AP_POR_PAGINA = 30;
+let _AP_TOTAL_FILTRADO = 0;
+let _AP_TOTAL_PAGINAS = 1;
+let _AP_FILTRO_TIMER = null;
 let _AP_INICIADO = false;
 
 /** Initialize the "Pedir" panel: populate origin selector and load stock. */
@@ -273,17 +280,30 @@ function adminPedirCambiarOrigen(sel) {
   _AP_CARRITO = [];
   adminPedirActualizarCarrito();
   _AP_STOCK = [];
+  _AP_FILTRO = '';
+  _AP_PAGINA = 1;
+  const buscar = document.getElementById('admin-pedir-buscar');
+  if (buscar) buscar.value = '';
   _AP_STOCK_ESTADO = 'cargando';
   adminPedirCargarStock();
 }
 
-/** Fetch available stock from the selected origin bodega. */
+/** Fetch the current page of available stock from the selected origin bodega (filtro/paginación server-side). */
 async function adminPedirCargarStock() {
   _AP_STOCK_ESTADO = 'cargando';
   adminPedirRenderStock();
   try {
-    const d = await get(`/api/traslados/stock-disponible?bodega=${_AP_ORIGEN?.id || 'NS1'}`);
+    const qs = new URLSearchParams({
+      bodega: _AP_ORIGEN?.id || 'NS1',
+      page: _AP_PAGINA,
+      per_page: _AP_POR_PAGINA,
+    });
+    if (_AP_FILTRO) qs.set('q', _AP_FILTRO);
+    const d = await get(`/api/traslados/stock-disponible?${qs}`);
     _AP_STOCK = (d.items || []).filter(i => i.producto_id && i.disponible > 0);
+    _AP_TOTAL_FILTRADO = d.total_filtrado ?? _AP_STOCK.length;
+    _AP_TOTAL_PAGINAS = d.total_paginas || 1;
+    _AP_PAGINA = d.pagina || _AP_PAGINA;
     _AP_STOCK_ESTADO = 'listo';
   } catch (e) {
     _AP_STOCK_ESTADO = 'error';
@@ -306,20 +326,23 @@ async function adminPedirActualizarStock() {
   finally { if (btn) { btn.disabled = false; btn.style.opacity = '1'; btn.textContent = '↻'; } }
 }
 
-/** Apply text filter from the search input to the stock list. */
+/** Apply text filter from the search input — debounced: el filtro corre en el servidor, no en el celular. */
 function adminPedirFiltrarStock() {
-  _AP_FILTRO = (document.getElementById('admin-pedir-buscar')?.value || '').toLowerCase();
-  _AP_PAGINA = 1;
-  adminPedirRenderStock();
+  clearTimeout(_AP_FILTRO_TIMER);
+  _AP_FILTRO_TIMER = setTimeout(() => {
+    _AP_FILTRO = (document.getElementById('admin-pedir-buscar')?.value || '').trim().toLowerCase();
+    _AP_PAGINA = 1;
+    adminPedirCargarStock();
+  }, 350);
 }
 
 /**
- * Navigate to a specific page in the stock list.
+ * Navigate to a specific page in the stock list (pide esa página al servidor).
  * @param {number} p - Page number to display.
  */
-function adminPedirIrPagina(p) {
+async function adminPedirIrPagina(p) {
   _AP_PAGINA = p;
-  adminPedirRenderStock();
+  await adminPedirCargarStock();
   document.getElementById('admin-pedir-stock-lista')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
@@ -337,35 +360,26 @@ function adminPedirRenderStock() {
     return;
   }
   if (!_AP_STOCK.length) {
-    el.innerHTML = '<div style="text-align:center;padding:30px;color:#555;">Sin productos disponibles</div>';
+    el.innerHTML = `<div style="text-align:center;padding:30px;color:#555;">${_AP_FILTRO ? 'Sin resultados' : 'Sin productos disponibles'}</div>`;
     return;
   }
-  const filtrado = _AP_FILTRO
-    ? _AP_STOCK.filter(i => (i.nombre||'').toLowerCase().includes(_AP_FILTRO) || (i.codigo_siesa||'').toLowerCase().includes(_AP_FILTRO))
-    : _AP_STOCK;
-  if (!filtrado.length) {
-    el.innerHTML = '<div style="text-align:center;padding:20px;color:#555;">Sin resultados</div>';
-    return;
-  }
-  const totalPags = Math.ceil(filtrado.length / _AP_POR_PAGINA);
-  _AP_PAGINA = Math.max(1, Math.min(_AP_PAGINA, totalPags));
-  const inicio = (_AP_PAGINA - 1) * _AP_POR_PAGINA;
-  const pagina = filtrado.slice(inicio, inicio + _AP_POR_PAGINA);
-
+  // La página ya viene recortada y filtrada del servidor (stock-disponible) —
+  // acá solo se pinta lo que llegó, sin volver a filtrar/cortar en el celular.
+  const totalPags = _AP_TOTAL_PAGINAS;
   const rango = 2, desde = Math.max(1, _AP_PAGINA - rango), hasta = Math.min(totalPags, _AP_PAGINA + rango);
   const nums = [];
   if (desde > 1) nums.push('<span style="color:#555;">…</span>');
   for (let p = desde; p <= hasta; p++) {
-    nums.push(`<button onclick="adminPedirIrPagina(${p})" style="min-width:32px;padding:6px 8px;background:${p===_AP_PAGINA?'#1E8395':'#222'};color:#fff;border:none;border-radius:6px;font-size:12px;font-weight:${p===_AP_PAGINA?'700':'400'};cursor:pointer;">${p}</button>`);
+    nums.push(`<button onclick="adminPedirIrPagina(${p})" style="min-width:44px;min-height:44px;padding:6px 8px;background:${p===_AP_PAGINA?'#1E8395':'#222'};color:#fff;border:none;border-radius:6px;font-size:12px;font-weight:${p===_AP_PAGINA?'700':'400'};cursor:pointer;">${p}</button>`);
   }
   if (hasta < totalPags) nums.push('<span style="color:#555;">…</span>');
   const nav = totalPags > 1 ? `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:10px 0 14px;flex-wrap:wrap;">
     <button onclick="adminPedirIrPagina(${_AP_PAGINA-1})" ${_AP_PAGINA===1?'disabled':''} style="padding:7px 14px;background:#222;color:${_AP_PAGINA===1?'#444':'#fff'};border:none;border-radius:8px;font-size:13px;cursor:pointer;">← Ant</button>
     <div style="display:flex;gap:4px;flex-wrap:wrap;justify-content:center;">${nums.join('')}</div>
     <button onclick="adminPedirIrPagina(${_AP_PAGINA+1})" ${_AP_PAGINA===totalPags?'disabled':''} style="padding:7px 14px;background:#222;color:${_AP_PAGINA===totalPags?'#444':'#fff'};border:none;border-radius:8px;font-size:13px;cursor:pointer;">Sig →</button>
-  </div><div style="text-align:center;font-size:11px;color:#555;margin-bottom:10px;">${filtrado.length} productos · pág ${_AP_PAGINA}/${totalPags}</div>` : '';
+  </div><div style="text-align:center;font-size:11px;color:#555;margin-bottom:10px;">${_AP_TOTAL_FILTRADO} productos · pág ${_AP_PAGINA}/${totalPags}</div>` : '';
 
-  el.innerHTML = nav + pagina.map(item => {
+  el.innerHTML = nav + _AP_STOCK.map(item => {
     const enCarrito = _AP_CARRITO.find(c => c.codigo_siesa === item.codigo_siesa);
     const qid = 'ap-qty-' + (item.codigo_siesa || '').replace(/[^a-zA-Z0-9]/g, '-');
     const nombreEsc = (item.nombre || '').replace(/\\/g,'\\\\').replace(/'/g,"\\'");
@@ -432,7 +446,7 @@ function adminPedirQuitarCarrito(codigoSiesa) {
 async function adminPedirEnviarSolicitud() {
   if (!_AP_CARRITO.length) { alerta('El carrito está vacío', 'error'); return; }
   const origen = _AP_ORIGEN?.nombre || _AP_ORIGEN?.id || 'la bodega';
-  if (!confirm(`¿Solicitar ${_AP_CARRITO.length} producto${_AP_CARRITO.length!==1?'s':''} desde ${origen} para Bodega Principal (NB1)?`)) return;
+  if (!await _modalConfirmar(`¿Solicitar ${_AP_CARRITO.length} producto${_AP_CARRITO.length!==1?'s':''} desde ${origen} para Bodega Principal (NB1)?`, { titulo: 'Solicitar traslado' })) return;
   const items = _AP_CARRITO.filter(c => c.producto_id).map(c => ({
     producto_id: c.producto_id,
     cantidad_solicitada: c.cantidad,
@@ -514,7 +528,7 @@ function _renderTrasladoOperario(t) {
  * @param {number} id - Traslado solicitud ID.
  */
 async function trasConfirmarRecogida(id) {
-  if (!confirm('¿Confirmar recogida completa? El traslado pasará a PREPARADO y podrás despacharlo.')) return;
+  if (!await _modalConfirmar('¿Confirmar recogida completa? El traslado pasará a PREPARADO y podrás despacharlo.', { titulo: 'Confirmar recogida' })) return;
   try {
     await post(`/api/traslados/${id}/confirmar-picking`, {});
     alerta('Recogida confirmada — listo para despachar', 'exito');
@@ -527,7 +541,7 @@ async function trasConfirmarRecogida(id) {
  * @param {number} id - Traslado solicitud ID.
  */
 async function trasDespacharDirecto(id) {
-  if (!confirm('¿Despachar directamente sin confirmar picking? Se usarán las cantidades aprobadas como enviadas.')) return;
+  if (!await _modalConfirmar('¿Despachar directamente sin confirmar picking? Se usarán las cantidades aprobadas como enviadas.', { titulo: 'Despacho directo' })) return;
   try {
     await post(`/api/traslados/${id}/despachar`, {});
     alerta('Despachado — mercancía en tránsito', 'exito');
@@ -661,7 +675,7 @@ async function trasAprobar(id) {
  * @param {number} id - Traslado solicitud ID.
  */
 async function trasRechazar(id) {
-  const motivo = prompt('Motivo del rechazo:');
+  const motivo = await _modalTexto('Rechazar solicitud', 'Motivo del rechazo:');
   if (!motivo) return;
   try {
     const r = await fetch(API + `/api/traslados/${id}/rechazar`, {
@@ -719,7 +733,7 @@ async function trasVerLPNs(id) {
  * @param {number} id - Traslado solicitud ID.
  */
 async function trasDespachar(id) {
-  if (!confirm('¿Confirmar despacho? El operario ya preparó los ítems. Se notificará a Siesa (salida de bodega).')) return;
+  if (!await _modalConfirmar('¿Confirmar despacho? El operario ya preparó los ítems. Se notificará a Siesa (salida de bodega).', { titulo: 'Confirmar despacho' })) return;
   try {
     const r = await fetch(API + `/api/traslados/${id}/despachar`, {
       method: 'POST',
@@ -736,7 +750,7 @@ async function trasDespachar(id) {
  * @param {number} id - Traslado solicitud ID.
  */
 async function trasConfirmarRecepcion(id) {
-  if (!confirm('¿Confirmar recepción? Se notificará a Siesa (entrada en tienda).')) return;
+  if (!await _modalConfirmar('¿Confirmar recepción? Se notificará a Siesa (entrada en tienda).', { titulo: 'Confirmar recepción' })) return;
   try {
     const r = await fetch(API + `/api/traslados/${id}/recibir`, {
       method: 'POST',
@@ -754,9 +768,9 @@ async function trasConfirmarRecepcion(id) {
  * @param {number} id - Traslado solicitud ID.
  */
 async function trasRevertir(id) {
-  const motivo = prompt('Motivo de la reversión (opcional):\nEj: "Camión regresó — mercancía no entregada"', '');
+  const motivo = await _modalTexto('Revertir traslado', 'Motivo de la reversión (opcional): Ej. "Camión regresó — mercancía no entregada"', { obligatorio: false });
   if (motivo === null) return;
-  if (!confirm(`¿Revertir este traslado?\n\nLas unidades volverán al inventario del almacén.\n⚠ Deberás anular manualmente el STS en Siesa.`)) return;
+  if (!await _modalConfirmar('¿Revertir este traslado? Las unidades volverán al inventario del almacén.\n⚠ Deberás anular manualmente el STS en Siesa.', { titulo: 'Revertir traslado', peligro: true })) return;
   try {
     const r = await fetch(API + `/api/traslados/${id}/revertir`, {
       method: 'POST',
@@ -774,14 +788,15 @@ async function trasRevertir(id) {
  * @param {number} id - Traslado solicitud ID.
  */
 async function trasReintentarRecepcionSiesa(id) {
-  if (!confirm(
-    '¿Reintentar el registro de entrada en Siesa (ETS 173079)?\n\n'
-    + 'El sistema ya verifica automáticamente en Siesa si el documento existe '
+  if (!await _modalConfirmar(
+    'El sistema ya verifica automáticamente en Siesa si el documento existe '
     + 'antes de reenviar. Solo llega hasta acá si esa verificación no encontró '
     + 'nada — pero si el documento SÍ existía y Siesa no devolvió un '
     + 'consecutivo legible, reintentar deja DOS ENTRADAS DUPLICADAS y el '
     + 'inventario de la bodega destino sube el doble. Anularla es un ajuste a '
-    + 'mano en Siesa.')) return;
+    + 'mano en Siesa.',
+    { titulo: '¿Reintentar entrada en Siesa (ETS 173079)?', peligro: true }
+  )) return;
   try {
     const r = await fetch(API + `/api/traslados/${id}/reintentar-recepcion`, {
       method: 'POST',
@@ -799,14 +814,15 @@ async function trasReintentarRecepcionSiesa(id) {
  * @param {number} id - Traslado solicitud ID.
  */
 async function trasReintentarDespachoSiesa(id) {
-  if (!confirm(
-    '¿Reintentar la salida en tránsito en Siesa (STS 173076/174930)?\n\n'
-    + 'El sistema ya verifica automáticamente en Siesa si el documento existe '
+  if (!await _modalConfirmar(
+    'El sistema ya verifica automáticamente en Siesa si el documento existe '
     + 'antes de reenviar. Solo llega hasta acá si esa verificación no encontró '
     + 'nada — pero si el documento SÍ existía y Siesa no devolvió un '
     + 'consecutivo legible, reintentar deja DOS SALIDAS DUPLICADAS y la '
     + 'bodega origen descarga el doble, puede quedar en negativo.\n\n'
-    + 'No mueve el estado del traslado.')) return;
+    + 'No mueve el estado del traslado.',
+    { titulo: '¿Reintentar salida en tránsito (STS 173076/174930)?', peligro: true }
+  )) return;
   try {
     const r = await fetch(API + `/api/traslados/${id}/reintentar-despacho`, {
       method: 'POST',
@@ -831,48 +847,101 @@ async function trasReintentarDespachoSiesa(id) {
 const _REQ_ESTADOS = ['ENVIADA', 'EN_PICKING', 'EN_PACKING', 'PREPARADO', 'EN_TRANSITO', 'ENTREGADA'];
 const REQ_TAB_LABELS = ['PENDIENTE APROBAR', 'EN PICKING', 'EN EMPAQUE', 'LISTO DESPACHAR', 'EN TRÁNSITO', 'RECIBIDO'];
 let REQ_TAB_ACTIVO = 0;
-let REQ_GRUPOS_HTML = ['', '', '', '', '', ''];
 let REQ_GRUPOS_COUNT = [0, 0, 0, 0, 0, 0];
+// Antes se pedían las 6 listas completas en paralelo para pintar 6 badges y
+// una sola pestaña visible — el resto del payload se descartaba sin usarlo.
+// Ahora los badges salen de un GROUP BY liviano (`/conteos-por-estado`) y solo
+// se trae la lista de la pestaña activa, paginada de verdad — antes, más de
+// 30 solicitudes en un estado quedaban invisibles sin aviso (el límite del
+// backend ya existía, solo faltaba el control de página en la pantalla).
+let REQ_PAGINA = 1;
+let REQ_TOTAL_PAGINAS = 1;
+let REQ_CARGANDO = false;
 
-/** Fetch and render transfer requisitions (RIT) grouped by status. */
+/** Fetch and render transfer requisitions (RIT): conteos de las 6 pestañas + la página activa. */
 async function cargarRequisiciones() {
   const lista = document.getElementById('req-lista');
   if (!lista) return;
+  if (REQ_CARGANDO) return;
+  REQ_CARGANDO = true;
   lista.innerHTML = '<div style="text-align:center;padding:20px;color:var(--tx3);">Cargando...</div>';
   try {
-    const promesas = _REQ_ESTADOS.map(e => get(`/api/traslados/?estado=${e}`).catch(() => ({ solicitudes: [] })));
-    const resultados = await Promise.all(promesas);
-    REQ_GRUPOS_HTML = resultados.map((r, i) => {
-      // ENTREGADA ya está resuelta — solo mostramos las últimas para confirmar recepción sin saturar la cola
-      const visibles = _REQ_ESTADOS[i] === 'ENTREGADA' ? (r.solicitudes || []).slice(0, 5) : (r.solicitudes || []);
-      REQ_GRUPOS_COUNT[i] = visibles.length;
-      return visibles.map(s => _renderRequisicionCard(s)).join('');
-    });
-    renderReqTabsYLista();
+    const [conteos] = await Promise.all([
+      get('/api/traslados/conteos-por-estado').catch(() => ({ conteos: {} })),
+      _reqCargarPaginaActiva(),
+    ]);
+    REQ_GRUPOS_COUNT = _REQ_ESTADOS.map(e => conteos.conteos?.[e] || 0);
+    _reqRenderTabs();
+  } catch (e) {
+    lista.innerHTML = '<div style="text-align:center;padding:20px;color:#ef4444;">Error cargando requisiciones</div>';
+  } finally {
+    REQ_CARGANDO = false;
+  }
+}
+
+/** Fetch solo la página actual de la pestaña activa y renderiza la lista + el paginador. */
+async function _reqCargarPaginaActiva() {
+  const lista = document.getElementById('req-lista');
+  if (!lista) return;
+  const estado = _REQ_ESTADOS[REQ_TAB_ACTIVO];
+  const esRecibido = estado === 'ENTREGADA';
+  try {
+    const d = await get(`/api/traslados/?estado=${estado}&page=${REQ_PAGINA}`);
+    // RECIBIDO ya está resuelto — se mantiene el mismo criterio de antes
+    // (mostrar solo lo último para confirmar recepción, sin paginador) en vez
+    // de convertirlo en un historial navegable que nadie pidió.
+    const solicitudes = esRecibido ? (d.solicitudes || []).slice(0, 5) : (d.solicitudes || []);
+    REQ_TOTAL_PAGINAS = esRecibido ? 1 : (d.paginas || 1);
+    REQ_PAGINA = Math.min(REQ_PAGINA, REQ_TOTAL_PAGINAS);
+    lista.innerHTML = (solicitudes.length
+      ? solicitudes.map(s => _renderRequisicionCard(s)).join('')
+      : '<div style="text-align:center;padding:40px;color:var(--tx3);">Sin requisiciones en esta pestaña ✓</div>')
+      + _reqRenderPaginador();
   } catch (e) {
     lista.innerHTML = '<div style="text-align:center;padding:20px;color:#ef4444;">Error cargando requisiciones</div>';
   }
 }
 
-/** Render requisition sub-tabs and the HTML for the active group. */
-function renderReqTabsYLista() {
-  const tabsEl = document.getElementById('req-tabs');
-  const lista = document.getElementById('req-lista');
-  if (!tabsEl || !lista) return;
+/** Igual patrón visual que el paginador de "Pedir" en Traslados (adminPedirRenderStock). */
+function _reqRenderPaginador() {
+  if (REQ_TOTAL_PAGINAS <= 1) return '';
+  const rango = 2, desde = Math.max(1, REQ_PAGINA - rango), hasta = Math.min(REQ_TOTAL_PAGINAS, REQ_PAGINA + rango);
+  const nums = [];
+  if (desde > 1) nums.push('<span style="color:#555;">…</span>');
+  for (let p = desde; p <= hasta; p++) {
+    nums.push(`<button onclick="reqIrPagina(${p})" style="min-width:44px;min-height:44px;padding:6px 8px;background:${p===REQ_PAGINA?'#1E8395':'#222'};color:#fff;border:none;border-radius:6px;font-size:12px;font-weight:${p===REQ_PAGINA?'700':'400'};cursor:pointer;">${p}</button>`);
+  }
+  if (hasta < REQ_TOTAL_PAGINAS) nums.push('<span style="color:#555;">…</span>');
+  return `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:14px 0 4px;flex-wrap:wrap;">
+    <button onclick="reqIrPagina(${REQ_PAGINA-1})" ${REQ_PAGINA===1?'disabled':''} style="padding:7px 14px;background:#222;color:${REQ_PAGINA===1?'#444':'#fff'};border:none;border-radius:8px;font-size:13px;cursor:pointer;">← Ant</button>
+    <div style="display:flex;gap:4px;flex-wrap:wrap;justify-content:center;">${nums.join('')}</div>
+    <button onclick="reqIrPagina(${REQ_PAGINA+1})" ${REQ_PAGINA===REQ_TOTAL_PAGINAS?'disabled':''} style="padding:7px 14px;background:#222;color:${REQ_PAGINA===REQ_TOTAL_PAGINAS?'#444':'#fff'};border:none;border-radius:8px;font-size:13px;cursor:pointer;">Sig →</button>
+  </div><div style="text-align:center;font-size:11px;color:#555;">pág ${REQ_PAGINA}/${REQ_TOTAL_PAGINAS}</div>`;
+}
 
+/** Render solo las pestañas (los badges de conteo) — la lista la pinta _reqCargarPaginaActiva. */
+function _reqRenderTabs() {
+  const tabsEl = document.getElementById('req-tabs');
+  if (!tabsEl) return;
   tabsEl.innerHTML = REQ_TAB_LABELS.map((label, i) => {
     const count = REQ_GRUPOS_COUNT[i] || 0;
     return `<div class="subtab${i === REQ_TAB_ACTIVO ? ' active' : ''}" onclick="reqCambiarTab(${i})">${label}${count ? ` (${count})` : ''}</div>`;
   }).join('');
-
-  lista.innerHTML = REQ_GRUPOS_HTML[REQ_TAB_ACTIVO]
-    || '<div style="text-align:center;padding:40px;color:var(--tx3);">Sin requisiciones en esta pestaña ✓</div>';
 }
 
 /** @param {number} idx - Requisition sub-tab index to activate. */
-function reqCambiarTab(idx) {
+async function reqCambiarTab(idx) {
   REQ_TAB_ACTIVO = idx;
-  renderReqTabsYLista();
+  REQ_PAGINA = 1;
+  _reqRenderTabs();
+  await _reqCargarPaginaActiva();
+}
+
+/** @param {number} p - Page number to navigate to within the active tab. */
+async function reqIrPagina(p) {
+  REQ_PAGINA = p;
+  await _reqCargarPaginaActiva();
+  document.getElementById('req-lista')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
 const _REQ_BODEGA_NOMBRES = {
@@ -992,7 +1061,7 @@ function _renderRequisicionCard(r) {
 
 /** @param {number} id - Requisition ID to dispatch (triggers Siesa STS from RIT). */
 async function despacharRequisicion(id) {
-  if (!confirm('¿Confirmar despacho de esta requisición?')) return;
+  if (!await _modalConfirmar('¿Confirmar despacho de esta requisición?', { titulo: 'Confirmar despacho' })) return;
   try {
     const r = await fetch(`/api/traslados/${id}/despachar`, {
       method: 'POST',
@@ -1009,7 +1078,7 @@ async function despacharRequisicion(id) {
 
 /** @param {number} id - Requisition ID to approve. */
 async function aprobarRequisicion(id) {
-  if (!confirm('¿Aprobar esta requisición? Se crearán las tareas de picking en Bodega.')) return;
+  if (!await _modalConfirmar('¿Aprobar esta requisición? Se crearán las tareas de picking en Bodega.', { titulo: 'Aprobar requisición' })) return;
   try {
     const r = await fetch(`/api/traslados/${id}/aprobar`, {
       method: 'POST',
@@ -1027,7 +1096,7 @@ async function aprobarRequisicion(id) {
 
 /** @param {number} id - Requisition ID to reject. */
 async function reqRechazar(id) {
-  const motivo = prompt('Motivo del rechazo:');
+  const motivo = await _modalTexto('Rechazar requisición', 'Motivo del rechazo:');
   if (!motivo) return;
   try {
     const r = await fetch(API + `/api/traslados/${id}/rechazar`, {
@@ -1118,369 +1187,3 @@ async function reqEditarAprobar(id) {
     } catch (e) { alerta('Error de conexión', 'error'); }
   };
 }
-
-
-
-// TrasPicker/Packer + confirmar picking/packing — movido desde app.js 2026-07-21
-
-/** @param {number} id - Transfer ID to confirm picking completion for. */
-async function confirmarPickingTraslado(id) {
-  if (!confirm('¿Confirmar que el picking de esta transferencia está completo?')) return;
-  try {
-    const r = await fetch(`/api/traslados/${id}/confirmar-picking`, {
-      method: 'POST',
-      headers: { 'Authorization': 'Bearer ' + TOKEN }
-    });
-    const d = await r.json();
-    if (!r.ok) { alerta(d.error || 'Error al confirmar picking', 'error'); return; }
-    alerta('Picking confirmado — pendiente de verificar empaque 📦', 'exito');
-    await cargarRequisiciones();
-  } catch (e) {
-    alerta('Error de conexión', 'error');
-  }
-}
-
-/** @param {number} id - Transfer ID to confirm packing completion for. */
-async function confirmarPackingTraslado(id) {
-  if (!confirm('¿Confirmar verificación de empaque? Esto disparará los compromisos en Siesa.')) return;
-  try {
-    const r = await fetch(`/api/traslados/${id}/confirmar-packing`, {
-      method: 'POST',
-      headers: { 'Authorization': 'Bearer ' + TOKEN }
-    });
-    const d = await r.json();
-    if (!r.ok) { alerta(d.error || 'Error al confirmar packing', 'error'); return; }
-    alerta('Empaque verificado — listo para despachar ✓', 'exito');
-    await cargarRequisiciones();
-  } catch (e) {
-    alerta('Error de conexión', 'error');
-  }
-}
-
-// ─── TRASLADOS — PICKING / PACKING ────────────────────────────────────────────
-// Los roles picker_traslado y packer_traslado usan las pantallas unificadas
-// (pantalla-operario y pantalla-empacador). El scoping por bodega_siesa_id
-// en el backend garantiza que solo vean tareas tipo TRASLADO de su tienda.
-// ─────────────────────────────────────────────────────────────────────────────
-
-// PICKER TRASLADO (legacy — mantenido solo para cargarTrasladosOperario en pantalla-operario)
-
-let TRAS_PICK = null;
-
-// El HUD de picking de traslados puede tener docenas de ítems y no tocaba el
-// backend hasta el POST final — un refresh o que Android recicle la pestaña
-// de fondo borraba toda la sesión sin aviso. Se persiste `idx`/`counts` en
-// localStorage en cada cambio (desde _trasPickerRenderHUD, que ya se llama
-// después de cualquier mutación) y se restaura al reabrir el mismo traslado.
-const _trasPickKey = id => 'wms_tras_pick_' + id;
-function _trasGuardarPick() {
-  if (!TRAS_PICK) return;
-  try { localStorage.setItem(_trasPickKey(TRAS_PICK.solicitudId), JSON.stringify({ idx: TRAS_PICK.idx, counts: TRAS_PICK.counts })); } catch (_) {}
-}
-function _trasLimpiarPick(id) {
-  try { localStorage.removeItem(_trasPickKey(id)); } catch (_) {}
-}
-
-/** Fetch and render the transfer picking queue for the store picker. */
-async function trasPickerCargarCola() {
-  const el = document.getElementById('tpick-lista');
-  if (!el) return;
-  try {
-    const d = await get('/api/traslados/cola-picker');
-    const solicitudes = d.solicitudes || [];
-    if (!solicitudes.length) {
-      el.innerHTML = '<div style="text-align:center;padding:60px 20px;color:#666;">Sin traslados para pickear ✓<br><button onclick="trasPickerCargarCola()" style="margin-top:20px;background:#222;border:1px solid #333;color:#fff;padding:10px 20px;border-radius:10px;cursor:pointer;">↻ Actualizar</button></div>';
-      return;
-    }
-    el.innerHTML = solicitudes.map(s => {
-      const items = s.items || [];
-      const totalUnd = items.reduce((a, i) => a + (i.cantidad_aprobada || i.cantidad_solicitada || 0), 0);
-      return `<div onclick="trasPickerAbrirHUD(${s.id})" style="background:#111;border:1px solid #222;border-radius:12px;padding:14px;margin-bottom:10px;cursor:pointer;">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
-          <div style="font-size:15px;font-weight:700;color:#fff;">${s.codigo}</div>
-          <span style="font-size:11px;font-weight:600;padding:3px 9px;border-radius:20px;background:#dbeafe;color:#2563eb;">🔍 En picking</span>
-        </div>
-        <div style="font-size:12px;color:#666;margin-bottom:4px;">${s.nombre_punto_venta || s.bodega_destino_siesa}</div>
-        <div style="font-size:12px;color:#666;">${items.length} producto(s) · ${totalUnd} uds</div>
-      </div>`;
-    }).join('');
-  } catch (e) {
-    el.innerHTML = '<div style="color:#ef4444;text-align:center;padding:40px;">Error cargando cola</div>';
-  }
-}
-
-/** @param {number} solicitudId - Transfer solicitud ID to open the picker HUD for. */
-async function trasPickerAbrirHUD(solicitudId) {
-  try {
-    const d = await get(`/api/traslados/${solicitudId}/items-picking`);
-    if (!d.items || !d.items.length) { alerta('Sin ítems para pickear', 'error'); return; }
-    TRAS_PICK = { solicitudId, codigo: d.codigo, items: d.items, idx: 0, counts: {} };
-    for (const it of d.items) TRAS_PICK.counts[it.item_id] = it.cantidad_recogida || 0;
-    // Restaurar progreso local si la pestaña se recicló a mitad de este picking.
-    try {
-      const guardado = localStorage.getItem(_trasPickKey(solicitudId));
-      if (guardado) {
-        const previo = JSON.parse(guardado);
-        Object.keys(previo.counts || {}).forEach(itemId => {
-          if (itemId in TRAS_PICK.counts) {
-            TRAS_PICK.counts[itemId] = Math.max(TRAS_PICK.counts[itemId], previo.counts[itemId] || 0);
-          }
-        });
-        if (Number.isInteger(previo.idx) && previo.idx >= 0 && previo.idx < d.items.length) TRAS_PICK.idx = previo.idx;
-        alerta('Se restauró el progreso pendiente de este picking', 'info');
-      }
-    } catch (_) {}
-    _trasPickerRenderHUD();
-    document.getElementById('tpick-hud').style.display = 'block';
-  } catch (e) { alerta('Error cargando traslado', 'error'); }
-}
-
-/** Render the current item in the transfer picker HUD. */
-function _trasPickerRenderHUD() {
-  if (!TRAS_PICK) return;
-  const { items, idx, counts, codigo } = TRAS_PICK;
-  const item    = items[idx];
-  const cant    = counts[item.item_id] || 0;
-  const req     = item.cantidad_aprobada || 0;
-  const pct     = req > 0 ? Math.min(cant / req * 100, 100) : 0;
-  const esUltimo = idx === items.length - 1;
-  document.getElementById('tpick-hud-badge').textContent    = '🔄 TRANSFERENCIA — PICKING';
-  document.getElementById('tpick-hud-progreso').textContent = `Ítem ${idx + 1} de ${items.length} · ${codigo}`;
-  document.getElementById('tpick-hud-ubicacion').textContent = item.ubicacion || 'BODEGA';
-  document.getElementById('tpick-hud-prod-codigo').textContent = item.producto_codigo;
-  document.getElementById('tpick-hud-prod-nombre').textContent = item.producto_nombre;
-  const contEl = document.getElementById('tpick-hud-contador');
-  contEl.textContent = `${cant}/${req}`;
-  contEl.style.color = cant >= req ? '#22c55e' : '#fff';
-  const barEl = document.getElementById('tpick-hud-barra');
-  barEl.style.width = pct + '%';
-  barEl.style.background = cant >= req ? '#22c55e' : (cant > 0 ? '#f59e0b' : '#4b5563');
-  const btnSig = document.getElementById('tpick-btn-sig');
-  if (btnSig) {
-    btnSig.textContent = esUltimo ? '✓ Confirmar picking' : '→ Siguiente ítem';
-    btnSig.style.background = (esUltimo && cant >= req) ? '#16a34a' : '#7c3aed';
-  }
-  _trasGuardarPick();
-}
-
-/** @param {number} delta - Amount to add/subtract from the current transfer picking item count. */
-function trasPickerDelta(delta) {
-  if (!TRAS_PICK) return;
-  const item = TRAS_PICK.items[TRAS_PICK.idx];
-  TRAS_PICK.counts[item.item_id] = Math.max(0, Math.min((TRAS_PICK.counts[item.item_id] || 0) + delta, item.cantidad_aprobada));
-  _trasPickerRenderHUD();
-}
-
-/** @param {string} codigo - Barcode scanned during transfer picking. */
-async function trasPickerScan(codigo) {
-  if (!TRAS_PICK) return;
-  const item = TRAS_PICK.items[TRAS_PICK.idx];
-  vibrar();
-  if (item.tarea_picking_id) {
-    try {
-      const r = await postConReintento('/api/mobile/escanear', { codigo, tarea_id: item.tarea_picking_id, tipo: 'PICKING' });
-      if (r.error) { beepError(); alerta(typeof r.error === 'object' ? r.error.mensaje : r.error, 'error'); return; }
-      TRAS_PICK.counts[item.item_id] = r.cantidad_actual;
-      _trasPickerRenderHUD();
-      if (r.completado) beepDone(); else beepOk();
-    } catch (e) { alerta('Error de escaneo', 'error'); }
-  } else {
-    const limpio  = (codigo || '').trim().toUpperCase();
-    const validos = [item.producto_codigo, item.producto_codigo_barras].filter(Boolean).map(c => c.toUpperCase());
-    if (!validos.includes(limpio)) { beepError(); alerta(`Código incorrecto — escanea ${item.producto_codigo}`, 'error'); return; }
-    beepOk();
-    trasPickerDelta(1);
-  }
-}
-
-/** Prompt for manual quantity entry in transfer picking. */
-function trasPickerManual() {
-  if (!TRAS_PICK) return;
-  const item = TRAS_PICK.items[TRAS_PICK.idx];
-  const cantStr = prompt(`¿Cuántas unidades de ${item.producto_codigo} recogiste? (máx. ${item.cantidad_aprobada})`);
-  if (cantStr === null) return;
-  const cant = parseInt(cantStr, 10);
-  if (isNaN(cant) || cant < 0 || cant > item.cantidad_aprobada) { alerta(`Ingresa un número entre 0 y ${item.cantidad_aprobada}`, 'error'); return; }
-  TRAS_PICK.counts[item.item_id] = cant;
-  _trasPickerRenderHUD();
-}
-
-/** Advance to the next item in transfer picking. */
-async function trasPickerSiguiente() {
-  if (!TRAS_PICK) return;
-  if (TRAS_PICK.idx < TRAS_PICK.items.length - 1) { TRAS_PICK.idx++; _trasPickerRenderHUD(); return; }
-  await _trasPickerConfirmar();
-}
-
-/** Submit all confirmed items for the transfer picking session. */
-async function _trasPickerConfirmar() {
-  if (!TRAS_PICK) return;
-  const { solicitudId, items, counts } = TRAS_PICK;
-  const items_confirmados = items.map(i => ({ id: i.item_id, cantidad_confirmada: counts[i.item_id] || 0 }));
-  try {
-    await postConReintento(`/api/traslados/${solicitudId}/confirmar-picking`, { items_confirmados });
-    beepDone();
-    alerta('Picking confirmado ✓ — empaque pendiente', 'exito');
-    trasPickerPausarHUD();
-    await trasPickerCargarCola();
-  } catch (e) { alerta(e.message || 'Error al confirmar picking', 'error'); }
-}
-
-/** Pause the transfer picker HUD and return to the queue. */
-function trasPickerPausarHUD() {
-  cerrarCamara('tpick-cambox');
-  document.getElementById('tpick-hud').style.display = 'none';
-  if (TRAS_PICK) _trasLimpiarPick(TRAS_PICK.solicitudId);
-  TRAS_PICK = null;
-}
-
-/** Report a problem during transfer picking. */
-function trasPickerProblema() {
-  if (!TRAS_PICK) return;
-  alerta('Reporta el problema al supervisor — código: ' + TRAS_PICK.codigo, 'advertencia');
-}
-
-
-// PACKER TRASLADO
-
-let TRAS_PACK = null;
-
-// Mismo motivo que TRAS_PICK arriba — TRAS_PACK es 100% local hasta el POST
-// final, así que sin esto un refresh o pestaña reciclada perdía toda la
-// verificación de empaque de un traslado.
-const _trasPackKey = id => 'wms_tras_pack_' + id;
-function _trasGuardarPack() {
-  if (!TRAS_PACK) return;
-  try { localStorage.setItem(_trasPackKey(TRAS_PACK.solicitudId), JSON.stringify({ counts: TRAS_PACK.counts })); } catch (_) {}
-}
-function _trasLimpiarPack(id) {
-  try { localStorage.removeItem(_trasPackKey(id)); } catch (_) {}
-}
-
-/** Fetch and render the transfer packing queue for the store packer. */
-async function trasPackerCargarCola() {
-  const el = document.getElementById('tpack-lista');
-  if (!el) return;
-  try {
-    const d = await get('/api/traslados/cola-packer');
-    const solicitudes = d.solicitudes || [];
-    if (!solicitudes.length) {
-      el.innerHTML = '<div style="text-align:center;padding:60px 20px;color:#666;">Sin traslados para verificar ✓<br><button onclick="_refreshBtn(event,trasPackerCargarCola)" style="margin-top:20px;background:#e2e8f0;border:none;color:#1a202c;padding:10px 20px;border-radius:10px;cursor:pointer;">↻ Actualizar</button></div>';
-      return;
-    }
-    el.innerHTML = '<div style="font-size:11px;font-weight:600;color:#718096;padding:16px 16px 8px;text-transform:uppercase;">TAREAS DE EMPAQUE</div>' +
-      solicitudes.map(s => {
-        const items = s.items || [];
-        return `<div onclick="trasPackerAbrirHUD(${s.id})" style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:16px;margin:0 12px 10px;cursor:pointer;box-shadow:0 1px 3px rgba(0,0,0,.06);">
-          <div style="font-size:16px;font-weight:700;color:#1a202c;margin-bottom:4px;">${s.codigo}</div>
-          <div style="font-size:13px;color:#718096;margin-bottom:8px;">${items.length} producto(s) · 0/${items.length} verificados</div>
-          <span style="font-size:11px;font-weight:600;padding:3px 9px;border-radius:20px;background:#fff7ed;color:#ea580c;">Pendiente</span>
-        </div>`;
-      }).join('');
-  } catch (e) {
-    el.innerHTML = '<div style="color:#ef4444;text-align:center;padding:40px;">Error cargando tareas</div>';
-  }
-}
-
-/** @param {number} solicitudId - Transfer solicitud ID to open the packer HUD for. */
-async function trasPackerAbrirHUD(solicitudId) {
-  try {
-    const d = await get(`/api/traslados/${solicitudId}/items-picking`);
-    if (!d.items || !d.items.length) { alerta('Sin ítems para verificar', 'error'); return; }
-    TRAS_PACK = { solicitudId, codigo: d.codigo, items: d.items, idx: 0, counts: {} };
-    for (const it of d.items) TRAS_PACK.counts[it.item_id] = 0;
-    // Restaurar progreso local si la pestaña se recicló a mitad de esta verificación.
-    try {
-      const guardado = localStorage.getItem(_trasPackKey(solicitudId));
-      if (guardado) {
-        const previo = JSON.parse(guardado);
-        Object.keys(previo.counts || {}).forEach(itemId => {
-          if (itemId in TRAS_PACK.counts) TRAS_PACK.counts[itemId] = previo.counts[itemId] || 0;
-        });
-        alerta('Se restauró el progreso pendiente de esta verificación', 'info');
-      }
-    } catch (_) {}
-    _trasPackerRenderHUD();
-    document.getElementById('tpack-hud').style.display = 'flex';
-  } catch (e) { alerta('Error cargando traslado', 'error'); }
-}
-
-/** Render the current item in the transfer packer HUD. */
-function _trasPackerRenderHUD() {
-  if (!TRAS_PACK) return;
-  const { items, counts } = TRAS_PACK;
-  const pendientes  = items.filter(i => !(counts[i.item_id] >= (i.cantidad_enviada || i.cantidad_aprobada || 0)));
-  const item        = pendientes[0] || items[0];
-  const cant        = counts[item.item_id] || 0;
-  const req         = item.cantidad_enviada || item.cantidad_aprobada || 0;
-  const verificados = items.filter(i => counts[i.item_id] >= (i.cantidad_enviada || i.cantidad_aprobada || 0)).length;
-  const pct         = req > 0 ? Math.min(cant / req * 100, 100) : 0;
-  const todoListo   = verificados === items.length;
-  document.getElementById('tpack-hud-codigo').textContent      = TRAS_PACK.codigo;
-  document.getElementById('tpack-hud-prod-nombre').textContent = todoListo ? '¡Todo verificado! Confirma el empaque.' : (item.producto_nombre || item.producto_codigo);
-  const cEl = document.getElementById('tpack-hud-contador');
-  cEl.textContent = cant;
-  cEl.style.color = todoListo ? '#16a34a' : '#0d9488';
-  document.getElementById('tpack-hud-de').textContent          = 'de ' + req;
-  const bEl = document.getElementById('tpack-hud-barra');
-  bEl.style.width      = pct + '%';
-  bEl.style.background = todoListo ? '#16a34a' : '#0d9488';
-  document.getElementById('tpack-hud-items').textContent = verificados + ' de ' + items.length + ' ítems verificados';
-  const btnConf = document.getElementById('tpack-btn-confirmar');
-  if (btnConf) {
-    btnConf.textContent      = todoListo ? 'Confirmar empaque ✓' : '→ Siguiente';
-    btnConf.style.background = todoListo ? '#16a34a' : '#0d9488';
-  }
-  _trasGuardarPack();
-}
-
-/** @param {number} delta - Amount to add/subtract from the current transfer packing item count. */
-function trasPackerDelta(delta) {
-  if (!TRAS_PACK) return;
-  const pendientes = TRAS_PACK.items.filter(i => !(TRAS_PACK.counts[i.item_id] >= (i.cantidad_enviada || i.cantidad_aprobada || 0)));
-  const item = pendientes[0] || TRAS_PACK.items[0];
-  const max  = item.cantidad_enviada || item.cantidad_aprobada || 0;
-  TRAS_PACK.counts[item.item_id] = Math.max(0, Math.min((TRAS_PACK.counts[item.item_id] || 0) + delta, max));
-  _trasPackerRenderHUD();
-}
-
-/** @param {string} codigo - Barcode scanned during transfer packing verification. */
-function trasPackerScan(codigo) {
-  if (!TRAS_PACK) return;
-  const pendientes = TRAS_PACK.items.filter(i => !(TRAS_PACK.counts[i.item_id] >= (i.cantidad_enviada || i.cantidad_aprobada || 0)));
-  const item = pendientes[0];
-  if (!item) { beepOk(); return; }
-  const limpio  = (codigo || '').trim().toUpperCase();
-  const validos = [item.producto_codigo, item.producto_codigo_barras].filter(Boolean).map(c => c.toUpperCase());
-  if (!validos.includes(limpio)) { beepError(); alerta('Código incorrecto — escanea ' + item.producto_codigo, 'error'); return; }
-  vibrar(); beepOk(); trasPackerDelta(1);
-}
-
-/** Advance to the next item in transfer packing. */
-async function trasPackerSiguiente() {
-  if (!TRAS_PACK) return;
-  const todoListo = TRAS_PACK.items.every(i => TRAS_PACK.counts[i.item_id] >= (i.cantidad_enviada || i.cantidad_aprobada || 0));
-  if (!todoListo) { _trasPackerRenderHUD(); return; }
-  await _trasPackerConfirmar();
-}
-
-/** Submit all confirmed items for the transfer packing session. */
-async function _trasPackerConfirmar() {
-  if (!TRAS_PACK) return;
-  try {
-    await postConReintento('/api/traslados/' + TRAS_PACK.solicitudId + '/confirmar-packing', {});
-    beepDone();
-    alerta('Empaque verificado — listo para despachar ✓', 'exito');
-    trasPackerPausarHUD();
-    await trasPackerCargarCola();
-  } catch (e) { alerta(e.message || 'Error al confirmar empaque', 'error'); }
-}
-
-/** Pause the transfer packer HUD and return to the queue. */
-function trasPackerPausarHUD() {
-  cerrarCamara('tpack-cambox');
-  document.getElementById('tpack-hud').style.display = 'none';
-  if (TRAS_PACK) _trasLimpiarPack(TRAS_PACK.solicitudId);
-  TRAS_PACK = null;
-}
-

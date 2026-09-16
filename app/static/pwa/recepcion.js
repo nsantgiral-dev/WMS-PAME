@@ -2198,42 +2198,27 @@ async function compCargarBloqueos() {
 }
 
 async function compPoblarBloqueos() {
-  if (!confirm('¿Generar lista inicial de bloqueos?\nSe bloquearán todos los SKUs con velocity=0 en 12 meses y stock existente.')) return;
+  if (!await _confirmarModal('Generar bloqueos', 'Se bloquearán todos los SKUs con velocity=0 en 12 meses y stock existente.', 'Generar', 'Cancelar')) return;
   try {
-    const r = await fetch(API + '/api/compras/bloqueados/poblar', {
-      method: 'POST', headers: { Authorization: 'Bearer ' + TOKEN },
-    });
-    const d = await r.json();
-    if (r.ok && d.ok) {
-      alerta(`${d.bloqueados_nuevos} SKU(s) bloqueado(s) — ${_liqFmtComp(d.total_capital_inmovilizado)} inmovilizado`, 'exito');
-      compCargarBloqueos();
-    } else {
-      alerta(d.error || 'Error al poblar', 'error');
-    }
-  } catch (e) { alerta('Error de conexión', 'error'); }
+    const d = await postConReintento('/api/compras/bloqueados/poblar', {});
+    alerta(`${d.bloqueados_nuevos} SKU(s) bloqueado(s) — ${_liqFmtComp(d.total_capital_inmovilizado)} inmovilizado`, 'exito');
+    compCargarBloqueos();
+  } catch (e) { alerta(e.message || 'Error de conexión', 'error'); }
 }
 
 async function compDesbloquear(bloqueoId, codigo) {
-  const motivo = prompt(`¿Por qué desbloquear ${codigo}?\n(Motivo obligatorio — queda registrado)`);
-  if (!motivo || !motivo.trim()) return;
-  const cantidad = prompt('Cantidad máxima autorizada a comprar:');
-  if (!cantidad || isNaN(cantidad) || Number(cantidad) <= 0) { alerta('Cantidad inválida', 'error'); return; }
-  const vigencia = prompt('Vigencia del desbloqueo en días (default 30):', '30');
-  const dias = parseInt(vigencia) || 30;
+  const motivo = await _modalTexto('Desbloquear SKU', `¿Por qué desbloquear ${codigo}? (queda registrado)`);
+  if (!motivo) return;
+  const cantidad = await _modalCantidad('Cantidad autorizada', 'Cantidad máxima autorizada a comprar:', { min: 1 });
+  if (cantidad === null) return;
+  const dias = await _modalCantidad('Vigencia', 'Vigencia del desbloqueo en días:', { min: 1, valorInicial: 30 });
+  if (dias === null) return;
 
   try {
-    const r = await fetch(API + `/api/compras/bloqueados/${bloqueoId}/desbloquear`, {
-      method: 'POST',
-      headers: { Authorization: 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ motivo: motivo.trim(), cantidad_autorizada: Number(cantidad), vigencia_dias: dias }),
-    });
-    const d = await r.json();
-    if (r.ok && d.ok) {
-      alerta(`${codigo} desbloqueado — máx ${cantidad} UND, vigencia ${dias} días`, 'exito');
-      compCargarBloqueos();
-    } else {
-      alerta(d.error || 'Error al desbloquear', 'error');
-    }
+    await postConReintento(`/api/compras/bloqueados/${bloqueoId}/desbloquear`,
+      { motivo: motivo.trim(), cantidad_autorizada: Number(cantidad), vigencia_dias: dias });
+    alerta(`${codigo} desbloqueado — máx ${cantidad} UND, vigencia ${dias} días`, 'exito');
+    compCargarBloqueos();
   } catch (e) { alerta(e.message || 'Error', 'error'); }
 }
 

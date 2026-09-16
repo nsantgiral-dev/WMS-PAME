@@ -578,7 +578,7 @@ function _modalEtiquetaCanasto(canasto) {
   const overlay = document.createElement('div');
   overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.93);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px;';
   overlay.innerHTML = `
-    <div style="background:#111;border-radius:16px;padding:28px 24px;width:100%;max-width:360px;border:2px solid #16a34a;text-align:center;">
+    <div style="background:#111;border-radius:16px;padding:28px 24px;width:100%;max-width:360px;max-height:90vh;overflow-y:auto;border:2px solid #16a34a;text-align:center;">
       <div style="font-size:56px;margin-bottom:8px;">✅</div>
       <div style="font-size:22px;font-weight:900;color:#4ade80;margin-bottom:8px;">Picking completado</div>
       <div style="font-size:14px;color:#aaa;margin-bottom:20px;line-height:1.6;">

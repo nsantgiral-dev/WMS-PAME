@@ -34,8 +34,9 @@ def _verificar_rol_para_tipo(operario_id: int, tipo: str):
         return jsonify({'error': 'tipo de tarea no puede estar vacío'}), 400
     if tipo not in _TIPOS_ALMACEN:
         return None  # Tipos de despacho/entrega — sin restricción adicional
+    from app.extensions import db
     from app.models.usuario import Usuario
-    u = Usuario.query.get(operario_id)
+    u = db.session.get(Usuario, operario_id)
     if not u or u.rol in _ROLES_SIN_ALMACEN:
         return jsonify({'error': f'El rol "{u.rol if u else "desconocido"}" no puede ejecutar tareas de almacén (tipo={tipo})'}), 403
     return None
@@ -46,8 +47,9 @@ def _verificar_rol_para_tipo(operario_id: int, tipo: str):
 def mis_tareas():
     """Todas las tareas activas del operario — optimizado para tablet."""
     operario_id = _operario_id()
+    from app.extensions import db
     from app.models.usuario import Usuario
-    u = Usuario.query.get(operario_id)
+    u = db.session.get(Usuario, operario_id)
     if not u or u.rol in _ROLES_SIN_ALMACEN:
         return jsonify({'error': 'Sin permiso para acceder a tareas de almacén'}), 403
     resultado = MobileService.get_tareas_operario(operario_id)
@@ -59,8 +61,9 @@ def mis_tareas():
 def tarea_actual():
     """La tarea más prioritaria del operario ahora mismo."""
     operario_id = _operario_id()
+    from app.extensions import db
     from app.models.usuario import Usuario
-    u = Usuario.query.get(operario_id)
+    u = db.session.get(Usuario, operario_id)
     if not u or u.rol in _ROLES_SIN_ALMACEN:
         return jsonify({'error': 'Sin permiso para acceder a tareas de almacén'}), 403
     try:
@@ -409,10 +412,11 @@ def reportar_problema():
 
     # ── PACKING ──────────────────────────────────────────────────
     if tipo == 'PACKING':
+        from app.extensions import db
         from app.models.packing import TareaPacking, EstadoPacking
         from app.models.usuario import Usuario
         from app.routes._auth_helpers import _puede_empacar
-        u = Usuario.query.get(operario_id)
+        u = db.session.get(Usuario, operario_id)
         if not u or not _puede_empacar(u):
             return jsonify({'error': 'Sin permiso para reportar problemas de packing'}), 403
         tarea = TareaPacking.query.get(tarea_id)

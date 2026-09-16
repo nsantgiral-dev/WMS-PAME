@@ -61,15 +61,15 @@ def actores(db):
 @pytest.fixture
 def capturados(monkeypatch):
     """Intercepta `_post` — el punto único por donde sale todo a Connekta."""
-    from app.services.connekta_gateway import connekta
+    from app.services.connekta_gateway import connekta, ConnektaGateway
     salidas = []
 
-    def _fake(id_conector, nombre_conector, payload, url=None, extra_params=None):
+    def _fake(self, id_conector, nombre_conector, payload, url=None, extra_params=None):
         salidas.append({'conector': str(id_conector), 'nombre': nombre_conector,
                         'payload': payload})
         return {'codigo': 0, 'mensaje': 'Transacción Exitosa (arnés)'}
 
-    monkeypatch.setattr(connekta, '_post', _fake)
+    monkeypatch.setattr(ConnektaGateway, '_post', _fake)
     monkeypatch.setattr(connekta, 'modo_simulacion', False)
     monkeypatch.setattr(connekta, 'modo_ensayo', False)
     return salidas

@@ -11,6 +11,25 @@ from app.services.bodegas import co_de_bodega
 traslados_bp = Blueprint('traslados', __name__)
 logger = logging.getLogger(__name__)
 
+# Roles con acceso total a solicitudes: gestión de bodega y admin. `tienda`
+# también entra, pero solo ve las suyas — ver `_query_solicitudes_visibles`.
+_ROLES_GESTION_TRASLADOS = ('admin', 'supervisor', 'gerente', 'jefe_almacen')
+
+
+def _usuario_autorizado_traslados(usuario):
+    return bool(usuario and usuario.rol in _ROLES_GESTION_TRASLADOS + ('tienda',))
+
+
+def _query_solicitudes_visibles(usuario):
+    """Query base de solicitudes visibles para el usuario — admin/gestión ve
+    todas, tienda solo las suyas. Una sola función: `listar_solicitudes` y
+    `conteos_por_estado` la comparten para que "qué ve cada rol" no diverja
+    entre el conteo del badge y la lista real (Regla 0)."""
+    query = SolicitudTraslado.query
+    if usuario.rol == 'tienda':
+        query = query.filter_by(solicitante_id=usuario.id)
+    return query
+
 
 @traslados_bp.route('/', methods=['GET'])
 @jwt_required()
@@ -21,11 +40,13 @@ def listar_solicitudes():
     except (TypeError, ValueError):
         return jsonify({'error': 'Token inválido'}), 401
     usuario = Usuario.query.get(usuario_id)
+    if not _usuario_autorizado_traslados(usuario):
+        return jsonify({'error': 'Sin permiso para ver traslados'}), 403
 
     estado = request.args.get('estado')
     page = request.args.get('page', 1, type=int)
 
-    query = SolicitudTraslado.query\
+    query = _query_solicitudes_visibles(usuario)\
         .options(
             joinedload(SolicitudTraslado.solicitante),
             joinedload(SolicitudTraslado.aprobador),
@@ -34,13 +55,6 @@ def listar_solicitudes():
             .joinedload(ItemSolicitudTraslado.producto),
         )\
         .order_by(SolicitudTraslado.fecha_creacion.desc())
-
-    # Roles con acceso total: gestión de bodega y admin
-    _roles_gestion = ('admin', 'supervisor', 'gerente', 'jefe_almacen')
-    if not usuario or usuario.rol not in _roles_gestion + ('tienda',):
-        return jsonify({'error': 'Sin permiso para ver traslados'}), 403
-    if usuario.rol == 'tienda':
-        query = query.filter_by(solicitante_id=usuario_id)
     if estado:
         query = query.filter_by(estado=estado)
 
@@ -48,8 +62,34 @@ def listar_solicitudes():
     return jsonify({
         'solicitudes': [s.to_dict() for s in pag.items],
         'total': pag.total,
+        'paginas': pag.pages or 1,
         'pagina': page,
     }), 200
+
+
+@traslados_bp.route('/conteos-por-estado', methods=['GET'])
+@jwt_required()
+def conteos_por_estado():
+    """Conteo de solicitudes por estado — alimenta los badges de las pestañas
+    de Requisiciones sin traer la lista completa de cada una. Antes, pintar
+    los 6 contadores exigía pedir las 6 listas enteras en paralelo; ahora es
+    un solo GROUP BY."""
+    try:
+        usuario_id = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
+    usuario = Usuario.query.get(usuario_id)
+    if not _usuario_autorizado_traslados(usuario):
+        return jsonify({'error': 'Sin permiso para ver traslados'}), 403
+
+    from sqlalchemy import func
+    filas = (
+        _query_solicitudes_visibles(usuario)
+        .with_entities(SolicitudTraslado.estado, func.count(SolicitudTraslado.id))
+        .group_by(SolicitudTraslado.estado)
+        .all()
+    )
+    return jsonify({'conteos': {estado: n for estado, n in filas}}), 200
 
 
 @traslados_bp.route('/<int:id>', methods=['GET'])
@@ -915,9 +955,19 @@ def items_picking_detail(id):
 def stock_disponible():
     """
     Stock disponible en bodega para armar solicitud de traslado.
-    ?bodega=NC1  — filtra por bodega origen (default BODEGA_ORIGEN_DEFAULT)
-    ?debug=true  — incluye detalle de lo que Siesa devolvió vs WMS (solo admin)
-    ?forzar=true — invalida cache y recarga desde Siesa
+    ?bodega=NC1    — filtra por bodega origen (default BODEGA_ORIGEN_DEFAULT)
+    ?q=texto       — filtra por nombre/código Siesa (paginado sobre el resultado filtrado)
+    ?page=1        — página (default 1)
+    ?per_page=30   — tamaño de página (default 30, tope 200)
+    ?debug=true    — incluye detalle de lo que Siesa devolvió vs WMS (solo admin)
+    ?forzar=true   — invalida cache y recarga desde Siesa
+
+    El cache de `TrasladoService.get_stock_disponible` guarda TODO el
+    inventario de la bodega (hasta ~4000 SKU, ver CLAUDE.md — verificado en
+    vivo contra Siesa QA) — cargarlo entero en el celular en cada filtro o
+    cambio de página es el costo real que un catálogo de esta bodega paga en
+    señal de bodega/tienda. La búsqueda y el recorte de página se hacen acá,
+    sobre la lista ya cacheada — no se repite el fetch a Siesa por paginar.
     """
     try:
         usuario_id = int(get_jwt_identity())
@@ -930,22 +980,59 @@ def stock_disponible():
     bodega = request.args.get('bodega')
     debug = request.args.get('debug', '').lower() == 'true'
     forzar = request.args.get('forzar', '').lower() == 'true'
+    q = (request.args.get('q') or '').strip().lower()
+    try:
+        page = max(1, int(request.args.get('page', 1)))
+    except (TypeError, ValueError):
+        page = 1
+    try:
+        per_page = int(request.args.get('per_page', 30))
+    except (TypeError, ValueError):
+        per_page = 30
+    per_page = max(1, min(per_page, 200))
 
     if forzar:
         TrasladoService.invalidar_cache_stock(bodega)
 
     try:
-        resultado = TrasladoService.get_stock_disponible(bodega, forzar=forzar)
+        # `cacheado` es el objeto que vive dentro de _stock_siesa_cache — se
+        # arma la respuesta sobre una copia para no mutar lo que otras
+        # peticiones (y otros usuarios) van a leer del mismo cache.
+        cacheado = TrasladoService.get_stock_disponible(bodega, forzar=forzar)
+        items_todos = cacheado.get('items', [])
+
+        if q:
+            items_filtrados = [
+                it for it in items_todos
+                if q in (it.get('nombre') or '').lower()
+                or q in (it.get('codigo_siesa') or '').lower()
+            ]
+        else:
+            items_filtrados = items_todos
+
+        total_filtrado = len(items_filtrados)
+        total_paginas = max(1, -(-total_filtrado // per_page))  # ceil sin float
+        page = min(page, total_paginas)
+        inicio = (page - 1) * per_page
+        items_pagina = items_filtrados[inicio:inicio + per_page]
+
+        resultado = dict(cacheado)
+        resultado['items'] = items_pagina
+        resultado['pagina'] = page
+        resultado['por_pagina'] = per_page
+        resultado['total_filtrado'] = total_filtrado
+        resultado['total_paginas'] = total_paginas
+
         if debug and usuario.rol in ('admin', 'supervisor', 'gerente', 'jefe_almacen'):
             # Expone métricas de diagnóstico sin datos sensibles adicionales
             resultado['_debug'] = {
-                'bodega': resultado.get('bodega'),
-                'fuente': resultado.get('fuente'),
-                'actualizado_en': resultado.get('actualizado_en'),
-                'siesa_total_rows': resultado.get('siesa_total_rows'),
-                'siesa_con_stock': resultado.get('siesa_con_stock'),
-                'wms_mapeados': resultado.get('total'),
-                'sin_mapeo': (resultado.get('siesa_con_stock') or 0) - (resultado.get('total') or 0),
+                'bodega': cacheado.get('bodega'),
+                'fuente': cacheado.get('fuente'),
+                'actualizado_en': cacheado.get('actualizado_en'),
+                'siesa_total_rows': cacheado.get('siesa_total_rows'),
+                'siesa_con_stock': cacheado.get('siesa_con_stock'),
+                'wms_mapeados': cacheado.get('total'),
+                'sin_mapeo': (cacheado.get('siesa_con_stock') or 0) - (cacheado.get('total') or 0),
             }
         return jsonify(resultado), 200
     except Exception as e:

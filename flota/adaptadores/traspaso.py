@@ -40,9 +40,6 @@ from flota.dominio.valores import (
     Ubicacion,
 )
 
-FOTOS_POR_CUSTODIA = 8
-
-
 def _a_dominio(fila: Custodia) -> CustodiaDom:
     """Traduce la fila a la estructura que el dominio sabe juzgar."""
     return CustodiaDom(
@@ -327,4 +324,4 @@ def _colgar_fotos(fotos, entidad_tipo, entidad_id, autor_id, ahora):
         ))
 
 
-__all__ = ['traspasar', 'custodia_activa', 'FOTOS_POR_CUSTODIA']
+__all__ = ['traspasar', 'custodia_activa']

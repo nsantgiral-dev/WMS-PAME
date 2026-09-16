@@ -776,23 +776,15 @@ function liqQuitarRetencion(recaudoId, idx, baseGravable) {
 // ── Fase 1: Liquidar WMS (solo estado financiero) ─────────────────────────
 
 async function liqLiquidarWMS(rutaId) {
-  if (!confirm(`¿Liquidar Ruta #${rutaId} en WMS?\nDespués podrás documentar NC/RC/DC por parada.`)) return;
+  if (!await _modalConfirmar(`¿Liquidar Ruta #${rutaId} en WMS?\nDespués podrás documentar NC/RC/NI por parada.`, { titulo: 'Liquidar ruta' })) return;
   try {
-    const r = await fetch(API + `/api/rutas/${rutaId}/liquidar`, {
-      method: 'POST',
-      headers: { Authorization: 'Bearer ' + TOKEN },
-    });
-    const d = await r.json();
-    if (r.ok) {
-      alerta('Ruta liquidada en WMS — ahora documenta NC/RC/DC por parada', 'exito');
-      // Recargar detalle para mostrar Fase 2
-      _liqDetalleRuta = await get(`/api/rutas/${rutaId}/liquidacion-detalle`);
-      _liqRenderDetalle();
-    } else {
-      alerta(d.error || 'Error al liquidar', 'error');
-    }
+    await postConReintento(`/api/rutas/${rutaId}/liquidar`, {});
+    alerta('Ruta liquidada en WMS — ahora documenta NC/RC/NI por parada', 'exito');
+    // Recargar detalle para mostrar Fase 2
+    _liqDetalleRuta = await get(`/api/rutas/${rutaId}/liquidacion-detalle`);
+    _liqRenderDetalle();
   } catch (e) {
-    alerta('Error de conexión', 'error');
+    alerta(e.message || 'Error al liquidar', 'error');
   }
 }
 
@@ -951,22 +943,18 @@ async function _liqRenderPanelCobro(rutaId, recaudoId) {
  * descubre el número mal, y para entonces esa vía ya no acepta la edición.
  */
 async function liqCorregirMonto(rutaId, recaudoId, montoActual) {
-  const nuevoStr = prompt(
-    `Monto declarado actualmente: ${_liqFmt(montoActual)}\n\n` +
-    `¿Cuál es el monto real (ya con lo que el cliente pagó de más, si aplica)?`,
-    montoActual
-  );
+  const nuevoStr = await _modalTexto('Corregir monto',
+    `Monto declarado actualmente: ${_liqFmt(montoActual)}. ¿Cuál es el monto real (ya con lo que el cliente pagó de más, si aplica)?`,
+    { valorInicial: String(montoActual) });
   if (nuevoStr === null) return;
   const nuevo = parseFloat(nuevoStr);
   if (!nuevo || nuevo <= 0) {
     alerta('Monto inválido', 'error');
     return;
   }
-  const razon = prompt(
-    '¿Por qué se corrige? (obligatorio — ej. "Cliente pagó el faltante tras ' +
-    'verificar que el descuento inicial fue excesivo")'
-  );
-  if (!razon || !razon.trim()) {
+  const razon = await _modalTexto('Corregir monto',
+    '¿Por qué se corrige? (obligatorio — ej. "Cliente pagó el faltante tras verificar que el descuento inicial fue excesivo")');
+  if (!razon) {
     alerta('La corrección necesita una razón — no se guardó nada', 'advertencia');
     return;
   }
@@ -1061,24 +1049,15 @@ async function liqConfirmarRetencion(rutaId, recaudoId, confirmar) {
   const pregunta = confirmar
     ? '¿Confirmar que al cliente sí le correspondía este descuento?'
     : '¿Rechazar el descuento? El RC queda bloqueado hasta que el cliente pague el valor completo.';
-  if (!confirm(pregunta)) return;
+  if (!await _modalConfirmar(pregunta, { titulo: 'Decisión sobre retención' })) return;
   try {
-    const r = await fetch(API + `/api/rutas/${rutaId}/recaudos/${recaudoId}/confirmar-retencion`, {
-      method: 'POST',
-      headers: { Authorization: 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ confirmar }),
-    });
-    const d = await r.json();
-    if (r.ok) {
-      alerta(confirmar ? 'Descuento confirmado' : 'Descuento rechazado — falta el pago del valor completo',
-             confirmar ? 'exito' : 'advertencia');
-      // Se recarga la LISTA, no solo el panel: la decision desbloquea (o
-      // bloquea) el boton de cobro de la tarjeta, que vive fuera del panel.
-      _liqDetalleRuta = await get(`/api/rutas/${rutaId}/liquidacion-detalle`);
-      _liqRenderDetalle();
-    } else {
-      alerta(d.error || 'Error al registrar la decisión', 'error');
-    }
+    await postConReintento(`/api/rutas/${rutaId}/recaudos/${recaudoId}/confirmar-retencion`, { confirmar });
+    alerta(confirmar ? 'Descuento confirmado' : 'Descuento rechazado — falta el pago del valor completo',
+           confirmar ? 'exito' : 'advertencia');
+    // Se recarga la LISTA, no solo el panel: la decision desbloquea (o
+    // bloquea) el boton de cobro de la tarjeta, que vive fuera del panel.
+    _liqDetalleRuta = await get(`/api/rutas/${rutaId}/liquidacion-detalle`);
+    _liqRenderDetalle();
   } catch (e) { alerta(e.message || 'Error de conexión', 'error'); }
 }
 
@@ -1163,7 +1142,7 @@ async function liqRegistrarCobro(rutaId, recaudoId, _ajuste) {
 
   // El confirm() solo se pregunta en el primer intento — un reintento con
   // ajuste ya viene de una decisión explícita (el prompt de la razón).
-  if (!_ajuste && !confirm(`¿Registrar cobro${retenciones.length ? ' con ' + retenciones.length + ' retención(es)' : ''}?`)) return;
+  if (!_ajuste && !await _modalConfirmar(`¿Registrar cobro${retenciones.length ? ' con ' + retenciones.length + ' retención(es)' : ''}?`, { titulo: 'Registrar cobro' })) return;
 
   const body = { retenciones, monto_override: monto };
   if (_ajuste) {
@@ -1172,24 +1151,13 @@ async function liqRegistrarCobro(rutaId, recaudoId, _ajuste) {
     body.ajuste_razon = _ajuste.ajuste_razon;
   }
 
+  let d;
   try {
-    const r = await fetch(API + `/api/rutas/${rutaId}/recaudos/${recaudoId}/registrar-cobro`, {
-      method: 'POST',
-      headers: { Authorization: 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-    const d = await r.json();
-    if (r.ok && d.ok) {
-      const partes = [`RC por ${_liqFmt(d.monto_neto_rc)}`];
-      if (d.dc_jobs && d.dc_jobs.length) partes.push(`${d.dc_jobs.length} DC`);
-      if (_ajuste) partes.push(`ajuste ${_ajuste.ajuste_es_sobrante ? 'sobrante' : 'faltante'} de ${_liqFmt(_ajuste.ajuste_valor)}`);
-      alerta(partes.join(' + ') + ' encolados', 'exito');
-      _liqDetalleRuta = await get(`/api/rutas/${rutaId}/liquidacion-detalle`);
-      _liqRenderDetalle();
-      return;
-    }
-
-    const msg = d.error || 'Error al registrar cobro';
+    // Dispara RC/NI a Siesa — post() simple, NUNCA postConReintento():
+    // Regla 3, un timeout no significa que falló.
+    d = await post(`/api/rutas/${rutaId}/recaudos/${recaudoId}/registrar-cobro`, body);
+  } catch (e) {
+    const msg = e.message || 'Error al registrar cobro';
     // Solo se ofrece el ajuste en el PRIMER rechazo por diferencia — si el
     // reintento con ajuste también rebota (tope, no explica, sobrante+
     // retención), es un rechazo distinto y se muestra tal cual: seguir
@@ -1199,38 +1167,25 @@ async function liqRegistrarCobro(rutaId, recaudoId, _ajuste) {
       const calc = _liqCalcularAjusteParaReintento(recaudoId, monto);
       if (calc.ajuste_valor > 0) {
         const lado = calc.ajuste_es_sobrante ? 'SOBRANTE' : 'FALTANTE';
-        const razon = prompt(
-          `${msg}\n\n¿Fue un ${lado} real de ${_liqFmt(calc.ajuste_valor)}? ` +
-          `Escribe la razón para declararlo en Siesa (cancelar = no registrar el cobro):`
-        );
-        if (razon && razon.trim()) {
-          await liqRegistrarCobro(rutaId, recaudoId, { ...calc, ajuste_razon: razon.trim() });
+        const razon = await _modalTexto('Ajustar cobro',
+          `${msg} ¿Fue un ${lado} real de ${_liqFmt(calc.ajuste_valor)}? Escribe la razón para declararlo en Siesa:`,
+          { obligatorio: false });
+        if (razon) {
+          await liqRegistrarCobro(rutaId, recaudoId, { ...calc, ajuste_razon: razon });
           return;
         }
       }
     }
     alerta(msg, 'error');
-  } catch (e) { alerta(e.message || 'Error de conexión', 'error'); }
-}
+    return;
+  }
 
-async function liqReintentarJob(jobId) {
-  try {
-    const d = await get(`/api/siesa/jobs/${jobId}`);
-    const error = d.error_ultimo || 'Sin detalle de error';
-    const tipo = d.tipo || '—';
-    const intentos = d.intentos || 0;
-    if (!confirm(`Job ${tipo} #${jobId}\nIntentos: ${intentos}\nÚltimo error: ${error}\n\n¿Reintentar?`)) return;
-    const r = await fetch(API + `/api/siesa/jobs/${jobId}/reintentar`, {
-      method: 'POST',
-      headers: { Authorization: 'Bearer ' + TOKEN },
-    });
-    const res = await r.json();
-    if (r.ok) {
-      alerta('Job reintentado', 'exito');
-    } else {
-      alerta(res.error || 'Error al reintentar', 'error');
-    }
-  } catch (e) { alerta(e.message || 'Error', 'error'); }
+  const partes = [`RC por ${_liqFmt(d.monto_neto_rc)}`];
+  if (d.dc_jobs && d.dc_jobs.length) partes.push(`${d.dc_jobs.length} NI`);
+  if (_ajuste) partes.push(`ajuste ${_ajuste.ajuste_es_sobrante ? 'sobrante' : 'faltante'} de ${_liqFmt(_ajuste.ajuste_valor)}`);
+  alerta(partes.join(' + ') + ' encolados', 'exito');
+  _liqDetalleRuta = await get(`/api/rutas/${rutaId}/liquidacion-detalle`);
+  _liqRenderDetalle();
 }
 
 /* ── Reconciliación de la ruta ──────────────────────────────────────────
