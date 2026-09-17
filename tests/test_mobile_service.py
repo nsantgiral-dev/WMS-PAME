@@ -357,12 +357,13 @@ class TestDispensador:
         assert resultado_a is not None and resultado_b is not None
         assert resultado_a['id'] != resultado_b['id']
 
-    def test_pedido_chico_no_se_asigna_si_otro_proceso_tiene_el_lock(
+    def test_pedido_chico_no_se_asigna_si_el_lock_sigue_ocupado_tras_agotar_reintentos(
             self, app, db, mobile_setup, monkeypatch):
-        """Blindaje contra condición de carrera: si el advisory lock del
-        documento ya lo tiene otra petición concurrente (dos operarios
-        pidiendo tarea casi al mismo tiempo), esta petición no se queda con
-        nada — no parte el pedido chico entre los dos."""
+        """Blindaje contra condición de carrera, caso límite: si el advisory
+        lock del documento sigue ocupado incluso después de los reintentos
+        internos (alguien lo tiene de verdad trabado), esta petición se
+        rinde y no se queda con nada — no parte el pedido chico entre dos
+        operarios, y no reintenta para siempre."""
         from contextlib import contextmanager
         from app.services.mobile_service import MobileService
 
@@ -371,14 +372,14 @@ class TestDispensador:
                                referencia_documento='PD-RACE')
 
         @contextmanager
-        def _lock_ocupado(clave, etiqueta=''):
+        def _lock_siempre_ocupado(clave, etiqueta=''):
             yield False
 
         # get_tarea_actual() hace `from app.utils.lock import advisory_lock`
         # DENTRO de la función (import perezoso) — parchar el atributo del
         # módulo es lo que ese import perezoso va a resolver en cada llamada.
         import app.utils.lock as lock_mod
-        monkeypatch.setattr(lock_mod, 'advisory_lock', _lock_ocupado)
+        monkeypatch.setattr(lock_mod, 'advisory_lock', _lock_siempre_ocupado)
 
         resultado = MobileService.get_tarea_actual(s['usuario'].id)
 
@@ -387,6 +388,49 @@ class TestDispensador:
         assert linea1.operario_id is None, (
             'con el lock ocupado por otra petición, esta no debe asignarse '
             'la tarea — debe reintentar en el siguiente poll')
+
+    def test_pedido_chico_reintenta_en_vez_de_devolver_sin_tareas(
+            self, app, db, mobile_setup, monkeypatch):
+        """Regresión real (2026-09-17): el poll de 5s de app.js
+        (`if (!TAREA_ACTUAL) pedirTarea()`) y el `setTimeout(pedirTarea,
+        1500)` que dispara confirmar() se solapan seguido — TAREA_ACTUAL
+        queda en null apenas se confirma una línea. Antes de este fix, si la
+        SEGUNDA de esas dos peticiones (mismo operario) chocaba contra el
+        lock del pedido chico, `get_tarea_actual` devolvía `None` de una —
+        el operario veía "Sin tareas pendientes" después de CADA confirmación
+        en un pedido chico, aunque sí le quedaba la siguiente línea. Ahora
+        reintenta: si el lock está ocupado la primera vez pero libre la
+        segunda, la petición SÍ debe quedarse con la tarea, no rendirse."""
+        from contextlib import contextmanager
+        from app.services.mobile_service import MobileService
+        from app.utils.lock import advisory_lock as _advisory_lock_real
+
+        s = mobile_setup
+        linea1 = _crear_tarea(db, s['producto'], s['ubicacion'], s['almacen'],
+                               referencia_documento='PD-RETRY')
+
+        llamadas = {'n': 0}
+
+        @contextmanager
+        def _lock_ocupado_una_vez(clave, etiqueta=''):
+            llamadas['n'] += 1
+            if llamadas['n'] == 1:
+                yield False
+            else:
+                with _advisory_lock_real(clave, etiqueta) as tomado:
+                    yield tomado
+
+        import app.utils.lock as lock_mod
+        monkeypatch.setattr(lock_mod, 'advisory_lock', _lock_ocupado_una_vez)
+
+        resultado = MobileService.get_tarea_actual(s['usuario'].id)
+
+        assert resultado is not None, (
+            'la primera petición choca contra el lock, pero al reintentar '
+            'debe encontrar el pedido libre y quedarse con la tarea — no '
+            'debe devolver "sin tareas"')
+        assert resultado['id'] == linea1.id
+        assert llamadas['n'] >= 2, 'debe haber reintentado tras el lock ocupado'
 
     def test_umbral_de_paralelizacion_es_configurable(self, app, db, mobile_setup, producto2, monkeypatch):
         """PEDIDO_LINEAS_PARALELIZABLE se puede bajar (ej. a 2) y un pedido de

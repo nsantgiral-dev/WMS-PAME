@@ -161,7 +161,7 @@ class MobileService:
         }
 
     @staticmethod
-    def get_tarea_actual(operario_id: int):
+    def get_tarea_actual(operario_id: int, _intento: int = 0):
         """
         Dispensador automático — el operario pide trabajo y el sistema lo asigna.
         Si ya tiene una tarea en proceso la devuelve.
@@ -170,6 +170,10 @@ class MobileService:
         más pendientes ahí, toma la siguiente de la cola global en orden
         físico de recorrido (pasillo->fila->cuerpo->nivel->hueco — ver
         PickingService.orden_ruta_fisica()), no por fecha de creación.
+
+        `_intento` es interno — ver el blindaje de pedido chico más abajo:
+        cuando el candidato elegido queda obsoleto por una carrera, esta
+        función se reintenta a sí misma (con tope) en vez de devolver `None`.
         """
         # Verificar si ya tiene tarea activa — eager-load relaciones para evitar lazy queries
         from sqlalchemy.orm import joinedload as _jl
@@ -626,15 +630,29 @@ class MobileService:
         if not _requiere_blindaje:
             return _finalizar_asignacion()
 
+        # Dos peticiones del MISMO operario casi seguidas son el caso normal,
+        # no la excepción: el poll cada 5s de app.js (`if (!TAREA_ACTUAL)
+        # pedirTarea()`) y el `setTimeout(pedirTarea, 1500)` que dispara
+        # confirmar() se solapan seguido, porque TAREA_ACTUAL queda en null
+        # apenas se confirma. Si la segunda petición choca contra el lock o
+        # ve el documento ya tomado, NO es que no haya trabajo — es que su
+        # candidato quedó obsoleto por la carrera. Reintentar desde el
+        # principio (con tope) lo resuelve solo: para cuando reintenta, la
+        # primera petición (mismo operario) ya comiteó, y `tarea_activa` al
+        # inicio de la función la encuentra de inmediato. Devolver `None`
+        # acá se traducía en la pantalla «Sin tareas pendientes» después de
+        # CADA confirmación en un pedido chico — el operario sí tenía la
+        # siguiente línea, el dispensador se la negó por esta carrera.
+        _MAX_REINTENTOS = 3
         import zlib
         from app.utils.lock import advisory_lock
         _clave_doc = zlib.crc32(tarea.referencia_documento.encode('utf-8')) & 0x7FFFFFFF
         with advisory_lock(_clave_doc, f'pedido_chico:{tarea.referencia_documento}') as _tomado:
             if not _tomado:
-                # Otra petición está decidiendo la asignación de este mismo
-                # pedido chico ahora mismo — no me quedo con nada esta vez.
                 db.session.rollback()
-                return None
+                if _intento >= _MAX_REINTENTOS:
+                    return None
+                return MobileService.get_tarea_actual(operario_id, _intento + 1)
             _ya_lo_tiene_otro = (
                 TareaPicking.query
                 .filter(
@@ -645,10 +663,10 @@ class MobileService:
                 .first()
             )
             if _ya_lo_tiene_otro:
-                # El otro operario ya comiteó su asignación mientras yo
-                # esperaba el lock — el pedido ya es suyo, no se parte.
                 db.session.rollback()
-                return None
+                if _intento >= _MAX_REINTENTOS:
+                    return None
+                return MobileService.get_tarea_actual(operario_id, _intento + 1)
             return _finalizar_asignacion()
 
     @staticmethod
