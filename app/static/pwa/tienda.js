@@ -78,7 +78,7 @@ function tiendaCambiarOrigen(sel) {
 /** @param {string} nombre - Tienda sub-tab to activate ('pedir', 'solicitudes', 'recibir', 'compras'). */
 function tiendaSubtab(nombre) {
   _TIENDA_SUBTAB = nombre;
-  ['solicitudes','nueva','recibir','recibir-oc'].forEach(k => {
+  ['solicitudes','nueva','averias','recibir','recibir-oc'].forEach(k => {
     const tab = document.getElementById(`tienda-tab-${k}`);
     const panel = document.getElementById(`tienda-panel-${k}`);
     const activo = k === nombre;
@@ -92,6 +92,7 @@ function tiendaSubtab(nombre) {
   if (nombre === 'solicitudes') tiendaCargarSolicitudes();
   if (nombre === 'nueva') tiendaRenderStock();
   if (nombre === 'recibir') tiendaCargarRecibir();
+  if (nombre === 'averias') tiendaAveriasIniciar();
   if (nombre === 'recibir-oc') tiendaOCCargar();
 }
 
@@ -117,6 +118,7 @@ async function tiendaCargarSolicitudes() {
         </div>
         <div style="font-size:11px;color:#666;">${esc(s.total_items)} ítem${s.total_items !== 1 ? 's' : ''} · ${s.fecha_creacion ? new Date(s.fecha_creacion).toLocaleDateString('es-CO') : ''}</div>
         ${s.motivo_rechazo ? `<div style="font-size:11px;color:#f87171;margin-top:4px;">Motivo: ${esc(s.motivo_rechazo)}</div>` : ''}
+        ${s.es_averia ? `<div style="font-size:11px;color:#fbbf24;margin-top:4px;">⚠ Avería · hacia ${esc(s.bodega_destino_siesa)}</div>` : ''}
         ${s.estado === 'BORRADOR' ? `
         <div style="display:flex;gap:8px;margin-top:10px;">
           <button onclick="tiendaEnviarSolicitudId(${esc(s.id)})"
@@ -124,11 +126,190 @@ async function tiendaCargarSolicitudes() {
             Enviar al almacén
           </button>
         </div>` : ''}
+        ${s.es_averia && s.estado === 'ENVIADA' && !s.averia_evidencia ? `
+        <div style="margin-top:10px;border-top:1px solid #222;padding-top:10px;">
+          <div style="font-size:11px;color:#a8a29e;margin-bottom:6px;">Falta tu visto bueno. Declarar y validar son dos actos distintos: acá va por escrito qué revisaste.</div>
+          <button onclick="tiendaValidarAveria(${esc(s.id)})"
+            style="width:100%;padding:10px;background:#92400e;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">
+            Validar y dejar evidencia
+          </button>
+        </div>` : ''}
+        ${s.averia_evidencia ? `<div style="font-size:11px;color:#666;margin-top:6px;">Tu evidencia: ${esc(s.averia_evidencia)}</div>` : ''}
+        ${s.averia_veredicto === false ? `<div style="font-size:11px;color:#4ade80;margin-top:4px;">El CD dictaminó que NO estaba averiada${s.averia_veredicto_nota ? `: ${esc(s.averia_veredicto_nota)}` : ''}</div>` : ''}
+        ${s.averia_veredicto === true ? `<div style="font-size:11px;color:#f87171;margin-top:4px;">El CD confirmó la avería</div>` : ''}
       </div>`;
     }).join('');
   } catch (e) {
     el.innerHTML = '<div style="text-align:center;padding:20px;color:#ef4444;">Error cargando pedidos</div>';
   }
+}
+
+// ── Averías: declarar mercancía dañada y mandarla al CD ────────────────
+//
+// Corre AL REVÉS que "Pedir": acá el punto manda, no pide. El origen es este
+// punto y el destino lo decide el backend (el CD), así que esta pantalla no
+// ofrece elegir bodegas — no hay nada que elegir, y un selector sugeriría que
+// sí.
+//
+// El stock que se lista es el de ESTE punto, no el del CD: se declara averiado
+// lo que uno tiene en el piso.
+
+let _TAV_STOCK = [];
+let _TAV_ESTADO = 'idle';
+let _TAV_FILTRO = '';
+let _TAV_CARRITO = [];
+
+async function tiendaAveriasIniciar() {
+  if (_TAV_ESTADO === 'listo' || _TAV_ESTADO === 'cargando') { tiendaAveriasRender(); return; }
+  _TAV_ESTADO = 'cargando';
+  tiendaAveriasRender();
+  try {
+    const bodega = OPERARIO?.bodega_siesa_id;
+    if (!bodega) { _TAV_ESTADO = 'sin-bodega'; tiendaAveriasRender(); return; }
+    const d = await get(`/api/traslados/stock-disponible?bodega=${bodega}`);
+    _TAV_STOCK = (d.items || []).filter(i => i.producto_id && i.disponible > 0);
+    _TAV_ESTADO = 'listo';
+  } catch (e) { _TAV_ESTADO = 'error'; }
+  tiendaAveriasRender();
+}
+
+function tiendaAveriasFiltrar() {
+  _TAV_FILTRO = (document.getElementById('tav-buscar')?.value || '').toLowerCase();
+  tiendaAveriasRender();
+}
+
+function tiendaAveriasRender() {
+  const el = document.getElementById('tienda-panel-averias-lista');
+  if (!el) return;
+  if (_TAV_ESTADO === 'cargando') {
+    el.innerHTML = '<div style="text-align:center;padding:20px;color:#555;">Cargando tu inventario...</div>'; return;
+  }
+  if (_TAV_ESTADO === 'sin-bodega') {
+    el.innerHTML = '<div style="padding:20px;color:#f87171;font-size:13px;">Tu usuario no tiene una bodega asignada, así que no se puede saber de qué punto sale la avería. Pedí que te la configuren.</div>'; return;
+  }
+  if (_TAV_ESTADO === 'error') {
+    el.innerHTML = '<div style="text-align:center;padding:20px;color:#ef4444;">Error cargando tu inventario</div>'; return;
+  }
+
+  const filtrados = _TAV_FILTRO
+    ? _TAV_STOCK.filter(i => (i.nombre || '').toLowerCase().includes(_TAV_FILTRO)
+                          || (i.codigo_siesa || '').toLowerCase().includes(_TAV_FILTRO))
+    : _TAV_STOCK.slice(0, 30);
+
+  const carrito = _TAV_CARRITO.length ? `
+    <div style="background:#1a1206;border:1px solid #92400e;border-radius:10px;padding:10px;margin-bottom:10px;">
+      <div style="font-size:12px;color:#fbbf24;font-weight:700;margin-bottom:6px;">${esc(_TAV_CARRITO.length)} producto${_TAV_CARRITO.length !== 1 ? 's' : ''} por declarar</div>
+      ${_TAV_CARRITO.map(c => `
+        <div style="display:flex;justify-content:space-between;padding:3px 0;font-size:12px;">
+          <span>${esc(c.nombre)} · ${esc(c.cantidad)} und<div style="color:#666;font-size:11px;">${esc(c.motivo)}</div></span>
+          <button onclick="tiendaAveriasQuitar('${esc(c.codigo_siesa)}')" style="background:none;border:none;color:#ef4444;cursor:pointer;">✕</button>
+        </div>`).join('')}
+      <button onclick="tiendaAveriasEnviar()" style="width:100%;margin-top:8px;padding:10px;background:#92400e;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">Declarar y mandar al CD</button>
+    </div>` : '';
+
+  el.innerHTML = carrito + (filtrados.length ? filtrados.map(i => {
+    const key = (i.codigo_siesa || '').replace(/[^a-zA-Z0-9]/g, '-');
+    return `
+    <div style="background:#111;border:1px solid #222;border-radius:10px;padding:10px;margin-bottom:8px;">
+      <div style="font-size:13px;font-weight:600;">${esc(i.nombre)}</div>
+      <div style="font-size:11px;color:#666;margin-bottom:6px;">${esc(i.codigo_siesa)} · tenés ${esc(i.disponible)}</div>
+      <div style="display:flex;gap:6px;">
+        <input id="tav-qty-${key}" type="number" min="1" max="${esc(i.disponible)}" value="1"
+          style="width:70px;padding:8px;background:#0a0a0a;color:#fff;border:1px solid #333;border-radius:6px;font-size:13px;">
+        <input id="tav-mot-${key}" type="text" placeholder="¿Qué le pasó?" maxlength="200"
+          style="flex:1;padding:8px;background:#0a0a0a;color:#fff;border:1px solid #333;border-radius:6px;font-size:13px;">
+        <button onclick="tiendaAveriasAgregar('${esc(i.codigo_siesa)}', ${esc(i.producto_id)})"
+          style="padding:8px 12px;background:#292524;color:#fbbf24;border:1px solid #57534e;border-radius:6px;font-size:13px;font-weight:700;cursor:pointer;">+</button>
+      </div>
+    </div>`;
+  }).join('') : '<div style="text-align:center;padding:20px;color:#555;">Sin resultados</div>');
+}
+
+function tiendaAveriasAgregar(codigoSiesa, productoId) {
+  const key = (codigoSiesa || '').replace(/[^a-zA-Z0-9]/g, '-');
+  const item = _TAV_STOCK.find(i => i.codigo_siesa === codigoSiesa);
+  const cantidad = parseInt(document.getElementById(`tav-qty-${key}`)?.value || 0);
+  const motivo = (document.getElementById(`tav-mot-${key}`)?.value || '').trim();
+
+  if (!cantidad || cantidad < 1) { alerta('Poné cuántas unidades', 'error'); return; }
+  // El motivo se exige acá y no al enviar: quien lo tiene fresco es el que
+  // está mirando la caja rota, no el que aprieta "declarar" cinco productos
+  // después. El backend lo exige igual —es su regla, no la de esta pantalla—
+  // pero un 400 al final obligaría a reconstruir de memoria qué tenía cada uno.
+  if (!motivo) { alerta('Falta decir qué le pasó — tres personas van a decidir sobre esto sin haber estado ahí', 'error'); return; }
+
+  const idx = _TAV_CARRITO.findIndex(c => c.codigo_siesa === codigoSiesa);
+  const linea = { codigo_siesa: codigoSiesa, producto_id: productoId,
+                  nombre: item?.nombre || codigoSiesa, cantidad, motivo };
+  if (idx >= 0) _TAV_CARRITO[idx] = linea; else _TAV_CARRITO.push(linea);
+  tiendaAveriasRender();
+}
+
+function tiendaAveriasQuitar(codigoSiesa) {
+  _TAV_CARRITO = _TAV_CARRITO.filter(c => c.codigo_siesa !== codigoSiesa);
+  tiendaAveriasRender();
+}
+
+/**
+ * Crea la avería y la envía. **No la aprueba** — eso es un acto aparte, en la
+ * pestaña de pedidos, y con la evidencia por escrito.
+ *
+ * Juntar los dos gestos acá sería cómodo y destruiría el control: la
+ * validación del punto dejaría de ser una decisión y pasaría a ser un efecto
+ * secundario de haber apretado un botón.
+ */
+async function tiendaAveriasEnviar() {
+  if (!_TAV_CARRITO.length) return;
+  if (!confirm(`¿Declarar ${_TAV_CARRITO.length} producto${_TAV_CARRITO.length !== 1 ? 's' : ''} averiado${_TAV_CARRITO.length !== 1 ? 's' : ''} y mandarlos al centro de distribución?`)) return;
+
+  try {
+    const r = await fetch(API + '/api/traslados/', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        clase_traslado: 'TRASLADO_AVERIAS',
+        items: _TAV_CARRITO.map(c => ({
+          producto_id: c.producto_id,
+          cantidad_solicitada: c.cantidad,
+          motivo_averia: c.motivo,
+        })),
+      })
+    });
+    const d = await r.json();
+    if (!r.ok) { alerta(d.error || 'No se pudo declarar', 'error'); return; }
+
+    const r2 = await fetch(API + `/api/traslados/${d.id}/enviar`, {
+      method: 'POST', headers: { Authorization: 'Bearer ' + TOKEN }
+    });
+    if (!r2.ok) { alerta('Se creó pero no se pudo enviar — quedó en borrador', 'error'); return; }
+
+    alerta('Avería declarada — falta tu visto bueno en Pedidos', 'exito');
+    _TAV_CARRITO = [];
+    tiendaSubtab('solicitudes');
+  } catch (e) { alerta('Error de conexión', 'error'); }
+}
+
+/**
+ * Segundo acto: el administrador del punto valida y deja la evidencia.
+ * Aparte del primero a propósito — ver `tiendaAveriasEnviar`.
+ */
+async function tiendaValidarAveria(id) {
+  const evidencia = prompt(
+    'Validar esta avería.\n\n'
+    + '¿Qué revisaste y qué encontraste? Lo van a leer quien la recibe en el '
+    + 'CD y quien decide si se confirma — ninguno estuvo acá.');
+  if (evidencia === null) return;
+  if (!evidencia.trim()) { alerta('Hace falta la evidencia', 'error'); return; }
+  try {
+    const r = await fetch(API + `/api/traslados/${id}/aprobar`, {
+      method: 'POST',
+      headers: { Authorization: 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ averia_evidencia: evidencia })
+    });
+    const d = await r.json();
+    if (r.ok) { alerta('Avería validada — va en camino al CD', 'exito'); tiendaCargarSolicitudes(); }
+    else { alerta(d.error || 'No se pudo validar', 'error'); }
+  } catch (e) { alerta('Error de conexión', 'error'); }
 }
 
 /** Fetch stock data for the store's selected origin warehouse. */

@@ -2590,6 +2590,10 @@
         style="flex:1;padding:11px;font-size:13px;color:var(--tx3);text-align:center;border-bottom:2px solid transparent;cursor:pointer;">
         Pedir
       </div>
+      <div id="tienda-tab-averias" onclick="tiendaSubtab('averias')"
+        style="flex:1;padding:11px;font-size:13px;color:var(--tx3);text-align:center;border-bottom:2px solid transparent;cursor:pointer;">
+        Averías
+      </div>
       <div id="tienda-tab-recibir" onclick="tiendaSubtab('recibir')"
         style="flex:1;padding:11px;font-size:13px;color:var(--tx3);text-align:center;border-bottom:2px solid transparent;cursor:pointer;position:relative;">
         Recibir Traslado
@@ -2607,6 +2611,22 @@
       <div id="tienda-lista-solicitudes">
         <div style="text-align:center;padding:30px;color:#555;">Cargando...</div>
       </div>
+    </div>
+
+    <!-- Panel: Averías — el punto MANDA, no pide. Sin selector de bodega:
+         el origen es este punto y el destino lo decide el backend (el CD).
+         Un selector sugeriría que hay algo que elegir. -->
+    <div id="tienda-panel-averias" style="padding:14px;display:none;">
+      <div style="background:var(--bg-s);border:1px solid #92400e;border-radius:10px;padding:10px 14px;margin-bottom:12px;">
+        <div style="font-size:11px;color:#fbbf24;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;">Declarar avería</div>
+        <div style="font-size:12px;color:var(--tx3);margin-top:4px;">
+          Lo que declares acá se manda al centro de distribución. Allá se cuenta
+          lo que llegó y el administrador decide si de verdad estaba averiada.
+        </div>
+      </div>
+      <input id="tav-buscar" type="text" oninput="tiendaAveriasFiltrar()" placeholder="Buscar en tu inventario..."
+        style="width:100%;padding:10px;background:var(--bg-s);color:var(--tx);border:1px solid var(--brd);border-radius:8px;font-size:14px;margin-bottom:10px;">
+      <div id="tienda-panel-averias-lista"></div>
     </div>
 
     <!-- Panel: Nueva Solicitud -->
@@ -3571,27 +3591,27 @@
   <!-- Área de impresión de etiquetas — visible solo al imprimir -->
   <div id="print-area"></div>
 
-  <script src="/static/pwa/util.js?v=20260917a"></script>
-  <script src="/static/pwa/app.js?v=20260917a"></script>
-  <script src="/static/pwa/picking.js?v=20260917a"></script>
-  <script src="/static/pwa/packing.js?v=20260917a"></script>
-  <script src="/static/pwa/recepcion.js?v=20260917a"></script>
-  <script src="/static/pwa/rutas.js?v=20260917a"></script>
-  <script src="/static/pwa/traslados.js?v=20260917a"></script>
-  <script src="/static/pwa/conteo.js?v=20260917a"></script>
-  <script src="/static/pwa/reposicion.js?v=20260917a"></script>
-  <script src="/static/pwa/liquidacion.js?v=20260917a"></script>
-  <script src="/static/pwa/layout.js?v=20260917a"></script>
-  <script src="/static/pwa/tienda.js?v=20260917a"></script>
-  <script src="/static/pwa/etiquetas.js?v=20260917a"></script>
-  <script src="/static/pwa/vigia.js?v=20260917a"></script>
-  <script src="/static/pwa/flota.js?v=20260917a"></script>
-  <script src="/static/pwa/compras_ia.js?v=20260917a"></script>
-  <script src="/static/pwa/kardex.js?v=20260917a"></script>
-  <script src="/static/pwa/temporada.js?v=20260917a"></script>
-  <script src="/static/pwa/tablero_bi.js?v=20260917a"></script>
-  <script src="/static/pwa/manuales.js?v=20260917a"></script>
-  <script src="/static/pwa/flota_analitica.js?v=20260917a"></script>
+  <script src="/static/pwa/util.js?v=20260917b"></script>
+  <script src="/static/pwa/app.js?v=20260917b"></script>
+  <script src="/static/pwa/picking.js?v=20260917b"></script>
+  <script src="/static/pwa/packing.js?v=20260917b"></script>
+  <script src="/static/pwa/recepcion.js?v=20260917b"></script>
+  <script src="/static/pwa/rutas.js?v=20260917b"></script>
+  <script src="/static/pwa/traslados.js?v=20260917b"></script>
+  <script src="/static/pwa/conteo.js?v=20260917b"></script>
+  <script src="/static/pwa/reposicion.js?v=20260917b"></script>
+  <script src="/static/pwa/liquidacion.js?v=20260917b"></script>
+  <script src="/static/pwa/layout.js?v=20260917b"></script>
+  <script src="/static/pwa/tienda.js?v=20260917b"></script>
+  <script src="/static/pwa/etiquetas.js?v=20260917b"></script>
+  <script src="/static/pwa/vigia.js?v=20260917b"></script>
+  <script src="/static/pwa/flota.js?v=20260917b"></script>
+  <script src="/static/pwa/compras_ia.js?v=20260917b"></script>
+  <script src="/static/pwa/kardex.js?v=20260917b"></script>
+  <script src="/static/pwa/temporada.js?v=20260917b"></script>
+  <script src="/static/pwa/tablero_bi.js?v=20260917b"></script>
+  <script src="/static/pwa/manuales.js?v=20260917b"></script>
+  <script src="/static/pwa/flota_analitica.js?v=20260917b"></script>
   <script>
     setInterval(() => {
       const cola = JSON.parse(localStorage.getItem('wms_cola_offline') || '[]');
