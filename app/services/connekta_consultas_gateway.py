@@ -722,18 +722,52 @@ class ConnektaConsultasGateway:
             'paginacion': f'numPag={pagina}|tamPag=100'
         })
 
+    def _get_items_filtrado(self, parametros: str):
+        """Un intento de API_v2_Items con un filtro dado. `None` = sin match.
+
+        Confirmado en vivo 2026-07-31: cuando el filtro no matchea ninguna
+        fila, Siesa responde HTTP 400 en vez de codigo:0 con Table vacía
+        (contrario a su propio spec, que documenta Table como lista — puede
+        venir vacía). Tratamos el 400 como "no encontrado", no como error
+        real — cualquier otro fallo (timeout, 5xx, red) sigue propagándose.
+        """
+        import os
+        core = self._core
+        api_items = os.getenv('CONNEKTA_API_ITEMS', 'API_v2_Items')
+        try:
+            resultado = core._get(api_items, {
+                'paginacion': 'numPag=1|tamPag=5',
+                'parametros': parametros,
+            })
+        except Exception as e:
+            if '400 client error' in str(e).lower():
+                logger.info(
+                    '[CONNEKTA] _get_items_filtrado(%s): Siesa 400 '
+                    '(sin match, tratado como no encontrado)', parametros
+                )
+                return None
+            raise
+        tabla = resultado.get('detalle', {}).get('Table', [])
+        return tabla[0] if tabla else None
+
     def buscar_item_por_referencia(self, referencia: str):
         """
-        Consulta EN VIVO un único ítem en API_v2_Items filtrado por referencia
-        exacta — para la herramienta de Etiquetas cuando el catálogo local
-        (sync periódico) aún no trae un ítem recién creado en Siesa.
+        Consulta EN VIVO un único ítem en API_v2_Items — para la herramienta
+        de Etiquetas cuando el catálogo local (sync periódico) aún no trae un
+        ítem recién creado en Siesa.
+
+        Primero intenta por f120_referencia exacta (el código WMS real, ej.
+        'PAPELSP2724'). Si `referencia` es puramente numérico y ese intento no
+        encuentra nada, reintenta por f120_id — el ID interno de Siesa (ej.
+        '4774', el "Item" que muestra el escritorio de Siesa en el diálogo de
+        pedido, "0004774" con ceros a la izquierda). Un operario que copia lo
+        que VE en Siesa copia ese ID, no la referencia — el escritorio nunca
+        muestra f120_referencia en ese diálogo.
 
         No usar en rutas calientes de picking/packing: es una llamada HTTP en
         tiempo real (hasta 30s), a diferencia de get_items_catalogo() que
         alimenta el sync de fondo hacia la tabla local `productos`.
         """
-        import os
-
         from app.services.siesa_filtro import lit as _lit
 
         core = self._core
@@ -742,33 +776,20 @@ class ConnektaConsultasGateway:
         ref = (referencia or '').strip()
         if not ref:
             return None
-        api_items = os.getenv('CONNEKTA_API_ITEMS', 'API_v2_Items')
         # f120_id_cia incluido para calzar con el ejemplo del spec
         # (API_v2_Items.docx: "f120_id_cia = 1 AND f120_referencia = ...").
-        try:
-            resultado = core._get(api_items, {
-                'paginacion': 'numPag=1|tamPag=5',
-                'parametros': f"f120_id_cia = {int(core.id_cia_siesa)} AND f120_referencia = {_lit(ref)}"
-            })
-        except Exception as e:
-            # Confirmado en vivo 2026-07-31: cuando el filtro f120_referencia
-            # no matchea ninguna fila, Siesa responde HTTP 400 en vez de
-            # codigo:0 con Table vacía (contrario a su propio spec, que
-            # documenta Table como lista — puede venir vacía). Con una
-            # referencia real (ej. PAPELSP01) el mismo filtro sí da 200.
-            # Tratamos el 400 como "no encontrado", no como error real —
-            # cualquier otro fallo (timeout, 5xx, red) sigue propagándose.
-            if '400 client error' in str(e).lower():
-                logger.info(
-                    '[CONNEKTA] buscar_item_por_referencia(%s): Siesa 400 '
-                    '(sin match, tratado como no encontrado)', ref
-                )
-                return None
-            raise
-        tabla = resultado.get('detalle', {}).get('Table', [])
-        if not tabla:
+        cia = int(core.id_cia_siesa)
+        row = self._get_items_filtrado(
+            f"f120_id_cia = {cia} AND f120_referencia = {_lit(ref)}")
+        if row is None:
+            # Solo dígitos (con o sin ceros a la izquierda) → probablemente
+            # el ID interno de Siesa, no la referencia.
+            ref_sin_ceros = ref.lstrip('0') or '0'
+            if ref_sin_ceros.isdigit():
+                row = self._get_items_filtrado(
+                    f"f120_id_cia = {cia} AND f120_id = {int(ref_sin_ceros)}")
+        if row is None:
             return None
-        row = tabla[0]
         codigo_siesa = (row.get('f120_referencia') or '').strip()
         if not codigo_siesa:
             return None
