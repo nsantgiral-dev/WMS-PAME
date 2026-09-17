@@ -769,7 +769,24 @@ def pendientes_recepcion():
     if not usuario or usuario.rol not in _roles_rec:
         return jsonify({'error': 'Sin permiso'}), 403
 
-    bodega = request.args.get('bodega') or (usuario.bodega_siesa_id if usuario.rol == 'recepcionista' else None)
+    # El parámetro `?bodega=` NO le gana a la bodega del usuario.
+    #
+    # Antes era `request.args.get('bodega') or (la del usuario)`: la propia era
+    # el valor por defecto, no el límite. Y el front la manda desde
+    # `localStorage` (`recepcion.js`), así que editarla en el navegador —o
+    # llamar la API a mano— alcanzaba para leer la cola de recepción de otro
+    # punto, sin tocar código.
+    #
+    # Los roles administrativos conservan el parámetro: es su ÚNICO acceso
+    # —no tienen bodega propia (el admin de producción no tiene ni bodega ni
+    # almacén)— y quitárselo los dejaría sin la pantalla entera.
+    from app.services.alcance import bodega_del_usuario
+    _ADMINISTRATIVOS = ('admin', 'supervisor', 'gerente', 'jefe_almacen')
+    _propia = bodega_del_usuario(usuario)
+    if usuario.rol in _ADMINISTRATIVOS:
+        bodega = request.args.get('bodega') or _propia
+    else:
+        bodega = _propia
     if not bodega:
         return jsonify({'solicitudes': []}), 200
 

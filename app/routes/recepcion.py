@@ -121,6 +121,29 @@ def declarar_averia(id):
     """
     if not _es_recepcion_autorizado():
         return jsonify({'error': 'Sin permiso para declarar averías en recepción'}), 403
+    # Pertenencia: una avería solo se declara sobre una recepción del propio
+    # punto. El guard va ACÁ y no en el servicio a propósito — la autorización
+    # es del borde; al servicio lo llaman también otros servicios, y meterle
+    # una pregunta sobre «quién sos» lo volvería dependiente de la sesión.
+    #
+    # El admin queda exento: en producción no tiene bodega ni almacén, así que
+    # un guard que falle cerrado lo dejaría fuera de todo.
+    from app.models.recepcion import RecepcionMercancia
+    from app.models.usuario import Usuario as _Usuario
+    from app.services.alcance import bodega_de_la_recepcion, usuario_es_de_la_bodega
+    # `db.session.get`, no el API legado de consulta: el trinquete de deuda lo
+    # cuenta por texto y su tope solo puede bajar.
+    from app.extensions import db as _db
+    _u = _db.session.get(_Usuario, int(get_jwt_identity()))
+    if _u and _u.rol != 'admin':
+        _rec = _db.session.get(RecepcionMercancia, id)
+        if not _rec:
+            return jsonify({'error': 'Recepción no encontrada'}), 404
+        if not usuario_es_de_la_bodega(_u, bodega_de_la_recepcion(_rec)):
+            return jsonify({
+                'error': 'Esa recepción no pertenece a tu punto de venta'
+            }), 403
+
     data = request.get_json() or {}
     for campo in ('producto_id', 'cantidad_averiada'):
         if campo not in data:
