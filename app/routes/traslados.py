@@ -2,10 +2,12 @@ import logging
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from sqlalchemy.orm import joinedload, subqueryload
-from app.models.traslado import SolicitudTraslado, ItemSolicitudTraslado, EstadoTraslado
+from app.models.traslado import (SolicitudTraslado, ItemSolicitudTraslado,
+                                EstadoTraslado, ClaseTraslado)
 from app.models.usuario import Usuario
 from app.routes._auth_helpers import Roles
-from app.services.traslado_service import TrasladoService
+from app.services.traslado_service import (TrasladoService,
+                                           BODEGA_AVERIAS_DESTINO)
 from app.services.bodegas import co_de_bodega
 
 traslados_bp = Blueprint('traslados', __name__)
@@ -91,11 +93,35 @@ def crear_solicitud():
         return jsonify({'error': 'Sin permiso para crear solicitudes de traslado'}), 403
     data = request.get_json() or {}
 
-    # Destino: siempre la tienda del usuario logueado
-    bodega_destino = data.get('bodega_destino_siesa') or (usuario.bodega_siesa_id if usuario else None)
-    nombre_pv = data.get('nombre_punto_venta') or (usuario.nombre_punto_venta if usuario else None)
-    # Origen: bodega fuente seleccionada en "Pedir desde" (default NB1)
-    bodega_origen = data.get('bodega_origen_siesa') or None
+    _clase = (data.get('clase_traslado') or ClaseTraslado.NORMAL).strip().upper()
+
+    if _clase == ClaseTraslado.AVERIAS:
+        # **El traslado de averías corre al revés que el normal.**
+        #
+        # En uno normal el punto PIDE: el destino es el punto y el origen es
+        # el CD. En uno de averías el punto MANDA: el origen es el punto y el
+        # destino es el CD. Si esto se dedujera del mismo `if`, un traslado de
+        # averías saldría del CD hacia el punto —es decir, al revés— y el STS
+        # descontaría del CD mercancía que nunca estuvo rota.
+        #
+        # El origen se toma del usuario, no del payload: quien declara una
+        # avería la declara de SU punto. `bodega_del_usuario` es la única
+        # función que contesta de qué bodega es alguien, y falla cerrada.
+        from app.services.alcance import bodega_del_usuario
+        bodega_origen = bodega_del_usuario(usuario)
+        if not bodega_origen:
+            return jsonify({'error':
+                'Tu usuario no tiene una bodega asignada, así que no se puede '
+                'saber de qué punto sale esta avería. Pedí que te la '
+                'configuren antes de declararla.'}), 400
+        bodega_destino = BODEGA_AVERIAS_DESTINO
+        nombre_pv = (usuario.nombre_punto_venta if usuario else None)
+    else:
+        # Destino: siempre la tienda del usuario logueado
+        bodega_destino = data.get('bodega_destino_siesa') or (usuario.bodega_siesa_id if usuario else None)
+        nombre_pv = data.get('nombre_punto_venta') or (usuario.nombre_punto_venta if usuario else None)
+        # Origen: bodega fuente seleccionada en "Pedir desde" (default NB1)
+        bodega_origen = data.get('bodega_origen_siesa') or None
 
     if not bodega_destino:
         return jsonify({'error': 'bodega_destino_siesa es requerida (o configurar en perfil de usuario)'}), 400
@@ -110,6 +136,7 @@ def crear_solicitud():
             items=data['items'],
             bodega_origen=bodega_origen,
             observaciones=data.get('observaciones'),
+            clase_traslado=_clase,
         )
         return jsonify(s.to_dict()), 201
     except ValueError as e:
@@ -151,7 +178,39 @@ def aprobar_solicitud(id):
         return jsonify({'error': 'Token inválido'}), 401
     usuario = Usuario.query.get(usuario_id)
     if not usuario or usuario.rol not in Roles.DESPACHO:
-        return jsonify({'error': 'Solo administradores pueden aprobar solicitudes'}), 403
+        # ── La excepción del administrador del punto ─────────────────────
+        #
+        # `Roles.DESPACHO` es quién aprueba un traslado NORMAL, y ahí el que
+        # aprueba es el CD: la tienda PIDE y el CD decide si manda. Un
+        # traslado de averías corre al revés —el punto MANDA— así que el que
+        # aprueba es el punto, y ningún punto tiene un usuario de DESPACHO.
+        #
+        # Medido en producción el 2026-09-17: cada punto satélite tiene un
+        # solo usuario administrativo, con rol `tienda` (NC1, NS1, PC1, FC1:
+        # uno cada uno). Sin esta excepción la avería se traba en ENVIADA y
+        # nadie del punto puede destrabarla.
+        #
+        # **No se ensancha `Roles.DESPACHO`.** Esa tupla decide sobre todos
+        # los traslados de la red y el repo ya tiene la cicatriz de una tupla
+        # de permisos que creció por el borde que nadie miró. Esto es una
+        # puerta lateral con tres llaves simultáneas —clase, rol y bodega— y
+        # cada una acota qué puede pasar por ella:
+        #
+        #   · la solicitud es de averías        → no toca ningún traslado normal
+        #   · el rol es `tienda`                → no habilita a pickers ni packers
+        #   · el origen es SU bodega            → no puede aprobar la de otro punto
+        #
+        # El alcance se resuelve con `bodega_del_usuario`, que es la única
+        # función que contesta de qué bodega es alguien y falla cerrada.
+        from app.services.alcance import usuario_es_de_la_bodega
+        _s = SolicitudTraslado.query.get_or_404(id)
+        _es_admin_de_su_punto = (
+            _s.es_averia()
+            and usuario.rol == Roles.TIENDA
+            and usuario_es_de_la_bodega(usuario, _s.bodega_origen_siesa)
+        )
+        if not _es_admin_de_su_punto:
+            return jsonify({'error': 'Solo administradores pueden aprobar solicitudes'}), 403
     data = request.get_json() or {}
     try:
         s = TrasladoService.aprobar_solicitud(
@@ -159,6 +218,63 @@ def aprobar_solicitud(id):
             aprobador_id=usuario_id,
             items_aprobados=data.get('items_aprobados'),
             operario_id=data.get('operario_id'),
+            averia_evidencia=data.get('averia_evidencia'),
+        )
+        return jsonify(s.to_dict()), 200
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    except Exception as e:
+        logger.exception(str(e))
+        return jsonify({'error': str(e)}), 500
+
+
+@traslados_bp.route('/<int:id>/dictaminar-averia', methods=['POST'])
+@jwt_required()
+def dictaminar_averia(id):
+    """NB1 dictamina si la mercancía que llegó estaba realmente averiada.
+
+    Cuarto y último momento de validación del proceso de averías. El guard de
+    rol y de bodega vive en el servicio, no acá: la regla de quién puede
+    dictaminar es de negocio, no de transporte, y así un segundo llamador no
+    puede entrar por una puerta más floja.
+    """
+    try:
+        usuario_id = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
+
+    # Puerta barata acá, autoridad abajo. El servicio vuelve a mirar el rol y
+    # además exige bodega, estado y que no sea quien declaró — esos son los
+    # guards que mandan, y viven ahí para que un segundo llamador no pueda
+    # entrar por una puerta más floja.
+    #
+    # Este chequeo no es redundancia decorativa: `test_todo_endpoint_verifica_rol`
+    # exige que la función de ruta sepa quién escribe, y tiene razón. La
+    # auditoría del 2026-08-04 encontró 28 rutas que delegaban el control
+    # «más abajo» y en varias no había ningún abajo. Es el mismo patrón de
+    # `PUT /api/conteo/<id>/ajustar`.
+    from app.extensions import db
+    usuario = db.session.get(Usuario, usuario_id)
+    if not usuario or usuario.rol not in Roles.SUPERVISION:
+        return jsonify({'error':
+            'Dictaminar una avería es del administrador o supervisor del '
+            'centro de distribución.'}), 403
+
+    data = request.get_json() or {}
+
+    # Se exige el campo explícito: un `data.get('confirmada')` ausente sería
+    # `None`, y `None` ya significa «nadie miró». El payload tiene que decir
+    # sí o no, no omitir. Es el mismo criterio que
+    # `POST /api/rutas/<r>/recaudos/<x>/confirmar-retencion`.
+    if 'confirmada' not in data:
+        return jsonify({'error': "Falta 'confirmada' (true/false)"}), 400
+
+    try:
+        s = TrasladoService.dictaminar_averia(
+            solicitud_id=id,
+            usuario_id=usuario_id,
+            confirmada=bool(data['confirmada']),
+            nota=data.get('nota'),
         )
         return jsonify(s.to_dict()), 200
     except ValueError as e:

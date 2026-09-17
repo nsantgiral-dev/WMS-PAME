@@ -212,6 +212,37 @@ function _renderTrasladoCard(s) {
       <button onclick="trasRevertir(${esc(s.id)})" style="padding:8px 10px;background:#1a1a1a;color:#fbbf24;border:1px solid #92400e;border-radius:8px;font-size:15px;font-weight:700;cursor:pointer;">↩ Revertir traslado</button>
     </div>` : '';
 
+  // ── Avería: el cuarto momento de validación ──────────────────────────
+  // Solo aparece cuando hay algo que decidir: es un traslado de averías, ya
+  // llegó y se contó (ENTREGADA), y nadie lo dictaminó todavía.
+  //
+  // `=== null` y no `!s.averia_veredicto`: un veredicto `false` («no estaba
+  // averiada») es una decisión tomada, y con truthiness volvería a pedir el
+  // dictamen de algo ya resuelto.
+  let bloqueDictamen = '';
+  if (s.es_averia) {
+    if (s.estado === 'ENTREGADA' && s.averia_veredicto === null) {
+      bloqueDictamen = `
+    <div style="margin-top:10px;border:1px solid #92400e;background:#1a1206;border-radius:8px;padding:10px;">
+      <div style="font-size:15px;color:#fbbf24;font-weight:700;margin-bottom:4px;">⚠ Avería sin dictaminar</div>
+      <div style="font-size:14px;color:#a8a29e;margin-bottom:8px;">Llegó y se contó. Antes de ubicarla hay que decir si de verdad estaba averiada.</div>
+      ${s.averia_evidencia ? `<div style="font-size:14px;color:#888;margin-bottom:8px;">Evidencia del punto: ${esc(s.averia_evidencia)}</div>` : ''}
+      <div style="display:flex;gap:6px;flex-wrap:wrap;">
+        <button onclick="trasDictaminarAveria(${esc(s.id)}, true)" style="padding:8px 10px;background:#7f1d1d;color:#fff;border:none;border-radius:8px;font-size:15px;font-weight:700;cursor:pointer;">Sí estaba averiada</button>
+        <button onclick="trasDictaminarAveria(${esc(s.id)}, false)" style="padding:8px 10px;background:#14532d;color:#fff;border:none;border-radius:8px;font-size:15px;font-weight:700;cursor:pointer;">No — vuelve a vendible</button>
+      </div>
+    </div>`;
+    } else if (s.averia_veredicto !== null) {
+      const ok = s.averia_veredicto;
+      bloqueDictamen = `
+    <div style="margin-top:10px;font-size:14px;color:${ok ? '#f87171' : '#4ade80'};">
+      ${ok ? '✓ Confirmada como averiada' : '✓ Dictaminada NO averiada — vuelve a vendible'}
+      ${s.averia_veredicto_nombre ? ` · ${esc(s.averia_veredicto_nombre)}` : ''}
+      ${s.averia_veredicto_nota ? `<div style="color:#888;">${esc(s.averia_veredicto_nota)}</div>` : ''}
+    </div>`;
+    }
+  }
+
   const operarioTag = s.operario_nombre
     ? `<div style="font-size:15px;color:#7c3aed;margin-bottom:6px;">👷 ${esc(s.operario_nombre)}${s.estado==='PREPARADO' ? ' · Listo para despachar' : s.estado==='EN_PICKING' ? ' · Recogiendo' : ''}</div>`
     : (s.estado === 'EN_PICKING' ? `<div style="font-size:15px;color:#f59e0b;margin-bottom:6px;">⚠ Sin operario asignado</div>` : '');
@@ -232,6 +263,7 @@ function _renderTrasladoCard(s) {
     ${acciones.length ? `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:10px;">${acciones.join('')}</div>` : ''}
     ${bloqueRecuperacion}
     ${bloqueRevertir}
+    ${bloqueDictamen}
   </div>`;
 }
 
@@ -771,6 +803,39 @@ async function trasRevertir(id) {
  * Retry the Siesa reception entry (connector 173079) for a traslado.
  * @param {number} id - Traslado solicitud ID.
  */
+/**
+ * Dictamen del CD sobre una avería recibida — el cuarto momento de validación.
+ *
+ * Se pide nota SOLO cuando el veredicto es «no estaba averiada»: ese desenlace
+ * contradice a quien la declaró en el punto, y la persona del punto tiene
+ * derecho a leer por qué. Confirmar no contradice a nadie.
+ */
+async function trasDictaminarAveria(id, confirmada) {
+  const titulo = confirmada
+    ? 'Confirmar que la mercancía SÍ estaba averiada.\n\nVa a la zona de averías y sale el documento a la bodega de averías en Siesa.'
+    : 'Dictaminar que NO estaba averiada.\n\nVuelve al inventario vendible y no sale ningún documento.';
+  let nota = null;
+  if (!confirmada) {
+    nota = prompt(titulo + '\n\n¿Por qué? (lo va a leer quien la declaró)');
+    if (nota === null) return;
+    if (!nota.trim()) { alerta('Hace falta el motivo', 'error'); return; }
+  } else if (!confirm(titulo + '\n\n¿Seguir?')) {
+    return;
+  }
+  try {
+    const r = await fetch(API + `/api/traslados/${id}/dictaminar-averia`, {
+      method: 'POST',
+      headers: { Authorization: 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ confirmada: confirmada, nota: nota })
+    });
+    const d = await r.json();
+    if (r.ok) {
+      alerta(confirmada ? 'Avería confirmada' : 'Dictaminada NO averiada', 'exito');
+      cargarTrasladosAdmin();
+    } else { alerta(d.error || 'No se pudo dictaminar', 'error'); }
+  } catch (e) { alerta('Error de conexión', 'error'); }
+}
+
 async function trasReintentarRecepcionSiesa(id) {
   if (!confirm(
     '¿Reintentar el registro de entrada en Siesa (ETS 173079)?\n\n'

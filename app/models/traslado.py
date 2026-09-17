@@ -33,6 +33,46 @@ class EstadoTraslado:
     REVERTIDA   = 'REVERTIDA'
 
 
+class ClaseTraslado:
+    """**Qué clase de mercancía mueve** este traslado. No es un estado: no
+    cambia nunca después de crearse.
+
+    `NORMAL` es todo lo que existía hasta hoy — mercancía vendible que va del
+    CD a un punto o entre puntos.
+
+    `AVERIAS` es el traslado que nace en un punto de venta cuando su jefe de
+    bodega encuentra mercancía dañada y la manda a NB1. Viaja por **la misma
+    máquina de estados y los mismos conectores** (STS 173076 al despachar, ETS
+    173079 al recibir): para Siesa es un traslado entre bodegas como cualquier
+    otro, y por eso no hace falta parametrizar nada nuevo en el ERP.
+
+    Lo que la clase decide es qué pasa **en el WMS al llegar**: un traslado
+    NORMAL lo repuebla el sync desde la existencia de Siesa; uno de AVERIAS
+    tiene que aterrizar en la zona de averías, que el sync no administra
+    (`inventario_siesa_service.bins_administrados_por_el_sync`). Sin esta
+    marca no hay forma de distinguirlos al recibir.
+    """
+    #: Los valores llevan el prefijo `TRASLADO_` **a propósito**, y no es
+    #: cosmética: `'AVERIAS'` a secas ya significa otra cosa en esta base —es
+    #: el `tipo_zona` con el que se decide si algo se puede vender
+    #: (`picking_service.ZONA_AVERIAS`)—. Dos columnas distintas con el mismo
+    #: literal es cómo alguien termina comparándolas, y el día que eso pase la
+    #: clase de un documento va a decidir si una ubicación es vendible.
+    #:
+    #: El trinquete `test_politica_vendible_unica.py` lo detectó: busca el
+    #: literal `'AVERIAS'` en todo `app/` porque una segunda copia de ese
+    #: string suele ser una segunda definición de «¿esto se vende?». Acá era
+    #: un homónimo, no una copia — pero meterlo en su lista de excepciones
+    #: habría sido peor: esa lista solo encoge, sus filas dicen «falta
+    #: migrar», y esta nunca migraría. Se arregla el homónimo, no el detector.
+    NORMAL  = 'TRASLADO_NORMAL'
+    AVERIAS = 'TRASLADO_AVERIAS'
+
+    #: Las dos únicas válidas. El CHECK homónimo en Postgres las repite; esta
+    #: tupla existe para que el código no escriba el literal suelto.
+    TODAS = (NORMAL, AVERIAS)
+
+
 class SolicitudTraslado(db.Model):
     __tablename__ = 'solicitudes_traslado'
 
@@ -81,6 +121,42 @@ class SolicitudTraslado(db.Model):
                                      server_default='false', nullable=False)
     inventario_descontado = db.Column(db.Boolean, default=False, server_default='false')
 
+    # ── Averías ────────────────────────────────────────────────────────────
+    #: Ver `ClaseTraslado`. `server_default` cubre las 174 solicitudes que ya
+    #: existen: todas son NORMAL, porque hasta hoy no había otra cosa.
+    clase_traslado = db.Column(db.String(20), nullable=False,
+                               default=ClaseTraslado.NORMAL,
+                               server_default=ClaseTraslado.NORMAL)
+
+    #: Lo que el administrador del punto escribió al aprobar la avería: qué
+    #: revisó, qué encontró, cómo lo constató. Es el segundo de los cuatro
+    #: momentos de validación del proceso (el primero es crear la solicitud,
+    #: que ya queda firmado por `solicitante_id` + `fecha_creacion`).
+    #:
+    #: Vive acá y no en `observaciones` porque `observaciones` es un campo
+    #: libre que cualquiera pisa en cualquier estado; esto es la firma de un
+    #: acto concreto y tiene que poder distinguirse de una nota al paso.
+    averia_evidencia = db.Column(db.Text)
+
+    #: **Tri-estado a propósito** — `None` no es «no».
+    #:
+    #:   · `None`  → nadie de NB1 miró todavía. La mercancía llegó y está en
+    #:               el limbo: contada en la recepción, sin ubicar.
+    #:   · `True`  → sí estaba averiada. Se ubica en la zona de averías y sale
+    #:               el documento a AV1.
+    #:   · `False` → no estaba averiada. Vuelve al inventario vendible de NB1
+    #:               y NO sale ningún documento de avería.
+    #:
+    #: Los tres desenlaces son distintos y tienen consecuencias operativas
+    #: distintas, así que un booleano de dos valores no alcanza — es el mismo
+    #: argumento de `RecaudoEntrega.retencion_confirmada`
+    #: (`app/models/recaudo_entrega.py:99`), que ya pagó esta lección.
+    averia_veredicto = db.Column(db.Boolean, nullable=True)
+    averia_veredicto_por = db.Column(db.Integer, db.ForeignKey('usuarios.id'),
+                                     nullable=True)
+    averia_veredicto_at = db.Column(db.DateTime, nullable=True)
+    averia_veredicto_nota = db.Column(db.String(200), nullable=True)
+
     # Timestamps
     fecha_creacion = db.Column(db.DateTime, default=datetime.utcnow)
     fecha_envio = db.Column(db.DateTime)
@@ -100,6 +176,49 @@ class SolicitudTraslado(db.Model):
                                backref='solicitudes_traslado_asignadas')
     items = db.relationship('ItemSolicitudTraslado', backref='solicitud',
                             lazy=True, cascade='all, delete-orphan')
+    averia_veredicto_usuario = db.relationship(
+        'Usuario', foreign_keys=[averia_veredicto_por],
+        backref='traslados_averia_dictaminados')
+
+    __table_args__ = (
+        # Las dos únicas clases que el código sabe leer. Un valor desconocido
+        # no daría error: se comportaría como NORMAL en todos los `if`, y un
+        # traslado de averías se ubicaría como mercancía vendible.
+        db.CheckConstraint(
+            "clase_traslado IN ('TRASLADO_NORMAL', 'TRASLADO_AVERIAS')",
+            name='ck_traslado_clase_conocida'),
+
+        # Un traslado NORMAL no puede cargar veredicto de avería.
+        #
+        # No es cosmética. Los cinco campos se leen para decidir **si la
+        # mercancía se ubica en la zona de averías**; si alguien los escribe
+        # sobre un traslado normal —un `PATCH` mal apuntado, un copiado de
+        # solicitud, una migración futura— el traslado normal empieza a
+        # comportarse como uno de averías y el stock vendible desaparece del
+        # pool sin que nadie lo haya pedido.
+        #
+        # La dirección contraria (un AVERIAS sin veredicto) sí es válida y es
+        # el estado inicial: `None` significa «nadie miró todavía».
+        db.CheckConstraint(
+            "clase_traslado = 'TRASLADO_AVERIAS' OR ("
+            " averia_veredicto IS NULL AND"
+            " averia_evidencia IS NULL AND"
+            " averia_veredicto_por IS NULL AND"
+            " averia_veredicto_at IS NULL AND"
+            " averia_veredicto_nota IS NULL)",
+            name='ck_traslado_veredicto_solo_en_averias'),
+    )
+
+    def es_averia(self) -> bool:
+        """¿Este traslado mueve mercancía averiada?
+
+        **Única implementación de la pregunta.** El repo ya pagó la factura de
+        tener el mismo criterio escrito en dos sitios
+        (`memoria: una-politica-una-funcion`): acá el criterio es uno y los
+        llamadores lo consultan, no lo copian. Si mañana la clase se decide
+        por otra cosa, cambia este método y lo heredan todos.
+        """
+        return self.clase_traslado == ClaseTraslado.AVERIAS
 
     def to_dict(self):
         # El error de Siesa es relevante (requiere acción) solo cuando no hay
@@ -157,6 +276,16 @@ class SolicitudTraslado(db.Model):
             'fecha_entrega': self.fecha_entrega.isoformat() if self.fecha_entrega else None,
             'observaciones': self.observaciones,
             'motivo_rechazo': self.motivo_rechazo,
+            'clase_traslado': self.clase_traslado,
+            'es_averia': self.es_averia(),
+            'averia_evidencia': self.averia_evidencia,
+            'averia_veredicto': self.averia_veredicto,
+            'averia_veredicto_por': self.averia_veredicto_por,
+            'averia_veredicto_nombre': (self.averia_veredicto_usuario.nombre
+                                        if self.averia_veredicto_usuario else None),
+            'averia_veredicto_at': (self.averia_veredicto_at.isoformat()
+                                    if self.averia_veredicto_at else None),
+            'averia_veredicto_nota': self.averia_veredicto_nota,
             'items': [i.to_dict() for i in self.items],
             'total_items': len(self.items),
             'picking_progreso': self._picking_progreso(),
@@ -219,6 +348,23 @@ class ItemSolicitudTraslado(db.Model):
 
     disponible_siesa = db.Column(db.Integer)  # snapshot en bodega origen al crear
 
+    #: Por qué está averiada ESTA línea. Solo aplica cuando la solicitud es de
+    #: `ClaseTraslado.AVERIAS`.
+    #:
+    #: **No hay `cantidad_averiada` acá, y es deliberado.** En un traslado de
+    #: averías la mercancía averiada es *todo* el documento: la cantidad ya la
+    #: dice `cantidad_solicitada`, y la cadena
+    #: `solicitada ≥ aprobada ≥ enviada ≥ recibida` la sigue recortando paso a
+    #: paso como en cualquier traslado. Una segunda columna con el mismo
+    #: número sería una segunda fuente de verdad que puede divergir de la
+    #: primera — exactamente el defecto que `ck_traslado_cadena_no_crece`
+    #: existe para impedir.
+    #:
+    #: (En `ItemRecepcion` sí hay `cantidad_averiada`, y ahí es correcto: en
+    #: una recepción por OC la avería es un *subconjunto* de lo recibido, no
+    #: el documento entero.)
+    motivo_averia = db.Column(db.String(200))
+
     producto = db.relationship('Producto', backref='items_traslado', lazy=True)
 
     __table_args__ = (
@@ -260,4 +406,5 @@ class ItemSolicitudTraslado(db.Model):
             'cantidad_enviada': self.cantidad_enviada,
             'cantidad_recibida': self.cantidad_recibida,
             'disponible_siesa': self.disponible_siesa,
+            'motivo_averia': self.motivo_averia,
         }

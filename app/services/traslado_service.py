@@ -17,7 +17,8 @@ import uuid
 import logging
 from datetime import datetime
 from app.extensions import db
-from app.models.traslado import SolicitudTraslado, ItemSolicitudTraslado, EstadoTraslado
+from app.models.traslado import (SolicitudTraslado, ItemSolicitudTraslado,
+                                EstadoTraslado, ClaseTraslado)
 from app.models.producto import Producto
 from app.models.producto_empaque import ProductoEmpaque
 from app.models.inventario import UbicacionProducto, MovimientoInventario
@@ -32,6 +33,20 @@ logger = logging.getLogger(__name__)
 
 # Bodega origen por defecto (bodega principal WMS)
 BODEGA_ORIGEN_DEFAULT = connekta.bodega  # NB1
+
+#: A dónde llega un traslado de averías. Es el CD, **no AV1** — el porqué está
+#: argumentado en `TrasladoService._validar_traslado_de_averias`. Se deriva de
+#: la misma fuente que el origen por defecto para que no puedan divergir: si
+#: mañana el CD cambia de código, cambia en un solo lugar.
+BODEGA_AVERIAS_DESTINO = BODEGA_ORIGEN_DEFAULT
+
+#: Quién puede dictaminar una avería en el CD. Es `Roles.SUPERVISION` — el
+#: dueño lo dijo así: «el admin o supervisor de la NB1 tiene que validarlo».
+#: Se nombra acá en vez de importar `Roles` para no meter una dependencia de
+#: `app.routes` dentro de un servicio; el trinquete
+#: `test_traslado_de_averias_dictamen.py` exige que las dos tuplas coincidan,
+#: así que no pueden divergir en silencio.
+_ROLES_DICTAMEN_AVERIA = ('admin', 'supervisor', 'jefe_almacen')
 
 
 def _resolver_empaque(prod):
@@ -65,27 +80,119 @@ class TrasladoService:
         return f'ST-{hoy}-{uid}'
 
     @staticmethod
+    def _validar_traslado_de_averias(bodega_origen: str, bodega_destino: str,
+                                     items: list):
+        """Las tres condiciones de un traslado de averías. **Único sitio.**
+
+        ── 1. El destino es el CD, nunca AV1 directamente ────────────────────
+
+        Es la pregunta que hay que contestar antes de construir nada: «¿el
+        traslado iría directo a la AV1?». No puede, y no es una preferencia de
+        diseño — son cuatro hechos medidos:
+
+          · AV1 **no tiene almacén WMS**. Los `almacenes` con bodega son 5
+            (NB1, NC1, NS1, PC1, FC1); AV1 no está. Sin almacén no hay
+            ubicaciones, y sin ubicaciones la mercancía no tiene dónde
+            aterrizar al recibirse.
+          · AV1 **no tiene quién reciba**. `confirmar_recepcion` la ejecuta un
+            usuario de la bodega destino; ningún usuario resuelve AV1.
+          · `co_de_bodega('AV1')` devuelve `None`. El documento sale hoy solo
+            porque el fallback es 003 por coincidencia — no porque esté
+            parametrizado.
+          · AV1 **no tiene camino de vuelta**. Si el veredicto de NB1 es «no
+            estaba averiada», la mercancía tiene que volver al inventario
+            vendible. Desde AV1 no hay cómo.
+
+        Así que el recorrido es **punto → NB1 → AV1, en dos tramos**. El
+        primero es este traslado, y viaja por los mismos conectores que
+        cualquier otro (STS 173076 / ETS 173079): para Siesa es un traslado
+        entre bodegas y no hay nada nuevo que parametrizar. El segundo tramo es
+        el documento clase 67 que ya existe y ya funciona
+        (`siesa_job_service.encolar_traslado_averias`), y sale **solo si el
+        veredicto de NB1 confirma la avería**.
+
+        ── 2. El origen no puede ser el destino ──────────────────────────────
+
+        Un traslado de NB1 a NB1 no mueve nada y ensucia el kardex con un par
+        STS/ETS que se cancelan.
+
+        ── 3. Cada línea dice por qué está averiada ──────────────────────────
+
+        Tres personas van a mirar esta línea después del que la escribió: el
+        administrador del punto que valida, quien recibe en NB1, y quien
+        dictamina antes de ubicar. Ninguno estuvo ahí cuando se encontró el
+        daño. Una línea sin motivo no se puede validar — solo se puede creer.
+        """
+        origen = (bodega_origen or '').strip().upper()
+        destino = (bodega_destino or '').strip().upper()
+
+        if destino != BODEGA_AVERIAS_DESTINO:
+            raise ValueError(
+                f'Un traslado de averías va al centro de distribución '
+                f'({BODEGA_AVERIAS_DESTINO}), no a {destino or "«sin destino»"}. '
+                f'Desde allá sale el documento a la bodega de averías, y solo '
+                f'si el administrador confirma que la mercancía está dañada.')
+
+        if origen == destino:
+            raise ValueError(
+                f'El origen y el destino son la misma bodega ({origen}) — '
+                f'ese traslado no mueve nada.')
+
+        sin_motivo = [
+            str(i.get('producto_id'))
+            for i in items
+            if not (i.get('motivo_averia') or '').strip()
+        ]
+        if sin_motivo:
+            raise ValueError(
+                f'Falta el motivo de la avería en {len(sin_motivo)} '
+                f'{"línea" if len(sin_motivo) == 1 else "líneas"} '
+                f'(producto {", ".join(sin_motivo)}). Quien valida en el punto '
+                f'y quien recibe en el CD no estuvieron cuando se encontró el '
+                f'daño: sin el motivo no pueden validar, solo creer.')
+
+    @staticmethod
     def crear_solicitud(solicitante_id: int, bodega_destino: str,
                         nombre_punto_venta: str, items: list,
                         bodega_origen: str = None,
-                        observaciones: str = None) -> SolicitudTraslado:
+                        observaciones: str = None,
+                        clase_traslado: str = None) -> SolicitudTraslado:
         """
         Tienda arma el carrito y crea la solicitud en BORRADOR.
-        items: [{producto_id, cantidad_solicitada}]
+        items: [{producto_id, cantidad_solicitada, motivo_averia?}]
         bodega_origen: bodega fuente del traslado (default NB1)
+        clase_traslado: `ClaseTraslado.NORMAL` (default) o `AVERIAS`.
+
+        Crear es **declarar**, no ejecutar. Nada de esto toca inventario ni
+        manda un documento a Siesa: eso pasa recién al despachar. Es por eso
+        que el traslado es la forma correcta de mover una avería entre puntos
+        — la separación entre decir y hacer ya existe en esta máquina de
+        estados, con dos aprobaciones de por medio.
         """
         if not items:
             raise ValueError('La solicitud debe tener al menos un ítem')
 
+        clase = (clase_traslado or ClaseTraslado.NORMAL).strip().upper()
+        if clase not in ClaseTraslado.TODAS:
+            raise ValueError(
+                f'Clase de traslado desconocida: {clase!r}. '
+                f'Las válidas son {", ".join(ClaseTraslado.TODAS)}.')
+
+        _origen = bodega_origen or BODEGA_ORIGEN_DEFAULT
+        if clase == ClaseTraslado.AVERIAS:
+            TrasladoService._validar_traslado_de_averias(
+                _origen, bodega_destino, items)
+
         solicitud = SolicitudTraslado(
             codigo=TrasladoService._codigo_solicitud(),
-            bodega_origen_siesa=bodega_origen or BODEGA_ORIGEN_DEFAULT,
+            bodega_origen_siesa=_origen,
             bodega_destino_siesa=bodega_destino,
             nombre_punto_venta=nombre_punto_venta,
             estado=EstadoTraslado.BORRADOR,
             modo_transferencia='EN_TRANSITO' if connekta.bodega_transito else 'DIRECTA',
             bodega_transito_siesa=connekta.bodega_transito or None,
             solicitante_id=solicitante_id,
+            clase_traslado=clase,
             observaciones=observaciones
         )
         db.session.add(solicitud)
@@ -101,6 +208,11 @@ class TrasladoService:
                 producto_codigo_siesa=producto.codigo_siesa or producto.codigo,
                 cantidad_solicitada=item_data['cantidad_solicitada'],
                 disponible_siesa=item_data.get('disponible_siesa'),
+                # El motivo solo viaja en un traslado de averías. En uno normal
+                # no hay avería que motivar, y dejarlo entrar convertiría el
+                # campo en un segundo `observaciones` por línea.
+                motivo_averia=((item_data.get('motivo_averia') or '').strip()[:200] or None
+                               if clase == ClaseTraslado.AVERIAS else None),
             )
             db.session.add(item)
 
@@ -126,11 +238,36 @@ class TrasladoService:
     @staticmethod
     def aprobar_solicitud(solicitud_id: int, aprobador_id: int,
                           items_aprobados: list = None,
-                          operario_id: int = None) -> SolicitudTraslado:
+                          operario_id: int = None,
+                          averia_evidencia: str = None) -> SolicitudTraslado:
         """
         Admin bodega aprueba (puede ajustar cantidades) y asigna operario.
         items_aprobados: [{id, cantidad_aprobada}] — si None, aprueba cantidades solicitadas.
         operario_id: usuario con rol operario que irá a recoger los ítems.
+        averia_evidencia: **obligatorio si el traslado es de averías.** Es el
+            segundo de los cuatro momentos de validación del proceso: el
+            administrador del punto dice qué revisó y qué encontró.
+
+        ── Por qué acá NO se exige que el que aprueba sea otra persona ────────
+
+        Porque hoy no hay otra persona. Medido en producción el 2026-09-17:
+        cada punto satélite tiene **un** usuario administrativo —el rol
+        `tienda`— más sus pickers y packers. NC1: 1. NS1: 1. PC1: 1. FC1: 1.
+        Ningún punto tiene un `admin` propio.
+
+        Un guard de «quien declara no valida» acá no separaría dos personas:
+        haría el proceso **imposible** en los cuatro puntos, y la salida sería
+        que alguien preste su usuario — que es peor que no tener el guard,
+        porque además borra el rastro.
+
+        Lo que sí se separa acá son dos **actos**: crear la solicitud y
+        aprobarla con evidencia escrita son dos gestos distintos, en dos
+        momentos distintos, y el segundo obliga a poner por escrito qué se
+        revisó. Esa es la garantía que este nivel puede dar de verdad.
+
+        La separación de **personas** se exige donde sí existe: en el veredicto
+        de NB1 (`dictaminar_averia`), que es además donde la mercancía
+        efectivamente se ubica y donde sale el documento a AV1.
         """
         s = SolicitudTraslado.query.filter_by(id=solicitud_id).with_for_update().first()
         if not s:
@@ -138,6 +275,21 @@ class TrasladoService:
             abort(404)
         if s.estado not in (EstadoTraslado.ENVIADA,):
             raise ValueError(f'Solo se puede aprobar una solicitud ENVIADA (estado: {s.estado})')
+
+        _evidencia = (averia_evidencia or '').strip()
+        if s.es_averia():
+            if not _evidencia:
+                raise ValueError(
+                    'Para aprobar un traslado de averías hay que dejar la '
+                    'evidencia: qué se revisó y qué se encontró. Tres personas '
+                    'van a decidir sobre esta mercancía sin haber estado ahí.')
+            s.averia_evidencia = _evidencia[:2000]
+        elif _evidencia:
+            # El CHECK `ck_traslado_veredicto_solo_en_averias` lo rechazaría en
+            # Postgres con un IntegrityError al commitear; decirlo acá es lo
+            # que hace que el mensaje llegue a quien apretó el botón.
+            raise ValueError(
+                'Este traslado no es de averías — no lleva evidencia de avería.')
 
         # Actualizar cantidades aprobadas
         if items_aprobados:
@@ -871,6 +1023,123 @@ class TrasladoService:
 
         TrasladoService.invalidar_cache_stock(s.bodega_origen_siesa)
         logger.info('[TRASLADO] %s → REVERTIDA por usuario %s: %s', s.codigo, usuario_id, motivo or '—')
+        return s
+
+    @staticmethod
+    def dictaminar_averia(solicitud_id: int, usuario_id: int,
+                          confirmada: bool, nota: str = None) -> SolicitudTraslado:
+        """**Cuarto momento**: NB1 dictamina si la mercancía estaba averiada.
+
+        El proceso tiene cuatro validaciones. Tres ya existían en la máquina de
+        estados y no se tocaron:
+
+          1. El jefe de bodega del punto **genera** la avería → crear la
+             solicitud (`solicitante_id` + `fecha_creacion`).
+          2. El administrador del punto **valida y deja evidencia** →
+             `aprobar_solicitud(averia_evidencia=...)`.
+          3. Recepción en NB1 **valida la cantidad** → `cantidad_recibida` por
+             ítem, con `ck_traslado_cadena_no_crece` impidiendo que crezca.
+          4. Antes de ubicar, el admin o supervisor de NB1 **dictamina** → esto.
+
+        ── Los tres desenlaces ───────────────────────────────────────────────
+
+        `confirmada=True`  → sí estaba averiada. La mercancía va a la zona de
+                             averías y sale el documento a AV1.
+        `confirmada=False` → no estaba averiada. Vuelve al inventario vendible
+                             de NB1 y **no sale ningún documento**.
+        Sin dictaminar     → `averia_veredicto` sigue en `None`: la mercancía
+                             llegó, se contó, y está en el limbo esperando que
+                             alguien la mire. Ese `None` tiene su propio reloj
+                             (`fecha_entrega`) y por eso no es lo mismo que un
+                             «no».
+
+        ── Acá SÍ se exige que sea otra persona ──────────────────────────────
+
+        A diferencia de la aprobación en el punto —donde hay un solo usuario
+        administrativo y el guard volvería el proceso imposible— NB1 tiene
+        gente distinta: jefe de almacén, supervisor y recepcionista son tres
+        personas. Y es el momento que más lo necesita: es donde el stock
+        efectivamente se mueve y donde se emite el documento a AV1.
+
+        ── Por qué el veredicto se congela ───────────────────────────────────
+
+        Porque del veredicto cuelga un documento en Siesa. Cambiarlo después
+        de que salió dejaría el WMS diciendo una cosa y el ERP otra, sin nada
+        que reconcilie. Si el dictamen fue equivocado, el arreglo es un
+        movimiento nuevo con su propia firma — no reescribir el viejo.
+        """
+        from app.models.usuario import Usuario
+        from app.services.alcance import usuario_es_de_la_bodega
+
+        if confirmada is None:
+            raise ValueError(
+                'El veredicto tiene que ser sí o no. «Todavía no sé» ya es el '
+                'estado actual y no hace falta escribirlo.')
+
+        s = SolicitudTraslado.query.filter_by(id=solicitud_id).with_for_update().first()
+        if not s:
+            from flask import abort
+            abort(404)
+
+        if not s.es_averia():
+            raise ValueError(
+                f'{s.codigo} no es un traslado de averías — no hay nada que '
+                f'dictaminar.')
+
+        if s.estado != EstadoTraslado.ENTREGADA:
+            raise ValueError(
+                f'{s.codigo} está en {s.estado}. El dictamen va después de que '
+                f'recepción confirme cuánto llegó: dictaminar antes sería '
+                f'opinar sobre mercancía que todavía no se contó.')
+
+        # Congelado. Se compara contra `is not None` a propósito: `False` es un
+        # veredicto tan real como `True`, y un `if s.averia_veredicto:` lo
+        # dejaría reescribir.
+        if s.averia_veredicto is not None:
+            _quien = (s.averia_veredicto_usuario.nombre
+                      if s.averia_veredicto_usuario else f'usuario {s.averia_veredicto_por}')
+            raise ValueError(
+                f'{s.codigo} ya fue dictaminado por {_quien}: '
+                f'{"averiada" if s.averia_veredicto else "no averiada"}. '
+                f'De este veredicto cuelga un documento en Siesa — si estuvo '
+                f'mal, se corrige con un movimiento nuevo, no reescribiendo '
+                f'este.')
+
+        usuario = db.session.get(Usuario, usuario_id)
+        if not usuario or not usuario.activo:
+            raise ValueError('Usuario no encontrado o inactivo.')
+
+        if usuario.rol not in _ROLES_DICTAMEN_AVERIA:
+            raise ValueError(
+                f'Dictaminar una avería es de {", ".join(_ROLES_DICTAMEN_AVERIA)}. '
+                f'{usuario.nombre} es {usuario.rol}.')
+
+        # Admin es la excepción explícita: es el rol sin bodega propia
+        # (`bodega_del_usuario` devuelve None para los 9 usuarios sin bodega
+        # medidos en producción), así que el guard de alcance lo dejaría fuera
+        # de todas las bodegas en vez de dentro de una.
+        if usuario.rol != 'admin' and not usuario_es_de_la_bodega(
+                usuario, s.bodega_destino_siesa):
+            raise ValueError(
+                f'{usuario.nombre} no es de {s.bodega_destino_siesa}. '
+                f'La mercancía está ahí: quien dictamina tiene que poder verla.')
+
+        if usuario_id == s.solicitante_id:
+            raise ValueError(
+                f'{usuario.nombre} fue quien declaró esta avería. El dictamen '
+                f'lo da otra persona — si no, el control es una firma sobre la '
+                f'propia palabra.')
+
+        s.averia_veredicto = bool(confirmada)
+        s.averia_veredicto_por = usuario_id
+        s.averia_veredicto_at = datetime.utcnow()
+        s.averia_veredicto_nota = ((nota or '').strip()[:200]) or None
+        db.session.commit()
+
+        logger.info(
+            '[TRASLADO] %s dictaminado por %s (%s): %s',
+            s.codigo, usuario.nombre, usuario.rol,
+            'AVERIADA' if s.averia_veredicto else 'NO AVERIADA')
         return s
 
     @staticmethod
