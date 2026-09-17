@@ -286,8 +286,16 @@ class MobileService:
         # comitear la asignación, más abajo — ver _pedido_es_chico().
         from sqlalchemy.orm import aliased as _aliased
         _TP_otra = _aliased(TareaPicking)
+        # 'PEDIDO_SIESA' es el valor REAL que escribe iniciar_despacho() (ver
+        # app/routes/siesa.py) — el único camino de producción que crea estas
+        # tareas. 'PEDIDO' nunca lo escribe nadie en producción (solo el
+        # default de tests) — con el guard viejo, comparando solo contra
+        # 'PEDIDO', esta regla completa quedaba en `db.not_(_es_pedido) = True`
+        # siempre para pedidos reales: la protección nunca corría y el pedido
+        # se repartía libre pese al umbral. PD1487 se partió en dos operarios
+        # con el fix del umbral ya desplegado — este era el motivo real.
         _es_pedido = db.or_(
-            TareaPicking.tipo_documento == 'PEDIDO',
+            TareaPicking.tipo_documento.in_(['PEDIDO', 'PEDIDO_SIESA']),
             TareaPicking.tipo_documento.is_(None),
         )
         _lineas_del_doc = (
@@ -608,7 +616,7 @@ class MobileService:
         # primero comiteado, ve el pedido tomado y no se queda con nada esta
         # vez — reintenta en el siguiente poll (segundos después, comportamiento
         # normal del dispensador), en vez de partir el pedido.
-        _tarea_es_pedido = tarea.tipo_documento in (None, 'PEDIDO')
+        _tarea_es_pedido = tarea.tipo_documento in (None, 'PEDIDO', 'PEDIDO_SIESA')
         _requiere_blindaje = (
             _tarea_es_pedido
             and tarea.referencia_documento

@@ -251,6 +251,38 @@ class TestDispensador:
         db.session.refresh(linea2)
         assert linea2.operario_id is None
 
+    def test_pedido_chico_con_tipo_documento_real_de_produccion_queda_pegado(
+            self, app, db, mobile_setup, producto2):
+        """
+        Regresión real (2026-09-17, PD1487): `iniciar_despacho()` — el ÚNICO
+        camino de producción que crea TareaPicking para un pedido Siesa —
+        escribe tipo_documento='PEDIDO_SIESA', NUNCA 'PEDIDO'. El guard de
+        "pedido chico pegajoso" (y el advisory lock que lo blinda) solo
+        reconocían 'PEDIDO'/None — así que en producción NUNCA se aplicaban
+        a un pedido real, aunque los tests de arriba (que usan el default
+        'PEDIDO' del helper `_crear_tarea`) pasaran en verde. Este test usa
+        el valor real para que una regresión de esto no vuelva a colarse
+        con la suite en verde.
+        """
+        from app.services.mobile_service import MobileService
+
+        s = mobile_setup
+        otro = self._crear_otro_operario(db, s['almacen'], 'otro_real@test.com')
+
+        linea1 = _crear_tarea(db, s['producto'], s['ubicacion'], s['almacen'],
+                               referencia_documento='PD1487', tipo_documento='PEDIDO_SIESA')
+        _crear_tarea(db, producto2, s['ubicacion'], s['almacen'],
+                     referencia_documento='PD1487', tipo_documento='PEDIDO_SIESA')
+
+        resultado_a = MobileService.get_tarea_actual(s['usuario'].id)
+        assert resultado_a['id'] == linea1.id
+
+        resultado_b = MobileService.get_tarea_actual(otro.id)
+        assert resultado_b is None, (
+            'con tipo_documento="PEDIDO_SIESA" (el valor real que usa '
+            'iniciar_despacho en producción), el pedido chico también debe '
+            'quedar pegado a un solo operario')
+
     def test_pedido_chico_libera_la_segunda_linea_al_mismo_operario(self, app, db, mobile_setup, producto2):
         """El "pegado" es al operario, no un bloqueo total — el mismo
         operario que tiene la línea 1 sigue recibiendo las demás líneas de
