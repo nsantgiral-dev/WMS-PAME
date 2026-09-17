@@ -280,6 +280,23 @@
       color: var(--green) !important;
       border-color: var(--gbrd) !important;
     }
+    /* Texto blanco/casi-blanco de un hijo con color propio (ej. el número
+       grande "3 de 3") no hereda el `color` del padre — un inline style en
+       el propio elemento gana siempre sobre lo heredado, con o sin
+       !important del ancestro. Sin esto queda invisible sobre el verde
+       pálido del modo claro. */
+    body.light [style*="background:#14532d"] *[style*="color:#fff"],
+    body.light [style*="background:#166534"] *[style*="color:#fff"],
+    body.light [style*="background:#065f46"] *[style*="color:#fff"],
+    body.light [style*="background:#1e3a1e"] *[style*="color:#fff"],
+    body.light [style*="background:#0d1a0d"] *[style*="color:#fff"],
+    body.light [style*="background:#0a1a0a"] *[style*="color:#fff"],
+    body.light [style*="background:#1a2a1a"] *[style*="color:#fff"],
+    body.light [style*="background:#064e3b"] *[style*="color:#fff"],
+    body.light [style*="background:#0f2e1c"] *[style*="color:#fff"],
+    body.light [style*="background:#1c2a1c"] *[style*="color:#fff"] {
+      color: var(--green) !important;
+    }
 
     /* 6. Estado ROJO */
     body.light [style*="background:#3f1515"],
@@ -297,6 +314,20 @@
       background-color: var(--rbg) !important;
       color: var(--red) !important;
       border-color: var(--rbrd) !important;
+    }
+    body.light [style*="background:#3f1515"] *[style*="color:#fff"],
+    body.light [style*="background:#7f1d1d"] *[style*="color:#fff"],
+    body.light [style*="background:#2d0a0a"] *[style*="color:#fff"],
+    body.light [style*="background:#1a0a0a"] *[style*="color:#fff"],
+    body.light [style*="background:#110a0a"] *[style*="color:#fff"],
+    body.light [style*="background:#7c2d12"] *[style*="color:#fff"],
+    body.light [style*="background:#450a0a"] *[style*="color:#fff"],
+    body.light [style*="background:#3a1616"] *[style*="color:#fff"],
+    body.light [style*="background:#2a1010"] *[style*="color:#fff"],
+    body.light [style*="background:#1a0000"] *[style*="color:#fff"],
+    body.light [style*="background:#1A0606"] *[style*="color:#fff"],
+    body.light [style*="background:#2a1e1e"] *[style*="color:#fff"] {
+      color: var(--red) !important;
     }
     body.light [style*="border-top:1px solid #2a1010"],
     body.light [style*="border-top: 1px solid #2a1010"] {
@@ -316,6 +347,16 @@
       color: var(--purple) !important;
       border-color: var(--pbrd) !important;
     }
+    body.light [style*="background:#2d1b69"] *[style*="color:#fff"],
+    body.light [style*="background:#1a0a2e"] *[style*="color:#fff"],
+    body.light [style*="background:#0d0d1a"] *[style*="color:#fff"],
+    body.light [style*="background:#7c3aed"] *[style*="color:#fff"],
+    body.light [style*="background:#6b21a8"] *[style*="color:#fff"],
+    body.light [style*="background:#1a1a2a"] *[style*="color:#fff"],
+    body.light [style*="background:#4c1d95"] *[style*="color:#fff"],
+    body.light [style*="background:#3b0766"] *[style*="color:#fff"] {
+      color: var(--purple) !important;
+    }
 
     /* 8. Estado AZUL */
     body.light [style*="background:#1e3a5f"],
@@ -329,6 +370,16 @@
       background-color: var(--bbg) !important;
       color: var(--blue) !important;
       border-color: var(--bbrd) !important;
+    }
+    body.light [style*="background:#1e3a5f"] *[style*="color:#fff"],
+    body.light [style*="background:#0a1628"] *[style*="color:#fff"],
+    body.light [style*="background:#1e40af"] *[style*="color:#fff"],
+    body.light [style*="background:#1d4ed8"] *[style*="color:#fff"],
+    body.light [style*="background:#0f2a3f"] *[style*="color:#fff"],
+    body.light [style*="background:#1e2a3a"] *[style*="color:#fff"],
+    body.light [style*="background:#0a0e11"] *[style*="color:#fff"],
+    body.light [style*="background:#0d1b2a"] *[style*="color:#fff"] {
+      color: var(--blue) !important;
     }
 
     /* 9b. Acento teal dim (#0B3038) → light-teal en claro (botones Asignar / Manual) */
@@ -359,6 +410,25 @@
       background-color: var(--ybg) !important;
       color: var(--yellow) !important;
       border-color: var(--ybrd) !important;
+    }
+    body.light [style*="background:#78350f"] *[style*="color:#fff"],
+    body.light [style*="background:#b45309"] *[style*="color:#fff"],
+    body.light [style*="background:#713f12"] *[style*="color:#fff"],
+    body.light [style*="background:#9a3412"] *[style*="color:#fff"],
+    body.light [style*="background:#1a0f00"] *[style*="color:#fff"],
+    body.light [style*="background:#1c1400"] *[style*="color:#fff"],
+    body.light [style*="background:#1a1a00"] *[style*="color:#fff"],
+    body.light [style*="background:#110a00"] *[style*="color:#fff"],
+    body.light [style*="background:#1c1a0a"] *[style*="color:#fff"],
+    body.light [style*="background:#92400e"] *[style*="color:#fff"],
+    body.light [style*="background:#431407"] *[style*="color:#fff"],
+    body.light [style*="background:#1a1408"] *[style*="color:#fff"],
+    body.light [style*="background:#451a03"] *[style*="color:#fff"],
+    body.light [style*="background:#1a1a0d"] *[style*="color:#fff"],
+    body.light [style*="background:#1C2B3A"] *[style*="color:#fff"],
+    body.light [style*="background:#1a1a0a"] *[style*="color:#fff"],
+    body.light [style*="background:#854d0e"] *[style*="color:#fff"] {
+      color: var(--yellow) !important;
     }
 
     /* 10. Estado GRIS NEUTRO (BORRADOR, CANCELADA) */
