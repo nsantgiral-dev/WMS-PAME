@@ -57,6 +57,24 @@ let _SCAN_LAST_TS = 0;      // debounce: ms del último scan registrado
 // poner la siguiente en foco — el código anterior, todavía en cuadro,
 // se volvía a aceptar como si fuera la unidad nueva. 1600ms es el punto
 // donde un swap manual de unidad ya alcanza a completarse.
+//
+// _SCAN_DEBOUNCE_MS ahora es el TECHO de seguridad, no el mecanismo
+// principal — ver _onQuaggaProcessed(). El lector físico (Bluetooth/USB,
+// ver SCANNER_BUFFER más abajo) nunca necesitó este ajuste: dispara un
+// código por gatillazo, evento discreto. La cámara analiza frames de video
+// sin parar mientras el código siga en cuadro, así que "cuánto esperar" es
+// la pregunta equivocada — lo que hace falta saber es "¿ya se fue el
+// código de encuadre?". Eso es lo que _onQuaggaProcessed() rastrea vía
+// Quagga.onProcessed (se dispara en cada frame, haya o no detección),
+// independiente de _onQuaggaDetect (que solo se dispara cuando SÍ hay
+// una decodificación). Con el código todavía en cuadro, _SCAN_ARMADO
+// se queda en false sin importar cuánto tiempo pase — el techo de
+// _SCAN_DEBOUNCE_MS solo existe por si el navegador no soporta
+// onProcessed o dejara de disparar, para no bloquear el escaneo para
+// siempre.
+let _SCAN_ARMADO = true;
+let _SCAN_SIN_DETECCION_DESDE = null;
+const _SCAN_REARME_GAP_MS = 350;
 const _SCAN_DEBOUNCE_MS = 1600;
 let CHART = null;
 let TAB = 'tab-dashboard';
@@ -2111,7 +2129,30 @@ async function verReconciliacion() {
 
 /** Generate an LPN label for an unlabeled pack detected during picking. */
 
-// ─── Quagga2 — debounce interno ───────────────────────────────────────────────
+// ─── Quagga2 — rearme por hueco de encuadre + techo de debounce ───────────────
+/**
+ * Se dispara en CADA frame que Quagga procesa, haya o no una decodificación
+ * — a diferencia de onDetected, que solo dispara cuando SÍ decodificó algo.
+ * Es lo que permite saber "¿el código sigue en cuadro?" en vez de adivinarlo
+ * con un timer. Mientras haya algo detectado (aunque no pase el filtro de
+ * confianza de _onQuaggaDetect — acá basta con que algo esté en cuadro) el
+ * hueco no arranca; apenas un frame no ve nada, empieza a contar, y solo
+ * tras _SCAN_REARME_GAP_MS consecutivos sin nada se rearma el escaneo.
+ * @param {Object} result - Resultado de Quagga2 para este frame (puede no traer codeResult).
+ */
+function _onQuaggaProcessed(result) {
+  const hayCodigo = !!(result && result.codeResult && result.codeResult.code);
+  if (hayCodigo) {
+    _SCAN_SIN_DETECCION_DESDE = null;
+    return;
+  }
+  const ahora = Date.now();
+  if (_SCAN_SIN_DETECCION_DESDE === null) _SCAN_SIN_DETECCION_DESDE = ahora;
+  if (!_SCAN_ARMADO && ahora - _SCAN_SIN_DETECCION_DESDE >= _SCAN_REARME_GAP_MS) {
+    _SCAN_ARMADO = true;
+  }
+}
+
 /** @param {Object} result - Quagga2 detection result with codeResult and confidence data. */
 function _onQuaggaDetect(result) {
   const code = result && result.codeResult && result.codeResult.code;
@@ -2126,8 +2167,13 @@ function _onQuaggaDetect(result) {
   }
 
   const now = Date.now();
-  if (now - _SCAN_LAST_TS < _SCAN_DEBOUNCE_MS) return;
+  // Armado (hubo un hueco real de encuadre) → acepta ya, sin esperar el
+  // techo. Si no, el techo sigue protegiendo por si onProcessed no rearmó.
+  if (!_SCAN_ARMADO && now - _SCAN_LAST_TS < _SCAN_DEBOUNCE_MS) return;
+
   _SCAN_LAST_TS = now;
+  _SCAN_ARMADO = false;
+  _SCAN_SIN_DETECCION_DESDE = null;
   vibrar();
   if (_QUAGGA_CB) _QUAGGA_CB(code);
 }
@@ -2136,6 +2182,7 @@ function _onQuaggaDetect(result) {
 async function _quaggaStop() {
   if (!window.Quagga) return;
   try { Quagga.offDetected(_onQuaggaDetect); } catch (_) {}
+  try { Quagga.offProcessed(_onQuaggaProcessed); } catch (_) {}
   try { Quagga.stop(); } catch (_) {}
 }
 
@@ -2158,6 +2205,8 @@ async function abrirCamara(lectorDivId = 'lector-qr', boxDivId = 'camara-box', o
   _QUAGGA_BOX = boxDivId;
   _QUAGGA_CB  = onScan || procesarScan;
   _SCAN_LAST_TS = 0;
+  _SCAN_ARMADO = true;
+  _SCAN_SIN_DETECCION_DESDE = null;
 
   if (!window.Quagga) {
     // Vendorizada localmente (igual que JsBarcode) y cacheada por sw.js —
@@ -2224,6 +2273,7 @@ async function abrirCamara(lectorDivId = 'lector-qr', boxDivId = 'camara-box', o
         resolve(); return;
       }
       Quagga.onDetected(_onQuaggaDetect);
+      try { Quagga.onProcessed(_onQuaggaProcessed); } catch (_) {}
       Quagga.start();
 
       // Estilar video insertado por Quagga + agregar visor rectangular
