@@ -224,7 +224,7 @@ class TestDispensador:
 
     def test_pedido_chico_queda_pegado_al_primer_operario(self, app, db, mobile_setup, producto2):
         """
-        Pedido con 2 líneas (< PEDIDO_LINEAS_PARALELIZABLE, default 4): el
+        Pedido con 2 líneas (< PEDIDO_LINEAS_PARALELIZABLE, default 6): el
         operario que toma la primera línea se queda con el pedido — otro
         operario no puede tomar la segunda línea mientras la primera siga
         sin terminar. Partir un pedido chico entre varios pickers no gana
@@ -274,7 +274,7 @@ class TestDispensador:
         assert resultado['id'] == linea2.id
 
     def test_pedido_grande_se_reparte_entre_varios_operarios(self, app, db, mobile_setup, producto2):
-        """Pedido con >= PEDIDO_LINEAS_PARALELIZABLE líneas (4 por defecto):
+        """Pedido con >= PEDIDO_LINEAS_PARALELIZABLE líneas (6 por defecto):
         dos operarios distintos SÍ pueden tomar líneas distintas del mismo
         pedido al mismo tiempo — acá sí conviene paralelizar."""
         from app.models.producto import Producto
@@ -282,15 +282,18 @@ class TestDispensador:
 
         s = mobile_setup
         otro = self._crear_otro_operario(db, s['almacen'], 'otro_grande@test.com')
-        prod3 = Producto(codigo='PROD-003', nombre='Cuaderno', codigo_siesa='PROD-003', activo=True)
-        prod4 = Producto(codigo='PROD-004', nombre='Borrador', codigo_siesa='PROD-004', activo=True)
-        db.session.add_all([prod3, prod4])
+        productos_extra = [
+            Producto(codigo=f'PROD-00{n}', nombre=f'Producto {n}',
+                     codigo_siesa=f'PROD-00{n}', activo=True)
+            for n in range(3, 7)
+        ]
+        db.session.add_all(productos_extra)
         db.session.commit()
 
         _crear_tarea(db, s['producto'], s['ubicacion'], s['almacen'], referencia_documento='PD-GRANDE')
         _crear_tarea(db, producto2, s['ubicacion'], s['almacen'], referencia_documento='PD-GRANDE')
-        _crear_tarea(db, prod3, s['ubicacion'], s['almacen'], referencia_documento='PD-GRANDE')
-        _crear_tarea(db, prod4, s['ubicacion'], s['almacen'], referencia_documento='PD-GRANDE')
+        for prod in productos_extra:
+            _crear_tarea(db, prod, s['ubicacion'], s['almacen'], referencia_documento='PD-GRANDE')
 
         resultado_a = MobileService.get_tarea_actual(s['usuario'].id)
         resultado_b = MobileService.get_tarea_actual(otro.id)
@@ -299,6 +302,59 @@ class TestDispensador:
         assert resultado_a['referencia'] == 'PD-GRANDE'
         assert resultado_b['referencia'] == 'PD-GRANDE'
         assert resultado_a['id'] != resultado_b['id']
+
+    def test_pedido_chico_por_lineas_pero_grande_por_unidades_se_reparte(
+            self, app, db, mobile_setup, producto2):
+        """2 líneas (< 6, "chico" por conteo de SKU) pero una línea pide
+        >= PEDIDO_UNIDADES_PARALELIZABLE unidades: el pedido completo se
+        trata como grande y SÍ se reparte entre varios operarios — pedir
+        30+ unidades de un SKU no es un picking rápido de un solo operario."""
+        from app.services.mobile_service import MobileService
+
+        s = mobile_setup
+        otro = self._crear_otro_operario(db, s['almacen'], 'otro_unds@test.com')
+
+        _crear_tarea(db, s['producto'], s['ubicacion'], s['almacen'],
+                     referencia_documento='PD-UNDS', cantidad_solicitada=30)
+        _crear_tarea(db, producto2, s['ubicacion'], s['almacen'],
+                     referencia_documento='PD-UNDS', cantidad_solicitada=5)
+
+        resultado_a = MobileService.get_tarea_actual(s['usuario'].id)
+        resultado_b = MobileService.get_tarea_actual(otro.id)
+
+        assert resultado_a is not None and resultado_b is not None
+        assert resultado_a['id'] != resultado_b['id']
+
+    def test_pedido_chico_no_se_asigna_si_otro_proceso_tiene_el_lock(
+            self, app, db, mobile_setup, monkeypatch):
+        """Blindaje contra condición de carrera: si el advisory lock del
+        documento ya lo tiene otra petición concurrente (dos operarios
+        pidiendo tarea casi al mismo tiempo), esta petición no se queda con
+        nada — no parte el pedido chico entre los dos."""
+        from contextlib import contextmanager
+        from app.services.mobile_service import MobileService
+
+        s = mobile_setup
+        linea1 = _crear_tarea(db, s['producto'], s['ubicacion'], s['almacen'],
+                               referencia_documento='PD-RACE')
+
+        @contextmanager
+        def _lock_ocupado(clave, etiqueta=''):
+            yield False
+
+        # get_tarea_actual() hace `from app.utils.lock import advisory_lock`
+        # DENTRO de la función (import perezoso) — parchar el atributo del
+        # módulo es lo que ese import perezoso va a resolver en cada llamada.
+        import app.utils.lock as lock_mod
+        monkeypatch.setattr(lock_mod, 'advisory_lock', _lock_ocupado)
+
+        resultado = MobileService.get_tarea_actual(s['usuario'].id)
+
+        assert resultado is None
+        db.session.refresh(linea1)
+        assert linea1.operario_id is None, (
+            'con el lock ocupado por otra petición, esta no debe asignarse '
+            'la tarea — debe reintentar en el siguiente poll')
 
     def test_umbral_de_paralelizacion_es_configurable(self, app, db, mobile_setup, producto2, monkeypatch):
         """PEDIDO_LINEAS_PARALELIZABLE se puede bajar (ej. a 2) y un pedido de

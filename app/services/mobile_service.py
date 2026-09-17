@@ -9,15 +9,17 @@ import threading
 from datetime import datetime, date, time as dtime
 from app.extensions import db
 
-# Un pedido con MENOS líneas (SKU distintos) que esto es "chico": una vez que
-# un operario toma su primera línea, las demás quedan pegadas a ese mismo
-# operario — nadie más puede tomarlas hasta que las termine (o un admin
-# reabra el pedido). Evita partir pedidos pequeños entre varios pickers, que
-# no gana velocidad real y sí le suma coordinación al empaque (esperar al
-# más lento de varios). Un pedido con ESTA cantidad de líneas o más sigue
-# repartiéndose libre entre cualquier picker disponible — ahí sí conviene
-# paralelizar. Solo aplica a PEDIDO, nunca a TRASLADO.
-PEDIDO_LINEAS_PARALELIZABLE = int(os.environ.get('PEDIDO_LINEAS_PARALELIZABLE', '4'))
+# Un pedido con MENOS líneas (SKU distintos) que esto Y donde NINGUNA línea
+# llega a PEDIDO_UNIDADES_PARALELIZABLE es "chico": una vez que un operario
+# toma su primera línea, las demás quedan pegadas a ese mismo operario —
+# nadie más puede tomarlas hasta que las termine (o un admin reabra el
+# pedido). Evita partir pedidos pequeños entre varios pickers, que no gana
+# velocidad real y sí le suma coordinación al empaque (esperar al más lento
+# de varios). Basta con QUE UNA sola condición se cumpla (líneas o unidades)
+# para que el pedido se trate como grande y se reparta libre entre cualquier
+# picker disponible. Solo aplica a PEDIDO, nunca a TRASLADO.
+PEDIDO_LINEAS_PARALELIZABLE = int(os.environ.get('PEDIDO_LINEAS_PARALELIZABLE', '6'))
+PEDIDO_UNIDADES_PARALELIZABLE = int(os.environ.get('PEDIDO_UNIDADES_PARALELIZABLE', '30'))
 
 # Debounce de scans: evita doble-conteo cuando la red cae después del commit
 # y la PWA reintenta el mismo scan. Cache por (tarea_id, tipo, codigo) → (ts, resultado).
@@ -38,6 +40,28 @@ from app.services.packing_service import PackingService
 from app.services.conteo_service import ConteoService
 
 logger = logging.getLogger(__name__)
+
+
+def _pedido_es_chico(referencia_documento: str) -> bool:
+    """¿Este documento debe quedar pegado a un solo operario?
+
+    Chico = menos de PEDIDO_LINEAS_PARALELIZABLE SKU distintos Y ninguna
+    línea llega a PEDIDO_UNIDADES_PARALELIZABLE unidades. Lee TODAS las
+    TareaPicking del documento sin importar su estado — el tamaño original
+    del pedido no cambia porque una línea ya se completó (mismo criterio
+    que el filtro de la cola, ver PEDIDO_LINEAS_PARALELIZABLE arriba).
+    """
+    from sqlalchemy import func as _func
+    fila = (db.session.query(
+                _func.count(_func.distinct(TareaPicking.producto_id)),
+                _func.max(TareaPicking.cantidad_solicitada),
+            )
+            .filter(TareaPicking.referencia_documento == referencia_documento)
+            .first())
+    lineas = (fila[0] or 0) if fila else 0
+    max_unidades = (fila[1] or 0) if fila else 0
+    return (lineas < PEDIDO_LINEAS_PARALELIZABLE
+            and max_unidades < PEDIDO_UNIDADES_PARALELIZABLE)
 
 
 class MobileService:
@@ -244,12 +268,22 @@ class MobileService:
                 )
             )
 
-        # Pedido chico (< PEDIDO_LINEAS_PARALELIZABLE líneas = SKU distintos) ya
-        # tocado por OTRO operario -> esta fila no es candidata para mí. "Líneas"
-        # se cuenta sobre TODAS las TareaPicking del documento sin importar su
-        # estado (el tamaño original del pedido no cambia porque una línea ya
-        # se completó). TRASLADO nunca entra aquí — solo PEDIDO (tipo_documento
-        # NULL cuenta como PEDIDO, igual que en _orden_dispatch más abajo).
+        # Pedido chico (< PEDIDO_LINEAS_PARALELIZABLE líneas = SKU distintos, Y
+        # ninguna línea llega a PEDIDO_UNIDADES_PARALELIZABLE unidades) ya
+        # tocado por OTRO operario -> esta fila no es candidata para mí. Basta
+        # con que se cumpla UNA de las dos condiciones (muchas líneas o una
+        # línea grande) para que el pedido se trate como grande y siga
+        # repartiéndose libre. "Líneas"/"unidades" se miden sobre TODAS las
+        # TareaPicking del documento sin importar su estado (el tamaño
+        # original del pedido no cambia porque una línea ya se completó).
+        # TRASLADO nunca entra aquí — solo PEDIDO (tipo_documento NULL cuenta
+        # como PEDIDO, igual que en _orden_dispatch más abajo).
+        #
+        # Esta es la comprobación "optimista" de la cola — barata, sin locks,
+        # y suficiente en el caso normal. La comprobación que de verdad cierra
+        # la condición de carrera (dos operarios pidiendo tarea casi al mismo
+        # tiempo) es la re-verificación bajo advisory lock justo antes de
+        # comitear la asignación, más abajo — ver _pedido_es_chico().
         from sqlalchemy.orm import aliased as _aliased
         _TP_otra = _aliased(TareaPicking)
         _es_pedido = db.or_(
@@ -261,6 +295,16 @@ class MobileService:
             .filter(_TP_otra.referencia_documento == TareaPicking.referencia_documento)
             .correlate(TareaPicking)
             .scalar_subquery()
+        )
+        _max_unidades_del_doc = (
+            db.session.query(db.func.max(_TP_otra.cantidad_solicitada))
+            .filter(_TP_otra.referencia_documento == TareaPicking.referencia_documento)
+            .correlate(TareaPicking)
+            .scalar_subquery()
+        )
+        _es_paralelizable_doc = db.or_(
+            _lineas_del_doc >= PEDIDO_LINEAS_PARALELIZABLE,
+            _max_unidades_del_doc >= PEDIDO_UNIDADES_PARALELIZABLE,
         )
         _otro_operario_ya_lo_tiene = (
             db.session.query(_TP_otra.id)
@@ -275,7 +319,7 @@ class MobileService:
         _filtros_base.append(
             db.or_(
                 db.not_(_es_pedido),
-                _lineas_del_doc >= PEDIDO_LINEAS_PARALELIZABLE,
+                _es_paralelizable_doc,
                 db.not_(_otro_operario_ya_lo_tiene),
             )
         )
@@ -504,55 +548,100 @@ class MobileService:
                         f'({conteos_hoy + 1 if capacidad > 0 else "∞"}/{capacidad or "∞"})'
                     )
 
-        # Capturar atributos antes del commit — expire_on_commit los invalida después
-        _tarea_id = tarea.id
-        _tarea_codigo = tarea.codigo
-        _tarea_prioridad = tarea.prioridad
-        _tarea_ubicacion = tarea.ubicacion.codigo if tarea.ubicacion else ''
-        _tarea_producto_id = tarea.producto_id
-        _tarea_almacen_id = tarea.almacen_id
-        _tarea_producto_codigo = tarea.producto.codigo if tarea.producto else ''
-        _tarea_producto_nombre = tarea.producto.nombre if tarea.producto else ''
-        _tarea_cantidad_requerida = tarea.cantidad_solicitada
-        _tarea_cantidad_escaneada = tarea.cantidad_recogida
-        _tarea_empaques_escaneados = tarea.empaques_escaneados or 0
-        _tarea_factor = tarea.producto.factor_conversion or 1 if tarea.producto else 1
-        _tarea_unidad_empaque = (tarea.producto.unidad_empaque or '').upper() if tarea.producto else ''
-        _tarea_referencia = tarea.referencia_documento
-        _tarea_lote = tarea.lote
-        _tarea_tipo_documento = tarea.tipo_documento or 'PEDIDO'
-        _tarea_disponible_siesa = float(tarea.disponible_siesa) if tarea.disponible_siesa is not None else None
+        def _finalizar_asignacion():
+            # Capturar atributos antes del commit — expire_on_commit los invalida después
+            _tarea_id = tarea.id
+            _tarea_codigo = tarea.codigo
+            _tarea_prioridad = tarea.prioridad
+            _tarea_ubicacion = tarea.ubicacion.codigo if tarea.ubicacion else ''
+            _tarea_producto_id = tarea.producto_id
+            _tarea_almacen_id = tarea.almacen_id
+            _tarea_producto_codigo = tarea.producto.codigo if tarea.producto else ''
+            _tarea_producto_nombre = tarea.producto.nombre if tarea.producto else ''
+            _tarea_cantidad_requerida = tarea.cantidad_solicitada
+            _tarea_cantidad_escaneada = tarea.cantidad_recogida
+            _tarea_empaques_escaneados = tarea.empaques_escaneados or 0
+            _tarea_factor = tarea.producto.factor_conversion or 1 if tarea.producto else 1
+            _tarea_unidad_empaque = (tarea.producto.unidad_empaque or '').upper() if tarea.producto else ''
+            _tarea_referencia = tarea.referencia_documento
+            _tarea_lote = tarea.lote
+            _tarea_tipo_documento = tarea.tipo_documento or 'PEDIDO'
+            _tarea_disponible_siesa = float(tarea.disponible_siesa) if tarea.disponible_siesa is not None else None
 
-        # Asignar picking al operario
-        tarea.operario_id = operario_id
-        tarea.estado = EstadoPicking.EN_PROCESO
-        tarea.fecha_inicio = datetime.utcnow()
-        db.session.commit()
+            # Asignar picking al operario
+            tarea.operario_id = operario_id
+            tarea.estado = EstadoPicking.EN_PROCESO
+            tarea.fecha_inicio = datetime.utcnow()
+            db.session.commit()
 
-        logger.info(f'[MOBILE] Picking {_tarea_codigo} asignado a operario {operario_id}')
+            logger.info(f'[MOBILE] Picking {_tarea_codigo} asignado a operario {operario_id}')
 
-        resultado = {
-            'id': _tarea_id,
-            'tipo': 'PICKING',
-            'tipo_documento': _tarea_tipo_documento,
-            'prioridad': _tarea_prioridad,
-            'ubicacion': _tarea_ubicacion,
-            'producto_id': _tarea_producto_id,
-            'almacen_id': _tarea_almacen_id,
-            'producto_codigo': _tarea_producto_codigo,
-            'producto_nombre': _tarea_producto_nombre,
-            'cantidad_requerida': _tarea_cantidad_requerida,
-            'cantidad_escaneada': _tarea_cantidad_escaneada,
-            'empaques_escaneados': _tarea_empaques_escaneados,
-            'factor_conversion': _tarea_factor,
-            'unidad_empaque': _tarea_unidad_empaque,
-            'estado': 'EN_PROCESO',
-            'referencia': _tarea_referencia,
-            'lote': _tarea_lote,
-            'conteo_intercalado': conteo_intercalado,
-            'disponible_siesa': _tarea_disponible_siesa,
-        }
-        return resultado
+            return {
+                'id': _tarea_id,
+                'tipo': 'PICKING',
+                'tipo_documento': _tarea_tipo_documento,
+                'prioridad': _tarea_prioridad,
+                'ubicacion': _tarea_ubicacion,
+                'producto_id': _tarea_producto_id,
+                'almacen_id': _tarea_almacen_id,
+                'producto_codigo': _tarea_producto_codigo,
+                'producto_nombre': _tarea_producto_nombre,
+                'cantidad_requerida': _tarea_cantidad_requerida,
+                'cantidad_escaneada': _tarea_cantidad_escaneada,
+                'empaques_escaneados': _tarea_empaques_escaneados,
+                'factor_conversion': _tarea_factor,
+                'unidad_empaque': _tarea_unidad_empaque,
+                'estado': 'EN_PROCESO',
+                'referencia': _tarea_referencia,
+                'lote': _tarea_lote,
+                'conteo_intercalado': conteo_intercalado,
+                'disponible_siesa': _tarea_disponible_siesa,
+            }
+
+        # ── Blindaje de pedidos chicos contra condición de carrera ──────────
+        # El filtro que armó la query de arriba lee estado ya comiteado: si
+        # dos operarios piden tarea casi al mismo tiempo, los dos pueden
+        # pasarlo ANTES de que el primero comitee su asignación — cada uno se
+        # queda con una línea distinta del mismo pedido chico. Se cierra con
+        # un advisory lock por documento: solo una petición a la vez decide
+        # y comitea la asignación de un pedido chico. La segunda, ya con el
+        # primero comiteado, ve el pedido tomado y no se queda con nada esta
+        # vez — reintenta en el siguiente poll (segundos después, comportamiento
+        # normal del dispensador), en vez de partir el pedido.
+        _tarea_es_pedido = tarea.tipo_documento in (None, 'PEDIDO')
+        _requiere_blindaje = (
+            _tarea_es_pedido
+            and tarea.referencia_documento
+            and _pedido_es_chico(tarea.referencia_documento)
+        )
+
+        if not _requiere_blindaje:
+            return _finalizar_asignacion()
+
+        import zlib
+        from app.utils.lock import advisory_lock
+        _clave_doc = zlib.crc32(tarea.referencia_documento.encode('utf-8')) & 0x7FFFFFFF
+        with advisory_lock(_clave_doc, f'pedido_chico:{tarea.referencia_documento}') as _tomado:
+            if not _tomado:
+                # Otra petición está decidiendo la asignación de este mismo
+                # pedido chico ahora mismo — no me quedo con nada esta vez.
+                db.session.rollback()
+                return None
+            _ya_lo_tiene_otro = (
+                TareaPicking.query
+                .filter(
+                    TareaPicking.referencia_documento == tarea.referencia_documento,
+                    TareaPicking.operario_id.isnot(None),
+                    TareaPicking.operario_id != operario_id,
+                )
+                .first()
+            )
+            if _ya_lo_tiene_otro:
+                # El otro operario ya comiteó su asignación mientras yo
+                # esperaba el lock — el pedido ya es suyo, no se parte.
+                db.session.rollback()
+                return None
+            return _finalizar_asignacion()
 
     @staticmethod
     def _conteo_a_dict(c: SesionConteo) -> dict:
