@@ -560,11 +560,20 @@ async function _registrarEscaneoRecepcion(productoId, cantidad, esEmpaque, unida
   const itemsOC = RECEPCION_ACTUAL.items.filter(it => it.tipo !== 'BONIFICACION');
   const todoCompleto = itemsOC.every(it => it.cantidad_recibida >= it.cantidad_ordenada);
   const btn = document.getElementById('btn-confirmar-rec');
-  if (btn && todoCompleto && itemsOC.length > 0) {
+  if (btn && itemsOC.length > 0) {
+    // El texto/color se calculan una vez en renderEscaneoRecepcion() y no se
+    // tocaban más — el botón se ponía verde al completar pero seguía
+    // diciendo "⚠ Confirmar recepción parcial", el texto quedaba viejo.
     btn.disabled = false;
-    btn.style.background = '#16a34a';
     btn.style.cursor = 'pointer';
-    alerta('Todo escaneado — confirma la recepción', 'exito');
+    if (todoCompleto) {
+      btn.style.background = '#16a34a';
+      btn.textContent = '✓ Confirmar recepción';
+      alerta('Todo escaneado — confirma la recepción', 'exito');
+    } else {
+      btn.style.background = '#b45309';
+      btn.textContent = '⚠ Confirmar recepción parcial';
+    }
   }
 }
 
