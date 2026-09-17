@@ -49,6 +49,15 @@ let HTML5QR = null;          // legacy — ya no se usa, conservado por si acaso
 let _QUAGGA_BOX  = null;    // boxDivId activo
 let _QUAGGA_CB   = null;    // callback del scan activo
 let _SCAN_LAST_TS = 0;      // debounce: ms del último scan registrado
+// Ventana mínima entre dos escaneos aceptados durante lectura continua con
+// cámara (picking, recepción, devoluciones, traslados de tienda — cualquier
+// pantalla que deje la cámara abierta entre unidades, ver abrirCamara()).
+// 900ms alcanzaba para leer el mismo código detectado en frames sucesivos,
+// pero no le daba al operario tiempo real de RETIRAR la unidad ya contada y
+// poner la siguiente en foco — el código anterior, todavía en cuadro,
+// se volvía a aceptar como si fuera la unidad nueva. 1600ms es el punto
+// donde un swap manual de unidad ya alcanza a completarse.
+const _SCAN_DEBOUNCE_MS = 1600;
 let CHART = null;
 let TAB = 'tab-dashboard';
 let ALMACEN_ID = 1;
@@ -2117,7 +2126,7 @@ function _onQuaggaDetect(result) {
   }
 
   const now = Date.now();
-  if (now - _SCAN_LAST_TS < 900) return;
+  if (now - _SCAN_LAST_TS < _SCAN_DEBOUNCE_MS) return;
   _SCAN_LAST_TS = now;
   vibrar();
   if (_QUAGGA_CB) _QUAGGA_CB(code);
