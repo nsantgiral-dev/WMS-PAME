@@ -292,7 +292,7 @@ function renderEscaneoRecepcion(rec) {
       <div style="background:#111;border-radius:10px;padding:12px;margin-bottom:12px;">
         <div style="font-size:12px;color:#666;text-align:center;margin-bottom:10px;">Escanea unidad, caja o paca — el sistema calcula las unidades</div>
         ${OPERARIO && OPERARIO.puede_usar_camara ? `
-        <button onclick="abrirCamara('lector-qr-rec','camara-box-rec', cod => { cerrarCamara('camara-box-rec'); procesarScanRecepcion(cod); })"
+        <button onclick="abrirCamara('lector-qr-rec','camara-box-rec', procesarScanRecepcion)"
           style="width:100%;padding:13px;font-size:16px;background:#fff;color:#000;border:2px solid #000;border-radius:10px;cursor:pointer;margin-bottom:8px;">
           📷 Escanear con cámara
         </button>
@@ -1478,7 +1478,7 @@ function renderLineasDevolucion(datos) {
     <div style="background:#111;border-radius:10px;padding:12px;margin-bottom:12px;">
       <div style="font-size:12px;color:#666;text-align:center;margin-bottom:10px;">Escanea cada unidad devuelta — suma 1 a la línea, hasta el tope facturado</div>
       ${OPERARIO && OPERARIO.puede_usar_camara ? `
-      <button onclick="abrirCamara('lector-qr-dev','camara-box-dev', cod => { cerrarCamara('camara-box-dev'); procesarScanDevolucion(cod); })"
+      <button onclick="abrirCamara('lector-qr-dev','camara-box-dev', procesarScanDevolucion)"
         style="width:100%;padding:13px;font-size:16px;background:#fff;color:#000;border:2px solid #000;border-radius:10px;cursor:pointer;margin-bottom:8px;">
         📷 Escanear con cámara
       </button>
