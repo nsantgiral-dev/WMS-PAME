@@ -801,7 +801,9 @@ def pendientes_recepcion():
         )
         .filter(
             SolicitudTraslado.bodega_destino_siesa == bodega,
-            SolicitudTraslado.estado.in_(['EN_TRANSITO', 'DESPACHADA']),
+            # 'DESPACHADA' no existe en EstadoTraslado y producción no tiene
+            # ninguna fila con ese valor — rama muerta, retirada el 2026-09-17.
+            SolicitudTraslado.estado == 'EN_TRANSITO',
         )
         .order_by(SolicitudTraslado.fecha_creacion.desc())
         .all()

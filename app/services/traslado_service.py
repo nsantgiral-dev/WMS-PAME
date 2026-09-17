@@ -884,7 +884,13 @@ class TrasladoService:
         if not s:
             from flask import abort
             abort(404)
-        if s.estado not in (EstadoTraslado.EN_TRANSITO, 'DESPACHADA'):
+        # `'DESPACHADA'` estuvo acá como literal y NO existe en
+        # `EstadoTraslado`: ningún camino lo escribe y producción no tiene
+        # una sola fila con ese valor (medido el 2026-09-17 sobre los 174
+        # traslados: EN_PACKING, ENTREGADA, EN_TRANSITO, EN_PICKING,
+        # RECHAZADA). Era una rama muerta que hacía creer que existía un
+        # estado intermedio.
+        if s.estado != EstadoTraslado.EN_TRANSITO:
             raise ValueError(f'No se puede confirmar recepción en estado {s.estado}')
         # Guard idempotencia: 173079 ya se envió exitosamente — no duplicar
         if s.siesa_entrada_consec and s.estado == EstadoTraslado.ENTREGADA:

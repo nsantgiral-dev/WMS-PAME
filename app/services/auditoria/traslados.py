@@ -252,6 +252,14 @@ def no_hay_entrada_sin_salida(ctx=None):
     ]
 
 
+#: Días en tránsito a partir de los cuales un traslado deja de parecerse a la
+#: operación normal. Medido el 2026-09-17 sobre los traslados ENTREGADA de
+#: producción que tienen las dos fechas: **promedio 7,6 días, máximo 15,3**.
+#: Un umbral de 2 o 3 días marcaría como problema la mitad de los despachos
+#: sanos — y un canal donde casi todo es aviso deja de leerse.
+DIAS_EN_TRANSITO_ANORMAL = 16
+
+
 @invariante(
     codigo='TRA-30',
     flujo='traslados',
@@ -263,18 +271,51 @@ def no_hay_entrada_sin_salida(ctx=None):
 )
 def se_pueden_contar_los_traslados_en_vuelo(ctx=None):
     """No es un defecto —un traslado tarda— pero sin poder contarlos, uno
-    atascado hace semanas se ve igual que uno de ayer."""
+    atascado hace semanas se ve igual que uno de ayer.
+
+    Antes emitía un hallazgo por CADA traslado en vuelo. Medido el 2026-09-17:
+    19 en tránsito, 19 hallazgos, todos los días. Eso no es un detector: es
+    ruido que entierra al que sí está atascado.
+
+    Ahora emite dos cosas distintas:
+
+      · uno por cada traslado que pasó el umbral — esos son los que alguien
+        tiene que mirar;
+      · UNO SOLO, agregado, por los que no tienen fecha de despacho. No es la
+        misma pregunta: «no sé hace cuánto salió» es un problema del registro,
+        no del traslado, y 19 líneas repitiéndolo no agregan información.
+
+    El sin-fecha tiene causa conocida y arreglada hacia adelante: hasta el
+    2026-09-16 el despacho por cierre de packing no escribía `fecha_despacho`
+    (solo lo hacía el botón del admin). Los 19 que hoy están así salieron por
+    ese camino y **no se pueden recuperar** — no hay de dónde deducir la fecha
+    sin inventarla.
+    """
     from app.utils.fecha import ahora_bogota
     hoy = ahora_bogota().date()
     out = []
+    sin_fecha = []
     for s in _solicitudes(('EN_TRANSITO',)):
-        ref = s.fecha_despacho.date() if s.fecha_despacho else None
-        dias = (hoy - ref).days if ref else None
+        if not s.fecha_despacho:
+            sin_fecha.append(s.codigo or f'traslado#{s.id}')
+            continue
+        dias = (hoy - s.fecha_despacho.date()).days
+        if dias < DIAS_EN_TRANSITO_ANORMAL:
+            continue
         out.append(Hallazgo(
             referencia=s.codigo or f'traslado#{s.id}',
-            detalle=(f'{dias} día(s) en tránsito' if dias is not None
-                     else 'en tránsito sin fecha de despacho'),
+            detalle=f'{dias} día(s) en tránsito',
             datos={'origen': s.bodega_origen_siesa,
-                   'destino': s.bodega_destino_siesa},
+                   'destino': s.bodega_destino_siesa,
+                   'dias': dias, 'umbral': DIAS_EN_TRANSITO_ANORMAL},
+        ))
+    if sin_fecha:
+        out.append(Hallazgo(
+            referencia='sin-fecha-de-despacho',
+            detalle=(f'{len(sin_fecha)} traslado(s) en tránsito sin '
+                     f'`fecha_despacho`: no se puede saber hace cuánto salieron. '
+                     f'Causa conocida —el despacho por cierre de packing no la '
+                     f'escribía hasta el 2026-09-16— y sin arreglo retroactivo.'),
+            datos={'codigos': sin_fecha[:20], 'total': len(sin_fecha)},
         ))
     return out

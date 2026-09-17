@@ -735,19 +735,17 @@ async function trasDespachar(id) {
  * Confirm reception of a traslado at the destination store.
  * @param {number} id - Traslado solicitud ID.
  */
-async function trasConfirmarRecepcion(id) {
-  if (!confirm('¿Confirmar recepción? Se notificará a Siesa (entrada en tienda).')) return;
-  try {
-    const r = await fetch(API + `/api/traslados/${id}/recibir`, {
-      method: 'POST',
-      headers: { Authorization: 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
-      body: JSON.stringify({})
-    });
-    const d = await r.json();
-    if (r.ok) { alerta('Recepción confirmada — inventario en tienda', 'exito'); cargarTrasladosAdmin(); }
-    else { alerta(d.error || 'Error', 'error'); }
-  } catch (e) { alerta('Error de conexión', 'error'); }
-}
+// `trasConfirmarRecepcion` se retiró el 2026-09-17: no tenía UN SOLO caller
+// —ni onclick, ni HTML, ni otra función— y además mandaba `{}`, que el guard
+// de `confirmar_recepcion` rechaza desde agosto por exigir las cantidades
+// contadas. O sea: código muerto que, de haberse alcanzado, habría fallado.
+//
+// El trinquete de integridad no lo vio porque mide COBERTURA DE URLS, no
+// alcanzabilidad de funciones: `/api/traslados/<id>/recibir` sí lo consume la
+// pantalla del recepcionista, así que la URL contaba como viva. Su propio
+// comentario ya anticipa ese escalón pendiente.
+//
+// Quien reciba un traslado cuenta ítem por ítem desde Recepción → Traslados.
 
 /**
  * Revert a traslado, returning units to the source warehouse inventory.
