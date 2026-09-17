@@ -1026,6 +1026,174 @@ class TrasladoService:
         return s
 
     @staticmethod
+    def _ejecutar_veredicto_averia(s: SolicitudTraslado):
+        """Ubica la mercancía según el dictamen. **No hace commit** — lo hace
+        `dictaminar_averia`, para que el veredicto y su consecuencia sean una
+        sola transacción.
+
+        ── Los dos destinos ──────────────────────────────────────────────────
+
+        `True`  → zona de averías, con la MISMA política que usa recepción
+                  (`_destino_averias_garantizado`, que nunca devuelve None y
+                  declara si tuvo que degradar). Y sale el documento a AV1: el
+                  segundo tramo del recorrido, por el conector que ya existe.
+
+        `False` → un bin vendible del destino. No sale ningún documento, y es
+                  correcto: el ETS 173079 de la recepción ya metió esas
+                  unidades en la existencia normal de la bodega en Siesa. El
+                  ERP ya dice lo que corresponde; lo único que faltaba era que
+                  el WMS supiera DÓNDE están.
+
+        ── Por qué se escribe sin lote ───────────────────────────────────────
+
+        Los tres filtros del sync de inventario miran `lote.is_(None)`
+        (`inventario_siesa_service.py:853,889,1058`). Una fila CON lote es
+        invisible para los tres: no se actualiza nunca y el bulk zero no la
+        toca. Quedaría contada por el WMS para siempre, sin nada que la
+        reconcilie — doble conteo permanente, sin causa a la vista.
+
+        `ItemSolicitudTraslado` hoy no tiene columna de lote —a diferencia de
+        `ItemRecepcion`, que sí—, así que no hay nada que se pierda al escribir
+        `lote=None`. El filtro está igual, explícito y no por omisión: si
+        mañana el ítem gana un lote, quien lo agregue tiene que venir acá y
+        decidir a sabiendas, en vez de heredar un `None` accidental que el
+        sync deja de ver.
+
+        ── Por qué no descuadra con el sync ──────────────────────────────────
+
+        Vendible: el sync calcula SIESA-GENERAL como
+        `existencia_siesa − stock_en_ubicaciones_reales`. Poner N unidades en
+        un bin real hace que reste N de GENERAL — el total sigue siendo el de
+        Siesa. No hay doble conteo.
+
+        Averías: el sync no administra esa zona (ni la resta en
+        `_stock_en_ubicaciones_reales`, ni la incluye en el bulk zero — ver
+        `bins_administrados_por_el_sync`), así que el valor persiste mientras
+        el TRA se lo lleva de la bodega en Siesa. Las dos puntas cuadran.
+        """
+        from app.models.inventario import UbicacionProducto
+        from app.services.picking_service import PickingService
+        from app.services.siesa_job_service import encolar_traslado_averias
+
+        almacen = Almacen.query.filter_by(
+            bodega_siesa_id=s.bodega_destino_siesa).first()
+        if not almacen:
+            # Regla 0: fallar conservador Y declararlo. Sin almacén no hay
+            # dónde ubicar; callarlo dejaría un dictamen sin efecto y nadie
+            # sabría por qué la mercancía nunca apareció.
+            logger.error(
+                '[AVERIAS] %s: no hay almacén WMS para la bodega %s — el '
+                'dictamen queda registrado pero la mercancía NO se ubicó. '
+                'Resolver a mano.', s.codigo, s.bodega_destino_siesa)
+            return
+
+        confirmada = bool(s.averia_veredicto)
+
+        for item in s.items:
+            cantidad = item.cantidad_recibida or item.cantidad_enviada or 0
+            if cantidad <= 0 or not item.producto_id:
+                continue
+
+            if confirmada:
+                ubicacion, degradada = PickingService._destino_averias_garantizado(
+                    almacen.id, cantidad)
+                motivo = (
+                    f'Traslado de averías {s.codigo} desde '
+                    f'{s.bodega_origen_siesa} — CONFIRMADA por '
+                    f'{s.averia_veredicto_usuario.nombre if s.averia_veredicto_usuario else s.averia_veredicto_por}'
+                    f'. Motivo del punto: {item.motivo_averia or "sin motivo"}')
+                if degradada:
+                    motivo += ' (sin zona de averías en el layout)'
+                sufijo = 'AVE'
+            else:
+                ubicacion = TrasladoService._bin_vendible_del_almacen(almacen)
+                if ubicacion is None:
+                    logger.error(
+                        '[AVERIAS] %s: %s no tiene ningún bin vendible — las '
+                        '%s unidades de %s dictaminadas NO averiadas se quedan '
+                        'sin ubicar. Resolver a mano.',
+                        s.codigo, s.bodega_destino_siesa, cantidad,
+                        item.producto_codigo_siesa)
+                    continue
+                motivo = (
+                    f'Traslado de averías {s.codigo} desde '
+                    f'{s.bodega_origen_siesa} — dictaminada NO averiada: '
+                    f'{s.averia_veredicto_nota or "sin nota"}')
+                sufijo = 'OK'
+
+            reg = UbicacionProducto.query.filter_by(
+                ubicacion_id=ubicacion.id,
+                producto_id=item.producto_id,
+                lote=None,
+            ).with_for_update().first()
+            if not reg:
+                reg = UbicacionProducto(
+                    ubicacion_id=ubicacion.id,
+                    producto_id=item.producto_id,
+                    cantidad=0,
+                    lote=None,
+                    fecha_ingreso=datetime.utcnow(),
+                )
+                db.session.add(reg)
+                db.session.flush()
+
+            saldo_antes = reg.cantidad
+            reg.cantidad += cantidad
+            reg.row_version = (reg.row_version or 0) + 1
+
+            mov = MovimientoInventario(
+                producto_id=item.producto_id,
+                ubicacion_id=ubicacion.id,
+                almacen_id=almacen.id,
+                tipo='ENTRADA',
+                cantidad=cantidad,
+                saldo_antes=saldo_antes,
+                saldo_despues=reg.cantidad,
+                motivo=motivo[:200],
+                numero_documento=s.codigo,
+                usuario_id=s.averia_veredicto_por,
+                idempotency_key=f'AVE-DICT-{sufijo}-{s.id}-{item.id}',
+            )
+            db.session.add(mov)
+            db.session.flush()
+
+            if confirmada:
+                # Segundo tramo: NB1 → AV1. El núcleo del encolado es único y
+                # trae su propio guard de bodega —el conector 142951 solo sabe
+                # emitir desde CONNEKTA_BODEGA— así que acá no se repite.
+                encolar_traslado_averias(
+                    movimiento=mov,
+                    codigo_siesa=item.producto_codigo_siesa,
+                    cantidad=cantidad,
+                    bodega_del_almacen=almacen.bodega_siesa_id,
+                    referencia=f'{s.codigo} línea {item.id}',
+                )
+
+    @staticmethod
+    def _bin_vendible_del_almacen(almacen):
+        """Dónde aterriza la mercancía que resultó NO estar averiada.
+
+        Se consulta la política de vendible en vez de escribir el criterio:
+        `filtro_ubicacion_vendible()` es la única respuesta a «¿esto se puede
+        vender?» y por eso no puede divergir de los demás lectores.
+
+        Prefiere SIESA-GENERAL cuando existe. No es arbitrario: es el bin que
+        el sync administra y contra el que cuadra la existencia de la bodega,
+        así que mercancía que vuelve al pool sin dirección física conocida
+        pertenece ahí. Si no existe, cualquier bin vendible es mejor que
+        ninguno — dejarla sin ubicar es perderla.
+        """
+        from app.models.ubicacion import Ubicacion
+        from app.services.picking_service import filtro_ubicacion_vendible
+
+        base = Ubicacion.query.filter(
+            Ubicacion.almacen_id == almacen.id,
+            filtro_ubicacion_vendible(),
+        )
+        return (base.filter(Ubicacion.codigo == 'SIESA-GENERAL').first()
+                or base.order_by(Ubicacion.id).first())
+
+    @staticmethod
     def dictaminar_averia(solicitud_id: int, usuario_id: int,
                           confirmada: bool, nota: str = None) -> SolicitudTraslado:
         """**Cuarto momento**: NB1 dictamina si la mercancía estaba averiada.
@@ -1134,6 +1302,13 @@ class TrasladoService:
         s.averia_veredicto_por = usuario_id
         s.averia_veredicto_at = datetime.utcnow()
         s.averia_veredicto_nota = ((nota or '').strip()[:200]) or None
+
+        # El veredicto TIENE consecuencia, y pasa en la misma transacción.
+        # Separarlo en un segundo gesto dejaría el limbo que este dictamen vino
+        # a cerrar: mercancía dictaminada y sin ubicar, con el registro diciendo
+        # que alguien ya decidió.
+        TrasladoService._ejecutar_veredicto_averia(s)
+
         db.session.commit()
 
         logger.info(
