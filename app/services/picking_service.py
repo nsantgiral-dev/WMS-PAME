@@ -622,7 +622,10 @@ class PickingService:
                 ))
 
         elif resultado == 'NO_ENCONTRADO':
-            if reg and reg.cantidad:
+            # Una tarea `bloqueo_sin_stock` no tiene stock propio: apunta a la
+            # ubicación de su hermana, y poner esa ubicación en 0 se llevaría
+            # unidades que son de otras tareas.
+            if reg and reg.cantidad and not tarea.bloqueo_sin_stock:
                 db.session.add(MovimientoInventario(
                     producto_id=tarea.producto_id,
                     ubicacion_id=tarea.ubicacion_id,
@@ -709,6 +712,21 @@ class PickingService:
                 total_disponible = ya_recogido + cantidad_hallada
             else:  # NO_ENCONTRADO, AVERIA
                 total_disponible = ya_recogido
+
+            # Una línea puede tener VARIAS tareas (FEFO por ubicación, o el
+            # backorder parcial de Siesa que la parte en pickeable + bloqueada).
+            # El ítem del packing es de la línea completa: lo ya recogido por
+            # las DEMÁS tareas cuenta. Sin esto, auditar la bloqueada (0
+            # recogidas) borraba el ítem aunque la hermana ya hubiera recogido
+            # 2 — PD1498, packing con 0 ítems.
+            total_disponible += (
+                db.session.query(db.func.coalesce(db.func.sum(TareaPicking.cantidad_recogida), 0))
+                .filter(
+                    TareaPicking.referencia_documento == tarea.referencia_documento,
+                    TareaPicking.producto_id == tarea.producto_id,
+                    TareaPicking.id != tarea.id,
+                ).scalar()
+            )
 
             packing = _TP.query.filter(
                 _TP.numero_pedido_siesa == tarea.referencia_documento,

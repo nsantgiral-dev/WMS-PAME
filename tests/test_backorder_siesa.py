@@ -512,3 +512,96 @@ class TestBackorderParcialSinStockEnElWMS:
         assert r.bloqueadas == []
         assert r.cantidad_pickeable == 4
         assert float(r.pickeables[0].cantidad_pedida) == 4
+
+
+class TestAuditarLineaPartidaNoBorraElPacking:
+    """PD1498 (2026-09-18): la línea se partió en una tarea pickeable (2,
+    recogidas) y una bloqueada por backorder (2). Auditar la bloqueada con
+    'No encontrado' calculaba el total del packing SOLO con ella (0 recogidas) y
+    borraba el ítem: packing con 0 ítems aunque ya había 2 unidades recogidas."""
+
+    def _linea_partida(self, db, almacen, producto, ub_picking, inv_picking):
+        from app.models.picking import TareaPicking, EstadoPicking
+        from app.services.packing_service import PackingService
+
+        inv_picking.cantidad = 5
+        inv_picking.bloqueado = 0
+        inv_picking.reservado = 0
+        db.session.add(TareaPicking(
+            codigo='PICK-PD1498-A', producto_id=producto.id, cantidad_solicitada=2,
+            cantidad_recogida=2, ubicacion_id=ub_picking.id, almacen_id=almacen.id,
+            estado=EstadoPicking.COMPLETADO, referencia_documento='PD1498',
+        ))
+        bloqueada = TareaPicking(
+            codigo='PICK-PD1498-B', producto_id=producto.id, cantidad_solicitada=2,
+            cantidad_recogida=0, ubicacion_id=ub_picking.id, almacen_id=almacen.id,
+            estado=EstadoPicking.BLOQUEADO, motivo_bloqueo='BACKORDER_SIESA',
+            referencia_documento='PD1498', bloqueo_sin_stock=True,
+        )
+        db.session.add(bloqueada)
+        db.session.commit()
+        packing = PackingService.crear_manual(
+            numero_pedido_siesa='PD1498', almacen_id=almacen.id,
+            items=[{'producto_id': producto.id, 'cantidad': 2}],
+        )
+        return bloqueada, packing
+
+    def test_no_encontrado_conserva_lo_recogido_por_la_hermana(
+        self, app, db, almacen, producto, ub_picking, inv_picking, usuario_admin,
+    ):
+        from app.models.packing import ItemPacking
+        from app.services.picking_service import PickingService
+
+        bloqueada, packing = self._linea_partida(db, almacen, producto, ub_picking, inv_picking)
+
+        PickingService.auditar_tarea(
+            bloqueada.id, admin_id=usuario_admin.id, resultado='NO_ENCONTRADO',
+        )
+
+        item = ItemPacking.query.filter_by(
+            tarea_id=packing.id, producto_id=producto.id).first()
+        assert item is not None, 'el ítem del packing no puede desaparecer'
+        assert item.cantidad_esperada == 2
+
+    def test_no_encontrado_de_una_bloqueada_sin_stock_no_pone_la_ubicacion_en_cero(
+        self, app, db, almacen, producto, ub_picking, inv_picking, usuario_admin,
+    ):
+        from app.services.picking_service import PickingService
+
+        bloqueada, _ = self._linea_partida(db, almacen, producto, ub_picking, inv_picking)
+
+        PickingService.auditar_tarea(
+            bloqueada.id, admin_id=usuario_admin.id, resultado='NO_ENCONTRADO',
+        )
+
+        db.session.refresh(inv_picking)
+        assert inv_picking.cantidad == 5, 'esas unidades son de otras tareas'
+
+    def test_linea_de_una_sola_tarea_sin_recogidas_sigue_borrando_el_item(
+        self, app, db, almacen, producto, ub_picking, inv_picking, usuario_admin,
+    ):
+        """El comportamiento de siempre no cambia: una línea con UNA sola tarea
+        y nada recogido, agotada, sale del packing."""
+        from app.models.packing import ItemPacking
+        from app.models.picking import TareaPicking, EstadoPicking
+        from app.services.packing_service import PackingService
+        from app.services.picking_service import PickingService
+
+        t = TareaPicking(
+            codigo='PICK-SOLA', producto_id=producto.id, cantidad_solicitada=2,
+            cantidad_recogida=0, ubicacion_id=ub_picking.id, almacen_id=almacen.id,
+            estado=EstadoPicking.BLOQUEADO, motivo_bloqueo='FALTANTE',
+            referencia_documento='PD-SOLA',
+        )
+        db.session.add(t)
+        db.session.commit()
+        packing = PackingService.crear_manual(
+            numero_pedido_siesa='PD-SOLA', almacen_id=almacen.id,
+            items=[{'producto_id': producto.id, 'cantidad': 2}],
+        )
+
+        PickingService.auditar_tarea(
+            t.id, admin_id=usuario_admin.id, resultado='NO_ENCONTRADO',
+        )
+
+        assert ItemPacking.query.filter_by(tarea_id=packing.id).count() == 0
