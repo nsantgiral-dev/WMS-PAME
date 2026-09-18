@@ -5,6 +5,7 @@ Servicio de Picking con lógica FEFO
 import logging
 from datetime import datetime
 import uuid
+from typing import NamedTuple
 from sqlalchemy import case
 from app.extensions import db
 from app.utils.fecha import ahora_bogota as _ahora_bogota
@@ -849,3 +850,63 @@ class PickingService:
                 'no se pickeó, el físico puede seguir disponible para otro pedido.'
             )
         db.session.commit()
+
+    @staticmethod
+    def crear_tareas_con_compromiso(
+        *,
+        producto_id: int,
+        cantidad: int,
+        compromiso_siesa,
+        almacen_id: int,
+        referencia_documento: str = None,
+        tipo_documento: str = None,
+        prioridad: int = 1,
+        detalle: str = None,
+    ) -> 'TareasConCompromiso':
+        """
+        Crea las tareas de una línea respetando lo que Siesa comprometió.
+
+        - `compromiso_siesa` >= cantidad, o `None` (no se pudo consultar):
+          todo es pickeable, nada se bloquea (Regla 0).
+        - 1 <= `compromiso_siesa` < cantidad (backorder parcial): solo el
+          compromiso es pickeable; el resto se crea ya BLOQUEADO
+          (BACKORDER_SIESA) y se resuelve en Bodega → Auditoría, igual que una
+          línea en 0. El operario no puede contar más de lo que Siesa facturará.
+
+        Compone `crear_tareas` y `bloquear_por_backorder_siesa` sin modificarlas.
+        Si el resto no se puede reservar, las pickeables quedan creadas y el
+        resultado lo declara en `resto_sin_bloquear` — nunca se pierde en silencio.
+        """
+        cant_pick = cantidad
+        if compromiso_siesa is not None and 1 <= int(compromiso_siesa) < cantidad:
+            cant_pick = int(compromiso_siesa)
+
+        pickeables = PickingService.crear_tareas(
+            producto_id=producto_id, cantidad=cant_pick, almacen_id=almacen_id,
+            referencia_documento=referencia_documento,
+            tipo_documento=tipo_documento, prioridad=prioridad,
+        )
+        if cant_pick == cantidad:
+            return TareasConCompromiso(pickeables, [], cant_pick, 0)
+
+        resto = cantidad - cant_pick
+        try:
+            bloqueadas = PickingService.crear_tareas(
+                producto_id=producto_id, cantidad=resto, almacen_id=almacen_id,
+                referencia_documento=referencia_documento,
+                tipo_documento=tipo_documento, prioridad=prioridad,
+            )
+        except ValueError as e:
+            logger.warning('[PICKING] Backorder parcial: no se pudo reservar el resto (%s): %s', resto, e)
+            return TareasConCompromiso(pickeables, [], cant_pick, resto)
+
+        PickingService.bloquear_por_backorder_siesa(bloqueadas, detalle=detalle)
+        return TareasConCompromiso(pickeables, bloqueadas, cant_pick, 0)
+
+
+class TareasConCompromiso(NamedTuple):
+    """Resultado de `PickingService.crear_tareas_con_compromiso`."""
+    pickeables: list
+    bloqueadas: list
+    cantidad_pickeable: int
+    resto_sin_bloquear: int

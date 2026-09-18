@@ -1049,6 +1049,10 @@ class ConteoService:
                     omitidas += 1
                     continue
                 existente.operario_id = operario_forzado.id
+                # Pasa a ser un conteo forzado: el dispensador prioriza tipo
+                # MANUAL (ver MobileService._orden_cola_preasignada). Sin esto
+                # conservaba su lugar viejo en la cola del operario.
+                existente.tipo = 'MANUAL'
                 reclamadas.append(existente.codigo)
                 continue
             sesion_codigo = f'CC-MANUAL-{hoy}-{str(uuid.uuid4())[:6].upper()}'

@@ -728,6 +728,17 @@ class MobileService:
         return MobileService._conteo_a_dict(sesion)
 
     @staticmethod
+    def _orden_cola_preasignada() -> tuple:
+        """
+        Criterio de orden de los conteos PENDIENTE ya asignados a un operario:
+        primero los forzados por un admin (tipo MANUAL), luego el resto por
+        antigüedad. Sin esto un conteo forzado hoy quedaba detrás de todo lo
+        viejo que el operario ya tenía en cola (PD1494, 2026-09-18).
+        """
+        forzado_primero = db.case((SesionConteo.tipo == 'MANUAL', 0), else_=1)
+        return (forzado_primero, SesionConteo.fecha_creacion.asc())
+
+    @staticmethod
     def _get_conteo_preassignado(operario_id: int):
         """
         SRP: activa y retorna un conteo pre-asignado PENDIENTE (ej: CC2 de doble ciego).
@@ -745,7 +756,7 @@ class MobileService:
                 SesionConteo.operario_id == operario_id,
                 SesionConteo.estado == _EC.PENDIENTE,
             )
-            .order_by(SesionConteo.fecha_creacion.asc())
+            .order_by(*MobileService._orden_cola_preasignada())
             .with_for_update(skip_locked=True)
             .first()
         )

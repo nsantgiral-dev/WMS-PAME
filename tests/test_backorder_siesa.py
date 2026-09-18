@@ -231,6 +231,58 @@ class TestIniciarDespachoExcluyeLineaSinCompromiso:
         codigos_error = [e['item_codigo'] for e in data.get('errores', [])]
         assert 'BELLESB1382' in codigos_error
 
+    def test_compromiso_parcial_solo_deja_pickear_lo_comprometido(
+        self, app, db, client, jwt_token_admin, almacen, producto,
+    ):
+        """PD1494: Siesa comprometió 2 de 4 → picking de 2, las otras 2 nacen
+        BLOQUEADAS (auditoría) y el packing espera 2, no 4."""
+        from app.models.picking import TareaPicking
+
+        producto.codigo_siesa = 'ARTESA173'
+        db.session.commit()
+
+        t_pick = TareaPicking(producto_id=producto.id, cantidad_solicitada=2,
+                              ubicacion_id=None, almacen_id=almacen.id, estado='PENDIENTE')
+        t_resto = TareaPicking(producto_id=producto.id, cantidad_solicitada=2,
+                               ubicacion_id=None, almacen_id=almacen.id, estado='PENDIENTE')
+
+        with patch(
+            'app.services.despacho_parcial_service.DespachoParialService.obtener_compromisos',
+            return_value=[{'f120_referencia': 'ARTESA173',
+                           'f405_cant_por_remisionar_base': 2}],
+        ), patch(
+            'app.services.picking_service.PickingService.crear_tareas',
+            side_effect=[[t_pick], [t_resto]],
+        ) as mock_crear_tareas, patch(
+            'app.services.picking_service.PickingService.bloquear_por_backorder_siesa'
+        ) as mock_bloquear, patch(
+            'app.services.packing_service.PackingService.crear_manual'
+        ) as mock_crear_manual:
+            mock_crear_manual.return_value = type('P', (), {
+                'to_dict': lambda self: {}, 'id': 1, 'codigo': 'PACK-TEST',
+            })()
+
+            resp = client.post(
+                '/api/siesa/iniciar-despacho',
+                json={
+                    'numero_pedido': 'PD1494', 'tipo_docto': 'PD',
+                    'consec_docto': '1494', 'almacen_id': almacen.id,
+                    'items': [{
+                        'producto_id': producto.id, 'item_codigo': 'ARTESA173',
+                        'cantidad_pendiente': 4, 'producto_nombre_wms': 'Acrilico',
+                    }],
+                },
+                headers={'Authorization': f'Bearer {jwt_token_admin}'},
+            )
+
+        assert resp.status_code in (200, 201, 207), resp.get_json()
+        assert [c.kwargs['cantidad'] for c in mock_crear_tareas.call_args_list] == [2, 2]
+        mock_bloquear.assert_called_once()
+        assert mock_bloquear.call_args.args[0] == [t_resto]
+        assert mock_crear_manual.call_args.kwargs['items'] == [
+            {'producto_id': producto.id, 'cantidad': 2}
+        ]
+
     def test_fallo_al_consultar_compromisos_no_bloquea_ningun_item(
         self, app, db, client, jwt_token_admin, almacen, producto,
     ):

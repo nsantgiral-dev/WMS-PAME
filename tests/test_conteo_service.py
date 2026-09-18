@@ -262,6 +262,52 @@ class TestCrearConteoManual:
         ).count()
         assert total == 1
 
+    def test_conteo_forzado_se_entrega_antes_que_los_pendientes_viejos(
+        self, db, almacen, producto, producto2, ub_picking, inv_picking, usuario,
+    ):
+        """PD1494: el operario tenía conteos PENDIENTE más viejos; el forzado
+        debe ser el primero que el dispensador le entrega, y reclamar una sesión
+        vieja la convierte en forzada (tipo MANUAL)."""
+        from datetime import timedelta
+        from app.models.conteo import SesionConteo
+        from app.services.conteo_service import ConteoService
+        from app.services.mobile_service import MobileService
+
+        viejo = SesionConteo(
+            codigo='CC-A-VIEJO', tipo='DIARIO_ABC', clasificacion_abc='C',
+            ubicacion_id=ub_picking.id, almacen_id=almacen.id,
+            producto_id=producto2.id, maneja_lote=False, estado='PENDIENTE',
+            operario_id=usuario.id,
+            fecha_creacion=datetime.utcnow() - timedelta(days=100),
+        )
+        db.session.add(viejo)
+        db.session.commit()
+
+        ConteoService.crear_conteo_manual(almacen.id, producto.codigo, operario_id=usuario.id)
+
+        entregado = MobileService._get_conteo_preassignado(usuario.id)
+        assert entregado['producto_codigo'] == producto.codigo
+        assert entregado['id'] != viejo.id
+
+    def test_reclamar_sesion_vieja_la_marca_manual(
+        self, db, almacen, producto, ub_picking, inv_picking, usuario,
+    ):
+        from app.models.conteo import SesionConteo
+        from app.services.conteo_service import ConteoService
+
+        s = SesionConteo(
+            codigo='CC-A-RECLAMA', tipo='DIARIO_ABC', clasificacion_abc='C',
+            ubicacion_id=ub_picking.id, almacen_id=almacen.id,
+            producto_id=producto.id, maneja_lote=False, estado='PENDIENTE',
+        )
+        db.session.add(s)
+        db.session.commit()
+
+        ConteoService.crear_conteo_manual(almacen.id, producto.codigo, operario_id=usuario.id)
+        db.session.refresh(s)
+        assert s.tipo == 'MANUAL'
+        assert s.operario_id == usuario.id
+
     def test_crear_conteo_manual_pausa_otro_en_proceso_del_operario_forzado(
         self, db, almacen, producto, producto2, ub_picking, inv_picking, usuario,
     ):
