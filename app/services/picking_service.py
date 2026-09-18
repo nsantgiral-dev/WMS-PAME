@@ -546,11 +546,21 @@ class PickingService:
         El admin cierra el ciclo de una tarea BLOQUEADA registrando qué encontró físicamente.
 
         Resultados y su efecto sobre el inventario WMS:
-          ENCONTRADO_COMPLETO   → descongela bloqueado, ajusta real si difiere, cancela tarea
-          ENCONTRADO_PARCIAL    → descongela, reduce cantidad WMS a lo hallado, cancela tarea
+          ENCONTRADO_COMPLETO   → descongela bloqueado, cancela tarea. Además
+                                   ajusta a Siesa como un conteo cíclico
+                                   enfocado en este SKU (ver
+                                   `ConteoService.ajustar_desde_auditoria_picking`)
+          ENCONTRADO_PARCIAL    → descongela, reduce cantidad WMS a lo hallado,
+                                   cancela tarea, y el mismo ajuste a Siesa que
+                                   ENCONTRADO_COMPLETO
           NO_ENCONTRADO         → descongela, reduce inventario a 0 en esa ubicación, cancela tarea
           AVERIA                → descongela, mueve stock a ubicación AVERIAS, cancela tarea
           DISCREPANCIA_SIESA    → descongela, cancela tarea; registra para ajuste manual en Siesa
+
+        ENCONTRADO_COMPLETO/PARCIAL levantan ValueError (sin persistir nada)
+        si Siesa no responde la existencia del SKU — Regla 0, el ajuste nunca
+        sale a ciegas contra el WMS. Reintentar la auditoría cuando Siesa
+        responda.
         """
         RESULTADOS_VALIDOS = {
             'ENCONTRADO_COMPLETO', 'ENCONTRADO_PARCIAL',
@@ -640,6 +650,20 @@ class PickingService:
 
         elif resultado == 'DISCREPANCIA_SIESA':
             pass  # admin ajustará manualmente en Siesa; solo registramos
+
+        # 2.5. ENCONTRADO_COMPLETO/PARCIAL son un conteo físico real, hecho por
+        # quien ya es la autoridad (admin/supervisor) — se ajustan a Siesa con
+        # la misma política que un conteo cíclico, enfocada en este SKU
+        # puntual. NO_ENCONTRADO y AVERIA no entran aquí: ya generan su propio
+        # MovimientoInventario local, y DISCREPANCIA_SIESA es a propósito
+        # manual (ver rama de arriba).
+        if resultado in ('ENCONTRADO_COMPLETO', 'ENCONTRADO_PARCIAL'):
+            from app.services.conteo_service import ConteoService
+            ConteoService.ajustar_desde_auditoria_picking(
+                tarea,
+                cantidad_fisica=(reg.cantidad if reg else 0),
+                aprobador_id=admin_id,
+            )
 
         # 3. Registrar auditoría y cancelar tarea
         tarea.auditoria_resultado         = resultado

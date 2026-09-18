@@ -711,6 +711,100 @@ class ConteoService:
         )
 
     @staticmethod
+    def ajustar_desde_auditoria_picking(tarea, *, cantidad_fisica: int,
+                                         aprobador_id: int) -> SesionConteo:
+        """
+        Ajuste a Siesa de un SKU puntual — la MISMA política que el conteo
+        cíclico normal (`_encolar_ajuste_fisico`, conector 142951), pero sin
+        double-blind: la llama `PickingService.auditar_tarea` cuando el
+        resultado es ENCONTRADO_COMPLETO o ENCONTRADO_PARCIAL, y en esos dos
+        casos quien resuelve YA es la autoridad que hizo un conteo físico
+        propio — el mismo rol que decide un CC3 (Conteo Definitivo), no un
+        picker que hay que verificar.
+
+        No se reinventa el envío: se construye una `SesionConteo` (tipo
+        `EXCEPCION_PICKING`, el mismo que usa `generar_auditoria_por_excepcion`
+        cuando un picker reporta faltante sin bloquear) y se delega en
+        `_encolar_ajuste_fisico`, el único código que arma el job
+        AJUSTE_CONTEO — Regla 0, una política un solo sitio.
+
+        Regla 0 — "ante dato ausente, declararlo": si Siesa no responde la
+        existencia, levanta ValueError SIN persistir nada — el caller
+        (`auditar_tarea`) no ha comiteado todavía, así que la auditoría entera
+        se puede reintentar cuando Siesa responda, en vez de quedar resuelta
+        localmente con el ajuste a Siesa perdido y sin rastro.
+        """
+        from app.models.almacen import Almacen
+
+        producto = tarea.producto
+        if not producto or not producto.codigo_siesa:
+            raise ValueError(
+                'Este producto no tiene código Siesa configurado — el ajuste '
+                'de esta auditoría no puede enviarse a Siesa.'
+            )
+
+        almacen = Almacen.query.get(tarea.almacen_id)
+        bodega_siesa = almacen.bodega_siesa_id if almacen else None
+        if not bodega_siesa:
+            raise ValueError(
+                f'Almacén {tarea.almacen_id} sin bodega Siesa configurada — '
+                'configúrala en /api/almacenes antes de auditar.'
+            )
+
+        existencia_siesa = ConteoService.consultar_existencia_siesa(
+            producto_codigo_siesa=producto.codigo_siesa, bodega=bodega_siesa)
+        if existencia_siesa is None:
+            raise ValueError(
+                f'Siesa no respondió la existencia de {producto.codigo_siesa} '
+                f'en {bodega_siesa} — el ajuste de esta auditoría no se manda '
+                f'a ciegas contra el WMS. Reintenta la auditoría cuando Siesa '
+                f'responda.'
+            )
+
+        diferencia = cantidad_fisica - existencia_siesa
+        codigo = f'AUD-{_ahora_bogota().strftime("%Y%m%d%H%M%S")}-{str(uuid.uuid4())[:6].upper()}'
+        sesion = SesionConteo(
+            codigo=codigo,
+            tipo='EXCEPCION_PICKING',
+            ubicacion_id=tarea.ubicacion_id,
+            almacen_id=tarea.almacen_id,
+            producto_id=tarea.producto_id,
+            producto_codigo_siesa=producto.codigo_siesa,
+            maneja_lote=False,
+            tarea_picking_id=tarea.id,
+            cantidad_fisica=cantidad_fisica,
+            existencia_siesa=existencia_siesa,
+            fuente_existencia='SIESA',
+            diferencia=diferencia,
+            aprobador_id=aprobador_id,
+            fecha_inicio=datetime.utcnow(),
+        )
+
+        if diferencia == 0:
+            # Cuadra con Siesa — sin ajuste que mandar, igual que un MATCH de
+            # conteo cíclico normal (no se encola nada en 0).
+            sesion.estado = EstadoConteo.MATCH
+            sesion.fecha_cierre = datetime.utcnow()
+            db.session.add(sesion)
+            logger.info(
+                f'[CONTEO] Auditoría de picking tarea={tarea.id} — '
+                f'{producto.codigo_siesa} cuadra con Siesa ({existencia_siesa}) '
+                f'— sin ajuste'
+            )
+            return sesion
+
+        sesion.estado = EstadoConteo.DESCUADRE
+        db.session.add(sesion)
+        db.session.flush()  # necesita sesion.id antes de encolar el job
+        ConteoService._encolar_ajuste_fisico(sesion, aprobador_id=aprobador_id)
+        logger.warning(
+            f'[CONTEO] Auditoría de picking tarea={tarea.id} — '
+            f'{producto.codigo_siesa} ajuste {sesion.motivo_codigo} '
+            f'{abs(sesion.diferencia)} uds — sesión {sesion.codigo}'
+        )
+        return sesion
+
+    @staticmethod
     def generar_auditoria_por_excepcion(
         tarea_picking_id: int,
         ubicacion_id: int,
