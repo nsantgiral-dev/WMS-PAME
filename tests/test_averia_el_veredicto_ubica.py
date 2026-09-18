@@ -245,3 +245,131 @@ class TestCuandoNoSePuedeUbicar:
         TrasladoService.dictaminar_averia(entregada.id, supervisor.id, True)
         assert MovimientoInventario.query.filter_by(
             numero_documento='ST-AVE-1').count() == 0
+
+
+class TestNoQuedaContadoDosVeces:
+    """El defecto que encontró la auditoría del propio trabajo.
+
+    Confirmar una avería SUMABA al bin de averías sin RESTAR del bucket
+    vendible donde el sync ya había puesto esas unidades. Las mismas N unidades
+    quedaban contadas dos veces en la misma bodega.
+
+    Y no era un parpadeo: el sync de inventario corre **una vez al día, a las
+    7am** (`inventario_siesa_service._programar_carga_diaria`). El doble conteo
+    duraba hasta 21 horas, y en todo ese rato NB1 prometía stock vendible que
+    estaba físicamente en el rincón de averías.
+    """
+
+    def test_confirmar_descuenta_del_bucket_vendible(self, db, cd, entregada,
+                                                     supervisor, prod):
+        """La carga de las 7am ya había traído las 5 unidades a SIESA-GENERAL.
+        Al confirmarlas como averiadas tienen que SALIR de ahí."""
+        gen = _bin(cd, 'SIESA-GENERAL')
+        db.session.add(UbicacionProducto(ubicacion_id=gen.id,
+                                         producto_id=prod.id, cantidad=5))
+        db.session.commit()
+
+        TrasladoService.dictaminar_averia(entregada.id, supervisor.id, True)
+
+        assert _stock(_bin(cd, 'AVE-A1-EST01'), prod) == 5
+        assert _stock(gen, prod) == 0, 'quedaron contadas dos veces'
+
+    def test_el_total_de_la_bodega_no_cambia_al_confirmar(self, db, cd,
+                                                          entregada,
+                                                          supervisor, prod):
+        """Un dictamen mueve mercancía de zona; no crea ni destruye unidades.
+        Un cuadre por sumas no detecta el error del reparto, pero sí detecta
+        que el total se mueva — y acá no debe moverse."""
+        gen = _bin(cd, 'SIESA-GENERAL')
+        db.session.add(UbicacionProducto(ubicacion_id=gen.id,
+                                         producto_id=prod.id, cantidad=12))
+        db.session.commit()
+
+        TrasladoService.dictaminar_averia(entregada.id, supervisor.id, True)
+
+        total = _stock(gen, prod) + _stock(_bin(cd, 'AVE-A1-EST01'), prod)
+        assert total == 12, f'la bodega pasó de 12 a {total} unidades'
+
+    def test_descuenta_del_bin_mas_grande_no_de_cinco_chicos(self, db, cd,
+                                                             entregada,
+                                                             supervisor, prod):
+        """Corregir un saldo no es elegir qué despachar: repartir el ajuste
+        entre huecos chicos ensucia cinco filas del kardex por una avería.
+
+        **Hacen falta DOS bins para que este test signifique algo.** La primera
+        versión ponía las 50 unidades en un solo bin, así que el `order_by` no
+        se ejercitaba nunca: una mutación que lo invertía a ascendente dejaba
+        el test en verde. Acá el bin chico tiene justo menos que la cantidad a
+        descontar, así que un orden ascendente lo vaciaría y partiría el ajuste
+        en dos filas — que es exactamente lo que se quiere evitar.
+        """
+        gen = _bin(cd, 'SIESA-GENERAL')
+        chico = Ubicacion(almacen_id=cd.id, codigo='A-01-01',
+                          tipo='estanteria', tipo_zona='GENERAL')
+        db.session.add(chico)
+        db.session.flush()
+        db.session.add(UbicacionProducto(ubicacion_id=gen.id,
+                                         producto_id=prod.id, cantidad=50))
+        db.session.add(UbicacionProducto(ubicacion_id=chico.id,
+                                         producto_id=prod.id, cantidad=3))
+        db.session.commit()
+
+        TrasladoService.dictaminar_averia(entregada.id, supervisor.id, True)
+
+        assert _stock(gen, prod) == 45, 'no salió del bin más grande'
+        assert _stock(chico, prod) == 3, (
+            'el ajuste se repartió: el bin chico se tocó sin necesidad')
+
+    def test_si_el_bucket_no_alcanza_no_queda_negativo_y_se_declara(
+            self, db, cd, entregada, supervisor, prod, caplog):
+        """Regla 0 en el borde real: dictaminar el MISMO día, antes de que la
+        carga de las 7am haya traído esas unidades desde Siesa.
+
+        Quedar corto promete de menos; no descontar promete de más. De los dos
+        errores, solo uno manda a alguien a buscar mercancía que no está.
+        """
+        gen = _bin(cd, 'SIESA-GENERAL')
+        db.session.add(UbicacionProducto(ubicacion_id=gen.id,
+                                         producto_id=prod.id, cantidad=2))
+        db.session.commit()
+
+        TrasladoService.dictaminar_averia(entregada.id, supervisor.id, True)
+
+        assert _stock(gen, prod) == 0, 'no puede quedar negativo'
+        assert _stock(_bin(cd, 'AVE-A1-EST01'), prod) == 5
+        assert 'Faltan 3' in caplog.text
+        assert '7am' in caplog.text
+
+    def test_NO_averiada_no_descuenta_nada(self, db, cd, entregada,
+                                           supervisor, prod):
+        """La mercancía que resultó sana se queda donde está y donde Siesa la
+        tiene. Descontarla la haría desaparecer del pool sin razón."""
+        gen = _bin(cd, 'SIESA-GENERAL')
+        db.session.add(UbicacionProducto(ubicacion_id=gen.id,
+                                         producto_id=prod.id, cantidad=5))
+        db.session.commit()
+
+        TrasladoService.dictaminar_averia(entregada.id, supervisor.id, False,
+                                          nota='estaba bien')
+        # 5 que ya estaban + 5 que se ubican al dictaminar.
+        assert _stock(gen, prod) == 10
+        assert _stock(_bin(cd, 'AVE-A1-EST01'), prod) == 0
+
+    def test_no_toca_el_stock_de_OTRO_almacen(self, db, cd, entregada,
+                                              supervisor, prod):
+        """El descuento se acota al almacén que firma el movimiento. Sin ese
+        recorte, confirmar una avería en el CD vaciaría el bin de un punto —el
+        total de la red no cambiaría y ningún cuadre por sumas lo vería."""
+        otro = Almacen(codigo='PV-X', nombre='Punto X', bodega_siesa_id='PCX')
+        db.session.add(otro)
+        db.session.flush()
+        ub_otro = Ubicacion(almacen_id=otro.id, codigo='PCX-GENERAL',
+                            tipo='estanteria', tipo_zona='GENERAL')
+        db.session.add(ub_otro)
+        db.session.flush()
+        db.session.add(UbicacionProducto(ubicacion_id=ub_otro.id,
+                                         producto_id=prod.id, cantidad=99))
+        db.session.commit()
+
+        TrasladoService.dictaminar_averia(entregada.id, supervisor.id, True)
+        assert _stock(ub_otro, prod) == 99

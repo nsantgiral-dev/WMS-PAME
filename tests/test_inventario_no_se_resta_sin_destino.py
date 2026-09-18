@@ -79,9 +79,18 @@ RESTAS_DECLARADAS = {
         'reflejando un movimiento que ya ocurrió allá.'
     ),
     'app/services/traslado_service.py': (
-        1,
-        'Salida por traslado entre sedes. La contrapartida es la bodega destino '
-        'en Siesa; en el WMS queda el `MovimientoInventario` SALIDA_TRASLADO.'
+        2,
+        'Dos restas, y las dos tienen contrapartida.\n'
+        '· Salida por traslado entre sedes: la contrapartida es la bodega '
+        'destino en Siesa; en el WMS queda el `MovimientoInventario` '
+        'SALIDA_TRASLADO.\n'
+        '· 2026-09-18 · `_descontar_del_bucket_vendible`: al confirmar una '
+        'avería, las unidades salen del stock vendible y entran al bin de '
+        'averías **en la misma transacción**, con su `MovimientoInventario` '
+        'ENTRADA. No es una resta sin destino: es un traslado entre zonas de '
+        'la misma bodega, y por eso el total del almacén no cambia. Sin ella, '
+        'las mismas unidades quedaban contadas dos veces —en el bucket y en '
+        'el bin— hasta la carga de las 7am del día siguiente.'
     ),
 }
 

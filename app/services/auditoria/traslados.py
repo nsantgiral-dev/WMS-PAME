@@ -319,3 +319,89 @@ def se_pueden_contar_los_traslados_en_vuelo(ctx=None):
             datos={'codigos': sin_fecha[:20], 'total': len(sin_fecha)},
         ))
     return out
+
+
+# ── Frontera: recepción → dictamen (averías) ─────────────────────────────
+
+@invariante(
+    codigo='TRA-31',
+    flujo='traslados',
+    frontera='recepción → dictamen de avería',
+    consecuencia='Mercancía declarada averiada que llegó al CD y nadie '
+                 'dictaminó. Hasta que alguien decida, el sync la repuebla '
+                 'desde la existencia de Siesa como stock VENDIBLE — o sea '
+                 'que se está ofreciendo para venta.',
+    severidad=AVISA,
+)
+def toda_averia_recibida_termina_dictaminada(ctx=None):
+    """El limbo propio del flujo de averías, y la razón por la que no es
+    cosmético.
+
+    ## Qué pasa mientras nadie dictamina
+
+    `confirmar_recepcion` no escribe stock en el destino —ningún traslado lo
+    hace, el sync lo repuebla desde Siesa— y el ETS 173079 ya metió esas
+    unidades en la existencia normal de la bodega en el ERP. Así que la
+    mercancía que alguien declaró rota aparece en el pool vendible del CD y
+    se puede despachar a un cliente.
+
+    El dictamen es lo que la saca de ahí: confirmada va a la zona de averías
+    (que el FEFO no toca) y sale el documento a AV1; no averiada se queda,
+    pero porque alguien lo decidió.
+
+    ## Por qué no tiene umbral de días
+
+    Regla 13: ningún número sin base y sin fecha. Hoy en producción hay **cero**
+    traslados de clase AVERIAS —el flujo se acaba de construir— así que
+    cualquier umbral que escribiera sería una opinión disfrazada de medición.
+    TRA-30 tiene 16 días porque se midieron 71 traslados entregados; acá no hay
+    qué medir todavía.
+
+    Mientras tanto se reportan **todos** los pendientes, en UN hallazgo
+    agregado con sus edades. Con cero averías esto no emite nada, así que no
+    ensucia el canal; cuando haya volumen, la lista de edades es exactamente
+    el dato con el que alguien podrá fijar el umbral con base.
+
+    ## Por qué agregado y no uno por traslado
+
+    Misma lección que TRA-30: 19 hallazgos diarios repitiendo lo mismo no son
+    un detector, son ruido que entierra al que importa. La pregunta acá es una
+    sola —«¿hay averías sin decidir, y desde cuándo?»— y se contesta una vez.
+    """
+    from app.models.traslado import ClaseTraslado
+    from app.utils.fecha import ahora_bogota
+
+    hoy = ahora_bogota().date()
+    pendientes = []
+    for s in _solicitudes(('ENTREGADA',)):
+        if s.clase_traslado != ClaseTraslado.AVERIAS:
+            continue
+        # `is not None` y no truthiness: `False` («no estaba averiada») es un
+        # dictamen dado, no un pendiente. Con `if s.averia_veredicto:` este
+        # invariante gritaría para siempre sobre traslados ya resueltos.
+        if s.averia_veredicto is not None:
+            continue
+        dias = (hoy - s.fecha_entrega.date()).days if s.fecha_entrega else None
+        pendientes.append({
+            'codigo': s.codigo or f'traslado#{s.id}',
+            'origen': s.bodega_origen_siesa,
+            'destino': s.bodega_destino_siesa,
+            'dias_desde_entrega': dias,
+        })
+
+    if not pendientes:
+        return []
+
+    _con_dias = [p['dias_desde_entrega'] for p in pendientes
+                 if p['dias_desde_entrega'] is not None]
+    _viejo = max(_con_dias) if _con_dias else None
+    return [Hallazgo(
+        referencia='averias-sin-dictaminar',
+        detalle=(
+            f'{len(pendientes)} traslado(s) de averías recibido(s) en el CD y '
+            f'sin dictaminar'
+            + (f' — el más viejo lleva {_viejo} día(s)' if _viejo is not None else '')
+            + '. Hasta que alguien decida, esas unidades cuentan como vendibles.'),
+        datos={'total': len(pendientes), 'pendientes': pendientes[:20],
+               'dias_mas_viejo': _viejo},
+    )]

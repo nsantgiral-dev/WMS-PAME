@@ -1158,6 +1158,31 @@ class TrasladoService:
             db.session.flush()
 
             if confirmada:
+                # ── Y se DESCUENTA del bucket vendible ────────────────────
+                #
+                # Sin esto la avería confirmada se suma sin restar, y el WMS
+                # cuenta las mismas N unidades dos veces: una en el bin de
+                # averías y otra en el bucket vendible donde el sync ya las
+                # había puesto.
+                #
+                # El sync de inventario corre **una vez al día, a las 7am**
+                # (`inventario_siesa_service._programar_carga_diaria`). O sea
+                # que el doble conteo no dura minutos: dura hasta 21 horas, y
+                # en todo ese rato la bodega promete stock vendible que está
+                # físicamente en el rincón de averías.
+                #
+                # Se descuenta del bucket, no del bin de averías, porque es un
+                # TRASLADO entre zonas de la misma bodega — no una entrada.
+                #
+                # Regla 0 en el borde: si el bucket tiene menos de N —el caso
+                # real es dictaminar el mismo día, antes de que el sync haya
+                # traído esas unidades— se descuenta lo que hay y se declara.
+                # Quedar corto promete de menos; no descontar promete de más, y
+                # de los dos errores solo uno manda a alguien a buscar
+                # mercancía que no está.
+                TrasladoService._descontar_del_bucket_vendible(
+                    almacen, item.producto_id, cantidad, s.codigo)
+
                 # Segundo tramo: NB1 → AV1. El núcleo del encolado es único y
                 # trae su propio guard de bodega —el conector 142951 solo sabe
                 # emitir desde CONNEKTA_BODEGA— así que acá no se repite.
@@ -1168,6 +1193,65 @@ class TrasladoService:
                     bodega_del_almacen=almacen.bodega_siesa_id,
                     referencia=f'{s.codigo} línea {item.id}',
                 )
+
+    @staticmethod
+    def _descontar_del_bucket_vendible(almacen, producto_id: int,
+                                       cantidad: int, referencia: str):
+        """Saca `cantidad` del stock vendible del almacén, sin bajar de cero.
+
+        Contraparte de la entrada al bin de averías: juntas convierten el
+        dictamen en un traslado interno en vez de una suma suelta.
+
+        Recorre los bins vendibles **de mayor a menor** y descuenta hasta
+        cubrir. El orden importa y es el contrario del FEFO a propósito: acá no
+        se está eligiendo qué despachar, se está corrigiendo un saldo, y tocar
+        el bin más grande evita repartir el ajuste entre cinco huecos chicos y
+        ensuciar cinco filas del kardex por una sola avería.
+
+        Devuelve lo que efectivamente descontó. Si es menos que `cantidad`, lo
+        declara en el log: el saldo queda corto respecto de Siesa hasta la
+        carga de las 7am, y eso hay que poder explicarlo sin adivinar.
+        """
+        from app.models.inventario import UbicacionProducto
+        from app.models.ubicacion import Ubicacion
+        from app.services.picking_service import filtro_ubicacion_vendible
+
+        filas = (
+            UbicacionProducto.query
+            .join(Ubicacion, Ubicacion.id == UbicacionProducto.ubicacion_id)
+            .filter(
+                Ubicacion.almacen_id == almacen.id,
+                UbicacionProducto.producto_id == producto_id,
+                UbicacionProducto.lote.is_(None),
+                UbicacionProducto.cantidad > 0,
+                filtro_ubicacion_vendible(),
+            )
+            .order_by(UbicacionProducto.cantidad.desc())
+            .with_for_update()
+            .all()
+        )
+
+        restante = int(cantidad)
+        for reg in filas:
+            if restante <= 0:
+                break
+            quita = min(reg.cantidad, restante)
+            reg.cantidad -= quita
+            reg.row_version = (reg.row_version or 0) + 1
+            restante -= quita
+
+        descontado = int(cantidad) - restante
+        if restante > 0:
+            logger.warning(
+                '[AVERIAS] %s: se ubicaron %s unidad(es) de producto %s en la '
+                'zona de averías pero el stock vendible de %s solo tenía %s '
+                'para descontar. Faltan %s. Causa esperada: el dictamen corrió '
+                'antes de que la carga de las 7am trajera esas unidades desde '
+                'Siesa. El saldo queda CORTO hasta la próxima carga, que lo '
+                'recalcula contra la existencia real.',
+                referencia, cantidad, producto_id, almacen.bodega_siesa_id,
+                descontado, restante)
+        return descontado
 
     @staticmethod
     def _bin_vendible_del_almacen(almacen):
