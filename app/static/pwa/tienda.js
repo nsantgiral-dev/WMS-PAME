@@ -534,7 +534,7 @@ function _tiendaRenderPickingTraslado() {
       <div style="background:#111;border-radius:10px;padding:12px;margin-bottom:14px;">
         <div style="font-size:12px;color:#666;text-align:center;margin-bottom:8px;">Escanea el código de barras o usá los botones +/−</div>
         ${OPERARIO && OPERARIO.puede_usar_camara ? `
-        <button onclick="abrirCamara('lector-qr-tt','camara-box-tt', tiendaScanTraslado)"
+        <button onclick="abrirCamara('lector-qr-tt','camara-box-tt', tiendaScanTraslado, this)"
           style="width:100%;padding:13px;font-size:16px;background:#fff;color:#000;border:2px solid #000;border-radius:10px;cursor:pointer;margin-bottom:8px;">
           📷 Escanear con cámara
         </button>
@@ -891,7 +891,7 @@ function _tiendaOCRenderScan() {
       <div style="background:#111;border-radius:10px;padding:12px;margin-bottom:12px;">
         <div style="font-size:12px;color:#666;text-align:center;margin-bottom:10px;">Escanea unidad, caja o paca — el sistema calcula las unidades</div>
         ${OPERARIO && OPERARIO.puede_usar_camara ? `
-        <button onclick="abrirCamara('lector-qr-toc','camara-box-toc', tiendaOCProcesarScan)"
+        <button onclick="abrirCamara('lector-qr-toc','camara-box-toc', tiendaOCProcesarScan, this)"
           style="width:100%;padding:13px;font-size:16px;background:#fff;color:#000;border:2px solid #000;border-radius:10px;cursor:pointer;margin-bottom:8px;">
           📷 Escanear con cámara
         </button>

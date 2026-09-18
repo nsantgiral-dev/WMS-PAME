@@ -168,7 +168,7 @@ function renderTarea(t) {
       ${htmlContador}
 
       ${puedeCamara ? `
-      <button onclick="abrirCamara()" style="width:100%;padding:14px;font-size:17px;background:#fff;color:#000;border:2px solid #000;border-radius:12px;cursor:pointer;margin-bottom:10px;">
+      <button onclick="abrirCamara('lector-qr','camara-box',null,this)" style="width:100%;padding:14px;font-size:17px;background:#fff;color:#000;border:2px solid #000;border-radius:12px;cursor:pointer;margin-bottom:10px;">
         📷 Escanear con cámara
       </button>
       <div id="camara-box" style="display:none;margin-bottom:10px;">

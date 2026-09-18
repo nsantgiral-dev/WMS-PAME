@@ -48,6 +48,7 @@ let CAMARA_ACTIVA = false;
 let HTML5QR = null;          // legacy — ya no se usa, conservado por si acaso
 let _QUAGGA_BOX  = null;    // boxDivId activo
 let _QUAGGA_CB   = null;    // callback del scan activo
+let _QUAGGA_BTN  = null;    // botón "Escanear con cámara" que abrió la cámara activa
 let _SCAN_LAST_TS = 0;      // debounce: ms del último scan registrado
 // Ventana mínima entre dos escaneos aceptados durante lectura continua con
 // cámara (picking, recepción, devoluciones, traslados de tienda — cualquier
@@ -2192,13 +2193,21 @@ async function _quaggaStop() {
  * @param {string} [boxDivId='camara-box'] - ID of the wrapper div to show/hide.
  * @param {Function|null} [onScan=null] - Callback on successful scan; defaults to procesarScan.
  */
-async function abrirCamara(lectorDivId = 'lector-qr', boxDivId = 'camara-box', onScan = null) {
+async function abrirCamara(lectorDivId = 'lector-qr', boxDivId = 'camara-box', onScan = null, btnEl = null) {
   // Cerrar cámara previa si hay alguna
   if (_QUAGGA_BOX) await cerrarCamara(_QUAGGA_BOX);
 
   const box    = document.getElementById(boxDivId);
   const target = document.getElementById(lectorDivId);
   if (!box || !target) return;
+
+  // El botón "Escanear con cámara" se oculta mientras la cámara está abierta
+  // — en móvil, con la vista previa ocupando el ancho de pantalla, el botón
+  // quedaba flotando arriba del video sin ninguna función. cerrarCamara() lo
+  // restaura, sin importar por qué camino se cerró (botón "Cerrar cámara" o
+  // un scan que la cierra solo).
+  if (btnEl) btnEl.style.display = 'none';
+  _QUAGGA_BTN = btnEl;
 
   box.style.display = 'block';
   CAMARA_ACTIVA = true;
@@ -2219,6 +2228,7 @@ async function abrirCamara(lectorDivId = 'lector-qr', boxDivId = 'camara-box', o
       CAMARA_ACTIVA = false;
       _QUAGGA_BOX = null;
       _QUAGGA_CB = null;
+      if (_QUAGGA_BTN) { _QUAGGA_BTN.style.display = ''; _QUAGGA_BTN = null; }
       box.style.display = 'none';
       alerta('No se pudo activar la cámara — usa el ingreso manual del código', 'error');
       return;
@@ -2334,6 +2344,7 @@ async function cerrarCamara(boxDivId = 'camara-box') {
   CAMARA_ACTIVA = false;
   _QUAGGA_BOX = null;
   _QUAGGA_CB  = null;
+  if (_QUAGGA_BTN) { _QUAGGA_BTN.style.display = ''; _QUAGGA_BTN = null; }
   const box = document.getElementById(boxDivId);
   if (box) {
     box.style.display = 'none';

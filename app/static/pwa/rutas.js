@@ -155,7 +155,7 @@ function muelleActivarScan() {
 }
 
 /** Abre la camara QR del muelle y procesa el codigo escaneado. */
-async function abrirCamaraMuelle() {
+async function abrirCamaraMuelle(btnEl = null) {
   await abrirCamara('lector-qr-muelle', 'camara-box-muelle', async cod => {
     await cerrarCamara('camara-box-muelle');
     const input = document.getElementById('muelle-scan-input');
@@ -163,7 +163,7 @@ async function abrirCamaraMuelle() {
     const campo = document.getElementById('muelle-scan-campo');
     if (campo) campo.style.display = 'flex';
     await muelleCargarCaja();
-  });
+  }, btnEl);
 }
 
 /** En movil, oculta el campo de escaneo y muestra el boton si esta vacio. */

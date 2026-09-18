@@ -292,7 +292,7 @@ function renderEscaneoRecepcion(rec) {
       <div style="background:#111;border-radius:10px;padding:12px;margin-bottom:12px;">
         <div style="font-size:12px;color:#666;text-align:center;margin-bottom:10px;">Escanea unidad, caja o paca — el sistema calcula las unidades</div>
         ${OPERARIO && OPERARIO.puede_usar_camara ? `
-        <button onclick="abrirCamara('lector-qr-rec','camara-box-rec', procesarScanRecepcion)"
+        <button onclick="abrirCamara('lector-qr-rec','camara-box-rec', procesarScanRecepcion, this)"
           style="width:100%;padding:13px;font-size:16px;background:#fff;color:#000;border:2px solid #000;border-radius:10px;cursor:pointer;margin-bottom:8px;">
           📷 Escanear con cámara
         </button>
@@ -618,7 +618,7 @@ function _panelScanBonificacion() {
         <div id="lector-qr-bono" style="border-radius:10px;overflow:hidden;"></div>
         <button onclick="cerrarCamara('camara-box-bono')" style="width:100%;padding:9px;margin-top:6px;font-size:14px;background:#333;color:#fff;border:none;border-radius:8px;cursor:pointer;">Cerrar cámara</button>
       </div>
-      <button onclick="abrirCamara('lector-qr-bono','camara-box-bono', cod => { cerrarCamara('camara-box-bono'); _escanearBono(cod, this.closest('div[style*=fixed]')); })"
+      <button onclick="abrirCamara('lector-qr-bono','camara-box-bono', cod => { cerrarCamara('camara-box-bono'); _escanearBono(cod, this.closest('div[style*=fixed]')); }, this)"
         style="width:100%;padding:13px;font-size:15px;background:#fff;color:#000;border:none;border-radius:10px;cursor:pointer;margin-bottom:8px;">
         📷 Escanear con cámara
       </button>` : ''}
@@ -1478,7 +1478,7 @@ function renderLineasDevolucion(datos) {
     <div style="background:#111;border-radius:10px;padding:12px;margin-bottom:12px;">
       <div style="font-size:12px;color:#666;text-align:center;margin-bottom:10px;">Escanea cada unidad devuelta — suma 1 a la línea, hasta el tope facturado</div>
       ${OPERARIO && OPERARIO.puede_usar_camara ? `
-      <button onclick="abrirCamara('lector-qr-dev','camara-box-dev', procesarScanDevolucion)"
+      <button onclick="abrirCamara('lector-qr-dev','camara-box-dev', procesarScanDevolucion, this)"
         style="width:100%;padding:13px;font-size:16px;background:#fff;color:#000;border:2px solid #000;border-radius:10px;cursor:pointer;margin-bottom:8px;">
         📷 Escanear con cámara
       </button>

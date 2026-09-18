@@ -1127,7 +1127,7 @@ function _defRender() {
     </div>
 
     ${puedeCamara ? `
-    <button onclick="defAbrirCamara()" style="width:100%;padding:14px;font-size:17px;background:#fff;color:#000;border:2px solid #000;border-radius:12px;cursor:pointer;margin-bottom:10px;">
+    <button onclick="defAbrirCamara(this)" style="width:100%;padding:14px;font-size:17px;background:#fff;color:#000;border:2px solid #000;border-radius:12px;cursor:pointer;margin-bottom:10px;">
       📷 Escanear con cámara
     </button>
     <div id="def-camara-box" style="display:none;margin-bottom:10px;">
@@ -1149,8 +1149,8 @@ function _defRender() {
 }
 
 /** Abre la cámara del navegador con su propia caja (aislada de picking.js). */
-async function defAbrirCamara() {
-  await abrirCamara('def-lector-qr', 'def-camara-box', defProcesarScan);
+async function defAbrirCamara(btnEl = null) {
+  await abrirCamara('def-lector-qr', 'def-camara-box', defProcesarScan, btnEl);
 }
 
 /** Procesa un código escaneado: mismo contrato que picking.js para CONTEO
