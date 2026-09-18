@@ -1116,6 +1116,33 @@ class ConteoService:
             'operario_nombre': operario_forzado.nombre if operario_forzado else None,
         }
 
+    #: Resultados de Auditoría de picking que piden un conteo cíclico forzado del
+    #: SKU. La auditoría diagnostica; el conteo mide y ajusta Siesa. Añadir un
+    #: resultado aquí no exige tocar `auditar_tarea`.
+    RESULTADOS_DE_AUDITORIA_QUE_FUERZAN_CONTEO = frozenset({'ENCONTRADO'})
+
+    @staticmethod
+    def forzar_desde_auditoria(tarea, operario_id: int = None) -> dict:
+        """Conteo cíclico forzado del SKU de una tarea auditada.
+
+        Reutiliza `crear_conteo_manual` (mismo camino, misma prioridad de cola).
+        Nunca levanta: un fallo al generar el conteo no puede deshacer una
+        auditoría ya cerrada, pero SÍ se declara — `{'ok': False, 'error': ...}`
+        — para que quien audita sepa que el conteo no quedó creado.
+        """
+        producto = tarea.producto
+        codigo = (producto.codigo_siesa or producto.codigo) if producto else None
+        if not codigo:
+            return {'ok': False, 'error': 'La tarea no tiene producto para contar'}
+        try:
+            r = ConteoService.crear_conteo_manual(
+                tarea.almacen_id, codigo, operario_id=operario_id)
+        except ValueError as e:
+            return {'ok': False, 'error': str(e)}
+        return {'ok': True, 'producto': codigo,
+                'tareas_creadas': r['tareas_creadas'], 'codigos': r['codigos'],
+                'operario_nombre': r.get('operario_nombre')}
+
     @staticmethod
     def liberar_tareas_zombi(timeout_horas: int = 2):
         """

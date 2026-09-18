@@ -1282,6 +1282,22 @@ function auditoriaCancelarPanel(id) {
   document.getElementById(`auditoria-panel-${id}`).style.display = 'none';
 }
 
+/** Muestra el bloque de "conteo forzado" solo para el resultado que lo dispara
+ * (ENCONTRADO) y carga los operarios una vez (helper de conteo.js). */
+async function auditoriaResultadoCambio(id) {
+  const resultado = document.getElementById(`auditoria-resultado-${id}`)?.value;
+  const bloque = document.getElementById(`auditoria-conteo-${id}`);
+  if (!bloque) return;
+  bloque.style.display = resultado === 'ENCONTRADO' ? 'block' : 'none';
+  const sel = document.getElementById(`auditoria-operario-${id}`);
+  if (resultado === 'ENCONTRADO' && sel && sel.options.length <= 1
+      && typeof _cargarOperariosConteo === 'function') {
+    const operarios = await _cargarOperariosConteo();
+    sel.innerHTML = '<option value="">Auto-asignar (el que lo tome primero)</option>' +
+      operarios.map(u => `<option value="${u.id}">${u.nombre || u.usuario} (${u.rol})</option>`).join('');
+  }
+}
+
 /** @param {number} id - Task ID to submit audit result for. */
 async function auditoriaGuardar(id) {
   const resultado       = document.getElementById(`auditoria-resultado-${id}`)?.value;
@@ -1292,13 +1308,22 @@ async function auditoriaGuardar(id) {
   if (!resultado) { alerta('Selecciona un resultado antes de guardar', 'error'); return; }
 
   try {
-    await post(`/api/picking/${id}/auditar`, {
+    const r = await post(`/api/picking/${id}/auditar`, {
       resultado,
       cantidad_hallada: cantidadHallada,
       ubicacion_hallada: ubicacion || null,
       observaciones: observaciones || null,
+      forzar_conteo: document.getElementById(`auditoria-forzar-${id}`)?.checked !== false,
+      conteo_operario_id: document.getElementById(`auditoria-operario-${id}`)?.value || null,
     });
-    alerta('Auditoría registrada ✓', 'exito');
+    const c = r && r.conteo_forzado;
+    if (c && c.ok) {
+      alerta(`Auditoría registrada ✓ — conteo cíclico generado (${c.codigos[0]})`, 'exito');
+    } else if (c && !c.ok) {
+      alerta(`Auditoría registrada, pero NO se generó el conteo: ${c.error}`, 'advertencia');
+    } else {
+      alerta('Auditoría registrada ✓', 'exito');
+    }
     await cargarTareasBodega();
   } catch (e) { alerta(e.message || 'Error al guardar auditoría', 'error'); }
 }
@@ -1554,15 +1579,24 @@ function _renderTareasBodegaHTML(tareas) {
           </button>
           <div id="auditoria-panel-${t.id}" style="display:none;margin-top:10px;">
             <div style="font-size:11px;color:#888;margin-bottom:8px;">¿Qué encontraste físicamente?</div>
-            <select id="auditoria-resultado-${t.id}"
+            <select id="auditoria-resultado-${t.id}" onchange="auditoriaResultadoCambio(${t.id})"
               style="width:100%;padding:10px;background:#0d0d0d;border:1px solid #333;border-radius:8px;color:#fff;font-size:13px;margin-bottom:8px;">
               <option value="">— Selecciona resultado —</option>
-              <option value="ENCONTRADO_COMPLETO">✅ Encontrado completo (error del operario)</option>
-              <option value="ENCONTRADO_PARCIAL">📉 Encontrado parcial</option>
+              <option value="ENCONTRADO">✅ Encontrado (se genera conteo cíclico)</option>
               <option value="NO_ENCONTRADO">❌ No encontrado — faltante confirmado</option>
               <option value="AVERIA">🚫 Mercancía averiada</option>
-              <option value="DISCREPANCIA_SIESA">⚠️ Discrepancia Siesa (existe en sistema, no en físico)</option>
             </select>
+            <div id="auditoria-conteo-${t.id}" style="display:none;margin-bottom:8px;padding:9px;background:#0d0d0d;border:1px solid #2d1b69;border-radius:8px;">
+              <label style="display:flex;align-items:center;gap:8px;font-size:12px;color:#c4b5fd;cursor:pointer;">
+                <input type="checkbox" id="auditoria-forzar-${t.id}" checked>
+                Generar conteo cíclico forzado de este SKU
+              </label>
+              <div style="font-size:11px;color:#666;margin:4px 0 6px;">El conteo es lo que ajusta Siesa — esta auditoría no mueve inventario.</div>
+              <select id="auditoria-operario-${t.id}"
+                style="width:100%;padding:8px;background:#0d0d0d;border:1px solid #333;border-radius:8px;color:#fff;font-size:12px;">
+                <option value="">Auto-asignar (el que lo tome primero)</option>
+              </select>
+            </div>
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;">
               <div>
                 <div style="font-size:11px;color:#666;margin-bottom:4px;">Cant. hallada</div>
