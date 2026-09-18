@@ -53,6 +53,17 @@ class TareaPicking(db.Model):
     #: ese ciclo) — nunca se inventa un número (Regla 0).
     disponible_siesa = db.Column(db.Numeric(12, 2), nullable=True)
 
+    #: Cuánto pedía la línea del pedido al crear la tarea (snapshot). La tarea
+    #: puede venir recortada a lo que Siesa comprometió — el HUD del operario
+    #: compara `disponible_siesa` contra ESTO, no contra `cantidad_solicitada`.
+    #: `NULL` = no pasó por `crear_tareas_con_compromiso` (traslado, manual).
+    cantidad_pedida = db.Column(db.Numeric(12, 2), nullable=True)
+
+    #: Nació BLOQUEADA sin congelar unidades (no había stock que congelar).
+    #: Cancelar/reabrir/auditar no le resta nada a `bloqueado`.
+    bloqueo_sin_stock = db.Column(db.Boolean, nullable=False, default=False,
+                                  server_default=db.false())
+
     # Auditoría (rellena el admin cuando investiga una tarea BLOQUEADA)
     auditoria_resultado      = db.Column(db.String(30))   # ENCONTRADO_COMPLETO|ENCONTRADO_PARCIAL|NO_ENCONTRADO|AVERIA|DISCREPANCIA_SIESA
     auditoria_cantidad_hallada = db.Column(db.Integer)
@@ -97,6 +108,8 @@ class TareaPicking(db.Model):
             'bodega_origen_siesa': self.bodega_origen_siesa,
             'motivo_bloqueo': self.motivo_bloqueo,
             'observaciones_bloqueo': self.observaciones_bloqueo,
+            'cantidad_pedida': float(self.cantidad_pedida) if self.cantidad_pedida is not None else None,
+            'bloqueo_sin_stock': bool(self.bloqueo_sin_stock),
             'auditoria_resultado': self.auditoria_resultado,
             'auditoria_cantidad_hallada': self.auditoria_cantidad_hallada,
             'auditoria_ubicacion_hallada': self.auditoria_ubicacion_hallada,

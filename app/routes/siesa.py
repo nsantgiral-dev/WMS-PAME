@@ -1078,10 +1078,8 @@ def iniciar_despacho():
                     'producto_nombre': item.get('producto_nombre_wms'),
                     'error': (
                         f'Siesa comprometió {resultado.cantidad_pickeable} de '
-                        f'{cant_pedida} (backorder parcial) — '
-                        + ('el resto quedó bloqueado, ver pestaña Bodega'
-                           if not resultado.resto_sin_bloquear else
-                           f'{resultado.resto_sin_bloquear} sin poder reservarse/bloquearse')
+                        f'{cant_pedida} (backorder parcial) — el resto quedó '
+                        f'bloqueado, ver pestaña Bodega'
                     ),
                 })
                 # El packing solo espera lo que sí se puede pickear.

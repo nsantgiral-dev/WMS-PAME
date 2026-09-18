@@ -202,6 +202,7 @@ class MobileService:
                 'referencia': tarea_activa.referencia_documento,
                 'lote': tarea_activa.lote,
                 'disponible_siesa': float(tarea_activa.disponible_siesa) if tarea_activa.disponible_siesa is not None else None,
+                'cantidad_pedida': float(tarea_activa.cantidad_pedida) if tarea_activa.cantidad_pedida is not None else None,
             }
 
         # Tomar siguiente tarea de la cola global — más prioritaria y más antigua.
@@ -579,6 +580,7 @@ class MobileService:
             _tarea_lote = tarea.lote
             _tarea_tipo_documento = tarea.tipo_documento or 'PEDIDO'
             _tarea_disponible_siesa = float(tarea.disponible_siesa) if tarea.disponible_siesa is not None else None
+            _tarea_cantidad_pedida = float(tarea.cantidad_pedida) if tarea.cantidad_pedida is not None else None
 
             # Asignar picking al operario
             tarea.operario_id = operario_id
@@ -608,6 +610,7 @@ class MobileService:
                 'lote': _tarea_lote,
                 'conteo_intercalado': conteo_intercalado,
                 'disponible_siesa': _tarea_disponible_siesa,
+                'cantidad_pedida': _tarea_cantidad_pedida,
             }
 
         # ── Blindaje de pedidos chicos contra condición de carrera ──────────

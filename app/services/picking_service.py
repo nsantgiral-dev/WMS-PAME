@@ -20,6 +20,21 @@ from app.models.ubicacion import Ubicacion
 class PickingService:
 
     @staticmethod
+    def _codigo_tarea() -> str:
+        return f'PICK-{_ahora_bogota().strftime("%Y%m%d%H%M%S")}-{str(uuid.uuid4())[:6].upper()}'
+
+    @staticmethod
+    def _cantidad_congelada(tarea, cantidad_faltante: int) -> int:
+        """Unidades que esta tarea BLOQUEADA tiene congeladas en `bloqueado`.
+
+        Una tarea con `bloqueo_sin_stock` nació bloqueada sin congelar nada (no
+        había stock): restarle su faltante a `bloqueado` le quitaría unidades a
+        otras tareas de la misma ubicación. Una política, tres sitios
+        (cancelar, reabrir, auditar).
+        """
+        return 0 if tarea.bloqueo_sin_stock else cantidad_faltante
+
+    @staticmethod
     def _ubicacion_averias_disponible(almacen_id: int, cantidad_necesaria: int):
         """
         Recorre las ubicaciones AVERIAS del almacén en orden de llenado
@@ -285,7 +300,7 @@ class PickingService:
         tareas_creadas = []
 
         for asig in fefo['asignaciones']:
-            codigo = f'PICK-{_ahora_bogota().strftime("%Y%m%d%H%M%S")}-{str(uuid.uuid4())[:6].upper()}'
+            codigo = PickingService._codigo_tarea()
 
             tarea = TareaPicking(
                 codigo=codigo,
@@ -504,7 +519,7 @@ class PickingService:
             # Si estaba bloqueada, liberar también el inventario congelado
             if tarea.estado == EstadoPicking.BLOQUEADO:
                 cantidad_faltante = max(0, tarea.cantidad_solicitada - (tarea.cantidad_recogida or 0))
-                reg.bloqueado = max(0, reg.bloqueado - cantidad_faltante)
+                reg.bloqueado = max(0, reg.bloqueado - PickingService._cantidad_congelada(tarea, cantidad_faltante))
 
         tarea.estado = EstadoPicking.CANCELADO
         db.session.commit()
@@ -529,7 +544,7 @@ class PickingService:
         ).with_for_update().first()
         if reg:
             cantidad_faltante = max(0, tarea.cantidad_solicitada - (tarea.cantidad_recogida or 0))
-            reg.bloqueado = max(0, reg.bloqueado - cantidad_faltante)
+            reg.bloqueado = max(0, reg.bloqueado - PickingService._cantidad_congelada(tarea, cantidad_faltante))
 
         tarea.estado = EstadoPicking.PENDIENTE
         tarea.operario_id = None
@@ -585,7 +600,7 @@ class PickingService:
 
         # 1. Descongelar inventario bloqueado en todos los casos
         if reg:
-            reg.bloqueado = max(0, reg.bloqueado - cantidad_faltante)
+            reg.bloqueado = max(0, reg.bloqueado - PickingService._cantidad_congelada(tarea, cantidad_faltante))
 
         # 2. Ajuste de inventario según resultado
         if resultado == 'ENCONTRADO_COMPLETO':
@@ -864,18 +879,23 @@ class PickingService:
         detalle: str = None,
     ) -> 'TareasConCompromiso':
         """
-        Crea las tareas de una línea respetando lo que Siesa comprometió.
+        Crea las tareas de una línea respetando lo que Siesa comprometió, y deja
+        en cada una `cantidad_pedida` (lo que pedía la línea) para trazabilidad y
+        para el aviso al operario.
 
         - `compromiso_siesa` >= cantidad, o `None` (no se pudo consultar):
           todo es pickeable, nada se bloquea (Regla 0).
         - 1 <= `compromiso_siesa` < cantidad (backorder parcial): solo el
-          compromiso es pickeable; el resto se crea ya BLOQUEADO
-          (BACKORDER_SIESA) y se resuelve en Bodega → Auditoría, igual que una
-          línea en 0. El operario no puede contar más de lo que Siesa facturará.
+          compromiso es pickeable; el resto queda BLOQUEADO (BACKORDER_SIESA) y
+          se resuelve en Bodega → Auditoría, igual que una línea en 0. El
+          operario no puede contar más de lo que Siesa facturará.
+
+        El resto se reserva vía FEFO si hay stock. Si no lo hay (Siesa y el WMS
+        cortos a la vez, el caso típico) se crea igual, bloqueado y sin congelar
+        unidades (`bloqueo_sin_stock`): que no haya stock que reservar no puede
+        ser motivo para que el faltante no llegue a Auditoría.
 
         Compone `crear_tareas` y `bloquear_por_backorder_siesa` sin modificarlas.
-        Si el resto no se puede reservar, las pickeables quedan creadas y el
-        resultado lo declara en `resto_sin_bloquear` — nunca se pierde en silencio.
         """
         cant_pick = cantidad
         if compromiso_siesa is not None and 1 <= int(compromiso_siesa) < cantidad:
@@ -886,22 +906,54 @@ class PickingService:
             referencia_documento=referencia_documento,
             tipo_documento=tipo_documento, prioridad=prioridad,
         )
-        if cant_pick == cantidad:
-            return TareasConCompromiso(pickeables, [], cant_pick, 0)
+        bloqueadas = []
+        if cant_pick < cantidad:
+            resto = cantidad - cant_pick
+            try:
+                bloqueadas = PickingService.crear_tareas(
+                    producto_id=producto_id, cantidad=resto, almacen_id=almacen_id,
+                    referencia_documento=referencia_documento,
+                    tipo_documento=tipo_documento, prioridad=prioridad,
+                )
+                PickingService.bloquear_por_backorder_siesa(bloqueadas, detalle=detalle)
+            except ValueError as e:
+                logger.warning(
+                    '[PICKING] Backorder parcial: sin stock para reservar el resto (%s) — '
+                    'se bloquea sin congelar unidades: %s', resto, e)
+                db.session.rollback()
+                bloqueadas = [PickingService._crear_bloqueada_sin_stock(
+                    base=pickeables[0], cantidad=resto, detalle=detalle)]
 
-        resto = cantidad - cant_pick
-        try:
-            bloqueadas = PickingService.crear_tareas(
-                producto_id=producto_id, cantidad=resto, almacen_id=almacen_id,
-                referencia_documento=referencia_documento,
-                tipo_documento=tipo_documento, prioridad=prioridad,
-            )
-        except ValueError as e:
-            logger.warning('[PICKING] Backorder parcial: no se pudo reservar el resto (%s): %s', resto, e)
-            return TareasConCompromiso(pickeables, [], cant_pick, resto)
+        for t in pickeables + bloqueadas:
+            t.cantidad_pedida = cantidad
+        db.session.commit()
+        return TareasConCompromiso(pickeables, bloqueadas, cant_pick)
 
-        PickingService.bloquear_por_backorder_siesa(bloqueadas, detalle=detalle)
-        return TareasConCompromiso(pickeables, bloqueadas, cant_pick, 0)
+    @staticmethod
+    def _crear_bloqueada_sin_stock(*, base, cantidad: int, detalle: str = None):
+        """Tarea BLOQUEADA (BACKORDER_SIESA) sobre la ubicación de `base`, sin
+        tocar `reservado` ni `bloqueado`: no hay unidades que congelar. Existe
+        para que el faltante quede visible en Bodega → Auditoría."""
+        tarea = TareaPicking(
+            codigo=PickingService._codigo_tarea(),
+            producto_id=base.producto_id,
+            cantidad_solicitada=cantidad,
+            ubicacion_id=base.ubicacion_id,
+            almacen_id=base.almacen_id,
+            lote=base.lote,
+            fecha_vencimiento=base.fecha_vencimiento,
+            estado=EstadoPicking.BLOQUEADO,
+            prioridad=base.prioridad,
+            referencia_documento=base.referencia_documento,
+            tipo_documento=base.tipo_documento,
+            motivo_bloqueo='BACKORDER_SIESA',
+            observaciones_bloqueo=detalle or (
+                'Siesa comprometió menos de lo pedido — el resto es backorder y '
+                'no había stock en el WMS para reservarlo.'),
+            bloqueo_sin_stock=True,
+        )
+        db.session.add(tarea)
+        return tarea
 
 
 class TareasConCompromiso(NamedTuple):
@@ -909,4 +961,3 @@ class TareasConCompromiso(NamedTuple):
     pickeables: list
     bloqueadas: list
     cantidad_pickeable: int
-    resto_sin_bloquear: int

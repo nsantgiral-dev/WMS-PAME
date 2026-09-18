@@ -420,3 +420,95 @@ class TestPickingBloqueadoEnPantallaDeEmpaque:
         )
         assert tarea['picking_listo'] is False
         assert tarea['picking_bloqueado'] is False
+
+
+class TestBackorderParcialSinStockEnElWMS:
+    """PD1497 (2026-09-18): el pedido pedía 4, Siesa comprometió 2 y el WMS solo
+    tenía 2. El resto no se podía reservar, la tarea bloqueada nunca se creó y
+    no quedó nada en Bodega → Auditoría. Tiene que quedar SIEMPRE."""
+
+    def _setup(self, db, ub_picking, inv_picking):
+        inv_picking.cantidad = 2
+        # Unidades congeladas por OTRA tarea en la misma ubicación: cancelar o
+        # auditar la bloqueada sin stock no puede tocarlas.
+        inv_picking.bloqueado = 1
+        db.session.commit()
+
+    def test_el_faltante_queda_bloqueado_sin_congelar_unidades(
+        self, app, db, almacen, producto, ub_picking, inv_picking,
+    ):
+        from app.models.picking import EstadoPicking
+        from app.services.picking_service import PickingService
+
+        self._setup(db, ub_picking, inv_picking)
+        # cantidad_disponible = 2 - 0 - 1 = 1: para el 2 no alcanza. Se lo damos
+        # completo al primer intento y nada al segundo.
+        inv_picking.bloqueado = 0
+        db.session.commit()
+
+        r = PickingService.crear_tareas_con_compromiso(
+            producto_id=producto.id, cantidad=4, compromiso_siesa=2,
+            almacen_id=almacen.id, referencia_documento='PD1497',
+            tipo_documento='PEDIDO_SIESA', prioridad=2, detalle='Siesa comprometió 2 de 4',
+        )
+
+        assert r.cantidad_pickeable == 2
+        assert [t.cantidad_solicitada for t in r.pickeables] == [2]
+        assert [t.estado for t in r.pickeables] == [EstadoPicking.PENDIENTE]
+
+        assert len(r.bloqueadas) == 1
+        b = r.bloqueadas[0]
+        assert b.estado == EstadoPicking.BLOQUEADO
+        assert b.motivo_bloqueo == 'BACKORDER_SIESA'
+        assert b.cantidad_solicitada == 2
+        assert b.bloqueo_sin_stock is True
+        assert b.ubicacion_id == ub_picking.id
+
+        # Lo pedido queda en TODAS las tareas de la línea (trazabilidad).
+        assert float(r.pickeables[0].cantidad_pedida) == 4
+        assert float(b.cantidad_pedida) == 4
+
+        db.session.refresh(inv_picking)
+        assert inv_picking.reservado == 2      # solo la pickeable
+        assert inv_picking.bloqueado == 0      # nada congelado: no había stock
+
+    def test_auditar_la_bloqueada_sin_stock_no_toca_lo_congelado_por_otras(
+        self, app, db, almacen, producto, ub_picking, inv_picking, usuario_admin,
+    ):
+        from app.models.picking import EstadoPicking
+        from app.services.picking_service import PickingService
+
+        self._setup(db, ub_picking, inv_picking)
+        inv_picking.bloqueado = 0
+        db.session.commit()
+        r = PickingService.crear_tareas_con_compromiso(
+            producto_id=producto.id, cantidad=4, compromiso_siesa=2,
+            almacen_id=almacen.id, referencia_documento='PD1497',
+            tipo_documento='PEDIDO_SIESA', prioridad=2,
+        )
+        # Otra tarea congela 1 unidad en la misma ubicación.
+        inv_picking.bloqueado = 1
+        db.session.commit()
+
+        cerrada = PickingService.auditar_tarea(
+            r.bloqueadas[0].id, admin_id=usuario_admin.id,
+            resultado='DISCREPANCIA_SIESA',
+        )
+
+        assert cerrada.estado == EstadoPicking.CANCELADO
+        db.session.refresh(inv_picking)
+        assert inv_picking.bloqueado == 1      # no se le restaron los 2 ajenos
+
+    def test_compromiso_completo_no_bloquea_nada_pero_guarda_lo_pedido(
+        self, app, db, almacen, producto, ub_picking, inv_picking,
+    ):
+        from app.services.picking_service import PickingService
+
+        r = PickingService.crear_tareas_con_compromiso(
+            producto_id=producto.id, cantidad=4, compromiso_siesa=4,
+            almacen_id=almacen.id, referencia_documento='PD1500',
+            tipo_documento='PEDIDO_SIESA', prioridad=2,
+        )
+        assert r.bloqueadas == []
+        assert r.cantidad_pickeable == 4
+        assert float(r.pickeables[0].cantidad_pedida) == 4

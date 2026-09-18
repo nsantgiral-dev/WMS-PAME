@@ -95,7 +95,13 @@ function renderTarea(t) {
   // se inventa un número.
   const dispSiesa = (esPicking && t.disponible_siesa !== null && t.disponible_siesa !== undefined)
     ? Number(t.disponible_siesa) : null;
-  const dispInsuficiente = dispSiesa !== null && dispSiesa < req;
+  // `cantidad_pedida` = lo que pedía la línea del pedido (la tarea puede venir
+  // recortada a lo que Siesa comprometió). Sin ella (tareas viejas) se compara
+  // contra la cantidad de la tarea, como antes.
+  const pedida = (t.cantidad_pedida !== null && t.cantidad_pedida !== undefined)
+    ? Number(t.cantidad_pedida) : req;
+  const dispInsuficiente = dispSiesa !== null && dispSiesa < pedida;
+  const faltanSiesa = dispInsuficiente ? pedida - dispSiesa : 0;
 
   const htmlContador = tieneEmpaque
     ? `<div style="background:#1a1a1a;border-radius:16px;padding:16px 20px;margin-bottom:12px;">
@@ -151,8 +157,8 @@ function renderTarea(t) {
       ${dispSiesa !== null ? `
       <div style="background:${dispInsuficiente ? '#2a1005' : '#0a1a0a'};border:1px solid ${dispInsuficiente ? '#b45309' : '#166534'};border-radius:12px;padding:12px 14px;margin-bottom:12px;text-align:center;">
         <div style="font-size:11px;color:${dispInsuficiente ? '#fbbf24' : '#4ade80'};font-weight:700;letter-spacing:.5px;">${dispInsuficiente ? '⚠ ' : ''}DISPONIBLE EN SIESA PARA ESTE PEDIDO</div>
-        <div style="font-size:20px;font-weight:800;color:#fff;margin-top:2px;">${dispSiesa} de ${req}</div>
-        ${dispInsuficiente ? `<div style="font-size:11px;color:#d97706;margin-top:2px;">Siesa podría no facturar todo — puede quedar pendiente</div>` : ''}
+        <div style="font-size:20px;font-weight:800;color:#fff;margin-top:2px;">${dispSiesa} de ${pedida}</div>
+        ${dispInsuficiente ? `<div style="font-size:12px;color:#fbbf24;margin-top:4px;">El pedido pedía ${pedida} y Siesa solo comprometió ${dispSiesa}. Recoge ${req} — las ${faltanSiesa} restantes pasan a Auditoría.</div>` : ''}
       </div>` : ''}
 
       ${esPicking && t.producto_id ? `
@@ -533,9 +539,16 @@ async function confirmar() {
       return;
     }
     beepDone();
+    // Backorder parcial de Siesa: la tarea era por lo comprometido y el pedido
+    // pedía más — se le dice al operario qué pasa con lo que falta.
+    const _ped = TAREA_ACTUAL.cantidad_pedida, _req = TAREA_ACTUAL.cantidad_requerida;
+    const _avisoBackorder = (_ped != null && _req != null && _ped > _req)
+      ? `Recogiste ${_req} de ${_ped} pedidas — ${_ped - _req} pasan a Auditoría`
+      : null;
     TAREA_ACTUAL = null;
     // Picking con packing asociado → mostrar botón etiqueta canasto
     if (r.canasto_data) {
+      if (_avisoBackorder) alerta(_avisoBackorder, 'exito');
       _modalEtiquetaCanasto(r.canasto_data);
       return;
     }
@@ -556,8 +569,8 @@ async function confirmar() {
       document.body.appendChild(overlay);
       setTimeout(() => { overlay.remove(); pedirTarea(); }, esMatch ? 2000 : 3000);
     } else {
-      alerta('¡Tarea completada!', 'exito');
-      setTimeout(pedirTarea, 1500);
+      alerta(_avisoBackorder || '¡Tarea completada!', 'exito');
+      setTimeout(pedirTarea, _avisoBackorder ? 3500 : 1500);
     }
   } catch (e) {
     if (e.status) {

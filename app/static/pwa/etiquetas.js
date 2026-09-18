@@ -14,6 +14,69 @@
  */
 
 let ETQ_PRODUCTO_ACTUAL = null;
+let _ETQ_SUGERIR_TIMER = null;
+
+function _etqEsc(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, ch => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  })[ch]);
+}
+
+/** Filas clicables de productos (sugerencias mientras se escribe y lista de
+ * coincidencias por descripción). Elegir una fila busca ese código exacto. */
+function _etqFilasHtml(productos) {
+  return productos.map(p => {
+    const barras = p.codigo_barras ? ' · ' + _etqEsc(p.codigo_barras) : '';
+    return `
+      <div onclick="etqElegir(this.dataset.codigo)" data-codigo="${_etqEsc(p.codigo)}"
+        style="padding:8px 12px;cursor:pointer;border-bottom:1px solid var(--brd);font-size:13px;"
+        onmouseover="this.style.background='var(--bg-input)'" onmouseout="this.style.background=''">
+        <div style="font-weight:700;color:var(--tx);">${_etqEsc(p.codigo)}${barras}</div>
+        <div style="color:var(--tx3);font-size:12px;">${_etqEsc(p.nombre || '')}</div>
+      </div>`;
+  }).join('');
+}
+
+function etqOcultarSugerencias() {
+  const box = document.getElementById('etq-sugerencias');
+  if (box) { box.style.display = 'none'; box.innerHTML = ''; }
+}
+
+/** Autocompletado por código, descripción o código de barras
+ * (GET /api/productos/?q=, el mismo endpoint del catálogo general). */
+function etqSugerir(valor) {
+  clearTimeout(_ETQ_SUGERIR_TIMER);
+  const q = (valor || '').trim();
+  const box = document.getElementById('etq-sugerencias');
+  if (!box) return;
+  if (q.length < 2) { etqOcultarSugerencias(); return; }
+
+  _ETQ_SUGERIR_TIMER = setTimeout(async () => {
+    let productos = [];
+    try {
+      const d = await get('/api/productos/?q=' + encodeURIComponent(q) + '&per_page=8');
+      productos = d.productos || [];
+    } catch (e) { etqOcultarSugerencias(); return; }
+    if (!productos.length) { etqOcultarSugerencias(); return; }
+    box.innerHTML = _etqFilasHtml(productos);
+    box.style.display = 'block';
+  }, 250);
+}
+
+function etqElegir(codigo) {
+  const input = document.getElementById('etq-buscar');
+  if (input) input.value = codigo;
+  etqOcultarSugerencias();
+  etqBuscarProducto();
+}
+
+/** Coincidencias por descripción/código parcial en el catálogo local. */
+async function _etqBuscarPorDescripcion(q) {
+  try {
+    const d = await get('/api/productos/?q=' + encodeURIComponent(q) + '&per_page=20');
+    return d.productos || [];
+  } catch (e) { return []; }
+}
 
 async function etqBuscarProducto() {
   const input = document.getElementById('etq-buscar');
@@ -23,6 +86,7 @@ async function etqBuscarProducto() {
   const codigo = (input.value || '').trim();
   if (!codigo) return;
 
+  etqOcultarSugerencias();
   ETQ_PRODUCTO_ACTUAL = null;
   resultado.innerHTML = '<div style="text-align:center;padding:20px;color:#555;">Buscando...</div>';
 
@@ -30,13 +94,38 @@ async function etqBuscarProducto() {
   try {
     prod = await get('/api/siesa/producto/' + encodeURIComponent(codigo));
   } catch (eLocal) {
+    // Ni código WMS, ni referencia, ni EAN exactos. Si no es solo dígitos
+    // (id de ítem / EAN), puede ser una descripción: se ofrece la lista del
+    // catálogo local ANTES de ir a Siesa en vivo, que es lento.
+    if (!/^\d+$/.test(codigo)) {
+      const coincidencias = await _etqBuscarPorDescripcion(codigo);
+      if (coincidencias.length) {
+        resultado.innerHTML = `
+          <div style="font-size:12px;color:var(--tx3);margin-bottom:6px;">
+            ${coincidencias.length} coincidencia(s) por descripción — elige una:
+          </div>
+          <div style="background:var(--bg-s);border:1px solid var(--brd);border-radius:10px;max-width:480px;overflow:hidden;">
+            ${_etqFilasHtml(coincidencias)}
+          </div>`;
+        return;
+      }
+    }
     resultado.innerHTML = '<div style="text-align:center;padding:20px;color:#555;">No está en el catálogo local — consultando Siesa en vivo (puede tardar unos segundos)...</div>';
     try {
       prod = await get('/api/siesa/producto-siesa-vivo/' + encodeURIComponent(codigo));
       enVivo = true;
     } catch (eVivo) {
-      resultado.innerHTML = `<div style="text-align:center;padding:20px;color:#dc2626;">${eVivo.message}</div>`;
+      resultado.innerHTML = `<div style="text-align:center;padding:20px;color:#dc2626;">${_etqEsc(eVivo.message)}</div>`;
       return;
+    }
+    // La consulta por id de ítem (ej. "260") entra por la ruta en vivo aunque
+    // el producto SÍ esté en el catálogo local bajo su referencia. Si está,
+    // se usa el local y no se marca "aún no sincronizado" — sería falso.
+    if (prod && prod.codigo_siesa) {
+      try {
+        prod = await get('/api/siesa/producto/' + encodeURIComponent(prod.codigo_siesa));
+        enVivo = false;
+      } catch (eNoLocal) { /* de verdad no está sincronizado: se queda en vivo */ }
     }
   }
 
