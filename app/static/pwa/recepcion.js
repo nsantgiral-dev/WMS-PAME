@@ -988,16 +988,30 @@ async function recepCargarTraslados(silencioso = false) {
     }
     el.innerHTML = _REC_TRASLADOS_PENDIENTES.map(s => {
       const totalEsp = (s.items || []).reduce((a, i) => a + (i.cantidad_enviada || i.cantidad_aprobada || i.cantidad_solicitada || 0), 0);
+      // Un traslado de averías NO puede verse igual que uno normal.
+      //
+      // Esta tarjeta se pintaba en verde de éxito para todo. Quien recibe
+      // mercancía rota necesita saberlo ANTES de contarla, y necesita leer por
+      // qué la declararon: ese motivo lo escribió alguien que estuvo ahí, y
+      // quien cuenta acá no estuvo. Es el tercero de los cuatro momentos de
+      // validación del proceso, y sin esta información no es una validación.
+      const _ave = s.es_averia;
+      const _fondo = _ave ? '#1a1206' : '#0a1a0a';
+      const _borde = _ave ? '#92400e' : '#166534';
+      const _acento = _ave ? '#fbbf24' : '#4ade80';
       return `
-      <div style="background:#0a1a0a;border:1px solid #166534;border-radius:12px;padding:14px;margin-bottom:10px;">
+      <div style="background:${_fondo};border:1px solid ${_borde};border-radius:12px;padding:14px;margin-bottom:10px;">
         <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px;">
-          <div style="font-size:15px;font-weight:800;">${esc(s.codigo)}</div>
-          <div style="font-size:11px;color:#4ade80;font-weight:600;">Desde ${esc(s.bodega_origen_siesa || '—')}</div>
+          <div style="font-size:15px;font-weight:800;">${_ave ? '⚠ ' : ''}${esc(s.codigo)}</div>
+          <div style="font-size:11px;color:${_acento};font-weight:600;">Desde ${esc(s.bodega_origen_siesa || '—')}</div>
         </div>
-        <div style="font-size:12px;color:#4ade80;margin-bottom:8px;">📦 ${esc(s.total_items)} ítem${s.total_items !== 1 ? 's' : ''} · ${totalEsp} und esperadas</div>
+        ${_ave ? `<div style="font-size:12px;color:#fbbf24;font-weight:700;margin-bottom:6px;">MERCANCÍA AVERIADA — contá lo que llegó; si estaba rota lo decide el administrador después</div>` : ''}
+        ${_ave && s.averia_evidencia ? `<div style="font-size:11px;color:#a8a29e;margin-bottom:8px;border-left:2px solid #92400e;padding-left:8px;">Lo que revisó el punto: ${esc(s.averia_evidencia)}</div>` : ''}
+        <div style="font-size:12px;color:${_acento};margin-bottom:8px;">📦 ${esc(s.total_items)} ítem${s.total_items !== 1 ? 's' : ''} · ${totalEsp} und esperadas</div>
         ${(s.items || []).slice(0, 3).map(i => `
           <div style="font-size:11px;color:#aaa;padding:2px 0;">
             ${i.producto_nombre || i.producto_codigo} · ${i.cantidad_enviada || i.cantidad_aprobada || i.cantidad_solicitada || 0} und
+            ${i.motivo_averia ? `<div style="color:#a16207;padding-left:8px;">${esc(i.motivo_averia)}</div>` : ''}
           </div>`).join('')}
         ${(s.items || []).length > 3 ? `<div style="font-size:11px;color:#555;padding:2px 0;">+ ${s.items.length - 3} más...</div>` : ''}
         <button onclick="recepAbrirConteoTraslado(${esc(s.id)})"
@@ -1051,10 +1065,20 @@ function _recepRenderPickingTraslado() {
           ← Volver
         </button>
         <div style="min-width:0;">
-          <div style="font-size:16px;font-weight:800;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(s.codigo)}</div>
+          <div style="font-size:16px;font-weight:800;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${s.es_averia ? '⚠ ' : ''}${esc(s.codigo)}</div>
           <div style="font-size:12px;color:#666;">Desde ${esc(s.bodega_origen_siesa || '—')} → ${esc(s.bodega_destino_siesa || '—')}</div>
         </div>
       </div>
+
+      ${s.es_averia ? `
+      <div style="background:#1a1206;border:1px solid #92400e;border-radius:10px;padding:12px;margin-bottom:14px;">
+        <div style="font-size:13px;color:#fbbf24;font-weight:700;margin-bottom:4px;">Traslado de averías</div>
+        <div style="font-size:12px;color:#a8a29e;">
+          Contá cuántas unidades llegaron. <b>No decidas si estaban rotas</b> — eso lo
+          dictamina el administrador antes de ubicarlas.
+        </div>
+        ${s.averia_evidencia ? `<div style="font-size:12px;color:#a8a29e;margin-top:8px;border-left:2px solid #92400e;padding-left:8px;">Lo que revisó el punto: ${esc(s.averia_evidencia)}</div>` : ''}
+      </div>` : ''}
 
       <div style="background:#111;border-radius:10px;padding:12px;margin-bottom:14px;">
         <div style="font-size:12px;color:#666;text-align:center;margin-bottom:8px;">Escanea el código o usá los botones +/−</div>
@@ -1103,6 +1127,7 @@ function _recepRenderItemsTraslado(items) {
           <div style="min-width:0;flex:1;">
             <div style="font-size:14px;font-weight:600;color:${completo ? '#4ade80' : '#fff'};overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${i.producto_nombre || i.producto_codigo}</div>
             <div style="font-size:11px;color:#555;margin-top:2px;">${i.producto_codigo_siesa || i.producto_codigo}</div>
+            ${i.motivo_averia ? `<div style="font-size:11px;color:#a16207;margin-top:3px;">⚠ ${esc(i.motivo_averia)}</div>` : ''}
           </div>
           <div style="display:flex;align-items:center;gap:8px;flex-shrink:0;padding-left:8px;">
             <button onclick="recepContarItem(${esc(i.producto_id)}, -1)"

@@ -45,8 +45,19 @@ sys.path.insert(0, REPO_ROOT)
 ITEM = 'PAPELSP9218'
 CANTIDAD = 10.0
 
-# Orden de la cadena -- las 10 bodegas operadas, visitadas una vez cada una.
-CADENA = ['NB1', 'NS1', 'NS2', 'NC1', 'FC1', 'PC1', 'PT1', 'FF1', 'FN1', 'FP1']
+# Orden de la cadena -- las 10 bodegas operadas, y VUELTA a NB1 al final.
+#
+# El regreso NO es redundante: la cadena era ABIERTA, y en una cadena abierta la
+# primera bodega solo se ejercita como ORIGEN y la ultima solo como DESTINO. El
+# docstring de arriba afirma "como origen y como destino" para cada bodega --
+# era falso justo para las dos puntas, NB1 y FP1.
+#
+# Y la punta que faltaba es la que importa: el traslado de averias va del punto
+# de venta HACIA NB1 (ver TrasladoService._validar_traslado_de_averias). Esa
+# direccion nunca se habia ejercitado contra Siesa. Con el salto de vuelta,
+# FP1->NB1 cubre las dos: FP1 como origen y NB1 como destino.
+CADENA = ['NB1', 'NS1', 'NS2', 'NC1', 'FC1', 'PC1', 'PT1', 'FF1', 'FN1', 'FP1',
+          'NB1']
 
 
 def _stock(connekta, bodega):

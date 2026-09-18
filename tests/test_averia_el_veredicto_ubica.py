@@ -373,3 +373,60 @@ class TestNoQuedaContadoDosVeces:
 
         TrasladoService.dictaminar_averia(entregada.id, supervisor.id, True)
         assert _stock(ub_otro, prod) == 99
+
+
+class TestSiElDocumentoNoSaleSeDice:
+    """Un warning en el log no es un canal: nadie lo mira hasta que ya está
+    buscando por qué no cuadra.
+
+    `encolar_traslado_averias` devuelve False —sin levantar nada— cuando falta
+    `codigo_siesa` o cuando la bodega no es la que el conector 142951 sabe
+    emitir. Descartando ese valor, la tarjeta decía «✓ Confirmada como
+    averiada» exactamente igual se hubiera emitido el documento o no, mientras
+    Siesa sigue contando esas unidades como vendibles en el CD.
+    """
+
+    def test_sin_codigo_siesa_el_veredicto_lo_declara(self, db, cd, entregada,
+                                                      supervisor, prod):
+        """Sin código Siesa no hay documento posible. La mercancía igual se
+        ubica —perderla sería peor— pero el traslado tiene que decirlo."""
+        entregada.items[0].producto_codigo_siesa = None
+        prod.codigo_siesa = None
+        db.session.commit()
+
+        s = TrasladoService.dictaminar_averia(entregada.id, supervisor.id, True)
+
+        assert s.averia_veredicto is True
+        assert _stock(_bin(cd, 'AVE-A1-EST01'), prod) == 5, 'no se ubicó'
+        assert SiesaJob.query.filter_by(tipo='TRASLADO_AVERIAS').count() == 0
+        assert s.siesa_error, 'el fallo quedó solo en el log'
+        assert 'SIN documento' in s.siesa_error
+        assert 'Resolver a mano' in s.siesa_error
+
+    def test_el_aviso_dice_donde_quedaron_contadas(self, db, cd, entregada,
+                                                   supervisor, prod):
+        """Quien lea esto tiene que saber qué arreglar: la mercancía está en la
+        zona de averías del WMS y Siesa la sigue contando en el CD."""
+        entregada.items[0].producto_codigo_siesa = None
+        prod.codigo_siesa = None
+        db.session.commit()
+
+        s = TrasladoService.dictaminar_averia(entregada.id, supervisor.id, True)
+        assert BODEGA_AVERIAS_DESTINO in s.siesa_error
+
+    def test_cuando_el_documento_SI_sale_no_se_inventa_un_error(self, db, cd,
+                                                                entregada,
+                                                                supervisor):
+        """La otra dirección. Un aviso que aparece en la operación sana se
+        vuelve ruido, y el canal deja de leerse — la lección de los 639."""
+        s = TrasladoService.dictaminar_averia(entregada.id, supervisor.id, True)
+        assert SiesaJob.query.filter_by(tipo='TRASLADO_AVERIAS').count() == 1
+        assert not s.siesa_error
+
+    def test_un_veredicto_NO_averiada_tampoco_inventa_error(self, db, cd,
+                                                            entregada,
+                                                            supervisor):
+        """No sale documento porque no corresponde, no porque haya fallado."""
+        s = TrasladoService.dictaminar_averia(entregada.id, supervisor.id, False,
+                                              nota='estaba bien')
+        assert not s.siesa_error

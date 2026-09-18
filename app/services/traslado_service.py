@@ -1088,6 +1088,11 @@ class TrasladoService:
             return
 
         confirmada = bool(s.averia_veredicto)
+        #: Líneas confirmadas cuyo documento a AV1 NO se pudo encolar. La
+        #: mercancía ya está en la zona de averías del WMS y Siesa la sigue
+        #: contando en el CD: el saldo de las dos puntas dejó de cuadrar y hay
+        #: que resolverlo a mano.
+        _sin_documento = []
 
         for item in s.items:
             cantidad = item.cantidad_recibida or item.cantidad_enviada or 0
@@ -1186,13 +1191,38 @@ class TrasladoService:
                 # Segundo tramo: NB1 → AV1. El núcleo del encolado es único y
                 # trae su propio guard de bodega —el conector 142951 solo sabe
                 # emitir desde CONNEKTA_BODEGA— así que acá no se repite.
-                encolar_traslado_averias(
+                # El resultado NO se descarta.
+                #
+                # `encolar_traslado_averias` devuelve False —con un warning y
+                # nada más— cuando falta `codigo_siesa` o cuando la bodega no
+                # es la que el conector 142951 sabe emitir. Descartarlo dejaba
+                # la pantalla diciendo «✓ Confirmada como averiada» exactamente
+                # igual se hubiera emitido el documento o no, mientras Siesa
+                # sigue contando esas unidades como vendibles en el CD.
+                #
+                # Un warning en el log no es un canal: nadie lo mira hasta que
+                # ya está buscando por qué no cuadra. Se anota en la solicitud
+                # para que TRA-31 lo vea y la pantalla lo diga.
+                if not encolar_traslado_averias(
                     movimiento=mov,
                     codigo_siesa=item.producto_codigo_siesa,
                     cantidad=cantidad,
                     bodega_del_almacen=almacen.bodega_siesa_id,
                     referencia=f'{s.codigo} línea {item.id}',
-                )
+                ):
+                    _sin_documento.append(item.producto_codigo_siesa
+                                          or f'producto {item.producto_id}')
+
+        if _sin_documento:
+            _aviso = (
+                f'Ubicadas en averías pero SIN documento a '
+                f'{connekta.bodega_averias}: {", ".join(_sin_documento[:10])}. '
+                f'Siesa las sigue contando en {s.bodega_destino_siesa}. '
+                f'Resolver a mano.')
+            logger.error('[AVERIAS] %s: %s', s.codigo, _aviso)
+            # Se escribe en `siesa_error`, que es el campo que la tarjeta ya
+            # mira y que `to_dict` expone cuando no hay consecutivo de cierre.
+            s.siesa_error = _aviso[:500]
 
     @staticmethod
     def _descontar_del_bucket_vendible(almacen, producto_id: int,

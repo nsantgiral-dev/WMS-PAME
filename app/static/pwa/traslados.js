@@ -13,6 +13,11 @@ const TRAS_ESTADO = {
   transito:   ['EN_TRANSITO'],
   historial:  ['ENTREGADA','RECHAZADA','CANCELADA','REVERTIDA']
 };
+
+// «Averías» NO está en TRAS_ESTADO porque no es un estado: es una decisión
+// pendiente. Tiene su propio endpoint —sin paginar— porque la lista general
+// pagina de a 30 y una avería sin dictaminar desaparecía en cuanto hubiera 30
+// traslados entregados más nuevos que ella.
 const TRAS_COL = {
   BORRADOR:'#374151', ENVIADA:'#1d4ed8', EN_PICKING:'#7c3aed', PREPARADO:'#166534',
   EN_TRANSITO:'#9a3412', ENTREGADA:'#065f46',
@@ -25,7 +30,7 @@ const TRAS_COL = {
  */
 function trasSubtab(nombre) {
   _TRAS_SUBTAB = nombre;
-  ['pedir','transito','historial'].forEach(k => {
+  ['pedir','transito','averias','historial'].forEach(k => {
     const el = document.getElementById(`tras-tab-${k}`);
     if (!el) return;
     const activo = k === nombre;
@@ -39,11 +44,52 @@ function trasSubtab(nombre) {
     if (lista) lista.style.display = 'none';
     if (panelPedir) panelPedir.style.display = 'block';
     adminPedirIniciar();
+  } else if (nombre === 'averias') {
+    if (lista) lista.style.display = 'block';
+    if (panelPedir) panelPedir.style.display = 'none';
+    cargarAveriasPendientes();
   } else {
     if (lista) lista.style.display = 'block';
     if (panelPedir) panelPedir.style.display = 'none';
     cargarTrasladosAdmin();
   }
+}
+
+/**
+ * La cola del cuarto momento de validación: averías que llegaron al CD y
+ * nadie dictaminó. Mientras estén acá, el sync las repuebla desde Siesa como
+ * stock VENDIBLE — o sea que el CD puede despachar a un cliente mercancía que
+ * alguien ya declaró rota. Por eso tiene badge: sin un número a la vista hay
+ * que acordarse de abrir la pestaña, y acordarse no es un control.
+ */
+async function cargarAveriasPendientes() {
+  const lista = document.getElementById('tras-lista');
+  if (!lista) return;
+  lista.innerHTML = '<div style="text-align:center;padding:20px;color:#555;">Cargando...</div>';
+  try {
+    const d = await get('/api/traslados/averias-pendientes');
+    const todas = d.solicitudes || [];
+    trasPintarBadgeAverias(todas.length);
+    if (!todas.length) {
+      lista.innerHTML = '<div style="text-align:center;padding:30px;color:#4ade80;">✓ Ninguna avería esperando dictamen</div>';
+      return;
+    }
+    lista.innerHTML = `
+      <div style="background:#1a1206;border:1px solid #92400e;border-radius:10px;padding:12px;margin-bottom:12px;font-size:13px;color:#a8a29e;">
+        Estas ya llegaron y se contaron. Hasta que alguien decida si de verdad
+        estaban averiadas, <b style="color:#fbbf24;">cuentan como stock vendible</b>.
+      </div>` + todas.map(s => _renderTrasladoCard(s)).join('');
+  } catch (e) {
+    lista.innerHTML = '<div style="text-align:center;padding:20px;color:#ef4444;">Error cargando averías</div>';
+  }
+}
+
+/** @param {number} n - Cuántas averías esperan dictamen. */
+function trasPintarBadgeAverias(n) {
+  const b = document.getElementById('badge-tras-averias');
+  if (!b) return;
+  b.style.display = n > 0 ? 'inline-block' : 'none';
+  b.textContent = n > 0 ? String(n) : '';
 }
 
 /** Fetch and render traslado cards for the current admin sub-tab. */

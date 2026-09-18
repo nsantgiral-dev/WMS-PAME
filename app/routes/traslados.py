@@ -228,6 +228,55 @@ def aprobar_solicitud(id):
         return jsonify({'error': str(e)}), 500
 
 
+@traslados_bp.route('/averias-pendientes', methods=['GET'])
+@jwt_required()
+def averias_pendientes():
+    """Las averías que llegaron al CD y nadie dictaminó.
+
+    Endpoint propio y no un filtro sobre la lista general, por dos razones
+    medidas:
+
+    · **La lista general pagina de a 30 y el front nunca manda `page`.** Una
+      avería pendiente entre traslados ENTREGADA deja de ser alcanzable en
+      cuanto haya 30 entregados más nuevos. La cola de una decisión pendiente
+      no puede depender de cuántas cosas terminaron después.
+
+    · **«Historial» es el lugar equivocado.** Ahí es donde uno mira lo que ya
+      pasó; esto es lo que falta hacer, y antes de ubicar la mercancía.
+
+    Devuelve además el conteo, que es lo que alimenta el badge: sin un número
+    a la vista, la pestaña hay que acordarse de abrirla — y acordarse no es un
+    control.
+    """
+    try:
+        usuario_id = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
+
+    from app.extensions import db
+    usuario = db.session.get(Usuario, usuario_id)
+    if not usuario or usuario.rol not in Roles.SUPERVISION:
+        return jsonify({'error': 'Solo administración del CD ve esta cola'}), 403
+
+    # `is_(None)` y no `.isnot(True)`: un veredicto `False` («no estaba
+    # averiada») es una decisión tomada, no un pendiente.
+    q = (SolicitudTraslado.query
+         .filter(
+             SolicitudTraslado.clase_traslado == ClaseTraslado.AVERIAS,
+             SolicitudTraslado.estado == EstadoTraslado.ENTREGADA,
+             SolicitudTraslado.averia_veredicto.is_(None),
+         )
+         .order_by(SolicitudTraslado.fecha_entrega.asc().nullsfirst()))
+
+    # Sin paginar, a propósito: son las que están esperando una decisión. Si
+    # algún día son tantas que hay que paginarlas, el problema no es la lista.
+    solicitudes = q.all()
+    return jsonify({
+        'solicitudes': [s.to_dict() for s in solicitudes],
+        'total': len(solicitudes),
+    }), 200
+
+
 @traslados_bp.route('/<int:id>/dictaminar-averia', methods=['POST'])
 @jwt_required()
 def dictaminar_averia(id):
