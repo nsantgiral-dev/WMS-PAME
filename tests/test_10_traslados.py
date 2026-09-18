@@ -34,6 +34,15 @@ def usuario_tienda(db, almacen):
         password_hash=generate_password_hash('test123'),
         rol='tienda',
         almacen_id=almacen.id,
+        # Su nombre dice «Centro» y los traslados que recibe declaran
+        # `nombre_punto_venta='Neiva Centro'`, pero sin esto la bodega se
+        # resolvía por el almacén compartido —que es NB1, el CD— y quedaba
+        # siendo la tienda del ORIGEN recibiendo lo que va al destino.
+        #
+        # Daba igual mientras «recibe quien lo pidió» fuera la regla: pasaba
+        # por ser el solicitante. Al pasar la regla a «recibe quien está en el
+        # destino» el desacuerdo entre el nombre y el dato quedó a la vista.
+        bodega_siesa_id='NC1',
         activo=True,
     )
     db.session.add(u)

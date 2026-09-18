@@ -617,11 +617,22 @@ async function tiendaCargarRecibir() {
   if (!el) return;
   el.innerHTML = '<div style="text-align:center;padding:20px;color:#555;">Cargando...</div>';
   try {
-    const [r1, r2] = await Promise.all([
-      get('/api/traslados/?estado=EN_TRANSITO'),
-      get('/api/traslados/?estado=DESPACHADA'),
-    ]);
-    _TIENDA_PENDIENTES = [...(r1.solicitudes || []), ...(r2.solicitudes || [])]
+    const r1 = await get('/api/traslados/?estado=EN_TRANSITO');
+    // «Recibir» significa «llegó ACÁ». El backend le devuelve a una tienda los
+    // traslados que ELLA pidió, y hasta hoy eso coincidía con los que le
+    // llegaban — todo traslado lo pedía su propio destinatario.
+    //
+    // Una avería rompe la coincidencia: la pide el punto y llega al CD. Sin
+    // este filtro el punto veía su propia avería bajo «Recibir Traslado» y el
+    // botón «Contar productos» le disparaba el ETS, saltándose el conteo del
+    // CD. El guard del backend ya lo rechaza; esto evita ofrecer un botón que
+    // no puede funcionar.
+    //
+    // (Se quitó también la consulta por 'DESPACHADA': ese estado no existe en
+    // `EstadoTraslado` y ya se retiró de los guards del backend.)
+    const _miBodega = OPERARIO?.bodega_siesa_id || null;
+    _TIENDA_PENDIENTES = (r1.solicitudes || [])
+      .filter(s => !_miBodega || s.bodega_destino_siesa === _miBodega)
       .sort((a, b) => new Date(b.fecha_creacion) - new Date(a.fecha_creacion));
 
     const badgeEl = document.getElementById('badge-recibir');

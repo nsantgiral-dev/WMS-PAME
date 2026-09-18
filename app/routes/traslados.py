@@ -537,14 +537,36 @@ def confirmar_recepcion(id):
     s = SolicitudTraslado.query.get_or_404(id)
     usuario = Usuario.query.get(usuario_id)
     es_admin = usuario and usuario.rol in ('admin', 'supervisor', 'gerente', 'jefe_almacen')
-    # Recepcionista puede confirmar si su bodega_siesa_id == bodega_destino del traslado
-    es_recep_destino = (
-        usuario and usuario.rol == 'recepcionista' and
-        usuario.bodega_siesa_id and
-        usuario.bodega_siesa_id == s.bodega_destino_siesa
-    )
-    if not es_admin and not es_recep_destino and s.solicitante_id != usuario_id:
-        return jsonify({'error': 'Solo puedes confirmar la recepción de tus propios traslados'}), 403
+
+    # ── Quien confirma que algo llegó tiene que estar donde llegó ──────────
+    #
+    # Antes acá decía `s.solicitante_id != usuario_id`, y funcionaba **por
+    # accidente**: hasta hoy todo traslado lo pedía su propio destinatario, así
+    # que «sos el solicitante» y «estás en el destino» eran la misma persona.
+    # Medido el 2026-09-18 sobre los 174 traslados de producción: en 166 el
+    # solicitante es del destino, y los 8 restantes los creó el Administrador,
+    # que entra por `es_admin`. La regla vieja no se apoyaba en un permiso,
+    # se apoyaba en una coincidencia.
+    #
+    # El traslado de averías es el primero que rompe esa coincidencia: lo pide
+    # el punto y llega al CD. Con la regla vieja, **el mismo punto que declaró
+    # la avería podía confirmar su recepción en el CD**, disparar el ETS y
+    # saltarse entero el tercer momento de validación del proceso —«en NB1
+    # recepción valida la cantidad»— sin que nadie del CD la hubiera contado.
+    #
+    # Ahora se pregunta lo que de verdad importa, con la única función que
+    # contesta de qué bodega es alguien y que falla cerrada. Esto además
+    # subsume el caso del recepcionista del destino, que antes se escribía
+    # aparte leyendo solo `bodega_siesa_id` y por eso no veía a quien resuelve
+    # su bodega por almacén.
+    from app.services.alcance import usuario_es_de_la_bodega
+    es_del_destino = usuario_es_de_la_bodega(usuario, s.bodega_destino_siesa)
+
+    if not es_admin and not es_del_destino:
+        return jsonify({'error':
+            'La recepción la confirma quien está en la bodega de destino '
+            f'({s.bodega_destino_siesa}) — es quien puede contar lo que '
+            'llegó.'}), 403
     data = request.get_json() or {}
     try:
         s = TrasladoService.confirmar_recepcion(
