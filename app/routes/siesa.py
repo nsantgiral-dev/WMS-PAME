@@ -1714,10 +1714,18 @@ def debug_cache_status():
             'productos_por_bodega': {k: len(v) for k, v in (multi['data'] or {}).items()},
             'ts': str(multi['ts']) if multi['ts'] else None,
         },
+        # `_cache_inventario_siesa` es **por bodega** — `{bodega: {data, ts}}`,
+        # no un caché único. Leerlo como `mono['data']` daba `KeyError: 'data'`
+        # siempre: con el diccionario vacío (el estado de arranque) y con
+        # datos adentro también. O sea que este endpoint nunca respondió 200.
+        # Nadie lo notó porque es de diagnóstico y no lo llama ninguna pantalla.
         'monobodega': {
-            'tiene_data': mono['data'] is not None,
-            'productos': len(mono['data']) if mono['data'] else 0,
-            'ts': str(mono['ts']) if mono['ts'] else None,
+            bod: {
+                'tiene_data': c.get('data') is not None,
+                'productos': len(c['data']) if c.get('data') else 0,
+                'ts': str(c['ts']) if c.get('ts') else None,
+            }
+            for bod, c in sorted(mono.items())
         },
         'descarga_en_curso': _descarga_multibodega_en_curso,
     }), 200
