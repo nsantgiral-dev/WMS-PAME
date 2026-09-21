@@ -4,6 +4,28 @@ Qué se verificó antes de correr `flask db upgrade` contra la base real, y con
 qué evidencia. Existe porque el ensayo se hizo una vez y el resultado no se
 puede reconstruir de memoria.
 
+## ⚠️ Corrección — a qué base se refieren estos números
+
+**Todo lo medido en este documento es la base de PRODUCCIÓN**, no la de QA. El
+`.env` del repo trae `metro.proxy.rlwy.net:29311`, que es el `DATABASE_URL` del
+ambiente `production` de Railway; QA vive en `altaria.proxy.rlwy.net:20841`.
+`CLAUDE.md` ya lo advertía con ese mismo host y no se verificó antes de medir.
+
+Eso no invalida los hallazgos —son datos reales y el ensayo de la migración se
+hizo sobre una copia restaurada, sin escribir en ninguna de las dos— pero hay
+que leerlos como producción:
+
+- las 174 solicitudes de traslado, los 27 usuarios, los 4.672 movimientos de
+  kardex y el barrido de 146 endpoints por rol son de **producción**;
+- el respaldo `wms-20260921-1231.dump` es un respaldo de **producción**;
+- los 11 endpoints en 5xx eran el desfase entre los modelos de esta rama y el
+  esquema de **producción**, que sigue en `n021`.
+
+**En QA la migración ya corrió**: el push a `origin/qa` dispar el deploy y su
+`releaseCommand` aplicó la cadena. Verificado contra
+`altaria.proxy.rlwy.net:20841`: revisión `m027mergedoscadenas`, 19 tablas
+`flota_*`, `clase_traslado` presente, y **los 11 endpoints en 200**.
+
 ## El síntoma que lo motivó
 
 Barrido de los **146 endpoints GET sin parámetro** con las credenciales de
