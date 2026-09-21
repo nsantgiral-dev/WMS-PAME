@@ -2409,7 +2409,31 @@ Generador de consultas y encontró el nombre real, registrado como
 soportan, mismo hallazgo que `get_terceros_contacto`/`get_vendedor_contacto`
 — se trae la página y se filtra en memoria).
 
-### Sin resolver: 401 persiste incluso con nombre y permiso correctos — aceptado como no-bloqueante, no se sigue persiguiendo
+### RESUELTO 2026-09-21 — el 401 no era de permisos: `api_tecnocedi_requisiciones_traslado` es una consulta ESTÁNDAR
+
+Se llamaba por el endpoint de las **dinámicas** (`ejecutarconsulta`). En Siesa
+QA → Administración → Permisos servicios aparece bajo **«Consultas estándar»**
+(314), no bajo «Consultas dinámicas» (20). Por el endpoint estándar responde
+sin tocar permisos ni regenerar el token — la hipótesis del JWT «horneado» era
+falsa (las consultas `papeleriamedellin_*` creadas después sí respondían con el
+mismo token).
+
+Además del endpoint, `get_consec_rit_by_referencia` tenía dos defectos más que
+el 401 tapaba: (1) buscaba `f440_referencia`, que **no existe** en la consulta —
+el código del traslado viaja en `f440_notas` como «WMS <código>»; y (2) no
+sabía leer el formato: responde `FOR JSON` **troceado** en filas de ~2000
+caracteres, que hay que unir antes de interpretar. Trae las ~150 más recientes.
+
+Verificado en vivo: `ST-20260921-0471` → RIT `003-RIT-148` (rowid 1121, estado
+«Comprometido»). Tests: `tests/test_connekta_traslados_gateway.py::TestRecoveryRIT`
+(usan el formato real; los dos anteriores codificaban el supuesto).
+
+Queda la lectura inmediata tras el POST, que sigue chocando con la Regla 20; el
+reintento del despacho (`traslado_service.despachar`) ya cubre eso.
+
+*Texto anterior, conservado como registro de lo que se creyó:*
+
+#### (superado) Sin resolver: 401 persiste incluso con nombre y permiso correctos — aceptado como no-bloqueante, no se sigue persiguiendo
 
 Con el nombre correcto, la consulta **sigue dando 401** — `"No autorizado...
 verifique si tiene permisos asignados a la consulta dinamica"` — aunque se
