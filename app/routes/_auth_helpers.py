@@ -29,7 +29,23 @@ class Roles:
     ALMACEN        = (ADMIN, JEFE_ALMACEN)
     DESPACHO       = (ADMIN, SUPERVISOR, GERENTE, JEFE_ALMACEN)
     SUPERVISION    = (ADMIN, SUPERVISOR, JEFE_ALMACEN)
-    PACKING_ROLES  = (ADMIN, SUPERVISOR, EMPACADOR)
+    # `PACKER_TRASLADO` entra acá el 2026-09-21. No es un ensanche por
+    # conveniencia: el endpoint YA estaba escrito para ellos —`scope_packing`
+    # documenta y filtra su caso («bodega_siesa_id + solo TRASLADO»)— y su
+    # gemelo `PICKER_TRASLADO` sí está en el guard de picking
+    # (`app/routes/picking.py:22`). La puerta era lo único que faltaba.
+    #
+    # Hasta hoy funcionaba por una casilla: los cuatro packers de producción
+    # tienen `puede_empacar=True`, un flag cuya etiqueta en la pantalla de
+    # usuarios dice «Empacador / Auditor» —otro puesto— y que nace DESMARCADA.
+    # El quinto packer que alguien cree queda mudo: la pantalla entera en rojo,
+    # sin que nada explique por qué.
+    #
+    # El radio es exacto: `PACKING_ROLES` tiene UN solo consumidor
+    # (`_puede_empacar`), y la autorización entra por la puerta mientras el
+    # alcance decide qué ve adentro. Un packer de traslado sigue viendo solo
+    # los traslados de su bodega.
+    PACKING_ROLES  = (ADMIN, SUPERVISOR, EMPACADOR, PACKER_TRASLADO)
     RECEPCION_ROLES = (ADMIN, JEFE_ALMACEN, RECEPCIONISTA)
     COMPRAS_ROLES  = (ADMIN, JEFE_ALMACEN, GERENTE, COMPRAS)
     LEAD           = (ADMIN, SUPERVISOR)
