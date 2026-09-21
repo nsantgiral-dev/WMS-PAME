@@ -19,6 +19,67 @@ os.environ.setdefault('SIESA_TIPO_DOCTO_TRANSITO_ENTRADA', 'TTE')
 os.environ.setdefault('SIESA_BODEGA_TRANSITO', 'TR')
 os.environ.setdefault('SIESA_MOTIVO_TRASLADO', '01')
 
+#: Estos `setdefault` llegan tarde si otro archivo importó el gateway primero.
+#:
+#: `connekta` es un singleton de módulo y lee estas variables en su `__init__`,
+#: que corre la primera vez que alguien importa `app.services.connekta_gateway`
+#: — transitivamente, un `from app.services.packing_service import ...` basta.
+#: pytest importa TODOS los módulos de test antes de correr el primero, así que
+#: quién gana la carrera depende del orden de colección.
+#:
+#: Cuando este archivo la perdía, el gateway quedaba con los tipos de documento
+#: de tránsito en `''`, y `test_confirmar_recepcion_transicion_a_entregada`
+#: fallaba con `0 == 1` (Siesa nunca se llamó) y
+#: `..._guarda_siesa_entrada_consec` con `None == 5555`. Verde en aislamiento,
+#: rojo en la suite, y el mensaje no nombra la causa.
+#:
+#: **Medido, no deducido** (2026-09-21, `pytest tests/test_packing_dos_puertas.py
+#: tests/test_10_traslados.py` reproduce con dos archivos):
+#:
+#:   solo tipo_docto_transito_salida   → sigue rojo
+#:   solo tipo_docto_transito_entrada  → sigue rojo
+#:   los dos juntos                    → verde
+#:   solo bodega_transito              → sigue rojo
+#:
+#: O sea que hacen falta **los dos tipos de documento a la vez**: la cadena de
+#: fixtures despacha (STS) antes de que el test reciba (ETS), y con el tipo de
+#: salida vacío el despacho no deja el traslado en el estado que la recepción
+#: necesita para llegar al POST. La primera versión de este comentario culpaba
+#: a `bodega_transito`; la medición lo desmintió.
+#:
+#: El arreglo no es reordenar —el orden no se puede fijar desde acá— sino dejar
+#: de depender de él: la configuración se fuerza sobre el singleton ya
+#: construido, y `monkeypatch` la restaura al terminar cada test.
+_CONFIG_SIESA_DE_TRASLADOS = {
+    'bodega_transito':      'TR',
+    'tipo_docto_transito_salida':  'TTS',
+    'tipo_docto_transito_entrada': 'TTE',
+    'motivo_traslado':      '01',
+}
+
+
+@pytest.fixture(autouse=True)
+def _siesa_configurado_para_traslados(monkeypatch):
+    """La config que estos tests asumen, puesta sobre el singleton vivo."""
+    from app.services.connekta_gateway import connekta
+    for attr, valor in _CONFIG_SIESA_DE_TRASLADOS.items():
+        if hasattr(connekta, attr):
+            monkeypatch.setattr(connekta, attr, valor)
+
+
+def test_la_config_no_depende_del_orden_de_importacion():
+    """El trinquete de este archivo.
+
+    Si alguien borra la fixture de arriba creyendo que los `setdefault`
+    alcanzan, esto se pone rojo **en aislamiento también**: comprueba que el
+    singleton tenga el valor, no que la variable de entorno exista.
+    """
+    from app.services.connekta_gateway import connekta
+    assert connekta.bodega_transito == 'TR', (
+        'el gateway no quedó configurado para tránsito: los tests de '
+        'recepción van a pasar por la rama DIRECTA y no llamar a Siesa, '
+        'fallando con «0 == 1» sin decir por qué')
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Fixtures de traslados
