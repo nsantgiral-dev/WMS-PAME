@@ -3782,6 +3782,28 @@ async function flotaRenderTaller() {
     return;
   }
 
+  // Los daños abiertos del vehículo, para poder ATAR la orden al daño.
+  //
+  // El endpoint acepta `hallazgo_id` desde siempre, lo valida contra el mismo
+  // vehículo, y la pantalla lo usa para decidir si al cerrar la orden ofrece
+  // cerrar también el daño. Lo único que faltaba era el selector: el
+  // formulario mandaba `{placa, tipo, taller, descripcion, km}` y nada más.
+  //
+  // Consecuencia de esa ausencia: TODA orden nacía con `hallazgo_id` nulo, el
+  // prompt «¿el daño quedó reparado?» no aparecía nunca, y el ciclo
+  // daño → taller → cierre no se cerraba solo en ningún caso. Alguien tenía
+  // que acordarse de ir a Daños y cerrarlo a mano, y acordarse no es un
+  // control.
+  //
+  // Falla tolerante a propósito: si esta consulta se cae, el formulario sale
+  // sin selector y se puede abrir una orden igual. Bloquear el taller porque
+  // no se pudo listar los daños sería peor que no tener el vínculo.
+  let abiertos = [];
+  try {
+    const h = await get('/flota/hallazgos/' + encodeURIComponent(FLOTA_PLACA));
+    abiertos = (h.hallazgos || []).filter(x => x.estado === 'abierto');
+  } catch (e) { abiertos = []; }
+
   // `pendientes` es {orden_id: [intervencion_id, ...]} y se arma acá, del
   // mismo payload que pinta las casillas. Existe porque el navegador no puede
   // recorrer casillas que todavía no leyó: sin la lista, «qué trabajos cubre
@@ -3831,6 +3853,15 @@ async function flotaRenderTaller() {
     <label>Qué vas a mandar a revisar</label>
     <select id="ot-sistema" style="width:100%;padding:6px"
             onchange="flotaTallerSistemaCambio()">${ops}</select>
+    ${abiertos.length ? `
+    <label>¿Viene de un daño reportado?</label>
+    <select id="ot-hallazgo" style="width:100%;padding:6px">
+      <option value="">No — entra por otra razón</option>
+      ${abiertos.map(h => `<option value="${esc(h.id)}">${esc(h.criticidad)} · ${esc(h.descripcion)}</option>`).join('')}
+    </select>
+    <p style="font-size:12px;color:var(--tx2);margin:4px 0 0">
+      Atarla al daño es lo que permite cerrarlo al cerrar la orden. Sin esto
+      hay que acordarse de cerrarlo aparte, en Daños.</p>` : ''}
     <div id="ot-garantias"></div>
     <label>A qué taller</label>
     <input id="ot-taller" style="width:100%;padding:6px" placeholder="Ej: Taller Los Andes — Neiva">
@@ -3924,6 +3955,9 @@ async function flotaAbrirOT() {
 
   const ok = await flotaPostTaller(FLOTA_OT_URL.abrir, {
     placa: placa, tipo: document.getElementById('ot-tipo').value,
+    // El selector solo existe si había daños abiertos; vacío = sin atar, que
+    // es lo que el endpoint interpreta como `None`.
+    hallazgo_id: (document.getElementById('ot-hallazgo') || {}).value || '',
     taller: taller, descripcion: desc, km: km,
   }, 'ot-guardar', 'ot-error', 'Abriendo…');
   if (!ok) return;
@@ -4103,9 +4137,26 @@ function flotaFilaMontaje(m) {
          alineación, presión y suspensión de ese eje antes de poner la
          siguiente en la misma posición.</div>`
     : '';
+  // Antes esta rama afirmaba que el montaje había sido una ROTACIÓN cuando no
+  // había gasto atado, y eso era una afirmación falsa.
+  //
+  // `gasto_id` existe en el modelo y la API lo valida, pero el formulario de
+  // montaje nunca lo manda (`flotaMontarLlanta` arma
+  // `{placa, llanta_id, posicion, km, observacion}`), y el id del gasto
+  // tampoco se muestra en ninguna pantalla — así que ni copiándolo a mano.
+  // Resultado: el campo es SIEMPRE nulo, y la pantalla afirmaba «rotación»
+  // también cuando hubo factura.
+  //
+  // Un identificador que promete una cosa y hace otra no falla: engaña con
+  // confianza. Se dice lo que se sabe —que no hay gasto atado— y no lo que
+  // se supone —que por eso fue una rotación—.
+  //
+  // El costo de la llanta igual llega al CPK: 'llanta' es categoría de gasto
+  // y el cálculo suma todas sin filtrar. Lo que falta acá es trazabilidad,
+  // no plata.
   const doc = m.gasto_id
     ? ` · factura registrada`
-    : ` · <span style="color:var(--tx2)">sin gasto asociado (rotación)</span>`;
+    : ` · <span style="color:var(--tx2)">sin gasto atado a este montaje</span>`;
   return `<li style="margin-bottom:12px;border-left:2px solid var(--bd);padding-left:10px">
     <div><b>Posición ${esc(m.posicion)}</b> · llanta <b>${esc(m.codigo)}</b>
       <span style="font-size:12px;color:var(--tx2)">${esc(m.marca_llanta)} ${esc(m.medida)}</span></div>

@@ -3087,6 +3087,16 @@ function _formUsuario(u = {}) {
         <option value="tienda" ${u.rol==='tienda'?'selected':''}>Tienda (punto de venta)</option>
         <option value="supervisor" ${u.rol==='supervisor'?'selected':''}>Supervisor</option>
         <option value="jefe_almacen" ${u.rol==='jefe_almacen'?'selected':''}>Jefe de almacén</option>
+        <!-- gerente y empacador faltaban aca y el backend SI los acepta
+             (_ROLES_VALIDOS en app/routes/auth.py). No eran roles teoricos:
+             gerente tiene autoridad en cinco tuplas (GESTION, DESPACHO,
+             COMPRAS_ROLES, LECTURA_FLOTA, VISTA_FLOTA), o sea que es quien
+             DECIDE en flota, y no se podia crear desde ninguna pantalla.
+             empacador esta en PACKING_ROLES.
+             El trinquete tests/test_roles_creables.py cruza este desplegable
+             contra _ROLES_VALIDOS para que no vuelvan a divergir. -->
+        <option value="gerente" ${u.rol==='gerente'?'selected':''}>Gerente</option>
+        <option value="empacador" ${u.rol==='empacador'?'selected':''}>Empacador</option>
         <option value="admin" ${u.rol==='admin'?'selected':''}>Admin</option>
         <optgroup label="── Traslados ──">
           <option value="picker_traslado" ${u.rol==='picker_traslado'?'selected':''}>Picker traslado</option>
