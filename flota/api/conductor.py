@@ -189,8 +189,30 @@ def _estado_del_vehiculo(vehiculo_id):
         #
         # Una correa que revienta en motor de interferencia es motor nuevo, y
         # `distribucion_km_cambio` llevaba meses en la base sin un solo lector.
+        # Las claves salen de `preventivo.diagnostico_de` (ver
+        # `flota/adaptadores/preventivo.py`): `nombre` y `km_restante`.
+        #
+        # Decía `d['tarea']` y `d.get('faltan_km')`, y NINGUNA de las dos
+        # existe en el diccionario que produce el adaptador. O sea que esta
+        # línea levantaba `KeyError` en cuanto hubiera **una** tarea vencida, y
+        # el endpoint devolvía 500.
+        #
+        # El `try/except` de `_preventivo_urgente` no lo tapaba: envuelve la
+        # consulta al adaptador, no esta comprensión. Y del lado de la pantalla
+        # `flotaCondCargar` atrapa cualquier error y deja el bloque VACÍO —el
+        # catch se escribió para el 404 de «conductor sin ficha»—, así que el
+        # conductor perdía de golpe Inspección, Entregar turno, Reportar daño,
+        # Tanqueo, Odómetro y Mis turnos, sin ningún mensaje.
+        #
+        # Por qué 1210 tests no lo vieron: los dos que tocan este campo
+        # afirman lista vacía sobre mundos sin tareas o sin línea base. Se
+        # probaba que NO dispara; nunca que se puede construir lleno.
+        #
+        # `km_restante` es negativo cuando ya venció — se publica tal cual en
+        # vez de un valor absoluto: el signo es el que dice «pasado», y
+        # taparlo obligaría a la pantalla a deducirlo.
         'preventivo_vencido': [
-            {'tarea': d['tarea'], 'faltan_km': d.get('faltan_km')}
+            {'tarea': d['nombre'], 'faltan_km': d.get('km_restante')}
             for d in _preventivo_urgente(vehiculo_id)],
         'documentos_vencidos': [
             {'tipo': d.tipo, 'vencio': d.fecha_vencimiento.isoformat()}

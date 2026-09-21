@@ -122,7 +122,27 @@ def _enviar_email_con_dlq(asunto: str, cuerpo_html: str, cuerpo_texto: str,
     evitando que la falla de alertas pase completamente desapercibida (SF_JOB_SILENCIOSO).
     """
     try:
-        enviar_email(asunto, cuerpo_html, cuerpo_texto, dest)
+        # **El valor de retorno importa tanto como la excepción.**
+        #
+        # `enviar_email` devuelve `False` —sin lanzar— cuando falta
+        # `RESEND_API_KEY` o cuando la API contesta un error. Este wrapper solo
+        # miraba las excepciones, así que ese `False` se descartaba: no se
+        # encolaba nada en el DLQ, no salía ningún `critical`, y el llamador
+        # seguía como si hubiera mandado.
+        #
+        # El caso que lo destapó (2026-09-21): el reporte semanal de flota
+        # registraba «[FLOTA_REPORTE] enviado a …» y devolvía
+        # `{'enviado': True}` sobre un correo que nunca salió. Pero no era de
+        # ese archivo — es de acá, y lo heredaban los 15 llamadores, entre
+        # ellos las cuatro alertas de inventario y la de ruta entregada sin
+        # liquidar.
+        #
+        # Una alerta apagada no falla: se calla. Y callarse es indistinguible
+        # de «no hubo nada que avisar».
+        if not enviar_email(asunto, cuerpo_html, cuerpo_texto, dest):
+            raise RuntimeError(
+                'enviar_email devolvió False — falta configuración de Resend '
+                'o la API rechazó el envío')
     except Exception as e:
         logger.critical(
             f'[ALERTAS] enviar_email falló para "{tipo_alerta}" — encolando en DLQ: {e}'

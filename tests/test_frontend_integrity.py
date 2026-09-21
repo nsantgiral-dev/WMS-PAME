@@ -757,6 +757,22 @@ _EXENTOS_POR_REGLA = (
 # necesita un tab. La pregunta correcta es QUÉ DECISIÓN DEBERÍA ESTAR INFORMANDO.
 # Un número que el usuario no puede auditar no se obedece: se ignora.
 DEUDA_SIN_UI = {
+    # ── flota/ (entró al guard el 2026-09-21, ver el comentario del filtro) ──
+    #
+    # 2026-09-21 · Webhook ENTRANTE de Gupshup: lo llama el proveedor, no una
+    # persona. Nace cerrado con `exige_secreto('FLOTA_AVISO_WEBHOOK_TOKEN')`
+    # (`flota/api/_permisos.py`), así que sin esa variable responde 503 a todo.
+    #
+    # Lo que se pierde si nadie lo llama: los avisos se quedan para siempre en
+    # `entregado_al_proveedor` y nunca pasan a `entregado`. El contador
+    # `avisos_sin_confirmar` sube sin techo y nadie sabe si el mensaje llegó.
+    # No es deuda de UI — es una integración que hay que apuntar desde Gupshup.
+    '/flota/avisos/entrega':
+        'Webhook entrante de Gupshup. Sin consumidor en el front A PROPÓSITO: '
+        'lo llama el proveedor. Requiere FLOTA_AVISO_WEBHOOK_TOKEN configurada '
+        'y la URL pública apuntada desde Gupshup, o los avisos nunca se '
+        'confirman como entregados.',
+
     # ── Destapadas el 2026-08-13 al cambiar presencia por adyacencia ──────
     #
     # Las once son **rutas parametrizadas que mueven inventario o dinero**, y
@@ -1000,7 +1016,20 @@ class TestEndpointsSinConsumidor:
         huerfanos = set()
         for regla in app.url_map.iter_rules():
             ruta = str(regla)
-            if not ruta.startswith('/api/'):
+            # `/api/` NO es el único prefijo que la PWA consume.
+            #
+            # `flota/` es un paquete aparte, montado en `/flota` y no en
+            # `/api/flota` (`flota/api/__init__.py`). Con el filtro anterior sus
+            # **44 endpoints quedaban fuera del guard**, y `DEUDA_SIN_UI` no
+            # tenía ni una entrada de flota — no porque el módulo estuviera
+            # limpio, sino porque nunca se midió. El filtro no lo decía en
+            # ninguna parte: se leía como «todas las rutas de la app».
+            #
+            # Es la misma forma que ya costó tres veces en este archivo:
+            # el detector medía una proxy de «todas las rutas» en vez de todas
+            # las rutas. Medido el 2026-09-21: 335 `/api/*` miradas, 44
+            # `/flota*` ignoradas.
+            if not (ruta.startswith('/api/') or ruta.startswith('/flota')):
                 continue
             if any(x in ruta for x in _EXENTOS_POR_REGLA):
                 continue

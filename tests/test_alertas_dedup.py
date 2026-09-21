@@ -116,8 +116,25 @@ class TestLaClaveSeUsaDeVerdad:
 
         fuente = (Path(__file__).resolve().parents[1] / 'app' / 'services'
                   / 'alertas_service.py').read_text(encoding='utf-8')
-        i = fuente.index('def _enviar_email_con_dlq')
-        cuerpo = fuente[i:i + 2600]
+        # El cuerpo REAL de la función, por AST.
+        #
+        # Antes se recortaba una ventana fija de 2600 caracteres desde el
+        # `def`. Eso mide la función solo mientras quepa: el 2026-09-21 se le
+        # agregaron ~900 caracteres de comentario explicando por qué ahora
+        # honra el valor de retorno de `enviar_email`, y `idem_key` quedó
+        # FUERA de la ventana — los dos trinquetes se pusieron rojos sin que la
+        # propiedad que vigilan hubiera cambiado.
+        #
+        # Un guard que se rompe al escribir un comentario enseña a borrar
+        # comentarios. Y falla peor hacia el otro lado: si la función crece,
+        # su final deja de mirarse y el guard se apaga en silencio — que es
+        # exactamente el modo de falla que este archivo existe para impedir.
+        arbol = ast.parse(fuente)
+        fn = next(n for n in ast.walk(arbol)
+                  if isinstance(n, ast.FunctionDef)
+                  and n.name == '_enviar_email_con_dlq')
+        cuerpo = ast.get_source_segment(fuente, fn) or ''
+        assert cuerpo, 'no se pudo extraer el cuerpo de _enviar_email_con_dlq'
         assert 'idem_key' in cuerpo and '_idem' in cuerpo
         assert '"tipo_alerta": "{tipo_alerta}"' not in cuerpo, (
             'la deduplicación volvió a filtrar por tipo sin cota temporal: un '
@@ -126,12 +143,30 @@ class TestLaClaveSeUsaDeVerdad:
     def test_la_fecha_es_el_dia_operativo(self):
         """`date.today()` en Railway es UTC: el día de la alerta cambiaría a
         las 7 p.m. Colombia, igual que todo lo demás que se corrigió hoy."""
+        import ast
         from pathlib import Path
 
         fuente = (Path(__file__).resolve().parents[1] / 'app' / 'services'
                   / 'alertas_service.py').read_text(encoding='utf-8')
-        i = fuente.index('def _enviar_email_con_dlq')
-        cuerpo = fuente[i:i + 2600]
+        # El cuerpo REAL de la función, por AST.
+        #
+        # Antes se recortaba una ventana fija de 2600 caracteres desde el
+        # `def`. Eso mide la función solo mientras quepa: el 2026-09-21 se le
+        # agregaron ~900 caracteres de comentario explicando por qué ahora
+        # honra el valor de retorno de `enviar_email`, y `idem_key` quedó
+        # FUERA de la ventana — los dos trinquetes se pusieron rojos sin que la
+        # propiedad que vigilan hubiera cambiado.
+        #
+        # Un guard que se rompe al escribir un comentario enseña a borrar
+        # comentarios. Y falla peor hacia el otro lado: si la función crece,
+        # su final deja de mirarse y el guard se apaga en silencio — que es
+        # exactamente el modo de falla que este archivo existe para impedir.
+        arbol = ast.parse(fuente)
+        fn = next(n for n in ast.walk(arbol)
+                  if isinstance(n, ast.FunctionDef)
+                  and n.name == '_enviar_email_con_dlq')
+        cuerpo = ast.get_source_segment(fuente, fn) or ''
+        assert cuerpo, 'no se pudo extraer el cuerpo de _enviar_email_con_dlq'
         assert 'dia_operativo' in cuerpo
         assert 'date.today()' not in cuerpo
 

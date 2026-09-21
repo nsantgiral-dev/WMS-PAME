@@ -257,6 +257,42 @@ def registrar():
     return jsonify(_json_gasto(fila)), 201
 
 
+@gastos_bp.route('/vocabulario', methods=['GET'])
+@jwt_required()
+@exige(Roles.LECTURA_FLOTA, 'armar el formulario de tanqueo')
+def vocabulario():
+    """Las listas que necesita el formulario de tanqueo. **Nada del vehículo.**
+
+    Existe porque el conductor tenía el botón de Tanqueo y no tenía la
+    pantalla: `flotaCondTanquear` reusaba `flotaRenderGastos`, cuya primera
+    línea es `GET /flota/gastos/<placa>` — que exige `MAESTROS_FLOTA` y le
+    devolvía 403. El `catch` pintaba «No se pudieron cargar los gastos» y
+    hacía `return`, así que el formulario, que se construye más abajo en la
+    misma función, no llegaba a dibujarse nunca.
+
+    Las dos mitades eran decisiones deliberadas y opuestas: el conductor DEBE
+    poder registrar un tanqueo (`POST /flota/tanqueos` es `LECTURA_FLOTA`), y
+    NO debe ver el CPK — «un CPK en la pantalla del conductor está a un paso
+    de leerse como una medida suya». Lo que faltaba era separar el dato
+    sensible del vocabulario.
+
+    Acá no viaja ningún gasto, ningún CPK y ningún rendimiento: solo los
+    catálogos cerrados que el propio POST valida. Se sirven desde el dominio y
+    no se copian al JS a propósito — una lista de categorías escrita en la
+    pantalla es la segunda copia de la política, y la de la pantalla es la que
+    la gente mira.
+    """
+    from flota.dominio import costos
+    from flota.adaptadores import gastos as adaptador
+    return jsonify({
+        'categorias': list(costos.CATEGORIAS_GASTO),
+        'categorias_con_periodo': list(costos.CATEGORIAS_CON_PERIODO),
+        'categorias_de_campo': sorted(adaptador.ORIGEN_DE_LECTURA),
+        'origenes_costo': list(costos.ORIGENES_COSTO),
+        'estados_tanque': list(costos.ESTADOS_TANQUE),
+    }), 200
+
+
 @gastos_bp.route('/tanqueos', methods=['POST'])
 @jwt_required()
 @exige(Roles.LECTURA_FLOTA, 'registrar un tanqueo')

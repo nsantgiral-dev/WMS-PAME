@@ -153,6 +153,71 @@ class TestElConductorVeElEstadoDeSuCamion:
             'una tarea sin línea base salió como vencida: se le está inventando '
             'una deuda al conductor por algo que nadie ejecutó nunca')
 
+    def test_una_tarea_VENCIDA_DE_VERDAD_llega_con_nombre_y_km(
+            self, client, mundo):
+        """EL test que faltaba, y por eso el 500 vivió hasta hoy.
+
+        Los dos de arriba afirman lista VACÍA: uno sobre un mundo sin tareas,
+        el otro sobre una tarea sin línea base. Los dos pasan sin construir
+        nunca el caso lleno — y el caso lleno es el único que ejecuta la
+        comprensión que arma el diccionario.
+
+        Lo que había ahí era `{'tarea': d['tarea'], 'faltan_km':
+        d.get('faltan_km')}`, y NINGUNA de las dos claves existe en lo que
+        produce `preventivo.diagnostico_de` (`nombre`, `km_restante`). O sea:
+        `KeyError` → **500** en cuanto hubiera una tarea vencida.
+
+        Y no se veía. El `try/except` de `_preventivo_urgente` envuelve la
+        consulta, no esta línea; y `flotaCondCargar` atrapa cualquier error y
+        deja el bloque en blanco, así que el conductor perdía Inspección,
+        Entregar turno, Reportar daño, Tanqueo, Odómetro y Mis turnos sin un
+        solo mensaje — justo después de guardar una inspección, que es cuando
+        la pantalla se recarga.
+        """
+        from datetime import datetime, timedelta
+        from flota.adaptadores import preventivo
+        from flota.adaptadores.modelos import (FichaTecnica, LecturaOdometro,
+                                               PlanTarea)
+
+        mundo['db'].session.add(FichaTecnica(
+            vehiculo_id=mundo['veh'], posiciones_llanta=6, km_inicial=1000,
+            km_inicial_ts=datetime.utcnow(), distribucion='correa',
+            distribucion_fuente='manual_fabricante',
+            distribucion_km_cambio=60000))
+        mundo['db'].session.commit()
+        preventivo.sembrar_desde_ficha(mundo['veh'])
+
+        tarea = PlanTarea.query.filter_by(vehiculo_id=mundo['veh']).first()
+        assert tarea is not None, 'el escenario no sembró ninguna tarea'
+
+        # Línea base: la correa se cambió a los 1.000 km.
+        preventivo.registrar_ejecucion(
+            plan_id=tarea.id, km=1000, usuario_id=mundo['usr'])
+
+        # Y el camión ya anda MUY por encima del intervalo → vencida de verdad.
+        mundo['db'].session.add(LecturaOdometro(
+            vehiculo_id=mundo['veh'], valor_km=1000 + 60000 + 5000,
+            # `origen` tiene vocabulario cerrado por CHECK (`ck_flota_origen`);
+            # 'manual' no está. 'cierre_dia' es el que corresponde: el número
+            # con el que el conductor cierra su turno.
+            ts=datetime.utcnow(), origen='cierre_dia',
+            autor_usuario_id=mundo['usr']))
+        mundo['db'].session.commit()
+
+        e = _turno(client, mundo)['estado_vehiculo']
+
+        assert e['preventivo_vencido'], (
+            'el escenario no produjo ninguna tarea vencida — el test no está '
+            'probando lo que dice probar')
+        v = e['preventivo_vencido'][0]
+        assert set(v) == {'tarea', 'faltan_km'}
+        assert isinstance(v['tarea'], str) and v['tarea'], (
+            'el nombre de la tarea llegó vacío: el conductor no puede saber '
+            'QUÉ venció')
+        assert v['faltan_km'] is not None and v['faltan_km'] < 0, (
+            'una tarea vencida tiene km_restante negativo — el signo es lo que '
+            'dice «ya pasó»')
+
     def test_ve_un_documento_vencido(self, client, mundo):
         """Una tecnomecánica vencida es un camión que no debería circular, y el
         que lo maneja no se enteraba."""

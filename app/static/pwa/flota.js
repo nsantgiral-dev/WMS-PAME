@@ -2040,7 +2040,10 @@ function flotaCondTanquear() {
   const placa = (FLOTA_COND && FLOTA_COND.placa) || FLOTA_PLACA;
   if (!placa) { alerta('Primero recibí el turno.', 'advertencia'); return; }
   FLOTA_PLACA = placa;
-  flotaAbrirGastos(placa);
+  // `true` = solo el formulario. Sin esto pedía el listado de gastos, que el
+  // conductor no puede ver, y la pantalla moría en el 403 antes de dibujar
+  // el formulario que sí le corresponde.
+  flotaRenderGastos(true);
 }
 
 function flotaCondOdometro() {
@@ -3273,16 +3276,30 @@ function flotaFilaGasto(g) {
  * `sin_dato` se dice con palabras y con el motivo — nunca como `$0`, que se
  * leería como un vehículo gratis.
  */
-async function flotaRenderGastos() {
+async function flotaRenderGastos(soloTanqueo = false) {
   const cont = document.getElementById('flota-recibo');
   let d;
+  // El conductor puede REGISTRAR un tanqueo y no puede VER los gastos — son
+  // dos decisiones deliberadas y opuestas, y esta función las mezclaba: su
+  // primera línea pedía el listado (MAESTROS_FLOTA), el 403 caía en el catch,
+  // y el formulario —que se arma más abajo, en la misma función— no llegaba a
+  // dibujarse. El conductor tenía el botón y no tenía la pantalla.
+  //
+  // En modo tanqueo se piden solo los vocabularios, que no llevan ningún dato
+  // del vehículo: ni gasto, ni CPK, ni rendimiento.
   try {
-    d = await get(FLOTA_GASTO_URL + '/' + encodeURIComponent(FLOTA_PLACA));
+    d = soloTanqueo
+      ? await get('/flota/vocabulario')
+      : await get(FLOTA_GASTO_URL + '/' + encodeURIComponent(FLOTA_PLACA));
   } catch (e) {
     cont.innerHTML = `<div class="tabla-card" style="color:var(--red)">
       No se pudieron cargar los gastos: ${esc(e.message)}</div>`;
     return;
   }
+  // Los bloques de lectura (listado, CPK, rendimiento) esperan estas claves.
+  // En modo tanqueo no vienen, y ausencia no es cero: se pasan vacías para
+  // que los `map` no revienten, y los bloques se omiten explícitamente abajo.
+  if (soloTanqueo) { d = Object.assign({gastos: [], cpk: null, rendimiento: null}, d); }
 
   FLOTA_GASTO_META = {
     periodo: d.categorias_con_periodo || [],
@@ -3318,7 +3335,11 @@ async function flotaRenderGastos() {
 
   const opciones = (arr) => arr.map(c => `<option value="${c}">${c}</option>`).join('');
 
-  cont.innerHTML = `<div class="tabla-card">
+  // El CPK y el listado NO se pintan en modo tanqueo, y no es por ahorrar
+  // markup: el conductor no puede verlos por decisión escrita —«un CPK en la
+  // pantalla del conductor está a un paso de leerse como una medida suya»— y
+  // en ese modo el servidor ni siquiera los manda.
+  const bloquesDeLectura = soloTanqueo ? '' : `<div class="tabla-card">
     <div class="tabla-titulo">Costo por kilómetro · ${esc(d.desde)} a ${esc(d.hasta)}</div>
     <p style="margin:4px 0">${cpk}</p>
     <p style="margin:4px 0">Rendimiento: ${rend}</p>
@@ -3327,7 +3348,9 @@ async function flotaRenderGastos() {
       depreciación ni financiación. <b>No se compara con otro vehículo</b> —
       un NHR y un motocarro no cuestan igual y la diferencia no dice nada.</p>
   </div>
-  <div class="tabla-card">${lista}</div>
+  <div class="tabla-card">${lista}</div>`;
+
+  cont.innerHTML = bloquesDeLectura + `
   <div class="tabla-card">
     <div class="tabla-titulo">Registrar un gasto</div>
     <label>Qué fue</label>
