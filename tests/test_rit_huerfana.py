@@ -168,6 +168,10 @@ class TestElPackingVuelveAPreguntarAntesDelCompromiso:
     def en_packing(self, db, solicitud_huerfana, monkeypatch):
         from app.services import traslado_service as ts
 
+        # La RIT nace apagada; estos tests ejercen específicamente el camino
+        # con la RIT encendida.
+        monkeypatch.setenv('TRASLADO_USA_RIT', 'true')
+
         # Confirmar el picking crea la RIT (simulada) y deja la marca de huérfana.
         monkeypatch.setattr(ts.siesa_traslado, 'crear_rit',
                             lambda **kw: {'simulado': True})

@@ -77,12 +77,16 @@ class TrasladoPackingCloser(IPackingCloser):
         # Es idempotente: Siesa actualiza compromisos existentes, no duplica.
         # Si falla, NO podemos continuar con DESPACHO_TRASLADO (174930) porque
         # el STS heredaría cantidades planificadas del RIT en vez de las reales.
+        # Con TRASLADO_USA_RIT apagada (el default) no hay RIT que usar, aunque el
+        # traslado ya traiga un consecutivo guardado: sale por 173076 directo.
+        from app.services.traslado_service import TrasladoService as _TS
+        _rit = _TS.consec_rit_efectivo(solicitud)
         _compromisos_ok = False
-        if solicitud.siesa_requisicion_consec and items_comp:
+        if _rit and items_comp:
             try:
                 from app.services.siesa_traslado_adapter import siesa_traslado
                 siesa_traslado.registrar_compromisos(
-                    consec_rit=solicitud.siesa_requisicion_consec,
+                    consec_rit=_rit,
                     bodega_origen=solicitud.bodega_origen_siesa,
                     bodega_destino=solicitud.bodega_destino_siesa,
                     items=items_comp,
@@ -218,9 +222,11 @@ class TrasladoPackingCloser(IPackingCloser):
         # su consecutivo (huérfana — ver CLAUDE.md "Las 28 requisiciones
         # huérfanas"), esa RIT queda suelta en Siesa para cerrar a mano; no
         # bloquea el movimiento real, que sale por el STS directo.
-        if not solicitud.siesa_requisicion_consec:
+        from app.services.traslado_service import TrasladoService as _TS
+        _rit = _TS.consec_rit_efectivo(solicitud)
+        if not _rit:
             logger.warning(
-                '[TRASLADO_CLOSER] %s sin siesa_requisicion_consec — '
+                '[TRASLADO_CLOSER] %s sin RIT en uso — '
                 'DESPACHO_TRASLADO usará 173076 directo (sin RIT)',
                 solicitud.codigo,
             )
@@ -238,7 +244,7 @@ class TrasladoPackingCloser(IPackingCloser):
         payload_dict = {
             'tarea_id':     tarea_id,
             'solicitud_id': solicitud.id,
-            'consec_rit':   solicitud.siesa_requisicion_consec,
+            'consec_rit':   _rit,
             'bodega_origen': solicitud.bodega_origen_siesa,
             'bodega_destino': solicitud.bodega_destino_siesa,
             'codigo':       solicitud.codigo,

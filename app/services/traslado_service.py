@@ -36,16 +36,25 @@ BODEGA_ORIGEN_DEFAULT = connekta.bodega  # NB1
 
 
 def traslado_usa_rit() -> bool:
-    """¿Se dispara la RIT 174646 al confirmar el picking de un traslado?
+    """¿El traslado usa la RIT (174646 → 174720 → 174930)?
 
-    Nace encendida para que un deploy no cambie el comportamiento por sí solo.
-    Con `TRASLADO_USA_RIT=false` el traslado sigue por el STS 173076 directo
-    —que es lo que ya pasa cuando la RIT queda huérfana— sin dejar una
-    requisición suelta en Siesa. La RIT solo la consumen el 174720 y el 174930;
-    sin ella lo único que se pierde es la reserva (comprometida) que hacía.
+    **Nace APAGADA.** La prueba en vivo del 2026-09-21 contra Siesa QA encontró
+    que el 174720 —Compromisos— se rechaza: envía una sección que el conector no
+    tiene (`Movimiento de Seriales`) y, quitada esa, el registro 405 no coincide
+    con el tamaño exigido (226 contra 303). Nunca se había ejercitado en vivo y
+    no hay spec en `docs/siesa-specs/`. Con la RIT encendida y su consecutivo
+    legible, el cierre de packing llama al 174720, falla y **se bloquea en cada
+    traslado**; con la RIT ilegible (el estado de antes) el cierre lo saltaba y
+    el traslado salía por el 173076.
+
+    Apagada, el traslado sale siempre por el STS 173076 directo y **no se crea ni
+    se usa ninguna RIT**, aunque el traslado ya tenga un consecutivo guardado.
+    Encenderla (`TRASLADO_USA_RIT=true`) exige antes corregir el 174720 y el
+    174930 contra su especificación.
+
     Se lee en cada llamada: cambiar la variable no exige reiniciar.
     """
-    return os.getenv('TRASLADO_USA_RIT', 'true').strip().lower() not in ('false', '0', 'no')
+    return os.getenv('TRASLADO_USA_RIT', 'false').strip().lower() in ('true', '1', 'yes', 'si', 'sí')
 
 
 def _resolver_empaque(prod):
@@ -358,6 +367,17 @@ class TrasladoService:
         return s
 
     @staticmethod
+    def consec_rit_efectivo(s: SolicitudTraslado):
+        """Consecutivo de RIT que el flujo debe USAR, o None.
+
+        Con `TRASLADO_USA_RIT` apagada una RIT ya existente se ignora: el traslado
+        sale por 173076 aunque otra ejecución (o una versión anterior del código)
+        haya dejado un consecutivo guardado. Sin esto, un traslado con RIT viva
+        seguiría entrando al 174720 aunque la variable diga que no.
+        """
+        return s.siesa_requisicion_consec if traslado_usa_rit() else None
+
+    @staticmethod
     def _reintentar_leer_rit(s: SolicitudTraslado) -> bool:
         """Segundo intento de leer el consecutivo de una RIT que quedó «huérfana».
 
@@ -433,7 +453,7 @@ class TrasladoService:
         # lectura llegó temprano (Regla 20); acá ya pasaron minutos.
         TrasladoService._reintentar_leer_rit(s)
 
-        if s.siesa_requisicion_consec and _comp_items:
+        if TrasladoService.consec_rit_efectivo(s) and _comp_items:
             try:
                 siesa_traslado.registrar_compromisos(
                     consec_rit=s.siesa_requisicion_consec,
@@ -594,7 +614,7 @@ class TrasladoService:
                     '[TRASLADO] %s: siesa_salida_consec=%s ya existe (recovery) — saltando Siesa',
                     s.codigo, s.siesa_salida_consec,
                 )
-            elif s.siesa_requisicion_consec and s.siesa_compromisos_ok:
+            elif TrasladoService.consec_rit_efectivo(s) and s.siesa_compromisos_ok:
                 # 174930 **no manda cantidades**: Siesa las toma de lo
                 # comprometido en la RIT. Por eso no alcanza con que la RIT
                 # exista — hace falta que el 174720 haya entrado. Hasta el
@@ -607,7 +627,7 @@ class TrasladoService:
                     consec_rit=s.siesa_requisicion_consec,
                     codigo=s.codigo,
                 )
-            elif s.siesa_requisicion_consec:
+            elif TrasladoService.consec_rit_efectivo(s):
                 # RIT creada y compromisos sin registrar. Se cae al 173076/173066
                 # —que sí llevan `cantidad_enviada`— en vez de frenar el
                 # despacho: la mercancía sale con los números correctos y lo que
