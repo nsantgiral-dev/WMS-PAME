@@ -1235,10 +1235,32 @@ def stock_disponible():
                 'bodega': cacheado.get('bodega'),
                 'fuente': cacheado.get('fuente'),
                 'actualizado_en': cacheado.get('actualizado_en'),
-                'siesa_total_rows': cacheado.get('siesa_total_rows'),
+                # La clave que produce el servicio es `siesa_total_productos`
+                # (`traslado_service.py:2239`). Acá se leía `siesa_total_rows`,
+                # que NO la escribe nadie — grep sobre todo el repo: aparecía
+                # solo en esta línea de lectura.
+                #
+                # `.get()` devolvía `None`, así que este campo salía SIEMPRE
+                # nulo al lado de dos enteros. Y un `null` entre números se lee
+                # como «Siesa no devolvió filas» — la confusión entre ausencia
+                # y vacío, justo en el campo que existe para explicar por qué
+                # faltan ítems.
+                'siesa_total_productos': cacheado.get('siesa_total_productos'),
                 'siesa_con_stock': cacheado.get('siesa_con_stock'),
                 'wms_mapeados': cacheado.get('total'),
-                'sin_mapeo': (cacheado.get('siesa_con_stock') or 0) - (cacheado.get('total') or 0),
+                # `sin_mapeo` sale NEGATIVO cuando el fallback `_get_stock_wms`
+                # contesta: ese camino no devuelve `siesa_con_stock`, así que
+                # la resta es `0 - total`. Un número negativo acá no significa
+                # «sobran mapeos»: significa que Siesa no contestó y se está
+                # mirando el stock del WMS. Se declara en vez de restar a
+                # ciegas.
+                'sin_mapeo': (
+                    (cacheado.get('siesa_con_stock') - (cacheado.get('total') or 0))
+                    if cacheado.get('siesa_con_stock') is not None else None),
+                'sin_mapeo_nota': (
+                    None if cacheado.get('siesa_con_stock') is not None
+                    else 'Siesa no contestó: esta respuesta viene del stock '
+                         'del WMS y no hay con qué comparar.'),
             }
         return jsonify(resultado), 200
     except Exception as e:

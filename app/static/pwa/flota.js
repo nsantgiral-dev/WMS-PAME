@@ -2036,14 +2036,23 @@ function flotaMensajeDeError(d) {
  * que faltaba era la puerta. Una segunda copia del formulario sería la que
  * diverja el día que cambie el CHECK del tanque.
  */
-function flotaCondTanquear() {
+async function flotaCondTanquear() {
+  // `async` + `await` + `catch`: sin los tres, un fallo acá moría como
+  // rejection no atendida —sin mensaje, sin toast, sin nada— y el conductor
+  // veía un botón que no hacía absolutamente nada. Es la mitad silenciosa del
+  // defecto: la otra mitad era no abrir el modal.
   const placa = (FLOTA_COND && FLOTA_COND.placa) || FLOTA_PLACA;
   if (!placa) { alerta('Primero recibí el turno.', 'advertencia'); return; }
   FLOTA_PLACA = placa;
-  // `true` = solo el formulario. Sin esto pedía el listado de gastos, que el
-  // conductor no puede ver, y la pantalla moría en el 403 antes de dibujar
-  // el formulario que sí le corresponde.
-  flotaRenderGastos(true);
+  // `flotaAbrirTanqueo` y no `flotaRenderGastos`: hay que ABRIR el modal, que
+  // es lo que crea el contenedor donde se dibuja. Sus cinco hermanos
+  // —Inspección, Entregar turno, Reportar daño, Odómetro, Recibo— también
+  // pasan por una función que abre.
+  try {
+    await flotaAbrirTanqueo(placa);
+  } catch (e) {
+    alerta('No se pudo abrir el registro de tanqueo: ' + e.message, 'error');
+  }
 }
 
 function flotaCondOdometro() {
@@ -2123,6 +2132,25 @@ function flotaCondEstado(e) {
 
   (e.documentos_vencidos || []).forEach(d => {
     lineas.push(['var(--red)', `${d.tipo} VENCIDO desde ${d.vencio}`]);
+  });
+
+  // `preventivo_vencido` se calculaba, se serializaba y se testeaba — y NINGUNA
+  // pantalla lo leía. El dato llegaba al navegador y se descartaba ahí.
+  //
+  // El backend lo publica con un argumento escrito: «una correa que revienta
+  // en motor de interferencia es motor nuevo, y `distribucion_km_cambio`
+  // llevaba meses en la base sin un solo lector». Se le dio lector al campo en
+  // el servidor y no en la pantalla, así que el conductor seguía sin
+  // enterarse.
+  //
+  // `faltan_km` es NEGATIVO cuando ya venció — el signo es el dato. Se muestra
+  // en valor absoluto con la palabra «pasado» adelante, que es como lo diría
+  // alguien: «correa: 5.000 km pasado», no «-5.000 km».
+  (e.preventivo_vencido || []).forEach(t => {
+    const km = (typeof t.faltan_km === 'number')
+      ? ` · ${Math.abs(t.faltan_km).toLocaleString('es-CO')} km pasado`
+      : '';
+    lineas.push(['var(--red)', `${t.tarea} VENCIDO${km}`]);
   });
 
   const i = e.inspeccion_de_hoy || {};
@@ -3215,9 +3243,42 @@ function flotaPesos(x) {
 }
 
 /** El expediente de plata de un vehículo. */
+// En qué modo está abierto el panel de gastos.
+//
+// Era un ARGUMENTO de `flotaRenderGastos`, y eso falló dos veces seguidas por
+// la misma causa: la función se vuelve a llamar desde otro sitio
+// —`flotaGuardarGasto`, al recargar tras guardar— y ese llamador no sabía el
+// modo. El conductor guardaba su tanqueo, veía el toast verde, y acto seguido
+// el panel se reemplazaba por «No se pudieron cargar los gastos: sin permiso».
+//
+// Como estado, lo decide QUIEN ABRE el panel y todo lo que viene después lo
+// hereda. Ningún llamador puede olvidarlo porque ninguno lo pasa.
+let FLOTA_GASTO_SOLO_TANQUEO = false;
+
 async function flotaAbrirGastos(placa) {
   FLOTA_PLACA = placa;
+  FLOTA_GASTO_SOLO_TANQUEO = false;
   flotaAbrirModal('Gastos del vehículo', placa);
+  document.getElementById('flota-recibo').innerHTML =
+    '<div class="tabla-card">Cargando…</div>';
+  await flotaRenderGastos();
+}
+
+/**
+ * El panel en modo tanqueo: solo el formulario, sin el listado ni el CPK.
+ *
+ * Abre el modal, que es lo que crea `#flota-recibo`. El arreglo anterior
+ * llamaba directo a `flotaRenderGastos(true)` y se saltaba ese paso: la
+ * primera vez el contenedor no existía —`cont` era `null` y la escritura
+ * lanzaba `TypeError`—, y si el conductor había abierto antes cualquier otro
+ * modal de flota, el contenedor existía pero el modal estaba oculto y el
+ * formulario se dibujaba donde nadie lo ve. En los dos caminos el botón no
+ * hacía nada.
+ */
+async function flotaAbrirTanqueo(placa) {
+  FLOTA_PLACA = placa;
+  FLOTA_GASTO_SOLO_TANQUEO = true;
+  flotaAbrirModal('Registrar tanqueo', placa);
   document.getElementById('flota-recibo').innerHTML =
     '<div class="tabla-card">Cargando…</div>';
   await flotaRenderGastos();
@@ -3276,7 +3337,8 @@ function flotaFilaGasto(g) {
  * `sin_dato` se dice con palabras y con el motivo — nunca como `$0`, que se
  * leería como un vehículo gratis.
  */
-async function flotaRenderGastos(soloTanqueo = false) {
+async function flotaRenderGastos() {
+  const soloTanqueo = FLOTA_GASTO_SOLO_TANQUEO;
   const cont = document.getElementById('flota-recibo');
   let d;
   // El conductor puede REGISTRAR un tanqueo y no puede VER los gastos — son
@@ -3299,7 +3361,11 @@ async function flotaRenderGastos(soloTanqueo = false) {
   // Los bloques de lectura (listado, CPK, rendimiento) esperan estas claves.
   // En modo tanqueo no vienen, y ausencia no es cero: se pasan vacías para
   // que los `map` no revienten, y los bloques se omiten explícitamente abajo.
-  if (soloTanqueo) { d = Object.assign({gastos: [], cpk: null, rendimiento: null}, d); }
+  // Solo `gastos`, que es lo único que se recorre con `.length`/`.map` fuera
+  // del bloque omitido. Antes también se rellenaba `rendimiento`, que NADIE
+  // lee —el código consume `rendimiento_km_galon`—: la red misma era una clave
+  // sin consumidor.
+  if (soloTanqueo) { d = Object.assign({gastos: []}, d); }
 
   FLOTA_GASTO_META = {
     periodo: d.categorias_con_periodo || [],
@@ -3317,13 +3383,34 @@ async function flotaRenderGastos(soloTanqueo = false) {
   //
   // Una política, una función: `medicion._motivo_cpk` decide, los dos lectores
   // —este expediente y el tablero— muestran lo mismo.
-  const cpk = d.cpk === 'sin_dato'
+  // `cpk` y `rend` se calculan SOLO si se van a pintar.
+  //
+  // Antes se calculaban siempre, y en modo tanqueo `d.cpk` es `null` —no
+  // `'sin_dato'`—, así que entraban a la rama del número y leían
+  // `d.km_recorridos.toLocaleString()` sobre `undefined`: **TypeError**, y la
+  // llamada desde `flotaCondTanquear` va sin `await` y sin `.catch`, así que
+  // moría como rejection no atendida y el formulario nunca se dibujaba.
+  //
+  // O sea: el arreglo anterior movió la falla del 403 al render y dejó al
+  // conductor exactamente igual de trabado. Se probó que el permiso estaba
+  // bien y nunca que la pantalla se podía construir — que es el mismo error
+  // que ese arreglo decía estar cerrando.
+  const cpk = soloTanqueo ? '' : d.cpk === 'sin_dato'
     ? `<b>sin dato</b> — ${esc(d.cpk_motivo || 'no se declaró el motivo.')}`
     : `<b>${flotaPesos(d.cpk)} por kilómetro</b>
        <span style="color:var(--tx2)">= ${flotaPesos(d.pesos_imputados)}
        ÷ ${d.km_recorridos.toLocaleString('es-CO')} km · odómetro ${esc(d.cpk_marca)}
        · ${esc(d.lecturas_en_ventana)} lectura(s) en la ventana</span>`;
-  const rend = d.rendimiento_km_galon === 'sin_dato'
+  // El guard de `rend` es por SIMETRÍA con `cpk`, no porque haga falta: con
+  // `undefined` esta expresión no revienta —produce la cadena
+  // «undefined km/galón»— y en modo tanqueo el bloque que la pintaría se
+  // omite, así que no hay nada observable. Una mutación que lo quita queda en
+  // VERDE y está bien que quede: no hay propiedad que probar.
+  //
+  // Se deja igual para que las dos ramas del mismo bloque se lean con la
+  // misma regla, y se escribe acá que ningún test lo sostiene — así nadie lo
+  // borra mañana creyendo que algo lo cubre.
+  const rend = soloTanqueo ? '' : d.rendimiento_km_galon === 'sin_dato'
     ? '<span style="color:var(--tx2)">sin dato — hacen falta dos tanqueos con ' +
       '<b>tanque lleno</b>. Entre llenos, lo que entró al tanque es lo que se ' +
       'gastó; sobre un parcial, el número mide lo que quedaba adentro.</span>'
@@ -3402,7 +3489,8 @@ async function flotaRenderGastos(soloTanqueo = false) {
         medir de tanque lleno a tanque lleno. Un «lleno» puesto sin mirar no da
         error: produce un número inventado que nadie va a poder desmentir.
         <b>«No sé» es una respuesta válida.</b></p>
-      ${d.capacidad_tanque_galones
+      ${soloTanqueo ? ''
+        : d.capacidad_tanque_galones
         ? `<p style="font-size:12px;color:var(--tx2);margin:4px 0 0">
              Tanque declarado en la ficha: ${esc(d.capacidad_tanque_galones)} galones.</p>`
         : `<p style="font-size:12px;color:var(--yellow);margin:4px 0 0">
