@@ -173,7 +173,12 @@ class ConnektaTrasladosGateway:
                 for idx, item in enumerate(items)
                 if item.get('codigo_siesa') and item.get('cantidad', 0) > 0
             ],
-            'Movimiento de Seriales': [],
+            # NO enviar 'Movimiento de Seriales': Siesa QA lo rechaza («la sección no
+            # existe o está mal escrita», 2026-09-21) — este conector no la tiene.
+            # OJO: quitarla NO deja el payload válido. El siguiente rechazo es del
+            # registro 405 (v8): «tamaño 226, exigido 303», con campos obligatorios
+            # ausentes y un numérico que recibe 'NDNB1'. Falta el spec del 174720
+            # (no está en docs/siesa-specs/); no se corrige a ciegas — Regla 1.
             'Final': [{'F_CIA': int(core.id_cia_siesa)}],
         }
         logger.info('[CONNEKTA] compromisos_desde_requisicion RIT=%s (%d ítems)',
@@ -588,46 +593,61 @@ class ConnektaTrasladosGateway:
                            codigo_solicitud, e)
         return None
 
+    # Clave con la que SQL Server devuelve un `FOR JSON`: el texto JSON completo,
+    # partido en trozos de ~2000 caracteres, uno por fila.
+    _CLAVE_FOR_JSON = 'JSON_F52E2B61-18A1-11d1-B105-00805F49916B'
+
+    @classmethod
+    def _filas_for_json(cls, res) -> list:
+        """Reconstruye las filas de una consulta que responde `FOR JSON`.
+
+        `detalle.Table` trae N filas `{JSON_F52E…: '<trozo>'}`; hay que unir los
+        trozos EN ORDEN y recién ahí interpretar el JSON. Interpretar cada trozo
+        por separado revienta con «Unterminated string».
+        """
+        tabla = (res or {}).get('detalle', {}).get('Table') or []
+        texto = ''.join(f[cls._CLAVE_FOR_JSON] for f in tabla
+                        if isinstance(f, dict) and cls._CLAVE_FOR_JSON in f)
+        if not texto:
+            return []
+        import json
+        datos = json.loads(texto)
+        return datos if isinstance(datos, list) else []
+
     def get_consec_rit_by_referencia(self, codigo_solicitud: str) -> int | None:
         """
-        Recovery: consulta dinámica (Connekta → Consultas Dinámicas)
-        `api_tecnocedi_requisiciones_traslado`, filtrada en memoria por
-        f440_referencia. Retorna f440_consec_docto de la RIT creada para
-        este traslado.
+        Recovery del consecutivo de la RIT recién creada (174646).
 
-        `API_v2_Inventarios_RequisicionesParaTransferir` (nombre anterior,
-        por analogía v1→v2 con el conector POST 174646) nunca existió en
-        Connekta — daba 401 indistinguible de un problema de permisos
-        (2026-09-04, ver CLAUDE.md "Los 12 traslados inter-bodega reales").
-        El nombre real se encontró en Siesa QA → Administración → Permisos
-        servicios → buscador de consultas dinámicas del usuario.
+        Consulta `api_tecnocedi_requisiciones_traslado`, que es una consulta
+        **ESTÁNDAR** y no dinámica: aparece en Siesa QA → Administración →
+        Permisos servicios bajo «Consultas estándar». Se llamaba por el endpoint
+        de las dinámicas (`ejecutarconsulta`) y por eso daba 401 «verifique si
+        tiene permisos asignados a la consulta dinámica» — no era un permiso,
+        era el endpoint equivocado. Verificado en vivo el 2026-09-21.
 
-        Es consulta DINÁMICA, no estándar: va por `url_get_dinamico`
-        (`ejecutarconsulta`) y sin `parametros` — las consultas dinámicas
-        custom de este ambiente no soportan filtro en tiempo real (mismo
-        hallazgo que `get_terceros_contacto`/`get_vendedor_contacto`), así
-        que se trae la página y se filtra acá.
+        Tres cosas del formato real, todas distintas de lo que se había supuesto:
+          · responde `FOR JSON` troceado (ver `_filas_for_json`);
+          · trae las ~150 requisiciones más recientes, sin filtrar;
+          · **no tiene `f440_referencia`**: el código del traslado viaja en
+            `f440_notas` como «WMS <código>» (`f440_num_docto_referencia` viene
+            vacío). Con el campo supuesto nunca habría coincidido.
 
-        Nombres de campo (`f440_referencia`, `f440_consec_docto`) asumidos
-        iguales a los del payload POST de 174646 (misma tabla t440) — sin
-        verificar contra una respuesta real: el 401 de permisos (issue
-        abierto, ver CLAUDE.md) bloqueó ver el schema real en vivo.
+        Se descartan las anuladas (`f440_ind_estado == 9`) y, si hubiera varias
+        para el mismo traslado, gana la más reciente (mayor `f440_rowid`).
         """
         core = self._core
         try:
-            res = core._get(
-                'api_tecnocedi_requisiciones_traslado',
-                params_extra={'paginacion': 'numPag=1|tamPag=100'},
-                url=core.url_get_dinamico,
-            )
-            rows = (
-                res.get('detalle', {}).get('Table') or
-                res.get('detalle', {}).get('Datos') or []
-            )
-            rows = [r for r in rows
-                    if str(r.get('f440_referencia', '')).strip() == str(codigo_solicitud).strip()]
-            if rows:
-                consec = rows[0].get('f440_consec_docto')
+            res = core._get('api_tecnocedi_requisiciones_traslado',
+                            params_extra={'paginacion': 'numPag=1|tamPag=100'})
+            codigo = str(codigo_solicitud).strip()
+            candidatas = [
+                r for r in self._filas_for_json(res)
+                if codigo in str(r.get('f440_notas', '')).split()
+                and r.get('f440_ind_estado') != 9
+            ]
+            if candidatas:
+                mejor = max(candidatas, key=lambda r: r.get('f440_rowid') or 0)
+                consec = mejor.get('f440_consec_docto')
                 return int(consec) if consec else None
         except Exception as e:
             logger.warning('[CONNEKTA] get_consec_rit_by_referencia(%s): %s',

@@ -1237,9 +1237,14 @@ def _ejecutar_job(job: SiesaJob) -> dict:
             return {'idempotente': True, 'solicitud_id': solicitud_id}
 
         from app.services.siesa_traslado_adapter import siesa_traslado as _st
-        from app.services.traslado_service import TrasladoService
+        from app.services.traslado_service import TrasladoService, traslado_usa_rit
 
-        consec_rit = payload.get('consec_rit') or solicitud.siesa_requisicion_consec
+        # Con TRASLADO_USA_RIT apagada se ignora también el consecutivo que traiga
+        # el payload de un job encolado antes: el STS sale por 173076 directo.
+        consec_rit = (
+            (payload.get('consec_rit') or solicitud.siesa_requisicion_consec)
+            if traslado_usa_rit() else None
+        )
         if consec_rit:
             res = _st.despachar_desde_rit(consec_rit=consec_rit, codigo=solicitud.codigo)
         else:

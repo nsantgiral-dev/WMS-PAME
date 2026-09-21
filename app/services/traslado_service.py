@@ -13,6 +13,7 @@ Flujo normal (EN_TRANSITO):
 Flujo contingencia (DIRECTA — sin bodega tránsito en Siesa):
   Pasos 1-2 igual. En paso 3 → fire 173066 (transferencia directa). No hay paso 5.
 """
+import os
 import uuid
 import logging
 from datetime import datetime
@@ -47,6 +48,28 @@ BODEGA_AVERIAS_DESTINO = BODEGA_ORIGEN_DEFAULT
 #: `test_traslado_de_averias_dictamen.py` exige que las dos tuplas coincidan,
 #: así que no pueden divergir en silencio.
 _ROLES_DICTAMEN_AVERIA = ('admin', 'supervisor', 'jefe_almacen')
+
+
+def traslado_usa_rit() -> bool:
+    """¿El traslado usa la RIT (174646 → 174720 → 174930)?
+
+    **Nace APAGADA.** La prueba en vivo del 2026-09-21 contra Siesa QA encontró
+    que el 174720 —Compromisos— se rechaza: envía una sección que el conector no
+    tiene (`Movimiento de Seriales`) y, quitada esa, el registro 405 no coincide
+    con el tamaño exigido (226 contra 303). Nunca se había ejercitado en vivo y
+    no hay spec en `docs/siesa-specs/`. Con la RIT encendida y su consecutivo
+    legible, el cierre de packing llama al 174720, falla y **se bloquea en cada
+    traslado**; con la RIT ilegible (el estado de antes) el cierre lo saltaba y
+    el traslado salía por el 173076.
+
+    Apagada, el traslado sale siempre por el STS 173076 directo y **no se crea ni
+    se usa ninguna RIT**, aunque el traslado ya tenga un consecutivo guardado.
+    Encenderla (`TRASLADO_USA_RIT=true`) exige antes corregir el 174720 y el
+    174930 contra su especificación.
+
+    Se lee en cada llamada: cambiar la variable no exige reiniciar.
+    """
+    return os.getenv('TRASLADO_USA_RIT', 'false').strip().lower() in ('true', '1', 'yes', 'si', 'sí')
 
 
 def _resolver_empaque(prod):
@@ -363,7 +386,10 @@ class TrasladoService:
                     item.cantidad_enviada = item.cantidad_aprobada or item.cantidad_solicitada
 
         # ── 174646 RIT: reserva SIESA con ubicaciones reales del picking ──
-        if not s.siesa_requisicion_consec:
+        if not s.siesa_requisicion_consec and not traslado_usa_rit():
+            logger.info('[TRASLADO] %s RIT 174646 omitida (TRASLADO_USA_RIT=false) — '
+                        'el despacho irá por 173076', s.codigo)
+        if not s.siesa_requisicion_consec and traslado_usa_rit():
             _tareas_rit = TareaPicking.query.filter_by(
                 referencia_documento=s.codigo,
                 tipo_documento='TRASLADO',
@@ -493,6 +519,51 @@ class TrasladoService:
         return s
 
     @staticmethod
+    def consec_rit_efectivo(s: SolicitudTraslado):
+        """Consecutivo de RIT que el flujo debe USAR, o None.
+
+        Con `TRASLADO_USA_RIT` apagada una RIT ya existente se ignora: el traslado
+        sale por 173076 aunque otra ejecución (o una versión anterior del código)
+        haya dejado un consecutivo guardado. Sin esto, un traslado con RIT viva
+        seguiría entrando al 174720 aunque la variable diga que no.
+        """
+        return s.siesa_requisicion_consec if traslado_usa_rit() else None
+
+    @staticmethod
+    def _reintentar_leer_rit(s: SolicitudTraslado) -> bool:
+        """Segundo intento de leer el consecutivo de una RIT que quedó «huérfana».
+
+        Al confirmar el picking la RIT se consulta **inmediatamente** después del
+        POST. La Regla 20 dice que Siesa tarda ~10-12 s en publicarla, así que esa
+        lectura llega temprano y el WMS la marca huérfana (28 casos en la primera
+        auditoría contra producción).
+
+        Se reintenta en el siguiente momento natural del flujo, no con un `sleep`
+        dentro del request. Y tiene que ser **antes del 174720** (confirmar
+        packing): sin consecutivo el 174720 se omite, y leerlo recién al despachar
+        llega tarde — el despacho cae a 173076 y la RIT vuelve a quedar suelta.
+
+        Solo actúa sobre el caso de la huérfana (`siesa_error` con esa marca): un
+        rechazo estructural del 174646 no se arregla volviendo a leer. Nunca
+        rompe el flujo. Devuelve True si recuperó el consecutivo.
+        """
+        if s.siesa_requisicion_consec or 'no pudo leer el consecutivo' not in (s.siesa_error or ''):
+            return False
+        try:
+            _rec = siesa_traslado.recuperar_consec_rit(s.codigo)
+            if _rec:
+                s.siesa_requisicion_consec = _rec
+                s.siesa_error = None
+                db.session.commit()
+                logger.info('[TRASLADO] %s: consecutivo de RIT recuperado (%s) — '
+                            'ya no queda huérfana', s.codigo, _rec)
+                return True
+        except Exception as _e_rec:
+            logger.warning('[TRASLADO] %s: segundo intento de leer la RIT falló: %s',
+                           s.codigo, _e_rec)
+        return False
+
+    @staticmethod
     def confirmar_packing_traslado(solicitud_id: int, usuario_id: int) -> SolicitudTraslado:
         """
         Operario verificó empaque (segundo conteo). Dispara 174720 (Compromisos desde RIT)
@@ -530,7 +601,11 @@ class TrasladoService:
                 'ubicacion_codigo': ubicacion_por_producto.get(item.producto_id),
             })
 
-        if s.siesa_requisicion_consec and _comp_items:
+        # El 174720 necesita el consecutivo de la RIT. Al confirmar el picking la
+        # lectura llegó temprano (Regla 20); acá ya pasaron minutos.
+        TrasladoService._reintentar_leer_rit(s)
+
+        if TrasladoService.consec_rit_efectivo(s) and _comp_items:
             try:
                 siesa_traslado.registrar_compromisos(
                     consec_rit=s.siesa_requisicion_consec,
@@ -682,20 +757,8 @@ class TrasladoService:
         # Acá ya pasaron minutos u horas desde la aprobación, que es lo que la
         # Regla 20 pedía esperar. No se duerme en el request: se pregunta de
         # nuevo en el siguiente momento natural del flujo.
-        if not _skip_siesa and not s.siesa_requisicion_consec and s.siesa_error \
-                and 'no pudo leer el consecutivo' in (s.siesa_error or ''):
-            try:
-                _rec = siesa_traslado.recuperar_consec_rit(s.codigo)
-                if _rec:
-                    s.siesa_requisicion_consec = _rec
-                    s.siesa_error = None
-                    db.session.commit()
-                    logger.info(
-                        '[TRASLADO] %s: consecutivo de RIT recuperado en el '
-                        'despacho (%s) — ya no queda huérfana', s.codigo, _rec)
-            except Exception as _e_rec:
-                logger.warning('[TRASLADO] %s: segundo intento de leer la RIT '
-                               'falló: %s', s.codigo, _e_rec)
+        if not _skip_siesa:
+            TrasladoService._reintentar_leer_rit(s)
 
         try:
             if _skip_siesa:
@@ -703,7 +766,7 @@ class TrasladoService:
                     '[TRASLADO] %s: siesa_salida_consec=%s ya existe (recovery) — saltando Siesa',
                     s.codigo, s.siesa_salida_consec,
                 )
-            elif s.siesa_requisicion_consec and s.siesa_compromisos_ok:
+            elif TrasladoService.consec_rit_efectivo(s) and s.siesa_compromisos_ok:
                 # 174930 **no manda cantidades**: Siesa las toma de lo
                 # comprometido en la RIT. Por eso no alcanza con que la RIT
                 # exista — hace falta que el 174720 haya entrado. Hasta el
@@ -716,7 +779,7 @@ class TrasladoService:
                     consec_rit=s.siesa_requisicion_consec,
                     codigo=s.codigo,
                 )
-            elif s.siesa_requisicion_consec:
+            elif TrasladoService.consec_rit_efectivo(s):
                 # RIT creada y compromisos sin registrar. Se cae al 173076/173066
                 # —que sí llevan `cantidad_enviada`— en vez de frenar el
                 # despacho: la mercancía sale con los números correctos y lo que

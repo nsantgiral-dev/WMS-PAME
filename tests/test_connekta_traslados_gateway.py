@@ -262,28 +262,95 @@ class TestRecoveryETS:
             assert connekta.get_consec_entrada_transito_by_alterno('ST-1') is None
 
 
+def _respuesta_for_json(requisiciones, trozo=2000):
+    """Arma la respuesta como la devuelve Siesa QA (verificado 2026-09-21): el
+    JSON completo partido en trozos de ~2000 caracteres, uno por fila."""
+    import json
+    clave = 'JSON_F52E2B61-18A1-11d1-B105-00805F49916B'
+    texto = json.dumps(requisiciones)
+    return {'detalle': {'Table': [{clave: texto[i:i + trozo]}
+                                  for i in range(0, len(texto), trozo)]}}
+
+
+def _rit(rowid, consec, notas, estado=2):
+    """Una requisición con la forma real: la referencia va en `f440_notas`;
+    `f440_referencia` NO existe en la consulta."""
+    return {'f440_rowid': rowid, 'f440_id_co': '003', 'f440_id_tipo_docto': 'RIT',
+            'f440_consec_docto': consec, 'f440_ind_estado': estado,
+            'f440_notas': notas, 'f440_num_docto_referencia': '',
+            'Movimientos': [{'f120_referencia': 'PAPELSP9218',
+                             'f120_descripcion': 'X' * 300}]}
+
+
 class TestRecoveryRIT:
-    def test_get_consec_rit_by_referencia_filtra_por_referencia_exacta(self, app, monkeypatch):
+    """`api_tecnocedi_requisiciones_traslado` es una consulta ESTÁNDAR. Se
+    llamaba por el endpoint de las dinámicas y daba 401: no era un permiso.
+    Los tests usan el formato REAL de la respuesta, no el que se había
+    supuesto — el supuesto (`f440_referencia` en filas planas) era justo lo
+    que impedía que el recovery funcionara aunque el permiso estuviera bien."""
+
+    def _con_respuesta(self, monkeypatch, requisiciones, capturar=None):
+        from app.services.connekta_gateway import connekta
+
+        def _fake_get(nombre, params_extra=None, url=None, **kw):
+            if capturar is not None:
+                capturar.append({'nombre': nombre, 'url': url})
+            return _respuesta_for_json(requisiciones)
+
+        monkeypatch.setattr(connekta, '_get', _fake_get)
+        return connekta
+
+    def test_encuentra_la_rit_por_f440_notas_en_el_json_troceado(self, app, monkeypatch):
+        with app.app_context():
+            reqs = [_rit(i, i, f'WMS ST-OTRO-{i}') for i in range(1, 30)]
+            reqs.append(_rit(1121, 148, 'WMS ST-20260921-0471'))
+            connekta = self._con_respuesta(monkeypatch, reqs)
+            assert len(_respuesta_for_json(reqs)['detalle']['Table']) > 1, (
+                'el caso no ejerce el troceo, que es lo que rompía el parser')
+            assert connekta.get_consec_rit_by_referencia('ST-20260921-0471') == 148
+
+    def test_usa_el_endpoint_estandar_no_el_dinamico(self, app, monkeypatch):
+        with app.app_context():
+            llamadas = []
+            connekta = self._con_respuesta(
+                monkeypatch, [_rit(1, 7, 'WMS ST-1')], capturar=llamadas)
+            connekta.get_consec_rit_by_referencia('ST-1')
+            assert llamadas[0]['nombre'] == 'api_tecnocedi_requisiciones_traslado'
+            assert llamadas[0]['url'] is None, (
+                'por el endpoint de las dinámicas da 401: es una consulta estándar')
+
+    def test_el_codigo_es_una_palabra_entera_no_un_prefijo(self, app, monkeypatch):
+        """ST-…047 no puede quedarse con la RIT de ST-…0471."""
+        with app.app_context():
+            connekta = self._con_respuesta(
+                monkeypatch, [_rit(1, 1, 'WMS ST-20260921-0471')])
+            assert connekta.get_consec_rit_by_referencia('ST-20260921-047') is None
+
+    def test_ignora_las_anuladas_y_gana_la_mas_reciente(self, app, monkeypatch):
+        with app.app_context():
+            connekta = self._con_respuesta(monkeypatch, [
+                _rit(10, 100, 'WMS ST-1', estado=9),   # anulada
+                _rit(20, 101, 'WMS ST-1'),
+                _rit(30, 102, 'WMS ST-1'),             # la más reciente
+            ])
+            assert connekta.get_consec_rit_by_referencia('ST-1') == 102
+
+    def test_sin_match_retorna_none(self, app, monkeypatch):
+        with app.app_context():
+            connekta = self._con_respuesta(monkeypatch, [_rit(1, 1, 'WMS ST-OTRO')])
+            assert connekta.get_consec_rit_by_referencia('ST-1') is None
+
+    def test_respuesta_vacia_o_caida_retorna_none(self, app, monkeypatch):
         with app.app_context():
             from app.services.connekta_gateway import connekta
 
-            def _fake_get(nombre, params_extra=None, url=None):
-                return {'detalle': {'Table': [
-                    {'f440_referencia': 'ST-OTRO', 'f440_consec_docto': 1},
-                    {'f440_referencia': 'ST-1', 'f440_consec_docto': 42},
-                ]}}
+            monkeypatch.setattr(connekta, '_get', lambda *a, **k: {'detalle': {'Table': []}})
+            assert connekta.get_consec_rit_by_referencia('ST-1') is None
 
-            monkeypatch.setattr(connekta, '_get', _fake_get)
-            assert connekta.get_consec_rit_by_referencia('ST-1') == 42
+            def _boom(*a, **k):
+                raise RuntimeError('caído')
 
-    def test_get_consec_rit_by_referencia_sin_match_retorna_none(self, app, monkeypatch):
-        with app.app_context():
-            from app.services.connekta_gateway import connekta
-
-            def _fake_get(nombre, params_extra=None, url=None):
-                return {'detalle': {'Table': [{'f440_referencia': 'ST-OTRO', 'f440_consec_docto': 1}]}}
-
-            monkeypatch.setattr(connekta, '_get', _fake_get)
+            monkeypatch.setattr(connekta, '_get', _boom)
             assert connekta.get_consec_rit_by_referencia('ST-1') is None
 
 
