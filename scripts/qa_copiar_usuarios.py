@@ -12,6 +12,19 @@ Con `--unidades` copia en cambio la unidad de negocio: el mapeo
 tiene vacía). El sync de QA inserta el mapeo con la unidad en blanco, y
 `aprobar_solicitud` rechaza cualquier producto sin unidad de negocio.
 
+Con `--flota` copia los **maestros de flota**: vehículos, conductores, las
+plantillas de inspección con sus ítems, y las fichas técnicas. Sin eso QA tiene
+el esquema de flota y ninguna fila — medido el 2026-09-21: 0 vehículos, 0
+conductores, 0 plantillas—, así que las pantallas salen vacías y los dos crons
+del módulo (`FLOTA_AVISOS`, `FLOTA_PREVENTIVO`) corren sobre la nada.
+
+**No copia `flota_documento_vehiculo`, y es a propósito.** Los 11 documentos de
+producción tienen `foto_id` y `flota_foto` guarda solo un `storage_ref`: los
+bytes viven en el volumen (`FLOTA_FOTOS_DIR`). Copiar las filas traería a QA
+documentos que afirman tener una foto que ahí no existe. Mientras el archivo no
+viaje con la fila, se deja fuera — y eso deja al barrido de vencimientos sin
+nada que barrer, que es una carencia declarada y no un hueco silencioso.
+
 Sin --ejecutar no escribe nada. Con --ejecutar hay que escribir el host de
 destino (mismo criterio que scripts de borrado: repetir un comando del
 historial no debe bastar).
@@ -25,6 +38,17 @@ from sqlalchemy.engine import make_url
 
 TABLAS = ['almacenes', 'usuarios']  # orden por FK: usuarios.almacen_id
 
+#: Maestros de flota, **en orden de clave foránea**:
+#:   vehiculos                   — sin dependencias
+#:   conductores                 — usuario_id -> usuarios (ya copiados, ids intactos)
+#:   flota_plantilla_inspeccion  — sin dependencias
+#:   flota_item_inspeccion       — plantilla_id -> flota_plantilla_inspeccion
+#:   flota_ficha_tecnica         — vehiculo_id  -> vehiculos
+#: Verificado contra `information_schema` el 2026-09-21; si aparece una FK
+#: nueva, el INSERT falla ruidoso y hay que reordenar acá.
+TABLAS_FLOTA = ['vehiculos', 'conductores', 'flota_plantilla_inspeccion',
+                'flota_item_inspeccion', 'flota_ficha_tecnica']
+
 
 def main():
     ap = argparse.ArgumentParser()
@@ -32,6 +56,8 @@ def main():
     ap.add_argument('--host', default='', help='host del destino, para confirmar')
     ap.add_argument('--unidades', action='store_true',
                     help='copiar unidad de negocio (mapeo + productos) en vez de usuarios')
+    ap.add_argument('--flota', action='store_true',
+                    help='copiar los maestros de flota en vez de usuarios')
     args = ap.parse_args()
 
     src_url, dst_url = os.environ.get('SRC_URL'), os.environ.get('DST_URL')
@@ -49,8 +75,9 @@ def main():
     if args.unidades:
         return copiar_unidades(src, dst, dst_u, args)
 
+    tablas = TABLAS_FLOTA if args.flota else TABLAS
     with src.connect() as s, dst.begin() as d:
-        for nombre in TABLAS:
+        for nombre in tablas:
             t_src = Table(nombre, MetaData(), autoload_with=s)
             t_dst = Table(nombre, MetaData(), autoload_with=d)
             filas = [dict(r._mapping) for r in s.execute(t_src.select())]
@@ -71,7 +98,8 @@ def main():
                     f"(SELECT COALESCE(MAX(id),1) FROM {nombre}))"))
         if not args.ejecutar:
             d.rollback() if hasattr(d, 'rollback') else None
-            print('Simulacro: no se escribió nada. Usa --ejecutar --host <destino>.')
+            modo = ' --flota' if args.flota else ''
+            print(f'Simulacro: no se escribió nada. Usa{modo} --ejecutar --host <destino>.')
         else:
             print('Listo.')
 
