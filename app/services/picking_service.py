@@ -797,6 +797,11 @@ class PickingService:
           NO_ENCONTRADO         → descongela, reduce inventario a 0 en esa ubicación, cancela tarea
           AVERIA                → descongela, mueve stock a ubicación AVERIAS, cancela tarea
           DISCREPANCIA_SIESA    → descongela, cancela tarea; registra para ajuste manual en Siesa
+          ENCONTRADO            → descongela y cancela la tarea SIN tocar inventario, Siesa ni
+                                   packing. El ajuste lo hace el conteo cíclico forzado que
+                                   dispara la ruta (`ConteoService.forzar_desde_auditoria`):
+                                   un solo sitio ajusta Siesa. Los COMPLETO/PARCIAL de arriba
+                                   quedan por compatibilidad con datos y reportes viejos.
 
         ENCONTRADO_COMPLETO/PARCIAL levantan ValueError (sin persistir nada)
         si Siesa no responde la existencia del SKU — Regla 0, el ajuste nunca
@@ -804,7 +809,7 @@ class PickingService:
         responda.
         """
         RESULTADOS_VALIDOS = {
-            'ENCONTRADO_COMPLETO', 'ENCONTRADO_PARCIAL',
+            'ENCONTRADO', 'ENCONTRADO_COMPLETO', 'ENCONTRADO_PARCIAL',
             'NO_ENCONTRADO', 'AVERIA', 'DISCREPANCIA_SIESA'
         }
         if resultado not in RESULTADOS_VALIDOS:
@@ -817,6 +822,10 @@ class PickingService:
             raise ValueError(f'Solo se pueden auditar tareas BLOQUEADAS (estado: {tarea.estado})')
 
         cantidad_faltante = max(0, tarea.cantidad_solicitada - (tarea.cantidad_recogida or 0))
+        # Backorder de Siesa: el WMS no perdió nada, Siesa simplemente no comprometió
+        # esas unidades. Las auditorías de estas tareas no tocan el stock ni el
+        # packing (este se armó solo con lo pickeable).
+        es_backorder = tarea.motivo_bloqueo == 'BACKORDER_SIESA'
 
         reg = UbicacionProducto.query.filter_by(
             ubicacion_id=tarea.ubicacion_id,
@@ -847,7 +856,10 @@ class PickingService:
                 ))
 
         elif resultado == 'NO_ENCONTRADO':
-            if reg and reg.cantidad:
+            # Una tarea `bloqueo_sin_stock` no tiene stock propio: apunta a la
+            # ubicación de su hermana, y poner esa ubicación en 0 se llevaría
+            # unidades que son de otras tareas.
+            if reg and reg.cantidad and not (tarea.bloqueo_sin_stock or es_backorder):
                 db.session.add(MovimientoInventario(
                     producto_id=tarea.producto_id,
                     ubicacion_id=tarea.ubicacion_id,
@@ -969,8 +981,8 @@ class PickingService:
                         'La mercancía rota sigue contada como vendible en Siesa.',
                         tarea.codigo, _e_ave)
 
-        elif resultado == 'DISCREPANCIA_SIESA':
-            pass  # admin ajustará manualmente en Siesa; solo registramos
+        elif resultado in ('DISCREPANCIA_SIESA', 'ENCONTRADO'):
+            pass  # sin efecto en inventario: solo se registra (el conteo ajusta)
 
         # 2.5. ENCONTRADO_COMPLETO/PARCIAL son un conteo físico real, hecho por
         # quien ya es la autoridad (admin/supervisor) — se ajustan a Siesa con
@@ -1005,7 +1017,8 @@ class PickingService:
         # Dejarla en 0 en vez de eliminarla enviaría cantidad_empacada=0 sin
         # probar contra el conector de Siesa. Si el total es > 0, se ajusta
         # cantidad_esperada para que el empacador complete esa línea.
-        if tarea.referencia_documento and resultado != 'DISCREPANCIA_SIESA':
+        if (tarea.referencia_documento and not es_backorder
+                and resultado not in ('DISCREPANCIA_SIESA', 'ENCONTRADO')):
             from app.models.packing import TareaPacking as _TP, ItemPacking as _IP
             ya_recogido = tarea.cantidad_recogida or 0
             if resultado == 'ENCONTRADO_COMPLETO':
@@ -1014,6 +1027,21 @@ class PickingService:
                 total_disponible = ya_recogido + cantidad_hallada
             else:  # NO_ENCONTRADO, AVERIA
                 total_disponible = ya_recogido
+
+            # Una línea puede tener VARIAS tareas (FEFO por ubicación, o el
+            # backorder parcial de Siesa que la parte en pickeable + bloqueada).
+            # El ítem del packing es de la línea completa: lo ya recogido por
+            # las DEMÁS tareas cuenta. Sin esto, auditar la bloqueada (0
+            # recogidas) borraba el ítem aunque la hermana ya hubiera recogido
+            # 2 — PD1498, packing con 0 ítems.
+            total_disponible += (
+                db.session.query(db.func.coalesce(db.func.sum(TareaPicking.cantidad_recogida), 0))
+                .filter(
+                    TareaPicking.referencia_documento == tarea.referencia_documento,
+                    TareaPicking.producto_id == tarea.producto_id,
+                    TareaPicking.id != tarea.id,
+                ).scalar()
+            )
 
             packing = _TP.query.filter(
                 _TP.numero_pedido_siesa == tarea.referencia_documento,

@@ -41,6 +41,15 @@ class MuelleService:
             destino = b.tarea.municipio or b.tarea.cliente or 'Sin destino'
             grupos.setdefault(destino, []).append(b.to_dict())
 
+        def _clave_pedido_desc(bulto: dict) -> tuple:
+            """PD más alto (el último que cae) primero; bultos del mismo PD ascendentes."""
+            digitos = ''.join(c for c in (bulto['numero_pedido'] or '') if c.isdigit())
+            # Sin número parseable → al final del grupo, no al inicio (Regla 0)
+            return (0, -int(digitos), bulto['numero']) if digitos else (1, 0, bulto['numero'])
+
+        for lista in grupos.values():
+            lista.sort(key=_clave_pedido_desc)
+
         return {
             'grupos': [
                 {'destino': destino, 'bultos': lista, 'total': len(lista)}

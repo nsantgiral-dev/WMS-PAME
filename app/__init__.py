@@ -3,7 +3,7 @@ import sys
 import click
 import logging
 from datetime import timedelta
-from flask import Flask, send_from_directory
+from flask import Flask, redirect, send_from_directory
 from flask_compress import Compress
 from werkzeug.middleware.proxy_fix import ProxyFix
 from dotenv import load_dotenv
@@ -292,6 +292,11 @@ def create_app():
     @app.route('/static/pwa/<path:filename>')
     def pwa_files(filename):
         return _servir_pwa(filename)
+
+    @app.route('/')
+    def raiz():
+        # Sin esto la raíz respondía el 404 en JSON del errorhandler.
+        return redirect('/pwa')
 
     @app.route('/pwa')
     def pwa():

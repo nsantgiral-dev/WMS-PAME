@@ -274,9 +274,19 @@ def auditar_tarea(id):
             ubicacion_hallada=data.get('ubicacion_hallada'),
             observaciones=data.get('observaciones'),
         )
-        return jsonify({'mensaje': 'Auditoría registrada', 'tarea': tarea.to_dict()}), 200
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
+
+    # La auditoría ya quedó cerrada; el conteo forzado es un paso aparte y su
+    # fallo no la deshace (se declara en `conteo_forzado`).
+    from app.services.conteo_service import ConteoService
+    conteo = None
+    if (resultado in ConteoService.RESULTADOS_DE_AUDITORIA_QUE_FUERZAN_CONTEO
+            and data.get('forzar_conteo', True)):
+        conteo = ConteoService.forzar_desde_auditoria(
+            tarea, operario_id=data.get('conteo_operario_id') or None)
+    return jsonify({'mensaje': 'Auditoría registrada', 'tarea': tarea.to_dict(),
+                    'conteo_forzado': conteo}), 200
 
 
 @picking_bp.route('/fefo', methods=['POST'])
