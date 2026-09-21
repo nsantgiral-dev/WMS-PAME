@@ -940,12 +940,21 @@ async function _enviarConfirmacionEntrega(id, payload) {
  */
 async function rutaVerManifiesto(id) {
   try {
+    // El fallo de la planilla NO se convierte en «no hay paradas».
+    //
+    // `GET /<id>/planilla` es `_es_admin_o_jefe`, pero `GET /<id>` no: un
+    // supervisor abre el manifiesto (200) y recibe 403 en el detalle. Con
+    // `.catch(() => ({paradas: []}))` eso se pintaba como «Sin paradas
+    // registradas» — medido el 2026-09-21 contra la ruta 31, que tiene tres.
+    // Un no-sé pintado como un hecho es peor que un error: no se reporta.
     const [dr, dp] = await Promise.all([
       get('/api/rutas/' + id),
-      get('/api/rutas/' + id + '/planilla').catch(() => ({ paradas: [] })),
+      get('/api/rutas/' + id + '/planilla').then(
+        d => ({ ok: true, paradas: d.paradas || [] }),
+        e => ({ ok: false, status: e && e.status, paradas: [] })),
     ]);
     const ruta    = dr.ruta;
-    const paradas = dp.paradas || [];
+    const paradas = dp.paradas;
 
     // Paleta modo día
     const EST = {
@@ -1010,6 +1019,13 @@ async function rutaVerManifiesto(id) {
 
         filas += '</div>';
       });
+    } else if (!dp.ok) {
+      filas = `<div style="color:#b45309;background:#fffbeb;border:1px solid #fcd34d;border-radius:10px;text-align:center;padding:20px;font-size:13px;">
+        ${dp.status === 403
+          ? 'No tienes permiso para ver el detalle de paradas de esta ruta.'
+          : 'No se pudo cargar el detalle de paradas.'}
+        <div style="font-size:11px;color:#92400e;margin-top:6px;">La ruta puede tener paradas — esta pantalla no las pudo leer.</div>
+      </div>`;
     } else {
       filas = '<div style="color:#9ca3af;text-align:center;padding:20px;">Sin paradas registradas</div>';
     }
@@ -1019,7 +1035,7 @@ async function rutaVerManifiesto(id) {
     modal.innerHTML = `
       <div style="background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:20px;max-width:560px;width:100%;max-height:85vh;display:flex;flex-direction:column;box-shadow:0 20px 40px rgba(0,0,0,.15);">
         <div style="font-size:16px;font-weight:800;color:#111827;margin-bottom:4px;">${esc(ruta.ruta_maestra_nombre || 'Ruta')} <span style="color:#9ca3af;font-weight:400;font-size:13px;">#${esc(ruta.id)}</span></div>
-        <div style="font-size:12px;color:#6b7280;margin-bottom:14px;">${esc(ruta.conductor_nombre)} · ${esc(ruta.tipo_ruta)} · ${esc(paradas.length)} pedido${paradas.length !== 1 ? 's' : ''}</div>
+        <div style="font-size:12px;color:#6b7280;margin-bottom:14px;">${esc(ruta.conductor_nombre)} · ${esc(ruta.tipo_ruta)} · ${dp.ok ? `${esc(paradas.length)} pedido${paradas.length !== 1 ? 's' : ''}` : 'pedidos: sin dato'}</div>
         <div style="overflow-y:auto;flex:1;">${filas}</div>
         <button onclick="this.closest('div[style*=fixed]').remove()" style="margin-top:16px;padding:10px;background:#f3f4f6;color:#374151;border:1px solid #e5e7eb;border-radius:8px;font-size:13px;cursor:pointer;width:100%;font-weight:600;">Cerrar</button>
       </div>`;
@@ -1624,6 +1640,27 @@ async function cargarListaConductoresEnSelect(selectId) {
   } catch (e) {}
 }
 
+/** ¿Este conductor puede entrar a la PWA?
+
+    Se pregunta por el HECHO (`tiene_cuenta_pwa`), no por el correo: la
+    dirección se borra por privacidad para quien no es de almacén
+    (`RutaService.listar_conductores`), y leer esa ausencia como «no tiene
+    cuenta» le decía a supervisor y a control_flota —los dos roles que
+    administran flota— que los tres conductores activos «no pueden entrar a
+    la app». `usuario_id` sobrevive hoy a la redacción, pero por casualidad:
+    el contrato es el booleano. */
+function conCuentaPwa(c) {
+  return c.tiene_cuenta_pwa === true
+      || (c.tiene_cuenta_pwa === undefined && (c.usuario_id != null || !!c.usuario_email));
+}
+
+/** Solo admin crea cuentas (`POST /conductores/<id>/cuenta` es `_solo_admin`).
+    Misma doctrina que `mostrarSegunRol`: ofrecer un gesto que el backend va a
+    negar con 403 enseña a ignorar errores. */
+function puedeCrearCuentaPwa() {
+  return typeof OPERARIO !== 'undefined' && OPERARIO?.rol === 'admin';
+}
+
 /** Carga y renderiza la lista completa de conductores (activos e inactivos). */
 async function cargarListaConductores() {
   const el = document.getElementById('lista-conductores');
@@ -1641,8 +1678,8 @@ async function cargarListaConductores() {
           <div>
             <div style="font-size:14px;font-weight:700;">${esc(c.nombre)}</div>
             <div style="font-size:12px;color:#555;margin-top:2px;">${identidadConductor(c, conductores)}${c.telefono ? ' · ' + c.telefono : ''}</div>
-            ${c.usuario_email
-              ? `<div style="font-size:11px;color:#facc15;margin-top:3px;">👤 ${esc(c.usuario_email)}</div>`
+            ${conCuentaPwa(c)
+              ? `<div style="font-size:11px;color:#facc15;margin-top:3px;">👤 ${esc(c.usuario_email || 'tiene cuenta')}</div>`
               : `<div style="font-size:11px;color:#fbbf24;margin-top:3px;">Sin cuenta PWA — no puede entrar a la app</div>`}
           </div>
           ${c.activo
@@ -1654,7 +1691,7 @@ async function cargarListaConductores() {
             style="flex:1;padding:8px;background:#1a1a1a;border:1px solid #333;color:#aaa;border-radius:8px;font-size:12px;cursor:pointer;">
             ${c.activo ? 'Desactivar' : 'Activar'}
           </button>
-          ${c.usuario_email ? '' : `<button onclick="conBotonOcupado(event, () => conductorCrearCuenta(${esc(c.id)}, '${c.nombre.replace(/'/g, "\\'")}'))"
+          ${(conCuentaPwa(c) || !puedeCrearCuentaPwa()) ? '' : `<button onclick="conBotonOcupado(event, () => conductorCrearCuenta(${esc(c.id)}, '${c.nombre.replace(/'/g, "\\'")}'))"
             style="flex:1;padding:8px;background:#1e3a5f;border:1px solid #2563eb;color:#93c5fd;border-radius:8px;font-size:12px;cursor:pointer;">
             Crear cuenta PWA
           </button>`}

@@ -27,6 +27,12 @@ class Conductor(db.Model):
             'activo':         self.activo,
             'disponible':     self.disponible,
             'usuario_id':     self.usuario_id,
+            # Que el conductor TENGA cuenta es un hecho operativo, no un dato
+            # personal: se manda siempre. La dirección de correo sí lo es y
+            # `listar_conductores` la borra para quien no es de almacén — sin
+            # este campo, esa redacción y «no tiene cuenta» valían lo mismo
+            # (`undefined`) y la pantalla afirmaba lo segundo.
+            'tiene_cuenta_pwa': self.usuario_id is not None,
             'usuario_email':  self.usuario.email if self.usuario else None,
             'fecha_creacion': self.fecha_creacion.isoformat(),
         }
