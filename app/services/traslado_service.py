@@ -1486,6 +1486,23 @@ class TrasladoService:
                 'sistema tendría que suponer que llegó todo lo que salió, y una '
                 'diferencia quedaría sin traza — ni acá ni en Siesa.'
             )
+        # Los dos clientes del PWA mandan `{id, cantidad_recibida}` y están
+        # bien. Pero el suscrito crudo convertía cualquier otra forma en un
+        # `KeyError` que el `except Exception` de la ruta devolvía como
+        # **500 con el cuerpo `{"error": "'id'"}`** — sin nombre de campo, sin
+        # ítem, sin decir qué se esperaba. Y eso justo al lado de tres
+        # validaciones que sí explican. Un reintento con un payload viejo, un
+        # script, o el próximo cliente caen ahí y leen «error interno» cuando
+        # el problema es suyo y es corregible.
+        _malos = [i for i in items_recibidos
+                  if not isinstance(i, dict) or 'id' not in i
+                  or 'cantidad_recibida' not in i]
+        if _malos:
+            raise ValueError(
+                f'{len(_malos)} ítem(s) del conteo no traen `id` y '
+                f'`cantidad_recibida`. Se recibió: {_malos[:3]}. La recepción '
+                f'necesita saber QUÉ ítem y CUÁNTO llegó de cada uno — sin las '
+                f'dos cosas no se puede confirmar nada.')
         recibidos_map = {i['id']: i['cantidad_recibida'] for i in items_recibidos}
         faltantes = [it.id for it in s.items if it.id not in recibidos_map]
         if faltantes:
