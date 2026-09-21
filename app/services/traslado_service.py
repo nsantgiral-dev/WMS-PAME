@@ -510,6 +510,40 @@ class TrasladoService:
         return s
 
     @staticmethod
+    def _reintentar_leer_rit(s: SolicitudTraslado) -> bool:
+        """Segundo intento de leer el consecutivo de una RIT que quedó «huérfana».
+
+        Al confirmar el picking la RIT se consulta **inmediatamente** después del
+        POST. La Regla 20 dice que Siesa tarda ~10-12 s en publicarla, así que esa
+        lectura llega temprano y el WMS la marca huérfana (28 casos en la primera
+        auditoría contra producción).
+
+        Se reintenta en el siguiente momento natural del flujo, no con un `sleep`
+        dentro del request. Y tiene que ser **antes del 174720** (confirmar
+        packing): sin consecutivo el 174720 se omite, y leerlo recién al despachar
+        llega tarde — el despacho cae a 173076 y la RIT vuelve a quedar suelta.
+
+        Solo actúa sobre el caso de la huérfana (`siesa_error` con esa marca): un
+        rechazo estructural del 174646 no se arregla volviendo a leer. Nunca
+        rompe el flujo. Devuelve True si recuperó el consecutivo.
+        """
+        if s.siesa_requisicion_consec or 'no pudo leer el consecutivo' not in (s.siesa_error or ''):
+            return False
+        try:
+            _rec = siesa_traslado.recuperar_consec_rit(s.codigo)
+            if _rec:
+                s.siesa_requisicion_consec = _rec
+                s.siesa_error = None
+                db.session.commit()
+                logger.info('[TRASLADO] %s: consecutivo de RIT recuperado (%s) — '
+                            'ya no queda huérfana', s.codigo, _rec)
+                return True
+        except Exception as _e_rec:
+            logger.warning('[TRASLADO] %s: segundo intento de leer la RIT falló: %s',
+                           s.codigo, _e_rec)
+        return False
+
+    @staticmethod
     def confirmar_packing_traslado(solicitud_id: int, usuario_id: int) -> SolicitudTraslado:
         """
         Operario verificó empaque (segundo conteo). Dispara 174720 (Compromisos desde RIT)
@@ -546,6 +580,10 @@ class TrasladoService:
                 'unidad_medida':   (item.producto.unidad_medida if item.producto else '') or '',
                 'ubicacion_codigo': ubicacion_por_producto.get(item.producto_id),
             })
+
+        # El 174720 necesita el consecutivo de la RIT. Al confirmar el picking la
+        # lectura llegó temprano (Regla 20); acá ya pasaron minutos.
+        TrasladoService._reintentar_leer_rit(s)
 
         if s.siesa_requisicion_consec and _comp_items:
             try:
@@ -699,20 +737,8 @@ class TrasladoService:
         # Acá ya pasaron minutos u horas desde la aprobación, que es lo que la
         # Regla 20 pedía esperar. No se duerme en el request: se pregunta de
         # nuevo en el siguiente momento natural del flujo.
-        if not _skip_siesa and not s.siesa_requisicion_consec and s.siesa_error \
-                and 'no pudo leer el consecutivo' in (s.siesa_error or ''):
-            try:
-                _rec = siesa_traslado.recuperar_consec_rit(s.codigo)
-                if _rec:
-                    s.siesa_requisicion_consec = _rec
-                    s.siesa_error = None
-                    db.session.commit()
-                    logger.info(
-                        '[TRASLADO] %s: consecutivo de RIT recuperado en el '
-                        'despacho (%s) — ya no queda huérfana', s.codigo, _rec)
-            except Exception as _e_rec:
-                logger.warning('[TRASLADO] %s: segundo intento de leer la RIT '
-                               'falló: %s', s.codigo, _e_rec)
+        if not _skip_siesa:
+            TrasladoService._reintentar_leer_rit(s)
 
         try:
             if _skip_siesa:
