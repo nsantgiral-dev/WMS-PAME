@@ -173,7 +173,12 @@ class ConnektaTrasladosGateway:
                 for idx, item in enumerate(items)
                 if item.get('codigo_siesa') and item.get('cantidad', 0) > 0
             ],
-            'Movimiento de Seriales': [],
+            # NO enviar 'Movimiento de Seriales': Siesa QA lo rechaza («la sección no
+            # existe o está mal escrita», 2026-09-21) — este conector no la tiene.
+            # OJO: quitarla NO deja el payload válido. El siguiente rechazo es del
+            # registro 405 (v8): «tamaño 226, exigido 303», con campos obligatorios
+            # ausentes y un numérico que recibe 'NDNB1'. Falta el spec del 174720
+            # (no está en docs/siesa-specs/); no se corrige a ciegas — Regla 1.
             'Final': [{'F_CIA': int(core.id_cia_siesa)}],
         }
         logger.info('[CONNEKTA] compromisos_desde_requisicion RIT=%s (%d ítems)',

@@ -2681,3 +2681,39 @@ en catálogo por la prueba de Compras.
 Script: `scripts/qa_traslados_gateway_real.py` (`--si-de-verdad`,
 `--desde-salto N` para reanudar, `--cadena A,B,C` para override de ruta —
 usado para el tramo 2).
+
+---
+
+## La RIT en traslados: creada y leída, pero el 174720 no funciona (2026-09-21)
+
+Prueba real de punta a punta contra Siesa QA con `ST-20260921-574D` (NC1 → NB1,
+5 uds de `PAPELSP9218`), después de arreglar la lectura del consecutivo.
+
+| Paso | Resultado |
+|---|---|
+| RIT 174646 al confirmar picking | Creada (`003-RIT-149`, «Comprometido») y **leída al instante** |
+| Comprometida de NC1 | 87 → 92 (la RIT reserva; la existencia no se toca) |
+| **174720 (Compromisos) al cerrar packing** | **Rechazado por Siesa.** El cierre abortó a propósito: sin STS, sin descuento de inventario, sin job |
+
+**El 174720 está mal armado y nunca se había ejercitado en vivo.** Primero, envía
+una sección `Movimiento de Seriales` que el conector no tiene. Quitada esa, el
+registro 405 (v8) falla: «tamaño 226, exigido 303», campos obligatorios ausentes
+(posiciones 254-304) y un numérico (posición 184-204) que recibe `NDNB1`. No hay
+spec del 174720 ni del 174930 en `docs/siesa-specs/`.
+
+**Consecuencia — por qué `TRASLADO_USA_RIT` nace APAGADA.** Arreglar la lectura
+de la RIT sin arreglar el 174720 empeora las cosas: antes la RIT era siempre
+ilegible, el cierre saltaba el 174720 y el traslado salía por el 173076; con la
+RIT legible el cierre llama al 174720, falla y se bloquea **en cada traslado**.
+Apagada, el traslado sale siempre por el STS 173076 directo y una RIT ya guardada
+se ignora (`TrasladoService.consec_rit_efectivo`, en el cierre, el despacho y el
+job del DLQ). Encenderla exige antes corregir el 174720 y el 174930 contra su spec.
+
+Otros hallazgos de la misma prueba:
+- `api_tecnocedi_requisiciones_traslado` es una consulta **estándar** (el 401 no
+  era de permisos): ver «RESUELTO 2026-09-21 — el 401 no era de permisos».
+- La RIT se crea en el **CO 003** aunque el origen sea NC1 (CO 002): Siesa lo aceptó.
+  Sigue sin probarse el 174930, donde el CO del documento sí se valida contra la bodega.
+- El STS por 173076 no toca `TRA1`: su bodega de entrada es el destino.
+- Quedan RIT sueltas en Siesa QA sin cerrar: `003-RIT-148` (ST-20260921-0471) y
+  `003-RIT-149` (ST-20260921-574D), ambas «Comprometido». Cerrar a mano.
