@@ -96,19 +96,6 @@ def actualizar_almacen(id):
     return jsonify(almacen.to_dict()), 200
 
 
-@almacenes_bp.route('/<int:id>/ubicaciones', methods=['GET'])
-@jwt_required()
-def listar_ubicaciones(id):
-    if not _es_personal_almacen():
-        return jsonify({'error': 'Sin permiso para listar ubicaciones'}), 403
-    almacen = Almacen.query.get_or_404(id)
-    ubicaciones = Ubicacion.query.filter_by(
-        almacen_id=almacen.id,
-        activo=True
-    ).all()
-    return jsonify([u.to_dict() for u in ubicaciones]), 200
-
-
 @almacenes_bp.route('/<int:id>/ubicaciones', methods=['POST'])
 @jwt_required()
 def crear_ubicacion(id):

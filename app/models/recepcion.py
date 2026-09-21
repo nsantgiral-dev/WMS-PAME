@@ -166,6 +166,12 @@ class ItemRecepcion(db.Model):
     lote = db.Column(db.String(50))
     fecha_vencimiento = db.Column(db.Date)
 
+    # Idempotencia de escaneo: guarda el scan_id (UUID generado por el cliente)
+    # del último escaneo aplicado a este ítem. Un reintento con el MISMO
+    # scan_id (wifi de andén que cortó justo al volver la respuesta) no vuelve
+    # a sumar — ver RecepcionService.escanear_producto.
+    ultimo_scan_id = db.Column(db.String(64), nullable=True)
+
     # Relaciones
     producto = db.relationship('Producto', backref='items_recepcion', lazy=True)
     ubicacion = db.relationship('Ubicacion', foreign_keys=[ubicacion_id], lazy=True)

@@ -9,9 +9,12 @@
  * este repo.
  *
  * Reusa el pipeline de fotos del conductor (`rutas.js`): captura con
- * `capture="environment"`, compresión en canvas, cola IndexedDB. Lo que NO
- * reusa es el almacenamiento — el binario no vuelve a vivir en una columna
- * Text. Acá la foto viaja como referencia + hash + dimensiones.
+ * `capture="environment"`, compresión en canvas. Lo que NO reusa todavía es
+ * la cola IndexedDB de reintento (`_condDB` en rutas.js) — el envío acá es
+ * `fetch()` directo, sin persistencia ante fallo de red (ver hallazgo Medio
+ * en DIAGNOSTICO_WMS.md). Tampoco reusa el almacenamiento — el binario no
+ * vuelve a vivir en una columna Text. Acá la foto viaja como referencia +
+ * hash + dimensiones.
  *
  * Dos clases de foto, y no comparten parámetros (regla 7):
  *   · evidencia_estado → 800×600 @ 0.65   (las ocho del vehículo)

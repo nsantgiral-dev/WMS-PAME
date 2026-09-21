@@ -375,10 +375,7 @@ async function tiendaActualizarStock() {
   if (btn) { btn.disabled = true; btn.style.opacity = '0.4'; btn.textContent = '…'; }
   try {
     const bodega = _TIENDA_ORIGEN.id || 'NB1';
-    await fetch(API + `/api/traslados/invalidar-cache-stock?bodega=${bodega}`, {
-      method: 'POST',
-      headers: { Authorization: 'Bearer ' + TOKEN },
-    });
+    await postConReintento(`/api/traslados/invalidar-cache-stock?bodega=${bodega}`, {});
     _TIENDA_STOCK = [];
     _TIENDA_STOCK_ESTADO = 'cargando';
     await tiendaCargarStock();
@@ -459,7 +456,7 @@ function tiendaRenderStock() {
   for (let p = desde; p <= hasta; p++) {
     const activo = p === _TIENDA_PAGINA;
     nums.push(`<button onclick="tiendaIrPagina(${p})"
-      style="min-width:32px;padding:6px 8px;background:${activo?'#1E8395':'#222'};color:#fff;border:none;border-radius:6px;font-size:12px;font-weight:${activo?'700':'400'};cursor:pointer;">${p}</button>`);
+      style="min-width:44px;min-height:44px;padding:6px 8px;background:${activo?'#1E8395':'#222'};color:#fff;border:none;border-radius:6px;font-size:12px;font-weight:${activo?'700':'400'};cursor:pointer;">${p}</button>`);
   }
   if (hasta < totalPags) nums.push('<span style="color:#555;padding:0 4px;">…</span>');
 
@@ -545,11 +542,11 @@ function tiendaQuitarCarrito(codigoSiesa) {
 }
 
 /** Submit the tienda transfer request with cart items. */
-async function tiendaEnviarSolicitud() {
+async function tiendaEnviarSolicitud(event) {
   if (!_TIENDA_CARRITO.length) { alerta('El carrito está vacío', 'error'); return; }
   const origen = _TIENDA_ORIGEN.nombre || _TIENDA_ORIGEN.id || 'la bodega';
   const miTienda = OPERARIO?.nombre_punto_venta || OPERARIO?.bodega_siesa_id || 'mi tienda';
-  if (!confirm(`¿Solicitar ${_TIENDA_CARRITO.length} producto${_TIENDA_CARRITO.length !== 1 ? 's' : ''} desde ${origen} para ${miTienda}?`)) return;
+  if (!await _modalConfirmar(`¿Solicitar ${_TIENDA_CARRITO.length} producto${_TIENDA_CARRITO.length !== 1 ? 's' : ''} desde ${origen} para ${miTienda}?`, { titulo: 'Solicitar traslado' })) return;
 
   const items = _TIENDA_CARRITO
     .filter(c => c.producto_id)
@@ -561,44 +558,43 @@ async function tiendaEnviarSolicitud() {
 
   if (!items.length) { alerta('No se encontraron productos válidos', 'error'); return; }
 
+  const btn = event?.target;
+  if (btn) btn.disabled = true;
+  let d;
   try {
-    const r = await fetch(API + '/api/traslados/', {
-      method: 'POST',
-      headers: { Authorization: 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        items,
-        bodega_origen_siesa: _TIENDA_ORIGEN.id,
-        bodega_destino_siesa: OPERARIO?.bodega_siesa_id || undefined,
-        nombre_punto_venta: OPERARIO?.nombre_punto_venta || OPERARIO?.bodega_siesa_id || undefined,
-      })
+    d = await post('/api/traslados/', {
+      items,
+      bodega_origen_siesa: _TIENDA_ORIGEN.id,
+      bodega_destino_siesa: OPERARIO?.bodega_siesa_id || undefined,
+      nombre_punto_venta: OPERARIO?.nombre_punto_venta || OPERARIO?.bodega_siesa_id || undefined,
     });
-    const d = await r.json();
-    if (!r.ok) { alerta(d.error || 'Error creando solicitud', 'error'); return; }
+  } catch (e) {
+    alerta(e.message || 'Error creando solicitud', 'error');
+    if (btn) btn.disabled = false;
+    return;
+  }
 
+  try {
     // Enviar inmediatamente
-    const r2 = await fetch(API + `/api/traslados/${d.id}/enviar`, {
-      method: 'POST',
-      headers: { Authorization: 'Bearer ' + TOKEN }
-    });
-    if (r2.ok) {
-      alerta('Pedido enviado al almacén', 'exito');
-      _TIENDA_CARRITO = [];
-      tiendaActualizarCarrito();
-      tiendaSubtab('solicitudes');
-    }
-  } catch (e) { alerta('Error de conexión', 'error'); }
+    await postConReintento(`/api/traslados/${d.id}/enviar`, {});
+    alerta('Pedido enviado al almacén', 'exito');
+    _TIENDA_CARRITO = [];
+    tiendaActualizarCarrito();
+    tiendaSubtab('solicitudes');
+  } catch (e) {
+    alerta((e.message || 'La solicitud se creó pero no se pudo enviar') + ' — revisa "Mis Pedidos" para reintentar', 'error');
+  } finally {
+    if (btn) btn.disabled = false;
+  }
 }
 
 /** @param {number} id - Transfer solicitud ID to resend to the warehouse. */
 async function tiendaEnviarSolicitudId(id) {
   try {
-    const r = await fetch(API + `/api/traslados/${id}/enviar`, {
-      method: 'POST', headers: { Authorization: 'Bearer ' + TOKEN }
-    });
-    const d = await r.json();
-    if (r.ok) { alerta('Pedido enviado', 'exito'); tiendaCargarSolicitudes(); }
-    else { alerta(d.error || 'Error', 'error'); }
-  } catch (e) { alerta('Error de conexión', 'error'); }
+    await postConReintento(`/api/traslados/${id}/enviar`, {});
+    alerta('Pedido enviado', 'exito');
+    tiendaCargarSolicitudes();
+  } catch (e) { alerta(e.message || 'Error de conexión', 'error'); }
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -729,6 +725,15 @@ function _tiendaRenderPickingTraslado() {
       <!-- Escaneo / entrada manual -->
       <div style="background:#111;border-radius:10px;padding:12px;margin-bottom:14px;">
         <div style="font-size:12px;color:#666;text-align:center;margin-bottom:8px;">Escanea el código de barras o usá los botones +/−</div>
+        ${OPERARIO && OPERARIO.puede_usar_camara ? `
+        <button onclick="abrirCamara('lector-qr-tt','camara-box-tt', tiendaScanTraslado, this)"
+          style="width:100%;padding:13px;font-size:16px;background:#fff;color:#000;border:2px solid #000;border-radius:10px;cursor:pointer;margin-bottom:8px;">
+          📷 Escanear con cámara
+        </button>
+        <div id="camara-box-tt" style="display:none;margin-bottom:8px;">
+          <div id="lector-qr-tt" style="border-radius:10px;overflow:hidden;"></div>
+          <button onclick="cerrarCamara('camara-box-tt')" style="width:100%;padding:9px;margin-top:6px;font-size:14px;background:#333;color:#fff;border:none;border-radius:8px;cursor:pointer;">Cerrar cámara</button>
+        </div>` : ''}
         <div style="display:flex;gap:8px;">
           <input id="tienda-scan-input" type="text" placeholder="Escanea o escribe el código..."
             style="flex:1;padding:10px;background:#0d0d0d;border:1px solid #333;border-radius:8px;color:#fff;font-size:14px;"
@@ -776,13 +781,13 @@ function _tiendaRenderItemsPickingTraslado(items) {
           </div>
           <div style="display:flex;align-items:center;gap:8px;flex-shrink:0;padding-left:8px;">
             <button onclick="tiendaContarItem(${esc(i.producto_id)}, -1)"
-              style="width:34px;height:34px;background:#222;border:1px solid #333;color:#fff;border-radius:8px;font-size:20px;font-weight:700;cursor:pointer;line-height:1;">−</button>
+              style="width:44px;height:44px;background:#222;border:1px solid #333;color:#fff;border-radius:8px;font-size:20px;font-weight:700;cursor:pointer;line-height:1;">−</button>
             <div style="text-align:center;min-width:54px;">
               <div style="font-size:26px;font-weight:900;line-height:1;color:${completo ? '#4ade80' : '#fff'};">${contado}</div>
               <div style="font-size:10px;color:#6b7280;">/ ${esperado}</div>
             </div>
             <button onclick="tiendaContarItem(${esc(i.producto_id)}, 1)"
-              style="width:34px;height:34px;background:#1E8395;border:none;color:#fff;border-radius:8px;font-size:20px;font-weight:700;cursor:pointer;line-height:1;">+</button>
+              style="width:44px;height:44px;background:#1E8395;border:none;color:#fff;border-radius:8px;font-size:20px;font-weight:700;cursor:pointer;line-height:1;">+</button>
           </div>
         </div>
         <div style="height:5px;background:#222;border-radius:3px;margin-top:8px;">
@@ -878,49 +883,46 @@ async function tiendaConfirmarRecepcionTraslado() {
   if (btn) { btn.textContent = 'Confirmando...'; btn.disabled = true; }
 
   try {
-    const r = await fetch(API + `/api/traslados/${s.id}/recibir`, {
-      method: 'POST',
-      headers: { Authorization: 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
-      // **Los conteos que la tienda acaba de hacer.** Iban vacíos: se contaba
-      // ítem por ítem, se veían las barras de progreso, el modal decía
-      // «¿confirmar como recepción parcial?» — y el cuerpo salía `{}`. El
-      // servidor rellenaba `recibida = enviada` para TODO, así que una tienda
-      // que contaba 3 de 10 hacía que el WMS y Siesa registraran 10.
-      //
-      // Siete unidades sin traza, y `TRA-01` —que exige enviada ≥ recibida— no
-      // podía dispararse porque los dos valores se escribían iguales.
-      //
-      // Es la misma vía y el mismo endpoint que usa Recepción, que sí manda los
-      // conteos (`recepcion.js`). Un endpoint con dos llamadores, uno honesto y
-      // otro no, indistinguibles desde el servidor.
-      body: JSON.stringify({
-        items_recibidos: items.map(i => ({
-          id: i.id,
-          cantidad_recibida: _TIENDA_CONTEOS[i.producto_id] || 0,
-        })),
-      })
+    // Dispara Siesa (ETS 173079) — postConReintento() es seguro acá:
+    // TrasladoService.confirmar_recepcion es idempotente (rechaza un segundo
+    // intento sobre un traslado ya ENTREGADA con 400, no duplica el 173079),
+    // mismo patrón ya verificado y usado en recepcion.js:1172 para el mismo
+    // endpoint. Ver el resto del comentario original más abajo sobre por qué
+    // items_recibidos no puede ir vacío.
+    //
+    // **Los conteos que la tienda acaba de hacer.** Iban vacíos: se contaba
+    // ítem por ítem, se veían las barras de progreso, el modal decía
+    // «¿confirmar como recepción parcial?» — y el cuerpo salía `{}`. El
+    // servidor rellenaba `recibida = enviada` para TODO, así que una tienda
+    // que contaba 3 de 10 hacía que el WMS y Siesa registraran 10.
+    //
+    // Siete unidades sin traza, y `TRA-01` —que exige enviada ≥ recibida— no
+    // podía dispararse porque los dos valores se escribían iguales.
+    //
+    // Es la misma vía y el mismo endpoint que usa Recepción, que sí manda los
+    // conteos (`recepcion.js`). Un endpoint con dos llamadores, uno honesto y
+    // otro no, indistinguibles desde el servidor.
+    await postConReintento(`/api/traslados/${s.id}/recibir`, {
+      items_recibidos: items.map(i => ({
+        id: i.id,
+        cantidad_recibida: _TIENDA_CONTEOS[i.producto_id] || 0,
+      })),
     });
-    const d = await r.json();
-    if (r.ok) {
-      alerta('Recepción confirmada — Siesa registró la entrada en tránsito', 'exito');
+    alerta('Recepción confirmada — Siesa registró la entrada en tránsito', 'exito');
+    _TIENDA_TRASLADO_ACTIVO = null;
+    _TIENDA_CONTEOS = {};
+    setTimeout(tiendaCargarRecibir, 1200);
+  } catch (e) {
+    const yaEntregado = (e.message || '').toLowerCase().includes('entregada');
+    if (yaEntregado) {
+      alerta('Este traslado ya fue recibido — actualizando lista', 'info');
       _TIENDA_TRASLADO_ACTIVO = null;
       _TIENDA_CONTEOS = {};
-      setTimeout(tiendaCargarRecibir, 1200);
+      setTimeout(tiendaCargarRecibir, 800);
     } else {
-      const yaEntregado = (d.error || '').toLowerCase().includes('entregada');
-      if (yaEntregado) {
-        alerta('Este traslado ya fue recibido — actualizando lista', 'info');
-        _TIENDA_TRASLADO_ACTIVO = null;
-        _TIENDA_CONTEOS = {};
-        setTimeout(tiendaCargarRecibir, 800);
-      } else {
-        alerta(d.error || 'Error al confirmar', 'error');
-        if (btn) { btn.textContent = todoContado ? '✓ Confirmar recepción' : '⚠ Confirmar recepción parcial'; btn.disabled = false; }
-      }
+      alerta(e.message || 'Error al confirmar', 'error');
+      if (btn) { btn.textContent = todoContado ? '✓ Confirmar recepción' : '⚠ Confirmar recepción parcial'; btn.disabled = false; }
     }
-  } catch (e) {
-    alerta('Error de conexión', 'error');
-    if (btn) { btn.textContent = todoContado ? '✓ Confirmar recepción' : '⚠ Confirmar recepción parcial'; btn.disabled = false; }
   }
 }
 
@@ -1080,14 +1082,15 @@ function _tiendaOCRenderScan() {
 
       <div style="background:#111;border-radius:10px;padding:12px;margin-bottom:12px;">
         <div style="font-size:12px;color:#666;text-align:center;margin-bottom:10px;">Escanea unidad, caja o paca — el sistema calcula las unidades</div>
-        <button onclick="abrirCamara('lector-qr-toc','camara-box-toc', cod => { cerrarCamara('camara-box-toc'); tiendaOCProcesarScan(cod); })"
+        ${OPERARIO && OPERARIO.puede_usar_camara ? `
+        <button onclick="abrirCamara('lector-qr-toc','camara-box-toc', tiendaOCProcesarScan, this)"
           style="width:100%;padding:13px;font-size:16px;background:#fff;color:#000;border:2px solid #000;border-radius:10px;cursor:pointer;margin-bottom:8px;">
           📷 Escanear con cámara
         </button>
         <div id="camara-box-toc" style="display:none;margin-bottom:8px;">
           <div id="lector-qr-toc" style="border-radius:10px;overflow:hidden;"></div>
           <button onclick="cerrarCamara('camara-box-toc')" style="width:100%;padding:9px;margin-top:6px;font-size:14px;background:#333;color:#fff;border:none;border-radius:8px;cursor:pointer;">Cerrar cámara</button>
-        </div>
+        </div>` : ''}
         <div style="display:flex;gap:8px;margin-bottom:8px;">
           <input id="toc-codigo-manual" type="text" placeholder="O escribe / pega el código aquí"
             style="flex:1;padding:10px;background:#0d0d0d;border:1px solid #333;border-radius:8px;color:#fff;font-size:14px;"

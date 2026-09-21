@@ -9,15 +9,17 @@ import threading
 from datetime import datetime, date, time as dtime
 from app.extensions import db
 
-# Un pedido con MENOS líneas (SKU distintos) que esto es "chico": una vez que
-# un operario toma su primera línea, las demás quedan pegadas a ese mismo
-# operario — nadie más puede tomarlas hasta que las termine (o un admin
-# reabra el pedido). Evita partir pedidos pequeños entre varios pickers, que
-# no gana velocidad real y sí le suma coordinación al empaque (esperar al
-# más lento de varios). Un pedido con ESTA cantidad de líneas o más sigue
-# repartiéndose libre entre cualquier picker disponible — ahí sí conviene
-# paralelizar. Solo aplica a PEDIDO, nunca a TRASLADO.
-PEDIDO_LINEAS_PARALELIZABLE = int(os.environ.get('PEDIDO_LINEAS_PARALELIZABLE', '4'))
+# Un pedido con MENOS líneas (SKU distintos) que esto Y donde NINGUNA línea
+# llega a PEDIDO_UNIDADES_PARALELIZABLE es "chico": una vez que un operario
+# toma su primera línea, las demás quedan pegadas a ese mismo operario —
+# nadie más puede tomarlas hasta que las termine (o un admin reabra el
+# pedido). Evita partir pedidos pequeños entre varios pickers, que no gana
+# velocidad real y sí le suma coordinación al empaque (esperar al más lento
+# de varios). Basta con QUE UNA sola condición se cumpla (líneas o unidades)
+# para que el pedido se trate como grande y se reparta libre entre cualquier
+# picker disponible. Solo aplica a PEDIDO, nunca a TRASLADO.
+PEDIDO_LINEAS_PARALELIZABLE = int(os.environ.get('PEDIDO_LINEAS_PARALELIZABLE', '6'))
+PEDIDO_UNIDADES_PARALELIZABLE = int(os.environ.get('PEDIDO_UNIDADES_PARALELIZABLE', '30'))
 
 # Debounce de scans: evita doble-conteo cuando la red cae después del commit
 # y la PWA reintenta el mismo scan. Cache por (tarea_id, tipo, codigo) → (ts, resultado).
@@ -38,6 +40,28 @@ from app.services.packing_service import PackingService
 from app.services.conteo_service import ConteoService
 
 logger = logging.getLogger(__name__)
+
+
+def _pedido_es_chico(referencia_documento: str) -> bool:
+    """¿Este documento debe quedar pegado a un solo operario?
+
+    Chico = menos de PEDIDO_LINEAS_PARALELIZABLE SKU distintos Y ninguna
+    línea llega a PEDIDO_UNIDADES_PARALELIZABLE unidades. Lee TODAS las
+    TareaPicking del documento sin importar su estado — el tamaño original
+    del pedido no cambia porque una línea ya se completó (mismo criterio
+    que el filtro de la cola, ver PEDIDO_LINEAS_PARALELIZABLE arriba).
+    """
+    from sqlalchemy import func as _func
+    fila = (db.session.query(
+                _func.count(_func.distinct(TareaPicking.producto_id)),
+                _func.max(TareaPicking.cantidad_solicitada),
+            )
+            .filter(TareaPicking.referencia_documento == referencia_documento)
+            .first())
+    lineas = (fila[0] or 0) if fila else 0
+    max_unidades = (fila[1] or 0) if fila else 0
+    return (lineas < PEDIDO_LINEAS_PARALELIZABLE
+            and max_unidades < PEDIDO_UNIDADES_PARALELIZABLE)
 
 
 class MobileService:
@@ -137,7 +161,7 @@ class MobileService:
         }
 
     @staticmethod
-    def get_tarea_actual(operario_id: int):
+    def get_tarea_actual(operario_id: int, _intento: int = 0):
         """
         Dispensador automático — el operario pide trabajo y el sistema lo asigna.
         Si ya tiene una tarea en proceso la devuelve.
@@ -146,6 +170,10 @@ class MobileService:
         más pendientes ahí, toma la siguiente de la cola global en orden
         físico de recorrido (pasillo->fila->cuerpo->nivel->hueco — ver
         PickingService.orden_ruta_fisica()), no por fecha de creación.
+
+        `_intento` es interno — ver el blindaje de pedido chico más abajo:
+        cuando el candidato elegido queda obsoleto por una carrera, esta
+        función se reintenta a sí misma (con tope) en vez de devolver `None`.
         """
         # Verificar si ya tiene tarea activa — eager-load relaciones para evitar lazy queries
         from sqlalchemy.orm import joinedload as _jl
@@ -174,6 +202,7 @@ class MobileService:
                 'referencia': tarea_activa.referencia_documento,
                 'lote': tarea_activa.lote,
                 'disponible_siesa': float(tarea_activa.disponible_siesa) if tarea_activa.disponible_siesa is not None else None,
+                'cantidad_pedida': float(tarea_activa.cantidad_pedida) if tarea_activa.cantidad_pedida is not None else None,
             }
 
         # Tomar siguiente tarea de la cola global — más prioritaria y más antigua.
@@ -210,6 +239,18 @@ class MobileService:
             _almacen_propio = _Alm.query.get(_u_pick.almacen_id)
             _bodega_propia = _almacen_propio.bodega_siesa_id if _almacen_propio else None
 
+        # Modo operativo del supervisor (2026-09-14) — apoya picking de
+        # pedidos/traslados y reposición, EXCLUSIVO de NB1 (única bodega con
+        # zonas RESERVA/PICKING físicas, ver Reposición Micro). Nunca conteo
+        # cíclico: el supervisor ya resuelve el Conteo Definitivo (CC3) cuando
+        # CC1≠CC2 — si también pudiera contar CC1/CC2, sería juez y parte de
+        # su propio desempate. La exclusión de conteo vive más abajo; acá solo
+        # se corta en seco a cualquier supervisor fuera de NB1, para que el
+        # alcance no dependa de que ninguna otra bodega tenga tareas que darle.
+        _es_supervisor = bool(_u_pick and _u_pick.rol == 'supervisor')
+        if _es_supervisor and _bodega_propia != 'NB1':
+            return None
+
         # Subquery: IDs de ubicaciones permitidas para pickers (no RESERVA)
         _ids_validos = db.session.query(Ubicacion.id).filter(
             Ubicacion.tipo_zona.in_(['PICKING', 'GENERAL'])
@@ -232,16 +273,34 @@ class MobileService:
                 )
             )
 
-        # Pedido chico (< PEDIDO_LINEAS_PARALELIZABLE líneas = SKU distintos) ya
-        # tocado por OTRO operario -> esta fila no es candidata para mí. "Líneas"
-        # se cuenta sobre TODAS las TareaPicking del documento sin importar su
-        # estado (el tamaño original del pedido no cambia porque una línea ya
-        # se completó). TRASLADO nunca entra aquí — solo PEDIDO (tipo_documento
-        # NULL cuenta como PEDIDO, igual que en _orden_dispatch más abajo).
+        # Pedido chico (< PEDIDO_LINEAS_PARALELIZABLE líneas = SKU distintos, Y
+        # ninguna línea llega a PEDIDO_UNIDADES_PARALELIZABLE unidades) ya
+        # tocado por OTRO operario -> esta fila no es candidata para mí. Basta
+        # con que se cumpla UNA de las dos condiciones (muchas líneas o una
+        # línea grande) para que el pedido se trate como grande y siga
+        # repartiéndose libre. "Líneas"/"unidades" se miden sobre TODAS las
+        # TareaPicking del documento sin importar su estado (el tamaño
+        # original del pedido no cambia porque una línea ya se completó).
+        # TRASLADO nunca entra aquí — solo PEDIDO (tipo_documento NULL cuenta
+        # como PEDIDO, igual que en _orden_dispatch más abajo).
+        #
+        # Esta es la comprobación "optimista" de la cola — barata, sin locks,
+        # y suficiente en el caso normal. La comprobación que de verdad cierra
+        # la condición de carrera (dos operarios pidiendo tarea casi al mismo
+        # tiempo) es la re-verificación bajo advisory lock justo antes de
+        # comitear la asignación, más abajo — ver _pedido_es_chico().
         from sqlalchemy.orm import aliased as _aliased
         _TP_otra = _aliased(TareaPicking)
+        # 'PEDIDO_SIESA' es el valor REAL que escribe iniciar_despacho() (ver
+        # app/routes/siesa.py) — el único camino de producción que crea estas
+        # tareas. 'PEDIDO' nunca lo escribe nadie en producción (solo el
+        # default de tests) — con el guard viejo, comparando solo contra
+        # 'PEDIDO', esta regla completa quedaba en `db.not_(_es_pedido) = True`
+        # siempre para pedidos reales: la protección nunca corría y el pedido
+        # se repartía libre pese al umbral. PD1487 se partió en dos operarios
+        # con el fix del umbral ya desplegado — este era el motivo real.
         _es_pedido = db.or_(
-            TareaPicking.tipo_documento == 'PEDIDO',
+            TareaPicking.tipo_documento.in_(['PEDIDO', 'PEDIDO_SIESA']),
             TareaPicking.tipo_documento.is_(None),
         )
         _lineas_del_doc = (
@@ -249,6 +308,16 @@ class MobileService:
             .filter(_TP_otra.referencia_documento == TareaPicking.referencia_documento)
             .correlate(TareaPicking)
             .scalar_subquery()
+        )
+        _max_unidades_del_doc = (
+            db.session.query(db.func.max(_TP_otra.cantidad_solicitada))
+            .filter(_TP_otra.referencia_documento == TareaPicking.referencia_documento)
+            .correlate(TareaPicking)
+            .scalar_subquery()
+        )
+        _es_paralelizable_doc = db.or_(
+            _lineas_del_doc >= PEDIDO_LINEAS_PARALELIZABLE,
+            _max_unidades_del_doc >= PEDIDO_UNIDADES_PARALELIZABLE,
         )
         _otro_operario_ya_lo_tiene = (
             db.session.query(_TP_otra.id)
@@ -263,7 +332,7 @@ class MobileService:
         _filtros_base.append(
             db.or_(
                 db.not_(_es_pedido),
-                _lineas_del_doc >= PEDIDO_LINEAS_PARALELIZABLE,
+                _es_paralelizable_doc,
                 db.not_(_otro_operario_ya_lo_tiene),
             )
         )
@@ -328,8 +397,12 @@ class MobileService:
                 if rep:
                     return rep
 
-            # Roles de tienda/traslado nunca reciben conteos cíclicos — solo NB1
-            if not _solo_traslado:
+            # Roles de tienda/traslado nunca reciben conteos cíclicos — solo NB1.
+            # Tampoco el supervisor en modo operativo (ver guarda de arriba):
+            # apoya picking/traslado (arriba) y reposición (justo arriba), pero
+            # el conteo cíclico regular sigue siendo exclusivo de operarios —
+            # ver la nota "juez y parte" en la guarda de NB1 más arriba.
+            if not _solo_traslado and not _es_supervisor:
                 # Retomar el conteo propio en curso (pospuesto arriba porque un
                 # picking/traslado nuevo tiene prioridad). Ya no hay nada pendiente,
                 # así que se le devuelve tal cual quedó, con lo ya contado intacto.
@@ -368,6 +441,12 @@ class MobileService:
                 resultado = MobileService.get_tareas_operario(operario_id)
                 if resultado['tareas']:
                     return resultado['tareas'][0]
+                return None
+
+            # Supervisor sin picking ni reposición pendiente: nada más que
+            # ofrecerle. Nunca cae al bloque de abajo (limpieza de conteos de
+            # otra bodega) — es exclusivo de roles de tienda/traslado.
+            if _es_supervisor:
                 return None
 
             # Liberar conteos de OTRA bodega asignados erróneamente.
@@ -482,55 +561,116 @@ class MobileService:
                         f'({conteos_hoy + 1 if capacidad > 0 else "∞"}/{capacidad or "∞"})'
                     )
 
-        # Capturar atributos antes del commit — expire_on_commit los invalida después
-        _tarea_id = tarea.id
-        _tarea_codigo = tarea.codigo
-        _tarea_prioridad = tarea.prioridad
-        _tarea_ubicacion = tarea.ubicacion.codigo if tarea.ubicacion else ''
-        _tarea_producto_id = tarea.producto_id
-        _tarea_almacen_id = tarea.almacen_id
-        _tarea_producto_codigo = tarea.producto.codigo if tarea.producto else ''
-        _tarea_producto_nombre = tarea.producto.nombre if tarea.producto else ''
-        _tarea_cantidad_requerida = tarea.cantidad_solicitada
-        _tarea_cantidad_escaneada = tarea.cantidad_recogida
-        _tarea_empaques_escaneados = tarea.empaques_escaneados or 0
-        _tarea_factor = tarea.producto.factor_conversion or 1 if tarea.producto else 1
-        _tarea_unidad_empaque = (tarea.producto.unidad_empaque or '').upper() if tarea.producto else ''
-        _tarea_referencia = tarea.referencia_documento
-        _tarea_lote = tarea.lote
-        _tarea_tipo_documento = tarea.tipo_documento or 'PEDIDO'
-        _tarea_disponible_siesa = float(tarea.disponible_siesa) if tarea.disponible_siesa is not None else None
+        def _finalizar_asignacion():
+            # Capturar atributos antes del commit — expire_on_commit los invalida después
+            _tarea_id = tarea.id
+            _tarea_codigo = tarea.codigo
+            _tarea_prioridad = tarea.prioridad
+            _tarea_ubicacion = tarea.ubicacion.codigo if tarea.ubicacion else ''
+            _tarea_producto_id = tarea.producto_id
+            _tarea_almacen_id = tarea.almacen_id
+            _tarea_producto_codigo = tarea.producto.codigo if tarea.producto else ''
+            _tarea_producto_nombre = tarea.producto.nombre if tarea.producto else ''
+            _tarea_cantidad_requerida = tarea.cantidad_solicitada
+            _tarea_cantidad_escaneada = tarea.cantidad_recogida
+            _tarea_empaques_escaneados = tarea.empaques_escaneados or 0
+            _tarea_factor = tarea.producto.factor_conversion or 1 if tarea.producto else 1
+            _tarea_unidad_empaque = (tarea.producto.unidad_empaque or '').upper() if tarea.producto else ''
+            _tarea_referencia = tarea.referencia_documento
+            _tarea_lote = tarea.lote
+            _tarea_tipo_documento = tarea.tipo_documento or 'PEDIDO'
+            _tarea_disponible_siesa = float(tarea.disponible_siesa) if tarea.disponible_siesa is not None else None
+            _tarea_cantidad_pedida = float(tarea.cantidad_pedida) if tarea.cantidad_pedida is not None else None
 
-        # Asignar picking al operario
-        tarea.operario_id = operario_id
-        tarea.estado = EstadoPicking.EN_PROCESO
-        tarea.fecha_inicio = datetime.utcnow()
-        db.session.commit()
+            # Asignar picking al operario
+            tarea.operario_id = operario_id
+            tarea.estado = EstadoPicking.EN_PROCESO
+            tarea.fecha_inicio = datetime.utcnow()
+            db.session.commit()
 
-        logger.info(f'[MOBILE] Picking {_tarea_codigo} asignado a operario {operario_id}')
+            logger.info(f'[MOBILE] Picking {_tarea_codigo} asignado a operario {operario_id}')
 
-        resultado = {
-            'id': _tarea_id,
-            'tipo': 'PICKING',
-            'tipo_documento': _tarea_tipo_documento,
-            'prioridad': _tarea_prioridad,
-            'ubicacion': _tarea_ubicacion,
-            'producto_id': _tarea_producto_id,
-            'almacen_id': _tarea_almacen_id,
-            'producto_codigo': _tarea_producto_codigo,
-            'producto_nombre': _tarea_producto_nombre,
-            'cantidad_requerida': _tarea_cantidad_requerida,
-            'cantidad_escaneada': _tarea_cantidad_escaneada,
-            'empaques_escaneados': _tarea_empaques_escaneados,
-            'factor_conversion': _tarea_factor,
-            'unidad_empaque': _tarea_unidad_empaque,
-            'estado': 'EN_PROCESO',
-            'referencia': _tarea_referencia,
-            'lote': _tarea_lote,
-            'conteo_intercalado': conteo_intercalado,
-            'disponible_siesa': _tarea_disponible_siesa,
-        }
-        return resultado
+            return {
+                'id': _tarea_id,
+                'tipo': 'PICKING',
+                'tipo_documento': _tarea_tipo_documento,
+                'prioridad': _tarea_prioridad,
+                'ubicacion': _tarea_ubicacion,
+                'producto_id': _tarea_producto_id,
+                'almacen_id': _tarea_almacen_id,
+                'producto_codigo': _tarea_producto_codigo,
+                'producto_nombre': _tarea_producto_nombre,
+                'cantidad_requerida': _tarea_cantidad_requerida,
+                'cantidad_escaneada': _tarea_cantidad_escaneada,
+                'empaques_escaneados': _tarea_empaques_escaneados,
+                'factor_conversion': _tarea_factor,
+                'unidad_empaque': _tarea_unidad_empaque,
+                'estado': 'EN_PROCESO',
+                'referencia': _tarea_referencia,
+                'lote': _tarea_lote,
+                'conteo_intercalado': conteo_intercalado,
+                'disponible_siesa': _tarea_disponible_siesa,
+                'cantidad_pedida': _tarea_cantidad_pedida,
+            }
+
+        # ── Blindaje de pedidos chicos contra condición de carrera ──────────
+        # El filtro que armó la query de arriba lee estado ya comiteado: si
+        # dos operarios piden tarea casi al mismo tiempo, los dos pueden
+        # pasarlo ANTES de que el primero comitee su asignación — cada uno se
+        # queda con una línea distinta del mismo pedido chico. Se cierra con
+        # un advisory lock por documento: solo una petición a la vez decide
+        # y comitea la asignación de un pedido chico. La segunda, ya con el
+        # primero comiteado, ve el pedido tomado y no se queda con nada esta
+        # vez — reintenta en el siguiente poll (segundos después, comportamiento
+        # normal del dispensador), en vez de partir el pedido.
+        _tarea_es_pedido = tarea.tipo_documento in (None, 'PEDIDO', 'PEDIDO_SIESA')
+        _requiere_blindaje = (
+            _tarea_es_pedido
+            and tarea.referencia_documento
+            and _pedido_es_chico(tarea.referencia_documento)
+        )
+
+        if not _requiere_blindaje:
+            return _finalizar_asignacion()
+
+        # Dos peticiones del MISMO operario casi seguidas son el caso normal,
+        # no la excepción: el poll cada 5s de app.js (`if (!TAREA_ACTUAL)
+        # pedirTarea()`) y el `setTimeout(pedirTarea, 1500)` que dispara
+        # confirmar() se solapan seguido, porque TAREA_ACTUAL queda en null
+        # apenas se confirma. Si la segunda petición choca contra el lock o
+        # ve el documento ya tomado, NO es que no haya trabajo — es que su
+        # candidato quedó obsoleto por la carrera. Reintentar desde el
+        # principio (con tope) lo resuelve solo: para cuando reintenta, la
+        # primera petición (mismo operario) ya comiteó, y `tarea_activa` al
+        # inicio de la función la encuentra de inmediato. Devolver `None`
+        # acá se traducía en la pantalla «Sin tareas pendientes» después de
+        # CADA confirmación en un pedido chico — el operario sí tenía la
+        # siguiente línea, el dispensador se la negó por esta carrera.
+        _MAX_REINTENTOS = 3
+        import zlib
+        from app.utils.lock import advisory_lock
+        _clave_doc = zlib.crc32(tarea.referencia_documento.encode('utf-8')) & 0x7FFFFFFF
+        with advisory_lock(_clave_doc, f'pedido_chico:{tarea.referencia_documento}') as _tomado:
+            if not _tomado:
+                db.session.rollback()
+                if _intento >= _MAX_REINTENTOS:
+                    return None
+                return MobileService.get_tarea_actual(operario_id, _intento + 1)
+            _ya_lo_tiene_otro = (
+                TareaPicking.query
+                .filter(
+                    TareaPicking.referencia_documento == tarea.referencia_documento,
+                    TareaPicking.operario_id.isnot(None),
+                    TareaPicking.operario_id != operario_id,
+                )
+                .first()
+            )
+            if _ya_lo_tiene_otro:
+                db.session.rollback()
+                if _intento >= _MAX_REINTENTOS:
+                    return None
+                return MobileService.get_tarea_actual(operario_id, _intento + 1)
+            return _finalizar_asignacion()
 
     @staticmethod
     def _conteo_a_dict(c: SesionConteo) -> dict:
@@ -591,6 +731,17 @@ class MobileService:
         return MobileService._conteo_a_dict(sesion)
 
     @staticmethod
+    def _orden_cola_preasignada() -> tuple:
+        """
+        Criterio de orden de los conteos PENDIENTE ya asignados a un operario:
+        primero los forzados por un admin (tipo MANUAL), luego el resto por
+        antigüedad. Sin esto un conteo forzado hoy quedaba detrás de todo lo
+        viejo que el operario ya tenía en cola (PD1494, 2026-09-18).
+        """
+        forzado_primero = db.case((SesionConteo.tipo == 'MANUAL', 0), else_=1)
+        return (forzado_primero, SesionConteo.fecha_creacion.asc())
+
+    @staticmethod
     def _get_conteo_preassignado(operario_id: int):
         """
         SRP: activa y retorna un conteo pre-asignado PENDIENTE (ej: CC2 de doble ciego).
@@ -608,7 +759,7 @@ class MobileService:
                 SesionConteo.operario_id == operario_id,
                 SesionConteo.estado == _EC.PENDIENTE,
             )
-            .order_by(SesionConteo.fecha_creacion.asc())
+            .order_by(*MobileService._orden_cola_preasignada())
             .with_for_update(skip_locked=True)
             .first()
         )
@@ -911,6 +1062,22 @@ class MobileService:
                       .first())
             if not sesion:
                 raise ValueError('Sesión de conteo no encontrada')
+
+            # Ownership + estado — mismo criterio que `ConteoService.registrar_conteo`
+            # y `reportar_problema` (routes/mobile.py). Sin esto, cualquier operario
+            # de almacén podía escanear hacia el sesion_id de OTRO (rompiendo el
+            # double-blind de CC2/CC3) o hacia una sesión ya cerrada (MATCH,
+            # DESCUADRE, AJUSTADO — ya enviada a Siesa), sobrescribiendo
+            # cantidad_fisica en silencio.
+            if sesion.operario_id and sesion.operario_id != operario_id:
+                raise ValueError('Esta sesión de conteo no está asignada a ti')
+            if sesion.estado not in (EstadoConteo.PENDIENTE, EstadoConteo.EN_PROCESO):
+                raise ValueError(f'No se puede escanear en un conteo con estado {sesion.estado}')
+            # CC3 (conteo definitivo) nace sin dueño a propósito — sin este
+            # chequeo, cualquier operario podía "tomarlo" escaneando directo
+            # aquí sin pasar por /api/conteo/definitivos, que sí exige
+            # supervisor/admin/jefe_almacén.
+            ConteoService.verificar_puede_tomar_definitivo(sesion, operario_id)
 
             producto = sesion.producto
             if codigo_limpio not in MobileService._codigos_validos(producto):

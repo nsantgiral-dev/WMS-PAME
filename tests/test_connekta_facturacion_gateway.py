@@ -46,16 +46,16 @@ class TestTriggerComprometerPedido:
 
     def test_prioriza_id_item_sobre_referencia(self, app, monkeypatch):
         with app.app_context():
-            from app.services.connekta_gateway import connekta
+            from app.services.connekta_gateway import connekta, ConnektaGateway
 
             monkeypatch.setattr(connekta, 'modo_simulacion', False)
             capturado = {}
 
-            def _fake_post(conector, nombre, payload, url=None, extra_params=None):
+            def _fake_post(self, conector, nombre, payload, url=None, extra_params=None):
                 capturado['payload'] = payload
                 return {'codigo': 0}
 
-            monkeypatch.setattr(connekta, '_post', _fake_post)
+            monkeypatch.setattr(ConnektaGateway, '_post', _fake_post)
             connekta.trigger_comprometer_pedido('100', [{
                 'referencia_item': 'P001', 'id_item': 12345,
                 'cant_base': 8, 'nro_registro': 470418, 'cant_por_remisionar': 8,
@@ -100,16 +100,16 @@ class TestTriggerDespacho:
 
     def test_filtra_items_en_cero_y_arma_payload(self, app, monkeypatch):
         with app.app_context():
-            from app.services.connekta_gateway import connekta
+            from app.services.connekta_gateway import connekta, ConnektaGateway
 
             monkeypatch.setattr(connekta, 'modo_simulacion', False)
             capturado = {}
 
-            def _fake_post(conector, nombre, payload, url=None, extra_params=None):
+            def _fake_post(self, conector, nombre, payload, url=None, extra_params=None):
                 capturado['payload'] = payload
                 return {'codigo': 0}
 
-            monkeypatch.setattr(connekta, '_post', _fake_post)
+            monkeypatch.setattr(ConnektaGateway, '_post', _fake_post)
             connekta.trigger_despacho('PD', '1', [
                 {'producto_codigo': 'P001', 'cantidad_empacada': 5},
                 {'producto_codigo': 'P002', 'cantidad_empacada': 0},
@@ -137,7 +137,8 @@ class TestTriggerFactura:
             monkeypatch.setattr(connekta, 'modo_simulacion', False)
             monkeypatch.setattr(connekta, 'get_estado_pedido', lambda t, c: '4')
             llamado = {}
-            monkeypatch.setattr(connekta, '_post',
+            from app.services.connekta_gateway import ConnektaGateway
+            monkeypatch.setattr(ConnektaGateway, '_post',
                                  lambda *a, **k: llamado.setdefault('si', True))
             res = connekta.trigger_factura('PD', '1', [])
             assert res == {'idempotente': True, 'mensaje': 'Pedido ya facturado en Siesa (estado=4)'}
@@ -145,17 +146,17 @@ class TestTriggerFactura:
 
     def test_payload_referencia_el_pedido(self, app, monkeypatch):
         with app.app_context():
-            from app.services.connekta_gateway import connekta
+            from app.services.connekta_gateway import connekta, ConnektaGateway
 
             monkeypatch.setattr(connekta, 'modo_simulacion', False)
             monkeypatch.setattr(connekta, 'get_estado_pedido', lambda t, c: '3')
             capturado = {}
 
-            def _fake_post(conector, nombre, payload, url=None, extra_params=None):
+            def _fake_post(self, conector, nombre, payload, url=None, extra_params=None):
                 capturado['payload'] = payload
                 return {'codigo': 0}
 
-            monkeypatch.setattr(connekta, '_post', _fake_post)
+            monkeypatch.setattr(ConnektaGateway, '_post', _fake_post)
             connekta.trigger_factura('PD', '100', [])
             doc = capturado['payload']['Docto_ventas_comercial'][0]
             assert doc['F430_ID_TIPO_DOCTO'] == 'PD'
@@ -185,15 +186,15 @@ class TestTriggerFacturaDesdeRemision:
 
     def test_payload_usa_condicion_de_ruta_si_pedido_no_trae_ninguna(self, app, monkeypatch):
         with app.app_context():
-            from app.services.connekta_gateway import connekta
+            from app.services.connekta_gateway import connekta, ConnektaGateway
 
             capturado = {}
 
-            def _fake_post(conector, nombre, payload):
+            def _fake_post(self, conector, nombre, payload):
                 capturado['payload'] = payload
                 return {'codigo': 0}
 
-            monkeypatch.setattr(connekta, '_post', _fake_post)
+            monkeypatch.setattr(ConnektaGateway, '_post', _fake_post)
             connekta.trigger_factura_desde_remision('RM', 42, {
                 'f200_id_pedido_fact': '900123', 'f461_id_punto_envio': '000',
             })

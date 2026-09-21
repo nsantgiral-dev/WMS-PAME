@@ -1972,6 +1972,21 @@ if resultado.get('modo_ensayo'):
 ## Testing
 
 ```bash
+# ⚠️ EN WINDOWS — PYTHONUTF8=1 es obligatorio, no opcional
+#
+# Decenas de tests leen código fuente propio (.py/.js) con
+# `Path.read_text()`/`open()` sin `encoding='utf-8'` explícito, para hacer
+# AST/texto sobre él (son los guards de invariantes de este repo). Python
+# por defecto usa la codificación del SISTEMA para esas lecturas — en Linux
+# (Railway, donde corre el build) eso ya es UTF-8, pero en Windows es
+# cp1252. Como el repo tiene comentarios/docstrings en español con tildes,
+# esa lectura falla con `UnicodeDecodeError` — o peor, decodifica mal en
+# silencio y revienta más adelante con un `SyntaxError` que no tiene nada
+# que ver con el bug real. **No es una falla de lógica del sistema — es el
+# intérprete leyendo con la codificación equivocada.** Verificado 2026-09-17:
+# de 97 tests que fallaban en local, 96 pasaron en verde con solo agregar
+# `PYTHONUTF8=1`, cero cambios de código.
+#
 # ⚠️ ANTES DE PUSHEAR ALGO CON FECHAS — el reloj del CI no es el tuyo
 #
 # Railway corre en UTC. Entre las 7 p.m. y la medianoche de Bogotá, allá ya es
@@ -1980,20 +1995,32 @@ if resultado.get('modo_ensayo'):
 # Cinco horas al día, de un solo lado, y reintentar «lo arregla».
 #
 # Rompió el build 52c0e4de (2026-08-13 20:41). Ver `tests/conftest.py::hoy_operativo`.
-TZ=UTC venv/bin/python -m pytest tests/ -q -m "not postgres"
+PYTHONUTF8=1 TZ=UTC venv/bin/python -m pytest tests/ -q -m "not postgres"
 
 # Suite completa
-venv/bin/python -m pytest tests/ -v --tb=short
+PYTHONUTF8=1 venv/bin/python -m pytest tests/ -v --tb=short
 
 # Solo formatos (rápido, sin DB)
-venv/bin/python -m pytest tests/test_siesa_formatos.py -v
+PYTHONUTF8=1 venv/bin/python -m pytest tests/test_siesa_formatos.py -v
 
 # Solo contracts (rápido, sin DB)
-venv/bin/python -m pytest tests/test_siesa_contracts.py -v
+PYTHONUTF8=1 venv/bin/python -m pytest tests/test_siesa_contracts.py -v
 
 # Con DB (integration)
-venv/bin/python -m pytest tests/test_siesa_dlq.py tests/test_liquidacion.py tests/test_siesa_guards.py -v
+PYTHONUTF8=1 venv/bin/python -m pytest tests/test_siesa_dlq.py tests/test_liquidacion.py tests/test_siesa_guards.py -v
 ```
+
+### `scripts/` es código versionado — el prefijo `_` NO exime del trinquete
+
+`test_deuda_legacy.py::test_todo_scripts_esta_en_el_repo` exige que **todo**
+`.py` en `scripts/` esté trackeado — sin excepción por nombre. Un script de
+verificación real (`qa_*_real.py`) se commitea porque es evidencia; un
+script de una sola corrida (`_algo.py`, convención informal usada alguna vez
+para "no entrar al trinquete") **no se crea en `scripts/`** — o se commitea
+si vale la pena conservarlo, o se corre desde el directorio de scratchpad y
+se borra al terminar. El 2026-09-17 había 19 `.py` sueltos sin trackear (12
+de un solo uso, 7 `qa_*_real.py` con evidencia real de pruebas contra Siesa
+QA) — los de un solo uso se borraron, los 7 reales se commitearon.
 
 ### Tiers Siesa (los que protegen la integración)
 

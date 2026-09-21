@@ -231,6 +231,58 @@ class TestIniciarDespachoExcluyeLineaSinCompromiso:
         codigos_error = [e['item_codigo'] for e in data.get('errores', [])]
         assert 'BELLESB1382' in codigos_error
 
+    def test_compromiso_parcial_solo_deja_pickear_lo_comprometido(
+        self, app, db, client, jwt_token_admin, almacen, producto,
+    ):
+        """PD1494: Siesa comprometió 2 de 4 → picking de 2, las otras 2 nacen
+        BLOQUEADAS (auditoría) y el packing espera 2, no 4."""
+        from app.models.picking import TareaPicking
+
+        producto.codigo_siesa = 'ARTESA173'
+        db.session.commit()
+
+        t_pick = TareaPicking(producto_id=producto.id, cantidad_solicitada=2,
+                              ubicacion_id=None, almacen_id=almacen.id, estado='PENDIENTE')
+        t_resto = TareaPicking(producto_id=producto.id, cantidad_solicitada=2,
+                               ubicacion_id=None, almacen_id=almacen.id, estado='PENDIENTE')
+
+        with patch(
+            'app.services.despacho_parcial_service.DespachoParialService.obtener_compromisos',
+            return_value=[{'f120_referencia': 'ARTESA173',
+                           'f405_cant_por_remisionar_base': 2}],
+        ), patch(
+            'app.services.picking_service.PickingService.crear_tareas',
+            side_effect=[[t_pick], [t_resto]],
+        ) as mock_crear_tareas, patch(
+            'app.services.picking_service.PickingService.bloquear_por_backorder_siesa'
+        ) as mock_bloquear, patch(
+            'app.services.packing_service.PackingService.crear_manual'
+        ) as mock_crear_manual:
+            mock_crear_manual.return_value = type('P', (), {
+                'to_dict': lambda self: {}, 'id': 1, 'codigo': 'PACK-TEST',
+            })()
+
+            resp = client.post(
+                '/api/siesa/iniciar-despacho',
+                json={
+                    'numero_pedido': 'PD1494', 'tipo_docto': 'PD',
+                    'consec_docto': '1494', 'almacen_id': almacen.id,
+                    'items': [{
+                        'producto_id': producto.id, 'item_codigo': 'ARTESA173',
+                        'cantidad_pendiente': 4, 'producto_nombre_wms': 'Acrilico',
+                    }],
+                },
+                headers={'Authorization': f'Bearer {jwt_token_admin}'},
+            )
+
+        assert resp.status_code in (200, 201, 207), resp.get_json()
+        assert [c.kwargs['cantidad'] for c in mock_crear_tareas.call_args_list] == [2, 2]
+        mock_bloquear.assert_called_once()
+        assert mock_bloquear.call_args.args[0] == [t_resto]
+        assert mock_crear_manual.call_args.kwargs['items'] == [
+            {'producto_id': producto.id, 'cantidad': 2}
+        ]
+
     def test_fallo_al_consultar_compromisos_no_bloquea_ningun_item(
         self, app, db, client, jwt_token_admin, almacen, producto,
     ):
@@ -368,3 +420,95 @@ class TestPickingBloqueadoEnPantallaDeEmpaque:
         )
         assert tarea['picking_listo'] is False
         assert tarea['picking_bloqueado'] is False
+
+
+class TestBackorderParcialSinStockEnElWMS:
+    """PD1497 (2026-09-18): el pedido pedía 4, Siesa comprometió 2 y el WMS solo
+    tenía 2. El resto no se podía reservar, la tarea bloqueada nunca se creó y
+    no quedó nada en Bodega → Auditoría. Tiene que quedar SIEMPRE."""
+
+    def _setup(self, db, ub_picking, inv_picking):
+        inv_picking.cantidad = 2
+        # Unidades congeladas por OTRA tarea en la misma ubicación: cancelar o
+        # auditar la bloqueada sin stock no puede tocarlas.
+        inv_picking.bloqueado = 1
+        db.session.commit()
+
+    def test_el_faltante_queda_bloqueado_sin_congelar_unidades(
+        self, app, db, almacen, producto, ub_picking, inv_picking,
+    ):
+        from app.models.picking import EstadoPicking
+        from app.services.picking_service import PickingService
+
+        self._setup(db, ub_picking, inv_picking)
+        # cantidad_disponible = 2 - 0 - 1 = 1: para el 2 no alcanza. Se lo damos
+        # completo al primer intento y nada al segundo.
+        inv_picking.bloqueado = 0
+        db.session.commit()
+
+        r = PickingService.crear_tareas_con_compromiso(
+            producto_id=producto.id, cantidad=4, compromiso_siesa=2,
+            almacen_id=almacen.id, referencia_documento='PD1497',
+            tipo_documento='PEDIDO_SIESA', prioridad=2, detalle='Siesa comprometió 2 de 4',
+        )
+
+        assert r.cantidad_pickeable == 2
+        assert [t.cantidad_solicitada for t in r.pickeables] == [2]
+        assert [t.estado for t in r.pickeables] == [EstadoPicking.PENDIENTE]
+
+        assert len(r.bloqueadas) == 1
+        b = r.bloqueadas[0]
+        assert b.estado == EstadoPicking.BLOQUEADO
+        assert b.motivo_bloqueo == 'BACKORDER_SIESA'
+        assert b.cantidad_solicitada == 2
+        assert b.bloqueo_sin_stock is True
+        assert b.ubicacion_id == ub_picking.id
+
+        # Lo pedido queda en TODAS las tareas de la línea (trazabilidad).
+        assert float(r.pickeables[0].cantidad_pedida) == 4
+        assert float(b.cantidad_pedida) == 4
+
+        db.session.refresh(inv_picking)
+        assert inv_picking.reservado == 2      # solo la pickeable
+        assert inv_picking.bloqueado == 0      # nada congelado: no había stock
+
+    def test_auditar_la_bloqueada_sin_stock_no_toca_lo_congelado_por_otras(
+        self, app, db, almacen, producto, ub_picking, inv_picking, usuario_admin,
+    ):
+        from app.models.picking import EstadoPicking
+        from app.services.picking_service import PickingService
+
+        self._setup(db, ub_picking, inv_picking)
+        inv_picking.bloqueado = 0
+        db.session.commit()
+        r = PickingService.crear_tareas_con_compromiso(
+            producto_id=producto.id, cantidad=4, compromiso_siesa=2,
+            almacen_id=almacen.id, referencia_documento='PD1497',
+            tipo_documento='PEDIDO_SIESA', prioridad=2,
+        )
+        # Otra tarea congela 1 unidad en la misma ubicación.
+        inv_picking.bloqueado = 1
+        db.session.commit()
+
+        cerrada = PickingService.auditar_tarea(
+            r.bloqueadas[0].id, admin_id=usuario_admin.id,
+            resultado='DISCREPANCIA_SIESA',
+        )
+
+        assert cerrada.estado == EstadoPicking.CANCELADO
+        db.session.refresh(inv_picking)
+        assert inv_picking.bloqueado == 1      # no se le restaron los 2 ajenos
+
+    def test_compromiso_completo_no_bloquea_nada_pero_guarda_lo_pedido(
+        self, app, db, almacen, producto, ub_picking, inv_picking,
+    ):
+        from app.services.picking_service import PickingService
+
+        r = PickingService.crear_tareas_con_compromiso(
+            producto_id=producto.id, cantidad=4, compromiso_siesa=4,
+            almacen_id=almacen.id, referencia_documento='PD1500',
+            tipo_documento='PEDIDO_SIESA', prioridad=2,
+        )
+        assert r.bloqueadas == []
+        assert r.cantidad_pickeable == 4
+        assert float(r.pickeables[0].cantidad_pedida) == 4

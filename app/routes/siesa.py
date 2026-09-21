@@ -1126,15 +1126,41 @@ def iniciar_despacho():
         item_codigo = (item.get('item_codigo') or '').strip()
 
         try:
-            tareas = PickingService.crear_tareas(
+            cant_pedida = int(item['cantidad_pendiente'])
+            comprometido = (compromisos_siesa.get(item_codigo)
+                            if compromisos_siesa is not None and item_codigo else None)
+            # Backorder parcial (PD1494): solo se pickea lo que Siesa comprometió,
+            # el resto nace bloqueado para Auditoría. Ver crear_tareas_con_compromiso.
+            resultado = PickingService.crear_tareas_con_compromiso(
                 producto_id=item['producto_id'],
-                cantidad=int(item['cantidad_pendiente']),
+                cantidad=cant_pedida,
+                compromiso_siesa=comprometido,
                 almacen_id=almacen_id,
                 referencia_documento=numero_pedido,
                 tipo_documento='PEDIDO_SIESA',
-                prioridad=2
+                prioridad=2,
+                detalle=(
+                    f'Siesa solo comprometió {comprometido} de {cant_pedida} '
+                    f'de {item_codigo} para el pedido {numero_pedido} — '
+                    f'el resto es backorder, no se pickea.'
+                ),
             )
-            tareas_picking_ids.extend([t.id for t in tareas])
+            tareas = resultado.pickeables
+            tareas_picking_ids.extend([t.id for t in tareas + resultado.bloqueadas])
+
+            if resultado.cantidad_pickeable < cant_pedida:
+                errores.append({
+                    'producto_id': item.get('producto_id'),
+                    'item_codigo': item_codigo,
+                    'producto_nombre': item.get('producto_nombre_wms'),
+                    'error': (
+                        f'Siesa comprometió {resultado.cantidad_pickeable} de '
+                        f'{cant_pedida} (backorder parcial) — el resto quedó '
+                        f'bloqueado, ver pestaña Bodega'
+                    ),
+                })
+                # El packing solo espera lo que sí se puede pickear.
+                item = {**item, 'cantidad_pendiente': resultado.cantidad_pickeable}
 
             # Siesa no comprometió esta línea (backorder) — la tarea se crea
             # igual (reserva stock local vía FEFO) pero se bloquea de una vez,

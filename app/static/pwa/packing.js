@@ -26,6 +26,7 @@ let EMP_FILTRO_TIPO = 'PEDIDO';
 
 /** Carga del servidor y renderiza la lista de tareas de packing asignadas al empacador. */
 async function empCargarTareas() {
+  if (_empBloqueoOfflineInfo()) { _empMostrarBloqueoOffline(); return; }
   const el = document.getElementById('emp-lista');
   if (!el) return;
   try {
@@ -186,6 +187,15 @@ function empRenderListaTareas() {
  * Inicia el HUD de empaque — carga items, sincroniza picking, muestra primer ítem.
  * @param {number} packingId
  */
+/** Ingreso manual del código en el HUD de empaque — mismo destino que la cámara. */
+function empEscanearManual() {
+  const inp = document.getElementById('emp-codigo-manual');
+  const v = (inp?.value || '').trim();
+  if (!v) return;
+  inp.value = '';
+  empProcesarEscaneo(v);
+}
+
 async function empIniciarHUD(packingId) {
   try {
     // Cargar detalle completo de la tarea
@@ -200,6 +210,12 @@ async function empIniciarHUD(packingId) {
 
     EMP_TAREA = { ...t, id: packingId };
 
+    // Mismo gate que ya aplican picking.js/conteo.js: si un admin le revocó
+    // la cámara a este operario, el HUD de empaque debe respetarlo también
+    // en vez de mostrar el botón igual.
+    const _btnCam = document.getElementById('emp-btn-camara');
+    if (_btnCam) _btnCam.style.display = (OPERARIO && OPERARIO.puede_usar_camara) ? '' : 'none';
+
     // Retry Siesa: bultos ya creados pero Siesa falló — reintentar directamente
     if (t.estado === 'VERIFICADO' && !t.siesa_triggered && t.bultos?.length) {
       await empReintentarSiesa(t);
@@ -209,22 +225,16 @@ async function empIniciarHUD(packingId) {
     // Iniciar si aún está PENDIENTE
     if (t.estado === 'PENDIENTE') {
       // Ajustar cantidades con lo que el picker realmente recogió (faltantes parciales)
-      await fetch(`/api/packing/${packingId}/sincronizar-picking`, {
-        method: 'POST',
-        headers: { 'Authorization': 'Bearer ' + TOKEN, 'Content-Type': 'application/json' }
-      });
-      const rIniciar = await fetch(`/api/packing/${packingId}/iniciar`, {
-        method: 'PUT',
-        headers: { 'Authorization': 'Bearer ' + TOKEN, 'Content-Type': 'application/json' }
-      });
-      if (!rIniciar.ok) {
+      try { await post(`/api/packing/${packingId}/sincronizar-picking`, {}); } catch (e) { console.error('sincronizar-picking:', e); }
+      try {
+        await put(`/api/packing/${packingId}/iniciar`, {});
+      } catch (e) {
         // Otro empacador ya tomó esta tarea (o cambió de estado) entre que
         // se cargó la lista y este clic -- no seguir: sin esto, el HUD se
         // activaba igual sobre una tarea que ya no es de este empacador,
         // y terminaba en "Exceso" infinito o un 403 al intentar cerrar caja.
         EMP_TAREA = null;
-        const dErr = await rIniciar.json().catch(() => ({}));
-        alerta(dErr.error || 'Otro empacador ya tomó esta tarea — actualizando lista', 'advertencia');
+        alerta(e.message || 'Otro empacador ya tomó esta tarea — actualizando lista', 'advertencia');
         empCargarTareas();
         return;
       }
@@ -260,33 +270,22 @@ async function empIniciarHUD(packingId) {
 
 /** Cancela el packing activo y libera la tarea. @param {number} packingId */
 async function empCancelarPacking(packingId) {
-  if (!confirm('¿Cancelar este packing? El pedido fue anulado en Siesa. La mercancía que ya fue pickeada debe devolverse a la ubicación o esperar el nuevo pedido.')) return;
+  if (!(await _modalConfirmar('El pedido fue anulado en Siesa. La mercancía que ya fue pickeada debe devolverse a la ubicación o esperar el nuevo pedido.', { titulo: '¿Cancelar este packing?', peligro: true }))) return;
   try {
-    const r = await fetch(`/api/packing/${packingId}/cancelar`, {
-      method: 'PUT',
-      headers: { 'Authorization': 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ motivo: 'Pedido anulado en Siesa ERP — cancelado desde WMS' })
-    });
-    const data = await r.json();
-    if (!r.ok) { alerta(data.error || 'Error al cancelar', 'error'); return; }
+    await put(`/api/packing/${packingId}/cancelar`, { motivo: 'Pedido anulado en Siesa ERP — cancelado desde WMS' });
     alerta('Packing cancelado — avisa al jefe de almacén para devolver la mercancía', 'info');
     empCargarTareas();
-  } catch (e) { alerta('Error de conexión', 'error'); }
+  } catch (e) { alerta(e.message || 'Error de conexión', 'error'); }
 }
 
 /** Resetea flags Siesa de la tarea para reintento. @param {number} packingId */
 async function empLimpiarSiesa(packingId) {
-  if (!confirm('¿Eliminar los bultos registrados y volver a declarar las piezas?')) return;
+  if (!(await _modalConfirmar('¿Eliminar los bultos registrados y volver a declarar las piezas?'))) return;
   try {
-    const r = await fetch(`/api/packing/${packingId}/resetear-siesa`, {
-      method: 'POST',
-      headers: { 'Authorization': 'Bearer ' + TOKEN }
-    });
-    const data = await r.json();
-    if (!r.ok) { alerta(data.error || 'Error al limpiar', 'error'); return; }
+    await post(`/api/packing/${packingId}/resetear-siesa`, {});
     alerta('Listo — declara las piezas de nuevo al abrir la tarea', 'exito');
     empCargarTareas();
-  } catch (e) { alerta('Error de conexión', 'error'); }
+  } catch (e) { alerta(e.message || 'Error de conexión', 'error'); }
 }
 
 
@@ -302,17 +301,8 @@ async function empReintentarSiesa(t) {
   alerta(`Reintentando Siesa para ${t.numero_pedido_siesa} (${resumenTexto})…`, 'info');
 
   try {
-    const r = await fetch(`/api/packing/${t.id}/cerrar`, {
-      method: 'POST',
-      headers: { 'Authorization': 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
-      // bultos_data vacío — el backend detecta bultos existentes y solo reintenta Siesa
-      body: JSON.stringify({ bultos: t.bultos.map(b => ({ tipo: b.tipo, cantidad: 1 })) })
-    });
-    const data = await r.json();
-    if (!r.ok) {
-      alerta(`Error Siesa: ${data.error || 'ver logs'}`, 'error');
-      return;
-    }
+    // bultos_data vacío — el backend detecta bultos existentes y solo reintenta Siesa
+    const data = await post(`/api/packing/${t.id}/cerrar`, { bultos: t.bultos.map(b => ({ tipo: b.tipo, cantidad: 1 })) });
     empImprimirEtiquetas(data.bultos, {
       numero_pedido: data.numero_pedido,
       cliente: data.cliente,
@@ -321,7 +311,7 @@ async function empReintentarSiesa(t) {
     alerta(`${t.numero_pedido_siesa} despachado — Siesa procesó la factura`, 'exito');
     empCargarTareas();
   } catch (e) {
-    alerta('Error de conexión al reintentar Siesa', 'error');
+    alerta(`Error Siesa: ${e.message || 'ver logs'}`, 'error');
   }
 }
 
@@ -415,43 +405,42 @@ function empRenderHUDItem() {
 async function empProcesarEscaneo(codigo) {
   if (!EMP_TAREA) return;
 
-  // ── Resolver empaque antes de registrar ───────────────────────────────────
-  // Si el operario escanea un DUN-14 (caja/paca), necesitamos:
-  //   1. Identificar el producto real (no el barcode de la caja)
-  //   2. Enviar cantidad = factor (no 1) al backend
-  let codigoParaBackend = codigo;
-  let cantidadParaBackend = 1;
-  let etiquetaEmpaque = '';
+  // Resolución de código compartida con picking (ver resolverEscaneoEmpaque
+  // en app.js) — si el operario escanea un DUN-14 (caja/paca), identifica el
+  // producto real y la cantidad = factor (no 1) a enviar al backend.
+  const scan = await resolverEscaneoEmpaque(codigo);
 
-  try {
-    const scan = await get(`/api/empaques/scan/${encodeURIComponent(codigo)}`);
-    const tipo = scan.tipo || 'NO_ENCONTRADO';
-
-    if (tipo === 'GS1_UNICO' && scan.producto && scan.factor > 1) {
-      // Barcode de empaque → enviar código de producto y factor como cantidad
-      codigoParaBackend = scan.producto.codigo;
-      cantidadParaBackend = scan.factor;
-      etiquetaEmpaque = `${scan.empaque?.unidad_medida || 'PIEZA'} completa — ${scan.factor} und`;
-    } else if (tipo === 'LPN' && scan.producto) {
-      codigoParaBackend = scan.producto.codigo;
-      cantidadParaBackend = scan.factor || 1;
-      etiquetaEmpaque = `LPN — ${cantidadParaBackend} und`;
-    } else if (tipo === 'GS1_AMBIGUO') {
-      _modalAmbiguedadPackingEmp(codigo, scan.ambiguos || []);
-      return;
-    }
-    // EAN_BASE o NO_ENCONTRADO → flujo original (codigoParaBackend = codigo, cantidad = 1)
-  } catch (_) {
-    // Si /api/empaques/scan falla, continuar con flujo original
+  if (scan.tipo === 'GS1_AMBIGUO') {
+    _modalAmbiguedadPackingEmp(codigo, scan.ambiguos || []);
+    return;
   }
 
+  const { codigoParaBackend, cantidad: cantidadParaBackend, unidad } = scan;
+  let etiquetaEmpaque = '';
+  if (scan.tipo === 'LPN') {
+    etiquetaEmpaque = `LPN — ${cantidadParaBackend} und`;
+  } else if (cantidadParaBackend > 1) {
+    etiquetaEmpaque = `${unidad || 'PIEZA'} completa — ${cantidadParaBackend} und`;
+  }
+
+  // total_acumulado: el backend YA soporta este modo idempotente para PACKING
+  // (mobile_service.py, misma protección with_for_update que PICKING) — antes
+  // packing.js nunca lo mandaba, así que quedaba afuera de la cola offline
+  // que sí tiene picking (un +=, no un "fijar total", no es seguro de encolar
+  // ni reintentar tras un timeout sin saber si el POST original ya llegó).
+  const itemLocal = EMP_ITEMS.find(i => i.producto_codigo === codigoParaBackend);
+  const totalAcumulado = itemLocal ? (itemLocal.cantidad_real || 0) + cantidadParaBackend : null;
+  const payload = {
+    accion: 'packing_escanear',
+    tarea_id: EMP_TAREA.id,
+    tipo: 'PACKING',
+    codigo: codigoParaBackend,
+    cantidad: cantidadParaBackend,
+  };
+  if (totalAcumulado !== null) payload.total_acumulado = totalAcumulado;
+
   try {
-    const r = await post('/api/mobile/escanear', {
-      tarea_id: EMP_TAREA.id,
-      tipo: 'PACKING',
-      codigo: codigoParaBackend,
-      cantidad: cantidadParaBackend
-    });
+    const r = await postConReintento('/api/mobile/escanear', payload);
 
     if (r.error) {
       empFlash('rojo', r.error);
@@ -479,7 +468,22 @@ async function empProcesarEscaneo(codigo) {
     empRenderHUDItem();
 
   } catch (e) {
-    empFlash('rojo', e.message && e.message !== '401' ? e.message : 'Error de conexión');
+    if (e.status) {
+      // Error del servidor — no encolar, el estado local no cambió
+      empFlash('rojo', e.message && e.message !== '401' ? e.message : 'Error');
+      return;
+    }
+    if (totalAcumulado !== null) {
+      // Corte de red real y el scan es idempotente — encolar y confiar en
+      // que aplicará (mismo criterio que picking.js): revertir aquí solo
+      // invitaría a re-escanear el mismo código y duplicar contra la cola.
+      guardarOffline(payload);
+      if (itemLocal) itemLocal.cantidad_real = totalAcumulado;
+      empFlash('verde', etiquetaEmpaque || null);
+      empRenderHUDItem();
+    } else {
+      empFlash('rojo', 'Sin conexión — vuelve a escanear');
+    }
   }
 }
 
@@ -566,7 +570,7 @@ async function _elegirEmpaquePacking(codigoBarras, productoCodigo, factor, unida
   if (modal) modal.remove();
   if (!EMP_TAREA) return;
   try {
-    const r = await post('/api/mobile/escanear', {
+    const r = await postConReintento('/api/mobile/escanear', {
       tarea_id: EMP_TAREA.id,
       tipo: 'PACKING',
       codigo: productoCodigo || codigoBarras,
@@ -596,25 +600,16 @@ async function empConfirmarPacking() {
   btn.textContent = 'Verificando...';
 
   try {
-    const r = await fetch(`/api/packing/${EMP_TAREA.id}/confirmar`, {
-      method: 'PUT',
-      headers: { 'Authorization': 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ forzar: false })
-    });
-    const data = await r.json();
-
-    if (!r.ok) {
-      if (r.status === 409 && data.diferencias) {
-        const resumen = data.diferencias.map(d => `${d.producto}: esperado ${d.esperado}, real ${d.real}`).join('\n');
-        if (confirm(`Hay diferencias en cantidades:\n${resumen}\n\n¿Confirmar de todas formas?`)) {
-          const r2 = await fetch(`/api/packing/${EMP_TAREA.id}/confirmar`, {
-            method: 'PUT',
-            headers: { 'Authorization': 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
-            body: JSON.stringify({ forzar: true })
-          });
-          if (!r2.ok) {
-            const d2 = await r2.json();
-            empFlash('rojo', d2.error || 'Error confirmando');
+    try {
+      await put(`/api/packing/${EMP_TAREA.id}/confirmar`, { forzar: false });
+    } catch (e) {
+      if (e.status === 409 && e.body && e.body.diferencias) {
+        const resumen = e.body.diferencias.map(d => `${d.producto}: esperado ${d.esperado}, real ${d.real}`).join('\n');
+        if (await _modalConfirmar(resumen, { titulo: 'Hay diferencias en cantidades', textoConfirmar: 'Confirmar de todas formas', peligro: true })) {
+          try {
+            await put(`/api/packing/${EMP_TAREA.id}/confirmar`, { forzar: true });
+          } catch (e2) {
+            empFlash('rojo', e2.message || 'Error confirmando');
             btn.disabled = false; btn.textContent = 'Cerrar Caja ✓';
             return;
           }
@@ -623,8 +618,7 @@ async function empConfirmarPacking() {
           return;
         }
       } else {
-        const msg = typeof data.error === 'string' ? data.error : 'Error confirmando';
-        empFlash('rojo', msg);
+        empFlash('rojo', e.message || 'Error confirmando');
         btn.disabled = false; btn.textContent = 'Cerrar Caja ✓';
         return;
       }
@@ -674,10 +668,10 @@ function bultosRenderLineas() {
   el.innerHTML = _BULTOS_LINEAS.map((l, i) => `
     <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;">
       <div style="flex:1;font-size:14px;font-weight:600;">${esc(l.tipo)}</div>
-      <button onclick="bultosAjustarCantidad(${i},-1)" style="width:32px;height:32px;background:#222;border:1px solid #333;color:#fff;border-radius:6px;cursor:pointer;font-size:18px;">−</button>
+      <button onclick="bultosAjustarCantidad(${i},-1)" style="width:44px;height:44px;background:#222;border:1px solid #333;color:#fff;border-radius:6px;cursor:pointer;font-size:18px;">−</button>
       <div style="min-width:28px;text-align:center;font-size:17px;font-weight:700;">${esc(l.cantidad)}</div>
-      <button onclick="bultosAjustarCantidad(${i},1)" style="width:32px;height:32px;background:#222;border:1px solid #333;color:#fff;border-radius:6px;cursor:pointer;font-size:18px;">+</button>
-      <button onclick="bultosEliminarLinea(${i})" style="width:32px;height:32px;background:#1a1a1a;border:1px solid #333;color:#ef4444;border-radius:6px;cursor:pointer;font-size:14px;">✕</button>
+      <button onclick="bultosAjustarCantidad(${i},1)" style="width:44px;height:44px;background:#222;border:1px solid #333;color:#fff;border-radius:6px;cursor:pointer;font-size:18px;">+</button>
+      <button onclick="bultosEliminarLinea(${i})" style="width:44px;height:44px;background:#1a1a1a;border:1px solid #333;color:#ef4444;border-radius:6px;cursor:pointer;font-size:14px;">✕</button>
     </div>`).join('');
 }
 
@@ -736,26 +730,107 @@ async function bultosConfirmar() {
     document.getElementById('modal-bultos').style.display = 'none';
     _BULTOS_LINEAS = [];
 
-    empImprimirEtiquetas(data.bultos, {
-      numero_pedido: data.numero_pedido,
-      cliente: data.cliente,
-      municipio: data.municipio
-    });
-
-    document.getElementById('emp-hud').classList.remove('activo');
-    EMP_TAREA = null;
-    EMP_ITEMS = [];
-    alerta(`${data.bultos.length} pieza(s) registradas — Siesa procesó la factura`, 'exito');
-    empCargarTareas();
-    // Factura solo para empacadores NB1 con tareas PD — los packer_traslado
-    // cierran traslados (numero_pedido=null) y no generan factura/remisión.
-    const _esPacTras = OPERARIO && ['packer_traslado','picker_traslado'].includes(OPERARIO.rol);
-    if (data.numero_pedido && !_esPacTras) empMostrarBotonFactura(tareaId, data.numero_pedido);
+    _empPostCierreExitoso(data, tareaId);
 
   } catch (e) {
-    errEl.textContent = 'Error de conexión';
-    if (btnConf) { btnConf.disabled = false; btnConf.textContent = 'Cerrar Caja y Etiquetar →'; }
+    // Corte de red real (o el timeout de 45s de arriba) — no reintentar solo,
+    // encolar el cierre y bloquear la pantalla: el bulto no puede moverse a
+    // despacho sin su etiqueta impresa, así que el empacador debe esperar
+    // aquí a que sincronice en vez de seguir con la siguiente tarea.
+    clearTimeout(_timeout);
+    guardarOffline({
+      accion: 'cerrar_packing',
+      tarea_id: EMP_TAREA.id,
+      bultos: _BULTOS_LINEAS.map(l => ({ tipo: l.tipo, cantidad: l.cantidad })),
+    });
+    localStorage.setItem('wms_emp_bloqueado', JSON.stringify({
+      tarea_id: EMP_TAREA.id,
+      numero_pedido: EMP_TAREA.numero_pedido_siesa,
+      cliente: EMP_TAREA.cliente,
+      municipio: EMP_TAREA.municipio,
+    }));
+    document.getElementById('modal-bultos').style.display = 'none';
+    _BULTOS_LINEAS = [];
+    _empMostrarBloqueoOffline();
   }
+}
+
+/**
+ * Acciones comunes tras un cierre de packing exitoso — ya sea inmediato (respuesta
+ * directa de `/api/packing/<id>/cerrar`) o diferido (sincronizado offline vía
+ * `onSync_cerrar_packing`). Debe quedar idéntico en ambos casos.
+ * @param {Object} data - Respuesta de cierre (mismo shape en ambas vías).
+ * @param {number} tareaId
+ */
+function _empPostCierreExitoso(data, tareaId) {
+  empImprimirEtiquetas(data.bultos, {
+    numero_pedido: data.numero_pedido,
+    cliente: data.cliente,
+    municipio: data.municipio
+  });
+  document.getElementById('emp-hud')?.classList.remove('activo');
+  EMP_TAREA = null;
+  EMP_ITEMS = [];
+  alerta(`${data.bultos.length} pieza(s) registradas — Siesa procesó la factura`, 'exito');
+  empCargarTareas();
+  // Factura solo para empacadores NB1 con tareas PD — los packer_traslado
+  // cierran traslados (numero_pedido=null) y no generan factura/remisión.
+  const _esPacTras = OPERARIO && ['packer_traslado', 'picker_traslado'].includes(OPERARIO.rol);
+  if (data.numero_pedido && !_esPacTras) empMostrarBotonFactura(tareaId, data.numero_pedido);
+}
+
+// ─────────────────────────────────────────────────────────────
+// BLOQUEO OFFLINE — pantalla de espera mientras un cierre de caja
+// queda pendiente de sincronizar (ver bultosConfirmar / syncOffline en app.js)
+// ─────────────────────────────────────────────────────────────
+
+let _EMP_BLOQUEO_TIMER = null;
+
+/** @returns {{tarea_id:number, numero_pedido:string, cliente:string, municipio:string}|null} */
+function _empBloqueoOfflineInfo() {
+  try {
+    const raw = localStorage.getItem('wms_emp_bloqueado');
+    return raw ? JSON.parse(raw) : null;
+  } catch (_) { return null; }
+}
+
+/** Muestra la pantalla de bloqueo — no se puede seguir empacando hasta que sincronice. */
+function _empMostrarBloqueoOffline() {
+  const info = _empBloqueoOfflineInfo();
+  if (!info || document.getElementById('emp-bloqueo-offline')) return;
+  const overlay = document.createElement('div');
+  overlay.id = 'emp-bloqueo-offline';
+  overlay.style.cssText = 'position:fixed;inset:0;z-index:9999;background:#0B1117;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;padding:30px;text-align:center;';
+  overlay.innerHTML = `
+    <div style="font-size:56px;">📡</div>
+    <div style="font-size:20px;font-weight:900;color:#FBBF24;">Cierre pendiente de conexión</div>
+    <div style="font-size:15px;color:#aaa;line-height:1.6;max-width:320px;">
+      Pedido ${esc(info.numero_pedido || '—')} · ${esc(info.cliente || '')}<br><br>
+      No muevas esta pieza. Se cierra y la etiqueta se imprime sola apenas vuelva la señal.
+    </div>
+    <div style="font-size:13px;color:#666;">Reintentando automáticamente…</div>`;
+  document.body.appendChild(overlay);
+  // navigator.onLine no siempre avisa a tiempo (ver rutas.js) — reintentar también por polling.
+  if (!_EMP_BLOQUEO_TIMER) _EMP_BLOQUEO_TIMER = setInterval(() => { if (navigator.onLine) syncOffline(); }, 8000);
+}
+
+/** Quita la pantalla de bloqueo y detiene el polling de reintento. */
+function _empOcultarBloqueoOffline() {
+  const overlay = document.getElementById('emp-bloqueo-offline');
+  if (overlay) overlay.remove();
+  if (_EMP_BLOQUEO_TIMER) { clearInterval(_EMP_BLOQUEO_TIMER); _EMP_BLOQUEO_TIMER = null; }
+}
+
+/**
+ * Callback invocado por `syncOffline()` (app.js) cuando un cierre de packing
+ * encolado offline por fin sincronizó con éxito.
+ * @param {Object} resultado - Mismo shape que la respuesta de `/api/packing/<id>/cerrar`.
+ */
+function onSync_cerrar_packing(resultado) {
+  const info = _empBloqueoOfflineInfo();
+  localStorage.removeItem('wms_emp_bloqueado');
+  _empOcultarBloqueoOffline();
+  _empPostCierreExitoso(resultado, info ? info.tarea_id : null);
 }
 
 // ─────────────────────────────────────────────────────────────

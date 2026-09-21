@@ -17,16 +17,24 @@ logger = logging.getLogger(__name__)
 kardex_bp = Blueprint('kardex', __name__)
 
 
-_kardex_descarga_estado = {'en_curso': False, 'resultado': None}
-
 @kardex_bp.route('/descargar', methods=['POST', 'GET'])
 @jwt_required()
 def descargar_kardex():
-    """Lanza descarga de kardex en background thread (no bloquea HTTP)."""
+    """Lanza descarga de kardex en background thread (no bloquea HTTP).
+
+    El estado se persiste en `registros_sync` (tipo='kardex'), no en un dict
+    en memoria del proceso — con Gunicorn corriendo 2 workers, el POST que
+    arranca la descarga y el GET de `/descargar/estado` que la sondea pueden
+    caer en workers distintos; un dict en memoria hace que el segundo nunca
+    vea lo que hizo el primero. Mismo patrón ya usado por
+    `inventario_siesa_service.iniciar_carga_inventario`/`estado_carga_inventario`.
+    """
     if not _es_admin_o_jefe():
         return jsonify({'error': 'Solo admin puede descargar kardex'}), 403
 
-    if _kardex_descarga_estado['en_curso']:
+    from app.services import registro_sync_service as _reg
+    _ultimo = _reg.ultimo('kardex')
+    if _ultimo and '_error_lectura' not in _ultimo and _ultimo.get('fin') is None:
         return jsonify({'ok': True, 'mensaje': 'Descarga ya en curso — revisar logs'}), 200
 
     if request.method == 'GET':
@@ -46,19 +54,21 @@ def descargar_kardex():
 
     import threading
     def _run():
-        _kardex_descarga_estado['en_curso'] = True
-        _kardex_descarga_estado['resultado'] = None
-        try:
-            with app.app_context():
+        with app.app_context():
+            from app.services import registro_sync_service as _reg2
+            registro_id = _reg2.abrir('kardex')
+            try:
                 from app.services.kardex_service import KardexService
                 resultado = KardexService.descargar_kardex(
                     fecha_desde, fecha_hasta,
                     pagina_inicial=pagina_inicial, max_minutos=max_minutos)
-                _kardex_descarga_estado['resultado'] = resultado
-        except Exception as e:
-            _kardex_descarga_estado['resultado'] = {'error': str(e)}
-        finally:
-            _kardex_descarga_estado['en_curso'] = False
+                # `resultado['ok']` es el veredicto de NEGOCIO (COMPLETA vs
+                # PARCIAL) — distinto de que este `cerrar_ok` de aquí abajo
+                # solo dice "el hilo terminó sin excepción". El frontend ya
+                # lee `resultado.ok`/`resultado.error` para la distinción real.
+                _reg2.cerrar_ok(registro_id, resultado)
+            except Exception as e:
+                _reg2.cerrar_error(registro_id, str(e))
 
     t = threading.Thread(target=_run, daemon=True)
     t.start()
@@ -80,11 +90,28 @@ def descargar_kardex():
 @kardex_bp.route('/descargar/estado', methods=['GET'])
 @jwt_required()
 def estado_descarga():
-    """Verifica si la descarga está en curso o terminó."""
-    return jsonify({
-        'en_curso': _kardex_descarga_estado['en_curso'],
-        'resultado': _kardex_descarga_estado['resultado'],
-    }), 200
+    """Verifica si la descarga está en curso o terminó — leído de `registros_sync`,
+    no de un dict en memoria (ver comentario en `descargar_kardex`)."""
+    from app.services import registro_sync_service as _reg
+    ultimo = _reg.ultimo('kardex')
+
+    if ultimo is None:
+        return jsonify({'en_curso': False, 'resultado': None}), 200
+
+    if '_error_lectura' in ultimo:
+        return jsonify({
+            'en_curso': False,
+            'resultado': None,
+            'error_lectura': ultimo['_error_lectura'],
+        }), 200
+
+    if ultimo['fin'] is None:
+        return jsonify({'en_curso': True, 'resultado': None}), 200
+
+    if ultimo['ok'] is False:
+        return jsonify({'en_curso': False, 'resultado': {'error': ultimo['error']}}), 200
+
+    return jsonify({'en_curso': False, 'resultado': ultimo['resultado']}), 200
 
 
 @kardex_bp.route('/reconstruir', methods=['POST'])
@@ -108,11 +135,20 @@ def reconstruir_stock():
     bodega = data.get('bodega')
     forzar = bool(data.get('forzar'))
 
-    ultima = _kardex_descarga_estado.get('resultado')
-    if _kardex_descarga_estado.get('en_curso'):
+    # Leído de `registros_sync` — igual que `estado_descarga()` arriba, no de
+    # un dict en memoria que un worker distinto al que descargó no puede ver.
+    from app.services import registro_sync_service as _reg
+    _ultimo_reg = _reg.ultimo('kardex')
+    if _ultimo_reg and '_error_lectura' not in _ultimo_reg and _ultimo_reg.get('fin') is None:
         return jsonify({
             'error': 'Hay una descarga en curso. Reconstruir ahora usaría datos a medias.',
         }), 409
+    if _ultimo_reg and '_error_lectura' not in _ultimo_reg and _ultimo_reg.get('ok') is False:
+        ultima = {'error': _ultimo_reg.get('error')}
+    elif _ultimo_reg and '_error_lectura' not in _ultimo_reg:
+        ultima = _ultimo_reg.get('resultado')
+    else:
+        ultima = None
 
     # Sin descarga en esta sesión no se puede afirmar que el kardex esté completo.
     # Regla 0: ante estado desconocido, no seguir.

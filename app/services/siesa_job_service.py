@@ -749,6 +749,61 @@ def _factura_saldada_en_siesa(connekta, nit: str, recaudo,
         return None
 
 
+def _ejecutar_con_preflag(obj, post_fn):
+    """
+    Ejecuta un POST a Siesa con el patrón pre-flag correcto (Regla 6 + Regla 3),
+    compartido por ENTRADA_OC, TRASLADO_AVERIAS y AJUSTE_CONTEO — los tres
+    usan los mismos nombres de atributo (`siesa_triggered`/`siesa_triggered_at`)
+    y la misma lógica exacta, que antes vivía copiada tres veces y divergía en
+    silencio (ver hallazgo de auditoría 2026-09-16: los tres marcaban el flag
+    DESPUÉS del POST, con una ventana de duplicado real si el proceso muere
+    entre el POST exitoso y ese commit — un job atascado en PROCESANDO se
+    resetea a PENDIENTE a los 10 min y se reintenta desde cero).
+
+    `obj` es el modelo con el flag (RecepcionMercancia, TareaDevolucion,
+    SesionConteo). `post_fn` es un callable sin argumentos que hace el POST
+    real contra Connekta y devuelve su resultado.
+
+    1. Marca el flag ANTES del POST — si el proceso muere a mitad de camino,
+       el guard de idempotencia que cada job ya tiene al principio (`if
+       obj.siesa_triggered: return {'idempotente': True}`) atrapa el reintento
+       sin volver a llamar a Siesa. No hace falta ninguna consulta de
+       verificación contra Siesa para esto — el orden solo ya cierra la
+       ventana.
+    2. Ante `ConnektaResultadoDesconocido` (timeout — Regla 3: no significa
+       que falló) el flag se queda en `True`. El dispatcher del DLQ ya manda
+       este tipo de excepción directo a FALLIDO sin backoff ni reintento
+       automático — el registro queda marcado "posiblemente enviado" para
+       revisión manual, nunca se arriesga un duplicado automático (Regla 0).
+    3. Ante cualquier otra excepción (429, HTTP de error, `codigo != 0` en la
+       respuesta) Siesa contestó que NO — se revierte el flag para que el
+       backoff normal pueda reintentar de verdad.
+    4. Si el POST fue en `modo_ensayo`, se revierte: no se creó nada real.
+
+    Levanta la excepción original en los casos 2 y 3, después de dejar el
+    flag en el estado correcto — el caller no necesita manejar el error, solo
+    lo que pasa cuando el POST sale bien.
+    """
+    obj.siesa_triggered = True
+    obj.siesa_triggered_at = datetime.utcnow()
+    db.session.commit()
+
+    try:
+        resultado = post_fn()
+    except _ResultadoDesconocido:
+        raise
+    except Exception:
+        obj.siesa_triggered = False
+        db.session.commit()
+        raise
+
+    if resultado.get('modo_ensayo'):
+        obj.siesa_triggered = False
+        db.session.commit()
+
+    return resultado
+
+
 def _ejecutar_job(job: SiesaJob) -> dict:
     """Despacha el job al handler correcto según su tipo."""
     from app.services.connekta_gateway import connekta
@@ -814,51 +869,36 @@ def _ejecutar_job(job: SiesaJob) -> dict:
                 f'siesa_triggered=True — omitiendo llamada a Siesa (idempotencia)'
             )
             return {'idempotente': True, 'recepcion_id': rec.id}
-        resultado = connekta.confirmar_entrada_compras(
-            id_co_oc=payload.get('id_co_oc', connekta.centro_op),
-            tipo_docto_oc=payload.get('tipo_docto_oc', ''),
-            consec_docto_oc=payload.get('consec_docto_oc', ''),
-            items=payload.get('items', []),
-            es_parcial=payload.get('es_parcial', False),
-            proveedor_id=payload.get('proveedor_id', ''),
-            sucursal_prov=payload.get('sucursal_prov', ''),
-            tercero_comprador=payload.get('tercero_comprador'),
-            moneda_docto=payload.get('moneda_docto'),
-            moneda_conv=payload.get('moneda_conv'),
-            moneda_local=payload.get('moneda_local'),
-            tasa_conv=payload.get('tasa_conv', 0.0),
-            tasa_local=payload.get('tasa_local', 0.0),
-            num_docto_referencia=payload.get('num_docto_referencia'),
-            cond_pago=payload.get('cond_pago', ''),
-        )
-        # Persistir flag — misma protección que DESPACHO_F470 (emergency block)
-        # No marcar triggered en modo ensayo: el POST fue bloqueado, no hay entrada real en Siesa.
-        if rec and not rec.siesa_triggered and not resultado.get('modo_ensayo'):
-            try:
-                rec.siesa_triggered = True
+
+        def _post_entrada_oc():
+            return connekta.confirmar_entrada_compras(
+                id_co_oc=payload.get('id_co_oc', connekta.centro_op),
+                tipo_docto_oc=payload.get('tipo_docto_oc', ''),
+                consec_docto_oc=payload.get('consec_docto_oc', ''),
+                items=payload.get('items', []),
+                es_parcial=payload.get('es_parcial', False),
+                proveedor_id=payload.get('proveedor_id', ''),
+                sucursal_prov=payload.get('sucursal_prov', ''),
+                tercero_comprador=payload.get('tercero_comprador'),
+                moneda_docto=payload.get('moneda_docto'),
+                moneda_conv=payload.get('moneda_conv'),
+                moneda_local=payload.get('moneda_local'),
+                tasa_conv=payload.get('tasa_conv', 0.0),
+                tasa_local=payload.get('tasa_local', 0.0),
+                num_docto_referencia=payload.get('num_docto_referencia'),
+                cond_pago=payload.get('cond_pago', ''),
+            )
+
+        # Pre-flag ANTES del POST (Regla 6) vía el helper compartido — si no
+        # hay `rec` (recepcion_id no encontrado en el payload) no hay nada
+        # sobre lo que marcar el flag; se llama a Siesa igual, sin idempotencia.
+        if rec:
+            resultado = _ejecutar_con_preflag(rec, _post_entrada_oc)
+            if not resultado.get('modo_ensayo'):
                 rec.siesa_response = _json.dumps(resultado)
-                rec.siesa_triggered_at = datetime.utcnow()
                 db.session.commit()
-            except Exception as _e:
-                logger.critical(
-                    f'[DLQ] ENTRADA_OC job={job.id}: Siesa OK pero fallo al guardar '
-                    f'siesa_triggered — revisar manualmente recepción {rec.id}. Error: {_e}'
-                )
-                db.session.rollback()
-                # Emergency: persistir SOLO el flag de idempotencia para bloquear
-                # el reintento de la DLQ — sin esto la próxima ejecución llamará a
-                # Siesa de nuevo y creará una entrada contable duplicada (cuenta 1435).
-                try:
-                    rec.siesa_triggered = True
-                    rec.siesa_triggered_at = datetime.utcnow()
-                    db.session.commit()
-                except Exception as _e2:
-                    db.session.rollback()
-                    logger.critical(
-                        f'[DLQ] ENTRADA_OC job={job.id}: DOBLE FALLO — '
-                        f'siesa_triggered no persiste: {_e2}. '
-                        f'Recepción {rec.id} en riesgo de duplicado contable.'
-                    )
+        else:
+            resultado = _post_entrada_oc()
 
         # ── Avisarle a Siesa de lo que llegó roto ────────────────────────
         #
@@ -961,38 +1001,16 @@ def _ejecutar_job(job: SiesaJob) -> dict:
                 f'no se puede enviar a Siesa sin referencia del ítem'
             )
 
-        resultado = connekta.transferir_a_averias(
+        # Pre-flag ANTES del POST (Regla 6) vía el helper compartido — cierra
+        # la ventana en la que un proceso muerto a mitad de camino dejaba
+        # `siesa_triggered=False` y el reset automático de jobs atascados
+        # reintentaba desde cero, duplicando el traslado a averías (el saldo
+        # de la bodega origen podía quedar negativo en Siesa).
+        return _ejecutar_con_preflag(tarea_dev, lambda: connekta.transferir_a_averias(
             item_codigo=item_codigo,
             cantidad=payload['cantidad'],
             referencia=payload.get('referencia', ''),
-        )
-        # Marcar triggered — emergency block para bloquear reintento duplicado
-        # No marcar triggered en modo ensayo: el POST fue bloqueado, no hay traslado real en Siesa.
-        if tarea_dev and not resultado.get('modo_ensayo'):
-            try:
-                tarea_dev.siesa_triggered = True
-                tarea_dev.siesa_triggered_at = datetime.utcnow()
-                db.session.commit()
-            except Exception as _e:
-                logger.critical(
-                    f'[DLQ] TRASLADO_AVERIAS job={job.id}: Siesa OK pero fallo al guardar '
-                    f'siesa_triggered — revisar manualmente tarea_dev {tarea_dev.id}. Error: {_e}'
-                )
-                db.session.rollback()
-                # Emergency: sin este commit la DLQ reintentará y el traslado NB1→AV1
-                # se duplicará — el saldo de NB1 puede quedar negativo en Siesa.
-                try:
-                    tarea_dev.siesa_triggered = True
-                    tarea_dev.siesa_triggered_at = datetime.utcnow()
-                    db.session.commit()
-                except Exception as _e2:
-                    db.session.rollback()
-                    logger.critical(
-                        f'[DLQ] TRASLADO_AVERIAS job={job.id}: DOBLE FALLO — '
-                        f'siesa_triggered no persiste: {_e2}. '
-                        f'Tarea_dev {tarea_dev.id} en riesgo de traslado duplicado (NB1 puede quedar negativo).'
-                    )
-        return resultado
+        ))
 
     if job.tipo == 'AJUSTE_CONTEO':
         from app.models.conteo import SesionConteo as _SesionConteo
@@ -1120,7 +1138,14 @@ def _ejecutar_job(job: SiesaJob) -> dict:
         _item_id_siesa = _ps.item_id_siesa if _ps else None
         logger.info(f'[DLQ] AJUSTE_CONTEO item_id_siesa lookup: item={item_codigo} → {_item_id_siesa!r}')
 
-        resultado = connekta.enviar_ajuste_inventario(
+        # Pre-flag ANTES del POST (Regla 6) vía el helper compartido — antes
+        # el flag se marcaba en un mini-commit DESPUÉS del POST, y si ESE
+        # commit fallaba el código hacía `raise`, lo que gastaba un reintento
+        # normal con `siesa_triggered` todavía en `False`: el siguiente intento
+        # reenviaba el ajuste, duplicándolo — exactamente lo que el mini-commit
+        # existía para evitar. Con el flag ya persistido antes de llamar a
+        # Siesa, ese escenario deja de ser posible.
+        resultado = _ejecutar_con_preflag(sesion_cteo, lambda: connekta.enviar_ajuste_inventario(
             motivo_codigo=payload['motivo_codigo'],
             item_codigo=item_codigo,
             item_id_siesa=_item_id_siesa,
@@ -1128,30 +1153,14 @@ def _ejecutar_job(job: SiesaJob) -> dict:
             referencia=payload.get('referencia', ''),
             bodega=payload.get('bodega'),
             centro_op=payload.get('centro_op'),
-        )
-
-        # CRÍTICO: commit mínimo de siesa_triggered=True ANTES del commit completo.
-        # Si Railway mata el proceso después de este commit, el retry verá
-        # siesa_triggered=True en el guard de idempotencia y no llamará Siesa de nuevo.
-        # Sin esto, un crash entre el HTTP 200 de Siesa y el commit completo
-        # deja siesa_triggered=False → el retry genera un doble ajuste de inventario.
+        ))
         _now = datetime.utcnow()
-        _es_ensayo = bool(resultado.get('modo_ensayo'))
-        try:
-            sesion_cteo = _SesionConteo.query.get(sesion_id)
-            if not _es_ensayo:
-                sesion_cteo.siesa_triggered = True
-                sesion_cteo.siesa_triggered_at = _now
-                db.session.commit()
-        except Exception as _e_flag:
-            db.session.rollback()
-            logger.critical(
-                f'[DLQ] AJUSTE_CONTEO job={job.id}: no se pudo persistir siesa_triggered '
-                f'para sesion {sesion_id}: {_e_flag} — abortando para no dejar estado ambiguo'
-            )
-            raise
 
-        # Commit completo: estado + respuesta + inventario
+        # Commit completo: estado + respuesta + inventario. `siesa_triggered`
+        # ya quedó persistido por el helper — si esto falla no hay riesgo de
+        # doble ajuste, solo estado/respuesta/inventario pendientes de
+        # reconciliar (la rama de recuperación de arriba, sesión atascada en
+        # AJUSTANDO, ya sabe recuperarse de esto).
         try:
             sesion_cteo = _SesionConteo.query.get(sesion_id)
             sesion_cteo.siesa_response = json.dumps(resultado)
@@ -1833,7 +1842,17 @@ def _ejecutar_job(job: SiesaJob) -> dict:
                 ajuste_valor=float(payload.get('ajuste_valor') or 0),
                 ajuste_razon=payload.get('ajuste_razon', ''),
             )
+        except _ResultadoDesconocido:
+            # Regla 3: un timeout no significa que falló — Siesa tarda 30-60s
+            # y el documento PUEDE existir. NO revertir el flag: el dispatcher
+            # ya manda esto a FALLIDO sin reintento automático, y revertir acá
+            # dejaría la puerta abierta a que un reintento manual duplique el
+            # NI de retención (documento contable, se reversa a mano en Siesa).
+            raise
         except Exception as _e_post:
+            # Cualquier otro error (rechazo confirmado de Siesa, red caída) —
+            # acá sí se sabe que no entró, es seguro revertir para permitir
+            # un reintento real.
             if recaudo and _puc:
                 try:
                     recaudo.desmarcar_puc(_puc)

@@ -256,11 +256,11 @@ function layoutRenderUbicaciones() {
           ${_layoutEsAdminCompleto() ? `
           <div style="display:flex;gap:6px;">
             <button onclick="layoutAbrirModalEditarFila('${esc(g.pasillo)}','${esc(g.estante)}')"
-              style="padding:5px 10px;background:var(--bg);border:1px solid var(--brd);border-radius:6px;color:var(--tx2);font-size:11px;cursor:pointer;">
+              style="padding:10px 14px;background:var(--bg);border:1px solid var(--brd);border-radius:6px;color:var(--tx2);font-size:11px;cursor:pointer;">
               ✏ Editar
             </button>
             <button onclick="layoutAbrirModalEliminarFila('${esc(g.pasillo)}','${esc(g.estante)}')"
-              style="padding:5px 10px;background:var(--bg);border:1px solid #7f1d1d;border-radius:6px;color:#f87171;font-size:11px;cursor:pointer;">
+              style="padding:10px 14px;background:var(--bg);border:1px solid #7f1d1d;border-radius:6px;color:#f87171;font-size:11px;cursor:pointer;">
               🗑 Eliminar
             </button>
           </div>` : ''}
@@ -611,7 +611,7 @@ async function layoutEliminarCuerpo(pasillo, fila, cuerpo, forzar) {
   const msg = forzar
     ? `⚠ FORZAR eliminación de TODO el cuerpo ${codigoCuerpo} — esto borra también el historial real de picking/reposición de cada hueco, PARA SIEMPRE. ¿Continuar?`
     : `¿Eliminar TODO el cuerpo ${codigoCuerpo} (todos sus entrepaños y huecos)? Esta acción no se puede deshacer. Se bloquea completo si algún hueco tiene stock o historial real — usa "Reclasificar > Desactivar cuerpo" en ese caso.`;
-  if (!confirm(msg)) return;
+  if (!await _modalConfirmar(msg, { titulo: forzar ? 'Forzar eliminación' : 'Eliminar cuerpo', peligro: true })) return;
   try {
     const r = await fetch(API + `/api/almacenes/${ALMACEN_ID}/ubicaciones/cuerpo`, {
       method: 'DELETE',
@@ -622,7 +622,7 @@ async function layoutEliminarCuerpo(pasillo, fila, cuerpo, forzar) {
     if (!r.ok) {
       if (!forzar && r.status === 400) {
         alerta(d.error || 'Error eliminando el cuerpo', 'error');
-        if (confirm(`Bloqueado: ${d.error}\n\n¿Forzar de todos modos? Requiere rol admin y borra el historial para siempre.`)) {
+        if (await _modalConfirmar(`Bloqueado: ${d.error}\n\n¿Forzar de todos modos? Requiere rol admin y borra el historial para siempre.`, { titulo: 'Forzar eliminación', peligro: true })) {
           return layoutEliminarCuerpo(pasillo, fila, cuerpo, true);
         }
         return;
@@ -810,7 +810,7 @@ async function layoutGuardarEliminarFila(forzar) {
   const msg = forzar
     ? `⚠ FORZAR eliminación de la fila ${codigoFila} — esto borra también el historial real de picking/reposición de cada posición, PARA SIEMPRE. ¿Continuar?`
     : `¿Eliminar la fila ${codigoFila}? Esta acción no se puede deshacer. Solo se borrarán las posiciones sin stock ni historial.`;
-  if (!confirm(msg)) return;
+  if (!await _modalConfirmar(msg, { titulo: forzar ? 'Forzar eliminación' : 'Eliminar fila', peligro: true })) return;
 
   try {
     const r = await fetch(API + `/api/almacenes/${ALMACEN_ID}/ubicaciones/fila`, {
@@ -833,7 +833,7 @@ async function layoutGuardarEliminarFila(forzar) {
 
     // Bloqueadas por stock/historial: ofrecer forzar como reintento explícito, solo sobre lo que falló.
     if (!forzar && bloqueadasCodigos.length) {
-      if (confirm(`${bloqueadasCodigos.length} posición(es) bloqueada(s) por stock/historial.\n\n¿Forzar de todos modos sobre TODA la fila? Requiere rol admin y borra el historial para siempre.`)) {
+      if (await _modalConfirmar(`${bloqueadasCodigos.length} posición(es) bloqueada(s) por stock/historial.\n\n¿Forzar de todos modos sobre TODA la fila? Requiere rol admin y borra el historial para siempre.`, { titulo: 'Forzar eliminación', peligro: true })) {
         return layoutGuardarEliminarFila(true);
       }
     }
@@ -1014,7 +1014,7 @@ async function layoutEliminarUbicacion(ubId, codigo, forzar) {
   const msg = forzar
     ? `⚠ FORZAR eliminación de ${codigo} — esto borra también el historial real de picking/reposición asociado, PARA SIEMPRE. Esto no es una prueba reversible. ¿Continuar?`
     : `¿Eliminar la ubicación ${codigo}? Esta acción no se puede deshacer. Solo se puede eliminar si no tiene stock ni historial.`;
-  if (!confirm(msg)) return;
+  if (!await _modalConfirmar(msg, { titulo: forzar ? 'Forzar eliminación' : 'Eliminar ubicación', peligro: true })) return;
   try {
     const url = API + `/api/almacenes/ubicaciones/${ubId}` + (forzar ? '?forzar=true' : '');
     const r = await fetch(url, {
@@ -1026,7 +1026,7 @@ async function layoutEliminarUbicacion(ubId, codigo, forzar) {
       // Bloqueada por stock/historial: ofrecer forzar como reintento explícito, nunca por defecto.
       if (!forzar && r.status === 400) {
         alerta(d.error || 'Error eliminando la ubicación', 'error');
-        if (confirm(`Bloqueada: ${d.error}\n\n¿Forzar de todos modos? Requiere rol admin y borra el historial para siempre.`)) {
+        if (await _modalConfirmar(`Bloqueada: ${d.error}\n\n¿Forzar de todos modos? Requiere rol admin y borra el historial para siempre.`, { titulo: 'Forzar eliminación', peligro: true })) {
           return layoutEliminarUbicacion(ubId, codigo, true);
         }
         return;
@@ -1433,7 +1433,7 @@ function layoutAbrirModalVerEntrepano(idsCsv) {
   cont.innerHTML = huecos.map(u => {
     const huecoLabel = u.codigo.split('-').pop();
     const skuLabel = u.producto_asignado_codigo ? `📦 ${u.producto_asignado_nombre || u.producto_asignado_codigo} · ${u.stock_actual ?? 0} UND` : 'Sin SKU asignado';
-    return `<div style="display:flex;align-items:center;gap:8px;padding:9px 0;border-top:1px solid var(--brd);"><div style="font-size:12px;font-family:monospace;font-weight:700;color:var(--tx);min-width:34px;">${huecoLabel}</div><div style="flex:1;font-size:12px;color:${u.producto_asignado_codigo ? '#60a5fa' : '#888'};overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${skuLabel}${!u.activo ? ' · INACTIVA' : ''}</div><div style="display:flex;gap:4px;flex-shrink:0;"><button title="Editar" onclick="layoutAbrirModalEditarUbicacion(${esc(u.id)})" style="padding:5px 8px;background:var(--bg);border:1px solid var(--brd);border-radius:5px;color:var(--tx2);font-size:11px;cursor:pointer;">✏</button><button title="Eliminar" onclick="layoutEliminarUbicacion(${esc(u.id)}, '${esc(u.codigo)}')" style="padding:5px 8px;background:var(--bg);border:1px solid #7f1d1d;border-radius:5px;color:#f87171;font-size:11px;cursor:pointer;">🗑</button><button title="Reclasificar" onclick="layoutAbrirModalReclasificar(${esc(u.id)})" style="padding:5px 8px;background:var(--bg);border:1px solid var(--brd);border-radius:5px;color:var(--tx2);font-size:11px;cursor:pointer;">⇄</button></div></div>`;
+    return `<div style="display:flex;align-items:center;gap:8px;padding:9px 0;border-top:1px solid var(--brd);"><div style="font-size:12px;font-family:monospace;font-weight:700;color:var(--tx);min-width:34px;">${huecoLabel}</div><div style="flex:1;font-size:12px;color:${u.producto_asignado_codigo ? '#60a5fa' : '#888'};overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${skuLabel}${!u.activo ? ' · INACTIVA' : ''}</div><div style="display:flex;gap:4px;flex-shrink:0;"><button title="Editar" onclick="layoutAbrirModalEditarUbicacion(${esc(u.id)})" style="padding:10px 12px;background:var(--bg);border:1px solid var(--brd);border-radius:5px;color:var(--tx2);font-size:11px;cursor:pointer;">✏</button><button title="Eliminar" onclick="layoutEliminarUbicacion(${esc(u.id)}, '${esc(u.codigo)}')" style="padding:10px 12px;background:var(--bg);border:1px solid #7f1d1d;border-radius:5px;color:#f87171;font-size:11px;cursor:pointer;">🗑</button><button title="Reclasificar" onclick="layoutAbrirModalReclasificar(${esc(u.id)})" style="padding:10px 12px;background:var(--bg);border:1px solid var(--brd);border-radius:5px;color:var(--tx2);font-size:11px;cursor:pointer;">⇄</button></div></div>`;
   }).join('');
   m.style.display = 'flex';
 }

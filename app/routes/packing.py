@@ -331,28 +331,8 @@ def cerrar_packing(id):
         if not hay_bultos:
             return jsonify({'error': 'Debes declarar al menos una pieza'}), 400
     try:
-        bultos = PackingService.cerrar_packing(tarea_id=id, bultos_data=bultos_data, usuario_id=uid)
-        from app.models.bulto import Bulto as _Bulto
-        from sqlalchemy.orm import selectinload as _sl_b
-        tarea = TareaPacking.query.get(id)
-        # Re-query bultos con eager load — expire_on_commit invalida los objetos retornados
-        # por cerrar_packing; b.to_dict() accede b.tarea (lazy) sin esto → N+1
-        bultos_resp = (_Bulto.query
-                       .options(_sl_b(_Bulto.tarea))
-                       .filter_by(tarea_id=id).all())
-        return jsonify({
-            'ok': True,
-            'mensaje': (
-                f'{len(bultos_resp)} pieza(s) registradas — Siesa confirmó la remisión'
-                if tarea.siesa_triggered else
-                f'{len(bultos_resp)} pieza(s) registradas — Siesa procesando (se confirma en segundos)'
-            ),
-            'siesa_triggered': tarea.siesa_triggered,
-            'numero_pedido': tarea.numero_pedido_siesa,
-            'cliente': tarea.cliente or '',
-            'municipio': tarea.municipio or '',
-            'bultos': [b.to_dict() for b in bultos_resp]
-        }), 200
+        resultado = PackingService.cerrar_packing_resultado(tarea_id=id, bultos_data=bultos_data, usuario_id=uid)
+        return jsonify(resultado), 200
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
     except Exception as e:

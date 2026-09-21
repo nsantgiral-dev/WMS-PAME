@@ -320,7 +320,8 @@ class TestLoPeligrosoNoSeConfundeConLoInocuo:
         for fn in self._PELIGROSAS:
             i = app.index(f'async function {fn}(')
             cuerpo = app[i:i + 1800]
-            assert 'confirm(' in cuerpo, f'{fn} escribe en Siesa sin confirmar'
+            assert 'confirm(' in cuerpo or '_modalConfirmar(' in cuerpo, (
+                f'{fn} escribe en Siesa sin confirmar')
 
     def test_la_confirmacion_nombra_la_consecuencia(self):
         """Un «¿estás seguro?» pelado se contesta que sí sin leerlo."""
@@ -435,7 +436,8 @@ class TestLosTresBotonesDeRecuperacionDeTraslado:
 
     def test_las_tres_piden_confirmacion(self):
         for fn in self._PELIGROSAS:
-            assert 'confirm(' in self._cuerpo(fn), (
+            cuerpo = self._cuerpo(fn)
+            assert 'confirm(' in cuerpo or '_modalConfirmar(' in cuerpo, (
                 f'{fn} crea un documento en Siesa o mueve inventario sin confirmar')
 
     def test_la_confirmacion_nombra_la_consecuencia(self):

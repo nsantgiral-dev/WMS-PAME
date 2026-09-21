@@ -48,7 +48,35 @@ let CAMARA_ACTIVA = false;
 let HTML5QR = null;          // legacy — ya no se usa, conservado por si acaso
 let _QUAGGA_BOX  = null;    // boxDivId activo
 let _QUAGGA_CB   = null;    // callback del scan activo
+let _QUAGGA_BTN  = null;    // botón "Escanear con cámara" que abrió la cámara activa
 let _SCAN_LAST_TS = 0;      // debounce: ms del último scan registrado
+// Ventana mínima entre dos escaneos aceptados durante lectura continua con
+// cámara (picking, recepción, devoluciones, traslados de tienda — cualquier
+// pantalla que deje la cámara abierta entre unidades, ver abrirCamara()).
+// 900ms alcanzaba para leer el mismo código detectado en frames sucesivos,
+// pero no le daba al operario tiempo real de RETIRAR la unidad ya contada y
+// poner la siguiente en foco — el código anterior, todavía en cuadro,
+// se volvía a aceptar como si fuera la unidad nueva. 1600ms es el punto
+// donde un swap manual de unidad ya alcanza a completarse.
+//
+// _SCAN_DEBOUNCE_MS ahora es el TECHO de seguridad, no el mecanismo
+// principal — ver _onQuaggaProcessed(). El lector físico (Bluetooth/USB,
+// ver SCANNER_BUFFER más abajo) nunca necesitó este ajuste: dispara un
+// código por gatillazo, evento discreto. La cámara analiza frames de video
+// sin parar mientras el código siga en cuadro, así que "cuánto esperar" es
+// la pregunta equivocada — lo que hace falta saber es "¿ya se fue el
+// código de encuadre?". Eso es lo que _onQuaggaProcessed() rastrea vía
+// Quagga.onProcessed (se dispara en cada frame, haya o no detección),
+// independiente de _onQuaggaDetect (que solo se dispara cuando SÍ hay
+// una decodificación). Con el código todavía en cuadro, _SCAN_ARMADO
+// se queda en false sin importar cuánto tiempo pase — el techo de
+// _SCAN_DEBOUNCE_MS solo existe por si el navegador no soporta
+// onProcessed o dejara de disparar, para no bloquear el escaneo para
+// siempre.
+let _SCAN_ARMADO = true;
+let _SCAN_SIN_DETECCION_DESDE = null;
+const _SCAN_REARME_GAP_MS = 350;
+const _SCAN_DEBOUNCE_MS = 1600;
 let CHART = null;
 let TAB = 'tab-dashboard';
 let ALMACEN_ID = 1;
@@ -121,7 +149,10 @@ document.addEventListener('DOMContentLoaded', () => {
 // 'tab-compras' agregado 2026-09-07: compras.py exige Roles.COMPRAS_ROLES
 // (admin/jefe_almacen/gerente/compras) en cada endpoint — supervisor nunca
 // estuvo en ese grupo y la pestaña quedaba viva mostrando error.
-const _TABS_OCULTAS_SUPERVISOR = ['tab-usuarios', 'tab-muelle', 'tab-liquidacion', 'tab-compras'];
+// 'tab-dashboard' agregado 2026-09-14: el supervisor ahora aterriza en
+// Pedidos (ver bloque esSupervisor) — el Dashboard es visión gerencial
+// general, no la pantalla de trabajo diaria de quien también apoya picking.
+const _TABS_OCULTAS_SUPERVISOR = ['tab-usuarios', 'tab-muelle', 'tab-liquidacion', 'tab-compras', 'tab-dashboard'];
 
 /**
  * Route user to the correct screen and start timers based on their role.
@@ -172,6 +203,8 @@ function mostrarSegunRol(rol) {
     // control_flota) — sin este reset, un admin que entra justo después de
     // un supervisor hereda sus pestañas ocultas hasta que alguien recarga.
     document.querySelectorAll('.nav-tab').forEach(el => { el.style.display = ''; });
+    const btnModoOp = document.getElementById('nav-modo-operario-supervisor');
+    if (btnModoOp) btnModoOp.style.display = 'none';
     if (soloFlota) {
       pantalla('pantalla-admin');
       if (OPERARIO) actualizarUI(OPERARIO);
@@ -196,6 +229,20 @@ function mostrarSegunRol(rol) {
           el.style.display = 'none';
         });
       });
+      // Modo Operario (2026-09-14) — exclusivo de NB1: el backend
+      // (get_tarea_actual) corta en seco a cualquier supervisor de otra
+      // bodega, así que el ítem del menú ni se muestra ahí — evita un
+      // enlace que lleva a una pantalla vacía por diseño.
+      if (btnModoOp && OPERARIO?.almacen_bodega_siesa_id === 'NB1') {
+        btnModoOp.style.display = 'block';
+      }
+      // Dashboard queda oculto para este rol (arriba, _TABS_OCULTAS_SUPERVISOR)
+      // — aterriza en Pedidos, su pantalla de trabajo real. tab() ya llama
+      // cargarAdmin() una vez; el timer de abajo sigue haciendo falta para
+      // el refresco periódico que el otro branch arma después del if.
+      tab('tab-pedidos');
+      TIMER_ADMIN = setInterval(() => cargarAdmin(true), 30000);
+      return;
     }
     cargarAdmin();
     TIMER_ADMIN = setInterval(() => cargarAdmin(true), 30000);
@@ -254,6 +301,7 @@ function pararTimers() {
   clearInterval(TIMER_OPERARIO);
   clearInterval(TIMER_REC);
   if (typeof COMP_TIMER !== 'undefined') clearInterval(COMP_TIMER);
+  if (typeof ABAST_TIMER !== 'undefined') clearInterval(ABAST_TIMER);
   RECEPCION_ACTUAL = null;
   DEVOLUCION_ACTUAL = null;
 }
@@ -273,24 +321,268 @@ function monitorRed() {
   update();
 }
 
-/** Send queued offline actions to the server and clear the local queue on success. */
+/**
+ * Send queued offline actions to the server. Solo se quitan de la cola los ítems
+ * que el servidor confirmó — uno que falle (ej. rechazado por regla de negocio)
+ * se queda encolado para el próximo intento en vez de perderse junto con los que
+ * sí sincronizaron.
+ */
 async function syncOffline() {
+  if (!COLA_OFFLINE.length) return;
   try {
     const r = await post('/api/mobile/sync', { cola: COLA_OFFLINE });
-    if (r.sincronizados > 0) {
-      COLA_OFFLINE = [];
-      localStorage.setItem('wms_cola_offline', '[]');
-      alerta('✓ ' + r.sincronizados + ' tarea(s) sincronizadas', 'exito');
-    }
+    const resultados = r.resultados || [];
+    const qidsExitosos = new Set(resultados.filter(x => x.exito).map(x => x._qid));
+    COLA_OFFLINE = COLA_OFFLINE.filter(item => !qidsExitosos.has(item._qid));
+    localStorage.setItem('wms_cola_offline', JSON.stringify(COLA_OFFLINE));
+    if (r.sincronizados > 0) alerta('✓ ' + r.sincronizados + ' tarea(s) sincronizadas', 'exito');
+    // Avisar al módulo dueño de cada acción puntual (ej. packing.js espera a
+    // cerrar_packing para imprimir la etiqueta e quitar el bloqueo de pantalla).
+    resultados.filter(x => x.exito && x.accion).forEach(x => {
+      const cb = window['onSync_' + x.accion];
+      if (typeof cb === 'function') cb(x.resultado);
+    });
   } catch (e) {}
 }
 
-/** @param {Object} datos - Action payload to enqueue for later sync. */
+/** @param {Object} datos - Action payload to enqueue for later sync. @returns {Object} el ítem encolado (incluye `_qid`) */
 function guardarOffline(datos) {
-  COLA_OFFLINE.push({ ...datos, ts: Date.now() });
+  const item = { ...datos, ts: Date.now(), _qid: `${Date.now()}_${Math.random().toString(36).slice(2, 8)}` };
+  COLA_OFFLINE.push(item);
   localStorage.setItem('wms_cola_offline', JSON.stringify(COLA_OFFLINE));
   alerta('Sin WiFi — guardado para sincronizar', 'advertencia');
+  return item;
 }
+
+/**
+ * POST con reintento automático ante corte de red real (no ante error del servidor).
+ * Pensado para escaneos individuales: el backend no tiene forma de "encolarlos" como
+ * hace `/api/mobile/sync` con una confirmación completa, así que la única resiliencia
+ * posible aquí es reintentar antes de que el operario pierda el escaneo.
+ * @param {string} url
+ * @param {Object} payload
+ * @param {number} [intentos=2] - reintentos adicionales tras el primer intento fallido
+ * @param {number} [esperaMs=600] - pausa entre reintentos
+ */
+/** Id de escaneo para deduplicar reintentos server-side — no necesita ser criptográficamente fuerte. */
+function generarScanId() {
+  if (window.crypto?.randomUUID) return crypto.randomUUID();
+  return 'scan-' + Date.now() + '-' + Math.random().toString(36).slice(2, 10);
+}
+
+async function postConReintento(url, payload, intentos = 2, esperaMs = 600) {
+  for (let i = 0; ; i++) {
+    try {
+      return await post(url, payload);
+    } catch (e) {
+      if (e.status || i >= intentos) throw e; // error del servidor, o sin reintentos restantes
+      await new Promise(res => setTimeout(res, esperaMs));
+    }
+  }
+}
+
+/**
+ * Modal propio para capturar una cantidad numérica — reemplaza `prompt()`.
+ * Teclado numérico garantizado (`inputmode="numeric"`), valida el rango
+ * antes de dejar confirmar (no substituye silenciosamente un valor inválido
+ * como hacía `parseInt(x) || default`), y con un solo paso en vez de
+ * encadenar `prompt()` + `confirm()`.
+ * @param {string} titulo
+ * @param {string} mensajeHtml - se inserta tal cual, permite HTML simple
+ * @param {Object} [opts]
+ * @param {number} [opts.min=1]
+ * @param {number} [opts.max]
+ * @param {number|string} [opts.valorInicial='']
+ * @param {string} [opts.textoConfirmar='Confirmar']
+ * @param {string} [opts.textoCancelar='Cancelar']
+ * @returns {Promise<number|null>} la cantidad, o null si se canceló
+ */
+function _modalCantidad(titulo, mensajeHtml, opts = {}) {
+  const {
+    min = 1, max, valorInicial = '',
+    textoConfirmar = 'Confirmar', textoCancelar = 'Cancelar',
+  } = opts;
+  return new Promise(resolve => {
+    const overlay = document.createElement('div');
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.92);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px;';
+    overlay.innerHTML = `
+      <div style="background:#111;border-radius:16px;padding:24px;width:100%;max-width:360px;border:1px solid #333;">
+        <div style="font-size:18px;font-weight:800;color:#fff;margin-bottom:10px;">${titulo}</div>
+        <div style="font-size:14px;color:#aaa;margin-bottom:16px;line-height:1.5;">${mensajeHtml}</div>
+        <input id="_mc-input" type="number" inputmode="numeric"
+          ${min != null ? `min="${min}"` : ''} ${max != null ? `max="${max}"` : ''} value="${valorInicial}"
+          style="width:100%;padding:14px;font-size:22px;font-weight:700;background:#000;border:2px solid #333;border-radius:10px;color:#fff;text-align:center;margin-bottom:6px;box-sizing:border-box;">
+        <div id="_mc-error" style="font-size:12px;color:#ef4444;min-height:16px;margin-bottom:10px;"></div>
+        <div style="display:flex;gap:10px;">
+          <button id="_mc-no" style="flex:1;padding:14px;background:#1a1a1a;color:#aaa;border:1px solid #333;border-radius:10px;font-size:14px;font-weight:700;cursor:pointer;">${textoCancelar}</button>
+          <button id="_mc-si" style="flex:1;padding:14px;background:var(--pm);color:#fff;border:none;border-radius:10px;font-size:14px;font-weight:700;cursor:pointer;">${textoConfirmar}</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    const input = overlay.querySelector('#_mc-input');
+    const errEl = overlay.querySelector('#_mc-error');
+    const cerrar = valor => { overlay.remove(); resolve(valor); };
+    const intentarConfirmar = () => {
+      const val = parseInt(input.value, 10);
+      if (isNaN(val) || val < min || (max != null && val > max)) {
+        errEl.textContent = max != null ? `Debe ser un número entre ${min} y ${max}` : `Debe ser un número desde ${min}`;
+        input.focus();
+        return;
+      }
+      cerrar(val);
+    };
+    overlay.querySelector('#_mc-si').onclick = intentarConfirmar;
+    overlay.querySelector('#_mc-no').onclick = () => cerrar(null);
+    input.addEventListener('keydown', e => { if (e.key === 'Enter') intentarConfirmar(); });
+    input.focus();
+    input.select();
+  });
+}
+
+/**
+ * Modal de confirmación compartido — reemplazo de `confirm()` nativo, que en
+ * iOS/Android bloquea el hilo con un diálogo del sistema operativo (no
+ * estilizable, texto largo se corta) en vez de la UI de la app.
+ * @param {string} mensajeHtml
+ * @param {{titulo?:string, textoConfirmar?:string, textoCancelar?:string, peligro?:boolean}} [opts]
+ * @returns {Promise<boolean>}
+ */
+function _modalConfirmar(mensajeHtml, opts = {}) {
+  const {
+    titulo = '¿Confirmar?', textoConfirmar = 'Confirmar', textoCancelar = 'Cancelar',
+    peligro = false,
+  } = opts;
+  return new Promise(resolve => {
+    const overlay = document.createElement('div');
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.92);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px;';
+    overlay.innerHTML = `
+      <div style="background:#111;border-radius:16px;padding:24px;width:100%;max-width:400px;border:1px solid #333;max-height:80vh;overflow-y:auto;">
+        <div style="font-size:17px;font-weight:800;color:#fff;margin-bottom:10px;">${titulo}</div>
+        <div style="font-size:14px;color:#ccc;margin-bottom:20px;line-height:1.5;white-space:pre-line;">${mensajeHtml}</div>
+        <div style="display:flex;gap:10px;">
+          <button id="_mconf-no" style="flex:1;padding:14px;background:#1a1a1a;color:#aaa;border:1px solid #333;border-radius:10px;font-size:14px;font-weight:700;cursor:pointer;">${textoCancelar}</button>
+          <button id="_mconf-si" style="flex:1;padding:14px;background:${peligro ? '#7f1d1d' : 'var(--pm)'};color:#fff;border:none;border-radius:10px;font-size:14px;font-weight:700;cursor:pointer;">${textoConfirmar}</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    const cerrar = valor => { overlay.remove(); resolve(valor); };
+    overlay.querySelector('#_mconf-si').onclick = () => cerrar(true);
+    overlay.querySelector('#_mconf-no').onclick = () => cerrar(false);
+  });
+}
+
+/**
+ * Modal propio para capturar texto libre — reemplaza `prompt()` para motivos,
+ * observaciones, etc. Mismo patrón que `_modalCantidad`/`_modalConfirmar`.
+ * @param {string} titulo
+ * @param {string} mensajeHtml
+ * @param {{obligatorio?:boolean, valorInicial?:string, placeholder?:string, textoConfirmar?:string, textoCancelar?:string}} [opts]
+ * @returns {Promise<string|null>} el texto, o null si se canceló
+ */
+function _modalTexto(titulo, mensajeHtml, opts = {}) {
+  const {
+    obligatorio = true, valorInicial = '', placeholder = '',
+    textoConfirmar = 'Confirmar', textoCancelar = 'Cancelar',
+  } = opts;
+  return new Promise(resolve => {
+    const overlay = document.createElement('div');
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.92);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px;';
+    overlay.innerHTML = `
+      <div style="background:#111;border-radius:16px;padding:24px;width:100%;max-width:400px;border:1px solid #333;">
+        <div style="font-size:18px;font-weight:800;color:#fff;margin-bottom:10px;">${titulo}</div>
+        <div style="font-size:14px;color:#aaa;margin-bottom:16px;line-height:1.5;">${mensajeHtml}</div>
+        <textarea id="_mt-input" placeholder="${placeholder}" rows="3"
+          style="width:100%;padding:12px;font-size:15px;background:#000;border:2px solid #333;border-radius:10px;color:#fff;margin-bottom:6px;box-sizing:border-box;font-family:inherit;resize:vertical;">${valorInicial}</textarea>
+        <div id="_mt-error" style="font-size:12px;color:#ef4444;min-height:16px;margin-bottom:10px;"></div>
+        <div style="display:flex;gap:10px;">
+          <button id="_mt-no" style="flex:1;padding:14px;background:#1a1a1a;color:#aaa;border:1px solid #333;border-radius:10px;font-size:14px;font-weight:700;cursor:pointer;">${textoCancelar}</button>
+          <button id="_mt-si" style="flex:1;padding:14px;background:var(--pm);color:#fff;border:none;border-radius:10px;font-size:14px;font-weight:700;cursor:pointer;">${textoConfirmar}</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    const input = overlay.querySelector('#_mt-input');
+    const errEl = overlay.querySelector('#_mt-error');
+    const cerrar = valor => { overlay.remove(); resolve(valor); };
+    const intentarConfirmar = () => {
+      const val = input.value.trim();
+      if (obligatorio && !val) {
+        errEl.textContent = 'Este campo es obligatorio';
+        input.focus();
+        return;
+      }
+      cerrar(val);
+    };
+    overlay.querySelector('#_mt-si').onclick = intentarConfirmar;
+    overlay.querySelector('#_mt-no').onclick = () => cerrar(null);
+    input.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); intentarConfirmar(); } });
+    input.focus();
+  });
+}
+
+/**
+ * Resuelve qué representa un código escaneado contra `/api/empaques/scan/` —
+ * compartido entre picking (`_procesarScanPicking`) y packing
+ * (`empProcesarEscaneo`), que hasta ahora reimplementaban la misma
+ * interpretación GS1/EAN/LPN por separado: un fix en un lado no llegaba
+ * al otro (ver CLAUDE.md sobre `identidadConductor`, mismo patrón de riesgo).
+ *
+ * `EAN_BASE` siempre trae `factor:1` desde el backend (scan_barcode() en
+ * empaques_service.py solo lo devuelve cuando `factor_conversion == 1`), así
+ * que tratarlo igual que GS1_UNICO no cambia ningún resultado — solo unifica
+ * el camino.
+ *
+ * @param {string} codigo
+ * @returns {Promise<{tipo:string, codigoParaBackend:string, cantidad:number,
+ *   lpnCodigo:string|null, unidad:string|null, ambiguos:Array|null}>}
+ */
+async function resolverEscaneoEmpaque(codigo) {
+  let scan;
+  try {
+    scan = await get(`/api/empaques/scan/${encodeURIComponent(codigo)}`);
+  } catch (_) {
+    scan = { tipo: 'NO_ENCONTRADO' };
+  }
+  const tipo = scan.tipo || 'NO_ENCONTRADO';
+
+  if (tipo === 'GS1_AMBIGUO') {
+    return { tipo, ambiguos: scan.ambiguos || [] };
+  }
+
+  let codigoParaBackend = codigo;  // default: código de producto base (EAN-13 en productos.codigo_barras)
+  let cantidad = 1;
+  let unidad = null;
+  let lpnCodigo = null;
+
+  if ((tipo === 'GS1_UNICO' || tipo === 'EAN_BASE') && scan.producto?.codigo) {
+    codigoParaBackend = scan.producto.codigo;
+    cantidad = scan.factor || 1;
+    unidad = scan.empaque?.unidad_medida || null;
+  } else if (tipo === 'LPN' && scan.producto?.codigo) {
+    codigoParaBackend = scan.producto.codigo;
+    cantidad = scan.factor || 1;  // scan.factor = lpn.cantidad_actual
+    lpnCodigo = codigo;           // 'LPN-XXXXXXX' original
+    unidad = scan.empaque?.unidad_medida || null;
+  }
+  // NO_ENCONTRADO → enviar código original, el backend da error descriptivo
+
+  return { tipo, codigoParaBackend, cantidad, lpnCodigo, unidad, ambiguos: null };
+}
+
+// e.key depende del layout de teclado ACTIVO (SO + firmware del lector).
+// Un lector configurado para US emulando sobre un Windows en Español
+// Latinoamérica transmite el guion como apóstrofe — confirmado en vivo
+// (2026-09-14): "BN-10" llegaba como "BN'10", incluso después de
+// reprogramar el lector con el código de barras "Spanish Keyboard" del
+// manual (esa vía de hardware quedó agotada, seguía fallando igual).
+// e.code identifica la TECLA FÍSICA, no el carácter que el layout le
+// asigna — es inmune a cualquier desacople lector/SO. Solo hace falta
+// mapear los símbolos que de verdad difieren entre layouts; letras y
+// dígitos ya llegan bien vía e.key en todos los layouts latinos probados.
+const SCANNER_CODE_A_CHAR = {
+  Minus: '-', Equal: '=', BracketLeft: '[', BracketRight: ']',
+  Backslash: '\\', Semicolon: ';', Quote: "'", Backquote: '`',
+  Comma: ',', Period: '.', Slash: '/',
+};
 
 /** Initialize laser/Bluetooth scanner input listener with keystroke buffering. */
 function scannerLaser() {
@@ -319,10 +611,13 @@ function scannerLaser() {
       SCANNER_BUFFER = '';
       clearTimeout(SCANNER_TIMER);
       if (cod) procesarScan(cod);
-    } else if (e.key && e.key.length === 1) {
-      SCANNER_BUFFER += e.key;
-      clearTimeout(SCANNER_TIMER);
-      SCANNER_TIMER = setTimeout(() => { SCANNER_BUFFER = ''; }, 150);
+    } else {
+      const ch = SCANNER_CODE_A_CHAR[e.code] || (e.key && e.key.length === 1 ? e.key : null);
+      if (ch) {
+        SCANNER_BUFFER += ch;
+        clearTimeout(SCANNER_TIMER);
+        SCANNER_TIMER = setTimeout(() => { SCANNER_BUFFER = ''; }, 150);
+      }
     }
   });
 }
@@ -370,6 +665,32 @@ async function get(url) {
   } finally { clearTimeout(timer); }
 }
 
+/**
+ * Deshabilita el botón que disparó el evento mientras `fn()` corre — evita
+ * doble-tap en wifi/datos inestables (latencias de 2-5s son comunes en
+ * bodega): sin esto, un toque sin reacción visible invita a tocar de nuevo,
+ * disparando la misma acción dos veces. El backend suele validar estado y
+ * evitar corrupción de datos, pero el operario igual ve una petición extra,
+ * un toast confuso, o corre contra ese mismo guard del servidor.
+ * @param {Event} event - el evento del onclick (pasar literalmente `event` en el call-site)
+ * @param {Function} fn - función (async o no) a ejecutar
+ * @param {string} [textoOcupado] - texto a mostrar en el botón mientras corre
+ */
+async function conBotonOcupado(event, fn, textoOcupado) {
+  const btn = event?.currentTarget || event?.target;
+  if (!btn) { await fn(); return; }
+  const origTexto = btn.textContent;
+  const origDisabled = btn.disabled;
+  btn.disabled = true;
+  if (textoOcupado) btn.textContent = textoOcupado;
+  try {
+    await fn();
+  } finally {
+    btn.disabled = origDisabled;
+    if (textoOcupado) btn.textContent = origTexto;
+  }
+}
+
 /** Ejecuta fn() dando feedback visual al botón que disparó el evento. */
 async function _refreshBtn(event, fn) {
   const btn = event.currentTarget || event.target;
@@ -395,12 +716,24 @@ async function _refreshBtn(event, fn) {
  * @returns {Promise<Object>} Parsed JSON response.
  */
 async function post(url, body) {
-  const r = await fetch(API + url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + TOKEN },
-    body: JSON.stringify(body)
-  });
-  return _checkResp(r);
+  const ctrl = new AbortController();
+  // 25s, no 15s como get(): varias rutas detrás de post()/put() disparan Siesa
+  // (packing, liquidación) y /api/mobile/confirmar ya devuelve 503+retry_after
+  // cuando Siesa está genuinamente lenta — este timeout es el respaldo para el
+  // caso en que ni siquiera esa respuesta rápida llega.
+  const timer = setTimeout(() => ctrl.abort(), 25000);
+  try {
+    const r = await fetch(API + url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + TOKEN },
+      body: JSON.stringify(body),
+      signal: ctrl.signal
+    });
+    return _checkResp(r);
+  } catch (e) {
+    if (e.name === 'AbortError') throw new Error('Tiempo de espera agotado — intenta de nuevo');
+    throw e;
+  } finally { clearTimeout(timer); }
 }
 
 /**
@@ -410,12 +743,87 @@ async function post(url, body) {
  * @returns {Promise<Object>} Parsed JSON response.
  */
 async function put(url, body = {}) {
-  const r = await fetch(API + url, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + TOKEN },
-    body: JSON.stringify(body)
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 25000);
+  try {
+    const r = await fetch(API + url, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + TOKEN },
+      body: JSON.stringify(body),
+      signal: ctrl.signal
+    });
+    return _checkResp(r);
+  } catch (e) {
+    if (e.name === 'AbortError') throw new Error('Tiempo de espera agotado — intenta de nuevo');
+    throw e;
+  } finally { clearTimeout(timer); }
+}
+
+/**
+ * fetch() autenticado con timeout — para los pocos casos que get()/post()/put()
+ * no cubren: cuerpo de respuesta que no es JSON (blob de un CSV) o un método
+ * que esos tres no soportan (PATCH). Devuelve la `Response` cruda sin
+ * parsear — a propósito, porque `_checkResp()` asume JSON y estos casos no
+ * lo son. Mismo timeout/abort que `get()`/`post()`/`put()`, para no
+ * reinventar esa parte cada vez (ver hallazgo: `fetch()` crudo bypassa los
+ * helpers centralizados — no repetir el mismo patrón con otro nombre).
+ * @param {string} url - Ruta de la API (relativa al origen).
+ * @param {RequestInit} [options] - Igual que `fetch()` (method, headers, body...).
+ * @param {number} [timeoutMs=25000]
+ * @returns {Promise<Response>}
+ */
+async function _fetchConTimeout(url, options = {}, timeoutMs = 25000) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    return await fetch(API + url, {
+      ...options,
+      headers: { Authorization: 'Bearer ' + TOKEN, ...(options.headers || {}) },
+      signal: ctrl.signal,
+    });
+  } catch (e) {
+    if (e.name === 'AbortError') throw new Error('Tiempo de espera agotado — intenta de nuevo');
+    throw e;
+  } finally { clearTimeout(timer); }
+}
+
+/**
+ * Sube un archivo (multipart/form-data) reportando progreso real de subida.
+ * Único helper de transporte que usa `XMLHttpRequest` en vez de `fetch()`:
+ * es el único de los dos que expone `upload.onprogress` — `fetch()` no lo
+ * tiene. El resto de la lógica (headers, timeout, parseo de error) es la
+ * misma política que `post()`/`put()`, para que un cambio ahí no diverja del
+ * resto de los helpers (Regla 0 corolario: una política, una función).
+ * @param {string} url - Ruta de la API (relativa al origen).
+ * @param {FormData} formData - Archivo(s) a subir.
+ * @param {(pct:number)=>void} [onProgress] - Callback con el % de subida (0-100).
+ * @param {number} [timeoutMs=90000] - Timeout total, más largo que post()/put()
+ *   porque el archivo puede tardar en subir Y el servidor puede procesarlo
+ *   síncrono después de recibirlo.
+ * @returns {Promise<Object>} Cuerpo JSON de la respuesta.
+ */
+function subirArchivoConProgreso(url, formData, onProgress, timeoutMs = 90000) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', API + url);
+    xhr.setRequestHeader('Authorization', 'Bearer ' + TOKEN);
+    xhr.timeout = timeoutMs;
+    if (onProgress) {
+      xhr.upload.onprogress = (ev) => {
+        if (ev.lengthComputable) onProgress(Math.round((ev.loaded / ev.total) * 100));
+      };
+    }
+    xhr.onload = () => {
+      let body;
+      try { body = JSON.parse(xhr.responseText); } catch (_) { body = {}; }
+      if (xhr.status === 401) { salir(true); reject(new Error('401')); return; }
+      if (xhr.status >= 200 && xhr.status < 300) resolve(body);
+      else reject(new Error(body.error || `Error ${xhr.status}`));
+    };
+    xhr.ontimeout = () => reject(new Error('Tiempo de espera agotado — intenta de nuevo'));
+    xhr.onerror = () => reject(new Error('Error de conexión'));
+    xhr.send(formData);
   });
-  return _checkResp(r);
 }
 
 /** Authenticate user with email/password, store token, and route to role screen. */
@@ -522,6 +930,31 @@ function layoutVolverDesdeOperario() {
     pedirTarea();
     TIMER_OPERARIO = setInterval(() => { if (!TAREA_ACTUAL) pedirTarea(); }, 5000);
   }
+}
+
+/**
+ * Modo Operario del supervisor (2026-09-14) — apoya picking de
+ * pedidos/traslados y reposición en NB1, sin salir de su misma sesión.
+ * Nunca conteo cíclico: get_tarea_actual ya lo excluye server-side (sería
+ * juez y parte, siendo quien resuelve el Conteo Definitivo). El botón que
+ * llama a esta función solo se muestra si almacen_bodega_siesa_id es NB1
+ * (mostrarSegunRol) — igual, el backend lo corta en seco si no lo es.
+ */
+function supervisorEntrarModoOperario() {
+  pararTimers();
+  pantalla('pantalla-operario');
+  actualizarUI(OPERARIO);
+  const btnVolver = document.getElementById('btn-volver-admin-supervisor');
+  if (btnVolver) btnVolver.style.display = 'inline-flex';
+  pedirTarea();
+  TIMER_OPERARIO = setInterval(() => { if (!TAREA_ACTUAL) pedirTarea(); }, 5000);
+}
+
+/** Vuelve del Modo Operario al panel admin del supervisor. */
+function supervisorVolverAdmin() {
+  const btnVolver = document.getElementById('btn-volver-admin-supervisor');
+  if (btnVolver) btnVolver.style.display = 'none';
+  mostrarSegunRol(OPERARIO.rol);
 }
 
 /**
@@ -822,30 +1255,24 @@ function movimientos(lista) {
 
 /** @param {number} id - Picking task ID to reopen back into the pool. */
 async function reabrirTareaPicking(id) {
-  if (!confirm('¿Reabrir esta tarea al pool de picking? El operario que llegue a esa ubicación la tomará de nuevo.')) return;
+  if (!await _modalConfirmar('¿Reabrir esta tarea al pool de picking? El operario que llegue a esa ubicación la tomará de nuevo.', { titulo: 'Reabrir tarea' })) return;
   try {
-    const r = await fetch(API + `/api/picking/${id}/reabrir`, { method: 'PUT', headers: { Authorization: 'Bearer ' + TOKEN } });
-    const d = await r.json();
-    if (r.ok) { alerta('Tarea reabierta al pool ✓', 'exito'); await cargarTareasBodega(); }
-    else alerta(d.error || 'Error al reabrir', 'error');
-  } catch (e) { alerta('Error de conexión', 'error'); }
+    await put(`/api/picking/${id}/reabrir`);
+    alerta('Tarea reabierta al pool ✓', 'exito');
+    await cargarTareasBodega();
+  } catch (e) { alerta(e.message || 'Error al reabrir', 'error'); }
 }
 
 /** @param {number} id - Picking task ID to cancel (prompts for reason). */
 async function cancelarTareaPicking(id) {
-  const motivo = prompt('Motivo de cancelación (obligatorio):');
-  if (!motivo || !motivo.trim()) return;
-  if (!confirm(`¿Cancelar esta tarea de picking? El pedido del cliente quedará incompleto.`)) return;
+  const motivo = await _modalTexto('Cancelar tarea', 'Motivo de cancelación (obligatorio):');
+  if (!motivo) return;
+  if (!await _modalConfirmar('¿Cancelar esta tarea de picking? El pedido del cliente quedará incompleto.', { titulo: 'Confirmar cancelación', peligro: true })) return;
   try {
-    const r = await fetch(API + `/api/picking/${id}/cancelar`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + TOKEN },
-      body: JSON.stringify({ motivo })
-    });
-    const d = await r.json();
-    if (r.ok) { alerta('Tarea cancelada', 'advertencia'); await cargarTareasBodega(); }
-    else alerta(d.error || 'Error al cancelar', 'error');
-  } catch (e) { alerta('Error de conexión', 'error'); }
+    await put(`/api/picking/${id}/cancelar`, { motivo });
+    alerta('Tarea cancelada', 'advertencia');
+    await cargarTareasBodega();
+  } catch (e) { alerta(e.message || 'Error al cancelar', 'error'); }
 }
 
 /** @param {number} id - Task ID whose inline audit form to show. */
@@ -868,24 +1295,15 @@ async function auditoriaGuardar(id) {
   if (!resultado) { alerta('Selecciona un resultado antes de guardar', 'error'); return; }
 
   try {
-    const r = await fetch(API + `/api/picking/${id}/auditar`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + TOKEN },
-      body: JSON.stringify({
-        resultado,
-        cantidad_hallada: cantidadHallada,
-        ubicacion_hallada: ubicacion || null,
-        observaciones: observaciones || null,
-      }),
+    await post(`/api/picking/${id}/auditar`, {
+      resultado,
+      cantidad_hallada: cantidadHallada,
+      ubicacion_hallada: ubicacion || null,
+      observaciones: observaciones || null,
     });
-    const d = await r.json();
-    if (r.ok) {
-      alerta('Auditoría registrada ✓', 'exito');
-      await cargarTareasBodega();
-    } else {
-      alerta(d.error || 'Error al guardar auditoría', 'error');
-    }
-  } catch (e) { alerta('Error de conexión', 'error'); }
+    alerta('Auditoría registrada ✓', 'exito');
+    await cargarTareasBodega();
+  } catch (e) { alerta(e.message || 'Error al guardar auditoría', 'error'); }
 }
 
 /** Fetch Siesa orders and render grouped pedidos list with action buttons. */
@@ -1588,8 +2006,7 @@ async function barcodesCobertura() {
 /** Baja el CSV de los que no se pueden escanear, para repartirlo en bodega. */
 async function barcodesDescargarFaltantes() {
   try {
-    const r = await fetch(API + '/api/productos/sin-codigo-barras?formato=csv',
-                          { headers: { Authorization: 'Bearer ' + TOKEN } });
+    const r = await _fetchConTimeout('/api/productos/sin-codigo-barras?formato=csv');
     if (!r.ok) { alerta('No se pudo bajar la lista', 'error'); return; }
     const blob = await r.blob();
     const url = URL.createObjectURL(blob);
@@ -1816,7 +2233,30 @@ async function verReconciliacion() {
 
 /** Generate an LPN label for an unlabeled pack detected during picking. */
 
-// ─── Quagga2 — debounce interno ───────────────────────────────────────────────
+// ─── Quagga2 — rearme por hueco de encuadre + techo de debounce ───────────────
+/**
+ * Se dispara en CADA frame que Quagga procesa, haya o no una decodificación
+ * — a diferencia de onDetected, que solo dispara cuando SÍ decodificó algo.
+ * Es lo que permite saber "¿el código sigue en cuadro?" en vez de adivinarlo
+ * con un timer. Mientras haya algo detectado (aunque no pase el filtro de
+ * confianza de _onQuaggaDetect — acá basta con que algo esté en cuadro) el
+ * hueco no arranca; apenas un frame no ve nada, empieza a contar, y solo
+ * tras _SCAN_REARME_GAP_MS consecutivos sin nada se rearma el escaneo.
+ * @param {Object} result - Resultado de Quagga2 para este frame (puede no traer codeResult).
+ */
+function _onQuaggaProcessed(result) {
+  const hayCodigo = !!(result && result.codeResult && result.codeResult.code);
+  if (hayCodigo) {
+    _SCAN_SIN_DETECCION_DESDE = null;
+    return;
+  }
+  const ahora = Date.now();
+  if (_SCAN_SIN_DETECCION_DESDE === null) _SCAN_SIN_DETECCION_DESDE = ahora;
+  if (!_SCAN_ARMADO && ahora - _SCAN_SIN_DETECCION_DESDE >= _SCAN_REARME_GAP_MS) {
+    _SCAN_ARMADO = true;
+  }
+}
+
 /** @param {Object} result - Quagga2 detection result with codeResult and confidence data. */
 function _onQuaggaDetect(result) {
   const code = result && result.codeResult && result.codeResult.code;
@@ -1831,8 +2271,13 @@ function _onQuaggaDetect(result) {
   }
 
   const now = Date.now();
-  if (now - _SCAN_LAST_TS < 900) return;
+  // Armado (hubo un hueco real de encuadre) → acepta ya, sin esperar el
+  // techo. Si no, el techo sigue protegiendo por si onProcessed no rearmó.
+  if (!_SCAN_ARMADO && now - _SCAN_LAST_TS < _SCAN_DEBOUNCE_MS) return;
+
   _SCAN_LAST_TS = now;
+  _SCAN_ARMADO = false;
+  _SCAN_SIN_DETECCION_DESDE = null;
   vibrar();
   if (_QUAGGA_CB) _QUAGGA_CB(code);
 }
@@ -1841,6 +2286,7 @@ function _onQuaggaDetect(result) {
 async function _quaggaStop() {
   if (!window.Quagga) return;
   try { Quagga.offDetected(_onQuaggaDetect); } catch (_) {}
+  try { Quagga.offProcessed(_onQuaggaProcessed); } catch (_) {}
   try { Quagga.stop(); } catch (_) {}
 }
 
@@ -1850,7 +2296,7 @@ async function _quaggaStop() {
  * @param {string} [boxDivId='camara-box'] - ID of the wrapper div to show/hide.
  * @param {Function|null} [onScan=null] - Callback on successful scan; defaults to procesarScan.
  */
-async function abrirCamara(lectorDivId = 'lector-qr', boxDivId = 'camara-box', onScan = null) {
+async function abrirCamara(lectorDivId = 'lector-qr', boxDivId = 'camara-box', onScan = null, btnEl = null) {
   // Cerrar cámara previa si hay alguna
   if (_QUAGGA_BOX) await cerrarCamara(_QUAGGA_BOX);
 
@@ -1858,14 +2304,38 @@ async function abrirCamara(lectorDivId = 'lector-qr', boxDivId = 'camara-box', o
   const target = document.getElementById(lectorDivId);
   if (!box || !target) return;
 
+  // El botón "Escanear con cámara" se oculta mientras la cámara está abierta
+  // — en móvil, con la vista previa ocupando el ancho de pantalla, el botón
+  // quedaba flotando arriba del video sin ninguna función. cerrarCamara() lo
+  // restaura, sin importar por qué camino se cerró (botón "Cerrar cámara" o
+  // un scan que la cierra solo).
+  if (btnEl) btnEl.style.display = 'none';
+  _QUAGGA_BTN = btnEl;
+
   box.style.display = 'block';
   CAMARA_ACTIVA = true;
   _QUAGGA_BOX = boxDivId;
   _QUAGGA_CB  = onScan || procesarScan;
   _SCAN_LAST_TS = 0;
+  _SCAN_ARMADO = true;
+  _SCAN_SIN_DETECCION_DESDE = null;
 
   if (!window.Quagga) {
-    await loadScript('https://cdn.jsdelivr.net/npm/@ericblade/quagga2@1.8.2/dist/quagga.min.js');
+    // Vendorizada localmente (igual que JsBarcode) y cacheada por sw.js —
+    // antes se descargaba de cdn.jsdelivr.net en caliente, un origen externo
+    // que el propio service worker rechaza cachear, así que la primera
+    // apertura de cámara con wifi caída fallaba sin ningún aviso.
+    try {
+      await loadScript('/static/vendor/quagga2.min.js?v=1.8.2');
+    } catch (e) {
+      CAMARA_ACTIVA = false;
+      _QUAGGA_BOX = null;
+      _QUAGGA_CB = null;
+      if (_QUAGGA_BTN) { _QUAGGA_BTN.style.display = ''; _QUAGGA_BTN = null; }
+      box.style.display = 'none';
+      alerta('No se pudo activar la cámara — usa el ingreso manual del código', 'error');
+      return;
+    }
   }
 
   const esMobil = /Mobi|Android|iPhone/i.test(navigator.userAgent);
@@ -1900,23 +2370,71 @@ async function abrirCamara(lectorDivId = 'lector-qr', boxDivId = 'camara-box', o
     }, err => {
       if (err) {
         console.error('Quagga init:', err);
-        alerta('No se pudo activar la cámara', 'error');
+        const nombre = err.name || (err.message && /NotAllowed|Permission denied/i.test(err.message) ? 'NotAllowedError' : '');
+        let msg;
+        if (nombre === 'NotAllowedError') {
+          msg = 'Cámara bloqueada — habilita el permiso de cámara para este sitio en el navegador y vuelve a intentar';
+        } else if (nombre === 'NotFoundError' || nombre === 'OverconstrainedError') {
+          msg = 'No se encontró una cámara disponible en este dispositivo';
+        } else if (nombre === 'NotReadableError') {
+          msg = 'La cámara está siendo usada por otra app — ciérrala e intenta de nuevo';
+        } else {
+          msg = 'No se pudo activar la cámara — usa el ingreso manual del código';
+        }
+        alerta(msg, 'error');
         cerrarCamara(boxDivId);
         resolve(); return;
       }
       Quagga.onDetected(_onQuaggaDetect);
+      try { Quagga.onProcessed(_onQuaggaProcessed); } catch (_) {}
       Quagga.start();
 
       // Estilar video insertado por Quagga + agregar visor rectangular
       const video = target.querySelector('video');
       if (video) {
         video.style.cssText = 'width:100%;height:260px;object-fit:cover;display:block;border-radius:10px;';
+        // Forzado explícito — iOS Safari puede ignorar el atributo si Quagga
+        // solo lo fija vía propiedad JS después de insertar el <video>.
+        video.setAttribute('playsinline', '');
+        video.setAttribute('muted', '');
+        video.playsInline = true;
+        video.muted = true;
       }
       const cvs = target.querySelector('canvas');
       if (cvs) cvs.style.cssText = 'position:absolute;top:0;left:0;width:100%;height:100%;';
       target.style.position = 'relative';
       target.style.overflow = 'hidden';
       target.style.borderRadius = '10px';
+      target.style.touchAction = 'none'; // evita que un pellizco sobre el visor dispare el zoom global de la página
+
+      // Linterna para poca luz (bodega/muelle de noche) — solo donde el
+      // hardware la expone (Android/Chrome vía getUserMedia torch constraint).
+      // iOS Safari no soporta esta capability desde web: sin el botón ahí,
+      // no es un bug, es el navegador.
+      try {
+        const track = Quagga.CameraAccess.getActiveTrack();
+        const caps = track && track.getCapabilities ? track.getCapabilities() : null;
+        if (caps && caps.torch) {
+          let torchOn = false;
+          const btnTorch = document.createElement('button');
+          btnTorch.type = 'button';
+          btnTorch.textContent = '🔦';
+          btnTorch.title = 'Linterna';
+          btnTorch.style.cssText = 'position:absolute;top:8px;right:8px;z-index:5;width:44px;height:44px;border-radius:50%;border:none;background:#000000aa;color:#fff;font-size:18px;cursor:pointer;';
+          btnTorch.onclick = async () => {
+            torchOn = !torchOn;
+            try {
+              await track.applyConstraints({ advanced: [{ torch: torchOn }] });
+              btnTorch.style.background = torchOn ? '#f59e0bcc' : '#000000aa';
+            } catch (e) {
+              console.error('Torch:', e);
+            }
+          };
+          target.appendChild(btnTorch);
+        }
+      } catch (e) {
+        // getActiveTrack/getCapabilities no soportados en este navegador — sin control de torch
+      }
 
       resolve();
     });
@@ -1929,6 +2447,7 @@ async function cerrarCamara(boxDivId = 'camara-box') {
   CAMARA_ACTIVA = false;
   _QUAGGA_BOX = null;
   _QUAGGA_CB  = null;
+  if (_QUAGGA_BTN) { _QUAGGA_BTN.style.display = ''; _QUAGGA_BTN = null; }
   const box = document.getElementById(boxDivId);
   if (box) {
     box.style.display = 'none';
@@ -3188,13 +3707,11 @@ async function siesaReintentarTraslado() {
   const id = parseInt(document.getElementById('rec-traslado-id')?.value, 10);
   const out = document.getElementById('rec-traslado-resultado');
   if (!Number.isFinite(id)) { alerta('Poné el ID de la solicitud', 'error'); return; }
-  if (!confirm(`Se va a crear una REQUISICIÓN formal (174646) en Siesa para la ` +
-               `solicitud ${id}.
-
-Esto NO es parte del flujo normal de traslados. ` +
-               `Solo hacelo si el consultor de Siesa lo pidió.
-
-¿Continuar?`)) return;
+  if (!await _modalConfirmar(
+    `Se va a crear una REQUISICIÓN formal (174646) en Siesa para la solicitud ${id}.\n\n` +
+    `Esto NO es parte del flujo normal de traslados. Solo hacelo si el consultor de Siesa lo pidió.`,
+    { titulo: '¿Continuar?', peligro: true }
+  )) return;
   out.innerHTML = '<p style="color:var(--tx3);font-size:12px;">Enviando…</p>';
   try {
     const r = await post(`/api/traslados/${id}/reintentar-siesa`, {});

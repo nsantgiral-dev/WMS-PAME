@@ -36,7 +36,7 @@ from app.extensions import db
 #: porque `ultimo('stock')` devuelve una sola fila, la más reciente — sin
 #: separarlas, correr NS1 y luego NC1 el mismo cron haría que el estado de
 #: NC1 "tape" el de NS1 para cualquiera que consulte por bodega.
-TIPOS = ('catalogo', 'barcodes', 'stock', 'stock_ns1', 'stock_nc1', 'setup_inicial', 'reconciliacion')
+TIPOS = ('catalogo', 'barcodes', 'stock', 'stock_ns1', 'stock_nc1', 'setup_inicial', 'reconciliacion', 'kardex')
 
 
 class RegistroSync(db.Model):

@@ -318,9 +318,9 @@ async function repGuardarLimites() {
   if (!Object.keys(payload).length) { alerta('Ingresa al menos un límite', 'error'); return; }
 
   try {
-    const r = await fetch(API + `/api/reposicion/ubicacion/${_repModalUbId}/limites`, {
+    const r = await _fetchConTimeout(`/api/reposicion/ubicacion/${_repModalUbId}/limites`, {
       method: 'PATCH',
-      headers: { Authorization: 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
     const d = await r.json();
@@ -338,39 +338,27 @@ async function repGuardarLimites() {
     } else {
       alerta(d.error || 'Error guardando', 'error');
     }
-  } catch (e) { alerta('Error de conexión', 'error'); }
+  } catch (e) {
+    alerta(e.message || 'Error de conexión', 'error');
+  }
 }
 
 /** Trigger stock level verification and generate reposicion tasks if needed. */
 async function repVerificarStock() {
   try {
-    const r = await fetch(API + '/api/reposicion/verificar-stock', {
-      method: 'POST',
-      headers: { Authorization: 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ almacen_id: ALMACEN_ID }),
-    });
-    const d = await r.json();
-    if (r.ok) {
-      const n = d.tareas_generadas || 0;
-      alerta(n > 0 ? `${n} tarea${n > 1 ? 's' : ''} de reposición generada${n > 1 ? 's' : ''}` : 'Stock en niveles correctos — sin nuevas tareas', n > 0 ? 'ok' : 'info');
-      repCargarUbicaciones();
-    } else { alerta(d.error || 'Error', 'error'); }
-  } catch (e) { alerta('Error de conexión', 'error'); }
+    const d = await post('/api/reposicion/verificar-stock', { almacen_id: ALMACEN_ID });
+    const n = d.tareas_generadas || 0;
+    alerta(n > 0 ? `${n} tarea${n > 1 ? 's' : ''} de reposición generada${n > 1 ? 's' : ''}` : 'Stock en niveles correctos — sin nuevas tareas', n > 0 ? 'ok' : 'info');
+    repCargarUbicaciones();
+  } catch (e) { alerta(e.message || 'Error de conexión', 'error'); }
 }
 
 /** Start a background sync of PIK-* ubicaciones from Siesa. */
 async function repSyncUbicaciones() {
   try {
-    const r = await fetch(API + '/api/reposicion/sync-ubicaciones', {
-      method: 'POST',
-      headers: { Authorization: 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
-      body: JSON.stringify({}),
-    });
-    const d = await r.json();
-    if (r.ok) {
-      alerta(d.mensaje || 'Sync iniciado en background', 'ok');
-    } else { alerta(d.error || 'Error', 'error'); }
-  } catch (e) { alerta('Error de conexión', 'error'); }
+    const d = await post('/api/reposicion/sync-ubicaciones', {});
+    alerta(d.mensaje || 'Sync iniciado en background', 'ok');
+  } catch (e) { alerta(e.message || 'Error de conexión', 'error'); }
 }
 
 // ── SECCIÓN 2: Tareas de Reposición ─────────────────────────────────────────
@@ -449,17 +437,12 @@ async function repCargarTareas() {
  * @param {string} codigo - Task code for the confirmation prompt.
  */
 async function repCancelarTarea(id, codigo) {
-  if (!confirm(`¿Cancelar tarea ${codigo}?`)) return;
+  if (!await _modalConfirmar(`¿Cancelar tarea ${codigo}?`, { titulo: 'Cancelar tarea' })) return;
   try {
-    const r = await fetch(API + `/api/reposicion/cancelar/${id}`, {
-      method: 'POST',
-      headers: { Authorization: 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ motivo: 'Cancelada desde admin' }),
-    });
-    const d = await r.json();
-    if (r.ok && d.ok) { alerta('Tarea cancelada', 'ok'); repCargarTareas(); }
-    else alerta(d.error || 'Error', 'error');
-  } catch (e) { alerta('Error de conexión', 'error'); }
+    await post(`/api/reposicion/cancelar/${id}`, { motivo: 'Cancelada desde admin' });
+    alerta('Tarea cancelada', 'ok');
+    repCargarTareas();
+  } catch (e) { alerta(e.message || 'Error de conexión', 'error'); }
 }
 
 // ── SECCIÓN 3: Ubicaciones Huérfanas ─────────────────────────────────────────
@@ -602,15 +585,10 @@ function _repJobCard(j, mostrarReintentar) {
  */
 async function repReintentar(jobId) {
   try {
-    const r = await fetch(API + `/api/reposicion/siesa-jobs/${jobId}/reintentar`, {
-      method: 'POST',
-      headers: { Authorization: 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
-      body: JSON.stringify({}),
-    });
-    const d = await r.json();
-    if (r.ok && d.ok) { alerta('Job enviado a reintentar', 'ok'); repCargarJobs(); }
-    else alerta(d.error || 'Error', 'error');
-  } catch (e) { alerta('Error de conexión', 'error'); }
+    await post(`/api/reposicion/siesa-jobs/${jobId}/reintentar`, {});
+    alerta('Job enviado a reintentar', 'ok');
+    repCargarJobs();
+  } catch (e) { alerta(e.message || 'Error de conexión', 'error'); }
 }
 
 /**
@@ -646,18 +624,10 @@ async function repReintentarTodosFallidos(btn) {
 async function repTestEmail(btn) {
   if (btn) { btn.disabled = true; btn.textContent = 'Enviando...'; }
   try {
-    const r = await fetch(API + '/api/reposicion/alertas/test-email', {
-      method: 'POST',
-      headers: { Authorization: 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
-    });
-    const d = await r.json();
-    if (r.ok && d.ok) {
-      alerta('Email enviado — revisa la bandeja de wms@papeleriamedellin.com.co', 'ok');
-    } else {
-      alerta(d.error || 'Error SMTP — revisa las variables en Railway', 'error');
-    }
+    await post('/api/reposicion/alertas/test-email', {});
+    alerta('Email enviado — revisa la bandeja de wms@papeleriamedellin.com.co', 'ok');
   } catch (e) {
-    alerta(`Error: ${e.message || 'no se pudo conectar al servidor'}`, 'error');
+    alerta(e.message || 'Error SMTP — revisa las variables en Railway', 'error');
   } finally {
     if (btn) { btn.disabled = false; btn.textContent = 'Enviar email de prueba ahora'; }
   }
@@ -737,6 +707,10 @@ function abastMostrarHUD(tarea) {
   if (!hud) return;
   if (cont) cont.style.display = 'none';
   hud.style.display = 'flex';
+  // Mismo gate que picking.js/conteo.js/packing.js: respetar si un admin le
+  // revocó la cámara a este operario.
+  const _btnCamAbast = document.getElementById('abast-btn-camara');
+  if (_btnCamAbast) _btnCamAbast.style.display = (OPERARIO && OPERARIO.puede_usar_camara) ? '' : 'none';
   document.getElementById('abast-hud-paso').textContent = 'Tarea de reposición';
   document.getElementById('abast-hud-instruccion').textContent = 'Busca la paca en la zona de reserva';
   document.getElementById('abast-hud-sub').textContent =
@@ -777,24 +751,25 @@ async function abastConfirmarScan() {
   const btn = document.getElementById('abast-btn-confirmar');
   if (btn) { btn.disabled = true; btn.textContent = 'Confirmando...'; }
   try {
-    const r = await fetch(API + '/api/reposicion/confirmar', {
-      method: 'POST',
-      headers: { Authorization: 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ tarea_id: ABAST_TAREA.id, lpn_codigo_escaneado: lpn_escaneado }),
-    });
-    const d = await r.json();
-    if (r.ok && d.ok) {
-      _abastFlash('#166534');
-      alerta(`Reposición completada — ${d.tarea?.unidades_movidas || ''} uds a ${ABAST_TAREA.ubicacion_picking}`, 'ok');
+    const d = await postConReintento('/api/reposicion/confirmar', { tarea_id: ABAST_TAREA.id, lpn_codigo_escaneado: lpn_escaneado });
+    _abastFlash('#166534');
+    alerta(`Reposición completada — ${d.tarea?.unidades_movidas || ''} uds a ${ABAST_TAREA.ubicacion_picking}`, 'ok');
+    ABAST_TAREA = null;
+    setTimeout(abastCerrarHUD, 800);
+  } catch (e) {
+    if (e.status) {
+      // Error explícito del servidor (ej. LPN incorrecto) — no es un corte de red.
+      _abastFlash('#7f1d1d');
+      alerta(e.message || 'LPN incorrecto — verifica el código', 'error');
+      if (inp) { inp.value = ''; inp.focus(); }
+    } else {
+      // Corte de red real (o timeout) — encolar para sincronizar cuando vuelva la señal.
+      // Seguro de reintentar: confirmar_reposicion rechaza una tarea que ya
+      // no está EN_PROCESO en vez de duplicar el movimiento de inventario.
+      guardarOffline({ accion: 'reposicion_confirmar', tarea_id: ABAST_TAREA.id, lpn_codigo: lpn_escaneado });
       ABAST_TAREA = null;
       setTimeout(abastCerrarHUD, 800);
-    } else {
-      _abastFlash('#7f1d1d');
-      alerta(d.error || 'LPN incorrecto — verifica el código', 'error');
-      if (inp) { inp.value = ''; inp.focus(); }
     }
-  } catch (e) {
-    alerta('Error de conexión', 'error');
   } finally {
     if (btn) { btn.disabled = false; btn.textContent = 'Confirmar entrega'; }
   }

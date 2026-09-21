@@ -56,6 +56,11 @@ OC_SIESA = {
 def setup(db, almacen, producto, ub_picking, inv_picking, usuario):
     u = Ubicacion(codigo='AVE-A1-EST01', almacen_id=almacen.id,
                   tipo_zona='AVERIAS', activo=True)
+    # El fixture compartido no trae `centro_op_siesa`, y desde el 2026-09-18 el
+    # ajuste focalizado de auditoría lo exige: sin CO, el documento saldría con
+    # el centro de operación equivocado, así que el servicio se niega antes de
+    # emitirlo. Es la bodega CD, CO 003.
+    almacen.centro_op_siesa = '003'
     db.session.add(u); db.session.commit()
     return {'almacen': almacen, 'producto': producto, 'usuario': usuario,
             'ave': u, 'ubicacion': ub_picking}
@@ -324,8 +329,23 @@ def test_otros_veredictos_de_auditoria_no_encolan_nada(db, setup):
                      estado=EstadoPicking.BLOQUEADO, motivo_bloqueo='FALTANTE')
     db.session.add(t); db.session.commit()
 
-    PickingService.auditar_tarea(t.id, setup['usuario'].id, 'ENCONTRADO_COMPLETO',
-                                 cantidad_hallada=5)
+    # `ENCONTRADO_COMPLETO` dejó de ser un veredicto inerte: desde el
+    # 2026-09-18 ajusta contra Siesa como un conteo cíclico focalizado en el
+    # SKU, y ese camino se niega a ajustar a ciegas si Siesa no contesta la
+    # existencia. Se stubea la consulta —no el ajuste— para que el veredicto
+    # recorra su camino real y este test siga midiendo lo que dice medir:
+    # que NINGÚN veredicto salvo AVERIA encola un traslado a la bodega de
+    # averías.
+    #
+    # `patch.object` sobre la CLASE, no sobre una instancia: parchear la
+    # instancia deja un atributo que sobrevive al teardown y vuelve sordos los
+    # parches por clase de otros archivos en la misma sesión de pytest.
+    from unittest.mock import patch
+    from app.services.conteo_service import ConteoService
+    with patch.object(ConteoService, 'consultar_existencia_siesa',
+                      return_value=5.0):
+        PickingService.auditar_tarea(t.id, setup['usuario'].id,
+                                     'ENCONTRADO_COMPLETO', cantidad_hallada=5)
     db.session.commit()
 
     assert SiesaJob.query.filter_by(tipo='TRASLADO_AVERIAS').count() == 0

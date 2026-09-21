@@ -65,6 +65,66 @@ def sesion_pendiente(db, almacen, producto, ub_picking, inv_picking):
 # Tests
 # ---------------------------------------------------------------------------
 
+class TestRutaConteoManualPermiso:
+    """POST /api/conteo/manual amplió de admin-only a Roles.LEAD (admin+supervisor)
+    — mismo grupo que ya usan editar/ajustar/asignar-lote sobre conteos."""
+
+    def test_supervisor_puede_crear_conteo_manual(self, app, db, client, almacen, producto, ub_picking, inv_picking):
+        from flask_jwt_extended import create_access_token
+        from werkzeug.security import generate_password_hash
+        from app.models.usuario import Usuario
+
+        sup = Usuario(nombre='Sup Test', email='sup-manual@test.com',
+                      password_hash=generate_password_hash('x'), rol='supervisor',
+                      almacen_id=almacen.id, activo=True)
+        db.session.add(sup)
+        db.session.commit()
+        with app.app_context():
+            tok = create_access_token(identity=str(sup.id))
+
+        r = client.post('/api/conteo/manual', json={
+            'almacen_id': almacen.id, 'producto_codigo': producto.codigo,
+        }, headers={'Authorization': f'Bearer {tok}'})
+        assert r.status_code == 201, r.get_json()
+
+    def test_operario_no_puede_crear_conteo_manual(self, app, db, client, almacen, producto, ub_picking, inv_picking, usuario):
+        from flask_jwt_extended import create_access_token
+        with app.app_context():
+            tok = create_access_token(identity=str(usuario.id))
+
+        r = client.post('/api/conteo/manual', json={
+            'almacen_id': almacen.id, 'producto_codigo': producto.codigo,
+        }, headers={'Authorization': f'Bearer {tok}'})
+        assert r.status_code == 403
+
+    def test_supervisor_puede_forzar_operario_via_api(self, app, db, client, almacen, producto, ub_picking, inv_picking, usuario):
+        """El caso que motivó el cambio: supervisor crea el conteo y ya lo deja
+        asignado a un operario específico para el primer conteo (CC1)."""
+        from flask_jwt_extended import create_access_token
+        from werkzeug.security import generate_password_hash
+        from app.models.usuario import Usuario
+        from app.models.conteo import SesionConteo
+
+        sup = Usuario(nombre='Sup Test 2', email='sup-manual-2@test.com',
+                      password_hash=generate_password_hash('x'), rol='supervisor',
+                      almacen_id=almacen.id, activo=True)
+        db.session.add(sup)
+        db.session.commit()
+        with app.app_context():
+            tok = create_access_token(identity=str(sup.id))
+
+        r = client.post('/api/conteo/manual', json={
+            'almacen_id': almacen.id, 'producto_codigo': producto.codigo,
+            'operario_id': usuario.id,
+        }, headers={'Authorization': f'Bearer {tok}'})
+        assert r.status_code == 201, r.get_json()
+        body = r.get_json()
+        assert body['operario_id'] == usuario.id
+
+        sesion = db.session.get(SesionConteo, SesionConteo.query.filter_by(codigo=body['codigos'][0]).first().id)
+        assert sesion.operario_id == usuario.id
+
+
 class TestCrearConteoManual:
 
     def test_crear_conteo_manual(self, db, almacen, producto, ub_picking, inv_picking):
@@ -88,6 +148,64 @@ class TestCrearConteoManual:
         assert sesion.producto_id == producto.id
         assert sesion.producto_codigo_siesa == producto.codigo_siesa
 
+    def test_crear_conteo_manual_fuerza_operario(self, db, almacen, producto, ub_picking, inv_picking, usuario):
+        """operario_id fuerza el CC1 a ese operario — queda PENDIENTE-pero-asignado,
+        mismo patrón que las tareas DIARIO_ABC pre-asignadas."""
+        from app.services.conteo_service import ConteoService
+        from app.models.conteo import SesionConteo
+
+        result = ConteoService.crear_conteo_manual(almacen.id, producto.codigo, operario_id=usuario.id)
+
+        assert result['operario_id'] == usuario.id
+        assert result['operario_nombre'] == usuario.nombre
+
+        sesion = SesionConteo.query.filter_by(codigo=result['codigos'][0]).first()
+        assert sesion.operario_id == usuario.id
+        assert sesion.estado == 'PENDIENTE', (
+            'debe quedar PENDIENTE-pero-asignado, no EN_PROCESO — el operario '
+            'todavía tiene que abrir la tarea (obtener_tarea_operario) para arrancarla')
+
+    def test_operario_forzado_pasa_a_en_proceso_al_abrirla(self, db, almacen, producto, ub_picking, inv_picking, usuario):
+        """Bug encontrado probando la feature: `obtener_tarea_operario` solo
+        transicionaba PENDIENTE→EN_PROCESO cuando operario_id venía en None.
+        Con una sesión pre-asignada (operario_id ya puesto por
+        crear_conteo_manual o por asignar-lote), el operario la abría, la
+        contaba, y quedaba viéndose PENDIENTE para siempre — fecha_inicio
+        nunca se registraba."""
+        from app.services.conteo_service import ConteoService
+        from app.models.conteo import SesionConteo, EstadoConteo
+
+        creado = ConteoService.crear_conteo_manual(almacen.id, producto.codigo, operario_id=usuario.id)
+        cc1_id = SesionConteo.query.filter_by(codigo=creado['codigos'][0]).first().id
+
+        ConteoService.obtener_tarea_operario(cc1_id, usuario.id)
+
+        sesion = SesionConteo.query.get(cc1_id)
+        assert sesion.estado == EstadoConteo.EN_PROCESO, (
+            f'se quedó en {sesion.estado} — la transición PENDIENTE→EN_PROCESO '
+            f'no ocurrió para una sesión pre-asignada')
+        assert sesion.fecha_inicio is not None
+
+    def test_crear_conteo_manual_busca_por_codigo_de_barras(self, db, almacen, producto, ub_picking, inv_picking):
+        """El campo del admin puede escanear/pegar el código de barras
+        directamente (no solo la referencia) — mismo criterio que ya usa
+        `_codigos_validos` en el escaneo real del operario."""
+        from app.services.conteo_service import ConteoService
+
+        producto.codigo_barras = 'BN-77'
+        db.session.commit()
+
+        resultado = ConteoService.crear_conteo_manual(almacen.id, 'bn-77')
+        assert resultado['tareas_creadas'] == 1
+        assert resultado['producto'] == 'BN-77'
+        assert resultado['producto_nombre'] == producto.nombre
+
+    def test_crear_conteo_manual_operario_inexistente(self, db, almacen, producto, ub_picking, inv_picking):
+        from app.services.conteo_service import ConteoService
+
+        with pytest.raises(ValueError, match='no encontrado o inactivo'):
+            ConteoService.crear_conteo_manual(almacen.id, producto.codigo, operario_id=999999)
+
     def test_crear_conteo_no_duplica(self, db, almacen, producto, ub_picking, inv_picking):
         """If an active session already exists for the same product+ubicacion, skip it."""
         from app.services.conteo_service import ConteoService
@@ -108,6 +226,165 @@ class TestCrearConteoManual:
             ubicacion_id=ub_picking.id,
         ).count()
         assert total == 1
+
+    def test_crear_conteo_manual_reclama_pendiente_al_forzar_operario(
+        self, db, almacen, producto, ub_picking, inv_picking, usuario,
+    ):
+        """Una sesión PENDIENTE sin dueño (ej. generada por el barrido
+        DIARIO_ABC, nadie la ha abierto) no debe bloquear un conteo manual
+        forzado a un operario específico — se reclama en vez de omitirse,
+        sin crear una segunda sesión para la misma ubicación."""
+        from app.services.conteo_service import ConteoService
+        from app.models.conteo import SesionConteo
+
+        # Sesión PENDIENTE preexistente, sin operario (ej. DIARIO_ABC)
+        primero = ConteoService.crear_conteo_manual(almacen.id, producto.codigo)
+        assert primero['tareas_creadas'] == 1
+        sesion_id = SesionConteo.query.filter_by(codigo=primero['codigos'][0]).first().id
+
+        # Forzar operario sobre el mismo producto/almacén
+        resultado = ConteoService.crear_conteo_manual(almacen.id, producto.codigo, operario_id=usuario.id)
+
+        assert resultado['tareas_creadas'] == 1
+        assert resultado['tareas_reclamadas'] == 1
+        assert resultado['tareas_nuevas'] == 0
+        assert resultado['omitidas_ya_activas'] == 0
+        assert resultado['codigos'] == [primero['codigos'][0]]
+
+        sesion = SesionConteo.query.get(sesion_id)
+        assert sesion.operario_id == usuario.id
+        assert sesion.estado == 'PENDIENTE'
+
+        # Sigue siendo una sola sesión — no se duplicó
+        total = SesionConteo.query.filter_by(
+            producto_id=producto.id,
+            ubicacion_id=ub_picking.id,
+        ).count()
+        assert total == 1
+
+    def test_conteo_forzado_se_entrega_antes_que_los_pendientes_viejos(
+        self, db, almacen, producto, producto2, ub_picking, inv_picking, usuario,
+    ):
+        """PD1494: el operario tenía conteos PENDIENTE más viejos; el forzado
+        debe ser el primero que el dispensador le entrega, y reclamar una sesión
+        vieja la convierte en forzada (tipo MANUAL)."""
+        from datetime import timedelta
+        from app.models.conteo import SesionConteo
+        from app.services.conteo_service import ConteoService
+        from app.services.mobile_service import MobileService
+
+        viejo = SesionConteo(
+            codigo='CC-A-VIEJO', tipo='DIARIO_ABC', clasificacion_abc='C',
+            ubicacion_id=ub_picking.id, almacen_id=almacen.id,
+            producto_id=producto2.id, maneja_lote=False, estado='PENDIENTE',
+            operario_id=usuario.id,
+            fecha_creacion=datetime.utcnow() - timedelta(days=100),
+        )
+        db.session.add(viejo)
+        db.session.commit()
+
+        ConteoService.crear_conteo_manual(almacen.id, producto.codigo, operario_id=usuario.id)
+
+        entregado = MobileService._get_conteo_preassignado(usuario.id)
+        assert entregado['producto_codigo'] == producto.codigo
+        assert entregado['id'] != viejo.id
+
+    def test_reclamar_sesion_vieja_la_marca_manual(
+        self, db, almacen, producto, ub_picking, inv_picking, usuario,
+    ):
+        from app.models.conteo import SesionConteo
+        from app.services.conteo_service import ConteoService
+
+        s = SesionConteo(
+            codigo='CC-A-RECLAMA', tipo='DIARIO_ABC', clasificacion_abc='C',
+            ubicacion_id=ub_picking.id, almacen_id=almacen.id,
+            producto_id=producto.id, maneja_lote=False, estado='PENDIENTE',
+        )
+        db.session.add(s)
+        db.session.commit()
+
+        ConteoService.crear_conteo_manual(almacen.id, producto.codigo, operario_id=usuario.id)
+        db.session.refresh(s)
+        assert s.tipo == 'MANUAL'
+        assert s.operario_id == usuario.id
+
+    def test_crear_conteo_manual_pausa_otro_en_proceso_del_operario_forzado(
+        self, db, almacen, producto, producto2, ub_picking, inv_picking, usuario,
+    ):
+        """Si el operario forzado ya está contando OTRO SKU (EN_PROCESO), el
+        conteo manual forzado debe pausarlo — vuelve a PENDIENTE sin dueño,
+        mismo patrón que liberar_tareas_zombi — para que el dispensador le
+        entregue el conteo forzado en vez de seguir devolviéndole el viejo.
+
+        La sesión "otro" vive en la MISMA ubicación que el producto forzado
+        (`ub_picking`) a propósito — replica el caso real de producción
+        (2026-09-14): dos SKUs distintos comparten `SIESA-GENERAL` como
+        ubicación genérica, y una versión anterior de este fix excluía por
+        `ubicacion_id` en vez de por identidad de sesión, así que el
+        EN_PROCESO de un SKU distinto en la misma ubicación sobrevivía sin
+        pausarse. Un test con ubicaciones distintas para "producto" y
+        "producto2" no habría detectado ese bug — es la lección de este
+        mismo repo sobre guards que miden una propiedad que la vía sana ya
+        satisface por construcción."""
+        from app.services.conteo_service import ConteoService
+        from app.models.conteo import SesionConteo, EstadoConteo
+        from app.models.inventario import UbicacionProducto
+
+        # Carlos ya está a mitad de un conteo de OTRO SKU en la MISMA ubicación
+        otro = SesionConteo(
+            codigo='CC-OTRO-EN-PROCESO', tipo='DIARIO_ABC',
+            clasificacion_abc='B', ubicacion_id=ub_picking.id, almacen_id=almacen.id,
+            producto_id=producto2.id, producto_codigo_siesa=producto2.codigo_siesa,
+            maneja_lote=False, estado=EstadoConteo.EN_PROCESO,
+            operario_id=usuario.id, fecha_inicio=datetime.utcnow(),
+        )
+        db.session.add(otro)
+        db.session.add(UbicacionProducto(
+            ubicacion_id=ub_picking.id, producto_id=producto2.id,
+            cantidad=10, reservado=0, bloqueado=0,
+        ))
+        db.session.commit()
+
+        resultado = ConteoService.crear_conteo_manual(almacen.id, producto.codigo, operario_id=usuario.id)
+        assert resultado['tareas_creadas'] == 1
+        assert resultado['operario_id'] == usuario.id
+
+        pausado = SesionConteo.query.filter_by(codigo='CC-OTRO-EN-PROCESO').first()
+        assert pausado.estado == EstadoConteo.PENDIENTE
+        assert pausado.operario_id is None
+        assert pausado.fecha_inicio is None
+
+        nuevo = SesionConteo.query.filter_by(codigo=resultado['codigos'][0]).first()
+        assert nuevo.operario_id == usuario.id
+        assert nuevo.estado == 'PENDIENTE'
+
+    def test_crear_conteo_manual_no_pausa_picking_activo(
+        self, db, almacen, producto, ub_picking, inv_picking, usuario,
+    ):
+        """Forzar un conteo manual NUNCA toca un picking/packing/traslado
+        activo del operario — solo pausa otro conteo cíclico. Interrumpir una
+        operación física en curso (bultos escaneados, LPN abierto) es un
+        riesgo distinto que esta feature no debe tocar."""
+        from app.services.conteo_service import ConteoService
+        from app.models.picking import TareaPicking
+
+        picking = TareaPicking(
+            codigo='PICK-NO-PAUSA-001',
+            operario_id=usuario.id, producto_id=producto.id,
+            ubicacion_id=ub_picking.id, almacen_id=almacen.id,
+            cantidad_solicitada=5, cantidad_recogida=2,
+            estado='EN_PROCESO', prioridad=1,
+        )
+        db.session.add(picking)
+        db.session.commit()
+        picking_id = picking.id
+
+        ConteoService.crear_conteo_manual(almacen.id, producto.codigo, operario_id=usuario.id)
+
+        picking = db.session.get(TareaPicking, picking_id)
+        assert picking.estado == 'EN_PROCESO'
+        assert picking.operario_id == usuario.id
+        assert picking.cantidad_recogida == 2
 
 
 class TestRegistrarConteo:

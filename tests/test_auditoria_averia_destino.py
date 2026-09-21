@@ -213,13 +213,26 @@ class TestLaCascadaNoSeComeLaPreferencia:
             self, app, db, almacen, producto, usuario_admin):
         """Estas dos ramas tampoco tenían test. Se escriben ahora porque el
         refactor las rozó y no había ninguna red."""
+        # `ENCONTRADO_PARCIAL` dejó de ser inerte el 2026-09-18: ahora ajusta
+        # contra Siesa como un conteo focalizado, y ese camino exige que Siesa
+        # conteste la existencia y que el almacén tenga centro de operación.
+        # Se le dan las dos cosas en vez de esquivar la rama — el test afirma
+        # que esas ramas NO tocan averías, y para afirmarlo tienen que correr.
+        from unittest.mock import patch
+        from app.services.conteo_service import ConteoService
+        almacen.centro_op_siesa = '003'
+        db.session.commit()
+
         for resultado in ('NO_ENCONTRADO', 'ENCONTRADO_PARCIAL'):
             ub, reg, tarea = _origen(db, almacen, producto)
             tarea.codigo = f'PICK-AUD-{resultado}'
             ub.codigo = f'PIK-AUD-{resultado}'
             db.session.commit()
-            PickingService.auditar_tarea(tarea.id, admin_id=usuario_admin.id,
-                                         resultado=resultado, cantidad_hallada=1)
+            with patch.object(ConteoService, 'consultar_existencia_siesa',
+                              return_value=1.0):
+                PickingService.auditar_tarea(tarea.id, admin_id=usuario_admin.id,
+                                             resultado=resultado,
+                                             cantidad_hallada=1)
             assert _en_averias(db, almacen, producto) == 0, resultado
             assert Ubicacion.query.filter_by(
                 codigo='AVERIADOS', almacen_id=almacen.id).count() == 0, resultado

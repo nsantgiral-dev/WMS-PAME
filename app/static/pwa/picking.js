@@ -95,7 +95,13 @@ function renderTarea(t) {
   // se inventa un número.
   const dispSiesa = (esPicking && t.disponible_siesa !== null && t.disponible_siesa !== undefined)
     ? Number(t.disponible_siesa) : null;
-  const dispInsuficiente = dispSiesa !== null && dispSiesa < req;
+  // `cantidad_pedida` = lo que pedía la línea del pedido (la tarea puede venir
+  // recortada a lo que Siesa comprometió). Sin ella (tareas viejas) se compara
+  // contra la cantidad de la tarea, como antes.
+  const pedida = (t.cantidad_pedida !== null && t.cantidad_pedida !== undefined)
+    ? Number(t.cantidad_pedida) : req;
+  const dispInsuficiente = dispSiesa !== null && dispSiesa < pedida;
+  const faltanSiesa = dispInsuficiente ? pedida - dispSiesa : 0;
 
   const htmlContador = tieneEmpaque
     ? `<div style="background:#1a1a1a;border-radius:16px;padding:16px 20px;margin-bottom:12px;">
@@ -151,8 +157,8 @@ function renderTarea(t) {
       ${dispSiesa !== null ? `
       <div style="background:${dispInsuficiente ? '#2a1005' : '#0a1a0a'};border:1px solid ${dispInsuficiente ? '#b45309' : '#166534'};border-radius:12px;padding:12px 14px;margin-bottom:12px;text-align:center;">
         <div style="font-size:11px;color:${dispInsuficiente ? '#fbbf24' : '#4ade80'};font-weight:700;letter-spacing:.5px;">${dispInsuficiente ? '⚠ ' : ''}DISPONIBLE EN SIESA PARA ESTE PEDIDO</div>
-        <div style="font-size:20px;font-weight:800;color:#fff;margin-top:2px;">${dispSiesa} de ${req}</div>
-        ${dispInsuficiente ? `<div style="font-size:11px;color:#d97706;margin-top:2px;">Siesa podría no facturar todo — puede quedar pendiente</div>` : ''}
+        <div style="font-size:20px;font-weight:800;color:#fff;margin-top:2px;">${dispSiesa} de ${pedida}</div>
+        ${dispInsuficiente ? `<div style="font-size:12px;color:#fbbf24;margin-top:4px;">El pedido pedía ${pedida} y Siesa solo comprometió ${dispSiesa}. Recoge ${req} — las ${faltanSiesa} restantes pasan a Auditoría.</div>` : ''}
       </div>` : ''}
 
       ${esPicking && t.producto_id ? `
@@ -168,7 +174,7 @@ function renderTarea(t) {
       ${htmlContador}
 
       ${puedeCamara ? `
-      <button onclick="abrirCamara()" style="width:100%;padding:14px;font-size:17px;background:#fff;color:#000;border:2px solid #000;border-radius:12px;cursor:pointer;margin-bottom:10px;">
+      <button onclick="abrirCamara('lector-qr','camara-box',null,this)" style="width:100%;padding:14px;font-size:17px;background:#fff;color:#000;border:2px solid #000;border-radius:12px;cursor:pointer;margin-bottom:10px;">
         📷 Escanear con cámara
       </button>
       <div id="camara-box" style="display:none;margin-bottom:10px;">
@@ -288,13 +294,13 @@ async function _generarLPNEnPicking() {
   const factor     = btn._factor || 1;
   const unidad     = btn._unidad || 'PACA';
 
-  const cantStr = prompt(
-    `Paca sin etiqueta detectada.\n` +
-    `¿Cuántas unidades tiene esta ${unidad}?\n` +
-    `(Factor estándar: ${factor} und)`
+  const cantidad = await _modalCantidad(
+    'Paca sin etiqueta',
+    `¿Cuántas unidades tiene esta <strong>${unidad}</strong>?<br>` +
+    `<span style="color:#666;font-size:12px;">Factor estándar: ${factor} und</span>`,
+    { min: 1, valorInicial: factor, textoConfirmar: 'Generar etiqueta' }
   );
-  if (cantStr === null) return;
-  const cantidad = parseInt(cantStr) || factor;
+  if (cantidad === null) return;
 
   try {
     const r = await post('/api/empaques/lpn/generar', {
@@ -324,6 +330,13 @@ async function procesarScan(codigo) {
   if (EMP_TAREA && document.getElementById('emp-hud')?.classList.contains('activo')) {
     await empProcesarEscaneo(codigo); return;
   }
+  // Conteo Definitivo (CC3) — modal de supervisor (conteo.js), aislado de
+  // TAREA_ACTUAL a propósito. Antes solo la cámara llegaba a defProcesarScan
+  // (defAbrirCamara la llama directo); el lector físico/láser pasa siempre
+  // por este dispatcher, así que sin esta rama el conteo definitivo no
+  // registraba nada con el lector — llegaba hasta el `if (!TAREA_ACTUAL)
+  // return;` de abajo y se detenía en silencio.
+  if (DEF_TAREA_ACTUAL) { await defProcesarScan(codigo); return; }
   if (!TAREA_ACTUAL) return;
   vibrar(); flash();
 
@@ -335,7 +348,7 @@ async function procesarScan(codigo) {
 
   // Otros tipos (CONTEO, PACKING) — flujo original
   try {
-    const r = await post('/api/mobile/escanear', {
+    const r = await postConReintento('/api/mobile/escanear', {
       tarea_id: TAREA_ACTUAL.id,
       tipo: TAREA_ACTUAL.tipo,
       codigo,
@@ -354,60 +367,70 @@ async function procesarScan(codigo) {
  * @returns {Promise<{exito: boolean, cantidad_actual: number, cantidad_requerida: number, completado: boolean, es_empaque: boolean}>}
  */
 async function _procesarScanPicking(codigo) {
-  // 1. Preguntar al sistema qué es este código
-  let scan;
-  try {
-    scan = await get(`/api/empaques/scan/${encodeURIComponent(codigo)}`);
-  } catch (_) {
-    scan = { tipo: 'NO_ENCONTRADO' };
-  }
+  // Resolución de código compartida con packing (ver app.js) — el backend
+  // PICKING valida por producto.codigo/codigo_siesa/codigo_barras, nunca
+  // acepta un DUN-14 o código LPN directamente.
+  const scan = await resolverEscaneoEmpaque(codigo);
 
-  const tipo = scan.tipo || 'NO_ENCONTRADO';
-
-  if (tipo === 'GS1_AMBIGUO') {
+  if (scan.tipo === 'GS1_AMBIGUO') {
     _modalAmbiguedadPicking(codigo, scan.ambiguos || []);
     return;
   }
 
-  // Resolver código de producto y cantidad según tipo de código escaneado.
-  // El backend PICKING valida por producto.codigo / codigo_siesa / codigo_barras —
-  // nunca acepta un DUN-14 o código LPN directamente.
-  let codigoParaBackend = codigo;  // default: código de producto base (EAN-13 en productos.codigo_barras)
-  let cantidad = 1;
+  const { codigoParaBackend, cantidad, lpnCodigo, unidad } = scan;
   let etiqueta = '';
-
-  if ((tipo === 'GS1_UNICO' || tipo === 'EAN_BASE') && scan.producto?.codigo) {
-    codigoParaBackend = scan.producto.codigo;
-    cantidad = scan.factor || 1;
-    if (cantidad > 1) {
-      const unidad = scan.empaque?.unidad_medida || 'EMPAQUE';
-      etiqueta = ` (+${cantidad} und — ${unidad})`;
-    }
-  } else if (tipo === 'LPN' && scan.producto?.codigo) {
-    codigoParaBackend = scan.producto.codigo;
-    cantidad = scan.factor || 1;  // scan.factor = lpn.cantidad_actual
+  if (scan.tipo === 'LPN') {
     etiqueta = ` (LPN: ${cantidad} und)`;
+  } else if (cantidad > 1) {
+    etiqueta = ` (+${cantidad} und — ${unidad || 'EMPAQUE'})`;
   }
-  // NO_ENCONTRADO → enviar codigo original, el backend dará error descriptivo
 
-  // Incluir lpn_codigo cuando es un LPN — el backend lo vincula al traslado si aplica
   // GS1/EAN/LPN: el frontend ya conoce las unidades reales → usar modo idempotente.
   // NO_ENCONTRADO (barcode empaque directo): el frontend no conoce el factor → el backend
   // aplica factor_conversion con +=; no enviar total_acumulado en ese caso.
-  const _scanResuelto = tipo !== 'NO_ENCONTRADO';
+  const _scanResuelto = scan.tipo !== 'NO_ENCONTRADO';
   if (_scanResuelto) _pickingTotal += cantidad;
-  const payload = { tarea_id: TAREA_ACTUAL.id, tipo: 'PICKING', codigo: codigoParaBackend, cantidad };
-  if (tipo === 'LPN') payload.lpn_codigo = codigo;  // 'LPN-XXXXXXX' original
+  // accion: solo la lee /api/mobile/sync si esto termina encolado offline;
+  // el endpoint /escanear en vivo la ignora sin problema.
+  const payload = { accion: 'picking_escanear', tarea_id: TAREA_ACTUAL.id, tipo: 'PICKING', codigo: codigoParaBackend, cantidad };
+  if (lpnCodigo) payload.lpn_codigo = lpnCodigo;  // 'LPN-XXXXXXX' original
   if (_scanResuelto) payload.total_acumulado = _pickingTotal;
 
   try {
-    const r = await post('/api/mobile/escanear', payload);
+    const r = await postConReintento('/api/mobile/escanear', payload);
     if (r.error) { beepError(); if (_scanResuelto) _pickingTotal -= cantidad; alerta(typeof r.error === 'object' ? r.error.mensaje : r.error, 'error'); return; }
     beepOk();
     _pickingTotal = r.cantidad_actual;  // siempre sincronizar con verdad del servidor
     if (etiqueta) alerta(`Registrado${etiqueta}`, 'exito');
     _actualizarContadorPicking(r);
-  } catch (e) { beepError(); if (_scanResuelto) _pickingTotal -= cantidad; alerta(e.status ? e.message : 'Error de conexión', 'error'); }
+  } catch (e) {
+    if (e.status) {
+      // Error del servidor (400/500) — no encolar, el contador optimista no aplicó
+      beepError(); if (_scanResuelto) _pickingTotal -= cantidad; alerta(e.message, 'error'); return;
+    }
+    if (_scanResuelto) {
+      // Corte de red real y el scan es idempotente (total_acumulado fija el
+      // total, no lo suma — reproducirlo después no duplica). Encolar y
+      // confiar en que aplicará: revertir aquí invitaría a re-escanear el
+      // mismo código y esta vez sí duplicar contra el que ya quedó en cola.
+      guardarOffline(payload);
+      beepOk();
+      const requerida = TAREA_ACTUAL.cantidad_requerida || 0;
+      const completadoLocal = _pickingTotal >= requerida;
+      _actualizarContadorPicking({
+        cantidad_actual: _pickingTotal,
+        cantidad_requerida: requerida,
+        completado: completadoLocal,
+        puede_confirmar: completadoLocal,
+      });
+    } else {
+      // NO_ENCONTRADO: el backend suma con += (no es idempotente) — encolarlo
+      // arriesgaría duplicar si el POST original sí había llegado. Revertir
+      // y dejar que el operario reintente el mismo código a propósito.
+      beepError();
+      alerta('Sin conexión — reintenta escaneando de nuevo', 'error');
+    }
+  }
 }
 
 /**
@@ -489,7 +512,7 @@ async function _elegirEmpaquePicking(productoCodigo, factor, unidad, modal) {
   // productoCodigo ya es el código del producto (no el DUN-14) — el backend lo acepta
   if (modal) modal.remove();
   try {
-    const r = await post('/api/mobile/escanear', {
+    const r = await postConReintento('/api/mobile/escanear', {
       tarea_id: TAREA_ACTUAL.id,
       tipo: 'PICKING',
       codigo: productoCodigo,
@@ -516,9 +539,16 @@ async function confirmar() {
       return;
     }
     beepDone();
+    // Backorder parcial de Siesa: la tarea era por lo comprometido y el pedido
+    // pedía más — se le dice al operario qué pasa con lo que falta.
+    const _ped = TAREA_ACTUAL.cantidad_pedida, _req = TAREA_ACTUAL.cantidad_requerida;
+    const _avisoBackorder = (_ped != null && _req != null && _ped > _req)
+      ? `Recogiste ${_req} de ${_ped} pedidas — ${_ped - _req} pasan a Auditoría`
+      : null;
     TAREA_ACTUAL = null;
     // Picking con packing asociado → mostrar botón etiqueta canasto
     if (r.canasto_data) {
+      if (_avisoBackorder) alerta(_avisoBackorder, 'exito');
       _modalEtiquetaCanasto(r.canasto_data);
       return;
     }
@@ -539,8 +569,8 @@ async function confirmar() {
       document.body.appendChild(overlay);
       setTimeout(() => { overlay.remove(); pedirTarea(); }, esMatch ? 2000 : 3000);
     } else {
-      alerta('¡Tarea completada!', 'exito');
-      setTimeout(pedirTarea, 1500);
+      alerta(_avisoBackorder || '¡Tarea completada!', 'exito');
+      setTimeout(pedirTarea, _avisoBackorder ? 3500 : 1500);
     }
   } catch (e) {
     if (e.status) {
@@ -561,7 +591,7 @@ function _modalEtiquetaCanasto(canasto) {
   const overlay = document.createElement('div');
   overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.93);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px;';
   overlay.innerHTML = `
-    <div style="background:#111;border-radius:16px;padding:28px 24px;width:100%;max-width:360px;border:2px solid #16a34a;text-align:center;">
+    <div style="background:#111;border-radius:16px;padding:28px 24px;width:100%;max-width:360px;max-height:90vh;overflow-y:auto;border:2px solid #16a34a;text-align:center;">
       <div style="font-size:56px;margin-bottom:8px;">✅</div>
       <div style="font-size:22px;font-weight:900;color:#4ade80;margin-bottom:8px;">Picking completado</div>
       <div style="font-size:14px;color:#aaa;margin-bottom:20px;line-height:1.6;">
@@ -667,14 +697,13 @@ async function _reportarFaltanteInfo(tareaId, cantRecogida, cantSolicitada) {
  * @param {number} cantMax - Cantidad máxima permitida
  */
 async function confirmarManual(tareaId, cantMax) {
-  const cantStr = prompt(`¿Cuántas unidades encontraste físicamente? (máx. ${cantMax})`);
-  if (cantStr === null) return;
-  const cant = parseInt(cantStr, 10);
-  if (isNaN(cant) || cant <= 0 || cant > cantMax) {
-    alerta(`Cantidad inválida — debe ser entre 1 y ${cantMax}. Si no hay stock usa "Reportar problema".`, 'error');
-    return;
-  }
-  if (!confirm(`¿Confirmar ${cant} unidades recogidas manualmente?`)) return;
+  const cant = await _modalCantidad(
+    'Confirmación manual',
+    `¿Cuántas unidades encontraste físicamente? (máx. ${cantMax})<br>` +
+    `<span style="color:#666;font-size:12px;">Si no hay stock usa "Reportar problema" en vez de esto.</span>`,
+    { min: 1, max: cantMax, textoConfirmar: 'Confirmar recogida' }
+  );
+  if (cant === null) return;
   const payload = {
     tarea_id: tareaId,
     tipo: TAREA_ACTUAL?.tipo,

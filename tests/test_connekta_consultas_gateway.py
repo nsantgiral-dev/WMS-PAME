@@ -109,6 +109,84 @@ def test_get_pedido_rowid_map_usa_llamada_intra_dominio(app, monkeypatch):
         assert mapa == {'PAPELSP9218': 555}
 
 
+def test_buscar_item_por_referencia_encuentra_por_referencia_sin_probar_id(app, monkeypatch):
+    """Caso normal: referencia exacta encuentra el ítem en el primer intento
+    — nunca debe intentar un segundo GET por f120_id."""
+    with app.app_context():
+        from app.services.connekta_gateway import connekta
+
+        monkeypatch.setattr(connekta, 'modo_simulacion', False)
+        llamadas = []
+
+        def _fake_get(nombre_api, params=None, **kw):
+            llamadas.append(params['parametros'])
+            return {'detalle': {'Table': [{
+                'f120_referencia': 'PAPELSP2724',
+                'f120_descripcion': 'COSEDORA QUIROND 5882',
+                'f120_id_tipo_inv_serv': 'INV0101-01',
+            }]}}
+
+        monkeypatch.setattr(connekta, '_get', _fake_get)
+        item = connekta.buscar_item_por_referencia('PAPELSP2724')
+        assert item == {
+            'codigo_siesa': 'PAPELSP2724',
+            'nombre': 'COSEDORA QUIROND 5882',
+            'tipo_inventario': 'INV0101-01',
+        }
+        assert len(llamadas) == 1
+        assert 'f120_referencia' in llamadas[0]
+
+
+def test_buscar_item_por_referencia_cae_al_id_interno_de_siesa(app, monkeypatch):
+    """Regresión real (2026-09-17): un operario copia el "Item" que ve en
+    el escritorio de Siesa (f120_id interno, ej. "0004774") — nunca la
+    referencia real (f120_referencia, ej. "PAPELSP2724"), que esa pantalla
+    de Siesa no muestra. Si la referencia exacta no matchea y la entrada es
+    puramente numérica (con o sin ceros a la izquierda), debe reintentar
+    por f120_id."""
+    with app.app_context():
+        from app.services.connekta_gateway import connekta
+
+        monkeypatch.setattr(connekta, 'modo_simulacion', False)
+        llamadas = []
+
+        def _fake_get(nombre_api, params=None, **kw):
+            filtro = params['parametros']
+            llamadas.append(filtro)
+            if 'f120_referencia' in filtro:
+                raise Exception('400 Client Error: Bad Request')
+            assert 'f120_id = 4774' in filtro
+            return {'detalle': {'Table': [{
+                'f120_referencia': 'PAPELSP2724',
+                'f120_descripcion': 'COSEDORA QUIROND 5882',
+                'f120_id_tipo_inv_serv': 'INV0101-01',
+            }]}}
+
+        monkeypatch.setattr(connekta, '_get', _fake_get)
+        item = connekta.buscar_item_por_referencia('0004774')
+        assert item['codigo_siesa'] == 'PAPELSP2724'
+        assert len(llamadas) == 2
+
+
+def test_buscar_item_por_referencia_no_numerico_no_prueba_id(app, monkeypatch):
+    """Una descripción (no numérica) que no matchea por referencia no debe
+    disparar un segundo GET por f120_id — ese fallback es solo para IDs."""
+    with app.app_context():
+        from app.services.connekta_gateway import connekta
+
+        monkeypatch.setattr(connekta, 'modo_simulacion', False)
+        llamadas = []
+
+        def _fake_get(nombre_api, params=None, **kw):
+            llamadas.append(params['parametros'])
+            raise Exception('400 Client Error: Bad Request')
+
+        monkeypatch.setattr(connekta, '_get', _fake_get)
+        item = connekta.buscar_item_por_referencia('COSEDORA QUIROND 5882')
+        assert item is None
+        assert len(llamadas) == 1
+
+
 def test_get_rowids_factura_arma_el_filtro_y_exige_datos(app, monkeypatch):
     with app.app_context():
         from app.services.connekta_gateway import connekta

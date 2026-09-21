@@ -11,18 +11,15 @@ async function cargarInventario() {
   // Cargar almacenes para el selector ABC (solo una vez)
   if (_INV_ALMACENES.length === 0) {
     try {
-      const r = await fetch(API + '/api/almacenes/', { headers: { Authorization: 'Bearer ' + TOKEN } });
-      if (r.ok) {
-        _INV_ALMACENES = await r.json();
-        const opts = _INV_ALMACENES.map(a =>
-          `<option value="${esc(a.id)}">${esc(a.nombre)}${a.bodega_siesa_id ? ` (${esc(a.bodega_siesa_id)})` : ''}</option>`
-        ).join('');
-        const sel = document.getElementById('inv-abc-almacen');
-        if (sel) sel.innerHTML = opts;
-        const selM = document.getElementById('conteo-manual-almacen');
-        if (selM) selM.innerHTML = opts;
-        mostrarConfigBodega();
-      }
+      _INV_ALMACENES = await get('/api/almacenes/');
+      const opts = _INV_ALMACENES.map(a =>
+        `<option value="${esc(a.id)}">${esc(a.nombre)}${a.bodega_siesa_id ? ` (${esc(a.bodega_siesa_id)})` : ''}</option>`
+      ).join('');
+      const sel = document.getElementById('inv-abc-almacen');
+      if (sel) sel.innerHTML = opts;
+      const selM = document.getElementById('conteo-manual-almacen');
+      if (selM) selM.innerHTML = opts;
+      mostrarConfigBodega();
     } catch (e) { /* silencioso */ }
   }
   if (_INV_SUBTAB === 'conteos') await cargarConteos();
@@ -68,23 +65,13 @@ async function guardarConfigBodega() {
   const bodega = document.getElementById('inv-bodega-input').value.trim().toUpperCase();
   const centroOp = document.getElementById('inv-centro-op-input').value.trim();
   try {
-    const r = await fetch(API + `/api/almacenes/${almId}`, {
-      method: 'PUT',
-      headers: { Authorization: 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ bodega_siesa_id: bodega || null, centro_op_siesa: centroOp || null })
-    });
-    if (r.ok) {
-      const updated = await r.json();
-      const idx = _INV_ALMACENES.findIndex(a => a.id == almId);
-      if (idx >= 0) _INV_ALMACENES[idx] = updated;
-      sel.options[sel.selectedIndex].text = `${updated.nombre}${updated.bodega_siesa_id ? ` (${updated.bodega_siesa_id})` : ''}`;
-      mostrarConfigBodega();
-      alerta(`Bodega actualizada → ${bodega || '(sin bodega)'}`, 'exito');
-    } else {
-      const d = await r.json();
-      alerta(d.error || 'Error al guardar', 'error');
-    }
-  } catch (e) { alerta('Error de conexión', 'error'); }
+    const updated = await put(`/api/almacenes/${almId}`, { bodega_siesa_id: bodega || null, centro_op_siesa: centroOp || null });
+    const idx = _INV_ALMACENES.findIndex(a => a.id == almId);
+    if (idx >= 0) _INV_ALMACENES[idx] = updated;
+    sel.options[sel.selectedIndex].text = `${updated.nombre}${updated.bodega_siesa_id ? ` (${updated.bodega_siesa_id})` : ''}`;
+    mostrarConfigBodega();
+    alerta(`Bodega actualizada → ${bodega || '(sin bodega)'}`, 'exito');
+  } catch (e) { alerta(e.message || 'Error de conexión', 'error'); }
 }
 
 /**
@@ -284,7 +271,12 @@ function _renderCardProgreso(s) {
       <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px;flex-shrink:0;margin-left:8px;">
         ${s.clasificacion_abc ? `<span style="background:#1C2B3A;color:#FBBF24;font-size:9px;font-weight:700;padding:1px 5px;border-radius:6px;">ABC-${esc(s.clasificacion_abc)}</span>` : ''}
         <span style="background:${col};color:#fff;font-size:10px;font-weight:700;padding:2px 8px;border-radius:8px;">${esc(s.estado)}</span>
-        <button onclick="conteoCancelar(${esc(s.id)})" style="background:none;border:1px solid #7F1D1D;color:#F87171;font-size:9px;padding:1px 6px;border-radius:6px;cursor:pointer;">Cancelar</button>
+        <div style="display:flex;gap:4px;">
+          <button onclick="conteoAbrirEdicion(${JSON.stringify(s).replace(/"/g,'&quot;')})"
+            title="Reasignar operario / corregir conteo"
+            style="background:var(--bg-input);border:1px solid var(--brd);color:var(--tx2);font-size:9px;padding:1px 6px;border-radius:6px;cursor:pointer;">✏</button>
+          <button onclick="conteoCancelar(${esc(s.id)})" style="background:none;border:1px solid #7F1D1D;color:#F87171;font-size:9px;padding:1px 6px;border-radius:6px;cursor:pointer;">Cancelar</button>
+        </div>
       </div>
     </div>
   </div>`;
@@ -326,9 +318,7 @@ async function cargarConteoStats() {
     const qs = new URLSearchParams();
     const almId = document.getElementById('inv-abc-almacen')?.value;
     if (almId) qs.set('almacen_id', almId);
-    const r = await fetch(API + '/api/conteo/stats?' + qs, { headers: { Authorization: 'Bearer ' + TOKEN } });
-    if (!r.ok) return;
-    const d = await r.json();
+    const d = await get('/api/conteo/stats?' + qs);
     document.getElementById('cs-pendientes').textContent = d.pendientes || 0;
     document.getElementById('cs-en-curso').textContent = d.en_proceso || 0;
     document.getElementById('cs-hoy').textContent = d.hoy_completados || 0;
@@ -356,20 +346,12 @@ async function cargarConteoStats() {
 
 /** Re-enqueue all failed Siesa adjustment jobs for retry. */
 async function conteoReintentarFallos() {
-  if (!confirm('Re-encolar todos los ajustes fallidos para reintentar con Siesa?')) return;
+  if (!await _modalConfirmar('¿Re-encolar todos los ajustes fallidos para reintentar con Siesa?', { titulo: 'Reintentar fallos' })) return;
   try {
-    const r = await fetch(API + '/api/conteo/reintentar-fallos', {
-      method: 'POST',
-      headers: { Authorization: 'Bearer ' + TOKEN }
-    });
-    const d = await r.json();
-    if (r.ok) {
-      alerta(`${d.reencolados} ajustes re-encolados`, 'exito');
-      await cargarConteoStats();
-    } else {
-      alerta(d.error || 'Error', 'error');
-    }
-  } catch (e) { alerta('Error de conexión', 'error'); }
+    const d = await post('/api/conteo/reintentar-fallos', {});
+    alerta(`${d.reencolados} ajustes re-encolados`, 'exito');
+    await cargarConteoStats();
+  } catch (e) { alerta(e.message || 'Error de conexión', 'error'); }
 }
 
 /**
@@ -385,12 +367,8 @@ async function conteoReintentarFallos() {
 async function conteoDescartarFallos() {
   let plan;
   try {
-    const rp = await fetch(API + '/api/conteo/descartar-fallos/preview', {
-      headers: { Authorization: 'Bearer ' + TOKEN }
-    });
-    plan = await rp.json();
-    if (!rp.ok) { alerta(plan.error || 'Error', 'error'); return; }
-  } catch (e) { alerta('Error de conexión', 'error'); return; }
+    plan = await get('/api/conteo/descartar-fallos/preview');
+  } catch (e) { alerta(e.message || 'Error de conexión', 'error'); return; }
 
   if (!plan.jobs_fallidos) { alerta('No hay ajustes fallidos que descartar', 'info'); return; }
 
@@ -412,26 +390,18 @@ async function conteoDescartarFallos() {
     texto += `\n\n⚠ Sesiones ${plan.huerfanas.join(', ')} quedan trabadas. `
       + 'Verificá en Siesa si el ajuste llegó ANTES de descartar.';
   }
-  if (!confirm(texto)) return;
+  if (!await _modalConfirmar(texto, { titulo: 'Descartar ajustes fallidos', peligro: true })) return;
 
   try {
-    const r = await fetch(API + '/api/conteo/descartar-fallos', {
-      method: 'POST',
-      headers: { Authorization: 'Bearer ' + TOKEN }
-    });
-    const d = await r.json();
-    if (r.ok) {
-      const aviso = (d.huerfanas && d.huerfanas.length)
-        ? ` · ${d.huerfanas.length} trabada(s): ${d.huerfanas.join(', ')}`
-        : '';
-      alerta(`${d.descartados} descartados · ${d.sesiones_reset} a DESCUADRE${aviso}`,
-             aviso ? 'advertencia' : 'exito');
-      await cargarConteoStats();
-      await cargarConteos(_CONTEO_PAGE);
-    } else {
-      alerta(d.error || 'Error', 'error');
-    }
-  } catch (e) { alerta('Error de conexión', 'error'); }
+    const d = await post('/api/conteo/descartar-fallos', {});
+    const aviso = (d.huerfanas && d.huerfanas.length)
+      ? ` · ${d.huerfanas.length} trabada(s): ${d.huerfanas.join(', ')}`
+      : '';
+    alerta(`${d.descartados} descartados · ${d.sesiones_reset} a DESCUADRE${aviso}`,
+           aviso ? 'advertencia' : 'exito');
+    await cargarConteoStats();
+    await cargarConteos(_CONTEO_PAGE);
+  } catch (e) { alerta(e.message || 'Error de conexión', 'error'); }
 }
 
 /**
@@ -439,35 +409,26 @@ async function conteoDescartarFallos() {
  * @param {number} id - Conteo session ID.
  */
 async function conteoOmitirSegundo(id) {
-  if (!confirm('¿Omitir el CC2/CC3 pendiente y mover esta sesión a DESCUADRE para revisión?\n\nEl conteo pendiente se cancelará. Podrás aprobar o rechazar el ajuste manualmente.')) return;
+  if (!await _modalConfirmar('¿Omitir el CC2/CC3 pendiente y mover esta sesión a DESCUADRE para revisión?\n\nEl conteo pendiente se cancelará. Podrás aprobar o rechazar el ajuste manualmente.', { titulo: 'Omitir segundo conteo' })) return;
   try {
-    const r = await fetch(API + '/api/conteo/' + id + '/omitir-segundo', {
-      method: 'POST',
-      headers: { Authorization: 'Bearer ' + TOKEN }
-    });
-    const d = await r.json();
-    if (r.ok) {
-      alerta('Sesión movida a DESCUADRE — revisa y confirma el ajuste', 'exito');
-      await cargarConteoStats();
-      await cargarConteos(_CONTEO_PAGE);
-    } else {
-      alerta(d.error || 'Error', 'error');
-    }
-  } catch (e) { alerta('Error de conexión', 'error'); }
+    await post('/api/conteo/' + id + '/omitir-segundo', {});
+    alerta('Sesión movida a DESCUADRE — revisa y confirma el ajuste', 'exito');
+    await cargarConteoStats();
+    await cargarConteos(_CONTEO_PAGE);
+  } catch (e) { alerta(e.message || 'Error de conexión', 'error'); }
 }
 
 /** Export conteo sessions to a CSV file with optional date range filter. */
 async function conteoExportar() {
   const almId = document.getElementById('inv-abc-almacen')?.value;
-  const desde = prompt('Desde (YYYY-MM-DD, vacío = todo):', '')?.trim() || '';
-  if (desde === null) return;
-  const hasta = prompt('Hasta (YYYY-MM-DD, vacío = hoy):', '')?.trim() || '';
+  const desde = (await _modalTexto('Exportar conteos', 'Desde (YYYY-MM-DD, vacío = todo):', { obligatorio: false })) || '';
+  const hasta = (await _modalTexto('Exportar conteos', 'Hasta (YYYY-MM-DD, vacío = hoy):', { obligatorio: false })) || '';
   const qs = new URLSearchParams();
   if (desde) qs.set('desde', desde);
   if (hasta) qs.set('hasta', hasta);
   if (almId) qs.set('almacen_id', almId);
   try {
-    const r = await fetch(API + '/api/conteo/exportar?' + qs, { headers: { Authorization: 'Bearer ' + TOKEN } });
+    const r = await _fetchConTimeout('/api/conteo/exportar?' + qs);
     if (!r.ok) { alerta('Error al exportar', 'error'); return; }
     const blob = await r.blob();
     const url = URL.createObjectURL(blob);
@@ -476,30 +437,34 @@ async function conteoExportar() {
     a.download = `conteos_${desde || 'all'}_${hasta || 'all'}.csv`;
     a.click();
     URL.revokeObjectURL(url);
-  } catch (e) { alerta('Error de conexión', 'error'); }
+  } catch (e) {
+    alerta(e.message || 'Error de conexión', 'error');
+  }
 }
 
 let _CONTEO_OPERARIOS = [];
+
+/** Carga (una vez) la lista de operarios activos — usada por el panel de
+ * asignación en lote y por el selector de "forzar operario" del conteo manual. */
+async function _cargarOperariosConteo() {
+  if (_CONTEO_OPERARIOS.length > 0) return _CONTEO_OPERARIOS;
+  try {
+    const todos = await get('/api/auth/usuarios');
+    _CONTEO_OPERARIOS = (todos.usuarios || todos || []).filter(u =>
+      u.activo && ['operario', 'jefe_almacen'].includes(u.rol)
+    );
+  } catch (e) { /* silencioso */ }
+  return _CONTEO_OPERARIOS;
+}
 
 /** Show the batch-assign panel and load available operarios. */
 async function conteoMostrarAsignar() {
   const panel = document.getElementById('conteo-asignar-panel');
   if (!panel) return;
-  // Cargar operarios del almacén
-  if (_CONTEO_OPERARIOS.length === 0) {
-    try {
-      const r = await fetch(API + '/api/auth/usuarios', { headers: { Authorization: 'Bearer ' + TOKEN } });
-      if (r.ok) {
-        const todos = await r.json();
-        _CONTEO_OPERARIOS = (todos.usuarios || todos || []).filter(u =>
-          u.activo && ['operario', 'jefe_almacen'].includes(u.rol)
-        );
-      }
-    } catch (e) { /* silencioso */ }
-  }
+  const operarios = await _cargarOperariosConteo();
   const sel = document.getElementById('conteo-asignar-operario');
   if (sel) {
-    sel.innerHTML = _CONTEO_OPERARIOS.map(u =>
+    sel.innerHTML = operarios.map(u =>
       `<option value="${esc(u.id)}">${u.nombre || u.usuario} (${esc(u.rol)})</option>`
     ).join('');
   }
@@ -519,21 +484,12 @@ async function conteoAsignarLote() {
   const almId = document.getElementById('inv-abc-almacen')?.value;
   if (!operarioId) { alerta('Selecciona un operario', 'error'); return; }
   try {
-    const r = await fetch(API + '/api/conteo/asignar-lote', {
-      method: 'POST',
-      headers: { Authorization: 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ operario_id: parseInt(operarioId), almacen_id: almId ? parseInt(almId) : null, limite })
-    });
-    const d = await r.json();
-    if (r.ok) {
-      conteoCerrarAsignar();
-      alerta(`${d.asignadas} tareas asignadas a ${d.operario_nombre}`, 'exito');
-      await cargarConteoStats();
-      await cargarConteos(_CONTEO_PAGE);
-    } else {
-      alerta(d.error || 'Error al asignar', 'error');
-    }
-  } catch (e) { alerta('Error de conexión', 'error'); }
+    const d = await post('/api/conteo/asignar-lote', { operario_id: parseInt(operarioId), almacen_id: almId ? parseInt(almId) : null, limite });
+    conteoCerrarAsignar();
+    alerta(`${d.asignadas} tareas asignadas a ${d.operario_nombre}`, 'exito');
+    await cargarConteoStats();
+    await cargarConteos(_CONTEO_PAGE);
+  } catch (e) { alerta(e.message || 'Error de conexión', 'error'); }
 }
 
 /**
@@ -541,23 +497,14 @@ async function conteoAsignarLote() {
  * @param {number} id - Conteo session ID.
  */
 async function conteoCancelar(id) {
-  const motivo = prompt('Motivo de cancelación:');
-  if (!motivo || !motivo.trim()) return;
+  const motivo = await _modalTexto('Cancelar conteo', 'Motivo de cancelación:');
+  if (!motivo) return;
   try {
-    const r = await fetch(API + `/api/conteo/${id}/cancelar`, {
-      method: 'PUT',
-      headers: { Authorization: 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ motivo: motivo.trim() })
-    });
-    const d = await r.json();
-    if (r.ok) {
-      alerta('Conteo cancelado', 'advertencia');
-      await cargarConteoStats();
-      await cargarConteos(_CONTEO_PAGE);
-    } else {
-      alerta(d.error || 'Error al cancelar', 'error');
-    }
-  } catch (e) { alerta('Error de conexión', 'error'); }
+    await put(`/api/conteo/${id}/cancelar`, { motivo: motivo.trim() });
+    alerta('Conteo cancelado', 'advertencia');
+    await cargarConteoStats();
+    await cargarConteos(_CONTEO_PAGE);
+  } catch (e) { alerta(e.message || 'Error al cancelar', 'error'); }
 }
 
 // ── Carga principal ───────────────────────────────────────────────────────────
@@ -592,8 +539,7 @@ async function cargarConteos(page) {
     if (marca) qs.set('marca', marca);
     if (clase) qs.set('clasificacion', clase);
 
-    const r = await fetch(API + '/api/conteo/?' + qs, { headers: { Authorization: 'Bearer ' + TOKEN } });
-    const d = await r.json();
+    const d = await get('/api/conteo/?' + qs);
     const sesiones  = d.sesiones  || [];
     const total     = d.total     || 0;
     const totalPag  = d.total_paginas || 1;
@@ -641,9 +587,15 @@ async function cargarConteos(page) {
   }
 }
 
-/** Show the manual conteo creation form and focus the code input. */
-function conteosMostrarFormManual() {
+/** Show the manual conteo creation form, load operarios, and focus the code input. */
+async function conteosMostrarFormManual() {
   document.getElementById('conteo-form-manual').style.display = 'block';
+  const operarios = await _cargarOperariosConteo();
+  const selOp = document.getElementById('conteo-manual-operario');
+  if (selOp) {
+    selOp.innerHTML = '<option value="">Auto-asignar (el que lo tome primero)</option>' +
+      operarios.map(u => `<option value="${esc(u.id)}">${esc(u.nombre || u.usuario)} (${esc(u.rol)})</option>`).join('');
+  }
   document.getElementById('conteo-manual-codigo').focus();
 }
 /** Hide the manual conteo form and clear its inputs. */
@@ -651,34 +603,96 @@ function conteosOcultarFormManual() {
   document.getElementById('conteo-form-manual').style.display = 'none';
   document.getElementById('conteo-manual-codigo').value = '';
   document.getElementById('conteo-manual-error').textContent = '';
+  conteoManualOcultarSugerencias();
 }
-/** Create a manual conteo task for a specific product code and almacen. */
+
+let _CONTEO_MANUAL_BUSCAR_TIMER = null;
+
+/** Escapa texto para insertarlo como HTML — evita que un nombre de
+ * producto con `<`, `>`, `&`, comillas, etc. rompa el marcado o inyecte. */
+function _conteoManualEscapeHtml(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, ch => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  })[ch]);
+}
+
+/** Autocompletado del campo "Código producto" en Crear conteo manual —
+ * busca por código, nombre O código de barras (GET /api/productos/ ya
+ * soporta los tres, mismo endpoint que usa el catálogo general). Elegir
+ * una sugerencia rellena el campo con la referencia real; seguir
+ * escribiendo un código exacto sin elegir nada sigue funcionando igual
+ * que antes (crearConteoManual lo resuelve server-side). */
+function conteoManualBuscarProducto(valor) {
+  clearTimeout(_CONTEO_MANUAL_BUSCAR_TIMER);
+  const q = (valor || '').trim();
+  const box = document.getElementById('conteo-manual-sugerencias');
+  if (!box) return;
+  if (q.length < 2) { box.style.display = 'none'; box.innerHTML = ''; return; }
+
+  _CONTEO_MANUAL_BUSCAR_TIMER = setTimeout(async () => {
+    let productos = [];
+    try {
+      const d = await get('/api/productos/?q=' + encodeURIComponent(q) + '&per_page=8');
+      productos = d.productos || [];
+    } catch (e) {
+      box.style.display = 'none';
+      return;
+    }
+    if (!productos.length) {
+      box.innerHTML = '<div style="padding:10px 12px;font-size:13px;color:var(--tx3);">Sin resultados</div>';
+      box.style.display = 'block';
+      return;
+    }
+    box.innerHTML = productos.map(p => {
+      const codigo = _conteoManualEscapeHtml(p.codigo);
+      const nombre = _conteoManualEscapeHtml(p.nombre || '');
+      const barras = p.codigo_barras ? ' · ' + _conteoManualEscapeHtml(p.codigo_barras) : '';
+      return `
+        <div onclick="conteoManualElegirProducto(this.dataset.codigo)" data-codigo="${codigo}"
+          style="padding:8px 12px;cursor:pointer;border-bottom:1px solid var(--brd);font-size:13px;"
+          onmouseover="this.style.background='var(--bg-input)'" onmouseout="this.style.background=''">
+          <div style="font-weight:700;color:var(--tx);">${codigo}${barras}</div>
+          <div style="color:var(--tx3);font-size:12px;">${nombre}</div>
+        </div>`;
+    }).join('');
+    box.style.display = 'block';
+  }, 250);
+}
+
+/** Selecciona una sugerencia — rellena el campo con la referencia real del producto. */
+function conteoManualElegirProducto(codigo) {
+  const input = document.getElementById('conteo-manual-codigo');
+  if (input) input.value = codigo;
+  conteoManualOcultarSugerencias();
+}
+
+function conteoManualOcultarSugerencias() {
+  const box = document.getElementById('conteo-manual-sugerencias');
+  if (box) { box.style.display = 'none'; box.innerHTML = ''; }
+}
+/** Create a manual conteo task for a specific product code and almacen —
+ * opcionalmente forzando a qué operario le cae el primer conteo (CC1). */
 async function crearConteoManual() {
   const almacenId = document.getElementById('conteo-manual-almacen')?.value;
   const codigo = document.getElementById('conteo-manual-codigo')?.value.trim().toUpperCase();
+  const operarioId = document.getElementById('conteo-manual-operario')?.value;
   const errorEl = document.getElementById('conteo-manual-error');
   errorEl.textContent = '';
   if (!codigo) { errorEl.textContent = 'Ingresa el código del producto'; return; }
   if (!almacenId) { errorEl.textContent = 'Selecciona un almacén'; return; }
   try {
-    const r = await fetch(API + '/api/conteo/manual', {
-      method: 'POST',
-      headers: { Authorization: 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ almacen_id: parseInt(almacenId), producto_codigo: codigo }),
-    });
-    const d = await r.json();
-    if (r.ok) {
-      if (d.tareas_creadas === 0) {
-        errorEl.textContent = d.omitidas_ya_activas > 0 ? 'Ya existe un conteo activo para este producto' : 'Producto sin stock en este almacén';
-      } else {
-        alerta(`Conteo creado para ${d.producto_nombre || codigo}`, 'exito');
-        conteosOcultarFormManual();
-        await cargarConteos(1);
-      }
+    const body = { almacen_id: parseInt(almacenId), producto_codigo: codigo };
+    if (operarioId) body.operario_id = parseInt(operarioId);
+    const d = await post('/api/conteo/manual', body);
+    if (d.tareas_creadas === 0) {
+      errorEl.textContent = d.omitidas_ya_activas > 0 ? 'Ya existe un conteo activo para este producto' : 'Producto sin stock en este almacén';
     } else {
-      errorEl.textContent = d.error || 'Error al crear conteo';
+      const destino = d.operario_nombre ? ` — asignado a ${d.operario_nombre}` : '';
+      alerta(`Conteo creado para ${d.producto_nombre || codigo}${destino}`, 'exito');
+      conteosOcultarFormManual();
+      await cargarConteos(1);
     }
-  } catch (e) { errorEl.textContent = 'Error de conexión'; }
+  } catch (e) { errorEl.textContent = e.message || 'Error de conexión'; }
 }
 
 /** Fetch and render the ABC classification summary for the selected almacen. */
@@ -689,10 +703,7 @@ async function cargarResumenAbc() {
   if (!resumenEl) return;
   resumenEl.innerHTML = '<div style="text-align:center;padding:20px;color:#555;">Cargando...</div>';
   try {
-    const r = await fetch(API + `/api/conteo/abc/resumen?almacen_id=${almacenId}`, {
-      headers: { Authorization: 'Bearer ' + TOKEN }
-    });
-    const d = await r.json();
+    const d = await get(`/api/conteo/abc/resumen?almacen_id=${almacenId}`);
     const dist = d.distribucion_abc || {};
     const items = [
       { clase: 'A', col: '#4ade80', bg: '#1e3a1e', border: '#166534', desc: 'Alta rotación · cada 15 días' },
@@ -728,25 +739,15 @@ async function generarAbc(clase, forzarTodo = false) {
   const res = document.getElementById('inv-abc-resultado');
   if (res) res.textContent = 'Generando...';
   try {
-    const r = await fetch(API + '/api/conteo/abc/generar-tareas', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + TOKEN },
-      body: JSON.stringify({ almacen_id: parseInt(almacenId), clasificacion: clase, forzar_todo: forzarTodo })
-    });
-    const d = await r.json();
-    if (r.ok) {
-      const loteInfo = d.batch_diario ? ` (lote ${d.batch_diario}/día de ${d.total_clase})` : ' (todo)';
-      const msg = `Clase ${clase}: ${d.tareas_creadas} tareas${loteInfo}`;
-      if (res) res.textContent = msg;
-      alerta(msg, d.tareas_creadas > 0 ? 'exito' : 'advertencia');
-      await cargarConteos(1);
-    } else {
-      if (res) res.textContent = '';
-      alerta(d.error || 'Error generando tareas', 'error');
-    }
+    const d = await post('/api/conteo/abc/generar-tareas', { almacen_id: parseInt(almacenId), clasificacion: clase, forzar_todo: forzarTodo });
+    const loteInfo = d.batch_diario ? ` (lote ${d.batch_diario}/día de ${d.total_clase})` : ' (todo)';
+    const msg = `Clase ${clase}: ${d.tareas_creadas} tareas${loteInfo}`;
+    if (res) res.textContent = msg;
+    alerta(msg, d.tareas_creadas > 0 ? 'exito' : 'advertencia');
+    await cargarConteos(1);
   } catch (e) {
     if (res) res.textContent = '';
-    alerta('Error de conexión', 'error');
+    alerta(e.message || 'Error de conexión', 'error');
   }
 }
 
@@ -757,30 +758,20 @@ async function generarAbc(clase, forzarTodo = false) {
 async function generarTodasClases(forzarTodo = false) {
   const almacenId = document.getElementById('inv-abc-almacen')?.value;
   if (!almacenId) { alerta('Selecciona un almacén primero', 'error'); return; }
-  if (forzarTodo && !confirm('¿Generar tareas para TODOS los productos elegibles sin límite de lote? Puede crear miles de conteos.')) return;
+  if (forzarTodo && !await _modalConfirmar('¿Generar tareas para TODOS los productos elegibles sin límite de lote? Puede crear miles de conteos.', { titulo: 'Forzar generación', peligro: true })) return;
   const res = document.getElementById('inv-abc-resultado');
   if (res) res.textContent = forzarTodo ? 'Forzando todo...' : 'Generando lote del día...';
   try {
-    const r = await fetch(API + '/api/conteo/abc/generar-todas', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + TOKEN },
-      body: JSON.stringify({ almacen_id: parseInt(almacenId), forzar_todo: forzarTodo })
-    });
-    const d = await r.json();
-    if (r.ok) {
-      const watchdog = d.por_clase?.watchdog;
-      const wdMsg = watchdog?.overrides > 0 ? ` · 🤖 ${watchdog.overrides} watchdog` : '';
-      const msg = `${d.total_tareas_creadas} tareas nuevas${wdMsg}`;
-      if (res) res.textContent = msg;
-      alerta(msg, d.total_tareas_creadas > 0 ? 'exito' : 'advertencia');
-      await cargarConteos(1);
-    } else {
-      if (res) res.textContent = '';
-      alerta(d.error || 'Error generando tareas', 'error');
-    }
+    const d = await post('/api/conteo/abc/generar-todas', { almacen_id: parseInt(almacenId), forzar_todo: forzarTodo });
+    const watchdog = d.por_clase?.watchdog;
+    const wdMsg = watchdog?.overrides > 0 ? ` · 🤖 ${watchdog.overrides} watchdog` : '';
+    const msg = `${d.total_tareas_creadas} tareas nuevas${wdMsg}`;
+    if (res) res.textContent = msg;
+    alerta(msg, d.total_tareas_creadas > 0 ? 'exito' : 'advertencia');
+    await cargarConteos(1);
   } catch (e) {
     if (res) res.textContent = '';
-    alerta('Error de conexión', 'error');
+    alerta(e.message || 'Error de conexión', 'error');
   }
 }
 
@@ -788,28 +779,19 @@ async function generarTodasClases(forzarTodo = false) {
 async function limpiarPendientesAbc() {
   const almacenId = document.getElementById('inv-abc-almacen')?.value;
   if (!almacenId) { alerta('Selecciona un almacén primero', 'error'); return; }
-  const clase = prompt('¿Qué clase limpiar? Escribe A, B, C o deja vacío para TODAS (esto eliminará TODAS las tareas PENDIENTE de la clase):');
+  const clase = await _modalTexto('Limpiar pendientes', 'Qué clase limpiar? Escribe A, B, C o deja vacío para TODAS (esto eliminará TODAS las tareas PENDIENTE de la clase):', { obligatorio: false });
   if (clase === null) return; // canceló
   const claseUpper = clase.trim().toUpperCase();
   if (claseUpper && !['A','B','C'].includes(claseUpper)) {
     alerta('Clase inválida. Usa A, B, C o deja vacío.', 'error'); return;
   }
   const etiqueta = claseUpper || 'todas las clases';
-  if (!confirm(`¿Eliminar TODAS las tareas PENDIENTE de ${etiqueta}? Esta acción no se puede deshacer.`)) return;
+  if (!await _modalConfirmar(`¿Eliminar TODAS las tareas PENDIENTE de ${etiqueta}? Esta acción no se puede deshacer.`, { titulo: 'Eliminar pendientes', peligro: true })) return;
   try {
-    const r = await fetch(API + '/api/conteo/abc/limpiar-pendientes', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + TOKEN },
-      body: JSON.stringify({ almacen_id: parseInt(almacenId), clasificacion: claseUpper || null }),
-    });
-    const d = await r.json();
-    if (r.ok) {
-      alerta(`${d.eliminadas} tareas eliminadas (${etiqueta})`, 'exito');
-      await cargarConteos(1);
-    } else {
-      alerta(d.error || 'Error limpiando cola', 'error');
-    }
-  } catch (e) { alerta('Error de conexión', 'error'); }
+    const d = await post('/api/conteo/abc/limpiar-pendientes', { almacen_id: parseInt(almacenId), clasificacion: claseUpper || null });
+    alerta(`${d.eliminadas} tareas eliminadas (${etiqueta})`, 'exito');
+    await cargarConteos(1);
+  } catch (e) { alerta(e.message || 'Error de conexión', 'error'); }
 }
 
 // ─── Edición de conteos (admin) ────────────────────────────────────────────
@@ -880,20 +862,11 @@ async function conteoGuardarEdicion() {
   }
 
   try {
-    const r = await fetch(API + `/api/conteo/${_CONTEO_EDICION_ID}/editar`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + TOKEN },
-      body: JSON.stringify(body)
-    });
-    const d = await r.json();
-    if (r.ok) {
-      alerta('Conteo actualizado · ' + (d.cambios || []).join(', '), 'exito');
-      conteosCerrarEdicion();
-      await cargarConteos(_CONTEO_PAGE);
-    } else {
-      alerta(d.error || 'Error actualizando conteo', 'error');
-    }
-  } catch (e) { alerta('Error de conexión', 'error'); }
+    const d = await put(`/api/conteo/${_CONTEO_EDICION_ID}/editar`, body);
+    alerta('Conteo actualizado · ' + (d.cambios || []).join(', '), 'exito');
+    conteosCerrarEdicion();
+    await cargarConteos(_CONTEO_PAGE);
+  } catch (e) { alerta(e.message || 'Error de conexión', 'error'); }
 }
 
 /**
@@ -920,11 +893,7 @@ async function subirCsvAbc(input) {
   if (almacenId) form.append('almacen_id', almacenId);
 
   try {
-    const r = await fetch(API + '/api/conteo/abc/cargar-csv', {
-      method: 'POST',
-      headers: { Authorization: 'Bearer ' + TOKEN },
-      body: form
-    });
+    const r = await _fetchConTimeout('/api/conteo/abc/cargar-csv', { method: 'POST', body: form }, 60000);
     const d = await r.json();
 
     if (r.ok) {
@@ -950,7 +919,7 @@ async function subirCsvAbc(input) {
     }
   } catch (e) {
     res.style.color = '#ef4444';
-    res.textContent = '✗ Error de conexión';
+    res.textContent = '✗ ' + (e.message || 'Error de conexión');
   }
   // Limpiar input para permitir subir el mismo archivo de nuevo
   input.value = '';
@@ -963,26 +932,16 @@ async function ejecutarWatchdog() {
   const res = document.getElementById('inv-abc-resultado');
   if (res) res.textContent = '🤖 Escaneando anomalías...';
   try {
-    const r = await fetch(API + '/api/conteo/abc/watchdog', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + TOKEN },
-      body: JSON.stringify({ almacen_id: parseInt(almacenId) })
-    });
-    const d = await r.json();
-    if (r.ok) {
-      const msg = d.overrides > 0
-        ? `🤖 Watchdog: ${d.overrides} producto(s) con rotación anómala → conteo forzado`
-        : '🤖 Watchdog: sin anomalías detectadas';
-      if (res) res.textContent = msg;
-      alerta(msg, d.overrides > 0 ? 'advertencia' : 'exito');
-      if (d.overrides > 0) await cargarConteos();
-    } else {
-      if (res) res.textContent = '';
-      alerta(d.error || 'Error en watchdog', 'error');
-    }
+    const d = await post('/api/conteo/abc/watchdog', { almacen_id: parseInt(almacenId) });
+    const msg = d.overrides > 0
+      ? `🤖 Watchdog: ${d.overrides} producto(s) con rotación anómala → conteo forzado`
+      : '🤖 Watchdog: sin anomalías detectadas';
+    if (res) res.textContent = msg;
+    alerta(msg, d.overrides > 0 ? 'advertencia' : 'exito');
+    if (d.overrides > 0) await cargarConteos();
   } catch (e) {
     if (res) res.textContent = '';
-    alerta('Error de conexión', 'error');
+    alerta(e.message || 'Error de conexión', 'error');
   }
 }
 
@@ -1064,20 +1023,12 @@ async function conteoConfirmarAjuste() {
   if (btn) { btn.disabled = true; btn.textContent = 'Procesando...'; }
 
   try {
-    const r = await fetch(API + `/api/conteo/${sesionId}/ajustar`, {
-      method: 'PUT',
-      headers: { Authorization: 'Bearer ' + TOKEN }
-    });
-    const d = await r.json();
-    if (r.ok) {
-      conteosCerrarAjuste();
-      alerta(`Ajuste ${d.motivo_codigo} encolado a Siesa · Δ ${d.diferencia} uds`, 'exito');
-      await cargarConteos(_CONTEO_PAGE);
-    } else {
-      alerta(d.error || 'Error al ajustar', 'error');
-    }
+    const d = await put(`/api/conteo/${sesionId}/ajustar`, {});
+    conteosCerrarAjuste();
+    alerta(`Ajuste ${d.motivo_codigo} encolado a Siesa · Δ ${d.diferencia} uds`, 'exito');
+    await cargarConteos(_CONTEO_PAGE);
   } catch (e) {
-    alerta('Error de conexión', 'error');
+    alerta(e.message || 'Error de conexión', 'error');
   } finally {
     if (btn) { btn.disabled = false; btn.textContent = 'Confirmar → SIESA'; }
   }
@@ -1176,7 +1127,7 @@ function _defRender() {
     </div>
 
     ${puedeCamara ? `
-    <button onclick="defAbrirCamara()" style="width:100%;padding:14px;font-size:17px;background:#fff;color:#000;border:2px solid #000;border-radius:12px;cursor:pointer;margin-bottom:10px;">
+    <button onclick="defAbrirCamara(this)" style="width:100%;padding:14px;font-size:17px;background:#fff;color:#000;border:2px solid #000;border-radius:12px;cursor:pointer;margin-bottom:10px;">
       📷 Escanear con cámara
     </button>
     <div id="def-camara-box" style="display:none;margin-bottom:10px;">
@@ -1198,8 +1149,8 @@ function _defRender() {
 }
 
 /** Abre la cámara del navegador con su propia caja (aislada de picking.js). */
-async function defAbrirCamara() {
-  await abrirCamara('def-lector-qr', 'def-camara-box', defProcesarScan);
+async function defAbrirCamara(btnEl = null) {
+  await abrirCamara('def-lector-qr', 'def-camara-box', defProcesarScan, btnEl);
 }
 
 /** Procesa un código escaneado: mismo contrato que picking.js para CONTEO
@@ -1207,7 +1158,7 @@ async function defAbrirCamara() {
 async function defProcesarScan(codigo) {
   if (!DEF_TAREA_ACTUAL) return;
   try {
-    const r = await post('/api/mobile/escanear', {
+    const r = await postConReintento('/api/mobile/escanear', {
       tarea_id: DEF_TAREA_ACTUAL.id, tipo: 'CONTEO', codigo, cantidad: 1,
     });
     if (r.error) {
@@ -1228,13 +1179,8 @@ async function defProcesarScan(codigo) {
 /** Confirma sin escáner — el supervisor contó físicamente y escribe el número. */
 async function defConfirmarManual() {
   if (!DEF_TAREA_ACTUAL) return;
-  const cantStr = prompt('¿Cuántas unidades contaste físicamente?');
-  if (cantStr === null) return;
-  const cant = parseInt(cantStr, 10);
-  if (isNaN(cant) || cant < 0) {
-    alerta('Cantidad inválida', 'error');
-    return;
-  }
+  const cant = await _modalCantidad('Conteo definitivo', '¿Cuántas unidades contaste físicamente?', { min: 0 });
+  if (cant === null) return;
   DEF_TAREA_ACTUAL.contado = cant;
   const el = document.getElementById('def-contador');
   if (el) el.textContent = cant;
@@ -1246,10 +1192,9 @@ async function defConfirmar() {
   if (!DEF_TAREA_ACTUAL) return;
   const btn = document.getElementById('def-btn-ok');
   if (btn) { btn.textContent = 'Confirmando...'; btn.disabled = true; }
+  const payload = { tarea_id: DEF_TAREA_ACTUAL.id, tipo: 'CONTEO', items_escaneados: [] };
   try {
-    const r = await post('/api/mobile/confirmar', {
-      tarea_id: DEF_TAREA_ACTUAL.id, tipo: 'CONTEO', items_escaneados: [],
-    });
+    const r = await post('/api/mobile/confirmar', payload);
     if (r.error) {
       alerta(typeof r.error === 'object' ? r.error.mensaje : r.error, 'error');
       if (btn) { btn.textContent = '✓ Confirmar conteo definitivo'; btn.disabled = false; }
@@ -1258,8 +1203,15 @@ async function defConfirmar() {
     beepDone();
     _defMostrarResultado(r);
   } catch (e) {
-    alerta(e.status ? e.message : 'Error de conexión', 'error');
-    if (btn) { btn.textContent = '✓ Confirmar conteo definitivo'; btn.disabled = false; }
+    if (e.status) {
+      // Error del servidor (400/500) — mostrar mensaje real, no guardar offline
+      alerta(e.message || 'Error al confirmar', 'error');
+      if (btn) { btn.textContent = '✓ Confirmar conteo definitivo'; btn.disabled = false; }
+    } else {
+      // Error de red real — guardar para sincronizar cuando haya WiFi (mismo patrón que picking.js)
+      guardarOffline(payload);
+      defCerrarModal();
+    }
   }
 }
 
@@ -1289,19 +1241,11 @@ function _defMostrarResultado(r) {
 /** Aprueba el ajuste ya mismo (PUT /api/conteo/<raiz_id>/ajustar) — dispara el POST real a Siesa vía DLQ. */
 async function defAprobarAjuste(raizId) {
   try {
-    const r = await fetch(API + `/api/conteo/${raizId}/ajustar`, {
-      method: 'PUT',
-      headers: { Authorization: 'Bearer ' + TOKEN },
-    });
-    const d = await r.json();
-    if (r.ok) {
-      alerta(`Ajuste ${d.motivo_codigo || ''} encolado a Siesa`, 'exito');
-      defCerrarModal();
-    } else {
-      alerta(d.error || 'Error al aprobar el ajuste', 'error');
-    }
+    const d = await put(`/api/conteo/${raizId}/ajustar`, {});
+    alerta(`Ajuste ${d.motivo_codigo || ''} encolado a Siesa`, 'exito');
+    defCerrarModal();
   } catch (e) {
-    alerta('Error de conexión', 'error');
+    alerta(e.message || 'Error de conexión', 'error');
   }
 }
 

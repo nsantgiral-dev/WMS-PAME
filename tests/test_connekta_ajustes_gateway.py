@@ -50,16 +50,16 @@ class TestEnviarAjusteInventario:
         """AJ-ENT arma el payload con motivo_ajuste_entrada — no dispara el
         POST real (modo simulación, sin credenciales)."""
         with app.app_context():
-            from app.services.connekta_gateway import connekta
+            from app.services.connekta_gateway import connekta, ConnektaGateway
 
             monkeypatch.setattr(connekta, 'tipo_docto_ajuste', 'ADI')
             capturado = {}
 
-            def _fake_post(conector, nombre, payload):
+            def _fake_post(self, conector, nombre, payload):
                 capturado['payload'] = payload
                 return {'codigo': 0}
 
-            monkeypatch.setattr(connekta, '_post', _fake_post)
+            monkeypatch.setattr(ConnektaGateway, '_post', _fake_post)
             connekta.enviar_ajuste_inventario(
                 motivo_codigo='AJ-ENT', item_codigo='PAPELSP9218',
                 cantidad=5, referencia='conteo cíclico', bodega='NB1', centro_op='003',
@@ -74,15 +74,15 @@ class TestEnviarAjusteInventario:
 class TestTransferirAAverias:
     def test_payload_usa_bodega_y_bodega_averias_del_core(self, app, monkeypatch):
         with app.app_context():
-            from app.services.connekta_gateway import connekta
+            from app.services.connekta_gateway import connekta, ConnektaGateway
 
             capturado = {}
 
-            def _fake_post(conector, nombre, payload):
+            def _fake_post(self, conector, nombre, payload):
                 capturado['payload'] = payload
                 return {'codigo': 0}
 
-            monkeypatch.setattr(connekta, '_post', _fake_post)
+            monkeypatch.setattr(ConnektaGateway, '_post', _fake_post)
             connekta.transferir_a_averias('PAPELSP9218', 3, referencia='avería en recepción')
 
             doc = capturado['payload']['Documentos'][0]

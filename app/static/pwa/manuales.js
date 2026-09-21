@@ -10,6 +10,7 @@
 const MANUALES = [
   { rol: 'Picker (Operario de Picking)', bodega: 'NB1', archivo: '/static/manuales/manual_picker_nb1.pdf' },
   { rol: 'Empacador', bodega: 'NB1', archivo: '/static/manuales/manual_empacador_nb1.pdf' },
+  { rol: 'Recepcionista', bodega: 'NB1', archivo: '/static/manuales/manual_recepcionista_nb1.pdf' },
 ];
 
 function cargarManuales() {

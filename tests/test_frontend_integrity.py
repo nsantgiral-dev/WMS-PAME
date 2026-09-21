@@ -76,9 +76,13 @@ class TestScriptIntegrity:
     """Estructura de carga de scripts es correcta y completa."""
 
     def _script_tags_in_html(self):
-        """Extrae scripts src del HTML en orden."""
+        """Extrae scripts src del HTML en orden.
+
+        `[^>]*?` tolera atributos antes de `src=` (ej. `<script defer src=...>`)
+        sin volverse dependiente de su orden u otros atributos futuros.
+        """
         html = _read('index.html')
-        return re.findall(r'<script src="/static/pwa/(\w+\.js)', html)
+        return re.findall(r'<script[^>]*?\ssrc="/static/pwa/(\w+\.js)', html)
 
     def test_all_js_files_loaded_in_html(self):
         """Cada .js en el directorio PWA está referenciado en index.html."""
@@ -135,7 +139,8 @@ class TestScriptIntegrity:
         como actuales es la peor clase de dato en un WMS.
         """
         html = _read('index.html')
-        scripts = re.findall(r'<script src="(/static/pwa/\w+\.js[^"]*)"', html)
+        scripts = re.findall(r'<script[^>]*?\ssrc="(/static/pwa/\w+\.js[^"]*)"', html)
+        assert len(scripts) >= 15, f'Solo {len(scripts)} scripts detectados — ¿se rompió el regex de nuevo?'
         for script in scripts:
             assert '?v=' in script, f'{script} sin cache bust version param'
 
@@ -820,12 +825,15 @@ DEUDA_SIN_UI = {
         'que NO EXISTE en index.html — verificado por grep: cero apariciones. La '
         'función retorna en la primera línea aunque alguien la llamara.',
     '/api/rutas/usuarios-conductores':
-        'Poblaba el selector del formulario de alta de conductor. Verificado: los '
-        'ids que toca (conductores-form, cond-form-usuario, cond-form-error) no '
-        'existen en index.html, así que conductoresMostrarForm reventaría en su '
-        'primera línea. Costo real: **no hay forma de dar de alta un conductor '
-        'desde la PWA** — la pantalla solo lista, activa/desactiva y crea la '
-        'cuenta PWA de uno ya existente. Alta = INSERT a mano en la base.',
+        'Poblaba el selector del formulario de alta directa de conductor '
+        '(conductoresCrear/conductoresMostrarForm/conductoresCancelarForm, '
+        'borradas de rutas.js el 2026-09-16 tras verificar que no era un '
+        'formulario a medio construir). El alta real vive en el módulo '
+        'Usuarios con rol=conductor: auth.py:111-120 y :205-220 crean/'
+        'sincronizan el Conductor (nombre, cédula, teléfono, usuario_id) al '
+        'crear o editar ese Usuario — index.html:1518 ya lo documenta en la '
+        'propia pantalla. Un segundo alta que no vincula usuario_id habría '
+        'sido la política duplicada que la Regla 0 prohíbe.',
     '/api/picking/<int:id>/cancelar':
         'Cancelar una tarea de picking con motivo. Verificado: cancelarTareaPicking '
         '(app.js:690) no se referencia en ningún onclick ni HTML. Lo que la '
@@ -1663,3 +1671,85 @@ class TestNingunDatoLlegaCrudoAlInnerHTML:
         fuente = ("const a = s.replace(/'/g, \"x\");\n"
                   "const b = `<div>${d.nombre}</div>`;")
         assert _crudos(fuente), 'el escáner se desincronizó con el regex'
+
+# ═══════════════════════════════════════════════════════════════════
+# NIVEL 4: Modo claro cubre todos los fondos oscuros que el JS escribe
+# ═══════════════════════════════════════════════════════════════════
+
+class TestModoClaroCubreFondosOscuros:
+    """
+    El modo claro no usa variables CSS para los ~19.000 líneas de JS que
+    generan estilos inline con hex literal — sobrescribe cada fondo oscuro
+    conocido con selectores `body.light [style*="background:#XXXXXX"]`
+    (ver el bloque "MODO CLARO" en index.html). Es una lista mantenida a
+    mano: un color nuevo que un desarrollador agregue en cualquier módulo y
+    que no esté en esa lista queda invisible (texto claro sobre fondo claro)
+    la primera vez que alguien abra esa pantalla en modo claro, sin que nada
+    lo avise antes de producción.
+
+    Este test cierra esa ventana: falla si aparece un `background:#hex`
+    oscuro en cualquier JS o en index.html que ni la lista de selectores
+    del modo claro ni el ALLOWLIST de abajo cubran. Si agregas un color
+    nuevo:
+      - si es un fondo oscuro de tarjeta/chip/badge → agrégalo al bucket
+        semántico correspondiente en el bloque "MODO CLARO" de index.html
+        (VERDE/ROJO/MORADO/AZUL/ÁMBAR/GRIS NEUTRO/genérico);
+      - si es un acento vivo que se ve bien en los dos temas (botón sólido,
+        no una tarjeta oscura) o un tono ya claro → agrégalo a ALLOWLIST
+        de este test, con un comentario de por qué no necesita conversión.
+    """
+
+    # Colores que NO necesitan selector en el modo claro:
+    # ya son claros, o son acentos vivos/saturados que se leen bien sobre
+    # cualquiera de los dos fondos (botones sólidos, no tarjetas oscuras).
+    ALLOWLIST = {
+        '#fff', '#ffffff', '#f9fafb', '#eee', '#e2e8f0', '#dbeafe',
+        '#f0f9ff', '#f3f4f6', '#f4f4f4', '#fee2e2', '#fef2f2', '#fff7ed',
+        '#16a34a', '#ef4444', '#1E8395', '#3b82f6', '#f59e0b', '#22c55e',
+        '#dc2626', '#4f46e5', '#FACC15', '#60A5FA', '#4ade80', '#a78bfa',
+        '#2563eb', '#F87171', '#fbbf24', '#374151',
+        # Paleta "modo día" del conductor (rutas.js) — igual que rutaVerManifiesto,
+        # a propósito siempre clara sin importar el tema, así que no necesita
+        # selector body.light: #F0F4F8 (fondo de página, ya es el --bg claro),
+        # #eff6ff/#fffbeb (tarjetas info/aviso muy claras), #d97706 (botón sólido).
+        '#F0F4F8', '#eff6ff', '#fffbeb', '#d97706',
+        # Dos de la misma paleta del conductor, que el merge del 2026-09-18
+        # trajo sin declarar: #f0fdf4 ya ES claro (verde muy pálido de la
+        # tarjeta ENTREGADO) y #0a3d62 es un botón sólido saturado — se lee
+        # sobre los dos fondos, como los demás acentos de esta lista.
+        '#f0fdf4', '#0a3d62',
+    }
+
+    _HEX_RE = re.compile(r'background:\s*#([0-9a-fA-F]{6}|[0-9a-fA-F]{3})')
+    _COVERED_RE = re.compile(r'\[style\*="background:#([0-9a-fA-F]{6}|[0-9a-fA-F]{3})"\]')
+
+    def _colores_usados(self):
+        codigo = _all_code() + '\n' + _read('index.html')
+        return {'#' + m.group(1) for m in self._HEX_RE.finditer(codigo)}
+
+    def _colores_cubiertos(self):
+        """Solo el bloque MODO CLARO — no todo index.html, para no mezclar
+        con otros usos de `background:#hex` fuera del sistema de temas."""
+        html = _read('index.html')
+        inicio = html.index('MODO CLARO — neutralizar')
+        fin = html.index('/* ── Reset ── */')
+        return {'#' + m.group(1) for m in self._COVERED_RE.finditer(html[inicio:fin])}
+
+    def test_todo_fondo_oscuro_esta_cubierto_o_en_allowlist(self):
+        usados = self._colores_usados()
+        cubiertos = self._colores_cubiertos()
+
+        def cubierto(hexval):
+            # CSS `[style*="...")]` hace match por substring: un selector de
+            # 3-6 dígitos cubre también la misma variante con sufijo alpha
+            # (ej. "#450a0a" cubre "#450a0a33").
+            return hexval in self.ALLOWLIST or any(hexval.startswith(c) for c in cubiertos)
+
+        faltantes = sorted(h for h in usados if not cubierto(h))
+        assert not faltantes, (
+            f'\n{len(faltantes)} color(es) de fondo oscuro sin cubrir en modo claro:\n'
+            + '\n'.join(f'  · {h}' for h in faltantes)
+            + '\n\nAgrega cada uno al bucket semántico correspondiente en el bloque '
+              '"MODO CLARO" de index.html, o a ALLOWLIST de este test si es un '
+              'acento vivo que no necesita conversión.'
+        )

@@ -35,8 +35,16 @@ class ConteoService:
         if sesion.estado not in ['PENDIENTE', 'EN_PROCESO']:
             raise ValueError(f'Tarea en estado {sesion.estado} — no disponible')
 
-        # Asignar operario si no tiene
-        if not sesion.operario_id:
+        ConteoService.verificar_puede_tomar_definitivo(sesion, operario_id)
+
+        # PENDIENTE → EN_PROCESO al abrirla — sin importar si YA tenía dueño.
+        # `crear_conteo_manual(operario_id=...)` y `asignar-lote` pre-asignan
+        # operario_id dejando estado=PENDIENTE ("asignada pero no iniciada",
+        # el mismo patrón que ya usan las tareas DIARIO_ABC). Comprobar
+        # `not sesion.operario_id` acá dejaba esas sesiones sin transición
+        # nunca: el operario asignado la abría, la contaba, y la sesión
+        # seguía viéndose PENDIENTE — fecha_inicio nunca se registraba.
+        if sesion.estado == EstadoConteo.PENDIENTE:
             sesion.operario_id = operario_id
             sesion.estado = EstadoConteo.EN_PROCESO
             sesion.fecha_inicio = datetime.utcnow()
@@ -48,6 +56,38 @@ class ConteoService:
 
         # Retornar SOLO vista ciega — sin cantidad esperada
         return sesion.to_dict_operario()
+
+    @staticmethod
+    def _es_conteo_definitivo(sesion: SesionConteo) -> bool:
+        """True si `sesion` es un CC3 — su padre (CC2) es a su vez es_segundo_conteo."""
+        if not (sesion.es_segundo_conteo and sesion.sesion_origen_id):
+            return False
+        origen = db.session.get(SesionConteo, sesion.sesion_origen_id)
+        return bool(origen and origen.es_segundo_conteo)
+
+    @staticmethod
+    def verificar_puede_tomar_definitivo(sesion: SesionConteo, operario_id: int) -> None:
+        """El CC3 nace SIN operario a propósito (`_crear_conteo_verificacion`)
+        — lo toma un supervisor desde `/api/conteo/definitivos`, nunca un
+        picker automático (decisión 2026-09-04). Sin este chequeo, cualquier
+        operario de almacén podía saltarse esa cola llamando directo a
+        `GET /api/conteo/<id>/tarea` o a `/api/mobile/escanear` con el
+        sesion_id del CC3 — la ruta que lista la cola ya exige
+        `Roles.SUPERVISION`, pero nada exigía lo mismo al TOMARLO.
+
+        No hace nada si la sesión ya tiene dueño (ese caso lo cubre el
+        chequeo de ownership de cada caller) ni si no es un CC3.
+        """
+        if sesion.operario_id or not ConteoService._es_conteo_definitivo(sesion):
+            return
+        from app.models.usuario import Usuario
+        from app.routes._auth_helpers import Roles
+        operario = db.session.get(Usuario, operario_id)
+        if not operario or operario.rol not in Roles.SUPERVISION:
+            raise ValueError(
+                'El conteo definitivo (CC3) solo lo puede tomar un supervisor, '
+                'admin o jefe de almacén'
+            )
 
     @staticmethod
     def registrar_conteo(
@@ -75,6 +115,7 @@ class ConteoService:
             raise ValueError('Esta tarea no está asignada a ti')
         if sesion_pre.maneja_lote and not lote_id:
             raise ValueError('Este producto maneja lotes. El campo lote_id es obligatorio.')
+        ConteoService.verificar_puede_tomar_definitivo(sesion_pre, operario_id)
 
         # Siesa es la fuente de verdad. Se consulta antes del lock para no
         # mantener la transacción abierta durante la llamada HTTP.
@@ -126,6 +167,9 @@ class ConteoService:
             raise ValueError(f'No se puede registrar conteo en estado {sesion.estado}')
         if sesion.operario_id and sesion.operario_id != operario_id:
             raise ValueError('Esta tarea no está asignada a ti')
+        # Re-verificado bajo lock: sesion_pre y sesion son lecturas distintas —
+        # el mismo criterio que ya aplican estado y ownership dos líneas arriba.
+        ConteoService.verificar_puede_tomar_definitivo(sesion, operario_id)
 
         sesion.operario_id = operario_id
         sesion.cantidad_fisica = cantidad_fisica
@@ -207,27 +251,58 @@ class ConteoService:
 
                 if cc1_cantidad is not None and cantidad_fisica == cc1_cantidad:
                     # CC1 == CC2: "verdad de bodega" — ajuste automático sin esperar admin
-                    if origen and origen.estado == EstadoConteo.SEGUNDO_CONTEO:
+                    debe_auto_encolar = bool(origen and origen.estado == EstadoConteo.SEGUNDO_CONTEO)
+                    if debe_auto_encolar:
                         origen.estado = EstadoConteo.DESCUADRE
+
+                    # Comitear y SOLTAR el lock de `sesion` (with_for_update, línea
+                    # ~119) ANTES de llamar a Siesa. `_encolar_ajuste_fisico` hace
+                    # una consulta HTTP — sostenerla con la fila bloqueada deja la
+                    # conexión (y con el timeout de ~30s de Siesa, Regla 14) atada
+                    # durante toda la llamada, justo lo que el resto de esta
+                    # función evita a propósito para `existencia_ref` (línea ~79).
+                    try:
+                        db.session.commit()
+                    except Exception as e:
+                        db.session.rollback()
+                        raise ValueError(f'Error al marcar DESCUADRE: {e}')
+
+                    auto_encolado = False
+                    error_auto_encolado = None
+                    if debe_auto_encolar:
                         try:
                             ConteoService._encolar_ajuste_fisico(origen, aprobador_id=None)
+                            db.session.commit()
+                            auto_encolado = True
                             logger.warning(
                                 f'[CONTEO] CC2 confirma CC1 ({cc1_cantidad} uds) — '
                                 f'padre {origen.codigo} → AJUSTANDO (auto)'
                             )
                         except Exception as e_enq:
+                            db.session.rollback()
+                            error_auto_encolado = str(e_enq)
                             logger.error(
                                 f'[CONTEO] Error al auto-encolar ajuste CC1==CC2 '
                                 f'para sesion {origen.id}: {e_enq} — queda en DESCUADRE para revisión admin'
                             )
-                    try:
-                        db.session.commit()
-                    except Exception as e:
-                        db.session.rollback()
-                        raise ValueError(f'Error al marcar DESCUADRE y encolar ajuste: {e}')
+
+                    # El mensaje refleja lo que de verdad pasó — antes decía
+                    # "encolado automáticamente" incluso cuando la excepción se
+                    # tragaba en el `except` de arriba y nada llegaba a la DLQ.
+                    if auto_encolado:
+                        mensaje = 'Ambos conteos coinciden — ajuste encolado automáticamente'
+                    elif debe_auto_encolar:
+                        mensaje = (
+                            'Ambos conteos coinciden — el ajuste automático falló '
+                            f'({error_auto_encolado}); queda en DESCUADRE para aprobación manual'
+                        )
+                    else:
+                        mensaje = 'Ambos conteos coinciden — queda en DESCUADRE para aprobación manual'
+
                     return {
                         'resultado': 'DESCUADRE',
-                        'mensaje': 'Ambos conteos coinciden — ajuste encolado automáticamente',
+                        'mensaje': mensaje,
+                        'auto_encolado': auto_encolado,
                         'sesion_id': sesion.id,
                     }
 
@@ -636,6 +711,100 @@ class ConteoService:
         )
 
     @staticmethod
+    def ajustar_desde_auditoria_picking(tarea, *, cantidad_fisica: int,
+                                         aprobador_id: int) -> SesionConteo:
+        """
+        Ajuste a Siesa de un SKU puntual — la MISMA política que el conteo
+        cíclico normal (`_encolar_ajuste_fisico`, conector 142951), pero sin
+        double-blind: la llama `PickingService.auditar_tarea` cuando el
+        resultado es ENCONTRADO_COMPLETO o ENCONTRADO_PARCIAL, y en esos dos
+        casos quien resuelve YA es la autoridad que hizo un conteo físico
+        propio — el mismo rol que decide un CC3 (Conteo Definitivo), no un
+        picker que hay que verificar.
+
+        No se reinventa el envío: se construye una `SesionConteo` (tipo
+        `EXCEPCION_PICKING`, el mismo que usa `generar_auditoria_por_excepcion`
+        cuando un picker reporta faltante sin bloquear) y se delega en
+        `_encolar_ajuste_fisico`, el único código que arma el job
+        AJUSTE_CONTEO — Regla 0, una política un solo sitio.
+
+        Regla 0 — "ante dato ausente, declararlo": si Siesa no responde la
+        existencia, levanta ValueError SIN persistir nada — el caller
+        (`auditar_tarea`) no ha comiteado todavía, así que la auditoría entera
+        se puede reintentar cuando Siesa responda, en vez de quedar resuelta
+        localmente con el ajuste a Siesa perdido y sin rastro.
+        """
+        from app.models.almacen import Almacen
+
+        producto = tarea.producto
+        if not producto or not producto.codigo_siesa:
+            raise ValueError(
+                'Este producto no tiene código Siesa configurado — el ajuste '
+                'de esta auditoría no puede enviarse a Siesa.'
+            )
+
+        almacen = Almacen.query.get(tarea.almacen_id)
+        bodega_siesa = almacen.bodega_siesa_id if almacen else None
+        if not bodega_siesa:
+            raise ValueError(
+                f'Almacén {tarea.almacen_id} sin bodega Siesa configurada — '
+                'configúrala en /api/almacenes antes de auditar.'
+            )
+
+        existencia_siesa = ConteoService.consultar_existencia_siesa(
+            producto_codigo_siesa=producto.codigo_siesa, bodega=bodega_siesa)
+        if existencia_siesa is None:
+            raise ValueError(
+                f'Siesa no respondió la existencia de {producto.codigo_siesa} '
+                f'en {bodega_siesa} — el ajuste de esta auditoría no se manda '
+                f'a ciegas contra el WMS. Reintenta la auditoría cuando Siesa '
+                f'responda.'
+            )
+
+        diferencia = cantidad_fisica - existencia_siesa
+        codigo = f'AUD-{_ahora_bogota().strftime("%Y%m%d%H%M%S")}-{str(uuid.uuid4())[:6].upper()}'
+        sesion = SesionConteo(
+            codigo=codigo,
+            tipo='EXCEPCION_PICKING',
+            ubicacion_id=tarea.ubicacion_id,
+            almacen_id=tarea.almacen_id,
+            producto_id=tarea.producto_id,
+            producto_codigo_siesa=producto.codigo_siesa,
+            maneja_lote=False,
+            tarea_picking_id=tarea.id,
+            cantidad_fisica=cantidad_fisica,
+            existencia_siesa=existencia_siesa,
+            fuente_existencia='SIESA',
+            diferencia=diferencia,
+            aprobador_id=aprobador_id,
+            fecha_inicio=datetime.utcnow(),
+        )
+
+        if diferencia == 0:
+            # Cuadra con Siesa — sin ajuste que mandar, igual que un MATCH de
+            # conteo cíclico normal (no se encola nada en 0).
+            sesion.estado = EstadoConteo.MATCH
+            sesion.fecha_cierre = datetime.utcnow()
+            db.session.add(sesion)
+            logger.info(
+                f'[CONTEO] Auditoría de picking tarea={tarea.id} — '
+                f'{producto.codigo_siesa} cuadra con Siesa ({existencia_siesa}) '
+                f'— sin ajuste'
+            )
+            return sesion
+
+        sesion.estado = EstadoConteo.DESCUADRE
+        db.session.add(sesion)
+        db.session.flush()  # necesita sesion.id antes de encolar el job
+        ConteoService._encolar_ajuste_fisico(sesion, aprobador_id=aprobador_id)
+        logger.warning(
+            f'[CONTEO] Auditoría de picking tarea={tarea.id} — '
+            f'{producto.codigo_siesa} ajuste {sesion.motivo_codigo} '
+            f'{abs(sesion.diferencia)} uds — sesión {sesion.codigo}'
+        )
+        return sesion
+
+    @staticmethod
     def generar_auditoria_por_excepcion(
         tarea_picking_id: int,
         ubicacion_id: int,
@@ -785,22 +954,63 @@ class ConteoService:
         return sesion
 
     @staticmethod
-    def crear_conteo_manual(almacen_id: int, producto_codigo: str) -> dict:
+    def crear_conteo_manual(almacen_id: int, producto_codigo: str, operario_id: int = None) -> dict:
         """
         Crea sesiones de conteo manual para todas las ubicaciones donde hay stock
-        del producto en el almacén. Omite ubicaciones con conteo activo.
-        Retorna dict con tareas_creadas, omitidas_ya_activas, producto_nombre, codigos.
+        del producto en el almacén.
+
+        Si una ubicación ya tiene una sesión PENDIENTE (creada por el barrido
+        DIARIO_ABC u otro conteo manual, pero nadie la ha abierto todavía), la
+        reclama en vez de omitirla: le reasigna el operario forzado y la cuenta
+        como parte del resultado. Solo se omite (`omitidas_ya_activas`) una
+        ubicación cuyo conteo YA está siendo contado de verdad —
+        EN_PROCESO o SEGUNDO_CONTEO — porque ahí sí hay trabajo físico en
+        marcha que no se puede pisar a ciegas.
+
+        operario_id (opcional): fuerza el CC1 a ese operario específico —
+        mismo estado PENDIENTE-pero-asignado que ya usan las tareas DIARIO_ABC
+        (`obtener_tarea_operario` lo pasa a EN_PROCESO cuando el operario abre
+        la tarea). Sin esto, la sesión queda sin dueño para el dispatcher
+        automático (`_next_conteo_tienda`), que la reparte a quien la pida
+        primero. El CC2, si CC1 sale discordante, lo sigue eligiendo
+        `_crear_conteo_verificacion` — este parámetro solo controla CC1.
+
+        Si el operario forzado ya tiene OTRO conteo cíclico EN_PROCESO (uno
+        de un SKU distinto), ese se pausa — mismo patrón que
+        `liberar_tareas_zombi`: vuelve a PENDIENTE, sin dueño, con
+        `cantidad_fisica`/`fecha_inicio` en None — para que el conteo forzado
+        sea lo próximo que el dispensador (`get_tarea_actual`) le entregue, en
+        vez de seguir devolviéndole el que ya tenía en curso. Nunca se pausa
+        un picking, packing o traslado activo — solo otro conteo: interrumpir
+        una operación física en curso (bultos ya escaneados, LPN abierto) es
+        un riesgo distinto, y ese conteo simplemente espera su turno en la
+        cola normal del operario.
+
+        Retorna dict con tareas_creadas, tareas_reclamadas, omitidas_ya_activas,
+        producto_nombre, codigos.
         """
         from app.models.producto import Producto
         from app.models.inventario import UbicacionProducto
         from app.models.ubicacion import Ubicacion
+        from app.models.usuario import Usuario
 
         codigo = producto_codigo.strip().upper()
         producto = Producto.query.filter(
-            db.or_(Producto.codigo_siesa == codigo, Producto.codigo == codigo)
+            db.or_(
+                Producto.codigo_siesa == codigo,
+                Producto.codigo == codigo,
+                db.func.upper(Producto.codigo_barras) == codigo,
+                db.func.upper(Producto.codigo_barras_empaque) == codigo,
+            )
         ).first()
         if not producto:
             raise ValueError(f'Producto {codigo} no encontrado')
+
+        operario_forzado = None
+        if operario_id is not None:
+            operario_forzado = db.session.get(Usuario, operario_id)
+            if not operario_forzado or not operario_forzado.activo:
+                raise ValueError(f'Operario {operario_id} no encontrado o inactivo')
 
         registros = (
             UbicacionProducto.query
@@ -815,8 +1025,8 @@ class ConteoService:
 
         # Pre-cargar sesiones activas en una sola query — evita N+1 en el loop
         ubicacion_ids = [r.ubicacion_id for r in registros]
-        activos_set = {
-            s.ubicacion_id
+        activas_por_ubicacion = {
+            s.ubicacion_id: s
             for s in SesionConteo.query.filter(
                 SesionConteo.producto_id == producto.id,
                 SesionConteo.ubicacion_id.in_(ubicacion_ids),
@@ -825,12 +1035,25 @@ class ConteoService:
         }
 
         creadas = []
+        reclamadas = []
         omitidas = 0
         from app.utils.fecha import fecha_hoy_bogota
         hoy = fecha_hoy_bogota()
         for reg in registros:
-            if reg.ubicacion_id in activos_set:
-                omitidas += 1
+            existente = activas_por_ubicacion.get(reg.ubicacion_id)
+            if existente:
+                # Sin operario forzado no hay nada que reclamar — mismo
+                # comportamiento de siempre (evita duplicar sobre un PENDIENTE
+                # que ya espera a que alguien lo tome).
+                if existente.estado != EstadoConteo.PENDIENTE or not operario_forzado:
+                    omitidas += 1
+                    continue
+                existente.operario_id = operario_forzado.id
+                # Pasa a ser un conteo forzado: el dispensador prioriza tipo
+                # MANUAL (ver MobileService._orden_cola_preasignada). Sin esto
+                # conservaba su lugar viejo en la cola del operario.
+                existente.tipo = 'MANUAL'
+                reclamadas.append(existente.codigo)
                 continue
             sesion_codigo = f'CC-MANUAL-{hoy}-{str(uuid.uuid4())[:6].upper()}'
             sesion = SesionConteo(
@@ -842,10 +1065,38 @@ class ConteoService:
                 producto_id=producto.id,
                 producto_codigo_siesa=producto.codigo_siesa,
                 maneja_lote=False,
-                estado='PENDIENTE'
+                estado='PENDIENTE',
+                operario_id=operario_forzado.id if operario_forzado else None,
             )
             db.session.add(sesion)
             creadas.append(sesion_codigo)
+
+        # Pausar el otro conteo EN_PROCESO del operario forzado (si tiene uno) —
+        # solo si de verdad le vamos a asignar algo nuevo. No hace falta excluir
+        # lo que acabamos de crear/reclamar: ambas ramas de arriba solo dejan
+        # sesiones en PENDIENTE (nunca EN_PROCESO), así que no pueden aparecer
+        # en esta consulta.
+        #
+        # Versión anterior excluía por ubicacion_id — incorrecto: ubicaciones
+        # genéricas como SIESA-GENERAL las comparten productos distintos, así
+        # que un EN_PROCESO de OTRO SKU en la misma ubicación quedaba sin
+        # pausar por error (bug real, encontrado en vivo 2026-09-14 — dos
+        # sesiones de SKUs distintos en ubicacion_id=20, la del operario
+        # forzado sobrevivía intacta).
+        if operario_forzado and (creadas or reclamadas):
+            en_proceso_otro = SesionConteo.query.filter(
+                SesionConteo.operario_id == operario_forzado.id,
+                SesionConteo.estado == EstadoConteo.EN_PROCESO,
+            ).all()
+            for s in en_proceso_otro:
+                logger.info(
+                    f'[CONTEO MANUAL] Pausando sesión {s.codigo} (id={s.id}) EN_PROCESO '
+                    f'del operario #{operario_forzado.id} — reemplazada por conteo forzado de {codigo}'
+                )
+                s.estado = EstadoConteo.PENDIENTE
+                s.operario_id = None
+                s.fecha_inicio = None
+                s.cantidad_fisica = None
 
         try:
             db.session.commit()
@@ -854,11 +1105,15 @@ class ConteoService:
             raise ValueError(f'Error al crear sesiones de conteo manual: {e_commit}') from e_commit
 
         return {
-            'tareas_creadas': len(creadas),
+            'tareas_creadas': len(creadas) + len(reclamadas),
+            'tareas_nuevas': len(creadas),
+            'tareas_reclamadas': len(reclamadas),
             'omitidas_ya_activas': omitidas,
             'producto': codigo,
             'producto_nombre': producto.nombre or '',
-            'codigos': creadas,
+            'codigos': creadas + reclamadas,
+            'operario_id': operario_forzado.id if operario_forzado else None,
+            'operario_nombre': operario_forzado.nombre if operario_forzado else None,
         }
 
     @staticmethod

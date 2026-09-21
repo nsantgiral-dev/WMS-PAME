@@ -291,14 +291,15 @@ function renderEscaneoRecepcion(rec) {
 
       <div style="background:#111;border-radius:10px;padding:12px;margin-bottom:12px;">
         <div style="font-size:12px;color:#666;text-align:center;margin-bottom:10px;">Escanea unidad, caja o paca — el sistema calcula las unidades</div>
-        <button onclick="abrirCamara('lector-qr-rec','camara-box-rec', cod => { cerrarCamara('camara-box-rec'); procesarScanRecepcion(cod); })"
+        ${OPERARIO && OPERARIO.puede_usar_camara ? `
+        <button onclick="abrirCamara('lector-qr-rec','camara-box-rec', procesarScanRecepcion, this)"
           style="width:100%;padding:13px;font-size:16px;background:#fff;color:#000;border:2px solid #000;border-radius:10px;cursor:pointer;margin-bottom:8px;">
           📷 Escanear con cámara
         </button>
         <div id="camara-box-rec" style="display:none;margin-bottom:8px;">
           <div id="lector-qr-rec" style="border-radius:10px;overflow:hidden;"></div>
           <button onclick="cerrarCamara('camara-box-rec')" style="width:100%;padding:9px;margin-top:6px;font-size:14px;background:#333;color:#fff;border:none;border-radius:8px;cursor:pointer;">Cerrar cámara</button>
-        </div>
+        </div>` : ''}
         <div style="display:flex;gap:8px;margin-bottom:8px;">
           <input id="rec-codigo-manual" type="text" placeholder="O escribe / pega el código aquí"
             style="flex:1;padding:10px;background:#0d0d0d;border:1px solid #333;border-radius:8px;color:#fff;font-size:14px;"
@@ -546,14 +547,19 @@ async function procesarScanRecepcion(codigo) {
  * @param {boolean} [esBonificacion=false] - true si es un obsequio fuera de la OC
  */
 async function _registrarEscaneoRecepcion(productoId, cantidad, esEmpaque, unidad, esBonificacion = false) {
+  // scan_id: dedupe server-side si esta misma petición se reintenta (postConReintento)
+  // o queda encolada offline — escanear_producto() es idempotente respecto a este id.
+  const scanId = generarScanId();
+  const payload = {
+    producto_id: productoId,
+    cantidad: cantidad,
+    es_empaque: esEmpaque,
+    es_bonificacion: esBonificacion,
+    scan_id: scanId,
+  };
   let r;
   try {
-    r = await post('/api/recepcion/' + RECEPCION_ACTUAL.id + '/escanear', {
-      producto_id: productoId,
-      cantidad: cantidad,
-      es_empaque: esEmpaque,
-      es_bonificacion: esBonificacion
-    });
+    r = await postConReintento('/api/recepcion/' + RECEPCION_ACTUAL.id + '/escanear', payload);
   } catch (e) {
     const body = e.body || {};
     if (e.status === 409 && body.tipo === 'PRODUCTO_NO_EN_OC' && !esBonificacion) {
@@ -565,8 +571,19 @@ async function _registrarEscaneoRecepcion(productoId, cantidad, esEmpaque, unida
       if (ok) await _registrarEscaneoRecepcion(productoId, cantidad, esEmpaque, unidad, true);
       return;
     }
-    beepError();
-    alerta(e.message, 'error');
+    if (e.status) {
+      beepError();
+      alerta(e.message, 'error');
+      return;
+    }
+    // Corte de red real, sostenido más allá de los reintentos de postConReintento
+    // — encolar para sincronizar cuando vuelva la señal (mismo scan_id: si el
+    // primer intento sí llegó al servidor, el reintento diferido no duplica).
+    guardarOffline({
+      accion: 'recepcion_escanear',
+      recepcion_id: RECEPCION_ACTUAL.id,
+      ...payload,
+    });
     return;
   }
 
@@ -607,11 +624,20 @@ async function _registrarEscaneoRecepcion(productoId, cantidad, esEmpaque, unida
   const itemsOC = RECEPCION_ACTUAL.items.filter(it => it.tipo !== 'BONIFICACION');
   const todoCompleto = itemsOC.every(it => it.cantidad_recibida >= it.cantidad_ordenada);
   const btn = document.getElementById('btn-confirmar-rec');
-  if (btn && todoCompleto && itemsOC.length > 0) {
+  if (btn && itemsOC.length > 0) {
+    // El texto/color se calculan una vez en renderEscaneoRecepcion() y no se
+    // tocaban más — el botón se ponía verde al completar pero seguía
+    // diciendo "⚠ Confirmar recepción parcial", el texto quedaba viejo.
     btn.disabled = false;
-    btn.style.background = '#16a34a';
     btn.style.cursor = 'pointer';
-    alerta('Todo escaneado — confirma la recepción', 'exito');
+    if (todoCompleto) {
+      btn.style.background = '#16a34a';
+      btn.textContent = '✓ Confirmar recepción';
+      alerta('Todo escaneado — confirma la recepción', 'exito');
+    } else {
+      btn.style.background = '#b45309';
+      btn.textContent = '⚠ Confirmar recepción parcial';
+    }
   }
 }
 
@@ -651,14 +677,15 @@ function _panelScanBonificacion() {
         <button onclick="this.closest('div[style*=fixed]').remove()" style="background:none;border:none;color:#555;font-size:22px;cursor:pointer;">✕</button>
       </div>
       <div style="font-size:12px;color:#6b7280;margin-bottom:14px;">Escanea el producto que el proveedor envió de más — entrará a inventario a $0.</div>
+      ${OPERARIO && OPERARIO.puede_usar_camara ? `
       <div id="camara-box-bono" style="display:none;margin-bottom:8px;">
         <div id="lector-qr-bono" style="border-radius:10px;overflow:hidden;"></div>
         <button onclick="cerrarCamara('camara-box-bono')" style="width:100%;padding:9px;margin-top:6px;font-size:14px;background:#333;color:#fff;border:none;border-radius:8px;cursor:pointer;">Cerrar cámara</button>
       </div>
-      <button onclick="abrirCamara('lector-qr-bono','camara-box-bono', cod => { cerrarCamara('camara-box-bono'); _escanearBono(cod, this.closest('div[style*=fixed]')); })"
+      <button onclick="abrirCamara('lector-qr-bono','camara-box-bono', cod => { cerrarCamara('camara-box-bono'); _escanearBono(cod, this.closest('div[style*=fixed]')); }, this)"
         style="width:100%;padding:13px;font-size:15px;background:#fff;color:#000;border:none;border-radius:10px;cursor:pointer;margin-bottom:8px;">
         📷 Escanear con cámara
-      </button>
+      </button>` : ''}
       <div style="display:flex;gap:8px;margin-bottom:8px;">
         <input id="bono-codigo-manual" type="text" placeholder="O escribe / pega el código"
           style="flex:1;padding:10px;background:#0a0a0a;border:1px solid #4c1d95;border-radius:8px;color:#fff;font-size:14px;"
@@ -960,6 +987,21 @@ let _REC_TRASLADO_ACTIVO    = null;  // ST abierto en conteo
 let _REC_CONTEOS            = {};    // {producto_id: cantidad_contada}
 let _REC_TRASLADOS_PENDIENTES = [];  // lista cargada desde API
 
+// El conteo de un traslado entrante puede tener decenas de ítems y nunca toca
+// el backend hasta el POST final (a propósito, para no depender de red
+// mientras se cuenta) — pero eso significa que hasta ahora vivía solo en esta
+// variable JS: un refresh o que Android recicle la pestaña de fondo borraba
+// toda la sesión de conteo sin aviso. Se persiste en localStorage en cada
+// ajuste y se restaura al reabrir el mismo traslado.
+const _recTrasladoConteoKey = id => 'wms_rec_traslado_conteo_' + id;
+function _recepGuardarConteoTraslado() {
+  if (!_REC_TRASLADO_ACTIVO) return;
+  try { localStorage.setItem(_recTrasladoConteoKey(_REC_TRASLADO_ACTIVO.id), JSON.stringify(_REC_CONTEOS)); } catch (_) {}
+}
+function _recepLimpiarConteoTraslado(id) {
+  try { localStorage.removeItem(_recTrasladoConteoKey(id)); } catch (_) {}
+}
+
 /**
  * Carga y renderiza la lista de traslados pendientes de recepcion (NB1).
  * @param {boolean} [silencioso=false] - true omite el spinner de carga inicial
@@ -1035,12 +1077,22 @@ function recepAbrirConteoTraslado(id) {
   _REC_TRASLADO_ACTIVO = s;
   _REC_CONTEOS = {};
   (s.items || []).forEach(i => { _REC_CONTEOS[i.producto_id] = 0; });
+  // Restaurar un conteo pendiente si la pestaña se recicló a mitad de esta recepción.
+  try {
+    const guardado = localStorage.getItem(_recTrasladoConteoKey(id));
+    if (guardado) {
+      const previo = JSON.parse(guardado);
+      Object.keys(previo).forEach(pid => { if (pid in _REC_CONTEOS) _REC_CONTEOS[pid] = previo[pid]; });
+      alerta('Se restauró un conteo pendiente de este traslado', 'info');
+    }
+  } catch (_) {}
   _recepRenderPickingTraslado();
   setTimeout(() => { const inp = document.getElementById('rec-tras-scan-input'); if (inp) inp.focus(); }, 150);
 }
 
 /** Limpia el traslado activo y vuelve a la lista de traslados pendientes. */
 function recepVolverListaTraslados() {
+  if (_REC_TRASLADO_ACTIVO) _recepLimpiarConteoTraslado(_REC_TRASLADO_ACTIVO.id);
   _REC_TRASLADO_ACTIVO = null;
   _REC_CONTEOS = {};
   recepCargarTraslados();
@@ -1180,6 +1232,7 @@ function recepContarItem(productoId, delta) {
   const esperado = item.cantidad_enviada || item.cantidad_aprobada || item.cantidad_solicitada || 0;
   const nuevo = (_REC_CONTEOS[productoId] || 0) + delta;
   _REC_CONTEOS[productoId] = Math.max(0, Math.min(nuevo, esperado));
+  _recepGuardarConteoTraslado();
   const itemsEl = document.getElementById('rec-tras-items');
   if (itemsEl) itemsEl.innerHTML = _recepRenderItemsTraslado(_REC_TRASLADO_ACTIVO.items || []);
   const items = _REC_TRASLADO_ACTIVO.items || [];
@@ -1211,29 +1264,23 @@ async function recepConfirmarTraslado() {
   const btn = document.getElementById('btn-confirmar-rec-traslado');
   if (btn) { btn.textContent = 'Confirmando...'; btn.disabled = true; }
   try {
-    const r = await fetch(API + `/api/traslados/${s.id}/recibir`, {
-      method: 'POST',
-      headers: { Authorization: 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        items_recibidos: items.map(i => ({
-          id: i.id,
-          cantidad_recibida: _REC_CONTEOS[i.producto_id] || 0
-        }))
-      })
+    // Idempotente en el backend (TrasladoService.confirmar_recepcion rechaza
+    // un segundo intento sobre un traslado ya ENTREGADA con 400, no duplica
+    // el 173079) — seguro reintentar automáticamente ante fallo de red.
+    await postConReintento(`/api/traslados/${s.id}/recibir`, {
+      items_recibidos: items.map(i => ({
+        id: i.id,
+        cantidad_recibida: _REC_CONTEOS[i.producto_id] || 0
+      }))
     });
-    const d = await r.json();
-    if (r.ok) {
-      beepDone();
-      alerta('✓ Recepción confirmada — ETS generado en Siesa', 'exito');
-      _REC_TRASLADO_ACTIVO = null;
-      _REC_CONTEOS = {};
-      setTimeout(recepCargarTraslados, 1200);
-    } else {
-      alerta(d.error || 'Error al confirmar', 'error');
-      if (btn) { btn.textContent = todoContado ? '✓ Confirmar recepción' : '⚠ Confirmar recepción parcial'; btn.disabled = false; }
-    }
+    beepDone();
+    alerta('✓ Recepción confirmada — ETS generado en Siesa', 'exito');
+    _recepLimpiarConteoTraslado(s.id);
+    _REC_TRASLADO_ACTIVO = null;
+    _REC_CONTEOS = {};
+    setTimeout(recepCargarTraslados, 1200);
   } catch (e) {
-    alerta('Error de conexión', 'error');
+    alerta(e.message || 'Error al confirmar', 'error');
     if (btn) { btn.textContent = todoContado ? '✓ Confirmar recepción' : '⚠ Confirmar recepción parcial'; btn.disabled = false; }
   }
 }
@@ -1519,14 +1566,15 @@ function renderLineasDevolucion(datos) {
 
     <div style="background:#111;border-radius:10px;padding:12px;margin-bottom:12px;">
       <div style="font-size:12px;color:#666;text-align:center;margin-bottom:10px;">Escanea cada unidad devuelta — suma 1 a la línea, hasta el tope facturado</div>
-      <button onclick="abrirCamara('lector-qr-dev','camara-box-dev', cod => { cerrarCamara('camara-box-dev'); procesarScanDevolucion(cod); })"
+      ${OPERARIO && OPERARIO.puede_usar_camara ? `
+      <button onclick="abrirCamara('lector-qr-dev','camara-box-dev', procesarScanDevolucion, this)"
         style="width:100%;padding:13px;font-size:16px;background:#fff;color:#000;border:2px solid #000;border-radius:10px;cursor:pointer;margin-bottom:8px;">
         📷 Escanear con cámara
       </button>
       <div id="camara-box-dev" style="display:none;margin-bottom:8px;">
         <div id="lector-qr-dev" style="border-radius:10px;overflow:hidden;"></div>
         <button onclick="cerrarCamara('camara-box-dev')" style="width:100%;padding:9px;margin-top:6px;font-size:14px;background:#333;color:#fff;border:none;border-radius:8px;cursor:pointer;">Cerrar cámara</button>
-      </div>
+      </div>` : ''}
       <div style="display:flex;gap:8px;">
         <input id="dev-codigo-manual" type="text" placeholder="O escribe / pega el código aquí"
           style="flex:1;padding:10px;background:#0d0d0d;border:1px solid #333;border-radius:8px;color:#fff;font-size:14px;"
@@ -1898,7 +1946,7 @@ function _compRenderVelocityList(el, items, meta) {
         <span style="font-size:11px;font-weight:800;color:${abcColor};background:${abcColor}22;padding:2px 8px;border-radius:6px;">${esc(it.abc)}</span>
       </div>
       <div style="font-size:11px;color:var(--tx3);margin-bottom:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(it.nombre)}</div>
-      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:4px;font-size:11px;">
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(70px,1fr));gap:4px;font-size:11px;">
         <div><span style="color:var(--tx3);">Picks/día</span><br><strong style="color:var(--tx);">${esc(it.picks_dia)}</strong></div>
         <div><span style="color:var(--tx3);">Total período</span><br><strong style="color:var(--tx);">${esc(it.picks_periodo)}</strong></div>
         <div><span style="color:var(--tx3);">Stock PICK</span><br><strong style="color:var(--tx);">${esc(it.stock_picking)}</strong></div>
@@ -1942,7 +1990,7 @@ async function compCargarDock(prefix) {
     let html = '';
 
     if (isP2) {
-      html += `<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:14px;">
+      html += `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:8px;margin-bottom:14px;">
         <div style="background:var(--bg-s);border:1px solid var(--brd);border-radius:10px;padding:12px;text-align:center;">
           <div style="font-size:22px;font-weight:800;color:#ef4444;">${esc(r.total_recepciones_con_problema || 0)}</div>
           <div style="font-size:11px;color:var(--tx3);">Con problema</div>
@@ -2024,7 +2072,7 @@ async function compCargarCuarentena(prefix) {
     let html = '';
 
     if (isP2) {
-      html += `<div style="display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-bottom:14px;">
+      html += `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px;margin-bottom:14px;">
         <div style="background:#110a0a;border:1px solid #7f1d1d;border-radius:10px;padding:14px;text-align:center;">
           <div style="font-size:26px;font-weight:800;color:#f87171;">${esc(r.pendientes || 0)}</div>
           <div style="font-size:11px;color:#fca5a5;">Pendientes de gestión</div>
@@ -2248,42 +2296,27 @@ async function compCargarBloqueos() {
 }
 
 async function compPoblarBloqueos() {
-  if (!confirm('¿Generar lista inicial de bloqueos?\nSe bloquearán todos los SKUs con velocity=0 en 12 meses y stock existente.')) return;
+  if (!await _confirmarModal('Generar bloqueos', 'Se bloquearán todos los SKUs con velocity=0 en 12 meses y stock existente.', 'Generar', 'Cancelar')) return;
   try {
-    const r = await fetch(API + '/api/compras/bloqueados/poblar', {
-      method: 'POST', headers: { Authorization: 'Bearer ' + TOKEN },
-    });
-    const d = await r.json();
-    if (r.ok && d.ok) {
-      alerta(`${d.bloqueados_nuevos} SKU(s) bloqueado(s) — ${_liqFmtComp(d.total_capital_inmovilizado)} inmovilizado`, 'exito');
-      compCargarBloqueos();
-    } else {
-      alerta(d.error || 'Error al poblar', 'error');
-    }
-  } catch (e) { alerta('Error de conexión', 'error'); }
+    const d = await postConReintento('/api/compras/bloqueados/poblar', {});
+    alerta(`${d.bloqueados_nuevos} SKU(s) bloqueado(s) — ${_liqFmtComp(d.total_capital_inmovilizado)} inmovilizado`, 'exito');
+    compCargarBloqueos();
+  } catch (e) { alerta(e.message || 'Error de conexión', 'error'); }
 }
 
 async function compDesbloquear(bloqueoId, codigo) {
-  const motivo = prompt(`¿Por qué desbloquear ${codigo}?\n(Motivo obligatorio — queda registrado)`);
-  if (!motivo || !motivo.trim()) return;
-  const cantidad = prompt('Cantidad máxima autorizada a comprar:');
-  if (!cantidad || isNaN(cantidad) || Number(cantidad) <= 0) { alerta('Cantidad inválida', 'error'); return; }
-  const vigencia = prompt('Vigencia del desbloqueo en días (default 30):', '30');
-  const dias = parseInt(vigencia) || 30;
+  const motivo = await _modalTexto('Desbloquear SKU', `¿Por qué desbloquear ${codigo}? (queda registrado)`);
+  if (!motivo) return;
+  const cantidad = await _modalCantidad('Cantidad autorizada', 'Cantidad máxima autorizada a comprar:', { min: 1 });
+  if (cantidad === null) return;
+  const dias = await _modalCantidad('Vigencia', 'Vigencia del desbloqueo en días:', { min: 1, valorInicial: 30 });
+  if (dias === null) return;
 
   try {
-    const r = await fetch(API + `/api/compras/bloqueados/${bloqueoId}/desbloquear`, {
-      method: 'POST',
-      headers: { Authorization: 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ motivo: motivo.trim(), cantidad_autorizada: Number(cantidad), vigencia_dias: dias }),
-    });
-    const d = await r.json();
-    if (r.ok && d.ok) {
-      alerta(`${codigo} desbloqueado — máx ${cantidad} UND, vigencia ${dias} días`, 'exito');
-      compCargarBloqueos();
-    } else {
-      alerta(d.error || 'Error al desbloquear', 'error');
-    }
+    await postConReintento(`/api/compras/bloqueados/${bloqueoId}/desbloquear`,
+      { motivo: motivo.trim(), cantidad_autorizada: Number(cantidad), vigencia_dias: dias });
+    alerta(`${codigo} desbloqueado — máx ${cantidad} UND, vigencia ${dias} días`, 'exito');
+    compCargarBloqueos();
   } catch (e) { alerta(e.message || 'Error', 'error'); }
 }
 

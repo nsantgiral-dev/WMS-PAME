@@ -322,6 +322,36 @@ class PackingService:
         return resultado
 
     @staticmethod
+    def cerrar_packing_resultado(tarea_id: int, bultos_data: list, usuario_id: int = None):
+        """
+        Cierra el packing y arma el dict de respuesta — compartido entre la ruta HTTP
+        (`POST /api/packing/<id>/cerrar`) y la sincronización offline (`/api/mobile/sync`),
+        para que ambas vías queden idénticas y no diverjan con el tiempo.
+        """
+        from app.models.bulto import Bulto
+        from sqlalchemy.orm import selectinload
+        PackingService.cerrar_packing(tarea_id=tarea_id, bultos_data=bultos_data, usuario_id=usuario_id)
+        tarea = db.session.get(TareaPacking, tarea_id)
+        # Re-query con eager load — expire_on_commit invalida los objetos que devolvió
+        # cerrar_packing; b.to_dict() accede b.tarea (lazy) sin esto → N+1
+        bultos_resp = (Bulto.query
+                       .options(selectinload(Bulto.tarea))
+                       .filter_by(tarea_id=tarea_id).all())
+        return {
+            'ok': True,
+            'mensaje': (
+                f'{len(bultos_resp)} pieza(s) registradas — Siesa confirmó la remisión'
+                if tarea.siesa_triggered else
+                f'{len(bultos_resp)} pieza(s) registradas — Siesa procesando (se confirma en segundos)'
+            ),
+            'siesa_triggered': tarea.siesa_triggered,
+            'numero_pedido': tarea.numero_pedido_siesa,
+            'cliente': tarea.cliente or '',
+            'municipio': tarea.municipio or '',
+            'bultos': [b.to_dict() for b in bultos_resp],
+        }
+
+    @staticmethod
     def _cerrar_packing_pedido_legacy(tarea_id: int, bultos_data: list):
         """Lógica original de cierre PD — mantenida para referencia interna."""
         from app.models.bulto import Bulto

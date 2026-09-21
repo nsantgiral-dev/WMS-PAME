@@ -144,6 +144,86 @@ Si un producto del pedido no llega de picking:
 
 ---
 
+# ROL: RECEPCIONISTA
+*Su trabajo es recibir la mercancía que entra a la bodega: pedidos de proveedores (OC) y traslados que llegan desde NB1.*
+
+---
+
+## ¿Qué hace la recepcionista?
+Cuando llega un camión con mercancía —de un proveedor o de otra bodega—, la recepcionista cuenta lo que trae, lo compara contra lo que el sistema espera, y confirma la entrada. El sistema actualiza el inventario y avisa a Siesa.
+
+Su pantalla tiene 3 pestañas: **OCs** (pedidos a proveedores), **Traslados** (mercancía que llega de NB1) y **Devoluciones** (clientes que devuelven mercancía — es otro flujo, con su propio manual aparte).
+
+---
+
+## PARTE 1 — Recibir un pedido de proveedor (OC)
+
+### 1. Ver las OCs
+La pantalla tiene 3 listas:
+- **Pendientes en Siesa** — OC que todavía no se ha empezado a recibir
+- **En proceso** — OC que ya empezaste a contar (puedes continuarla después)
+- **Recepcionadas** — OC ya confirmadas
+
+> Si ves el aviso **"⚠ Siesa no respondió"**, espera un momento y refresca — el sistema no puede traer la lista de OCs sin conexión con Siesa.
+
+### 2. Iniciar o continuar
+- OC nueva → toca **"Iniciar recepción"**
+- OC que ya empezaste → toca **"Continuar recepción"**
+
+### 3. Contar la mercancía
+La pantalla te guía: *"Escanea unidad, caja o paca — el sistema calcula las unidades"*.
+- **📷 Escanear con cámara**, o escribe/pega el código manualmente
+- Si el producto no tiene código de barras, usa **"📦 Sin código — buscar producto manualmente"**
+- Cada producto muestra una barra de progreso: recibido / ordenado — se pone verde cuando está completo
+
+### 4. Cuando el sistema te pregunta algo
+No son errores — son decisiones que solo tú puedes tomar mirando lo que tienes físicamente en frente:
+
+| Pregunta del sistema | Qué significa | Qué hacer |
+|---|---|---|
+| **"¿Unidad o caja?"** | El código escaneado no distingue si es 1 unidad o una caja completa | Mira la mercancía física y elige |
+| **"⚠️ Código ambiguo"** | El código GS1 puede corresponder a más de un tipo de empaque | Elige el que corresponde según lo que tienes en mano |
+| **"⚠ Producto fuera de OC — ¿es obsequio o bonificación?"** | Llegó un producto que el pedido no tenía | Si el proveedor lo mandó de regalo, responde "Sí" — también puedes registrarlo directo con el botón **🎁 Registrar Obsequio/Bonificación** |
+| Paca sin ningún código | El sistema te pregunta la cantidad | Escríbela — genera una etiqueta nueva (LPN) automáticamente; imprímela y pégala a la paca |
+
+### 5. Confirmar la recepción
+- Si falta algo por contar, el sistema pregunta: **"¿Confirmar como recepción parcial?"**
+- Siempre te va a pedir el **número de remisión del proveedor** antes de cerrar — Siesa lo necesita para procesar la entrada. Tenlo a mano.
+- Al confirmar verás **"Recepción confirmada — Siesa actualizó inventario"**
+
+### ¿No vas a terminar ahora?
+Toca **"Guardar y salir (continuar más tarde)"** — lo que ya contaste queda guardado, nadie lo pierde. Retómala después desde "En proceso".
+
+---
+
+## PARTE 2 — Recibir un traslado desde NB1
+
+### 1. Ver los traslados pendientes
+Cada tarjeta muestra: código de la solicitud (ST-...), desde qué bodega viene (normalmente NB1), y cuántos ítems/unidades esperadas trae.
+
+### 2. Contar productos
+Toca **"📋 Contar productos"**.
+- Escanea el código de cada producto, o usa los botones **−** / **+** para ajustar a mano
+- El sistema no te deja pasarte de la cantidad esperada
+- Si escaneas algo que no corresponde a ese traslado, avisa: **"Código no encontrado en este traslado"**
+
+### 3. Confirmar
+- Si falta algo, igual que en OC: pregunta si confirmas como parcial
+- Al confirmar verás **"✓ Recepción confirmada — ETS generado en Siesa"** — significa que Siesa ya registró la entrada
+- ¿Te equivocaste antes de confirmar? Toca **"Cancelar — volver a la lista"**, no pasa nada todavía
+
+---
+
+## Lo que NUNCA debes hacer
+- ❌ No confirmes una OC o traslado sin contar físicamente lo que llegó
+- ❌ No inventes el número de remisión — sin el real, Siesa puede rechazar la entrada
+- ❌ No marques algo como "obsequio" solo para que el sistema te deje avanzar — solo si de verdad el proveedor lo mandó de regalo
+- ❌ No cierres la app a la mitad de un conteo — usa "Guardar y salir" si necesitas parar
+
+---
+
+---
+
 # ROL: SUPERVISOR
 *1 persona. Su trabajo es resolver los problemas que reportan los operarios y mantener la operación fluyendo.*
 
@@ -316,6 +396,7 @@ Llama al administrador. Tiene la opción de forzar el cierre de la ruta desde su
 | Rol | Acceso |
 |-----|--------|
 | `operario` | Solo tareas de picking/packing/conteo |
+| `recepcionista` | Recibir OCs de proveedores, traslados entrantes y devoluciones de cliente |
 | `supervisor` | Dashboard + auditorías + gestión de bloqueados |
 | `conductor` | Solo sus rutas de despacho |
 | `jefe_almacen` | Todo excepto configuración de sistema |
