@@ -13,6 +13,7 @@ Flujo normal (EN_TRANSITO):
 Flujo contingencia (DIRECTA — sin bodega tránsito en Siesa):
   Pasos 1-2 igual. En paso 3 → fire 173066 (transferencia directa). No hay paso 5.
 """
+import os
 import uuid
 import logging
 from datetime import datetime
@@ -32,6 +33,19 @@ logger = logging.getLogger(__name__)
 
 # Bodega origen por defecto (bodega principal WMS)
 BODEGA_ORIGEN_DEFAULT = connekta.bodega  # NB1
+
+
+def traslado_usa_rit() -> bool:
+    """¿Se dispara la RIT 174646 al confirmar el picking de un traslado?
+
+    Nace encendida para que un deploy no cambie el comportamiento por sí solo.
+    Con `TRASLADO_USA_RIT=false` el traslado sigue por el STS 173076 directo
+    —que es lo que ya pasa cuando la RIT queda huérfana— sin dejar una
+    requisición suelta en Siesa. La RIT solo la consumen el 174720 y el 174930;
+    sin ella lo único que se pierde es la reserva (comprometida) que hacía.
+    Se lee en cada llamada: cambiar la variable no exige reiniciar.
+    """
+    return os.getenv('TRASLADO_USA_RIT', 'true').strip().lower() not in ('false', '0', 'no')
 
 
 def _resolver_empaque(prod):
@@ -211,10 +225,10 @@ class TrasladoService:
                     item.cantidad_enviada = item.cantidad_aprobada or item.cantidad_solicitada
 
         # ── 174646 RIT: reserva SIESA con ubicaciones reales del picking ──
-        # SIESA_RIT_ENABLED=false lo salta del todo: el 401 de permisos deja el
-        # RIT siempre huérfano y reservado en Siesa sin que nadie lo confirme.
-        # El despacho no lo necesita — cae solo a 173076/173079 (ver despachar()).
-        if not s.siesa_requisicion_consec and connekta.rit_habilitado:
+        if not s.siesa_requisicion_consec and not traslado_usa_rit():
+            logger.info('[TRASLADO] %s RIT 174646 omitida (TRASLADO_USA_RIT=false) — '
+                        'el despacho irá por 173076', s.codigo)
+        if not s.siesa_requisicion_consec and traslado_usa_rit():
             _tareas_rit = TareaPicking.query.filter_by(
                 referencia_documento=s.codigo,
                 tipo_documento='TRASLADO',
