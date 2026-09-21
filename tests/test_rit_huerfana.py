@@ -153,3 +153,74 @@ class TestLaReferenciaCabeEnSiesa:
         assert ancho >= len('ST-20260612-6F7C'), (
             f'f440_referencia mide {ancho}: el código del traslado se trunca en '
             f'Siesa y el recovery no lo va a encontrar nunca')
+
+
+class TestElPackingVuelveAPreguntarAntesDelCompromiso:
+    """El reintento tiene que estar ANTES del 174720, no solo en el despacho.
+
+    Sin consecutivo, `confirmar_packing_traslado` omite el 174720. Si el WMS lo
+    lee recién al despachar, el despacho ve «hay RIT pero no hay compromisos» y
+    cae a 173076: la RIT vuelve a quedar suelta. El reintento en el despacho
+    solo no arregla nada — llega después de la ventana en que hacía falta.
+    """
+
+    @pytest.fixture
+    def en_packing(self, db, solicitud_huerfana, monkeypatch):
+        from app.services import traslado_service as ts
+
+        # Confirmar el picking crea la RIT (simulada) y deja la marca de huérfana.
+        monkeypatch.setattr(ts.siesa_traslado, 'crear_rit',
+                            lambda **kw: {'simulado': True})
+        ts.TrasladoService.confirmar_picking_traslado(
+            solicitud_huerfana.id, solicitud_huerfana.operario_id)
+        db.session.refresh(solicitud_huerfana)
+        solicitud_huerfana.siesa_error = _MARCA
+        solicitud_huerfana.siesa_requisicion_consec = None
+        db.session.commit()
+        return solicitud_huerfana
+
+    def test_lee_la_rit_y_dispara_el_174720_con_ese_consecutivo(
+            self, db, en_packing, monkeypatch):
+        from app.services import traslado_service as ts
+
+        monkeypatch.setattr(ts.siesa_traslado, 'recuperar_consec_rit',
+                            lambda codigo: 148)
+        compromisos = []
+        monkeypatch.setattr(ts.siesa_traslado, 'registrar_compromisos',
+                            lambda **kw: compromisos.append(kw) or {'ok': True})
+
+        ts.TrasladoService.confirmar_packing_traslado(en_packing.id, 1)
+
+        db.session.refresh(en_packing)
+        assert len(compromisos) == 1, 'el 174720 no se disparó aunque la RIT ya se podía leer'
+        assert compromisos[0]['consec_rit'] == 148
+        assert en_packing.siesa_requisicion_consec == 148
+        assert en_packing.siesa_compromisos_ok is True
+        assert en_packing.siesa_error is None
+
+    def test_si_sigue_sin_leerse_omite_el_174720_y_el_traslado_avanza(
+            self, db, en_packing, monkeypatch):
+        from app.services import traslado_service as ts
+
+        monkeypatch.setattr(ts.siesa_traslado, 'recuperar_consec_rit',
+                            lambda codigo: None)
+        monkeypatch.setattr(ts.siesa_traslado, 'registrar_compromisos',
+                            lambda **kw: pytest.fail('sin consecutivo no hay 174720'))
+
+        ts.TrasladoService.confirmar_packing_traslado(en_packing.id, 1)
+
+        db.session.refresh(en_packing)
+        assert en_packing.estado == 'PREPARADO'
+        assert en_packing.siesa_requisicion_consec is None
+
+    def test_no_reintenta_ante_un_rechazo_que_no_es_la_huerfana(
+            self, db, en_packing, monkeypatch):
+        """Un error estructural del 174646 no se arregla volviendo a leer."""
+        from app.services import traslado_service as ts
+
+        en_packing.siesa_error = 'RIT 174646: rechazo de Siesa'
+        db.session.commit()
+        monkeypatch.setattr(ts.siesa_traslado, 'recuperar_consec_rit',
+                            lambda codigo: pytest.fail('consultó Siesa sin motivo'))
+
+        ts.TrasladoService.confirmar_packing_traslado(en_packing.id, 1)
