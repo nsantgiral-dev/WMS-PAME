@@ -142,7 +142,7 @@ Buscar aquí antes de darlos por inexistentes:
 
 | Variable | Default | Clase | Conectores |
 |----------|---------|-------|------------|
-| `SIESA_TIPO_DOCTO_FACTURA` | `FEW` | FE | 142943 |
+| `SIESA_TIPO_DOCTO_FACTURA` | `FE` (confirmado 2026-09-22: Railway QA y producción ya lo tenían puesto; código y `.env.qa` alineados el mismo día, era `FEW`) | FE | 142943 |
 | `SIESA_TIPO_DOCTO_REMISION` | `''` | RM | 142945 |
 | `SIESA_TIPO_DOCTO_NOTA_CREDITO` | `NCE` | NC | 142946 |
 | `SIESA_TIPO_DOCTO_RECIBO_CAJA` | `RC` | 13 | 142888 |
