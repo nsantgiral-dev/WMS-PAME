@@ -27,7 +27,7 @@ from app.models.ubicacion import Ubicacion
 from app.models.ubicacion_huerfana import UbicacionHuerfana
 from app.models.usuario import Usuario
 from app.routes._auth_helpers import _es_admin_o_jefe, Roles
-from app.services.alertas_service import enviar_email, _config_resend
+from app.services.alertas_service import enviar_email, _config_resend, prefijo_ambiente
 from app.services.connekta_gateway import connekta
 from app.services.ola_predictiva_service import pre_verificar_ola as _verificar
 from app.services.reposicion_service import confirmar_reposicion, configurar_umbral, get_tarea_abastecedor, get_tareas_abastecedor, verificar_stock_picking
@@ -608,5 +608,8 @@ def smtp_check():
             'ALERTA_EMAIL_DEST': dest or '❌ no configurado',
             'ALERTA_EMAIL_FROM': from_,
         },
+        # Lo que este proceso le antepone al asunto: `[QA] ` en QA, vacío en
+        # producción. Se lee de la función que lo aplica, no de la variable.
+        'prefijo_asunto': prefijo_ambiente(),
         'listo': bool(api_key and dest),
     }), 200
