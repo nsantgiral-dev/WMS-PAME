@@ -2054,6 +2054,10 @@ QA) — los de un solo uso se borraron, los 7 reales se commitearon.
 
 Railway detecta push a main automáticamente. Pipeline: install deps → pytest → `flask db upgrade` → gunicorn.
 
+**Dos ambientes: QA (rama `qa`) y production (rama `main`).** Se entra por PR a
+`qa`, nunca push directo a `main`. Servicios, URLs, bases y las reglas que ya
+costaron: `docs/flujo_qa_produccion.md`.
+
 ### Migraciones
 
 72 migraciones en cadena, un solo head. `releaseCommand` corre `flask db upgrade`
