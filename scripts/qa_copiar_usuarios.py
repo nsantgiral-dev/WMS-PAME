@@ -93,9 +93,30 @@ def main():
                 sys.exit(f'Para escribir pasa --host {dst_u.host}')
             if filas:
                 d.execute(t_dst.insert(), filas)
-                d.execute(text(
-                    f"SELECT setval(pg_get_serial_sequence('{nombre}','id'), "
-                    f"(SELECT COALESCE(MAX(id),1) FROM {nombre}))"))
+                # La secuencia se reinicia solo si la tabla TIENE una.
+                #
+                # Antes esto asumía una columna `id` serial en todas. Vale para
+                # `almacenes` y `usuarios`, y no para `flota_ficha_tecnica`,
+                # cuya clave primaria es `vehiculo_id` — ahí
+                # `pg_get_serial_sequence(...,'id')` revienta con «column "id"
+                # does not exist» **después** de insertar. La transacción lo
+                # revirtió entero, así que el costo fue una corrida perdida y
+                # no medio maestro sembrado; el arreglo es no suponer el
+                # esquema, preguntarlo.
+                fila = d.execute(text(
+                    "SELECT a.attname, pg_get_serial_sequence(:t, a.attname) "
+                    "FROM pg_attribute a "
+                    "WHERE a.attrelid = CAST(:t AS regclass) AND a.attnum > 0 "
+                    "AND NOT a.attisdropped "
+                    "AND pg_get_serial_sequence(:t, a.attname) IS NOT NULL "
+                    "LIMIT 1"), {'t': nombre}).first()
+                if fila:
+                    col, seq = fila
+                    d.execute(text(
+                        f"SELECT setval('{seq}', "
+                        f"(SELECT COALESCE(MAX({col}),1) FROM {nombre}))"))
+                else:
+                    print(f'  ({nombre} no tiene secuencia — nada que reiniciar)')
         if not args.ejecutar:
             d.rollback() if hasattr(d, 'rollback') else None
             modo = ' --flota' if args.flota else ''
