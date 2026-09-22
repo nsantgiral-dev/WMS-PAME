@@ -211,7 +211,10 @@ class TrasladoService:
                     item.cantidad_enviada = item.cantidad_aprobada or item.cantidad_solicitada
 
         # ── 174646 RIT: reserva SIESA con ubicaciones reales del picking ──
-        if not s.siesa_requisicion_consec:
+        # SIESA_RIT_ENABLED=false lo salta del todo: el 401 de permisos deja el
+        # RIT siempre huérfano y reservado en Siesa sin que nadie lo confirme.
+        # El despacho no lo necesita — cae solo a 173076/173079 (ver despachar()).
+        if not s.siesa_requisicion_consec and connekta.rit_habilitado:
             _tareas_rit = TareaPicking.query.filter_by(
                 referencia_documento=s.codigo,
                 tipo_documento='TRASLADO',

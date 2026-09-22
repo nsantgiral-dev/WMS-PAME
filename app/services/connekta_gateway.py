@@ -348,6 +348,14 @@ class ConnektaGateway:
         self.tipo_docto_req_traslado = (
             os.getenv('SIESA_TIPO_DOCTO_RIT') or os.getenv('SIESA_TIPO_DOCTO_TRASLADO', '')
         )
+        # Kill-switch temporal (22-sep-2026): el 401 de api_tecnocedi_requisiciones_traslado
+        # (permisos, sin resolver desde el 4-sep) deja el consecutivo del RIT ilegible siempre,
+        # así que el RIT SIEMPRE queda huérfano en Siesa —Siesa lo acepta y lo reserva, y nadie
+        # confirma ni cierra esa reserva—. El STS/ETS ya despachan por la vía de respaldo
+        # (173076/173079 con cantidad_enviada real) sin depender del RIT en absoluto: apagar
+        # esto no cambia el despacho, solo deja de generar reservas huérfanas en Siesa mientras
+        # se resuelve el permiso. Default 'true' — no cambia nada hasta que alguien lo apague.
+        self.rit_habilitado = os.getenv('SIESA_RIT_ENABLED', 'true').lower() == 'true'
         # Tipo documento tránsito salida/entrada (verificar con consultor Siesa)
         self.tipo_docto_transito_salida = os.getenv('SIESA_TIPO_DOCTO_TRANSITO_SALIDA', '')
         self.tipo_docto_transito_entrada = os.getenv('SIESA_TIPO_DOCTO_TRANSITO_ENTRADA', '')

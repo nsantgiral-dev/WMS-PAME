@@ -46,7 +46,7 @@ algo que la vía de respaldo ya resuelve.
 """
 import pytest
 
-from app.models.traslado import SolicitudTraslado
+from app.models.traslado import SolicitudTraslado, EstadoTraslado
 
 
 @pytest.fixture
@@ -228,6 +228,119 @@ class TestElJobQuePrometiaUnReintentoInexistente:
         job.payload = f'{{"solicitud_id": {s.id}, "items": []}}'
         assert sjs._ejecutar_job(job).get('idempotente')
         assert not llamadas
+
+
+class TestElKillSwitchDelRIT:
+    """22-sep-2026: el 401 de `api_tecnocedi_requisiciones_traslado` (permisos,
+    sin resolver desde el 4-sep) deja el consecutivo del RIT SIEMPRE ilegible.
+    Confirmado en vivo contra Siesa QA el mismo día: el 174646 entra
+    (`codigo:0`) y queda huérfano y reservado en Siesa sin que nadie lo
+    confirme — el despacho ya no lo necesita, cae solo a 173076/173079.
+    `SIESA_RIT_ENABLED=false` salta la creación del todo mientras se arregla
+    el permiso, sin tocar el despacho.
+    """
+
+    def test_rit_habilitado_lee_la_variable_con_default_true(self, app, monkeypatch):
+        from app.services.connekta_gateway import ConnektaGateway
+
+        monkeypatch.delenv('SIESA_RIT_ENABLED', raising=False)
+        assert ConnektaGateway().rit_habilitado is True
+
+        monkeypatch.setenv('SIESA_RIT_ENABLED', 'false')
+        assert ConnektaGateway().rit_habilitado is False
+
+        monkeypatch.setenv('SIESA_RIT_ENABLED', 'true')
+        assert ConnektaGateway().rit_habilitado is True
+
+    def test_la_creacion_del_rit_exige_el_interruptor(self):
+        """Por AST: la rama que llama a `crear_rit` tiene que nombrar
+        `rit_habilitado` en su condición, no solo `siesa_requisicion_consec`."""
+        import ast
+        import pathlib
+
+        fuente = pathlib.Path('app/services/traslado_service.py').read_text(encoding='utf-8')
+        arbol = ast.parse(fuente)
+
+        objetivo = None
+        for n in ast.walk(arbol):
+            if (isinstance(n, ast.Call)
+                    and getattr(n.func, 'attr', None) == 'crear_rit'):
+                objetivo = n
+        assert objetivo is not None, 'ya no se llama a crear_rit'
+
+        guardas = []
+        for n in ast.walk(arbol):
+            if isinstance(n, ast.If) and n.test:
+                cuerpo = [x for x in ast.walk(n) if x is objetivo]
+                if cuerpo:
+                    guardas += [a.attr for a in ast.walk(n.test)
+                                if isinstance(a, ast.Attribute)]
+        assert 'rit_habilitado' in guardas, (
+            'la creación del RIT ya no respeta SIESA_RIT_ENABLED — con el 401 '
+            'de permisos sin resolver, cada traslado deja una reserva huérfana '
+            'en Siesa que nadie confirma ni cierra.')
+
+    def test_apagado_el_traslado_no_pide_rit(self, db, solicitante, monkeypatch):
+        """Ejercitando la rama real, no solo el AST: con el interruptor
+        apagado, `siesa_traslado.crear_rit` no se llama aunque haya ítems
+        pickeados listos para reservar."""
+        from app.services.connekta_gateway import connekta
+        from app.services.traslado_service import TrasladoService
+        from app.services.siesa_traslado_adapter import siesa_traslado
+        from app.models.picking import TareaPicking, EstadoPicking
+        from app.models.producto import Producto
+        from app.models.almacen import Almacen
+        from app.models.ubicacion import Ubicacion
+
+        monkeypatch.setattr(connekta, 'rit_habilitado', False)
+
+        almacen = Almacen.query.filter_by(codigo='NB1-TEST-RIT').first()
+        if not almacen:
+            almacen = Almacen(codigo='NB1-TEST-RIT', nombre='NB1 test RIT',
+                               bodega_siesa_id='NB1', activo=True)
+            db.session.add(almacen); db.session.flush()
+
+        ubicacion = Ubicacion.query.filter_by(
+            codigo='UBI-RIT-1', almacen_id=almacen.id).first()
+        if not ubicacion:
+            ubicacion = Ubicacion(codigo='UBI-RIT-1', almacen_id=almacen.id, zona='GENERAL')
+            db.session.add(ubicacion); db.session.flush()
+
+        producto = Producto.query.filter_by(codigo='PROD-RIT-1').first()
+        if not producto:
+            producto = Producto(codigo='PROD-RIT-1', nombre='Producto RIT',
+                                 codigo_siesa='PRODRIT1', unidad_medida='UND',
+                                 unidad_negocio_id='99')
+            db.session.add(producto); db.session.flush()
+
+        s = SolicitudTraslado(
+            codigo='TR-KILLSWITCH-1', solicitante_id=solicitante.id,
+            bodega_origen_siesa='NB1', bodega_destino_siesa='NC1',
+            modo_transferencia='EN_TRANSITO', estado=EstadoTraslado.EN_PICKING)
+        from app.models.traslado import ItemSolicitudTraslado
+        item = ItemSolicitudTraslado(
+            producto_id=producto.id, producto_codigo_siesa='PRODRIT1',
+            cantidad_solicitada=5, cantidad_aprobada=5, cantidad_enviada=5)
+        s.items.append(item)
+        db.session.add(s); db.session.flush()
+
+        db.session.add(TareaPicking(
+            codigo='PICK-RIT-KILLSWITCH-1',
+            referencia_documento=s.codigo, tipo_documento='TRASLADO',
+            producto_id=producto.id, almacen_id=almacen.id,
+            ubicacion_id=ubicacion.id,
+            cantidad_solicitada=5, estado=EstadoPicking.COMPLETADO))
+        db.session.commit()
+
+        llamadas = []
+        monkeypatch.setattr(siesa_traslado, 'crear_rit',
+                             lambda **kw: llamadas.append(kw))
+
+        TrasladoService.confirmar_picking_traslado(s.id, solicitante.id)
+
+        assert not llamadas, 'crear_rit se llamó con SIESA_RIT_ENABLED=false'
+        db.session.refresh(s)
+        assert s.siesa_requisicion_consec is None
 
 
 class TestLaBanderaSeEnciendeDespuesDelPOST:
