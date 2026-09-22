@@ -113,7 +113,7 @@ VARS_CRITICAS: tuple = (
                'Transferencia de averías y reposición 173066'),
     VarCritica('SIESA_TIPO_DOCTO_RIT', 'TRA',
                'Requisición de traslado — 174646 y 174930 (cae a TIPO_DOCTO_TRASLADO)'),
-    VarCritica('SIESA_TIPO_DOCTO_FACTURA', 'FEW',
+    VarCritica('SIESA_TIPO_DOCTO_FACTURA', 'FE',
                'Factura electrónica desde remisión — conector 142943'),
     VarCritica('SIESA_TIPO_DOCTO_NOTA_CREDITO', 'NCE',
                'Nota crédito de devolución — conectores 142946 y 251126'),
