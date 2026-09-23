@@ -954,7 +954,9 @@ class ConteoService:
         1. Valida lote si el producto lo requiere.
         2. Consulta stock WMS (UbicacionProducto.cantidad) — sin llamada HTTP.
         3. Adquiere lock, re-valida estado y guarda.
-        4. Decide: MATCH o SEGUNDO_CONTEO.
+        4. Decide: MATCH; en el CC1, dentro de tolerancia (se ajusta sin CC2) o
+           fuera (RECONTAR_TU una vez, después SEGUNDO_CONTEO); en CC2/CC3, como
+           siempre (ver «Conteo: tolerancias y topes» en CLAUDE.md).
         """
         from app.models.inventario import UbicacionProducto
 
