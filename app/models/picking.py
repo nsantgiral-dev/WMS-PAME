@@ -77,6 +77,12 @@ class TareaPicking(db.Model):
     fecha_inicio = db.Column(db.DateTime)
     fecha_completado = db.Column(db.DateTime)
 
+    __table_args__ = (
+        # La guarda de «mercancía en proceso» del conteo pregunta por SKU ×
+        # almacén (`ConteoService.procesos_en_curso`). Migración m031.
+        db.Index('ix_tareas_picking_producto_almacen', 'producto_id', 'almacen_id'),
+    )
+
     # Relaciones
     producto   = db.relationship('Producto', backref='tareas_picking', lazy=True)
     ubicacion  = db.relationship('Ubicacion', backref='tareas_picking', lazy=True)

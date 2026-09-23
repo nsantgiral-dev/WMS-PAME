@@ -187,6 +187,8 @@ class ItemRecepcion(db.Model):
                            name='ck_item_recepcion_averiada_no_negativa'),
         db.CheckConstraint('cantidad_averiada <= cantidad_recibida',
                            name='ck_item_recepcion_averiada_subconjunto'),
+        # `ConteoService.procesos_en_curso` (recepción sin EntradaOC). m031.
+        db.Index('ix_items_recepcion_producto', 'producto_id'),
     )
 
     def cantidad_buena(self):

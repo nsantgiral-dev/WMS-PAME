@@ -32,7 +32,6 @@ cola (`siesa_job_service._ejecutar_job`) y `DevolucionClienteService`. Lo único
 que se escribe a mano es lo que en producción escribe Siesa o un camino que
 llama a Siesa (el cierre de un traslado), y está dicho donde pasa.
 """
-import json
 from datetime import datetime, timedelta
 from unittest.mock import MagicMock, patch
 
@@ -556,3 +555,35 @@ class TestConsultaAcotada:
         raiz = _raiz(db, cc1)
         assert _svc().mercancia_en_proceso(raiz) is None
         assert self._consultas(db, raiz) == base
+
+    def test_las_consultas_por_producto_usan_su_indice(self, db, siesa, tienda):
+        """Acotada por producto, no por almacén: el plan de cada consulta del
+        núcleo sobre tablas que crecen con la operación usa el índice por
+        producto (m031). Se capturan las sentencias reales y se les pide el plan
+        a sqlite con los mismos parámetros."""
+        cc1, _ = _contar_cc1_cc2(tienda, siesa, 7, existencia=10)
+        raiz = _raiz(db, cc1)
+        capturadas = []
+
+        def capturar(_conn, _cur, sentencia, parametros, _ctx, _many):
+            capturadas.append((sentencia, parametros))
+        event.listen(db.engine, 'before_cursor_execute', capturar)
+        try:
+            _svc().mercancia_en_proceso(raiz)
+        finally:
+            event.remove(db.engine, 'before_cursor_execute', capturar)
+
+        esperados = {'tareas_picking': 'ix_tareas_picking_producto_almacen',
+                     'items_recepcion': 'ix_items_recepcion_producto',
+                     'lineas_devolucion_cliente': 'ix_lineas_devolucion_cliente_producto'}
+        vistos = {}
+        with db.engine.connect() as con:
+            for sentencia, parametros in capturadas:
+                desde = sentencia.split('FROM', 1)[1] if 'FROM' in sentencia else ''
+                for tabla, indice in esperados.items():
+                    if f' {tabla}' in desde.split('WHERE', 1)[0]:
+                        plan = ' '.join(str(f[-1]) for f in con.exec_driver_sql(
+                            'EXPLAIN QUERY PLAN ' + sentencia, parametros).fetchall())
+                        vistos[tabla] = plan
+                        assert indice in plan, (tabla, plan)
+        assert set(vistos) == set(esperados), f'no se vio la consulta de {set(esperados) - set(vistos)}'

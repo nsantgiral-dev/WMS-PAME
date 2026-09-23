@@ -165,6 +165,11 @@ class LineaDevolucionCliente(db.Model):
 
     fecha_creacion = db.Column(db.DateTime, default=datetime.utcnow)
 
+    __table_args__ = (
+        # `ConteoService.procesos_en_curso` (devolución con la NC sin aprobar). m031.
+        db.Index('ix_lineas_devolucion_cliente_producto', 'producto_id'),
+    )
+
     # Relaciones
     producto = db.relationship('Producto', lazy=True)
     ubicacion = db.relationship('Ubicacion', lazy=True)
