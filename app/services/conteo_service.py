@@ -2162,6 +2162,22 @@ class ConteoService:
             SesionConteo.raiz_con_cadena_viva(incluye_descuadre=True),
         ).first()
         if existente:
+            # Si lo que ya existe es un conteo del plan que nadie empezó, pasa a
+            # ser la auditoría: el reparto pone los eventos primero
+            # (`conteo_politica.orden_de_reparto`), y con un conteo del plan
+            # pendiente sobre cada SKU —las 4.825 de abril en NB1— toda
+            # auditoría por faltante se habría quedado con la prioridad de su
+            # clase, detrás de miles. Mismo precedente que `crear_conteo_manual`
+            # con el tipo MANUAL.
+            if (existente.estado == EstadoConteo.PENDIENTE
+                    and existente.tipo in ('DIARIO_ABC', 'WATCHDOG_ABC')):
+                existente.tipo = 'EXCEPCION_PICKING'
+                existente.tarea_picking_id = tarea_picking_id
+                db.session.flush()
+                logger.warning(
+                    '[SUPERVISOR_GUARD] %s (conteo del plan pendiente) pasa a auditoría '
+                    'por excepción de la tarea_picking #%s', existente.codigo, tarea_picking_id)
+                return existente
             logger.info(
                 '[SUPERVISOR_GUARD] Auditoría omitida — ya existe %s para producto %s ubicación %s',
                 existente.codigo, producto_id, ubicacion_id,

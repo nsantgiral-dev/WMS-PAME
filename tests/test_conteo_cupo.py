@@ -351,6 +351,24 @@ class TestEventosPrimeroEnElPool:
         d = MobileService._next_conteo_tienda(op.id, nb1.almacen.id)
         assert SesionConteo.query.get(d['id']).tipo == 'EXCEPCION_PICKING'
 
+    def test_un_faltante_sobre_un_conteo_del_plan_pendiente_lo_vuelve_evento(self, nb1, monkeypatch):
+        """En producción cada SKU de NB1 tiene un conteo del plan PENDIENTE (las
+        4.825 de abril): la auditoría se encontraba con él, lo devolvía tal cual
+        y quedaba con la prioridad de su clase, detrás de miles."""
+        from app.models.conteo import SesionConteo
+        from app.services.mobile_service import MobileService
+        monkeypatch.setenv('CONTEO_CUPO_DIARIO', '10')
+        nb1.producto('A-VIEJO', 'A')
+        nb1.producto('C-FALTA', 'C')
+        hace = datetime.utcnow() - timedelta(days=30)
+        nb1.sesion('A-VIEJO', fecha_creacion=hace)
+        plan_c = nb1.sesion('C-FALTA', fecha_creacion=hace + timedelta(days=1))
+        s = _auditoria(nb1, 'C-FALTA')
+        assert s.id == plan_c.id, 'no abre otra cadena sobre el mismo hueco'
+        assert (s.tipo, s.tarea_picking_id is not None) == ('EXCEPCION_PICKING', True)
+        t = MobileService.get_tarea_actual(nb1.operario('falta@test.com').id)
+        assert SesionConteo.query.get(t['id']).producto_codigo_siesa == 'C-FALTA'
+
     def test_la_cola_asignada_y_asignar_lote_usan_el_mismo_orden(self, app, client, nb1, monkeypatch,
                                                                  usuario_admin, jwt_token_admin):
         from app.models.conteo import SesionConteo
