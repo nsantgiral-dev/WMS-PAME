@@ -18,7 +18,35 @@ class EstadoConteo:
     #: otra sobre el mismo hueco. Antes cada sitio escribía su lista a mano
     #: —`PENDIENTE, EN_PROCESO, SEGUNDO_CONTEO`— y a las seis les faltaban
     #: `TERCER_CONTEO` y `AJUSTANDO` (2026-09-23).
-    CADENA_EN_CURSO = (PENDIENTE, EN_PROCESO, SEGUNDO_CONTEO, TERCER_CONTEO, AJUSTANDO)
+    #:
+    #: **`BLOQUEADO` también** (2026-09-23, P0-HUD). Un conteo bloqueado —el
+    #: operario reportó «no lo encontré» u otro problema— espera que el líder
+    #: lo reabra o lo cancele: la cadena sigue abierta. Sin él acá, el
+    #: generador ABC abría otra cadena sobre el mismo hueco y la bloqueada
+    #: quedaba huérfana para siempre (nadie la podía sacar: `/cancelar` no la
+    #: aceptaba). Un hijo bloqueado ya estaba cubierto —su raíz está en
+    #: SEGUNDO/TERCER_CONTEO—; la raíz bloqueada no.
+    CADENA_EN_CURSO = (PENDIENTE, EN_PROCESO, SEGUNDO_CONTEO, TERCER_CONTEO, AJUSTANDO,
+                       BLOQUEADO)
+
+
+class MotivoBloqueoConteo:
+    """Por qué un operario bloqueó su conteo (`SesionConteo.motivo_bloqueo`).
+
+    **«No lo encontré» NO es un cero.** Un cero dice «revisé y no hay
+    ninguna»; «no lo encontré» dice «no sé dónde está». Sin layout físico
+    —todo NB1 vive en `SIESA-GENERAL`— «no lo encontré» es el caso frecuente,
+    y confirmarlo como cero hacía CC1 = 0, CC2 = 0 → coinciden → **ajuste
+    automático a cero en Siesa**. Por eso es un bloqueo que decide el líder
+    (reabrir o cancelar) y nunca produce MATCH, segundo conteo ni ajuste.
+    """
+    NO_ENCONTRADO = 'NO_ENCONTRADO'
+    OTRO = 'OTRO'
+    #: Los que mandaba la pantalla vieja de «Reportar problema» (pensada para
+    #: picking). Se aceptan para que una PWA todavía en caché no falle, y se
+    #: guardan tal cual: son igual de bloqueantes.
+    LEGADOS = ('UBICACION_VACIA', 'FALTANTE', 'MERCANCIA_AVERIADA', 'PRODUCTO_INCORRECTO')
+    VALIDOS = (NO_ENCONTRADO, OTRO) + LEGADOS
 
 
 class SesionConteo(db.Model):
@@ -164,6 +192,14 @@ class SesionConteo(db.Model):
     editado_en = db.Column(db.DateTime)
     motivo_edicion = db.Column(db.Text)
 
+    #: **Por qué está BLOQUEADO** (`MotivoBloqueoConteo`), m031hud. Antes el
+    #: motivo viajaba solo dentro del texto de `motivo_edicion`
+    #: (`'[UBICACION_VACIA] …'`), que además pisa cualquier edición de un
+    #: admin: un dato parseado de una prosa no es un campo. `None` en un
+    #: bloqueo anterior a la columna: se lista como «sin motivo registrado».
+    motivo_bloqueo = db.Column(db.String(30), nullable=True)
+    bloqueado_en = db.Column(db.DateTime, nullable=True)
+
     # Relaciones
     ubicacion = db.relationship('Ubicacion', backref='sesiones_conteo', lazy=True)
     almacen = db.relationship('Almacen', backref='sesiones_conteo', lazy=True)
@@ -239,6 +275,11 @@ class SesionConteo(db.Model):
           («recontar»). Que el recuento no duplique el ajuste lo garantiza
           `ConteoService.motivo_bloqueo_ajuste` (una observación más reciente
           del hueco deja vieja a la anterior), no esta condición.
+
+        Una raíz BLOQUEADA traba las dos puertas (está en `CADENA_EN_CURSO`):
+        lo que el líder hace con ella es reabrirla o cancelarla
+        (`ConteoService.reabrir_bloqueado` / `cancelar_bloqueado`), no abrir
+        otra cadena al lado.
 
         El índice único `ix_sesion_conteo_activa_unica` sigue con su predicado
         original (PENDIENTE/EN_PROCESO/SEGUNDO_CONTEO): cambiarlo exige
@@ -372,3 +413,62 @@ def _motivo_bloqueo_ajuste(sesion):
     """Import diferido: la política vive en el servicio, no en el modelo."""
     from app.services.conteo_service import ConteoService
     return ConteoService.motivo_bloqueo_ajuste(sesion)
+
+
+class NovedadConteo(db.Model):
+    """«Encontré mercancía sin código» — lo que un operario vio mientras
+    contaba y no puede escanear: unidades sin etiqueta, una caja sin
+    referencia, algo que no sabe qué es.
+
+    **No bloquea el conteo del SKU** (m031hud): el operario sigue contando lo
+    que sí reconoce, y esto queda para que el líder lo identifique. Antes no
+    había dónde dejarlo, y lo que el operario hacía era no contarlo o
+    contarlo como el SKU que tenía en pantalla — las dos cosas terminan en un
+    ajuste equivocado.
+
+    Solo texto: el HUD de conteo no captura fotos (su cámara es el lector de
+    códigos). `sesion_id` es el conteo que se estaba haciendo cuando se vio,
+    no necesariamente el producto de la novedad.
+    """
+    __tablename__ = 'novedades_conteo'
+
+    ABIERTA = 'ABIERTA'
+    RESUELTA = 'RESUELTA'
+    TIPO_SIN_CODIGO = 'MERCANCIA_SIN_CODIGO'
+
+    id = db.Column(db.Integer, primary_key=True)
+    tipo = db.Column(db.String(30), nullable=False, default=TIPO_SIN_CODIGO)
+    sesion_id = db.Column(db.Integer, db.ForeignKey('sesiones_conteo.id'), nullable=True)
+    almacen_id = db.Column(db.Integer, db.ForeignKey('almacenes.id'), nullable=True)
+    reportado_por = db.Column(db.Integer, db.ForeignKey('usuarios.id'), nullable=False)
+    descripcion = db.Column(db.Text, nullable=False)
+    estado = db.Column(db.String(15), nullable=False, default=ABIERTA)
+    fecha_creacion = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    resuelta_por = db.Column(db.Integer, db.ForeignKey('usuarios.id'), nullable=True)
+    resuelta_en = db.Column(db.DateTime, nullable=True)
+    nota_resolucion = db.Column(db.Text, nullable=True)
+
+    sesion = db.relationship('SesionConteo', foreign_keys=[sesion_id], lazy=True)
+    almacen = db.relationship('Almacen', foreign_keys=[almacen_id], lazy=True)
+    reportante = db.relationship('Usuario', foreign_keys=[reportado_por], lazy=True)
+    resolutor = db.relationship('Usuario', foreign_keys=[resuelta_por], lazy=True)
+
+    def to_dict(self):
+        s = self.sesion
+        return {
+            'id': self.id,
+            'tipo': self.tipo,
+            'sesion_id': self.sesion_id,
+            'sesion_codigo': s.codigo if s else None,
+            'producto_en_conteo': (s.producto.codigo if s and s.producto else None),
+            'almacen_id': self.almacen_id,
+            'almacen_nombre': self.almacen.nombre if self.almacen else None,
+            'reportado_por': self.reportado_por,
+            'reportado_por_nombre': self.reportante.nombre if self.reportante else None,
+            'descripcion': self.descripcion,
+            'estado': self.estado,
+            'fecha_creacion': self.fecha_creacion.isoformat() if self.fecha_creacion else None,
+            'resuelta_por_nombre': self.resolutor.nombre if self.resolutor else None,
+            'resuelta_en': self.resuelta_en.isoformat() if self.resuelta_en else None,
+            'nota_resolucion': self.nota_resolucion,
+        }

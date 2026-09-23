@@ -439,11 +439,21 @@ class TestVeredictoAuditoria:
         raiz.estado = 'MATCH'
         assert _m().veredicto_cadena(raiz) == _m().OK_CC1
 
-    def test_bloqueado_legado_no_rompe(self, db, tienda):
+    def test_bloqueado_sin_motivo_registrado_no_rompe(self, db, tienda):
+        """Un BLOQUEADO anterior a m031hud: sin `motivo_bloqueo`."""
         raiz = _fila(db, tienda, estado='BLOQUEADO', fecha_creacion=datetime(2026, 4, 1))
         db.session.commit()
         assert _m().veredicto_cadena(raiz) == _m().SIN_VEREDICTO
-        assert _m().motivo_sin_veredicto(raiz) == 'bloqueado_legado'
+        assert _m().motivo_sin_veredicto(raiz) == 'bloqueado'
+
+    def test_no_lo_encontre_se_distingue_y_no_es_un_veredicto(self, db, tienda):
+        """«No lo encontré» no es un cero ni un error: sin veredicto, con su
+        propio motivo — sea la raíz o el CC2 el bloqueado."""
+        raiz = _fila(db, tienda, estado='BLOQUEADO', fecha_creacion=datetime(2026, 4, 1))
+        raiz.motivo_bloqueo = 'NO_ENCONTRADO'
+        db.session.commit()
+        assert _m().veredicto_cadena(raiz) == _m().SIN_VEREDICTO
+        assert _m().motivo_sin_veredicto(raiz) == 'no_encontrado'
 
 
 class TestCoberturaSinRitmo:

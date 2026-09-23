@@ -1885,6 +1885,17 @@
         </div>
       </div>
       <div id="inv-definitivo-lista" style="min-height:60px;"></div>
+
+      <!-- Conteos bloqueados («no lo encontré» u otro problema) y mercancía
+           sin código: lo que el operario dejó para el líder (conteo.js). -->
+      <div style="font-size:13px;font-weight:700;color:var(--tx);margin:18px 0 6px;">🔍 Conteos bloqueados — esperan tu decisión</div>
+      <div style="font-size:12px;color:var(--tx3);margin-bottom:8px;line-height:1.5;">
+        El operario no pudo cerrarlos con un número. «No lo encontré» no es un cero: no se ajusta nada hasta que decidas.
+        <b>Reabrir</b> lo devuelve a la cola desde cero; <b>Cancelar</b> descarta esa cadena de conteo.
+      </div>
+      <div id="inv-bloqueados-lista" style="min-height:40px;"></div>
+      <div style="font-size:13px;font-weight:700;color:var(--tx);margin:18px 0 6px;">🏷 Mercancía sin código</div>
+      <div id="inv-novedades-lista" style="min-height:40px;"></div>
     </div>
 
     <!-- Modal Conteo Definitivo — escaneo + confirmación -->
@@ -3791,12 +3802,12 @@
        dato crudo, que es peor que un error. -->
   <script defer src="/static/pwa/util.js?v=20260921a"></script>
   <script defer src="/static/pwa/app.js?v=20260921a"></script>
-  <script defer src="/static/pwa/picking.js?v=20260923a"></script>
+  <script defer src="/static/pwa/picking.js?v=20260923hud"></script>
   <script defer src="/static/pwa/packing.js?v=20260921a"></script>
   <script defer src="/static/pwa/recepcion.js?v=20260921a"></script>
   <script defer src="/static/pwa/rutas.js?v=20260921a"></script>
   <script defer src="/static/pwa/traslados.js?v=20260921a"></script>
-  <script defer src="/static/pwa/conteo.js?v=20260923c"></script>
+  <script defer src="/static/pwa/conteo.js?v=20260923d"></script>
   <script defer src="/static/pwa/reposicion.js?v=20260921a"></script>
   <script defer src="/static/pwa/liquidacion.js?v=20260921a"></script>
   <script defer src="/static/pwa/layout.js?v=20260921a"></script>

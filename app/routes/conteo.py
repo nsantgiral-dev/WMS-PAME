@@ -188,7 +188,8 @@ def registrar_conteo(id):
             sesion_id=id,
             operario_id=operario_id,
             cantidad_fisica=cantidad_fisica,
-            lote_id=data.get('lote_id')
+            lote_id=data.get('lote_id'),
+            cero_confirmado=data.get('cero_confirmado') is True,
         )
         return jsonify(resultado), 200
     except ValueError as e:
@@ -793,6 +794,20 @@ def cancelar_conteo(id):
     if not sesion:
         return jsonify({'error': 'Sesión no encontrada'}), 404
 
+    # Un BLOQUEADO («no lo encontré» u otro problema) no tenía salida: esta
+    # ruta no lo aceptaba y la cadena quedaba trabada. Se cancela con su
+    # cadena, por la política del servicio (`cancelar_bloqueado`).
+    if sesion.estado == EstadoConteo.BLOQUEADO:
+        try:
+            sesion = ConteoService.cancelar_bloqueado(
+                id, uid, (request.get_json() or {}).get('motivo', ''))
+        except PermissionError as e:
+            return jsonify({'error': str(e)}), 403
+        except ValueError as e:
+            return jsonify({'error': str(e)}), 400
+        return jsonify({'mensaje': 'Conteo bloqueado cancelado con su cadena',
+                        'sesion': sesion.to_dict()}), 200
+
     estados_cancelables = [
         EstadoConteo.PENDIENTE, EstadoConteo.EN_PROCESO,
         EstadoConteo.SEGUNDO_CONTEO, EstadoConteo.DESCUADRE,
@@ -823,6 +838,82 @@ def cancelar_conteo(id):
     db.session.commit()
     logger.info(f'[CONTEO] #{id} cancelado por usuario #{uid}: {motivo}')
     return jsonify({'mensaje': 'Conteo cancelado', 'sesion': sesion.to_dict()}), 200
+
+
+@conteo_bp.route('/bloqueados', methods=['GET'])
+@jwt_required()
+def listar_bloqueados():
+    """Conteos BLOQUEADOS («no lo encontré» u otro problema) que esperan
+    que el líder los reabra o los cancele, con su motivo."""
+    from app.models.usuario import Usuario
+    try:
+        uid = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
+    u = db.session.get(Usuario, uid)
+    if not u or u.rol not in Roles.SUPERVISION:
+        return jsonify({'error': 'Sin permiso'}), 403
+    filas = ConteoService.listar_bloqueados(almacen_id=request.args.get('almacen_id', type=int))
+    return jsonify({'bloqueados': filas, 'total': len(filas)}), 200
+
+
+@conteo_bp.route('/<int:id>/reabrir', methods=['POST'])
+@jwt_required()
+def reabrir_bloqueado(id):
+    """El líder devuelve un conteo BLOQUEADO a la cola (PENDIENTE, desde
+    cero). Opcional: `operario_id` para dárselo a alguien en particular."""
+    try:
+        uid = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
+    data = request.get_json() or {}
+    try:
+        sesion = ConteoService.reabrir_bloqueado(
+            id, uid, nota=data.get('nota'), operario_id=data.get('operario_id'))
+    except PermissionError as e:
+        return jsonify({'error': str(e)}), 403
+    except LookupError as e:
+        return jsonify({'error': str(e)}), 404
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    return jsonify({'mensaje': 'Conteo reabierto — vuelve a la cola desde cero',
+                    'sesion': sesion.to_dict()}), 200
+
+
+@conteo_bp.route('/novedades', methods=['GET'])
+@jwt_required()
+def listar_novedades():
+    """«Mercancía sin código» que los operarios reportaron al contar."""
+    from app.models.usuario import Usuario
+    try:
+        uid = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
+    u = db.session.get(Usuario, uid)
+    if not u or u.rol not in Roles.SUPERVISION:
+        return jsonify({'error': 'Sin permiso'}), 403
+    filas = ConteoService.listar_novedades(
+        almacen_id=request.args.get('almacen_id', type=int),
+        solo_abiertas=request.args.get('todas') != '1')
+    return jsonify({'novedades': filas, 'total': len(filas)}), 200
+
+
+@conteo_bp.route('/novedades/<int:nid>/resolver', methods=['POST'])
+@jwt_required()
+def resolver_novedad(nid):
+    try:
+        uid = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
+    try:
+        nov = ConteoService.resolver_novedad(nid, uid, (request.get_json() or {}).get('nota'))
+    except PermissionError as e:
+        return jsonify({'error': str(e)}), 403
+    except LookupError as e:
+        return jsonify({'error': str(e)}), 404
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    return jsonify({'ok': True, 'novedad': nov.to_dict()}), 200
 
 
 @conteo_bp.route('/reintentar-fallos', methods=['POST'])
@@ -890,7 +981,9 @@ def omitir_segundo_conteo(id):
     ahora = datetime.utcnow()
     descendiente = sesion.hijo_conteo
     while descendiente is not None:
-        if descendiente.estado in ('PENDIENTE', 'EN_PROCESO'):
+        # BLOQUEADO también: un CC2/CC3 bloqueado que sobrevive a la omisión
+        # queda para siempre en la cola de bloqueados de una cadena resuelta.
+        if descendiente.estado in ('PENDIENTE', 'EN_PROCESO', EstadoConteo.BLOQUEADO):
             descendiente.estado = 'CANCELADO'
             descendiente.fecha_cierre = ahora
         descendiente = descendiente.hijo_conteo

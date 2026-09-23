@@ -237,7 +237,7 @@ class TestVentaDuranteElConteo:
         _sesion(db, cc1).cantidad_fisica = 7
         db.session.commit()
         siesa.poner(existencia=10, pos=3)
-        r = MobileService.confirmar_tarea(tienda['a'].id, cc1, 'CONTEO')
+        r = MobileService.confirmar_tarea(tienda['a'].id, cc1, 'CONTEO', total_contado=7)
         assert r['resultado'] == 'RECONTAR'
         assert _sesion(db, cc1).cantidad_fisica is None
 
@@ -910,9 +910,11 @@ class TestAvisoCajasPosEnCadaInicioDeConteo:
     def test_piso_y_puntos_conocidos(self):
         """Un troceo roto devuelve cero inicios y cero hallazgos: verde falso."""
         h = _inicios_de_conteo(_fuentes_pwa())
-        assert {'renderTarea', '_defRender', 'pedirTarea', 'defAbrirConteo',
+        # Un solo HUD de conteo desde P0-HUD (2026-09-23): `conteoHudHtml` lo
+        # pinta para el operario (vía renderTarea) y para el Definitivo.
+        assert {'conteoHudHtml', 'pedirTarea', 'defAbrirConteo',
                 'conteosMostrarFormManual'} <= set(h), h
-        assert h['renderTarea'][0] == 'hud' and h['_defRender'][0] == 'hud'
+        assert h['conteoHudHtml'][0] == 'hud'
         assert h['pedirTarea'][0] == 'apertura' and h['defAbrirConteo'][0] == 'apertura'
 
     def test_las_declaradas_existen_y_dicen_por_que(self):

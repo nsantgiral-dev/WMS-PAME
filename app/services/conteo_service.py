@@ -57,8 +57,12 @@ class ConteoService:
             # reciba la tarea, o sea antes de que empiece a contar.
             ConteoService.registrar_foto_inicio(sesion)
 
-        # Retornar SOLO vista ciega — sin cantidad esperada
-        return sesion.to_dict_operario()
+        # Retornar SOLO vista ciega — sin cantidad esperada. Más lo que pinta
+        # el HUD (producto, empaque, si la ubicación es física) y lo que ESTA
+        # persona lleva contado en esta sesión — el suyo, nunca el de otro
+        # conteo de la cadena: el HUD retoma desde ahí en vez de desde cero.
+        return {**sesion.to_dict_operario(), **ConteoService.vista_hud(sesion),
+                'cantidad_contada': sesion.cantidad_fisica or 0}
 
     @staticmethod
     def _bodega_siesa_de(sesion: SesionConteo):
@@ -346,21 +350,359 @@ class ConteoService:
             return alm.id if alm else None
         return None
 
+    # ── Lo que se cuenta: siempre declarado, nunca un default ────────────────
+
+    @staticmethod
+    def exigir_cantidad_declarada(cantidad_fisica, *, cero_confirmado: bool = False) -> int:
+        """La cantidad con la que se cierra un conteo, validada. **Una política,
+        una función** (P0-HUD, 2026-09-23): la llama `registrar_conteo`, que es
+        por donde pasa TODO cierre de conteo, venga de la pantalla del
+        operario, del Conteo Definitivo o de la API.
+
+        La clase que cierra: **un conteo se confirma sin que alguien diga
+        cuánto contó.** `MobileService.confirmar_tarea` hacía
+        `cantidad_fisica if … is not None else 0`: un operario que no escaneó
+        nada —porque no encontró el producto, en una bodega sin layout donde
+        eso es lo normal— cerraba en CERO. CC1 = 0 y CC2 = 0 coinciden →
+        ajuste automático a cero en Siesa. El defecto más caro del sistema.
+
+        - `None` → se rechaza. Nadie dijo cuánto contó.
+        - Negativo, fraccionario o booleano → se rechaza.
+        - **Cero exige `cero_confirmado`**: «revisé y no hay ninguna» es un
+          dato; «no escaneé nada» no lo es. Quien no lo encontró tiene su
+          propio cierre (`bloquear_conteo` con `NO_ENCONTRADO`), que no es un
+          cero y nunca ajusta.
+        """
+        if cantidad_fisica is None:
+            raise ValueError(
+                'Falta la cantidad contada: un conteo no se cierra sin que '
+                'alguien diga cuánto contó. Si no encontraste el producto, usá '
+                '«No lo encontré». Si la pantalla no te deja, cerrá y volvé a '
+                'abrir la app (está desactualizada).')
+        if isinstance(cantidad_fisica, bool):
+            raise ValueError('La cantidad contada debe ser un número entero')
+        if isinstance(cantidad_fisica, float) and cantidad_fisica.is_integer():
+            cantidad_fisica = int(cantidad_fisica)
+        if not isinstance(cantidad_fisica, int):
+            raise ValueError('La cantidad contada debe ser un número entero')
+        if cantidad_fisica < 0:
+            raise ValueError('La cantidad contada no puede ser negativa')
+        if cantidad_fisica == 0 and not cero_confirmado:
+            raise ValueError(
+                'Contaste 0: confirmá que NO hay ninguna unidad en la bodega. '
+                'Si lo que pasa es que no lo encontraste, usá «No lo encontré».')
+        return cantidad_fisica
+
+    @staticmethod
+    def vista_hud(sesion: SesionConteo) -> dict:
+        """Lo que el HUD de conteo muestra del producto y del lugar — ciego:
+        nunca la cantidad esperada. **Una sola definición** para la pantalla
+        del operario (`MobileService._conteo_a_dict`) y la del Conteo
+        Definitivo (`obtener_tarea_operario`), que antes armaban cada una su
+        dict y divergían.
+
+        `ubicacion_fisica` dice si la ubicación le sirve a alguien para buscar
+        (`Ubicacion.es_fisica`). Sin layout, todo NB1 está en `SIESA-GENERAL`:
+        ahí lo que se pinta en grande es el PRODUCTO y «buscalo en toda la
+        bodega».
+        """
+        p = sesion.producto
+        ub = sesion.ubicacion
+        factor = (p.factor_conversion or 1) if p else 1
+        return {
+            'ubicacion': ub.codigo if ub else '',
+            'ubicacion_fisica': bool(ub and ub.es_fisica),
+            'producto_codigo': p.codigo if p else '',
+            'producto_nombre': p.nombre if p else '',
+            'producto_codigo_barras': (p.codigo_barras or '') if p else '',
+            'unidad_empaque': (p.unidad_empaque or '').upper() if p else '',
+            'factor_conversion': factor if factor > 1 else 1,
+        }
+
+    # ── Bloqueo: «no lo encontré» y otros problemas ──────────────────────────
+
+    @staticmethod
+    def bloquear_conteo(sesion_id: int, operario_id: int, motivo: str,
+                        observaciones: str = None) -> dict:
+        """El operario no puede cerrar su conteo con un número: lo bloquea y
+        lo decide el líder (`reabrir_bloqueado` / `cancelar_bloqueado`).
+
+        **«No lo encontré» (`NO_ENCONTRADO`) NO es un cero** — ver
+        `MotivoBloqueoConteo`. Un conteo BLOQUEADO no produce MATCH, ni
+        segundo conteo, ni ajuste: `registrar_conteo` y `confirmar_ajuste` lo
+        rechazan por estado, y su raíz traba la generación de otra cadena del
+        mismo hueco (`EstadoConteo.CADENA_EN_CURSO`).
+
+        Vivía en la ruta `/api/mobile/reportar-problema`; la política va en el
+        servicio, que protege la operación y no solo esa puerta.
+        """
+        from app.models.conteo import MotivoBloqueoConteo
+        motivo = (motivo or '').strip().upper()
+        if motivo not in MotivoBloqueoConteo.VALIDOS:
+            raise ValueError(f'Motivo de bloqueo desconocido: {motivo or "(vacío)"}')
+        observaciones = (observaciones or '').strip() or None
+        if motivo == MotivoBloqueoConteo.OTRO and not observaciones:
+            raise ValueError('Contá qué pasó: el líder necesita saberlo para decidir')
+
+        sesion = (SesionConteo.query.filter_by(id=sesion_id)
+                  .with_for_update().first())
+        if not sesion:
+            raise LookupError(f'Sesión de conteo {sesion_id} no encontrada')
+        if sesion.operario_id != operario_id:
+            raise PermissionError('Esta sesión de conteo no te está asignada')
+        # Solo conteos activos: impide revertir AJUSTADO → BLOQUEADO.
+        if sesion.estado not in (EstadoConteo.PENDIENTE, EstadoConteo.EN_PROCESO):
+            raise ValueError(
+                f'No se puede reportar problema en un conteo con estado {sesion.estado}')
+
+        sesion.estado = EstadoConteo.BLOQUEADO
+        sesion.motivo_bloqueo = motivo
+        sesion.bloqueado_en = datetime.utcnow()
+        sesion.motivo_edicion = f'[{motivo}] {observaciones or ""}'.strip()
+        try:
+            db.session.commit()
+        except Exception as e:
+            db.session.rollback()
+            raise RuntimeError(f'Error al bloquear la sesión de conteo: {e}') from e
+        logger.warning(f'[CONTEO] {sesion.codigo} BLOQUEADO por operario #{operario_id}: '
+                       f'{motivo} {observaciones or ""}'.strip())
+        return {
+            'ok': True,
+            'mensaje': ('Reportado: no lo encontraste. El líder decide si se '
+                        'vuelve a buscar o se cancela — no se ajusta nada.'
+                        if motivo == MotivoBloqueoConteo.NO_ENCONTRADO
+                        else 'Problema de conteo reportado — el líder lo revisa'),
+            'motivo': motivo,
+            'tarea_id': sesion_id,
+        }
+
+    @staticmethod
+    def _exigir_supervision(usuario_id: int):
+        from app.models.usuario import Usuario
+        from app.routes._auth_helpers import Roles
+        u = db.session.get(Usuario, usuario_id)
+        if not u or u.rol not in Roles.SUPERVISION:
+            raise PermissionError('Solo un supervisor, admin o jefe de almacén puede hacer esto')
+        return u
+
+    @staticmethod
+    def _raiz_de(sesion: SesionConteo) -> SesionConteo:
+        raiz = sesion
+        while raiz.es_segundo_conteo and raiz.sesion_origen_id:
+            padre = db.session.get(SesionConteo, raiz.sesion_origen_id)
+            if padre is None:
+                break
+            raiz = padre
+        return raiz
+
+    @staticmethod
+    def nivel_en_cadena(sesion: SesionConteo) -> str:
+        """'CC1' | 'CC2' | 'CC3' — para que el líder sepa qué está decidiendo."""
+        if not sesion.es_segundo_conteo:
+            return 'CC1'
+        return 'CC3' if ConteoService._es_conteo_definitivo(sesion) else 'CC2'
+
+    @staticmethod
+    def listar_bloqueados(almacen_id: int = None) -> list:
+        """Conteos BLOQUEADOS esperando al líder, con su motivo. Sin cantidades:
+        el líder puede terminar haciendo el CC3 de la misma cadena."""
+        q = SesionConteo.query.filter(SesionConteo.estado == EstadoConteo.BLOQUEADO)
+        if almacen_id:
+            q = q.filter(SesionConteo.almacen_id == almacen_id)
+        filas = []
+        for s in q.order_by(SesionConteo.id.desc()).all():
+            filas.append({
+                'id': s.id,
+                'codigo': s.codigo,
+                'nivel': ConteoService.nivel_en_cadena(s),
+                'almacen_id': s.almacen_id,
+                'almacen_nombre': s.almacen.nombre if s.almacen else None,
+                'producto_codigo': s.producto.codigo if s.producto else None,
+                'producto_nombre': s.producto.nombre if s.producto else None,
+                'ubicacion_codigo': s.ubicacion.codigo if s.ubicacion else None,
+                'motivo_bloqueo': s.motivo_bloqueo or 'SIN_MOTIVO_REGISTRADO',
+                'nota': s.motivo_edicion,
+                'reportado_por_nombre': s.operario.nombre if s.operario else None,
+                'bloqueado_en': s.bloqueado_en.isoformat() if s.bloqueado_en else None,
+            })
+        return filas
+
+    @staticmethod
+    def reabrir_bloqueado(sesion_id: int, usuario_id: int, nota: str = None,
+                          operario_id: int = None) -> SesionConteo:
+        """El líder devuelve un conteo BLOQUEADO a la cola: PENDIENTE, sin lo
+        contado y sin foto de inicio (se relee al abrirlo). Sin dueño, o con
+        el que el líder elija — que tiene que poder contarlo
+        (`motivo_no_puede_contar`: el CC3 es de supervisión y el doble ciego
+        no se dobla por reabrir).
+
+        Una raíz bloqueada ANTERIOR a que BLOQUEADO trabara el hueco pudo
+        quedar con otra cadena viva al lado: reabrirla serían dos cadenas del
+        mismo hueco (el defecto «un solo ajuste por hueco»). Se niega; se
+        cancela en su lugar.
+        """
+        lider = ConteoService._exigir_supervision(usuario_id)
+        sesion = (SesionConteo.query.filter_by(id=sesion_id)
+                  .with_for_update().first())
+        if not sesion:
+            raise LookupError('Sesión de conteo no encontrada')
+        if sesion.estado != EstadoConteo.BLOQUEADO:
+            raise ValueError(f'Solo se reabre un conteo BLOQUEADO (está {sesion.estado})')
+
+        if not sesion.es_segundo_conteo:
+            otra = SesionConteo.query.filter(
+                SesionConteo.id != sesion.id,
+                SesionConteo.producto_id == sesion.producto_id,
+                SesionConteo.ubicacion_id == sesion.ubicacion_id,
+                SesionConteo.almacen_id == sesion.almacen_id,
+                SesionConteo.raiz_con_cadena_viva(incluye_descuadre=True),
+            ).first()
+            if otra:
+                raise ValueError(
+                    f'Ya hay otro conteo vivo de este producto ({otra.codigo}, '
+                    f'{otra.estado}). Reabrir este dejaría dos: cancelalo.')
+
+        if operario_id is not None:
+            from app.models.usuario import Usuario
+            op = db.session.get(Usuario, operario_id)
+            if not op or not op.activo:
+                raise ValueError(f'Operario {operario_id} no encontrado o inactivo')
+            no_puede = ConteoService.motivo_no_puede_contar(sesion, operario_id)
+            if no_puede:
+                raise ValueError(no_puede)
+
+        antes = sesion.motivo_edicion or f'[{sesion.motivo_bloqueo or "?"}]'
+        ahora = datetime.utcnow()
+        sesion.estado = EstadoConteo.PENDIENTE
+        sesion.operario_id = operario_id
+        sesion.cantidad_fisica = None
+        sesion.fecha_inicio = None
+        sesion.motivo_bloqueo = None
+        sesion.bloqueado_en = None
+        ConteoService._grabar_foto_inicio(sesion, None)
+        nota = (nota or '').strip()
+        sesion.motivo_edicion = f'REABIERTO por {lider.nombre}' + (f': {nota}' if nota else '') \
+            + f' (estaba bloqueado: {antes})'
+        sesion.editado_por = usuario_id
+        sesion.editado_en = ahora
+        db.session.commit()
+        logger.info(f'[CONTEO] {sesion.codigo} reabierto por #{usuario_id} '
+                    f'(operario → {operario_id or "sin dueño"})')
+        return sesion
+
+    @staticmethod
+    def cancelar_bloqueado(sesion_id: int, usuario_id: int, motivo: str) -> SesionConteo:
+        """El líder descarta un conteo BLOQUEADO — y con él **toda su cadena**.
+
+        Una cadena no avanza sin ese eslabón: cancelar solo un CC2 bloqueado
+        dejaba la raíz en SEGUNDO_CONTEO para siempre, trabando el hueco
+        (`CADENA_EN_CURSO`). Si el líder quiere ajustar con lo que ya dijo el
+        CC1, la herramienta es `omitir-segundo` sobre la raíz, que cancela el
+        bloqueado igual; cancelar es «esta cadena no vale».
+        """
+        ConteoService._exigir_supervision(usuario_id)
+        motivo = (motivo or '').strip()
+        if not motivo:
+            raise ValueError('Se requiere un motivo de cancelación')
+        sesion = (SesionConteo.query.filter_by(id=sesion_id)
+                  .with_for_update().first())
+        if not sesion:
+            raise LookupError('Sesión de conteo no encontrada')
+        if sesion.estado != EstadoConteo.BLOQUEADO:
+            raise ValueError(f'Solo se cancela por acá un conteo BLOQUEADO (está {sesion.estado})')
+
+        ahora = datetime.utcnow()
+        vivos = set(EstadoConteo.CADENA_EN_CURSO) - {EstadoConteo.AJUSTANDO}
+        nodo = ConteoService._raiz_de(sesion)
+        while nodo is not None:
+            if nodo.estado in vivos:
+                nodo.estado = EstadoConteo.CANCELADO
+                nodo.fecha_cierre = ahora
+                nodo.motivo_edicion = (f'CANCELADO: {motivo}' if nodo.id == sesion.id
+                                       else f'CANCELADO (cadena de {sesion.codigo}): {motivo}')
+                nodo.editado_por = usuario_id
+                nodo.editado_en = ahora
+            nodo = nodo.hijo_conteo
+        db.session.commit()
+        logger.info(f'[CONTEO] {sesion.codigo} (bloqueado) y su cadena cancelados '
+                    f'por #{usuario_id}: {motivo}')
+        return sesion
+
+    # ── Novedades: «mercancía sin código» ────────────────────────────────────
+
+    @staticmethod
+    def registrar_novedad_sin_codigo(sesion_id: int, operario_id: int, descripcion: str):
+        """El operario encontró mercancía que no puede escanear. Queda para el
+        líder y **no toca el conteo**: ni su estado ni lo contado."""
+        from app.models.conteo import NovedadConteo
+        descripcion = (descripcion or '').strip()
+        if len(descripcion) < 3:
+            raise ValueError('Describí lo que encontraste (qué es, cuántas, dónde)')
+        sesion = db.session.get(SesionConteo, sesion_id)
+        if not sesion:
+            raise LookupError('Sesión de conteo no encontrada')
+        if sesion.operario_id != operario_id:
+            raise PermissionError('Esta sesión de conteo no te está asignada')
+        nov = NovedadConteo(tipo=NovedadConteo.TIPO_SIN_CODIGO, sesion_id=sesion.id,
+                            almacen_id=sesion.almacen_id, reportado_por=operario_id,
+                            descripcion=descripcion[:2000], estado=NovedadConteo.ABIERTA)
+        db.session.add(nov)
+        db.session.commit()
+        logger.info(f'[CONTEO] Novedad #{nov.id} (mercancía sin código) en {sesion.codigo} '
+                    f'por operario #{operario_id}')
+        return nov
+
+    @staticmethod
+    def listar_novedades(almacen_id: int = None, solo_abiertas: bool = True) -> list:
+        from app.models.conteo import NovedadConteo
+        q = NovedadConteo.query
+        if solo_abiertas:
+            q = q.filter(NovedadConteo.estado == NovedadConteo.ABIERTA)
+        if almacen_id:
+            q = q.filter(NovedadConteo.almacen_id == almacen_id)
+        return [n.to_dict() for n in q.order_by(NovedadConteo.fecha_creacion.desc()).all()]
+
+    @staticmethod
+    def resolver_novedad(novedad_id: int, usuario_id: int, nota: str):
+        from app.models.conteo import NovedadConteo
+        ConteoService._exigir_supervision(usuario_id)
+        nota = (nota or '').strip()
+        if not nota:
+            raise ValueError('Contá qué se hizo con la mercancía')
+        nov = db.session.get(NovedadConteo, novedad_id)
+        if not nov:
+            raise LookupError('Novedad no encontrada')
+        if nov.estado != NovedadConteo.ABIERTA:
+            raise ValueError('Esa novedad ya estaba resuelta')
+        nov.estado = NovedadConteo.RESUELTA
+        nov.resuelta_por = usuario_id
+        nov.resuelta_en = datetime.utcnow()
+        nov.nota_resolucion = nota[:2000]
+        db.session.commit()
+        return nov
+
     @staticmethod
     def registrar_conteo(
         sesion_id: int,
         operario_id: int,
         cantidad_fisica: int,
-        lote_id: str = None
+        lote_id: str = None,
+        *,
+        cero_confirmado: bool = False,
     ):
         """
         Registra el conteo físico del operario.
+        0. La cantidad tiene que venir declarada (`exigir_cantidad_declarada`):
+           nunca un default, y un cero solo confirmado.
         1. Valida lote si el producto lo requiere.
         2. Consulta stock WMS (UbicacionProducto.cantidad) — sin llamada HTTP.
         3. Adquiere lock, re-valida estado y guarda.
         4. Decide: MATCH o SEGUNDO_CONTEO.
         """
         from app.models.inventario import UbicacionProducto
+
+        cantidad_fisica = ConteoService.exigir_cantidad_declarada(
+            cantidad_fisica, cero_confirmado=cero_confirmado)
 
         # Lectura previa sin lock — validaciones básicas
         sesion_pre = SesionConteo.query.filter_by(id=sesion_id).first()

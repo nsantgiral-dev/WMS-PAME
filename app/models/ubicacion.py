@@ -77,6 +77,25 @@ class Ubicacion(db.Model):
     def es_reserva(self):
         return self.tipo_zona == 'RESERVA'
 
+    @property
+    def es_fisica(self):
+        """¿Esta ubicación le dice a alguien DÓNDE mirar?
+
+        No lo es el bucket `SIESA-GENERAL`: el sync de Siesa pone ahí todo el
+        stock que todavía no tiene un hueco real (`inventario_siesa_service.
+        _get_o_crear_ubicacion_general`) — en NB1, 4.836 SKUs, medido el
+        2026-09-23. Pintar «UBICACIÓN: SIESA-GENERAL» en grande es información
+        nula, y un «conteo pendiente AQUÍ» sobre ella no es aquí en ningún
+        lado.
+
+        Criterio por identidad (`CODIGO_GENERAL`), no por heurística (cuántos
+        SKUs tiene, si le faltan ejes de Layout): una ubicación MANUAL vieja
+        sin ejes —`A-01`— sí le dice al operario dónde mirar, y un umbral de
+        SKUs sería un número inventado. Hoy `SIESA-GENERAL` es el único bucket
+        que agrupa un almacén entero; si aparece otro, se agrega acá.
+        """
+        return self.codigo != self.CODIGO_GENERAL
+
     __table_args__ = (
         # Declarado con el nombre EXACTO que tiene en la base. Existía en
         # migraciones y no en el modelo, así que `flask db check` lo

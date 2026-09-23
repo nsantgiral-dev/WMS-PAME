@@ -70,10 +70,13 @@ async function pedirTarea() {
  * @param {{tipo: string, producto_codigo: string, producto_nombre: string, cantidad_requerida: number, cantidad_escaneada: number, ubicacion: string, referencia: string, lote: string, factor_conversion: number, unidad_empaque: string, empaques_escaneados: number, conteo_intercalado: Object|null}} t
  */
 function renderTarea(t) {
+  // El conteo tiene su propio HUD (conteo.js), compartido con el Conteo
+  // Definitivo: producto en grande, cantidad tecleable, cierres explícitos.
+  if (t.tipo === 'CONTEO') { conteoHudAbrir(t, 'OPERARIO', 'contenido-tarea'); return; }
+  if (CONTEO_HUD && CONTEO_HUD.modo === 'OPERARIO') CONTEO_HUD = null;
   _pickingTotal = t.cantidad_escaneada || 0;
-  const colores = { PICKING: '#1d4ed8', PACKING: '#7c3aed', CONTEO: '#b45309' };
+  const colores = { PICKING: '#1d4ed8', PACKING: '#7c3aed' };
   const color = colores[t.tipo] || '#333';
-  const esConteo = t.tipo === 'CONTEO';
   const esPicking = t.tipo === 'PICKING';
   const pct = t.cantidad_requerida ? Math.min((t.cantidad_escaneada / t.cantidad_requerida) * 100, 100) : 0;
   const puedeCamara = OPERARIO && OPERARIO.puede_usar_camara;
@@ -117,13 +120,7 @@ function renderTarea(t) {
           <div id="barra" style="height:100%;background:#22c55e;border-radius:4px;width:${pct}%;transition:width 0.3s;"></div>
         </div>
       </div>`
-    : esConteo
-      ? `${avisoCajasPosHtml()}<div style="background:#1a1a1a;border-radius:16px;padding:20px;margin-bottom:12px;text-align:center;">
-          <div style="font-size:13px;color:#666;">CONTEO CIEGO</div>
-          <div id="contador" style="font-size:64px;font-weight:900;">${esc(t.cantidad_escaneada || 0)}</div>
-          <div style="font-size:13px;color:#555;margin-top:6px;">Cuenta sin ver cantidad esperada</div>
-        </div>`
-      : `<div style="background:#1a1a1a;border-radius:16px;padding:20px;margin-bottom:12px;text-align:center;">
+    : `<div style="background:#1a1a1a;border-radius:16px;padding:20px;margin-bottom:12px;text-align:center;">
           <div style="font-size:13px;color:#666;">CANTIDAD</div>
           <div id="contador" style="font-size:64px;font-weight:900;">${unds}/${req}</div>
           <div style="height:8px;background:#333;border-radius:4px;margin-top:10px;">
@@ -182,16 +179,16 @@ function renderTarea(t) {
         <button onclick="cerrarCamara()" style="width:100%;padding:10px;margin-top:6px;font-size:15px;background:#333;color:#fff;border:none;border-radius:10px;cursor:pointer;">Cerrar cámara</button>
       </div>` : ''}
 
-      <button id="btn-ok" onclick="${esPicking ? 'confirmarConGuard()' : 'confirmar()'}" ${(esConteo || esPicking || (req > 0 && unds >= req)) ? '' : 'disabled'}
-        style="width:100%;padding:20px;font-size:22px;font-weight:700;background:${esPicking ? (unds >= req ? '#16a34a' : (unds > 0 ? '#b45309' : '#4b5563')) : ((esConteo || (req > 0 && unds >= req)) ? '#16a34a' : '#000')};color:#fff;border:none;border-radius:16px;cursor:pointer;opacity:${(esConteo || esPicking || (req > 0 && unds >= req)) ? 1 : 0.3};margin-bottom:10px;">
+      <button id="btn-ok" onclick="${esPicking ? 'confirmarConGuard()' : 'confirmar()'}" ${(esPicking || (req > 0 && unds >= req)) ? '' : 'disabled'}
+        style="width:100%;padding:20px;font-size:22px;font-weight:700;background:${esPicking ? (unds >= req ? '#16a34a' : (unds > 0 ? '#b45309' : '#4b5563')) : ((req > 0 && unds >= req) ? '#16a34a' : '#000')};color:#fff;border:none;border-radius:16px;cursor:pointer;opacity:${(esPicking || (req > 0 && unds >= req)) ? 1 : 0.3};margin-bottom:10px;">
         ✓ Confirmar
       </button>
 
-      ${!esConteo ? `
+      
       <button onclick="confirmarManual(${esc(t.id)}, ${esc(t.cantidad_requerida)})"
         style="width:100%;padding:14px;font-size:15px;font-weight:600;background:#1a2a1a;color:#4ade80;border:1px solid #166534;border-radius:12px;cursor:pointer;margin-bottom:10px;">
         ✓ Confirmar conteo manual
-      </button>` : ''}
+      </button>
 
       <button onclick="reportarProblema(${esc(t.id)})"
         style="width:100%;padding:14px;font-size:15px;font-weight:600;background:#7f1d1d;color:#f87171;border:none;border-radius:12px;cursor:pointer;">
@@ -330,13 +327,11 @@ async function procesarScan(codigo) {
   if (EMP_TAREA && document.getElementById('emp-hud')?.classList.contains('activo')) {
     await empProcesarEscaneo(codigo); return;
   }
-  // Conteo Definitivo (CC3) — modal de supervisor (conteo.js), aislado de
-  // TAREA_ACTUAL a propósito. Antes solo la cámara llegaba a defProcesarScan
-  // (defAbrirCamara la llama directo); el lector físico/láser pasa siempre
-  // por este dispatcher, así que sin esta rama el conteo definitivo no
-  // registraba nada con el lector — llegaba hasta el `if (!TAREA_ACTUAL)
-  // return;` de abajo y se detenía en silencio.
-  if (DEF_TAREA_ACTUAL) { await defProcesarScan(codigo); return; }
+  // HUD de conteo (conteo.js) — el del operario y el del Conteo Definitivo
+  // (modal de supervisor, aislado de TAREA_ACTUAL). El lector físico/láser
+  // pasa siempre por este dispatcher: sin esta rama el conteo definitivo no
+  // registraba nada con el lector. Va antes del `if (!TAREA_ACTUAL)`.
+  if (conteoHudActivo()) { await conteoHudScan(codigo); return; }
   if (!TAREA_ACTUAL) return;
   vibrar(); flash();
 
@@ -346,7 +341,9 @@ async function procesarScan(codigo) {
     return;
   }
 
-  // Otros tipos (CONTEO, PACKING) — flujo original
+  // PACKING — flujo original. CONTEO nunca llega acá (va por el HUD de
+  // conteo, que siempre manda total_previo); si llegara, el servidor lo
+  // rechaza en vez de sumar a ciegas.
   try {
     const r = await postConReintento('/api/mobile/escanear', {
       tarea_id: TAREA_ACTUAL.id,
@@ -456,12 +453,10 @@ function _actualizarContadorPicking(r) {
     if (factorEl) factorEl.textContent = `${unds}/${req} und totales`;
     if (r.puede_confirmar) { pkgEl.style.color = '#4ade80'; undEl.style.color = '#4ade80'; }
   } else {
-    // Vista simple (unidades sueltas o conteo)
+    // Vista simple (unidades sueltas)
     const contador = document.getElementById('contador');
     if (contador) {
-      contador.textContent = TAREA_ACTUAL.tipo === 'CONTEO'
-        ? r.cantidad_contada
-        : `${r.cantidad_actual}/${r.cantidad_requerida}`;
+      contador.textContent = `${r.cantidad_actual}/${r.cantidad_requerida}`;
     }
   }
 
@@ -552,42 +547,10 @@ async function confirmar() {
       _modalEtiquetaCanasto(r.canasto_data);
       return;
     }
-    // Conteo contaminado: Siesa se movió (ventas de caja) mientras contaba. El
-    // servidor ya descartó lo contado y dejó la MISMA tarea lista para recontar
-    // desde cero; pedirTarea() se la devuelve con el contador en 0.
-    if (r.resultado === 'RECONTAR') {
-      const overlay = document.createElement('div');
-      overlay.style.cssText = 'position:fixed;inset:0;z-index:9999;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:16px;background:#0B1117;';
-      overlay.innerHTML = `
-        <div style="font-size:80px;">🔁</div>
-        <div style="font-size:28px;font-weight:900;color:#FBBF24;text-align:center;padding:0 20px;">Recontar</div>
-        <div style="font-size:15px;color:#E5C07B;text-align:center;padding:0 30px;line-height:1.5;">
-          ${esc(r.mensaje || 'Hubo ventas mientras contabas. Vuelve a contar desde cero.')}
-        </div>`;
-      document.body.appendChild(overlay);
-      setTimeout(() => { overlay.remove(); pedirTarea(); }, 4000);
-      return;
-    }
-    // Conteos: mostrar resultado MATCH vs SEGUNDO_CONTEO antes de pedir siguiente tarea
-    if (r.resultado === 'MATCH' || r.resultado === 'SEGUNDO_CONTEO') {
-      const esMatch = r.resultado === 'MATCH';
-      const overlay = document.createElement('div');
-      overlay.style.cssText = 'position:fixed;inset:0;z-index:9999;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:16px;';
-      overlay.style.background = esMatch ? '#091F12' : '#0B1117';
-      overlay.innerHTML = `
-        <div style="font-size:80px;">${esMatch ? '✅' : '⚠️'}</div>
-        <div style="font-size:28px;font-weight:900;color:${esMatch ? '#22C55E' : '#FBBF24'};text-align:center;padding:0 20px;">
-          ${esMatch ? 'Inventario correcto' : 'Diferencia detectada'}
-        </div>
-        <div style="font-size:15px;color:${esMatch ? '#14532D' : '#415A70'};text-align:center;padding:0 30px;line-height:1.5;">
-          ${esMatch ? 'El conteo cuadra con el sistema.' : 'Se asignó un segundo conteo\npara verificación.'}
-        </div>`;
-      document.body.appendChild(overlay);
-      setTimeout(() => { overlay.remove(); pedirTarea(); }, esMatch ? 2000 : 3000);
-    } else {
-      alerta(_avisoBackorder || '¡Tarea completada!', 'exito');
-      setTimeout(pedirTarea, _avisoBackorder ? 3500 : 1500);
-    }
+    // (Los resultados de un CONTEO —MATCH, recontar, segundo conteo— los
+    // muestra el HUD de conteo, `_conteoResultadoOperario` en conteo.js.)
+    alerta(_avisoBackorder || '¡Tarea completada!', 'exito');
+    setTimeout(pedirTarea, _avisoBackorder ? 3500 : 1500);
   } catch (e) {
     if (e.status) {
       // Error del servidor (400/500) — mostrar mensaje real, no guardar offline

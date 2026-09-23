@@ -82,6 +82,11 @@ OPERATIVAS = [
     # más abajo: el DELETE de `tareas_picking` fallaba por FK y el bucle lo
     # imprimía como un aviso. Lo encontró el trinquete de orden, no una
     # corrida — y una corrida solo lo habría mostrado el día del corte.
+    #
+    # `novedades_conteo` («mercancía sin código» que un operario vio al
+    # contar, m031hud) apunta a `sesiones_conteo`: va ANTES, por la misma
+    # razón. Es registro del ensayo, como la sesión que la originó.
+    'novedades_conteo',
     'sesiones_conteo',
     'tareas_picking',
     'tareas_devolucion',

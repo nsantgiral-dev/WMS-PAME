@@ -146,7 +146,8 @@ def _cc1(tienda, fisico):
     creado = ConteoService.crear_conteo_manual(tienda['almacen'].id, SKU)
     cc1 = SesionConteo.query.filter_by(codigo=creado['codigos'][0]).one()
     ConteoService.obtener_tarea_operario(cc1.id, tienda['a'].id)
-    r1 = ConteoService.registrar_conteo(cc1.id, tienda['a'].id, fisico)
+    # El operario DECLARA lo que contó, cero incluido («revisé y no hay»).
+    r1 = ConteoService.registrar_conteo(cc1.id, tienda['a'].id, fisico, cero_confirmado=True)
     return cc1.id, r1
 
 
@@ -154,7 +155,7 @@ def _cc2(tienda, r1, fisico):
     from app.services.conteo_service import ConteoService
     cc2_id = r1['segundo_conteo_id']
     ConteoService.obtener_tarea_operario(cc2_id, tienda['b'].id)
-    return ConteoService.registrar_conteo(cc2_id, tienda['b'].id, fisico)
+    return ConteoService.registrar_conteo(cc2_id, tienda['b'].id, fisico, cero_confirmado=True)
 
 
 def _jobs(sesion_id):

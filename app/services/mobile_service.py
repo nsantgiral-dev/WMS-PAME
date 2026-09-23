@@ -507,7 +507,12 @@ class MobileService:
         # asignamos ahora para que lo haga al terminar el picking — sin viaje extra.
         # Respetar capacidad_diaria_conteo del operario (0 = sin límite).
         conteo_intercalado = None
-        if tarea.ubicacion_id:
+        # Solo sobre una ubicación FÍSICA: «hay un conteo pendiente AQUÍ» en
+        # `SIESA-GENERAL` —donde vive todo el stock sin layout— no es aquí en
+        # ningún lado. Le colgaba al picker un conteo cualquiera del almacén
+        # y le gastaba el cupo diario (`Ubicacion.es_fisica`).
+        _ubic_tarea = db.session.get(Ubicacion, tarea.ubicacion_id) if tarea.ubicacion_id else None
+        if _ubic_tarea is not None and _ubic_tarea.es_fisica:
             # Una sola query: capacidad del operario + conteos de hoy juntos
             from sqlalchemy import text as _text
             # `capacidad_diaria_conteo` es un CUPO DIARIO. Con corte UTC se
@@ -549,7 +554,7 @@ class MobileService:
                 from sqlalchemy.orm import joinedload as _jl_cm
                 # El almacén es el de la ubicación que se está pickeando: el
                 # conteo intercalado es, por definición, de ese mismo hueco.
-                _ubic_interc = db.session.get(Ubicacion, tarea.ubicacion_id)
+                _ubic_interc = _ubic_tarea
                 conteo_mismo_lugar = (SesionConteo.query
                     .options(_jl_cm(SesionConteo.producto))
                     .filter(
@@ -696,9 +701,9 @@ class MobileService:
             'id': c.id,
             'tipo': 'CONTEO',
             'prioridad': 1,
-            'ubicacion': c.ubicacion.codigo if c.ubicacion else '',
-            'producto_codigo': c.producto.codigo if c.producto else '',
-            'producto_nombre': c.producto.nombre if c.producto else '',
+            # ubicacion, ubicacion_fisica, producto_*, unidad_empaque,
+            # factor_conversion: lo que pinta el HUD, definido una vez.
+            **ConteoService.vista_hud(c),
             'cantidad_requerida': None,
             'cantidad_escaneada': c.cantidad_fisica or 0,
             'estado': c.estado,
@@ -802,10 +807,82 @@ class MobileService:
         return codigo_limpio == MobileService._normalizar(producto.codigo_barras_empaque)
 
     @staticmethod
+    def _unidades_del_escaneo(producto, codigo_limpio: str, cantidad: int):
+        """Cuántas unidades representa UN escaneo: `(es_empaque, factor, unidades)`.
+
+        **Una política, una función** para picking y conteo. El EAN del
+        empaque (`codigo_barras_empaque`, factor > 1) vale `cantidad × factor`;
+        cualquier otro código válido vale `cantidad` — que ya llega en unidades
+        cuando el PWA resolvió el empaque por `/api/empaques/scan`
+        (`resolverEscaneoEmpaque`). El conteo sumaba `cantidad` a secas: una
+        caja de 12 escaneada por su EAN contaba 1.
+        """
+        es_empaque = MobileService._es_escaneo_empaque(producto, codigo_limpio)
+        factor = producto.factor_conversion or 1
+        return es_empaque, factor, (cantidad * factor if es_empaque else cantidad)
+
+    @staticmethod
+    def _entero_no_negativo(valor, campo: str) -> int:
+        """Un entero ≥ 0 que llega por JSON, o `ValueError`. Un booleano no es
+        un número (en Python `True == 1`)."""
+        if isinstance(valor, bool) or valor is None:
+            raise ValueError(f'{campo} debe ser un número entero')
+        if isinstance(valor, float) and valor.is_integer():
+            valor = int(valor)
+        if isinstance(valor, str) and valor.strip().isdigit():
+            valor = int(valor.strip())
+        if not isinstance(valor, int) or valor < 0:
+            raise ValueError(f'{campo} debe ser un número entero mayor o igual a 0')
+        return valor
+
+    @staticmethod
+    def _sesion_conteo_para_contar(tarea_id: int, operario_id: int) -> SesionConteo:
+        """La sesión bajo `FOR UPDATE`, si ESTE operario puede escribirle lo
+        contado. Lo comparten el escaneo y el total tecleado: las dos puertas
+        escriben `cantidad_fisica`."""
+        from sqlalchemy.orm import selectinload as _sl_conteo
+        sesion = (SesionConteo.query
+                  .options(_sl_conteo(SesionConteo.producto))
+                  .filter_by(id=tarea_id)
+                  .with_for_update()
+                  .first())
+        if not sesion:
+            raise ValueError('Sesión de conteo no encontrada')
+        # Ownership + estado — mismo criterio que `ConteoService.registrar_conteo`
+        # y `bloquear_conteo`. Sin esto, cualquier operario de almacén podía
+        # escribir en el sesion_id de OTRO (rompiendo el double-blind de
+        # CC2/CC3) o en una sesión ya cerrada (MATCH, DESCUADRE, AJUSTADO — ya
+        # enviada a Siesa), sobrescribiendo cantidad_fisica en silencio.
+        if sesion.operario_id and sesion.operario_id != operario_id:
+            raise ValueError('Esta sesión de conteo no está asignada a ti')
+        if sesion.estado not in (EstadoConteo.PENDIENTE, EstadoConteo.EN_PROCESO):
+            raise ValueError(f'No se puede contar en un conteo con estado {sesion.estado}')
+        # CC3 (conteo definitivo) nace sin dueño a propósito — sin este
+        # chequeo, cualquier operario podía "tomarlo" escaneando directo
+        # aquí sin pasar por /api/conteo/definitivos, que sí exige
+        # supervisor/admin/jefe_almacén.
+        ConteoService.verificar_puede_contar(sesion, operario_id)
+        return sesion
+
+    @staticmethod
+    def fijar_total_conteo(operario_id: int, tarea_id: int, total_acumulado) -> dict:
+        """Fija lo contado hasta ahora sin escanear: el operario tecleó una
+        cantidad (una pila de 400 cuadernos no se escanea de a uno) o deshizo
+        el último movimiento. El PWA manda el TOTAL, nunca un incremento: un
+        reintento de red escribe lo mismo dos veces, no suma dos veces."""
+        total = MobileService._entero_no_negativo(total_acumulado, 'total_acumulado')
+        sesion = MobileService._sesion_conteo_para_contar(tarea_id, operario_id)
+        sesion.cantidad_fisica = total
+        db.session.commit()
+        return {'exito': True, 'tipo': 'CONTEO', 'cantidad_contada': total,
+                'mensaje': f'Contando: {total} unidades'}
+
+    @staticmethod
     def procesar_escaneo(operario_id: int, tarea_id: int,
                          tipo: str, codigo: str, cantidad: int = 1,
                          lpn_codigo: str = None,
-                         total_acumulado: int = None):
+                         total_acumulado: int = None,
+                         total_previo: int = None):
         """
         Procesa un escaneo — funciona con cámara o láser Bluetooth.
         Valida que el código escaneado corresponde al producto de la tarea.
@@ -816,6 +893,14 @@ class MobileService:
 
         lpn_codigo: si se provee y la tarea es de TRASLADO, vincula el LPN
                     automáticamente al traslado y lo marca EN_TRANSITO.
+
+        total_previo (solo CONTEO, obligatorio): lo que el PWA tenía contado
+                    ANTES de este escaneo. El servidor fija
+                    `total_previo + unidades(código)`: un reintento del mismo
+                    escaneo manda el mismo `total_previo` y escribe lo mismo —
+                    nunca suma dos veces—, y las unidades de una caja las
+                    decide el servidor (`_unidades_del_escaneo`), que conoce
+                    el factor aunque el PWA no haya podido resolverlo.
         """
         codigo_limpio = MobileService._normalizar(codigo)
 
@@ -877,9 +962,8 @@ class MobileService:
                 })
 
             # Detectar si escanearon el empaque (caja/paca) o la unidad suelta
-            es_empaque = MobileService._es_escaneo_empaque(producto, codigo_limpio)
-            factor = producto.factor_conversion or 1
-            unidades_este_scan = cantidad * factor if es_empaque else cantidad
+            es_empaque, factor, unidades_este_scan = MobileService._unidades_del_escaneo(
+                producto, codigo_limpio, cantidad)
 
             if total_acumulado is not None:
                 # Idempotente: el cliente lleva el contador. MAX evita que un paquete
@@ -1056,53 +1140,55 @@ class MobileService:
             }
 
         elif tipo == 'CONTEO':
-            # WITH FOR UPDATE previene que dos workers procesen el mismo escaneo simultáneamente.
-            # Idempotencia: el cliente envía total_acumulado → servidor usa SET en vez de +=.
-            # Sin total_acumulado (legacy), el debounce de 5s cubre retries rápidos de red.
-            from sqlalchemy.orm import selectinload as _sl_conteo
-            sesion = (SesionConteo.query
-                      .options(_sl_conteo(SesionConteo.producto))
-                      .filter_by(id=tarea_id)
-                      .with_for_update()
-                      .first())
-            if not sesion:
-                raise ValueError('Sesión de conteo no encontrada')
-
-            # Ownership + estado — mismo criterio que `ConteoService.registrar_conteo`
-            # y `reportar_problema` (routes/mobile.py). Sin esto, cualquier operario
-            # de almacén podía escanear hacia el sesion_id de OTRO (rompiendo el
-            # double-blind de CC2/CC3) o hacia una sesión ya cerrada (MATCH,
-            # DESCUADRE, AJUSTADO — ya enviada a Siesa), sobrescribiendo
-            # cantidad_fisica en silencio.
-            if sesion.operario_id and sesion.operario_id != operario_id:
-                raise ValueError('Esta sesión de conteo no está asignada a ti')
-            if sesion.estado not in (EstadoConteo.PENDIENTE, EstadoConteo.EN_PROCESO):
-                raise ValueError(f'No se puede escanear en un conteo con estado {sesion.estado}')
-            # CC3 (conteo definitivo) nace sin dueño a propósito — sin este
-            # chequeo, cualquier operario podía "tomarlo" escaneando directo
-            # aquí sin pasar por /api/conteo/definitivos, que sí exige
-            # supervisor/admin/jefe_almacén.
-            ConteoService.verificar_puede_contar(sesion, operario_id)
+            # El PWA manda SIEMPRE lo que tenía antes del escaneo, y el
+            # servidor FIJA el total — no suma sobre lo guardado. La rama vieja
+            # hacía `cantidad_fisica += cantidad`: un reintento de red
+            # (`postConReintento`) contaba dos veces, y el debounce de 5 s que
+            # decía cubrirlo nunca se escribía para CONTEO (solo picking guarda
+            # en `_SCAN_DEBOUNCE`). Sin `total_previo` es una PWA vieja en
+            # caché: se rechaza con un mensaje que dice qué hacer, en vez de
+            # sumar a ciegas.
+            if total_previo is None:
+                raise ValueError(
+                    'Esta pantalla de conteo está desactualizada: cerrá y volvé '
+                    'a abrir la app para seguir contando (lo que ya contaste '
+                    'quedó guardado).')
+            previo = MobileService._entero_no_negativo(total_previo, 'total_previo')
+            cantidad_scan = MobileService._entero_no_negativo(cantidad, 'cantidad')
+            if cantidad_scan < 1:
+                raise ValueError('cantidad debe ser al menos 1')
+            sesion = MobileService._sesion_conteo_para_contar(tarea_id, operario_id)
 
             producto = sesion.producto
             if codigo_limpio not in MobileService._codigos_validos(producto):
                 raise ValueError(f'Producto incorrecto — escanea {producto.codigo}')
 
-            if total_acumulado is not None:
-                # Modo idempotente: el cliente lleva el contador — reintento seguro
-                sesion.cantidad_fisica = total_acumulado
-            else:
-                # Modo legacy: += (protegido por debounce TTL 5s)
-                sesion.cantidad_fisica = (sesion.cantidad_fisica or 0) + cantidad
+            es_empaque, factor, unidades = MobileService._unidades_del_escaneo(
+                producto, codigo_limpio, cantidad_scan)
+            if sesion.cantidad_fisica is not None and sesion.cantidad_fisica != previo:
+                # El PWA manda lo que el operario ve en pantalla. Si difiere de
+                # lo guardado es un escaneo cuya respuesta se perdió y que el
+                # operario no repitió: manda lo que él vio.
+                logger.info(
+                    f'[CONTEO] {sesion.codigo}: total_previo={previo} ≠ guardado='
+                    f'{sesion.cantidad_fisica} — se fija sobre lo que ve el operario')
+            nuevo = previo + unidades
+            sesion.cantidad_fisica = nuevo
+            _unidad = (producto.unidad_empaque or 'EMPAQUE').upper()
             db.session.commit()
 
             return {
                 'exito': True,
                 'tipo': 'CONTEO',
                 'codigo_escaneado': codigo,
-                'cantidad_contada': sesion.cantidad_fisica,
+                'cantidad_contada': nuevo,
+                'unidades_este_scan': unidades,
+                'es_empaque': es_empaque,
+                'factor_conversion': factor,
+                'unidad_empaque': _unidad,
                 'puede_confirmar': True,
-                'mensaje': f'Contando: {sesion.cantidad_fisica} unidades'
+                'mensaje': (f'+{unidades} ({_unidad.lower()}) → {nuevo}' if es_empaque
+                            else f'Contando: {nuevo} unidades'),
             }
 
         raise ValueError(f'Tipo de tarea desconocido: {tipo}')
@@ -1110,8 +1196,16 @@ class MobileService:
     @staticmethod
     def confirmar_tarea(operario_id: int, tarea_id: int,
                         tipo: str, items_escaneados: list = None,
-                        cantidad_manual: int = None):
-        """Confirma la tarea completa."""
+                        cantidad_manual: int = None,
+                        total_contado: int = None,
+                        cero_confirmado: bool = False):
+        """Confirma la tarea completa.
+
+        CONTEO: `total_contado` es lo que el operario declara al apretar «ya
+        revisé todo — contar N». Obligatorio: nunca se deriva de lo guardado
+        ni de un default (`ConteoService.exigir_cantidad_declarada`). Un cero
+        exige `cero_confirmado`.
+        """
         if tipo == 'PICKING':
             tarea = TareaPicking.query.get(tarea_id)
             if not tarea:
@@ -1218,12 +1312,16 @@ class MobileService:
             sesion = SesionConteo.query.get(tarea_id)
             if not sesion:
                 raise ValueError('Sesión de conteo no encontrada')
-            # cantidad_fisica None significa que no escaneó nada → conteo = 0 (ubicación vacía)
-            cantidad = sesion.cantidad_fisica if sesion.cantidad_fisica is not None else 0
+            # Lo que el operario DECLARA, no lo que quedó guardado. Antes:
+            # «cantidad_fisica None significa que no escaneó nada → conteo = 0»
+            # — un «no lo encontré» cerraba en cero, CC1 = CC2 = 0 coincidían y
+            # Siesa se ajustaba a cero. La validación (None, negativos, el cero
+            # sin confirmar) vive en `registrar_conteo`, por donde pasa todo.
             return ConteoService.registrar_conteo(
                 sesion_id=tarea_id,
                 operario_id=operario_id,
-                cantidad_fisica=cantidad
+                cantidad_fisica=total_contado,
+                cero_confirmado=bool(cero_confirmado),
             )
 
         raise ValueError(f'Tipo desconocido: {tipo}')

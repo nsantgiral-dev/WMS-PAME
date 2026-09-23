@@ -119,8 +119,13 @@ def veredicto_cadena(raiz: SesionConteo) -> str:
       denominador, y la exactitud de «otros tipos» salía inflada por
       construcción.
     - **SIN_VEREDICTO** — todo lo demás: cancelada, pendiente, en curso,
-      omitida (CC2/CC3 cancelado por `omitir-segundo`), `BLOQUEADO` (estado
-      legado que hoy nadie escribe). Una raíz CANCELADA no tiene veredicto
+      omitida (CC2/CC3 cancelado por `omitir-segundo`), y **bloqueada** —
+      cualquier eslabón en `BLOQUEADO`: el operario reportó «no lo encontré»
+      u otro problema desde el HUD (`ConteoService.bloquear_conteo`) y el
+      líder no decidió todavía. **No es un estado legado**: el docstring
+      anterior decía «que hoy nadie escribe» y `/api/mobile/reportar-problema`
+      lo escribía en cada reporte. «No lo encontré» NO es un cero ni un
+      error: no hay con qué juzgar el inventario. Una raíz CANCELADA no tiene veredicto
       aunque haya llegado a DESCUADRE: el supervisor decidió no creerle, y el
       reporte no le enmienda la plana. El porqué, en `motivo_sin_veredicto`.
     """
@@ -162,10 +167,17 @@ def motivo_sin_veredicto(raiz: SesionConteo) -> str:
     """
     if raiz.estado == EstadoConteo.CANCELADO:
         return 'cancelada'
-    if raiz.estado == EstadoConteo.BLOQUEADO:
-        return 'bloqueado_legado'
     hijo = raiz.hijo_conteo
     descendientes = [n for n in (hijo, hijo.hijo_conteo if hijo else None) if n is not None]
+    bloqueado = next((n for n in [raiz] + descendientes
+                      if n.estado == EstadoConteo.BLOQUEADO), None)
+    if bloqueado is not None:
+        # Esperando al líder (reabrir o cancelar). «No lo encontré» se separa
+        # del resto: sin layout es el caso frecuente y no es un cero.
+        from app.models.conteo import MotivoBloqueoConteo
+        return ('no_encontrado'
+                if bloqueado.motivo_bloqueo == MotivoBloqueoConteo.NO_ENCONTRADO
+                else 'bloqueado')
     if any(n.estado == EstadoConteo.CANCELADO for n in descendientes):
         return 'omitida'
     if hijo is not None and raiz.estado in _ESTADOS_RESUELTOS_A_MANO:

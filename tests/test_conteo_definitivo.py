@@ -146,6 +146,7 @@ class TestSoloSupervisorPuedeTomarlo:
 
         r = client.post('/api/mobile/escanear', json={
             'tarea_id': cc3_id, 'tipo': 'CONTEO', 'codigo': 'CC3ITEM', 'cantidad': 1,
+            'total_previo': 0,
         }, headers=_auth(tok))
         assert r.status_code == 400, r.get_json()
         assert 'supervisor' in r.get_json()['error'].lower()
@@ -172,6 +173,7 @@ class TestFlujoCompletoDelSupervisor:
         # Escaneo válido incrementa cantidad_fisica.
         r = client.post('/api/mobile/escanear', json={
             'tarea_id': cc3_id, 'tipo': 'CONTEO', 'codigo': 'CC3ITEM', 'cantidad': 1,
+            'total_previo': 0,
         }, headers=_auth(tok))
         assert r.status_code == 200, r.get_json()
         assert r.get_json()['cantidad_contada'] == 1
@@ -179,6 +181,7 @@ class TestFlujoCompletoDelSupervisor:
         # Confirmar propaga el resultado a la raíz (CC1), no a CC3.
         r = client.post('/api/mobile/confirmar', json={
             'tarea_id': cc3_id, 'tipo': 'CONTEO', 'items_escaneados': [],
+            'total_contado': 1,
         }, headers=_auth(tok))
         assert r.status_code == 200, r.get_json()
         body = r.get_json()

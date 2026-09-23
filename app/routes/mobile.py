@@ -104,7 +104,8 @@ def escanear():
             codigo=data['codigo'],
             cantidad=data.get('cantidad', 1),
             lpn_codigo=data.get('lpn_codigo'),
-            total_acumulado=data.get('total_acumulado'),  # idempotencia conteo
+            total_acumulado=data.get('total_acumulado'),  # idempotencia picking/packing
+            total_previo=data.get('total_previo'),        # idempotencia conteo
         )
         return jsonify(resultado), 200
     except ValueError as e:
@@ -137,7 +138,9 @@ def confirmar_tarea():
             tarea_id=data['tarea_id'],
             tipo=data['tipo'],
             items_escaneados=data.get('items_escaneados', []),
-            cantidad_manual=data.get('cantidad_manual')
+            cantidad_manual=data.get('cantidad_manual'),
+            total_contado=data.get('total_contado'),
+            cero_confirmado=data.get('cero_confirmado') is True,
         )
         return jsonify(resultado), 200
     except ValueError as e:
@@ -308,7 +311,10 @@ def sync_offline():
                 operario_id=operario_id,
                 tarea_id=item['tarea_id'],
                 tipo=item['tipo'],
-                items_escaneados=item.get('items_escaneados', [])
+                items_escaneados=item.get('items_escaneados', []),
+                # Un conteo confirmado sin señal viaja con lo que se declaró.
+                total_contado=item.get('total_contado'),
+                cero_confirmado=item.get('cero_confirmado') is True,
             )
             resultados.append({
                 'tarea_id': item['tarea_id'],
@@ -346,7 +352,6 @@ def reportar_problema():
     Motivos: UBICACION_VACIA | FALTANTE | MERCANCIA_AVERIADA | PRODUCTO_INCORRECTO
     """
     from app.extensions import db
-    from app.models.conteo import SesionConteo, EstadoConteo
 
     operario_id = _operario_id()
     data = request.get_json() or {}
@@ -382,33 +387,23 @@ def reportar_problema():
             return jsonify({'error': 'Error interno al reportar problema'}), 500
 
     # ── CONTEO ───────────────────────────────────────────────────
+    # La política (motivos válidos, dueño, estado) vive en el servicio.
     if tipo == 'CONTEO':
-        sesion = SesionConteo.query.get(tarea_id)
-        if not sesion:
-            return jsonify({'error': f'Sesión de conteo {tarea_id} no encontrada'}), 404
-        # Solo el operario asignado puede reportar problema en su propio conteo
-        if sesion.operario_id != operario_id:
-            return jsonify({'error': 'Esta sesión de conteo no te está asignada'}), 403
-        # Guard estado: solo bloquear conteos activos (previene revertir AJUSTADO → BLOQUEADO)
-        if sesion.estado not in (EstadoConteo.PENDIENTE, EstadoConteo.EN_PROCESO):
-            return jsonify({
-                'error': f'No se puede reportar problema en un conteo con estado {sesion.estado}'
-            }), 409
-
+        from app.services.conteo_service import ConteoService
         try:
-            sesion.estado = EstadoConteo.BLOQUEADO
-            sesion.motivo_edicion = f'[{motivo}] {observaciones or ""}'.strip()
-            db.session.commit()
+            return jsonify(ConteoService.bloquear_conteo(
+                sesion_id=tarea_id, operario_id=operario_id,
+                motivo=data.get('motivo') or '', observaciones=observaciones)), 200
+        except LookupError as e:
+            return jsonify({'error': str(e)}), 404
+        except PermissionError as e:
+            return jsonify({'error': str(e)}), 403
+        except ValueError as e:
+            return jsonify({'error': str(e)}), 409
         except Exception as e:
             db.session.rollback()
             current_app.logger.error(f'[MOBILE] reportar_problema CONTEO error: {e}', exc_info=True)
             return jsonify({'error': 'Error al bloquear sesión de conteo — reintenta'}), 500
-        return jsonify({
-            'ok': True,
-            'mensaje': 'Problema de conteo reportado — el jefe revisará la ubicación',
-            'motivo': motivo,
-            'tarea_id': tarea_id,
-        }), 200
 
     # ── PACKING ──────────────────────────────────────────────────
     if tipo == 'PACKING':
@@ -448,6 +443,52 @@ def reportar_problema():
         }), 200
 
     return jsonify({'error': f'Tipo de tarea no reconocido: {tipo}'}), 400
+
+
+@mobile_bp.route('/conteo/total', methods=['POST'])
+@jwt_required()
+def conteo_fijar_total():
+    """El operario tecleó una cantidad o deshizo el último movimiento en el
+    HUD de conteo: el PWA manda el TOTAL (`total_acumulado`), el servidor lo
+    fija. Idempotente: reintentar escribe lo mismo."""
+    operario_id = _operario_id()
+    rechazo = _verificar_rol_para_tipo(operario_id, 'CONTEO')
+    if rechazo:
+        return rechazo
+    data = request.get_json() or {}
+    if 'tarea_id' not in data or 'total_acumulado' not in data:
+        return jsonify({'error': 'tarea_id y total_acumulado son requeridos'}), 400
+    try:
+        return jsonify(MobileService.fijar_total_conteo(
+            operario_id, data['tarea_id'], data['total_acumulado'])), 200
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+
+
+@mobile_bp.route('/conteo/sin-codigo', methods=['POST'])
+@jwt_required()
+def conteo_mercancia_sin_codigo():
+    """«Encontré mercancía sin código» desde el HUD de conteo. Queda para el
+    líder y no toca el conteo en curso."""
+    from app.services.conteo_service import ConteoService
+    operario_id = _operario_id()
+    rechazo = _verificar_rol_para_tipo(operario_id, 'CONTEO')
+    if rechazo:
+        return rechazo
+    data = request.get_json() or {}
+    if not data.get('tarea_id'):
+        return jsonify({'error': 'tarea_id es requerido'}), 400
+    try:
+        nov = ConteoService.registrar_novedad_sin_codigo(
+            data['tarea_id'], operario_id, data.get('descripcion') or '')
+    except LookupError as e:
+        return jsonify({'error': str(e)}), 404
+    except PermissionError as e:
+        return jsonify({'error': str(e)}), 403
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    return jsonify({'ok': True, 'novedad_id': nov.id,
+                    'mensaje': 'Anotado para el líder — seguí contando'}), 200
 
 
 @mobile_bp.route('/faltante-info', methods=['POST'])
