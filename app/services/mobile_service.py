@@ -676,27 +676,27 @@ class MobileService:
         _clave_doc = clave_en_rango(
             RANGO_PEDIDO_CHICO,
             zlib.crc32(tarea.referencia_documento.encode('utf-8')) & 0x7FFFFFFF)
+        # El reintento va DESPUÉS de soltar el lock, no dentro del `with`: el
+        # lock vive en una conexión propia (app/utils/lock.py), así que un
+        # reintento anidado que volviera a este mismo documento chocaría
+        # contra el lock que todavía sostiene su propio llamador.
         with advisory_lock(_clave_doc, f'pedido_chico:{tarea.referencia_documento}') as _tomado:
-            if not _tomado:
-                db.session.rollback()
-                if _intento >= _MAX_REINTENTOS:
-                    return None
-                return MobileService.get_tarea_actual(operario_id, _intento + 1)
-            _ya_lo_tiene_otro = (
-                TareaPicking.query
-                .filter(
-                    TareaPicking.referencia_documento == tarea.referencia_documento,
-                    TareaPicking.operario_id.isnot(None),
-                    TareaPicking.operario_id != operario_id,
+            if _tomado:
+                _ya_lo_tiene_otro = (
+                    TareaPicking.query
+                    .filter(
+                        TareaPicking.referencia_documento == tarea.referencia_documento,
+                        TareaPicking.operario_id.isnot(None),
+                        TareaPicking.operario_id != operario_id,
+                    )
+                    .first()
                 )
-                .first()
-            )
-            if _ya_lo_tiene_otro:
-                db.session.rollback()
-                if _intento >= _MAX_REINTENTOS:
-                    return None
-                return MobileService.get_tarea_actual(operario_id, _intento + 1)
-            return _finalizar_asignacion()
+                if not _ya_lo_tiene_otro:
+                    return _finalizar_asignacion()
+            db.session.rollback()
+        if _intento >= _MAX_REINTENTOS:
+            return None
+        return MobileService.get_tarea_actual(operario_id, _intento + 1)
 
     @staticmethod
     def _conteo_a_dict(c: SesionConteo) -> dict:
