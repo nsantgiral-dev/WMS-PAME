@@ -815,11 +815,16 @@ def cancelar_conteo(id):
     eslabón elegido dejaba a la raíz esperando un conteo que ya no iba a
     llegar, y el hueco trabado para siempre.
     """
+    from app.models.usuario import Usuario
     from app.services.conteo_service import CadenaNoCancelable
     try:
         uid = int(get_jwt_identity())
     except (TypeError, ValueError):
         return jsonify({'error': 'Token inválido'}), 401
+    # El servicio lo vuelve a exigir: esto protege la ruta, aquello la operación.
+    u = db.session.get(Usuario, uid)
+    if not u or u.rol not in Roles.SUPERVISION:
+        return jsonify({'error': 'Sin permiso'}), 403
     try:
         sesion = ConteoService.cancelar_cadena(
             id, uid, (request.get_json() or {}).get('motivo', ''))
@@ -905,11 +910,16 @@ def listar_recogido_sin_despachar():
 def declarar_devuelto_al_estante():
     """El líder declara que la mercancía recogida de un pedido volvió al
     estante. Body: `{pedido, almacen_id, nota?}`. No mueve inventario."""
+    from app.models.usuario import Usuario
     from app.services.picking_service import PickingService
     try:
         uid = int(get_jwt_identity())
     except (TypeError, ValueError):
         return jsonify({'error': 'Token inválido'}), 401
+    # El servicio lo vuelve a exigir: esto protege la ruta, aquello la operación.
+    u = db.session.get(Usuario, uid)
+    if not u or u.rol not in Roles.SUPERVISION:
+        return jsonify({'error': 'Sin permiso'}), 403
     data = request.get_json() or {}
     try:
         r = PickingService.declarar_devuelto_al_estante(
