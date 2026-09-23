@@ -147,6 +147,9 @@ class TestCancelarCualquierMiembroCancelaLaCadena:
         cc2 = r2['sesion_id']
         r = _cancelar(app, client, tienda['supervisor'], cc2)
         assert r.status_code == 409, r.get_json()
+        # El 409 saldría igual por «nada abierto»; lo que se exige es que el
+        # líder sepa POR QUÉ: el ajuste está en vuelo, no la cadena cerrada.
+        assert 'en vuelo' in r.get_json()['error']
         assert (_s(db, cc1).estado, _s(db, cc2).estado) == ('AJUSTANDO', 'DESCUADRE')
 
     def test_una_cadena_cerrada_no_se_cancela(self, app, client, db, siesa, tienda):
