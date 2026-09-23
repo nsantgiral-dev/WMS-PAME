@@ -216,6 +216,19 @@ function _bloqueoAjusteHtml(s) {
   return `<div style="font-size:11px;color:#F87171;border-left:3px solid #F87171;padding:4px 8px;margin-bottom:10px;">⛔ ${esc(s.bloqueo_ajuste)}</div>`;
 }
 
+/** Por qué un ajuste aprobable no salió solo (tope en pesos, sin costo) y si
+ *  la cadena se cerró por tolerancia. Lo dice el servicio
+ *  (`ConteoService.motivo_no_sale_solo`), la pantalla solo lo pinta. */
+function _aprobacionAjusteHtml(s) {
+  if (s.estado !== 'DESCUADRE' || s.bloqueo_ajuste) return '';
+  const partes = [];
+  if (s.ajuste_por_tolerancia) partes.push('Diferencia dentro de tolerancia: se aceptó con el primer conteo, sin segundo conteo.');
+  if (s.no_sale_solo && s.no_sale_solo.mensaje) partes.push(`No salió solo: ${s.no_sale_solo.mensaje}.`);
+  if (s.valor_ajuste != null) partes.push(`Valor del ajuste: $${Number(s.valor_ajuste).toLocaleString('es-CO', { maximumFractionDigits: 0 })}.`);
+  if (!partes.length) return '';
+  return `<div style="font-size:11px;color:#FBBF24;border-left:3px solid #FBBF24;padding:4px 8px;margin-bottom:10px;">✋ ${esc(partes.join(' '))}</div>`;
+}
+
 /**
  * Build the detailed action card for a conteo requiring admin review.
  * @param {Object} s - Conteo session object with segundo_conteo/tercer_conteo.
@@ -295,6 +308,7 @@ function _renderCardAccion(s) {
           : ''}
     </div>
     ${_bloqueoAjusteHtml(s)}
+    ${_aprobacionAjusteHtml(s)}
 
     <div style="display:flex;gap:6px;flex-wrap:wrap;">
       ${s.estado !== 'AJUSTADO' && s.estado !== 'AJUSTANDO'
@@ -1143,6 +1157,7 @@ function conteoAbrirAjuste(s) {
     ${hijo && !coinciden ? `<div style="color:#f87171;font-size:11px;text-align:center;">⚠ Los operarios no coinciden — se usará el 2do conteo como referencia</div>` : ''}
     ${coinciden ? `<div style="color:#4ade80;font-size:11px;text-align:center;">✓ Ambos operarios confirmaron el mismo valor</div>` : ''}
     ${_bloqueoAjusteHtml(s)}
+    ${_aprobacionAjusteHtml(s)}
   `;
 
   m.style.display = 'flex';
@@ -1332,6 +1347,11 @@ function conteoHudHtml(h) {
       <div style="background:${def ? '#78350f' : '#b45309'};color:#fff;border-radius:12px;padding:10px 16px;font-size:20px;font-weight:700;text-align:center;margin-bottom:14px;">${def ? '🎯 CONTEO DEFINITIVO' : 'CONTEO'}</div>
 
       ${avisoCajasPosHtml()}
+
+      ${h.aviso ? `<div id="chud-aviso" style="background:#1a1a1a;border:2px solid #FBBF24;border-radius:14px;padding:14px;margin-bottom:12px;text-align:center;">
+        <div style="font-size:22px;font-weight:900;color:#FBBF24;">🔁 Recontá este producto con cuidado</div>
+        <div style="font-size:14px;color:#FDE68A;margin-top:6px;line-height:1.4;">${esc(h.aviso)}</div>
+      </div>` : ''}
 
       <div style="background:#111;border:1px solid #333;border-radius:16px;padding:18px;margin-bottom:12px;">
         <div style="font-size:12px;color:#666;letter-spacing:1px;">CONTÁ ESTE PRODUCTO</div>
@@ -1599,6 +1619,13 @@ async function conteoHudConfirmar() {
   try {
     const r = await post('/api/mobile/confirmar', payload);
     if (r.error) { alerta(typeof r.error === 'object' ? r.error.mensaje : r.error, 'error'); restaurar(); return; }
+    // Fuera de tolerancia: el MISMO operario recuenta, a ciegas. La tarea es la
+    // misma y el servidor ya descartó lo contado: el HUD se queda y el
+    // contador vuelve a cero, con el aviso arriba. Nada del teórico viaja.
+    if (r.resultado === 'RECONTAR_TU' && h.modo !== 'DEFINITIVO') {
+      _conteoHudReiniciar(h, r.mensaje);
+      return;
+    }
     beepDone();
     _conteoHudTerminar(h, r);
   } catch (e) {
@@ -1607,6 +1634,19 @@ async function conteoHudConfirmar() {
     guardarOffline(payload);
     _conteoHudTerminar(h, null);
   }
+}
+
+/** «Recontá con cuidado»: mismo HUD, contador en cero y el aviso arriba. */
+function _conteoHudReiniciar(h, mensaje) {
+  if (CONTEO_HUD !== h) return;
+  h.total = 0;
+  h.pasos = [];
+  h.ultimo = '';
+  h.ocupado = false;
+  h.aviso = mensaje || 'Revisá otra vez todos los sitios donde puede estar y contá desde cero.';
+  beepError();
+  vibrar();
+  conteoHudPintar();
 }
 
 /** Cierra el HUD tras confirmar o bloquear y sigue con lo que toca. */
@@ -1638,6 +1678,35 @@ function _conteoResultadoOperario(r) {
       </div>`;
     document.body.appendChild(overlay);
     setTimeout(() => { overlay.remove(); pedirTarea(); }, 4000);
+    return;
+  }
+  // Siesa se movió en cada intento: el servidor bloqueó el conteo para el
+  // líder (MOVIMIENTO_CONTINUO). No es un error del operario.
+  if (r.resultado === 'BLOQUEADO') {
+    const overlay = document.createElement('div');
+    overlay.style.cssText = 'position:fixed;inset:0;z-index:9999;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:16px;background:#0B1117;';
+    overlay.innerHTML = `
+      <div style="font-size:80px;">🛒</div>
+      <div style="font-size:26px;font-weight:900;color:#FBBF24;text-align:center;padding:0 20px;">Queda para el líder</div>
+      <div style="font-size:15px;color:#E5C07B;text-align:center;padding:0 30px;line-height:1.5;">
+        ${esc(r.mensaje || 'Este producto se está vendiendo mientras contás: queda para el líder.')}
+      </div>`;
+    document.body.appendChild(overlay);
+    setTimeout(() => { overlay.remove(); pedirTarea(); }, 4000);
+    return;
+  }
+  // Dentro de tolerancia: se aceptó. Mensaje neutro — el operario no sabe si
+  // hubo diferencia ni de cuánto.
+  if (r.resultado === 'DENTRO_TOLERANCIA') {
+    const overlay = document.createElement('div');
+    overlay.style.cssText = 'position:fixed;inset:0;z-index:9999;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:16px;';
+    overlay.style.background = '#091F12';   // el mismo fondo del MATCH
+    overlay.innerHTML = `
+      <div style="font-size:80px;">✅</div>
+      <div style="font-size:28px;font-weight:900;color:#22C55E;text-align:center;padding:0 20px;">Conteo registrado</div>
+      <div style="font-size:15px;color:#86EFAC;text-align:center;padding:0 30px;line-height:1.5;">${esc(r.mensaje || 'Gracias.')}</div>`;
+    document.body.appendChild(overlay);
+    setTimeout(() => { overlay.remove(); pedirTarea(); }, 2000);
     return;
   }
   if (r.resultado === 'MATCH' || r.resultado === 'SEGUNDO_CONTEO') {
@@ -1730,6 +1799,19 @@ function _defMostrarResultado(r) {
   const esMatch = r.resultado === 'MATCH';
   const cont = document.getElementById('def-modal-contenido');
   if (!cont) return;
+  if (r.resultado === 'BLOQUEADO') {
+    // Siesa se movió en cada intento: el CC3 quedó bloqueado (MOVIMIENTO_CONTINUO).
+    cont.innerHTML = `
+      <div style="text-align:center;padding:30px 10px;">
+        <div style="font-size:64px;">🛒</div>
+        <div style="font-size:22px;font-weight:900;color:#FBBF24;margin-top:10px;">Bloqueado</div>
+        <div style="font-size:14px;color:#aaa;margin-top:8px;line-height:1.5;">${esc(r.mensaje || '')}</div>
+        <button onclick="defCerrarModal()" style="width:100%;margin-top:12px;padding:14px;font-size:14px;background:#1a1a1a;color:#aaa;border:1px solid #333;border-radius:12px;cursor:pointer;">
+          Cerrar
+        </button>
+      </div>`;
+    return;
+  }
   if (r.resultado === 'RECONTAR') {
     // Siesa se movió mientras se contaba: el servidor descartó el conteo y
     // dejó el MISMO CC3 abierto, a tu nombre, para contar de nuevo.
@@ -1795,6 +1877,7 @@ function defCerrarModal() {
 
 const _MOTIVO_BLOQUEO_TXT = {
   NO_ENCONTRADO: 'No lo encontró',
+  MOVIMIENTO_CONTINUO: 'Se vendía mientras se contaba (reabrilo en un momento quieto)',
   OTRO: 'Otro problema',
   SIN_MOTIVO_REGISTRADO: 'Sin motivo registrado',
 };
@@ -2033,7 +2116,8 @@ function _ceVolumen(v) {
       Necesitaron 2º conteo: ${_ceMetrica(v.a_cc2)}<br>
       Necesitaron 3º conteo: ${_ceMetrica(v.a_cc3)}<br>
       Sin veredicto: ${sv}<br>
-      Recuentos por venta durante el conteo: ${_ceMetrica(v.recuentos)}
+      Recuentos por venta durante el conteo: ${_ceMetrica(v.recuentos)}<br>
+      Recuentos propios (primer conteo fuera de tolerancia): <b>${_ceNum(v.recuentos_propios)}</b>
       ${_ceExcluidos(v.recuentos && v.recuentos.excluidos)}${_ceExcluidos(v.excluidos)}
     </div>${tabla}
     <div style="font-size:10px;color:var(--tx3);margin-top:6px;">${esc(v.unidad)}</div>`);
@@ -2043,25 +2127,38 @@ function _ceAjustes(a) {
   const val = a.valor || {};
   const bl = a.bloqueados_hoy || {};
   const bloq = Object.entries(bl.por_motivo || {}).map(([k, n]) => `${esc(k)} ${_ceNum(n)}`).join(' · ') || '—';
+  const _ESPERAN_TXT = { SUPERA_TOPE: 'superan el tope', SIN_COSTO: 'sin costo', FIRMA_DEL_PROCESO: 'firma del proceso' };
+  const esperan = Object.entries(bl.aprobables_por_motivo || {}).map(([k, n]) => `${esc(_ESPERAN_TXT[k] || k)} ${_ceNum(n)}`).join(' · ') || '—';
   const aud = Object.entries((a.motivos_auditoria_picking || {}).por_motivo || {}).map(([k, n]) => `${esc(k)} ${_ceNum(n)}`).join(' · ') || '—';
   return _ceTarjeta('⚖️ Ajustes a Siesa', `<div style="font-size:12px;color:var(--tx2);line-height:1.6;">
-      Ajustes: <b>${_ceNum(a.cantidad)}</b> (automáticos ${_ceNum(a.automaticos)} · por supervisor ${_ceNum(a.aprobados_por_supervisor)} · en vuelo ${_ceNum(a.en_vuelo)})<br>
+      Ajustes: <b>${_ceNum(a.cantidad)}</b> (automáticos ${_ceNum(a.automaticos)} · por supervisor ${_ceNum(a.aprobados_por_supervisor)} · en vuelo ${_ceNum(a.en_vuelo)} · dentro de tolerancia ${_ceNum(a.por_tolerancia)})<br>
       Unidades: +${_ceNum(a.unidades_ent)} / −${_ceNum(a.unidades_sal)} · neto ${_ceNum(a.unidades_neto)}<br>
       Valor <span style="color:var(--tx3);">(${esc(val.etiqueta || '')})</span>: +$${_ceNum(val.ent)} / −$${_ceNum(val.sal)} · neto <b>$${_ceNum(val.neto)}</b><br>
       <span style="color:var(--tx3);font-size:11px;">${_ceNum(val.ajustes_valorizados)} valorizados · ${_ceNum(val.ajustes_sin_costo)} sin costo en su foto</span><br>
-      Hoy bloqueados: <b>${_ceNum(bl.total)}</b> (${bloq}) · aprobables: ${_ceNum(bl.descuadres_aprobables)} · jobs fallidos: ${_ceNum(a.jobs_fallidos_hoy)}<br>
+      Hoy bloqueados: <b>${_ceNum(bl.total)}</b> (${bloq}) · aprobables: ${_ceNum(bl.descuadres_aprobables)} (${esperan}) · jobs fallidos: ${_ceNum(a.jobs_fallidos_hoy)}<br>
       <span style="color:var(--tx3);font-size:11px;">Auditorías de picking (diagnóstico, no ajuste): ${aud}</span>
       ${_ceExcluidos(a.excluidos)}</div>`);
 }
 
 function _ceExactitud(e) {
-  const filas = Object.entries(e.por_clase || {}).map(([cl, grupos]) =>
+  const filasDe = (porClase) => Object.entries(porClase || {}).map(([cl, grupos]) =>
     Object.entries(grupos).map(([g, m]) =>
       `<div>Clase ${esc(cl)} · ${esc(g)}: ${_ceMetrica(m)}</div>`).join('')).join('');
+  const filas = filasDe(e.por_clase);
+  const t = e.con_tolerancia || {};
+  const tv = t.tolerancia_vigente || {};
+  const fuera = t.primer_conteo_fuera || {};
+  const regla = (cl) => `${esc(cl)}: ${_ceNum((tv.unidades || {})[cl])} und o ${_ceNum((tv.porcentaje || {})[cl], 1)} %`;
+  const tolerancia = `<div style="border-top:1px solid var(--brd);margin-top:8px;padding-top:8px;">
+      <div style="font-weight:700;color:var(--tx);">Con tolerancia</div>
+      <div style="font-size:10px;color:var(--tx3);margin-bottom:4px;">${esc(t.definicion || '')} · tolerancia vigente ${['A', 'B', 'C'].map(regla).join(' · ')}, hasta $${_ceNum(tv.tope_valor_tolerancia)} por diferencia</div>
+      ${filasDe(t.por_clase) || '<div style="color:var(--tx3);">Sin cadenas medibles con tolerancia en el rango.</div>'}
+      <div>Primer conteo fuera: resolvió el recuento propio <b>${_ceNum(fuera.resuelto_por_recuento_propio)}</b> · necesitó 2º conteo <b>${_ceNum(fuera.a_segundo_conteo)}</b></div>
+      ${_ceExcluidos(t.excluidos)}</div>`;
   return _ceTarjeta('🎯 Exactitud de inventario', `<div style="font-size:12px;color:var(--tx2);line-height:1.6;">
-      <div style="font-size:10px;color:var(--tx3);margin-bottom:4px;">${esc(e.definicion)} · sin porcentaje con n &lt; ${_ceNum(e.min_n)}</div>
+      <div style="font-size:10px;color:var(--tx3);margin-bottom:4px;">Exacta: ${esc(e.definicion)} · sin porcentaje con n &lt; ${_ceNum(e.min_n)}</div>
       ${filas || '<div style="color:var(--tx3);">Sin cadenas medibles en el rango.</div>'}
-      ${_ceExcluidos(e.excluidos)}</div>`);
+      ${_ceExcluidos(e.excluidos)}${tolerancia}</div>`);
 }
 
 function _ceProductos(p) {
