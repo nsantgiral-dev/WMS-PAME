@@ -619,6 +619,59 @@ def stats_conteo():
     }), 200
 
 
+@conteo_bp.route('/estadisticas', methods=['GET'])
+@jwt_required()
+def estadisticas_conteo():
+    """Estadísticas del conteo cíclico: carga y cobertura del plan ABC, flujo,
+    ajustes (unidades y valor estimado), exactitud y productos problema.
+
+    Query: `desde`, `hasta` (YYYY-MM-DD, días operativos Bogotá; por defecto las
+    últimas 4 semanas), `almacen_id`, `clase` (A/B/C), `tipo`.
+
+    La ruta solo parsea: toda la política vive en
+    `app/services/metricas/conteo.py`. Un parámetro ilegible es 400 — ignorarlo
+    en silencio devolvería el reporte de otro rango con cara de ser el pedido.
+    """
+    from app.models.usuario import Usuario
+    from app.services.metricas.conteo import calcular_estadisticas_conteo
+    try:
+        uid = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
+    u = Usuario.query.get(uid)
+    if not u or u.rol not in Roles.SUPERVISION:
+        return jsonify({'error': 'Sin permiso'}), 403
+
+    fechas = {}
+    for nombre in ('desde', 'hasta'):
+        crudo = (request.args.get(nombre) or '').strip()
+        if not crudo:
+            fechas[nombre] = None
+            continue
+        try:
+            fechas[nombre] = datetime.strptime(crudo, '%Y-%m-%d').date()
+        except ValueError:
+            return jsonify({'error': f'{nombre} inválida: {crudo!r} (formato YYYY-MM-DD)'}), 400
+
+    almacen_crudo = (request.args.get('almacen_id') or '').strip()
+    almacen_id = None
+    if almacen_crudo:
+        try:
+            almacen_id = int(almacen_crudo)
+        except ValueError:
+            return jsonify({'error': f'almacen_id inválido: {almacen_crudo!r}'}), 400
+
+    clase = (request.args.get('clase') or '').strip().upper() or None
+    tipo = (request.args.get('tipo') or '').strip().upper() or None
+    try:
+        reporte = calcular_estadisticas_conteo(
+            fechas['desde'], fechas['hasta'],
+            almacen_id=almacen_id, clase=clase, tipo=tipo)
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    return jsonify(reporte), 200
+
+
 @conteo_bp.route('/asignar-lote', methods=['POST'])
 @jwt_required()
 def asignar_lote():
@@ -987,19 +1040,33 @@ def descartar_fallos_dlq():
     return jsonify(plan), 200
 
 
+#: Filas máximas del CSV de `/exportar`. Si hay más, el CSV lo declara en una
+#: línea `TRUNCADO` — un corte silencioso se lee como «esto es todo».
+LIMITE_EXPORTAR = 5000
+
+
 @conteo_bp.route('/exportar', methods=['GET'])
 @jwt_required()
 def exportar_conteos():
     """
     Exporta historial de conteos en CSV.
     Query params: desde (YYYY-MM-DD), hasta (YYYY-MM-DD), almacen_id.
-    Incluye: accuracy por operario, varianza por clase, ajustes totales.
+    Incluye el resumen por clase con el veredicto por cadena
+    (`veredicto_cadena`), ajustes y varianza.
+
+    **Ya no trae exactitud por operario** (2026-09-23, decisión del usuario):
+    contaba filas CC1 sueltas, con muestra chica y con el sesgo de que el CC2
+    solo le toca a quien le mandan los huecos que no cuadraron. Ver
+    `app/services/metricas/conteo.py::_por_operario`.
     """
     import csv
     import io
     from flask import Response
     from app.models.usuario import Usuario
-    from sqlalchemy.orm import joinedload
+    from sqlalchemy.orm import joinedload, selectinload
+    from app.services.metricas.conteo import (MIN_N_EXACTITUD, SIN_VEREDICTO,
+                                              VEREDICTOS_ERROR, VEREDICTOS_OK,
+                                              veredicto_cadena)
 
     try:
         uid = int(get_jwt_identity())
@@ -1020,6 +1087,9 @@ def exportar_conteos():
              joinedload(SesionConteo.operario),
              joinedload(SesionConteo.almacen),
              joinedload(SesionConteo.aprobador),
+             # El veredicto se lee de la cadena entera: sin esto, un N+1 de
+             # hasta dos consultas por raíz sobre 5.000 filas.
+             selectinload(SesionConteo.hijo_conteo).selectinload(SesionConteo.hijo_conteo),
          )
          .filter(SesionConteo.estado.in_([
              'MATCH', 'AJUSTADO', 'AJUSTANDO', 'DESCUADRE', 'CANCELADO'
@@ -1041,13 +1111,22 @@ def exportar_conteos():
     if almacen_id:
         q = q.filter(SesionConteo.almacen_id == almacen_id)
 
-    sesiones = q.limit(5000).all()
+    LIMITE = LIMITE_EXPORTAR
+    sesiones = q.limit(LIMITE + 1).all()
+    # Una fila de más dice si hubo corte. Un CSV truncado sin decirlo se lee
+    # como «esto es todo lo que hubo».
+    truncado = len(sesiones) > LIMITE
+    sesiones = sesiones[:LIMITE]
+
+    def _num(v):
+        return v if v is not None else ''
 
     output = io.StringIO()
     writer = csv.writer(output)
     writer.writerow([
         'Codigo', 'Tipo', 'ABC', 'Estado', 'Producto', 'Producto Nombre',
-        'Ubicacion', 'Almacen', 'Operario', 'Stock WMS', 'Conteo Fisico',
+        'Ubicacion', 'Almacen', 'Operario', 'Existencia Siesa', 'Teorico Siesa',
+        'POS', 'Fuente', 'Costo unit.', 'Conteo Fisico',
         'Diferencia', 'Motivo', '2do Conteo', 'Aprobador',
         'Creacion', 'Cierre', 'Editado', 'Motivo Edicion',
     ])
@@ -1063,9 +1142,13 @@ def exportar_conteos():
             s.ubicacion.codigo if s.ubicacion else '',
             s.almacen.nombre if s.almacen else '',
             s.operario.nombre if s.operario else '',
-            s.existencia_siesa if s.existencia_siesa is not None else '',
-            s.cantidad_fisica if s.cantidad_fisica is not None else '',
-            s.diferencia if s.diferencia is not None else '',
+            _num(s.existencia_siesa),
+            _num(s.teorico_siesa),
+            _num(s.cant_pos_siesa),
+            s.fuente_existencia or '',
+            _num(s.costo_prom_uni_siesa),
+            _num(s.cantidad_fisica),
+            _num(s.diferencia),
             s.motivo_codigo or '',
             'Si' if s.es_segundo_conteo else 'No',
             s.aprobador.nombre if s.aprobador else '',
@@ -1075,48 +1158,50 @@ def exportar_conteos():
             s.motivo_edicion or '',
         ])
 
+    if truncado:
+        writer.writerow([f'TRUNCADO: se exportaron las {LIMITE} sesiones más recientes; '
+                         'hay más en el rango. Acotar desde/hasta o almacén.'])
+
     # Resumen al final
     writer.writerow([])
     writer.writerow(['=== RESUMEN ==='])
 
-    # Accuracy por operario
+    # Resumen por clase — por CADENA, con el veredicto de `veredicto_cadena`
+    # (la misma función que las estadísticas). Antes contaba filas raíz por
+    # su estado: una raíz MATCH por un CC2 que cuadró salía «acierto» igual
+    # que una que cuadró sola, y una raíz AJUSTADO no contaba como error.
     from collections import defaultdict
-    op_stats = defaultdict(lambda: {'total': 0, 'match': 0})
-    for s in sesiones:
-        if not s.operario or s.es_segundo_conteo:
-            continue
-        nombre = s.operario.nombre
-        op_stats[nombre]['total'] += 1
-        if s.estado == 'MATCH':
-            op_stats[nombre]['match'] += 1
-
-    writer.writerow([])
-    writer.writerow(['Operario', 'Total Conteos', 'Match', 'Accuracy %'])
-    for nombre, stats in sorted(op_stats.items()):
-        acc = round(stats['match'] / stats['total'] * 100, 1) if stats['total'] else 0
-        writer.writerow([nombre, stats['total'], stats['match'], f'{acc}%'])
-
-    # Varianza por clase ABC
-    clase_stats = defaultdict(lambda: {'total': 0, 'match': 0, 'ajustado': 0, 'sum_dif': 0})
+    clase_stats = defaultdict(lambda: {'total': 0, 'ok': 0, 'error': 0, 'sin': 0,
+                                       'ajustado': 0, 'sum_dif': 0})
     for s in sesiones:
         if s.es_segundo_conteo:
             continue
         cls = s.clasificacion_abc or '?'
-        clase_stats[cls]['total'] += 1
-        if s.estado == 'MATCH':
-            clase_stats[cls]['match'] += 1
+        v = veredicto_cadena(s)
+        st = clase_stats[cls]
+        st['total'] += 1
+        if v in VEREDICTOS_OK:
+            st['ok'] += 1
+        elif v in VEREDICTOS_ERROR:
+            st['error'] += 1
+        elif v == SIN_VEREDICTO:
+            st['sin'] += 1
         if s.estado in ('AJUSTADO', 'AJUSTANDO'):
-            clase_stats[cls]['ajustado'] += 1
-            clase_stats[cls]['sum_dif'] += abs(s.diferencia or 0)
+            st['ajustado'] += 1
+            st['sum_dif'] += abs(s.diferencia or 0)
 
     writer.writerow([])
-    writer.writerow(['Clase ABC', 'Total', 'Match', 'Ajustados', 'Accuracy %', 'Varianza Total (uds)'])
+    writer.writerow(['Clase ABC', 'Cadenas', 'OK', 'Error', 'Sin veredicto', 'Ajustados',
+                     'Exactitud %', 'Varianza Total (uds)'])
     for cls in ['A', 'B', 'C', '?']:
         if cls not in clase_stats:
             continue
         st = clase_stats[cls]
-        acc = round(st['match'] / st['total'] * 100, 1) if st['total'] else 0
-        writer.writerow([cls, st['total'], st['match'], st['ajustado'], f'{acc}%', st['sum_dif']])
+        n = st['ok'] + st['error']
+        acc = (f'{round(st["ok"] / n * 100, 1)}%' if n >= MIN_N_EXACTITUD
+               else f'n={n} < {MIN_N_EXACTITUD}')
+        writer.writerow([cls, st['total'], st['ok'], st['error'], st['sin'],
+                         st['ajustado'], acc, st['sum_dif']])
 
     resp = Response(output.getvalue(), mimetype='text/csv')
     resp.headers['Content-Disposition'] = f'attachment; filename=conteos_{desde_str or "all"}_{hasta_str or "all"}.csv'
