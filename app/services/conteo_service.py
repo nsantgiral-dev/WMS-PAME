@@ -515,6 +515,7 @@ class ConteoService:
                 'id': s.id,
                 'codigo': s.codigo,
                 'nivel': ConteoService.nivel_en_cadena(s),
+                'tipo': s.tipo,
                 'almacen_id': s.almacen_id,
                 'almacen_nombre': s.almacen.nombre if s.almacen else None,
                 'producto_codigo': s.producto.codigo if s.producto else None,
@@ -1838,6 +1839,18 @@ class ConteoService:
             almacen_id, datetime.utcnow(), producto_id=producto_id))
 
     @staticmethod
+    def hallazgos_que_sacan_del_plan(almacen_id: int, instante: datetime = None) -> list:
+        """Los hallazgos crudos (con `sin_fecha`, `documento`, `accion`) por
+        los que el generador deja un SKU fuera del plan en `instante` (ahora
+        por defecto). Es exactamente lo que filtra `conteo_politica.
+        filtrar_elegibles` —vía `productos_con_mercancia_en_proceso`—, sin
+        agrupar: el tablero del líder necesita el documento para decir cuál
+        cerrar. Una política, una función."""
+        if instante is None:
+            instante = datetime.utcnow()
+        return ConteoService._hallazgos_para_generador(almacen_id, instante)
+
+    @staticmethod
     def productos_con_mercancia_en_proceso(almacen_id: int, instante: datetime = None) -> dict:
         """Variante EN LOTE para el generador: `{producto_id: descripción}` de
         todos los SKU del almacén con mercancía en proceso en `instante`
@@ -1846,7 +1859,7 @@ class ConteoService:
         if instante is None:
             instante = datetime.utcnow()
         por_producto = {}
-        for h in ConteoService._hallazgos_para_generador(almacen_id, instante):
+        for h in ConteoService.hallazgos_que_sacan_del_plan(almacen_id, instante):
             por_producto.setdefault(h['producto_id'], []).append(h)
         return {pid: ConteoService.describir_procesos(hs)
                 for pid, hs in por_producto.items()}

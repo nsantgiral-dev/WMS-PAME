@@ -1782,3 +1782,116 @@ class TestModoClaroCubreFondosOscuros:
               '"MODO CLARO" de index.html, o a ALLOWLIST de este test si es un '
               'acento vivo que no necesita conversión.'
         )
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# Nivel 6: el PWA llama a una ruta que el backend no tiene (2026-09-23)
+# ══════════════════════════════════════════════════════════════════════════
+#
+# El Nivel 4 mira hacia un lado —ruta sin consumidor—. Éste mira al otro:
+# **consumidor sin ruta**. El caso que lo destapó: `cargarAuditoriasUrgentes()`
+# (app.js) llamaba a `GET /api/conteo/auditorias-urgentes`, ruta borrada el
+# 2026-08-24 (0266118) y resucitada del lado del JS por un merge. Cualquiera
+# que la invocara recibía 404 y la pantalla decía «Error cargando auditorías».
+#
+# `TestEndpointIntegrity.test_api_urls_exist_in_flask` existía y estaba en
+# verde con ella adentro: aceptaba la URL si **el prefijo** `/api/conteo`
+# existía, y solo fallaba con más de diez huérfanas. Medía «el módulo existe»,
+# no «la ruta existe». Medido el 2026-09-23 con coincidencia exacta: 397 URLs
+# en el PWA, **una** sin ruta — ésa.
+#
+# Esta versión convierte cada regla de Flask en un patrón por segmentos
+# (`<int:id>` → un segmento) y exige que cada URL del PWA —con sus `${...}`
+# como segmento— coincida con alguna. Una URL que termina en `/` y no existe
+# tal cual se prueba como prefijo de concatenación (`'/api/x/' + id`), que es
+# como la PWA arma varias. Los comentarios no cuentan: la prosa no llama.
+#
+# Lo que NO ve: URLs armadas enteras por concatenación de variables
+# (`API + base + accion`) y el método HTTP (una ruta GET llamada con POST
+# pasa). Dicho para que nadie lo suponga cubierto.
+
+#: Literales `/api/…` del PWA que NO son una llamada, con su porqué. Solo
+#: encoge. Nace vacía: con los comentarios fuera, las 397 URLs medidas son
+#: llamadas (el `/api/` de sw.js vive en un comentario).
+URLS_QUE_NO_SON_LLAMADAS = {}
+
+_URL_PWA = re.compile(r"['\"`]((?:/api/|/flota/)[^'\"`\s?#]*)")
+
+
+def _urls_del_pwa(fuentes=None):
+    """[(archivo, url)] de todo literal `/api/…` o `/flota/…` del PWA, sin
+    comentarios. `fuentes` ({nombre: texto}) lo usan los meta-tests."""
+    if fuentes is None:
+        fuentes = {f: _read(f) for f in _all_js_files()}
+        fuentes['index.html'] = _read('index.html')
+    salida = []
+    for nombre, texto in fuentes.items():
+        limpio = (re.sub(r'<!--.*?-->', '', texto, flags=re.S) if nombre.endswith('.html')
+                  else _sin_comentarios(texto))
+        salida.extend((nombre, m.group(1)) for m in _URL_PWA.finditer(limpio))
+    return salida
+
+
+def _patrones_de_rutas(app):
+    patrones = []
+    for regla in app.url_map.iter_rules():
+        partes = re.split(r'(<[^>]+>)', str(regla))
+        cuerpo = ''.join('[^/]+' if p.startswith('<') else re.escape(p) for p in partes)
+        patrones.append(re.compile('^' + cuerpo.rstrip('/') + '/?$'))
+    return patrones
+
+
+def _urls_sin_ruta(app, fuentes=None):
+    patrones = _patrones_de_rutas(app)
+    # Las reglas con cada parámetro como `X`: para el prefijo de una
+    # concatenación (`'/flota/vehiculo/' + placa + '/ficha'`) basta que alguna
+    # regla empiece con el prefijo seguido de un parámetro.
+    normalizadas = [re.sub(r'<[^>]+>', 'X', str(r)) for r in app.url_map.iter_rules()]
+
+    def existe(u):
+        return any(p.match(u) for p in patrones)
+
+    faltan = []
+    for nombre, url in _urls_del_pwa(fuentes):
+        if url in URLS_QUE_NO_SON_LLAMADAS:
+            continue
+        u = re.sub(r'\$\{[^}]*\}', 'X', url)
+        if existe(u) or (u.endswith('/') and any(r.startswith(u + 'X') for r in normalizadas)):
+            continue
+        faltan.append((nombre, url))
+    return faltan
+
+
+class TestNingunaLlamadaAUnaRutaQueNoExiste:
+
+    def test_toda_url_del_pwa_tiene_su_ruta(self, app):
+        faltan = _urls_sin_ruta(app)
+        assert not faltan, (
+            f'\n{len(faltan)} URL(s) del PWA sin ruta en Flask:\n'
+            + '\n'.join(f'  · {n}: {u}' for n, u in faltan)
+            + '\n\nO la ruta se borró y quedó el JS (borralo), o el JS apunta mal.')
+
+    def test_piso_minimo_de_urls(self):
+        """Un extractor roto devuelve cero URLs y el guard queda verde solo."""
+        assert len(_urls_del_pwa()) >= 300
+
+    def test_detecta_la_ruta_borrada(self, app):
+        """La forma exacta del caso: una URL literal cuyo prefijo sí existe."""
+        fuente = {'x.js': "const d = await get('/api/conteo/auditorias-urgentes?almacen_id=' + A);"}
+        assert _urls_sin_ruta(app, fuente) == [('x.js', '/api/conteo/auditorias-urgentes')]
+
+    def test_no_marca_una_ruta_parametrizada_ni_una_concatenacion(self, app):
+        fuente = {'x.js': "put(`/api/conteo/${id}/cancelar`, {}); get('/api/conteo/lider/tablero');"
+                          " post('/api/muelle/cargar/' + id);"
+                          " get('/flota/vehiculo/' + placa + '/ficha');"}
+        assert _urls_sin_ruta(app, fuente) == []
+
+    def test_una_url_en_un_comentario_no_es_una_llamada(self, app):
+        fuente = {'x.js': "// antes: get('/api/conteo/auditorias-urgentes')\nconst a = 1;"}
+        assert _urls_sin_ruta(app, fuente) == []
+
+    def test_las_excepciones_siguen_existiendo_y_dicen_por_que(self):
+        todas = {u for _, u in _urls_del_pwa()}
+        for url, razon in URLS_QUE_NO_SON_LLAMADAS.items():
+            assert url in todas, f'{url} ya no está en el PWA: sacala de la lista'
+            assert len(razon) > 25, f'{url} sin razón'

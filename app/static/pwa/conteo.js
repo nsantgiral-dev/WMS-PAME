@@ -50,6 +50,7 @@ async function cargarInventario() {
     } catch (e) { /* silencioso */ }
   }
   if (_INV_SUBTAB === 'conteos') await cargarConteos();
+  else if (_INV_SUBTAB === 'lider') await liderCargar();
   else await cargarResumenAbc();
 }
 
@@ -103,12 +104,12 @@ async function guardarConfigBodega() {
 
 /**
  * Switch the inventory sub-tab.
- * @param {string} nombre - 'conteos', 'abc', 'datos', 'definitivo' o 'estadisticas'.
+ * @param {string} nombre - 'lider', 'conteos', 'abc', 'datos', 'definitivo' o 'estadisticas'.
  */
 function invSubtab(nombre) {
   _INV_SUBTAB = nombre;
-  const tabs = { conteos: 'inv-tab-conteos', abc: 'inv-tab-abc', datos: 'inv-tab-datos', definitivo: 'inv-tab-definitivo', estadisticas: 'inv-tab-estadisticas' };
-  const panels = { conteos: 'inv-panel-conteos', abc: 'inv-panel-abc', datos: 'inv-panel-datos', definitivo: 'inv-panel-definitivo', estadisticas: 'inv-panel-estadisticas' };
+  const tabs = { lider: 'inv-tab-lider', conteos: 'inv-tab-conteos', abc: 'inv-tab-abc', datos: 'inv-tab-datos', definitivo: 'inv-tab-definitivo', estadisticas: 'inv-tab-estadisticas' };
+  const panels = { lider: 'inv-panel-lider', conteos: 'inv-panel-conteos', abc: 'inv-panel-abc', datos: 'inv-panel-datos', definitivo: 'inv-panel-definitivo', estadisticas: 'inv-panel-estadisticas' };
   Object.entries(tabs).forEach(([k, id]) => {
     const el = document.getElementById(id);
     if (!el) return;
@@ -121,7 +122,8 @@ function invSubtab(nombre) {
     const el = document.getElementById(id);
     if (el) el.style.display = k === nombre ? 'block' : 'none';
   });
-  if (nombre === 'conteos') cargarConteos();
+  if (nombre === 'lider') liderCargar();
+  else if (nombre === 'conteos') cargarConteos();
   else if (nombre === 'abc') cargarResumenAbc();
   else if (nombre === 'datos') kardexCargarPanel();
   else if (nombre === 'definitivo') cargarConteoDefinitivos();
@@ -2082,3 +2084,315 @@ function _ceOperarios(o) {
       ${filas || '<div style="color:var(--tx3);">Sin conteos en el rango.</div>'}
       ${_ceExcluidos(o.excluidos)}</div>`);
 }
+
+// ══════════════════════════════════════════════════════════════════════════
+// 🧭 TABLERO DEL LÍDER — «qué abro el lunes a las 7 a. m.»
+//
+// Pinta `GET /api/conteo/lider/tablero`. La pantalla no decide nada: qué es
+// urgente, qué se puede aprobar, cuánto vale y qué botón le toca a cada rol lo
+// dice `app/services/tablero_lider_conteo.py`. Cada botón llama un endpoint
+// que ya existía (reabrir, cancelar, resolver, ajustar, manual, reintentar,
+// descartar, limpiar cola). Los botones pasan SOLO ids numéricos: el dato se
+// busca en `_LIDER_DATOS` (un texto dentro de un onclick no lo protege esc()).
+// Todo texto pasa por esc(). Pensada para celular: tarjetas a lo ancho y
+// botones que se apilan.
+// ══════════════════════════════════════════════════════════════════════════
+
+let _LIDER_DATOS = null;
+
+/** Un número con separador de miles colombiano, ya escapado. */
+function _lNum(v, dec = 0) {
+  if (v === null || v === undefined) return '—';
+  return esc(Number(v).toLocaleString('es-CO', { maximumFractionDigits: dec }));
+}
+
+/** Plata, ya escapada. `null` es «sin costo»: no se sabe cuánto vale, no es cero. */
+function _lPlata(v) {
+  if (v === null || v === undefined) return '<span style="color:var(--yellow);">sin costo</span>';
+  return '$' + _lNum(v);
+}
+
+/** Un botón de acción. `onclick` lo arma el código (solo ids numéricos). */
+function _lBoton(texto, onclick, tono = 'pm') {
+  const estilos = {
+    pm: 'background:var(--pm);color:#fff;border:none;',
+    peligro: 'background:#7f1d1d;color:#fca5a5;border:none;',
+    suave: 'background:var(--bg-input);color:var(--tx);border:1px solid var(--brd);',
+  };
+  return `<button onclick="${onclick}" style="flex:1 1 140px;min-height:44px;padding:10px;${estilos[tono] || estilos.pm}border-radius:10px;font-size:13px;font-weight:700;cursor:pointer;">${esc(texto)}</button>`;
+}
+
+/** Nota en lugar de un botón que ese rol no puede usar (el endpoint diría 403). */
+function _lSinPermiso(quien) {
+  return `<div style="flex:1 1 100%;font-size:11px;color:var(--tx3);">${esc(quien)}</div>`;
+}
+
+/** Una tarjeta de fila. `cabecera` y `cuerpo` llegan ya armados y escapados. */
+function _lFila(cabecera, cuerpo, botones) {
+  return `<div style="background:var(--bg-s);border:1px solid var(--brd);border-radius:12px;padding:12px 14px;margin-bottom:8px;">
+    ${cabecera}${cuerpo}
+    ${botones ? `<div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:10px;">${botones}</div>` : ''}
+  </div>`;
+}
+
+/** Un bloque de la cola con su total. `cuerpo` ya viene armado y escapado. */
+function _lBloque(titulo, total, base, cuerpo, vacio) {
+  const color = total > 0 ? 'var(--yellow)' : 'var(--green)';
+  return `<div style="margin:18px 0 8px;">
+    <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;flex-wrap:wrap;">
+      <div style="font-size:14px;font-weight:800;color:var(--tx);">${esc(titulo)}</div>
+      <div style="font-size:13px;font-weight:800;color:${color};">${_lNum(total)}</div>
+    </div>
+    ${base ? `<div style="font-size:11px;color:var(--tx3);margin-top:2px;">${base}</div>` : ''}
+  </div>${total > 0 ? cuerpo : `<div style="font-size:12px;color:var(--tx3);padding:4px 2px 8px;">${esc(vacio)}</div>`}`;
+}
+
+function _lProducto(f) {
+  const tag = f.es_auditoria ? ' <span style="font-size:10px;color:#fca5a5;background:#7f1d1d;border-radius:6px;padding:1px 6px;">auditoría por faltante</span>' : '';
+  return `<div style="font-size:14px;font-weight:700;color:var(--tx);">${esc(f.producto_nombre || f.producto_codigo || '—')}${tag}</div>
+    <div style="font-size:12px;color:var(--tx3);">${esc(f.producto_codigo || '')} · ${esc(f.codigo || '')}</div>`;
+}
+
+function _lBloqueados(b, p) {
+  const motivos = Object.entries(b.por_motivo || {}).map(([k, n]) => `${esc(k)} ${_lNum(n)}`).join(' · ');
+  const filas = (b.filas || []).map(f => _lFila(
+    `<div style="font-size:11px;font-weight:700;color:#f59e0b;">${esc(f.motivo_texto || f.motivo_bloqueo)} · ${esc(f.nivel)}${f.reportado_por_nombre ? ` · reportó ${esc(f.reportado_por_nombre)}` : ''}</div>`,
+    _lProducto(f) + (f.nota ? `<div style="font-size:12px;color:var(--tx2);margin-top:4px;">${esc(f.nota)}</div>` : ''),
+    p.reabrir_cancelar_bloqueado
+      ? _lBoton('↻ Reabrir', `liderReabrir(${esc(f.id)})`) + _lBoton('✕ Cancelar', `liderCancelarBloqueado(${esc(f.id)})`, 'peligro')
+      : _lSinPermiso('Lo decide un supervisor, jefe de almacén o admin')));
+  return _lBloque('🔍 Conteos bloqueados', b.total, motivos ? `Por motivo: ${motivos}` : '',
+    filas.join(''), 'Ningún conteo bloqueado ✓');
+}
+
+function _lNovedades(n, p) {
+  const filas = (n.filas || []).map(f => _lFila(
+    `<div style="font-size:11px;color:var(--tx3);">${esc(f.reportado_por_nombre || '')} · contando ${esc(f.producto_en_conteo || '—')}</div>`,
+    `<div style="font-size:14px;color:var(--tx);margin-top:4px;">${esc(f.descripcion)}</div>`,
+    p.resolver_novedad ? _lBoton('✓ Resuelta', `liderResolverNovedad(${esc(f.id)})`)
+                       : _lSinPermiso('La resuelve un supervisor, jefe de almacén o admin')));
+  return _lBloque('🏷 Mercancía sin código', n.total, '', filas.join(''), 'Nada reportado ✓');
+}
+
+function _lAjustes(a, p) {
+  const ap = a.aprobables || {};
+  const bl = a.bloqueados || {};
+  const filasAp = (ap.filas || []).map(f => _lFila(
+    `<div style="font-size:11px;font-weight:700;color:${f.direccion === 'ENTRADA' ? 'var(--green)' : 'var(--red)'};">${f.direccion === 'ENTRADA' ? '📦 Sobran' : '📤 Faltan'} ${_lNum(f.unidades)} und · ${_lPlata(f.valor)}</div>`,
+    _lProducto(f) + `<div style="font-size:11px;color:var(--tx3);margin-top:2px;">Contado el ${esc(f.dia_conteo || '—')}${f.costo_unitario !== null && f.costo_unitario !== undefined ? ` · costo de la foto $${_lNum(f.costo_unitario)}/und` : ''}</div>`,
+    p.aprobar_ajuste ? _lBoton('✓ Aprobar y enviar a Siesa', `liderAprobarAjuste(${esc(f.id)})`)
+                     : _lSinPermiso('Lo aprueba un supervisor o admin')));
+  const filasBl = (bl.filas || []).map(f => {
+    const acc = f.accion || {};
+    let botones = '';
+    if (acc.tipo !== 'CANCELAR' && p.recontar) botones += _lBoton('↻ Recontar', `liderRecontar(${esc(f.id)})`);
+    if (p.cancelar_conteo) botones += _lBoton('✕ Cancelar', `liderCancelarConteo(${esc(f.id)})`, acc.tipo === 'CANCELAR' ? 'pm' : 'peligro');
+    if (!botones) botones = _lSinPermiso('Lo decide un supervisor o admin');
+    return _lFila(
+      `<div style="font-size:11px;font-weight:700;color:#f59e0b;">No se puede aprobar · ${esc(f.motivo_clave)}</div>`,
+      _lProducto(f)
+        + `<div style="font-size:13px;color:var(--tx);margin-top:6px;font-weight:700;">→ ${esc(acc.texto || '')}</div>`
+        + `<details style="margin-top:4px;"><summary style="font-size:11px;color:var(--tx3);cursor:pointer;">Por qué</summary><div style="font-size:12px;color:var(--tx2);margin-top:4px;">${esc(f.motivo)}</div></details>`,
+      botones);
+  });
+  const motivos = Object.entries(bl.por_motivo || {}).map(([k, n]) => `${esc(k)} ${_lNum(n)}`).join(' · ');
+  const base = `${_lNum(a.total_descuadres)} contados con diferencia: ${_lNum(ap.total)} se pueden aprobar`
+    + ` (${_lPlata(ap.valor_total)} en ${_lNum(ap.valorizados)} valorizados${ap.sin_costo ? `, ${_lNum(ap.sin_costo)} sin costo` : ''}; ${esc(ap.etiqueta_valor || '')})`
+    + ` · ${_lNum(bl.total)} no${motivos ? ` (${motivos})` : ''}`;
+  return _lBloque('⚖️ Ajustes esperando decisión', (ap.total || 0) + (bl.total || 0), base,
+    filasAp.join('') + filasBl.join(''), 'Ningún ajuste esperando ✓');
+}
+
+function _lAuditorias(a) {
+  const filas = (a.filas || []).map(f => {
+    const acc = f.accion || {};
+    const boton = acc.tipo === 'CONTAR_DEFINITIVO' ? _lBoton('🎯 Contar definitivo', 'liderContarDefinitivo()') : '';
+    return _lFila(
+      `<div style="font-size:11px;font-weight:700;color:#fca5a5;">${esc(f.estado_texto)}${f.pedido ? ` · pedido ${esc(f.pedido)}` : ''}${f.dias_abierta !== null && f.dias_abierta !== undefined ? ` · hace ${_lNum(f.dias_abierta)} día(s)` : ''}</div>`,
+      _lProducto(f) + `<div style="font-size:12px;color:var(--tx2);margin-top:4px;">${esc(acc.texto || '')}</div>`,
+      boton);
+  });
+  return _lBloque('🚨 Auditorías por faltante de picking', a.total,
+    `${_lNum(a.esperan_al_lider)} esperan al líder; el resto las cuenta un operario o ya están en otro bloque`,
+    filas.join(''), 'Ninguna auditoría abierta ✓');
+}
+
+function _lRechazados(r, p) {
+  const filas = (r.filas || []).map(f => _lFila(
+    `<div style="font-size:11px;font-weight:700;color:var(--red);">Siesa lo rechazó · ${esc(f.motivo_codigo || '')} ${_lNum(f.unidades)} und · ${_lNum(f.intentos)} intento(s)</div>`,
+    _lProducto(f) + (f.error ? `<div style="font-size:12px;color:var(--tx2);margin-top:4px;">${esc(f.error)}</div>` : ''),
+    ''));
+  let botones = '';
+  if (r.total_sistema > 0) {
+    botones = p.reintentar_descartar_fallos
+      ? `<div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px;">${_lBoton('↻ Reintentar todos', 'liderReintentarFallos()')}${_lBoton('✕ Descartar (ver antes)', 'liderDescartarFallos()', 'peligro')}</div>`
+      : `<div style="margin-bottom:10px;">${_lSinPermiso('Los reintenta o descarta un supervisor o admin')}</div>`;
+  }
+  const base = `${_lNum(r.total)} de este almacén · ${_lNum(r.total_sistema)} en todo el sistema (los botones actúan sobre todos)`
+    + (r.sin_sesion_identificable ? ` · ${_lNum(r.sin_sesion_identificable)} sin conteo identificable` : '');
+  return _lBloque('⛔ Ajustes rechazados por Siesa', r.total, base, botones + filas.join(''),
+    r.total_sistema > 0 ? 'Ninguno de este almacén' : 'Ninguno ✓');
+}
+
+function _lFueraDelPlan(fp) {
+  const filas = (fp.filas || []).map(f => _lFila(
+    `<div style="font-size:11px;font-weight:700;color:#f59e0b;">${esc(f.clase || '')} · ${esc(f.documento || '—')} · ${_lNum(f.n_skus)} SKU</div>`,
+    `<div style="font-size:12px;color:var(--tx2);">${esc(f.detalle || '')}</div>
+     <div style="font-size:13px;color:var(--tx);font-weight:700;margin-top:4px;">→ ${esc(f.accion || '')}</div>
+     <div style="font-size:11px;color:var(--tx3);margin-top:4px;">${(f.skus || []).map(s => esc(s)).join(' · ')}</div>`,
+    ''));
+  return _lBloque('🧾 Fuera del plan: mercancía en proceso sin fecha', fp.skus_sin_fecha,
+    `${_lNum(fp.skus_sin_fecha)} SKU en ${_lNum(fp.documentos)} documento(s) no se programan hasta que alguien cierre el documento · ${_lNum(fp.skus_con_fecha_salen_solos)} SKU más esperan un documento que entra solo`,
+    filas.join(''), 'Ningún SKU trabado por un documento sin fecha ✓');
+}
+
+function _lHoy(h) {
+  const pp = h.por_persona || {};
+  const personas = (pp.filas || []).map(f =>
+    `<div style="display:flex;justify-content:space-between;gap:8px;font-size:13px;color:var(--tx2);padding:3px 0;"><span>${esc(f.nombre || ('#' + f.operario_id))}</span><span>${_lNum(f.cadenas)} cerrados · ${_lNum(f.conteos)} conteos</span></div>`).join('');
+  return `<div style="background:var(--bg-s);border:1px solid var(--brd);border-radius:12px;padding:12px 14px;margin:18px 0 8px;">
+    <div style="font-size:14px;font-weight:800;color:var(--tx);">📅 Hoy <span style="font-size:11px;color:var(--tx3);font-weight:400;">${esc(h.dia)}</span></div>
+    <div style="font-size:22px;font-weight:800;color:var(--tx);margin-top:6px;">${_lNum(h.cerrados)} <span style="font-size:13px;color:var(--tx3);font-weight:600;">de un cupo de ${_lNum(h.cupo_diario)} por día</span></div>
+    <div style="font-size:12px;color:var(--tx2);margin-top:4px;">Pendientes sin contar: <b>${_lNum(h.pendientes_vivas)}</b>${h.dias_de_cupo_pendientes === null || h.dias_de_cupo_pendientes === undefined ? '' : ` (${_lNum(h.dias_de_cupo_pendientes, 1)} días de cupo)`}</div>
+    ${h.mensaje_generador ? `<div style="font-size:12px;color:var(--yellow);margin-top:4px;">Generador: ${esc(h.mensaje_generador)}</div>` : ''}
+    <div style="font-size:10px;color:var(--tx3);margin-top:6px;">${esc(h.unidad)}</div>
+    <div style="margin-top:8px;border-top:1px solid var(--brd);padding-top:6px;">
+      <div style="font-size:10px;color:var(--tx3);margin-bottom:4px;">${esc(pp.nota || '')}</div>
+      ${personas || '<div style="font-size:12px;color:var(--tx3);">Nadie cerró conteos hoy todavía.</div>'}
+    </div>
+  </div>`;
+}
+
+function _lRezago(r, p) {
+  if (!r || !r.hay_aviso) return '';
+  const tramos = Object.entries(r.por_antiguedad_dias || {}).filter(([, n]) => n > 0)
+    .map(([k, n]) => `${_lNum(n)} de ${esc(k)} días`).join(' · ');
+  return `<div style="background:#1c1a0a;border:1px solid #b45309;border-radius:12px;padding:12px 14px;margin-bottom:12px;">
+    <div style="font-size:13px;font-weight:800;color:#f59e0b;">⏸ El generador está detenido por rezago</div>
+    <div style="font-size:12px;color:#fde68a;margin-top:4px;line-height:1.5;">${_lNum(r.pendientes_vivas)} pendientes = ${_lNum(r.dias_de_cupo_pendientes, 1)} días de cupo (cupo ${_lNum(r.cupo_diario)}/día). ${_lNum(r.a_cancelar)} son del plan y nadie las tomó${tramos ? ` (${tramos})` : ''}: mientras sigan, no se crea ningún conteo nuevo.</div>
+    <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:10px;">
+      ${p.cancelar_rezago ? _lBoton('🗑 Cancelar rezago (ver antes)', 'liderCancelarRezago()', 'suave') : _lSinPermiso('El rezago lo cancela un admin (Inventario → ABC → Cancelar rezago)')}
+    </div>
+  </div>`;
+}
+
+/** El tablero completo, ya escapado. Pura: la prueba la corre en Node. */
+function liderTableroHtml(d) {
+  const p = d.permisos || {};
+  const dec = d.decisiones || {};
+  const r = d.resumen || {};
+  const pb = r.por_bloque || {};
+  const chip = (txt, n) => `<span style="display:inline-block;padding:3px 8px;margin:2px 4px 2px 0;border-radius:10px;background:var(--bg-input);font-size:11px;color:var(--tx2);">${esc(txt)} <b>${_lNum(n)}</b></span>`;
+  const cabecera = `<div style="background:var(--bg-s);border:1px solid var(--brd);border-radius:12px;padding:12px 14px;margin-bottom:12px;">
+    <div style="font-size:12px;color:var(--tx3);">${esc(d.almacen || '')}${d.bodega_siesa ? ` (${esc(d.bodega_siesa)})` : ''} · ${esc(d.al_dia_operativo)}</div>
+    <div style="font-size:20px;font-weight:800;color:${r.decisiones_pendientes ? 'var(--yellow)' : 'var(--green)'};margin-top:4px;">${_lNum(r.decisiones_pendientes)} decisiones esperan por vos</div>
+    <div style="margin-top:6px;">${chip('Bloqueados', pb.bloqueados)}${chip('Sin código', pb.novedades)}${chip('Ajustes', pb.ajustes)}${chip('Auditorías', pb.auditorias)}${chip('Rechazos Siesa', pb.rechazados_siesa)}</div>
+  </div>`;
+  return _lRezago(d.rezago, p) + cabecera
+    + _lBloqueados(dec.bloqueados || {}, p)
+    + _lNovedades(dec.novedades || {}, p)
+    + _lAjustes(dec.ajustes || {}, p)
+    + _lAuditorias(dec.auditorias || {})
+    + _lRechazados(dec.rechazados_siesa || {}, p)
+    + _lFueraDelPlan(d.fuera_del_plan || {})
+    + _lHoy(d.hoy || {})
+    + `<div style="font-size:10px;color:var(--tx3);text-align:center;margin:8px 0 16px;">${esc(d.fuente || '')}</div>`;
+}
+
+/** El almacén del tablero: el del selector propio, o el de la pestaña ABC. */
+function _liderAlmacenId() {
+  const sel = document.getElementById('lider-almacen');
+  return (sel && sel.value) || document.getElementById('inv-abc-almacen')?.value || '';
+}
+
+/** Entrada de la pestaña 🧭 Líder (la llama invSubtab). */
+async function liderCargar() {
+  const el = document.getElementById('inv-lider-contenido');
+  if (!el) return;
+  const sel = document.getElementById('lider-almacen');
+  if (sel && !sel.options.length) {
+    try {
+      if (!_INV_ALMACENES.length) _INV_ALMACENES = await get('/api/almacenes/');
+    } catch (_) { /* el tablero dice que falta el almacén */ }
+    sel.innerHTML = (_INV_ALMACENES || []).map(a =>
+      `<option value="${esc(a.id)}">${esc(a.nombre)}${a.bodega_siesa_id ? ` (${esc(a.bodega_siesa_id)})` : ''}</option>`).join('');
+    const abc = document.getElementById('inv-abc-almacen')?.value;
+    if (abc) sel.value = abc;
+  }
+  const almId = _liderAlmacenId();
+  if (!almId) {
+    el.innerHTML = '<div style="text-align:center;padding:30px;color:var(--tx3);">Elegí un almacén</div>';
+    return;
+  }
+  el.innerHTML = '<div style="text-align:center;padding:30px;color:var(--tx3);">Cargando…</div>';
+  try {
+    _LIDER_DATOS = await get(`/api/conteo/lider/tablero?almacen_id=${encodeURIComponent(almId)}`);
+    el.innerHTML = liderTableroHtml(_LIDER_DATOS);
+  } catch (e) {
+    el.innerHTML = `<div style="text-align:center;padding:30px;color:var(--red);">${esc(e.message || 'Error cargando el tablero')}</div>`;
+  }
+}
+
+/** Busca una fila del tablero por id dentro de un bloque. */
+function _liderFila(bloque, id) {
+  const dec = (_LIDER_DATOS && _LIDER_DATOS.decisiones) || {};
+  const filas = bloque === 'ajustes'
+    ? [...((dec.ajustes || {}).aprobables || {}).filas || [], ...((dec.ajustes || {}).bloqueados || {}).filas || []]
+    : ((dec[bloque] || {}).filas || []);
+  return filas.find(f => f.id === id) || null;
+}
+
+async function liderReabrir(id) { await conteoReabrirBloqueado(id); await liderCargar(); }
+async function liderCancelarBloqueado(id) { await conteoCancelarBloqueado(id); await liderCargar(); }
+async function liderResolverNovedad(id) { await conteoResolverNovedad(id); await liderCargar(); }
+
+/** Aprueba un ajuste de la raíz: dice qué sale a Siesa y cuánto vale antes de mandarlo. */
+async function liderAprobarAjuste(id) {
+  const f = _liderFila('ajustes', id);
+  if (!f) return;
+  const texto = `${f.direccion === 'ENTRADA' ? 'ENTRADA' : 'SALIDA'} de ${_lNum(f.unidades)} und de ${esc(f.producto_codigo || '')} ${esc(f.producto_nombre || '')}\n`
+    + `Valor: ${f.valor === null || f.valor === undefined ? 'sin costo en la foto' : '$' + _lNum(f.valor)}\n\nSe envía a Siesa como ajuste de inventario.`;
+  if (!await _modalConfirmar(texto, { titulo: 'Aprobar ajuste', textoConfirmar: 'Aprobar y enviar' })) return;
+  try {
+    const d = await put(`/api/conteo/${id}/ajustar`, {});
+    alerta(d.mensaje || 'Ajuste aprobado', 'exito');
+  } catch (e) { alerta(e.message || 'No se pudo aprobar', 'error'); }
+  await liderCargar();
+}
+
+/** Abre un conteo nuevo del producto (conteo manual). El viejo queda «viejo» cuando el nuevo se cuente, y se cancela. */
+async function liderRecontar(id) {
+  const f = _liderFila('ajustes', id);
+  if (!f || !_LIDER_DATOS) return;
+  if (!await _modalConfirmar(`Se abre un conteo nuevo de ${esc(f.producto_codigo || '')} ${esc(f.producto_nombre || '')}.\n\nCuando se cuente, éste queda viejo y lo cancelás desde acá.`, { titulo: 'Recontar' })) return;
+  try {
+    await post('/api/conteo/manual', { almacen_id: _LIDER_DATOS.almacen_id, producto_codigo: f.producto_codigo });
+    alerta('Conteo nuevo creado — sale en la cola de los operarios', 'exito');
+  } catch (e) { alerta(e.message || 'No se pudo crear el conteo', 'error'); }
+  await liderCargar();
+}
+
+/** Cancela un conteo en DESCUADRE que no se puede aprobar (con motivo). */
+async function liderCancelarConteo(id) {
+  const motivo = await _modalTexto('Cancelar conteo', 'No se ajusta nada en Siesa. ¿Por qué se cancela?',
+    { obligatorio: true, textoConfirmar: 'Cancelar conteo', textoCancelar: 'Volver' });
+  if (motivo === null) return;
+  try {
+    await put(`/api/conteo/${id}/cancelar`, { motivo });
+    alerta('Conteo cancelado', 'exito');
+  } catch (e) { alerta(e.message || 'No se pudo cancelar', 'error'); }
+  await liderCargar();
+}
+
+async function liderReintentarFallos() { await conteoReintentarFallos(); await liderCargar(); }
+async function liderDescartarFallos() { await conteoDescartarFallos(); await liderCargar(); }
+
+/** El mismo «Cancelar rezago» de la pestaña ABC (vista previa + motivo), sobre el almacén del tablero. */
+async function liderCancelarRezago() {
+  const abc = document.getElementById('inv-abc-almacen');
+  if (abc && _LIDER_DATOS) abc.value = String(_LIDER_DATOS.almacen_id);
+  await limpiarPendientesAbc();
+  await liderCargar();
+}
+
+function liderContarDefinitivo() { invSubtab('definitivo'); }

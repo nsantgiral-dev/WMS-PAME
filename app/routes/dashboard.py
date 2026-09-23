@@ -255,10 +255,12 @@ def resumen_completo():
     traslados_riesgo = _safe(get_resumen_alertas)
 
     try:
-        auditorias_urgentes = (SesionConteo.query
-            .filter_by(tipo='EXCEPCION_PICKING', almacen_id=almacen_id)
-            .filter(SesionConteo.estado.in_(['PENDIENTE', 'EN_PROCESO', 'SEGUNDO_CONTEO', 'DESCUADRE']))
-            .count())
+        # La misma lista que el tablero del líder muestra: el número del KPI y
+        # las filas que abre su tarjeta no pueden decir cosas distintas. Antes
+        # contaba filas (CC1 + CC2 de la misma auditoría) y el CC2 que resuelve
+        # queda en DESCUADRE para siempre: el KPI solo crecía.
+        from app.services.tablero_lider_conteo import contar_auditorias_urgentes
+        auditorias_urgentes = contar_auditorias_urgentes(almacen_id)
     except Exception:
         logger.exception('[DASHBOARD] auditorias_urgentes query falló')
         auditorias_urgentes = None

@@ -269,12 +269,17 @@ def _cadena(raiz: SesionConteo) -> _Cadena:
     )
 
 
-def _cargar_cadenas(almacen_id=None) -> list:
+def _cargar_cadenas(almacen_id=None, *, ids_raices=None) -> list:
     """Todas las raíces (del almacén, si se pide) con sus dos niveles de hijos
     precargados. Sin filtro de fecha a propósito: el rezago, la cobertura y los
     bloqueados son una foto de HOY, y una cadena creada en abril puede
     resolverse en septiembre. Con el volumen medido (~9.000 raíces) es una
-    consulta y dos `selectin`, no N+1."""
+    consulta y dos `selectin`, no N+1.
+
+    `ids_raices` acota a esas raíces (lo usa `cadenas_cerradas_el_dia`); el
+    veredicto y el día los sigue decidiendo `_cadena`, igual que acá."""
+    if ids_raices is not None and not ids_raices:
+        return []
     q = (SesionConteo.query
          .options(
              selectinload(SesionConteo.hijo_conteo).selectinload(SesionConteo.hijo_conteo),
@@ -285,7 +290,54 @@ def _cargar_cadenas(almacen_id=None) -> list:
                      SesionConteo.es_segundo_conteo.is_(None))))
     if almacen_id:
         q = q.filter(SesionConteo.almacen_id == almacen_id)
+    if ids_raices is not None:
+        q = q.filter(SesionConteo.id.in_(sorted(ids_raices)))
     return [_cadena(r) for r in q.all()]
+
+
+def cadenas_cerradas_el_dia(dia: date, almacen_id=None) -> list:
+    """Las cadenas que se CERRARON (tienen veredicto) el día operativo `dia`,
+    con la misma regla de día que el reporte (`dia_de_atribucion`). Lo usa el
+    tablero del líder para «cuánto se contó hoy» contra el cupo.
+
+    No carga las ~9.000 raíces: primero busca las filas con foto o cierre
+    dentro del día —el día de una cadena sale de uno de esos dos instantes de
+    alguno de sus nodos, así que es un superconjunto— y sube a su raíz. El
+    veredicto y el día se deciden después con `_cadena`, igual que en el
+    reporte: una política, una función.
+    """
+    from sqlalchemy import and_
+    from app.utils.fecha import rango_dia_operativo_utc
+    inicio, fin = rango_dia_operativo_utc(dia, dia)
+    q = (db.session.query(SesionConteo.id, SesionConteo.sesion_origen_id,
+                          SesionConteo.es_segundo_conteo)
+         .filter(or_(and_(SesionConteo.foto_siesa_at >= inicio,
+                          SesionConteo.foto_siesa_at < fin),
+                     and_(SesionConteo.fecha_cierre >= inicio,
+                          SesionConteo.fecha_cierre < fin))))
+    if almacen_id:
+        q = q.filter(SesionConteo.almacen_id == almacen_id)
+    raices, pendientes = set(), {}
+    for sid, origen, es_hijo in q.all():
+        if es_hijo and origen:
+            pendientes[sid] = origen
+        else:
+            raices.add(sid)
+    # Un CC3 cuelga de su CC2, que cuelga de la raíz: dos saltos como mucho.
+    for _ in range(2):
+        if not pendientes:
+            break
+        padres = (db.session.query(SesionConteo.id, SesionConteo.sesion_origen_id,
+                                   SesionConteo.es_segundo_conteo)
+                  .filter(SesionConteo.id.in_(sorted(set(pendientes.values())))).all())
+        pendientes = {}
+        for pid, origen, es_hijo in padres:
+            if es_hijo and origen:
+                pendientes[pid] = origen
+            else:
+                raices.add(pid)
+    return [c for c in _cargar_cadenas(almacen_id, ids_raices=raices)
+            if c.cerrada and c.dia == dia]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -822,6 +874,13 @@ def _por_operario(cerradas) -> dict:
         'filas': filas,
         'excluidos': {'conteo_sin_operario': sin_operario} if sin_operario else {},
     }
+
+
+def participacion_por_persona(cerradas) -> dict:
+    """`_por_operario` con nombre público: el tablero del líder muestra el
+    volumen de hoy por persona con la MISMA regla que el reporte (solo
+    volumen, orden por nombre, sin exactitud ni ranking)."""
+    return _por_operario(cerradas)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

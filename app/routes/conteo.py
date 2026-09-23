@@ -715,6 +715,37 @@ def estadisticas_conteo():
     return jsonify(reporte), 200
 
 
+@conteo_bp.route('/lider/tablero', methods=['GET'])
+@jwt_required()
+def tablero_lider():
+    """El tablero del líder de bodega: lo que espera su decisión, lo urgente
+    primero y cada fila con su acción. Query: `almacen_id` (obligatorio).
+
+    La ruta solo parsea: la política vive en
+    `app/services/tablero_lider_conteo.py`. Cero Siesa.
+    """
+    from app.models.usuario import Usuario
+    from app.services.tablero_lider_conteo import tablero
+    try:
+        uid = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
+    u = db.session.get(Usuario, uid)
+    if not u or u.rol not in Roles.SUPERVISION:
+        return jsonify({'error': 'Sin permiso'}), 403
+    crudo = (request.args.get('almacen_id') or '').strip()
+    if not crudo:
+        return jsonify({'error': 'almacen_id es requerido'}), 400
+    try:
+        almacen_id = int(crudo)
+    except ValueError:
+        return jsonify({'error': f'almacen_id inválido: {crudo!r}'}), 400
+    try:
+        return jsonify(tablero(almacen_id, rol=u.rol)), 200
+    except LookupError as e:
+        return jsonify({'error': str(e)}), 404
+
+
 @conteo_bp.route('/asignar-lote', methods=['POST'])
 @jwt_required()
 def asignar_lote():
