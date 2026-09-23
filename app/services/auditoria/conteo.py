@@ -57,22 +57,30 @@ def _sesiones(estados=None, limite=2000):
     detector_ciego='tests/flujo/test_flujo_conteo.py::TestElDetectorNoEstaCiego::test_ve_una_diferencia_que_no_es_la_resta',
 )
 def la_diferencia_es_la_resta(ctx=None):
-    """`diferencia = cantidad_fisica − existencia_siesa`.
+    """`diferencia = cantidad_fisica − base`, con la base de
+    `ConteoService.base_de_comparacion`: el teórico de la foto de Siesa
+    (`existencia − POS pendiente`) o, sin foto, `existencia_siesa`.
 
     Se guarda calculada en vez de derivarse al leer, así que puede quedar
     desincronizada si alguien edita una de las dos puntas. Y es el número que
     viaja al ajuste.
+
+    La base la decide la MISMA función que usa el servicio: si este invariante
+    restara la existencia cruda, marcaría como rota cada sesión de tienda con
+    POS pendiente —las sanas— y callaría las que repitieran el doble descuento.
     """
+    from app.services.conteo_service import ConteoService
     out = []
     for s in _sesiones():
-        if s.cantidad_fisica is None or s.existencia_siesa is None:
+        base = ConteoService.base_de_comparacion(s)
+        if s.cantidad_fisica is None or base is None:
             continue
-        esperada = s.cantidad_fisica - s.existencia_siesa
+        esperada = s.cantidad_fisica - base
         if s.diferencia is not None and s.diferencia != esperada:
             out.append(Hallazgo(
                 referencia=s.codigo or f'conteo#{s.id}',
                 detalle=f'diferencia={s.diferencia} pero '
-                        f'{s.cantidad_fisica} − {s.existencia_siesa} = {esperada}',
+                        f'{s.cantidad_fisica} − {base} = {esperada}',
                 datos={'estado': s.estado},
             ))
     return out
@@ -267,4 +275,42 @@ def ningun_ajuste_sobre_una_base_del_wms(ctx=None):
         )
         for s in _sesiones()
         if s.siesa_triggered and s.fuente_existencia == 'WMS'
+    ]
+
+
+@invariante(
+    codigo='CNT-08',
+    flujo='conteo',
+    frontera='foto de Siesa → ajuste',
+    consecuencia='Salió a Siesa un ajuste medido con salidas sin confirmar que '
+                 'no eran POS. Si esa mercancía ya había dejado el estante, el '
+                 'conteo la vio faltar y Siesa la vuelve a descontar al '
+                 'confirmar la salida: el mismo faltante, dos veces.',
+    severidad=BLOQUEA,
+    detector_ciego='tests/test_conteo_teorico_pos.py::TestCNT08::test_ve_un_ajuste_con_salidas_no_pos',
+)
+def ningun_ajuste_con_salidas_no_pos(ctx=None):
+    """`siesa_triggered` con `salida_sin_conf_siesa ≠ cant_pos_siesa` en la foto.
+
+    Desde el 2026-09-23 la aprobación **se niega** en ese caso
+    (`ConteoService.motivo_bloqueo_ajuste`). Este invariante cubre el día que
+    alguien reabra la puerta — otro camino al 142951 que no pase por la
+    política, o la política aflojada.
+
+    `NULL` no cuenta: es el histórico anterior a la foto, y no se sabe con qué
+    salidas se midió. Lo mismo que CNT-07 hace con `fuente_existencia`.
+    """
+    return [
+        Hallazgo(
+            referencia=s.codigo or f'conteo#{s.id}',
+            detalle=f'ajuste de {s.diferencia} enviado con salida sin confirmar '
+                    f'{s.salida_sin_conf_siesa} y POS {s.cant_pos_siesa} en la '
+                    f'foto: {s.salida_sin_conf_siesa - s.cant_pos_siesa} und de '
+                    f'salidas que no eran de caja',
+            datos={'producto': s.producto_codigo_siesa, 'estado': s.estado},
+        )
+        for s in _sesiones()
+        if s.siesa_triggered
+        and s.salida_sin_conf_siesa is not None and s.cant_pos_siesa is not None
+        and s.salida_sin_conf_siesa != s.cant_pos_siesa
     ]

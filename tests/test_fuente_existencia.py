@@ -79,31 +79,36 @@ class TestLaProcedenciaSeDeclaraSiempre:
 class TestNoSeAjustaContraElWMS:
     """La decisión de Operaciones, en código."""
 
-    def test_la_aprobacion_se_niega_si_siesa_no_responde(self, monkeypatch):
-        """Por AST: la rama del `else` tiene que levantar, no loguear.
+    def test_la_aprobacion_se_niega_si_siesa_no_responde(self, db, sitio, almacen):
+        """Ejecutando la aprobación, no leyendo su fuente.
 
-        Antes era `logger.warning(...)` y el ajuste salía igual.
+        Antes era `logger.warning(...)` y el ajuste salía igual. Hasta el
+        2026-09-23 esto se comprobaba por AST —«la rama `else` de
+        `if existencia_siesa ...` levanta»—, atado a una forma del código que
+        dejó de existir: la aprobación ya no lee Siesa, usa la foto que el
+        conteo guardó. La propiedad es la misma y se mide por lo que hace: una
+        sesión cuya base fue el WMS (Siesa no respondió al contar) no produce
+        ningún job, levanta, y no cambia de estado.
         """
-        import ast
-        import pathlib
+        import pytest as _pytest
+        from app.models.siesa_job import SiesaJob
+        from app.services.conteo_service import ConteoService
+        almacen.centro_op_siesa = '003'
+        s = SesionConteo(codigo='CC-FE-WMS', tipo='DIARIO_ABC', estado='DESCUADRE',
+                         producto_codigo_siesa='PROD-001',
+                         cantidad_fisica=10, existencia_siesa=7, diferencia=3,
+                         fuente_existencia='WMS', **sitio)
+        db.session.add(s)
+        db.session.commit()
 
-        src = pathlib.Path('app/services/conteo_service.py').read_text()
-        arbol = ast.parse(src)
-        # la asignación `existencia_siesa = ConteoService.consultar_...`
-        objetivo = None
-        for n in ast.walk(arbol):
-            if (isinstance(n, ast.If) and isinstance(n.test, ast.Compare)
-                    and isinstance(n.test.left, ast.Name)
-                    and n.test.left.id == 'existencia_siesa'
-                    and n.orelse):
-                objetivo = n
-        assert objetivo is not None, 'ya no existe la comprobación de existencia'
-        levanta = [x for x in ast.walk(ast.Module(body=objetivo.orelse, type_ignores=[]))
-                   if isinstance(x, ast.Raise)]
-        assert levanta, (
-            'la aprobación volvió a seguir de largo cuando Siesa no responde. El '
+        with _pytest.raises(ValueError, match='siempre puede esperar'):
+            ConteoService._encolar_ajuste_fisico(s, aprobador_id=None)
+        db.session.rollback()
+        assert SiesaJob.query.filter_by(tipo='AJUSTE_CONTEO').count() == 0, (
+            'la aprobación volvió a seguir de largo sin foto de Siesa. El '
             'ajuste sale como delta sobre la base del WMS y deja a Siesa peor de '
             'lo que estaba.')
+        assert db.session.get(SesionConteo, s.id).estado == 'DESCUADRE'
 
     def test_el_mensaje_dice_que_puede_esperar(self):
         import pathlib

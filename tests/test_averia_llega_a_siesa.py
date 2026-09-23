@@ -342,8 +342,9 @@ def test_otros_veredictos_de_auditoria_no_encolan_nada(db, setup):
     # parches por clase de otros archivos en la misma sesión de pytest.
     from unittest.mock import patch
     from app.services.conteo_service import ConteoService
-    with patch.object(ConteoService, 'consultar_existencia_siesa',
-                      return_value=5.0):
+    from tests.conftest import foto_siesa
+    with patch.object(ConteoService, 'consultar_foto_siesa',
+                      return_value=foto_siesa(5.0)):
         PickingService.auditar_tarea(t.id, setup['usuario'].id,
                                      'ENCONTRADO_COMPLETO', cantidad_hallada=5)
     db.session.commit()

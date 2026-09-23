@@ -61,6 +61,31 @@ class SesionConteo(db.Model):
     #: Sin esta columna ningún invariante podía comprobarlo: el defecto no era
     #: solo indetectable, era inauditable.
     fuente_existencia = db.Column(db.String(10), nullable=True)
+    #: **La foto de Siesa tomada al contar** (2026-09-23). Las cuatro juntas o
+    #: ninguna — `ConteoService.consultar_foto_siesa` no devuelve media foto.
+    #:
+    #: `existencia_siesa` sola no es contra qué comparar en una tienda:
+    #: `f400_cant_existencia_1` todavía incluye la venta POS que Siesa no ha
+    #: acumulado (`f400_cant_pos_1`). La mercancía ya se fue del estante, así
+    #: que un conteo honesto sale «corto» exactamente en esa cantidad; si se
+    #: ajusta, la acumulación del POS la vuelve a descontar al día siguiente.
+    #: Doble descuento. La base es el **teórico**: `existencia − cant_pos`.
+    #:
+    #: Y la foto se guarda —no se vuelve a leer al aprobar— porque el ajuste es
+    #: un DELTA medido en un instante: `cantidad_fisica − teorico_siesa`. Leer
+    #: la existencia en otro instante mezcla dos momentos, y cualquier
+    #: movimiento entre medio se cuela en el ajuste (hasta con el signo
+    #: invertido).
+    #:
+    #: `salida_sin_conf_siesa` va aparte porque es la que decide si el delta se
+    #: puede creer: el POS pendiente vive dentro de ella (medido: 600/600 filas
+    #: con POS en Siesa QA, 2026-09-23). Si hay salidas sin confirmar que NO son
+    #: POS, no se sabe si esa mercancía ya salió del estante y el ajuste no se
+    #: aprueba — ver `ConteoService.motivo_bloqueo_ajuste`.
+    cant_pos_siesa = db.Column(db.Integer, nullable=True)
+    salida_sin_conf_siesa = db.Column(db.Integer, nullable=True)
+    teorico_siesa = db.Column(db.Integer, nullable=True)
+    foto_siesa_at = db.Column(db.DateTime, nullable=True)
     cantidad_fisica = db.Column(db.Integer)   # Lo que contó el operario
     lote_id = db.Column(db.String(50))        # Obligatorio si maneja_lote=True
 
@@ -181,6 +206,10 @@ class SesionConteo(db.Model):
             'estado': self.estado,
             'existencia_siesa': self.existencia_siesa,
             'fuente_existencia': self.fuente_existencia,
+            'cant_pos_siesa': self.cant_pos_siesa,
+            'salida_sin_conf_siesa': self.salida_sin_conf_siesa,
+            'teorico_siesa': self.teorico_siesa,
+            'foto_siesa_at': self.foto_siesa_at.isoformat() if self.foto_siesa_at else None,
             'cantidad_fisica': self.cantidad_fisica,
             'lote_id': self.lote_id,
             'diferencia': self.diferencia,
@@ -200,12 +229,20 @@ class SesionConteo(db.Model):
             'editado_por_nombre': self.editor.nombre if self.editor else None,
             'editado_en': self.editado_en.isoformat() if self.editado_en else None,
             'motivo_edicion': self.motivo_edicion,
+            # Por qué este ajuste no se puede aprobar, dicho por la MISMA
+            # función que lo niega — la pantalla no reimplementa la regla.
+            'bloqueo_ajuste': _motivo_bloqueo_ajuste(self),
             # Datos del segundo conteo (hijo) embebidos para evitar N+1.
             # Si CC1≠CC2, hijo_conteo.hijo_conteo es el CC3.
             'segundo_conteo': {
                 'id': self.hijo_conteo.id,
                 'estado': self.hijo_conteo.estado,
                 'cantidad_fisica': self.hijo_conteo.cantidad_fisica,
+                # CC1 y CC2 coinciden por DIFERENCIA contra su propia foto, no
+                # por cantidad física — la pantalla necesita las dos para
+                # decir lo mismo que el servicio.
+                'diferencia': self.hijo_conteo.diferencia,
+                'teorico_siesa': self.hijo_conteo.teorico_siesa,
                 'operario_id': self.hijo_conteo.operario_id,
                 'operario_nombre': (
                     self.hijo_conteo.operario.nombre
@@ -227,3 +264,9 @@ class SesionConteo(db.Model):
                 } if self.hijo_conteo.hijo_conteo else None,
             } if self.hijo_conteo else None,
         }
+
+
+def _motivo_bloqueo_ajuste(sesion):
+    """Import diferido: la política vive en el servicio, no en el modelo."""
+    from app.services.conteo_service import ConteoService
+    return ConteoService.motivo_bloqueo_ajuste(sesion)

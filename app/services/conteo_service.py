@@ -125,9 +125,12 @@ class ConteoService:
             _alm = _Alm.query.get(sesion_pre.almacen_id)
             _bodega_siesa = _alm.bodega_siesa_id if _alm else None
 
-        existencia_ref = None
+        # La foto se toma AHORA, en el instante del conteo, y queda guardada:
+        # el ajuste que salga de esta sesión es un delta contra ESTA foto, no
+        # contra una existencia leída cuando alguien apruebe.
+        foto = None
         if sesion_pre.producto_codigo_siesa and _bodega_siesa:
-            existencia_ref = ConteoService.consultar_existencia_siesa(
+            foto = ConteoService.consultar_foto_siesa(
                 producto_codigo_siesa=sesion_pre.producto_codigo_siesa,
                 bodega=_bodega_siesa,
             )
@@ -136,22 +139,27 @@ class ConteoService:
         # solo se escribe en el caso malo deja el caso bueno indistinguible del
         # histórico sin dato.
         _fuente_existencia = 'SIESA'
-        if existencia_ref is None:
-            # Fallback a WMS si Siesa no responde
+        existencia_wms = None
+        if foto is None:
+            # Fallback a WMS si Siesa no responde (o la foto vino incompleta).
+            # Sirve para decidir MATCH / segundo conteo; NO para ajustar:
+            # `motivo_bloqueo_ajuste` niega cualquier ajuste sin foto.
             reg_inv = UbicacionProducto.query.filter_by(
                 ubicacion_id=sesion_pre.ubicacion_id,
                 producto_id=sesion_pre.producto_id,
             ).first()
-            existencia_ref = float(reg_inv.cantidad) if reg_inv else 0.0
+            existencia_wms = float(reg_inv.cantidad) if reg_inv else 0.0
             _fuente_existencia = 'WMS'
             logger.warning(
-                f'[CONTEO] Siesa no respondió para {sesion_pre.codigo} '
-                f'— diferencia calculada contra WMS ({existencia_ref})'
+                f'[CONTEO] Siesa no dio foto completa para {sesion_pre.codigo} '
+                f'— diferencia calculada contra WMS ({existencia_wms}); '
+                f'esta sesión no podrá ajustar Siesa'
             )
         else:
             logger.info(
-                f'[CONTEO] Referencia Siesa para {sesion_pre.codigo}: '
-                f'{existencia_ref} und (bodega={_bodega_siesa})'
+                f'[CONTEO] Foto Siesa para {sesion_pre.codigo} (bodega={_bodega_siesa}): '
+                f'existencia={foto["existencia"]} pos={foto["cant_pos"]} '
+                f'salida_sin_conf={foto["salida_sin_conf"]} → teórico={foto["teorico"]}'
             )
 
         # Adquirir lock pesimista para el update atómico
@@ -173,7 +181,9 @@ class ConteoService:
 
         sesion.operario_id = operario_id
         sesion.cantidad_fisica = cantidad_fisica
-        sesion.existencia_siesa = existencia_ref
+        ConteoService._grabar_foto(sesion, foto)
+        if foto is None:
+            sesion.existencia_siesa = existencia_wms
         sesion.fuente_existencia = _fuente_existencia
         sesion.lote_id = lote_id
         sesion.fecha_inicio = sesion.fecha_inicio or datetime.utcnow()
@@ -225,10 +235,8 @@ class ConteoService:
                     sesion.estado = EstadoConteo.DESCUADRE
                     if raiz and raiz.estado == EstadoConteo.TERCER_CONTEO:
                         raiz.estado = EstadoConteo.DESCUADRE
-                        raiz.cantidad_fisica = cantidad_fisica  # CC3 es la verdad definitiva
-                        raiz.diferencia = diferencia
-                        raiz.existencia_siesa = existencia_ref
-                        raiz.fuente_existencia = _fuente_existencia
+                        # CC3 es la verdad definitiva: su físico Y su foto.
+                        ConteoService._copiar_observacion(raiz, sesion)
                         raiz.motivo_codigo = 'AJ-ENT' if diferencia > 0 else 'AJ-SAL'
                         logger.warning(f'[CONTEO] CC3 DESCUADRE — raíz {raiz.codigo} → DESCUADRE, cantidad={cantidad_fisica}')
                     try:
@@ -243,24 +251,26 @@ class ConteoService:
                         # id de CC1 (la raíz) — quien llama necesita este id para
                         # PUT /api/conteo/<raiz_id>/ajustar, no el de CC3 mismo.
                         'raiz_id': raiz.id if raiz else None,
+                        # Se avisa ya, no cuando el supervisor apriete aprobar.
+                        'ajuste_bloqueado': ConteoService.motivo_bloqueo_ajuste(raiz if raiz else sesion),
                     }
 
                 # CC2 no cuadra con Siesa — comparar CC1 vs CC2
                 cc1_cantidad = origen.cantidad_fisica if origen else None
                 sesion.estado = EstadoConteo.DESCUADRE
 
-                if cc1_cantidad is not None and cantidad_fisica == cc1_cantidad:
-                    # CC1 == CC2: "verdad de bodega" — ajuste automático sin esperar admin
-                    debe_auto_encolar = bool(origen and origen.estado == EstadoConteo.SEGUNDO_CONTEO)
+                if origen is not None and ConteoService.conteos_coinciden(origen, sesion):
+                    # CC1 == CC2 (en diferencia contra su foto): "verdad de
+                    # bodega" — ajuste automático sin esperar admin.
+                    debe_auto_encolar = bool(origen.estado == EstadoConteo.SEGUNDO_CONTEO)
                     if debe_auto_encolar:
                         origen.estado = EstadoConteo.DESCUADRE
+                        # La raíz se queda con la observación que resolvió —
+                        # la de CC2, la más reciente— para que el ajuste y su
+                        # bloqueo se decidan sobre UNA foto.
+                        ConteoService._copiar_observacion(origen, sesion)
+                        origen.motivo_codigo = 'AJ-ENT' if diferencia > 0 else 'AJ-SAL'
 
-                    # Comitear y SOLTAR el lock de `sesion` (with_for_update, línea
-                    # ~119) ANTES de llamar a Siesa. `_encolar_ajuste_fisico` hace
-                    # una consulta HTTP — sostenerla con la fila bloqueada deja la
-                    # conexión (y con el timeout de ~30s de Siesa, Regla 14) atada
-                    # durante toda la llamada, justo lo que el resto de esta
-                    # función evita a propósito para `existencia_ref` (línea ~79).
                     try:
                         db.session.commit()
                     except Exception as e:
@@ -269,7 +279,18 @@ class ConteoService:
 
                     auto_encolado = False
                     error_auto_encolado = None
-                    if debe_auto_encolar:
+                    bloqueo = (ConteoService.motivo_bloqueo_ajuste(origen)
+                               if debe_auto_encolar else None)
+                    if bloqueo:
+                        # No se intenta: no es un fallo del encolado, es una
+                        # decisión. Queda en DESCUADRE con la foto grabada, y la
+                        # aprobación manual la va a negar por la misma razón.
+                        error_auto_encolado = bloqueo
+                        logger.warning(
+                            f'[CONTEO] CC1==CC2 en {origen.codigo} pero el ajuste '
+                            f'NO se encola: {bloqueo}'
+                        )
+                    elif debe_auto_encolar:
                         try:
                             ConteoService._encolar_ajuste_fisico(origen, aprobador_id=None)
                             db.session.commit()
@@ -291,6 +312,11 @@ class ConteoService:
                     # tragaba en el `except` de arriba y nada llegaba a la DLQ.
                     if auto_encolado:
                         mensaje = 'Ambos conteos coinciden — ajuste encolado automáticamente'
+                    elif bloqueo:
+                        mensaje = (
+                            'Ambos conteos coinciden, pero el ajuste NO se envía: '
+                            f'{bloqueo}'
+                        )
                     elif debe_auto_encolar:
                         mensaje = (
                             'Ambos conteos coinciden — el ajuste automático falló '
@@ -303,6 +329,7 @@ class ConteoService:
                         'resultado': 'DESCUADRE',
                         'mensaje': mensaje,
                         'auto_encolado': auto_encolado,
+                        'ajuste_bloqueado': bloqueo,
                         'sesion_id': sesion.id,
                     }
 
@@ -320,7 +347,8 @@ class ConteoService:
                     logger.error(f'[CONTEO] Error al crear CC3 para sesión {sesion_id}: {e}')
                     raise ValueError(f'Error al crear tercer conteo: {e}')
                 logger.warning(
-                    f'[CONTEO] CC1≠CC2 ({cc1_cantidad} vs {cantidad_fisica}) — '
+                    f'[CONTEO] CC1≠CC2 (físico {cc1_cantidad} vs {cantidad_fisica}; '
+                    f'diferencia {origen.diferencia if origen else None} vs {diferencia}) — '
                     f'CC3 creado: {cc3.codigo}'
                 )
                 return {
@@ -355,11 +383,11 @@ class ConteoService:
             }
 
     @staticmethod
-    def consultar_existencia_siesa(producto_codigo_siesa: str, bodega: str = None):
-        """
-        Consulta existencia fiscal en Siesa — solo para confirmar_ajuste().
-        Retorna float o None si Siesa no responde.
-        bodega: código de bodega Siesa (ej 'NB1'). Si None usa el default del gateway.
+    def _fila_invfecha(producto_codigo_siesa: str, bodega: str = None):
+        """La fila cruda de `API_v2_Inventarios_InvFecha` para ítem × bodega, o
+        `None` si Siesa no la dio. **La única lectura HTTP del conteo**: la
+        existencia suelta y la foto completa salen de acá, para que el sobre de
+        rechazo y la tabla vacía se traten igual en las dos.
         """
         if connekta.modo_simulacion:
             return None  # en simulación no hay Siesa real
@@ -390,31 +418,257 @@ class ConteoService:
                     f'bodega={bodega} — no se puede obtener existencia fiscal.'
                 )
                 return None
-            # El campo tiene que venir. Si falta, la fila no es la que
-            # creemos —otra API, otro alias— y un default de 0 sería la misma
-            # mentira por otra puerta.
-            crudo = tabla[0].get('f400_cant_existencia_1')
-            if crudo is None:
-                logger.error(
-                    '[CONTEO] la fila de existencia de %s bodega=%s no trae '
-                    'f400_cant_existencia_1 (claves: %s). No se asume cero.',
-                    producto_codigo_siesa, bodega, list(tabla[0].keys()))
-                return None
-            return float(crudo)
+            return tabla[0]
         except Exception as e:
             logger.warning(f'[CONTEO] Error consultando Siesa para {producto_codigo_siesa}: {e}')
             return None
 
     @staticmethod
+    def consultar_existencia_siesa(producto_codigo_siesa: str, bodega: str = None):
+        """
+        `f400_cant_existencia_1` sola, como float, o None si Siesa no responde.
+
+        **No es la base de un conteo** (desde 2026-09-23): en una tienda incluye
+        la venta POS que Siesa todavía no acumuló. Para comparar un conteo se
+        usa `consultar_foto_siesa`. Esta queda para quien solo quiere MIRAR la
+        existencia —los scripts de prueba real, el prewarm del turno— y no
+        decide ningún ajuste (ver `tests/test_conteo_teorico_pos.py`, el
+        inventario de lecturas).
+        bodega: código de bodega Siesa (ej 'NB1'). Si None usa el default del gateway.
+        """
+        fila = ConteoService._fila_invfecha(producto_codigo_siesa, bodega)
+        if fila is None:
+            return None
+        # El campo tiene que venir. Si falta, la fila no es la que
+        # creemos —otra API, otro alias— y un default de 0 sería la misma
+        # mentira por otra puerta.
+        crudo = fila.get('f400_cant_existencia_1')
+        if crudo is None:
+            logger.error(
+                '[CONTEO] la fila de existencia de %s bodega=%s no trae '
+                'f400_cant_existencia_1 (claves: %s). No se asume cero.',
+                producto_codigo_siesa, bodega, list(fila.keys()))
+            return None
+        try:
+            return float(crudo)
+        except (TypeError, ValueError):
+            logger.error('[CONTEO] f400_cant_existencia_1 ilegible para %s bodega=%s: %r',
+                         producto_codigo_siesa, bodega, crudo)
+            return None
+
+    #: Los tres campos sin los cuales la foto no sirve. `f400_cant_comprometida_1`
+    #: NO está: lo comprometido sigue físicamente en el estante, así que no
+    #: entra al teórico, y exigirlo bloquearía conteos por un dato que no se usa.
+    CAMPOS_FOTO = {
+        'existencia': 'f400_cant_existencia_1',
+        'cant_pos': 'f400_cant_pos_1',
+        'salida_sin_conf': 'f400_cant_salida_sin_conf_1',
+    }
+
+    @staticmethod
+    def teorico(existencia, cant_pos):
+        """**Lo que debería haber en el estante según Siesa**: `existencia − cant_pos`.
+
+        La única implementación de la fórmula (Regla 0, corolario: una política,
+        una función).
+
+        `f400_cant_pos_1` es venta de caja que Siesa aún no acumuló: la
+        mercancía ya salió, pero la existencia todavía la cuenta. Comparar el
+        físico contra la existencia cruda fabrica un faltante igual al POS; si
+        se ajusta, la acumulación del POS lo vuelve a descontar al día
+        siguiente. Doble descuento.
+
+        **No se resta la comprometida.** Un pedido comprometido sigue en el
+        estante hasta que alguien lo saca: el contador lo ve y lo cuenta.
+        """
+        return existencia - cant_pos
+
+    @staticmethod
+    def consultar_foto_siesa(producto_codigo_siesa: str, bodega: str = None):
+        """
+        La foto de Siesa contra la que se mide un conteo, tomada en el instante
+        de contar::
+
+            {existencia, cant_pos, salida_sin_conf, comprometida, teorico, leido_at}
+
+        o **None** si Siesa no responde o la fila no trae alguno de los tres
+        campos de `CAMPOS_FOTO`.
+
+        Campo ausente ≠ 0 (Regla 0). Un `f400_cant_pos_1` que no vino no es
+        «no hay POS pendiente»: es «no sé cuánto hay». Tomarlo como 0 reabre
+        exactamente el doble descuento que esta foto existe para cerrar, y en
+        la tienda donde más duele. Media foto se trata como ninguna.
+
+        `comprometida` viaja solo como contexto —puede venir `None`—; no entra
+        a ninguna cuenta.
+        """
+        fila = ConteoService._fila_invfecha(producto_codigo_siesa, bodega)
+        if fila is None:
+            return None
+        valores = {}
+        for clave, campo in ConteoService.CAMPOS_FOTO.items():
+            crudo = fila.get(campo)
+            if crudo is None:
+                logger.error(
+                    '[CONTEO] foto INCOMPLETA de %s bodega=%s: falta %s '
+                    '(claves: %s). No se asume cero: no se compara contra '
+                    'una base a medias.',
+                    producto_codigo_siesa, bodega, campo, list(fila.keys()))
+                return None
+            try:
+                valores[clave] = float(crudo)
+            except (TypeError, ValueError):
+                logger.error('[CONTEO] %s ilegible para %s bodega=%s: %r',
+                             campo, producto_codigo_siesa, bodega, crudo)
+                return None
+        comprometida = fila.get('f400_cant_comprometida_1')
+        try:
+            comprometida = float(comprometida) if comprometida is not None else None
+        except (TypeError, ValueError):
+            comprometida = None
+        return {
+            **valores,
+            'comprometida': comprometida,
+            'teorico': ConteoService.teorico(valores['existencia'], valores['cant_pos']),
+            'leido_at': datetime.utcnow(),
+        }
+
+    @staticmethod
+    def _grabar_foto(sesion: SesionConteo, foto) -> None:
+        """Escribe la foto completa en la sesión, o la deja vacía entera.
+
+        Nunca a medias: una sesión con `teorico_siesa` de un instante y
+        `salida_sin_conf_siesa` de otro sería una base que no midió nadie.
+        `existencia_siesa` y `fuente_existencia` NO se tocan con foto `None`:
+        las escribe el fallback al WMS, que declara su propia procedencia.
+        """
+        if foto is None:
+            sesion.cant_pos_siesa = None
+            sesion.salida_sin_conf_siesa = None
+            sesion.teorico_siesa = None
+            sesion.foto_siesa_at = None
+            return
+        sesion.existencia_siesa = foto['existencia']
+        sesion.cant_pos_siesa = foto['cant_pos']
+        sesion.salida_sin_conf_siesa = foto['salida_sin_conf']
+        sesion.teorico_siesa = foto['teorico']
+        sesion.foto_siesa_at = foto['leido_at']
+
+    @staticmethod
+    def _copiar_observacion(destino: SesionConteo, origen: SesionConteo) -> None:
+        """El conteo que RESOLVIÓ (el CC2 que confirma a CC1, o el CC3) se
+        copia a la raíz entero: físico, foto, procedencia y diferencia.
+
+        Entero porque el ajuste se calcula SOLO con lo que tiene la raíz
+        (`cantidad_fisica − teorico_siesa`) y porque el bloqueo por salidas no
+        POS se decide sobre esa misma foto. Copiar el físico sin la foto —o la
+        foto sin el físico— produce un delta entre dos instantes, que es el
+        defecto que esto cierra. El conteo propio de CC1 no se pierde del
+        todo: cuando CC1 y CC2 coinciden, coinciden en diferencia, que es lo
+        que viaja a Siesa.
+        """
+        destino.cantidad_fisica = origen.cantidad_fisica
+        destino.existencia_siesa = origen.existencia_siesa
+        destino.fuente_existencia = origen.fuente_existencia
+        destino.cant_pos_siesa = origen.cant_pos_siesa
+        destino.salida_sin_conf_siesa = origen.salida_sin_conf_siesa
+        destino.teorico_siesa = origen.teorico_siesa
+        destino.foto_siesa_at = origen.foto_siesa_at
+        destino.diferencia = origen.diferencia
+
+    @staticmethod
+    def base_de_comparacion(sesion: SesionConteo):
+        """Contra qué se compara el físico de esta sesión.
+
+        El teórico si hay foto de Siesa; si no, `existencia_siesa`, que en ese
+        caso es el stock del WMS (`fuente_existencia='WMS'`) o el histórico
+        anterior a la foto. Sirve para decidir MATCH / segundo conteo; **no**
+        para ajustar: sin foto no se ajusta (`motivo_bloqueo_ajuste`).
+        """
+        if sesion.teorico_siesa is not None:
+            return sesion.teorico_siesa
+        return sesion.existencia_siesa
+
+    @staticmethod
+    def conteos_coinciden(cc1: SesionConteo, cc2: SesionConteo) -> bool:
+        """¿CC2 confirma a CC1? Por **diferencia contra su propia foto**, no por
+        cantidad física.
+
+        Entre CC1 y CC2 la tienda sigue vendiendo. Ejemplo: CC1 cuenta 7 con
+        Siesa en existencia 10 / POS 2 (teórico 8, diferencia −1). Se vende 1
+        por caja. CC2 cuenta 6 con existencia 10 / POS 3 (teórico 7,
+        diferencia −1). Comparar físicos (7 ≠ 6) manda a un tercer conteo por
+        una venta que las dos cuentas registraron bien; comparar diferencias
+        (−1 == −1) dice lo que pasó: los dos vieron el mismo faltante de 1.
+
+        Solo se comparan diferencias si **las dos** tienen foto de Siesa: una
+        diferencia contra el stock del WMS y otra contra el teórico de Siesa
+        miden cosas distintas. Sin las dos fotos se compara el físico, como
+        antes — y ese ajuste igual queda bloqueado por falta de foto.
+        """
+        if cc1.teorico_siesa is not None and cc2.teorico_siesa is not None:
+            return (cc1.diferencia is not None
+                    and cc1.diferencia == cc2.diferencia)
+        return (cc1.cantidad_fisica is not None
+                and cc1.cantidad_fisica == cc2.cantidad_fisica)
+
+    @staticmethod
+    def motivo_bloqueo_ajuste(sesion: SesionConteo):
+        """Por qué el ajuste de esta sesión NO puede salir a Siesa, o `None`.
+
+        La usan el auto-ajuste de CC1 == CC2, la aprobación del supervisor, la
+        auditoría de picking y la pantalla (`to_dict`). Una regla, una función:
+        si la pantalla la reimplementara, un día diría «aprobable» sobre algo
+        que el servicio niega.
+
+        Dos casos, los dos Regla 0:
+
+        1. **Sin foto de Siesa.** El delta se mide contra la foto del conteo;
+           sin ella solo queda la base del WMS, y un delta sobre esa base deja
+           a Siesa en `siesa_real + (fisico − wms)`: peor que antes, justo
+           cuando las bases discrepan. Un ajuste de inventario siempre puede
+           esperar.
+        2. **Salidas sin confirmar que no son POS.** El POS pendiente vive
+           dentro de la salida sin confirmar (600/600 filas con POS medidas en
+           Siesa QA, 2026-09-23). Si `salida_sin_conf ≠ cant_pos` sobra una
+           salida que no es de caja —una remisión, un traslado sin confirmar—
+           y no se sabe si esa mercancía ya dejó el estante. Si ya salió, el
+           conteo sale corto en esa cantidad y Siesa la descuenta otra vez al
+           confirmarla: el mismo doble descuento por otra puerta.
+        """
+        if (sesion.fuente_existencia != 'SIESA' or sesion.teorico_siesa is None
+                or sesion.cant_pos_siesa is None
+                or sesion.salida_sin_conf_siesa is None):
+            return (
+                'El conteo no tiene foto de Siesa (existencia y POS pendiente '
+                'leídos al contar). El ajuste NO se aprueba contra el stock del '
+                'WMS ni contra una existencia leída en otro momento: saldría '
+                'como delta sobre una base equivocada. Recontar con Siesa '
+                'respondiendo — un ajuste de inventario siempre puede esperar.'
+            )
+        if sesion.salida_sin_conf_siesa != sesion.cant_pos_siesa:
+            no_pos = sesion.salida_sin_conf_siesa - sesion.cant_pos_siesa
+            return (
+                f'Siesa tenía {no_pos:g} und en salidas sin confirmar que NO '
+                f'son venta POS (salida sin confirmar '
+                f'{sesion.salida_sin_conf_siesa:g}, POS {sesion.cant_pos_siesa:g}). '
+                f'No se sabe si esa mercancía ya salió del estante, así que el '
+                f'conteo no se puede convertir en ajuste. Recontar cuando esas '
+                f'salidas estén confirmadas en Siesa.'
+            )
+        return None
+
+    @staticmethod
     def reconciliar_cantidad(sesion: SesionConteo, nueva_cantidad: int) -> dict:
         """
         Calcula diferencia y aplica transición MATCH si cuadra.
-        Compara contra existencia_siesa (que ahora almacena stock WMS).
+        Compara contra `base_de_comparacion`: el teórico de la foto de Siesa
+        (`existencia − POS pendiente`) o, sin foto, el stock del WMS.
 
         Returns:
             {'es_match': bool, 'diferencia': float}
         """
-        diferencia = nueva_cantidad - sesion.existencia_siesa
+        diferencia = nueva_cantidad - ConteoService.base_de_comparacion(sesion)
         sesion.diferencia = diferencia
         if diferencia == 0:
             sesion.estado = EstadoConteo.MATCH
@@ -596,8 +850,11 @@ class ConteoService:
     @staticmethod
     def _encolar_ajuste_fisico(sesion: SesionConteo, aprobador_id: int = None) -> None:
         """
-        SRP: única responsabilidad — consultar Siesa, calcular diferencia y encolar
-        job AJUSTE_CONTEO en DLQ. No hace commit — el caller lo hace.
+        SRP: única responsabilidad — calcular el delta con la foto de Siesa que
+        la sesión guardó AL CONTAR (`cantidad_fisica − teorico_siesa`) y encolar
+        el job AJUSTE_CONTEO en DLQ. **No consulta Siesa**: una lectura acá
+        mezclaría el instante de la aprobación con el del conteo.
+        No hace commit — el caller lo hace.
         Pre-condición: sesion.estado == DESCUADRE y sesion.cantidad_fisica is not None.
         """
         from app.models.almacen import Almacen
@@ -637,45 +894,42 @@ class ConteoService:
                 f'configurar en /api/almacenes antes de aprobar ajustes'
             )
 
-        existencia_siesa = ConteoService.consultar_existencia_siesa(
-            producto_codigo_siesa=sesion.producto_codigo_siesa,
-            bodega=bodega_siesa,
-        )
-        if existencia_siesa is not None:
-            sesion.existencia_siesa = existencia_siesa
-            sesion.fuente_existencia = 'SIESA'
-            logger.info(
-                f'[CONTEO] Existencia fiscal Siesa para sesion {sesion.id}: '
-                f'{existencia_siesa} (bodega={bodega_siesa}) — base del ajuste'
-            )
-        else:
-            # **No se ajusta a ciegas.** Decisión de Operaciones (2026-08-15).
-            #
-            # El ajuste sale a Siesa como un DELTA: `fisica − existencia_siesa`.
-            # Con la base tomada del WMS, Siesa queda en
-            # `siesa_real + (fisica − wms)` en vez de en `fisica` — o sea que
-            # **justo cuando las dos bases discrepan, que es la única razón para
-            # contar, el ajuste empeora el descuadre.**
-            #
-            # Antes esto era un `logger.warning` y el ajuste salía igual.
-            #
-            # El ajuste de inventario es la única transacción de esta operación
-            # que SIEMPRE puede esperar: no detiene una venta, ni un despacho,
-            # ni un recaudo. Si alguien necesita aprobarlo con Siesa caído, no
-            # está corrigiendo la verdad — está desbloqueando una operación, y
-            # entonces el kardex deja de ser una medición para volverse un
-            # residuo que se corrige a sí mismo cada vez que estorba.
-            sesion.fuente_existencia = 'WMS'
-            db.session.commit()
+        # **El delta se fijó al contar.** Hasta el 2026-09-23 esta función
+        # volvía a leer la existencia de Siesa al aprobar y recalculaba
+        # `fisica − existencia_de_ahora`: dos instantes en una resta. Cualquier
+        # movimiento entre el conteo y la aprobación se colaba en el ajuste —
+        # conteo 95 contra 100; sale una remisión de 10 → 90; al aprobar
+        # 95 − 90 = +5 AJ-ENT, cuando lo contado era un faltante de 5—. El
+        # movimiento de después ya está en los dos lados (salió del estante y
+        # salió de Siesa), así que el faltante medido al contar sigue siendo
+        # exactamente el mismo: se manda ése.
+        #
+        # **No se ajusta a ciegas.** Decisión de Operaciones (2026-08-15): sin
+        # foto de Siesa solo queda la base del WMS, y un delta sobre esa base
+        # deja a Siesa en `siesa_real + (fisica − wms)` — peor, justo cuando las
+        # dos bases discrepan. El ajuste de inventario es la única transacción
+        # de esta operación que SIEMPRE puede esperar: no detiene una venta, ni
+        # un despacho, ni un recaudo.
+        bloqueo = ConteoService.motivo_bloqueo_ajuste(sesion)
+        if bloqueo:
             raise ValueError(
-                f'Siesa no respondió la existencia de {sesion.producto_codigo_siesa} '
-                f'en {bodega_siesa}. El ajuste NO se aprueba contra el stock del '
-                f'WMS: saldría como delta sobre una base equivocada y dejaría a '
-                f'Siesa peor de lo que está. Reintentar cuando Siesa responda — '
-                f'un ajuste de inventario siempre puede esperar.'
+                f'Ajuste de {sesion.producto_codigo_siesa} en {bodega_siesa} NO '
+                f'aprobado. {bloqueo}'
             )
 
-        diferencia = sesion.cantidad_fisica - sesion.existencia_siesa
+        diferencia = sesion.cantidad_fisica - sesion.teorico_siesa
+        if diferencia == 0:
+            raise ValueError(
+                f'El conteo de {sesion.producto_codigo_siesa} cuadra con el '
+                f'teórico de Siesa de su foto ({sesion.teorico_siesa:g}) — no hay '
+                f'ajuste que mandar.'
+            )
+        logger.info(
+            f'[CONTEO] Ajuste de sesion {sesion.id} con la foto del conteo '
+            f'({sesion.foto_siesa_at}): físico {sesion.cantidad_fisica} − teórico '
+            f'{sesion.teorico_siesa} (existencia {sesion.existencia_siesa} − POS '
+            f'{sesion.cant_pos_siesa}) = {diferencia}'
+        )
         motivo_codigo = 'AJ-ENT' if diferencia > 0 else 'AJ-SAL'
         cantidad_ajuste = abs(diferencia)
 
@@ -751,17 +1005,21 @@ class ConteoService:
                 'configúrala en /api/almacenes antes de auditar.'
             )
 
-        existencia_siesa = ConteoService.consultar_existencia_siesa(
+        # La auditoría ES el conteo: la foto se toma ahora, con la misma
+        # función y la misma fórmula que el conteo cíclico. Comparar contra la
+        # existencia cruda acá reabriría el doble descuento del POS por la
+        # puerta de la auditoría.
+        foto = ConteoService.consultar_foto_siesa(
             producto_codigo_siesa=producto.codigo_siesa, bodega=bodega_siesa)
-        if existencia_siesa is None:
+        if foto is None:
             raise ValueError(
                 f'Siesa no respondió la existencia de {producto.codigo_siesa} '
-                f'en {bodega_siesa} — el ajuste de esta auditoría no se manda '
-                f'a ciegas contra el WMS. Reintenta la auditoría cuando Siesa '
-                f'responda.'
+                f'en {bodega_siesa} (o la respondió sin el POS pendiente) — el '
+                f'ajuste de esta auditoría no se manda a ciegas contra el WMS. '
+                f'Reintenta la auditoría cuando Siesa responda.'
             )
 
-        diferencia = cantidad_fisica - existencia_siesa
+        diferencia = cantidad_fisica - foto['teorico']
         codigo = f'AUD-{_ahora_bogota().strftime("%Y%m%d%H%M%S")}-{str(uuid.uuid4())[:6].upper()}'
         sesion = SesionConteo(
             codigo=codigo,
@@ -773,12 +1031,12 @@ class ConteoService:
             maneja_lote=False,
             tarea_picking_id=tarea.id,
             cantidad_fisica=cantidad_fisica,
-            existencia_siesa=existencia_siesa,
             fuente_existencia='SIESA',
             diferencia=diferencia,
             aprobador_id=aprobador_id,
             fecha_inicio=datetime.utcnow(),
         )
+        ConteoService._grabar_foto(sesion, foto)
 
         if diferencia == 0:
             # Cuadra con Siesa — sin ajuste que mandar, igual que un MATCH de
@@ -788,14 +1046,30 @@ class ConteoService:
             db.session.add(sesion)
             logger.info(
                 f'[CONTEO] Auditoría de picking tarea={tarea.id} — '
-                f'{producto.codigo_siesa} cuadra con Siesa ({existencia_siesa}) '
-                f'— sin ajuste'
+                f'{producto.codigo_siesa} cuadra con el teórico de Siesa '
+                f'({foto["teorico"]}) — sin ajuste'
             )
             return sesion
 
         sesion.estado = EstadoConteo.DESCUADRE
+        sesion.motivo_codigo = 'AJ-ENT' if diferencia > 0 else 'AJ-SAL'
         db.session.add(sesion)
         db.session.flush()  # necesita sesion.id antes de encolar el job
+
+        bloqueo = ConteoService.motivo_bloqueo_ajuste(sesion)
+        if bloqueo:
+            # Salidas sin confirmar que no son POS: no se sabe si esa
+            # mercancía ya salió, así que el ajuste no sale. Pero la auditoría
+            # SÍ se cierra — a diferencia de «Siesa no responde», esto puede
+            # durar días, y trabar la tarea de picking todo ese tiempo castiga
+            # la operación por un problema del ERP. La sesión queda en
+            # DESCUADRE con la foto y el motivo, visible y sin aprobar.
+            logger.warning(
+                f'[CONTEO] Auditoría de picking tarea={tarea.id} — '
+                f'{producto.codigo_siesa}: ajuste de {diferencia} NO encolado. '
+                f'{bloqueo} Sesión {sesion.codigo} queda en DESCUADRE.'
+            )
+            return sesion
         ConteoService._encolar_ajuste_fisico(sesion, aprobador_id=aprobador_id)
         logger.warning(
             f'[CONTEO] Auditoría de picking tarea={tarea.id} — '
@@ -904,7 +1178,15 @@ class ConteoService:
             logger.error(
                 f'[CONTEO] Sesión {sesion.id} stuck AJUSTANDO sin job DLQ — re-encolando'
             )
-            diferencia_reenc = (sesion.cantidad_fisica or 0) - (sesion.existencia_siesa or 0)
+            # El delta que se fijó al encolar la primera vez — `diferencia` —,
+            # no una resta nueva: recalcular contra `existencia_siesa` cruda
+            # reabría el doble descuento del POS justo en la recuperación.
+            if sesion.diferencia is None:
+                raise ValueError(
+                    f'Sesión {sesion.id} AJUSTANDO sin diferencia registrada — '
+                    'no se re-encola un ajuste sin el delta que se aprobó.'
+                )
+            diferencia_reenc = sesion.diferencia
             motivo_reenc = 'AJ-ENT' if diferencia_reenc > 0 else 'AJ-SAL'
             if not sesion.producto_codigo_siesa:
                 raise ValueError(

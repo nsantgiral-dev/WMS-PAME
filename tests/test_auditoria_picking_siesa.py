@@ -17,6 +17,7 @@ from app.models.ubicacion import Ubicacion
 from app.models.conteo import SesionConteo, EstadoConteo
 from app.models.siesa_job import SiesaJob
 from app.services.conteo_service import ConteoService
+from tests.conftest import foto_siesa as _foto
 from app.services.picking_service import PickingService
 
 
@@ -55,7 +56,7 @@ class TestEncontradoCompletoAjustaComoConteo:
             cantidad_wms=20, bloqueado=5,
         )
 
-        with patch.object(ConteoService, 'consultar_existencia_siesa', return_value=20.0):
+        with patch.object(ConteoService, 'consultar_foto_siesa', return_value=_foto(20.0)):
             PickingService.auditar_tarea(
                 tarea.id, admin_id=usuario_admin.id, resultado='ENCONTRADO_COMPLETO',
             )
@@ -82,7 +83,7 @@ class TestEncontradoCompletoAjustaComoConteo:
             cantidad_wms=20, bloqueado=5,
         )
 
-        with patch.object(ConteoService, 'consultar_existencia_siesa', return_value=15.0):
+        with patch.object(ConteoService, 'consultar_foto_siesa', return_value=_foto(15.0)):
             PickingService.auditar_tarea(
                 tarea.id, admin_id=usuario_admin.id, resultado='ENCONTRADO_COMPLETO',
             )
@@ -116,7 +117,7 @@ class TestEncontradoCompletoAjustaComoConteo:
             cantidad_wms=20, bloqueado=5,
         )
 
-        with patch.object(ConteoService, 'consultar_existencia_siesa', return_value=None):
+        with patch.object(ConteoService, 'consultar_foto_siesa', return_value=None):
             with pytest.raises(ValueError, match='no respondió'):
                 PickingService.auditar_tarea(
                     tarea.id, admin_id=usuario_admin.id, resultado='ENCONTRADO_COMPLETO',
@@ -147,7 +148,7 @@ class TestEncontradoParcialUsaLaCantidadYaCorregida:
             cantidad_wms=50, bloqueado=7,
         )
 
-        with patch.object(ConteoService, 'consultar_existencia_siesa', return_value=50.0):
+        with patch.object(ConteoService, 'consultar_foto_siesa', return_value=_foto(50.0)):
             PickingService.auditar_tarea(
                 tarea.id, admin_id=usuario_admin.id, resultado='ENCONTRADO_PARCIAL',
                 cantidad_hallada=2,
@@ -181,7 +182,7 @@ class TestOtrosResultadosNoDisparanElAjusteFocalizado:
             cantidad_wms=20, bloqueado=5,
         )
 
-        with patch.object(ConteoService, 'consultar_existencia_siesa', return_value=999.0):
+        with patch.object(ConteoService, 'consultar_foto_siesa', return_value=_foto(999.0)):
             PickingService.auditar_tarea(
                 tarea.id, admin_id=usuario_admin.id, resultado=resultado, **kwargs,
             )

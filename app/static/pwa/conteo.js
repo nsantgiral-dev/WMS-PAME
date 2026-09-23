@@ -156,6 +156,37 @@ function _tipoTag(s) {
 }
 
 /**
+ * ¿CC2 confirma a CC1? La MISMA regla que `ConteoService.conteos_coinciden`:
+ * por diferencia contra la foto de Siesa de cada uno cuando los dos la tienen
+ * (entre CC1 y CC2 la tienda sigue vendiendo: el físico baja y el POS sube
+ * igual), por cantidad física cuando no.
+ */
+function _conteosCoinciden(s, hijo) {
+  if (!hijo) return false;
+  if (s.teorico_siesa != null && hijo.teorico_siesa != null) {
+    return hijo.diferencia != null && hijo.diferencia === s.diferencia;
+  }
+  return hijo.cantidad_fisica != null && hijo.cantidad_fisica === s.cantidad_fisica;
+}
+
+/**
+ * Línea bajo la cifra de Siesa: el teórico contra el que se contó cuando hay
+ * venta POS pendiente — la diferencia (Δ) es contra ese número, no contra la
+ * existencia de arriba.
+ */
+function _fotoSiesaHtml(s) {
+  if (!s.cant_pos_siesa) return '';
+  return `<div style="font-size:9px;color:#FBBF24;margin-top:2px;">POS ${esc(s.cant_pos_siesa)} → teórico ${esc(s.teorico_siesa)}</div>`;
+}
+
+/** Por qué el ajuste no se puede aprobar — el texto lo escribe el servicio
+ *  (`ConteoService.motivo_bloqueo_ajuste`), la pantalla no decide nada. */
+function _bloqueoAjusteHtml(s) {
+  if (s.estado !== 'DESCUADRE' || !s.bloqueo_ajuste) return '';
+  return `<div style="font-size:11px;color:#F87171;border-left:3px solid #F87171;padding:4px 8px;margin-bottom:10px;">⛔ ${esc(s.bloqueo_ajuste)}</div>`;
+}
+
+/**
  * Build the detailed action card for a conteo requiring admin review.
  * @param {Object} s - Conteo session object with segundo_conteo/tercer_conteo.
  * @returns {string} HTML string for the action card.
@@ -169,7 +200,7 @@ function _renderCardAccion(s) {
   const cc3Pendiente = cc3 ? !TERMINADOS.includes(cc3.estado) : true;
   const hijoPendiente = esTercerConteo ? cc3Pendiente : cc2Pendiente;
   const puedeAjustar = s.estado === 'DESCUADRE';
-  const coinciden = hijo && !cc2Pendiente && hijo.cantidad_fisica != null && hijo.cantidad_fisica === s.cantidad_fisica;
+  const coinciden = !cc2Pendiente && _conteosCoinciden(s, hijo);
   const bordColor = s.estado === 'DESCUADRE' ? '#7F1D1D' : s.estado === 'TERCER_CONTEO' ? '#7F4010' : '#164F5A';
   const badgeColor = s.estado === 'DESCUADRE' ? '#7F1D1D' : s.estado === 'TERCER_CONTEO' ? '#92400E' : '#1E8395';
   const dif = s.diferencia != null ? (s.diferencia > 0 ? `+${esc(s.diferencia)}` : `${s.diferencia}`) : '?';
@@ -215,6 +246,7 @@ function _renderCardAccion(s) {
         <div style="font-size:9px;color:#415A70;font-weight:700;text-transform:uppercase;margin-bottom:3px;">Siesa</div>
         <div style="font-size:20px;font-weight:800;color:#60A5FA;line-height:1;">${s.existencia_siesa != null ? s.existencia_siesa : '—'}</div>
         <div style="font-size:9px;color:#415A70;margin-top:2px;">${esc(s.bodega_siesa_id || 'stock')}</div>
+        ${_fotoSiesaHtml(s)}
       </div>
       <div style="border-left:1px solid #1C2B3A;border-right:1px solid #1C2B3A;">
         <div style="font-size:9px;color:#415A70;font-weight:700;text-transform:uppercase;margin-bottom:3px;">1er Conteo</div>
@@ -232,6 +264,7 @@ function _renderCardAccion(s) {
           ? `<span style="color:#FBBF24;font-size:10px;">✓ CC3 definitivo</span>`
           : ''}
     </div>
+    ${_bloqueoAjusteHtml(s)}
 
     <div style="display:flex;gap:6px;flex-wrap:wrap;">
       ${s.estado !== 'AJUSTADO' && s.estado !== 'AJUSTANDO'
@@ -966,7 +999,7 @@ function conteoAbrirAjuste(s) {
   const motivo   = s.motivo_codigo || (difVal > 0 ? 'AJ-ENT' : 'AJ-SAL');
   const accion   = motivo === 'AJ-ENT' ? '📦 ENTRADA' : '📤 SALIDA';
   const cant     = Math.abs(difVal);
-  const coinciden = hijo && hijo.cantidad_fisica != null && hijo.cantidad_fisica === s.cantidad_fisica;
+  const coinciden = _conteosCoinciden(s, hijo);
 
   const bodega = s.bodega_siesa_id || '—';
 
@@ -979,6 +1012,7 @@ function conteoAbrirAjuste(s) {
       <div>
         <div style="font-size:9px;color:#4b5563;text-transform:uppercase;margin-bottom:2px;">WMS</div>
         <div style="font-size:18px;font-weight:800;color:#60a5fa;">${s.existencia_siesa ?? '—'}</div>
+        ${_fotoSiesaHtml(s)}
       </div>
       <div style="border-left:1px solid #1f2937;border-right:1px solid #1f2937;">
         <div style="font-size:9px;color:#4b5563;text-transform:uppercase;margin-bottom:2px;">1er Conteo</div>
@@ -996,6 +1030,7 @@ function conteoAbrirAjuste(s) {
     </div>
     ${hijo && !coinciden ? `<div style="color:#f87171;font-size:11px;text-align:center;">⚠ Los operarios no coinciden — se usará el 2do conteo como referencia</div>` : ''}
     ${coinciden ? `<div style="color:#4ade80;font-size:11px;text-align:center;">✓ Ambos operarios confirmaron el mismo valor</div>` : ''}
+    ${_bloqueoAjusteHtml(s)}
   `;
 
   m.style.display = 'flex';
