@@ -25,7 +25,93 @@ Servicios, iguales en los dos:
 `positive-integrity` es un servicio viejo, sin dominio y con
 `SYNC_SCHEDULER=false`. No es la web: no reiniciar ni configurar nada ahí.
 
-## El flujo (decidido 2026-09-23)
+## El flujo por ramas (acordado 2026-09-23 · vigente DESDE la última promoción completa)
+
+> **Cada funcionalidad vive en su rama. `qa` es un banco de pruebas y nunca se
+> promueve: a `main` llegan las ramas, una por una, cuando están aprobadas.**
+
+Por qué se cambió: con «`qa` completa o nada», lo terminado de uno esperaba lo
+a medias del otro. El 2026-09-23 el filtro de Stock por bodega, probado en QA,
+no pudo subir porque `qa` traía 61 commits de otra persona sin terminar.
+
+**Transición:** hay una última promoción de `qa` completa con el flujo anterior
+(sección de abajo). Desde que `main` y `qa` quedan iguales, rige este.
+
+```
+            main ───────●──────────────●────────▶  producción
+             │          ▲              ▲
+             │     (aprobada)     (aprobada)
+ tu rama     └─●──●─────┤              │
+                  │     │              │
+ rama de otro ────┼──●──┼──●───────────┘
+                  ▼  ▼  │  ▼
+            qa ───●──●──●──●──────────────────▶  Railway QA (solo pruebas)
+```
+
+### Las cinco condiciones
+
+1. **Toda rama nace de `main`, nunca de `qa`.** Unir una rama a `main` lleva
+   TODO lo que contiene: nacida de `qa`, arrastra el trabajo de los demás.
+2. **`qa` es banco de pruebas y nunca se une a `main`.** Detalle abajo.
+3. **Migraciones.** Dos ramas que migran desde el mismo punto dejan dos *heads*
+   de Alembic al llegar a `main`, y el release de producción falla. Quien llega
+   segundo actualiza su rama con `main` y encadena su migración (o crea una
+   migración de unión) ANTES de unirla. Y deben ser **aditivas** (tablas o
+   columnas nuevas que admitan vacío): renombrar o borrar rompe el código que
+   todavía no se actualizó.
+4. **Después de cada unión a `main`, sincronizar el banco:**
+   `git checkout qa && git pull && git merge origin/main && git push origin qa`.
+5. **Lo probado no es exactamente lo que sale.** En QA la rama corrió junto a
+   otras; a producción llega sola. Revisión rápida en producción después de
+   cada unión.
+
+### El ciclo de una rama
+
+```bash
+# 1. Nace de main
+git checkout main && git pull
+git checkout -b stock/filtro-bodega
+# 2. Commits EN LA RAMA; subirla (respaldo y visibilidad)
+git push -u origin stock/filtro-bodega
+# 3. Al banco de pruebas
+git checkout qa && git pull && git merge stock/filtro-bodega && git push origin qa
+# 4. Probar en wms-pame-qa. Correcciones SIEMPRE en la rama, y se vuelve al paso 3
+# 5. Aprobada: la RAMA a main (respaldo previo si trae migraciones)
+git checkout main && git pull && git merge stock/filtro-bodega && git push origin main
+# 6. Sincronizar el banco (condición 4)
+git checkout qa && git pull && git merge origin/main && git push origin qa
+# 7. Borrar la rama
+git branch -d stock/filtro-bodega && git push origin --delete stock/filtro-bodega
+```
+
+### Las reglas del banco (`qa`)
+
+1. **En `qa` no se hacen commits, solo merges de ramas.** Una corrección hecha
+   en `qa` se queda en el banco y nunca llega a `main`: a producción saldría la
+   versión que falló.
+2. **Dirección única: rama → `qa`. Nunca `git merge qa` dentro de una rama**
+   (ni hacia `main`): arrastra lo de los demás.
+3. **Un conflicto resuelto en `qa` vuelve a aparecer en `main`.** La resolución
+   queda solo en el banco. Quien llega segundo a `main` une primero `main` a SU
+   rama, resuelve ahí, prueba de nuevo, y recién entonces la une a `main`.
+4. **Rama abandonada = sacarla del banco:** `git revert -m 1 <merge de esa rama>`
+   en `qa`. Si traía migración, la base de QA quedó migrada: `flask db
+   downgrade` o recargar la base de QA.
+5. **Una sola rama con migraciones en `qa` a la vez.** Dos migraciones desde el
+   mismo punto dejan a `qa` con dos heads y el deploy de QA falla. La segunda
+   espera, o se coordina para encadenarla sobre la primera.
+6. **El banco se limpia cada tanto** (al cerrar un ciclo grande), avisando
+   antes: `git checkout qa && git reset --hard origin/main && git push --force
+   origin qa`. Es la **única** excepción a «nunca `--force` sobre `qa`», y vale
+   porque `qa` ya es desechable. La base de QA tiene que quedar en la misma
+   revisión que el código: recargarla y **redesplegar QA en seguida** (regla 2
+   de «Reglas aprendidas»).
+
+**En `main` siguen prohibidos** los commits directos, el `cherry-pick` y el
+`--force`. Un hotfix es una rama más que nace de `main` y vuelve a `main`,
+seguida de la condición 4.
+
+## El flujo anterior — vigente HASTA la última promoción completa (decidido 2026-09-23)
 
 > **`main` no se toca: solo avanza copiando a `qa` exactamente como está.**
 
