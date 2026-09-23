@@ -63,10 +63,16 @@ def _stock(db, ubicacion, producto, cantidad=25):
 
 
 def _picks_completados(db, producto, almacen, ubicacion, cuantos, prefijo):
-    """N tareas de picking COMPLETADO dentro de la ventana de 7 días."""
+    """N tareas de picking COMPLETADO dentro de la ventana de 7 días, cada una
+    con su pedido ya remisionado. Sin la remisión, la guarda de mercancía en
+    proceso (`ConteoService.procesos_en_curso`) las lee —con razón— como
+    mercancía fuera del estante que Siesa todavía cuenta, y el SKU sale del
+    plan del watchdog (`conteo_politica.filtrar_elegibles`)."""
+    from app.models.packing import TareaPacking
     from app.models.picking import TareaPicking
     hace_dos_dias = datetime.utcnow() - timedelta(days=2)
     for i in range(cuantos):
+        pedido = f'PD-{prefijo}-{i:03d}'
         db.session.add(TareaPicking(
             codigo=f'{prefijo}-{i:03d}',
             producto_id=producto.id,
@@ -75,8 +81,14 @@ def _picks_completados(db, producto, almacen, ubicacion, cuantos, prefijo):
             ubicacion_id=ubicacion.id,
             almacen_id=almacen.id,
             estado='COMPLETADO',
+            referencia_documento=pedido,
+            fecha_inicio=hace_dos_dias,
             fecha_completado=hace_dos_dias,
         ))
+        db.session.add(TareaPacking(
+            codigo=f'PAK-{prefijo}-{i:03d}', almacen_id=almacen.id,
+            numero_pedido_siesa=pedido, estado='DESPACHADO', siesa_triggered=True,
+            siesa_triggered_at=hace_dos_dias + timedelta(hours=1)))
     db.session.commit()
 
 
