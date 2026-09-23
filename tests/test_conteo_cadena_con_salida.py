@@ -38,7 +38,8 @@ from unittest.mock import patch
 
 import pytest
 
-from tests.test_conteo_teorico_pos import SKU, _jobs, siesa, tienda  # noqa: F401 (fixtures)
+from tests.test_conteo_teorico_pos import (  # noqa: F401 (fixtures)
+    SKU, _jobs, contar_primero, siesa, tienda)
 from tests.test_conteo_mercancia_en_proceso import (  # noqa: F401
     PEDIDO, _contar_cc1_cc2, _empacar, _exigir_bloqueado, _picking, _raiz)
 
@@ -68,8 +69,10 @@ def _auth(app, usuario):
 
 
 def _abrir_y_contar(sid, operario, fisico):
+    """Con su recuento propio si cae fuera de tolerancia (`contar_primero`):
+    estos tests miden la salida de la cadena, no la tolerancia."""
     _svc().obtener_tarea_operario(sid, operario.id)
-    return _svc().registrar_conteo(sid, operario.id, fisico, cero_confirmado=True)
+    return contar_primero(sid, operario.id, fisico, cero_confirmado=True)
 
 
 def _cc1(tienda):
@@ -362,8 +365,9 @@ class TestLosZombisSeLiberanPorInactividad:
 PUEDEN_BORRAR_LO_CONTADO = {
     ('app/services/conteo_service.py', 'devolver_al_pool'):
         'la política: deja lo parcial en conteos_descartados antes de borrarlo',
-    ('app/services/conteo_service.py', '_pedir_recuento'):
-        'recuento por movimiento de Siesa: también lo deja en conteos_descartados',
+    ('app/services/conteo_service.py', '_descartar_conteo'):
+        'recuento (por movimiento de Siesa o fuera de tolerancia): lo deja en '
+        'conteos_descartados y la MISMA sesión sigue con el mismo operario',
 }
 
 

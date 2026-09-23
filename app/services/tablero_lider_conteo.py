@@ -124,16 +124,24 @@ ESTADO_TEXTO = {
 # Permisos — qué botones puede usar quien mira
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _quien(rol):
+    """Un usuario de ese rol, para preguntarle a la política de aprobación
+    (que solo mira `rol` y `activo`) sin buscar a nadie en la base."""
+    from types import SimpleNamespace
+    return SimpleNamespace(rol=rol, activo=True)
+
+
 def permisos_de(rol: str) -> dict:
     """Qué acciones del tablero le responden a este rol, con las MISMAS tuplas
     de `Roles` que exige cada endpoint. La pantalla no pinta un botón que va a
     devolver 403; `tests/test_tablero_lider_conteo.py` cruza cada entrada
     contra la respuesta real de su endpoint, rol por rol."""
     from app.routes._auth_helpers import Roles
+    from app.services.conteo_service import ConteoService
     return {
         'reabrir_cancelar_bloqueado': rol in Roles.SUPERVISION,
         'resolver_novedad': rol in Roles.SUPERVISION,
-        'aprobar_ajuste': rol in Roles.LEAD,
+        'aprobar_ajuste': ConteoService.motivo_no_aprueba_ningun_ajuste(_quien(rol)) is None,
         'recontar': rol in Roles.LEAD,
         'cancelar_conteo': rol in Roles.SUPERVISION,
         'reintentar_descartar_fallos': rol in Roles.LEAD,
@@ -183,7 +191,7 @@ def _fila_conteo(s: SesionConteo) -> dict:
     }
 
 
-def _ajustes(almacen_id) -> dict:
+def _ajustes(almacen_id, rol: str = None) -> dict:
     """Raíces en DESCUADRE: las que se pueden aprobar, con su plata, y las que
     no, con el porqué resumido y la acción. Solo raíces: el ajuste sale de la
     raíz (`_exigir_raiz_para_ajustar`); el CC2/CC3 que resolvió queda en
@@ -228,6 +236,10 @@ def _ajustes(almacen_id) -> dict:
             valor=valor,
             dia_conteo=(dia_operativo_de(s.foto_siesa_at).isoformat()
                         if s.foto_siesa_at else None),
+            # Por qué QUIEN MIRA no aprueba ESTE ajuste (el tope del jefe es
+            # por monto): la pantalla muestra el motivo en vez del botón.
+            no_puede_aprobar=(ConteoService.motivo_no_puede_aprobar(_quien(rol), s)
+                              if rol else None),
         )
         aprobables.append(fila)
     # Más plata primero; sin costo ADELANTE — que no se sepa cuánto vale no lo
@@ -425,7 +437,7 @@ def tablero(almacen_id: int, *, rol: str = None, ahora: datetime = None) -> dict
     decisiones = {
         'bloqueados': _bloqueados(almacen_id),
         'novedades': _novedades(almacen_id),
-        'ajustes': _ajustes(almacen_id),
+        'ajustes': _ajustes(almacen_id, rol),
         'auditorias': _auditorias(almacen_id, hoy),
         'rechazados_siesa': _rechazados_siesa(almacen_id),
     }

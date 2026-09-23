@@ -458,6 +458,30 @@ class ConteoService:
         return politica.motivo_tope_autoajuste(diferencia, sesion.costo_prom_uni_siesa)
 
     @staticmethod
+    def motivo_no_aprueba_ningun_ajuste(usuario):
+        """¿Por qué este usuario no aprueba NINGÚN ajuste, sea cual sea su
+        monto? Texto, o `None` si hay alguno que sí podría aprobar.
+
+        La mitad de `motivo_no_puede_aprobar` que no depende del ajuste. La
+        ruta la usa para cortar temprano con 403 y el tablero del líder para
+        no pintar un botón que va a devolver 403: si cada uno la escribiera a
+        su modo, el jefe de almacén con tope en $0 vería «Aprobar» y recibiría
+        un error (pasó al juntar el tablero con la aprobación por valor)."""
+        from app.routes._auth_helpers import Roles
+        from app.services import conteo_politica as politica
+        if usuario is None or not getattr(usuario, 'activo', True):
+            return 'Usuario no encontrado o inactivo'
+        if usuario.rol in Roles.LEAD:
+            return None
+        if usuario.rol != Roles.JEFE_ALMACEN:
+            return ('Solo un supervisor o admin —o un jefe de almacén dentro de su '
+                    'tope— puede aprobar ajustes de inventario')
+        if politica.tope_aprobacion_jefe() <= 0:
+            return ('Un jefe de almacén no aprueba ajustes de inventario (tope de '
+                    'aprobación en $0): lo aprueba un supervisor o admin')
+        return None
+
+    @staticmethod
     def motivo_no_puede_aprobar(usuario, sesion: SesionConteo):
         """¿Por qué ESTE usuario no puede aprobar ESTE ajuste? Texto, o `None`.
 
@@ -469,17 +493,10 @@ class ConteoService:
         """
         from app.routes._auth_helpers import Roles
         from app.services import conteo_politica as politica
-        if usuario is None or not getattr(usuario, 'activo', True):
-            return 'Usuario no encontrado o inactivo'
-        if usuario.rol in Roles.LEAD:
-            return None
-        if usuario.rol != Roles.JEFE_ALMACEN:
-            return ('Solo un supervisor o admin —o un jefe de almacén dentro de su '
-                    'tope— puede aprobar ajustes de inventario')
+        no_aprueba = ConteoService.motivo_no_aprueba_ningun_ajuste(usuario)
+        if no_aprueba or usuario.rol in Roles.LEAD:
+            return no_aprueba
         tope = politica.tope_aprobacion_jefe()
-        if tope <= 0:
-            return ('Un jefe de almacén no aprueba ajustes de inventario (tope de '
-                    'aprobación en $0): lo aprueba un supervisor o admin')
         valor = ConteoService.valor_del_ajuste(sesion)
         if valor is None:
             return ('Este ajuste no tiene costo en la foto de Siesa: no se sabe cuánto '
@@ -1865,7 +1882,7 @@ class ConteoService:
         - **Pedido que no sale** (empaque cancelado sin remisión, o recogido y
           nunca empacado): la declaración del líder de que la mercancía volvió
           al estante (`TareaPicking.devuelto_estante_at`,
-          `PickingService.declarar_devuelto_al_estante`, m032ciclo). Es la
+          `PickingService.declarar_devuelto_al_estante`, m033ciclo). Es la
           fecha que faltaba: sin ella el SKU quedaba fuera del plan de conteo
           para siempre. Se juzga igual que las otras salidas — un regreso
           posterior al instante no cubre un conteo de antes.

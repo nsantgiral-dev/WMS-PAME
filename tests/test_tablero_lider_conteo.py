@@ -30,7 +30,7 @@ from flask_jwt_extended import create_access_token
 from werkzeug.security import generate_password_hash
 
 from tests.test_conteo_teorico_pos import siesa, tienda  # noqa: F401 (fixtures)
-from tests.test_estadisticas_conteo import _abrir_y_contar, _hueco, _nuevo_cc1, _poner
+from tests.test_estadisticas_conteo import _abrir_y_contar, _abrir_y_contar_cc1, _hueco, _nuevo_cc1, _poner
 
 RAIZ = pathlib.Path(__file__).resolve().parents[1]
 X = '<img src=x onerror=alert(1)>'
@@ -104,16 +104,17 @@ def mundo(app, db, siesa, tienda, monkeypatch):
     # Ajuste aprobable con costo: CC1 −1, CC2 −2, el definitivo +2 a $2.000.
     _poner(siesa, 10, costo=1000)
     ids['aprobable'] = s = _nuevo_cc1(tienda, next(huecos))
-    r = _abrir_y_contar(s, a, 9)
+    r = _abrir_y_contar_cc1(s, a, 9)
     r = _abrir_y_contar(r['segundo_conteo_id'], b, 8)
     _poner(siesa, 10, costo=2000)
     r3 = _abrir_y_contar(r['tercer_conteo_id'], sup, 12)
     assert r3['resultado'] == 'DESCUADRE' and not r3['ajuste_bloqueado'], r3
 
-    # Ajuste aprobable SIN costo en la foto.
-    _poner(siesa, 10)
+    # Ajuste aprobable SIN costo en la foto (la Siesa de mentira trae costo
+    # por defecto: la fila sin él se pide explícita).
+    _poner(siesa, 10, costo=None)
     ids['aprobable_sin_costo'] = s = _nuevo_cc1(tienda, next(huecos))
-    r = _abrir_y_contar(s, a, 9)
+    r = _abrir_y_contar_cc1(s, a, 9)
     r = _abrir_y_contar(r['segundo_conteo_id'], b, 8)
     r3 = _abrir_y_contar(r['tercer_conteo_id'], sup, 7)
     assert r3['resultado'] == 'DESCUADRE' and not r3['ajuste_bloqueado'], r3
@@ -121,14 +122,14 @@ def mundo(app, db, siesa, tienda, monkeypatch):
     # Ajuste que no se puede aprobar: salidas sin confirmar que no son POS.
     _poner(siesa, 10, pos=2, salida_sin_conf=5)
     ids['bloq_ajuste'] = s = _nuevo_cc1(tienda, next(huecos))
-    r = _abrir_y_contar(s, a, 9)
+    r = _abrir_y_contar_cc1(s, a, 9)
     r2 = _abrir_y_contar(r['segundo_conteo_id'], b, 9)
     assert r2['ajuste_bloqueado'], r2
 
     # Ajuste que Siesa rechazó: CC1 == CC2 encola solo; la cola lo agota.
     _poner(siesa, 10, costo=1500)
     ids['fallido'] = s = _nuevo_cc1(tienda, next(huecos))
-    r = _abrir_y_contar(s, a, 9)
+    r = _abrir_y_contar_cc1(s, a, 9)
     r2 = _abrir_y_contar(r['segundo_conteo_id'], b, 9)
     assert r2['auto_encolado'] is True, r2
     job = SiesaJob.query.filter_by(tipo='AJUSTE_CONTEO', referencia_id=s).one()
@@ -142,7 +143,7 @@ def mundo(app, db, siesa, tienda, monkeypatch):
     # Un conteo que cuadró hoy.
     _poner(siesa, 10)
     ids['match'] = s = _nuevo_cc1(tienda, next(huecos))
-    assert _abrir_y_contar(s, a, 10)['resultado'] == 'MATCH'
+    assert _abrir_y_contar_cc1(s, a, 10)['resultado'] == 'MATCH'
 
     # Uno contado AYER cuyo ajuste la cola cerró HOY: la raíz queda AJUSTADO
     # con `fecha_cierre` de hoy, pero la cadena es de ayer (el día es el de la
@@ -153,7 +154,7 @@ def mundo(app, db, siesa, tienda, monkeypatch):
     monkeypatch.setattr(ConnektaGateway, 'enviar_ajuste_inventario', lambda self, **kw: {'codigo': 0})
     _poner(siesa, 10, costo=1500)
     ids['ayer_ajustado_hoy'] = s = _nuevo_cc1(tienda, next(huecos))
-    r = _abrir_y_contar(s, a, 9)
+    r = _abrir_y_contar_cc1(s, a, 9)
     assert _abrir_y_contar(r['segundo_conteo_id'], b, 9)['auto_encolado'] is True
     for sid in (s, r['segundo_conteo_id']):
         nodo = db.session.get(SesionConteo, sid)
@@ -173,12 +174,12 @@ def mundo(app, db, siesa, tienda, monkeypatch):
     # urgente aunque su CC2 quede en DESCUADRE para siempre.
     ids['aud_cola'] = _auditoria(db, tienda, next(huecos))
     ids['aud_cc2'] = s = _auditoria(db, tienda, next(huecos))
-    _abrir_y_contar(s, a, 9)
+    _abrir_y_contar_cc1(s, a, 9)
     ids['aud_cc3'] = s = _auditoria(db, tienda, next(huecos))
-    r = _abrir_y_contar(s, a, 9)
+    r = _abrir_y_contar_cc1(s, a, 9)
     assert _abrir_y_contar(r['segundo_conteo_id'], b, 8)['resultado'] == 'TERCER_CONTEO'
     ids['aud_resuelta'] = s = _auditoria(db, tienda, next(huecos))
-    r = _abrir_y_contar(s, a, 9)
+    r = _abrir_y_contar_cc1(s, a, 9)
     assert _abrir_y_contar(r['segundo_conteo_id'], b, 9)['auto_encolado'] is True
     assert db.session.get(SesionConteo, s).estado == EstadoConteo.AJUSTANDO
 
@@ -479,6 +480,39 @@ class TestNingunBotonPrometeUn403:
             status = getattr(client, metodo)(url, **kw).status_code
             db.session.rollback()
             assert (status != 403) == permitido, (rol, clave, status)
+
+
+class TestElTopeDelJefeEsPorAjuste:
+    """Con la aprobación por valor el jefe de almacén firma hasta su tope, así
+    que el permiso de rol no alcanza: la ruta corta con la misma función que
+    usa el tablero (`motivo_no_aprueba_ningun_ajuste`) y cada fila dice si
+    QUIEN MIRA la puede aprobar. Al juntar las dos cosas el jefe con tope en
+    $0 veía «Aprobar» y recibía un error."""
+
+    def test_tope_en_cero_ni_boton_ni_ruta(self, app, client, db, tienda, monkeypatch):
+        from app.services.tablero_lider_conteo import permisos_de
+        monkeypatch.delenv('CONTEO_TOPE_APROBACION_JEFE', raising=False)
+        assert permisos_de('jefe_almacen')['aprobar_ajuste'] is False
+        jefe = _usuario(db, tienda, 'jefe_almacen')
+        r = client.put('/api/conteo/999999/ajustar', json={}, headers=_tok(app, jefe))
+        assert r.status_code == 403, r.get_json()
+        assert 'tope' in r.get_json()['error']
+
+    def test_con_tope_cada_fila_dice_si_la_firma(self, mundo, tienda, monkeypatch):
+        monkeypatch.setenv('CONTEO_TOPE_APROBACION_JEFE', '3000')
+        t = _tablero(tienda, rol='jefe_almacen')
+        assert t['permisos']['aprobar_ajuste'] is True
+        filas = {f['id']: f for f in t['decisiones']['ajustes']['aprobables']['filas']}
+        assert 'supera tu tope' in filas[mundo['aprobable']]['no_puede_aprobar']      # $4.000
+        assert 'no tiene costo' in filas[mundo['aprobable_sin_costo']]['no_puede_aprobar']
+
+        monkeypatch.setenv('CONTEO_TOPE_APROBACION_JEFE', '5000')
+        filas = {f['id']: f for f in
+                 _tablero(tienda, rol='jefe_almacen')['decisiones']['ajustes']['aprobables']['filas']}
+        assert filas[mundo['aprobable']]['no_puede_aprobar'] is None
+
+        sup = _tablero(tienda)['decisiones']['ajustes']['aprobables']['filas']
+        assert [f['no_puede_aprobar'] for f in sup] == [None, None]
 
 
 # ─────────────────────────────────────────────────────────────────────────────

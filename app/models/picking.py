@@ -77,7 +77,7 @@ class TareaPicking(db.Model):
     fecha_inicio = db.Column(db.DateTime)
     fecha_completado = db.Column(db.DateTime)
 
-    #: **La mercancía recogida volvió al estante** (m032ciclo), declarado por
+    #: **La mercancía recogida volvió al estante** (m033ciclo), declarado por
     #: el líder (`PickingService.declarar_devuelto_al_estante`). Es la salida
     #: con fecha que le faltaba a la guarda de «mercancía en proceso» del
     #: conteo (`ConteoService._en_proceso_por_picking`): un pedido recogido

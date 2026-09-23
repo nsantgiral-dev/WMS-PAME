@@ -1,7 +1,7 @@
 """Conteo: actividad real de la sesión y regreso al estante de lo recogido
 
-Revision ID: m032ciclo
-Revises: m031hud
+Revision ID: m033ciclo
+Revises: m032tol
 Create Date: 2026-09-23
 
 ## Para qué
@@ -26,8 +26,8 @@ contando como en proceso (Regla 0: no se inventa que la mercancía volvió).
 import sqlalchemy as sa
 from alembic import op
 
-revision = 'm032ciclo'
-down_revision = 'm031hud'
+revision = 'm033ciclo'
+down_revision = 'm032tol'
 branch_labels = None
 depends_on = None
 

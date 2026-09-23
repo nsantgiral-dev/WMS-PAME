@@ -201,7 +201,7 @@ class SesionConteo(db.Model):
     salida_sin_conf_inicio_siesa = db.Column(db.Integer, nullable=True)
     foto_inicio_at = db.Column(db.DateTime, nullable=True)
     #: Los conteos que se descartaron, en JSON (lista), cada uno con su
-    #: `motivo` (`MotivoDescarteConteo`; sin motivo = anterior a m032ciclo, y
+    #: `motivo` (`MotivoDescarteConteo`; sin motivo = anterior a m033ciclo, y
     #: entonces es de movimiento). Por movimiento durante el conteo, o porque
     #: la sesión volvió a la cola (inactividad, conteo forzado, otra bodega,
     #: reabierta): lo contado no se borra sin rastro.
@@ -211,7 +211,7 @@ class SesionConteo(db.Model):
     #: acá para auditoría: físico, las dos fotos, quién y cuándo.
     conteos_descartados = db.Column(db.Text, nullable=True)
     cantidad_fisica = db.Column(db.Integer)   # Lo que contó el operario
-    #: **La última vez que alguien contó algo en esta sesión** (m032ciclo): un
+    #: **La última vez que alguien contó algo en esta sesión** (m033ciclo): un
     #: escaneo o un total tecleado. El barrido de zombis libera por
     #: INACTIVIDAD —`coalesce(ultima_actividad_at, fecha_inicio)`— y no por
     #: antigüedad: antes miraba solo `fecha_inicio`, así que un conteo largo (o

@@ -2336,8 +2336,11 @@ function _lAjustes(a, p) {
   const filasAp = (ap.filas || []).map(f => _lFila(
     `<div style="font-size:11px;font-weight:700;color:${f.direccion === 'ENTRADA' ? 'var(--green)' : 'var(--red)'};">${f.direccion === 'ENTRADA' ? '📦 Sobran' : '📤 Faltan'} ${_lNum(f.unidades)} und · ${_lPlata(f.valor)}</div>`,
     _lProducto(f) + `<div style="font-size:11px;color:var(--tx3);margin-top:2px;">Contado el ${esc(f.dia_conteo || '—')}${f.costo_unitario !== null && f.costo_unitario !== undefined ? ` · costo de la foto $${_lNum(f.costo_unitario)}/und` : ''}</div>`,
-    p.aprobar_ajuste ? _lBoton('✓ Aprobar y enviar a Siesa', `liderAprobarAjuste(${esc(f.id)})`)
-                     : _lSinPermiso('Lo aprueba un supervisor o admin')));
+    // El tope del jefe es por monto: la fila trae por qué quien mira no
+    // aprueba ESTE ajuste, y ese texto reemplaza al botón (no un 403 después).
+    p.aprobar_ajuste && !f.no_puede_aprobar
+      ? _lBoton('✓ Aprobar y enviar a Siesa', `liderAprobarAjuste(${esc(f.id)})`)
+      : _lSinPermiso(f.no_puede_aprobar || 'Lo aprueba un supervisor o admin')));
   const filasBl = (bl.filas || []).map(f => {
     const acc = f.accion || {};
     let botones = '';

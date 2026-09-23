@@ -2594,11 +2594,10 @@ veces. Trinquete: `tests/test_conteo_hud_operario.py` (61 tests, 7 mutaciones).
 PWA no reconoce el código no sabe si es la caja, y duplicar en JS la regla de
 `_es_escaneo_empaque` sería una segunda política.
 
-**Pendientes declarados:** `liberar_tareas_zombi` todavía borra
-`cantidad_fisica` a las 2 h (un conteo largo pierde el avance); cancelar un CC2
-PENDIENTE deja la raíz en SEGUNDO_CONTEO (solo se arregló para BLOQUEADO); los
-BLOQUEADO viejos de producción salen como «Sin motivo registrado» (sin backfill
-a propósito: no se parsea prosa).
+**Pendiente declarado:** los BLOQUEADO viejos de producción salen como «Sin
+motivo registrado» (sin backfill a propósito: no se parsea prosa). Los otros
+dos —zombis que borraban el avance y cancelar un CC2 dejando la raíz trabada—
+se cerraron en «Conteo: ninguna cadena queda sin salida».
 
 ---
 
@@ -2631,7 +2630,11 @@ junta políticas que ya existían y las ordena como las atiende un jefe de bodeg
   regla exacta por segmentos (397 URLs, cero excepciones).
 - **Ningún botón promete un 403**: `permisos_de(rol)` usa las tuplas de `Roles`
   de cada endpoint y el test las cruza contra la respuesta real, rol por rol
-  (aprobar y recontar son LEAD: el jefe de almacén no los ve).
+  (recontar es LEAD). **Aprobar es por monto** desde las tolerancias: el
+  permiso sale de `ConteoService.motivo_no_aprueba_ningun_ajuste` —la misma
+  que corta la ruta con 403— y cada fila aprobable trae `no_puede_aprobar`
+  (`motivo_no_puede_aprobar` de quien mira), que reemplaza al botón. Al juntar
+  las dos ramas el jefe con tope en $0 veía «Aprobar» y recibía un error.
 
 Trinquete: `tests/test_tablero_lider_conteo.py` (10 mutaciones, las 10 rojas).
 
@@ -2952,16 +2955,24 @@ un eslabón vivo contando para una raíz cerrada. Trinquete:
 eslabón que no está vivo, o eslabón vivo bajo una raíz que no lo espera.
 
 **Los zombis se liberan por inactividad, no por antigüedad.**
-`ultima_actividad_at` (m032ciclo) la marcan el escaneo y el total tecleado; el
+`ultima_actividad_at` (m033ciclo) la marcan el escaneo y el total tecleado; el
 barrido mira `coalesce(ultima_actividad_at, fecha_inicio)` > 2 h. Toda puerta
 que devuelve un conteo a la cola —zombi, conteo forzado, otra bodega, CC1
 cedido al CC2, bloqueado reabierto— pasa por `devolver_al_pool`: lo parcial va
 a `conteos_descartados` con su `motivo` y la sesión vuelve **desde cero** (el
 despachador de otra bodega no borraba lo contado: el siguiente heredaba el
 parcial ajeno en un conteo ciego). Trinquete AST: nadie más borra
-`cantidad_fisica` ni pone una sesión PENDIENTE sin dueño. Las métricas de
-recuento solo cuentan los descartes `MOVIMIENTO_SIESA` (sin motivo = anterior,
-y entonces es de movimiento). **Declarado:** un conteo pospuesto por un
+`cantidad_fisica` ni pone una sesión PENDIENTE sin dueño (salvo
+`devolver_al_pool` y `_descartar_conteo`, el recuento en la misma sesión).
+
+**Un vocabulario de descartes**, `MotivoDescarteConteo`: dos son recuentos
+(`MOVIMIENTO_SIESA`, `FUERA_DE_TOLERANCIA`) y el resto, `DE_LA_COLA`, es la
+sesión devuelta a la cola, que ninguna estadística de recuento cuenta. Las
+dos ramas del 2026-09-23 habían escrito cada una el suyo (`'MOVIMIENTO'` y
+`'MOVIMIENTO_SIESA'`); `ConteoService.DESCARTE_*` quedan como alias. Reabrir
+un bloqueado deja las dos cosas: lo parcial (`REABIERTO`, vía
+`devolver_al_pool`) y **después** el evento `REABIERTO` que corta la cuenta de
+recuentos por movimiento. **Declarado:** un conteo pospuesto por un
 picking de más de 2 h sin tocarlo se libera — lo contado queda en el rastro.
 
 **Recogido sin despachar tiene salida con fecha.** `PackingService.cancelar` no

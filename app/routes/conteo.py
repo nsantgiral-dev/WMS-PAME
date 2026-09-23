@@ -207,8 +207,9 @@ def confirmar_ajuste(id):
     salida). **Quién aprueba cuánto lo decide el servicio**
     (`ConteoService.motivo_no_puede_aprobar`): supervisor y admin cualquier
     monto, jefe de almacén hasta `CONTEO_TOPE_APROBACION_JEFE`. Acá solo se
-    corta temprano a quien no es de supervisión y se traduce el
-    `PermissionError` del servicio a 403 con su mensaje.
+    corta temprano a quien no aprueba ningún ajuste
+    (`motivo_no_aprueba_ningun_ajuste`, la misma que usa el tablero) y se
+    traduce el `PermissionError` del servicio a 403 con su mensaje.
     """
     from app.models.usuario import Usuario
     try:
@@ -218,6 +219,9 @@ def confirmar_ajuste(id):
     usuario = Usuario.query.get(supervisor_id)
     if not usuario or usuario.rol not in Roles.SUPERVISION:
         return jsonify({'error': 'Solo un supervisor, admin o jefe de almacén puede aprobar ajustes de inventario'}), 403
+    no_aprueba = ConteoService.motivo_no_aprueba_ningun_ajuste(usuario)
+    if no_aprueba:
+        return jsonify({'error': no_aprueba}), 403
     try:
         sesion = ConteoService.confirmar_ajuste(id, supervisor_id)
         # [A22] 202 cuando el ajuste está encolado en DLQ (AJUSTANDO) — el supervisor

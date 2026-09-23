@@ -404,7 +404,7 @@ def _descartes(s: SesionConteo):
     movimiento (Siesa se movió mientras se contaba) y fuera de tolerancia (el
     recuento propio a ciegas). Mezclarlos inflaría la tasa de «ventas durante
     el conteo» con recuentos que no tienen nada que ver con ventas. Y desde
-    m032ciclo la lista guarda además lo parcial de los conteos que volvieron a
+    m033ciclo la lista guarda además lo parcial de los conteos que volvieron a
     la cola (`MotivoDescarteConteo.DE_LA_COLA`: inactividad, conteo forzado…):
     esos no son recuentos de ninguna clase y no salen de acá."""
     from app.models.conteo import MotivoDescarteConteo
