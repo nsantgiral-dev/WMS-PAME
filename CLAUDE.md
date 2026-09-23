@@ -2602,6 +2602,41 @@ a propósito: no se parsea prosa).
 
 ---
 
+## Conteo: el tablero del líder (2026-09-23)
+
+**Inventario Cíclico → 🧭 Líder** (`liderCargar`, `conteo.js`) ←
+`GET /api/conteo/lider/tablero?almacen_id=` (SUPERVISION) ← política en
+`app/services/tablero_lider_conteo.py`. Cero Siesa. No calcula nada nuevo:
+junta políticas que ya existían y las ordena como las atiende un jefe de bodega.
+
+| Bloque (en este orden) | Sale de | Acción |
+|---|---|---|
+| Conteos bloqueados | `listar_bloqueados` | Reabrir / Cancelar |
+| Mercancía sin código | `listar_novedades` | Resuelta |
+| Ajustes en DESCUADRE (solo raíces) | `motivo_bloqueo_ajuste` + `resumir_motivo_bloqueo` | Aprobable: Aprobar, con `diferencia × costo_prom_uni_siesa` («sin costo» va **adelante**, Regla 0). Bloqueado: Recontar (conteo manual) / Cancelar, con `ACCION_POR_MOTIVO_AJUSTE` |
+| Auditorías por faltante | `auditorias_por_faltante_vivas` | Solo el TERCER_CONTEO espera al líder (Contar definitivo) |
+| Rechazados por Siesa | jobs `AJUSTE_CONTEO` FALLIDO | reintentar / descartar (actúan sobre **todo** el sistema: se muestra el total al lado) |
+| Fuera del plan **sin fecha** | `ConteoService.hallazgos_que_sacan_del_plan` (lo que excluye el generador) | El documento a cerrar |
+| Hoy | `metricas.conteo.cadenas_cerradas_el_dia` vs `tope_de_generacion` | Solo volumen por persona, por nombre |
+| Rezago | `tope_de_generacion` = REZAGO y `plan_cancelar_rezago` > 0 | El «Cancelar rezago» de ABC (solo admin) |
+
+- **«Auditoría urgente» tiene una definición.** El KPI del dashboard contaba
+  FILAS `EXCEPCION_PICKING`: el CC2 hereda el tipo y queda en DESCUADRE para
+  siempre → una auditoría contaba dos y el KPI solo crecía. Ahora es `len` de la
+  lista del tablero (`contar_auditorias_urgentes`) y la tarjeta abre la pestaña.
+- **`cargarAuditoriasUrgentes()` se borró**: llamaba a una ruta borrada en
+  `0266118` y resucitada por un merge del lado del JS. El guard que debía verlo
+  aceptaba la URL si existía el *prefijo* `/api/conteo`. Ahora
+  `test_frontend_integrity::TestNingunaLlamadaAUnaRutaQueNoExiste` exige la
+  regla exacta por segmentos (397 URLs, cero excepciones).
+- **Ningún botón promete un 403**: `permisos_de(rol)` usa las tuplas de `Roles`
+  de cada endpoint y el test las cruza contra la respuesta real, rol por rol
+  (aprobar y recontar son LEAD: el jefe de almacén no los ve).
+
+Trinquete: `tests/test_tablero_lider_conteo.py` (10 mutaciones, las 10 rojas).
+
+---
+
 ## Conteo cíclico real (sobrante/faltante) + Conteo Definitivo (CC3) hecho por supervisor (2026-09-04)
 
 Dos pruebas reales de ajuste de inventario (142951) contra Siesa QA, más
