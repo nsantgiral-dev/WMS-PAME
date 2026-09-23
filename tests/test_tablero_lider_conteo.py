@@ -144,6 +144,30 @@ def mundo(app, db, siesa, tienda, monkeypatch):
     ids['match'] = s = _nuevo_cc1(tienda, next(huecos))
     assert _abrir_y_contar(s, a, 10)['resultado'] == 'MATCH'
 
+    # Uno contado AYER cuyo ajuste la cola cerró HOY: la raíz queda AJUSTADO
+    # con `fecha_cierre` de hoy, pero la cadena es de ayer (el día es el de la
+    # foto del conteo que resolvió, `dia_de_atribucion`). Se corre el reloj de
+    # sus fotos un día atrás antes de que corra el job real.
+    from app.services.connekta_gateway import ConnektaGateway
+    from app.services.siesa_job_service import _ejecutar_job
+    monkeypatch.setattr(ConnektaGateway, 'enviar_ajuste_inventario', lambda self, **kw: {'codigo': 0})
+    _poner(siesa, 10, costo=1500)
+    ids['ayer_ajustado_hoy'] = s = _nuevo_cc1(tienda, next(huecos))
+    r = _abrir_y_contar(s, a, 9)
+    assert _abrir_y_contar(r['segundo_conteo_id'], b, 9)['auto_encolado'] is True
+    for sid in (s, r['segundo_conteo_id']):
+        nodo = db.session.get(SesionConteo, sid)
+        for campo in ('foto_siesa_at', 'foto_inicio_at', 'fecha_inicio', 'fecha_creacion'):
+            if getattr(nodo, campo, None) is not None:
+                setattr(nodo, campo, getattr(nodo, campo) - timedelta(days=1))
+        if nodo.id != s and nodo.fecha_cierre is not None:
+            nodo.fecha_cierre -= timedelta(days=1)
+    db.session.commit()
+    _ejecutar_job(SiesaJob.query.filter_by(tipo='AJUSTE_CONTEO', referencia_id=s).one())
+    raiz = db.session.get(SesionConteo, s)
+    assert raiz.estado == EstadoConteo.AJUSTADO
+    assert raiz.fecha_cierre > datetime.utcnow() - timedelta(minutes=5)
+
     # Auditorías por faltante: en cola, en segundo conteo, esperando el
     # definitivo, y una ya resuelta (CC1 == CC2 → ajuste en camino) que NO es
     # urgente aunque su CC2 quede en DESCUADRE para siempre.
@@ -308,8 +332,9 @@ class TestHoy:
     def test_cerrados_hoy_contra_el_cupo(self, mundo, tienda):
         h = _tablero(tienda)['hoy']
         # Cerradas con veredicto hoy: match, aprobable, aprobable sin costo,
-        # bloq_ajuste, fallido y la auditoría resuelta. No: bloqueadas,
-        # pendientes, ni las que esperan 2º o definitivo.
+        # bloq_ajuste, fallido y la auditoría resuelta. No: la contada ayer
+        # que la cola ajustó hoy, bloqueadas, pendientes, ni las que esperan
+        # 2º o definitivo.
         assert h['cerrados'] == 6
         assert h['cupo_diario'] == 2
         assert h['pendientes_vivas'] >= 4 and h['dias_de_cupo_pendientes'] >= 2
