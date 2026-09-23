@@ -434,6 +434,7 @@ class MobileService:
                     conteo.estado = EstadoConteo.EN_PROCESO
                     conteo.fecha_inicio = datetime.utcnow()
                     db.session.commit()
+                    ConteoService.registrar_foto_inicio(conteo)
                     logger.info(f'[MOBILE] Conteo {conteo.codigo} asignado a operario {operario_id}')
                     return MobileService._conteo_a_dict(conteo)
 
@@ -726,6 +727,7 @@ class MobileService:
         sesion.estado = EstadoConteo.EN_PROCESO
         sesion.fecha_inicio = datetime.utcnow()
         db.session.commit()
+        ConteoService.registrar_foto_inicio(sesion)
         logger.info('[MOBILE] Conteo %s asignado a picker_traslado %s (bodega almacen_id=%s)',
                     sesion.codigo, operario_id, almacen_id)
         return MobileService._conteo_a_dict(sesion)
@@ -768,6 +770,7 @@ class MobileService:
         sesion.estado = _EC.EN_PROCESO
         sesion.fecha_inicio = datetime.utcnow()
         db.session.commit()
+        ConteoService.registrar_foto_inicio(sesion)
         logger.info('[MOBILE] Conteo pre-asignado %s activado para picker %s',
                     sesion.codigo, operario_id)
         return MobileService._conteo_a_dict(sesion)

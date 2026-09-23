@@ -86,6 +86,31 @@ class SesionConteo(db.Model):
     salida_sin_conf_siesa = db.Column(db.Integer, nullable=True)
     teorico_siesa = db.Column(db.Integer, nullable=True)
     foto_siesa_at = db.Column(db.DateTime, nullable=True)
+    #: **La foto de Siesa tomada al ABRIR la tarea** (2026-09-23, m029). La de
+    #: arriba es la del cierre: se lee al confirmar. El físico se cuenta en el
+    #: intervalo entre las dos, así que si Siesa se movió en el medio —un
+    #: cliente paga en caja una unidad que ya estaba contada, una unidad se
+    #: vende antes de que el contador llegue al estante, el POS se acumula—
+    #: el físico y la foto del cierre miden instantes distintos y el conteo
+    #: fabrica un sobrante o un faltante que no existe.
+    #:
+    #: Con las dos fotos se sabe: si existencia, POS o salida sin confirmar
+    #: cambiaron entre la apertura y el cierre, el conteo está CONTAMINADO y se
+    #: recuenta (`ConteoService.movimiento_durante_conteo`). Sin la de inicio
+    #: —Siesa no respondió al abrir, o la sesión es anterior a la columna— no
+    #: se sabe, y el conteo sirve para decidir MATCH o segundo conteo pero no
+    #: para ajustar (`ConteoService.motivo_bloqueo_ajuste`). Las cuatro juntas
+    #: o ninguna, igual que la del cierre.
+    existencia_inicio_siesa = db.Column(db.Integer, nullable=True)
+    cant_pos_inicio_siesa = db.Column(db.Integer, nullable=True)
+    salida_sin_conf_inicio_siesa = db.Column(db.Integer, nullable=True)
+    foto_inicio_at = db.Column(db.DateTime, nullable=True)
+    #: Los conteos que se descartaron por movimiento durante el conteo, en JSON
+    #: (lista). El recuento se hace sobre la MISMA sesión —no se crea otra: la
+    #: cadena CC1 → CC2 → CC3 es de un hijo por padre y la cola del Conteo
+    #: Definitivo cuelga de ella—, así que lo que se contó y se descartó queda
+    #: acá para auditoría: físico, las dos fotos, quién y cuándo.
+    conteos_descartados = db.Column(db.Text, nullable=True)
     cantidad_fisica = db.Column(db.Integer)   # Lo que contó el operario
     lote_id = db.Column(db.String(50))        # Obligatorio si maneja_lote=True
 
@@ -172,6 +197,18 @@ class SesionConteo(db.Model):
                      "AND es_segundo_conteo = 0")),
     )
 
+    def lista_conteos_descartados(self) -> list:
+        """`conteos_descartados` leído. Un JSON ilegible no se oculta: se
+        devuelve tal cual, marcado, para que la auditoría lo vea."""
+        if not self.conteos_descartados:
+            return []
+        import json
+        try:
+            valor = json.loads(self.conteos_descartados)
+        except (TypeError, ValueError):
+            return [{'ilegible': self.conteos_descartados}]
+        return valor if isinstance(valor, list) else [valor]
+
     def to_dict_operario(self):
         """Vista para el operario — SIN cantidad esperada (conteo ciego).
         No exponer es_segundo_conteo: el operario no debe saber si está verificando."""
@@ -210,6 +247,11 @@ class SesionConteo(db.Model):
             'salida_sin_conf_siesa': self.salida_sin_conf_siesa,
             'teorico_siesa': self.teorico_siesa,
             'foto_siesa_at': self.foto_siesa_at.isoformat() if self.foto_siesa_at else None,
+            'existencia_inicio_siesa': self.existencia_inicio_siesa,
+            'cant_pos_inicio_siesa': self.cant_pos_inicio_siesa,
+            'salida_sin_conf_inicio_siesa': self.salida_sin_conf_inicio_siesa,
+            'foto_inicio_at': self.foto_inicio_at.isoformat() if self.foto_inicio_at else None,
+            'conteos_descartados': self.lista_conteos_descartados(),
             'cantidad_fisica': self.cantidad_fisica,
             'lote_id': self.lote_id,
             'diferencia': self.diferencia,
@@ -231,7 +273,12 @@ class SesionConteo(db.Model):
             'motivo_edicion': self.motivo_edicion,
             # Por qué este ajuste no se puede aprobar, dicho por la MISMA
             # función que lo niega — la pantalla no reimplementa la regla.
-            'bloqueo_ajuste': _motivo_bloqueo_ajuste(self),
+            # Solo en DESCUADRE: es el único estado desde el que
+            # `confirmar_ajuste` encola, y la pantalla solo lo pinta ahí. En
+            # los demás la respuesta no significa nada, y desde m029 cuesta
+            # una consulta de traslados por fila del listado.
+            'bloqueo_ajuste': (_motivo_bloqueo_ajuste(self)
+                               if self.estado == EstadoConteo.DESCUADRE else None),
             # Datos del segundo conteo (hijo) embebidos para evitar N+1.
             # Si CC1≠CC2, hijo_conteo.hijo_conteo es el CC3.
             'segundo_conteo': {

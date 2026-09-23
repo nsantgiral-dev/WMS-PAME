@@ -633,6 +633,11 @@ LECTURAS_DECLARADAS = {
     'app/services/conteo_service.py::ConteoService.registrar_conteo': (
         'El instante del conteo: la foto se toma acá, antes del lock, y queda '
         'guardada en la sesión como base del delta.'),
+    'app/services/conteo_service.py::ConteoService.registrar_foto_inicio': (
+        'La foto de la APERTURA del conteo (m029): se toma al abrir la tarea, '
+        'antes de que el operario cuente. No entra al delta: solo decide si '
+        'Siesa se movió mientras se contaba (recontar) comparándola con la del '
+        'cierre. Ver tests/test_conteo_ventas_durante_conteo.py.'),
     'app/services/conteo_service.py::ConteoService.ajustar_desde_auditoria_picking': (
         'La auditoría de picking ES un conteo físico del supervisor, hecho en '
         'ese instante: toma su foto igual que registrar_conteo y la guarda.'),

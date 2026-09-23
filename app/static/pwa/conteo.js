@@ -1255,6 +1255,23 @@ function _defMostrarResultado(r) {
   const esMatch = r.resultado === 'MATCH';
   const cont = document.getElementById('def-modal-contenido');
   if (!cont) return;
+  if (r.resultado === 'RECONTAR') {
+    // Siesa se movió mientras se contaba: el servidor descartó el conteo y
+    // dejó el MISMO CC3 abierto, a tu nombre, para contar de nuevo.
+    cont.innerHTML = `
+      <div style="text-align:center;padding:30px 10px;">
+        <div style="font-size:64px;">🔁</div>
+        <div style="font-size:22px;font-weight:900;color:#FBBF24;margin-top:10px;">Recontar</div>
+        <div style="font-size:14px;color:#aaa;margin-top:8px;line-height:1.5;">${esc(r.mensaje || '')}</div>
+        <button onclick="defAbrirConteo(${esc(r.sesion_id)})" style="width:100%;margin-top:20px;padding:16px;font-size:16px;font-weight:700;background:var(--pm);color:#fff;border:none;border-radius:12px;cursor:pointer;">
+          Contar de nuevo
+        </button>
+        <button onclick="defCerrarModal()" style="width:100%;margin-top:12px;padding:14px;font-size:14px;background:#1a1a1a;color:#aaa;border:1px solid #333;border-radius:12px;cursor:pointer;">
+          Cerrar
+        </button>
+      </div>`;
+    return;
+  }
   cont.innerHTML = `
     <div style="text-align:center;padding:30px 10px;">
       <div style="font-size:64px;">${esMatch ? '✅' : '⚠️'}</div>
