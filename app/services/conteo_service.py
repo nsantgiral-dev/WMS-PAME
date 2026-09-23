@@ -2610,9 +2610,8 @@ class ConteoService:
                 SesionConteo.cantidad_fisica.is_(None),
             ).first()
             if cc1_en_curso:
-                cc1_en_curso.operario_id = None
-                cc1_en_curso.estado = EstadoConteo.PENDIENTE
-                cc1_en_curso.fecha_inicio = None
+                ConteoService.devolver_al_pool(
+                    cc1_en_curso, MotivoDescarteConteo.CEDIDO_A_SEGUNDO_CONTEO)
                 logger.info(
                     '[CONTEO] CC1 %s liberado de picker %s para priorizar CC2 %s',
                     cc1_en_curso.codigo, otro_operario.id, segundo.codigo,
@@ -3348,13 +3347,16 @@ class ConteoService:
         """Devuelve un conteo a la cola **desde cero**, sin perder el rastro.
         No hace commit.
 
-        **Una política, una función** para las tres puertas que sacan un conteo
-        de las manos de un operario: el barrido de zombis (`INACTIVIDAD`), el
-        conteo forzado a ese operario (`CONTEO_FORZADO`) y el despachador de
-        tiendas cuando el conteo es de otra bodega (`OTRA_BODEGA`). Antes
-        eran tres bucles: dos borraban lo contado sin dejar rastro y el tercero
-        **no lo borraba** — el siguiente operario heredaba en su HUD el parcial
-        de otro, en un conteo que es ciego.
+        **Una política, una función** para toda puerta que saca un conteo de
+        las manos de un operario: el barrido de zombis (`INACTIVIDAD`), el
+        conteo forzado a ese operario (`CONTEO_FORZADO`), el despachador de
+        tiendas cuando el conteo es de otra bodega (`OTRA_BODEGA`), el CC1
+        cedido para que el CC2 vaya primero (`CEDIDO_A_SEGUNDO_CONTEO`) y el
+        bloqueado que el líder reabre (`REABIERTO`). Antes eran cinco bucles:
+        dos borraban lo contado sin dejar rastro y el del despachador **no lo
+        borraba** — el siguiente operario heredaba en su HUD el parcial de
+        otro, en un conteo que es ciego. Trinquete:
+        `tests/test_conteo_cadena_con_salida.py::TestNadieDevuelveAlPoolAMano`.
 
         Si la sesión se estaba contando (EN_PROCESO o con algo contado), lo
         parcial va a `conteos_descartados` con su motivo, quién y la foto de

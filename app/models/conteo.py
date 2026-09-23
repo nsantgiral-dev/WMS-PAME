@@ -61,9 +61,13 @@ class MotivoDescarteConteo:
     OTRA_BODEGA = 'OTRA_BODEGA'
     #: Estaba BLOQUEADA y el líder la devolvió a la cola (`reabrir_bloqueado`).
     REABIERTO = 'REABIERTO'
+    #: Un CC1 abierto y sin contar que se le quita a un operario para que su
+    #: próxima tarea sea el CC2 que le acaba de tocar (`_crear_conteo_verificacion`).
+    CEDIDO_A_SEGUNDO_CONTEO = 'CEDIDO_A_SEGUNDO_CONTEO'
     #: Los que dejó `devolver_al_pool`: la sesión volvió a la cola. No son
     #: recuentos y ninguna estadística de recuento los cuenta.
-    DE_LA_COLA = (INACTIVIDAD, CONTEO_FORZADO, OTRA_BODEGA, REABIERTO)
+    DE_LA_COLA = (INACTIVIDAD, CONTEO_FORZADO, OTRA_BODEGA, REABIERTO,
+                  CEDIDO_A_SEGUNDO_CONTEO)
     VALIDOS = (MOVIMIENTO_SIESA, FUERA_DE_TOLERANCIA) + DE_LA_COLA
 
 
