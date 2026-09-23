@@ -236,3 +236,36 @@ class TestUnaSolaLista:
             'posible catálogo paralelo de variables:\n'
             + '\n'.join(f'  · {s}' for s in sospechosos)
             + '\n\nSi es legítimo, que consuma `vars_criticas.VARS_CRITICAS`.')
+
+
+class TestLaSuiteNoHeredaElBuild:
+    """El contenedor de build de Railway corre esta suite con las variables del
+    servicio. Si la suite las hereda, el mismo commit pasa en un ambiente y
+    rompe en el otro: el 2026-09-23 el hotfix que borró CONNEKTA_URL arregló el
+    build de producción y rompió todos los de QA, porque QA tiene
+    SKIP_FE_CHECK=true y la pareja quedó a medias.
+
+    Se corre este archivo en un proceso aparte con el entorno de cada build
+    —conftest actúa al importarse, así que monkeypatch llega tarde— y se exige
+    el mismo verde."""
+
+    ENTORNOS = {
+        'build de QA': {'CONNEKTA_URL': 'https://serviciosqa.siesacloud.com',
+                        'SKIP_FE_CHECK': 'true', 'MODO_ENSAYO': 'true'},
+        'build de producción': {'CONNEKTA_URL': 'https://servicios.siesacloud.com'},
+    }
+
+    @pytest.mark.parametrize('ambiente', list(ENTORNOS))
+    def test_el_catalogo_da_lo_mismo_en_cada_build(self, ambiente):
+        import os
+        import subprocess
+        import sys
+        env = {**os.environ, **self.ENTORNOS[ambiente], 'PYTHONUTF8': '1'}
+        r = subprocess.run(
+            [sys.executable, '-m', 'pytest', '-q', '-p', 'no:cacheprovider',
+             f'{Path(__file__).resolve()}::TestElProblemaSeExplicaSolo'],
+            cwd=Path(__file__).resolve().parents[1], env=env,
+            capture_output=True, text=True, timeout=300)
+        assert r.returncode == 0, (
+            f'Con el entorno del {ambiente} la suite da otro resultado: '
+            f'hereda una variable del build.\n{r.stdout[-1500:]}')

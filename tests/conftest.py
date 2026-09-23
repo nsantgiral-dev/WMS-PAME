@@ -33,6 +33,15 @@ os.environ.pop('CONNEKTA_ITOKEN', None)
 # pasa o falla según el ambiente que lo corre no mide el código.
 os.environ.pop('CONNEKTA_URL', None)
 os.environ.pop('MODO_ENSAYO', None)
+# Y SKIP_FE_CHECK, que va en PAR con CONNEKTA_URL (`vars_criticas.
+# _combinaciones_peligrosas`: apagado contra algo que no es QA = peligroso).
+# Borrar solo la URL dejó el par a medias: el build de QA —que tiene
+# SKIP_FE_CHECK=true a propósito— pasó a verse como «guard anti-duplicado
+# apagado contra producción», y `test_vars_criticas` rompió todos los deploys
+# de QA desde el hotfix de arriba (2026-09-23). Una variable que forma pareja
+# con otra se hermetiza con su pareja. Trinquete:
+# `tests/test_vars_criticas.py::TestLaSuiteNoHeredaElBuild`.
+os.environ.pop('SKIP_FE_CHECK', None)
 os.environ['CONNEKTA_MODO_SIMULACION'] = 'true'  # informativo; el guard real es el de arriba
 # El build de Railway corre esta suite con `RAILWAY_ENVIRONMENT_NAME` puesta
 # (`QA` o `production`), y `alertas_service.prefijo_ambiente()` la lee. Se
