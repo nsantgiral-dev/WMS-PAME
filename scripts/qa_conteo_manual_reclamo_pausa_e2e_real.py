@@ -200,11 +200,10 @@ def main():
 
         # ── 5. Contar CC1 discordante -> CC2 "verdad de bodega" -> auto-ajuste ──
         print('\n--- Paso 5: Carlos cuenta CC1 (discordante a propósito) ---')
-        r_scan = MobileService.procesar_escaneo(operario_id=carlos.id, tarea_id=cc1.id,
-                                                 tipo='CONTEO', codigo=CODIGO_FORZADO,
-                                                 total_acumulado=cantidad_contada)
+        r_scan = MobileService.fijar_total_conteo(carlos.id, cc1.id, cantidad_contada)
         assert r_scan['exito']
-        r1 = MobileService.confirmar_tarea(operario_id=carlos.id, tarea_id=cc1.id, tipo='CONTEO')
+        r1 = MobileService.confirmar_tarea(operario_id=carlos.id, tarea_id=cc1.id, tipo='CONTEO',
+                                           total_contado=cantidad_contada)
         print(f'  CC1 confirmado: {r1["resultado"]}')
         assert r1['resultado'] == 'SEGUNDO_CONTEO', r1
         cc2_id = r1['segundo_conteo_id']
@@ -220,9 +219,9 @@ def main():
             db.session.commit()
             ConteoService.obtener_tarea_operario(cc2_id, otro_picker.id)
             cc2_operario = otro_picker.id
-        MobileService.procesar_escaneo(operario_id=cc2_operario, tarea_id=cc2_id, tipo='CONTEO',
-                                        codigo=CODIGO_FORZADO, total_acumulado=cantidad_contada)
-        r2 = MobileService.confirmar_tarea(operario_id=cc2_operario, tarea_id=cc2_id, tipo='CONTEO')
+        MobileService.fijar_total_conteo(cc2_operario, cc2_id, cantidad_contada)
+        r2 = MobileService.confirmar_tarea(operario_id=cc2_operario, tarea_id=cc2_id, tipo='CONTEO',
+                                           total_contado=cantidad_contada)
         print(f'  CC2 confirmado: {r2["resultado"]} — {r2["mensaje"]}')
         assert r2['resultado'] == 'DESCUADRE', r2
         assert r2.get('auto_encolado') is True, r2

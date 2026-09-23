@@ -856,7 +856,7 @@ class MobileService:
         if sesion.operario_id and sesion.operario_id != operario_id:
             raise ValueError('Esta sesión de conteo no está asignada a ti')
         if sesion.estado not in (EstadoConteo.PENDIENTE, EstadoConteo.EN_PROCESO):
-            raise ValueError(f'No se puede contar en un conteo con estado {sesion.estado}')
+            raise ValueError(f'No se puede escanear ni contar en un conteo con estado {sesion.estado}')
         # CC3 (conteo definitivo) nace sin dueño a propósito — sin este
         # chequeo, cualquier operario podía "tomarlo" escaneando directo
         # aquí sin pasar por /api/conteo/definitivos, que sí exige

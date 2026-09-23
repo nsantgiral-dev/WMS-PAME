@@ -152,7 +152,7 @@ def main():
         try:
             MobileService.procesar_escaneo(
                 operario_id=picker_c.id, tarea_id=cc1_id, tipo='CONTEO',
-                codigo=CODIGO_SIESA, cantidad=1)
+                codigo=CODIGO_SIESA, cantidad=1, total_previo=0)
             _falla('picker_c pudo escanear en una sesion que NO es suya — guard de ownership no funciono')
         except ValueError as e:
             if 'no está asignada a ti' in str(e) or 'no esta asignada a ti' in str(e):
@@ -161,14 +161,13 @@ def main():
                 _falla(f'picker_c fue bloqueado pero con un mensaje inesperado: {e}')
 
         # Escaneo legitimo — picker_a, el dueño real.
-        r_scan = MobileService.procesar_escaneo(
-            operario_id=picker_a.id, tarea_id=cc1_id, tipo='CONTEO',
-            codigo=CODIGO_SIESA, total_acumulado=cantidad_contada)
+        r_scan = MobileService.fijar_total_conteo(picker_a.id, cc1_id, cantidad_contada)
         assert r_scan['exito'] and r_scan['cantidad_contada'] == cantidad_contada, r_scan
         _ok(f'picker_a escaneo su propio CC1 sin problema: {r_scan["mensaje"]}')
 
         # Confirmar CC1 via MobileService (mismo camino que /api/mobile/confirmar)
-        r1 = MobileService.confirmar_tarea(operario_id=picker_a.id, tarea_id=cc1_id, tipo='CONTEO')
+        r1 = MobileService.confirmar_tarea(operario_id=picker_a.id, tarea_id=cc1_id, tipo='CONTEO',
+                                           total_contado=cantidad_contada)
         print(f'  CC1 confirmado: {r1["resultado"]}')
         assert r1['resultado'] == 'SEGUNDO_CONTEO', r1
         _ok('CC1 con diferencia -> genero CC2 (double-blind)')
@@ -185,17 +184,16 @@ def main():
         try:
             MobileService.procesar_escaneo(
                 operario_id=picker_a.id, tarea_id=cc2_id, tipo='CONTEO',
-                codigo=CODIGO_SIESA, cantidad=1)
+                codigo=CODIGO_SIESA, cantidad=1, total_previo=0)
             _falla('picker_a (dueño de CC1) pudo escanear en CC2 — rompe el double-blind')
         except ValueError as e:
             _ok(f'picker_a bloqueado al intentar escanear el CC2 de otro: "{e}"')
 
-        r_scan2 = MobileService.procesar_escaneo(
-            operario_id=cc2_operario, tarea_id=cc2_id, tipo='CONTEO',
-            codigo=CODIGO_SIESA, total_acumulado=cantidad_contada)
+        r_scan2 = MobileService.fijar_total_conteo(cc2_operario, cc2_id, cantidad_contada)
         assert r_scan2['exito'], r_scan2
 
-        r2 = MobileService.confirmar_tarea(operario_id=cc2_operario, tarea_id=cc2_id, tipo='CONTEO')
+        r2 = MobileService.confirmar_tarea(operario_id=cc2_operario, tarea_id=cc2_id, tipo='CONTEO',
+                                           total_contado=cantidad_contada)
         print(f'  CC2 confirmado: {r2["resultado"]} — {r2["mensaje"]}')
         assert r2['resultado'] == 'DESCUADRE', r2
 
@@ -212,7 +210,7 @@ def main():
         try:
             MobileService.procesar_escaneo(
                 operario_id=picker_a.id, tarea_id=cc1_id, tipo='CONTEO',
-                codigo=CODIGO_SIESA, cantidad=1)
+                codigo=CODIGO_SIESA, cantidad=1, total_previo=0)
             _falla(f'se pudo re-escanear un CC1 en estado {cc1.estado} — guard de estado no funciono')
         except ValueError as e:
             _ok(f're-escaneo sobre CC1 ya cerrado ({cc1.estado}) bloqueado: "{e}"')

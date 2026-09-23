@@ -188,7 +188,7 @@ def main():
         print('\n--- Guard: picker_a intenta escanear el CC3 del supervisor ---')
         r = client.post('/api/mobile/escanear',
                          json={'tarea_id': cc3_id, 'tipo': 'CONTEO',
-                               'codigo': CODIGO_SIESA, 'cantidad': 1},
+                               'codigo': CODIGO_SIESA, 'cantidad': 1, 'total_previo': 0},
                          headers=H_a)
         if r.status_code == 400 and 'no está asignada a ti' in (r.get_json() or {}).get('error', ''):
             _ok(f'picker_a bloqueado al intentar escanear el CC3 ajeno: "{r.get_json()["error"]}"')
@@ -198,16 +198,17 @@ def main():
 
         # ── Escaneo real del supervisor (mismo endpoint que usa la pantalla) ──
         print('--- Supervisor cuenta CC3 (escaneo simulando lector) ---')
-        r = client.post('/api/mobile/escanear',
-                         json={'tarea_id': cc3_id, 'tipo': 'CONTEO',
-                               'codigo': CODIGO_SIESA, 'total_acumulado': int(cc3_val)},
+        # El total tecleado — mismo endpoint que el HUD usa para una pila.
+        r = client.post('/api/mobile/conteo/total',
+                         json={'tarea_id': cc3_id, 'total_acumulado': int(cc3_val)},
                          headers=H_sup)
         assert r.status_code == 200, r.get_json()
         print(f'  cantidad_contada: {r.get_json()["cantidad_contada"]}')
 
         # ── Confirmar CC3 -> propaga a la raíz (CC1) ────────────────────
         r = client.post('/api/mobile/confirmar',
-                         json={'tarea_id': cc3_id, 'tipo': 'CONTEO', 'items_escaneados': []},
+                         json={'tarea_id': cc3_id, 'tipo': 'CONTEO', 'items_escaneados': [],
+                               'total_contado': int(cc3_val)},
                          headers=H_sup)
         assert r.status_code == 200, r.get_json()
         body = r.get_json()
@@ -220,7 +221,7 @@ def main():
         print('\n--- Guard: reintento de escaneo sobre CC3 ya confirmado ---')
         r = client.post('/api/mobile/escanear',
                          json={'tarea_id': cc3_id, 'tipo': 'CONTEO',
-                               'codigo': CODIGO_SIESA, 'cantidad': 1},
+                               'codigo': CODIGO_SIESA, 'cantidad': 1, 'total_previo': 0},
                          headers=H_sup)
         cc3_ahora = SesionConteo.query.get(cc3_id)
         if r.status_code == 400 and 'No se puede escanear' in (r.get_json() or {}).get('error', ''):

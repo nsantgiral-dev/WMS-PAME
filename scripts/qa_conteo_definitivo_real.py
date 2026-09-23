@@ -163,17 +163,20 @@ def main():
 
         # ── Escaneo real (mismo endpoint que usa la pantalla) ──
         print('--- Supervisor cuenta CC3 (escaneo simulando lector) ---')
-        for _ in range(int(cc3_val)):
+        # `total_previo`: lo que la pantalla tenía antes de cada escaneo (el
+        # servidor fija, no suma — un reintento no cuenta dos veces).
+        for i in range(int(cc3_val)):
             r = client.post('/api/mobile/escanear',
                              json={'tarea_id': cc3_id, 'tipo': 'CONTEO',
-                                   'codigo': CODIGO_SIESA, 'cantidad': 1},
+                                   'codigo': CODIGO_SIESA, 'cantidad': 1, 'total_previo': i},
                              headers=H)
             assert r.status_code == 200, r.get_json()
         print(f'  cantidad_contada final: {r.get_json()["cantidad_contada"]}')
 
         # ── Confirmar CC3 -> propaga a la raíz (CC1) ──
         r = client.post('/api/mobile/confirmar',
-                         json={'tarea_id': cc3_id, 'tipo': 'CONTEO', 'items_escaneados': []},
+                         json={'tarea_id': cc3_id, 'tipo': 'CONTEO', 'items_escaneados': [],
+                               'total_contado': int(cc3_val)},
                          headers=H)
         assert r.status_code == 200, r.get_json()
         body = r.get_json()

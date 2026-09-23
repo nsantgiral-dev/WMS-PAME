@@ -166,7 +166,7 @@ def main():
 
         try:
             MobileService.procesar_escaneo(operario_id=picker_b.id, tarea_id=cc1.id,
-                                            tipo='CONTEO', codigo=CODIGO_SIESA, cantidad=1)
+                                            tipo='CONTEO', codigo=CODIGO_SIESA, cantidad=1, total_previo=0)
             _falla('picker_b pudo escanear una sesión forzada a otro operario')
         except ValueError as e:
             _ok(f'picker_b bloqueado en /escanear: "{e}"')
@@ -178,11 +178,10 @@ def main():
         assert cc1.estado == EstadoConteo.EN_PROCESO
         _ok(f'picker_a abrió la tarea -> estado={cc1.estado}')
 
-        r_scan = MobileService.procesar_escaneo(operario_id=picker_a.id, tarea_id=cc1.id,
-                                                 tipo='CONTEO', codigo=CODIGO_SIESA,
-                                                 total_acumulado=cantidad_contada)
+        r_scan = MobileService.fijar_total_conteo(picker_a.id, cc1.id, cantidad_contada)
         assert r_scan['exito']
-        r1 = MobileService.confirmar_tarea(operario_id=picker_a.id, tarea_id=cc1.id, tipo='CONTEO')
+        r1 = MobileService.confirmar_tarea(operario_id=picker_a.id, tarea_id=cc1.id, tipo='CONTEO',
+                                           total_contado=cantidad_contada)
         print(f'  CC1 confirmado: {r1["resultado"]}')
         assert r1['resultado'] == 'SEGUNDO_CONTEO', r1
         cc2_id = r1['segundo_conteo_id']
@@ -193,9 +192,9 @@ def main():
         if not cc2.operario_id:
             ConteoService.obtener_tarea_operario(cc2_id, picker_b.id)
         cc2_operario = cc2.operario_id or picker_b.id
-        MobileService.procesar_escaneo(operario_id=cc2_operario, tarea_id=cc2_id, tipo='CONTEO',
-                                        codigo=CODIGO_SIESA, total_acumulado=cantidad_contada)
-        r2 = MobileService.confirmar_tarea(operario_id=cc2_operario, tarea_id=cc2_id, tipo='CONTEO')
+        MobileService.fijar_total_conteo(cc2_operario, cc2_id, cantidad_contada)
+        r2 = MobileService.confirmar_tarea(operario_id=cc2_operario, tarea_id=cc2_id, tipo='CONTEO',
+                                           total_contado=cantidad_contada)
         print(f'  CC2 confirmado: {r2["resultado"]} — {r2["mensaje"]}')
         assert r2['resultado'] == 'DESCUADRE', r2
         assert r2.get('auto_encolado') is True, r2
