@@ -141,7 +141,11 @@ class TestVentaDuranteElConteo:
         r = _contar(cc1, tienda['a'], 7)
 
         assert r['resultado'] == 'RECONTAR', r
-        assert 'cant_pos 2→3' in r['movimiento']
+        # A ciegas: la respuesta va al operario y no lleva los números de
+        # Siesa (existencia, cant_pos) que el conteo ciego le oculta.
+        assert 'movimiento' not in r
+        assert not any(ch.isdigit() for ch in r['mensaje']), r['mensaje']
+        assert r['motivo'] == 'MOVIMIENTO_EN_SIESA'
         s = _sesion(db, cc1)
         assert s.estado == EstadoConteo.EN_PROCESO
         assert s.operario_id == tienda['a'].id
@@ -152,7 +156,8 @@ class TestVentaDuranteElConteo:
         (desc,) = s.lista_conteos_descartados()
         assert desc['cantidad_fisica'] == 7
         assert (desc['inicio']['cant_pos'], desc['cierre']['cant_pos']) == (2, 3)
-        assert s.to_dict()['conteos_descartados'][0]['movimiento'] == r['movimiento']
+        # El detalle vive donde lo lee el líder, no en la pantalla del operario.
+        assert 'cant_pos 2→3' in s.to_dict()['conteos_descartados'][0]['movimiento']
         # La foto del cierre descartado es la de inicio del recuento.
         assert (s.existencia_inicio_siesa, s.cant_pos_inicio_siesa) == (10, 3)
 

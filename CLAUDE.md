@@ -2670,11 +2670,20 @@ Los descartes llevan `motivo`: los recuentos propios no inflan la tasa de
 ninguna fila hija (la rama de tolerancia nunca crea un CC2; `omitir-segundo`
 con la bandera sigue marcándose).
 
-**Pendientes declarados:** `ajustar_desde_auditoria_picking` (auditoría de
-picking, que la ruta permite a `jefe_almacen`) ajusta cualquier monto sin la
-regla de aprobación por valor — tocarlo cambia picking, queda para decisión;
-la respuesta de `RECONTAR` por movimiento sigue trayendo los números de Siesa
-(`movimiento`), que un test existente fija.
+**Dos huecos que quedaron cerrados el mismo día:**
+
+- **La auditoría de picking esquivaba la aprobación por valor.**
+  `ajustar_desde_auditoria_picking` (que la ruta permite a `jefe_almacen`)
+  ajustaba cualquier monto. Ahora pregunta `motivo_no_puede_aprobar` antes de
+  encolar y, si no puede, deja la raíz en DESCUADRE para el líder; y
+  `_encolar_ajuste_fisico` —el único sitio que arma el `AJUSTE_CONTEO`— levanta
+  `PermissionError` con aprobador sin permiso, así que ninguna puerta nueva la
+  vuelve a esquivar. `tests/test_auditoria_picking_siesa.py::TestLaAuditoriaRespetaLaAprobacionPorValor`.
+- **El recuento por movimiento rompía el conteo ciego.** La respuesta de
+  `RECONTAR` le mostraba al operario «existencia 10→9, cant_pos 2→3»: los
+  números que el ciego existe para no darle. Ahora lleva un mensaje sin cifras
+  y `motivo='MOVIMIENTO_EN_SIESA'`; el detalle queda en `conteos_descartados`
+  (vista del líder) y en el log.
 
 ---
 

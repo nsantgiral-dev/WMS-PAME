@@ -306,12 +306,17 @@ class ConteoService:
         logger.warning(
             f'[CONTEO] {sesion.codigo}: Siesa se movió mientras se contaba '
             f'({movimiento}) — conteo de {cantidad_fisica} DESCARTADO, se recuenta')
+        # **A ciegas también acá** (2026-09-23): la respuesta va al operario,
+        # y antes llevaba `movimiento` —«existencia 10→9, cant_pos 2→3»—, o sea
+        # los números de Siesa que el conteo ciego existe para no mostrarle.
+        # El detalle queda donde lo lee el líder: `conteos_descartados` y el
+        # log de arriba.
         return {
             'resultado': 'RECONTAR',
-            'mensaje': ('Recontar: hubo ventas o movimientos en Siesa mientras '
-                        f'contabas ({movimiento}). Este conteo no se usa — vuelve '
-                        'a contar desde cero.'),
-            'movimiento': movimiento,
+            'mensaje': ('Recontar: hubo ventas o movimientos de este producto '
+                        'mientras contabas. Este conteo no se usa — vuelve a '
+                        'contar desde cero.'),
+            'motivo': 'MOVIMIENTO_EN_SIESA',
             'sesion_id': sesion.id,
         }
 
