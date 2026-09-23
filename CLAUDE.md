@@ -2559,8 +2559,16 @@ así divergieron 15/90/180 (generador), «semanal/mensual/trimestral» (resumen)
   PENDIENTE sin dueño ni hijos, con motivo y vista previa que es el mismo
   cálculo. Con las 4.825 de abril en NB1 el generador **no crea nada** hasta
   que el líder cancele ese rezago (≈ 80 días de cupo).
-- **Punto de extensión**: `conteo_politica.filtrar_elegibles` — ahí, y en
-  ningún otro sitio, se conecta la exclusión de SKUs con mercancía en proceso.
+- **Elegibilidad**: `conteo_politica.filtrar_elegibles` —generador y
+  watchdog, y ningún otro sitio— excluye los SKUs con **mercancía en proceso**
+  (pedido recogido sin remisión, recepción sin EntradaOC, avería sin
+  transferir, traslado sin STS, devolución sin NC) con el mismo núcleo que el
+  caso 7 de `motivo_bloqueo_ajuste` (`ConteoService.procesos_en_curso`). Un SKU
+  que el ajuste bloquearía no gasta cupo. **Riesgo declarado:** un hallazgo
+  sin fecha (empaque cancelado sin remisión, picking completado nunca
+  empacado) no tiene salida automática y saca el SKU del plan hasta que
+  alguien cierre el documento. Medido en producción el 2026-09-23: 129 tareas
+  de 21 SKUs en NB1, todas de prueba (las vacía el acta de corte).
 
 ---
 
