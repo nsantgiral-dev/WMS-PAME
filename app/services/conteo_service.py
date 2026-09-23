@@ -778,7 +778,8 @@ class ConteoService:
         La foto de Siesa contra la que se mide un conteo, tomada en el instante
         de contar::
 
-            {existencia, cant_pos, salida_sin_conf, comprometida, teorico, leido_at}
+            {existencia, cant_pos, salida_sin_conf, comprometida, costo_prom_uni,
+             teorico, leido_at}
 
         o **None** si Siesa no responde o la fila no trae alguno de los tres
         campos de `CAMPOS_FOTO`.
@@ -789,7 +790,8 @@ class ConteoService:
         la tienda donde más duele. Media foto se trata como ninguna.
 
         `comprometida` viaja solo como contexto —puede venir `None`—; no entra
-        a ninguna cuenta.
+        a ninguna cuenta. `costo_prom_uni` tampoco: solo valoriza el ajuste en
+        las estadísticas (`_costo_de_fila`).
         """
         fila = ConteoService._fila_invfecha(producto_codigo_siesa, bodega)
         if fila is None:
@@ -818,9 +820,32 @@ class ConteoService:
         return {
             **valores,
             'comprometida': comprometida,
+            'costo_prom_uni': ConteoService._costo_de_fila(fila),
             'teorico': ConteoService.teorico(valores['existencia'], valores['cant_pos']),
             'leido_at': datetime.utcnow(),
         }
+
+    @staticmethod
+    def _costo_de_fila(fila: dict):
+        """`f400_costo_prom_uni` de la fila de InvFecha, o `None`.
+
+        Opcional, igual que la comprometida: el costo no decide nada del
+        conteo —solo valoriza el ajuste en las estadísticas—, así que su
+        ausencia nunca vuelve incompleta la foto. Ausente, ilegible o no
+        finito → `None`, **nunca 0**: cero afirma «este ajuste no vale plata»,
+        y lo que de verdad pasa es que no se sabe cuánto vale (Regla 0).
+        Un costo ≤ 0 sí se devuelve tal cual: es lo que Siesa dijo, y el
+        reporte lo declara como «sin valorizar» en vez de esconderlo.
+        """
+        import math
+        crudo = fila.get('f400_costo_prom_uni')
+        if crudo is None:
+            return None
+        try:
+            valor = float(crudo)
+        except (TypeError, ValueError):
+            return None
+        return valor if math.isfinite(valor) else None
 
     @staticmethod
     def _grabar_foto(sesion: SesionConteo, foto) -> None:
@@ -836,12 +861,16 @@ class ConteoService:
             sesion.salida_sin_conf_siesa = None
             sesion.teorico_siesa = None
             sesion.foto_siesa_at = None
+            sesion.costo_prom_uni_siesa = None
             return
         sesion.existencia_siesa = foto['existencia']
         sesion.cant_pos_siesa = foto['cant_pos']
         sesion.salida_sin_conf_siesa = foto['salida_sin_conf']
         sesion.teorico_siesa = foto['teorico']
         sesion.foto_siesa_at = foto['leido_at']
+        # `.get`: una foto armada sin costo (los stubs de los tests, o una
+        # versión vieja de la foto) es una foto sin costo, no una foto rota.
+        sesion.costo_prom_uni_siesa = foto.get('costo_prom_uni')
 
     @staticmethod
     def _copiar_observacion(destino: SesionConteo, origen: SesionConteo) -> None:
@@ -863,6 +892,11 @@ class ConteoService:
         destino.salida_sin_conf_siesa = origen.salida_sin_conf_siesa
         destino.teorico_siesa = origen.teorico_siesa
         destino.foto_siesa_at = origen.foto_siesa_at
+        # El costo viaja con la foto: el ajuste sale de la raíz, y valorizarlo
+        # con el costo de CC1 mezclaría el instante de un conteo con la
+        # diferencia de otro — el mismo defecto que esta función existe para
+        # cerrar, trasladado a la plata.
+        destino.costo_prom_uni_siesa = origen.costo_prom_uni_siesa
         # Y la foto de inicio: el bloqueo del ajuste de la raíz se decide sobre
         # la apertura y el cierre del conteo que resolvió, no sobre los de CC1.
         destino.existencia_inicio_siesa = origen.existencia_inicio_siesa

@@ -92,6 +92,19 @@ class SesionConteo(db.Model):
     salida_sin_conf_siesa = db.Column(db.Integer, nullable=True)
     teorico_siesa = db.Column(db.Integer, nullable=True)
     foto_siesa_at = db.Column(db.DateTime, nullable=True)
+    #: **El costo promedio unitario de la foto del cierre** (`f400_costo_prom_uni`,
+    #: m030). Es lo único que permite decir cuánta PLATA mueve un ajuste de
+    #: conteo, y se guarda en el instante del conteo por la misma razón que la
+    #: foto: el costo promedio cambia con cada entrada, y valorizar hoy un
+    #: ajuste de hace tres meses con el costo de hoy es otra cifra.
+    #:
+    #: **No es parte de la foto obligatoria** (`ConteoService.CAMPOS_FOTO`): un
+    #: conteo se decide con existencia y POS, y que Siesa no mande el costo no
+    #: puede bloquearlo. Ausente o ilegible → `None`, nunca 0: un cero diría
+    #: «este ajuste no vale nada», y lo que pasa es que no se sabe cuánto vale.
+    #: Un costo ≤ 0 se guarda tal cual (es lo que Siesa dijo) y el reporte lo
+    #: trata como «sin valorizar».
+    costo_prom_uni_siesa = db.Column(db.Numeric(14, 4), nullable=True)
     #: **La foto de Siesa tomada al ABRIR la tarea** (2026-09-23, m029). La de
     #: arriba es la del cierre: se lee al confirmar. El físico se cuenta en el
     #: intervalo entre las dos, así que si Siesa se movió en el medio —un
@@ -287,6 +300,8 @@ class SesionConteo(db.Model):
             'salida_sin_conf_siesa': self.salida_sin_conf_siesa,
             'teorico_siesa': self.teorico_siesa,
             'foto_siesa_at': self.foto_siesa_at.isoformat() if self.foto_siesa_at else None,
+            'costo_prom_uni_siesa': (float(self.costo_prom_uni_siesa)
+                                     if self.costo_prom_uni_siesa is not None else None),
             'existencia_inicio_siesa': self.existencia_inicio_siesa,
             'cant_pos_inicio_siesa': self.cant_pos_inicio_siesa,
             'salida_sin_conf_inicio_siesa': self.salida_sin_conf_inicio_siesa,

@@ -45,6 +45,110 @@ WATCHDOG_VENTANA_DIAS = 7
 PORCENTAJE_STOCK_MINIMO_ABC = {'A': 0.20, 'B': 0.12, 'C': 0.08}
 
 
+def universo_conteo_ciclico(almacen_id: int, clasificacion: str) -> list:
+    """Los productos que el plan ABC exige contar en `almacen_id` para una clase:
+    filas `(id, codigo_siesa)`.
+
+    **La definición del universo, en un solo sitio.** La usan el generador
+    (`ABCService.generar_tareas_conteo_diario`, que de acá saca el tamaño del
+    lote diario) y las estadísticas de conteo (`app/services/metricas/conteo.py`,
+    que de acá saca la carga y la cobertura). Si el reporte midiera otro
+    universo que el generador, la cobertura hablaría de un plan que nadie
+    ejecuta.
+
+    Producto clasificado en ESE almacén (el ABC vive en ítem × bodega) ∩
+    producto activo ∩ con stock > 0 en alguna ubicación del almacén — sin stock
+    no hay nada que contar.
+    """
+    return (
+        Producto.query
+        .join(ProductoClasificacionABC,
+              ProductoClasificacionABC.producto_id == Producto.id)
+        .join(UbicacionProducto,
+              UbicacionProducto.producto_id == Producto.id)
+        .join(Ubicacion,
+              Ubicacion.id == UbicacionProducto.ubicacion_id)
+        .filter(
+            ProductoClasificacionABC.almacen_id == almacen_id,
+            ProductoClasificacionABC.clasificacion == clasificacion,
+            Producto.activo == True,
+            Ubicacion.almacen_id == almacen_id,
+            UbicacionProducto.cantidad > 0,
+        )
+        .with_entities(Producto.id, Producto.codigo_siesa)
+        .distinct()
+        .all()
+    )
+
+
+def huecos_con_stock(almacen_id: int, producto_ids: list) -> list:
+    """Los `UbicacionProducto` con stock > 0 de esos productos en el almacén —
+    los huecos que el generador puede convertir en tarea, uno por
+    (producto, ubicación). Compartida con las estadísticas por la misma razón
+    que `universo_conteo_ciclico`."""
+    if not producto_ids:
+        return []
+    return (
+        UbicacionProducto.query
+        .join(Ubicacion)
+        .filter(
+            UbicacionProducto.producto_id.in_(producto_ids),
+            UbicacionProducto.cantidad > 0,
+            Ubicacion.almacen_id == almacen_id
+        ).all()
+    )
+
+
+def ultimo_conteo_por_hueco(producto_ids: list, ubicacion_ids: list) -> dict:
+    """`{(producto_id, ubicacion_id): fecha_cierre del último conteo completado}`.
+
+    **Qué cuenta como «contado» para el plan, en un solo sitio.** La usan el
+    generador (que no vuelve a pedir un hueco contado dentro de su frecuencia)
+    y la cobertura de las estadísticas de conteo. Dos definiciones de «último
+    conteo» harían que el reporte diga «al día» sobre un hueco que el
+    generador va a volver a pedir, o al revés.
+
+    Completado = `MATCH` o `AJUSTADO`, en cualquier fila de la cadena (un CC2
+    que cuadra cierra en MATCH con su propia fecha). GROUP BY en SQL: no carga
+    el historial en memoria.
+
+    Ojo, declarado y no corregido acá: la `fecha_cierre` de un AJUSTADO es la
+    hora en que la DLQ recibió la respuesta de Siesa, no la del conteo. Para
+    decidir «al día / vencido» con frecuencias de 15 a 180 días la diferencia
+    no cambia nada; para atribuir un conteo a un DÍA sí — por eso las
+    estadísticas no usan esta fecha para eso.
+    """
+    if not producto_ids or not ubicacion_ids:
+        return {}
+    filas = (
+        db.session.query(
+            SesionConteo.producto_id,
+            SesionConteo.ubicacion_id,
+            func.max(SesionConteo.fecha_cierre).label('ultima')
+        )
+        .filter(
+            SesionConteo.producto_id.in_(producto_ids),
+            SesionConteo.ubicacion_id.in_(ubicacion_ids),
+            SesionConteo.estado.in_(['MATCH', 'AJUSTADO'])
+        )
+        .group_by(SesionConteo.producto_id, SesionConteo.ubicacion_id)
+        .all()
+    )
+    return {(r.producto_id, r.ubicacion_id): r.ultima for r in filas}
+
+
+def umbral_al_dia(clasificacion: str, ahora: datetime = None) -> datetime:
+    """Desde cuándo un conteo sigue «al día» para su clase: `ahora − frecuencia`.
+
+    Instante técnico en UTC naive —se compara contra `fecha_cierre`, que es
+    UTC naive—, no un día que alguien lea: no es fecha de negocio (Regla 5).
+    Clase desconocida → la frecuencia más exigente (15), la misma que el
+    generador ya usaba como default.
+    """
+    frecuencia = FRECUENCIA_DIAS.get(clasificacion, 15)
+    return (ahora or datetime.utcnow()) - timedelta(days=frecuencia)
+
+
 class ABCService:
 
     @staticmethod
@@ -463,29 +567,11 @@ class ABCService:
         from app.models.inventario import UbicacionProducto
 
         frecuencia = FRECUENCIA_DIAS.get(clasificacion, 15)
-        umbral = datetime.utcnow() - timedelta(days=frecuencia)
+        umbral = umbral_al_dia(clasificacion)
 
         # Solo productos con stock > 0 en este almacén — sin stock no hay nada que contar
         # Fetch solo columnas necesarias para reducir footprint de memoria
-        todos_productos = (
-            Producto.query
-            .join(ProductoClasificacionABC,
-                  ProductoClasificacionABC.producto_id == Producto.id)
-            .join(UbicacionProducto,
-                  UbicacionProducto.producto_id == Producto.id)
-            .join(Ubicacion,
-                  Ubicacion.id == UbicacionProducto.ubicacion_id)
-            .filter(
-                ProductoClasificacionABC.almacen_id == almacen_id,
-                ProductoClasificacionABC.clasificacion == clasificacion,
-                Producto.activo == True,
-                Ubicacion.almacen_id == almacen_id,
-                UbicacionProducto.cantidad > 0,
-            )
-            .with_entities(Producto.id, Producto.codigo_siesa)
-            .distinct()
-            .all()
-        )
+        todos_productos = universo_conteo_ciclico(almacen_id, clasificacion)
 
         if not todos_productos:
             return {
@@ -508,15 +594,7 @@ class ABCService:
 
         # Pre-cargar todos los UbicacionProducto relevantes en un solo query
         producto_ids = [p.id for p in todos_productos]
-        todos_registros = (
-            UbicacionProducto.query
-            .join(Ubicacion)
-            .filter(
-                UbicacionProducto.producto_id.in_(producto_ids),
-                UbicacionProducto.cantidad > 0,
-                Ubicacion.almacen_id == almacen_id
-            ).all()
-        )
+        todos_registros = huecos_con_stock(almacen_id, producto_ids)
         # Agrupar por producto_id
         from collections import defaultdict
         registros_por_producto = defaultdict(list)
@@ -536,22 +614,7 @@ class ABCService:
 
             # Pre-cargar fecha del último conteo completado por (producto_id, ubicacion_id)
             # GROUP BY en SQL evita cargar todas las filas históricas en memoria
-            from sqlalchemy import func as _func
-            ultimo_rows = (
-                db.session.query(
-                    SesionConteo.producto_id,
-                    SesionConteo.ubicacion_id,
-                    _func.max(SesionConteo.fecha_cierre).label('ultima')
-                )
-                .filter(
-                    SesionConteo.producto_id.in_(producto_ids),
-                    SesionConteo.ubicacion_id.in_(ubic_ids_all),
-                    SesionConteo.estado.in_(['MATCH', 'AJUSTADO'])
-                )
-                .group_by(SesionConteo.producto_id, SesionConteo.ubicacion_id)
-                .all()
-            )
-            ultimo_por_par = {(r.producto_id, r.ubicacion_id): r.ultima for r in ultimo_rows}
+            ultimo_por_par = ultimo_conteo_por_hueco(producto_ids, ubic_ids_all)
         else:
             activos_set = set()
             ultimo_por_par = {}
