@@ -6,6 +6,33 @@
 let _INV_SUBTAB = 'conteos';
 let _INV_ALMACENES = [];
 
+// ── Aviso de cajas POS al iniciar un conteo ─────────────────────────────
+// Una caja que vende sin conexión no sube `f400_cant_pos_1` a Siesa central
+// hasta que sincroniza. Mientras tanto el teórico (existencia − POS) queda
+// ALTO: la mercancía ya salió del estante y Siesa no lo sabe. El conteo ve un
+// faltante falso, se ajusta, y cuando la caja sincroniza la acumulación del
+// POS descuenta otra vez: doble descuento. El servidor no lo puede detectar
+// (ninguna foto de Siesa ve una venta que todavía no le llegó), así que se le
+// pide a quien cuenta que lo confirme. Pendiente: confirmar con el consultor
+// si Siesa POS puede vender offline.
+//
+// Sale en TODAS las bodegas —en Siesa QA hasta NB1 tiene POS pendiente— y en
+// todo sitio donde un conteo empieza. Es un aviso, no un bloqueo: nada de
+// confirm() nativo. El texto vive SOLO acá; cada pantalla llama
+// `avisoCajasPosHtml()`. Trinquete:
+// tests/test_conteo_ventas_durante_conteo.py::TestAvisoCajasPosEnCadaInicioDeConteo
+const AVISO_CAJAS_POS = 'Antes de contar: confirma que todas las cajas POS de la tienda '
+  + 'están en línea y al día — que la última venta de cada caja ya aparezca en Siesa '
+  + 'central. Si una caja estuvo caída, cuenta después de que sincronice.';
+
+/** Banner destacado con AVISO_CAJAS_POS. Texto estático: no lleva dato de nadie. */
+function avisoCajasPosHtml() {
+  return `<div class="aviso-cajas-pos" role="note" style="background:#1c1a0a;border:1px solid #b45309;border-radius:12px;padding:12px 14px;margin-bottom:12px;text-align:left;">
+      <div style="font-size:12px;color:#f59e0b;font-weight:800;margin-bottom:4px;">⚠️ CAJAS POS AL DÍA</div>
+      <div style="font-size:13px;color:#fde68a;line-height:1.45;">${AVISO_CAJAS_POS}</div>
+    </div>`;
+}
+
 /** Load almacenes for the ABC selector (once) and refresh the active inventory panel. */
 async function cargarInventario() {
   // Cargar almacenes para el selector ABC (solo una vez)
@@ -623,6 +650,8 @@ async function cargarConteos(page) {
 /** Show the manual conteo creation form, load operarios, and focus the code input. */
 async function conteosMostrarFormManual() {
   document.getElementById('conteo-form-manual').style.display = 'block';
+  const aviso = document.getElementById('conteo-manual-aviso-pos');
+  if (aviso) aviso.innerHTML = avisoCajasPosHtml();
   const operarios = await _cargarOperariosConteo();
   const selOp = document.getElementById('conteo-manual-operario');
   if (selOp) {
@@ -1144,6 +1173,8 @@ function _defRender() {
   document.getElementById('def-modal-contenido').innerHTML = `
     <div style="background:#78350f;color:#fcd34d;border-radius:12px;padding:10px 16px;font-size:18px;font-weight:700;text-align:center;margin-bottom:16px;">🎯 CONTEO DEFINITIVO</div>
 
+    ${avisoCajasPosHtml()}
+
     <div style="background:#000;border:1px solid #222;border-radius:16px;padding:20px;margin-bottom:12px;">
       <div style="font-size:13px;color:#666;">UBICACIÓN</div>
       <div style="font-size:44px;font-weight:900;letter-spacing:2px;color:#fff;">${esc(t.ubicacion || '—')}</div>
@@ -1255,6 +1286,23 @@ function _defMostrarResultado(r) {
   const esMatch = r.resultado === 'MATCH';
   const cont = document.getElementById('def-modal-contenido');
   if (!cont) return;
+  if (r.resultado === 'RECONTAR') {
+    // Siesa se movió mientras se contaba: el servidor descartó el conteo y
+    // dejó el MISMO CC3 abierto, a tu nombre, para contar de nuevo.
+    cont.innerHTML = `
+      <div style="text-align:center;padding:30px 10px;">
+        <div style="font-size:64px;">🔁</div>
+        <div style="font-size:22px;font-weight:900;color:#FBBF24;margin-top:10px;">Recontar</div>
+        <div style="font-size:14px;color:#aaa;margin-top:8px;line-height:1.5;">${esc(r.mensaje || '')}</div>
+        <button onclick="defAbrirConteo(${esc(r.sesion_id)})" style="width:100%;margin-top:20px;padding:16px;font-size:16px;font-weight:700;background:var(--pm);color:#fff;border:none;border-radius:12px;cursor:pointer;">
+          Contar de nuevo
+        </button>
+        <button onclick="defCerrarModal()" style="width:100%;margin-top:12px;padding:14px;font-size:14px;background:#1a1a1a;color:#aaa;border:1px solid #333;border-radius:12px;cursor:pointer;">
+          Cerrar
+        </button>
+      </div>`;
+    return;
+  }
   cont.innerHTML = `
     <div style="text-align:center;padding:30px 10px;">
       <div style="font-size:64px;">${esMatch ? '✅' : '⚠️'}</div>

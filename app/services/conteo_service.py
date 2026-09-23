@@ -53,9 +53,178 @@ class ConteoService:
             except Exception as e_commit:
                 db.session.rollback()
                 raise ValueError(f'Error al asignar sesión de conteo: {e_commit}') from e_commit
+            # Fuera del lock (el commit lo soltó) y antes de que el operario
+            # reciba la tarea, o sea antes de que empiece a contar.
+            ConteoService.registrar_foto_inicio(sesion)
 
         # Retornar SOLO vista ciega — sin cantidad esperada
         return sesion.to_dict_operario()
+
+    @staticmethod
+    def _bodega_siesa_de(sesion: SesionConteo):
+        """La bodega Siesa del almacén de la sesión, o `None`."""
+        if not sesion.almacen_id:
+            return None
+        from app.models.almacen import Almacen as _Alm
+        alm = db.session.get(_Alm, sesion.almacen_id)
+        return alm.bodega_siesa_id if alm else None
+
+    @staticmethod
+    def registrar_foto_inicio(sesion: SesionConteo) -> None:
+        """Lee y guarda la foto de Siesa de la APERTURA del conteo.
+
+        **Todo sitio que pasa un conteo a EN_PROCESO la llama** (trinquete:
+        `tests/test_conteo_ventas_durante_conteo.py::TestTodaAperturaTomaFotoDeInicio`).
+        Se llama DESPUÉS del commit que abre la tarea —la lectura HTTP no puede
+        ir dentro del `with_for_update`— y antes de devolverle la tarea al
+        operario, o sea antes de que empiece a contar.
+
+        **Nunca levanta.** La apertura es lo que el operario ve: si Siesa no
+        responde (timeout de 8 s, circuito abierto, después de las 8 p.m. —
+        Regla 14), la tarea se abre igual y la foto queda vacía. Un conteo sin
+        foto de inicio decide MATCH o segundo conteo, pero no ajusta
+        (`motivo_bloqueo_ajuste`): Regla 0, y un ajuste siempre puede esperar.
+
+        Se sobrescribe en cada apertura PENDIENTE → EN_PROCESO: una sesión que
+        vuelve a PENDIENTE (zombi, pausa, liberada) se recuenta desde cero.
+        """
+        try:
+            foto = None
+            bodega = ConteoService._bodega_siesa_de(sesion)
+            if sesion.producto_codigo_siesa and bodega:
+                foto = ConteoService.consultar_foto_siesa(
+                    producto_codigo_siesa=sesion.producto_codigo_siesa, bodega=bodega)
+            ConteoService._grabar_foto_inicio(sesion, foto)
+            db.session.commit()
+            if foto is None:
+                logger.warning(
+                    f'[CONTEO] {sesion.codigo} abierto SIN foto de inicio de Siesa — '
+                    f'se puede contar, pero este conteo no va a poder ajustar Siesa')
+        except Exception as e:
+            db.session.rollback()
+            logger.error(f'[CONTEO] No se pudo guardar la foto de inicio de la sesión '
+                         f'{getattr(sesion, "id", "?")}: {e} — la tarea se abre igual, '
+                         f'sin foto de inicio (no ajustará)')
+
+    @staticmethod
+    def _grabar_foto_inicio(sesion: SesionConteo, foto) -> None:
+        """La foto de inicio entera, o vacía entera — nunca a medias."""
+        if foto is None:
+            sesion.existencia_inicio_siesa = None
+            sesion.cant_pos_inicio_siesa = None
+            sesion.salida_sin_conf_inicio_siesa = None
+            sesion.foto_inicio_at = None
+            return
+        sesion.existencia_inicio_siesa = foto['existencia']
+        sesion.cant_pos_inicio_siesa = foto['cant_pos']
+        sesion.salida_sin_conf_inicio_siesa = foto['salida_sin_conf']
+        sesion.foto_inicio_at = foto['leido_at']
+
+    #: Qué se compara entre la foto de inicio y la del cierre. La existencia y
+    #: el POS son los dos términos del teórico. La salida sin confirmar también:
+    #: si cambia sola —una remisión o un traslado que se crea o se anula
+    #: mientras se cuenta— hay mercancía que se está moviendo del estante en
+    #: ese intervalo, aunque el teórico todavía no lo refleje.
+    CAMPOS_MOVIMIENTO = (
+        ('existencia', 'existencia_inicio_siesa', 'existencia_siesa'),
+        ('cant_pos', 'cant_pos_inicio_siesa', 'cant_pos_siesa'),
+        ('salida_sin_conf', 'salida_sin_conf_inicio_siesa', 'salida_sin_conf_siesa'),
+    )
+
+    @staticmethod
+    def movimiento_durante_conteo(sesion: SesionConteo, foto_cierre: dict = None):
+        """¿Se movió Siesa mientras se contaba? Descripción del cambio, o `None`.
+
+        **Una política, una función**: la usan `registrar_conteo` (para mandar
+        a recontar) y `motivo_bloqueo_ajuste` (para no ajustar nunca un conteo
+        contaminado, venga por donde venga).
+
+        Compara la foto de inicio de la sesión contra `foto_cierre` (la foto
+        recién leída, antes de grabarla) o, si no se pasa, contra la foto de
+        cierre ya grabada en la sesión.
+
+        `None` también cuando falta alguna de las dos fotos: acá no se puede
+        saber, y esa ausencia la juzga `motivo_bloqueo_ajuste` por su cuenta.
+        """
+        if sesion.foto_inicio_at is None:
+            return None
+        cambios = []
+        for clave, col_inicio, col_cierre in ConteoService.CAMPOS_MOVIMIENTO:
+            inicio = getattr(sesion, col_inicio)
+            cierre = (foto_cierre.get(clave) if foto_cierre is not None
+                      else getattr(sesion, col_cierre))
+            if inicio is None or cierre is None:
+                return None
+            # Las columnas son enteras; la foto recién leída viene en float.
+            # Se comparan en la misma escala para no ver un cambio donde solo
+            # hay una conversión.
+            if int(round(float(inicio))) != int(round(float(cierre))):
+                cambios.append(f'{clave} {float(inicio):g}→{float(cierre):g}')
+        return ', '.join(cambios) or None
+
+    @staticmethod
+    def _pedir_recuento(sesion: SesionConteo, operario_id: int, cantidad_fisica,
+                        foto: dict, movimiento: str) -> dict:
+        """El conteo se contaminó: se descarta y la MISMA sesión queda lista
+        para recontar. Pre-condición: la sesión está bajo `with_for_update`.
+
+        **Por qué la misma sesión y no una nueva.** La cadena CC1 → CC2 → CC3
+        es de un hijo por padre (`hijo_conteo`, `uselist=False`), la cola del
+        Conteo Definitivo se arma sobre ella y el índice único de sesiones
+        activas no admite dos CC1 vivos del mismo hueco. Una sesión nueva
+        rompería las tres cosas; recontar sobre la misma no toca ninguna.
+
+        **Qué se conserva**: lo contado y las dos fotos van a
+        `conteos_descartados`. **Qué se limpia**: `cantidad_fisica` (el
+        recuento empieza de cero) y `diferencia`. La foto del cierre del conteo
+        descartado se vuelve la foto de INICIO del recuento: es la lectura más
+        reciente de Siesa, anterior a que el operario vuelva a contar. Si algo
+        se mueve entre esa lectura y el nuevo cierre, el recuento también se
+        descarta — el intervalo cubierto es igual o mayor, nunca menor.
+        """
+        import json
+        historial = sesion.lista_conteos_descartados()
+        historial.append({
+            'cantidad_fisica': cantidad_fisica,
+            'operario_id': operario_id,
+            'inicio': {
+                'existencia': sesion.existencia_inicio_siesa,
+                'cant_pos': sesion.cant_pos_inicio_siesa,
+                'salida_sin_conf': sesion.salida_sin_conf_inicio_siesa,
+                'at': sesion.foto_inicio_at.isoformat() if sesion.foto_inicio_at else None,
+            },
+            'cierre': {
+                'existencia': foto['existencia'],
+                'cant_pos': foto['cant_pos'],
+                'salida_sin_conf': foto['salida_sin_conf'],
+                'at': foto['leido_at'].isoformat() if foto.get('leido_at') else None,
+            },
+            'movimiento': movimiento,
+            'descartado_at': datetime.utcnow().isoformat(),
+        })
+        sesion.conteos_descartados = json.dumps(historial, ensure_ascii=False)
+        sesion.operario_id = operario_id
+        sesion.cantidad_fisica = None
+        sesion.diferencia = None
+        sesion.estado = EstadoConteo.EN_PROCESO
+        sesion.fecha_inicio = datetime.utcnow()
+        ConteoService._grabar_foto_inicio(sesion, foto)
+        try:
+            db.session.commit()
+        except Exception as e:
+            db.session.rollback()
+            raise ValueError(f'Error al pedir el recuento: {e}') from e
+        logger.warning(
+            f'[CONTEO] {sesion.codigo}: Siesa se movió mientras se contaba '
+            f'({movimiento}) — conteo de {cantidad_fisica} DESCARTADO, se recuenta')
+        return {
+            'resultado': 'RECONTAR',
+            'mensaje': ('Recontar: hubo ventas o movimientos en Siesa mientras '
+                        f'contabas ({movimiento}). Este conteo no se usa — vuelve '
+                        'a contar desde cero.'),
+            'movimiento': movimiento,
+            'sesion_id': sesion.id,
+        }
 
     @staticmethod
     def _es_conteo_definitivo(sesion: SesionConteo) -> bool:
@@ -179,6 +348,17 @@ class ConteoService:
         # el mismo criterio que ya aplican estado y ownership dos líneas arriba.
         ConteoService.verificar_puede_tomar_definitivo(sesion, operario_id)
 
+        # ¿Se movió Siesa entre la apertura y este cierre? Entonces el físico
+        # y la foto miden instantes distintos: el conteo no produce MATCH, ni
+        # segundo conteo, ni ajuste. Se descarta y se recuenta. Va ANTES de
+        # tocar nada de la sesión: un conteo contaminado no escribe su
+        # diferencia en ningún lado, ni en la raíz.
+        if foto is not None:
+            movimiento = ConteoService.movimiento_durante_conteo(sesion, foto)
+            if movimiento:
+                return ConteoService._pedir_recuento(
+                    sesion, operario_id, cantidad_fisica, foto, movimiento)
+
         sesion.operario_id = operario_id
         sesion.cantidad_fisica = cantidad_fisica
         ConteoService._grabar_foto(sesion, foto)
@@ -263,6 +443,12 @@ class ConteoService:
                     # CC1 == CC2 (en diferencia contra su foto): "verdad de
                     # bodega" — ajuste automático sin esperar admin.
                     debe_auto_encolar = bool(origen.estado == EstadoConteo.SEGUNDO_CONTEO)
+                    # CC1 AVALA el ajuste automático, así que se le pide lo
+                    # mismo que a cualquier conteo que decide un ajuste: sus
+                    # dos fotos. Se mira ANTES de copiarle la observación de
+                    # CC2, que pisa las suyas.
+                    cc1_no_avala = (ConteoService._conteo_sin_sus_dos_fotos(origen)
+                                    if debe_auto_encolar else None)
                     if debe_auto_encolar:
                         origen.estado = EstadoConteo.DESCUADRE
                         # La raíz se queda con la observación que resolvió —
@@ -290,6 +476,15 @@ class ConteoService:
                             f'[CONTEO] CC1==CC2 en {origen.codigo} pero el ajuste '
                             f'NO se encola: {bloqueo}'
                         )
+                    elif cc1_no_avala:
+                        # CC2 tiene sus dos fotos y el ajuste es aprobable,
+                        # pero no solo: la confirmación de CC1 no se puede
+                        # creer. Queda para el supervisor — un conteo limpio más
+                        # una firma humana es el estándar del CC3.
+                        logger.warning(
+                            f'[CONTEO] CC1==CC2 en {origen.codigo}, pero CC1 '
+                            f'{cc1_no_avala} — sin ajuste automático'
+                        )
                     elif debe_auto_encolar:
                         try:
                             ConteoService._encolar_ajuste_fisico(origen, aprobador_id=None)
@@ -316,6 +511,12 @@ class ConteoService:
                         mensaje = (
                             'Ambos conteos coinciden, pero el ajuste NO se envía: '
                             f'{bloqueo}'
+                        )
+                    elif cc1_no_avala:
+                        mensaje = (
+                            f'Ambos conteos coinciden, pero el primero {cc1_no_avala}: '
+                            'no se ajusta solo. Queda en DESCUADRE para aprobación '
+                            'manual — el segundo conteo sí tiene sus dos fotos.'
                         )
                     elif debe_auto_encolar:
                         mensaje = (
@@ -574,6 +775,12 @@ class ConteoService:
         destino.salida_sin_conf_siesa = origen.salida_sin_conf_siesa
         destino.teorico_siesa = origen.teorico_siesa
         destino.foto_siesa_at = origen.foto_siesa_at
+        # Y la foto de inicio: el bloqueo del ajuste de la raíz se decide sobre
+        # la apertura y el cierre del conteo que resolvió, no sobre los de CC1.
+        destino.existencia_inicio_siesa = origen.existencia_inicio_siesa
+        destino.cant_pos_inicio_siesa = origen.cant_pos_inicio_siesa
+        destino.salida_sin_conf_inicio_siesa = origen.salida_sin_conf_inicio_siesa
+        destino.foto_inicio_at = origen.foto_inicio_at
         destino.diferencia = origen.diferencia
 
     @staticmethod
@@ -613,7 +820,119 @@ class ConteoService:
                 and cc1.cantidad_fisica == cc2.cantidad_fisica)
 
     @staticmethod
-    def motivo_bloqueo_ajuste(sesion: SesionConteo):
+    def _conteo_sin_sus_dos_fotos(sesion: SesionConteo):
+        """Qué le falta a este conteo para avalar un ajuste, o `None`.
+
+        Un conteo avala un ajuste solo si se midió entre dos fotos de Siesa: la
+        de la apertura y la del cierre. Sin la del cierre no hay contra qué
+        medir; sin la de la apertura no se sabe si Siesa se movió mientras se
+        contaba (una venta de caja en el medio). Los dos casos, Regla 0: el
+        conteo sirve para decidir MATCH o segundo conteo, no para ajustar.
+        """
+        if (sesion.fuente_existencia != 'SIESA' or sesion.teorico_siesa is None
+                or sesion.cant_pos_siesa is None
+                or sesion.salida_sin_conf_siesa is None):
+            return 'no tiene foto de Siesa del cierre'
+        if (sesion.foto_inicio_at is None or sesion.existencia_inicio_siesa is None
+                or sesion.cant_pos_inicio_siesa is None
+                or sesion.salida_sin_conf_inicio_siesa is None):
+            return 'no tiene foto de Siesa de la apertura'
+        return None
+
+    #: Cuántos días operativos (Bogotá) ANTES del día del conteo sigue contando
+    #: como «recibido hace poco» un traslado entrante. Con 1, bloquea lo
+    #: recibido el mismo día del conteo o el anterior.
+    #:
+    #: Por qué no «el mismo día»: la tienda confirma la recepción —y con ella
+    #: el ETS 173079 sube la existencia en Siesa— al contar las cajas en la
+    #: puerta, y abrirlas y ponerlas en el estante puede quedar para el turno
+    #: siguiente. Recibido a las 7 p.m. y contado a las 8 a.m. es el caso
+    #: normal, y un corte a medianoche lo dejaría pasar.
+    #:
+    #: Por qué no un número de horas: no hay un dato medido de cuánto tardan en
+    #: abrirse las cajas; cualquier N sería inventado. «Hoy o ayer» es el
+    #: menor corte que contiene la noche de por medio sin depender de la hora.
+    #:
+    #: El costo de pasarse es un ajuste que espera un día (Regla 0: un ajuste
+    #: siempre puede esperar). El de quedarse corto es un AJ-SAL falso por las
+    #: cajas sin abrir, que Siesa vuelve a contar cuando se abren: el faltante
+    #: fabricado queda como merma.
+    DIAS_OPERATIVOS_RECEPCION_RECIENTE = 1
+
+    @staticmethod
+    def traslado_entrante_vivo(sesion: SesionConteo):
+        """¿Había un traslado entrando a esta bodega con este SKU cuando se
+        contó? Descripción, o `None`.
+
+        La salida sin confirmar no lo delata: es una ENTRADA. Y es un faltante
+        falso en las dos puntas del viaje:
+
+        - **en tránsito** (`EN_TRANSITO`): la mercancía está en un camión o en
+          la puerta, y dónde la cuenta Siesa depende de si ya entró el ETS;
+        - **recibido hace poco** (`ENTREGADA`, con `fecha_entrega` dentro de
+          la ventana `DIAS_OPERATIVOS_RECEPCION_RECIENTE`): el ETS ya subió la
+          existencia, pero las cajas pueden estar sin abrir.
+
+        Se juzga contra el INSTANTE DEL CONTEO (`foto_siesa_at`), no contra
+        ahora: la aprobación puede ser días después, y el delta se fijó al
+        contar. Un traslado despachado después del conteo no lo afectó; uno
+        entregado antes de la ventana ya estaba en el estante.
+
+        Un traslado `ENTREGADA` sin `fecha_entrega` —no debería existir: los
+        dos caminos que entregan la escriben— no se puede ubicar en el tiempo y
+        cuenta como vivo (Regla 0). El mensaje nombra el traslado para que
+        alguien lo corrija.
+
+        Sin foto del cierre devuelve `None`: esa sesión ya está bloqueada por
+        no tener foto.
+        """
+        if sesion.foto_siesa_at is None or not sesion.producto_id:
+            return None
+        bodega = ConteoService._bodega_siesa_de(sesion)
+        if not bodega:
+            return None
+        from datetime import timedelta
+        from sqlalchemy import or_
+        from app.models.traslado import (EstadoTraslado, ItemSolicitudTraslado,
+                                         SolicitudTraslado)
+        from app.utils.fecha import dia_operativo_de, inicio_del_dia_utc
+
+        instante = sesion.foto_siesa_at
+        desde = inicio_del_dia_utc(
+            dia_operativo_de(instante)
+            - timedelta(days=ConteoService.DIAS_OPERATIVOS_RECEPCION_RECIENTE))
+        vivos = (SolicitudTraslado.query
+                 .join(ItemSolicitudTraslado,
+                       ItemSolicitudTraslado.solicitud_id == SolicitudTraslado.id)
+                 .filter(
+                     SolicitudTraslado.bodega_destino_siesa == bodega,
+                     ItemSolicitudTraslado.producto_id == sesion.producto_id,
+                     SolicitudTraslado.estado.in_(
+                         [EstadoTraslado.EN_TRANSITO, EstadoTraslado.ENTREGADA]),
+                     # Despachado antes del conteo (sin fecha: no se sabe → vivo).
+                     or_(SolicitudTraslado.fecha_despacho.is_(None),
+                         SolicitudTraslado.fecha_despacho <= instante),
+                     # Y no recibido antes de la ventana.
+                     or_(SolicitudTraslado.fecha_entrega.is_(None),
+                         SolicitudTraslado.fecha_entrega >= desde),
+                 )
+                 .order_by(SolicitudTraslado.id)
+                 .all())
+        if not vivos:
+            return None
+        partes = []
+        for s in vivos:
+            if s.estado == EstadoTraslado.EN_TRANSITO:
+                partes.append(f'{s.codigo} en tránsito desde {s.bodega_origen_siesa}')
+            elif s.fecha_entrega is None:
+                partes.append(f'{s.codigo} entregado sin fecha de entrega registrada')
+            else:
+                partes.append(f'{s.codigo} recibido el '
+                              f'{dia_operativo_de(s.fecha_entrega).isoformat()}')
+        return '; '.join(partes)
+
+    @staticmethod
+    def motivo_bloqueo_ajuste(sesion: SesionConteo, *, exige_foto_inicio: bool = True):
         """Por qué el ajuste de esta sesión NO puede salir a Siesa, o `None`.
 
         La usan el auto-ajuste de CC1 == CC2, la aprobación del supervisor, la
@@ -621,7 +940,12 @@ class ConteoService:
         si la pantalla la reimplementara, un día diría «aprobable» sobre algo
         que el servicio niega.
 
-        Dos casos, los dos Regla 0:
+        `exige_foto_inicio=False` solo lo pasa quien no tiene apertura que
+        fotografiar — hoy únicamente `ajustar_desde_auditoria_picking`, y está
+        declarado con su motivo en el trinquete
+        (`tests/test_conteo_ventas_durante_conteo.py::AJUSTES_SIN_FOTO_DE_INICIO`).
+
+        Cinco casos, todos Regla 0:
 
         1. **Sin foto de Siesa.** El delta se mide contra la foto del conteo;
            sin ella solo queda la base del WMS, y un delta sobre esa base deja
@@ -635,6 +959,14 @@ class ConteoService:
            y no se sabe si esa mercancía ya dejó el estante. Si ya salió, el
            conteo sale corto en esa cantidad y Siesa la descuenta otra vez al
            confirmarla: el mismo doble descuento por otra puerta.
+        3. **Sin foto de la apertura** (2026-09-23). No se sabe si Siesa se
+           movió mientras se contaba. Siesa no respondió al abrir la tarea, o
+           la sesión es anterior a la columna (m029): las dos se tratan igual.
+        4. **Siesa se movió entre la apertura y el cierre.** `registrar_conteo`
+           ya lo manda a recontar y nunca lo deja llegar acá; esto es la
+           defensa para cualquier otro camino que escriba una sesión.
+        5. **Un traslado entrante vivo** para esta bodega y este SKU en el
+           instante del conteo (`traslado_entrante_vivo`).
         """
         if (sesion.fuente_existencia != 'SIESA' or sesion.teorico_siesa is None
                 or sesion.cant_pos_siesa is None
@@ -655,6 +987,31 @@ class ConteoService:
                 f'No se sabe si esa mercancía ya salió del estante, así que el '
                 f'conteo no se puede convertir en ajuste. Recontar cuando esas '
                 f'salidas estén confirmadas en Siesa.'
+            )
+        if exige_foto_inicio and ConteoService._conteo_sin_sus_dos_fotos(sesion):
+            return (
+                'El conteo no tiene foto de Siesa de la APERTURA de la tarea (Siesa '
+                'no respondió al abrirla, o la sesión es anterior a esa foto). Sin '
+                'ella no se sabe si hubo ventas mientras se contaba, así que el '
+                'conteo no se convierte en ajuste. Recontar — un ajuste de '
+                'inventario siempre puede esperar.'
+            )
+        movimiento = ConteoService.movimiento_durante_conteo(sesion)
+        if movimiento:
+            return (
+                f'Siesa se movió mientras se contaba ({movimiento}): el físico y la '
+                f'foto miden instantes distintos. Recontar.'
+            )
+        traslado = ConteoService.traslado_entrante_vivo(sesion)
+        if traslado:
+            return (
+                f'Había un traslado entrando a esta bodega con este producto cuando '
+                f'se contó ({traslado}). La mercancía puede estar en camino o en '
+                f'cajas sin abrir, y el conteo saldría con un faltante falso. '
+                f'Recontar cuando el traslado esté recibido y guardado en el '
+                f'estante: un conteo hecho '
+                f'{ConteoService.DIAS_OPERATIVOS_RECEPCION_RECIENTE + 1} días '
+                f'operativos después de la recepción ya no lo cuenta.'
             )
         return None
 
@@ -848,7 +1205,8 @@ class ConteoService:
         ]
 
     @staticmethod
-    def _encolar_ajuste_fisico(sesion: SesionConteo, aprobador_id: int = None) -> None:
+    def _encolar_ajuste_fisico(sesion: SesionConteo, aprobador_id: int = None, *,
+                               exige_foto_inicio: bool = True) -> None:
         """
         SRP: única responsabilidad — calcular el delta con la foto de Siesa que
         la sesión guardó AL CONTAR (`cantidad_fisica − teorico_siesa`) y encolar
@@ -910,7 +1268,8 @@ class ConteoService:
         # dos bases discrepan. El ajuste de inventario es la única transacción
         # de esta operación que SIEMPRE puede esperar: no detiene una venta, ni
         # un despacho, ni un recaudo.
-        bloqueo = ConteoService.motivo_bloqueo_ajuste(sesion)
+        bloqueo = ConteoService.motivo_bloqueo_ajuste(
+            sesion, exige_foto_inicio=exige_foto_inicio)
         if bloqueo:
             raise ValueError(
                 f'Ajuste de {sesion.producto_codigo_siesa} en {bodega_siesa} NO '
@@ -1056,10 +1415,17 @@ class ConteoService:
         db.session.add(sesion)
         db.session.flush()  # necesita sesion.id antes de encolar el job
 
-        bloqueo = ConteoService.motivo_bloqueo_ajuste(sesion)
+        # La auditoría no tiene apertura que fotografiar: el supervisor cuenta
+        # y resuelve en un solo gesto, y la foto se toma al resolver. Es un
+        # hueco declarado —una venta de caja durante ese conteo no se ve— y
+        # vive en el inventario del trinquete
+        # (`tests/test_conteo_ventas_durante_conteo.py::AJUSTES_SIN_FOTO_DE_INICIO`).
+        # El resto de la política —salidas no POS, traslado entrante— sí aplica.
+        bloqueo = ConteoService.motivo_bloqueo_ajuste(sesion, exige_foto_inicio=False)
         if bloqueo:
-            # Salidas sin confirmar que no son POS: no se sabe si esa
-            # mercancía ya salió, así que el ajuste no sale. Pero la auditoría
+            # Salidas sin confirmar que no son POS, o un traslado entrante
+            # vivo: no se sabe dónde está esa mercancía, así que el ajuste no
+            # sale. Pero la auditoría
             # SÍ se cierra — a diferencia de «Siesa no responde», esto puede
             # durar días, y trabar la tarea de picking todo ese tiempo castiga
             # la operación por un problema del ERP. La sesión queda en
@@ -1070,7 +1436,8 @@ class ConteoService:
                 f'{bloqueo} Sesión {sesion.codigo} queda en DESCUADRE.'
             )
             return sesion
-        ConteoService._encolar_ajuste_fisico(sesion, aprobador_id=aprobador_id)
+        ConteoService._encolar_ajuste_fisico(sesion, aprobador_id=aprobador_id,
+                                             exige_foto_inicio=False)
         logger.warning(
             f'[CONTEO] Auditoría de picking tarea={tarea.id} — '
             f'{producto.codigo_siesa} ajuste {sesion.motivo_codigo} '

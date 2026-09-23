@@ -7,7 +7,10 @@ del seed mínimo de almacén / producto / ubicación / operarios):
 
   1. Lee la foto de Siesa (`ConteoService.consultar_foto_siesa`) y la muestra.
   2. Crea un conteo manual para el SKU en esa bodega.
-  3. Registra CC1 y CC2 con el físico indicado (dos operarios distintos).
+  3. Abre y registra CC1 y CC2 con el físico indicado (dos operarios
+     distintos). Abrir la tarea toma la foto de INICIO de Siesa; confirmar, la
+     del CIERRE. Si Siesa se movió entre las dos (una venta de caja real
+     mientras corre el script), el flujo pide RECONTAR y el script lo reporta.
   4. Deja que el flujo encole el AJUSTE_CONTEO (CC1 == CC2 → automático) y
      corre ese job del DLQ, como los otros qa_conteo_*_real.py.
   5. Espera ~15 s (Regla 20) y relee Siesa.
@@ -206,18 +209,40 @@ def _correr(args, bodega, sku):
         # ── 2 y 3. Conteo, CC1 y CC2 por los servicios reales ────────────────
         creado = ConteoService.crear_conteo_manual(almacen.id, sku)
         cc1_id = SesionConteo.query.filter_by(codigo=creado['codigos'][0]).one().id
-        ConteoService.obtener_tarea_operario(cc1_id, picker_a.id)
-        r1 = ConteoService.registrar_conteo(cc1_id, picker_a.id, fisico)
         print(f'\n[2] Conteo {creado["codigos"][0]} creado')
-        print(f'[3] CC1 = {fisico} → {r1["resultado"]}')
+
+        def _abrir_y_contar(etiqueta, sesion_id, operario_id):
+            """Como en la PWA: abrir la tarea (toma la foto de INICIO de Siesa)
+            y confirmar el conteo (foto de CIERRE). Si Siesa se movió entre las
+            dos —una venta de caja real mientras corre el script—, el servicio
+            responde RECONTAR, y eso es un resultado, no un fallo."""
+            ConteoService.obtener_tarea_operario(sesion_id, operario_id)
+            s = db.session.get(SesionConteo, sesion_id)
+            db.session.refresh(s)
+            if s.foto_inicio_at is None:
+                print(f'{etiqueta}: SIN foto de inicio (Siesa no respondió al abrir) '
+                      '— el conteo no podrá ajustar')
+            else:
+                print(f'{etiqueta} abierto — foto de INICIO: existencia='
+                      f'{s.existencia_inicio_siesa} pos={s.cant_pos_inicio_siesa} '
+                      f'salida_sin_conf={s.salida_sin_conf_inicio_siesa} ({s.foto_inicio_at})')
+            r = ConteoService.registrar_conteo(sesion_id, operario_id, fisico)
+            print(f'{etiqueta} = {fisico} → {r["resultado"]} — {r["mensaje"]}')
+            if r['resultado'] == 'RECONTAR':
+                print('\n=== RESUMEN ===\n  Siesa se movió mientras se contaba '
+                      f'({r["movimiento"]}): el flujo descartó el conteo y pidió '
+                      'recontar, como corresponde. Nada se mandó a Siesa. Volver a '
+                      'correr cuando la caja esté quieta.')
+                sys.exit(0)
+            return r
+
+        r1 = _abrir_y_contar('[3] CC1', cc1_id, picker_a.id)
         if r1['resultado'] != 'SEGUNDO_CONTEO':
             print(f'[ERROR] se esperaba SEGUNDO_CONTEO: {r1}'); sys.exit(1)
         cc2_id = r1['segundo_conteo_id']
         cc2 = db.session.get(SesionConteo, cc2_id)
         operario_cc2 = cc2.operario_id or picker_b.id
-        ConteoService.obtener_tarea_operario(cc2_id, operario_cc2)
-        r2 = ConteoService.registrar_conteo(cc2_id, operario_cc2, fisico)
-        print(f'    CC2 = {fisico} → {r2["resultado"]} — {r2["mensaje"]}')
+        r2 = _abrir_y_contar('    CC2', cc2_id, operario_cc2)
 
         cc1 = db.session.get(SesionConteo, cc1_id)
         print(f'    raíz: estado={cc1.estado} diferencia={cc1.diferencia} '

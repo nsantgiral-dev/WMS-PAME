@@ -118,7 +118,7 @@ function renderTarea(t) {
         </div>
       </div>`
     : esConteo
-      ? `<div style="background:#1a1a1a;border-radius:16px;padding:20px;margin-bottom:12px;text-align:center;">
+      ? `${avisoCajasPosHtml()}<div style="background:#1a1a1a;border-radius:16px;padding:20px;margin-bottom:12px;text-align:center;">
           <div style="font-size:13px;color:#666;">CONTEO CIEGO</div>
           <div id="contador" style="font-size:64px;font-weight:900;">${esc(t.cantidad_escaneada || 0)}</div>
           <div style="font-size:13px;color:#555;margin-top:6px;">Cuenta sin ver cantidad esperada</div>
@@ -550,6 +550,22 @@ async function confirmar() {
     if (r.canasto_data) {
       if (_avisoBackorder) alerta(_avisoBackorder, 'exito');
       _modalEtiquetaCanasto(r.canasto_data);
+      return;
+    }
+    // Conteo contaminado: Siesa se movió (ventas de caja) mientras contaba. El
+    // servidor ya descartó lo contado y dejó la MISMA tarea lista para recontar
+    // desde cero; pedirTarea() se la devuelve con el contador en 0.
+    if (r.resultado === 'RECONTAR') {
+      const overlay = document.createElement('div');
+      overlay.style.cssText = 'position:fixed;inset:0;z-index:9999;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:16px;background:#0B1117;';
+      overlay.innerHTML = `
+        <div style="font-size:80px;">🔁</div>
+        <div style="font-size:28px;font-weight:900;color:#FBBF24;text-align:center;padding:0 20px;">Recontar</div>
+        <div style="font-size:15px;color:#E5C07B;text-align:center;padding:0 30px;line-height:1.5;">
+          ${esc(r.mensaje || 'Hubo ventas mientras contabas. Vuelve a contar desde cero.')}
+        </div>`;
+      document.body.appendChild(overlay);
+      setTimeout(() => { overlay.remove(); pedirTarea(); }, 4000);
       return;
     }
     // Conteos: mostrar resultado MATCH vs SEGUNDO_CONTEO antes de pedir siguiente tarea
