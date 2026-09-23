@@ -252,6 +252,69 @@ class TestLaBaseEsElTeorico:
         assert foto['comprometida'] == 5
 
 
+class TestPOSMayorQueLaExistencia:
+    """El teórico da NEGATIVO, y no es un dato inventado.
+
+    Medido contra Siesa QA el 2026-09-23: `PAPELSP9218` en PC1 viene con
+    `existencia=140` y `cant_pos=152`. Teórico = **−12**. Siesa dice que en el
+    estante debería haber menos doce unidades, que es físicamente imposible.
+
+    No es un error de Siesa que haya que corregir acá: es el estado normal de
+    una tienda que vendió por caja más de lo que el acumulado alcanzó a
+    descontar. Cuando el POS se acumule, la existencia va a quedar en −12 sola.
+
+    Por eso la fórmula **no debe recortar el negativo a cero**. Si el estante
+    está vacío y se ajusta `+12`, Siesa queda en 152; al acumularse los 152 del
+    POS queda en 0, que es la verdad. Recortar a cero dejaría la existencia en
+    140, el acumulado la llevaría a −12, y el faltante reaparecería mañana.
+
+    Este caso no estaba cubierto: de los 47 tests del archivo, ninguno ponía
+    `pos > existencia`.
+    """
+
+    def test_el_teorico_puede_ser_negativo(self):
+        """La fórmula no recorta. Es una resta, y el signo es información."""
+        from app.services.conteo_service import ConteoService
+        assert ConteoService.teorico(140, 152) == -12
+
+    def test_el_estante_vacio_contra_teorico_negativo_es_sobrante(
+            self, db, siesa, tienda):
+        """Existencia 140, POS 152, físico 0 → ajuste **+12** (AJ-ENT).
+
+        El código viejo habría mandado −140 (AJ-SAL de 140), vaciando en Siesa
+        una bodega que el acumulado del POS iba a vaciar igual: doble descuento
+        de 140 unidades."""
+        from app.models.conteo import SesionConteo
+        siesa.poner(existencia=140, pos=152)
+        cc1_id, r1 = _cc1(tienda, 0)
+        r2 = _cc2(tienda, r1, 0)
+        assert r2['auto_encolado'] is True, r2
+
+        raiz = db.session.get(SesionConteo, cc1_id)
+        assert raiz.existencia_siesa == 140
+        assert raiz.cant_pos_siesa == 152
+        assert raiz.teorico_siesa == -12, (
+            'el teórico se recortó: un POS mayor que la existencia deja de '
+            'verse y el faltante vuelve mañana')
+        assert raiz.diferencia == 12
+
+        p = _un_job(cc1_id)
+        assert (p['motivo_codigo'], p['cantidad']) == ('AJ-ENT', 12)
+        viejo = 0 - raiz.existencia_siesa
+        assert viejo == -140 and p['cantidad'] != abs(viejo)
+
+    def test_contar_lo_que_el_pos_ya_vendio_no_fabrica_entrada(
+            self, db, siesa, tienda):
+        """La otra dirección: si el físico coincide con el teórico negativo no
+        hay nada que ajustar. Como el físico no puede ser negativo, el caso se
+        arma con el teórico en cero — POS igual a la existencia."""
+        siesa.poner(existencia=152, pos=152)
+        cc1_id, r1 = _cc1(tienda, 0)
+        assert r1['resultado'] != 'SEGUNDO_CONTEO', (
+            'un estante vacío con todo el POS pendiente es un MATCH: no hay '
+            f'diferencia que ajustar, y sin embargo pidió CC2 ({r1})')
+
+
 class TestElDeltaSeFijaAlContar:
 
     def test_d_aprobacion_diferida_con_siesa_movido(self, db, siesa, tienda):

@@ -128,8 +128,25 @@ _SIN_MIGRACION_ACEPTADO: dict = {}
 
 
 #: Directorios que no contienen modelos de producción.
+#:
+#: `.claude` está acá por una razón distinta de las demás, y conviene no
+#: «simplificarla» junto con ellas: `.claude/worktrees/` son **copias enteras
+#: del repo en otros commits**, que los agentes crean para trabajar aislados.
+#: Sin esta exclusión el detector lee los modelos de OTRA RAMA y los cruza
+#: contra las migraciones de ÉSTA.
+#:
+#: El 2026-09-23 eso produjo el falso positivo exacto: «20 columnas declaradas
+#: y ausentes de toda migración», que eran las mismas 5 repetidas en 4
+#: worktrees de la rama `conteo/ventas-durante-conteo` — una rama que **sí**
+#: trae su migración (`m029fotoinicioconteo`). El árbol real no declaraba
+#: ninguna de las cinco.
+#:
+#: No angosta la cobertura: cada archivo de un worktree tiene su contraparte
+#: en el árbol principal, que sí se revisa. Lo que evita es contar dos veces y
+#: mezclar ramas. Y un falso positivo acá cuesta caro: manda a escribir una
+#: migración que ya existe, y enseña a ignorar el guard.
 _EXCLUIDOS = ('venv', 'tests', 'migrations', '__pycache__', 'scratchpad',
-              '.git', 'node_modules')
+              '.git', 'node_modules', '.claude')
 
 #: Sitios donde vivían modelos fuera de `app/models/` cuando este detector se
 #: amplió (2026-09-01). Son el canario de que el barrido no se volvió a
@@ -141,6 +158,21 @@ _ANTES_CIEGOS = (
     'app/services/kardex_service.py',  # kardex_movimientos, stock_diario
     'app/services/vigia_service.py',   # serie_vigia, alarma_vigia
 )
+
+
+def test_los_worktrees_de_agentes_no_entran_al_barrido():
+    """Un worktree es el repo en otra rama: sus modelos no son de ésta.
+
+    `.claude/worktrees/<agente>/` aparece cada vez que alguien corre agentes.
+    Si el barrido lo mira, cruza los modelos de una rama contra las
+    migraciones de otra y reporta columnas huérfanas que no lo son.
+    """
+    assert '.claude' in _EXCLUIDOS, (
+        'volvió el barrido sobre .claude/worktrees/: el detector va a leer '
+        'modelos de otras ramas como si fueran de ésta')
+    for p in _archivos_de_modelos():
+        rel = p.relative_to(_RAIZ) if p.is_absolute() else p
+        assert '.claude' not in rel.parts, f'se coló un worktree: {rel}'
 
 
 @functools.lru_cache(maxsize=1)
