@@ -2533,7 +2533,7 @@ capacidad, no de código.
 
 `app/services/conteo_politica.py` es **el único sitio** que sabe cuánto se
 cuenta por día, cada cuánto se recuenta cada clase y en qué orden se reparte.
-`tests/test_conteo_cupo.py` (27 mutaciones, las 27 rojas) exige por AST que
+`tests/test_conteo_cupo.py` (28 mutaciones, las 28 rojas) exige por AST que
 nadie fuera de ese módulo nombre sus variables ni escriba un mapa clase→número:
 así divergieron 15/90/180 (generador), «semanal/mensual/trimestral» (resumen) y
 «≈ N÷15/día» (pantalla).
@@ -2552,7 +2552,9 @@ así divergieron 15/90/180 (generador), «semanal/mensual/trimestral» (resumen)
 - **Watchdog**: corre antes que el plan y dentro del mismo cupo.
 - **Reparto**: `orden_de_reparto()` — EXCEPCION_PICKING > MANUAL > A > B > C >
   antigüedad, en toda puerta (NB1, intercalado, tienda, cola asignada,
-  asignar-lote, mis-tareas).
+  asignar-lote, mis-tareas). Una auditoría por faltante sobre un hueco con un
+  conteo del plan pendiente **lo convierte** en EXCEPCION_PICKING (si no, con
+  el rezago de abril, ninguna auditoría habría llegado nunca a ser evento).
 - **«Limpiar cola» cancela, no borra**: solo raíces DIARIO_ABC/WATCHDOG_ABC en
   PENDIENTE sin dueño ni hijos, con motivo y vista previa que es el mismo
   cálculo. Con las 4.825 de abril en NB1 el generador **no crea nada** hasta
