@@ -153,8 +153,9 @@ def motivo_sin_veredicto(raiz: SesionConteo) -> str:
 
     `omitida` cubre también la raíz resuelta a mano con su CC3 todavía
     PENDIENTE: `omitir-segundo` dejaba el CC3 vivo y huérfano cuando la raíz
-    estaba en TERCER_CONTEO (arreglo en la rama conteo/defectos-flujo). Leído
-    como «pendiente» mandaría a buscar un conteo que ya nadie va a hacer.
+    estaba en TERCER_CONTEO (arreglado en b69bc78; el histórico anterior sigue
+    así en la base). Leído como «pendiente» mandaría a buscar un conteo que ya
+    nadie va a hacer.
     """
     if raiz.estado == EstadoConteo.CANCELADO:
         return 'cancelada'
@@ -546,6 +547,7 @@ _CLAVES_BLOQUEO = (
     ('salidas sin confirmar que NO', 'SALIDAS_NO_POS'),
     ('de la APERTURA', 'SIN_FOTO_APERTURA'),
     ('se movió mientras se contaba', 'MOVIMIENTO_DURANTE_CONTEO'),
+    ('quedó viejo', 'CONTEO_VIEJO'),
     ('traslado entrando', 'TRASLADO_ENTRANTE'),
 )
 

@@ -55,10 +55,38 @@ def _poner(siesa, existencia, pos=0, salida_sin_conf=None, costo=None):
         siesa.fila['f400_costo_prom_uni'] = float(costo)
 
 
-def _nuevo_cc1(tienda):
+def _nuevo_cc1(tienda, sku=SKU):
     from app.models.conteo import SesionConteo
-    creado = _svc().crear_conteo_manual(tienda['almacen'].id, SKU)
+    creado = _svc().crear_conteo_manual(tienda['almacen'].id, sku)
     return SesionConteo.query.filter_by(codigo=creado['codigos'][0]).one().id
+
+
+def _hueco(db, tienda, n):
+    """Un producto clase C con su propio hueco en la tienda. Cada cadena del
+    mundo dorado va en un hueco distinto: desde b69bc78 una cadena viva o un
+    ajuste en vuelo bloquea abrir otra sobre el mismo hueco, y una
+    observación más reciente deja vieja a la anterior. Apiladas en un solo
+    hueco, el mundo mediría esas reglas y no el reporte."""
+    from app.models.inventario import UbicacionProducto
+    from app.models.producto import Producto
+    from app.models.producto_clasificacion_abc import ProductoClasificacionABC
+    from app.models.ubicacion import Ubicacion
+    sku = f'EST{n}'
+    prod = Producto(codigo=sku, nombre=f'Item {n}', codigo_siesa=sku,
+                    unidad_negocio_id='001', activo=True)
+    db.session.add(prod)
+    db.session.flush()
+    ub = Ubicacion(codigo=f'EST-UB-{n}', almacen_id=tienda['almacen'].id, tipo_zona='GENERAL',
+                   stock_minimo=0, stock_maximo=9999, secuencia_ruteo=1, activo=True)
+    db.session.add(ub)
+    db.session.flush()
+    db.session.add(UbicacionProducto(ubicacion_id=ub.id, producto_id=prod.id,
+                                     cantidad=10, reservado=0, bloqueado=0))
+    db.session.add(ProductoClasificacionABC(producto_id=prod.id,
+                                            almacen_id=tienda['almacen'].id,
+                                            clasificacion='C'))
+    db.session.commit()
+    return sku
 
 
 def _abrir_y_contar(sid, actor, fisico):
@@ -83,24 +111,20 @@ def _tok(app, usuario):
 
 @pytest.fixture
 def dorado(app, db, client, siesa, tienda, monkeypatch):
-    """Las nueve cadenas. Devuelve los ids de las raíces por nombre."""
-    from app.models.producto_clasificacion_abc import ProductoClasificacionABC
+    """Las nueve cadenas, una por hueco (clase C). Devuelve los ids de las raíces."""
     from app.models.siesa_job import SiesaJob
     from app.services.connekta_gateway import ConnektaGateway
     from app.services.siesa_job_service import _ejecutar_job
 
     monkeypatch.setattr(ConnektaGateway, 'enviar_ajuste_inventario',
                         lambda self, **kw: {'codigo': 0})
-    db.session.add(ProductoClasificacionABC(producto_id=tienda['producto'].id,
-                                            almacen_id=tienda['almacen'].id,
-                                            clasificacion='C'))
-    db.session.commit()
     a, b, sup = tienda['a'], tienda['b'], tienda['supervisor']
     ids = {}
+    huecos = iter(_hueco(db, tienda, n) for n in range(1, 10))
 
     # 1 · OK_CC1, con un recuento: se vende 1 por caja mientras CC1 cuenta.
     _poner(siesa, 10)
-    ids['ok_cc1'] = cc1 = _nuevo_cc1(tienda)
+    ids['ok_cc1'] = cc1 = _nuevo_cc1(tienda, next(huecos))
     _svc().obtener_tarea_operario(cc1, a.id)
     _poner(siesa, 10, pos=1)
     assert _svc().registrar_conteo(cc1, a.id, 9)['resultado'] == 'RECONTAR'
@@ -108,13 +132,13 @@ def dorado(app, db, client, siesa, tienda, monkeypatch):
 
     # 2 · OK_CC2
     _poner(siesa, 10)
-    ids['ok_cc2'] = cc1 = _nuevo_cc1(tienda)
+    ids['ok_cc2'] = cc1 = _nuevo_cc1(tienda, next(huecos))
     r = _abrir_y_contar(cc1, a, 9)
     assert _abrir_y_contar(r['segundo_conteo_id'], b, 10)['resultado'] == 'MATCH'
 
     # 3 · OK_CC3 — CC1 −1, CC2 −2, el definitivo del supervisor cuadra.
     _poner(siesa, 10)
-    ids['ok_cc3'] = cc1 = _nuevo_cc1(tienda)
+    ids['ok_cc3'] = cc1 = _nuevo_cc1(tienda, next(huecos))
     r = _abrir_y_contar(cc1, a, 9)
     r = _abrir_y_contar(r['segundo_conteo_id'], b, 8)
     assert r['resultado'] == 'TERCER_CONTEO'
@@ -123,7 +147,7 @@ def dorado(app, db, client, siesa, tienda, monkeypatch):
     # 4 · ERROR_CONFIRMADO, auto-ajustado y llevado a AJUSTADO por el job real.
     #     El costo cambia entre CC1 y CC2: la raíz se queda con el de CC2.
     _poner(siesa, 10, costo=1400)
-    ids['error_auto'] = cc1 = _nuevo_cc1(tienda)
+    ids['error_auto'] = cc1 = _nuevo_cc1(tienda, next(huecos))
     r = _abrir_y_contar(cc1, a, 9)
     _poner(siesa, 10, costo=1500)
     r2 = _abrir_y_contar(r['segundo_conteo_id'], b, 9)
@@ -134,7 +158,7 @@ def dorado(app, db, client, siesa, tienda, monkeypatch):
 
     # 5 · ERROR_CC3 aprobado por el supervisor (queda AJUSTANDO, en vuelo).
     _poner(siesa, 10, costo=1000)
-    ids['error_cc3'] = cc1 = _nuevo_cc1(tienda)
+    ids['error_cc3'] = cc1 = _nuevo_cc1(tienda, next(huecos))
     r = _abrir_y_contar(cc1, a, 9)
     r = _abrir_y_contar(r['segundo_conteo_id'], b, 8)
     _poner(siesa, 10, costo=2000)
@@ -145,7 +169,7 @@ def dorado(app, db, client, siesa, tienda, monkeypatch):
 
     # 6 · ERROR_CONFIRMADO bloqueado: salidas sin confirmar que no son POS.
     _poner(siesa, 10, pos=2, salida_sin_conf=5)
-    ids['error_bloqueado'] = cc1 = _nuevo_cc1(tienda)
+    ids['error_bloqueado'] = cc1 = _nuevo_cc1(tienda, next(huecos))
     r = _abrir_y_contar(cc1, a, 9)
     r2 = _abrir_y_contar(r['segundo_conteo_id'], b, 9)
     assert r2['ajuste_bloqueado'], r2
@@ -153,19 +177,19 @@ def dorado(app, db, client, siesa, tienda, monkeypatch):
 
     # 7 · Omitida: el supervisor salta el CC2.
     _poner(siesa, 10)
-    ids['omitida'] = cc1 = _nuevo_cc1(tienda)
+    ids['omitida'] = cc1 = _nuevo_cc1(tienda, next(huecos))
     _abrir_y_contar(cc1, a, 9)
     resp = client.post(f'/api/conteo/{cc1}/omitir-segundo', headers=_tok(app, sup))
     assert resp.status_code == 200, resp.get_json()
 
     # 8 · Cancelada antes de contarse.
-    ids['cancelada'] = cc1 = _nuevo_cc1(tienda)
+    ids['cancelada'] = cc1 = _nuevo_cc1(tienda, next(huecos))
     resp = client.put(f'/api/conteo/{cc1}/cancelar', json={'motivo': 'prueba'},
                       headers=_tok(app, sup))
     assert resp.status_code == 200, resp.get_json()
 
     # 9 · Pendiente: creada, nadie la abrió.
-    ids['pendiente'] = _nuevo_cc1(tienda)
+    ids['pendiente'] = _nuevo_cc1(tienda, next(huecos))
     db.session.expire_all()
     return ids
 
@@ -200,7 +224,7 @@ class TestMundoDorado:
         v = _reporte()['volumen']
         assert v['iniciadas'] == 9
         assert v['cerradas'] == 6
-        assert v['skus_cerrados'] == 1
+        assert v['skus_cerrados'] == 6
         assert v['por_veredicto'] == {'OK_CC1': 1, 'OK_CC2': 1, 'OK_CC3': 1,
                                       'ERROR_AUDITORIA': 0, 'ERROR_CC3': 1,
                                       'ERROR_CONFIRMADO': 2}
@@ -244,8 +268,9 @@ class TestMundoDorado:
                 for f in p['por_diferencia']]
         assert [d[1] for d in difs] == [2, -1, 1]
         assert [d[2] for d in difs] == ['ERROR_CC3', 'ERROR_CONFIRMADO', 'ERROR_CONFIRMADO']
-        assert p['por_ajustes'][0]['n'] == 2
-        assert p['por_recuentos'][0]['n'] == 1
+        assert sorted(f['producto_codigo'] for f in p['por_ajustes']) == ['EST4', 'EST5']
+        assert all(f['n'] == 1 for f in p['por_ajustes'])
+        assert [(f['producto_codigo'], f['n']) for f in p['por_recuentos']] == [('EST1', 1)]
 
     def test_por_operario_solo_volumen_y_sin_ranking(self, db, dorado, tienda):
         f = {x['nombre']: x for x in _reporte()['por_operario']['filas']}
@@ -264,11 +289,17 @@ class TestMundoDorado:
         assert filas['A']['universo_huecos'] == 0 and filas['A']['exigencia_diaria'] == 0
         fila = filas['C']
         assert fila['frecuencia_dias'] == 180
-        assert (fila['universo_productos'], fila['universo_huecos']) == (1, 1)
-        assert fila['contados_en_frecuencia']['numerador'] == 1
-        assert fila['exigencia_diaria'] == 1
+        # Nueve huecos clase C (el POSITEM del fixture `tienda` no tiene ABC).
+        assert (fila['universo_productos'], fila['universo_huecos']) == (9, 9)
+        # Al día = MATCH o AJUSTADO (la regla del generador): OK_CC1, OK_CC2,
+        # OK_CC3 y el ajuste auto que el DLQ llevó a AJUSTADO. El AJUSTANDO y
+        # los DESCUADRE todavía no cuentan como contados para el plan.
+        assert (fila['contados_en_frecuencia']['numerador'],
+                fila['contados_en_frecuencia']['denominador']) == (4, 9)
+        assert (fila['sin_contar_en_ventana'], fila['nunca_contados']) == (5, 5)
+        assert fila['exigencia_diaria'] == 1          # ceil(9 / 180)
         assert fila['ritmo']['cadenas_cerradas'] == 6
-        assert fila['dias_para_cerrar_ciclo'] == 0.0
+        assert fila['dias_para_cerrar_ciclo'] == round(5 / (6 / 28), 1)
 
     def test_rezago(self, db, dorado):
         r = _reporte()['rezago']
@@ -531,10 +562,27 @@ class TestBloqueadosSeAgrupan:
             assert motivo, clave
             assert _m().resumir_motivo_bloqueo(motivo) == clave, motivo
             vistos.add(clave)
+            s.estado = 'CANCELADO'   # que no deje vieja a la siguiente
+            db.session.flush()
+
+        # CONTEO_VIEJO: un conteo limpio del hueco, y otro posterior con resultado.
+        limpia = dict(fuente_existencia='SIESA', teorico_siesa=8, existencia_siesa=10,
+                      cant_pos_siesa=2, salida_sin_conf_siesa=2,
+                      existencia_inicio_siesa=10, cant_pos_inicio_siesa=2,
+                      salida_sin_conf_inicio_siesa=2)
+        vieja = _fila(db, tienda, estado='DESCUADRE', fecha_creacion=t, foto_siesa_at=t,
+                      foto_inicio_at=t, cantidad_fisica=7, diferencia=-1, **limpia)
+        assert ConteoService.motivo_bloqueo_ajuste(vieja) is None, 'debe llegar limpia'
+        _fila(db, tienda, estado='MATCH', fecha_creacion=t, cantidad_fisica=8,
+              foto_siesa_at=t + timedelta(hours=1), foto_inicio_at=t + timedelta(hours=1),
+              **limpia)
+        motivo = ConteoService.motivo_bloqueo_ajuste(vieja)
+        assert _m().resumir_motivo_bloqueo(motivo) == 'CONTEO_VIEJO', motivo
+        vistos.add('CONTEO_VIEJO')
         assert _m().resumir_motivo_bloqueo(
             'Había un traslado entrando a esta bodega …') == 'TRASLADO_ENTRANTE'
         assert _m().resumir_motivo_bloqueo('algo que nadie escribió') == 'OTRO'
-        assert len(vistos) >= 4
+        assert len(vistos) >= 5
 
 
 # ─────────────────────────────────────────────────────────────────────────────
