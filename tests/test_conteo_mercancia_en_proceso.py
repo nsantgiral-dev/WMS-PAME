@@ -587,3 +587,42 @@ class TestConsultaAcotada:
                         vistos[tabla] = plan
                         assert indice in plan, (tabla, plan)
         assert set(vistos) == set(esperados), f'no se vio la consulta de {set(esperados) - set(vistos)}'
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# El generador no programa lo que el ajuste bloquearía
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestElGeneradorNoProgramaLoQueEstaEnProceso:
+    """La misma regla en las dos puertas: `conteo_politica.filtrar_elegibles`
+    (generador y watchdog) usa el núcleo del caso 7 de `motivo_bloqueo_ajuste`.
+    Programar un SKU con un pedido recogido sin remisión gasta un cupo del día
+    en un conteo que después no puede ajustar."""
+
+    def _clasificar(self, db, tienda):
+        from app.models.producto_clasificacion_abc import ProductoClasificacionABC
+        db.session.add(ProductoClasificacionABC(producto_id=tienda['producto'].id,
+                                                almacen_id=tienda['almacen'].id,
+                                                clasificacion='A'))
+        db.session.commit()
+
+    def _del_plan(self, tienda):
+        from app.models.conteo import SesionConteo
+        return SesionConteo.query.filter_by(producto_id=tienda['producto'].id,
+                                            tipo='DIARIO_ABC').count()
+
+    def test_recogido_sin_remision_no_entra_al_plan(self, db, siesa, tienda):
+        from app.services.abc_service import ABCService
+        self._clasificar(db, tienda)
+        _picking(tienda)
+        r = ABCService.generar_tareas_conteo_diario(tienda['almacen'].id)
+        assert self._del_plan(tienda) == 0, r
+        assert r['excluidos_elegibilidad'] == {'mercancia_en_proceso': 1}, r
+
+    def test_remisionado_vuelve_al_plan(self, db, siesa, tienda):
+        from app.services.abc_service import ABCService
+        self._clasificar(db, tienda)
+        _remisionar(db, _empacar(tienda, _picking(tienda)))
+        r = ABCService.generar_tareas_conteo_diario(tienda['almacen'].id)
+        assert self._del_plan(tienda) == 1, r
+        assert r['excluidos_elegibilidad'] == {}, r

@@ -376,8 +376,28 @@ def filtrar_elegibles(almacen_id: int, candidatos: list) -> tuple:
     en construcción en paralelo): contar un SKU con un picking o una recepción
     a medias mide un número que se está moviendo. Lo usan el generador y el
     watchdog, así que una regla puesta acá rige para las dos puertas.
+
+    **Mercancía en proceso** (2026-09-23): un SKU con un pedido recogido sin
+    remisión, una recepción sin entrada a Siesa, una avería sin transferir, un
+    traslado sin STS o una devolución sin NC no se programa. Su ajuste lo
+    bloquearía igual (`motivo_bloqueo_ajuste`, caso 7): contarlo ahora gasta un
+    cupo del día en un conteo que no puede servir. Se excluyen también los
+    hallazgos «sin fecha» (Regla 0): no se sabe si la mercancía volvió al
+    estante, y el conteo quedaría bloqueado. Esos no desaparecen: el mismo
+    núcleo (`ConteoService.procesos_en_curso`) los lista con el documento a
+    cerrar, y cerrarlo devuelve el SKU al plan.
+
+    Un fallo al consultar NO se traga: sube, y la corrida diaria lo reporta
+    por su correo de fallo. Generar sin saber qué está en proceso es
+    exactamente lo que esta regla existe para impedir.
     """
-    return list(candidatos), {}
+    from app.services.conteo_service import ConteoService
+    en_proceso = ConteoService.productos_con_mercancia_en_proceso(almacen_id)
+    elegibles = [c for c in candidatos if c[0] not in en_proceso]
+    excluidos = {}
+    if len(elegibles) < len(candidatos):
+        excluidos['mercancia_en_proceso'] = len(candidatos) - len(elegibles)
+    return elegibles, excluidos
 
 
 def orden_de_reparto() -> tuple:

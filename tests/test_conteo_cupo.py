@@ -121,14 +121,25 @@ class Mundo:
         return u
 
     def picks(self, codigo, cuantos):
+        """Historial de picking TERMINADO: cada línea con su pedido, ya
+        remisionado en Siesa. Sin la remisión, la guarda de mercancía en proceso
+        (`ConteoService.procesos_en_curso`) lo lee —con razón— como mercancía
+        fuera del estante que Siesa todavía cuenta, y el SKU sale del plan."""
+        from app.models.packing import TareaPacking
         from app.models.picking import TareaPicking
         p = self.productos[codigo]
         hace_dos_dias = datetime.utcnow() - timedelta(days=2)
         for i in range(cuantos):
+            pedido = f'PD-{codigo}-{i:03d}'
             self.db.session.add(TareaPicking(
                 codigo=f'PK-{codigo}-{i:03d}', producto_id=p.id, cantidad_solicitada=1,
                 cantidad_recogida=1, ubicacion_id=self.ub.id, almacen_id=self.almacen.id,
-                estado='COMPLETADO', fecha_completado=hace_dos_dias))
+                estado='COMPLETADO', referencia_documento=pedido,
+                fecha_inicio=hace_dos_dias, fecha_completado=hace_dos_dias))
+            self.db.session.add(TareaPacking(
+                codigo=f'PAK-{codigo}-{i:03d}', almacen_id=self.almacen.id,
+                numero_pedido_siesa=pedido, estado='DESPACHADO', siesa_triggered=True,
+                siesa_triggered_at=hace_dos_dias + timedelta(hours=1)))
         self.db.session.commit()
 
 
