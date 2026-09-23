@@ -38,6 +38,7 @@ from app.models.producto import Producto
 from app.services.picking_service import PickingService
 from app.services.packing_service import PackingService
 from app.services.conteo_service import ConteoService
+from app.services.conteo_politica import orden_de_reparto
 
 logger = logging.getLogger(__name__)
 
@@ -426,11 +427,14 @@ class MobileService:
                 # a un operario el CC3 (que es de supervisión), el CC2 de un CC1
                 # que él mismo contó, y conteos de otra bodega. La regla vive
                 # en `filtros_pool_sin_dueno`, igual para toda puerta.
+                # Y el orden era solo antigüedad: una auditoría por faltante
+                # esperaba detrás de miles de conteos del plan. El orden vive
+                # en `orden_de_reparto`, igual para toda puerta.
                 conteo = (SesionConteo.query
                           .options(_sl_conteo_disp(SesionConteo.producto), _sl_conteo_disp(SesionConteo.ubicacion))
                           .filter(*ConteoService.filtros_pool_sin_dueno(
                               operario_id, ConteoService.almacen_de_usuario(_u_pick)))
-                          .order_by(SesionConteo.fecha_creacion.asc())
+                          .order_by(*orden_de_reparto())
                           .with_for_update(skip_locked=True)
                           .first())
 
@@ -553,7 +557,11 @@ class MobileService:
                         *ConteoService.filtros_pool_sin_dueno(
                             operario_id,
                             _ubic_interc.almacen_id if _ubic_interc else None),
-                    ).first())
+                    )
+                    # Sin orden, el intercalado tomaba cualquiera: en
+                    # SIESA-GENERAL todos los SKU comparten ubicación.
+                    .order_by(*orden_de_reparto())
+                    .first())
                 if conteo_mismo_lugar:
                     conteo_mismo_lugar.operario_id = operario_id
                     # No cambia a EN_PROCESO aún — el operario primero hace el picking
@@ -705,16 +713,11 @@ class MobileService:
         """
         SRP: única responsabilidad — asignar el próximo conteo cíclico de la bodega
         a un picker_traslado cuando no hay traslados pendientes.
-        Prioridad A → B → C, más antigua primero dentro de cada clase.
+        Orden: `orden_de_reparto` — el mismo que NB1. Antes ordenaba A → B → C
+        y dejaba las auditorías por faltante (sin clase) AL FINAL.
         Usa skip_locked para evitar colisiones entre workers concurrentes.
         """
-        from sqlalchemy import case as _sa_case
         from sqlalchemy.orm import selectinload as _sl_tienda
-        _prioridad_abc = _sa_case(
-            {'A': 1, 'B': 2, 'C': 3},
-            value=SesionConteo.clasificacion_abc,
-            else_=4,
-        )
         # selectinload: pre-cargar producto/ubicacion antes del commit — expire_on_commit
         # los invalida y _conteo_a_dict necesita ambas relaciones.
         sesion = (
@@ -724,7 +727,7 @@ class MobileService:
                 *ConteoService.filtros_pool_sin_dueno(operario_id, almacen_id),
                 SesionConteo.es_segundo_conteo.is_(False),  # CC2 va al admin, no al dispatcher cíclico
             )
-            .order_by(_prioridad_abc, SesionConteo.fecha_creacion.asc())
+            .order_by(*orden_de_reparto())
             .with_for_update(skip_locked=True)
             .first()
         )
@@ -738,17 +741,6 @@ class MobileService:
         logger.info('[MOBILE] Conteo %s asignado a picker_traslado %s (bodega almacen_id=%s)',
                     sesion.codigo, operario_id, almacen_id)
         return MobileService._conteo_a_dict(sesion)
-
-    @staticmethod
-    def _orden_cola_preasignada() -> tuple:
-        """
-        Criterio de orden de los conteos PENDIENTE ya asignados a un operario:
-        primero los forzados por un admin (tipo MANUAL), luego el resto por
-        antigüedad. Sin esto un conteo forzado hoy quedaba detrás de todo lo
-        viejo que el operario ya tenía en cola (PD1494, 2026-09-18).
-        """
-        forzado_primero = db.case((SesionConteo.tipo == 'MANUAL', 0), else_=1)
-        return (forzado_primero, SesionConteo.fecha_creacion.asc())
 
     @staticmethod
     def _get_conteo_preassignado(operario_id: int):
@@ -768,7 +760,10 @@ class MobileService:
                 SesionConteo.operario_id == operario_id,
                 SesionConteo.estado == _EC.PENDIENTE,
             )
-            .order_by(*MobileService._orden_cola_preasignada())
+            # Un conteo forzado hoy (MANUAL) no queda detrás de todo lo viejo
+            # que el operario ya tenía en cola (PD1494, 2026-09-18): lo decide
+            # `orden_de_reparto`, el mismo orden de toda puerta.
+            .order_by(*orden_de_reparto())
             .with_for_update(skip_locked=True)
             .first()
         )

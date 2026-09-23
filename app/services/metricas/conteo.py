@@ -12,8 +12,11 @@ cerrar — y además tardaría 8 s por SKU.
 
 El conteo casi no opera: 8.761 cadenas, 8.690 creadas de golpe en abril y
 ~70 desde entonces; 4.830 PENDIENTES colgadas desde abril; 25 MATCH y 5
-AJUSTADO en total. El plan ABC de NB1 (A 15 d, B 90 d, C 180 d sobre ~26.000
-productos) exige ~316 conteos por día.
+AJUSTADO en total. El plan ABC de entonces para NB1 (A 15 d, B 90 d, C 180 d
+sobre ~26.000 productos) exigía ~316 conteos por día. Desde 2026-09-23 la
+capacidad fija el ritmo (`conteo_politica`: cupo diario por almacén e
+intervalos por clase), y este reporte pone el cupo configurado al lado del
+ritmo real.
 
 Por eso **el primer bloque es carga y cobertura**: cuánto exige el plan, cuánto
 se cuenta y a qué ritmo. Exactitud y tasas van a tener n chico durante meses,
@@ -338,7 +341,10 @@ def _carga_y_cobertura(cadenas, almacen_id, clase, hoy, ahora) -> dict:
     que usa el generador (`abc_service`). La cobertura es por hueco
     (producto × ubicación), que es lo que el generador programa y lo que
     `ultimo_conteo_por_hueco` fecha; la exigencia diaria es `ceil(productos /
-    frecuencia)`, el lote que el generador crea cada día.
+    intervalo)`: lo que haría falta contar por día para cumplir los intervalos
+    de `conteo_politica`. El generador NO crea eso: crea hasta el cupo diario
+    del almacén. Por eso `por_almacen` pone lado a lado el cupo configurado, la
+    exigencia y el ritmo real.
 
     El ritmo cuenta las cadenas CERRADAS (con veredicto) en los últimos 28 días
     operativos sobre huecos de ese universo. Una cerrada con error que todavía
@@ -347,7 +353,8 @@ def _carga_y_cobertura(cadenas, almacen_id, clase, hoy, ahora) -> dict:
     """
     from app.models.almacen import Almacen
     from app.models.producto_clasificacion_abc import ProductoClasificacionABC
-    from app.services.abc_service import (FRECUENCIA_DIAS, huecos_con_stock,
+    from app.services import conteo_politica as politica
+    from app.services.abc_service import (huecos_con_stock,
                                           ultimo_conteo_por_hueco, umbral_al_dia,
                                           universo_conteo_ciclico)
 
@@ -355,7 +362,7 @@ def _carga_y_cobertura(cadenas, almacen_id, clase, hoy, ahora) -> dict:
     if almacen_id:
         q_alm = q_alm.filter(ProductoClasificacionABC.almacen_id == almacen_id)
     almacen_ids = sorted(a for (a,) in q_alm.all())
-    clases = [clase] if clase else sorted(FRECUENCIA_DIAS)
+    clases = [clase] if clase else list(politica.CLASES)
 
     ventana_desde = hoy - timedelta(days=VENTANA_RITMO_DIAS - 1)
     cerradas_por_hueco = Counter(
@@ -367,7 +374,7 @@ def _carga_y_cobertura(cadenas, almacen_id, clase, hoy, ahora) -> dict:
     for alm_id in almacen_ids:
         alm = db.session.get(Almacen, alm_id)
         for cl in clases:
-            frecuencia = FRECUENCIA_DIAS[cl]
+            frecuencia = politica.intervalo_dias(cl)
             productos = universo_conteo_ciclico(alm_id, cl)
             ids = [p.id for p in productos]
             pares = {(h.producto_id, h.ubicacion_id) for h in huecos_con_stock(alm_id, ids)}
@@ -406,10 +413,38 @@ def _carga_y_cobertura(cadenas, almacen_id, clase, hoy, ahora) -> dict:
                 'dias_para_cerrar_ciclo': dias_ciclo,
                 'sin_estimacion_por': motivo_ciclo,
             })
+    # Cupo configurado contra ritmo real, por almacén y con TODAS las clases:
+    # el cupo es del almacén, no de una clase. El ritmo real son las cadenas
+    # cerradas del almacén en la ventana, vengan del plan, de un conteo manual
+    # o de una auditoría — es lo que el equipo de verdad cuenta por día.
+    cerradas_por_almacen = Counter(c.raiz.almacen_id for c in cadenas
+                                   if c.cerrada and _en(c.dia, ventana_desde, hoy))
+    por_almacen = []
+    for alm_id in almacen_ids:
+        alm = db.session.get(Almacen, alm_id)
+        tope = politica.tope_de_generacion(alm_id)
+        exigencia = sum(math.ceil(len(universo_conteo_ciclico(alm_id, cl)) / politica.intervalo_dias(cl))
+                        for cl in politica.CLASES)
+        por_almacen.append({
+            'almacen_id': alm_id,
+            'almacen': alm.nombre if alm else None,
+            'bodega_siesa': alm.bodega_siesa_id if alm else None,
+            'cupo_diario': tope['cupo_diario'],
+            'exigencia_diaria_plan': exigencia,
+            'ritmo_real_por_dia': round(cerradas_por_almacen.get(alm_id, 0) / VENTANA_RITMO_DIAS, 2),
+            'dias_ventana': VENTANA_RITMO_DIAS,
+            'pendientes_vivas': tope['pendientes_vivas'],
+            'dias_de_cupo_pendientes': tope['dias_de_cupo_pendientes'],
+            'generaria_hoy': tope['tope'],
+            'mensaje_generador': tope['mensaje'],
+        })
+
     return {
         'al_dia_operativo': hoy.isoformat(),
         'nota': ('Foto de hoy: no depende del rango de fechas, y el filtro de tipo '
                  'no aplica (cualquier conteo deja el hueco al día).'),
+        'plan': politica.descripcion_del_plan(),
+        'por_almacen': por_almacen,
         'filas': filas,
         'excluidos': {'cerradas_sin_fecha_de_confirmacion': sin_dia} if sin_dia else {},
     }
@@ -799,9 +834,9 @@ def calcular_estadisticas_conteo(fecha_desde: date = None, fecha_hasta: date = N
     """El reporte completo. `ahora` (UTC naive) se inyecta en los tests; la
     fecha de negocio sale siempre de `dia_operativo_de`, nunca de
     `utcnow().date()` (Regla 5)."""
-    from app.services.abc_service import FRECUENCIA_DIAS
+    from app.services.conteo_politica import CLASES
 
-    if clase is not None and clase not in FRECUENCIA_DIAS:
+    if clase is not None and clase not in CLASES:
         raise ValueError(f'clase inválida: {clase!r} (A, B o C)')
     ahora = ahora or datetime.utcnow()
     hoy = dia_operativo_de(ahora)

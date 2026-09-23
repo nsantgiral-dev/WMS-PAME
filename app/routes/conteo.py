@@ -6,7 +6,7 @@ from flask_jwt_extended import jwt_required, get_jwt_identity
 from app.extensions import db
 from app.models.conteo import SesionConteo, EstadoConteo
 from app.services.conteo_service import ConteoService
-from app.services.abc_service import ABCService
+from app.services.abc_service import ABCService, RezagoCambioDesdeLaVistaPrevia
 from app.routes._auth_helpers import Roles, _es_personal_almacen
 
 conteo_bp = Blueprint('conteo', __name__)
@@ -97,19 +97,14 @@ def mis_tareas():
     except (ValueError, TypeError):
         return jsonify({'error': 'Identidad de usuario inválida en el token'}), 422
 
-    from sqlalchemy import case as sa_case
-    prioridad_abc = sa_case(
-        {'A': 1, 'B': 2, 'C': 3},
-        value=SesionConteo.clasificacion_abc,
-        else_=4
-    )
+    from app.services.conteo_politica import orden_de_reparto
     from sqlalchemy.orm import selectinload as _sl_mis
     tareas = (SesionConteo.query
               .options(_sl_mis(SesionConteo.ubicacion), _sl_mis(SesionConteo.producto))
               .filter(
                   SesionConteo.operario_id == operario_id,
                   SesionConteo.estado.in_(['PENDIENTE', 'EN_PROCESO'])
-              ).order_by(prioridad_abc, SesionConteo.fecha_creacion.asc()).all())
+              ).order_by(*orden_de_reparto()).all())
 
     return jsonify({
         'tareas': [t.to_dict_operario() for t in tareas],
@@ -242,12 +237,21 @@ def confirmar_ajuste(id):
         return jsonify({'error': str(e)}), 500
 
 
+def _adelantar(data: dict) -> bool:
+    """`adelantar` — o `forzar_todo`, su nombre anterior (un cliente con la
+    PWA vieja en caché lo sigue mandando). Los dos significan lo mismo desde
+    2026-09-23: considerar también huecos al día, **dentro del cupo**. Ya no
+    existe un modo que cree todo lo elegible sin límite."""
+    return bool(data.get('adelantar', data.get('forzar_todo', False)))
+
+
 @conteo_bp.route('/abc/generar-tareas', methods=['POST'])
 @jwt_required()
 def generar_tareas_abc():
     """
-    Genera el lote diario de conteo para una clase.
-    forzar_todo=true genera para todos los elegibles sin límite de batch.
+    Genera los conteos del plan de UNA clase, dentro del cupo diario del
+    almacén (ver `conteo_politica`). `adelantar=true` también toma huecos al
+    día, los más atrasados primero — nunca más que el cupo.
     Solo admin.
     """
     if not _solo_admin():
@@ -261,9 +265,11 @@ def generar_tareas_abc():
         resultado = ABCService.generar_tareas_conteo_diario(
             almacen_id=data['almacen_id'],
             clasificacion=data.get('clasificacion', 'A'),
-            forzar_todo=bool(data.get('forzar_todo', False)),
+            adelantar=_adelantar(data),
         )
         return jsonify(resultado), 201
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
     except Exception as e:
         logger.exception(f'[CONTEO] Error en generar_tareas_conteo_diario almacen={data.get("almacen_id")}')
         return jsonify({'error': str(e)}), 500
@@ -272,7 +278,7 @@ def generar_tareas_abc():
 @conteo_bp.route('/abc/generar-todas', methods=['POST'])
 @jwt_required()
 def generar_todas_las_clases():
-    """Genera tareas A+B+C en una sola llamada — solo admin."""
+    """Watchdog + plan A+B+C dentro del cupo, en una sola llamada — solo admin."""
     if not _solo_admin():
         return jsonify({'error': 'Solo admin puede generar tareas de conteo'}), 403
     data = request.get_json() or {}
@@ -281,7 +287,7 @@ def generar_todas_las_clases():
     try:
         resultado = ABCService.generar_todas_las_clases(
             almacen_id=data['almacen_id'],
-            forzar_todo=bool(data.get('forzar_todo', False)),
+            adelantar=_adelantar(data),
         )
         return jsonify(resultado), 201
     except Exception as e:
@@ -289,34 +295,66 @@ def generar_todas_las_clases():
         return jsonify({'error': str(e)}), 500
 
 
+def _clase_de(valor):
+    clase = (valor or '').strip().upper() or None
+    if clase and clase not in ('A', 'B', 'C'):
+        raise ValueError('clasificacion debe ser A, B, C o vacía (todas)')
+    return clase
+
+
+@conteo_bp.route('/abc/limpiar-pendientes/preview', methods=['GET'])
+@jwt_required()
+def preview_limpiar_pendientes_abc():
+    """GET — qué cancelaría «Limpiar cola», sin tocar nada: cuántas, por clase,
+    por tipo y por antigüedad, y lo que NO se toca con su motivo. Solo admin."""
+    if not _solo_admin():
+        return jsonify({'error': 'Solo admin puede limpiar la cola de conteo'}), 403
+    almacen_id = request.args.get('almacen_id', type=int)
+    if not almacen_id:
+        return jsonify({'error': 'almacen_id es requerido'}), 400
+    try:
+        plan = ABCService.plan_cancelar_rezago(
+            almacen_id, _clase_de(request.args.get('clasificacion')))
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    plan.pop('ids', None)
+    plan['ejecutado'] = False
+    return jsonify(plan), 200
+
+
 @conteo_bp.route('/abc/limpiar-pendientes', methods=['POST'])
 @jwt_required()
 def limpiar_pendientes_abc():
     """
-    Elimina tareas PENDIENTE para reiniciar el ciclo de conteo de una clase.
-    Útil cuando se generó todo de golpe y se quiere empezar gradualmente.
-    Solo admin.
+    CANCELA —no borra— el rezago del plan: raíces DIARIO_ABC/WATCHDOG_ABC en
+    PENDIENTE, sin dueño y sin hijos. Nunca CC2/CC3, MANUAL ni auditorías por
+    faltante. Exige `motivo` y, si se manda, `esperadas` (lo que mostró la
+    vista previa): si el rezago cambió, no cancela nada (409). Solo admin.
+
+    Antes era un DELETE físico de TODA pendiente del almacén: se llevaba los
+    CC2 (y dejaba su raíz huérfana en SEGUNDO_CONTEO), los conteos manuales y
+    las auditorías por faltante, sin rastro de quién ni por qué.
     """
     if not _solo_admin():
         return jsonify({'error': 'Solo admin puede limpiar la cola de conteo'}), 403
     data = request.get_json() or {}
     almacen_id = data.get('almacen_id')
-    clasificacion = data.get('clasificacion')  # A, B, C o None (todas)
     if not almacen_id:
         return jsonify({'error': 'almacen_id es requerido'}), 400
-
-    query = SesionConteo.query.filter_by(estado='PENDIENTE', almacen_id=almacen_id)
-    if clasificacion and clasificacion in ('A', 'B', 'C'):
-        query = query.filter_by(clasificacion_abc=clasificacion)
-
-    count = query.count()
-    query.delete(synchronize_session=False)
-    db.session.commit()
-    return jsonify({
-        'eliminadas': count,
-        'almacen_id': almacen_id,
-        'clasificacion': clasificacion or 'todas',
-    }), 200
+    motivo = (data.get('motivo') or '').strip()
+    if not motivo:
+        return jsonify({'error': 'Se requiere un motivo para cancelar el rezago'}), 400
+    try:
+        clase = _clase_de(data.get('clasificacion'))
+        uid = int(get_jwt_identity())
+        resultado = ABCService.cancelar_rezago(
+            int(almacen_id), motivo=motivo, usuario_id=uid, clasificacion=clase,
+            esperadas=data.get('esperadas'))
+    except RezagoCambioDesdeLaVistaPrevia as e:
+        return jsonify({'error': str(e)}), 409
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    return jsonify(resultado), 200
 
 
 @conteo_bp.route('/manual', methods=['POST'])
@@ -382,7 +420,8 @@ def sincronizar_abc():
 def watchdog_anomalias():
     """
     Ejecuta el AI Watchdog manualmente para un almacén. Solo admin.
-    Detecta productos B/C con alta rotación real y fuerza conteo inmediato.
+    Detecta productos B/C con alta rotación real y abre un conteo inmediato,
+    dentro del cupo del almacén y nunca sobre un hueco recién contado.
     """
     if not _solo_admin():
         return jsonify({'error': 'Solo admin puede ejecutar el watchdog'}), 403
@@ -390,8 +429,11 @@ def watchdog_anomalias():
     if 'almacen_id' not in data:
         return jsonify({'error': 'almacen_id es requerido'}), 400
     try:
-        overrides = ABCService.watchdog_anomalias(almacen_id=data['almacen_id'])
-        return jsonify({'overrides': len(overrides), 'detalle': overrides}), 200
+        informe = ABCService.watchdog_con_informe(almacen_id=data['almacen_id'])
+        return jsonify({'overrides': len(informe['overrides']), 'detalle': informe['overrides'],
+                        'omitidos_por_cupo': informe['omitidos_por_cupo'],
+                        'omitidos_recien_contados': informe['omitidos_recien_contados'],
+                        'cupo': informe['cupo']}), 200
     except Exception as e:
         logger.exception(f'[CONTEO] Error en watchdog_anomalias almacen={data.get("almacen_id")}')
         return jsonify({'error': str(e)}), 500
@@ -707,9 +749,10 @@ def asignar_lote():
     if not almacen_id:
         return jsonify({'error': 'Indicar almacen_id: el operario no tiene almacén asignado'}), 400
 
+    from app.services.conteo_politica import orden_de_reparto
     q = (SesionConteo.query
          .filter(*ConteoService.filtros_pool_sin_dueno(operario.id, almacen_id))
-         .order_by(SesionConteo.fecha_creacion.asc()))
+         .order_by(*orden_de_reparto()))
 
     tareas = q.limit(limite).all()
 

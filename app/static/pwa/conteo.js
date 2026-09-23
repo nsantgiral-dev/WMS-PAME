@@ -758,7 +758,14 @@ async function crearConteoManual() {
   } catch (e) { errorEl.textContent = e.message || 'Error de conexión'; }
 }
 
-/** Fetch and render the ABC classification summary for the selected almacen. */
+/**
+ * Fetch and render the ABC classification summary for the selected almacen.
+ *
+ * Los intervalos, el cupo y los umbrales del watchdog salen del servidor
+ * (`conteo_politica`): antes esta pantalla decía «cada 15 / 90 / 180 días»
+ * escrito a mano, el resumen decía «semanal / mensual / trimestral» y el
+ * generador usaba otra cosa. Una sola fuente, pintada donde se muestra.
+ */
 async function cargarResumenAbc() {
   const almacenId = document.getElementById('inv-abc-almacen')?.value;
   if (!almacenId) return;
@@ -766,47 +773,79 @@ async function cargarResumenAbc() {
   if (!resumenEl) return;
   resumenEl.innerHTML = '<div style="text-align:center;padding:20px;color:#555;">Cargando...</div>';
   try {
-    const d = await get(`/api/conteo/abc/resumen?almacen_id=${almacenId}`);
-    const dist = d.distribucion_abc || {};
-    const items = [
-      { clase: 'A', col: '#4ade80', bg: '#1e3a1e', border: '#166534', desc: 'Alta rotación · cada 15 días' },
-      { clase: 'B', col: '#60a5fa', bg: '#1e2a3a', border: '#1e40af', desc: 'Rotación media · cada 90 días' },
-      { clase: 'C', col: '#f87171', bg: '#2a1e1e', border: '#7f1d1d', desc: 'Baja rotación · cada 180 días' },
-    ];
-    resumenEl.innerHTML = `
-      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:8px;">
-        ${items.map(it => {
-          const total = dist[it.clase]?.total_productos ?? '—';
-          return `
-          <div style="background:${esc(it.bg)};border:1px solid ${esc(it.border)};border-radius:10px;padding:14px;text-align:center;">
-            <div style="font-size:22px;font-weight:900;color:${esc(it.col)};">${total}</div>
-            <div style="font-size:11px;font-weight:700;color:${esc(it.col)};">Clase ${esc(it.clase)}</div>
-            <div style="font-size:10px;color:#666;margin-top:2px;">${esc(it.desc)}</div>
-          </div>`;
-        }).join('')}
-      </div>
-      <div style="font-size:11px;color:#555;text-align:right;">Fuente: ${esc(d.fuente || 'WMS')}</div>`;
+    const d = await get(`/api/conteo/abc/resumen?almacen_id=${encodeURIComponent(almacenId)}`);
+    resumenEl.innerHTML = _abcResumenHtml(d);
+    _abcPintarEtiquetas(d);
   } catch (e) {
     resumenEl.innerHTML = '<div style="color:#ef4444;font-size:12px;">Error cargando resumen</div>';
   }
 }
 
+/** HTML del resumen ABC + el plan vigente (cupo, pendientes, lo que haría hoy). */
+function _abcResumenHtml(d) {
+  const dist = d.distribucion_abc || {};
+  const plan = d.plan || {};
+  const items = [
+    { clase: 'A', col: '#4ade80', bg: '#1e3a1e', border: '#166534' },
+    { clase: 'B', col: '#60a5fa', bg: '#1e2a3a', border: '#1e40af' },
+    { clase: 'C', col: '#f87171', bg: '#2a1e1e', border: '#7f1d1d' },
+  ];
+  const tarjetas = items.map(it => {
+    const c = dist[it.clase] || {};
+    return `
+      <div style="background:${esc(it.bg)};border:1px solid ${esc(it.border)};border-radius:10px;padding:14px;text-align:center;">
+        <div style="font-size:22px;font-weight:900;color:${esc(it.col)};">${esc(c.total_productos ?? '—')}</div>
+        <div style="font-size:11px;font-weight:700;color:${esc(it.col)};">Clase ${esc(it.clase)}</div>
+        <div style="font-size:10px;color:#666;margin-top:2px;">${esc(c.descripcion || '')}</div>
+      </div>`;
+  }).join('');
+  const dias = plan.dias_de_cupo_pendientes;
+  const lineaPlan = `
+    <div style="background:#0a0a0a;border:1px solid #222;border-radius:10px;padding:10px;font-size:12px;color:#aaa;line-height:1.6;margin-bottom:8px;">
+      Cupo diario: <b style="color:#fff;">${esc(plan.cupo_diario ?? '—')}</b> conteos ·
+      pendientes sin contar: <b style="color:#fff;">${esc(plan.pendientes_vivas ?? '—')}</b>${dias === null || dias === undefined ? '' : ` (${esc(dias)} días de cupo)`}<br>
+      El generador corre a las ${esc(plan.hora_del_generador || '')} y hoy crearía <b style="color:#fff;">${esc(plan.generaria_hoy ?? 0)}</b>.
+      ${plan.mensaje ? `<br><span style="color:#fbbf24;">${esc(plan.mensaje)}</span>` : ''}
+      ${(plan.advertencias || []).map(a => `<br><span style="color:#ef4444;">⚠ ${esc(a)}</span>`).join('')}
+    </div>`;
+  return `
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:8px;">${tarjetas}</div>
+    ${lineaPlan}
+    <div style="font-size:11px;color:#555;text-align:right;">Fuente: ${esc(d.fuente || 'WMS')}</div>`;
+}
+
+/** Pone en los botones y en la nota del watchdog los números vigentes del plan. */
+function _abcPintarEtiquetas(d) {
+  const dist = d.distribucion_abc || {};
+  const plan = d.plan || {};
+  ['A', 'B', 'C'].forEach(cl => {
+    const el = document.getElementById(`inv-abc-int-${cl}`);
+    if (el && dist[cl]) el.textContent = `cada ${dist[cl].intervalo_dias} días`;
+  });
+  const wd = document.getElementById('inv-abc-watchdog-nota');
+  if (wd && plan.watchdog_umbral_picks) {
+    const u = plan.watchdog_umbral_picks;
+    wd.textContent = `Productos B/C con alta rotación real (≥${u.C} picks en ${plan.watchdog_ventana_dias} días para C, `
+      + `≥${u.B} para B) reciben un conteo inmediato — dentro del cupo del día, y nunca sobre un producto `
+      + `contado hace menos de ${plan.watchdog_dias_sin_reabrir} días.`;
+  }
+}
+
 /**
- * Generate conteo tasks for a single ABC class (daily batch or forced all).
+ * Generate conteo tasks for a single ABC class, within the almacen's daily cupo.
  * @param {string} clase - ABC class: 'A', 'B', or 'C'.
- * @param {boolean} [forzarTodo=false] - If true, skip daily batch limits.
  */
-async function generarAbc(clase, forzarTodo = false) {
+async function generarAbc(clase) {
   const almacenId = document.getElementById('inv-abc-almacen')?.value;
   if (!almacenId) { alerta('Selecciona un almacén primero', 'error'); return; }
   const res = document.getElementById('inv-abc-resultado');
   if (res) res.textContent = 'Generando...';
   try {
-    const d = await post('/api/conteo/abc/generar-tareas', { almacen_id: parseInt(almacenId), clasificacion: clase, forzar_todo: forzarTodo });
-    const loteInfo = d.batch_diario ? ` (lote ${d.batch_diario}/día de ${d.total_clase})` : ' (todo)';
-    const msg = `Clase ${clase}: ${d.tareas_creadas} tareas${loteInfo}`;
+    const d = await post('/api/conteo/abc/generar-tareas', { almacen_id: parseInt(almacenId), clasificacion: clase });
+    const msg = `Clase ${clase}: ${d.mensaje}`;
     if (res) res.textContent = msg;
     alerta(msg, d.tareas_creadas > 0 ? 'exito' : 'advertencia');
+    await cargarResumenAbc();
     await cargarConteos(1);
   } catch (e) {
     if (res) res.textContent = '';
@@ -815,22 +854,24 @@ async function generarAbc(clase, forzarTodo = false) {
 }
 
 /**
- * Generate conteo tasks for all ABC classes at once.
- * @param {boolean} [forzarTodo=false] - If true, skip daily batch limits for all classes.
+ * Generate the day's batch (watchdog + A+B+C) within the almacen's daily cupo.
+ * @param {boolean} [adelantar=false] - Also consider products still up to date
+ *   (most overdue first). Never more than the cupo.
  */
-async function generarTodasClases(forzarTodo = false) {
+async function generarTodasClases(adelantar = false) {
   const almacenId = document.getElementById('inv-abc-almacen')?.value;
   if (!almacenId) { alerta('Selecciona un almacén primero', 'error'); return; }
-  if (forzarTodo && !await _modalConfirmar('¿Generar tareas para TODOS los productos elegibles sin límite de lote? Puede crear miles de conteos.', { titulo: 'Forzar generación', peligro: true })) return;
+  if (adelantar && !await _modalConfirmar('¿Adelantar conteos? Además de los vencidos, toma productos que todavía están al día (los más atrasados primero).\n\nNunca pasa del cupo diario del almacén.', { titulo: 'Adelantar conteos' })) return;
   const res = document.getElementById('inv-abc-resultado');
-  if (res) res.textContent = forzarTodo ? 'Forzando todo...' : 'Generando lote del día...';
+  if (res) res.textContent = adelantar ? 'Adelantando...' : 'Generando lote del día...';
   try {
-    const d = await post('/api/conteo/abc/generar-todas', { almacen_id: parseInt(almacenId), forzar_todo: forzarTodo });
+    const d = await post('/api/conteo/abc/generar-todas', { almacen_id: parseInt(almacenId), adelantar });
     const watchdog = d.por_clase?.watchdog;
-    const wdMsg = watchdog?.overrides > 0 ? ` · 🤖 ${watchdog.overrides} watchdog` : '';
-    const msg = `${d.total_tareas_creadas} tareas nuevas${wdMsg}`;
+    const wdMsg = watchdog?.overrides > 0 ? ` · 🤖 ${watchdog.overrides} por watchdog` : '';
+    const msg = `${d.mensaje}${wdMsg}`;
     if (res) res.textContent = msg;
     alerta(msg, d.total_tareas_creadas > 0 ? 'exito' : 'advertencia');
+    await cargarResumenAbc();
     await cargarConteos(1);
   } catch (e) {
     if (res) res.textContent = '';
@@ -838,21 +879,59 @@ async function generarTodasClases(forzarTodo = false) {
   }
 }
 
-/** Delete all PENDIENTE conteo tasks for a specific ABC class or all classes. */
+const _ETIQUETAS_NO_SE_TOCAN = {
+  verificacion_cc2_cc3: 'segundos/terceros conteos (su cadena sigue viva)',
+  auditoria_por_faltante: 'auditorías por faltante de picking',
+  conteo_manual: 'conteos manuales',
+  en_proceso: 'conteos que alguien está contando ahora',
+  asignada_a_un_operario: 'conteos ya asignados a un operario',
+  con_cadena_iniciada: 'conteos con la cadena ya iniciada',
+};
+
+/** Texto (ya escapado) de la vista previa de «Limpiar cola». */
+function _limpiarColaPreviewHtml(plan, etiqueta) {
+  const lista = (obj, fmt) => Object.entries(obj || {})
+    .map(([k, n]) => `  · ${esc(n)} ${esc(fmt(k))}`).join('\n');
+  let t = `Se cancelan ${esc(plan.a_cancelar)} conteo(s) del plan (${esc(etiqueta)}) que nadie tomó.\n\n`
+    + `Por clase:\n${lista(plan.por_clase, k => 'clase ' + k)}\n\n`
+    + `Por antigüedad:\n${lista(plan.por_antiguedad_dias, k => 'de ' + k + ' días')}\n`;
+  const quedan = lista(plan.no_se_tocan, k => _ETIQUETAS_NO_SE_TOCAN[k] || k);
+  if (quedan) t += `\nNO se tocan:\n${quedan}\n`;
+  return t + '\nNo se borra nada: quedan CANCELADAS, con tu nombre y el motivo.';
+}
+
+/**
+ * Cancel (not delete) the plan's backlog: shows the preview first, asks for a
+ * reason, and confirms exactly what was previewed.
+ */
 async function limpiarPendientesAbc() {
   const almacenId = document.getElementById('inv-abc-almacen')?.value;
   if (!almacenId) { alerta('Selecciona un almacén primero', 'error'); return; }
-  const clase = await _modalTexto('Limpiar pendientes', 'Qué clase limpiar? Escribe A, B, C o deja vacío para TODAS (esto eliminará TODAS las tareas PENDIENTE de la clase):', { obligatorio: false });
+  const clase = await _modalTexto('Limpiar cola', 'Qué clase limpiar? Escribe A, B, C o deja vacío para TODAS:', { obligatorio: false });
   if (clase === null) return; // canceló
   const claseUpper = clase.trim().toUpperCase();
   if (claseUpper && !['A','B','C'].includes(claseUpper)) {
     alerta('Clase inválida. Usa A, B, C o deja vacío.', 'error'); return;
   }
-  const etiqueta = claseUpper || 'todas las clases';
-  if (!await _modalConfirmar(`¿Eliminar TODAS las tareas PENDIENTE de ${etiqueta}? Esta acción no se puede deshacer.`, { titulo: 'Eliminar pendientes', peligro: true })) return;
+  const etiqueta = claseUpper ? `clase ${claseUpper}` : 'todas las clases';
+  let plan;
   try {
-    const d = await post('/api/conteo/abc/limpiar-pendientes', { almacen_id: parseInt(almacenId), clasificacion: claseUpper || null });
-    alerta(`${d.eliminadas} tareas eliminadas (${etiqueta})`, 'exito');
+    plan = await get(`/api/conteo/abc/limpiar-pendientes/preview?almacen_id=${encodeURIComponent(almacenId)}&clasificacion=${encodeURIComponent(claseUpper)}`);
+  } catch (e) { alerta(e.message || 'Error de conexión', 'error'); return; }
+  if (!plan.a_cancelar) { alerta(`No hay conteos del plan sin tomar en ${etiqueta}`, 'info'); return; }
+
+  const motivo = await _modalTexto('Motivo de la cancelación',
+    _limpiarColaPreviewHtml(plan, etiqueta).replace(/\n/g, '<br>')
+    + '<br><br>¿Por qué se cancela? (queda registrado en cada conteo)', { obligatorio: true });
+  if (motivo === null || !motivo.trim()) return;
+  if (!await _modalConfirmar(`¿Cancelar ${esc(plan.a_cancelar)} conteo(s) de ${esc(etiqueta)}?\n\nMotivo: ${esc(motivo.trim())}`, { titulo: 'Cancelar rezago', peligro: true })) return;
+  try {
+    const d = await post('/api/conteo/abc/limpiar-pendientes', {
+      almacen_id: parseInt(almacenId), clasificacion: claseUpper || null,
+      motivo: motivo.trim(), esperadas: plan.a_cancelar,
+    });
+    alerta(`${d.canceladas} conteo(s) cancelados (${etiqueta})`, 'exito');
+    await cargarResumenAbc();
     await cargarConteos(1);
   } catch (e) { alerta(e.message || 'Error de conexión', 'error'); }
 }
@@ -996,9 +1075,10 @@ async function ejecutarWatchdog() {
   if (res) res.textContent = '🤖 Escaneando anomalías...';
   try {
     const d = await post('/api/conteo/abc/watchdog', { almacen_id: parseInt(almacenId) });
-    const msg = d.overrides > 0
-      ? `🤖 Watchdog: ${d.overrides} producto(s) con rotación anómala → conteo forzado`
-      : '🤖 Watchdog: sin anomalías detectadas';
+    let msg = d.overrides > 0
+      ? `🤖 Watchdog: ${d.overrides} producto(s) con rotación anómala → conteo inmediato`
+      : '🤖 Watchdog: sin anomalías nuevas';
+    if (d.omitidos_por_cupo > 0) msg += ` · ${d.omitidos_por_cupo} sin crear por cupo (${d.cupo?.mensaje || 'cupo agotado'})`;
     if (res) res.textContent = msg;
     alerta(msg, d.overrides > 0 ? 'advertencia' : 'exito');
     if (d.overrides > 0) await cargarConteos();
@@ -1435,22 +1515,31 @@ function _ceCobertura(c, r) {
   const filas = (c.filas || []).filter(f => f.universo_huecos > 0);
   const cuerpoFilas = filas.length ? filas.map(f => `
     <div style="border-top:1px solid var(--brd);padding:8px 0;">
-      <div style="font-size:12px;font-weight:700;color:var(--tx);">${esc(f.almacen || '')} · clase ${esc(f.clase)} <span style="color:var(--tx3);font-weight:400;">(cada ${_ceNum(f.frecuencia_dias)} días)</span></div>
+      <div style="font-size:12px;font-weight:700;color:var(--tx);">${esc(f.almacen || '')} · clase ${esc(f.clase)} <span style="color:var(--tx3);font-weight:400;">(objetivo: cada ${_ceNum(f.frecuencia_dias)} días)</span></div>
       <div style="font-size:12px;color:var(--tx2);line-height:1.6;">
         Universo: ${_ceNum(f.universo_productos)} productos · ${_ceNum(f.universo_huecos)} huecos<br>
-        Contados dentro de su frecuencia: ${_ceMetrica(f.contados_en_frecuencia)}<br>
+        Contados dentro de su intervalo: ${_ceMetrica(f.contados_en_frecuencia)}<br>
         Sin contar: <b>${_ceNum(f.sin_contar_en_ventana)}</b> (nunca contados ${_ceNum(f.nunca_contados)})<br>
-        El plan exige <b>${_ceNum(f.exigencia_diaria)}</b>/día · ritmo real ${_ceNum(f.ritmo.por_dia, 2)}/día (${_ceNum(f.ritmo.cadenas_cerradas)} en ${_ceNum(f.ritmo.dias_ventana)} días)<br>
+        Para cumplir el intervalo harían falta <b>${_ceNum(f.exigencia_diaria)}</b>/día · ritmo real ${_ceNum(f.ritmo.por_dia, 2)}/día (${_ceNum(f.ritmo.cadenas_cerradas)} en ${_ceNum(f.ritmo.dias_ventana)} días)<br>
         Días para cerrar el ciclo: ${f.dias_para_cerrar_ciclo === null ? `<span style="color:var(--yellow);">${esc(f.sin_estimacion_por || 'sin estimación')}</span>` : `<b>${_ceNum(f.dias_para_cerrar_ciclo, 1)}</b>`}
       </div>
     </div>`).join('') : '<div style="font-size:12px;color:var(--tx3);">No hay universo ABC cargado para este filtro.</div>';
+  // Cupo configurado contra ritmo real, por almacén: la capacidad fija el
+  // ritmo, así que lo primero es ver si el equipo alcanza el cupo.
+  const cupos = (c.por_almacen || []).map(a => `
+    <div style="border-top:1px solid var(--brd);padding:8px 0;font-size:12px;color:var(--tx2);line-height:1.6;">
+      <div style="font-weight:700;color:var(--tx);">${esc(a.almacen || a.bodega_siesa || '')}</div>
+      Cupo configurado <b>${_ceNum(a.cupo_diario)}</b>/día · ritmo real <b>${_ceNum(a.ritmo_real_por_dia, 2)}</b>/día (${_ceNum(a.dias_ventana)} días) · el plan pediría ${_ceNum(a.exigencia_diaria_plan)}/día<br>
+      Pendientes sin contar: ${_ceNum(a.pendientes_vivas)}${a.dias_de_cupo_pendientes === null || a.dias_de_cupo_pendientes === undefined ? '' : ` (${_ceNum(a.dias_de_cupo_pendientes, 1)} días de cupo)`}
+      ${a.mensaje_generador ? `<br><span style="color:var(--yellow);">${esc(a.mensaje_generador)}</span>` : ''}
+    </div>`).join('');
   const tramos = (t) => Object.entries(t || {}).map(([k, n]) => `${esc(k)} d: <b>${_ceNum(n)}</b>`).join(' · ');
   const rezago = `<div style="border-top:1px solid var(--brd);padding-top:8px;font-size:12px;color:var(--tx2);line-height:1.6;">
     Pendientes (${_ceNum(r.total_pendiente)}): ${tramos(r.pendiente)}<br>
     En curso (${_ceNum(r.total_en_curso)}): ${tramos(r.en_curso)}
     ${_ceExcluidos(r.excluidos)}</div>`;
   return _ceTarjeta(`📦 Carga y cobertura del plan <span style="font-size:10px;color:var(--tx3);font-weight:400;">al ${esc(c.al_dia_operativo)}</span>`,
-    `<div style="font-size:10px;color:var(--tx3);margin-bottom:6px;">${esc(c.nota)}</div>${cuerpoFilas}${_ceExcluidos(c.excluidos)}${rezago}`);
+    `<div style="font-size:10px;color:var(--tx3);margin-bottom:6px;">${esc(c.nota)}</div>${cupos}${cuerpoFilas}${_ceExcluidos(c.excluidos)}${rezago}`);
 }
 
 function _ceVolumen(v) {

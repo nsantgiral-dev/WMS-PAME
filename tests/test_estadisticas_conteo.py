@@ -288,7 +288,7 @@ class TestMundoDorado:
         assert set(filas) == {'A', 'B', 'C'}
         assert filas['A']['universo_huecos'] == 0 and filas['A']['exigencia_diaria'] == 0
         fila = filas['C']
-        assert fila['frecuencia_dias'] == 180
+        assert fila['frecuencia_dias'] == 600   # intervalo C vigente (conteo_politica)
         # Nueve huecos clase C (el POSITEM del fixture `tienda` no tiene ABC).
         assert (fila['universo_productos'], fila['universo_huecos']) == (9, 9)
         # Al día = MATCH o AJUSTADO (la regla del generador): OK_CC1, OK_CC2,
@@ -297,7 +297,7 @@ class TestMundoDorado:
         assert (fila['contados_en_frecuencia']['numerador'],
                 fila['contados_en_frecuencia']['denominador']) == (4, 9)
         assert (fila['sin_contar_en_ventana'], fila['nunca_contados']) == (5, 5)
-        assert fila['exigencia_diaria'] == 1          # ceil(9 / 180)
+        assert fila['exigencia_diaria'] == 1          # ceil(9 / 600)
         assert fila['ritmo']['cadenas_cerradas'] == 6
         assert fila['dias_para_cerrar_ciclo'] == round(5 / (6 / 28), 1)
 
@@ -758,7 +758,10 @@ const X = '<img src=x onerror=alert(1)>';
 const m = { numerador: 1, denominador: 2, porcentaje: null, sin_porcentaje_por: X, excluidos: { [X]: 3 } };
 const d = {
   parametros: { desde: X, hasta: X }, fuente: X,
-  carga_cobertura: { al_dia_operativo: X, nota: X, excluidos: { [X]: 1 }, filas: [{
+  carga_cobertura: { al_dia_operativo: X, nota: X, excluidos: { [X]: 1 },
+    por_almacen: [{ almacen: X, bodega_siesa: X, cupo_diario: 60, ritmo_real_por_dia: 1, dias_ventana: 28,
+      exigencia_diaria_plan: 20, pendientes_vivas: 5, dias_de_cupo_pendientes: 0.1, mensaje_generador: X }],
+    filas: [{
     almacen: X, clase: X, frecuencia_dias: 15, universo_productos: 1, universo_huecos: 1,
     contados_en_frecuencia: m, nunca_contados: 1, sin_contar_en_ventana: 1, exigencia_diaria: 1,
     ritmo: { por_dia: 0, cadenas_cerradas: 0, dias_ventana: 28 }, dias_para_cerrar_ciclo: null, sin_estimacion_por: X }] },

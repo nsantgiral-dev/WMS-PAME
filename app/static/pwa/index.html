@@ -1948,20 +1948,20 @@
       <div style="background:#111;border:1px solid #222;border-radius:12px;padding:16px;margin-bottom:12px;">
         <div style="font-size:13px;font-weight:700;margin-bottom:4px;">Generar lote diario de conteo</div>
         <div style="font-size:11px;color:#555;margin-bottom:12px;">
-          Genera la dosis diaria proporcional: el sistema divide el catálogo por la frecuencia de cada clase y crea solo los conteos del día, priorizando los productos más antiguos sin contar.
+          Crea solo lo que el equipo puede contar: hasta el cupo diario del almacén, menos lo que ya está pendiente. Si lo pendiente cubre dos días de cupo, no crea nada. Primero los productos A nunca contados; después los más atrasados respecto a su intervalo. Corre solo cada noche a las 2:00 a. m.
         </div>
         <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:10px;">
-          <button onclick="generarAbc('A', false)"
+          <button onclick="generarAbc('A')"
             style="padding:12px 6px;background:#1e3a1e;color:#4ade80;border:1px solid #166534;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">
-            Lote A<br><span style="font-size:10px;color:#86efac;font-weight:400;">≈ N÷15/día</span>
+            Lote A<br><span id="inv-abc-int-A" style="font-size:10px;color:#86efac;font-weight:400;">dentro del cupo</span>
           </button>
-          <button onclick="generarAbc('B', false)"
+          <button onclick="generarAbc('B')"
             style="padding:12px 6px;background:#1e2a3a;color:#60a5fa;border:1px solid #1e40af;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">
-            Lote B<br><span style="font-size:10px;color:#93c5fd;font-weight:400;">≈ N÷90/día</span>
+            Lote B<br><span id="inv-abc-int-B" style="font-size:10px;color:#93c5fd;font-weight:400;">dentro del cupo</span>
           </button>
-          <button onclick="generarAbc('C', false)"
+          <button onclick="generarAbc('C')"
             style="padding:12px 6px;background:#2a1e1e;color:#f87171;border:1px solid #7f1d1d;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">
-            Lote C<br><span style="font-size:10px;color:#fca5a5;font-weight:400;">≈ N÷180/día</span>
+            Lote C<br><span id="inv-abc-int-C" style="font-size:10px;color:#fca5a5;font-weight:400;">dentro del cupo</span>
           </button>
         </div>
         <button onclick="generarTodasClases(false)"
@@ -1969,15 +1969,15 @@
           📅 Generar lote del día (A+B+C)
         </button>
         <div style="margin-top:8px;border-top:1px solid #222;padding-top:8px;">
-          <div style="font-size:11px;color:#555;margin-bottom:6px;">Avanzado — genera TODOS los pendientes de una vez:</div>
+          <div style="font-size:11px;color:#555;margin-bottom:6px;">Avanzado — siempre dentro del cupo:</div>
           <div style="display:flex;gap:6px;">
             <button onclick="generarTodasClases(true)"
               style="flex:1;padding:10px;background:#1a0a0a;color:#f87171;border:1px solid #7f1d1d;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;">
-              ⚡ Forzar todo (A+B+C)
+              ⚡ Adelantar conteos
             </button>
             <button onclick="limpiarPendientesAbc()"
               style="flex:1;padding:10px;background:#1a1a0a;color:#fbbf24;border:1px solid #78350f;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;">
-              🗑 Limpiar cola
+              🗑 Cancelar rezago
             </button>
           </div>
         </div>
@@ -1985,8 +1985,8 @@
           style="width:100%;padding:13px;background:#1c1a0a;color:#f59e0b;border:1px solid #b45309;border-radius:10px;font-size:13px;font-weight:700;cursor:pointer;margin-top:8px;">
           🤖 AI Watchdog — detectar anomalías
         </button>
-        <div style="font-size:10px;color:#555;margin-top:4px;text-align:center;">
-          Detecta productos B/C con alta rotación real (≥10 picks/7días para C, ≥25 para B) y fuerza conteo inmediato
+        <div id="inv-abc-watchdog-nota" style="font-size:10px;color:#555;margin-top:4px;text-align:center;">
+          Detecta productos B/C con alta rotación real y les abre un conteo inmediato, dentro del cupo del día.
         </div>
         <div id="inv-abc-resultado" style="min-height:20px;font-size:12px;color:#4ade80;margin-top:8px;text-align:center;"></div>
       </div>
@@ -3796,7 +3796,7 @@
   <script defer src="/static/pwa/recepcion.js?v=20260921a"></script>
   <script defer src="/static/pwa/rutas.js?v=20260921a"></script>
   <script defer src="/static/pwa/traslados.js?v=20260921a"></script>
-  <script defer src="/static/pwa/conteo.js?v=20260923b"></script>
+  <script defer src="/static/pwa/conteo.js?v=20260923c"></script>
   <script defer src="/static/pwa/reposicion.js?v=20260921a"></script>
   <script defer src="/static/pwa/liquidacion.js?v=20260921a"></script>
   <script defer src="/static/pwa/layout.js?v=20260921a"></script>

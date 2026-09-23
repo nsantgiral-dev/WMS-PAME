@@ -3,18 +3,18 @@ Servicio ABC — El WMS NO calcula clasificación ABC.
 Siesa Enterprise tiene su propio motor estadístico.
 Este servicio consume la clasificación de Siesa y genera tareas de conteo.
 
-Frecuencias de conteo cíclico (estrategia de costos bajos):
-  A — Alta rotación  → contar cada 15 días
-  B — Rotación media → contar cada 90 días
-  C — Baja rotación  → contar cada 180 días
+**Cuánto y cada cuánto se cuenta NO vive acá**: vive en
+`app/services/conteo_politica.py` —cupo diario por almacén, intervalo objetivo
+por clase, orden de selección y de reparto—. Este módulo aplica esa política:
 
-AI Watchdog — Anomaly Override:
-  Si un producto clase B o C registra picks >= umbral en los últimos 7 días,
-  el WMS ignora la regla de frecuencia y fuerza un conteo inmediato.
-  Esto captura picos estacionales antes de que Siesa recalcule (mensual).
-  Umbrales (picks en 7 días):
-    C → >= 10 picks → override a A (conteo inmediato)
-    B → >= 25 picks → override a A (conteo inmediato)
+  · Generador diario (cron 2:00 a. m. Bogotá): crea como máximo
+    `cupo − pendientes_vivas` conteos, y ninguno si lo pendiente ya cubre dos
+    días de cupo. Elige primero los nunca contados de A, después el mayor
+    atraso relativo (días desde el último conteo / intervalo de su clase).
+  · AI Watchdog: un producto B o C con picks de la última semana por encima
+    del umbral de su clase recibe un conteo inmediato — dentro del mismo cupo,
+    y nunca sobre un hueco contado hace menos de
+    `CONTEO_WATCHDOG_DIAS_SIN_REABRIR` días.
 """
 import uuid
 import logging
@@ -31,12 +31,8 @@ from app.utils.fecha import ahora_bogota as _ahora_bogota
 
 logger = logging.getLogger(__name__)
 
-# Días mínimos entre conteos por clase
-FRECUENCIA_DIAS = {'A': 15, 'B': 90, 'C': 180}
-
-# Watchdog: picks en 7 días que disparan override a clase A
-WATCHDOG_UMBRAL = {'B': 25, 'C': 10}
-WATCHDOG_VENTANA_DIAS = 7
+from app.services import conteo_politica as politica
+from app.services.conteo_politica import WATCHDOG_UMBRAL, WATCHDOG_VENTANA_DIAS
 
 # stock_minimo derivado = % del stock WMS actual de esa referencia, por clase.
 # Más severo en A a propósito: alta rotación, agotarse ahí cuesta más caro que
@@ -103,7 +99,7 @@ def ultimo_conteo_por_hueco(producto_ids: list, ubicacion_ids: list) -> dict:
     """`{(producto_id, ubicacion_id): fecha_cierre del último conteo completado}`.
 
     **Qué cuenta como «contado» para el plan, en un solo sitio.** La usan el
-    generador (que no vuelve a pedir un hueco contado dentro de su frecuencia)
+    generador (que no vuelve a pedir un hueco contado dentro de su intervalo)
     y la cobertura de las estadísticas de conteo. Dos definiciones de «último
     conteo» harían que el reporte diga «al día» sobre un hueco que el
     generador va a volver a pedir, o al revés.
@@ -114,7 +110,7 @@ def ultimo_conteo_por_hueco(producto_ids: list, ubicacion_ids: list) -> dict:
 
     Ojo, declarado y no corregido acá: la `fecha_cierre` de un AJUSTADO es la
     hora en que la DLQ recibió la respuesta de Siesa, no la del conteo. Para
-    decidir «al día / vencido» con frecuencias de 15 a 180 días la diferencia
+    decidir «al día / vencido» con intervalos de meses la diferencia
     no cambia nada; para atribuir un conteo a un DÍA sí — por eso las
     estadísticas no usan esta fecha para eso.
     """
@@ -138,15 +134,19 @@ def ultimo_conteo_por_hueco(producto_ids: list, ubicacion_ids: list) -> dict:
 
 
 def umbral_al_dia(clasificacion: str, ahora: datetime = None) -> datetime:
-    """Desde cuándo un conteo sigue «al día» para su clase: `ahora − frecuencia`.
+    """Desde cuándo un conteo sigue «al día» para su clase: `ahora − intervalo`.
 
     Instante técnico en UTC naive —se compara contra `fecha_cierre`, que es
     UTC naive—, no un día que alguien lea: no es fecha de negocio (Regla 5).
-    Clase desconocida → la frecuencia más exigente (15), la misma que el
-    generador ya usaba como default.
+    El intervalo es el de `conteo_politica.intervalo_dias` (clase desconocida →
+    el más exigente).
     """
-    frecuencia = FRECUENCIA_DIAS.get(clasificacion, 15)
-    return (ahora or datetime.utcnow()) - timedelta(days=frecuencia)
+    return (ahora or datetime.utcnow()) - timedelta(days=politica.intervalo_dias(clasificacion))
+
+
+class RezagoCambioDesdeLaVistaPrevia(ValueError):
+    """Lo que se confirma tiene que ser lo que se vio: el rezago cambió entre
+    la vista previa y la confirmación, y no se canceló nada."""
 
 
 class ABCService:
@@ -360,15 +360,35 @@ class ABCService:
 
     @staticmethod
     def watchdog_anomalias(almacen_id: int) -> list:
+        """Los overrides del watchdog, como lista (contrato de siempre).
+        El informe completo —qué se dejó de crear y por qué— lo da
+        `ABCService.watchdog_con_informe`."""
+        return ABCService.watchdog_con_informe(almacen_id)['overrides']
+
+    @staticmethod
+    def watchdog_con_informe(almacen_id: int) -> dict:
         """
         AI Watchdog — detecta productos cuya rotación real supera su clase ABC.
 
-        Consulta cuántas veces fue picado cada producto en los últimos 7 días.
-        Si un producto clase C supera 10 picks, o clase B supera 25 picks,
-        fuerza una SesionConteo inmediata ignorando la regla de frecuencia.
+        Cuenta los picks COMPLETADOS de cada producto B o C en los últimos
+        `WATCHDOG_VENTANA_DIAS` días, en ESTE almacén. Si superan el umbral de
+        su clase (`WATCHDOG_UMBRAL`) crea una `SesionConteo` WATCHDOG_ABC con
+        clase A, sin esperar al plan. Dos límites, los dos de
+        `conteo_politica` (2026-09-23):
 
-        Retorna lista de overrides ejecutados: [{producto_id, clase_actual,
-        picks_7dias, umbral, sesion_codigo}]
+        - **No reabre lo recién contado.** Un hueco contado (MATCH/AJUSTADO)
+          hace menos de `watchdog_dias_sin_reabrir()` días no se reabre. Antes
+          el watchdog lo reabría CADA NOCHE mientras el SKU siguiera rotando —
+          que es justamente lo que un SKU de alta rotación hace.
+        - **Respeta el cupo del almacén.** Cuenta dentro del mismo cupo que el
+          generador (`tope_de_generacion`), y corre ANTES que él en la corrida
+          diaria: una anomalía vale más que un conteo del plan, así que toma su
+          lugar en vez de sumarse encima. Si el tope es cero no crea nada, y el
+          informe dice cuántos overrides quedaron sin crear (`omitidos_por_cupo`)
+          — un override perdido en silencio es un watchdog apagado.
+
+        Retorna `{overrides: [...], omitidos_por_cupo, omitidos_recien_contados,
+        omitidos_ya_activos, excluidos_elegibilidad, cupo}`.
         """
         from app.models.picking import TareaPicking
         from app.models.inventario import UbicacionProducto
@@ -379,16 +399,26 @@ class ABCService:
         _lock_acquired = db.session.execute(
             db.text(f'SELECT pg_try_advisory_lock({_lock_key})')
         ).scalar()
+        informe = {'overrides': [], 'omitidos_por_cupo': 0, 'omitidos_recien_contados': 0,
+                   'omitidos_ya_activos': 0, 'excluidos_elegibilidad': {}, 'cupo': None}
         if not _lock_acquired:
             logger.info(f'[ABC WATCHDOG] Almacén {almacen_id} — lock no disponible, omitiendo ejecución concurrente')
-            return []
+            informe['cupo'] = {'mensaje': 'otro proceso está corriendo el watchdog de este almacén'}
+            return informe
 
         ventana = datetime.utcnow() - timedelta(days=WATCHDOG_VENTANA_DIAS)
-        overrides = []
+        sin_reabrir_desde = datetime.utcnow() - timedelta(days=politica.watchdog_dias_sin_reabrir())
+        overrides = informe['overrides']
 
         # [A1] Wrap everything in try/finally so advisory lock is always released,
         # even if an exception occurs during queries before the commit.
         try:
+            # El cupo se lee con el lock del cupo tomado: el generador no puede
+            # estar creando conteos del mismo almacén entre la lectura y el insert.
+            politica.bloquear_cupo(almacen_id)
+            tope = politica.tope_de_generacion(almacen_id)
+            informe['cupo'] = tope
+
             # Pre-cargar todos los conteos activos del almacén en un set (producto_id, ubicacion_id)
             # para evitar N+1 en el check de duplicados dentro del loop
             conteos_activos = {
@@ -399,6 +429,7 @@ class ABCService:
                 ).with_entities(SesionConteo.producto_id, SesionConteo.ubicacion_id).all()
             }
 
+            candidatos = []   # (clave, producto, reg, clase, picks, umbral)
             # Clases susceptibles de override — consulta por almacén
             for clase, umbral in WATCHDOG_UMBRAL.items():
                 productos_clase = (
@@ -460,65 +491,80 @@ class ABCService:
                     ).all()
                 ):
                     registros_por_prod.setdefault(reg.producto_id, []).append(reg)
+                ultimo = ultimo_conteo_por_hueco(
+                    ids_sobre_umbral,
+                    sorted({r.ubicacion_id for regs in registros_por_prod.values() for r in regs}))
 
                 for producto in productos_clase:
                     picks = picks_por_producto.get(producto.id, 0)
-
                     if picks < umbral:
                         continue
-
-                    registros = registros_por_prod.get(producto.id, [])
-
-                    for reg in registros:
-                        # Verificación en memoria (evita duplicar dentro de la misma corrida)
+                    for reg in registros_por_prod.get(producto.id, []):
                         if (producto.id, reg.ubicacion_id) in conteos_activos:
+                            informe['omitidos_ya_activos'] += 1
                             continue
-
-                        # Verificación en DB justo antes del insert — reduce ventana de race condition
-                        # entre dos workers que hayan pasado simultáneamente el check en memoria.
-                        ya_existe = SesionConteo.query.filter(
-                            SesionConteo.producto_id == producto.id,
-                            SesionConteo.ubicacion_id == reg.ubicacion_id,
-                            SesionConteo.raiz_con_cadena_viva(incluye_descuadre=True)
-                        ).first()
-                        if ya_existe:
-                            conteos_activos.add((producto.id, reg.ubicacion_id))
+                        ult = ultimo.get((producto.id, reg.ubicacion_id))
+                        if ult and ult >= sin_reabrir_desde:
+                            informe['omitidos_recien_contados'] += 1
                             continue
+                        # Más anómalo primero: picks sobre su propio umbral.
+                        clave = (-(picks / umbral), producto.id, reg.ubicacion_id)
+                        candidatos.append((clave, producto, reg, clase, picks, umbral))
 
-                        codigo = (
-                            f'CC-WATCHDOG-'
-                            f'{_ahora_bogota().strftime("%Y%m%d")}-'
-                            f'{str(uuid.uuid4())[:6].upper()}'
-                        )
-                        sesion = SesionConteo(
-                            codigo=codigo,
-                            tipo='WATCHDOG_ABC',
-                            clasificacion_abc='A',   # override temporal
-                            ubicacion_id=reg.ubicacion_id,
-                            almacen_id=almacen_id,
-                            producto_id=producto.id,
-                            producto_codigo_siesa=producto.codigo_siesa,
-                            maneja_lote=bool(getattr(reg, 'lote', None)),
-                            estado='PENDIENTE'
-                        )
-                        from sqlalchemy.exc import IntegrityError as _IE_wd
-                        _sp = db.session.begin_nested()
-                        try:
-                            db.session.add(sesion)
-                            db.session.flush()
-                            _sp.commit()
-                            conteos_activos.add((producto.id, reg.ubicacion_id))  # evita duplicar en misma corrida
-                            overrides.append({
-                                'producto_id': producto.id,
-                                'producto_codigo': producto.codigo_siesa or producto.codigo,
-                                'clase_actual': clase,
-                                'picks_7dias': picks,
-                                'umbral': umbral,
-                                'sesion_codigo': codigo,
-                            })
-                        except _IE_wd:
-                            _sp.rollback()
-                            logger.warning(f'[ABC WATCHDOG] Sesión duplicada ignorada — prod {producto.id} ubic {reg.ubicacion_id}')
+            elegibles, excluidos = politica.filtrar_elegibles(
+                almacen_id, [(c[1].id, c[2].ubicacion_id) for c in candidatos])
+            informe['excluidos_elegibilidad'] = excluidos
+            elegibles = set(elegibles)
+            candidatos = sorted((c for c in candidatos if (c[1].id, c[2].ubicacion_id) in elegibles),
+                                key=lambda c: c[0])
+            informe['omitidos_por_cupo'] = max(0, len(candidatos) - tope['tope'])
+
+            for _, producto, reg, clase, picks, umbral in candidatos[:tope['tope']]:
+                # Verificación en DB justo antes del insert — reduce ventana de race condition
+                # entre dos workers que hayan pasado simultáneamente el check en memoria.
+                ya_existe = SesionConteo.query.filter(
+                    SesionConteo.producto_id == producto.id,
+                    SesionConteo.ubicacion_id == reg.ubicacion_id,
+                    SesionConteo.raiz_con_cadena_viva(incluye_descuadre=True)
+                ).first()
+                if ya_existe:
+                    conteos_activos.add((producto.id, reg.ubicacion_id))
+                    continue
+
+                codigo = (
+                    f'CC-WATCHDOG-'
+                    f'{_ahora_bogota().strftime("%Y%m%d")}-'
+                    f'{str(uuid.uuid4())[:6].upper()}'
+                )
+                sesion = SesionConteo(
+                    codigo=codigo,
+                    tipo='WATCHDOG_ABC',
+                    clasificacion_abc='A',   # override temporal
+                    ubicacion_id=reg.ubicacion_id,
+                    almacen_id=almacen_id,
+                    producto_id=producto.id,
+                    producto_codigo_siesa=producto.codigo_siesa,
+                    maneja_lote=bool(getattr(reg, 'lote', None)),
+                    estado='PENDIENTE'
+                )
+                from sqlalchemy.exc import IntegrityError as _IE_wd
+                _sp = db.session.begin_nested()
+                try:
+                    db.session.add(sesion)
+                    db.session.flush()
+                    _sp.commit()
+                    conteos_activos.add((producto.id, reg.ubicacion_id))  # evita duplicar en misma corrida
+                    overrides.append({
+                        'producto_id': producto.id,
+                        'producto_codigo': producto.codigo_siesa or producto.codigo,
+                        'clase_actual': clase,
+                        'picks_7dias': picks,
+                        'umbral': umbral,
+                        'sesion_codigo': codigo,
+                    })
+                except _IE_wd:
+                    _sp.rollback()
+                    logger.warning(f'[ABC WATCHDOG] Sesión duplicada ignorada — prod {producto.id} ubic {reg.ubicacion_id}')
 
             db.session.commit()
         except Exception as e:
@@ -540,123 +586,109 @@ class ABCService:
                 + ', '.join(f"{o['producto_codigo']} ({o['clase_actual']}→A, {o['picks_7dias']} picks)" for o in overrides)
             )
         else:
-            logger.info(f'[ABC WATCHDOG] Sin anomalías en almacén {almacen_id}')
+            logger.info(f'[ABC WATCHDOG] Sin anomalías nuevas en almacén {almacen_id}')
+        if informe['omitidos_por_cupo']:
+            logger.warning(
+                f'[ABC WATCHDOG] Almacén {almacen_id}: {informe["omitidos_por_cupo"]} '
+                f'override(s) sin crear por cupo — {tope.get("mensaje") or "cupo agotado"}')
 
-        return overrides
+        return informe
 
     @staticmethod
-    def generar_tareas_conteo_diario(almacen_id: int, clasificacion: str = 'A',
-                                     forzar_todo: bool = False):
+    def generar_tareas_conteo_diario(almacen_id: int, clasificacion: str = None,
+                                     adelantar: bool = False, *, ahora: datetime = None):
         """
-        Genera tareas de conteo cíclico con lote diario proporcional.
+        Genera los conteos del plan de un almacén **dentro de su cupo diario**.
 
-        Modo normal (forzar_todo=False — scheduler 6am o botón "Lote de hoy"):
-          Calcula cuántos productos hay en la clase y divide por la frecuencia
-          para generar solo la "dosis diaria":
-            A (15 días):  N_A ÷ 15   ≈  X productos/día
-            B (90 días):  N_B ÷ 90   ≈  X productos/día
-            C (180 días): N_C ÷ 180  ≈  X productos/día
-          Los candidatos se ordenan por "última vez contado" (nunca contados primero),
-          garantizando rotación equitativa del catálogo.
+        Cuánto: como máximo `cupo − pendientes_vivas`, y nada si las pendientes
+        ya cubren dos días de cupo (`conteo_politica.tope_de_generacion`). El
+        resultado dice por qué se creó lo que se creó y cuánto quedó esperando
+        (`cupo.mensaje`, `omitidos_por_cupo`). Antes el lote era
+        `ceil(productos_de_la_clase / frecuencia)`, sumado cada noche sin mirar
+        si alguien había contado el anterior.
 
-        Modo completo (forzar_todo=True — botón "Forzar todo"):
-          Genera tarea para CADA producto elegible sin límite.
-          Útil para arranque inicial o revisión de emergencia.
+        Qué: los huecos (producto × ubicación con stock) del universo ABC del
+        almacén que están vencidos —nunca contados, o contados hace más que el
+        intervalo de su clase— y que no tienen una cadena viva. `clasificacion`
+        (A, B o C) restringe a una clase; `None` las considera todas juntas, que
+        es lo que hace el cron: el cupo es del almacén, no de la clase.
+
+        En qué orden: nunca contados de A primero; después el mayor atraso
+        relativo (días desde el último conteo / intervalo de su clase)
+        — `conteo_politica.clave_de_seleccion`.
+
+        `adelantar=True` (el botón que antes se llamaba «Forzar todo» y creó
+        8.527 tareas el 24-abr): también considera huecos todavía al día, los
+        más atrasados primero. **El cupo se respeta igual**: adelantar trabajo
+        es elegir entre más candidatos, no crear más.
         """
-        import math
-        from app.models.inventario import UbicacionProducto
+        clases = [clasificacion] if clasificacion else list(politica.CLASES)
+        if clasificacion and clasificacion not in politica.CLASES:
+            raise ValueError(f'clase inválida: {clasificacion!r} (A, B o C)')
+        ahora = ahora or datetime.utcnow()
 
-        frecuencia = FRECUENCIA_DIAS.get(clasificacion, 15)
-        umbral = umbral_al_dia(clasificacion)
+        # El lock del cupo antes de leer las pendientes: dos generaciones
+        # simultáneas (cron + botón) no pueden calcular el mismo tope.
+        politica.bloquear_cupo(almacen_id)
+        tope = politica.tope_de_generacion(almacen_id)
 
-        # Solo productos con stock > 0 en este almacén — sin stock no hay nada que contar
-        # Fetch solo columnas necesarias para reducir footprint de memoria
-        todos_productos = universo_conteo_ciclico(almacen_id, clasificacion)
-
-        if not todos_productos:
-            return {
-                'mensaje': f'No hay productos clase {clasificacion} para contar',
-                'tareas_creadas': 0,
-                'clasificacion': clasificacion,
-                'frecuencia_dias': frecuencia,
-                'batch_diario': 0,
-                'total_clase': 0,
-            }
-
-        total_clase = len(todos_productos)
-        # Lote diario: cubrir todo el catálogo en exactamente frecuencia_dias
-        batch_diario = max(1, math.ceil(total_clase / frecuencia)) if not forzar_todo else None
-
-        # Recopilar candidatos elegibles con su antigüedad de último conteo
-        candidatos = []
+        candidatos = []          # (clave, clase, producto, reg)
+        total_universo = 0
         omitidos_por_pendiente = 0
-        omitidos_por_frecuencia = 0
-
-        # Pre-cargar todos los UbicacionProducto relevantes en un solo query
-        producto_ids = [p.id for p in todos_productos]
-        todos_registros = huecos_con_stock(almacen_id, producto_ids)
-        # Agrupar por producto_id
-        from collections import defaultdict
-        registros_por_producto = defaultdict(list)
-        for r in todos_registros:
-            registros_por_producto[r.producto_id].append(r)
-
-        # Pre-cargar conteos activos (PENDIENTE/EN_PROCESO/SEGUNDO_CONTEO)
-        pares_ubic_prod = [(r.ubicacion_id, r.producto_id) for r in todos_registros]
-        if pares_ubic_prod:
-            ubic_ids_all = list({x[0] for x in pares_ubic_prod})  # dedup: evita IN clause con N duplicados
-            sesiones_activas = SesionConteo.query.filter(
-                SesionConteo.producto_id.in_(producto_ids),
-                SesionConteo.ubicacion_id.in_(ubic_ids_all),
-                SesionConteo.raiz_con_cadena_viva(incluye_descuadre=True)
-            ).all()
-            activos_set = {(s.ubicacion_id, s.producto_id) for s in sesiones_activas}
-
-            # Pre-cargar fecha del último conteo completado por (producto_id, ubicacion_id)
+        omitidos_por_intervalo = 0
+        for clase in clases:
+            # Solo productos con stock > 0 en este almacén — sin stock no hay nada que contar
+            todos_productos = universo_conteo_ciclico(almacen_id, clase)
+            total_universo += len(todos_productos)
+            if not todos_productos:
+                continue
+            producto_por_id = {p.id: p for p in todos_productos}
+            producto_ids = list(producto_por_id)
+            todos_registros = huecos_con_stock(almacen_id, producto_ids)
+            ubic_ids_all = sorted({r.ubicacion_id for r in todos_registros})
+            if not ubic_ids_all:
+                continue
+            activos_set = {
+                (s.ubicacion_id, s.producto_id)
+                for s in SesionConteo.query.filter(
+                    SesionConteo.producto_id.in_(producto_ids),
+                    SesionConteo.ubicacion_id.in_(ubic_ids_all),
+                    SesionConteo.raiz_con_cadena_viva(incluye_descuadre=True)
+                ).with_entities(SesionConteo.ubicacion_id, SesionConteo.producto_id).all()
+            }
             # GROUP BY en SQL evita cargar todas las filas históricas en memoria
             ultimo_por_par = ultimo_conteo_por_hueco(producto_ids, ubic_ids_all)
-        else:
-            activos_set = set()
-            ultimo_por_par = {}
+            umbral = umbral_al_dia(clase, ahora)
 
-        for producto in todos_productos:
-            registros = registros_por_producto.get(producto.id, [])
-
-            for reg in registros:
-                # Saltar si ya hay tarea activa
-                if (reg.ubicacion_id, producto.id) in activos_set:
+            for reg in todos_registros:
+                if (reg.ubicacion_id, reg.producto_id) in activos_set:
                     omitidos_por_pendiente += 1
                     continue
-
-                # Obtener fecha del último conteo completado
-                ultimo_fecha = ultimo_por_par.get((producto.id, reg.ubicacion_id))
-
-                if ultimo_fecha and ultimo_fecha >= umbral:
-                    omitidos_por_frecuencia += 1
+                ultimo_fecha = ultimo_por_par.get((reg.producto_id, reg.ubicacion_id))
+                if ultimo_fecha and ultimo_fecha >= umbral and not adelantar:
+                    omitidos_por_intervalo += 1
                     continue
+                atraso = politica.atraso_relativo(ultimo_fecha, clase, ahora)
+                clave = politica.clave_de_seleccion(
+                    atraso, clase, (reg.producto_id, reg.ubicacion_id))
+                candidatos.append((clave, clase, producto_por_id[reg.producto_id], reg))
 
-                # Sort key: nunca contado → datetime mínimo (va primero)
-                sort_key = ultimo_fecha if ultimo_fecha else datetime(1970, 1, 1)
-                candidatos.append((sort_key, producto, reg))
-
-        # Ordenar: los que llevan más tiempo sin contar van primero
-        candidatos.sort(key=lambda x: x[0])
-
-        # Aplicar límite de lote diario
-        if batch_diario is not None:
-            candidatos = candidatos[:batch_diario]
+        elegibles, excluidos = politica.filtrar_elegibles(
+            almacen_id, [(p.id, r.ubicacion_id) for _, _, p, r in candidatos])
+        elegibles = set(elegibles)
+        candidatos = sorted((c for c in candidatos if (c[2].id, c[3].ubicacion_id) in elegibles),
+                            key=lambda c: c[0])
+        seleccion = candidatos[:tope['tope']]
 
         # Crear tareas — savepoint por ítem para tolerar race conditions entre
         # scheduler y API sin perder todos los inserts por un único conflicto.
         # La re-verificación dentro del savepoint cierra la ventana entre el
         # activos_set (leído antes) y el INSERT efectivo.
         from sqlalchemy.exc import IntegrityError as _IE
-        tareas_creadas = []
-        for _, producto, reg in candidatos:
+        creadas_por_clase = {c: 0 for c in clases}
+        for _, clase, producto, reg in seleccion:
             sp = db.session.begin_nested()
             try:
-                # Re-verificar bajo savepoint: otro worker puede haber insertado
-                # entre el SELECT de activos_set y este INSERT (race condition scheduler+API)
                 ya_existe = SesionConteo.query.filter(
                     SesionConteo.ubicacion_id == reg.ubicacion_id,
                     SesionConteo.producto_id == producto.id,
@@ -667,14 +699,14 @@ class ABCService:
                     continue
 
                 codigo = (
-                    f'CC-{clasificacion}-'
+                    f'CC-{clase}-'
                     f'{_ahora_bogota().strftime("%Y%m%d")}-'
                     f'{str(uuid.uuid4())[:6].upper()}'
                 )
                 sesion = SesionConteo(
                     codigo=codigo,
                     tipo='DIARIO_ABC',
-                    clasificacion_abc=clasificacion,
+                    clasificacion_abc=clase,
                     ubicacion_id=reg.ubicacion_id,
                     almacen_id=almacen_id,
                     producto_id=producto.id,
@@ -685,7 +717,7 @@ class ABCService:
                 db.session.add(sesion)
                 db.session.flush()
                 sp.commit()
-                tareas_creadas.append(sesion)
+                creadas_por_clase[clase] += 1
             except _IE:
                 sp.rollback()
                 logger.warning(f'[ABC] Sesión duplicada ignorada — prod {producto.id} ubic {reg.ubicacion_id}')
@@ -697,56 +729,66 @@ class ABCService:
             logger.error(f'[ABC] Error guardando tareas de conteo: {e}')
             raise
 
-        # Prewarm consolidado: NO llamar aquí — se hace una única vez en generar_todas_las_clases()
-        # para todas las clases A+B+C juntas. Si se llama aquí, el semáforo non-blocking descarta
-        # los prewarms de B y C porque el de A todavía está en curso (cold cache garantizado).
-
-        dias_para_ciclo = math.ceil(total_clase / (batch_diario or 1)) if batch_diario else 1
+        creadas = sum(creadas_por_clase.values())
+        omitidos_por_cupo = max(0, len(candidatos) - tope['tope'])
+        if creadas:
+            mensaje = (f'se crearon {creadas} conteo(s) de un cupo de {tope["cupo_diario"]}/día '
+                       f'({tope["pendientes_vivas"]} ya pendientes)')
+        elif tope['mensaje']:
+            mensaje = tope['mensaje']
+        else:
+            mensaje = 'no se generó: no hay huecos vencidos sin una cadena viva'
+        if omitidos_por_cupo:
+            mensaje += f' · {omitidos_por_cupo} vencido(s) esperan cupo'
+        advertencias = politica.advertencias_de_configuracion()
 
         logger.info(
-            f'[ABC] Clase {clasificacion} · {len(tareas_creadas)} tareas creadas '
-            f'(lote {batch_diario or "completo"} de {total_clase}) · '
-            f'{omitidos_por_pendiente} ya activas · {omitidos_por_frecuencia} dentro de frecuencia'
+            f'[ABC] Almacén {almacen_id} · clase {clasificacion or "A+B+C"} · {mensaje} · '
+            f'{omitidos_por_pendiente} con cadena viva · {omitidos_por_intervalo} dentro de su intervalo'
+            + (f' · CONFIGURACIÓN: {advertencias}' if advertencias else '')
         )
 
         return {
-            'tareas_creadas': len(tareas_creadas),
-            'batch_diario': batch_diario,
-            'total_clase': total_clase,
-            'dias_para_ciclo_completo': dias_para_ciclo,
+            'tareas_creadas': creadas,
+            'por_clase': creadas_por_clase,
+            'mensaje': mensaje,
+            'cupo': tope,
+            'candidatos': len(candidatos),
+            'omitidos_por_cupo': omitidos_por_cupo,
             'omitidos_por_pendiente': omitidos_por_pendiente,
-            'omitidos_por_frecuencia': omitidos_por_frecuencia,
-            'clasificacion': clasificacion,
-            'frecuencia_dias': frecuencia,
+            'omitidos_por_intervalo': omitidos_por_intervalo,
+            'excluidos_elegibilidad': excluidos,
+            'total_universo': total_universo,
+            'clasificacion': clasificacion or 'todas',
+            'intervalos_dias': {c: politica.intervalo_dias(c) for c in clases},
             'almacen_id': almacen_id,
-            'modo': 'completo' if forzar_todo else 'lote_diario',
-            '_sesiones_creadas': tareas_creadas,  # para prewarm consolidado en generar_todas_las_clases
+            'modo': 'adelantado' if adelantar else 'lote_diario',
+            'advertencias_configuracion': advertencias,
         }
 
     @staticmethod
-    def generar_todas_las_clases(almacen_id: int, forzar_todo: bool = False):
+    def generar_todas_las_clases(almacen_id: int, adelantar: bool = False):
         """
-        Genera tareas para A, B y C + ejecuta Watchdog de anomalías.
-        Usado por el scheduler diario a las 6am (forzar_todo=False).
-        El admin puede pasar forzar_todo=True desde la UI para generar todo de una vez.
+        La corrida diaria de un almacén: Watchdog y después el plan A+B+C,
+        los dos dentro del mismo cupo. Usado por el scheduler de las 2:00 a. m.
+        (Bogotá) y por el botón «Generar lote del día».
+
+        El watchdog va PRIMERO a propósito (antes iba después): sus conteos
+        son anomalías de rotación y valen más que un conteo del plan, así que
+        toman su lugar en el cupo en vez de sumarse encima de un cupo ya lleno.
+        Si el watchdog falla, el plan corre igual y el fallo se avisa por correo.
         """
         resultados = {}
         total = 0
-        for clase in ['A', 'B', 'C']:
-            r = ABCService.generar_tareas_conteo_diario(almacen_id, clase,
-                                                        forzar_todo=forzar_todo)
-            resultados[clase] = r
-            total += r['tareas_creadas']
-            # Prewarm se ejecuta en _prewarm_pre_turno (5:55am) — no aquí (2am) porque
-            # el caché expira en ~5min y el turno empieza a las 6am.
 
-        # Watchdog DESPUÉS de las tareas normales — detecta reclasificaciones urgentes
         try:
-            overrides = ABCService.watchdog_anomalias(almacen_id)
-            total += len(overrides)
+            wd = ABCService.watchdog_con_informe(almacen_id)
+            total += len(wd['overrides'])
             resultados['watchdog'] = {
-                'overrides': len(overrides),
-                'detalle': overrides
+                'overrides': len(wd['overrides']),
+                'detalle': wd['overrides'],
+                'omitidos_por_cupo': wd['omitidos_por_cupo'],
+                'omitidos_recien_contados': wd['omitidos_recien_contados'],
             }
         except Exception as e:
             # Productos que debían reclasificarse a A quedan en B/C → sin conteo urgente.
@@ -777,12 +819,23 @@ class ABCService:
                     f'queda completamente invisible: {_e_email_watchdog}'
                 )
 
-        logger.info(f'[ABC] Generación completa · {total} tareas nuevas en almacén {almacen_id}')
-        return {'total_tareas_creadas': total, 'por_clase': resultados}
+        plan = ABCService.generar_tareas_conteo_diario(almacen_id, None, adelantar=adelantar)
+        total += plan['tareas_creadas']
+        for clase in politica.CLASES:
+            resultados[clase] = {'tareas_creadas': plan['por_clase'].get(clase, 0)}
+        # Prewarm se ejecuta en _prewarm_pre_turno (5:55am) — no aquí (2am) porque
+        # el caché expira en ~5min y el turno empieza a las 6am.
+
+        logger.info(f'[ABC] Generación completa · {total} tareas nuevas en almacén {almacen_id} · {plan["mensaje"]}')
+        return {'total_tareas_creadas': total, 'por_clase': resultados,
+                'plan': plan, 'mensaje': plan['mensaje']}
 
     @staticmethod
     def init_scheduler(app):
-        """Scheduler diario a las 6am para generar tareas de conteo cíclico ABC."""
+        """Scheduler del conteo cíclico ABC: la corrida diaria (watchdog + plan,
+        dentro del cupo) a las 2:00 a. m. Bogotá, el pre-calentamiento del
+        caché de Siesa a las 5:55 a. m. y la liberación de conteos zombi cada
+        30 minutos."""
         try:
             from apscheduler.schedulers.background import BackgroundScheduler
             from apscheduler.triggers.cron import CronTrigger
@@ -994,9 +1047,12 @@ class ABCService:
     @staticmethod
     def resumen_abc(almacen_id: int):
         """
-        Resumen de la distribución ABC del inventario.
+        Distribución ABC del almacén y **el plan vigente**: intervalo de cada
+        clase, cupo diario y lo pendiente. Los textos salen de
+        `conteo_politica`, no de una tabla escrita aparte — la anterior decía
+        «semanal / mensual / trimestral» mientras el generador usaba 15/90/180
+        días, y la pantalla repetía otra copia.
         """
-        from app.models.inventario import UbicacionProducto
         from app.extensions import db as database
         from sqlalchemy import func
 
@@ -1011,21 +1067,197 @@ class ABCService:
             .all()
         )
         counts_map = {clase: cnt for clase, cnt in counts_rows}
-        descripciones = {
-            'A': 'Alta rotación — contar semanalmente',
-            'B': 'Rotación media — contar mensualmente',
-            'C': 'Baja rotación — contar trimestralmente',
-        }
+        rotacion = {'A': 'Alta rotación', 'B': 'Rotación media', 'C': 'Baja rotación'}
+        plan = politica.descripcion_del_plan(almacen_id)
         resumen = {
-            cls: {'total_productos': counts_map.get(cls, 0), 'descripcion': descripciones[cls]}
-            for cls in ['A', 'B', 'C']
+            cls: {
+                'total_productos': counts_map.get(cls, 0),
+                'intervalo_dias': plan['intervalos_dias'][cls],
+                'descripcion': (f'{rotacion[cls]} — contar cada '
+                                f'{plan["intervalos_dias"][cls]} días'),
+            }
+            for cls in politica.CLASES
         }
+        tope = politica.tope_de_generacion(almacen_id)
 
         return {
             'almacen_id': almacen_id,
             'distribucion_abc': resumen,
+            'plan': {**plan, 'pendientes_vivas': tope['pendientes_vivas'],
+                     'dias_de_cupo_pendientes': tope['dias_de_cupo_pendientes'],
+                     'generaria_hoy': tope['tope'], 'mensaje': tope['mensaje']},
             'fuente': 'Siesa Enterprise' if not connekta.modo_simulacion else 'WMS local (simulación)'
         }
+
+    #: Los tipos que el plan crea solo. Son los únicos que la cancelación del
+    #: rezago puede tocar: un MANUAL lo pidió una persona y una
+    #: EXCEPCION_PICKING la abrió un faltante real.
+    TIPOS_DEL_PLAN = ('DIARIO_ABC', 'WATCHDOG_ABC')
+
+    @staticmethod
+    def _filtros_rezago_cancelable(almacen_id: int, clasificacion: str = None) -> list:
+        """**La única definición de «qué del rezago se puede cancelar».** La usan
+        la vista previa y la cancelación: si fueran dos cálculos, la vista
+        previa mentiría el día que uno cambie.
+
+        Solo raíces del plan (DIARIO_ABC / WATCHDOG_ABC) en PENDIENTE, sin
+        dueño y sin hijos: una tarea que nadie tomó y que no empezó ninguna
+        cadena. Nunca un CC2/CC3 (su raíz quedaría huérfana en SEGUNDO/
+        TERCER_CONTEO — lo que hacía el DELETE anterior), nunca un MANUAL ni una
+        EXCEPCION_PICKING, nunca algo que un operario ya tiene asignado.
+        """
+        from sqlalchemy import exists
+        from sqlalchemy.orm import aliased
+        from app.models.conteo import EstadoConteo
+        hijo = aliased(SesionConteo)
+        filtros = [
+            SesionConteo.almacen_id == almacen_id,
+            SesionConteo.estado == EstadoConteo.PENDIENTE,
+            SesionConteo.operario_id.is_(None),
+            SesionConteo.es_segundo_conteo.is_(False),
+            SesionConteo.tipo.in_(ABCService.TIPOS_DEL_PLAN),
+            ~exists().where(hijo.sesion_origen_id == SesionConteo.id),
+        ]
+        if clasificacion:
+            filtros.append(SesionConteo.clasificacion_abc == clasificacion)
+        return filtros
+
+    @staticmethod
+    def plan_cancelar_rezago(almacen_id: int, clasificacion: str = None,
+                             *, ahora: datetime = None) -> dict:
+        """Qué cancelaría «Limpiar cola» — **sin tocar nada**.
+
+        Cuántas, por clase, por tipo y por antigüedad (días operativos desde
+        que se crearon), y también **lo que NO se toca** con su motivo: un
+        líder que solo ve «se cancelan 4.825» no sabe que quedan 3 auditorías
+        por faltante y dos segundos conteos esperando.
+        """
+        from app.models.conteo import EstadoConteo
+        from app.services.metricas.conteo import TRAMOS_REZAGO
+        from app.utils.fecha import dia_operativo_de
+        if clasificacion and clasificacion not in politica.CLASES:
+            raise ValueError(f'clase inválida: {clasificacion!r} (A, B o C)')
+        ahora = ahora or datetime.utcnow()
+        hoy = dia_operativo_de(ahora)
+
+        cancelables = (SesionConteo.query
+                       .filter(*ABCService._filtros_rezago_cancelable(almacen_id, clasificacion))
+                       .with_entities(SesionConteo.id, SesionConteo.tipo,
+                                      SesionConteo.clasificacion_abc,
+                                      SesionConteo.fecha_creacion)
+                       .order_by(SesionConteo.id)
+                       .all())
+        ids = [r.id for r in cancelables]
+        por_clase, por_tipo = {}, {}
+        por_antiguedad = {t[0]: 0 for t in TRAMOS_REZAGO}
+        for r in cancelables:
+            clase = r.clasificacion_abc or 'sin clase'
+            por_clase[clase] = por_clase.get(clase, 0) + 1
+            por_tipo[r.tipo] = por_tipo.get(r.tipo, 0) + 1
+            if r.fecha_creacion is None:
+                # Sin fecha → el tramo más viejo: no saber cuándo nació no la
+                # hace reciente.
+                tramo = TRAMOS_REZAGO[-1][0]
+            else:
+                edad = max(0, (hoy - dia_operativo_de(r.fecha_creacion)).days)
+                tramo = next(n for n, lo, hi in TRAMOS_REZAGO
+                             if edad >= lo and (hi is None or edad <= hi))
+            por_antiguedad[tramo] += 1
+
+        # Lo que queda: todo lo vivo sin contar que NO entra, con su porqué.
+        id_set = set(ids)
+        con_hijo = {sid for (sid,) in db.session.query(SesionConteo.sesion_origen_id)
+                    .filter(SesionConteo.almacen_id == almacen_id,
+                            SesionConteo.sesion_origen_id.isnot(None)).all()}
+        vivas = (SesionConteo.query
+                 .filter(SesionConteo.almacen_id == almacen_id,
+                         SesionConteo.estado.in_([EstadoConteo.PENDIENTE,
+                                                  EstadoConteo.EN_PROCESO]))
+                 .with_entities(SesionConteo.id, SesionConteo.tipo, SesionConteo.estado,
+                                SesionConteo.operario_id, SesionConteo.es_segundo_conteo,
+                                SesionConteo.clasificacion_abc)
+                 .all())
+        no_se_tocan = {}
+        for v in vivas:
+            if v.id in id_set or (clasificacion and v.clasificacion_abc != clasificacion):
+                continue
+            if v.es_segundo_conteo:
+                motivo = 'verificacion_cc2_cc3'
+            elif v.tipo == 'EXCEPCION_PICKING':
+                motivo = 'auditoria_por_faltante'
+            elif v.tipo == 'MANUAL':
+                motivo = 'conteo_manual'
+            elif v.estado == EstadoConteo.EN_PROCESO:
+                motivo = 'en_proceso'
+            elif v.operario_id:
+                motivo = 'asignada_a_un_operario'
+            elif v.id in con_hijo:
+                motivo = 'con_cadena_iniciada'
+            else:
+                motivo = f'otro_tipo_{v.tipo}'
+            no_se_tocan[motivo] = no_se_tocan.get(motivo, 0) + 1
+
+        return {
+            'almacen_id': almacen_id,
+            'clasificacion': clasificacion or 'todas',
+            'al_dia_operativo': hoy.isoformat(),
+            'a_cancelar': len(ids),
+            'por_clase': por_clase,
+            'por_tipo': por_tipo,
+            'por_antiguedad_dias': por_antiguedad,
+            'no_se_tocan': no_se_tocan,
+            'ids': ids,
+        }
+
+    @staticmethod
+    def cancelar_rezago(almacen_id: int, *, motivo: str, usuario_id: int,
+                        clasificacion: str = None, esperadas: int = None) -> dict:
+        """Cancela el rezago del plan: **cancelar, no borrar**.
+
+        El endpoint anterior hacía un DELETE físico de toda PENDIENTE del
+        almacén: borraba CC2 (la raíz quedaba huérfana en SEGUNDO_CONTEO para
+        siempre), conteos MANUAL y auditorías por faltante, sin dejar rastro de
+        quién ni por qué. Ahora: estado CANCELADO, `fecha_cierre`,
+        `motivo_edicion` obligatorio y `editado_por`, solo sobre lo que define
+        `_filtros_rezago_cancelable` —el mismo cálculo que la vista previa—.
+
+        `esperadas`: el `a_cancelar` que el líder vio en la vista previa. Si el
+        rezago cambió desde entonces (alguien tomó conteos, el cron generó
+        otros) no se cancela nada y se levanta `ValueError`: lo que se confirma
+        tiene que ser lo que se vio.
+        """
+        from sqlalchemy import false
+        from app.models.conteo import EstadoConteo
+        motivo = (motivo or '').strip()
+        if not motivo:
+            raise ValueError('Se requiere un motivo para cancelar el rezago')
+        plan = ABCService.plan_cancelar_rezago(almacen_id, clasificacion)
+        if esperadas is not None and int(esperadas) != plan['a_cancelar']:
+            raise RezagoCambioDesdeLaVistaPrevia(
+                f'El rezago cambió desde la vista previa: se vieron {esperadas} y '
+                f'ahora son {plan["a_cancelar"]}. Volvé a abrir la vista previa.')
+
+        ahora = datetime.utcnow()
+        # Mismo filtro bajo lock de fila: una tarea que un operario toma entre
+        # la vista previa y este UPDATE ya no cumple «sin dueño» y queda fuera.
+        filas = (SesionConteo.query
+                 .filter(SesionConteo.id.in_(plan['ids']) if plan['ids'] else false(),
+                         *ABCService._filtros_rezago_cancelable(almacen_id, clasificacion))
+                 .with_for_update(skip_locked=True)
+                 .all())
+        for s in filas:
+            s.estado = EstadoConteo.CANCELADO
+            s.fecha_cierre = ahora
+            s.motivo_edicion = f'CANCELADO (rezago del plan): {motivo}'
+            s.editado_por = usuario_id
+            s.editado_en = ahora
+        db.session.commit()
+        logger.warning(
+            '[ABC] Rezago cancelado en almacén %s por usuario #%s: %s de %s '
+            '(clase %s) — %s', almacen_id, usuario_id, len(filas), plan['a_cancelar'],
+            clasificacion or 'todas', motivo)
+        plan.pop('ids', None)
+        return {**plan, 'canceladas': len(filas), 'motivo': motivo, 'ejecutado': True}
 
     @staticmethod
     def procesar_csv_abc(file_obj, ext: str, almacen_id: int = None) -> dict:

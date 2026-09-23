@@ -301,7 +301,7 @@ class TestElGeneradorNoAbreOtraCadena:
         _clasificar_a(db, tienda)
 
         antes = _sesiones_del_hueco(tienda)
-        ABCService.generar_tareas_conteo_diario(tienda['almacen'].id, 'A', forzar_todo=True)
+        ABCService.generar_tareas_conteo_diario(tienda['almacen'].id, 'A', adelantar=True)
         assert _sesiones_del_hueco(tienda) == antes, (
             f'el generador abrió otra cadena sobre una raíz en {estado_raiz}')
 
@@ -378,6 +378,10 @@ LEEN_EL_POOL_SIN_REPARTIR = {
     ('app/routes/conteo.py', 'stats_conteo'):
         'Solo cuenta cuántos conteos PENDIENTE siguen sin dueño para el tablero; '
         'no asigna ninguno, así que no hay regla de reparto que aplicar.',
+    ('app/services/abc_service.py', '_filtros_rezago_cancelable'):
+        'Define qué rezago del plan se CANCELA (P0-4, 2026-09-23): lo sin dueño '
+        'es justo lo que se puede cancelar sin quitarle trabajo a nadie. No asigna '
+        'ningún conteo, así que no hay regla de reparto que aplicar.',
 }
 
 _POLITICA = 'filtros_pool_sin_dueno'
