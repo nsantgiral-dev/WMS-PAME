@@ -1751,6 +1751,10 @@
         style="flex:1;padding:10px;font-size:13px;text-align:center;cursor:pointer;color:var(--tx3);">
         🎯 Definitivo <span id="inv-tab-definitivo-badge" style="display:none;background:#78350f;color:#fcd34d;border-radius:10px;padding:1px 6px;font-size:10px;margin-left:2px;"></span>
       </div>
+      <div id="inv-tab-estadisticas" onclick="invSubtab('estadisticas')"
+        style="flex:1;padding:10px;font-size:13px;text-align:center;cursor:pointer;color:var(--tx3);">
+        📊 Estadísticas
+      </div>
     </div>
 
     <!-- Panel Conteos -->
@@ -1857,6 +1861,12 @@
 
       <div id="inv-conteos-lista" style="min-height:60px;"></div>
       <div id="inv-conteos-paginacion" style="display:flex;justify-content:space-between;align-items:center;padding:12px 0;"></div>
+    </div>
+
+    <!-- Panel Estadísticas — lo llena conteoEstIniciar (conteo.js) desde GET /api/conteo/estadisticas -->
+    <div id="inv-panel-estadisticas" style="display:none;">
+      <div id="inv-estadisticas-filtros"></div>
+      <div id="inv-estadisticas-contenido" style="min-height:60px;"></div>
     </div>
 
     <!-- Panel Conteo Definitivo (CC3) -->
@@ -3782,7 +3792,7 @@
   <script defer src="/static/pwa/recepcion.js?v=20260921a"></script>
   <script defer src="/static/pwa/rutas.js?v=20260921a"></script>
   <script defer src="/static/pwa/traslados.js?v=20260921a"></script>
-  <script defer src="/static/pwa/conteo.js?v=20260923a"></script>
+  <script defer src="/static/pwa/conteo.js?v=20260923b"></script>
   <script defer src="/static/pwa/reposicion.js?v=20260921a"></script>
   <script defer src="/static/pwa/liquidacion.js?v=20260921a"></script>
   <script defer src="/static/pwa/layout.js?v=20260921a"></script>

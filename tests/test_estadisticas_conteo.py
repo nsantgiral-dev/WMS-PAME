@@ -674,3 +674,72 @@ class TestUnVeredictoUnaFuncion:
         assert _compara_con_match(consulta) == []
         sin_llamada = ast.parse("def f(s):\n    return s.estado\n").body[0]
         assert not _llama(sin_llamada, 'veredicto_cadena')
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# La pantalla escapa todo dato — ejecutando el render real, no contando esc()
+# ─────────────────────────────────────────────────────────────────────────────
+
+_ARNES_XSS = r"""
+const fs = require('fs'); const vm = require('vm');
+// `node -e` deja los argumentos desde argv[1]; el `--` se descarta.
+const args = process.argv.slice(1).filter(a => a !== '--');
+const base = args[0];
+const ctx = { console, document: { getElementById: () => null }, window: {} };
+vm.createContext(ctx);
+vm.runInContext(fs.readFileSync(base + '/util.js', 'utf8'), ctx);
+vm.runInContext(fs.readFileSync(base + '/conteo.js', 'utf8'), ctx);
+if (args[1] === 'esc-roto') vm.runInContext('esc = (x) => String(x);', ctx);
+const X = '<img src=x onerror=alert(1)>';
+const m = { numerador: 1, denominador: 2, porcentaje: null, sin_porcentaje_por: X, excluidos: { [X]: 3 } };
+const d = {
+  parametros: { desde: X, hasta: X }, fuente: X,
+  carga_cobertura: { al_dia_operativo: X, nota: X, excluidos: { [X]: 1 }, filas: [{
+    almacen: X, clase: X, frecuencia_dias: 15, universo_productos: 1, universo_huecos: 1,
+    contados_en_frecuencia: m, nunca_contados: 1, sin_contar_en_ventana: 1, exigencia_diaria: 1,
+    ritmo: { por_dia: 0, cadenas_cerradas: 0, dias_ventana: 28 }, dias_para_cerrar_ciclo: null, sin_estimacion_por: X }] },
+  rezago: { pendiente: { [X]: 1 }, en_curso: {}, total_pendiente: 1, total_en_curso: 0, excluidos: {} },
+  volumen: { iniciadas: 1, cerradas: 1, skus_cerrados: 1, a_cc2: m, a_cc3: m, sin_veredicto: { [X]: 1 },
+    recuentos: m, excluidos: {}, unidad: X, por_semana: [{ semana: X, cerradas: 1, ok: 1, error: 0, ajustes: 0, unidades_ajustadas: 0 }] },
+  ajustes: { cantidad: 1, automaticos: 1, aprobados_por_supervisor: 0, en_vuelo: 0, unidades_ent: 1, unidades_sal: 0, unidades_neto: 1,
+    valor: { etiqueta: X, ent: 1, sal: 0, neto: 1, ajustes_valorizados: 1, ajustes_sin_costo: 0 },
+    bloqueados_hoy: { total: 1, por_motivo: { [X]: 1 }, descuadres_aprobables: 0 }, jobs_fallidos_hoy: 0,
+    motivos_auditoria_picking: { por_motivo: { [X]: 1 } }, excluidos: { [X]: 1 } },
+  exactitud: { definicion: X, min_n: 30, por_clase: { [X]: { [X]: m } }, excluidos: {} },
+  productos_problema: { por_diferencia: [{ producto_codigo: X, producto_nombre: X, diferencia: 1, dia: X }],
+    por_ajustes: [{ producto_codigo: X, n: 1 }], por_recuentos: [] },
+  por_operario: { nota: X, filas: [{ operario_id: 1, nombre: X, cadenas: 1, conteos: 1 }], excluidos: {} },
+};
+const html = vm.runInContext('_ceRender', ctx)(d);
+const crudos = (html.match(/<img/g) || []).length;
+const escapados = (html.match(/&lt;img/g) || []).length;
+console.log(JSON.stringify({ crudos, escapados, largo: html.length }));
+"""
+
+
+def _render_malicioso(modo=''):
+    import json
+    import shutil
+    import subprocess
+    if not shutil.which('node'):
+        pytest.skip('sin node')
+    pwa = RAIZ / 'app' / 'static' / 'pwa'
+    r = subprocess.run(['node', '-e', _ARNES_XSS, '--', str(pwa), modo],
+                       capture_output=True, text=True, timeout=60)
+    assert r.returncode == 0, r.stderr
+    return json.loads(r.stdout.strip().splitlines()[-1])
+
+
+class TestLaPantallaEscapaTodoDato:
+    """CLAUDE.md, «Todo dato que se pinta va con esc()»: el guard de texto mide
+    interpolaciones; esto carga `util.js` y `conteo.js` DE VERDAD en Node,
+    pinta el reporte con `<img onerror>` en cada texto y cuenta lo que queda."""
+
+    def test_ningun_texto_llega_crudo(self):
+        r = _render_malicioso()
+        assert r['crudos'] == 0, r
+        assert r['escapados'] >= 25, f'piso: el arnés dejó de pintar el reporte ({r})'
+
+    def test_el_arnes_muerde_con_esc_roto(self):
+        """Meta: con un esc que no escapa, el mismo render deja pasar el ataque."""
+        assert _render_malicioso('esc-roto')['crudos'] >= 25

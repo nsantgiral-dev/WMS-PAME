@@ -102,13 +102,13 @@ async function guardarConfigBodega() {
 }
 
 /**
- * Switch the inventory sub-tab between conteos and ABC views.
- * @param {string} nombre - Sub-tab key: 'conteos' or 'abc'.
+ * Switch the inventory sub-tab.
+ * @param {string} nombre - 'conteos', 'abc', 'datos', 'definitivo' o 'estadisticas'.
  */
 function invSubtab(nombre) {
   _INV_SUBTAB = nombre;
-  const tabs = { conteos: 'inv-tab-conteos', abc: 'inv-tab-abc', datos: 'inv-tab-datos', definitivo: 'inv-tab-definitivo' };
-  const panels = { conteos: 'inv-panel-conteos', abc: 'inv-panel-abc', datos: 'inv-panel-datos', definitivo: 'inv-panel-definitivo' };
+  const tabs = { conteos: 'inv-tab-conteos', abc: 'inv-tab-abc', datos: 'inv-tab-datos', definitivo: 'inv-tab-definitivo', estadisticas: 'inv-tab-estadisticas' };
+  const panels = { conteos: 'inv-panel-conteos', abc: 'inv-panel-abc', datos: 'inv-panel-datos', definitivo: 'inv-panel-definitivo', estadisticas: 'inv-panel-estadisticas' };
   Object.entries(tabs).forEach(([k, id]) => {
     const el = document.getElementById(id);
     if (!el) return;
@@ -125,6 +125,7 @@ function invSubtab(nombre) {
   else if (nombre === 'abc') cargarResumenAbc();
   else if (nombre === 'datos') kardexCargarPanel();
   else if (nombre === 'definitivo') cargarConteoDefinitivos();
+  else if (nombre === 'estadisticas') conteoEstIniciar();
 }
 
 /** Refresca el contador de la pestaña "Definitivo" sin cambiar de subtab —
@@ -1340,3 +1341,186 @@ function defCerrarModal() {
   cargarConteoDefinitivos();
 }
 
+
+// ── Estadísticas del conteo cíclico ─────────────────────────────────────────
+// Pinta `GET /api/conteo/estadisticas`. La pantalla no calcula nada: cada
+// número —y cada porcentaje que NO se publica por muestra chica— lo decide
+// `app/services/metricas/conteo.py`. Carga y cobertura van primero porque hoy
+// es lo único con n suficiente para decir algo. Todo dato pasa por esc().
+
+/** Un número con separador de miles colombiano, ya escapado. */
+function _ceNum(v, dec = 0) {
+  if (v === null || v === undefined) return '—';
+  return esc(Number(v).toLocaleString('es-CO', { maximumFractionDigits: dec }));
+}
+
+/** Una métrica {numerador, denominador, porcentaje}: el porcentaje solo si el
+ * servidor lo publicó; si no, el n y el porqué. */
+function _ceMetrica(m) {
+  if (!m) return '—';
+  const base = `${_ceNum(m.numerador)} / ${_ceNum(m.denominador)}`;
+  if (m.porcentaje === null || m.porcentaje === undefined) {
+    return `${base} <span style="color:var(--tx3);font-size:10px;">(${esc(m.sin_porcentaje_por || 'sin porcentaje')})</span>`;
+  }
+  return `${base} · <b>${_ceNum(m.porcentaje, 1)}%</b>`;
+}
+
+/** Los `excluidos` de una métrica, dichos — un cero sin denominador no se esconde. */
+function _ceExcluidos(ex) {
+  const pares = Object.entries(ex || {});
+  if (!pares.length) return '';
+  const txt = pares.map(([k, n]) => `${esc(k)}: ${_ceNum(n)}`).join(' · ');
+  return `<div style="font-size:10px;color:var(--tx3);margin-top:4px;">Excluidos — ${txt}</div>`;
+}
+
+/** Contenedor de un bloque. `titulo` y `cuerpo` llegan ya armados y escapados. */
+function _ceTarjeta(titulo, cuerpo) {
+  return `<div style="background:var(--bg-s);border:1px solid var(--brd);border-radius:12px;padding:12px 14px;margin-bottom:12px;">
+    <div style="font-size:13px;font-weight:700;color:var(--tx);margin-bottom:8px;">${titulo}</div>${cuerpo}</div>`;
+}
+
+/** Los filtros, armados una vez (las fechas por defecto las fija el servidor). */
+function _ceFiltrosHtml() {
+  const alms = (_INV_ALMACENES || []).map(a =>
+    `<option value="${esc(a.id)}">${esc(a.nombre)}</option>`).join('');
+  const campo = 'padding:8px;background:var(--bg-input);border:1px solid var(--brd);border-radius:8px;color:var(--tx);font-size:12px;';
+  return `<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px;">
+    <input id="ce-desde" type="date" style="${campo}flex:1;min-width:130px;">
+    <input id="ce-hasta" type="date" style="${campo}flex:1;min-width:130px;">
+    <select id="ce-almacen" style="${campo}flex:1;min-width:120px;"><option value="">Todos los almacenes</option>${alms}</select>
+    <select id="ce-clase" style="${campo}"><option value="">A+B+C</option><option value="A">A</option><option value="B">B</option><option value="C">C</option></select>
+    <select id="ce-tipo" style="${campo}"><option value="">Todos los tipos</option><option value="DIARIO_ABC">Plan ABC</option><option value="MANUAL">Manual</option><option value="WATCHDOG_ABC">Watchdog</option><option value="EXCEPCION_PICKING">Auditoría picking</option></select>
+    <button onclick="conteoEstCargar()" style="padding:8px 14px;background:var(--pm);color:#fff;border:none;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;">Actualizar</button>
+  </div>`;
+}
+
+/** Entrada de la pestaña 📊 Estadísticas (la llama invSubtab). */
+async function conteoEstIniciar() {
+  const cont = document.getElementById('inv-estadisticas-filtros');
+  if (cont && !document.getElementById('ce-desde')) cont.innerHTML = _ceFiltrosHtml();
+  await conteoEstCargar();
+}
+
+/** Lee los filtros, pide el reporte y lo pinta. */
+async function conteoEstCargar() {
+  const el = document.getElementById('inv-estadisticas-contenido');
+  if (!el) return;
+  const qs = new URLSearchParams();
+  [['desde', 'ce-desde'], ['hasta', 'ce-hasta'], ['almacen_id', 'ce-almacen'],
+   ['clase', 'ce-clase'], ['tipo', 'ce-tipo']].forEach(([k, id]) => {
+    const v = document.getElementById(id)?.value;
+    if (v) qs.set(k, v);
+  });
+  el.innerHTML = '<div style="text-align:center;padding:30px;color:var(--tx3);">Cargando…</div>';
+  try {
+    const d = await get(`/api/conteo/estadisticas?${qs.toString()}`);
+    const desde = document.getElementById('ce-desde');
+    const hasta = document.getElementById('ce-hasta');
+    if (desde && !desde.value) desde.value = d.parametros.desde;
+    if (hasta && !hasta.value) hasta.value = d.parametros.hasta;
+    el.innerHTML = _ceRender(d);
+  } catch (e) {
+    el.innerHTML = `<div style="text-align:center;padding:30px;color:var(--red);">${esc(e.message || 'Error cargando estadísticas')}</div>`;
+  }
+}
+
+function _ceRender(d) {
+  return [_ceCobertura(d.carga_cobertura, d.rezago), _ceVolumen(d.volumen),
+          _ceAjustes(d.ajustes), _ceExactitud(d.exactitud),
+          _ceProductos(d.productos_problema), _ceOperarios(d.por_operario)].join('')
+    + `<div style="font-size:10px;color:var(--tx3);text-align:center;margin:6px 0 16px;">${esc(d.fuente)} · rango ${esc(d.parametros.desde)} a ${esc(d.parametros.hasta)}</div>`;
+}
+
+function _ceCobertura(c, r) {
+  const filas = (c.filas || []).filter(f => f.universo_huecos > 0);
+  const cuerpoFilas = filas.length ? filas.map(f => `
+    <div style="border-top:1px solid var(--brd);padding:8px 0;">
+      <div style="font-size:12px;font-weight:700;color:var(--tx);">${esc(f.almacen || '')} · clase ${esc(f.clase)} <span style="color:var(--tx3);font-weight:400;">(cada ${_ceNum(f.frecuencia_dias)} días)</span></div>
+      <div style="font-size:12px;color:var(--tx2);line-height:1.6;">
+        Universo: ${_ceNum(f.universo_productos)} productos · ${_ceNum(f.universo_huecos)} huecos<br>
+        Contados dentro de su frecuencia: ${_ceMetrica(f.contados_en_frecuencia)}<br>
+        Sin contar: <b>${_ceNum(f.sin_contar_en_ventana)}</b> (nunca contados ${_ceNum(f.nunca_contados)})<br>
+        El plan exige <b>${_ceNum(f.exigencia_diaria)}</b>/día · ritmo real ${_ceNum(f.ritmo.por_dia, 2)}/día (${_ceNum(f.ritmo.cadenas_cerradas)} en ${_ceNum(f.ritmo.dias_ventana)} días)<br>
+        Días para cerrar el ciclo: ${f.dias_para_cerrar_ciclo === null ? `<span style="color:var(--yellow);">${esc(f.sin_estimacion_por || 'sin estimación')}</span>` : `<b>${_ceNum(f.dias_para_cerrar_ciclo, 1)}</b>`}
+      </div>
+    </div>`).join('') : '<div style="font-size:12px;color:var(--tx3);">No hay universo ABC cargado para este filtro.</div>';
+  const tramos = (t) => Object.entries(t || {}).map(([k, n]) => `${esc(k)} d: <b>${_ceNum(n)}</b>`).join(' · ');
+  const rezago = `<div style="border-top:1px solid var(--brd);padding-top:8px;font-size:12px;color:var(--tx2);line-height:1.6;">
+    Pendientes (${_ceNum(r.total_pendiente)}): ${tramos(r.pendiente)}<br>
+    En curso (${_ceNum(r.total_en_curso)}): ${tramos(r.en_curso)}
+    ${_ceExcluidos(r.excluidos)}</div>`;
+  return _ceTarjeta(`📦 Carga y cobertura del plan <span style="font-size:10px;color:var(--tx3);font-weight:400;">al ${esc(c.al_dia_operativo)}</span>`,
+    `<div style="font-size:10px;color:var(--tx3);margin-bottom:6px;">${esc(c.nota)}</div>${cuerpoFilas}${_ceExcluidos(c.excluidos)}${rezago}`);
+}
+
+function _ceVolumen(v) {
+  const sv = Object.entries(v.sin_veredicto || {}).map(([k, n]) => `${esc(k)} ${_ceNum(n)}`).join(' · ') || '—';
+  const semanas = (v.por_semana || []).map(s => `<tr>
+      <td style="padding:4px 6px;">${esc(s.semana)}</td>
+      <td style="padding:4px 6px;text-align:right;">${_ceNum(s.cerradas)}</td>
+      <td style="padding:4px 6px;text-align:right;">${_ceNum(s.ok)}</td>
+      <td style="padding:4px 6px;text-align:right;">${_ceNum(s.error)}</td>
+      <td style="padding:4px 6px;text-align:right;">${_ceNum(s.ajustes)}</td>
+      <td style="padding:4px 6px;text-align:right;">${_ceNum(s.unidades_ajustadas)}</td></tr>`).join('');
+  const tabla = semanas ? `<div style="overflow-x:auto;margin-top:8px;"><table style="width:100%;border-collapse:collapse;font-size:11px;color:var(--tx2);">
+      <tr style="color:var(--tx3);"><th style="text-align:left;padding:4px 6px;">Semana (lunes)</th><th style="text-align:right;padding:4px 6px;">Cerradas</th><th style="text-align:right;padding:4px 6px;">OK</th><th style="text-align:right;padding:4px 6px;">Error</th><th style="text-align:right;padding:4px 6px;">Ajustes</th><th style="text-align:right;padding:4px 6px;">Uds</th></tr>
+      ${semanas}</table></div>` : '<div style="font-size:12px;color:var(--tx3);margin-top:6px;">Sin cadenas cerradas en el rango.</div>';
+  return _ceTarjeta('🔁 Volumen y flujo', `<div style="font-size:12px;color:var(--tx2);line-height:1.6;">
+      Cadenas iniciadas: <b>${_ceNum(v.iniciadas)}</b> · cerradas: <b>${_ceNum(v.cerradas)}</b> · SKUs: ${_ceNum(v.skus_cerrados)}<br>
+      Necesitaron 2º conteo: ${_ceMetrica(v.a_cc2)}<br>
+      Necesitaron 3º conteo: ${_ceMetrica(v.a_cc3)}<br>
+      Sin veredicto: ${sv}<br>
+      Recuentos por venta durante el conteo: ${_ceMetrica(v.recuentos)}
+      ${_ceExcluidos(v.recuentos && v.recuentos.excluidos)}${_ceExcluidos(v.excluidos)}
+    </div>${tabla}
+    <div style="font-size:10px;color:var(--tx3);margin-top:6px;">${esc(v.unidad)}</div>`);
+}
+
+function _ceAjustes(a) {
+  const val = a.valor || {};
+  const bl = a.bloqueados_hoy || {};
+  const bloq = Object.entries(bl.por_motivo || {}).map(([k, n]) => `${esc(k)} ${_ceNum(n)}`).join(' · ') || '—';
+  const aud = Object.entries((a.motivos_auditoria_picking || {}).por_motivo || {}).map(([k, n]) => `${esc(k)} ${_ceNum(n)}`).join(' · ') || '—';
+  return _ceTarjeta('⚖️ Ajustes a Siesa', `<div style="font-size:12px;color:var(--tx2);line-height:1.6;">
+      Ajustes: <b>${_ceNum(a.cantidad)}</b> (automáticos ${_ceNum(a.automaticos)} · por supervisor ${_ceNum(a.aprobados_por_supervisor)} · en vuelo ${_ceNum(a.en_vuelo)})<br>
+      Unidades: +${_ceNum(a.unidades_ent)} / −${_ceNum(a.unidades_sal)} · neto ${_ceNum(a.unidades_neto)}<br>
+      Valor <span style="color:var(--tx3);">(${esc(val.etiqueta || '')})</span>: +$${_ceNum(val.ent)} / −$${_ceNum(val.sal)} · neto <b>$${_ceNum(val.neto)}</b><br>
+      <span style="color:var(--tx3);font-size:11px;">${_ceNum(val.ajustes_valorizados)} valorizados · ${_ceNum(val.ajustes_sin_costo)} sin costo en su foto</span><br>
+      Hoy bloqueados: <b>${_ceNum(bl.total)}</b> (${bloq}) · aprobables: ${_ceNum(bl.descuadres_aprobables)} · jobs fallidos: ${_ceNum(a.jobs_fallidos_hoy)}<br>
+      <span style="color:var(--tx3);font-size:11px;">Auditorías de picking (diagnóstico, no ajuste): ${aud}</span>
+      ${_ceExcluidos(a.excluidos)}</div>`);
+}
+
+function _ceExactitud(e) {
+  const filas = Object.entries(e.por_clase || {}).map(([cl, grupos]) =>
+    Object.entries(grupos).map(([g, m]) =>
+      `<div>Clase ${esc(cl)} · ${esc(g)}: ${_ceMetrica(m)}</div>`).join('')).join('');
+  return _ceTarjeta('🎯 Exactitud de inventario', `<div style="font-size:12px;color:var(--tx2);line-height:1.6;">
+      <div style="font-size:10px;color:var(--tx3);margin-bottom:4px;">${esc(e.definicion)} · sin porcentaje con n &lt; ${_ceNum(e.min_n)}</div>
+      ${filas || '<div style="color:var(--tx3);">Sin cadenas medibles en el rango.</div>'}
+      ${_ceExcluidos(e.excluidos)}</div>`);
+}
+
+function _ceProductos(p) {
+  const dif = (p.por_diferencia || []).map(f => `<tr>
+      <td style="padding:4px 6px;">${esc(f.producto_codigo || '')}</td>
+      <td style="padding:4px 6px;">${esc(f.producto_nombre || '')}</td>
+      <td style="padding:4px 6px;text-align:right;">${_ceNum(f.diferencia)}</td>
+      <td style="padding:4px 6px;">${esc(f.dia)}</td></tr>`).join('');
+  const lista = (arr) => (arr || []).map(f => `${esc(f.producto_codigo || '')} (${_ceNum(f.n)})`).join(' · ') || '—';
+  const tabla = dif
+    ? `<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:11px;color:var(--tx2);">
+      <tr style="color:var(--tx3);"><th style="text-align:left;padding:4px 6px;">Código</th><th style="text-align:left;padding:4px 6px;">Producto</th><th style="text-align:right;padding:4px 6px;">Dif.</th><th style="text-align:left;padding:4px 6px;">Día</th></tr>${dif}</table></div>`
+    : '<div style="font-size:12px;color:var(--tx3);">Sin diferencias confirmadas en el rango.</div>';
+  return _ceTarjeta('🔎 Productos problema', `${tabla}
+    <div style="font-size:12px;color:var(--tx2);margin-top:8px;line-height:1.6;">Más ajustes: ${lista(p.por_ajustes)}<br>Más recuentos: ${lista(p.por_recuentos)}</div>`);
+}
+
+function _ceOperarios(o) {
+  const filas = (o.filas || []).map(f =>
+    `<div>${esc(f.nombre || ('#' + f.operario_id))}: ${_ceNum(f.cadenas)} cadenas · ${_ceNum(f.conteos)} conteos</div>`).join('');
+  return _ceTarjeta('👥 Participación por persona', `<div style="font-size:12px;color:var(--tx2);line-height:1.6;">
+      <div style="font-size:10px;color:var(--tx3);margin-bottom:4px;">${esc(o.nota)}</div>
+      ${filas || '<div style="color:var(--tx3);">Sin conteos en el rango.</div>'}
+      ${_ceExcluidos(o.excluidos)}</div>`);
+}
