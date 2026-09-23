@@ -429,27 +429,21 @@ def pendientes_vivas(almacen_id: int) -> int:
             .count())
 
 
-#: Base de la clave del lock que serializa a quienes consumen el cupo de un
-#: almacén (generador y watchdog). No choca con las claves fijas 1003/20xx ni
-#: con el lock de sesión del watchdog (3000 + almacén).
-LOCK_CUPO_BASE = 4000
-
-
 def bloquear_cupo(almacen_id: int) -> None:
     """Serializa, dentro de la transacción en curso, a todo el que va a crear
     conteos contra el cupo de `almacen_id`.
 
     Sin esto, el cron y un «Generar lote» apretado a la misma hora leen las
     mismas pendientes, calculan el mismo tope y crean el doble. Es un lock de
-    **transacción** (`pg_advisory_xact_lock`), no de sesión: se suelta solo en
+    **transacción** (`lock_de_transaccion`), no de sesión: se suelta solo en
     el commit o el rollback, así que no puede quedar tomado en una conexión
     que vuelve al pool —el defecto que ya costó dos jobs muertos, ver
     `tests/test_advisory_locks.py`—. Espera en vez de rendirse: el que llega
-    segundo lee las pendientes que el primero ya dejó.
+    segundo lee las pendientes que el primero ya dejó. La clave sale del
+    rango `RANGO_CUPO_CONTEO` del registro de `app/utils/lock.py`.
     """
-    from sqlalchemy import text
-    db.session.execute(text('SELECT pg_advisory_xact_lock(:k)'),
-                       {'k': LOCK_CUPO_BASE + int(almacen_id)})
+    from app.utils.lock import RANGO_CUPO_CONTEO, clave_en_rango, lock_de_transaccion
+    lock_de_transaccion(clave_en_rango(RANGO_CUPO_CONTEO, int(almacen_id)))
 
 
 SIN_CUPO = 'SIN_CUPO'

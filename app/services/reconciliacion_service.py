@@ -110,7 +110,7 @@ class ReconciliacionService:
     @staticmethod
     def _ejecutar_sweep():
         from app.models.packing import TareaPacking
-        from app.utils.lock import advisory_lock
+        from app.utils.lock import LOCK_RECONCILIACION_SWEEP, advisory_lock
 
         # Advisory lock: evita que 2 workers Gunicorn ejecuten sweep simultáneamente.
         #
@@ -119,7 +119,7 @@ class ReconciliacionService:
         # se encontraba el lock ocupado. Dejaba de correr en silencio — y este
         # sweep es el que detecta tareas de packing que Siesa YA proceso y el WMS
         # cree que no. Sin él, el inventario diverge del ERP sin que nada avise.
-        with advisory_lock(2014, 'reconciliacion_sweep') as tomado:
+        with advisory_lock(LOCK_RECONCILIACION_SWEEP, 'reconciliacion_sweep') as tomado:
             if not tomado:
                 logger.info('[RECONCILIACION] Lock no disponible — omitiendo sweep')
                 return

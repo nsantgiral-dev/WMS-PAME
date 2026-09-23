@@ -64,9 +64,9 @@ class LPN(db.Model):
         if a concurrent insert causes a collision, the caller gets IntegrityError
         and can retry (or use a UUID-based fallback).
         """
-        from sqlalchemy import text as _text
-        # Lock-free: use advisory lock scoped to this table to serialize code generation
-        db.session.execute(_text('SELECT pg_advisory_xact_lock(:k)'), {'k': 3001})
+        from app.utils.lock import LOCK_CODIGO_LPN, lock_de_transaccion
+        # Lock de transacción: serializa la generación del código hasta el commit
+        lock_de_transaccion(LOCK_CODIGO_LPN)
         ultimo = db.session.query(db.func.max(cls.id)).scalar() or 0
         return f'LPN-{(ultimo + 1):07d}'
 

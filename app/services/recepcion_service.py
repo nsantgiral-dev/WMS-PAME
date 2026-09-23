@@ -46,8 +46,8 @@ class RecepcionService:
         # ambos y crean dos recepciones, que si ambas se confirman disparan dos
         # ENTRADA_OC duplicadas en Siesa. Se libera solo al terminar la
         # transacción (commit del caller o de este mismo método más abajo).
-        from sqlalchemy import text as _text
-        db.session.execute(_text('SELECT pg_advisory_xact_lock(:k)'), {'k': 3003})
+        from app.utils.lock import LOCK_RECEPCION_POR_OC, lock_de_transaccion
+        lock_de_transaccion(LOCK_RECEPCION_POR_OC)
 
         filtro = {'numero_oc_siesa': numero_oc_siesa}
         if co_oc_siesa:

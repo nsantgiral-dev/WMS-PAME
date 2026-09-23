@@ -711,9 +711,6 @@ def _descargar_inventario_multibodega_para_reconciliar():
 # 1. CARGA INICIAL
 # ─────────────────────────────────────────────
 
-_ADVISORY_LOCK_INV_SIESA = 2002  # clave única para pg_advisory_lock
-
-
 def _tipo_registro_stock(bod: str) -> str:
     """Tipo de `registro_sync` para la carga física de una bodega.
 
@@ -757,13 +754,12 @@ def _run_carga_inicial(app, bodega: str = None):
         # una segunda corrida de la MISMA bodega, serializa cargas de bodegas
         # distintas entre sí — más lento si se piden varias a la vez, pero ninguna
         # pisa el `db.session` de otra a mitad de camino.
-        from sqlalchemy import text as _text
-        lock_adquirido = False
+        from app.utils.lock import (LOCK_CARGA_INVENTARIO_SIESA, LockDeSesion,
+                                    tomar_lock_de_sesion)
+        _lock = LockDeSesion(LOCK_CARGA_INVENTARIO_SIESA)   # sin tomar: liberar() no hace nada
         try:
-            lock_adquirido = db.session.execute(
-                _text('SELECT pg_try_advisory_lock(:key)'), {'key': _ADVISORY_LOCK_INV_SIESA}
-            ).scalar()
-            if not lock_adquirido:
+            _lock = tomar_lock_de_sesion(LOCK_CARGA_INVENTARIO_SIESA, 'carga_inventario_siesa')
+            if not _lock:
                 logger.warning('[INV-SIESA] Otro worker ya ejecuta una carga — omitido (bodega %s)', bod)
                 estado['en_curso'] = False
                 return
@@ -1101,14 +1097,7 @@ def _run_carga_inicial(app, bodega: str = None):
                 pass
             return
         finally:
-            if lock_adquirido:
-                try:
-                    db.session.execute(
-                        _text('SELECT pg_advisory_unlock(:key)'), {'key': _ADVISORY_LOCK_INV_SIESA}
-                    )
-                    db.session.commit()
-                except Exception as _e:
-                    logger.error('[INV-SIESA] Error liberando advisory lock — podría quedar bloqueado: %s', _e)
+            _lock.liberar()
 
         resultado = {
             'timestamp': datetime.utcnow().isoformat(),
@@ -1264,7 +1253,7 @@ def _ejecutar_carga_fisica_diaria(app):
     """Corre `_run_carga_inicial` para cada bodega calibrada, EN SECUENCIA.
 
     Nunca en paralelo: las tres comparten el advisory lock de Postgres
-    (`_ADVISORY_LOCK_INV_SIESA`), así que lanzarlas a la vez solo lograría que
+    (`LOCK_CARGA_INVENTARIO_SIESA`), así que lanzarlas a la vez solo lograría que
     la 2da y 3ra lo encontraran ocupado y se saltaran sin reintentar — el
     lock existe para serializar reintentos de una misma bodega, no para
     poner en cola cargas de bodegas distintas.
@@ -1839,11 +1828,9 @@ def _run_reconciliacion(app):
     with app.app_context():
         # Advisory lock — protege contra reconciliaciones paralelas entre workers Gunicorn.
         # Sin esto, dos workers pueden calcular la misma diferencia y enviar ajustes duplicados a Siesa.
-        from sqlalchemy import text as _text_rec
+        from app.utils.lock import LOCK_RECONCILIACION_INVENTARIO, tomar_lock_de_sesion
         try:
-            _lock_rec = db.session.execute(
-                _text_rec('SELECT pg_try_advisory_lock(:key)'), {'key': 1003}
-            ).scalar()
+            _lock_rec = tomar_lock_de_sesion(LOCK_RECONCILIACION_INVENTARIO, 'reconciliacion_inventario')
         except Exception as _lock_err:
             logger.error(f'[RECONCILIACION] Fallo al adquirir advisory lock: {_lock_err}')
             _estado_reconciliacion['en_curso'] = False
@@ -1865,6 +1852,9 @@ def _run_reconciliacion(app):
             # Liberar la conexión DB antes del HTTP download (puede tardar 2+ min).
             # Sin este commit, la sesión retiene la conexión del pool durante toda la descarga
             # bloqueando requests concurrentes en un pool pequeño (Railway: 5-10 conexiones).
+            # El lock 1003 NO viaja con ella: vive en su propia conexión
+            # (app/utils/lock.py). Antes viajaba — este commit devolvía al pool
+            # la conexión CON el lock, y el unlock del final salía por otra.
             db.session.commit()
 
             # Se descarga el diccionario POR BODEGA, no la vista aplastada de
@@ -1910,12 +1900,7 @@ def _run_reconciliacion(app):
 
         finally:
             _estado_reconciliacion['en_curso'] = False
-            if _lock_rec:
-                try:
-                    db.session.execute(_text_rec('SELECT pg_advisory_unlock(:key)'), {'key': 1003})
-                    db.session.commit()
-                except Exception as _e_unlock:
-                    logger.error('[RECONCILIACION] Error liberando advisory lock 1003: %s', _e_unlock)
+            _lock_rec.liberar()
 
 
 def iniciar_reconciliacion(app):

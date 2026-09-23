@@ -672,8 +672,10 @@ class MobileService:
         # siguiente línea, el dispensador se la negó por esta carrera.
         _MAX_REINTENTOS = 3
         import zlib
-        from app.utils.lock import advisory_lock
-        _clave_doc = zlib.crc32(tarea.referencia_documento.encode('utf-8')) & 0x7FFFFFFF
+        from app.utils.lock import RANGO_PEDIDO_CHICO, advisory_lock, clave_en_rango
+        _clave_doc = clave_en_rango(
+            RANGO_PEDIDO_CHICO,
+            zlib.crc32(tarea.referencia_documento.encode('utf-8')) & 0x7FFFFFFF)
         with advisory_lock(_clave_doc, f'pedido_chico:{tarea.referencia_documento}') as _tomado:
             if not _tomado:
                 db.session.rollback()

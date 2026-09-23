@@ -343,12 +343,13 @@ def init_scheduler(app):
 
     def _job():
         with app.app_context():
-            from app.utils.lock import advisory_lock
+            from app.utils.lock import LOCK_FLOTA_AVISOS, advisory_lock
 
-            # 2016 — libre. Con `--workers=2` dos procesos disparan el mismo
+            # Clave propia del registro de app/utils/lock.py. Decía «2016 —
+            # libre», y dos semanas después reposición tomó el mismo 2016. Con `--workers=2` dos procesos disparan el mismo
             # cron, y un aviso duplicado por WhatsApp a las 6 de la mañana es la
             # forma más rápida de que alguien silencie el canal.
-            with advisory_lock(2016, 'flota_avisos_barrido') as tomado:
+            with advisory_lock(LOCK_FLOTA_AVISOS, 'flota_avisos_barrido') as tomado:
                 if not tomado:
                     return
                 try:

@@ -232,7 +232,8 @@ def verificar_y_alertar_huerfanas(app=None):
 
     with ctx_app.app_context():
         from app.extensions import db as _db
-        _lock = _db.session.execute(_db.text('SELECT pg_try_advisory_lock(2004)')).scalar()
+        from app.utils.lock import LOCK_ALERTA_HUERFANAS, tomar_lock_de_sesion
+        _lock = tomar_lock_de_sesion(LOCK_ALERTA_HUERFANAS, 'alerta_huerfanas')
         if not _lock:
             logger.info('[ALERTAS] verificar_y_alertar_huerfanas omitida — otro worker ya la ejecuta')
             return
@@ -267,10 +268,9 @@ def verificar_y_alertar_huerfanas(app=None):
         finally:
             try:
                 _db.session.rollback()
-                _db.session.execute(_db.text('SELECT pg_advisory_unlock(2004)'))
-                _db.session.commit()
             except Exception as _fe:
-                logger.error(f'[ALERTAS] Error liberando advisory lock 2004: {_fe}')
+                logger.error(f'[ALERTAS] rollback al cerrar: {_fe}')
+            _lock.liberar()
 
 
 def _enviar_alerta_huerfanas(huerfanas: list):
@@ -483,7 +483,8 @@ def verificar_y_alertar_stock_critico(app=None):
 
     with ctx_app.app_context():
         from app.extensions import db as _db
-        _lock = _db.session.execute(_db.text('SELECT pg_try_advisory_lock(2005)')).scalar()
+        from app.utils.lock import LOCK_ALERTA_STOCK_CRITICO, tomar_lock_de_sesion
+        _lock = tomar_lock_de_sesion(LOCK_ALERTA_STOCK_CRITICO, 'alerta_stock_critico')
         if not _lock:
             logger.info('[ALERTAS] verificar_y_alertar_stock_critico omitida — otro worker ya la ejecuta')
             return
@@ -581,10 +582,9 @@ def verificar_y_alertar_stock_critico(app=None):
         finally:
             try:
                 _db.session.rollback()
-                _db.session.execute(_db.text('SELECT pg_advisory_unlock(2005)'))
-                _db.session.commit()
             except Exception as _fe:
-                logger.error(f'[ALERTAS] Error liberando advisory lock 2005: {_fe}')
+                logger.error(f'[ALERTAS] rollback al cerrar: {_fe}')
+            _lock.liberar()
 
 
 def _enviar_alerta_stock_critico(criticos: list):
@@ -668,7 +668,8 @@ def enviar_resumen_diario(app=None):
 
     with ctx_app.app_context():
         from app.extensions import db as _db
-        _lock = _db.session.execute(_db.text('SELECT pg_try_advisory_lock(2011)')).scalar()
+        from app.utils.lock import LOCK_RESUMEN_DIARIO, tomar_lock_de_sesion
+        _lock = tomar_lock_de_sesion(LOCK_RESUMEN_DIARIO, 'resumen_diario')
         if not _lock:
             logger.info('[ALERTAS] enviar_resumen_diario omitido — otro worker ya lo ejecuta')
             return
@@ -799,10 +800,9 @@ def enviar_resumen_diario(app=None):
         finally:
             try:
                 _db.session.rollback()
-                _db.session.execute(_db.text('SELECT pg_advisory_unlock(2011)'))
-                _db.session.commit()
             except Exception as _fe:
-                logger.error(f'[ALERTAS] Error liberando advisory lock 2011: {_fe}')
+                logger.error(f'[ALERTAS] rollback al cerrar: {_fe}')
+            _lock.liberar()
 
 
 def _enviar_resumen_diario(fecha, pedidos, bultos, tareas_rep, jobs_ok, jobs_fallidos, anomalias=None):
@@ -958,7 +958,8 @@ def verificar_y_alertar_rutas_sin_liquidar(app=None):
 
     with ctx_app.app_context():
         from app.extensions import db as _db
-        _lock = _db.session.execute(_db.text('SELECT pg_try_advisory_lock(2007)')).scalar()
+        from app.utils.lock import LOCK_ALERTA_RUTAS_SIN_LIQUIDAR, tomar_lock_de_sesion
+        _lock = tomar_lock_de_sesion(LOCK_ALERTA_RUTAS_SIN_LIQUIDAR, 'alerta_rutas_sin_liquidar')
         if not _lock:
             logger.info('[ALERTAS] rutas_sin_liquidar omitida — otro worker ya la ejecuta')
             return
@@ -991,10 +992,9 @@ def verificar_y_alertar_rutas_sin_liquidar(app=None):
         finally:
             try:
                 _db.session.rollback()
-                _db.session.execute(_db.text('SELECT pg_advisory_unlock(2007)'))
-                _db.session.commit()
             except Exception as _fe:
-                logger.error(f'[ALERTAS] Error liberando advisory lock 2007: {_fe}')
+                logger.error(f'[ALERTAS] rollback al cerrar: {_fe}')
+            _lock.liberar()
 
 
 def _enviar_alerta_rutas_sin_liquidar(atrasadas: list, cruzan_mes: list):

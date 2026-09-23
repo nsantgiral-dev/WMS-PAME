@@ -393,12 +393,19 @@ class ABCService:
         from app.models.picking import TareaPicking
         from app.models.inventario import UbicacionProducto
 
+        # Antes del lock: lo que puede levantar sin haber tocado nada no tiene
+        # por qué hacerlo con el lock tomado y fuera del try/finally que lo suelta.
+        ventana = datetime.utcnow() - timedelta(days=WATCHDOG_VENTANA_DIAS)
+        sin_reabrir_desde = datetime.utcnow() - timedelta(days=politica.watchdog_dias_sin_reabrir())
+
         # [A3] Advisory lock por almacén — evita ejecuciones concurrentes (scheduler + API manual).
-        # Clave: 3000 + almacen_id (distinto de 2003 del scheduler general para no bloquear entre sí).
-        _lock_key = 3000 + almacen_id
-        _lock_acquired = db.session.execute(
-            db.text(f'SELECT pg_try_advisory_lock({_lock_key})')
-        ).scalar()
+        # Era 3000 + almacen_id, que para los almacenes 1, 2 y 3 caía sobre
+        # 3001/3002/3003 (códigos de LPN y de reposición, recepción por OC):
+        # el rango vive ahora en app/utils/lock.py, con los demás.
+        from app.utils.lock import RANGO_WATCHDOG_ABC, clave_en_rango, tomar_lock_de_sesion
+        _lock = tomar_lock_de_sesion(clave_en_rango(RANGO_WATCHDOG_ABC, almacen_id),
+                                     f'watchdog_abc:{almacen_id}')
+        _lock_acquired = _lock.tomado
         informe = {'overrides': [], 'omitidos_por_cupo': 0, 'omitidos_recien_contados': 0,
                    'omitidos_ya_activos': 0, 'excluidos_elegibilidad': {}, 'cupo': None}
         if not _lock_acquired:
@@ -406,8 +413,6 @@ class ABCService:
             informe['cupo'] = {'mensaje': 'otro proceso está corriendo el watchdog de este almacén'}
             return informe
 
-        ventana = datetime.utcnow() - timedelta(days=WATCHDOG_VENTANA_DIAS)
-        sin_reabrir_desde = datetime.utcnow() - timedelta(days=politica.watchdog_dias_sin_reabrir())
         overrides = informe['overrides']
 
         # [A1] Wrap everything in try/finally so advisory lock is always released,
@@ -574,11 +579,7 @@ class ABCService:
         finally:
             # [M2] Envolver en try propio: excepción aquí no debe reemplazar el resultado exitoso
             # del try ni del except principal (enmascararía overrides correctamente aplicados).
-            try:
-                db.session.execute(db.text(f'SELECT pg_advisory_unlock({_lock_key})'))
-                db.session.commit()
-            except Exception as _fe:
-                logger.error(f'[ABC WATCHDOG] Error liberando advisory lock {_lock_key}: {_fe}')
+            _lock.liberar()
 
         if overrides:
             logger.warning(
@@ -850,10 +851,9 @@ class ABCService:
                 # Advisory lock 2003 — garantiza que solo un worker Gunicorn ejecuta
                 # este job a la vez. Si el lock no está disponible (otro worker ganó),
                 # salir silenciosamente en vez de generar tareas duplicadas.
-                lock_acquired = _db.session.execute(
-                    _db.text('SELECT pg_try_advisory_lock(2003)')
-                ).scalar()
-                if not lock_acquired:
+                from app.utils.lock import LOCK_ABC_SCHEDULER, tomar_lock_de_sesion
+                _lock = tomar_lock_de_sesion(LOCK_ABC_SCHEDULER, 'abc_scheduler')
+                if not _lock:
                     logger.info('[ABC] Job omitido — otro worker ya lo está ejecutando')
                     return
                 try:
@@ -927,10 +927,9 @@ class ABCService:
                 finally:
                     try:
                         _db.session.rollback()
-                        _db.session.execute(_db.text('SELECT pg_advisory_unlock(2003)'))
-                        _db.session.commit()
                     except Exception as _fe:
-                        logger.error(f'[ABC] Error liberando advisory lock 2003: {_fe}')
+                        logger.error(f'[ABC] rollback al cerrar el job: {_fe}')
+                    _lock.liberar()
 
         def _prewarm_pre_turno(app):
             """
@@ -986,11 +985,11 @@ class ABCService:
             `return`. El job dejaba de correr, en silencio y sin error — las
             tareas zombi se quedaban EN_PROCESO para siempre.
             """
-            from app.utils.lock import advisory_lock
+            from app.utils.lock import LOCK_LIBERAR_ZOMBIS_CONTEO, advisory_lock
 
             with app.app_context():
                 try:
-                    with advisory_lock(2015, 'liberar_zombis') as tomado:
+                    with advisory_lock(LOCK_LIBERAR_ZOMBIS_CONTEO, 'liberar_zombis') as tomado:
                         if not tomado:
                             return
                         from app.services.conteo_service import ConteoService

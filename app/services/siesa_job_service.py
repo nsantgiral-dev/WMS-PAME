@@ -85,7 +85,6 @@ class DependenciaPendiente(Exception):
         self.espera_minutos = espera_minutos
 
 
-_ADVISORY_LOCK_DLQ = 2007  # evita thundering herd cuando Siesa se recupera y hay N workers
 
 
 def _procesar_jobs_pendientes_interno(_app):
@@ -100,13 +99,19 @@ def _procesar_jobs_pendientes_interno(_app):
         # Advisory lock: solo un worker procesa la DLQ a la vez.
         # Sin esto, cuando Siesa se recupera y hay 100 jobs acumulados, N workers
         # los atacan simultáneamente saturando la API de Connekta.
-        from sqlalchemy import text as _text
-        lock = db.session.execute(_text('SELECT pg_try_advisory_xact_lock(:k)'), {'k': _ADVISORY_LOCK_DLQ}).scalar()
-        if not lock:
-            logger.info('[DLQ] Otro worker ya procesa jobs — omitido')
-            return 0
-
-        return _run_dlq_jobs()
+        #
+        # De SESIÓN y en conexión propia, no `pg_try_advisory_xact_lock`: un
+        # lock de transacción se suelta en el primer commit, y `_run_dlq_jobs`
+        # comitea antes y después de cada job. Desde el segundo job en adelante
+        # la exclusión no existía — y con ella caían también los FOR UPDATE
+        # SKIP LOCKED de los jobs que quedaban en la lista, así que otro worker
+        # podía tomar los mismos jobs PENDIENTE que este iba a procesar.
+        from app.utils.lock import LOCK_DLQ, advisory_lock
+        with advisory_lock(LOCK_DLQ, 'dlq') as tomado:
+            if not tomado:
+                logger.info('[DLQ] Otro worker ya procesa jobs — omitido')
+                return 0
+            return _run_dlq_jobs()
 
 
 def _run_dlq_jobs():
@@ -2004,7 +2009,7 @@ def reintentar_job(job_id: int) -> dict:
 def disparar_dlq_inmediato(app=None):
     """
     Lanza procesar_jobs_pendientes() en un hilo daemon para procesar jobs recién encolados
-    sin bloquear el worker de Gunicorn. El advisory lock (pg_try_advisory_lock) garantiza que
+    sin bloquear el worker de Gunicorn. El advisory lock (`advisory_lock(LOCK_DLQ)`) garantiza que
     a lo sumo un hilo corre la DLQ simultáneamente — si el scheduler ya está corriendo, el hilo
     sale en <1ms sin hacer nada.
 

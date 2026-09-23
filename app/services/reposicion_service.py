@@ -506,19 +506,18 @@ def liberar_tareas_zombi(timeout_horas: int = 2):
 # ──────────────────────────────────────────────────────────────────────────────
 
 def _barrido_stock_picking(app):
-    from app.utils.lock import advisory_lock
+    from app.utils.lock import LOCK_REPOSICION_BARRIDO, advisory_lock
 
     with app.app_context():
         try:
-            # Lock 2016, NO 2015 — 2015 ya es de abc_service._liberar_zombis
-            # (ver app/utils/lock.py). Compartir número entre dos jobs
-            # DISTINTOS los vuelve mutuamente excluyentes sin que nadie lo
-            # haya querido: cuando los dos caen en la misma ventana de 30 min,
-            # uno de los dos se salta el ciclo en silencio — 'lock no
-            # disponible' se registra igual para 'otro worker corriendo esto
-            # mismo' que para 'un job completamente distinto lo tiene', y no
-            # hay forma de distinguirlos desde el log.
-            with advisory_lock(2016, 'reposicion_barrido') as tomado:
+            # Ni 2015 (abc_service._liberar_zombis) ni 2016 (barrido de avisos
+            # de flota): los dos se eligieron a mano y los dos chocaron.
+            # Compartir número entre dos jobs DISTINTOS los vuelve mutuamente
+            # excluyentes sin que nadie lo haya querido, y 'lock no disponible'
+            # se registra igual para 'otro worker corriendo esto mismo' que
+            # para 'un job completamente distinto lo tiene'. La clave sale del
+            # registro de app/utils/lock.py, que el test mantiene sin choques.
+            with advisory_lock(LOCK_REPOSICION_BARRIDO, 'reposicion_barrido') as tomado:
                 if not tomado:
                     logger.info('[REPOSICION_SCHEDULER] Lock no disponible — omitiendo ejecución concurrente')
                     return

@@ -611,13 +611,13 @@ def init_scheduler(app):
 
     def _job():
         with app.app_context():
-            from app.utils.lock import advisory_lock
+            from app.utils.lock import LOCK_FLOTA_PREVENTIVO, advisory_lock
 
-            # 2017 — libre; 2016 lo usa el barrido de avisos. Con
+            # Clave propia del registro de app/utils/lock.py. Con
             # `--workers=2` dos procesos disparan el mismo cron, y dos siembras
             # simultáneas chocan contra `uq_flota_plan_tarea`: la segunda
             # reventaría con un IntegrityError en el log, todos los días.
-            with advisory_lock(2017, 'flota_preventivo_siembra') as tomado:
+            with advisory_lock(LOCK_FLOTA_PREVENTIVO, 'flota_preventivo_siembra') as tomado:
                 if not tomado:
                     return
                 try:

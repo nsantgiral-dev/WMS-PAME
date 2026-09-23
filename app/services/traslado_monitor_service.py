@@ -76,13 +76,14 @@ def check_pending_transfers(app):
     Job horario: detecta traslados estancados y emite logs de alerta.
     Los críticos (> 24h) loggean como ERROR para que Railway los capture.
     """
+    from app.utils.lock import LOCK_MONITOR_TRASLADOS, LockDeSesion, tomar_lock_de_sesion
+
     with app.app_context():
+        _lock = LockDeSesion(LOCK_MONITOR_TRASLADOS)   # sin tomar: liberar() no hace nada
         try:
             # [A13] Advisory lock — evita ejecuciones concurrentes (scheduler + API manual)
-            _lock_acquired = db.session.execute(
-                db.text('SELECT pg_try_advisory_lock(2010)')
-            ).scalar()
-            if not _lock_acquired:
+            _lock = tomar_lock_de_sesion(LOCK_MONITOR_TRASLADOS, 'monitor_traslados')
+            if not _lock:
                 logger.info('[TRASLADO_MONITOR] Lock no disponible — omitiendo ejecución concurrente')
                 return
 
@@ -110,11 +111,7 @@ def check_pending_transfers(app):
         except Exception as e:
             logger.error(f'[TRASLADO_MONITOR] Error en check: {e}')
         finally:
-            try:
-                db.session.execute(db.text('SELECT pg_advisory_unlock(2010)'))
-                db.session.commit()
-            except Exception:
-                pass
+            _lock.liberar()
 
 
 def get_resumen_alertas():

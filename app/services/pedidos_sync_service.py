@@ -39,18 +39,16 @@ def _run_sync(app):
 
     with app.app_context():
         # Advisory lock de PostgreSQL — protege contra ejecución simultánea entre workers
-        from sqlalchemy import text as _text
+        from app.utils.lock import LOCK_SYNC_PEDIDOS, tomar_lock_de_sesion
         # [M6] Wrap lock acquisition in try/except — a dead connection here would
         # leave _sync_estado['en_curso']=True permanently, blocking all future syncs.
         try:
-            lock_adquirido = db.session.execute(
-                _text('SELECT pg_try_advisory_lock(:key)'), {'key': 2008}
-            ).scalar()
+            _lock = tomar_lock_de_sesion(LOCK_SYNC_PEDIDOS, 'sync_pedidos')
         except Exception as _e_lock:
             logger.error(f'[PEDIDOS_SYNC] Error adquiriendo advisory lock: {_e_lock}')
             _sync_estado['en_curso'] = False
             return
-        if not lock_adquirido:
+        if not _lock:
             logger.warning('[PEDIDOS_SYNC] Otro worker ya ejecuta — omitido')
             _sync_estado['en_curso'] = False
             return
@@ -323,12 +321,7 @@ def _run_sync(app):
             _sync_estado['ultimo_error'] = str(e)
         finally:
             _sync_estado['en_curso'] = False
-            if lock_adquirido:
-                try:
-                    db.session.execute(_text('SELECT pg_advisory_unlock(:key)'), {'key': 2008})
-                    db.session.commit()
-                except Exception as _e:
-                    logger.error('[PEDIDOS_SYNC] Error liberando advisory lock: %s', _e)
+            _lock.liberar()
 
 
 def iniciar_sync_background(app, forzar=False):
