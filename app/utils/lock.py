@@ -199,6 +199,12 @@ class LockDeSesion:
                     '[LOCK] pg_advisory_unlock(%s) devolvió false en la conexión '
                     'que lo tomó — se cierra la conexión para soltarlo', self.nombre)
                 _invalidar(conn)
+            else:
+                # La conexión es de este lock y de nadie más: soltar todo lo
+                # de la sesión no puede tocar un lock ajeno, y garantiza que
+                # vuelva limpia al pool aunque se haya tomado dos veces
+                # (reentrante: un unlock baja el contador, no lo pone en cero).
+                conn.execute(text('SELECT pg_advisory_unlock_all()'))
         except Exception as e:
             # Ruidoso y con salida: cerrar la sesión de PostgreSQL suelta sus
             # locks. Lo que no puede pasar es que vuelva al pool tomada.
