@@ -2928,3 +2928,48 @@ Otros hallazgos de la misma prueba:
 - El STS por 173076 no toca `TRA1`: su bodega de entrada es el destino.
 - Quedan RIT sueltas en Siesa QA sin cerrar: `003-RIT-148` (ST-20260921-0471) y
   `003-RIT-149` (ST-20260921-574D), ambas «Comprometido». Cerrar a mano.
+
+---
+
+## Conteo: ninguna cadena queda sin salida (2026-09-23)
+
+La clase: **una operación sobre un miembro de la cadena CC1 → CC2 → CC3 la deja
+sin salida.** La cadena avanza por propagación (el hijo que resuelve mueve a la
+raíz), así que tocar un eslabón sin mirar los otros deja una raíz en
+SEGUNDO/TERCER_CONTEO esperando algo que no va a llegar —y como ese estado está
+en `CADENA_EN_CURSO`, el generador no vuelve a programar el hueco **nunca**—, o
+un eslabón vivo contando para una raíz cerrada. Trinquete:
+`tests/test_conteo_cadena_con_salida.py` (36 tests, 16 mutaciones, las 16 rojas).
+
+| Operación | Qué dejaba | Ahora |
+|---|---|---|
+| Cancelar un CC2/CC3 | La raíz en SEGUNDO/TERCER_CONTEO para siempre | `ConteoService.cancelar_cadena`: **cancelar cualquier miembro cancela todo lo vivo de la cadena** (+ la raíz en DESCUADRE), con motivo. Nunca con AJUSTANDO (puede haber llegado, Regla 3) |
+| Editar la raíz hasta MATCH | El CC2/CC3 vivo contando para nada | `corregir_cantidad` lo rechaza (409): omitir o cancelar |
+| Descartar ajustes fallidos | Una sesión AJUSTANDO con `siesa_triggered` **sin job**: el barrido la ignora, cancelar y editar rechazan AJUSTANDO | Su job no se descarta: queda FALLIDO, y «Reintentar» la cierra como AJUSTADO sin reenviar |
+| Omitir, reabrir, zombis, rezago | — (sin salidas trabadas) | Omitir usa la misma definición de «vivo» (`descendientes_vivos`) |
+
+`CNT-09` (BLOQUEA) ve la forma rota venga de donde venga: raíz esperando un
+eslabón que no está vivo, o eslabón vivo bajo una raíz que no lo espera.
+
+**Los zombis se liberan por inactividad, no por antigüedad.**
+`ultima_actividad_at` (m032ciclo) la marcan el escaneo y el total tecleado; el
+barrido mira `coalesce(ultima_actividad_at, fecha_inicio)` > 2 h. Toda puerta
+que devuelve un conteo a la cola —zombi, conteo forzado, otra bodega, CC1
+cedido al CC2, bloqueado reabierto— pasa por `devolver_al_pool`: lo parcial va
+a `conteos_descartados` con su `motivo` y la sesión vuelve **desde cero** (el
+despachador de otra bodega no borraba lo contado: el siguiente heredaba el
+parcial ajeno en un conteo ciego). Trinquete AST: nadie más borra
+`cantidad_fisica` ni pone una sesión PENDIENTE sin dueño. Las métricas de
+recuento solo cuentan los descartes `MOVIMIENTO_SIESA` (sin motivo = anterior,
+y entonces es de movimiento). **Declarado:** un conteo pospuesto por un
+picking de más de 2 h sin tocarlo se libera — lo contado queda en el rastro.
+
+**Recogido sin despachar tiene salida con fecha.** `PackingService.cancelar` no
+reingresa inventario ni registra el regreso, así que la guarda de mercancía en
+proceso trataba el empaque cancelado sin remisión (y el picking nunca empacado)
+como vivo para siempre. El líder declara el regreso en Inventario Cíclico →
+«Recogido sin despachar» (`PickingService.declarar_devuelto_al_estante`,
+`TareaPicking.devuelto_estante_at`) y la guarda lo juzga como las otras salidas:
+cubre los conteos **posteriores**, no los de antes. **No mueve inventario**: en
+`SIESA-GENERAL` la sincronización con Siesa repone lo que el picking descontó;
+en un hueco físico queda a cargo del líder.
