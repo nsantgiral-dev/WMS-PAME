@@ -2635,6 +2635,47 @@ junta políticas que ya existían y las ordena como las atiende un jefe de bodeg
 
 Trinquete: `tests/test_tablero_lider_conteo.py` (10 mutaciones, las 10 rojas).
 
+## Conteo: tolerancias y topes (2026-09-23)
+
+Toda diferencia ≠ 0 mandaba a un segundo conteo de otra persona (una unidad
+suelta costaba dos conteos y la deriva chica no se corregía nunca), CC1 == CC2
+ajustaba solo **sin tope de valor**, y la aprobación era una regla de la RUTA.
+Configuración en `conteo_politica` (y solo ahí: `TestUnSoloSitioLeeLaPolitica`
+cubre las cinco variables nuevas). Trinquete: `tests/test_conteo_tolerancia.py`
+(70 tests, 23 mutaciones, las 23 rojas).
+
+| Variable | Defecto | Qué es |
+|---|---|---|
+| `CONTEO_TOLERANCIA_UNIDADES` | `{"A":0,"B":1,"C":1}` | Unidades aceptables por clase |
+| `CONTEO_TOLERANCIA_PCT` | `{"A":0.5,"B":2,"C":5}` | % del teórico aceptable por clase |
+| `CONTEO_TOLERANCIA_TOPE_VALOR` | `20000` | Una diferencia que vale más no es «chica» |
+| `CONTEO_TOPE_AUTOAJUSTE` | `100000` | Ningún ajuste AUTOMÁTICO por encima, ni sin costo |
+| `CONTEO_TOPE_APROBACION_JEFE` | `0` | Hasta cuánto firma un jefe de almacén (0 = nada, lo de antes) |
+
+| Regla | Dónde vive |
+|---|---|
+| **Dentro** si `\|dif\| ≤ max(und, pct × teórico)` **y** `\|dif\| × costo ≤ tope`. Sin costo: solo unidades, declarado. Manual, auditoría y sin clase → regla **A** (el manual nace con clase `C` por defecto: la clase sola no alcanza) | `conteo_politica.evaluar_tolerancia` |
+| **Solo el CC1.** Dentro → se acepta y se ajusta sin CC2 (`DENTRO_TOLERANCIA`, `ajuste_por_tolerancia`), por `motivo_bloqueo_ajuste` como siempre. Fuera → `RECONTAR_TU`: el mismo operario, **a ciegas** (la respuesta es `resultado/mensaje/sesion_id`, nada más), una vez por cadena —ni bloquear y reabrir da otro—; fuera otra vez → CC2 como siempre | `registrar_conteo`, `_pedir_recuento_propio` |
+| **Tope de todo automático** (tolerancia y CC1 == CC2): queda en DESCUADRE con `no_sale_solo` visible. La guarda está en `_encolar_ajuste_fisico` cuando no hay aprobador; un trinquete con inventario impide encolar `AJUSTE_CONTEO` en otro sitio (hoy solo las dos recuperaciones de un ajuste ya decidido) | `ConteoService.motivo_no_sale_solo` |
+| **Aprobación por valor**: supervisor/admin todo; jefe hasta su tope; sin costo el jefe no firma. La ruta solo traduce el `PermissionError` a 403 | `ConteoService.motivo_no_puede_aprobar`, en `confirmar_ajuste` |
+| **Máximo 2 `RECONTAR` por movimiento**: al tercero `BLOQUEADO` con `MOVIMIENTO_CONTINUO` (cola del líder). Reabrir escribe un evento `REABIERTO` en `conteos_descartados` y devuelve los dos recuentos | `_pedir_recuento` |
+
+**Métricas.** Veredicto nuevo `AJUSTE_EN_TOLERANCIA` (error para la exactitud
+EXACTA, que no cambió). `exactitud.con_tolerancia` es el IRA ASCM —acierto =
+primer conteo dentro— leído de `tolerancia_primer_conteo` (m032tol), que guarda
+lo que dijo la tolerancia **vigente al contar**: recalcularla con la
+configuración de hoy cambiaría el pasado. Cadenas anteriores → `excluidos`.
+Los descartes llevan `motivo`: los recuentos propios no inflan la tasa de
+«ventas durante el conteo». **CNT-04** exime solo `ajuste_por_tolerancia` sin
+ninguna fila hija (la rama de tolerancia nunca crea un CC2; `omitir-segundo`
+con la bandera sigue marcándose).
+
+**Pendientes declarados:** `ajustar_desde_auditoria_picking` (auditoría de
+picking, que la ruta permite a `jefe_almacen`) ajusta cualquier monto sin la
+regla de aprobación por valor — tocarlo cambia picking, queda para decisión;
+la respuesta de `RECONTAR` por movimiento sigue trayendo los números de Siesa
+(`movimiento`), que un test existente fija.
+
 ---
 
 ## Conteo cíclico real (sobrante/faltante) + Conteo Definitivo (CC3) hecho por supervisor (2026-09-04)
