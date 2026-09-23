@@ -1311,8 +1311,8 @@ class ConteoService:
             else:
                 detalle = (f'recepción {r.codigo} (OC {r.numero_oc_siesa}) recibida '
                            f'y sin entrada en Siesa')
-            if sin_fecha and r.estado != EstadoRecepcion.CONFIRMADA:
-                detalle += ' (sin fecha de inicio registrada)'
+            if r.fecha_inicio is None and r.fecha_confirmacion is None:
+                detalle += ' (sin fecha de recepción registrada)'
             hallazgos.append({
                 'producto_id': pid, 'clase': 'RECEPCION', 'documento': r.codigo,
                 'detalle': detalle,
