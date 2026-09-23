@@ -65,6 +65,9 @@ def _crear_discordancia(mundo):
     cc1 = SesionConteo.query.filter_by(codigo=creado['codigos'][0]).first()
     ConteoService.obtener_tarea_operario(cc1.id, mundo['picker_a'].id)
     r1 = ConteoService.registrar_conteo(cc1.id, mundo['picker_a'].id, 90)
+    # Fuera de tolerancia: el mismo picker recuenta (a ciegas) antes del CC2.
+    assert r1['resultado'] == 'RECONTAR_TU'
+    r1 = ConteoService.registrar_conteo(cc1.id, mundo['picker_a'].id, 90)
     assert r1['resultado'] == 'SEGUNDO_CONTEO'
     cc2_id = r1['segundo_conteo_id']
     ConteoService.obtener_tarea_operario(cc2_id, mundo['picker_b'].id)

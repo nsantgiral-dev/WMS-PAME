@@ -92,6 +92,32 @@ class TestElDetectorNoEstaCiego:
         db.session.commit()
         assert _res('CNT-04')['total'] == 1
 
+    def test_dentro_de_tolerancia_no_avisa(self, db, sesion):
+        """La excepción decidida (2026-09-23): una diferencia chica aceptada
+        por tolerancia se ajusta sin segundo conteo. No es el salto que CNT-04
+        vigila."""
+        sesion.estado = 'AJUSTADO'
+        sesion.ajuste_por_tolerancia = True
+        db.session.commit()
+        assert _res('CNT-04')['total'] == 0
+
+    def test_la_bandera_de_tolerancia_no_tapa_el_salto(self, db, sesion, almacen,
+                                                      producto, ub_picking):
+        """La rama de tolerancia nunca crea un CC2. Una raíz con hijo y la
+        bandera puesta no salió por esa rama: `omitir-segundo` sigue viéndose."""
+        import uuid
+
+        from app.models.conteo import SesionConteo
+        sesion.estado = 'AJUSTADO'
+        sesion.ajuste_por_tolerancia = True
+        db.session.add(SesionConteo(
+            codigo=f'CC2-{uuid.uuid4().hex[:6]}', tipo='DIARIO_ABC',
+            ubicacion_id=ub_picking.id, almacen_id=almacen.id,
+            producto_id=producto.id, estado='CANCELADO',
+            es_segundo_conteo=True, sesion_origen_id=sesion.id))
+        db.session.commit()
+        assert _res('CNT-04')['total'] == 1
+
     def test_con_segundo_conteo_no_avisa(self, db, sesion, almacen, producto, ub_picking):
         import uuid
 

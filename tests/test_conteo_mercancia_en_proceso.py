@@ -38,7 +38,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from sqlalchemy import event
 
-from tests.test_conteo_teorico_pos import SKU, _jobs, siesa, tienda  # noqa: F401 (fixtures)
+from tests.test_conteo_teorico_pos import SKU, _jobs, contar_primero, siesa, tienda  # noqa: F401 (fixtures)
 
 
 def _svc():
@@ -65,7 +65,7 @@ def _contar_cc1_cc2(tienda, siesa, fisico, existencia, pos=0):
     creado = svc.crear_conteo_manual(tienda['almacen'].id, SKU)
     cc1 = SesionConteo.query.filter_by(codigo=creado['codigos'][0]).one().id
     svc.obtener_tarea_operario(cc1, tienda['a'].id)
-    r1 = svc.registrar_conteo(cc1, tienda['a'].id, fisico)
+    r1 = contar_primero(cc1, tienda['a'].id, fisico)
     assert r1['resultado'] == 'SEGUNDO_CONTEO', r1
     svc.obtener_tarea_operario(r1['segundo_conteo_id'], tienda['b'].id)
     r2 = svc.registrar_conteo(r1['segundo_conteo_id'], tienda['b'].id, fisico)

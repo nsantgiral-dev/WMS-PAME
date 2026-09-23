@@ -415,11 +415,20 @@ class TestRegistrarConteo:
     def test_registrar_conteo_descuadre(
         self, db, almacen, producto, ub_picking, inv_picking, usuario, sesion_pendiente,
     ):
-        """Physical count != WMS stock → SEGUNDO_CONTEO generated."""
+        """Physical count != WMS stock, fuera de tolerancia → el MISMO operario
+        recuenta a ciegas (RECONTAR_TU); si sigue fuera → SEGUNDO_CONTEO."""
         from app.services.conteo_service import ConteoService
         from app.models.conteo import SesionConteo
 
         # Count 25 but WMS says 30 → difference of -5
+        result = ConteoService.registrar_conteo(
+            sesion_id=sesion_pendiente.id,
+            operario_id=usuario.id,
+            cantidad_fisica=25,
+        )
+        assert result['resultado'] == 'RECONTAR_TU'
+        # A ciegas: ni el teórico ni la diferencia viajan al operario.
+        assert set(result) == {'resultado', 'mensaje', 'sesion_id'}
         result = ConteoService.registrar_conteo(
             sesion_id=sesion_pendiente.id,
             operario_id=usuario.id,
@@ -462,15 +471,17 @@ class TestRegistrarConteo:
     def test_registrar_conteo_descuadre_with_mocked_siesa(
         self, db, almacen, producto, ub_picking, inv_picking, usuario, sesion_pendiente,
     ):
-        """When Siesa says 100 but operator counts 90 → SEGUNDO_CONTEO."""
+        """When Siesa says 100 but operator counts 90 (twice: the own recount)
+        → SEGUNDO_CONTEO."""
         from app.services.conteo_service import ConteoService
 
         with patch.object(ConteoService, 'consultar_foto_siesa', return_value=_foto(100.0)):
-            result = ConteoService.registrar_conteo(
-                sesion_id=sesion_pendiente.id,
-                operario_id=usuario.id,
-                cantidad_fisica=90,
-            )
+            for _ in range(2):
+                result = ConteoService.registrar_conteo(
+                    sesion_id=sesion_pendiente.id,
+                    operario_id=usuario.id,
+                    cantidad_fisica=90,
+                )
 
         assert result['resultado'] == 'SEGUNDO_CONTEO'
         db.session.refresh(sesion_pendiente)
@@ -512,12 +523,13 @@ class TestCancelarConteo:
         result = ConteoService.crear_conteo_manual(almacen.id, producto.codigo)
         padre = SesionConteo.query.filter_by(codigo=result['codigos'][0]).first()
 
-        # Register a mismatch to create CC2
-        padre_result = ConteoService.registrar_conteo(
-            sesion_id=padre.id,
-            operario_id=usuario.id,
-            cantidad_fisica=25,
-        )
+        # Register a mismatch (and its own recount) to create CC2
+        for _ in range(2):
+            padre_result = ConteoService.registrar_conteo(
+                sesion_id=padre.id,
+                operario_id=usuario.id,
+                cantidad_fisica=25,
+            )
         assert padre_result['resultado'] == 'SEGUNDO_CONTEO'
         cc2 = SesionConteo.query.get(padre_result['segundo_conteo_id'])
 

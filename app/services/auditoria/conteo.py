@@ -180,6 +180,17 @@ def un_descuadre_se_cuenta_dos_veces(ctx=None):
         # El guard medía presencia de fila cuando la propiedad es *hubo una
         # segunda cuenta*, y estaba en verde sobre el único caso que le importa.
         from app.models.conteo import SesionConteo
+        # **La única excepción decidida (2026-09-23): dentro de tolerancia.**
+        # Una diferencia chica —tolerancia de su clase y tope en pesos— se
+        # acepta con el primer conteo (o su único recuento propio) y se ajusta
+        # sin segundo conteo: es la regla, no un salto. Se reconoce por
+        # `ajuste_por_tolerancia`, que SOLO escribe esa rama de
+        # `registrar_conteo`, y además sin NINGUNA fila hija: esa rama nunca
+        # crea un CC2, así que una raíz con hijo (cancelado por
+        # `omitir-segundo`, p. ej.) sigue marcándose aunque traiga la bandera.
+        if s.ajuste_por_tolerancia and not SesionConteo.query.filter(
+                SesionConteo.sesion_origen_id == s.id).first():
+            continue
         hay = SesionConteo.query.filter(
             SesionConteo.sesion_origen_id == s.id,
             SesionConteo.cantidad_fisica.isnot(None),

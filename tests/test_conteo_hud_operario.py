@@ -119,6 +119,12 @@ class TestUnConteoNoSeCierraSinCantidadDeclarada:
     def test_cero_confirmado_es_un_dato(self, db, tienda, conteo):
         r = _mob().confirmar_tarea(tienda['a'].id, conteo, 'CONTEO',
                                    total_contado=0, cero_confirmado=True)
+        # Un cero contra un teórico de 10 está fuera de tolerancia: el mismo
+        # operario recuenta. El cero quedó registrado como lo que se contó.
+        assert r['resultado'] == 'RECONTAR_TU'
+        assert _sesion(db, conteo).lista_conteos_descartados()[-1]['cantidad_fisica'] == 0
+        r = _mob().confirmar_tarea(tienda['a'].id, conteo, 'CONTEO',
+                                   total_contado=0, cero_confirmado=True)
         assert r['resultado'] == 'SEGUNDO_CONTEO'
         assert _sesion(db, conteo).cantidad_fisica == 0
 
@@ -228,7 +234,10 @@ class TestNoLoEncontreNoEsUnCero:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _cc2_bloqueado(db, tienda, conteo):
-    """CC1 = 7 (≠ 10) → CC2 para `b`, que no lo encuentra."""
+    """CC1 = 7 (≠ 10, fuera de tolerancia: `a` recuenta 7) → CC2 para `b`,
+    que no lo encuentra."""
+    r1 = _mob().confirmar_tarea(tienda['a'].id, conteo, 'CONTEO', total_contado=7)
+    assert r1['resultado'] == 'RECONTAR_TU', r1
     r1 = _mob().confirmar_tarea(tienda['a'].id, conteo, 'CONTEO', total_contado=7)
     cc2 = r1['segundo_conteo_id']
     _svc().obtener_tarea_operario(cc2, tienda['b'].id)

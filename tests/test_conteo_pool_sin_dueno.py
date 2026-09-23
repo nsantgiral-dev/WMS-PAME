@@ -36,7 +36,7 @@ import pytest
 from flask_jwt_extended import create_access_token
 from werkzeug.security import generate_password_hash
 
-from tests.test_conteo_teorico_pos import SKU, _jobs, siesa, tienda  # noqa: F401 (fixtures)
+from tests.test_conteo_teorico_pos import SKU, _jobs, contar_primero, siesa, tienda  # noqa: F401 (fixtures)
 
 RAIZ = pathlib.Path(__file__).resolve().parents[1]
 
@@ -58,7 +58,7 @@ def _cc1(tienda, operario, fisico):
     assert creado['codigos'], creado
     cc1 = SesionConteo.query.filter_by(codigo=creado['codigos'][0]).one()
     _svc().obtener_tarea_operario(cc1.id, operario.id)
-    return cc1.id, _svc().registrar_conteo(cc1.id, operario.id, fisico)
+    return cc1.id, contar_primero(cc1.id, operario.id, fisico)
 
 
 def _contar(sid, operario, fisico):

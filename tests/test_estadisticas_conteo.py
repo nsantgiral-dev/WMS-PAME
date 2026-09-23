@@ -32,7 +32,7 @@ from datetime import date, datetime, timedelta
 import pytest
 from flask_jwt_extended import create_access_token
 
-from tests.test_conteo_teorico_pos import SKU, siesa, tienda  # noqa: F401 (fixtures)
+from tests.test_conteo_teorico_pos import SKU, contar_primero, siesa, tienda  # noqa: F401 (fixtures)
 
 RAIZ = pathlib.Path(__file__).resolve().parents[1]
 METRICAS = RAIZ / 'app' / 'services' / 'metricas' / 'conteo.py'
@@ -100,6 +100,14 @@ def _abrir_y_contar(sid, actor, fisico):
     return _svc().registrar_conteo(sid, actor.id, fisico)
 
 
+def _abrir_y_contar_cc1(sid, actor, fisico):
+    """El primer conteo: fuera de tolerancia el operario recuenta lo mismo
+    (`contar_primero`). Una diferencia de 1 sobre 10 en un conteo manual cae
+    fuera (regla A)."""
+    _svc().obtener_tarea_operario(sid, actor.id)
+    return contar_primero(sid, actor.id, fisico)
+
+
 def _get(db, sid):
     from app.models.conteo import SesionConteo
     db.session.expire_all()
@@ -139,13 +147,13 @@ def dorado(app, db, client, siesa, tienda, monkeypatch):
     # 2 · OK_CC2
     _poner(siesa, 10)
     ids['ok_cc2'] = cc1 = _nuevo_cc1(tienda, next(huecos))
-    r = _abrir_y_contar(cc1, a, 9)
+    r = _abrir_y_contar_cc1(cc1, a, 9)
     assert _abrir_y_contar(r['segundo_conteo_id'], b, 10)['resultado'] == 'MATCH'
 
     # 3 · OK_CC3 — CC1 −1, CC2 −2, el definitivo del supervisor cuadra.
     _poner(siesa, 10)
     ids['ok_cc3'] = cc1 = _nuevo_cc1(tienda, next(huecos))
-    r = _abrir_y_contar(cc1, a, 9)
+    r = _abrir_y_contar_cc1(cc1, a, 9)
     r = _abrir_y_contar(r['segundo_conteo_id'], b, 8)
     assert r['resultado'] == 'TERCER_CONTEO'
     assert _abrir_y_contar(r['tercer_conteo_id'], sup, 10)['resultado'] == 'MATCH'
@@ -154,7 +162,7 @@ def dorado(app, db, client, siesa, tienda, monkeypatch):
     #     El costo cambia entre CC1 y CC2: la raíz se queda con el de CC2.
     _poner(siesa, 10, costo=1400)
     ids['error_auto'] = cc1 = _nuevo_cc1(tienda, next(huecos))
-    r = _abrir_y_contar(cc1, a, 9)
+    r = _abrir_y_contar_cc1(cc1, a, 9)
     _poner(siesa, 10, costo=1500)
     r2 = _abrir_y_contar(r['segundo_conteo_id'], b, 9)
     assert r2['auto_encolado'] is True, r2
@@ -165,7 +173,7 @@ def dorado(app, db, client, siesa, tienda, monkeypatch):
     # 5 · ERROR_CC3 aprobado por el supervisor (queda AJUSTANDO, en vuelo).
     _poner(siesa, 10, costo=1000)
     ids['error_cc3'] = cc1 = _nuevo_cc1(tienda, next(huecos))
-    r = _abrir_y_contar(cc1, a, 9)
+    r = _abrir_y_contar_cc1(cc1, a, 9)
     r = _abrir_y_contar(r['segundo_conteo_id'], b, 8)
     _poner(siesa, 10, costo=2000)
     r3 = _abrir_y_contar(r['tercer_conteo_id'], sup, 12)
@@ -176,7 +184,7 @@ def dorado(app, db, client, siesa, tienda, monkeypatch):
     # 6 · ERROR_CONFIRMADO bloqueado: salidas sin confirmar que no son POS.
     _poner(siesa, 10, pos=2, salida_sin_conf=5)
     ids['error_bloqueado'] = cc1 = _nuevo_cc1(tienda, next(huecos))
-    r = _abrir_y_contar(cc1, a, 9)
+    r = _abrir_y_contar_cc1(cc1, a, 9)
     r2 = _abrir_y_contar(r['segundo_conteo_id'], b, 9)
     assert r2['ajuste_bloqueado'], r2
     assert _get(db, cc1).estado == 'DESCUADRE'
@@ -184,7 +192,7 @@ def dorado(app, db, client, siesa, tienda, monkeypatch):
     # 7 · Omitida: el supervisor salta el CC2.
     _poner(siesa, 10)
     ids['omitida'] = cc1 = _nuevo_cc1(tienda, next(huecos))
-    _abrir_y_contar(cc1, a, 9)
+    _abrir_y_contar_cc1(cc1, a, 9)
     resp = client.post(f'/api/conteo/{cc1}/omitir-segundo', headers=_tok(app, sup))
     assert resp.status_code == 200, resp.get_json()
 
@@ -232,6 +240,7 @@ class TestMundoDorado:
         assert v['cerradas'] == 6
         assert v['skus_cerrados'] == 6
         assert v['por_veredicto'] == {'OK_CC1': 1, 'OK_CC2': 1, 'OK_CC3': 1,
+                                      'AJUSTE_EN_TOLERANCIA': 0,
                                       'ERROR_AUDITORIA': 0, 'ERROR_CC3': 1,
                                       'ERROR_CONFIRMADO': 2}
         assert (v['a_cc2']['numerador'], v['a_cc2']['denominador']) == (5, 6)
@@ -239,9 +248,13 @@ class TestMundoDorado:
         assert v['omitidas'] == 1
         assert v['sin_veredicto'] == {'cancelada': 1, 'omitida': 1, 'pendiente': 1}
         assert v['por_tipo'] == {'MANUAL': {'iniciadas': 9, 'cerradas': 6}}
-        # Recuentos: 1 descartado; intentos medibles = 14 conteos confirmados
-        # con foto de inicio (raíces incluidas: la raíz ES el CC1) + el descarte.
-        assert (v['recuentos']['numerador'], v['recuentos']['denominador']) == (1, 15)
+        # Recuentos por movimiento: 1 descartado; intentos medibles = 14
+        # conteos confirmados con foto de inicio (raíces incluidas: la raíz ES
+        # el CC1) + el descarte + los 6 recuentos propios por tolerancia (los
+        # seis CC1 con diferencia: un intento medido que NO es una venta
+        # durante el conteo, así que va al denominador y no al numerador).
+        assert (v['recuentos']['numerador'], v['recuentos']['denominador']) == (1, 21)
+        assert v['recuentos_propios'] == 6
         (semana,) = v['por_semana']
         assert (semana['cerradas'], semana['ok'], semana['error'],
                 semana['ajustes'], semana['unidades_ajustadas']) == (6, 3, 3, 2, 3)
@@ -256,8 +269,12 @@ class TestMundoDorado:
         assert a['valor'] == {'etiqueta': _m().ETIQUETA_VALOR, 'ent': 4000.0,
                               'sal': 1500.0, 'neto': 2500.0,
                               'ajustes_valorizados': 2, 'ajustes_sin_costo': 0}
+        # La aprobable es la omitida: no la frena ni el tope ni el costo, la
+        # frena el proceso (el supervisor saltó el CC2 y firma él).
         assert a['bloqueados_hoy'] == {'total': 1, 'por_motivo': {'SALIDAS_NO_POS': 1},
-                                       'descuadres_aprobables': 1}
+                                       'descuadres_aprobables': 1,
+                                       'aprobables_por_motivo': {'FIRMA_DEL_PROCESO': 1}}
+        assert a['por_tolerancia'] == 0
         assert a['jobs_fallidos_hoy'] == 0
         assert a['excluidos'] == {}
 
@@ -267,6 +284,17 @@ class TestMundoDorado:
         assert (g['numerador'], g['denominador'], g['porcentaje']) == (3, 6, None)
         assert '< 30' in g['sin_porcentaje_por']
         assert e['excluidos'] == {}
+        # Con tolerancia (ASCM): acierto = el PRIMER conteo quedó dentro. Solo
+        # el OK_CC1 (su primer conteo válido fue exacto; el contaminado por la
+        # venta no cuenta como conteo). Los otros cinco empezaron fuera, y los
+        # cinco necesitaron a otra persona.
+        t = e['con_tolerancia']
+        gt = t['por_clase']['C']['OTROS']
+        assert (gt['numerador'], gt['denominador'], gt['porcentaje']) == (1, 6, None)
+        assert t['primer_conteo_fuera'] == {'resuelto_por_recuento_propio': 0,
+                                            'a_segundo_conteo': 5}
+        assert t['excluidos'] == {}
+        assert t['tolerancia_vigente']['tope_autoajuste'] == 100000
 
     def test_productos_problema(self, db, dorado):
         p = _reporte()['productos_problema']
@@ -525,7 +553,7 @@ class TestCostoDeLaFoto:
     def test_la_raiz_hereda_el_costo_del_cc2(self, db, siesa, tienda):
         _poner(siesa, 10, costo=100)
         cc1 = _nuevo_cc1(tienda)
-        r = _abrir_y_contar(cc1, tienda['a'], 9)
+        r = _abrir_y_contar_cc1(cc1, tienda['a'], 9)
         assert float(_get(db, cc1).costo_prom_uni_siesa) == 100
         _poner(siesa, 10, costo=250)
         _abrir_y_contar(r['segundo_conteo_id'], tienda['b'], 9)
@@ -534,7 +562,7 @@ class TestCostoDeLaFoto:
     def test_la_raiz_hereda_el_costo_del_cc3(self, db, siesa, tienda):
         _poner(siesa, 10, costo=100)
         cc1 = _nuevo_cc1(tienda)
-        r = _abrir_y_contar(cc1, tienda['a'], 9)
+        r = _abrir_y_contar_cc1(cc1, tienda['a'], 9)
         r = _abrir_y_contar(r['segundo_conteo_id'], tienda['b'], 8)
         _poner(siesa, 10, costo=777)
         _abrir_y_contar(r['tercer_conteo_id'], tienda['supervisor'], 12)

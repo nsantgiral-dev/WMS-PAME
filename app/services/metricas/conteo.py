@@ -58,10 +58,16 @@ OK_CC3 = 'OK_CC3'                      # CC1 ≠ CC2, el definitivo cuadró
 ERROR_CONFIRMADO = 'ERROR_CONFIRMADO'  # CC2 confirmó la diferencia de CC1
 ERROR_CC3 = 'ERROR_CC3'                # el definitivo encontró diferencia
 ERROR_AUDITORIA = 'ERROR_AUDITORIA'    # auditoría de picking: un conteo de supervisor
+#: El primer conteo (o su único recuento propio) quedó dentro de tolerancia: se
+#: aceptó sin segundo conteo y la diferencia chica se ajustó (2026-09-23). Para
+#: la exactitud EXACTA es un error —el registro no cuadraba—; la exactitud con
+#: tolerancia lo juzga aparte, por el primer conteo (`_exactitud`).
+AJUSTE_EN_TOLERANCIA = 'AJUSTE_EN_TOLERANCIA'
 SIN_VEREDICTO = 'SIN_VEREDICTO'
 
 VEREDICTOS_OK = frozenset({OK_CC1, OK_CC2, OK_CC3})
-VEREDICTOS_ERROR = frozenset({ERROR_CONFIRMADO, ERROR_CC3, ERROR_AUDITORIA})
+VEREDICTOS_ERROR = frozenset({ERROR_CONFIRMADO, ERROR_CC3, ERROR_AUDITORIA,
+                              AJUSTE_EN_TOLERANCIA})
 VEREDICTOS = tuple(sorted(VEREDICTOS_OK)) + tuple(sorted(VEREDICTOS_ERROR)) + (SIN_VEREDICTO,)
 
 #: Por debajo de este n no se publica porcentaje de exactitud. Treinta no es un
@@ -111,6 +117,11 @@ def veredicto_cadena(raiz: SesionConteo) -> str:
       DESCUADRE, AJUSTANDO o AJUSTADO según el bloqueo — el veredicto no
       depende de eso: el error se encontró aunque el ajuste espere.
     - **ERROR_CC3** — nieto DESCUADRE.
+    - **AJUSTE_EN_TOLERANCIA** — raíz sin hijo con `ajuste_por_tolerancia`, en
+      DESCUADRE/AJUSTANDO/AJUSTADO: el primer conteo (o su recuento propio)
+      quedó dentro de tolerancia y se aceptó sin segundo conteo (2026-09-23).
+      Va antes que ERROR_AUDITORIA: una auditoría por excepción contada en el
+      HUD también pasa por la tolerancia, y la marca la escribe solo esa rama.
     - **ERROR_AUDITORIA** — raíz con `tarea_picking_id`, diferencia ≠ 0 y sin
       hijo, en DESCUADRE/AJUSTANDO/AJUSTADO. Es `ajustar_desde_auditoria_picking`:
       un supervisor cuenta y resuelve en un gesto, sin double-blind — el mismo
@@ -135,6 +146,8 @@ def veredicto_cadena(raiz: SesionConteo) -> str:
     if hijo is None:
         if raiz.estado == EstadoConteo.MATCH:
             return OK_CC1
+        if raiz.ajuste_por_tolerancia and raiz.estado in _ESTADOS_RESUELTOS_A_MANO:
+            return AJUSTE_EN_TOLERANCIA
         if (raiz.tarea_picking_id is not None
                 and raiz.estado in _ESTADOS_RESUELTOS_A_MANO
                 and raiz.diferencia not in (None, 0)):
@@ -175,9 +188,13 @@ def motivo_sin_veredicto(raiz: SesionConteo) -> str:
         # Esperando al líder (reabrir o cancelar). «No lo encontré» se separa
         # del resto: sin layout es el caso frecuente y no es un cero.
         from app.models.conteo import MotivoBloqueoConteo
-        return ('no_encontrado'
-                if bloqueado.motivo_bloqueo == MotivoBloqueoConteo.NO_ENCONTRADO
-                else 'bloqueado')
+        if bloqueado.motivo_bloqueo == MotivoBloqueoConteo.NO_ENCONTRADO:
+            return 'no_encontrado'
+        # Siesa se movió en cada intento (2026-09-23): no es un problema del
+        # conteo ni del inventario, es un producto que se vende sin parar.
+        if bloqueado.motivo_bloqueo == MotivoBloqueoConteo.MOVIMIENTO_CONTINUO:
+            return 'movimiento_continuo'
+        return 'bloqueado'
     if any(n.estado == EstadoConteo.CANCELADO for n in descendientes):
         return 'omitida'
     if hijo is not None and raiz.estado in _ESTADOS_RESUELTOS_A_MANO:
@@ -192,7 +209,7 @@ def motivo_sin_veredicto(raiz: SesionConteo) -> str:
 def sesion_resolutiva(raiz: SesionConteo, veredicto: str = None):
     """La fila cuyo conteo decidió el veredicto, o `None` si no hay veredicto."""
     veredicto = veredicto or veredicto_cadena(raiz)
-    if veredicto in (OK_CC1, ERROR_AUDITORIA):
+    if veredicto in (OK_CC1, ERROR_AUDITORIA, AJUSTE_EN_TOLERANCIA):
         return raiz
     if veredicto in (OK_CC2, ERROR_CONFIRMADO):
         return raiz.hijo_conteo
@@ -379,15 +396,25 @@ def _producto_fila(s: SesionConteo) -> dict:
 
 
 def _descartes(s: SesionConteo):
-    """Las entradas de `conteos_descartados` con su día operativo, o `None`
-    si la entrada no trae una fecha legible."""
+    """Los conteos descartados de la sesión como `(día operativo, motivo,
+    entrada)`. Día `None` si la entrada no trae una fecha legible. Los eventos
+    del historial (una reapertura del líder) no son conteos: se saltan.
+
+    Desde 2026-09-23 hay dos motivos (`ConteoService.motivo_de_descarte`):
+    `MOVIMIENTO` (Siesa se movió mientras se contaba) y `FUERA_DE_TOLERANCIA`
+    (el recuento propio a ciegas). Mezclarlos inflaría la tasa de «ventas
+    durante el conteo» con recuentos que no tienen nada que ver con ventas."""
+    from app.services.conteo_service import ConteoService
     for entrada in s.lista_conteos_descartados():
+        if isinstance(entrada, dict) and 'evento' in entrada:
+            continue
+        motivo = ConteoService.motivo_de_descarte(entrada)
         crudo = entrada.get('descartado_at') if isinstance(entrada, dict) else None
         try:
             dia = dia_operativo_de(datetime.fromisoformat(crudo)) if crudo else None
         except (TypeError, ValueError):
             dia = None
-        yield dia
+        yield dia, motivo, entrada
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -589,7 +616,10 @@ def _volumen(cadenas, desde, hasta) -> dict:
 
 def _recuentos(cadenas, desde, hasta) -> dict:
     """Conteos descartados porque Siesa se movió mientras se contaba (m029),
-    contados por el día en que se descartaron.
+    contados por el día en que se descartaron. Los recuentos propios por
+    tolerancia (2026-09-23) NO son numerador —no tienen que ver con ventas—:
+    se cuentan aparte en `recuentos_propios` y, como intentos que sí se
+    midieron, entran al denominador.
 
     El denominador son los intentos que PODÍAN descartarse: conteos confirmados
     en el rango con foto de inicio, más los propios descartes. Un conteo sin
@@ -597,24 +627,39 @@ def _recuentos(cadenas, desde, hasta) -> dict:
     descartarse nunca, así que meterlo abajo diluiría la tasa con conteos que no
     la miden — va a `excluidos`.
     """
+    from app.services.conteo_service import ConteoService
     recuentos = 0
+    propios = 0
     por_producto = Counter()
     confirmados = 0
     excl = Counter()
     for c in cadenas:
         for s in c.nodos:
-            for dia in _descartes(s):
+            for dia, motivo, entrada in _descartes(s):
                 if dia is None:
                     excl['descarte_sin_fecha'] += 1
-                elif _en(dia, desde, hasta):
+                elif not _en(dia, desde, hasta):
+                    continue
+                elif motivo == ConteoService.DESCARTE_MOVIMIENTO:
                     recuentos += 1
                     por_producto[s.producto_id] += 1
+                elif motivo == ConteoService.DESCARTE_FUERA_DE_TOLERANCIA:
+                    # Un intento que PODÍA descartarse por movimiento y no se
+                    # descartó por eso: va al denominador, no al numerador.
+                    propios += 1
+                    if ((entrada.get('inicio') or {}).get('at')) is not None:
+                        confirmados += 1
+                    else:
+                        excl['recuento_propio_sin_foto_de_inicio'] += 1
+                else:
+                    excl['descarte_sin_motivo'] += 1
             if s.foto_siesa_at is not None and _en(dia_operativo_de(s.foto_siesa_at), desde, hasta):
                 if s.foto_inicio_at is not None:
                     confirmados += 1
                 else:
                     excl['confirmado_sin_foto_de_inicio'] += 1
     return {'metrica': _metrica(recuentos, confirmados + recuentos, excl),
+            'recuentos_propios': propios,
             'por_producto': por_producto}
 
 
@@ -710,9 +755,13 @@ def _ajustes(cadenas, desde, hasta) -> tuple:
         else:
             valor_sal += -c.raiz.diferencia * costo
 
-    # Bloqueados: foto de HOY — raíces en DESCUADRE esperando decisión.
+    # Bloqueados: foto de HOY — raíces en DESCUADRE esperando decisión. Las
+    # aprobables se separan por qué no salieron solas (2026-09-23): el tope en
+    # pesos o la falta de costo (`ConteoService.motivo_no_sale_solo`), o
+    # ninguno de los dos — un conteo definitivo, un CC1 sin sus dos fotos.
     bloqueados = Counter()
     aprobables = 0
+    esperan_aprobacion = Counter()
     for c in cadenas:
         if c.raiz.estado != EstadoConteo.DESCUADRE:
             continue
@@ -721,6 +770,8 @@ def _ajustes(cadenas, desde, hasta) -> tuple:
             bloqueados[resumir_motivo_bloqueo(motivo)] += 1
         else:
             aprobables += 1
+            no_solo = ConteoService.motivo_no_sale_solo(c.raiz)
+            esperan_aprobacion[no_solo['codigo'] if no_solo else 'FIRMA_DEL_PROCESO'] += 1
 
     ids_raices = {c.raiz.id for c in cadenas}
     fallidos = SiesaJob.query.filter(SiesaJob.tipo == 'AJUSTE_CONTEO',
@@ -735,6 +786,7 @@ def _ajustes(cadenas, desde, hasta) -> tuple:
         'cantidad': len(validos),
         'en_vuelo': sum(1 for c in validos if c.raiz.estado == EstadoConteo.AJUSTANDO),
         'automaticos': sum(1 for c in validos if c.raiz.aprobador_id is None),
+        'por_tolerancia': sum(1 for c in validos if c.raiz.ajuste_por_tolerancia),
         'aprobados_por_supervisor': sum(1 for c in validos if c.raiz.aprobador_id is not None),
         'unidades_ent': ent,
         'unidades_sal': sal,
@@ -750,7 +802,8 @@ def _ajustes(cadenas, desde, hasta) -> tuple:
         'excluidos': dict(excl),
         'bloqueados_hoy': {'total': sum(bloqueados.values()),
                            'por_motivo': dict(sorted(bloqueados.items())),
-                           'descuadres_aprobables': aprobables},
+                           'descuadres_aprobables': aprobables,
+                           'aprobables_por_motivo': dict(sorted(esperan_aprobacion.items()))},
         'jobs_fallidos_hoy': jobs_fallidos,
         'motivos_auditoria_picking': {
             'nota': 'diagnóstico del picker al crear la auditoría — NO son ajustes',
@@ -794,6 +847,64 @@ def _exactitud(cerradas) -> dict:
         'definicion': 'OK / (OK + ERROR) por cadena, contra la foto de Siesa del conteo que resolvió',
         'min_n': MIN_N_EXACTITUD,
         'por_clase': dict(por_clase),
+        'excluidos': dict(excl),
+        'con_tolerancia': _exactitud_con_tolerancia(cerradas),
+    }
+
+
+#: Lo que dijo la tolerancia del primer conteo y cuenta como acierto (ASCM).
+_ACIERTO_TOLERANCIA = ('EXACTO', 'DENTRO')
+
+
+def _exactitud_con_tolerancia(cerradas) -> dict:
+    """IRA con tolerancia, definición ASCM: **acierto = el PRIMER conteo quedó
+    dentro de tolerancia** (exacto incluido). No reemplaza a la exacta: mide
+    otra cosa — si el registro estaba «suficientemente bien», no si estaba
+    perfecto.
+
+    Se lee de `tolerancia_primer_conteo`, que se guardó al contar con la
+    tolerancia VIGENTE en ese instante (m032tol). Recalcularla hoy con la
+    configuración de hoy cambiaría el pasado cada vez que alguien mueve una
+    variable. Las cadenas anteriores a la regla no lo tienen: van a `excluidos`
+    (`sin_evaluacion_de_tolerancia`), no se adivinan. Mismo universo y misma
+    exclusión por foto que la exacta, para que las dos se puedan comparar.
+
+    `primer_conteo_fuera` responde si el recuento propio sirve: de las cadenas
+    cuyo primer conteo quedó fuera, cuántas resolvió el recuento del mismo
+    operario y cuántas necesitaron a otra persona.
+    """
+    from app.services.conteo_politica import descripcion_de_tolerancias
+    grupos = defaultdict(lambda: {'ok': 0, 'err': 0})
+    excl = Counter()
+    fuera = Counter()
+    for c in cerradas:
+        s = c.resolutiva
+        if s is None or s.teorico_siesa is None or s.fuente_existencia != 'SIESA':
+            excl['sin_foto_siesa'] += 1
+            continue
+        primero = c.raiz.tolerancia_primer_conteo
+        if primero is None:
+            excl['sin_evaluacion_de_tolerancia'] += 1
+            continue
+        grupo = 'DIARIO_ABC' if c.raiz.tipo == 'DIARIO_ABC' else 'OTROS'
+        g = grupos[(c.raiz.clasificacion_abc or '?', grupo)]
+        if primero in _ACIERTO_TOLERANCIA:
+            g['ok'] += 1
+        else:
+            g['err'] += 1
+            fuera['a_segundo_conteo' if c.hijo is not None
+                  else 'resuelto_por_recuento_propio'] += 1
+    por_clase = defaultdict(dict)
+    for (cl, grupo), g in sorted(grupos.items()):
+        por_clase[cl][grupo] = _metrica(g['ok'], g['ok'] + g['err'], min_n=MIN_N_EXACTITUD)
+    return {
+        'definicion': ('acierto = el primer conteo quedó dentro de tolerancia (ASCM), '
+                       'evaluado con la tolerancia vigente al contar'),
+        'min_n': MIN_N_EXACTITUD,
+        'por_clase': dict(por_clase),
+        'primer_conteo_fuera': {'resuelto_por_recuento_propio': fuera['resuelto_por_recuento_propio'],
+                                'a_segundo_conteo': fuera['a_segundo_conteo']},
+        'tolerancia_vigente': descripcion_de_tolerancias(),
         'excluidos': dict(excl),
     }
 
@@ -922,6 +1033,7 @@ def calcular_estadisticas_conteo(fecha_desde: date = None, fecha_hasta: date = N
     volumen = _volumen(filtradas, desde, hasta)
     recuentos = _recuentos(filtradas, desde, hasta)
     volumen['recuentos'] = recuentos['metrica']
+    volumen['recuentos_propios'] = recuentos['recuentos_propios']
     ajustes, ajustes_validos = _ajustes(filtradas, desde, hasta)
     volumen['por_semana'] = _por_semana(cerradas, ajustes_validos)
     muestra = {}

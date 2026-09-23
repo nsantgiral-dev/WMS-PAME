@@ -37,7 +37,7 @@ from datetime import datetime, timedelta
 
 import pytest
 
-from tests.test_conteo_teorico_pos import SKU, _jobs, _un_job, siesa, tienda  # noqa: F401 (fixtures)
+from tests.test_conteo_teorico_pos import SKU, _jobs, _un_job, contar_primero, siesa, tienda  # noqa: F401 (fixtures)
 
 RAIZ = pathlib.Path(__file__).resolve().parents[1]
 
@@ -72,7 +72,7 @@ def _cc1_limpio(tienda, siesa, fisico, existencia, pos):
     siesa.poner(existencia=existencia, pos=pos)
     cc1 = _nuevo_cc1(tienda)
     _abrir(cc1, tienda['a'])
-    return cc1, _contar(cc1, tienda['a'], fisico)
+    return cc1, contar_primero(cc1, tienda['a'].id, fisico)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -156,8 +156,9 @@ class TestVentaDuranteElConteo:
         # La foto del cierre descartado es la de inicio del recuento.
         assert (s.existencia_inicio_siesa, s.cant_pos_inicio_siesa) == (10, 3)
 
-        # El recuento, con Siesa quieta, sí vale: 6 contra teórico 7 = −1.
-        r2 = _contar(cc1, tienda['a'], 6)
+        # El recuento, con Siesa quieta, sí vale: 6 contra teórico 7 = −1
+        # (fuera de tolerancia: recuento propio, y después segundo conteo).
+        r2 = contar_primero(cc1, tienda['a'].id, 6)
         assert r2['resultado'] == 'SEGUNDO_CONTEO', r2
         assert _sesion(db, cc1).diferencia == -1
 
@@ -293,6 +294,13 @@ class TestSinFotoDeInicio:
         siesa.fila = None
         cc1 = _nuevo_cc1(tienda)
         _abrir(cc1, tienda['a'])
+        # Siesa sigue sin responder al primer cierre: se compara contra el
+        # WMS, cae fuera de tolerancia y se pide el recuento propio. Sin foto
+        # de ese cierre, el recuento conserva la apertura que había: ninguna.
+        # (Si Siesa hubiera respondido, la foto de ese cierre sería la apertura
+        # del recuento — un recuento nuevo, con sus dos fotos, sí avala.)
+        assert _contar(cc1, tienda['a'], 7)['resultado'] == 'RECONTAR_TU'
+        assert _sesion(db, cc1).foto_inicio_at is None
         siesa.poner(existencia=10, pos=2)
         r1 = _contar(cc1, tienda['a'], 7)
         assert r1['resultado'] == 'SEGUNDO_CONTEO'
@@ -510,15 +518,31 @@ class TestSesionesViejas:
         db.session.commit()
         return s.id
 
-    def test_i_en_proceso_se_termina_y_decide_segundo_conteo(self, db, siesa, tienda):
+    def test_i_en_proceso_se_termina_pero_no_ajusta(self, db, siesa, tienda):
+        """Una vieja del plan (clase C) con una unidad de diferencia cae dentro
+        de tolerancia: se acepta sin segundo conteo, como cualquiera — pero no
+        ajusta, porque no tiene foto de apertura."""
+        siesa.poner(existencia=10, pos=2)
+        cc1 = self._vieja(db, tienda, estado='EN_PROCESO', tipo='DIARIO_ABC',
+                          clasificacion_abc='C')
+        r1 = _contar(cc1, tienda['a'], 7)
+        assert r1['resultado'] == 'DENTRO_TOLERANCIA', r1
+        assert r1['auto_encolado'] is False and 'APERTURA' in (r1['ajuste_bloqueado'] or '')
+        assert _jobs(cc1) == []
+
+    def test_i_fuera_de_tolerancia_el_recuento_es_un_conteo_nuevo(self, db, siesa, tienda):
+        """Fuera de tolerancia, la vieja se recuenta; el recuento arranca de la
+        foto del cierre descartado, así que YA no es un conteo viejo: tiene sus
+        dos fotos y, si CC2 lo confirma, avala el ajuste automático."""
         siesa.poner(existencia=10, pos=2)
         cc1 = self._vieja(db, tienda, estado='EN_PROCESO')
+        assert _contar(cc1, tienda['a'], 7)['resultado'] == 'RECONTAR_TU'
+        assert _sesion(db, cc1).foto_inicio_at is not None
         r1 = _contar(cc1, tienda['a'], 7)
         assert r1['resultado'] == 'SEGUNDO_CONTEO'
-        # Y no la avala sola: CC2 limpio coincide, pero va al supervisor.
         _abrir(r1['segundo_conteo_id'], tienda['b'])
         r2 = _contar(r1['segundo_conteo_id'], tienda['b'], 7)
-        assert r2['auto_encolado'] is False and _jobs(cc1) == []
+        assert r2['auto_encolado'] is True, r2
 
     def test_i_en_proceso_puede_dar_match(self, db, siesa, tienda):
         siesa.poner(existencia=10, pos=2)

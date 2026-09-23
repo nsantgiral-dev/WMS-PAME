@@ -149,6 +149,23 @@ def tienda(db, almacen):
     return mundo
 
 
+def contar_primero(sesion_id, operario_id, fisico, **kw):
+    """El PRIMER conteo de una cadena, con su recuento propio si hace falta.
+
+    Desde 2026-09-23 un primer conteo fuera de tolerancia no va directo al
+    segundo conteo: el servidor le pide al MISMO operario que recuente
+    (`RECONTAR_TU`). Estos tests miden otras reglas (el teórico, las fotos, el
+    doble ciego…) con diferencias de una o dos unidades sobre un conteo
+    MANUAL, que usa la regla estricta (A: 0 und / 0,5 %) y siempre cae fuera.
+    El operario recuenta lo mismo —su conteo estaba bien, el inventario no— y
+    la cadena sigue como antes. Devuelve la respuesta del último conteo."""
+    from app.services.conteo_service import ConteoService
+    r = ConteoService.registrar_conteo(sesion_id, operario_id, fisico, **kw)
+    if r.get('resultado') == 'RECONTAR_TU':
+        r = ConteoService.registrar_conteo(sesion_id, operario_id, fisico, **kw)
+    return r
+
+
 def _cc1(tienda, fisico):
     from app.models.conteo import SesionConteo
     from app.services.conteo_service import ConteoService
@@ -156,7 +173,7 @@ def _cc1(tienda, fisico):
     cc1 = SesionConteo.query.filter_by(codigo=creado['codigos'][0]).one()
     ConteoService.obtener_tarea_operario(cc1.id, tienda['a'].id)
     # El operario DECLARA lo que contó, cero incluido («revisé y no hay»).
-    r1 = ConteoService.registrar_conteo(cc1.id, tienda['a'].id, fisico, cero_confirmado=True)
+    r1 = contar_primero(cc1.id, tienda['a'].id, fisico, cero_confirmado=True)
     return cc1.id, r1
 
 
