@@ -1,7 +1,7 @@
 """Conteo: motivo del bloqueo como campo, y novedades «mercancía sin código»
 
 Revision ID: m031hud
-Revises: m030costoconteo
+Revises: m031guardaenproceso
 Create Date: 2026-09-23
 
 ## Para qué
@@ -27,7 +27,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision = 'm031hud'
-down_revision = 'm030costoconteo'
+down_revision = 'm031guardaenproceso'
 branch_labels = None
 depends_on = None
 
