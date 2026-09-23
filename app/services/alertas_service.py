@@ -28,6 +28,35 @@ logger = logging.getLogger(__name__)
 
 # ── Envío de email via Resend API ─────────────────────────────────────────────
 
+#: La inyecta Railway en cada proceso: `QA` o `production`. No se configura a
+#: mano — por eso sirve para distinguir, y por eso no hay default que inventar.
+_VAR_AMBIENTE = 'RAILWAY_ENVIRONMENT_NAME'
+
+
+def prefijo_ambiente() -> str:
+    """El prefijo que lleva el asunto de TODO correo que sale de este proceso.
+
+    QA y producción tienen la **misma** `ALERTA_EMAIL_DEST`. Sin esto, una
+    alerta de QA llega idéntica a una de producción y la bandeja no dice cuál
+    es cuál: o se atiende un problema que no existe, o —peor— se aprende a
+    ignorar el asunto y el día que es de producción tampoco se abre.
+
+    - `production` → `''`. Producción no se marca: es lo que se espera leer.
+    - ausente (local, tests, un script) → `''`. Regla 0: no se inventa un
+      ambiente que nadie declaró.
+    - cualquier otro nombre → `'[<nombre>] '`, tal cual lo da Railway.
+
+    **Se aplica en un solo sitio: `enviar_email`.** Ningún llamador lo pone a
+    mano — un prefijo que depende de que cada alerta se acuerde es un prefijo
+    que la alerta nueva no lleva. Trinquete:
+    `tests/test_alertas_prefijo_ambiente.py`.
+    """
+    nombre = (os.getenv(_VAR_AMBIENTE) or '').strip()
+    if not nombre or nombre.lower() == 'production':
+        return ''
+    return f'[{nombre}] '
+
+
 def _config_resend(dest_override: str | None = None) -> dict | None:
     """Lee env vars de Resend. Retorna None si no están configuradas.
 
@@ -85,6 +114,9 @@ def enviar_email(asunto: str, cuerpo_html: str, cuerpo_texto: str,
         return False
 
     import requests as _requests
+
+    # El prefijo va acá y en ningún otro lado: es la única puerta a Resend.
+    asunto = prefijo_ambiente() + asunto
 
     payload = {
         'from':    cfg['from'],

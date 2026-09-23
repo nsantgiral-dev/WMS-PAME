@@ -28,7 +28,11 @@
 - Base de datos PostgreSQL inaccesible
 
 ### Pasos
-1. Entra a **railway.app** → proyecto → servicio Flask (`positive-integrity`)
+1. Entra a **railway.app** → proyecto `determined-intuition` → **elegí el
+   ambiente arriba a la izquierda** (`production` o `QA`; los dos tienen los
+   mismos servicios y se confunden) → servicio web **`WMS-PAME`**. Si lo que
+   falla son los crons (sync, DLQ, alertas por correo), el servicio es
+   **`WMS-Worker`**. Ver `docs/flujo_qa_produccion.md`
 2. Tab **Deployments** → ver el log del deploy fallido
 3. Busca la línea de error (generalmente al final del log)
 
@@ -183,11 +187,13 @@ Antes de que empiece el turno, el admin verifica:
 
 | Componente | Detalle |
 |-----------|---------|
-| Servidor | Railway — `positive-integrity` |
-| Base de datos | PostgreSQL en Railway — `determined-intuition` |
+| Proyecto Railway | `determined-intuition` — dos ambientes: `production` (rama `main`) y `QA` (rama `qa`). Elegir el ambiente arriba a la izquierda antes de tocar nada |
+| Servidor web | Servicio `WMS-PAME` (preDeploy `flask db upgrade`) — `wms-pame-production.up.railway.app` / `wms-pame-qa.up.railway.app` |
+| Worker | Servicio `WMS-Worker` — schedulers pesados |
+| Base de datos | Servicio `Postgres` de cada ambiente (una base por ambiente) |
 | Repo código | GitHub — `nsantgiral-dev/WMS-PAME` |
 | Sync Siesa | Automático cada 90 segundos (7am–8pm) |
-| Deploy | Automático al hacer push a GitHub |
+| Deploy | Automático: push a `qa` despliega QA, push a `main` despliega producción. A `main` solo se llega por PR desde `qa` — ver `docs/flujo_qa_produccion.md` |
 
 ---
 

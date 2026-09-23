@@ -1097,7 +1097,10 @@ Posibles causas:
 
 ### "La app se cayó (CRASHED en Railway)"
 
-1. Entra a Railway → servicio Flask (`positive-integrity`)
+1. Entra a Railway → proyecto `determined-intuition` → **elegí el ambiente
+   arriba a la izquierda** (`production` o `QA` — tienen los mismos servicios
+   y se confunden) → servicio web **`WMS-PAME`** (los crons viven en
+   `WMS-Worker`)
 2. Tab Variables → verificar que `DATABASE_URL` y `SECRET_KEY` están presentes
 3. Si están → Tab Deployments → toca los 3 puntos del último deploy → **"Restart"**
 4. Espera 2 minutos

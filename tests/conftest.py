@@ -27,6 +27,11 @@ os.environ['SECRET_KEY'] = 'test-secret-key-de-32-bytes-o-mas-para-hmac-sha256'
 os.environ.pop('CONNEKTA_IKEY', None)
 os.environ.pop('CONNEKTA_ITOKEN', None)
 os.environ['CONNEKTA_MODO_SIMULACION'] = 'true'  # informativo; el guard real es el de arriba
+# El build de Railway corre esta suite con `RAILWAY_ENVIRONMENT_NAME` puesta
+# (`QA` o `production`), y `alertas_service.prefijo_ambiente()` la lee. Se
+# borra para que la suite dé lo mismo en el build de QA, en el de producción y
+# en local: el test que quiera un ambiente lo declara con monkeypatch.
+os.environ.pop('RAILWAY_ENVIRONMENT_NAME', None)
 
 
 from app import create_app
