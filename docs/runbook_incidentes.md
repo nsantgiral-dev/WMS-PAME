@@ -193,7 +193,7 @@ Antes de que empiece el turno, el admin verifica:
 | Base de datos | Servicio `Postgres` de cada ambiente (una base por ambiente) |
 | Repo código | GitHub — `nsantgiral-dev/WMS-PAME` |
 | Sync Siesa | Automático cada 90 segundos (7am–8pm) |
-| Deploy | Automático: push a `qa` despliega QA, push a `main` despliega producción. A `main` solo se llega por PR desde `qa` — ver `docs/flujo_qa_produccion.md` |
+| Deploy | Automático: push a `qa` despliega QA, push a `main` despliega producción. `main` solo avanza por fast-forward desde `qa`, después de probar en QA — ver `docs/flujo_qa_produccion.md` |
 
 ---
 

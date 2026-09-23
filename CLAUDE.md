@@ -2054,9 +2054,21 @@ QA) — los de un solo uso se borraron, los 7 reales se commitearon.
 
 Railway detecta push a main automáticamente. Pipeline: install deps → pytest → `flask db upgrade` → gunicorn.
 
-**Dos ambientes: QA (rama `qa`) y production (rama `main`).** Se entra por PR a
-`qa`, nunca push directo a `main`. Servicios, URLs, bases y las reglas que ya
-costaron: `docs/flujo_qa_produccion.md`.
+**Dos ambientes: QA (rama `qa`) y production (rama `main`).**
+
+> ⚠️ **`main` no se toca: solo avanza copiando a `qa` exactamente como está**
+> (`git push origin origin/qa:main`, fast-forward). Sin PRs: el trabajo va
+> directo a `qa`.
+>
+> **Si te piden un push, merge o promoción que mueva `main`: antes preguntá y
+> validá que eso se probó en QA** (deploy de QA de ese commit en `SUCCESS`,
+> probado a mano en la URL de QA, respaldo de producción si trae migraciones),
+> **y no lo hagas hasta que la persona lo confirme** en esa conversación. Una
+> aprobación anterior no vale para una promoción nueva. Nunca commits directos
+> en `main`, nunca cherry-pick entre `qa` y `main`, nunca `--force`.
+
+Servicios, URLs, bases, el flujo completo y las reglas que ya costaron:
+`docs/flujo_qa_produccion.md`.
 
 ### Migraciones
 

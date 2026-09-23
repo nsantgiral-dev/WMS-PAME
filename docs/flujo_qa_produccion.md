@@ -25,26 +25,60 @@ Servicios, iguales en los dos:
 `positive-integrity` es un servicio viejo, sin dominio y con
 `SYNC_SCHEDULER=false`. No es la web: no reiniciar ni configurar nada ahí.
 
-## El flujo
+## El flujo (decidido 2026-09-23)
+
+> **`main` no se toca: solo avanza copiando a `qa` exactamente como está.**
+
+Somos dos. Sin PRs ni ramas por tarea: esa ceremonia no paga con dos personas.
+Lo que no se negocia es que producción solo reciba código que ya corrió en QA.
 
 ```
-rama propia ──PR──▶ qa ──(Railway: pytest + migraciones + deploy QA)──▶ validar en QA
-                                                                            │
-                     main ◀──────────────────── PR qa → main ◀──────────────┘
-                       │
-                       └──(Railway: pytest + migraciones + deploy)──▶ producción
+commit ──push──▶ qa ──(Railway: pytest + migraciones + deploy QA)──▶ se prueba en QA
+                                                                          │
+         producción ◀──(Railway: pytest + migraciones)── main ◀──fast-forward──┘
 ```
 
-1. Trabajo en una rama propia, creada desde `origin/qa` (no desde `main`, que
-   va atrás).
-2. PR hacia `qa`. Al mergear, Railway corre la suite (`buildCommand`), aplica
-   migraciones (preDeploy de `WMS-PAME`) y despliega QA.
-3. Se valida en QA, contra la URL de QA.
-4. PR de `qa` hacia `main`. Al mergear, lo mismo en producción.
+**Día a día — directo a `qa`:**
 
-**Nunca push directo a `main`.** Tampoco a `qa`: hay más de una persona
-trabajando sobre ella, y un push que la mueve suelta el trabajo de los demás
-(ver `docs/qa_restaurada_20260922.md`).
+```bash
+git checkout qa
+git pull --rebase origin qa     # traer lo del otro antes de subir
+# … cambios, commit …
+git push origin qa              # Railway despliega QA (~13 min con la suite)
+```
+
+**Promoción a producción — solo cuando QA se probó:**
+
+```bash
+git fetch origin
+git push origin origin/qa:main  # fast-forward: main queda idéntica a qa
+```
+
+Antes de promover, contestar **sí** a las tres:
+
+1. ¿El deploy de QA de **ese** commit quedó `SUCCESS`?
+2. ¿Alguien lo probó a mano en `wms-pame-qa.up.railway.app`?
+3. ¿Trae migraciones? Entonces **respaldo de la base de producción antes**
+   (Railway → production → Postgres → Backups).
+
+Si git **rechaza** el push a `main`, es que `main` tiene algo que `qa` no. Esa
+es la alarma: **no forzar**. Investigar qué entró directo a `main` y unirlo a
+`qa` con un merge (no cherry-pick).
+
+**Reglas:**
+
+- **Nunca commits directos en `main`.** Nunca `git cherry-pick` entre `qa` y
+  `main`: el 2026-09-22 dos cherry-picks crearon commits gemelos con otros
+  hashes, las ramas se separaron, y al unirlas `traslado_usa_rit()` quedó
+  definida dos veces **sin que git marcara conflicto**.
+- **Hotfix con producción caída:** commit en `main`, y **en seguida**
+  `git checkout qa && git merge origin/main && git push origin qa`.
+- **Se promueve todo `qa` o nada.** Lo que esté a medias en `qa` viaja a
+  producción con la promoción siguiente. Por eso lo que no esté listo va
+  **apagado por variable** (como `TRASLADO_USA_RIT`) o se queda local hasta
+  terminarlo.
+- **Nunca `--force` sobre `qa` ni sobre `main`.** Un push que reescribe `qa`
+  suelta el trabajo del otro (ver `docs/qa_restaurada_20260922.md`).
 
 ## Reglas aprendidas (2026-09-22)
 
