@@ -815,3 +815,171 @@ class TestElDetectorDeAjustesMuerde:
 
     def test_piso(self):
         assert len(_sin_foto_de_inicio()) >= 1
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PWA — el aviso de cajas POS sale en cada sitio donde un conteo empieza
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# Una caja que vende sin conexión no sube `f400_cant_pos_1` a Siesa central
+# hasta sincronizar: el teórico queda alto, el conteo ve un faltante falso, se
+# ajusta, y la acumulación posterior descuenta otra vez. Ninguna foto de Siesa
+# ve una venta que todavía no le llegó, así que se le pide a quien cuenta que
+# lo confirme. El texto vive en `conteo.js` (`AVISO_CAJAS_POS`) y cada pantalla
+# llama `avisoCajasPosHtml()`.
+#
+# Qué es «un sitio donde un conteo empieza», medido sobre el JS con el mismo
+# troceo y grafo de llamadas de `test_frontend_integrity.py`:
+#   · un HUD de conteo: la función que pinta «CONTEO CIEGO»;
+#   · una apertura: la función que pide la tarea a contar
+#     (`/api/mobile/tarea-actual`, `/api/conteo/<id>/tarea`) — tiene que
+#     LLEGAR, por el grafo, a una función que pinta el aviso;
+#   · las entradas declaradas abajo (el formulario de conteo manual), que no
+#     tienen una marca propia que un detector pueda ver.
+
+import re  # noqa: E402
+
+from tests.test_frontend_integrity import (  # noqa: E402
+    _referencias, _sin_comentarios, _trocear)
+
+_PWA = RAIZ / 'app' / 'static' / 'pwa'
+_MARCA_HUD = 'CONTEO CIEGO'
+_APERTURA = re.compile(r"/api/mobile/tarea-actual|/api/conteo/\$\{[^}]*\}/tarea\b")
+_LLAMA_AVISO = re.compile(r'(?<![.\w$])avisoCajasPosHtml\s*\(')
+
+#: Entradas sin marca detectable, con por qué son un inicio de conteo.
+ENTRADAS_DE_CONTEO_DECLARADAS = {
+    'conteosMostrarFormManual': (
+        'Formulario de conteo manual: quien lo lanza suele ser el jefe de la '
+        'tienda que va a contar o a mandar a contar ya mismo.'),
+}
+
+
+def _cuerpos(fuentes):
+    cuerpos = {}
+    for f in sorted(fuentes):
+        c, _ = _trocear(fuentes[f])
+        for nombre, cuerpo in c.items():
+            cuerpos[nombre] = cuerpos.get(nombre, '') + '\n' + _sin_comentarios(cuerpo)
+    return cuerpos
+
+
+def _llega_al_aviso(cuerpos, fn):
+    vistos, pendientes = set(), [fn]
+    while pendientes:
+        f = pendientes.pop()
+        if f in vistos or f not in cuerpos:
+            continue
+        vistos.add(f)
+        if _LLAMA_AVISO.search(cuerpos[f]):
+            return True
+        pendientes += [n for n in _referencias(cuerpos[f]) if n in cuerpos]
+    return False
+
+
+def _inicios_de_conteo(fuentes):
+    """`{funcion: (tipo, muestra_el_aviso)}` de cada inicio de conteo."""
+    cuerpos = _cuerpos(fuentes)
+    hallados = {}
+    for fn, cuerpo in cuerpos.items():
+        if fn == 'avisoCajasPosHtml':
+            continue
+        if _MARCA_HUD in cuerpo or fn in ENTRADAS_DE_CONTEO_DECLARADAS:
+            hallados[fn] = ('hud' if _MARCA_HUD in cuerpo else 'declarada',
+                            bool(_LLAMA_AVISO.search(cuerpo)))
+        elif _APERTURA.search(cuerpo):
+            hallados[fn] = ('apertura', _llega_al_aviso(cuerpos, fn))
+    return hallados
+
+
+def _fuentes_pwa():
+    return {f.name: f.read_text(encoding='utf-8') for f in sorted(_PWA.glob('*.js'))}
+
+
+class TestAvisoCajasPosEnCadaInicioDeConteo:
+
+    def test_cada_inicio_de_conteo_muestra_el_aviso(self):
+        sin_aviso = {fn: t for fn, (t, ok) in _inicios_de_conteo(_fuentes_pwa()).items()
+                     if not ok}
+        assert not sin_aviso, (
+            f'\nInicios de conteo sin el aviso de cajas POS: {sin_aviso}\n'
+            'Llamá avisoCajasPosHtml() (conteo.js) en la pantalla donde se empieza '
+            'a contar. Una caja caída deja el POS sin subir y el conteo ajusta un '
+            'faltante que la acumulación vuelve a descontar.')
+
+    def test_piso_y_puntos_conocidos(self):
+        """Un troceo roto devuelve cero inicios y cero hallazgos: verde falso."""
+        h = _inicios_de_conteo(_fuentes_pwa())
+        assert {'renderTarea', '_defRender', 'pedirTarea', 'defAbrirConteo',
+                'conteosMostrarFormManual'} <= set(h), h
+        assert h['renderTarea'][0] == 'hud' and h['_defRender'][0] == 'hud'
+        assert h['pedirTarea'][0] == 'apertura' and h['defAbrirConteo'][0] == 'apertura'
+
+    def test_las_declaradas_existen_y_dicen_por_que(self):
+        cuerpos = _cuerpos(_fuentes_pwa())
+        assert set(ENTRADAS_DE_CONTEO_DECLARADAS) <= set(cuerpos)
+        assert not [k for k, m in ENTRADAS_DE_CONTEO_DECLARADAS.items() if len(m) < 40]
+
+    def test_el_formulario_manual_tiene_donde_pintarlo(self):
+        html = (_PWA / 'index.html').read_text(encoding='utf-8')
+        form = html[html.index('id="conteo-form-manual"'):]
+        form = form[:form.index('crearConteoManual()')]
+        assert 'id="conteo-manual-aviso-pos"' in form
+
+    def test_el_texto_vive_en_un_solo_sitio(self):
+        """Una constante, no N copias que divergen."""
+        frase = 'cajas POS de la tienda'
+        apariciones = sum(f.read_text(encoding='utf-8').count(frase)
+                          for f in list(_PWA.glob('*.js')) + [_PWA / 'index.html'])
+        assert apariciones == 1, apariciones
+
+    def test_el_html_generado_dice_lo_pedido(self):
+        """Se evalúa la función real con Node, sin stubs."""
+        import shutil
+        import subprocess
+        if not shutil.which('node'):
+            pytest.skip('sin node')
+        src = (_PWA / 'conteo.js').read_text(encoding='utf-8')
+        ini = src.index('const AVISO_CAJAS_POS')
+        fin = src.index('\n}\n', src.index('function avisoCajasPosHtml')) + 3
+        programa = src[ini:fin] + '\nprocess.stdout.write(avisoCajasPosHtml());'
+        salida = subprocess.run(['node', '-e', programa], capture_output=True,
+                                text=True, check=True).stdout
+        assert ('Antes de contar: confirma que todas las cajas POS de la tienda están en '
+                'línea y al día — que la última venta de cada caja ya aparezca en Siesa '
+                'central. Si una caja estuvo caída, cuenta después de que sincronice.') in salida
+        assert 'confirm(' not in salida
+
+
+class TestElDetectorDelAvisoMuerde:
+
+    def test_ve_un_hud_sin_aviso(self):
+        src = 'function f(t) { el.innerHTML = `<div>CONTEO CIEGO</div>`; }\n'
+        assert _inicios_de_conteo({'x.js': src}) == {'f': ('hud', False)}
+
+    def test_un_aviso_en_un_comentario_no_cuenta(self):
+        src = ('function f(t) {\n  // avisoCajasPosHtml()\n'
+               '  el.innerHTML = `<div>CONTEO CIEGO</div>`;\n}\n')
+        assert _inicios_de_conteo({'x.js': src}) == {'f': ('hud', False)}
+
+    def test_ve_el_hud_con_aviso(self):
+        src = ('function avisoCajasPosHtml() { return "x"; }\n'
+               'function f(t) { el.innerHTML = `${avisoCajasPosHtml()}<div>CONTEO CIEGO</div>`; }\n')
+        assert _inicios_de_conteo({'x.js': src}) == {'f': ('hud', True)}
+
+    def test_una_apertura_que_no_llega_al_aviso(self):
+        src = ('async function abrir(id) { const t = await get(`/api/conteo/${id}/tarea`); pintar(t); }\n'
+               'function pintar(t) { el.innerHTML = `<b>${esc(t.x)}</b>`; }\n')
+        assert _inicios_de_conteo({'x.js': src}) == {'abrir': ('apertura', False)}
+
+    def test_una_apertura_que_llega_por_el_grafo(self):
+        src = ('function avisoCajasPosHtml() { return "x"; }\n'
+               'async function abrir(id) { const t = await get(`/api/conteo/${id}/tarea`); pintar(t); }\n'
+               'function pintar(t) { el.innerHTML = `${avisoCajasPosHtml()}<b>CONTEO CIEGO</b>`; }\n')
+        h = _inicios_de_conteo({'x.js': src})
+        assert h == {'abrir': ('apertura', True), 'pintar': ('hud', True)}
+
+    def test_no_marca_lo_que_no_es(self):
+        src = ('function f() { return get("/api/conteo/definitivos"); }\n'
+               'function g() { /* CONTEO CIEGO */ return 1; }\n')
+        assert _inicios_de_conteo({'x.js': src}) == {}

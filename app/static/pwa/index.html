@@ -1830,6 +1830,8 @@
       <!-- Form conteo manual (oculto por defecto) -->
       <div id="conteo-form-manual" style="display:none;background:var(--bg-s);border:1px solid var(--brd);border-radius:12px;padding:14px;margin-bottom:12px;">
         <div style="font-size:13px;font-weight:700;color:var(--pm);margin-bottom:10px;">Crear conteo manual</div>
+        <!-- Lo llena conteosMostrarFormManual con el aviso de cajas POS (conteo.js) -->
+        <div id="conteo-manual-aviso-pos"></div>
         <select id="conteo-manual-almacen"
           style="width:100%;padding:10px;background:var(--bg-input);border:1px solid var(--brd);border-radius:8px;color:var(--tx);font-size:14px;margin-bottom:8px;">
           <option value="">Cargando almacenes...</option>
@@ -3775,12 +3777,12 @@
        dato crudo, que es peor que un error. -->
   <script defer src="/static/pwa/util.js?v=20260921a"></script>
   <script defer src="/static/pwa/app.js?v=20260921a"></script>
-  <script defer src="/static/pwa/picking.js?v=20260921a"></script>
+  <script defer src="/static/pwa/picking.js?v=20260923a"></script>
   <script defer src="/static/pwa/packing.js?v=20260921a"></script>
   <script defer src="/static/pwa/recepcion.js?v=20260921a"></script>
   <script defer src="/static/pwa/rutas.js?v=20260921a"></script>
   <script defer src="/static/pwa/traslados.js?v=20260921a"></script>
-  <script defer src="/static/pwa/conteo.js?v=20260921a"></script>
+  <script defer src="/static/pwa/conteo.js?v=20260923a"></script>
   <script defer src="/static/pwa/reposicion.js?v=20260921a"></script>
   <script defer src="/static/pwa/liquidacion.js?v=20260921a"></script>
   <script defer src="/static/pwa/layout.js?v=20260921a"></script>
