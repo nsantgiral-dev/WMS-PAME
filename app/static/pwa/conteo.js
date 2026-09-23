@@ -1518,6 +1518,14 @@ function conteoHudSumarTecleado() {
     alerta('Escribí cuántas unidades tiene la pila (1 o más)', 'error');
     return;
   }
+  // Un lector láser que dispara con el cursor en esta caja escribe el código
+  // de barras acá: 7700000000017 sumado como cantidad. Ninguna pila real
+  // llega a 100.000 unidades.
+  if (n >= 100000) {
+    if (inp) inp.value = '';
+    alerta('Eso parece un código de barras, no una cantidad. Escanealo con la caja vacía.', 'error');
+    return;
+  }
   if (inp) { inp.value = ''; inp.blur(); }
   return _conteoHudEncolar(h, () => _conteoHudFijarTotal(h, h.total + n, `+${n} (tecleado)`, false));
 }

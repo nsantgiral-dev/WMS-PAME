@@ -866,6 +866,11 @@ def reabrir_bloqueado(id):
         uid = int(get_jwt_identity())
     except (TypeError, ValueError):
         return jsonify({'error': 'Token inválido'}), 401
+    # El servicio lo vuelve a exigir: esto protege la ruta, aquello la operación.
+    from app.models.usuario import Usuario
+    u = db.session.get(Usuario, uid)
+    if not u or u.rol not in Roles.SUPERVISION:
+        return jsonify({'error': 'Sin permiso'}), 403
     data = request.get_json() or {}
     try:
         sesion = ConteoService.reabrir_bloqueado(
@@ -905,6 +910,10 @@ def resolver_novedad(nid):
         uid = int(get_jwt_identity())
     except (TypeError, ValueError):
         return jsonify({'error': 'Token inválido'}), 401
+    from app.models.usuario import Usuario
+    u = db.session.get(Usuario, uid)
+    if not u or u.rol not in Roles.SUPERVISION:
+        return jsonify({'error': 'Sin permiso'}), 403
     try:
         nov = ConteoService.resolver_novedad(nid, uid, (request.get_json() or {}).get('nota'))
     except PermissionError as e:

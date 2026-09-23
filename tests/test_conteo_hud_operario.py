@@ -737,6 +737,11 @@ class TestElHudEjecutado:
         assert totales == [401, 1]
         assert r['total'] == 1
 
+    def test_un_codigo_de_barras_en_la_caja_de_cantidad_no_se_suma(self, tmp_path):
+        r = _correr_hud(tmp_path, {'pasos': [{'teclear': UNIDAD}]})
+        assert not [e for e in r['envios'] if e[0] == '/api/mobile/conteo/total']
+        assert r['total'] == 0 and 'código de barras' in r['alertas'][-1][0]
+
     def test_confirmar_manda_siempre_el_total(self, tmp_path):
         r = _correr_hud(tmp_path, {'pasos': [{'teclear': '7'}, {'confirmar': True}]})
         conf = [b for u, b in [e for e in r['envios'] if e[0] == '/api/mobile/confirmar']]

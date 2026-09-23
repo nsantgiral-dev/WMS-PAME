@@ -197,6 +197,8 @@ class SesionConteo(db.Model):
     #: (`'[UBICACION_VACIA] …'`), que además pisa cualquier edición de un
     #: admin: un dato parseado de una prosa no es un campo. `None` en un
     #: bloqueo anterior a la columna: se lista como «sin motivo registrado».
+    #: **No confundir con `ConteoService.motivo_bloqueo_ajuste`**, que dice por
+    #: qué un DESCUADRE no se puede ajustar: acá es por qué no se pudo contar.
     motivo_bloqueo = db.Column(db.String(30), nullable=True)
     bloqueado_en = db.Column(db.DateTime, nullable=True)
 
