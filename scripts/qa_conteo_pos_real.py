@@ -309,11 +309,21 @@ def _correr(args, bodega, sku):
         if args.revertir:
             inv = 'AJ-SAL' if payload_job['motivo_codigo'] == 'AJ-ENT' else 'AJ-ENT'
             print(f'\n[7] Reverso: {inv} {payload_job["cantidad"]} (misma función del gateway)')
-            r_rev = connekta.enviar_ajuste_inventario(
-                motivo_codigo=inv, item_codigo=sku, cantidad=payload_job['cantidad'],
-                referencia=f'REV-{cc1.codigo}', bodega=bodega, centro_op=centro_op)
-            print(f'    respuesta: {r_rev}')
-            time.sleep(ESPERA_REGLA_20)
+            try:
+                r_rev = connekta.enviar_ajuste_inventario(
+                    motivo_codigo=inv, item_codigo=sku, cantidad=payload_job['cantidad'],
+                    referencia=f'REV-{cc1.codigo}', bodega=bodega, centro_op=centro_op)
+            except Exception as e:
+                # Un AJ-SAL de reverso puede ser rechazado con «Faltante Inv.»:
+                # el 142951 valida existencia − comprometida − salida_sin_conf, y
+                # el POS pendiente vive en salida_sin_conf. Visto el 2026-09-23 con
+                # ARTESA104@NC1 (existencia 1, POS 1). Es un resultado, no un fallo
+                # del script: Siesa quedó con el ajuste y hay que decirlo.
+                print(f'    Siesa RECHAZÓ el reverso: {e}')
+                r_rev = None
+            if r_rev is not None:
+                print(f'    respuesta: {r_rev}')
+                time.sleep(ESPERA_REGLA_20)
             foto_rev = ConteoService.consultar_foto_siesa(sku, bodega=bodega)
             print(f'    Foto tras el reverso: {_fmt_foto(foto_rev)}')
             rev_ok = foto_rev is not None and foto_rev['existencia'] == foto_antes['existencia']
