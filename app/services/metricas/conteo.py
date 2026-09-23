@@ -549,6 +549,7 @@ _CLAVES_BLOQUEO = (
     ('se movió mientras se contaba', 'MOVIMIENTO_DURANTE_CONTEO'),
     ('quedó viejo', 'CONTEO_VIEJO'),
     ('traslado entrando', 'TRASLADO_ENTRANTE'),
+    ('mercancía de este producto en proceso', 'MERCANCIA_EN_PROCESO'),
 )
 
 

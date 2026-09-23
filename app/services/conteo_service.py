@@ -1013,45 +1013,501 @@ class ConteoService:
         bodega = ConteoService._bodega_siesa_de(sesion)
         if not bodega:
             return None
+        partes = [texto for _pid, texto in ConteoService._traslados_entrantes_vivos(
+            bodega, sesion.foto_siesa_at, producto_id=sesion.producto_id)]
+        return '; '.join(partes) or None
+
+    @staticmethod
+    def _traslados_entrantes_vivos(bodega: str, instante: datetime, *,
+                                   producto_id: int = None) -> list:
+        """Núcleo de `traslado_entrante_vivo`: `[(producto_id, descripción)]` de
+        los traslados que entraban a `bodega` en `instante`, para un producto o
+        —con `producto_id=None`— para todos (lo usa el generador en lote).
+
+        Una sola consulta sirve a los dos: la del ajuste, juzgada contra el
+        instante del conteo, y la del generador, juzgada contra ahora.
+        """
         from datetime import timedelta
         from sqlalchemy import or_
         from app.models.traslado import (EstadoTraslado, ItemSolicitudTraslado,
                                          SolicitudTraslado)
         from app.utils.fecha import dia_operativo_de, inicio_del_dia_utc
 
-        instante = sesion.foto_siesa_at
         desde = inicio_del_dia_utc(
             dia_operativo_de(instante)
             - timedelta(days=ConteoService.DIAS_OPERATIVOS_RECEPCION_RECIENTE))
-        vivos = (SolicitudTraslado.query
-                 .join(ItemSolicitudTraslado,
-                       ItemSolicitudTraslado.solicitud_id == SolicitudTraslado.id)
-                 .filter(
-                     SolicitudTraslado.bodega_destino_siesa == bodega,
-                     ItemSolicitudTraslado.producto_id == sesion.producto_id,
-                     SolicitudTraslado.estado.in_(
-                         [EstadoTraslado.EN_TRANSITO, EstadoTraslado.ENTREGADA]),
-                     # Despachado antes del conteo (sin fecha: no se sabe → vivo).
-                     or_(SolicitudTraslado.fecha_despacho.is_(None),
-                         SolicitudTraslado.fecha_despacho <= instante),
-                     # Y no recibido antes de la ventana.
-                     or_(SolicitudTraslado.fecha_entrega.is_(None),
-                         SolicitudTraslado.fecha_entrega >= desde),
-                 )
-                 .order_by(SolicitudTraslado.id)
-                 .all())
-        if not vivos:
-            return None
-        partes = []
-        for s in vivos:
+        q = (db.session.query(SolicitudTraslado, ItemSolicitudTraslado.producto_id)
+             .join(ItemSolicitudTraslado,
+                   ItemSolicitudTraslado.solicitud_id == SolicitudTraslado.id)
+             .filter(
+                 SolicitudTraslado.bodega_destino_siesa == bodega,
+                 SolicitudTraslado.estado.in_(
+                     [EstadoTraslado.EN_TRANSITO, EstadoTraslado.ENTREGADA]),
+                 # Despachado antes del conteo (sin fecha: no se sabe → vivo).
+                 or_(SolicitudTraslado.fecha_despacho.is_(None),
+                     SolicitudTraslado.fecha_despacho <= instante),
+                 # Y no recibido antes de la ventana.
+                 or_(SolicitudTraslado.fecha_entrega.is_(None),
+                     SolicitudTraslado.fecha_entrega >= desde),
+             ))
+        if producto_id is not None:
+            q = q.filter(ItemSolicitudTraslado.producto_id == producto_id)
+        partes, vistos = [], set()
+        for s, pid in q.order_by(SolicitudTraslado.id).all():
+            if (s.id, pid) in vistos:
+                continue
+            vistos.add((s.id, pid))
             if s.estado == EstadoTraslado.EN_TRANSITO:
-                partes.append(f'{s.codigo} en tránsito desde {s.bodega_origen_siesa}')
+                texto = f'{s.codigo} en tránsito desde {s.bodega_origen_siesa}'
             elif s.fecha_entrega is None:
-                partes.append(f'{s.codigo} entregado sin fecha de entrega registrada')
+                texto = f'{s.codigo} entregado sin fecha de entrega registrada'
             else:
-                partes.append(f'{s.codigo} recibido el '
-                              f'{dia_operativo_de(s.fecha_entrega).isoformat()}')
+                texto = (f'{s.codigo} recibido el '
+                         f'{dia_operativo_de(s.fecha_entrega).isoformat()}')
+            partes.append((pid, texto))
+        return partes
+
+    # ── Mercancía en proceso (2026-09-23) ────────────────────────────────────
+    #
+    # El conteo compara el estante contra el teórico de Siesa. Entre que una
+    # operación del WMS mueve mercancía físicamente y que su documento entra a
+    # Siesa, los dos miden cosas distintas. Si el conteo se ajusta en ese
+    # intervalo, el documento que llega después vuelve a mover lo mismo: doble
+    # descuento (o doble entrada).
+    #
+    # **Qué NO está acá, y por qué** (verificado en el código, no supuesto):
+    #
+    # - Reposición RESERVA → PICKING: mueve entre zonas de la MISMA bodega Siesa
+    #   y ya no manda nada a Siesa (`reposicion_service.confirmar_reposicion`,
+    #   docstring: «100% WMS — nunca toca Siesa»). El teórico es por
+    #   ítem × bodega (`_fila_invfecha`), así que su total no cambia.
+    # - `TareaDevolucion` (logística inversa vieja): DEPRECATED desde el
+    #   2026-07-28, sin escritor vivo (`devolucion_service.py`, encabezado).
+    # - Avería que nunca se encoló a Siesa (almacén de otra bodega, producto sin
+    #   código Siesa — `siesa_job_service.encolar_traslado_averias` la declara en
+    #   el log y NO emite): ningún documento del WMS va a mover a Siesa después,
+    #   así que no hay doble movimiento que evitar. La del producto sin código
+    #   igual no ajusta nunca: sin código no hay foto.
+    # - Traslado ENTRANTE: tiene su propio caso (`traslado_entrante_vivo`).
+    #
+    # Todas se juzgan contra un INSTANTE: el del conteo (`foto_siesa_at`) para
+    # el ajuste, ahora para el generador. Un proceso que terminó antes del
+    # instante ya estaba en el estante (o fuera) y en Siesa; uno que empezó
+    # después no afectó lo contado. El estado que se mira es el de hoy (el WMS
+    # no guarda historia de estados), acotado por las fechas que sí guarda.
+
+    #: Cuántos documentos se nombran en el mensaje. El resto se cuenta: un
+    #: mensaje de bloqueo de veinte renglones no lo lee nadie.
+    MAX_PROCESOS_EN_MENSAJE = 5
+
+    @staticmethod
+    def procesos_en_curso(almacen_id: int, instante: datetime = None, *,
+                          producto_id: int = None) -> list:
+        """**El núcleo.** Mercancía que en `instante` ya se había movido
+        físicamente en el almacén y cuyo documento todavía no había entrado a
+        Siesa. `instante=None` es ahora; `producto_id=None` es todo el almacén
+        (el generador en lote). Devuelve una lista de::
+
+            {'producto_id', 'clase', 'documento', 'detalle', 'accion',
+             'sin_fecha'}
+
+        `clase`: VENTA · TRASLADO_SALIENTE · RECEPCION · AVERIA ·
+        DEVOLUCION_CLIENTE. `sin_fecha=True` cuando el proceso cuenta como vivo
+        porque algún instante no está registrado (Regla 0): el mensaje nombra
+        el documento para que alguien lo corrija.
+
+        Lo usan `mercancia_en_proceso` (el ajuste, contra el instante del
+        conteo) y las dos variantes del generador. Una política, una función.
+        """
+        if not almacen_id:
+            return []
+        if instante is None:
+            instante = datetime.utcnow()
+        return (ConteoService._en_proceso_por_picking(almacen_id, instante, producto_id)
+                + ConteoService._en_proceso_por_recepcion(almacen_id, instante, producto_id)
+                + ConteoService._en_proceso_por_averia(almacen_id, instante, producto_id)
+                + ConteoService._en_proceso_por_devolucion(almacen_id, instante, producto_id))
+
+    @staticmethod
+    def _en_proceso_por_picking(almacen_id, instante, producto_id) -> list:
+        """VENTA y TRASLADO_SALIENTE: recogido del estante y sin salida en Siesa.
+
+        Una tarea de picking sacó mercancía del estante si está EN_PROCESO o
+        tiene `cantidad_recogida > 0` (COMPLETADO, el short-pick BLOQUEADO, o
+        CANCELADO después de una auditoría). Lo que empezó a recoger antes del
+        instante (`fecha_inicio`) sigue «en proceso» hasta que Siesa registra
+        la salida de SU documento:
+
+        - **Pedido**: la remisión 142945, que descarga el inventario. El WMS la
+          marca en `TareaPacking.siesa_triggered_at`
+          (`DespachoParialService._persistir_resultado`) — después de la FE, o
+          sea un poco tarde: el error es hacia el lado conservador.
+        - **Traslado**: la salida 173076/174930 (`siesa_salida_consec`),
+          fechada con `fecha_despacho`.
+
+        La salida tiene que caer entre el inicio del picking y el instante: una
+        remisión anterior al picking es de otra tanda y no lo cubre.
+
+        Sin `fecha_inicio`, o con un empaque cancelado sin remisión, no hay
+        forma de ubicar en el tiempo cuándo volvió la mercancía (si volvió):
+        cuenta como vivo y lo dice.
+        """
+        from sqlalchemy import and_, exists, or_
+        from app.models.packing import EstadoPacking, TareaPacking
+        from app.models.picking import EstadoPicking, TareaPicking as T
+        from app.models.traslado import SolicitudTraslado
+
+        remitido = exists().where(and_(
+            TareaPacking.numero_pedido_siesa == T.referencia_documento,
+            TareaPacking.siesa_triggered.is_(True),
+            TareaPacking.siesa_triggered_at.isnot(None),
+            TareaPacking.siesa_triggered_at >= T.fecha_inicio,
+            TareaPacking.siesa_triggered_at <= instante))
+        salio = exists().where(and_(
+            SolicitudTraslado.codigo == T.referencia_documento,
+            SolicitudTraslado.siesa_salida_consec.isnot(None),
+            SolicitudTraslado.fecha_despacho.isnot(None),
+            SolicitudTraslado.fecha_despacho >= T.fecha_inicio,
+            SolicitudTraslado.fecha_despacho <= instante))
+        es_traslado = T.tipo_documento == 'TRASLADO'
+        es_pedido = or_(T.tipo_documento.is_(None), T.tipo_documento != 'TRASLADO')
+        q = T.query.filter(
+            T.almacen_id == almacen_id,
+            T.estado != EstadoPicking.PENDIENTE,
+            or_(T.estado == EstadoPicking.EN_PROCESO, T.cantidad_recogida > 0),
+            or_(T.fecha_inicio.is_(None), T.fecha_inicio <= instante),
+            or_(and_(es_traslado, ~salio), and_(es_pedido, ~remitido)),
+        )
+        if producto_id is not None:
+            q = q.filter(T.producto_id == producto_id)
+        tareas = q.order_by(T.id).all()
+        if not tareas:
+            return []
+
+        # Solo para el texto: cómo quedó el empaque de cada pedido vivo.
+        pedidos = {t.referencia_documento for t in tareas
+                   if t.tipo_documento != 'TRASLADO' and t.referencia_documento}
+        empaques = {}
+        if pedidos:
+            for p in TareaPacking.query.filter(
+                    TareaPacking.numero_pedido_siesa.in_(pedidos)).all():
+                empaques.setdefault(p.numero_pedido_siesa, []).append(p)
+
+        grupos = {}
+        for t in tareas:
+            clase = 'TRASLADO_SALIENTE' if t.tipo_documento == 'TRASLADO' else 'VENTA'
+            grupos.setdefault((t.producto_id, clase, t.referencia_documento), []).append(t)
+
+        hallazgos = []
+        for (pid, clase, ref), ts in grupos.items():
+            sin_inicio = [t.codigo for t in ts if t.fecha_inicio is None]
+            en_curso = any(t.estado == EstadoPicking.EN_PROCESO for t in ts)
+            accion_picking = 'en picking' if en_curso else 'recogido en picking'
+            sin_fecha = bool(sin_inicio)
+            if not ref:
+                detalle = (f'la tarea de picking {ts[0].codigo} sacó mercancía del '
+                           f'estante y no tiene documento asociado')
+                accion = (f'Revisar la tarea {ts[0].codigo} con el jefe de bodega: '
+                          f'sin documento no hay salida que esperar')
+                sin_fecha = True
+            elif clase == 'TRASLADO_SALIENTE':
+                detalle = (f'traslado {ref} {accion_picking} y sin salida (STS) '
+                           f'en Siesa')
+                accion = f'Recontar cuando el traslado {ref} salga en Siesa'
+            else:
+                pks = empaques.get(ref, [])
+                rm = next((p for p in pks if p.rm_consec and not p.siesa_triggered), None)
+                vivos = [p for p in pks if p.estado != EstadoPacking.CANCELADO]
+                if rm is not None:
+                    detalle = (f'pedido {ref} {accion_picking}; la remisión '
+                               f'{rm.rm_tipo or "RM"}-{rm.rm_consec} existe pero el '
+                               f'despacho no terminó de registrarse (sin fecha)')
+                    accion = (f'Terminar el despacho del pedido {ref} en la cola de '
+                              f'Siesa y recontar')
+                    sin_fecha = True
+                elif pks and not vivos:
+                    detalle = (f'pedido {ref} {accion_picking} y su empaque se '
+                               f'canceló sin remisión: no hay registro de que la '
+                               f'mercancía haya vuelto al estante')
+                    accion = (f'Revisar con el jefe de bodega dónde quedó la '
+                              f'mercancía del pedido {ref}')
+                    sin_fecha = True
+                else:
+                    detalle = f'pedido {ref} {accion_picking} y sin remisión en Siesa'
+                    accion = f'Recontar cuando se remisione el pedido {ref}'
+            if sin_inicio:
+                detalle += (f' (picking {", ".join(sin_inicio[:3])} sin fecha de '
+                            f'inicio registrada)')
+            hallazgos.append({'producto_id': pid, 'clase': clase,
+                              'documento': ref or ts[0].codigo, 'detalle': detalle,
+                              'accion': accion, 'sin_fecha': sin_fecha})
+        return hallazgos
+
+    @staticmethod
+    def _en_proceso_por_recepcion(almacen_id, instante, producto_id) -> list:
+        """RECEPCION: mercancía recibida físicamente sin la entrada 142948.
+
+        Vivo si la recepción está EN_PROCESO (el camión se está descargando) o
+        CONFIRMADA con algo recibido de este SKU, empezó antes del instante
+        (`fecha_inicio`, o `fecha_confirmacion` si no la tiene), y la entrada
+        no estaba registrada en Siesa en el instante:
+
+        - `siesa_triggered_at` ≤ instante: el pre-flag se marca justo antes del
+          POST (`siesa_job_service._ejecutar_con_preflag`);
+        - **salvo** que haya un job ENTRADA_OC FALLIDO: con la bandera puesta
+          eso es un timeout (Regla 3, «posiblemente enviado») — no se sabe si
+          entró;
+        - o un job ENTRADA_OC COMPLETADO antes del instante (la corrección [C7]
+          de `confirmar_recepcion` marca la bandera sin fecha).
+
+        ABIERTA no cuenta: nadie empezó a descargar. CANCELADA tampoco: la
+        mercancía no se recibió.
+        """
+        from sqlalchemy import and_, exists, func, or_
+        from app.models.recepcion import (EstadoRecepcion, ItemRecepcion as I,
+                                          RecepcionMercancia as R)
+        from app.models.siesa_job import EstadoSiesaJob, SiesaJob
+
+        def _job(estado, *extra):
+            return exists().where(and_(
+                SiesaJob.tipo == 'ENTRADA_OC',
+                SiesaJob.referencia_tipo == 'RecepcionMercancia',
+                SiesaJob.referencia_id == R.id,
+                SiesaJob.estado == estado, *extra))
+
+        llegada = func.coalesce(R.fecha_inicio, R.fecha_confirmacion)
+        entro_a_tiempo = or_(
+            and_(R.siesa_triggered.is_(True), R.siesa_triggered_at.isnot(None),
+                 R.siesa_triggered_at <= instante,
+                 ~_job(EstadoSiesaJob.FALLIDO)),
+            _job(EstadoSiesaJob.COMPLETADO, SiesaJob.fecha_completado <= instante),
+        )
+        q = (db.session.query(R, I.producto_id)
+             .join(I, I.recepcion_id == R.id)
+             .filter(
+                 R.almacen_id == almacen_id,
+                 or_(R.estado == EstadoRecepcion.EN_PROCESO,
+                     and_(R.estado == EstadoRecepcion.CONFIRMADA,
+                          I.cantidad_recibida > 0)),
+                 or_(llegada.is_(None), llegada <= instante),
+                 ~entro_a_tiempo,
+             ))
+        if producto_id is not None:
+            q = q.filter(I.producto_id == producto_id)
+        hallazgos, vistos = [], set()
+        for r, pid in q.order_by(R.id).all():
+            if (r.id, pid) in vistos:
+                continue
+            vistos.add((r.id, pid))
+            sin_fecha = r.fecha_inicio is None and r.fecha_confirmacion is None
+            if r.estado == EstadoRecepcion.EN_PROCESO:
+                detalle = f'recepción {r.codigo} (OC {r.numero_oc_siesa}) en curso'
+            elif r.siesa_triggered and (r.siesa_triggered_at is None
+                                        or r.siesa_triggered_at <= instante):
+                detalle = (f'recepción {r.codigo} (OC {r.numero_oc_siesa}) recibida; '
+                           f'no se sabe si su entrada llegó a Siesa (resultado '
+                           f'desconocido o sin fecha)')
+                sin_fecha = True
+            else:
+                detalle = (f'recepción {r.codigo} (OC {r.numero_oc_siesa}) recibida '
+                           f'y sin entrada en Siesa')
+            if sin_fecha and r.estado != EstadoRecepcion.CONFIRMADA:
+                detalle += ' (sin fecha de inicio registrada)'
+            hallazgos.append({
+                'producto_id': pid, 'clase': 'RECEPCION', 'documento': r.codigo,
+                'detalle': detalle,
+                'accion': (f'Recontar cuando la entrada de la OC {r.numero_oc_siesa} '
+                           f'quede registrada en Siesa'),
+                'sin_fecha': sin_fecha})
+        return hallazgos
+
+    @staticmethod
+    def _en_proceso_por_averia(almacen_id, instante, producto_id) -> list:
+        """AVERIA: separada del estante y sin traslado a la bodega de averías.
+
+        El ancla es el movimiento que registró la avería, con su job
+        TRASLADO_AVERIAS (`encolar_traslado_averias`, el núcleo único del
+        encolado: recepción y auditoría de picking). Vivo si el movimiento es
+        anterior al instante y ningún job suyo se había COMPLETADO en el
+        instante. Un job FALLIDO o DESCARTADO no llegó a Siesa: la mercancía
+        sigue contada como vendible allá, y sigue vivo.
+
+        `MovimientoInventario.siesa_sync = 'ENVIADO'` no sirve de fecha: no
+        dice cuándo. `fecha_completado` del job sí.
+        """
+        import json as _json
+        from sqlalchemy import and_, exists, or_
+        from sqlalchemy.orm import aliased
+        from app.models.inventario import MovimientoInventario as M
+        from app.models.siesa_job import EstadoSiesaJob, SiesaJob
+
+        _ref = dict(tipo='TRASLADO_AVERIAS', referencia_tipo='movimiento_averia')
+        J2 = aliased(SiesaJob)
+        enviado = exists().where(and_(
+            J2.tipo == _ref['tipo'], J2.referencia_tipo == _ref['referencia_tipo'],
+            J2.referencia_id == M.id, J2.estado == EstadoSiesaJob.COMPLETADO,
+            J2.fecha_completado.isnot(None), J2.fecha_completado <= instante))
+        q = (db.session.query(M, SiesaJob)
+             .join(SiesaJob, and_(SiesaJob.referencia_id == M.id,
+                                  SiesaJob.tipo == _ref['tipo'],
+                                  SiesaJob.referencia_tipo == _ref['referencia_tipo']))
+             .filter(M.almacen_id == almacen_id,
+                     or_(M.fecha.is_(None), M.fecha <= instante),
+                     ~enviado))
+        if producto_id is not None:
+            q = q.filter(M.producto_id == producto_id)
+        por_mov = {}
+        for m, j in q.order_by(M.id, SiesaJob.id).all():
+            por_mov.setdefault(m.id, (m, []))[1].append(j)
+        hallazgos = []
+        for m, jobs in por_mov.values():
+            ultimo = jobs[-1]
+            try:
+                referencia = (_json.loads(ultimo.payload or '{}').get('referencia')
+                              or m.motivo or f'movimiento {m.id}')
+            except (TypeError, ValueError):
+                referencia = m.motivo or f'movimiento {m.id}'
+            if ultimo.estado in (EstadoSiesaJob.FALLIDO, EstadoSiesaJob.DESCARTADO):
+                estado = 'falló' if ultimo.estado == EstadoSiesaJob.FALLIDO else 'se descartó'
+                accion = ('Reintentar el traslado a averías en la cola de Siesa (o '
+                          'registrarlo en Siesa a mano) y recontar')
+                detalle = (f'avería separada del estante ({referencia}) y su traslado '
+                           f'a averías en Siesa {estado}')
+            else:
+                accion = ('Recontar cuando el traslado a averías quede registrado '
+                          'en Siesa')
+                detalle = (f'avería separada del estante ({referencia}) y sin '
+                           f'traslado a averías en Siesa')
+            hallazgos.append({
+                'producto_id': m.producto_id, 'clase': 'AVERIA',
+                'documento': referencia, 'detalle': detalle, 'accion': accion,
+                'sin_fecha': m.fecha is None})
+        return hallazgos
+
+    @staticmethod
+    def _en_proceso_por_devolucion(almacen_id, instante, producto_id) -> list:
+        """DEVOLUCION_CLIENTE: la mercancía volvió a la bodega y la nota crédito
+        no está aprobada en Siesa.
+
+        La NC se crea en Elaboración (Regla 21) y **reingresa el inventario a
+        Siesa al aprobarla** a mano en el escritorio (CLAUDE.md, «Procedimiento
+        Manual», paso 5). Hasta entonces la mercancía está en la bodega y Siesa
+        no la tiene: un sobrante falso que, ajustado, entra dos veces.
+
+        La aprobación la anota contabilidad en el WMS
+        (`DevolucionClienteService.marcar_nc_aprobada` →
+        `nc_aprobada_siesa_at`). Vivo si la devolución se confirmó antes del
+        instante y no estaba marcada aprobada en el instante. ABIERTA no cuenta:
+        la mercancía todavía no entró al estante. Las líneas averiadas también
+        cuentan: la NC las reingresa a la bodega igual.
+        """
+        from sqlalchemy import and_, or_
+        from app.models.devolucion_cliente import (DevolucionCliente as D,
+                                                   EstadoDevolucionCliente,
+                                                   LineaDevolucionCliente as L)
+        q = (db.session.query(D, L.producto_id)
+             .join(L, L.devolucion_id == D.id)
+             .filter(D.almacen_id == almacen_id,
+                     D.estado == EstadoDevolucionCliente.CONFIRMADA,
+                     L.cantidad_devuelta > 0,
+                     or_(D.fecha_confirmacion.is_(None),
+                         D.fecha_confirmacion <= instante),
+                     ~and_(D.nc_aprobada_siesa.is_(True),
+                           D.nc_aprobada_siesa_at.isnot(None),
+                           D.nc_aprobada_siesa_at <= instante)))
+        if producto_id is not None:
+            q = q.filter(L.producto_id == producto_id)
+        hallazgos, vistos = [], set()
+        for d, pid in q.order_by(D.id).all():
+            if (d.id, pid) in vistos:
+                continue
+            vistos.add((d.id, pid))
+            nc = f'NC {d.siesa_nc_consec}' if d.siesa_nc_consec else 'nota crédito'
+            detalle = (f'devolución {d.codigo} del pedido {d.numero_pedido_siesa or "?"} '
+                       f'ya volvió a la bodega y su {nc} no consta aprobada en Siesa')
+            if d.fecha_confirmacion is None:
+                detalle += ' (sin fecha de confirmación registrada)'
+            hallazgos.append({
+                'producto_id': pid, 'clase': 'DEVOLUCION_CLIENTE',
+                'documento': d.codigo, 'detalle': detalle,
+                'accion': (f'Aprobar la {nc} en Siesa, marcarla aprobada en el WMS '
+                           f'(devolución {d.codigo}) y recontar'),
+                'sin_fecha': d.fecha_confirmacion is None})
+        return hallazgos
+
+    @staticmethod
+    def describir_procesos(hallazgos: list):
+        """Texto de una lista de `procesos_en_curso`: qué documento y qué hacer.
+        `None` si la lista está vacía."""
+        if not hallazgos:
+            return None
+        tope = ConteoService.MAX_PROCESOS_EN_MENSAJE
+        partes = [f'{h["detalle"]} → {h["accion"]}' for h in hallazgos[:tope]]
+        if len(hallazgos) > tope:
+            partes.append(f'y {len(hallazgos) - tope} documento(s) más')
         return '; '.join(partes)
+
+    @staticmethod
+    def mercancia_en_proceso(sesion: SesionConteo):
+        """¿Había mercancía de este SKU en proceso en el instante del conteo?
+        Descripción legible (documento y qué hacer), o `None`.
+
+        Caso 7 de `motivo_bloqueo_ajuste`. Se juzga contra `foto_siesa_at`,
+        igual que `traslado_entrante_vivo`: la aprobación puede ser días
+        después, y el delta se fijó al contar. Sin foto del cierre devuelve
+        `None`: esa sesión ya está bloqueada por no tener foto.
+        """
+        if sesion.foto_siesa_at is None or not sesion.producto_id or not sesion.almacen_id:
+            return None
+        return ConteoService.describir_procesos(ConteoService.procesos_en_curso(
+            sesion.almacen_id, sesion.foto_siesa_at, producto_id=sesion.producto_id))
+
+    @staticmethod
+    def _hallazgos_para_generador(almacen_id: int, instante: datetime,
+                                  producto_id: int = None) -> list:
+        """Lo del núcleo más los traslados entrantes, que para decidir si
+        conviene contar AHORA son lo mismo: mercancía que está llegando."""
+        hallazgos = ConteoService.procesos_en_curso(almacen_id, instante,
+                                                    producto_id=producto_id)
+        from app.models.almacen import Almacen as _Alm
+        alm = db.session.get(_Alm, almacen_id) if almacen_id else None
+        bodega = alm.bodega_siesa_id if alm else None
+        if bodega:
+            for pid, texto in ConteoService._traslados_entrantes_vivos(
+                    bodega, instante, producto_id=producto_id):
+                hallazgos.append({
+                    'producto_id': pid, 'clase': 'TRASLADO_ENTRANTE',
+                    'documento': texto.split(' ', 1)[0],
+                    'detalle': f'traslado {texto}',
+                    'accion': 'Contar cuando el traslado esté recibido y guardado',
+                    'sin_fecha': 'sin fecha' in texto})
+        return hallazgos
+
+    @staticmethod
+    def mercancia_en_proceso_ahora(producto_id: int, almacen_id: int):
+        """Para el GENERADOR de conteos: ¿este SKU × almacén tiene mercancía en
+        proceso AHORA? Descripción legible, o `None`.
+
+        Mismo núcleo que el ajuste (`procesos_en_curso`), juzgado contra ahora,
+        más los traslados entrantes. Contar un SKU en ese estado produce un
+        conteo que no se va a poder ajustar.
+        """
+        return ConteoService.describir_procesos(ConteoService._hallazgos_para_generador(
+            almacen_id, datetime.utcnow(), producto_id=producto_id))
+
+    @staticmethod
+    def productos_con_mercancia_en_proceso(almacen_id: int, instante: datetime = None) -> dict:
+        """Variante EN LOTE para el generador: `{producto_id: descripción}` de
+        todos los SKU del almacén con mercancía en proceso en `instante`
+        (ahora por defecto). Las mismas consultas, sin filtro de producto: un
+        barrido por almacén en vez de una ronda por SKU."""
+        if instante is None:
+            instante = datetime.utcnow()
+        por_producto = {}
+        for h in ConteoService._hallazgos_para_generador(almacen_id, instante):
+            por_producto.setdefault(h['producto_id'], []).append(h)
+        return {pid: ConteoService.describir_procesos(hs)
+                for pid, hs in por_producto.items()}
 
     @staticmethod
     def _ids_de_la_cadena(sesion: SesionConteo) -> set:
@@ -1135,7 +1591,7 @@ class ConteoService:
         declarado con su motivo en el trinquete
         (`tests/test_conteo_ventas_durante_conteo.py::AJUSTES_SIN_FOTO_DE_INICIO`).
 
-        Seis casos, todos Regla 0:
+        Siete casos, todos Regla 0:
 
         1. **Sin foto de Siesa.** El delta se mide contra la foto del conteo;
            sin ella solo queda la base del WMS, y un delta sobre esa base deja
@@ -1160,6 +1616,13 @@ class ConteoService:
         6. **Otra cadena del mismo hueco dejó vieja esta foto** (2026-09-23):
            un conteo posterior, un ajuste en vuelo, o uno aceptado por Siesa
            después de esta foto (`observacion_que_la_vuelve_vieja`).
+        7. **Mercancía en proceso** (2026-09-23): en el instante del conteo
+           había mercancía de este SKU que ya se había movido físicamente y
+           cuyo documento todavía no estaba en Siesa — recogida y sin remisión,
+           recogida para un traslado y sin STS, recibida y sin EntradaOC,
+           averiada y sin traslado a averías, devuelta por el cliente y con la
+           NC sin aprobar (`mercancia_en_proceso`). El documento que entra
+           después vuelve a mover lo mismo que el ajuste.
         """
         if (sesion.fuente_existencia != 'SIESA' or sesion.teorico_siesa is None
                 or sesion.cant_pos_siesa is None
@@ -1212,6 +1675,14 @@ class ConteoService:
                 f'estante: un conteo hecho '
                 f'{ConteoService.DIAS_OPERATIVOS_RECEPCION_RECIENTE + 1} días '
                 f'operativos después de la recepción ya no lo cuenta.'
+            )
+        en_proceso = ConteoService.mercancia_en_proceso(sesion)
+        if en_proceso:
+            return (
+                f'Había mercancía de este producto en proceso que Siesa todavía no '
+                f'había registrado cuando se contó: {en_proceso}. Mientras ese '
+                f'documento no entre, el estante y Siesa no miden lo mismo, y '
+                f'ajustar ahora movería esa mercancía dos veces en Siesa.'
             )
         return None
 
