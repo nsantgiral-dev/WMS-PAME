@@ -2939,7 +2939,7 @@ raíz), así que tocar un eslabón sin mirar los otros deja una raíz en
 SEGUNDO/TERCER_CONTEO esperando algo que no va a llegar —y como ese estado está
 en `CADENA_EN_CURSO`, el generador no vuelve a programar el hueco **nunca**—, o
 un eslabón vivo contando para una raíz cerrada. Trinquete:
-`tests/test_conteo_cadena_con_salida.py` (36 tests, 16 mutaciones, las 16 rojas).
+`tests/test_conteo_cadena_con_salida.py` (35 tests, 16 mutaciones, las 16 rojas).
 
 | Operación | Qué dejaba | Ahora |
 |---|---|---|
