@@ -1409,18 +1409,22 @@
 
     <!-- Stock -->
     <div id="tab-stock" class="admin-content" style="display:none;">
-      <div style="font-size:16px;font-weight:700;margin-bottom:12px;">Alertas de stock</div>
-      <div id="lista-alertas">Cargando...</div>
-
-      <div style="font-size:16px;font-weight:700;margin:20px 0 12px;">Catálogo de productos</div>
-      <div style="display:flex;gap:8px;margin-bottom:12px;">
+      <div style="font-size:16px;font-weight:700;margin-bottom:12px;">Catálogo de productos</div>
+      <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;">
         <input id="input-buscar-producto" type="text" placeholder="Buscar por nombre o código..."
-          style="flex:1;padding:10px 12px;background:#1a1a1a;border:1px solid #333;border-radius:8px;color:#fff;font-size:13px;"
+          style="flex:1;min-width:180px;padding:10px 12px;background:#1a1a1a;border:1px solid #333;border-radius:8px;color:#fff;font-size:13px;"
           oninput="buscarProductos()" />
+        <select id="filtro-almacen-stock" onchange="cargarCatalogo(1)"
+          style="padding:10px 12px;background:#1a1a1a;border:1px solid #333;border-radius:8px;color:#fff;font-size:13px;">
+          <option value="">Todas las bodegas</option>
+        </select>
         <span id="total-productos" style="font-size:12px;color:#555;align-self:center;white-space:nowrap;"></span>
       </div>
       <div id="lista-productos">Cargando...</div>
       <div style="display:flex;gap:8px;justify-content:center;margin-top:12px;" id="paginacion-productos"></div>
+
+      <div style="font-size:16px;font-weight:700;margin:20px 0 12px;">Alertas de stock</div>
+      <div id="lista-alertas">Cargando...</div>
     </div>
 
     <!-- Siesa -->

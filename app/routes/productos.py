@@ -17,6 +17,14 @@ def listar_productos():
     per_page = min(request.args.get('per_page', 50, type=int), 200)
     buscar = request.args.get('q', '')
     categoria = request.args.get('categoria', '')
+    almacen_id = request.args.get('almacen_id', type=int)
+
+    if almacen_id is not None:
+        from app.models.almacen import Almacen
+        if not Almacen.query.get(almacen_id):
+            # Un almacén que no existe no tiene «0 unidades»: la pregunta está
+            # mal hecha, y contestarla con ceros la disfraza de respuesta.
+            return jsonify({'error': f'almacen_id {almacen_id} no existe'}), 400
 
     query = Producto.query.filter_by(activo=True)
 
@@ -35,11 +43,28 @@ def listar_productos():
 
     productos = query.paginate(page=page, per_page=per_page, error_out=False)
 
+    from app.services.stock_por_almacen import CAMPOS_STOCK, stock_por_almacen
+    desglose = stock_por_almacen([p.id for p in productos.items])
+
+    salida = []
+    for p in productos.items:
+        d = p.to_dict()
+        por_almacen = desglose.get(p.id, {})
+        if almacen_id is not None:
+            # Mismos nombres de campo, acotados al almacén pedido: el total de
+            # todas las bodegas no puede colarse cuando se filtra por una.
+            fila = por_almacen.get(almacen_id, {})
+            for campo in CAMPOS_STOCK:
+                d[campo] = fila.get(campo, 0)
+        d['stock_por_almacen'] = sorted(por_almacen.values(), key=lambda f: f['almacen'])
+        salida.append(d)
+
     return jsonify({
-        'productos': [p.to_dict() for p in productos.items],
+        'productos': salida,
         'total': productos.total,
         'paginas': productos.pages,
-        'pagina_actual': page
+        'pagina_actual': page,
+        'almacen_id': almacen_id,
     }), 200
 
 

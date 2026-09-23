@@ -1745,8 +1745,28 @@ async function cargarOperarios() {
   } catch (e) { el.innerHTML = '<div style="color:#ef4444;">Error</div>'; }
 }
 
-/** Fetch stock alerts and load the product catalog. */
+let _filtroAlmacenStockListo = false;
+/** Fill the warehouse selector of the Stock tab once; defaults to ALMACEN_ID. */
+async function _poblarFiltroAlmacenStock() {
+  const sel = document.getElementById('filtro-almacen-stock');
+  if (!sel || _filtroAlmacenStockListo) return;
+  try {
+    const almacenes = await get('/api/almacenes/');
+    (almacenes || []).forEach(a => {
+      const op = document.createElement('option');
+      op.value = String(a.id);
+      op.textContent = `${a.codigo} · ${a.nombre}`;
+      sel.appendChild(op);
+    });
+    if ((almacenes || []).some(a => a.id === ALMACEN_ID)) sel.value = String(ALMACEN_ID);
+    _filtroAlmacenStockListo = true;
+  } catch (e) { /* sin la lista queda «Todas las bodegas», que sigue siendo verdad */ }
+}
+
+/** Load the product catalog (top of the tab) and the stock alerts. */
 async function cargarStock() {
+  await _poblarFiltroAlmacenStock();
+  await cargarCatalogo(1);
   const el = document.getElementById('lista-alertas');
   if (!el) return;
   try {
@@ -1767,7 +1787,6 @@ async function cargarStock() {
       </div>`).join('');
     }
   } catch (e) { el.innerHTML = '<div style="color:#ef4444;">Error</div>'; }
-  await cargarCatalogo(1);
 }
 
 let _catalogoPag = 1;
@@ -1779,8 +1798,12 @@ async function cargarCatalogo(pag) {
   const pagEl = document.getElementById('paginacion-productos');
   if (!el) return;
   const q = (document.getElementById('input-buscar-producto') || {}).value || '';
+  // Sin selector (u opción vacía) = todas las bodegas, que es lo que la API
+  // devuelve sin `almacen_id`.
+  const almacenId = (document.getElementById('filtro-almacen-stock') || {}).value || '';
+  const filtroAlm = almacenId ? `&almacen_id=${encodeURIComponent(almacenId)}` : '';
   try {
-    const d = await get(`/api/productos/?page=${_catalogoPag}&per_page=20&q=${encodeURIComponent(q)}`);
+    const d = await get(`/api/productos/?page=${_catalogoPag}&per_page=20&q=${encodeURIComponent(q)}${filtroAlm}`);
     if (totalEl) totalEl.textContent = `${d.total} productos`;
     if (!d.productos || !d.productos.length) {
       el.innerHTML = '<div style="color:#555;text-align:center;padding:20px;font-size:13px;">Sin productos</div>';
@@ -1796,6 +1819,9 @@ async function cargarCatalogo(pag) {
         <div style="text-align:right;">
           <div style="font-size:16px;font-weight:700;color:${(p.stock_vendible ?? p.stock_total) > 0 ? '#4ade80' : (p.stock_total > 0 ? '#fbbf24' : '#555')}">${esc(p.stock_total)}</div>
           ${p.stock_averiado > 0 ? `<div style="font-size:10px;color:#fbbf24;">${esc(p.stock_averiado)} averiadas</div>` : ''}
+          ${!almacenId && Array.isArray(p.stock_por_almacen) && p.stock_por_almacen.length
+            ? `<div style="font-size:10px;color:#93c5fd;">${p.stock_por_almacen.map(a => `${esc(a.almacen)} ${esc(a.stock_total)}`).join(' · ')}</div>`
+            : ''}
           <div style="font-size:10px;color:#555;">${esc(p.unidad_medida || 'UND')}</div>
         </div>
       </div>`).join('');
