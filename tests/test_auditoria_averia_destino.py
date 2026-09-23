@@ -220,6 +220,7 @@ class TestLaCascadaNoSeComeLaPreferencia:
         # que esas ramas NO tocan averías, y para afirmarlo tienen que correr.
         from unittest.mock import patch
         from app.services.conteo_service import ConteoService
+        from tests.conftest import foto_siesa
         almacen.centro_op_siesa = '003'
         db.session.commit()
 
@@ -228,8 +229,8 @@ class TestLaCascadaNoSeComeLaPreferencia:
             tarea.codigo = f'PICK-AUD-{resultado}'
             ub.codigo = f'PIK-AUD-{resultado}'
             db.session.commit()
-            with patch.object(ConteoService, 'consultar_existencia_siesa',
-                              return_value=1.0):
+            with patch.object(ConteoService, 'consultar_foto_siesa',
+                              return_value=foto_siesa(1.0)):
                 PickingService.auditar_tarea(tarea.id, admin_id=usuario_admin.id,
                                              resultado=resultado,
                                              cantidad_hallada=1)

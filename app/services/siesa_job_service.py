@@ -1102,10 +1102,14 @@ def _ejecutar_job(job: SiesaJob) -> dict:
                     f'y sesion {sesion_id} sin producto_codigo_siesa'
                 )
             _alm_r = _AlmRec.query.get(sesion_cteo.almacen_id)
+            # Sin `diferencia` se reconstruye contra la MISMA base del conteo
+            # (el teórico de su foto, `existencia − POS`), nunca contra la
+            # existencia cruda: esa resta es el doble descuento del POS.
+            from app.services.conteo_service import ConteoService as _CS
             _dif_r = (
                 sesion_cteo.diferencia
                 if sesion_cteo.diferencia is not None
-                else (sesion_cteo.cantidad_fisica or 0) - (sesion_cteo.existencia_siesa or 0)
+                else (sesion_cteo.cantidad_fisica or 0) - (_CS.base_de_comparacion(sesion_cteo) or 0)
             )
             if _dif_r == 0:
                 logger.info(

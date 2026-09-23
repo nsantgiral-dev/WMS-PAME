@@ -44,11 +44,11 @@ class TestLaExistenciaDeSiesaNoSeInventa:
         """**El detector ciego.** `0.0` habría entrado al ajuste como si Siesa
         hubiera dicho cero."""
         from app.services import conteo_service
-        from app.services.connekta_gateway import connekta
+        from app.services.connekta_gateway import connekta, ConnektaGateway as _ConnektaGateway
         self._sesion(db, almacen)
         monkeypatch.setattr(connekta, 'modo_simulacion', False)
         monkeypatch.setattr(
-            connekta, 'get_inventario_fecha',
+            _ConnektaGateway, 'get_inventario_fecha',
             lambda *a, **k: {'detalle': {'Table': [
                 {'alerta': 'Por favor verifique los parámetros'}]}})
 
@@ -62,10 +62,10 @@ class TestLaExistenciaDeSiesaNoSeInventa:
         """Otra API, otro alias, misma consecuencia. El default de 0 era la
         misma mentira por otra puerta."""
         from app.services import conteo_service
-        from app.services.connekta_gateway import connekta
+        from app.services.connekta_gateway import connekta, ConnektaGateway as _ConnektaGateway
         monkeypatch.setattr(connekta, 'modo_simulacion', False)
         monkeypatch.setattr(
-            connekta, 'get_inventario_fecha',
+            _ConnektaGateway, 'get_inventario_fecha',
             lambda *a, **k: {'detalle': {'Table': [{'otro_campo': 5}]}})
         assert conteo_service.ConteoService.consultar_existencia_siesa(
             'SKU-EXIST', bodega='NB1') is None
@@ -75,10 +75,10 @@ class TestLaExistenciaDeSiesaNoSeInventa:
         """Lo que el arreglo no puede romper: Siesa sí puede decir cero, y eso
         es un dato. Confundirlo con «no sé» impediría ajustar un SKU agotado."""
         from app.services import conteo_service
-        from app.services.connekta_gateway import connekta
+        from app.services.connekta_gateway import connekta, ConnektaGateway as _ConnektaGateway
         monkeypatch.setattr(connekta, 'modo_simulacion', False)
         monkeypatch.setattr(
-            connekta, 'get_inventario_fecha',
+            _ConnektaGateway, 'get_inventario_fecha',
             lambda *a, **k: {'detalle': {'Table': [
                 {'f400_cant_existencia_1': 0}]}})
         assert conteo_service.ConteoService.consultar_existencia_siesa(
@@ -307,7 +307,7 @@ class TestElSTSNoSeEmiteDosVeces:
 
         from app.models.traslado import SolicitudTraslado
         from app.models.usuario import Usuario
-        from app.services.connekta_gateway import connekta
+        from app.services.connekta_gateway import connekta, ConnektaGateway as _ConnektaGateway
         u = Usuario.query.filter_by(email='sts_ok@test.com').first()
         if not u:
             u = Usuario(email='sts_ok@test.com', nombre='A', rol='admin',
@@ -340,10 +340,10 @@ class TestElSTSNoSeEmiteDosVeces:
         import logging
 
         from app.services import conteo_service
-        from app.services.connekta_gateway import connekta
+        from app.services.connekta_gateway import connekta, ConnektaGateway as _ConnektaGateway
         monkeypatch.setattr(connekta, 'modo_simulacion', False)
         monkeypatch.setattr(
-            connekta, 'get_inventario_fecha',
+            _ConnektaGateway, 'get_inventario_fecha',
             lambda *a, **k: {'detalle': {'Table': [
                 {'alerta': 'Por favor verifique los parámetros'}]}})
         with caplog.at_level(logging.ERROR):

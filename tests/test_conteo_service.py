@@ -11,12 +11,13 @@ Covers:
   - generar_auditoria_por_excepcion no-dup: returns existing active session
 
 Siesa integration is NOT tested here (covered by test_siesa_contracts.py).
-connekta is in modo_simulacion (consultar_existencia_siesa returns None),
+connekta is in modo_simulacion (consultar_foto_siesa returns None),
 so registrar_conteo falls back to UbicacionProducto.cantidad from WMS.
 """
 import pytest
 from unittest.mock import patch
 from datetime import datetime
+from tests.conftest import foto_siesa as _foto
 
 
 # ---------------------------------------------------------------------------
@@ -444,10 +445,10 @@ class TestRegistrarConteo:
     def test_registrar_conteo_match_with_mocked_siesa(
         self, db, almacen, producto, ub_picking, inv_picking, usuario, sesion_pendiente,
     ):
-        """When consultar_existencia_siesa returns a known value, MATCH uses that value."""
+        """When consultar_foto_siesa returns a known photo, MATCH uses its teorico."""
         from app.services.conteo_service import ConteoService
 
-        with patch.object(ConteoService, 'consultar_existencia_siesa', return_value=50.0):
+        with patch.object(ConteoService, 'consultar_foto_siesa', return_value=_foto(50.0)):
             result = ConteoService.registrar_conteo(
                 sesion_id=sesion_pendiente.id,
                 operario_id=usuario.id,
@@ -464,7 +465,7 @@ class TestRegistrarConteo:
         """When Siesa says 100 but operator counts 90 → SEGUNDO_CONTEO."""
         from app.services.conteo_service import ConteoService
 
-        with patch.object(ConteoService, 'consultar_existencia_siesa', return_value=100.0):
+        with patch.object(ConteoService, 'consultar_foto_siesa', return_value=_foto(100.0)):
             result = ConteoService.registrar_conteo(
                 sesion_id=sesion_pendiente.id,
                 operario_id=usuario.id,

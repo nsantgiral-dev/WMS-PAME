@@ -378,3 +378,26 @@ def hoy_operativo():
     """
     from app.utils.fecha import dia_operativo
     return dia_operativo()
+
+
+def foto_siesa(existencia, cant_pos=0.0, salida_sin_conf=None):
+    """Una foto de Siesa como la devuelve `ConteoService.consultar_foto_siesa`.
+
+    Para stubear la lectura del conteo en tests que no hablan de POS: sin
+    argumentos extra es una bodega sin venta de caja pendiente (NB1 típico),
+    donde el teórico es la existencia. `salida_sin_conf` por defecto es igual
+    al POS — el caso sano; pasarla distinta es declarar salidas que no son de
+    caja. El teórico se calcula con la función del servicio, no a mano: un
+    helper de test con su propia fórmula sería la segunda implementación.
+    """
+    from datetime import datetime
+    from app.services.conteo_service import ConteoService
+    salida = cant_pos if salida_sin_conf is None else salida_sin_conf
+    return {
+        'existencia': float(existencia),
+        'cant_pos': float(cant_pos),
+        'salida_sin_conf': float(salida),
+        'comprometida': None,
+        'teorico': ConteoService.teorico(float(existencia), float(cant_pos)),
+        'leido_at': datetime.utcnow(),
+    }
