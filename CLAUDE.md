@@ -2572,6 +2572,36 @@ así divergieron 15/90/180 (generador), «semanal/mensual/trimestral» (resumen)
 
 ---
 
+## Conteo: «no lo encontré» no es un cero (2026-09-23)
+
+El HUD del operario cerraba en **cero** todo conteo sin escaneos
+(`cantidad_fisica if … else 0`). Sin layout físico, «no lo encontré» es el
+resultado más común: CC1 = 0, CC2 = 0, coinciden → **auto-ajuste a cero en
+Siesa**, y el Armador compra sobre ese déficit. Además la caja escaneada
+contaba 1, no se podía teclear una cantidad, y un reintento de red sumaba dos
+veces. Trinquete: `tests/test_conteo_hud_operario.py` (61 tests, 7 mutaciones).
+
+| Regla | Dónde vive |
+|---|---|
+| **Todo cierre declara cuánto contó.** `None`, negativo o decimal se rechaza; **el cero solo con `cero_confirmado=true` literal** («¿Confirmás que NO hay ninguna unidad?») | `ConteoService.exigir_cantidad_declarada`, dentro de `registrar_conteo` (toda puerta pasa por ahí). Guard AST: ninguna llamada a `registrar_conteo` deriva la cantidad de un literal, un `.get(…, default)` ni de `.cantidad_fisica` |
+| **«No lo encontré» → BLOQUEADO con `motivo_bloqueo='NO_ENCONTRADO'`**: nunca MATCH, CC2 ni ajuste. Va a la cola del líder, que **reabre** (vuelve al pool respetando el doble ciego) o **cancela** (toda la cadena) | `GET /api/conteo/bloqueados`, `POST /<id>/reabrir`, `PUT /<id>/cancelar` |
+| **BLOQUEADO traba el hueco** (está en `EstadoConteo.CADENA_EN_CURSO`): el generador no abre otra cadena al lado | `app/models/conteo.py` |
+| **«Mercancía sin código»** es una novedad aparte (`novedades_conteo`), no toca el conteo | `GET /api/conteo/novedades`, `POST /novedades/<id>/resolver` |
+| **Escaneo idempotente con factor:** el escaneo manda `total_previo` y el servidor fija `previo + unidades` (la caja multiplica por su factor con la MISMA regla de picking: `MobileService._unidades_del_escaneo`). Lo tecleado y el «deshacer» mandan `total_acumulado` a `POST /api/mobile/conteo/total`. Un PWA viejo sin `total_previo` se rechaza pidiendo recargar | `mobile_service.procesar_escaneo` rama CONTEO |
+| **HUD único** (`conteo.js`) para el operario y el CC3: el producto en grande; si la ubicación no es física (`Ubicacion.es_fisica`: `SIESA-GENERAL` no lo es) dice «Buscalo en toda la bodega». El intercalado ya no cuelga conteos sobre una ubicación virtual | `conteoHudHtml` |
+
+`total_previo` y no `total_acumulado` en el escaneo **a propósito**: cuando el
+PWA no reconoce el código no sabe si es la caja, y duplicar en JS la regla de
+`_es_escaneo_empaque` sería una segunda política.
+
+**Pendientes declarados:** `liberar_tareas_zombi` todavía borra
+`cantidad_fisica` a las 2 h (un conteo largo pierde el avance); cancelar un CC2
+PENDIENTE deja la raíz en SEGUNDO_CONTEO (solo se arregló para BLOQUEADO); los
+BLOQUEADO viejos de producción salen como «Sin motivo registrado» (sin backfill
+a propósito: no se parsea prosa).
+
+---
+
 ## Conteo cíclico real (sobrante/faltante) + Conteo Definitivo (CC3) hecho por supervisor (2026-09-04)
 
 Dos pruebas reales de ajuste de inventario (142951) contra Siesa QA, más
