@@ -458,11 +458,12 @@ class TestElHelper:
         with advisory_lock(LOCK_DLQ) as tomado:
             assert tomado is True
             sesion.commit()
-        assert any('pg_try_advisory_lock' in s for s in c.sql)
-        assert any('pg_advisory_unlock' in s for s in c.sql)
+        assert any('pg_try_advisory_lock(' in s for s in c.sql)
+        assert any('pg_advisory_unlock(' in s for s in c.sql), 'no se soltó en ELLA'
         assert c.opciones == {'isolation_level': 'AUTOCOMMIT'}
         assert c.cerrada and not c.invalidada
-        sqls = ' '.join(str(x) for x in sesion.execute.call_args_list)
+        # str() del TextClause, no del call: el repr de un call no trae el SQL
+        sqls = ' '.join(str(x.args[0]) for x in sesion.execute.call_args_list if x.args)
         assert 'advisory' not in sqls, 'el lock pasó por db.session'
 
     def test_libera_aunque_el_trabajo_levante(self, motor_pg_falso):
@@ -473,7 +474,7 @@ class TestElHelper:
         with pytest.raises(ValueError):
             with advisory_lock(LOCK_DLQ):
                 raise ValueError('el trabajo falló')
-        assert any('pg_advisory_unlock' in s for s in c.sql) and c.cerrada
+        assert any('pg_advisory_unlock(' in s for s in c.sql) and c.cerrada
 
     def test_no_libera_lo_que_no_tomo_y_devuelve_la_conexion(self, motor_pg_falso):
         from app.utils.lock import LOCK_DLQ, advisory_lock
@@ -535,7 +536,10 @@ def app_pg():
     app = Flask('locks_pg')
     app.config['SQLALCHEMY_DATABASE_URI'] = url
     app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
-        'pool_pre_ping': True, 'pool_size': 20, 'max_overflow': 10}
+        'pool_pre_ping': True, 'pool_size': 20, 'max_overflow': 10,
+        # Como producción (lock_timeout 8 s): un lock bloqueante que no llega
+        # falla en vez de colgar la corrida.
+        'connect_args': {'options': '-c lock_timeout=2000 -c statement_timeout=10000'}}
     db.init_app(app)
     observador = sa.create_engine(url, poolclass=sa.pool.NullPool)
     yield app, db, observador
