@@ -188,3 +188,54 @@ class TestOtrosResultadosNoDisparanElAjusteFocalizado:
             )
 
         assert SesionConteo.query.filter_by(tarea_picking_id=tarea.id).count() == 0
+
+
+class TestLaAuditoriaRespetaLaAprobacionPorValor:
+    """Quien audita FIRMA el ajuste, así que se le exige lo mismo que a quien
+    aprueba un DESCUADRE (`ConteoService.motivo_no_puede_aprobar`). La ruta de
+    auditar admite SUPERVISION, que incluye al jefe de almacén: antes esta
+    puerta ajustaba cualquier monto con su firma y la regla de valor
+    (CONTEO_TOPE_APROBACION_JEFE, por defecto $0) quedaba esquivada."""
+
+    def _jefe(self, db, almacen):
+        from werkzeug.security import generate_password_hash
+        from app.models.usuario import Usuario
+        u = Usuario(nombre='jefe-aud', email='jefe-aud@test.com',
+                    password_hash=generate_password_hash('x'), rol='jefe_almacen',
+                    almacen_id=almacen.id, activo=True)
+        db.session.add(u)
+        db.session.commit()
+        return u
+
+    def _auditar(self, db, almacen, producto, firmante_id):
+        almacen.centro_op_siesa = '003'
+        db.session.commit()
+        # Sin unidades recogidas: con recogidas y sin remisión, la guarda de
+        # mercancía en proceso (caso 7) bloquea el ajuste por su cuenta y el
+        # test mediría esa regla, no la de la firma.
+        tarea, _ = _tarea_bloqueada(db, almacen, producto, cantidad_solicitada=10,
+                                    cantidad_recogida=0, cantidad_wms=50, bloqueado=10)
+        with patch.object(ConteoService, 'consultar_foto_siesa', return_value=_foto(50.0)):
+            PickingService.auditar_tarea(tarea.id, admin_id=firmante_id,
+                                         resultado='ENCONTRADO_PARCIAL', cantidad_hallada=2)
+        return SesionConteo.query.filter_by(tarea_picking_id=tarea.id).one()
+
+    def test_el_jefe_no_ajusta_con_su_firma_queda_para_el_supervisor(
+            self, app, db, almacen, producto):
+        sesion = self._auditar(db, almacen, producto, self._jefe(db, almacen).id)
+        assert sesion.estado == EstadoConteo.DESCUADRE, sesion.estado
+        assert SiesaJob.query.filter_by(tipo='AJUSTE_CONTEO').count() == 0, (
+            'un jefe de almacén ajustó en Siesa por la puerta de la auditoría')
+
+    def test_el_admin_si_ajusta(self, app, db, almacen, producto, usuario_admin):
+        sesion = self._auditar(db, almacen, producto, usuario_admin.id)
+        assert sesion.estado == EstadoConteo.AJUSTANDO
+        assert SiesaJob.query.filter_by(tipo='AJUSTE_CONTEO').count() == 1
+
+    def test_el_unico_sitio_que_arma_el_job_exige_la_firma(self, app, db, almacen, producto):
+        """Defensa en `_encolar_ajuste_fisico`: una puerta futura que firme no
+        tiene que acordarse de llamar la regla."""
+        sesion = self._auditar(db, almacen, producto, self._jefe(db, almacen).id)
+        with pytest.raises(PermissionError):
+            ConteoService._encolar_ajuste_fisico(sesion, aprobador_id=sesion.aprobador_id,
+                                                 exige_foto_inicio=False)

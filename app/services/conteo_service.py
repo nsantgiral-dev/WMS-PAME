@@ -2644,6 +2644,17 @@ class ConteoService:
                 raise ValueError(
                     f'Ajuste automático de {sesion.producto_codigo_siesa} en '
                     f'{bodega_siesa} NO enviado: {no_sale_solo["mensaje"]}.')
+        else:
+            # **Con firma, la firma tiene que poder aprobar ESE monto.** Misma
+            # regla que `confirmar_ajuste`, repetida acá como defensa del único
+            # sitio que arma el job: la auditoría de picking la esquivaba
+            # (firmaba un jefe de almacén cualquier monto), y la próxima puerta
+            # que firme no tiene que acordarse de llamarla.
+            from app.models.usuario import Usuario
+            no_puede = ConteoService.motivo_no_puede_aprobar(
+                db.session.get(Usuario, aprobador_id), sesion)
+            if no_puede:
+                raise PermissionError(no_puede)
         logger.info(
             f'[CONTEO] Ajuste de sesion {sesion.id} con la foto del conteo '
             f'({sesion.foto_siesa_at}): físico {sesion.cantidad_fisica} − teórico '
@@ -2795,6 +2806,23 @@ class ConteoService:
                 f'[CONTEO] Auditoría de picking tarea={tarea.id} — '
                 f'{producto.codigo_siesa}: ajuste de {diferencia} NO encolado. '
                 f'{bloqueo} Sesión {sesion.codigo} queda en DESCUADRE.'
+            )
+            return sesion
+        # **Aprobación por valor** (2026-09-23): quien audita firma el ajuste,
+        # así que se le exige lo mismo que a quien aprueba un DESCUADRE en
+        # `confirmar_ajuste`. Antes esta puerta ajustaba cualquier monto con la
+        # firma de un jefe de almacén (la ruta de auditar admite SUPERVISION),
+        # y la regla de valor quedaba esquivada. Igual que con un bloqueo, la
+        # auditoría SÍ se cierra —no se traba el picking por una firma— y el
+        # ajuste queda en DESCUADRE para que lo apruebe quien puede.
+        from app.models.usuario import Usuario
+        no_puede = ConteoService.motivo_no_puede_aprobar(
+            db.session.get(Usuario, aprobador_id), sesion)
+        if no_puede:
+            logger.warning(
+                f'[CONTEO] Auditoría de picking tarea={tarea.id} — '
+                f'{producto.codigo_siesa}: ajuste de {diferencia} NO encolado. '
+                f'{no_puede} Sesión {sesion.codigo} queda en DESCUADRE.'
             )
             return sesion
         ConteoService._encolar_ajuste_fisico(sesion, aprobador_id=aprobador_id,
