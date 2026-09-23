@@ -1158,13 +1158,16 @@ function conteosCerrarAjuste() {
 /** Confirm and enqueue the inventory adjustment to Siesa for the active session. */
 async function conteoConfirmarAjuste() {
   if (!_CONTEO_AJUSTE_SESION) return;
-  const s    = _CONTEO_AJUSTE_SESION;
-  const hijo = s.segundo_conteo;
+  const s = _CONTEO_AJUSTE_SESION;
 
-  // Usar ID del hijo cuando está completo (datos verificados del 2do conteo);
-  // caer al padre si no hay hijo (excepción picking, conteo directo a DESCUADRE).
-  const TERMINADOS = ['DESCUADRE', 'SEGUNDO_CONTEO'];
-  const sesionId   = (hijo && hijo.id && TERMINADOS.includes(hijo.estado)) ? hijo.id : s.id;
+  // SIEMPRE la raíz de la cadena. El ajuste sale de la raíz: la observación
+  // que resolvió (CC2 o CC3) ya está copiada ahí (`_copiar_observacion`), y el
+  // servidor rechaza aprobar un hijo (`_exigir_raiz_para_ajustar`, 2026-09-23)
+  // porque la idempotencia es por sesión y el mismo delta saldría dos veces a
+  // Siesa. Este botón elegía el id del hijo cuando el 2do conteo terminaba:
+  // desde ese arreglo fallaba con 400 en toda cadena con segundo conteo. La
+  // pantalla no decide qué sesión se ajusta; esa regla es del servidor.
+  const sesionId = s.id;
 
   const btn = document.getElementById('btn-confirmar-ajuste');
   if (btn) { btn.disabled = true; btn.textContent = 'Procesando...'; }

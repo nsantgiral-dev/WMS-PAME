@@ -586,3 +586,44 @@ class TestLaPestana:
         assert 'id="inv-panel-lider"' in html and 'id="inv-lider-contenido"' in html
         tarjeta = re.search(r'<div class="kpi-card" id="kpi-card-auditorias"[^>]*>', html).group(0)
         assert "invSubtab('lider')" in tarjeta
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# «Confirmar → SIESA» de Conteos → Acción: siempre la raíz
+# ─────────────────────────────────────────────────────────────────────────────
+
+_ARNES_AJUSTE = r"""
+const fs = require('fs'); const vm = require('vm');
+const base = process.argv.slice(1).filter(a => a !== '--')[0];
+const llamadas = [];
+const ctx = { console, window: {}, document: { getElementById: () => null },
+  put: async (url) => { llamadas.push(url); return { motivo_codigo: 'AJ-SAL', diferencia: -1 }; },
+  alerta: () => {}, conteosCerrarAjuste: () => {}, cargarConteos: async () => {} };
+vm.createContext(ctx);
+vm.runInContext(fs.readFileSync(base + '/util.js', 'utf8'), ctx);
+vm.runInContext(fs.readFileSync(base + '/conteo.js', 'utf8'), ctx);
+(async () => {
+  for (const estadoHijo of ['DESCUADRE', 'SEGUNDO_CONTEO', 'MATCH', null]) {
+    vm.runInContext(`_CONTEO_AJUSTE_SESION = ${JSON.stringify({
+      id: 11, segundo_conteo: estadoHijo ? { id: 22, estado: estadoHijo } : null })};`, ctx);
+    await vm.runInContext('conteoConfirmarAjuste', ctx)();
+  }
+  console.log(JSON.stringify(llamadas));
+})();
+"""
+
+
+class TestElBotonDeAjusteApruebaLaRaiz:
+    """El botón viejo de Conteos → Acción mandaba el id del CC2 cuando éste
+    había terminado. Desde `_exigir_raiz_para_ajustar` el servidor lo rechaza
+    (400): el botón quedó roto en toda cadena con segundo conteo."""
+
+    def test_siempre_manda_la_raiz(self):
+        if not shutil.which('node'):
+            pytest.skip('sin node')
+        pwa = RAIZ / 'app' / 'static' / 'pwa'
+        r = subprocess.run(['node', '-e', _ARNES_AJUSTE, '--', str(pwa)],
+                           capture_output=True, text=True, timeout=60)
+        assert r.returncode == 0, r.stderr
+        urls = json.loads(r.stdout.strip().splitlines()[-1])
+        assert urls == ['/api/conteo/11/ajustar'] * 4, urls
