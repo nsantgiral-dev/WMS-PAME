@@ -360,6 +360,22 @@ class TestDiaDeAtribucion:
         assert r['ajustes']['excluidos'] == {'sin_fecha_de_confirmacion': 1}
         assert hijo.id  # la fila hija existe y no se contó aparte
 
+    def test_ni_cuando_la_raiz_misma_es_la_que_cuenta(self, db, tienda):
+        """Omitida y después ajustada: sin veredicto, el día sale de la raíz. Sin
+        foto, su `fecha_cierre` (la del DLQ) tampoco vale — solo en MATCH."""
+        raiz = _fila(db, tienda, estado='AJUSTADO', motivo_codigo='AJ-SAL', diferencia=-1,
+                     fecha_creacion=datetime(2026, 9, 1, 15),
+                     fecha_cierre=datetime(2026, 9, 5, 15), siesa_triggered=True)
+        _fila(db, tienda, estado='CANCELADO', es_segundo_conteo=True,
+              sesion_origen_id=raiz.id, fecha_creacion=datetime(2026, 9, 1, 15),
+              fecha_cierre=datetime(2026, 9, 2, 15))
+        db.session.commit()
+        assert _m().veredicto_cadena(raiz) == _m().SIN_VEREDICTO
+        assert _m().dia_de_atribucion(raiz) is None
+        a = _m().calcular_estadisticas_conteo(date(2026, 9, 1), date(2026, 9, 30))['ajustes']
+        assert a['cantidad'] == 0
+        assert a['excluidos'] == {'sin_fecha_de_confirmacion': 1}
+
     def test_ensayo_no_cuenta_como_ajuste(self, db, tienda):
         t = datetime(2026, 9, 10, 15)
         raiz = _fila(db, tienda, estado='AJUSTADO', motivo_codigo='AJ-ENT', diferencia=3,
