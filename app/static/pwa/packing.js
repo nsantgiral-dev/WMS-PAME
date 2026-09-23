@@ -539,11 +539,22 @@ function empFlash(color, mensaje) {
 // EMPACADOR — Modal ambigüedad de empaque en packing
 // ─────────────────────────────────────────────────────────────
 
+/**
+ * Modal de ambigüedad abierto: el código escaneado y sus empaques. El botón lleva
+ * solo su POSICIÓN en `empaques`, no el dato: un código o una unidad dentro de
+ * `onclick="fn('…')"` no se protege con `esc()` —el navegador decodifica `&#39;`
+ * a `'` antes de correr el JS— y una comilla en el dato rompe la cadena. Ver
+ * CLAUDE.md, «Todo dato que se pinta va con esc()».
+ * @type {{codigo: string, empaques: Array<Object>}}
+ */
+let _AMBIGUEDAD_PACKING_EMP = { codigo: '', empaques: [] };
+
 /** Modal de ambigüedad de empaque en packing. @param {string} codigo @param {Array} ambiguos */
 function _modalAmbiguedadPackingEmp(codigo, ambiguos) {
   // ambiguos: array de ProductoEmpaque.to_dict()
-  const opciones = ambiguos.map(e => `
-    <button onclick="_elegirEmpaquePacking('${codigo}', '${esc(e.producto_codigo || '')}', ${esc(e.factor_conversion)}, '${esc(e.unidad_medida)}', this.closest('.modal-ambig-emp'))"
+  _AMBIGUEDAD_PACKING_EMP = { codigo, empaques: ambiguos.slice() };
+  const opciones = ambiguos.map((e, i) => `
+    <button onclick="_elegirEmpaqueAmbiguoPacking(${i}, this.closest('.modal-ambig-emp'))"
       style="width:100%;padding:16px;font-size:18px;font-weight:700;background:#1a1a1a;color:#fff;border:1px solid #333;border-radius:12px;cursor:pointer;margin-bottom:8px;">
       ${esc(e.unidad_medida)} — ${esc(e.factor_conversion)} und
       <div style="font-size:12px;color:#666;font-weight:400;margin-top:2px;">${esc(e.producto_nombre || e.referencia_item || '')}</div>
@@ -555,7 +566,7 @@ function _modalAmbiguedadPackingEmp(codigo, ambiguos) {
   modal.innerHTML = `
     <div style="background:#0a0a0a;border-top:2px solid #7c3aed;border-radius:20px 20px 0 0;padding:24px;width:100%;max-height:70vh;overflow-y:auto;">
       <div style="font-size:16px;font-weight:700;color:#a78bfa;margin-bottom:4px;">Código en múltiples empaques</div>
-      <div style="font-size:13px;color:#666;margin-bottom:16px;">${codigo} — ¿Cuál estás empacando?</div>
+      <div style="font-size:13px;color:#666;margin-bottom:16px;">${esc(codigo)} — ¿Cuál estás empacando?</div>
       ${opciones}
       <button onclick="this.closest('.modal-ambig-emp').remove()"
         style="width:100%;padding:12px;font-size:14px;background:#111;color:#666;border:1px solid #222;border-radius:10px;cursor:pointer;margin-top:4px;">
@@ -563,6 +574,19 @@ function _modalAmbiguedadPackingEmp(codigo, ambiguos) {
       </button>
     </div>`;
   document.body.appendChild(modal);
+}
+
+/**
+ * El botón del modal: busca el empaque por posición y sigue igual que antes.
+ * `Number(...)`: el factor viajaba como literal numérico dentro del onclick, así
+ * que llegaba como número; se conserva.
+ * @param {number} i @param {HTMLElement} modal
+ */
+function _elegirEmpaqueAmbiguoPacking(i, modal) {
+  const e = _AMBIGUEDAD_PACKING_EMP.empaques[i];
+  if (!e) { if (modal) modal.remove(); return; }
+  return _elegirEmpaquePacking(_AMBIGUEDAD_PACKING_EMP.codigo, e.producto_codigo || '',
+                               Number(e.factor_conversion), e.unidad_medida, modal);
 }
 
 /** @param {string} codigoBarras @param {string} productoCodigo @param {number} factor @param {string} unidad @param {HTMLElement} modal */

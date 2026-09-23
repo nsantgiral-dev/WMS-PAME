@@ -768,6 +768,16 @@ function _confirmarModal(titulo, cuerpoHtml, txtSi, txtNo) {
 }
 
 /**
+ * Modal de ambigüedad abierto: el código escaneado y sus empaques. El botón lleva
+ * solo su POSICIÓN en `empaques`, no el dato: un código o una unidad dentro de
+ * `onclick="fn('…')"` no se protege con `esc()` —el navegador decodifica `&#39;`
+ * a `'` antes de correr el JS— y una comilla en el dato rompe la cadena. Ver
+ * CLAUDE.md, «Todo dato que se pinta va con esc()».
+ * @type {{codigo: string, empaques: Array<Object>}}
+ */
+let _AMBIGUEDAD_RECEPCION = { codigo: '', empaques: [] };
+
+/**
  * Muestra modal para resolver ambiguedad cuando un codigo corresponde a multiples empaques.
  * @param {string} codigo - Codigo de barras ambiguo
  * @param {Array<Object>} ambiguos - Lista de empaques posibles con producto_id, factor_conversion, unidad_medida
@@ -775,8 +785,9 @@ function _confirmarModal(titulo, cuerpoHtml, txtSi, txtNo) {
 function _modalAmbiguedadRecepcion(codigo, ambiguos) {
   // El mismo código de barras corresponde a múltiples niveles de empaque
   // El operario debe decir qué está escaneando
+  _AMBIGUEDAD_RECEPCION = { codigo, empaques: ambiguos.slice() };
   const opciones = ambiguos.map((e, i) => `
-    <button onclick="_elegirEmpaque('${codigo}',${esc(e.producto_id)},${esc(e.factor_conversion)},'${esc(e.unidad_medida)}',this.closest('.modal-rec'))"
+    <button onclick="_elegirEmpaqueAmbiguoRecepcion(${i},this.closest('.modal-rec'))"
       style="width:100%;padding:14px;margin-bottom:8px;background:#1a1a1a;border:1px solid #333;
              color:#fff;border-radius:10px;cursor:pointer;font-size:15px;text-align:left;">
       <span style="font-size:22px;font-weight:900;">${esc(e.factor_conversion)}</span>
@@ -790,7 +801,7 @@ function _modalAmbiguedadRecepcion(codigo, ambiguos) {
   modal.innerHTML = `
     <div style="background:#111;border-radius:16px;padding:20px;width:100%;max-width:480px;margin:auto;">
       <div style="font-size:16px;font-weight:700;margin-bottom:6px;">⚠️ Código ambiguo</div>
-      <div style="font-size:13px;color:#9ca3af;margin-bottom:16px;">${codigo} — ¿Qué estás escaneando?</div>
+      <div style="font-size:13px;color:#9ca3af;margin-bottom:16px;">${esc(codigo)} — ¿Qué estás escaneando?</div>
       ${opciones}
       <button onclick="this.closest('.modal-rec').remove()"
         style="width:100%;padding:12px;background:#0d0d0d;color:#6b7280;border:1px solid #222;border-radius:8px;cursor:pointer;margin-top:4px;">
@@ -798,6 +809,19 @@ function _modalAmbiguedadRecepcion(codigo, ambiguos) {
       </button>
     </div>`;
   document.body.appendChild(modal);
+}
+
+/**
+ * El botón del modal: busca el empaque por posición y sigue igual que antes.
+ * `Number(...)`: el id y el factor viajaban como literales numéricos dentro del
+ * onclick, así que llegaban como números; se conserva.
+ * @param {number} i @param {HTMLElement} modal
+ */
+function _elegirEmpaqueAmbiguoRecepcion(i, modal) {
+  const e = _AMBIGUEDAD_RECEPCION.empaques[i];
+  if (!e) { if (modal) modal.remove(); return; }
+  return _elegirEmpaque(_AMBIGUEDAD_RECEPCION.codigo, Number(e.producto_id),
+                        Number(e.factor_conversion), e.unidad_medida, modal);
 }
 
 /**
