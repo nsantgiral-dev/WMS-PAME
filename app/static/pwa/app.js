@@ -1175,7 +1175,7 @@ async function cargarDashboard() {
         const todos = [...(tr.criticos || []), ...(tr.alertas || [])];
         lista.innerHTML = todos.slice(0, 5).map(t =>
           `<div style="padding:6px 0;border-bottom:1px solid #1e3a5f;display:flex;justify-content:space-between;">
-            <span style="color:#cbd5e1;">${esc(t.codigo)} → ${t.nombre_punto_venta || t.bodega_destino}</span>
+            <span style="color:#cbd5e1;">${esc(t.codigo)} → ${esc(t.nombre_punto_venta || t.bodega_destino)}</span>
             <span style="color:${t.horas_en_transito > 24 ? '#fb923c' : '#60a5fa'};font-weight:700;">${esc(t.horas_en_transito)}h</span>
           </div>`
         ).join('');
@@ -1556,7 +1556,7 @@ function _renderTareasBodegaHTML(tareas) {
       <div style="padding:10px 0;${esPrimera ? '' : 'border-top:1px solid #222;'}">
         <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">
           <div style="flex:1;min-width:0;">
-            <span style="font-size:14px;font-weight:600;">${t.producto_nombre || t.producto_codigo}</span>
+            <span style="font-size:14px;font-weight:600;">${esc(t.producto_nombre || t.producto_codigo)}</span>
             <div style="font-size:12px;color:#666;margin-top:2px;">${esc(t.ubicacion_codigo || '—')}</div>
             <div style="font-size:11px;color:#444;margin-top:2px;">${
               t.operario_id

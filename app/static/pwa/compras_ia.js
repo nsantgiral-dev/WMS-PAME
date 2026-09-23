@@ -743,7 +743,7 @@ async function preciosRenderComparador() {
             <div class="tabla-fila">
               <span class="tabla-nombre" style="font-size:12px;">
                 ${esc(x.proveedor)}
-                <span style="color:var(--tx3);"> · ${x.fuente || x.tipo || ''}</span>
+                <span style="color:var(--tx3);"> · ${esc(x.fuente || x.tipo || '')}</span>
               </span>
               <span style="font-size:13px;font-weight:700;">$${(x.precio || 0).toLocaleString('es-CO')}</span>
             </div>`).join('')

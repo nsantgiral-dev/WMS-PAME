@@ -1550,8 +1550,15 @@ class TestMotivoDeRechazoNoChocaDeId:
 # Los tres están medidos y declarados en `docs/flota/ESTADO.md`. Este guard
 # cubre el sumidero principal, no todos.
 
+#: Un acceso a dato: `d.motivo`, `s['x']`, `r.a.b`.
+_ACCESO_DATO = r"[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*|\[[^\]\[]+\])+"
+#: Un dato interpolado: uno o VARIOS accesos encadenados con `||`, con un
+#: literal opcional de respaldo al final. La versión anterior aceptaba un solo
+#: acceso (`d.a || '—'`) y dejaba pasar la forma más común de pintar un nombre
+#: con respaldo, `s.producto_nombre || s.producto_codigo || '—'` — encontrado el
+#: 2026-09-23 en el Conteo Definitivo, crudo y en verde.
 _DATO_INTERPOLADO = re.compile(
-    r"^\(?[A-Za-z_$][\w$]*(\.[A-Za-z_$][\w$]*|\[[^\]\[]+\])+"
+    r"^\(?" + _ACCESO_DATO + r"(?:\s*\|\|\s*" + _ACCESO_DATO + r")*"
     r"(\s*\|\|\s*(''|\"\"|'[^']*'|\"[^\"]*\"|0))?\)?"
     r"(\.(slice|trim|toUpperCase|toLowerCase|padStart|padEnd)\([^()]*\))*$")
 _TIENE_TAG = re.compile(r'<[a-zA-Z/!]')
@@ -1684,6 +1691,9 @@ class TestNingunDatoLlegaCrudoAlInnerHTML:
         verde — ya pasó con los literales de expresión regular."""
         assert _crudos('const x = `<div>${d.motivo}</div>`;')
         assert not _crudos('const x = `<div>${esc(d.motivo)}</div>`;')
+        assert _crudos("const x = `<div>${s.producto_nombre || s.producto_codigo || '—'}</div>`;"), (
+            'una cadena de dos datos con respaldo es un dato: tiene que marcarse')
+        assert not _crudos("const x = `<div>${esc(s.producto_nombre || s.producto_codigo || '—')}</div>`;")
 
     def test_el_guard_ve_DENTRO_de_las_plantillas_anidadas(self):
         """La forma exacta del ataque que pasó la primera versión."""

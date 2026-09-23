@@ -528,7 +528,7 @@ async function conteoMostrarAsignar() {
   const sel = document.getElementById('conteo-asignar-operario');
   if (sel) {
     sel.innerHTML = operarios.map(u =>
-      `<option value="${esc(u.id)}">${u.nombre || u.usuario} (${esc(u.rol)})</option>`
+      `<option value="${esc(u.id)}">${esc(u.nombre || u.usuario)} (${esc(u.rol)})</option>`
     ).join('');
   }
   panel.style.display = 'block';
@@ -967,7 +967,7 @@ function conteoAbrirEdicion(s) {
     infoDiv.innerHTML = `
       <div style="font-size:12px;color:#888;margin-bottom:10px;">
         <b>${esc(s.producto_codigo || '—')}</b> · ${esc(s.producto_nombre || '')}<br>
-        📍 ${s.ubicacion_codigo || s.ubicacion_id || '—'}${s.clasificacion_abc ? ` · ABC-${esc(s.clasificacion_abc)}` : ''}<br>
+        📍 ${esc(s.ubicacion_codigo || s.ubicacion_id || '—')}${s.clasificacion_abc ? ` · ABC-${esc(s.clasificacion_abc)}` : ''}<br>
         <span style="display:inline-flex;gap:12px;margin-top:4px;">
           ${s.existencia_siesa != null ? `<span>Siesa <b style="color:#60a5fa;">${esc(s.existencia_siesa)}</b></span>` : '<span style="color:#374151;">Sin ref. Siesa</span>'}
           ${s.cantidad_fisica != null ? `<span>1er conteo <b style="color:#f59e0b;">${esc(s.cantidad_fisica)}</b></span>` : ''}
@@ -1223,7 +1223,7 @@ async function cargarConteoDefinitivos() {
           <span style="font-size:11px;font-weight:700;color:#f59e0b;background:rgba(120,53,15,.35);padding:2px 8px;border-radius:8px;">CC1 ≠ CC2</span>
           <span style="font-size:11px;color:var(--tx3);">${esc(s.almacen_nombre || '')}</span>
         </div>
-        <div style="font-size:15px;font-weight:700;color:var(--tx);">${s.producto_nombre || s.producto_codigo || '—'}</div>
+        <div style="font-size:15px;font-weight:700;color:var(--tx);">${esc(s.producto_nombre || s.producto_codigo || '—')}</div>
         <div style="font-size:13px;color:var(--tx3);">${esc(s.producto_codigo || '')} · Ubicación ${esc(s.ubicacion_codigo || '—')}</div>
         <div style="font-size:11px;color:var(--tx3);margin-top:4px;">${s.operario_nombre ? `En proceso por ${esc(s.operario_nombre)}` : 'Sin asignar — tómalo vos'}</div>
         <button onclick="defAbrirConteo(${esc(s.id)})" style="width:100%;margin-top:10px;padding:12px;background:var(--pm);color:#fff;border:none;border-radius:10px;font-size:14px;font-weight:700;cursor:pointer;">🎯 Contar ahora</button>
@@ -2122,7 +2122,7 @@ function _lBoton(texto, onclick, tono = 'pm') {
     peligro: 'background:#7f1d1d;color:#fca5a5;border:none;',
     suave: 'background:var(--bg-input);color:var(--tx);border:1px solid var(--brd);',
   };
-  return `<button onclick="${onclick}" style="flex:1 1 140px;min-height:44px;padding:10px;${estilos[tono] || estilos.pm}border-radius:10px;font-size:13px;font-weight:700;cursor:pointer;">${esc(texto)}</button>`;
+  return `<button onclick="${onclick}" style="flex:1 1 140px;min-height:44px;padding:10px;${esc(estilos[tono] || estilos.pm)}border-radius:10px;font-size:13px;font-weight:700;cursor:pointer;">${esc(texto)}</button>`;
 }
 
 /** Nota en lugar de un botón que ese rol no puede usar (el endpoint diría 403). */

@@ -131,7 +131,7 @@ async function etqBuscarProducto() {
 
   if (!prod.codigo_siesa) {
     resultado.innerHTML = `<div style="text-align:center;padding:20px;color:#d97706;">
-      ${prod.nombre || prod.codigo} no tiene código Siesa registrado — no se puede generar la etiqueta.
+      ${esc(prod.nombre || prod.codigo)} no tiene código Siesa registrado — no se puede generar la etiqueta.
     </div>`;
     return;
   }

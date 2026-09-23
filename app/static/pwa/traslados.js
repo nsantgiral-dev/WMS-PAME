@@ -141,7 +141,7 @@ function _renderTrasladoCard(s) {
       ? ` <span style="color:#f59e0b;">(aprobado: ${esc(i.cantidad_aprobada)})</span>` : '';
     const enviado = i.cantidad_enviada > 0
       ? ` <span style="color:#4ade80;">→ enviado: ${esc(i.cantidad_enviada)}</span>` : '';
-    return `<div style="font-size:15px;color:#666;">${i.producto_codigo || i.producto_nombre} · ${esc(i.cantidad_solicitada)} und${aprobado}${enviado}</div>`;
+    return `<div style="font-size:15px;color:#666;">${esc(i.producto_codigo || i.producto_nombre)} · ${esc(i.cantidad_solicitada)} und${aprobado}${enviado}</div>`;
   }).join('');
 
   // Barra de progreso picking
@@ -298,7 +298,7 @@ function _renderTrasladoCard(s) {
     <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px;">
       <div>
         <div style="font-size:17px;font-weight:700;">${esc(s.codigo)}</div>
-        <div style="font-size:15px;color:#555;margin-top:2px;">${s.nombre_punto_venta || s.bodega_destino_siesa} · ${fecha} ${alertaAntiguedad}</div>
+        <div style="font-size:15px;color:#555;margin-top:2px;">${esc(s.nombre_punto_venta || s.bodega_destino_siesa)} · ${fecha} ${alertaAntiguedad}</div>
       </div>
       <span style="background:${col};color:#fff;font-size:19px;font-weight:700;padding:3px 8px;border-radius:8px;white-space:nowrap;">${s.estado.replace(/_/g, ' ')}</span>
     </div>
@@ -591,7 +591,7 @@ function _renderTrasladoOperario(t) {
     <div style="background:#0d0d1a;border:1px solid #7c3aed;border-radius:12px;padding:14px;margin-bottom:10px;">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
         <div style="font-size:13px;font-weight:700;">${esc(t.codigo)}</div>
-        <span style="font-size:11px;color:#7c3aed;">${t.nombre_punto_venta || t.bodega_destino_siesa}</span>
+        <span style="font-size:11px;color:#7c3aed;">${esc(t.nombre_punto_venta || t.bodega_destino_siesa)}</span>
       </div>
       <div style="margin-bottom:10px;">${itemsHtml}</div>
       <button onclick="trasConfirmarRecogida(${esc(t.id)})"
@@ -706,7 +706,7 @@ async function trasAprobar(id) {
     <div style="position:fixed;inset:0;background:rgba(0,0,0,0.92);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px;">
       <div style="background:#111;border-radius:16px;padding:24px;width:100%;max-width:440px;border:1px solid #166534;max-height:85vh;overflow-y:auto;">
         <div style="font-size:17px;font-weight:700;margin-bottom:4px;">Aprobar y asignar traslado</div>
-        <div style="font-size:12px;color:#666;margin-bottom:16px;">${solicitud.nombre_punto_venta || solicitud.bodega_destino_siesa}</div>
+        <div style="font-size:12px;color:#666;margin-bottom:16px;">${esc(solicitud.nombre_punto_venta || solicitud.bodega_destino_siesa)}</div>
 
         <div style="font-size:12px;font-weight:600;margin-bottom:8px;color:#aaa;">CANTIDADES A ENVIAR</div>
         ${filasItems}
@@ -1087,7 +1087,7 @@ function _renderRequisicionCard(r) {
 
   const itemsHtml = items.slice(0, 4).map(i =>
     `<div style="display:flex;justify-content:space-between;font-size:11px;color:var(--tx3);padding:2px 0;">
-      <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:70%;">${i.producto_nombre || i.producto_codigo_siesa || '—'}</span>
+      <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:70%;">${esc(i.producto_nombre || i.producto_codigo_siesa || '—')}</span>
       <span style="font-weight:600;color:var(--tx2);">${esc(i.cantidad_solicitada)}</span>
     </div>`
   ).join('');
@@ -1235,7 +1235,7 @@ async function reqEditarAprobar(id) {
   const filasItems = items.map(i => `
     <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
       <div style="flex:1;font-size:12px;">
-        <div style="font-weight:600;">${i.producto_nombre || i.producto_codigo}</div>
+        <div style="font-weight:600;">${esc(i.producto_nombre || i.producto_codigo)}</div>
         <div style="color:#666;font-size:11px;">Solicitado: ${esc(i.cantidad_solicitada)} · Disp. Siesa: ${i.disponible_siesa ?? '—'}</div>
       </div>
       <div style="display:flex;align-items:center;gap:4px;">
@@ -1255,7 +1255,7 @@ async function reqEditarAprobar(id) {
     <div style="position:fixed;inset:0;background:rgba(0,0,0,0.92);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px;">
       <div style="background:#111;border-radius:16px;padding:24px;width:100%;max-width:440px;border:1px solid #166534;max-height:85vh;overflow-y:auto;">
         <div style="font-size:17px;font-weight:700;margin-bottom:4px;">Editar y aprobar requisición</div>
-        <div style="font-size:12px;color:#666;margin-bottom:16px;">${solicitud.nombre_punto_venta || solicitud.bodega_destino_siesa || '—'}</div>
+        <div style="font-size:12px;color:#666;margin-bottom:16px;">${esc(solicitud.nombre_punto_venta || solicitud.bodega_destino_siesa || '—')}</div>
 
         <div style="font-size:12px;font-weight:600;margin-bottom:8px;color:#aaa;">CANTIDADES A ENVIAR</div>
         ${filasItems}

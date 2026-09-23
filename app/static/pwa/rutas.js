@@ -996,7 +996,7 @@ async function rutaVerManifiesto(id) {
             <div style="font-size:10px;color:#92400e;font-weight:700;margin-bottom:4px;">DETALLE PARCIAL</div>
             <div style="display:grid;grid-template-columns:1fr auto auto;gap:3px 10px;font-size:11px;">
               ${r.items_entregados.map(it => `
-                <div style="color:#374151;">${it.nombre || it.codigo}</div>
+                <div style="color:#374151;">${esc(it.nombre || it.codigo)}</div>
                 <div style="color:#15803d;text-align:right;font-weight:700;">✓ ${esc(it.cantidad_entregada)}</div>
                 <div style="color:${it.cantidad_devuelta > 0 ? '#b91c1c' : '#9ca3af'};text-align:right;font-weight:700;">↩ ${esc(it.cantidad_devuelta)}</div>
               `).join('')}
@@ -1845,7 +1845,7 @@ async function cargarRutasConductor() {
     return `
       <div style="background:#fff;border:2px solid #bfdbfe;border-radius:16px;padding:20px;margin-bottom:12px;box-shadow:0 1px 3px rgba(0,0,0,.06);">
         <div style="font-size:18px;font-weight:800;color:#1d4ed8;margin-bottom:4px;">🚛 Ruta #${esc(r.id)}</div>
-        <div style="font-size:14px;color:#374151;margin-bottom:12px;">${r.ruta_maestra_nombre || r.tipo_ruta} · ${esc(r.vehiculo_placa || 'Sin vehículo')}</div>
+        <div style="font-size:14px;color:#374151;margin-bottom:12px;">${esc(r.ruta_maestra_nombre || r.tipo_ruta)} · ${esc(r.vehiculo_placa || 'Sin vehículo')}</div>
         <div style="font-size:12px;color:#6b7280;margin-bottom:16px;">${totalBultos} bulto${totalBultos !== 1 ? 's' : ''}</div>
         <button onclick="condAbrirParadas(${esc(r.id)})"
           style="width:100%;padding:18px;background:#1d4ed8;color:#fff;border:none;border-radius:12px;font-size:18px;font-weight:800;cursor:pointer;letter-spacing:0.02em;">
@@ -3099,7 +3099,7 @@ async function _cargarPlanilla(id) {
     let html = `
       <div style="margin-bottom:16px;">
         <div style="font-size:16px;font-weight:800;">Ruta #${esc(ruta.id)} — ${esc(ruta.conductor_nombre)}</div>
-        <div style="font-size:13px;color:#aaa;margin-top:4px;">${ruta.ruta_maestra_nombre || ruta.tipo_ruta} · ${esc(ruta.vehiculo_placa || '')}</div>
+        <div style="font-size:13px;color:#aaa;margin-top:4px;">${esc(ruta.ruta_maestra_nombre || ruta.tipo_ruta)} · ${esc(ruta.vehiculo_placa || '')}</div>
         <div style="margin-top:8px;">${finBadge}</div>
       </div>
 
@@ -3167,7 +3167,7 @@ async function _cargarPlanilla(id) {
               <div style="color:#4ade80;font-weight:700;text-align:right;">ENTREGADO</div>
               <div style="color:#f87171;font-weight:700;text-align:right;">DEVUELTO</div>
               ${r.items_entregados.map(it => `
-                <div style="color:#ccc;">${it.nombre || it.codigo}</div>
+                <div style="color:#ccc;">${esc(it.nombre || it.codigo)}</div>
                 <div style="color:#555;text-align:right;">${esc(it.cantidad_pedida)}</div>
                 <div style="color:#4ade80;text-align:right;font-weight:700;">${esc(it.cantidad_entregada)}</div>
                 <div style="color:${it.cantidad_devuelta > 0 ? '#f87171' : '#555'};text-align:right;font-weight:700;">${esc(it.cantidad_devuelta)}</div>

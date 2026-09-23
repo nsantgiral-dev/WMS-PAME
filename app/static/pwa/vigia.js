@@ -561,7 +561,7 @@ async function vigiaCompararIngesta() {
       const color = f.estado === 'OK' ? 'var(--green)'
                   : f.estado === 'DIFIERE' ? 'var(--red)' : 'var(--tx3)';
       return `<li style="color:${color}">
-        <b>${f.serie || f.co}</b> — vivo ${f.vivo ?? '—'} · histórico ${f.historico ?? '—'}
+        <b>${esc(f.serie || f.co)}</b> — vivo ${f.vivo ?? '—'} · histórico ${f.historico ?? '—'}
         ${f.desvio_pct != null ? ` · ${f.desvio_pct > 0 ? '+' : ''}${esc(f.desvio_pct)}%` : ''}
         <span style="color:var(--tx3)">${esc(f.estado)}</span></li>`;
     }).join('');

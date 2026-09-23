@@ -480,7 +480,7 @@ function _actualizarContadorPicking(r) {
 function _modalAmbiguedadPicking(codigo, empaques) {
   // empaques: array de ProductoEmpaque.to_dict() — incluye producto_codigo
   const opciones = empaques.map(e => `
-    <button onclick="_elegirEmpaquePicking('${e.producto_codigo || e.referencia_item}', ${esc(e.factor_conversion)}, '${esc(e.unidad_medida)}', this.closest('.modal-ambig'))"
+    <button onclick="_elegirEmpaquePicking('${esc(e.producto_codigo || e.referencia_item)}', ${esc(e.factor_conversion)}, '${esc(e.unidad_medida)}', this.closest('.modal-ambig'))"
       style="width:100%;padding:16px;font-size:18px;font-weight:700;background:#1a1a1a;color:#fff;border:1px solid #333;border-radius:12px;cursor:pointer;margin-bottom:8px;">
       ${esc(e.unidad_medida)} — ${esc(e.factor_conversion)} und
       <div style="font-size:12px;color:#666;font-weight:400;margin-top:2px;">${esc(e.producto_nombre || '')}</div>

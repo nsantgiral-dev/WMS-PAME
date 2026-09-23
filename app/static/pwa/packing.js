@@ -546,7 +546,7 @@ function _modalAmbiguedadPackingEmp(codigo, ambiguos) {
     <button onclick="_elegirEmpaquePacking('${codigo}', '${esc(e.producto_codigo || '')}', ${esc(e.factor_conversion)}, '${esc(e.unidad_medida)}', this.closest('.modal-ambig-emp'))"
       style="width:100%;padding:16px;font-size:18px;font-weight:700;background:#1a1a1a;color:#fff;border:1px solid #333;border-radius:12px;cursor:pointer;margin-bottom:8px;">
       ${esc(e.unidad_medida)} — ${esc(e.factor_conversion)} und
-      <div style="font-size:12px;color:#666;font-weight:400;margin-top:2px;">${e.producto_nombre || e.referencia_item || ''}</div>
+      <div style="font-size:12px;color:#666;font-weight:400;margin-top:2px;">${esc(e.producto_nombre || e.referencia_item || '')}</div>
     </button>`).join('');
 
   const modal = document.createElement('div');

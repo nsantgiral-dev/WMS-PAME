@@ -400,7 +400,7 @@ async function repCargarTareas() {
             <span style="font-size:11px;font-weight:700;color:${color};background:${color}22;padding:3px 8px;border-radius:20px;">${esc(t.estado)}</span>
           </div>
 
-          <div style="font-size:13px;font-weight:600;color:var(--tx);margin-bottom:6px;">${t.producto_nombre || t.producto_codigo || '—'}</div>
+          <div style="font-size:13px;font-weight:600;color:var(--tx);margin-bottom:6px;">${esc(t.producto_nombre || t.producto_codigo || '—')}</div>
 
           <div style="display:flex;gap:6px;align-items:center;margin-bottom:8px;flex-wrap:wrap;">
             <span style="font-size:12px;font-family:monospace;background:#166534;color:#4ade80;padding:3px 8px;border-radius:6px;">${esc(t.ubicacion_reserva || '—')}</span>

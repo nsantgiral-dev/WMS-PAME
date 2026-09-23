@@ -351,7 +351,7 @@ function renderItemsRecepcion(items) {
             <div style="min-width:0;flex:1;">
               <div style="display:flex;align-items:center;gap:8px;">
                 <span style="background:#4c1d95;color:#a78bfa;font-size:10px;font-weight:700;padding:2px 7px;border-radius:20px;">🎁 BONO</span>
-                <div style="font-size:14px;font-weight:600;color:#a78bfa;">${it.producto_nombre || it.producto_codigo}</div>
+                <div style="font-size:14px;font-weight:600;color:#a78bfa;">${esc(it.producto_nombre || it.producto_codigo)}</div>
               </div>
               <div style="font-size:11px;color:#555;margin-top:2px;">${esc(it.producto_codigo)}</div>
             </div>
@@ -386,7 +386,7 @@ function renderItemsRecepcion(items) {
         style="background:${completo ? '#0d1a0d' : '#111'};border:1px solid ${completo ? '#166534' : '#222'};border-radius:12px;padding:14px;margin-bottom:8px;">
         <div style="display:flex;justify-content:space-between;align-items:center;">
           <div style="min-width:0;flex:1;">
-            <div style="font-size:14px;font-weight:600;color:${completo ? '#4ade80' : '#fff'};">${it.producto_nombre || it.producto_codigo}</div>
+            <div style="font-size:14px;font-weight:600;color:${completo ? '#4ade80' : '#fff'};">${esc(it.producto_nombre || it.producto_codigo)}</div>
             <div style="font-size:11px;color:#555;">${esc(it.producto_codigo)}</div>
             ${it.destino === 'CROSS_DOCK' ? '<div style="font-size:11px;color:#60a5fa;margin-top:4px;">↔ CROSS-DOCK</div>' : ''}
           </div>

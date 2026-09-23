@@ -219,7 +219,7 @@ function _liqRutaCard(r, esLiquidada) {
             ${esc(r.conductor_nombre)} · ${esc(r.vehiculo_placa || '—')}
           </div>
           <div style="font-size:11px;color:var(--tx3);">
-            ${r.ruta_maestra_nombre || r.tipo_ruta} · ${esc(r.total_paradas || 0)} paradas
+            ${esc(r.ruta_maestra_nombre || r.tipo_ruta)} · ${esc(r.total_paradas || 0)} paradas
           </div>
         </div>
         <div style="text-align:right;">
@@ -477,7 +477,7 @@ function _liqRenderDetalle() {
   let html = `
     <div style="margin-bottom:16px;">
       <div style="font-size:14px;font-weight:700;">Ruta #${esc(ruta.id)} · ${esc(ruta.conductor_nombre)}</div>
-      <div style="font-size:12px;color:var(--tx3);">${esc(ruta.vehiculo_placa || '—')} · ${ruta.ruta_maestra_nombre || ruta.tipo_ruta}</div>
+      <div style="font-size:12px;color:var(--tx3);">${esc(ruta.vehiculo_placa || '—')} · ${esc(ruta.ruta_maestra_nombre || ruta.tipo_ruta)}</div>
       ${esLiquidada ? '<div style="font-size:12px;color:#4ade80;font-weight:700;margin-top:4px;">LIQUIDADA</div>' : ''}
     </div>`;
 
@@ -539,7 +539,7 @@ function _liqRenderDetalle() {
             <div style="color:var(--tx3);font-weight:700;text-align:right;">Entregado</div>
             ${esLiquidada ? '' : '<div style="color:var(--tx3);font-weight:700;text-align:right;">Devuelto</div>'}
             ${rec.items_entregados.map((it, itIdx) => `
-              <div style="color:var(--tx2);">${it.nombre || it.codigo}</div>
+              <div style="color:var(--tx2);">${esc(it.nombre || it.codigo)}</div>
               <div style="color:var(--tx3);text-align:right;">${esc(it.cantidad_pedida)}</div>
               <div style="color:#4ade80;text-align:right;">${esc(it.cantidad_entregada)}</div>
               ${esLiquidada ? '' : `
