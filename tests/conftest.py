@@ -26,6 +26,13 @@ os.environ['SECRET_KEY'] = 'test-secret-key-de-32-bytes-o-mas-para-hmac-sha256'
 # Se borran las credenciales para que la simulacion sea inevitable, no opcional.
 os.environ.pop('CONNEKTA_IKEY', None)
 os.environ.pop('CONNEKTA_ITOKEN', None)
+# Y el host y el modo, por la misma razón: el contenedor de build hereda las
+# variables del servicio. El 2026-09-23, al mover producción a Siesa
+# producción, el build falló en `test_ambiente` — el test simula «cambiar el
+# host a producción» y el host del contenedor YA era producción. Un test que
+# pasa o falla según el ambiente que lo corre no mide el código.
+os.environ.pop('CONNEKTA_URL', None)
+os.environ.pop('MODO_ENSAYO', None)
 os.environ['CONNEKTA_MODO_SIMULACION'] = 'true'  # informativo; el guard real es el de arriba
 # El build de Railway corre esta suite con `RAILWAY_ENVIRONMENT_NAME` puesta
 # (`QA` o `production`), y `alertas_service.prefijo_ambiente()` la lee. Se
