@@ -510,6 +510,9 @@ def editar_conteo(id):
             op_usr = Usuario.query.get(nuevo_op)
             if not op_usr:
                 return jsonify({'error': f'Operario {nuevo_op} no encontrado'}), 404
+            no_puede = ConteoService.motivo_no_puede_contar(sesion, op_usr.id)
+            if no_puede:
+                return jsonify({'error': no_puede}), 400
         sesion.operario_id = nuevo_op
         cambios.append(f'operario_id → {nuevo_op}')
         if sesion.estado == EstadoConteo.PENDIENTE and nuevo_op:
@@ -644,13 +647,16 @@ def asignar_lote():
     if not operario or not operario.activo:
         return jsonify({'error': 'Operario no encontrado o inactivo'}), 404
 
-    q = SesionConteo.query.filter(
-        SesionConteo.estado == 'PENDIENTE',
-        SesionConteo.operario_id.is_(None)
-    ).order_by(SesionConteo.fecha_creacion.asc())
+    # Sin almacén explícito, el del operario. Antes, sin almacén se asignaban
+    # conteos de cualquier bodega; y sin filtro de cadena se asignaban también
+    # CC3 (que son de supervisión) y CC2 cuyo CC1 había hecho el mismo operario.
+    almacen_id = almacen_id or ConteoService.almacen_de_usuario(operario)
+    if not almacen_id:
+        return jsonify({'error': 'Indicar almacen_id: el operario no tiene almacén asignado'}), 400
 
-    if almacen_id:
-        q = q.filter(SesionConteo.almacen_id == almacen_id)
+    q = (SesionConteo.query
+         .filter(*ConteoService.filtros_pool_sin_dueno(operario.id, almacen_id))
+         .order_by(SesionConteo.fecha_creacion.asc()))
 
     tareas = q.limit(limite).all()
 
@@ -780,16 +786,18 @@ def omitir_segundo_conteo(id):
     if sesion.estado not in ('SEGUNDO_CONTEO', 'TERCER_CONTEO'):
         return jsonify({'error': f'Solo se puede omitir en estado SEGUNDO_CONTEO o TERCER_CONTEO, actual: {sesion.estado}'}), 400
 
-    # Cancelar el hijo activo (CC2 o CC3)
-    hijo = sesion.hijo_conteo
-    if hijo and hijo.estado in ('PENDIENTE', 'EN_PROCESO'):
-        hijo.estado = 'CANCELADO'
-        hijo.fecha_cierre = datetime.utcnow()
-        # Si hijo tenía su propio hijo (CC3), cancelarlo también
-        nieto = hijo.hijo_conteo
-        if nieto and nieto.estado in ('PENDIENTE', 'EN_PROCESO'):
-            nieto.estado = 'CANCELADO'
-            nieto.fecha_cierre = datetime.utcnow()
+    # Cancelar TODO conteo vivo de la cadena, cada uno por su estado. Antes el
+    # CC3 solo se cancelaba si su padre CC2 seguía vivo, pero con la raíz en
+    # TERCER_CONTEO el CC2 ya está en DESCUADRE: el CC3 quedaba vivo y huérfano
+    # en la cola de Conteo Definitivo, y contarlo no llegaba a ningún lado
+    # (la propagación exige la raíz en TERCER_CONTEO).
+    ahora = datetime.utcnow()
+    descendiente = sesion.hijo_conteo
+    while descendiente is not None:
+        if descendiente.estado in ('PENDIENTE', 'EN_PROCESO'):
+            descendiente.estado = 'CANCELADO'
+            descendiente.fecha_cierre = ahora
+        descendiente = descendiente.hijo_conteo
 
     sesion.estado = 'DESCUADRE'
     db.session.commit()

@@ -422,9 +422,14 @@ class MobileService:
                 # selectinload: pre-cargar producto/ubicacion antes del commit — después del
                 # commit expire_on_commit invalida todo y _conteo_a_dict necesita ambas relaciones.
                 from sqlalchemy.orm import selectinload as _sl_conteo_disp
+                # Filtraba solo `estado='PENDIENTE', operario_id=None`: le daba
+                # a un operario el CC3 (que es de supervisión), el CC2 de un CC1
+                # que él mismo contó, y conteos de otra bodega. La regla vive
+                # en `filtros_pool_sin_dueno`, igual para toda puerta.
                 conteo = (SesionConteo.query
                           .options(_sl_conteo_disp(SesionConteo.producto), _sl_conteo_disp(SesionConteo.ubicacion))
-                          .filter_by(estado='PENDIENTE', operario_id=None)
+                          .filter(*ConteoService.filtros_pool_sin_dueno(
+                              operario_id, ConteoService.almacen_de_usuario(_u_pick)))
                           .order_by(SesionConteo.fecha_creacion.asc())
                           .with_for_update(skip_locked=True)
                           .first())
@@ -538,12 +543,16 @@ class MobileService:
 
             if bajo_tope and not _solo_traslado:
                 from sqlalchemy.orm import joinedload as _jl_cm
+                # El almacén es el de la ubicación que se está pickeando: el
+                # conteo intercalado es, por definición, de ese mismo hueco.
+                _ubic_interc = db.session.get(Ubicacion, tarea.ubicacion_id)
                 conteo_mismo_lugar = (SesionConteo.query
                     .options(_jl_cm(SesionConteo.producto))
-                    .filter_by(
-                        ubicacion_id=tarea.ubicacion_id,
-                        estado='PENDIENTE',
-                        operario_id=None
+                    .filter(
+                        SesionConteo.ubicacion_id == tarea.ubicacion_id,
+                        *ConteoService.filtros_pool_sin_dueno(
+                            operario_id,
+                            _ubic_interc.almacen_id if _ubic_interc else None),
                     ).first())
                 if conteo_mismo_lugar:
                     conteo_mismo_lugar.operario_id = operario_id
@@ -712,9 +721,7 @@ class MobileService:
             SesionConteo.query
             .options(_sl_tienda(SesionConteo.producto), _sl_tienda(SesionConteo.ubicacion))
             .filter(
-                SesionConteo.almacen_id == almacen_id,
-                SesionConteo.estado == EstadoConteo.PENDIENTE,
-                SesionConteo.operario_id.is_(None),
+                *ConteoService.filtros_pool_sin_dueno(operario_id, almacen_id),
                 SesionConteo.es_segundo_conteo.is_(False),  # CC2 va al admin, no al dispatcher cíclico
             )
             .order_by(_prioridad_abc, SesionConteo.fecha_creacion.asc())
@@ -1080,7 +1087,7 @@ class MobileService:
             # chequeo, cualquier operario podía "tomarlo" escaneando directo
             # aquí sin pasar por /api/conteo/definitivos, que sí exige
             # supervisor/admin/jefe_almacén.
-            ConteoService.verificar_puede_tomar_definitivo(sesion, operario_id)
+            ConteoService.verificar_puede_contar(sesion, operario_id)
 
             producto = sesion.producto
             if codigo_limpio not in MobileService._codigos_validos(producto):

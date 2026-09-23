@@ -35,7 +35,7 @@ class ConteoService:
         if sesion.estado not in ['PENDIENTE', 'EN_PROCESO']:
             raise ValueError(f'Tarea en estado {sesion.estado} — no disponible')
 
-        ConteoService.verificar_puede_tomar_definitivo(sesion, operario_id)
+        ConteoService.verificar_puede_contar(sesion, operario_id)
 
         # PENDIENTE → EN_PROCESO al abrirla — sin importar si YA tenía dueño.
         # `crear_conteo_manual(operario_id=...)` y `asignar-lote` pre-asignan
@@ -235,28 +235,116 @@ class ConteoService:
         return bool(origen and origen.es_segundo_conteo)
 
     @staticmethod
-    def verificar_puede_tomar_definitivo(sesion: SesionConteo, operario_id: int) -> None:
-        """El CC3 nace SIN operario a propósito (`_crear_conteo_verificacion`)
-        — lo toma un supervisor desde `/api/conteo/definitivos`, nunca un
-        picker automático (decisión 2026-09-04). Sin este chequeo, cualquier
-        operario de almacén podía saltarse esa cola llamando directo a
-        `GET /api/conteo/<id>/tarea` o a `/api/mobile/escanear` con el
-        sesion_id del CC3 — la ruta que lista la cola ya exige
-        `Roles.SUPERVISION`, pero nada exigía lo mismo al TOMARLO.
+    def _operarios_previos_de_la_cadena(sesion: SesionConteo) -> set:
+        """Quiénes ya contaron ANTES que esta sesión en su cadena: el operario
+        de CC1 para un CC2; los de CC1 y CC2 para un CC3. Vacío para un CC1."""
+        previos = set()
+        origen_id = sesion.sesion_origen_id if sesion.es_segundo_conteo else None
+        while origen_id:
+            origen = db.session.get(SesionConteo, origen_id)
+            if origen is None:
+                break
+            if origen.operario_id:
+                previos.add(origen.operario_id)
+            origen_id = origen.sesion_origen_id if origen.es_segundo_conteo else None
+        return previos
 
-        No hace nada si la sesión ya tiene dueño (ese caso lo cubre el
-        chequeo de ownership de cada caller) ni si no es un CC3.
+    @staticmethod
+    def motivo_no_puede_contar(sesion: SesionConteo, operario_id: int):
+        """¿Por qué ESTE usuario no puede contar ESTA sesión? Texto, o `None`.
+
+        **Una política, una función** (2026-09-23). Hasta hoy la regla vivía a
+        medias en cada puerta: la cola de tienda excluía todo CC2/CC3, el
+        despachador de NB1 no excluía nada, `asignar-lote` y `/editar`
+        tampoco, y el control del CC3 solo corría si la sesión no tenía dueño
+        —así que bastaba con que una de esas puertas le pusiera dueño para que
+        dejara de correr—. Dos reglas:
+
+        1. **El CC3 (conteo definitivo) lo cuenta supervisión** (decisión
+           2026-09-04): define el ajuste, y un picker automático no debe ser
+           quien desempata.
+        2. **Doble ciego: nadie cuenta dos veces la misma cadena.** Un CC2
+           hecho por quien hizo el CC1 no verifica nada: repite el mismo
+           error con la misma mano, y CC1 == CC2 dispara el ajuste
+           automático.
+
+        Se aplica haya o no dueño: un dueño mal puesto no convierte en válido
+        lo que la regla prohíbe.
         """
-        if sesion.operario_id or not ConteoService._es_conteo_definitivo(sesion):
-            return
-        from app.models.usuario import Usuario
-        from app.routes._auth_helpers import Roles
-        operario = db.session.get(Usuario, operario_id)
-        if not operario or operario.rol not in Roles.SUPERVISION:
-            raise ValueError(
-                'El conteo definitivo (CC3) solo lo puede tomar un supervisor, '
-                'admin o jefe de almacén'
-            )
+        if not sesion.es_segundo_conteo:
+            return None
+        if ConteoService._es_conteo_definitivo(sesion):
+            from app.models.usuario import Usuario
+            from app.routes._auth_helpers import Roles
+            operario = db.session.get(Usuario, operario_id)
+            if not operario or operario.rol not in Roles.SUPERVISION:
+                return ('El conteo definitivo (CC3) solo lo puede tomar un '
+                        'supervisor, admin o jefe de almacén')
+        if operario_id in ConteoService._operarios_previos_de_la_cadena(sesion):
+            return ('Doble ciego: ya contaste este producto en esta misma cadena '
+                    'de conteo. La verificación la tiene que hacer otra persona.')
+        return None
+
+    @staticmethod
+    def verificar_puede_contar(sesion: SesionConteo, operario_id: int) -> None:
+        """`motivo_no_puede_contar` como excepción, para las puertas que abren,
+        escanean o registran un conteo."""
+        motivo = ConteoService.motivo_no_puede_contar(sesion, operario_id)
+        if motivo:
+            raise ValueError(motivo)
+
+    @staticmethod
+    def filtros_pool_sin_dueno(operario_id: int, almacen_id) -> list:
+        """Filtros SQL de «qué conteo sin dueño se le puede dar a este operario».
+
+        Es `motivo_no_puede_contar` escrita para una consulta: toda puerta que
+        reparte conteos sin dueño —los despachadores móviles, el intercalado
+        durante el picking, `asignar-lote`— la usa, y ninguna arma su propio
+        filtro (`tests/test_conteo_pool_sin_dueno.py` lo exige por AST).
+
+        - **De su almacén.** El despachador de NB1 no filtraba: un operario de
+          NB1 podía recibir un conteo de NS1, el más viejo primero.
+        - **Nunca un CC3**: su cola es `/api/conteo/definitivos`.
+        - **Un CC2 solo si el CC1 no lo hizo él.** Un CC2 sin dueño es normal:
+          nace así cuando no hay par disponible, y queda así cuando el barrido
+          de zombis o la pausa de un conteo forzado lo liberan.
+
+        Sin almacén conocido no se reparte nada (Regla 0): repartir sin saber
+        la bodega es exactamente el defecto que esto cierra.
+        """
+        from sqlalchemy import false, or_
+        from sqlalchemy.orm import aliased
+        if not almacen_id:
+            return [false()]
+        Cc1 = aliased(SesionConteo)
+        cc1_ajenos = (db.session.query(Cc1.id)
+                      .filter(Cc1.es_segundo_conteo.is_(False),
+                              or_(Cc1.operario_id.is_(None),
+                                  Cc1.operario_id != operario_id))
+                      .scalar_subquery())
+        return [
+            SesionConteo.estado == EstadoConteo.PENDIENTE,
+            SesionConteo.operario_id.is_(None),
+            SesionConteo.almacen_id == almacen_id,
+            # CC1, o un CC2 cuyo origen es un CC1 ajeno. Un CC3 tiene por
+            # origen un CC2, así que no entra por ninguna de las dos ramas.
+            or_(SesionConteo.es_segundo_conteo.is_(False),
+                SesionConteo.sesion_origen_id.in_(cc1_ajenos)),
+        ]
+
+    @staticmethod
+    def almacen_de_usuario(usuario):
+        """El `almacen_id` de un usuario: el suyo, o el de su `bodega_siesa_id`
+        (un picker_traslado puede tener solo la bodega). `None` si no se sabe."""
+        if usuario is None:
+            return None
+        if usuario.almacen_id:
+            return usuario.almacen_id
+        if usuario.bodega_siesa_id:
+            from app.models.almacen import Almacen
+            alm = Almacen.query.filter_by(bodega_siesa_id=usuario.bodega_siesa_id).first()
+            return alm.id if alm else None
+        return None
 
     @staticmethod
     def registrar_conteo(
@@ -284,7 +372,7 @@ class ConteoService:
             raise ValueError('Esta tarea no está asignada a ti')
         if sesion_pre.maneja_lote and not lote_id:
             raise ValueError('Este producto maneja lotes. El campo lote_id es obligatorio.')
-        ConteoService.verificar_puede_tomar_definitivo(sesion_pre, operario_id)
+        ConteoService.verificar_puede_contar(sesion_pre, operario_id)
 
         # Siesa es la fuente de verdad. Se consulta antes del lock para no
         # mantener la transacción abierta durante la llamada HTTP.
@@ -346,7 +434,7 @@ class ConteoService:
             raise ValueError('Esta tarea no está asignada a ti')
         # Re-verificado bajo lock: sesion_pre y sesion son lecturas distintas —
         # el mismo criterio que ya aplican estado y ownership dos líneas arriba.
-        ConteoService.verificar_puede_tomar_definitivo(sesion, operario_id)
+        ConteoService.verificar_puede_contar(sesion, operario_id)
 
         # ¿Se movió Siesa entre la apertura y este cierre? Entonces el físico
         # y la foto miden instantes distintos: el conteo no produce MATCH, ni
@@ -932,6 +1020,74 @@ class ConteoService:
         return '; '.join(partes)
 
     @staticmethod
+    def _ids_de_la_cadena(sesion: SesionConteo) -> set:
+        """Ids de toda la cadena de `sesion`: su raíz y los descendientes."""
+        raiz = sesion
+        while raiz.es_segundo_conteo and raiz.sesion_origen_id:
+            origen = db.session.get(SesionConteo, raiz.sesion_origen_id)
+            if origen is None:
+                break
+            raiz = origen
+        ids, nodo = set(), raiz
+        while nodo is not None:
+            ids.add(nodo.id)
+            nodo = nodo.hijo_conteo
+        return ids
+
+    @staticmethod
+    def observacion_que_la_vuelve_vieja(sesion: SesionConteo):
+        """¿Otra cadena del mismo hueco dejó vieja la foto de esta? Descripción,
+        o `None`.
+
+        El ajuste es un delta fijado contra la foto de Siesa del conteo. Ese
+        delta sigue valiendo mientras Siesa no haya recibido OTRO ajuste del
+        mismo hueco que la foto no vio. Tres formas de que eso pase, todas
+        desde otra cadena (la propia no cuenta: su observación es la misma):
+
+        - **Otro conteo posterior** del hueco, con resultado: la diferencia la
+          midió él también, y si los dos la ajustan, se descuenta dos veces.
+        - **Otro ajuste en vuelo** (AJUSTANDO): no se sabe si ya llegó a Siesa
+          antes o después de esta foto.
+        - **Otro ajuste aceptado por Siesa DESPUÉS de esta foto**: la foto no lo
+          incluye, así que esta diferencia ya está corregida.
+
+        Es el cierre del doble ajuste del mismo hueco (2026-09-23): una cadena
+        esperando al supervisor en DESCUADRE, y otra abierta encima que la
+        ajustaba sola. Va acá, en la política de «puede salir este ajuste», y
+        no solo en el generador, porque son varias las puertas que abren
+        cadenas.
+        """
+        if sesion.foto_siesa_at is None or not sesion.producto_id:
+            return None
+        from sqlalchemy import and_, or_
+        propias = ConteoService._ids_de_la_cadena(sesion)
+        otra = (SesionConteo.query
+                .filter(
+                    SesionConteo.producto_id == sesion.producto_id,
+                    SesionConteo.ubicacion_id == sesion.ubicacion_id,
+                    ~SesionConteo.id.in_(propias),
+                    or_(
+                        and_(SesionConteo.foto_siesa_at > sesion.foto_siesa_at,
+                             SesionConteo.cantidad_fisica.isnot(None),
+                             SesionConteo.estado != EstadoConteo.CANCELADO),
+                        SesionConteo.estado == EstadoConteo.AJUSTANDO,
+                        and_(SesionConteo.estado == EstadoConteo.AJUSTADO,
+                             SesionConteo.fecha_cierre > sesion.foto_siesa_at),
+                    ),
+                )
+                .order_by(SesionConteo.id.desc())
+                .first())
+        if otra is None:
+            return None
+        if otra.estado == EstadoConteo.AJUSTANDO:
+            return f'el conteo {otra.codigo} del mismo hueco tiene un ajuste en camino a Siesa'
+        if otra.estado == EstadoConteo.AJUSTADO and (
+                otra.foto_siesa_at is None or otra.foto_siesa_at <= sesion.foto_siesa_at):
+            return (f'el conteo {otra.codigo} del mismo hueco ya se ajustó en Siesa '
+                    f'después de esta foto')
+        return f'el conteo {otra.codigo} del mismo hueco es posterior a éste'
+
+    @staticmethod
     def motivo_bloqueo_ajuste(sesion: SesionConteo, *, exige_foto_inicio: bool = True):
         """Por qué el ajuste de esta sesión NO puede salir a Siesa, o `None`.
 
@@ -945,7 +1101,7 @@ class ConteoService:
         declarado con su motivo en el trinquete
         (`tests/test_conteo_ventas_durante_conteo.py::AJUSTES_SIN_FOTO_DE_INICIO`).
 
-        Cinco casos, todos Regla 0:
+        Seis casos, todos Regla 0:
 
         1. **Sin foto de Siesa.** El delta se mide contra la foto del conteo;
            sin ella solo queda la base del WMS, y un delta sobre esa base deja
@@ -967,6 +1123,9 @@ class ConteoService:
            defensa para cualquier otro camino que escriba una sesión.
         5. **Un traslado entrante vivo** para esta bodega y este SKU en el
            instante del conteo (`traslado_entrante_vivo`).
+        6. **Otra cadena del mismo hueco dejó vieja esta foto** (2026-09-23):
+           un conteo posterior, un ajuste en vuelo, o uno aceptado por Siesa
+           después de esta foto (`observacion_que_la_vuelve_vieja`).
         """
         if (sesion.fuente_existencia != 'SIESA' or sesion.teorico_siesa is None
                 or sesion.cant_pos_siesa is None
@@ -1001,6 +1160,13 @@ class ConteoService:
             return (
                 f'Siesa se movió mientras se contaba ({movimiento}): el físico y la '
                 f'foto miden instantes distintos. Recontar.'
+            )
+        vieja = ConteoService.observacion_que_la_vuelve_vieja(sesion)
+        if vieja:
+            return (
+                f'Este conteo quedó viejo: {vieja}. Ajustarlo descontaría la misma '
+                f'diferencia dos veces en Siesa. Se decide sobre el conteo más '
+                f'reciente del hueco; éste se cancela.'
             )
         traslado = ConteoService.traslado_entrante_vivo(sesion)
         if traslado:
@@ -1205,6 +1371,27 @@ class ConteoService:
         ]
 
     @staticmethod
+    def _exigir_raiz_para_ajustar(sesion: SesionConteo) -> None:
+        """Un ajuste sale SOLO de la raíz de la cadena (el CC1).
+
+        El CC2 y el CC3 que resuelven una cadena quedan en DESCUADRE para
+        siempre, con su propia `cantidad_fisica`, y su observación ya se copió a
+        la raíz (`_copiar_observacion`), que es de donde sale el ajuste. La
+        idempotencia de los jobs es por sesión (`ADJ-<id>`), así que aprobar el
+        hijo encolaba un SEGUNDO AJUSTE_CONTEO con el mismo delta: el mismo
+        faltante descontado dos veces en Siesa. Solo la pantalla lo evitaba,
+        porque no le pinta el botón a los hijos; `PUT /api/conteo/<id>/ajustar`
+        con el id del hijo lo hacía (2026-09-23). La guarda va en el servicio:
+        protege la operación, no una puerta.
+        """
+        if sesion.es_segundo_conteo:
+            raise ValueError(
+                f'{sesion.codigo} es un conteo de verificación (CC2/CC3): el '
+                'ajuste de la cadena se aprueba sobre el primer conteo, que ya '
+                'tiene su resultado. Aprobarlo acá lo enviaría dos veces a Siesa.'
+            )
+
+    @staticmethod
     def _encolar_ajuste_fisico(sesion: SesionConteo, aprobador_id: int = None, *,
                                exige_foto_inicio: bool = True) -> None:
         """
@@ -1217,6 +1404,8 @@ class ConteoService:
         """
         from app.models.almacen import Almacen
         from app.models.siesa_job import SiesaJob, EstadoSiesaJob
+
+        ConteoService._exigir_raiz_para_ajustar(sesion)
 
         # Guard idempotencia: no crear job duplicado si ya hay uno activo para esta sesión
         job_activo = SiesaJob.query.filter(
@@ -1465,8 +1654,7 @@ class ConteoService:
         existente = SesionConteo.query.filter(
             SesionConteo.producto_id == producto_id,
             SesionConteo.ubicacion_id == ubicacion_id,
-            SesionConteo.estado.in_(['PENDIENTE', 'EN_PROCESO', 'SEGUNDO_CONTEO']),
-            SesionConteo.es_segundo_conteo.is_(False),
+            SesionConteo.raiz_con_cadena_viva(incluye_descuadre=True),
         ).first()
         if existente:
             logger.info(
@@ -1512,6 +1700,7 @@ class ConteoService:
                   .first())
         if not sesion:
             raise ValueError('Sesión no encontrada')
+        ConteoService._exigir_raiz_para_ajustar(sesion)
 
         # Idempotencia — si Siesa ya procesó este ajuste, devolver sin repetir
         if sesion.siesa_triggered:
@@ -1679,7 +1868,7 @@ class ConteoService:
             for s in SesionConteo.query.filter(
                 SesionConteo.producto_id == producto.id,
                 SesionConteo.ubicacion_id.in_(ubicacion_ids),
-                SesionConteo.estado.in_(['PENDIENTE', 'EN_PROCESO', 'SEGUNDO_CONTEO'])
+                SesionConteo.raiz_con_cadena_viva(incluye_descuadre=False),
             ).all()
         }
 

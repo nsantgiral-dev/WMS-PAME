@@ -291,7 +291,7 @@ class ABCService:
                 (sc.producto_id, sc.ubicacion_id)
                 for sc in SesionConteo.query.filter(
                     SesionConteo.almacen_id == almacen_id,
-                    SesionConteo.estado.in_(['PENDIENTE', 'EN_PROCESO', 'SEGUNDO_CONTEO'])
+                    SesionConteo.raiz_con_cadena_viva(incluye_descuadre=True)
                 ).with_entities(SesionConteo.producto_id, SesionConteo.ubicacion_id).all()
             }
 
@@ -375,7 +375,7 @@ class ABCService:
                         ya_existe = SesionConteo.query.filter(
                             SesionConteo.producto_id == producto.id,
                             SesionConteo.ubicacion_id == reg.ubicacion_id,
-                            SesionConteo.estado.in_(['PENDIENTE', 'EN_PROCESO', 'SEGUNDO_CONTEO'])
+                            SesionConteo.raiz_con_cadena_viva(incluye_descuadre=True)
                         ).first()
                         if ya_existe:
                             conteos_activos.add((producto.id, reg.ubicacion_id))
@@ -530,7 +530,7 @@ class ABCService:
             sesiones_activas = SesionConteo.query.filter(
                 SesionConteo.producto_id.in_(producto_ids),
                 SesionConteo.ubicacion_id.in_(ubic_ids_all),
-                SesionConteo.estado.in_(['PENDIENTE', 'EN_PROCESO', 'SEGUNDO_CONTEO'])
+                SesionConteo.raiz_con_cadena_viva(incluye_descuadre=True)
             ).all()
             activos_set = {(s.ubicacion_id, s.producto_id) for s in sesiones_activas}
 
@@ -597,7 +597,7 @@ class ABCService:
                 ya_existe = SesionConteo.query.filter(
                     SesionConteo.ubicacion_id == reg.ubicacion_id,
                     SesionConteo.producto_id == producto.id,
-                    SesionConteo.estado.in_(['PENDIENTE', 'EN_PROCESO', 'SEGUNDO_CONTEO'])
+                    SesionConteo.raiz_con_cadena_viva(incluye_descuadre=True)
                 ).first()
                 if ya_existe:
                     sp.rollback()

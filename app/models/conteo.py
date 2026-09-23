@@ -14,6 +14,12 @@ class EstadoConteo:
     AJUSTADO        = 'AJUSTADO'
     CANCELADO       = 'CANCELADO'
 
+    #: Estados de una RAÍZ cuya cadena todavía está en curso: nadie debe abrir
+    #: otra sobre el mismo hueco. Antes cada sitio escribía su lista a mano
+    #: —`PENDIENTE, EN_PROCESO, SEGUNDO_CONTEO`— y a las seis les faltaban
+    #: `TERCER_CONTEO` y `AJUSTANDO` (2026-09-23).
+    CADENA_EN_CURSO = (PENDIENTE, EN_PROCESO, SEGUNDO_CONTEO, TERCER_CONTEO, AJUSTANDO)
+
 
 class SesionConteo(db.Model):
     __tablename__ = 'sesiones_conteo'
@@ -196,6 +202,40 @@ class SesionConteo(db.Model):
                      "estado IN ('PENDIENTE', 'EN_PROCESO', 'SEGUNDO_CONTEO') "
                      "AND es_segundo_conteo = 0")),
     )
+
+    @classmethod
+    def raiz_con_cadena_viva(cls, *, incluye_descuadre: bool):
+        """Condición SQL: «esta fila es la raíz de una cadena viva del hueco».
+
+        **Una definición para toda puerta que abre una cadena** — el generador
+        ABC, el watchdog, la auditoría por excepción y el conteo manual. Se
+        mira la raíz, no los hijos: un CC2 o CC3 vivo implica una raíz en
+        SEGUNDO/TERCER_CONTEO, y un hijo que resolvió queda en DESCUADRE para
+        siempre (contarlo como vivo trabaría el hueco sin fin).
+
+        `incluye_descuadre` es la única diferencia entre puertas, y es a
+        propósito:
+
+        - **True — generación automática.** Una raíz en DESCUADRE espera que
+          un supervisor apruebe o cancele. Abrir otra cadena encima era contar
+          dos veces la misma diferencia: la nueva la ajustaba sola (CC1 == CC2)
+          y después el supervisor aprobaba la vieja — **el mismo faltante
+          descontado dos veces en Siesa**.
+        - **False — conteo manual.** Un humano que pide recontar un DESCUADRE
+          está haciendo exactamente lo que el bloqueo del ajuste le pide
+          («recontar»). Que el recuento no duplique el ajuste lo garantiza
+          `ConteoService.motivo_bloqueo_ajuste` (una observación más reciente
+          del hueco deja vieja a la anterior), no esta condición.
+
+        El índice único `ix_sesion_conteo_activa_unica` sigue con su predicado
+        original (PENDIENTE/EN_PROCESO/SEGUNDO_CONTEO): cambiarlo exige
+        migración, y la carrera que ese índice cierra —dos CC1 simultáneos
+        creados por la API y el scheduler— ocurre en esos tres estados.
+        """
+        estados = list(EstadoConteo.CADENA_EN_CURSO)
+        if incluye_descuadre:
+            estados.append(EstadoConteo.DESCUADRE)
+        return db.and_(cls.es_segundo_conteo.is_(False), cls.estado.in_(estados))
 
     def lista_conteos_descartados(self) -> list:
         """`conteos_descartados` leído. Un JSON ilegible no se oculta: se

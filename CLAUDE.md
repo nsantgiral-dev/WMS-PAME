@@ -2492,6 +2492,43 @@ entorno reales de Railway desde esta sesión.
 
 ---
 
+## Conteo: quién cuenta qué, y un solo ajuste por hueco (2026-09-23)
+
+Cuatro defectos del flujo, encontrados al diseñar las estadísticas de conteo:
+**medir la exactitud de un doble ciego que no se cumplía era medir un proceso
+que no existe.** Trinquete: `tests/test_conteo_pool_sin_dueno.py` (8
+mutaciones, las 8 rojas).
+
+| | Qué pasaba | Ahora |
+|---|---|---|
+| **Doble ajuste** | `PUT /api/conteo/<id>/ajustar` aceptaba un CC2/CC3 en DESCUADRE. Su observación ya había salido desde la raíz y la idempotencia es por sesión (`ADJ-<id>`): **el mismo faltante dos veces en Siesa**. Solo la pantalla lo evitaba | `_exigir_raiz_para_ajustar`, en `confirmar_ajuste` y en `_encolar_ajuste_fisico` |
+| **Pool sin regla** | El despachador de NB1 hacía `filter_by(estado='PENDIENTE', operario_id=None)`: el CC3 (de supervisión) le caía a un operario, un CC2 liberado le volvía a quien hizo el CC1, y llegaban conteos de otra bodega. `asignar-lote`, `/editar` y el intercalado tampoco filtraban. El control del CC3 solo corría si la sesión **no tenía dueño**, así que cualquier puerta que le pusiera uno lo apagaba | Una política, `motivo_no_puede_contar`, aplicada haya dueño o no; su versión SQL, `filtros_pool_sin_dueno`, en toda puerta que reparte |
+| **CC3 huérfano** | «Omitir» con la raíz en TERCER_CONTEO no cancelaba el CC3 (su padre CC2 ya estaba en DESCUADRE) | Se cancela todo lo vivo de la cadena |
+| **Dos cadenas por hueco** | El generador ABC miraba `PENDIENTE/EN_PROCESO/SEGUNDO_CONTEO`: con una raíz en DESCUADRE esperando al supervisor abría otra, que ajustaba sola la misma diferencia; después el supervisor aprobaba la vieja | `SesionConteo.raiz_con_cadena_viva()` en las seis puertas que abren cadenas, y el caso 6 de `motivo_bloqueo_ajuste`: **una observación posterior del hueco deja vieja a la anterior** |
+
+Dos decisiones que no son obvias:
+
+- **El conteo manual SÍ puede abrir cadena sobre un DESCUADRE** (`incluye_descuadre=False`).
+  Es lo que el bloqueo del ajuste le pide a un humano: «recontar». Que el
+  recuento no duplique el ajuste no lo garantiza la puerta sino la política
+  del ajuste (caso 6). Por eso el caso 6 existe aunque el generador ya filtre.
+- **El índice único `ix_sesion_conteo_activa_unica` no se tocó**: cambiar su
+  predicado exige migración, y la carrera que cierra (dos CC1 simultáneos de
+  la API y el scheduler) ocurre en sus tres estados.
+
+**Lo que el trinquete NO ve:** consultas al pool con un alias de
+`SesionConteo` (`aliased(...)`, `_SC`). Hoy no hay ninguna.
+
+**Producción, medido el 2026-09-23 (solo lectura):** el conteo casi no opera.
+8.761 cadenas, de las cuales 8.690 son una generación masiva de abril en NB1;
+4.825 siguen PENDIENTES desde entonces, 25 MATCH y 5 ajustes enviados, con
+usuarios de prueba. Y la frecuencia configurada (`FRECUENCIA_DIAS` A 15 / B 90
+/ C 180 sobre 2.326 / 4.657 / 19.311 SKUs de NB1) exige **~316 conteos por
+día** solo en NB1. Antes de encender el conteo en serio, eso es una decisión de
+capacidad, no de código.
+
+---
+
 ## Conteo cíclico real (sobrante/faltante) + Conteo Definitivo (CC3) hecho por supervisor (2026-09-04)
 
 Dos pruebas reales de ajuste de inventario (142951) contra Siesa QA, más
