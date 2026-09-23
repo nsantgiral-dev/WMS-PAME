@@ -2529,6 +2529,39 @@ capacidad, no de código.
 
 ---
 
+## Conteo: la capacidad fija el ritmo (2026-09-23)
+
+`app/services/conteo_politica.py` es **el único sitio** que sabe cuánto se
+cuenta por día, cada cuánto se recuenta cada clase y en qué orden se reparte.
+`tests/test_conteo_cupo.py` (27 mutaciones, las 27 rojas) exige por AST que
+nadie fuera de ese módulo nombre sus variables ni escriba un mapa clase→número:
+así divergieron 15/90/180 (generador), «semanal/mensual/trimestral» (resumen) y
+«≈ N÷15/día» (pantalla).
+
+| Variable | Defecto | Qué es |
+|---|---|---|
+| `CONTEO_CUPO_DIARIO` | `60` | Conteos por día por almacén (tabla de capacidad del usuario: 3 operarios en NB1) |
+| `CONTEO_CUPO_POR_BODEGA` | — | JSON `{"NC1": 0, …}`. **Tiendas fuera de la v1 → cupo 0** |
+| `CONTEO_INTERVALOS_DIAS` | `{"A":150,"B":300,"C":600}` | Intervalo objetivo; mide el atraso, no dicta el lote |
+| `CONTEO_WATCHDOG_DIAS_SIN_REABRIR` | `30` | El watchdog no reabre un hueco contado hace menos (el ABC de Siesa se recalcula mensual) |
+
+- **Generador** (cron 2:00 a. m.): crea como máximo `cupo − pendientes_vivas`
+  y **nada** con ≥ 2 días de cupo pendientes; el resultado dice por qué. Nunca
+  contados de A primero, después mayor atraso relativo (días / intervalo).
+  «Forzar todo» ahora es **Adelantar**: más candidatos, mismo cupo.
+- **Watchdog**: corre antes que el plan y dentro del mismo cupo.
+- **Reparto**: `orden_de_reparto()` — EXCEPCION_PICKING > MANUAL > A > B > C >
+  antigüedad, en toda puerta (NB1, intercalado, tienda, cola asignada,
+  asignar-lote, mis-tareas).
+- **«Limpiar cola» cancela, no borra**: solo raíces DIARIO_ABC/WATCHDOG_ABC en
+  PENDIENTE sin dueño ni hijos, con motivo y vista previa que es el mismo
+  cálculo. Con las 4.825 de abril en NB1 el generador **no crea nada** hasta
+  que el líder cancele ese rezago (≈ 80 días de cupo).
+- **Punto de extensión**: `conteo_politica.filtrar_elegibles` — ahí, y en
+  ningún otro sitio, se conecta la exclusión de SKUs con mercancía en proceso.
+
+---
+
 ## Conteo cíclico real (sobrante/faltante) + Conteo Definitivo (CC3) hecho por supervisor (2026-09-04)
 
 Dos pruebas reales de ajuste de inventario (142951) contra Siesa QA, más
