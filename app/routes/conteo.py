@@ -203,8 +203,12 @@ def registrar_conteo(id):
 @jwt_required()
 def confirmar_ajuste(id):
     """
-    Solo admin o supervisor pueden aprobar ajustes de inventario.
-    Dispara POST a Siesa con motivo 01 (entrada) o 02 (salida).
+    Aprueba un ajuste de inventario y lo encola a Siesa (motivo 01 entrada / 02
+    salida). **Quién aprueba cuánto lo decide el servicio**
+    (`ConteoService.motivo_no_puede_aprobar`): supervisor y admin cualquier
+    monto, jefe de almacén hasta `CONTEO_TOPE_APROBACION_JEFE`. Acá solo se
+    corta temprano a quien no es de supervisión y se traduce el
+    `PermissionError` del servicio a 403 con su mensaje.
     """
     from app.models.usuario import Usuario
     try:
@@ -212,8 +216,8 @@ def confirmar_ajuste(id):
     except (ValueError, TypeError):
         return jsonify({'error': 'Identidad de usuario inválida en el token'}), 422
     usuario = Usuario.query.get(supervisor_id)
-    if not usuario or usuario.rol not in Roles.LEAD:
-        return jsonify({'error': 'Solo un supervisor o admin puede aprobar ajustes de inventario'}), 403
+    if not usuario or usuario.rol not in Roles.SUPERVISION:
+        return jsonify({'error': 'Solo un supervisor, admin o jefe de almacén puede aprobar ajustes de inventario'}), 403
     try:
         sesion = ConteoService.confirmar_ajuste(id, supervisor_id)
         # [A22] 202 cuando el ajuste está encolado en DLQ (AJUSTANDO) — el supervisor
@@ -231,6 +235,9 @@ def confirmar_ajuste(id):
             'siesa_triggered': sesion.siesa_triggered,
             'sesion': sesion.to_dict()
         }), http_status
+    except PermissionError as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 403
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
     except Exception as e:

@@ -48,8 +48,8 @@ POLITICA = RAIZ / 'app' / 'services' / 'conteo_politica.py'
 @pytest.fixture(autouse=True)
 def _config_limpia(monkeypatch):
     """Ninguna variable del entorno del desarrollador se cuela en los tests."""
-    for nombre in ('CONTEO_CUPO_DIARIO', 'CONTEO_CUPO_POR_BODEGA',
-                   'CONTEO_INTERVALOS_DIAS', 'CONTEO_WATCHDOG_DIAS_SIN_REABRIR'):
+    from app.services.conteo_politica import VARIABLES_DE_ENTORNO
+    for nombre in VARIABLES_DE_ENTORNO:
         monkeypatch.delenv(nombre, raising=False)
 
 
@@ -706,15 +706,20 @@ class TestUnSoloSitioLeeLaPolitica:
         mapas = sum(1 for n in ast.walk(arbol) if _mapa_clase_numero(n))
         nombres = sum(1 for n in ast.walk(arbol)
                       if _nombra_variable_de_politica(n, _nombres_de_variables()))
-        assert mapas >= 3, mapas
-        assert nombres >= 4, nombres
-        assert len(_nombres_de_variables()) == 4
+        assert mapas >= 4, mapas   # intervalos, rango, umbral y unidades de tolerancia
+        assert nombres >= 9, nombres
+        # Cupo, intervalos, watchdog + tolerancias y topes en pesos (2026-09-23).
+        assert len(_nombres_de_variables()) == 9
 
     @pytest.mark.parametrize('codigo', [
         "x = os.environ.get('CONTEO_CUPO_DIARIO', '60')",
         "x = os.getenv('CONTEO_INTERVALOS_DIAS')",
         "x = os.environ['CONTEO_CUPO_POR_BODEGA']",
         "_ENV = 'CONTEO_WATCHDOG_DIAS_SIN_REABRIR'\nx = os.environ.get(_ENV)",
+        "x = os.environ.get('CONTEO_TOPE_AUTOAJUSTE', '100000')",
+        "TOPE = os.getenv('CONTEO_TOPE_APROBACION_JEFE')",
+        "x = json.loads(os.environ['CONTEO_TOLERANCIA_PCT'])",
+        "TOLERANCIA = {'A': 0, 'B': 1, 'C': 1}",
         "FRECUENCIA_DIAS = {'A': 15, 'B': 90, 'C': 180}",
         "UMBRAL = {'B': 25, 'C': 10}",
         "orden = case({'A': 1, 'B': 2, 'C': 3}, value=x)",

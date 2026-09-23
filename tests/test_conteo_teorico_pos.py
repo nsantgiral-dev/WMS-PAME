@@ -60,8 +60,15 @@ class SiesaFalsa:
         self.fila = None
         self.lecturas = 0
 
+    #: Costo unitario de la fila por defecto. Desde 2026-09-23 un ajuste sin
+    #: costo no sale solo (`CONTEO_TOPE_AUTOAJUSTE`, Regla 0), así que la Siesa
+    #: de mentira trae uno: chico, para que una diferencia de pocas unidades
+    #: quede lejos del tope y los tests sigan midiendo lo que miden. Un test que
+    #: necesita la fila SIN costo pasa `costo=None`.
+    COSTO = 1000.0
+
     def poner(self, existencia, pos=0, salida_sin_conf=None, comprometida=0,
-              quitar=()):
+              quitar=(), costo=COSTO):
         ssc = pos if salida_sin_conf is None else salida_sin_conf
         fila = {
             'f120_referencia': SKU, 'f150_id': 'NS1',
@@ -71,6 +78,8 @@ class SiesaFalsa:
             'f400_cant_pos_1': float(pos),
             'f400_id_lote': '', 'f400_id_ubicacion_aux': None,
         }
+        if costo is not None:
+            fila['f400_costo_prom_uni'] = float(costo)
         for campo in quitar:
             fila.pop(campo)
         self.fila = fila

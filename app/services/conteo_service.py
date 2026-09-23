@@ -166,11 +166,52 @@ class ConteoService:
                 cambios.append(f'{clave} {float(inicio):g}→{float(cierre):g}')
         return ', '.join(cambios) or None
 
+    #: Por qué se descartó un conteo (`conteos_descartados[*].motivo`). Las
+    #: entradas anteriores a este campo son todas de movimiento: traen la clave
+    #: `movimiento` (`motivo_de_descarte`).
+    DESCARTE_MOVIMIENTO = 'MOVIMIENTO'
+    DESCARTE_FUERA_DE_TOLERANCIA = 'FUERA_DE_TOLERANCIA'
+    #: No es un conteo descartado: el líder reabrió la sesión bloqueada. Corta
+    #: la cuenta de recuentos por movimiento (`recuentos_por_movimiento_vigentes`)
+    #: — reabrir un MOVIMIENTO_CONTINUO es darle otra oportunidad en un momento
+    #: más quieto, no bloquearlo otra vez al primer movimiento.
+    EVENTO_REABIERTO = 'REABIERTO'
+
     @staticmethod
-    def _pedir_recuento(sesion: SesionConteo, operario_id: int, cantidad_fisica,
-                        foto: dict, movimiento: str) -> dict:
-        """El conteo se contaminó: se descarta y la MISMA sesión queda lista
-        para recontar. Pre-condición: la sesión está bajo `with_for_update`.
+    def motivo_de_descarte(entrada):
+        """El motivo de una entrada de `conteos_descartados`, o `None` si no es
+        un conteo descartado (un evento, o una entrada ilegible)."""
+        if not isinstance(entrada, dict) or 'evento' in entrada:
+            return None
+        if entrada.get('motivo'):
+            return entrada['motivo']
+        return ConteoService.DESCARTE_MOVIMIENTO if 'movimiento' in entrada else None
+
+    @staticmethod
+    def recuentos_por_movimiento_vigentes(sesion: SesionConteo) -> int:
+        """Cuántos conteos de esta sesión se descartaron por movimiento desde
+        la última vez que el líder la reabrió."""
+        n = 0
+        for entrada in reversed(sesion.lista_conteos_descartados()):
+            if isinstance(entrada, dict) and entrada.get('evento') == ConteoService.EVENTO_REABIERTO:
+                break
+            if ConteoService.motivo_de_descarte(entrada) == ConteoService.DESCARTE_MOVIMIENTO:
+                n += 1
+        return n
+
+    @staticmethod
+    def recuentos_propios_usados(sesion: SesionConteo) -> int:
+        """Cuántos recuentos propios por tolerancia ya se usaron en esta
+        sesión. **No se reinicia al reabrir**: es uno por cadena."""
+        return sum(1 for e in sesion.lista_conteos_descartados()
+                   if ConteoService.motivo_de_descarte(e) == ConteoService.DESCARTE_FUERA_DE_TOLERANCIA)
+
+    @staticmethod
+    def _descartar_conteo(sesion: SesionConteo, operario_id: int, cantidad_fisica,
+                          foto, *, motivo: str, **extra) -> None:
+        """Guarda lo contado en `conteos_descartados` y deja la MISMA sesión
+        lista para recontar desde cero, a nombre del mismo operario. No hace
+        commit. Pre-condición: la sesión está bajo `with_for_update`.
 
         **Por qué la misma sesión y no una nueva.** La cadena CC1 → CC2 → CC3
         es de un hijo por padre (`hijo_conteo`, `uselist=False`), la cola del
@@ -178,17 +219,17 @@ class ConteoService:
         activas no admite dos CC1 vivos del mismo hueco. Una sesión nueva
         rompería las tres cosas; recontar sobre la misma no toca ninguna.
 
-        **Qué se conserva**: lo contado y las dos fotos van a
-        `conteos_descartados`. **Qué se limpia**: `cantidad_fisica` (el
-        recuento empieza de cero) y `diferencia`. La foto del cierre del conteo
-        descartado se vuelve la foto de INICIO del recuento: es la lectura más
-        reciente de Siesa, anterior a que el operario vuelva a contar. Si algo
-        se mueve entre esa lectura y el nuevo cierre, el recuento también se
-        descarta — el intervalo cubierto es igual o mayor, nunca menor.
+        La foto del cierre del conteo descartado se vuelve la foto de INICIO
+        del recuento: es la lectura más reciente de Siesa, anterior a que el
+        operario vuelva a contar. Si algo se mueve entre esa lectura y el nuevo
+        cierre, el recuento también se descarta. Sin foto del cierre (Siesa no
+        respondió) se conserva la de inicio que había: el intervalo cubierto
+        queda igual o mayor, nunca menor.
         """
         import json
         historial = sesion.lista_conteos_descartados()
-        historial.append({
+        entrada = {
+            'motivo': motivo,
             'cantidad_fisica': cantidad_fisica,
             'operario_id': operario_id,
             'inicio': {
@@ -197,27 +238,71 @@ class ConteoService:
                 'salida_sin_conf': sesion.salida_sin_conf_inicio_siesa,
                 'at': sesion.foto_inicio_at.isoformat() if sesion.foto_inicio_at else None,
             },
-            'cierre': {
+            'cierre': ({
                 'existencia': foto['existencia'],
                 'cant_pos': foto['cant_pos'],
                 'salida_sin_conf': foto['salida_sin_conf'],
                 'at': foto['leido_at'].isoformat() if foto.get('leido_at') else None,
-            },
-            'movimiento': movimiento,
+            } if foto is not None else None),
             'descartado_at': datetime.utcnow().isoformat(),
-        })
-        sesion.conteos_descartados = json.dumps(historial, ensure_ascii=False)
+        }
+        entrada.update(extra)
+        historial.append(entrada)
+        sesion.conteos_descartados = json.dumps(historial, ensure_ascii=False, default=str)
         sesion.operario_id = operario_id
         sesion.cantidad_fisica = None
         sesion.diferencia = None
         sesion.estado = EstadoConteo.EN_PROCESO
         sesion.fecha_inicio = datetime.utcnow()
-        ConteoService._grabar_foto_inicio(sesion, foto)
+        if foto is not None:
+            ConteoService._grabar_foto_inicio(sesion, foto)
+
+    @staticmethod
+    def _pedir_recuento(sesion: SesionConteo, operario_id: int, cantidad_fisica,
+                        foto: dict, movimiento: str) -> dict:
+        """El conteo se contaminó (Siesa se movió mientras se contaba): se
+        descarta y la MISMA sesión queda lista para recontar
+        (`_descartar_conteo`). Pre-condición: la sesión está bajo
+        `with_for_update`.
+
+        **Con techo** (2026-09-23). Sin él, un producto que se vende sin parar
+        pedía recontar para siempre: el operario contaba, Siesa se movía, se
+        descartaba, y otra vez. Después de `MAX_RECUENTOS_POR_MOVIMIENTO`
+        recuentos (contados desde la última reapertura del líder) el siguiente
+        movimiento **bloquea** la sesión con `MOVIMIENTO_CONTINUO`: va a la cola
+        del líder, que la reabre en un momento quieto o la cancela. El conteo
+        de ese intento también queda en `conteos_descartados`.
+        """
+        from app.models.conteo import MotivoBloqueoConteo
+        from app.services import conteo_politica as politica
+        previos = ConteoService.recuentos_por_movimiento_vigentes(sesion)
+        ConteoService._descartar_conteo(
+            sesion, operario_id, cantidad_fisica, foto,
+            motivo=ConteoService.DESCARTE_MOVIMIENTO, movimiento=movimiento)
+        bloquear = previos >= politica.MAX_RECUENTOS_POR_MOVIMIENTO
+        if bloquear:
+            sesion.estado = EstadoConteo.BLOQUEADO
+            sesion.motivo_bloqueo = MotivoBloqueoConteo.MOVIMIENTO_CONTINUO
+            sesion.bloqueado_en = datetime.utcnow()
+            sesion.motivo_edicion = (
+                f'[{MotivoBloqueoConteo.MOVIMIENTO_CONTINUO}] Siesa se movió mientras '
+                f'se contaba en {previos + 1} intentos seguidos (último: {movimiento})')
         try:
             db.session.commit()
         except Exception as e:
             db.session.rollback()
             raise ValueError(f'Error al pedir el recuento: {e}') from e
+        if bloquear:
+            logger.warning(
+                f'[CONTEO] {sesion.codigo}: Siesa se movió en {previos + 1} intentos '
+                f'seguidos ({movimiento}) — BLOQUEADO para el líder (MOVIMIENTO_CONTINUO)')
+            return {
+                'resultado': 'BLOQUEADO',
+                'motivo_bloqueo': MotivoBloqueoConteo.MOVIMIENTO_CONTINUO,
+                'mensaje': ('Este producto se está vendiendo mientras contás: queda '
+                            'para el líder. Seguí con la próxima tarea.'),
+                'sesion_id': sesion.id,
+            }
         logger.warning(
             f'[CONTEO] {sesion.codigo}: Siesa se movió mientras se contaba '
             f'({movimiento}) — conteo de {cantidad_fisica} DESCARTADO, se recuenta')
@@ -229,6 +314,169 @@ class ConteoService:
             'movimiento': movimiento,
             'sesion_id': sesion.id,
         }
+
+    @staticmethod
+    def _pedir_recuento_propio(sesion: SesionConteo, operario_id: int, cantidad_fisica,
+                               foto, tolerancia: dict) -> dict:
+        """El primer conteo quedó fuera de tolerancia: el MISMO operario lo
+        recuenta una vez, **a ciegas**, antes de gastar el tiempo de otra
+        persona en un segundo conteo. Pre-condición: `with_for_update`.
+
+        A ciegas quiere decir que la respuesta no trae ni el teórico, ni la
+        diferencia, ni si sobró o faltó: solo «recontá con cuidado». Lo que se
+        contó y la evaluación de tolerancia quedan en `conteos_descartados`
+        para el supervisor. El recuento REEMPLAZA al primer conteo: si cae
+        dentro de tolerancia se acepta; si sigue fuera, segundo conteo de otra
+        persona como siempre. Uno por cadena (`RECUENTOS_PROPIOS_POR_CADENA`).
+
+        La foto del cierre del conteo descartado se borra de la sesión (queda
+        en el historial): una sesión recontándose no tiene cierre.
+        """
+        diferencia = sesion.diferencia
+        ConteoService._descartar_conteo(
+            sesion, operario_id, cantidad_fisica, foto,
+            motivo=ConteoService.DESCARTE_FUERA_DE_TOLERANCIA,
+            diferencia=diferencia, tolerancia=tolerancia)
+        ConteoService._grabar_foto(sesion, None)
+        sesion.existencia_siesa = None
+        sesion.fuente_existencia = None
+        try:
+            db.session.commit()
+        except Exception as e:
+            db.session.rollback()
+            raise ValueError(f'Error al pedir el recuento: {e}') from e
+        logger.info(
+            f'[CONTEO] {sesion.codigo}: primer conteo fuera de tolerancia '
+            f'({tolerancia.get("motivo")}) — recuento propio del operario #{operario_id}')
+        return {
+            'resultado': 'RECONTAR_TU',
+            'mensaje': ('Recontá este producto con cuidado: revisá otra vez todos '
+                        'los sitios donde puede estar y contá desde cero.'),
+            'sesion_id': sesion.id,
+        }
+
+    @staticmethod
+    def _aceptar_en_tolerancia(sesion: SesionConteo, tolerancia: dict) -> dict:
+        """El primer conteo (o su único recuento propio) quedó dentro de
+        tolerancia: se acepta sin segundo conteo y la diferencia chica se
+        ajusta — dejarla para después es dejar que la deriva se acumule.
+
+        El ajuste pasa por la política de siempre: `motivo_bloqueo_ajuste`
+        (sin foto, salidas no POS, movimiento, traslado, en proceso…) y el tope
+        en pesos de todo ajuste automático (`motivo_no_sale_solo`). Si alguna
+        dice que no, la raíz queda en DESCUADRE con el motivo visible, para
+        aprobación o recuento — nunca un segundo conteo por detrás.
+        """
+        diferencia = sesion.diferencia
+        sesion.estado = EstadoConteo.DESCUADRE
+        sesion.motivo_codigo = 'AJ-ENT' if diferencia > 0 else 'AJ-SAL'
+        sesion.ajuste_por_tolerancia = True
+        try:
+            db.session.commit()
+        except Exception as e:
+            db.session.rollback()
+            raise ValueError(f'Error al registrar el conteo: {e}') from e
+
+        bloqueo = ConteoService.motivo_bloqueo_ajuste(sesion)
+        no_sale_solo = None if bloqueo else ConteoService.motivo_no_sale_solo(sesion)
+        auto_encolado = False
+        error = None
+        if not bloqueo and not no_sale_solo:
+            try:
+                ConteoService._encolar_ajuste_fisico(sesion, aprobador_id=None)
+                db.session.commit()
+                auto_encolado = True
+            except Exception as e:
+                db.session.rollback()
+                error = str(e)
+                logger.error(f'[CONTEO] Ajuste por tolerancia de {sesion.codigo} no se '
+                             f'encoló: {e} — queda en DESCUADRE')
+        if auto_encolado:
+            detalle = 'Diferencia dentro de tolerancia — ajuste encolado automáticamente'
+        elif bloqueo:
+            detalle = f'Diferencia dentro de tolerancia, pero el ajuste NO se envía: {bloqueo}'
+        elif no_sale_solo:
+            detalle = (f'Diferencia dentro de tolerancia, pero no sale sola: '
+                       f'{no_sale_solo["mensaje"]}')
+        else:
+            detalle = (f'Diferencia dentro de tolerancia — el ajuste automático falló '
+                       f'({error}); queda en DESCUADRE para aprobación manual')
+        logger.info(f'[CONTEO] {sesion.codigo}: {detalle} ({tolerancia.get("motivo")})')
+        return {
+            'resultado': 'DENTRO_TOLERANCIA',
+            # Lo que ve el operario: nada del teórico ni de la diferencia.
+            'mensaje': 'Conteo registrado — gracias.',
+            'detalle_ajuste': detalle,
+            'auto_encolado': auto_encolado,
+            'ajuste_bloqueado': bloqueo,
+            'no_sale_solo': no_sale_solo,
+            'sesion_id': sesion.id,
+        }
+
+    @staticmethod
+    def _diferencia_del_ajuste(sesion: SesionConteo):
+        """La diferencia que viajaría a Siesa: `cantidad_fisica − teorico_siesa`
+        si hay foto, si no la `diferencia` guardada."""
+        if sesion.cantidad_fisica is not None and sesion.teorico_siesa is not None:
+            return sesion.cantidad_fisica - sesion.teorico_siesa
+        return sesion.diferencia
+
+    @staticmethod
+    def valor_del_ajuste(sesion: SesionConteo):
+        """Cuánto vale el ajuste de esta sesión en pesos (`Decimal`, sin signo),
+        con el costo de su foto; `None` si no hay costo o diferencia."""
+        from app.services import conteo_politica as politica
+        return politica.valor_de_diferencia(ConteoService._diferencia_del_ajuste(sesion),
+                                            sesion.costo_prom_uni_siesa)
+
+    @staticmethod
+    def motivo_no_sale_solo(sesion: SesionConteo):
+        """Por qué el ajuste de esta sesión NO puede salir SOLO a Siesa
+        (aunque un líder sí pueda aprobarlo): `{'codigo', 'mensaje'}` o `None`.
+
+        **Una política, una función** para todo ajuste automático: el de
+        tolerancia, el de CC1 == CC2, la pantalla (`to_dict`) y la guarda de
+        `_encolar_ajuste_fisico` cuando no hay aprobador. Hoy: sin costo, o
+        valor por encima de `CONTEO_TOPE_AUTOAJUSTE`
+        (`conteo_politica.motivo_tope_autoajuste`).
+        """
+        from app.services import conteo_politica as politica
+        diferencia = ConteoService._diferencia_del_ajuste(sesion)
+        if not diferencia:
+            return None
+        return politica.motivo_tope_autoajuste(diferencia, sesion.costo_prom_uni_siesa)
+
+    @staticmethod
+    def motivo_no_puede_aprobar(usuario, sesion: SesionConteo):
+        """¿Por qué ESTE usuario no puede aprobar ESTE ajuste? Texto, o `None`.
+
+        **Aprobación por valor** (2026-09-23): supervisor y admin aprueban
+        cualquier monto; un jefe de almacén, hasta `CONTEO_TOPE_APROBACION_JEFE`
+        (por defecto 0: nada, que es lo que había). Sin costo no se sabe cuánto
+        vale, así que el jefe no lo aprueba (Regla 0). Vive acá y no en la
+        ruta: la ruta solo lo traduce a 403.
+        """
+        from app.routes._auth_helpers import Roles
+        from app.services import conteo_politica as politica
+        if usuario is None or not getattr(usuario, 'activo', True):
+            return 'Usuario no encontrado o inactivo'
+        if usuario.rol in Roles.LEAD:
+            return None
+        if usuario.rol != Roles.JEFE_ALMACEN:
+            return ('Solo un supervisor o admin —o un jefe de almacén dentro de su '
+                    'tope— puede aprobar ajustes de inventario')
+        tope = politica.tope_aprobacion_jefe()
+        if tope <= 0:
+            return ('Un jefe de almacén no aprueba ajustes de inventario (tope de '
+                    'aprobación en $0): lo aprueba un supervisor o admin')
+        valor = ConteoService.valor_del_ajuste(sesion)
+        if valor is None:
+            return ('Este ajuste no tiene costo en la foto de Siesa: no se sabe cuánto '
+                    'vale, así que lo aprueba un supervisor o admin')
+        if valor > tope:
+            return (f'Este ajuste vale {politica.pesos(valor)} y supera tu tope de '
+                    f'aprobación de {politica.pesos(tope)}: lo aprueba un supervisor o admin')
+        return None
 
     @staticmethod
     def _es_conteo_definitivo(sesion: SesionConteo) -> bool:
@@ -574,6 +822,14 @@ class ConteoService:
 
         antes = sesion.motivo_edicion or f'[{sesion.motivo_bloqueo or "?"}]'
         ahora = datetime.utcnow()
+        # La reapertura queda en el historial de la sesión: corta la cuenta de
+        # recuentos por movimiento (un MOVIMIENTO_CONTINUO reabierto vuelve a
+        # tener sus recuentos) y deja rastro de quién la devolvió a la cola.
+        import json
+        historial = sesion.lista_conteos_descartados()
+        historial.append({'evento': ConteoService.EVENTO_REABIERTO, 'at': ahora.isoformat(),
+                          'por': usuario_id, 'motivo_bloqueo': sesion.motivo_bloqueo})
+        sesion.conteos_descartados = json.dumps(historial, ensure_ascii=False, default=str)
         sesion.estado = EstadoConteo.PENDIENTE
         sesion.operario_id = operario_id
         sesion.cantidad_fisica = None
@@ -802,6 +1058,25 @@ class ConteoService:
         resultado_conciliacion = ConteoService.reconciliar_cantidad(sesion, cantidad_fisica)
         diferencia = resultado_conciliacion['diferencia']
 
+        # **Tolerancia del primer conteo** (2026-09-23). Solo el CC1: el CC2 y
+        # el CC3 existen porque el primero ya quedó fuera, y ahí decide la
+        # comparación entre conteos, como siempre. Lo que dijo el PRIMER conteo
+        # válido se guarda una vez (es el acierto de la exactitud con
+        # tolerancia); el recuento propio no lo pisa.
+        tolerancia = None
+        if not sesion.es_segundo_conteo:
+            if resultado_conciliacion['es_match']:
+                if sesion.tolerancia_primer_conteo is None:
+                    sesion.tolerancia_primer_conteo = 'EXACTO'
+            else:
+                from app.services import conteo_politica as _politica
+                tolerancia = _politica.evaluar_tolerancia(
+                    diferencia, ConteoService.base_de_comparacion(sesion),
+                    sesion.costo_prom_uni_siesa,
+                    tipo=sesion.tipo, clase=sesion.clasificacion_abc)
+                if sesion.tolerancia_primer_conteo is None:
+                    sesion.tolerancia_primer_conteo = 'DENTRO' if tolerancia['dentro'] else 'FUERA'
+
         if resultado_conciliacion['es_match']:
             # CC2 o CC3 cuadra con Siesa → cierra también el padre (sin ajuste)
             if sesion.es_segundo_conteo and sesion.sesion_origen_id:
@@ -898,6 +1173,10 @@ class ConteoService:
                     error_auto_encolado = None
                     bloqueo = (ConteoService.motivo_bloqueo_ajuste(origen)
                                if debe_auto_encolar else None)
+                    # El tope en pesos de todo ajuste automático: antes CC1 ==
+                    # CC2 ajustaba sola cualquier cifra.
+                    no_sale_solo = (ConteoService.motivo_no_sale_solo(origen)
+                                    if debe_auto_encolar and not bloqueo else None)
                     if bloqueo:
                         # No se intenta: no es un fallo del encolado, es una
                         # decisión. Queda en DESCUADRE con la foto grabada, y la
@@ -915,6 +1194,11 @@ class ConteoService:
                         logger.warning(
                             f'[CONTEO] CC1==CC2 en {origen.codigo}, pero CC1 '
                             f'{cc1_no_avala} — sin ajuste automático'
+                        )
+                    elif no_sale_solo:
+                        logger.warning(
+                            f'[CONTEO] CC1==CC2 en {origen.codigo}, pero el ajuste no '
+                            f'sale solo: {no_sale_solo["mensaje"]}'
                         )
                     elif debe_auto_encolar:
                         try:
@@ -949,6 +1233,11 @@ class ConteoService:
                             'no se ajusta solo. Queda en DESCUADRE para aprobación '
                             'manual — el segundo conteo sí tiene sus dos fotos.'
                         )
+                    elif no_sale_solo:
+                        mensaje = (
+                            'Ambos conteos coinciden, pero el ajuste no sale solo: '
+                            f'{no_sale_solo["mensaje"]}. Queda en DESCUADRE para aprobación.'
+                        )
                     elif debe_auto_encolar:
                         mensaje = (
                             'Ambos conteos coinciden — el ajuste automático falló '
@@ -962,6 +1251,7 @@ class ConteoService:
                         'mensaje': mensaje,
                         'auto_encolado': auto_encolado,
                         'ajuste_bloqueado': bloqueo,
+                        'no_sale_solo': no_sale_solo,
                         'sesion_id': sesion.id,
                     }
 
@@ -990,7 +1280,18 @@ class ConteoService:
                     'tercer_conteo_id': cc3.id,
                 }
 
-            # Primer conteo con diferencia — generar segundo conteo (CC2)
+            # Primer conteo con diferencia. Dentro de tolerancia: se acepta y se
+            # ajusta sin segundo conteo. Fuera, y sin su recuento propio: el
+            # mismo operario recuenta a ciegas. Fuera otra vez: segundo conteo
+            # de otra persona, como siempre.
+            if tolerancia is not None and tolerancia['dentro']:
+                return ConteoService._aceptar_en_tolerancia(sesion, tolerancia)
+            from app.services import conteo_politica as _politica
+            if (tolerancia is not None and ConteoService.recuentos_propios_usados(sesion)
+                    < _politica.RECUENTOS_PROPIOS_POR_CADENA):
+                return ConteoService._pedir_recuento_propio(
+                    sesion, operario_id, cantidad_fisica, foto, tolerancia)
+
             sesion.estado = EstadoConteo.SEGUNDO_CONTEO
             try:
                 segundo_conteo = ConteoService._crear_conteo_verificacion(
@@ -2332,6 +2633,15 @@ class ConteoService:
                 f'teórico de Siesa de su foto ({sesion.teorico_siesa:g}) — no hay '
                 f'ajuste que mandar.'
             )
+        # **Sin aprobador = automático**, y ningún automático pasa el tope en
+        # pesos ni sale sin costo. La guarda va acá, en el único sitio que arma
+        # el job: protege toda puerta automática, la de hoy y la que venga.
+        if aprobador_id is None:
+            no_sale_solo = ConteoService.motivo_no_sale_solo(sesion)
+            if no_sale_solo:
+                raise ValueError(
+                    f'Ajuste automático de {sesion.producto_codigo_siesa} en '
+                    f'{bodega_siesa} NO enviado: {no_sale_solo["mensaje"]}.')
         logger.info(
             f'[CONTEO] Ajuste de sesion {sesion.id} con la foto del conteo '
             f'({sesion.foto_siesa_at}): físico {sesion.cantidad_fisica} − teórico '
@@ -2577,6 +2887,15 @@ class ConteoService:
         if not sesion:
             raise ValueError('Sesión no encontrada')
         ConteoService._exigir_raiz_para_ajustar(sesion)
+
+        # **Quién aprueba cuánto** (2026-09-23): la regla vive acá, no en la
+        # ruta. Antes la ruta exigía supervisor/admin y el servicio no miraba
+        # a nadie: cualquier otra puerta aprobaba sin control.
+        from app.models.usuario import Usuario
+        no_puede = ConteoService.motivo_no_puede_aprobar(
+            db.session.get(Usuario, supervisor_id), sesion)
+        if no_puede:
+            raise PermissionError(no_puede)
 
         # Idempotencia — si Siesa ya procesó este ajuste, devolver sin repetir
         if sesion.siesa_triggered:

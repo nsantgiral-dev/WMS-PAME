@@ -60,12 +60,66 @@ conservador y declararlo.
 
 `tests/test_conteo_cupo.py::TestUnSoloSitioLeeLaPolitica` exige por AST que
 ningún otro módulo de `app/` lea estas variables ni escriba un mapa clase→días.
+
+## Tolerancias y topes (2026-09-23)
+
+Hasta hoy **toda** diferencia ≠ 0 mandaba a un segundo conteo de otra persona,
+y toda coincidencia CC1 == CC2 ajustaba sola **sin mirar cuánta plata movía**.
+Con tres operarios eso es un segundo conteo por cada unidad suelta —la deriva
+chica nunca se corrige porque nadie llega a contarla dos veces— y, del otro
+lado, un faltante de millones entraba a Siesa sin que nadie lo firmara.
+
+| Variable | Defecto | Qué es |
+|---|---|---|
+| `CONTEO_TOLERANCIA_UNIDADES` | `{"A":0,"B":1,"C":1}` | Unidades de diferencia aceptables por clase |
+| `CONTEO_TOLERANCIA_PCT` | `{"A":0.5,"B":2,"C":5}` | Porcentaje del teórico aceptable por clase |
+| `CONTEO_TOLERANCIA_TOPE_VALOR` | `20000` | Pesos: una diferencia que vale más no está «en tolerancia» aunque sean pocas unidades |
+| `CONTEO_TOPE_AUTOAJUSTE` | `100000` | Pesos: ningún ajuste AUTOMÁTICO que valga más (tolerancia o CC1 == CC2) |
+| `CONTEO_TOPE_APROBACION_JEFE` | `0` | Pesos: hasta cuánto aprueba un jefe de almacén. `0` = nada, que es lo que había |
+
+**Dentro de tolerancia** (`evaluar_tolerancia`): `|dif| ≤ max(unidades_clase,
+pct_clase × teórico)` **y** `|dif| × costo ≤ tope de valor`. Las dos: la
+primera mide si la diferencia es chica para ESE producto; la segunda, si es
+chica para la empresa — un ítem de $400.000 con una unidad de diferencia no es
+deriva, es plata.
+
+De dónde salen los números: son los que decidió el usuario, y siguen la forma
+de la práctica ASCM (A estricta, C holgada). A tiene 0 unidades a propósito:
+un ítem A mueve plata o disponibilidad, y el 0,5 % solo deja pasar diferencias
+en huecos grandes (≥ 200 und). B y C admiten una unidad suelta — el error de
+conteo más común — o el porcentaje, lo que sea mayor.
+
+**Sin costo** en la foto (`None` o ≤ 0): el criterio de valor no se puede
+aplicar; cuenta solo el de unidades y **se declara** (`sin_costo`). Pero ese
+ajuste nunca sale solo: `motivo_tope_autoajuste` lo manda a aprobación. Regla
+0: sin costo no se sabe cuánto vale.
+
+**Qué clase se usa.** La del conteo si es del plan (`DIARIO_ABC`,
+`WATCHDOG_ABC`) y es A, B o C. Todo lo demás —sin clase, auditorías por
+excepción, conteos manuales— usa la regla de **A**, la más estricta: un conteo
+que alguien pidió por una sospecha no se cierra con la holgura de un C
+(`clase_de_tolerancia`, y el resultado declara `regla_por_defecto`). El conteo
+manual nace con clase `C` por defecto (`crear_conteo_manual`): por eso la clase
+del conteo no alcanza, hay que mirar el tipo.
+
+**Topes en pesos.** `CONTEO_TOPE_AUTOAJUSTE` y `CONTEO_TOPE_APROBACION_JEFE`
+son independientes de la tolerancia: el primero corta **todo** ajuste
+automático (también el de CC1 == CC2, que antes no tenía techo), el segundo
+dice hasta dónde firma un jefe de almacén. Supervisor y admin aprueban
+cualquier monto.
+
+**Recuentos con techo.** `RECUENTOS_PROPIOS_POR_CADENA` (1): fuera de
+tolerancia, el mismo operario recuenta una vez, a ciegas, antes de gastar el
+tiempo de otra persona. `MAX_RECUENTOS_POR_MOVIMIENTO` (2): si Siesa se sigue
+moviendo mientras se cuenta, al tercer intento el conteo se bloquea para el
+líder en vez de pedir recontar para siempre.
 """
 import json
 import logging
 import math
 import os
 from datetime import datetime
+from decimal import Decimal, InvalidOperation
 
 from sqlalchemy import case
 
@@ -117,8 +171,55 @@ _ENV_CUPO_BODEGA = 'CONTEO_CUPO_POR_BODEGA'
 _ENV_INTERVALOS = 'CONTEO_INTERVALOS_DIAS'
 _ENV_WATCHDOG_DIAS = 'CONTEO_WATCHDOG_DIAS_SIN_REABRIR'
 
+_ENV_TOL_UNIDADES = 'CONTEO_TOLERANCIA_UNIDADES'
+_ENV_TOL_PCT = 'CONTEO_TOLERANCIA_PCT'
+_ENV_TOL_TOPE_VALOR = 'CONTEO_TOLERANCIA_TOPE_VALOR'
+_ENV_TOPE_AUTOAJUSTE = 'CONTEO_TOPE_AUTOAJUSTE'
+_ENV_TOPE_JEFE = 'CONTEO_TOPE_APROBACION_JEFE'
+
 #: Los nombres de las variables, para el trinquete de «un solo sitio».
-VARIABLES_DE_ENTORNO = (_ENV_CUPO, _ENV_CUPO_BODEGA, _ENV_INTERVALOS, _ENV_WATCHDOG_DIAS)
+VARIABLES_DE_ENTORNO = (_ENV_CUPO, _ENV_CUPO_BODEGA, _ENV_INTERVALOS, _ENV_WATCHDOG_DIAS,
+                        _ENV_TOL_UNIDADES, _ENV_TOL_PCT, _ENV_TOL_TOPE_VALOR,
+                        _ENV_TOPE_AUTOAJUSTE, _ENV_TOPE_JEFE)
+
+#: Unidades de diferencia que se aceptan sin segundo conteo, por clase. Ver el
+#: encabezado: A 0 (estricta), B y C una unidad suelta.
+TOLERANCIA_UNIDADES_DEFECTO = {'A': 0, 'B': 1, 'C': 1}
+
+#: Porcentaje del teórico que se acepta sin segundo conteo, por clase. En
+#: PORCENTAJE (0,5 = 0,5 %), no en fracción: es como lo dice el negocio.
+TOLERANCIA_PCT_DEFECTO = {'A': 0.5, 'B': 2.0, 'C': 5.0}
+
+#: Pesos. Una diferencia que vale más que esto no es «chica» aunque sean pocas
+#: unidades.
+TOLERANCIA_TOPE_VALOR_DEFECTO = 20000
+
+#: Pesos. Ningún ajuste automático —ni el de tolerancia ni el de CC1 == CC2—
+#: sale a Siesa si vale más que esto: queda en DESCUADRE para que lo firme un
+#: líder.
+TOPE_AUTOAJUSTE_DEFECTO = 100000
+
+#: Pesos. Hasta cuánto aprueba un jefe de almacén. 0 = nada: es exactamente lo
+#: que había (la aprobación era solo de supervisor y admin) hasta que el
+#: negocio decida otra cosa.
+TOPE_APROBACION_JEFE_DEFECTO = 0
+
+#: La clase cuya regla se aplica a lo que no es un conteo del plan con clase
+#: A/B/C: la más estricta.
+CLASE_REGLA_ESTRICTA = 'A'
+
+#: Tipos de conteo cuya clase ABC decide la tolerancia. Los demás (auditoría
+#: por excepción, manual) usan la regla estricta: alguien sospechaba algo.
+TIPOS_CON_TOLERANCIA_DE_CLASE = ('DIARIO_ABC', 'WATCHDOG_ABC')
+
+#: Cuántas veces el MISMO operario recuenta su conteo fuera de tolerancia antes
+#: de que la cadena pase a un segundo conteo de otra persona. Una por cadena.
+RECUENTOS_PROPIOS_POR_CADENA = 1
+
+#: Cuántas veces se pide recontar por movimiento de Siesa durante el conteo.
+#: Al siguiente la sesión se bloquea (`MOVIMIENTO_CONTINUO`) para el líder: un
+#: producto que se vende sin parar no se cuenta insistiendo.
+MAX_RECUENTOS_POR_MOVIMIENTO = 2
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -134,6 +235,18 @@ def _entero_no_negativo(valor):
     except (TypeError, ValueError):
         return None
     return n if n >= 0 else None
+
+
+def _numero_no_negativo(valor):
+    """Número finito ≥ 0 (entero o decimal), o `None`. Para porcentajes y
+    pesos. `True`/`False` no son números acá."""
+    if isinstance(valor, bool):
+        return None
+    try:
+        n = float(str(valor).strip())
+    except (TypeError, ValueError):
+        return None
+    return n if (math.isfinite(n) and n >= 0) else None
 
 
 def _json_env(nombre: str, advertencias: list):
@@ -199,8 +312,47 @@ def _leer() -> dict:
         else:
             watchdog_dias = n
 
+    tol_unidades = dict(TOLERANCIA_UNIDADES_DEFECTO)
+    for clase, valor in (_json_env(_ENV_TOL_UNIDADES, advertencias) or {}).items():
+        clase_n = str(clase).strip().upper()
+        n = _entero_no_negativo(valor)
+        if clase_n not in CLASES:
+            advertencias.append(f'{_ENV_TOL_UNIDADES}: clase {clase!r} desconocida; se ignora')
+        elif n is None:
+            advertencias.append(f'{_ENV_TOL_UNIDADES}[{clase_n}]={valor!r} no es un entero '
+                                f'≥ 0; se usa {TOLERANCIA_UNIDADES_DEFECTO[clase_n]}')
+        else:
+            tol_unidades[clase_n] = n
+
+    tol_pct = dict(TOLERANCIA_PCT_DEFECTO)
+    for clase, valor in (_json_env(_ENV_TOL_PCT, advertencias) or {}).items():
+        clase_n = str(clase).strip().upper()
+        n = _numero_no_negativo(valor)
+        if clase_n not in CLASES:
+            advertencias.append(f'{_ENV_TOL_PCT}: clase {clase!r} desconocida; se ignora')
+        elif n is None or n > 100:
+            advertencias.append(f'{_ENV_TOL_PCT}[{clase_n}]={valor!r} no es un porcentaje '
+                                f'entre 0 y 100; se usa {TOLERANCIA_PCT_DEFECTO[clase_n]:g}')
+        else:
+            tol_pct[clase_n] = n
+
+    def _pesos(nombre, defecto):
+        crudo_p = os.environ.get(nombre, '').strip()
+        if not crudo_p:
+            return defecto
+        n = _numero_no_negativo(crudo_p)
+        if n is None:
+            advertencias.append(f'{nombre}={crudo_p!r} no es un valor en pesos ≥ 0; '
+                                f'se usa {defecto}')
+            return defecto
+        return n
+
     return {'cupo_global': cupo_global, 'cupo_por_bodega': por_bodega,
             'intervalos': intervalos, 'watchdog_dias': watchdog_dias,
+            'tolerancia_unidades': tol_unidades, 'tolerancia_pct': tol_pct,
+            'tolerancia_tope_valor': _pesos(_ENV_TOL_TOPE_VALOR, TOLERANCIA_TOPE_VALOR_DEFECTO),
+            'tope_autoajuste': _pesos(_ENV_TOPE_AUTOAJUSTE, TOPE_AUTOAJUSTE_DEFECTO),
+            'tope_aprobacion_jefe': _pesos(_ENV_TOPE_JEFE, TOPE_APROBACION_JEFE_DEFECTO),
             'advertencias': advertencias}
 
 
@@ -256,6 +408,7 @@ def descripcion_del_plan(almacen=None) -> dict:
         'watchdog_umbral_picks': dict(WATCHDOG_UMBRAL),
         'watchdog_ventana_dias': WATCHDOG_VENTANA_DIAS,
         'hora_del_generador': '2:00 a. m. (Bogotá)',
+        'tolerancia': descripcion_de_tolerancias(cfg),
         'advertencias': list(cfg['advertencias']),
     }
 
@@ -422,3 +575,145 @@ def orden_de_reparto() -> tuple:
                        else_=len(RANGO_CLASE) + 1)
     return (nivel_evento, rango_clase, SesionConteo.fecha_creacion.asc(),
             SesionConteo.id.asc())
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Tolerancias y topes en pesos
+# ─────────────────────────────────────────────────────────────────────────────
+
+#: Por qué un ajuste NO sale solo a Siesa (`motivo_tope_autoajuste`). Códigos
+#: estables: las estadísticas agrupan por ellos, no por la prosa.
+SIN_COSTO = 'SIN_COSTO'
+SUPERA_TOPE = 'SUPERA_TOPE'
+
+
+def pesos(valor) -> str:
+    """`$1.234.567` — como se lee en Colombia."""
+    return '$' + f'{float(valor):,.0f}'.replace(',', '.')
+
+
+def costo_valido(costo):
+    """El costo unitario con el que se puede valorizar, o `None`.
+
+    `None`, ilegible, no finito o ≤ 0 → `None`: un costo cero diría «este
+    ajuste no vale nada», y lo que pasa es que no se sabe cuánto vale (el
+    mismo criterio de `ConteoService._costo_de_fila` y del reporte, que trata
+    ≤ 0 como «sin valorizar»)."""
+    if costo is None or isinstance(costo, bool):
+        return None
+    try:
+        c = Decimal(str(costo))
+    except (InvalidOperation, ValueError, TypeError):
+        return None
+    return c if (c.is_finite() and c > 0) else None
+
+
+def valor_de_diferencia(diferencia, costo):
+    """`|diferencia| × costo` en pesos (`Decimal`), o `None` si no hay costo
+    válido o no hay diferencia medida."""
+    c = costo_valido(costo)
+    if c is None or diferencia is None:
+        return None
+    return abs(Decimal(str(diferencia))) * c
+
+
+def clase_de_tolerancia(tipo, clase) -> tuple:
+    """`(clase cuya regla se aplica, regla_por_defecto)`.
+
+    La clase del conteo solo decide si es un conteo del plan
+    (`TIPOS_CON_TOLERANCIA_DE_CLASE`) con clase A, B o C. Lo demás —sin clase,
+    auditoría por excepción, manual— usa la regla estricta (`A`), y se declara:
+    un conteo pedido por una sospecha no se cierra con la holgura de un C, y
+    el manual nace con clase `C` por defecto aunque nadie la haya decidido."""
+    if tipo in TIPOS_CON_TOLERANCIA_DE_CLASE and clase in CLASES:
+        return clase, False
+    return CLASE_REGLA_ESTRICTA, True
+
+
+def evaluar_tolerancia(diferencia, teorico, costo, *, tipo, clase) -> dict:
+    """¿Esta diferencia es chica? **La única implementación** — la usan el
+    registro del conteo (qué hacer con el primer conteo) y nadie más decide
+    tolerancia por su cuenta.
+
+    Dentro si `|dif| ≤ max(unidades_clase, pct_clase × teórico)` **y**
+    `|dif| × costo ≤ tope de valor`. Sin costo válido el segundo criterio no se
+    aplica y se declara (`sin_costo`). Justo en el límite es DENTRO (≤).
+
+    Un teórico negativo (Siesa con más POS pendiente que existencia) no da
+    holgura: el porcentaje se calcula sobre `max(teórico, 0)`. Regla 0.
+    """
+    cfg = _leer()
+    regla, por_defecto = clase_de_tolerancia(tipo, clase)
+    unidades = Decimal(str(cfg['tolerancia_unidades'][regla]))
+    pct = Decimal(str(cfg['tolerancia_pct'][regla]))
+    base = max(Decimal(str(teorico)) if teorico is not None else Decimal(0), Decimal(0))
+    limite = max(unidades, pct * base / Decimal(100))
+    dif = Decimal(str(diferencia or 0))
+    dentro_unidades = abs(dif) <= limite
+    valor = valor_de_diferencia(dif, costo)
+    tope = Decimal(str(cfg['tolerancia_tope_valor']))
+    dentro_valor = None if valor is None else valor <= tope
+    dentro = bool(dentro_unidades and dentro_valor is not False)
+    if dentro:
+        motivo = 'dentro de tolerancia'
+    elif not dentro_unidades:
+        motivo = (f'la diferencia ({abs(dif):g} und) supera la tolerancia de la regla '
+                  f'{regla} ({limite:g} und)')
+    else:
+        motivo = (f'la diferencia vale {pesos(valor)}, más que el tope de tolerancia '
+                  f'de {pesos(tope)}')
+    return {
+        'dentro': dentro,
+        'regla_clase': regla,
+        'regla_por_defecto': por_defecto,
+        'limite_unidades': float(limite),
+        'dentro_por_unidades': bool(dentro_unidades),
+        'valor': float(valor) if valor is not None else None,
+        'tope_valor': float(tope),
+        'dentro_por_valor': dentro_valor,
+        'sin_costo': valor is None,
+        'motivo': motivo,
+    }
+
+
+def motivo_tope_autoajuste(diferencia, costo):
+    """Por qué un ajuste de `diferencia` unidades con este costo NO puede salir
+    solo a Siesa, o `None` si puede. `{'codigo', 'mensaje'}`.
+
+    Vale para TODO ajuste automático: el de tolerancia y el de CC1 == CC2.
+    Sin costo válido no sale solo (Regla 0: no se sabe cuánto vale); si vale
+    más que `CONTEO_TOPE_AUTOAJUSTE`, tampoco. En los dos casos el conteo
+    queda en DESCUADRE y lo aprueba un líder (`ConteoService.confirmar_ajuste`).
+    """
+    valor = valor_de_diferencia(diferencia, costo)
+    if valor is None:
+        return {'codigo': SIN_COSTO, 'mensaje': (
+            'sin costo en la foto de Siesa: no se sabe cuánto vale este ajuste, '
+            'así que no sale solo — lo aprueba un líder')}
+    tope = Decimal(str(_leer()['tope_autoajuste']))
+    if valor > tope:
+        return {'codigo': SUPERA_TOPE, 'mensaje': (
+            f'el ajuste vale {pesos(valor)} y supera el tope de {pesos(tope)} para '
+            'ajustes automáticos — lo aprueba un líder')}
+    return None
+
+
+def tope_aprobacion_jefe() -> Decimal:
+    """Pesos hasta los que un jefe de almacén aprueba un ajuste. `0` = nada."""
+    return Decimal(str(_leer()['tope_aprobacion_jefe']))
+
+
+def descripcion_de_tolerancias(cfg: dict = None) -> dict:
+    """Los valores VIGENTES de tolerancias y topes, para la pantalla y las
+    estadísticas."""
+    cfg = cfg or _leer()
+    return {
+        'unidades': dict(cfg['tolerancia_unidades']),
+        'porcentaje': dict(cfg['tolerancia_pct']),
+        'tope_valor_tolerancia': cfg['tolerancia_tope_valor'],
+        'tope_autoajuste': cfg['tope_autoajuste'],
+        'tope_aprobacion_jefe': cfg['tope_aprobacion_jefe'],
+        'regla_sin_clase': CLASE_REGLA_ESTRICTA,
+        'recuentos_propios_por_cadena': RECUENTOS_PROPIOS_POR_CADENA,
+        'max_recuentos_por_movimiento': MAX_RECUENTOS_POR_MOVIMIENTO,
+    }

@@ -39,6 +39,9 @@ METRICAS = RAIZ / 'app' / 'services' / 'metricas' / 'conteo.py'
 RUTAS = RAIZ / 'app' / 'routes' / 'conteo.py'
 
 
+_SIN_DECIR = object()
+
+
 def _svc():
     from app.services.conteo_service import ConteoService
     return ConteoService
@@ -49,10 +52,13 @@ def _m():
     return conteo
 
 
-def _poner(siesa, existencia, pos=0, salida_sin_conf=None, costo=None):
-    siesa.poner(existencia=existencia, pos=pos, salida_sin_conf=salida_sin_conf)
-    if costo is not None:
-        siesa.fila['f400_costo_prom_uni'] = float(costo)
+def _poner(siesa, existencia, pos=0, salida_sin_conf=None, costo=_SIN_DECIR):
+    """`costo` sin decir → el de la Siesa de mentira; `None` → la fila no lo trae."""
+    if costo is _SIN_DECIR:
+        siesa.poner(existencia=existencia, pos=pos, salida_sin_conf=salida_sin_conf)
+    else:
+        siesa.poner(existencia=existencia, pos=pos, salida_sin_conf=salida_sin_conf,
+                    costo=costo)
 
 
 def _nuevo_cc1(tienda, sku=SKU):
@@ -497,7 +503,7 @@ class TestCoberturaSinRitmo:
 class TestCostoDeLaFoto:
 
     def test_ausente_es_none_no_cero(self, db, siesa, tienda):
-        _poner(siesa, 10)  # la fila no trae f400_costo_prom_uni
+        _poner(siesa, 10, costo=None)  # la fila no trae f400_costo_prom_uni
         foto = _svc().consultar_foto_siesa(SKU, 'NS1')
         assert foto is not None and foto['costo_prom_uni'] is None
         cc1 = _nuevo_cc1(tienda)
@@ -506,7 +512,7 @@ class TestCostoDeLaFoto:
 
     @pytest.mark.parametrize('crudo', ['abc', float('nan'), {}])
     def test_ilegible_es_none_y_no_rompe_la_foto(self, db, siesa, tienda, crudo):
-        _poner(siesa, 10)
+        _poner(siesa, 10, costo=None)
         siesa.fila['f400_costo_prom_uni'] = crudo
         foto = _svc().consultar_foto_siesa(SKU, 'NS1')
         assert foto is not None, 'la falta de costo nunca bloquea un conteo'

@@ -47,6 +47,13 @@ class MotivoBloqueoConteo:
     #: guardan tal cual: son igual de bloqueantes.
     LEGADOS = ('UBICACION_VACIA', 'FALTANTE', 'MERCANCIA_AVERIADA', 'PRODUCTO_INCORRECTO')
     VALIDOS = (NO_ENCONTRADO, OTRO) + LEGADOS
+    #: **Lo pone el sistema, no el operario** (2026-09-23): Siesa se movió
+    #: mientras se contaba más veces de las que se pide recontar
+    #: (`conteo_politica.MAX_RECUENTOS_POR_MOVIMIENTO`). Un producto que se
+    #: vende sin parar no se cuenta insistiendo: lo decide el líder (reabrir en
+    #: un momento quieto, o cancelar). No está en `VALIDOS`: no es una opción de
+    #: la pantalla del operario.
+    MOVIMIENTO_CONTINUO = 'MOVIMIENTO_CONTINUO'
 
 
 class SesionConteo(db.Model):
@@ -201,6 +208,18 @@ class SesionConteo(db.Model):
     #: qué un DESCUADRE no se puede ajustar: acá es por qué no se pudo contar.
     motivo_bloqueo = db.Column(db.String(30), nullable=True)
     bloqueado_en = db.Column(db.DateTime, nullable=True)
+
+    #: **Qué dijo la tolerancia del primer conteo válido de la cadena** (m032tol):
+    #: `EXACTO` | `DENTRO` | `FUERA`, evaluado con la configuración vigente en
+    #: ese instante (`conteo_politica.evaluar_tolerancia`). Solo en la raíz. Es
+    #: el acierto de la exactitud con tolerancia (ASCM); `None` en las cadenas
+    #: anteriores a la regla, que las estadísticas declaran en vez de adivinar.
+    tolerancia_primer_conteo = db.Column(db.String(10), nullable=True)
+    #: **La cadena se cerró sin segundo conteo porque la diferencia estaba dentro
+    #: de tolerancia** (m032tol). Solo la escribe esa rama de
+    #: `ConteoService.registrar_conteo`. El invariante CNT-04 la lee para no
+    #: confundir esta decisión de producto con el salto indebido del doble ciego.
+    ajuste_por_tolerancia = db.Column(db.Boolean, nullable=True)
 
     # Relaciones
     ubicacion = db.relationship('Ubicacion', backref='sesiones_conteo', lazy=True)
@@ -377,6 +396,16 @@ class SesionConteo(db.Model):
             # una consulta de traslados por fila del listado.
             'bloqueo_ajuste': (_motivo_bloqueo_ajuste(self)
                                if self.estado == EstadoConteo.DESCUADRE else None),
+            # Por qué este DESCUADRE no salió solo a Siesa aunque se pueda
+            # aprobar (supera el tope en pesos, o no tiene costo), y cuánto
+            # vale — la MISMA función que decidió no enviarlo.
+            'no_sale_solo': (_motivo_no_sale_solo(self)
+                             if self.estado == EstadoConteo.DESCUADRE else None),
+            'valor_ajuste': (_valor_ajuste(self)
+                             if self.estado == EstadoConteo.DESCUADRE else None),
+            'tolerancia_primer_conteo': self.tolerancia_primer_conteo,
+            'ajuste_por_tolerancia': bool(self.ajuste_por_tolerancia),
+            'motivo_bloqueo': self.motivo_bloqueo,
             # Datos del segundo conteo (hijo) embebidos para evitar N+1.
             # Si CC1≠CC2, hijo_conteo.hijo_conteo es el CC3.
             'segundo_conteo': {
@@ -415,6 +444,17 @@ def _motivo_bloqueo_ajuste(sesion):
     """Import diferido: la política vive en el servicio, no en el modelo."""
     from app.services.conteo_service import ConteoService
     return ConteoService.motivo_bloqueo_ajuste(sesion)
+
+
+def _motivo_no_sale_solo(sesion):
+    from app.services.conteo_service import ConteoService
+    return ConteoService.motivo_no_sale_solo(sesion)
+
+
+def _valor_ajuste(sesion):
+    from app.services.conteo_service import ConteoService
+    valor = ConteoService.valor_del_ajuste(sesion)
+    return float(valor) if valor is not None else None
 
 
 class NovedadConteo(db.Model):
