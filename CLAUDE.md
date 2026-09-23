@@ -2984,3 +2984,64 @@ como vivo para siempre. El líder declara el regreso en Inventario Cíclico →
 cubre los conteos **posteriores**, no los de antes. **No mueve inventario**: en
 `SIESA-GENERAL` la sincronización con Siesa repone lo que el picking descontó;
 en un hueco físico queda a cargo del líder.
+
+---
+
+## Advisory locks: se soltaban por la conexión equivocada (2026-09-23)
+
+**Verificado contra PostgreSQL 17 local, no deducido.** Todo lock de cron se
+tomaba por `db.session` (`pg_try_advisory_lock`), el trabajo comiteaba y el
+`finally` liberaba por `db.session`. Pero la sesión **devuelve su conexión al
+pool en cada commit**. Con el pool de producción (`pool_size=20`) y dos
+conexiones ociosas:
+
+```
+toma el lock        → pid 9668
+commit del trabajo  → 9668 vuelve al pool CON el lock
+unlock del finally  → sale por pid 9669 → false, no suelta nada
+ciclo siguiente     → en 9669: «otro worker ya lo ejecuta» → return, en silencio
+                    → en 9668: lo retoma (reentrante) aunque otro esté corriendo
+```
+
+Dura hasta que `pool_recycle` (30 min) cierra esa conexión. Las dos garantías
+caían juntas: se saltaban corridas y se dejaban pasar solapamientos. La **DLQ**
+tenía la variante inversa: `pg_try_advisory_xact_lock` se suelta en el primer
+commit, y `_run_dlq_jobs` comitea por cada job — desde el segundo, ni exclusión
+ni `FOR UPDATE SKIP LOCKED`. Afectaba a los 20 locks de sesión (14 a mano, 6
+por la versión anterior del helper) y a la DLQ.
+
+**Una sola forma: `app/utils/lock.py`.**
+
+| | Para qué | Cómo |
+|---|---|---|
+| `advisory_lock(LOCK_X)` / `tomar_lock_de_sesion` | Crons: «si otro lo corre, me salto» | Conexión **dedicada** en AUTOCOMMIT; se suelta en ESA conexión (+ `pg_advisory_unlock_all`); si el unlock falla o da false, la conexión se **invalida** — nunca vuelve al pool tomada |
+| `lock_de_transaccion(LOCK_X)` | «Leer y después insertar» en UNA transacción | `pg_advisory_xact_lock` en `db.session`; espera; se suelta en el commit |
+
+En SQLite (tests) `advisory_lock` concede sin tocar la base: el pool en memoria
+es una sola conexión (StaticPool) y una «dedicada» haría rollback de la sesión.
+
+**Y un registro único de números**, porque ya iban cuatro choques entre jobs
+distintos (un choque = los dos se excluyen, y el log no lo distingue de «otro
+worker»): 2015 (arreglado el 2026-08-27, mudándose a 2016…), **2016**
+reposición/avisos de flota, **2007** DLQ/alerta de rutas sin liquidar, y el
+watchdog ABC **3000 + almacén** sobre 3001/3002/3003 (LPN, `TareaReposicion`,
+recepción por OC — bloqueantes, con `lock_timeout` de 8 s). Reposición pasa a
+2018, la alerta de rutas a 2019, el watchdog al rango 5000+, el pedido chico a
+un rango fuera de int32. La línea de «Reposición Micro» que dice
+`advisory_lock(2016, …)` queda superada por esto.
+
+Trinquete: `tests/test_advisory_locks.py`, todo por AST sobre `app/` y
+`flota/` — ningún SQL `pg_*advisory*` fuera del helper, ninguna clave que no
+sea `LOCK_*`/`clave_en_rango(RANGO_*)`, el registro sin choques, toda toma con
+su `finally … .liberar()`; meta-tests, pisos, 10 mutaciones (todas rojas). Las pruebas
+`@postgres` reproducen la fuga del patrón viejo y la ausencia con el helper:
+
+```bash
+FLOTA_TEST_PG_URL=postgresql://postgres@localhost:<puerto>/<base desechable> \
+    venv/bin/python -m pytest tests/test_advisory_locks.py -m postgres
+```
+
+**Lo que no está probado:** el efecto en producción. No se miró `pg_locks` de
+Railway (regla de no tocar bases reales), así que no se sabe cuántas corridas
+se saltaron de verdad; lo probado es el mecanismo, con el mismo pool y la misma
+versión de SQLAlchemy (2.0.48).
