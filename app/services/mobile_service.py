@@ -483,10 +483,11 @@ class MobileService:
                 )
             _erroneos = _q_err.all()
             if _erroneos:
+                # `devolver_al_pool`: dejaba `cantidad_fisica` puesta y el
+                # siguiente operario heredaba en su HUD el parcial de otro.
+                from app.models.conteo import MotivoDescarteConteo as _MDC
                 for c in _erroneos:
-                    c.operario_id = None
-                    c.estado = EstadoConteo.PENDIENTE
-                    c.fecha_inicio = None
+                    ConteoService.devolver_al_pool(c, _MDC.OTRA_BODEGA)
                 db.session.commit()
                 logger.info('[MOBILE] %d conteo(s) de otra bodega liberados de picker_traslado %s',
                             len(_erroneos), operario_id)
@@ -873,6 +874,7 @@ class MobileService:
         total = MobileService._entero_no_negativo(total_acumulado, 'total_acumulado')
         sesion = MobileService._sesion_conteo_para_contar(tarea_id, operario_id)
         sesion.cantidad_fisica = total
+        ConteoService.marcar_actividad(sesion)
         db.session.commit()
         return {'exito': True, 'tipo': 'CONTEO', 'cantidad_contada': total,
                 'mensaje': f'Contando: {total} unidades'}
@@ -1174,6 +1176,7 @@ class MobileService:
                     f'{sesion.cantidad_fisica} — se fija sobre lo que ve el operario')
             nuevo = previo + unidades
             sesion.cantidad_fisica = nuevo
+            ConteoService.marcar_actividad(sesion)
             _unidad = (producto.unidad_empaque or 'EMPAQUE').upper()
             db.session.commit()
 

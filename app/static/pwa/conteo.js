@@ -453,7 +453,7 @@ async function conteoDescartarFallos() {
     reset_a_descuadre: 'vuelven a DESCUADRE (podés re-aprobar o cancelar)',
     sin_tocar_ya_ajustada: 'ya estaban AJUSTADAS — no se tocan',
     sin_tocar_otro_estado: 'están en otro estado — no se tocan',
-    QUEDA_HUERFANA: '⚠ QUEDAN TRABADAS en AJUSTANDO, sin nadie que las recoja',
+    SE_CONSERVA_POSIBLE_ENVIO: '⚠ NO se descartan: el ajuste pudo haber llegado a Siesa (quedan para reintentar)',
     job_sin_sesion_en_payload: 'sin sesión en el payload',
     sesion_no_existe: 'su sesión ya no está en la base'
   };
@@ -464,15 +464,15 @@ async function conteoDescartarFallos() {
   let texto = `Descartar ${plan.jobs_fallidos} ajuste(s) fallido(s)?\n\n${detalle}\n\n`
     + 'Descartar NO los envía a Siesa: los marca como abandonados.';
   if (plan.huerfanas && plan.huerfanas.length) {
-    texto += `\n\n⚠ Sesiones ${plan.huerfanas.join(', ')} quedan trabadas. `
-      + 'Verificá en Siesa si el ajuste llegó ANTES de descartar.';
+    texto += `\n\n⚠ Sesiones ${plan.huerfanas.join(', ')}: su ajuste pudo haber llegado a Siesa. `
+      + 'No se descartan — quedan para «Reintentar», que las cierra sin volver a enviar. Verificá en Siesa si llegó.';
   }
   if (!await _modalConfirmar(texto, { titulo: 'Descartar ajustes fallidos', peligro: true })) return;
 
   try {
     const d = await post('/api/conteo/descartar-fallos', {});
     const aviso = (d.huerfanas && d.huerfanas.length)
-      ? ` · ${d.huerfanas.length} trabada(s): ${d.huerfanas.join(', ')}`
+      ? ` · ${d.huerfanas.length} conservada(s) para reintentar: ${d.huerfanas.join(', ')}`
       : '';
     alerta(`${d.descartados} descartados · ${d.sesiones_reset} a DESCUADRE${aviso}`,
            aviso ? 'advertencia' : 'exito');
@@ -574,7 +574,8 @@ async function conteoAsignarLote() {
  * @param {number} id - Conteo session ID.
  */
 async function conteoCancelar(id) {
-  const motivo = await _modalTexto('Cancelar conteo', 'Motivo de cancelación:');
+  const motivo = await _modalTexto('Cancelar conteo',
+    'Se cancela este conteo y toda su cadena (1º, 2º y 3º conteo): no se ajusta nada. ¿Por qué?');
   if (!motivo) return;
   try {
     await put(`/api/conteo/${id}/cancelar`, { motivo: motivo.trim() });
@@ -1217,6 +1218,7 @@ let DEF_TAREA_ACTUAL = null;
 async function cargarConteoDefinitivos() {
   cargarConteoBloqueados();
   cargarConteoNovedades();
+  cargarConteoRecogidoSinDespachar();
   const el = document.getElementById('inv-definitivo-lista');
   if (!el) return;
   el.innerHTML = '<div style="text-align:center;padding:30px;color:var(--tx3);">Cargando…</div>';
@@ -1976,6 +1978,60 @@ async function conteoResolverNovedad(id) {
     cargarConteoNovedades();
   } catch (e) {
     alerta(e.message || 'No se pudo marcar', 'error');
+  }
+}
+
+// ── Recogido sin despachar ─────────────────────────────────────────────────
+// Pedidos con mercancía recogida cuyo empaque se canceló sin remisión, o que
+// nunca se empacaron. Mientras nadie declare que volvió al estante, el conteo
+// no programa esos productos (ConteoService.procesos_en_curso): no hay fecha
+// que diga cuándo volvió. La declaración NO mueve inventario.
+// El pedido no viaja dentro del onclick: se pasa el índice y se busca acá.
+
+let _RECOGIDO_SIN_DESPACHAR = [];
+
+/** Lista los pedidos recogidos que no salieron ni están saliendo. */
+async function cargarConteoRecogidoSinDespachar() {
+  const el = document.getElementById('inv-recogido-lista');
+  if (!el) return;
+  try {
+    const d = await get('/api/conteo/recogido-sin-despachar');
+    _RECOGIDO_SIN_DESPACHAR = d.pedidos || [];
+    if (!_RECOGIDO_SIN_DESPACHAR.length) {
+      el.innerHTML = '<div style="text-align:center;padding:14px;color:var(--tx3);font-size:13px;">Nada recogido sin despachar ✓</div>';
+      return;
+    }
+    el.innerHTML = _RECOGIDO_SIN_DESPACHAR.map((p, i) => `
+      <div style="background:var(--bg-s);border:1px solid var(--brd);border-radius:12px;padding:12px 14px;margin-bottom:8px;">
+        <div style="display:flex;justify-content:space-between;gap:8px;">
+          <span style="font-size:11px;font-weight:700;color:#f59e0b;">${p.situacion === 'EMPAQUE_CANCELADO' ? 'Empaque cancelado sin remisión' : 'Recogido y nunca empacado'}</span>
+          <span style="font-size:11px;color:var(--tx3);">${esc(p.almacen_nombre || '')}</span>
+        </div>
+        <div style="font-size:14px;font-weight:700;color:var(--tx);margin-top:4px;">Pedido ${esc(p.pedido)}</div>
+        ${(p.productos || []).map(x => `<div style="font-size:12px;color:var(--tx2);">${esc(x.producto_codigo || '')} · ${esc(x.producto_nombre || '')} — ${esc(x.cantidad_recogida)} und</div>`).join('')}
+        <button onclick="conteoDevolverAlEstante(${i})" style="width:100%;margin-top:8px;padding:10px;background:var(--pm);color:#fff;border:none;border-radius:10px;font-size:13px;font-weight:700;cursor:pointer;">↩ Volvió al estante</button>
+      </div>`).join('');
+  } catch (e) {
+    el.innerHTML = '<div style="text-align:center;padding:14px;color:#ef4444;font-size:13px;">Error cargando lo recogido sin despachar</div>';
+  }
+}
+
+/** El líder declara que la mercancía del pedido volvió al estante. @param {number} i índice en la lista */
+async function conteoDevolverAlEstante(i) {
+  const p = _RECOGIDO_SIN_DESPACHAR[i];
+  if (!p) return;
+  const nota = await _modalTexto(`Pedido ${esc(p.pedido)}: ¿volvió al estante?`,
+    'Confirmá solo si la mercancía de este pedido ya está de vuelta en su lugar. '
+    + 'Desde ahora esos productos se pueden volver a contar. No cambia el inventario.',
+    { obligatorio: false, textoConfirmar: 'Sí, volvió' });
+  if (nota === null) return;
+  try {
+    await post('/api/conteo/recogido-sin-despachar/devuelto',
+      { pedido: p.pedido, almacen_id: p.almacen_id, nota });
+    alerta('Listo — esos productos vuelven al plan de conteo', 'exito');
+    cargarConteoRecogidoSinDespachar();
+  } catch (e) {
+    alerta(e.message || 'No se pudo declarar', 'error');
   }
 }
 

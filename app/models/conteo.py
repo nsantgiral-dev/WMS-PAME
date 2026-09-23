@@ -29,6 +29,43 @@ class EstadoConteo:
     CADENA_EN_CURSO = (PENDIENTE, EN_PROCESO, SEGUNDO_CONTEO, TERCER_CONTEO, AJUSTANDO,
                        BLOQUEADO)
 
+    #: Estados de un MIEMBRO de la cadena que todavía espera algo de un humano
+    #: y que se puede cancelar (2026-09-23, «ninguna cadena queda sin salida»).
+    #: Es `CADENA_EN_CURSO` sin `AJUSTANDO`: una sesión con el ajuste en vuelo a
+    #: Siesa no se cancela —puede haber llegado (Regla 3)—, la resuelve la cola.
+    MIEMBRO_VIVO = (PENDIENTE, EN_PROCESO, SEGUNDO_CONTEO, TERCER_CONTEO, BLOQUEADO)
+
+
+class MotivoDescarteConteo:
+    """Por qué un conteo en curso se descartó (`SesionConteo.conteos_descartados`).
+
+    Lo que se descarta no se borra: queda en la lista con su motivo. Los
+    motivos no pesan igual en las estadísticas — solo `MOVIMIENTO_SIESA` es un
+    «recuento por venta durante el conteo»; los demás son la sesión devuelta a
+    la cola (`ConteoService.devolver_al_pool`) y no dicen nada de Siesa.
+    """
+    #: Siesa se movió entre la foto de apertura y la del cierre: se recuenta.
+    #: Las entradas anteriores a este campo no traen motivo y son todas de esta
+    #: clase (era el único descarte que existía).
+    MOVIMIENTO_SIESA = 'MOVIMIENTO_SIESA'
+    #: El conteo cayó fuera de tolerancia y se le pidió al mismo operario un
+    #: recuento propio, a ciegas (`ConteoService._pedir_recuento_propio`).
+    #: Tampoco es una venta: va al denominador de la tasa, no al numerador.
+    FUERA_DE_TOLERANCIA = 'FUERA_DE_TOLERANCIA'
+    #: Nadie escaneó ni tecleó nada en `CONTEO_INACTIVIDAD_HORAS`: el barrido
+    #: de zombis la devolvió a la cola.
+    INACTIVIDAD = 'INACTIVIDAD'
+    #: El líder le forzó otro conteo al mismo operario (`crear_conteo_manual`).
+    CONTEO_FORZADO = 'CONTEO_FORZADO'
+    #: La sesión era de otra bodega y el despachador se la quitó al operario.
+    OTRA_BODEGA = 'OTRA_BODEGA'
+    #: Estaba BLOQUEADA y el líder la devolvió a la cola (`reabrir_bloqueado`).
+    REABIERTO = 'REABIERTO'
+    #: Los que dejó `devolver_al_pool`: la sesión volvió a la cola. No son
+    #: recuentos y ninguna estadística de recuento los cuenta.
+    DE_LA_COLA = (INACTIVIDAD, CONTEO_FORZADO, OTRA_BODEGA, REABIERTO)
+    VALIDOS = (MOVIMIENTO_SIESA, FUERA_DE_TOLERANCIA) + DE_LA_COLA
+
 
 class MotivoBloqueoConteo:
     """Por qué un operario bloqueó su conteo (`SesionConteo.motivo_bloqueo`).
@@ -159,13 +196,24 @@ class SesionConteo(db.Model):
     cant_pos_inicio_siesa = db.Column(db.Integer, nullable=True)
     salida_sin_conf_inicio_siesa = db.Column(db.Integer, nullable=True)
     foto_inicio_at = db.Column(db.DateTime, nullable=True)
-    #: Los conteos que se descartaron por movimiento durante el conteo, en JSON
-    #: (lista). El recuento se hace sobre la MISMA sesión —no se crea otra: la
+    #: Los conteos que se descartaron, en JSON (lista), cada uno con su
+    #: `motivo` (`MotivoDescarteConteo`; sin motivo = anterior a m032ciclo, y
+    #: entonces es de movimiento). Por movimiento durante el conteo, o porque
+    #: la sesión volvió a la cola (inactividad, conteo forzado, otra bodega,
+    #: reabierta): lo contado no se borra sin rastro.
+    #: El recuento se hace sobre la MISMA sesión —no se crea otra: la
     #: cadena CC1 → CC2 → CC3 es de un hijo por padre y la cola del Conteo
     #: Definitivo cuelga de ella—, así que lo que se contó y se descartó queda
     #: acá para auditoría: físico, las dos fotos, quién y cuándo.
     conteos_descartados = db.Column(db.Text, nullable=True)
     cantidad_fisica = db.Column(db.Integer)   # Lo que contó el operario
+    #: **La última vez que alguien contó algo en esta sesión** (m032ciclo): un
+    #: escaneo o un total tecleado. El barrido de zombis libera por
+    #: INACTIVIDAD —`coalesce(ultima_actividad_at, fecha_inicio)`— y no por
+    #: antigüedad: antes miraba solo `fecha_inicio`, así que un conteo largo (o
+    #: uno pospuesto por un picking en NB1) perdía lo contado a las 2 h aunque
+    #: el operario siguiera escaneando.
+    ultima_actividad_at = db.Column(db.DateTime, nullable=True)
     lote_id = db.Column(db.String(50))        # Obligatorio si maneja_lote=True
 
     # Diferencia calculada al conciliar

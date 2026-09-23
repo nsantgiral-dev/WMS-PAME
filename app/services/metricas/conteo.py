@@ -400,15 +400,21 @@ def _descartes(s: SesionConteo):
     entrada)`. Día `None` si la entrada no trae una fecha legible. Los eventos
     del historial (una reapertura del líder) no son conteos: se saltan.
 
-    Desde 2026-09-23 hay dos motivos (`ConteoService.motivo_de_descarte`):
-    `MOVIMIENTO` (Siesa se movió mientras se contaba) y `FUERA_DE_TOLERANCIA`
-    (el recuento propio a ciegas). Mezclarlos inflaría la tasa de «ventas
-    durante el conteo» con recuentos que no tienen nada que ver con ventas."""
+    Hay dos motivos de recuento (`ConteoService.motivo_de_descarte`):
+    movimiento (Siesa se movió mientras se contaba) y fuera de tolerancia (el
+    recuento propio a ciegas). Mezclarlos inflaría la tasa de «ventas durante
+    el conteo» con recuentos que no tienen nada que ver con ventas. Y desde
+    m032ciclo la lista guarda además lo parcial de los conteos que volvieron a
+    la cola (`MotivoDescarteConteo.DE_LA_COLA`: inactividad, conteo forzado…):
+    esos no son recuentos de ninguna clase y no salen de acá."""
+    from app.models.conteo import MotivoDescarteConteo
     from app.services.conteo_service import ConteoService
     for entrada in s.lista_conteos_descartados():
         if isinstance(entrada, dict) and 'evento' in entrada:
             continue
         motivo = ConteoService.motivo_de_descarte(entrada)
+        if motivo in MotivoDescarteConteo.DE_LA_COLA:
+            continue
         crudo = entrada.get('descartado_at') if isinstance(entrada, dict) else None
         try:
             dia = dia_operativo_de(datetime.fromisoformat(crudo)) if crudo else None

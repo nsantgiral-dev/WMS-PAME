@@ -750,6 +750,129 @@ class PickingService:
         db.session.commit()
         return tarea
 
+    # ── Recogido sin despachar: la salida con fecha ─────────────────────────
+
+    @staticmethod
+    def _filtro_devolvible_al_estante():
+        """Condición SQL: «tarea de un pedido cuya mercancía se recogió y no
+        salió ni va en camino de salir». **Una definición** para la lista y para
+        la declaración.
+
+        - pedido (no traslado: su salida es el STS y tiene otro circuito);
+        - picking COMPLETADO con algo recogido, sin regreso ya declarado;
+        - **ningún empaque del pedido vivo o con remisión**: todos cancelados
+          sin remisión, o ninguno (recogido y nunca empacado). Un empaque vivo
+          es mercancía en proceso de salir; uno con remisión (`rm_consec` o
+          `siesa_triggered`) ya salió en Siesa — declararla «de vuelta al
+          estante» sería inventar un sobrante.
+        """
+        from sqlalchemy import and_, exists, or_
+        from app.models.packing import EstadoPacking, TareaPacking
+        T = TareaPicking
+        empaque_que_la_explica = exists().where(and_(
+            TareaPacking.numero_pedido_siesa == T.referencia_documento,
+            or_(TareaPacking.estado != EstadoPacking.CANCELADO,
+                TareaPacking.siesa_triggered.is_(True),
+                TareaPacking.rm_consec.isnot(None))))
+        return and_(
+            or_(T.tipo_documento.is_(None), T.tipo_documento != 'TRASLADO'),
+            T.referencia_documento.isnot(None),
+            T.estado == EstadoPicking.COMPLETADO,
+            T.cantidad_recogida > 0,
+            T.devuelto_estante_at.is_(None),
+            ~empaque_que_la_explica,
+        )
+
+    @staticmethod
+    def recogido_sin_despachar(almacen_id: int = None) -> list:
+        """Pedidos con mercancía recogida que no salió ni está saliendo: el
+        empaque se canceló sin remisión, o nunca se empacó. Uno por pedido ×
+        almacén, con sus productos.
+
+        Es la lista donde el líder declara «volvió al estante»
+        (`declarar_devuelto_al_estante`). Hasta que lo haga, la guarda de
+        mercancía en proceso del conteo (`ConteoService.procesos_en_curso`) no
+        tiene fecha que juzgar y deja esos SKU fuera del plan de conteo.
+        """
+        from app.models.packing import TareaPacking
+        q = TareaPicking.query.filter(PickingService._filtro_devolvible_al_estante())
+        if almacen_id:
+            q = q.filter(TareaPicking.almacen_id == almacen_id)
+        tareas = q.order_by(TareaPicking.referencia_documento, TareaPicking.id).all()
+        pedidos = {t.referencia_documento for t in tareas}
+        empacados = {p.numero_pedido_siesa for p in TareaPacking.query.filter(
+            TareaPacking.numero_pedido_siesa.in_(pedidos)).all()} if pedidos else set()
+        from app.models.almacen import Almacen
+        nombres = {a.id: a.nombre for a in Almacen.query.filter(
+            Almacen.id.in_({t.almacen_id for t in tareas})).all()} if tareas else {}
+        grupos = {}
+        for t in tareas:
+            g = grupos.setdefault((t.referencia_documento, t.almacen_id), {
+                'pedido': t.referencia_documento,
+                'almacen_id': t.almacen_id,
+                'almacen_nombre': nombres.get(t.almacen_id),
+                'situacion': ('EMPAQUE_CANCELADO' if t.referencia_documento in empacados
+                              else 'NUNCA_EMPACADO'),
+                'recogido_desde': None,
+                'productos': [],
+            })
+            inicio = t.fecha_completado or t.fecha_inicio
+            if inicio and (g['recogido_desde'] is None or inicio.isoformat() < g['recogido_desde']):
+                g['recogido_desde'] = inicio.isoformat()
+            g['productos'].append({
+                'tarea': t.codigo,
+                'producto_codigo': t.producto.codigo if t.producto else None,
+                'producto_nombre': t.producto.nombre if t.producto else None,
+                'cantidad_recogida': t.cantidad_recogida,
+                'ubicacion_codigo': t.ubicacion.codigo if t.ubicacion else None,
+            })
+        return list(grupos.values())
+
+    @staticmethod
+    def declarar_devuelto_al_estante(pedido: str, almacen_id: int, usuario_id: int,
+                                     nota: str = None) -> dict:
+        """El líder declara que la mercancía recogida de `pedido` volvió al
+        estante. Fecha cada tarea devolvible del pedido en ese almacén
+        (`TareaPicking.devuelto_estante_at`) y hace commit.
+
+        Es la **salida con fecha** que le faltaba a la guarda de mercancía en
+        proceso del conteo: desde este instante el SKU deja de estar «en
+        proceso» por este pedido; los conteos de ANTES siguen bloqueados (se
+        juzga el instante del conteo, no el de ahora).
+
+        **No mueve inventario** — ver `TareaPicking.devuelto_estante_at`.
+        """
+        from app.services.conteo_service import ConteoService
+        ConteoService._exigir_supervision(usuario_id)
+        pedido = str(pedido or '').strip()
+        try:
+            almacen_id = int(almacen_id)
+        except (TypeError, ValueError):
+            almacen_id = None
+        if not pedido or not almacen_id:
+            raise ValueError('Indicá el pedido y el almacén')
+        tareas = (TareaPicking.query
+                  .filter(PickingService._filtro_devolvible_al_estante(),
+                          TareaPicking.referencia_documento == pedido,
+                          TareaPicking.almacen_id == almacen_id)
+                  .with_for_update().all())
+        if not tareas:
+            raise LookupError(
+                f'El pedido {pedido} no tiene mercancía recogida pendiente de '
+                f'volver al estante (ya se declaró, o tiene un empaque vivo o '
+                f'una remisión)')
+        ahora = datetime.utcnow()
+        nota = (nota or '').strip() or None
+        for t in tareas:
+            t.devuelto_estante_at = ahora
+            t.devuelto_estante_por_id = usuario_id
+            t.devuelto_estante_nota = nota
+        db.session.commit()
+        logger.info(f'[PICKING] Pedido {pedido} (almacén {almacen_id}): mercancía de '
+                    f'{len(tareas)} tarea(s) declarada de vuelta al estante por #{usuario_id}')
+        return {'pedido': pedido, 'almacen_id': almacen_id, 'tareas': len(tareas),
+                'devuelto_estante_at': ahora.isoformat()}
+
     @staticmethod
     def reabrir_picking(tarea_id: int):
         """

@@ -7,11 +7,15 @@ import uuid
 import logging
 from datetime import datetime
 from app.extensions import db
-from app.models.conteo import SesionConteo, EstadoConteo
+from app.models.conteo import SesionConteo, EstadoConteo, MotivoDescarteConteo
 from app.services.connekta_gateway import connekta
 from app.utils.fecha import ahora_bogota as _ahora_bogota
 
 logger = logging.getLogger(__name__)
+
+
+class CadenaNoCancelable(ValueError):
+    """La cadena no está en un estado que se pueda cancelar (la ruta: 409)."""
 
 
 class ConteoService:
@@ -169,8 +173,10 @@ class ConteoService:
     #: Por qué se descartó un conteo (`conteos_descartados[*].motivo`). Las
     #: entradas anteriores a este campo son todas de movimiento: traen la clave
     #: `movimiento` (`motivo_de_descarte`).
-    DESCARTE_MOVIMIENTO = 'MOVIMIENTO'
-    DESCARTE_FUERA_DE_TOLERANCIA = 'FUERA_DE_TOLERANCIA'
+    #: Un solo vocabulario: los valores viven en `MotivoDescarteConteo`
+    #: (`app/models/conteo.py`); estos nombres son alias.
+    DESCARTE_MOVIMIENTO = MotivoDescarteConteo.MOVIMIENTO_SIESA
+    DESCARTE_FUERA_DE_TOLERANCIA = MotivoDescarteConteo.FUERA_DE_TOLERANCIA
     #: No es un conteo descartado: el líder reabrió la sesión bloqueada. Corta
     #: la cuenta de recuentos por movimiento (`recuentos_por_movimiento_vigentes`)
     #: — reabrir un MOVIMIENTO_CONTINUO es darle otra oportunidad en un momento
@@ -826,22 +832,23 @@ class ConteoService:
                 raise ValueError(no_puede)
 
         antes = sesion.motivo_edicion or f'[{sesion.motivo_bloqueo or "?"}]'
+        antes_motivo = sesion.motivo_bloqueo
         ahora = datetime.utcnow()
-        # La reapertura queda en el historial de la sesión: corta la cuenta de
-        # recuentos por movimiento (un MOVIMIENTO_CONTINUO reabierto vuelve a
-        # tener sus recuentos) y deja rastro de quién la devolvió a la cola.
+        # Desde cero, pero lo que se alcanzó a contar antes del bloqueo queda
+        # en `conteos_descartados` — la misma función que toda puerta que
+        # devuelve un conteo a la cola.
+        ConteoService.devolver_al_pool(sesion, MotivoDescarteConteo.REABIERTO)
+        # Y la reapertura queda como EVENTO, después de lo anterior: corta la
+        # cuenta de recuentos por movimiento (un MOVIMIENTO_CONTINUO reabierto
+        # vuelve a tener sus recuentos) y deja rastro de quién la devolvió.
         import json
         historial = sesion.lista_conteos_descartados()
         historial.append({'evento': ConteoService.EVENTO_REABIERTO, 'at': ahora.isoformat(),
-                          'por': usuario_id, 'motivo_bloqueo': sesion.motivo_bloqueo})
+                          'por': usuario_id, 'motivo_bloqueo': antes_motivo})
         sesion.conteos_descartados = json.dumps(historial, ensure_ascii=False, default=str)
-        sesion.estado = EstadoConteo.PENDIENTE
         sesion.operario_id = operario_id
-        sesion.cantidad_fisica = None
-        sesion.fecha_inicio = None
         sesion.motivo_bloqueo = None
         sesion.bloqueado_en = None
-        ConteoService._grabar_foto_inicio(sesion, None)
         nota = (nota or '').strip()
         sesion.motivo_edicion = f'REABIERTO por {lider.nombre}' + (f': {nota}' if nota else '') \
             + f' (estaba bloqueado: {antes})'
@@ -854,13 +861,50 @@ class ConteoService:
 
     @staticmethod
     def cancelar_bloqueado(sesion_id: int, usuario_id: int, motivo: str) -> SesionConteo:
-        """El líder descarta un conteo BLOQUEADO — y con él **toda su cadena**.
-
-        Una cadena no avanza sin ese eslabón: cancelar solo un CC2 bloqueado
-        dejaba la raíz en SEGUNDO_CONTEO para siempre, trabando el hueco
-        (`CADENA_EN_CURSO`). Si el líder quiere ajustar con lo que ya dijo el
+        """El líder descarta un conteo BLOQUEADO — y con él **toda su cadena**
+        (`cancelar_cadena`). Si el líder quiere ajustar con lo que ya dijo el
         CC1, la herramienta es `omitir-segundo` sobre la raíz, que cancela el
-        bloqueado igual; cancelar es «esta cadena no vale».
+        bloqueado igual; cancelar es «esta cadena no vale»."""
+        ConteoService._exigir_supervision(usuario_id)
+        sesion = db.session.get(SesionConteo, sesion_id)
+        if sesion is not None and sesion.estado != EstadoConteo.BLOQUEADO:
+            raise ValueError(f'Solo se cancela por acá un conteo BLOQUEADO (está {sesion.estado})')
+        return ConteoService.cancelar_cadena(sesion_id, usuario_id, motivo)
+
+    @staticmethod
+    def nodos_de_la_cadena(sesion: SesionConteo) -> list:
+        """La cadena de `sesion` en orden: raíz (CC1), CC2, CC3."""
+        nodos = []
+        nodo = ConteoService._raiz_de(sesion)
+        while nodo is not None and len(nodos) < 10:   # 3 en la práctica; tope anti-ciclo
+            nodos.append(nodo)
+            nodo = nodo.hijo_conteo
+        return nodos
+
+    @staticmethod
+    def cancelar_cadena(sesion_id: int, usuario_id: int, motivo: str) -> SesionConteo:
+        """**Cancelar cualquier miembro de una cadena cancela la cadena entera.**
+
+        La cadena CC1 → CC2 → CC3 avanza por propagación: el hijo que resuelve
+        mueve a la raíz (`registrar_conteo`). Cancelar solo un eslabón vivo
+        dejaba a los demás esperando algo que ya no iba a llegar:
+
+        - un CC2 cancelado dejaba la raíz en SEGUNDO_CONTEO **para siempre**, y
+          como ese estado está en `EstadoConteo.CADENA_EN_CURSO`, el hueco
+          quedaba trabado: el generador nunca lo volvía a programar;
+        - un CC3 cancelado, lo mismo con la raíz en TERCER_CONTEO;
+        - la raíz cancelada con un CC3 vivo dejaba al supervisor contando algo
+          que no llegaba a ningún lado.
+
+        Se cancela, con el motivo: todo miembro vivo (`EstadoConteo.MIEMBRO_VIVO`),
+        la raíz si espera aprobación (DESCUADRE) y el miembro elegido si está
+        en DESCUADRE. Un hijo ya resuelto (DESCUADRE) de otro eslabón se deja
+        como está: es una observación que ya ocurrió. Nada se cancela si la
+        raíz tiene el ajuste en vuelo (AJUSTANDO: puede haber llegado a Siesa,
+        Regla 3) o si la cadena ya cerró.
+
+        Levanta `PermissionError` (no es supervisión), `LookupError` (no
+        existe), `CadenaNoCancelable` (estado) o `ValueError` (sin motivo).
         """
         ConteoService._exigir_supervision(usuario_id)
         motivo = (motivo or '').strip()
@@ -870,24 +914,39 @@ class ConteoService:
                   .with_for_update().first())
         if not sesion:
             raise LookupError('Sesión de conteo no encontrada')
-        if sesion.estado != EstadoConteo.BLOQUEADO:
-            raise ValueError(f'Solo se cancela por acá un conteo BLOQUEADO (está {sesion.estado})')
+
+        nodos = ConteoService.nodos_de_la_cadena(sesion)
+        raiz = nodos[0]
+        if raiz.id != sesion.id:
+            raiz = (SesionConteo.query.filter_by(id=raiz.id)
+                    .with_for_update().first()) or raiz
+        if any(n.estado == EstadoConteo.AJUSTANDO for n in nodos):
+            raise CadenaNoCancelable(
+                'El ajuste de esta cadena está en vuelo a Siesa: no se cancela '
+                '(puede haber llegado). Esperá a que la cola lo resuelva.')
+
+        a_cancelar = [n for n in nodos
+                      if n.estado in EstadoConteo.MIEMBRO_VIVO
+                      or (n.estado == EstadoConteo.DESCUADRE
+                          and (n.id == raiz.id or n.id == sesion.id))]
+        abiertos = [n for n in a_cancelar
+                    if n.estado in EstadoConteo.MIEMBRO_VIVO or n.id == raiz.id]
+        if not abiertos:
+            raise CadenaNoCancelable(
+                f'No se puede cancelar en estado {sesion.estado}: la cadena de '
+                f'este conteo ya cerró (1er conteo {raiz.estado})')
 
         ahora = datetime.utcnow()
-        vivos = set(EstadoConteo.CADENA_EN_CURSO) - {EstadoConteo.AJUSTANDO}
-        nodo = ConteoService._raiz_de(sesion)
-        while nodo is not None:
-            if nodo.estado in vivos:
-                nodo.estado = EstadoConteo.CANCELADO
-                nodo.fecha_cierre = ahora
-                nodo.motivo_edicion = (f'CANCELADO: {motivo}' if nodo.id == sesion.id
-                                       else f'CANCELADO (cadena de {sesion.codigo}): {motivo}')
-                nodo.editado_por = usuario_id
-                nodo.editado_en = ahora
-            nodo = nodo.hijo_conteo
+        for n in a_cancelar:
+            n.estado = EstadoConteo.CANCELADO
+            n.fecha_cierre = ahora
+            n.motivo_edicion = (f'CANCELADO: {motivo}' if n.id == sesion.id
+                                else f'CANCELADO (cadena de {sesion.codigo}): {motivo}')
+            n.editado_por = usuario_id
+            n.editado_en = ahora
         db.session.commit()
-        logger.info(f'[CONTEO] {sesion.codigo} (bloqueado) y su cadena cancelados '
-                    f'por #{usuario_id}: {motivo}')
+        logger.info(f'[CONTEO] {sesion.codigo} y su cadena cancelados por #{usuario_id} '
+                    f'({len(a_cancelar)} sesión(es)): {motivo}')
         return sesion
 
     # ── Novedades: «mercancía sin código» ────────────────────────────────────
@@ -1779,6 +1838,10 @@ class ConteoService:
                 + ConteoService._en_proceso_por_averia(almacen_id, instante, producto_id)
                 + ConteoService._en_proceso_por_devolucion(almacen_id, instante, producto_id))
 
+    #: Dónde declara el líder que la mercancía recogida volvió al estante. Lo
+    #: nombran los mensajes de la guarda; la pantalla es `conteo.js`.
+    DONDE_DECLARAR_REGRESO = 'Inventario Cíclico → «Recogido sin despachar»'
+
     @staticmethod
     def _en_proceso_por_picking(almacen_id, instante, producto_id) -> list:
         """VENTA y TRASLADO_SALIENTE: recogido del estante y sin salida en Siesa.
@@ -1799,9 +1862,17 @@ class ConteoService:
         La salida tiene que caer entre el inicio del picking y el instante: una
         remisión anterior al picking es de otra tanda y no lo cubre.
 
-        Sin `fecha_inicio`, o con un empaque cancelado sin remisión, no hay
-        forma de ubicar en el tiempo cuándo volvió la mercancía (si volvió):
-        cuenta como vivo y lo dice.
+        - **Pedido que no sale** (empaque cancelado sin remisión, o recogido y
+          nunca empacado): la declaración del líder de que la mercancía volvió
+          al estante (`TareaPicking.devuelto_estante_at`,
+          `PickingService.declarar_devuelto_al_estante`, m032ciclo). Es la
+          fecha que faltaba: sin ella el SKU quedaba fuera del plan de conteo
+          para siempre. Se juzga igual que las otras salidas — un regreso
+          posterior al instante no cubre un conteo de antes.
+
+        Sin `fecha_inicio`, o con un empaque cancelado sin remisión y sin
+        regreso declarado, no hay forma de ubicar en el tiempo cuándo volvió la
+        mercancía (si volvió): cuenta como vivo y lo dice.
         """
         from sqlalchemy import and_, exists, or_
         from app.models.packing import EstadoPacking, TareaPacking
@@ -1822,12 +1893,14 @@ class ConteoService:
             SolicitudTraslado.fecha_despacho <= instante))
         es_traslado = T.tipo_documento == 'TRASLADO'
         es_pedido = or_(T.tipo_documento.is_(None), T.tipo_documento != 'TRASLADO')
+        volvio = and_(T.devuelto_estante_at.isnot(None), T.devuelto_estante_at <= instante)
         q = T.query.filter(
             T.almacen_id == almacen_id,
             T.estado != EstadoPicking.PENDIENTE,
             or_(T.estado == EstadoPicking.EN_PROCESO, T.cantidad_recogida > 0),
             or_(T.fecha_inicio.is_(None), T.fecha_inicio <= instante),
             or_(and_(es_traslado, ~salio), and_(es_pedido, ~remitido)),
+            ~volvio,
         )
         if producto_id is not None:
             q = q.filter(T.producto_id == producto_id)
@@ -1881,11 +1954,16 @@ class ConteoService:
                                f'canceló sin remisión: no hay registro de que la '
                                f'mercancía haya vuelto al estante')
                     accion = (f'Revisar con el jefe de bodega dónde quedó la '
-                              f'mercancía del pedido {ref}')
+                              f'mercancía del pedido {ref}; si volvió al estante, '
+                              f'declararlo en {ConteoService.DONDE_DECLARAR_REGRESO}')
                     sin_fecha = True
                 else:
                     detalle = f'pedido {ref} {accion_picking} y sin remisión en Siesa'
                     accion = f'Recontar cuando se remisione el pedido {ref}'
+                    if not pks and not en_curso:
+                        accion += (f' (si el pedido no va a salir y la mercancía '
+                                   f'volvió al estante, declararlo en '
+                                   f'{ConteoService.DONDE_DECLARAR_REGRESO})')
             if sin_inicio:
                 detalle += (f' (picking {", ".join(sin_inicio[:3])} sin fecha de '
                             f'inicio registrada)')
@@ -2367,6 +2445,51 @@ class ConteoService:
             sesion.fecha_cierre = datetime.utcnow()
             return {'es_match': True, 'diferencia': 0}
         return {'es_match': False, 'diferencia': diferencia}
+
+    @staticmethod
+    def descendientes_vivos(sesion: SesionConteo) -> list:
+        """Los conteos de la cadena que cuelgan de `sesion` y siguen vivos
+        (`EstadoConteo.MIEMBRO_VIVO`)."""
+        vivos = []
+        nodo = sesion.hijo_conteo
+        while nodo is not None and len(vivos) < 10:
+            if nodo.estado in EstadoConteo.MIEMBRO_VIVO:
+                vivos.append(nodo)
+            nodo = nodo.hijo_conteo
+        return vivos
+
+    @staticmethod
+    def corregir_cantidad(sesion: SesionConteo, nueva_cantidad: int) -> list:
+        """Un admin corrige lo contado (`PUT /api/conteo/<id>/editar`). Devuelve
+        la lista de cambios aplicados; no hace commit.
+
+        **No sobre una sesión con un segundo o tercer conteo vivo colgando.**
+        Corregir la raíz en SEGUNDO/TERCER_CONTEO hasta que cuadrara la pasaba
+        a MATCH y dejaba vivo al CC2/CC3: un operario (o el supervisor, en el
+        definitivo) contando algo que ya no llegaba a ninguna parte — la
+        propagación exige la raíz esperándolo. Para cerrar una cadena en curso
+        están `omitir-segundo` (ajustar con lo que dijo el CC1) y cancelar.
+        """
+        vivos = ConteoService.descendientes_vivos(sesion)
+        if vivos:
+            raise ValueError(
+                f'Este conteo tiene un {ConteoService.nivel_en_cadena(vivos[0])} '
+                f'en curso ({vivos[0].codigo}). Corregir la cantidad lo dejaría '
+                f'contando para nada: omitilo o cancelá la cadena primero.')
+        cambios = []
+        sesion.cantidad_fisica = nueva_cantidad
+        cambios.append(f'cantidad_fisica → {nueva_cantidad}')
+        # Re-conciliar si ya tenemos referencia Siesa
+        if sesion.existencia_siesa is not None:
+            resultado = ConteoService.reconciliar_cantidad(sesion, nueva_cantidad)
+            if resultado['es_match']:
+                cambios.append('estado → MATCH')
+            elif sesion.estado == EstadoConteo.MATCH:
+                # Estaba en MATCH pero ahora no cuadra: vuelve a DESCUADRE
+                sesion.estado = EstadoConteo.DESCUADRE
+                sesion.fecha_cierre = None
+                cambios.append(f'estado → DESCUADRE (dif={resultado["diferencia"]})')
+        return cambios
 
     @staticmethod
     def _crear_conteo_verificacion(sesion_origen: SesionConteo, operario_excluido: int):
@@ -3044,9 +3167,9 @@ class ConteoService:
         `_crear_conteo_verificacion` — este parámetro solo controla CC1.
 
         Si el operario forzado ya tiene OTRO conteo cíclico EN_PROCESO (uno
-        de un SKU distinto), ese se pausa — mismo patrón que
-        `liberar_tareas_zombi`: vuelve a PENDIENTE, sin dueño, con
-        `cantidad_fisica`/`fecha_inicio` en None — para que el conteo forzado
+        de un SKU distinto), ese se pausa con `devolver_al_pool` (lo contado
+        queda en `conteos_descartados`, la sesión vuelve a la cola desde cero)
+        — para que el conteo forzado
         sea lo próximo que el dispensador (`get_tarea_actual`) le entregue, en
         vez de seguir devolviéndole el que ya tenía en curso. Nunca se pausa
         un picking, packing o traslado activo — solo otro conteo: interrumpir
@@ -3161,10 +3284,7 @@ class ConteoService:
                     f'[CONTEO MANUAL] Pausando sesión {s.codigo} (id={s.id}) EN_PROCESO '
                     f'del operario #{operario_forzado.id} — reemplazada por conteo forzado de {codigo}'
                 )
-                s.estado = EstadoConteo.PENDIENTE
-                s.operario_id = None
-                s.fecha_inicio = None
-                s.cantidad_fisica = None
+                ConteoService.devolver_al_pool(s, MotivoDescarteConteo.CONTEO_FORZADO)
 
         try:
             db.session.commit()
@@ -3211,29 +3331,96 @@ class ConteoService:
                 'tareas_creadas': r['tareas_creadas'], 'codigos': r['codigos'],
                 'operario_nombre': r.get('operario_nombre')}
 
+    #: Horas sin actividad (escaneo o total tecleado) tras las que un conteo
+    #: EN_PROCESO vuelve a la cola. El barrido corre cada 30 min
+    #: (`abc_service`), así que en la práctica se libera entre 2 h y 2 h 30.
+    CONTEO_INACTIVIDAD_HORAS = 2
+
     @staticmethod
-    def liberar_tareas_zombi(timeout_horas: int = 2):
+    def marcar_actividad(sesion: SesionConteo) -> None:
+        """Alguien contó algo en esta sesión. **Toda puerta que escribe
+        `cantidad_fisica` mientras se cuenta la llama** —el escaneo y el total
+        tecleado (`MobileService`)—: es lo que mira el barrido de zombis."""
+        sesion.ultima_actividad_at = datetime.utcnow()
+
+    @staticmethod
+    def devolver_al_pool(sesion: SesionConteo, motivo: str) -> None:
+        """Devuelve un conteo a la cola **desde cero**, sin perder el rastro.
+        No hace commit.
+
+        **Una política, una función** para las tres puertas que sacan un conteo
+        de las manos de un operario: el barrido de zombis (`INACTIVIDAD`), el
+        conteo forzado a ese operario (`CONTEO_FORZADO`) y el despachador de
+        tiendas cuando el conteo es de otra bodega (`OTRA_BODEGA`). Antes
+        eran tres bucles: dos borraban lo contado sin dejar rastro y el tercero
+        **no lo borraba** — el siguiente operario heredaba en su HUD el parcial
+        de otro, en un conteo que es ciego.
+
+        Si la sesión se estaba contando (EN_PROCESO o con algo contado), lo
+        parcial va a `conteos_descartados` con su motivo, quién y la foto de
+        apertura. La foto de inicio se limpia: quien la tome la relee al
+        abrirla (`registrar_foto_inicio`), y un conteo nuevo no puede medirse
+        contra la apertura de otro.
         """
-        Libera tareas EN_PROCESO que llevan más de `timeout_horas` sin progreso.
-        Devuelve la tarea a PENDIENTE sin operario para que otro la tome.
+        if motivo not in MotivoDescarteConteo.VALIDOS:
+            raise ValueError(f'Motivo de descarte desconocido: {motivo}')
+        if sesion.estado == EstadoConteo.EN_PROCESO or sesion.cantidad_fisica is not None:
+            import json
+            historial = sesion.lista_conteos_descartados()
+            historial.append({
+                'motivo': motivo,
+                'cantidad_fisica': sesion.cantidad_fisica,
+                'operario_id': sesion.operario_id,
+                'fecha_inicio': sesion.fecha_inicio.isoformat() if sesion.fecha_inicio else None,
+                'ultima_actividad': (sesion.ultima_actividad_at.isoformat()
+                                     if sesion.ultima_actividad_at else None),
+                'inicio': {
+                    'existencia': sesion.existencia_inicio_siesa,
+                    'cant_pos': sesion.cant_pos_inicio_siesa,
+                    'salida_sin_conf': sesion.salida_sin_conf_inicio_siesa,
+                    'at': sesion.foto_inicio_at.isoformat() if sesion.foto_inicio_at else None,
+                },
+                'descartado_at': datetime.utcnow().isoformat(),
+            })
+            sesion.conteos_descartados = json.dumps(historial, ensure_ascii=False)
+        sesion.estado = EstadoConteo.PENDIENTE
+        sesion.operario_id = None
+        sesion.fecha_inicio = None
+        sesion.ultima_actividad_at = None
+        sesion.cantidad_fisica = None
+        ConteoService._grabar_foto_inicio(sesion, None)
+
+    @staticmethod
+    def liberar_tareas_zombi(timeout_horas: int = None):
+        """Devuelve a la cola los conteos EN_PROCESO **inactivos** hace más de
+        `timeout_horas` (`CONTEO_INACTIVIDAD_HORAS` por defecto).
+
+        Inactivo = sin escaneo ni total tecleado: se mide desde
+        `ultima_actividad_at`, o desde `fecha_inicio` si nunca se contó nada.
+        Antes se medía solo desde `fecha_inicio` y se borraba lo contado: un
+        conteo largo —o uno pospuesto porque entró un picking en NB1— perdía el
+        avance a las 2 h aunque el operario siguiera escaneando. Lo parcial de
+        un conteo liberado queda en `conteos_descartados`
+        (`devolver_al_pool`) y la sesión vuelve a empezar desde cero con quien
+        la tome: el conteo es ciego, no se hereda un parcial ajeno.
         """
         from datetime import timedelta
-        umbral = datetime.utcnow() - timedelta(hours=timeout_horas)
+        horas = ConteoService.CONTEO_INACTIVIDAD_HORAS if timeout_horas is None else timeout_horas
+        umbral = datetime.utcnow() - timedelta(hours=horas)
+        ultima = db.func.coalesce(SesionConteo.ultima_actividad_at, SesionConteo.fecha_inicio)
         zombis = SesionConteo.query.filter(
             SesionConteo.estado == EstadoConteo.EN_PROCESO,
-            SesionConteo.fecha_inicio < umbral,
+            ultima < umbral,
         ).all()
 
         liberadas = 0
         for s in zombis:
             logger.warning(
-                f'[CONTEO TIMEOUT] Sesion {s.codigo} (id={s.id}) EN_PROCESO '
-                f'desde {s.fecha_inicio} — liberando (operario #{s.operario_id})'
+                f'[CONTEO TIMEOUT] Sesion {s.codigo} (id={s.id}) EN_PROCESO sin '
+                f'actividad desde {s.ultima_actividad_at or s.fecha_inicio} — vuelve a '
+                f'la cola (operario #{s.operario_id}, llevaba {s.cantidad_fisica})'
             )
-            s.estado = EstadoConteo.PENDIENTE
-            s.operario_id = None
-            s.fecha_inicio = None
-            s.cantidad_fisica = None
+            ConteoService.devolver_al_pool(s, MotivoDescarteConteo.INACTIVIDAD)
             liberadas += 1
 
         if liberadas:

@@ -530,28 +530,19 @@ def editar_conteo(id):
 
     cambios = []
 
-    # Corregir cantidad_fisica — dispara re-conciliación si ya tiene existencia_siesa
+    # Corregir cantidad_fisica — dispara re-conciliación si ya tiene
+    # existencia_siesa. La política (y el «no con un CC2/CC3 vivo colgando»)
+    # vive en el servicio.
     if 'cantidad_fisica' in data:
         nueva_cantidad = data['cantidad_fisica']
-        if not isinstance(nueva_cantidad, int) or nueva_cantidad < 0:
+        if not isinstance(nueva_cantidad, int) or isinstance(nueva_cantidad, bool) \
+                or nueva_cantidad < 0:
             return jsonify({'error': 'cantidad_fisica debe ser un entero >= 0'}), 400
-        sesion.cantidad_fisica = nueva_cantidad
-        cambios.append(f'cantidad_fisica → {nueva_cantidad}')
-
-        # Re-conciliar si ya tenemos referencia Siesa
-        if sesion.existencia_siesa is not None:
-            resultado = ConteoService.reconciliar_cantidad(sesion, nueva_cantidad)
-            if resultado['es_match']:
-                sesion.estado = EstadoConteo.MATCH
-                sesion.fecha_cierre = datetime.utcnow()
-                cambios.append('estado → MATCH')
-            else:
-                diferencia = resultado['diferencia']
-                # Si estaba en MATCH pero ahora no cuadra, volver a DESCUADRE
-                if sesion.estado == EstadoConteo.MATCH:
-                    sesion.estado = EstadoConteo.DESCUADRE
-                    sesion.fecha_cierre = None
-                    cambios.append(f'estado → DESCUADRE (dif={diferencia})')
+        try:
+            cambios.extend(ConteoService.corregir_cantidad(sesion, nueva_cantidad))
+        except ValueError as e:
+            db.session.rollback()
+            return jsonify({'error': str(e)}), 409
 
     # Reasignar operario
     if 'operario_id' in data:
@@ -818,64 +809,30 @@ def asignar_lote():
 @conteo_bp.route('/<int:id>/cancelar', methods=['PUT'])
 @jwt_required()
 def cancelar_conteo(id):
-    """Cancela un conteo que no ha sido ajustado ni está en vuelo a Siesa."""
-    from app.models.usuario import Usuario
+    """Cancela un conteo **y toda su cadena** (CC1, CC2, CC3).
+
+    La política vive en `ConteoService.cancelar_cadena`: cancelar solo el
+    eslabón elegido dejaba a la raíz esperando un conteo que ya no iba a
+    llegar, y el hueco trabado para siempre.
+    """
+    from app.services.conteo_service import CadenaNoCancelable
     try:
         uid = int(get_jwt_identity())
     except (TypeError, ValueError):
         return jsonify({'error': 'Token inválido'}), 401
-    u = Usuario.query.get(uid)
-    if not u or u.rol not in Roles.SUPERVISION:
-        return jsonify({'error': 'Sin permiso'}), 403
-
-    sesion = SesionConteo.query.filter_by(id=id).with_for_update().first()
-    if not sesion:
-        return jsonify({'error': 'Sesión no encontrada'}), 404
-
-    # Un BLOQUEADO («no lo encontré» u otro problema) no tenía salida: esta
-    # ruta no lo aceptaba y la cadena quedaba trabada. Se cancela con su
-    # cadena, por la política del servicio (`cancelar_bloqueado`).
-    if sesion.estado == EstadoConteo.BLOQUEADO:
-        try:
-            sesion = ConteoService.cancelar_bloqueado(
-                id, uid, (request.get_json() or {}).get('motivo', ''))
-        except PermissionError as e:
-            return jsonify({'error': str(e)}), 403
-        except ValueError as e:
-            return jsonify({'error': str(e)}), 400
-        return jsonify({'mensaje': 'Conteo bloqueado cancelado con su cadena',
-                        'sesion': sesion.to_dict()}), 200
-
-    estados_cancelables = [
-        EstadoConteo.PENDIENTE, EstadoConteo.EN_PROCESO,
-        EstadoConteo.SEGUNDO_CONTEO, EstadoConteo.DESCUADRE,
-    ]
-    if sesion.estado not in estados_cancelables:
-        return jsonify({
-            'error': f'No se puede cancelar en estado {sesion.estado}'
-        }), 409
-
-    motivo = (request.get_json() or {}).get('motivo', '').strip()
-    if not motivo:
-        return jsonify({'error': 'Se requiere un motivo de cancelación'}), 400
-
-    sesion.estado = EstadoConteo.CANCELADO
-    sesion.fecha_cierre = datetime.utcnow()
-    sesion.motivo_edicion = f'CANCELADO: {motivo}'
-    sesion.editado_por = uid
-    sesion.editado_en = datetime.utcnow()
-
-    # Cancelar hijo también si existe
-    if sesion.hijo_conteo and sesion.hijo_conteo.estado in estados_cancelables:
-        sesion.hijo_conteo.estado = EstadoConteo.CANCELADO
-        sesion.hijo_conteo.fecha_cierre = datetime.utcnow()
-        sesion.hijo_conteo.motivo_edicion = f'CANCELADO (padre): {motivo}'
-        sesion.hijo_conteo.editado_por = uid
-        sesion.hijo_conteo.editado_en = datetime.utcnow()
-
-    db.session.commit()
-    logger.info(f'[CONTEO] #{id} cancelado por usuario #{uid}: {motivo}')
-    return jsonify({'mensaje': 'Conteo cancelado', 'sesion': sesion.to_dict()}), 200
+    try:
+        sesion = ConteoService.cancelar_cadena(
+            id, uid, (request.get_json() or {}).get('motivo', ''))
+    except PermissionError as e:
+        return jsonify({'error': str(e)}), 403
+    except LookupError as e:
+        return jsonify({'error': str(e)}), 404
+    except CadenaNoCancelable as e:
+        return jsonify({'error': str(e)}), 409
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    logger.info(f'[CONTEO] #{id} cancelado con su cadena por usuario #{uid}')
+    return jsonify({'mensaje': 'Conteo cancelado con su cadena', 'sesion': sesion.to_dict()}), 200
 
 
 @conteo_bp.route('/bloqueados', methods=['GET'])
@@ -921,6 +878,49 @@ def reabrir_bloqueado(id):
         return jsonify({'error': str(e)}), 400
     return jsonify({'mensaje': 'Conteo reabierto — vuelve a la cola desde cero',
                     'sesion': sesion.to_dict()}), 200
+
+
+@conteo_bp.route('/recogido-sin-despachar', methods=['GET'])
+@jwt_required()
+def listar_recogido_sin_despachar():
+    """Pedidos con mercancía recogida que no salió ni está saliendo (empaque
+    cancelado sin remisión, o nunca empacado). Mientras nadie declare que
+    volvió al estante, sus productos quedan fuera del plan de conteo."""
+    from app.models.usuario import Usuario
+    from app.services.picking_service import PickingService
+    try:
+        uid = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
+    u = db.session.get(Usuario, uid)
+    if not u or u.rol not in Roles.SUPERVISION:
+        return jsonify({'error': 'Sin permiso'}), 403
+    filas = PickingService.recogido_sin_despachar(
+        almacen_id=request.args.get('almacen_id', type=int))
+    return jsonify({'pedidos': filas, 'total': len(filas)}), 200
+
+
+@conteo_bp.route('/recogido-sin-despachar/devuelto', methods=['POST'])
+@jwt_required()
+def declarar_devuelto_al_estante():
+    """El líder declara que la mercancía recogida de un pedido volvió al
+    estante. Body: `{pedido, almacen_id, nota?}`. No mueve inventario."""
+    from app.services.picking_service import PickingService
+    try:
+        uid = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
+    data = request.get_json() or {}
+    try:
+        r = PickingService.declarar_devuelto_al_estante(
+            data.get('pedido'), data.get('almacen_id'), uid, nota=data.get('nota'))
+    except PermissionError as e:
+        return jsonify({'error': str(e)}), 403
+    except LookupError as e:
+        return jsonify({'error': str(e)}), 404
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    return jsonify({'ok': True, **r}), 200
 
 
 @conteo_bp.route('/novedades', methods=['GET'])
@@ -1025,15 +1025,13 @@ def omitir_segundo_conteo(id):
     # TERCER_CONTEO el CC2 ya está en DESCUADRE: el CC3 quedaba vivo y huérfano
     # en la cola de Conteo Definitivo, y contarlo no llegaba a ningún lado
     # (la propagación exige la raíz en TERCER_CONTEO).
+    # BLOQUEADO también: un CC2/CC3 bloqueado que sobrevive a la omisión
+    # queda para siempre en la cola de bloqueados de una cadena resuelta. La
+    # lista de «vivo» es la de la cancelación (`descendientes_vivos`).
     ahora = datetime.utcnow()
-    descendiente = sesion.hijo_conteo
-    while descendiente is not None:
-        # BLOQUEADO también: un CC2/CC3 bloqueado que sobrevive a la omisión
-        # queda para siempre en la cola de bloqueados de una cadena resuelta.
-        if descendiente.estado in ('PENDIENTE', 'EN_PROCESO', EstadoConteo.BLOQUEADO):
-            descendiente.estado = 'CANCELADO'
-            descendiente.fecha_cierre = ahora
-        descendiente = descendiente.hijo_conteo
+    for descendiente in ConteoService.descendientes_vivos(sesion):
+        descendiente.estado = EstadoConteo.CANCELADO
+        descendiente.fecha_cierre = ahora
 
     sesion.estado = 'DESCUADRE'
     db.session.commit()
@@ -1045,7 +1043,7 @@ def omitir_segundo_conteo(id):
 #: aparece en el preview, así que dice la consecuencia, no el mecanismo.
 _RESET = 'reset_a_descuadre'
 _YA_AJUSTADA = 'sin_tocar_ya_ajustada'
-_HUERFANA = 'QUEDA_HUERFANA'
+_HUERFANA = 'SE_CONSERVA_POSIBLE_ENVIO'
 _SIN_SESION = 'job_sin_sesion_en_payload'
 _NO_EXISTE = 'sesion_no_existe'
 _OTRO_ESTADO = 'sin_tocar_otro_estado'
@@ -1106,10 +1104,12 @@ def _plan_descarte_ajustes():
                           'accion': _HUERFANA,
                           'estado_sesion': s.estado,
                           'por_que': (
-                              'AJUSTANDO con siesa_triggered=True: el descarte no la '
-                              'resetea y el barrido de sesiones atascadas la ignora. '
-                              'Al quedarse sin job no la recoge nadie. Revisar a mano '
-                              'si el ajuste llegó a Siesa antes de descartar.')})
+                              'AJUSTANDO con siesa_triggered=True: el ajuste pudo haber '
+                              'llegado a Siesa. Su job NO se descarta: sin job, ni el '
+                              'barrido de sesiones atascadas ni nadie la volvería a '
+                              'mirar y la cadena quedaría sin salida. Queda FALLIDO; '
+                              '«Reintentar» la cierra como AJUSTADO sin volver a '
+                              'llamar a Siesa. Revisá en Siesa si el ajuste llegó.')})
         else:
             items.append({'job_id': job.id, 'sesion_id': s.id,
                           'accion': _RESET, 'estado_sesion': s.estado,
@@ -1152,9 +1152,9 @@ def preview_descartar_fallos():
     plan['ejecutado'] = False
     if plan['huerfanas']:
         plan['advertencia'] = (
-            f'{len(plan["huerfanas"])} sesión(es) quedarían en AJUSTANDO sin job y '
-            f'sin barrido que las recoja: {plan["huerfanas"]}. Verificá en Siesa si '
-            f'el ajuste llegó antes de descartar.'
+            f'{len(plan["huerfanas"])} sesión(es) en AJUSTANDO con el ajuste '
+            f'posiblemente enviado: {plan["huerfanas"]}. Sus jobs NO se descartan '
+            f'(quedan FALLIDO para reintentar). Verificá en Siesa si el ajuste llegó.'
         )
     return jsonify(plan), 200
 
@@ -1191,6 +1191,11 @@ def descartar_fallos_dlq():
     ahora = datetime.utcnow()
 
     for it in plan['items']:
+        if it['accion'] == _HUERFANA:
+            # Descartarle el job la dejaba AJUSTANDO sin job para siempre: una
+            # cadena sin salida (ningún barrido la recoge, cancelar y editar
+            # rechazan AJUSTANDO). Su job queda FALLIDO, visible y reintentable.
+            continue
         job = db.session.get(SiesaJob, it['job_id'])
         if job is None:
             continue
@@ -1218,7 +1223,7 @@ def descartar_fallos_dlq():
     plan['ejecutado'] = True
     # Compatibilidad con quien ya leía estas dos claves. Se conservan con el
     # mismo significado; lo que cambia es que ahora no son lo único que hay.
-    plan['descartados'] = plan['jobs_fallidos']
+    plan['descartados'] = plan['jobs_fallidos'] - plan['resumen'].get(_HUERFANA, 0)
     plan['sesiones_reset'] = plan['resumen'].get(_RESET, 0)
     return jsonify(plan), 200
 

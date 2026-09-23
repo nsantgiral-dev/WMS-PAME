@@ -147,10 +147,10 @@ class TestDeclaraLoQueNoToca:
         assert s.estado == EstadoConteo.DESCUADRE
         assert r['resumen'].get('reset_a_descuadre') == 1
 
-    def test_una_sesion_AJUSTANDO_con_marca_se_declara_huerfana(
+    def test_una_sesion_AJUSTANDO_con_marca_se_declara(
             self, client, db, ub_picking, almacen, producto, h):
-        """El caso que hay que ver ANTES de apretar el botón: ni el descarte ni
-        el barrido la tocan, y sin job no la recoge nadie."""
+        """El caso que hay que ver ANTES de apretar el botón: el ajuste pudo
+        haber llegado a Siesa."""
         s = _sesion(db, ub_picking, almacen, producto, 'CC-H1',
                     EstadoConteo.AJUSTANDO, triggered=True)
         _job_fallido(db, s.id)
@@ -160,21 +160,26 @@ class TestDeclaraLoQueNoToca:
         assert prev['huerfanas'] == [s.id]
         assert 'advertencia' in prev
         assert str(s.id) in prev['advertencia']
-        assert prev['resumen'].get('QUEDA_HUERFANA') == 1
+        assert prev['resumen'].get('SE_CONSERVA_POSIBLE_ENVIO') == 1
 
-    def test_la_huerfana_no_se_resetea_al_ejecutar(
+    def test_la_posiblemente_enviada_no_se_resetea_ni_pierde_su_job(
             self, client, db, ub_picking, almacen, producto, h):
+        """Resetearla borraría la marca de que el ajuste pudo haber llegado
+        (un doble ajuste es peor que esperar). Pero descartarle el job la dejaba
+        AJUSTANDO sin job para siempre: el barrido de atascadas filtra
+        `siesa_triggered == False`, y cancelar y editar rechazan AJUSTANDO — una
+        cadena sin salida (2026-09-23). El job queda FALLIDO: visible, y
+        «Reintentar» la cierra como AJUSTADO sin volver a llamar a Siesa."""
         s = _sesion(db, ub_picking, almacen, producto, 'CC-H2',
                     EstadoConteo.AJUSTANDO, triggered=True)
         client_job = _job_fallido(db, s.id)
-        client.post(_DESCARTAR, headers=h)
+        r = client.post(_DESCARTAR, headers=h).get_json()
 
         db.session.refresh(s)
         db.session.refresh(client_job)
-        assert s.estado == EstadoConteo.AJUSTANDO, (
-            'resetearla borraría la marca de que el ajuste pudo haber llegado a '
-            'Siesa — un doble ajuste de inventario es peor que una sesión trabada')
-        assert client_job.estado == EstadoSiesaJob.DESCARTADO
+        assert s.estado == EstadoConteo.AJUSTANDO
+        assert client_job.estado == EstadoSiesaJob.FALLIDO
+        assert r['descartados'] == 0
 
     def test_una_sesion_ya_ajustada_se_declara_intacta(
             self, client, db, ub_picking, almacen, producto, h):

@@ -1914,6 +1914,14 @@
       <div id="inv-bloqueados-lista" style="min-height:40px;"></div>
       <div style="font-size:13px;font-weight:700;color:var(--tx);margin:18px 0 6px;">🏷 Mercancía sin código</div>
       <div id="inv-novedades-lista" style="min-height:40px;"></div>
+      <!-- Pedidos recogidos que no salieron: sin la declaración de regreso,
+           sus productos quedan fuera del plan de conteo (conteo.js). -->
+      <div style="font-size:13px;font-weight:700;color:var(--tx);margin:18px 0 6px;">📦 Recogido sin despachar</div>
+      <div style="font-size:12px;color:var(--tx3);margin-bottom:8px;line-height:1.5;">
+        Pedidos que se recogieron y no salieron: el empaque se canceló sin remisión o nunca se empacó.
+        Mientras no confirmes que la mercancía volvió al estante, esos productos no se programan para contar.
+      </div>
+      <div id="inv-recogido-lista" style="min-height:40px;"></div>
     </div>
 
     <!-- Modal Conteo Definitivo — escaneo + confirmación -->
@@ -3825,7 +3833,7 @@
   <script defer src="/static/pwa/recepcion.js?v=20260923esc"></script>
   <script defer src="/static/pwa/rutas.js?v=20260923esc"></script>
   <script defer src="/static/pwa/traslados.js?v=20260923esc"></script>
-  <script defer src="/static/pwa/conteo.js?v=20260923esctol"></script>
+  <script defer src="/static/pwa/conteo.js?v=20260923ciclo"></script>
   <script defer src="/static/pwa/reposicion.js?v=20260923esc"></script>
   <script defer src="/static/pwa/liquidacion.js?v=20260923esc"></script>
   <script defer src="/static/pwa/layout.js?v=20260921a"></script>

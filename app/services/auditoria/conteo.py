@@ -325,3 +325,72 @@ def ningun_ajuste_con_salidas_no_pos(ctx=None):
         and s.salida_sin_conf_siesa is not None and s.cant_pos_siesa is not None
         and s.salida_sin_conf_siesa != s.cant_pos_siesa
     ]
+
+
+#: Qué raíz necesita cada miembro vivo de la cadena para que su conteo llegue a
+#: algún lado: la propagación de `ConteoService.registrar_conteo` solo mueve una
+#: raíz que lo está esperando.
+_RAIZ_QUE_ESPERA = {'CC2': 'SEGUNDO_CONTEO', 'CC3': 'TERCER_CONTEO'}
+
+
+@invariante(
+    codigo='CNT-09',
+    flujo='conteo',
+    frontera='miembro de la cadena → raíz',
+    consecuencia='La cadena de conteo quedó sin salida: la raíz espera un '
+                 'conteo que ya no va a llegar —y como sigue «en curso», el '
+                 'generador nunca vuelve a programar ese hueco—, o un conteo '
+                 'vivo trabaja para una raíz que ya cerró y lo que cuente no '
+                 'llega a ningún lado.',
+    severidad=BLOQUEA,
+    detector_ciego='tests/test_conteo_cadena_con_salida.py::TestCNT09::test_ve_la_raiz_esperando_un_cc2_cancelado',
+)
+def ninguna_cadena_queda_sin_salida(ctx=None):
+    """La raíz (CC1) avanza cuando su hijo resuelve: SEGUNDO_CONTEO espera a un
+    CC2 vivo, TERCER_CONTEO a un CC3 vivo. Si el eslabón que espera terminó
+    (cancelado, cerrado) o no existe, nadie la va a mover. Y al revés: un CC2 o
+    CC3 vivo bajo una raíz que no lo espera cuenta para nada.
+
+    **Qué escribe lo que se compara, y puede el camino roto escribirlo igual:**
+    el estado de la raíz lo escribe la propagación, y el del hijo quien lo
+    cierra o cancela. El camino roto —cancelar solo un eslabón, corregir la
+    raíz hasta MATCH con un hijo vivo— deja precisamente el par incoherente;
+    no hay forma de que lo escriba coherente sin pasar por la regla
+    (`ConteoService.cancelar_cadena`, `corregir_cantidad`).
+    """
+    from app.models.conteo import EstadoConteo
+    from app.services.conteo_service import ConteoService
+    vivos = set(EstadoConteo.MIEMBRO_VIVO)
+    out = []
+
+    # 1 · Raíces esperando un eslabón que ya no está vivo.
+    for raiz in _sesiones(('SEGUNDO_CONTEO', 'TERCER_CONTEO')):
+        if raiz.es_segundo_conteo:
+            continue
+        cc2 = raiz.hijo_conteo
+        esperado = cc2 if raiz.estado == 'SEGUNDO_CONTEO' else (cc2.hijo_conteo if cc2 else None)
+        nivel = 'CC2' if raiz.estado == 'SEGUNDO_CONTEO' else 'CC3'
+        if esperado is None or esperado.estado not in vivos:
+            out.append(Hallazgo(
+                referencia=raiz.codigo or f'conteo#{raiz.id}',
+                detalle=(f'raíz en {raiz.estado} esperando su {nivel}, que '
+                         + (f'está {esperado.estado} ({esperado.codigo})' if esperado
+                            else 'no existe')),
+                datos={'producto': raiz.producto_codigo_siesa, 'almacen_id': raiz.almacen_id},
+            ))
+
+    # 2 · Eslabones vivos que su raíz ya no espera.
+    for s in _sesiones(tuple(vivos)):
+        if not s.es_segundo_conteo:
+            continue
+        nivel = ConteoService.nivel_en_cadena(s)
+        raiz = ConteoService._raiz_de(s)
+        if raiz is s or raiz.estado != _RAIZ_QUE_ESPERA[nivel]:
+            out.append(Hallazgo(
+                referencia=s.codigo or f'conteo#{s.id}',
+                detalle=(f'{nivel} {s.estado} bajo una raíz en '
+                         f'{raiz.estado if raiz is not s else "(sin raíz)"} '
+                         f'({raiz.codigo}): lo que se cuente no llega a ningún lado'),
+                datos={'producto': s.producto_codigo_siesa, 'almacen_id': s.almacen_id},
+            ))
+    return out

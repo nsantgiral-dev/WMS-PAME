@@ -495,7 +495,7 @@ class TestMovimientoContinuo:
         assert 'se está vendiendo mientras contás' in r['mensaje']
         s = _sesion(db, sid)
         assert (s.estado, s.motivo_bloqueo) == ('BLOQUEADO', 'MOVIMIENTO_CONTINUO')
-        assert [d['motivo'] for d in s.lista_conteos_descartados()] == ['MOVIMIENTO'] * 3
+        assert [d['motivo'] for d in s.lista_conteos_descartados()] == ['MOVIMIENTO_SIESA'] * 3
         assert s.hijo_conteo is None and _jobs(sid) == []
         (fila,) = [b for b in _svc().listar_bloqueados() if b['id'] == sid]
         assert fila['motivo_bloqueo'] == 'MOVIMIENTO_CONTINUO'

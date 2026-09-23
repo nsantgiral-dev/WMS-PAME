@@ -77,6 +77,22 @@ class TareaPicking(db.Model):
     fecha_inicio = db.Column(db.DateTime)
     fecha_completado = db.Column(db.DateTime)
 
+    #: **La mercancía recogida volvió al estante** (m032ciclo), declarado por
+    #: el líder (`PickingService.declarar_devuelto_al_estante`). Es la salida
+    #: con fecha que le faltaba a la guarda de «mercancía en proceso» del
+    #: conteo (`ConteoService._en_proceso_por_picking`): un pedido recogido
+    #: cuyo empaque se canceló sin remisión —o que nunca se empacó— no tenía
+    #: ningún instante que dijera si la mercancía volvió, y sacaba el SKU del
+    #: plan de conteo para siempre.
+    #:
+    #: **No mueve inventario**: solo fecha el regreso. El WMS descontó la
+    #: ubicación al confirmar el picking; en `SIESA-GENERAL` la próxima
+    #: sincronización con Siesa la repone (Siesa nunca la descontó), en un
+    #: hueco físico queda a cargo del líder.
+    devuelto_estante_at = db.Column(db.DateTime, nullable=True)
+    devuelto_estante_por_id = db.Column(db.Integer, db.ForeignKey('usuarios.id'), nullable=True)
+    devuelto_estante_nota = db.Column(db.Text, nullable=True)
+
     __table_args__ = (
         # La guarda de «mercancía en proceso» del conteo pregunta por SKU ×
         # almacén (`ConteoService.procesos_en_curso`). Migración m031.
