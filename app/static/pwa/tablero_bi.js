@@ -248,6 +248,15 @@ async function biCargarPendientes() {
   }
 }
 
+/** Un agotado sin precio de venta no vale $0: no se sabe cuánto vale. El
+ *  servidor no lo suma y lo declara (`sin_precio`, `total_es_cota_inferior`);
+ *  la pantalla solo lo dice. */
+function _biSinPrecioHtml(kpi) {
+  const sp = (kpi && kpi.sin_precio) || {};
+  if (!sp.eventos) return '';
+  return `<div style="font-size:12px;color:var(--tx3);margin:4px 0 8px;">⚠ El total es un piso: ${esc(sp.eventos)} agotado(s) (${esc(sp.unidades)} und) no tienen precio de venta y no están sumados.</div>`;
+}
+
 async function biCargarVentaPerdida() {
   const kpiEl = document.getElementById('bi-kpi');
   const descEl = document.getElementById('bi-desglose');
@@ -273,6 +282,7 @@ async function biCargarVentaPerdida() {
       <div style="display:grid;grid-template-columns:1fr;gap:10px;margin-bottom:6px;">
         <div class="kpi-card"><div class="kpi-valor">${biMoneda(kpi.venta_perdida_total)}</div><div class="kpi-label">Venta perdida en el rango</div></div>
       </div>
+      ${_biSinPrecioHtml(kpi)}
       ${biUltimaActualizacion()}`;
     descEl.innerHTML = biBadges(
       Object.fromEntries(Object.entries(kpi.por_categoria || {}).map(([k, v]) => [k, biMoneda(v)]))
@@ -282,11 +292,11 @@ async function biCargarVentaPerdida() {
     listaEl.innerHTML = det.items.length ? det.items.map(ev => `
       <div class="tabla-fila">
         <div>
-          <div class="tabla-nombre">${ev.producto_codigo || ('SKU ' + ev.producto_id)} — ${esc(ev.producto_nombre || '')}</div>
+          <div class="tabla-nombre">${esc(ev.producto_codigo || ('SKU ' + ev.producto_id))} — ${esc(ev.producto_nombre || '')}</div>
           <div style="font-size:11px;color:var(--tx3);">${esc(ev.pedido_siesa_ref || 'Sin pedido')} · ${esc(ev.categoria_producto || 'Sin categoría')} · ${biFechaHora(ev.creado_en)}</div>
         </div>
         <div style="text-align:right;">
-          <div style="font-weight:700;">${biMoneda(ev.cantidad_faltante * ev.precio_venta_capturado)}</div>
+          <div style="font-weight:700;">${ev.precio_venta_capturado == null ? 'sin precio' : biMoneda(ev.cantidad_faltante * ev.precio_venta_capturado)}</div>
           <div style="font-size:11px;color:var(--tx3);">${esc(ev.cantidad_faltante)} und</div>
         </div>
       </div>`).join('')
