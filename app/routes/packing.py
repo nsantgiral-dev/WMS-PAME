@@ -114,12 +114,17 @@ def listar_tareas():
     # Una sola query para todos los pickings de la página — sin N+1
     numeros = [t.numero_pedido_siesa for t in tareas.items]
     picking_listo_map, picking_bloqueado_map = _picking_listo_batch(numeros)
+    # Retenido por cartera en el cierre: la caja queda VERIFICADA sin Siesa y
+    # no es un «Reintentar Siesa» (`cartera_service.compuerta_cierre`).
+    from app.services.cartera_service import resumen_por_pedido as _retenidos_cartera
+    retenidos = _retenidos_cartera([n for n in numeros if n])
 
     items = []
     for t in tareas.items:
         d = t.to_dict()
         d['picking_listo'] = picking_listo_map.get(t.numero_pedido_siesa, True)
         d['picking_bloqueado'] = picking_bloqueado_map.get(t.numero_pedido_siesa, False)
+        d['retencion_cartera'] = retenidos.get(t.numero_pedido_siesa)
         items.append(d)
 
     return jsonify({

@@ -301,13 +301,17 @@ class TestEvaluar:
         assert _codigos(ev) == {cs.SIN_CUPO}
 
     def test_maestro_de_otra_compania_se_declara_y_no_retiene(self, db, fake):
-        fake.cliente(cupo=2_000_000, cia=1)
-        fake.cliente(cupo=15_000_000, cia=2)
+        # Como en QA: la fila de la compañía 2 trae el cupo viejo. Aunque
+        # fuera la más reciente, no es de esta compañía (Regla 2).
+        fake.cliente(cupo=2_000_000, cia=1, ts='2024-01-01T00:00:00')
+        fake.cliente(cupo=15_000_000, cia=2, ts='2026-06-01T00:00:00')
         ev = cs.evaluar(NIT, '001', 1_000_000, 'C04')
         assert ev['decision'] == cs.PASA
         dup = [m for m in ev['motivos'] if m['codigo'] == cs.MAESTRO_DUPLICADO]
         assert dup and dup[0]['retiene'] is False
         assert ev['cupo'] == pytest.approx(2_000_000), 'se usó el cupo de otra compañía'
+        assert ev['maestro']['otras_companias'][0]['cupo'] == pytest.approx(15_000_000)
+        assert ev['maestro']['duplicado_misma_cia'] == []
 
     def test_duplicado_en_la_misma_compania_usa_la_fila_mas_reciente(self, db, fake):
         fake.cliente(cupo=5_000_000, ts='2024-01-01T00:00:00')
@@ -696,6 +700,18 @@ class TestCompuertaCierre:
             res2 = PedidoPackingCloser().ejecutar_cierre(t.id, [], 0)
         assert res2.exitoso, res2.error
         assert SiesaJob.query.filter_by(tipo='DESPACHO_F470').count() == 1
+
+
+    def test_el_packing_muestra_la_retencion_y_no_un_fallo_de_siesa(self, app, client, db,
+                                                                     fake, almacen):
+        fake.cliente(cupo=0)
+        _historia(db, '003-PD-404')
+        t = _tarea(db, almacen, '003-PD-404', cond='C04')
+        cs.compuerta_cierre(t)
+        db.session.commit()
+        d = client.get('/api/packing/?activas=true', headers=_jwt(app, _usuario(db))).get_json()
+        x = next(y for y in d['tareas'] if y['id'] == t.id)
+        assert x['retencion_cartera']['motivos'] == [cs.SIN_CUPO]
 
 
 class TestCompuertaEmision:

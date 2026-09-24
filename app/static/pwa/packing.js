@@ -124,7 +124,10 @@ function empRenderListaTareas() {
         const pickingListo = t.picking_listo !== false;
         const pedidoAnulado = t.pedido_anulado_siesa === true;
         const _puedeCancelarPacking = OPERARIO && ['admin', 'supervisor'].includes(OPERARIO.rol);
-        const siesaFallo = t.estado === 'VERIFICADO' && !t.siesa_triggered && !pedidoAnulado;
+        // Retenido por cartera en el cierre: no es un fallo de Siesa. Lo libera
+        // cartera; después se cierra desde la cola de pedidos.
+        const retenidoCartera = !!t.retencion_cartera && !t.siesa_triggered;
+        const siesaFallo = t.estado === 'VERIFICADO' && !t.siesa_triggered && !pedidoAnulado && !retenidoCartera;
         const enProceso = t.estado === 'EN_PROCESO';
         const bloqueado = (!pickingListo && t.estado === 'PENDIENTE') || pedidoAnulado;
         // Una tarea BLOQUEADA (backorder Siesa, faltante, avería...) no se
@@ -134,7 +137,7 @@ function empRenderListaTareas() {
         const enAuditoria = bloqueado && !pedidoAnulado && t.picking_bloqueado === true;
         const color = pedidoAnulado ? 'var(--red)' : enAuditoria ? '#c084fc' : bloqueado ? '#6b7280' : siesaFallo ? '#fca5a5' : enProceso ? '#93c5fd' : '#facc15';
         const bg    = pedidoAnulado ? 'var(--rbg)' : enAuditoria ? '#2e1065' : bloqueado ? '#1a1a1a'  : siesaFallo ? '#7f1d1d'  : enProceso ? '#1e3a5f' : '#713f12';
-        const label = pedidoAnulado ? '🚫 PEDIDO ANULADO EN SIESA' : enAuditoria ? '🔍 En auditoría' : bloqueado ? 'Esperando picking' : siesaFallo ? '⚠ Reintentar Siesa' : enProceso ? 'En proceso' : 'Pendiente';
+        const label = retenidoCartera ? '⛔ Retenido por cartera' : pedidoAnulado ? '🚫 PEDIDO ANULADO EN SIESA' : enAuditoria ? '🔍 En auditoría' : bloqueado ? 'Esperando picking' : siesaFallo ? '⚠ Reintentar Siesa' : enProceso ? 'En proceso' : 'Pendiente';
         const anulado_banner = pedidoAnulado ? `
           <div style="margin-top:10px;background:var(--rbg);border:1px solid var(--rbrd);border-radius:8px;padding:10px 12px;">
             <div style="font-size:var(--fs-xs);font-weight:700;color:var(--red);margin-bottom:4px;">🚫 Pedido anulado en Siesa (estado ${esc(t.pedido_estado_siesa_detectado || '9')})</div>
@@ -172,7 +175,8 @@ function empRenderListaTareas() {
           ${total > 0 ? `<div style="margin-top:10px;background:var(--bg-input);border-radius:8px;height:6px;overflow:hidden;">
             <div style="height:100%;background:#4ade80;width:${pct}%;border-radius:8px;transition:width 0.3s;"></div>
           </div>` : ''}
-          <span class="emp-task-badge" style="background:${bg};color:${color};">${label}</span>
+          <span class="emp-task-badge" style="${retenidoCartera ? 'background:var(--warn-bg);color:var(--warn-tx);' : `background:${bg};color:${color};`}">${label}</span>
+          ${retenidoCartera ? `<div style="margin-top:6px;font-size:var(--fs-xs);color:var(--warn-tx);">${esc(t.retencion_cartera.resumen || '')}</div>` : ''}
           ${anulado_banner}
           ${limpiarBtn}
         </div>`;

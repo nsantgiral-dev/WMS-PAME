@@ -31,6 +31,7 @@ flota.js        (2,198)         Custodia de vehículos, ficha, documentos, aviso
 flota_analitica.js              Sub-tab de analítica de flota (15 paneles, sin canvas) + despachador de sub-pestañas
 flota_bandeja.js                Bandeja de flota: Hoy · Pendientes · Señales · Vehículos (GET /flota/bandeja)
 kardex.js         (446)         Motor kardex
+cartera.js                      Bloque «Retenidos por cartera» del tablero + respaldo en el WMS (autorizar / contado / re-evaluar)
 temporada.js      (365)         Temporada escolar
 ```
 
@@ -183,6 +184,7 @@ recibe por parámetro.
 > viva. Ver «Specs DOCX del Consultor → Cobertura del lado LECTURA» antes de
 > tocar cualquier conector de esta tabla.
 | papeleriamedellin_WMS_Vendedor_Contacto | `get_vendedor_contacto()` | Nombre + teléfono real del asesor (JOIN T210×T200×T015), para mostrárselo al conductor en pago parcial |
+| API_v2_Clientes | `cartera_service.FuenteSiesa.clientes()` | Maestro de clientes por NIT (cupo, gracia, bloqueos) para la retención de cartera. **Sin contrato** en `docs/siesa-specs/`: campos descubiertos en vivo (2026-09-24). Trae **las dos compañías** (`f201_id_cia`) |
 
 ---
 
@@ -5002,3 +5004,252 @@ riesgo $0 con amarillo hasta $1.000.000, nivel de servicio ≥ 92 %, venta
 perdida $0 con amarillo hasta $100.000 por día, exactitud ≥ 95 %.
 Se cambian en `analitica_kpi._CATALOGO`; el semáforo, la portada, el
 Recorrido y Diagnóstico las leen de ahí.
+
+## Retención de cartera — mora y cupo antes de despachar a crédito real (2026-09-24)
+
+**Regla del dueño.** Solo aplica a pedidos de **crédito real** (`cond_pago.
+cobro_contraentrega(cond)['cobrar'] is False`: > 15 días, días conocidos).
+Contado (≤ 15 días, y todo lo supuesto) **siempre sale**: se cobra al entregar.
+Un pedido a crédito no se despacha si el cliente tiene **cualquier** factura
+vencida (saldo > `CARTERA_TOLERANCIA_SALDO`, $5.000; sin umbral de 30 días),
+si no tiene cupo asignado, si con lo que ya debe lo supera, o si tiene un
+**acuerdo de pago vigente** con cartera (sale solo de contado). Los clientes
+**institucionales** (licitaciones, colegios, entidades) no se retienen por mora;
+el cupo sí les aplica. La excepción la da un **usuario de cartera, con motivo y
+nombre**, desde el Gestor de Cartera; quien inició el pedido no puede
+autorizarlo.
+
+**Por qué el WMS necesita su propia compuerta** (medido en vivo contra Siesa QA,
+solo GET): Siesa retiene por cupo/mora al aprobar, pero el mismo usuario libera
+en ~4 s y sin motivo; 15 de 18 pedidos a crédito de clientes con vencidas no
+quedaron retenidos.
+
+### Una política, una función — `app/services/cartera_service.evaluar`
+
+`evaluar(nit, sucursal, valor, cond, contexto) → {decision: PASA|RETIENE,
+motivos[], vencidas_n, vencido, vencido_neto, saldo_a_favor, dias_max, cupo,
+saldo, consumo_wms, disponible, exceso, as_of, origen, canal, ...}`. Nada de
+ella escribe: las retenciones son de las compuertas.
+
+| Motivo (código) | Cuándo | ¿Retiene? |
+|---|---|---|
+| `MORA` | ≥ 1 fila con saldo > tolerancia y hoy (Bogotá) > vencimiento real + gracia de la sucursal | sí |
+| `MORA_EXENTA` | lo mismo, canal `INSTITUCIONAL` (dato del Gestor) | no, declarado. **Sin canal no se exime** |
+| `SIN_CUPO` | cupo 0/nulo, o el NIT no está en el maestro de esta compañía | sí |
+| `CUPO_EXCEDIDO` | `cupo − saldo − consumo_wms − valor < 0` (cupo exacto pasa) | sí |
+| `VALOR_DESCONOCIDO` | con cupo, pero no se pudo calcular el valor del pedido | sí |
+| `ACUERDO_VIGENTE` | el Gestor declaró un acuerdo de pago vigente | sí (la salida natural es convertir a contado) |
+| `SIN_DATO` | Siesa no respondió y no hay foto de < 24 h | sí (crédito); contado pasa |
+| `MAESTRO_DUPLICADO` | el maestro trae más de una fila para el NIT | **nunca**, declarado |
+
+Una **excepción vigente** del Gestor (`habilitaciones`) con `tope ≥ valor`
+deja pasar (salvo `ACUERDO_VIGENTE`). En `CARTERA_COMPUERTA=INFORMA` evalúa,
+loguea `habria_retenido` y deja pasar; un valor ilegible **no apaga** la
+compuerta (queda RETIENE, declarado).
+
+**El «maestro duplicado» era multicompañía.** `API_v2_Clientes` devuelve las
+filas de `f201_id_cia` 1 **y** 2: de 3.783 NIT+sucursal, 2.217 tienen fila en
+las dos; dentro de la compañía 1 no hay ni un duplicado. Los cupos viejos viven
+en la 2 (135 clientes con cupo) y en la 1 solo 25. Se usa la fila de
+`SIESA_ID_CIA` (Regla 2); la de la otra compañía se declara con su cupo — es la
+explicación probable de «tenía cupo y ahora no». Un duplicado de verdad en la
+misma compañía usa la fila más reciente (`f201_ts`) y se declara.
+
+**Cupo del NIT** = suma de los cupos de sus sucursales en la compañía propia;
+**saldo** = todo el NIT. **Mora** por fila, de cualquier sucursal.
+
+### Qué cuenta como deuda — clasificación de las FE del WMS
+
+La cartera se lee por NIT (`API_v2_CxC_General`, `f353_fecha_cancelacion IS
+NULL AND f253_id LIKE '1305%'` — 1 página, ~0,5 s; la misma que la foto
+diaria). Cada fila de una FE del WMS (cruzada por **factura**, `fe_tipo` +
+`fe_consec`) se clasifica con su parada:
+
+| Clase | Qué es | Cuenta |
+|---|---|---|
+| `EN_RUTA` | FE del WMS sin entrega confirmada | sí, con su **vencimiento real** |
+| `EN_CAJA` | el conductor cobró (trato CONTADO) y el RC no se aplicó, o se aplicó hace < 48 h | **no**: se resta lo cobrado + descuento + retenciones (plata del conductor; el rezago de liquidación ya alerta) |
+| `RESIDUO` | RC aplicado y lo que queda ≤ retenciones + descuento + tolerancia | no |
+| `DEVUELTA` | RECHAZADO (la mercancía volvió), o PARCIAL con la NC creada | no |
+| `DEUDA` | ENTREGADO_SIN_PAGO, crédito real o autorizado, crédito no autorizado, el resto de un parcial sin NC, y toda FE ajena al WMS | sí |
+| `A_FAVOR` | saldo negativo (NC sin aplicar, anticipo) | resta del saldo; `vencido_neto` lo descuenta |
+
+**Vencimiento real**: FE del WMS → `cond_pago.vencimiento_fe(f353_fecha,
+codigo_vigente(tarea))` (contado +15, crédito +días). Las emitidas antes del
+2026-09-24 vencen a +30 fijo en Siesa: artefacto, no se usa. FE ajena →
+`f353_fecha_vcto`.
+
+**`consumo_wms`**: pedidos de crédito real del mismo NIT (por
+`pedidos_historia.cliente_id`) con packing vivo cuya FE todavía no está en la
+cartera leída: `valor_factura` o, sin ella, el valor pendiente de la historia.
+Sin esto, dos pedidos seguidos ven el mismo cupo libre.
+
+**Foto** (`cartera_cliente`): cada lectura completa se guarda por NIT; si Siesa
+no responde (o es de noche: fuera de 6:00–20:00 no se le pregunta, Regla 14),
+vale la foto de < 24 h. Dentro de 2 min no se relee el mismo NIT.
+
+### Las compuertas
+
+| | Dónde | Qué hace si retiene |
+|---|---|---|
+| **G1** `compuerta_inicio` (context manager) | `POST /api/siesa/iniciar-despacho`, antes del backorder y del picking | 409 `retenido_por_cartera` + retención; no se crea nada. **Lock de sesión por NIT** (`RANGO_CARTERA_NIT`, `advisory_lock`) sostenido por el `with` hasta crear el packing; otro despacho del mismo cliente en curso → 409 «se está evaluando» |
+| **G2** `compuerta_cierre` | `PedidoPackingCloser.ejecutar_cierre`: evalúa antes del lock pesimista, aplica después de crear los bultos | la caja queda **VERIFICADA con sus bultos**, sin job; `CierreResult` con el motivo. Liberada, la cola ofrece «Cerrar caja» (`carteraCerrarLiberado`, cierre sin bultos nuevos) |
+| **EMISIÓN** `compuerta_emision` | `DespachoParialService.despachar_parcial`, con la **cabecera de Siesa** en la mano, antes del 244328 | `RetenidoPorCartera` (subclase de `DependenciaPendiente`: el DLQ espera sin gastar reintento; resolver adelanta el job). Carril admin → 409 |
+| **G3** `informe_de_tarea` | `RutaService._informe_de_cobro` (iniciar cargue / despachar) | solo informa: autorizado, convertido a contado, retención viva |
+
+G1/G2 leen la condición anotada (historia del pedido); **la emisión lee la que
+la FE va a llevar de verdad**: una condición que era supuesta (sin dato → pasa
+como contado) y la cabecera desmiente (C04) se evalúa ahí. Una decisión
+tomada (`tareas_packing.cartera_decision`: PASA | AUTORIZADO | CONTADO |
+NO_APLICA) no se vuelve a preguntar en un reintento del cierre.
+
+`facturar_remision_existente` y `facturar_rm_con_consec` (la RM ya existe:
+retener la FE no devuelve la mercancía) solo aplican `cabecera_para_factura`
+— la conversión a contado.
+
+### Resolver una retención
+
+| Acción | Efecto | Bitácora |
+|---|---|---|
+| **Autorizar** | AUTORIZADO; cubre hasta `tope_valor` (obligatorio) y `vence_en` (≤ 30 días; sin dato, +30); `codigo_excepcion` E1/E2a/E2b/E2c/E3/E4 opcional. **En G2, si lo empacado supera el tope, vuelve a retener** | `FORZAR`, `origen='gestor_cartera'` con el usuario del Gestor en `despues` |
+| **Convertir a contado** | CONVERTIDO_CONTADO; la FE sale en `SIESA_COND_PAGO_RUTA` (C02): `cabecera_para_factura` cambia `f430_id_cond_pago`, el gateway la manda en `F461_ID_COND_PAGO` y la vence a 15 días; la tarea queda con `cond_pago_fe='C02'` (snapshot contado, `difiere_del_pedido` lo declara). Sin condición de ruta configurada → 409 | `EDITAR` con `clasif_origen: 'CARTERA'` en `despues` |
+| **Re-evaluar** | relee Siesa; si ya no retiene → LIBERADO_PAGO (el pedido se vuelve a intentar) | — |
+| **Cancelar** (barrido) | el packing se canceló o el pedido se anuló en Siesa | `CANCELAR` |
+
+Quien inició el pedido no puede autorizarlo: se compara el `usuario` del Gestor
+(`username`/`email`/`nombre`) contra el usuario del WMS que tocó «Aprobar»
+(`tareas_packing.despacho_iniciado_por_id`) y contra el creador en Siesa
+(`f430_usuario_creacion`); en el WMS, además, por id. **Barrido** cada 30 min
+(7:00–19:30 Bogotá, esencial, `LOCK_CARTERA_BARRIDO` 2022): una lectura por NIT
+retenido; retenido > 3 días → log, `alertas` en la salud y advertencia en
+`/api/health/siesa`.
+
+### La API para el Gestor de Cartera — contrato (`app/routes/cartera.py`)
+
+Autenticación **`Authorization: Bearer <CARTERA_GESTOR_TOKEN>`** con
+`hmac.compare_digest` (`exige_token_servicio`); sin la variable → 503; token
+en la URL no sirve. **`Idempotency-Key` obligatoria en todo POST**: la misma
+clave devuelve la misma respuesta con `idempotente: true`; usada en otra
+operación → 409; solo se guarda lo exitoso. Retención ya resuelta → 409 con
+`estado`. `usuario` es un objeto `{username, nombre, email, rol, sistema}`.
+NIT sin dígito de verificación (se normaliza `900123456-7`); sucursal como
+`f201_id_sucursal`. Las lecturas **nunca devuelven una lista vacía ante un
+error**: 503 con el texto.
+
+| Método y ruta | Cuerpo / query | Respuesta |
+|---|---|---|
+| `GET /api/cartera/retenciones` | `estado`, `nit`, `cambiados_desde` (ISO; incluye resueltas), `limite` (≤ 500) | `{retenciones[], cursor, politica{version, parametros}, generado_en}` |
+| `GET /api/cartera/retenciones/<id>` | — | `{retencion}` |
+| `POST /api/cartera/retenciones/<id>/autorizar` | `{usuario, motivo, tope_valor, vence_en?, codigo_excepcion?}` | `{retencion}` |
+| `POST /api/cartera/retenciones/<id>/convertir-contado` | `{usuario, motivo}` | `{retencion}` |
+| `POST /api/cartera/retenciones/<id>/reevaluar` | `{usuario?}` | `{retencion}` |
+| `POST /api/cartera/habilitaciones` | `{usuario, nit, sucursal?, canal, acuerdo_vigente, acuerdo_vence?, excepciones[{codigo, tope, vence}], as_of}` o `{usuario, clientes: [...]}` | `{guardadas[], n}`. Una habilitación con `as_of` más viejo no pisa la guardada |
+| `GET /api/cartera/salud` | — | modo, retenidos por antigüedad, alertas, frescura de la foto, habilitaciones, `gestor_token_configurado` |
+
+Cada retención: `id, estado, compuerta, pedido, pedido_clave, cliente, nit,
+sucursal, vendedor, cond_pago, dias_credito, valor, motivos[{codigo, texto,
+retiene, …cifras}], motivos_codigos, resumen, vencidas[{documento, fecha, vence,
+vence_siesa, dias, saldo, cuenta, clase, wms, pedido}], vencido, vencido_neto,
+saldo_a_favor, dias_max, cupo, saldo, consumo_wms, pedidos_wms, disponible,
+exceso, canal, habilitacion, as_of, origen_dato, politica, iniciado_por{id,
+nombre, email}, siesa_usuario_creacion, contexto_siesa (retenido_cupo/mora/…,
+usuario_retenido, usuario_aprobacion_cart…), creada_en, actualizada_en,
+antiguedad_horas, resolucion, reevaluaciones`.
+
+**Respaldo en el WMS** (`/api/cartera/panel/*`, JWT): ver con gestión o el
+permiso; decidir solo con **`puede_autorizar_cartera`** (casilla por persona en
+Usuarios, nace apagada, ni el admin la tiene por rol; conductor y tienda
+nunca). Bloque «⛔ Retenidos por cartera» en el tablero (`cartera.js`), etiqueta
+en la cola de pedidos y en packing. `GET/POST /api/cartera/panel/credito-lote`
+(`_solo_admin`): autoriza en lote, con un motivo común y bitácora por parada,
+las paradas `credito_no_autorizado` confirmadas **antes** de
+`CONTADO_DESPLIEGUE_FECHA` (sin la variable → 409, no se adivina).
+
+### Variables
+
+| Variable | Defecto | Qué es |
+|---|---|---|
+| `CARTERA_COMPUERTA` | `RETIENE` | `INFORMA` para el arranque |
+| `CARTERA_TOLERANCIA_SALDO` | `5000` | Saldo mínimo de una vencida |
+| `CARTERA_GESTOR_TOKEN` | — | Secreto con el Gestor. Sin él, 503 |
+| `CONTADO_DESPLIEGUE_FECHA` | — | Día de m043contado en producción, para el lote |
+
+Migración **`m044cartera`** (down `m043contado`, aditiva, sin backfill): cuatro
+tablas (`retenciones_cartera`, `cartera_cliente`, `cartera_habilitaciones`,
+`cartera_idempotencia` — las cuatro OPERATIVAS en el acta de corte, sin FK;
+`cartera_cliente` REGENERABLE en la verificación de respaldo) +
+`tareas_packing.despacho_iniciado_por_id / cartera_decision / cartera_decidido_en`
++ `usuarios.puede_autorizar_cartera`.
+
+### Trinquetes y mutaciones
+
+- `tests/test_cartera_trinquete.py` (por AST sobre `app/`): toda función que
+  llama 244328/142945 llama `compuerta_emision`; toda la que llama 142943
+  llama `compuerta_emision` o `cabecera_para_factura`; toda la que crea el
+  picking de un pedido (`crear_tareas_con_compromiso`) llama
+  `compuerta_inicio` o solo la llaman funciones que la llaman; quien encola
+  `DESPACHO_F470` está declarado (el helper del closer, llamado solo desde
+  `ejecutar_cierre`, que llama `compuerta_cierre`; el legacy sin llamador).
+  Meta-tests (las tres escrituras, docstrings, comentarios, función anidada) y
+  pisos.
+- `tests/test_cartera_retencion.py` (94): mundo con `FakeSiesa`
+  (`cartera_service.usar_fuente`) — cada caso de la política, la
+  clasificación, las cuatro compuertas (G1 por HTTP con 409 y sin picking, G2
+  por el closer real, emisión con `despachar_parcial`), resolver, API, panel,
+  lote. `tests/test_cartera_js.py` (Node con `util.js` real).
+- `test_todo_endpoint_verifica_rol` ganó `_RUTAS_DE_SERVICIO` (inventario
+  exacto de las rutas con `exige_token_servicio`); las siete del Gestor están
+  en `DEUDA_SIN_UI` (las llama otro sistema).
+- **24 mutaciones, las 24 rojas** (cupo +1, EN_CAJA sin restar, institucional,
+  cupo 0, otra compañía, consumo del WMS, compuerta de emisión y de cierre
+  quitadas, iniciador autoriza, autorizar sin bitácora, tope ignorado en G2,
+  foto vieja, token sin comparar, sin idempotencia, gracia, FE del WMS con el
+  +30, acuerdo, conversión sin C02, `esc()` en el JS, G1 que no frena,
+  excepción sin tope, lote sin corte, NO_APLICA no re-evaluado, contado
+  evaluado).
+
+### Medido en QA (solo GET, 2026-09-24)
+
+Filtros verificados en vivo: `API_v2_Clientes` por `f200_id` (0,5 s),
+`API_v2_CxC_General` por NIT + abierta + 1305 (0,5 s), `API_v2_Ventas_Pedidos`
+por CO + tipo + consecutivo (1 s, trae `f430_ind_retenido_*`,
+`f430_usuario_creacion`, `f430_id_sucursal_pedido_fact`). Sobre los 270
+pedidos comprometidos de QA: 80 de crédito real, y de ellos **79 quedarían
+retenidos por mora y 79 por cupo 0** en la compañía 1 (los datos de QA tienen
+mora desde 2024). Ver «Decisiones abiertas».
+
+**`f201_id_tipo_cli` no sirve como canal**: `0001` mezcla ICBF, SENA y
+personas naturales; `0002` son personas naturales. El canal institucional
+viene del Gestor (`habilitaciones`); sin él no se exime.
+
+### Lo que NO cubre, dicho
+
+- **La carrera de dos pedidos del mismo NIT** está probada por el mecanismo (el
+  lock se toma con su clave y un lock ocupado da 409), no contra PostgreSQL:
+  en SQLite `advisory_lock` concede siempre.
+- **El valor del pedido** sale de `pedidos_historia` (neto × pendiente /
+  pedido); en G2, por línea × `min(1, empacado/esperado)`. Descuentos globales
+  del pedido no se prorratean aparte.
+- **PARCIAL sin NC** cuenta el resto como deuda aunque parte sea mercancía que
+  volvió (el WMS no separa «devuelto» de «pagó una parte» sin la NC).
+- **Retenciones en la emisión dentro del DLQ** dejan la tarea DESPACHADO en el
+  WMS hasta que cartera resuelva (el job espera). Solo pasa con jobs
+  anteriores a la compuerta o una condición supuesta que la cabecera
+  desmiente.
+- **Ninguna alerta por correo** del retenido > 3 días: log + salud + health.
+- **Modo INFORMA** no deja fila: lo que habría retenido solo va al log.
+- **No se re-cierra solo** una caja liberada: alguien toca «Cerrar caja».
+
+### Decisiones abiertas para el dueño
+
+1. **Cupos en la compañía 1**: solo 25 clientes tienen cupo; los 135 cupos
+   viven en la compañía 2. Con la regla «crédito real sin cupo → retiene», casi
+   todo el crédito real queda retenido desde el primer día. ¿Se cargan los
+   cupos en la compañía 1 antes de encender, o se arranca en
+   `CARTERA_COMPUERTA=INFORMA`?
+2. **¿Cupo por NIT (suma de sucursales) o por sucursal?** Hoy por NIT.
+3. **Institucionales y cupo**: hoy solo se eximen de la mora; el cupo les aplica.
+4. **¿Una caja liberada se cierra sola** (el Gestor autoriza y el WMS emite) o
+   la cierra una persona (hoy)?
+5. **`vence_en` y `codigo_excepcion`** opcionales en la autorización (sin
+   `vence_en`, 30 días). ¿Obligatorios?
