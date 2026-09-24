@@ -3491,5 +3491,14 @@ borrado de picking, que trabaja la Fase 0A.
 
 Tests: `test_cadena_pedido.py`, `test_pedidos_historia.py`,
 `test_recaudo_desenlace_siesa.py`, `test_fotos_siesa.py`,
-`test_siesa_filtro_fecha.py`, `test_acta_de_corte.py` (clase nueva). 21
-mutaciones, las 21 rojas.
+`test_siesa_filtro_fecha.py`, `test_acta_de_corte.py` (clase nueva),
+`test_conftest_sombras_gateway.py`. 22 mutaciones, las 22 rojas. Suite completa
+el 2026-09-24: **6930 passed, 0 failed**.
+
+**De paso, en `tests/conftest.py`:** `_sin_sombras_en_el_gateway` borra tras
+cada test las «sombras de método» del singleton `connekta` — el
+`setattr(connekta, '_get', <método original>)` con que `monkeypatch` restaura
+un parche de instancia, y que tapa los parches de CLASE de los tests
+siguientes (la lección del refactor del 2026-09-09, que no tenía limpieza). Era
+la causa de que `test_rechazo_siesa_no_es_pagina_vacia` fallara solo en la
+suite completa.
