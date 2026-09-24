@@ -641,6 +641,9 @@ class TestOtrasSenales:
         s = _senales(j, 'fuera_de_sede_frecuente')
         assert len(s) == 1
         assert s[0]['comparacion']['observado_comparable'] == 3
+        # tres cierres de turno, no cinco: re-declararse a la mañana siguiente
+        # (recoger el camión de la casa) no es cerrar un turno
+        assert s[0]['comparacion']['n_comparable'] == 3
         assert s[0]['evidencia'][0]['motivo'] == 'en la casa'
 
     def test_descuentos_en_la_puerta(self, db, mundo, monkeypatch):
