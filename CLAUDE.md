@@ -28,12 +28,13 @@ etiquetas.js      (110)         Impresión de etiquetas
 vigia.js          (513)         Panel CUSUM, alarmas, carga de series
 compras_ia.js     (394)         Acuerdos marco, Armador, deriva, inteligencia inventario
 flota.js        (2,198)         Custodia de vehículos, ficha, documentos, avisos, daños
-flota_analitica.js              Sub-tab de analítica de flota (15 paneles, sin canvas)
+flota_analitica.js              Sub-tab de analítica de flota (15 paneles, sin canvas) + despachador de sub-pestañas
+flota_bandeja.js                Bandeja de flota: Hoy · Pendientes · Señales · Vehículos (GET /flota/bandeja)
 kardex.js         (446)         Motor kardex
 temporada.js      (365)         Temporada escolar
 ```
 
-Orden de carga: util → app → picking → packing → recepcion → rutas → traslados → conteo → reposicion → liquidacion → layout → tienda → etiquetas → vigia → compras_ia → kardex → temporada → flota → flota_analitica. Todas las funciones son globales. Cross-module calls son runtime (onclick), nunca parse-time.
+Orden de carga: util → app → picking → packing → recepcion → rutas → traslados → conteo → reposicion → liquidacion → layout → tienda → etiquetas → vigia → compras_ia → kardex → temporada → flota → flota_analitica → flota_bandeja. Todas las funciones son globales. Cross-module calls son runtime (onclick), nunca parse-time.
 
 La lista autoritativa del orden real es el `SHELL` de `app/static/pwa/sw.js` —
 es la que el service worker cachea. Si esta tabla y ese arreglo divergen, el
@@ -3910,3 +3911,68 @@ pone rojo).
 
 Suite completa (2026-09-24, este worktree, sqlite): **7529 passed, 0 failed**
 (5 skipped, 19 xfailed) — 7528 + el test de arriba ya corregido.
+
+## Flota: la bandeja primero, el catálogo después (2026-09-24)
+
+`GET /flota/bandeja` (`VISTA_FLOTA`, `?almacen_id=` opcional) ←
+`flota/adaptadores/bandeja.py` ← `flota/dominio/senales.py` (puro) ←
+`app/static/pwa/flota_bandeja.js`. El tab Flota de `control_flota` y gestión
+abre en **Hoy · Pendientes · Señales · Vehículos · Analítica**; las cuatro
+primeras salen de UN viaje (antes: seis `fetch` en serie y `/flota/health` dos
+veces). `cargarFlota()` delega en la bandeja.
+
+| Sección | Qué trae | De dónde (no se recalcula nada) |
+|---|---|---|
+| Hoy | una fila por vehículo activo: «turno de Ana desde las 06:05», dónde, km y su confianza, inspección de hoy, ruta de hoy, **semáforo con su porqué** | `custodia_activa`, `odometro_actual`, `Inspeccion` del día, `RutaDespacho` |
+| Pendientes | papeles, **cola de daños de toda la flota** (Reparado / Aplazar / No era nada, solo si `puede_decidir` = `DECIDE_FLOTA`), km en duda, cierres forzados de la semana (fuga 11), turnos sin fotos de inicio (fuga 10), ficha, preventivo vencido | `MedidorSQL.documentos_por_vehiculo` / `custodias_por_vehiculo`, `verificacion.pendientes`, `diagnostico_de_la_flota` |
+| Señales | km en días sin ruta (fuga 4), km de una ruta vs la mediana de su ruta maestra, galones vs esperados y precio del galón (fuga 5), ruta de hoy con conductor/vehículo ≠ custodio (fuga 12) | `vigentes_tras_la_ultima_correccion`, `confianza_del_tramo`, `rendimiento_publicable_de`, `ventanas_lleno_a_lleno`, `precio_por_galon` |
+
+- **Semáforo**: rojo = no debería salir o hay que actuar hoy (papel vencido,
+  daño bloqueante o vencido, inspección no apta, ruta de hoy sin inspección
+  apta, preventivo vencido). Ámbar = trabajo con plazo **o no se sabe** (km sin
+  dato o en duda, papel sin cargar, sin turno, ficha incompleta). Verde dice
+  «sin pendientes conocidos», nunca «todo bien».
+- **Señales: tres estados**, `senal` / `normal` / `no_evaluable`. Sin dato no
+  hay señal y se publica por qué en `senales_no_evaluables` (tramo con km en
+  duda, ruta sin placa ese día, <5 recorridos de la ruta, rendimiento no
+  sostenible, <5 tanqueos para el precio). Los umbrales viajan en `umbrales`:
+  son a ojo, declarados, para fijarlos con un mes de bandeja.
+- **Proponen, no culpan** (regla 2 de flota): ninguna función del dominio
+  recibe una persona; el turno aparece como «contexto», y la pantalla lo dice
+  encima de las señales. «Abrir el caso» abre el expediente donde está la
+  evidencia; no crea nada.
+- **Expediente con pestañas** (Resumen · Daños · Gastos · Taller · Llantas ·
+  Preventivo · Documentos · Ficha) reutilizando los modales de siempre; en
+  cada `onclick` viajan solo posiciones.
+- La Salud se mudó a Analítica (con el mismo health, `flotaHealth()`, pedido
+  una vez); los avisos, `FLOTA_AVISOS` y los contadores técnicos
+  (`pendiente_sede`, lecturas del mismo segundo) al **Diagnóstico plegado**;
+  fuera de sede y todos los cierres forzados, a «Historial de turnos» plegado.
+  Rutas → la subpestaña «Flota» se llama **«Alta de vehículos»**.
+- **P0 arreglado**: `flotaAbrirFicha` reventaba con `ficha: null` (vehículo sin
+  ficha) y se quedaba en «Cargando…»: no se podía crear la primera ficha. La
+  clase —«un campo leído de un objeto que el servidor declara nullable»— tiene
+  trinquete: `test_ficha_primera_vez_js.py::TestTodoExpedienteAbreConUnVehiculoNuevo`
+  abre cada pantalla del expediente contra las respuestas **reales** del
+  servidor para un vehículo recién dado de alta, con inventario declarado.
+- De paso: `flotaBarrerAvisos` llamaba a `flotaTablero()`, que no existe;
+  `flotaBloqueDudosas` se retiró (sus filas están en Pendientes).
+
+Tests: `tests/flota/test_bandeja.py` (47, mundo armado con un caso por placa),
+`test_senales_dominio.py` (47), `test_bandeja_js.py` (38, Node + `util.js`
+real), `test_ficha_primera_vez_js.py` (17).
+
+**Lo que NO cubre, declarado:**
+- **Casi todas las señales de km duermen hoy en producción**: las lecturas sin
+  foto nacen `dudosa`, y un tramo en duda no se juzga. Van a
+  `no_evaluables` («verificalo primero»): se encienden verificando kilometrajes.
+- **Galones** necesita rendimiento publicable (≥6 ventanas y ≥60 días): en una
+  flota nueva, dos meses de tanqueos llenos.
+- **Sin memoria de casos**: una señal explicada vuelve a aparecer hasta que
+  sale de la ventana de 30 días. Una tabla de casos (abierto / explicado /
+  escalado) es la decisión abierta para el dueño; no se creó migración.
+- El almacén de un vehículo es la sede de su **último turno de sede**; uno que
+  nunca pasó por una sede no pertenece a ninguna (se cuenta, no se esconde).
+- Papeles y Custodia **siguen también en Analítica** (la decisión «tab
+  completo» de sus 15 paneles tiene tests); en Pendientes está la versión
+  accionable.

@@ -226,10 +226,23 @@ class TestLaPantallaDeFlotaFuncionaParaControlFlota:
 
         pwa = os.path.join(os.path.dirname(os.path.dirname(
             os.path.dirname(os.path.abspath(__file__)))), 'app', 'static', 'pwa')
-        with open(os.path.join(pwa, 'flota.js'), encoding='utf-8') as f:
-            js = f.read()
+
+        def leer(nombre):
+            with open(os.path.join(pwa, nombre), encoding='utf-8') as f:
+                return f.read()
+
         # Solo las que no llevan interpolación: las de placa se prueban aparte.
-        return sorted({u for u in re.findall(r"'(/api/[a-z/?=&_-]+)'", js)})
+        #
+        # Desde el 2026-09-24 la pantalla son TRES archivos: la bandeja
+        # (`flota_bandeja.js`) es la entrada del tab y la analítica despacha
+        # las pestañas. Leer solo `flota.js` dejaba afuera justo la primera
+        # llamada que hace el rol al entrar. De esos dos se miran también las
+        # `/flota/...`: son pantallas de gestión y control de flota enteras, a
+        # diferencia de `flota.js`, que además tiene la del conductor.
+        urls = set(re.findall(r"'(/api/[a-z/?=&_-]+)'", leer('flota.js')))
+        for nombre in ('flota_analitica.js', 'flota_bandeja.js'):
+            urls |= set(re.findall(r"'(/(?:api|flota)/[a-z/?=&_-]+)'", leer(nombre)))
+        return sorted(urls)
 
     def test_ninguna_devuelve_403(self, app, db, client):
         token = self._token_yesid(app, db)
@@ -252,7 +265,13 @@ class TestLaPantallaDeFlotaFuncionaParaControlFlota:
         problemas — y son cosas distintas.
         """
         urls = self._urls_que_llama_la_pantalla()
-        assert len(urls) >= 3, f'solo se extrajeron {len(urls)} URLs de flota.js'
+        # Eran tres de `/api/`; `/api/rutas/vehiculos` salió con la bandeja
+        # (la lista de vehículos viene en `/flota/bandeja`), y entraron la
+        # bandeja y el health. Las cuatro con nombre, para que el piso diga
+        # cuáles y no solo cuántas.
+        assert len(urls) >= 4, f'solo se extrajeron {len(urls)} URLs: {urls}'
+        for esperada in ('/api/almacenes/', '/flota/bandeja', '/flota/health'):
+            assert esperada in urls, (esperada, urls)
 
     def test_y_sigue_sin_poder_escribir(self, app, db, client):
         """Leer los maestros no es administrarlos: el alta sigue siendo de admin."""

@@ -386,3 +386,68 @@ class TestLaFichaDeUnVehiculoNuevoSeAbreDesdeLaBandeja:
             'leer': ['flota-recibo'],
         })
         assert 'Guardar ficha' in r['html']['flota-recibo']
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Trinquete: en un onclick de la bandeja solo viajan números
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# Se mide sobre lo PINTADO, no sobre el fuente: se renderizan las cuatro
+# pestañas y el resumen con una placa y un texto hostiles, y se exige que todo
+# `onclick` lleve solo posiciones. Un detector de texto sobre el `.js` ve
+# `${Number(f.pos)}` y no sabe si `f.pos` era un número; el pintado sí lo sabe.
+
+import re as _re
+
+_ONCLICK = _re.compile(r'onclick="(\w+)\(([^"]*)\)"')
+_SOLO_NUMEROS = _re.compile(r'^\s*(-?\d+|true|false)?(\s*,\s*(-?\d+|true|false))*\s*$')
+
+
+def _onclicks(html):
+    return _ONCLICK.findall(html)
+
+
+def _con_datos_hostiles():
+    malo = "X'); alert(1); ('"
+    return _bandeja(
+        hoy=[_fila(0, malo, 'rojo'), _fila(1, 'OK0001', 'verde')],
+        pendientes=[_dano(placa=malo)] + _bandeja()['pendientes'][1:],
+        senales=[_senal(placa=malo)])
+
+
+class TestEnUnOnclickSoloViajanNumeros:
+
+    @pytest.mark.parametrize('pestana', ['hoy', 'pendientes', 'senales', 'vehiculos'])
+    def test_ninguna_pestana_mete_un_dato_en_un_onclick(self, tmp_path, pestana):
+        html = _pintar(tmp_path, pestana, bandeja=_con_datos_hostiles())
+        html = html['html']['flota-contenido']
+        vistos = _onclicks(html)
+        assert vistos, 'el detector no vio ningún onclick: ¿cambió la forma?'
+        malos = [(fn, args) for fn, args in vistos if not _SOLO_NUMEROS.match(args)]
+        assert not malos, malos
+
+    def test_tampoco_el_resumen_del_expediente(self, tmp_path):
+        r = correr(tmp_path, {
+            'rutas': {'/flota/bandeja': _con_datos_hostiles()},
+            'operario': {'rol': 'admin'},
+            'pasos': [{'fn': 'cargarFlota'},
+                      {'fn': 'flotaExpediente', 'args': [0, 0]}],
+            'leer': ['flota-recibo'],
+        })
+        vistos = _onclicks(r['html']['flota-recibo'])
+        assert len(vistos) >= 5
+        assert all(_SOLO_NUMEROS.match(a) for _f, a in vistos), vistos
+
+    def test_el_detector_muerde(self):
+        """Meta-test: la forma prohibida se ve, la permitida no."""
+        assert not _SOLO_NUMEROS.match("'ABC123'")
+        assert not _SOLO_NUMEROS.match('3, "x"')
+        assert _SOLO_NUMEROS.match('3, 0')
+        assert _SOLO_NUMEROS.match('')
+        assert _onclicks('<b onclick="f(1, 2)">x</b>') == [('f', '1, 2')]
+
+    def test_piso_de_onclicks_medidos(self, tmp_path):
+        """Si el pintado cambia de forma y el detector deja de ver, cero
+        onclicks se leería como «ninguno malo»."""
+        html = _pintar(tmp_path, 'pendientes')['html']['flota-contenido']
+        assert len(_onclicks(html)) >= 6

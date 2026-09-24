@@ -117,3 +117,13 @@ las rutas tienen placa". Era falso —son 3 de 15— y se leyó mal dos veces, l
 después de la advertencia. La defensa no es leer con más cuidado: es que el dato llegue
 con su procedencia pegada.*
 
+## 14. Una señal de fuga propone dónde mirar, y dice cuándo no pudo mirar
+
+Vive en la bandeja del encargado, con su evidencia (números y fechas) y el turno
+como contexto, nunca como veredicto. Tres estados: señal, normal, no evaluable —
+y el tercero se publica con su motivo. Sus umbrales tienen nombre y viajan en la
+respuesta. `flota/dominio/senales.py` no recibe personas.
+
+*Motivo: un detector que sin dato contesta «normal» se apaga sin que nadie lo
+note, y uno que culpa mata la adopción (regla 2). La explicación de casi toda
+señal es normal —un taller, un encargo—: la señal pregunta, el encargado decide.*
