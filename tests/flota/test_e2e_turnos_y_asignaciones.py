@@ -14,8 +14,9 @@ Por eso este archivo corre contra los endpoints reales
 
 Los once escenarios siguen la vida real de una placa en un solo hilo
 narrativo, no once turnos sueltos: FLT100 nace con Ana, pasa a Beto por
-entrega directa (turno propio), Eva se lo lleva a la fuerza cuando Beto no
-cierra, Eva lo entrega a la sede, y Diego lo recibe limpio al día
+relevo (Ana lo deja en la sede y Beto lo recibe, cada uno con su token — desde
+el 2026-09-24 un conductor no deja el turno a nombre de otro), Eva se lo lleva
+a la fuerza cuando Beto no cierra, Eva lo entrega a la sede, y Diego lo recibe limpio al día
 siguiente. En paralelo, FLT200 cubre la cascada de asignación
 (custodia → ruta programada → elección libre) y FLT300 cubre el bloqueo de
 "un conductor, un vehículo a la vez".
@@ -122,6 +123,28 @@ def _sede(db, codigo, nombre):
     return a
 
 
+def _pasar_por_la_sede(client, elenco, placa, km, de, a):
+    """El relevo entre dos conductores, como lo permite el sistema desde el
+    2026-09-24: quien lo tiene lo deja en la sede con SU token, y quien lo va a
+    manejar lo recibe con el SUYO. Cada uno firma su mitad con sus fotos.
+
+    Antes era un solo POST de `de` nombrando a `a` como custodio: `a` quedaba
+    respondiendo por un camión que no recibió ni fotografió
+    (`dominio.custodia.custodio_que_puede_nombrar`).
+    """
+    r1 = client.post('/flota/custodia/traspaso', json={
+        'placa': placa, 'km': km, 'custodio_tipo': 'sede',
+        'custodio_sede_id': elenco['sede1'].id, 'ubicacion': 'sede',
+    }, headers=_auth(elenco[de]['token']))
+    assert r1.status_code == 201, r1.get_json()
+    r2 = client.post('/flota/custodia/traspaso', json={
+        'placa': placa, 'km': km, 'custodio_tipo': 'conductor',
+        'custodio_conductor_id': elenco[a]['conductor_id'],
+    }, headers=_auth(elenco[a]['token']))
+    assert r2.status_code == 201, r2.get_json()
+    return r1, r2
+
+
 @pytest.fixture
 def elenco(db, app):
     """Cuatro conductores, tres vehículos, una sede — todo el reparto de la
@@ -165,17 +188,25 @@ class TestFlujoDeTurnosYAsignaciones:
         )
 
     def test_02_ana_entrega_su_propio_turno_a_beto(self, client, jwt_token_admin, elenco):
-        """Ana (con SU token) entrega FLT100 a Beto — turno propio, sin forzado."""
+        """Ana entrega FLT100 y Beto lo recibe: cada uno con SU token.
+
+        Hasta el 2026-09-24 era un solo POST de Ana nombrando a Beto custodio, y
+        pasaba. Ahora eso es 403: un conductor solo deja el turno a su propio
+        nombre, porque si no Beto responde por un camión que no recibió ni
+        fotografió. El relevo es entregar a la sede y recibir de la sede.
+        """
         client.post('/flota/custodia/traspaso', json={
             'placa': 'FLT100', 'km': 1000, 'custodio_tipo': 'conductor',
             'custodio_conductor_id': elenco['ana']['conductor_id'],
         }, headers=_auth(jwt_token_admin))
 
-        r = client.post('/flota/custodia/traspaso', json={
+        directo = client.post('/flota/custodia/traspaso', json={
             'placa': 'FLT100', 'km': 1180, 'custodio_tipo': 'conductor',
             'custodio_conductor_id': elenco['beto']['conductor_id'],
         }, headers=_auth(elenco['ana']['token']))
-        assert r.status_code == 201, r.get_json()
+        assert directo.status_code == 403, directo.get_json()
+
+        entrega, r = _pasar_por_la_sede(client, elenco, 'FLT100', 1180, 'ana', 'beto')
         body = r.get_json()
 
         from flota.adaptadores.modelos import Custodia
@@ -186,13 +217,17 @@ class TestFlujoDeTurnosYAsignaciones:
         assert anterior.cierre_forzado is False
 
         _reportar(
-            'Entrega directa entre conductores — Ana entrega FLT100 a Beto',
+            'Relevo entre conductores — Ana entrega FLT100, Beto lo recibe',
             {'entrega': 'Ana E2E', 'recibe': 'Beto E2E', 'placa': 'FLT100',
-             'km_cierre': 1180, 'quien_registra': 'Ana (su propio token)'},
-            {'status': r.status_code, 'custodia_nueva_id': body['custodia_id'],
+             'km_cierre': 1180, 'quien_registra': 'cada uno con su propio token'},
+            {'status_nombrando_a_otro': directo.status_code,
+             'status_entrega': entrega.status_code,
+             'status_recibo': r.status_code,
+             'custodia_nueva_id': body['custodia_id'],
              'custodia_anterior_cerrada': anterior.fin_ts is not None,
              'cierre_forzado': anterior.cierre_forzado,
-             'nota': 'cerrar el turno propio siempre se puede, sin fotos ni motivo'},
+             'nota': 'un conductor no deja el turno a nombre de otro: cada uno '
+                     'firma su mitad'},
         )
 
     def test_03_mi_turno_con_custodia_activa_no_pide_confirmacion(
@@ -201,10 +236,7 @@ class TestFlujoDeTurnosYAsignaciones:
             'placa': 'FLT100', 'km': 1000, 'custodio_tipo': 'conductor',
             'custodio_conductor_id': elenco['ana']['conductor_id'],
         }, headers=_auth(jwt_token_admin))
-        client.post('/flota/custodia/traspaso', json={
-            'placa': 'FLT100', 'km': 1180, 'custodio_tipo': 'conductor',
-            'custodio_conductor_id': elenco['beto']['conductor_id'],
-        }, headers=_auth(elenco['ana']['token']))
+        _pasar_por_la_sede(client, elenco, 'FLT100', 1180, 'ana', 'beto')
 
         r = client.get('/flota/conductor/mi-turno', headers=_auth(elenco['beto']['token']))
         assert r.status_code == 200, r.get_json()
@@ -273,10 +305,7 @@ class TestFlujoDeTurnosYAsignaciones:
             'placa': 'FLT100', 'km': 1000, 'custodio_tipo': 'conductor',
             'custodio_conductor_id': elenco['ana']['conductor_id'],
         }, headers=_auth(jwt_token_admin))
-        client.post('/flota/custodia/traspaso', json={
-            'placa': 'FLT100', 'km': 1180, 'custodio_tipo': 'conductor',
-            'custodio_conductor_id': elenco['beto']['conductor_id'],
-        }, headers=_auth(elenco['ana']['token']))
+        _pasar_por_la_sede(client, elenco, 'FLT100', 1180, 'ana', 'beto')
 
         r = client.post('/flota/custodia/traspaso', json={
             'placa': 'FLT100', 'km': 1200, 'custodio_tipo': 'conductor',
@@ -300,10 +329,7 @@ class TestFlujoDeTurnosYAsignaciones:
             'placa': 'FLT100', 'km': 1000, 'custodio_tipo': 'conductor',
             'custodio_conductor_id': elenco['ana']['conductor_id'],
         }, headers=_auth(jwt_token_admin))
-        client.post('/flota/custodia/traspaso', json={
-            'placa': 'FLT100', 'km': 1180, 'custodio_tipo': 'conductor',
-            'custodio_conductor_id': elenco['beto']['conductor_id'],
-        }, headers=_auth(elenco['ana']['token']))
+        _pasar_por_la_sede(client, elenco, 'FLT100', 1180, 'ana', 'beto')
 
         # Sin motivo: bloqueado incluso para el admin.
         sin_motivo = client.post('/flota/custodia/traspaso', json={
@@ -345,10 +371,7 @@ class TestFlujoDeTurnosYAsignaciones:
             'placa': 'FLT100', 'km': 1000, 'custodio_tipo': 'conductor',
             'custodio_conductor_id': elenco['ana']['conductor_id'],
         }, headers=_auth(jwt_token_admin))
-        client.post('/flota/custodia/traspaso', json={
-            'placa': 'FLT100', 'km': 1180, 'custodio_tipo': 'conductor',
-            'custodio_conductor_id': elenco['eva']['conductor_id'],
-        }, headers=_auth(elenco['ana']['token']))
+        _pasar_por_la_sede(client, elenco, 'FLT100', 1180, 'ana', 'eva')
 
         r = client.post('/flota/custodia/traspaso', json={
             'placa': 'FLT300', 'km': 50, 'custodio_tipo': 'conductor',
@@ -371,10 +394,7 @@ class TestFlujoDeTurnosYAsignaciones:
             'placa': 'FLT100', 'km': 1000, 'custodio_tipo': 'conductor',
             'custodio_conductor_id': elenco['ana']['conductor_id'],
         }, headers=_auth(jwt_token_admin))
-        client.post('/flota/custodia/traspaso', json={
-            'placa': 'FLT100', 'km': 1180, 'custodio_tipo': 'conductor',
-            'custodio_conductor_id': elenco['eva']['conductor_id'],
-        }, headers=_auth(elenco['ana']['token']))
+        _pasar_por_la_sede(client, elenco, 'FLT100', 1180, 'ana', 'eva')
 
         entrega = client.post('/flota/custodia/traspaso', json={
             'placa': 'FLT100', 'km': 1250, 'custodio_tipo': 'sede',

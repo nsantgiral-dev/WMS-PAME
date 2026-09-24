@@ -391,6 +391,13 @@ class QuienPide(str, Enum):
 
     CONDUCTOR  = 'conductor'
     ADMIN_ZONA = 'admin_zona'
+    #: El encargado de flota. Puede forzar el cierre de un turno ajeno como el
+    #: admin de zona, pero **sin el atajo de las fotos**: a él siempre le pide
+    #: motivo y siempre lo deja marcado (ver `Veredicto.fotos_no_eximen` y
+    #: `flota/api/_permisos.py::FUERZA_CIERRE`). Hasta el 2026-09-24 caía en
+    #: CONDUCTOR y el recibo de escritorio le mostraba un campo que el sistema
+    #: le rechazaba.
+    CONTROL_FLOTA = 'control_flota'
 
 
 #: Los documentos que el módulo persigue. El vocabulario vive acá y la tabla lo

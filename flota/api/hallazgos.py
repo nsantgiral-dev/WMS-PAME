@@ -11,8 +11,9 @@ llegue la pantalla».
 
 | | Rol | Motivo |
 |---|---|---|
-| Reportar | `LECTURA_FLOTA` (incluye conductor) | El que ve el golpe es el que maneja. Un daño que solo puede reportar un jefe es un daño que se reporta el lunes |
-| Cerrar / descartar / aplazar | `MAESTROS_FLOTA` (sin conductor) | Regla 11: si quien reporta también cierra, el camino barato es reportar y descartar en el mismo minuto. La severidad la decide quien reporta; el desenlace, no |
+| Ver los daños de un vehículo | `LECTURA_FLOTA`, **cualquier placa** | El conductor que va a recibir un camión tiene que ver lo que hereda antes de firmar; `mi-turno` ya le muestra el estado del sugerido |
+| Reportar | `LECTURA_FLOTA` (incluye conductor) — **el conductor, solo sobre el vehículo de su custodia activa** (2026-09-24) | El que ve el golpe es el que maneja. Un daño que solo puede reportar un jefe es un daño que se reporta el lunes. Y el que no lo maneja no le reporta daños con su km a un camión ajeno |
+| Cerrar / descartar / aplazar | `DECIDE_FLOTA` = gestión (sin conductor **ni control de flota**) | Regla 11: si quien reporta también cierra, el camino barato es reportar y descartar en el mismo minuto. Y control de flota es medido por los días de hallazgo abierto: quien es medido por un contador no tiene el botón que lo baja (`_permisos.DECIDE_FLOTA`) |
 
 `reportado_por_usuario_id` sale del token, nunca del cuerpo. Quién dice que vio
 el daño no lo elige quien manda el JSON.
@@ -26,7 +27,8 @@ from app.models.vehiculo import Vehiculo
 from app.routes._auth_helpers import Roles
 from flota.adaptadores import hallazgos as adaptador
 from flota.adaptadores.modelos import Hallazgo
-from flota.api._permisos import DECIDE_FLOTA, MAESTROS_FLOTA, exige
+from flota.api._permisos import (DECIDE_FLOTA, MAESTROS_FLOTA, exige,
+                                 sin_derecho_sobre_vehiculo)
 from flota.api._tiempo import iso_utc
 from flota.dominio.errores import ErrorFlota
 from flota.dominio.hallazgo import (EstadoHallazgo, dias_transcurridos,
@@ -146,6 +148,10 @@ def reportar():
         km = int(datos['km'])
     except (ValueError, TypeError):
         return jsonify({'error': f'km inválido: {datos["km"]!r}'}), 400
+
+    denegado = sin_derecho_sobre_vehiculo(vehiculo, 'reportar un daño')
+    if denegado is not None:
+        return denegado
 
     try:
         fila = adaptador.reportar(

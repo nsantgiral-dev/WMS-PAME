@@ -10,7 +10,7 @@ nunca escrito.
 
 | | Rol | Motivo |
 |---|---|---|
-| **Registrar un tanqueo** | `LECTURA_FLOTA` (incluye conductor) | El que tanquea es el que maneja. Un tanqueo que solo puede registrar un jefe se registra el lunes, y para el lunes la factura ya se perdió — que es literalmente lo que pasa hoy. Mismo criterio que reportar un daño |
+| **Registrar un tanqueo** | `LECTURA_FLOTA` (incluye conductor) — **el conductor, solo sobre el vehículo de su custodia activa** (2026-09-24) | El que tanquea es el que maneja. Un tanqueo que solo puede registrar un jefe se registra el lunes, y para el lunes la factura ya se perdió — que es literalmente lo que pasa hoy. Mismo criterio que reportar un daño. Y un tanqueo con km sobre un camión ajeno le mueve el odómetro y el rendimiento a otro |
 | **Registrar cualquier otro gasto** | `MAESTROS_FLOTA` (sin conductor) | El SOAT, el impuesto vehicular y una entrada a taller no los paga el conductor. Son maestros del vehículo, como la ficha y los documentos, y el rol que los levanta es el de control de flota (FLO-PR-01) |
 | **Ver los gastos y el CPK** | `MAESTROS_FLOTA` (sin conductor) | *«¿Cuánto cuesta este camión?»* no es una pregunta del turno. Y un CPK visible en la pantalla del conductor está a un paso de leerse como una medida suya, que es exactamente lo que la regla 2 prohíbe — el número no mide a nadie y la pantalla no debe insinuar que sí |
 
@@ -44,7 +44,8 @@ from flota.adaptadores import gastos as adaptador
 from flota.adaptadores.gastos import numero_legible
 from flota.adaptadores.medicion import _motivo_cpk
 from flota.adaptadores.modelos import Gasto
-from flota.api._permisos import MAESTROS_FLOTA, exige
+from flota.api._permisos import (MAESTROS_FLOTA, exige,
+                                 sin_derecho_sobre_vehiculo)
 from flota.dominio import costos
 from flota.dominio.errores import ErrorFlota, PermisoInsuficiente
 from flota.dominio.valores import palabra_de_confianza
@@ -327,6 +328,10 @@ def registrar_tanqueo():
         km = int(datos['km'])
     except (ValueError, TypeError) as e:
         return jsonify({'error': str(e)}), 400
+
+    denegado = sin_derecho_sobre_vehiculo(vehiculo, 'registrar un tanqueo')
+    if denegado is not None:
+        return denegado
 
     try:
         fila = adaptador.registrar_tanqueo(

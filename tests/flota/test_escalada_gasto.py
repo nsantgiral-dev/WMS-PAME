@@ -88,6 +88,11 @@ class TestElConductorSigueTanqueando:
     quedaría vacía. Cerrar de más también es un defecto."""
 
     def test_el_conductor_registra_su_tanqueo(self, client, mundo):
+        # Del camión que tiene: desde el 2026-09-24 el conductor tanquea solo el
+        # vehículo de su custodia activa.
+        from tests.flota._turno import dar_turno
+
+        dar_turno(mundo['db'], mundo['u']['conductor'], mundo['placa'], km=900)
         r = _tanqueo(client, mundo['t']['conductor'], mundo['placa'])
         assert r.status_code == 201, r.get_json()
         assert Gasto.query.filter_by(categoria='combustible').count() == 1

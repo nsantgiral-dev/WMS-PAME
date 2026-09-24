@@ -14,7 +14,8 @@ import pytest
 from flota.adaptadores import traspaso
 from flota.adaptadores.modelos import Custodia, Foto, LecturaOdometro
 from flota.dominio.custodia import huecos_de_cobertura
-from flota.dominio.errores import CustodiaInvalida, LecturaRechazada
+from flota.dominio.errores import (CustodiaInvalida, LecturaRechazada,
+                                   PermisoInsuficiente)
 from flota.dominio.valores import CustodioEstado, CustodioTipo, QuienPide
 
 _T0 = datetime(2026, 8, 1, 5, 0)
@@ -245,9 +246,17 @@ class TestQuienPuedeRecibir:
     """
 
     def _recibir(self, mundo, conductor, quien, pide_usuario=None, **kw):
+        # Un CONDUCTOR pide con SU usuario: desde el 2026-09-24 solo puede dejar
+        # el turno a su propio nombre (`custodio_que_puede_nombrar`), y el
+        # usuario admin del fixture no tiene ficha de conductor. Antes estos
+        # tests mezclaban «pide el admin» con `quien_pide=CONDUCTOR`, una
+        # combinación que la API no produce nunca.
+        if pide_usuario is None:
+            pide_usuario = (mundo['usr'] if quien != QuienPide.CONDUCTOR
+                            else mundo[{'c1': 'u1', 'c2': 'u2'}[conductor]])
         return traspaso.traspasar(
             vehiculo_id=mundo['veh'], km=100_500,
-            registrado_por_usuario_id=pide_usuario or mundo['usr'],
+            registrado_por_usuario_id=pide_usuario,
             custodio_tipo=CustodioTipo.CONDUCTOR,
             custodio_conductor_id=mundo[conductor],
             quien_pide=quien,
@@ -378,7 +387,7 @@ class TestUnVehiculoPorConductor:
         with pytest.raises(CustodiaInvalida) as e:
             traspaso.traspasar(
                 vehiculo_id=dos_vehiculos['veh2'], km=5_000,
-                registrado_por_usuario_id=dos_vehiculos['usr'],
+                registrado_por_usuario_id=dos_vehiculos['u1'],
                 custodio_tipo=CustodioTipo.CONDUCTOR,
                 custodio_conductor_id=dos_vehiculos['c1'],
                 quien_pide=QuienPide.CONDUCTOR,
@@ -395,7 +404,7 @@ class TestUnVehiculoPorConductor:
         with pytest.raises(CustodiaInvalida):
             traspaso.traspasar(
                 vehiculo_id=dos_vehiculos['veh2'], km=5_000,
-                registrado_por_usuario_id=dos_vehiculos['usr'],
+                registrado_por_usuario_id=dos_vehiculos['u1'],
                 custodio_tipo=CustodioTipo.CONDUCTOR,
                 custodio_conductor_id=dos_vehiculos['c1'],
                 quien_pide=QuienPide.CONDUCTOR,
@@ -449,7 +458,7 @@ class TestUnVehiculoPorConductor:
 
         nueva = traspaso.traspasar(
             vehiculo_id=dos_vehiculos['veh2'], km=5_000,
-            registrado_por_usuario_id=dos_vehiculos['usr'],
+            registrado_por_usuario_id=dos_vehiculos['u1'],
             custodio_tipo=CustodioTipo.CONDUCTOR,
             custodio_conductor_id=dos_vehiculos['c1'],
             quien_pide=QuienPide.CONDUCTOR,
@@ -481,9 +490,15 @@ class TestElConductorNoLeCierraElTurnoAOtro:
     """
 
     def test_B_no_puede_cerrar_el_turno_de_A_nombrandolo_custodio(self, mundo):
-        """**El ataque, literal.** 409 donde antes daba 201."""
+        """**El ataque, literal.** 409 donde antes daba 201.
+
+        Desde el 2026-09-24 lo frena antes otra puerta, y con 403:
+        `custodio_que_puede_nombrar` — un conductor solo deja el turno a su
+        propio nombre, y B está nombrando a A. El guard de `mismo_custodio` queda
+        como segunda línea; por eso se acepta cualquiera de los dos rechazos.
+        """
         _traspasar(mundo, 'c1', 100_000, 0)
-        with pytest.raises(CustodiaInvalida):
+        with pytest.raises((CustodiaInvalida, PermisoInsuficiente)):
             traspaso.traspasar(
                 vehiculo_id=mundo['veh'], km=88_888,
                 registrado_por_usuario_id=mundo['u2'],   # ← B, con SU token
@@ -497,7 +512,7 @@ class TestElConductorNoLeCierraElTurnoAOtro:
         """Que levante no alcanza: lo que importa es que no haya escrito nada.
         Un cierre a medias con `km_fin` inventado es peor que el 201."""
         _traspasar(mundo, 'c1', 100_000, 0)
-        with pytest.raises(CustodiaInvalida):
+        with pytest.raises((CustodiaInvalida, PermisoInsuficiente)):
             traspaso.traspasar(
                 vehiculo_id=mundo['veh'], km=88_888,
                 registrado_por_usuario_id=mundo['u2'],

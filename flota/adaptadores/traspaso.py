@@ -29,7 +29,7 @@ from app.models.vehiculo import Vehiculo
 from flota.adaptadores.modelos import Custodia, LecturaOdometro
 from flota.dominio import custodia as dom
 from flota.dominio import odometro as dom_odo
-from flota.dominio.errores import CustodiaInvalida
+from flota.dominio.errores import CustodiaInvalida, PermisoInsuficiente
 from flota.dominio.valores import (
     ClaseFoto,
     Custodia as CustodiaDom,
@@ -103,6 +103,24 @@ def traspasar(
     """
     ahora = ts if ts is not None else datetime.utcnow()
 
+    # ── 0a. ¿A nombre de quién lo puede dejar quien pide? ────────────────
+    #
+    # Antes que todo, también antes de la idempotencia: un reintento no le da a
+    # nadie un permiso que el primer intento no tenía. Ver
+    # `dom.custodio_que_puede_nombrar` — hasta el 2026-09-24 un conductor dejaba
+    # el camión a nombre de un compañero con solo cambiar un id del JSON.
+    vigente_previa = custodia_activa(vehiculo_id)
+    nombra = dom.custodio_que_puede_nombrar(
+        quien_pide,
+        custodio_tipo=custodio_tipo,
+        custodio_conductor_id=custodio_conductor_id,
+        conductor_del_que_pide_id=_conductor_id_de_usuario(registrado_por_usuario_id),
+        es_el_custodio_actual=_es_custodio_actual(vigente_previa,
+                                                  registrado_por_usuario_id),
+    )
+    if not nombra.puede:
+        raise PermisoInsuficiente(nombra.mensaje)
+
     # ── 0. ¿Ya pasó esto mismo hace un momento? ──────────────────────────
     #
     # Regla 9 aplicada acá: un timeout no significa que falló. El traspaso tiene
@@ -142,12 +160,7 @@ def traspasar(
     # Se resuelve por USUARIO —el del token— y no por el conductor que viene en
     # el cuerpo: el vínculo `Conductor.usuario_id` es el que los une. Esta es la
     # única de las dos preguntas que el que pide no puede contestar a su favor.
-    es_el_custodio_actual = (
-        vigente is not None
-        and vigente.custodio_conductor is not None
-        and vigente.custodio_conductor.usuario_id is not None
-        and vigente.custodio_conductor.usuario_id == registrado_por_usuario_id
-    )
+    es_el_custodio_actual = _es_custodio_actual(vigente, registrado_por_usuario_id)
 
     # ── El no-op: el mismo custodio se re-declara a sí mismo ─────────────
     #
@@ -218,7 +231,9 @@ def traspasar(
         # Ese es el daño concreto — el turno siguiente arranca sin nada con qué
         # comparar, y el próximo golpe que aparezca no se le puede atribuir a
         # nadie. Un admin que cierra con las ocho fotos hace un cierre normal.
-        if veredicto.requiere_forzado and not fotos_fin:
+        # Control de flota no tiene el atajo de las fotos: a él todo cierre de
+        # un turno ajeno le pide motivo y queda marcado (`fotos_no_eximen`).
+        if veredicto.requiere_forzado and (veredicto.fotos_no_eximen or not fotos_fin):
             if not (motivo_forzado or '').strip():
                 raise CustodiaInvalida(
                     'Cerrar el turno de otro sin su firma exige motivo escrito: '
@@ -338,6 +353,28 @@ def traspasar(
 #: MISMO kilometraje separadas por menos de minuto y medio no existen en la
 #: operación — para que el odómetro no se moviera, el camión no rodó.
 VENTANA_IDEMPOTENCIA_S = 90
+
+
+def _es_custodio_actual(vigente, usuario_id) -> bool:
+    """¿El usuario de la sesión ES el conductor que tiene el vehículo ahora?
+
+    Por el vínculo `Conductor.usuario_id`, nunca por el conductor del cuerpo:
+    es la única pregunta que quien pide no puede contestar a su favor.
+    """
+    return (
+        vigente is not None
+        and vigente.custodio_conductor is not None
+        and vigente.custodio_conductor.usuario_id is not None
+        and vigente.custodio_conductor.usuario_id == usuario_id
+    )
+
+
+def _conductor_id_de_usuario(usuario_id):
+    """La ficha de conductor activa de este usuario, o `None`."""
+    from app.models.conductor import Conductor
+
+    c = Conductor.query.filter_by(usuario_id=usuario_id, activo=True).first()
+    return c.id if c is not None else None
 
 
 def _traspaso_reciente_identico(vehiculo_id, km, conductor_id, sede_id, ahora):

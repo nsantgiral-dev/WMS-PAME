@@ -22,9 +22,9 @@ de abajo no permite.
 
 | | Rol | Motivo |
 |---|---|---|
-| Ver los ítems del día | `LECTURA_FLOTA` (incluye conductor) | El que inspecciona es el que maneja. Si necesitara un jefe para abrir la lista, la inspección se hace a las nueve o no se hace |
-| Registrar la inspección | `LECTURA_FLOTA` (incluye conductor) | Es **su** turno y **su** respaldo. Que un admin la registre por él convierte la app en un registro *sobre* el conductor hecho por otro, y entonces deja de servirle a él — que es lo que sostiene la adopción (regla 12) |
-| Cerrar el daño que la inspección produjo | `MAESTROS_FLOTA` (sin conductor), en `flota/api/hallazgos.py` | Regla 11: si quien reporta también cierra, el camino barato es marcar `no_apto` y cerrarlo en el mismo minuto |
+| Ver los ítems del día | `LECTURA_FLOTA` (incluye conductor), **cualquier placa** | El que inspecciona es el que maneja. Si necesitara un jefe para abrir la lista, la inspección se hace a las nueve o no se hace. Es el catálogo de preguntas: leerlo no escribe nada |
+| Registrar la inspección | `LECTURA_FLOTA` (incluye conductor) — **el conductor, solo sobre el vehículo de su custodia activa** (2026-09-24) | Es **su** turno y **su** respaldo. Que un admin la registre por él convierte la app en un registro *sobre* el conductor hecho por otro, y entonces deja de servirle a él — que es lo que sostiene la adopción (regla 12). Y por lo mismo no firma la de un camión que no tiene |
+| Cerrar el daño que la inspección produjo | `DECIDE_FLOTA` = gestión (sin conductor ni control de flota), en `flota/api/hallazgos.py` | Regla 11: si quien reporta también cierra, el camino barato es marcar `no_apto` y cerrarlo en el mismo minuto |
 
 La asimetría **ya está y no se repite acá**: los hallazgos que nacen de un
 `no_apto` pasan por `hallazgos.reportar` y solo se cierran por los endpoints de
@@ -51,7 +51,7 @@ from app.routes._auth_helpers import Roles
 from app.utils.fecha import dia_operativo
 from flota.adaptadores import inspecciones as adaptador
 from flota.adaptadores.modelos import Inspeccion
-from flota.api._permisos import exige
+from flota.api._permisos import exige, sin_derecho_sobre_vehiculo
 from flota.api._tiempo import iso_utc
 from flota.dominio import inspeccion as dom
 from flota.dominio.errores import ErrorFlota
@@ -231,6 +231,10 @@ def registrar():
         km = int(datos['km'])
     except (ValueError, TypeError):
         return jsonify({'error': f'km inválido: {datos["km"]!r}'}), 400
+
+    denegado = sin_derecho_sobre_vehiculo(vehiculo, 'registrar la inspección')
+    if denegado is not None:
+        return denegado
 
     try:
         fila = adaptador.registrar(

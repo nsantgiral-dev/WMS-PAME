@@ -52,6 +52,37 @@ function flotaDecide() {
   return !!u && FLOTA_ROLES_DECIDEN.includes(u.rol);
 }
 
+/**
+ * Quién puede cerrar el turno de otro sin su firma: gestión y control de flota
+ * (2026-09-24). Espejo de `FUERZA_CIERRE` en `flota/api/_permisos.py`, y
+ * `tests/flota/test_derecho_del_conductor.py` compara las dos listas — misma
+ * forma que `FLOTA_ROLES_DECIDEN`. Hasta ese día el campo del motivo le
+ * aparecía a control de flota y el backend le contestaba 409.
+ */
+const FLOTA_ROLES_FUERZAN_CIERRE = ['admin', 'control_flota', 'gerente', 'jefe_almacen', 'supervisor'];
+
+function flotaFuerzaCierre() {
+  const u = (typeof OPERARIO !== 'undefined' && OPERARIO) ? OPERARIO : null;
+  return !!u && FLOTA_ROLES_FUERZAN_CIERRE.includes(u.rol);
+}
+
+/**
+ * Dónde se da de alta un vehículo, dicho para quien lo lee.
+ *
+ * El alta es de administración (`/api/rutas/vehiculos` y la vinculación de
+ * cuentas de conductor piden admin). A control de flota se le mandaba a
+ * «Rutas → Vehículos», una pestaña que tiene escondida (hoy «Alta de vehículos»): la instrucción era
+ * imposible. Decidido el 2026-09-24 no darle el alta —vehículos y cuentas de
+ * conductor tocan despacho e identidad, fuera del registro de flota— y decirle
+ * a quién pedírselo.
+ */
+function flotaDondeSeDaDeAlta() {
+  const u = (typeof OPERARIO !== 'undefined' && OPERARIO) ? OPERARIO : null;
+  return (u && u.rol === 'admin')
+    ? 'en <b>Rutas → Alta de vehículos</b>'
+    : 'por <b>administración</b> (pedíselo al administrador del sistema)';
+}
+
 let FLOTA_PLACA = null;
 let FLOTA_ESTADO = null;      // respuesta de /custodia/activa
 let FLOTA_FOTOS = {};         // angulo → dataURL comprimido
@@ -384,13 +415,13 @@ function flotaRenderRecibo() {
       <option value="sede">Queda en una sede</option>
     </select>
     <div id="flota-custodio-detalle" style="margin-top:8px"></div>
-    ${c ? `
+    ${(c && c.custodio_tipo === 'conductor' && flotaFuerzaCierre()) ? `
     <label style="display:block;margin-top:14px;color:var(--yellow)">Motivo del cierre forzado
-      (solo si quien lo tiene ahora no puede cerrar su propio turno)</label>
+      (obligatorio: el turno lo tiene un conductor y lo cerrás vos, sin su firma)</label>
     <input id="flota-motivo-forzado" style="width:100%;padding:6px"
-           placeholder="Ej: el vehículo quedó en la sede, nadie lo puede cerrar por acá">
-    <p style="font-size:var(--fs-xs);color:var(--tx2);margin-top:2px">Solo hace falta si el turno
-      anterior no lo cierra su propio custodio con sus fotos. Si no aplica, dejalo vacío.</p>
+           placeholder="Ej: se fue sin cerrar y el camión tiene que salir">
+    <p style="font-size:var(--fs-xs);color:var(--tx2);margin-top:2px">Queda registrado con tu
+      nombre y cuenta en «cierres forzados». Avisale hoy a quien lo tenía.</p>
     ` : ''}
 
     <!-- La placa va TAMBIÉN en el botón: es lo último que se mira antes de

@@ -420,15 +420,30 @@ class TestUnConductorPuedeSoltarSuPropioVehiculo:
 
         Comparar ids de conductor era justamente el error: al entregar a una
         sede no hay conductor entrante con el que comparar.
+
+        Desde el 2026-09-24 la comparación vive en `_es_custodio_actual`, que
+        usan las dos preguntas del traspaso (a quién puede nombrar y si puede
+        cerrar). Se lee por AST: la función compara `usuario_id`, y `traspasar`
+        la llama con el usuario de la sesión.
         """
+        import ast
         from pathlib import Path
 
         fuente = (Path(__file__).resolve().parents[2] / 'flota' / 'adaptadores'
                   / 'traspaso.py').read_text(encoding='utf-8')
-        i = fuente.index('es_el_custodio_actual = (')
-        cuerpo = fuente[i:i + 400]
-        assert 'custodio_conductor.usuario_id' in cuerpo
-        assert 'registrado_por_usuario_id' in cuerpo
+        arbol = ast.parse(fuente)
+        funcs = {n.name: n for n in ast.walk(arbol) if isinstance(n, ast.FunctionDef)}
+        atributos = {n.attr for n in ast.walk(funcs['_es_custodio_actual'])
+                     if isinstance(n, ast.Attribute)}
+        assert {'custodio_conductor', 'usuario_id'} <= atributos
+        llamadas = [n for n in ast.walk(funcs['traspasar'])
+                    if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+                    and n.func.id == '_es_custodio_actual']
+        assert llamadas, 'traspasar ya no pregunta si quien pide es el custodio'
+        assert all(isinstance(c.args[1], ast.Name)
+                   and c.args[1].id == 'registrado_por_usuario_id'
+                   for c in llamadas), (
+            'el custodio se resuelve por el USUARIO de la sesión, no por otra cosa')
 
 
 class TestElVisorExisteDondeSeUsa:

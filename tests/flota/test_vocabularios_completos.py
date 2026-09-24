@@ -301,14 +301,33 @@ def admin(app, db):
 
 
 @pytest.fixture
-def conductor(app, db):
+def conductor(app, db, placa):
+    """Un conductor CON el turno de `placa`.
+
+    Desde el 2026-09-24 el conductor registra solo sobre el vehículo de su
+    custodia activa; este archivo ejerce vocabularios, no permisos, así que el
+    actor tiene que poder llegar a la validación del vocabulario. El turno se
+    recibe a km 0 para no pisar ningún kilometraje de los tests.
+    """
     from app.models.usuario import Usuario
+    from tests.flota._turno import dar_turno
 
     u = Usuario(email='vocab-cond@x.com', nombre='c', rol='conductor',
                 activo=True, password_hash=_HASH)
     db.session.add(u)
     db.session.commit()
+    dar_turno(db, u.id, placa, km=0)
     return {_H: f'Bearer {create_access_token(identity=str(u.id))}'}
+
+
+@pytest.fixture
+def conductor_id(conductor):
+    """La ficha del conductor del fixture: el único custodio que puede nombrar."""
+    from app.models.conductor import Conductor
+    from app.models.usuario import Usuario
+
+    u = Usuario.query.filter_by(email='vocab-cond@x.com').one()
+    return Conductor.query.filter_by(usuario_id=u.id).one().id
 
 
 @pytest.fixture
@@ -611,7 +630,7 @@ class TestElHallazgoYLaCustodiaAceptanSuVocabularioEntero:
 
     @pytest.mark.parametrize('ubicacion', _vocabulario('UBICACION'))
     def test_cada_ubicacion_exige_su_custodio(
-            self, client, db, conductor, placa, ubicacion):
+            self, client, db, conductor, conductor_id, placa, ubicacion):
         """El vocabulario entero de `Ubicacion` contra la función que traduce
         ubicación → custodio. Las tres, no las dos de siempre."""
         from flota.dominio.valores import Ubicacion, custodio_de_ubicacion
@@ -621,8 +640,10 @@ class TestElHallazgoYLaCustodiaAceptanSuVocabularioEntero:
         # depende del tipo, y eso también es parte del vocabulario que se ejerce.
         cuerpo = {'placa': placa, 'km': 1000, 'custodio_tipo': exigido,
                   'ubicacion': ubicacion, 'ubicacion_motivo': 'porque sí'}
+        # El conductor solo puede nombrarse a sí mismo (2026-09-24).
         cuerpo['custodio_conductor_id' if exigido == 'conductor'
-               else 'custodio_sede_id'] = 1
+               else 'custodio_sede_id'] = (conductor_id if exigido == 'conductor'
+                                           else 1)
         r = client.post('/flota/custodia/traspaso', json=cuerpo,
                         headers=conductor)
         assert r.status_code == 201, f'{ubicacion}: {r.get_json()}'
@@ -652,13 +673,14 @@ class TestElHallazgoYLaCustodiaAceptanSuVocabularioEntero:
             self, client, db, conductor, placa, campo, malo):
         from flota.adaptadores.modelos import Custodia
 
+        antes = Custodia.query.count()      # el turno del fixture
         cuerpo = {'placa': placa, 'km': 1000, 'custodio_tipo': 'conductor',
                   'custodio_conductor_id': 1}
         cuerpo[campo] = malo
         r = client.post('/flota/custodia/traspaso', json=cuerpo,
                         headers=conductor)
         assert 400 <= r.status_code < 500, f'{campo}={malo} → {r.status_code}'
-        assert Custodia.query.count() == 0
+        assert Custodia.query.count() == antes
 
 
 class TestElOdometroAceptaSuVocabularioEntero:
@@ -666,7 +688,7 @@ class TestElOdometroAceptaSuVocabularioEntero:
     @pytest.mark.parametrize('origen', [o.value for o in __import__(
         'flota.dominio.valores', fromlist=['x']).OrigenLectura])
     def test_todo_origen_del_enum_entra_o_explica_por_que_no(
-            self, client, db, conductor, placa, origen):
+            self, client, db, conductor, admin, placa, origen):
         """Los **siete**, no los tres habilitados.
 
         Un origen excluido tiene que dar 400 **con su motivo escrito**: el mapa
@@ -680,7 +702,11 @@ class TestElOdometroAceptaSuVocabularioEntero:
         cuerpo = {'placa': placa, 'valor_km': 1000, 'origen': origen}
         if origen == 'correccion':
             cuerpo['motivo_correccion'] = 'se digitó mal'
-        r = client.post('/flota/odometro', json=cuerpo, headers=conductor)
+        # Corregir es de MAESTROS_FLOTA desde el 2026-09-24: la corrección la
+        # manda quien puede corregir; la del conductor se prueba en
+        # `test_derecho_del_conductor.py`.
+        quien = admin if origen == 'correccion' else conductor
+        r = client.post('/flota/odometro', json=cuerpo, headers=quien)
         if suelto:
             assert r.status_code == 201, f'{origen}: {r.get_json()}'
         else:
@@ -704,7 +730,9 @@ class TestElOdometroAceptaSuVocabularioEntero:
                               'origen': 'cierre_dia', 'confianza': confianza},
                         headers=conductor)
         assert r.status_code == 201
-        assert LecturaOdometro.query.one().confianza != 'verificada'
+        # `filter_by(origen=...)`: el turno del fixture también dejó su lectura.
+        assert (LecturaOdometro.query.filter_by(origen='cierre_dia').one()
+                .confianza != 'verificada')
 
 
 class TestElTallerAceptaSuVocabularioEntero:

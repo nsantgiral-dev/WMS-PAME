@@ -58,6 +58,7 @@ def mundo(db, almacen):
     return {
         'placa': veh.placa,
         't_cond': create_access_token(identity=str(cond.id)),
+        'u_cond': cond.id,
         't_flota': create_access_token(identity=str(flota.id)),
         't_tienda': create_access_token(identity=str(tienda.id)),
         't_gestion': create_access_token(identity=str(jefe.id)),
@@ -84,6 +85,28 @@ class TestSesionObligatoria:
 
 class TestQuienPuedeQue:
     """La asimetría deliberada: reportar es de todos; el desenlace no."""
+
+    @pytest.fixture(autouse=True)
+    def _el_conductor_tiene_el_turno(self, db, mundo):
+        """Desde el 2026-09-24 el conductor reporta solo sobre el vehículo de su
+        custodia activa. Estos tests miden quién DECIDE el desenlace, así que el
+        conductor tiene que poder reportar primero: se le da el turno."""
+        from tests.flota._turno import dar_turno
+
+        dar_turno(db, mundo['u_cond'], mundo['placa'], km=900)
+
+    def test_el_conductor_NO_reporta_sobre_un_vehiculo_que_no_tiene(
+            self, client, db, mundo):
+        """La otra mitad de «reportar es de todos»: de todos los que lo manejan.
+        Un daño con su kilometraje sobre un camión ajeno le mueve el odómetro a
+        otro y abre un reloj a nombre de un turno que no es el suyo."""
+        from app.models.vehiculo import Vehiculo
+
+        db.session.add(Vehiculo(placa='HZE201', tipo='NHR', activo=True))
+        db.session.commit()
+        r = _reportar(client, mundo['t_cond'], 'HZE201')
+        assert r.status_code == 403, r.get_json()
+        assert r.get_json()['motivo'] == 'sin_derecho'
 
     def test_el_conductor_SI_puede_reportar(self, client, mundo):
         """El que ve el golpe es el que maneja. Un daño que solo puede reportar
@@ -375,7 +398,10 @@ class TestElIndicadorSeMideYNoSeInventa:
         """
         from flota.adaptadores.medicion import MedidorSQL
 
-        _reportar(client, mundo['t_cond'], mundo['placa'])
+        # Lo reporta control de flota: el conductor, desde el 2026-09-24, no
+        # reporta sobre un vehículo sin su custodia — y este test es justamente
+        # el del vehículo que nadie tiene.
+        _reportar(client, mundo['t_flota'], mundo['placa'])
         d = MedidorSQL().dias_hallazgo_abierto()
         assert d['n_fuera'] == 1 and d['n_abiertos'] == 0 and d['n'] == 0
         fuera = d['casos'][0]
@@ -395,7 +421,7 @@ class TestElIndicadorSeMideYNoSeInventa:
         from flota.adaptadores.medicion import MedidorSQL
         from flota.adaptadores.modelos import Hallazgo
 
-        _reportar(client, mundo['t_cond'], mundo['placa'])
+        _reportar(client, mundo['t_flota'], mundo['placa'])
         # Se simula el caso normal —daño encontrado con el vehículo bajo
         # custodia— sin montar media custodia: lo que el indicador mira es esta
         # columna, y es la que la derivación de `reportar` escribe.

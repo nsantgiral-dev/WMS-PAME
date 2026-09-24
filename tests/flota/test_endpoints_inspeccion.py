@@ -67,6 +67,11 @@ def mundo(db, almacen):
     db.session.add_all([veh, sin_catalogo, cond, flota, tienda, jefe])
     db.session.commit()
     catalogo.sembrar(db)
+    # El conductor recibe el camión antes de inspeccionarlo, como en la
+    # operación: desde el 2026-09-24 solo registra la inspección del vehículo de
+    # su custodia activa. km=0 para no pisar los kilometrajes de cada test.
+    from tests.flota._turno import dar_turno
+    dar_turno(db, cond.id, veh.placa, km=0)
     return {
         'placa': veh.placa,
         'placa_sin_catalogo': sin_catalogo.placa,
@@ -119,6 +124,17 @@ class TestSesionObligatoria:
 
 class TestQuienPuedeQue:
     """La asimetría deliberada: inspeccionar es del que maneja; el desenlace no."""
+
+    def test_el_conductor_NO_registra_la_de_un_camion_que_no_tiene(
+            self, client, mundo):
+        """Es su respaldo del turno, no un formulario sobre cualquier placa: la
+        firma de una inspección sobre un camión ajeno respalda un turno que no
+        es suyo (2026-09-24)."""
+        r = client.post('/flota/inspeccion', json={
+            'placa': mundo['placa_sin_catalogo'], 'km': 10, 'respuestas': [],
+            'segundos_llenado': 60}, headers=_auth(mundo['t_cond']))
+        assert r.status_code == 403, r.get_json()
+        assert r.get_json()['motivo'] == 'sin_derecho'
 
     def test_el_conductor_SI_ve_los_items_de_hoy(self, client, mundo):
         """Si necesitara un jefe para abrir la lista, la inspección se hace a

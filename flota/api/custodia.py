@@ -17,14 +17,22 @@ from flask_jwt_extended import get_jwt_identity, jwt_required
 
 from app.extensions import db
 from app.routes._auth_helpers import Roles
-from flota.api._permisos import MAESTROS_FLOTA, exige
-from app.routes._auth_helpers import _es_gestion
+from flota.api._permisos import (
+    MAESTROS_FLOTA,
+    _usuario,
+    exige,
+    quien_pide_de,
+    sin_derecho_sobre_custodia,
+    sin_derecho_sobre_foto,
+    sin_derecho_sobre_vehiculo,
+    sin_permiso_de_corregir,
+)
 from app.models.vehiculo import Vehiculo
 from flota.api._tiempo import iso_utc
 from flota.adaptadores import traspaso
 from flota.adaptadores.modelos import Custodia, FichaTecnica, LecturaOdometro
 from flota.dominio import odometro as dom_odo
-from flota.dominio.errores import ErrorFlota
+from flota.dominio.errores import ErrorFlota, PermisoInsuficiente
 from flota.dominio.valores import (
     MOTIVO_ORIGEN_NO_SUELTO,
     angulos_de_custodia,
@@ -36,7 +44,6 @@ from flota.dominio.valores import (
     CustodioTipo,
     Lectura,
     OrigenLectura,
-    QuienPide,
     Ubicacion,
 )
 
@@ -169,6 +176,11 @@ def ver_foto(foto_id):
 
     Si la foto no se puede recuperar, la evidencia no existe — da igual que la
     fila diga que sí. Por eso el test de guardado incluye recuperarla.
+
+    **El conductor ve solo las suyas** (2026-09-24): las de sus custodias, sus
+    daños y sus lecturas, nunca las de documentos. Hasta ese día bajaba el
+    escaneo del SOAT o de la tarjeta de propiedad de cualquier vehículo con
+    solo recorrer ids. La política está en `_permisos.FOTO_DEL_CONDUCTOR`.
     """
     from flask import Response
 
@@ -178,6 +190,9 @@ def ver_foto(foto_id):
     foto = db.session.get(Foto, foto_id)
     if foto is None:
         return jsonify({'error': f'No existe la foto {foto_id}'}), 404
+    denegado = sin_derecho_sobre_foto(foto, 'ver esta foto')
+    if denegado is not None:
+        return denegado
     if foto.estado == 'pendiente_evidencia':
         return jsonify({
             'error': 'Esta foto nunca se guardó',
@@ -205,12 +220,19 @@ def fotos_de_custodia(custodia_id):
 
     Devuelve las que faltan también: un ángulo sin foto es un hueco que alguien
     tiene que poder ver, no una ausencia que se disimula no listándola.
+
+    El conductor, solo de SUS turnos (2026-09-24): la entrega le muestra las
+    fotos de apertura de su propia custodia, y nada de su pantalla pide las de
+    otro.
     """
     from flota.adaptadores.modelos import Custodia, Foto
 
     custodia = db.session.get(Custodia, custodia_id)
     if custodia is None:
         return jsonify({'error': f'No existe la custodia {custodia_id}'}), 404
+    denegado = sin_derecho_sobre_custodia(custodia, 'ver las fotos de ese turno')
+    if denegado is not None:
+        return denegado
 
     vehiculo = db.session.get(Vehiculo, custodia.vehiculo_id)
     ficha = db.session.get(FichaTecnica, custodia.vehiculo_id)
@@ -384,8 +406,12 @@ def custodia_traspaso():
 
     # `quien_pide` sale del ROL, jamás del cuerpo. Si viniera en el JSON, un
     # conductor mandaría `admin_zona` y le cerraría el turno a otro — la regla
-    # entera se saltaría con un campo.
-    quien = QuienPide.ADMIN_ZONA if _es_gestion() else QuienPide.CONDUCTOR
+    # entera se saltaría con un campo. Una sola traducción: `quien_pide_de`.
+    #
+    # Desde el 2026-09-24 control de flota tiene su propio valor: antes caía en
+    # CONDUCTOR, y el recibo de escritorio le ofrecía el cierre forzado que el
+    # adaptador le rechazaba con 409.
+    quien = quien_pide_de(_usuario())
 
     try:
         nueva = traspaso.traspasar(
@@ -403,6 +429,10 @@ def custodia_traspaso():
             ubicacion=ubicacion,
             ubicacion_motivo=datos['ubicacion_motivo'] if 'ubicacion_motivo' in datos else None,
         )
+    except PermisoInsuficiente as e:
+        # 403 y no 409: el mundo admite el traspaso; ESTE usuario no puede
+        # hacerlo — p. ej. un conductor dejando el camión a nombre de otro.
+        return jsonify({'error': str(e), 'motivo': 'sin_derecho'}), 403
     except ErrorFlota as e:
         # 409: el estado del mundo no admite este traspaso. No es un error de
         # sintaxis del cliente ni una falla del servidor — es un "no se puede".
@@ -427,6 +457,15 @@ def registrar_odometro():
     Append-only. Una lectura no se edita: se corrige con un registro nuevo de
     `origen = correccion`, que exige motivo escrito — sin él una corrección es
     indistinguible de un error de digitación.
+
+    **Dos preguntas además del rol** (2026-09-24):
+
+    · el conductor registra solo sobre el vehículo de su custodia activa
+      (`sin_derecho_sobre_vehiculo`);
+    · `correccion` es de `MAESTROS_FLOTA` aunque la puerta sea `LECTURA_FLOTA`
+      (`sin_permiso_de_corregir`): gana por ser la más reciente y reescribe el
+      odómetro del que cuelgan el CPK y el preventivo. El conductor que tecleó
+      mal avisa; corregir es verificar, y verificar ya no es suyo.
     """
     datos = request.get_json(silent=True) or {}
 
@@ -446,9 +485,12 @@ def registrar_odometro():
         return jsonify({'error': f'Valor inválido: {e}'}), 400
 
     # Que el origen exista en el enum no significa que ESTE gesto lo produzca.
-    # `entrega` la escribe el traspaso; `preoperacional` y `ot` todavía no
-    # tienen fuente. Aceptarlos acá deja una lectura apuntando a un padre que
-    # no existe — y en el caso de `entrega`, un cambio de turno inventado.
+    # `entrega` la escribe el traspaso, `preoperacional` la inspección, `ot` la
+    # apertura de una orden y `hallazgo` el reporte del daño — cada una en la
+    # misma transacción que su padre (regla 3). Aceptarlas sueltas acá deja una
+    # lectura que dice «acá hubo X» sin ningún X al lado — y en el caso de
+    # `entrega`, un cambio de turno inventado. El motivo de cada una, en
+    # `MOTIVO_ORIGEN_NO_SUELTO`.
     if origen not in ORIGENES_LECTURA_SUELTA:
         permitidos = ', '.join(o.value for o in ORIGENES_LECTURA_SUELTA)
         return jsonify({
@@ -458,6 +500,15 @@ def registrar_odometro():
             # orígenes excluidos y un test del dominio lo mantiene así.
             'motivo': MOTIVO_ORIGEN_NO_SUELTO[origen],
         }), 400
+
+    if origen == OrigenLectura.CORRECCION:
+        negado = sin_permiso_de_corregir()
+        if negado is not None:
+            return negado
+
+    denegado = sin_derecho_sobre_vehiculo(vehiculo, 'registrar el odómetro')
+    if denegado is not None:
+        return denegado
 
     from datetime import datetime
     nueva = Lectura(

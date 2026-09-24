@@ -93,6 +93,7 @@ def mundo(db, almacen):
         'sin_capacidad_id': sin_ficha.id, 'placa_sin_capacidad': sin_ficha.placa,
         'usuario_id': flota.id,
         't_cond': create_access_token(identity=str(cond.id)),
+        'u_cond': cond.id,
         't_flota': create_access_token(identity=str(flota.id)),
         't_tienda': create_access_token(identity=str(tienda.id)),
         'db': db,
@@ -702,10 +703,28 @@ class TestQuienPuedeQue:
     quien no puede recibe 403, y quien sí puede **no** recibe 403 — sin lo
     segundo, un `exige()` que rechazara a todo el mundo pasaría igual."""
 
-    def test_el_conductor_SI_registra_un_tanqueo(self, client, mundo):
+    def test_el_conductor_SI_registra_un_tanqueo(self, client, db, mundo):
+        """Del camión que tiene: desde el 2026-09-24 el conductor tanquea solo
+        el vehículo de su custodia activa."""
+        from tests.flota._turno import dar_turno
+
+        dar_turno(db, mundo['u_cond'], mundo['placa'], km=99_500)
         r = client.post('/flota/tanqueos', json=_cuerpo_tanqueo(mundo['placa']),
                         headers=_auth(mundo['t_cond']))
         assert r.status_code == 201, r.get_json()
+
+    def test_el_conductor_NO_tanquea_un_camion_que_no_tiene(self, client, db,
+                                                            mundo):
+        """Un tanqueo con km sobre un camión ajeno le mueve el odómetro y el
+        rendimiento a otro vehículo (2026-09-24)."""
+        from tests.flota._turno import dar_turno
+
+        dar_turno(db, mundo['u_cond'], mundo['placa'], km=99_500)
+        r = client.post('/flota/tanqueos',
+                        json=_cuerpo_tanqueo(mundo['placa_sin_capacidad'], km=10),
+                        headers=_auth(mundo['t_cond']))
+        assert r.status_code == 403, r.get_json()
+        assert r.get_json()['motivo'] == 'sin_derecho'
 
     def test_el_conductor_NO_ve_el_CPK(self, client, mundo):
         """Un CPK en su pantalla está a un paso de leerse como una medida suya,

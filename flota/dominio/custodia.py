@@ -34,6 +34,12 @@ class Veredicto:
     puede: bool
     requiere_forzado: bool
     mensaje: str
+    #: Si las fotos de cierre NO eximen del forzado. `False` para el admin de
+    #: zona (un cierre con las fotos del turno es un cierre normal) y `True`
+    #: para control de flota: es el rol al que se mide por los cierres
+    #: forzados, y un atajo que no los cuente sería el botón que baja su propio
+    #: contador (regla 11).
+    fotos_no_eximen: bool = False
 
 
 @dataclass(frozen=True)
@@ -56,7 +62,7 @@ def puede_recibir(custodia_vigente, quien_pide: QuienPide,
     veces en un mes significa que los conductores no están cerrando turno, y eso
     lo dice el contador del health, no esta función.
 
-    Cinco casos:
+    Seis casos:
 
     · **Quien pide YA es el custodio** — se puede, siempre y sin forzado. Está
       cerrando su propio turno; a quién se lo entregue es otra decisión.
@@ -73,6 +79,9 @@ def puede_recibir(custodia_vigente, quien_pide: QuienPide,
       **no puede**: la conversación es entre él y quien tiene el vehículo. El
       admin de zona **sí**, y queda marcado como forzado — es la única salida
       cuando alguien se fue sin cerrar y el camión tiene que salir.
+    · **Vigente de OTRO conductor, y pide control de flota** — sí, como el
+      admin de zona, pero siempre con motivo y siempre marcado aunque traiga
+      fotos (`fotos_no_eximen`). Decidido el 2026-09-24: el patio lo opera él.
 
     El mensaje del rechazo dice CÓMO se destraba, no solo que está trabado. El
     2026-08-05 decía «tiene que cerrar su turno primero» y Yesid preguntó «¿cómo
@@ -113,6 +122,16 @@ def puede_recibir(custodia_vigente, quien_pide: QuienPide,
     if custodia_vigente.custodio_tipo == CustodioTipo.SEDE.value:
         return Veredicto(True, False, '')
 
+    if quien_pide == QuienPide.CONTROL_FLOTA:
+        return Veredicto(
+            True, True,
+            f'{nombre_custodio_actual or "El custodio anterior"} no cerró su '
+            f'turno. Lo cerrás vos a la fuerza: pide motivo escrito siempre, '
+            f'queda registrado con tu nombre y cuenta en «cierres forzados». '
+            f'Avisale hoy a quien lo tenía.',
+            fotos_no_eximen=True,
+        )
+
     if quien_pide == QuienPide.CONDUCTOR:
         quien = nombre_custodio_actual or 'otro conductor'
         cuando = f' desde {desde}' if desde else ''
@@ -131,6 +150,53 @@ def puede_recibir(custodia_vigente, quien_pide: QuienPide,
         f'y por qué, y sin fotos de cierre no hay con qué comparar el estado del '
         f'vehículo en el turno siguiente.'
     )
+
+
+def custodio_que_puede_nombrar(quien_pide: QuienPide, *,
+                               custodio_tipo: CustodioTipo,
+                               custodio_conductor_id,
+                               conductor_del_que_pide_id,
+                               es_el_custodio_actual: bool) -> Veredicto:
+    """A nombre de quién puede dejar la custodia quien pide.
+
+    QUÉ AFIRMA: si quien pide puede nombrar a ESE custodio entrante.
+
+    QUÉ NO AFIRMA: que pueda cerrar el turno vigente — eso lo dice
+    `puede_recibir`. Son dos preguntas: «¿de quién lo sacás?» y «¿a quién se lo
+    das?». Hasta el 2026-09-24 solo existía la primera, y la segunda la
+    contestaba el cuerpo del request: un conductor mandaba
+    `custodio_conductor_id` de un compañero sobre un camión que dormía en la
+    sede —`puede_recibir` lo deja pasar, una sede no firma—, y el camión quedaba
+    a nombre de otro, que respondía por lo que no recibió.
+
+    · **Gestión y control de flota** — a nombre de cualquiera. Es el recibo de
+      escritorio: el encargado asigna el camión a quien lo va a manejar.
+    · **Conductor** — el custodio entrante solo puede ser **él mismo**. Dejarlo
+      en la sede, solo si lo está entregando él (es el custodio actual): un
+      conductor no mueve a la sede un camión que no tiene.
+    """
+    if quien_pide != QuienPide.CONDUCTOR:
+        return Veredicto(True, False, '')
+
+    if custodio_tipo == CustodioTipo.CONDUCTOR:
+        if conductor_del_que_pide_id is None:
+            return Veredicto(False, False,
+                             'Tu usuario no está vinculado a un conductor: sin '
+                             'eso no se puede dejar un turno a tu nombre. '
+                             'Pedile a administración que te vincule la ficha.')
+        if custodio_conductor_id != conductor_del_que_pide_id:
+            return Veredicto(False, False,
+                             'Solo podés recibir el turno a tu nombre. Si lo va '
+                             'a manejar otro conductor, que lo reciba él con su '
+                             'usuario, o que el encargado de flota lo asigne '
+                             'desde el escritorio.')
+        return Veredicto(True, False, '')
+
+    if es_el_custodio_actual:
+        return Veredicto(True, False, '')
+    return Veredicto(False, False,
+                     'Solo podés dejar en la sede el vehículo de tu turno. '
+                     'Este no lo tenés vos.')
 
 
 def custodias_activas(custodias: Sequence[Custodia]) -> List[Custodia]:
@@ -286,6 +352,9 @@ def validar_arco_exclusivo(custodia: Custodia) -> None:
 
 __all__ = [
     'Hueco',
+    'Veredicto',
+    'puede_recibir',
+    'custodio_que_puede_nombrar',
     'custodias_activas',
     'validar_cardinalidad',
     'validar_un_vehiculo_por_conductor',

@@ -159,9 +159,7 @@ function flotaBandejaCabecera(b) {
 function flotaBandejaHoyHtml(b) {
   const filas = b.hoy || [];
   if (!filas.length) {
-    const dondeAlta = (typeof OPERARIO !== 'undefined' && OPERARIO && OPERARIO.rol === 'admin')
-      ? 'Se dan de alta en <b>Rutas → Alta de vehículos</b>.'
-      : 'El alta de vehículos la hace un administrador.';
+    const dondeAlta = `Se dan de alta ${flotaDondeSeDaDeAlta()}.`;
     return flotaBandejaCabecera(b) + `<div class="tabla-card"><p>No hay vehículos activos
       ${b.filtro ? 'en esta sede' : ''}.</p>
       <p style="color:var(--tx2)">${dondeAlta} Sin vehículos no hay dónde cargar una
@@ -473,10 +471,7 @@ async function flotaSenalAbrir(k) {
 // ═══════════════════════════════════════════════════════════════════════════
 
 function flotaBandejaVehiculosHtml(b) {
-  const esAdmin = typeof OPERARIO !== 'undefined' && OPERARIO && OPERARIO.rol === 'admin';
-  const alta = esAdmin
-    ? 'El alta y la baja de vehículos se hacen en <b>Rutas → Alta de vehículos</b>.'
-    : 'El alta y la baja de vehículos las hace un administrador.';
+  const alta = `El alta y la baja de vehículos se hacen ${flotaDondeSeDaDeAlta()}.`;
   const FICHA = { completa: 'ficha completa', incompleta: 'ficha incompleta', sin_ficha: 'sin ficha' };
   const filas = (b.hoy || []).map(f => `<tr style="cursor:pointer" onclick="flotaExpediente(${Number(f.pos)}, 0)">
       <td>${flotaChipSemaforo(f.semaforo.color)}</td>

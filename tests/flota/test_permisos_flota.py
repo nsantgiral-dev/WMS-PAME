@@ -222,7 +222,15 @@ class TestLaOperacionDelTurnoSigueAbiertaAlConductor:
             assert client.get(ruta, headers=_auth(t)).status_code != 403, ruta
 
     def test_el_conductor_registra_odometro(self, app, db, client, vehiculo):
+        """Del camión que tiene: desde el 2026-09-24 la puerta del rol no
+        alcanza, y el conductor registra solo sobre su custodia activa
+        (`tests/flota/test_derecho_del_conductor.py`)."""
+        from app.models.usuario import Usuario
+        from tests.flota._turno import dar_turno
+
         t = _token(app, db, 'conductor')
+        dar_turno(db, Usuario.query.filter_by(email='conductor-perm@x.com')
+                  .one().id, vehiculo, km=0)
         r = client.post('/flota/odometro',
                         json={'placa': vehiculo, 'valor_km': 100,
                               'origen': 'tanqueo'},

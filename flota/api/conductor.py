@@ -6,7 +6,10 @@ Lo que ve el conductor en su app. Solo lo suyo.
 
 No hay endpoint de escritura acá: el recibo de turno usa
 `POST /flota/custodia/traspaso` como todos, pero con `quien_pide=conductor`, que
-es lo que impide que le quite el turno a otro.
+es lo que impide que le quite el turno a otro — y, desde el 2026-09-24, que lo
+deje a nombre de otro (`dominio.custodia.custodio_que_puede_nombrar`). Lo que
+registra después (odómetro, inspección, daño, tanqueo) es solo sobre el vehículo
+de su custodia activa: `_permisos.sin_derecho_sobre_vehiculo`.
 
 **La identidad sale del token, nunca del cuerpo.** Un conductor no puede pedir
 el turno de otro cambiando un id en el JSON.
