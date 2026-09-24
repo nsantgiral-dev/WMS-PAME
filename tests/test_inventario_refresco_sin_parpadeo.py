@@ -153,8 +153,6 @@ const RESPUESTAS = [
   ['/api/conteo/estadisticas', () => estadisticas('REPORTE')],
   ['/api/conteo/stats', { pendientes: 1 }],
   ['/api/conteo/definitivos', { pendientes: [sesion], total: 1 }],
-  ['/api/conteo/bloqueados', { bloqueados: [{ ...sesion, motivo_bloqueo: 'NO_ENCONTRADO', nivel: 'CC1' }] }],
-  ['/api/conteo/novedades', { novedades: [{ id: 3, descripcion: largo }] }],
   ['/api/conteo/abc/resumen', { distribucion_abc: {}, plan: {}, fuente: largo }],
   ['/api/conteo/?', { sesiones: [sesion], total: 1, total_paginas: 1 }],
   ['/api/kardex/descargar/estado', { en_curso: false, resultado: null }],
@@ -169,7 +167,7 @@ async function responderTodo() {
   for (const [patron, datos] of RESPUESTAS) await responder(patron, datos);
 }
 const CONTENIDO = { lider: 'inv-lider-contenido', conteos: 'inv-conteos-lista', abc: 'inv-abc-resumen',
-  datos: 'inv-datos-container', definitivo: 'inv-definitivo-lista', estadisticas: 'inv-estadisticas-contenido' };
+  datos: 'inv-datos-container', estadisticas: 'inv-estadisticas-contenido' };
 const vacioOCargando = (h) => !h.trim() || /Cargando/.test(h);
 const pollsVivos = () => [...timers.values()].filter(t => t.rep && t.ms === 10000).length;
 
@@ -432,7 +430,7 @@ class TestRecargarNoVaciaElPanel:
         """La clase, en las seis pestañas de Inventario: volver a entrar con los
         mismos parámetros nunca escribe «Cargando…» ni un panel vacío."""
         r = resultados['recargar_cada_pestana']
-        assert set(r['subtabs']) == {'lider', 'conteos', 'abc', 'datos', 'definitivo', 'estadisticas'}, (
+        assert set(r['subtabs']) == {'lider', 'conteos', 'abc', 'datos', 'estadisticas'}, (
             'Pestaña nueva en INV_SUBTABS: agregale contenedor y respuesta a este arnés')
         for s, p in r['por_pestana'].items():
             assert p.get('pinto_datos'), f'{s}: el arnés no llegó a pintar datos ({p})'
