@@ -4116,7 +4116,9 @@ contra `@idempotente`). **17 mutaciones, las 17 rojas** (la del daño con
 gravedad preseleccionada en el opener sobrevivía al primer arnés: se agregó el
 test por la puerta). Migración: upgrade → downgrade → upgrade contra un
 PostgreSQL local desechable; `test_gemelos_del_esquema` y
-`test_constraints_postgres` en verde (103 CHECK).
+`test_constraints_postgres` en verde (103 CHECK). Suite completa el
+2026-09-24 (`-m "not postgres"`): **7501 passed, 0 failed** (5 skipped, 19
+xfailed); después se agregó un test (403 `sin_derecho`), verde por separado.
 
 ### Lo que NO cubre
 
