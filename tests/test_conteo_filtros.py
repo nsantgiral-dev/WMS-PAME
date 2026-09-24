@@ -366,6 +366,9 @@ ctx.get = (u) => { urls.push(u); return new Promise(res => esperas.push({ u, res
 vm.createContext(ctx);
 vm.runInContext(fs.readFileSync(base + '/util.js', 'utf8'), ctx);
 vm.runInContext(fs.readFileSync(base + '/conteo.js', 'utf8'), ctx);
+// Estos tests miden qué viaja y qué se pinta, no si la pestaña está a la
+// vista: eso lo mide tests/test_inventario_refresco_sin_parpadeo.py.
+vm.runInContext('invPanelVisible = () => true;', ctx);
 const R = (s) => vm.runInContext(s, ctx);
 const tick = () => new Promise(r => setImmediate(r));
 const resp = (id, extra) => ({ sesiones: [{ id, codigo: 'C' + id, estado: 'PENDIENTE', producto_codigo: 'P' + id,
