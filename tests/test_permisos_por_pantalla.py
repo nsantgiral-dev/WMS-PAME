@@ -77,6 +77,9 @@ PANTALLAS = [
     ('temporada.js',  None,         ['admin']),
     ('vigia.js',      None,         ['admin']),
     ('etiquetas.js',  None,         ['admin']),
+    # 📈 Analítica (Fase 1): la pestaña la ven `_ROLES_ANALITICA` = Roles.GESTION.
+    ('analitica.js',           None, ['admin', 'supervisor', 'jefe_almacen', 'gerente']),
+    ('analitica_recorrido.js', None, ['admin', 'supervisor', 'jefe_almacen', 'gerente']),
 ]
 
 _MODULOS = {m for m, _, _ in PANTALLAS}
