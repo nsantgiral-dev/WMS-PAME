@@ -64,8 +64,11 @@ def cerrar_ok(registro_id, resultado=None):
     _cerrar(registro_id, True, resultado=resultado)
 
 
-def cerrar_error(registro_id, error):
-    _cerrar(registro_id, False, error=error)
+def cerrar_error(registro_id, error, resultado=None):
+    """`resultado` opcional: una corrida que falló a medias igual hizo cosas
+    (el sync de pedidos pudo hacer upserts antes de quedar incompleto), y eso
+    se anota junto al motivo en vez de perderse."""
+    _cerrar(registro_id, False, resultado=resultado, error=error)
 
 
 def ultimo(tipo: str):

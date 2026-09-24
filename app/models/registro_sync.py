@@ -36,7 +36,13 @@ from app.extensions import db
 #: porque `ultimo('stock')` devuelve una sola fila, la más reciente — sin
 #: separarlas, correr NS1 y luego NC1 el mismo cron haría que el estado de
 #: NC1 "tape" el de NS1 para cualquiera que consulte por bodega.
-TIPOS = ('catalogo', 'barcodes', 'stock', 'stock_ns1', 'stock_nc1', 'setup_inicial', 'reconciliacion', 'kardex')
+#:
+#: `pedidos` (2026-09-24): el sync de pedidos (cada minuto, 7 a 20 h) es el que
+#: BORRA líneas de `pedidos_siesa` cuando el barrido fue completo. Su estado
+#: vivía solo en memoria: un reinicio borraba la única evidencia de qué se
+#: eliminó y por qué. ~780 filas por día hábil; la tabla es OPERATIVA y el
+#: acta de corte la vacía.
+TIPOS = ('catalogo', 'barcodes', 'stock', 'stock_ns1', 'stock_nc1', 'setup_inicial', 'reconciliacion', 'kardex', 'pedidos')
 
 
 class RegistroSync(db.Model):

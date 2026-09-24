@@ -284,3 +284,55 @@ class TestLosSyncsRegistranDeVerdad:
                 f'seguiría viviendo solo en memoria')
         assert 'cerrar_ok(' in fuente, f'{tipo}: nunca cierra con éxito'
         assert 'cerrar_error(' in fuente, f'{tipo}: no registra el fallo'
+
+
+class TestElSyncDePedidosDejaRastro:
+    """El sync de pedidos es el único que BORRA (`pedidos_siesa`) y su estado
+    vivía solo en memoria: un deploy borraba la evidencia de qué se eliminó y
+    por qué. Cada corrida queda ahora en `registros_sync` con tipo `pedidos`."""
+
+    @staticmethod
+    def _pedido(db, consec):
+        from app.models.pedido_siesa import PedidoSiesa
+        db.session.add(PedidoSiesa(
+            tipo_docto='PD', consec_docto=consec, centro_op='003', bodega='NB1',
+            numero_pedido=f'PD-{consec}', item_codigo='SKU1', cantidad_pedida=5,
+            cantidad_pendiente=5, estado_siesa=3))
+        db.session.commit()
+
+    @staticmethod
+    def _correr(app, monkeypatch, respuesta):
+        from app.services import pedidos_sync_service as sync
+        from app.services.connekta_gateway import ConnektaGateway
+        monkeypatch.setattr(ConnektaGateway, '_get', lambda self, *a, **k: respuesta)
+        sync._run_sync(app)
+
+    def test_un_barrido_completo_anota_lo_que_borro(self, app, db, monkeypatch):
+        self._pedido(db, 501)
+        self._correr(app, monkeypatch, {'detalle': {'Table': []}})
+        filas = RegistroSync.query.filter_by(tipo='pedidos').all()
+        assert len(filas) == 1
+        d = filas[0].to_dict()
+        assert d['ok'] is True and d['fin']
+        assert d['resultado']['paginacion_completa'] is True
+        assert d['resultado']['eliminados'] == 1
+        assert d['resultado']['eliminados_detalle'] == ['PD-501/NB1:SKU1']
+
+    def test_un_barrido_incompleto_queda_como_fallo_con_su_motivo(
+            self, app, db, monkeypatch):
+        """No lanzó, pero no pudo decidir qué borrar: no es una corrida OK."""
+        self._pedido(db, 502)
+        self._correr(app, monkeypatch,
+                     {'detalle': {'Table': [{'alerta': 'tamaño de página excede'}]}})
+        d = RegistroSync.query.filter_by(tipo='pedidos').one().to_dict()
+        assert d['ok'] is False
+        assert 'barrido incompleto' in d['error']
+        assert d['resultado']['paginacion_completa'] is False
+        assert d['resultado']['eliminados'] == 0
+
+    def test_el_estado_publica_lo_persistido(self, app, db, monkeypatch):
+        from app.services.pedidos_sync_service import estado_sync
+        self._correr(app, monkeypatch, {'detalle': {'Table': []}})
+        p = estado_sync()['persistido']
+        assert p['ultima_corrida']['tipo'] == 'pedidos'
+        assert p['alguna_vez_ok'] is True

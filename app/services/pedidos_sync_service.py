@@ -28,6 +28,7 @@ _sync_estado = {
     'ultimo_error': None,
 }
 _MIN_INTERVALO_SEG = 90  # mínimo 90s entre syncs manuales
+_MAX_BORRADOS_DETALLE = 200  # claves borradas que se anotan en registros_sync
 
 
 def _run_sync(app):
@@ -62,6 +63,16 @@ def _run_sync(app):
         # los que ya no existen. Regla 0, la misma de `ConnektaPaginacionError`.
         paginacion_completa = False
         motivo_incompleta = None
+        borrados_detalle = []
+
+        # Se anota DESPUÉS del lock (una corrida que no llegó a ejecutar no es
+        # una corrida) y en la tabla, no solo en `_sync_estado`: este sync es el
+        # que borra líneas de `pedidos_siesa`, y la memoria del proceso se
+        # pierde en cada deploy. Anotar no puede tumbar el sync (el servicio de
+        # registro traga sus propios errores).
+        from app.services import registro_sync_service as _reg
+        _reg_id = _reg.abrir('pedidos')
+        resultado = None
 
         try:
             # estado=3 → Comprometido: inventario físicamente reservado en Siesa
@@ -294,10 +305,17 @@ def _run_sync(app):
                 PedidoSiesa.bodega,
                 PedidoSiesa.item_codigo,
             ).all()
-            ids_a_borrar = [
-                r.id for r in todos_ids
+            filas_a_borrar = [
+                r for r in todos_ids
                 if (r.tipo_docto, r.consec_docto, r.centro_op, r.bodega, r.item_codigo) not in claves_activas
             ] if paginacion_completa else []
+            ids_a_borrar = [r.id for r in filas_a_borrar]
+            # La evidencia de QUÉ se borró, para `registros_sync`. Con tope: un
+            # barrido que borra miles es en sí el hallazgo, y la cuenta total
+            # viaja en `eliminados`.
+            borrados_detalle = [
+                f'{r.tipo_docto}-{r.consec_docto}/{r.bodega}:{r.item_codigo}'
+                for r in filas_a_borrar[:_MAX_BORRADOS_DETALLE]]
             if ids_a_borrar:
                 PedidoSiesa.query.filter(PedidoSiesa.id.in_(ids_a_borrar)).delete(synchronize_session=False)
                 eliminados = len(ids_a_borrar)
@@ -316,15 +334,29 @@ def _run_sync(app):
                 # «no había nada que borrar».
                 'paginacion_completa': paginacion_completa,
                 'motivo_incompleta': motivo_incompleta,
+                'eliminados_detalle': borrados_detalle,
             }
             logger.info(f'[PEDIDOS_SYNC] OK: {resultado}')
             _sync_estado['ultimo_resultado'] = resultado
             _sync_estado['ultimo_error'] = None
+            # Un barrido incompleto NO es una corrida OK aunque no haya
+            # lanzado: no pudo decidir qué borrar. Se anota como fallo, con el
+            # motivo y lo que sí alcanzó a hacer.
+            if paginacion_completa:
+                _reg.cerrar_ok(_reg_id, resultado)
+            else:
+                _reg.cerrar_error(_reg_id, f'barrido incompleto: {motivo_incompleta}',
+                                  resultado=resultado)
 
         except Exception as e:
             logger.error(f'[PEDIDOS_SYNC] Error: {e}')
             db.session.rollback()
             _sync_estado['ultimo_error'] = str(e)
+            _reg.cerrar_error(_reg_id, e, resultado={
+                'paginas_leidas': paginas_leidas,
+                'paginacion_completa': paginacion_completa,
+                'motivo_incompleta': motivo_incompleta,
+            })
         finally:
             _sync_estado['en_curso'] = False
             _lock.liberar()
@@ -355,11 +387,16 @@ def iniciar_sync_background(app, forzar=False):
 
 
 def estado_sync():
+    from app.services import registro_sync_service as _reg
     return {
         'en_curso': _sync_estado['en_curso'],
         'ultimo_inicio': _sync_estado['ultimo_inicio'].isoformat() if _sync_estado['ultimo_inicio'] else None,
         'ultimo_resultado': _sync_estado['ultimo_resultado'],
         'ultimo_error': _sync_estado['ultimo_error'],
+        # Lo que sobrevive al reinicio: la memoria de arriba es del proceso.
+        'persistido': _reg.estado_persistido(
+            'pedidos', en_memoria_corrio=bool(
+                _sync_estado['ultimo_resultado'] or _sync_estado['ultimo_error'])),
     }
 
 
