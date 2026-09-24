@@ -5,6 +5,7 @@ POST /api/kardex/descargar          — descarga movimientos de Siesa
 POST /api/kardex/reconstruir        — reconstruye stock diario hacia atrás
 GET  /api/kardex/tasa-censurada     — velocity censurada por SKU
 GET  /api/kardex/stock-diario       — stock reconstruido por referencia+bodega
+GET  /api/kardex/salud              — ¿está al día? veredicto servido
 """
 from flask import Blueprint, jsonify, request
 from flask_jwt_extended import jwt_required
@@ -32,9 +33,11 @@ def descargar_kardex():
     if not _es_admin_o_jefe():
         return jsonify({'error': 'Solo admin puede descargar kardex'}), 403
 
-    from app.services import registro_sync_service as _reg
-    _ultimo = _reg.ultimo('kardex')
-    if _ultimo and '_error_lectura' not in _ultimo and _ultimo.get('fin') is None:
+    # «En curso» lo decide `estado_descarga`: un registro abierto por un
+    # proceso que murió (deploy a mitad) NO es una descarga en curso, y leerlo
+    # así bloqueaba este botón para siempre.
+    from app.services.kardex_service import estado_descarga
+    if estado_descarga()['en_curso']:
         return jsonify({'ok': True, 'mensaje': 'Descarga ya en curso — revisar logs'}), 200
 
     if request.method == 'GET':
@@ -92,26 +95,13 @@ def descargar_kardex():
 def estado_descarga():
     """Verifica si la descarga está en curso o terminó — leído de `registros_sync`,
     no de un dict en memoria (ver comentario en `descargar_kardex`)."""
-    from app.services import registro_sync_service as _reg
-    ultimo = _reg.ultimo('kardex')
-
-    if ultimo is None:
-        return jsonify({'en_curso': False, 'resultado': None}), 200
-
-    if '_error_lectura' in ultimo:
-        return jsonify({
-            'en_curso': False,
-            'resultado': None,
-            'error_lectura': ultimo['_error_lectura'],
-        }), 200
-
-    if ultimo['fin'] is None:
-        return jsonify({'en_curso': True, 'resultado': None}), 200
-
-    if ultimo['ok'] is False:
-        return jsonify({'en_curso': False, 'resultado': {'error': ultimo['error']}}), 200
-
-    return jsonify({'en_curso': False, 'resultado': ultimo['resultado']}), 200
+    from app.services.kardex_service import estado_descarga as _estado
+    e = _estado()
+    salida = {'en_curso': e['en_curso'], 'interrumpida': e['interrumpida'],
+              'resultado': None if e['en_curso'] else e['resultado']}
+    if e['error_lectura']:
+        salida['error_lectura'] = e['error_lectura']
+    return jsonify(salida), 200
 
 
 @kardex_bp.route('/reconstruir', methods=['POST'])
@@ -137,18 +127,15 @@ def reconstruir_stock():
 
     # Leído de `registros_sync` — igual que `estado_descarga()` arriba, no de
     # un dict en memoria que un worker distinto al que descargó no puede ver.
-    from app.services import registro_sync_service as _reg
-    _ultimo_reg = _reg.ultimo('kardex')
-    if _ultimo_reg and '_error_lectura' not in _ultimo_reg and _ultimo_reg.get('fin') is None:
+    from app.services.kardex_service import estado_descarga
+    _e = estado_descarga()
+    if _e['en_curso']:
         return jsonify({
             'error': 'Hay una descarga en curso. Reconstruir ahora usaría datos a medias.',
         }), 409
-    if _ultimo_reg and '_error_lectura' not in _ultimo_reg and _ultimo_reg.get('ok') is False:
-        ultima = {'error': _ultimo_reg.get('error')}
-    elif _ultimo_reg and '_error_lectura' not in _ultimo_reg:
-        ultima = _ultimo_reg.get('resultado')
-    else:
-        ultima = None
+    # Una interrumpida llega acá con `ok: False` y estado INTERRUMPIDA: se
+    # rechaza por calidad (con override), no como «esperá a que termine».
+    ultima = _e['resultado']
 
     # Sin descarga en esta sesión no se puede afirmar que el kardex esté completo.
     # Regla 0: ante estado desconocido, no seguir.
@@ -186,6 +173,24 @@ def reconstruir_stock():
         'perfil_mensual': perfil_mensual_kardex(),
         **resultado,
     }), 200
+
+
+@kardex_bp.route('/salud', methods=['GET'])
+@jwt_required()
+def salud():
+    """¿Está al día el kardex? — el veredicto que pintan Datos y Modelos.
+
+    Lectura pura. `_es_compras()` como `/reconciliar`: quien firma la compra
+    abre Modelos, y tiene derecho a saber si lo que lee está al día.
+    """
+    if not _es_compras():
+        return jsonify({'error': 'Sin permiso para ver la salud del kardex'}), 403
+    from app.services.kardex_service import salud_kardex
+    try:
+        return jsonify(salud_kardex()), 200
+    except Exception as e:
+        logger.exception('[KARDEX] salud')
+        return jsonify({'error': str(e)}), 500
 
 
 @kardex_bp.route('/perfil-mensual', methods=['GET'])

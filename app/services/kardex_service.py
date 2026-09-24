@@ -222,6 +222,358 @@ def hash_movimiento(fecha, tipo_docto, bodega, referencia, concepto,
     return hashlib.sha256('|'.join(partes).encode()).hexdigest()
 
 
+def _parsear_fila(row):
+    """Una fila cruda de la consulta → los campos del movimiento, o `None`.
+
+    UNA SOLA LECTURA DE LA FILA, para la descarga y para el diagnóstico de
+    orden. Antes cada uno armaba la identidad a su manera: la descarga con
+    `f470_nro_registro`, el diagnóstico con `LineaRegistro` — y `LineaRegistro`
+    NO identifica una fila. Medido en vivo contra Siesa QA el 2026-09-24 sobre
+    el mismo endpoint dinámico (`papeleriamedellin_WMS_Stock_Bodega_v2`): es el
+    número de posición del resultado (la página 50 trae exactamente 4901–5000),
+    y dos pedidos de la misma página con 5 s de diferencia le asignaron esos
+    mismos números a filas distintas. Meterlo en la identidad hacía que una
+    misma fila pareciera otra.
+
+    Devuelve `None` si falta referencia, bodega o una fecha legible: esa fila no
+    puede ser un movimiento, y quien llama la cuenta como error.
+    """
+    if not isinstance(row, dict):
+        return None
+    ref = (row.get('f120_referencia') or '').strip()
+    bodega = (row.get('f150_id') or row.get('f470_id_bodega') or '').strip()
+    if not ref or not bodega:
+        return None
+
+    # Fecha: puede venir como 'f450_id_fecha ' (con espacio) o ISO format
+    fecha_str = str(
+        row.get('f450_id_fecha ') or row.get('f450_id_fecha') or
+        row.get('f350_fecha') or ''
+    ).strip()
+    try:
+        # Soporta YYYYMMDD y YYYY-MM-DDTHH:MM:SS
+        fecha = (datetime.strptime(fecha_str[:10], '%Y-%m-%d').date()
+                 if '-' in fecha_str
+                 else datetime.strptime(fecha_str[:8], '%Y%m%d').date())
+    except (ValueError, TypeError):
+        return None
+
+    # Naturaleza: Connekta devuelve 'Entrada'/'Salida' (string), no 1/2
+    nat_raw = row.get('f470_ind_naturaleza', '')
+    if isinstance(nat_raw, str):
+        naturaleza = 1 if 'ntrada' in nat_raw else 2  # Entrada=1, Salida=2
+    else:
+        naturaleza = int(nat_raw) if nat_raw else 0
+
+    # Clave natural del documento, si viene. Los nombres varían entre
+    # consultas, así que se prueban los plausibles.
+    consec = str(
+        row.get('f350_consec_docto') or row.get('f470_consec_docto') or
+        row.get('f350_consec') or ''
+    ).strip()
+    try:
+        nro_reg = int(row.get('f470_nro_registro') or
+                      row.get('f470_nro_reg') or 0) or None
+    except (TypeError, ValueError):
+        nro_reg = None
+
+    tipo_docto = (row.get('f350_id_tipo_docto') or '').strip()
+    try:
+        concepto = int(row.get('f470_id_concepto', 0) or 0)
+        cantidad = abs(float(row.get('f470_cant_base', 0) or 0))
+        costo = float(row.get('f470_costo_prom_uni', 0) or 0)
+    except (TypeError, ValueError):
+        return None
+
+    return {
+        'fecha': fecha, 'tipo_docto': tipo_docto, 'bodega': bodega,
+        'referencia': ref, 'concepto': concepto, 'naturaleza': naturaleza,
+        'cantidad': cantidad, 'costo_promedio': costo,
+        'consec_docto': consec or None, 'nro_registro': nro_reg,
+        'hash': hash_movimiento(fecha, tipo_docto, bodega, ref, concepto,
+                                naturaleza, cantidad, consec, nro_reg),
+    }
+
+
+def totales_declarados(respuesta):
+    """(total_registros, total_paginas) que la consulta dinámica declara.
+
+    El sobre REAL, medido en vivo contra Siesa QA el 2026-09-24 en el endpoint
+    dinámico (`ejecutarconsulta`) — el mismo que usa el kardex:
+
+        detalle = {'tamaño_página': 5, 'página_actual': 1,
+                   'total_páginas': 7121, 'total_registros': 35604,
+                   'Datos': [...]}
+
+    Con tilde y eñe. La descarga buscaba `totalRegistros`, `TotalRegistros`,
+    `total`, `Total`, `totalFilas`, `cantidadRegistros` — seis nombres
+    adivinados y ninguno era el real, así que `total_declarado_por_siesa` salía
+    `None` en toda descarga y la prueba de completitud POR CONTEO, la que el
+    propio docstring llamaba «superior al perfil mensual», nunca corrió. El test
+    que la cuidaba solo pedía que la clave existiera.
+
+    Devuelve `None` en lo que no venga: no saber no es cero.
+    """
+    det = (respuesta or {}).get('detalle')
+    if not isinstance(det, dict):
+        return None, None
+
+    def _entero(*claves):
+        for k in claves:
+            v = det.get(k)
+            if v in (None, ''):
+                v = (respuesta or {}).get(k)
+            if v in (None, ''):
+                continue
+            try:
+                return int(v)
+            except (TypeError, ValueError):
+                return None
+        return None
+
+    return (_entero('total_registros', 'totalRegistros'),
+            _entero('total_páginas', 'total_paginas', 'totalPaginas'))
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ¿ESTÁ CORRIENDO LA DESCARGA, O MURIÓ?
+# ══════════════════════════════════════════════════════════════════════════════
+
+#: Ninguna corrida de descarga dura más que esto. Es un techo y no un default:
+#: `tope_minutos` recorta lo que pida la llamada. De que exista un techo
+#: depende poder afirmar que un registro abierto hace más tiempo es un proceso
+#: muerto y no una descarga lenta.
+KARDEX_TOPE_MINUTOS = 120
+#: Holgura sobre el techo: la última página (timeout 60 s) y su commit.
+MARGEN_INTERRUMPIDA_MIN = 10
+
+
+def tope_minutos(max_minutos=None) -> int:
+    """Minutos que puede durar ESTA corrida: lo pedido, o `KARDEX_MAX_MINUTOS`
+    (25), recortado a [1, `KARDEX_TOPE_MINUTOS`]."""
+    try:
+        v = int(max_minutos or os.environ.get('KARDEX_MAX_MINUTOS', '25'))
+    except (TypeError, ValueError):
+        v = 25
+    return max(1, min(v, KARDEX_TOPE_MINUTOS))
+
+
+def estado_descarga(ahora=None) -> dict:
+    """La última descarga según `registros_sync`, con el caso que faltaba.
+
+    UN REGISTRO ABIERTO NO ES UNA DESCARGA EN CURSO. La descarga corre en un
+    hilo del proceso web; un deploy o un reinicio de Railway lo mata sin cerrar
+    su fila, y `ok`/`fin` quedan en NULL para siempre. Las tres rutas leían
+    «fin es NULL» como «en curso», así que desde ese momento:
+
+      · `/descargar` contestaba «Descarga ya en curso — revisar logs» y no
+        arrancaba NUNCA más;
+      · `/reconstruir` contestaba 409 «hay una descarga en curso» — también
+        para siempre;
+      · la pantalla mostraba «● En curso» indefinidamente.
+
+    Y la descarga completa son horas de corridas de 25 minutos: que un deploy
+    caiga en medio de una no es un caso raro, es el esperable. Con el techo de
+    `KARDEX_TOPE_MINUTOS` un registro abierto hace más de techo + margen no
+    puede ser una corrida viva: es una INTERRUMPIDA, y se declara como tal —
+    ni en curso ni exitosa.
+
+    Returns: {hay_registro, en_curso, interrumpida, registro, resultado,
+              error_lectura}
+    """
+    from app.services import registro_sync_service as _reg
+    ult = _reg.ultimo('kardex')
+    salida = {'hay_registro': False, 'en_curso': False, 'interrumpida': False,
+              'registro': None, 'resultado': None, 'error_lectura': None}
+    if ult is None:
+        return salida
+    if '_error_lectura' in ult:
+        salida['error_lectura'] = ult['_error_lectura']
+        return salida
+
+    salida['hay_registro'] = True
+    salida['registro'] = {k: ult.get(k) for k in ('id', 'inicio', 'fin', 'ok')}
+    if ult.get('fin') is None:
+        ahora = ahora or datetime.utcnow()
+        try:
+            inicio = datetime.fromisoformat(ult['inicio'])
+        except (TypeError, ValueError):
+            inicio = None
+        limite = timedelta(minutes=KARDEX_TOPE_MINUTOS + MARGEN_INTERRUMPIDA_MIN)
+        # Sin inicio legible no se puede afirmar que siga viva: Regla 0.
+        if inicio is None or ahora - inicio > limite:
+            salida['interrumpida'] = True
+            salida['resultado'] = {
+                'ok': False,
+                'estado': 'INTERRUMPIDA',
+                'detalle_estado': (
+                    'La descarga que empezó '
+                    f'{ult.get("inicio") or "(sin hora)"} (UTC) nunca cerró: el '
+                    'proceso murió (reinicio o deploy). No se sabe hasta qué '
+                    'página llegó. Descargar de nuevo desde la página 1: lo ya '
+                    'guardado no se duplica.'),
+                'reanudar_desde': 1,
+            }
+        else:
+            salida['en_curso'] = True
+        return salida
+
+    if ult.get('ok') is False:
+        salida['resultado'] = {'ok': False, 'error': ult.get('error')}
+    else:
+        salida['resultado'] = ult.get('resultado')
+    return salida
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ¿ESTÁ AL DÍA EL KARDEX? — un veredicto, calculado acá y en ningún otro sitio
+# ══════════════════════════════════════════════════════════════════════════════
+
+#: Días que puede tener el último movimiento guardado antes de declarar el
+#: kardex desactualizado. Los modelos promedian doce meses, pero la semana que
+#: falta es la más reciente — la que el ROP y la reposición leen primero.
+def dias_frescura() -> int:
+    try:
+        return max(1, int(os.environ.get('KARDEX_DIAS_FRESCURA', '7')))
+    except (TypeError, ValueError):
+        return 7
+
+
+def salud_kardex() -> dict:
+    """¿Puedo creerle al kardex HOY? — lo que la pantalla muestra, servido.
+
+    Antes, la pestaña Datos mostraba solo el resultado de la última descarga
+    (o «Sin descargas en esta sesión del servidor», que dejó de ser cierto
+    cuando el estado pasó a `registros_sync`), y la pantalla Modelos decía
+    «✓ Kardex completo» con que no hubiera conceptos sin clasificar — lo que
+    un kardex VACÍO cumple por construcción. Nadie podía saber, mirando, si el
+    kardex tenía datos, de cuándo, ni si la serie de stock diario estaba
+    reconstruida sobre la última descarga.
+
+    El veredicto se calcula ACÁ y las pantallas lo pintan: si cada una armara
+    el suyo en JS, divergirían (Regla 0, «una política, una función»).
+
+    `confiable` es True solo si NO hay ningún problema: un estado que no se
+    puede afirmar bueno no se muestra verde.
+    """
+    from sqlalchemy import func
+    from app.services.connekta_gateway import connekta
+
+    hoy = _dia_operativo()
+    umbral = dias_frescura()
+
+    total, f_min, f_max = db.session.query(
+        func.count(KardexMovimiento.id),
+        func.min(KardexMovimiento.fecha),
+        func.max(KardexMovimiento.fecha),
+    ).one()
+    total = int(total or 0)
+    bodegas = sorted(r[0] for r in
+                     db.session.query(KardexMovimiento.bodega).distinct().all())
+    ultimo_guardado = db.session.query(func.max(KardexMovimiento.descargado_en)).scalar()
+    sd_total, sd_max = db.session.query(
+        func.count(StockDiario.id), func.max(StockDiario.fecha)).one()
+    sd_total = int(sd_total or 0)
+    conceptos = {r[0] for r in
+                 db.session.query(KardexMovimiento.concepto).distinct().all()}
+    sin_clasificar = sorted(conceptos - set(CONCEPTO_DEFINICION.keys()))
+
+    desc = estado_descarga()
+    res = desc['resultado'] or {}
+    dias_desde = (hoy - f_max).days if f_max else None
+
+    problemas = []
+
+    def _p(codigo, titulo, que_hacer):
+        problemas.append({'codigo': codigo, 'titulo': titulo, 'que_hacer': que_hacer})
+
+    if desc['error_lectura']:
+        _p('SIN_LECTURA_DEL_REGISTRO',
+           'No se pudo leer el registro de descargas.',
+           'Revisar la base (registros_sync) antes de confiar en nada de acá.')
+    if total == 0:
+        _p('SIN_DATOS', 'El kardex está vacío: los modelos no tienen de dónde leer.',
+           'Descargar el kardex de Siesa (fuera de horario).')
+    if desc['en_curso']:
+        _p('DESCARGA_EN_CURSO', 'Hay una descarga corriendo: los datos están a medias.',
+           'Esperar a que termine y volver a mirar.')
+    elif desc['interrumpida']:
+        _p('DESCARGA_INTERRUMPIDA',
+           'La última descarga murió sin terminar (reinicio o deploy).',
+           'Descargar de nuevo: lo ya guardado no se duplica.')
+    elif desc['hay_registro'] and res.get('ok') is not True:
+        _p('ULTIMA_DESCARGA_INCOMPLETA',
+           'La última descarga no quedó completa ('
+           + str(res.get('estado') or ('error: ' + str(res.get('error'))[:120]
+                                       if res.get('error') else 'sin estado'))
+           + ').',
+           'Reanudar o repetir la descarga; no reconstruir sobre datos truncados.')
+    elif not desc['hay_registro'] and total > 0 and not desc['error_lectura']:
+        _p('SIN_DESCARGA_REGISTRADA',
+           f'Hay {total} movimientos pero ninguna descarga registrada: no se '
+           'puede afirmar que estén completos.',
+           'Descargar de nuevo para dejar constancia de cómo terminó.')
+    if sin_clasificar:
+        _p('CONCEPTOS_SIN_CLASIFICAR',
+           f'{len(sin_clasificar)} concepto(s) sin clasificar: {sin_clasificar}.',
+           'Agregarlos a CONCEPTO_DEFINICION antes de calcular.')
+    if total > 0 and dias_desde is not None and dias_desde > umbral:
+        _p('DESACTUALIZADO',
+           f'El último movimiento guardado es del {f_max.isoformat()}: '
+           f'{dias_desde} días atrás (tolerancia {umbral}).',
+           'Descargar el kardex: nada lo actualiza solo.')
+    if total > 0 and (sd_max is None or sd_max < f_max):
+        _p('STOCK_DIARIO_ATRASADO',
+           'La serie de stock diario no cubre el último movimiento guardado'
+           + (f' (llega al {sd_max.isoformat()})' if sd_max else ' (está vacía)')
+           + ': la demanda corregida por agotados usa días que faltan.',
+           'Reconstruir stock diario después de una descarga completa.')
+
+    return {
+        'veredicto': problemas[0]['codigo'] if problemas else 'AL_DIA',
+        'confiable': not problemas,
+        'problemas': problemas,
+        'hoy': hoy.isoformat(),
+        'umbral_dias': umbral,
+        'movimientos': {
+            'total': total,
+            'primera_fecha': f_min.isoformat() if f_min else None,
+            'ultima_fecha': f_max.isoformat() if f_max else None,
+            'dias_desde_ultimo': dias_desde,
+            'bodegas': bodegas,
+            'ultimo_guardado_utc': ultimo_guardado.isoformat() if ultimo_guardado else None,
+        },
+        'stock_diario': {
+            'dias': sd_total,
+            'ultima_fecha': sd_max.isoformat() if sd_max else None,
+        },
+        'conceptos_sin_clasificar': sin_clasificar,
+        'ultima_descarga': {
+            'hay_registro': desc['hay_registro'],
+            'en_curso': desc['en_curso'],
+            'interrumpida': desc['interrumpida'],
+            'inicio_utc': (desc['registro'] or {}).get('inicio'),
+            'fin_utc': (desc['registro'] or {}).get('fin'),
+            'estado': res.get('estado') or ('ERROR' if res.get('error') else None),
+            'ok': res.get('ok') if desc['hay_registro'] else None,
+            'error': res.get('error'),
+            'total_descargados': res.get('total_descargados'),
+            'reanudar_desde': res.get('reanudar_desde'),
+        },
+        # Ningún cron descarga el kardex (ver el trinquete en
+        # tests/test_kardex_salud.py). Si alguien lo agenda, esto tiene que
+        # cambiar con él.
+        'actualizacion_automatica': False,
+        'nota_actualizacion': (
+            'Nada actualiza el kardex solo: se descarga cuando alguien pulsa '
+            '«Descargar». Por eso la fecha del último movimiento es el dato a mirar.'),
+        'descargaria_de': {
+            'host': connekta.host_siesa,
+            'parece_qa': bool(connekta.apunta_a_pruebas),
+        },
+    }
+
+
 def perfil_mensual_kardex():
     """Filas por mes en el kardex almacenado.
 
@@ -362,8 +714,10 @@ class KardexService:
         filtrados = 0
         inicio = datetime.utcnow()
         # Por debajo del corte anterior: mejor varias corridas honestas que una
-        # que se rinde justo donde nadie mira.
-        MAX_MINUTOS = int(max_minutos or os.environ.get('KARDEX_MAX_MINUTOS', '25'))
+        # que se rinde justo donde nadie mira. Acotado por `tope_minutos`: de
+        # ese techo depende saber cuándo un registro abierto es un proceso
+        # muerto (ver `estado_descarga`).
+        MAX_MINUTOS = tope_minutos(max_minutos)
 
         # Cómo terminó. Es el dato que faltaba: sin él, truncado y completo son
         # el mismo retorno.
@@ -377,6 +731,13 @@ class KardexService:
         fecha_min = fecha_max = None
         duplicados = 0
         total_declarado = None
+        paginas_declaradas = None
+        # Lo que ATERRIZÓ en esta corrida, sin filtro de fechas: filas que
+        # llegaron y cuántas identidades distintas son. Es el otro lado del
+        # conteo que Siesa declara.
+        filas_recibidas = 0
+        identidades_corrida = set()
+        sin_clave_natural = 0
 
         # Hashes ya presentes: hace la descarga idempotente entre corridas.
         vistos_bd = {h for (h,) in db.session.query(KardexMovimiento.hash_origen)
@@ -413,18 +774,12 @@ class KardexService:
                 # ¿Siesa declara cuántas filas hay? Si lo hace, es la verdad de
                 # origen: declaradas vs aterrizadas es una prueba de completitud
                 # por CONTEO, superior al perfil mensual, que la infiere por
-                # distribución. Se buscan los nombres plausibles.
-                if total_declarado is None:
-                    for k in ('totalRegistros', 'TotalRegistros', 'total',
-                              'Total', 'totalFilas', 'cantidadRegistros'):
-                        v = (res or {}).get(k) or detalle.get(k)
-                        if v not in (None, ''):
-                            try:
-                                total_declarado = int(v)
-                                logger.info('[KARDEX] Siesa declara %d registros', total_declarado)
-                            except (TypeError, ValueError):
-                                pass
-                            break
+                # distribución. Ver `totales_declarados` (nombres medidos).
+                if total_declarado is None and paginas_declaradas is None:
+                    total_declarado, paginas_declaradas = totales_declarados(res)
+                    if total_declarado is not None:
+                        logger.info('[KARDEX] Siesa declara %d registros en %s páginas',
+                                    total_declarado, paginas_declaradas)
 
                 # Log de descubrimiento: mostrar keys del primer registro
                 if pagina == 1 and rows:
@@ -435,58 +790,33 @@ class KardexService:
                     if pagina == max(1, int(pagina_inicial or 1)):
                         estado = 'SIN_DATOS'
                         detalle_estado = 'La primera página vino vacía — ¿credenciales o consulta?'
+                    elif paginas_declaradas and pagina <= paginas_declaradas:
+                        # Una página vacía ANTES del final declarado no es el
+                        # fin: es un hueco. Cortar ahí y llamarlo COMPLETA era
+                        # exactamente el truncamiento que esto existe para ver.
+                        estado = 'PAGINA_VACIA_ANTES_DEL_FINAL'
+                        detalle_estado = (
+                            f'La página {pagina} vino vacía y Siesa declara '
+                            f'{paginas_declaradas} páginas.')
                     break
 
+                filas_recibidas += len(rows)
                 for row in rows:
-                    if not isinstance(row, dict):
-                        continue
-                    ref = (row.get('f120_referencia') or '').strip()
-                    bodega = (row.get('f150_id') or row.get('f470_id_bodega') or '').strip()
-                    if not ref or not bodega:
-                        continue
-
-                    # Fecha: puede venir como 'f450_id_fecha ' (con espacio) o ISO format
-                    fecha_str = str(
-                        row.get('f450_id_fecha ') or row.get('f450_id_fecha') or
-                        row.get('f350_fecha') or ''
-                    ).strip()
-                    try:
-                        # Soporta YYYYMMDD y YYYY-MM-DDTHH:MM:SS
-                        fecha = datetime.strptime(fecha_str[:10], '%Y-%m-%d').date() if '-' in fecha_str else datetime.strptime(fecha_str[:8], '%Y%m%d').date()
-                    except (ValueError, TypeError):
+                    f = _parsear_fila(row)
+                    if f is None:
                         errores += 1
                         continue
+                    identidades_corrida.add(f['hash'])
+                    if not f['consec_docto'] and f['nro_registro'] is None:
+                        sin_clave_natural += 1
 
+                    fecha = f['fecha']
                     # Filtro por rango de fechas (en Python, no en Connekta)
                     if fecha < fecha_desde_dt or fecha > fecha_hasta_dt:
                         filtrados += 1
                         continue
 
-                    # Naturaleza: Connekta devuelve 'Entrada'/'Salida' (string), no 1/2
-                    nat_raw = row.get('f470_ind_naturaleza', '')
-                    if isinstance(nat_raw, str):
-                        naturaleza = 1 if 'ntrada' in nat_raw else 2  # Entrada=1, Salida=2
-                    else:
-                        naturaleza = int(nat_raw) if nat_raw else 0
-
-                    # Clave natural del documento, si viene. Los nombres varían
-                    # entre consultas, así que se prueban los plausibles.
-                    consec = str(
-                        row.get('f350_consec_docto') or row.get('f470_consec_docto') or
-                        row.get('f350_consec') or ''
-                    ).strip()
-                    try:
-                        nro_reg = int(row.get('f470_nro_registro') or
-                                      row.get('f470_nro_reg') or 0) or None
-                    except (TypeError, ValueError):
-                        nro_reg = None
-
-                    tipo_docto = (row.get('f350_id_tipo_docto') or '').strip()
-                    concepto = int(row.get('f470_id_concepto', 0))
-                    cantidad = abs(float(row.get('f470_cant_base', 0)))
-
-                    h = hash_movimiento(fecha, tipo_docto, bodega, ref, concepto,
-                                        naturaleza, cantidad, consec, nro_reg)
+                    h = f['hash']
                     # Idempotencia: reanudar o repetir la descarga NO duplica.
                     if h in vistos_lote or h in vistos_bd:
                         duplicados += 1
@@ -495,15 +825,15 @@ class KardexService:
 
                     mov = KardexMovimiento(
                         fecha=fecha,
-                        tipo_docto=tipo_docto,
-                        bodega=bodega,
-                        referencia=ref,
-                        concepto=concepto,
-                        naturaleza=naturaleza,
-                        cantidad=cantidad,
-                        costo_promedio=float(row.get('f470_costo_prom_uni', 0)),
-                        consec_docto=consec or None,
-                        nro_registro=nro_reg,
+                        tipo_docto=f['tipo_docto'],
+                        bodega=f['bodega'],
+                        referencia=f['referencia'],
+                        concepto=f['concepto'],
+                        naturaleza=f['naturaleza'],
+                        cantidad=f['cantidad'],
+                        costo_promedio=f['costo_promedio'],
+                        consec_docto=f['consec_docto'],
+                        nro_registro=f['nro_registro'],
                         hash_origen=h,
                     )
                     db.session.add(mov)
@@ -516,7 +846,14 @@ class KardexService:
                 db.session.commit()
                 logger.info('[KARDEX] Página %d: %d movimientos', pagina, len(rows))
 
-                if len(rows) < 100:
+                # EL FIN LO DECLARA SIESA, no el tamaño de la página. Con
+                # `len(rows) < 100` como único criterio, una página corta en
+                # el medio —o un tope de página más chico que 100 del lado del
+                # servidor— terminaba la descarga como COMPLETA.
+                if paginas_declaradas:
+                    if pagina >= paginas_declaradas:
+                        break
+                elif len(rows) < 100:
                     break
 
                 pagina += 1
@@ -532,6 +869,32 @@ class KardexService:
                 errores += 1
                 db.session.rollback()
                 break
+
+        # LA PRUEBA POR CONTEO. Solo vale para una corrida que recorrió el
+        # conjunto desde la página 1: una reanudación no ve lo anterior.
+        #
+        # Se comparan IDENTIDADES distintas, no filas recibidas. Con un orden no
+        # determinista cada página trae sus 100 filas y la suma cuadra igual —
+        # medido: la página 50 pedida dos veces no compartió ni una fila—, pero
+        # unas se repiten y otras no llegan nunca. Y si faltan identidades
+        # porque dos movimientos legítimos son indistinguibles sin la clave
+        # natural, el kardex almacenado también tiene menos de lo que Siesa
+        # declara: el hash los colapsa en uno. Las dos causas dan un kardex
+        # incompleto, y por eso las dos lo declaran.
+        faltan_por_conteo = None
+        if (estado == 'COMPLETA' and total_declarado is not None
+                and int(pagina_inicial or 1) == 1):
+            faltan_por_conteo = total_declarado - len(identidades_corrida)
+            if faltan_por_conteo != 0:
+                estado = 'CONTEO_NO_CUADRA'
+                detalle_estado = (
+                    f'Siesa declara {total_declarado} registros; llegaron '
+                    f'{filas_recibidas} filas y {len(identidades_corrida)} '
+                    f'movimientos distintos ({errores} ilegibles). Diferencia: '
+                    f'{faltan_por_conteo}. Causas posibles: el orden de la '
+                    'consulta no es determinista (filas repetidas y filas '
+                    'nunca vistas) o movimientos idénticos sin consecutivo ni '
+                    'línea, que la identidad no distingue.')
 
         completa = estado == 'COMPLETA' and not paginacion_no_enumera
         if estado == 'COMPLETA' and paginacion_no_enumera:
@@ -557,6 +920,14 @@ class KardexService:
             'duplicados_omitidos': duplicados,
             # Verdad de origen si Siesa la declara: conteo, no distribución.
             'total_declarado_por_siesa': total_declarado,
+            'paginas_declaradas_por_siesa': paginas_declaradas,
+            'filas_recibidas': filas_recibidas,
+            'movimientos_distintos_recibidos': len(identidades_corrida),
+            'faltan_por_conteo': faltan_por_conteo,
+            # Sin consecutivo ni línea, dos movimientos iguales del mismo día
+            # (dos ventas POS de 1 unidad) tienen la misma identidad y el hash
+            # guarda uno solo: demanda de menos. Se cuenta para que se vea.
+            'filas_sin_clave_natural': sin_clave_natural,
             'errores': errores,
             'segundos': round((datetime.utcnow() - inicio).total_seconds()),
             # El rango no ve los agujeros del medio. Esto sí.
@@ -619,12 +990,20 @@ class KardexService:
             return det.get('Datos', []) or det.get('Table', []) or []
 
         def _firmas(rows):
-            return [hash_movimiento(
-                None, r.get('f350_id_tipo_docto'), r.get('f470_id_bodega') or r.get('f150_id'),
-                r.get('f120_referencia'), r.get('f470_id_concepto'),
-                r.get('f470_ind_naturaleza'), r.get('f470_cant_base'),
-                nro_registro=r.get('LineaRegistro'),
-            ) for r in rows if isinstance(r, dict)]
+            # La misma identidad que usa la descarga (`_parsear_fila`), sin
+            # `LineaRegistro`: ese número es la POSICIÓN en el resultado, no
+            # la fila.
+            return [f['hash'] for f in map(_parsear_fila, rows) if f is not None]
+
+        def _en_comun(a, b):
+            # CONJUNTOS, no posiciones. Medido el 2026-09-24: dentro de una
+            # página las filas no vienen ordenadas (4902, 4906, 4910, … y en
+            # el pedido siguiente 4901, 4905, …). Comparar posición por
+            # posición marca «0 de 100 iguales» aunque la página traiga las
+            # MISMAS filas, y eso se leía como orden no determinista. La
+            # pregunta de la paginación es si la página N contiene lo mismo,
+            # no en qué orden lo muestra.
+            return len(set(a) & set(b))
 
         base = _firmas(_traer(pagina))
         if not base:
@@ -633,18 +1012,18 @@ class KardexService:
         # 1) Intervalo CORTO — distingue deriva de no-determinismo
         time.sleep(5)
         corto = _firmas(_traer(pagina))
-        iguales_corto = sum(1 for a, b in zip(base, corto) if a == b)
+        iguales_corto = _en_comun(base, corto)
 
         # 2) Página CONSECUTIVA — ¿se solapan páginas contiguas?
         vecina = _firmas(_traer(pagina + 1))
-        solape = len(set(base) & set(vecina))
+        solape = _en_comun(base, vecina)
 
         # 3) Intervalo LARGO
         time.sleep(max(1, int(espera_s)))
         largo = _firmas(_traer(pagina))
-        iguales_largo = sum(1 for a, b in zip(base, largo) if a == b)
+        iguales_largo = _en_comun(base, largo)
 
-        n = len(base)
+        n = len(set(base))
         estable_corto = iguales_corto >= n * 0.95
         estable_largo = iguales_largo >= n * 0.95
 

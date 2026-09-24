@@ -839,7 +839,11 @@ async function modelosSemaforoKardex() {
   if (!el) return;
   let d;
   try {
-    d = await get('/api/kardex/reconciliar?meses=12');
+    // El veredicto es del servidor (`kardex_service.salud_kardex`), el mismo
+    // que pinta Inventario › Datos. Antes se leía `/reconciliar` y se decía
+    // «✓ Kardex completo» con solo que no hubiera conceptos sin clasificar —
+    // lo que un kardex VACÍO, o uno de hace tres meses, cumple igual.
+    d = await get('/api/kardex/salud');
   } catch (e) {
     // No se puede afirmar que sea confiable si no se pudo preguntar.
     el.innerHTML = `<div style="border:1px solid var(--yellow);border-radius:8px;padding:8px 10px;margin-bottom:10px;font-size:11px;color:var(--yellow);">
@@ -847,18 +851,18 @@ async function modelosSemaforoKardex() {
       de abajo pueden estar calculados sobre una serie incompleta.</div>`;
     return;
   }
-  const ok = d.compuerta_ok === true;
-  const sin = (d.conceptos_desconocidos || []).length;
+  const ok = d.confiable === true;
+  const m = d.movimientos || {};
+  const problemas = (d.problemas || []).map(p => `<div>· ${esc(p.titulo)}</div>`).join('');
   el.innerHTML = ok
     ? `<div style="border:1px solid var(--green);border-radius:8px;padding:8px 10px;margin-bottom:10px;font-size:11px;color:var(--tx3);">
-         <b style="color:var(--green);">✓ Kardex completo</b> —
-         ${(d.total_registros_kardex || 0).toLocaleString('es-CO')} movimientos,
-         todos los conceptos clasificados. Los modelos de abajo leen de acá.</div>`
+         <b style="color:var(--green);">✓ Kardex al día</b> —
+         ${Number(m.total || 0).toLocaleString('es-CO')} movimientos, el último del
+         ${esc(m.ultima_fecha || '—')}. Los modelos de abajo leen de acá.</div>`
     : `<div style="border:1px solid var(--red);border-radius:8px;padding:8px 10px;margin-bottom:10px;font-size:11px;color:var(--red);line-height:1.6;">
-         <b>✗ ${sin} concepto(s) del kardex sin clasificar.</b> Los modelos de
-         abajo están calculados sobre una serie con agujeros y no lo dicen por sí
-         solos. Arreglarlo en <b>Inventario › Datos › ¿Le creo al kardex?</b>
-         antes de decidir con estos números.</div>`;
+         <b>✗ No decidir todavía con estos modelos: el kardex no está al día.</b>
+         ${problemas}
+         Ver qué hacer en <b>Inventario › Datos</b>.</div>`;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

@@ -18,12 +18,73 @@ async function kardexCargarPanel() {
   if (!el) return;
   el.innerHTML = '<div style="color:var(--tx3);padding:20px;">Cargando estado…</div>';
   try {
-    const estado = await get('/api/kardex/descargar/estado');
+    // La salud se pide aparte y no tumba el panel: sin ella los botones siguen
+    // sirviendo, y su ausencia se DICE (no se pinta un verde por omisión).
+    const [estado, salud] = await Promise.all([
+      get('/api/kardex/descargar/estado'),
+      get('/api/kardex/salud').catch(e => ({ _error: e.message || String(e) })),
+    ]);
     _kardexRender(el, estado);
+    el.insertAdjacentHTML('afterbegin', `<div id="kardex-salud">${_kardexSaludHtml(salud)}</div>`);
     if (estado.en_curso) _kardexIniciarPoll();
   } catch (e) {
-    el.innerHTML = `<div style="color:var(--red);padding:20px;">Error: ${e.message || e}</div>`;
+    el.innerHTML = `<div style="color:var(--red);padding:20px;">Error: ${esc(e.message || e)}</div>`;
   }
+}
+
+/** Vuelve a pedir la salud sin repintar el resto del panel (que tiene el
+ *  resultado de la acción que se acaba de hacer). */
+async function kardexRefrescarSalud() {
+  const caja = document.getElementById('kardex-salud');
+  if (!caja) return;
+  const salud = await get('/api/kardex/salud').catch(e => ({ _error: e.message || String(e) }));
+  caja.innerHTML = _kardexSaludHtml(salud);
+}
+
+/** ¿Está al día el kardex? — lo pinta, no lo calcula.
+ *
+ *  El veredicto, los problemas y qué hacer vienen de `GET /api/kardex/salud`
+ *  (`kardex_service.salud_kardex`). Calcularlo acá sería una segunda política
+ *  que diverge de la que lee la pantalla Modelos. Lo único que decide el JS es
+ *  el color, y lo decide por `confiable`, que también viene del servidor.
+ */
+function _kardexSaludHtml(s) {
+  if (!s || s._error || !s.veredicto) {
+    return `<div style="border:1px solid var(--yellow);border-radius:10px;padding:14px;margin-bottom:12px;font-size:12px;color:var(--yellow);">
+      No se pudo saber si el kardex está al día${s && s._error ? ' (' + esc(s._error) + ')' : ''}.
+      Mientras no se sepa, no decidir compras con los modelos.</div>`;
+  }
+  const ok = s.confiable === true;
+  const col = ok ? 'var(--green)' : 'var(--red)';
+  const m = s.movimientos || {};
+  const sd = s.stock_diario || {};
+  const ud = s.ultima_descarga || {};
+  const n = v => Number(v || 0).toLocaleString('es-CO');
+  const problemas = (s.problemas || []).map(p => `
+    <div style="margin-top:6px;">
+      <b style="color:var(--red);">✗ ${esc(p.titulo)}</b>
+      <div style="color:var(--tx3);">→ ${esc(p.que_hacer)}</div>
+    </div>`).join('');
+  return `<div style="border:1px solid ${col};border-radius:10px;padding:14px;margin-bottom:12px;">
+    <div style="font-size:13px;font-weight:700;color:${col};margin-bottom:6px;">
+      ${ok ? '✓ Kardex al día' : '✗ No confiar todavía en el kardex'} · ${esc(s.veredicto)}
+    </div>
+    <div style="font-size:11px;color:var(--tx3);line-height:1.7;">
+      <b>Último movimiento guardado:</b> ${esc(m.ultima_fecha || '—')}
+      ${m.dias_desde_ultimo != null ? '(' + esc(m.dias_desde_ultimo) + ' día(s) atrás · tolerancia ' + esc(s.umbral_dias) + ')' : ''}<br>
+      <b>Movimientos:</b> ${n(m.total)} · desde ${esc(m.primera_fecha || '—')} ·
+      bodegas: ${esc((m.bodegas || []).join(', ') || '—')}<br>
+      <b>Stock diario reconstruido hasta:</b> ${esc(sd.ultima_fecha || '—')} (${n(sd.dias)} día-bodega)<br>
+      <b>Última descarga:</b> ${ud.hay_registro
+        ? esc(ud.estado || (ud.en_curso ? 'EN CURSO' : '—')) + ' · empezó ' + esc(ud.inicio_utc || '—') + ' UTC'
+          + (ud.fin_utc ? ' · terminó ' + esc(ud.fin_utc) + ' UTC' : '')
+        : 'ninguna registrada'}<br>
+      <b>Se descargaría de:</b> ${esc((s.descargaria_de || {}).host || '—')}
+      ${(s.descargaria_de || {}).parece_qa ? '<b style="color:var(--yellow);">(ambiente de PRUEBAS)</b>' : ''}
+    </div>
+    ${problemas}
+    <div style="font-size:11px;color:var(--yellow);margin-top:8px;">${esc(s.nota_actualizacion || '')}</div>
+  </div>`;
 }
 
 function _kardexRender(el, estado) {
@@ -97,7 +158,9 @@ function _kardexRender(el, estado) {
       </button>` : ''}
     </div>`;
   } else {
-    html += `<div style="font-size:12px;color:var(--tx3);margin-top:10px;">Sin descargas en esta sesión del servidor.</div>`;
+    // El estado vive en `registros_sync` desde el 2026-08: sobrevive al
+    // reinicio. «En esta sesión del servidor» ya no era cierto.
+    html += `<div style="font-size:12px;color:var(--tx3);margin-top:10px;">No hay ninguna descarga registrada.</div>`;
   }
 
   html += '</div>';
@@ -344,12 +407,24 @@ async function kardexReconstruir(forzar) {
       return;
     }
 
+    // Las claves son las que devuelve `reconstruir_stock_diario`. La pantalla
+    // leía `d.dias` y `d.referencias`, que el servidor nunca mandó: el aviso
+    // salía «✓ Reconstruido» sin un solo número, y los SKU sin ancla —la
+    // demanda que se subestima— no se veían nunca.
+    const sinAncla = (d.refs_sin_ancla || {}).cantidad || 0;
+    const insuf = (d.reporte_calidad || {}).dato_insuficiente || 0;
     out.innerHTML = `<div style="border:1px solid var(--green);border-radius:8px;padding:10px;font-size:12px;color:var(--tx2);">
       <b style="color:var(--green);">✓ Reconstruido</b>
-      ${d.dias != null ? ` · ${Number(d.dias).toLocaleString('es-CO')} día(s)` : ''}
-      ${d.referencias != null ? ` · ${Number(d.referencias).toLocaleString('es-CO')} referencia(s)` : ''}
+      · ${Number(d.dias_generados || 0).toLocaleString('es-CO')} día(s)
+      · ${Number(d.referencias_procesadas || 0).toLocaleString('es-CO')} referencia(s)
+      ${sinAncla ? `<div style="color:var(--yellow);margin-top:6px;font-size:11px;">
+        ${Number(sinAncla).toLocaleString('es-CO')} SKU×bodega sin saldo en Siesa para anclar: su serie
+        quedó en cero y se lee como «agotado». ${esc((d.refs_sin_ancla || {}).nota || '')}</div>` : ''}
+      ${insuf ? `<div style="color:var(--yellow);margin-top:6px;font-size:11px;">
+        ${Number(insuf).toLocaleString('es-CO')} SKU×bodega con más de 10% de días en negativo: dato insuficiente.</div>` : ''}
       ${forzar ? '<div style="color:var(--yellow);margin-top:6px;font-size:11px;">Se forzó sobre una descarga incompleta — la demanda censurada de este cálculo puede estar inventada.</div>' : ''}
     </div>`;
+    kardexRefrescarSalud();
   } catch (e) {
     out.innerHTML = `<div style="font-size:12px;color:var(--red);">Sin conexión: ${esc(e.message)}</div>`;
   }
