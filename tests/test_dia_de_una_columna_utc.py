@@ -35,6 +35,11 @@ atributo y no lo que se le asignó. Ahora sigue la asignación dentro de la
 función (`x = obj.fecha_…` o `x = getattr(obj, 'fecha_…')`).
 
 Se escanean `app/` y `flota/` (el paquete de flota vive fuera de `app/`).
+
+**Lo que NO ve** (probado por mutación el 2026-09-24): el `.date()` sobre la
+variable de un `for` que recorre una consulta —`for (m,) in query(T.fecha_x):
+m.date()`—. El detector sigue asignaciones, no iteraciones; ese caso lo cubre
+el test de borde de noche de cada sitio, no el trinquete.
 """
 import ast
 import pathlib
@@ -123,10 +128,12 @@ def _sitios(fuente: str, nombre: str = '<src>'):
         if not isinstance(n, ast.Call) or not n.args:
             continue
         f = n.func
-        es_cast = (isinstance(f, ast.Name) and f.id == 'cast' and len(n.args) == 2
+        # `cast`, `sa.cast`, `sa_cast`…: cualquier nombre que termine en cast.
+        es_cast = (_nombre_de(f).endswith('cast') and len(n.args) == 2
                    and _nombre_de(n.args[1]) == 'Date')
+        # `func.date`, `db.func.date`, `sa_func.date`.
         es_func_date = (isinstance(f, ast.Attribute) and f.attr == 'date'
-                        and _nombre_de(f.value) == 'func')
+                        and _nombre_de(f.value).endswith('func'))
         if (es_cast or es_func_date) and _es_columna_fecha(n.args[0]):
             out.append((nombre, n.lineno, n.args[0].attr))
     return out
@@ -177,9 +184,12 @@ class TestElDetectorMuerde:
         src = ('a = db.session.query(cast(T.fecha_completado, Date))\n'
                'b = Q.filter(func.date(B.fecha_cargado) == hoy)\n'
                'c = Q.filter(db.func.date(B.created_at) == hoy)\n'
-               'd = sa.cast(X.updated_at, sa.Date)\n')
-        assert [a for _, _, a in _sitios(src)] == [
-            'fecha_completado', 'fecha_cargado', 'created_at']
+               'd = sa.cast(X.updated_at, sa.Date)\n'
+               'e = sa_cast(X.fecha_y, Date)\n'
+               'g = sa_func.date(X.fecha_z)\n')
+        assert sorted(a for _, _, a in _sitios(src)) == sorted([
+            'fecha_completado', 'fecha_cargado', 'created_at', 'updated_at',
+            'fecha_y', 'fecha_z'])
 
     def test_ve_el_alias_dentro_de_la_funcion(self):
         """La forma de `rezago_liquidacion`: la columna pasa por un nombre."""
