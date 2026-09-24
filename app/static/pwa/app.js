@@ -154,6 +154,12 @@ document.addEventListener('DOMContentLoaded', () => {
 // general, no la pantalla de trabajo diaria de quien también apoya picking.
 const _TABS_OCULTAS_SUPERVISOR = ['tab-usuarios', 'tab-muelle', 'tab-liquidacion', 'tab-compras', 'tab-dashboard'];
 
+// 📈 Analítica: la ven los mismos roles que `_es_gestion` deja pasar en sus
+// endpoints (`Roles.GESTION`). Una pestaña que el servidor le niega con 403 a
+// quien la ve enseña a ignorar errores. `test_analitica_recorrido.py` cruza esta
+// lista contra `Roles.GESTION`.
+const _ROLES_ANALITICA = ['admin', 'supervisor', 'jefe_almacen', 'gerente'];
+
 /**
  * Route user to the correct screen and start timers based on their role.
  * @param {string} rol - User role (admin, operario, recepcionista, conductor, tienda, compras, etc.).
@@ -203,6 +209,9 @@ function mostrarSegunRol(rol) {
     // control_flota) — sin este reset, un admin que entra justo después de
     // un supervisor hereda sus pestañas ocultas hasta que alguien recarga.
     document.querySelectorAll('.nav-tab').forEach(el => { el.style.display = ''; });
+    if (!_ROLES_ANALITICA.includes(rol)) {
+      document.querySelectorAll('.nav-tab[onclick*="tab-analitica"]').forEach(el => { el.style.display = 'none'; });
+    }
     const btnModoOp = document.getElementById('nav-modo-operario-supervisor');
     if (btnModoOp) btnModoOp.style.display = 'none';
     if (soloFlota) {
@@ -981,6 +990,9 @@ async function cargarAdmin(desdeTimer = false) {
   // para que un supervisor lo vea llegar aunque esté parado en otra pantalla.
   actualizarBadgeDefinitivos();
   if (TAB === 'tab-dashboard') await cargarDashboard();
+  // Analítica es de consulta: carga al entrar, nunca por el timer de 30 s
+  // (repintar mientras alguien lee una cifra se la cambia debajo del dedo).
+  else if (TAB === 'tab-analitica') { if (!desdeTimer) await cargarAnalitica(); }
   else if (TAB === 'tab-pedidos') await cargarPedidos();
   else if (TAB === 'tab-requisiciones') await cargarRequisiciones();
   else if (TAB === 'tab-bodega') await cargarTareasBodega();
@@ -1012,7 +1024,7 @@ async function cargarAdmin(desdeTimer = false) {
 
 /** @param {string} id - Tab element ID to activate (e.g. 'tab-dashboard'). */
 function tab(id) {
-  const TABS = ['tab-dashboard','tab-pedidos','tab-requisiciones','tab-traslados','tab-bodega','tab-operarios','tab-usuarios','tab-stock','tab-connekta','tab-muelle','tab-rutas','tab-inventario','tab-liquidacion','tab-layout','tab-reposicion','tab-compras','tab-etiquetas','tab-vigia','tab-flota','tab-manuales'];
+  const TABS = ['tab-dashboard','tab-analitica','tab-pedidos','tab-requisiciones','tab-traslados','tab-bodega','tab-operarios','tab-usuarios','tab-stock','tab-connekta','tab-muelle','tab-rutas','tab-inventario','tab-liquidacion','tab-layout','tab-reposicion','tab-compras','tab-etiquetas','tab-vigia','tab-flota','tab-manuales'];
   TABS.forEach(t => {
     const el = document.getElementById(t);
     if (el) el.style.display = t === id ? 'block' : 'none';

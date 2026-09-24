@@ -1183,6 +1183,7 @@
     <!-- Tabs -->
     <div class="admin-nav">
       <div class="nav-tab active" onclick="tab('tab-dashboard')">📈 Dashboard</div>
+      <div class="nav-tab" onclick="tab('tab-analitica')">📈 Analítica</div>
       <div class="nav-tab" onclick="tab('tab-pedidos')">🛍️ Pedidos</div>
       <div class="nav-tab" onclick="tab('tab-requisiciones')">📋 Requisiciones</div>
       <div class="nav-tab" onclick="tab('tab-traslados')">🏪 Traslados</div>
@@ -2735,6 +2736,12 @@
       <div id="flota-analitica" style="display:none;"></div>
     </div>
 
+    <!-- 📈 Analítica — el BI de la empresa (Fase 1, 2026-09-24). El shell lo
+         pinta `cargarAnalitica()` (analitica.js): filtros comunes, sub-pestañas
+         y un panel por vista. Solo gestión (el mismo `_es_gestion` de sus
+         endpoints). -->
+    <div id="tab-analitica" class="admin-content" style="display:none;"></div>
+
     <div id="tab-vigia" class="admin-content" style="display:none;">
       <div style="font-size:var(--fs-md);font-weight:700;margin-bottom:4px;">👁️ Vigia — Monitoreo de corrimientos</div>
       <div style="font-size:var(--fs-xs);color:var(--tx3);margin-bottom:14px;">
@@ -3880,6 +3887,8 @@
   <script defer src="/static/pwa/tablero_bi.js?v=20260924leg2"></script>
   <script defer src="/static/pwa/manuales.js?v=20260924leg2"></script>
   <script defer src="/static/pwa/flota_analitica.js?v=20260924leg2"></script>
+  <script defer src="/static/pwa/analitica.js?v=20260924an"></script>
+  <script defer src="/static/pwa/analitica_recorrido.js?v=20260924an"></script>
   <script>
     setInterval(() => {
       const cola = JSON.parse(localStorage.getItem('wms_cola_offline') || '[]');
