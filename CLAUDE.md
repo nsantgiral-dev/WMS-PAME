@@ -4135,3 +4135,152 @@ xfailed); después se agregó un test (403 `sin_derecho`), verde por separado.
   estreche la tupla.
 - La inspección sin señal usa la última lista bajada (se dice de qué día); el
   veredicto lo da el servidor al llegar.
+
+## 🕒 La jornada del conductor — Fase 0 (2026-09-24)
+
+El dueño: *los conductores, que además de manejar entregan y cobran, no son
+controlados y «van y hacen otras cosas».* Esta vista **no contesta eso**.
+Contesta lo que los datos de hoy permiten contestar con honestidad: qué dejó
+registrado cada conductor en su día, a qué hora, con qué confianza, y dónde
+hay tiempo que ningún registro explica. **Cero pasos nuevos al conductor.**
+
+`app/services/jornada_conductor.py` · `app/routes/jornada.py` ·
+`app/static/pwa/flota_jornada.js` · `tests/test_jornada_conductor.py`.
+Sin migración.
+
+    GET /api/jornada?dia=&conductor_id=     línea de tiempo + indicadores + señales
+    GET /api/jornada/resumen?desde=&hasta=  por conductor (≤ 92 días; por defecto 7)
+
+Rol: `Roles.VISTA_FLOTA` (gestión + control de flota), **el conductor no**:
+es el registro de trabajo de sus compañeros. Basura, rango invertido, futuro o
+> 92 días → 400; conductor inexistente → 404.
+
+### La línea de tiempo (conductor × día Bogotá)
+
+| Evento | Fuente | Hora | Confianza | ¿Gesto suyo? |
+|---|---|---|---|---|
+| Recibió / entregó el vehículo | `flota_custodia.inicio_ts` / `fin_ts` | servidor | alta (solo existe en línea) | si lo registró él y no fue cierre forzado |
+| Preoperacional | `flota_inspeccion.respondida_ts` | servidor | alta | si la hizo él |
+| Cargue en el muelle | `bultos.fecha_cargado` (intervalo) | servidor | alta | no (lo escanea el muelle) |
+| Cierre del cargue | `rutas_despacho.fecha_cierre` | servidor | alta | no — **no es la salida física** |
+| Parada | `recaudos_entrega.fecha_creacion` (primera confirmación) | servidor | **baja**: sin señal es la hora de sincronizar | si `confirmado_por` es su usuario |
+| Parada con hora del teléfono | `ts_dispositivo − ts_desfase_s` | teléfono | alta; media si el reloj estaba corrido o el desfase no se midió | ídem |
+| Tanqueo | `flota_lectura_odometro.ts` (origen tanqueo) | servidor | alta | sí |
+| Cierre de ruta | `rutas_despacho.fecha_entregada` | servidor | media | **no**: `entregar_ruta` no guarda autor |
+| Liquidación | `rutas_despacho.liquidada_en` | servidor | alta | no (oficina) |
+
+Joins: `conductores` ↔ `flota_custodia.custodio_conductor_id` ↔
+`rutas_despacho.conductor_id` ↔ `recaudos_entrega.ruta_id`; los gestos por
+usuario (inspección, tanqueo, confirmación) por `conductores.usuario_id`. Un
+conductor **sin cuenta** no tiene gestos propios: sus paradas las confirma
+otro y la pantalla lo dice.
+
+**Estados del día** (`estado_de`, una función): `reconstruida` (apertura y
+cierre de turno registrados, cobertura ≥ `cobertura_minima`) · `parcial`
+(hay tramo entre registros pero falta la apertura o el cierre: `horas` es
+`None`, se da `tramo_observado_h`) · `no_reconstruible` (< 2 gestos propios o
+cobertura baja: horas y tiempo no explicado `None`, nunca 0) ·
+`sin_actividad`. La cobertura mide el **registro**, no el trabajo.
+
+**Tiempo no explicado** — nunca «muerto»: entre dos registros consecutivos
+dentro de la jornada, lo que excede el p90 de los compañeros en esa maestra
+para ese tipo de tramo (salida, entre paradas, regreso) o, sin base, el umbral
+fijo. Se descuenta lo normal **a favor de la persona**, y lo que el cargue
+cubre.
+
+### Señales (nivel conductor)
+
+Todas: evidencia concreta, comparación contra **otros conductores de la misma
+ruta maestra** con su `n` (las rutas propias no son pares), «sin base» con
+menos de `n_minimo_pares`, `que_hacer` = preguntarle. **Proponen, no
+sancionan** (regla 2 de `flota/CLAUDE.md`).
+
+`tiempo_no_explicado` · `duracion_ruta` (> p90) · `km_entre_turnos` (km
+sumados con la sede como custodio entre dos turnos de conductor; aparece en el
+día de quien entregó antes y de quien recibió) · `rechazo_<motivo>` (cliente
+cerrado, fuera de horario, no pagó y se quedó, dirección errada: observado vs
+`Σ paradas × tasa de los compañeros`) · `ruta_cruza_el_dia` ·
+`fuera_de_sede_frecuente` · `rechazos_sin_ubicacion` · `preoperacional_rapido`
+(p10 de los compañeros, misma plantilla) · `descuentos_en_la_puerta` ·
+`tiempo_hasta_liquidar` · `rafaga_de_confirmaciones` (**solo** con hora del
+teléfono).
+
+Las de **vehículo** (km en días sin ruta, custodio ≠ conductor de la ruta,
+galones) son de la bandeja del encargado: no se reimplementan acá; se unifican
+al integrar.
+
+**Umbrales en un solo sitio**: `UMBRALES_POR_DEFECTO`, ajustables con
+`JORNADA_UMBRALES` (JSON). Un ajuste inválido no se aplica y se declara
+(`umbrales_rechazados`). Todos van en cada respuesta. Son **provisionales**.
+
+### Hora del teléfono
+
+Las columnas (`ts_dispositivo`, `ts_desfase_s`, `via_cola` en
+`recaudos_entrega`; `ts_dispositivo`, `pos_ts_dispositivo` en `entregas_geo`,
+de la tanda de fugas) se leen **por inspección de la base**, no del modelo:
+con ellas o sin ellas funciona. **Sin ellas no se calculan ráfagas** —una
+ráfaga de sincronización y una de «confirmé todo desde la esquina» son
+idénticas con hora del servidor— y la respuesta y la pantalla lo declaran.
+
+### Lo que NO puede ver (va en cada respuesta, `no_puede_ver`)
+
+- **La salida física**: `fecha_cierre` es el cierre del manifiesto.
+- **Dónde estuvo el vehículo entre dos eventos**: sin GPS del vehículo, un
+  tramo no explicado no dice a dónde fue.
+- **La hora real de una parada sin señal** mientras la app no mande la del
+  teléfono.
+- **Quién cerró la ruta**; el orden y la hora **planeados** (la maestra solo
+  ordena municipios); horas extra, pausas legales, viáticos — no mide
+  cumplimiento de horario.
+- La ubicación del cliente como verdad: `clientes_geo` se arma con capturas de
+  los conductores; con un solo conductor por cliente, compararlo es circular
+  (por eso esta vista no lo hace; la distancia la mide la tanda de fugas).
+
+### Fase 1 y Fase 3 — dónde entran
+
+`FUENTES_DE_EVENTOS` es la tupla de funciones que producen `Evento`s (tipo,
+ts, fuente, confianza, lat/lon). **Fase 1**: una tabla `jornada_evento` (GPS
+automático al abrir la ruta y cada parada, «salí», «volví») y la **hora
+planeada de salida por maestra** entran como una función más; con eso
+«cierre del cargue» deja de ser la proxy de la salida. **Fase 3**: el GPS del
+vehículo por la API del proveedor, igual. Huecos, cobertura y señales no
+cambian.
+
+### Aviso legal (Ley 1581 de 2012)
+
+Antes de usar esta vista para hablar con un conductor, él tiene que haber sido
+**informado por escrito** de la finalidad —control operativo de la ruta, del
+vehículo y del dinero recaudado— y cubre **solo su jornada laboral**. El texto
+va en cada respuesta y al pie de la pantalla. La decisión de informar es del
+dueño/RR. HH., no del sistema.
+
+### Integración pendiente — lo que hay que cablear
+
+La sub-pestaña de Flota la rediseña otro agente, así que **no hay botón**:
+`/api/jornada` y `/api/jornada/resumen` están en `DEUDA_SIN_UI` con «la
+cablea el integrador». Para cablear: una sub-pestaña «🕒 Jornada» en Flota
+(solo admin/control_flota, igual que `flota_analitica.js`) que llame
+`flotaJornadaCargar(<contenedor>)`; después, borrar las dos líneas de
+`DEUDA_SIN_UI` (`test_la_lista_solo_encoge` lo exige). `flota_jornada.js` ya
+está en `index.html`, en el `SHELL` de `sw.js` y en `PANTALLAS`.
+
+**Hallazgo del guard de alcance** (sin tocar, es de otro archivo): el detector
+de `test_frontend_integrity` lee un `nombre(` en un **comentario de nivel de
+módulo** como llamada de arranque. El encabezado de este módulo decía
+`flotaJornadaCargar(el)` y bastó para declarar «conectadas» dos rutas sin
+ningún botón. Se esquivó escribiendo el nombre sin paréntesis; el hueco
+queda para quien sea dueño del guard.
+
+### Tests
+
+`tests/test_jornada_conductor.py` (86): mundo armado con `traspasar`,
+`inspecciones.registrar`, `RutaService.confirmar_parada` y
+`_marcar_liquidada`; cada señal con su caso que dispara y el que no (sin base,
+sin dato, rutas propias), con y sin columnas de hora del teléfono, permisos
+por rol, 400/404, render en Node con `util.js` real (dato malicioso escapado,
+`onclick` solo con posiciones), trinquetes de vocabulario (ni «muerto» ni
+«sanción» en código ni pantalla, con meta-tests) y de umbrales (todo umbral
+leído existe y todo umbral declarado se lee). **20 mutaciones, las 20 rojas.**
+
+Rendimiento medido (SQLite, 12 conductores, 183 días, 26.352 paradas):
+resumen de 92 días 2,5 s; un día 0,9 s.
