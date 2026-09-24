@@ -3211,3 +3211,119 @@ volvía a entrar por `invSubtab` y vaciaba el panel cada 30 s.
 **Los filtros filtran lo que dicen** (ver la sección de ese nombre): la vista
 viaja al servidor (`conteo_listado.VISTAS`), Acción y Resueltos solo traen
 raíces, y el filtro de marca declara cuando ningún producto tiene marca.
+
+---
+
+## Bitácora de acciones (Fase 0 de analítica, 2026-09-24)
+
+Bajo la Ley 1116 la caja vale más: la analítica tiene que poder reconstruir el
+recorrido pedido → caja y ver **todo lo que se elimina, cancela o edita, con
+quién, cuándo y por qué**. Antes de esto esas tres preguntas se contestaban de
+memoria: `cancelar_picking` recibía el motivo y lo tiraba, `reabrir_picking` y
+`reportar_problema` borraban al operario, reintentar un job FALLIDO borraba el
+error que lo había hecho fallar, `forzar_cierre_ruta` pisaba la hora de salida
+con la del forzado, la liquidación tenía estado y no fecha ni autor, y
+retractar un juicio de temporada lo **borraba** de una tabla analítica
+protegida.
+
+**Una tabla, una función.** `bitacora_acciones` (`app/models/bitacora.py`,
+migración `m034bitacora`) y `registrar_accion(...)` (`app/services/bitacora.py`),
+que **no hace commit**: va en la transacción de la acción. Columnas:
+`ocurrido_en` (UTC), `dia_operativo` (Bogotá, Regla 5), `accion`, `entidad` +
+`entidad_id` + `entidad_codigo`, `usuario_id` (None = sistema), `motivo`,
+`antes`/`despues` (JSON, solo los campos que cambian; la fila completa si se
+borra), `almacen_id`, `origen` (la ruta HTTP en curso, o el proceso).
+
+**Sin claves foráneas, a propósito**: está en `PROTEGIDAS_ANALITICAS` del acta
+de corte y en `IRRECUPERABLES` de la verificación de respaldo. Sobrevive al
+corte; las filas a las que apunta, no. Ids sueltos + código legible.
+
+**Vocabulario cerrado** (`ACCIONES`): ELIMINAR, ANULAR, CANCELAR, REABRIR,
+EDITAR, REASIGNAR, DESASIGNAR, REINTENTAR, DESCARTAR, FORZAR, LIQUIDAR,
+DESACTIVAR, BLOQUEAR. Un verbo fuera de la lista levanta `ValueError`.
+
+**El flujo normal no pasa por la bitácora**: su autor va en columnas de la
+fila (`m034bitacora`, todas nullable, sin backfill — no se inventa un autor
+que no se registró): `tareas_picking.ultimo_operario_id`,
+`tareas_packing.cerrado_por_id`, `bultos.asignado_ruta_por_id` /
+`asignado_ruta_at` / `cargado_por_id`, `rutas_despacho.liquidada_en` /
+`liquidada_por_id`, `juicios_temporada.anulado_en` / `anulado_por_id` /
+`anulado_motivo`. Ninguna reescribe al primero en un reintento.
+
+### Qué se registra, sitio por sitio
+
+| Sitio | Acción | Motivo |
+|---|---|---|
+| `DELETE /api/picking/purgar-ceros` | ELIMINAR por tarea, fila completa | **obligatorio** |
+| `cancelar_picking` | CANCELAR | **obligatorio** (la pantalla ya lo pedía) |
+| `reabrir_picking` | REABRIR, guarda lo recogido que pone en 0 | **obligatorio** (sin UI) |
+| `reportar_problema` | BLOQUEAR | el motivo de bloqueo |
+| `auditar_tarea` | CANCELAR + ELIMINAR de la línea de packing | `Auditoría <resultado>` |
+| `PackingService.cancelar` | CANCELAR + ELIMINAR por bulto; `observaciones` ya no se pisa | **obligatorio** (la pantalla manda uno fijo) |
+| `resetear-siesa` | REABRIR + ELIMINAR por bulto; guarda el `siesa_response` que borra | opcional |
+| Reintentar jobs (`reencolar_job_fallido`) | REINTENTAR con `error_ultimo`/`intentos` | opcional |
+| Layout: ubicación, fila, cuerpo, remodular (`_borrar_ubicacion`) | ELIMINAR con asignaciones | opcional (limpieza técnica) |
+| Layout forzado (`_borrar_historial_de`) | ELIMINAR por tarea/sesión borrada + EDITAR con las desvinculadas | opcional |
+| Juicios de temporada | Retractar → **ANULAR** (ya no se borra); re-registrar → EDITAR | opcional (la pantalla no lo pide) |
+| Rutas maestras | EDITAR (paradas viejas) / ELIMINAR | opcional |
+| Productos, conductores, vehículos | DESACTIVAR (por DELETE y por PUT con `activo`) | opcional |
+| Mapeo de unidades | ELIMINAR | opcional |
+| Recepción, traslado, reposición, devolución de cliente | CANCELAR | **obligatorio** (sin UI, o la UI ya lo manda) |
+| Descartar tarea de devolución | DESCARTAR | **obligatorio** |
+| Cascadas de traslado (cancelar, despachar sin recoger, revertir) | CANCELAR por tarea; revertir = ANULAR | el del traslado |
+| Muelle: desasignar | DESASIGNAR con la asignación que deshace | opcional |
+| `forzar_cierre_ruta` | FORZAR + LIQUIDAR; ya no pisa `fecha_cierre`, pone `fecha_entregada` | **obligatorio** (la pantalla lo pide: cambio mínimo en `rutas.js`) |
+| Liquidar ruta (`_marcar_liquidada`) | LIQUIDAR | — |
+| Re-confirmar una parada | EDITAR con los montos/estados que pisa | opcional (`motivo_edicion`) |
+
+`motivo_obligatorio()` es la única definición de «vacío» (`None`, `''`, `'  '`).
+
+**Lectura:** `GET /api/analitica/bitacora` (gestión) — filtros `dia` /
+`desde`/`hasta`, `accion`, `entidad`, `entidad_id`, `usuario_id`,
+`almacen_id`; paginado. Sin pantalla: `DEUDA_SIN_UI`, pantalla en Fase 1.
+
+### El trinquete
+
+`tests/test_bitacora_acciones.py` (48 tests, 12 mutaciones, las 12 rojas).
+Por AST sobre `app/` y `flota/`:
+
+- Todo borrado físico —`db.session.delete(x)`, `Query.delete()`,
+  `delete(Tabla)`, `text('DELETE FROM …')`— vive en una función de
+  `BORRADOS_REGISTRADOS` que llama a `registrar_accion` **en la misma
+  función** (una hija no cuenta), o en `BORRADOS_SIN_BITACORA` con su porqué
+  (tope 1: el espejo de `pedidos_sync_service`).
+- Toda función que pone un estado CANCELADO/ANULADO/DESCARTADO/REVERTIDO
+  (asignación o `{'estado': …}`) llama a `registrar_accion`, salvo
+  `ESTADOS_SIN_BITACORA` (tope 6).
+- Una política, una función: solo `reencolar_job_fallido` borra
+  `error_ultimo`; solo `PickingService._soltar_operario` pone `operario_id`
+  en None; solo `RutaService._marcar_liquidada` escribe LIQUIDADA.
+- Meta-tests: las cuatro escrituras del borrado, las tres de la baja, lo sano
+  no se marca (docstrings y comentarios incluidos), la función anidada no
+  cuenta, y pisos (≥ 9 funciones / 14 llamadas de borrado, ≥ 15 de baja).
+
+### Lo que NO cubre — escrito para que nadie lo suponga cubierto
+
+- **Conteo, por instrucción de la Fase 0A.** Declarado en los inventarios:
+  `omitir_segundo_conteo` no guarda quién omitió (solo el log),
+  `descartar_fallos_dlq` guarda quién en `resultado` pero sin motivo, y
+  `reintentar_fallos_dlq` borra `error_ultimo` sin dejarlo escrito (pasarlo a
+  `reencolar_job_fallido` es una línea). `cancelar_cadena` y
+  `cancelar_rezago` sí tienen motivo y autor propios.
+- **Flota** tiene rastro propio (`cerrado_por_usuario_id` + `motivo_cierre`
+  con CHECK) y no escribe en la bitácora.
+- **Granularidad por función**: una función que ya llama a
+  `registrar_accion` una vez no se pone roja si pierde una segunda llamada
+  (la mutación M9 del layout la detectan los tests de comportamiento, no el
+  trinquete).
+- **`.remove()` sobre relaciones con `delete-orphan`** (borrado por cascada
+  del ORM) y `setattr(x, 'estado', …)` no se detectan. Hoy no hay ninguno
+  que borre filas de negocio.
+- **Motivo opcional donde la pantalla no lo pide** (tabla de arriba): la
+  acción queda registrada con `motivo=None`. Volverlo obligatorio exige que
+  la pantalla lo pida — Fase 1.
+- **No registradas**: `rechazar_solicitud` de traslado (RECHAZADA, ya guarda
+  `aprobador_id` + `motivo_rechazo`), ediciones de maestros por
+  `PUT /api/productos/<id>`, y `pedidos_sync_service` (Fase 0B).
+- **El histórico**: todo lo anterior al deploy de `m034bitacora` queda sin
+  autor ni bitácora. No hay backfill posible.
