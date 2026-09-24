@@ -3045,3 +3045,22 @@ FLOTA_TEST_PG_URL=postgresql://postgres@localhost:<puerto>/<base desechable> \
 Railway (regla de no tocar bases reales), así que no se sabe cuántas corridas
 se saltaron de verdad; lo probado es el mecanismo, con el mismo pool y la misma
 versión de SQLAlchemy (2.0.48).
+
+---
+
+## Tres huecos de la misma noche (2026-09-23)
+
+| | Qué pasaba | Ahora |
+|---|---|---|
+| **`/editar` cerraba conteos sin contar** | La ruta aceptaba la cantidad en todo estado salvo AJUSTADO/AJUSTANDO, y `reconciliar_cantidad` pone MATCH si cuadra: un PENDIENTE pasaba a MATCH sin que nadie contara, un CANCELADO resucitaba, un BLOQUEADO se cerraba sin el líder y un CC2/CC3 cambiaba sin mover la raíz que se aprueba | `ConteoService.motivo_no_se_corrige_cantidad`: solo la **raíz ya contada** (MATCH o DESCUADRE) sin eslabones vivos. `to_dict` la publica (`no_se_corrige_cantidad`) y el modal muestra ese texto en vez de copiar estados en JS. `tests/test_conteo_cadena_con_salida.py::TestSoloSeCorrigeLaRaizYaContada` |
+| **El JSON de la sesión dentro del `onclick`** | Las tarjetas de Conteos pasaban `JSON.stringify(s)` con `"` → `&quot;`; un dato que ya trajera `&quot;` volvía a ser `"` al decodificar el atributo y cerraba la cadena. Lo mismo, con otra forma, en los modales de empaque ambiguo de recepción y packing | El botón lleva el id (o la posición) y la función busca el dato. `tests/test_conteo_tarjetas_por_id_js.py`, `tests/test_recepcion_packing_modal_ambiguedad_js.py` |
+| **Día UTC restado a día Bogotá** | Cinco sitios hacían `hoy_bogota - columna.date()`. Entre las 7 p. m. y la medianoche daba un día menos: TRA-30 no reportaba el traslado en el umbral, TRA-31 contaba de menos. Lo destapó la suite corrida a las 22:35; en Railway (UTC) rompía el build cinco horas al día | `dia_operativo_de` en los cinco. `tests/test_dia_de_una_columna_utc.py`: trinquete AST sobre `app/` (ningún `.fecha*/created*/updated*.date()`), inventario de excepciones vacío |
+
+Los manejadores inline con datos de **otra** forma (49 sitios, listados por el
+agente del 2026-09-23: `flota.js` con `v.placa`, `layout.js`, `rutas.js:480`,
+`tienda.js`, …) siguen sin tocar: es el renglón «Dato dentro de JS dentro de un
+atributo» de la tabla de huecos del guard de `esc()`.
+
+**No desplegado a propósito:** la rama local `feat/cartera-nc-sensor`
+(`4a95368`, 2026-08-01, «NO DESPLEGAR AÚN») nunca se subió a `origin` y no
+está en `qa`. Decidir antes de integrarla.
