@@ -32,7 +32,7 @@ async function kardexCargarPanel() {
     ]),
     pintar: (el, [estado, salud]) => {
       _kardexRender(el, estado);
-      el.insertAdjacentHTML('afterbegin', `<div id="kardex-salud">${_kardexSaludHtml(salud)}</div>`);
+      el.innerHTML = `<div id="kardex-salud">${_kardexSaludHtml(salud)}</div>` + el.innerHTML;
     },
     despues: ([estado]) => { if (estado.en_curso) _kardexIniciarPoll(); },
     error: (e) => `<div style="color:var(--red);padding:20px;">Error: ${esc(e.message || e)}</div>`,

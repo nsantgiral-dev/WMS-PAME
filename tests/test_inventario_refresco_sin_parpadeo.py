@@ -158,7 +158,13 @@ const RESPUESTAS = [
   ['/api/conteo/abc/resumen', { distribucion_abc: {}, plan: {}, fuente: largo }],
   ['/api/conteo/?', { sesiones: [sesion], total: 1, total_paginas: 1 }],
   ['/api/kardex/descargar/estado', { en_curso: false, resultado: null }],
+  ['/api/kardex/salud', { veredicto: 'AL_DIA', confiable: true, problemas: [] }],
 ];
+// Datos pide estado y salud a la vez (`Promise.all`): se responden juntos.
+async function responderKardex(estado) {
+  await responder('/api/kardex/descargar/estado', estado);
+  await responder('/api/kardex/salud', { veredicto: 'AL_DIA', confiable: true, problemas: [] });
+}
 async function responderTodo() {
   for (const [patron, datos] of RESPUESTAS) await responder(patron, datos);
 }
@@ -284,35 +290,35 @@ const esc = {};
   if (escenario === 'intervalos') {
     const kardexCorriendo = { en_curso: true, resultado: null };
     js('invSubtab("datos")');
-    await responder('/api/kardex/descargar/estado', kardexCorriendo);
+    await responderKardex(kardexCorriendo);
     await responderTodo();
     esc.poll_en_datos = pollsVivos();
     js('invSubtab("lider")'); await responderTodo();
     esc.poll_tras_cambiar_subtab = pollsVivos();
     for (let i = 0; i < 5; i++) {
       js('invSubtab("datos")');
-      await responder('/api/kardex/descargar/estado', kardexCorriendo);
+      await responderKardex(kardexCorriendo);
       js('invSubtab("abc")');
       js('invSubtab("datos")');
-      await responder('/api/kardex/descargar/estado', kardexCorriendo);
+      await responderKardex(kardexCorriendo);
     }
     await responderTodo();
     esc.poll_tras_idas_y_vueltas = pollsVivos();
     js('tab("tab-dashboard")');
     esc.poll_tras_salir_de_inventario = pollsVivos();
     js('tab("tab-inventario")'); js('invSubtab("datos")');
-    await responder('/api/kardex/descargar/estado', kardexCorriendo);
+    await responderKardex(kardexCorriendo);
     await responderTodo();
     js('invSalir()');
     esc.poll_tras_invSalir = pollsVivos();
     // Un sondeo que termina con la pestaña oculta no repinta Datos.
     js('invSubtab("datos")');
-    await responder('/api/kardex/descargar/estado', kardexCorriendo);
+    await responderKardex(kardexCorriendo);
     const datos = $('inv-datos-container');
     const antes = datos.escrituras.length;
     js('TAB = "tab-inventario"; _INV_SUBTAB = "lider"');   // oculto sin pasar por invSubtab
     await avanzar(10000);
-    await responder('/api/kardex/descargar/estado', { en_curso: false, resultado: null });
+    await responderKardex({ en_curso: false, resultado: null });
     await responderTodo();
     esc.datos_repintado_oculto = datos.escrituras.length - antes;
   }
