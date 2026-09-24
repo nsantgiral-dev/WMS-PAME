@@ -1064,6 +1064,8 @@ class TestEditar:
         st, e = b.get(b.supervisor, f'/api/conteo/estadisticas?almacen_id={b.almacen.id}')
         assert e['volumen']['recuentos']['numerador'] == 0
         assert e['volumen']['recuentos_propios'] == 0
+        assert e['volumen']['recuentos']['excluidos'] == {}, \
+            'lo que devolvió la cola no es un descarte sin motivo: es DE_LA_COLA'
 
     def test_reasignar_un_conteo_ya_contado_no_reescribe_quien_conto(self, bodega):
         """Cambiarle el dueño a un CC1 ya contado reescribía quién contó, y con
