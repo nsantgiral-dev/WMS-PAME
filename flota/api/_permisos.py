@@ -343,6 +343,20 @@ def _foto_de_lectura_propia(foto, conductor, usuario):
     return padre is not None and padre.autor_usuario_id == usuario.id
 
 
+def _foto_de_gasto_propio(foto, conductor, usuario):
+    """La foto del recibo de SU tanqueo: el gasto cuelga de la lectura que él
+    registró (`Gasto.lectura_id` → `LecturaOdometro.autor_usuario_id`). Un gasto
+    sin lectura lo cargó gestión, y no es suyo."""
+    from app.extensions import db
+    from flota.adaptadores.modelos import Gasto, LecturaOdometro
+
+    gasto = db.session.get(Gasto, foto.entidad_id)
+    if gasto is None or gasto.lectura_id is None:
+        return False
+    lectura = db.session.get(LecturaOdometro, gasto.lectura_id)
+    return lectura is not None and lectura.autor_usuario_id == usuario.id
+
+
 def _nunca(foto, conductor, usuario):
     return False
 
@@ -364,6 +378,7 @@ FOTO_DEL_CONDUCTOR = {
     'custodia_fin': _foto_de_custodia_propia,
     'hallazgo': _foto_de_hallazgo_propio,
     'odometro': _foto_de_lectura_propia,
+    'gasto': _foto_de_gasto_propio,
     'documento': _nunca,
 }
 

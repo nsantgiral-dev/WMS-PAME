@@ -61,7 +61,7 @@ const FLOTA_CLASE_SENAL = {
 
 /** Una palabra para un código. Si no está, el código tal cual: se ve y se
  * agrega, en vez de esconderse detrás de un texto inventado. */
-function flotaPalabra(mapa, codigo) {
+function flotaPalabraDe(mapa, codigo) {
   return Object.prototype.hasOwnProperty.call(mapa, codigo) ? mapa[codigo] : String(codigo);
 }
 
@@ -303,7 +303,7 @@ function flotaTextoAccion(accion) {
   const textos = { documentos: 'Cargar papeles', ficha: 'Completar ficha',
                    preventivo: 'Ver preventivo', danos: 'Ver daños',
                    gastos: 'Ver gastos', resumen: 'Abrir expediente' };
-  return flotaPalabra(textos, accion.pestana);
+  return flotaPalabraDe(textos, accion.pestana);
 }
 
 /** El índice del vehículo en `hoy` para una placa, o -1. */
@@ -410,7 +410,7 @@ function flotaBandejaTarjetaSenal(s, k) {
     .map(([clave, v]) => `<li><span style="color:var(--tx2)">${esc(clave.replace(/_/g, ' '))}:</span>
       ${esc(Array.isArray(v) ? v.join(', ') : v)}</li>`).join('');
   return `<div class="tabla-card" style="border-left:4px solid var(--warn-brd)">
-    <div style="font-size:var(--fs-xs);color:var(--tx2)">${esc(flotaPalabra(FLOTA_CLASE_SENAL, s.clase))}</div>
+    <div style="font-size:var(--fs-xs);color:var(--tx2)">${esc(flotaPalabraDe(FLOTA_CLASE_SENAL, s.clase))}</div>
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:4px 0">
       <b>${esc(s.placa)}</b> <span>${esc(s.titulo)}</span>
     </div>
@@ -426,7 +426,7 @@ function flotaBandejaTarjetaSenal(s, k) {
 function flotaBandejaNoEvaluables(filas) {
   if (!filas.length) return '';
   const li = filas.map(f => `<li style="margin-bottom:4px">
-    <b>${esc(f.placa || 'sin placa')}</b> · ${esc(flotaPalabra(FLOTA_CLASE_SENAL, f.clase))}:
+    <b>${esc(f.placa || 'sin placa')}</b> · ${esc(flotaPalabraDe(FLOTA_CLASE_SENAL, f.clase))}:
     ${esc(f.motivo)}${f.casos > 1 ? ` (${esc(f.casos)} casos)` : ''}</li>`).join('');
   return `<div class="tabla-card"><details>
     <summary style="cursor:pointer"><b>Lo que no se pudo revisar (${esc(filas.length)})</b></summary>
@@ -477,7 +477,7 @@ function flotaBandejaVehiculosHtml(b) {
       <td>${flotaChipSemaforo(f.semaforo.color)}</td>
       <td><b>${esc(f.placa)}</b></td>
       <td>${esc(f.tipo)}${f.capacidad_kg ? ' · ' + esc(f.capacidad_kg) + ' kg' : ''}</td>
-      <td>${esc(flotaPalabra(FICHA, f.ficha))}</td>
+      <td>${esc(flotaPalabraDe(FICHA, f.ficha))}</td>
       <td>${esc(f.danos_abiertos)} daño(s) abierto(s)</td>
     </tr>`).join('');
   return flotaBandejaCabecera(b) + `<div class="tabla-card">

@@ -232,7 +232,7 @@ class TestLaPrimeraFichaSePuedeCrear:
 #: `SIN_EXPEDIENTE` con su motivo; `test_el_inventario_esta_completo` lo exige.
 EXPEDIENTE = ('flotaAbrirRecibo', 'flotaAbrirOdometro', 'flotaAbrirFicha',
               'flotaAbrirDocumentos', 'flotaAbrirDanos', 'flotaAbrirGastos',
-              'flotaAbrirTanqueo', 'flotaAbrirTaller', 'flotaAbrirLlantas',
+              'flotaAbrirTaller', 'flotaAbrirLlantas',
               'flotaAbrirPreventivo')
 
 SIN_EXPEDIENTE = {}
@@ -289,7 +289,7 @@ class TestTodoExpedienteAbreConUnVehiculoNuevo:
         texto = (PWA / 'flota.js').read_text(encoding='utf-8')
         declaradas = set(re.findall(
             r'^(?:async\s+)?function\s+(flotaAbrir\w+)\(placa\)', texto, re.M))
-        assert len(declaradas) >= 10, 'el escáner no ve las pantallas'
+        assert len(declaradas) >= 9, 'el escáner no ve las pantallas'
         faltan = declaradas - set(EXPEDIENTE) - set(SIN_EXPEDIENTE)
         assert not faltan, (
             f'Pantallas de expediente sin probar con un vehículo nuevo: {faltan}. '

@@ -625,6 +625,18 @@ class TestLasFotosDelConductor:
                           headers=_auth(mundo['t']['a'])).status_code == 403
 
 
+    def test_la_foto_del_recibo_de_su_propio_tanqueo(self, client, mundo, db):
+        """El recibo del tanqueo (`entidad_tipo='gasto'`, de la app del
+        conductor) es suyo por la lectura que él registró; el de otro, no."""
+        r = _tanqueo(client, mundo, 'b', 'DRB100')
+        assert r.status_code == 201, r.get_json()
+        fid = _foto(db, 'gasto', r.get_json()['id'], mundo['u']['b'])
+        assert client.get(f'/flota/foto/{fid}',
+                          headers=_auth(mundo['t']['b'])).status_code != 403
+        assert client.get(f'/flota/foto/{fid}',
+                          headers=_auth(mundo['t']['a'])).status_code == 403
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # 6 · El cierre forzado de control de flota
 # ═══════════════════════════════════════════════════════════════════════════
