@@ -399,6 +399,24 @@ def health_siesa():
     except Exception as _e_cp:
         resultado['cobro_contraentrega'] = {'error': str(_e_cp)[:200]}
 
+    # RETENCIÓN DE CARTERA (m044cartera). Modo de la compuerta, frescura de la
+    # cartera leída, retenidos por antigüedad y si el Gestor puede llamar.
+    try:
+        from app.services import cartera_service as _cart_h
+        resultado['cartera'] = _cart_h.salud()
+        for _prob in resultado['cartera']['problemas']:
+            resultado['advertencias'].append(f'Cartera: {_prob}')
+        if resultado['cartera']['alertas']:
+            resultado['advertencias'].append(
+                f"Cartera: {len(resultado['cartera']['alertas'])} pedido(s) retenidos "
+                'hace más de 3 días')
+        if not resultado['cartera']['gestor_token_configurado']:
+            resultado['advertencias'].append(
+                'Cartera: CARTERA_GESTOR_TOKEN no está configurada — el Gestor de Cartera '
+                'no puede autorizar; solo el respaldo del WMS')
+    except Exception as _e_cart:
+        resultado['cartera'] = {'error': str(_e_cart)[:200]}
+
     # Pasos que siguen siendo manuales en Siesa. No son un fallo — son trabajo
     # de una persona todos los días, y la única forma de que nadie los olvide
     # (o los haga de más) es que estén escritos en un sitio consultable.

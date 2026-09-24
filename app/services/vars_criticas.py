@@ -141,6 +141,21 @@ VARS_CRITICAS: tuple = (
                'la copia y el health declara las diferencias',
                condicional=True),
 
+    # ── Retención de cartera (m044cartera) ────────────────────────────────────
+    VarCritica('CARTERA_COMPUERTA', 'RETIENE',
+               'RETIENE (defecto) o INFORMA: si la compuerta de mora y cupo frena el '
+               'despacho a crédito real o solo lo registra en el log'),
+    VarCritica('CARTERA_TOLERANCIA_SALDO', '5000',
+               'Saldo mínimo de una factura vencida para contar como mora'),
+    VarCritica('CARTERA_GESTOR_TOKEN', None,
+               'Secreto compartido con el Gestor de Cartera (Bearer). Sin él la API '
+               '/api/cartera/* responde 503 y solo queda el respaldo del WMS',
+               condicional=True),
+    VarCritica('CONTADO_DESPLIEGUE_FECHA', None,
+               'Día (YYYY-MM-DD) en que m043contado entró: las paradas de crédito no '
+               'autorizado anteriores se pueden autorizar en lote',
+               condicional=True),
+
     # ── Guard condicional: solo dispara si la API no trae el dato ────────────
     VarCritica('SIESA_PUNTO_ENVIO_DEFAULT', None,
                'Fallback de punto de envío para 142943, solo cuando '
