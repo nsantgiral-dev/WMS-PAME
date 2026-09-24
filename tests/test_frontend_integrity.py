@@ -776,18 +776,6 @@ DEUDA_SIN_UI = {
         'Sin ella, un día que el cron no calculó queda AUSENTE hasta que alguien '
         'llame la API.',
 
-    # 2026-09-24 · 🕒 Jornada del conductor (Fase 0). `flota_jornada.js` ya
-    # existe y exporta `flotaJornadaCargar(el)`; lo que falta es el botón de la
-    # sub-pestaña de Flota, que otro agente está rediseñando en paralelo. **La
-    # cablea el integrador.** Al cablearla, `test_la_lista_solo_encoge` exige
-    # borrar estas dos líneas.
-    '/api/jornada':
-        'La cablea el integrador: flotaJornadaCargar(el) en la sub-pestaña de Flota. '
-        'Sin ella la línea de tiempo del día de un conductor solo se lee por API.',
-    '/api/jornada/resumen':
-        'La cablea el integrador: flotaJornadaCargar(el) en la sub-pestaña de Flota. '
-        'Sin ella el encargado no ve qué conductores tienen tiempo sin explicar.',
-
     # ── flota/ (entró al guard el 2026-09-21, ver el comentario del filtro) ──
     #
     # 2026-09-21 · Webhook ENTRANTE de Gupshup: lo llama el proveedor, no una

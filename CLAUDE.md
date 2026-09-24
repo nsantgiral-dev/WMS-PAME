@@ -4254,15 +4254,13 @@ vehículo y del dinero recaudado— y cubre **solo su jornada laboral**. El text
 va en cada respuesta y al pie de la pantalla. La decisión de informar es del
 dueño/RR. HH., no del sistema.
 
-### Integración pendiente — lo que hay que cablear
+### Cableada (2026-09-24)
 
-La sub-pestaña de Flota la rediseña otro agente, así que **no hay botón**:
-`/api/jornada` y `/api/jornada/resumen` están en `DEUDA_SIN_UI` con «la
-cablea el integrador». Para cablear: una sub-pestaña «🕒 Jornada» en Flota
-(solo admin/control_flota, igual que `flota_analitica.js`) que llame
-`flotaJornadaCargar(<contenedor>)`; después, borrar las dos líneas de
-`DEUDA_SIN_UI` (`test_la_lista_solo_encoge` lo exige). `flota_jornada.js` ya
-está en `index.html`, en el `SHELL` de `sw.js` y en `PANTALLAS`.
+Flota → **🕒 Jornada** (entre Señales y Vehículos): `flotaSubtab('jornada')`
+esconde la bandeja y la analítica, muestra `#flota-jornada` y llama
+`flotaJornadaCargar('flota-jornada')`. Las dos rutas salieron de
+`DEUDA_SIN_UI`. `tests/flota/test_subtab_jornada_js.py` prueba el cable en Node
+(mutación: quitar la llamada lo pone rojo).
 
 **Hallazgo del guard de alcance** (sin tocar, es de otro archivo): el detector
 de `test_frontend_integrity` lee un `nombre(` en un **comentario de nivel de

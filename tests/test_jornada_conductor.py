@@ -521,16 +521,21 @@ class TestKmEntreTurnos:
 
     def test_el_traspaso_directo_no_se_mide(self, db, mundo):
         """Conductor → conductor: `traspasar` escribe el mismo km en los dos
-        lados. Medirlo daría cero por construcción."""
+        lados. Medirlo daría cero por construcción.
+
+        Desde el 2026-09-24 un conductor no puede dejarle el camión a otro
+        (regla 15 de flota): el relevo directo solo lo hace la oficina, desde el
+        recibo de escritorio y con motivo. Es ese camino el que se mide."""
         from flota.adaptadores.traspaso import traspasar
         from flota.dominio.valores import CustodioTipo, QuienPide
         beto = mundo.conductor('Beto')
         ana = mundo.conductor('Ana')
         mundo.recibe(beto, 'JOR001', _t(DIA, '06:00'), 1000)
         traspasar(vehiculo_id=mundo.vehiculos['JOR001'].id, km=1100,
-                  registrado_por_usuario_id=beto.usuario_id,
+                  registrado_por_usuario_id=mundo.admin.id,
                   custodio_tipo=CustodioTipo.CONDUCTOR, custodio_conductor_id=ana.id,
-                  quien_pide=QuienPide.CONDUCTOR, ts=_t(DIA, '12:00'))
+                  quien_pide=QuienPide.ADMIN_ZONA, motivo_forzado='relevo en ruta',
+                  ts=_t(DIA, '12:00'))
         assert _svc()._casos_km_entre_turnos(
             _svc().Mundo(DIA, DIA, _svc().umbrales())) == []
 

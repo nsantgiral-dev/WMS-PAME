@@ -45,12 +45,14 @@
  * `control_flota` va a vivir en la bandeja; rebotarlo a otra pestaña en cada
  * recarga es cómo se deja de usar una pantalla.
  *
- * Desde el 2026-09-24 son cinco: Hoy · Pendientes · Señales · Vehículos ·
- * Analítica. Las cuatro primeras pintan la bandeja (`flota_bandeja.js`) en
- * `#flota-contenido`; Analítica pinta acá, en `#flota-analitica`. El valor
- * viejo `operacion` —el que quedó guardado en los teléfonos— se lee como Hoy.
+ * Desde el 2026-09-24 son seis: Hoy · Pendientes · Señales · 🕒 Jornada ·
+ * Vehículos · Analítica. Hoy, Pendientes, Señales y Vehículos pintan la bandeja
+ * (`flota_bandeja.js`) en `#flota-contenido`; Jornada pinta
+ * `flotaJornadaCargar` (`flota_jornada.js`) en `#flota-jornada`; Analítica
+ * pinta acá, en `#flota-analitica`. El valor viejo `operacion` —el que quedó
+ * guardado en los teléfonos— se lee como Hoy.
  */
-const FLOTA_SUBTABS = ['hoy', 'pendientes', 'senales', 'vehiculos', 'analitica'];
+const FLOTA_SUBTABS = ['hoy', 'pendientes', 'senales', 'jornada', 'vehiculos', 'analitica'];
 
 function flotaNormalizarSubtab(nombre) {
   if (nombre === 'operacion') return 'hoy';
@@ -80,12 +82,16 @@ function flotaSubtab(nombre) {
     }
   });
   const analitica = FLOTA_SUBTAB === 'analitica';
+  const jornada = FLOTA_SUBTAB === 'jornada';
   const pAn = document.getElementById('flota-analitica');
+  const pJo = document.getElementById('flota-jornada');
   const pCo = document.getElementById('flota-contenido');
   if (pAn) pAn.style.display = analitica ? 'block' : 'none';
-  if (pCo) pCo.style.display = analitica ? 'none' : 'block';
+  if (pJo) pJo.style.display = jornada ? 'block' : 'none';
+  if (pCo) pCo.style.display = (analitica || jornada) ? 'none' : 'block';
 
   if (analitica) return flotaCargarAnalitica();
+  if (jornada) return flotaJornadaCargar('flota-jornada');
   // Sin forzar: cambiar de pestaña repinta la bandeja que ya se leyó, si es
   // reciente. `cargarFlota()` —la que llaman Rutas y las acciones— sí fuerza.
   return flotaBandejaCargar(false);
