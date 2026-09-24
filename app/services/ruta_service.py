@@ -1034,7 +1034,10 @@ class RutaService:
             # Lo mismo que tolera la guarda del servidor al comparar lo cobrado
             # con el valor de la factura.
             'tolerancia_cobro':        _tope_cobro(),
-            'version_formulario':      _sr_p.VERSION_FORMULARIO_CON_EVIDENCIA,
+            # La versión que este servidor sabe exigir: evidencia (2) y
+            # contado contraentrega sin crédito en el select (3).
+            'version_formulario':      max(_sr_p.VERSION_FORMULARIO_CON_EVIDENCIA,
+                                           _cp_tabla.VERSION_FORMULARIO_CONTADO),
         }
 
     # La unidad que el sync roto inventó en TODO el catálogo. No es una lista
@@ -1499,8 +1502,8 @@ class RutaService:
                             'si pagó una parte, marcá Parcial y ajustá lo entregado.')
             else:
                 from app.services.connekta_gateway import connekta as _cx_r
-                if forma_pago == FormaPago.CREDITO and _cp_r.regla_anterior_rechaza_credito(
-                        _cp_r.codigo_vigente(_tarea_cp),
+                if _cp_r.regla_anterior_rechaza_credito(
+                        forma_pago, _cp_r.codigo_vigente(_tarea_cp),
                         _cx_r.cond_pago_ventas, _cx_r.cond_pago_ruta):
                     raise ValueError(
                         'Este pedido se cobra en la entrega: no se puede registrar '

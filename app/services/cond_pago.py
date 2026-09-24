@@ -454,13 +454,15 @@ def formulario_sabe_de_contado(data: dict) -> bool:
         return False
 
 
-def regla_anterior_rechaza_credito(codigo, cond_pago_contado, cond_pago_ruta) -> bool:
+def regla_anterior_rechaza_credito(forma_pago, codigo, cond_pago_contado, cond_pago_ruta) -> bool:
     """Lo único que la guarda rechazaba ANTES del 2026-09-24, para los ítems
     de la cola armados por un PWA viejo: `CREDITO` sobre el código de contado
     o sobre la condición de ruta (y el vacío, que factura en ruta). Un ítem
     viejo que la regla nueva rechazaría y la vieja no, pasa — y llega a la
     liquidación como `credito_no_autorizado`. No se endurece hacia atrás: un
     ítem rechazado en la cola queda trabado en el teléfono para siempre."""
+    if _norm(forma_pago) != 'CREDITO':
+        return False
     c = _norm(codigo)
     contado, ruta = _norm(cond_pago_contado), _norm(cond_pago_ruta)
     if codigo is None:

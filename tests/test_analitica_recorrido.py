@@ -77,7 +77,7 @@ def _mock_connekta():
 
 
 def sembrar_historia(db, productos, consec, cliente, valores=None, remisionada=0,
-                     completa=False, ahora=None):
+                     completa=False, ahora=None, cond_pago=None):
     """Las líneas del pedido como las lee el sync: pendientes en Siesa + su historia."""
     from app.models.pedido_siesa import PedidoSiesa
     from app.services.pedidos_historia import registrar_barrido
@@ -98,6 +98,7 @@ def sembrar_historia(db, productos, consec, cliente, valores=None, remisionada=0
             'f200_razon_social_pedido_fact': cliente, 'f431_cant1_pedida': 10,
             'f431_cant1_remisionada': remisionada, 'f431_vlr_neto': valores[i],
             'f430_ind_estado': 3,
+            **({'f430_id_cond_pago': cond_pago} if cond_pago else {}),
         })
     db.session.commit()
     r = registrar_barrido(filas, paginacion_completa=completa, ahora=ahora, co_barrido='003')
@@ -156,9 +157,9 @@ def _liquidar(db, flujo, admin):
 
 
 def _hasta_despacho(db, almacen, oper, consec, cliente, conductor, recoger=10, n=2,
-                    valores=None):
+                    valores=None, cond_pago=None):
     productos, _ = sembrar_catalogo(db, almacen, n=n)
-    sembrar_historia(db, productos, consec, cliente, valores=valores)
+    sembrar_historia(db, productos, consec, cliente, valores=valores, cond_pago=cond_pago)
     f = _flujo(almacen, oper, productos, consec)
     hacer_picking(db, f, 10, recoger)
     _empacar(db, f, consec)
@@ -221,7 +222,11 @@ def mundo(db, almacen):
                                 referencia_documento='PD1508', tipo_documento='PEDIDO')
     db.session.commit()
 
-    f9 = _hasta_despacho(db, almacen, oper, 1509, 'CLIENTE CREDITO', cond, n=1)
+    # Crédito REAL (C04, 30 días), leído de la historia del pedido al crear el
+    # packing (`cond_pago.anotar_desde_historia`). Sobre contado sería
+    # `credito_no_autorizado` y la ruta no se liquidaría.
+    f9 = _hasta_despacho(db, almacen, oper, 1509, 'CLIENTE CREDITO', cond, n=1,
+                         cond_pago='C04')
     _entregar(db, f9, cond_u, forma_pago='CREDITO', monto_cobrado=0)
     _liquidar(db, f9, admin)
     w['f9'] = f9

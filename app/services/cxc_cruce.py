@@ -12,6 +12,16 @@ Es una asimetría incómoda —`get_rowids_factura` sí necesita la FACTURA, por
 filtra por `f353_*` es del cruce y `f350_*` del documento— y por eso se
 documentó con esas palabras.
 
+**Y hoy no es la regla para las facturas del WMS** (hallazgo 2026-09-24,
+contado contraentrega): la cartera de las FE que emite el WMS (142943) se
+indexa por la **FACTURA** —`f353_id_tipo_docto_cruce` = tipo de la FE—, no
+por el pedido. La búsqueda de abajo sigue probando primero por PEDIDO (no se
+cambió el comportamiento) y cae a la FE, que es donde de verdad aparecen. Y
+no sirve para saber la condición de pago: el WMS mandaba `F353_FECHA_VCTO =
+hoy + 30` fijo y Siesa lo respeta, así que toda FE del WMS vencía a 30 días
+sin importar la condición (desde el 2026-09-24 lo decide
+`cond_pago.vencimiento_fe`; las ya emitidas quedan con +30).
+
 **No es universal.** PD1411/FE-1416 (2026-08-18) trajo el cruce indexado por
 la **FE**, no por el pedido — verificado en vivo contra Siesa (fila
 `f353_id_tipo_docto_cruce='FE', consec='1416'`, saldo completo). Se busca
