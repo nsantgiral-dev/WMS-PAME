@@ -4053,3 +4053,6 @@ no cero; piso 13). **13 mutaciones, las 13 rojas.** Helper de tests:
   (autor de la lectura) está escrita para cuando lo tengan.
 - `rutas.py`/`almacenes.py` usan `LECTURA_FLOTA` fuera de `flota/` para leer
   maestros; no están en este inventario.
+
+Suite completa en el worktree (2026-09-24, `-m "not postgres"`, TZ=UTC):
+**7497 passed, 0 failed** (5 skipped, 19 xfailed).
