@@ -125,6 +125,22 @@ VARS_CRITICAS: tuple = (
                'F_CIA de TODO payload. Si queda en 8215 (el tenant Connekta) '
                'no hay POST que pase'),
 
+    # ── Contado contraentrega (2026-09-24) — `cond_pago.cobro_contraentrega` ──
+    #
+    # No tumban un POST: deciden si el conductor cobra y cuándo vence la FE.
+    # Un valor inválido no se aplica (se usa el default) y se declara en
+    # `/api/health/siesa` → `cobro_contraentrega.problemas`.
+    VarCritica('COBRO_CONTRAENTREGA_MAX_DIAS', '15',
+               'Hasta cuántos días de crédito una factura se COBRA al entregar '
+               '(contado contraentrega) y cuándo vence la FE de contado'),
+    VarCritica('SIESA_COND_PAGO_DIAS', '(copia del PDF en cond_pago.DIAS_POR_CODIGO_PDF)',
+               'Sobreescribe por código los días de las condiciones de pago (JSON) — '
+               'deciden si una parada se cobra o es crédito real'),
+    VarCritica('CONNEKTA_CONSULTA_COND_PAGO', None,
+               'Consulta dinámica del maestro de condiciones: si existe manda sobre '
+               'la copia y el health declara las diferencias',
+               condicional=True),
+
     # ── Guard condicional: solo dispara si la API no trae el dato ────────────
     VarCritica('SIESA_PUNTO_ENVIO_DEFAULT', None,
                'Fallback de punto de envío para 142943, solo cuando '

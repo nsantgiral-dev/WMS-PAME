@@ -495,3 +495,47 @@ def ninguna_parada_de_ruta_declara_contado(ctx=None):
         ) for t in filas
         if cp.clasificar(t.cond_pago, connekta.cond_pago_ventas) == cp.CONTADO
     ]
+
+
+@invariante(
+    codigo='VTA-62',
+    flujo='venta',
+    frontera='ruta → recaudo',
+    consecuencia='Una factura de contado contraentrega salió sin plata y quedó '
+                 'como crédito que nadie evaluó: la mercancía está con el '
+                 'cliente y la factura abierta.',
+    severidad=BLOQUEA,
+    detector_ciego='tests/test_contado_contraentrega.py::TestLaAuditoriaLoVe::test_vta62_ve_un_credito_no_autorizado',
+)
+def ninguna_parada_de_contado_sale_sin_cobro(ctx=None):
+    """Regla del dueño (2026-09-24): ≤ 15 días de crédito es contado — el
+    conductor cobra al entregar. Un CREDITO/EXENTO, o un ENTREGADO con $0,
+    sobre una parada así, sin autorización de la oficina, es crédito otorgado
+    en la puerta.
+
+    La guarda del servidor lo rechaza desde el formulario 3; esto ve lo que
+    entró antes, por la cola vieja o armado a mano. Lee la política
+    (`cond_pago.credito_no_autorizado`), no la reimplementa.
+    """
+    from app.models.recaudo_entrega import EstadoEntrega, RecaudoEntrega
+    from app.services import cond_pago as cp
+
+    filas = (RecaudoEntrega.query
+             .filter(RecaudoEntrega.estado_entrega.in_(
+                 (EstadoEntrega.ENTREGADO, EstadoEntrega.PARCIAL)))
+             .filter(RecaudoEntrega.credito_autorizado_en.is_(None))
+             .order_by(RecaudoEntrega.id.desc()).limit(1000).all())
+    salida = []
+    for r in filas:
+        if not cp.credito_no_autorizado(r):
+            continue
+        cobro = cp.cobro_de_recaudo(r)
+        salida.append(Hallazgo(
+            referencia=f'ruta#{r.ruta_id}/tarea#{r.tarea_id}',
+            detalle=(f'contado contraentrega ({cobro.get("codigo") or "sin condición"}, '
+                     f'{cobro.get("origen")}) registrado {r.forma_pago or "sin forma de pago"} '
+                     f'con {float(r.monto_cobrado or 0):,.0f} cobrados y sin autorización'),
+            datos={'forma_pago': r.forma_pago, 'estado': r.estado_entrega,
+                   'monto': float(r.monto_cobrado or 0)},
+        ))
+    return salida

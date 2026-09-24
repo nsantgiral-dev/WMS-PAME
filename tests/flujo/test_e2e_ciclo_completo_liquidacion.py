@@ -508,6 +508,14 @@ class TestUnPedidoPorTipoDePago:
         flujo, producto = _armar_parada(db, almacen, conductor_full, cantidad_pedida=10)
         mock, bruto, iva, neto = _mock_connekta(producto, cantidad_facturada=10)
         monto_cobrado = 0 if forma_pago in ('CREDITO', 'EXENTO') else neto
+        if forma_pago in ('CREDITO', 'EXENTO'):
+            # Desde el 2026-09-24 solo un cliente de CRÉDITO REAL (> 15 días)
+            # puede quedar sin cobrar: sobre contado contraentrega (o sin
+            # condición) sería `credito_no_autorizado`. Ver
+            # `tests/test_contado_contraentrega.py`.
+            from app.models.packing import TareaPacking
+            TareaPacking.query.get(flujo.packing_id).cond_pago = 'C04'
+            db.session.commit()
 
         with patch('app.services.connekta_gateway.connekta', mock):
             recaudo_id, _ = RutaService.confirmar_parada(

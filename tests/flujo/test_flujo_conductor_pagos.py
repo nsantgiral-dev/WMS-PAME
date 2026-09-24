@@ -170,15 +170,18 @@ class TestEntregaTotalPagoTotal:
         assert rc_payload['forma_pago'] == 'TRANSFERENCIA_BANCOLOMBIA_CTE'
 
 
-#: Las 13 opciones reales del `<select>` del conductor — `_FORMAS_PAGO_COBRO`
-#: en rutas.js. Mismo orden que se ve en pantalla.
+#: Las opciones reales del `<select>` del conductor en una parada de CONTADO
+#: contraentrega — `_condFormasPago` en rutas.js. Mismo orden que se ve en
+#: pantalla. Desde el 2026-09-24 CREDITO y EXENTO NO están: el conductor no
+#: otorga crédito (`cond_pago.FORMAS_QUE_NO_COBRAN`); solo se ofrecen en una
+#: parada de crédito real, donde no hay cobro (test de abajo).
 FORMAS_PAGO_COBRO_PUERTA = (
     'EFECTIVO',
     'TRANSFERENCIA_BANCOLOMBIA_AH', 'TRANSFERENCIA_BANCOLOMBIA_CTE',
     'TRANSFERENCIA_BBVA', 'TRANSFERENCIA_BOGOTA',
     'TRANSFERENCIA_AGRARIO_AH', 'TRANSFERENCIA_AGRARIO_CTE',
     'TRANSFERENCIA_DAVIVIENDA', 'TRANSFERENCIA_IHO_CTE',
-    'TARJETA', 'CHEQUE', 'EXENTO',
+    'TARJETA', 'CHEQUE',
 )
 
 
@@ -222,6 +225,11 @@ class TestTodasLasFormasDePagoHastaLiquidacion:
 
         flujo, producto = _armar_parada(db, almacen, victor, cantidad_pedida=10)
         mock, bruto, iva, neto = _mock_connekta(producto, cantidad_facturada=10)
+        # Crédito REAL (C04, 30 días): la única parada que no se cobra. Sobre
+        # contado contraentrega sería `credito_no_autorizado`.
+        from app.models.packing import TareaPacking
+        TareaPacking.query.get(flujo.packing_id).cond_pago = 'C04'
+        db.session.commit()
 
         with patch('app.services.connekta_gateway.connekta', mock):
             recaudo_id, _ = RutaService.confirmar_parada(

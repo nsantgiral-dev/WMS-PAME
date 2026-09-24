@@ -221,6 +221,18 @@ class LiquidacionService:
             # primer clic, sin esperar a que el DLQ corra. Ver
             # `_hay_rc_en_cola` / el guard nuevo en `registrar_cobro_recaudo`.
             rd['rc_en_cola'] = _hay_rc_en_cola(recaudo.id)
+            # Contado contraentrega vs crédito real: cómo trata la liquidación
+            # esta parada (la política, no la forma de pago) y si es un
+            # crédito que nadie autorizó.
+            from app.services import cond_pago as _cp_det
+            _cobro_det = _cp_det.cobro_de_recaudo(recaudo, tarea)
+            rd['cobro'] = {k: _cobro_det.get(k) for k in
+                           ('cobrar', 'dias', 'codigo', 'origen', 'congelado')}
+            rd['trato_cobro'] = (_cp_det.trato_de_cobro(recaudo, tarea)
+                                 if recaudo.estado_entrega in (EstadoEntrega.ENTREGADO,
+                                                               EstadoEntrega.PARCIAL)
+                                 else None)
+            rd['credito_no_autorizado'] = rd['trato_cobro'] == _cp_det.TRATO_NO_AUTORIZADO
 
             factura_siesa = None
             from app.services.fe_resolver import resolver_fe_o_none
@@ -424,15 +436,21 @@ class LiquidacionService:
         # pusiera forma de pago habría propuesto un recibo de caja por plata
         # que nadie recibió.
         acciones_pendientes = []
+        from app.services import cond_pago as _cp_pv
+        _trato = (_cp_pv.trato_de_cobro(recaudo, tarea)
+                  if estado in (EstadoEntrega.ENTREGADO, EstadoEntrega.PARCIAL) else None)
         if estado != EstadoEntrega.ENTREGADO_SIN_PAGO:
             if estado in (EstadoEntrega.PARCIAL, EstadoEntrega.RECHAZADO):
                 if not recaudo.siesa_nc_triggered:
                     acciones_pendientes.append('NOTA_CREDITO_FACTURA')
-            if forma_pago not in ('CREDITO', 'EXENTO', '') and estado != EstadoEntrega.RECHAZADO:
+            # Por el TRATO (la política), no por `forma_pago`: un CREDITO sobre
+            # contado no propone recibo, pero tampoco pasa como crédito.
+            if _trato == _cp_pv.TRATO_CONTADO and forma_pago:
                 if not recaudo.siesa_rc_triggered:
                     acciones_pendientes.append('RECIBO_CAJA')
                 if not recaudo.siesa_dc_triggered:
                     acciones_pendientes.append('DOCUMENTO_CONTABLE_RET')
+        _cobro_pv = _cp_pv.cobro_de_recaudo(recaudo, tarea)
 
         return {
             'recaudo_id': recaudo_id,
@@ -467,6 +485,12 @@ class LiquidacionService:
             # False = rechazada (bloquea el RC hasta pagar el valor completo).
             'retencion_confirmada': recaudo.retencion_confirmada,
             'acciones_pendientes': acciones_pendientes,
+            # La clasificación de cobro con la que se juzga esta parada, y si
+            # quedó como crédito que nadie autorizó.
+            'cobro': {k: _cobro_pv.get(k) for k in
+                      ('cobrar', 'dias', 'codigo', 'origen', 'congelado')},
+            'credito_no_autorizado': _trato == _cp_pv.TRATO_NO_AUTORIZADO,
+            'credito_autorizado': _cp_pv.credito_autorizado(recaudo),
             'flags': {
                 'siesa_nc_triggered': recaudo.siesa_nc_triggered or False,
                 'siesa_rc_triggered': recaudo.siesa_rc_triggered or False,
@@ -505,6 +529,51 @@ class LiquidacionService:
             'CONFIRMADA' if confirmar else 'RECHAZADA', recaudo_id,
             recaudo.motivo_descuento, admin_id
         )
+        return recaudo.to_dict()
+
+    @staticmethod
+    def autorizar_credito(recaudo_id: int, admin_id: int, razon: str) -> dict:
+        """La oficina decide que una parada de contado que no trajo plata queda
+        como CRÉDITO. **Razón obligatoria**; autor, fecha y razón quedan en el
+        recaudo y en la bitácora (EDITAR). Es la única salida del estado
+        `credito_no_autorizado` que no pasa por cobrar.
+
+        No toca la forma de pago ni el monto (lo que declaró el conductor se
+        conserva): cambia cómo lo trata la liquidación. Solo sobre una parada
+        que HOY es crédito no autorizado — autorizar algo que no lo necesita
+        sería una marca sin sentido que después confunde a quien la lea.
+        """
+        from app.services import cond_pago as _cp
+        from app.services.bitacora import registrar_accion, motivo_obligatorio
+        recaudo = db.session.query(RecaudoEntrega).with_for_update().get(recaudo_id)
+        if not recaudo:
+            raise LookupError(f'RecaudoEntrega {recaudo_id} no encontrado')
+        texto = motivo_obligatorio(razon)
+        if _cp.credito_autorizado(recaudo):
+            raise ValueError(f'El crédito del recaudo {recaudo_id} ya fue autorizado')
+        if not _cp.credito_no_autorizado(recaudo, recaudo.tarea):
+            raise ValueError(
+                f'El recaudo {recaudo_id} no es un crédito sin autorizar: no hay nada '
+                'que autorizar (o es crédito real, o trajo plata)')
+        antes = {'credito_autorizado_por': None, 'credito_autorizado_en': None,
+                 'credito_autorizado_razon': None}
+        recaudo.credito_autorizado_por = admin_id
+        recaudo.credito_autorizado_en = datetime.utcnow()
+        recaudo.credito_autorizado_razon = texto
+        tarea = recaudo.tarea
+        registrar_accion(
+            'EDITAR', recaudo, usuario_id=admin_id, motivo=texto,
+            entidad_codigo=getattr(tarea, 'numero_pedido_siesa', None),
+            antes=antes,
+            despues={'credito_autorizado_por': admin_id,
+                     'credito_autorizado_en': recaudo.credito_autorizado_en.isoformat(),
+                     'credito_autorizado_razon': texto,
+                     'forma_pago': recaudo.forma_pago,
+                     'monto_cobrado': float(recaudo.monto_cobrado or 0),
+                     'cobro': _cp.cobro_de_recaudo(recaudo, tarea)})
+        db.session.commit()
+        logger.info('[LIQUIDACION] Crédito autorizado recaudo %d por %s: %s',
+                    recaudo_id, admin_id, texto)
         return recaudo.to_dict()
 
     @staticmethod
@@ -562,8 +631,13 @@ class LiquidacionService:
                 f'No se puede registrar cobro sobre una parada {estado}: '
                 f'solo ENTREGADO o PARCIAL representan dinero recibido')
 
-        # Validate: forma_pago not CREDITO/EXENTO
-        if forma_pago in ('CREDITO', 'EXENTO'):
+        # Una parada que declara «no entró plata» no produce recibo. Si además
+        # era de contado, el mensaje lo dice: no es crédito, es un cobro que
+        # falta (o un crédito que hay que autorizar).
+        from app.services import cond_pago as _cp_rc
+        if _cp_rc.forma_no_cobra(forma_pago):
+            if _cp_rc.credito_no_autorizado(recaudo, tarea):
+                raise ValueError(mensaje_credito_no_autorizado(recaudo, tarea))
             raise ValueError(
                 f'No se puede registrar cobro para recaudo {recaudo_id} '
                 f'con forma_pago={forma_pago}'
@@ -1215,7 +1289,8 @@ class LiquidacionService:
         )
 
         resumen = {'rc_encolados': 0, 'nc_encolados': 0, 'dc_encolados': 0,
-                    'credito_omitidos': 0, 'ya_procesados': 0, 'errores': []}
+                    'credito_omitidos': 0, 'ya_procesados': 0,
+                    'credito_no_autorizado': 0, 'errores': []}
 
         for recaudo in recaudos:
             try:
@@ -1225,6 +1300,7 @@ class LiquidacionService:
                 resumen['dc_encolados'] += r.get('dc', 0)
                 resumen['credito_omitidos'] += r.get('credito', 0)
                 resumen['ya_procesados'] += r.get('ya_procesado', 0)
+                resumen['credito_no_autorizado'] += r.get('credito_no_autorizado', 0)
                 # Un documento que no se encoló y no levantó (el DC sin base
                 # gravable) llega por acá. Antes solo dejaba un WARNING en el
                 # log mientras el contador subía: la pantalla decía «1 DC» sin
@@ -1236,6 +1312,8 @@ class LiquidacionService:
                         'recaudo_id': recaudo.id,
                         'tarea_id': recaudo.tarea_id,
                         'error': _msg,
+                        'codigo': (CREDITO_NO_AUTORIZADO
+                                   if str(_msg).startswith(CREDITO_NO_AUTORIZADO) else None),
                     })
             except Exception as e:
                 logger.error(
@@ -1358,6 +1436,26 @@ def _contar_dc(resultado: dict, r_dc) -> None:
     resultado.setdefault('errores', []).append(r_dc.motivo)
 
 
+#: Código estable del error, para que la pantalla lo reconozca sin parsear prosa.
+CREDITO_NO_AUTORIZADO = 'credito_no_autorizado'
+
+
+def mensaje_credito_no_autorizado(recaudo, tarea=None) -> str:
+    """El texto que ve quien liquida. Dice qué pasó y qué puede hacer."""
+    from app.services import cond_pago as _cp
+    tarea = tarea if tarea is not None else recaudo.tarea
+    cobro = _cp.cobro_de_recaudo(recaudo, tarea)
+    cond = cobro.get('codigo') or 'sin condición'
+    dias = f' ({cobro["dias"]} días)' if cobro.get('dias') is not None else ''
+    que = (recaudo.forma_pago or 'sin forma de pago')
+    monto = float(recaudo.monto_cobrado or 0)
+    pedido = getattr(tarea, 'numero_pedido_siesa', None) or f'tarea {recaudo.tarea_id}'
+    return (f'{CREDITO_NO_AUTORIZADO}: el pedido {pedido} es de contado contraentrega '
+            f'({cond}{dias}) y se registró {que} con ${monto:,.0f} cobrados. No se '
+            f'documenta como crédito: cobralo, o autorizalo como crédito con una razón '
+            f'(queda en la bitácora).')
+
+
 def _procesar_recaudo(recaudo: RecaudoEntrega, notas_base: str,
                        admin_id: int = None) -> dict:
     """
@@ -1411,9 +1509,21 @@ def _procesar_recaudo(recaudo: RecaudoEntrega, notas_base: str,
 
     estado = recaudo.estado_entrega
     forma_pago = (recaudo.forma_pago or '').upper()
-    es_credito = forma_pago == 'CREDITO'
+    # Contado contraentrega vs crédito real (2026-09-24): se ramifica por la
+    # CLASIFICACIÓN de la parada (`cond_pago.trato_de_cobro`, el snapshot
+    # congelado al confirmar), no por la forma de pago que marcó el conductor.
+    # Un CREDITO/EXENTO sobre una factura de contado —o un ENTREGADO de contado
+    # con $0— no es crédito: es plata que nadie cobró, y no va al contador
+    # `credito` sino a `errores` hasta que la oficina lo autorice con razón.
+    from app.services import cond_pago as _cp_liq
+    trato = (_cp_liq.trato_de_cobro(recaudo, tarea)
+             if estado in (EstadoEntrega.ENTREGADO, EstadoEntrega.PARCIAL) else None)
+    es_credito = trato == _cp_liq.TRATO_CREDITO
     monto = float(recaudo.monto_cobrado or 0)
     resultado = {'rc': 0, 'nc': 0, 'dc': 0, 'credito': 0, 'ya_procesado': 0,
+                 # Contado que salió sin plata y sin autorización. Bloquea la
+                 # liquidación de la ruta (`RutaService.liquidar_ruta`).
+                 'credito_no_autorizado': 0,
                  # Cuenta aparte y no dentro de `credito`: un crédito lo
                  # autorizó alguien; esto no lo autorizó nadie.
                  'sin_pago': 0,
@@ -1450,6 +1560,25 @@ def _procesar_recaudo(recaudo: RecaudoEntrega, notas_base: str,
             resultado['nc'] = 1
         else:
             resultado['ya_procesado'] = 1
+        return resultado
+
+    # ── CONTADO sin plata y sin autorización: no se documenta como crédito ──
+    #
+    # Lo físico sigue su camino: si hubo devolución (PARCIAL), la mercancía
+    # volvió y recepción tiene que poder recibirla — la devolución pendiente se
+    # arma igual. Lo que NO se hace es tratar lo no cobrado como crédito: se
+    # declara en `errores` con su código y la oficina decide (cobrarlo, o
+    # «autorizar como crédito» con razón, que queda en la bitácora).
+    if trato == _cp_liq.TRATO_NO_AUTORIZADO:
+        resultado['credito_no_autorizado'] = 1
+        if estado == EstadoEntrega.PARCIAL and not recaudo.siesa_nc_triggered:
+            if _crear_devolucion_pendiente(
+                recaudo, tarea, tipo_docto_fe, consec_fe,
+                items_devueltos=recaudo.items_entregados,
+                notas=f'{notas_base} | PARCIAL contado sin cobro — devolución',
+            ):
+                resultado['nc'] = 1
+        resultado['errores'].append(mensaje_credito_no_autorizado(recaudo, tarea))
         return resultado
 
     # ── CRÉDITO + ENTREGADO: noop ────────────────────────────────
@@ -1605,7 +1734,7 @@ def _procesar_recaudo(recaudo: RecaudoEntrega, notas_base: str,
 
         return resultado
 
-    # Forma de pago EXENTO o caso no contemplado
+    # Caso no contemplado
     logger.warning(
         '[LIQUIDACION] Recaudo %d: estado=%s forma_pago=%s — sin acción Siesa',
         recaudo.id, estado, forma_pago

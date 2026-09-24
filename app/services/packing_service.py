@@ -67,6 +67,10 @@ class PackingService:
         )
         db.session.add(tarea)
         db.session.flush()
+        # Clasificación de cobro lo antes posible: la condición del pedido que
+        # el sync ya guardó. Sin red y sin inventar: si no hay, queda NULL.
+        from app.services import cond_pago as _cp_hist
+        _cp_hist.anotar_desde_historia(tarea)
 
         # Agrupar ítems por producto
         items_por_producto = {}

@@ -393,7 +393,10 @@ def cerrar_ruta(id):
         return _respuesta_advertencias(e)
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
-    return jsonify({'ok': True, 'ruta': ruta.to_dict(include_bultos=True)}), 200
+    return jsonify({'ok': True, 'ruta': ruta.to_dict(include_bultos=True),
+                    # Informa, no bloquea: facturas sin condición conocida, de
+                    # contado documental o ya saldadas (`_informe_de_cobro`).
+                    'informe_cobro': getattr(ruta, 'informe_cobro', [])}), 200
 
 
 @rutas_bp.route('/<int:id>/entregar', methods=['POST'])
@@ -676,6 +679,36 @@ def registrar_cobro_recaudo(ruta_id, recaudo_id):
     return jsonify(resultado), 200
 
 
+@rutas_bp.route('/<int:ruta_id>/recaudos/<int:recaudo_id>/autorizar-credito', methods=['POST'])
+@jwt_required()
+def autorizar_credito_recaudo(ruta_id, recaudo_id):
+    """La oficina autoriza como CRÉDITO una parada de contado contraentrega que
+    no trajo plata (`credito_no_autorizado`). Razón obligatoria, a la bitácora.
+
+    `_solo_admin`, igual que `/liquidar` y `/liquidar-siesa`: otorgar crédito
+    que nadie evaluó no puede pedir menos que liquidar.
+    """
+    if not _solo_admin():
+        return jsonify({'error': 'Solo admin puede autorizar un crédito'}), 403
+    uid = _uid()
+    if not uid:
+        return jsonify({'error': 'Token inválido'}), 401
+    from app.models.recaudo_entrega import RecaudoEntrega
+    recaudo = RecaudoEntrega.query.get(recaudo_id)
+    if not recaudo or recaudo.ruta_id != ruta_id:
+        return jsonify({'error': 'Recaudo no pertenece a esta ruta'}), 404
+    data = request.get_json(silent=True) or {}
+    try:
+        from app.services.liquidacion_service import LiquidacionService
+        resultado = LiquidacionService.autorizar_credito(
+            recaudo_id, admin_id=uid, razon=data.get('razon'))
+    except LookupError as e:
+        return jsonify({'error': str(e)}), 404
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    return jsonify({'recaudo': resultado}), 200
+
+
 # ── Liquidación — dashboard, detalle, one-click ───────────────────
 
 def _distribucion(valores: list, total_recaudos: int) -> dict:
@@ -832,6 +865,11 @@ def liquidacion_desglose():
     #: que se venía planteando como «abrir un pedido en Siesa, dos minutos»,
     #: pero sobre todos los pedidos a la vez en vez de sobre uno.
     por_condicion = {}
+    #: Contado contraentrega vs crédito real (2026-09-24): cuántas paradas por
+    #: condición y días, con cómo las clasifica la política. Y las de contado
+    #: que salieron sin plata y sin autorización, con identificadores.
+    from app.services import cond_pago as _cp_des
+    por_dias, sin_autorizar = {}, []
     #: Tope declarado, no silencioso. Si se recorta, la respuesta lo dice —
     #: una lista truncada sin avisar se lee como «esas son todas».
     _TOPE_CREDITO = 500
@@ -858,6 +896,26 @@ def liquidacion_desglose():
             _clase = _cpd.clasificar(_tv.cond_pago, connekta.cond_pago_ventas)
             _clase = f'{_clase} ({_tv.cond_pago or "vacío"})'
         por_condicion[_clase] = por_condicion.get(_clase, 0) + 1
+        _cobro_d = _cp_des.cobro_de_recaudo(r, _tv)
+        _dias_d = (f'{_cobro_d["dias"]} día{"" if _cobro_d["dias"] == 1 else "s"}'
+                   if _cobro_d['dias'] is not None else 'días desconocidos')
+        _clase_d = ('crédito real' if not _cobro_d['cobrar'] else
+                    'contado' if _cobro_d['origen'] == _cp_des.MAESTRO else 'contado supuesto')
+        _k_d = f'{_cobro_d["codigo"] or "(sin condición)"} ({_dias_d}) · {_clase_d}'
+        por_dias[_k_d] = por_dias.get(_k_d, 0) + 1
+        _no_aut = _cp_des.credito_no_autorizado(r, _tv)
+        if _no_aut and len(sin_autorizar) < _TOPE_CREDITO:
+            sin_autorizar.append({
+                'recaudo_id': r.id, 'ruta_id': r.ruta_id,
+                'cliente': (_tv.cliente if _tv is not None else None),
+                'pedido': (_tv.numero_pedido_siesa if _tv is not None else None),
+                'forma_pago': r.forma_pago, 'estado_entrega': ee,
+                'monto_cobrado': float(r.monto_cobrado or 0),
+                'valor': (float(_tv.valor_factura)
+                          if _tv is not None and _tv.valor_factura is not None else None),
+                'cond_pago': _cobro_d['codigo'], 'dias_credito': _cobro_d['dias'],
+                'clasif_origen': _cobro_d['origen'],
+            })
         mp = r.modo_pantalla or '(sin registrar)'
         por_modo[mp] = por_modo.get(mp, 0) + 1
         # El cruce que la matriz de arriba no da: modo × forma de pago. La
@@ -896,6 +954,9 @@ def liquidacion_desglose():
                           if _t is not None and _t.valor_factura is not None else None),
                 'estado_entrega': ee,
                 'modo_pantalla': r.modo_pantalla,
+                # Crédito sobre una factura de contado que nadie autorizó.
+                'credito_no_autorizado': _no_aut,
+                'credito_autorizado': _cp_des.credito_autorizado(r),
             })
         if ee == 'RECHAZADO':
             mr = r.motivo_rechazo or '(sin registrar)'
@@ -1030,6 +1091,27 @@ def liquidacion_desglose():
         # sesgada deja pasar justo lo que venía a frenar — y el sesgo acá no es
         # aleatorio: tienen valor las paradas cuya FE alguien resolvió.
         'distribucion_valor_parada': _distribucion(valores, total),
+        # ── Contado contraentrega vs crédito real ──────────────────────
+        'por_dias_credito': {
+            'umbral_dias': _cp_des.umbral_dias()[0],
+            'conteo': por_dias,
+            'nota': ('Clasificación de cada parada según la política '
+                     '(`cond_pago.cobro_contraentrega`): ≤ umbral es contado '
+                     'contraentrega, > umbral crédito real; «supuesto» = sin '
+                     'condición conocida, se cobra.'),
+        },
+        'credito_no_autorizado': {
+            'total': len(sin_autorizar),
+            'truncado': len(sin_autorizar) >= _TOPE_CREDITO,
+            'valor_sin_cobrar': round(sum(
+                max(0.0, x['valor'] - x['monto_cobrado'])
+                for x in sin_autorizar if x['valor'] is not None), 2),
+            'sin_valor': sum(1 for x in sin_autorizar if x['valor'] is None),
+            'detalle': sin_autorizar,
+            'nota': ('Paradas de contado contraentrega registradas CREDITO/EXENTO '
+                     'o con $0 y sin autorización. Bloquean la liquidación de su '
+                     'ruta hasta que se cobren o se autoricen con razón.'),
+        },
         'paradas_credito': {
             'total': por_pago.get('CREDITO', 0),
             'listadas': len(credito),

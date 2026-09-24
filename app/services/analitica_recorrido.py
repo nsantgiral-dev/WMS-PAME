@@ -253,6 +253,8 @@ class Pedido:
     parciales: list = field(default_factory=list)
     fuera_del_wms: str = None
     a_credito: bool = False
+    #: Contado contraentrega registrado sin cobro y sin autorización.
+    credito_no_autorizado: bool = False
     valor_facturado: Decimal = None
     monto_cobrado: Decimal = None
 
@@ -306,7 +308,7 @@ def _evaluar(p: Pedido, almacen_de_bodega: dict):
     from app.models.recaudo_entrega import EstadoEntrega
     from app.models.ruta_despacho import EstadoFinancieroRuta
     from app.services import motivos_rechazo
-    from app.services.ruta_service import FormaPago
+    from app.services import cond_pago as _cp_trato
 
     # ── Aprobado ──
     t_siesa = min((h.primera_vez_vista_at for h in p.historia
@@ -373,8 +375,16 @@ def _evaluar(p: Pedido, almacen_de_bodega: dict):
     if rec is not None and rec.estado_entrega in (EstadoEntrega.ENTREGADO, EstadoEntrega.PARCIAL):
         monto = Decimal(rec.monto_cobrado or 0)
         p.monto_cobrado = monto
-        if (rec.forma_pago or '').upper() == FormaPago.CREDITO:
+        # Por la política (`cond_pago.trato_de_cobro`), no por `forma_pago`:
+        # un CREDITO sobre una factura de contado contraentrega NO es «cobro
+        # ok» — es plata que nadie cobró. Solo el crédito real o autorizado
+        # pasa a cartera.
+        _trato = _cp_trato.trato_de_cobro(rec, next(
+            (x for x in pk_vivos if x.id == rec.tarea_id), None))
+        if _trato == _cp_trato.TRATO_CREDITO:
             cob_ok, p.a_credito = True, True          # pasa a cartera: sin marca
+        elif _trato == _cp_trato.TRATO_NO_AUTORIZADO:
+            p.credito_no_autorizado = True
         elif monto > 0:
             cob_ok, marcas['cobrado'] = True, rec.fecha_confirmacion
         elif rec.siesa_rc_resultado in ('ENVIADO', 'YA_SALDADA'):
@@ -408,7 +418,11 @@ def _evaluar(p: Pedido, almacen_de_bodega: dict):
     if rec is not None and rec.estado_entrega == EstadoEntrega.ENTREGADO_SIN_PAGO:
         cortes.append((5, 'ENTREGADO_SIN_PAGO', 'Entregado sin pago: la mercancía se quedó '
                                                  'con el cliente y la factura sigue abierta'))
-    if (ent_ok and not cob_ok and liq_ok
+    if p.credito_no_autorizado:
+        cortes.append((5, 'CREDITO_NO_AUTORIZADO',
+                       'Factura de contado contraentrega registrada sin cobro '
+                       '(crédito que nadie autorizó)'))
+    elif (ent_ok and not cob_ok and liq_ok
             and rec.estado_entrega in (EstadoEntrega.ENTREGADO, EstadoEntrega.PARCIAL)):
         cortes.append((5, 'LIQUIDADO_SIN_COBRO', 'Ruta liquidada sin cobro registrado '
                                                   'ni venta a crédito'))

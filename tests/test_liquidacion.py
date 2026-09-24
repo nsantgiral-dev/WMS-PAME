@@ -285,6 +285,10 @@ class TestCreditoEntregado:
 
     def test_credito_entregado_noop(self, app, db, recaudo_liq):
         recaudo = recaudo_liq(estado='ENTREGADO', pago='CREDITO', monto=2000000)
+        # Crédito REAL (C04): desde el 2026-09-24 es la única forma de que un
+        # CREDITO quede como crédito sin autorización de la oficina.
+        recaudo.tarea.cond_pago = 'C04'
+        db.session.commit()
         resultado = _run_procesar(recaudo, db)
         assert resultado['credito'] == 1
         assert resultado['rc'] == 0

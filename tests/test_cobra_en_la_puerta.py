@@ -74,49 +74,42 @@ class TestLaTablaCompleta:
         # Siesa respondió y el tercero no tiene condición: la FE salió en la
         # de ruta, así que **hay que cobrarla**. Ver `cond_pago_efectiva`.
         ('', True),
-        (None, None),           # no se pudo preguntar: no se afirma nada
+        # No se pudo preguntar. Hasta el 2026-09-24 era `None` (LIBRE). Con la
+        # regla por días, solo un crédito CONOCIDO no se cobra: se cobra como
+        # contado supuesto, declarado (`SUPUESTO_AUSENTE`).
+        (None, True),
     ])
     def test_quien_cobra(self, cond, esperado):
         assert cp.cobra_en_la_puerta(cond, CONTADO, RUTA) is esperado
 
-    @pytest.mark.parametrize('cod_contado,cod_ruta', [
-        ('C01', 'C02'), ('CO', 'CR'), ('X9', 'Z1'), ('001', '002'),
-    ])
-    def test_los_codigos_salen_de_la_configuracion(self, cod_contado, cod_ruta):
-        """Probado con códigos que NO son C01/C02.
-
-        Con los valores reales en los dos lados, una implementación que los
-        hardcodee da el mismo resultado que una que lea la configuración, y el
-        test no distingue. La empresa puede cambiarlos en Siesa.
-        """
-        assert cp.cobra_en_la_puerta(cod_contado, cod_contado, cod_ruta) is True
-        assert cp.cobra_en_la_puerta(cod_ruta, cod_contado, cod_ruta) is True
-        assert cp.cobra_en_la_puerta('OTRO', cod_contado, cod_ruta) is False
+    def test_los_dias_salen_de_la_tabla_configurable(self, monkeypatch):
+        """Probado con códigos que NO están en el PDF: la tabla se
+        sobreescribe con `SIESA_COND_PAGO_DIAS`. Una implementación que
+        hardcodee C01/C02 no pasa esto."""
+        monkeypatch.setenv('SIESA_COND_PAGO_DIAS', '{"X9": 0, "Z1": 20, "C04": 10}')
+        assert cp.cobra_en_la_puerta('X9') is True
+        assert cp.cobra_en_la_puerta('Z1') is False
+        assert cp.cobra_en_la_puerta('C04') is True, 'la sobreescritura manda sobre la copia'
+        assert cp.cobra_en_la_puerta('OTRO') is True   # desconocido: se cobra
 
 
-class TestSinLaCondicionDeRutaNoSeAfirmaNada:
-    """Sin `SIESA_COND_PAGO_RUTA`, C02 y C04 son indistinguibles.
-
-    Devolver `False` ahí reintroduce el defecto **completo y en silencio**:
-    ninguna parada de ruta pediría cobrar, exactamente como antes, y sin
-    ningún síntoma visible. Es el modo de fallo más caro de los tres.
+class TestSinLaCondicionDeRutaSeDecidePorDias:
+    """Antes, sin `SIESA_COND_PAGO_RUTA`, C02 y C04 eran indistinguibles
+    («distinto de contado») y se caía a `None`/LIBRE. Desde el 2026-09-24 la
+    decisión es por días de la condición, y esa variable ya no la gobierna.
     """
 
     @pytest.mark.parametrize('sin_ruta', ['', None, '   '])
-    def test_cae_a_none_no_a_false(self, sin_ruta):
-        assert cp.cobra_en_la_puerta(RUTA, CONTADO, sin_ruta) is None
-        assert cp.cobra_en_la_puerta(CREDITO_REAL, CONTADO, sin_ruta) is None
+    def test_c02_se_cobra_y_c04_no(self, sin_ruta):
+        assert cp.cobra_en_la_puerta(RUTA, CONTADO, sin_ruta) is True
+        assert cp.cobra_en_la_puerta(CREDITO_REAL, CONTADO, sin_ruta) is False
 
     def test_el_contado_sigue_reconociendose(self):
-        """No depende de la condición de ruta: es el otro código."""
         assert cp.cobra_en_la_puerta(CONTADO, CONTADO, '') is True
 
-    def test_none_produce_libre_que_es_contable(self):
-        """LIBRE no afirma nada Y se cuenta en el desglose.
-
-        Es la diferencia entre degradarse y callarse: la falta de
-        configuración se ve en `por_modo_pantalla`.
-        """
+    def test_none_de_pantalla_sigue_dando_libre(self):
+        """`modo_pantalla` conserva su contrato con `None` (un llamador viejo),
+        aunque la política ya no lo produzca."""
         assert cp.modo_pantalla(None, True) == cp.LIBRE
 
 
@@ -126,8 +119,9 @@ class TestElModoDePantalla:
         (RUTA, False, cp.LIBRE),              # sin valor no se afirma un monto
         (CONTADO, True, cp.DINAMICO),
         (CREDITO_REAL, True, cp.CREDITO_PANTALLA),
-        ('', True, cp.DINAMICO),   # sin condición → la FE salió en ruta
-        (None, True, cp.LIBRE),    # no se pudo preguntar
+        ('', True, cp.DINAMICO),   # sin condición → se cobra (supuesto)
+        (None, True, cp.DINAMICO), # no se pudo preguntar → se cobra (supuesto)
+        (None, False, cp.LIBRE),   # se cobra, pero sin valor: monto libre
     ])
     def test_de_la_condicion_al_modo(self, cond, hay_valor, esperado):
         se_cobra = cp.cobra_en_la_puerta(cond, CONTADO, RUTA)
@@ -160,31 +154,25 @@ class TestMutaciones:
         assert mutante is False and correcto is True
 
     def test_m2_sin_ruta_devuelve_false(self):
-        """Reintroduce el defecto en silencio cuando falta la variable.
-
-        La versión ingenua —`valor in (contado, ruta)`— con la ruta vacía deja
-        C02 en False: ninguna parada pide cobrar, exactamente como antes, y sin
-        un solo síntoma. El `None` es lo que lo vuelve visible.
-        """
+        """La versión ingenua —`valor in (contado, ruta)`— con la ruta vacía deja
+        C02 en False: ninguna parada pide cobrar. Con la tabla de días, C02 se
+        cobra sin depender de la variable."""
         def mutante(c, ct, cr):
             v = (c or '').strip()
             return None if not v else v in ((ct or '').strip(), (cr or '').strip())
 
         assert mutante(RUTA, CONTADO, '') is False
-        assert cp.cobra_en_la_puerta(RUTA, CONTADO, '') is None
+        assert cp.cobra_en_la_puerta(RUTA, CONTADO, '') is True
 
     def test_m3_el_credito_real_pasa_a_cobrarse(self):
         """El error invertido: pedirle plata a un cliente de 30 días."""
         assert cp.cobra_en_la_puerta(CREDITO_REAL, CONTADO, RUTA) is False
 
-    def test_m4_truthiness_en_vez_de_is_true(self):
-        """`if se_cobra:` en vez de `is True` trata `None` como False.
-
-        En la pantalla da LIBRE igual; en la restricción del punto 4 la
-        diferencia es real —bloquear o no— y por eso hay que probarla acá.
-        """
-        assert cp.cobra_en_la_puerta(None, CONTADO, RUTA) is None
-        assert cp.cobra_en_la_puerta(None, CONTADO, RUTA) is not False
+    def test_m4_nunca_devuelve_none(self):
+        """La política contesta siempre: `None` era «no sé» y dejaba la guarda
+        sin actuar. Ahora «no sé» es contado supuesto, con origen."""
+        for c in (None, '', 'ZZZ', CONTADO, RUTA, CREDITO_REAL):
+            assert cp.cobra_en_la_puerta(c, CONTADO, RUTA) in (True, False)
 
     def test_m5_clasificar_sigue_intacta(self):
         """Si alguien «arregla» `clasificar` para que C02 dé contado, la
@@ -214,7 +202,7 @@ class TestLaRestriccionDelPuntoCuatroEmpiezaAProteger:
             n.func.attr for n in ast.walk(arbol)
             if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
         }
-        assert 'cobra_en_la_puerta' in llamadas, (
+        assert {'cobro_de_tarea', 'forma_no_cobra'} <= llamadas, (
             'la restricción del punto 4 volvió a preguntar por contado '
             'documental — sobre una parada de ruta eso no bloquea nunca')
 
@@ -248,10 +236,12 @@ class TestLosDosFallbacksApuntanAlMismoLado:
         assert cp.modo_pantalla(
             cp.cobra_en_la_puerta('', CONTADO, RUTA), True) == cp.DINAMICO
 
-    def test_sin_ninguna_de_las_dos_no_se_afirma_nada(self):
-        """Sin condición y sin `SIESA_COND_PAGO_RUTA` no hay FE que leer —el
-        gateway ni siquiera emite, levanta `ValueError`."""
-        assert cp.cobra_en_la_puerta('', CONTADO, '') is None
+    def test_sin_ninguna_de_las_dos_se_cobra_supuesto(self):
+        """Sin condición y sin `SIESA_COND_PAGO_RUTA` el gateway no emite
+        (levanta `ValueError`); la pantalla, si llegara a verla, cobra como
+        contado supuesto — nunca afirma crédito sin días conocidos."""
+        assert cp.cobra_en_la_puerta('', CONTADO, '') is True
+        assert cp.cobro_contraentrega('')['origen'] == cp.SUPUESTO_AUSENTE
 
     def test_el_gateway_usa_la_misma_funcion(self):
         """Por AST. Un `or` suelto acá es exactamente cómo divergieron.
@@ -286,4 +276,6 @@ class TestLosDosFallbacksApuntanAlMismoLado:
         Colapsarlos acá le pediría plata a un cliente sobre un supuesto.
         """
         assert cp.cobra_en_la_puerta('', CONTADO, RUTA) is True
-        assert cp.cobra_en_la_puerta(None, CONTADO, RUTA) is None
+        # Desde el 2026-09-24 `None` también se cobra (contado supuesto): la
+        # distinción vacío/None se conserva en el crudo, no en la decisión.
+        assert cp.cobra_en_la_puerta(None, CONTADO, RUTA) is True

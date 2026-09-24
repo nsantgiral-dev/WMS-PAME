@@ -75,13 +75,15 @@ def _monto(valor) -> float:
         return 0.0
 
 
-def _debia_cobrarse(recaudo, tarea, connekta) -> bool:
+def _debia_cobrarse(recaudo, tarea, connekta=None) -> bool:
     """¿Esta parada tenía que producir plata en la puerta?
 
-    Se pregunta por `cobra_en_la_puerta` y **no** por la forma de pago
-    elegida: usar lo que el conductor marcó haría que una parada donde no se
-    pidió cobrar saliera del denominador — el defecto se borraría a sí mismo
-    de su propia medición.
+    Se pregunta a la política (`cond_pago.cobro_de_recaudo`: ≤ 15 días de
+    crédito es contado contraentrega) y **no** por la forma de pago elegida:
+    usar lo que el conductor marcó haría que una parada donde no se pidió
+    cobrar saliera del denominador — el defecto se borraría a sí mismo de su
+    propia medición. Un crédito que la oficina AUTORIZÓ con razón escrita sí
+    sale: ya nadie esperaba plata de esa parada.
     """
     from app.models.recaudo_entrega import EstadoEntrega
     from app.services import cond_pago as _cp
@@ -89,9 +91,9 @@ def _debia_cobrarse(recaudo, tarea, connekta) -> bool:
     if recaudo.estado_entrega not in (EstadoEntrega.ENTREGADO,
                                       EstadoEntrega.PARCIAL):
         return False
-    return _cp.cobra_en_la_puerta(
-        getattr(tarea, 'cond_pago', None),
-        connekta.cond_pago_ventas, connekta.cond_pago_ruta) is True
+    if _cp.credito_autorizado(recaudo):
+        return False
+    return _cp.cobro_de_recaudo(recaudo, tarea)['cobrar']
 
 
 def _rc_llego_a_siesa(recaudo_id: int) -> bool:
@@ -143,17 +145,16 @@ def reconciliar(ruta_id: int) -> dict:
             ('debian_cobrarse', 'cobros_registrados', 'rc_en_siesa')}
     detalle, sin_condicion = [], 0
 
+    from app.services import cond_pago as _cp
     for r in recaudos:
         tarea = tareas.get(r.tarea_id)
-        if not _debia_cobrarse(r, tarea, connekta):
-            # Se cuenta aparte: una parada sin condición conocida no está
-            # exenta, está **sin clasificar**, y con la cola mezclada nadie
-            # nota que el universo se encogió.
-            from app.services import cond_pago as _cp
-            if _cp.cobra_en_la_puerta(
-                    getattr(tarea, 'cond_pago', None), connekta.cond_pago_ventas,
-                    connekta.cond_pago_ruta) is None:
-                sin_condicion += 1
+        # Se cuenta aparte: una parada sin condición conocida se cobra como
+        # contado SUPUESTO (entra al denominador), y hay que poder ver cuántas
+        # son — una clasificación supuesta no es una leída.
+        if (r.estado_entrega in (EstadoEntrega.ENTREGADO, EstadoEntrega.PARCIAL)
+                and _cp.cobro_de_tarea(tarea)['origen'] not in (_cp.MAESTRO, _cp.NO_APLICA)):
+            sin_condicion += 1
+        if not _debia_cobrarse(r, tarea):
             continue
 
         esperado = _monto(getattr(tarea, 'valor_factura', None))

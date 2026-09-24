@@ -115,7 +115,11 @@ class TestUnaSolaPolitica:
 class TestRutaServiceNoAfirmaContado:
     """El defecto medido, en el sitio donde estaba."""
 
-    def test_es_contado_es_None_cuando_siesa_no_trae_condicion(self, monkeypatch):
+    def test_sin_condicion_se_cobra_como_contado_supuesto(self, monkeypatch):
+        """Hasta el 2026-09-24 esto daba `None` (LIBRE: el conductor elegía,
+        incluso CRÉDITO). Regla del dueño: solo NO se cobra un crédito real
+        CONOCIDO (> 15 días). Sin condición se cobra, y el origen lo declara
+        (`SUPUESTO_AUSENTE`) — no se colapsa con un contado leído."""
         from app.services import ruta_service as rs
         from app.services.connekta_gateway import connekta
 
@@ -147,9 +151,10 @@ class TestRutaServiceNoAfirmaContado:
         assert crudo == '', (
             'el campo crudo tiene que viajar: `es_contado` lo deriva esta '
             'misma función y no sirve para verificar el supuesto que la gobierna')
-        assert es_contado is None, (
-            'con condición vacía volvió a afirmar contado — la pantalla del '
-            'conductor le pediría cobrar sin saber si el cliente es de crédito')
+        assert es_contado is True, (
+            'sin condición se cobra (contado supuesto): dejarla en LIBRE le '
+            'permitía al conductor registrar crédito que nadie autorizó')
+        assert cp.cobro_contraentrega(crudo)['origen'] == cp.SUPUESTO_AUSENTE
 
     def test_es_contado_es_True_con_condicion_de_contado(self, monkeypatch):
         from app.services import ruta_service as rs
@@ -245,7 +250,9 @@ class TestElCrudoDistingueLoQueElDerivadoColapsa:
     def test_siesa_responde_sin_condicion(self, monkeypatch):
         _, es_contado, _, crudo, _, _, _ = self._correr(
             monkeypatch, lambda *a, **k: {'f430_id_cond_pago': ''})
-        assert crudo == '' and es_contado is None
+        # Se cobra (supuesto); lo que distingue «vacío» de «no respondió» es
+        # el crudo, que viaja aparte.
+        assert crudo == '' and es_contado is True
 
     def test_siesa_no_responde(self, monkeypatch):
         def _explota(*a, **k):
@@ -360,7 +367,7 @@ class TestLaCondicionQuedaAnotadaEnLaTarea:
             monkeypatch,
             lambda *a, **k: (_ for _ in ()).throw(AssertionError('volvió a preguntar')))
         _, es_contado, _, crudo, _, _, _ = rs.RutaService._valor_y_cond_pago(t)
-        assert crudo == '' and es_contado is None
+        assert crudo == '' and es_contado is True
 
 
 class TestLaFacturaDeRutaNoPuedeSerDeContado:
@@ -545,39 +552,31 @@ class TestCobraEnLaPuerta:
         assert cp.cobra_en_la_puerta(self.RUTA, self.CONTADO, self.RUTA) is True
 
     def test_un_credito_real_no_cobra_en_la_puerta(self):
-        assert cp.cobra_en_la_puerta('30D', self.CONTADO, self.RUTA) is False
+        assert cp.cobra_en_la_puerta('C04', self.CONTADO, self.RUTA) is False
 
-    def test_el_vacio_y_el_None_NO_son_lo_mismo(self):
-        """`''` = Siesa contestó y el tercero no tiene condición.
-        `None`  = no se pudo preguntar.
+    def test_un_codigo_que_la_tabla_no_conoce_se_cobra(self):
+        """'30D' no está en el maestro: no se CONOCEN sus días, así que no se
+        puede afirmar crédito real. Se cobra y se declara."""
+        assert cp.cobra_en_la_puerta('30D', self.CONTADO, self.RUTA) is True
+        assert cp.cobro_contraentrega('30D')['origen'] == cp.SUPUESTO_DESCONOCIDO
 
-        Con el vacío **sí se sabe qué lleva la factura**: el gateway cae a la
-        condición de ruta, y su propia alerta lo dice —«la cartera la salda el
-        recibo de caja del conductor»—. Dejar la pantalla en «no sé» ahí hacía
-        que la FE saliera en una condición que exige cobro y el conductor no lo
-        pidiera: el mismo fallback escrito dos veces con resultados opuestos.
-
-        Con `None` no se sabe ni si la factura existe. Ahí no se afirma nada.
-        """
+    def test_el_vacio_y_el_None_se_cobran_los_dos(self):
+        """Hasta el 2026-09-24: `''` cobraba y `None` daba «no sé» (LIBRE).
+        Con la regla por días, ninguno de los dos es un crédito CONOCIDO: los
+        dos se cobran como contado supuesto. La diferencia entre «Siesa
+        contestó vacío» y «no se pudo preguntar» sigue viajando en el crudo
+        (`p['cond_pago']`), no en la decisión de cobro."""
         assert cp.cobra_en_la_puerta('', self.CONTADO, self.RUTA) is True
-        assert cp.cobra_en_la_puerta(None, self.CONTADO, self.RUTA) is None
+        assert cp.cobra_en_la_puerta(None, self.CONTADO, self.RUTA) is True
+        assert cp.cobro_contraentrega(None)['origen'] == cp.SUPUESTO_AUSENTE
 
-    def test_sin_condicion_de_ruta_configurada_no_se_afirma(self):
-        """Sin `SIESA_COND_PAGO_RUTA`, C02 y C04 son **indistinguibles**.
-
-        La versión anterior devolvía `False` en ese caso. Con `'30D'` eso es
-        correcto —es crédito real— y por eso el test pasaba; pero **no probaba
-        el C02**, que es donde `False` significa que ninguna parada de ruta
-        pide cobrar, en silencio y sin un solo síntoma. Un test que ejerce solo
-        el caso seguro certifica el peligroso.
-
-        `None` cae a `LIBRE`, que se cuenta en `por_modo_pantalla`: la falta de
-        configuración se ve en vez de callarse.
-        """
-        assert cp.cobra_en_la_puerta(self.RUTA, self.CONTADO, '') is None
-        assert cp.cobra_en_la_puerta('30D', self.CONTADO, '') is None
-        assert cp.cobra_en_la_puerta('', self.CONTADO, '') is None
-        # El contado no depende de la condición de ruta: es el otro código.
+    def test_sin_condicion_de_ruta_configurada_igual_se_decide_por_dias(self):
+        """Antes, sin `SIESA_COND_PAGO_RUTA`, C02 y C04 eran indistinguibles
+        («distinto de contado») y se caía a `None`. Con la tabla de días ya no:
+        C02 (1 día) se cobra, C04 (30) no, sin depender de esa variable."""
+        assert cp.cobra_en_la_puerta(self.RUTA, self.CONTADO, '') is True
+        assert cp.cobra_en_la_puerta('C04', self.CONTADO, '') is False
+        assert cp.cobra_en_la_puerta('', self.CONTADO, '') is True
         assert cp.cobra_en_la_puerta(self.CONTADO, self.CONTADO, '') is True
 
     def test_no_se_puede_confundir_con_aprobable_en_ruta(self):

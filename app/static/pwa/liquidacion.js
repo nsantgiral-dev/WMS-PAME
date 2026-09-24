@@ -556,7 +556,10 @@ function _liqRenderDetalle() {
     const colorEstado = estado === 'ENTREGADO' ? '#4ade80' : estado === 'PARCIAL' ? '#fbbf24' : '#f87171';
     const fp = rec.forma_pago || '—';
     const monto = rec.monto_cobrado || 0;
-    const esCred = (fp === 'CREDITO');
+    // El TRATO lo decide el servidor (`cond_pago.trato_de_cobro`): un CRÉDITO
+    // sobre una factura de contado contraentrega NO es crédito. Sin el campo
+    // (servidor viejo) se cae a lo que había.
+    const esCred = rec.trato_cobro ? rec.trato_cobro === 'CREDITO' : (fp === 'CREDITO');
     const factura = rec.factura_siesa;
     const baseGravable = factura ? factura.base_gravable : 0;
 
@@ -581,7 +584,8 @@ function _liqRenderDetalle() {
             ${rec.referencia_pago ? `<div style="font-size:var(--fs-xs);color:var(--tx3);">Ref. ${esc(rec.referencia_pago)}</div>` : ''}
           </div>
         </div>
-        ${_liqBloqueSenales(rec)}`;
+        ${_liqBloqueSenales(rec)}
+        ${_liqBloqueCreditoNoAutorizado(ruta.id, rec)}`;
 
     // Siesa flags + badges fallidos si ya liquidada
     if (esLiquidada) {
@@ -703,7 +707,7 @@ function _liqRenderDetalle() {
       // todavía no lo haya procesado (`siesa_rc_triggered` solo se enciende
       // ahí) — sin esto el botón seguía visible tras el primer clic y un
       // segundo clic podía duplicar el RC.
-      if (!esCred && fp !== 'EXENTO' && estado !== 'RECHAZADO'
+      if (!esCred && fp !== 'EXENTO' && !rec.credito_no_autorizado && estado !== 'RECHAZADO'
           && estado !== 'ENTREGADO_SIN_PAGO' && !rec.siesa_rc_triggered
           && !rec.rc_en_cola) {
         const rcEsperaNC = (estado === 'PARCIAL' && !rec.siesa_nc_triggered);
@@ -758,6 +762,52 @@ function _liqRenderDetalle() {
   }
 
   body.innerHTML = html;
+}
+
+/**
+ * Contado contraentrega sin plata y sin autorización (`credito_no_autorizado`).
+ * Bloquea la liquidación de la ruta: o se cobra, o la oficina lo autoriza como
+ * crédito con una razón (queda en la bitácora). En el onclick viajan solo ids.
+ */
+function _liqBloqueCreditoNoAutorizado(rutaId, rec) {
+  if (rec.credito_autorizado_en) {
+    return `
+      <div style="margin-bottom:8px;padding:8px;background:var(--info-bg);border:1px solid var(--info-brd);border-radius:8px;font-size:var(--fs-xs);color:var(--info-tx);">
+        Crédito autorizado por la oficina — ${esc(rec.credito_autorizado_razon || '')}
+      </div>`;
+  }
+  if (!rec.credito_no_autorizado) return '';
+  const c = rec.cobro || {};
+  const cond = c.codigo ? `${c.codigo}${c.dias != null ? ` (${c.dias} días)` : ''}` : 'sin condición conocida';
+  return `
+    <div style="margin-bottom:8px;padding:10px;background:var(--err-bg);border:1px solid var(--err-brd);border-radius:8px;">
+      <div style="font-size:var(--fs-xs);color:var(--err-tx);font-weight:700;margin-bottom:4px;">CRÉDITO NO AUTORIZADO</div>
+      <div style="font-size:var(--fs-xs);color:var(--tx);">
+        Factura de contado contraentrega (${esc(cond)}) registrada ${esc(rec.forma_pago || 'sin forma de pago')}
+        con ${_liqFmt(rec.monto_cobrado || 0)} cobrados. La ruta no se liquida hasta que se cobre o se autorice.
+      </div>
+      <button onclick="liqAutorizarCredito(${esc(rutaId)}, ${esc(rec.id)})"
+        style="width:100%;margin-top:8px;padding:10px;background:var(--bg);color:var(--err-tx);border:1px solid var(--err-brd);border-radius:8px;font-size:var(--fs-sm);font-weight:700;cursor:pointer;">
+        Autorizar como crédito…
+      </button>
+    </div>`;
+}
+
+/** Pide la razón y autoriza como crédito una parada de contado sin cobro. */
+async function liqAutorizarCredito(rutaId, recaudoId) {
+  const razon = await _modalTexto('Autorizar como crédito',
+    '¿Por qué esta factura de contado queda como crédito? (obligatorio — queda en la bitácora con tu nombre)');
+  if (!razon || !razon.trim()) {
+    alerta('Autorizar un crédito necesita una razón — no se guardó nada', 'advertencia');
+    return;
+  }
+  try {
+    await post(`/api/rutas/${rutaId}/recaudos/${recaudoId}/autorizar-credito`, { razon: razon.trim() });
+    alerta('Crédito autorizado', 'exito');
+    await liqAbrirRuta(rutaId);
+  } catch (e) {
+    alerta(e.message || 'No se pudo autorizar el crédito', 'error');
+  }
 }
 
 /**
@@ -1360,7 +1410,7 @@ function _liqRenderReconciliacion(d, previo) {
       <h3 style="margin:0 0 4px;">Reconciliación · ruta ${esc(d.ruta_id)}</h3>
       <div style="font-size:var(--fs-xs);color:var(--tx2);margin-bottom:14px;">
         Cubre ${esc(d.cobertura.tramos_medibles)} de ${esc(d.cobertura.tramos_totales)} tramos.
-        ${d.paradas_sin_condicion ? `· ${esc(d.paradas_sin_condicion)} parada(s) sin condición de pago, fuera del denominador` : ''}
+        ${d.paradas_sin_condicion ? `· ${esc(d.paradas_sin_condicion)} parada(s) sin condición de pago conocida — se cobran como contado supuesto` : ''}
       </div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px;">
         ${col('Debían cobrarse', c.debian_cobrarse || {})}

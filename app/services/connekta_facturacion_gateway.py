@@ -265,8 +265,11 @@ class ConnektaFacturacionGateway:
 
         fecha_hoy = core._fecha_hoy_bogota()
         consec_int = int(consec_docto_pedido) if str(consec_docto_pedido).isdigit() else consec_docto_pedido
-        # Vencimiento a 30 días — Siesa usará condición de pago del pedido si la tiene
-        fecha_vcto = core._fecha_bogota_mas(30)
+        # Código muerto (238925 no tiene caller), pero sin el `+30` fijo: acá
+        # no se conoce la condición del pedido, así que `vencimiento_fe` la
+        # trata como contado supuesto → fecha + umbral. Una sola política.
+        from app.services import cond_pago as _cp_v
+        fecha_vcto = _cp_v.vencimiento_fe(fecha_hoy, None)
 
         payload = {
             'Docto_ventas_comercial': [{
@@ -313,7 +316,6 @@ class ConnektaFacturacionGateway:
         """
         core = self._core
         fecha_hoy = core._fecha_hoy_bogota()
-        fecha_vcto = core._fecha_bogota_mas(30)
         cia = int(core.id_cia_siesa)
 
         # Nombres de campo verificados empíricamente contra JSON real de API_v2_Ventas_Pedidos
@@ -340,6 +342,13 @@ class ConnektaFacturacionGateway:
                 'código de contado produce una FE que Siesa no aprueba. '
                 'La RM ya está en BD — el reintento del DLQ va directo al 142943.'
             )
+        # El vencimiento sale de la MISMA política que decide si el conductor
+        # cobra (`cond_pago.vencimiento_fe`, decisión del dueño 2026-09-24):
+        # contado contraentrega → fecha + 15 (despacho + ruta, no el día de la
+        # condición: C02 vencería antes de que salga el camión); crédito real
+        # → fecha + sus días. Hasta ese día era `hoy + 30` para toda FE, y
+        # Siesa lo respeta — la cartera del WMS no decía nada de la condición.
+        fecha_vcto = _cp.vencimiento_fe(fecha_hoy, cond_pago)
         # La lectura de la condición vive en `services/cond_pago.py` — misma
         # política que usa la pantalla del conductor y que cuenta el desglose.
         _clase = _cp.clasificar(_cond_pago_siesa, core.cond_pago_ventas)
@@ -542,14 +551,21 @@ class ConnektaFacturacionGateway:
         }
 
         logger.info(
-            '[CONNEKTA] FacturaDesdeRemision %s%s → FE tercero=%s',
-            tipo_docto_rm, consec_rm, tercero
+            '[CONNEKTA] FacturaDesdeRemision %s%s → FE tercero=%s cond=%s vcto=%s',
+            tipo_docto_rm, consec_rm, tercero, cond_pago, fecha_vcto
         )
-        return core._post(
+        respuesta = core._post(
             core.conector_factura_remision,
             'API_v1_Ventas_Comercial_FacturaRemision',
             payload
         )
+        # La condición que la FE lleva DE VERDAD, para el snapshot de la tarea
+        # (`cond_pago.anotar_en_tarea`): es la que manda sobre la del pedido.
+        if isinstance(respuesta, dict):
+            respuesta = {**respuesta, 'cond_pago_emitida': cond_pago,
+                         'cond_pago_pedido': _cond_pago_siesa,
+                         'fecha_vcto_emitida': fecha_vcto}
+        return respuesta
 
 
 __all__ = ['ConnektaFacturacionGateway']

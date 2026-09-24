@@ -140,6 +140,17 @@ class RecaudoEntrega(db.Model):
     #: `NULL` = no hubo captura o el cliente no tenía punto: sin señal.
     distancia_cliente_m = db.Column(db.Numeric(10, 1), nullable=True)
 
+    # ── Contado contraentrega (m043contado) ─────────────────────────────
+    #: La clasificación de la tarea CONGELADA al confirmar (cada
+    #: confirmación la vuelve a congelar). `NULL` = parada anterior a esto: se
+    #: juzga con la de la tarea. Ver `cond_pago.cobro_de_recaudo`.
+    cobro_contraentrega = db.Column(db.Boolean, nullable=True)
+    #: Crédito que la oficina autorizó sobre una parada de contado que no
+    #: trajo plata. Razón obligatoria; queda también en la bitácora (EDITAR).
+    credito_autorizado_por = db.Column(db.Integer, db.ForeignKey('usuarios.id'), nullable=True)
+    credito_autorizado_razon = db.Column(db.Text, nullable=True)
+    credito_autorizado_en = db.Column(db.DateTime, nullable=True)
+
     __table_args__ = (
         # Un recaudo por parada. Lo comprueba `ruta_service.py:978` con un
         # `.first()` sin bloqueo, y hay DOS escritores —`confirmar_parada` y
@@ -347,6 +358,11 @@ class RecaudoEntrega(db.Model):
             'via_cola':              self.via_cola,
             'distancia_cliente_m':   (float(self.distancia_cliente_m)
                                       if self.distancia_cliente_m is not None else None),
+            'cobro_contraentrega':   self.cobro_contraentrega,
+            'credito_autorizado_por': self.credito_autorizado_por,
+            'credito_autorizado_razon': self.credito_autorizado_razon,
+            'credito_autorizado_en': (self.credito_autorizado_en.isoformat()
+                                      if self.credito_autorizado_en else None),
             'siesa_rc_triggered':    self.siesa_rc_triggered or False,
             'siesa_nc_triggered':    self.siesa_nc_triggered or False,
             'siesa_dc_triggered':    self.siesa_dc_triggered or False,

@@ -483,6 +483,19 @@ class DespachoParialService:
             tarea.estado             = EstadoPacking.DESPACHADO
             tarea.fecha_despachado   = tarea.fecha_despachado or datetime.utcnow()
         tarea.siesa_response     = json.dumps(resultado)
+        # Snapshot de cobro con la condición que la FE llevó DE VERDAD (manda
+        # sobre la del pedido). Solo si hubo POST real: en ensayo no existe FE.
+        # No puede romper el cierre: un fallo acá se loguea y la clasificación
+        # se reintenta al despachar la ruta y al listar paradas.
+        if not _es_ensayo and isinstance(fe_response, dict):
+            try:
+                from app.services import cond_pago as _cp_snap
+                _cp_snap.anotar_en_tarea(
+                    tarea, cond_fe=fe_response.get('cond_pago_emitida'),
+                    cond_pedido=fe_response.get('cond_pago_pedido'))
+            except Exception as _e_snap:
+                logger.warning('[DESPACHO_PARCIAL] tarea=%s: no se pudo anotar la '
+                               'clasificación de cobro: %s', tarea.id, _e_snap)
         try:
             db.session.commit()
         except Exception as _e_persist:

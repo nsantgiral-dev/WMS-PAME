@@ -1776,7 +1776,14 @@ let _COND_FORMAS_COMPROBANTE = null;
 //: Lo que este formulario sabe pedir. El servidor exige comprobante y
 //: evidencia solo a los formularios que lo declaran: un ítem viejo de la cola
 //: offline no queda trabado para siempre.
-const COND_VERSION_FORMULARIO = 2;
+//: 3 = sabe ofrecer el select sin CRÉDITO/EXENTO en una parada de contado
+//: contraentrega (`cond_pago.VERSION_FORMULARIO_CONTADO`, 2026-09-24).
+const COND_VERSION_FORMULARIO = 3;
+//: Formas que declaran «no entró plata». Del servidor (`cond_pago.FORMAS_QUE_NO_COBRAN`),
+//: dentro del payload que se cachea; el literal es solo el respaldo de una caché vieja.
+let _COND_FORMAS_NO_COBRAN = ['CREDITO', 'EXENTO'];
+//: Cuánto puede faltar por redondeo (`liquidacion_service.tope_diferencia_recaudo`).
+let _COND_TOLERANCIA_COBRO = 100;
 //: Mínimo de caracteres de la referencia (mismo que `senales_ruta.MIN_REFERENCIA`).
 const COND_MIN_REFERENCIA = 4;
 
@@ -1939,6 +1946,8 @@ async function condAbrirParadas(rutaId) {
   }
   _COND_RETENCIONES = data.retenciones_disponibles || _COND_RETENCIONES;
   if (Array.isArray(data.formas_con_comprobante)) _COND_FORMAS_COMPROBANTE = data.formas_con_comprobante;
+  if (Array.isArray(data.formas_que_no_cobran)) _COND_FORMAS_NO_COBRAN = data.formas_que_no_cobran;
+  if (typeof data.tolerancia_cobro === 'number') _COND_TOLERANCIA_COBRO = data.tolerancia_cobro;
   _condRenderParadas(data);
 }
 
@@ -2081,6 +2090,44 @@ const _FORMAS_PAGO_COBRO = [
   { v: 'EXENTO', l: 'Exento' },
 ];
 
+/**
+ * ¿Esta parada es crédito REAL? Solo si el servidor lo confirmó
+ * (`cobro_contraentrega === false`, días conocidos > 15). Contado
+ * contraentrega y el supuesto (sin condición) se cobran.
+ *
+ * Una caché vieja del payload (sin el campo) cae a `modo_pago`, que es lo que
+ * esa caché sabía: no se le cambia la pantalla a un conductor sin señal.
+ */
+function _condEsCreditoReal(p) {
+  if (!p) return false;
+  if (p.cobro_contraentrega === false) return true;
+  if (p.cobro_contraentrega === true) return false;
+  return p.modo_pago === 'CREDITO';
+}
+
+/**
+ * Las formas de pago que el conductor puede elegir en esta parada. En contado
+ * contraentrega (y en el supuesto) NO se ofrecen crédito ni exento: el
+ * conductor no otorga crédito — si no pagó, es Rechazado → «No pagó».
+ */
+function _condFormasPago(p) {
+  if (_condEsCreditoReal(p)) return _FORMAS_PAGO_COBRO;
+  const fuera = _COND_FORMAS_NO_COBRAN || ['CREDITO', 'EXENTO'];
+  return _FORMAS_PAGO_COBRO.filter(f => !fuera.includes(f.v));
+}
+
+/**
+ * El aviso de cobro de la parada: texto y tono, del servidor
+ * (`cond_pago.etiqueta_conductor`). Sin el campo (caché vieja) se arma algo
+ * equivalente con lo que haya — nunca se inventa una condición.
+ */
+function _condAvisoCobro(p) {
+  const e = p && p.cobro_etiqueta;
+  if (e && e.texto) return { texto: e.texto, tono: e.tono || 'info' };
+  if (_condEsCreditoReal(p)) return { texto: 'Crédito — no se cobra', tono: 'info' };
+  return { texto: 'Sin condición de pago: cobrá al entregar', tono: 'warn' };
+}
+
 /** Renderiza el formulario de confirmacion de parada con estado, pago, foto y items. */
 function _condRenderFormParada() {
   const el = document.getElementById('cond-contenido');
@@ -2126,6 +2173,10 @@ function _condRenderFormParada() {
   // confirmó; asumir CREDITO le impediría cobrar uno que sí correspondía.
   const modoPago = p.modo_pago || 'LIBRE';
   el._modoPago = modoPago;
+  const avisoCobro = _condAvisoCobro(p);
+  const _TONO_AVISO = { ok: ['--ok-bg', '--ok-brd', '--ok-tx'], warn: ['--warn-bg', '--warn-brd', '--warn-tx'],
+                        info: ['--info-bg', '--info-brd', '--info-tx'] };
+  const [_avBg, _avBrd, _avTx] = _TONO_AVISO[avisoCobro.tono] || _TONO_AVISO.info;
   el._mostrarValorDinamico = mostrarValorDinamico;
   // El valor de la factura se muestra siempre que se conozca — hasta en
   // crédito, donde es solo informativo (no cobra, no dispara el toggle).
@@ -2240,10 +2291,13 @@ function _condRenderFormParada() {
         </div>
       </div>
       ` : ''}
-      <div style="margin-bottom:14px;padding:14px;background:#f9fafb;border:1px solid #e5e7eb;border-radius:10px;font-size:var(--fs-sm);color:var(--tx2);display:flex;align-items:center;gap:10px;">
-        💳 Pedido a crédito — no se cobra en la entrega. La cartera se gestiona aparte.
+      <div id="cond-aviso-cobro" style="margin-bottom:14px;padding:14px;background:var(${_avBg});border:1px solid var(${_avBrd});border-radius:10px;font-size:var(--fs-sm);font-weight:700;color:var(${_avTx});display:flex;align-items:center;gap:10px;">
+        💳 ${esc(avisoCobro.texto)}
       </div>
       ` : `
+      <div id="cond-aviso-cobro" style="margin-bottom:14px;padding:12px 14px;background:var(${_avBg});border:1px solid var(${_avBrd});border-radius:10px;font-size:var(--fs-sm);font-weight:700;color:var(${_avTx});">
+        💵 ${esc(avisoCobro.texto)}
+      </div>
       ${modoPago === 'DINAMICO' ? `
       <div id="cond-valorfactura-wrap" style="margin-bottom:14px;">
         <label style="font-size:var(--fs-xs);color:var(--tx2);font-weight:700;display:block;margin-bottom:8px;">VALOR A COBRAR</label>
@@ -2305,7 +2359,7 @@ function _condRenderFormParada() {
         <select id="cond-forma-pago" onchange="condFormaPagoCambio()"
           style="width:100%;padding:14px;background:#fff;border:1px solid #d1d5db;color:var(--tx);border-radius:10px;font-size:var(--fs-md);">
           <option value="">— Seleccionar —</option>
-          ${_FORMAS_PAGO_COBRO.map(f =>
+          ${_condFormasPago(p).map(f =>
             `<option value="${esc(f.v)}" ${f.v===formaActual?'selected':''}>${esc(f.l)}</option>`
           ).join('')}
         </select>
@@ -2957,6 +3011,16 @@ async function condGuardarParada() {
     montoFinal = parseFloat(document.getElementById('cond-monto')?.value || 0) || 0;
     if (estadoEntrega === 'PARCIAL' && montoFinal <= 0) {
       alerta('Ingresa el monto cobrado por la parte entregada', 'error');
+      document.getElementById('cond-monto')?.focus();
+      return;
+    }
+    // Contado contraentrega: una entrega completa se cobra completa. La misma
+    // regla que aplica el servidor (`confirmar_parada`), dicha antes de encolar
+    // para que la parada no quede rechazada en la cola sin señal.
+    const _faltaCobro = !_condEsCreditoReal(p) && estadoEntrega === 'ENTREGADO' && (
+      montoFinal <= 0 || (p.valor_factura != null && montoFinal < Number(p.valor_factura) - _COND_TOLERANCIA_COBRO));
+    if (_faltaCobro) {
+      alerta('Esta factura se cobra al entregar y el monto no alcanza. Si no pagó, marcá Rechazado → «No pagó»; si pagó una parte, ajustá lo entregado.', 'error');
       document.getElementById('cond-monto')?.focus();
       return;
     }

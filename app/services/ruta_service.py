@@ -534,6 +534,73 @@ class RutaService:
                      'detalle': advertencias})
         return advertencias
 
+    #: Tope de consultas de cartera por despacho: el informe es un aviso y no
+    #: puede demorar la salida del camión.
+    _TOPE_CARTERA_DESPACHO = 40
+
+    @staticmethod
+    def _informe_de_cobro(ruta, consultar_cartera: bool = True) -> list:
+        """Lo que conviene saber de cada factura ANTES de que salga el camión.
+        **Informa, no bloquea** (a diferencia de la flota, no pide motivo): el
+        conductor igual la cobra, porque la política cobra ante la duda.
+
+        De paso escribe el snapshot de clasificación de cada tarea (respaldo,
+        sin red): es lo que el teléfono cachea si al abrir las paradas no hay
+        señal. El que llama hace el commit.
+
+        · `cobro_supuesto` — sin condición de pago conocida (o fuera de la
+          tabla): se cobra como contado y conviene confirmarlo con el asesor.
+        · `fe_contado` — el pedido declara la condición de CONTADO documental.
+        · `fe_saldada` — la cartera dice que la factura ya está pagada: el
+          conductor no debería cobrarla otra vez. Solo si `cxc_cruce` lo sabe
+          (`None` → no se dice nada), con tope de consultas y sin insistir si
+          Siesa falla.
+        """
+        from app.services import cond_pago as _cp
+        from app.services.connekta_gateway import connekta
+        tareas, vistas = [], set()
+        for b in (ruta.bultos or []):
+            t = b.tarea
+            if t is None or t.id in vistas or t.tipo_documento == 'TRASLADO':
+                continue
+            vistas.add(t.id)
+            tareas.append(t)
+        informe = []
+        consultas, cartera_viva = 0, consultar_cartera and not connekta.modo_simulacion
+        for t in tareas:
+            cobro = _cp.anotar_en_tarea(t)
+            base = {'tarea_id': t.id, 'pedido': t.numero_pedido_siesa,
+                    'cliente': t.cliente, 'cond_pago': cobro['codigo'],
+                    'dias_credito': cobro['dias'], 'clasif_origen': cobro['origen']}
+            if cobro['origen'] != _cp.MAESTRO:
+                informe.append({**base, 'clave': 'cobro_supuesto',
+                                'texto': 'Sin condición de pago conocida: el conductor la '
+                                         'cobra como contado. Confirmala con el asesor.'})
+            if cobro['codigo'] and _cp.clasificar(
+                    cobro['codigo'], connekta.cond_pago_ventas) == _cp.CONTADO:
+                informe.append({**base, 'clave': 'fe_contado',
+                                'texto': f'El pedido declara contado ({cobro["codigo"]}).'})
+            if (cartera_viva and cobro['cobrar'] and t.fe_tipo and t.fe_consec
+                    and consultas < RutaService._TOPE_CARTERA_DESPACHO):
+                consultas += 1
+                try:
+                    from app.services import cxc_cruce as _cx
+                    from app.services.liquidacion_service import _obtener_tercero
+                    nit, _suc = _obtener_tercero(t)
+                    saldada = (_cx.esta_saldada(
+                        connekta.get_cxc_general(nit), t.tipo_docto_pedido_siesa,
+                        t.consec_docto_pedido_siesa, t.fe_tipo, t.fe_consec)
+                        if nit else None)
+                except Exception as e:  # noqa: BLE001 — un aviso no insiste
+                    logger.warning('[RUTAS] informe de cobro: cartera no disponible (%s); '
+                                   'no se sigue preguntando', e)
+                    cartera_viva, saldada = False, None
+                if saldada is True:
+                    informe.append({**base, 'clave': 'fe_saldada',
+                                    'texto': 'La cartera de Siesa dice que esta factura ya '
+                                             'está pagada: no la cobres otra vez.'})
+        return informe
+
     @staticmethod
     def iniciar_ruta(id: int, motivo_advertencias: str = None,
                      usuario_id: int = None) -> dict:
@@ -545,6 +612,7 @@ class RutaService:
 
         advertencias = RutaService._reconocer_advertencias_flota(
             ruta, 'iniciar_cargue', motivo_advertencias, usuario_id)
+        informe_cobro = RutaService._informe_de_cobro(ruta, consultar_cartera=False)
         ruta.estado = EstadoRutaDespacho.EN_CARGUE
         ruta_id = ruta.id
         db.session.commit()
@@ -575,6 +643,7 @@ class RutaService:
             'sugeridos_count': len(sugeridos_ids),
             'sugeridos_ids': sugeridos_ids,
             'advertencias_flota': advertencias,
+            'informe_cobro': informe_cobro,
         }
 
     @staticmethod
@@ -622,6 +691,8 @@ class RutaService:
         # puede decir algo. Informa, no bloquea — con motivo, sale.
         RutaService._reconocer_advertencias_flota(
             ruta, 'despachar', motivo_advertencias, usuario_id)
+        # Informa, no bloquea: y escribe el snapshot de cobro (misma transacción).
+        informe_cobro = RutaService._informe_de_cobro(ruta)
 
         _n_bultos = len(ruta.bultos)
         _ruta_id  = ruta.id
@@ -630,7 +701,7 @@ class RutaService:
         db.session.commit()
         logger.info(f'[RUTAS] Ruta {_ruta_id} EN_CARGUE → EN_TRANSITO ({_n_bultos} bultos)')
 
-        return (RutaDespacho.query
+        ruta = (RutaDespacho.query
                 .options(
                     _jl(RutaDespacho.conductor),
                     _jl(RutaDespacho.vehiculo),
@@ -638,6 +709,9 @@ class RutaService:
                     _sl(RutaDespacho.bultos).joinedload(Bulto.tarea),
                 )
                 .get(_ruta_id))
+        # Transitorio (no es columna): lo lee la ruta HTTP para mostrarlo.
+        ruta.informe_cobro = informe_cobro
+        return ruta
 
     @staticmethod
     def entregar_ruta(id: int, data: dict, usuario_id: int) -> dict:
@@ -797,6 +871,10 @@ class RutaService:
         # no una por tarea). Si Siesa no responde, el mapa queda vacío y
         # cada tarea simplemente no muestra el bloque de asesor.
         from app.services.connekta_gateway import connekta as _connekta_vend
+        # Si el maestro de condiciones tiene consulta dinámica, este es un
+        # momento con señal para refrescarlo (TTL; sin consulta, no hace nada).
+        from app.services import cond_pago as _cp_tabla
+        _cp_tabla.refrescar_tabla_desde_siesa()
         vendedores_map: dict = {}
         try:
             for v in _connekta_vend.get_vendedor_contacto():
@@ -877,9 +955,21 @@ class RutaService:
             # conductor no veía el cobro en ninguna. Se deriva del código
             # crudo, que es la única fuente — no de `es_contado`, que ya es una
             # lectura y responde otra pregunta.
-            p['se_cobra_en_puerta'] = _cpm.cobra_en_la_puerta(
-                cond_pago_crudo, connekta.cond_pago_ventas, connekta.cond_pago_ruta)
+            #
+            # Desde el 2026-09-24 sale del SNAPSHOT de la tarea
+            # (`cond_pago.anotar_en_tarea`): la condición de la FE si se leyó,
+            # si no la del pedido, y si no, contado supuesto (se cobra, y la
+            # pantalla lo dice). Lo que viaja acá se cachea entero en el
+            # teléfono: la parada se confirma offline con esto.
+            _cobro = _cpm.anotar_en_tarea(t)
+            p['se_cobra_en_puerta'] = _cobro['cobrar']
             p['modo_pago'] = _cpm.modo_pantalla(p['se_cobra_en_puerta'], _hay_valor)
+            p['cobro_contraentrega'] = _cobro['cobrar']
+            p['dias_credito'] = _cobro['dias']
+            p['cond_pago_fe'] = t.cond_pago_fe
+            p['clasif_origen'] = _cobro['origen']
+            p['cond_pago_difiere'] = _cobro['difiere_del_pedido']
+            p['cobro_etiqueta'] = _cpm.etiqueta_conductor(_cobro)
 
             # ── Dónde queda este cliente, si alguien ya estuvo ─────────────
             #
@@ -896,6 +986,15 @@ class RutaService:
             _m = _geo_c.maestro_de(t.cliente, t.municipio)
             p['geo'] = _m.to_dict() if _m is not None else None
 
+        # El respaldo del snapshot, sin red: lo que `anotar_en_tarea` escribió
+        # arriba. Anotar no puede romper la lista del conductor.
+        try:
+            db.session.commit()
+        except Exception as _e_snap:
+            db.session.rollback()
+            logger.warning('[RUTAS] no se pudo guardar la clasificación de cobro de la '
+                           'ruta %s: %s', ruta_id, _e_snap)
+
         paradas = sorted(tareas_map.values(), key=lambda x: (x['municipio'], x['cliente']))
         # Ojo: `paradas` está indexado por tarea_id, así que cada entrada es una
         # factura, no una parada física. La parada real es DISTINCT cliente.
@@ -905,6 +1004,7 @@ class RutaService:
         # en liquidacion_service.py) — una sola fuente, el conductor y el admin
         # ven siempre las mismas cuentas/tasas.
         from app.services.liquidacion_service import CATALOGO_RETENCIONES
+        from app.services.liquidacion_service import tope_diferencia_recaudo as _tope_cobro
         from app.services import senales_ruta as _sr_p
         retenciones_disponibles = [
             {'tipo': k, 'nombre': v['nombre'], 'puc': v['puc'], 'tasa': v['tasa']}
@@ -928,6 +1028,12 @@ class RutaService:
             # payload que la pantalla cachea: tiene que saberlo sin señal.
             'formas_con_comprobante':  [f for f in FormaPago.VALIDOS
                                         if _sr_p.requiere_comprobante(f)],
+            # Las que declaran «no entró plata»: la pantalla las quita del
+            # select de una parada de contado. Del servidor, no del JS.
+            'formas_que_no_cobran':    list(_cp_tabla.FORMAS_QUE_NO_COBRAN),
+            # Lo mismo que tolera la guarda del servidor al comparar lo cobrado
+            # con el valor de la factura.
+            'tolerancia_cobro':        _tope_cobro(),
             'version_formulario':      _sr_p.VERSION_FORMULARIO_CON_EVIDENCIA,
         }
 
@@ -1162,6 +1268,10 @@ class RutaService:
         iva_factura = None
         valores_por_referencia = {}
         codigo_vendedor = None
+        #: `f461_id_cond_pago` de la FE — viene en la misma respuesta, sin
+        #: llamada extra. Es la condición que la factura lleva de verdad y
+        #: manda sobre la del pedido (`cond_pago.anotar_en_tarea`).
+        cond_fe = None
         diag = {'valoradas': 0, 'ambiguas': 0, 'referencias': []}
         # Unidad con la que el WMS maneja cada referencia. Se indexa por las
         # dos formas del código (Siesa e interna) porque el consumidor
@@ -1195,6 +1305,7 @@ class RutaService:
                 # f200_id_vendedor='53051164' (NIT) vs f210_codigo_vendedor='002 '
                 # (coincide con el maestro — FIGUEROA ANACONA LEIDA YOANA).
                 codigo_vendedor = str(lineas[0].get('f210_codigo_vendedor') or '').strip() or None
+                cond_fe = str(lineas[0].get('f461_id_cond_pago') or '').strip() or None
                 valores_por_referencia, diag = \
                     RutaService._unitarios_por_referencia(lineas, _uom_wms)
                 if diag['ambiguas']:
@@ -1233,6 +1344,22 @@ class RutaService:
                 logger.warning('[RUTAS] no se pudo anotar valor_factura en la tarea %s: %s',
                                tarea.id, _e_val)
 
+        # Snapshot de cobro con la condición de la FE (sin red: ya se leyó).
+        if cond_fe:
+            try:
+                from app.extensions import db as _db_fe
+                from app.services import cond_pago as _cp_fe
+                _cp_fe.anotar_en_tarea(tarea, cond_fe=cond_fe)
+                _db_fe.session.commit()
+            except Exception as _e_fe:
+                try:
+                    from app.extensions import db as _db_fe2
+                    _db_fe2.session.rollback()
+                except Exception:
+                    pass
+                logger.warning('[RUTAS] no se pudo anotar la condición de la FE en la '
+                               'tarea %s: %s', tarea.id, _e_fe)
+
         es_contado = None
         # El valor CRUDO de Siesa, además del derivado. `es_contado` lo produce
         # esta misma función, así que usarlo para verificar el supuesto que la
@@ -1252,8 +1379,7 @@ class RutaService:
         if getattr(tarea, 'cond_pago', None) is not None:
             from app.services import cond_pago as _cp0
             return (valor_factura,
-                    _cp0.cobra_en_la_puerta(
-                        tarea.cond_pago, connekta.cond_pago_ventas, connekta.cond_pago_ruta),
+                    _cp0.cobro_de_tarea(tarea)['cobrar'],
                     valores_por_referencia,
                     tarea.cond_pago,
                     base_gravable,
@@ -1265,9 +1391,7 @@ class RutaService:
             from app.services import cond_pago as _cp
             cond_pago_siesa = (cabecera or {}).get('f430_id_cond_pago') or ''
             cond_pago_crudo = cond_pago_siesa
-            es_contado = _cp.cobra_en_la_puerta(
-                cond_pago_siesa, connekta.cond_pago_ventas, connekta.cond_pago_ruta)
-            if es_contado is None:
+            if not cond_pago_siesa:
                 _cp.registrar_ausencia(
                     f'pedido {tarea.tipo_docto_pedido_siesa}-{tarea.consec_docto_pedido_siesa}')
             # Anotar no puede romper lo anotado: si el commit falla, el valor ya
@@ -1275,6 +1399,7 @@ class RutaService:
             try:
                 from app.extensions import db as _db_cp
                 tarea.cond_pago = cond_pago_crudo
+                _cp.anotar_en_tarea(tarea)
                 _db_cp.session.commit()
             except Exception as _e_cp:
                 try:
@@ -1284,6 +1409,7 @@ class RutaService:
                     pass
                 logger.warning('[RUTAS] no se pudo anotar cond_pago en la tarea %s: %s',
                                tarea.id, _e_cp)
+            es_contado = _cp.cobro_de_tarea(tarea)['cobrar']
         except Exception as e:
             logger.warning('[RUTAS] cond_pago falló para tarea %s: %s', tarea.id, e)
 
@@ -1320,18 +1446,8 @@ class RutaService:
         # otorgar crédito en la puerta; si el cliente se lleva la mercancía sin
         # pagar, el camino es el motivo tipificado, que deja documento.
         #
-        # `cobra_en_la_puerta`, no `clasificar(...) == CONTADO`: C02 (la
-        # condición de ruta que el vendedor captura para que la FE se apruebe
-        # en Siesa) es, de cara al cliente, tan de contado como C01 — la
-        # misma razón por la que la pantalla del conductor la trata igual en
-        # `_valor_y_cond_pago`. Antes de este cambio, un pedido capturado
-        # como C02 podía marcarse `forma_pago=CREDITO` sin que nada lo
-        # impidiera.
-        #
-        # Se valida contra lo ANOTADO en la tarea (`m005condpagoparada`), no
-        # contra Siesa: esta confirmación **tiene que funcionar sin señal**. Si
-        # la condición no se alcanzó a anotar, no se bloquea — no saber no es
-        # evidencia de contado (Regla 0).
+        # Contra lo ANOTADO en la tarea, no contra Siesa: esta confirmación
+        # **tiene que funcionar sin señal**.
         # Acotada a los estados donde `forma_pago` significa algo. En RECHAZADO
         # no se pide forma de pago —el camino es el motivo tipificado— pero el
         # `<select>` puede conservar un valor de un render anterior, y con él
@@ -1339,29 +1455,58 @@ class RutaService:
         # motivo existe para canalizar. Prohibir sin dar salida devuelve al
         # conductor al camino de menor resistencia (marcar «cliente cerrado»),
         # que convierte un impago en un faltante de inventario.
-        if forma_pago == FormaPago.CREDITO and \
-                estado_entrega in (EstadoEntrega.ENTREGADO, EstadoEntrega.PARCIAL):
-            from app.services import cond_pago as _cp_r
-            from app.services.connekta_gateway import connekta as _cx_r
-            _tarea_cp = TareaPacking.query.get(tarea_id)
-            _anotada = getattr(_tarea_cp, 'cond_pago', None) if _tarea_cp else None
-            # `cobra_en_la_puerta`, **no `clasificar`**: la pregunta acá es
-            # si en esta parada había que cobrar, no si la factura era de
-            # contado documental. Con `clasificar` la restricción no se
-            # disparaba NUNCA en ruta —toda venta de ruta es C02, que no es
-            # contado— así que el conductor podía marcar CREDITO sobre
-            # cualquier parada y el control existía sin proteger nada.
-            #
-            # `is True` y no truthiness: `None` es «no se pudo saber» y ahí no
-            # se bloquea (Regla 0) — una parada trabada en la calle no la
-            # desbloquea nadie.
-            if _cp_r.cobra_en_la_puerta(
-                    _anotada, _cx_r.cond_pago_ventas, _cx_r.cond_pago_ruta) is True:
-                raise ValueError(
-                    'Este pedido se cobra en la entrega: no se puede registrar '
-                    'como crédito. Si el cliente no pagó, marcá Rechazado y elegí '
-                    'el motivo — ahí queda registrado si la mercancía volvió o se '
-                    'quedó con él.')
+        # ── Contado contraentrega: el conductor no otorga crédito ──────────
+        #
+        # Regla del dueño (2026-09-24): ≤ 15 días de crédito es CONTADO — se
+        # cobra al entregar. Sobre una parada así no se registra CREDITO ni
+        # EXENTO: si el cliente no pagó, el camino es «No pagó» (la mercancía
+        # vuelve) o «No pagó y se quedó» con evidencia — los dos siempre
+        # disponibles, en RECHAZADO, que esta guarda no toca (una parada
+        # trabada en la calle no la desbloquea nadie).
+        #
+        # Se juzga contra el SNAPSHOT de la tarea (`cond_pago.cobro_de_tarea`),
+        # sin red. Sin clasificación, la política cobra (contado supuesto): la
+        # guarda también actúa ahí. Antes, «no sé» dejaba pasar cualquier cosa.
+        #
+        # Solo al formulario que sabe ofrecer el select sin crédito
+        # (`version_formulario >= 3`). Un ítem viejo de la cola no se rechaza
+        # por la regla nueva —quedaría trabado para siempre en el teléfono—:
+        # conserva la restricción de antes y lo demás llega a la liquidación
+        # como `credito_no_autorizado`, que no lo deja pasar sin autorización.
+        from app.services import cond_pago as _cp_r
+        _tarea_cp = TareaPacking.query.get(tarea_id)
+        _cobro_parada = _cp_r.cobro_de_tarea(_tarea_cp)
+        _entrega_con_cobro = estado_entrega in (EstadoEntrega.ENTREGADO, EstadoEntrega.PARCIAL)
+        if _entrega_con_cobro and _cobro_parada['cobrar']:
+            if _cp_r.formulario_sabe_de_contado(data):
+                if _cp_r.forma_no_cobra(forma_pago):
+                    raise ValueError(
+                        'Esta factura se cobra al entregar (contado contraentrega): no '
+                        'se puede registrar como crédito ni exento. Si el cliente no '
+                        'pagó, marcá Rechazado → «No pagó» (la mercancía vuelve).')
+                if estado_entrega == EstadoEntrega.ENTREGADO:
+                    _monto_e = float(data.get('monto_cobrado') or 0)
+                    _desc_e = float(data.get('monto_descuento') or 0)
+                    _valor_e = (float(_tarea_cp.valor_factura)
+                                if _tarea_cp is not None and _tarea_cp.valor_factura is not None
+                                else None)
+                    from app.services.liquidacion_service import tope_diferencia_recaudo
+                    if _monto_e <= 0 or (_valor_e is not None and
+                                         _monto_e + _desc_e < _valor_e - tope_diferencia_recaudo()):
+                        raise ValueError(
+                            'Esta factura se cobra al entregar y el monto no alcanza el '
+                            'valor de la factura. Si el cliente no pagó, marcá «No pagó»; '
+                            'si pagó una parte, marcá Parcial y ajustá lo entregado.')
+            else:
+                from app.services.connekta_gateway import connekta as _cx_r
+                if forma_pago == FormaPago.CREDITO and _cp_r.regla_anterior_rechaza_credito(
+                        _cp_r.codigo_vigente(_tarea_cp),
+                        _cx_r.cond_pago_ventas, _cx_r.cond_pago_ruta):
+                    raise ValueError(
+                        'Este pedido se cobra en la entrega: no se puede registrar '
+                        'como crédito. Si el cliente no pagó, marcá Rechazado y elegí '
+                        'el motivo — ahí queda registrado si la mercancía volvió o se '
+                        'quedó con él.')
 
         # Validación de campos obligatorios por estado. Entregado y Parcial
         # pasan por el mismo toggle Pago Total/Parcial en el conductor — los
@@ -1402,7 +1547,7 @@ class RutaService:
             # monto>0 solo aplica si de verdad se cobra en la puerta — un
             # pedido a crédito con devolución parcial no cobra nada ahí (solo
             # genera NC por lo devuelto), forzar monto>0 bloquearía ese caso.
-            if forma_pago != FormaPago.CREDITO:
+            if not _cp_r.forma_no_cobra(forma_pago):
                 monto = float(data.get('monto_cobrado') or 0)
                 if monto <= 0:
                     raise ValueError('El monto cobrado debe ser mayor a 0 en una entrega parcial')
@@ -1573,6 +1718,7 @@ class RutaService:
         # Re-confirmar pisa montos, estado y `fecha_confirmacion`: lo que
         # decía antes queda en la bitácora (EDITAR), no solo quién editó.
         _CAMPOS_PARADA = ('estado_entrega', 'forma_pago', 'monto_cobrado',
+                          'cobro_contraentrega',
                           'monto_descuento', 'motivo_descuento', 'motivo_rechazo',
                           'referencia_pago',
                           'observaciones', 'bultos_rechazados_ids',
@@ -1594,6 +1740,14 @@ class RutaService:
 
         recaudo.estado_entrega        = estado_entrega
         recaudo.forma_pago            = forma_pago
+        # La clasificación con la que se juzgó esta confirmación, CONGELADA:
+        # la liquidación la lee de acá aunque la tabla cambie después. Solo si
+        # era LEÍDA (MAESTRO): un supuesto no se congela —queda NULL,
+        # declarado— para que la condición real, si aparece después (la FE se
+        # lee al listar), decida.
+        recaudo.cobro_contraentrega   = (bool(_cobro_parada['cobrar'])
+                                         if _cobro_parada['origen'] == _cp_r.MAESTRO
+                                         else None)
         # Lo que el conductor tenía enfrente, no solo lo que eligió. Se acepta
         # del cliente porque el modo depende de datos de Siesa que la parada ya
         # resolvió; recalcularlo acá exigiría volver a consultar y la
@@ -1811,6 +1965,20 @@ class RutaService:
             raise ValueError(
                 f'Faltan {sin_gestionar} parada{"s" if sin_gestionar != 1 else ""} por gestionar antes de liquidar.'
             )
+
+        # Contado que salió sin plata y sin autorización: la ruta no se da por
+        # liquidada. Cobrarlo, o «autorizar como crédito» con razón.
+        from app.services import cond_pago as _cp_lq
+        _sin_aut = [r for r in RecaudoEntrega.query.filter_by(ruta_id=id).all()
+                    if _cp_lq.credito_no_autorizado(r)]
+        if _sin_aut:
+            _peds = ', '.join((r.tarea.numero_pedido_siesa if r.tarea else f'tarea {r.tarea_id}')
+                              or f'tarea {r.tarea_id}' for r in _sin_aut[:10])
+            raise ValueError(
+                f'credito_no_autorizado: {len(_sin_aut)} parada'
+                f'{"s" if len(_sin_aut) != 1 else ""} de contado contraentrega '
+                f'sin plata y sin autorización ({_peds}). Cobralas o autorizalas como '
+                f'crédito con una razón antes de liquidar.')
 
         RutaService._marcar_liquidada(ruta, usuario_id)
 

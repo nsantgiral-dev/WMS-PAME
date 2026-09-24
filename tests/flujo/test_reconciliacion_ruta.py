@@ -151,14 +151,15 @@ class TestElDenominadorEsVisible:
 
     def test_una_parada_sin_condicion_se_cuenta_aparte(self, db, almacen,
                                                         actores, codigos):
-        """No está exenta: está **sin clasificar**. Sacarla en silencio encoge
-        el universo sin que nadie lo note."""
+        """No está exenta: está **sin clasificar**, y desde el 2026-09-24 se
+        cobra como contado supuesto — entra al denominador y se cuenta aparte
+        (sacarla en silencio encogía el universo sin que nadie lo notara)."""
         from app.services.reconciliacion_ruta import reconciliar
         f = _ruta(db, almacen, actores, cond=None, monto_cobrado=0,
                   forma_pago='EXENTO')
 
         rep = reconciliar(f.ruta_id)
-        assert rep['columnas']['debian_cobrarse']['n'] == 0
+        assert rep['columnas']['debian_cobrarse']['n'] == 1
         assert rep['paradas_sin_condicion'] == 1
 
     def test_el_denominador_del_defecto_no_depende_de_lo_que_marco_el_conductor(

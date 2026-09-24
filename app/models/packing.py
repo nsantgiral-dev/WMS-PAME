@@ -86,6 +86,25 @@ class TareaPacking(db.Model):
     #: `NULL` = no se ha calculado, no «vale cero».
     valor_factura = db.Column(db.Numeric(14, 2), nullable=True)
 
+    # ── Contado contraentrega vs crédito real (m043contado) ──────────────
+    #
+    # El snapshot de `cond_pago.cobro_contraentrega` para esta factura, escrito
+    # lo antes posible (al crear el packing, al emitir la FE, al despachar, al
+    # listar paradas) para que la pantalla y la guarda del servidor funcionen
+    # SIN RED. `NULL` en todas = no se clasificó todavía (se trata como
+    # contado supuesto: se cobra). Sin backfill: no se inventa una condición.
+    #: `f461_id_cond_pago` — la condición con la que la FE SALIÓ. Si difiere
+    #: de `cond_pago` (el pedido), manda ésta.
+    cond_pago_fe = db.Column(db.String(10), nullable=True)
+    #: Días de la condición según la tabla vigente. `NULL` = no se conocen.
+    dias_credito = db.Column(db.Integer, nullable=True)
+    #: `True` = contado contraentrega (se cobra al entregar). `False` = crédito
+    #: real confirmado (días conocidos > umbral).
+    cobro_contraentrega = db.Column(db.Boolean, nullable=True)
+    #: MAESTRO | SUPUESTO_AUSENTE | SUPUESTO_DESCONOCIDO | SIN_MAESTRO
+    clasif_origen = db.Column(db.String(24), nullable=True)
+    clasif_en = db.Column(db.DateTime, nullable=True)
+
     __table_args__ = (
         # Una tarea activa por pedido. `packing_service.py:48` lo comprueba y
         # `.first()`-inserta sin lock: dos cierres del mismo pedido casi a la
@@ -107,6 +126,12 @@ class TareaPacking(db.Model):
         # mal leída. Cero sí es posible (factura anulada, líneas en cero).
         db.CheckConstraint('valor_factura IS NULL OR valor_factura >= 0',
                            name='ck_packing_valor_no_negativo'),
+        db.CheckConstraint('dias_credito IS NULL OR dias_credito >= 0',
+                           name='ck_packing_dias_credito'),
+        db.CheckConstraint(
+            "clasif_origen IS NULL OR clasif_origen IN "
+            "('MAESTRO','SUPUESTO_AUSENTE','SUPUESTO_DESCONOCIDO','SIN_MAESTRO')",
+            name='ck_packing_clasif_origen'),
     )
 
     # Alerta: pedido anulado en Siesa mientras el WMS lo procesaba
@@ -152,6 +177,10 @@ class TareaPacking(db.Model):
             'numero_pedido_siesa': self.numero_pedido_siesa,
             'pedido_clave': self.pedido_clave,
             'cond_pago': self.cond_pago,
+            'cond_pago_fe': self.cond_pago_fe,
+            'dias_credito': self.dias_credito,
+            'cobro_contraentrega': self.cobro_contraentrega,
+            'clasif_origen': self.clasif_origen,
             'valor_factura': float(self.valor_factura) if self.valor_factura is not None else None,
             'fe_tipo': self.fe_tipo,
             'fe_consec': self.fe_consec,

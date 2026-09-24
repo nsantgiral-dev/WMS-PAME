@@ -373,6 +373,24 @@ def health_siesa():
     except Exception as _e_kpi:
         resultado['analitica_kpi'] = {'error': str(_e_kpi)[:200]}
 
+    # CONTADO CONTRAENTREGA vs CRÉDITO REAL (2026-09-24). Umbral, tabla de
+    # días vigente y su fuente (copia del PDF, env o la consulta dinámica), y
+    # en qué difiere la copia del maestro vivo si la consulta existe. Un
+    # problema de configuración no apaga nada: se usa el default y se dice.
+    try:
+        from app.services import cond_pago as _cp_h
+        resultado['cobro_contraentrega'] = _cp_h.estado_politica(refrescar=True)
+        for _prob in resultado['cobro_contraentrega']['problemas']:
+            resultado['advertencias'].append(f'Contado contraentrega: {_prob}')
+        if resultado['cobro_contraentrega']['divergencias_con_siesa']:
+            resultado['advertencias'].append(
+                'Contado contraentrega: la copia de la tabla de condiciones difiere '
+                'del maestro de Siesa en '
+                f"{len(resultado['cobro_contraentrega']['divergencias_con_siesa'])} "
+                'código(s) — manda Siesa; actualizar DIAS_POR_CODIGO_PDF')
+    except Exception as _e_cp:
+        resultado['cobro_contraentrega'] = {'error': str(_e_cp)[:200]}
+
     # Pasos que siguen siendo manuales en Siesa. No son un fallo — son trabajo
     # de una persona todos los días, y la única forma de que nadie los olvide
     # (o los haga de más) es que estén escritos en un sitio consultable.

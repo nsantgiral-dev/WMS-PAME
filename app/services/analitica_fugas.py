@@ -58,7 +58,8 @@ from app.utils.fecha import ahora_bogota, dia_operativo_de, rango_dia_operativo_
 
 #: Una clave que no está acá es un 404, no una fuga vacía.
 CLAVES = ('venta_perdida', 'faltantes_inventario', 'rechazos_ruta',
-          'entregado_sin_pago', 'plata_en_la_calle', 'mercancia_en_limbo',
+          'entregado_sin_pago', 'credito_no_autorizado', 'plata_en_la_calle',
+          'mercancia_en_limbo',
           'trabajo_perdido', 'documentos_trabados')
 
 POR_PAGINA_MAX = 200
@@ -476,6 +477,44 @@ def _entregado_sin_pago(desde, hasta, ctx) -> Resultado:
         'por_conductor': ctx.una_vez(('sin_pago_por_conductor', desde, hasta),
                                      lambda: tasa_sin_pago_por_conductor(desde, hasta, ctx.almacen_id)),
     })
+
+
+def _credito_no_autorizado(desde, hasta, ctx) -> Resultado:
+    """Paradas de **contado contraentrega** (≤ 15 días de crédito, regla del
+    dueño 2026-09-24) que el conductor entregó sin cobrar —CRÉDITO, EXENTO o
+    $0— y que nadie autorizó como crédito. No define la política: la lee
+    (`cond_pago.credito_no_autorizado`).
+
+    Valor: `valor_factura − monto_cobrado` (lo que quedó sin cobrar; en un
+    PARCIAL es cota superior: incluye lo devuelto, que no se valoriza acá).
+    Sin `valor_factura` → sin valor. Dimensión: qué se registró.
+    """
+    from app.models.recaudo_entrega import EstadoEntrega
+    from app.services import cond_pago as _cp
+    casos = []
+    for r in _recaudos(desde, hasta, ctx, (EstadoEntrega.ENTREGADO, EstadoEntrega.PARCIAL)):
+        t = r.tarea
+        if not _cp.credito_no_autorizado(r, t):
+            continue
+        vf = _f(t.valor_factura)
+        cobrado = float(r.monto_cobrado or 0)
+        pesos = None if vf is None else max(0.0, vf - cobrado)
+        fp = (r.forma_pago or '').upper()
+        motivo = (f'Registrado {fp}' if _cp.forma_no_cobra(fp)
+                  else 'Entregado con $0 cobrado')
+        cobro = _cp.cobro_de_recaudo(r, t)
+        casos.append(Caso(
+            referencia=t.numero_pedido_siesa or t.codigo, pesos=pesos,
+            unidades=_unidades_empacadas(t), almacen_id=t.almacen_id,
+            motivo=motivo, dia=dia_operativo_de(r.fecha_confirmacion),
+            pedido_clave=t.pedido_clave,
+            detalle={'cliente': t.cliente, 'ruta_id': r.ruta_id,
+                     'estado_entrega': r.estado_entrega, 'forma_pago': r.forma_pago,
+                     'valor_factura': vf, 'cobrado': cobrado,
+                     'cond_pago': cobro.get('codigo'), 'dias_credito': cobro.get('dias'),
+                     'clasif_origen': cobro.get('origen')},
+        ))
+    return Resultado(casos)
 
 
 def tasa_sin_pago_por_conductor(desde, hasta, almacen_id=None) -> list:
@@ -906,6 +945,9 @@ FUGAS = {f.clave: f for f in (
     Fuga('entregado_sin_pago', 'Entregado sin pago',
          'Mercancía que se quedó con el cliente sin pagar: la factura sigue abierta.',
          'Días con la factura abierta', 'unidades entregadas', True, _entregado_sin_pago),
+    Fuga('credito_no_autorizado', 'Crédito no autorizado',
+         'Facturas de contado contraentrega entregadas sin cobrar y que nadie autorizó como crédito.',
+         'Qué se registró', 'unidades entregadas', True, _credito_no_autorizado),
     Fuga('plata_en_la_calle', 'Plata en la calle',
          'Lo que el conductor cobró en rutas entregadas que nadie ha liquidado.',
          'Urgencia', 'paradas', True, _plata_en_la_calle),
