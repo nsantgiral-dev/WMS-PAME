@@ -1031,6 +1031,75 @@ class TestEditar:
         st, r = self._editar(b, raiz_d, 50)
         assert st == 409, r
 
+    def test_reasignar_un_conteo_en_curso_no_le_hereda_el_parcial_al_otro(self, bodega):
+        """`/editar` con `operario_id` sobre un conteo EN_PROCESO se lo pasaba
+        a otro operario CON lo que el primero llevaba contado y su foto de
+        apertura: el segundo seguía, a ciegas, desde el parcial ajeno — la
+        clase que `devolver_al_pool` existe para cerrar — y lo del primero se
+        perdía sin rastro."""
+        from app.models.conteo import EstadoConteo
+        b = bodega
+        sku = b.hueco('C', teorico=10)
+        b.programar(b.admin, 'C')
+        sid = b.raiz_de(sku).id
+        st, t = b.get(b.op_a, '/api/mobile/tarea-actual')
+        assert t['id'] == sid
+        b.post(b.op_a, '/api/mobile/conteo/total', {'tarea_id': sid, 'total_acumulado': 7})
+        st, r = b.put(b.admin, f'/api/conteo/{sid}/editar',
+                      {'operario_id': b.op_b.id, 'motivo_edicion': 'Ana salió a almorzar'})
+        assert st == 200, r
+        s = b.sesion(sid)
+        assert (s.estado, s.operario_id, s.cantidad_fisica, s.foto_inicio_at) == (
+            EstadoConteo.PENDIENTE, b.op_b.id, None, None), 'Beto arranca desde cero'
+        rastro = s.lista_conteos_descartados()
+        assert [(e['cantidad_fisica'], e['operario_id']) for e in rastro] == [(7, b.op_a.id)], rastro
+        # Beto lo recibe desde cero, y con su propia foto de apertura.
+        st, t = b.get(b.op_b, '/api/mobile/tarea-actual')
+        assert (t['id'], t['cantidad_escaneada']) == (sid, 0), t
+        assert b.sesion(sid).foto_inicio_at is not None
+        # Ana ya no puede seguir escribiéndole.
+        st, r = b.post(b.op_a, '/api/mobile/conteo/total', {'tarea_id': sid, 'total_acumulado': 9})
+        assert st == 400, r
+        # Y las estadísticas no lo cuentan como un recuento.
+        st, e = b.get(b.supervisor, f'/api/conteo/estadisticas?almacen_id={b.almacen.id}')
+        assert e['volumen']['recuentos']['numerador'] == 0
+        assert e['volumen']['recuentos_propios'] == 0
+
+    def test_reasignar_un_conteo_ya_contado_no_reescribe_quien_conto(self, bodega):
+        """Cambiarle el dueño a un CC1 ya contado reescribía quién contó, y con
+        eso el doble ciego: el CC1 de Ana pasaba a ser «de Caro», y el CC2 se le
+        podía dar a Ana — la misma persona contaba las dos veces."""
+        from app.models.conteo import EstadoConteo
+        b = bodega
+        sku = b.hueco('A', teorico=50)
+        b.programar(b.admin, 'A')
+        raiz = b.raiz_de(sku).id
+        b.contar(b.op_a, raiz, 40)
+        st, r = b.confirmar(b.op_a, raiz, 40)
+        cc2 = r['segundo_conteo_id']
+        st, r = b.put(b.admin, f'/api/conteo/{raiz}/editar',
+                      {'operario_id': b.op_c.id, 'motivo_edicion': 'lo contó Caro'})
+        assert st == 409, r
+        assert b.sesion(raiz).operario_id == b.op_a.id
+        st, r = b.put(b.admin, f'/api/conteo/{cc2}/editar',
+                      {'operario_id': b.op_a.id, 'motivo_edicion': 'que lo haga Ana'})
+        assert st == 400 and 'Doble ciego' in r['error'], r
+        assert b.sesion(cc2).operario_id == b.op_b.id
+        # Reasignar el CC2 que nadie empezó a otra persona sí se puede.
+        st, r = b.put(b.admin, f'/api/conteo/{cc2}/editar',
+                      {'operario_id': b.op_c.id, 'motivo_edicion': 'Beto no vino'})
+        assert st == 200, r
+        assert (b.sesion(cc2).operario_id, b.sesion(cc2).estado) == (b.op_c.id, EstadoConteo.PENDIENTE)
+        # Un MATCH tampoco cambia de dueño.
+        sku2 = b.hueco('C', teorico=10)
+        b.programar(b.admin, 'C')
+        s2 = b.raiz_de(sku2).id
+        b.contar(b.op_a, s2, 10)
+        st, r = b.put(b.admin, f'/api/conteo/{s2}/editar',
+                      {'operario_id': b.op_b.id, 'motivo_edicion': 'x'})
+        assert st == 409, r
+        assert b.sesion(s2).operario_id == b.op_a.id
+
     def test_la_pantalla_sabe_por_que_no_se_edita(self, bodega):
         """La lista del supervisor trae el motivo por fila: la pantalla no
         promete un campo editable que el servidor va a rechazar."""
