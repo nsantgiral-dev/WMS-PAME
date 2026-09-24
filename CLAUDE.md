@@ -149,13 +149,13 @@ texto.
 |-----|-----------------|--------------|
 | API_v2_Ventas_Pedidos | `get_pedidos_aprobados()`, `get_estado_pedido()`, `get_pedido_cabecera()` | Pedidos aprobados, estado, cabecera (NIT, cond_pago) |
 | API_v2_Compras_Ordenes | `get_ordenes_compra_aprobadas()` | OCs para recepción |
-| API_v2_Inventarios_InvFecha | `get_inventario_fecha()`, `get_stock_bodega()` | Stock actual por bodega |
+| API_v2_Inventarios_InvFecha | `get_inventario_fecha()`, `get_stock_bodega()`, `fotos_siesa_service._costos_de_bodega()` | Stock actual por bodega; costo de la foto diaria. **Pagina inestable** (filas repetidas entre páginas) |
 | API_v2_Items | `get_items_catalogo()` | Catálogo productos |
 | API_v2_ItemsBarras | `get_item_por_barras()` | Barcode → SKU |
 | API_v2_ItemsUnidadesMedida | `get_items_unidades_medida()` | Factores de conversión empaque |
 | API_v2_Ubicaciones | `get_ubicaciones_siesa()` | Ubicaciones por bodega |
-| API_v2_Ventas_Facturas_DesdePedido | `get_factura_desde_remision()`, `get_rowids_factura()`, `vigia_service._facturas_de_semana()` | Anti-duplicado de la FE **desde remisión**, rowids para NCE, base gravable. Ojo: `get_factura_desde_pedido()` NO usa esta API pese al nombre — usa la dinámica `papeleriamedellin_monitos_facturas_wms` |
-| API_v2_CxC_General | `get_cxc_general()` | Cuentas por cobrar (f253_id para cruce) |
+| API_v2_Ventas_Facturas_DesdePedido | `get_factura_desde_remision()`, `get_rowids_factura()`, `vigia_service._facturas_de_semana()` | Anti-duplicado de la FE **desde remisión**, rowids para NCE, base gravable, foto diaria de ventas (`fotos_siesa_service`). **Fecha entre comillas** (`lit_fecha`): sin ellas devuelve cero filas. Ojo: `get_factura_desde_pedido()` NO usa esta API pese al nombre — usa la dinámica `papeleriamedellin_monitos_facturas_wms` |
+| API_v2_CxC_General | `get_cxc_general()`, `fotos_siesa_service.fotografiar_cartera()` | Cuentas por cobrar (f253_id para cruce); foto diaria de cartera 1305 abierta |
 | API_v2_Bodegas | `get_bodegas_siesa()` (`connekta_gateway`) | Maestro de bodegas configuradas en Siesa |
 | API_v2_Ventas_Pedidos_Compromisos | `get_compromisos_pedido()` + una ruta de auditoría en `routes/siesa.py` | Cantidades comprometidas por línea de pedido |
 | API_v2_Inventarios_Transferencia_Salida_Transito | `get_sts_info_by_alterno()` | Recovery: encontrar el STS ya creado tras un timeout (`f450_docto_alterno`) |
@@ -3327,3 +3327,167 @@ Por AST sobre `app/` y `flota/`:
   `PUT /api/productos/<id>`, y `pedidos_sync_service` (Fase 0B).
 - **El histórico**: todo lo anterior al deploy de `m035bitacora` queda sin
   autor ni bitácora. No hay backfill posible.
+
+---
+
+## Fotos diarias de Siesa y claves de la cadena (Fase 0 de analítica, 2026-09-24)
+
+> Bajo la Ley 1116 la caja vale más. La analítica tiene que reconstruir el
+> recorrido **pedido → caja** de punta a punta y tener historia que Siesa no
+> guarda. **Siesa casi no tiene historia: lo que no se fotografía cada día no
+> existe mañana.** Esto tiene que estar andando antes del acta de corte.
+
+Migración única `m034fotos` (aditiva). Todo lo nuevo es de **lectura** contra
+Siesa: cero POST.
+
+### 1 · Las claves que conectan la cadena
+
+| Qué | Dónde | Quién la escribe |
+|---|---|---|
+| `pedido_clave` = `'003-PD-1502'` (CO + tipo + consecutivo, Regla 18) | `tareas_picking`, `tareas_packing`, `pedidos_historia`, `foto_ventas_lineas` | `cadena_pedido.clave_pedido` y **nadie más**. Al crear: `PickingService.crear_tareas` (solo `tipo_documento` PEDIDO/PEDIDO_SIESA — `'MANUAL-1'` tiene la misma forma que `'PD1502'`), `PackingService.crear_manual`/`crear_desde_picking` |
+| Desenlace de NC / RC / DC: `siesa_{nc,rc,dc}_resultado`, `_consec`, `_at`; `siesa_dc_detalle` (JSON por cuenta PUC) | `recaudos_entrega` | `RecaudoEntrega.anotar_documento_siesa`, llamado desde el DLQ en cada desenlace |
+| `valor_factura` para despachos que ningún conductor abrió | `tareas_packing` | `fotos_siesa_service.completar_valor_factura` |
+
+- **Antes** picking y packing se unían solo porque `referencia_documento` y
+  `numero_pedido_siesa` coincidían como texto, y el texto no lleva el CO.
+- **CO de la clave**: el de `pedidos_siesa` para ese tipo+consecutivo (si hay
+  exactamente uno) → `almacenes.centro_op_siesa` → `co_de_bodega` → **NULL**.
+  Nunca se inventa. La migración rellena el histórico con la misma regla
+  escrita en SQL (una migración no importa la app); `tests/test_cadena_pedido.py::TestElBackfillUsaLaMismaRegla` compara las dos.
+- **Vocabulario del desenlace** (`RESULTADOS_SIESA`): `ENVIADO` · `YA_SALDADA`
+  (el RC no se mandó: factura sin saldo) · `SIN_VERIFICAR` (el POST salió y no
+  se sabe, Regla 3) · `FALLIDO` (el WMS dejó de intentar — no «no existe en
+  Siesa») · `SIN_LINEAS`. Un `FALLIDO` posterior no pisa un `ENVIADO`. El
+  consecutivo queda NULL cuando la respuesta no lo trae, que es **casi
+  siempre** (`{'codigo':0,…,'detalle':'Importacion exitosa'}`); la NC lo recibe
+  después, con el motivo DIAN. Anotar nunca rompe el job.
+- **`valor_factura` al facturar: no se hizo, a propósito.** La respuesta del
+  142943 no trae el valor; un hook que lo busque ahí no dispararía nunca. Lo
+  completa la foto de ventas: por la FE ya resuelta, o por `pedido_clave` solo
+  si el pedido tiene **una** factura y **un** packing despachado (dos parciales
+  no se adivinan). Anuladas (estado 9) no cuentan. Lo que anotó la pantalla
+  del conductor no se pisa.
+
+⚠️ **`recaudos_entrega` y `tareas_*` son OPERATIVAS**: el acta de corte las
+vacía igual que a `siesa_jobs`. Lo que se ganó es que el desenlace sobreviva a
+la cola (descartes, reintentos, limpiezas), no al corte. Lo que sí sobrevive
+al corte son las cinco tablas de abajo.
+
+### 2 · La historia del pedido — `pedidos_historia`
+
+`pedidos_siesa` borra una línea en cuanto deja de tener pendiente y no guarda
+cuándo apareció. `pedidos_historia` (una fila por `f431_rowid`, la línea real
+de Siesa) guarda primera y última vez vista (UTC + día Bogotá), lo pedido la
+primera vez y la última, lo remisionado, cliente, municipio, CO, y **por qué
+salió**: `CUMPLIDO` · `DESAPARECIDO` · `ANULADO` · `OTRO_ESTADO`.
+
+La escribe el sync de pedidos (`pedidos_historia.registrar_barrido`, en un
+SAVEPOINT, nunca levanta). **Ningún barrido incompleto registra una salida**
+—ni cumplido ni desaparecido—: es la misma bandera `paginacion_completa` que
+protege el borrado de `pedidos_siesa`. `ultima_vez_vista_at` se refresca cada
+10 min salvo que cambie una cantidad. Las `DESAPARECIDO` se clasifican
+preguntando `get_estado_pedido`, **3 por ciclo** como mucho.
+
+Límite heredado del sync: solo ve `f430_id_co = CONNEKTA_CENTRO_OP` en estado 3
+(244 líneas en QA el 2026-09-24). Un pedido que nunca llegó a comprometido no
+tiene historia.
+
+### 3 · Las fotos diarias — `app/services/fotos_siesa_service.py`
+
+| Tabla | Fuente | Clave | Qué guarda |
+|---|---|---|---|
+| `foto_ventas_lineas` | `API_v2_Ventas_Facturas_DesdePedido`, por CO y día del documento | `f470_rowid` | cantidad, bruto, descuento, IVA, neto, costo, cliente, vendedor, cond. pago, bodega, concepto/motivo, causal, estado, pedido de origen + `pedido_clave` |
+| `foto_stock_diaria` | `stock_siesa` + costo de `API_v2_Inventarios_InvFecha` | día × bodega × SKU | existencia, comprometido, salida sin confirmar, `stock_actualizado_at` (frescura de la fila), `rezagada`, `vendible` (solo `_BODEGAS_PV`), costo unitario/total |
+| `foto_cartera_diaria` | `API_v2_CxC_General`, `f353_fecha_cancelacion IS NULL AND f253_id LIKE ''1305%''` | día × `f353_rowid` | saldo (db − cr), vencimiento, días vencido, tercero, CO, cuenta |
+| `fotos_siesa_corridas` | — | `run_id` × alcance | **el veredicto**: `completa` + motivo, filas, páginas, detalle |
+
+**La corrida es la unidad de completitud.** Un total sale de
+`filas_vigentes(tipo, alcance, dia)`: las filas de la última corrida
+**completa**, o **`None`** — hueco declarado, no «cero ventas». Una corrida
+incompleta (rechazo `alerta`, excepción, breaker, página tope agotada,
+paginación inestable dos veces) **no pisa filas existentes**: solo agrega las
+nuevas marcadas `completa=False`. Nunca escribe un cero.
+
+| Variable | Defecto | Qué hace |
+|---|---|---|
+| `FOTOS_SIESA` | ausente = **apagado** | Enciende el cron (`[FOTOS_SIESA]`, en `_scheduler_pesados`, 18:00 Bogotá). El interruptor vive en `correr_fotos`, no en el scheduler |
+| `FOTOS_SIESA_COSTO` | `true` | Costo por InvFecha (~50-70 páginas por bodega operada, ~1 min c/u) |
+| `FOTOS_SIESA_DIAS_VENTAS` | `3` | Días hacia atrás que se re-fotografían (facturas tardías, anulaciones) |
+
+Corre solo entre **7:00 y 19:30 Bogotá** (Regla 14); si la ventana se cierra a
+mitad, lo que falta va a `no_corrieron`. Lock `LOCK_FOTOS_SIESA = 2020`.
+`GET /api/health/siesa` → `fotos_siesa`: encendido, última corrida por tipo y
+`huecos_ultimos_dias`, leídos **de la base** (el cron corre en el worker).
+
+**Cómo encenderlo:** `HEAVY_SCHEDULERS=true` en el worker (ya lo necesita) +
+`FOTOS_SIESA=true`. Verificar primero con
+`venv/bin/python scripts/qa_fotos_siesa_real.py --co 003 --dia <YYYY-MM-DD>`
+(solo GET, SQLite local, POST bloqueado dos veces).
+
+### Verificado en vivo contra Siesa QA (2026-09-24, 12:47 Bogotá, solo GET)
+
+| Foto | Resultado |
+|---|---|
+| Ventas CO 003, 2026-09-22 | completa · 2 líneas · 2 FE · neto $149.000 · 2 con `pedido_clave` |
+| Cartera 1305 abierta | completa · **4.632** documentos · **47** páginas · saldo $4.102.143.835 (QA: 4.613 vencidos) |
+| Costo InvFecha NB1 | **incompleta — paginación inestable**: 851 y 897 filas repetidas en dos pasadas; unión 4.028 referencias con costo |
+
+**Hallazgo — la fecha sin comillas devuelve cero.** `f350_fecha >= 20260101
+AND f350_fecha <= 20260923` → 0 filas; con `''20260101''` → 100. Siesa no
+rechaza: contesta «No se encontraron registros», que `_get` convierte en tabla
+vacía. **`vigia_service._facturas_de_semana` estaba así**: encendida la
+ingesta, habría escrito cada semana en cero. Arreglado con
+`siesa_filtro.lit_fecha`; trinquete AST `tests/test_siesa_filtro_fecha.py`.
+
+**Hallazgo — InvFecha repite filas entre páginas** (sin `ORDER BY` estable).
+Las 623 «referencias con varias filas» que se midieron antes eran casi todas
+**duplicados de paginación**, no lotes: deduplicado por (ref, lote,
+ubicación) quedan 4.028 filas = 4.028 referencias. Sumar sin deduplicar
+**duplica el costo**. La foto marca el costo `completo=False` y lo declara; el
+costo por fila es correcto, la cobertura no está garantizada.
+
+**Campos reales que el contrato no trae**: `f210_codigo_vendedor` (Ventas),
+el pedido viene como `f430_*` (el `.docx` lo documenta como `f350_*`
+duplicados), `f201_id_sucursal` (CxC); `f353_prefijo_cruce` del contrato no
+viene. Referencias de InvFecha y bodegas vienen con espacios a la derecha.
+
+### Lo que NO cubre (declarado)
+
+- **Kardex**: `…_KardexWMS` bloqueada en QA. `stock_diario` sigue
+  reconstruyéndose del kardex; esta foto es otra fuente (observada, no
+  reconstruida).
+- **Ventas POS de tienda**: no hay consulta. La foto es de facturas **desde
+  pedido**; la venta de caja en tienda no aparece.
+- **NC y RC como documentos**: solo se ven en `total_cr` de la cartera.
+- **`stock_siesa` es acumulativa**: una fila que Siesa dejó de reportar
+  conserva su último valor. La foto la copia con `rezagada=True` y su
+  `stock_actualizado_at`; no la convierte en cero.
+- **La historia del pedido empieza el día que se despliegue**. Lo anterior no
+  existe en ningún lado.
+
+### Qué pedirle al consultor
+
+1. `ORDER BY` estable en `API_v2_Inventarios_InvFecha` (o una consulta de
+   costo por bodega sin paginación inestable).
+2. Contrato de `API_v2_Ventas_Pedidos` (sigue ausente; la historia depende de
+   él) y una variante con filtro por fecha de cumplimiento/anulación, para
+   clasificar las salidas sin una consulta por pedido.
+3. Una consulta de ventas POS por CO y día.
+4. Desbloquear `…_KardexWMS` en QA.
+5. Confirmar que `f470_rowid` es único en toda la T470 (se asume como clave de
+   la foto de ventas).
+
+### Hallazgo del acta de corte, no arreglado
+
+`eventos_stock_agotado` (PROTEGIDA_ANALITICA) tiene `tarea_picking_id` **NOT
+NULL con FK a `tareas_picking`** (OPERATIVA). Con un solo evento en la base, el
+`DELETE FROM tareas_picking` del corte falla por FK y el script termina en
+RESET INCOMPLETO. Declarado en
+`tests/test_acta_de_corte.py::FK_ANALITICA_A_OPERATIVA_CONOCIDAS` (solo
+encoge). Arreglo propuesto: columna nullable + `ON DELETE SET NULL` — toca el
+borrado de picking, que trabaja la Fase 0A.
+
+Tests: `test_cadena_pedido.py`, `test_pedidos_historia.py`,
+`test_recaudo_desenlace_siesa.py`, `test_fotos_siesa.py`,
+`test_siesa_filtro_fecha.py`, `test_acta_de_corte.py` (clase nueva). 21
+mutaciones, las 21 rojas.
