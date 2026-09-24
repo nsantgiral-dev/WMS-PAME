@@ -2730,6 +2730,10 @@ class ConteoService:
                     ),
                     ~Usuario.id.in_(_ids_en_conflicto),
                 )
+                # Determinista: sin ORDER BY, `.first()` devuelve lo que el plan
+                # de la base encuentre primero y el CC2 caía a una persona
+                # distinta según el día (lo vio el e2e, intermitente).
+                .order_by(Usuario.id)
                 .first()
             )
             # Sin par disponible → queda sin asignar (PENDIENTE, panel admin lo escala)
@@ -2744,11 +2748,11 @@ class ConteoService:
                 otro_operario = _base.filter(
                     Usuario.almacen_id == sesion_origen.almacen_id,
                     Usuario.rol.in_(['operario', 'jefe_almacen', 'admin']),
-                ).first()
+                ).order_by(Usuario.id).first()
             if not otro_operario:
                 otro_operario = _base.filter(
                     Usuario.rol.in_(['jefe_almacen', 'admin']),
-                ).first()
+                ).order_by(Usuario.id).first()
 
         if otro_operario:
             segundo.operario_id = otro_operario.id

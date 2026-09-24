@@ -822,6 +822,8 @@ class TestNoLoEncontre:
         b.contar(b.op_a, raiz, 40)
         st, r = b.confirmar(b.op_a, raiz, 40)
         cc2 = r['segundo_conteo_id']
+        # El CC2 va al primer par elegible por id (determinista): Beto.
+        assert b.sesion(cc2).operario_id == b.op_b.id
         st, t = b.get(b.op_b, '/api/mobile/tarea-actual')
         assert t['id'] == cc2
         # «Otro problema» sin contar qué pasó no se acepta.
