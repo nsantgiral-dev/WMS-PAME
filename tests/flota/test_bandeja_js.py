@@ -193,7 +193,7 @@ class TestHoy:
         flota = _pintar(tmp_path, bandeja=_bandeja(hoy=[]),
                         operario={'rol': 'control_flota'})
         assert 'Rutas' not in flota['html']['flota-contenido']
-        assert 'un administrador' in flota['html']['flota-contenido']
+        assert 'administración' in flota['html']['flota-contenido']
 
     def test_los_contadores_de_las_pestanas(self, tmp_path):
         """Por `textContent`: un número nunca pasa por `innerHTML`."""

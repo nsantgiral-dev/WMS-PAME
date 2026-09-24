@@ -774,4 +774,4 @@ class TestLaPantallaDiceLoMismo:
         assert 'administración' in out['alta']
 
     def test_al_admin_si_le_dice_donde(self, tmp_path):
-        assert 'Rutas → Vehículos' in _correr(tmp_path, 'admin', None)['alta']
+        assert 'Rutas → Alta de vehículos' in _correr(tmp_path, 'admin', None)['alta']
