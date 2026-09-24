@@ -1,7 +1,7 @@
 """Fugas de plata en ruta: comprobante, hora del teléfono, distancia al cliente, declarado vs contado
 
 Revision ID: m041flfugas
-Revises: m037kpi
+Revises: m039flcond
 Create Date: 2026-09-24
 
 Aditiva y nullable, sin backfill. Un NULL en cualquiera de estas columnas
@@ -31,7 +31,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision = 'm041flfugas'
-down_revision = 'm037kpi'
+down_revision = 'm039flcond'
 branch_labels = None
 depends_on = None
 

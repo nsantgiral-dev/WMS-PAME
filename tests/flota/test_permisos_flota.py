@@ -359,7 +359,7 @@ class TestElPermisoNoPuedeSerMasAnchoQueElGesto:
         # odómetro vigente de cualquier placa. La tupla la estrecha el frente
         # de permisos (hallazgo 2 del contrato de flota); cuando lo haga, esta
         # entrada SALE y la lista vuelve a estar vacía.
-        '/flota/odometro': 'gesto retirado al conductor; tupla pendiente del frente de permisos',
+        '/flota/odometro': 'gesto retirado de la pantalla del conductor (va dentro del tanqueo); el rol sigue autorizado para tanqueo/cierre_dia SOLO sobre su custodia activa (sin_derecho_sobre_vehiculo) y sin correccion (sin_permiso_de_corregir)',
     }
 
     def _funciones_del_pwa(self):
