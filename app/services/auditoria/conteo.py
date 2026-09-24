@@ -266,6 +266,18 @@ def ninguna_sesion_se_queda_ajustando(ctx=None):
     detector_ciego='tests/flujo/test_flujo_conteo.py::TestElDetectorNoEstaCiego::test_cuenta_los_descuadres_abiertos',
 )
 def se_pueden_contar_los_descuadres_abiertos(ctx=None):
+    """Una fila por CADENA abierta: su raíz (CC1) en DESCUADRE, SEGUNDO_CONTEO
+    o TERCER_CONTEO.
+
+    **Solo raíces.** El CC2 que confirma al CC1 y el CC3 que desempata quedan
+    en DESCUADRE para siempre —su observación ya se copió a la raíz, que es la
+    que se aprueba, se ajusta o se cancela—. Contarlos hacía que cada cadena
+    que pasó por un segundo conteo sumara aunque ya estuviera ajustada: el
+    número solo podía crecer (2026-09-23, 8 «abiertos» sobre 2 cadenas que
+    esperaban al líder en `tests/flujo/test_e2e_inventario_ciclico.py`). Es el
+    mismo defecto que ya se le corrigió al KPI de auditorías urgentes
+    (`tablero_lider_conteo.auditorias_por_faltante_vivas`).
+    """
     return [
         Hallazgo(
             referencia=s.codigo or f'conteo#{s.id}',
@@ -273,6 +285,7 @@ def se_pueden_contar_los_descuadres_abiertos(ctx=None):
             datos={'producto': s.producto_codigo_siesa},
         )
         for s in _sesiones(('DESCUADRE', 'SEGUNDO_CONTEO', 'TERCER_CONTEO'))
+        if not s.es_segundo_conteo
     ]
 
 

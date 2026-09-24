@@ -208,6 +208,22 @@ class TestElDetectorNoEstaCiego:
     def test_cuenta_los_descuadres_abiertos(self, sesion):
         assert _res('CNT-06')['total'] == 1
 
+    def test_el_cc2_que_resolvio_no_es_un_descuadre_abierto(self, db, sesion, almacen,
+                                                          producto, ub_picking):
+        """La raíz ya se ajustó; su CC2 queda en DESCUADRE para siempre. La
+        cadena está cerrada: no es una diferencia que el inventario arrastre."""
+        import uuid
+
+        from app.models.conteo import SesionConteo
+        sesion.estado = 'AJUSTADO'
+        db.session.add(SesionConteo(
+            codigo=f'CC2-{uuid.uuid4().hex[:6]}', tipo='DIARIO_ABC',
+            ubicacion_id=ub_picking.id, almacen_id=almacen.id, producto_id=producto.id,
+            estado='DESCUADRE', cantidad_fisica=95, diferencia=-5,
+            es_segundo_conteo=True, sesion_origen_id=sesion.id))
+        db.session.commit()
+        assert _res('CNT-06')['total'] == 0
+
 
 # ── Reposición ───────────────────────────────────────────────────────────
 
