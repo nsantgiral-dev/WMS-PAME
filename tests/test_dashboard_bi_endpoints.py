@@ -34,7 +34,7 @@ class TestBiPedidosDespachados:
         assert resp.status_code == 200
         data = resp.get_json()
         assert set(data.keys()) == {'pedidos', 'lineas', 'unidades', 'valor_total', 'por_dia',
-                                     'fecha_desde', 'fecha_hasta'}
+                                     'fecha_desde', 'fecha_hasta', 'sin_valor_factura'}
         assert data['pedidos'] == 0  # sin datos cargados, no debe fallar
 
     def test_admin_acepta_rango_de_fechas(self, client, jwt_token_admin, almacen):
