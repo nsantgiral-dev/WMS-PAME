@@ -4084,7 +4084,9 @@ Toda operación se guarda en `_condDB` (`wms_cond`, la base de las entregas)
 **con sus fotos** antes de intentarse, con `clave_idempotencia` y
 `ts_dispositivo`. Sale en orden y se detiene en la primera que no sale; un
 `hecho` o `rechazado` la quita; un rechazo sin nadie mirando queda en la
-tarjeta hasta «Entendido». Aviso «N registros pendientes de sincronizar» con
+tarjeta hasta «Entendido». Un 403 `sin_derecho` (sin turno abierto sobre ese
+camión, regla del frente de permisos) es un rechazo, no un reintento: sale de
+la cola con «pedíselo al encargado de flota». Aviso «N registros pendientes de sincronizar» con
 «Sincronizar», y el evento `online` la vacía solo. La tarjeta cuenta lo
 pendiente: un recibo encolado ya es turno abierto.
 
@@ -4106,11 +4108,11 @@ del servidor).
 
 ### Tests y mutaciones
 
-`tests/flota/test_mi_camion_hoy_js.py` (45, Node con `util.js` real: estados de
+`tests/flota/test_mi_camion_hoy_js.py` (46, Node con `util.js` real: estados de
 la tarjeta, cola, sin códigos, sin preselección, km, fecha Bogotá, recibo
 guiado, contrato de `mi-turno`) y `tests/flota/test_cola_del_conductor.py` (16:
 reenvío, rechazo, clave ajena, fotos de daño y recibo, inventario de la cola
-contra `@idempotente`). **16 mutaciones, las 16 rojas** (la del daño con
+contra `@idempotente`). **17 mutaciones, las 17 rojas** (la del daño con
 gravedad preseleccionada en el opener sobrevivía al primer arnés: se agregó el
 test por la puerta). Migración: upgrade → downgrade → upgrade contra un
 PostgreSQL local desechable; `test_gemelos_del_esquema` y

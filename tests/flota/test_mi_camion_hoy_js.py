@@ -499,6 +499,27 @@ class TestLaColaSinSenal:
         assert s['cola'] == []
         assert s['rech'][0]['mensaje'] == 'el odómetro retrocede'
 
+    def test_sin_derecho_no_se_reintenta_y_dice_a_quien_pedirselo(self, tmp_path):
+        """Sin turno abierto sobre ese camión el servidor contesta 403
+        `sin_derecho`. Reintentarlo para siempre no lo arregla: sale de la cola
+        y queda a la vista, con a quién pedírselo. Y la cola sigue con lo de
+        atrás: un rechazo no es falta de señal."""
+        semilla = ('ALMACEN_INICIAL = [{clave: "k1", tipo: "inspeccion", que: "inspeccion",'
+                   ' placa: "THP696", creado: "x", cuerpo: {km: 1}},'
+                   ' {clave: "k2", tipo: "hallazgo", que: "dano", placa: "THP696",'
+                   ' creado: "x", cuerpo: {km: 1}}];')
+        s = _correr(tmp_path, '(async () => { await _condDB.set("flota_cola", ALMACEN_INICIAL);'
+                              ' await flotaColaSincronizar();'
+                              ' return {cola: await _condDB.get("flota_cola"), envios: __ENVIOS.length,'
+                              ' rech: await _condDB.get("flota_cola_rechazos")}; })()',
+                    semilla=semilla,
+                    respuestas=[{'status': 403, 'json': {'error': 'No tenés turno abierto',
+                                                         'motivo': 'sin_derecho'}},
+                                {'status': 201, 'json': {'id': 4}}])
+        assert s['cola'] == [] and s['envios'] == 2
+        assert 'encargado de flota' in s['rech'][0]['mensaje']
+        assert 'sin_derecho' not in s['rech'][0]['mensaje']
+
     def test_un_500_se_queda_para_reintentar(self, tmp_path):
         s = _correr(tmp_path, _registrar(), respuestas=[{'status': 503, 'json': {}}])
         assert s['r']['estado'] == 'en_cola'

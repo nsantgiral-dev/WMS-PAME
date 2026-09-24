@@ -2171,6 +2171,13 @@ async function flotaColaEnviarUna(op) {
   if (r.status >= 500 || r.status === 429 || r.status === 408) {
     return { estado: 'reintentar', mensaje: 'El servidor no respondió bien. Se vuelve a intentar sola.' };
   }
+  // Sin turno abierto sobre ese camión el servidor contesta 403 `sin_derecho`
+  // (frente de permisos, 2026-09-24). Reenviarlo no lo arregla: lo arregla una
+  // persona. Se dice a quién pedírselo, en vez del rol crudo.
+  if (r.status === 403 && d && d.motivo === 'sin_derecho') {
+    return { estado: 'rechazado', datos: d, mensaje: (d.error ? d.error + '. ' : '') +
+      'No se pudo registrar: pedíselo al encargado de flota.' };
+  }
   return { estado: 'rechazado', mensaje: flotaMensajeDeError(d), datos: d };
 }
 
