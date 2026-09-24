@@ -55,6 +55,7 @@ from app.models.recepcion import ItemRecepcion
 from app.models.lpn import LPN
 from app.models.devolucion import TareaDevolucion
 from app.models.devolucion_cliente import LineaDevolucionCliente
+from app.services.bitacora import registrar_accion, foto
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -414,7 +415,7 @@ def _motivo_no_eliminable(ubicacion_id: int) -> str | None:
     return None
 
 
-def _borrar_historial_de(ubicacion_id: int):
+def _borrar_historial_de(ubicacion_id: int, usuario_id: int = None, motivo: str = None):
     """
     SOLO para el path forzar=True de eliminar_ubicacion()/eliminar_fila()/
     eliminar_cuerpo() — cuando el usuario pidió explícitamente saltarse el
@@ -439,7 +440,38 @@ def _borrar_historial_de(ubicacion_id: int):
     UbicacionProducto no aparece aquí — su FK también es NOT NULL, pero ya se
     borra aparte en cada llamador (eliminar_ubicacion/eliminar_fila/
     eliminar_cuerpo), antes o después de esta función.
+
+    Cada fila de negocio que se borra (tarea de picking, de reposición,
+    sesión de conteo) deja su foto completa en la bitácora, y las que se
+    desvinculan quedan listadas por id: después del forzado, la bitácora es
+    lo único que sabe que esas filas apuntaban a esta ubicación.
     """
+    _motivo = motivo or 'Eliminación FORZADA de ubicación (se salta el guardarraíl de historial)'
+    _reposicion = TareaReposicion.query.filter(
+        db.or_(
+            TareaReposicion.ubicacion_picking_id == ubicacion_id,
+            TareaReposicion.ubicacion_reserva_id == ubicacion_id,
+        )
+    ).all()
+    for fila in (TareaPicking.query.filter_by(ubicacion_id=ubicacion_id).all()
+                 + _reposicion
+                 + SesionConteo.query.filter_by(ubicacion_id=ubicacion_id).all()):
+        registrar_accion('ELIMINAR', fila, usuario_id=usuario_id, motivo=_motivo,
+                         antes=foto(fila))
+    _desvinculadas = {
+        'movimientos_inventario': [m.id for m in MovimientoInventario.query.filter_by(ubicacion_id=ubicacion_id)],
+        'items_recepcion': [i.id for i in ItemRecepcion.query.filter_by(ubicacion_id=ubicacion_id)],
+        'items_recepcion_cross_dock': [i.id for i in ItemRecepcion.query.filter_by(ubicacion_cross_dock_id=ubicacion_id)],
+        'lpn': [x.id for x in LPN.query.filter_by(ubicacion_id=ubicacion_id)],
+        'tareas_devolucion': [x.id for x in TareaDevolucion.query.filter_by(ubicacion_id=ubicacion_id)],
+        'lineas_devolucion_cliente': [x.id for x in LineaDevolucionCliente.query.filter_by(ubicacion_id=ubicacion_id)],
+    }
+    if any(_desvinculadas.values()):
+        registrar_accion('EDITAR', 'Ubicacion', ubicacion_id, usuario_id=usuario_id,
+                         motivo=_motivo,
+                         antes={'ubicacion_id': ubicacion_id, 'filas_que_apuntaban': _desvinculadas},
+                         despues={'ubicacion_id': None})
+
     TareaPicking.query.filter_by(ubicacion_id=ubicacion_id).delete(synchronize_session=False)
     TareaReposicion.query.filter(
         db.or_(
@@ -463,7 +495,27 @@ def _borrar_historial_de(ubicacion_id: int):
         {'ubicacion_id': None}, synchronize_session=False)
 
 
-def eliminar_ubicacion(ubicacion_id: int, forzar: bool = False):
+def _borrar_ubicacion(ub: Ubicacion, usuario_id: int = None, motivo: str = None,
+                     forzada: bool = False) -> None:
+    """Borra un hueco y sus filas de `UbicacionProducto`, **dejando la foto**.
+
+    Es limpieza técnica (deshacer lo creado por error, o remodular), así que el
+    motivo no se exige; lo que no puede faltar es el `antes` completo: el
+    hueco, y qué SKU y cuánto tenía asignado. Una sola función para los cuatro
+    caminos que borran huecos (ubicación, fila, cuerpo, remodular).
+    """
+    asignaciones = UbicacionProducto.query.filter_by(ubicacion_id=ub.id).all()
+    registrar_accion(
+        'ELIMINAR', ub, usuario_id=usuario_id,
+        motivo=motivo or ('Eliminación FORZADA de ubicación' if forzada else None),
+        antes={**foto(ub), 'asignaciones': [foto(a) for a in asignaciones],
+               'forzada': forzada})
+    UbicacionProducto.query.filter_by(ubicacion_id=ub.id).delete()
+    db.session.delete(ub)
+
+
+def eliminar_ubicacion(ubicacion_id: int, forzar: bool = False,
+                       usuario_id: int = None, motivo: str = None):
     """
     Elimina una sola ubicación que nunca se usó — versión de eliminar_fila()
     para una posición individual, con el mismo guardarraíl duro (bloquea si
@@ -485,14 +537,14 @@ def eliminar_ubicacion(ubicacion_id: int, forzar: bool = False):
 
     codigo = ubicacion.codigo
     if forzar:
-        _borrar_historial_de(ubicacion_id)
-    UbicacionProducto.query.filter_by(ubicacion_id=ubicacion.id).delete()
-    db.session.delete(ubicacion)
+        _borrar_historial_de(ubicacion_id, usuario_id=usuario_id, motivo=motivo)
+    _borrar_ubicacion(ubicacion, usuario_id=usuario_id, motivo=motivo, forzada=forzar)
     db.session.commit()
     return {'codigo': codigo}
 
 
-def eliminar_cuerpo(almacen_id: int, pasillo: str, fila: int, cuerpo: int, forzar: bool = False) -> dict:
+def eliminar_cuerpo(almacen_id: int, pasillo: str, fila: int, cuerpo: int, forzar: bool = False,
+                    usuario_id: int = None, motivo: str = None) -> dict:
     """
     Elimina un Cuerpo completo — todos sus Entrepaños y Huecos, sin excepción.
 
@@ -529,9 +581,8 @@ def eliminar_cuerpo(almacen_id: int, pasillo: str, fila: int, cuerpo: int, forza
     codigos = [ub.codigo for ub in ubicaciones]
     for ub in ubicaciones:
         if forzar:
-            _borrar_historial_de(ub.id)
-        UbicacionProducto.query.filter_by(ubicacion_id=ub.id).delete()
-        db.session.delete(ub)
+            _borrar_historial_de(ub.id, usuario_id=usuario_id, motivo=motivo)
+        _borrar_ubicacion(ub, usuario_id=usuario_id, motivo=motivo, forzada=forzar)
     db.session.commit()
     return {
         'pasillo': pasillo.strip().upper(), 'fila': fila, 'cuerpo': cuerpo,
@@ -601,7 +652,8 @@ def reclasificar_cuerpo(almacen_id: int, pasillo: str, fila: int, cuerpo: int,
     }
 
 
-def eliminar_fila(almacen_id: int, pasillo: str, fila: int, forzar: bool = False):
+def eliminar_fila(almacen_id: int, pasillo: str, fila: int, forzar: bool = False,
+                  usuario_id: int = None, motivo: str = None):
     """
     Elimina en bloque las posiciones de una fila que nunca se usaron. Pensado
     para deshacer una fila creada por error, no para dar de baja infraestructura
@@ -629,12 +681,11 @@ def eliminar_fila(almacen_id: int, pasillo: str, fila: int, forzar: bool = False
                 bloqueadas[ub.codigo] = motivo
                 continue
         if forzar:
-            _borrar_historial_de(ub.id)
+            _borrar_historial_de(ub.id, usuario_id=usuario_id, motivo=motivo)
         # Filas nunca usadas pueden tener registros de UbicacionProducto en 0
         # (ej. se asignó y luego se vació) — se limpian junto con la ubicación.
-        UbicacionProducto.query.filter_by(ubicacion_id=ub.id).delete()
         eliminadas.append(ub.codigo)
-        db.session.delete(ub)
+        _borrar_ubicacion(ub, usuario_id=usuario_id, motivo=motivo, forzada=forzar)
 
     db.session.commit()
     return {
@@ -823,8 +874,8 @@ def editar_cuerpo(almacen_id: int, pasillo: str, fila: int, cuerpo: int,
 
     # Borrar huecos actuales (ya sin stock ni historial — limpio)
     for ub in ubicaciones:
-        UbicacionProducto.query.filter_by(ubicacion_id=ub.id).delete()
-        db.session.delete(ub)
+        _borrar_ubicacion(ub, usuario_id=usuario_id,
+                          motivo=f'Remodulación del cuerpo {pasillo}-{fila}-{cuerpo}')
     db.session.flush()
 
     # Reconstruir desde cero con la nueva numeración (misma zona, mismo tipo de mueble) — commitea al final

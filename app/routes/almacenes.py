@@ -277,7 +277,8 @@ def eliminar_cuerpo(id):
     (TareaPicking/TareaReposicion/MovimientoInventario) — pérdida de datos
     permanente, requiere admin (no basta jefe_almacen).
     """
-    if not _es_admin_o_jefe():
+    usuario = _es_admin_o_jefe()
+    if not usuario:
         return jsonify({'error': 'Solo admin o jefe de almacén'}), 403
     Almacen.query.get_or_404(id)
     data = request.get_json() or {}
@@ -294,6 +295,8 @@ def eliminar_cuerpo(id):
             fila=int(data['fila']),
             cuerpo=int(data['cuerpo']),
             forzar=forzar,
+            usuario_id=usuario.id,
+            motivo=data.get('motivo'),
         )
         return jsonify(resultado), 200
     except ValueError as e:
@@ -341,7 +344,8 @@ def eliminar_fila(id):
     forzar=true se salta el guardarraíl y borra en cascada el historial real
     por posición — pérdida de datos permanente, requiere admin.
     """
-    if not _es_admin_o_jefe():
+    usuario = _es_admin_o_jefe()
+    if not usuario:
         return jsonify({'error': 'Solo admin o jefe de almacén'}), 403
     Almacen.query.get_or_404(id)
     data = request.get_json() or {}
@@ -356,6 +360,8 @@ def eliminar_fila(id):
             pasillo=data['pasillo'],
             fila=int(data['fila']),
             forzar=forzar,
+            usuario_id=usuario.id,
+            motivo=data.get('motivo'),
         )
         return jsonify(resultado), 200
     except ValueError as e:
@@ -372,13 +378,16 @@ def eliminar_ubicacion(ubicacion_id):
     historial real (TareaPicking/TareaReposicion/MovimientoInventario) —
     pérdida de datos permanente, requiere admin (no basta jefe_almacen).
     """
-    if not _es_admin_o_jefe():
+    usuario = _es_admin_o_jefe()
+    if not usuario:
         return jsonify({'error': 'Solo admin o jefe de almacén'}), 403
     forzar = request.args.get('forzar', '').lower() == 'true'
     if forzar and not _solo_admin():
         return jsonify({'error': 'forzar=true requiere rol admin'}), 403
     try:
-        resultado = layout_service.eliminar_ubicacion(ubicacion_id, forzar=forzar)
+        resultado = layout_service.eliminar_ubicacion(
+            ubicacion_id, forzar=forzar, usuario_id=usuario.id,
+            motivo=request.args.get('motivo') or (request.get_json(silent=True) or {}).get('motivo'))
         return jsonify(resultado), 200
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
