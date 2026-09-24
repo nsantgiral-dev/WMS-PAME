@@ -510,6 +510,8 @@ class Mundo:
         self._dias_cache = {}
         self._rutas_por_dia = None
         self._casos_km = None
+        self._agregados = {}
+        self._referencias = {}
 
     # ── utilidades ──────────────────────────────────────────────────────────
 
@@ -682,6 +684,13 @@ def referencia(m: Mundo, metrica, maestra_id, dia, excluir_conductor, p=90):
 
     Una ruta sin maestra no tiene compañeros comparables: sale «sin base».
     """
+    clave = (metrica, maestra_id, dia, excluir_conductor, p)
+    if clave not in m._referencias:
+        m._referencias[clave] = _referencia(m, metrica, maestra_id, dia, excluir_conductor, p)
+    return m._referencias[clave]
+
+
+def _referencia(m: Mundo, metrica, maestra_id, dia, excluir_conductor, p):
     U = m.U
     desde = dia - timedelta(days=U['ventana_pares_dias'])
     if maestra_id is None:
@@ -699,6 +708,27 @@ def referencia(m: Mundo, metrica, maestra_id, dia, excluir_conductor, p=90):
     }
 
 
+def _agregado(m: Mundo, muestra, bandera):
+    """`[(día, {(conductor, maestra): (casos, con_bandera)})]` ordenado por día.
+
+    La tasa se pide por cada conductor × día del resumen: sumar por día una
+    sola vez convierte cada pedido en una pasada por los días de la ventana, no
+    por cada parada. `bandera` es una clave de las banderas o `('motivo', X)`.
+    """
+    clave = (muestra, bandera)
+    cache = m._agregados
+    if clave in cache:
+        return cache[clave]
+    por_dia = {}
+    for d, c, M, b in m.muestras()[muestra]:
+        hit = (b['motivo'] == bandera[1]) if isinstance(bandera, tuple) else bool(b[bandera])
+        dia = por_dia.setdefault(d, {})
+        n, h = dia.get((c, M), (0, 0))
+        dia[(c, M)] = (n + 1, h + (1 if hit else 0))
+    cache[clave] = sorted(por_dia.items(), key=lambda t: t[0])
+    return cache[clave]
+
+
 def tasa_vs_pares(m: Mundo, conductor_id, desde, hasta, bandera, muestra='paradas'):
     """Cuántas veces le pasó `bandera` al conductor, contra cuántas se
     esperaban si le pasara lo que a sus compañeros **en las mismas rutas
@@ -709,12 +739,12 @@ def tasa_vs_pares(m: Mundo, conductor_id, desde, hasta, bandera, muestra='parada
     compañeros; el resto se cuenta aparte, sin comparar.
     """
     U = m.U
-    lista = _ventana(m, m.muestras()[muestra], desde, hasta)
     suyo, pares = {}, {}
-    for _d, c, M, b in lista:
-        destino = suyo if c == conductor_id else pares
-        n, h = destino.get(M, (0, 0))
-        destino[M] = (n + 1, h + (1 if b[bandera] else 0))
+    for _d, por_clave in _ventana(m, _agregado(m, muestra, bandera), desde, hasta):
+        for (c, M), (n, h) in por_clave.items():
+            destino = suyo if c == conductor_id else pares
+            n0, h0 = destino.get(M, (0, 0))
+            destino[M] = (n0 + n, h0 + h)
     observado = sum(h for _n, h in suyo.values())
     n_conductor = sum(n for n, _h in suyo.values())
     esperado, obs_base, n_base, n_pares, sin_base = 0.0, 0, 0, 0, 0
@@ -1240,12 +1270,8 @@ def _s_rechazos(ctx):
 
 
 def _tasa_motivo(m, conductor_id, desde, hasta, motivo):
-    """La tasa de un motivo, con la bandera armada al vuelo."""
-    clave = f'motivo:{motivo}'
-    ms = m.muestras()
-    if clave not in ms:
-        ms[clave] = [(d, cid, M, {'x': b['motivo'] == motivo}) for d, cid, M, b in ms['paradas']]
-    return tasa_vs_pares(m, conductor_id, desde, hasta, 'x', muestra=clave)
+    """La tasa de un motivo de rechazo contra los compañeros."""
+    return tasa_vs_pares(m, conductor_id, desde, hasta, ('motivo', motivo))
 
 
 def _s_cruza_dia(ctx):
