@@ -59,7 +59,8 @@ class MuelleService:
         }
 
     @staticmethod
-    def asignar_a_ruta(ruta_id: int, bultos_ids: list = None, pedido_siesa: str = None) -> dict:
+    def asignar_a_ruta(ruta_id: int, bultos_ids: list = None, pedido_siesa: str = None,
+                       usuario_id: int = None) -> dict:
         ruta = RutaDespacho.query.get(ruta_id)
         if not ruta:
             raise LookupError('Ruta no encontrada')
@@ -85,24 +86,40 @@ class MuelleService:
                 f'Los bultos {ya_asignados} ya están asignados a la ruta #{otra_ruta}. Desasígnalos primero.'
             )
 
+        ahora = datetime.utcnow()
         for b in bultos:
+            # Quién y cuándo, solo al asignar de verdad: re-mandar el mismo
+            # bulto a la misma ruta no cambia el autor.
+            if b.ruta_despacho_id != ruta_id:
+                b.asignado_ruta_por_id = usuario_id
+                b.asignado_ruta_at = ahora
             b.ruta_despacho_id = ruta_id
         db.session.commit()
         return {'ok': True, 'mensaje': f'{len(bultos)} bultos asignados a la ruta {ruta_id}'}
 
     @staticmethod
-    def desasignar_de_ruta(bulto_id: int) -> dict:
+    def desasignar_de_ruta(bulto_id: int, usuario_id: int = None, motivo: str = None) -> dict:
+        """Quita el bulto de la ruta. La asignación que se deshace —a qué ruta,
+        quién y cuándo la hizo— queda en la bitácora (DESASIGNAR)."""
+        from app.services.bitacora import registrar_accion, foto
         bulto = Bulto.query.get(bulto_id)
         if not bulto:
             raise LookupError('Bulto no encontrado')
         if bulto.estado == EstadoBulto.CARGADO:
             raise ValueError('No se puede desasignar un bulto que ya fue cargado físicamente')
+        _campos = ['ruta_despacho_id', 'asignado_ruta_por_id', 'asignado_ruta_at']
+        antes = foto(bulto, _campos)
         bulto.ruta_despacho_id = None
+        bulto.asignado_ruta_por_id = None
+        bulto.asignado_ruta_at = None
+        registrar_accion('DESASIGNAR', bulto, usuario_id=usuario_id, motivo=motivo,
+                         antes=antes, despues=foto(bulto, _campos),
+                         almacen_id=(bulto.tarea.almacen_id if bulto.tarea else None))
         db.session.commit()
         return {'ok': True, 'mensaje': 'Bulto desasignado de la ruta'}
 
     @staticmethod
-    def cargar_bulto(codigo_barras: str, ruta_id: int) -> dict:
+    def cargar_bulto(codigo_barras: str, ruta_id: int, usuario_id: int = None) -> dict:
         # Algunos escáneres con layout español envían apóstrofe en lugar de guion
         codigo_normalizado = codigo_barras.upper().replace("'", "-")
         bulto = (
@@ -145,6 +162,7 @@ class MuelleService:
 
         bulto.estado = EstadoBulto.CARGADO
         bulto.fecha_cargado = datetime.utcnow()
+        bulto.cargado_por_id = usuario_id
         db.session.commit()
 
         pendientes_ruta = Bulto.query.filter_by(

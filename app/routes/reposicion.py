@@ -188,16 +188,16 @@ def cancelar(tarea_id):
     data = request.get_json() or {}
 
     from app.services.bitacora import registrar_accion, motivo_obligatorio, foto, MotivoRequerido
-    try:
-        motivo = motivo_obligatorio(data.get('motivo'), 'cancelar una tarea de reposición')
-    except MotivoRequerido as e:
-        return jsonify({'error': str(e)}), 400
 
     tarea = TareaReposicion.query.get(tarea_id)
     if not tarea:
         return jsonify({'error': f'Tarea {tarea_id} no encontrada'}), 404
     if tarea.estado in (EstadoReposicion.COMPLETADA, EstadoReposicion.CANCELADA):
         return jsonify({'error': f'Tarea ya está en estado {tarea.estado}'}), 400
+    try:
+        motivo = motivo_obligatorio(data.get('motivo'), 'cancelar una tarea de reposición')
+    except MotivoRequerido as e:
+        return jsonify({'error': str(e)}), 400
 
     antes = foto(tarea, ['estado', 'abastecedor_id', 'notas'])
     tarea.estado = EstadoReposicion.CANCELADA

@@ -422,18 +422,26 @@ def cancelar_solicitud(id):
         return jsonify({'error': f'No se puede cancelar en estado {s.estado}'}), 400
 
     data = request.get_json() or {}
+    from app.services.bitacora import registrar_accion, motivo_obligatorio, foto, MotivoRequerido
+    try:
+        motivo = motivo_obligatorio(data.get('motivo'), 'cancelar un traslado')
+    except MotivoRequerido as e:
+        return jsonify({'error': str(e)}), 400
+    antes = foto(s, ['estado', 'motivo_rechazo'])
     # Liberar reservas de picking antes de cancelar
     if s.estado in ('EN_PICKING', 'PREPARADO'):
         from app.services.traslado_service import TrasladoService
         try:
-            TrasladoService._liberar_reservas_traslado(s)
+            TrasladoService._liberar_reservas_traslado(s, usuario_id=usuario_id, motivo=motivo)
         except Exception as _e:
             from app.extensions import db as _db
             _db.session.rollback()
             logger.error(f'[TRASLADO] Error liberando reservas en {id}: {_e}', exc_info=True)
             return jsonify({'error': f'Error liberando reservas de picking: {_e}'}), 500
     s.estado = EstadoTraslado.CANCELADA
-    s.motivo_rechazo = data.get('motivo', 'Cancelada por usuario')
+    s.motivo_rechazo = motivo
+    registrar_accion('CANCELAR', s, usuario_id=usuario_id, motivo=motivo,
+                     antes=antes, despues={'estado': s.estado})
     try:
         db.session.commit()
     except Exception as e:

@@ -244,14 +244,25 @@ def confirmar_recepcion(id):
 @recepcion_bp.route('/<int:id>/cancelar', methods=['PUT'])
 @jwt_required()
 def cancelar_recepcion(id):
-    if not _solo_admin():
+    admin = _solo_admin()
+    if not admin:
         return jsonify({'error': 'Solo admin puede cancelar recepciones'}), 403
+    from app.services.bitacora import registrar_accion, motivo_obligatorio, foto, MotivoRequerido
     data = request.get_json() or {}
     recepcion = RecepcionMercancia.query.get_or_404(id)
     if recepcion.estado == EstadoRecepcion.CONFIRMADA:
         return jsonify({'error': 'No se puede cancelar una recepción ya confirmada'}), 400
+    try:
+        motivo = motivo_obligatorio(data.get('motivo'), 'cancelar una recepción')
+    except MotivoRequerido as e:
+        return jsonify({'error': str(e)}), 400
+    antes = foto(recepcion, ['estado', 'observaciones'])
     recepcion.estado = EstadoRecepcion.CANCELADA
-    recepcion.observaciones = data.get('motivo')
+    # Las observaciones que ya tenía no se pisan: se les agrega el motivo.
+    recepcion.observaciones = (f'{recepcion.observaciones} | Cancelada: {motivo}'
+                               if recepcion.observaciones else motivo)
+    registrar_accion('CANCELAR', recepcion, usuario_id=admin.id, motivo=motivo,
+                     antes=antes, despues=foto(recepcion, ['estado', 'observaciones']))
     from app.extensions import db
     db.session.commit()
     return jsonify({'mensaje': 'Recepción cancelada', 'recepcion': recepcion.to_dict()}), 200

@@ -380,7 +380,14 @@ class DevolucionClienteService:
 
     @staticmethod
     def cancelar(devolucion_id: int, recepcionista_id: int, motivo: str = None) -> DevolucionCliente:
-        """Solo válido si estado == ABIERTA — nada tocó stock ni Siesa todavía."""
+        """Solo válido si estado == ABIERTA — nada tocó stock ni Siesa todavía.
+
+        El motivo es obligatorio: una devolución que el conductor declaró y
+        nadie recibió es exactamente lo que la liquidación necesita poder
+        explicar.
+        """
+        from app.services.bitacora import motivo_obligatorio
+        motivo = motivo_obligatorio(motivo, 'cancelar una devolución de cliente')
         devolucion = db.session.get(DevolucionCliente, devolucion_id)
         if not devolucion:
             raise ValueError(f'Devolución {devolucion_id} no existe')
@@ -388,9 +395,17 @@ class DevolucionClienteService:
             raise ValueError(
                 f'Solo se puede cancelar una devolución ABIERTA (estado actual: {devolucion.estado})'
             )
+        from app.services.bitacora import registrar_accion, foto
+        antes = foto(devolucion, ['estado', 'recepcionista_id', 'observaciones'])
         devolucion.estado = EstadoDevolucionCliente.CANCELADA
-        devolucion.recepcionista_id = recepcionista_id
+        # `recepcionista_id` es quién la ATENDIÓ: si ya tenía uno, cancelar no
+        # lo reemplaza (quién canceló queda en la bitácora).
+        if not devolucion.recepcionista_id:
+            devolucion.recepcionista_id = recepcionista_id
         devolucion.observaciones = motivo or devolucion.observaciones
+        registrar_accion('CANCELAR', devolucion, usuario_id=recepcionista_id,
+                         motivo=motivo, antes=antes,
+                         despues=foto(devolucion, ['estado', 'recepcionista_id', 'observaciones']))
         db.session.commit()
         return devolucion
 

@@ -26,6 +26,7 @@ from app.models.inventario import UbicacionProducto, MovimientoInventario
 from app.models.almacen import Almacen
 from app.services.connekta_gateway import connekta
 from app.utils.fecha import ahora_bogota as _ahora_bogota
+from app.services.bitacora import registrar_accion, foto as foto_fila
 
 from app.services.bodegas import co_de_bodega
 from app.services.siesa_traslado_adapter import siesa_traslado
@@ -1075,13 +1076,21 @@ class TrasladoService:
             ).with_for_update().first()
             if reg_res:
                 reg_res.reservado = max(0, reg_res.reservado - t.cantidad_solicitada)
+            _antes_t = foto_fila(t, ['estado', 'operario_id'])
             t.estado = _EP.CANCELADO
+            registrar_accion('CANCELAR', t, usuario_id=usuario_id,
+                             motivo=f'Cascada: traslado {s.codigo} revertido'
+                                    + (f' — {motivo}' if motivo else ''),
+                             antes=_antes_t, despues={'estado': t.estado})
 
+        _antes_s = foto_fila(s, ['estado', 'siesa_error'])
         s.estado = EstadoTraslado.REVERTIDA
         s.siesa_error = (
             'REVERSA WMS: unidades devueltas al inventario origen. '
             'Anular manualmente el STS en Siesa (Inventarios → Transferencias).'
         )
+        registrar_accion('ANULAR', s, usuario_id=usuario_id, motivo=motivo or None,
+                         antes=_antes_s, despues={'estado': s.estado})
         db.session.commit()
 
         TrasladoService.invalidar_cache_stock(s.bodega_origen_siesa)
@@ -1848,10 +1857,13 @@ class TrasladoService:
         return []  # Sin "sin_stock" — la tienda confirma lo que tiene físicamente
 
     @staticmethod
-    def _liberar_reservas_traslado(solicitud: SolicitudTraslado):
+    def _liberar_reservas_traslado(solicitud: SolicitudTraslado,
+                                   usuario_id: int = None, motivo: str = None):
         """
         Cancela las TareaPicking pendientes de un traslado y libera el campo
         reservado en UbicacionProducto. Se llama al cancelar/rechazar en EN_PICKING.
+        Cada tarea cancelada en cascada queda en la bitácora con quién canceló
+        el traslado.
         """
         from app.models.picking import TareaPicking, EstadoPicking as _EP
 
@@ -1867,11 +1879,16 @@ class TrasladoService:
             ).with_for_update().first()
             if reg:
                 reg.reservado = max(0, reg.reservado - t.cantidad_solicitada)
+            _antes_t = foto_fila(t, ['estado', 'operario_id'])
             t.estado = _EP.CANCELADO
+            registrar_accion('CANCELAR', t, usuario_id=usuario_id,
+                             motivo=f'Cascada: traslado {solicitud.codigo} cancelado'
+                                    + (f' — {motivo}' if motivo else ''),
+                             antes=_antes_t, despues={'estado': t.estado})
             logger.info(f'[TRASLADO] Tarea {t.codigo} cancelada por cancelación de {solicitud.codigo}')
 
     @staticmethod
-    def _descontar_inventario_wms(solicitud: SolicitudTraslado):
+    def _descontar_inventario_wms(solicitud: SolicitudTraslado, usuario_id: int = None):
         """
         Descuenta las cantidades despachadas de UbicacionProducto y registra
         un MovimientoInventario de tipo SALIDA_TRASLADO.
@@ -1915,7 +1932,13 @@ class TrasladoService:
                     ).with_for_update().first()
                     if reg:
                         reg.reservado = max(0, reg.reservado - t.cantidad_solicitada)
+                    _antes_t = foto_fila(t, ['estado', 'operario_id'])
                     t.estado = _EP2.CANCELADO
+                    registrar_accion(
+                        'CANCELAR', t, usuario_id=usuario_id,
+                        motivo=f'Cascada: traslado {solicitud.codigo} despachado '
+                               'con la tarea sin recoger',
+                        antes=_antes_t, despues={'estado': t.estado})
 
             if hay_picking_mobile:
                 # PickingService.confirmar_picking ya decrementó `cantidad` → no fallback.

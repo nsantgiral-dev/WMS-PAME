@@ -21,7 +21,8 @@ def listos():
 @muelle_bp.route('/asignar', methods=['POST'])
 @jwt_required()
 def asignar_a_ruta():
-    if not _es_admin_o_jefe():
+    usuario = _es_admin_o_jefe()
+    if not usuario:
         return jsonify({'error': 'Sin permiso — se requiere rol admin o jefe_almacen'}), 403
     data = request.get_json()
     ruta_id = data.get('ruta_id')
@@ -32,6 +33,7 @@ def asignar_a_ruta():
             ruta_id=ruta_id,
             bultos_ids=data.get('bultos_ids', []),
             pedido_siesa=data.get('pedido_siesa'),
+            usuario_id=usuario.id,
         )
     except ConflictError as e:
         return jsonify({'error': str(e)}), 409
@@ -45,10 +47,13 @@ def asignar_a_ruta():
 @muelle_bp.route('/desasignar/<int:id>', methods=['DELETE'])
 @jwt_required()
 def desasignar_de_ruta(id):
-    if not _es_admin_o_jefe():
+    usuario = _es_admin_o_jefe()
+    if not usuario:
         return jsonify({'error': 'No autorizado'}), 403
     try:
-        resultado = MuelleService.desasignar_de_ruta(id)
+        resultado = MuelleService.desasignar_de_ruta(
+            id, usuario_id=usuario.id,
+            motivo=(request.get_json(silent=True) or {}).get('motivo') or request.args.get('motivo'))
     except LookupError as e:
         return jsonify({'error': str(e)}), 404
     except ValueError as e:
@@ -59,7 +64,8 @@ def desasignar_de_ruta(id):
 @muelle_bp.route('/cargar/<string:codigo_barras>', methods=['POST'])
 @jwt_required()
 def cargar_bulto(codigo_barras):
-    if not _es_admin_o_jefe():
+    usuario = _es_admin_o_jefe()
+    if not usuario:
         return jsonify({'error': 'Sin permiso — se requiere rol admin o jefe_almacen'}), 403
     data = request.get_json(silent=True) or {}
     ruta_id_raw = data.get('ruta_id')
@@ -70,7 +76,7 @@ def cargar_bulto(codigo_barras):
     except (ValueError, TypeError):
         return jsonify({'error': 'ruta_id debe ser un número entero válido'}), 400
     try:
-        resultado = MuelleService.cargar_bulto(codigo_barras, ruta_id)
+        resultado = MuelleService.cargar_bulto(codigo_barras, ruta_id, usuario_id=usuario.id)
     except LookupError as e:
         return jsonify({'error': str(e)}), 404
     except ValueError as e:

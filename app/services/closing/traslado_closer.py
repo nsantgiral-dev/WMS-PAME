@@ -119,7 +119,7 @@ class TrasladoPackingCloser(IPackingCloser):
             logger.info('[TRASLADO_CLOSER] %s inventario ya descontado — saltando',
                         solicitud.codigo)
         else:
-            TrasladoService._descontar_inventario_wms(solicitud)
+            TrasladoService._descontar_inventario_wms(solicitud, usuario_id=usuario_id or None)
             solicitud.inventario_descontado = True
 
         # ── Encolar DESPACHO_TRASLADO → 174930 (DLQ con retry) ───────────────

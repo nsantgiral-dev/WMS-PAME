@@ -416,9 +416,14 @@ def descartar(tarea_id: int, recepcionista_id: int, motivo: str = None) -> Tarea
     Descarta una tarea (p.ej. el diferencial era error de conteo en Siesa).
     NO modifica stock — solo cierra la tarea.
     """
+    from app.services.bitacora import registrar_accion, motivo_obligatorio, foto
+    motivo = motivo_obligatorio(motivo, 'descartar una tarea de devolución')
     tarea = TareaDevolucion.query.get(tarea_id)
     if not tarea:
         raise ValueError(f'Tarea {tarea_id} no existe')
+    registrar_accion('DESCARTAR', tarea, usuario_id=recepcionista_id, motivo=motivo,
+                     antes=foto(tarea, ['estado', 'recepcionista_id', 'observaciones']),
+                     despues={'estado': EstadoDevolucion.DESCARTADO})
     tarea.estado = EstadoDevolucion.DESCARTADO
     tarea.recepcionista_id = recepcionista_id
     tarea.observaciones = motivo
