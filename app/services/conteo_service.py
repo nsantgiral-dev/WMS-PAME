@@ -1906,7 +1906,7 @@ class ConteoService:
 
     #: Dónde declara el líder que la mercancía recogida volvió al estante. Lo
     #: nombran los mensajes de la guarda; la pantalla es `conteo.js`.
-    DONDE_DECLARAR_REGRESO = 'Inventario Cíclico → 🧭 Líder → «Recogido sin despachar»'
+    DONDE_DECLARAR_REGRESO = 'Inventario Cíclico → 📥 Por decidir → «Recogido sin despachar»'
 
     @staticmethod
     def _en_proceso_por_picking(almacen_id, instante, producto_id) -> list:
@@ -2806,6 +2806,9 @@ class ConteoService:
         return [
             {
                 **s.to_dict_operario(),
+                # Una auditoría por faltante de picking se marca: el CC3
+                # hereda el tipo de su raíz. No es una cifra: no rompe el ciego.
+                'es_auditoria': s.tipo == 'EXCEPCION_PICKING',
                 'almacen_id': s.almacen_id,
                 'almacen_nombre': s.almacen.nombre if s.almacen else None,
                 'operario_id': s.operario_id,

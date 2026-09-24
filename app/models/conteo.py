@@ -387,6 +387,10 @@ class SesionConteo(db.Model):
             'id': self.id,
             'codigo': self.codigo,
             'ubicacion_codigo': self.ubicacion.codigo if self.ubicacion else None,
+            # ¿La ubicación le dice a alguien DÓNDE mirar? `SIESA-GENERAL` no
+            # (`Ubicacion.es_fisica`): la pantalla dice «Buscalo en toda la
+            # bodega» en vez de pintar un código que no es un lugar.
+            'ubicacion_fisica': bool(self.ubicacion and self.ubicacion.es_fisica),
             'producto_id': self.producto_id,
             'producto_codigo': self.producto.codigo if self.producto else None,
             'producto_nombre': self.producto.nombre if self.producto else None,
@@ -403,6 +407,7 @@ class SesionConteo(db.Model):
             'clasificacion_abc': self.clasificacion_abc,
             'ubicacion_id': self.ubicacion_id,
             'ubicacion_codigo': self.ubicacion.codigo if self.ubicacion else None,
+            'ubicacion_fisica': bool(self.ubicacion and self.ubicacion.es_fisica),
             'almacen_id': self.almacen_id,
             'almacen_nombre': self.almacen.nombre if self.almacen else None,
             'bodega_siesa_id': self.almacen.bodega_siesa_id if self.almacen else None,
@@ -411,6 +416,8 @@ class SesionConteo(db.Model):
             'producto_nombre': self.producto.nombre if self.producto else None,
             'maneja_lote': self.maneja_lote,
             'operario_id': self.operario_id,
+            # El nombre, no el número: la tarjeta decía «Op #4».
+            'operario_nombre': self.operario.nombre if self.operario else None,
             'estado': self.estado,
             'existencia_siesa': self.existencia_siesa,
             'fuente_existencia': self.fuente_existencia,

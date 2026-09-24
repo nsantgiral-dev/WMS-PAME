@@ -97,6 +97,95 @@ MOTIVOS_AJUSTE = ('AJ-ENT', 'AJ-SAL')
 
 ETIQUETA_VALOR = 'estimado a costo de la foto del conteo'
 
+#: Las palabras de bodega de cada CLAVE que el reporte agrupa y la pantalla
+#: pinta (`excluidos`, `sin_veredicto`, `por_motivo`, los grupos de la
+#: exactitud). La clave es para agrupar; el texto, para leer: la pestaña
+#: 📊 Estadísticas mostraba «sin_veredicto: pendiente 3 · en_curso 1»,
+#: «Excluidos — sin_foto_siesa: 2» y «Clase A · DIARIO_ABC» (2026-09-24).
+#: Viaja en la respuesta (`etiquetas`) y la pantalla solo la busca: una
+#: política, una función. `tests/test_inventario_ciclico_ia.py` exige por AST
+#: que toda clave literal que este módulo escribe tenga su texto acá.
+ETIQUETAS = {
+    # excluidos — por qué algo no entra a una métrica
+    'cerradas_sin_fecha_de_confirmacion': 'cerradas sin fecha de confirmación',
+    'sin_fecha_de_confirmacion': 'sin fecha de confirmación',
+    'sin_fecha_de_creacion': 'sin fecha de creación',
+    'descarte_sin_fecha': 'recuentos sin fecha',
+    'descarte_sin_motivo': 'recuentos sin motivo registrado',
+    'recuento_propio_sin_foto_de_inicio': 'recuentos propios sin foto de Siesa al abrir',
+    'confirmado_sin_foto_de_inicio': 'conteos sin foto de Siesa al abrir',
+    'modo_ensayo': 'enviados en modo ensayo (no llegaron a Siesa)',
+    'sin_diferencia': 'sin diferencia registrada',
+    'sin_foto_siesa': 'sin foto de Siesa al contar',
+    'sin_evaluacion_de_tolerancia': 'anteriores a la regla de tolerancia',
+    'conteo_sin_operario': 'conteos sin persona registrada',
+    # sin veredicto — por qué una cadena abierta no tiene resultado
+    # (`motivo_sin_veredicto`)
+    'pendiente': 'sin contar',
+    'en_curso': 'contándose o esperando recuento',
+    'cancelada': 'canceladas',
+    'omitida': 'recuento saltado',
+    'no_encontrado': 'no lo encontraron',
+    'movimiento_continuo': 'se vendía mientras se contaba',
+    'bloqueado': 'bloqueadas por otro problema',
+    'descuadre_sin_segundo_conteo': 'con diferencia, sin 2º conteo',
+    # grupos de la exactitud
+    'DIARIO_ABC': 'plan ABC',
+    'OTROS': 'manual, watchdog y auditorías',
+    '?': 'sin clase',
+    # por qué un ajuste no se puede aprobar (`resumir_motivo_bloqueo`)
+    'SIN_FOTO_CIERRE': 'sin foto de Siesa al cerrar',
+    'SIN_FOTO_APERTURA': 'sin foto de Siesa al abrir',
+    'MOVIMIENTO_DURANTE_CONTEO': 'hubo movimiento mientras se contaba',
+    'SALIDAS_NO_POS': 'salidas sin confirmar en Siesa',
+    'TRASLADO_ENTRANTE': 'traslado entrando',
+    'MERCANCIA_EN_PROCESO': 'mercancía en proceso',
+    'CONTEO_VIEJO': 'hay un conteo más reciente',
+    'OTRO': 'otro motivo',
+    # por qué un ajuste aprobable no salió solo (`motivo_no_sale_solo`)
+    'SUPERA_TOPE': 'superan el tope automático',
+    'SIN_COSTO': 'sin costo en la foto',
+    'FIRMA_DEL_PROCESO': 'los firma el proceso (definitivo o saltado)',
+    # lo que el picker reportó al abrir una auditoría (diagnóstico, no ajuste)
+    'FALTANTE': 'faltante',
+    'UBICACION_VACIA': 'ubicación vacía',
+    'MERCANCIA_AVERIADA': 'mercancía averiada',
+    'PRODUCTO_INCORRECTO': 'producto incorrecto',
+}
+
+#: Dónde viven, dentro del reporte, los diccionarios cuyas CLAVES se pintan.
+_CONTENEDORES_DE_CLAVES = ('excluidos', 'sin_veredicto', 'por_motivo', 'aprobables_por_motivo')
+
+
+def etiqueta(clave: str) -> str:
+    """El texto de una clave del reporte. Una clave nueva sin texto no se
+    esconde: sale en palabras sueltas (`_` → espacio) y el trinquete de
+    `ETIQUETAS` la marca."""
+    return ETIQUETAS.get(clave) or str(clave).replace('_', ' ').lower()
+
+
+def etiquetas_del_reporte(reporte: dict) -> dict:
+    """`ETIQUETAS` más el texto de toda clave que el reporte vaya a pintar y
+    no esté ahí (un motivo de auditoría nuevo, por ejemplo)."""
+    salida = dict(ETIQUETAS)
+
+    def _recorrer(nodo, padre=None):
+        if isinstance(nodo, dict):
+            for k, v in nodo.items():
+                if padre in _CONTENEDORES_DE_CLAVES:
+                    salida.setdefault(k, etiqueta(k))
+                _recorrer(v, k)
+        elif isinstance(nodo, list):
+            for v in nodo:
+                _recorrer(v, padre)
+    _recorrer(reporte)
+    for porc in (reporte.get('exactitud') or {}, (reporte.get('exactitud') or {}).get('con_tolerancia') or {}):
+        for cl, grupos in (porc.get('por_clase') or {}).items():
+            salida.setdefault(cl, etiqueta(cl))
+            for g in grupos:
+                salida.setdefault(g, etiqueta(g))
+    return salida
+
 _ESTADOS_RESUELTOS_A_MANO = (EstadoConteo.DESCUADRE, EstadoConteo.AJUSTANDO,
                              EstadoConteo.AJUSTADO)
 
@@ -981,7 +1070,8 @@ def _por_operario(cerradas) -> dict:
     if cadenas_por:
         nombres = {u.id: u.nombre for u in
                    Usuario.query.filter(Usuario.id.in_(list(cadenas_por))).all()}
-    filas = [{'operario_id': uid, 'nombre': nombres.get(uid),
+    # Sin nombre se dice, no se pinta «#4».
+    filas = [{'operario_id': uid, 'nombre': nombres.get(uid) or 'Sin nombre registrado',
               'cadenas': len(cids), 'conteos': conteos_por[uid]}
              for uid, cids in cadenas_por.items()]
     filas.sort(key=lambda f: ((f['nombre'] or '').lower(), f['operario_id']))
@@ -1046,7 +1136,7 @@ def calcular_estadisticas_conteo(fecha_desde: date = None, fecha_hasta: date = N
     for c in filtradas:
         muestra.setdefault(c.raiz.producto_id, c.raiz)
 
-    return {
+    reporte = {
         'parametros': {'desde': desde.isoformat(), 'hasta': hasta.isoformat(),
                        'almacen_id': almacen_id, 'clase': clase, 'tipo': tipo},
         'generado_al_dia_operativo': hoy.isoformat(),
@@ -1060,3 +1150,5 @@ def calcular_estadisticas_conteo(fecha_desde: date = None, fecha_hasta: date = N
                                                   recuentos['por_producto'], muestra),
         'por_operario': _por_operario(cerradas),
     }
+    reporte['etiquetas'] = etiquetas_del_reporte(reporte)
+    return reporte

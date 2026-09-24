@@ -3,6 +3,11 @@
 Revisión de la pantalla como la lee un jefe de bodega. Lo que se arregló y
 este archivo fija, renderizando `conteo.js` en Node con `util.js` REAL:
 
+(2026-09-24: el modal de aprobar de Conteos y el «Aprobar» del resultado del
+definitivo se retiraron — aprobar vive solo en 📥 Por decidir. Lo que fija esa
+estructura está en `tests/test_inventario_ciclico_ia.py`; acá quedan los
+textos de las tarjetas.)
+
 | Enredo | Ahora |
 |---|---|
 | Tarjetas con `DESCUADRE`, `SEGUNDO_CONTEO`, `CC2 / CC3`, `AJ-SAL`, «Omitir CC2» | Palabras de bodega (las del servidor en el tablero) |
@@ -12,7 +17,7 @@ este archivo fija, renderizando `conteo.js` en Node con `util.js` REAL:
 | «Aprobar ajuste ahora → Siesa» del Definitivo sin confirmación | Pide confirmar, como el tablero |
 | «Cancelar conteo» con un botón «Cancelar» que cerraba el diálogo | «Cancelar conteo» / «Volver» |
 | Tablero: «Por motivo: NO_ENCONTRADO 1», «CC2», «No se puede aprobar · MOVIMIENTO_DURANTE_CONTEO» | El texto que ya manda el servidor |
-| «Recogido sin despachar» vivía en la pestaña Definitivo; el servidor manda a buscarlo en «Inventario Cíclico» | Está en 🧭 Líder, y el mensaje del servidor lo dice |
+| «Recogido sin despachar» vivía en la pestaña Definitivo; el servidor manda a buscarlo en «Inventario Cíclico» | Está en 📥 Por decidir (antes 🧭 Líder), y el mensaje del servidor lo dice |
 | `MOVIMIENTO_CONTINUO` tenía texto en la pantalla vieja y no en el tablero | Todo motivo de bloqueo tiene su texto |
 """
 import json
@@ -69,12 +74,7 @@ const tercero = card({ ...raiz, id: 17, estado: 'TERCER_CONTEO',
 const progreso = vm.runInContext('_renderCardProgreso', ctx)({ ...raiz, estado: 'EN_PROCESO', segundo_conteo: null });
 const resuelto = vm.runInContext('_renderCardResuelto', ctx)({ ...raiz, estado: 'AJUSTADO' });
 
-vm.runInContext('conteoAbrirAjuste', ctx)(raiz);
-const modalDef = els['conteo-ajuste-info'].innerHTML;
-vm.runInContext('conteoAbrirAjuste', ctx)({ ...raiz, segundo_conteo: { id: 12, estado: 'DESCUADRE', cantidad_fisica: 3560, diferencia: -12, teorico_siesa: 3570 } });
-const modalIgual = els['conteo-ajuste-info'].innerHTML;
-vm.runInContext('conteoAbrirAjuste', ctx)({ ...raiz, bodega_siesa_id: X, ubicacion_codigo: X });
-const modalX = els['conteo-ajuste-info'].innerHTML;
+const cardX = card({ ...raiz, id: 19, producto_codigo: X, producto_nombre: X, ubicacion_codigo: X });
 
 const tablero = vm.runInContext('liderTableroHtml', ctx)({
   permisos: { reabrir_cancelar_bloqueado: true, resolver_novedad: true, aprobar_ajuste: true, recontar: true, cancelar_conteo: true },
@@ -91,13 +91,11 @@ const tablero = vm.runInContext('liderTableroHtml', ctx)({
   hoy: {} });
 
 (async () => {
-  await vm.runInContext('defAprobarAjuste', ctx)(11);
   await vm.runInContext('conteoCancelar', ctx)(11);
   console.log(JSON.stringify({
-    conDef: texto(conDef), bloq: texto(bloq), bloqHtml: bloq, espera: texto(espera), tercero: texto(tercero),
-    progreso: texto(progreso), resuelto: texto(resuelto),
-    modalDef: texto(modalDef), modalIgual: texto(modalIgual),
-    modalCrudos: (modalX.match(/<img/g) || []).length, modalEscapados: (modalX.match(/&lt;img/g) || []).length,
+    conDef: texto(conDef), conDefHtml: conDef, bloq: texto(bloq), bloqHtml: bloq, espera: texto(espera),
+    tercero: texto(tercero), progreso: texto(progreso), resuelto: texto(resuelto),
+    cardCrudos: (cardX.match(/<img/g) || []).length, cardEscapados: (cardX.match(/&lt;img/g) || []).length,
     tablero: texto(tablero), llamadas,
   }));
 })();
@@ -147,44 +145,35 @@ class TestLasTarjetasHablanEnPalabrasDeBodega:
         assert '3558' in r['conDef'] and 'definitivo' in r['conDef'], r['conDef']
         assert 'Manda el conteo definitivo' in r['conDef']
 
-    def test_con_bloqueo_del_servidor_no_se_ofrece_aprobar(self, r):
-        assert 'No se puede aprobar' in r['bloq']
+    def test_con_bloqueo_del_servidor_lleva_a_recontar_o_cancelar(self, r):
         assert 'Hubo ventas mientras se contaba' in r['bloq']
-        assert 'conteoAbrirAjusteId(' not in r['bloqHtml']
+        assert 'Recontar o cancelar en 📥 Por decidir' in r['bloq']
+        assert '/ajustar' not in r['bloqHtml']
 
-    def test_sin_bloqueo_si_se_ofrece(self, r):
-        assert 'Revisar y aprobar ajuste' in r['conDef']
+    def test_sin_bloqueo_lleva_a_decidir(self, r):
+        """Aprobar vive en 📥 Por decidir: la tarjeta solo lleva hasta allá."""
+        assert 'Decidir en 📥 Por decidir' in r['conDef']
+        assert 'conteoIrADecidir()' in r['conDefHtml']
 
     def test_cancelar_dice_que_cancela(self, r):
-        assert '✕ Cancelar' in r['conDef']
+        """Lo que está esperando un recuento se cancela desde acá; lo contado
+        con diferencia se decide (aprobar o no ajustar) en 📥 Por decidir."""
+        assert '✕ Cancelar' in r['espera']
+        assert '✕ Cancelar' not in r['conDef']
 
 
-class TestElModalDeAprobarDiceLoQuePasa:
+class TestLaTarjetaEscapaYNoTieneCamposMuertos:
 
-    def test_la_cifra_de_siesa_no_se_rotula_wms(self, r):
-        assert 'WMS' not in r['modalDef'] and 'Siesa 3570' in r['modalDef'], r['modalDef']
-
-    def test_con_definitivo_dice_que_manda_el_definitivo(self, r):
-        assert 'Definitivo 3558' in r['modalDef'], r['modalDef']
-        assert 'manda el conteo definitivo' in r['modalDef']
-        assert '2do conteo como referencia' not in r['modalDef']
-
-    def test_con_1_y_2_iguales_lo_dice(self, r):
-        assert '2º conteo 3560' in r['modalIgual'] and 'coinciden' in r['modalIgual'], r['modalIgual']
-
-    def test_el_motivo_va_en_palabras(self, r):
-        assert 'Ajuste por faltante' in r['modalDef']
-        assert 'Concepto 603' not in r['modalDef']
-
-    def test_bodega_y_ubicacion_pasan_por_esc(self, r):
-        assert r['modalCrudos'] == 0 and r['modalEscapados'] >= 3, r
+    def test_producto_y_ubicacion_pasan_por_esc(self, r):
+        assert r['cardCrudos'] == 0 and r['cardEscapados'] >= 3, r
 
     def test_el_arnes_muerde_con_esc_roto(self):
-        assert _render('esc-roto')['modalCrudos'] >= 3
+        assert _render('esc-roto')['cardCrudos'] >= 3
 
     def test_no_hay_campo_de_observaciones_que_no_viaja(self):
         """PUT /api/conteo/<id>/ajustar no recibe observaciones: el campo
-        recogía un texto que se perdía sin avisar."""
+        recogía un texto que se perdía sin avisar. (El modal entero se retiró
+        el 2026-09-24; el campo no puede volver en otro lado.)"""
         html = (PWA / 'index.html').read_text(encoding='utf-8')
         assert 'conteo-ajuste-obs' not in html
         js = (PWA / 'conteo.js').read_text(encoding='utf-8')
@@ -192,13 +181,6 @@ class TestElModalDeAprobarDiceLoQuePasa:
 
 
 class TestLasAccionesQueNoSeDeshacenPidenConfirmar:
-
-    def test_aprobar_desde_el_definitivo_pide_confirmacion(self, r):
-        assert r['llamadas']['confirmar'], 'defAprobarAjuste no pidió confirmación'
-        assert r['llamadas']['put'] == [], 'se envió a Siesa sin confirmar'
-
-    def test_confirmado_si_envia_la_raiz(self):
-        assert _render('acepta')['llamadas']['put'] == ['/api/conteo/11/ajustar']
 
     def test_cancelar_conteo_no_tiene_dos_botones_cancelar(self, r):
         titulo, opts = r['llamadas']['texto'][0]
@@ -233,7 +215,7 @@ class TestRecogidoSinDespacharEstaDondeLoMandaBuscarElServidor:
     def test_la_lista_vive_en_el_panel_lider(self):
         html = (PWA / 'index.html').read_text(encoding='utf-8')
         assert 'id="inv-recogido-lista"' in self._panel(html, 'inv-panel-lider')
-        assert 'id="inv-recogido-lista"' not in self._panel(html, 'inv-panel-definitivo')
+        assert 'id="inv-panel-definitivo"' not in html
         assert html.count('id="inv-recogido-lista"') == 1
 
     def test_el_tablero_la_carga(self):
@@ -243,7 +225,7 @@ class TestRecogidoSinDespacharEstaDondeLoMandaBuscarElServidor:
 
     def test_el_mensaje_del_servidor_nombra_la_pestana(self):
         from app.services.conteo_service import ConteoService
-        assert 'Líder' in ConteoService.DONDE_DECLARAR_REGRESO
+        assert 'Por decidir' in ConteoService.DONDE_DECLARAR_REGRESO
         assert 'Recogido sin despachar' in ConteoService.DONDE_DECLARAR_REGRESO
 
     def test_inventario_abre_en_lider(self):

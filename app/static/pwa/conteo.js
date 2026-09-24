@@ -3,9 +3,24 @@
 // Dependencias globales (de app.js): alerta(), API, TOKEN
 // ══════════════════════════════════════════════════════════════════
 
-// Se abre en 🧭 Líder: es «lo que espera tu decisión». La lista completa de
-// conteos (con el rezago de abril, miles de pendientes) es consulta, no el
-// punto de entrada del jefe de bodega.
+// ── Arquitectura de la pantalla (2026-09-24) ─────────────────────────────
+// Cuatro pestañas de conteo, un lugar para cada cosa:
+//   📥 Por decidir  (`lider`)        TODO lo que espera a una persona: contar
+//                                    un definitivo, reabrir un bloqueado,
+//                                    aprobar o cancelar un ajuste. La ÚNICA
+//                                    puerta para aprobar un ajuste: es la única
+//                                    que conoce el tope en pesos de quien mira.
+//   📋 Conteos      (`conteos`)      Seguimiento de lo que está en curso:
+//                                    reasignar, saltar un recuento, cancelar,
+//                                    corregir, crear un conteo manual.
+//   ⚙️ Plan ABC     (`abc`)          Qué se cuenta y cuándo.
+//   📊 Estadísticas (`estadisticas`) Cómo va.
+// Antes había seis: 🎯 Definitivo repetía los bloqueados y la mercancía sin
+// código del tablero, y se aprobaba desde Conteos → Acción, desde el resultado
+// del definitivo y desde el tablero. 🗄️ Datos (kardex) sigue al final: no es
+// del conteo cíclico y su mudanza es de otra pieza.
+// Se abre en 📥 Por decidir. La lista completa de conteos (con el rezago de
+// abril, miles de pendientes) es consulta, no el punto de entrada.
 let _INV_SUBTAB = 'lider';
 let _INV_ALMACENES = [];
 
@@ -43,7 +58,6 @@ const INV_SUBTABS = {
   conteos:      { tab: 'inv-tab-conteos',      panel: 'inv-panel-conteos',      vivo: true,  cargar: () => cargarConteos() },
   abc:          { tab: 'inv-tab-abc',          panel: 'inv-panel-abc',          vivo: false, cargar: () => cargarResumenAbc() },
   datos:        { tab: 'inv-tab-datos',        panel: 'inv-panel-datos',        vivo: false, cargar: () => kardexCargarPanel() },
-  definitivo:   { tab: 'inv-tab-definitivo',   panel: 'inv-panel-definitivo',   vivo: true,  cargar: () => cargarConteoDefinitivos() },
   estadisticas: { tab: 'inv-tab-estadisticas', panel: 'inv-panel-estadisticas', vivo: false, cargar: () => conteoEstIniciar() },
 };
 
@@ -281,9 +295,12 @@ async function guardarConfigBodega() {
 
 /**
  * Switch the inventory sub-tab.
- * @param {string} nombre - 'lider', 'conteos', 'abc', 'datos', 'definitivo' o 'estadisticas'.
+ * @param {string} nombre - 'lider', 'conteos', 'abc', 'estadisticas' o 'datos'.
+ *   'definitivo' (la pestaña retirada el 2026-09-24) abre 'lider', donde vive
+ *   ahora la cola de conteos definitivos.
  */
 function invSubtab(nombre) {
+  if (nombre === 'definitivo') nombre = 'lider';
   _INV_SUBTAB = nombre;
   // Lo que corría para la pestaña anterior (el sondeo del kardex) se apaga acá.
   invLimpiarIntervalos(nombre);
@@ -302,10 +319,14 @@ function invSubtab(nombre) {
   if (INV_SUBTABS[nombre]) INV_SUBTABS[nombre].cargar();
 }
 
-/** Refresca el contador de la pestaña "Definitivo" sin cambiar de subtab —
- * llamado desde el refresco general del dashboard admin. */
+/** Lleva a 📥 Por decidir — el único lugar donde se decide un ajuste. */
+function conteoIrADecidir() { invSubtab('lider'); }
+
+/** Refresca el contador de conteos definitivos por contar, en la pestaña
+ * 📥 Por decidir (donde se cuentan), sin cambiar de subtab — llamado desde el
+ * refresco general del dashboard admin. */
 async function actualizarBadgeDefinitivos() {
-  const badge = document.getElementById('inv-tab-definitivo-badge');
+  const badge = document.getElementById('inv-tab-lider-badge');
   if (!badge) return;
   try {
     const d = await get('/api/conteo/definitivos');
@@ -392,12 +413,23 @@ function _nivelConteoTxt(nivel) {
   return { CC1: '1er conteo', CC2: '2º conteo', CC3: 'conteo definitivo' }[nivel] || nivel || '';
 }
 
-/** Quién contó: el nombre si el servidor lo manda; si no, el número de
- *  operario. Texto plano (sin escapar): va por esc() donde se pinta. */
+/** Quién contó: el nombre que manda el servidor (`to_dict.operario_nombre`).
+ *  Nunca «Op #4»: un número de fila no es una persona. Texto plano (sin
+ *  escapar): va por esc() donde se pinta. */
 function _quienContoTxt(x, sinDato = '—') {
   if (!x) return sinDato;
   if (x.operario_nombre) return x.operario_nombre;
-  return x.operario_id ? 'Op #' + x.operario_id : sinDato;
+  return x.operario_id ? 'sin nombre registrado' : sinDato;
+}
+
+/** Dónde buscar. Si la ubicación no es un lugar (`Ubicacion.es_fisica`, que
+ *  manda el servidor como `ubicacion_fisica`: `SIESA-GENERAL` no lo es), lo
+ *  dice en vez de pintar un código que no lleva a ningún lado. Las mismas
+ *  palabras que el HUD del operario. Texto plano: va por esc(). */
+function _ubicacionTxt(x) {
+  if (!x) return '—';
+  if (x.ubicacion_fisica === false) return 'Buscalo en toda la bodega';
+  return x.ubicacion_codigo || '—';
 }
 
 /** El motivo del ajuste (AJ-ENT / AJ-SAL) como lo dice la bodega. */
@@ -481,20 +513,24 @@ function _renderCardAccion(s) {
   const cc3Pendiente = cc3 ? !TERMINADOS.includes(cc3.estado) : true;
   const hijoPendiente = esTercerConteo ? cc3Pendiente : cc2Pendiente;
   // El servidor ya dijo si este ajuste se puede aprobar (`bloqueo_ajuste`, la
-  // misma función que lo niega): con motivo, el botón no promete un error.
+  // misma función que lo niega): con motivo, la tarjeta lo dice.
   const bloqueado = s.estado === 'DESCUADRE' && !!s.bloqueo_ajuste;
-  const puedeAjustar = s.estado === 'DESCUADRE' && !bloqueado;
   const coinciden = !cc2Pendiente && _conteosCoinciden(s, hijo);
   const bordColor = s.estado === 'DESCUADRE' ? '#7F1D1D' : s.estado === 'TERCER_CONTEO' ? '#7F4010' : '#164F5A';
   const badgeColor = s.estado === 'DESCUADRE' ? '#7F1D1D' : s.estado === 'TERCER_CONTEO' ? '#92400E' : '#1E8395';
   const dif = s.diferencia != null ? (s.diferencia > 0 ? `+${s.diferencia}` : `${s.diferencia}`) : '?';
   const difCol = (s.diferencia || 0) > 0 ? '#22C55E' : '#F87171';
   const mostrarOmitir = ['SEGUNDO_CONTEO','TERCER_CONTEO'].includes(s.estado) && hijoPendiente;
-  const btnTexto = bloqueado
-    ? '⛔ No se puede aprobar (ver arriba)'
-    : hijoPendiente
-      ? (esTercerConteo ? '⏳ Esperando el conteo definitivo' : '⏳ Esperando el 2º conteo')
-      : '✓ Revisar y aprobar ajuste →';
+  // Cuando un 2º conteo (o el definitivo) resolvió la cadena, la raíz lleva
+  // copiado ESE conteo (`_copiar_observacion`), no el del 1er operario:
+  // rotularlo «1er conteo» mostraba la cifra del definitivo dos veces.
+  const resueltaPorHijo = s.estado === 'DESCUADRE' && !!hijo && hijo.cantidad_fisica != null;
+  // Aprobar vive en UN lugar: 📥 Por decidir, que conoce el tope en pesos de
+  // quien mira (`no_puede_aprobar`). Esta tarjeta solo lleva hasta allá.
+  const esperaDecision = s.estado === 'DESCUADRE';
+  const btnTexto = esperaDecision
+    ? (bloqueado ? '⚖ Recontar o cancelar en 📥 Por decidir →' : '⚖ Decidir en 📥 Por decidir →')
+    : (esTercerConteo ? '⏳ Esperando el conteo definitivo (en 📥 Por decidir)' : '⏳ Esperando el 2º conteo');
 
   // Columna 3 del grid varía según estado
   let col3Html;
@@ -522,7 +558,7 @@ function _renderCardAccion(s) {
       <div style="flex:1;min-width:0;">
         <div style="font-size:13px;font-weight:700;">${esc(s.producto_codigo || '—')}${_tipoTag(s)}${s.clasificacion_abc ? `<span style="background:#1C2B3A;color:#FBBF24;font-size:9px;font-weight:700;padding:1px 5px;border-radius:6px;margin-left:4px;">ABC-${esc(s.clasificacion_abc)}</span>` : ''}</div>
         <div style="font-size:11px;color:#415A70;margin-top:1px;">${esc(s.producto_nombre || '')}</div>
-        <div style="font-size:11px;color:#415A70;margin-top:1px;">📍 ${esc(s.ubicacion_codigo || '—')}</div>
+        <div style="font-size:11px;color:#415A70;margin-top:1px;">📍 ${esc(_ubicacionTxt(s))}</div>
       </div>
       <span style="background:${badgeColor};color:#fff;font-size:10px;font-weight:700;padding:2px 8px;border-radius:8px;white-space:nowrap;flex-shrink:0;margin-left:8px;">${esc(_estadoConteoTxt(s.estado))}</span>
     </div>
@@ -535,7 +571,7 @@ function _renderCardAccion(s) {
         ${_fotoSiesaHtml(s)}
       </div>
       <div style="border-left:1px solid #1C2B3A;border-right:1px solid #1C2B3A;">
-        <div style="font-size:9px;color:#415A70;font-weight:700;text-transform:uppercase;margin-bottom:3px;">1er conteo</div>
+        <div style="font-size:9px;color:#415A70;font-weight:700;text-transform:uppercase;margin-bottom:3px;">${resueltaPorHijo ? 'Quedó en' : '1er conteo'}</div>
         <div style="font-size:20px;font-weight:800;color:#FBBF24;line-height:1;">${esc(s.cantidad_fisica != null ? s.cantidad_fisica : '—')}</div>
         <div style="font-size:9px;color:#415A70;margin-top:2px;">${esc(_quienContoTxt(s))}</div>
       </div>
@@ -563,12 +599,12 @@ function _renderCardAccion(s) {
              title="No esperar el recuento: la diferencia queda para que la decidas"
              style="padding:8px 10px;background:none;border:1px solid #415A70;color:#415A70;border-radius:8px;font-size:11px;cursor:pointer;white-space:nowrap;">${esTercerConteo ? 'Saltar conteo definitivo' : 'Saltar 2º conteo'}</button>`
         : ''}
-      <button onclick="${puedeAjustar ? `conteoAbrirAjusteId(${esc(_conteoPintado(s))})` : 'void(0)'}"
-        ${!puedeAjustar ? 'disabled' : ''}
-        style="flex:2;padding:8px;background:${puedeAjustar?'#1E8395':'var(--bg-input)'};color:${puedeAjustar?'#fff':'var(--tx3)'};border:${puedeAjustar?'none':'1px solid var(--brd)'};border-radius:8px;font-size:12px;font-weight:700;cursor:${puedeAjustar?'pointer':'not-allowed'};min-width:120px;">
+      <button onclick="${esperaDecision ? 'conteoIrADecidir()' : 'void(0)'}"
+        ${!esperaDecision ? 'disabled' : ''}
+        style="flex:2;padding:8px;background:${esperaDecision?'#1E8395':'var(--bg-input)'};color:${esperaDecision?'#fff':'var(--tx3)'};border:${esperaDecision?'none':'1px solid var(--brd)'};border-radius:8px;font-size:12px;font-weight:700;cursor:${esperaDecision?'pointer':'not-allowed'};min-width:120px;">
         ${btnTexto}
       </button>
-      <button onclick="conteoCancelar(${esc(s.id)})" title="Cancelar este conteo y su cadena: no se ajusta nada" style="padding:8px;background:none;border:1px solid #7F1D1D;color:#F87171;border-radius:8px;font-size:11px;cursor:pointer;white-space:nowrap;">✕ Cancelar</button>
+      ${esperaDecision ? '' : `<button onclick="conteoCancelar(${esc(s.id)})" title="Cancelar este conteo y su cadena: no se ajusta nada" style="padding:8px;background:none;border:1px solid #7F1D1D;color:#F87171;border-radius:8px;font-size:11px;cursor:pointer;white-space:nowrap;">✕ Cancelar</button>`}
     </div>
     ${s.editado_en ? `<div style="font-size:10px;color:#415A70;margin-top:6px;">✏ Editado: ${esc(s.motivo_edicion)}</div>` : ''}
   </div>`;
@@ -586,7 +622,7 @@ function _renderCardProgreso(s) {
       <div style="flex:1;min-width:0;">
         <div style="font-size:12px;font-weight:700;">${esc(s.producto_codigo || '—')}${_tipoTag(s)}</div>
         <div style="font-size:11px;color:#415A70;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(s.producto_nombre || '')}</div>
-        <div style="font-size:11px;color:#415A70;margin-top:2px;">📍 ${esc(s.ubicacion_codigo || '—')}${s.operario_id ? ` · 👤 ${esc(_quienContoTxt(s))}` : ''}</div>
+        <div style="font-size:11px;color:#415A70;margin-top:2px;">📍 ${esc(_ubicacionTxt(s))} · 👤 ${esc(s.operario_id ? _quienContoTxt(s) : 'lo toma el próximo libre')}</div>
       </div>
       <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px;flex-shrink:0;margin-left:8px;">
         ${s.clasificacion_abc ? `<span style="background:#1C2B3A;color:#FBBF24;font-size:9px;font-weight:700;padding:1px 5px;border-radius:6px;">ABC-${esc(s.clasificacion_abc)}</span>` : ''}
@@ -617,7 +653,7 @@ function _renderCardResuelto(s) {
       <div style="flex:1;min-width:0;">
         <div style="font-size:12px;font-weight:700;color:#415A70;">${esc(s.producto_codigo || '—')}</div>
         <div style="font-size:11px;color:#415A70;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(s.producto_nombre || '')}</div>
-        <div style="font-size:11px;color:#415A70;margin-top:1px;">📍 ${esc(s.ubicacion_codigo || '—')}</div>
+        <div style="font-size:11px;color:#415A70;margin-top:1px;">📍 ${esc(_ubicacionTxt(s))}</div>
       </div>
       <div style="display:flex;flex-direction:column;align-items:flex-end;gap:3px;flex-shrink:0;margin-left:8px;">
         <span style="background:${col};color:#fff;font-size:10px;font-weight:700;padding:2px 8px;border-radius:8px;">${esc(_estadoConteoTxt(s.estado))}</span>
@@ -671,7 +707,9 @@ async function cargarConteoStats() {
 
 /** Re-enqueue all failed Siesa adjustment jobs for retry. */
 async function conteoReintentarFallos() {
-  if (!await _modalConfirmar('¿Re-encolar todos los ajustes fallidos para reintentar con Siesa?', { titulo: 'Reintentar fallos' })) return;
+  if (!await _modalConfirmar('Los ajustes que Siesa rechazó —de TODOS los almacenes— vuelven a la cola para enviarse otra vez.\n\n'
+      + 'Si el motivo del rechazo no se corrigió en Siesa, van a volver a fallar.',
+      { titulo: 'Reintentar ajustes rechazados', textoConfirmar: 'Reintentar todos', textoCancelar: 'Volver' })) return;
   try {
     const d = await post('/api/conteo/reintentar-fallos', {});
     alerta(`${d.reencolados} ajustes re-encolados`, 'exito');
@@ -715,7 +753,7 @@ async function conteoDescartarFallos() {
     texto += `\n\n⚠ Sesiones ${esc(plan.huerfanas.join(', '))}: su ajuste pudo haber llegado a Siesa. `
       + 'No se descartan — quedan para «Reintentar», que las cierra sin volver a enviar. Verificá en Siesa si llegó.';
   }
-  if (!await _modalConfirmar(texto, { titulo: 'Descartar ajustes fallidos', peligro: true })) return;
+  if (!await _modalConfirmar(texto, { titulo: 'Descartar ajustes fallidos', peligro: true, textoConfirmar: 'Descartar', textoCancelar: 'Volver' })) return;
 
   try {
     const d = await post('/api/conteo/descartar-fallos', {});
@@ -894,7 +932,12 @@ function _conteosAvisoFiltro(d) {
 function _conteosListaHtml(d, vista) {
   const sesiones = d.sesiones || [];
   if (!sesiones.length) {
-    return `<div style="text-align:center;padding:30px;color:#555;">${vista === 'accion' ? '✓ Sin conteos pendientes de revisión' : 'No hay conteos con este filtro'}</div>`;
+    const VACIO = {
+      accion: 'Nada con diferencia ni esperando recuento ✓',
+      progreso: 'Nada pendiente de contar ✓',
+      resueltos: 'Todavía no hay conteos cerrados con este filtro',
+    };
+    return `<div style="text-align:center;padding:30px;color:#555;">${esc(VACIO[vista] || 'No hay conteos con este filtro')}</div>`;
   }
   // Acción y Resueltos llegan solo con raíces (el CC2/CC3 va embebido en
   // `segundo_conteo`): lo filtra el servidor, ANTES de paginar. Filtrarlo
@@ -1143,7 +1186,7 @@ async function generarAbc(clase) {
 async function generarTodasClases(adelantar = false) {
   const almacenId = document.getElementById('inv-abc-almacen')?.value;
   if (!almacenId) { alerta('Selecciona un almacén primero', 'error'); return; }
-  if (adelantar && !await _modalConfirmar('¿Adelantar conteos? Además de los vencidos, toma productos que todavía están al día (los más atrasados primero).\n\nNunca pasa del cupo diario del almacén.', { titulo: 'Adelantar conteos' })) return;
+  if (adelantar && !await _modalConfirmar('¿Adelantar conteos? Además de los vencidos, toma productos que todavía están al día (los más atrasados primero).\n\nNunca pasa del cupo diario del almacén.', { titulo: 'Adelantar conteos', textoConfirmar: 'Adelantar', textoCancelar: 'Volver' })) return;
   const res = document.getElementById('inv-abc-resultado');
   if (res) res.textContent = adelantar ? 'Adelantando...' : 'Generando lote del día...';
   try {
@@ -1206,7 +1249,7 @@ async function limpiarPendientesAbc() {
     _limpiarColaPreviewHtml(plan, etiqueta).replace(/\n/g, '<br>')
     + '<br><br>¿Por qué se cancela? (queda registrado en cada conteo)', { obligatorio: true });
   if (motivo === null || !motivo.trim()) return;
-  if (!await _modalConfirmar(`¿Cancelar ${esc(plan.a_cancelar)} conteo(s) de ${esc(etiqueta)}?\n\nMotivo: ${esc(motivo.trim())}`, { titulo: 'Cancelar rezago', peligro: true })) return;
+  if (!await _modalConfirmar(`¿Cancelar ${esc(plan.a_cancelar)} conteo(s) de ${esc(etiqueta)}?\n\nMotivo: ${esc(motivo.trim())}`, { titulo: 'Cancelar rezago', peligro: true, textoConfirmar: 'Sí, cancelarlos', textoCancelar: 'Volver' })) return;
   try {
     const d = await post('/api/conteo/abc/limpiar-pendientes', {
       almacen_id: parseInt(almacenId), clasificacion: claseUpper || null,
@@ -1241,12 +1284,6 @@ function _conteoPintado(s) {
 function conteoAbrirEdicionId(id) {
   const s = _CONTEO_PINTADOS.get(String(id));
   if (s) conteoAbrirEdicion(s);
-}
-
-/** @param {number} id */
-function conteoAbrirAjusteId(id) {
-  const s = _CONTEO_PINTADOS.get(String(id));
-  if (s) conteoAbrirAjuste(s);
 }
 
 let _CONTEO_EDICION_ID = null;
@@ -1403,108 +1440,11 @@ async function ejecutarWatchdog() {
   }
 }
 
-let _CONTEO_AJUSTE_SESION = null;
-
-/**
- * Open the adjustment confirmation modal for a DESCUADRE conteo.
- * @param {Object} s - Conteo session object with difference and Siesa details.
- */
-function conteoAbrirAjuste(s) {
-  _CONTEO_AJUSTE_SESION = s;
-  const m    = document.getElementById('modal-conteo-ajuste');
-  const info = document.getElementById('conteo-ajuste-info');
-  if (!m || !info) return;
-
-  const hijo     = s.segundo_conteo;
-  // Con 1º ≠ 2º la cadena la resolvió el conteo definitivo: su cifra es la
-  // que el servidor copió a la raíz y la que sale en el ajuste. El modal decía
-  // «se usará el 2do conteo» también en ese caso.
-  const cc3      = hijo && hijo.tercer_conteo;
-  const cc3Hecho = !!(cc3 && cc3.cantidad_fisica != null);
-  const difVal   = s.diferencia != null ? s.diferencia : 0;
-  const difCol   = difVal > 0 ? '#4ade80' : '#f87171';
-  const motivo   = s.motivo_codigo || (difVal > 0 ? 'AJ-ENT' : 'AJ-SAL');
-  const accion   = motivo === 'AJ-ENT' ? '📦 ENTRADA' : '📤 SALIDA';
-  const cant     = Math.abs(difVal);
-  const coinciden = _conteosCoinciden(s, hijo);
-
-  const bodega = s.bodega_siesa_id || '—';
-  const col3 = cc3Hecho
-    ? { titulo: 'Definitivo', valor: cc3.cantidad_fisica, color: '#fbbf24' }
-    : { titulo: '2º conteo', valor: hijo?.cantidad_fisica, color: coinciden ? '#4ade80' : '#f87171' };
-  const colorCol3 = col3.color;   // color fijo del código, no un dato
-  let referencia = '';
-  if (cc3Hecho) referencia = `<div style="color:#fbbf24;font-size:11px;text-align:center;">El 1º y el 2º conteo no coincidieron: manda el conteo definitivo (${esc(cc3.cantidad_fisica)})</div>`;
-  else if (coinciden) referencia = '<div style="color:#4ade80;font-size:11px;text-align:center;">✓ El 1º y el 2º conteo coinciden</div>';
-
-  info.innerHTML = `
-    <div style="margin-bottom:10px;">
-      <div style="font-size:13px;font-weight:700;color:#e2e8f0;">${esc(s.producto_codigo || '—')} · ${esc(s.producto_nombre || '')}</div>
-      <div style="font-size:11px;color:#4b5563;margin-top:1px;">📍 ${esc(s.ubicacion_codigo || '—')} · Bodega: <span style="color:#60a5fa;font-weight:700;">${esc(bodega)}</span></div>
-    </div>
-    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-bottom:12px;text-align:center;">
-      <div>
-        <div style="font-size:9px;color:#4b5563;text-transform:uppercase;margin-bottom:2px;">Siesa</div>
-        <div style="font-size:18px;font-weight:800;color:#60a5fa;">${esc(s.existencia_siesa ?? '—')}</div>
-        ${_fotoSiesaHtml(s)}
-      </div>
-      <div style="border-left:1px solid #1f2937;border-right:1px solid #1f2937;">
-        <div style="font-size:9px;color:#4b5563;text-transform:uppercase;margin-bottom:2px;">1er conteo</div>
-        <div style="font-size:18px;font-weight:800;color:#f59e0b;">${esc(s.cantidad_fisica ?? '—')}</div>
-      </div>
-      <div>
-        <div style="font-size:9px;color:#4b5563;text-transform:uppercase;margin-bottom:2px;">${esc(col3.titulo)}</div>
-        <div style="font-size:18px;font-weight:800;color:${colorCol3};">${esc(col3.valor ?? '—')}</div>
-      </div>
-    </div>
-    <div style="background:#0d0d0d;border-radius:8px;padding:10px;text-align:center;margin-bottom:8px;">
-      <div style="font-size:10px;color:#4b5563;margin-bottom:4px;">Se enviará a Siesa → Bodega <span style="color:#60a5fa;font-weight:700;">${esc(bodega)}</span>:</div>
-      <div style="font-size:16px;font-weight:800;color:${difCol};">${accion} de ${esc(cant)} unidades</div>
-      <div style="font-size:10px;color:#4b5563;margin-top:2px;">Ajuste por ${esc(_motivoAjusteTxt(motivo))} (${esc(motivo)})</div>
-    </div>
-    ${referencia}
-    ${_bloqueoAjusteHtml(s)}
-    ${_aprobacionAjusteHtml(s)}
-  `;
-
-  m.style.display = 'flex';
-}
-
-/** Close the adjustment modal and clear the active session reference. */
-function conteosCerrarAjuste() {
-  const m = document.getElementById('modal-conteo-ajuste');
-  if (m) m.style.display = 'none';
-  _CONTEO_AJUSTE_SESION = null;
-}
-
-/** Confirm and enqueue the inventory adjustment to Siesa for the active session. */
-async function conteoConfirmarAjuste() {
-  if (!_CONTEO_AJUSTE_SESION) return;
-  const s = _CONTEO_AJUSTE_SESION;
-
-  // SIEMPRE la raíz de la cadena. El ajuste sale de la raíz: la observación
-  // que resolvió (CC2 o CC3) ya está copiada ahí (`_copiar_observacion`), y el
-  // servidor rechaza aprobar un hijo (`_exigir_raiz_para_ajustar`, 2026-09-23)
-  // porque la idempotencia es por sesión y el mismo delta saldría dos veces a
-  // Siesa. Este botón elegía el id del hijo cuando el 2do conteo terminaba:
-  // desde ese arreglo fallaba con 400 en toda cadena con segundo conteo. La
-  // pantalla no decide qué sesión se ajusta; esa regla es del servidor.
-  const sesionId = s.id;
-
-  const btn = document.getElementById('btn-confirmar-ajuste');
-  if (btn) { btn.disabled = true; btn.textContent = 'Procesando...'; }
-
-  try {
-    const d = await put(`/api/conteo/${sesionId}/ajustar`, {});
-    conteosCerrarAjuste();
-    alerta(d.mensaje || `Ajuste enviado a Siesa · ${d.diferencia} uds`, 'exito');
-    await cargarConteos(_CONTEO_PAGE);
-  } catch (e) {
-    alerta(e.message || 'Error de conexión', 'error');
-  } finally {
-    if (btn) { btn.disabled = false; btn.textContent = 'Aprobar y enviar a Siesa'; }
-  }
-}
+// El modal «Revisar y aprobar ajuste» de Conteos se retiró el 2026-09-24: era
+// la segunda puerta para aprobar y no conocía el tope en pesos de quien mira
+// (un jefe con tope $0 veía el botón y recibía un 403). Aprobar vive en
+// 📥 Por decidir (`liderAprobarAjuste`), con el valor, lo que se contó y
+// `no_puede_aprobar` por fila.
 
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -1519,50 +1459,10 @@ async function conteoConfirmarAjuste() {
 
 let DEF_TAREA_ACTUAL = null;
 
-/** Carga la cola de conteos definitivos pendientes (CC1≠CC2, sin resolver),
- * y debajo lo que el operario dejó para el líder: bloqueados y novedades.
- * «Recogido sin despachar» vive en 🧭 Líder: es donde lo manda buscar el
- * servidor (`ConteoService.DONDE_DECLARAR_REGRESO`) y donde está el bloque
- * «Fuera del plan» que lo explica. */
-async function cargarConteoDefinitivos() {
-  cargarConteoBloqueados();
-  cargarConteoNovedades();
-  const el = document.getElementById('inv-definitivo-lista');
-  if (!el) return;
-  await invCargarPanel({
-    subtab: 'definitivo', el,
-    pedir: () => get('/api/conteo/definitivos'),
-    html: (d) => _definitivosHtml(d),
-    despues: (d) => {
-      const pend = d.pendientes || [];
-      const badge = document.getElementById('inv-tab-definitivo-badge');
-      if (badge) {
-        badge.textContent = pend.length;
-        badge.style.display = pend.length > 0 ? 'inline' : 'none';
-      }
-    },
-    error: () => '<div style="text-align:center;padding:30px;color:#ef4444;">Error cargando la cola</div>',
-  });
-}
-
-/** La cola de conteos definitivos, ya escapada. */
-function _definitivosHtml(d) {
-  const pend = d.pendientes || [];
-  if (!pend.length) {
-    return '<div style="text-align:center;padding:40px 20px;color:var(--tx3);">Sin conteos definitivos pendientes ✓</div>';
-  }
-  return pend.map(s => `
-    <div style="background:var(--bg-s);border:1px solid var(--brd);border-radius:12px;padding:14px;margin-bottom:10px;">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
-        <span style="font-size:11px;font-weight:700;color:#f59e0b;background:rgba(120,53,15,.35);padding:2px 8px;border-radius:8px;">1º y 2º conteo no coinciden</span>
-        <span style="font-size:11px;color:var(--tx3);">${esc(s.almacen_nombre || '')}</span>
-      </div>
-      <div style="font-size:15px;font-weight:700;color:var(--tx);">${esc(s.producto_nombre || s.producto_codigo || '—')}</div>
-      <div style="font-size:13px;color:var(--tx3);">${esc(s.producto_codigo || '')} · Ubicación ${esc(s.ubicacion_codigo || '—')}</div>
-      <div style="font-size:11px;color:var(--tx3);margin-top:4px;">${s.operario_nombre ? `En proceso por ${esc(s.operario_nombre)}` : 'Sin asignar — tómalo vos'}</div>
-      <button onclick="defAbrirConteo(${esc(s.id)})" style="width:100%;margin-top:10px;padding:12px;background:var(--pm);color:#fff;border:none;border-radius:10px;font-size:14px;font-weight:700;cursor:pointer;">🎯 Contar ahora</button>
-    </div>`).join('');
-}
+// La cola de definitivos se pinta en 📥 Por decidir (`_lDefinitivos`, del
+// bloque `definitivos` del tablero — la MISMA `listar_definitivos` que
+// `GET /api/conteo/definitivos`). La pestaña 🎯 Definitivo se retiró el
+// 2026-09-24: repetía los bloqueados y la mercancía sin código del tablero.
 
 /** Abre el conteo definitivo de una sesión CC3 — se auto-asigna al supervisor.
  * El HUD es el mismo del operario (`conteoHudAbrir`): una implementación. */
@@ -2153,100 +2053,49 @@ function _defMostrarResultado(r) {
       </div>
       <div style="font-size:14px;color:#aaa;margin-top:8px;line-height:1.5;">${esc(r.mensaje || '')}</div>
       ${(!esMatch && r.raiz_id) ? `
-      <button onclick="defAprobarAjuste(${esc(r.raiz_id)})" style="width:100%;margin-top:20px;padding:16px;font-size:16px;font-weight:700;background:var(--pm);color:#fff;border:none;border-radius:12px;cursor:pointer;">
-        Aprobar ajuste y enviar a Siesa
+      <button onclick="defCerrarModal()" style="width:100%;margin-top:20px;padding:16px;font-size:16px;font-weight:700;background:var(--pm);color:#fff;border:none;border-radius:12px;cursor:pointer;">
+        ⚖ Ver el ajuste en «Ajustes esperando decisión»
       </button>
-      <div style="font-size:11px;color:#666;margin-top:8px;">O decidilo después en 🧭 Líder → «Ajustes esperando decisión», con su valor</div>` : ''}
+      <div style="font-size:11px;color:#666;margin-top:8px;">Ahí está con su valor y con lo que podés aprobar según tu tope.</div>` : `
       <button onclick="defCerrarModal()" style="width:100%;margin-top:12px;padding:14px;font-size:14px;background:#1a1a1a;color:#aaa;border:1px solid #333;border-radius:12px;cursor:pointer;">
         Cerrar
-      </button>
+      </button>`}
     </div>`;
 }
 
-/** Aprueba el ajuste ya mismo (PUT /api/conteo/<raiz_id>/ajustar) — dispara el POST real a Siesa vía DLQ. */
-async function defAprobarAjuste(raizId) {
-  // Un ajuste de inventario a Siesa no sale de un solo toque: el mismo paso
-  // de confirmación que tienen el tablero del líder y Conteos → Acción.
-  if (!await _modalConfirmar('Se envía a Siesa un ajuste de inventario con la cantidad del conteo definitivo.\n\n'
-      + 'Si el ajuste supera tu tope o no se puede aprobar, Siesa no recibe nada y te decimos por qué.',
-      { titulo: 'Aprobar ajuste', textoConfirmar: 'Aprobar y enviar', textoCancelar: 'Volver' })) return;
-  try {
-    const d = await put(`/api/conteo/${raizId}/ajustar`, {});
-    alerta(d.mensaje || 'Ajuste enviado a Siesa', 'exito');
-    defCerrarModal();
-  } catch (e) {
-    alerta(e.message || 'Error de conexión', 'error');
-  }
-}
+// «Aprobar ajuste y enviar a Siesa» desde el resultado del definitivo se
+// retiró el 2026-09-24: era una tercera puerta para aprobar, sin el tope de
+// quien mira. El resultado lleva a «Ajustes esperando decisión».
 
-/** Cierra el modal de conteo definitivo y refresca la cola. */
+/** Cierra el modal de conteo definitivo y refresca 📥 Por decidir, donde
+ * vive la cola (y donde queda el ajuste que el definitivo haya dejado). */
 function defCerrarModal() {
   const modal = document.getElementById('def-modal');
   if (modal) modal.style.display = 'none';
   if (CONTEO_HUD && CONTEO_HUD.modo === 'DEFINITIVO') CONTEO_HUD = null;
   DEF_TAREA_ACTUAL = null;
-  cargarConteoDefinitivos();
+  if (_INV_SUBTAB === 'lider') liderCargar();
+  actualizarBadgeDefinitivos();
 }
 
 
 
 // ── Conteos BLOQUEADOS y mercancía sin código — la decisión del líder ──────
 // Un conteo bloqueado («no lo encontré» u otro problema) no tenía salida: la
-// cadena quedaba trabada para siempre. Acá el líder lo reabre (vuelve a la
-// cola desde cero) o lo cancela (con su cadena). La política vive en
-// ConteoService.reabrir_bloqueado / cancelar_bloqueado.
-
-const _MOTIVO_BLOQUEO_TXT = {
-  NO_ENCONTRADO: 'No lo encontró',
-  MOVIMIENTO_CONTINUO: 'Se vendía mientras se contaba (reabrilo en un momento quieto)',
-  OTRO: 'Otro problema',
-  SIN_MOTIVO_REGISTRADO: 'Sin motivo registrado',
-};
-
-/** Lista los conteos BLOQUEADOS con su motivo y las dos salidas. */
-async function cargarConteoBloqueados() {
-  const el = document.getElementById('inv-bloqueados-lista');
-  if (!el) return;
-  await invCargarPanel({
-    subtab: 'definitivo', canal: 'definitivo:bloqueados', el, cargando: false,
-    pedir: () => get('/api/conteo/bloqueados'),
-    html: (d) => _bloqueadosHtml(d),
-    error: () => '<div style="text-align:center;padding:14px;color:#ef4444;font-size:13px;">Error cargando los bloqueados</div>',
-  });
-}
-
-/** La lista de conteos bloqueados, ya escapada. */
-function _bloqueadosHtml(d) {
-  const filas = d.bloqueados || [];
-  if (!filas.length) {
-    return '<div style="text-align:center;padding:14px;color:var(--tx3);font-size:13px;">Ningún conteo bloqueado ✓</div>';
-  }
-  return filas.map(b => `
-    <div style="background:var(--bg-s);border:1px solid var(--brd);border-radius:12px;padding:12px 14px;margin-bottom:8px;">
-      <div style="display:flex;justify-content:space-between;gap:8px;">
-        <span style="font-size:11px;font-weight:700;color:#f59e0b;">${esc(_MOTIVO_BLOQUEO_TXT[b.motivo_bloqueo] || b.motivo_bloqueo)} · ${esc(_nivelConteoTxt(b.nivel))}</span>
-        <span style="font-size:11px;color:var(--tx3);">${esc(b.almacen_nombre || '')}</span>
-      </div>
-      <div style="font-size:14px;font-weight:700;color:var(--tx);margin-top:4px;">${esc(b.producto_nombre || b.producto_codigo || '—')}</div>
-      <div style="font-size:12px;color:var(--tx3);">${esc(b.producto_codigo || '')} · ${esc(b.codigo)}${b.reportado_por_nombre ? ` · reportó ${esc(b.reportado_por_nombre)}` : ''}</div>
-      ${b.nota ? `<div style="font-size:12px;color:var(--tx2);margin-top:4px;">${esc(b.nota)}</div>` : ''}
-      <div style="display:flex;gap:8px;margin-top:10px;">
-        <button onclick="conteoReabrirBloqueado(${esc(b.id)})" style="flex:1;padding:10px;background:var(--pm);color:#fff;border:none;border-radius:10px;font-size:13px;font-weight:700;cursor:pointer;">↻ Reabrir</button>
-        <button onclick="conteoCancelarBloqueado(${esc(b.id)})" style="flex:1;padding:10px;background:#7f1d1d;color:#fca5a5;border:none;border-radius:10px;font-size:13px;font-weight:700;cursor:pointer;">✕ Cancelar</button>
-      </div>
-    </div>`).join('');
-}
+// cadena quedaba trabada para siempre. El líder lo reabre (vuelve a la cola
+// desde cero) o lo cancela (con su cadena). La política vive en
+// ConteoService.reabrir_bloqueado / cancelar_bloqueado. Las listas se pintan
+// en 📥 Por decidir (`_lBloqueados`, `_lNovedades`); acá quedan las acciones.
 
 /** Devuelve un conteo bloqueado a la cola, desde cero. */
 async function conteoReabrirBloqueado(id) {
   const nota = await _modalTexto('Reabrir conteo',
     'Vuelve a la cola desde cero, sin dueño. Si querés, dejá una pista para quien lo cuente (dónde buscar).',
-    { obligatorio: false, textoConfirmar: 'Reabrir' });
+    { obligatorio: false, textoConfirmar: 'Reabrir', textoCancelar: 'Volver' });
   if (nota === null) return;
   try {
     await post(`/api/conteo/${id}/reabrir`, { nota });
     alerta('Conteo reabierto — vuelve a la cola', 'exito');
-    cargarConteoBloqueados();
   } catch (e) {
     alerta(e.message || 'No se pudo reabrir', 'error');
   }
@@ -2261,48 +2110,20 @@ async function conteoCancelarBloqueado(id) {
   try {
     await put(`/api/conteo/${id}/cancelar`, { motivo });
     alerta('Conteo cancelado', 'exito');
-    cargarConteoBloqueados();
   } catch (e) {
     alerta(e.message || 'No se pudo cancelar', 'error');
   }
-}
-
-/** Lista la mercancía sin código que reportaron los operarios. */
-async function cargarConteoNovedades() {
-  const el = document.getElementById('inv-novedades-lista');
-  if (!el) return;
-  await invCargarPanel({
-    subtab: 'definitivo', canal: 'definitivo:novedades', el, cargando: false,
-    pedir: () => get('/api/conteo/novedades'),
-    html: (d) => _novedadesHtml(d),
-    error: () => '<div style="text-align:center;padding:14px;color:#ef4444;font-size:13px;">Error cargando las novedades</div>',
-  });
-}
-
-/** La lista de mercancía sin código, ya escapada. */
-function _novedadesHtml(d) {
-  const filas = d.novedades || [];
-  if (!filas.length) {
-    return '<div style="text-align:center;padding:14px;color:var(--tx3);font-size:13px;">Nada reportado ✓</div>';
-  }
-  return filas.map(n => `
-    <div style="background:var(--bg-s);border:1px solid var(--brd);border-radius:12px;padding:12px 14px;margin-bottom:8px;">
-      <div style="font-size:11px;color:var(--tx3);">${esc(n.almacen_nombre || '')} · ${esc(n.reportado_por_nombre || '')} · contando ${esc(n.producto_en_conteo || '—')}</div>
-      <div style="font-size:14px;color:var(--tx);margin-top:4px;">${esc(n.descripcion)}</div>
-      <button onclick="conteoResolverNovedad(${esc(n.id)})" style="width:100%;margin-top:8px;padding:10px;background:var(--pm);color:#fff;border:none;border-radius:10px;font-size:13px;font-weight:700;cursor:pointer;">✓ Resuelta</button>
-    </div>`).join('');
 }
 
 /** Marca una novedad como resuelta, diciendo qué se hizo. */
 async function conteoResolverNovedad(id) {
   const nota = await _modalTexto('Mercancía identificada',
     '¿Qué era y qué se hizo? (se etiquetó, se contó en tal producto, era de otra bodega...)',
-    { obligatorio: true, textoConfirmar: 'Marcar resuelta' });
+    { obligatorio: true, textoConfirmar: 'Marcar resuelta', textoCancelar: 'Volver' });
   if (nota === null) return;
   try {
     await post(`/api/conteo/novedades/${id}/resolver`, { nota });
     alerta('Novedad resuelta', 'exito');
-    cargarConteoNovedades();
   } catch (e) {
     alerta(e.message || 'No se pudo marcar', 'error');
   }
@@ -2360,7 +2181,7 @@ async function conteoDevolverAlEstante(i) {
   const nota = await _modalTexto(`Pedido ${esc(p.pedido)}: ¿volvió al estante?`,
     'Confirmá solo si la mercancía de este pedido ya está de vuelta en su lugar. '
     + 'Desde ahora esos productos se pueden volver a contar. No cambia el inventario.',
-    { obligatorio: false, textoConfirmar: 'Sí, volvió' });
+    { obligatorio: false, textoConfirmar: 'Sí, volvió', textoCancelar: 'Volver' });
   if (nota === null) return;
   try {
     await post('/api/conteo/recogido-sin-despachar/devuelto',
@@ -2395,12 +2216,27 @@ function _ceMetrica(m) {
   return `${base} · <b>${_ceNum(m.porcentaje, 1)}%</b>`;
 }
 
+/** Palabras de bodega de las claves del reporte (`etiquetas`, que arma el
+ * servidor en `metricas.conteo.ETIQUETAS`). La pantalla solo busca: la clave
+ * (`sin_foto_siesa`, `DIARIO_ABC`, `SUPERA_TOPE`) es para agrupar, no para leer. */
+let _CE_ETIQUETAS = {};
+
+/** El texto de una clave, ya escapado. */
+function _ceEt(k) {
+  return esc(_CE_ETIQUETAS[k] || String(k).replace(/_/g, ' ').toLowerCase());
+}
+
+/** `{clave: n}` dicho en palabras: «sin contar 3 · canceladas 1». */
+function _cePares(obj) {
+  return Object.entries(obj || {}).map(([k, n]) => `${_ceEt(k)} ${_ceNum(n)}`).join(' · ');
+}
+
 /** Los `excluidos` de una métrica, dichos — un cero sin denominador no se esconde. */
 function _ceExcluidos(ex) {
   const pares = Object.entries(ex || {});
   if (!pares.length) return '';
-  const txt = pares.map(([k, n]) => `${esc(k)}: ${_ceNum(n)}`).join(' · ');
-  return `<div style="font-size:10px;color:var(--tx3);margin-top:4px;">Excluidos — ${txt}</div>`;
+  const txt = pares.map(([k, n]) => `${_ceEt(k)}: ${_ceNum(n)}`).join(' · ');
+  return `<div style="font-size:10px;color:var(--tx3);margin-top:4px;">No entran en la cuenta — ${txt}</div>`;
 }
 
 /** Contenedor de un bloque. `titulo` y `cuerpo` llegan ya armados y escapados. */
@@ -2465,6 +2301,7 @@ async function conteoEstCargar() {
 }
 
 function _ceRender(d) {
+  _CE_ETIQUETAS = d.etiquetas || {};
   return [_ceCobertura(d.carga_cobertura, d.rezago), _ceVolumen(d.volumen),
           _ceAjustes(d.ajustes), _ceExactitud(d.exactitud),
           _ceProductos(d.productos_problema), _ceOperarios(d.por_operario)].join('')
@@ -2503,7 +2340,7 @@ function _ceCobertura(c, r) {
 }
 
 function _ceVolumen(v) {
-  const sv = Object.entries(v.sin_veredicto || {}).map(([k, n]) => `${esc(k)} ${_ceNum(n)}`).join(' · ') || '—';
+  const sv = _cePares(v.sin_veredicto) || '—';
   const semanas = (v.por_semana || []).map(s => `<tr>
       <td style="padding:4px 6px;">${esc(s.semana)}</td>
       <td style="padding:4px 6px;text-align:right;">${_ceNum(s.cerradas)}</td>
@@ -2518,7 +2355,7 @@ function _ceVolumen(v) {
       Cadenas iniciadas: <b>${_ceNum(v.iniciadas)}</b> · cerradas: <b>${_ceNum(v.cerradas)}</b> · SKUs: ${_ceNum(v.skus_cerrados)}<br>
       Necesitaron 2º conteo: ${_ceMetrica(v.a_cc2)}<br>
       Necesitaron 3º conteo: ${_ceMetrica(v.a_cc3)}<br>
-      Sin veredicto: ${sv}<br>
+      Abiertas, todavía sin resultado: ${sv}<br>
       Recuentos por venta durante el conteo: ${_ceMetrica(v.recuentos)}<br>
       Recuentos propios (primer conteo fuera de tolerancia): <b>${_ceNum(v.recuentos_propios)}</b>
       ${_ceExcluidos(v.recuentos && v.recuentos.excluidos)}${_ceExcluidos(v.excluidos)}
@@ -2529,16 +2366,15 @@ function _ceVolumen(v) {
 function _ceAjustes(a) {
   const val = a.valor || {};
   const bl = a.bloqueados_hoy || {};
-  const bloq = Object.entries(bl.por_motivo || {}).map(([k, n]) => `${esc(k)} ${_ceNum(n)}`).join(' · ') || '—';
-  const _ESPERAN_TXT = { SUPERA_TOPE: 'superan el tope', SIN_COSTO: 'sin costo', FIRMA_DEL_PROCESO: 'firma del proceso' };
-  const esperan = Object.entries(bl.aprobables_por_motivo || {}).map(([k, n]) => `${esc(_ESPERAN_TXT[k] || k)} ${_ceNum(n)}`).join(' · ') || '—';
-  const aud = Object.entries((a.motivos_auditoria_picking || {}).por_motivo || {}).map(([k, n]) => `${esc(k)} ${_ceNum(n)}`).join(' · ') || '—';
+  const bloq = _cePares(bl.por_motivo) || '—';
+  const esperan = _cePares(bl.aprobables_por_motivo) || '—';
+  const aud = _cePares((a.motivos_auditoria_picking || {}).por_motivo) || '—';
   return _ceTarjeta('⚖️ Ajustes a Siesa', `<div style="font-size:12px;color:var(--tx2);line-height:1.6;">
       Ajustes: <b>${_ceNum(a.cantidad)}</b> (automáticos ${_ceNum(a.automaticos)} · por supervisor ${_ceNum(a.aprobados_por_supervisor)} · en vuelo ${_ceNum(a.en_vuelo)} · dentro de tolerancia ${_ceNum(a.por_tolerancia)})<br>
       Unidades: +${_ceNum(a.unidades_ent)} / −${_ceNum(a.unidades_sal)} · neto ${_ceNum(a.unidades_neto)}<br>
       Valor <span style="color:var(--tx3);">(${esc(val.etiqueta || '')})</span>: +$${_ceNum(val.ent)} / −$${_ceNum(val.sal)} · neto <b>$${_ceNum(val.neto)}</b><br>
       <span style="color:var(--tx3);font-size:11px;">${_ceNum(val.ajustes_valorizados)} valorizados · ${_ceNum(val.ajustes_sin_costo)} sin costo en su foto</span><br>
-      Hoy bloqueados: <b>${_ceNum(bl.total)}</b> (${bloq}) · aprobables: ${_ceNum(bl.descuadres_aprobables)} (${esperan}) · jobs fallidos: ${_ceNum(a.jobs_fallidos_hoy)}<br>
+      Hoy no se pueden aprobar: <b>${_ceNum(bl.total)}</b> (${bloq}) · esperan aprobación: ${_ceNum(bl.descuadres_aprobables)} (${esperan}) · rechazados por Siesa: ${_ceNum(a.jobs_fallidos_hoy)}<br>
       <span style="color:var(--tx3);font-size:11px;">Auditorías de picking (diagnóstico, no ajuste): ${aud}</span>
       ${_ceExcluidos(a.excluidos)}</div>`);
 }
@@ -2546,7 +2382,7 @@ function _ceAjustes(a) {
 function _ceExactitud(e) {
   const filasDe = (porClase) => Object.entries(porClase || {}).map(([cl, grupos]) =>
     Object.entries(grupos).map(([g, m]) =>
-      `<div>Clase ${esc(cl)} · ${esc(g)}: ${_ceMetrica(m)}</div>`).join('')).join('');
+      `<div>${cl === '?' ? _ceEt(cl) : `Clase ${esc(cl)}`} · ${_ceEt(g)}: ${_ceMetrica(m)}</div>`).join('')).join('');
   const filas = filasDe(e.por_clase);
   const t = e.con_tolerancia || {};
   const tv = t.tolerancia_vigente || {};
@@ -2581,7 +2417,7 @@ function _ceProductos(p) {
 
 function _ceOperarios(o) {
   const filas = (o.filas || []).map(f =>
-    `<div>${esc(f.nombre || ('#' + f.operario_id))}: ${_ceNum(f.cadenas)} cadenas · ${_ceNum(f.conteos)} conteos</div>`).join('');
+    `<div>${esc(f.nombre || 'Sin nombre registrado')}: ${_ceNum(f.cadenas)} cadenas · ${_ceNum(f.conteos)} conteos</div>`).join('');
   return _ceTarjeta('👥 Participación por persona', `<div style="font-size:12px;color:var(--tx2);line-height:1.6;">
       <div style="font-size:10px;color:var(--tx3);margin-bottom:4px;">${esc(o.nota)}</div>
       ${filas || '<div style="color:var(--tx3);">Sin conteos en el rango.</div>'}
@@ -2589,7 +2425,7 @@ function _ceOperarios(o) {
 }
 
 // ══════════════════════════════════════════════════════════════════════════
-// 🧭 TABLERO DEL LÍDER — «qué abro el lunes a las 7 a. m.»
+// 📥 POR DECIDIR (tablero del líder) — «qué abro el lunes a las 7 a. m.»
 //
 // Pinta `GET /api/conteo/lider/tablero`. La pantalla no decide nada: qué es
 // urgente, qué se puede aprobar, cuánto vale y qué botón le toca a cada rol lo
@@ -2652,8 +2488,10 @@ function _lBloque(titulo, total, base, cuerpo, vacio) {
 
 function _lProducto(f) {
   const tag = f.es_auditoria ? ' <span style="font-size:10px;color:#fca5a5;background:#7f1d1d;border-radius:6px;padding:1px 6px;">auditoría por faltante</span>' : '';
+  // Dónde: solo si el servidor lo mandó; si no es un lugar, lo dice.
+  const donde = ('ubicacion_codigo' in f || 'ubicacion_fisica' in f) ? ` · 📍 ${esc(_ubicacionTxt(f))}` : '';
   return `<div style="font-size:14px;font-weight:700;color:var(--tx);">${esc(f.producto_nombre || f.producto_codigo || '—')}${tag}</div>
-    <div style="font-size:12px;color:var(--tx3);">${esc(f.producto_codigo || '')} · ${esc(f.codigo || '')}</div>`;
+    <div style="font-size:12px;color:var(--tx3);">${esc(f.producto_codigo || '')} · ${esc(f.codigo || '')}${donde}</div>`;
 }
 
 /**
@@ -2692,17 +2530,39 @@ function _lNovedades(n, p) {
   return _lBloque('🏷 Mercancía sin código', n.total, '', filas.join(''), 'Nada reportado ✓');
 }
 
+/** Los conteos definitivos (CC3) por contar. Lo cuenta un supervisor, a
+ * ciegas: la fila no trae cifras (vista `to_dict_operario` del servidor). */
+function _lDefinitivos(de, p) {
+  const filas = (de.filas || []).map(f => _lFila(
+    `<div style="font-size:11px;font-weight:700;color:#f59e0b;">El 1º y el 2º conteo no coinciden${f.operario_nombre ? ` · lo está contando ${esc(f.operario_nombre)}` : ' · sin asignar'}</div>`,
+    _lProducto(f),
+    p.contar_definitivo
+      ? _lBoton('🎯 Contar ahora', `liderContarDefinitivo(${esc(f.id)})`)
+      : _lSinPermiso('Lo cuenta un supervisor, jefe de almacén o admin')));
+  return _lBloque('🎯 Conteos definitivos por contar', de.total,
+    de.total ? 'Rompen el empate y deciden el ajuste. Son a ciegas: no vas a ver cuánto contaron los otros dos.' : '',
+    filas.join(''), 'Ningún conteo definitivo pendiente ✓');
+}
+
 function _lAjustes(a, p) {
   const ap = a.aprobables || {};
   const bl = a.bloqueados || {};
-  const filasAp = (ap.filas || []).map(f => _lFila(
-    `<div style="font-size:11px;font-weight:700;color:${f.direccion === 'ENTRADA' ? 'var(--green)' : 'var(--red)'};">${f.direccion === 'ENTRADA' ? '📦 Sobran' : '📤 Faltan'} ${_lNum(f.unidades)} und · ${_lPlata(f.valor)}</div>`,
-    _lProducto(f) + `<div style="font-size:11px;color:var(--tx3);margin-top:2px;">Contado el ${esc(f.dia_conteo || '—')}${f.costo_unitario !== null && f.costo_unitario !== undefined ? ` · costo de la foto $${_lNum(f.costo_unitario)}/und` : ''}</div>`,
+  const filasAp = (ap.filas || []).map(f => {
     // El tope del jefe es por monto: la fila trae por qué quien mira no
     // aprueba ESTE ajuste, y ese texto reemplaza al botón (no un 403 después).
-    p.aprobar_ajuste && !f.no_puede_aprobar
+    let botones = p.aprobar_ajuste && !f.no_puede_aprobar
       ? _lBoton('✓ Aprobar y enviar a Siesa', `liderAprobarAjuste(${esc(f.id)})`)
-      : _lSinPermiso(f.no_puede_aprobar || 'Lo aprueba un supervisor o admin')));
+      : _lSinPermiso(f.no_puede_aprobar || 'Lo aprueba un supervisor o admin');
+    if (p.cancelar_conteo) botones += _lBoton('✕ No ajustar (cancelar)', `liderCancelarConteo(${esc(f.id)})`, 'suave');
+    const cifras = (f.teorico !== undefined || f.contado !== undefined)
+      ? `<div style="font-size:12px;color:var(--tx2);margin-top:4px;">Siesa decía <b>${_lNum(f.teorico)}</b> · se contaron <b>${_lNum(f.contado)}</b></div>` : '';
+    return _lFila(
+      `<div style="font-size:11px;font-weight:700;color:${f.direccion === 'ENTRADA' ? 'var(--green)' : 'var(--red)'};">${f.direccion === 'ENTRADA' ? '📦 Sobran' : '📤 Faltan'} ${_lNum(f.unidades)} und · ${_lPlata(f.valor)}</div>`,
+      _lProducto(f) + cifras
+        + (f.decidio ? `<div style="font-size:11px;color:var(--tx3);margin-top:2px;">${esc(f.decidio)}</div>` : '')
+        + `<div style="font-size:11px;color:var(--tx3);margin-top:2px;">Contado el ${esc(f.dia_conteo || '—')}${f.costo_unitario !== null && f.costo_unitario !== undefined ? ` · costo de la foto $${_lNum(f.costo_unitario)}/und` : ''}</div>`,
+      botones);
+  });
   const filasBl = (bl.filas || []).map(f => {
     const acc = f.accion || {};
     let botones = '';
@@ -2727,14 +2587,16 @@ function _lAjustes(a, p) {
 function _lAuditorias(a) {
   const filas = (a.filas || []).map(f => {
     const acc = f.accion || {};
-    const boton = acc.tipo === 'CONTAR_DEFINITIVO' ? _lBoton('🎯 Contar definitivo', 'liderContarDefinitivo()') : '';
+    // Sin botones: cada auditoría que espera a alguien ya está en su bloque
+    // (definitivos, bloqueados o ajustes) y se decide allá, una vez.
+    const boton = '';
     return _lFila(
       `<div style="font-size:11px;font-weight:700;color:#fca5a5;">${esc(f.estado_texto)}${f.pedido ? ` · pedido ${esc(f.pedido)}` : ''}${f.dias_abierta !== null && f.dias_abierta !== undefined ? ` · hace ${_lNum(f.dias_abierta)} día(s)` : ''}</div>`,
       _lProducto(f) + `<div style="font-size:12px;color:var(--tx2);margin-top:4px;">${esc(acc.texto || '')}</div>`,
       boton);
   });
   return _lBloque('🚨 Auditorías por faltante de picking', a.total,
-    `${_lNum(a.esperan_al_lider)} esperan al líder; el resto las cuenta un operario o ya están en otro bloque`,
+    'Para seguirlas: las que esperan una decisión ya están arriba, en su bloque; el resto las cuenta un operario',
     filas.join(''), 'Ninguna auditoría abierta ✓');
 }
 
@@ -2770,7 +2632,7 @@ function _lFueraDelPlan(fp) {
 function _lHoy(h) {
   const pp = h.por_persona || {};
   const personas = (pp.filas || []).map(f =>
-    `<div style="display:flex;justify-content:space-between;gap:8px;font-size:13px;color:var(--tx2);padding:3px 0;"><span>${esc(f.nombre || ('#' + f.operario_id))}</span><span>${_lNum(f.cadenas)} cerrados · ${_lNum(f.conteos)} conteos</span></div>`).join('');
+    `<div style="display:flex;justify-content:space-between;gap:8px;font-size:13px;color:var(--tx2);padding:3px 0;"><span>${esc(f.nombre || 'Sin nombre registrado')}</span><span>${_lNum(f.cadenas)} cerrados · ${_lNum(f.conteos)} conteos</span></div>`).join('');
   return `<div style="background:var(--bg-s);border:1px solid var(--brd);border-radius:12px;padding:12px 14px;margin:18px 0 8px;">
     <div style="font-size:14px;font-weight:800;color:var(--tx);">📅 Hoy <span style="font-size:11px;color:var(--tx3);font-weight:400;">${esc(h.dia)}</span></div>
     <div style="font-size:22px;font-weight:800;color:var(--tx);margin-top:6px;">${_lNum(h.cerrados)} <span style="font-size:13px;color:var(--tx3);font-weight:600;">de un cupo de ${_lNum(h.cupo_diario)} por día</span></div>
@@ -2806,12 +2668,13 @@ function liderTableroHtml(d) {
   const chip = (txt, n) => `<span style="display:inline-block;padding:3px 8px;margin:2px 4px 2px 0;border-radius:10px;background:var(--bg-input);font-size:11px;color:var(--tx2);">${esc(txt)} <b>${_lNum(n)}</b></span>`;
   const cabecera = `<div style="background:var(--bg-s);border:1px solid var(--brd);border-radius:12px;padding:12px 14px;margin-bottom:12px;">
     <div style="font-size:12px;color:var(--tx3);">${esc(d.almacen || '')}${d.bodega_siesa ? ` (${esc(d.bodega_siesa)})` : ''} · ${esc(d.al_dia_operativo)}</div>
-    <div style="font-size:20px;font-weight:800;color:${r.decisiones_pendientes ? 'var(--yellow)' : 'var(--green)'};margin-top:4px;">${_lNum(r.decisiones_pendientes)} decisiones esperan por vos</div>
-    <div style="margin-top:6px;">${chip('Bloqueados', pb.bloqueados)}${chip('Sin código', pb.novedades)}${chip('Ajustes', pb.ajustes)}${chip('Auditorías', pb.auditorias)}${chip('Rechazos Siesa', pb.rechazados_siesa)}</div>
+    <div style="font-size:20px;font-weight:800;color:${r.decisiones_pendientes ? 'var(--yellow)' : 'var(--green)'};margin-top:4px;">${r.decisiones_pendientes ? `${_lNum(r.decisiones_pendientes)} ${r.decisiones_pendientes === 1 ? 'cosa espera' : 'cosas esperan'} por vos` : 'Nada pendiente ✓'}</div>
+    ${r.decisiones_pendientes ? `<div style="margin-top:6px;">${chip('Bloqueados', pb.bloqueados)}${chip('Sin código', pb.novedades)}${chip('Definitivos', pb.definitivos)}${chip('Ajustes', pb.ajustes)}${chip('Rechazos Siesa', pb.rechazados_siesa)}</div>` : '<div style="font-size:12px;color:var(--tx3);margin-top:4px;">Nadie espera una decisión tuya en este almacén.</div>'}
   </div>`;
   return _lRezago(d.rezago, p) + cabecera
     + _lBloqueados(dec.bloqueados || {}, p)
     + _lNovedades(dec.novedades || {}, p)
+    + _lDefinitivos(dec.definitivos || {}, p)
     + _lAjustes(dec.ajustes || {}, p)
     + _lAuditorias(dec.auditorias || {})
     + _lRechazados(dec.rechazados_siesa || {}, p)
@@ -2826,7 +2689,7 @@ function _liderAlmacenId() {
   return (sel && sel.value) || document.getElementById('inv-abc-almacen')?.value || '';
 }
 
-/** Entrada de la pestaña 🧭 Líder (la llama invSubtab). */
+/** Entrada de la pestaña 📥 Por decidir (la llama invSubtab). */
 async function liderCargar() {
   const el = document.getElementById('inv-lider-contenido');
   if (!el) return;
@@ -2875,8 +2738,10 @@ async function liderAprobarAjuste(id) {
   const f = _liderFila('ajustes', id);
   if (!f) return;
   const texto = `${f.direccion === 'ENTRADA' ? 'ENTRADA' : 'SALIDA'} de ${_lNum(f.unidades)} und de ${esc(f.producto_codigo || '')} ${esc(f.producto_nombre || '')}\n`
-    + `Valor: ${f.valor === null || f.valor === undefined ? 'sin costo en la foto' : '$' + _lNum(f.valor)}\n\nSe envía a Siesa como ajuste de inventario.`;
-  if (!await _modalConfirmar(texto, { titulo: 'Aprobar ajuste', textoConfirmar: 'Aprobar y enviar' })) return;
+    + (f.teorico !== undefined ? `Siesa decía ${_lNum(f.teorico)} · se contaron ${_lNum(f.contado)}\n` : '')
+    + `Valor: ${f.valor === null || f.valor === undefined ? 'sin costo en la foto' : '$' + _lNum(f.valor)}\n\n`
+    + 'Se envía a Siesa como ajuste de inventario y cambia la existencia allá. No se deshace desde el WMS.';
+  if (!await _modalConfirmar(texto, { titulo: 'Aprobar ajuste', textoConfirmar: 'Aprobar y enviar', textoCancelar: 'Volver' })) return;
   try {
     const d = await put(`/api/conteo/${id}/ajustar`, {});
     alerta(d.mensaje || 'Ajuste aprobado', 'exito');
@@ -2888,7 +2753,7 @@ async function liderAprobarAjuste(id) {
 async function liderRecontar(id) {
   const f = _liderFila('ajustes', id);
   if (!f || !_LIDER_DATOS) return;
-  if (!await _modalConfirmar(`Se abre un conteo nuevo de ${esc(f.producto_codigo || '')} ${esc(f.producto_nombre || '')}.\n\nCuando se cuente, éste queda viejo y lo cancelás desde acá.`, { titulo: 'Recontar' })) return;
+  if (!await _modalConfirmar(`Se abre un conteo nuevo de ${esc(f.producto_codigo || '')} ${esc(f.producto_nombre || '')}.\n\nCuando se cuente, éste queda viejo y lo cancelás desde acá.`, { titulo: 'Recontar', textoConfirmar: 'Abrir conteo nuevo', textoCancelar: 'Volver' })) return;
   try {
     await post('/api/conteo/manual', { almacen_id: _LIDER_DATOS.almacen_id, producto_codigo: f.producto_codigo });
     alerta('Conteo nuevo creado — sale en la cola de los operarios', 'exito');
@@ -2919,4 +2784,6 @@ async function liderCancelarRezago() {
   await liderCargar();
 }
 
-function liderContarDefinitivo() { invSubtab('definitivo'); }
+/** Abre el HUD del conteo definitivo (CC3) — el mismo del operario. Al
+ * cerrarlo, el tablero se recarga (`defCerrarModal`). */
+function liderContarDefinitivo(id) { defAbrirConteo(id); }

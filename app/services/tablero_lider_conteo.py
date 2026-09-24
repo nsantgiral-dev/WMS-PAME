@@ -11,6 +11,7 @@ base del WMS (incluida la foto de Siesa que cada conteo guardó al contar).
 |---|---|
 | Conteos bloqueados | `ConteoService.listar_bloqueados` |
 | Mercancía sin código | `ConteoService.listar_novedades` |
+| Conteos definitivos por contar | `ConteoService.listar_definitivos` (la cola de `/definitivos`) |
 | Ajustes en DESCUADRE | `ConteoService.motivo_bloqueo_ajuste` + `metricas.conteo.resumir_motivo_bloqueo` |
 | Auditorías por faltante | `auditorias_por_faltante_vivas` (acá; la usa también el KPI del dashboard) |
 | Ajustes rechazados por Siesa | jobs `AJUSTE_CONTEO` en FALLIDO (el mismo filtro de `/stats`) |
@@ -34,8 +35,13 @@ from app.models.conteo import EstadoConteo, SesionConteo
 FUENTE = 'solo base del WMS — cero llamadas a Siesa'
 
 #: El orden de la cola de decisiones — lo fijó el usuario. Cada bloque se
-#: pinta en este orden y el resumen lo respeta.
-ORDEN_DE_URGENCIA = ('bloqueados', 'novedades', 'ajustes', 'auditorias', 'rechazados_siesa')
+#: pinta en este orden y el resumen lo respeta. `definitivos` (2026-09-24) va
+#: justo antes de `ajustes` sin mover a los otros cinco: un conteo definitivo
+#: contado ES el ajuste que se decide después. Antes vivía en su propia pestaña
+#: (🎯 Definitivo) y el tablero solo lo nombraba para las auditorías: el CC3 de
+#: un conteo del plan no aparecía acá nunca.
+ORDEN_DE_URGENCIA = ('bloqueados', 'novedades', 'definitivos', 'ajustes', 'auditorias',
+                     'rechazados_siesa')
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Auditorías por faltante de picking — la fuente única
@@ -142,6 +148,8 @@ def permisos_de(rol: str) -> dict:
     return {
         'reabrir_cancelar_bloqueado': rol in Roles.SUPERVISION,
         'resolver_novedad': rol in Roles.SUPERVISION,
+        # `/definitivos` y el CC3 (`motivo_no_puede_contar`) son de SUPERVISION.
+        'contar_definitivo': rol in Roles.SUPERVISION,
         'aprobar_ajuste': ConteoService.motivo_no_aprueba_ningun_ajuste(_quien(rol)) is None,
         'recontar': rol in Roles.LEAD,
         'cancelar_conteo': rol in Roles.SUPERVISION,
@@ -187,9 +195,50 @@ def _fila_conteo(s: SesionConteo) -> dict:
         'es_auditoria': s.tipo == 'EXCEPCION_PICKING',
         'producto_codigo': s.producto.codigo if s.producto else s.producto_codigo_siesa,
         'producto_nombre': s.producto.nombre if s.producto else None,
+        'ubicacion_codigo': s.ubicacion.codigo if s.ubicacion else None,
+        'ubicacion_fisica': bool(s.ubicacion and s.ubicacion.es_fisica),
         'estado': s.estado,
         'estado_texto': ESTADO_TEXTO.get(s.estado, s.estado),
     }
+
+
+def _definitivos(almacen_id) -> dict:
+    """Los conteos definitivos (CC3) de este almacén que esperan a un
+    supervisor. La MISMA cola que `GET /api/conteo/definitivos`
+    (`ConteoService.listar_definitivos`), vista ciega: ni Siesa ni lo que
+    contaron el 1º y el 2º — quien va a contar tampoco los ve."""
+    from app.services.conteo_service import ConteoService
+    filas = ConteoService.listar_definitivos(almacen_id=almacen_id)
+    filas.sort(key=lambda f: _orden_mas_viejo_primero(f['fecha_creacion']))
+    return {'total': len(filas),
+            'en_curso': sum(1 for f in filas if f.get('operario_id')),
+            'filas': filas}
+
+
+def _nombre(usuario) -> str:
+    return usuario.nombre if usuario is not None else None
+
+
+def _quien_decidio(s: SesionConteo) -> str:
+    """Qué conteo quedó en la raíz y por qué, dicho para quien aprueba. La
+    raíz lleva copiado el conteo que resolvió (`_copiar_observacion`): sin esta
+    frase el «contado» no dice de quién es."""
+    hijo = s.hijo_conteo
+    nieto = hijo.hijo_conteo if hijo is not None else None
+    if nieto is not None and nieto.cantidad_fisica is not None:
+        quien = _nombre(nieto.operario)
+        return ('El 1º y el 2º conteo no coincidieron: manda el conteo definitivo'
+                + (f' de {quien}' if quien else ''))
+    if nieto is not None:
+        return 'Se saltó el conteo definitivo: queda el 1er conteo'
+    if hijo is not None and hijo.cantidad_fisica is not None:
+        quienes = [q for q in (_nombre(s.operario), _nombre(hijo.operario)) if q]
+        return ('El 2º conteo confirmó al 1º' + (f' ({" y ".join(quienes)})' if quienes else ''))
+    if hijo is not None:
+        return 'Se saltó el 2º conteo: queda el 1er conteo'
+    if s.ajuste_por_tolerancia:
+        return 'El 1er conteo quedó dentro de tolerancia: se aceptó sin 2º conteo'
+    return 'Queda el 1er conteo'
 
 
 def _ajustes(almacen_id, rol: str = None) -> dict:
@@ -231,6 +280,11 @@ def _ajustes(almacen_id, rol: str = None) -> dict:
             sin_costo += 1
         fila.update(
             diferencia=dif,
+            # Contra qué se contó y cuánto quedó: lo que un aprobador quiere
+            # ver antes de firmar (antes vivía en el modal de Conteos).
+            teorico=(s.teorico_siesa if s.teorico_siesa is not None else s.existencia_siesa),
+            contado=s.cantidad_fisica,
+            decidio=_quien_decidio(s),
             direccion=(None if dif is None else ('ENTRADA' if dif > 0 else 'SALIDA')),
             unidades=abs(dif) if dif is not None else None,
             costo_unitario=costo,
@@ -276,9 +330,11 @@ def _accion_auditoria(raiz: SesionConteo) -> dict:
         return {'tipo': 'VER_AJUSTES', 'texto': 'Contada con diferencia — decidí en «Ajustes»',
                 'decide_el_lider': False}
     if raiz.estado == EstadoConteo.TERCER_CONTEO:
-        return {'tipo': 'CONTAR_DEFINITIVO',
-                'texto': 'Los dos conteos no coinciden: falta el definitivo, lo hace un supervisor',
-                'decide_el_lider': True}
+        # Ya está en su bloque («Conteos definitivos por contar»): se cuenta
+        # ahí, una vez, como las bloqueadas y las contadas con diferencia.
+        return {'tipo': 'VER_DEFINITIVOS',
+                'texto': 'Los dos conteos no coinciden — contá el definitivo en «Conteos definitivos por contar»',
+                'decide_el_lider': False}
     vivo = _nodo_vivo(raiz)
     if raiz.estado == EstadoConteo.SEGUNDO_CONTEO:
         quien = vivo.operario.nombre if vivo.operario else None
@@ -438,17 +494,20 @@ def tablero(almacen_id: int, *, rol: str = None, ahora: datetime = None) -> dict
     decisiones = {
         'bloqueados': _bloqueados(almacen_id),
         'novedades': _novedades(almacen_id),
+        'definitivos': _definitivos(almacen_id),
         'ajustes': _ajustes(almacen_id, rol),
         'auditorias': _auditorias(almacen_id, hoy),
         'rechazados_siesa': _rechazados_siesa(almacen_id),
     }
     tope = politica.tope_de_generacion(almacen_id)
     ajustes = decisiones['ajustes']
-    # Lo que espera al líder, sin contar dos veces: una auditoría bloqueada o
-    # en DESCUADRE ya está en su bloque, y una en cola la resuelve un operario.
+    # Lo que espera al líder, sin contar dos veces: una auditoría bloqueada,
+    # en DESCUADRE o esperando el definitivo ya está en su bloque, y una en
+    # cola la resuelve un operario.
     por_bloque = {
         'bloqueados': decisiones['bloqueados']['total'],
         'novedades': decisiones['novedades']['total'],
+        'definitivos': decisiones['definitivos']['total'],
         'ajustes': ajustes['aprobables']['total'] + ajustes['bloqueados']['total'],
         'auditorias': decisiones['auditorias']['esperan_al_lider'],
         'rechazados_siesa': decisiones['rechazados_siesa']['total'],

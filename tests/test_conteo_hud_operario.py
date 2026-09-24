@@ -248,13 +248,16 @@ def _cc2_bloqueado(db, tienda, conteo):
 class TestElBloqueadoTieneSalida:
 
     def test_el_lider_los_lista_con_su_motivo(self, app, client, db, tienda, conteo):
+        # La cola del líder vive en el tablero (📥 Por decidir); el
+        # `GET /bloqueados` que la duplicaba se retiró el 2026-09-24.
         cc2 = _cc2_bloqueado(db, tienda, conteo)
-        r = client.get('/api/conteo/bloqueados', headers=_auth(app, tienda['supervisor']))
-        filas = r.get_json()['bloqueados']
+        url = f'/api/conteo/lider/tablero?almacen_id={tienda["almacen"].id}'
+        r = client.get(url, headers=_auth(app, tienda['supervisor']))
+        filas = r.get_json()['decisiones']['bloqueados']['filas']
         assert [(f['id'], f['nivel'], f['motivo_bloqueo']) for f in filas] == [
             (cc2, 'CC2', 'NO_ENCONTRADO')]
         assert 'cantidad_fisica' not in filas[0]
-        r = client.get('/api/conteo/bloqueados', headers=_auth(app, tienda['a']))
+        r = client.get(url, headers=_auth(app, tienda['a']))
         assert r.status_code == 403
 
     def test_reabrir_vuelve_a_la_cola_desde_cero(self, db, tienda, conteo):
@@ -465,7 +468,8 @@ class TestMercanciaSinCodigo:
         s = _sesion(db, conteo)
         assert (s.estado, s.cantidad_fisica) == ('EN_PROCESO', 2)
         hs = _auth(app, tienda['supervisor'])
-        filas = client.get('/api/conteo/novedades', headers=hs).get_json()['novedades']
+        url = f'/api/conteo/lider/tablero?almacen_id={tienda["almacen"].id}'
+        filas = client.get(url, headers=hs).get_json()['decisiones']['novedades']['filas']
         assert [f['descripcion'] for f in filas] == ['3 cajas sin etiqueta al fondo']
         assert filas[0]['producto_en_conteo'] == SKU
         nid = filas[0]['id']
@@ -473,14 +477,14 @@ class TestMercanciaSinCodigo:
                            headers=hs).status_code == 400
         assert client.post(f'/api/conteo/novedades/{nid}/resolver', json={'nota': 'era X'},
                            headers=hs).status_code == 200
-        assert client.get('/api/conteo/novedades', headers=hs).get_json()['total'] == 0
+        assert client.get(url, headers=hs).get_json()['decisiones']['novedades']['total'] == 0
 
     def test_ajeno_y_vacio_rechazados(self, app, client, db, tienda, conteo):
         with pytest.raises(PermissionError):
             _svc().registrar_novedad_sin_codigo(conteo, tienda['b'].id, 'algo raro')
         with pytest.raises(ValueError):
             _svc().registrar_novedad_sin_codigo(conteo, tienda['a'].id, ' ')
-        assert client.get('/api/conteo/novedades',
+        assert client.get(f'/api/conteo/lider/tablero?almacen_id={tienda["almacen"].id}',
                           headers=_auth(app, tienda['a'])).status_code == 403
 
 

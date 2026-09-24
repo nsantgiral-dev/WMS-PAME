@@ -238,8 +238,10 @@ class TestLaColaDeDecisiones:
     def test_los_bloques_van_en_el_orden_del_usuario(self, mundo, tienda):
         from app.services.tablero_lider_conteo import ORDEN_DE_URGENCIA
         d = _tablero(tienda)
-        assert ORDEN_DE_URGENCIA == ('bloqueados', 'novedades', 'ajustes', 'auditorias',
-                                     'rechazados_siesa')
+        # `definitivos` entró el 2026-09-24 antes de `ajustes`; los cinco del
+        # usuario siguen en su orden.
+        assert ORDEN_DE_URGENCIA == ('bloqueados', 'novedades', 'definitivos', 'ajustes',
+                                     'auditorias', 'rechazados_siesa')
         assert list(d['decisiones']) == list(ORDEN_DE_URGENCIA) == d['orden']
 
     def test_bloqueados_con_su_motivo(self, mundo, tienda):
@@ -289,9 +291,30 @@ class TestLaColaDeDecisiones:
     def test_auditorias_vivas_una_por_cadena_con_su_accion(self, mundo, tienda):
         au = _tablero(tienda)['decisiones']['auditorias']
         por_id = {f['id']: f['accion']['tipo'] for f in au['filas']}
+        # La que espera el definitivo ya está en SU bloque: acá solo se nombra
+        # (como la bloqueada o la contada con diferencia), no se cuenta dos veces.
         assert por_id == {mundo['aud_cola']: 'EN_COLA', mundo['aud_cc2']: 'EN_CURSO',
-                          mundo['aud_cc3']: 'CONTAR_DEFINITIVO'}
-        assert au['total'] == 3 and au['esperan_al_lider'] == 1
+                          mundo['aud_cc3']: 'VER_DEFINITIVOS'}
+        assert au['total'] == 3 and au['esperan_al_lider'] == 0
+
+    def test_los_definitivos_del_almacen_con_la_auditoria_marcada(self, mundo, tienda):
+        """El CC3 de la auditoría espera a un supervisor: sale en el bloque de
+        definitivos, ciego (sin Siesa ni lo que contaron el 1º y el 2º)."""
+        from app.models.conteo import SesionConteo
+        de = _tablero(tienda)['decisiones']['definitivos']
+        cc3 = SesionConteo.query.get(mundo['aud_cc3']).hijo_conteo.hijo_conteo
+        assert de['total'] == 1 and [f['id'] for f in de['filas']] == [cc3.id]
+        fila = de['filas'][0]
+        assert fila['es_auditoria'] is True and fila['ubicacion_fisica'] is True
+        for ciego in ('existencia_siesa', 'cantidad_fisica', 'teorico_siesa', 'diferencia'):
+            assert ciego not in fila, ciego
+
+    def test_el_aprobador_ve_que_conteo_manda(self, mundo, tienda):
+        filas = {f['id']: f for f in
+                 _tablero(tienda)['decisiones']['ajustes']['aprobables']['filas']}
+        con = filas[mundo['aprobable']]
+        assert (con['teorico'], con['contado']) == (10, 12)
+        assert con['decidio'].startswith('El 1º y el 2º conteo no coincidieron: manda el conteo definitivo de ')
 
     def test_rechazados_por_siesa_del_almacen_contra_el_total(self, mundo, tienda):
         r = _tablero(tienda)['decisiones']['rechazados_siesa']
@@ -302,8 +325,8 @@ class TestLaColaDeDecisiones:
 
     def test_el_resumen_no_cuenta_dos_veces(self, mundo, tienda):
         d = _tablero(tienda)
-        assert d['resumen']['por_bloque'] == {'bloqueados': 2, 'novedades': 1, 'ajustes': 3,
-                                              'auditorias': 1, 'rechazados_siesa': 1}
+        assert d['resumen']['por_bloque'] == {'bloqueados': 2, 'novedades': 1, 'definitivos': 1,
+                                              'ajustes': 3, 'auditorias': 0, 'rechazados_siesa': 1}
         assert d['resumen']['decisiones_pendientes'] == 8
 
 
@@ -455,6 +478,7 @@ class TestElEndpoint:
 LLAMADA_POR_PERMISO = {
     'reabrir_cancelar_bloqueado': ('post', '/api/conteo/999999/reabrir', {}),
     'resolver_novedad': ('post', '/api/conteo/novedades/999999/resolver', {'nota': 'x'}),
+    'contar_definitivo': ('get', '/api/conteo/definitivos', None),
     'aprobar_ajuste': ('put', '/api/conteo/999999/ajustar', {}),
     'recontar': ('post', '/api/conteo/manual', {}),
     'cancelar_conteo': ('put', '/api/conteo/999999/cancelar', {'motivo': 'x'}),
@@ -531,8 +555,8 @@ if (modo === 'esc-roto') vm.runInContext('esc = (x) => String(x);', ctx);
 const X = '<img src=x onerror=alert(1)>';
 const fila = { id: 7, codigo: X, producto_codigo: X, producto_nombre: X, estado_texto: X, es_auditoria: true };
 const permisos = modo === 'sin-permisos' ? {} : {
-  reabrir_cancelar_bloqueado: true, resolver_novedad: true, aprobar_ajuste: true, recontar: true,
-  cancelar_conteo: true, reintentar_descartar_fallos: true, cancelar_rezago: true };
+  reabrir_cancelar_bloqueado: true, resolver_novedad: true, contar_definitivo: true, aprobar_ajuste: true,
+  recontar: true, cancelar_conteo: true, reintentar_descartar_fallos: true, cancelar_rezago: true };
 const d = {
   almacen_id: 1, almacen: X, bodega_siesa: X, al_dia_operativo: X, fuente: X, permisos,
   resumen: { decisiones_pendientes: 8, por_bloque: { bloqueados: 1, novedades: 1, ajustes: 2, auditorias: 1, rechazados_siesa: 1 } },
@@ -543,7 +567,8 @@ const d = {
       aprobables: { total: 1, valor_total: 4000, valorizados: 1, sin_costo: 0, etiqueta_valor: X,
         filas: [{ ...fila, direccion: 'SALIDA', unidades: 2, valor: 4000, costo_unitario: 2000, dia_conteo: X }] },
       bloqueados: { total: 1, por_motivo: { [X]: 1 }, filas: [{ ...fila, motivo_clave: X, motivo: X, accion: { tipo: 'RECONTAR', texto: X } }] } },
-    auditorias: { total: 1, esperan_al_lider: 1, filas: [{ ...fila, pedido: X, dias_abierta: 3, accion: { tipo: 'CONTAR_DEFINITIVO', texto: X } }] },
+    definitivos: { total: 1, en_curso: 0, filas: [{ ...fila, id: 9, ubicacion_codigo: X, ubicacion_fisica: true, operario_nombre: X }] },
+    auditorias: { total: 1, esperan_al_lider: 0, filas: [{ ...fila, pedido: X, dias_abierta: 3, accion: { tipo: 'VER_DEFINITIVOS', texto: X } }] },
     rechazados_siesa: { total: 1, total_sistema: 2, sin_sesion_identificable: 1,
       filas: [{ ...fila, motivo_codigo: X, unidades: 1, intentos: 3, error: X }] },
   },
@@ -561,11 +586,12 @@ const anchos = [...html.matchAll(/(?:^|[;"\s])(?:min-)?width:\s*(\d+)px/g)].map(
 console.log(JSON.stringify({
   crudos: (html.match(/<img/g) || []).length,
   escapados: (html.match(/&lt;img/g) || []).length,
-  titulos: ['Conteos bloqueados', 'Mercancía sin código', 'Ajustes esperando decisión',
+  titulos: ['Conteos bloqueados', 'Mercancía sin código', 'Conteos definitivos por contar', 'Ajustes esperando decisión',
     'Auditorías por faltante', 'Ajustes rechazados por Siesa', 'Fuera del plan', '📅 Hoy',
     'generador está detenido'].map(t => html.indexOf(t)),
   handlers, sinDefinir, anchoMax: Math.max(0, ...anchos),
   botonAprobar: html.includes('liderAprobarAjuste('), botonRezago: html.includes('liderCancelarRezago('),
+  botonDefinitivo: html.includes('liderContarDefinitivo('),
 }));
 """
 
@@ -607,8 +633,8 @@ class TestLaPestana:
 
     def test_sin_permiso_no_hay_boton(self):
         con, sin = _render(), _render('sin-permisos')
-        assert con['botonAprobar'] and con['botonRezago']
-        assert not sin['botonAprobar'] and not sin['botonRezago']
+        assert con['botonAprobar'] and con['botonRezago'] and con['botonDefinitivo']
+        assert not sin['botonAprobar'] and not sin['botonRezago'] and not sin['botonDefinitivo']
 
     def test_cabe_en_un_celular(self):
         """Nada con ancho fijo mayor que una pantalla de 360 px."""
@@ -622,42 +648,7 @@ class TestLaPestana:
         assert "invSubtab('lider')" in tarjeta
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# «Confirmar → SIESA» de Conteos → Acción: siempre la raíz
-# ─────────────────────────────────────────────────────────────────────────────
-
-_ARNES_AJUSTE = r"""
-const fs = require('fs'); const vm = require('vm');
-const base = process.argv.slice(1).filter(a => a !== '--')[0];
-const llamadas = [];
-const ctx = { console, window: {}, document: { getElementById: () => null },
-  put: async (url) => { llamadas.push(url); return { motivo_codigo: 'AJ-SAL', diferencia: -1 }; },
-  alerta: () => {}, conteosCerrarAjuste: () => {}, cargarConteos: async () => {} };
-vm.createContext(ctx);
-vm.runInContext(fs.readFileSync(base + '/util.js', 'utf8'), ctx);
-vm.runInContext(fs.readFileSync(base + '/conteo.js', 'utf8'), ctx);
-(async () => {
-  for (const estadoHijo of ['DESCUADRE', 'SEGUNDO_CONTEO', 'MATCH', null]) {
-    vm.runInContext(`_CONTEO_AJUSTE_SESION = ${JSON.stringify({
-      id: 11, segundo_conteo: estadoHijo ? { id: 22, estado: estadoHijo } : null })};`, ctx);
-    await vm.runInContext('conteoConfirmarAjuste', ctx)();
-  }
-  console.log(JSON.stringify(llamadas));
-})();
-"""
-
-
-class TestElBotonDeAjusteApruebaLaRaiz:
-    """El botón viejo de Conteos → Acción mandaba el id del CC2 cuando éste
-    había terminado. Desde `_exigir_raiz_para_ajustar` el servidor lo rechaza
-    (400): el botón quedó roto en toda cadena con segundo conteo."""
-
-    def test_siempre_manda_la_raiz(self):
-        if not shutil.which('node'):
-            pytest.skip('sin node')
-        pwa = RAIZ / 'app' / 'static' / 'pwa'
-        r = subprocess.run(['node', '-e', _ARNES_AJUSTE, '--', str(pwa)],
-                           capture_output=True, text=True, timeout=60)
-        assert r.returncode == 0, r.stderr
-        urls = json.loads(r.stdout.strip().splitlines()[-1])
-        assert urls == ['/api/conteo/11/ajustar'] * 4, urls
+# «Confirmar → SIESA» de Conteos → Acción (`conteoConfirmarAjuste`) se retiró
+# el 2026-09-24 con su modal: aprobar vive solo en 📥 Por decidir, y el botón
+# de allá manda el id de la fila, que el servidor arma con raíces
+# (`tablero_lider_conteo._ajustes`). Ver tests/test_inventario_ciclico_ia.py.

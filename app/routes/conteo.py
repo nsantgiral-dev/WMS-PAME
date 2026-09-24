@@ -759,21 +759,10 @@ def cancelar_conteo(id):
     return jsonify({'mensaje': 'Conteo cancelado con su cadena', 'sesion': sesion.to_dict()}), 200
 
 
-@conteo_bp.route('/bloqueados', methods=['GET'])
-@jwt_required()
-def listar_bloqueados():
-    """Conteos BLOQUEADOS («no lo encontré» u otro problema) que esperan
-    que el líder los reabra o los cancele, con su motivo."""
-    from app.models.usuario import Usuario
-    try:
-        uid = int(get_jwt_identity())
-    except (TypeError, ValueError):
-        return jsonify({'error': 'Token inválido'}), 401
-    u = db.session.get(Usuario, uid)
-    if not u or u.rol not in Roles.SUPERVISION:
-        return jsonify({'error': 'Sin permiso'}), 403
-    filas = ConteoService.listar_bloqueados(almacen_id=request.args.get('almacen_id', type=int))
-    return jsonify({'bloqueados': filas, 'total': len(filas)}), 200
+# `GET /bloqueados` se retiró el 2026-09-24: su única pantalla era la copia de
+# la lista en la pestaña 🎯 Definitivo, que se fundió con 🧭 Por decidir. La
+# lista vive en el tablero (`tablero_lider_conteo._bloqueados`, misma
+# `ConteoService.listar_bloqueados`): una lista, un lugar.
 
 
 @conteo_bp.route('/<int:id>/reabrir', methods=['POST'])
@@ -852,22 +841,8 @@ def declarar_devuelto_al_estante():
     return jsonify({'ok': True, **r}), 200
 
 
-@conteo_bp.route('/novedades', methods=['GET'])
-@jwt_required()
-def listar_novedades():
-    """«Mercancía sin código» que los operarios reportaron al contar."""
-    from app.models.usuario import Usuario
-    try:
-        uid = int(get_jwt_identity())
-    except (TypeError, ValueError):
-        return jsonify({'error': 'Token inválido'}), 401
-    u = db.session.get(Usuario, uid)
-    if not u or u.rol not in Roles.SUPERVISION:
-        return jsonify({'error': 'Sin permiso'}), 403
-    filas = ConteoService.listar_novedades(
-        almacen_id=request.args.get('almacen_id', type=int),
-        solo_abiertas=request.args.get('todas') != '1')
-    return jsonify({'novedades': filas, 'total': len(filas)}), 200
+# `GET /novedades` se retiró el 2026-09-24 por la misma razón que
+# `GET /bloqueados`: la lista vive en el tablero (`_novedades`).
 
 
 @conteo_bp.route('/novedades/<int:nid>/resolver', methods=['POST'])

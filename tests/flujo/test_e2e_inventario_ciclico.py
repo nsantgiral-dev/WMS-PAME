@@ -795,10 +795,9 @@ class TestVentaDuranteElConteo:
         assert t.get('sin_tareas'), t
 
         # Está en la cola del líder y en el tablero.
-        st, bl = b.get(b.supervisor, f'/api/conteo/bloqueados?almacen_id={b.almacen.id}')
-        fila = next(x for x in bl['bloqueados'] if x['id'] == sid)
-        assert fila['motivo_bloqueo'] == 'MOVIMIENTO_CONTINUO' and fila['nivel'] == 'CC1'
         st, t = b.get(b.supervisor, f'/api/conteo/lider/tablero?almacen_id={b.almacen.id}')
+        fila = next(x for x in t['decisiones']['bloqueados']['filas'] if x['id'] == sid)
+        assert fila['motivo_bloqueo'] == 'MOVIMIENTO_CONTINUO' and fila['nivel'] == 'CC1'
         assert t['decisiones']['bloqueados']['por_motivo'] == {'MOVIMIENTO_CONTINUO': 1}
         # Un operario no reabre.
         st, r = b.post(b.op_b, f'/api/conteo/{sid}/reabrir', {})
@@ -1267,6 +1266,7 @@ def _un_dia(b, monkeypatch):
 SONDAS = {
     'reabrir_cancelar_bloqueado': ('post', '/api/conteo/999999/reabrir', {}),
     'resolver_novedad': ('post', '/api/conteo/novedades/999999/resolver', {'nota': 'x'}),
+    'contar_definitivo': ('get', '/api/conteo/definitivos', None),
     'aprobar_ajuste': ('put', '/api/conteo/999999/ajustar', {}),
     'recontar': ('post', '/api/conteo/manual', {'almacen_id': None, 'producto_codigo': 'NO-EXISTE'}),
     'cancelar_conteo': ('put', '/api/conteo/999999/cancelar', {'motivo': 'x'}),
@@ -1305,8 +1305,10 @@ class TestTableroDelLider:
         assert aud['esperan_al_lider'] == 0 and aud['filas'][0]['accion']['tipo'] == 'EN_COLA'
         assert [f['id'] for f in d['rechazados_siesa']['filas']] == [ids['err_conf']]
         assert d['rechazados_siesa']['total_sistema'] == 1
+        assert d['definitivos']['total'] == 0
         assert t['resumen'] == {'decisiones_pendientes': 5, 'por_bloque': {
-            'bloqueados': 1, 'novedades': 1, 'ajustes': 2, 'auditorias': 0, 'rechazados_siesa': 1}}
+            'bloqueados': 1, 'novedades': 1, 'definitivos': 0, 'ajustes': 2, 'auditorias': 0,
+            'rechazados_siesa': 1}}
         hoy = t['hoy']
         assert hoy['cerrados'] == 8, hoy
         assert hoy['pendientes_vivas'] == 2, hoy       # la auditoría y el que se está contando
