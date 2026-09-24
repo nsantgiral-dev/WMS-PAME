@@ -206,6 +206,14 @@ function _nivelConteoTxt(nivel) {
   return { CC1: '1er conteo', CC2: '2º conteo', CC3: 'conteo definitivo' }[nivel] || nivel || '';
 }
 
+/** Quién contó: el nombre si el servidor lo manda; si no, el número de
+ *  operario. Texto plano (sin escapar): va por esc() donde se pinta. */
+function _quienContoTxt(x, sinDato = '—') {
+  if (!x) return sinDato;
+  if (x.operario_nombre) return x.operario_nombre;
+  return x.operario_id ? 'Op #' + x.operario_id : sinDato;
+}
+
 /** El motivo del ajuste (AJ-ENT / AJ-SAL) como lo dice la bodega. */
 function _motivoAjusteTxt(codigo) {
   if (codigo === 'AJ-ENT') return 'sobrante';
@@ -318,9 +326,9 @@ function _renderCardAccion(s) {
       <div style="font-size:9px;color:#415A70;font-weight:700;text-transform:uppercase;margin-bottom:3px;">2º conteo</div>
       ${hijo && !cc2Pendiente
         ? `<div style="font-size:20px;font-weight:800;color:${coinciden?'#22C55E':'#F87171'};line-height:1;">${esc(hijo.cantidad_fisica != null ? hijo.cantidad_fisica : '—')}</div>
-           <div style="font-size:9px;color:#415A70;margin-top:2px;">${esc(hijo.operario_nombre || (hijo.operario_id ? `Op #${hijo.operario_id}` : '—'))}</div>`
+           <div style="font-size:9px;color:#415A70;margin-top:2px;">${esc(_quienContoTxt(hijo))}</div>`
         : `<div style="font-size:16px;color:#415A70;padding:2px 0;">⏳</div>
-           <div style="font-size:9px;color:#415A70;margin-top:2px;">${esc(hijo ? (hijo.operario_nombre || (hijo.operario_id ? `Op #${hijo.operario_id}` : 'asignado')) : 'sin asignar')}</div>`}`;
+           <div style="font-size:9px;color:#415A70;margin-top:2px;">${esc(hijo ? _quienContoTxt(hijo, 'asignado') : 'sin asignar')}</div>`}`;
   }
 
   return `<div style="background:#121C26;border:1px solid ${bordColor};border-radius:12px;padding:14px;margin-bottom:10px;">
@@ -343,7 +351,7 @@ function _renderCardAccion(s) {
       <div style="border-left:1px solid #1C2B3A;border-right:1px solid #1C2B3A;">
         <div style="font-size:9px;color:#415A70;font-weight:700;text-transform:uppercase;margin-bottom:3px;">1er conteo</div>
         <div style="font-size:20px;font-weight:800;color:#FBBF24;line-height:1;">${esc(s.cantidad_fisica != null ? s.cantidad_fisica : '—')}</div>
-        <div style="font-size:9px;color:#415A70;margin-top:2px;">${esc(s.operario_nombre || (s.operario_id ? `Op #${s.operario_id}` : '—'))}</div>
+        <div style="font-size:9px;color:#415A70;margin-top:2px;">${esc(_quienContoTxt(s))}</div>
       </div>
       <div>${col3Html}</div>
     </div>
@@ -392,7 +400,7 @@ function _renderCardProgreso(s) {
       <div style="flex:1;min-width:0;">
         <div style="font-size:12px;font-weight:700;">${esc(s.producto_codigo || '—')}${_tipoTag(s)}</div>
         <div style="font-size:11px;color:#415A70;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(s.producto_nombre || '')}</div>
-        <div style="font-size:11px;color:#415A70;margin-top:2px;">📍 ${esc(s.ubicacion_codigo || '—')}${s.operario_id ? ` · 👤 ${esc(s.operario_nombre || `Op #${s.operario_id}`)}` : ''}</div>
+        <div style="font-size:11px;color:#415A70;margin-top:2px;">📍 ${esc(s.ubicacion_codigo || '—')}${s.operario_id ? ` · 👤 ${esc(_quienContoTxt(s))}` : ''}</div>
       </div>
       <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px;flex-shrink:0;margin-left:8px;">
         ${s.clasificacion_abc ? `<span style="background:#1C2B3A;color:#FBBF24;font-size:9px;font-weight:700;padding:1px 5px;border-radius:6px;">ABC-${esc(s.clasificacion_abc)}</span>` : ''}
@@ -1217,6 +1225,7 @@ function conteoAbrirAjuste(s) {
   const col3 = cc3Hecho
     ? { titulo: 'Definitivo', valor: cc3.cantidad_fisica, color: '#fbbf24' }
     : { titulo: '2º conteo', valor: hijo?.cantidad_fisica, color: coinciden ? '#4ade80' : '#f87171' };
+  const colorCol3 = col3.color;   // color fijo del código, no un dato
   let referencia = '';
   if (cc3Hecho) referencia = `<div style="color:#fbbf24;font-size:11px;text-align:center;">El 1º y el 2º conteo no coincidieron: manda el conteo definitivo (${esc(cc3.cantidad_fisica)})</div>`;
   else if (coinciden) referencia = '<div style="color:#4ade80;font-size:11px;text-align:center;">✓ El 1º y el 2º conteo coinciden</div>';
@@ -1238,7 +1247,7 @@ function conteoAbrirAjuste(s) {
       </div>
       <div>
         <div style="font-size:9px;color:#4b5563;text-transform:uppercase;margin-bottom:2px;">${esc(col3.titulo)}</div>
-        <div style="font-size:18px;font-weight:800;color:${col3.color};">${esc(col3.valor ?? '—')}</div>
+        <div style="font-size:18px;font-weight:800;color:${colorCol3};">${esc(col3.valor ?? '—')}</div>
       </div>
     </div>
     <div style="background:#0d0d0d;border-radius:8px;padding:10px;text-align:center;margin-bottom:8px;">
