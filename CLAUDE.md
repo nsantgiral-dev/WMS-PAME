@@ -4284,3 +4284,5 @@ leído existe y todo umbral declarado se lee). **20 mutaciones, las 20 rojas.**
 
 Rendimiento medido (SQLite, 12 conductores, 183 días, 26.352 paradas):
 resumen de 92 días 2,5 s; un día 0,9 s.
+
+Suite completa en este worktree (2026-09-24, sobre qa `ed730f7`): **7524 passed, 0 failed** (5 skipped, 19 xfailed).
