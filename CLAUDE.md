@@ -2584,9 +2584,9 @@ veces. Trinquete: `tests/test_conteo_hud_operario.py` (61 tests, 7 mutaciones).
 | Regla | Dónde vive |
 |---|---|
 | **Todo cierre declara cuánto contó.** `None`, negativo o decimal se rechaza; **el cero solo con `cero_confirmado=true` literal** («¿Confirmás que NO hay ninguna unidad?») | `ConteoService.exigir_cantidad_declarada`, dentro de `registrar_conteo` (toda puerta pasa por ahí). Guard AST: ninguna llamada a `registrar_conteo` deriva la cantidad de un literal, un `.get(…, default)` ni de `.cantidad_fisica` |
-| **«No lo encontré» → BLOQUEADO con `motivo_bloqueo='NO_ENCONTRADO'`**: nunca MATCH, CC2 ni ajuste. Va a la cola del líder, que **reabre** (vuelve al pool respetando el doble ciego) o **cancela** (toda la cadena) | `GET /api/conteo/bloqueados`, `POST /<id>/reabrir`, `PUT /<id>/cancelar` |
+| **«No lo encontré» → BLOQUEADO con `motivo_bloqueo='NO_ENCONTRADO'`**: nunca MATCH, CC2 ni ajuste. Va a la cola del líder, que **reabre** (vuelve al pool respetando el doble ciego) o **cancela** (toda la cadena) | el bloque «Conteos bloqueados» de 📥 Por decidir (`GET /api/conteo/lider/tablero`), `POST /<id>/reabrir`, `PUT /<id>/cancelar` |
 | **BLOQUEADO traba el hueco** (está en `EstadoConteo.CADENA_EN_CURSO`): el generador no abre otra cadena al lado | `app/models/conteo.py` |
-| **«Mercancía sin código»** es una novedad aparte (`novedades_conteo`), no toca el conteo | `GET /api/conteo/novedades`, `POST /novedades/<id>/resolver` |
+| **«Mercancía sin código»** es una novedad aparte (`novedades_conteo`), no toca el conteo | el bloque «Mercancía sin código» de 📥 Por decidir, `POST /novedades/<id>/resolver` |
 | **Escaneo idempotente con factor:** el escaneo manda `total_previo` y el servidor fija `previo + unidades` (la caja multiplica por su factor con la MISMA regla de picking: `MobileService._unidades_del_escaneo`). Lo tecleado y el «deshacer» mandan `total_acumulado` a `POST /api/mobile/conteo/total`. Un PWA viejo sin `total_previo` se rechaza pidiendo recargar | `mobile_service.procesar_escaneo` rama CONTEO |
 | **HUD único** (`conteo.js`) para el operario y el CC3: el producto en grande; si la ubicación no es física (`Ubicacion.es_fisica`: `SIESA-GENERAL` no lo es) dice «Buscalo en toda la bodega». El intercalado ya no cuelga conteos sobre una ubicación virtual | `conteoHudHtml` |
 
@@ -2603,7 +2603,7 @@ se cerraron en «Conteo: ninguna cadena queda sin salida».
 
 ## Conteo: el tablero del líder (2026-09-23)
 
-**Inventario Cíclico → 🧭 Líder** (`liderCargar`, `conteo.js`) ←
+**Inventario Cíclico → 📥 Por decidir** (antes «🧭 Líder»; `liderCargar`, `conteo.js`) ←
 `GET /api/conteo/lider/tablero?almacen_id=` (SUPERVISION) ← política en
 `app/services/tablero_lider_conteo.py`. Cero Siesa. No calcula nada nuevo:
 junta políticas que ya existían y las ordena como las atiende un jefe de bodega.
@@ -2730,7 +2730,7 @@ nueva, solo visible para `Roles.SUPERVISION` (admin/supervisor/jefe_almacén):
 - `GET /api/conteo/definitivos` — lista los CC3 pendientes. Vista ciega
   (`to_dict_operario()`): ni existencia_siesa ni lo que contaron CC1/CC2
   se exponen — el punto de CC3 es que sea independiente de los otros dos.
-- Pantalla nueva en el PWA: **Inventario Cíclico → pestaña "🎯 Definitivo"**
+- Pantalla nueva en el PWA: **Inventario Cíclico → pestaña "🎯 Definitivo"** (retirada el 2026-09-24: la cola vive en 📥 Por decidir, bloque «Conteos definitivos por contar»)
   (`app/static/pwa/conteo.js`, `index.html`). Mismo lenguaje visual que el
   conteo ciego de `picking.js` (contador grande, escaneo con cámara,
   confirmar/manual) pero aislada — no toca `TAREA_ACTUAL` ni `pedirTarea()`
@@ -3182,3 +3182,32 @@ comentario del modelo sugiere ese origen. Hace falta decidir qué plan es «marc
 y registrar una consulta que la lea (sin contrato: descubrimiento en vivo), o
 cambiar el filtro por otro dato. Hasta entonces el filtro devuelve vacío **y lo
 dice**. El Armador (`MARCAS_CHINA`) depende del mismo dato.
+
+
+---
+
+## Inventario Cíclico: cuatro pestañas, un lugar para cada cosa (2026-09-24)
+
+**📥 Por decidir · 📋 Conteos · ⚙️ Plan ABC · 📊 Estadísticas · 🗄️ Datos** (al
+final: es el kardex, no el conteo). Antes eran seis (Líder, Conteos, ABC, Datos,
+Definitivo, Estadísticas), y se aprobaba un ajuste por tres lados, pero solo el
+tablero conocía el tope en pesos de quien mira.
+
+| Qué | Dónde, y solo ahí |
+|---|---|
+| Aprobar un ajuste | 📥 Por decidir → «Ajustes esperando decisión» (`liderAprobarAjuste`, con `no_puede_aprobar` por fila). `tests/test_inventario_ciclico_ia.py` exige que sea el único código que arma `/api/conteo/<id>/ajustar` |
+| Bloqueados y mercancía sin código | 📥 Por decidir (se retiraron `GET /api/conteo/bloqueados` y `/novedades`) |
+| Conteos definitivos por contar | 📥 Por decidir → «🎯 Contar ahora» (mismo HUD del operario). `invSubtab('definitivo')` abre Por decidir |
+| Seguir lo que está en curso | 📋 Conteos (reasignar, saltar recuento, cancelar, corregir, conteo manual) |
+
+**Un solo cargador para todo el módulo** (`invCargarPanel`, tabla
+`INV_SUBTABS`): el refresco de 30 s del admin solo toca pestañas `vivo`
+(Por decidir, Conteos) y solo si se ven; no vacía el panel con «Cargando…» si
+ya hay datos (sí cuando cambia el filtro); una respuesta vieja no pisa; los
+intervalos se limpian al salir. Era el parpadeo de Estadísticas: el tick
+volvía a entrar por `invSubtab` y vaciaba el panel cada 30 s.
+`tests/test_inventario_refresco_sin_parpadeo.py`.
+
+**Los filtros filtran lo que dicen** (ver la sección de ese nombre): la vista
+viaja al servidor (`conteo_listado.VISTAS`), Acción y Resueltos solo traen
+raíces, y el filtro de marca declara cuando ningún producto tiene marca.
