@@ -1,9 +1,11 @@
 """
 Analítica — lectura de la bitácora de acciones (Fase 0, 2026-09-24).
 
-Todavía no hay pantalla (Fase 1): el endpoint existe para que la bitácora se
-pueda consultar desde el día en que empieza a escribirse, no desde el día en
-que alguien diseñe la vista. Declarado en `DEUDA_SIN_UI`.
+Desde la Fase 1 la consume la pantalla 📈 Analítica → 📜 Bitácora
+(`analitica_bitacora.js`). Cada fila sale enriquecida por
+`analitica_salud.describir_acciones`: quién (nombre), la frase legible, el
+pedido, la hora Bogotá y el antes → después campo por campo. **Solo lectura**:
+la lógica de registro vive en `app/services/bitacora.py` y no se toca acá.
 """
 from datetime import date
 
@@ -65,16 +67,22 @@ def listar_bitacora():
     if entidad:
         q = q.filter(BitacoraAccion.entidad == entidad)
     for campo in ('entidad_id', 'usuario_id', 'almacen_id'):
-        valor = request.args.get(campo, type=int)
-        if valor is not None:
-            q = q.filter(getattr(BitacoraAccion, campo) == valor)
+        crudo = (request.args.get(campo) or '').strip()
+        if not crudo:
+            continue
+        # `type=int` de Flask convertía la basura en None y el filtro se
+        # ignoraba en silencio: pedir «almacén x» devolvía todos.
+        if not crudo.isdigit():
+            return jsonify({'error': f'{campo}: debe ser un número entero'}), 400
+        q = q.filter(getattr(BitacoraAccion, campo) == int(crudo))
 
     page = max(1, request.args.get('page', 1, type=int))
     per_page = min(max(1, request.args.get('per_page', 50, type=int)), 200)
     pagina = (q.order_by(BitacoraAccion.ocurrido_en.desc(), BitacoraAccion.id.desc())
               .paginate(page=page, per_page=per_page, error_out=False))
+    from app.services.analitica_salud import describir_acciones
     return jsonify({
-        'acciones': [a.to_dict() for a in pagina.items],
+        'acciones': describir_acciones([a.to_dict() for a in pagina.items]),
         'total': pagina.total,
         'pagina': page,
         'por_pagina': per_page,

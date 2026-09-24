@@ -3572,3 +3572,75 @@ Trinquete: `tests/test_analitica_recorrido.py` (55 tests, mundo armado con los
 servicios reales: completo, cancelado con motivo, rechazado, sin pago, recogido
 incompleto, en curso, fuera del WMS, sin valor, crédito, bloqueado, sin clave;
 render en Node con `util.js` real). 13 mutaciones, las 13 rojas.
+
+---
+
+## Analítica — Salud del dato y Bitácora (Fase 1, 2026-09-24)
+
+**🩺 Salud del dato** contesta «¿puedo confiar en los números de hoy?» antes de
+que alguien decida sobre el recorrido, las fugas o los KPI.
+`GET /api/analitica/salud` (gestión, `_es_gestion`) ← `app/services/analitica_salud.py`
+← vista `analitica_salud.js` (`anSaludCargar(el, f)`). **Cero Siesa**: lee la
+base del WMS y reutiliza lo que ya existía, no lo reimplementa.
+
+| Fuente | De dónde sale el veredicto | Crítica |
+|---|---|---|
+| Pedidos de Siesa | `registro_sync_service.estado_persistido('pedidos')`; tolerancia 15 min operativos (ventana 7–21) | sí |
+| Existencias (`stock_siesa`) | `max(updated_at)` por bodega de `_BODEGAS_INVENTARIO` (o la del almacén); 2 h operativas | sí |
+| Fotos ventas / stock / cartera | `fotos_siesa_corridas`: última corrida **completa** por alcance; se espera la de ayer, o la de hoy pasadas las 19:30. Stock con costo incompleto en una bodega vendible → INCOMPLETA | no |
+| Kardex | `kardex_service.salud_kardex()` traducido (`_KARDEX_A_VEREDICTO`); un código que no conoce se lee INCOMPLETA, nunca al día | no |
+| Vigía adopción / facturación | `serie_vigia` por semana; se espera la semana cerrada anterior (lunes ≥ 06:00) | no |
+
+Además: crons **de este proceso** (`SCHEDULERS_ACTIVOS`, lo mismo que
+`/api/health/siesa`), invariantes de `app/services/auditoria/` por flujo, cola
+de Siesa (FALLIDO = crítico; pendiente > 1 h operativa o PROCESANDO > 30 min =
+advertencia) y **cobertura de `pedido_clave`** en picking/packing de PEDIDO del
+rango (< 95 % advertencia, < 80 % crítico; sin tareas = `null`, no 0 %).
+
+- **Cinco veredictos** (`AL_DIA`, `ATRASADA`, `INCOMPLETA`, `APAGADA`,
+  `SIN_DATOS`) y **una** traducción a nivel (`_NIVEL_DE_VEREDICTO`, `nivel_de`):
+  apagada y sin datos nunca son `ok`; en una fuente crítica son `critico`.
+- **Global** (`veredicto_global`): `CONFIABLE` solo si todo está `ok`; cualquier
+  crítico → `NO_CONFIABLE`; lo demás `CON_RESERVAS`. Una auditoría que no miró
+  todos los flujos, o con consultas truncadas, tampoco deja decir «confiable».
+- **Tiempo operativo, no de reloj** (`tiempo_operativo`): de noche Siesa no
+  opera (Regla 14) y la fuente no «se atrasa».
+- **La web y el worker son procesos distintos.** Los crons del worker (fotos,
+  refresco de existencias, alertas) no se ven desde la web: el veredicto sale de
+  la **frescura del dato en la base**. Los interruptores (`FOTOS_SIESA`,
+  `VIGIA_INGESTA_FACTURACION`) se leen en ESTE proceso y Railway da variables
+  por servicio: con dato fresco manda el dato; con dato viejo e interruptor
+  apagado acá se declara `APAGADA`.
+- **Tope de la auditoría**: resultado guardado 10 min por proceso
+  (`AUDITORIA_TTL`); al recalcular no se empieza un flujo nuevo pasados 20 s
+  (`AUDITORIA_PRESUPUESTO_S`); lo que no alcanzó va en `flujos_no_evaluados`.
+  Los invariantes miran el estado actual, no el rango ni el almacén.
+- Filtros: `desde`/`hasta`/`almacen_id` validados (400 ante basura, rango >
+  366 días o almacén inexistente). Solo la cobertura (rango + almacén) y las
+  existencias (almacén) los respetan; la salud de una fuente es de hoy.
+
+**📜 Bitácora** — `analitica_bitacora.js` (`anBitacoraCargar(el, f)`) sobre
+`GET /api/analitica/bitacora` (ya no está en `DEUDA_SIN_UI`) y
+`GET /api/analitica/bitacora/patrones`. La lista llega enriquecida por
+`describir_acciones` (**solo lectura**, la lógica de registro no se tocó):
+«Ana canceló el picking PK-123 del pedido 003-PD-1502 — motivo: …», con nombre
+(o «El sistema», o «Usuario #N (ya no existe)»), hora Bogotá, almacén y el
+antes → después campo por campo (el pedido sale de lo que la fila guardó, o de
+la tarea viva). Patrones: por persona, por acción, por entidad y por hora del
+día Bogotá, cada uno con su `n`; `opciones` se calcula solo con rango y
+almacén, para que los selectores no se encojan al filtrar. Tope del patrón
+por hora: 20.000 filas, declarado. `/bitacora` ahora rechaza `almacen_id`,
+`usuario_id` o `entidad_id` ilegibles con 400 (antes `type=int` los ignoraba y
+devolvía todo).
+
+**Lo que NO mide todavía:** si el worker está vivo (solo se infiere por sus
+datos); la salud del kardex en QA será siempre `SIN_DATOS` (la consulta da
+401); las fotos nacen apagadas; Conteo y Flota no escriben en la bitácora.
+
+**Para el integrador:** en este worktree `test_frontend_integrity::
+test_ningun_endpoint_nuevo_sin_consumidor` queda rojo con las tres rutas
+porque el shell (`analitica.js`, con `AN_VISTAS`) lo escribe otro agente;
+verificado que con la tabla del contrato presente el guard pasa.
+
+Trinquete: `tests/test_analitica_salud.py` (servicio con datos que distinguen
+los cinco veredictos, endpoints, render real en Node con `util.js`).
