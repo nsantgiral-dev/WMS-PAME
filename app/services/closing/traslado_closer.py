@@ -125,6 +125,8 @@ class TrasladoPackingCloser(IPackingCloser):
         # ── Encolar DESPACHO_TRASLADO → 174930 (DLQ con retry) ───────────────
         self._encolar_job_traslado(tarea_id, solicitud, items_comp)
 
+        if not tarea.cerrado_por_id:   # un reintento no pisa al primero
+            tarea.cerrado_por_id = usuario_id or None
         tarea.estado = 'DESPACHADO'
         db.session.commit()
 
@@ -252,11 +254,10 @@ class TrasladoPackingCloser(IPackingCloser):
         }
         if job and job.estado == EstadoSiesaJob.FALLIDO:
             import json
-            job.estado = EstadoSiesaJob.PENDIENTE
-            job.intentos = 0
-            job.proximo_intento = None
-            job.error_ultimo = None
-            job.payload = json.dumps(payload_dict, ensure_ascii=False)
+            from app.services.siesa_job_service import reencolar_job_fallido
+            reencolar_job_fallido(
+                job, motivo='Reintento del cierre de packing de traslado',
+                payload=json.dumps(payload_dict, ensure_ascii=False))
         elif not job:
             SiesaJob.encolar(
                 tipo='DESPACHO_TRASLADO',

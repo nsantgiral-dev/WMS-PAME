@@ -1991,17 +1991,46 @@ def get_jobs_fallidos():
     return SiesaJob.query.filter_by(estado=EstadoSiesaJob.FALLIDO).order_by(SiesaJob.fecha_creacion.desc()).all()
 
 
-def reintentar_job(job_id: int) -> dict:
+def reencolar_job_fallido(job: SiesaJob, *, usuario_id: int = None,
+                          motivo: str = None, origen: str = None,
+                          payload: str = None) -> SiesaJob:
+    """Un job FALLIDO vuelve a PENDIENTE — **el fallo que se borra queda escrito**.
+
+    Reintentar pone `intentos` en 0 y `error_ultimo` en None: sin esto, un job
+    que falló tres veces con «el documento de cruce no existe» y después pasó
+    se veía igual que uno que pasó a la primera. El historial del fallo va a
+    la bitácora (REINTENTAR) antes de limpiarlo, en la misma transacción.
+
+    Única función que limpia `error_ultimo`/`intentos` de un job — el
+    trinquete de `tests/test_bitacora_acciones.py` lo exige (con una excepción
+    declarada en conteo). No hace commit.
+    """
+    from app.services.bitacora import registrar_accion, foto
+    registrar_accion(
+        'REINTENTAR', 'SiesaJob', job.id,
+        entidad_codigo=f'{job.tipo}#{job.id}',
+        usuario_id=usuario_id, motivo=motivo, origen=origen,
+        antes=foto(job, ['estado', 'intentos', 'error_ultimo', 'proximo_intento',
+                         'referencia_tipo', 'referencia_id']),
+        despues={'estado': EstadoSiesaJob.PENDIENTE, 'intentos': 0},
+    )
+    job.estado = EstadoSiesaJob.PENDIENTE
+    job.intentos = 0
+    job.proximo_intento = None
+    job.error_ultimo = None
+    if payload is not None:
+        job.payload = payload
+    return job
+
+
+def reintentar_job(job_id: int, usuario_id: int = None, motivo: str = None) -> dict:
     """Admin fuerza un reintento de un job FALLIDO."""
     job = SiesaJob.query.get(job_id)
     if not job:
         raise ValueError(f'Job {job_id} no encontrado')
     if job.estado != EstadoSiesaJob.FALLIDO:
         raise ValueError(f'Job {job_id} no está en estado FALLIDO — está {job.estado}')
-    job.estado = EstadoSiesaJob.PENDIENTE
-    job.intentos = 0
-    job.proximo_intento = None
-    job.error_ultimo = None
+    reencolar_job_fallido(job, usuario_id=usuario_id, motivo=motivo)
     db.session.commit()
     return job.to_dict()
 

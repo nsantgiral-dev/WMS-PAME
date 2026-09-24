@@ -187,14 +187,23 @@ def cancelar(tarea_id):
         return jsonify({'error': 'Solo admin o jefe de almacén puede cancelar tareas'}), 403
     data = request.get_json() or {}
 
+    from app.services.bitacora import registrar_accion, motivo_obligatorio, foto, MotivoRequerido
+    try:
+        motivo = motivo_obligatorio(data.get('motivo'), 'cancelar una tarea de reposición')
+    except MotivoRequerido as e:
+        return jsonify({'error': str(e)}), 400
+
     tarea = TareaReposicion.query.get(tarea_id)
     if not tarea:
         return jsonify({'error': f'Tarea {tarea_id} no encontrada'}), 404
     if tarea.estado in (EstadoReposicion.COMPLETADA, EstadoReposicion.CANCELADA):
         return jsonify({'error': f'Tarea ya está en estado {tarea.estado}'}), 400
 
+    antes = foto(tarea, ['estado', 'abastecedor_id', 'notas'])
     tarea.estado = EstadoReposicion.CANCELADA
-    tarea.notas = (tarea.notas or '') + f' | Cancelada: {data.get("motivo", "sin motivo")}'
+    tarea.notas = (tarea.notas or '') + f' | Cancelada: {motivo}'
+    registrar_accion('CANCELAR', tarea, usuario_id=usuario_id, motivo=motivo,
+                     antes=antes, despues={'estado': tarea.estado})
     db.session.commit()
     return jsonify({'ok': True, 'tarea': tarea.to_dict()}), 200
 
@@ -433,7 +442,8 @@ def reintentar_job(job_id):
     if not u or u.rol not in Roles.SUPERVISION:
         return jsonify({'error': 'Sin permiso — solo admin/supervisor/jefe_almacen puede reintentar jobs'}), 403
     try:
-        resultado = _reintentar(job_id)
+        data = request.get_json(silent=True) or {}
+        resultado = _reintentar(job_id, usuario_id=uid, motivo=data.get('motivo'))
         return jsonify({'ok': True, 'job': resultado}), 200
     except ValueError as e:
         return jsonify({'error': str(e)}), 400

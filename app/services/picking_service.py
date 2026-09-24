@@ -15,6 +15,7 @@ from app.models.picking import TareaPicking, EstadoPicking
 from app.models.inventario import UbicacionProducto, MovimientoInventario
 from app.models.producto import Producto
 from app.models.ubicacion import Ubicacion
+from app.services.bitacora import registrar_accion, motivo_obligatorio, foto
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -726,14 +727,37 @@ class PickingService:
         return tarea
 
     @staticmethod
-    def cancelar_picking(tarea_id: int, motivo: str = None):
-        """Cancela una tarea y libera la reserva (y el bloqueado si aplica)."""
+    def _soltar_operario(tarea) -> None:
+        """Devuelve la tarea al pool **sin perder quién la tenía**.
+
+        Reabrir, reportar un problema, auditar y el backorder ponen
+        `operario_id` en None para que otro la tome. Eso borraba la
+        atribución: una tarea bloqueada por faltante ya no decía quién caminó
+        hasta el hueco vacío. `operario_id` sigue significando «de quién es
+        ahora» (sus consumidores no cambian); la historia queda en
+        `ultimo_operario_id`. Única función que suelta al operario — el
+        trinquete de `tests/test_bitacora_acciones.py` lo exige.
+        """
+        if tarea.operario_id:
+            tarea.ultimo_operario_id = tarea.operario_id
+        tarea.operario_id = None
+
+    @staticmethod
+    def cancelar_picking(tarea_id: int, motivo: str = None, usuario_id: int = None):
+        """Cancela una tarea y libera la reserva (y el bloqueado si aplica).
+
+        El motivo es obligatorio y queda en la bitácora con quién canceló.
+        Antes se recibía y se tiraba: una tarea cancelada no decía por qué.
+        """
+        motivo = motivo_obligatorio(motivo, 'cancelar una tarea de picking')
         tarea = TareaPicking.query.get(tarea_id)
         if not tarea:
             raise ValueError('Tarea no encontrada')
 
         if tarea.estado == EstadoPicking.COMPLETADO:
             raise ValueError('No se puede cancelar una tarea completada')
+        antes = foto(tarea, ['estado', 'operario_id', 'cantidad_solicitada',
+                             'cantidad_recogida', 'motivo_bloqueo'])
 
         reg = UbicacionProducto.query.filter_by(
             ubicacion_id=tarea.ubicacion_id,
@@ -747,6 +771,9 @@ class PickingService:
                 reg.bloqueado = max(0, reg.bloqueado - PickingService._cantidad_congelada(tarea, cantidad_faltante))
 
         tarea.estado = EstadoPicking.CANCELADO
+        registrar_accion('CANCELAR', tarea, usuario_id=usuario_id, motivo=motivo,
+                         antes=antes, despues={'estado': tarea.estado},
+                         entidad_codigo=tarea.codigo)
         db.session.commit()
         return tarea
 
@@ -874,11 +901,15 @@ class PickingService:
                 'devuelto_estante_at': ahora.isoformat()}
 
     @staticmethod
-    def reabrir_picking(tarea_id: int):
+    def reabrir_picking(tarea_id: int, usuario_id: int = None, motivo: str = None):
         """
         Reabre una tarea BLOQUEADA → PENDIENTE.
         Libera el inventario congelado por el bloqueo y la devuelve al pool.
+
+        Pone `cantidad_recogida` en cero: lo recogido antes del bloqueo queda
+        en el `antes` de la bitácora, con el operario que lo recogió.
         """
+        motivo = motivo_obligatorio(motivo, 'reabrir una tarea de picking')
         tarea = TareaPicking.query.get(tarea_id)
         if not tarea:
             raise ValueError('Tarea no encontrada')
@@ -894,11 +925,17 @@ class PickingService:
             cantidad_faltante = max(0, tarea.cantidad_solicitada - (tarea.cantidad_recogida or 0))
             reg.bloqueado = max(0, reg.bloqueado - PickingService._cantidad_congelada(tarea, cantidad_faltante))
 
+        antes = foto(tarea, ['estado', 'operario_id', 'cantidad_recogida',
+                             'empaques_escaneados', 'motivo_bloqueo',
+                             'observaciones_bloqueo'])
         tarea.estado = EstadoPicking.PENDIENTE
-        tarea.operario_id = None
+        PickingService._soltar_operario(tarea)
         tarea.cantidad_recogida = 0
         tarea.empaques_escaneados = 0
         tarea.motivo_bloqueo = None
+        registrar_accion('REABRIR', tarea, usuario_id=usuario_id, motivo=motivo,
+                         antes=antes, despues=foto(tarea, list(antes)),
+                         entidad_codigo=tarea.codigo)
         db.session.commit()
         return tarea
 
@@ -944,6 +981,8 @@ class PickingService:
         if tarea.estado != EstadoPicking.BLOQUEADO:
             raise ValueError(f'Solo se pueden auditar tareas BLOQUEADAS (estado: {tarea.estado})')
 
+        antes_auditoria = foto(tarea, ['estado', 'operario_id', 'cantidad_recogida',
+                                       'motivo_bloqueo', 'observaciones_bloqueo'])
         cantidad_faltante = max(0, tarea.cantidad_solicitada - (tarea.cantidad_recogida or 0))
         # Backorder de Siesa: el WMS no perdió nada, Siesa simplemente no comprometió
         # esas unidades. Las auditorías de estas tareas no tocan el stock ni el
@@ -1129,7 +1168,15 @@ class PickingService:
         tarea.auditoria_resuelta_por_id   = admin_id
         tarea.fecha_auditoria             = datetime.utcnow()
         tarea.estado                      = EstadoPicking.CANCELADO
-        tarea.operario_id                 = None
+        PickingService._soltar_operario(tarea)
+        registrar_accion(
+            'CANCELAR', tarea, usuario_id=admin_id,
+            motivo=(f'Auditoría {resultado}'
+                    + (f': {tarea.auditoria_observaciones}' if tarea.auditoria_observaciones else '')),
+            antes=antes_auditoria,
+            despues={'estado': tarea.estado, 'auditoria_resultado': resultado,
+                     'auditoria_cantidad_hallada': cantidad_hallada},
+            entidad_codigo=tarea.codigo)
 
         # 4. Sincronizar el packing del pedido con el resultado de la auditoría.
         # total_disponible = lo que ya se había recogido antes del bloqueo
@@ -1176,6 +1223,13 @@ class PickingService:
                 ).first()
                 if item:
                     if total_disponible <= 0:
+                        # La línea sale del empaque: el pedido sigue parcial.
+                        # Lo único que queda de ella es este `antes`.
+                        registrar_accion(
+                            'ELIMINAR', item, usuario_id=admin_id,
+                            motivo=f'Auditoría {resultado} de {tarea.codigo}: nada que empacar',
+                            antes=foto(item), entidad_codigo=packing.codigo,
+                            almacen_id=packing.almacen_id)
                         db.session.delete(item)
                     else:
                         item.cantidad_esperada = total_disponible
@@ -1242,10 +1296,19 @@ class PickingService:
                 idempotency_key=f'SP-{tarea.id}-{int(_dt.utcnow().timestamp()*1000)}',
             ))
 
+        antes_bloqueo = foto(tarea, ['estado', 'operario_id', 'motivo_bloqueo'])
         tarea.estado = EstadoPicking.BLOQUEADO
-        tarea.operario_id = None
+        PickingService._soltar_operario(tarea)
         tarea.motivo_bloqueo = motivo
         tarea.observaciones_bloqueo = observaciones
+        registrar_accion(
+            'BLOQUEAR', tarea, usuario_id=operario_id,
+            motivo=(motivo or '') + (f': {observaciones}' if observaciones else ''),
+            antes=antes_bloqueo,
+            despues={'estado': tarea.estado, 'motivo_bloqueo': motivo,
+                     'cantidad_encontrada': cantidad_encontrada,
+                     'cantidad_faltante': cantidad_faltante},
+            entidad_codigo=tarea.codigo)
 
         # Snapshot para el tablero BI (métricas "SKU agotado" / "venta perdida $")
         # — solo agotado físico real, no el rechazo previo de Siesa (BACKORDER_SIESA
@@ -1314,7 +1377,7 @@ class PickingService:
                 reg.reservado = max(0, reg.reservado - cant)
 
             tarea.estado = EstadoPicking.BLOQUEADO
-            tarea.operario_id = None
+            PickingService._soltar_operario(tarea)
             tarea.motivo_bloqueo = 'BACKORDER_SIESA'
             tarea.observaciones_bloqueo = detalle or (
                 'Siesa no comprometió esta línea del pedido (backorder) — '

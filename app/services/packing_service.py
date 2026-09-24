@@ -579,17 +579,17 @@ class PackingService:
         if job_dlq and job_dlq.estado == _ESJ.FALLIDO:
             # Reusar el job fallido: resetear a PENDIENTE con el payload actualizado.
             # Esto evita crear un job nuevo que duplicaría el envío a Siesa.
-            job_dlq.estado = _ESJ.PENDIENTE
-            job_dlq.intentos = 0
-            job_dlq.proximo_intento = None
-            job_dlq.error_ultimo = None
-            job_dlq.payload = json.dumps({
-                'tarea_id': tarea_id,
-                'tipo_docto_pedido': tarea.tipo_docto_pedido_siesa or '',
-                'consec_docto_pedido': consec_para_siesa,
-                'items': items_payload,
-                'numero_pedido_siesa': tarea.numero_pedido_siesa,
-            }, ensure_ascii=False)
+            from app.services.siesa_job_service import reencolar_job_fallido
+            reencolar_job_fallido(
+                job_dlq, origen='PackingService._cerrar_packing_pedido_legacy',
+                motivo='Reintento del cierre de packing',
+                payload=json.dumps({
+                    'tarea_id': tarea_id,
+                    'tipo_docto_pedido': tarea.tipo_docto_pedido_siesa or '',
+                    'consec_docto_pedido': consec_para_siesa,
+                    'items': items_payload,
+                    'numero_pedido_siesa': tarea.numero_pedido_siesa,
+                }, ensure_ascii=False))
             logger.warning(
                 f'[PACKING] Job FALLIDO {job_dlq.id} reutilizado (reset a PENDIENTE) '
                 f'para tarea {tarea_id} — evita doble factura a Siesa'
@@ -623,10 +623,17 @@ class PackingService:
         return bultos_existentes
 
     @staticmethod
-    def cancelar(tarea_id: int, motivo: str = None):
-        """Cancela una tarea de packing."""
+    def cancelar(tarea_id: int, motivo: str = None, usuario_id: int = None):
+        """Cancela una tarea de packing.
+
+        El motivo es obligatorio. Antes pisaba `observaciones` y no dejaba
+        quién: ahora `observaciones` conserva lo que tenía más el motivo, y la
+        bitácora guarda quién, cuándo, el antes y cada bulto borrado.
+        """
         from app.models.bulto import Bulto
         from app.models.siesa_job import SiesaJob as _SJ
+        from app.services.bitacora import registrar_accion, motivo_obligatorio, foto
+        motivo = motivo_obligatorio(motivo, 'cancelar un empaque')
         tarea = TareaPacking.query.get(tarea_id)
         if not tarea:
             raise ValueError('Tarea no encontrada')
@@ -646,21 +653,34 @@ class PackingService:
                 'Espera a que termine o falle definitivamente antes de cancelar.'
             )
 
-        # Si tiene bultos sin cargar, eliminarlos antes de cancelar
+        # Si tiene bultos sin cargar, eliminarlos antes de cancelar — cada uno
+        # deja su fila completa en la bitácora: es lo único que queda de él.
+        antes = foto(tarea, ['estado', 'observaciones', 'empacador_id'])
+        for b in Bulto.query.filter_by(tarea_id=tarea_id, estado='PENDIENTE').all():
+            registrar_accion('ELIMINAR', b, usuario_id=usuario_id, motivo=motivo,
+                             antes=foto(b), almacen_id=tarea.almacen_id)
         Bulto.query.filter_by(tarea_id=tarea_id, estado='PENDIENTE').delete()
         tarea.estado = EstadoPacking.CANCELADO
-        tarea.observaciones = motivo
+        tarea.observaciones = (f'{tarea.observaciones} | Cancelado: {motivo}'
+                               if tarea.observaciones else motivo)
+        registrar_accion('CANCELAR', tarea, usuario_id=usuario_id, motivo=motivo,
+                         antes=antes, despues=foto(tarea, ['estado', 'observaciones']))
         db.session.commit()
         return tarea
 
     @staticmethod
-    def resetear_siesa(tarea_id: int):
+    def resetear_siesa(tarea_id: int, usuario_id: int = None, motivo: str = None):
         """
         Elimina los bultos pendientes y vuelve el estado a VERIFICADO
         para poder reintentar el cierre con Siesa.
         Solo aplica cuando Siesa falló (siesa_triggered=False).
+
+        Limpieza técnica con razón propia (Siesa falló): el motivo es opcional
+        porque la pantalla no lo pide, y el porqué real —`siesa_response`, que
+        esta función borra— queda en el `antes` de la bitácora.
         """
         from app.models.bulto import Bulto
+        from app.services.bitacora import registrar_accion, foto
         tarea = TareaPacking.query.get(tarea_id)
         if not tarea:
             raise ValueError('Tarea no encontrada')
@@ -680,8 +700,15 @@ class PackingService:
                 'Usa el retry de Siesa en su lugar.'
             )
 
+        _motivo = motivo or 'Reset tras fallo de Siesa: redeclarar piezas'
+        for b in Bulto.query.filter_by(tarea_id=tarea_id).all():
+            registrar_accion('ELIMINAR', b, usuario_id=usuario_id, motivo=_motivo,
+                             antes=foto(b), almacen_id=tarea.almacen_id)
+        antes = foto(tarea, ['estado', 'siesa_response'])
         Bulto.query.filter_by(tarea_id=tarea_id).delete()
         tarea.estado = EstadoPacking.VERIFICADO
         tarea.siesa_response = None
+        registrar_accion('REABRIR', tarea, usuario_id=usuario_id, motivo=_motivo,
+                         antes=antes, despues={'estado': tarea.estado})
         db.session.commit()
         return tarea

@@ -1485,7 +1485,8 @@ def resetear_jobs_fallidos():
     ?tipo=DESPACHO_F470  (default)
     Solo admin.
     """
-    if not _solo_admin():
+    admin = _solo_admin()
+    if not admin:
         return jsonify({'error': 'Solo admin puede resetear jobs'}), 403
 
     from app.models.siesa_job import SiesaJob, EstadoSiesaJob
@@ -1504,11 +1505,11 @@ def resetear_jobs_fallidos():
             'reseteados': 0
         }), 200
 
+    # El error de cada job va a la bitácora antes de limpiarlo (Fase 0).
+    from app.services.siesa_job_service import reencolar_job_fallido
+    _motivo = (request.get_json(silent=True) or {}).get('motivo') or request.args.get('motivo')
     for job in jobs:
-        job.estado = EstadoSiesaJob.PENDIENTE
-        job.intentos = 0
-        job.proximo_intento = None
-        job.error_ultimo = None
+        reencolar_job_fallido(job, usuario_id=admin.id, motivo=_motivo)
 
     db.session.commit()
 

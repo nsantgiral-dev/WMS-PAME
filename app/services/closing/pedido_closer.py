@@ -67,6 +67,12 @@ class PedidoPackingCloser(IPackingCloser):
             msg = f'Tarea {tarea_id} sin datos Siesa válidos (tipo_docto / consec)'
             return CierreResult(exitoso=False, error=msg, mensaje=msg)
 
+        # Quién cerró: puede no ser el empacador (supervisión cierra ajenas).
+        # `usuario_id` llega en 0 cuando la vía no lo conoce — 0 no es nadie.
+        # Un reintento del cierre no pisa al primero que cerró.
+        if not tarea.cerrado_por_id:
+            tarea.cerrado_por_id = usuario_id or None
+
         # Encolar SiesaJob DESPACHO_F470
         self._encolar_job(tarea, tarea_id, items_payload)
         tarea.estado = 'DESPACHADO'
@@ -227,11 +233,11 @@ class PedidoPackingCloser(IPackingCloser):
             'numero_pedido_siesa': tarea.numero_pedido_siesa,
         }
         if job and job.estado == EstadoSiesaJob.FALLIDO:
-            job.estado = EstadoSiesaJob.PENDIENTE
-            job.intentos = 0
-            job.proximo_intento = None
-            job.error_ultimo = None
-            job.payload = json.dumps(payload_dict, ensure_ascii=False)
+            from app.services.siesa_job_service import reencolar_job_fallido
+            reencolar_job_fallido(
+                job, usuario_id=(getattr(tarea, 'cerrado_por_id', None) or None),
+                motivo='Reintento del cierre de packing',
+                payload=json.dumps(payload_dict, ensure_ascii=False))
         elif not job:
             SiesaJob.encolar(
                 tipo='DESPACHO_F470',

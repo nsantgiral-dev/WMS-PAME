@@ -56,8 +56,13 @@ def listar_tareas():
 @picking_bp.route('/purgar-ceros', methods=['DELETE'])
 @jwt_required()
 def purgar_picks_cero():
-    """Elimina tareas COMPLETADO con cantidad_recogida=0 (registros basura de confirms fallidos)."""
+    """Elimina tareas COMPLETADO con cantidad_recogida=0 (registros basura de confirms fallidos).
+
+    Es limpieza técnica, pero borra filas: exige `motivo` (query o JSON) y
+    cada tarea borrada deja en la bitácora su fila completa y quién la borró.
+    """
     from app.models.usuario import Usuario
+    from app.services.bitacora import registrar_accion, motivo_obligatorio, foto, MotivoRequerido
     try:
         uid = int(get_jwt_identity())
     except (TypeError, ValueError):
@@ -65,6 +70,12 @@ def purgar_picks_cero():
     u = Usuario.query.get(uid)
     if not u or u.rol not in Roles.SUPERVISION:
         return jsonify({'error': 'Sin permiso'}), 403
+    try:
+        motivo = motivo_obligatorio(
+            request.args.get('motivo') or (request.get_json(silent=True) or {}).get('motivo'),
+            'purgar tareas de picking')
+    except MotivoRequerido as e:
+        return jsonify({'error': str(e)}), 400
     referencia = request.args.get('referencia')
     query = TareaPicking.query.filter(
         TareaPicking.estado == EstadoPicking.COMPLETADO,
@@ -75,6 +86,7 @@ def purgar_picks_cero():
     tareas = query.all()
     count = len(tareas)
     for t in tareas:
+        registrar_accion('ELIMINAR', t, usuario_id=uid, motivo=motivo, antes=foto(t))
         db.session.delete(t)
     db.session.commit()
     return jsonify({'eliminadas': count}), 200
@@ -223,7 +235,8 @@ def cancelar_tarea(id):
     try:
         tarea = PickingService.cancelar_picking(
             tarea_id=id,
-            motivo=data.get('motivo')
+            motivo=data.get('motivo'),
+            usuario_id=uid,
         )
         return jsonify({
             'mensaje': 'Tarea cancelada',
@@ -249,8 +262,10 @@ def reabrir_tarea(id):
     u = Usuario.query.get(uid)
     if not u or u.rol not in Roles.SUPERVISION:
         return jsonify({'error': 'Solo admin, supervisor o jefe puede reabrir tareas'}), 403
+    data = request.get_json(silent=True) or {}
     try:
-        tarea = PickingService.reabrir_picking(tarea_id=id)
+        tarea = PickingService.reabrir_picking(tarea_id=id, usuario_id=uid,
+                                               motivo=data.get('motivo'))
         return jsonify({'mensaje': 'Tarea reabierta — vuelve al pool de picking', 'tarea': tarea.to_dict()}), 200
     except ValueError as e:
         return jsonify({'error': str(e)}), 400

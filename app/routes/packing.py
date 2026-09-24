@@ -353,7 +353,7 @@ def cancelar_tarea(id):
         return jsonify({'error': 'No autorizado — se requiere rol admin o supervisor'}), 403
     data = request.get_json() or {}
     try:
-        tarea = PackingService.cancelar(id, motivo=data.get('motivo'))
+        tarea = PackingService.cancelar(id, motivo=data.get('motivo'), usuario_id=uid)
         return jsonify({'mensaje': 'Tarea cancelada', 'tarea': tarea.to_dict()}), 200
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
@@ -388,10 +388,13 @@ def reconciliar_manual(id):
 @jwt_required()
 def resetear_siesa(id):
     """Elimina bultos y vuelve a VERIFICADO para reintentar Siesa desde cero."""
-    if not _solo_admin():
+    admin = _solo_admin()
+    if not admin:
         return jsonify({'error': 'Solo admin puede resetear el estado de Siesa'}), 403
     try:
-        tarea = PackingService.resetear_siesa(id)
+        tarea = PackingService.resetear_siesa(
+            id, usuario_id=admin.id,
+            motivo=(request.get_json(silent=True) or {}).get('motivo'))
         return jsonify({'ok': True, 'mensaje': 'Packing reseteado — declara las piezas de nuevo', 'tarea': tarea.to_dict()}), 200
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
