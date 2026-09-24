@@ -156,6 +156,10 @@ BAJO_EL_RELOJ = (
     ('flota.adaptadores.modelos', 'datetime'),
     ('flota.adaptadores.medicion', '_datetime'),
     ('flota.api.hallazgos', 'datetime'),
+    # La clave de reenvío de la cola del conductor (2026-09-24): su `creado_ts`
+    # es la hora en que el servidor recibió el recibo, la inspección o el
+    # tanqueo — parte del día del conductor.
+    ('flota.api._idempotencia', 'datetime'),
 )
 
 #: Módulos de `flota/` que enlazan `datetime` y **no** están bajo el reloj, con

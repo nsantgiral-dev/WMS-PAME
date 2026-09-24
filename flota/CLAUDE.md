@@ -140,3 +140,17 @@ inventario de `tests/flota/test_derecho_del_conductor.py` o el build se pone roj
 conductor reescribía por `correccion` el odómetro —el CPK, el preventivo— de un camión
 que no manejaba, dejaba el camión de la sede a nombre de un compañero y bajaba el SOAT
 de cualquier vehículo. Un guard cuya precondición la manda quien pide no es un guard.*
+
+
+## 16. Todo lo que el conductor registra viaja por la cola, con su clave de reenvío
+
+Recibo, entrega, inspección, daño y tanqueo se guardan en el teléfono (con sus fotos)
+ANTES de salir, y llevan una `clave_idempotencia` creada al encolar. El servidor la
+recuerda (`@idempotente`, `flota_idempotencia`): un reenvío devuelve lo ya hecho.
+Toda puerta nueva que la cola reenvíe va con la marca, o el trinquete
+`test_cola_del_conductor::TestInventarioDeLaCola` se pone rojo.
+
+*Motivo: el patio y la estación no tienen señal. Sin cola se perdían trece fotos; sin
+clave, el reenvío de un recibo horas después —fuera de la ventana de 90 s— cerraba la
+custodia recién abierta y abría otra con los mismos kilómetros (regla 9, del lado del
+teléfono).*

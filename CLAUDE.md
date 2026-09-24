@@ -4056,3 +4056,78 @@ no cero; piso 13). **13 mutaciones, las 13 rojas.** Helper de tests:
 
 Suite completa en el worktree (2026-09-24, `-m "not postgres"`, TZ=UTC):
 **7497 passed, 0 failed** (5 skipped, 19 xfailed).
+
+## Flota — «Mi camión hoy»: la pantalla del conductor (2026-09-24)
+
+`app/static/pwa/flota.js` (bloque del conductor, funciones `flotaCond*`,
+`flotaRec*`, `flotaDano*`, `flotaTanqueo*`, `flotaCola*`) · `index.html`
+(clases `.flota-hoy*`, `.flota-hoja*`, `.flota-paso*`, `.flota-opcion*`) ·
+`flota/api/_idempotencia.py` · migración `m039flcond` (sobre `m037kpi`).
+
+### Lo que cambió en la pantalla
+
+| Antes | Ahora |
+|---|---|
+| Seis botones de 54 px apilados sobre las rutas | **Una tarjeta, un botón**: sin turno → «Recibir el camión»; turno sin inspección de hoy → «Inspeccionar»; inspeccionado → una franja `🚚 placa · semáforo · Más`. «Más» abre una hoja inferior con Daño, Tanqueo, Entregar, Mis turnos, el detalle del estado y el rendimiento |
+| Estado en varias líneas siempre visibles | **Semáforo de una línea** (lo más grave primero, `+N`), solo cuando hay algo. Informa, no bloquea |
+| `#cond-flota` y `#flota-modal` en oscuro | En la **zona clara fija** (selector de tokens del tema claro), con trinquete en `test_legibilidad_pwa` |
+| Recibo: grilla de 13 botones | **Checklist guiado**: tablero + km primero, después un ángulo por pantalla con su guía (convención de lados y llantas incluida), `4/12`, la foto abre la cámara y avanza sola, «Saltar» = faltante, resumen con «tomar/repetir» |
+| Km pedido 3 veces por turno | Una vez: inspección, daño y tanqueo lo **heredan** (último conocido, la cola manda sobre el servidor) con «Cambió». Sin dato → se pide (regla 4). La entrega sí lo pide: es el del final del día |
+| Daño: texto obligatorio, gravedad en «Mayor», sin foto | **Tres toques**: foto (o «no puedo tomarla»), gravedad en tres botones sin ninguno elegido, texto opcional (obligatorio sin foto) |
+| Tanqueo: 12 campos, categorías, códigos crudos, fecha vacía | Foto del recibo (`foto_dato`), galones, valor, «¿lo llenaste?», «¿con qué pagaste?» (sin preselección, sin `sin_dato`), estación, km heredado; fecha = hoy Bogotá (`flotaHoyBogota`) |
+| «Odómetro» y «Corrección» al conductor | Retirado. El panel de gastos perdió su «modo tanqueo» |
+| `d.error` crudo, `no_apto`, `tarjeta_propiedad`… | `flotaMensajeDeError` (roles en palabras) y `flotaPalabra` |
+
+### La cola sin señal
+
+Toda operación se guarda en `_condDB` (`wms_cond`, la base de las entregas)
+**con sus fotos** antes de intentarse, con `clave_idempotencia` y
+`ts_dispositivo`. Sale en orden y se detiene en la primera que no sale; un
+`hecho` o `rechazado` la quita; un rechazo sin nadie mirando queda en la
+tarjeta hasta «Entendido». Aviso «N registros pendientes de sincronizar» con
+«Sincronizar», y el evento `online` la vacía solo. La tarjeta cuenta lo
+pendiente: un recibo encolado ya es turno abierto.
+
+**Servidor:** `@idempotente(operacion, campo_id)` debajo de `@exige` en
+traspaso, hallazgo, inspección y tanqueo. La fila de `flota_idempotencia` entra
+en la **misma transacción** que el hecho (el adaptador hace el commit); un
+rechazo hace rollback y no gasta la clave; la clave de otro usuario u otra
+operación → 409. `ts_dispositivo` se guarda sin creerle (el hecho lleva la hora
+del servidor).
+
+### Dos defectos que se cerraron de paso
+
+- **Una `foto_dato` bajo 1600 px reventaba el recibo con un 500**: salía `ok`
+  y el CHECK de resolución la rechazaba en el commit. La pantalla prometía
+  «queda `pendiente_evidencia`» desde la tanda 1. Ahora `guardar_foto` la
+  declara así sobre lo medido; el CHECK no se aflojó (test nuevo).
+- `hallazgo_peor.descripcion` se pintaba sin `esc()` en la pantalla del
+  conductor.
+
+### Tests y mutaciones
+
+`tests/flota/test_mi_camion_hoy_js.py` (45, Node con `util.js` real: estados de
+la tarjeta, cola, sin códigos, sin preselección, km, fecha Bogotá, recibo
+guiado, contrato de `mi-turno`) y `tests/flota/test_cola_del_conductor.py` (16:
+reenvío, rechazo, clave ajena, fotos de daño y recibo, inventario de la cola
+contra `@idempotente`). **16 mutaciones, las 16 rojas** (la del daño con
+gravedad preseleccionada en el opener sobrevivía al primer arnés: se agregó el
+test por la puerta). Migración: upgrade → downgrade → upgrade contra un
+PostgreSQL local desechable; `test_gemelos_del_esquema` y
+`test_constraints_postgres` en verde (103 CHECK).
+
+### Lo que NO cubre
+
+- **Que las rutas se vean sin bajar en 390×844 no está medido**: Node no hace
+  layout. El test mide un proxy (controles por estado, sin `btn-flota`).
+- **La hora del hecho sigue siendo la del servidor**: un recibo de las 5 a.m.
+  que sincroniza a las 11 queda de las 11. La hora del teléfono queda en
+  `flota_idempotencia.ts_dispositivo` para verlo, no para decidir.
+- **El km heredado del tanqueo puede estar viejo** si el conductor no toca
+  «Cambió» (el rendimiento se mide entre tanqueos llenos). La pantalla lo dice;
+  nada lo impide.
+- **`/flota/odometro` sigue autorizando al conductor** aunque ya no tenga el
+  gesto: declarado en `_ANCHOS_ACEPTADOS` hasta que el frente de permisos
+  estreche la tupla.
+- La inspección sin señal usa la última lista bajada (se dice de qué día); el
+  veredicto lo da el servidor al llegar.
