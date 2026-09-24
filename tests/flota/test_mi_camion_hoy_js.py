@@ -398,6 +398,18 @@ class TestNadaNaceMarcado:
         assert 'flota-opcion ok' not in html
         assert 'selected' not in html and 'checked' not in html
 
+    def test_por_la_puerta_tampoco_nace_elegida(self, tmp_path):
+        """Por el GESTO, no por la pieza: abrir el daño desde la hoja «Más»
+        deja la gravedad sin elegir. Un test que siembra `FLOTA_DANO` a mano
+        quedaba en verde con el opener sembrando «mayor»."""
+        s = _correr(tmp_path, '(async () => { await flotaCondReportarDano(); flotaDanoSinFoto();'
+                              ' return {g: FLOTA_DANO.gravedad,'
+                              ' html: document.getElementById("flota-recibo").innerHTML}; })()',
+                    semilla=f'FLOTA_COND = {json.dumps(_turno(tiene_turno_abierto=True))};')
+        assert s['g'] is None
+        assert 'flota-opcion ok' not in s['html']
+        assert s['html'].count('flotaDanoGravedad(') == 3
+
     def test_elegir_marca_solo_esa(self, tmp_path):
         html = _correr(tmp_path, '(flotaDanoGravedad("mayor"), flotaDanoHTML())', semilla=(
             'FLOTA_PLACA = "THP696"; FLOTA_DANO = {foto: null, sinFoto: true, gravedad: null};'))
