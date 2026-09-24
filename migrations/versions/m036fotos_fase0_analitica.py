@@ -1,7 +1,7 @@
 """Fase 0 de analítica: claves de la cadena del pedido, historia y fotos de Siesa
 
-Revision ID: m034fotos
-Revises: m033ciclo
+Revision ID: m036fotos
+Revises: m035bitacora
 Create Date: 2026-09-24
 
 ## Para qué
@@ -39,8 +39,8 @@ import re
 import sqlalchemy as sa
 from alembic import op
 
-revision = 'm034fotos'
-down_revision = 'm033ciclo'
+revision = 'm036fotos'
+down_revision = 'm035bitacora'
 branch_labels = None
 depends_on = None
 
@@ -322,7 +322,7 @@ def upgrade():
 
     # ── Backfill de la clave del pedido ────────────────────────────────────
     res = backfill_pedido_clave(op.get_bind())
-    print(f'[m034fotos] pedido_clave rellenada: {res}')
+    print(f'[m036fotos] pedido_clave rellenada: {res}')
 
 
 def downgrade():

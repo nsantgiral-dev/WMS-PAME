@@ -1,5 +1,5 @@
 """
-Historia de las líneas de pedido (m034fotos).
+Historia de las líneas de pedido (m036fotos).
 
 `pedidos_siesa` borra lo cumplido y no guarda cuándo vio algo por primera vez.
 `pedidos_historia` sí. La regla que manda: **un barrido incompleto no registra

@@ -30,7 +30,7 @@ class TareaPacking(db.Model):
     # Componentes separados requeridos por el gateway (F430_ID_TIPO_DOCTO / F430_CONSEC_DOCTO)
     tipo_docto_pedido_siesa = db.Column(db.String(20))
     consec_docto_pedido_siesa = db.Column(db.String(30))
-    #: **La clave del pedido** (`'003-PD-1502'`, m034fotos) — la misma de sus
+    #: **La clave del pedido** (`'003-PD-1502'`, m036fotos) — la misma de sus
     #: tareas de picking. Ver `TareaPicking.pedido_clave` y
     #: `app/services/cadena_pedido.py`. `NULL` para TRASLADO.
     pedido_clave = db.Column(db.String(40), nullable=True, index=True)

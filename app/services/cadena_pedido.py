@@ -32,7 +32,7 @@ sede al primero que pase (Regla 0).
    mismo; si eso cambia, la fuente 1 manda.
 3. Ninguna → `None`, declarado.
 
-La migración `m034fotos` rellena el histórico con **la misma regla** escrita
+La migración `m036fotos` rellena el histórico con **la misma regla** escrita
 en SQL (una migración no importa código de la app); el test
 `test_cadena_pedido.py::TestElBackfillUsaLaMismaRegla` las compara.
 """

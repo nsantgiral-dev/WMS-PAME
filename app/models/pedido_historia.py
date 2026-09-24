@@ -1,5 +1,5 @@
 """
-Historia de cada línea de pedido que el WMS vio en Siesa (m034fotos).
+Historia de cada línea de pedido que el WMS vio en Siesa (m036fotos).
 
 `pedidos_siesa` es un read model de lo PENDIENTE: el sync borra una línea en
 cuanto deja de tener pendiente (`pedidos_sync_service`), y no guarda cuándo la

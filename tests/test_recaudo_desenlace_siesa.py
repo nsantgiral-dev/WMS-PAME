@@ -1,5 +1,5 @@
 """
-El desenlace de NC/RC/DC queda en el recaudo, no solo en la cola (m034fotos).
+El desenlace de NC/RC/DC queda en el recaudo, no solo en la cola (m036fotos).
 
 `siesa_jobs` guarda qué pasó con cada documento, pero es una COLA: se
 descarta, se reintenta, su `referencia_tipo/referencia_id` es polimórfico sin

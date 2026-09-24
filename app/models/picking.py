@@ -44,7 +44,7 @@ class TareaPicking(db.Model):
     tipo_documento = db.Column(db.String(30))   # 'PEDIDO' | 'TRASLADO'
     bodega_origen_siesa = db.Column(db.String(20))  # scoping multi-bodega
 
-    #: **La clave del pedido** (`'003-PD-1502'`, m034fotos): la misma que lleva
+    #: **La clave del pedido** (`'003-PD-1502'`, m036fotos): la misma que lleva
     #: el packing, la historia del pedido y las fotos de ventas. Antes picking y
     #: packing se unían solo porque `referencia_documento` y
     #: `numero_pedido_siesa` coincidían como texto. La arma

@@ -1,5 +1,5 @@
 """
-La clave del pedido que une picking, packing, historia y fotos (m034fotos).
+La clave del pedido que une picking, packing, historia y fotos (m036fotos).
 
 Hasta el 2026-09-24 picking y packing del mismo pedido se unían solo porque
 `TareaPicking.referencia_documento` y `TareaPacking.numero_pedido_siesa`
@@ -20,7 +20,7 @@ from unittest.mock import patch
 import pytest
 
 _MIG = (pathlib.Path(__file__).resolve().parents[1] / 'migrations' / 'versions'
-        / 'm034fotos_fase0_analitica.py')
+        / 'm036fotos_fase0_analitica.py')
 
 
 def _migracion():

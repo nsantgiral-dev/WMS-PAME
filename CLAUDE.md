@@ -3337,7 +3337,7 @@ Por AST sobre `app/` y `flota/`:
 > guarda. **Siesa casi no tiene historia: lo que no se fotografía cada día no
 > existe mañana.** Esto tiene que estar andando antes del acta de corte.
 
-Migración única `m034fotos` (aditiva). Todo lo nuevo es de **lectura** contra
+Migración única `m036fotos` (aditiva). Todo lo nuevo es de **lectura** contra
 Siesa: cero POST.
 
 ### 1 · Las claves que conectan la cadena
@@ -3479,20 +3479,19 @@ viene. Referencias de InvFecha y bodegas vienen con espacios a la derecha.
 5. Confirmar que `f470_rowid` es único en toda la T470 (se asume como clave de
    la foto de ventas).
 
-### Hallazgo del acta de corte, no arreglado
+### Hallazgo del acta de corte — resuelto por `m034agotado`
 
-`eventos_stock_agotado` (PROTEGIDA_ANALITICA) tiene `tarea_picking_id` **NOT
-NULL con FK a `tareas_picking`** (OPERATIVA). Con un solo evento en la base, el
-`DELETE FROM tareas_picking` del corte falla por FK y el script termina en
-RESET INCOMPLETO. Declarado en
-`tests/test_acta_de_corte.py::FK_ANALITICA_A_OPERATIVA_CONOCIDAS` (solo
-encoge). Arreglo propuesto: columna nullable + `ON DELETE SET NULL` — toca el
-borrado de picking, que trabaja la Fase 0A.
+`eventos_stock_agotado` (PROTEGIDA_ANALITICA) tenía `tarea_picking_id` NOT
+NULL con FK a `tareas_picking` (OPERATIVA): con un solo evento, el corte
+terminaba en RESET INCOMPLETO. Lo resolvió en el esquema la migración
+`m034agotado` (nullable + `ON DELETE SET NULL`, el evento copia su contexto),
+y `tests/test_acta_de_corte.py::TestLoProtegidoNoApuntaAlEnsayo` exige que toda
+FK de una tabla protegida hacia una operativa esté resuelta así o declarada en
+`REFERENCIAS_PROTEGIDAS`. Las cinco tablas de fotos no tienen FKs.
 
 Tests: `test_cadena_pedido.py`, `test_pedidos_historia.py`,
 `test_recaudo_desenlace_siesa.py`, `test_fotos_siesa.py`,
-`test_siesa_filtro_fecha.py`, `test_acta_de_corte.py` (clase nueva),
-`test_conftest_sombras_gateway.py`. 22 mutaciones, las 22 rojas. Suite completa
+`test_siesa_filtro_fecha.py`, `test_connekta_sin_sombras.py`. 22 mutaciones, las 22 rojas. Suite completa
 el 2026-09-24: **6930 passed, 0 failed**.
 
 **De paso, en `tests/conftest.py`:** `_sin_sombras_en_el_gateway` borra tras

@@ -525,7 +525,7 @@ class PickingService:
 
         tareas_creadas = []
 
-        # La clave del pedido (m034fotos): la misma que llevará su packing.
+        # La clave del pedido (m036fotos): la misma que llevará su packing.
         # Una sola vez por llamada, no por asignación FEFO.
         from app.services.cadena_pedido import clave_de_tarea_picking
         _pedido_clave = clave_de_tarea_picking(

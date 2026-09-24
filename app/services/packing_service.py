@@ -58,7 +58,7 @@ class PackingService:
             numero_pedido_siesa=numero_pedido_siesa,
             tipo_docto_pedido_siesa=tipo_docto_pedido_siesa,
             consec_docto_pedido_siesa=consec_docto_pedido_siesa,
-            # La misma clave que sus tareas de picking (m034fotos).
+            # La misma clave que sus tareas de picking (m036fotos).
             pedido_clave=clave_de_documento(
                 numero_pedido=numero_pedido_siesa, tipo=tipo_docto_pedido_siesa,
                 consec=consec_docto_pedido_siesa, almacen_id=almacen_id),
@@ -114,7 +114,7 @@ class PackingService:
             numero_pedido_siesa=numero_pedido_siesa,
             tipo_docto_pedido_siesa=tipo_docto_pedido_siesa,
             consec_docto_pedido_siesa=consec_docto_pedido_siesa,
-            # La misma clave que sus tareas de picking (m034fotos).
+            # La misma clave que sus tareas de picking (m036fotos).
             pedido_clave=clave_de_documento(
                 numero_pedido=numero_pedido_siesa, tipo=tipo_docto_pedido_siesa,
                 consec=consec_docto_pedido_siesa, almacen_id=almacen_id),

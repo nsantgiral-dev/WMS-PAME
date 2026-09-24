@@ -320,7 +320,7 @@ def _run_sync(app):
                 PedidoSiesa.query.filter(PedidoSiesa.id.in_(ids_a_borrar)).delete(synchronize_session=False)
                 eliminados = len(ids_a_borrar)
 
-            # Historia de las líneas (m034fotos). `pedidos_siesa` borra lo que
+            # Historia de las líneas (m036fotos). `pedidos_siesa` borra lo que
             # se cumple y no guarda cuándo apareció; esto sí. Recibe TODO lo
             # leído —no solo lo pendiente de NB1— y la misma bandera que el
             # borrado de arriba: sin barrido completo no se registra ninguna

@@ -1,5 +1,5 @@
 """
-Fotos diarias de Siesa (m034fotos): ventas, stock y cartera.
+Fotos diarias de Siesa (m036fotos): ventas, stock y cartera.
 
 La propiedad que manda: **lo completo se escribe; lo fallido se declara y no
 escribe un cero.** Un rechazo (`alerta`), una excepción, una respuesta vacía

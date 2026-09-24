@@ -1,5 +1,5 @@
 """
-Fotos diarias de Siesa (m034fotos) — la historia que Siesa no guarda.
+Fotos diarias de Siesa (m036fotos) — la historia que Siesa no guarda.
 
 Siesa contesta «cómo está ahora»: la existencia de hoy, el saldo abierto de
 hoy. Lo que no se fotografía cada día no existe mañana. Estas cuatro tablas

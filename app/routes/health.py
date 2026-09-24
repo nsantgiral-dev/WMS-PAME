@@ -352,7 +352,7 @@ def health_siesa():
                  'Se consulta en cada servicio por separado.'),
     }
 
-    # FOTOS DIARIAS DE SIESA (m034fotos). La frescura sale de la base —de las
+    # FOTOS DIARIAS DE SIESA (m036fotos). La frescura sale de la base —de las
     # corridas— y no del proceso: el cron corre en el worker y este endpoint
     # puede contestar desde el web. Un hueco es «no hay total de ese día», no
     # un total en cero.

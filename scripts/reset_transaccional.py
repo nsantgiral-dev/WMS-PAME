@@ -258,7 +258,7 @@ PROTEGIDAS_ANALITICAS = {
     # durante la marcha blanca, que es lo que la Ley 1116 pide poder mostrar.
     'bitacora_acciones': 'rastro de eliminaciones, cancelaciones y ediciones — no reconstruible',
 
-    # ── Fase 0 de analítica (2026-09-24, m034fotos) ─────────────────────────
+    # ── Fase 0 de analítica (2026-09-24, m036fotos) ─────────────────────────
     # Siesa casi no tiene historia: contesta «cómo está ahora». Estas son las
     # fotos diarias que se toman para que mañana exista el ayer. Ninguna tiene
     # FK hacia una tabla operativa, justamente para que el corte no las arrastre.

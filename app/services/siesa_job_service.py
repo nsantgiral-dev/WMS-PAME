@@ -1598,7 +1598,7 @@ def _ejecutar_job(job: SiesaJob) -> dict:
                 recaudo_origen = db.session.get(_REC, devolucion.recaudo_entrega_id)
                 if recaudo_origen and not recaudo_origen.siesa_nc_triggered:
                     recaudo_origen.siesa_nc_triggered = True
-                    # El desenlace también, en la entidad (m034fotos). El
+                    # El desenlace también, en la entidad (m036fotos). El
                     # consecutivo llega después, con el motivo DIAN.
                     recaudo_origen.anotar_documento_siesa(
                         'NC', 'ENVIADO', respuesta=resultado,
@@ -1682,7 +1682,7 @@ def _ejecutar_job(job: SiesaJob) -> dict:
             devolucion.siesa_nc_consec = str(consec_nc)
             db.session.commit()
         # Si la devolución vino de una ruta, su recaudo recibe el consecutivo
-        # real de la NC (m034fotos). Anotar no puede romper el motivo.
+        # real de la NC (m036fotos). Anotar no puede romper el motivo.
         if devolucion.recaudo_entrega_id:
             try:
                 from app.models.recaudo_entrega import RecaudoEntrega as _REM
@@ -1980,7 +1980,7 @@ _DOCUMENTO_DEL_RECAUDO = {
 
 def _anotar_en_recaudo(job: SiesaJob, resultado: str, respuesta=None,
                        recaudo=None, consec=None):
-    """Deja el desenlace del documento en el recaudo (m034fotos).
+    """Deja el desenlace del documento en el recaudo (m036fotos).
 
     **Anotar no puede romper lo anotado**: el documento ya salió (o ya se dio
     por perdido) y eso lo decide la cola, no esta nota. Cualquier fallo acá se

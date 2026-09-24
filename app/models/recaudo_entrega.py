@@ -153,7 +153,7 @@ class RecaudoEntrega(db.Model):
     #: en Siesa hay uno.
     siesa_dc_pucs = db.Column(db.Text, nullable=True)
 
-    # ── El desenlace de cada documento, en la entidad de negocio (m034fotos) ──
+    # ── El desenlace de cada documento, en la entidad de negocio (m036fotos) ──
     #
     # Las tres banderas de arriba dicen «ya salió» y sirven de guarda. Lo que
     # NO decían: con qué consecutivo, cuándo, ni cómo terminó. Eso vivía solo en
