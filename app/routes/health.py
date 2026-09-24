@@ -363,6 +363,16 @@ def health_siesa():
     except Exception as _e_fotos:
         resultado['fotos_siesa'] = {'error': str(_e_fotos)[:200]}
 
+    # KPI DIARIO DE LA ANALÍTICA (m037kpi). Igual que las fotos: la frescura
+    # sale de la base y no del proceso. Un día sin calcular no tiene KPI —no
+    # un KPI en cero—, y es lo que ve la pantalla de tendencias.
+    try:
+        from app.services import analitica_kpi as _kpi
+        resultado['analitica_kpi'] = _kpi.estado()
+        resultado['analitica_kpi']['cron_en_este_proceso'] = '[ANALITICA_KPI]' in _activos
+    except Exception as _e_kpi:
+        resultado['analitica_kpi'] = {'error': str(_e_kpi)[:200]}
+
     # Pasos que siguen siendo manuales en Siesa. No son un fallo — son trabajo
     # de una persona todos los días, y la única forma de que nadie los olvide
     # (o los haga de más) es que estén escritos en un sitio consultable.

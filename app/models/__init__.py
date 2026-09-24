@@ -36,3 +36,4 @@ from app.models.bitacora import BitacoraAccion
 from app.models.pedido_historia import PedidoHistoria
 from app.models.fotos_siesa import (FotoCorrida, FotoVentaLinea, FotoStockDiaria,
                                     FotoCarteraDiaria)
+from app.models.analitica_kpi import AnaliticaKpiDiario

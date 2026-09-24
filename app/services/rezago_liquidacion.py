@@ -126,3 +126,54 @@ def diagnostico(hoy=None):
         'cruzan_mes': [f for f in filas if f['urgencia'] == CRUZA_MES],
         'dias': dias,
     }
+
+
+def rutas_sin_liquidar_al_cierre(dia):
+    """Las rutas que al CIERRE del día `dia` (Bogotá) estaban entregadas y sin
+    liquidar, con su urgencia medida contra `dia`. Es `rutas_entregadas_sin_liquidar`
+    + `urgencia` llevados a un día pasado: para `dia` = hoy da el mismo universo.
+
+    El pasado se reconstruye con `liquidada_en` (m035bitacora). Una ruta
+    LIQUIDADA **sin** `liquidada_en` se liquidó antes de que esa columna
+    existiera: si `dia` es posterior a la primera `liquidada_en` registrada, se
+    sabe que ya estaba liquidada; si no, no se sabe y va a `desconocidas` — no
+    se adivina hacia ningún lado (Regla 0). Una ruta sin fecha cuenta si ya
+    existía ese día, igual que `urgencia` la cuenta como atrasada.
+
+    Devuelve `{'rutas': [...], 'con_rezago': n, 'atrasadas': n, 'cruzan_mes': n,
+    'desconocidas': n}`; `con_rezago` = atrasadas + cruzan_mes.
+    """
+    from datetime import timedelta
+
+    from sqlalchemy import func
+
+    from app.extensions import db
+    from app.models.ruta_despacho import EstadoFinancieroRuta, RutaDespacho
+    from app.utils.fecha import inicio_del_dia_utc
+
+    fin = inicio_del_dia_utc(dia + timedelta(days=1))
+    primera = db.session.query(func.min(RutaDespacho.liquidada_en)).scalar()
+    registro_desde = dia_operativo_de(primera) if primera else None
+
+    filas, desconocidas = [], 0
+    for ruta in RutaDespacho.query.filter(RutaDespacho.estado == 'ENTREGADA').all():
+        ref = fecha_de_referencia(ruta)
+        if ref is not None and ref > dia:
+            continue                      # se entregó después de ese día
+        if ref is None and (ruta.fecha_creacion is None or ruta.fecha_creacion >= fin):
+            continue                      # sin fecha y todavía no existía
+        if ruta.estado_financiero == EstadoFinancieroRuta.LIQUIDADA:
+            if ruta.liquidada_en is not None:
+                if ruta.liquidada_en < fin:
+                    continue              # ya estaba liquidada al cierre
+            elif registro_desde is not None and dia >= registro_desde:
+                continue                  # liquidada antes de que existiera la columna
+            else:
+                desconocidas += 1
+                continue
+        filas.append({'ruta_id': ruta.id, 'dias': dias_de_rezago(ruta, dia),
+                      'urgencia': urgencia(ruta, dia)})
+    atrasadas = sum(1 for f in filas if f['urgencia'] == ATRASADA)
+    cruzan = sum(1 for f in filas if f['urgencia'] == CRUZA_MES)
+    return {'rutas': filas, 'con_rezago': atrasadas + cruzan, 'atrasadas': atrasadas,
+            'cruzan_mes': cruzan, 'desconocidas': desconocidas}

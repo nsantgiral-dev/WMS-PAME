@@ -401,10 +401,11 @@ def _cargar_cadenas(almacen_id=None, *, ids_raices=None) -> list:
     return [_cadena(r) for r in q.all()]
 
 
-def cadenas_cerradas_el_dia(dia: date, almacen_id=None) -> list:
-    """Las cadenas que se CERRARON (tienen veredicto) el día operativo `dia`,
-    con la misma regla de día que el reporte (`dia_de_atribucion`). Lo usa el
-    tablero del líder para «cuánto se contó hoy» contra el cupo.
+def cadenas_del_dia(dia: date, almacen_id=None) -> list:
+    """Las cadenas cuyo día de atribución (`dia_de_atribucion`) es `dia`,
+    tengan o no veredicto — una raíz ajustada tras omitir el CC2 no lo tiene y
+    sí es un ajuste de ese día. `cadenas_cerradas_el_dia` se queda con las que
+    tienen veredicto.
 
     No carga las ~9.000 raíces: primero busca las filas con foto o cierre
     dentro del día —el día de una cadena sale de uno de esos dos instantes de
@@ -442,8 +443,15 @@ def cadenas_cerradas_el_dia(dia: date, almacen_id=None) -> list:
                 pendientes[pid] = origen
             else:
                 raices.add(pid)
-    return [c for c in _cargar_cadenas(almacen_id, ids_raices=raices)
-            if c.cerrada and c.dia == dia]
+    return [c for c in _cargar_cadenas(almacen_id, ids_raices=raices) if c.dia == dia]
+
+
+def cadenas_cerradas_el_dia(dia: date, almacen_id=None) -> list:
+    """Las cadenas que se CERRARON (tienen veredicto) el día operativo `dia`,
+    con la misma regla de día que el reporte (`dia_de_atribucion`). Lo usa el
+    tablero del líder para «cuánto se contó hoy» contra el cupo, y la analítica
+    para «conteos cerrados» del KPI diario."""
+    return [c for c in cadenas_del_dia(dia, almacen_id) if c.cerrada]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -949,6 +957,32 @@ def _exactitud(cerradas) -> dict:
 
 #: Lo que dijo la tolerancia del primer conteo y cuenta como acierto (ASCM).
 _ACIERTO_TOLERANCIA = ('EXACTO', 'DENTRO')
+
+
+def exactitud_total(cerradas) -> dict:
+    """La IRA exacta del conjunto, sin abrir por clase ni por tipo: Σ OK /
+    Σ (OK + ERROR) de `_exactitud` — la misma regla, sumada. Para el KPI
+    diario, que agrega días (Σnum/Σden) y aplica `MIN_N_EXACTITUD` al
+    período, no a cada día. Devuelve numerador, denominador y excluidos."""
+    ex = _exactitud(cerradas)
+    celdas = [g for clase in ex['por_clase'].values() for g in clase.values()]
+    return {
+        'definicion': ex['definicion'],
+        'numerador': sum(g['numerador'] for g in celdas),
+        'denominador': sum(g['denominador'] for g in celdas),
+        'excluidos': ex['excluidos'],
+    }
+
+
+def ajustes_del_dia(dia: date, almacen_id=None, cadenas=None) -> dict:
+    """El bloque de ajustes (`_ajustes`) de los que se confirmaron el día
+    `dia`: cantidad, unidades y valor estimado a costo de la foto. Mismo
+    universo y mismas exclusiones que el reporte, sobre un solo día.
+    `cadenas`: las de `cadenas_del_dia(dia, almacen_id)`, si ya se cargaron."""
+    if cadenas is None:
+        cadenas = cadenas_del_dia(dia, almacen_id)
+    bloque, _validos = _ajustes(cadenas, dia, dia)
+    return bloque
 
 
 def _exactitud_con_tolerancia(cerradas) -> dict:

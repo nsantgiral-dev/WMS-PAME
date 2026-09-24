@@ -757,6 +757,25 @@ _EXENTOS_POR_REGLA = (
 # necesita un tab. La pregunta correcta es QUÉ DECISIÓN DEBERÍA ESTAR INFORMANDO.
 # Un número que el usuario no puede auditar no se obedece: se ignora.
 DEUDA_SIN_UI = {
+    # 2026-09-24 · Fase 1 de analítica, capa semántica y KPI diario. El
+    # backend nace antes que su pantalla: la tabla se llena desde el día en que
+    # se enciende `ANALITICA_KPI`, y una tendencia necesita semanas de historia
+    # antes de poder mostrarse. Lo que se pierde mientras tanto: nada del dato,
+    # solo la vista; gestión lo consulta por API.
+    '/api/analitica/metricas':
+        'Catálogo de métricas (qué mide cada una, unidad, dirección buena, dueño): '
+        'pantalla de tendencias en Fase 2.',
+    '/api/analitica/serie':
+        'Serie diaria de una métrica con su estado por día: pantalla de tendencias en '
+        'Fase 2. Informa si un número se mueve por el negocio o por un hueco del dato.',
+    '/api/analitica/resumen':
+        'Período contra período anterior con alerta CUSUM: pantalla de tendencias en '
+        'Fase 2. Informa qué métrica cambió de verdad y hacia dónde.',
+    '/api/analitica/kpi/recalcular':
+        'Recálculo manual del KPI diario (admin): pantalla de tendencias en Fase 2. '
+        'Sin ella, un día que el cron no calculó queda AUSENTE hasta que alguien '
+        'llame la API.',
+
     # ── flota/ (entró al guard el 2026-09-21, ver el comentario del filtro) ──
     #
     # 2026-09-21 · Webhook ENTRANTE de Gupshup: lo llama el proveedor, no una

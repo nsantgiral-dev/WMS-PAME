@@ -95,6 +95,7 @@ LOCK_FLOTA_PREVENTIVO = 2017            # flota/adaptadores/preventivo
 LOCK_REPOSICION_BARRIDO = 2018          # reposicion_service._barrido_stock_picking (era 2016)
 LOCK_ALERTA_RUTAS_SIN_LIQUIDAR = 2019   # alertas_service (era 2007, el de la DLQ)
 LOCK_FOTOS_SIESA = 2020                 # fotos_siesa_service (fotos diarias de Siesa, m036fotos)
+LOCK_ANALITICA_KPI = 2021               # analitica_kpi (cron y recálculo manual del KPI diario, m037kpi)
 
 # De transacción (`lock_de_transaccion`): serializan un «leer y después insertar».
 LOCK_CODIGO_LPN = 3001                  # LPN.generar_codigo

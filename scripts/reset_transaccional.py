@@ -271,6 +271,12 @@ PROTEGIDAS_ANALITICAS = {
     'foto_ventas_lineas': 'líneas de factura por día — Siesa no guarda la foto del día',
     'foto_stock_diaria': 'existencia y costo por día × bodega × SKU — stock_siesa solo guarda el último',
     'foto_cartera_diaria': 'saldo abierto por documento y día — la cartera de ayer no se puede volver a pedir',
+
+    # ── Fase 1 de analítica (2026-09-24, m037kpi) ───────────────────────────
+    # El número de cada métrica, cada día. Sale de tablas que el corte vacía
+    # (tareas, recaudos, jobs): después del corte no se puede recalcular. Sin
+    # FKs. Las tendencias y las alertas de la Fase 2 leen de acá.
+    'analitica_kpi_diario': 'el KPI de cada día — sus fuentes operativas se vacían en el corte',
 }
 
 PROTEGIDAS_MAESTRAS = {

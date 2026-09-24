@@ -11,7 +11,8 @@ los dos únicos sitios que asignan ese estado).
 `valor_factura` es el valor neto de la FE de esa tarea de packing — ya
 prorrateado por tarea cuando el pedido se despachó en varias tandas, no el
 valor del pedido completo (ver `TareaPacking.valor_factura`, comentario del
-modelo).
+modelo). Puede ser NULL: `sin_valor_factura` cuenta esos despachos, que la
+suma no incluye (no se inventa un valor que no se anotó).
 """
 from datetime import date
 
@@ -31,9 +32,10 @@ def calcular_pedidos_despachados(almacen_id: int, fecha_desde: date, fecha_hasta
         TareaPacking.fecha_despachado < fin_utc,
     )
 
-    pedidos, valor_total = db.session.query(
+    pedidos, valor_total, sin_valor = db.session.query(
         func.count(TareaPacking.id),
         func.coalesce(func.sum(TareaPacking.valor_factura), 0),
+        func.count(TareaPacking.id) - func.count(TareaPacking.valor_factura),
     ).filter(*filtros).one()
 
     lineas, unidades = db.session.query(
@@ -56,6 +58,10 @@ def calcular_pedidos_despachados(almacen_id: int, fecha_desde: date, fecha_hasta
         'lineas': int(lineas or 0),
         'unidades': int(unidades or 0),
         'valor_total': float(valor_total or 0),
+        # Despachos sin `valor_factura` (ningún conductor abrió la parada y la
+        # foto de ventas todavía no lo completó). `valor_total` NO los suma:
+        # con `sin_valor_factura > 0` es una cota inferior, no el valor.
+        'sin_valor_factura': int(sin_valor or 0),
         'por_dia': por_dia,
         'fecha_desde': fecha_desde.isoformat(),
         'fecha_hasta': fecha_hasta.isoformat(),

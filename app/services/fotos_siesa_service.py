@@ -81,6 +81,9 @@ _REZAGO_STOCK = timedelta(hours=1)
 #: por `lit`, que rechaza `%` a propósito (es comodín de LIKE).
 _FILTRO_CARTERA = "f353_fecha_cancelacion IS NULL AND f253_id LIKE ''1305%''"
 
+#: `f350_ind_estado` de un documento anulado: sus líneas no son venta.
+ESTADO_DOCTO_ANULADO = 9
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Interruptores
@@ -418,7 +421,7 @@ def completar_valor_factura() -> dict:
             if f.f470_rowid in vistas:
                 continue
             vistas.add(f.f470_rowid)
-            if f.estado_docto == 9 or f.vlr_neto is None:
+            if f.estado_docto == ESTADO_DOCTO_ANULADO or f.vlr_neto is None:
                 continue
             doc = (f.tipo_docto, f.consec_docto)
             documentos[doc] = documentos.get(doc, Decimal(0)) + f.vlr_neto
@@ -669,6 +672,71 @@ def filas_vigentes(tipo: str, alcance: str, dia):
         if tipo == TipoFoto.STOCK:
             q = q.filter(modelo.bodega == str(alcance))
     return q.all()
+
+
+def _corrida_info(c) -> dict:
+    return {'run_id': c.run_id,
+            'terminada_at': c.terminada_at.isoformat() if c.terminada_at else None}
+
+
+def ventas_del_dia(co: str, dia, bodega: str = None):
+    """Lo facturado desde pedido por el CO ese día, según la última corrida
+    COMPLETA. **`None` si no la hay**: hueco, no «cero ventas».
+
+    `bodega` acota a las líneas de esa bodega (la corrida es por CO, y un CO
+    puede tener dos bodegas: 001 = NS1 + NS2). Las anuladas no suman; una
+    línea sin `vlr_neto` tampoco, y se cuenta en `sin_valor` — con
+    `sin_valor > 0` el neto es cota inferior.
+    """
+    c = corrida_vigente(TipoFoto.VENTAS, co, dia)
+    if c is None:
+        return None
+    filas = filas_vigentes(TipoFoto.VENTAS, co, dia) or []
+    neto, lineas, sin_valor, anuladas, docs = Decimal(0), 0, 0, 0, set()
+    for f in filas:
+        if bodega and (f.bodega or '').strip().upper() != str(bodega).strip().upper():
+            continue
+        if f.estado_docto == ESTADO_DOCTO_ANULADO:
+            anuladas += 1
+            continue
+        if f.vlr_neto is None:
+            sin_valor += 1
+            continue
+        neto += f.vlr_neto
+        lineas += 1
+        docs.add((f.tipo_docto, f.consec_docto))
+    return {'neto': neto, 'lineas': lineas, 'documentos': len(docs),
+            'sin_valor': sin_valor, 'anuladas': anuladas, **_corrida_info(c)}
+
+
+def cartera_del_dia(dia):
+    """Cartera de clientes (1305) abierta y vencida según la foto COMPLETA de
+    ese día. **`None` si no hay corrida completa.**
+
+    `vencida` suma el saldo de los documentos con `dias_vencido > 0`. Uno sin
+    fecha de vencimiento no se da por vencido ni por al día: va a
+    `sin_vencimiento` (y la vencida queda como cota inferior).
+    """
+    c = corrida_vigente(TipoFoto.CARTERA, 'TODAS', dia)
+    if c is None:
+        return None
+    filas = filas_vigentes(TipoFoto.CARTERA, 'TODAS', dia) or []
+    abierta, vencida = Decimal(0), Decimal(0)
+    documentos = vencidos = sin_saldo = sin_vencimiento = 0
+    for f in filas:
+        if f.saldo is None:
+            sin_saldo += 1
+            continue
+        documentos += 1
+        abierta += f.saldo
+        if f.dias_vencido is None:
+            sin_vencimiento += 1
+        elif f.dias_vencido > 0:
+            vencidos += 1
+            vencida += f.saldo
+    return {'abierta': abierta, 'vencida': vencida, 'documentos': documentos,
+            'vencidos': vencidos, 'sin_saldo': sin_saldo,
+            'sin_vencimiento': sin_vencimiento, **_corrida_info(c)}
 
 
 # ──────────────────────────────────────────────────────────────────────────────

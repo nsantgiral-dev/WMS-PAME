@@ -426,6 +426,11 @@ def create_app():
                 # ventana de Siesa. **Nace apagado** por `FOTOS_SIESA`: el
                 # interruptor vive en `correr_fotos`, no acá.
                 ('app.services.fotos_siesa_service',        'init_scheduler',          '[FOTOS_SIESA]'),
+                # KPI diario de la analítica (m037kpi): calcula ayer y
+                # recalcula los últimos `ANALITICA_KPI_DIAS` a las 04:30
+                # Bogotá. **Nace apagado** por `ANALITICA_KPI`: el interruptor
+                # vive en `correr_kpi`, no acá. No toca Siesa.
+                ('app.services.analitica_kpi',              'init_scheduler',          '[ANALITICA_KPI]'),
             ]
             for _mod_path, _fn_name, _tag in _scheduler_pesados:
                 _registrar_scheduler(app, _il, _app_logger, _mod_path, _fn_name, _tag)

@@ -55,6 +55,9 @@ IRRECUPERABLES = (
     # no se fotografió un día no se puede volver a pedir.
     'pedidos_historia', 'fotos_siesa_corridas', 'foto_ventas_lineas',
     'foto_stock_diaria', 'foto_cartera_diaria',
+    # Fase 1 (m037kpi): el KPI de cada día. Sus fuentes operativas se vacían
+    # en el corte; el número no se puede volver a calcular.
+    'analitica_kpi_diario',
 )
 
 #: Se pueden volver a cargar desde Siesa. Que la copia tenga menos no es un

@@ -36,7 +36,8 @@ class TestCalcularPedidosDespachados:
         hoy = hoy_operativo()
         resultado = calcular_pedidos_despachados(almacen.id, hoy, hoy)
         assert resultado == {
-            'pedidos': 0, 'lineas': 0, 'unidades': 0, 'valor_total': 0.0, 'por_dia': {},
+            'pedidos': 0, 'lineas': 0, 'unidades': 0, 'valor_total': 0.0,
+            'sin_valor_factura': 0, 'por_dia': {},
             'fecha_desde': hoy.isoformat(), 'fecha_hasta': hoy.isoformat(),
         }
 
