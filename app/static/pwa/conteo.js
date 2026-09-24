@@ -3,7 +3,10 @@
 // Dependencias globales (de app.js): alerta(), API, TOKEN
 // ══════════════════════════════════════════════════════════════════
 
-let _INV_SUBTAB = 'conteos';
+// Se abre en 🧭 Líder: es «lo que espera tu decisión». La lista completa de
+// conteos (con el rezago de abril, miles de pendientes) es consulta, no el
+// punto de entrada del jefe de bodega.
+let _INV_SUBTAB = 'lider';
 let _INV_ALMACENES = [];
 
 // ── Aviso de cajas POS al iniciar un conteo ─────────────────────────────
@@ -49,9 +52,10 @@ async function cargarInventario() {
       mostrarConfigBodega();
     } catch (e) { /* silencioso */ }
   }
-  if (_INV_SUBTAB === 'conteos') await cargarConteos();
-  else if (_INV_SUBTAB === 'lider') await liderCargar();
-  else await cargarResumenAbc();
+  // La pestaña que esté activa, con su propio cargador: antes todo lo que no
+  // fuera Conteos o Líder recargaba el resumen ABC (volver a Inventario desde
+  // Definitivo dejaba la cola de definitivos sin refrescar).
+  invSubtab(_INV_SUBTAB);
 }
 
 // ── Config bodega por almacén ─────────────────────────────────────────────────
@@ -66,7 +70,7 @@ function mostrarConfigBodega() {
   if (!alm) { info.style.display = 'none'; return; }
   const bod = alm.bodega_siesa_id || '—';
   const co = alm.centro_op_siesa || '—';
-  label.innerHTML = `Bodega Siesa: <span style="color:#60a5fa;font-weight:700;">${bod}</span> · CO: <span style="color:#60a5fa;font-weight:700;">${co}</span>`;
+  label.innerHTML = `Bodega Siesa: <span style="color:#60a5fa;font-weight:700;">${esc(bod)}</span> · CO: <span style="color:#60a5fa;font-weight:700;">${esc(co)}</span>`;
   info.style.display = 'block';
   document.getElementById('inv-abc-bodega-edit').style.display = 'none';
 }
@@ -172,6 +176,43 @@ function conteosFiltrar() {
 
 // ── Render helpers por vista ──────────────────────────────────────────────────
 
+// ── Palabras de bodega para los códigos del servidor ────────────────────────
+// Solo etiquetas: ninguna decide nada. Quien lee la tarjeta es un jefe de
+// bodega, no el modelo de datos: «DESCUADRE», «CC2» o «AJ-SAL» son nombres de
+// columnas. Las del tablero del líder las manda el servidor
+// (`tablero_lider_conteo.ESTADO_TEXTO`); el listado de Conteos todavía no, y
+// estas usan las MISMAS palabras. Un código que no esté acá se muestra tal cual.
+
+const _ESTADO_CONTEO_TXT = {
+  PENDIENTE: 'Pendiente',
+  EN_PROCESO: 'Contándose',
+  SEGUNDO_CONTEO: 'Esperando el 2º conteo',
+  TERCER_CONTEO: 'Esperando el conteo definitivo',
+  DESCUADRE: 'Contado con diferencia',
+  BLOQUEADO: 'Bloqueado',
+  MATCH: 'Cuadró con Siesa',
+  AJUSTANDO: 'Enviando ajuste a Siesa',
+  AJUSTADO: 'Ajustado en Siesa',
+  CANCELADO: 'Cancelado',
+};
+
+/** El estado de una sesión dicho en palabras (sin escapar: va por esc()). */
+function _estadoConteoTxt(estado) {
+  return _ESTADO_CONTEO_TXT[estado] || estado || '—';
+}
+
+/** 'CC1' | 'CC2' | 'CC3' (`ConteoService.nivel_en_cadena`) en palabras. */
+function _nivelConteoTxt(nivel) {
+  return { CC1: '1er conteo', CC2: '2º conteo', CC3: 'conteo definitivo' }[nivel] || nivel || '';
+}
+
+/** El motivo del ajuste (AJ-ENT / AJ-SAL) como lo dice la bodega. */
+function _motivoAjusteTxt(codigo) {
+  if (codigo === 'AJ-ENT') return 'sobrante';
+  if (codigo === 'AJ-SAL') return 'faltante';
+  return codigo || '';
+}
+
 /**
  * Render a small colored badge indicating the conteo type (PICKING/MANUAL).
  * @param {Object} s - Conteo session object.
@@ -239,39 +280,47 @@ function _renderCardAccion(s) {
   const cc3  = hijo?.tercer_conteo;        // CC3 (cuando CC1≠CC2)
   const TERMINADOS = ['MATCH','DESCUADRE','SEGUNDO_CONTEO','TERCER_CONTEO','AJUSTADO','CANCELADO'];
   const esTercerConteo = s.estado === 'TERCER_CONTEO';
+  // Con la cadena ya resuelta por el definitivo (raíz en DESCUADRE) la tarjeta
+  // mostraba solo el 2º conteo y escondía la cifra que manda el ajuste.
+  const conDefinitivo = esTercerConteo || !!(cc3 && cc3.cantidad_fisica != null);
   const cc2Pendiente = hijo ? !TERMINADOS.includes(hijo.estado) : true;
   const cc3Pendiente = cc3 ? !TERMINADOS.includes(cc3.estado) : true;
   const hijoPendiente = esTercerConteo ? cc3Pendiente : cc2Pendiente;
-  const puedeAjustar = s.estado === 'DESCUADRE';
+  // El servidor ya dijo si este ajuste se puede aprobar (`bloqueo_ajuste`, la
+  // misma función que lo niega): con motivo, el botón no promete un error.
+  const bloqueado = s.estado === 'DESCUADRE' && !!s.bloqueo_ajuste;
+  const puedeAjustar = s.estado === 'DESCUADRE' && !bloqueado;
   const coinciden = !cc2Pendiente && _conteosCoinciden(s, hijo);
   const bordColor = s.estado === 'DESCUADRE' ? '#7F1D1D' : s.estado === 'TERCER_CONTEO' ? '#7F4010' : '#164F5A';
   const badgeColor = s.estado === 'DESCUADRE' ? '#7F1D1D' : s.estado === 'TERCER_CONTEO' ? '#92400E' : '#1E8395';
-  const dif = s.diferencia != null ? (s.diferencia > 0 ? `+${esc(s.diferencia)}` : `${s.diferencia}`) : '?';
+  const dif = s.diferencia != null ? (s.diferencia > 0 ? `+${s.diferencia}` : `${s.diferencia}`) : '?';
   const difCol = (s.diferencia || 0) > 0 ? '#22C55E' : '#F87171';
   const mostrarOmitir = ['SEGUNDO_CONTEO','TERCER_CONTEO'].includes(s.estado) && hijoPendiente;
-  const btnTexto = hijoPendiente
-    ? (esTercerConteo ? '⏳ Esperando 3er conteo' : '⏳ Esperando 2do conteo')
-    : '✓ Confirmar ajuste →';
+  const btnTexto = bloqueado
+    ? '⛔ No se puede aprobar (ver arriba)'
+    : hijoPendiente
+      ? (esTercerConteo ? '⏳ Esperando el conteo definitivo' : '⏳ Esperando el 2º conteo')
+      : '✓ Revisar y aprobar ajuste →';
 
   // Columna 3 del grid varía según estado
   let col3Html;
-  if (esTercerConteo) {
+  if (conDefinitivo) {
     const cc2Val = hijo?.cantidad_fisica != null ? hijo.cantidad_fisica : '—';
     const cc3Hecho = cc3 && !cc3Pendiente;
     col3Html = `
-      <div style="font-size:9px;color:#415A70;font-weight:700;text-transform:uppercase;margin-bottom:2px;">CC2 / CC3</div>
-      <div style="font-size:14px;font-weight:700;color:#F87171;line-height:1.4;">${cc2Val}<span style="font-size:9px;color:#415A70;margin-left:3px;">CC2</span></div>
+      <div style="font-size:9px;color:#415A70;font-weight:700;text-transform:uppercase;margin-bottom:2px;">2º / Definitivo</div>
+      <div style="font-size:14px;font-weight:700;color:#F87171;line-height:1.4;">${esc(cc2Val)}<span style="font-size:9px;color:#415A70;margin-left:3px;">2º</span></div>
       ${cc3Hecho
-        ? `<div style="font-size:14px;font-weight:700;color:#FBBF24;line-height:1.4;">${cc3.cantidad_fisica ?? '—'}<span style="font-size:9px;color:#415A70;margin-left:3px;">CC3</span></div>`
-        : `<div style="font-size:13px;color:#415A70;">⏳ CC3</div>`}`;
+        ? `<div style="font-size:14px;font-weight:700;color:#FBBF24;line-height:1.4;">${esc(cc3.cantidad_fisica ?? '—')}<span style="font-size:9px;color:#415A70;margin-left:3px;">definitivo</span></div>`
+        : `<div style="font-size:13px;color:#415A70;">⏳ definitivo</div>`}`;
   } else {
     col3Html = `
-      <div style="font-size:9px;color:#415A70;font-weight:700;text-transform:uppercase;margin-bottom:3px;">2do Conteo</div>
+      <div style="font-size:9px;color:#415A70;font-weight:700;text-transform:uppercase;margin-bottom:3px;">2º conteo</div>
       ${hijo && !cc2Pendiente
-        ? `<div style="font-size:20px;font-weight:800;color:${coinciden?'#22C55E':'#F87171'};line-height:1;">${hijo.cantidad_fisica != null ? hijo.cantidad_fisica : '—'}</div>
-           <div style="font-size:9px;color:#415A70;margin-top:2px;">${hijo.operario_nombre || (hijo.operario_id ? `Op #${esc(hijo.operario_id)}` : '—')}</div>`
+        ? `<div style="font-size:20px;font-weight:800;color:${coinciden?'#22C55E':'#F87171'};line-height:1;">${esc(hijo.cantidad_fisica != null ? hijo.cantidad_fisica : '—')}</div>
+           <div style="font-size:9px;color:#415A70;margin-top:2px;">${esc(hijo.operario_nombre || (hijo.operario_id ? `Op #${hijo.operario_id}` : '—'))}</div>`
         : `<div style="font-size:16px;color:#415A70;padding:2px 0;">⏳</div>
-           <div style="font-size:9px;color:#415A70;margin-top:2px;">${hijo ? (hijo.operario_nombre || (hijo.operario_id ? `Op #${esc(hijo.operario_id)}` : 'asignado')) : 'sin asignar'}</div>`}`;
+           <div style="font-size:9px;color:#415A70;margin-top:2px;">${esc(hijo ? (hijo.operario_nombre || (hijo.operario_id ? `Op #${hijo.operario_id}` : 'asignado')) : 'sin asignar')}</div>`}`;
   }
 
   return `<div style="background:#121C26;border:1px solid ${bordColor};border-radius:12px;padding:14px;margin-bottom:10px;">
@@ -281,30 +330,30 @@ function _renderCardAccion(s) {
         <div style="font-size:11px;color:#415A70;margin-top:1px;">${esc(s.producto_nombre || '')}</div>
         <div style="font-size:11px;color:#415A70;margin-top:1px;">📍 ${esc(s.ubicacion_codigo || '—')}</div>
       </div>
-      <span style="background:${badgeColor};color:#fff;font-size:10px;font-weight:700;padding:2px 8px;border-radius:8px;white-space:nowrap;flex-shrink:0;margin-left:8px;">${esc(s.estado)}</span>
+      <span style="background:${badgeColor};color:#fff;font-size:10px;font-weight:700;padding:2px 8px;border-radius:8px;white-space:nowrap;flex-shrink:0;margin-left:8px;">${esc(_estadoConteoTxt(s.estado))}</span>
     </div>
 
     <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;background:#0B1117;border-radius:8px;padding:10px;margin-bottom:10px;text-align:center;">
       <div>
         <div style="font-size:9px;color:#415A70;font-weight:700;text-transform:uppercase;margin-bottom:3px;">Siesa</div>
-        <div style="font-size:20px;font-weight:800;color:#60A5FA;line-height:1;">${s.existencia_siesa != null ? s.existencia_siesa : '—'}</div>
+        <div style="font-size:20px;font-weight:800;color:#60A5FA;line-height:1;">${esc(s.existencia_siesa != null ? s.existencia_siesa : '—')}</div>
         <div style="font-size:9px;color:#415A70;margin-top:2px;">${esc(s.bodega_siesa_id || 'stock')}</div>
         ${_fotoSiesaHtml(s)}
       </div>
       <div style="border-left:1px solid #1C2B3A;border-right:1px solid #1C2B3A;">
-        <div style="font-size:9px;color:#415A70;font-weight:700;text-transform:uppercase;margin-bottom:3px;">1er Conteo</div>
-        <div style="font-size:20px;font-weight:800;color:#FBBF24;line-height:1;">${s.cantidad_fisica != null ? s.cantidad_fisica : '—'}</div>
-        <div style="font-size:9px;color:#415A70;margin-top:2px;">${s.operario_id ? `Op #${esc(s.operario_id)}` : '—'}</div>
+        <div style="font-size:9px;color:#415A70;font-weight:700;text-transform:uppercase;margin-bottom:3px;">1er conteo</div>
+        <div style="font-size:20px;font-weight:800;color:#FBBF24;line-height:1;">${esc(s.cantidad_fisica != null ? s.cantidad_fisica : '—')}</div>
+        <div style="font-size:9px;color:#415A70;margin-top:2px;">${esc(s.operario_nombre || (s.operario_id ? `Op #${s.operario_id}` : '—'))}</div>
       </div>
       <div>${col3Html}</div>
     </div>
 
     <div style="display:flex;justify-content:space-between;align-items:center;font-size:11px;color:#415A70;margin-bottom:10px;">
-      <span>Δ <span style="color:${difCol};font-weight:700;">${dif} uds</span>${s.motivo_codigo ? ` · <span style="color:${s.motivo_codigo==='AJ-ENT'?'#22C55E':'#F87171'};">${esc(s.motivo_codigo)}</span>` : ''}</span>
+      <span>Diferencia <span style="color:${difCol};font-weight:700;">${esc(dif)} uds</span>${s.motivo_codigo ? ` · <span style="color:${s.motivo_codigo==='AJ-ENT'?'#22C55E':'#F87171'};">${esc(_motivoAjusteTxt(s.motivo_codigo))}</span>` : ''}</span>
       ${s.estado === 'DESCUADRE' && coinciden
-        ? `<span style="color:#22C55E;font-size:10px;">✓ CC1==CC2 confirmado</span>`
+        ? `<span style="color:#22C55E;font-size:10px;">✓ 1º y 2º conteo coinciden</span>`
         : s.estado === 'DESCUADRE' && !coinciden && hijo && !cc2Pendiente
-          ? `<span style="color:#FBBF24;font-size:10px;">✓ CC3 definitivo</span>`
+          ? `<span style="color:#FBBF24;font-size:10px;">✓ Manda el conteo definitivo</span>`
           : ''}
     </div>
     ${_bloqueoAjusteHtml(s)}
@@ -317,15 +366,15 @@ function _renderCardAccion(s) {
         : ''}
       ${mostrarOmitir
         ? `<button onclick="conteoOmitirSegundo(${esc(s.id)})"
-             title="Saltar CC2/CC3 y mover a DESCUADRE para revisión admin"
-             style="padding:8px 10px;background:none;border:1px solid #415A70;color:#415A70;border-radius:8px;font-size:11px;cursor:pointer;white-space:nowrap;">Omitir CC2</button>`
+             title="No esperar el recuento: la diferencia queda para que la decidas"
+             style="padding:8px 10px;background:none;border:1px solid #415A70;color:#415A70;border-radius:8px;font-size:11px;cursor:pointer;white-space:nowrap;">${esTercerConteo ? 'Saltar conteo definitivo' : 'Saltar 2º conteo'}</button>`
         : ''}
       <button onclick="${puedeAjustar ? `conteoAbrirAjusteId(${esc(_conteoPintado(s))})` : 'void(0)'}"
         ${!puedeAjustar ? 'disabled' : ''}
         style="flex:2;padding:8px;background:${puedeAjustar?'#1E8395':'var(--bg-input)'};color:${puedeAjustar?'#fff':'var(--tx3)'};border:${puedeAjustar?'none':'1px solid var(--brd)'};border-radius:8px;font-size:12px;font-weight:700;cursor:${puedeAjustar?'pointer':'not-allowed'};min-width:120px;">
         ${btnTexto}
       </button>
-      <button onclick="conteoCancelar(${esc(s.id)})" style="padding:8px;background:none;border:1px solid #7F1D1D;color:#F87171;border-radius:8px;font-size:11px;cursor:pointer;">✕</button>
+      <button onclick="conteoCancelar(${esc(s.id)})" title="Cancelar este conteo y su cadena: no se ajusta nada" style="padding:8px;background:none;border:1px solid #7F1D1D;color:#F87171;border-radius:8px;font-size:11px;cursor:pointer;white-space:nowrap;">✕ Cancelar</button>
     </div>
     ${s.editado_en ? `<div style="font-size:10px;color:#415A70;margin-top:6px;">✏ Editado: ${esc(s.motivo_edicion)}</div>` : ''}
   </div>`;
@@ -343,11 +392,11 @@ function _renderCardProgreso(s) {
       <div style="flex:1;min-width:0;">
         <div style="font-size:12px;font-weight:700;">${esc(s.producto_codigo || '—')}${_tipoTag(s)}</div>
         <div style="font-size:11px;color:#415A70;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(s.producto_nombre || '')}</div>
-        <div style="font-size:11px;color:#415A70;margin-top:2px;">📍 ${esc(s.ubicacion_codigo || '—')}${s.operario_id ? ` · 👤 Op #${esc(s.operario_id)}` : ''}</div>
+        <div style="font-size:11px;color:#415A70;margin-top:2px;">📍 ${esc(s.ubicacion_codigo || '—')}${s.operario_id ? ` · 👤 ${esc(s.operario_nombre || `Op #${s.operario_id}`)}` : ''}</div>
       </div>
       <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px;flex-shrink:0;margin-left:8px;">
         ${s.clasificacion_abc ? `<span style="background:#1C2B3A;color:#FBBF24;font-size:9px;font-weight:700;padding:1px 5px;border-radius:6px;">ABC-${esc(s.clasificacion_abc)}</span>` : ''}
-        <span style="background:${col};color:#fff;font-size:10px;font-weight:700;padding:2px 8px;border-radius:8px;">${esc(s.estado)}</span>
+        <span style="background:${col};color:#fff;font-size:10px;font-weight:700;padding:2px 8px;border-radius:8px;">${esc(_estadoConteoTxt(s.estado))}</span>
         <div style="display:flex;gap:4px;">
           <button onclick="conteoAbrirEdicionId(${esc(_conteoPintado(s))})"
             title="Reasignar operario / corregir conteo"
@@ -367,7 +416,7 @@ function _renderCardProgreso(s) {
 function _renderCardResuelto(s) {
   const colMap = { MATCH:'#14532D', AJUSTADO:'#14532D', AJUSTANDO:'#7F1D1D', CANCELADO:'#253A4A' };
   const col = colMap[s.estado] || '#253A4A';
-  const dif = s.diferencia != null ? (s.diferencia > 0 ? `+${esc(s.diferencia)}` : `${s.diferencia}`) : null;
+  const dif = s.diferencia != null ? (s.diferencia > 0 ? `+${s.diferencia}` : `${s.diferencia}`) : null;
   const difCol = (s.diferencia || 0) > 0 ? '#22C55E' : (s.diferencia || 0) < 0 ? '#F87171' : '#415A70';
   return `<div style="background:#0B1117;border:1px solid #1C2B3A;border-radius:10px;padding:12px;margin-bottom:6px;">
     <div style="display:flex;justify-content:space-between;align-items:flex-start;">
@@ -377,8 +426,8 @@ function _renderCardResuelto(s) {
         <div style="font-size:11px;color:#415A70;margin-top:1px;">📍 ${esc(s.ubicacion_codigo || '—')}</div>
       </div>
       <div style="display:flex;flex-direction:column;align-items:flex-end;gap:3px;flex-shrink:0;margin-left:8px;">
-        <span style="background:${col};color:#fff;font-size:10px;font-weight:700;padding:2px 8px;border-radius:8px;">${esc(s.estado)}</span>
-        ${dif ? `<span style="color:${difCol};font-size:11px;font-weight:700;">Δ ${dif}</span>` : ''}
+        <span style="background:${col};color:#fff;font-size:10px;font-weight:700;padding:2px 8px;border-radius:8px;">${esc(_estadoConteoTxt(s.estado))}</span>
+        ${dif ? `<span style="color:${difCol};font-size:11px;font-weight:700;">Dif. ${esc(dif)}</span>` : ''}
       </div>
     </div>
     ${s.aprobador_nombre ? `<div style="font-size:10px;color:#415A70;margin-top:4px;">✓ ${esc(s.aprobador_nombre)}</div>` : ''}
@@ -450,7 +499,7 @@ async function conteoDescartarFallos() {
   if (!plan.jobs_fallidos) { alerta('No hay ajustes fallidos que descartar', 'info'); return; }
 
   const etiquetas = {
-    reset_a_descuadre: 'vuelven a DESCUADRE (podés re-aprobar o cancelar)',
+    reset_a_descuadre: 'vuelven a «contado con diferencia» (podés aprobarlos de nuevo o cancelarlos)',
     sin_tocar_ya_ajustada: 'ya estaban AJUSTADAS — no se tocan',
     sin_tocar_otro_estado: 'están en otro estado — no se tocan',
     SE_CONSERVA_POSIBLE_ENVIO: '⚠ NO se descartan: el ajuste pudo haber llegado a Siesa (quedan para reintentar)',
@@ -458,13 +507,13 @@ async function conteoDescartarFallos() {
     sesion_no_existe: 'su sesión ya no está en la base'
   };
   const detalle = Object.entries(plan.resumen)
-    .map(([k, n]) => `  · ${n} ${etiquetas[k] || k}`)
+    .map(([k, n]) => `  · ${esc(n)} ${esc(etiquetas[k] || k)}`)
     .join('\n');
 
   let texto = `Descartar ${plan.jobs_fallidos} ajuste(s) fallido(s)?\n\n${detalle}\n\n`
     + 'Descartar NO los envía a Siesa: los marca como abandonados.';
   if (plan.huerfanas && plan.huerfanas.length) {
-    texto += `\n\n⚠ Sesiones ${plan.huerfanas.join(', ')}: su ajuste pudo haber llegado a Siesa. `
+    texto += `\n\n⚠ Sesiones ${esc(plan.huerfanas.join(', '))}: su ajuste pudo haber llegado a Siesa. `
       + 'No se descartan — quedan para «Reintentar», que las cierra sin volver a enviar. Verificá en Siesa si llegó.';
   }
   if (!await _modalConfirmar(texto, { titulo: 'Descartar ajustes fallidos', peligro: true })) return;
@@ -474,7 +523,7 @@ async function conteoDescartarFallos() {
     const aviso = (d.huerfanas && d.huerfanas.length)
       ? ` · ${d.huerfanas.length} conservada(s) para reintentar: ${d.huerfanas.join(', ')}`
       : '';
-    alerta(`${d.descartados} descartados · ${d.sesiones_reset} a DESCUADRE${aviso}`,
+    alerta(`${d.descartados} descartados · ${d.sesiones_reset} vuelven a «contado con diferencia»${aviso}`,
            aviso ? 'advertencia' : 'exito');
     await cargarConteoStats();
     await cargarConteos(_CONTEO_PAGE);
@@ -486,10 +535,10 @@ async function conteoDescartarFallos() {
  * @param {number} id - Conteo session ID.
  */
 async function conteoOmitirSegundo(id) {
-  if (!await _modalConfirmar('¿Omitir el CC2/CC3 pendiente y mover esta sesión a DESCUADRE para revisión?\n\nEl conteo pendiente se cancelará. Podrás aprobar o rechazar el ajuste manualmente.', { titulo: 'Omitir segundo conteo' })) return;
+  if (!await _modalConfirmar('¿No esperar el recuento pendiente?\n\nEl conteo que falta se cancela y esta diferencia queda «contada con diferencia», para que la apruebes o la canceles vos.', { titulo: 'Saltar el recuento', textoConfirmar: 'Sí, saltarlo', textoCancelar: 'Volver' })) return;
   try {
     await post('/api/conteo/' + id + '/omitir-segundo', {});
-    alerta('Sesión movida a DESCUADRE — revisa y confirma el ajuste', 'exito');
+    alerta('Listo — la diferencia queda para tu decisión', 'exito');
     await cargarConteoStats();
     await cargarConteos(_CONTEO_PAGE);
   } catch (e) { alerta(e.message || 'Error de conexión', 'error'); }
@@ -575,7 +624,8 @@ async function conteoAsignarLote() {
  */
 async function conteoCancelar(id) {
   const motivo = await _modalTexto('Cancelar conteo',
-    'Se cancela este conteo y toda su cadena (1º, 2º y 3º conteo): no se ajusta nada. ¿Por qué?');
+    'Se cancela este conteo y toda su cadena (1º, 2º y conteo definitivo): no se ajusta nada. ¿Por qué?',
+    { obligatorio: true, textoConfirmar: 'Cancelar conteo', textoCancelar: 'Volver' });
   if (!motivo) return;
   try {
     await put(`/api/conteo/${id}/cancelar`, { motivo: motivo.trim() });
@@ -924,7 +974,7 @@ function _limpiarColaPreviewHtml(plan, etiqueta) {
 async function limpiarPendientesAbc() {
   const almacenId = document.getElementById('inv-abc-almacen')?.value;
   if (!almacenId) { alerta('Selecciona un almacén primero', 'error'); return; }
-  const clase = await _modalTexto('Limpiar cola', 'Qué clase limpiar? Escribe A, B, C o deja vacío para TODAS:', { obligatorio: false });
+  const clase = await _modalTexto('Cancelar rezago', '¿De qué clase? Escribí A, B o C, o dejalo vacío para TODAS:', { obligatorio: false, textoConfirmar: 'Ver qué se cancela', textoCancelar: 'Volver' });
   if (clase === null) return; // canceló
   const claseUpper = clase.trim().toUpperCase();
   if (claseUpper && !['A','B','C'].includes(claseUpper)) {
@@ -1148,13 +1198,15 @@ function conteoAbrirAjuste(s) {
   _CONTEO_AJUSTE_SESION = s;
   const m    = document.getElementById('modal-conteo-ajuste');
   const info = document.getElementById('conteo-ajuste-info');
-  const obs  = document.getElementById('conteo-ajuste-obs');
   if (!m || !info) return;
-  if (obs) obs.value = '';
 
   const hijo     = s.segundo_conteo;
+  // Con 1º ≠ 2º la cadena la resolvió el conteo definitivo: su cifra es la
+  // que el servidor copió a la raíz y la que sale en el ajuste. El modal decía
+  // «se usará el 2do conteo» también en ese caso.
+  const cc3      = hijo && hijo.tercer_conteo;
+  const cc3Hecho = !!(cc3 && cc3.cantidad_fisica != null);
   const difVal   = s.diferencia != null ? s.diferencia : 0;
-  const dif      = difVal > 0 ? `+${difVal}` : `${difVal}`;
   const difCol   = difVal > 0 ? '#4ade80' : '#f87171';
   const motivo   = s.motivo_codigo || (difVal > 0 ? 'AJ-ENT' : 'AJ-SAL');
   const accion   = motivo === 'AJ-ENT' ? '📦 ENTRADA' : '📤 SALIDA';
@@ -1162,34 +1214,39 @@ function conteoAbrirAjuste(s) {
   const coinciden = _conteosCoinciden(s, hijo);
 
   const bodega = s.bodega_siesa_id || '—';
+  const col3 = cc3Hecho
+    ? { titulo: 'Definitivo', valor: cc3.cantidad_fisica, color: '#fbbf24' }
+    : { titulo: '2º conteo', valor: hijo?.cantidad_fisica, color: coinciden ? '#4ade80' : '#f87171' };
+  let referencia = '';
+  if (cc3Hecho) referencia = `<div style="color:#fbbf24;font-size:11px;text-align:center;">El 1º y el 2º conteo no coincidieron: manda el conteo definitivo (${esc(cc3.cantidad_fisica)})</div>`;
+  else if (coinciden) referencia = '<div style="color:#4ade80;font-size:11px;text-align:center;">✓ El 1º y el 2º conteo coinciden</div>';
 
   info.innerHTML = `
     <div style="margin-bottom:10px;">
       <div style="font-size:13px;font-weight:700;color:#e2e8f0;">${esc(s.producto_codigo || '—')} · ${esc(s.producto_nombre || '')}</div>
-      <div style="font-size:11px;color:#4b5563;margin-top:1px;">📍 ${esc(s.ubicacion_codigo || '—')} · Bodega: <span style="color:#60a5fa;font-weight:700;">${bodega}</span></div>
+      <div style="font-size:11px;color:#4b5563;margin-top:1px;">📍 ${esc(s.ubicacion_codigo || '—')} · Bodega: <span style="color:#60a5fa;font-weight:700;">${esc(bodega)}</span></div>
     </div>
     <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-bottom:12px;text-align:center;">
       <div>
-        <div style="font-size:9px;color:#4b5563;text-transform:uppercase;margin-bottom:2px;">WMS</div>
-        <div style="font-size:18px;font-weight:800;color:#60a5fa;">${s.existencia_siesa ?? '—'}</div>
+        <div style="font-size:9px;color:#4b5563;text-transform:uppercase;margin-bottom:2px;">Siesa</div>
+        <div style="font-size:18px;font-weight:800;color:#60a5fa;">${esc(s.existencia_siesa ?? '—')}</div>
         ${_fotoSiesaHtml(s)}
       </div>
       <div style="border-left:1px solid #1f2937;border-right:1px solid #1f2937;">
-        <div style="font-size:9px;color:#4b5563;text-transform:uppercase;margin-bottom:2px;">1er Conteo</div>
-        <div style="font-size:18px;font-weight:800;color:#f59e0b;">${s.cantidad_fisica ?? '—'}</div>
+        <div style="font-size:9px;color:#4b5563;text-transform:uppercase;margin-bottom:2px;">1er conteo</div>
+        <div style="font-size:18px;font-weight:800;color:#f59e0b;">${esc(s.cantidad_fisica ?? '—')}</div>
       </div>
       <div>
-        <div style="font-size:9px;color:#4b5563;text-transform:uppercase;margin-bottom:2px;">2do Conteo</div>
-        <div style="font-size:18px;font-weight:800;color:${coinciden?'#4ade80':'#f87171'};">${hijo?.cantidad_fisica ?? '—'}</div>
+        <div style="font-size:9px;color:#4b5563;text-transform:uppercase;margin-bottom:2px;">${esc(col3.titulo)}</div>
+        <div style="font-size:18px;font-weight:800;color:${col3.color};">${esc(col3.valor ?? '—')}</div>
       </div>
     </div>
     <div style="background:#0d0d0d;border-radius:8px;padding:10px;text-align:center;margin-bottom:8px;">
-      <div style="font-size:10px;color:#4b5563;margin-bottom:4px;">Se enviará a SIESA → Bodega <span style="color:#60a5fa;font-weight:700;">${bodega}</span>:</div>
-      <div style="font-size:16px;font-weight:800;color:${difCol};">${accion} de ${cant} unidades</div>
-      <div style="font-size:10px;color:#4b5563;margin-top:2px;">${motivo} · Concepto 603 · Clase 63</div>
+      <div style="font-size:10px;color:#4b5563;margin-bottom:4px;">Se enviará a Siesa → Bodega <span style="color:#60a5fa;font-weight:700;">${esc(bodega)}</span>:</div>
+      <div style="font-size:16px;font-weight:800;color:${difCol};">${accion} de ${esc(cant)} unidades</div>
+      <div style="font-size:10px;color:#4b5563;margin-top:2px;">Ajuste por ${esc(_motivoAjusteTxt(motivo))} (${esc(motivo)})</div>
     </div>
-    ${hijo && !coinciden ? `<div style="color:#f87171;font-size:11px;text-align:center;">⚠ Los operarios no coinciden — se usará el 2do conteo como referencia</div>` : ''}
-    ${coinciden ? `<div style="color:#4ade80;font-size:11px;text-align:center;">✓ Ambos operarios confirmaron el mismo valor</div>` : ''}
+    ${referencia}
     ${_bloqueoAjusteHtml(s)}
     ${_aprobacionAjusteHtml(s)}
   `;
@@ -1224,12 +1281,12 @@ async function conteoConfirmarAjuste() {
   try {
     const d = await put(`/api/conteo/${sesionId}/ajustar`, {});
     conteosCerrarAjuste();
-    alerta(`Ajuste ${d.motivo_codigo} encolado a Siesa · Δ ${d.diferencia} uds`, 'exito');
+    alerta(d.mensaje || `Ajuste enviado a Siesa · ${d.diferencia} uds`, 'exito');
     await cargarConteos(_CONTEO_PAGE);
   } catch (e) {
     alerta(e.message || 'Error de conexión', 'error');
   } finally {
-    if (btn) { btn.disabled = false; btn.textContent = 'Confirmar → SIESA'; }
+    if (btn) { btn.disabled = false; btn.textContent = 'Aprobar y enviar a Siesa'; }
   }
 }
 
@@ -1247,11 +1304,13 @@ async function conteoConfirmarAjuste() {
 let DEF_TAREA_ACTUAL = null;
 
 /** Carga la cola de conteos definitivos pendientes (CC1≠CC2, sin resolver),
- * y debajo lo que el operario dejó para el líder: bloqueados y novedades. */
+ * y debajo lo que el operario dejó para el líder: bloqueados y novedades.
+ * «Recogido sin despachar» vive en 🧭 Líder: es donde lo manda buscar el
+ * servidor (`ConteoService.DONDE_DECLARAR_REGRESO`) y donde está el bloque
+ * «Fuera del plan» que lo explica. */
 async function cargarConteoDefinitivos() {
   cargarConteoBloqueados();
   cargarConteoNovedades();
-  cargarConteoRecogidoSinDespachar();
   const el = document.getElementById('inv-definitivo-lista');
   if (!el) return;
   el.innerHTML = '<div style="text-align:center;padding:30px;color:var(--tx3);">Cargando…</div>';
@@ -1270,7 +1329,7 @@ async function cargarConteoDefinitivos() {
     el.innerHTML = pend.map(s => `
       <div style="background:var(--bg-s);border:1px solid var(--brd);border-radius:12px;padding:14px;margin-bottom:10px;">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
-          <span style="font-size:11px;font-weight:700;color:#f59e0b;background:rgba(120,53,15,.35);padding:2px 8px;border-radius:8px;">CC1 ≠ CC2</span>
+          <span style="font-size:11px;font-weight:700;color:#f59e0b;background:rgba(120,53,15,.35);padding:2px 8px;border-radius:8px;">1º y 2º conteo no coinciden</span>
           <span style="font-size:11px;color:var(--tx3);">${esc(s.almacen_nombre || '')}</span>
         </div>
         <div style="font-size:15px;font-weight:700;color:var(--tx);">${esc(s.producto_nombre || s.producto_codigo || '—')}</div>
@@ -1375,7 +1434,7 @@ function conteoHudHtml(h) {
     : `<div style="font-size:20px;font-weight:800;color:#fde68a;">📍 Buscalo en toda la bodega</div>
        <div style="font-size:12px;color:#888;margin-top:4px;">Este producto no tiene una ubicación física registrada: revisá todos los sitios donde pueda estar.</div>`;
   const empaque = factor > 1
-    ? `<div style="font-size:14px;color:#4ade80;margin-top:8px;font-weight:700;">📦 ${esc(unidadEmp)} de ${esc(factor)} und — escanear la ${esc(unidadEmp.toLowerCase())} suma ${esc(factor)}</div>`
+    ? `<div style="font-size:14px;color:#4ade80;margin-top:8px;font-weight:700;">📦 ${esc(unidadEmp)} de ${esc(factor)} und — escanear el código de la ${esc(unidadEmp)} suma ${esc(factor)}</div>`
     : '';
   return `
     <div style="padding:${def ? '0' : '16px'};">
@@ -1754,8 +1813,8 @@ function _conteoResultadoOperario(r) {
       <div style="font-size:28px;font-weight:900;color:${esMatch ? '#22C55E' : '#FBBF24'};text-align:center;padding:0 20px;">
         ${esMatch ? 'Inventario correcto' : 'Diferencia detectada'}
       </div>
-      <div style="font-size:15px;color:${esMatch ? '#14532D' : '#415A70'};text-align:center;padding:0 30px;line-height:1.5;">
-        ${esMatch ? 'El conteo cuadra con el sistema.' : 'Se asignó un segundo conteo\npara verificación.'}
+      <div style="font-size:15px;color:${esMatch ? '#86EFAC' : '#E5C07B'};text-align:center;padding:0 30px;line-height:1.5;">
+        ${esMatch ? 'El conteo cuadra con el sistema.' : 'Otra persona lo va a contar para confirmar. Seguí con tu próxima tarea.'}
       </div>`;
     document.body.appendChild(overlay);
     setTimeout(() => { overlay.remove(); pedirTarea(); }, esMatch ? 2000 : 3000);
@@ -1873,9 +1932,9 @@ function _defMostrarResultado(r) {
       <div style="font-size:14px;color:#aaa;margin-top:8px;line-height:1.5;">${esc(r.mensaje || '')}</div>
       ${(!esMatch && r.raiz_id) ? `
       <button onclick="defAprobarAjuste(${esc(r.raiz_id)})" style="width:100%;margin-top:20px;padding:16px;font-size:16px;font-weight:700;background:var(--pm);color:#fff;border:none;border-radius:12px;cursor:pointer;">
-        Aprobar ajuste ahora → Siesa
+        Aprobar ajuste y enviar a Siesa
       </button>
-      <div style="font-size:11px;color:#666;margin-top:8px;">O revísalo después desde Conteos → Acción</div>` : ''}
+      <div style="font-size:11px;color:#666;margin-top:8px;">O decidilo después en 🧭 Líder → «Ajustes esperando decisión», con su valor</div>` : ''}
       <button onclick="defCerrarModal()" style="width:100%;margin-top:12px;padding:14px;font-size:14px;background:#1a1a1a;color:#aaa;border:1px solid #333;border-radius:12px;cursor:pointer;">
         Cerrar
       </button>
@@ -1884,9 +1943,14 @@ function _defMostrarResultado(r) {
 
 /** Aprueba el ajuste ya mismo (PUT /api/conteo/<raiz_id>/ajustar) — dispara el POST real a Siesa vía DLQ. */
 async function defAprobarAjuste(raizId) {
+  // Un ajuste de inventario a Siesa no sale de un solo toque: el mismo paso
+  // de confirmación que tienen el tablero del líder y Conteos → Acción.
+  if (!await _modalConfirmar('Se envía a Siesa un ajuste de inventario con la cantidad del conteo definitivo.\n\n'
+      + 'Si el ajuste supera tu tope o no se puede aprobar, Siesa no recibe nada y te decimos por qué.',
+      { titulo: 'Aprobar ajuste', textoConfirmar: 'Aprobar y enviar', textoCancelar: 'Volver' })) return;
   try {
     const d = await put(`/api/conteo/${raizId}/ajustar`, {});
-    alerta(`Ajuste ${d.motivo_codigo || ''} encolado a Siesa`, 'exito');
+    alerta(d.mensaje || 'Ajuste enviado a Siesa', 'exito');
     defCerrarModal();
   } catch (e) {
     alerta(e.message || 'Error de conexión', 'error');
@@ -1931,7 +1995,7 @@ async function cargarConteoBloqueados() {
     el.innerHTML = filas.map(b => `
       <div style="background:var(--bg-s);border:1px solid var(--brd);border-radius:12px;padding:12px 14px;margin-bottom:8px;">
         <div style="display:flex;justify-content:space-between;gap:8px;">
-          <span style="font-size:11px;font-weight:700;color:#f59e0b;">${esc(_MOTIVO_BLOQUEO_TXT[b.motivo_bloqueo] || b.motivo_bloqueo)} · ${esc(b.nivel)}</span>
+          <span style="font-size:11px;font-weight:700;color:#f59e0b;">${esc(_MOTIVO_BLOQUEO_TXT[b.motivo_bloqueo] || b.motivo_bloqueo)} · ${esc(_nivelConteoTxt(b.nivel))}</span>
           <span style="font-size:11px;color:var(--tx3);">${esc(b.almacen_nombre || '')}</span>
         </div>
         <div style="font-size:14px;font-weight:700;color:var(--tx);margin-top:4px;">${esc(b.producto_nombre || b.producto_codigo || '—')}</div>
@@ -2342,10 +2406,25 @@ function _lProducto(f) {
     <div style="font-size:12px;color:var(--tx3);">${esc(f.producto_codigo || '')} · ${esc(f.codigo || '')}</div>`;
 }
 
+/**
+ * «Por motivo: …» con las palabras que el servidor puso en cada fila, no con la
+ * clave (`NO_ENCONTRADO`, `MOVIMIENTO_DURANTE_CONTEO`): la clave es para
+ * agrupar, el texto para leer. Si ninguna fila trae texto, queda la clave.
+ * @param {Object} porMotivo {clave: n}
+ * @param {Array} filas
+ * @param {(f: Object) => string} textoDe texto de una fila
+ * @param {string} campo el campo de la fila que lleva la clave
+ */
+function _lMotivosEnPalabras(porMotivo, filas, textoDe, campo) {
+  const texto = {};
+  (filas || []).forEach(f => { const t = textoDe(f); if (t && !(f[campo] in texto)) texto[f[campo]] = t; });
+  return Object.entries(porMotivo || {}).map(([k, n]) => `${esc(texto[k] || k)}: ${_lNum(n)}`).join(' · ');
+}
+
 function _lBloqueados(b, p) {
-  const motivos = Object.entries(b.por_motivo || {}).map(([k, n]) => `${esc(k)} ${_lNum(n)}`).join(' · ');
+  const motivos = _lMotivosEnPalabras(b.por_motivo, b.filas, f => f.motivo_texto, 'motivo_bloqueo');
   const filas = (b.filas || []).map(f => _lFila(
-    `<div style="font-size:11px;font-weight:700;color:#f59e0b;">${esc(f.motivo_texto || f.motivo_bloqueo)} · ${esc(f.nivel)}${f.reportado_por_nombre ? ` · reportó ${esc(f.reportado_por_nombre)}` : ''}</div>`,
+    `<div style="font-size:11px;font-weight:700;color:#f59e0b;">${esc(f.motivo_texto || f.motivo_bloqueo)} · en el ${esc(_nivelConteoTxt(f.nivel))}${f.reportado_por_nombre ? ` · reportó ${esc(f.reportado_por_nombre)}` : ''}</div>`,
     _lProducto(f) + (f.nota ? `<div style="font-size:12px;color:var(--tx2);margin-top:4px;">${esc(f.nota)}</div>` : ''),
     p.reabrir_cancelar_bloqueado
       ? _lBoton('↻ Reabrir', `liderReabrir(${esc(f.id)})`) + _lBoton('✕ Cancelar', `liderCancelarBloqueado(${esc(f.id)})`, 'peligro')
@@ -2381,16 +2460,16 @@ function _lAjustes(a, p) {
     if (p.cancelar_conteo) botones += _lBoton('✕ Cancelar', `liderCancelarConteo(${esc(f.id)})`, acc.tipo === 'CANCELAR' ? 'pm' : 'peligro');
     if (!botones) botones = _lSinPermiso('Lo decide un supervisor o admin');
     return _lFila(
-      `<div style="font-size:11px;font-weight:700;color:#f59e0b;">No se puede aprobar · ${esc(f.motivo_clave)}</div>`,
+      `<div style="font-size:11px;font-weight:700;color:#f59e0b;">No se puede aprobar todavía</div>`,
       _lProducto(f)
         + `<div style="font-size:13px;color:var(--tx);margin-top:6px;font-weight:700;">→ ${esc(acc.texto || '')}</div>`
         + `<details style="margin-top:4px;"><summary style="font-size:11px;color:var(--tx3);cursor:pointer;">Por qué</summary><div style="font-size:12px;color:var(--tx2);margin-top:4px;">${esc(f.motivo)}</div></details>`,
       botones);
   });
-  const motivos = Object.entries(bl.por_motivo || {}).map(([k, n]) => `${esc(k)} ${_lNum(n)}`).join(' · ');
+  const motivos = _lMotivosEnPalabras(bl.por_motivo, bl.filas, f => (f.accion || {}).texto, 'motivo_clave');
   const base = `${_lNum(a.total_descuadres)} contados con diferencia: ${_lNum(ap.total)} se pueden aprobar`
     + ` (${_lPlata(ap.valor_total)} en ${_lNum(ap.valorizados)} valorizados${ap.sin_costo ? `, ${_lNum(ap.sin_costo)} sin costo` : ''}; ${esc(ap.etiqueta_valor || '')})`
-    + ` · ${_lNum(bl.total)} no${motivos ? ` (${motivos})` : ''}`;
+    + ` · ${_lNum(bl.total)} todavía no${motivos ? ` (${motivos})` : ''}`;
   return _lBloque('⚖️ Ajustes esperando decisión', (ap.total || 0) + (bl.total || 0), base,
     filasAp.join('') + filasBl.join(''), 'Ningún ajuste esperando ✓');
 }
@@ -2411,7 +2490,7 @@ function _lAuditorias(a) {
 
 function _lRechazados(r, p) {
   const filas = (r.filas || []).map(f => _lFila(
-    `<div style="font-size:11px;font-weight:700;color:var(--red);">Siesa lo rechazó · ${esc(f.motivo_codigo || '')} ${_lNum(f.unidades)} und · ${_lNum(f.intentos)} intento(s)</div>`,
+    `<div style="font-size:11px;font-weight:700;color:var(--red);">Siesa lo rechazó · ${esc(_motivoAjusteTxt(f.motivo_codigo))} de ${_lNum(f.unidades)} und · ${_lNum(f.intentos)} intento(s)</div>`,
     _lProducto(f) + (f.error ? `<div style="font-size:12px;color:var(--tx2);margin-top:4px;">${esc(f.error)}</div>` : ''),
     ''));
   let botones = '';
@@ -2517,6 +2596,8 @@ async function liderCargar() {
     return;
   }
   el.innerHTML = '<div style="text-align:center;padding:30px;color:var(--tx3);">Cargando…</div>';
+  // Lo recogido que no salió: su propio endpoint, debajo del tablero.
+  cargarConteoRecogidoSinDespachar();
   try {
     _LIDER_DATOS = await get(`/api/conteo/lider/tablero?almacen_id=${encodeURIComponent(almId)}`);
     el.innerHTML = liderTableroHtml(_LIDER_DATOS);

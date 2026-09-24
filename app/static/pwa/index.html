@@ -1183,7 +1183,7 @@
         </div>
         <div class="kpi-card" style="cursor:pointer;" onclick="tab('tab-inventario')">
           <div class="kpi-valor" id="kpi-conteos-desc">—</div>
-          <div class="kpi-label">Conteos descuadre</div>
+          <div class="kpi-label">Conteos con diferencia</div>
         </div>
         <div class="kpi-card" id="kpi-card-auditorias" style="cursor:pointer;" onclick="tab('tab-inventario'); invSubtab('lider');">
           <div class="kpi-valor" id="kpi-auditorias">—</div>
@@ -1191,8 +1191,8 @@
         </div>
         <div class="kpi-card" id="kpi-card-definitivos" style="cursor:pointer;" onclick="tab('tab-inventario'); invSubtab('definitivo');">
           <div class="kpi-valor" id="kpi-definitivos">—</div>
-          <div class="kpi-label">Conteo definitivo (CC3)</div>
-          <div class="kpi-sub">CC1≠CC2 — esperando supervisor</div>
+          <div class="kpi-label">Conteo definitivo</div>
+          <div class="kpi-sub">1º y 2º no coinciden — lo cuenta un supervisor</div>
         </div>
       </div>
 
@@ -1740,11 +1740,11 @@
     <!-- Sub-nav -->
     <div style="display:flex;flex-wrap:wrap;gap:0;background:var(--bg-s);border:1px solid var(--brd);border-radius:10px;overflow:hidden;margin-bottom:16px;">
       <div id="inv-tab-lider" onclick="invSubtab('lider')"
-        style="flex:1 1 30%;padding:10px;font-size:13px;text-align:center;cursor:pointer;color:var(--tx3);">
+        style="flex:1 1 30%;padding:10px;font-size:13px;text-align:center;cursor:pointer;background:var(--pm);color:#fff;font-weight:700;">
         🧭 Líder
       </div>
       <div id="inv-tab-conteos" onclick="invSubtab('conteos')"
-        style="flex:1 1 30%;padding:10px;font-size:13px;text-align:center;cursor:pointer;background:var(--pm);color:#fff;font-weight:700;">
+        style="flex:1 1 30%;padding:10px;font-size:13px;text-align:center;cursor:pointer;color:var(--tx3);">
         Conteos
       </div>
       <div id="inv-tab-abc" onclick="invSubtab('abc')"
@@ -1766,7 +1766,7 @@
     </div>
 
     <!-- Panel Conteos -->
-    <div id="inv-panel-conteos">
+    <div id="inv-panel-conteos" style="display:none;">
       <!-- Dashboard de deuda -->
       <div id="conteo-stats-bar" style="display:none;background:var(--bg-s);border:1px solid var(--brd);border-radius:10px;padding:10px 12px;margin-bottom:10px;">
         <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px;">
@@ -1783,7 +1783,7 @@
             <span onclick="conteoReintentarFallos()" style="padding:4px 10px;background:var(--rbg);border:1px solid var(--rbrd);color:var(--red);border-radius:6px;font-size:10px;font-weight:700;cursor:pointer;white-space:nowrap;">
               <span id="cs-fallos">0</span> fallos Siesa — Reintentar
             </span>
-            <span onclick="conteoDescartarFallos()" title="Descartar fallos y resetear sesiones a DESCUADRE" style="padding:4px 8px;background:var(--rbg);border:1px solid var(--rbrd);color:var(--tx2);border-radius:6px;font-size:10px;cursor:pointer;white-space:nowrap;">✕ Descartar</span>
+            <span onclick="conteoDescartarFallos()" title="Descartar los ajustes que Siesa rechazó (primero muestra qué pasa con cada uno)" style="padding:4px 8px;background:var(--rbg);border:1px solid var(--rbrd);color:var(--tx2);border-radius:6px;font-size:10px;cursor:pointer;white-space:nowrap;">✕ Descartar</span>
           </span>
           <button onclick="conteoExportar()" style="padding:4px 10px;background:var(--bg-s);border:1px solid var(--brd);color:var(--tx3);border-radius:6px;font-size:10px;font-weight:600;cursor:pointer;white-space:nowrap;">Exportar CSV</button>
         </div>
@@ -1873,7 +1873,7 @@
 
     <!-- Panel Líder — lo llena liderCargar (conteo.js) desde GET /api/conteo/lider/tablero.
          Lo que espera la decisión del líder, lo urgente primero, cada fila con su acción. -->
-    <div id="inv-panel-lider" style="display:none;">
+    <div id="inv-panel-lider">
       <div style="margin-bottom:10px;">
         <div style="font-size:11px;color:var(--tx3);text-transform:uppercase;letter-spacing:.05em;margin-bottom:5px;">Almacén</div>
         <div style="display:flex;gap:8px;">
@@ -1883,6 +1883,16 @@
         </div>
       </div>
       <div id="inv-lider-contenido" style="min-height:60px;"></div>
+      <!-- Pedidos recogidos que no salieron: sin la declaración de regreso,
+           sus productos quedan fuera del plan de conteo (conteo.js).
+           Vive acá, al lado de «Fuera del plan», que es donde el servidor
+           manda a declararlo (ConteoService.DONDE_DECLARAR_REGRESO). -->
+      <div style="font-size:13px;font-weight:700;color:var(--tx);margin:18px 0 6px;">📦 Recogido sin despachar</div>
+      <div style="font-size:12px;color:var(--tx3);margin-bottom:8px;line-height:1.5;">
+        Pedidos que se recogieron y no salieron: el empaque se canceló sin remisión o nunca se empacó.
+        Mientras no confirmes que la mercancía volvió al estante, esos productos no se programan para contar.
+      </div>
+      <div id="inv-recogido-lista" style="min-height:40px;"></div>
     </div>
 
     <!-- Panel Estadísticas — lo llena conteoEstIniciar (conteo.js) desde GET /api/conteo/estadisticas -->
@@ -1909,19 +1919,12 @@
       <div style="font-size:13px;font-weight:700;color:var(--tx);margin:18px 0 6px;">🔍 Conteos bloqueados — esperan tu decisión</div>
       <div style="font-size:12px;color:var(--tx3);margin-bottom:8px;line-height:1.5;">
         El operario no pudo cerrarlos con un número. «No lo encontré» no es un cero: no se ajusta nada hasta que decidas.
+        (Es la misma lista del tablero 🧭 Líder: decidir acá o allá da lo mismo.)
         <b>Reabrir</b> lo devuelve a la cola desde cero; <b>Cancelar</b> descarta esa cadena de conteo.
       </div>
       <div id="inv-bloqueados-lista" style="min-height:40px;"></div>
       <div style="font-size:13px;font-weight:700;color:var(--tx);margin:18px 0 6px;">🏷 Mercancía sin código</div>
       <div id="inv-novedades-lista" style="min-height:40px;"></div>
-      <!-- Pedidos recogidos que no salieron: sin la declaración de regreso,
-           sus productos quedan fuera del plan de conteo (conteo.js). -->
-      <div style="font-size:13px;font-weight:700;color:var(--tx);margin:18px 0 6px;">📦 Recogido sin despachar</div>
-      <div style="font-size:12px;color:var(--tx3);margin-bottom:8px;line-height:1.5;">
-        Pedidos que se recogieron y no salieron: el empaque se canceló sin remisión o nunca se empacó.
-        Mientras no confirmes que la mercancía volvió al estante, esos productos no se programan para contar.
-      </div>
-      <div id="inv-recogido-lista" style="min-height:40px;"></div>
     </div>
 
     <!-- Modal Conteo Definitivo — escaneo + confirmación -->
@@ -2020,7 +2023,7 @@
         </div>
         <button onclick="ejecutarWatchdog()"
           style="width:100%;padding:13px;background:#1c1a0a;color:#f59e0b;border:1px solid #b45309;border-radius:10px;font-size:13px;font-weight:700;cursor:pointer;margin-top:8px;">
-          🤖 AI Watchdog — detectar anomalías
+          🤖 Watchdog — productos que rotan más de lo esperado
         </button>
         <div id="inv-abc-watchdog-nota" style="font-size:10px;color:#555;margin-top:4px;text-align:center;">
           Detecta productos B/C con alta rotación real y les abre un conteo inmediato, dentro del cupo del día.
@@ -3141,16 +3144,12 @@
   <div id="modal-conteo-ajuste" style="display:none;position:fixed;inset:0;background:rgba(7,11,16,.95);z-index:750;align-items:center;justify-content:center;padding:20px;">
     <div style="background:#111;border:1px solid #7c2d12;border-radius:20px;width:100%;max-width:440px;padding:24px;">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
-        <div style="font-size:15px;font-weight:800;color:#fed7aa;">⚠ Confirmar Ajuste de Inventario</div>
+        <div style="font-size:15px;font-weight:800;color:#fed7aa;">⚠ Aprobar ajuste de inventario</div>
         <button onclick="conteosCerrarAjuste()" style="background:none;border:none;color:#555;font-size:22px;cursor:pointer;">✕</button>
       </div>
       <div id="conteo-ajuste-info" style="background:#0d0d0d;border-radius:12px;padding:14px;margin-bottom:14px;font-size:12px;color:#888;"></div>
-      <div style="margin-bottom:16px;">
-        <label style="font-size:12px;color:#888;display:block;margin-bottom:4px;">Observaciones (opcional)</label>
-        <textarea id="conteo-ajuste-obs" rows="2"
-          style="width:100%;background:#0d0d0d;border:1px solid #333;color:#fff;border-radius:8px;padding:10px;font-size:13px;box-sizing:border-box;resize:none;"
-          placeholder="Ej: Validado con cámara, faltante confirmado por jefe de turno"></textarea>
-      </div>
+      <!-- Sin campo de observaciones: PUT /api/conteo/<id>/ajustar no recibe
+           ninguna, y lo escrito se perdía sin avisar. -->
       <div style="display:flex;gap:10px;">
         <button onclick="conteosCerrarAjuste()"
           style="flex:1;padding:12px;background:#1a1a1a;border:1px solid #333;color:#aaa;border-radius:10px;font-size:14px;cursor:pointer;">
@@ -3158,7 +3157,7 @@
         </button>
         <button id="btn-confirmar-ajuste" onclick="conteoConfirmarAjuste()"
           style="flex:2;padding:12px;background:#b45309;border:none;color:#fff;border-radius:10px;font-size:14px;font-weight:700;cursor:pointer;">
-          Confirmar → SIESA
+          Aprobar y enviar a Siesa
         </button>
       </div>
     </div>
@@ -3833,7 +3832,7 @@
   <script defer src="/static/pwa/recepcion.js?v=20260923ambig"></script>
   <script defer src="/static/pwa/rutas.js?v=20260923esc"></script>
   <script defer src="/static/pwa/traslados.js?v=20260923esc"></script>
-  <script defer src="/static/pwa/conteo.js?v=20260923editar"></script>
+  <script defer src="/static/pwa/conteo.js?v=20260923ux"></script>
   <script defer src="/static/pwa/reposicion.js?v=20260923esc"></script>
   <script defer src="/static/pwa/liquidacion.js?v=20260923esc"></script>
   <script defer src="/static/pwa/layout.js?v=20260921a"></script>

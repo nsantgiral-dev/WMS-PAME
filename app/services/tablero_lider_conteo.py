@@ -85,6 +85,7 @@ def contar_auditorias_urgentes(almacen_id: int) -> int:
 
 MOTIVO_BLOQUEO_TEXTO = {
     'NO_ENCONTRADO': 'No lo encontró',
+    'MOVIMIENTO_CONTINUO': 'Se vendía mientras se contaba (reabrilo en un momento quieto)',
     'OTRO': 'Otro problema',
     'SIN_MOTIVO_REGISTRADO': 'Sin motivo registrado',
     # Los que mandaba la pantalla vieja de «Reportar problema».
