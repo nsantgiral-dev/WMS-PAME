@@ -3960,7 +3960,11 @@ veces). `cargarFlota()` delega en la bandeja.
 
 Tests: `tests/flota/test_bandeja.py` (47, mundo armado con un caso por placa),
 `test_senales_dominio.py` (47), `test_bandeja_js.py` (38, Node + `util.js`
-real), `test_ficha_primera_vez_js.py` (17).
+real), `test_ficha_primera_vez_js.py` (17). 17 mutaciones, las 17 rojas.
+Suite completa el 2026-09-24 (`-m "not postgres"`, TZ=UTC): **7585 passed**,
+1 failed —el inventario del reloj de `tests/flujo/conductor_de_flota.py`, que
+no conocía los dos módulos nuevos; declarados en `FUERA_DEL_RELOJ` con su
+motivo y verde después—, 5 skipped, 19 xfailed.
 
 **Lo que NO cubre, declarado:**
 - **Casi todas las señales de km duermen hoy en producción**: las lecturas sin

@@ -178,6 +178,12 @@ FUERA_DEL_RELOJ = {
     # forma de que corra con la hora de la máquina sin que el test lo elija.
     'flota.adaptadores.reporte_semanal': (
         'cron de los lunes; recibe `dia` y `ahora` por parámetro y no los lee'),
+    # La bandeja del encargado (2026-09-24): solo lectura, no escribe ninguna
+    # hora. `armar_bandeja(ahora=...)` recibe el instante por parámetro.
+    'flota.adaptadores.bandeja': (
+        'lectura de la bandeja; no escribe horas y recibe `ahora` por parámetro'),
+    'flota.api.bandeja': (
+        'usa `datetime` solo para reconocer el tipo al serializar; no lo produce'),
 }
 
 
