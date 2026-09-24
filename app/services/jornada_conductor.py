@@ -281,6 +281,15 @@ def _min_del_dia(ts):
     return t.hour * 60 + t.minute
 
 
+def _cuando(ts):
+    """«2026-09-15 07:30», en Bogotá: lo que lee una persona en la evidencia."""
+    return _local(ts).strftime('%Y-%m-%d %H:%M') if ts else None
+
+
+_ESTADO_RUTA = {'PROGRAMADO': 'programada', 'EN_CARGUE': 'en cargue',
+                'EN_TRANSITO': 'en tránsito', 'ENTREGADA': 'cerrada'}
+
+
 def _hhmm(minutos):
     if minutos is None:
         return None
@@ -1137,7 +1146,7 @@ def _s_km_entre_turnos(ctx):
         if not (recibe_hoy or entrego_hoy):
             continue
         placa = m.placas.get(k.vehiculo_id, k.vehiculo_id)
-        en_medio = [{'custodio': m.custodio_txt(x), 'desde': _iso(x.inicio_ts),
+        en_medio = [{'custodio': m.custodio_txt(x), 'desde': _cuando(x.inicio_ts),
                      'ubicacion': x.ubicacion, 'km_inicio': x.km_inicio, 'km_fin': x.km_fin}
                     for x in medio]
         out.append(_senal(
@@ -1147,8 +1156,8 @@ def _s_km_entre_turnos(ctx):
              f'(lo recibió con {k.km_inicio} km). En ese tramo lo tenía la sede.'),
             [{'placa': placa, 'km': km, 'rol': 'recibió' if recibe_hoy else 'entregó antes',
               'entrego': m.nombre(antes.custodio_conductor_id), 'km_entrega': antes.km_fin,
-              'entrega': _iso(antes.fin_ts), 'recibio': m.nombre(k.custodio_conductor_id),
-              'km_recibo': k.km_inicio, 'recibo': _iso(k.inicio_ts), 'en_medio': en_medio}],
+              'entrega': _cuando(antes.fin_ts), 'recibio': m.nombre(k.custodio_conductor_id),
+              'km_recibo': k.km_inicio, 'recibo': _cuando(k.inicio_ts), 'en_medio': en_medio}],
             {'referencia': 'un vehículo bajo custodia de la sede no debería sumar km',
              'base': 'regla', 'n': None}))
     return out
@@ -1168,9 +1177,9 @@ def _s_duracion_ruta(ctx):
         out.append(_senal(
             'duracion_ruta', 'Ruta más larga que la de sus compañeros',
             (f'La ruta {m.maestras.get(h["maestra_id"], "")} le tomó '
-             f'{h["duracion_h"]:.1f} h del cierre del cargue al cierre de la ruta; '
-             f'a sus compañeros en esa ruta les toma {ref["mediana"]:.1f} h '
-             f'(el 90 % termina en {ref["p"]:.1f} h o menos).'),
+             f'{_num(h["duracion_h"])} h del cierre del cargue al cierre de la ruta; '
+             f'a sus compañeros en esa ruta les toma {_num(ref["mediana"])} h '
+             f'(el 90 % termina en {_num(ref["p"])} h o menos).'),
             [{'ruta_id': r.id, 'cierre_cargue': _hora_local(r.fecha_cierre),
               'cierre_ruta': _hora_local(r.fecha_entregada),
               'horas': round(h['duracion_h'], 2), 'paradas': len(h['paradas'])}],
@@ -1293,8 +1302,9 @@ def _s_cruza_dia(ctx):
                 f'se cerró el {dia_operativo_de(r.fecha_entregada)} a las '
                 f'{_hora_local(r.fecha_entregada)}.')
              + ' La mercancía y el dinero pasaron la noche fuera.'),
-            [{'ruta_id': r.id, 'estado': r.estado, 'cierre_cargue': _iso(r.fecha_cierre),
-              'cierre_ruta': _iso(r.fecha_entregada)}],
+            [{'ruta_id': r.id, 'estado': _ESTADO_RUTA.get(r.estado, r.estado),
+              'cierre_cargue': _cuando(r.fecha_cierre),
+              'cierre_ruta': _cuando(r.fecha_entregada)}],
             {'base': 'regla', 'n': None,
              'referencia': 'una ruta sale y se cierra el mismo día'},
             nivel='observa'))
@@ -1419,8 +1429,8 @@ def _s_liquidar(ctx):
               else f'La ruta se liquidó {horas:.0f} h después de cerrarse')
              + f'; en esa ruta el 90 % se liquida en {ref["p"]:.0f} h o menos. La '
                f'liquidación la hace la oficina, pero el efectivo lo trae el conductor.'),
-            [{'ruta_id': r.id, 'cierre_ruta': _iso(r.fecha_entregada),
-              'liquidada': _iso(r.liquidada_en), 'pendiente': pendiente}],
+            [{'ruta_id': r.id, 'cierre_ruta': _cuando(r.fecha_entregada),
+              'liquidada': _cuando(r.liquidada_en), 'pendiente': pendiente}],
             {'valor': _redondo(horas), 'mediana': _redondo(ref['mediana']),
              'p90': _redondo(ref['p']), 'n': ref['n'], 'base': ref['base'],
              'pares': ref['pares']},

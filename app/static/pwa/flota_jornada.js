@@ -226,7 +226,7 @@ function fjHtmlFila(f, i) {
   const hj = f.horas_jornada || {};
   const sub = [
     `${f.jornadas} ${f.jornadas === 1 ? 'jornada' : 'jornadas'}`,
-    f.reconstruidas ? `${f.reconstruidas} completas` : '',
+    f.reconstruidas ? `${f.reconstruidas} ${f.reconstruidas === 1 ? 'completa' : 'completas'}` : '',
     f.parciales ? `${f.parciales} solo en tramo` : '',
     f.no_reconstruibles ? `${f.no_reconstruibles} no reconstruibles` : '',
     hj.mediana !== null && hj.mediana !== undefined ? `jornada típica ${fjNum(hj.mediana)} h` : '',
@@ -377,7 +377,7 @@ function fjHtmlIndicadores(j) {
     const cierre = r.cierre_cargue ? `cerró cargue ${r.cierre_cargue}`
       + (r.cierre_cargue_pares ? ` (compañeros ${r.cierre_cargue_pares})` : '') : 'sin cierre de cargue';
     const partes = [`Ruta ${r.maestra || 'sin maestra'}`, r.placa || '', cierre, dur,
-      `${r.paradas_propias} de ${r.paradas} paradas confirmadas por él`,
+      `${r.paradas_propias} de ${r.paradas} ${r.paradas === 1 ? 'parada confirmada' : 'paradas confirmadas'} por él`,
       r.forzada ? 'cerrada a la fuerza por la oficina' : ''].filter(Boolean);
     return `<div style="font-size:var(--fs-sm);color:var(--tx);padding:6px 0;border-top:1px solid var(--brd);">${partes.map((x) => esc(x)).join(' · ')}</div>`;
   }).join('');
@@ -391,6 +391,7 @@ const FJ_ETIQUETAS = {
   entrego: 'Lo entregó', km_entrega: 'Km al entregar', recibio: 'Lo recibió',
   km_recibo: 'Km al recibir', rol: 'Él', monto: 'Monto', horas: 'Horas',
   cierre_cargue: 'Cierre del cargue', cierre_ruta: 'Cierre de la ruta',
+  entrega: 'Entregado el', recibo: 'Recibido el', liquidada: 'Liquidada el',
   paradas: 'Paradas', con_gps: 'Con ubicación', con_foto: 'Con foto',
   hora_gps: 'Hora del GPS', pendiente: 'Sin liquidar',
   desde: 'Desde', hasta: 'Hasta', minutos: 'Minutos', no_explicado_min: 'Sin explicar (min)',
@@ -477,7 +478,8 @@ function fjDetalleEvento(e) {
       p.push(`${d.bultos} bultos`, e.hora_fin ? `hasta ${e.hora_fin}` : '', d.nota);
       break;
     case 'cierre_cargue':
-      p.push(`ruta ${d.maestra || 'sin maestra'}`, d.paradas ? `${d.paradas} paradas` : '', d.nota);
+      p.push(`ruta ${d.maestra || 'sin maestra'}`,
+        d.paradas ? `${d.paradas} ${d.paradas === 1 ? 'parada' : 'paradas'}` : '', d.nota);
       break;
     case 'tanqueo':
       p.push(d.placa, `${d.km} km`);
