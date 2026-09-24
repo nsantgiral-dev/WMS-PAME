@@ -1,7 +1,7 @@
 """Bitácora de acciones y autores que faltaban (Fase 0 de analítica)
 
-Revision ID: m034bitacora
-Revises: m033ciclo
+Revision ID: m035bitacora
+Revises: m034agotado
 Create Date: 2026-09-24
 
 ## Para qué
@@ -35,8 +35,8 @@ de otras columnas por la misma razón.
 import sqlalchemy as sa
 from alembic import op
 
-revision = 'm034bitacora'
-down_revision = 'm033ciclo'
+revision = 'm035bitacora'
+down_revision = 'm034agotado'
 branch_labels = None
 depends_on = None
 

@@ -3227,7 +3227,7 @@ retractar un juicio de temporada lo **borraba** de una tabla analítica
 protegida.
 
 **Una tabla, una función.** `bitacora_acciones` (`app/models/bitacora.py`,
-migración `m034bitacora`) y `registrar_accion(...)` (`app/services/bitacora.py`),
+migración `m035bitacora`) y `registrar_accion(...)` (`app/services/bitacora.py`),
 que **no hace commit**: va en la transacción de la acción. Columnas:
 `ocurrido_en` (UTC), `dia_operativo` (Bogotá, Regla 5), `accion`, `entidad` +
 `entidad_id` + `entidad_codigo`, `usuario_id` (None = sistema), `motivo`,
@@ -3243,7 +3243,7 @@ EDITAR, REASIGNAR, DESASIGNAR, REINTENTAR, DESCARTAR, FORZAR, LIQUIDAR,
 DESACTIVAR, BLOQUEAR. Un verbo fuera de la lista levanta `ValueError`.
 
 **El flujo normal no pasa por la bitácora**: su autor va en columnas de la
-fila (`m034bitacora`, todas nullable, sin backfill — no se inventa un autor
+fila (`m035bitacora`, todas nullable, sin backfill — no se inventa un autor
 que no se registró): `tareas_picking.ultimo_operario_id`,
 `tareas_packing.cerrado_por_id`, `bultos.asignado_ruta_por_id` /
 `asignado_ruta_at` / `cargado_por_id`, `rutas_despacho.liquidada_en` /
@@ -3325,5 +3325,5 @@ Por AST sobre `app/` y `flota/`:
 - **No registradas**: `rechazar_solicitud` de traslado (RECHAZADA, ya guarda
   `aprobador_id` + `motivo_rechazo`), ediciones de maestros por
   `PUT /api/productos/<id>`, y `pedidos_sync_service` (Fase 0B).
-- **El histórico**: todo lo anterior al deploy de `m034bitacora` queda sin
+- **El histórico**: todo lo anterior al deploy de `m035bitacora` queda sin
   autor ni bitácora. No hay backfill posible.
