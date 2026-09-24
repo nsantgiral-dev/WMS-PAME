@@ -13,7 +13,7 @@ LA FRONTERA
 
   Tablas ANALÍTICAS  → NUNCA se tocan.
     serie_vigia, alarma_vigia, kardex_movimientos, stock_diario,
-    juicios_temporada, eventos_stock_agotado. Sin las 26 semanas de
+    juicios_temporada, eventos_stock_agotado, bitacora_acciones. Sin las 26 semanas de
     referencia el CUSUM queda ciego ~6 meses y se pierde la alarma de
     Florencia — la primera certificada. TSB, ROP y newsvendor consumen esa
     misma historia. eventos_stock_agotado es del mismo tipo: evento hacia
@@ -251,6 +251,12 @@ PROTEGIDAS_ANALITICAS = {
     # FALTANTE. Borrarlo en un corte pierde ese histórico sin forma de
     # reconstruirlo, ni desde Siesa ni desde ningún otro lado.
     'eventos_stock_agotado': 'evento hacia adelante del tablero BI, no reconstruible',
+    # Quién eliminó, canceló, anuló, reabrió o editó qué, cuándo y por qué
+    # (Fase 0 de analítica, 2026-09-24). No tiene FKs hacia las operativas
+    # —ids sueltos + código legible— justamente para sobrevivir al corte con
+    # su contexto. Borrarla con el corte borraría el rastro de lo que se hizo
+    # durante la marcha blanca, que es lo que la Ley 1116 pide poder mostrar.
+    'bitacora_acciones': 'rastro de eliminaciones, cancelaciones y ediciones — no reconstruible',
 }
 
 PROTEGIDAS_MAESTRAS = {

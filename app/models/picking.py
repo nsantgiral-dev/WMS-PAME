@@ -93,6 +93,13 @@ class TareaPicking(db.Model):
     devuelto_estante_por_id = db.Column(db.Integer, db.ForeignKey('usuarios.id'), nullable=True)
     devuelto_estante_nota = db.Column(db.Text, nullable=True)
 
+    # Quién tenía la tarea cuando una vía la devolvió al pool (reabrir,
+    # reportar problema, cancelar, auditar): esas vías ponen `operario_id` en
+    # None para que otro la tome, y con eso se perdía quién la trabajó.
+    # `operario_id` sigue significando «de quién es AHORA» — sus consumidores
+    # no cambian. Lo escribe solo `PickingService._soltar_operario` (m034).
+    ultimo_operario_id = db.Column(db.Integer, db.ForeignKey('usuarios.id'), nullable=True)
+
     __table_args__ = (
         # La guarda de «mercancía en proceso» del conteo pregunta por SKU ×
         # almacén (`ConteoService.procesos_en_curso`). Migración m031.

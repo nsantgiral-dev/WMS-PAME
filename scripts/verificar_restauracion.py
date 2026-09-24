@@ -50,7 +50,7 @@ VERDE, ROJO, AMAR, GRIS, FIN = '\033[92m', '\033[91m', '\033[93m', '\033[90m', '
 #: tampoco las puede perder.
 IRRECUPERABLES = (
     'serie_vigia', 'alarma_vigia', 'kardex_movimientos', 'stock_diario',
-    'juicios_temporada', 'precios_realizados',
+    'juicios_temporada', 'precios_realizados', 'bitacora_acciones',
 )
 
 #: Se pueden volver a cargar desde Siesa. Que la copia tenga menos no es un

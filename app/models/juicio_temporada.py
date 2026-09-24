@@ -36,6 +36,13 @@ class JuicioTemporada(db.Model):
     costo_unitario = db.Column(db.Numeric(14, 2))
     distribucion = db.Column(db.String(60))
 
+    # Retractar un juicio lo ANULA, no lo borra: la tabla es analítica
+    # protegida («no recalculable»), y un juicio que el comité retiró también
+    # es un dato para enero de 2027 (m034). Una fila anulada no se lista.
+    anulado_en = db.Column(db.DateTime, nullable=True)
+    anulado_por_id = db.Column(db.Integer, db.ForeignKey('usuarios.id'), nullable=True)
+    anulado_motivo = db.Column(db.Text, nullable=True)
+
     fecha_creacion = db.Column(db.DateTime, default=datetime.utcnow)
     fecha_actualizacion = db.Column(db.DateTime, default=datetime.utcnow,
                                     onupdate=datetime.utcnow)

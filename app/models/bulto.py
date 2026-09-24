@@ -27,6 +27,10 @@ class Bulto(db.Model):
     ruta_despacho_id   = db.Column(db.Integer, db.ForeignKey('rutas_despacho.id'), nullable=True)
     fecha_cargado      = db.Column(db.DateTime)
     fecha_entrega      = db.Column(db.DateTime)
+    # Quién puso el bulto en la ruta y quién lo cargó al camión (m034).
+    asignado_ruta_por_id = db.Column(db.Integer, db.ForeignKey('usuarios.id'), nullable=True)
+    asignado_ruta_at     = db.Column(db.DateTime)
+    cargado_por_id       = db.Column(db.Integer, db.ForeignKey('usuarios.id'), nullable=True)
     motivo_rechazo     = db.Column(db.String(100))  # Cliente rechazó / Dirección incorrecta / Averiado / No había nadie
     fecha_creacion     = db.Column(db.DateTime, default=datetime.utcnow)
 

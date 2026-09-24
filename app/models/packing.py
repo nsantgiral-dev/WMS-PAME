@@ -34,6 +34,9 @@ class TareaPacking(db.Model):
 
     # Empacador asignado
     empacador_id = db.Column(db.Integer, db.ForeignKey('usuarios.id'), nullable=True)
+    # Quién cerró el empaque (disparó la remisión). Puede no ser el empacador:
+    # supervisión cierra tareas ajenas. m034.
+    cerrado_por_id = db.Column(db.Integer, db.ForeignKey('usuarios.id'), nullable=True)
 
     # Estado
     estado = db.Column(db.String(30), default='PENDIENTE', nullable=False)
@@ -118,7 +121,7 @@ class TareaPacking(db.Model):
     fecha_cargado = db.Column(db.DateTime)
 
     # Relaciones
-    empacador = db.relationship('Usuario', backref='tareas_packing', lazy=True)
+    empacador = db.relationship('Usuario', foreign_keys=[empacador_id], backref='tareas_packing', lazy=True)
     solicitud_traslado = db.relationship('SolicitudTraslado', backref='tareas_packing', lazy=True, foreign_keys=[solicitud_id])
     almacen = db.relationship('Almacen', backref='tareas_packing', lazy=True)
     items = db.relationship('ItemPacking', backref='tarea', lazy=True,

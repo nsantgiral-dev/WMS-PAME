@@ -36,6 +36,10 @@ class RutaDespacho(db.Model):
     fecha_creacion  = db.Column(db.DateTime, default=datetime.utcnow)
     fecha_cierre    = db.Column(db.DateTime)    # cuando pasa a EN_TRANSITO
     fecha_entregada = db.Column(db.DateTime)    # cuando pasa a ENTREGADA
+    # La liquidación tenía estado y no fecha ni autor (m034). Solo la escribe
+    # `RutaService._marcar_liquidada`.
+    liquidada_en     = db.Column(db.DateTime)
+    liquidada_por_id = db.Column(db.Integer, db.ForeignKey('usuarios.id'), nullable=True)
 
     bultos = db.relationship('Bulto', backref='ruta', lazy=True)
 

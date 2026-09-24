@@ -32,3 +32,4 @@ from app.models.precio_realizado import PrecioRealizado
 from app.models.registro_sync import RegistroSync
 from app.models.geo_entrega import EntregaGeo, ClienteGeo
 from app.models.evento_stock_agotado import EventoStockAgotado
+from app.models.bitacora import BitacoraAccion
