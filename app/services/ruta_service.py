@@ -1568,6 +1568,10 @@ class RutaService:
                     raise ValueError('El monto cobrado debe ser mayor a 0 en una entrega parcial')
             if not (data.get('observaciones') or '').strip():
                 raise ValueError('Las observaciones son obligatorias en una entrega parcial')
+            # Una PARCIAL dice QUÉ volvió (formulario >= 4). Sin esto la
+            # liquidación la convertía en devolución TOTAL.
+            from app.services import devolucion_ruta as _dr_v
+            _dr_v.validar_parcial_del_conductor(estado_entrega, data)
 
         # Motivo del descuento (Pago Parcial de contado, ver pantalla del
         # conductor) — no se revalida contra Siesa acá (rompería el flujo
@@ -1682,7 +1686,15 @@ class RutaService:
         ahora = datetime.utcnow()
         ids_rechazados_set = set(bultos_rechazados_ids)
 
+        # Lo que recepción ya recibió o contó no lo cambia una reconfirmación
+        # desde la calle (m045devol). Observaciones y foto sí.
+        from app.services import devolucion_ruta as _dr
+        _dr.verificar_reconfirmacion(_previo, estado_entrega, data, bultos_tarea)
+
         for b in bultos_tarea:
+            if b.estado in (EstadoBulto.RETORNADO, EstadoBulto.FALTANTE):
+                # Ya pasó por recepción: su estado es el dato físico.
+                continue
             if b.id in ids_rechazados_set:
                 b.estado = EstadoBulto.RECHAZADO
                 b.motivo_rechazo = data.get('observaciones', 'Rechazado en entrega')[:100]
@@ -1822,6 +1834,25 @@ class RutaService:
             recaudo.items_entregados = items_limpios
         elif estado_entrega == EstadoEntrega.ENTREGADO:
             recaudo.items_entregados = None
+
+        # ── La devolución nace ACÁ, con el rechazo (m045devol) ──────────────
+        #
+        # Antes nacía al liquidar: entre que el camión volvía y alguien
+        # liquidaba, la mercancía no existía en el WMS. Ahora una RECHAZADA o
+        # PARCIAL deja su devolución EN_CAMION con lo declarado, y recepción la
+        # tiene en «Llegó el camión». Sin red (la parada se confirma offline).
+        #
+        # En un SAVEPOINT: la entrega no se traba por la devolución. Si armarla
+        # falla, la parada se confirma igual, el error queda en el log y el
+        # invariante DEV-06 la muestra; la liquidación la asegura después con
+        # la misma función.
+        db.session.flush()
+        try:
+            with db.session.begin_nested():
+                _dr.sincronizar_con_parada(recaudo, usuario_id)
+        except Exception as _e_dev:
+            logger.error('[RUTAS] parada %s/%s: no se pudo armar la devolución: %s',
+                         ruta_id, tarea_id, _e_dev)
 
         if es_edicion:
             despues_parada = foto_fila(recaudo, list(_CAMPOS_PARADA))
@@ -1972,7 +2003,17 @@ class RutaService:
             despues=foto_fila(ruta, ['estado_financiero', 'liquidada_en', 'liquidada_por_id']))
 
     @staticmethod
-    def liquidar_ruta(id: int, usuario_id: int = None) -> dict:
+    def liquidar_ruta(id: int, usuario_id: int = None,
+                      motivo_devoluciones: str = None) -> dict:
+        """La ruta pasa a LIQUIDADA.
+
+        **No con mercancía sin contar** (m045devol): si una parada
+        RECHAZADA/PARCIAL tiene su devolución sin contar (o no la tiene), la
+        ruta no se liquida — la regla del dueño es que lo que vuelve entre al
+        inventario, y liquidar era el momento en que eso se olvidaba. Se puede
+        FORZAR con `motivo_devoluciones` (bitácora FORZAR con la lista): la
+        devolución sigue viva en recepción y en los avisos.
+        """
         ruta = RutaDespacho.query.get(id)
         if not ruta:
             raise LookupError('Ruta no encontrada')
@@ -2001,12 +2042,31 @@ class RutaService:
                 f'sin plata y sin autorización ({_peds}). Cobralas o autorizalas como '
                 f'crédito con una razón antes de liquidar.')
 
-        RutaService._marcar_liquidada(ruta, usuario_id)
+        from app.services import devolucion_ruta as _dr_lq
+        _sin_contar = _dr_lq.pendientes_de_conteo(id)
+        if _sin_contar:
+            if not (motivo_devoluciones or '').strip():
+                _peds = ', '.join(str(p['pedido'] or f'tarea {p["tarea_id"]}')
+                                  for p in _sin_contar[:10])
+                raise ValueError(
+                    f'devoluciones_sin_contar: {len(_sin_contar)} parada'
+                    f'{"s" if len(_sin_contar) != 1 else ""} rechazada/parcial con la '
+                    f'mercancía sin contar en bodega ({_peds}). Recepción la cuenta en '
+                    f'«Llegó el camión»; si hay que liquidar igual, forzá con un motivo.')
+            motivo_devoluciones = motivo_obligatorio(
+                motivo_devoluciones, 'liquidar con devoluciones sin contar')
+            registrar_accion(
+                'FORZAR', ruta, usuario_id=usuario_id, motivo=motivo_devoluciones,
+                entidad_codigo=f'RUTA-{ruta.id}',
+                despues={'liquidada_con_devoluciones_sin_contar': _sin_contar})
 
-        # PARCIAL/RECHAZADO caen solos al módulo de Devoluciones al liquidar —
-        # ver LiquidacionService.crear_devoluciones_pendientes_ruta. RC/DC
-        # siguen siendo manuales en el módulo Liquidación (revisión de
-        # retenciones y monto Siesa vs. conductor).
+        RutaService._marcar_liquidada(
+            ruta, usuario_id,
+            motivo=(f'Con devoluciones sin contar: {motivo_devoluciones}'
+                    if _sin_contar else None))
+
+        # Las devoluciones ya nacieron al confirmar cada parada; esto las
+        # ENCUENTRA y solo crea (con la función única) las de paradas viejas.
         from app.services.liquidacion_service import LiquidacionService
         resumen_devoluciones = LiquidacionService.crear_devoluciones_pendientes_ruta(id)
 
@@ -2051,7 +2111,7 @@ class RutaService:
                 b.estado = EstadoBulto.RECHAZADO
                 b.motivo_rechazo = 'Cierre forzado por admin'
                 b.fecha_entrega = ahora
-            db.session.add(RecaudoEntrega(
+            _rec_forzado = RecaudoEntrega(
                 ruta_id=id,
                 tarea_id=tarea.id,
                 estado_entrega=EstadoEntrega.RECHAZADO,
@@ -2060,7 +2120,14 @@ class RutaService:
                 observaciones='Cierre forzado por administrador — parada no gestionada',
                 confirmado_por=admin_id,
                 fecha_creacion=ahora,
-            ))
+            )
+            db.session.add(_rec_forzado)
+            db.session.flush()
+            # Se da por rechazada: la mercancía "vuelve". Su devolución nace
+            # acá, EN_CAMION, con la misma función que la de una parada
+            # confirmada; recepción dirá si de verdad volvió (o FALTANTE).
+            from app.services import devolucion_ruta as _dr_fz
+            _dr_fz.sincronizar_con_parada(_rec_forzado, admin_id)
             auto_cerradas += 1
 
         ruta.estado = EstadoRutaDespacho.ENTREGADA

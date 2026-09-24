@@ -325,7 +325,9 @@ class TestPedidoParcialDevolucion:
 
             devolucion = DevolucionCliente.query.filter_by(
                 recaudo_entrega_id=recaudo_id).one()
-            assert devolucion.estado == EstadoDevolucionCliente.ABIERTA
+            # m045devol: nace EN_CAMION al confirmar la parada; la
+            # liquidación la ENCUENTRA (y la amarra a la factura).
+            assert devolucion.estado == EstadoDevolucionCliente.EN_CAMION
             assert devolucion.es_total is False
             linea = devolucion.lineas[0]
             assert linea.producto_id == producto.id

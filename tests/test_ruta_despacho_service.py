@@ -263,16 +263,27 @@ class TestLiquidarRutaCreaDevolucionesPendientes:
         ruta, recaudo = self._crear_recaudo(
             db, almacen, conductor, vehiculo, ruta_maestra, 'RECHAZADO')
 
+        # m045devol: con la mercancía sin contar la ruta NO se liquida…
+        with pytest.raises(ValueError, match='devoluciones_sin_contar'):
+            RutaService.liquidar_ruta(ruta.id)
+        db.session.rollback()
+        # …salvo forzado con motivo. La parada es vieja (no pasó por
+        # `confirmar_parada`), así que la liquidación CREA su devolución con la
+        # función única, EN_CAMION: recepción la sigue teniendo en su cola.
         with patch('app.services.fe_resolver.resolver_fe', return_value=('FEW', '9999')), \
              self._mock_rowids(producto.codigo_siesa):
-            resultado = RutaService.liquidar_ruta(ruta.id)
+            resultado = RutaService.liquidar_ruta(
+                ruta.id, motivo_devoluciones='el camión llega mañana; cierre de mes')
 
         assert resultado['devoluciones_pendientes_creadas'] == 1
 
         devolucion = DevolucionCliente.query.filter_by(recaudo_entrega_id=recaudo.id).first()
         assert devolucion is not None
-        assert devolucion.estado == 'ABIERTA'
+        assert devolucion.estado == 'EN_CAMION'
         assert devolucion.es_total is True
+        from app.models.bitacora import BitacoraAccion
+        assert BitacoraAccion.query.filter_by(accion='FORZAR', entidad='RutaDespacho',
+                                              entidad_id=ruta.id).count() == 1
 
         from app.models.siesa_job import SiesaJob
         assert SiesaJob.query.filter_by(referencia_id=recaudo.id, tipo='NOTA_CREDITO_FACTURA').count() == 0
@@ -288,7 +299,7 @@ class TestLiquidarRutaCreaDevolucionesPendientes:
 
         with patch('app.services.fe_resolver.resolver_fe', return_value=('FEW', '9999')), \
              self._mock_rowids(producto.codigo_siesa):
-            RutaService.liquidar_ruta(ruta.id)
+            RutaService.liquidar_ruta(ruta.id, motivo_devoluciones='forzado en el test')
 
         devolucion = DevolucionCliente.query.filter_by(recaudo_entrega_id=recaudo.id).first()
         assert devolucion is not None
@@ -325,7 +336,7 @@ class TestLiquidarRutaCreaDevolucionesPendientes:
 
         with patch('app.services.fe_resolver.resolver_fe', return_value=('FEW', '9999')), \
              self._mock_rowids(producto.codigo_siesa):
-            RutaService.liquidar_ruta(ruta.id)
+            RutaService.liquidar_ruta(ruta.id, motivo_devoluciones='forzado en el test')
             # Re-invocar directamente el creador (simula liquidar de nuevo /
             # el botón manual de respaldo en Rutas)
             resumen = LiquidacionService.crear_devoluciones_pendientes_ruta(ruta.id)

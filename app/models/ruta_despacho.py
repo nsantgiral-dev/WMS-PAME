@@ -40,6 +40,11 @@ class RutaDespacho(db.Model):
     # `RutaService._marcar_liquidada`.
     liquidada_en     = db.Column(db.DateTime)
     liquidada_por_id = db.Column(db.Integer, db.ForeignKey('usuarios.id'), nullable=True)
+    #: Recepción cerró la llegada del camión (m045devol): los bultos que el
+    #: conductor declaró de vuelta quedaron RETORNADO o FALTANTE. Hasta acá,
+    #: el cuadre de bultos de la ruta no puede ser exacto.
+    llegada_cerrada_at     = db.Column(db.DateTime, nullable=True)
+    llegada_cerrada_por_id = db.Column(db.Integer, db.ForeignKey('usuarios.id'), nullable=True)
 
     bultos = db.relationship('Bulto', backref='ruta', lazy=True)
 

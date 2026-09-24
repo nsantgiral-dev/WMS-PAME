@@ -66,8 +66,8 @@ def _run_procesar(recaudo, db):
 
 
 def _mock_rowids_una_linea(codigo_siesa='PROD-001', cant_base=5, vlr_neto=100000):
-    """PARCIAL/RECHAZADO ahora arman una DevolucionCliente (_crear_devolucion_pendiente)
-    que necesita get_rowids_factura real para construir sus líneas — antes
+    """PARCIAL/RECHAZADO arman una DevolucionCliente (`devolucion_ruta`) que la
+    liquidación amarra a la factura con get_rowids_factura — antes
     _encolar_nota_credito no tocaba Siesa en este punto, solo encolaba el job."""
     return patch('app.services.connekta_gateway.connekta.get_rowids_factura', return_value=[{
         'f120_referencia': codigo_siesa, 'f470_cant_base': cant_base,
@@ -260,7 +260,11 @@ class TestContadoParcial:
         assert SiesaJob.query.filter_by(referencia_id=recaudo.id, tipo='NOTA_CREDITO_FACTURA').count() == 0
         devolucion = DevolucionCliente.query.filter_by(recaudo_entrega_id=recaudo.id).first()
         assert devolucion is not None
-        assert devolucion.estado == 'ABIERTA'
+        # m045devol: la devolución de ruta nace EN_CAMION (la mercancía viene
+        # en el camión hasta que recepción la reciba). Esta parada no pasó por
+        # `confirmar_parada`, así que la liquidación la crea con la misma
+        # función única (`devolucion_ruta.asegurar_devolucion`).
+        assert devolucion.estado == 'EN_CAMION'
         assert devolucion.es_total is False
         assert len(devolucion.lineas) == 1
         assert float(devolucion.lineas[0].cantidad_devuelta) == 2

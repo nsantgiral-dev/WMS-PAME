@@ -519,7 +519,9 @@ def liquidar_ruta(id):
     if not _solo_admin():
         return jsonify({'error': 'Solo admin puede liquidar rutas'}), 403
     try:
-        resultado = RutaService.liquidar_ruta(id, usuario_id=_uid())
+        resultado = RutaService.liquidar_ruta(
+            id, usuario_id=_uid(),
+            motivo_devoluciones=(request.get_json(silent=True) or {}).get('motivo_devoluciones'))
     except LookupError as e:
         return jsonify({'error': str(e)}), 404
     except ValueError as e:
@@ -1452,6 +1454,17 @@ def liquidar_completo(id):
                         it['cantidad_entregada'] = max(0, pedido - cant_devuelta)
                         break
             recaudo.items_entregados = items
+            # La devolución de la parada nació al confirmarla (m045devol): la
+            # corrección del líder la actualiza si todavía no se contó. Lo que
+            # dijo el conductor sigue siendo lo declarado.
+            from app.services import devolucion_ruta as _dr_lc
+            _dev_lc = _dr_lc.devolucion_vigente(recaudo.id)
+            if _dev_lc is not None and _dev_lc.estado in ('EN_CAMION', 'ABIERTA'):
+                _dr_lc.sincronizar_con_parada(recaudo, uid)
+            elif _dev_lc is not None:
+                errores.append(
+                    f'Recaudo {recaudo.id}: la devolución {_dev_lc.codigo} ya se contó en '
+                    f'bodega ({_dev_lc.estado}); la cantidad corregida no cambia lo contado.')
 
         # (b) Retenciones
         retenciones = rp.get('retenciones', [])
@@ -1600,7 +1613,8 @@ def liquidar_completo(id):
 
     # Step 3: Set estado_financiero = LIQUIDADA
     try:
-        resultado_liquidar = RutaService.liquidar_ruta(id, usuario_id=uid)
+        resultado_liquidar = RutaService.liquidar_ruta(
+            id, usuario_id=uid, motivo_devoluciones=data.get('motivo_devoluciones'))
     except (LookupError, ValueError) as e:
         errores.append(f'Error al liquidar ruta: {e}')
         resultado_liquidar = {}

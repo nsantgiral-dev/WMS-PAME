@@ -516,16 +516,25 @@ class TestRecepcionNoPisaLoDeclarado:
         db.session.refresh(dev)
         assert float(dev.lineas[0].cantidad_declarada) == 10
 
-    def test_la_liquidacion_usa_lo_que_dijo_el_conductor(self):
+    def test_la_liquidacion_usa_lo_que_dijo_el_conductor(self, db, almacen, producto):
         """Si el líder corrigió en la liquidación, lo declarado sigue siendo lo
-        del conductor (`cantidad_devuelta_conductor`)."""
-        from app.services.liquidacion_service import _declarado_por_el_conductor
-        filas = [{'ref': 'A', 'rowid': '1', 'cant_facturada': 20,
-                  'producto': SimpleNamespace(codigo='A', codigo_siesa='A')}]
-        items = [{'codigo': 'A', 'cantidad_devuelta': 6, 'cantidad_devuelta_conductor': 9}]
-        assert _declarado_por_el_conductor(filas, items, 1, [6]) == [9]
-        assert _declarado_por_el_conductor(filas, [{'codigo': 'A', 'cantidad_devuelta': 6}],
-                                           1, [6]) == [6]
+        del conductor (`cantidad_devuelta_conductor`). Desde m045devol la
+        declaración la arma `devolucion_ruta._declaracion` (una función)."""
+        from app.services import devolucion_ruta as dr
+        ruta, tarea, c = _ruta(db, almacen)
+        rec = RecaudoEntrega(ruta_id=ruta.id, tarea_id=tarea.id, estado_entrega='PARCIAL',
+                             items_entregados=[{'codigo': producto.codigo, 'cantidad_pedida': 20,
+                                                'cantidad_devuelta': 6,
+                                                'cantidad_devuelta_conductor': 9}])
+        db.session.add(rec); db.session.flush()
+        lineas, decl = dr._declaracion(rec, tarea)
+        assert lineas[0]['cantidad_devuelta'] == 6
+        assert lineas[0]['cantidad_declarada'] == 9
+        assert decl['items'][0]['cantidad_devuelta'] == 9
+        rec.items_entregados = [{'codigo': producto.codigo, 'cantidad_pedida': 20,
+                                 'cantidad_devuelta': 6}]
+        lineas, _ = dr._declaracion(rec, tarea)
+        assert lineas[0]['cantidad_declarada'] == 6
 
     def test_liquidar_completo_guarda_lo_del_conductor_antes_de_corregir(self):
         texto = (_APP / 'routes' / 'rutas.py').read_text(encoding='utf-8')

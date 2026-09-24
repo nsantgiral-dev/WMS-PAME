@@ -553,7 +553,7 @@ class TestPendientesAprobacionNC:
         from app.services.devolucion_cliente_service import DevolucionClienteService
         dev = self._make_devolucion(db, almacen, siesa_nc_triggered=True, nc_aprobada=False, codigo='DEVC-NC-D')
 
-        DevolucionClienteService.marcar_nc_aprobada(dev.id, usuario_admin.id)
+        DevolucionClienteService.marcar_nc_aprobada(dev.id, usuario_admin.id, motivo="aprobada en el escritorio de Siesa")
 
         db.session.refresh(dev)
         assert dev.nc_aprobada_siesa is True
@@ -566,7 +566,7 @@ class TestPendientesAprobacionNC:
         from app.services.devolucion_cliente_service import DevolucionClienteService
         dev = self._make_devolucion(db, almacen, siesa_nc_triggered=False, codigo='DEVC-NC-E')
         with pytest.raises(ValueError, match='no tiene una NC'):
-            DevolucionClienteService.marcar_nc_aprobada(dev.id, usuario_admin.id)
+            DevolucionClienteService.marcar_nc_aprobada(dev.id, usuario_admin.id, motivo="aprobada en el escritorio de Siesa")
 
 
 class TestListarPendientesDeRuta:

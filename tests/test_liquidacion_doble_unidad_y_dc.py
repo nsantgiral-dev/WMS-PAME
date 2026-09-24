@@ -9,7 +9,8 @@ DOS líneas, una en PQ y otra en UND, con `f470_rowid` y valores distintos
 
 El arreglo de la clave llegó a la ruta de **Devolución de Cliente**
 (`siesa_job_service._construir_lineas_nc`, `tests/test_nc_doble_unidad.py`).
-`liquidacion_service._crear_devolucion_pendiente` quedó sin arreglar: indexa lo
+`liquidacion_service._crear_devolucion_pendiente` (retirada en m045devol: la
+devolución de ruta la arma `devolucion_ruta`) quedó sin arreglar: indexa lo
 declarado por el conductor por **código** y recorre la factura resolviendo
 referencia → producto, así que las dos filas resuelven al MISMO producto y se
 crean **dos** `LineaDevolucionCliente` con la cantidad declarada entera cada una.
@@ -136,150 +137,96 @@ def _lineas_de(recaudo_id):
 # DEFECTO 1 — doble unidad en la ruta de liquidación
 # ═══════════════════════════════════════════════════════════════════
 class TestDobleUnidadEnLaDevolucionDeRuta:
+    """Desde m045devol la devolución de ruta NACE al confirmar la parada (sin
+    red) y se amarra a la factura después (`devolucion_ruta.vincular_a_factura`).
+    La política de la doble unidad cambió de forma y no de fondo: **lo declarado
+    por referencia nunca se reparte entre PQ y UND**. Antes eso bloqueaba la
+    devolución (y la mercancía que sí volvió quedaba sin cola); ahora se abre
+    una línea por fila de factura en CERO y recepción cuenta cuál volvió. La
+    propiedad que protegía el test viejo sigue en pie: 1 unidad declarada nunca
+    produce 2 unidades a devolver."""
 
-    def test_una_unidad_declarada_no_puede_crear_dos_lineas(
+    def test_una_unidad_declarada_no_puede_crear_dos_lineas_de_una(
             self, app, db, recaudo_liq, producto):
-        """El conductor declaró 1 unidad de una referencia que la factura trae
-        en dos líneas (PQ y UND). No hay dato que diga a cuál corresponde:
-        **no se crea la devolución**, se declara la ambigüedad."""
-        from app.services.siesa_job_service import LineaDevueltaAmbigua
-        from app.services.liquidacion_service import _crear_devolucion_pendiente
-
         items = [{'codigo': producto.codigo, 'cantidad_devuelta': 1}]
         recaudo = recaudo_liq(estado='PARCIAL', pago='EFECTIVO', monto=800000,
                               items_ent=items)
 
         with patch('app.services.connekta_gateway.connekta.get_rowids_factura',
                    return_value=_factura_doble_unidad(producto.codigo_siesa)):
-            with pytest.raises(LineaDevueltaAmbigua) as exc:
-                _crear_devolucion_pendiente(
-                    recaudo, recaudo.tarea, 'FEW', '1466',
-                    items_devueltos=items, notas='test')
-
-        mensaje = str(exc.value)
-        assert producto.codigo_siesa in mensaje or producto.codigo in mensaje, (
-            'el error tiene que nombrar la referencia ambigua')
-        assert '2857568' in mensaje and '2857569' in mensaje, (
-            'el error tiene que decir entre qué rowids está la ambigüedad')
-
-    def test_no_queda_una_devolucion_a_medias(self, app, db, recaudo_liq, producto):
-        """Ni la devolución ni sus líneas: lo que se declaró de más es
-        inventario que reingresa sin haber vuelto y cartera cruzada de más
-        (Regla 21). Antes del arreglo esto dejaba 2 líneas de 1 unidad."""
-        from app.services.siesa_job_service import LineaDevueltaAmbigua
-
-        items = [{'codigo': producto.codigo, 'cantidad_devuelta': 1}]
-        recaudo = recaudo_liq(estado='PARCIAL', pago='EFECTIVO', monto=800000,
-                              items_ent=items)
-
-        with patch('app.services.connekta_gateway.connekta.get_rowids_factura',
-                   return_value=_factura_doble_unidad(producto.codigo_siesa)):
-            try:
-                _procesar(recaudo, db)
-            except LineaDevueltaAmbigua:
-                pass
-            db.session.rollback()
+            _procesar(recaudo, db)
 
         dev, lineas = _lineas_de(recaudo.id)
-        detalle = '\n'.join(
-            f'  rowid={l.f470_rowid} uom={l.f470_id_unidad_medida} '
-            f'cant={l.cantidad_devuelta}' for l in lineas)
-        assert dev is None and lineas == [], (
-            f'se creó una devolución con {len(lineas)} línea(s) para 1 unidad '
-            f'declarada:\n{detalle}')
+        assert dev is not None and dev.estado == 'EN_CAMION'
+        assert {l.f470_rowid for l in lineas} == {'2857568', '2857569'}
+        assert sum(float(l.cantidad_devuelta) for l in lineas) == 0, (
+            'lo declarado por referencia se repartió entre PQ y UND')
+        assert all(l.cantidad_declarada is None for l in lineas)
+        decl = dev.declaracion_conductor
+        assert decl['declarado_por_producto'] == {str(producto.id): 1.0}
+        assert any('doble unidad' in a for a in decl['avisos_vinculacion'])
 
-    def test_la_liquidacion_de_ruta_declara_el_error_y_no_cuenta_la_nc(
+    def test_no_sale_ninguna_nota_credito_hasta_que_recepcion_cuente(
             self, app, db, recaudo_liq, producto):
-        """A nivel ruta: el recaudo ambiguo no suma `nc_encolados` y aparece en
-        `errores` —lo que la pantalla pinta en rojo—, en vez de contar una NC
-        que no debía existir."""
-        from app.services.liquidacion_service import LiquidacionService
-
+        from app.models.siesa_job import SiesaJob
         items = [{'codigo': producto.codigo, 'cantidad_devuelta': 1}]
         recaudo = recaudo_liq(estado='PARCIAL', pago='EFECTIVO', monto=800000,
                               items_ent=items)
-
-        with patch('app.services.liquidacion_service._obtener_tercero',
-                   return_value=('900123456', '001')):
-            with patch('app.services.connekta_gateway.connekta.get_rowids_factura',
-                       return_value=_factura_doble_unidad(producto.codigo_siesa)):
-                resumen = LiquidacionService.liquidar_ruta_siesa(recaudo.ruta_id)
-
-        assert resumen['nc_encolados'] == 0
-        assert len(resumen['errores']) == 1, (
-            f'la ambigüedad no se declaró: {resumen}')
-        assert 'ambig' in resumen['errores'][0]['error'].lower()
+        with patch('app.services.connekta_gateway.connekta.get_rowids_factura',
+                   return_value=_factura_doble_unidad(producto.codigo_siesa)):
+            _procesar(recaudo, db)
+        assert SiesaJob.query.filter(SiesaJob.tipo.like('NOTA_CREDITO%')).count() == 0
 
     def test_declarar_las_dos_lineas_por_rowid_si_es_posible(
             self, app, db, recaudo_liq, producto):
-        """La otra mitad: **con** `f470_rowid` la correspondencia es exacta y sí
-        se crea una línea por línea de factura.
-
-        Hoy ningún productor lo manda —`ruta_service.confirmar_parada` recorta
-        `items_entregados` a codigo/nombre/unidad/cantidades—, pero la política
-        tiene que ser la misma que la de `_construir_lineas_nc`: el rowid manda
-        cuando está, y la ambigüedad solo existe cuando falta."""
-        from app.services.liquidacion_service import _crear_devolucion_pendiente
-
+        """**Con** `f470_rowid` la correspondencia es exacta: una línea por
+        línea de factura, con su cantidad. Hoy el PWA del conductor no lo
+        manda; la política es la misma de `_construir_lineas_nc`."""
         items = [
             {'codigo': producto.codigo, 'cantidad_devuelta': 1, 'f470_rowid': '2857568'},
             {'codigo': producto.codigo, 'cantidad_devuelta': 1, 'f470_rowid': '2857569'},
         ]
         recaudo = recaudo_liq(estado='PARCIAL', pago='EFECTIVO', monto=800000,
                               items_ent=items)
-
         with patch('app.services.connekta_gateway.connekta.get_rowids_factura',
                    return_value=_factura_doble_unidad(producto.codigo_siesa)):
-            assert _crear_devolucion_pendiente(
-                recaudo, recaudo.tarea, 'FEW', '1466',
-                items_devueltos=items, notas='test') is True
-        db.session.commit()
+            _procesar(recaudo, db)
 
         _dev, lineas = _lineas_de(recaudo.id)
         assert {l.f470_rowid for l in lineas} == {'2857568', '2857569'}
         assert {l.f470_id_unidad_medida for l in lineas} == {'PQ', 'UND'}
+        assert {float(l.cantidad_devuelta) for l in lineas} == {1.0}
 
     def test_un_solo_rowid_declarado_crea_una_sola_linea(
             self, app, db, recaudo_liq, producto):
-        """Con el rowid del PAQUETE sale el paquete y nada más — 1 línea, PQ."""
-        from app.services.liquidacion_service import _crear_devolucion_pendiente
-
         items = [{'codigo': producto.codigo, 'cantidad_devuelta': 1,
                   'f470_rowid': '2857569'}]
         recaudo = recaudo_liq(estado='PARCIAL', pago='EFECTIVO', monto=800000,
                               items_ent=items)
-
         with patch('app.services.connekta_gateway.connekta.get_rowids_factura',
                    return_value=_factura_doble_unidad(producto.codigo_siesa)):
-            _crear_devolucion_pendiente(
-                recaudo, recaudo.tarea, 'FEW', '1466',
-                items_devueltos=items, notas='test')
-        db.session.commit()
+            _procesar(recaudo, db)
 
         _dev, lineas = _lineas_de(recaudo.id)
         assert len(lineas) == 1
         assert lineas[0].f470_rowid == '2857569'
         assert lineas[0].f470_id_unidad_medida == 'UND'
 
-    def test_dos_declaraciones_de_la_misma_referencia_sin_rowid_es_ambiguo(
+    def test_dos_declaraciones_del_mismo_producto_con_una_sola_linea_se_suman(
             self, app, db, recaudo_liq, producto):
-        """Aunque la factura traiga una sola línea: dos declaraciones del mismo
-        código sin rowid no se pueden repartir. El dict de antes se quedaba con
-        la última, en silencio."""
-        from app.services.siesa_job_service import LineaDevueltaAmbigua
-        from app.services.liquidacion_service import _crear_devolucion_pendiente
-
+        """La factura trae UNA línea de ese producto: todo lo declarado le
+        corresponde. Antes el dict se quedaba con la última, en silencio."""
         items = [{'codigo': producto.codigo, 'cantidad_devuelta': 1},
                  {'codigo': producto.codigo, 'cantidad_devuelta': 2}]
         recaudo = recaudo_liq(estado='PARCIAL', pago='EFECTIVO', monto=800000,
                               items_ent=items)
-
         with patch('app.services.connekta_gateway.connekta.get_rowids_factura',
                    return_value=_factura_unidad_unica(producto.codigo_siesa)):
-            with pytest.raises(LineaDevueltaAmbigua):
-                _crear_devolucion_pendiente(
-                    recaudo, recaudo.tarea, 'FEW', '1466',
-                    items_devueltos=items, notas='test')
+            _procesar(recaudo, db)
+        _dev, lineas = _lineas_de(recaudo.id)
+        assert len(lineas) == 1
+        assert float(lineas[0].cantidad_devuelta) == 3.0
+        assert float(lineas[0].cantidad_declarada) == 3.0
 
 
 class TestDobleUnidadNoRompeLaDevolucionTotal:
@@ -331,26 +278,21 @@ class TestUnidadUnicaNoCambia:
             self, app, db, recaudo_liq, producto):
         """`min(cant_devuelta, cant_facturada)` — comportamiento viejo que se
         conserva: no se puede devolver más de lo que se facturó."""
-        from app.services.liquidacion_service import _crear_devolucion_pendiente
-
         items = [{'codigo': producto.codigo, 'cantidad_devuelta': 99}]
         recaudo = recaudo_liq(estado='PARCIAL', pago='EFECTIVO', monto=800000,
                               items_ent=items)
 
         with patch('app.services.connekta_gateway.connekta.get_rowids_factura',
                    return_value=_factura_unidad_unica(producto.codigo_siesa)):
-            _crear_devolucion_pendiente(
-                recaudo, recaudo.tarea, 'FEW', '1466',
-                items_devueltos=items, notas='test')
-        db.session.commit()
+            _procesar(recaudo, db)
 
         _dev, lineas = _lineas_de(recaudo.id)
         assert float(lineas[0].cantidad_devuelta) == 5.0
+        # Lo que DIJO el conductor no se topea: es la otra mitad del faltante.
+        assert float(lineas[0].cantidad_declarada) == 99.0
 
     def test_dos_referencias_distintas_una_linea_cada_una(
             self, app, db, recaudo_liq, producto, producto2):
-        from app.services.liquidacion_service import _crear_devolucion_pendiente
-
         factura = (_factura_unidad_unica(producto.codigo_siesa)
                    + [{'f470_rowid': 2857569, 'f120_referencia': producto2.codigo_siesa,
                        'f470_cant_base': 4, 'f470_id_unidad_medida': 'UND',
@@ -362,10 +304,7 @@ class TestUnidadUnicaNoCambia:
 
         with patch('app.services.connekta_gateway.connekta.get_rowids_factura',
                    return_value=factura):
-            _crear_devolucion_pendiente(
-                recaudo, recaudo.tarea, 'FEW', '1466',
-                items_devueltos=items, notas='test')
-        db.session.commit()
+            _procesar(recaudo, db)
 
         _dev, lineas = _lineas_de(recaudo.id)
         por_codigo = {l.codigo_siesa: float(l.cantidad_devuelta) for l in lineas}
@@ -375,8 +314,6 @@ class TestUnidadUnicaNoCambia:
     def test_lo_no_devuelto_no_entra(self, app, db, recaudo_liq, producto, producto2):
         """Una referencia facturada que el conductor no devolvió no genera
         línea. Comportamiento viejo, se conserva."""
-        from app.services.liquidacion_service import _crear_devolucion_pendiente
-
         factura = (_factura_unidad_unica(producto.codigo_siesa)
                    + [{'f470_rowid': 2857569, 'f120_referencia': producto2.codigo_siesa,
                        'f470_cant_base': 4, 'f470_id_unidad_medida': 'UND',
@@ -387,10 +324,7 @@ class TestUnidadUnicaNoCambia:
 
         with patch('app.services.connekta_gateway.connekta.get_rowids_factura',
                    return_value=factura):
-            _crear_devolucion_pendiente(
-                recaudo, recaudo.tarea, 'FEW', '1466',
-                items_devueltos=items, notas='test')
-        db.session.commit()
+            _procesar(recaudo, db)
 
         _dev, lineas = _lineas_de(recaudo.id)
         assert [l.codigo_siesa for l in lineas] == [producto2.codigo_siesa]

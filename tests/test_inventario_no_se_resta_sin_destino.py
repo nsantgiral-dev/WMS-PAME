@@ -51,6 +51,16 @@ RESTAS_DECLARADAS = {
         'y por qué. NOTA: no encola nada a Siesa — desacuadra contra el ERP y '
         'eso está sin resolver (2026-09-14).'
     ),
+    'app/services/devolucion_cliente_service.py': (
+        1,
+        '2026-09-24 · m045devol · `liberar_reingreso`: con la NC aprobada en '
+        'Siesa, lo devuelto SANO sale del bin DEVOLUCIONES (zona no vendible) '
+        'hacia el slot de picking del producto o la ubicación óptima. La '
+        'contrapartida es el `UbicacionProducto` del destino, en la misma '
+        'función y transacción, con dos `MovimientoInventario` '
+        'LIBERACION_DEVOLUCION (salida y entrada). Es un traslado entre zonas '
+        'de la misma bodega: el total del almacén no cambia.'
+    ),
     'app/services/layout_service.py': (
         1,
         'Traspaso de SIESA-GENERAL hacia un hueco real durante la asignación. '

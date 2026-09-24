@@ -65,6 +65,23 @@ from app.services.bitacora import registrar_accion, motivo_obligatorio, foto
 
 ZONA_AVERIAS = 'AVERIAS'
 
+# ── La segunda zona que no se vende (2026-09-24, m045devol) ──────────────────
+#
+# Mercancía que un cliente devolvió y cuya nota crédito **todavía no está
+# aprobada en Siesa**. Está en la bodega pero no es de la empresa todavía: la NC
+# en Elaboración no reingresa nada en Siesa (Regla 21), así que venderla es
+# vender algo que el ERP sigue diciendo que tiene el cliente, y si la NC se anula
+# ya se vendió. Al aprobarse la NC, `devolucion_cliente_service.liberar_reingreso`
+# la mueve a picking con su movimiento de inventario.
+#
+# Es la MISMA pregunta que averías («¿se puede vender?»), así que entra a la
+# MISMA política y no a una tupla nueva en cada consumidor: FEFO, alerta de
+# mínimos, carga inicial, ABC y traslados la heredan sin tocarlos.
+#
+# `DEVOLUCION` y no `DEVOLUCIONES`: `ubicaciones.tipo_zona` es `String(10)`.
+ZONA_DEVOLUCION = 'DEVOLUCION'
+ZONAS_NO_VENDIBLES = (ZONA_AVERIAS, ZONA_DEVOLUCION)
+
 # Señales legadas que los dos escritores de devoluciones ya venían poniendo en
 # el bin `AVERIADOS`. NO son la política —`tipo_zona` lo es— pero se siguen
 # escribiendo porque `inventario_siesa_service._cuarentena_wms` (que no es de
@@ -83,7 +100,7 @@ def filtro_ubicacion_vendible():
     `filtro_ubicacion_averias()` — las dos leen el mismo campo, así que no
     pueden divergir.
     """
-    return Ubicacion.tipo_zona != ZONA_AVERIAS
+    return Ubicacion.tipo_zona.notin_(ZONAS_NO_VENDIBLES)
 
 
 def filtro_ubicacion_averias():
@@ -101,7 +118,23 @@ def filtro_ubicacion_averias():
 def es_ubicacion_vendible(ubicacion) -> bool:
     """Versión en Python de `filtro_ubicacion_vendible()`, para objetos ya
     cargados. Misma respuesta que la de SQL, por construcción."""
-    return getattr(ubicacion, 'tipo_zona', None) != ZONA_AVERIAS
+    return getattr(ubicacion, 'tipo_zona', None) not in ZONAS_NO_VENDIBLES
+
+
+def campos_ubicacion_devolucion() -> dict:
+    """Los campos del bin de devoluciones de cliente con la NC sin aprobar.
+
+    Mismo contrato que `campos_ubicacion_averias`: el escritor
+    (`devolucion_cliente_service`) no decide qué hace no vendible a una
+    ubicación, lo pide acá. `zona`/`tipo` NO llevan las señales legadas de
+    cuarentena: esto no es mercancía dañada, y `_cuarentena_wms` la contaría
+    como averías.
+    """
+    return {
+        'tipo_zona': ZONA_DEVOLUCION,
+        'zona': ZONA_DEVOLUCION,
+        'tipo': 'devolucion',
+    }
 
 
 def campos_ubicacion_averias() -> dict:

@@ -450,7 +450,7 @@ def _nc_creada_y_aprobada(db, dev, tienda):
     d = db.session.get(DevolucionCliente, dev.id)
     d.siesa_nc_triggered, d.siesa_nc_consec = True, '61'
     db.session.commit()
-    DevolucionClienteService.marcar_nc_aprobada(dev.id, tienda['supervisor'].id)
+    DevolucionClienteService.marcar_nc_aprobada(dev.id, tienda['supervisor'].id, motivo='aprobada en Siesa')
 
 
 class TestDevolucionSinNCAprobada:

@@ -107,9 +107,15 @@ class TestNoDisparaSobreLoQueEstaSano:
 
         ub = _resolver(alm, prod, averiado=False)
 
+        # m045devol: lo devuelto en buen estado NO va a averías —la mitad de
+        # este test que sigue igual— pero tampoco a picking: va a la zona
+        # DEVOLUCION, no vendible, hasta que la NC esté aprobada en Siesa
+        # (`liberar_reingreso`). Antes esta aserción exigía «vendible».
+        from app.services.picking_service import ZONA_DEVOLUCION
         assert ub.codigo != _UBICACION_AVERIADOS
-        assert es_ubicacion_vendible(ub) is True, (
-            'una devolución en buen estado terminó en zona no vendible')
+        assert ub.tipo_zona == ZONA_DEVOLUCION
+        assert es_ubicacion_vendible(ub) is False, (
+            'lo devuelto con la NC sin aprobar quedó vendible')
 
     def test_no_toca_una_ubicacion_vendible_de_otro_codigo(self, app, escenario):
         """La reparación es estrecha a propósito: solo el bin de averías de este

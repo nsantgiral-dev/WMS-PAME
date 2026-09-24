@@ -285,7 +285,7 @@ class LiquidacionService:
 
             # Parcial/Rechazado ya no disparan la NC directo — arman una
             # DevolucionCliente pendiente que recepción confirma (ver
-            # _crear_devolucion_pendiente). El admin ve acá si ya se envió.
+            # devolucion_ruta). El admin ve acá si ya se envió.
             devolucion = (DevolucionCliente.query
                           .filter_by(recaudo_entrega_id=recaudo.id)
                           .filter(DevolucionCliente.estado != 'CANCELADA')
@@ -1347,60 +1347,38 @@ class LiquidacionService:
     @staticmethod
     def crear_devoluciones_pendientes_ruta(ruta_id: int) -> dict:
         """
-        Arma la DevolucionCliente pendiente (ver _crear_devolucion_pendiente)
-        para cada recaudo PARCIAL/RECHAZADO de la ruta. Llamada automáticamente
-        desde RutaService.liquidar_ruta/forzar_cierre_ruta — así la devolución
-        cae sola al módulo de Devoluciones al liquidar, sin que el admin tenga
-        que dispararla a mano recaudo por recaudo (ese paso manual se perdió
-        al eliminar el botón "Enviar Nota Crédito (NC)" del módulo Liquidación
-        sin dejar reemplazo — bug real detectado en producción, ruta #16 /
-        PD1350: 0 SiesaJobs, 0 devoluciones creadas).
+        Asegura que cada recaudo RECHAZADO/PARCIAL de la ruta tenga su
+        devolución (m045devol: normalmente ya nació al confirmar la parada; acá
+        se ENCUENTRA). Solo crea —con la misma función única,
+        `devolucion_ruta.asegurar_devolucion`— la de una parada confirmada
+        antes de este cambio o por un camino que no pasó por la parada. Y la
+        intenta amarrar a su factura (con red; si Siesa no responde, se hace al
+        contar).
 
-        A propósito NO toca RC/DC — esos siguen siendo manuales en el módulo
-        Liquidación (ahí el admin revisa retenciones y el monto Siesa vs. lo
-        que declaró el conductor antes de confirmar el cobro; automatizarlos
-        quitaría esa revisión).
-
-        Idempotente (_crear_devolucion_pendiente no duplica si ya existe) y
-        nunca lanza — un recaudo con error (p.ej. FE no resuelta) queda para
-        el flujo manual de respaldo (Rutas → "Enviar a Siesa") en vez de
-        tumbar la liquidación completa.
+        Nunca lanza: lo que impide una devolución (referencia sin producto,
+        factura no localizada) queda escrito en ella (`problema_factura`) y en
+        `errores`, visible — no en un log.
         """
-        from app.services.fe_resolver import FENoEncontrada, resolver_fe
+        from app.services import devolucion_ruta as _dr
 
         recaudos = (RecaudoEntrega.query
                     .filter_by(ruta_id=ruta_id)
                     .filter(RecaudoEntrega.estado_entrega.in_(
                         [EstadoEntrega.RECHAZADO, EstadoEntrega.PARCIAL]))
                     .all())
-        resumen = {'creadas': 0, 'errores': []}
+        resumen = {'creadas': 0, 'encontradas': 0, 'errores': []}
 
         for recaudo in recaudos:
-            if recaudo.siesa_nc_triggered:
-                continue
-            tarea = recaudo.tarea
-            if not tarea:
-                continue
             try:
-                tipo_docto_fe, consec_fe = resolver_fe(tarea)
-            except FENoEncontrada:
-                tipo_docto_fe = consec_fe = ''
-            if not tipo_docto_fe or not consec_fe:
-                logger.warning(
-                    '[LIQUIDACION] crear_devoluciones_pendientes_ruta: recaudo %d '
-                    'sin FE resuelta — queda para el flujo manual', recaudo.id
-                )
-                continue
-
-            items = (None if recaudo.estado_entrega == EstadoEntrega.RECHAZADO
-                      else recaudo.items_entregados)
-            try:
-                if _crear_devolucion_pendiente(
-                    recaudo, tarea, tipo_docto_fe, consec_fe,
-                    items_devueltos=items,
-                    notas=f'WMS Ruta #{ruta_id} | Liquidar en WMS | {recaudo.estado_entrega}',
-                ):
-                    resumen['creadas'] += 1
+                dev, creada = _dr.asegurar_devolucion(recaudo)
+                if dev is None:
+                    continue
+                resumen['creadas' if creada else 'encontradas'] += 1
+                problema = _vincular_sin_romper(dev)
+                if problema:
+                    resumen['errores'].append({'recaudo_id': recaudo.id,
+                                               'devolucion': dev.codigo,
+                                               'error': problema})
             except Exception as e:
                 logger.error(
                     '[LIQUIDACION] crear_devoluciones_pendientes_ruta: recaudo %d: %s',
@@ -1411,10 +1389,50 @@ class LiquidacionService:
         db.session.commit()
         logger.info(
             '[LIQUIDACION] crear_devoluciones_pendientes_ruta: ruta %d — '
-            '%d devolución(es) creada(s), %d error(es)',
-            ruta_id, resumen['creadas'], len(resumen['errores'])
+            '%d creada(s), %d encontrada(s), %d error(es)',
+            ruta_id, resumen['creadas'], resumen['encontradas'], len(resumen['errores'])
         )
         return resumen
+
+
+def _vincular_sin_romper(devolucion) -> str | None:
+    """Amarra la devolución a su factura si está activa y no lo estaba.
+    Devuelve el problema que impide contarla (o None). Un fallo de red no es un
+    problema de la devolución: se reintenta al contar."""
+    from app.services import devolucion_ruta as _dr
+    from app.services.connekta_gateway import connekta
+    if devolucion.estado not in ('EN_CAMION', 'ABIERTA'):
+        return None
+    try:
+        with db.session.begin_nested():
+            _dr.vincular_a_factura(devolucion, gateway=connekta)
+    except Exception as e:
+        logger.warning('[LIQUIDACION] no se pudo vincular %s a su factura (se reintenta al '
+                       'contar): %s', devolucion.codigo, e)
+        return None
+    return devolucion.problema_factura
+
+
+def _devolucion_de_ruta(recaudo, resultado: dict) -> bool:
+    """La devolución del recaudo: la ENCUENTRA (nació al confirmar la parada)
+    o, si es una parada vieja, la crea con la función única. Lo que impida
+    contarla va a `resultado['errores']`.
+
+    Devuelve True si hay una nota crédito EN CAMINO para este recaudo —la
+    devolución está sin contar, o contada con la NC todavía sin salir—, que es
+    lo que el contador `nc` de la liquidación siempre quiso decir. False si ya
+    terminó (NC enviada, contada en cero, cancelada): «ya procesado»."""
+    from app.services import devolucion_ruta as _dr
+    dev, _creada = _dr.asegurar_devolucion(recaudo)
+    if dev is None:
+        return False
+    problema = _vincular_sin_romper(dev)
+    if problema:
+        resultado.setdefault('errores', []).append(
+            f'devolución {dev.codigo}: {problema}')
+    if dev.estado in ('EN_CAMION', 'ABIERTA'):
+        return True
+    return dev.estado == 'CONFIRMADA' and not dev.siesa_nc_triggered
 
 
 def _contar_dc(resultado: dict, r_dc) -> None:
@@ -1470,12 +1488,13 @@ def _procesar_recaudo(recaudo: RecaudoEntrega, notas_base: str,
       CRÉDITO + PARCIAL                   → devolución pendiente solamente
       RECHAZADO                           → devolución pendiente total
 
-    "Devolución pendiente" (ver _crear_devolucion_pendiente): PARCIAL/RECHAZADO
-    ya no disparan la NC (250696) directo desde acá — arman una
-    DevolucionCliente ABIERTA que la recepcionista confirma físicamente en
-    Devoluciones. Esa confirmación dispara la NC real (251126, con cruce
-    automático de cartera) y marca recaudo.siesa_nc_triggered=True (bridge en
-    siesa_job_service.py), que es lo que destraba el RC dependiente.
+    "Devolución pendiente" (`devolucion_ruta`): desde m045devol la devolución
+    NACE al confirmar la parada (EN_CAMION) y acá se ENCUENTRA; solo una parada
+    vieja la crea, con la misma función. La recepcionista la cuenta; eso
+    dispara la NC real (251126, con cruce automático de cartera) y marca
+    recaudo.siesa_nc_triggered=True (bridge en siesa_job_service.py), que es lo
+    que destraba el RC dependiente. Si la devolución termina SIN NC (contada en
+    cero o cancelada), el RC sale por lo cobrado (`nc_no_llegara`).
 
     El dict devuelto trae además `errores`: los documentos que NO se encolaron
     sin levantar excepción (hoy, el DC sin base gravable — ver `_contar_dc`).
@@ -1552,11 +1571,7 @@ def _procesar_recaudo(recaudo: RecaudoEntrega, notas_base: str,
         if recaudo.siesa_nc_triggered:
             resultado['ya_procesado'] = 1
             return resultado
-        if _crear_devolucion_pendiente(
-            recaudo, tarea, tipo_docto_fe, consec_fe,
-            items_devueltos=None,  # None = devolución total
-            notas=f'{notas_base} | RECHAZADO total',
-        ):
+        if _devolucion_de_ruta(recaudo, resultado):
             resultado['nc'] = 1
         else:
             resultado['ya_procesado'] = 1
@@ -1572,11 +1587,7 @@ def _procesar_recaudo(recaudo: RecaudoEntrega, notas_base: str,
     if trato == _cp_liq.TRATO_NO_AUTORIZADO:
         resultado['credito_no_autorizado'] = 1
         if estado == EstadoEntrega.PARCIAL and not recaudo.siesa_nc_triggered:
-            if _crear_devolucion_pendiente(
-                recaudo, tarea, tipo_docto_fe, consec_fe,
-                items_devueltos=recaudo.items_entregados,
-                notas=f'{notas_base} | PARCIAL contado sin cobro — devolución',
-            ):
+            if _devolucion_de_ruta(recaudo, resultado):
                 resultado['nc'] = 1
         resultado['errores'].append(mensaje_credito_no_autorizado(recaudo, tarea))
         return resultado
@@ -1591,11 +1602,7 @@ def _procesar_recaudo(recaudo: RecaudoEntrega, notas_base: str,
         if recaudo.siesa_nc_triggered:
             resultado['ya_procesado'] = 1
             return resultado
-        if _crear_devolucion_pendiente(
-            recaudo, tarea, tipo_docto_fe, consec_fe,
-            items_devueltos=recaudo.items_entregados,
-            notas=f'{notas_base} | PARCIAL crédito — devolución',
-        ):
+        if _devolucion_de_ruta(recaudo, resultado):
             resultado['nc'] = 1
         else:
             resultado['ya_procesado'] = 1
@@ -1604,20 +1611,21 @@ def _procesar_recaudo(recaudo: RecaudoEntrega, notas_base: str,
     # ── CONTADO + PARCIAL: devolución pendiente → RC espera esa NC ──────
     if not es_credito and estado == EstadoEntrega.PARCIAL:
         if not recaudo.siesa_nc_triggered:
-            _crear_devolucion_pendiente(
-                recaudo, tarea, tipo_docto_fe, consec_fe,
-                items_devueltos=recaudo.items_entregados,
-                notas=f'{notas_base} | PARCIAL contado — devolución',
-            )
+            _devolucion_de_ruta(recaudo, resultado)
             resultado['nc'] = 1
 
         if not recaudo.siesa_rc_triggered and monto > 0:
+            # Espera la NC —salvo que la devolución ya haya terminado SIN NC
+            # (contada en cero o cancelada): entonces sale por lo cobrado y la
+            # factura queda con el saldo de lo que no volvió
+            # (`devolucion_ruta.nc_no_llegara`; el ejecutor lo vuelve a mirar).
+            from app.services import devolucion_ruta as _dr_rc
             _encolar_recibo_caja(
                 recaudo, tipo_docto_fe, consec_fe,
                 tercero_nit, sucursal, monto, forma_pago,
                 notas=f'{notas_base} | PARCIAL contado — cobro',
                 admin_id=admin_id,
-                depende_de_nc=True,
+                depende_de_nc=not _dr_rc.nc_no_llegara(recaudo),
                 co_factura=co_factura,
                 cuenta_cxc=cuenta_cxc,
                 unidad_negocio=un_cxc,
@@ -1762,155 +1770,6 @@ def _obtener_tercero(tarea) -> tuple:
     return '', '001'
 
 
-def _declarado_por_el_conductor(filas: list, items_devueltos: list, recaudo_id: int,
-                                cantidades_vigentes: list) -> list:
-    """Lo que el CONDUCTOR declaró devolver, por línea de factura.
-
-    `items_devueltos` puede traer la corrección del líder en la liquidación
-    (`/liquidar-completo`, `cantidades_verificadas`), que conserva lo que dijo
-    el conductor en `cantidad_devuelta_conductor`. Esa es la declaración que
-    se compara contra lo contado en recepción. Si ningún ítem trae la marca, lo
-    declarado es lo vigente. Si reasignarlo por línea falla (doble unidad
-    ambigua), `None` por línea: no se sabe, y no se inventa.
-    """
-    if not any('cantidad_devuelta_conductor' in (it or {}) for it in items_devueltos):
-        return list(cantidades_vigentes)
-    del_conductor = []
-    for it in items_devueltos:
-        it2 = dict(it)
-        if 'cantidad_devuelta_conductor' in it2:
-            it2['cantidad_devuelta'] = it2['cantidad_devuelta_conductor']
-        del_conductor.append(it2)
-    try:
-        return _cantidades_por_linea_de_factura(filas, del_conductor, recaudo_id)
-    except Exception as e:
-        logger.warning('[LIQUIDACION] recaudo %d: no se pudo atribuir lo declarado por '
-                       'el conductor por línea: %s', recaudo_id, e)
-        return [None] * len(filas)
-
-
-def _cantidades_por_linea_de_factura(filas: list, items_devueltos: list,
-                                      recaudo_id: int) -> list:
-    """Cuánto se devolvió de **cada línea de la factura**, en el orden de `filas`.
-
-    ## Por qué no alcanza con la referencia
-
-    Este repo tiene **productos de doble unidad**: la misma referencia se
-    factura en DOS líneas, una en PQ y otra en UND, con `f470_rowid` y valores
-    distintos (PAPELSP6741 — `despacho_parcial_service.py:102-106`). Indexando
-    lo declarado por código, las dos filas resuelven al MISMO producto y las dos
-    se llevan la cantidad declarada entera: 1 unidad devuelta → 2 líneas de
-    devolución. Medido contra la ruta de Recepción, ya arreglada: 1 línea NC de
-    24.250 allá, 2 líneas de 25.058,33 acá. La correspondencia correcta es
-    línea-de-factura → línea-de-devolución, y la clave es `f470_rowid` (la misma
-    que eligió `siesa_job_service._construir_lineas_nc` — una política, una
-    función; si acá se eligiera otra, las dos rutas volverían a divergir).
-
-    ## Y cuando el conductor no dijo a cuál línea corresponde
-
-    Éste es el caso real de esta ruta, no un residuo histórico: lo que declara
-    el conductor pasa por `ruta_service.confirmar_parada`, que recorta cada item
-    a `codigo/nombre/unidad/cantidad_*` — **el rowid no existe en el dato de
-    entrada**. Así que ante «devolvió 3 de PAPELSP6741» con la referencia en dos
-    líneas, el código no sabe a cuál corresponde. Las opciones eran:
-
-    · **repartir por orden de la factura hasta agotar** — es adivinar. Las dos
-      líneas valen distinto por unidad (24.250 el paquete, 2.425 la unidad
-      suelta): elegir mal cruza cartera por ~10× el valor real, y Siesa no
-      aprueba un documento cuya cartera no cuadre con sus CxC (Regla 21). El
-      error se descubre en contabilidad, no acá;
-    · **exigir el rowid al declarante** — es lo correcto a futuro, pero hoy no
-      se puede hacer desde este archivo: el rowid tendría que viajar desde el
-      PWA del conductor y sobrevivir el recorte de `ruta_service`. Queda
-      soportado abajo (`rowid` declarado manda) para el día que llegue;
-    · **declarar la ambigüedad y no crear la devolución** — lo elegido.
-
-    Regla 0: ante dato ausente, el lado conservador **y declarado**. Conservador
-    porque no crear nada es reversible —el recaudo queda en `errores`, la
-    pantalla lo pinta en rojo y la recepcionista arma esa devolución en el
-    módulo de Devoluciones, donde el PWA sí manda el rowid por línea— mientras
-    que una devolución de más ya reingresó inventario que nadie devolvió y ya
-    cruzó cartera de más: eso se reversa a mano en el ERP. Declarado porque el
-    silencio era justamente el defecto: las dos líneas salían con rowid válido
-    cada una y el guard de `_construir_lineas_nc` las daba por desambiguadas.
-
-    Una referencia con **una sola** línea en la factura no es ambigua: la
-    correspondencia es única y se usa, que es el caso de toda la operación de
-    unidad única (el detector no puede dispararle a la operación sana).
-    """
-    from app.services.siesa_job_service import LineaDevueltaAmbigua
-
-    declarados = []
-    for it in items_devueltos:
-        cant = it.get('cantidad_devuelta') or it.get('devuelto', 0)
-        if float(cant or 0) > 0:
-            declarados.append({
-                'codigo': it.get('codigo'),
-                'cantidad': float(cant),
-                'rowid': str(it.get('f470_rowid') or '').strip(),
-            })
-
-    por_rowid = {}
-    por_codigo = {}
-    for i, fila in enumerate(filas):
-        if fila['rowid']:
-            por_rowid.setdefault(fila['rowid'], i)
-        por_codigo.setdefault(fila['producto'].codigo, []).append(i)
-
-    # Cuántas veces se declaró el mismo código SIN rowid: dos declaraciones del
-    # mismo código tampoco se pueden repartir entre sí, aunque la factura traiga
-    # una sola línea. El dict de antes se quedaba con la última, en silencio.
-    veces_sin_rowid = {}
-    for d in declarados:
-        if not d['rowid']:
-            veces_sin_rowid[d['codigo']] = veces_sin_rowid.get(d['codigo'], 0) + 1
-
-    cantidades = [0.0] * len(filas)
-    huerfanos = []
-    for d in declarados:
-        if d['rowid']:
-            idx = por_rowid.get(d['rowid'])
-            if idx is None:
-                huerfanos.append(d)
-                continue
-            cantidades[idx] += d['cantidad']
-            continue
-
-        indices = por_codigo.get(d['codigo']) or []
-        if not indices:
-            huerfanos.append(d)
-            continue
-        if len(indices) > 1 or veces_sin_rowid.get(d['codigo'], 0) > 1:
-            rowids = [filas[i]['rowid'] for i in indices]
-            uoms = [filas[i]['uom'] for i in indices]
-            raise LineaDevueltaAmbigua(
-                f'recaudo {recaudo_id}: la referencia {filas[indices[0]]["ref"]!r} '
-                f'({d["codigo"]}) se declaró devuelta sin f470_rowid y la factura '
-                f'tiene {len(indices)} línea(s) con ese producto '
-                f'(rowids {rowids}, unidades {uoms}, '
-                f'{veces_sin_rowid.get(d["codigo"], 0)} declaración(es)) — es un '
-                'producto de doble unidad: la correspondencia es ambigua y no se '
-                'puede saber a cuál línea corresponde lo devuelto. NO se crea la '
-                'devolución: adivinar cruzaría cartera de más contra la factura '
-                '(Regla 21, Siesa no la aprobaría) y reingresaría inventario que '
-                'nadie devolvió. Armar esta devolución desde Recepción, que '
-                'declara el rowid por línea.'
-            )
-        cantidades[indices[0]] += d['cantidad']
-
-    if huerfanos:
-        # Lo declarado que no tiene línea en la factura. Antes desaparecía sin
-        # ruido y la devolución salía corta. Se declara, no se levanta: una
-        # devolución corta se completa; una de más hay que reversarla.
-        logger.warning(
-            '[LIQUIDACION] recaudo %d: %d item(s) declarado(s) sin línea en la '
-            'factura — NO entran a la devolución: %s',
-            recaudo_id, len(huerfanos),
-            [(h['codigo'], h['rowid'] or None) for h in huerfanos]
-        )
-    return cantidades
-
-
 def _resolver_cuenta_cxc(tarea, tipo_docto_fe, consec_fe) -> tuple:
     """(co_factura, cuenta_cxc, un_cxc) reales desde Siesa — o ('', '', '') si
     no se pudo resolver.
@@ -1953,141 +1812,6 @@ def _resolver_cuenta_cxc(tarea, tipo_docto_fe, consec_fe) -> tuple:
             tarea.id, e
         )
     return co_factura, cuenta_cxc, un_cxc
-
-
-def _crear_devolucion_pendiente(recaudo: RecaudoEntrega, tarea, tipo_docto_fe: str,
-                                 consec_fe, items_devueltos, notas: str) -> bool:
-    """
-    "Liquidar en WMS" ya no crea la NC directo (250696, sin cruce automático
-    de cartera) — arma una DevolucionCliente ABIERTA con recaudo_entrega_id
-    apuntando a este recaudo. La recepcionista la confirma en el módulo de
-    Devoluciones (251126, con cruce automático de cartera) — eso dispara la
-    NC real, y el bridge en siesa_job_service.py (job
-    NOTA_CREDITO_DEVOLUCION_CLIENTE) marca recaudo.siesa_nc_triggered=True
-    al terminar, destrabando el RECIBO_CAJA que dependa de esa NC.
-
-    Quién decide qué se devolvió pasa de "lo que declaró el conductor en la
-    calle" a "lo que la recepcionista contó físicamente" — la razón real de
-    este cambio, no solo evitar la NC duplicada.
-
-    items_devueltos=None → devolución total (Rechazado): todas las líneas
-    reales de la factura, cantidad completa. Si no, solo las líneas con
-    cantidad_devuelta > 0 que declaró el conductor (ver RecaudoEntrega.
-    items_entregados) — la recepcionista puede ajustarlas antes de confirmar.
-
-    Devuelve False sin hacer nada si ya existe una devolución (ABIERTA o
-    CONFIRMADA) para este recaudo — evita duplicar el pendiente si
-    "Liquidar en WMS" se vuelve a apretar antes de que la recepcionista
-    confirme la primera vez.
-
-    Levanta `LineaDevueltaAmbigua` (la misma de `siesa_job_service`) si lo
-    declarado no se puede atribuir a una línea concreta de la factura — el
-    producto de doble unidad. El porqué está en
-    `_cantidades_por_linea_de_factura`. Los dos llamadores
-    (`liquidar_ruta_siesa` y `crear_devoluciones_pendientes_ruta`) lo recogen en
-    su lista `errores`: el recaudo queda sin devolución y declarado, no
-    silenciosamente con una de más.
-    """
-    from app.models.devolucion_cliente import DevolucionCliente
-    from app.models.producto import Producto
-    from app.services.connekta_gateway import connekta
-    from app.services.devolucion_cliente_service import DevolucionClienteService
-
-    ya_existe = (DevolucionCliente.query
-                 .filter_by(recaudo_entrega_id=recaudo.id)
-                 .filter(DevolucionCliente.estado != 'CANCELADA')
-                 .first())
-    if ya_existe:
-        logger.info(
-            '[LIQUIDACION] recaudo %d ya tiene devolución pendiente %s — no se duplica',
-            recaudo.id, ya_existe.codigo
-        )
-        return False
-
-    rowids_data = connekta.get_rowids_factura(tipo_docto_fe, consec_fe)
-    if not rowids_data:
-        raise ValueError(
-            f'No se obtuvieron líneas de FE {tipo_docto_fe}-{consec_fe} — '
-            'no se puede armar la devolución pendiente'
-        )
-
-    # Filas reales de la factura, resueltas a producto WMS. El orden de la
-    # factura se conserva: es el que ve quien compara la NC contra el papel.
-    filas = []
-    for row in rowids_data:
-        ref = (row.get('f120_referencia') or '').strip()
-        if not ref:
-            continue
-        producto = Producto.query.filter_by(codigo_siesa=ref).first()
-        if not producto:
-            logger.warning(
-                '[LIQUIDACION] devolución pendiente recaudo %d: referencia Siesa %r '
-                'sin producto WMS — omitida', recaudo.id, ref
-            )
-            continue
-        filas.append({
-            'producto': producto,
-            'ref': ref,
-            'rowid': str(row.get('f470_rowid') or '').strip(),
-            'cant_facturada': float(row.get('f470_cant_base') or 0),
-            'uom': (row.get('f470_id_unidad_medida') or '').strip(),
-            'bodega': (row.get('f150_id') or '').strip(),
-        })
-
-    es_total = not items_devueltos
-    if es_total:
-        # Devolución total: todas las líneas, completas. Acá la doble unidad NO
-        # es ambigua —volvió la factura entera, las dos líneas incluidas—, por
-        # eso esta rama no necesita clave.
-        cantidades = [f['cant_facturada'] for f in filas]
-        declaradas = list(cantidades)
-    else:
-        cantidades = _cantidades_por_linea_de_factura(
-            filas, items_devueltos, recaudo.id)
-        declaradas = _declarado_por_el_conductor(filas, items_devueltos, recaudo.id,
-                                                 cantidades)
-
-    lineas = []
-    for fila, cant_devuelta, cant_declarada in zip(filas, cantidades, declaradas):
-        if cant_devuelta <= 0:
-            continue
-        lineas.append({
-            'producto_id': fila['producto'].id,
-            'codigo_siesa': fila['ref'],
-            'cantidad_facturada': fila['cant_facturada'],
-            # Lo que DIJO el conductor. Nunca se pisa: el contado de recepción
-            # va a `cantidad_devuelta`, y la diferencia es el faltante de
-            # retorno (`senales_ruta.faltante_de_retorno`).
-            'cantidad_declarada': cant_declarada,
-            'cantidad_devuelta': min(cant_devuelta, fila['cant_facturada']),
-            'f470_id_unidad_medida': fila['uom'],
-            'f150_id_bodega': fila['bodega'],
-            'f470_rowid': fila['rowid'],
-        })
-
-    if not lineas:
-        raise ValueError(
-            f'Sin líneas para armar la devolución pendiente del recaudo {recaudo.id} — '
-            'revisar códigos declarados por el conductor vs factura real en Siesa'
-        )
-
-    DevolucionClienteService.crear_devolucion(
-        tarea_packing_id=tarea.id,
-        tipo_docto_fe=tipo_docto_fe,
-        consec_fe=consec_fe,
-        almacen_id=tarea.almacen_id,
-        recepcionista_id=None,
-        lineas=lineas,
-        es_total=es_total,
-        observaciones=notas,
-        recaudo_entrega_id=recaudo.id,
-        commit=False,
-    )
-    logger.info(
-        '[LIQUIDACION] Devolución pendiente creada para recaudo %d (FE %s-%s, %d línea(s))',
-        recaudo.id, tipo_docto_fe, consec_fe, len(lineas)
-    )
-    return True
 
 
 def _hay_rc_en_cola(recaudo_id: int) -> bool:

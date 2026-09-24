@@ -270,7 +270,7 @@ def _run_dlq_jobs():
                 _anotar_en_recaudo(job, 'SIN_VERIFICAR')
                 _crear_alerta_admin(job)
                 continue
-            if isinstance(e, LineaDevueltaAmbigua):
+            if isinstance(e, ErrorDeterminista):
                 # **Determinista**: los mismos datos la producen siempre. El
                 # payload del job no cambia entre intentos y la factura
                 # tampoco, así que los 5 reintentos dan el mismo resultado —
@@ -477,7 +477,24 @@ def _marcar_motivo_dian_manual(job: SiesaJob, error_msg: str):
         logger.error('[DLQ] no se pudo marcar motivo DIAN manual (job=%s): %s', job.id, e)
 
 
-class LineaDevueltaAmbigua(Exception):
+class ErrorDeterminista(Exception):
+    """Un error que da lo mismo en cada reintento: los datos del job no cambian
+    solos. Va a FALLIDO sin gastar reintentos y con alerta (ver el clasificador
+    en `_run_dlq_jobs`): lo que lo desbloquea es que una persona mire."""
+
+
+class NotaCreditoSinLineas(ErrorDeterminista):
+    """La NC de una devolución contada no encontró NINGUNA de sus líneas en la
+    factura.
+
+    Antes el job devolvía `{'sin_lineas': True}` y el DLQ lo marcaba
+    COMPLETADO: sin nota crédito, con el inventario ya reingresado en el WMS y
+    —si la devolución venía de ruta— con el recibo de caja esperando para
+    siempre una NC que nunca iba a salir. La falla se leía como un éxito.
+    """
+
+
+class LineaDevueltaAmbigua(ErrorDeterminista):
     """No se puede decir A QUÉ LÍNEA de la factura corresponde lo devuelto.
 
     Se levanta desde `_construir_lineas_nc` (rama parcial) cuando un item
@@ -1493,12 +1510,16 @@ def _ejecutar_job(job: SiesaJob) -> dict:
             ) from _e_amb
 
         if not lineas_nc:
-            logger.warning(
-                '[DLQ] NOTA_CREDITO_DEVOLUCION_CLIENTE job=%s: sin líneas para devolver — '
-                'posible mismatch de códigos entre items_devueltos y factura Siesa',
-                job.id
-            )
-            return {'sin_lineas': True, 'devolucion_id': payload.get('devolucion_id')}
+            # Antes: `{'sin_lineas': True}` → COMPLETADO sin NC. Ahora falla y
+            # avisa (determinista: el payload no cambia). Ocurre ANTES del
+            # pre-flag, así que nada queda marcado como enviado.
+            raise NotaCreditoSinLineas(
+                f'NOTA_CREDITO_DEVOLUCION_CLIENTE job={job.id} devolución='
+                f'{devolucion.codigo if devolucion else payload.get("devolucion_id")} '
+                f'FE {tipo_docto_fe}-{consec_fe}: ninguna línea devuelta coincide con la '
+                f'factura en Siesa ({[(it.get("codigo"), it.get("f470_rowid")) for it in items_devueltos]}). '
+                f'El inventario ya reingresó (zona de devoluciones); la NC no sale hasta '
+                f'revisar las líneas.')
 
         # 251126 crea la NC Y cruza la cartera en el mismo POST (ver CLAUDE.md
         # "Cruce de cartera SÍ se pudo automatizar") — reemplaza a
@@ -1721,11 +1742,23 @@ def _ejecutar_job(job: SiesaJob) -> dict:
         # Secuencialidad: si depende de NC, verificar que NC ya pasó.
         # `DependenciaPendiente` y no `Exception`: esperar no gasta reintento.
         if payload.get('depende_de_nc') and recaudo and not recaudo.siesa_nc_triggered:
-            raise DependenciaPendiente(
-                f'RECIBO_CAJA job={job.id}: RC espera la NC del recaudo '
-                f'{recaudo.id}, que la desbloquea la recepción física de la '
-                f'devolución. Sigue pendiente.'
-            )
+            # La NC ya no va a salir si la devolución terminó sin ella —contada
+            # en cero (FALTANTE_TOTAL) o cancelada—: el RC sale por lo cobrado
+            # y la factura queda con el saldo de lo que no volvió, en cartera.
+            # Antes esperaba para siempre. NC → RC → DC no se rompe: no hay NC
+            # que esperar, y el DC sigue esperando a este RC.
+            from app.services import devolucion_ruta as _dr_rc
+            if _dr_rc.nc_no_llegara(recaudo):
+                logger.warning(
+                    '[DLQ] RECIBO_CAJA job=%s: la devolución del recaudo %s terminó sin '
+                    'nota crédito (faltante total o cancelada) — el RC sale por lo cobrado',
+                    job.id, recaudo.id)
+            else:
+                raise DependenciaPendiente(
+                    f'RECIBO_CAJA job={job.id}: RC espera la NC del recaudo '
+                    f'{recaudo.id}, que la desbloquea la recepción física de la '
+                    f'devolución. Sigue pendiente.'
+                )
 
         # El monto ya viene calculado por la lógica de negocio real
         # (`registrar_cobro_recaudo`/`_procesar_recaudo`): para ENTREGADO es

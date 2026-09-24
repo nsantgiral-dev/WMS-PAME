@@ -397,7 +397,16 @@ class TestTrinqueteElEnvoltorioNoVuelve:
         arbol = ast.parse(fuente)
         run = next(n for n in ast.walk(arbol)
                    if isinstance(n, ast.FunctionDef) and n.name == '_run_dlq_jobs')
-        assert any(isinstance(n, ast.Name) and n.id == 'LineaDevueltaAmbigua'
+        # Desde m045devol el clasificador nombra la BASE, `ErrorDeterminista`,
+        # y la ambigüedad es una de sus hijas (la otra: la NC sin líneas). El
+        # trinquete exige las dos cosas: que el clasificador la nombre y que la
+        # ambigüedad siga siendo determinista.
+        from app.services.siesa_job_service import (ErrorDeterminista,
+                                                    LineaDevueltaAmbigua,
+                                                    NotaCreditoSinLineas)
+        assert issubclass(LineaDevueltaAmbigua, ErrorDeterminista)
+        assert issubclass(NotaCreditoSinLineas, ErrorDeterminista)
+        assert any(isinstance(n, ast.Name) and n.id == 'ErrorDeterminista'
                    for n in ast.walk(run)), (
-            '_run_dlq_jobs no menciona LineaDevueltaAmbigua — el clasificador '
-            'la trata como un fallo transitorio cualquiera')
+            '_run_dlq_jobs no menciona ErrorDeterminista — el clasificador '
+            'trata la ambigüedad como un fallo transitorio cualquiera')
