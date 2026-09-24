@@ -769,12 +769,13 @@ async function _rutaPostConFlota(ruta, accion) {
   let r = await enviar({});
   let d = await r.json().catch(() => ({}));
   if (r.status === 409 && Array.isArray(d.advertencias_flota)) {
-    const lista = d.advertencias_flota.map(a => '• ' + a.texto).join('\n');
-    const motivo = prompt(
-      `El vehículo tiene advertencias de flota:\n\n${lista}\n\n` +
-      `Podés ${accion} igual. Escribí el motivo (queda registrado):`);
-    if (motivo === null) return { r: null, d: null };
-    if (!motivo.trim()) { alerta('Sin motivo no se puede continuar', 'error'); return { r: null, d: null }; }
+    const lista = d.advertencias_flota.map(a => `<li>${esc(a.texto)}</li>`).join('');
+    const motivo = await _modalTexto(
+      '⚠️ Advertencias del vehículo',
+      `<ul style="margin:0 0 10px;padding-left:18px;">${lista}</ul>` +
+      `Podés ${esc(accion)} igual. El motivo queda registrado.`,
+      { placeholder: 'Motivo', textoConfirmar: 'Continuar' });
+    if (motivo === null || motivo === undefined || !String(motivo).trim()) return { r: null, d: null };
     r = await enviar({ motivo_advertencias: motivo.trim() });
     d = await r.json().catch(() => ({}));
   }
