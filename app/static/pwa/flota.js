@@ -1139,7 +1139,7 @@ async function flotaAbrirFicha(placa) {
 
     ${!d.existe ? '<p style="color:var(--yellow)">Este vehículo todavía no tiene ficha.</p>'
                 : `<p>${d.completa ? '<span style="color:var(--green)">Ficha completa</span>'
-                                   : '<span style="color:var(--yellow)">Falta: ' + d.atributos_sin_dato.join(', ') + '</span>'}</p>`}
+                                   : '<span style="color:var(--yellow)">Falta: ' + esc((d.atributos_sin_dato || []).join(', ')) + '</span>'}</p>`}
 
     <label>Kilometraje actual (del tablero) *</label>
     <input type="number" id="fi-km_inicial" inputmode="numeric" value="${v('km_inicial')}"
@@ -1198,7 +1198,7 @@ async function flotaAbrirFicha(placa) {
            placeholder="ej. 15 — está en el manual, o se mide llenándolo desde vacío"
            style="width:100%;padding:6px">
     <label>¿De dónde salió ese número?</label>
-    ${flotaSelect('capacidad_tanque_fuente', d.ficha.capacidad_tanque_fuente)}
+    ${flotaSelect('capacidad_tanque_fuente', v('capacidad_tanque_fuente') || 'sin_dato')}
     <p style="font-size:var(--fs-xs);color:var(--tx2);margin:4px 0 0">
       Es lo único que hace posible detectar un tanqueo por encima de lo que
       cabe: un tanque de 15 galones que recibe 22 no es un error de medición.
@@ -1212,7 +1212,7 @@ async function flotaAbrirFicha(placa) {
 
     <button class="btn-primary" style="margin-top:16px;width:100%;font-size:var(--fs-lg)"
             onclick="flotaGuardarFicha()" id="fi-guardar"
-            data-placa="${placa}">Guardar ficha</button>
+            data-placa="${esc(placa)}">Guardar ficha</button>
     <div id="fi-error" style="color:var(--red);margin-top:8px"></div>
   </div>`;
 }
