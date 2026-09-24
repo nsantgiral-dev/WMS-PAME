@@ -525,6 +525,12 @@ class PickingService:
 
         tareas_creadas = []
 
+        # La clave del pedido (m034fotos): la misma que llevará su packing.
+        # Una sola vez por llamada, no por asignación FEFO.
+        from app.services.cadena_pedido import clave_de_tarea_picking
+        _pedido_clave = clave_de_tarea_picking(
+            referencia_documento, tipo_documento, almacen_id)
+
         for asig in fefo['asignaciones']:
             codigo = PickingService._codigo_tarea()
 
@@ -542,6 +548,7 @@ class PickingService:
                 referencia_documento=referencia_documento,
                 tipo_documento=tipo_documento,
                 bodega_origen_siesa=bodega_origen_siesa,
+                pedido_clave=_pedido_clave,
             )
 
             # Reservar el stock — lock a nivel de fila para evitar doble reserva concurrente
@@ -1465,6 +1472,7 @@ class PickingService:
             prioridad=base.prioridad,
             referencia_documento=base.referencia_documento,
             tipo_documento=base.tipo_documento,
+            pedido_clave=base.pedido_clave,
             motivo_bloqueo='BACKORDER_SIESA',
             observaciones_bloqueo=detalle or (
                 'Siesa comprometió menos de lo pedido — el resto es backorder y '

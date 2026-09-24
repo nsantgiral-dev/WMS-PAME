@@ -9,6 +9,7 @@ from app.extensions import db
 from app.models.packing import TareaPacking, ItemPacking, EstadoPacking
 from app.models.picking import TareaPicking
 from app.services.connekta_gateway import connekta
+from app.services.cadena_pedido import clave_de_documento
 import logging
 from app.utils.fecha import ahora_bogota as _ahora_bogota
 
@@ -57,6 +58,10 @@ class PackingService:
             numero_pedido_siesa=numero_pedido_siesa,
             tipo_docto_pedido_siesa=tipo_docto_pedido_siesa,
             consec_docto_pedido_siesa=consec_docto_pedido_siesa,
+            # La misma clave que sus tareas de picking (m034fotos).
+            pedido_clave=clave_de_documento(
+                numero_pedido=numero_pedido_siesa, tipo=tipo_docto_pedido_siesa,
+                consec=consec_docto_pedido_siesa, almacen_id=almacen_id),
             almacen_id=almacen_id,
             estado='PENDIENTE'
         )
@@ -109,6 +114,10 @@ class PackingService:
             numero_pedido_siesa=numero_pedido_siesa,
             tipo_docto_pedido_siesa=tipo_docto_pedido_siesa,
             consec_docto_pedido_siesa=consec_docto_pedido_siesa,
+            # La misma clave que sus tareas de picking (m034fotos).
+            pedido_clave=clave_de_documento(
+                numero_pedido=numero_pedido_siesa, tipo=tipo_docto_pedido_siesa,
+                consec=consec_docto_pedido_siesa, almacen_id=almacen_id),
             almacen_id=almacen_id,
             cliente=cliente,
             municipio=municipio,

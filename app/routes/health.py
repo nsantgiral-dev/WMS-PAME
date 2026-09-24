@@ -352,6 +352,17 @@ def health_siesa():
                  'Se consulta en cada servicio por separado.'),
     }
 
+    # FOTOS DIARIAS DE SIESA (m034fotos). La frescura sale de la base —de las
+    # corridas— y no del proceso: el cron corre en el worker y este endpoint
+    # puede contestar desde el web. Un hueco es «no hay total de ese día», no
+    # un total en cero.
+    try:
+        from app.services import fotos_siesa_service as _fotos
+        resultado['fotos_siesa'] = _fotos.estado()
+        resultado['fotos_siesa']['cron_en_este_proceso'] = '[FOTOS_SIESA]' in _activos
+    except Exception as _e_fotos:
+        resultado['fotos_siesa'] = {'error': str(_e_fotos)[:200]}
+
     # Pasos que siguen siendo manuales en Siesa. No son un fallo — son trabajo
     # de una persona todos los días, y la única forma de que nadie los olvide
     # (o los haga de más) es que estén escritos en un sitio consultable.

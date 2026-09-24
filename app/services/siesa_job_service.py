@@ -267,6 +267,7 @@ def _run_dlq_jobs():
                     'documento puede existir en Siesa. No se reintenta: '
                     'verificar en Auditoría de documentos antes de nada.',
                     job.id, job.tipo)
+                _anotar_en_recaudo(job, 'SIN_VERIFICAR')
                 _crear_alerta_admin(job)
                 continue
             if isinstance(e, LineaDevueltaAmbigua):
@@ -293,6 +294,7 @@ def _run_dlq_jobs():
                 logger.error(
                     '[DLQ] Job %s (%s) AMBIGUO — no se reintenta (el reintento '
                     'daría lo mismo): %s', job.id, job.tipo, e)
+                _anotar_en_recaudo(job, 'FALLIDO')
                 _crear_alerta_admin(job)
                 continue
             if isinstance(e, ConnektaCircuitOpenError):
@@ -317,6 +319,7 @@ def _run_dlq_jobs():
                     f'[DLQ] Job {job.id} ({job.tipo}) FALLIDO tras {job.intentos} intentos: {error_msg}'
                 )
                 _marcar_motivo_dian_manual(job, error_msg)
+                _anotar_en_recaudo(job, 'FALLIDO')
                 _crear_alerta_admin(job)
             else:
                 logger.warning(
@@ -1357,6 +1360,7 @@ def _ejecutar_job(job: SiesaJob) -> dict:
                 'posible mismatch de códigos entre items_devueltos y factura Siesa',
                 job.id
             )
+            _anotar_en_recaudo(job, 'SIN_LINEAS', recaudo=recaudo)
             return {'sin_lineas': True, 'recaudo_id': payload.get('recaudo_id')}
 
         # Paso 3: POST 251126 — crea Y cruza la cartera en un solo POST.
@@ -1429,6 +1433,8 @@ def _ejecutar_job(job: SiesaJob) -> dict:
                 db.session.commit()
             except Exception:
                 db.session.rollback()
+        elif recaudo:
+            _anotar_en_recaudo(job, 'ENVIADO', respuesta=resultado, recaudo=recaudo)
         return resultado
 
     if job.tipo == 'NOTA_CREDITO_DEVOLUCION_CLIENTE':
@@ -1592,6 +1598,11 @@ def _ejecutar_job(job: SiesaJob) -> dict:
                 recaudo_origen = db.session.get(_REC, devolucion.recaudo_entrega_id)
                 if recaudo_origen and not recaudo_origen.siesa_nc_triggered:
                     recaudo_origen.siesa_nc_triggered = True
+                    # El desenlace también, en la entidad (m034fotos). El
+                    # consecutivo llega después, con el motivo DIAN.
+                    recaudo_origen.anotar_documento_siesa(
+                        'NC', 'ENVIADO', respuesta=resultado,
+                        consec=devolucion.siesa_nc_consec)
                     db.session.commit()
                     logger.info(
                         '[DLQ] NOTA_CREDITO_DEVOLUCION_CLIENTE job=%s: recaudo %s '
@@ -1670,6 +1681,19 @@ def _ejecutar_job(job: SiesaJob) -> dict:
         if not devolucion.siesa_nc_consec:
             devolucion.siesa_nc_consec = str(consec_nc)
             db.session.commit()
+        # Si la devolución vino de una ruta, su recaudo recibe el consecutivo
+        # real de la NC (m034fotos). Anotar no puede romper el motivo.
+        if devolucion.recaudo_entrega_id:
+            try:
+                from app.models.recaudo_entrega import RecaudoEntrega as _REM
+                _rec = db.session.get(_REM, devolucion.recaudo_entrega_id)
+                if _rec is not None and _rec.siesa_nc_consec != str(consec_nc):
+                    _rec.anotar_documento_siesa('NC', 'ENVIADO', consec=consec_nc)
+                    db.session.commit()
+            except Exception as _e_rec:
+                db.session.rollback()
+                logger.warning('[DLQ] MOTIVO_DIAN_NC job=%s: no se pudo anotar el '
+                               'consecutivo en el recaudo: %s', job.id, _e_rec)
 
         resultado = connekta.trigger_motivo_dian_nc(consec_nc)
         if not resultado.get('modo_ensayo'):
@@ -1736,6 +1760,7 @@ def _ejecutar_job(job: SiesaJob) -> dict:
             if recaudo:
                 recaudo.siesa_rc_triggered = True
                 db.session.commit()
+                _anotar_en_recaudo(job, 'YA_SALDADA', recaudo=recaudo)
             return {'ya_existente': True, 'recaudo_id': payload.get('recaudo_id')}
 
         # Pre-flag: marcar ANTES del POST para cerrar el crash window.
@@ -1769,6 +1794,7 @@ def _ejecutar_job(job: SiesaJob) -> dict:
                     '[DLQ] RECIBO_CAJA job=%s: POST falló pero API 21 confirma '
                     'que RC sí entró a Siesa — manteniendo flag', job.id
                 )
+                _anotar_en_recaudo(job, 'ENVIADO', recaudo=recaudo)
                 return {'timeout_pero_exitoso': True}
             if _rc_entro is None:
                 # NO SE SABE. Regla 3: un timeout no significa que falló, y un
@@ -1782,6 +1808,7 @@ def _ejecutar_job(job: SiesaJob) -> dict:
                     'en Siesa si el RC entró.',
                     job.id, getattr(recaudo, 'id', '?')
                 )
+                _anotar_en_recaudo(job, 'SIN_VERIFICAR', recaudo=recaudo)
                 return {'verificacion_imposible': True,
                         'recaudo_id': getattr(recaudo, 'id', None)}
             # Confirmado que NO entró — revertir pre-flag y reintentar
@@ -1801,6 +1828,8 @@ def _ejecutar_job(job: SiesaJob) -> dict:
                 db.session.commit()
             except Exception:
                 db.session.rollback()
+        elif recaudo:
+            _anotar_en_recaudo(job, 'ENVIADO', respuesta=resultado, recaudo=recaudo)
         return resultado
 
     if job.tipo == 'DOCUMENTO_CONTABLE_RET':
@@ -1882,6 +1911,8 @@ def _ejecutar_job(job: SiesaJob) -> dict:
                 db.session.commit()
             except Exception:
                 db.session.rollback()
+        elif recaudo:
+            _anotar_en_recaudo(job, 'ENVIADO', respuesta=resultado, recaudo=recaudo)
         return resultado
 
     if job.tipo == 'COMPROMISOS_RIT':
@@ -1936,6 +1967,43 @@ def _ejecutar_job(job: SiesaJob) -> dict:
         return {'compromisos_registrados': True, 'codigo': s.codigo}
 
     raise ValueError(f'Tipo de job no reconocido: {job.tipo}')
+
+
+#: Qué documento del recaudo produce cada tipo de job. Los tres de la
+#: liquidación, y ningún otro: los demás no cuelgan de un recaudo.
+_DOCUMENTO_DEL_RECAUDO = {
+    'NOTA_CREDITO_FACTURA': 'NC',
+    'RECIBO_CAJA': 'RC',
+    'DOCUMENTO_CONTABLE_RET': 'DC',
+}
+
+
+def _anotar_en_recaudo(job: SiesaJob, resultado: str, respuesta=None,
+                       recaudo=None, consec=None):
+    """Deja el desenlace del documento en el recaudo (m034fotos).
+
+    **Anotar no puede romper lo anotado**: el documento ya salió (o ya se dio
+    por perdido) y eso lo decide la cola, no esta nota. Cualquier fallo acá se
+    registra y se traga — igual que `_post_completado`.
+    """
+    doc = _DOCUMENTO_DEL_RECAUDO.get(job.tipo)
+    if not doc:
+        return
+    try:
+        if recaudo is None:
+            from app.models.recaudo_entrega import RecaudoEntrega as _RE
+            rid = (job.get_payload() or {}).get('recaudo_id')
+            recaudo = db.session.get(_RE, rid) if rid else None
+        if recaudo is None:
+            return
+        recaudo.anotar_documento_siesa(
+            doc, resultado, respuesta=respuesta, consec=consec,
+            cuenta_puc=(job.get_payload() or {}).get('cuenta_puc') if doc == 'DC' else None)
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        logger.warning('[DLQ] job %s (%s): no se pudo anotar %s en el recaudo: %s',
+                       job.id, job.tipo, resultado, e)
 
 
 def _post_completado(job: SiesaJob):

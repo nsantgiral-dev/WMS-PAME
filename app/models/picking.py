@@ -44,6 +44,14 @@ class TareaPicking(db.Model):
     tipo_documento = db.Column(db.String(30))   # 'PEDIDO' | 'TRASLADO'
     bodega_origen_siesa = db.Column(db.String(20))  # scoping multi-bodega
 
+    #: **La clave del pedido** (`'003-PD-1502'`, m034fotos): la misma que lleva
+    #: el packing, la historia del pedido y las fotos de ventas. Antes picking y
+    #: packing se unían solo porque `referencia_documento` y
+    #: `numero_pedido_siesa` coincidían como texto. La arma
+    #: `cadena_pedido.clave_pedido` y nadie más. `NULL` = no es de un pedido, o
+    #: no se pudo saber el CO (no se inventa).
+    pedido_clave = db.Column(db.String(40), nullable=True, index=True)
+
     #: Cuánto seguía comprometido en Siesa (`f405_cant_por_remisionar_base`,
     #: ver `backorder_service.compromisos_por_siesa`) para esta línea del
     #: pedido, al momento de crear la tarea — se muestra al operario mientras
@@ -133,6 +141,7 @@ class TareaPicking(db.Model):
             'estado': self.estado,
             'prioridad': self.prioridad,
             'referencia_documento': self.referencia_documento,
+            'pedido_clave': self.pedido_clave,
             'tipo_documento': self.tipo_documento,
             'bodega_origen_siesa': self.bodega_origen_siesa,
             'motivo_bloqueo': self.motivo_bloqueo,

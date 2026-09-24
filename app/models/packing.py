@@ -30,6 +30,10 @@ class TareaPacking(db.Model):
     # Componentes separados requeridos por el gateway (F430_ID_TIPO_DOCTO / F430_CONSEC_DOCTO)
     tipo_docto_pedido_siesa = db.Column(db.String(20))
     consec_docto_pedido_siesa = db.Column(db.String(30))
+    #: **La clave del pedido** (`'003-PD-1502'`, m034fotos) — la misma de sus
+    #: tareas de picking. Ver `TareaPicking.pedido_clave` y
+    #: `app/services/cadena_pedido.py`. `NULL` para TRASLADO.
+    pedido_clave = db.Column(db.String(40), nullable=True, index=True)
     almacen_id = db.Column(db.Integer, db.ForeignKey('almacenes.id'), nullable=False)
 
     # Empacador asignado
@@ -146,6 +150,7 @@ class TareaPacking(db.Model):
             'tienda_destino': self.tienda_destino,
             'bodega_origen_siesa': self.bodega_origen_siesa,
             'numero_pedido_siesa': self.numero_pedido_siesa,
+            'pedido_clave': self.pedido_clave,
             'cond_pago': self.cond_pago,
             'valor_factura': float(self.valor_factura) if self.valor_factura is not None else None,
             'fe_tipo': self.fe_tipo,

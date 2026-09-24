@@ -31,7 +31,7 @@ from zoneinfo import ZoneInfo
 from collections import defaultdict
 from app.extensions import db
 from app.utils.fecha import dia_operativo as _dia_operativo
-from app.services.siesa_filtro import lit as _lit
+from app.services.siesa_filtro import lit as _lit, lit_fecha as _lit_fecha
 
 logger = logging.getLogger(__name__)
 
@@ -901,8 +901,8 @@ class VigiaService:
                     'paginacion': f'numPag={pag}|tamPag=100',
                     'parametros': (
                         f"f350_id_co = {_lit(co)} "
-                        f"AND f350_fecha >= {desde.strftime('%Y%m%d')} "
-                        f"AND f350_fecha <= {hasta.strftime('%Y%m%d')}"
+                        f"AND f350_fecha >= {_lit_fecha(desde)} "
+                        f"AND f350_fecha <= {_lit_fecha(hasta)}"
                     ),
                 })
                 if res is None:

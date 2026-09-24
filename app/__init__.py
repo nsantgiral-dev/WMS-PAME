@@ -421,6 +421,11 @@ def create_app():
                 # 06:15 y no 05:30 ni 06:00: esas dos son de Vigía/preventivo y
                 # del barrido de avisos, y este reporte lee un plan ya barrido.
                 ('flota.adaptadores.reporte_semanal',       'init_scheduler',          '[FLOTA_REPORTE_SEMANAL]'),
+                # Fotos diarias de Siesa (m034fotos): ventas, stock y cartera,
+                # la historia que Siesa no guarda. 18:00 Bogotá, dentro de la
+                # ventana de Siesa. **Nace apagado** por `FOTOS_SIESA`: el
+                # interruptor vive en `correr_fotos`, no acá.
+                ('app.services.fotos_siesa_service',        'init_scheduler',          '[FOTOS_SIESA]'),
             ]
             for _mod_path, _fn_name, _tag in _scheduler_pesados:
                 _registrar_scheduler(app, _il, _app_logger, _mod_path, _fn_name, _tag)

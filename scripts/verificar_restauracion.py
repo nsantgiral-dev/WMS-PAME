@@ -51,6 +51,10 @@ VERDE, ROJO, AMAR, GRIS, FIN = '\033[92m', '\033[91m', '\033[93m', '\033[90m', '
 IRRECUPERABLES = (
     'serie_vigia', 'alarma_vigia', 'kardex_movimientos', 'stock_diario',
     'juicios_temporada', 'precios_realizados', 'bitacora_acciones',
+    # Fase 0 de analítica (m034fotos): la historia que Siesa no guarda. Lo que
+    # no se fotografió un día no se puede volver a pedir.
+    'pedidos_historia', 'fotos_siesa_corridas', 'foto_ventas_lineas',
+    'foto_stock_diaria', 'foto_cartera_diaria',
 )
 
 #: Se pueden volver a cargar desde Siesa. Que la copia tenga menos no es un

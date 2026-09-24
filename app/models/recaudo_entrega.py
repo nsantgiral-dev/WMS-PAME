@@ -153,12 +153,107 @@ class RecaudoEntrega(db.Model):
     #: en Siesa hay uno.
     siesa_dc_pucs = db.Column(db.Text, nullable=True)
 
+    # ── El desenlace de cada documento, en la entidad de negocio (m034fotos) ──
+    #
+    # Las tres banderas de arriba dicen «ya salió» y sirven de guarda. Lo que
+    # NO decían: con qué consecutivo, cuándo, ni cómo terminó. Eso vivía solo en
+    # `siesa_jobs` —`referencia_tipo`/`referencia_id` polimórfico, sin FK—, que
+    # es una COLA: se descarta, se reintenta y la vacía el acta de corte. La
+    # analítica pedido → caja no puede depender de una cola.
+    #
+    # Lo escribe `anotar_documento_siesa` y nadie más. `NULL` = nunca se intentó
+    # (o se intentó antes de que esto existiera), que NO es lo mismo que
+    # «falló». El consecutivo queda `NULL` cuando Siesa no lo devuelve en la
+    # respuesta del POST — pasa en la mayoría de los conectores — y no se
+    # inventa: la NC lo obtiene después por la consulta del motivo DIAN.
+    siesa_nc_resultado = db.Column(db.String(20), nullable=True)
+    siesa_nc_consec    = db.Column(db.String(30), nullable=True)
+    siesa_nc_at        = db.Column(db.DateTime, nullable=True)
+    siesa_rc_resultado = db.Column(db.String(20), nullable=True)
+    siesa_rc_consec    = db.Column(db.String(30), nullable=True)
+    siesa_rc_at        = db.Column(db.DateTime, nullable=True)
+    #: Las retenciones son N documentos (una por cuenta PUC): el detalle va en
+    #: JSON `{puc: {resultado, consec, at}}`; `siesa_dc_resultado`/`_at` son los
+    #: del último que cambió.
+    siesa_dc_resultado = db.Column(db.String(20), nullable=True)
+    siesa_dc_at        = db.Column(db.DateTime, nullable=True)
+    siesa_dc_detalle   = db.Column(db.Text, nullable=True)
+
     # Trazabilidad
     confirmado_por  = db.Column(db.Integer, db.ForeignKey('usuarios.id'), nullable=True)
     editado_por     = db.Column(db.Integer, db.ForeignKey('usuarios.id'), nullable=True)
     editado_en      = db.Column(db.DateTime)
 
     fecha_confirmacion = db.Column(db.DateTime, default=datetime.utcnow)
+
+    # ── Desenlace de los documentos Siesa ─────────────────────────────────
+    #: El vocabulario. **Uno solo** para los tres documentos.
+    #:
+    #: · `ENVIADO`       Siesa contestó `codigo 0` a un POST real.
+    #: · `YA_SALDADA`    el RC no se mandó: la factura ya no tenía saldo.
+    #: · `SIN_VERIFICAR` el POST salió y no se sabe si entró (Regla 3). Hay que
+    #:                   mirar Siesa; el WMS no reintenta.
+    #: · `FALLIDO`       el job se dio por perdido (reintentos agotados o error
+    #:                   determinista). No es «no existe en Siesa»: es «el WMS
+    #:                   dejó de intentar».
+    #: · `SIN_LINEAS`    la NC no tenía nada que devolver.
+    RESULTADOS_SIESA = ('ENVIADO', 'YA_SALDADA', 'SIN_VERIFICAR', 'FALLIDO',
+                        'SIN_LINEAS')
+    #: Un desenlace que ya dice «el documento existe» no lo pisa un `FALLIDO`
+    #: posterior (un reintento manual que choca con el duplicado, por ejemplo).
+    _RESULTADOS_FINALES = ('ENVIADO', 'YA_SALDADA')
+
+    def anotar_documento_siesa(self, documento: str, resultado: str,
+                               respuesta=None, cuenta_puc: str = None,
+                               consec=None, momento=None):
+        """Deja en el recaudo cómo terminó un documento. **La única que escribe
+        las columnas `siesa_{nc,rc,dc}_{resultado,consec,at}`.**
+
+        `documento`: `'NC'`, `'RC'` o `'DC'` (este último con `cuenta_puc`).
+        `consec`: el consecutivo si el llamador lo conoce; si no, se busca en
+        `respuesta` (`consecutivo_en_respuesta`) y, si no está, queda `NULL`.
+        No comitea: lo hace el llamador, dentro de su propia transacción.
+        """
+        import json
+        from datetime import datetime as _dt
+        doc = (documento or '').upper()
+        if doc not in ('NC', 'RC', 'DC'):
+            raise ValueError(f'documento Siesa desconocido: {documento!r}')
+        if resultado not in self.RESULTADOS_SIESA:
+            raise ValueError(f'resultado Siesa desconocido: {resultado!r}')
+        if consec is None:
+            consec = consecutivo_en_respuesta(respuesta)
+        momento = momento or _dt.utcnow()
+
+        if doc == 'DC':
+            try:
+                detalle = json.loads(self.siesa_dc_detalle or '{}')
+                if not isinstance(detalle, dict):
+                    detalle = {}
+            except (ValueError, TypeError):
+                detalle = {}
+            clave = cuenta_puc or '?'
+            previo = detalle.get(clave) or {}
+            if previo.get('resultado') in self._RESULTADOS_FINALES and \
+                    resultado not in self._RESULTADOS_FINALES:
+                return
+            detalle[clave] = {
+                'resultado': resultado,
+                'consec': str(consec) if consec is not None else previo.get('consec'),
+                'at': momento.isoformat(),
+            }
+            self.siesa_dc_detalle = json.dumps(detalle, sort_keys=True)
+            self.siesa_dc_resultado = resultado
+            self.siesa_dc_at = momento
+            return
+
+        previo = getattr(self, f'siesa_{doc.lower()}_resultado')
+        if previo in self._RESULTADOS_FINALES and resultado not in self._RESULTADOS_FINALES:
+            return
+        setattr(self, f'siesa_{doc.lower()}_resultado', resultado)
+        setattr(self, f'siesa_{doc.lower()}_at', momento)
+        if consec is not None:
+            setattr(self, f'siesa_{doc.lower()}_consec', str(consec))
 
     # ── Retenciones ya enviadas, por cuenta PUC ──────────────────────────
     def pucs_enviadas(self) -> set:
@@ -214,6 +309,11 @@ class RecaudoEntrega(db.Model):
             'siesa_rc_triggered':    self.siesa_rc_triggered or False,
             'siesa_nc_triggered':    self.siesa_nc_triggered or False,
             'siesa_dc_triggered':    self.siesa_dc_triggered or False,
+            'siesa_nc_resultado':    self.siesa_nc_resultado,
+            'siesa_nc_consec':       self.siesa_nc_consec,
+            'siesa_rc_resultado':    self.siesa_rc_resultado,
+            'siesa_rc_consec':       self.siesa_rc_consec,
+            'siesa_dc_resultado':    self.siesa_dc_resultado,
             # `siesa_triggered` en cada línea se guardó en True al ENCOLAR el
             # job (`registrar_cobro_recaudo`), no al confirmarse el envío —
             # un DC que Siesa rechaza (job 482, recaudo 22, PD1425, ruta 23,
@@ -234,3 +334,27 @@ class RecaudoEntrega(db.Model):
         if include_foto:
             d['foto_entrega'] = self.foto_entrega or ''
         return d
+
+
+def consecutivo_en_respuesta(respuesta):
+    """El consecutivo que Siesa asignó, si la respuesta del POST lo trae.
+
+    La mayoría de las respuestas de Connekta **no lo traen**
+    (`{'codigo': 0, 'mensaje': 'Transacción Exitosa', 'detalle': 'Importacion
+    exitosa'}`). Se busca en las formas conocidas y, si no está, `None`: un
+    consecutivo inventado apuntaría a otro documento.
+    """
+    if not isinstance(respuesta, dict) or respuesta.get('modo_ensayo'):
+        return None
+    for k in ('consecutivo', 'consec', 'consec_docto', 'f350_consec_docto'):
+        v = respuesta.get(k)
+        if v not in (None, '', 0, '0'):
+            return v
+    det = respuesta.get('detalle')
+    filas = det.get('Table') if isinstance(det, dict) else None
+    if isinstance(filas, list) and len(filas) == 1 and isinstance(filas[0], dict):
+        for k in ('f350_consec_docto', 'consecutivo', 'consec_docto'):
+            v = filas[0].get(k)
+            if v not in (None, '', 0, '0'):
+                return v
+    return None

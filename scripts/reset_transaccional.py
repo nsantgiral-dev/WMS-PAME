@@ -257,6 +257,20 @@ PROTEGIDAS_ANALITICAS = {
     # su contexto. Borrarla con el corte borraría el rastro de lo que se hizo
     # durante la marcha blanca, que es lo que la Ley 1116 pide poder mostrar.
     'bitacora_acciones': 'rastro de eliminaciones, cancelaciones y ediciones — no reconstruible',
+
+    # ── Fase 0 de analítica (2026-09-24, m034fotos) ─────────────────────────
+    # Siesa casi no tiene historia: contesta «cómo está ahora». Estas son las
+    # fotos diarias que se toman para que mañana exista el ayer. Ninguna tiene
+    # FK hacia una tabla operativa, justamente para que el corte no las arrastre.
+    #
+    # ¿No son del ensayo? Las fotos de Siesa QA sí lo son — pero el corte es el
+    # paso a producción y en producción se encienden DESPUÉS del corte. Lo que
+    # haya antes en producción es Siesa real, no ensayo del WMS.
+    'pedidos_historia': 'primera vez vista y salida de cada línea de pedido — pedidos_siesa la borra',
+    'fotos_siesa_corridas': 'el veredicto de completitud de cada foto — sin él las fotos no se pueden sumar',
+    'foto_ventas_lineas': 'líneas de factura por día — Siesa no guarda la foto del día',
+    'foto_stock_diaria': 'existencia y costo por día × bodega × SKU — stock_siesa solo guarda el último',
+    'foto_cartera_diaria': 'saldo abierto por documento y día — la cartera de ayer no se puede volver a pedir',
 }
 
 PROTEGIDAS_MAESTRAS = {

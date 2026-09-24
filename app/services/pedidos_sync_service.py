@@ -320,7 +320,19 @@ def _run_sync(app):
                 PedidoSiesa.query.filter(PedidoSiesa.id.in_(ids_a_borrar)).delete(synchronize_session=False)
                 eliminados = len(ids_a_borrar)
 
+            # Historia de las líneas (m034fotos). `pedidos_siesa` borra lo que
+            # se cumple y no guarda cuándo apareció; esto sí. Recibe TODO lo
+            # leído —no solo lo pendiente de NB1— y la misma bandera que el
+            # borrado de arriba: sin barrido completo no se registra ninguna
+            # salida. Corre en un SAVEPOINT y nunca levanta.
+            from app.services import pedidos_historia as _historia
+            historia = _historia.registrar_barrido(
+                all_items, paginacion_completa, co_barrido=connekta.centro_op)
+
             db.session.commit()
+
+            if paginacion_completa:
+                historia['clasificacion'] = _historia.clasificar_desaparecidas(connekta)
 
             resultado = {
                 'timestamp': datetime.utcnow().isoformat(),
@@ -335,6 +347,7 @@ def _run_sync(app):
                 'paginacion_completa': paginacion_completa,
                 'motivo_incompleta': motivo_incompleta,
                 'eliminados_detalle': borrados_detalle,
+                'historia': historia,
             }
             logger.info(f'[PEDIDOS_SYNC] OK: {resultado}')
             _sync_estado['ultimo_resultado'] = resultado

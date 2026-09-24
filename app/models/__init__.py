@@ -33,3 +33,6 @@ from app.models.registro_sync import RegistroSync
 from app.models.geo_entrega import EntregaGeo, ClienteGeo
 from app.models.evento_stock_agotado import EventoStockAgotado
 from app.models.bitacora import BitacoraAccion
+from app.models.pedido_historia import PedidoHistoria
+from app.models.fotos_siesa import (FotoCorrida, FotoVentaLinea, FotoStockDiaria,
+                                    FotoCarteraDiaria)

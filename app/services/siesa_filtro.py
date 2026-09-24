@@ -78,3 +78,27 @@ def lit(valor, campo: str = None) -> str:
             f"{s!r}. Rompería el literal ''valor'' y ensancharía la consulta. "
             f'No se limpia en silencio: se rechaza.')
     return f"''{s}''"
+
+
+def lit_fecha(dia) -> str:
+    """`''YYYYMMDD''` para comparar una columna de fecha en un filtro de Siesa.
+
+    **Con comillas, siempre.** Verificado en vivo contra Siesa QA el
+    2026-09-24 sobre `API_v2_Ventas_Facturas_DesdePedido` (CO 003):
+
+        f350_fecha >= 20260101 AND f350_fecha <= 20260923          →   0 filas
+        f350_fecha >= ''20260101'' AND f350_fecha <= ''20260923''  → 100 filas
+
+    Sin comillas Siesa no rechaza el filtro: contesta **«No se encontraron
+    registros»** (HTTP 400, que `_get` convierte en tabla vacía). Un filtro
+    mal armado se lee igual que un día sin ventas — el peor modo de fallo
+    posible para una serie que cuenta ventas. Así estaba escrito el de
+    `vigia_service._facturas_de_semana`.
+
+    `dia`: `date`/`datetime`. Un texto se rechaza: la fecha que alguien LEE
+    como día sale de `app/utils/fecha.py` (Regla 5), no de un string suelto.
+    """
+    from datetime import date as _date
+    if not isinstance(dia, _date):
+        raise ValueError(f'lit_fecha espera una fecha, recibió {type(dia).__name__}')
+    return f"''{dia.strftime('%Y%m%d')}''"

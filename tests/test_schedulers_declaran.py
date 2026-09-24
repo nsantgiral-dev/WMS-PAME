@@ -54,6 +54,9 @@ REGISTRADOS = {
     'reposicion_service': 'init_scheduler',
     'abc_service': 'init_scheduler',
     'inventario_siesa_service': 'iniciar_refresh_periodico',
+    # Fotos diarias de Siesa (2026-09-24). Nace apagado por `FOTOS_SIESA`; el
+    # interruptor vive dentro de `correr_fotos`.
+    'fotos_siesa_service': 'init_scheduler',
 }
 
 #: Fuera de `app/services/`. El barrido de vencimientos de flota vivía sin
