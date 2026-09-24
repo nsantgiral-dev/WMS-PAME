@@ -203,13 +203,15 @@ def _una_pasada(gateway, api, filtro, max_paginas):
         return Lectura(filas, max(pag - 1, 0), False, f'página {pag}: {str(e)[:300]}')
 
 
-def leer_paginado(gateway, api, filtro, clave, max_paginas=MAX_PAGINAS) -> Lectura:
+def leer_paginado(gateway, api, filtro, clave, max_paginas=None) -> Lectura:
     """Lee todas las páginas y deduplica por `clave(fila)`.
 
     Filas repetidas en una pasada = paginación inestable: las que se repiten
     empujaron a otras fuera. Se hace una segunda pasada; si viene limpia se usa
     esa, si no se unen las dos y la lectura queda **incompleta**.
     """
+    max_paginas = max_paginas or MAX_PAGINAS
+
     def _dedup(filas):
         vistas = {}
         for f in filas:
