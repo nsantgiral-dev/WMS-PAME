@@ -3047,10 +3047,14 @@ let _PLAN_RUTA_ID = null;
  */
 async function rutaForzarCierre(id) {
   if (!confirm('¿Forzar el cierre de esta ruta?\n\nLas paradas sin gestionar quedarán registradas como RECHAZADAS automáticamente.\nEsta acción es irreversible.')) return;
+  // El servidor exige el motivo (queda en la bitácora con quién forzó).
+  const motivo = (prompt('Motivo del cierre forzado (obligatorio):') || '').trim();
+  if (!motivo) { alerta('El motivo es obligatorio para forzar el cierre', 'error'); return; }
   try {
     const r = await fetch(API + `/api/rutas/${id}/forzar-cierre`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + TOKEN }
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + TOKEN },
+      body: JSON.stringify({ motivo })
     });
     const d = await r.json();
     if (r.ok) {

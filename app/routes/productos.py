@@ -193,9 +193,15 @@ def actualizar_producto(id):
 @productos_bp.route('/<int:id>', methods=['DELETE'])
 @jwt_required()
 def eliminar_producto(id):
-    if not _solo_admin():
+    admin = _solo_admin()
+    if not admin:
         return jsonify({'error': 'Solo admin puede desactivar productos'}), 403
+    from app.services.bitacora import registrar_accion
     producto = Producto.query.get_or_404(id)
+    if producto.activo:
+        registrar_accion('DESACTIVAR', producto, usuario_id=admin.id,
+                         motivo=(request.get_json(silent=True) or {}).get('motivo'),
+                         antes={'activo': True}, despues={'activo': False})
     producto.activo = False
     db.session.commit()
     return jsonify({'mensaje': 'Producto desactivado'}), 200

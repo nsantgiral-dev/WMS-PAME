@@ -83,10 +83,11 @@ def crear_cuenta_conductor(id):
 @rutas_bp.route('/conductores/<int:id>', methods=['PUT'])
 @jwt_required()
 def actualizar_conductor(id):
-    if not _solo_admin():
+    admin = _solo_admin()
+    if not admin:
         return jsonify({'error': 'Solo admin puede modificar conductores'}), 403
     try:
-        c = RutaService.actualizar_conductor(id, request.get_json())
+        c = RutaService.actualizar_conductor(id, request.get_json(), usuario_id=admin.id)
     except LookupError as e:
         return jsonify({'error': str(e)}), 404
     except ValueError as e:
@@ -97,10 +98,13 @@ def actualizar_conductor(id):
 @rutas_bp.route('/conductores/<int:id>', methods=['DELETE'])
 @jwt_required()
 def desactivar_conductor(id):
-    if not _solo_admin():
+    admin = _solo_admin()
+    if not admin:
         return jsonify({'error': 'Solo admin puede desactivar conductores'}), 403
     try:
-        RutaService.desactivar_conductor(id)
+        RutaService.desactivar_conductor(
+            id, usuario_id=admin.id,
+            motivo=(request.get_json(silent=True) or {}).get('motivo'))
     except LookupError as e:
         return jsonify({'error': str(e)}), 404
     return jsonify({'ok': True}), 200
@@ -135,10 +139,11 @@ def crear_vehiculo():
 @rutas_bp.route('/vehiculos/<int:id>', methods=['PUT'])
 @jwt_required()
 def actualizar_vehiculo(id):
-    if not _solo_admin():
+    admin = _solo_admin()
+    if not admin:
         return jsonify({'error': 'Solo admin puede modificar vehículos'}), 403
     try:
-        v = RutaService.actualizar_vehiculo(id, request.get_json())
+        v = RutaService.actualizar_vehiculo(id, request.get_json(), usuario_id=admin.id)
     except LookupError as e:
         return jsonify({'error': str(e)}), 404
     except ValueError as e:
@@ -149,10 +154,13 @@ def actualizar_vehiculo(id):
 @rutas_bp.route('/vehiculos/<int:id>', methods=['DELETE'])
 @jwt_required()
 def desactivar_vehiculo(id):
-    if not _solo_admin():
+    admin = _solo_admin()
+    if not admin:
         return jsonify({'error': 'Solo admin puede desactivar vehículos'}), 403
     try:
-        RutaService.desactivar_vehiculo(id)
+        RutaService.desactivar_vehiculo(
+            id, usuario_id=admin.id,
+            motivo=(request.get_json(silent=True) or {}).get('motivo'))
     except LookupError as e:
         return jsonify({'error': str(e)}), 404
     return jsonify({'ok': True}), 200
@@ -221,10 +229,11 @@ def crear_maestra():
 @rutas_bp.route('/maestras/<int:id>', methods=['PUT'])
 @jwt_required()
 def actualizar_maestra(id):
-    if not _solo_admin():
+    admin = _solo_admin()
+    if not admin:
         return jsonify({'error': 'Solo admin puede modificar rutas maestras'}), 403
     try:
-        m = RutaService.actualizar_maestra(id, request.get_json())
+        m = RutaService.actualizar_maestra(id, request.get_json(), usuario_id=admin.id)
     except LookupError as e:
         return jsonify({'error': str(e)}), 404
     except ValueError as e:
@@ -235,10 +244,13 @@ def actualizar_maestra(id):
 @rutas_bp.route('/maestras/<int:id>', methods=['DELETE'])
 @jwt_required()
 def eliminar_maestra(id):
-    if not _solo_admin():
+    admin = _solo_admin()
+    if not admin:
         return jsonify({'error': 'Solo admin puede eliminar rutas maestras'}), 403
     try:
-        RutaService.eliminar_maestra(id)
+        RutaService.eliminar_maestra(
+            id, usuario_id=admin.id,
+            motivo=(request.get_json(silent=True) or {}).get('motivo'))
     except LookupError as e:
         return jsonify({'error': str(e)}), 404
     except ConflictError as e:
@@ -486,7 +498,7 @@ def liquidar_ruta(id):
     if not _solo_admin():
         return jsonify({'error': 'Solo admin puede liquidar rutas'}), 403
     try:
-        resultado = RutaService.liquidar_ruta(id)
+        resultado = RutaService.liquidar_ruta(id, usuario_id=_uid())
     except LookupError as e:
         return jsonify({'error': str(e)}), 404
     except ValueError as e:
@@ -503,7 +515,8 @@ def forzar_cierre_ruta(id):
     if not uid:
         return jsonify({'error': 'Token inválido'}), 401
     try:
-        resultado = RutaService.forzar_cierre_ruta(id, uid)
+        resultado = RutaService.forzar_cierre_ruta(
+            id, uid, motivo=(request.get_json(silent=True) or {}).get('motivo'))
     except LookupError as e:
         return jsonify({'error': str(e)}), 404
     except ValueError as e:
@@ -1454,7 +1467,7 @@ def liquidar_completo(id):
 
     # Step 3: Set estado_financiero = LIQUIDADA
     try:
-        resultado_liquidar = RutaService.liquidar_ruta(id)
+        resultado_liquidar = RutaService.liquidar_ruta(id, usuario_id=uid)
     except (LookupError, ValueError) as e:
         errores.append(f'Error al liquidar ruta: {e}')
         resultado_liquidar = {}

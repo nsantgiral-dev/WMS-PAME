@@ -360,7 +360,9 @@ def listar_juicios():
         return jsonify({'error': 'Solo admin puede ver juicios'}), 403
     from app.models.juicio_temporada import JuicioTemporada
     temporada = request.args.get('temporada', '2026-27')
-    js = JuicioTemporada.query.filter_by(temporada=temporada).all()
+    # Un juicio retractado queda ANULADO, no borrado: no se lista como vigente.
+    js = (JuicioTemporada.query.filter_by(temporada=temporada)
+          .filter(JuicioTemporada.anulado_en.is_(None)).all())
     return jsonify({
         'temporada': temporada,
         'juicios': {j.referencia: j.to_dict() for j in js},
@@ -379,8 +381,10 @@ def guardar_juicio():
     if not _es_admin_o_jefe():
         return jsonify({'error': 'Solo admin puede registrar juicios'}), 403
 
+    from datetime import datetime as _dt
     from app.models.juicio_temporada import JuicioTemporada
     from app.extensions import db
+    from app.services.bitacora import registrar_accion, foto
 
     d = request.get_json() or {}
     ref = (d.get('referencia') or '').strip()
@@ -391,25 +395,46 @@ def guardar_juicio():
     cantidad = d.get('cantidad_juicio')
 
     j = JuicioTemporada.query.filter_by(temporada=temporada, referencia=ref).first()
+    uid = _get_uid()
+    _CAMPOS_JUICIO = ['cantidad_juicio', 'autor_id', 'autor_nombre', 'nota',
+                      'q_modelo', 'costo_unitario', 'distribucion',
+                      'fecha_actualizacion', 'anulado_en']
 
-    # Cantidad nula = borrar el juicio (el comité se retractó)
+    # Cantidad nula = el comité se retractó. Se ANULA, no se borra: la tabla es
+    # analítica protegida («no recalculable») y el juicio retirado —con su
+    # autor y su foto del modelo— también es un dato para enero de 2027.
+    # `borrado: True` se conserva en la respuesta por compatibilidad con la
+    # pantalla: para ella el juicio dejó de estar vigente.
     if cantidad is None or cantidad == '':
-        if j:
-            db.session.delete(j)
+        if j and j.anulado_en is None:
+            antes = foto(j, _CAMPOS_JUICIO)
+            j.anulado_en = _dt.utcnow()
+            j.anulado_por_id = uid
+            j.anulado_motivo = (d.get('motivo') or '').strip() or None
+            registrar_accion('ANULAR', j, usuario_id=uid, motivo=j.anulado_motivo,
+                             entidad_codigo=f'{temporada}/{ref}', antes=antes,
+                             despues=foto(j, ['anulado_en', 'anulado_por_id']))
             db.session.commit()
-        return jsonify({'ok': True, 'borrado': True}), 200
+        return jsonify({'ok': True, 'borrado': True, 'anulado': True}), 200
 
     try:
         cantidad = int(cantidad)
     except (TypeError, ValueError):
         return jsonify({'error': 'cantidad_juicio debe ser entero'}), 400
 
+    # Un juicio ya registrado que cambia se EDITA con rastro: el upsert pisaba
+    # la cantidad y el autor, y el juicio anterior desaparecía.
+    antes = foto(j, _CAMPOS_JUICIO) if j is not None else None
     if j is None:
         j = JuicioTemporada(temporada=temporada, referencia=ref)
         db.session.add(j)
 
     j.cantidad_juicio = cantidad
-    j.autor_id = _get_uid()
+    j.autor_id = uid
+    # Re-registrar un juicio anulado lo vuelve vigente.
+    j.anulado_en = None
+    j.anulado_por_id = None
+    j.anulado_motivo = None
     j.autor_nombre = d.get('autor_nombre') or j.autor_nombre
     j.nota = d.get('nota') or j.nota
     # Foto del modelo en el momento del juicio
@@ -419,6 +444,16 @@ def guardar_juicio():
         j.costo_unitario = d.get('costo_unitario')
     if d.get('distribucion'):
         j.distribucion = d.get('distribucion')
+
+    if antes is not None:
+        despues = foto(j, _CAMPOS_JUICIO)
+        cambios = [k for k in _CAMPOS_JUICIO
+                   if k != 'fecha_actualizacion' and antes.get(k) != despues.get(k)]
+        if cambios:
+            registrar_accion('EDITAR', j, usuario_id=uid, motivo=d.get('motivo'),
+                             entidad_codigo=f'{temporada}/{ref}',
+                             antes={k: antes[k] for k in cambios + ['fecha_actualizacion']},
+                             despues={k: despues[k] for k in cambios})
 
     db.session.commit()
     return jsonify({'ok': True, 'juicio': j.to_dict()}), 200

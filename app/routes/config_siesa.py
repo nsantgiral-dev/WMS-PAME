@@ -64,9 +64,17 @@ def actualizar_mapeo(id):
 @config_siesa_bp.route('/mapeo-unidades/<int:id>', methods=['DELETE'])
 @jwt_required()
 def eliminar_mapeo(id):
-    if not _solo_admin():
+    admin = _solo_admin()
+    if not admin:
         return jsonify({'error': 'Solo admin puede eliminar mapeos'}), 403
+    from app.services.bitacora import registrar_accion, foto
     m = SiesaMapeoUnidades.query.get_or_404(id)
+    # Configuración, no operación: motivo opcional, pero la fila entera queda
+    # escrita — un mapeo borrado deja productos sin unidad de negocio.
+    registrar_accion('ELIMINAR', m, usuario_id=admin.id,
+                     entidad_codigo=m.tipo_inv_siesa,
+                     motivo=(request.get_json(silent=True) or {}).get('motivo'),
+                     antes=foto(m))
     db.session.delete(m)
     db.session.commit()
     return jsonify({'ok': True}), 200

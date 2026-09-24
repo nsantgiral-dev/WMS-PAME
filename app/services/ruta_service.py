@@ -15,6 +15,7 @@ from app.models.vehiculo import Vehiculo
 from app.models.ruta_maestra import RutaMaestra, RutaMaestraParada
 from app.models.ruta_despacho import RutaDespacho, EstadoRutaDespacho, EstadoFinancieroRuta
 from app.utils.fecha import dia_operativo as _dia_operativo
+from app.services.bitacora import registrar_accion, motivo_obligatorio, foto as foto_fila
 
 logger = logging.getLogger(__name__)
 
@@ -137,10 +138,11 @@ class RutaService:
         return conductor, usuario
 
     @staticmethod
-    def actualizar_conductor(id: int, data: dict) -> Conductor:
+    def actualizar_conductor(id: int, data: dict, usuario_id: int = None) -> Conductor:
         c = Conductor.query.get(id)
         if not c:
             raise LookupError('Conductor no encontrado')
+        _activo_antes = c.activo
         if 'nombre'     in data: c.nombre     = (data['nombre'] or '').strip()
         if 'telefono'   in data: c.telefono   = (data['telefono'] or '').strip() or None
         if 'activo' in data:
@@ -151,16 +153,35 @@ class RutaService:
                 if u:
                     u.activo = c.activo
         if 'usuario_id' in data: c.usuario_id = data['usuario_id'] or None
+        RutaService._registrar_cambio_de_activo(c, _activo_antes, usuario_id,
+                                                data.get('motivo'))
         db.session.commit()
         db.session.refresh(c)
         return c
 
     @staticmethod
-    def desactivar_conductor(id: int) -> None:
+    def _registrar_cambio_de_activo(fila, activo_antes, usuario_id, motivo) -> None:
+        """Baja o reactivación de un maestro: quién, cuándo y por qué.
+
+        Una sola función para conductores y vehículos, por las dos puertas
+        (DELETE y PUT con `activo`). Sin cambio de `activo`, no registra nada:
+        editar un teléfono no es una baja.
+        """
+        if bool(activo_antes) == bool(fila.activo):
+            return
+        registrar_accion(
+            'DESACTIVAR' if not fila.activo else 'EDITAR', fila,
+            usuario_id=usuario_id, motivo=motivo,
+            antes={'activo': bool(activo_antes)}, despues={'activo': bool(fila.activo)})
+
+    @staticmethod
+    def desactivar_conductor(id: int, usuario_id: int = None, motivo: str = None) -> None:
         c = Conductor.query.get(id)
         if not c:
             raise LookupError('Conductor no encontrado')
+        _activo_antes = c.activo
         c.activo = False
+        RutaService._registrar_cambio_de_activo(c, _activo_antes, usuario_id, motivo)
         db.session.commit()
 
     # ── Vehículos ─────────────────────────────────────────────────────
@@ -188,23 +209,28 @@ class RutaService:
         return v
 
     @staticmethod
-    def actualizar_vehiculo(id: int, data: dict) -> Vehiculo:
+    def actualizar_vehiculo(id: int, data: dict, usuario_id: int = None) -> Vehiculo:
         v = Vehiculo.query.get(id)
         if not v:
             raise LookupError('Vehículo no encontrado')
+        _activo_antes = v.activo
         if 'tipo'         in data: v.tipo         = data['tipo'].strip()
         if 'capacidad_kg' in data: v.capacidad_kg = data['capacidad_kg'] or None
         if 'codigo_siesa' in data: v.codigo_siesa = (data['codigo_siesa'] or '').strip() or None
         if 'activo'       in data: v.activo       = bool(data['activo'])
+        RutaService._registrar_cambio_de_activo(v, _activo_antes, usuario_id,
+                                                data.get('motivo'))
         db.session.commit()
         return v
 
     @staticmethod
-    def desactivar_vehiculo(id: int) -> None:
+    def desactivar_vehiculo(id: int, usuario_id: int = None, motivo: str = None) -> None:
         v = Vehiculo.query.get(id)
         if not v:
             raise LookupError('Vehículo no encontrado')
+        _activo_antes = v.activo
         v.activo = False
+        RutaService._registrar_cambio_de_activo(v, _activo_antes, usuario_id, motivo)
         db.session.commit()
 
     # ── Rutas Maestras ───────────────────────────────────────────────
@@ -255,15 +281,19 @@ class RutaService:
         return m
 
     @staticmethod
-    def actualizar_maestra(id: int, data: dict) -> RutaMaestra:
+    def actualizar_maestra(id: int, data: dict, usuario_id: int = None) -> RutaMaestra:
         m = RutaMaestra.query.get(id)
         if not m:
             raise LookupError('Ruta maestra no encontrada')
+        _campos = ['nombre', 'tipo_ruta', 'activa']
+        antes = {**foto_fila(m, _campos), 'paradas': [p.municipio for p in m.paradas]}
         if 'nombre'    in data: m.nombre    = data['nombre'].strip()
         if 'tipo_ruta' in data: m.tipo_ruta = data['tipo_ruta']
         if 'activa'    in data: m.activa    = bool(data['activa'])
 
         if 'paradas' in data:
+            # Las paradas se reescriben enteras: las viejas quedan en el
+            # `antes` del registro EDITAR de abajo.
             for p in m.paradas:
                 db.session.delete(p)
             db.session.flush()
@@ -276,17 +306,29 @@ class RutaService:
                         municipio=nombre,
                         orden=i + 1,
                     ))
+        db.session.flush()
+        db.session.expire(m, ['paradas'])
+        despues = {**foto_fila(m, _campos), 'paradas': [p.municipio for p in m.paradas]}
+        cambios = [k for k in antes if antes[k] != despues[k]]
+        if cambios:
+            registrar_accion(
+                'DESACTIVAR' if cambios == ['activa'] and not m.activa else 'EDITAR',
+                m, usuario_id=usuario_id, motivo=data.get('motivo'),
+                antes={k: antes[k] for k in cambios},
+                despues={k: despues[k] for k in cambios})
         db.session.commit()
         db.session.refresh(m)
         return m
 
     @staticmethod
-    def eliminar_maestra(id: int) -> None:
+    def eliminar_maestra(id: int, usuario_id: int = None, motivo: str = None) -> None:
         m = RutaMaestra.query.get(id)
         if not m:
             raise LookupError('Ruta maestra no encontrada')
         if RutaDespacho.query.filter_by(ruta_maestra_id=id).first():
             raise ConflictError('No se puede eliminar: la ruta tiene viajes asociados. Desactívala en su lugar.')
+        registrar_accion('ELIMINAR', m, usuario_id=usuario_id, motivo=motivo,
+                         antes={**foto_fila(m), 'paradas': [foto_fila(p) for p in m.paradas]})
         for p in m.paradas:
             db.session.delete(p)
         db.session.delete(m)
@@ -1381,6 +1423,15 @@ class RutaService:
                     'nota crédito. Las observaciones y la foto sí se pueden '
                     'editar.')
 
+        # Re-confirmar pisa montos, estado y `fecha_confirmacion`: lo que
+        # decía antes queda en la bitácora (EDITAR), no solo quién editó.
+        _CAMPOS_PARADA = ('estado_entrega', 'forma_pago', 'monto_cobrado',
+                          'monto_descuento', 'motivo_descuento', 'motivo_rechazo',
+                          'observaciones', 'bultos_rechazados_ids',
+                          'items_entregados', 'fecha_confirmacion',
+                          'confirmado_por', 'editado_por')
+        antes_parada = foto_fila(recaudo, list(_CAMPOS_PARADA)) if recaudo else None
+
         if not recaudo:
             recaudo = RecaudoEntrega(
                 ruta_id=ruta_id,
@@ -1431,6 +1482,19 @@ class RutaService:
             recaudo.items_entregados = items_limpios
         elif estado_entrega == EstadoEntrega.ENTREGADO:
             recaudo.items_entregados = None
+
+        if es_edicion:
+            despues_parada = foto_fila(recaudo, list(_CAMPOS_PARADA))
+            _cambios = [k for k in _CAMPOS_PARADA
+                        if k not in ('fecha_confirmacion', 'editado_por')
+                        and antes_parada.get(k) != despues_parada.get(k)]
+            registrar_accion(
+                'EDITAR', recaudo, usuario_id=usuario_id,
+                entidad_codigo=(bultos_tarea[0].tarea.numero_pedido_siesa
+                                if bultos_tarea[0].tarea else None),
+                motivo=(data.get('motivo_edicion') or None),
+                antes={k: antes_parada[k] for k in _cambios + ['fecha_confirmacion', 'editado_por']},
+                despues={k: despues_parada[k] for k in _cambios + ['fecha_confirmacion', 'editado_por']})
 
         db.session.commit()
 
@@ -1533,7 +1597,26 @@ class RutaService:
         }
 
     @staticmethod
-    def liquidar_ruta(id: int) -> dict:
+    def _marcar_liquidada(ruta, usuario_id: int = None, motivo: str = None) -> None:
+        """La ruta pasa a LIQUIDADA **con fecha y autor**.
+
+        Única función que escribe `EstadoFinancieroRuta.LIQUIDADA`: antes lo
+        hacían dos sitios y ninguno guardaba cuándo ni quién. Una liquidación
+        que se repite no pisa la primera (ni la fecha ni el autor).
+        """
+        antes = foto_fila(ruta, ['estado_financiero', 'liquidada_en', 'liquidada_por_id'])
+        ruta.estado_financiero = EstadoFinancieroRuta.LIQUIDADA
+        if not ruta.liquidada_en:
+            ruta.liquidada_en = datetime.utcnow()
+            ruta.liquidada_por_id = usuario_id
+        registrar_accion(
+            'LIQUIDAR', ruta, usuario_id=usuario_id, motivo=motivo,
+            entidad_codigo=f'RUTA-{ruta.id}',
+            antes=antes,
+            despues=foto_fila(ruta, ['estado_financiero', 'liquidada_en', 'liquidada_por_id']))
+
+    @staticmethod
+    def liquidar_ruta(id: int, usuario_id: int = None) -> dict:
         ruta = RutaDespacho.query.get(id)
         if not ruta:
             raise LookupError('Ruta no encontrada')
@@ -1548,7 +1631,7 @@ class RutaService:
                 f'Faltan {sin_gestionar} parada{"s" if sin_gestionar != 1 else ""} por gestionar antes de liquidar.'
             )
 
-        ruta.estado_financiero = EstadoFinancieroRuta.LIQUIDADA
+        RutaService._marcar_liquidada(ruta, usuario_id)
 
         # PARCIAL/RECHAZADO caen solos al módulo de Devoluciones al liquidar —
         # ver LiquidacionService.crear_devoluciones_pendientes_ruta. RC/DC
@@ -1566,12 +1649,22 @@ class RutaService:
         }
 
     @staticmethod
-    def forzar_cierre_ruta(id: int, admin_id: int) -> dict:
+    def forzar_cierre_ruta(id: int, admin_id: int, motivo: str = None) -> dict:
+        """Cierra una ruta EN_TRANSITO dando por rechazadas las paradas sin gestionar.
+
+        Motivo obligatorio: es un FORZAR que decide por el conductor. Antes
+        pisaba `fecha_cierre` (que es cuándo SALIÓ la ruta) con la hora del
+        forzado y dejaba `fecha_entregada` en blanco; ahora la salida se
+        conserva y el cierre queda en `fecha_entregada`.
+        """
+        motivo = motivo_obligatorio(motivo, 'forzar el cierre de una ruta')
         ruta = RutaDespacho.query.get(id)
         if not ruta:
             raise LookupError('Ruta no encontrada')
         if ruta.estado != EstadoRutaDespacho.EN_TRANSITO:
             raise ValueError(f'La ruta debe estar EN_TRANSITO para forzar cierre (estado: {ruta.estado})')
+        antes_ruta = foto_fila(ruta, ['estado', 'estado_financiero', 'fecha_cierre',
+                                 'fecha_entregada'])
 
         tareas = ruta.tareas_unicas()
         recaudos_existentes = {r.tarea_id for r in RecaudoEntrega.query.filter_by(ruta_id=id).all()}
@@ -1601,8 +1694,16 @@ class RutaService:
             auto_cerradas += 1
 
         ruta.estado = EstadoRutaDespacho.ENTREGADA
-        ruta.estado_financiero = EstadoFinancieroRuta.LIQUIDADA
-        ruta.fecha_cierre = ahora
+        if not ruta.fecha_cierre:
+            ruta.fecha_cierre = ahora
+        ruta.fecha_entregada = ahora
+        registrar_accion(
+            'FORZAR', ruta, usuario_id=admin_id, motivo=motivo,
+            entidad_codigo=f'RUTA-{ruta.id}',
+            antes=antes_ruta,
+            despues={**foto_fila(ruta, ['estado', 'fecha_cierre', 'fecha_entregada']),
+                     'paradas_auto_rechazadas': [t.id for t in pendientes]})
+        RutaService._marcar_liquidada(ruta, admin_id, motivo=f'Cierre forzado: {motivo}')
         _ruta_id = ruta.id
         db.session.flush()
 
