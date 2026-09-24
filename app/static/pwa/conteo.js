@@ -440,13 +440,14 @@ function _motivoAjusteTxt(codigo) {
 }
 
 /**
- * Render a small colored badge indicating the conteo type (PICKING/MANUAL).
+ * Render a small colored badge indicating the conteo type (auditoría por
+ * faltante de picking / manual) — con la palabra del tablero, no el tipo.
  * @param {Object} s - Conteo session object.
  * @returns {string} HTML badge string or empty string.
  */
 function _tipoTag(s) {
   if (s.tipo === 'EXCEPCION_PICKING')
-    return `<span style="background:#1A0606;color:#F87171;font-size:9px;font-weight:700;padding:1px 6px;border-radius:6px;margin-left:3px;">PICKING</span>`;
+    return `<span style="background:#1A0606;color:#F87171;font-size:9px;font-weight:700;padding:1px 6px;border-radius:6px;margin-left:3px;">AUDITORÍA</span>`;
   if (s.tipo === 'MANUAL')
     return `<span style="background:#0B3038;color:#1E8395;font-size:9px;font-weight:700;padding:1px 6px;border-radius:6px;margin-left:3px;">MANUAL</span>`;
   return '';
