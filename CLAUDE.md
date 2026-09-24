@@ -3641,6 +3641,11 @@ datos); la salud del kardex en QA será siempre `SIN_DATOS` (la consulta da
 test_ningun_endpoint_nuevo_sin_consumidor` queda rojo con las tres rutas
 porque el shell (`analitica.js`, con `AN_VISTAS`) lo escribe otro agente;
 verificado que con la tabla del contrato presente el guard pasa.
+Las dos vistas quedan declaradas en `tests/test_permisos_por_pantalla.py::PANTALLAS`
+(rol `admin`); el shell `analitica.js` tendrá que declararse igual.
+
+Suite completa en este worktree (2026-09-24): **7256 passed**, 1 failed (el
+guard de consumidor de arriba, que espera al shell), 5 skipped, 19 xfailed.
 
 Trinquete: `tests/test_analitica_salud.py` (68 tests: servicio con datos que
 distinguen los cinco veredictos, endpoints, render real en Node con `util.js`;
