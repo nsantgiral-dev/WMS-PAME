@@ -480,3 +480,482 @@ class TestElOperarioCuenta:
         assert t['id'] == sid
         st, r = b.confirmar(b.op_a, sid, 0, cero=True)
         assert st == 200 and r['resultado'] == 'MATCH', r
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 3 · Dentro de tolerancia
+# ═════════════════════════════════════════════════════════════════════════════
+
+class TestDentroDeTolerancia:
+
+    def test_se_ajusta_sin_segundo_conteo_y_el_tope_decide_si_sale_solo(self, bodega, monkeypatch):
+        from app.models.conteo import EstadoConteo
+        b = bodega
+        # Tolerancia de valor holgada: acá decide el tope del AUTOMÁTICO, no la tolerancia.
+        monkeypatch.setenv('CONTEO_TOLERANCIA_TOPE_VALOR', '1000000')
+        monkeypatch.setenv('CONTEO_TOPE_AUTOAJUSTE', '2500')
+        chico = b.hueco('C', teorico=100)          # C: max(1 und, 5 %) = 5 und
+        grande = b.hueco('C', teorico=100)
+        b.programar(b.admin, 'C')
+
+        # −2 × $1.000 = $2.000 ≤ tope $2.500 → sale solo.
+        sid = b.raiz_de(chico).id
+        r = b.contar(b.op_a, sid, 98)
+        assert r['resultado'] == 'DENTRO_TOLERANCIA' and r['auto_encolado'] is True, r
+        assert r['mensaje'] == 'Conteo registrado — gracias.'
+        s = b.sesion(sid)
+        assert (s.estado, s.ajuste_por_tolerancia, s.hijo_conteo) == (EstadoConteo.AJUSTANDO, True, None)
+        assert s.aprobador_id is None and s.tolerancia_primer_conteo == 'DENTRO'
+        jobs = b.jobs_ajuste(sid)
+        assert len(jobs) == 1
+        p = json.loads(jobs[0].payload)
+        assert (p['motivo_codigo'], p['cantidad'], p['bodega'], p['centro_op']) == ('AJ-SAL', 2, 'NB1', '003')
+
+        # −3 × $1.000 = $3.000 > tope → dentro de tolerancia, pero NO sale solo.
+        sid2 = b.raiz_de(grande).id
+        r = b.contar(b.op_a, sid2, 97)
+        assert r['resultado'] == 'DENTRO_TOLERANCIA' and r['auto_encolado'] is False, r
+        s2 = b.sesion(sid2)
+        assert (s2.estado, s2.ajuste_por_tolerancia) == (EstadoConteo.DESCUADRE, True)
+        assert b.jobs_ajuste(sid2) == []
+        # El líder lo ve como aprobable, con su motivo de «no salió solo».
+        st, lista = b.get(b.supervisor, f'/api/conteo/?estado=DESCUADRE&almacen_id={b.almacen.id}')
+        fila = next(x for x in lista['sesiones'] if x['id'] == sid2)
+        assert fila['no_sale_solo']['codigo'] == 'SUPERA_TOPE', fila
+        st, r = b.put(b.supervisor, f'/api/conteo/{sid2}/ajustar')
+        assert st == 202, r
+        assert len(b.jobs_ajuste(sid2)) == 1
+
+    def test_la_respuesta_al_operario_es_ciega_aunque_no_salga_solo(self, bodega, monkeypatch):
+        """El operario solo recibe «Conteo registrado». Ni el valor del ajuste
+        ni las cifras de Siesa que explican por qué no salió solo."""
+        b = bodega
+        monkeypatch.setenv('CONTEO_TOLERANCIA_TOPE_VALOR', '1000000')
+        monkeypatch.setenv('CONTEO_TOPE_AUTOAJUSTE', '2500')
+        sku = b.hueco('C', teorico=100, pos=3, salida_sin_conf=5)   # salidas que no son POS
+        otro = b.hueco('C', teorico=100)
+        b.programar(b.admin, 'C')
+        r = b.contar(b.op_a, b.raiz_de(sku).id, 98)
+        assert r['resultado'] == 'DENTRO_TOLERANCIA', r
+        assert_ciego(r, 100, 103, 98, 2, 3, 5)
+        r = b.contar(b.op_a, b.raiz_de(otro).id, 97)
+        assert r['resultado'] == 'DENTRO_TOLERANCIA', r
+        assert_ciego(r, 100, 97, 3, 3000, '3.000', 2500, '2.500')
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 4 · Fuera de tolerancia: recuento propio, doble ciego, definitivo y firma
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _cadena_hasta_definitivo(b, sku, cc1=45, cc2=47):
+    """CC1 (Ana, con su recuento propio) ≠ CC2 (Beto) → CC3 en la cola del
+    supervisor. Todo por HTTP. Devuelve `(raiz_id, cc2_id, cc3_id)`."""
+    raiz = b.raiz_de(sku).id
+    r = b.contar(b.op_a, raiz, cc1)
+    assert r['resultado'] == 'RECONTAR_TU', r
+    assert set(r) == {'resultado', 'mensaje', 'sesion_id'}, r
+    st, r = b.confirmar(b.op_a, raiz, cc1)
+    assert st == 200 and r['resultado'] == 'SEGUNDO_CONTEO', r
+    cc2_id = r['segundo_conteo_id']
+    assert b.sesion(cc2_id).operario_id == b.op_b.id
+    st, t = b.get(b.op_b, '/api/mobile/tarea-actual')
+    assert t['id'] == cc2_id, t
+    st, r = b.confirmar(b.op_b, cc2_id, cc2)
+    assert st == 200 and r['resultado'] == 'TERCER_CONTEO', r
+    return raiz, cc2_id, r['tercer_conteo_id']
+
+
+class TestFueraDeTolerancia:
+
+    def test_recuento_propio_doble_ciego_definitivo_y_aprobacion(self, bodega, monkeypatch):
+        from app.models.conteo import EstadoConteo
+        b = bodega
+        monkeypatch.setenv('CONTEO_TOPE_APROBACION_JEFE', '0')
+        sku = b.hueco('A', teorico=50)            # A: 0 und / 0,5 % → 45 cae fuera
+        b.programar(b.admin, 'A')
+        raiz = b.raiz_de(sku).id
+
+        # CC1: fuera de tolerancia → RECONTAR_TU, a ciegas, al mismo operario.
+        st, t = b.get(b.op_a, '/api/mobile/tarea-actual')
+        assert t['id'] == raiz
+        st, r = b.confirmar(b.op_a, raiz, 45)
+        assert st == 200 and r['resultado'] == 'RECONTAR_TU', r
+        assert set(r) == {'resultado', 'mensaje', 'sesion_id'}, r
+        assert_ciego(r, 50, 45, 5)
+        s = b.sesion(raiz)
+        assert (s.estado, s.operario_id, s.cantidad_fisica) == (EstadoConteo.EN_PROCESO, b.op_a.id, None)
+        # La cola se la devuelve a ella, desde cero.
+        st, t = b.get(b.op_a, '/api/mobile/tarea-actual')
+        assert (t['id'], t['cantidad_escaneada']) == (raiz, 0), t
+        # Recuenta lo mismo: ahora sí, segundo conteo de OTRA persona.
+        st, r = b.confirmar(b.op_a, raiz, 45)
+        assert st == 200 and r['resultado'] == 'SEGUNDO_CONTEO', r
+        assert_ciego(r, 50, 45, 5)
+        cc2 = r['segundo_conteo_id']
+
+        # Doble ciego: Ana no puede tomar, abrir, escanear ni cerrar el CC2.
+        st, r = b.abrir(b.op_a, cc2)
+        assert st == 400, r
+        st, r = b.post(b.op_a, '/api/mobile/escanear', {
+            'codigo': sku, 'tarea_id': cc2, 'tipo': 'CONTEO', 'total_previo': 0})
+        assert st == 400, r
+        st, r = b.confirmar(b.op_a, cc2, 45)
+        assert st == 400, r
+        st, t = b.get(b.op_a, '/api/mobile/tarea-actual')
+        assert t.get('sin_tareas'), t
+        # Y el operario que lo recibe lo ve ciego: ni la cifra de Siesa ni la de Ana.
+        st, t = b.get(b.op_b, '/api/mobile/tarea-actual')
+        assert t['id'] == cc2 and t['cantidad_escaneada'] == 0, t
+        assert_ciego(t, 50, 45)
+        st, r = b.confirmar(b.op_b, cc2, 47)
+        assert st == 200 and r['resultado'] == 'TERCER_CONTEO', r
+        assert_ciego(r, 50, 45, 47)
+        cc3 = r['tercer_conteo_id']
+        assert b.sesion(raiz).estado == EstadoConteo.TERCER_CONTEO
+
+        # El CC3 no es de nadie del piso: ni en la cola, ni por id.
+        for op in (b.op_a, b.op_b, b.op_c):
+            st, t = b.get(op, '/api/mobile/tarea-actual')
+            assert t.get('sin_tareas'), (op.email, t)
+            st, r = b.abrir(op, cc3)
+            assert st == 400, r
+        st, r = b.get(b.op_c, '/api/conteo/definitivos')
+        assert st == 403
+        # El supervisor lo ve en su cola, ciego.
+        st, cola = b.get(b.supervisor, f'/api/conteo/definitivos?almacen_id={b.almacen.id}')
+        assert st == 200 and [x['id'] for x in cola['pendientes']] == [cc3], cola
+        assert_ciego(cola, 50, 45, 47)
+        st, t = b.abrir(b.supervisor, cc3)
+        assert st == 200 and t['cantidad_contada'] == 0, t
+        assert_ciego(t, 50, 45, 47)
+        st, r = b.post(b.supervisor, '/api/mobile/escanear', {
+            'codigo': sku, 'tarea_id': cc3, 'tipo': 'CONTEO', 'total_previo': 0})
+        assert st == 200 and r['cantidad_contada'] == 1, r
+        st, r = b.post(b.supervisor, '/api/mobile/conteo/total', {'tarea_id': cc3, 'total_acumulado': 48})
+        assert st == 200, r
+        st, r = b.confirmar(b.supervisor, cc3, 48)
+        assert st == 200 and r['resultado'] == 'DESCUADRE' and r['raiz_id'] == raiz, r
+        assert r['ajuste_bloqueado'] is None, r
+        s = b.sesion(raiz)
+        assert (s.estado, s.cantidad_fisica, s.diferencia) == (EstadoConteo.DESCUADRE, 48, -2)
+        assert b.jobs_ajuste(raiz) == []
+
+        # El hijo nunca se aprueba: saldría dos veces a Siesa.
+        st, r = b.put(b.supervisor, f'/api/conteo/{cc3}/ajustar')
+        assert st == 400, r
+        # Jefe con tope $0: 403, y el tablero no le pinta el botón.
+        st, t = b.get(b.jefe, f'/api/conteo/lider/tablero?almacen_id={b.almacen.id}')
+        assert t['permisos']['aprobar_ajuste'] is False
+        st, r = b.put(b.jefe, f'/api/conteo/{raiz}/ajustar')
+        assert st == 403, r
+        assert b.jobs_ajuste(raiz) == [] and b.sesion(raiz).estado == EstadoConteo.DESCUADRE
+        # Jefe con tope por debajo del valor ($2.000): 403 con el motivo, y el
+        # tablero se lo dice en la fila en vez de pintarle el botón.
+        monkeypatch.setenv('CONTEO_TOPE_APROBACION_JEFE', '1500')
+        st, t = b.get(b.jefe, f'/api/conteo/lider/tablero?almacen_id={b.almacen.id}')
+        assert t['permisos']['aprobar_ajuste'] is True
+        fila = next(f for f in t['decisiones']['ajustes']['aprobables']['filas'] if f['id'] == raiz)
+        assert fila['valor'] == 2000 and 'supera tu tope' in (fila['no_puede_aprobar'] or ''), fila
+        st, r = b.put(b.jefe, f'/api/conteo/{raiz}/ajustar')
+        assert st == 403 and 'supera tu tope' in r['error'], r
+        assert b.jobs_ajuste(raiz) == []
+        # Jefe con tope suficiente: aprueba.
+        monkeypatch.setenv('CONTEO_TOPE_APROBACION_JEFE', '5000')
+        st, t = b.get(b.jefe, f'/api/conteo/lider/tablero?almacen_id={b.almacen.id}')
+        fila = next(f for f in t['decisiones']['ajustes']['aprobables']['filas'] if f['id'] == raiz)
+        assert fila['no_puede_aprobar'] is None, fila
+        st, r = b.put(b.jefe, f'/api/conteo/{raiz}/ajustar')
+        assert st == 202, r
+        s = b.sesion(raiz)
+        assert (s.estado, s.aprobador_id) == (EstadoConteo.AJUSTANDO, b.jefe.id)
+        p = json.loads(b.jobs_ajuste(raiz)[0].payload)
+        assert (p['motivo_codigo'], p['cantidad']) == ('AJ-SAL', 2)
+        # Aprobar dos veces no encola dos veces.
+        st, r = b.put(b.supervisor, f'/api/conteo/{raiz}/ajustar')
+        assert st in (200, 202), r
+        assert len(b.jobs_ajuste(raiz)) == 1
+
+    def test_el_supervisor_aprueba_cualquier_monto(self, bodega, monkeypatch):
+        from app.models.conteo import EstadoConteo
+        b = bodega
+        monkeypatch.setenv('CONTEO_TOPE_APROBACION_JEFE', '0')
+        sku = b.hueco('A', teorico=500, costo=90000)
+        b.programar(b.admin, 'A')
+        raiz, _, cc3 = _cadena_hasta_definitivo(b, sku, 480, 490)
+        b.contar(b.supervisor, cc3, 470)
+        st, r = b.put(b.jefe, f'/api/conteo/{raiz}/ajustar')
+        assert st == 403, r
+        st, r = b.put(b.supervisor, f'/api/conteo/{raiz}/ajustar')
+        assert st == 202, r
+        assert b.sesion(raiz).estado == EstadoConteo.AJUSTANDO
+        p = json.loads(b.jobs_ajuste(raiz)[0].payload)
+        assert (p['motivo_codigo'], p['cantidad']) == ('AJ-SAL', 30)
+
+    def test_cc1_igual_cc2_ajusta_solo_bajo_el_tope(self, bodega):
+        """Fuera de tolerancia, CC2 confirma a CC1: la verdad de bodega sale sola."""
+        from app.models.conteo import EstadoConteo
+        b = bodega
+        sku = b.hueco('A', teorico=50)
+        b.programar(b.admin, 'A')
+        raiz = b.raiz_de(sku).id
+        b.contar(b.op_a, raiz, 46)
+        st, r = b.confirmar(b.op_a, raiz, 46)
+        cc2 = r['segundo_conteo_id']
+        r = b.contar(b.op_b, cc2, 46)
+        assert r['resultado'] == 'DESCUADRE', r
+        assert_ciego(r, 50, 4)
+        assert b.sesion(raiz).estado == EstadoConteo.AJUSTANDO
+        p = json.loads(b.jobs_ajuste(raiz)[0].payload)
+        assert (p['motivo_codigo'], p['cantidad']) == ('AJ-SAL', 4)
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 5 · Venta durante el conteo
+# ═════════════════════════════════════════════════════════════════════════════
+
+class TestVentaDuranteElConteo:
+
+    def test_recontar_a_ciegas_y_al_tercero_movimiento_continuo(self, bodega):
+        from app.models.conteo import EstadoConteo, MotivoBloqueoConteo
+        b = bodega
+        sku = b.hueco('C', teorico=30)
+        b.programar(b.admin, 'C')
+        sid = b.raiz_de(sku).id
+
+        # Ana abre (foto de inicio: existencia 30, POS 0)…
+        st, t = b.get(b.op_a, '/api/mobile/tarea-actual')
+        assert t['id'] == sid
+        # …y mientras cuenta se vende 1 por caja.
+        b.siesa.poner(sku, existencia=30, pos=1)
+        st, r = b.confirmar(b.op_a, sid, 29)
+        assert st == 200 and r['resultado'] == 'RECONTAR', r
+        assert r['motivo'] == 'MOVIMIENTO_EN_SIESA'
+        assert_ciego(r, 30, 29, 1)
+        s = b.sesion(sid)
+        assert (s.estado, s.operario_id, s.cantidad_fisica) == (EstadoConteo.EN_PROCESO, b.op_a.id, None)
+        historial = s.lista_conteos_descartados()
+        assert len(historial) == 1
+        assert historial[0]['motivo'] == 'MOVIMIENTO_SIESA' and historial[0]['cantidad_fisica'] == 29
+        assert 'cant_pos 0→1' in historial[0]['movimiento'], historial[0]
+        # El líder sí lo ve, en la vista completa.
+        st, lista = b.get(b.supervisor, f'/api/conteo/?almacen_id={b.almacen.id}')
+        assert st == 200 and any(x['id'] == sid for x in lista['sesiones'])
+
+        # Segunda venta durante el recuento: RECONTAR otra vez.
+        b.siesa.poner(sku, existencia=30, pos=2)
+        st, r = b.confirmar(b.op_a, sid, 28)
+        assert r['resultado'] == 'RECONTAR', r
+        assert_ciego(r, 30, 28, 2)
+        # Tercera: ya no se insiste — queda para el líder.
+        b.siesa.poner(sku, existencia=30, pos=3)
+        st, r = b.confirmar(b.op_a, sid, 27)
+        assert st == 200 and r['resultado'] == 'BLOQUEADO', r
+        assert r['motivo_bloqueo'] == MotivoBloqueoConteo.MOVIMIENTO_CONTINUO
+        assert_ciego(r, 30, 27, 3)
+        s = b.sesion(sid)
+        assert (s.estado, s.motivo_bloqueo) == (EstadoConteo.BLOQUEADO, MotivoBloqueoConteo.MOVIMIENTO_CONTINUO)
+        assert len(s.lista_conteos_descartados()) == 3
+        assert b.jobs_ajuste(sid) == []
+        # Ana ya no la recibe.
+        st, t = b.get(b.op_a, '/api/mobile/tarea-actual')
+        assert t.get('sin_tareas'), t
+
+        # Está en la cola del líder y en el tablero.
+        st, bl = b.get(b.supervisor, f'/api/conteo/bloqueados?almacen_id={b.almacen.id}')
+        fila = next(x for x in bl['bloqueados'] if x['id'] == sid)
+        assert fila['motivo_bloqueo'] == 'MOVIMIENTO_CONTINUO' and fila['nivel'] == 'CC1'
+        st, t = b.get(b.supervisor, f'/api/conteo/lider/tablero?almacen_id={b.almacen.id}')
+        assert t['decisiones']['bloqueados']['por_motivo'] == {'MOVIMIENTO_CONTINUO': 1}
+        # Un operario no reabre.
+        st, r = b.post(b.op_b, f'/api/conteo/{sid}/reabrir', {})
+        assert st == 403
+        # El líder lo reabre en un momento quieto: vuelve a la cola desde cero.
+        st, r = b.post(b.supervisor, f'/api/conteo/{sid}/reabrir', {'nota': 'ya cerró la caja'})
+        assert st == 200, r
+        s = b.sesion(sid)
+        assert (s.estado, s.operario_id, s.cantidad_fisica, s.motivo_bloqueo) == (
+            EstadoConteo.PENDIENTE, None, None, None)
+        assert s.lista_conteos_descartados()[-1]['evento'] == 'REABIERTO'
+        # Con la caja quieta, cuadra.
+        st, t = b.get(b.op_c, '/api/mobile/tarea-actual')
+        assert t['id'] == sid, t
+        st, r = b.confirmar(b.op_c, sid, 27)
+        assert st == 200 and r['resultado'] == 'MATCH', r
+
+    def test_reabrir_devuelve_los_dos_recuentos(self, bodega):
+        """Tras la reapertura, un movimiento vuelve a pedir RECONTAR (no bloquea
+        al primero): la cuenta de recuentos se corta en el evento REABIERTO."""
+        b = bodega
+        sku = b.hueco('C', teorico=30)
+        b.programar(b.admin, 'C')
+        sid = b.raiz_de(sku).id
+        b.get(b.op_a, '/api/mobile/tarea-actual')
+        for pos in (1, 2, 3):
+            b.siesa.poner(sku, existencia=30, pos=pos)
+            st, r = b.confirmar(b.op_a, sid, 30 - pos)
+        assert r['resultado'] == 'BLOQUEADO'
+        st, r = b.post(b.supervisor, f'/api/conteo/{sid}/reabrir', {})
+        assert st == 200
+        b.get(b.op_a, '/api/mobile/tarea-actual')
+        b.siesa.poner(sku, existencia=30, pos=4)
+        st, r = b.confirmar(b.op_a, sid, 26)
+        assert r['resultado'] == 'RECONTAR', r
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 6 · «No lo encontré»
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _no_lo_encontre(b, operario, sid):
+    return b.post(operario, '/api/mobile/reportar-problema',
+                  {'tarea_id': sid, 'tipo': 'CONTEO', 'motivo': 'NO_ENCONTRADO'})
+
+
+class TestNoLoEncontre:
+
+    def test_bloquea_el_lider_reabre_respetando_el_doble_ciego(self, bodega):
+        from app.models.conteo import EstadoConteo
+        b = bodega
+        sku = b.hueco('A', teorico=50)
+        b.programar(b.admin, 'A')
+        raiz = b.raiz_de(sku).id
+
+        # CC1 de Ana fuera de tolerancia → CC2 a Beto, que no lo encuentra.
+        b.contar(b.op_a, raiz, 40)
+        st, r = b.confirmar(b.op_a, raiz, 40)
+        cc2 = r['segundo_conteo_id']
+        st, t = b.get(b.op_b, '/api/mobile/tarea-actual')
+        assert t['id'] == cc2
+        # «Otro problema» sin contar qué pasó no se acepta.
+        st, r = b.post(b.op_b, '/api/mobile/reportar-problema',
+                       {'tarea_id': cc2, 'tipo': 'CONTEO', 'motivo': 'OTRO'})
+        assert st == 409, r
+        # Solo el dueño lo bloquea.
+        st, r = _no_lo_encontre(b, b.op_c, cc2)
+        assert st == 403, r
+        st, r = _no_lo_encontre(b, b.op_b, cc2)
+        assert st == 200 and r['motivo'] == 'NO_ENCONTRADO', r
+        assert 'no se ajusta nada' in r['mensaje']
+        s = b.sesion(cc2)
+        assert (s.estado, s.motivo_bloqueo, s.cantidad_fisica) == (EstadoConteo.BLOQUEADO, 'NO_ENCONTRADO', None)
+        assert b.sesion(raiz).estado == EstadoConteo.SEGUNDO_CONTEO
+        assert b.jobs_ajuste(raiz) == []
+        # No es un cero: nada lo cierra por la puerta de contar.
+        st, r = b.confirmar(b.op_b, cc2, 0, cero=True)
+        assert st == 400, r
+
+        # El tablero del líder lo muestra, el primero de la cola.
+        st, t = b.get(b.supervisor, f'/api/conteo/lider/tablero?almacen_id={b.almacen.id}')
+        assert st == 200
+        bloq = t['decisiones']['bloqueados']
+        assert bloq['total'] == 1 and bloq['filas'][0]['id'] == cc2, bloq
+        assert bloq['filas'][0]['nivel'] == 'CC2' and bloq['filas'][0]['motivo_texto'] == 'No lo encontró'
+        assert t['resumen']['por_bloque']['bloqueados'] == 1
+        assert t['orden'][0] == 'bloqueados'
+        # Los números no están en la fila: el líder puede terminar contando esta cadena.
+        assert_ciego(bloq, 50, 40)
+
+        # Dárselo a Ana, que contó el CC1, no se puede.
+        st, r = b.post(b.supervisor, f'/api/conteo/{cc2}/reabrir', {'operario_id': b.op_a.id})
+        assert st == 400 and 'Doble ciego' in r['error'], r
+        assert b.sesion(cc2).estado == EstadoConteo.BLOQUEADO
+        # Reabrir sin dueño: vuelve al pool…
+        st, r = b.post(b.supervisor, f'/api/conteo/{cc2}/reabrir', {})
+        assert st == 200, r
+        s = b.sesion(cc2)
+        assert (s.estado, s.operario_id) == (EstadoConteo.PENDIENTE, None)
+        # …y el pool no se lo da a Ana.
+        st, t = b.get(b.op_a, '/api/mobile/tarea-actual')
+        assert t.get('sin_tareas'), t
+        st, r = b.post(b.supervisor, '/api/conteo/asignar-lote',
+                       {'operario_id': b.op_a.id, 'almacen_id': b.almacen.id})
+        assert st == 200 and r['asignadas'] == 0, r
+        # Carolina sí lo toma, y la cadena sigue.
+        st, t = b.get(b.op_c, '/api/mobile/tarea-actual')
+        assert t['id'] == cc2, t
+        st, r = b.confirmar(b.op_c, cc2, 50)
+        assert st == 200 and r['resultado'] == 'MATCH', r
+        assert b.sesion(raiz).estado == EstadoConteo.MATCH
+
+    def test_el_lider_cancela_toda_la_cadena_y_el_hueco_se_libera(self, bodega):
+        from app.models.conteo import EstadoConteo
+        b = bodega
+        sku = b.hueco('C', teorico=20)
+        b.programar(b.admin, 'C')
+        raiz = b.raiz_de(sku).id
+        b.get(b.op_a, '/api/mobile/tarea-actual')
+        st, r = _no_lo_encontre(b, b.op_a, raiz)
+        assert st == 200, r
+        # Bloqueado traba el hueco: el generador no abre otra al lado.
+        r = b.programar(b.admin, 'C')
+        assert r['tareas_creadas'] == 0 and r['omitidos_por_pendiente'] == 1, r
+        # Sin motivo no se cancela; un operario tampoco.
+        st, r = b.put(b.supervisor, f'/api/conteo/{raiz}/cancelar', {})
+        assert st == 400, r
+        st, r = b.put(b.op_b, f'/api/conteo/{raiz}/cancelar', {'motivo': 'x'})
+        assert st == 403, r
+        st, r = b.put(b.jefe, f'/api/conteo/{raiz}/cancelar', {'motivo': 'descontinuado'})
+        assert st == 200, r
+        s = b.sesion(raiz)
+        assert s.estado == EstadoConteo.CANCELADO and 'descontinuado' in s.motivo_edicion
+        st, t = b.get(b.supervisor, f'/api/conteo/lider/tablero?almacen_id={b.almacen.id}')
+        assert t['decisiones']['bloqueados']['total'] == 0
+        # Cancelar otra vez: la cadena ya cerró.
+        st, r = b.put(b.jefe, f'/api/conteo/{raiz}/cancelar', {'motivo': 'otra vez'})
+        assert st == 409, r
+        # El hueco vuelve a estar libre para el plan.
+        r = b.programar(b.admin, 'C')
+        assert r['tareas_creadas'] == 1, r
+        assert b.raiz_de(sku).id != raiz
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 7 · Cancelar un CC2 cancela la cadena y libera el hueco
+# ═════════════════════════════════════════════════════════════════════════════
+
+class TestCancelarUnSegundoConteo:
+
+    def test_cancelar_el_cc2_cancela_la_cadena(self, bodega):
+        from app.models.conteo import EstadoConteo
+        b = bodega
+        sku = b.hueco('A', teorico=50)
+        b.programar(b.admin, 'A')
+        raiz = b.raiz_de(sku).id
+        b.contar(b.op_a, raiz, 40)
+        st, r = b.confirmar(b.op_a, raiz, 40)
+        cc2 = r['segundo_conteo_id']
+        # Beto ya lo abrió.
+        st, t = b.get(b.op_b, '/api/mobile/tarea-actual')
+        assert t['id'] == cc2
+        r = b.programar(b.admin, 'A')
+        assert r['tareas_creadas'] == 0, 'con la cadena viva no se abre otra'
+
+        st, r = b.put(b.supervisor, f'/api/conteo/{cc2}/cancelar', {'motivo': 'se contó mal el CC1'})
+        assert st == 200, r
+        assert (b.sesion(cc2).estado, b.sesion(raiz).estado) == (EstadoConteo.CANCELADO,
+                                                                  EstadoConteo.CANCELADO)
+        # Beto ya no lo tiene, ni puede cerrarlo.
+        st, t = b.get(b.op_b, '/api/mobile/tarea-actual')
+        assert t.get('sin_tareas'), t
+        st, r = b.confirmar(b.op_b, cc2, 50)
+        assert st == 400, r
+        assert b.jobs_ajuste(raiz) == []
+        # Y el hueco se puede volver a programar.
+        r = b.programar(b.admin, 'A')
+        assert r['tareas_creadas'] == 1, r
+        nueva = b.raiz_de(sku)
+        assert nueva.id not in (raiz, cc2) and nueva.estado == EstadoConteo.PENDIENTE
+
+    def test_cancelar_el_cc3_tambien(self, bodega):
+        from app.models.conteo import EstadoConteo
+        b = bodega
+        sku = b.hueco('A', teorico=50)
+        b.programar(b.admin, 'A')
+        raiz, cc2, cc3 = _cadena_hasta_definitivo(b, sku)
+        st, r = b.put(b.supervisor, f'/api/conteo/{cc3}/cancelar', {'motivo': 'no aplica'})
+        assert st == 200, r
+        assert b.sesion(raiz).estado == EstadoConteo.CANCELADO
+        assert b.sesion(cc3).estado == EstadoConteo.CANCELADO
+        st, cola = b.get(b.supervisor, f'/api/conteo/definitivos?almacen_id={b.almacen.id}')
+        assert cola['total'] == 0
+        assert b.programar(b.admin, 'A')['tareas_creadas'] == 1
