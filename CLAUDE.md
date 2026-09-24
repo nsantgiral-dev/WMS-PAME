@@ -3819,6 +3819,7 @@ despachos, paradas y rutas, igual que sus propios tests. **14 mutaciones, las
 14 rojas.** La cadena entera de migraciones corrió contra un PostgreSQL 17
 desechable (upgrade, downgrade, upgrade) y un recálculo real sobre él (lock
 suelto al terminar, despacho de las 20:30 en su día).
+Suite completa el 2026-09-24: **7262 passed, 0 failed** (5 skipped, 19 xfailed).
 
 ### Lo que NO mide todavía (declarado)
 
