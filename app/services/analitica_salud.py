@@ -1012,7 +1012,12 @@ def salud_del_dato(desde, hasta, almacen_id=None, ahora_utc=None):
                 'nota': ('La salud de una fuente es de HOY, no del rango: una fuente '
                          'apagada hoy no se enciende mirando el mes pasado.'),
             },
-            'fuentes': {f['clave']: {'veredicto': f['veredicto'],
+            # Forma común del módulo (`anFrescura` en analitica.js): nombre y
+            # motivo legibles, para que el aviso diga QUÉ fuente y POR QUÉ.
+            'fuentes': {f['clave']: {'nombre': f['nombre'],
+                                     'motivo': f['motivo'],
+                                     'veredicto': f['veredicto'],
+                                     'actualizado_en': f['ultima_actualizacion'],
                                      'ultima_actualizacion': f['ultima_actualizacion'],
                                      'completa': f['completa']} for f in fuentes},
         },
@@ -1274,6 +1279,8 @@ def patrones_bitacora(desde, hasta, almacen_id=None, accion=None, entidad=None,
             'usuario_id': usuario_id,
             'calculado_en': datetime.utcnow().isoformat(),
             'fuentes': {'bitacora_acciones': {
+                'nombre': 'Bitácora de acciones',
+                'actualizado_en': _iso(ultima),
                 'ultima_accion_utc': _iso(ultima),
                 'completa': True,
                 'nota': ('Registra desde el deploy de m035bitacora; lo anterior no '
