@@ -260,15 +260,44 @@ def _textos(obj):
         yield obj
 
 
+#: Una fecha o una hora no es un número de Siesa. Sin quitarlas, la hora del
+#: reloj decidía el test: a las 14:40 un teórico de 40 «aparecía» en
+#: `fecha_inicio` y el build de QA rompía unos minutos por hora.
+_FECHA_U_HORA = re.compile(
+    r'\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?'
+    r'|\b\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?\b')
+
+
 def assert_ciego(respuesta, *numeros):
     """Ninguna clave delatora y ninguno de `numeros` (los de Siesa de ese
-    hueco) escrito en un texto de la respuesta."""
+    hueco) escrito en un texto de la respuesta. Las fechas y horas no cuentan."""
     malas = [k for k in _claves(respuesta) if CLAVES_PROHIBIDAS.search(k.split('.')[-1])]
     assert not malas, f'la respuesta al operario trae {malas}: {respuesta}'
     for texto in _textos(respuesta):
+        texto = _FECHA_U_HORA.sub(' ', texto)
         for n in numeros:
             assert not re.search(rf'(?<![\d.]){re.escape(str(n))}(?![\d])', texto), \
                 f'la respuesta al operario dice {n!r}: {texto!r}'
+
+
+class TestElGuardDelCiegoMide:
+    """`assert_ciego` muerde el número de Siesa y no la hora del reloj."""
+
+    @pytest.mark.parametrize('hora', [
+        '2026-09-24T14:40:56.216363', '2026-09-24 14:40:56', '2026-09-24T14:40:56Z',
+        '2026-09-24T14:40:56-05:00', '2026-09-24', 'a las 14:40', '09:40:12'])
+    def test_una_fecha_o_una_hora_no_es_un_numero_de_siesa(self, hora):
+        assert_ciego({'fecha_inicio': hora, 'mensaje': f'Contado {hora}'}, 40, 14, 9, 24, 56)
+
+    @pytest.mark.parametrize('texto', [
+        'existencia 40', 'Siesa dice 40 unidades', '40', 'contado el 2026-09-24: 40'])
+    def test_el_numero_de_siesa_sigue_rojo(self, texto):
+        with pytest.raises(AssertionError, match='dice 40'):
+            assert_ciego({'mensaje': texto}, 40)
+
+    def test_la_clave_delatora_sigue_roja(self):
+        with pytest.raises(AssertionError, match='trae'):
+            assert_ciego({'existencia_siesa': 1}, 40)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
