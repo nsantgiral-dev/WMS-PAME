@@ -341,22 +341,37 @@ def faltante_de_retorno(devolucion) -> Optional[dict]:
     """
     if devolucion is None or not devolucion.recaudo_entrega_id:
         return None
-    if devolucion.estado != 'CONFIRMADA':
+    # FALTANTE_TOTAL (m045devol) es una devolución contada en cero: el caso más
+    # grande de faltante, no uno que se saque de la medición.
+    if devolucion.estado not in ('CONFIRMADA', 'FALTANTE_TOTAL'):
         return None
     lineas, faltante, sobrante, medidas = [], 0.0, 0.0, 0
-    for l in devolucion.lineas:
-        if l.cantidad_declarada is None:
-            continue
-        medidas += 1
-        dec, cont = float(l.cantidad_declarada), float(l.cantidad_devuelta or 0)
+
+    def _sumar(codigo, producto_id, dec, cont):
+        nonlocal faltante, sobrante
         dif = round(dec - cont, 4)
         if dif > 0:
             faltante += dif
         elif dif < 0:
             sobrante += -dif
         if dif:
-            lineas.append({'codigo_siesa': l.codigo_siesa, 'producto_id': l.producto_id,
+            lineas.append({'codigo_siesa': codigo, 'producto_id': producto_id,
                            'declarado': dec, 'contado': cont, 'diferencia': dif})
+
+    for l in devolucion.lineas:
+        if l.cantidad_declarada is None:
+            continue
+        medidas += 1
+        _sumar(l.codigo_siesa, l.producto_id, float(l.cantidad_declarada),
+               float(l.cantidad_devuelta or 0))
+    # Doble unidad declarada por referencia (`devolucion_ruta.vincular_a_factura`):
+    # lo declarado vive por producto y lo contado en sus líneas.
+    decl_prod = ((devolucion.declaracion_conductor or {}).get('declarado_por_producto') or {})
+    for pid, dec in decl_prod.items():
+        medidas += 1
+        lns = [l for l in devolucion.lineas if str(l.producto_id) == str(pid)]
+        _sumar(lns[0].codigo_siesa if lns else None, int(pid), float(dec or 0),
+               sum(float(l.cantidad_devuelta or 0) for l in lns))
     if not medidas:
         return None
     return {'devolucion_id': devolucion.id, 'codigo': devolucion.codigo,

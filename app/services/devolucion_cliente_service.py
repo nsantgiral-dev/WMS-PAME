@@ -308,6 +308,12 @@ class DevolucionClienteService:
             # Dos paradas del mismo pedido confirmadas en el mismo segundo
             # chocarían en el índice único del código: el recaudo lo distingue.
             codigo = f'{codigo}-R{recaudo_entrega_id}'
+        # Dos devoluciones del mismo pedido en el mismo segundo (una cancelada
+        # y la que la reemplaza) chocaban en el índice único del código.
+        _base, _n = codigo, 1
+        while DevolucionCliente.query.filter_by(codigo=codigo).first() is not None:
+            _n += 1
+            codigo = f'{_base}-{_n}'
         devolucion = DevolucionCliente(
             codigo=codigo,
             tarea_packing_id=tarea_packing_id,
