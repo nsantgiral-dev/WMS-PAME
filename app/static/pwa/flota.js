@@ -172,7 +172,7 @@ async function flotaLlenarSedes(idSelect) {
     // que saber por qué, no descubrirlo en el health la semana que viene.
     sel.innerHTML = `<option value="">— no se pudo cargar la lista —</option>`;
     alerta('No se pudieron cargar las sedes: ' + e.message +
-           '. La custodia va a quedar pendiente_sede.', 'error');
+           '. El turno va a quedar con la sede sin resolver.', 'error');
   }
 }
 
@@ -347,10 +347,10 @@ function flotaRenderRecibo() {
 
   let html = `<div class="tabla-card">
     <p>Último odómetro registrado: ${kmTexto}</p>
-    <p>${c ? `Viene de: custodia #${esc(c.id)} (desde ${horaColombia(c.inicio_ts)})
+    <p>${c ? `Viene del turno abierto desde ${horaColombia(c.inicio_ts)}
               <button class="btn-flota" style="padding:2px 8px;font-size:var(--fs-xs)"
                       onclick="flotaVerFotosDeCustodia(${esc(c.id)})">ver sus fotos</button>`
-           : '<b>Arranque en frío</b> — primera custodia. Lo que se registre acá nace como preexistente, sin responsable.'}</p>
+           : '<b>Primer turno registrado de este vehículo.</b> Lo que se registre acá nace como preexistente, sin responsable.'}</p>
 
     <label>Odómetro ahora (km)</label>
     <input type="number" id="flota-km" inputmode="numeric" style="width:100%;font-size:20px">
@@ -422,7 +422,7 @@ async function flotaCambiarTipoCustodio() {
   } else {
     det.innerHTML = '<select id="flota-sede"></select>' +
       '<p style="color:var(--yellow);font-size:var(--fs-xs)">Si la sede no aparece, dejá la ' +
-      'primera opción: la custodia queda declarada <b>pendiente_sede</b> y el health la ' +
+      'primera opción: el turno queda <b>con la sede sin resolver</b> y el diagnóstico lo ' +
       'cuenta. No se inventa una sede.</p>';
     await flotaLlenarSedes('flota-sede');
   }
