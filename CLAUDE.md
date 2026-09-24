@@ -3431,6 +3431,8 @@ mitad, lo que falta va a `no_corrieron`. Lock `LOCK_FOTOS_SIESA = 2020`.
 | Ventas CO 003, 2026-09-22 | completa · 2 líneas · 2 FE · neto $149.000 · 2 con `pedido_clave` |
 | Cartera 1305 abierta | completa · **4.632** documentos · **47** páginas · saldo $4.102.143.835 (QA: 4.613 vencidos) |
 | Costo InvFecha NB1 | **incompleta — paginación inestable**: 851 y 897 filas repetidas en dos pasadas; unión 4.028 referencias con costo |
+| Ventas CO 003, 2026-09-04 | completa · 17 líneas · 7 FE · neto $6.917.520 · 7 con `pedido_clave` |
+| Stock NB1 (tras descargar `stock_siesa` con la consulta de producción: 10 bodegas, NB1 = 3.276 SKU) | completa · 3.276 filas · 0 rezagadas · costo en 2.717 (**559 sin costo, NULL**: sin fila en InvFecha con existencia ≠ 0, o perdidas por la paginación inestable — 877 y 889 repetidas) |
 
 **Hallazgo — la fecha sin comillas devuelve cero.** `f350_fecha >= 20260101
 AND f350_fecha <= 20260923` → 0 filas; con `''20260101''` → 100. Siesa no
