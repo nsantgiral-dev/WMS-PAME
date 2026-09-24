@@ -4040,6 +4040,15 @@ no cero; piso 13). **13 mutaciones, las 13 rojas.** Helper de tests:
 - La **cola offline** del conductor: si un tanqueo o una inspección se
   sincroniza DESPUÉS de la entrega del turno, ahora es 403 (sin gracia, Regla
   0). Una cola FIFO lo evita; una que reordene, no.
+- **El tanqueo tardío** (registrado después de entregar el turno, caso que el
+  módulo declara habitual): el conductor ya no puede, ni por el km de cierre
+  (que entraba sin marca) ni por `correccion` (que borraba la historia). Lo
+  registra control de flota — y para él el hueco sigue: el km real del
+  surtidor da 409 y el de cierre pasa colgado de la lectura `entrega`. Falta
+  exponer `lectura_id` en `POST /flota/tanqueos`. Medido en
+  `tests/flujo/test_flujo_dia_torcido.py`, que también cambió: la inspección
+  antes de recibir el turno ahora es 403 (antes 201 con daños que no contaban
+  y nadie lo decía).
 - Las fotos con `entidad_tipo='odometro'` no tienen escritor todavía; la regla
   (autor de la lectura) está escrita para cuando lo tengan.
 - `rutas.py`/`almacenes.py` usan `LECTURA_FLOTA` fuera de `flota/` para leer

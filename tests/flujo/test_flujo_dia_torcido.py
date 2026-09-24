@@ -51,59 +51,40 @@ def _inspeccionar(client, mundo, km, token=None, no_aptos=None, omitir=()):
 class TestInspeccionarAntesDeRecibirElTurno:
     """El conductor abre la app a las 4:30, inspecciona, y **después** recibe.
 
-    Pasa de verdad: la inspección es el gesto que tiene el camión delante, y el
-    botón de recibir turno está en otra pantalla.
+    **Hasta el 2026-09-24** se aceptaba (201) y la inspección colgaba de la
+    custodia abierta a esa hora —la de la sede, `linea_base` en el arranque en
+    frío—, así que todos los daños que el conductor encontraba nacían
+    preexistentes y no entraban al indicador, **sin que la respuesta lo dijera**.
 
-    Medido: se acepta (201) y la inspección **cuelga de la custodia que esté
-    abierta**, que a esa hora es la de la sede. En el arranque en frío esa
-    custodia es `linea_base`, así que **todos los daños que el conductor
-    encuentre nacen preexistentes y no entran al indicador**.
-
-    ¿Me parece el que debería ser? La mitad. Que un daño encontrado durante el
-    levantamiento no se le cuente a nadie es la regla escrita y es correcta. Lo
-    que no me parece es que **no se diga**: la respuesta del POST publica
-    `hallazgos: [{hallazgo_id, item_id, nombre, criticidad, nota}]` y ninguno de
-    esos campos dice `linea_base` ni `entra_al_indicador`. El conductor ve que su
-    reporte llegó; nadie ve que no va a contar. Y el mismo gesto diez minutos
-    después —con el turno ya recibido— produce un daño que sí cuenta.
+    **Desde ese día es 403 `sin_derecho`**: el conductor registra solo sobre el
+    vehículo de su custodia activa (`flota/api/_permisos.py`, «El rol no
+    alcanza»). Resuelve también lo que este archivo marcaba como mal: ya no hay
+    un acuse idéntico para un daño que no va a contar, porque ese daño no se
+    escribe. La pantalla ya lo pedía así —«Inspección de hoy» solo aparece con
+    el turno abierto—, y el mensaje dice la salida: recibir primero.
     """
 
-    def test_se_acepta_sin_turno_abierto(self, client, mundo, reloj, en_el_patio):
-        reloj.en(arnes.DIA_1, (4, 30))
-        _items, r = _inspeccionar(client, mundo, 100_000)
-        assert r.status_code == 201, r.get_json()
-
-    def test_la_inspeccion_cuelga_de_la_custodia_de_la_sede(
+    def test_sin_turno_abierto_es_403_y_dice_la_salida(
             self, client, mundo, reloj, en_el_patio):
         reloj.en(arnes.DIA_1, (4, 30))
         _items, r = _inspeccionar(client, mundo, 100_000)
-        assert r.get_json()['custodia_id'] == en_el_patio['custodia_id']
+        assert r.status_code == 403, r.get_json()
+        assert r.get_json()['motivo'] == 'sin_derecho'
+        assert 'recibí el turno primero' in r.get_json()['error']
 
-    def test_sus_hallazgos_nacen_linea_base_y_no_entran_al_indicador(
-            self, client, mundo, reloj, en_el_patio):
-        """El costo concreto: el daño existe, tiene fecha límite y **no cuenta**."""
+    def test_y_no_deja_nada_escrito(self, client, mundo, reloj, en_el_patio):
+        """Ni inspección ni daño: un rechazo no deja la mitad de lo rechazado."""
         reloj.en(arnes.DIA_1, (4, 30))
-        _items, r = _inspeccionar(client, mundo, 100_000)
-        nacido = r.get_json()['hallazgos'][0]
+        _inspeccionar(client, mundo, 100_000)
+        assert arnes.hallazgos_de(client, mundo).get_json()['hallazgos'] == []
 
-        fila = [h for h in arnes.hallazgos_de(client, mundo).get_json()['hallazgos']
-                if h['id'] == nacido['hallazgo_id']][0]
-        assert fila['linea_base'] is True
-        assert fila['entra_al_indicador'] is False
-        assert fila['estado'] == 'abierto' and fila['fecha_limite']
-
-    def test_la_respuesta_del_POST_no_dice_que_no_va_a_contar(
+    def test_leer_los_items_antes_de_recibir_SI_se_puede(
             self, client, mundo, reloj, en_el_patio):
-        """**Lo que me parece que está mal.** El conductor recibe un acuse
-        idéntico al del daño que sí cuenta.
-
-        Si mañana se publica `entra_al_indicador` en esta lista, este test
-        empieza a fallar: hay que borrarlo, no aflojarlo.
-        """
+        """La lectura del catálogo queda abierta a propósito
+        (`SIN_VERIFICAR` en `test_derecho_del_conductor.py`): mirar las
+        preguntas no escribe nada."""
         reloj.en(arnes.DIA_1, (4, 30))
-        _items, r = _inspeccionar(client, mundo, 100_000)
-        assert set(r.get_json()['hallazgos'][0]) == {
-            'hallazgo_id', 'item_id', 'nombre', 'criticidad', 'nota'}
+        assert arnes.items_del_dia(client, mundo).status_code == 200
 
     def test_diez_minutos_despues_el_mismo_daño_SI_cuenta(
             self, client, mundo, reloj, en_el_patio):
@@ -156,14 +137,18 @@ class TestDosConductoresElMismoDia:
         r = arnes.recibir_turno(client, mundo, 100_010,
                                 conductor=mundo['conductor_a'],
                                 token=mundo['t_b'])
-        assert r.status_code == 409, r.get_json()
+        # Desde el 2026-09-24 lo frena antes otra puerta, con 403: un conductor
+        # solo deja el turno a SU nombre, y B está nombrando a A.
+        assert r.status_code == 403, r.get_json()
+        assert r.get_json()['motivo'] == 'sin_derecho'
 
     def test_B_tampoco_puede_entregar_el_vehiculo_de_A(self, client, mundo,
                                                        a_tiene_el_camion):
         """Entregar a la sede es la otra puerta a la misma operación: cierra la
         custodia de A. Un guard que solo mirara el recibo dejaría esta abierta."""
         r = arnes.entregar_turno(client, mundo, 100_010, token=mundo['t_b'])
-        assert r.status_code == 409, r.get_json()
+        # 403 desde el 2026-09-24: a la sede solo manda un camión quien lo tiene.
+        assert r.status_code == 403, r.get_json()
 
     def test_ni_A_ni_B_dejaron_rastro_de_cierre_forzado(self, client, mundo,
                                                         a_tiene_el_camion):
@@ -184,29 +169,32 @@ class TestDosConductoresElMismoDia:
         assert abiertas[0].custodio_conductor_id == mundo['conductor_a']
         assert arnes.health(client, mundo)['custodias_cerradas_forzadas'] == 0
 
-    def test_control_de_flota_NO_puede_forzar_y_el_mensaje_lo_dice(
+    def test_control_de_flota_SI_fuerza_con_motivo_y_queda_con_su_nombre(
             self, client, mundo, a_tiene_el_camion):
-        """**Medido, y no era lo que yo esperaba.**
+        """**Cambió el 2026-09-24, y a propósito.**
 
-        `control_flota` está en `MAESTROS_FLOTA` y en `LECTURA_FLOTA`, así que
-        entra al endpoint — pero el traspaso resuelve `quien_pide` con
-        `_es_gestion()`, que **no** lo incluye. Son dos nociones de autoridad
-        distintas dentro del mismo módulo, y acá gana la conservadora: Yesid,
-        que es quien tiene el camión delante, recibe el mismo 409 que un
-        conductor cualquiera aunque escriba el motivo.
+        Hasta ese día este test medía un 409: el traspaso resolvía `quien_pide`
+        con `_es_gestion()` y control de flota caía en CONDUCTOR. Y la pantalla
+        de escritorio le ofrecía el campo «Motivo del cierre forzado» igual: le
+        mostraba un gesto que el sistema le negaba.
 
-        Me parece el que debería ser, y por lo que dice el propio módulo:
-        *«Yesid no ordena, señala plazos vencidos y escala»* — cerrar el turno
-        de otro es una decisión, no un levantamiento de campo. Lo que lo hace
-        aceptable es que **el mensaje nombra la salida**: dice que un admin de
-        zona puede forzarlo. Sin esa frase esto sería un callejón.
+        Se decidió darle el permiso —el patio lo opera él, y a las 5 a.m. gestión
+        no está—, pero más estricto que al admin: a él las fotos de cierre no lo
+        eximen, así que todo cierre ajeno pide motivo y queda contado en
+        «cierres forzados», que es justamente la señal con la que se lo mide
+        (`_permisos.FUERZA_CIERRE`, `Veredicto.fotos_no_eximen`).
         """
+        sin = arnes.recibir_turno(client, mundo, 100_010,
+                                  conductor=mundo['conductor_b'],
+                                  token=mundo['t_flota'])
+        assert sin.status_code == 409 and 'motivo' in sin.get_json()['error']
+
         r = arnes.recibir_turno(client, mundo, 100_010,
                                 conductor=mundo['conductor_b'],
                                 token=mundo['t_flota'],
                                 motivo_forzado='A se fue sin cerrar y hay ruta')
-        assert r.status_code == 409
-        assert 'admin de zona' in r.get_json()['error']
+        assert r.status_code == 201, r.get_json()
+        assert arnes.health(client, mundo)['custodias_cerradas_forzadas'] == 1
 
     def test_un_admin_de_zona_SI_puede_forzar_y_queda_con_nombre(
             self, client, mundo, a_tiene_el_camion):
@@ -311,22 +299,19 @@ class TestElTanqueoQueSeRegistraTarde:
     puede registrar un jefe se registra el lunes, y para el lunes la factura ya
     se perdió — que es literalmente lo que pasa hoy»*.
 
-    Medido: si el conductor lo registra **después** de entregar el turno, el
-    kilometraje real del surtidor ya es menor que el de cierre y el endpoint lo
-    rechaza con 409. Lo que **sí** acepta es el kilometraje de cierre — o sea, un
-    número que nadie leyó en el tablero, que entra al CPK y al rendimiento.
+    **Hasta el 2026-09-24** el conductor lo registraba después de entregar: el km
+    real del surtidor daba 409 (el odómetro no decrece), el km de cierre pasaba
+    —un número que nadie leyó en el tablero, colgado de la lectura `entrega`— y
+    la salida que sugería el error, `origen=correccion`, borraba la historia del
+    vehículo.
 
-    ¿Me parece el que debería ser? El 409 sí: el odómetro no puede decrecer y
-    eso protege la serie. Lo que no me parece es que **no haya una tercera
-    salida**. `registrar_gasto` ya recibe `lectura_id` —y `taller.py:612` lo
-    usa— pero ni `registrar_tanqueo` ni `POST /flota/tanqueos` lo exponen: el
-    único gasto que se registra en campo es justamente el único que no puede
-    anclarse a una lectura que ya existe.
-
-    La otra salida que el mensaje de error sugiere —`origen=correccion`— existe
-    y es peor: declara falsa una lectura que era correcta, y
-    `vigentes_tras_la_ultima_correccion` descarta con ella toda la historia
-    anterior del vehículo.
+    **Desde ese día el conductor no registra sobre un camión que ya entregó**
+    (403 `sin_derecho`) ni corrige odómetros (`MAESTROS_FLOTA`). Las dos salidas
+    malas le quedaron cerradas a él. El tanqueo tardío lo registra control de
+    flota con la factura en la mano — y ahí **el hueco sigue**: el km real
+    todavía da 409 y el de cierre todavía pasa sin marca. Falta la tercera
+    salida que ya se nombraba acá: exponer `lectura_id` en `POST /flota/tanqueos`
+    para anclar el gasto a una lectura que ya existe. Declarado, no arreglado.
     """
 
     @pytest.fixture
@@ -337,53 +322,36 @@ class TestElTanqueoQueSeRegistraTarde:
         assert arnes.entregar_turno(client, mundo, 100_400).status_code == 201
         reloj.en(arnes.DIA_1, (21, 0))
 
-    def test_el_km_real_del_surtidor_se_rechaza(self, client, mundo,
-                                                turno_entregado):
-        r = arnes.tanquear(client, mundo, 100_320, galones='10')
-        assert r.status_code == 409
-        assert 'no puede decrecer' in r.get_json()['error']
-
-    def test_el_km_de_cierre_se_acepta_y_nada_marca_que_es_prestado(
+    def test_el_conductor_ya_no_lo_registra_despues_de_entregar(
             self, client, mundo, turno_entregado):
-        """La salida barata, y la que la operación va a tomar: reusar el número
-        del cierre. La lectura ni siquiera nace nueva —`anclar_odometro`
-        reutiliza la de la entrega porque el kilometraje coincide—, así que el
-        gasto queda colgado de una lectura de **origen `entrega`** y nada dice
-        que el tanqueo fue seis horas antes."""
-        r = arnes.tanquear(client, mundo, 100_400, galones='10')
-        assert r.status_code == 201, r.get_json()
+        for km in (100_320, 100_400):
+            r = arnes.tanquear(client, mundo, km, galones='10')
+            assert r.status_code == 403, (km, r.get_json())
+            assert r.get_json()['motivo'] == 'sin_derecho'
 
-        lectura = [l for l in arnes.lecturas_de(mundo['vehiculo_id'])
-                   if l.id == r.get_json()['lectura_id']][0]
-        assert lectura.origen == 'entrega', (
-            'el gasto de combustible quedó colgado de la lectura del cierre de '
-            'turno; ninguna columna dice que el tanqueo ocurrió antes')
-
-    def test_la_salida_que_el_mensaje_sugiere_borra_la_historia(
+    def test_ni_por_la_correccion_que_borraba_la_historia(
             self, client, mundo, turno_entregado):
-        """*«Si el valor es correcto, se registra con origen=correccion y
-        motivo»*. Se puede — y deja el ritmo del vehículo con dos lecturas.
-
-        `vigentes_tras_la_ultima_correccion` existe para que una lectura
-        envenenada no trabe el vehículo para siempre, y hace exactamente eso:
-        una corrección declara «de acá en adelante, esto es lo cierto». Usarla
-        para registrar un tanqueo tardío tira por la borda el histórico de un
-        camión que no tenía nada malo.
-        """
-        antes = arnes.health(client, mundo)['km_dia_por_vehiculo'][0]
-        assert antes['n'] >= 3
-
         r = client.post('/flota/odometro', json={
             'placa': mundo['placa'], 'valor_km': 100_320, 'origen': 'correccion',
             'motivo_correccion': 'tanqueo de las 11 registrado después del cierre',
         }, headers={'Authorization': f"Bearer {mundo['t_a']}"})
-        assert r.status_code == 201, r.get_json()
+        assert r.status_code == 403, r.get_json()
+        assert arnes.health(client, mundo)['km_dia_por_vehiculo'][0]['n'] >= 3
 
-        despues = arnes.health(client, mundo)['km_dia_por_vehiculo'][0]
-        assert despues['n'] == 1, (
-            'la corrección dejó la serie vigente en una sola lectura: el km/día '
-            'del vehículo se perdió por registrar un tanqueo tarde')
-        assert despues['km_dia'] == 'sin_dato'
+    def test_control_de_flota_lo_registra_pero_el_hueco_del_km_sigue(
+            self, client, mundo, turno_entregado):
+        """Lo que queda abierto, medido para que no se lea como cerrado."""
+        real = arnes.tanquear(client, mundo, 100_320, galones='10',
+                              token=mundo['t_flota'])
+        assert real.status_code == 409
+        assert 'no puede decrecer' in real.get_json()['error']
+
+        prestado = arnes.tanquear(client, mundo, 100_400, galones='10',
+                                  token=mundo['t_flota'])
+        assert prestado.status_code == 201, prestado.get_json()
+        lectura = [l for l in arnes.lecturas_de(mundo['vehiculo_id'])
+                   if l.id == prestado.get_json()['lectura_id']][0]
+        assert lectura.origen == 'entrega'
 
 
 # ═══════════════════════════════════════════════════════════════════════════
