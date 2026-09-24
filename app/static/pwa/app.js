@@ -1088,6 +1088,9 @@ async function cargarDashboard() {
   // Fuera del try de abajo a propósito: si el dashboard falla, la franja
   // tiene que salir igual. Es la que avisa.
   cargarFranjaAmbiente();
+  // Retenidos por cartera (cartera.js): independiente del resumen, se
+  // esconde solo si el rol no lo ve.
+  if (typeof carteraCargarBloque === 'function') carteraCargarBloque();
   try {
     const d = await get('/api/dashboard/resumen-completo?almacen_id=' + ALMACEN_ID);
     const k = d.kpis;
@@ -1426,7 +1429,20 @@ async function cargarPedidos() {
         const totalUds = p.items.reduce((s, it) => s + (it.cantidad_pendiente || 0), 0);
 
         let accionBtn = '';
-        if (p.siesa_triggered) {
+        const _rc = p.retencion_cartera;
+        if (_rc && !p.siesa_triggered) {
+          // Retenido por cartera: ni «Aprobar» ni «Error Siesa». Lo libera un
+          // usuario de cartera (Gestor) o el pago; reintentar re-evalúa.
+          accionBtn = `<div style="flex-shrink:0;display:flex;flex-direction:column;gap:4px;align-items:stretch;max-width:180px;">
+              <div style="background:var(--warn-bg);color:var(--warn-tx);border:1px solid var(--warn-brd);padding:6px 10px;border-radius:6px;font-size:var(--fs-xs);font-weight:700;text-align:center;">⛔ Retenido por cartera</div>
+              <div style="font-size:var(--fs-xs);color:var(--tx2);">${esc(_rc.resumen || (_rc.motivos || []).join(', '))}</div>
+            </div>`;
+        } else if (p.cartera_liberada && p.packing_estado === 'VERIFICADO' && !p.siesa_triggered && p.packing_id) {
+          accionBtn = `<button onclick="carteraCerrarLiberado(${esc(p.packing_id)})"
+            style="flex-shrink:0;background:var(--ok-bg);color:var(--ok-tx);border:1px solid var(--ok-brd);padding:8px 12px;border-radius:8px;font-size:var(--fs-xs);font-weight:700;cursor:pointer;text-align:center;">
+            Cartera lo liberó<br>▶ Cerrar caja
+          </button>`;
+        } else if (p.siesa_triggered) {
           // Estado final: Siesa tiene la factura
           // Los DOS papeles: la remisión descarga inventario y viaja con el
           // camión; la factura cobra. El endpoint de remisión existía sin
@@ -2896,7 +2912,7 @@ async function iniciarDespachoDesdeSiesa(idx) {
       almacen_id: ALMACEN_ID,
       items: itemsValidos
     });
-    if (r.error) { alerta(r.error, 'error'); return; }
+    if (r.error) { alerta(r.error, 'error'); setTimeout(cargarPedidos, 800); return; }
     if (r.errores && r.errores.length) {
       console.warn(`[DESPACHO] ${pedido.numero_pedido} — ${r.errores.length} línea(s) sin stock, excluidas de picking y packing:`, r.errores);
       alerta(`Pedido aprobado — ${r.errores.length} línea(s) sin stock quedaron fuera (pedido parcial). Detalle en consola.`, 'advertencia');
@@ -2904,7 +2920,11 @@ async function iniciarDespachoDesdeSiesa(idx) {
       alerta(`Pedido aprobado — Packing ${r.packing_codigo}`, 'exito');
     }
     setTimeout(cargarPedidos, 800);
-  } catch (e) { alerta('Error aprobando pedido', 'error'); }
+  } catch (e) {
+    // Un 409 de cartera trae el motivo: mostrarlo, no «Error aprobando».
+    alerta(e.message || 'Error aprobando pedido', 'error');
+    setTimeout(cargarPedidos, 800);
+  }
 }
 
 // confirmarDespachoSiesa eliminado — el único gatillo hacia Siesa
@@ -3226,6 +3246,13 @@ function _formUsuario(u = {}) {
             <div style="font-size:var(--fs-xs);color:var(--tx3);">Puede crear ubicaciones y registrar SKU en Layout (no editar/eliminar/reclasificar)</div>
           </div>
         </label>
+        <label style="display:flex;align-items:center;gap:12px;cursor:pointer;margin-bottom:10px;">
+          <input type="checkbox" id="u-puede-autorizar-cartera" ${u.puede_autorizar_cartera?'checked':''} style="width:20px;height:20px;">
+          <div>
+            <div style="font-size:var(--fs-sm);font-weight:600;color:var(--warn-tx);">Autoriza cartera</div>
+            <div style="font-size:var(--fs-xs);color:var(--tx3);">Puede dejar salir a crédito un pedido retenido por mora o cupo, con motivo (respaldo del Gestor de Cartera)</div>
+          </div>
+        </label>
         <label style="display:flex;align-items:center;gap:12px;cursor:pointer;">
           <input type="checkbox" id="u-puede-camara" ${u.puede_usar_camara!==false?'checked':''} style="width:20px;height:20px;accent-color:#34d399;">
           <div>
@@ -3292,6 +3319,7 @@ async function _guardarUsuario(uid) {
   const puedeEmpacar    = document.getElementById('u-puede-empacar')?.checked;
   const puedeAbastecer  = document.getElementById('u-puede-abastecer')?.checked || false;
   const puedeOrganizarLayout = document.getElementById('u-puede-organizar-layout')?.checked || false;
+  const puedeAutorizarCartera = document.getElementById('u-puede-autorizar-cartera')?.checked || false;
   const puedeCamara     = document.getElementById('u-puede-camara')?.checked ?? true;
   const capacidadConteo = puedePicar ? parseInt(document.getElementById('u-capacidad-conteo')?.value || '15', 10) : null;
   const conductorCedula   = rol === 'conductor' ? (document.getElementById('u-conductor-cedula')?.value.trim() || '') : null;
@@ -3306,6 +3334,7 @@ async function _guardarUsuario(uid) {
   const payload = {
     nombre, rol, puede_picar: puedePicar, puede_empacar: puedeEmpacar,
     puede_abastecer: puedeAbastecer, puede_organizar_layout: puedeOrganizarLayout,
+    puede_autorizar_cartera: puedeAutorizarCartera,
     puede_usar_camara: puedeCamara,
     capacidad_diaria_conteo: capacidadConteo === null ? null : (isNaN(capacidadConteo) ? 15 : Math.max(0, capacidadConteo)),
     bodega_siesa_id: bodegaSiesaId, nombre_punto_venta: nombrePv,

@@ -580,8 +580,10 @@ def pedidos_aprobados():
     # «Error Siesa» sobre un pedido que cartera frenó.
     from app.services import cartera_service as _cartera
     retenidos = _cartera.resumen_por_pedido(nums)
+    liberadas = _cartera.liberadas_por_pedido(nums)
     for num, pedido in pedidos.items():
         pedido['retencion_cartera'] = retenidos.get(num)
+        pedido['cartera_liberada'] = num in liberadas
 
     lista = sorted(pedidos.values(), key=lambda x: x['fecha_entrega'] or '', reverse=True)
     return jsonify({'pedidos': lista, 'total': len(lista)}), 200
@@ -1113,19 +1115,28 @@ def iniciar_despacho():
 
     # Compuerta de cartera (G1): un pedido de CRÉDITO REAL de un cliente con
     # facturas vencidas, sin cupo o que lo supera no llega al picking. Contado
-    # pasa sin mirar nada. El lock del NIT se suelta al terminar la petición,
-    # con el packing ya creado: así el pedido siguiente del mismo cliente lo
+    # pasa sin mirar nada. El lock del NIT dura todo el bloque `with`, con el
+    # packing ya creado adentro: así el pedido siguiente del mismo cliente lo
     # cuenta en su cupo. Ver `cartera_service.compuerta_inicio`.
     from app.services import cartera_service as _cartera
     try:
-        puerta = _cartera.compuerta_inicio(
-            numero_pedido, tipo_docto, consec_docto, co=data.get('co'), items=items,
-            almacen_id=almacen_id, usuario_id=admin.id)
+        with _cartera.compuerta_inicio(
+                numero_pedido, tipo_docto, consec_docto, co=data.get('co'), items=items,
+                almacen_id=almacen_id, usuario_id=admin.id) as puerta:
+            if not puerta.pasa:
+                return jsonify(puerta.cuerpo()), 409
+            return _iniciar_despacho_tras_cartera(
+                data, admin, numero_pedido, tipo_docto, consec_docto, almacen_id, items)
     except _cartera.DespachoEnCurso as e:
         return jsonify({'error': str(e)}), 409
-    if not puerta.pasa:
-        return jsonify(puerta.cuerpo()), 409
 
+
+def _iniciar_despacho_tras_cartera(data, admin, numero_pedido, tipo_docto, consec_docto,
+                                   almacen_id, items):
+    """El cuerpo de `iniciar_despacho` una vez que cartera dejó pasar el
+    pedido. Corre DENTRO del lock del NIT (`compuerta_inicio`): el packing se
+    crea antes de soltarlo."""
+    from app.services import cartera_service as _cartera
     # Backorder Siesa: qué líneas comprometió Siesa de verdad para este pedido
     # (API_v2_Ventas_Pedidos_Compromisos), ANTES de mandar al operario a
     # pickear algo que Siesa ya decidió cancelar (pedido con

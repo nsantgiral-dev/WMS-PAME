@@ -63,7 +63,10 @@ IRRECUPERABLES = (
 #: Se pueden volver a cargar desde Siesa. Que la copia tenga menos no es un
 #: fallo del respaldo.
 REGENERABLES = ('pedidos_siesa', 'stock_siesa', 'siesa_jobs',
-                'movimientos_inventario', 'ubicaciones_huerfanas')
+                'movimientos_inventario', 'ubicaciones_huerfanas',
+                # Caché de la cartera por NIT (m044cartera): se relee de Siesa
+                # en la primera evaluación.
+                'cartera_cliente')
 
 
 def _destino():

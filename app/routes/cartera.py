@@ -35,14 +35,6 @@ _TOKEN = 'CARTERA_GESTOR_TOKEN'
 _QUE = 'la API de cartera para el Gestor'
 
 
-@cartera_bp.teardown_app_request
-def _soltar_locks_de_cartera(exc=None):
-    """El lock por NIT de la compuerta G1 vive hasta el final de la petición
-    (después de crear el packing). Se suelta acá, pase lo que pase."""
-    from app.services.cartera_service import soltar_locks_de_la_peticion
-    soltar_locks_de_la_peticion(exc)
-
-
 # ── utilidades ────────────────────────────────────────────────────────────
 
 def _fecha_iso(texto):
@@ -247,22 +239,10 @@ def panel_listar():
         logger.exception('[CARTERA] panel: listar falló')
         return jsonify({'error': f'No se pudieron leer las retenciones: {e}'}), 503
     datos['puede_autorizar'] = bool(_puede_autorizar_cartera())
+    # El lote de paradas viejas es `_solo_admin`: el botón solo con él.
+    datos['puede_autorizar_lote'] = bool(_solo_admin())
     datos['usuario_id'] = u.id
     return jsonify(datos), 200
-
-
-@cartera_bp.route('/panel/resumen', methods=['GET'])
-@jwt_required()
-def panel_resumen():
-    u = _ve_cartera()
-    if not u:
-        return jsonify({'error': 'Sin permiso para ver las retenciones de cartera'}), 403
-    from app.services import cartera_service as cs
-    s = cs.salud()
-    return jsonify({'retenidos': s['retenidos'],
-                    'retenidos_por_antiguedad': s['retenidos_por_antiguedad'],
-                    'alertas': s['alertas'], 'modo': s['modo'],
-                    'puede_autorizar': bool(_puede_autorizar_cartera())}), 200
 
 
 @cartera_bp.route('/panel/retenciones/<int:rid>/autorizar', methods=['POST'])

@@ -71,6 +71,34 @@ _ABIERTAS_A_PROPOSITO = {
 }
 
 
+# ══════════════════════════════════════════════════════════════════════════
+# RUTAS DE SERVICIO — las llama OTRO SISTEMA, no una persona: no hay rol que
+# verificar. Se autentican con `exige_token_servicio(VAR)` (Bearer + secreto
+# compartido, nace cerrado: sin la variable, 503). Se declaran una por una:
+# el decorador solo no alcanza para salir del guard.
+# ══════════════════════════════════════════════════════════════════════════
+_RUTAS_DE_SERVICIO = {
+    # El Gestor de Cartera (m044cartera): lista y resuelve retenciones de
+    # cartera sin que el usuario de cartera entre al WMS.
+    ('cartera.py', 'gestor_listar'),
+    ('cartera.py', 'gestor_detalle'),
+    ('cartera.py', 'gestor_autorizar'),
+    ('cartera.py', 'gestor_convertir'),
+    ('cartera.py', 'gestor_reevaluar'),
+    ('cartera.py', 'gestor_habilitaciones'),
+    ('cartera.py', 'gestor_salud'),
+}
+_DECORADOR_DE_SERVICIO = 'exige_token_servicio'
+
+
+def _es_de_servicio(fn) -> bool:
+    for d in fn.decorator_list:
+        f = d.func if isinstance(d, ast.Call) else d
+        if (getattr(f, 'id', None) or getattr(f, 'attr', None)) == _DECORADOR_DE_SERVICIO:
+            return True
+    return False
+
+
 class _BuscaRol(ast.NodeVisitor):
     """¿Esta función **decide** con el rol? No: ¿lo menciona?
 
@@ -235,6 +263,8 @@ def _sin_rol():
             decs = n.decorator_list
             if not any('route' in ast.dump(d) for d in decs):
                 continue
+            if _es_de_servicio(n) and (archivo, n.name) in _RUTAS_DE_SERVICIO:
+                continue
             v = _BuscaRol(guards)
             for d in decs:
                 v.visit(d)
@@ -298,6 +328,38 @@ class TestNingunEndpointSinRol:
         assert len(_guards(arboles)) > len(_BASE), (
             'el punto fijo no encontró ningún helper local: sin transitividad '
             'la auditoría acusa endpoints que sí verifican')
+
+
+class TestLasRutasDeServicio:
+
+    def _declaradas_en_el_codigo(self):
+        out = set()
+        for archivo, arbol in _arboles().items():
+            for n in ast.walk(arbol):
+                if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) \
+                        and any('route' in ast.dump(d) for d in n.decorator_list) \
+                        and _es_de_servicio(n):
+                    out.add((archivo, n.name))
+        return out
+
+    def test_el_inventario_coincide_con_el_codigo(self):
+        """Declarar una ruta de servicio sin el decorador la dejaría abierta;
+        usar el decorador sin declararla no la exime."""
+        assert self._declaradas_en_el_codigo() == _RUTAS_DE_SERVICIO
+
+    def test_sin_el_decorador_la_ruta_vuelve_a_ser_un_endpoint_sin_rol(self):
+        codigo = ('@bp.route("/x", methods=["POST"])\n'
+                  'def gestor_listar():\n    return 1\n')
+        fn = ast.parse(codigo).body[0]
+        assert not _es_de_servicio(fn)
+
+    def test_el_decorador_exige_el_token(self, app, client, db, monkeypatch):
+        monkeypatch.delenv('CARTERA_GESTOR_TOKEN', raising=False)
+        assert client.get('/api/cartera/salud').status_code == 503
+        monkeypatch.setenv('CARTERA_GESTOR_TOKEN', 'k')
+        assert client.get('/api/cartera/salud').status_code == 401
+        assert client.get('/api/cartera/salud',
+                          headers={'Authorization': 'Bearer k'}).status_code == 200
 
 
 class TestLosQueSeCerraronHoy:

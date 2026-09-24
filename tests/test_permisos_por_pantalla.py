@@ -67,6 +67,13 @@ PANTALLAS = [
     # Sub-pestaña de 📈 Analítica: la pestaña se muestra a quien pasa
     # `_es_gestion` (contrato de la Fase 1), y los endpoints piden lo mismo.
     ('analitica_fugas.js', None,    ['admin', 'supervisor', 'jefe_almacen', 'gerente']),
+    # Bloque «Retenidos por cartera» del tablero (m044cartera): lo ve gestión;
+    # decidir exige además el permiso `puede_autorizar_cartera` (POST, fuera
+    # de este guard).
+    # El lote de paradas anteriores a la regla de contado es `_solo_admin`:
+    # su botón solo aparece con `puede_autorizar_lote`.
+    ('cartera.js',         'carteraLote', ['admin']),
+    ('cartera.js',         None,    ['admin', 'supervisor', 'jefe_almacen', 'gerente']),
     ('rutas.js',      'condCargar', ['conductor']),
     ('rutas.js',      'condVer',    ['conductor']),
     ('rutas.js',      None,         ['admin']),

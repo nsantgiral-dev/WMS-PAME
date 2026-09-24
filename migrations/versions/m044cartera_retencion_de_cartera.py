@@ -49,7 +49,7 @@ def upgrade():
         sa.Column('tarea_packing_id', sa.Integer()),
         sa.Column('almacen_id', sa.Integer()),
         sa.Column('compuerta', sa.String(10), nullable=False),
-        sa.Column('cond_pago', sa.String(10)),
+        sa.Column('condicion_pago', sa.String(10)),
         sa.Column('dias_credito', sa.Integer()),
         sa.Column('valor', sa.Numeric(16, 2)),
         sa.Column('motivos', sa.JSON()),

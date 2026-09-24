@@ -60,6 +60,8 @@ REGISTRADOS = {
     # KPI diario de la analítica (2026-09-24). Nace apagado por `ANALITICA_KPI`;
     # el interruptor vive dentro de `correr_kpi`.
     'analitica_kpi': 'init_scheduler',
+    # Re-evaluación de retenidos por cartera cada 30 min (m044cartera).
+    'cartera_service': 'init_scheduler',
 }
 
 #: Fuera de `app/services/`. El barrido de vencimientos de flota vivía sin

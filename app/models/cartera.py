@@ -62,7 +62,9 @@ class RetencionCartera(db.Model):
     almacen_id = db.Column(db.Integer)
     compuerta = db.Column(db.String(10), nullable=False)
 
-    cond_pago = db.Column(db.String(10))
+    #: La condición del pedido (`f430_id_cond_pago`). No se llama `cond_pago`
+    #: a propósito: el trinquete de contado vigila ese nombre como decisión de cobro.
+    condicion_pago = db.Column(db.String(10))
     dias_credito = db.Column(db.Integer)
     valor = db.Column(db.Numeric(16, 2))
     #: `[{codigo, texto, ...cifras}]` — códigos: MORA, CUPO_EXCEDIDO, SIN_CUPO,

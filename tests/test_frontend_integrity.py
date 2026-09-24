@@ -757,6 +757,29 @@ _EXENTOS_POR_REGLA = (
 # necesita un tab. La pregunta correcta es QUÉ DECISIÓN DEBERÍA ESTAR INFORMANDO.
 # Un número que el usuario no puede auditar no se obedece: se ignora.
 DEUDA_SIN_UI = {
+    # 2026-09-24 · Retención de cartera (m044cartera). API servicio a servicio
+    # para el Gestor de Cartera (`exige_token_servicio('CARTERA_GESTOR_TOKEN')`,
+    # Bearer). Sin consumidor en el PWA A PROPÓSITO: la llama el Gestor, no una
+    # persona. Lo que se pierde si nadie la llama: el usuario de cartera tiene
+    # que entrar al WMS (panel de respaldo, `cartera.js`) para autorizar, y el
+    # canal institucional / acuerdos vigentes nunca llegan a la política.
+    '/api/cartera/retenciones':
+        'Lista para el Gestor de Cartera (servicio a servicio, cursor cambiados_desde). '
+        'La consume el Gestor; en el WMS la vista es /api/cartera/panel/retenciones.',
+    '/api/cartera/retenciones/<int:rid>':
+        'Detalle de una retención para el Gestor de Cartera (servicio a servicio).',
+    '/api/cartera/retenciones/<int:rid>/autorizar':
+        'El Gestor autoriza la excepción de crédito (usuario de cartera, motivo, tope, '
+        'vigencia ≤ 30 días). Respaldo en el WMS: /api/cartera/panel/.../autorizar.',
+    '/api/cartera/retenciones/<int:rid>/convertir-contado':
+        'El Gestor convierte el pedido retenido a contado (la FE sale C02).',
+    '/api/cartera/retenciones/<int:rid>/reevaluar':
+        'El Gestor pide releer la cartera tras un pago. El barrido de 30 min lo hace solo.',
+    '/api/cartera/habilitaciones':
+        'El Gestor empuja canal, acuerdo vigente y excepciones por cliente. Sin esto, '
+        'ningún institucional se exime de la mora y ningún acuerdo retiene el crédito.',
+    '/api/cartera/salud':
+        'Frescura de la cartera y retenidos por antigüedad para el Gestor de Cartera.',
     # 2026-09-24 · Fase 1 de analítica, capa semántica y KPI diario. `/resumen`
     # (la portada 🎯 ¿Cómo vamos?), `/metricas` («Cómo se mide cada cifra» de
     # 🩺 Diagnóstico) y `/kpi/recalcular` (botón de admin de la portada) ya

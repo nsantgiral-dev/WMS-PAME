@@ -50,6 +50,7 @@ import json
 import logging
 import os
 import zlib
+from contextlib import contextmanager
 from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 
@@ -584,11 +585,15 @@ def lineas_de_pedido(pedido_clave: str) -> list:
     from app.models.pedido_historia import PedidoHistoria
     if not pedido_clave:
         return []
-    return [{'item_codigo': (h.item_codigo or '').strip(), 'vlr_neto': h.vlr_neto,
-             'pedida': h.cantidad_pedida, 'remisionada': h.cantidad_remisionada,
-             'cliente_id': h.cliente_id, 'cliente': h.cliente,
-             'vendedor_id': h.vendedor_id, 'cond_pago': h.cond_pago}
-            for h in PedidoHistoria.query.filter_by(pedido_clave=pedido_clave).all()]
+    out = []
+    for h in PedidoHistoria.query.filter_by(pedido_clave=pedido_clave).all():
+        cobro = _cp.cobro_contraentrega(h.cond_pago)
+        out.append({'item_codigo': (h.item_codigo or '').strip(), 'vlr_neto': h.vlr_neto,
+                    'pedida': h.cantidad_pedida, 'remisionada': h.cantidad_remisionada,
+                    'cliente_id': h.cliente_id, 'cliente': h.cliente,
+                    'vendedor_id': h.vendedor_id, 'cond_pago': cobro['codigo'],
+                    'cobro_contraentrega': cobro['cobrar']})
+    return out
 
 
 def lineas_de_siesa(filas: list) -> list:
@@ -698,14 +703,21 @@ def consumo_wms(nit: str, excluir_pedido: str = None, filas: list = None) -> dic
                                        TareaPacking.estado != EstadoPacking.CANCELADO).all():
         if (t.tipo_documento or '').upper() == 'TRASLADO':
             continue
-        if _cp.cobro_de_tarea(t)['cobrar']:
-            continue                      # contado: no consume cupo
+        lineas = None
+        codigo = _cp.codigo_vigente(t)
+        if not codigo:
+            # La tarea todavía no tiene la condición anotada: la del pedido.
+            lineas = lineas_de_pedido(t.pedido_clave)
+            codigo = next((l['cond_pago'] for l in lineas if l.get('cond_pago')), None)
+        if _cp.cobro_contraentrega(codigo)['cobrar']:
+            continue                      # contado (o supuesto): no consume cupo
         if t.fe_consec and ((t.fe_tipo or '').strip(), str(t.fe_consec).strip()) in en_cartera:
             continue                      # ya está en la cartera: no se cuenta dos veces
         if t.valor_factura is not None:
             v, fuente_v = _dec(t.valor_factura), 'factura'
         else:
-            v, _c = valor_de_items(lineas_de_pedido(t.pedido_clave))
+            v, _c = valor_de_items(lineas if lineas is not None
+                                   else lineas_de_pedido(t.pedido_clave))
             fuente_v = 'estimado'
         if v is None:
             v, fuente_v = Decimal(0), 'desconocido'
@@ -977,7 +989,7 @@ def _registrar_retencion(ev: dict, compuerta: str, pedido: dict, tarea=None,
         vendedor_id=pedido.get('vendedor_id'),
         tarea_packing_id=getattr(tarea, 'id', None),
         almacen_id=pedido.get('almacen_id') or getattr(tarea, 'almacen_id', None),
-        compuerta=compuerta, cond_pago=ev.get('cond_pago'), dias_credito=ev.get('dias_credito'),
+        compuerta=compuerta, condicion_pago=ev.get('cond_pago'), dias_credito=ev.get('dias_credito'),
         valor=ev.get('valor'), motivos=motivos, evaluacion=_json(ev),
         as_of=_as_of(ev), origen_dato=ev.get('origen'),
         estado=EstadoRetencion.RETENIDO,
@@ -1093,31 +1105,17 @@ def datos_pedido(pedido_clave, numero_pedido=None, tipo=None, consec=None, co=No
 # Lock por cliente
 # ═════════════════════════════════════════════════════════════════════════════
 
+def n_lock_nit(nit: str) -> int:
+    """La posición del NIT en `RANGO_CARTERA_NIT`. Dos NIT que caen en la misma
+    solo se serializan entre sí (un «otro despacho en curso» de más): nunca
+    se dejan pasar juntos."""
+    from app.utils.lock import RANGO_CARTERA_NIT
+    return zlib.crc32(nit_normalizado(nit).encode()) % RANGO_CARTERA_NIT[1]
+
+
 def clave_lock_nit(nit: str) -> int:
     from app.utils.lock import RANGO_CARTERA_NIT, clave_en_rango
-    return clave_en_rango(RANGO_CARTERA_NIT,
-                          zlib.crc32(nit_normalizado(nit).encode()) % RANGO_CARTERA_NIT[1])
-
-
-def tomar_lock_nit(nit: str):
-    """Lock de sesión (conexión dedicada) por NIT, sin esperar. Lo suelta el
-    teardown de la petición (`soltar_locks_de_la_peticion`) o quien lo tomó."""
-    from app.utils.lock import tomar_lock_de_sesion
-    lock = tomar_lock_de_sesion(clave_lock_nit(nit), f'cartera_nit_{nit}')
-    if lock.tomado and _en_request():
-        from flask import g
-        g.setdefault('_cartera_locks', []).append(lock)
-    return lock
-
-
-def soltar_locks_de_la_peticion(_exc=None):
-    try:
-        from flask import g
-        locks = g.pop('_cartera_locks', [])
-    except Exception:  # noqa: BLE001
-        return
-    for lock in locks:
-        lock.liberar()
+    return clave_en_rango(RANGO_CARTERA_NIT, n_lock_nit(nit))
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -1162,33 +1160,46 @@ def _aplicar_modo(ev: dict, pedido: dict, compuerta: str, tarea=None,
     return Paso(False, RETIENE, ev, r, _mensaje(ev, r))
 
 
+@contextmanager
 def compuerta_inicio(numero_pedido, tipo, consec, co=None, items=None, almacen_id=None,
-                     usuario_id=None) -> Paso:
-    """G1 — al tocar «Aprobar», antes de crear el picking.
+                     usuario_id=None):
+    """G1 — al tocar «Aprobar», antes de crear el picking. Context manager:
 
-    Contado → pasa sin red. Crédito real → toma el lock del NIT (lo suelta el
-    teardown de la petición, después de crear el packing: así el pedido
-    siguiente del mismo cliente ya lo ve en `consumo_wms`) y evalúa con el
-    valor pendiente. Si retiene, deja la retención comiteada.
+        with cartera_service.compuerta_inicio(...) as puerta:
+            if not puerta.pasa:
+                return 409
+            ...crear picking y packing...
+
+    Contado → rinde sin red y sin lock. Crédito real → toma el lock de sesión
+    del NIT y lo **sostiene mientras dura el bloque**: el packing se crea
+    adentro, así que el pedido siguiente del mismo cliente ya lo ve en
+    `consumo_wms`. Otro despacho del mismo NIT en curso → `DespachoEnCurso`.
+    Si retiene, deja la retención comiteada.
     """
     from app.services.cadena_pedido import clave_de_documento
+    from app.utils.lock import RANGO_CARTERA_NIT, advisory_lock, clave_en_rango
     clave = clave_de_documento(numero_pedido=numero_pedido, tipo=tipo, consec=consec,
                                almacen_id=almacen_id, co=co)
     if not clave:
-        return Paso(True, 'NO_APLICA', {'nota': 'pedido sin clave: no se puede evaluar'})
+        yield Paso(True, 'NO_APLICA', {'nota': 'pedido sin clave: no se puede evaluar'})
+        return
     pedido = datos_pedido(clave, numero_pedido, con_siesa=False)
     cobro = _cp.cobro_contraentrega(pedido.get('cond_pago'))
     if cobro['cobrar']:
-        return Paso(True, 'NO_APLICA', {'cobro': cobro})
+        yield Paso(True, 'NO_APLICA', {'cobro': cobro})
+        return
     pedido = datos_pedido(clave, numero_pedido, tipo, consec, co)
     pedido['almacen_id'] = almacen_id
     nit = pedido.get('nit')
-    lock = tomar_lock_nit(nit or clave)
-    if not lock.tomado:
-        raise DespachoEnCurso(f'Otro despacho a crédito del cliente {nit} se está evaluando '
-                              'en este momento. Reintentá en unos segundos.')
-    if not _en_request():
-        lock.liberar()
+    with advisory_lock(clave_en_rango(RANGO_CARTERA_NIT, n_lock_nit(nit or clave)),
+                       f'cartera_nit_{nit}') as tomado:
+        if not tomado:
+            raise DespachoEnCurso(f'Otro despacho a crédito del cliente {nit} se está '
+                                  'evaluando en este momento. Reintentá en unos segundos.')
+        yield _decidir_inicio(clave, pedido, nit, items, usuario_id)
+
+
+def _decidir_inicio(clave, pedido, nit, items, usuario_id) -> Paso:
     valor, completo = valor_de_items(pedido['lineas'],
                                      [{'item_codigo': i.get('item_codigo'),
                                        'cantidad_pendiente': i.get('cantidad_pendiente')}
@@ -1540,7 +1551,7 @@ def reevaluar(retencion_id: int, usuario=None, origen: str = 'WMS',
     ctx = {'pedido_clave': r.pedido_clave, 'forzar': cartera is None}
     if cartera is not None:
         ctx['cartera'] = cartera
-    ev = evaluar(r.nit, r.sucursal, valor, r.cond_pago, ctx)
+    ev = evaluar(r.nit, r.sucursal, valor, r.condicion_pago, ctx)
     ahora = datetime.utcnow()
     r.reevaluada_en = r.actualizada_en = ahora
     r.reevaluaciones = (r.reevaluaciones or 0) + 1
@@ -1669,7 +1680,7 @@ def retencion_publica(r) -> dict:
         'tarea_packing_id': r.tarea_packing_id,
         'cliente': r.cliente, 'nit': r.nit, 'sucursal': r.sucursal,
         'vendedor': r.vendedor_id,
-        'cond_pago': r.cond_pago, 'dias_credito': r.dias_credito,
+        'cond_pago': r.condicion_pago, 'dias_credito': r.dias_credito,
         'valor': float(r.valor) if r.valor is not None else None,
         'motivos': r.motivos or [],
         'motivos_codigos': [m.get('codigo') for m in (r.motivos or []) if m.get('retiene')],
@@ -1772,6 +1783,22 @@ def resumen_por_pedido(numeros: list) -> dict:
                                             if m.get('retiene')],
                                 'compuerta': r.compuerta, 'desde': _iso(r.creada_en)}
     return out
+
+
+def liberadas_por_pedido(numeros: list) -> set:
+    """Pedidos cuya caja quedó retenida en el cierre (o en la emisión) y
+    cartera ya liberó: la cola ofrece «Cerrar caja» en vez de «Error Siesa»."""
+    if not numeros:
+        return set()
+    vivos = {r.numero_pedido for r in RetencionCartera.query.filter(
+        RetencionCartera.numero_pedido.in_(list(numeros)),
+        RetencionCartera.estado == EstadoRetencion.RETENIDO)}
+    return {r.numero_pedido for r in RetencionCartera.query.filter(
+        RetencionCartera.numero_pedido.in_(list(numeros)),
+        RetencionCartera.compuerta.in_((Compuerta.CIERRE, Compuerta.EMISION)),
+        RetencionCartera.estado.in_((EstadoRetencion.AUTORIZADO,
+                                     EstadoRetencion.CONVERTIDO_CONTADO,
+                                     EstadoRetencion.LIBERADO_PAGO)))} - vivos
 
 
 def informe_de_tarea(tarea, base: dict) -> list:

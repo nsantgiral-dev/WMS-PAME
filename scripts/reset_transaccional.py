@@ -50,6 +50,16 @@ VERDE, ROJO, AMAR, GRIS, FIN = '\033[92m', '\033[91m', '\033[93m', '\033[90m', '
 
 # Se vacían. Orden importa: hijos antes que padres por las FKs.
 OPERATIVAS = [
+    # Retención de cartera (m044cartera, 2026-09-24). Sin FK hacia nada: el
+    # orden no importa. Las retenciones y sus resoluciones del ensayo son del
+    # ensayo (quién autorizó queda además en `bitacora_acciones`, protegida);
+    # la foto de cartera es caché de Siesa; las habilitaciones las vuelve a
+    # empujar el Gestor de Cartera; las claves de idempotencia solo valen
+    # para reintentos de la misma corrida.
+    'retenciones_cartera',
+    'cartera_cliente',
+    'cartera_habilitaciones',
+    'cartera_idempotencia',
     # Devolución de cliente PRIMERO: apunta a `tareas_packing` y a
     # `recaudos_entrega`, que se vacían más abajo. Sin este orden el DELETE de
     # esas dos falla por clave foránea, el `except` de abajo lo imprime como un
