@@ -3064,3 +3064,43 @@ atributo» de la tabla de huecos del guard de `esc()`.
 **No desplegado a propósito:** la rama local `feat/cartera-nc-sensor`
 (`4a95368`, 2026-08-01, «NO DESPLEGAR AÚN») nunca se subió a `origin` y no
 está en `qa`. Decidir antes de integrarla.
+
+---
+
+## Conteo: lo que encontró el recorrido end to end (2026-09-23)
+
+`tests/flujo/test_e2e_inventario_ciclico.py` recorre un día de inventario
+cíclico **por los endpoints HTTP reales**, con JWT por rol (operario, jefe,
+supervisor, admin): plan con cupo y rezago, HUD del operario, tolerancias,
+doble ciego, CC3, aprobación por monto, ventas durante el conteo, «no lo
+encontré», cancelar cadenas, `/editar`, tablero del líder, estadísticas y
+auditoría. Encontró cuatro defectos, los cuatro con test y mutación:
+
+| | Qué pasaba | Ahora |
+|---|---|---|
+| **CNT-05 falso BLOQUEA** | Toda sesión AJUSTANDO era «atascada», y ése es el estado normal mientras su job espera en la cola: un bloqueante por cada aprobación | Solo AJUSTANDO **sin** job `AJUSTE_CONTEO` vivo |
+| **Números de Siesa al operario** | Además del RECONTAR, el cierre dentro de tolerancia y el del CC2 devolvían `ajuste_bloqueado`, `detalle_ajuste`, `no_sale_solo` («salida sin confirmar 5, POS 3», «el ajuste vale $3.000»). La pantalla no los pintaba; viajaban igual | `ConteoService.respuesta_para_quien_cuenta` en las dos puertas HTTP; supervisión recibe el resultado completo (el CC3 lo necesita). Trinquete AST: toda llamada a `registrar_conteo` en `app/` pasa por la política |
+| **`/editar` reasignaba con el parcial ajeno** | Cambiar el `operario_id` de un EN_PROCESO le pasaba al nuevo el conteo parcial y la foto del anterior; cambiarlo en un CC1 ya contado sacaba del doble ciego a quien contó | `ConteoService.reasignar_operario`: solo PENDIENTE y EN_PROCESO; el EN_PROCESO pasa por `devolver_al_pool` (`MotivoDescarteConteo.REASIGNADO`) |
+| **CNT-06 contaba filas** | Un CC2/CC3 resuelto queda en DESCUADRE para siempre: «8 descuadres abiertos» donde esperaban 2 cadenas | Solo raíces |
+
+**Abierto, decisión de producto:** corregir la raíz con `/editar` no cambia el
+veredicto de la cadena. CC1 45 → CC2 47 → CC3 48, el admin corrige la raíz a
+50 → la raíz queda MATCH sin ajuste, pero `veredicto_cadena`
+(`metricas/conteo.py`) sigue leyendo el CC3 y cuenta `ERROR_CC3`. ¿La
+corrección reescribe la historia de la cadena o solo su desenlace?
+
+### Y la pantalla (mismo día)
+
+Inventario Cíclico abre en **🧭 Líder** (antes abría en «En progreso», con los
+miles de pendientes de abril); los estados y motivos se muestran en palabras de
+bodega («Contado con diferencia», «faltante», «Saltar 2º conteo») y no en
+códigos; el modal de aprobar ya no rotula «WMS» a la cifra de Siesa, muestra el
+definitivo y perdió el cuadro de observaciones que nunca se enviaba; una
+tarjeta con el ajuste bloqueado por el servidor ya no ofrece aprobar; aprobar
+desde el definitivo pide confirmación. `tests/test_inventario_ciclico_ux.py`.
+
+**Propuesto, no hecho:** los bloqueados y «mercancía sin código» aparecen en
+Líder **y** en Definitivo (quitar la copia exige retirar
+`GET /api/conteo/bloqueados` y `/novedades`); se aprueba desde Conteos → Acción
+y desde Líder, pero solo Líder conoce el tope en pesos de quien mira; y
+Estadísticas todavía muestra claves crudas (`sin_veredicto`, `excluidos`).
