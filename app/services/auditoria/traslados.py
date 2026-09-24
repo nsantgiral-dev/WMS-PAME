@@ -291,7 +291,7 @@ def se_pueden_contar_los_traslados_en_vuelo(ctx=None):
     ese camino y **no se pueden recuperar** — no hay de dónde deducir la fecha
     sin inventarla.
     """
-    from app.utils.fecha import ahora_bogota
+    from app.utils.fecha import ahora_bogota, dia_operativo_de
     hoy = ahora_bogota().date()
     out = []
     sin_fecha = []
@@ -299,7 +299,7 @@ def se_pueden_contar_los_traslados_en_vuelo(ctx=None):
         if not s.fecha_despacho:
             sin_fecha.append(s.codigo or f'traslado#{s.id}')
             continue
-        dias = (hoy - s.fecha_despacho.date()).days
+        dias = (hoy - dia_operativo_de(s.fecha_despacho)).days
         if dias < DIAS_EN_TRANSITO_ANORMAL:
             continue
         out.append(Hallazgo(
@@ -369,7 +369,7 @@ def toda_averia_recibida_termina_dictaminada(ctx=None):
     sola —«¿hay averías sin decidir, y desde cuándo?»— y se contesta una vez.
     """
     from app.models.traslado import ClaseTraslado
-    from app.utils.fecha import ahora_bogota
+    from app.utils.fecha import ahora_bogota, dia_operativo_de
 
     hoy = ahora_bogota().date()
     pendientes = []
@@ -381,7 +381,7 @@ def toda_averia_recibida_termina_dictaminada(ctx=None):
         # invariante gritaría para siempre sobre traslados ya resueltos.
         if s.averia_veredicto is not None:
             continue
-        dias = (hoy - s.fecha_entrega.date()).days if s.fecha_entrega else None
+        dias = (hoy - dia_operativo_de(s.fecha_entrega)).days if s.fecha_entrega else None
         pendientes.append({
             'codigo': s.codigo or f'traslado#{s.id}',
             'origen': s.bodega_origen_siesa,

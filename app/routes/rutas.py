@@ -10,7 +10,7 @@ from app.models.ruta_despacho import RutaDespacho
 from app.routes._auth_helpers import _es_admin_o_jefe, _solo_admin, Roles
 from app.models.recaudo_entrega import EstadoEntrega
 from app.services.ruta_service import RutaService, ConflictError
-from app.utils.fecha import dia_operativo as _dia_operativo
+from app.utils.fecha import dia_operativo as _dia_operativo, dia_operativo_de as _dia_operativo_de
 
 logger = logging.getLogger(__name__)
 
@@ -844,7 +844,8 @@ def liquidacion_desglose():
             credito.append({
                 'recaudo_id': r.id,
                 'ruta_id': r.ruta_id,
-                'fecha_entregada': (_ru.fecha_entregada.date().isoformat()
+                # El día que alguien LEE, en Bogotá (Regla 5): la columna es UTC.
+                'fecha_entregada': (_dia_operativo_de(_ru.fecha_entregada).isoformat()
                                     if _ru is not None and _ru.fecha_entregada else None),
                 'cliente': (_t.cliente if _t is not None else None),
                 'pedido': (f'{_t.tipo_docto_pedido_siesa}-{_t.consec_docto_pedido_siesa}'

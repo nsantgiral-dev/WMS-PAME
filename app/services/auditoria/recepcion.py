@@ -165,11 +165,11 @@ def ninguna_entrada_sin_mercancia(ctx=None):
     detector_ciego='tests/flujo/test_flujo_devoluciones_recepcion.py::TestDetectorRecepcion::test_cuenta_las_abiertas',
 )
 def se_pueden_contar_las_recepciones_abiertas(ctx=None):
-    from app.utils.fecha import ahora_bogota
+    from app.utils.fecha import ahora_bogota, dia_operativo_de
     hoy = ahora_bogota().date()
     out = []
     for r in _recepciones(('ABIERTA', 'EN_PROCESO')):
-        ref = r.fecha_creacion.date() if r.fecha_creacion else None
+        ref = dia_operativo_de(r.fecha_creacion) if r.fecha_creacion else None
         dias = (hoy - ref).days if ref else None
         out.append(Hallazgo(
             referencia=r.codigo or f'recepcion#{r.id}',

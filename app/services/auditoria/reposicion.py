@@ -107,11 +107,11 @@ def el_origen_y_el_destino_son_distintos(ctx=None):
     detector_ciego='tests/flujo/test_flujo_conteo.py::TestDetectorReposicion::test_cuenta_las_que_estan_en_curso',
 )
 def se_pueden_contar_las_reposiciones_en_curso(ctx=None):
-    from app.utils.fecha import ahora_bogota
+    from app.utils.fecha import ahora_bogota, dia_operativo_de
     hoy = ahora_bogota().date()
     out = []
     for t in _tareas(('EN_PROCESO',)):
-        ref = t.fecha_inicio.date() if t.fecha_inicio else None
+        ref = dia_operativo_de(t.fecha_inicio) if t.fecha_inicio else None
         dias = (hoy - ref).days if ref else None
         out.append(Hallazgo(
             referencia=t.codigo or f'reposicion#{t.id}',
