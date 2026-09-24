@@ -46,8 +46,9 @@ Paquete propio en la raíz, con arquitectura hexagonal (`dominio/`,
 `adaptadores/`, `api/`, `puertos.py`) — distinta del resto del repo, que es
 `routes/` + `services/` + `models/`.
 
-**Un `grep` acotado a `app/` no lo ve.** Sus 21 endpoints están registrados
-(`/flota/*`) y funcionan; buscarlos en `app/routes/` da cero resultados y la
+**Un `grep` acotado a `app/` no lo ve.** Sus endpoints —**45 pares
+ruta×método sobre 43 rutas**, contados contra `url_map` el 2026-09-24; este
+archivo decía «21» desde la tanda 1— están registrados (`/flota/*`) y funcionan; buscarlos en `app/routes/` da cero resultados y la
 conclusión natural —«esto es UI muerta»— es falsa. Para verificar si un
 endpoint existe, la fuente es el `url_map`:
 
@@ -3980,3 +3981,66 @@ motivo y verde después—, 5 skipped, 19 xfailed.
 - Papeles y Custodia **siguen también en Analítica** (la decisión «tab
   completo» de sus 15 paneles tiene tests); en Pendientes está la versión
   accionable.
+
+## Flota: el rol no alcanza — sobre QUÉ vehículo opera el conductor (2026-09-24)
+
+**La clase:** *un endpoint `LECTURA_FLOTA` que recibe una placa, un vehículo o
+una entidad opera sin verificar que el conductor tiene derecho sobre ella.*
+`@exige` pregunta por el rol; la placa la elige el cuerpo del request. Casos
+ejecutados ese día: un conductor dejaba el camión de la sede **a nombre de un
+compañero**; reescribía con `origen=correccion` el odómetro —CPK, preventivo—
+de un camión que no manejaba, y registraba inspección, daño y tanqueo sobre
+cualquier placa; `GET /flota/foto/<id>` le daba el **escaneo del SOAT o de la
+tarjeta de propiedad** de cualquier vehículo.
+
+| Qué | Regla | Dónde |
+|---|---|---|
+| Traspaso | Un conductor deja la custodia **solo a su nombre**, y a la sede solo el camión que tiene. 403. El relevo entre conductores es entregar en la sede y recibir de la sede: cada uno firma su mitad con sus fotos | `dominio.custodia.custodio_que_puede_nombrar`, llamada por `traspaso.traspasar` |
+| Odómetro, inspección, daño, tanqueo | El conductor, **solo sobre el vehículo de su custodia ACTIVA** (no el de su ruta: la ruta es sugerencia, y Regla 0). Gestión y control de flota, sobre cualquiera | `_permisos.sin_derecho_sobre_vehiculo` |
+| `origen=correccion` | `MAESTROS_FLOTA` aunque la puerta sea `LECTURA_FLOTA`: la más reciente reescribe el odómetro. El conductor avisa | `_permisos.sin_permiso_de_corregir` |
+| Fotos | El conductor ve las de sus custodias (por **padre**, no por autor), sus daños y sus lecturas. **Nunca documentos** | `_permisos.FOTO_DEL_CONDUCTOR` (total sobre `EntidadFoto`) |
+| `/custodia/<id>/fotos` | Conductor: solo sus turnos | `_permisos.sin_derecho_sobre_custodia` |
+
+El 403 de derecho lleva `motivo: 'sin_derecho'` y no `roles_permitidos`: al
+que lo recibe no le falta un rol, le falta el vehículo.
+
+**Decisión — cierre forzado para `control_flota`:** se le **da** (antes veía el
+campo del motivo y el backend lo trataba como conductor → 409). El patio lo
+opera él. Tiene `QuienPide.CONTROL_FLOTA` y, a diferencia del admin, **las
+fotos de cierre no lo eximen**: siempre motivo, siempre marcado con su nombre
+(`Veredicto.fotos_no_eximen`). Es la regla 11: «cierres forzados por semana» es
+una de sus señales y «cero en un mes» su criterio para crecer — un cierre ajeno
+con fotos que no contara sería el botón que baja su propio contador. UI:
+`FLOTA_ROLES_FUERZAN_CIERRE` = `FUERZA_CIERRE` (test), y el campo solo aparece
+si el turno vigente es de un conductor.
+
+**Decisión — alta de vehículos y cuentas de conductor: NO para
+`control_flota`.** Tocan despacho e identidad, no el registro de flota; siguen
+`_solo_admin` en `app/routes/rutas.py` (sin tocar). Lo que se arregló es que la
+pantalla no lo mande a «Rutas → Vehículos», una pestaña que no ve:
+`flotaDondeSeDaDeAlta()` le dice «pedíselo a administración».
+
+**Trinquete:** `tests/flota/test_derecho_del_conductor.py` — inventario por AST
+de toda ruta de `flota/api/` cuya tupla de `@exige` admite al conductor
+(`VERIFICAN` 6 · `VERIFICAN_EN_EL_ADAPTADOR` 1 · `SIN_VERIFICAR` 6 con motivo,
+tope que solo encoge) y **cada puerta verificada ejercida por HTTP**: JWT de A
+sobre lo de B → 403, sobre lo propio → no 403. Meta-tests (docstring,
+comentario y función anidada no cuentan; tupla que no sabe resolver → error,
+no cero; piso 13). **13 mutaciones, las 13 rojas.** Helper de tests:
+`tests/flota/_turno.py::dar_turno` (el conductor recibe por el adaptador real).
+
+**Lo que NO cubre, dicho:**
+- Las **lecturas** del conductor siguen abiertas sobre cualquier placa, a
+  propósito y declaradas: `custodia/activa`, `hallazgos/<placa>`,
+  `inspeccion/items/<placa>` (recibir exige ver lo heredado antes de tenerlo).
+- La verificación vive en la **frontera**, no en los adaptadores: hoy cada
+  operación tiene una sola puerta (verificado). Un servicio nuevo que llame a
+  `registrar_tanqueo` desde `app/` no la heredaría; el trinquete solo mira
+  `flota/api/`.
+- La **cola offline** del conductor: si un tanqueo o una inspección se
+  sincroniza DESPUÉS de la entrega del turno, ahora es 403 (sin gracia, Regla
+  0). Una cola FIFO lo evita; una que reordene, no.
+- Las fotos con `entidad_tipo='odometro'` no tienen escritor todavía; la regla
+  (autor de la lectura) está escrita para cuando lo tengan.
+- `rutas.py`/`almacenes.py` usan `LECTURA_FLOTA` fuera de `flota/` para leer
+  maestros; no están en este inventario.

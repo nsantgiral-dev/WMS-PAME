@@ -102,14 +102,26 @@ la empresa, y eso tiene que verse.
 
 Esa conversación la tienen ustedes dos. El sistema no la reemplaza.
 
+**No podés dejar el turno a nombre de otro conductor** (desde el 2026-09-24).
+El relevo es: vos lo entregás en la sede con tus 4 fotos, y el que sigue lo
+recibe con las suyas. Si lo dejaras a su nombre, él respondería por un camión
+que no recibió ni fotografió.
+
+**Registrás solo sobre el camión de tu turno abierto:** odómetro, inspección,
+daño y tanqueo. Sobre otra placa el sistema te lo rechaza. Y de fotos ves las
+de tus turnos y tus reportes — las de los documentos (SOAT, tarjeta) no: lo
+que necesitás saber, que están vencidos, te aparece en tu pantalla.
+
 **No podés cargar ni modificar la ficha técnica del vehículo.**
 La ficha tiene el `km_inicial`, que es el número contra el que se valida todo tu
 kilometraje después. Darte la llave de ese dato sería darte el dato que después
 te respalda a vos. Lo carga control de flota.
 
 **No podés registrar un odómetro menor al anterior.** La base lo rechaza. Si te
-equivocaste al escribir, se corrige con una lectura nueva de tipo *corrección* y
-motivo escrito — no se edita la anterior.
+equivocaste al escribir, **avisale a control de flota**: él la corrige con una
+lectura nueva de tipo *corrección*, mirando la foto del tablero — no se edita la
+anterior. Desde el 2026-09-24 la corrección no es tuya: la más reciente
+reescribe el odómetro del camión, y corregir es verificar.
 
 ---
 

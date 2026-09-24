@@ -33,6 +33,8 @@ va a negar con 403 enseña a ignorar los errores.
 | **Registrar** un gasto y la factura de una reparación | Sos el dueño del registro: consignar lo que ya pasó es tuyo |
 | **Registrar** qué se hizo en una visita al taller | La orden la abre gestión; lo que se hizo adentro lo registrás vos |
 | Reportar un daño | Reportar es de todos. El desenlace no |
+| **Forzar el cierre** de un turno que su conductor no cerró (desde el 2026-09-24) | El patio lo operás vos. Pide **motivo escrito siempre** —aunque tengas las fotos de cierre— y queda con tu nombre en «cierres forzados». Avisale el mismo día a quien lo tenía |
+| Asignar un vehículo a cualquier conductor desde el recibo de escritorio | El conductor, desde su celular, solo lo recibe a su propio nombre |
 
 ---
 
@@ -53,8 +55,10 @@ va a negar con 403 enseña a ignorar los errores.
 | Abrir una orden de trabajo (mandar el camión al taller) | Gestión |
 | Cerrar o anular una orden de trabajo | Gestión |
 | Cerrar, descartar o aplazar un daño | Gestión |
+| Dar de alta vehículos o conductores, vincular la cuenta de un conductor | Administración (decidido el 2026-09-24: tocan despacho e identidad, no el registro de flota) |
 
-Los tres comprometen plata o cierran un ciclo. Los tres se piden **escalando**,
+Los tres primeros comprometen plata o cierran un ciclo; el alta se le pide a
+administración, y la pantalla te lo dice así. Todo se pide **escalando**,
 que es literalmente lo que tu ficha dice que hacés: *no ordenás, señalás plazos
 vencidos y escalás*. En la pantalla no vas a ver esos botones — no por adorno:
 dejarte a la vista un gesto que el sistema te va a negar con 403 **enseña a

@@ -127,3 +127,16 @@ respuesta. `flota/dominio/senales.py` no recibe personas.
 *Motivo: un detector que sin dato contesta «normal» se apaga sin que nadie lo
 note, y uno que culpa mata la adopción (regla 2). La explicación de casi toda
 señal es normal —un taller, un encargo—: la señal pregunta, el encargado decide.*
+
+## 15. El rol dice quién entra; la custodia activa dice sobre qué
+
+Un conductor registra odómetro, inspección, daño y tanqueo **solo sobre el vehículo de su
+custodia activa**, ve solo las fotos de sus turnos y reportes (nunca de documentos), y deja
+un turno solo a **su** nombre. Gestión y control de flota operan la flota entera. Corregir
+un odómetro es de `MAESTROS_FLOTA`. Toda puerta nueva que admita al conductor entra al
+inventario de `tests/flota/test_derecho_del_conductor.py` o el build se pone rojo.
+
+*Motivo: `@exige` mira el rol y la placa la elige el cuerpo del request. El 2026-09-24 un
+conductor reescribía por `correccion` el odómetro —el CPK, el preventivo— de un camión
+que no manejaba, dejaba el camión de la sede a nombre de un compañero y bajaba el SOAT
+de cualquier vehículo. Un guard cuya precondición la manda quien pide no es un guard.*
