@@ -397,7 +397,8 @@ def elegir_coordenada_del_maestro(capturas) -> Eleccion:
 # ═════════════════════════════════════════════════════════════════════════════
 
 def registrar_captura(recaudo_id: int, cliente, municipio, geo,
-                      ahora: datetime = None) -> Optional[str]:
+                      ahora: datetime = None, ts_dispositivo: datetime = None,
+                      pos_ts_dispositivo: datetime = None) -> Optional[str]:
     """Guarda la captura de una parada y recalcula el maestro de ese cliente.
 
     Devuelve una etiqueta de lo que pasó (`'capturada'`, `'sin_dato'`,
@@ -453,6 +454,10 @@ def registrar_captura(recaudo_id: int, cliente, municipio, geo,
     fila.fuente = captura.fuente
     fila.motivo_sin_dato = captura.motivo_sin_dato
     fila.capturado_en = ahora
+    # Las horas del TELÉFONO, aparte de `capturado_en` (servidor). `None` =
+    # el cliente no las mandó, no «la misma que el servidor».
+    fila.ts_dispositivo = ts_dispositivo
+    fila.pos_ts_dispositivo = pos_ts_dispositivo
 
     db.session.flush()
     recalcular_maestro(clave, cliente=cliente, municipio=municipio, ahora=ahora)

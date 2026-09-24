@@ -230,7 +230,9 @@ def _armar_parada_muelle_real(db, almacen, conductor, vehiculo, cantidad_pedida=
         b = Bulto.query.get(bulto_id)
         resultado_scan = MuelleService.cargar_bulto(b.codigo_barras, ruta.id)
         assert resultado_scan.get('ok'), f'el bulto {b.codigo_barras} no cargó en el muelle'
-    RutaService.cerrar_ruta(ruta.id)
+    # El arnés no arma el mundo de flota (SOAT, inspección, custodia): la
+    # salida se reconoce con motivo, que es lo que haría quien despacha.
+    RutaService.cerrar_ruta(ruta.id, motivo_advertencias='arnés e2e sin flota')
 
     flujo.ruta_id = ruta.id
     return flujo, productos[0]

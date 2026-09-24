@@ -24,6 +24,20 @@ class ConflictError(ValueError):
     """Señala un conflicto de unicidad (HTTP 409)."""
 
 
+class AdvertenciasDeFlota(ValueError):
+    """El vehículo tiene algo que la flota sabe y quien despacha no reconoció.
+
+    **Informa, no bloquea**: con un motivo escrito la ruta sale igual, y el
+    motivo queda en la bitácora como FORZAR. Sin motivo, la ruta responde 409
+    con la lista para que la pantalla la muestre y lo pida.
+    """
+
+    def __init__(self, advertencias):
+        self.advertencias = list(advertencias)
+        super().__init__('El vehículo tiene advertencias de flota: '
+                         + '; '.join(a['texto'] for a in self.advertencias))
+
+
 # `EstadoEntrega` vivía definida acá **y** en `models/recaudo_entrega.py`, con
 # los mismos valores y distinto nombre de tupla. Se importa la del modelo: un
 # estado agregado en un solo lado era cuestión de tiempo.
@@ -484,13 +498,53 @@ class RutaService:
         return ruta
 
     @staticmethod
-    def iniciar_ruta(id: int) -> dict:
+    def _reconocer_advertencias_flota(ruta, momento: str, motivo=None,
+                                      usuario_id: int = None) -> list:
+        """Lo que la flota sabe del vehículo, reconocido o no. **Una función**
+        para las dos puertas (iniciar el cargue y despachar).
+
+        Sin advertencias → nada. Con advertencias ya reconocidas en esta ruta
+        (un FORZAR anterior cuyas claves las cubren todas) → nada: no se pide
+        el mismo motivo dos veces en el mismo viaje. Con advertencias nuevas y
+        sin motivo → `AdvertenciasDeFlota`. Con motivo → FORZAR en la bitácora
+        (misma transacción que la transición) y la ruta sigue.
+        """
+        from app.models.bitacora import BitacoraAccion
+        from app.services import senales_ruta as _sr
+        advertencias = _sr.advertencias_de_flota(ruta)
+        if not advertencias:
+            return []
+        claves = {a['clave'] for a in advertencias}
+        reconocidas = set()
+        for fila in (BitacoraAccion.query
+                     .filter_by(accion='FORZAR', entidad='RutaDespacho', entidad_id=ruta.id)
+                     .all()):
+            reconocidas |= set((fila.despues or {}).get('advertencias_flota') or [])
+        if claves <= reconocidas:
+            return advertencias
+        texto = str(motivo).strip() if motivo is not None else ''
+        if not texto:
+            raise AdvertenciasDeFlota(advertencias)
+        registrar_accion(
+            'FORZAR', ruta, usuario_id=usuario_id, motivo=texto,
+            entidad_codigo=f'RUTA-{ruta.id}',
+            antes={'estado': ruta.estado},
+            despues={'momento': momento,
+                     'advertencias_flota': sorted(claves),
+                     'detalle': advertencias})
+        return advertencias
+
+    @staticmethod
+    def iniciar_ruta(id: int, motivo_advertencias: str = None,
+                     usuario_id: int = None) -> dict:
         ruta = RutaDespacho.query.get(id)
         if not ruta:
             raise LookupError('Ruta no encontrada')
         if ruta.estado != EstadoRutaDespacho.PROGRAMADO:
             raise ValueError(f'La ruta debe estar PROGRAMADO, está {ruta.estado}')
 
+        advertencias = RutaService._reconocer_advertencias_flota(
+            ruta, 'iniciar_cargue', motivo_advertencias, usuario_id)
         ruta.estado = EstadoRutaDespacho.EN_CARGUE
         ruta_id = ruta.id
         db.session.commit()
@@ -520,6 +574,7 @@ class RutaService:
             'ruta': ruta.to_dict(),
             'sugeridos_count': len(sugeridos_ids),
             'sugeridos_ids': sugeridos_ids,
+            'advertencias_flota': advertencias,
         }
 
     @staticmethod
@@ -544,7 +599,8 @@ class RutaService:
                 if (b.tarea.municipio or '').lower() in municipios]
 
     @staticmethod
-    def cerrar_ruta(id: int) -> RutaDespacho:
+    def cerrar_ruta(id: int, motivo_advertencias: str = None,
+                    usuario_id: int = None) -> RutaDespacho:
         ruta = (RutaDespacho.query
                 .options(_sl(RutaDespacho.bultos).joinedload(Bulto.tarea))
                 .get(id))
@@ -561,6 +617,11 @@ class RutaService:
                 f'Faltan {sin_confirmar} bulto{"s" if sin_confirmar != 1 else ""} por confirmar. '
                 f'Escanéalos en el muelle antes de cerrar la ruta.'
             )
+
+        # El despacho es cuando el camión sale: la última puerta donde la flota
+        # puede decir algo. Informa, no bloquea — con motivo, sale.
+        RutaService._reconocer_advertencias_flota(
+            ruta, 'despachar', motivo_advertencias, usuario_id)
 
         _n_bultos = len(ruta.bultos)
         _ruta_id  = ruta.id
@@ -588,26 +649,52 @@ class RutaService:
 
         ahora = datetime.utcnow()
         rechazados = 0
-        confirmaciones = data.get('bultos', [])
+        entregados = 0
+        confirmaciones = data.get('bultos', []) or []
 
-        if confirmaciones:
-            bultos_ruta = Bulto.query.filter_by(ruta_despacho_id=id).with_for_update().all()
-            for bulto in bultos_ruta:
-                conf = next((c for c in confirmaciones if c['id'] == bulto.id), None)
-                entregado = conf.get('entregado', True) if conf else True
-                if entregado:
-                    bulto.estado = EstadoBulto.ENTREGADO
-                    bulto.fecha_entrega = ahora
-                else:
-                    bulto.estado = EstadoBulto.RECHAZADO
-                    bulto.fecha_entrega = ahora
-                    bulto.motivo_rechazo = conf.get('motivo_rechazo', 'Sin especificar') if conf else 'Sin especificar'
-                    rechazados += 1
+        # ── Solo se marca lo que alguien DECLARÓ ────────────────────────────
+        #
+        # Antes: todo bulto de la ruta que no venía en el payload —o venía sin
+        # `entregado`— quedaba ENTREGADO. Un bulto que el conductor había
+        # marcado RECHAZADO en la parada, y que después no venía en este cierre,
+        # se volvía «entregado» y salía de la lista de reingreso: la caja
+        # desaparecía del inventario sin que nadie la hubiera entregado.
+        #
+        # Ahora un bulto se toca solo si su entrada trae `entregado` como
+        # booleano literal. El resto conserva su estado (el de la parada, si la
+        # hubo) y se DECLARA en `sin_declarar` con el que tenía. El cierre del
+        # conductor —y su cola offline— manda `bultos: []` porque cada parada
+        # ya marcó sus bultos: ese flujo no cambia.
+        por_id = {}
+        for c in confirmaciones:
+            if isinstance(c, dict) and c.get('id') is not None:
+                por_id[c['id']] = c
+        bultos_ruta = Bulto.query.filter_by(ruta_despacho_id=id).with_for_update().all()
+        sin_declarar = []
+        for bulto in bultos_ruta:
+            conf = por_id.get(bulto.id)
+            entregado = conf.get('entregado') if conf else None
+            if entregado is True:
+                bulto.estado = EstadoBulto.ENTREGADO
+                bulto.fecha_entrega = ahora
+                entregados += 1
+            elif entregado is False:
+                bulto.estado = EstadoBulto.RECHAZADO
+                bulto.fecha_entrega = ahora
+                bulto.motivo_rechazo = (conf.get('motivo_rechazo') or 'Sin especificar')[:100]
+                rechazados += 1
+            elif bulto.estado not in (EstadoBulto.ENTREGADO, EstadoBulto.RECHAZADO):
+                # Ni el cierre ni una parada dijeron qué pasó con este bulto.
+                sin_declarar.append({'id': bulto.id, 'codigo_barras': bulto.codigo_barras,
+                                     'estado': bulto.estado, 'tarea_id': bulto.tarea_id})
 
         ruta.estado = EstadoRutaDespacho.ENTREGADA
         ruta.fecha_entregada = ahora
         _ruta_id = ruta.id
         db.session.commit()
+        if sin_declarar:
+            logger.warning('[RUTAS] Ruta %s entregada con %d bulto(s) sin declarar: %s',
+                           _ruta_id, len(sin_declarar), [b['id'] for b in sin_declarar])
 
         ruta = (RutaDespacho.query
                 .options(
@@ -618,8 +705,11 @@ class RutaService:
                 .get(_ruta_id))
         return {
             'ok': True,
-            'entregados': len(confirmaciones) - rechazados if confirmaciones else 0,
+            'entregados': entregados,
             'rechazados': rechazados,
+            # Bultos que nadie declaró, con el estado que conservan. No es un
+            # error del cierre: es lo que alguien tiene que ir a mirar.
+            'sin_declarar': sin_declarar,
             'ruta': ruta.to_dict(),
         }
 
@@ -815,6 +905,7 @@ class RutaService:
         # en liquidacion_service.py) — una sola fuente, el conductor y el admin
         # ven siempre las mismas cuentas/tasas.
         from app.services.liquidacion_service import CATALOGO_RETENCIONES
+        from app.services import senales_ruta as _sr_p
         retenciones_disponibles = [
             {'tipo': k, 'nombre': v['nombre'], 'puc': v['puc'], 'tasa': v['tasa']}
             for k, v in CATALOGO_RETENCIONES.items()
@@ -832,6 +923,12 @@ class RutaService:
             # ruta rota si la base es 5 y ruido si es 300. Van juntos o no van.
             'referencias_valoradas':   _refs_valoradas,
             'referencias_ambiguas':    _refs_ambiguas,
+            # Qué formas de pago piden comprobante. Del servidor y no de una
+            # lista en el JS (`senales_ruta.requiere_comprobante`), y dentro del
+            # payload que la pantalla cachea: tiene que saberlo sin señal.
+            'formas_con_comprobante':  [f for f in FormaPago.VALIDOS
+                                        if _sr_p.requiere_comprobante(f)],
+            'version_formulario':      _sr_p.VERSION_FORMULARIO_CON_EVIDENCIA,
         }
 
     # La unidad que el sync roto inventó en TODO el catálogo. No es una lista
@@ -1343,8 +1440,58 @@ class RutaService:
                 _buf = BytesIO()
                 _img.convert('RGB').save(_buf, format='JPEG', quality=40, optimize=True)
                 foto = base64.b64encode(_buf.getvalue()).decode('ascii')
-            except Exception:
-                pass
+            except Exception as _e_foto:
+                # Se guarda tal como llegó —una foto sin comprimir sigue siendo
+                # evidencia— pero ya no en silencio: si esto empieza a pasar,
+                # hay un cliente mandando algo que no es una imagen.
+                logger.warning('[RUTAS] foto de la parada %s/%s no se pudo comprimir, '
+                               'se guarda como llegó: %s', ruta_id, tarea_id, _e_foto)
+
+        # ── Evidencia de las excepciones (`senales_ruta`) ──────────────────
+        #
+        # La parada normal (efectivo, completa) no pide nada nuevo. Se exige
+        # evidencia donde está la plata: el pago bancario y «no pagó y se quedó
+        # con la mercancía». Solo al formulario que sabe pedirla
+        # (`version_formulario`): un ítem viejo de la cola offline que se
+        # rechazara quedaría trabado en el teléfono para siempre. Lo que llega
+        # sin evidencia de un formulario viejo NO se rechaza: queda como señal
+        # en la liquidación (`senales_ruta.senales_de_recaudo`).
+        from app.services import senales_ruta as _sr
+        from app.models.geo_entrega import EntregaGeo as _EntregaGeo
+        _previo = RecaudoEntrega.query.filter_by(ruta_id=ruta_id, tarea_id=tarea_id).first()
+        _exige = _sr.formulario_con_evidencia(data)
+
+        referencia_pago = _sr.limpiar_referencia(data.get('referencia_pago'))
+        foto_comprobante = data.get('foto_comprobante') or None
+        if foto_comprobante and len(foto_comprobante) > 2_500_000:
+            raise ValueError('La foto del comprobante es demasiado grande. Máximo ~1.8MB.')
+        _cobra = estado_entrega in (EstadoEntrega.ENTREGADO, EstadoEntrega.PARCIAL)
+        _monto_cobrado = float(data.get('monto_cobrado') or 0)
+        if _exige and _cobra and _sr.requiere_comprobante(forma_pago) and _monto_cobrado > 0:
+            if not referencia_pago:
+                raise ValueError(
+                    'Escribí la referencia del comprobante (al menos los últimos '
+                    f'{_sr.MIN_REFERENCIA} dígitos): sin ella el pago no se puede '
+                    'cruzar contra el banco')
+            if not (foto_comprobante or (_previo and _previo.foto_comprobante)):
+                raise ValueError('Tomale una foto al comprobante del pago')
+
+        if _exige and estado_entrega == EstadoEntrega.ENTREGADO_SIN_PAGO:
+            if not (foto or (_previo and _previo.foto_entrega)):
+                raise ValueError(
+                    'Si el cliente se quedó con la mercancía sin pagar, tomá una foto '
+                    '(la mercancía en el local o la fachada)')
+            _geo_previo = (_EntregaGeo.query.filter_by(recaudo_id=_previo.id).first()
+                           if _previo else None)
+            if not (_sr.geo_fue_intentado(data.get('geo')) or _geo_previo is not None):
+                raise ValueError(
+                    'Tocá «Estoy aquí» para registrar la ubicación antes de confirmar')
+
+        # La hora del teléfono, aparte de la del servidor. Nunca la reemplaza.
+        _ts_disp = _sr.leer_ts(data.get('ts_dispositivo'))
+        _desfase = _sr.desfase_s(_sr.leer_ts(data.get('ts_envio')), datetime.utcnow())
+        _via_cola = data.get('via_cola')
+        _via_cola = _via_cola if isinstance(_via_cola, bool) else None
 
         ids_tarea = {b.id for b in bultos_tarea}
         bultos_rechazados_ids = data.get('bultos_rechazados', [])
@@ -1427,6 +1574,7 @@ class RutaService:
         # decía antes queda en la bitácora (EDITAR), no solo quién editó.
         _CAMPOS_PARADA = ('estado_entrega', 'forma_pago', 'monto_cobrado',
                           'monto_descuento', 'motivo_descuento', 'motivo_rechazo',
+                          'referencia_pago',
                           'observaciones', 'bultos_rechazados_ids',
                           'items_entregados', 'fecha_confirmacion',
                           'confirmado_por', 'editado_por')
@@ -1460,9 +1608,26 @@ class RutaService:
         recaudo.motivo_descuento      = motivo_descuento
         recaudo.monto_descuento       = monto_descuento
         recaudo.observaciones         = data.get('observaciones', '') or None
-        recaudo.foto_entrega          = foto
+        # Una edición sin foto nueva CONSERVA la anterior. Antes la borraba: la
+        # pantalla decía «Foto guardada — toma una nueva para reemplazarla» y
+        # corregir un dedazo en el monto dejaba la parada sin evidencia.
+        if foto or not es_edicion:
+            recaudo.foto_entrega      = foto
         recaudo.bultos_rechazados_ids = list(ids_rechazados_set & ids_tarea)
         recaudo.fecha_confirmacion    = ahora
+        # La referencia se guarda solo donde significa algo: si la parada deja
+        # de ser un cobro bancario, una referencia vieja sería un comprobante
+        # de un pago que ya no se declara.
+        if _cobra and _sr.requiere_comprobante(forma_pago):
+            if referencia_pago or not es_edicion:
+                recaudo.referencia_pago = referencia_pago
+            if foto_comprobante:
+                recaudo.foto_comprobante = foto_comprobante
+        else:
+            recaudo.referencia_pago = None
+        recaudo.ts_dispositivo        = _ts_disp
+        recaudo.ts_desfase_s          = _desfase
+        recaudo.via_cola              = _via_cola
 
         # Detalle de referencias para entrega PARCIAL
         items_raw = data.get('items_entregados') or []
@@ -1515,13 +1680,29 @@ class RutaService:
         try:
             from app.services import geo_cliente as _geo
             _t_geo = db.session.get(TareaPacking, tarea_id)
+            # La distancia al cliente se mide ANTES de que esta captura vote en
+            # el maestro: si no, un «cliente cerrado» registrado a 2 km movería
+            # el punto hacia sí mismo y se mediría contra su propia sombra.
+            # Solo en la primera captura (la geografía de una parada no se
+            # pisa al re-confirmar — ver `registrar_captura`).
+            if recaudo.distancia_cliente_m is None:
+                _dist = _sr.distancia_al_maestro(
+                    data.get('geo'),
+                    _geo.maestro_de(getattr(_t_geo, 'cliente', None),
+                                    getattr(_t_geo, 'municipio', None)))
+                if _dist is not None:
+                    recaudo.distancia_cliente_m = _dist
+            _pos_ts = (_sr.leer_ts(data['geo'].get('pos_ts'))
+                       if isinstance(data.get('geo'), dict) else None)
             _res_geo = _geo.registrar_captura(
                 recaudo.id,
                 getattr(_t_geo, 'cliente', None),
                 getattr(_t_geo, 'municipio', None),
                 data.get('geo'),
-                ahora=ahora)
-            if _res_geo not in ('no_vino', 'ya_capturada'):
+                ahora=ahora,
+                ts_dispositivo=_ts_disp,
+                pos_ts_dispositivo=_pos_ts)
+            if _res_geo not in ('no_vino', 'ya_capturada') or db.session.dirty:
                 db.session.commit()
         except Exception as _e_geo:
             try:

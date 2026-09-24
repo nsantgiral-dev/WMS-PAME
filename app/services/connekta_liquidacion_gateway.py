@@ -39,6 +39,27 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+#: `F358_REFERENCIA_OTROS` en el DOCX del 142888: Alfanumérico, 30 posiciones.
+LARGO_REFERENCIA_OTROS = 30
+
+
+def referencia_otros_rc(referencia_pago, notas) -> str:
+    """Lo que va en `F358_REFERENCIA_OTROS` de un RC bancario.
+
+    La referencia del comprobante que anotó el conductor, si la hay: es lo
+    único que permite cruzar el recibo contra el extracto del banco. Antes se
+    mandaban las notas de la liquidación o `'APP'`, y una transferencia falsa
+    entraba a Siesa sin nada con qué verificarla. Sin referencia (parada vieja,
+    o formulario anterior a la exigencia) se conserva el comportamiento previo
+    — el campo es obligatorio para consignación y no puede ir vacío.
+
+    Se recorta por la IZQUIERDA: los últimos dígitos son los que identifican.
+    """
+    ref = (str(referencia_pago).strip() if referencia_pago else '')
+    if ref:
+        return ref[-LARGO_REFERENCIA_OTROS:]
+    return notas[:LARGO_REFERENCIA_OTROS] if notas else 'APP'
+
 
 class ConnektaLiquidacionGateway:
 
@@ -500,7 +521,8 @@ class ConnektaLiquidacionGateway:
                              unidad_negocio: str = '',
                              notas: str = '',
                              ajuste_valor: float = 0.0,
-                             ajuste_es_sobrante: bool = False) -> dict:
+                             ajuste_es_sobrante: bool = False,
+                             referencia_pago: str = '') -> dict:
         """
         142888 → API_v1_ReciboCaja
         Registra cobro del conductor. Cruza automáticamente contra la factura (CxC).
@@ -526,6 +548,10 @@ class ConnektaLiquidacionGateway:
                     proyecto del mismo negocio, mismo Siesa) ya resuelve esto leyendo
                     `f353_id_un_cruce` de la fila de cartera real en vez de un env var — mismo
                     fix acá. Si vacío, cae a `core.unidad_negocio` (comportamiento previo).
+
+        referencia_pago: referencia del comprobante bancario que anotó el
+                    conductor (`RecaudoEntrega.referencia_pago`). Va a
+                    `F358_REFERENCIA_OTROS` — ver `referencia_otros_rc`.
 
         ajuste_valor / ajuste_es_sobrante: diferencia al peso entre lo que el
                     conductor entregó y `monto` (el saldo que este RC cancela).
@@ -727,7 +753,7 @@ class ConnektaLiquidacionGateway:
         forma_upper = (forma_pago or '').upper()
         if forma_upper == 'CONSIGNACION' or medio_pago.startswith('T'):
             if medio_pago != core.medio_pago_efectivo:
-                caja['F358_REFERENCIA_OTROS'] = notas[:30] if notas else 'APP'
+                caja['F358_REFERENCIA_OTROS'] = referencia_otros_rc(referencia_pago, notas)
                 caja['F358_FECHA_CONSIGNACION'] = fecha_hoy
                 caja['f358_docto_banco_cg'] = 'CG'
 

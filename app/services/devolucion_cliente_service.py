@@ -174,6 +174,7 @@ class DevolucionClienteService:
                 codigo_siesa=l['codigo_siesa'],
                 cantidad_facturada=l.get('cantidad_facturada') or 0,
                 cantidad_devuelta=l['cantidad_devuelta'],
+                cantidad_declarada=l.get('cantidad_declarada'),
                 es_averiado=bool(l.get('es_averiado')),
                 f470_id_unidad_medida=l.get('f470_id_unidad_medida'),
                 f150_id_bodega=l.get('f150_id_bodega'),
@@ -234,16 +235,42 @@ class DevolucionClienteService:
         # Ajuste de la recepcionista sobre lo declarado (si vino algo distinto
         # de lo contado físicamente) — ANTES de la revalidación contra Siesa,
         # para que valide el número real que va a entrar al inventario.
+        # Lo que declaró el conductor NO se pisa: si la línea no lo trae (una
+        # devolución de ruta armada antes de m041flfugas), lo vigente ANTES de
+        # que recepción ajuste es lo declarado — se congela acá.
+        if devolucion.recaudo_entrega_id:
+            for linea in devolucion.lineas:
+                if linea.cantidad_declarada is None:
+                    linea.cantidad_declarada = linea.cantidad_devuelta
         if lineas_ajustadas:
             por_producto = {int(l['producto_id']): l for l in lineas_ajustadas if l.get('producto_id') is not None}
+            _cambios = []
             for linea in devolucion.lineas:
                 ajuste = por_producto.get(linea.producto_id)
                 if not ajuste:
                     continue
                 cant_fact = float(linea.cantidad_facturada or 0)
                 cant_nueva = max(0.0, min(float(ajuste.get('cantidad_devuelta') or 0), cant_fact))
+                if abs(cant_nueva - float(linea.cantidad_devuelta or 0)) > 1e-9:
+                    _cambios.append({'linea_id': linea.id, 'codigo_siesa': linea.codigo_siesa,
+                                     'declarado': (float(linea.cantidad_declarada)
+                                                   if linea.cantidad_declarada is not None else None),
+                                     'antes': float(linea.cantidad_devuelta or 0),
+                                     'contado': cant_nueva})
                 linea.cantidad_devuelta = cant_nueva
                 linea.es_averiado = bool(ajuste.get('es_averiado'))
+            if _cambios:
+                # La corrección de recepción sobre lo declarado queda en la
+                # bitácora: quién contó distinto, cuánto y en qué línea.
+                from app.services.bitacora import registrar_accion
+                registrar_accion(
+                    'EDITAR', devolucion, usuario_id=recepcionista_id,
+                    entidad_codigo=devolucion.codigo,
+                    motivo='Recepción contó distinto de lo declarado',
+                    antes={'lineas': [{k: c[k] for k in ('linea_id', 'codigo_siesa', 'declarado', 'antes')}
+                                      for c in _cambios]},
+                    despues={'lineas': [{k: c[k] for k in ('linea_id', 'codigo_siesa', 'contado')}
+                                        for c in _cambios]})
 
             if not any(float(l.cantidad_devuelta or 0) > 0 for l in devolucion.lineas):
                 raise ValueError(

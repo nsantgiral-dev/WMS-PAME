@@ -164,7 +164,7 @@ def main():
         for b in Bulto.query.filter_by(tarea_id=tarea.id).all():
             r = MuelleService.cargar_bulto(b.codigo_barras, ruta.id)
             print(f'  escaneado {b.codigo_barras}: {r.get("ok")}')
-        RutaService.cerrar_ruta(ruta.id)
+        RutaService.cerrar_ruta(ruta.id, motivo_advertencias='script QA: prueba real sin mundo de flota')
         ruta = RutaDespacho.query.get(ruta.id)
         print(f'  ruta {ruta.id} -> {ruta.estado}')
 

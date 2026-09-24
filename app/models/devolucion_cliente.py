@@ -154,6 +154,17 @@ class LineaDevolucionCliente(db.Model):
 
     cantidad_facturada = db.Column(db.Numeric(14, 4), nullable=False, default=0)  # tope, solo referencia
     cantidad_devuelta = db.Column(db.Numeric(14, 4), nullable=False, default=0)   # puede ser < facturada
+    #: Lo que el CONDUCTOR declaró que volvía (m041flfugas). Solo en las
+    #: devoluciones que arma Liquidación de ruta; `NULL` en las de mostrador
+    #: (ahí quien declara y quien cuenta es la misma recepcionista).
+    #:
+    #: Existe porque `confirmar_entrada_fisica` **sobrescribe**
+    #: `cantidad_devuelta` con lo contado — que es lo correcto para el
+    #: inventario y la NC — y con eso se perdía la única evidencia de un
+    #: retorno inflado: el conductor declara 10 devueltas, llegan 7, y las 3
+    #: que faltan no están ni en el cliente (no las pagó) ni en bodega. Nunca
+    #: se pisa: `senales_ruta.faltante_de_retorno` lee la diferencia.
+    cantidad_declarada = db.Column(db.Numeric(14, 4), nullable=True)
 
     es_averiado = db.Column(db.Boolean, nullable=False, default=False)
     ubicacion_id = db.Column(db.Integer, db.ForeignKey('ubicaciones.id'), nullable=True)
@@ -185,6 +196,8 @@ class LineaDevolucionCliente(db.Model):
             'codigo_siesa': self.codigo_siesa,
             'cantidad_facturada': float(self.cantidad_facturada or 0),
             'cantidad_devuelta': float(self.cantidad_devuelta or 0),
+            'cantidad_declarada': (float(self.cantidad_declarada)
+                                   if self.cantidad_declarada is not None else None),
             'es_averiado': self.es_averiado,
             'ubicacion_id': self.ubicacion_id,
             'ubicacion_codigo': self.ubicacion.codigo if self.ubicacion else None,

@@ -381,8 +381,15 @@ def _rechazos_ruta(desde, hasta, ctx) -> Resultado:
     """
     from app.models.recaudo_entrega import EstadoEntrega
     from app.services import motivos_rechazo
+    from app.services.senales_ruta import faltantes_de_retorno_de_recaudos
     casos, desenlaces = [], Counter()
-    for r in _recaudos(desde, hasta, ctx, (EstadoEntrega.RECHAZADO, EstadoEntrega.PARCIAL)):
+    recaudos = _recaudos(desde, hasta, ctx, (EstadoEntrega.RECHAZADO, EstadoEntrega.PARCIAL))
+    # Declarado por el conductor vs contado por recepción: lo que el conductor
+    # dijo que volvía y no llegó a bodega. Solo devoluciones ya confirmadas.
+    faltantes = faltantes_de_retorno_de_recaudos([r.id for r in recaudos])
+    faltante_por_conductor = defaultdict(lambda: {'devoluciones': 0, 'faltante_unidades': 0.0,
+                                                  'sobrante_unidades': 0.0})
+    for r in recaudos:
         t = r.tarea
         if r.estado_entrega == EstadoEntrega.RECHAZADO:
             pesos, unidades, sin_precio = _f(t.valor_factura), _unidades_empacadas(t), []
@@ -394,6 +401,12 @@ def _rechazos_ruta(desde, hasta, ctx) -> Resultado:
                       else 'Entrega parcial')
         nc = _desenlace_nc(r)
         desenlaces[nc] += 1
+        falt = faltantes.get(r.id)
+        if falt:
+            g = faltante_por_conductor[r.ruta.conductor_id if r.ruta else None]
+            g['devoluciones'] += 1
+            g['faltante_unidades'] += falt['faltante_unidades']
+            g['sobrante_unidades'] += falt['sobrante_unidades']
         casos.append(Caso(
             referencia=t.numero_pedido_siesa or t.codigo,
             pesos=pesos, unidades=unidades, almacen_id=t.almacen_id, motivo=motivo,
@@ -401,10 +414,20 @@ def _rechazos_ruta(desde, hasta, ctx) -> Resultado:
             detalle={'estado': 'Rechazada' if r.estado_entrega == EstadoEntrega.RECHAZADO
                      else 'Parcial', 'cliente': t.cliente, 'ruta_id': r.ruta_id,
                      'nota_credito': _TEXTO_NC.get(nc, nc),
-                     'referencias_sin_precio': sin_precio},
+                     'referencias_sin_precio': sin_precio,
+                     'faltante_retorno': falt['faltante_unidades'] if falt else None},
         ))
-    return Resultado(casos, extra={'notas_credito': {
-        _TEXTO_NC.get(k, k): v for k, v in sorted(desenlaces.items())}})
+    from app.models.conductor import Conductor
+    nombres = dict(db.session.query(Conductor.id, Conductor.nombre)
+                   .filter(Conductor.id.in_([c for c in faltante_por_conductor if c] or [-1])).all())
+    return Resultado(casos, extra={
+        'notas_credito': {_TEXTO_NC.get(k, k): v for k, v in sorted(desenlaces.items())},
+        'faltante_de_retorno': sorted(
+            [{'conductor_id': cid, 'conductor': nombres.get(cid), **{k: round(v, 4) if isinstance(v, float) else v
+                                                                     for k, v in g.items()}}
+             for cid, g in faltante_por_conductor.items()],
+            key=lambda f: -f['faltante_unidades']),
+    })
 
 
 #: Tramos de días con la factura abierta. Los mismos del rezago del conteo:
@@ -446,9 +469,63 @@ def _entregado_sin_pago(desde, hasta, ctx) -> Resultado:
             unidades=_unidades_empacadas(t), almacen_id=t.almacen_id,
             motivo=_tramo(dias), dia=dia, pedido_clave=t.pedido_clave,
             detalle={'cliente': t.cliente, 'ruta_id': r.ruta_id, 'dias': dias,
-                     'valor_factura': vf, 'abonado': float(r.monto_cobrado or 0)},
+                     'valor_factura': vf, 'abonado': float(r.monto_cobrado or 0),
+                     'con_evidencia': bool(r.foto_entrega)},
         ))
-    return Resultado(casos)
+    return Resultado(casos, extra={
+        'por_conductor': ctx.una_vez(('sin_pago_por_conductor', desde, hasta),
+                                     lambda: tasa_sin_pago_por_conductor(desde, hasta, ctx.almacen_id)),
+    })
+
+
+def tasa_sin_pago_por_conductor(desde, hasta, almacen_id=None) -> list:
+    """«No pagó y se quedó con la mercancía», **por conductor**, como tasa.
+
+    Es una SEÑAL para el encargado, no una sanción (regla 2 de flota): un
+    conductor con una tasa alta puede tener la ruta de los clientes difíciles.
+    Por eso va con su denominador —las paradas que confirmó en el rango— y con
+    cuántas de las sin pago no traen foto de evidencia. Sin paradas → no
+    aparece (no hay tasa de cero sobre nada).
+
+    Vive acá, junto a la fuga que valoriza ENTREGADO_SIN_PAGO, y la liquidación
+    la lee de acá: una política, una función.
+    """
+    from app.models.conductor import Conductor
+    from app.models.packing import TareaPacking
+    from app.models.recaudo_entrega import EstadoEntrega, RecaudoEntrega
+    from app.models.ruta_despacho import RutaDespacho
+    ini, fin = _rango_utc(desde, hasta)
+    q = (db.session.query(RutaDespacho.conductor_id, RecaudoEntrega.estado_entrega,
+                          RecaudoEntrega.foto_entrega.isnot(None), TareaPacking.valor_factura,
+                          RecaudoEntrega.monto_cobrado)
+         .join(RutaDespacho, RutaDespacho.id == RecaudoEntrega.ruta_id)
+         .join(TareaPacking, TareaPacking.id == RecaudoEntrega.tarea_id)
+         .filter(RecaudoEntrega.fecha_confirmacion >= ini,
+                 RecaudoEntrega.fecha_confirmacion < fin))
+    if almacen_id is not None:
+        q = q.filter(TareaPacking.almacen_id == almacen_id)
+    por = defaultdict(lambda: {'paradas': 0, 'sin_pago': 0, 'sin_evidencia': 0,
+                               'pesos': 0.0, 'sin_valor': 0})
+    for cid, estado, con_foto, vf, cobrado in q.all():
+        g = por[cid]
+        g['paradas'] += 1
+        if estado == EstadoEntrega.ENTREGADO_SIN_PAGO:
+            g['sin_pago'] += 1
+            if not con_foto:
+                g['sin_evidencia'] += 1
+            if vf is None:
+                g['sin_valor'] += 1
+            else:
+                g['pesos'] += max(0.0, float(vf) - float(cobrado or 0))
+    nombres = dict(db.session.query(Conductor.id, Conductor.nombre)
+                   .filter(Conductor.id.in_(list(por) or [-1])).all())
+    filas = [{'conductor_id': cid, 'conductor': nombres.get(cid),
+              'paradas': g['paradas'], 'sin_pago': g['sin_pago'],
+              'tasa': round(g['sin_pago'] / g['paradas'], 4),
+              'sin_evidencia': g['sin_evidencia'],
+              'pesos': round(g['pesos'], 2), 'sin_valor': g['sin_valor']}
+             for cid, g in por.items()]
+    return sorted(filas, key=lambda f: (-f['tasa'], -f['sin_pago'], -f['paradas']))
 
 
 # ─────────────────────────────────────────────────────────────────────────────

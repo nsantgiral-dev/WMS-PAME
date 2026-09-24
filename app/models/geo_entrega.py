@@ -135,6 +135,14 @@ class EntregaGeo(db.Model):
 
     capturado_en = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
 
+    #: Hora del teléfono al confirmar la parada (UTC). `capturado_en` es la del
+    #: servidor al recibir: con la cola offline pueden separarse horas.
+    ts_dispositivo = db.Column(db.DateTime, nullable=True)
+    #: `GeolocationPosition.timestamp` — cuándo el GPS fijó ESA posición, según
+    #: el teléfono. Distinto de `ts_dispositivo`: el conductor puede tocar
+    #: «Estoy aquí» y confirmar diez minutos después y a otra cuadra.
+    pos_ts_dispositivo = db.Column(db.DateTime, nullable=True)
+
     __table_args__ = (
         db.CheckConstraint(
             "fuente IN ('gps_conductor','corregida_a_mano','sin_dato')",
@@ -180,6 +188,9 @@ class EntregaGeo(db.Model):
             'fuente': self.fuente,
             'motivo_sin_dato': self.motivo_sin_dato,
             'capturado_en': self.capturado_en.isoformat() if self.capturado_en else None,
+            'ts_dispositivo': self.ts_dispositivo.isoformat() if self.ts_dispositivo else None,
+            'pos_ts_dispositivo': (self.pos_ts_dispositivo.isoformat()
+                                   if self.pos_ts_dispositivo else None),
         }
 
 

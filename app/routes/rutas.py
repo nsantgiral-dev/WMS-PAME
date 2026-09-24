@@ -9,7 +9,7 @@ from app.models.conductor import Conductor
 from app.models.ruta_despacho import RutaDespacho
 from app.routes._auth_helpers import _es_admin_o_jefe, _solo_admin, Roles
 from app.models.recaudo_entrega import EstadoEntrega
-from app.services.ruta_service import RutaService, ConflictError
+from app.services.ruta_service import RutaService, ConflictError, AdvertenciasDeFlota
 from app.utils.fecha import dia_operativo as _dia_operativo, dia_operativo_de as _dia_operativo_de
 
 logger = logging.getLogger(__name__)
@@ -28,6 +28,16 @@ def _usuario():
     from app.models.usuario import Usuario
     uid = _uid()
     return Usuario.query.get(uid) if uid else None
+
+
+def _respuesta_advertencias(e):
+    """409 con lo que la flota sabe del vehículo. No es un error: la pantalla
+    muestra la lista y vuelve a mandar con `motivo_advertencias`."""
+    return jsonify({
+        'error': str(e),
+        'advertencias_flota': e.advertencias,
+        'requiere_motivo': True,
+    }), 409
 
 
 # ── Conductores ──────────────────────────────────────────────────
@@ -341,10 +351,14 @@ def obtener_ruta(id):
 def iniciar_ruta(id):
     if not _es_admin_o_jefe():
         return jsonify({'error': 'Solo admin o jefe de almacén puede iniciar el cargue'}), 403
+    data = request.get_json(silent=True) or {}
     try:
-        resultado = RutaService.iniciar_ruta(id)
+        resultado = RutaService.iniciar_ruta(
+            id, motivo_advertencias=data.get('motivo_advertencias'), usuario_id=_uid())
     except LookupError as e:
         return jsonify({'error': str(e)}), 404
+    except AdvertenciasDeFlota as e:
+        return _respuesta_advertencias(e)
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
     return jsonify(resultado), 200
@@ -369,10 +383,14 @@ def sugeridos_ruta(id):
 def cerrar_ruta(id):
     if not _es_admin_o_jefe():
         return jsonify({'error': 'Solo admin o jefe de almacén puede cerrar rutas'}), 403
+    data = request.get_json(silent=True) or {}
     try:
-        ruta = RutaService.cerrar_ruta(id)
+        ruta = RutaService.cerrar_ruta(
+            id, motivo_advertencias=data.get('motivo_advertencias'), usuario_id=_uid())
     except LookupError as e:
         return jsonify({'error': str(e)}), 404
+    except AdvertenciasDeFlota as e:
+        return _respuesta_advertencias(e)
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
     return jsonify({'ok': True, 'ruta': ruta.to_dict(include_bultos=True)}), 200
@@ -1086,6 +1104,7 @@ def liquidacion_dashboard():
     from app.models.siesa_job import SiesaJob
     from app.services.connekta_gateway import connekta
     from app.services.motivos_rechazo import SIN_RETORNO as _MR_SIN_RETORNO
+    from collections import Counter
 
     # Soporta rango de fechas (fecha_desde/fecha_hasta) o fecha única (backwards compatible)
     fecha_desde_str = request.args.get('fecha_desde') or request.args.get('fecha')
@@ -1139,6 +1158,10 @@ def liquidacion_dashboard():
     pendientes = 0
     liquidadas = 0
     rutas_out = []
+
+    from app.services import senales_ruta as _sr
+    _faltantes = _sr.faltantes_de_retorno_de_recaudos(
+        [r.id for ruta in rutas for r in ruta.recaudos])
 
     for ruta in rutas:
         recaudos = ruta.recaudos  # preloaded via selectinload
@@ -1222,7 +1245,26 @@ def liquidacion_dashboard():
         rd['siesa_rc_enviados'] = siesa_rc
         rd['siesa_dc_enviados'] = siesa_dc
         rd['jobs_fallidos'] = jobs_fallidos
+        # Señales de fuga de la ruta (`senales_ruta.senales_de_recaudo`): cuántas
+        # paradas tienen algo que mirar, y cuáles claves. Datos para quien
+        # liquida, nunca un veredicto sobre el conductor.
+        _sen = Counter()
+        for r in recaudos:
+            for x in _sr.senales_de_recaudo(r, ruta, _faltantes.get(r.id)):
+                _sen[x['clave']] += 1
+        rd['senales'] = dict(_sen)
+        rd['faltante_retorno_unidades'] = round(sum(
+            _faltantes[r.id]['faltante_unidades'] for r in recaudos if r.id in _faltantes), 4)
         rutas_out.append(rd)
+
+    # Señales por conductor, en la cabecera de la liquidación. Ninguna es una
+    # sanción: el encargado decide si pregunta. Efectivo en poder no depende
+    # del rango —es lo que está afuera HOY—; la tasa de «se quedó sin pagar» sí.
+    from app.services.analitica_fugas import tasa_sin_pago_por_conductor
+    senales_conductor = {
+        'efectivo_en_poder': _sr.efectivo_en_poder_por_conductor(),
+        'sin_pago_por_conductor': tasa_sin_pago_por_conductor(fecha_desde, fecha_hasta),
+    }
 
     return jsonify({
         'resumen': {
@@ -1235,6 +1277,7 @@ def liquidacion_dashboard():
             'total_credito': total_credito,
         },
         'rutas': rutas_out,
+        'senales_conductor': senales_conductor,
     }), 200
 
 
@@ -1308,12 +1351,19 @@ def liquidar_completo(id):
         # (a) Actualizar cantidades verificadas por el Líder
         cantidades_verificadas = rp.get('cantidades_verificadas', [])
         if cantidades_verificadas and recaudo.items_entregados:
-            items = list(recaudo.items_entregados)  # copy from JSON
+            # Copia PROFUNDA: mutar los dicts del JSON en su sitio deja el valor
+            # viejo igual al nuevo y SQLAlchemy no ve el cambio.
+            items = [dict(it) for it in recaudo.items_entregados]
             for cv in cantidades_verificadas:
                 codigo = cv.get('codigo', '')
                 cant_devuelta = int(cv.get('cantidad_devuelta', 0))
                 for it in items:
                     if it.get('codigo') == codigo:
+                        # Lo que declaró el conductor no se pisa: queda al lado,
+                        # una sola vez, para medir después el faltante de
+                        # retorno contra lo que cuente recepción.
+                        it.setdefault('cantidad_devuelta_conductor',
+                                      it.get('cantidad_devuelta'))
                         it['cantidad_devuelta'] = cant_devuelta
                         pedido = int(it.get('cantidad_pedida', 0))
                         it['cantidad_entregada'] = max(0, pedido - cant_devuelta)

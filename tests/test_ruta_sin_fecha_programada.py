@@ -107,7 +107,7 @@ class TestRutaSinFechaProgramadaApareceEnLiquidacion:
         })
         tarea, bulto = _tarea_con_bulto(db, almacen, ruta_id=ruta.id,
                                         estado_bulto='CARGADO')
-        RutaService.cerrar_ruta(ruta.id)
+        RutaService.cerrar_ruta(ruta.id, motivo_advertencias='test sin flota')
         RutaService.confirmar_parada(ruta.id, tarea.id, conductor.usuario_id, {
             'estado_entrega': 'ENTREGADO', 'forma_pago': 'EFECTIVO',
             'monto_cobrado': 50000,

@@ -198,10 +198,19 @@ class LiquidacionService:
 
         resultado_recaudos = []
         warnings = []
+        from app.services import senales_ruta as _sr
+        _faltantes = _sr.faltantes_de_retorno_de_recaudos([r.id for r in recaudos])
 
         for recaudo in recaudos:
             tarea = recaudo.tarea
             rd = recaudo.to_dict()
+            # Lo que quien liquida tiene que mirar antes de firmar. Señales, no
+            # veredictos (`senales_ruta.senales_de_recaudo`).
+            rd['senales'] = _sr.senales_de_recaudo(recaudo, ruta, _faltantes.get(recaudo.id))
+            rd['faltante_retorno'] = _faltantes.get(recaudo.id)
+            rd['hora_dispositivo'] = _sr.clasificar_hora(
+                recaudo.ts_dispositivo, recaudo.ts_desfase_s,
+                recaudo.fecha_confirmacion, ruta.fecha_cierre)
             rd['cliente'] = tarea.cliente or '' if tarea else ''
             rd['numero_pedido'] = tarea.numero_pedido_siesa or '' if tarea else ''
             rd['tipo_docto'] = tarea.tipo_docto_pedido_siesa or '' if tarea else ''
@@ -1624,6 +1633,33 @@ def _obtener_tercero(tarea) -> tuple:
     return '', '001'
 
 
+def _declarado_por_el_conductor(filas: list, items_devueltos: list, recaudo_id: int,
+                                cantidades_vigentes: list) -> list:
+    """Lo que el CONDUCTOR declaró devolver, por línea de factura.
+
+    `items_devueltos` puede traer la corrección del líder en la liquidación
+    (`/liquidar-completo`, `cantidades_verificadas`), que conserva lo que dijo
+    el conductor en `cantidad_devuelta_conductor`. Esa es la declaración que
+    se compara contra lo contado en recepción. Si ningún ítem trae la marca, lo
+    declarado es lo vigente. Si reasignarlo por línea falla (doble unidad
+    ambigua), `None` por línea: no se sabe, y no se inventa.
+    """
+    if not any('cantidad_devuelta_conductor' in (it or {}) for it in items_devueltos):
+        return list(cantidades_vigentes)
+    del_conductor = []
+    for it in items_devueltos:
+        it2 = dict(it)
+        if 'cantidad_devuelta_conductor' in it2:
+            it2['cantidad_devuelta'] = it2['cantidad_devuelta_conductor']
+        del_conductor.append(it2)
+    try:
+        return _cantidades_por_linea_de_factura(filas, del_conductor, recaudo_id)
+    except Exception as e:
+        logger.warning('[LIQUIDACION] recaudo %d: no se pudo atribuir lo declarado por '
+                       'el conductor por línea: %s', recaudo_id, e)
+        return [None] * len(filas)
+
+
 def _cantidades_por_linea_de_factura(filas: list, items_devueltos: list,
                                       recaudo_id: int) -> list:
     """Cuánto se devolvió de **cada línea de la factura**, en el orden de `filas`.
@@ -1875,18 +1911,25 @@ def _crear_devolucion_pendiente(recaudo: RecaudoEntrega, tarea, tipo_docto_fe: s
         # es ambigua —volvió la factura entera, las dos líneas incluidas—, por
         # eso esta rama no necesita clave.
         cantidades = [f['cant_facturada'] for f in filas]
+        declaradas = list(cantidades)
     else:
         cantidades = _cantidades_por_linea_de_factura(
             filas, items_devueltos, recaudo.id)
+        declaradas = _declarado_por_el_conductor(filas, items_devueltos, recaudo.id,
+                                                 cantidades)
 
     lineas = []
-    for fila, cant_devuelta in zip(filas, cantidades):
+    for fila, cant_devuelta, cant_declarada in zip(filas, cantidades, declaradas):
         if cant_devuelta <= 0:
             continue
         lineas.append({
             'producto_id': fila['producto'].id,
             'codigo_siesa': fila['ref'],
             'cantidad_facturada': fila['cant_facturada'],
+            # Lo que DIJO el conductor. Nunca se pisa: el contado de recepción
+            # va a `cantidad_devuelta`, y la diferencia es el faltante de
+            # retorno (`senales_ruta.faltante_de_retorno`).
+            'cantidad_declarada': cant_declarada,
             'cantidad_devuelta': min(cant_devuelta, fila['cant_facturada']),
             'f470_id_unidad_medida': fila['uom'],
             'f150_id_bodega': fila['bodega'],

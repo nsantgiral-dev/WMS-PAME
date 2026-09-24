@@ -110,6 +110,36 @@ class RecaudoEntrega(db.Model):
     retencion_confirmada_por = db.Column(db.Integer, db.ForeignKey('usuarios.id'), nullable=True)
     retencion_confirmada_en = db.Column(db.DateTime, nullable=True)
 
+    # ── Evidencia de las excepciones (m041flfugas) ───────────────────────
+    #
+    # Todo `NULL` = «se confirmó antes de que esto se midiera» (o por un
+    # formulario viejo en caché). Nunca «no hacía falta»: esa pregunta la
+    # contesta `senales_ruta`, no la columna vacía.
+
+    #: Últimos dígitos del comprobante de una transferencia/consignación. Viaja
+    #: al RC en `F358_REFERENCIA_OTROS` (Alfanumérico 30 en el DOCX del
+    #: 142888). Antes de esto el RC mandaba `'APP'` o las observaciones: Siesa
+    #: recibía un cobro bancario sin nada con qué cruzarlo contra el extracto.
+    referencia_pago = db.Column(db.String(30), nullable=True)
+    #: Foto-dato del comprobante (regla 7 de flota): el número tiene que
+    #: poderse leer, así que el servidor **no la recomprime**.
+    foto_comprobante = db.Column(db.Text, nullable=True)
+    #: Hora del teléfono en el instante en que el conductor confirmó (UTC).
+    #: **No reemplaza** `fecha_confirmacion`, que es la del servidor al recibir
+    #: — con la cola offline pueden separarse horas, y las dos son verdad.
+    ts_dispositivo = db.Column(db.DateTime, nullable=True)
+    #: Reloj del teléfono − reloj del servidor, en segundos, medido **al
+    #: sincronizar** (no al confirmar). Positivo = teléfono adelantado. Es lo
+    #: que separa «llegó tarde porque no había señal» de «el reloj miente».
+    ts_desfase_s = db.Column(db.Integer, nullable=True)
+    #: Llegó desde la cola offline. `NULL` = cliente que no lo declara.
+    via_cola = db.Column(db.Boolean, nullable=True)
+    #: Metros entre la captura GPS de esta parada y el punto del maestro del
+    #: cliente, medidos **antes** de que esta captura vote en el maestro (si no,
+    #: un rechazo falso lejos del cliente movería el punto hacia sí mismo).
+    #: `NULL` = no hubo captura o el cliente no tenía punto: sin señal.
+    distancia_cliente_m = db.Column(db.Numeric(10, 1), nullable=True)
+
     __table_args__ = (
         # Un recaudo por parada. Lo comprueba `ruta_service.py:978` con un
         # `.first()` sin bloqueo, y hay DOS escritores —`confirmar_parada` y
@@ -306,6 +336,17 @@ class RecaudoEntrega(db.Model):
             'retencion_confirmada':  self.retencion_confirmada,
             'retencion_confirmada_por': self.retencion_confirmada_por,
             'retencion_confirmada_en': self.retencion_confirmada_en.isoformat() if self.retencion_confirmada_en else None,
+            'referencia_pago':       self.referencia_pago,
+            # Booleanos y no la foto: la lista de paradas no carga binarios,
+            # pero la pantalla necesita saber si la evidencia ya existe para no
+            # pedirla otra vez al editar.
+            'tiene_foto_entrega':    bool(self.foto_entrega),
+            'tiene_foto_comprobante': bool(self.foto_comprobante),
+            'ts_dispositivo':        self.ts_dispositivo.isoformat() if self.ts_dispositivo else None,
+            'ts_desfase_s':          self.ts_desfase_s,
+            'via_cola':              self.via_cola,
+            'distancia_cliente_m':   (float(self.distancia_cliente_m)
+                                      if self.distancia_cliente_m is not None else None),
             'siesa_rc_triggered':    self.siesa_rc_triggered or False,
             'siesa_nc_triggered':    self.siesa_nc_triggered or False,
             'siesa_dc_triggered':    self.siesa_dc_triggered or False,
@@ -333,6 +374,7 @@ class RecaudoEntrega(db.Model):
         }
         if include_foto:
             d['foto_entrega'] = self.foto_entrega or ''
+            d['foto_comprobante'] = self.foto_comprobante or ''
         return d
 
 

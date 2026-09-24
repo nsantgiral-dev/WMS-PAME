@@ -1478,13 +1478,15 @@ class ConnektaGateway:
                              unidad_negocio: str = '',
                              notas: str = '',
                              ajuste_valor: float = 0.0,
-                             ajuste_es_sobrante: bool = False) -> dict:
+                             ajuste_es_sobrante: bool = False,
+                             referencia_pago: str = '') -> dict:
         """142888 — cobro del conductor, cruza contra la factura. Delegado —
         ver `ConnektaLiquidacionGateway.trigger_recibo_caja`."""
         return self._liquidacion.trigger_recibo_caja(
             tercero_nit, sucursal, monto, forma_pago, tipo_docto_fe, consec_fe,
             co_factura=co_factura, cuenta_cxc=cuenta_cxc, unidad_negocio=unidad_negocio,
             notas=notas, ajuste_valor=ajuste_valor, ajuste_es_sobrante=ajuste_es_sobrante,
+            referencia_pago=referencia_pago,
         )
 
     def trigger_documento_contable(self, tercero_nit: str, sucursal: str,

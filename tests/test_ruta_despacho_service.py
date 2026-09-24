@@ -6,6 +6,11 @@ import pytest
 from datetime import date
 from unittest.mock import patch
 
+#: Estos tests no arman el mundo de flota (SOAT, inspección, custodia): la
+#: transición se reconoce con motivo, como haría quien despacha. Las
+#: advertencias en sí se prueban en `tests/test_fugas_ruta.py`.
+_SIN_FLOTA = 'test sin mundo de flota'
+
 
 @pytest.fixture
 def conductor(db):
@@ -79,7 +84,7 @@ class TestIniciarRuta:
             'tipo_ruta': 'Urbana',
             'fecha_programada': date.today().isoformat(),
         })
-        resultado = RutaService.iniciar_ruta(ruta.id)
+        resultado = RutaService.iniciar_ruta(ruta.id, motivo_advertencias=_SIN_FLOTA)
         # iniciar_ruta transiciona PROGRAMADO → EN_CARGUE (el conductor carga en muelle)
         db.session.refresh(ruta)
         assert ruta.estado in ('EN_CARGUE', 'EN_TRANSITO')
@@ -96,7 +101,7 @@ class TestCerrarRuta:
             'tipo_ruta': 'Urbana',
             'fecha_programada': date.today().isoformat(),
         })
-        RutaService.iniciar_ruta(ruta.id)
+        RutaService.iniciar_ruta(ruta.id, motivo_advertencias=_SIN_FLOTA)
         db.session.refresh(ruta)
         # cerrar_ruta requiere EN_CARGUE + bultos — sin bultos lanza error
         # Verificamos que la ruta está en EN_CARGUE (pre-condición para cerrar)
@@ -123,7 +128,7 @@ class TestTransicionesEstado:
         ruta.estado = 'ENTREGADA'
         db.session.commit()
         with pytest.raises(ValueError, match='PROGRAMADO'):
-            RutaService.iniciar_ruta(ruta.id)
+            RutaService.iniciar_ruta(ruta.id, motivo_advertencias=_SIN_FLOTA)
 
     def test_cerrar_desde_programado_falla(self, app, db, conductor, vehiculo, ruta_maestra):
         """No se puede cerrar ruta que no está EN_CARGUE."""
@@ -149,7 +154,7 @@ class TestTransicionesEstado:
             'tipo_ruta': 'Urbana',
             'fecha_programada': date.today().isoformat(),
         })
-        RutaService.iniciar_ruta(ruta.id)
+        RutaService.iniciar_ruta(ruta.id, motivo_advertencias=_SIN_FLOTA)
         # Está EN_CARGUE — intentar entregar sin pasar por EN_TRANSITO
         with pytest.raises(ValueError, match='EN_TRANSITO'):
             RutaService.entregar_ruta(ruta.id, data={'paradas': []}, usuario_id=1)
@@ -165,7 +170,7 @@ class TestTransicionesEstado:
             'fecha_programada': date.today().isoformat(),
         })
         assert ruta.estado == 'PROGRAMADO'
-        RutaService.iniciar_ruta(ruta.id)
+        RutaService.iniciar_ruta(ruta.id, motivo_advertencias=_SIN_FLOTA)
         db.session.refresh(ruta)
         assert ruta.estado == 'EN_CARGUE'
 

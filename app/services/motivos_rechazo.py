@@ -90,10 +90,13 @@ def etiqueta(codigo) -> str:
 
 
 def para_frontend() -> list:
-    """`[{codigo, etiqueta, retorna}]` — el desplegable del conductor.
+    """`[{codigo, etiqueta, retorna, exige_evidencia}]` — el desplegable del conductor.
 
     Sale de acá y no de una lista en el JS: dos catálogos del mismo dominio
     divergen, y ya pasó con la condición de pago y con los tipos de vehículo.
     """
-    return [{'codigo': m.codigo, 'etiqueta': m.etiqueta, 'retorna': m.retorna}
+    from app.services import senales_ruta as _sr
+    return [{'codigo': m.codigo, 'etiqueta': m.etiqueta, 'retorna': m.retorna,
+             # Foto + «Estoy aquí» obligatorios (`senales_ruta.exige_evidencia`)
+             'exige_evidencia': _sr.exige_evidencia(m.codigo)}
             for m in MOTIVOS]

@@ -1782,6 +1782,9 @@ def _ejecutar_job(job: SiesaJob) -> dict:
                 notas=payload.get('notas', ''),
                 ajuste_valor=float(payload.get('ajuste_valor') or 0),
                 ajuste_es_sobrante=bool(payload.get('ajuste_es_sobrante', False)),
+                # Del recaudo y no del payload: el comprobante se puede haber
+                # anotado después de encolar el job (edición de la parada).
+                referencia_pago=(getattr(recaudo, 'referencia_pago', None) or ''),
             )
         except Exception as _e_post:
             # POST falló — verificar el saldo real antes de revertir (Regla #3:
