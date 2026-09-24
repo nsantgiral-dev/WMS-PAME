@@ -5,8 +5,12 @@ Lee `EventoStockAgotado` directamente — no pasa por
 `eventos_agotado_service` (DIP: el lector no se acopla al escritor, solo al
 modelo/esquema compartido).
 
-`tipo_documento == 'TRASLADO'` se excluye siempre: un traslado bloqueado por
-falta de stock no es una venta perdida, es un movimiento interno frustrado.
+Los traslados se excluyen siempre: un traslado bloqueado por falta de stock
+no es una venta perdida, es un movimiento interno frustrado. **Se excluyen por
+complemento** (`TipoDocumento.es_venta`), no se incluye la venta por igualdad:
+hasta el 2026-09-24 este archivo filtraba `== 'PEDIDO'`, y el flujo real escribe
+`'PEDIDO_SIESA'` — la métrica daba ≈ 0 todos los días. Ver
+`app/models/tipo_documento.py`.
 
 Evento hacia adelante (ya acordado con el usuario): un rango de fechas
 anterior al despliegue de esta funcionalidad simplemente no tendrá eventos
@@ -18,6 +22,7 @@ from sqlalchemy import func
 
 from app.extensions import db
 from app.models.evento_stock_agotado import EventoStockAgotado
+from app.models.tipo_documento import TipoDocumento
 from app.utils.fecha import rango_dia_operativo_utc, dia_operativo_de
 
 
@@ -25,7 +30,7 @@ def calcular_venta_perdida(almacen_id: int, fecha_desde: date, fecha_hasta: date
     inicio_utc, fin_utc = rango_dia_operativo_utc(fecha_desde, fecha_hasta)
     filtros = (
         EventoStockAgotado.almacen_id == almacen_id,
-        EventoStockAgotado.tipo_documento == 'PEDIDO',
+        TipoDocumento.es_venta(EventoStockAgotado.tipo_documento),
         EventoStockAgotado.creado_en >= inicio_utc,
         EventoStockAgotado.creado_en < fin_utc,
     )
@@ -67,7 +72,7 @@ def listar_venta_perdida_detalle(almacen_id: int, fecha_desde: date, fecha_hasta
     inicio_utc, fin_utc = rango_dia_operativo_utc(fecha_desde, fecha_hasta)
     q = EventoStockAgotado.query.filter(
         EventoStockAgotado.almacen_id == almacen_id,
-        EventoStockAgotado.tipo_documento == 'PEDIDO',
+        TipoDocumento.es_venta(EventoStockAgotado.tipo_documento),
         EventoStockAgotado.creado_en >= inicio_utc,
         EventoStockAgotado.creado_en < fin_utc,
     ).order_by(EventoStockAgotado.creado_en.desc())

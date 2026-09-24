@@ -32,6 +32,7 @@ _SCAN_DEBOUNCE_TTL = 5  # segundos
 # bajo carga alta (10-30 operarios pickeando simultáneamente en apertura de turno).
 _STOCK_VERIF_SEMAPHORE = threading.Semaphore(2)
 from app.models.picking import TareaPicking, EstadoPicking
+from app.models.tipo_documento import TipoDocumento
 from app.models.packing import TareaPacking, ItemPacking
 from app.models.conteo import SesionConteo, EstadoConteo
 from app.models.producto import Producto
@@ -300,10 +301,11 @@ class MobileService:
         # siempre para pedidos reales: la protección nunca corría y el pedido
         # se repartía libre pese al umbral. PD1487 se partió en dos operarios
         # con el fix del umbral ya desplegado — este era el motivo real.
-        _es_pedido = db.or_(
-            TareaPicking.tipo_documento.in_(['PEDIDO', 'PEDIDO_SIESA']),
-            TareaPicking.tipo_documento.is_(None),
-        )
+        #
+        # Desde el 2026-09-24 la pregunta se hace con `TipoDocumento.es_venta`
+        # (todo lo que no es traslado): el mismo literal a mano volvió a romper
+        # la métrica de venta perdida. Ver app/models/tipo_documento.py.
+        _es_pedido = TipoDocumento.es_venta(TareaPicking.tipo_documento)
         _lineas_del_doc = (
             db.session.query(db.func.count(db.func.distinct(_TP_otra.producto_id)))
             .filter(_TP_otra.referencia_documento == TareaPicking.referencia_documento)
@@ -647,7 +649,7 @@ class MobileService:
         # primero comiteado, ve el pedido tomado y no se queda con nada esta
         # vez — reintenta en el siguiente poll (segundos después, comportamiento
         # normal del dispensador), en vez de partir el pedido.
-        _tarea_es_pedido = tarea.tipo_documento in (None, 'PEDIDO', 'PEDIDO_SIESA')
+        _tarea_es_pedido = TipoDocumento.es_venta_valor(tarea.tipo_documento)
         _requiere_blindaje = (
             _tarea_es_pedido
             and tarea.referencia_documento

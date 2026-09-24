@@ -16,6 +16,7 @@ from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from app.services.connekta_gateway import connekta
 from app.models.producto import Producto
+from app.models.tipo_documento import TipoDocumento
 from app.services.picking_service import PickingService
 from app.services.packing_service import PackingService
 from app.services.recepcion_service import RecepcionService
@@ -1137,7 +1138,7 @@ def iniciar_despacho():
                 compromiso_siesa=comprometido,
                 almacen_id=almacen_id,
                 referencia_documento=numero_pedido,
-                tipo_documento='PEDIDO_SIESA',
+                tipo_documento=TipoDocumento.PEDIDO_SIESA,
                 prioridad=2,
                 detalle=(
                     f'Siesa solo comprometió {comprometido} de {cant_pedida} '

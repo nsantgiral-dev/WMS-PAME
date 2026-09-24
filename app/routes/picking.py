@@ -116,6 +116,12 @@ def crear_tarea():
     for campo in requeridos:
         if campo not in data:
             return jsonify({'error': f'Campo requerido: {campo}'}), 400
+    # Lista cerrada: un tipo libre escrito acá es un valor que ningún lector
+    # espera (ver app/models/tipo_documento.py). `None` = tarea de venta manual.
+    from app.models.tipo_documento import TipoDocumento
+    if data.get('tipo_documento') not in (None, *TipoDocumento.TODOS):
+        return jsonify({'error': f'tipo_documento inválido: {data.get("tipo_documento")!r} '
+                                 f'(válidos: {", ".join(TipoDocumento.TODOS)})'}), 400
     try:
         tareas = PickingService.crear_tareas(
             producto_id=data['producto_id'],
