@@ -16,7 +16,7 @@ from app.utils.dane_municipios import resolver_municipio
 from app.extensions import db
 from app.models.pedido_siesa import PedidoSiesa
 from app.models.producto import Producto
-from app.services.connekta_gateway import connekta
+from app.services.connekta_gateway import connekta, _exigir_datos
 from app.services.siesa_filtro import lit as _lit
 
 logger = logging.getLogger(__name__)
@@ -86,7 +86,13 @@ def _run_sync(app):
                         'paginacion': f'numPag={pag}|tamPag={TAM_PAG}',
                         'parametros': parametros
                     })
-                    rows = res.get('detalle', {}).get('Table', [])
+                    # Una fila `[{'alerta': …}]` es un RECHAZO de Siesa, no
+                    # una página corta: leída como página corta marcaba el
+                    # barrido completo con cero pedidos y borraba TODO
+                    # `pedidos_siesa`. `_exigir_datos` levanta y el except de
+                    # abajo lo declara barrido incompleto: no se borra nada.
+                    rows = _exigir_datos(res.get('detalle', {}).get('Table', []),
+                                         connekta.api_pedidos, parametros)
                     all_items.extend(rows)
                     paginas_leidas += 1
                     if len(rows) < TAM_PAG:

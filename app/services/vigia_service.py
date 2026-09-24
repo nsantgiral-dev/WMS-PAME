@@ -908,7 +908,14 @@ class VigiaService:
                 if res is None:
                     return None          # breaker abierto o respuesta no-200
                 rows = res.get('detalle', {}).get('Table', [])
-                if not rows or (len(rows) == 1 and 'alerta' in (rows[0] or {})):
+                if len(rows) == 1 and 'alerta' in (rows[0] or {}):
+                    # Un rechazo de Siesa no es «no se facturó»: devolver lo
+                    # leído (o `[]`) escribía la semana en cero y el CUSUM lo
+                    # leía como colapso. Es «no sabemos».
+                    logger.error('[VIGIA] CO %s: Siesa rechazó la consulta: %s',
+                                 co, rows[0].get('alerta'))
+                    return None
+                if not rows:
                     break
                 for r in rows:
                     # Anuladas fuera: en Siesa estado 9 es anulado, y sumarlas
@@ -926,6 +933,12 @@ class VigiaService:
                     })
                 if len(rows) < 100:
                     break
+            else:
+                # Se agotaron las 99 páginas sin llegar a una página corta: la
+                # semana está truncada. Un total parcial no es un total.
+                logger.error('[VIGIA] CO %s: más de 99 páginas de facturas; '
+                             'semana truncada, no se escribe', co)
+                return None
         except Exception as e:
             logger.error('[VIGIA] CO %s: fallo consultando facturas: %s', co, e)
             return None
