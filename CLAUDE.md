@@ -3710,3 +3710,122 @@ prueba el cable en Node.
   dice si el rango es anterior. Costo de mano de obra: no existe en el WMS.
 - Documentos trabados solo valoriza tres tipos; NC y traslados no llevan monto
   en el payload.
+
+## Analítica — capa semántica y KPI diario (Fase 1, 2026-09-24)
+
+`app/services/analitica_kpi.py` · `app/routes/analitica_kpi.py` ·
+`analitica_kpi_diario` (migración `m037kpi`, sobre `m036fotos`).
+
+Bajo la Ley 1116 la caja vale más: las tendencias y las alertas (Fase 2) tienen
+que leer **un número por métrica y por día**, definido una sola vez y guardado
+en una tabla que sobreviva al acta de corte. Esto es esa capa.
+
+### El catálogo — 15 métricas, una definición cada una
+
+Cada entrada de `METRICAS` trae nombre de gerencia, qué mide, unidad, dirección
+buena (↑/↓), dueño sugerido, fuente, agregación (SUMA / TASA / NIVEL), si se
+abre por almacén y la función que la calcula para un día y almacén.
+**Reutilizan las políticas existentes**; lo nuevo que hizo falta vive junto a
+su política, no en la analítica:
+
+| Clave | Qué es | Fuente / función |
+|---|---|---|
+| `pedidos_despachados` · `valor_despachado` | Tareas de empaque DESPACHADO ese día y su `valor_factura`. Sin valor → INCOMPLETO (cota) | `metricas.pedidos_despachados` (ahora devuelve `sin_valor_factura`) |
+| `fill_rate` | Cohorte con **entrega** ese día: Σ min(remisionado, pedido) / Σ pedido | **`metricas/fill_rate.py`** sobre `pedidos_historia` (abajo) |
+| `venta_perdida` | Faltante × precio de pickings de venta bloqueados. Sin precio → INCOMPLETO | `metricas.venta_perdida` |
+| `conteos_cerrados` · `exactitud_inventario` · `ajustes_valor` | Cadenas con veredicto; IRA exacta; ajustes \|ent\|+\|sal\| a costo de la foto | `metricas.conteo`: `cadenas_del_dia`, `exactitud_total`, `ajustes_del_dia` (nuevas, sobre `_exactitud`/`_ajustes`) |
+| `rutas_sin_liquidar` (NIVEL, total) | Al **cierre** del día: entregadas sin liquidar con urgencia atrasada o cruza_mes | `rezago_liquidacion.rutas_sin_liquidar_al_cierre` (nueva) |
+| `entregado_sin_pago` · `rechazos_ruta` | Paradas confirmadas ese día: valor ENTREGADO_SIN_PAGO; RECHAZADO / todas | `recaudos_entrega` + `EstadoEntrega` |
+| `jobs_siesa_fallidos` (total) | Cohorte de jobs **encolados** ese día (sin `ALERTA_EMAIL`) que hoy están FALLIDO. Con alguno en cola → INCOMPLETO | `siesa_jobs` (no hay columna «falló el…»: se mide por cohorte) |
+| `cancelaciones` | Acciones CANCELAR/ELIMINAR/ANULAR de la bitácora | `bitacora_acciones` |
+| `ventas_facturadas` | Neto de la foto de ventas sin anuladas; por almacén = su bodega dentro de la corrida de su CO | `fotos_siesa_service.ventas_del_dia` (nueva) |
+| `cartera_abierta` · `cartera_vencida` (NIVEL, total) | Saldo 1305 de la foto del día; vencida = `dias_vencido > 0` | `fotos_siesa_service.cartera_del_dia` (nueva) |
+
+### Las reglas que la hacen confiable
+
+- **AUSENTE ≠ 0**, con CHECK en la base: `(estado='AUSENTE') = (valor IS NULL)`
+  y todo lo que no es OK lleva motivo. Un día anterior al **primer registro**
+  de su fuente es AUSENTE («el WMS no registraba»), no cero. Una tasa sin
+  denominador o con muestra chica es AUSENTE **pero guarda numerador y
+  denominador**, para que la semana o el período los sumen (Σnum/Σden).
+- **Un AUSENTE no pisa un valor guardado.** El acta de corte vacía tareas,
+  recaudos y jobs; recalcular después «descubriría» que no hay datos. La
+  tabla existe justamente para sobrevivir a eso (`conservada` en el resultado).
+- **Único con NULL**: dos índices parciales (almacén / total). Un UNIQUE normal
+  deja pasar dos filas «total» del mismo día.
+- **El día en curso no se guarda**: la serie lo calcula en vivo, `en_curso`,
+  INCOMPLETO. Un día pasado sin fila es AUSENTE «sin calcular» — no se calcula
+  al vuelo: el valor del día es el guardado.
+- **Día Bogotá** en todo, también 19:00–23:59 (`rango_dia_operativo_utc`).
+
+### Fill rate sin sesgo de supervivencia
+
+`pedidos_siesa` borra lo cumplido: el fill rate de ahí sale bajo por
+construcción. Sobre `pedidos_historia`, solo entran las líneas **pedidas desde
+el primer día de historia** (las anteriores pudieron salir sin que nadie las
+viera; se excluyen y el día queda INCOMPLETO). DESAPARECIDO, OTRO_ESTADO y
+CUMPLIDO-por-estado-4 (su remisionado es el del último barrido **antes** de
+salir) son desenlace desconocido: fuera y declarados. ANULADO sale del
+denominador y se cuenta aparte. Sin historia: AUSENTE.
+
+### Rezago de liquidación hacia atrás
+
+Con `liquidada_en` (m035). Una ruta LIQUIDADA **sin** `liquidada_en` se liquidó
+antes de que existiera la columna: se sabe que estaba liquidada solo para días
+posteriores a la primera `liquidada_en` registrada; antes, va a `desconocidas`
+y el día es INCOMPLETO. Para hoy da el mismo universo que la alerta.
+
+### Cron, lock, frescura
+
+`[ANALITICA_KPI]` en `_scheduler_pesados`, 04:30 Bogotá. **Nace apagado**
+(`ANALITICA_KPI=true`); el interruptor vive en `correr_kpi`. Calcula ayer y
+recalcula los `ANALITICA_KPI_DIAS` anteriores (defecto 7, tope 60): una foto
+re-tomada, un job que terminó de fallar, un recaudo del otro día.
+`LOCK_ANALITICA_KPI = 2021` (registro de `app/utils/lock.py`), el mismo que
+toma el recálculo manual — si está tomado, 409. `/api/health/siesa` →
+`analitica_kpi`: encendido, último cálculo, totales por día y
+`dias_sin_calcular`, leídos de la base.
+
+### Endpoints (gestión; recalcular solo admin)
+
+| | |
+|---|---|
+| `GET /api/analitica/metricas` | catálogo |
+| `GET /api/analitica/serie?metrica=&desde=&hasta=&almacen_id=` | un punto por día: `valor, n, numerador, denominador, estado, motivo, detalle, en_curso` |
+| `GET /api/analitica/resumen?desde=&hasta=&almacen_id=` | por métrica: `periodo`, `anterior` (misma duración), `variacion` (`absoluta, relativa, favorable, comparable`), `alerta` |
+| `POST /api/analitica/kpi/recalcular` `{desde, hasta, almacen_id?}` | idempotente, tope 31 días, `hasta` < hoy |
+
+Por defecto los últimos 30 días; fecha ilegible, rango invertido, futuro,
+almacén inexistente o rango > 366 días → 400. Todas en `DEUDA_SIN_UI`
+(«pantalla de tendencias en Fase 2»).
+
+### La alerta es el CUSUM de Vigía, no una copia
+
+`vigia_service.cusum_bilateral` es ahora la única implementación (pura);
+`ejecutar_cusum` la usa y persiste alarmas, la analítica la usa sin escribir
+nada. Se corre sobre **semanas cerradas y completas** (Vigía está certificado
+en semanal; una serie diaria tiene domingos en cero). Una semana con un día
+sin medir se excluye y se cuenta; con menos de `MIN_SEMANAS_CUSUM` (8) no hay
+alerta y se dice. Trinquete AST: la recursión `max(0, s ± z − k)` vive solo en
+`vigia_service` (piso: exactamente 2 sitios; meta-tests de copia y de lo sano).
+
+### Tests y verificación
+
+`tests/test_analitica_kpi.py` (70): cada métrica contra su mundo —servicios
+reales para bitácora, historia de pedidos, fotos (Siesa falsa), cola de jobs,
+agotados y el **mundo dorado del conteo** (el KPI da lo mismo que el reporte:
+6 cerrados, IRA 3/6 sin tasa por n<30, ajustes $5.500); filas de modelo para
+despachos, paradas y rutas, igual que sus propios tests. **14 mutaciones, las
+14 rojas.** La cadena entera de migraciones corrió contra un PostgreSQL 17
+desechable (upgrade, downgrade, upgrade) y un recálculo real sobre él (lock
+suelto al terminar, despacho de las 20:30 en su día).
+
+### Lo que NO mide todavía (declarado)
+
+- **Ciclo de caja** (pedido aprobado → recaudo liquidado): falta unir historia,
+  packing y recaudo por `pedido_clave`; es pieza de otro agente / Fase 2.
+- **Jobs fallidos por día de falla**: `siesa_jobs` no guarda cuándo falló; se
+  mide por cohorte de encolado y cambia si alguien reintenta o descarta.
+- **Ventas POS de tienda**: no hay consulta (ver fotos).
+- **Rutas, cartera y jobs por almacén**: sus tablas no tienen almacén.
+- **Todo lo anterior a cada fuente**: AUSENTE, sin backfill posible.
