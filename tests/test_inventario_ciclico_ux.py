@@ -239,7 +239,7 @@ class TestRecogidoSinDespacharEstaDondeLoMandaBuscarElServidor:
     def test_el_tablero_la_carga(self):
         js = (PWA / 'conteo.js').read_text(encoding='utf-8')
         cuerpo = js[js.index('async function liderCargar'):js.index('function _liderFila')]
-        assert 'cargarConteoRecogidoSinDespachar()' in cuerpo
+        assert 'cargarConteoRecogidoSinDespachar(almId)' in cuerpo, 'el tablero no carga lo recogido de SU almacén'
 
     def test_el_mensaje_del_servidor_nombra_la_pestana(self):
         from app.services.conteo_service import ConteoService

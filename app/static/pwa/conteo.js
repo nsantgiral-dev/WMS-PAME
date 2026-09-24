@@ -2086,13 +2086,18 @@ async function conteoResolverNovedad(id) {
 // El pedido no viaja dentro del onclick: se pasa el índice y se busca acá.
 
 let _RECOGIDO_SIN_DESPACHAR = [];
+let _RECOGIDO_ALMACEN = '';
 
-/** Lista los pedidos recogidos que no salieron ni están saliendo. */
-async function cargarConteoRecogidoSinDespachar() {
+/** Lista los pedidos recogidos que no salieron ni están saliendo — del mismo
+ * almacén que el tablero de arriba (sin almacén, todos).
+ * @param {string|number} [almacenId] si se omite, el de la última carga */
+async function cargarConteoRecogidoSinDespachar(almacenId) {
   const el = document.getElementById('inv-recogido-lista');
   if (!el) return;
+  if (almacenId !== undefined) _RECOGIDO_ALMACEN = almacenId ? String(almacenId) : '';
+  const qs = _RECOGIDO_ALMACEN ? `?almacen_id=${encodeURIComponent(_RECOGIDO_ALMACEN)}` : '';
   try {
-    const d = await get('/api/conteo/recogido-sin-despachar');
+    const d = await get(`/api/conteo/recogido-sin-despachar${qs}`);
     _RECOGIDO_SIN_DESPACHAR = d.pedidos || [];
     if (!_RECOGIDO_SIN_DESPACHAR.length) {
       el.innerHTML = '<div style="text-align:center;padding:14px;color:var(--tx3);font-size:13px;">Nada recogido sin despachar ✓</div>';
@@ -2597,7 +2602,7 @@ async function liderCargar() {
   }
   el.innerHTML = '<div style="text-align:center;padding:30px;color:var(--tx3);">Cargando…</div>';
   // Lo recogido que no salió: su propio endpoint, debajo del tablero.
-  cargarConteoRecogidoSinDespachar();
+  cargarConteoRecogidoSinDespachar(almId);
   try {
     _LIDER_DATOS = await get(`/api/conteo/lider/tablero?almacen_id=${encodeURIComponent(almId)}`);
     el.innerHTML = liderTableroHtml(_LIDER_DATOS);
