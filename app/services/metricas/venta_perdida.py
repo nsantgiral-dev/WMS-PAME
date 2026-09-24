@@ -32,14 +32,29 @@ from app.models.tipo_documento import TipoDocumento
 from app.utils.fecha import rango_dia_operativo_utc, dia_operativo_de
 
 
-def calcular_venta_perdida(almacen_id: int, fecha_desde: date, fecha_hasta: date) -> dict:
+def filtros_venta_perdida(almacen_id, fecha_desde: date, fecha_hasta: date) -> tuple:
+    """**La** definición de qué evento es venta perdida en un rango. La usan el
+    total, el detalle del tablero y las fugas de la analítica
+    (`analitica_fugas`): si cada uno escribiera su filtro, el día que alguien
+    cambiara la exclusión de traslados en uno solo, dos pantallas darían dos
+    ventas perdidas distintas del mismo día.
+
+    `almacen_id=None` = todos los almacenes (la analítica lo pide así; el
+    tablero siempre manda uno).
+    """
     inicio_utc, fin_utc = rango_dia_operativo_utc(fecha_desde, fecha_hasta)
-    filtros = (
-        EventoStockAgotado.almacen_id == almacen_id,
+    filtros = [
         TipoDocumento.es_venta(EventoStockAgotado.tipo_documento),
         EventoStockAgotado.creado_en >= inicio_utc,
         EventoStockAgotado.creado_en < fin_utc,
-    )
+    ]
+    if almacen_id is not None:
+        filtros.insert(0, EventoStockAgotado.almacen_id == almacen_id)
+    return tuple(filtros)
+
+
+def calcular_venta_perdida(almacen_id: int, fecha_desde: date, fecha_hasta: date) -> dict:
+    filtros = filtros_venta_perdida(almacen_id, fecha_desde, fecha_hasta)
 
     monto = func.coalesce(func.sum(
         EventoStockAgotado.cantidad_faltante * EventoStockAgotado.precio_venta_capturado
@@ -87,11 +102,7 @@ def calcular_venta_perdida(almacen_id: int, fecha_desde: date, fecha_hasta: date
 
 def listar_venta_perdida_detalle(almacen_id: int, fecha_desde: date, fecha_hasta: date,
                                   page: int = 1, per_page: int = 50):
-    inicio_utc, fin_utc = rango_dia_operativo_utc(fecha_desde, fecha_hasta)
     q = EventoStockAgotado.query.filter(
-        EventoStockAgotado.almacen_id == almacen_id,
-        TipoDocumento.es_venta(EventoStockAgotado.tipo_documento),
-        EventoStockAgotado.creado_en >= inicio_utc,
-        EventoStockAgotado.creado_en < fin_utc,
+        *filtros_venta_perdida(almacen_id, fecha_desde, fecha_hasta)
     ).order_by(EventoStockAgotado.creado_en.desc())
     return q.paginate(page=page, per_page=per_page, error_out=False)
