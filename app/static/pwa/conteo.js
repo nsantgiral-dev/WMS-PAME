@@ -312,7 +312,7 @@ function _renderCardAccion(s) {
 
     <div style="display:flex;gap:6px;flex-wrap:wrap;">
       ${s.estado !== 'AJUSTADO' && s.estado !== 'AJUSTANDO'
-        ? `<button onclick="conteoAbrirEdicion(${JSON.stringify(s).replace(/"/g,'&quot;')})"
+        ? `<button onclick="conteoAbrirEdicionId(${esc(_conteoPintado(s))})"
              style="padding:8px 10px;background:var(--bg-input);color:var(--tx2);border:1px solid var(--brd);border-radius:8px;font-size:12px;cursor:pointer;">✏</button>`
         : ''}
       ${mostrarOmitir
@@ -320,7 +320,7 @@ function _renderCardAccion(s) {
              title="Saltar CC2/CC3 y mover a DESCUADRE para revisión admin"
              style="padding:8px 10px;background:none;border:1px solid #415A70;color:#415A70;border-radius:8px;font-size:11px;cursor:pointer;white-space:nowrap;">Omitir CC2</button>`
         : ''}
-      <button onclick="${puedeAjustar ? `conteoAbrirAjuste(${JSON.stringify(s).replace(/"/g,'&quot;')})` : 'void(0)'}"
+      <button onclick="${puedeAjustar ? `conteoAbrirAjusteId(${esc(_conteoPintado(s))})` : 'void(0)'}"
         ${!puedeAjustar ? 'disabled' : ''}
         style="flex:2;padding:8px;background:${puedeAjustar?'#1E8395':'var(--bg-input)'};color:${puedeAjustar?'#fff':'var(--tx3)'};border:${puedeAjustar?'none':'1px solid var(--brd)'};border-radius:8px;font-size:12px;font-weight:700;cursor:${puedeAjustar?'pointer':'not-allowed'};min-width:120px;">
         ${btnTexto}
@@ -349,7 +349,7 @@ function _renderCardProgreso(s) {
         ${s.clasificacion_abc ? `<span style="background:#1C2B3A;color:#FBBF24;font-size:9px;font-weight:700;padding:1px 5px;border-radius:6px;">ABC-${esc(s.clasificacion_abc)}</span>` : ''}
         <span style="background:${col};color:#fff;font-size:10px;font-weight:700;padding:2px 8px;border-radius:8px;">${esc(s.estado)}</span>
         <div style="display:flex;gap:4px;">
-          <button onclick="conteoAbrirEdicion(${JSON.stringify(s).replace(/"/g,'&quot;')})"
+          <button onclick="conteoAbrirEdicionId(${esc(_conteoPintado(s))})"
             title="Reasignar operario / corregir conteo"
             style="background:var(--bg-input);border:1px solid var(--brd);color:var(--tx2);font-size:9px;padding:1px 6px;border-radius:6px;cursor:pointer;">✏</button>
           <button onclick="conteoCancelar(${esc(s.id)})" style="background:none;border:1px solid #7F1D1D;color:#F87171;font-size:9px;padding:1px 6px;border-radius:6px;cursor:pointer;">Cancelar</button>
@@ -955,6 +955,35 @@ async function limpiarPendientesAbc() {
 
 // ─── Edición de conteos (admin) ────────────────────────────────────────────
 
+/**
+ * Sesiones pintadas en las tarjetas, por id. El botón lleva solo el id y la
+ * función busca la sesión acá: antes el onclick llevaba el JSON entero con
+ * `"` → `&quot;`, y un dato que TRAJERA `&quot;` (un nombre de producto, un
+ * motivo) se decodificaba a `"` antes de correr el JS y rompía la cadena.
+ * `esc()` no protege dentro de un atributo JS (CLAUDE.md, «Todo dato que se
+ * pinta va con esc()»).
+ * @type {Map<string, Object>}
+ */
+const _CONTEO_PINTADOS = new Map();
+
+/** Registra la sesión que pinta una tarjeta y devuelve su id. */
+function _conteoPintado(s) {
+  _CONTEO_PINTADOS.set(String(s.id), s);
+  return s.id;
+}
+
+/** @param {number} id */
+function conteoAbrirEdicionId(id) {
+  const s = _CONTEO_PINTADOS.get(String(id));
+  if (s) conteoAbrirEdicion(s);
+}
+
+/** @param {number} id */
+function conteoAbrirAjusteId(id) {
+  const s = _CONTEO_PINTADOS.get(String(id));
+  if (s) conteoAbrirAjuste(s);
+}
+
 let _CONTEO_EDICION_ID = null;
 
 /**
@@ -966,13 +995,16 @@ function conteoAbrirEdicion(s) {
   const m = document.getElementById('modal-conteo-edicion');
   if (!m) return;
 
-  const bloqueado = s.estado === 'AJUSTADO' || s.estado === 'CANCELADO';
+  // Si la cantidad se puede corregir lo decide el servidor
+  // (`ConteoService.motivo_no_se_corrige_cantidad`): acá solo se muestra.
+  const noSeCorrige = s.no_se_corrige_cantidad || null;
   const cantInput = document.getElementById('conteo-edit-cantidad');
   const estadoBadge = document.getElementById('conteo-edit-estado');
 
   if (cantInput) {
     cantInput.value = s.cantidad_fisica ?? '';
-    cantInput.disabled = bloqueado;
+    cantInput.disabled = !!noSeCorrige;
+    cantInput.title = noSeCorrige || '';
   }
   if (estadoBadge) estadoBadge.textContent = s.estado;
 
@@ -989,6 +1021,7 @@ function conteoAbrirEdicion(s) {
           ${hijo?.cantidad_fisica != null ? `<span>2do conteo <b style="color:${hijo.cantidad_fisica===s.cantidad_fisica?'#4ade80':'#f87171'};">${esc(hijo.cantidad_fisica)}</b></span>` : ''}
         </span>
         ${s.editado_en ? `<br><span style="color:#f59e0b;">Última edición: ${esc(s.motivo_edicion)}</span>` : ''}
+        ${noSeCorrige ? `<div style="margin-top:8px;padding:8px;border-radius:8px;background:#1C2B3A;color:#FBBF24;">La cantidad no se corrige acá: ${esc(noSeCorrige)}</div>` : ''}
       </div>`;
   }
   const motivoInput = document.getElementById('conteo-edit-motivo');
