@@ -42,6 +42,75 @@ CUSUM_H_ALARMA = float(os.environ.get('CUSUM_H_ALARMA', '4.5'))
 VENTANA_REF = int(os.environ.get('CUSUM_VENTANA_SEMANAS', '26'))
 
 
+#: Por debajo de esto el CUSUM no se corre: con menos semanas la referencia
+#: (mediana y MAD) se calcula sobre la misma anomalía que tendría que detectar.
+MIN_SEMANAS_CUSUM = 8
+
+
+def cusum_bilateral(valores) -> dict:
+    """El CUSUM tabular bilateral de dos bandas. **La única implementación.**
+
+    Pura: recibe los valores de semanas CERRADAS, en orden, y no toca la base.
+    `VigiaService.ejecutar_cusum` la usa para las series de Vigía (y persiste
+    las alarmas); la analítica (`app/services/analitica_kpi.py`) la usa sobre
+    las semanas de sus KPI diarios. Una copia en otro módulo divergiría del
+    canon certificado de Florencia sin que nadie lo notara — por eso hay un
+    trinquete AST que exige que la recursión viva solo acá.
+
+    Referencia robusta: mediana y MAD×1.4826 de las primeras `VENTANA_REF`
+    semanas. Parámetros `CUSUM_K`, `CUSUM_H_AVISO`, `CUSUM_H_ALARMA`.
+
+    Devuelve `{mu_ref, sigma_ref, puntos: [{valor, z, s_plus, s_minus,
+    alarma, severidad}]}` sin redondear.
+    """
+    import statistics
+
+    valores = [float(v) for v in valores]
+    if not valores:
+        return {'mu_ref': None, 'sigma_ref': None, 'puntos': []}
+
+    # Referencia robusta: mediana y MAD de las primeras VENTANA_REF semanas
+    ref_window = valores[:min(VENTANA_REF, len(valores))]
+    mu_ref = statistics.median(ref_window)
+    mad = statistics.median([abs(v - mu_ref) for v in ref_window])
+    sigma_ref = mad * 1.4826  # MAD → σ estimado
+    if sigma_ref < 0.001:
+        sigma_ref = statistics.stdev(ref_window) if len(ref_window) > 1 else 1
+    if sigma_ref < 0.001:
+        sigma_ref = 1  # última defensa: serie constante → σ=1 para evitar div/0
+
+    # CUSUM tabular bilateral con dos bandas
+    s_plus = 0
+    s_minus = 0
+    puntos = []
+    for valor in valores:
+        z = (valor - mu_ref) / sigma_ref
+
+        s_plus = max(0, s_plus + z - CUSUM_K)
+        s_minus = max(0, s_minus - z - CUSUM_K)
+
+        # Dos bandas: aviso (h=3.0) y alarma (h=4.5)
+        alarma = None
+        severidad = None
+
+        if s_plus > CUSUM_H_ALARMA:
+            alarma = 'SUBE'
+            severidad = 'ALARMA'
+        elif s_plus > CUSUM_H_AVISO:
+            alarma = 'SUBE'
+            severidad = 'AVISO'
+        elif s_minus > CUSUM_H_ALARMA:
+            alarma = 'BAJA'
+            severidad = 'ALARMA'
+        elif s_minus > CUSUM_H_AVISO:
+            alarma = 'BAJA'
+            severidad = 'AVISO'
+
+        puntos.append({'valor': valor, 'z': z, 's_plus': s_plus, 's_minus': s_minus,
+                       'alarma': alarma, 'severidad': severidad})
+    return {'mu_ref': mu_ref, 'sigma_ref': sigma_ref, 'puntos': puntos}
+
+
 class SerieVigia(db.Model):
     """Serie semanal para vigilancia CUSUM."""
     __tablename__ = 'serie_vigia'
@@ -345,8 +414,6 @@ class VigiaService:
 
         Returns: {serie, semanas, alarmas_nuevas, cusum: [{semana, valor, z, s_plus, s_minus, alarma, severidad}]}
         """
-        import statistics
-
         lunes_actual = _lunes_semana_actual()
 
         datos = (
@@ -357,50 +424,17 @@ class VigiaService:
             .all()
         )
 
-        if len(datos) < 8:
-            return {'error': f'Serie {nombre_serie} tiene solo {len(datos)} semanas cerradas — mínimo 8'}
+        if len(datos) < MIN_SEMANAS_CUSUM:
+            return {'error': f'Serie {nombre_serie} tiene solo {len(datos)} semanas cerradas '
+                             f'— mínimo {MIN_SEMANAS_CUSUM}'}
 
-        valores = [float(d.valor) for d in datos]
-
-        # Referencia robusta: mediana y MAD de las primeras VENTANA_REF semanas
-        ref_window = valores[:min(VENTANA_REF, len(valores))]
-        mu_ref = statistics.median(ref_window)
-        mad = statistics.median([abs(v - mu_ref) for v in ref_window])
-        sigma_ref = mad * 1.4826  # MAD → σ estimado
-        if sigma_ref < 0.001:
-            sigma_ref = statistics.stdev(ref_window) if len(ref_window) > 1 else 1
-        if sigma_ref < 0.001:
-            sigma_ref = 1  # última defensa: serie constante → σ=1 para evitar div/0
-
-        # CUSUM tabular bilateral con dos bandas
-        s_plus = 0
-        s_minus = 0
+        calculo = cusum_bilateral([float(d.valor) for d in datos])
+        mu_ref, sigma_ref = calculo['mu_ref'], calculo['sigma_ref']
         resultado = []
         alarmas_nuevas = 0
 
-        for d in datos:
-            valor = float(d.valor)
-            z = (valor - mu_ref) / sigma_ref
-
-            s_plus = max(0, s_plus + z - CUSUM_K)
-            s_minus = max(0, s_minus - z - CUSUM_K)
-
-            # Dos bandas: aviso (h=3.0) y alarma (h=4.5)
-            alarma = None
-            severidad = None
-
-            if s_plus > CUSUM_H_ALARMA:
-                alarma = 'SUBE'
-                severidad = 'ALARMA'
-            elif s_plus > CUSUM_H_AVISO:
-                alarma = 'SUBE'
-                severidad = 'AVISO'
-            elif s_minus > CUSUM_H_ALARMA:
-                alarma = 'BAJA'
-                severidad = 'ALARMA'
-            elif s_minus > CUSUM_H_AVISO:
-                alarma = 'BAJA'
-                severidad = 'AVISO'
+        for d, punto in zip(datos, calculo['puntos']):
+            alarma, severidad = punto['alarma'], punto['severidad']
 
             # Registrar alarma si es nueva (dedup por serie+semana+tipo+severidad)
             if alarma:
@@ -412,17 +446,17 @@ class VigiaService:
                     db.session.add(AlarmaVigia(
                         serie=nombre_serie, semana=d.semana,
                         tipo=alarma, severidad=severidad,
-                        s_valor=s_plus if alarma == 'SUBE' else s_minus,
+                        s_valor=punto['s_plus'] if alarma == 'SUBE' else punto['s_minus'],
                         mu_ref=mu_ref, sigma_ref=sigma_ref,
                     ))
                     alarmas_nuevas += 1
 
             resultado.append({
                 'semana': d.semana.isoformat(),
-                'valor': valor,
-                'z': round(z, 3),
-                's_plus': round(s_plus, 3),
-                's_minus': round(s_minus, 3),
+                'valor': punto['valor'],
+                'z': round(punto['z'], 3),
+                's_plus': round(punto['s_plus'], 3),
+                's_minus': round(punto['s_minus'], 3),
                 'alarma': alarma,
                 'severidad': severidad,
             })
