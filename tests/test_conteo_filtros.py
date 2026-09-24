@@ -416,7 +416,7 @@ const out = {};
   R('conteosFiltrarTexto()'); R('conteosFiltrarTexto()'); R('conteosFiltrarTexto()');
   await tick();
   out.peticionesAlTipear = urls.filter(lista).length - antes;
-  pendientes.pop()();
+  const agendada = pendientes.pop(); if (agendada) agendada();
   await tick();
   out.peticionesTrasPausa = urls.filter(lista).length - antes;
 
