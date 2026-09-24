@@ -131,11 +131,14 @@ function anSubtab(clave) {
     if (p) p.style.display = k === clave ? 'block' : 'none';
   });
   const el = document.getElementById('an-panel-' + clave);
-  if (!el) return;
+  if (!el) return Promise.resolve();
   try {
-    AN_VISTAS[clave].cargar(el, anFiltros());
+    // Devuelve la carga: quien salta desde otra vista (p. ej. de una fuga al
+    // recorrido de su pedido) espera a que la vista exista antes de abrir.
+    return Promise.resolve(AN_VISTAS[clave].cargar(el, anFiltros()));
   } catch (e) {
     el.innerHTML = `<div style="padding:20px;color:var(--err-tx);">Esta vista no está disponible: ${esc(e && e.message || 'error')}</div>`;
+    return Promise.resolve();
   }
 }
 

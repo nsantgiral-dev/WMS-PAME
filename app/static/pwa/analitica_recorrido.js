@@ -302,6 +302,16 @@ function anRecAbrirPedido(clave) {
   });
 }
 
+/** Entrada desde otras vistas (💸 Fugas, Bitácora): abre el Recorrido y, ya
+ *  pintado, la línea de tiempo de ese pedido. */
+async function anRecorridoAbrir(clave) {
+  if (!clave) return;
+  await anSubtab('recorrido');
+  anRecAbrirPedido(clave);
+  const det = document.getElementById('an-rec-detalle');
+  if (det && det.scrollIntoView) det.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
 function anRecVolverEtapa() {
   if (_AN_REC.etapa === null || _AN_REC.etapa === undefined) anRecCerrarDetalle();
   else anRecEtapa(_AN_REC.etapa, _AN_REC.vista, _AN_REC.pagina);
