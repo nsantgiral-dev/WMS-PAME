@@ -508,5 +508,66 @@ class TestElReporteRealTraeSusPalabras:
         assert all(rep['etiquetas'][k] == ETIQUETAS[k] for k in vistas)
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# 5 · De punta a punta: el tablero REAL del servidor, pintado por el JS real
+# ─────────────────────────────────────────────────────────────────────────────
+
+_ARNES_TABLERO = r"""
+const fs = require('fs'); const vm = require('vm');
+const args = process.argv.slice(1).filter(a => a !== '--');
+const ctx = { console, window: {}, document: { getElementById: () => null } };
+vm.createContext(ctx);
+vm.runInContext(fs.readFileSync(args[0] + '/util.js', 'utf8'), ctx);
+vm.runInContext(fs.readFileSync(args[0] + '/conteo.js', 'utf8'), ctx);
+const html = vm.runInContext('liderTableroHtml', ctx)(JSON.parse(fs.readFileSync(args[1], 'utf8')));
+console.log(JSON.stringify({ texto: html.replace(/<[^>]+>/g, ' ').replace(/&amp;/g, '&').replace(/\s+/g, ' ') }));
+"""
+
+#: Códigos que el modelo usa y un jefe de bodega no tiene por qué leer.
+_CODIGOS = re.compile(r'\[[A-Z_]+\]|(?<![\w-])(?:VENTA|RECEPCION|AVERIA|OTRO|[A-Z]{2,}(?:_[A-Z]+)+)(?![\w-])')
+
+
+class TestElTableroRealSeLeeEnPalabras:
+
+    def test_sin_codigos_del_modelo(self, mundo, tienda, tmp_path):
+        from app.services.tablero_lider_conteo import tablero
+        d = tablero(tienda['almacen'].id, rol='supervisor')
+        ruta = tmp_path / 'tablero.json'
+        ruta.write_text(json.dumps(d, default=str), encoding='utf-8')
+        texto = _node(_ARNES_TABLERO, str(ruta))['texto']
+        assert 'Conteos definitivos por contar' in texto and 'Contar ahora' in texto
+        assert 'Venta · PD-LIDER-1' in texto
+        assert sorted(set(_CODIGOS.findall(texto))) == [], texto[:800]
+
+    def test_el_detector_de_codigos_muerde(self):
+        assert _CODIGOS.findall('[NO_ENCONTRADO] · VENTA · PD-1 · SALIDAS_NO_POS') == [
+            '[NO_ENCONTRADO]', 'VENTA', 'SALIDAS_NO_POS']
+        assert _CODIGOS.findall('Venta · PD-LIDER-1 · CC-MANUAL-2026 · EST101') == []
+
+    def test_la_nota_del_bloqueo_no_repite_el_codigo(self, mundo, tienda):
+        from app.services.tablero_lider_conteo import tablero
+        filas = {f['id']: f for f in tablero(tienda['almacen'].id)['decisiones']['bloqueados']['filas']}
+        assert filas[mundo['bloq_noenc']]['nota'] is None
+        assert filas[mundo['bloq_otro']]['nota'] == 'la estantería está caída'
+
+    def test_toda_clase_en_proceso_tiene_su_texto(self):
+        """Por AST: cada `'clase': '<LITERAL>'` y `clase = '<A>' if … else '<B>'`
+        de `conteo_service` tiene su palabra en `CLASE_EN_PROCESO_TEXTO`."""
+        from app.services.tablero_lider_conteo import CLASE_EN_PROCESO_TEXTO
+        arbol = ast.parse((RAIZ / 'app' / 'services' / 'conteo_service.py').read_text(encoding='utf-8'))
+        clases = set()
+        for n in ast.walk(arbol):
+            if isinstance(n, ast.Dict):
+                for k, v in zip(n.keys, n.values):
+                    if isinstance(k, ast.Constant) and k.value == 'clase' and isinstance(v, ast.Constant):
+                        clases.add(v.value)
+            if isinstance(n, ast.Assign) and any(isinstance(t, ast.Name) and t.id == 'clase' for t in n.targets):
+                # Solo los VALORES posibles (ramas del if), no lo que se compara.
+                ramas = [n.value.body, n.value.orelse] if isinstance(n.value, ast.IfExp) else [n.value]
+                clases |= {r.value for r in ramas if isinstance(r, ast.Constant) and isinstance(r.value, str)}
+        assert len(clases) >= 6, f'piso: el escáner dejó de ver clases ({clases})'
+        assert sorted(clases - set(CLASE_EN_PROCESO_TEXTO)) == []
+
+
 from tests.test_conteo_teorico_pos import siesa, tienda  # noqa: E402,F401 (fixtures)
 from tests.test_tablero_lider_conteo import mundo  # noqa: E402,F401 (fixture)

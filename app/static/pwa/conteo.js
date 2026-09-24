@@ -2619,7 +2619,7 @@ function _lRechazados(r, p) {
 
 function _lFueraDelPlan(fp) {
   const filas = (fp.filas || []).map(f => _lFila(
-    `<div style="font-size:11px;font-weight:700;color:#f59e0b;">${esc(f.clase || '')} · ${esc(f.documento || '—')} · ${_lNum(f.n_skus)} SKU</div>`,
+    `<div style="font-size:11px;font-weight:700;color:#f59e0b;">${esc(f.clase_texto || f.clase || '')} · ${esc(f.documento || '—')} · ${_lNum(f.n_skus)} SKU</div>`,
     `<div style="font-size:12px;color:var(--tx2);">${esc(f.detalle || '')}</div>
      <div style="font-size:13px;color:var(--tx);font-weight:700;margin-top:4px;">→ ${esc(f.accion || '')}</div>
      <div style="font-size:11px;color:var(--tx3);margin-top:4px;">${(f.skus || []).map(s => esc(s)).join(' · ')}</div>`,
@@ -2654,7 +2654,7 @@ function _lRezago(r, p) {
     <div style="font-size:13px;font-weight:800;color:#f59e0b;">⏸ El generador está detenido por rezago</div>
     <div style="font-size:12px;color:#fde68a;margin-top:4px;line-height:1.5;">${_lNum(r.pendientes_vivas)} pendientes = ${_lNum(r.dias_de_cupo_pendientes, 1)} días de cupo (cupo ${_lNum(r.cupo_diario)}/día). ${_lNum(r.a_cancelar)} son del plan y nadie las tomó${tramos ? ` (${tramos})` : ''}: mientras sigan, no se crea ningún conteo nuevo.</div>
     <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:10px;">
-      ${p.cancelar_rezago ? _lBoton('🗑 Cancelar rezago (ver antes)', 'liderCancelarRezago()', 'suave') : _lSinPermiso('El rezago lo cancela un admin (Inventario → ABC → Cancelar rezago)')}
+      ${p.cancelar_rezago ? _lBoton('🗑 Cancelar rezago (ver antes)', 'liderCancelarRezago()', 'suave') : _lSinPermiso('El rezago lo cancela un admin (Inventario Cíclico → ⚙️ Plan ABC → Cancelar rezago)')}
     </div>
   </div>`;
 }

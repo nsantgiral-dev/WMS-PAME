@@ -828,6 +828,21 @@ class ConteoService:
         return 'CC3' if ConteoService._es_conteo_definitivo(sesion) else 'CC2'
 
     @staticmethod
+    def _nota_de_bloqueo(s: SesionConteo):
+        """Lo que escribió quien bloqueó, sin el `[MOTIVO]` que le antepone
+        `bloquear_conteo`: el motivo ya viaja en palabras (`motivo_texto`) y la
+        pantalla mostraba «[NO_ENCONTRADO]» debajo de «No lo encontró». Solo se
+        quita el prefijo EXACTO del motivo de la fila; cualquier otro texto
+        (una edición posterior) queda tal cual."""
+        nota = s.motivo_edicion
+        if not nota or not s.motivo_bloqueo:
+            return nota
+        prefijo = f'[{s.motivo_bloqueo}]'
+        if nota.startswith(prefijo):
+            nota = nota[len(prefijo):].strip()
+        return nota or None
+
+    @staticmethod
     def listar_bloqueados(almacen_id: int = None) -> list:
         """Conteos BLOQUEADOS esperando al líder, con su motivo. Sin cantidades:
         el líder puede terminar haciendo el CC3 de la misma cadena."""
@@ -846,8 +861,9 @@ class ConteoService:
                 'producto_codigo': s.producto.codigo if s.producto else None,
                 'producto_nombre': s.producto.nombre if s.producto else None,
                 'ubicacion_codigo': s.ubicacion.codigo if s.ubicacion else None,
+                'ubicacion_fisica': bool(s.ubicacion and s.ubicacion.es_fisica),
                 'motivo_bloqueo': s.motivo_bloqueo or 'SIN_MOTIVO_REGISTRADO',
-                'nota': s.motivo_edicion,
+                'nota': ConteoService._nota_de_bloqueo(s),
                 'reportado_por_nombre': s.operario.nombre if s.operario else None,
                 'bloqueado_en': s.bloqueado_en.isoformat() if s.bloqueado_en else None,
             })

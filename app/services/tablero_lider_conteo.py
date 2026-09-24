@@ -117,6 +117,17 @@ ACCION_POR_MOTIVO_AJUSTE = {
     'OTRO': ('REVISAR', 'Leer el motivo y decidir: recontar o cancelar'),
 }
 
+#: La clase de mercancía en proceso (`ConteoService.procesos_en_curso`) en
+#: palabras: el bloque «Fuera del plan» decía «VENTA · PD-1».
+CLASE_EN_PROCESO_TEXTO = {
+    'VENTA': 'Venta',
+    'TRASLADO_SALIENTE': 'Traslado saliente',
+    'TRASLADO_ENTRANTE': 'Traslado entrante',
+    'RECEPCION': 'Recepción',
+    'AVERIA': 'Avería',
+    'DEVOLUCION_CLIENTE': 'Devolución de cliente',
+}
+
 ESTADO_TEXTO = {
     EstadoConteo.PENDIENTE: 'Pendiente',
     EstadoConteo.EN_PROCESO: 'Contándose',
@@ -429,6 +440,7 @@ def _fuera_del_plan(almacen_id) -> dict:
     for h in sin_fecha:
         clave = (h.get('clase'), h.get('documento'))
         d = por_doc.setdefault(clave, {'documento': h.get('documento'), 'clase': h.get('clase'),
+                                       'clase_texto': CLASE_EN_PROCESO_TEXTO.get(h.get('clase'), h.get('clase')),
                                        'detalle': h.get('detalle'), 'accion': h.get('accion'),
                                        'skus': set()})
         d['skus'].add(h['producto_id'])
