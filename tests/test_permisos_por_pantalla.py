@@ -57,6 +57,9 @@ PANTALLAS = [
     # y un CPK visible en su pantalla está a un paso de leerse como una medida
     # suya, que es lo que la regla 2 del módulo prohíbe.
     ('flota_analitica.js', None,    ['admin', 'control_flota']),
+    # Sub-pestaña de 📈 Analítica: la pestaña se muestra a quien pasa
+    # `_es_gestion` (contrato de la Fase 1), y los endpoints piden lo mismo.
+    ('analitica_fugas.js', None,    ['admin', 'supervisor', 'jefe_almacen', 'gerente']),
     ('rutas.js',      'condCargar', ['conductor']),
     ('rutas.js',      'condVer',    ['conductor']),
     ('rutas.js',      None,         ['admin']),
