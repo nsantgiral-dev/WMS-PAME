@@ -3501,3 +3501,74 @@ un parche de instancia, y que tapa los parches de CLASE de los tests
 siguientes (la lección del refactor del 2026-09-09, que no tenía limpieza). Era
 la causa de que `test_rechazo_siesa_no_es_pagina_vacia` fallara solo en la
 suite completa.
+
+---
+
+## Analítica — shell y 🧭 Recorrido del pedido (Fase 1, 2026-09-24)
+
+Pestaña admin **📈 Analítica** (`tab-analitica`, segunda del nav — `tab()`
+resalta por POSICIÓN, y `test_analitica_recorrido.py` exige que `TABS` y el nav
+tengan el mismo orden). La ven `_ROLES_ANALITICA` = `Roles.GESTION` (cruzado
+por test); carga al entrar, **nunca por el timer de 30 s**.
+
+**Shell** (`analitica.js`): filtros comunes (`an-f-almacen`, `an-f-desde`,
+`an-f-hasta`, 30 días Bogotá por defecto, `anFiltros()`), sub-pestañas de
+`AN_VISTAS` (recorrido · fugas · salud · bitácora, llamadas en runtime),
+`anCargarPanel` (sin parpadeo, la respuesta vieja no pisa, un fallo conserva lo
+que se ve) y formatos que no inventan ceros: `anPesos(null)` = «sin dato»,
+`anPct(x, n)` = «82 % de 340» o «— de 0», `anFrescura(meta)` nombra cada
+fuente con `completa === false` y su `motivo`. **Convención de `meta.fuentes`**
+para todas las vistas: `{nombre, completa, motivo, actualizado_en}`.
+
+**Recorrido** — `services/analitica_recorrido.py` (la única que decide:
+`_evaluar`), `routes/analitica_recorrido.py`, `analitica_recorrido.js`:
+
+    GET /api/analitica/recorrido                        embudo + guía + sin_enlazar + meta
+    GET /api/analitica/recorrido/etapa/<etapa>?vista=en|llegaron|fuga&page&per_page
+    GET /api/analitica/recorrido/pedido/<pedido_clave>  línea de tiempo (o SIN-CLAVE-PK<id>)
+
+| Etapa | Evidencia | Marca |
+|---|---|---|
+| aprobado | línea en `pedidos_historia` / `pedidos_siesa` | `primera_vez_vista_at` (solo si es anterior al primer registro WMS) |
+| recogido | todo picking vivo COMPLETADO | última `fecha_completado` |
+| empacado | empaque vivo VERIFICADO/DESPACHADO | `fecha_verificado` |
+| despachado | DESPACHADO / remisión | `fecha_despachado` |
+| entregado | parada ENTREGADO / PARCIAL / ENTREGADO_SIN_PAGO | `fecha_confirmacion` |
+| cobrado | `monto_cobrado` > 0 o RC ENVIADO/YA_SALDADA; CREDITO pasa **sin marca** | idem / `siesa_rc_at` |
+| liquidado | ruta LIQUIDADA | `liquidada_en` |
+
+- **Acumulativas**: evidencia de una etapa posterior implica las anteriores;
+  la que no dejó hora cuenta en el embudo y sale de los tiempos (`sin_marca`).
+- **Cohorte**: día Bogotá en que el pedido entró (historia de Siesa o, si no la
+  hay, primer registro WMS; `entrada_fuente`). Pendiente en Siesa sin historia
+  ni WMS: `meta.sin_fecha_de_entrada`, no se asigna a ningún rango.
+- **Fugas que cortan** (en la etapa que no alcanzó, con motivo): picking
+  cancelado (motivo de la bitácora), empaque cancelado, rechazo en ruta
+  (`motivos_rechazo.etiqueta`), entregado sin pago, liquidado sin cobro,
+  anulado en Siesa. **Detenido**: bloqueo de picking/empaque. **Pérdidas
+  parciales** (siguen): recogido incompleto, entrega parcial, NC, devolución.
+  **FUERA_DEL_WMS**: salió de pendientes en Siesa sin un registro WMS; fuera
+  del denominador.
+- **Valor** = suma de `pedidos_historia.vlr_neto`; una línea sin valor deja el
+  pedido «sin valor» (contado aparte, nunca parcial).
+- **Guía**: ciclo de caja (aprobado → liquidado, mediana/p90 por rango más
+  cercano, `n`, `sin_marca`, `negativos`); % del valor sin fuga sobre la
+  cohorte y **sobre los ya cerrados** (lo que va en camino no la baja).
+- **Sin enlazar**: empaques de pedido sin `pedido_clave` (mini embudo +
+  muestra con línea de tiempo), pickings y líneas de historia sin clave. No se
+  unen por texto.
+- Píldoras: referencias **provisionales** (`AN_REC_REFERENCIAS`: ciclo ≤ 2
+  días, sin fuga ≥ 95 %), declaradas en pantalla; no son metas del negocio.
+
+**Lo que no se puede medir bien todavía**: la aprobación real (la historia
+empieza con el deploy de `m036fotos`; antes el pedido entra por el WMS y el
+tramo aprobado→recogido queda sin marca); el valor en recogido/empacado (el
+picking no tiene precio: se arrastra el valor aprobado); el cobro de lo que va
+a crédito (pasa a cartera, fuera del WMS); motivos de cancelación anteriores a
+`m035bitacora`; y el ciclo de caja con hora en rutas liquidadas antes de
+`liquidada_en`.
+
+Trinquete: `tests/test_analitica_recorrido.py` (55 tests, mundo armado con los
+servicios reales: completo, cancelado con motivo, rechazado, sin pago, recogido
+incompleto, en curso, fuera del WMS, sin valor, crédito, bloqueado, sin clave;
+render en Node con `util.js` real). 13 mutaciones, las 13 rojas.
