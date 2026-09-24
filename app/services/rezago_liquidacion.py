@@ -37,7 +37,9 @@ propósito: cualquier N sería un número inventado, y este proyecto ya tiene
 suficientes umbrales razonados sin medir. El cruce de mes es un hecho, no un
 umbral.
 """
-from app.utils.fecha import ahora_bogota
+from datetime import datetime
+
+from app.utils.fecha import ahora_bogota, dia_operativo_de
 
 #: Se liquida el mismo día. Un día de rezago ya es un incumplimiento del
 #: proceso LOG-03, no una tolerancia.
@@ -49,13 +51,19 @@ CRUZA_MES = 'cruza_mes'
 def fecha_de_referencia(ruta):
     """El día contra el que se mide el rezago.
 
-    `fecha_entregada` es DateTime y `fecha_programada` es Date: restarlas sin
-    normalizar revienta. Y se usa la fecha de Bogotá, no UTC — una ruta
-    entregada a las 8 p.m. tiene 0 días de rezago, no 1 (Regla 5).
+    `fecha_entregada` es DateTime **UTC naive** y `fecha_programada` es Date:
+    restarlas sin normalizar revienta. Y se usa el día de Bogotá, no el UTC —
+    una ruta entregada a las 8 p.m. tiene 0 días de rezago, no 1 (Regla 5).
+
+    Hasta el 2026-09-24 esto hacía `entregada.date()`, que sobre UTC es el día
+    UTC: la docstring decía Bogotá y el código calculaba UTC. Una ruta
+    entregada el 31 a las 9 p. m. caía el 1.º y no «cruzaba mes».
     """
     entregada = getattr(ruta, 'fecha_entregada', None)
+    if isinstance(entregada, datetime):
+        return dia_operativo_de(entregada)
     if entregada is not None:
-        return entregada.date() if hasattr(entregada, 'date') else entregada
+        return entregada
     return getattr(ruta, 'fecha_programada', None)
 
 

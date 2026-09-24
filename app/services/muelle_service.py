@@ -5,12 +5,12 @@ Flujo: siesa_triggered → bultos PENDIENTE aparecen en muelle → scan-to-truck
 import logging
 from datetime import datetime, date
 from sqlalchemy.orm import selectinload
-from sqlalchemy import func
 from app.extensions import db
 from app.models.bulto import Bulto, EstadoBulto
 from app.models.packing import TareaPacking, EstadoPacking
 from app.models.ruta_despacho import RutaDespacho, EstadoRutaDespacho
 from app.utils.fecha import dia_operativo as _dia_operativo
+from app.utils.fecha import rango_dia_operativo_utc as _rango_dia_operativo_utc
 
 logger = logging.getLogger(__name__)
 
@@ -172,13 +172,18 @@ class MuelleService:
     @staticmethod
     def obtener_manifiesto() -> dict:
         hoy = _dia_operativo()
+        # Rango UTC del día operativo, no `func.date(col) == hoy`: la columna
+        # guarda UTC y su fecha es el día UTC — un bulto cargado a las 8 p. m.
+        # salía del manifiesto de hoy (Regla 5).
+        inicio, fin = _rango_dia_operativo_utc(hoy, hoy)
         bultos = (
             Bulto.query
             .options(selectinload(Bulto.tarea))
             .join(TareaPacking, Bulto.tarea_id == TareaPacking.id)
             .filter(
                 Bulto.estado == EstadoBulto.CARGADO,
-                func.date(Bulto.fecha_cargado) == hoy,
+                Bulto.fecha_cargado >= inicio,
+                Bulto.fecha_cargado < fin,
             )
             .order_by(TareaPacking.municipio, TareaPacking.cliente, Bulto.numero)
             .all()

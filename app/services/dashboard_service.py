@@ -111,40 +111,33 @@ def _tendencia_7d():
     from app.models.traslado import SolicitudTraslado
     from app.models.ruta_despacho import RutaDespacho
     from app.extensions import db
-    from sqlalchemy import func, cast, Date
 
     # Día OPERATIVO (Colombia), no día UTC. Las columnas guardan UTC naive, así
     # que el corte se expresa en ese mismo marco: `inicio_del_dia_utc`.
-    from app.utils.fecha import dia_operativo, inicio_del_dia_utc
+    from app.utils.fecha import dia_operativo, dia_operativo_de, inicio_del_dia_utc
     hoy = dia_operativo()
     inicio_ventana = inicio_del_dia_utc(hoy - timedelta(days=6))
 
-    # Una query por modelo, agrupada por día
-    picking_rows = (
-        db.session.query(cast(TareaPicking.fecha_completado, Date), func.count(TareaPicking.id))
-        .filter(TareaPicking.estado == 'COMPLETADO', TareaPicking.fecha_completado >= inicio_ventana)
-        .group_by(cast(TareaPicking.fecha_completado, Date)).all()
-    )
-    conteo_rows = (
-        db.session.query(cast(SesionConteo.fecha_cierre, Date), func.count(SesionConteo.id))
-        .filter(SesionConteo.estado.in_(['MATCH', 'AJUSTADO']), SesionConteo.fecha_cierre >= inicio_ventana)
-        .group_by(cast(SesionConteo.fecha_cierre, Date)).all()
-    )
-    traslado_rows = (
-        db.session.query(cast(SolicitudTraslado.fecha_entrega, Date), func.count(SolicitudTraslado.id))
-        .filter(SolicitudTraslado.estado == 'ENTREGADA', SolicitudTraslado.fecha_entrega >= inicio_ventana)
-        .group_by(cast(SolicitudTraslado.fecha_entrega, Date)).all()
-    )
-    ruta_rows = (
-        db.session.query(cast(RutaDespacho.fecha_entregada, Date), func.count(RutaDespacho.id))
-        .filter(RutaDespacho.estado == 'ENTREGADA', RutaDespacho.fecha_entregada >= inicio_ventana)
-        .group_by(cast(RutaDespacho.fecha_entregada, Date)).all()
-    )
+    # Agrupado por día OPERATIVO en Python. Antes era `GROUP BY cast(col, Date)`,
+    # que es el día UTC: lo hecho entre las 7 p. m. y la medianoche se contaba
+    # en la barra de mañana (y en la última barra, en ninguna). La ventana ya
+    # viene acotada a 7 días, así que traer los timestamps cuesta poco.
+    def _por_dia(columna, *filtros):
+        cuenta = {}
+        for (momento,) in db.session.query(columna).filter(
+                columna >= inicio_ventana, *filtros):
+            clave = str(dia_operativo_de(momento))
+            cuenta[clave] = cuenta.get(clave, 0) + 1
+        return cuenta
 
-    picking_map   = {str(d): c for d, c in picking_rows}
-    conteo_map    = {str(d): c for d, c in conteo_rows}
-    traslado_map  = {str(d): c for d, c in traslado_rows}
-    ruta_map      = {str(d): c for d, c in ruta_rows}
+    picking_map = _por_dia(TareaPicking.fecha_completado,
+                           TareaPicking.estado == 'COMPLETADO')
+    conteo_map = _por_dia(SesionConteo.fecha_cierre,
+                          SesionConteo.estado.in_(['MATCH', 'AJUSTADO']))
+    traslado_map = _por_dia(SolicitudTraslado.fecha_entrega,
+                            SolicitudTraslado.estado == 'ENTREGADA')
+    ruta_map = _por_dia(RutaDespacho.fecha_entregada,
+                        RutaDespacho.estado == 'ENTREGADA')
 
     dias = []
     for i in range(6, -1, -1):
