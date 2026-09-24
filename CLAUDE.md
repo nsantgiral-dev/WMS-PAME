@@ -3830,3 +3830,74 @@ Suite completa el 2026-09-24: **7262 passed, 0 failed** (5 skipped, 19 xfailed).
 - **Ventas POS de tienda**: no hay consulta (ver fotos).
 - **Rutas, cartera y jobs por almacén**: sus tablas no tienen almacén.
 - **Todo lo anterior a cada fuente**: AUSENTE, sin backfill posible.
+
+---
+
+## Fugas de plata en ruta — comprobante, evidencia, hora, distancia, retorno, flota (2026-09-24)
+
+Frente «fugas» del contrato de flota (1, 2, 3, 6, 8, 9, 13, 14). **Todo es
+señal para el encargado, nunca sanción** (regla 2 de `flota/CLAUDE.md`): nada
+de esto cambia un estado por sí solo ni culpa a nadie. La política vive en
+**`app/services/senales_ruta.py`** (una función por pregunta); la tasa de «no
+pagó y se quedó» vive en `analitica_fugas.tasa_sin_pago_por_conductor`, junto a
+la fuga que ya valorizaba `ENTREGADO_SIN_PAGO`. Migración **`m041flfugas`**
+(aditiva, nullable, sin backfill; `down_revision='m037kpi'`, el integrador
+re-encadena). Trinquete: `tests/test_fugas_ruta.py` (90 tests, 16 mutaciones,
+las 16 rojas).
+
+**La parada normal no pide nada nuevo.** La evidencia se pide solo en las
+excepciones, que es donde está la plata:
+
+| Fuga | Qué se hizo | Dónde |
+|---|---|---|
+| **Transferencia falsa** | Pago bancario (transferencias, consignación, tarjeta, cheque — `requiere_comprobante`) con monto > 0 exige **referencia** (≥ 4 alfanuméricos, `limpiar_referencia`) y **foto del comprobante** (foto-dato: 1600 px, calidad 0.8, **sin recomprimir** en servidor). La referencia viaja al RC en `F358_REFERENCIA_OTROS` (Alfanumérico 30 según el DOCX del 142888 — el test lo lee del `.docx`), leída del recaudo en el ejecutor del DLQ; sin referencia (parada vieja) se conserva lo de antes (`notas`/`'APP'`), porque el campo es obligatorio en consignación | `recaudos_entrega.referencia_pago`, `foto_comprobante`; `connekta_liquidacion_gateway.referencia_otros_rc` |
+| **«No pagó y se quedó» falso** | Foto y «📍 Estoy aquí» **intentado** obligatorios (sin señal o sin permiso se acepta: se intentó; `no_se_pidio` no). El conductor ve el aviso y el **contacto del asesor** al elegir el motivo. Tasa por conductor, con su denominador y cuántas sin foto, en Liquidación y en 💸 Fugas (`extra.por_conductor`) | `senales_ruta.exige_evidencia` (lee `motivos_rechazo.SIN_RETORNO`), `para_frontend().exige_evidencia` |
+| **Devolución parcial inflada** | `lineas_devolucion_cliente.cantidad_declarada` = lo que dijo el **conductor**; recepción sigue escribiendo lo contado en `cantidad_devuelta` y **no pisa** lo declarado (si falta, se congela lo vigente antes de ajustar). La corrección de recepción va a la bitácora (EDITAR). `/liquidar-completo` guarda lo del conductor en `cantidad_devuelta_conductor` antes de aplicar la corrección del líder. Faltante de retorno = declarado − contado, en Liquidación (señal por parada y total por ruta) y en 💸 Fugas (`rechazos_ruta.extra.faltante_de_retorno` por conductor) | `senales_ruta.faltante_de_retorno`, `liquidacion_service._declarado_por_el_conductor` |
+| **Hora de la parada** | Nombres acordados con el integrador: `recaudos_entrega.ts_dispositivo` (hora del teléfono al confirmar, UTC), `ts_desfase_s` (teléfono − servidor **medido al enviar**, con `ts_envio`; positivo = adelantado), `via_cola`; `entregas_geo.ts_dispositivo` y `pos_ts_dispositivo` (`pos.timestamp`). **No reemplazan** `fecha_confirmacion`/`capturado_en`. La cola offline las manda (`_condSelloDeEnvio`); un ítem viejo usa la hora a la que se encoló. `clasificar_hora`: `reloj_desfasado` / `antes_de_salir` son señal; `diferida` (sin señal) es informativa | `senales_ruta.leer_ts/desfase_s/clasificar_hora` |
+| **Rechazo lejos del cliente** | `recaudos_entrega.distancia_cliente_m`, medida contra el maestro **antes** de que la captura vote (si no, se mide contra su propia sombra). Señal solo si el motivo afirma presencia (`CLIENTE_CERRADO`, `FUERA_DE_HORARIO`) y supera el umbral. Sin punto del cliente → sin señal | `senales_ruta.senal_rechazo_lejos` |
+| **Efectivo en la calle** | Por conductor: efectivo cobrado en rutas EN_TRANSITO/ENTREGADA no liquidadas, con antigüedad (día Bogotá de la confirmación más vieja). Cabecera de Liquidación | `senales_ruta.efectivo_en_poder_por_conductor` |
+| **Despacho sin mirar la flota** | Al **iniciar el cargue** y al **despachar**: SOAT/RTM vencidos, no registrados o no encontrados, sin inspección apta hoy, OT de taller abierta, custodia de otro conductor / en sede / de nadie, sin vehículo. **Informa, no bloquea**: 409 con la lista; con `motivo_advertencias` sale y queda FORZAR en la bitácora (con las claves). Lo ya reconocido en la misma ruta no se pregunta dos veces. Lee `flota/` solo por sus funciones públicas (`custodia_activa`, `inspecciones.del_dia`, `taller.ordenes_de`, `MedidorSQL.documentos_por_vehiculo`) + el modelo `DocumentoVehiculo` para «no registrado» | `senales_ruta.advertencias_de_flota`, `RutaService._reconocer_advertencias_flota` |
+| **`entregar_ruta` marcaba ENTREGADO lo ausente** | Solo se toca un bulto con `entregado` **booleano literal**. Lo demás conserva su estado (el de la parada) y lo que nadie declaró va en `sin_declarar`. El cierre del conductor (`bultos: []`, también offline) no cambia | `RutaService.entregar_ruta` |
+
+**Tres trinquetes de clase**, por AST y con inventario que solo encoge:
+- toda llamada a `trigger_recibo_caja` en `app/` pasa `referencia_pago` (inventario vacío);
+- toda función que pone una ruta en `EN_CARGUE`/`EN_TRANSITO` llama a
+  `_reconocer_advertencias_flota` (única excepción: `crear_ruta`, que nace
+  EN_CARGUE y despacha por `cerrar_ruta`);
+- ningún `.get('entregado'|'cantidad_entregada', <default>)` (una excepción
+  declarada: los ítems de una PARCIAL, que el PWA manda siempre).
+
+**El formulario viejo en caché.** La exigencia de comprobante y evidencia se
+aplica al payload con `version_formulario >= 2` (el PWA nuevo lo manda). Un
+ítem de la cola offline armado por un PWA anterior **no se rechaza** —quedaría
+trabado en el teléfono para siempre— y aparece como señal (`sin_comprobante`,
+`sin_evidencia`). Esto también es una puerta: quien arme el POST a mano sin el
+campo se salta la exigencia, y la señal es lo único que lo delata.
+
+**De paso:** re-confirmar una parada sin foto nueva **borraba** la foto
+anterior (la pantalla decía «Foto guardada»); ahora la conserva. La compresión
+fallida de la foto ya no es un `except: pass`: se guarda como llegó y se loguea.
+`liquidar-completo` mutaba los dicts del JSON en su sitio (SQLAlchemy puede no
+ver el cambio): ahora copia profunda.
+
+| Variable | Defecto | Qué es |
+|---|---|---|
+| `SENAL_DESFASE_RELOJ_S` | `300` | Desde cuántos segundos de desfase el reloj del teléfono es señal |
+| `SENAL_RECHAZO_LEJOS_M` | `geo_cliente.RADIO_COHERENCIA_M` (500) | Desde cuántos metros un «cliente cerrado» está lejos del cliente |
+
+**Lo que NO cubre (declarado):**
+- Fugas 4 (km fuera de ruta), 5 (combustible), 7 (licencia del conductor),
+  10–12 (fotos de custodia, cierre forzado, custodio ≠ conductor fuera del
+  despacho): no son de este frente.
+- `CHEQUE` exige comprobante pero el 142888 sigue sin código de medio para él
+  (levanta `ValueError`, como antes).
+- La foto del comprobante se guarda en la fila (base64, como `foto_entrega`), no
+  en el almacén de fotos de flota; nadie la cruza todavía contra el extracto.
+- El faltante de retorno se mide en unidades; en 💸 Fugas no se valoriza (el
+  precio por línea existe en la foto de ventas, falta decidir si suma a la fuga).
+- Si el líder baja a 0 una línea en `/liquidar-completo`, la línea no entra a la
+  devolución y su declarado se pierde para el faltante (se conserva en
+  `items_entregados.cantidad_devuelta_conductor`).
+- La advertencia de flota se pide en el servicio: `scripts/qa_*` y los tests
+  que despachan sin mundo de flota pasan un motivo explícito.
+- `flota/CLAUDE.md` no se tocó (este frente no edita `flota/`).
