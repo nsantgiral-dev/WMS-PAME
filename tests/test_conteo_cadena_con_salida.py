@@ -208,6 +208,54 @@ class TestEditarNoDejaHijosContandoParaNada:
         assert _s(db, cc1).estado == 'MATCH'
 
 
+class TestSoloSeCorrigeLaRaizYaContada:
+    """`/editar` aceptaba la cantidad en cualquier estado salvo AJUSTADO y
+    AJUSTANDO, y `reconciliar_cantidad` pone MATCH si cuadra: un PENDIENTE
+    cerraba sin que nadie contara, un CANCELADO resucitaba y un CC2 cambiaba
+    sin mover a la raíz que se aprueba. Una política
+    (`motivo_no_se_corrige_cantidad`) para el servidor y la pantalla."""
+
+    def _editar(self, app, client, tienda, sid, n):
+        return client.put(f'/api/conteo/{sid}/editar',
+                          json={'cantidad_fisica': n, 'motivo_edicion': 'prueba'},
+                          headers=_auth(app, tienda['supervisor']))
+
+    def test_un_pendiente_no_se_cierra_sin_contar(self, app, client, db, siesa, tienda):
+        siesa.poner(existencia=10, pos=0)
+        cc1 = _cc1(tienda)
+        _s(db, cc1).existencia_siesa = 10          # con referencia: reconciliaría
+        db.session.commit()
+        r = self._editar(app, client, tienda, cc1, 10)
+        assert r.status_code == 409, r.get_json()
+        assert 'PENDIENTE' in r.get_json()['error']
+        assert (_s(db, cc1).estado, _s(db, cc1).cantidad_fisica) == ('PENDIENTE', None)
+        assert 'PENDIENTE' in _s(db, cc1).to_dict()['no_se_corrige_cantidad']
+
+    def test_un_cancelado_no_resucita(self, app, client, db, siesa, tienda):
+        cc1, _r2 = _contar_cc1_cc2(tienda, siesa, 7, existencia=10)
+        _s(db, cc1).estado = 'CANCELADO'
+        db.session.commit()
+        r = self._editar(app, client, tienda, cc1, 10)
+        assert r.status_code == 409, r.get_json()
+        assert _s(db, cc1).estado == 'CANCELADO'
+
+    def test_un_cc2_se_corrige_en_la_raiz(self, app, client, db, siesa, tienda):
+        cc1, cc2, _cc3 = _en_tercero(siesa, tienda)
+        assert _s(db, cc2).estado == 'DESCUADRE'
+        r = self._editar(app, client, tienda, cc2, 10)
+        assert r.status_code == 409, r.get_json()
+        assert 'Corregí la raíz' in r.get_json()['error']
+        assert _s(db, cc2).cantidad_fisica == 8
+
+    def test_la_raiz_contada_si_y_la_pantalla_lo_sabe(self, app, client, db, siesa, tienda):
+        cc1, _r2 = _contar_cc1_cc2(tienda, siesa, 7, existencia=10)
+        raiz = _s(db, cc1)
+        raiz.estado = 'DESCUADRE'
+        db.session.commit()
+        assert _s(db, cc1).to_dict()['no_se_corrige_cantidad'] is None
+        assert self._editar(app, client, tienda, cc1, 10).status_code == 200
+
+
 class TestDescartarNoDejaAjustandoSinJob:
 
     def test_la_posiblemente_enviada_sale_por_reintentar_sin_reenviar(

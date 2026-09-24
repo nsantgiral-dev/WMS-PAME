@@ -2475,6 +2475,42 @@ class ConteoService:
             nodo = nodo.hijo_conteo
         return vivos
 
+    #: Los únicos estados en los que la cantidad es un RESULTADO de conteo
+    #: que un admin puede corregir: ya se contó y la cadena espera una
+    #: decisión (DESCUADRE) o ya cerró sin ajuste (MATCH).
+    ESTADOS_CANTIDAD_CORREGIBLE = (EstadoConteo.MATCH, EstadoConteo.DESCUADRE)
+
+    @staticmethod
+    def motivo_no_se_corrige_cantidad(sesion: SesionConteo):
+        """¿Por qué a esta sesión no se le puede corregir la cantidad contada?
+        Texto, o `None`. **Una política, una función**: la usan
+        `corregir_cantidad` (el servidor decide) y `SesionConteo.to_dict` (la
+        pantalla deshabilita el campo y dice por qué, en vez de copiar la lista
+        de estados en JS).
+
+        Corregir solo tiene sentido sobre la RAÍZ ya contada. Antes `/editar`
+        aceptaba cualquier estado salvo AJUSTADO/AJUSTANDO, y
+        `reconciliar_cantidad` pone MATCH si cuadra, así que:
+        - un PENDIENTE o EN_PROCESO pasaba a MATCH **sin que nadie contara**;
+        - un CANCELADO **resucitaba** a MATCH, reescribiendo la cancelación;
+        - un BLOQUEADO («no lo encontré») se cerraba sin pasar por el líder;
+        - un CC2/CC3 cambiaba sin mover a su raíz, que es la que se aprueba y
+          ajusta: el número editado no llegaba a ninguna parte.
+        """
+        if sesion.es_segundo_conteo:
+            return (f'Es un {ConteoService.nivel_en_cadena(sesion)}: la cantidad que '
+                    f'decide es la de la raíz de la cadena. Corregí la raíz.')
+        vivos = ConteoService.descendientes_vivos(sesion)
+        if vivos:
+            return (f'Este conteo tiene un {ConteoService.nivel_en_cadena(vivos[0])} '
+                    f'en curso ({vivos[0].codigo}). Corregir la cantidad lo dejaría '
+                    f'contando para nada: omitilo o cancelá la cadena primero.')
+        if sesion.estado not in ConteoService.ESTADOS_CANTIDAD_CORREGIBLE:
+            return (f'Un conteo en {sesion.estado} no tiene una cantidad que corregir: '
+                    f'solo se corrige lo ya contado (MATCH o DESCUADRE). Para cerrarlo '
+                    f'sin contar, cancelalo.')
+        return None
+
     @staticmethod
     def corregir_cantidad(sesion: SesionConteo, nueva_cantidad: int) -> list:
         """Un admin corrige lo contado (`PUT /api/conteo/<id>/editar`). Devuelve
@@ -2487,12 +2523,9 @@ class ConteoService:
         propagación exige la raíz esperándolo. Para cerrar una cadena en curso
         están `omitir-segundo` (ajustar con lo que dijo el CC1) y cancelar.
         """
-        vivos = ConteoService.descendientes_vivos(sesion)
-        if vivos:
-            raise ValueError(
-                f'Este conteo tiene un {ConteoService.nivel_en_cadena(vivos[0])} '
-                f'en curso ({vivos[0].codigo}). Corregir la cantidad lo dejaría '
-                f'contando para nada: omitilo o cancelá la cadena primero.')
+        no_se_corrige = ConteoService.motivo_no_se_corrige_cantidad(sesion)
+        if no_se_corrige:
+            raise ValueError(no_se_corrige)
         cambios = []
         sesion.cantidad_fisica = nueva_cantidad
         cambios.append(f'cantidad_fisica → {nueva_cantidad}')

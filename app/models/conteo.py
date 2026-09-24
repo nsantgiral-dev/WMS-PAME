@@ -455,6 +455,10 @@ class SesionConteo(db.Model):
                              if self.estado == EstadoConteo.DESCUADRE else None),
             'valor_ajuste': (_valor_ajuste(self)
                              if self.estado == EstadoConteo.DESCUADRE else None),
+            # Por qué el admin no puede corregir la cantidad de ESTA sesión
+            # (`ConteoService.motivo_no_se_corrige_cantidad`): la pantalla
+            # deshabilita el campo con este texto en vez de copiar los estados.
+            'no_se_corrige_cantidad': _motivo_no_se_corrige_cantidad(self),
             'tolerancia_primer_conteo': self.tolerancia_primer_conteo,
             'ajuste_por_tolerancia': bool(self.ajuste_por_tolerancia),
             'motivo_bloqueo': self.motivo_bloqueo,
@@ -501,6 +505,11 @@ def _motivo_bloqueo_ajuste(sesion):
 def _motivo_no_sale_solo(sesion):
     from app.services.conteo_service import ConteoService
     return ConteoService.motivo_no_sale_solo(sesion)
+
+
+def _motivo_no_se_corrige_cantidad(sesion):
+    from app.services.conteo_service import ConteoService
+    return ConteoService.motivo_no_se_corrige_cantidad(sesion)
 
 
 def _valor_ajuste(sesion):
