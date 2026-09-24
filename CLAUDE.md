@@ -3104,3 +3104,53 @@ Líder **y** en Definitivo (quitar la copia exige retirar
 `GET /api/conteo/bloqueados` y `/novedades`); se aprueba desde Conteos → Acción
 y desde Líder, pero solo Líder conoce el tope en pesos de quien mira; y
 Estadísticas todavía muestra claves crudas (`sin_veredicto`, `excluidos`).
+
+---
+
+## Kardex: ¿funciona? — probado contra Siesa QA, solo lectura (2026-09-24)
+
+**Mapa.** `kardex_service.descargar_kardex` lee la consulta dinámica
+`KARDEX_CONSULTA_NOMBRE` (default `papeleriamedellin_papeleriamedellin_API_custom_KardexWMS`)
+por `ejecutarconsulta`, `tamPag=100`, **sin filtro** (la ventana de fechas se
+aplica en Python: acotar el rango no ahorra ni una petición), en corridas de
+`KARDEX_MAX_MINUTOS` (25, techo `KARDEX_TOPE_MINUTOS` = 120) que se reanudan por
+página. Escribe `kardex_movimientos` (idempotente por `hash_origen`).
+`/reconstruir` arma `stock_diario` hacia atrás desde `stock_siesa.existencia`
+(el ancla). Consumidores: `costo_service` (solo concepto 601), `armador_service`
+(demanda descensurada → ROP / contenedor), `temporada_service` (newsvendor), S-B
+y TSB. Vigía **no** lo lee. **Ningún cron lo descarga**: se actualiza solo cuando
+alguien pulsa «Descargar» (trinquete: `TestNadieDescargaElKardexSolo`).
+
+**Lo medido en QA.** La consulta del kardex responde **401** por el endpoint
+dinámico y por el estándar, con los dos nombres que tuvo (doble y simple
+prefijo); con el mismo token `papeleriamedellin_WMS_Stock_Bodega_v2` responde
+200. En QA el kardex **no se puede descargar**: no es código, es el registro o
+el permiso de la consulta en Siesa. El cuadre kardex ↔ `InvFecha` por SKU queda
+pendiente de que responda: `scripts/qa_kardex_real.py --cuadre`.
+
+Del mismo endpoint dinámico, medido sobre la consulta de control:
+
+- El sobre declara `total_páginas` y `total_registros` (con tilde y eñe).
+- **El orden no es determinista.** Una pasada completa declaró 35.604 registros,
+  trajo 35.604 filas y **22.345** (bodega, referencia) distintas; la página 50
+  pedida dos veces con 5 s de diferencia no compartió ninguna fila.
+  `LineaRegistro` es la **posición** (la página 50 trae 4901–5000), no la fila.
+- El ancla sí cuadra: existencia de `PAPELSP9218` / `9830` / `6948` en NB1 =
+  3.488 / 1.739 / 673 en las dos consultas.
+
+**Arreglado** (`tests/test_kardex_salud.py`, 37 tests, 17 mutaciones rojas):
+
+| | Qué pasaba | Ahora |
+|---|---|---|
+| Conteo | `total_declarado_por_siesa` salía `None` siempre (seis nombres adivinados) | `totales_declarados` lee el sobre real; la descarga termina donde Siesa declara y exige que los movimientos distintos cuadren (`CONTEO_NO_CUADRA`, `PAGINA_VACIA_ANTES_DEL_FINAL`) |
+| Diagnóstico de orden | Comparaba posiciones y metía `LineaRegistro` en la identidad | Conjuntos, con la identidad de la descarga (`_parsear_fila`) |
+| Descarga muerta | Un registro abierto por un deploy bloqueaba `/descargar` y `/reconstruir` para siempre | `estado_descarga`: pasado el techo + 10 min es `INTERRUMPIDA` |
+| Nadie sabía si estaba al día | Datos solo mostraba la última descarga; Modelos decía «✓ Kardex completo» sobre un kardex **vacío** | `GET /api/kardex/salud` (`salud_kardex`): veredicto servido, que Datos y Modelos pintan. `KARDEX_DIAS_FRESCURA` (7) |
+| Resultado de «Reconstruir» | Leía `d.dias`/`d.referencias`, que el servidor nunca mandó | Lee `dias_generados`, `referencias_procesadas` y muestra los SKU sin ancla |
+
+**Consecuencia del conteo:** si la consulta del kardex tiene el mismo orden no
+determinista que la de control, **ninguna descarga va a quedar COMPLETA** — y
+eso es la verdad, no un falso negativo. El arreglo es de Siesa: la consulta
+necesita un `ORDER BY` por clave única (consecutivo + línea / `f470_rowid`) y
+devolver esa clave. Sin la clave natural, dos ventas POS iguales del mismo día
+colapsan en un movimiento (`filas_sin_clave_natural` lo cuenta).
