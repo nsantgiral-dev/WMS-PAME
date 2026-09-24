@@ -234,15 +234,35 @@ class TestElCHECKDeLaBaseRecibeLoMedido:
             self, app, db, tmp_path, monkeypatch, autor):
         """**El caso completo.** 100×75 declarados 4000×3000: antes la fila
         llegaba con 4000, el CHECK la daba por buena y quedaba como evidencia
-        legible del odómetro. Ahora llega con 100 y la base la rechaza.
+        legible del odómetro. Ahora llega con 100 **y declarada**:
+        `pendiente_evidencia`, que es la única forma en que el CHECK admite
+        una foto-dato chica.
 
-        El mensaje se comprueba: un rechazo por otra restricción —un NOT NULL
-        olvidado en el test, por ejemplo— haría pasar este test sin que el
-        CHECK de resolución hubiera intervenido."""
-        from sqlalchemy.exc import IntegrityError, OperationalError
+        Cambió el 2026-09-24. Antes la fila salía `ok` y el CHECK la rechazaba
+        en el commit: la propiedad «no entra como evidencia» se cumplía, pero a
+        costa de un 500 que tumbaba el recibo entero —el camión se quedaba sin
+        turno por una foto—, contra lo que la pantalla prometía desde la
+        tanda 1 («se declara, no se rechaza»). La propiedad sigue en pie: la
+        fila entra, y entra diciendo que no sirve para verificar el número."""
+        from flota.adaptadores.modelos import Foto
 
         campos = self._guardar(tmp_path, monkeypatch, _jpeg(100, 75), 4000, 3000)
         assert (campos['ancho'], campos['alto']) == (100, 75)
+        assert campos['estado'] == 'pendiente_evidencia'
+        db.session.add(self._fila(campos, autor))
+        db.session.commit()
+        assert Foto.query.one().estado == 'pendiente_evidencia'
+
+    def test_el_CHECK_sigue_rechazando_una_chica_que_se_dice_ok(
+            self, app, db, tmp_path, monkeypatch, autor):
+        """El CHECK no se aflojó: una foto-dato chica marcada `ok` —por un
+        INSERT a mano, o por un adaptador que se olvide de declararla— sigue
+        sin entrar. El mensaje se comprueba: un rechazo por otra restricción
+        haría pasar este test sin que el CHECK de resolución interviniera."""
+        from sqlalchemy.exc import IntegrityError, OperationalError
+
+        campos = self._guardar(tmp_path, monkeypatch, _jpeg(100, 75), 4000, 3000)
+        campos['estado'] = 'ok'
         db.session.add(self._fila(campos, autor))
         with pytest.raises((IntegrityError, OperationalError)) as e:
             db.session.commit()

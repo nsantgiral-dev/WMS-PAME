@@ -352,7 +352,15 @@ class TestElPermisoNoPuedeSerMasAnchoQueElGesto:
     #: Endpoints que un rol autoriza sin que su pantalla los ofrezca, con el
     #: motivo. **Vacía a propósito**: cada entrada que se agregue es una
     #: decisión que alguien tiene que poder defender por escrito.
-    _ANCHOS_ACEPTADOS: dict = {}
+    _ANCHOS_ACEPTADOS: dict = {
+        # 2026-09-24 (pantalla del conductor): se le retiró el botón
+        # «Odómetro». Su única razón de ser era el tanqueo —que ahora registra
+        # el km por su propia puerta— y le abría «Corrección», que cambia el
+        # odómetro vigente de cualquier placa. La tupla la estrecha el frente
+        # de permisos (hallazgo 2 del contrato de flota); cuando lo haga, esta
+        # entrada SALE y la lista vuelve a estar vacía.
+        '/flota/odometro': 'gesto retirado al conductor; tupla pendiente del frente de permisos',
+    }
 
     def _funciones_del_pwa(self):
         import re

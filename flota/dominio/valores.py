@@ -481,6 +481,9 @@ class EntidadFoto(str, Enum):
     ODOMETRO        = 'odometro'
     DOCUMENTO       = 'documento'
     HALLAZGO        = 'hallazgo'
+    #: El recibo de un tanqueo (2026-09-24). No es `documento`: ese padre son
+    #: los papeles del vehículo, y el conductor no debe poder bajarlos.
+    GASTO           = 'gasto'
 
 
 # ── Estructuras de trabajo ───────────────────────────────────────────────────

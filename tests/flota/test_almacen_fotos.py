@@ -89,7 +89,11 @@ class TestGuardarYRecuperar:
 class TestElCampoQueVaALaFila:
 
     def test_el_hash_sale_del_contenido_no_de_ceros(self, almacen):
-        campos = guardar_foto({'clase': 'foto_dato', 'data_url': _DATA_URL,
+        # `evidencia_estado` y no `foto_dato`: el JPEG de prueba mide 1×1, y
+        # una foto-dato por debajo de 1600 px se guarda declarada
+        # `pendiente_evidencia` desde el 2026-09-24 (ver
+        # `test_dimensiones_medidas`). Lo que este test mide es el hash.
+        campos = guardar_foto({'clase': 'evidencia_estado', 'data_url': _DATA_URL,
                                'ancho': 1600, 'alto': 1200})
         assert campos['hash_sha256'] == hashlib.sha256(_BYTES).hexdigest()
         assert campos['hash_sha256'] != '0' * 64

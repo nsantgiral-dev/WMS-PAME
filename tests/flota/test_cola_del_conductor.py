@@ -302,7 +302,13 @@ class TestInventarioDeLaCola:
         import re
         js = (pathlib.Path(__file__).resolve().parents[2] / 'app' / 'static'
               / 'pwa' / 'flota.js').read_text(encoding='utf-8')
-        m = re.search(r'const FLOTA_COLA_URL = \{(.*?)\};', js, re.S)
-        assert m, 'no se encontró FLOTA_COLA_URL en flota.js'
-        urls = set(re.findall(r"'(/flota/[a-z/]+)'", m.group(1)))
+        i = js.index('function flotaColaUrl(')
+        cuerpo = js[i:js.index('\n}\n', i)]
+        nombres = set(re.findall(r'return (FLOTA_\w+_URL);', cuerpo))
+        assert len(nombres) >= 4, 'no se encontraron las constantes de la cola'
+        urls = set()
+        for n in nombres:
+            m = re.search(rf"const {n} = '(/flota/[a-z/]+)';", js)
+            assert m, f'{n} no es una constante literal'
+            urls.add(m.group(1))
         assert urls == set(self.RUTAS.values())

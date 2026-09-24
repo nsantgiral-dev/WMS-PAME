@@ -1,5 +1,14 @@
 """La pantalla de tanqueo del conductor, EJECUTADA.
 
+**2026-09-24:** el conductor dejó de usar el formulario genérico de gastos
+(`flotaRenderGastos` en «modo tanqueo»): tiene el suyo, `flotaCondTanquear`, con
+~5 campos y sin categorías ni códigos crudos. Lo que este archivo sigue
+exigiendo es lo mismo —que el gesto abra el modal, que la pantalla se construya
+con solo el vocabulario, y que no le muestre el CPK—; los tests de la recarga
+del panel de gastos se retiraron porque el conductor ya no recarga ese panel.
+Lo propio del formulario nuevo (sin preselección, sin códigos, cola sin señal)
+vive en `test_mi_camion_hoy_js.py`.
+
 El 2026-09-21 se arregló que el conductor tuviera el botón de Tanqueo y no la
 pantalla: reusaba `flotaRenderGastos`, cuya primera llamada exige un rol que él
 no tiene. Se le dio `GET /flota/vocabulario` y un modo `soloTanqueo`.
@@ -162,62 +171,34 @@ def _render(tmp_path, payload, solo_tanqueo, recargar=False):
 class TestElConductorVeElFormulario:
 
     def test_el_modal_se_abre(self, tmp_path):
-        """EL defecto que dos arreglos seguidos no vieron.
-
-        `flotaRenderGastos` escribe en `#flota-recibo`, que **solo existe
-        dentro del modal**. El arreglo anterior llamaba al render directo y se
-        saltaba la apertura: la primera vez el contenedor no existía y la
-        escritura lanzaba `TypeError`; si el conductor había abierto antes otro
-        modal de flota, el contenedor existía pero el modal estaba oculto y el
-        formulario se dibujaba donde nadie lo ve.
-
-        En los dos caminos el botón no hacía nada, y la llamada iba sin `await`
-        ni `.catch`, así que moría como rejection no atendida: sin mensaje.
-        """
+        """EL defecto que dos arreglos seguidos no vieron: el formulario se
+        dibujaba en `#flota-recibo`, que **solo existe dentro del modal**, y el
+        gesto no abría el modal. En los dos caminos el botón no hacía nada."""
         visible, _ = _abrir(tmp_path, VOCABULARIO, solo_tanqueo=True)
         assert visible, (
             'el modal no quedó visible: el formulario se dibuja en un '
             'contenedor que el conductor no puede ver')
 
     def test_se_dibuja_sin_reventar(self, tmp_path):
-        """EL test. Con el payload del vocabulario —que NO trae cpk,
-        km_recorridos ni rendimiento— la pantalla tiene que construirse."""
+        """Con el payload del vocabulario —que NO trae cpk, km_recorridos ni
+        rendimiento— la pantalla tiene que construirse."""
         html = _render(tmp_path, VOCABULARIO, solo_tanqueo=True)
-        assert 'gs-cat' in html, 'no se dibujó el selector de categoría'
-        assert 'Registrar' in html, 'no se dibujó el botón de registrar'
+        assert 'id="tq-galones"' in html and 'id="tq-valor"' in html
+        assert 'Registrar tanqueo' in html, 'no se dibujó el botón de registrar'
 
-    def test_ofrece_los_estados_de_tanque(self, tmp_path):
+    def test_no_hay_categorias_que_elegir(self, tmp_path):
+        """El conductor registra un tanqueo, no «un gasto de categoría
+        combustible»: el selector de categoría era un paso que solo podía
+        salir mal."""
+        html = _render(tmp_path, VOCABULARIO, solo_tanqueo=True)
+        assert 'gs-cat' not in html
+
+    def test_ofrece_los_estados_de_tanque_en_palabras(self, tmp_path):
         """Sin esto no se puede marcar «lleno», y sin dos llenos no hay
-        ventana de rendimiento — el dato que la fase de gastos vino a medir."""
+        ventana de rendimiento. En palabras: `parcial` no es lo que se dice en
+        la estación."""
         html = _render(tmp_path, VOCABULARIO, solo_tanqueo=True)
-        for estado in VOCABULARIO['estados_tanque']:
-            assert estado in html, f'falta el estado de tanque {estado!r}'
-
-
-class TestDespuesDeGuardarSigueAhi:
-    """El camino de ÉXITO, que es donde el defecto sobrevivía.
-
-    `flotaGuardarGasto` termina recargando el panel. Cuando el modo era un
-    argumento, esa recarga lo perdía: el conductor guardaba su tanqueo, veía el
-    toast verde, y acto seguido el panel se reemplazaba por «No se pudieron
-    cargar los gastos: sin permiso para ver los gastos de un vehículo».
-
-    El formulario desaparecía justo después de usarlo bien. Por eso el modo
-    pasó a ser ESTADO del panel: lo decide quien abre, y la recarga lo hereda
-    sin que nadie tenga que acordarse de pasarlo.
-    """
-
-    def test_el_formulario_sigue_despues_de_recargar(self, tmp_path):
-        html = _render(tmp_path, VOCABULARIO, solo_tanqueo=True, recargar=True)
-        assert 'gs-cat' in html, (
-            'tras guardar, el panel perdió el formulario — la recarga se fue '
-            'al listado de gastos que el conductor no puede ver')
-
-    def test_la_recarga_no_pinta_el_error_de_permiso(self, tmp_path):
-        html = _render(tmp_path, VOCABULARIO, solo_tanqueo=True, recargar=True)
-        assert 'No se pudieron cargar los gastos' not in html, (
-            'el panel se reemplazó por el 403 justo después de un tanqueo '
-            'correcto')
+        assert 'Lo llené' in html and 'No lo llené' in html
 
 
 class TestNoLeMuestraLoQueNoLeToca:
@@ -237,14 +218,10 @@ class TestNoLeMuestraLoQueNoLeToca:
             'del vocabulario no trae se está pintando igual')
 
     def test_no_afirma_nada_sobre_la_ficha_del_vehiculo(self, tmp_path):
-        """El vocabulario no trae `capacidad_tanque_galones` —es por vehículo,
-        no un catálogo—, así que la rama del `else` decía SIEMPRE «la ficha no
-        dice cuántos galones caben», también cuando sí lo dice. Otra afirmación
-        falsa, en la pantalla de quien tanquea."""
+        """El vocabulario no trae `capacidad_tanque_galones`: la pantalla del
+        conductor no puede afirmar nada sobre la ficha."""
         html = _render(tmp_path, VOCABULARIO, solo_tanqueo=True)
-        assert 'La ficha no dice' not in html, (
-            'la pantalla afirma que la ficha no declara la capacidad, y en '
-            'modo tanqueo simplemente no la pidió: no lo sabe')
+        assert 'La ficha no dice' not in html
 
 
 class TestLaPantallaCompletaSigueIgual:

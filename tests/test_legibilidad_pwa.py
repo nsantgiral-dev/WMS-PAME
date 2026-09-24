@@ -555,6 +555,9 @@ def _cubiertos_por_el_tema_claro(html):
 #: .tema-claro-fijo` de index.html—, y así se miden.
 PALETA_CLARA_FIJA = {
     'rutas.js': re.compile(r'^(_?cond[A-Z]\w*|cargarRutasConductor|rutaVerManifiesto)$'),
+    # «Mi camión hoy» (2026-09-24): la tarjeta pinta en `#cond-flota` y los
+    # formularios del conductor en `#flota-modal`, las dos zonas claras fijas.
+    'flota.js': re.compile(r'^(flotaCond\w*|flotaRec\w*|flotaDano\w*|flotaTanqueo\w*|flotaCola\w*)$'),
 }
 
 
@@ -616,6 +619,9 @@ class TestLaZonaClaraFijaExiste:
         assert m, 'el bloque de tokens del tema claro ya no es una lista de selectores'
         selectores = {x.strip() for x in m.group(1).split(',')}
         assert {'body.light', '#cond-contenido', '.tema-claro-fijo'} <= selectores, selectores
+        # La tarjeta de flota del conductor y el modal donde llena sus
+        # formularios también se leen al sol (2026-09-24).
+        assert {'#cond-flota', '#flota-modal'} <= selectores, selectores
 
     def test_el_manifiesto_se_monta_en_la_zona_clara(self):
         js = (PWA / 'rutas.js').read_text(encoding='utf-8')
@@ -625,6 +631,13 @@ class TestLaZonaClaraFijaExiste:
 
     def test_el_contenido_del_conductor_existe(self):
         assert 'id="cond-contenido"' in _html()
+
+    def test_la_tarjeta_de_flota_y_su_modal_existen(self):
+        """Si el id cambia, el selector de la zona clara deja de aplicar y el
+        conductor vuelve a leer en oscuro al sol, con el test anterior en verde."""
+        assert 'id="cond-flota"' in _html()
+        flota = (PWA / 'flota.js').read_text(encoding='utf-8')
+        assert "m.id = 'flota-modal'" in flota
 
 
 class TestLosParesFijosPasanAA:

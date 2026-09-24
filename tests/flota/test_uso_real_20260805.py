@@ -73,7 +73,14 @@ class TestLaPlacaViajaConElFormulario:
         """
         js = _js()
         # 6 → 10 el 2026-09-02: taller, preventivo y llantas.
-        assert js.count('data-placa="${FLOTA_PLACA}"') == 10, (
+        # 10 → 12 el 2026-09-24 (pantalla del conductor): el recibo guiado y la
+        # entrega se reescribieron, y entran el daño y el tanqueo propios del
+        # conductor. Los cuatro sellan con `esc()`, que es la forma que el
+        # guard de `esc` pide para todo dato pintado; se cuentan las dos
+        # escrituras.
+        sellados = (js.count('data-placa="${FLOTA_PLACA}"')
+                    + js.count('data-placa="${esc(FLOTA_PLACA)}"'))
+        assert sellados == 12, (
             'algún formulario que escribe contra un vehículo volvió a depender '
             'solo de la global')
 
@@ -102,7 +109,8 @@ class TestLaPlacaViajaConElFormulario:
         # afuera —la ficha— guardó en el vehículo equivocado esa misma tarde.
         # 1 definición + 11 formularios que escriben contra una placa
         # (2026-09-02: taller, preventivo y llantas).
-        assert js.count('flotaPlacaDelFormulario(') == 12
+        # + 2 el 2026-09-24: el daño y el tanqueo propios del conductor.
+        assert js.count('flotaPlacaDelFormulario(') == 14
 
     def test_la_comprobacion_compara_las_dos_fuentes(self):
         js = _js()
@@ -363,10 +371,19 @@ class TestLaConvencionEstaEnLaPantalla:
         assert 'antihorario' in cuerpo
 
     def test_aparece_en_los_tres_formularios_que_piden_fotos(self):
+        """Dos formularios la llevan como bloque (recibo de escritorio y
+        entrega del conductor). El recibo del conductor es guiado desde el
+        2026-09-24 —un ángulo por pantalla— y la lleva **en la guía de cada
+        ángulo que la necesita**: los costados y las llantas."""
         js = _js()
-        assert js.count('${flotaConvencionFotos()}') == 3, (
+        assert js.count('${flotaConvencionFotos()}') == 2, (
             'un formulario que pide fotos sin la convención produce fotos que no '
             'se pueden comparar con las de los otros')
+        i = js.index('function flotaGuiaAngulo(')
+        guia = js[i:js.index('\n}\n', i)]
+        assert 'mirando el vehículo de frente' in guia
+        assert 'La 1 es la delantera derecha' in guia
+        assert 'contrario al reloj' in guia
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -517,7 +534,8 @@ class TestLaFichaNoDiceGuardadaSobreOtroVehiculo:
         """
         js = _js()
         # 9 → 13 el 2026-09-02: taller, preventivo y llantas.
-        assert js.count('data-placa=') == 13, (
+        # 13 → 15 el 2026-09-24: el daño y el tanqueo propios del conductor.
+        assert js.count('data-placa=') == 15, (
             'recibo escritorio, recibo conductor, entrega, ficha, odómetro, '
             'documentos, reporte de daño, inspección diaria y registro de '
             'gastos: los nueve escriben contra una placa')
