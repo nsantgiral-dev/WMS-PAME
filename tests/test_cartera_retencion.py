@@ -523,6 +523,15 @@ class TestCompuertaInicio:
         assert not paso.pasa and paso.retencion.id == r1.id
         assert RetencionCartera.query.count() == 1
 
+    def test_un_reintento_que_ya_pasa_libera_la_retencion_viva(self, db, fake, almacen):
+        r = _retener(db, fake, almacen)
+        fake.cartera_por_nit[NIT] = []
+        paso = _inicio('PD100', 'PD', '100', co='003', almacen_id=almacen.id,
+                       items=[{'item_codigo': 'SKU1', 'cantidad_pendiente': 10}])
+        db.session.commit()
+        assert paso.pasa and r.estado == EstadoRetencion.LIBERADO_PAGO
+        assert r.resuelta_origen == 'SISTEMA'
+
     def test_dos_pedidos_seguidos_el_segundo_cabe(self, db, fake, almacen):
         fake.cliente(cupo=1_000_000)
         _historia(db, '003-PD-301', lineas=(('SKU1', 10, 400_000),))

@@ -1146,10 +1146,28 @@ def _mensaje(ev: dict, retencion) -> str:
             + (f' — retención #{retencion.id}' if retencion is not None else '') + '.')
 
 
+def _liberar_si_viva(clave, ev):
+    """Un reintento que ya pasa (el cliente pagó y nadie tocó «Re-evaluar»)
+    no deja la retención viva colgando: queda LIBERADO_PAGO, con la
+    evaluación que la liberó. Sin commit."""
+    viva = retencion_viva(clave) if clave else None
+    if viva is None:
+        return
+    ahora = datetime.utcnow()
+    viva.estado = EstadoRetencion.LIBERADO_PAGO
+    viva.resuelta_en = viva.actualizada_en = viva.reevaluada_en = ahora
+    viva.resuelta_origen = 'SISTEMA'
+    viva.motivo_resolucion = 'Re-evaluada al reintentar el despacho: ya no retiene'
+    viva.evaluacion, viva.motivos = _json(ev), ev.get('motivos') or []
+    viva.as_of, viva.origen_dato = _as_of(ev), ev.get('origen')
+    viva.reevaluaciones = (viva.reevaluaciones or 0) + 1
+
+
 def _aplicar_modo(ev: dict, pedido: dict, compuerta: str, tarea=None,
                   iniciado_por_id=None) -> 'Paso':
     if ev['decision'] == PASA:
         dec = 'NO_APLICA' if not ev.get('aplica') else 'PASA'
+        _liberar_si_viva(pedido.get('pedido_clave'), ev)
         return Paso(True, dec, ev)
     m, _ = modo()
     if m == 'INFORMA':
@@ -1208,8 +1226,10 @@ def _decidir_inicio(clave, pedido, nit, items, usuario_id) -> Paso:
     if res is not None:
         return Paso(True, 'CONTADO' if res.estado == EstadoRetencion.CONVERTIDO_CONTADO
                     else 'AUTORIZADO', {'resolucion_id': res.id})
+    # Un reintento sobre un pedido ya retenido relee Siesa: puede haber pagado.
     ev = evaluar(nit, pedido.get('sucursal'), valor if completo else None,
-                 pedido.get('cond_pago'), {'pedido_clave': clave})
+                 pedido.get('cond_pago'), {'pedido_clave': clave,
+                                           'forzar': retencion_viva(clave) is not None})
     paso = _aplicar_modo(ev, pedido, Compuerta.INICIO, iniciado_por_id=usuario_id)
     if not paso.pasa:
         db.session.commit()
@@ -1271,7 +1291,8 @@ def compuerta_cierre(tarea, usuario_id=None) -> Paso:
         v_items, c_items = valor_empacado(tarea, pedido['lineas'])
         valor, completo = (v_items, c_items) if v_items is not None else (valor, completo)
     ev = evaluar(pedido.get('nit'), pedido.get('sucursal'), valor if completo else None,
-                 _cp.codigo_vigente(tarea), {'pedido_clave': clave})
+                 _cp.codigo_vigente(tarea), {'pedido_clave': clave,
+                                             'forzar': retencion_viva(clave) is not None})
     paso = _aplicar_modo(ev, pedido, Compuerta.CIERRE, tarea,
                          tarea.despacho_iniciado_por_id or usuario_id)
     if paso.pasa:
