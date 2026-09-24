@@ -1385,6 +1385,22 @@ class TestAuditoria:
         assert not rotos, rotos
         assert len(r['resultados']) >= 9, 'la auditoría de conteo dejó de correr invariantes'
 
+    def test_los_descuadres_abiertos_son_cadenas_no_filas(self, bodega, monkeypatch):
+        """CNT-06 «descuadres que nadie resolvió» contaba FILAS: el CC2/CC3 que
+        resuelve una cadena queda en DESCUADRE para siempre, así que cada
+        cadena que pasó por un segundo conteo sumaba aunque ya estuviera
+        ajustada. El mismo defecto que ya se le corrigió al KPI de auditorías
+        urgentes. Abiertos hoy: las dos raíces que esperan al líder."""
+        b = bodega
+        ids = _un_dia(b, monkeypatch)
+        st, r = b.get(b.supervisor, '/api/auditoria/flujo?flujo=conteo')
+        cnt06 = next(x for x in r['resultados'] if x['codigo'] == 'CNT-06')
+        st, t = b.get(b.supervisor, f'/api/conteo/lider/tablero?almacen_id={b.almacen.id}')
+        assert t['decisiones']['ajustes']['total_descuadres'] == 2
+        assert cnt06['total'] == 2, cnt06
+        assert {h['referencia'] for h in cnt06['hallazgos']} == {
+            b.sesion(ids['aprobable']).codigo, b.sesion(ids['ajuste_bloqueado']).codigo}
+
 
 # ═════════════════════════════════════════════════════════════════════════════
 # Defecto encontrado: la respuesta al que cuenta traía el motivo del ajuste
