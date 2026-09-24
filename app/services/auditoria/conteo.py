@@ -217,15 +217,42 @@ def un_descuadre_se_cuenta_dos_veces(ctx=None):
 def ninguna_sesion_se_queda_ajustando(ctx=None):
     """`AJUSTANDO` es una transición —lock liberado, Siesa en vuelo—, no un
     estado de reposo. Una sesión que se quedó ahí no está ni contada ni
-    ajustada, y ningún proceso la va a retomar."""
+    ajustada, y ningún proceso la va a retomar.
+
+    **«Ningún proceso la va a retomar» es la condición, no el estado.** Todo
+    ajuste aprobado —o automático— pasa por AJUSTANDO con su `AJUSTE_CONTEO`
+    vivo en la DLQ (PENDIENTE, PROCESANDO o REINTENTANDO) hasta el próximo
+    ciclo: ése es el camino sano, y la cola SÍ la va a retomar. Marcarlo
+    BLOQUEA mandaba a investigar cada aprobación del día (2026-09-23, visto en
+    `tests/flujo/test_e2e_inventario_ciclico.py::TestAuditoria`). Atascada es
+    AJUSTANDO **sin** job vivo: sin job, con el job FALLIDO/DESCARTADO, o con
+    el job COMPLETADO y la sesión sin cerrar.
+
+    Qué escribe lo que se compara: el estado lo escribe `_encolar_ajuste_fisico`
+    en el mismo commit que encola el job; el job vivo lo consume solo la DLQ.
+    El camino roto —crash entre los dos, job agotado, job descartado— deja
+    AJUSTANDO sin job vivo, que es exactamente lo que se mira.
+    """
+    from app.models.siesa_job import EstadoSiesaJob, SiesaJob
+    ajustando = _sesiones(('AJUSTANDO',))
+    ids = [s.id for s in ajustando]
+    con_job_vivo = set()
+    if ids:
+        con_job_vivo = {rid for (rid,) in SiesaJob.query
+                        .filter(SiesaJob.tipo == 'AJUSTE_CONTEO',
+                                SiesaJob.referencia_tipo == 'SesionConteo',
+                                SiesaJob.referencia_id.in_(ids),
+                                SiesaJob.estado.in_(EstadoSiesaJob.ACTIVOS))
+                        .with_entities(SiesaJob.referencia_id).all()}
     return [
         Hallazgo(
             referencia=s.codigo or f'conteo#{s.id}',
-            detalle=f'atascada en AJUSTANDO · diferencia={s.diferencia} · '
+            detalle=f'atascada en AJUSTANDO sin ajuste vivo en la cola · '
+                    f'diferencia={s.diferencia} · '
                     f'siesa_triggered={bool(s.siesa_triggered)}',
             datos={'producto': s.producto_codigo_siesa},
         )
-        for s in _sesiones(('AJUSTANDO',))
+        for s in ajustando if s.id not in con_job_vivo
     ]
 
 

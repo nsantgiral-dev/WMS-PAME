@@ -164,6 +164,47 @@ class TestElDetectorNoEstaCiego:
         db.session.commit()
         assert _res('CNT-05')['total'] == 1
 
+    @pytest.mark.parametrize('estado_job', ['PENDIENTE', 'PROCESANDO', 'REINTENTANDO'])
+    def test_ajustando_con_su_job_vivo_en_la_cola_no_esta_atascada(self, db, sesion, estado_job):
+        """El camino SANO de todo ajuste aprobado: AJUSTANDO con su
+        AJUSTE_CONTEO esperando el próximo ciclo de la DLQ. La cola la va a
+        retomar — marcarla BLOQUEA mandaba a investigar cada aprobación."""
+        from app.models.siesa_job import SiesaJob
+        sesion.estado = 'AJUSTANDO'
+        job = SiesaJob.encolar('AJUSTE_CONTEO', {'sesion_id': sesion.id},
+                               referencia_tipo='SesionConteo', referencia_id=sesion.id)
+        job.estado = estado_job
+        db.session.commit()
+        assert _res('CNT-05')['total'] == 0
+
+    @pytest.mark.parametrize('estado_job', ['FALLIDO', 'DESCARTADO', 'COMPLETADO'])
+    def test_ajustando_con_el_job_terminado_si_esta_atascada(self, db, sesion, estado_job):
+        """Con el job agotado, descartado o completado sin cerrar la sesión,
+        ninguna cola la retoma: eso sí es atascada."""
+        from app.models.siesa_job import SiesaJob
+        sesion.estado = 'AJUSTANDO'
+        job = SiesaJob.encolar('AJUSTE_CONTEO', {'sesion_id': sesion.id},
+                               referencia_tipo='SesionConteo', referencia_id=sesion.id)
+        job.estado = estado_job
+        db.session.commit()
+        assert _res('CNT-05')['total'] == 1
+
+    def test_el_job_vivo_de_otra_sesion_no_la_salva(self, db, sesion, almacen, producto, ub_picking):
+        import uuid
+
+        from app.models.conteo import SesionConteo
+        from app.models.siesa_job import SiesaJob
+        otra = SesionConteo(codigo=f'CC-{uuid.uuid4().hex[:6]}', tipo='DIARIO_ABC',
+                            ubicacion_id=ub_picking.id, almacen_id=almacen.id,
+                            producto_id=producto.id, estado='MATCH')
+        db.session.add(otra)
+        db.session.flush()
+        sesion.estado = 'AJUSTANDO'
+        SiesaJob.encolar('AJUSTE_CONTEO', {'sesion_id': otra.id},
+                         referencia_tipo='SesionConteo', referencia_id=otra.id)
+        db.session.commit()
+        assert _res('CNT-05')['total'] == 1
+
     def test_cuenta_los_descuadres_abiertos(self, sesion):
         assert _res('CNT-06')['total'] == 1
 
