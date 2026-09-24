@@ -55,18 +55,18 @@ function _vigiaRenderPanel(el, data, salud) {
   // Banner G0: latencia de conectores
   if (salud && !salud.g0_ok) {
     html += `<div style="background:#F8717122;border:2px solid var(--red);border-radius:8px;padding:12px;margin-bottom:12px;">
-      <div style="font-weight:700;color:var(--red);font-size:13px;margin-bottom:6px;">G0 — Datos desactualizados</div>`;
+      <div style="font-weight:700;color:var(--red);font-size:var(--fs-sm);margin-bottom:6px;">G0 — Datos desactualizados</div>`;
     for (const c of (salud.conectores || [])) {
       if (!c.ok) {
         const latencia = c.latencia_horas != null ? `${esc(c.latencia_horas)}h` : `${esc(c.latencia_dias)}d`;
-        html += `<div style="font-size:12px;color:var(--tx);margin-left:8px;">
+        html += `<div style="font-size:var(--fs-xs);color:var(--tx);margin-left:8px;">
           <span style="color:var(--red);">●</span> ${esc(c.nombre)}: ultima sync hace ${latencia}
         </div>`;
       }
     }
     html += '</div>';
   } else if (salud && salud.conectores && salud.conectores.length > 0) {
-    html += `<div style="font-size:11px;color:var(--green);margin-bottom:8px;">
+    html += `<div style="font-size:var(--fs-xs);color:var(--green);margin-bottom:8px;">
       G0 ● Conectores OK — datos actualizados
     </div>`;
   }
@@ -75,7 +75,7 @@ function _vigiaRenderPanel(el, data, salud) {
   html += '<div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px;">';
   html += _vigiaBadgeResumen(nAlarmas, 'ALARMA', 'var(--red)');
   html += _vigiaBadgeResumen(nAvisos, 'AVISO', 'var(--yellow)');
-  html += `<div style="flex:1;text-align:right;color:var(--tx3);font-size:12px;align-self:center;">
+  html += `<div style="flex:1;text-align:right;color:var(--tx3);font-size:var(--fs-xs);align-self:center;">
     ${total_series} series | ${esc(coKeys.length)} C.O.s
   </div>`;
   html += '</div>';
@@ -83,7 +83,7 @@ function _vigiaRenderPanel(el, data, salud) {
   // Alarmas abiertas (si hay)
   if (alarmas.length > 0) {
     html += '<div style="margin-bottom:16px;">';
-    html += '<div style="font-size:13px;font-weight:700;color:var(--tx);margin-bottom:8px;">Alarmas abiertas</div>';
+    html += '<div style="font-size:var(--fs-sm);font-weight:700;color:var(--tx);margin-bottom:8px;">Alarmas abiertas</div>';
     html += '<div style="display:flex;flex-direction:column;gap:6px;">';
     for (const a of alarmas) {
       const esAlarma = a.severidad === 'ALARMA';
@@ -92,13 +92,13 @@ function _vigiaRenderPanel(el, data, salud) {
       const dir = a.tipo === 'BAJA' ? '↓' : '↑';
       html += `<div style="background:var(--bg-s);border:${border};border-radius:8px;padding:10px 14px;display:flex;justify-content:space-between;align-items:center;">
         <div>
-          <span style="color:${color};font-weight:700;font-size:13px;">${esc(a.severidad)} ${dir}</span>
-          <span style="color:var(--tx);font-size:13px;margin-left:8px;">${esc(a.serie)}</span>
-          <span style="color:var(--tx3);font-size:11px;margin-left:8px;">${esc(a.semana)}</span>
-          <span style="color:var(--tx3);font-size:11px;margin-left:4px;">S=${a.s_valor.toFixed(1)}</span>
+          <span style="color:${color};font-weight:700;font-size:var(--fs-sm);">${esc(a.severidad)} ${dir}</span>
+          <span style="color:var(--tx);font-size:var(--fs-sm);margin-left:8px;">${esc(a.serie)}</span>
+          <span style="color:var(--tx3);font-size:var(--fs-xs);margin-left:8px;">${esc(a.semana)}</span>
+          <span style="color:var(--tx3);font-size:var(--fs-xs);margin-left:4px;">S=${a.s_valor.toFixed(1)}</span>
         </div>
         <button onclick="vigiaAbrirCerrar(${esc(a.id)}, '${esc(a.severidad)}')"
-          style="padding:6px 14px;background:${color};border:none;border-radius:6px;color:#fff;font-size:11px;font-weight:700;cursor:pointer;">
+          style="padding:6px 14px;background:${color};border:none;border-radius:6px;color:#fff;font-size:var(--fs-xs);font-weight:700;cursor:pointer;">
           Cerrar
         </button>
       </div>`;
@@ -110,11 +110,11 @@ function _vigiaRenderPanel(el, data, salud) {
   if (coKeys.length === 0) {
     html += '<div style="color:var(--tx3);padding:20px;text-align:center;">Sin series cargadas. Carga un archivo TXT de ventas para comenzar.</div>';
   } else {
-    html += '<div style="font-size:13px;font-weight:700;color:var(--tx);margin-bottom:8px;">Series por C.O.</div>';
+    html += '<div style="font-size:var(--fs-sm);font-weight:700;color:var(--tx);margin-bottom:8px;">Series por C.O.</div>';
     for (const co of coKeys) {
       const series = cos[co];
       html += `<div style="background:var(--bg-s);border:1px solid var(--brd);border-radius:8px;padding:12px;margin-bottom:8px;">`;
-      html += `<div style="font-size:14px;font-weight:700;color:var(--pm);margin-bottom:6px;">C.O. ${co}</div>`;
+      html += `<div style="font-size:var(--fs-sm);font-weight:700;color:var(--acento-tx);margin-bottom:6px;">C.O. ${co}</div>`;
 
       for (const tipo of _VIGIA_TIPO_ORDEN) {
         const s = series[tipo];
@@ -123,11 +123,11 @@ function _vigiaRenderPanel(el, data, salud) {
           if (tipo === 'planillas') {
             html += `<div style="display:flex;align-items:center;gap:8px;padding:8px;margin:2px 0;border-radius:6px;
               background:var(--bg);border:1px dashed var(--brd);opacity:0.7;">
-              <span style="color:var(--tx3);font-size:16px;">○</span>
-              <span style="font-size:12px;">${esc(_VIGIA_TIPO_ICON[tipo])}</span>
+              <span style="color:var(--tx3);font-size:var(--fs-md);">○</span>
+              <span style="font-size:var(--fs-xs);">${esc(_VIGIA_TIPO_ICON[tipo])}</span>
               <div style="flex:1;">
-                <div style="font-size:12px;font-weight:600;color:var(--tx3);">${esc(_VIGIA_TIPO_LABEL[tipo])}</div>
-                <div style="font-size:10px;color:var(--yellow);">Pendiente de conector Generic Transfer (Nelly)</div>
+                <div style="font-size:var(--fs-xs);font-weight:600;color:var(--tx3);">${esc(_VIGIA_TIPO_LABEL[tipo])}</div>
+                <div style="font-size:var(--fs-xs);color:var(--yellow);">Pendiente de conector Generic Transfer (Nelly)</div>
               </div>
             </div>`;
           }
@@ -141,15 +141,15 @@ function _vigiaRenderPanel(el, data, salud) {
         html += `<div onclick="vigiaSeleccionarSerie('${esc(s.serie)}')"
           style="display:flex;align-items:center;gap:8px;padding:8px;margin:2px 0;border-radius:6px;cursor:pointer;
             background:${isActive ? 'var(--pm)22' : 'transparent'};border:${isActive ? '1px solid var(--pm)' : '1px solid transparent'};">
-          <span style="color:${dotColor};font-size:16px;">●</span>
-          <span style="font-size:12px;">${esc(_VIGIA_TIPO_ICON[tipo] || '')}</span>
+          <span style="color:${dotColor};font-size:var(--fs-md);">●</span>
+          <span style="font-size:var(--fs-xs);">${esc(_VIGIA_TIPO_ICON[tipo] || '')}</span>
           <div style="flex:1;">
-            <div style="font-size:12px;font-weight:600;color:var(--tx);">${_VIGIA_TIPO_LABEL[tipo] || tipo}</div>
-            <div style="font-size:10px;color:var(--tx3);">${esc(_VIGIA_TIPO_DESC[tipo] || '')}</div>
+            <div style="font-size:var(--fs-xs);font-weight:600;color:var(--tx);">${_VIGIA_TIPO_LABEL[tipo] || tipo}</div>
+            <div style="font-size:var(--fs-xs);color:var(--tx3);">${esc(_VIGIA_TIPO_DESC[tipo] || '')}</div>
           </div>
           <div style="text-align:right;">
-            <div style="font-size:11px;color:var(--tx3);">${esc(s.semanas)} sem</div>
-            <div style="font-size:10px;color:var(--tx3);">${esc(s.desde || '?')} a ${esc(s.hasta || '?')}</div>
+            <div style="font-size:var(--fs-xs);color:var(--tx3);">${esc(s.semanas)} sem</div>
+            <div style="font-size:var(--fs-xs);color:var(--tx3);">${esc(s.desde || '?')} a ${esc(s.hasta || '?')}</div>
           </div>
         </div>`;
       }
@@ -159,12 +159,12 @@ function _vigiaRenderPanel(el, data, salud) {
 
   // Area del grafico CUSUM
   html += `<div id="vigia-chart-area" style="margin-top:16px;display:${_VIGIA_SERIE_ACTIVA ? 'block' : 'none'};">
-    <div style="font-size:13px;font-weight:700;color:var(--tx);margin-bottom:8px;">
-      CUSUM: <span id="vigia-chart-titulo" style="color:var(--pm);">${_VIGIA_SERIE_ACTIVA || ''}</span>
+    <div style="font-size:var(--fs-sm);font-weight:700;color:var(--tx);margin-bottom:8px;">
+      CUSUM: <span id="vigia-chart-titulo" style="color:var(--acento-tx);">${_VIGIA_SERIE_ACTIVA || ''}</span>
     </div>
     <div style="background:var(--bg-s);border:1px solid var(--brd);border-radius:8px;padding:12px;">
       <canvas id="vigia-cusum-chart" style="width:100%;height:280px;"></canvas>
-      <div id="vigia-chart-stats" style="margin-top:8px;font-size:11px;color:var(--tx3);"></div>
+      <div id="vigia-chart-stats" style="margin-top:8px;font-size:var(--fs-xs);color:var(--tx3);"></div>
     </div>
   </div>`;
 
@@ -172,26 +172,26 @@ function _vigiaRenderPanel(el, data, salud) {
   html += `<div id="vigia-modal-cerrar" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:9999;
     align-items:center;justify-content:center;">
     <div style="background:var(--bg-s);border:1px solid var(--brd);border-radius:12px;padding:20px;max-width:420px;width:90%;">
-      <div style="font-size:15px;font-weight:700;color:var(--tx);margin-bottom:12px;">Cerrar alarma</div>
-      <div id="vigia-modal-info" style="font-size:12px;color:var(--tx3);margin-bottom:12px;"></div>
+      <div style="font-size:var(--fs-md);font-weight:700;color:var(--tx);margin-bottom:12px;">Cerrar alarma</div>
+      <div id="vigia-modal-info" style="font-size:var(--fs-xs);color:var(--tx3);margin-bottom:12px;"></div>
       <div style="margin-bottom:10px;">
-        <label style="font-size:11px;color:var(--tx3);display:block;margin-bottom:4px;">Responsable del plan</label>
+        <label style="font-size:var(--fs-xs);color:var(--tx3);display:block;margin-bottom:4px;">Responsable del plan</label>
         <select id="vigia-modal-responsable"
           style="width:100%;padding:8px 10px;background:var(--bg);border:1px solid var(--brd);border-radius:8px;
-            color:var(--tx);font-size:13px;box-sizing:border-box;">
+            color:var(--tx);font-size:var(--fs-sm);box-sizing:border-box;">
           <option value="">-- Seleccionar responsable --</option>
         </select>
       </div>
       <textarea id="vigia-modal-causa" placeholder="Causa del corrimiento (min. 20 caracteres para ALARMA)..."
         style="width:100%;height:80px;background:var(--bg);border:1px solid var(--brd);border-radius:8px;padding:10px;
-          color:var(--tx);font-size:13px;resize:vertical;box-sizing:border-box;"></textarea>
+          color:var(--tx);font-size:var(--fs-sm);resize:vertical;box-sizing:border-box;"></textarea>
       <div style="display:flex;gap:8px;margin-top:12px;justify-content:flex-end;">
         <button onclick="vigiaCerrarModal()"
-          style="padding:8px 16px;background:var(--bg);border:1px solid var(--brd);border-radius:6px;color:var(--tx);font-size:12px;cursor:pointer;">
+          style="padding:8px 16px;background:var(--bg);border:1px solid var(--brd);border-radius:6px;color:var(--tx);font-size:var(--fs-xs);cursor:pointer;">
           Cancelar
         </button>
         <button onclick="vigiaConfirmarCierre()"
-          style="padding:8px 16px;background:var(--pm);border:none;border-radius:6px;color:#fff;font-size:12px;font-weight:700;cursor:pointer;">
+          style="padding:8px 16px;background:var(--pm-fill);border:none;border-radius:6px;color:#fff;font-size:var(--fs-xs);font-weight:700;cursor:pointer;">
           Confirmar cierre
         </button>
       </div>
@@ -200,12 +200,12 @@ function _vigiaRenderPanel(el, data, salud) {
 
   // Carga TXT (admin only)
   html += `<div style="margin-top:20px;padding-top:16px;border-top:1px solid var(--brd);">
-    <div style="font-size:12px;font-weight:700;color:var(--tx3);margin-bottom:8px;">Cargar datos (admin)</div>
+    <div style="font-size:var(--fs-xs);font-weight:700;color:var(--tx3);margin-bottom:8px;">Cargar datos (admin)</div>
     <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
       <input type="file" id="vigia-file" accept=".txt"
-        style="flex:1;min-width:200px;padding:8px;background:var(--bg);border:1px solid var(--brd);border-radius:8px;color:var(--tx);font-size:12px;">
+        style="flex:1;min-width:200px;padding:8px;background:var(--bg);border:1px solid var(--brd);border-radius:8px;color:var(--tx);font-size:var(--fs-xs);">
       <button onclick="vigiaCargarTxt()"
-        style="padding:8px 16px;background:var(--pm);border:none;border-radius:8px;color:#fff;font-size:12px;font-weight:700;cursor:pointer;">
+        style="padding:8px 16px;background:var(--pm-fill);border:none;border-radius:8px;color:#fff;font-size:var(--fs-xs);font-weight:700;cursor:pointer;">
         Cargar TXT
       </button>
     </div>
@@ -213,23 +213,23 @@ function _vigiaRenderPanel(el, data, salud) {
       <div style="height:6px;background:var(--bg);border-radius:3px;overflow:hidden;">
         <div id="vigia-txt-progreso-barra" style="height:100%;width:0%;background:var(--pm);transition:width 0.15s;"></div>
       </div>
-      <div id="vigia-txt-progreso-texto" style="font-size:11px;color:var(--tx3);margin-top:4px;">Subiendo…</div>
+      <div id="vigia-txt-progreso-texto" style="font-size:var(--fs-xs);color:var(--tx3);margin-top:4px;">Subiendo…</div>
     </div>
     <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:10px;">
       <button onclick="vigiaAlimentarPicking()"
-        style="padding:8px 16px;background:transparent;border:1px solid var(--pm);border-radius:8px;color:var(--pm);font-size:12px;font-weight:700;cursor:pointer;">
+        style="padding:8px 16px;background:transparent;border:1px solid var(--pm);border-radius:8px;color:var(--acento-tx);font-size:var(--fs-xs);font-weight:700;cursor:pointer;">
         Recalcular series de picking
       </button>
-      <span style="font-size:11px;color:var(--tx3);">
+      <span style="font-size:var(--fs-xs);color:var(--tx3);">
         Adopcion y brecha, desde tareas vivas. Automatico cada lunes 05:30.
       </span>
     </div>
     <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:10px;">
       <button onclick="vigiaCompararIngesta()"
-        style="padding:8px 16px;background:transparent;border:1px solid var(--yellow);border-radius:8px;color:var(--yellow);font-size:12px;font-weight:700;cursor:pointer;">
+        style="padding:8px 16px;background:transparent;border:1px solid var(--yellow);border-radius:8px;color:var(--yellow);font-size:var(--fs-xs);font-weight:700;cursor:pointer;">
         Verificar ingesta de facturacion
       </button>
-      <span style="font-size:11px;color:var(--tx3);">
+      <span style="font-size:var(--fs-xs);color:var(--tx3);">
         Las series de negocio (despachos, facturacion, facturas) todavia NO se
         alimentan solas. Esto compara una semana calculada en vivo contra la
         historica: si coincide, se puede encender el cron.
@@ -244,7 +244,7 @@ function _vigiaBadgeResumen(count, label, color) {
   return `<div style="background:${count > 0 ? color + '22' : 'var(--bg-s)'};border:1px solid ${count > 0 ? color : 'var(--brd)'};
     border-radius:8px;padding:8px 14px;display:flex;align-items:center;gap:8px;">
     <span style="font-size:20px;font-weight:800;color:${count > 0 ? color : 'var(--tx3)'};">${count}</span>
-    <span style="font-size:12px;color:${count > 0 ? color : 'var(--tx3)'};font-weight:600;">${label}${count !== 1 ? 'S' : ''}</span>
+    <span style="font-size:var(--fs-xs);color:${count > 0 ? color : 'var(--tx3)'};font-weight:600;">${label}${count !== 1 ? 'S' : ''}</span>
   </div>`;
 }
 
@@ -568,18 +568,18 @@ async function vigiaCompararIngesta() {
 
     caja.innerHTML = `
       <div class="tabla-titulo">Ingesta vs línea base — semana ${esc(r.semana)}</div>
-      <p style="font-size:13px;color:${r.apto_para_encender ? 'var(--green)' : 'var(--red)'}">
+      <p style="font-size:var(--fs-sm);color:${r.apto_para_encender ? 'var(--green)' : 'var(--red)'}">
         <b>${r.apto_para_encender
               ? 'Coincide: la ingesta viva reproduce la histórica.'
               : 'NO coincide todavía.'}</b><br>
         ${esc(r.coinciden)} iguales · ${esc(r.difieren)} difieren · ${esc(r.sin_linea_base)} sin base
       </p>
       ${r.apto_para_encender ? '' :
-        `<p style="font-size:12px;color:var(--yellow)">Encender el cron con series
+        `<p style="font-size:var(--fs-xs);color:var(--yellow)">Encender el cron con series
          que no coinciden haría que el CUSUM lea la diferencia de método como un
          desplome del negocio. Revisar antes de poner
          <code>VIGIA_INGESTA_FACTURACION=true</code>.</p>`}
-      <ul style="line-height:1.7;font-size:12.5px">${filas}</ul>`;
+      <ul style="line-height:1.7;font-size:var(--fs-sm)">${filas}</ul>`;
   } catch (e) {
     caja.innerHTML = `<p style="color:var(--red)">${esc(e.message)}</p>`;
   }

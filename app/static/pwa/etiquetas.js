@@ -29,10 +29,10 @@ function _etqFilasHtml(productos) {
     const barras = p.codigo_barras ? ' · ' + _etqEsc(p.codigo_barras) : '';
     return `
       <div onclick="etqElegir(this.dataset.codigo)" data-codigo="${_etqEsc(p.codigo)}"
-        style="padding:8px 12px;cursor:pointer;border-bottom:1px solid var(--brd);font-size:13px;"
+        style="padding:8px 12px;cursor:pointer;border-bottom:1px solid var(--brd);font-size:var(--fs-sm);"
         onmouseover="this.style.background='var(--bg-input)'" onmouseout="this.style.background=''">
         <div style="font-weight:700;color:var(--tx);">${_etqEsc(p.codigo)}${barras}</div>
-        <div style="color:var(--tx3);font-size:12px;">${_etqEsc(p.nombre || '')}</div>
+        <div style="color:var(--tx3);font-size:var(--fs-xs);">${_etqEsc(p.nombre || '')}</div>
       </div>`;
   }).join('');
 }
@@ -88,7 +88,7 @@ async function etqBuscarProducto() {
 
   etqOcultarSugerencias();
   ETQ_PRODUCTO_ACTUAL = null;
-  resultado.innerHTML = '<div style="text-align:center;padding:20px;color:#555;">Buscando...</div>';
+  resultado.innerHTML = '<div style="text-align:center;padding:20px;color:var(--tx3);">Buscando...</div>';
 
   let prod, enVivo = false;
   try {
@@ -101,7 +101,7 @@ async function etqBuscarProducto() {
       const coincidencias = await _etqBuscarPorDescripcion(codigo);
       if (coincidencias.length) {
         resultado.innerHTML = `
-          <div style="font-size:12px;color:var(--tx3);margin-bottom:6px;">
+          <div style="font-size:var(--fs-xs);color:var(--tx3);margin-bottom:6px;">
             ${_etqEsc(coincidencias.length)} coincidencia(s) por descripción — elige una:
           </div>
           <div style="background:var(--bg-s);border:1px solid var(--brd);border-radius:10px;max-width:480px;overflow:hidden;">
@@ -110,12 +110,12 @@ async function etqBuscarProducto() {
         return;
       }
     }
-    resultado.innerHTML = '<div style="text-align:center;padding:20px;color:#555;">No está en el catálogo local — consultando Siesa en vivo (puede tardar unos segundos)...</div>';
+    resultado.innerHTML = '<div style="text-align:center;padding:20px;color:var(--tx3);">No está en el catálogo local — consultando Siesa en vivo (puede tardar unos segundos)...</div>';
     try {
       prod = await get('/api/siesa/producto-siesa-vivo/' + encodeURIComponent(codigo));
       enVivo = true;
     } catch (eVivo) {
-      resultado.innerHTML = `<div style="text-align:center;padding:20px;color:#dc2626;">${_etqEsc(eVivo.message)}</div>`;
+      resultado.innerHTML = `<div style="text-align:center;padding:20px;color:var(--err-tx);">${_etqEsc(eVivo.message)}</div>`;
       return;
     }
     // La consulta por id de ítem (ej. "260") entra por la ruta en vivo aunque
@@ -130,7 +130,7 @@ async function etqBuscarProducto() {
   }
 
   if (!prod.codigo_siesa) {
-    resultado.innerHTML = `<div style="text-align:center;padding:20px;color:#d97706;">
+    resultado.innerHTML = `<div style="text-align:center;padding:20px;color:var(--warn-tx);">
       ${esc(prod.nombre || prod.codigo)} no tiene código Siesa registrado — no se puede generar la etiqueta.
     </div>`;
     return;
@@ -145,17 +145,17 @@ async function etqBuscarProducto() {
   ETQ_PRODUCTO_ACTUAL = { ...prod, codigo_para_barra: codigoParaBarra };
   resultado.innerHTML = `
     <div style="background:var(--bg-s);border:1px solid var(--brd);border-radius:10px;padding:16px;max-width:320px;">
-      ${enVivo ? '<div style="font-size:11px;color:#f59e0b;font-weight:700;margin-bottom:6px;">🔴 EN VIVO — aún no sincronizado en el catálogo local</div>' : ''}
-      <div style="font-size:14px;font-weight:700;margin-bottom:4px;">${esc(prod.nombre || '')}</div>
-      <div style="font-size:12px;color:var(--tx3);margin-bottom:2px;">Referencia Siesa: ${esc(prod.codigo_siesa)}</div>
-      <div style="font-size:12px;color:var(--tx3);margin-bottom:10px;">
+      ${enVivo ? '<div style="font-size:var(--fs-xs);color:var(--warn-tx);font-weight:700;margin-bottom:6px;">🔴 EN VIVO — aún no sincronizado en el catálogo local</div>' : ''}
+      <div style="font-size:var(--fs-sm);font-weight:700;margin-bottom:4px;">${esc(prod.nombre || '')}</div>
+      <div style="font-size:var(--fs-xs);color:var(--tx3);margin-bottom:2px;">Referencia Siesa: ${esc(prod.codigo_siesa)}</div>
+      <div style="font-size:var(--fs-xs);color:var(--tx3);margin-bottom:10px;">
         ${esReferenciaFallback
-          ? '<span style="color:#d97706;">Sin EAN en Siesa — se imprimirá la referencia interna</span>'
+          ? '<span style="color:var(--warn-tx);">Sin EAN en Siesa — se imprimirá la referencia interna</span>'
           : 'Código de barras EAN: ' + prod.codigo_barras}
       </div>
       <svg id="etq-preview-svg" style="width:100%;height:60px;"></svg>
       <button onclick="etqImprimir()"
-        style="width:100%;margin-top:10px;padding:10px;background:var(--pm);border:none;border-radius:8px;color:#fff;font-size:13px;font-weight:700;cursor:pointer;">
+        style="width:100%;margin-top:10px;padding:10px;background:var(--pm-fill);border:none;border-radius:8px;color:#fff;font-size:var(--fs-sm);font-weight:700;cursor:pointer;">
         🖨 Imprimir etiqueta
       </button>
     </div>`;
@@ -167,7 +167,7 @@ async function etqBuscarProducto() {
     const svg = document.getElementById('etq-preview-svg');
     if (svg) svg.outerHTML =
       '<div style="padding:10px;border:1px dashed #dc2626;border-radius:6px;'
-      + 'color:#dc2626;font-size:11px;text-align:center;">No cargó el generador '
+      + 'color:var(--err-tx);font-size:var(--fs-xs);text-align:center;">No cargó el generador '
       + 'de códigos de barras — recargá la página (Ctrl+F5)</div>';
   }
 }

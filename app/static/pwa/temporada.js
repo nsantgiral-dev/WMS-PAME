@@ -82,7 +82,7 @@ function _tempQ(fila) {
 function _tempCoberturaCosto(c) {
   if (!c) return '';
   const f = c.por_fuente || {};
-  return `<div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--brd);font-size:11px;color:var(--tx3);line-height:1.7;">
+  return `<div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--brd);font-size:var(--fs-xs);color:var(--tx3);line-height:1.7;">
     <strong>Origen del costo:</strong>
     acuerdo vigente ${esc(f.ACUERDO_VIGENTE || 0)} ·
     cotización ${esc(f.COTIZACION || 0)} ·
@@ -116,7 +116,7 @@ function _tempFuenteCosto(f) {
 function _tempRender(el, d) {
   if (!el) return;
   if (d.error) {
-    el.innerHTML = `<div style="padding:20px;color:var(--yellow);font-size:12px;">${esc(d.error)}</div>`;
+    el.innerHTML = `<div style="padding:20px;color:var(--yellow);font-size:var(--fs-xs);">${esc(d.error)}</div>`;
     return;
   }
 
@@ -128,15 +128,15 @@ function _tempRender(el, d) {
   const pct = cob.pct_cubierto || 0;
   const colorCob = pct >= 80 ? 'var(--green)' : (pct >= 50 ? 'var(--yellow)' : 'var(--red)');
   html += `<div style="border:1px solid ${colorCob};border-radius:10px;padding:12px;margin-bottom:14px;">
-    <div style="font-size:13px;font-weight:700;color:${colorCob};margin-bottom:6px;">
+    <div style="font-size:var(--fs-sm);font-weight:700;color:${colorCob};margin-bottom:6px;">
       El modelo cubre ${esc(cob.cubiertos_por_modelo || 0)} de ${esc(cob.skus_temporada || 0)} SKUs de temporada (${pct}%)
     </div>
-    <div style="font-size:11px;color:var(--tx3);line-height:1.7;">
+    <div style="font-size:var(--fs-xs);color:var(--tx3);line-height:1.7;">
       Excluidos por costo fantasma: <strong>${esc(cob.excluidos_costo_fantasma || 0)}</strong> ·
       por lista negra: <strong>${esc(cob.excluidos_lista_negra || 0)}</strong> ·
       sin producto: <strong>${esc(cob.excluidos_sin_producto || 0)}</strong>
     </div>
-    ${cob.advertencia ? `<div style="font-size:11px;color:${colorCob};margin-top:6px;">${esc(cob.advertencia)}</div>` : ''}
+    ${cob.advertencia ? `<div style="font-size:var(--fs-xs);color:${colorCob};margin-top:6px;">${esc(cob.advertencia)}</div>` : ''}
     ${_tempCoberturaCosto(cob.costo)}
   </div>`;
 
@@ -164,17 +164,17 @@ function _tempRender(el, d) {
   // ── "¿Y si...?" — el comité explora con la herramienta, no la juzga ─────
   const escenarios = [-30, -20, -10, 0, 10, 20];
   html += `<div style="border:1px solid var(--brd);border-radius:8px;padding:10px;margin-bottom:12px;">
-    <div style="font-size:11px;font-weight:700;color:var(--tx3);margin-bottom:6px;">¿Y si la demanda...?</div>
+    <div style="font-size:var(--fs-xs);font-weight:700;color:var(--tx3);margin-bottom:6px;">¿Y si la demanda...?</div>
     <div style="display:flex;gap:5px;flex-wrap:wrap;">
       ${escenarios.map(e => `<button onclick="temporadaEscenario(${e})"
-        style="padding:5px 11px;border-radius:6px;cursor:pointer;font-size:11px;
+        style="padding:5px 11px;border-radius:6px;cursor:pointer;font-size:var(--fs-xs);
                border:1px solid ${e === _TEMP_ESCENARIO ? 'var(--pm)' : 'var(--brd)'};
-               background:${e === _TEMP_ESCENARIO ? 'var(--pm)' : 'transparent'};
+               background:${e === _TEMP_ESCENARIO ? 'var(--pm-fill)' : 'transparent'};
                color:${e === _TEMP_ESCENARIO ? '#fff' : 'var(--tx3)'};
                font-weight:${e === _TEMP_ESCENARIO ? '700' : '400'};">
         ${e === 0 ? 'Base' : (e > 0 ? '+' : '') + e + '%'}</button>`).join('')}
     </div>
-    ${_TEMP_ESCENARIO !== 0 ? `<div style="font-size:10px;color:var(--yellow);margin-top:6px;">
+    ${_TEMP_ESCENARIO !== 0 ? `<div style="font-size:var(--fs-xs);color:var(--yellow);margin-top:6px;">
       Escenario activo: demanda ${_TEMP_ESCENARIO > 0 ? '+' : ''}${_TEMP_ESCENARIO}%. El acta se exporta con el escenario BASE.
     </div>` : ''}
   </div>`;
@@ -184,16 +184,16 @@ function _tempRender(el, d) {
   if (bs.exposicion_pesos != null) {
     const par2 = d.parametros || {};
     html += `<div style="border:1px solid var(--brd);border-radius:8px;padding:10px;margin-bottom:12px;">
-      <div style="font-size:11px;font-weight:700;color:var(--tx3);margin-bottom:6px;">
+      <div style="font-size:var(--fs-xs);font-weight:700;color:var(--tx3);margin-bottom:6px;">
         Sensibilidad al ratio crítico (±10 puntos)
       </div>
-      <div style="display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:var(--tx);">
+      <div style="display:flex;gap:14px;flex-wrap:wrap;font-size:var(--fs-xs);color:var(--tx);">
         <span>CR−10: <strong>$${(bs.inversion_cr_menos_10 || 0).toLocaleString('es-CO')}</strong></span>
         <span>Base: <strong>$${(bs.inversion_base || 0).toLocaleString('es-CO')}</strong></span>
         <span>CR+10: <strong>$${(bs.inversion_cr_mas_10 || 0).toLocaleString('es-CO')}</strong></span>
         <span style="color:var(--yellow);">Exposición: <strong>$${(bs.exposicion_pesos || 0).toLocaleString('es-CO')}</strong></span>
       </div>
-      <div style="font-size:10px;color:var(--tx3);margin-top:6px;line-height:1.6;">
+      <div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:6px;line-height:1.6;">
         Ese rango es lo que está en juego por la <strong>política de tasas</strong>, no por la demanda.
         Capital ${Math.round((par2.tasa_capital || 0.30) * 100)}% · liquidación ${Math.round((par2.tasa_liquidacion || 0.60) * 100)}%
         — ratificar por escrito ANTES de correr el modelo.
@@ -203,10 +203,10 @@ function _tempRender(el, d) {
 
   html += `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;align-items:center;">
     <button onclick="temporadaExportar()"
-      style="padding:7px 14px;border:none;border-radius:7px;background:var(--pm);color:#fff;font-size:12px;font-weight:700;cursor:pointer;">
+      style="padding:7px 14px;border:none;border-radius:7px;background:var(--pm-fill);color:#fff;font-size:var(--fs-xs);font-weight:700;cursor:pointer;">
       Exportar acta (PDF)
     </button>
-    <span style="font-size:11px;color:var(--tx3);">
+    <span style="font-size:var(--fs-xs);color:var(--tx3);">
       ${conParalela} de ${esc(filas.length)} filas con cifra de la lista paralela.
     </span>
   </div>`;
@@ -219,7 +219,7 @@ function _tempRender(el, d) {
     return { ...f, _p: p, _difU: difU, _difP: difP };
   }).sort((a, b) => Math.abs(b._difP || 0) - Math.abs(a._difP || 0));
 
-  html += `<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:11px;">
+  html += `<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:var(--fs-xs);">
     <thead><tr style="border-bottom:2px solid var(--brd);color:var(--tx3);text-align:right;">
       <th style="text-align:left;padding:6px;">Referencia</th>
       <th style="padding:6px;">Temporadas</th>
@@ -238,18 +238,18 @@ function _tempRender(el, d) {
     html += `<tr style="border-bottom:1px solid var(--brd);text-align:right;">
       <td style="text-align:left;padding:6px;">
         <div style="color:var(--tx);font-weight:600;">${esc(f.referencia)}</div>
-        <div style="color:var(--tx3);font-size:10px;">${esc((f.nombre || '').slice(0, 42))}</div>
+        <div style="color:var(--tx3);font-size:var(--fs-xs);">${esc((f.nombre || '').slice(0, 42))}</div>
       </td>
       <td style="padding:6px;color:${alerta ? 'var(--yellow)' : 'var(--tx3)'};" title="${esc(f.distribucion || '')}">
         ${esc(f.n_temporadas)}${alerta ? ' ⚠' : ''}
       </td>
-      <td style="padding:6px;font-size:10px;">${_tempFuenteCosto(f)}</td>
+      <td style="padding:6px;font-size:var(--fs-xs);">${_tempFuenteCosto(f)}</td>
       <td style="padding:6px;color:var(--tx3);">${esc(f.demanda_esperada)}</td>
       <td style="padding:6px;color:var(--tx);font-weight:700;">${_tempQ(f)}</td>
       <td style="padding:6px;">
         <input type="number" value="${f._p != null ? f._p : ''}" placeholder="—"
           onchange="temporadaSetParalela('${esc(f.referencia)}', this.value)"
-          style="width:70px;padding:3px;text-align:right;background:var(--bg);border:1px solid var(--brd);border-radius:4px;color:var(--tx);font-size:11px;">
+          style="width:70px;padding:3px;text-align:right;background:var(--bg);border:1px solid var(--brd);border-radius:4px;color:var(--tx);font-size:var(--fs-xs);">
       </td>
       <td style="padding:6px;color:${difColor};font-weight:700;">
         ${f._difU != null ? (f._difU > 0 ? '+' : '') + f._difU : '—'}
@@ -261,7 +261,7 @@ function _tempRender(el, d) {
   }
   html += '</tbody></table></div>';
 
-  html += `<div style="font-size:10px;color:var(--tx3);margin-top:10px;line-height:1.6;">
+  html += `<div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:10px;line-height:1.6;">
     Costo: <span style="color:var(--green);">acuerdo/cotización</span> mira hacia adelante ·
     <span style="color:var(--yellow);">kardex</span> mira hacia atrás y con 500 días de inventario
     SUBESTIMA el costo de reposición — y subestimar el costo empuja a comprar más.

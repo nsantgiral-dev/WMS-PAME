@@ -115,7 +115,7 @@ function flotaAngulosDeGrilla(angulos) {
  */
 function flotaConvencionFotos() {
   return `<div style="border-left:3px solid var(--pm-light);padding:6px 10px;
-       margin:8px 0;font-size:13px;color:var(--tx2)">
+       margin:8px 0;font-size:var(--fs-sm);color:var(--tx2)">
     <b>Cómo orientarse</b> — siempre igual, o las fotos no se pueden comparar
     entre turnos:<br>
     · <b>Izquierda y derecha</b> se toman <b>mirando el vehículo de frente</b>
@@ -184,7 +184,7 @@ function flotaNotaLlantas() {
   const razon = fuente === 'tipo'
     ? `deducidas del tipo <b>${esc(FLOTA_ESTADO.tipo || 'del vehículo')}</b>`
     : 'un supuesto — no se pudo deducir del tipo';
-  return `<p style="color:var(--yellow);font-size:12px;margin:4px 0">
+  return `<p style="color:var(--yellow);font-size:var(--fs-xs);margin:4px 0">
     ${n} posiciones de llanta: ${razon}, no de la ficha técnica.
     Cargá la ficha para que el número sea un dato.</p>`;
 }
@@ -212,7 +212,7 @@ async function cargarFlota() {
     html += await flotaBloqueForzados();
     html += await flotaBloqueAvisos();
     html += '<div class="tabla-card"><div class="tabla-titulo">Expedientes de flota</div>' +
-      '<p style="font-size:12px;color:var(--tx2);margin:0 0 12px">El alta y la baja de ' +
+      '<p style="font-size:var(--fs-xs);color:var(--tx2);margin:0 0 12px">El alta y la baja de ' +
       'vehículos se hacen en <b>Rutas → Vehículos</b>. Acá vive el expediente de cada uno.</p><div>';
     vehiculos.forEach(v => {
       html += `<div class="flota-veh">
@@ -257,7 +257,7 @@ function flotaAsegurarModal() {
       <div id="flota-modal-cabeza" class="flota-modal-cabeza">
         <div>
           <div id="flota-modal-placa" class="flota-modal-placa"></div>
-          <div id="flota-modal-titulo" style="font-size:12px;color:var(--tx2);"></div>
+          <div id="flota-modal-titulo" style="font-size:var(--fs-xs);color:var(--tx2);"></div>
         </div>
         <!-- NO dice "Cerrar". El rechazo de traspaso pide «cerrar el turno» y
              este era el único botón con esa palabra en pantalla: Yesid lo
@@ -376,7 +376,7 @@ function flotaRenderRecibo() {
   let html = `<div class="tabla-card">
     <p>Último odómetro registrado: ${kmTexto}</p>
     <p>${c ? `Viene de: custodia #${esc(c.id)} (desde ${horaColombia(c.inicio_ts)})
-              <button class="btn-flota" style="padding:2px 8px;font-size:12px"
+              <button class="btn-flota" style="padding:2px 8px;font-size:var(--fs-xs)"
                       onclick="flotaVerFotosDeCustodia(${esc(c.id)})">ver sus fotos</button>`
            : '<b>Arranque en frío</b> — primera custodia. Lo que se registre acá nace como preexistente, sin responsable.'}</p>
 
@@ -417,7 +417,7 @@ function flotaRenderRecibo() {
       (solo si quien lo tiene ahora no puede cerrar su propio turno)</label>
     <input id="flota-motivo-forzado" style="width:100%;padding:6px"
            placeholder="Ej: el vehículo quedó en la sede, nadie lo puede cerrar por acá">
-    <p style="font-size:12px;color:var(--tx2);margin-top:2px">Solo hace falta si el turno
+    <p style="font-size:var(--fs-xs);color:var(--tx2);margin-top:2px">Solo hace falta si el turno
       anterior no lo cierra su propio custodio con sus fotos. Si no aplica, dejalo vacío.</p>
     ` : ''}
 
@@ -426,7 +426,7 @@ function flotaRenderRecibo() {
          misma placa no es redundancia — es que el gesto irreversible diga sobre
          qué vehículo se ejerce. -->
     <button class="btn-primary" id="flota-guardar" data-placa="${FLOTA_PLACA}"
-            style="margin-top:16px;width:100%;font-size:18px"
+            style="margin-top:16px;width:100%;font-size:var(--fs-lg)"
             onclick="flotaGuardarRecibo()">Confirmar recibo de turno · ${FLOTA_PLACA}</button>
     <div id="flota-error" style="color:var(--red);margin-top:8px"></div>
   </div>`;
@@ -449,7 +449,7 @@ async function flotaCambiarTipoCustodio() {
       '</select>';
   } else {
     det.innerHTML = '<select id="flota-sede"></select>' +
-      '<p style="color:var(--yellow);font-size:12px">Si la sede no aparece, dejá la ' +
+      '<p style="color:var(--yellow);font-size:var(--fs-xs)">Si la sede no aparece, dejá la ' +
       'primera opción: la custodia queda declarada <b>pendiente_sede</b> y el health la ' +
       'cuenta. No se inventa una sede.</p>';
     await flotaLlenarSedes('flota-sede');
@@ -552,21 +552,21 @@ function flotaFotoPayload(r, clase, angulo) {
 function flotaPintarFoto(cont, url, bytes, titulo, mime) {
   const cabecera = `
     <p style="margin:0 0 6px"><b>${titulo || 'Archivo'}</b> · ${Math.round(bytes / 1024)} KB —
-      <a href="${url}" target="_blank" style="color:var(--pm-light)">abrir en grande</a></p>`;
+      <a href="${url}" target="_blank" style="color:var(--acento-tx)">abrir en grande</a></p>`;
   // Un PDF metido en un <img> no falla ruidosamente: pinta un icono roto y
   // parece que el archivo no esta. Se distingue por tipo, no por esperanza.
   if (mime === 'application/pdf') {
     cont.innerHTML = cabecera + `
       <object data="${url}" type="application/pdf"
-              style="width:100%;height:60vh;border-radius:8px;border:1px solid #333">
+              style="width:100%;height:60vh;border-radius:8px;border:1px solid var(--brd)">
         <p style="color:var(--tx2)">Este navegador no muestra PDF incrustado —
           usa "abrir en grande".</p>
       </object>`;
     return;
   }
   cont.innerHTML = cabecera + `
-    <img src="${url}" style="max-width:100%;border-radius:8px;border:1px solid #333">
-    <p style="font-size:11px;color:var(--tx3);margin-top:4px">
+    <img src="${url}" style="max-width:100%;border-radius:8px;border:1px solid var(--brd)">
+    <p style="font-size:var(--fs-xs);color:var(--tx3);margin-top:4px">
       Si es el tablero: hacé zoom y verificá que se lean los seis dígitos.
       Si no se leen, los parámetros de <code>foto_dato</code> están cortos.</p>`;
 }
@@ -649,7 +649,7 @@ async function flotaVerFotosDeCustodia(custodiaId) {
       }
       return `<li>${flotaNombreAngulo(a)} · ${esc(f.ancho)}×${esc(f.alto)} ·
         ${Math.round(f.bytes / 1024)} KB
-        <button class="btn-flota" style="padding:2px 8px;font-size:12px"
+        <button class="btn-flota" style="padding:2px 8px;font-size:var(--fs-xs)"
                 onclick="flotaVerFoto(${esc(f.id)}, '${flotaNombreAngulo(a)}')">ver</button></li>`;
     }).join('');
 
@@ -667,13 +667,13 @@ async function flotaVerFotosDeCustodia(custodiaId) {
         filas += `<li style="color:var(--green);margin-top:4px">
           Salvo el <b>tablero</b>: es la única <code>foto_dato</code> del recibo,
           y la clase sí quedó guardada.
-          ${tablero.map(f => `<button class="btn-flota" style="padding:2px 8px;font-size:12px"
+          ${tablero.map(f => `<button class="btn-flota" style="padding:2px 8px;font-size:var(--fs-xs)"
               onclick="flotaVerFoto(${esc(f.id)}, 'tablero — el del odómetro')">
               ver tablero (${esc(f.ancho)}×${esc(f.alto)})</button>`).join(' ')}</li>`;
       }
       if (resto.length) {
         filas += `<li style="color:var(--tx2);margin-top:4px">Las otras:
-          ${resto.map(f => `<button class="btn-flota" style="padding:2px 8px;font-size:12px"
+          ${resto.map(f => `<button class="btn-flota" style="padding:2px 8px;font-size:var(--fs-xs)"
               onclick="flotaVerFoto(${esc(f.id)}, 'sin ángulo')">#${esc(f.id)}</button>`).join(' ')}</li>`;
       }
     }
@@ -835,7 +835,7 @@ function flotaAbrirOdometro(placa) {
   FLOTA_PLACA = placa;
   flotaAbrirModal('Lectura de odómetro', placa);
   document.getElementById('flota-recibo').innerHTML = `<div class="tabla-card">
-    <p style="color:var(--tx2);font-size:13px">Para una lectura fuera del recibo de turno.
+    <p style="color:var(--tx2);font-size:var(--fs-sm)">Para una lectura fuera del recibo de turno.
     Una lectura <b>no se edita</b>: si está mal, se corrige con un registro nuevo, y la
     corrección exige motivo escrito — sin él es indistinguible de un error de digitación.</p>
     <label>Kilometraje</label>
@@ -950,7 +950,7 @@ async function flotaBloqueDudosas() {
   if (!n) return '';
   return `<div class="tabla-card" style="border-left:3px solid var(--yellow)">
     <h3>${n} kilometraje(s) sin verificar</h3>
-    <p style="color:var(--tx2);font-size:13px;margin:4px 0 10px">
+    <p style="color:var(--tx2);font-size:var(--fs-sm);margin:4px 0 10px">
       No es que estén mal: es que nadie los pudo cotejar todavía. Mientras uno de
       estos sea un extremo del mes, el <b>costo por kilómetro de ese vehículo no
       se publica</b> — sale «sin dato», que es lo que corresponde y no un número
@@ -986,13 +986,13 @@ async function flotaRenderVerificacion() {
   if (!pendientes.length) {
     cont.innerHTML = `<div class="tabla-card">
       <p>No hay kilometrajes en duda.</p>
-      <p style="color:var(--tx2);font-size:13px">Una lectura entra acá cuando no
+      <p style="color:var(--tx2);font-size:var(--fs-sm)">Una lectura entra acá cuando no
         tiene foto del tablero, cuando el reloj no avanzó y el odómetro sí, o
         cuando salta un orden de magnitud respecto de la anterior.</p></div>`;
     return;
   }
   cont.innerHTML = `<div class="tabla-card">
-      <p style="color:var(--tx2);font-size:13px;margin:0 0 10px">
+      <p style="color:var(--tx2);font-size:var(--fs-sm);margin:0 0 10px">
         <b>Confirmar deja tu nombre y la fecha en la fila.</b> Si el número está
         mal, no se edita: se corrige con un registro nuevo, y la corrección pide
         motivo escrito. La más vieja va primero.</p>
@@ -1014,22 +1014,22 @@ async function flotaRenderVerificacion() {
  */
 function flotaFilaDudosa(p) {
   const foto = p.tiene_foto
-    ? `<button class="btn-flota" style="padding:4px 10px;font-size:12px"
+    ? `<button class="btn-flota" style="padding:4px 10px;font-size:var(--fs-xs)"
                onclick="flotaVerFoto(${esc(p.foto_id)}, 'Tablero de ${esc(p.placa)}')">Ver la foto</button>`
-    : `<span style="color:var(--yellow);font-size:12px">sin foto del tablero —
+    : `<span style="color:var(--yellow);font-size:var(--fs-xs)">sin foto del tablero —
          confirmarla es tu palabra, no la de una foto</span>`;
   return `<li style="margin-bottom:14px;border-left:2px solid var(--bd);padding-left:10px">
     <div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap">
       <b style="font-size:20px">${Number(p.valor_km).toLocaleString('es-CO')} km</b>
-      <span class="flota-placa" style="font-size:15px">${esc(p.placa)}</span>
-      <span style="font-size:12px;color:var(--tx2)">${horaColombia(p.ts)} · ${esc(p.origen)}</span>
+      <span class="flota-placa" style="font-size:var(--fs-md)">${esc(p.placa)}</span>
+      <span style="font-size:var(--fs-xs);color:var(--tx2)">${horaColombia(p.ts)} · ${esc(p.origen)}</span>
     </div>
-    <div style="font-size:12px;color:var(--yellow);margin:2px 0 6px">${esc(p.motivo || '')}</div>
+    <div style="font-size:var(--fs-xs);color:var(--yellow);margin:2px 0 6px">${esc(p.motivo || '')}</div>
     <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
       ${foto}
-      <button class="btn-flota" style="padding:4px 10px;font-size:12px"
+      <button class="btn-flota" style="padding:4px 10px;font-size:var(--fs-xs)"
               onclick="flotaConfirmarKm(${esc(p.lectura_id)})">Confirmar</button>
-      <button class="btn-flota" style="padding:4px 10px;font-size:12px"
+      <button class="btn-flota" style="padding:4px 10px;font-size:var(--fs-xs)"
               onclick="flotaCorregirKm('${esc(p.placa)}', ${esc(p.valor_km)})">Corregir</button>
     </div>
   </li>`;
@@ -1128,11 +1128,11 @@ async function flotaAbrirFicha(placa) {
   const v = c => (f[c] === undefined || f[c] === null) ? '' : f[c];
 
   el.innerHTML = `<div class="tabla-card">
-    <p style="color:var(--tx2);font-size:13px">Se llena parado al lado del vehículo: el
+    <p style="color:var(--tx2);font-size:var(--fs-sm)">Se llena parado al lado del vehículo: el
     kilometraje está en el tablero, el aceite en la tapa del motor o en la última factura,
     la medida de llanta en el flanco. <b>Lo que no sepas, dejalo vacío o en <code>sin_dato</code></b> —
     el sistema lo declara y lo persigue. Inventarlo es peor que no tenerlo.</p>
-    <p style="color:var(--yellow);font-size:13px">El texto gris de cada campo es un
+    <p style="color:var(--yellow);font-size:var(--fs-sm)">El texto gris de cada campo es un
     <b>ejemplo de formato</b>, no la respuesta de este vehículo. Copiarlo sin mirar llena
     la ficha de datos plausibles y ajenos — y eso no se nota nunca, porque un hueco se ve
     y un valor inventado no.</p>
@@ -1199,7 +1199,7 @@ async function flotaAbrirFicha(placa) {
            style="width:100%;padding:6px">
     <label>¿De dónde salió ese número?</label>
     ${flotaSelect('capacidad_tanque_fuente', d.ficha.capacidad_tanque_fuente)}
-    <p style="font-size:12px;color:var(--tx2);margin:4px 0 0">
+    <p style="font-size:var(--fs-xs);color:var(--tx2);margin:4px 0 0">
       Es lo único que hace posible detectar un tanqueo por encima de lo que
       cabe: un tanque de 15 galones que recibe 22 no es un error de medición.
       Sin este dato el sistema no puede revisarlo, y lo dice en vez de suponerlo.</p>
@@ -1210,7 +1210,7 @@ async function flotaAbrirFicha(placa) {
            style="width:100%;padding:6px">
     <label><input type="checkbox" id="fi-tiene_furgon" ${f.tiene_furgon ? 'checked' : ''}> Tiene furgón</label>
 
-    <button class="btn-primary" style="margin-top:16px;width:100%;font-size:18px"
+    <button class="btn-primary" style="margin-top:16px;width:100%;font-size:var(--fs-lg)"
             onclick="flotaGuardarFicha()" id="fi-guardar"
             data-placa="${placa}">Guardar ficha</button>
     <div id="fi-error" style="color:var(--red);margin-top:8px"></div>
@@ -1335,7 +1335,7 @@ async function flotaAbrirDocumentos(placa) {
       // acá y no al abrirlo: si se ve igual que uno sano, nadie lo revisa.
       foto = ' · <span style="color:var(--red)">archivo NO guardado</span>';
     } else {
-      foto = ` · <button class="btn-flota" style="padding:2px 8px;font-size:12px"
+      foto = ` · <button class="btn-flota" style="padding:2px 8px;font-size:var(--fs-xs)"
              onclick="flotaVerFoto(${esc(a.id)}, '${esc(x.tipo)}')">ver ${a.es_pdf ? 'PDF' : 'imagen'}</button>`;
     }
     return `<li style="color:${color}"><b>${esc(x.tipo)}</b> ${esc(x.numero)} · ${esc(x.entidad)}
@@ -1376,7 +1376,7 @@ async function flotaAbrirDocumentos(placa) {
         <label>Fecha de vencimiento</label>
         <input type="date" id="doc-vencimiento" style="width:100%;padding:6px">
       </div>
-      <p id="doc-no-vence" style="display:none;color:var(--tx2);font-size:13px">
+      <p id="doc-no-vence" style="display:none;color:var(--tx2);font-size:var(--fs-sm)">
         La tarjeta de propiedad <b>no vence</b>: acredita titularidad mientras el
         vehículo sea del titular. No se le pide fecha — inventarle una la volvería
         indistinguible de un documento que sí caduca.</p>
@@ -1910,7 +1910,7 @@ async function flotaBloqueSalud() {
   const li = filas.map(([color, titulo, nota]) => `
     <li style="margin-bottom:10px">
       <b style="color:var(--${color})">${titulo}</b><br>
-      <span style="color:var(--tx2);font-size:13px">${nota}</span>
+      <span style="color:var(--tx2);font-size:var(--fs-sm)">${nota}</span>
     </li>`).join('');
   return `<div class="tabla-card" style="border-left:3px solid var(--yellow)">
     <h3>Salud de la flota</h3>
@@ -1929,7 +1929,7 @@ async function flotaBloqueFueraDeSede() {
   if (!filas.length) return '';
   return `<div class="tabla-card" style="border-left:3px solid var(--yellow)">
     <h3 style="color:var(--yellow)">Fuera de sede ahora (${esc(filas.length)})</h3>
-    <p style="font-size:13px;color:var(--tx2)">Estos vehículos <b>no están en un
+    <p style="font-size:var(--fs-sm);color:var(--tx2)">Estos vehículos <b>no están en un
     patio de la empresa</b>. La custodia sigue en la persona que los tiene — no
     pasó a ninguna sede, porque ninguna sede los vio.</p>
     <ul style="line-height:1.6">${filas.map(f => `
@@ -1958,7 +1958,7 @@ async function flotaBloqueForzados() {
     </li>`).join('');
   return `<div class="tabla-card" style="border-left:3px solid var(--red)">
     <h3 style="color:var(--red)">Turnos cerrados a la fuerza (${esc(cierres.length)})</h3>
-    <p style="font-size:13px;color:var(--tx2)">Sin firma del custodio anterior y sin
+    <p style="font-size:var(--fs-sm);color:var(--tx2)">Sin firma del custodio anterior y sin
     fotos de cierre: el turno siguiente arrancó sin nada con qué comparar.
     <b>Si este bloque crece, el problema no es el sistema — es que no se está
     cerrando turno.</b></p>
@@ -2098,19 +2098,19 @@ function flotaCondRendimiento(r) {
   // y uno que nadie tanqueó nunca se corrigen distinto — el primero solo
   // necesita que pase el tiempo.
   const cuerpo = r.publicable
-    ? `<b style="font-size:18px">${esc(r.km_galon)} km/galón</b>
-       <div style="font-size:12px;color:var(--tx2);margin-top:2px">
+    ? `<b style="font-size:var(--fs-lg)">${esc(r.km_galon)} km/galón</b>
+       <div style="font-size:var(--fs-xs);color:var(--tx2);margin-top:2px">
          sobre ${esc(r.ventanas)} ventana(s) de tanque lleno a tanque lleno,
          ${esc(r.dias_historia)} día(s) de historia${
            r.tanqueos_fuera_por_parcial
              ? ` · ${esc(r.tanqueos_fuera_por_parcial)} tanqueo(s) quedaron fuera por no estar marcados «lleno»`
              : ''}</div>`
     : `<b style="color:var(--tx2)">Midiendo todavía</b>
-       <div style="font-size:12px;color:var(--tx2);margin-top:2px">${esc(r.motivo)}</div>`;
+       <div style="font-size:var(--fs-xs);color:var(--tx2);margin-top:2px">${esc(r.motivo)}</div>`;
   return `<div class="tabla-card" style="margin-top:10px">
-    <div style="font-size:13px;color:var(--tx2);margin-bottom:4px">Rendimiento del vehículo</div>
+    <div style="font-size:var(--fs-sm);color:var(--tx2);margin-bottom:4px">Rendimiento del vehículo</div>
     ${cuerpo}
-    <div style="font-size:11px;color:var(--tx2);margin-top:6px">${esc(r.no_afirma)}</div>
+    <div style="font-size:var(--fs-xs);color:var(--tx2);margin-top:6px">${esc(r.no_afirma)}</div>
   </div>`;
 }
 
@@ -2167,7 +2167,7 @@ function flotaCondEstado(e) {
   return `<div style="margin:6px 0 10px;padding:8px 10px;border-left:3px solid var(--red);
       background:rgba(255,255,255,.03);border-radius:4px">
     ${lineas.map(([c, txt]) =>
-      `<div style="color:${c};font-size:13px;line-height:1.5">${txt}</div>`).join('')}
+      `<div style="color:${c};font-size:var(--fs-sm);line-height:1.5">${txt}</div>`).join('')}
   </div>`;
 }
 
@@ -2184,13 +2184,13 @@ function flotaCondRender() {
   let cabeza;
   if (d.origen === 'custodia') {
     cabeza = `<div class="flota-placa">${esc(d.placa)}</div>
-      <div style="color:var(--green);font-size:13px">Tu turno está abierto · ${km}</div>`;
+      <div style="color:var(--green);font-size:var(--fs-sm)">Tu turno está abierto · ${km}</div>`;
   } else if (d.origen === 'ruta') {
     cabeza = `<div class="flota-placa">${esc(d.placa)}</div>
-      <div style="color:var(--yellow);font-size:13px">Según tu ruta de hoy.
+      <div style="color:var(--yellow);font-size:var(--fs-sm)">Según tu ruta de hoy.
       <b>Confirmá que la placa es la del camión que tenés enfrente.</b> · ${km}</div>`;
   } else {
-    cabeza = `<div style="color:var(--yellow);font-size:14px">Elegí el vehículo que vas a recibir:</div>`;
+    cabeza = `<div style="color:var(--yellow);font-size:var(--fs-sm)">Elegí el vehículo que vas a recibir:</div>`;
   }
 
   // Con origen 'ruta' ya se sabe cuál vehículo le toca — mostrar los otros
@@ -2203,7 +2203,7 @@ function flotaCondRender() {
     lista = flotaCondListaCandidatos();
   } else if (d.origen === 'ruta') {
     lista = `<div style="margin-top:8px">
-      <button class="btn-flota" style="font-size:12px;padding:4px 10px"
+      <button class="btn-flota" style="font-size:var(--fs-xs);padding:4px 10px"
               onclick="flotaCondMostrarTodos()">¿No es este tu vehículo? Elegir otro</button>
       <div id="cond-flota-todos"></div>
     </div>`;
@@ -2225,19 +2225,19 @@ function flotaCondRender() {
     el.innerHTML = `<div class="flota-veh" style="padding:10px 14px">
       <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
         <span style="font-size:17px;font-weight:800;letter-spacing:.05em">🚚 ${esc(d.placa)}</span>
-        <span style="color:var(--green);font-size:13px">turno abierto · ${km}</span>
+        <span style="color:var(--green);font-size:var(--fs-sm)">turno abierto · ${km}</span>
         <span style="flex:1"></span>
-        <button class="btn-primary" style="padding:6px 12px;font-size:13px;margin-top:0"
+        <button class="btn-primary" style="padding:6px 12px;font-size:var(--fs-sm);margin-top:0"
                 onclick="flotaCondInspeccion()">Inspección de hoy</button>
-        <button class="btn-flota" style="padding:6px 12px;font-size:13px"
+        <button class="btn-flota" style="padding:6px 12px;font-size:var(--fs-sm)"
                 onclick="flotaCondAbrirEntrega()">Entregar turno</button>
-        <button class="btn-flota" style="padding:6px 12px;font-size:13px"
+        <button class="btn-flota" style="padding:6px 12px;font-size:var(--fs-sm)"
                 onclick="flotaCondReportarDano()">Reportar daño</button>
-        <button class="btn-flota" style="padding:6px 12px;font-size:13px"
+        <button class="btn-flota" style="padding:6px 12px;font-size:var(--fs-sm)"
                 onclick="flotaCondTanquear()">Tanqueo</button>
-        <button class="btn-flota" style="padding:6px 12px;font-size:13px"
+        <button class="btn-flota" style="padding:6px 12px;font-size:var(--fs-sm)"
                 onclick="flotaCondOdometro()">Odómetro</button>
-        <button class="btn-flota" style="padding:6px 12px;font-size:13px"
+        <button class="btn-flota" style="padding:6px 12px;font-size:var(--fs-sm)"
                 onclick="flotaCondMisReportes()">Mis turnos</button>
       </div>
       ${flotaCondEstado(d.estado_vehiculo)}
@@ -2268,7 +2268,7 @@ function flotaCondListaCandidatos() {
       // mirando el celular en el patio sin saber a quién llamar.
       return `<div style="padding:10px;margin:4px 0;border:1px solid var(--rbg);border-radius:8px;opacity:.75">
         <b>${esc(c.placa)}</b> · ${esc(c.tipo)}<br>
-        <span style="color:var(--red);font-size:12px">Lo tiene ${esc(c.ocupado_por)}.
+        <span style="color:var(--red);font-size:var(--fs-xs)">Lo tiene ${esc(c.ocupado_por)}.
         Si lo vas a recibir vos, tiene que cerrar su turno primero.</span>
       </div>`;
     }
@@ -2397,7 +2397,7 @@ async function flotaCondAbrirEntrega() {
       <button type="button" class="btn-flota" id="flota-b-${a}"
               onclick="document.getElementById('flota-f-${a}').click()">${flotaNombreAngulo(a)}</button>
       ${FLOTA_REFERENCIA[a] ? `<div><button class="btn-flota"
-           style="padding:1px 6px;font-size:11px;margin-top:2px"
+           style="padding:1px 6px;font-size:var(--fs-xs);margin-top:2px"
            onclick="flotaVerFoto(${esc(FLOTA_REFERENCIA[a])}, 'así estaba al recibir — ${flotaNombreAngulo(a)}')"
            >cómo estaba</button></div>` : ''}
     </div>`).join('');
@@ -2405,7 +2405,7 @@ async function flotaCondAbrirEntrega() {
   document.getElementById('cond-flota-form').innerHTML = `
     <hr style="border-color:#333;margin:14px 0">
     <div style="font-size:20px;font-weight:800;margin-bottom:2px">Entregar ${FLOTA_PLACA}</div>
-    <p style="font-size:12px;color:var(--tx2);margin:0 0 8px">
+    <p style="font-size:var(--fs-xs);color:var(--tx2);margin:0 0 8px">
       Cierra tu turno. Cuatro fotos, no trece — las que detectan un golpe nuevo.</p>
 
     <label class="input-label">Kilometraje del tablero</label>
@@ -2419,7 +2419,7 @@ async function flotaCondAbrirEntrega() {
 
     <p style="margin-top:12px"><b>Las 4 fotos</b>
       ${Object.keys(FLOTA_REFERENCIA).length
-        ? '<span style="font-size:12px;color:var(--tx2)">— "cómo estaba" te muestra la de cuando lo recibiste</span>'
+        ? '<span style="font-size:var(--fs-xs);color:var(--tx2)">— "cómo estaba" te muestra la de cuando lo recibiste</span>'
         : ''}</p>
     ${flotaConvencionFotos()}
     <div>${angulos}</div>
@@ -2434,7 +2434,7 @@ async function flotaCondAbrirEntrega() {
     <div id="cf-fuera-caja" style="display:none">
       <label class="input-label" style="color:var(--yellow)">¿Por qué queda fuera? (obligatorio)</label>
       <input id="cf-ubicacion-motivo" class="input-field">
-      <p style="font-size:12px;color:var(--yellow);margin:4px 0">
+      <p style="font-size:var(--fs-xs);color:var(--yellow);margin:4px 0">
         El vehículo <b>sigue bajo tu responsabilidad</b> — no pasa a la sede.
         Queda marcado en el tablero de control de flota.</p>
     </div>
@@ -2724,7 +2724,7 @@ async function flotaBarrerAvisos() {
  */
 function flotaChipCriticidad(c) {
   const COLOR = { bloqueante: 'var(--red)', mayor: 'var(--yellow)', menor: 'var(--tx2)' };
-  return `<span style="font-size:11px;font-weight:700;text-transform:uppercase;
+  return `<span style="font-size:var(--fs-xs);font-weight:700;text-transform:uppercase;
     color:${esc(COLOR[c])};border:1px solid ${esc(COLOR[c])};border-radius:6px;padding:1px 6px">${c}</span>`;
 }
 
@@ -2750,15 +2750,15 @@ function flotaFilaHallazgo(h, conAcciones) {
     : '';
   const acciones = (abierto && conAcciones && flotaDecide()) ? `
     <div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap">
-      <button class="btn-flota" style="padding:4px 10px;font-size:12px"
+      <button class="btn-flota" style="padding:4px 10px;font-size:var(--fs-xs)"
               onclick="flotaCerrarHallazgo(${esc(h.id)})">Reparado</button>
-      <button class="btn-flota" style="padding:4px 10px;font-size:12px"
+      <button class="btn-flota" style="padding:4px 10px;font-size:var(--fs-xs)"
               onclick="flotaAplazarHallazgo(${esc(h.id)})">Aplazar 7 días</button>
-      <button class="btn-flota" style="padding:4px 10px;font-size:12px"
+      <button class="btn-flota" style="padding:4px 10px;font-size:var(--fs-xs)"
               onclick="flotaDescartarHallazgo(${esc(h.id)})">No era nada</button>
     </div>` : '';
   const desenlace = abierto ? '' :
-    `<div style="font-size:12px;color:var(--tx2);margin-top:4px">
+    `<div style="font-size:var(--fs-xs);color:var(--tx2);margin-top:4px">
        ${esc(h.estado)} · ${h.cerrado_ts ? horaColombia(h.cerrado_ts) : 'sin fecha'}
        ${h.motivo_cierre ? '· ' + h.motivo_cierre : ''}</div>`;
 
@@ -2767,7 +2767,7 @@ function flotaFilaHallazgo(h, conAcciones) {
       ${flotaChipCriticidad(h.criticidad)}
       <b>${esc(h.descripcion)}</b>
     </div>
-    <div style="font-size:12px;color:var(--tx2);margin-top:2px">
+    <div style="font-size:var(--fs-xs);color:var(--tx2);margin-top:2px">
       ${alerta_}lleva ${esc(h.dias_abierto)} día(s) · límite ${horaColombia(h.fecha_limite)}${aplazos}${base}
     </div>
     ${desenlace}${acciones}
@@ -2810,7 +2810,7 @@ async function flotaRenderDanos(conAcciones) {
   // ruido, y el ruido es cómo un renglón deja de leerse. Se pinta solo en la
   // pantalla donde los botones existirían — al conductor no le falta nada.
   const escalar = (conAcciones && !flotaDecide())
-    ? `<div style="font-size:12px;color:var(--tx2);margin-bottom:8px;
+    ? `<div style="font-size:var(--fs-xs);color:var(--tx2);margin-bottom:8px;
                    border-left:3px solid var(--brd);padding-left:8px">
          <b>Cerrar, aplazar o descartar un daño lo decide gestión.</b> Los días
          que un daño lleva abierto y los que pasaron su fecha límite son dos de
@@ -2833,8 +2833,8 @@ async function flotaRenderDanos(conAcciones) {
       <option value="menor">Menor — hay 30 días</option>
     </select>
     <label>Kilometraje actual</label>
-    <input type="number" id="hz-km" inputmode="numeric" style="width:100%;padding:6px;font-size:18px">
-    <p style="font-size:12px;color:var(--tx2);margin:6px 0 0">
+    <input type="number" id="hz-km" inputmode="numeric" style="width:100%;padding:6px;font-size:var(--fs-lg)">
+    <p style="font-size:var(--fs-xs);color:var(--tx2);margin:6px 0 0">
       El kilometraje va con el daño para poder cruzarlo después contra los
       mantenimientos. La fecha límite <b>no se elige</b>: sale de la gravedad.</p>
     <button class="btn-primary" style="margin-top:12px;width:100%"
@@ -3036,7 +3036,7 @@ function flotaCondInspeccionHTML() {
     <ul style="line-height:1.6;padding-left:18px">${ya.map(i => `
       <li><b>${esc(i.veredicto)}</b> · ${i.items_esperados - i.items_sin_dato} de
       ${esc(i.items_esperados)} contestados · ${esc(i.segundos_llenado)}s</li>`).join('')}</ul>
-    <p style="font-size:12px;color:var(--tx2);margin:6px 0 0">Los daños que ya
+    <p style="font-size:var(--fs-xs);color:var(--tx2);margin:6px 0 0">Los daños que ya
     nacieron no se borran: una segunda inspección no los tapa.</p>
   </div>` : '';
 
@@ -3044,22 +3044,22 @@ function flotaCondInspeccionHTML() {
     <li id="insp-item-${esc(i.item_id)}" style="margin-bottom:14px;border-left:3px solid ${
       i.bloqueante ? 'var(--red)' : 'var(--bd)'};padding-left:10px">
       <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-        <span style="color:var(--tx2);font-size:13px">${esc(i.orden_mostrado)}.</span>
-        <b style="font-size:15px">${esc(i.nombre)}</b>
+        <span style="color:var(--tx2);font-size:var(--fs-sm)">${esc(i.orden_mostrado)}.</span>
+        <b style="font-size:var(--fs-md)">${esc(i.nombre)}</b>
         ${flotaChipCriticidad(i.criticidad)}
       </div>
-      <div style="font-size:13px;color:var(--tx2);margin:2px 0 6px">${esc(i.gesto)}</div>
+      <div style="font-size:var(--fs-sm);color:var(--tx2);margin:2px 0 6px">${esc(i.gesto)}</div>
       <div id="insp-ctrl-${esc(i.item_id)}">${flotaCondControlesItem(i)}</div>
     </li>`).join('');
 
   return `${previas}
   <div class="tabla-card">
     <div class="tabla-titulo">${esc(items.length)} ítems · ${d ? d.bloqueantes : 0} bloqueantes</div>
-    <p style="font-size:13px;color:var(--tx2);margin:0 0 4px">
+    <p style="font-size:var(--fs-sm);color:var(--tx2);margin:0 0 4px">
       Los primeros ${d ? d.bloqueantes : 0} deciden si el camión sale hoy. El resto
       cambia de orden cada día a propósito: es para que se lean, no para que se
       recuerden.</p>
-    <p id="insp-faltan" style="font-size:13px;color:var(--yellow);margin:0">
+    <p id="insp-faltan" style="font-size:var(--fs-sm);color:var(--yellow);margin:0">
       Faltan ${faltan} de ${esc(items.length)}</p>
   </div>
   <div class="tabla-card">
@@ -3068,8 +3068,8 @@ function flotaCondInspeccionHTML() {
   <div class="tabla-card">
     <label>Kilometraje ahora</label>
     <input type="number" id="insp-km" inputmode="numeric"
-           style="width:100%;padding:6px;font-size:18px">
-    <p style="font-size:12px;color:var(--tx2);margin:6px 0 0">
+           style="width:100%;padding:6px;font-size:var(--fs-lg)">
+    <p style="font-size:var(--fs-xs);color:var(--tx2);margin:6px 0 0">
       Sin odómetro no se registra ningún evento de flota. Es lo que después
       permite cruzar esta inspección contra los mantenimientos.</p>
     <label>Observación (opcional)</label>
@@ -3099,7 +3099,7 @@ function flotaCondControlesItem(item) {
            value="${esc(FLOTA_INSP_NOTA[item.item_id] || '')}"
            oninput="flotaCondNotaItem(${esc(item.item_id)}, this.value)"
            placeholder="¿Cuál, dónde, qué tan grande? (opcional)">
-    <div style="font-size:12px;color:var(--tx2);margin-top:4px">
+    <div style="font-size:var(--fs-xs);color:var(--tx2);margin-top:4px">
       Queda un daño abierto con ${esc(item.dias_de_plazo)} día(s) de plazo. Lo cierra
       quien lo repara, no vos.</div>` : '';
   return `<div style="display:flex;gap:8px">
@@ -3301,21 +3301,21 @@ function flotaFilaGasto(g) {
   let extra = '';
   if (tq) {
     const aviso = tq.excede_capacidad === true
-      ? `<div style="color:var(--red);font-size:12px;margin-top:2px">
+      ? `<div style="color:var(--red);font-size:var(--fs-xs);margin-top:2px">
            ${esc(tq.galones)} galones sobre un tanque declarado más chico —
            la capacidad de la ficha y este registro no pueden ser los dos
            ciertos. Hay que mirar cuál de los dos está mal.</div>`
       : (tq.excede_capacidad === 'sin_dato'
-        ? `<div style="color:var(--tx2);font-size:12px;margin-top:2px">
+        ? `<div style="color:var(--tx2);font-size:var(--fs-xs);margin-top:2px">
              Sin capacidad de tanque en la ficha: este tanqueo <b>no se pudo
              revisar</b>. No es que esté bien.</div>`
         : '');
-    extra = `<div style="font-size:12px;color:var(--tx2)">
+    extra = `<div style="font-size:var(--fs-xs);color:var(--tx2)">
         ${esc(tq.galones)} gal · ${flotaPesos(tq.precio_galon)}/gal · ${esc(tq.estacion)}
         · tanque <b>${esc(tq.tanque)}</b></div>${aviso}`;
   }
   const periodo = g.cubre_periodo
-    ? `<div style="font-size:12px;color:var(--tx2)">cubre ${esc(g.periodo_desde)}
+    ? `<div style="font-size:var(--fs-xs);color:var(--tx2)">cubre ${esc(g.periodo_desde)}
          → ${esc(g.periodo_hasta)} · se reparte por día, no cae entero en un mes</div>`
     : '';
   const doc = g.documento_numero
@@ -3324,7 +3324,7 @@ function flotaFilaGasto(g) {
          con la causación</span>`;
   return `<li style="margin-bottom:12px;border-left:2px solid var(--bd);padding-left:10px">
     <div><b>${esc(g.categoria)}</b> · ${flotaPesos(g.valor)} · ${esc(g.fecha)}</div>
-    <div style="font-size:12px;color:var(--tx2)">${esc(g.proveedor)} · ${doc}
+    <div style="font-size:var(--fs-xs);color:var(--tx2)">${esc(g.proveedor)} · ${doc}
       · ${esc(g.km)} km · origen ${esc(g.origen_costo)}</div>
     ${periodo}${extra}
   </li>`;
@@ -3430,7 +3430,7 @@ async function flotaRenderGastos() {
     <div class="tabla-titulo">Costo por kilómetro · ${esc(d.desde)} a ${esc(d.hasta)}</div>
     <p style="margin:4px 0">${cpk}</p>
     <p style="margin:4px 0">Rendimiento: ${rend}</p>
-    <p style="font-size:12px;color:var(--tx2);margin:6px 0 0">
+    <p style="font-size:var(--fs-xs);color:var(--tx2);margin:6px 0 0">
       Es lo que se registró, no el costo de tener el camión: no incluye
       depreciación ni financiación. <b>No se compara con otro vehículo</b> —
       un NHR y un motocarro no cuestan igual y la diferencia no dice nada.</p>
@@ -3447,7 +3447,7 @@ async function flotaRenderGastos() {
     <label>Fecha del hecho</label>
     <input type="date" id="gs-fecha" style="width:100%;padding:6px">
     <label>Valor total (pesos)</label>
-    <input type="number" id="gs-valor" inputmode="numeric" style="width:100%;padding:6px;font-size:18px">
+    <input type="number" id="gs-valor" inputmode="numeric" style="width:100%;padding:6px;font-size:var(--fs-lg)">
     <label>A quién se le pagó</label>
     <input id="gs-prov" style="width:100%;padding:6px" placeholder="Ej: Terpel Neiva">
     <label>De dónde salió la plata</label>
@@ -3461,7 +3461,7 @@ async function flotaRenderGastos() {
 
     <div id="gs-campo-km">
       <label>Kilometraje ahora</label>
-      <input type="number" id="gs-km" inputmode="numeric" style="width:100%;padding:6px;font-size:18px">
+      <input type="number" id="gs-km" inputmode="numeric" style="width:100%;padding:6px;font-size:var(--fs-lg)">
     </div>
 
     <div id="gs-campo-periodo" style="display:none">
@@ -3469,14 +3469,14 @@ async function flotaRenderGastos() {
       <input type="date" id="gs-pdesde" style="width:100%;padding:6px">
       <label>Período que cubre — hasta</label>
       <input type="date" id="gs-phasta" style="width:100%;padding:6px">
-      <p style="font-size:12px;color:var(--tx2);margin:4px 0 0">
+      <p style="font-size:var(--fs-xs);color:var(--tx2);margin:4px 0 0">
         El SOAT no se carga al costo del día que se pagó: se reparte por día
         sobre el período que cubre.</p>
     </div>
 
     <div id="gs-campo-tanqueo" style="display:none">
       <label>Galones</label>
-      <input type="number" step="0.001" id="gs-gal" inputmode="decimal" style="width:100%;padding:6px;font-size:18px">
+      <input type="number" step="0.001" id="gs-gal" inputmode="decimal" style="width:100%;padding:6px;font-size:var(--fs-lg)">
       <label>Estación</label>
       <input id="gs-est" style="width:100%;padding:6px" placeholder="Ej: Terpel Av. 26">
       <label>Cómo quedó el tanque</label>
@@ -3484,16 +3484,16 @@ async function flotaRenderGastos() {
         <option value="" selected>— elegí una —</option>
         ${opciones(d.estados_tanque)}
       </select>
-      <p style="font-size:12px;color:var(--tx2);margin:4px 0 0">
+      <p style="font-size:var(--fs-xs);color:var(--tx2);margin:4px 0 0">
         <b>Ninguna viene marcada, a propósito.</b> El rendimiento solo se puede
         medir de tanque lleno a tanque lleno. Un «lleno» puesto sin mirar no da
         error: produce un número inventado que nadie va a poder desmentir.
         <b>«No sé» es una respuesta válida.</b></p>
       ${soloTanqueo ? ''
         : d.capacidad_tanque_galones
-        ? `<p style="font-size:12px;color:var(--tx2);margin:4px 0 0">
+        ? `<p style="font-size:var(--fs-xs);color:var(--tx2);margin:4px 0 0">
              Tanque declarado en la ficha: ${esc(d.capacidad_tanque_galones)} galones.</p>`
-        : `<p style="font-size:12px;color:var(--yellow);margin:4px 0 0">
+        : `<p style="font-size:var(--fs-xs);color:var(--yellow);margin:4px 0 0">
              La ficha no dice cuántos galones caben, así que nada va a poder
              revisar este registro contra la capacidad.</p>`}
     </div>
@@ -3702,7 +3702,7 @@ function flotaTextoVigencia(g) {
 function flotaFilaGarantia(g) {
   return `<li style="margin-bottom:8px">
     <b>${esc(g.sistema)}</b>${g.descripcion ? ' · ' + g.descripcion : ''}
-    <div style="font-size:12px;color:var(--tx2)">${flotaTextoVigencia(g)}</div>
+    <div style="font-size:var(--fs-xs);color:var(--tx2)">${flotaTextoVigencia(g)}</div>
   </li>`;
 }
 
@@ -3718,8 +3718,8 @@ function flotaFilaTrabajo(t) {
       : 'no se preguntó si traía garantía — que no es lo mismo que no tenerla');
   return `<li style="margin-bottom:8px">
     <b>${esc(t.sistema)}</b>${t.descripcion ? ' · ' + t.descripcion : ''}
-    <div style="font-size:12px;color:var(--tx2)">${gar}</div>
-    <div style="font-size:12px;color:var(--tx2)">${factura}</div>
+    <div style="font-size:var(--fs-xs);color:var(--tx2)">${gar}</div>
+    <div style="font-size:var(--fs-xs);color:var(--tx2)">${factura}</div>
   </li>`;
 }
 
@@ -3729,7 +3729,7 @@ function flotaFilaOrden(o) {
   const trabajos = (o.intervenciones || []).length
     ? `<ul style="list-style:none;padding:0;margin:6px 0">${
         o.intervenciones.map(t => flotaFilaTrabajo(t)).join('')}</ul>`
-    : `<p style="font-size:12px;color:var(--tx2);margin:6px 0">
+    : `<p style="font-size:var(--fs-xs);color:var(--tx2);margin:6px 0">
          Todavía no hay ningún trabajo registrado. Una orden no se puede cerrar
          así: cerrarla dejaría una visita al taller sin registro de qué se hizo.
          Si de verdad no se hizo nada, se anula con motivo escrito.</p>`;
@@ -3739,10 +3739,10 @@ function flotaFilaOrden(o) {
   // cierran el ciclo de la visita.
   const acciones = abierta ? `
     ${flotaDecide() ? `<div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap">
-      <button class="btn-flota" style="padding:4px 10px;font-size:12px"
+      <button class="btn-flota" style="padding:4px 10px;font-size:var(--fs-xs)"
               id="cerrar-ot-${esc(o.id)}"
               onclick="flotaCerrarOT(${esc(o.id)}, ${o.hallazgo_id !== null})">Volvió del taller</button>
-      <button class="btn-flota" style="padding:4px 10px;font-size:12px"
+      <button class="btn-flota" style="padding:4px 10px;font-size:var(--fs-xs)"
               id="anular-ot-${esc(o.id)}"
               onclick="flotaAnularOT(${esc(o.id)})">Anular</button>
     </div>` : ''}
@@ -3752,14 +3752,14 @@ function flotaFilaOrden(o) {
     ? flotaFormFactura(o) : '';
 
   const desenlace = abierta ? '' :
-    `<div style="font-size:12px;color:var(--tx2)">${esc(o.estado)} ·
+    `<div style="font-size:var(--fs-xs);color:var(--tx2)">${esc(o.estado)} ·
        ${o.cerrada_ts ? horaColombia(o.cerrada_ts) : 'sin fecha'}
        ${o.motivo_cierre ? '· ' + o.motivo_cierre : ''}</div>`;
 
   return `<li style="margin-bottom:14px;border-left:2px solid var(--bd);padding-left:10px">
     <div><b>${esc(o.tipo)}</b> · ${esc(o.taller)} · ${esc(o.km)} km</div>
-    <div style="font-size:13px">${esc(o.descripcion)}</div>
-    <div style="font-size:12px;color:var(--tx2)">
+    <div style="font-size:var(--fs-sm)">${esc(o.descripcion)}</div>
+    <div style="font-size:var(--fs-xs);color:var(--tx2)">
       abierta ${horaColombia(o.abierta_ts)}
       ${o.hallazgo_id !== null ? ' · nació del daño ' + o.hallazgo_id : ''}</div>
     ${desenlace}${trabajos}${acciones}${factura}
@@ -3790,7 +3790,7 @@ function flotaFormTrabajo(id) {
       <option value="no">No trae garantía</option>
       <option value="sin_dato">No sé / no dice nada</option>
     </select>
-    <p style="font-size:12px;color:var(--tx2);margin:4px 0 0">
+    <p style="font-size:var(--fs-xs);color:var(--tx2);margin:4px 0 0">
       <b>«No dice nada» no es «no trae».</b> Una factura que no lo menciona no
       es una factura sin garantía: es que no se preguntó, y las dos cosas se
       reclaman distinto.</p>
@@ -3798,7 +3798,7 @@ function flotaFormTrabajo(id) {
     <input type="number" id="tr-${id}-meses" inputmode="numeric" style="width:100%;padding:6px">
     <label>Kilómetros de garantía <span style="color:var(--tx2)">(si la factura los dice)</span></label>
     <input type="number" id="tr-${id}-km" inputmode="numeric" style="width:100%;padding:6px">
-    <p style="font-size:12px;color:var(--tx2);margin:4px 0 0">
+    <p style="font-size:var(--fs-xs);color:var(--tx2);margin:4px 0 0">
       La fecha y el kilometraje de vencimiento <b>no se escriben</b>: se calculan
       contra el día de hoy y el kilometraje con el que entró el camión.</p>
     <button class="btn-primary" style="margin-top:10px;width:100%"
@@ -3833,7 +3833,7 @@ function flotaFormFactura(o) {
     .map(c => `<option value="${c}">${c}</option>`).join('');
   return `<div class="tabla-card" style="margin-top:8px">
     <div class="tabla-titulo">Llegó la factura de esta visita</div>
-    <p style="font-size:12px;color:var(--tx2);margin:0 0 6px">
+    <p style="font-size:var(--fs-xs);color:var(--tx2);margin:0 0 6px">
       Qué trabajos cubre. Una factura puede cubrir unos y no otros.</p>
     ${casillas}
     <label>Qué clase de gasto es</label>
@@ -3841,14 +3841,14 @@ function flotaFormFactura(o) {
     <label>Fecha de la factura</label>
     <input type="date" id="fa-${esc(o.id)}-fecha" style="width:100%;padding:6px">
     <label>Valor total (pesos)</label>
-    <input type="number" id="fa-${esc(o.id)}-valor" inputmode="numeric" style="width:100%;padding:6px;font-size:18px">
+    <input type="number" id="fa-${esc(o.id)}-valor" inputmode="numeric" style="width:100%;padding:6px;font-size:var(--fs-lg)">
     <label>A quién se le pagó</label>
     <input id="fa-${esc(o.id)}-prov" style="width:100%;padding:6px" placeholder="Ej: Taller Los Andes">
     <label>De dónde salió la plata</label>
     <select id="fa-${esc(o.id)}-origen" style="width:100%;padding:6px">${orgs}</select>
     <label>Número de factura <span style="color:var(--tx2)">(opcional)</span></label>
     <input id="fa-${esc(o.id)}-doc" style="width:100%;padding:6px" placeholder="Sin esto no se puede cruzar con Siesa">
-    <p style="font-size:12px;color:var(--tx2);margin:4px 0 0">
+    <p style="font-size:var(--fs-xs);color:var(--tx2);margin:4px 0 0">
       El kilometraje no se pide: el gasto se ancla al odómetro con el que el
       camión entró al taller, que es cuando el trabajo se hizo.</p>
     <button class="btn-primary" style="margin-top:10px;width:100%"
@@ -3928,10 +3928,10 @@ async function flotaRenderTaller() {
   // el backend le va a rechazar con 403 después de llenarlo entero.
   const formAbrir = !flotaDecide() ? `<div class="tabla-card">
     <div class="tabla-titulo">Abrir una orden de trabajo</div>
-    <p style="font-size:13px;color:var(--tx2);margin:6px 0 0">
+    <p style="font-size:var(--fs-sm);color:var(--tx2);margin:6px 0 0">
       <b>Mandar un camión al taller lo decide gestión.</b> Control de flota
       señala el daño y escala; la orden la abre quien decide sobre plata.</p>
-    <p style="font-size:12px;color:var(--tx2);margin:6px 0 0">
+    <p style="font-size:var(--fs-xs);color:var(--tx2);margin:6px 0 0">
       Lo que sí podés hacer acá: registrar los trabajos y la factura de las
       órdenes que ya existen, más abajo.</p>
   </div>` : `<div class="tabla-card">
@@ -3947,7 +3947,7 @@ async function flotaRenderTaller() {
       <option value="">No — entra por otra razón</option>
       ${abiertos.map(h => `<option value="${esc(h.id)}">${esc(h.criticidad)} · ${esc(h.descripcion)}</option>`).join('')}
     </select>
-    <p style="font-size:12px;color:var(--tx2);margin:4px 0 0">
+    <p style="font-size:var(--fs-xs);color:var(--tx2);margin:4px 0 0">
       Atarla al daño es lo que permite cerrarlo al cerrar la orden. Sin esto
       hay que acordarse de cerrarlo aparte, en Daños.</p>` : ''}
     <div id="ot-garantias"></div>
@@ -3956,8 +3956,8 @@ async function flotaRenderTaller() {
     <label>Qué se pidió hacer</label>
     <input id="ot-desc" style="width:100%;padding:6px" placeholder="Ej: revisar ruido al embragar">
     <label>Kilometraje con el que entra</label>
-    <input type="number" id="ot-km" inputmode="numeric" style="width:100%;padding:6px;font-size:18px">
-    <p style="font-size:12px;color:var(--tx2);margin:6px 0 0">
+    <input type="number" id="ot-km" inputmode="numeric" style="width:100%;padding:6px;font-size:var(--fs-lg)">
+    <p style="font-size:var(--fs-xs);color:var(--tx2);margin:6px 0 0">
       El kilometraje va con la orden para poder calcular hasta qué kilómetro
       cubre lo que se repare, y para auditar después si el mantenimiento era
       necesario.</p>
@@ -3996,7 +3996,7 @@ function flotaTallerSistemaCambio() {
       reparación(es) de ${esc(sel.value)} todavía en garantía</b>
     <ul style="list-style:none;padding:0;margin:6px 0">${
       vivas.map(g => flotaFilaGarantia(g)).join('')}</ul>
-    <div style="font-size:12px;color:var(--tx2)">
+    <div style="font-size:var(--fs-xs);color:var(--tx2)">
       No bloquea nada: puede ser otra cosa. Pero conviene llamar al taller antes
       de mandar el camión — el caso que esto evita es el que se paga dos veces.</div>
   </div>`;
@@ -4220,7 +4220,7 @@ function flotaFilaMontaje(m) {
   // la llanta: habla del eje. Una llanta que murió por desalineación y una que
   // cumplió su vida se ven iguales en la lista si esto no se dice.
   const aviso = m.motivo_desmontaje === 'desgaste_irregular'
-    ? `<div style="color:var(--yellow);font-size:12px;margin-top:2px">
+    ? `<div style="color:var(--yellow);font-size:var(--fs-xs);margin-top:2px">
          Desgaste irregular: eso no lo explica la llanta. Conviene mirar
          alineación, presión y suspensión de ese eje antes de poner la
          siguiente en la misma posición.</div>`
@@ -4247,13 +4247,13 @@ function flotaFilaMontaje(m) {
     : ` · <span style="color:var(--tx2)">sin gasto atado a este montaje</span>`;
   return `<li style="margin-bottom:12px;border-left:2px solid var(--bd);padding-left:10px">
     <div><b>Posición ${esc(m.posicion)}</b> · llanta <b>${esc(m.codigo)}</b>
-      <span style="font-size:12px;color:var(--tx2)">${esc(m.marca_llanta)} ${esc(m.medida)}</span></div>
-    <div style="font-size:12px;color:var(--tx2)">${estado}${doc}</div>
-    <div style="font-size:12px;color:var(--tx2)">
+      <span style="font-size:var(--fs-xs);color:var(--tx2)">${esc(m.marca_llanta)} ${esc(m.medida)}</span></div>
+    <div style="font-size:var(--fs-xs);color:var(--tx2)">${estado}${doc}</div>
+    <div style="font-size:var(--fs-xs);color:var(--tx2)">
       ${m.km_inicio.toLocaleString('es-CO')} km${m.km_fin === null ? '' : ' → ' + m.km_fin.toLocaleString('es-CO') + ' km'}
       · ${flotaKmLlanta(m.km, m.km_marca)}</div>
     ${aviso}
-    ${m.vigente ? `<button class="btn-flota" style="padding:2px 8px;font-size:12px;margin-top:4px"
+    ${m.vigente ? `<button class="btn-flota" style="padding:2px 8px;font-size:var(--fs-xs);margin-top:4px"
         onclick="flotaAbrirDesmontaje(${esc(m.id)}, '${esc(m.codigo)}', ${esc(m.posicion)})">Desmontar</button>` : ''}
   </li>`;
 }
@@ -4290,14 +4290,14 @@ async function flotaRenderLlantas() {
     : (libres.length
       ? `<p style="color:var(--yellow)">Sin llanta registrada:
            <b>posición ${libres.join(', ')}</b>.<br>
-           <span style="font-size:12px;color:var(--tx2)">Casi siempre quiere
+           <span style="font-size:var(--fs-xs);color:var(--tx2)">Casi siempre quiere
            decir que la llanta está puesta y nadie la registró, no que el camión
            ande sin rueda.</span></p>`
       : `<p style="color:var(--tx2)">Las ${esc(d.posiciones_declaradas)} posiciones
            tienen su llanta registrada.</p>`);
 
   const vida = (d.km_por_posicion || []).length
-    ? `<ul style="list-style:none;padding:0;font-size:13px">${d.km_por_posicion.map(p => `
+    ? `<ul style="list-style:none;padding:0;font-size:var(--fs-sm)">${d.km_por_posicion.map(p => `
         <li>Posición <b>${esc(p.posicion)}</b>: ${esc(p.n)} vida(s) medida(s)
           ${p.mediana_km === 'sin_dato'
             ? `<span style="color:var(--tx2)">— faltan ${esc(p.faltan)} para poder
@@ -4325,7 +4325,7 @@ async function flotaRenderLlantas() {
   <div class="tabla-card">
     <div class="tabla-titulo">Vida medida por posición</div>
     ${vida}
-    <p style="font-size:12px;color:var(--tx2);margin:6px 0 0">
+    <p style="font-size:var(--fs-xs);color:var(--tx2);margin:6px 0 0">
       Es un dato, no una alarma: no hay un kilometraje de cambio medido en esta
       flota y ninguno se inventa acá. <b>No se compara una posición con otra</b>
       — una direccional y una de tracción no duran lo mismo.</p>
@@ -4333,7 +4333,7 @@ async function flotaRenderLlantas() {
   <div class="tabla-card">${montajes}</div>
   <div class="tabla-card">
     <div class="tabla-titulo">Dar de alta una llanta</div>
-    <p style="font-size:12px;color:var(--tx2);margin:0 0 8px">Entra al
+    <p style="font-size:var(--fs-xs);color:var(--tx2);margin:0 0 8px">Entra al
       inventario. <b>No la monta en ningún camión</b> — eso es el formulario de
       abajo.</p>
     <label>Código marcado en la llanta</label>
@@ -4352,14 +4352,14 @@ async function flotaRenderLlantas() {
     <select id="mt-llanta" style="width:100%;padding:6px">
       <option value="" selected>— elegí una —</option>${disponibles}
     </select>
-    <p style="font-size:12px;color:var(--tx2);margin:4px 0 0">Solo aparecen las
+    <p style="font-size:var(--fs-xs);color:var(--tx2);margin:4px 0 0">Solo aparecen las
       que hoy no están puestas en ningún vehículo. Si alguna salió por un corte
       de flanco, el motivo va al lado: todavía no hay baja de llanta, así que
       volver a montarla es una decisión de quien la ve.</p>
     <label>Posición</label>
-    <input type="number" id="mt-pos" inputmode="numeric" style="width:100%;padding:6px;font-size:18px">
+    <input type="number" id="mt-pos" inputmode="numeric" style="width:100%;padding:6px;font-size:var(--fs-lg)">
     <label>Kilometraje ahora</label>
-    <input type="number" id="mt-km" inputmode="numeric" style="width:100%;padding:6px;font-size:18px">
+    <input type="number" id="mt-km" inputmode="numeric" style="width:100%;padding:6px;font-size:var(--fs-lg)">
     <label>Observación <span style="color:var(--tx2)">(opcional)</span></label>
     <input id="mt-obs" style="width:100%;padding:6px">
     <button class="btn-primary" style="margin-top:12px;width:100%"
@@ -4462,12 +4462,12 @@ function flotaAbrirDesmontaje(montajeId, codigo, posicion) {
   cont.innerHTML = `<div class="tabla-card">
     <div class="tabla-titulo">Desmontar la llanta ${codigo} (posición ${posicion})</div>
     <label>Kilometraje ahora</label>
-    <input type="number" id="dm-km" inputmode="numeric" style="width:100%;padding:6px;font-size:18px">
+    <input type="number" id="dm-km" inputmode="numeric" style="width:100%;padding:6px;font-size:var(--fs-lg)">
     <label>Por qué sale</label>
     <select id="dm-motivo" style="width:100%;padding:6px">
       <option value="" selected>— elegí uno —</option>${opciones}
     </select>
-    <p style="font-size:12px;color:var(--tx2);margin:4px 0 0">
+    <p style="font-size:var(--fs-xs);color:var(--tx2);margin:4px 0 0">
       <b>Ninguna viene marcada, a propósito.</b> De este campo depende que se
       pueda ver un eje que come flancos: <b>desgaste irregular</b> no habla de la
       llanta, habla de la alineación. <b>Rotación</b> es una llanta que salió
@@ -4611,8 +4611,8 @@ function flotaFilaTarea(t) {
     : '';
   return `<li style="margin-bottom:12px;border-left:2px solid var(--bd);padding-left:10px">
     <div><b>${esc(t.nombre)}</b> — <span style="color:var(--${color})">${texto}</span></div>
-    <div style="font-size:12px;color:var(--tx2)">${intervalo} · ${ultima}${km}${dias}${manual}</div>
-    ${t.nota ? `<div style="font-size:12px;color:var(--tx2)">${esc(t.nota)}</div>` : ''}
+    <div style="font-size:var(--fs-xs);color:var(--tx2)">${intervalo} · ${ultima}${km}${dias}${manual}</div>
+    ${t.nota ? `<div style="font-size:var(--fs-xs);color:var(--tx2)">${esc(t.nota)}</div>` : ''}
     <div style="margin-top:6px">
       <button class="btn-flota" id="prev-hecho-${esc(t.plan_id)}"
               onclick="flotaRegistrarEjecucion(${esc(t.plan_id)})">Se hizo</button>
@@ -4640,9 +4640,9 @@ async function flotaRenderPreventivo() {
   // números distintos.
   const r = d.ritmo;
   const ritmo = r.km_dia === 'sin_dato'
-    ? `<p style="color:var(--yellow);font-size:13px">Ritmo de uso: <b>sin dato</b>
+    ? `<p style="color:var(--yellow);font-size:var(--fs-sm)">Ritmo de uso: <b>sin dato</b>
        — ${esc(r.motivo)}. Sin él, «faltan 500 km» no se puede traducir a días.</p>`
-    : `<p style="font-size:13px;color:var(--tx2)">Ritmo de uso: <b>${esc(r.km_dia)} km/día</b>
+    : `<p style="font-size:var(--fs-sm);color:var(--tx2)">Ritmo de uso: <b>${esc(r.km_dia)} km/día</b>
        (${esc(r.marca)}, ${esc(r.n)} lecturas sobre ${esc(r.dias)} días). Es lo que convierte
        los kilómetros que faltan en días. No se compara con otro vehículo.</p>`;
 
@@ -4659,14 +4659,14 @@ async function flotaRenderPreventivo() {
     <div class="tabla-card">
       <h3>Mantenimiento preventivo · ${esc(d.placa)}</h3>
       ${ritmo}
-      <p style="font-size:12px;color:var(--tx2)">«Llega pronto» significa dentro
+      <p style="font-size:var(--fs-xs);color:var(--tx2)">«Llega pronto» significa dentro
       de <b>${esc(d.dias_aviso)} días</b> al ritmo medido de este vehículo. Es el único
       número elegido de esta pantalla: los kilómetros los pone el fabricante.</p>
       ${lista}
       <div style="margin-top:12px">
         <button class="btn-flota" id="prev-sembrar"
                 onclick="flotaSembrarPlan()">Sembrar desde la ficha</button>
-        <div style="font-size:12px;color:var(--tx2);margin-top:4px">
+        <div style="font-size:var(--fs-xs);color:var(--tx2);margin-top:4px">
           Vuelve a leer la ficha y crea las tareas que falten. No pisa lo que
           alguien escribió a mano ni retira nada.</div>
       </div>

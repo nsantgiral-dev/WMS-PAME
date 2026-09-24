@@ -57,7 +57,7 @@ async function kardexRefrescarSalud() {
  */
 function _kardexSaludHtml(s) {
   if (!s || s._error || !s.veredicto) {
-    return `<div style="border:1px solid var(--yellow);border-radius:10px;padding:14px;margin-bottom:12px;font-size:12px;color:var(--yellow);">
+    return `<div style="background:var(--warn-bg);border:1px solid var(--warn-brd);border-radius:10px;padding:14px;margin-bottom:12px;font-size:var(--fs-sm);color:var(--warn-tx);">
       No se pudo saber si el kardex está al día${s && s._error ? ' (' + esc(s._error) + ')' : ''}.
       Mientras no se sepa, no decidir compras con los modelos.</div>`;
   }
@@ -73,10 +73,10 @@ function _kardexSaludHtml(s) {
       <div style="color:var(--tx3);">→ ${esc(p.que_hacer)}</div>
     </div>`).join('');
   return `<div style="border:1px solid ${col};border-radius:10px;padding:14px;margin-bottom:12px;">
-    <div style="font-size:13px;font-weight:700;color:${col};margin-bottom:6px;">
+    <div style="font-size:var(--fs-sm);font-weight:700;color:${col};margin-bottom:6px;">
       ${ok ? '✓ Kardex al día' : '✗ No confiar todavía en el kardex'} · ${esc(s.veredicto)}
     </div>
-    <div style="font-size:11px;color:var(--tx3);line-height:1.7;">
+    <div style="font-size:var(--fs-xs);color:var(--tx3);line-height:1.7;">
       <b>Último movimiento guardado:</b> ${esc(m.ultima_fecha || '—')}
       ${m.dias_desde_ultimo != null ? '(' + esc(m.dias_desde_ultimo) + ' día(s) atrás · tolerancia ' + esc(s.umbral_dias) + ')' : ''}<br>
       <b>Movimientos:</b> ${n(m.total)} · desde ${esc(m.primera_fecha || '—')} ·
@@ -90,7 +90,7 @@ function _kardexSaludHtml(s) {
       ${(s.descargaria_de || {}).parece_qa ? '<b style="color:var(--yellow);">(ambiente de PRUEBAS)</b>' : ''}
     </div>
     ${problemas}
-    <div style="font-size:11px;color:var(--yellow);margin-top:8px;">${esc(s.nota_actualizacion || '')}</div>
+    <div style="font-size:var(--fs-xs);color:var(--yellow);margin-top:8px;">${esc(s.nota_actualizacion || '')}</div>
   </div>`;
 }
 
@@ -99,42 +99,42 @@ function _kardexRender(el, estado) {
   const r = estado.resultado;
 
   let html = `<div style="border:1px solid var(--brd);border-radius:10px;padding:14px;">
-    <div style="font-size:13px;font-weight:700;color:var(--tx);margin-bottom:4px;">Descargar kardex de Siesa</div>
-    <div style="font-size:11px;color:var(--tx3);margin-bottom:10px;">
+    <div style="font-size:var(--fs-sm);font-weight:700;color:var(--tx);margin-bottom:4px;">Descargar kardex de Siesa</div>
+    <div style="font-size:var(--fs-xs);color:var(--tx3);margin-bottom:10px;">
       Los modelos de Inteligencia leen del kardex. Sin esta descarga, todos muestran 0.
     </div>
     <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
-      <label style="font-size:11px;color:var(--tx3);">Desde
+      <label style="font-size:var(--fs-xs);color:var(--tx3);">Desde
         <input type="date" id="kardex-desde" value="2024-01-01"
-          style="margin-left:4px;padding:5px;background:var(--bg);border:1px solid var(--brd);border-radius:6px;color:var(--tx);font-size:12px;">
+          style="margin-left:4px;padding:5px;background:var(--bg);border:1px solid var(--brd);border-radius:6px;color:var(--tx);font-size:var(--fs-xs);">
       </label>
       <button onclick="kardexDescargar()" ${enCurso ? 'disabled' : ''}
-        style="padding:7px 14px;border:none;border-radius:7px;font-size:12px;font-weight:700;
+        style="padding:7px 14px;border:none;border-radius:7px;font-size:var(--fs-xs);font-weight:700;
                cursor:${enCurso ? 'not-allowed' : 'pointer'};
-               background:${enCurso ? 'var(--brd)' : 'var(--pm)'};color:#fff;">
+               background:${enCurso ? 'var(--brd)' : 'var(--pm-fill)'};color:#fff;">
         ${enCurso ? 'Descargando…' : 'Descargar'}
       </button>
       <button onclick="kardexProbarPaginacion()"
-        style="padding:7px 12px;border:1px solid var(--yellow);border-radius:7px;background:transparent;color:var(--yellow);font-size:12px;font-weight:700;cursor:pointer;">
+        style="padding:7px 12px;border:1px solid var(--yellow);border-radius:7px;background:transparent;color:var(--yellow);font-size:var(--fs-xs);font-weight:700;cursor:pointer;">
         Probar orden
       </button>
       <button onclick="kardexVerPerfil()"
-        style="padding:7px 12px;border:1px solid var(--pm);border-radius:7px;background:transparent;color:var(--pm);font-size:12px;font-weight:700;cursor:pointer;">
+        style="padding:7px 12px;border:1px solid var(--pm);border-radius:7px;background:transparent;color:var(--acento-tx);font-size:var(--fs-xs);font-weight:700;cursor:pointer;">
         Verificar perfil
       </button>
-      <span style="font-size:11px;color:var(--tx3);">Corre en segundo plano y por tramos: si se corta, se reanuda.</span>
+      <span style="font-size:var(--fs-xs);color:var(--tx3);">Corre en segundo plano y por tramos: si se corta, se reanuda.</span>
     </div>
     <div id="kardex-perfil-out"></div>
-    <div style="margin-top:8px;font-size:11px;color:var(--yellow);border-left:2px solid var(--yellow);padding-left:8px;">
+    <div style="margin-top:8px;font-size:var(--fs-xs);color:var(--yellow);border-left:2px solid var(--yellow);padding-left:8px;">
       Son ~17.000 peticiones contra el ERP que factura en los puntos de venta.
       Correr <strong>fuera de horario</strong> y avisando antes — no después de que
       alguien no pueda facturar a media mañana.
     </div>`;
 
   if (enCurso) {
-    html += `<div style="font-size:12px;color:var(--yellow);margin-top:10px;">● En curso — el detalle queda en los logs de Railway.</div>`;
+    html += `<div style="font-size:var(--fs-xs);color:var(--yellow);margin-top:10px;">● En curso — el detalle queda en los logs de Railway.</div>`;
   } else if (r && r.error) {
-    html += `<div style="font-size:12px;color:var(--red);margin-top:10px;">Última descarga falló: ${esc(r.error)}</div>`;
+    html += `<div style="font-size:var(--fs-xs);color:var(--red);margin-top:10px;">Última descarga falló: ${esc(r.error)}</div>`;
   } else if (r) {
     // Una descarga PARCIAL es un fallo, no un aviso. Antes las tres formas de
     // terminar —fin, timeout, excepción— daban el mismo mensaje verde.
@@ -142,10 +142,10 @@ function _kardexRender(el, estado) {
     const col = completa ? 'var(--green)' : 'var(--red)';
     const rp = r.rango_pedido || {}, rt = r.rango_traido || {};
     html += `<div style="margin-top:12px;border:1px solid ${col};border-radius:8px;padding:10px;">
-      <div style="font-size:13px;font-weight:700;color:${col};margin-bottom:6px;">
+      <div style="font-size:var(--fs-sm);font-weight:700;color:${col};margin-bottom:6px;">
         ${completa ? '✓ COMPLETA' : '✗ ' + (r.estado || 'PARCIAL')}
       </div>
-      <div style="font-size:11px;color:var(--tx3);line-height:1.7;">
+      <div style="font-size:var(--fs-xs);color:var(--tx3);line-height:1.7;">
         ${(r.total_descargados || 0).toLocaleString('es-CO')} movimientos ·
         páginas ${r.pagina_inicial || 1}–${esc(r.pagina_final || 0)} ·
         ${esc(r.errores || 0)} errores · ${esc(r.segundos || 0)}s
@@ -155,19 +155,19 @@ function _kardexRender(el, estado) {
         <strong>Pedido:</strong> ${esc(rp.desde || '—')} → ${esc(rp.hasta || '—')}<br>
         <strong>Traído:</strong> ${esc(rt.desde || '—')} → ${esc(rt.hasta || '—')}
       </div>
-      ${r.detalle_estado ? `<div style="font-size:11px;color:${col};margin-top:6px;">${esc(r.detalle_estado)}</div>` : ''}
-      ${r.advertencia ? `<div style="font-size:11px;color:var(--red);margin-top:6px;font-weight:700;">${esc(r.advertencia)}</div>` : ''}
+      ${r.detalle_estado ? `<div style="font-size:var(--fs-xs);color:${col};margin-top:6px;">${esc(r.detalle_estado)}</div>` : ''}
+      ${r.advertencia ? `<div style="font-size:var(--fs-xs);color:var(--red);margin-top:6px;font-weight:700;">${esc(r.advertencia)}</div>` : ''}
       ${_kardexPerfil(r.perfil_mensual)}
-      ${r._supuesto_de_reanudacion ? `<div style="font-size:10px;color:var(--yellow);margin-top:6px;">${esc(r._supuesto_de_reanudacion)}</div>` : ''}
+      ${r._supuesto_de_reanudacion ? `<div style="font-size:var(--fs-xs);color:var(--yellow);margin-top:6px;">${esc(r._supuesto_de_reanudacion)}</div>` : ''}
       ${r.reanudar_desde ? `<button onclick="kardexDescargar(${esc(r.reanudar_desde)})"
-        style="margin-top:8px;padding:6px 12px;border:none;border-radius:6px;background:var(--red);color:#fff;font-size:12px;font-weight:700;cursor:pointer;">
+        style="margin-top:8px;padding:6px 12px;border:none;border-radius:6px;background:#dc2626;color:#fff;font-size:var(--fs-xs);font-weight:700;cursor:pointer;">
         Reanudar desde la página ${esc(r.reanudar_desde)}
       </button>` : ''}
     </div>`;
   } else {
     // El estado vive en `registros_sync` desde el 2026-08: sobrevive al
     // reinicio. «En esta sesión del servidor» ya no era cierto.
-    html += `<div style="font-size:12px;color:var(--tx3);margin-top:10px;">No hay ninguna descarga registrada.</div>`;
+    html += `<div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:10px;">No hay ninguna descarga registrada.</div>`;
   }
 
   html += '</div>';
@@ -179,31 +179,31 @@ function _kardexRender(el, estado) {
   // reconstruir no dice nada sobre la serie que los modelos van a leer.
   const completa = !!(r && r.ok === true);
   html += `<div style="border:1px solid var(--brd);border-radius:10px;padding:14px;margin-top:12px;">
-    <div style="font-size:13px;font-weight:700;color:var(--tx);margin-bottom:4px;">
+    <div style="font-size:var(--fs-sm);font-weight:700;color:var(--tx);margin-bottom:4px;">
       Reconstruir stock diario</div>
-    <div style="font-size:11px;color:var(--tx3);margin-bottom:10px;line-height:1.6;">
+    <div style="font-size:var(--fs-xs);color:var(--tx3);margin-bottom:10px;line-height:1.6;">
       Calcula qué stock había cada día, hacia atrás desde el saldo actual. Sin
       esto no se sabe qué días un SKU estuvo agotado — y una demanda medida sobre
       días sin mercancía se lee como baja cuando en realidad <b>no había qué
       vender</b>. Es lo que Reposición y el Armador llaman «demanda censurada».
     </div>
-    ${completa ? '' : `<div style="font-size:11px;color:var(--yellow);border-left:2px solid var(--yellow);padding-left:8px;margin-bottom:10px;">
+    ${completa ? '' : `<div style="font-size:var(--fs-xs);color:var(--yellow);border-left:2px solid var(--yellow);padding-left:8px;margin-bottom:10px;">
       La última descarga no quedó COMPLETA. El servidor va a rechazar la
       reconstrucción — y con razón: sobre un kardex truncado inventaría días sin
       movimiento.</div>`}
     <button onclick="kardexReconstruir(false)" ${enCurso ? 'disabled' : ''}
-      style="padding:7px 14px;border:none;border-radius:7px;font-size:12px;font-weight:700;
+      style="padding:7px 14px;border:none;border-radius:7px;font-size:var(--fs-xs);font-weight:700;
              cursor:${enCurso ? 'not-allowed' : 'pointer'};
-             background:${enCurso ? 'var(--brd)' : 'var(--pm)'};color:#fff;">
+             background:${enCurso ? 'var(--brd)' : 'var(--pm-fill)'};color:#fff;">
       Reconstruir stock diario
     </button>
     <div id="kardex-reconstruir-out" style="margin-top:10px;"></div>
   </div>
 
   <div style="border:1px solid var(--brd);border-radius:10px;padding:14px;margin-top:12px;">
-    <div style="font-size:13px;font-weight:700;color:var(--tx);margin-bottom:4px;">
+    <div style="font-size:var(--fs-sm);font-weight:700;color:var(--tx);margin-bottom:4px;">
       ¿Le creo al kardex?</div>
-    <div style="font-size:11px;color:var(--tx3);margin-bottom:10px;line-height:1.6;">
+    <div style="font-size:var(--fs-xs);color:var(--tx3);margin-bottom:10px;line-height:1.6;">
       La compuerta de completitud. Revisa que <b>ningún concepto quede sin
       clasificar</b> —uno solo deja un agujero que ningún modelo reporta— y
       muestra las unidades vendidas por mes y bodega para cruzarlas contra las
@@ -211,7 +211,7 @@ function _kardexRender(el, estado) {
       del número vive en el ERP.
     </div>
     <button onclick="kardexReconciliar()"
-      style="padding:7px 14px;border:1px solid var(--pm);border-radius:7px;background:transparent;color:var(--pm);font-size:12px;font-weight:700;cursor:pointer;">
+      style="padding:7px 14px;border:1px solid var(--pm);border-radius:7px;background:transparent;color:var(--acento-tx);font-size:var(--fs-xs);font-weight:700;cursor:pointer;">
       Verificar completitud
     </button>
     <div id="kardex-reconciliar-out" style="margin-top:10px;"></div>
@@ -240,14 +240,14 @@ function _kardexPerfil(p) {
   const limpio = p.sin_huecos;
   const col = limpio ? 'var(--green)' : 'var(--red)';
   return `<div style="margin-top:10px;padding-top:8px;border-top:1px solid var(--brd);">
-    <div style="font-size:11px;font-weight:700;color:var(--tx3);margin-bottom:6px;">
+    <div style="font-size:var(--fs-xs);font-weight:700;color:var(--tx3);margin-bottom:6px;">
       Filas por mes — el hueco que el rango no ve
     </div>
     <div style="display:flex;gap:2px;align-items:flex-end;height:50px;">${barras}</div>
-    <div style="display:flex;justify-content:space-between;font-size:9px;color:var(--tx3);margin-top:3px;">
+    <div style="display:flex;justify-content:space-between;font-size:var(--fs-xs);color:var(--tx3);margin-top:3px;">
       <span>${esc(p.meses[0].mes)}</span><span>${esc(p.meses[p.meses.length - 1].mes)}</span>
     </div>
-    <div style="font-size:11px;color:${col};margin-top:6px;">
+    <div style="font-size:var(--fs-xs);color:${col};margin-top:6px;">
       ${limpio
         ? '✓ Sin meses vacíos ni anómalamente bajos (mediana ' + (p.mediana_filas || 0).toLocaleString('es-CO') + ' filas/mes)'
         : '✗ Revisar: ' + [...(p.huecos || []), ...(p.meses_ausentes || [])].join(', ')}
@@ -283,19 +283,19 @@ function _kardexIniciarPoll() {
  */
 async function kardexProbarPaginacion() {
   const out = document.getElementById('kardex-perfil-out');
-  if (out) out.innerHTML = '<div style="font-size:11px;color:var(--tx3);padding:6px 0;">Diagnosticando… 4 peticiones, ~2 minutos. No cierres la pestaña.</div>';
+  if (out) out.innerHTML = '<div style="font-size:var(--fs-xs);color:var(--tx3);padding:6px 0;">Diagnosticando… 4 peticiones, ~2 minutos. No cierres la pestaña.</div>';
   try {
     const r = await post('/api/kardex/probar-paginacion', { pagina: 50, espera_s: 90 });
     if (!out) return;
-    if (r.error) { out.innerHTML = `<div style="font-size:11px;color:var(--red);">${esc(r.error)}</div>`; return; }
+    if (r.error) { out.innerHTML = `<div style="font-size:var(--fs-xs);color:var(--red);">${esc(r.error)}</div>`; return; }
     const ok = r.se_puede_paginar;
     const col = ok ? (r.causa_probable === 'DERIVA_POR_INSERCION' ? 'var(--yellow)' : 'var(--green)') : 'var(--red)';
     const corto = Object.keys(r).find(k => k.startsWith('iguales_tras_') && k !== 'iguales_tras_5s');
     out.innerHTML = `<div style="margin-top:8px;border:1px solid ${col};border-radius:8px;padding:10px;">
-      <div style="font-size:13px;font-weight:700;color:${col};">
+      <div style="font-size:var(--fs-sm);font-weight:700;color:${col};">
         ${ok ? 'Paginación USABLE' : 'Paginación NO USABLE'} — ${esc(r.causa_probable)}
       </div>
-      <div style="font-size:11px;color:var(--tx3);margin-top:6px;line-height:1.7;">
+      <div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:6px;line-height:1.7;">
         Página ${esc(r.pagina)}, ${esc(r.filas)} filas.<br>
         Tras <strong>5s</strong>: ${esc(r.iguales_tras_5s)}/${esc(r.filas)} en la misma posición
         ${r.estable_corto ? '<span style="color:var(--green);">(estable)</span>' : '<span style="color:var(--red);">(ya cambió)</span>'}<br>
@@ -304,22 +304,22 @@ async function kardexProbarPaginacion() {
         Solape con la página siguiente: <strong>${esc(r.solape_con_pagina_siguiente)}</strong> filas
         ${r.solape_con_pagina_siguiente ? '<span style="color:var(--red);"> — páginas contiguas no deberían compartir ninguna</span>' : ''}
       </div>
-      <div style="font-size:11px;color:${col};margin-top:8px;">${esc(r.veredicto)}</div>
+      <div style="font-size:var(--fs-xs);color:${col};margin-top:8px;">${esc(r.veredicto)}</div>
     </div>`;
   } catch (e) {
-    if (out) out.innerHTML = `<div style="font-size:11px;color:var(--red);">${e.message || e}</div>`;
+    if (out) out.innerHTML = `<div style="font-size:var(--fs-xs);color:var(--red);">${e.message || e}</div>`;
   }
 }
 
 async function kardexVerPerfil() {
   const out = document.getElementById('kardex-perfil-out');
-  if (out) out.innerHTML = '<div style="font-size:11px;color:var(--tx3);padding:6px 0;">Calculando perfil…</div>';
+  if (out) out.innerHTML = '<div style="font-size:var(--fs-xs);color:var(--tx3);padding:6px 0;">Calculando perfil…</div>';
   try {
     const p = await get('/api/kardex/perfil-mensual');
     if (out) out.innerHTML = _kardexPerfil(p) ||
-      '<div style="font-size:11px;color:var(--tx3);padding:6px 0;">Kardex vacío.</div>';
+      '<div style="font-size:var(--fs-xs);color:var(--tx3);padding:6px 0;">Kardex vacío.</div>';
   } catch (e) {
-    if (out) out.innerHTML = `<div style="font-size:11px;color:var(--red);">${e.message || e}</div>`;
+    if (out) out.innerHTML = `<div style="font-size:var(--fs-xs);color:var(--red);">${e.message || e}</div>`;
   }
 }
 
@@ -367,7 +367,7 @@ async function kardexDescargar(paginaInicial) {
 async function kardexReconstruir(forzar) {
   const out = document.getElementById('kardex-reconstruir-out');
   if (!out) return;
-  out.innerHTML = '<div style="font-size:12px;color:var(--tx3);padding:8px 0;">Reconstruyendo…</div>';
+  out.innerHTML = '<div style="font-size:var(--fs-xs);color:var(--tx3);padding:8px 0;">Reconstruyendo…</div>';
   try {
     const r = await fetch(API + '/api/kardex/reconstruir', {
       method: 'POST',
@@ -389,7 +389,7 @@ async function kardexReconstruir(forzar) {
     // veía razonable.
     const esRechazoPorCalidad = !!(d.por_que || d.override || d.estado_descarga);
     if (r.status === 409 && !esRechazoPorCalidad) {
-      out.innerHTML = `<div style="border:1px solid var(--yellow);border-radius:8px;padding:10px;font-size:12px;color:var(--yellow);">
+      out.innerHTML = `<div style="border:1px solid var(--yellow);border-radius:8px;padding:10px;font-size:var(--fs-xs);color:var(--yellow);">
         ${esc(d.error || 'Hay una descarga en curso.')}
         <div style="color:var(--tx3);margin-top:4px;">Reconstruir ahora usaría datos a medias. Esperá a que termine.</div></div>`;
       return;
@@ -399,13 +399,13 @@ async function kardexReconstruir(forzar) {
       // un "RECHAZADO" pelado manda a la gente a buscar el override sin
       // entender qué está saltando.
       out.innerHTML = `<div style="border:1px solid var(--red);border-radius:8px;padding:10px;">
-        <div style="font-size:12px;font-weight:700;color:var(--red);margin-bottom:6px;">
+        <div style="font-size:var(--fs-xs);font-weight:700;color:var(--red);margin-bottom:6px;">
           ${esc(d.error || 'No se pudo reconstruir')}</div>
-        ${d.estado_descarga ? `<div style="font-size:11px;color:var(--tx3);">Última descarga: <b>${esc(d.estado_descarga)}</b></div>` : ''}
-        ${d.por_que ? `<div style="font-size:11px;color:var(--tx2);margin-top:6px;">${esc(d.por_que)}</div>` : ''}
-        ${d.que_hacer ? `<div style="font-size:11px;color:var(--tx2);margin-top:6px;"><b>Qué hacer:</b> ${esc(d.que_hacer)}</div>` : ''}
+        ${d.estado_descarga ? `<div style="font-size:var(--fs-xs);color:var(--tx3);">Última descarga: <b>${esc(d.estado_descarga)}</b></div>` : ''}
+        ${d.por_que ? `<div style="font-size:var(--fs-xs);color:var(--tx2);margin-top:6px;">${esc(d.por_que)}</div>` : ''}
+        ${d.que_hacer ? `<div style="font-size:var(--fs-xs);color:var(--tx2);margin-top:6px;"><b>Qué hacer:</b> ${esc(d.que_hacer)}</div>` : ''}
         ${forzar ? '' : `<button onclick="kardexReconstruirForzar()"
-          style="margin-top:10px;padding:6px 12px;border:1px solid var(--red);border-radius:6px;background:transparent;color:var(--red);font-size:11px;font-weight:700;cursor:pointer;">
+          style="margin-top:10px;padding:6px 12px;border:1px solid var(--red);border-radius:6px;background:transparent;color:var(--red);font-size:var(--fs-xs);font-weight:700;cursor:pointer;">
           Reconstruir igual (queda registrado)</button>`}
       </div>`;
       return;
@@ -417,20 +417,20 @@ async function kardexReconstruir(forzar) {
     // demanda que se subestima— no se veían nunca.
     const sinAncla = (d.refs_sin_ancla || {}).cantidad || 0;
     const insuf = (d.reporte_calidad || {}).dato_insuficiente || 0;
-    out.innerHTML = `<div style="border:1px solid var(--green);border-radius:8px;padding:10px;font-size:12px;color:var(--tx2);">
+    out.innerHTML = `<div style="border:1px solid var(--green);border-radius:8px;padding:10px;font-size:var(--fs-xs);color:var(--tx2);">
       <b style="color:var(--green);">✓ Reconstruido</b>
       · ${Number(d.dias_generados || 0).toLocaleString('es-CO')} día(s)
       · ${Number(d.referencias_procesadas || 0).toLocaleString('es-CO')} referencia(s)
-      ${sinAncla ? `<div style="color:var(--yellow);margin-top:6px;font-size:11px;">
+      ${sinAncla ? `<div style="color:var(--yellow);margin-top:6px;font-size:var(--fs-xs);">
         ${Number(sinAncla).toLocaleString('es-CO')} SKU×bodega sin saldo en Siesa para anclar: su serie
         quedó en cero y se lee como «agotado». ${esc((d.refs_sin_ancla || {}).nota || '')}</div>` : ''}
-      ${insuf ? `<div style="color:var(--yellow);margin-top:6px;font-size:11px;">
+      ${insuf ? `<div style="color:var(--yellow);margin-top:6px;font-size:var(--fs-xs);">
         ${Number(insuf).toLocaleString('es-CO')} SKU×bodega con más de 10% de días en negativo: dato insuficiente.</div>` : ''}
-      ${forzar ? '<div style="color:var(--yellow);margin-top:6px;font-size:11px;">Se forzó sobre una descarga incompleta — la demanda censurada de este cálculo puede estar inventada.</div>' : ''}
+      ${forzar ? '<div style="color:var(--yellow);margin-top:6px;font-size:var(--fs-xs);">Se forzó sobre una descarga incompleta — la demanda censurada de este cálculo puede estar inventada.</div>' : ''}
     </div>`;
     kardexRefrescarSalud();
   } catch (e) {
-    out.innerHTML = `<div style="font-size:12px;color:var(--red);">Sin conexión: ${esc(e.message)}</div>`;
+    out.innerHTML = `<div style="font-size:var(--fs-xs);color:var(--red);">Sin conexión: ${esc(e.message)}</div>`;
   }
 }
 
@@ -464,12 +464,12 @@ function kardexReconstruirForzar() {
 async function kardexReconciliar() {
   const out = document.getElementById('kardex-reconciliar-out');
   if (!out) return;
-  out.innerHTML = '<div style="font-size:12px;color:var(--tx3);padding:8px 0;">Cruzando…</div>';
+  out.innerHTML = '<div style="font-size:var(--fs-xs);color:var(--tx3);padding:8px 0;">Cruzando…</div>';
   let d;
   try {
     d = await get('/api/kardex/reconciliar?meses=12');
   } catch (e) {
-    out.innerHTML = `<div style="font-size:12px;color:var(--red);">${esc(e.message)}</div>`;
+    out.innerHTML = `<div style="font-size:var(--fs-xs);color:var(--red);">${esc(e.message)}</div>`;
     return;
   }
 
@@ -478,16 +478,16 @@ async function kardexReconciliar() {
     .filter(([, v]) => !v.clasificado);
 
   let html = `<div style="border:1px solid ${ok ? 'var(--green)' : 'var(--red)'};border-radius:8px;padding:10px;">
-    <div style="font-size:13px;font-weight:700;color:${ok ? 'var(--green)' : 'var(--red)'};">
+    <div style="font-size:var(--fs-sm);font-weight:700;color:${ok ? 'var(--green)' : 'var(--red)'};">
       ${ok ? '✓ Compuerta abierta' : '✗ Compuerta CERRADA'}
     </div>
-    <div style="font-size:11px;color:var(--tx3);margin-top:4px;">
+    <div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:4px;">
       ${(d.total_registros_kardex || 0).toLocaleString('es-CO')} movimientos ·
       ${(d.bodegas_con_datos || []).length} bodega(s): ${(d.bodegas_con_datos || []).join(', ') || '—'}
     </div>`;
 
   if (!ok) {
-    html += `<div style="font-size:11px;color:var(--red);margin-top:8px;line-height:1.6;">
+    html += `<div style="font-size:var(--fs-xs);color:var(--red);margin-top:8px;line-height:1.6;">
       <b>${esc(sinClasificar.length)} concepto(s) sin clasificar.</b> Cada uno es un
       movimiento que el sistema no sabe si es demanda. Omitirlos deja un agujero
       que ningún modelo va a reportar — hay que agregarlos a
@@ -503,12 +503,12 @@ async function kardexReconciliar() {
   const ventas = d.ventas_por_mes_bodega || [];
   if (ventas.length) {
     html += `<details style="margin-top:10px;">
-      <summary style="font-size:11px;color:var(--pm);cursor:pointer;">
+      <summary style="font-size:var(--fs-xs);color:var(--acento-tx);cursor:pointer;">
         Unidades vendidas según el kardex (${esc(ventas.length)} fila(s)) — para cruzar contra Siesa
       </summary>
-      <div style="font-size:11px;color:var(--tx2);margin:6px 0;">${esc(d.instruccion || '')}</div>
+      <div style="font-size:var(--fs-xs);color:var(--tx2);margin:6px 0;">${esc(d.instruccion || '')}</div>
       <div style="max-height:260px;overflow:auto;">
-      <table style="width:100%;border-collapse:collapse;font-size:11px;">
+      <table style="width:100%;border-collapse:collapse;font-size:var(--fs-xs);">
         <thead><tr style="color:var(--tx3);text-align:right;border-bottom:1px solid var(--brd);">
           <th style="text-align:left;padding:4px;">Mes</th><th style="padding:4px;">Bodega</th>
           <th style="padding:4px;">Unidades</th><th style="padding:4px;">Registros</th></tr></thead>

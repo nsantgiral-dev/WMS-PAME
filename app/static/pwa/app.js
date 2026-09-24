@@ -102,9 +102,9 @@ function _mostrarBannerSW(reg) {
   if (document.getElementById('sw-update-banner')) return;
   const div = document.createElement('div');
   div.id = 'sw-update-banner';
-  div.innerHTML = `<div style="position:fixed;bottom:0;left:0;right:0;z-index:99999;background:#1e3a5f;color:#fff;padding:14px 20px;display:flex;align-items:center;justify-content:space-between;gap:12px;font-size:15px;font-weight:600;box-shadow:0 -2px 16px rgba(0,0,0,0.5);">
+  div.innerHTML = `<div style="position:fixed;bottom:0;left:0;right:0;z-index:99999;background:#1e3a5f;color:var(--tx);padding:14px 20px;display:flex;align-items:center;justify-content:space-between;gap:12px;font-size:var(--fs-md);font-weight:600;box-shadow:0 -2px 16px rgba(0,0,0,0.5);">
     <span>Nueva version disponible</span>
-    <button id="sw-update-btn" style="background:#3b82f6;color:#fff;border:none;border-radius:8px;padding:9px 20px;font-size:14px;font-weight:700;cursor:pointer;white-space:nowrap;">Actualizar ahora</button>
+    <button id="sw-update-btn" style="background:#2563eb;color:#fff;border:none;border-radius:8px;padding:9px 20px;font-size:var(--fs-sm);font-weight:700;cursor:pointer;white-space:nowrap;">Actualizar ahora</button>
   </div>`;
   document.body.appendChild(div);
   document.getElementById('sw-update-btn').addEventListener('click', () => {
@@ -407,16 +407,16 @@ function _modalCantidad(titulo, mensajeHtml, opts = {}) {
     const overlay = document.createElement('div');
     overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.92);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px;';
     overlay.innerHTML = `
-      <div style="background:#111;border-radius:16px;padding:24px;width:100%;max-width:360px;border:1px solid #333;">
-        <div style="font-size:18px;font-weight:800;color:#fff;margin-bottom:10px;">${titulo}</div>
-        <div style="font-size:14px;color:#aaa;margin-bottom:16px;line-height:1.5;">${mensajeHtml}</div>
+      <div style="background:var(--bg-s);border-radius:16px;padding:24px;width:100%;max-width:360px;border:1px solid var(--brd);">
+        <div style="font-size:var(--fs-lg);font-weight:800;color:var(--tx);margin-bottom:10px;">${titulo}</div>
+        <div style="font-size:var(--fs-sm);color:var(--tx2);margin-bottom:16px;line-height:1.5;">${mensajeHtml}</div>
         <input id="_mc-input" type="number" inputmode="numeric"
           ${min != null ? `min="${min}"` : ''} ${max != null ? `max="${max}"` : ''} value="${valorInicial}"
-          style="width:100%;padding:14px;font-size:22px;font-weight:700;background:#000;border:2px solid #333;border-radius:10px;color:#fff;text-align:center;margin-bottom:6px;box-sizing:border-box;">
-        <div id="_mc-error" style="font-size:12px;color:#ef4444;min-height:16px;margin-bottom:10px;"></div>
+          style="width:100%;padding:14px;font-size:var(--fs-xl);font-weight:700;background:var(--bg-s);border:2px solid var(--brd);border-radius:10px;color:var(--tx);text-align:center;margin-bottom:6px;box-sizing:border-box;">
+        <div id="_mc-error" style="font-size:var(--fs-xs);color:var(--err-tx);min-height:16px;margin-bottom:10px;"></div>
         <div style="display:flex;gap:10px;">
-          <button id="_mc-no" style="flex:1;padding:14px;background:#1a1a1a;color:#aaa;border:1px solid #333;border-radius:10px;font-size:14px;font-weight:700;cursor:pointer;">${textoCancelar}</button>
-          <button id="_mc-si" style="flex:1;padding:14px;background:var(--pm);color:#fff;border:none;border-radius:10px;font-size:14px;font-weight:700;cursor:pointer;">${textoConfirmar}</button>
+          <button id="_mc-no" style="flex:1;padding:14px;background:var(--bg-input);color:var(--tx2);border:1px solid var(--brd);border-radius:10px;font-size:var(--fs-sm);font-weight:700;cursor:pointer;">${textoCancelar}</button>
+          <button id="_mc-si" style="flex:1;padding:14px;background:var(--pm-fill);color:#fff;border:none;border-radius:10px;font-size:var(--fs-sm);font-weight:700;cursor:pointer;">${textoConfirmar}</button>
         </div>
       </div>`;
     document.body.appendChild(overlay);
@@ -457,12 +457,12 @@ function _modalConfirmar(mensajeHtml, opts = {}) {
     const overlay = document.createElement('div');
     overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.92);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px;';
     overlay.innerHTML = `
-      <div style="background:#111;border-radius:16px;padding:24px;width:100%;max-width:400px;border:1px solid #333;max-height:80vh;overflow-y:auto;">
-        <div style="font-size:17px;font-weight:800;color:#fff;margin-bottom:10px;">${titulo}</div>
-        <div style="font-size:14px;color:#ccc;margin-bottom:20px;line-height:1.5;white-space:pre-line;">${mensajeHtml}</div>
+      <div style="background:var(--bg-s);border-radius:16px;padding:24px;width:100%;max-width:400px;border:1px solid var(--brd);max-height:80vh;overflow-y:auto;">
+        <div style="font-size:17px;font-weight:800;color:var(--tx);margin-bottom:10px;">${titulo}</div>
+        <div style="font-size:var(--fs-sm);color:var(--tx);margin-bottom:20px;line-height:1.5;white-space:pre-line;">${mensajeHtml}</div>
         <div style="display:flex;gap:10px;">
-          <button id="_mconf-no" style="flex:1;padding:14px;background:#1a1a1a;color:#aaa;border:1px solid #333;border-radius:10px;font-size:14px;font-weight:700;cursor:pointer;">${textoCancelar}</button>
-          <button id="_mconf-si" style="flex:1;padding:14px;background:${peligro ? '#7f1d1d' : 'var(--pm)'};color:#fff;border:none;border-radius:10px;font-size:14px;font-weight:700;cursor:pointer;">${textoConfirmar}</button>
+          <button id="_mconf-no" style="flex:1;padding:14px;background:var(--bg-input);color:var(--tx2);border:1px solid var(--brd);border-radius:10px;font-size:var(--fs-sm);font-weight:700;cursor:pointer;">${textoCancelar}</button>
+          <button id="_mconf-si" style="flex:1;padding:14px;background:${peligro ? '#7f1d1d' : 'var(--pm-fill)'};color:#fff;border:none;border-radius:10px;font-size:var(--fs-sm);font-weight:700;cursor:pointer;">${textoConfirmar}</button>
         </div>
       </div>`;
     document.body.appendChild(overlay);
@@ -489,15 +489,15 @@ function _modalTexto(titulo, mensajeHtml, opts = {}) {
     const overlay = document.createElement('div');
     overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.92);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px;';
     overlay.innerHTML = `
-      <div style="background:#111;border-radius:16px;padding:24px;width:100%;max-width:400px;border:1px solid #333;">
-        <div style="font-size:18px;font-weight:800;color:#fff;margin-bottom:10px;">${titulo}</div>
-        <div style="font-size:14px;color:#aaa;margin-bottom:16px;line-height:1.5;">${mensajeHtml}</div>
+      <div style="background:var(--bg-s);border-radius:16px;padding:24px;width:100%;max-width:400px;border:1px solid var(--brd);">
+        <div style="font-size:var(--fs-lg);font-weight:800;color:var(--tx);margin-bottom:10px;">${titulo}</div>
+        <div style="font-size:var(--fs-sm);color:var(--tx2);margin-bottom:16px;line-height:1.5;">${mensajeHtml}</div>
         <textarea id="_mt-input" placeholder="${placeholder}" rows="3"
-          style="width:100%;padding:12px;font-size:15px;background:#000;border:2px solid #333;border-radius:10px;color:#fff;margin-bottom:6px;box-sizing:border-box;font-family:inherit;resize:vertical;">${valorInicial}</textarea>
-        <div id="_mt-error" style="font-size:12px;color:#ef4444;min-height:16px;margin-bottom:10px;"></div>
+          style="width:100%;padding:12px;font-size:var(--fs-md);background:var(--bg-s);border:2px solid var(--brd);border-radius:10px;color:var(--tx);margin-bottom:6px;box-sizing:border-box;font-family:inherit;resize:vertical;">${valorInicial}</textarea>
+        <div id="_mt-error" style="font-size:var(--fs-xs);color:var(--err-tx);min-height:16px;margin-bottom:10px;"></div>
         <div style="display:flex;gap:10px;">
-          <button id="_mt-no" style="flex:1;padding:14px;background:#1a1a1a;color:#aaa;border:1px solid #333;border-radius:10px;font-size:14px;font-weight:700;cursor:pointer;">${textoCancelar}</button>
-          <button id="_mt-si" style="flex:1;padding:14px;background:var(--pm);color:#fff;border:none;border-radius:10px;font-size:14px;font-weight:700;cursor:pointer;">${textoConfirmar}</button>
+          <button id="_mt-no" style="flex:1;padding:14px;background:var(--bg-input);color:var(--tx2);border:1px solid var(--brd);border-radius:10px;font-size:var(--fs-sm);font-weight:700;cursor:pointer;">${textoCancelar}</button>
+          <button id="_mt-si" style="flex:1;padding:14px;background:var(--pm-fill);color:#fff;border:none;border-radius:10px;font-size:var(--fs-sm);font-weight:700;cursor:pointer;">${textoConfirmar}</button>
         </div>
       </div>`;
     document.body.appendChild(overlay);
@@ -1049,24 +1049,24 @@ async function cargarFranjaAmbiente() {
     // **no se puede leer como «todo bien»**: se pinta la alarma igual.
     d = e && e.datos ? e.datos : null;
     if (!d) {
-      cont.innerHTML = `<div style="padding:8px 12px;background:#7f1d1d;color:#fff;
-        font-size:12px;font-weight:700;">AMBIENTE SIN VERIFICAR — no se pudo
+      cont.innerHTML = `<div style="padding:8px 12px;background:#7f1d1d;color:var(--tx);
+        font-size:var(--fs-xs);font-weight:700;">AMBIENTE SIN VERIFICAR — no se pudo
         consultar el estado. El silencio no es «todo bien».</div>`;
       return;
     }
   }
   if (d.estado === 'DECLARADO') {
     const u = d.ultima_declaracion || {};
-    cont.innerHTML = `<div style="padding:6px 12px;background:#064e3b;color:#d1fae5;
-      font-size:11px;">Ambiente contrastado por <b>${esc(u.declarado_por_nombre || '—')}</b>
+    cont.innerHTML = `<div style="padding:6px 12px;background:#064e3b;color:var(--ok-tx);
+      font-size:var(--fs-xs);">Ambiente contrastado por <b>${esc(u.declarado_por_nombre || '—')}</b>
       el ${esc((u.declarado_en || '').slice(0, 10))} · ${esc(u.concepto || '')}
       (WMS ${esc(u.cifra_wms)} vs ${esc(u.fuente_externa)}: ${esc(u.cifra_externa)})</div>`;
     return;
   }
-  cont.innerHTML = `<div style="padding:10px 12px;background:#7f1d1d;color:#fff;font-size:12px;">
-    <b style="font-size:13px;">AMBIENTE SIN VERIFICAR</b><br>
+  cont.innerHTML = `<div style="padding:10px 12px;background:#7f1d1d;color:var(--tx);font-size:var(--fs-xs);">
+    <b style="font-size:var(--fs-sm);">AMBIENTE SIN VERIFICAR</b><br>
     ${(d.motivos || []).map(m => `• ${m}`).join('<br>')}
-    <div style="margin-top:6px;opacity:.85;font-size:11px;">
+    <div style="margin-top:6px;opacity:.85;font-size:var(--fs-xs);">
       El host y la compañía no distinguen producción de una copia: los dos son
       iguales en las dos. Hace falta que alguien cuadre una cifra contra una
       fuente externa al ERP.</div></div>`;
@@ -1144,16 +1144,16 @@ async function cargarDashboard() {
     if (prodEl && d.productividad && d.productividad.operarios) {
       const ops = d.productividad.operarios.filter(o => o.total_tareas > 0);
       if (!ops.length) {
-        prodEl.innerHTML = '<div style="color:#444;font-size:12px;">Sin actividad en los últimos 7 días</div>';
+        prodEl.innerHTML = '<div style="color:var(--tx3);font-size:var(--fs-xs);">Sin actividad en los últimos 7 días</div>';
       } else {
         prodEl.innerHTML = ops.slice(0, 5).map(o => {
           const pct = Math.min(100, Math.round(o.total_tareas / Math.max(...ops.map(x => x.total_tareas)) * 100));
           return `<div style="margin-bottom:8px;">
             <div style="display:flex;justify-content:space-between;margin-bottom:3px;">
-              <span style="color:#aaa;font-size:12px;">${esc(o.nombre)}</span>
-              <span style="color:#666;font-size:11px;">Pick:${esc(o.pickings_completados)} · Pack:${esc(o.packings_completados)} · Cont:${esc(o.conteos_completados)}</span>
+              <span style="color:var(--tx2);font-size:var(--fs-xs);">${esc(o.nombre)}</span>
+              <span style="color:var(--tx3);font-size:var(--fs-xs);">Pick:${esc(o.pickings_completados)} · Pack:${esc(o.packings_completados)} · Cont:${esc(o.conteos_completados)}</span>
             </div>
-            <div style="background:#1a1a1a;border-radius:4px;height:5px;">
+            <div style="background:var(--bg-input);border-radius:4px;height:5px;">
               <div style="background:#3b82f6;width:${pct}%;height:5px;border-radius:4px;"></div>
             </div>
           </div>`;
@@ -1179,9 +1179,9 @@ async function cargarDashboard() {
       if (lista) {
         const todos = [...(tr.criticos || []), ...(tr.alertas || [])];
         lista.innerHTML = todos.slice(0, 5).map(t =>
-          `<div style="padding:6px 0;border-bottom:1px solid #1e3a5f;display:flex;justify-content:space-between;">
-            <span style="color:#cbd5e1;">${esc(t.codigo)} → ${esc(t.nombre_punto_venta || t.bodega_destino)}</span>
-            <span style="color:${t.horas_en_transito > 24 ? '#fb923c' : '#60a5fa'};font-weight:700;">${esc(t.horas_en_transito)}h</span>
+          `<div style="padding:6px 0;border-bottom:1px solid var(--info-brd);display:flex;justify-content:space-between;">
+            <span style="color:var(--tx);">${esc(t.codigo)} → ${esc(t.nombre_punto_venta || t.bodega_destino)}</span>
+            <span style="color:${t.horas_en_transito > 24 ? 'var(--orange)' : 'var(--info-tx)'};font-weight:700;">${esc(t.horas_en_transito)}h</span>
           </div>`
         ).join('');
       }
@@ -1245,7 +1245,7 @@ function graficaTendencia(dias) {
 function movimientos(lista) {
   const el = document.getElementById('movimientos-recientes');
   if (!el) return;
-  if (!lista || !lista.length) { el.innerHTML = '<div class="tabla-titulo">Últimos movimientos</div><div style="color:#555;font-size:13px;padding:8px 0;">Sin movimientos</div>'; return; }
+  if (!lista || !lista.length) { el.innerHTML = '<div class="tabla-titulo">Últimos movimientos</div><div style="color:var(--tx3);font-size:var(--fs-sm);padding:8px 0;">Sin movimientos</div>'; return; }
   const TIPOS_ENTRADA = new Set(['ENTRADA', 'CARGA_INICIAL_SIESA', 'RECEPCION', 'AJUSTE_ENTRADA', 'DEVOLUCION']);
   el.innerHTML = '<div class="tabla-titulo">Últimos movimientos</div>' + lista.slice(0,8).map(m => {
     const esEntrada = TIPOS_ENTRADA.has(m.tipo);
@@ -1253,8 +1253,8 @@ function movimientos(lista) {
     const s = esEntrada ? '+' : (m.cantidad > 0 ? '-' : '');
     const fechaStr = m.fecha && !m.fecha.endsWith('Z') ? m.fecha + 'Z' : m.fecha;
     const h = new Date(fechaStr).toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Bogota' });
-    const doc = m.numero_documento ? `<div style="font-size:10px;color:#444;">${esc(m.numero_documento)}</div>` : '';
-    return `<div class="tabla-fila"><div><div class="tabla-nombre">${esc(m.tipo)}</div><div style="font-size:11px;color:#555;">${h}</div>${doc}</div><div style="color:${c};font-weight:700;">${s}${esc(m.cantidad)}</div></div>`;
+    const doc = m.numero_documento ? `<div style="font-size:var(--fs-xs);color:var(--tx3);">${esc(m.numero_documento)}</div>` : '';
+    return `<div class="tabla-fila"><div><div class="tabla-nombre">${esc(m.tipo)}</div><div style="font-size:var(--fs-xs);color:var(--tx3);">${h}</div>${doc}</div><div style="color:${c};font-weight:700;">${s}${esc(m.cantidad)}</div></div>`;
   }).join('');
 }
 
@@ -1358,13 +1358,13 @@ async function cargarPedidos() {
 
     if (siesa.simulado) {
       if (tabsEl) tabsEl.innerHTML = '';
-      el.innerHTML = `<div style="background:#1a1a00;border-radius:10px;padding:10px 12px;margin-bottom:12px;font-size:12px;color:#facc15;border:1px solid #333300;">⚡ Connekta en simulación — conecta credenciales para ver pedidos reales</div>`;
+      el.innerHTML = `<div style="background:var(--warn-bg);border-radius:10px;padding:10px 12px;margin-bottom:12px;font-size:var(--fs-xs);color:var(--warn-tx);border:1px solid var(--warn-brd);">⚡ Connekta en simulación — conecta credenciales para ver pedidos reales</div>`;
       return;
     }
 
     if (!SIESA_PEDIDOS.length) {
       if (tabsEl) tabsEl.innerHTML = '';
-      el.innerHTML = `<div style="background:#0d1a0d;border-radius:10px;padding:10px 12px;margin-bottom:12px;font-size:12px;color:#4ade80;border:1px solid #1a2a1a;">✓ Sin pedidos pendientes en Siesa</div>`;
+      el.innerHTML = `<div style="background:var(--ok-bg);border-radius:10px;padding:10px 12px;margin-bottom:12px;font-size:var(--fs-xs);color:var(--ok-tx);border:1px solid var(--ok-brd);">✓ Sin pedidos pendientes en Siesa</div>`;
       return;
     }
 
@@ -1381,8 +1381,8 @@ async function cargarPedidos() {
           // Los DOS papeles: la remisión descarga inventario y viaja con el
           // camión; la factura cobra. El endpoint de remisión existía sin
           // botón desde que se escribió.
-          const _bt = 'width:100%;background:#1a1a1a;color:#fff;border:none;'
-                    + 'padding:5px 8px;border-radius:6px;font-size:11px;'
+          const _bt = 'width:100%;background:var(--bg-input);color:var(--tx);border:none;'
+                    + 'padding:5px 8px;border-radius:6px;font-size:var(--fs-xs);'
                     + 'font-weight:600;cursor:pointer;margin-top:6px;';
           const btnRemision = p.packing_id
             ? `<button onclick="imprimirRemisionAdmin(${esc(p.packing_id)})" style="${_bt}">
@@ -1392,39 +1392,39 @@ async function cargarPedidos() {
                 🖨 Factura
                </button>`
             : '';
-          accionBtn = `<div style="flex-shrink:0;background:#0d1a0d;color:#4ade80;border:1px solid #166534;padding:8px 12px;border-radius:8px;font-size:12px;font-weight:700;text-align:center;">✓ Despachado<br>en Siesa${btnRemision}</div>`;
+          accionBtn = `<div style="flex-shrink:0;background:var(--ok-bg);color:var(--ok-tx);border:1px solid var(--ok-brd);padding:8px 12px;border-radius:8px;font-size:var(--fs-xs);font-weight:700;text-align:center;">✓ Despachado<br>en Siesa${btnRemision}</div>`;
         } else if (p.packing_estado === 'EN_PROCESO') {
           // Empacador verificando en mesa — admin puede entrar a ayudar/probar
           accionBtn = `<button onclick="empIniciarHUD(${esc(p.packing_id)})"
-            style="flex-shrink:0;background:#1a0a2e;color:#c084fc;border:1px solid #4c1d95;padding:8px 12px;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;text-align:center;">
+            style="flex-shrink:0;background:var(--lila-bg);color:var(--lila-tx);border:1px solid var(--lila-brd);padding:8px 12px;border-radius:8px;font-size:var(--fs-xs);font-weight:700;cursor:pointer;text-align:center;">
             Packing<br>🔄 Abrir
           </button>`;
         } else if (p.packing_estado === 'VERIFICADO' && !p.siesa_triggered) {
           // RM creada en Siesa pero FE falló — carril de recuperación
           accionBtn = p.packing_id
             ? `<div style="flex-shrink:0;display:flex;flex-direction:column;gap:4px;align-items:stretch;">
-                <div style="background:#2d0a0a;color:#fca5a5;border:1px solid #7f1d1d;padding:6px 10px;border-radius:6px;font-size:11px;font-weight:700;text-align:center;">⚠ Error Siesa</div>
+                <div style="background:var(--err-bg);color:var(--err-tx);border:1px solid var(--err-brd);padding:6px 10px;border-radius:6px;font-size:var(--fs-xs);font-weight:700;text-align:center;">⚠ Error Siesa</div>
                 <button onclick="facturarRemisionExistente(${esc(p.packing_id)})"
-                  style="background:#7c2d12;color:#fed7aa;border:1px solid #c2410c;padding:6px 10px;border-radius:6px;font-size:11px;font-weight:700;cursor:pointer;text-align:center;">
+                  style="background:#7c2d12;color:#fdba74;border:1px solid #c2410c;padding:6px 10px;border-radius:6px;font-size:var(--fs-xs);font-weight:700;cursor:pointer;text-align:center;">
                   🧾 Facturar Remisión
                 </button>
               </div>`
-            : `<div style="flex-shrink:0;background:#2d0a0a;color:#fca5a5;border:1px solid #7f1d1d;padding:8px 12px;border-radius:8px;font-size:12px;font-weight:700;text-align:center;">⚠ Error<br>Siesa</div>`;
+            : `<div style="flex-shrink:0;background:var(--err-bg);color:var(--err-tx);border:1px solid var(--err-brd);padding:8px 12px;border-radius:8px;font-size:var(--fs-xs);font-weight:700;text-align:center;">⚠ Error<br>Siesa</div>`;
         } else if (p.picking_completado) {
           // Picking listo — admin puede abrir directamente el packing
           accionBtn = `<button onclick="empIniciarHUD(${esc(p.packing_id)})"
-            style="flex-shrink:0;background:#1c1400;color:#fbbf24;border:1px solid #78350f;padding:8px 12px;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;text-align:center;">
+            style="flex-shrink:0;background:var(--warn-bg);color:var(--warn-tx);border:1px solid var(--warn-brd);padding:8px 12px;border-radius:8px;font-size:var(--fs-xs);font-weight:700;cursor:pointer;text-align:center;">
             Packing<br>pendiente ▶
           </button>`;
         } else if (p.picking_iniciado) {
           // Operario recogiendo
-          accionBtn = `<div style="flex-shrink:0;background:#1a1a2a;color:#93c5fd;border:1px solid #1e3a5f;padding:8px 12px;border-radius:8px;font-size:12px;font-weight:700;text-align:center;">
+          accionBtn = `<div style="flex-shrink:0;background:var(--lila-bg);color:var(--info-tx);border:1px solid var(--info-brd);padding:8px 12px;border-radius:8px;font-size:var(--fs-xs);font-weight:700;text-align:center;">
             En picking<br>${esc(p.picking_progreso || '')}
           </div>`;
         } else {
           // Sin tareas — listo para despachar
           accionBtn = `<button onclick="iniciarDespachoDesdeSiesa(${i})"
-            style="flex-shrink:0;background:var(--pm);color:#fff;border:none;padding:10px 14px;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">
+            style="flex-shrink:0;background:var(--pm-fill);color:#fff;border:none;padding:10px 14px;border-radius:8px;font-size:var(--fs-sm);font-weight:700;cursor:pointer;">
             Aprobar
           </button>`;
         }
@@ -1433,10 +1433,10 @@ async function cargarPedidos() {
           <div class="tabla-card">
             <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">
               <div style="min-width:0;">
-                <div style="font-size:15px;font-weight:700;">${esc(p.numero_pedido)}</div>
-                <div style="font-size:12px;color:#666;margin-top:2px;">${esc(p.cliente || 'Sin cliente')}</div>
-                <div style="font-size:11px;color:#444;margin-top:2px;">${esc(p.items.length)} producto(s) · ${totalUds} uds</div>
-                ${sinProd ? `<div style="font-size:11px;color:#d97706;margin-top:2px;">⚠ ${sinProd} sin registrar en WMS</div>` : ''}
+                <div style="font-size:var(--fs-md);font-weight:700;">${esc(p.numero_pedido)}</div>
+                <div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:2px;">${esc(p.cliente || 'Sin cliente')}</div>
+                <div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:2px;">${esc(p.items.length)} producto(s) · ${totalUds} uds</div>
+                ${sinProd ? `<div style="font-size:var(--fs-xs);color:var(--warn-tx);margin-top:2px;">⚠ ${sinProd} sin registrar en WMS</div>` : ''}
               </div>
               ${accionBtn}
             </div>
@@ -1448,7 +1448,7 @@ async function cargarPedidos() {
       renderPedidosTabsYLista();
     }
   } catch (e) {
-    el.innerHTML = '<div style="color:#ef4444;">Error cargando pedidos</div>';
+    el.innerHTML = '<div style="color:var(--err-tx);">Error cargando pedidos</div>';
   }
 }
 
@@ -1469,7 +1469,7 @@ function renderPedidosTabsYLista() {
   }).join('');
 
   el.innerHTML = PEDIDOS_GRUPOS_HTML[PEDIDOS_TAB_ACTIVO]
-    || '<div style="color:#555;text-align:center;padding:40px;">Sin pedidos en esta pestaña ✓</div>';
+    || '<div style="color:var(--tx3);text-align:center;padding:40px;">Sin pedidos en esta pestaña ✓</div>';
 }
 
 /** @param {number} idx - Index of the pedidos sub-tab to activate (0-3). */
@@ -1501,7 +1501,7 @@ async function cargarTareasBodega() {
     BODEGA_GRUPOS_HTML = porTipo.map(ts => _renderTareasBodegaHTML(ts));
     renderBodegaTabsYLista();
   } catch (e) {
-    el.innerHTML = '<div style="color:#ef4444;text-align:center;">Error cargando tareas de bodega</div>';
+    el.innerHTML = '<div style="color:var(--err-tx);text-align:center;">Error cargando tareas de bodega</div>';
   }
 }
 
@@ -1517,7 +1517,7 @@ function renderBodegaTabsYLista() {
   }).join('');
 
   el.innerHTML = BODEGA_GRUPOS_HTML[BODEGA_TAB_ACTIVO]
-    || '<div style="color:#555;text-align:center;padding:40px;">Sin tareas activas en esta pestaña ✓</div>';
+    || '<div style="color:var(--tx3);text-align:center;padding:40px;">Sin tareas activas en esta pestaña ✓</div>';
 }
 
 /** @param {number} idx - Index of the bodega sub-tab to activate (0=pedidos, 1=traslados). */
@@ -1558,12 +1558,12 @@ function _renderTareasBodegaHTML(tareas) {
     // línea con su propio botón/panel de auditoría (id sigue siendo t.id,
     // porque la decisión de auditoría es por línea, no por pedido entero).
     const _lineaHTML = (t, esPrimera) => `
-      <div style="padding:10px 0;${esPrimera ? '' : 'border-top:1px solid #222;'}">
+      <div style="padding:10px 0;${esPrimera ? '' : 'border-top:1px solid var(--brd);'}">
         <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">
           <div style="flex:1;min-width:0;">
-            <span style="font-size:14px;font-weight:600;">${esc(t.producto_nombre || t.producto_codigo)}</span>
-            <div style="font-size:12px;color:#666;margin-top:2px;">${esc(t.ubicacion_codigo || '—')}</div>
-            <div style="font-size:11px;color:#444;margin-top:2px;">${
+            <span style="font-size:var(--fs-sm);font-weight:600;">${esc(t.producto_nombre || t.producto_codigo)}</span>
+            <div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:2px;">${esc(t.ubicacion_codigo || '—')}</div>
+            <div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:2px;">${
               t.operario_id
                 ? '👤 En proceso'
                 : t.estado === 'BLOQUEADO'
@@ -1571,7 +1571,7 @@ function _renderTareasBodegaHTML(tareas) {
                   : '⏳ En cola'
             }</div>
             ${t.estado === 'BLOQUEADO' && t.observaciones_bloqueo
-              ? `<div style="font-size:11px;color:#ef4444;margin-top:3px;font-style:italic;">"${esc(t.observaciones_bloqueo)}"</div>`
+              ? `<div style="font-size:var(--fs-xs);color:var(--err-tx);margin-top:3px;font-style:italic;">"${esc(t.observaciones_bloqueo)}"</div>`
               : ''}
           </div>
           <div style="text-align:right;flex-shrink:0;">
@@ -1580,52 +1580,52 @@ function _renderTareasBodegaHTML(tareas) {
           </div>
         </div>
         ${t.estado === 'BLOQUEADO' ? `
-        <div style="margin-top:10px;padding-top:10px;border-top:1px solid #2a1010;">
+        <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--err-brd);">
           <button onclick="auditoriaMostrarPanel(${esc(t.id)})"
-            style="width:100%;padding:9px;background:#1a1a2a;color:#a78bfa;border:1px solid #2d1b69;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;">
+            style="width:100%;padding:9px;background:var(--lila-bg);color:var(--lila-tx);border:1px solid var(--info-brd);border-radius:8px;font-size:var(--fs-xs);font-weight:700;cursor:pointer;">
             🔍 Auditoría
           </button>
           <div id="auditoria-panel-${esc(t.id)}" style="display:none;margin-top:10px;">
-            <div style="font-size:11px;color:#888;margin-bottom:8px;">¿Qué encontraste físicamente?</div>
+            <div style="font-size:var(--fs-xs);color:var(--tx2);margin-bottom:8px;">¿Qué encontraste físicamente?</div>
             <select id="auditoria-resultado-${esc(t.id)}" onchange="auditoriaResultadoCambio(${esc(t.id)})"
-              style="width:100%;padding:10px;background:#0d0d0d;border:1px solid #333;border-radius:8px;color:#fff;font-size:13px;margin-bottom:8px;">
+              style="width:100%;padding:10px;background:var(--bg-s);border:1px solid var(--brd);border-radius:8px;color:var(--tx);font-size:var(--fs-sm);margin-bottom:8px;">
               <option value="">— Selecciona resultado —</option>
               <option value="ENCONTRADO">✅ Encontrado (se genera conteo cíclico)</option>
               <option value="NO_ENCONTRADO">❌ No encontrado — faltante confirmado</option>
               <option value="AVERIA">🚫 Mercancía averiada</option>
             </select>
-            <div id="auditoria-conteo-${esc(t.id)}" style="display:none;margin-bottom:8px;padding:9px;background:#0d0d0d;border:1px solid #2d1b69;border-radius:8px;">
-              <label style="display:flex;align-items:center;gap:8px;font-size:12px;color:#c4b5fd;cursor:pointer;">
+            <div id="auditoria-conteo-${esc(t.id)}" style="display:none;margin-bottom:8px;padding:9px;background:var(--bg-s);border:1px solid var(--info-brd);border-radius:8px;">
+              <label style="display:flex;align-items:center;gap:8px;font-size:var(--fs-xs);color:var(--lila-tx);cursor:pointer;">
                 <input type="checkbox" id="auditoria-forzar-${esc(t.id)}" checked>
                 Generar conteo cíclico forzado de este SKU
               </label>
-              <div style="font-size:11px;color:#666;margin:4px 0 6px;">El conteo es lo que ajusta Siesa — esta auditoría no mueve inventario.</div>
+              <div style="font-size:var(--fs-xs);color:var(--tx3);margin:4px 0 6px;">El conteo es lo que ajusta Siesa — esta auditoría no mueve inventario.</div>
               <select id="auditoria-operario-${esc(t.id)}"
-                style="width:100%;padding:8px;background:#0d0d0d;border:1px solid #333;border-radius:8px;color:#fff;font-size:12px;">
+                style="width:100%;padding:8px;background:var(--bg-s);border:1px solid var(--brd);border-radius:8px;color:var(--tx);font-size:var(--fs-xs);">
                 <option value="">Auto-asignar (el que lo tome primero)</option>
               </select>
             </div>
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;">
               <div>
-                <div style="font-size:11px;color:#666;margin-bottom:4px;">Cant. hallada</div>
+                <div style="font-size:var(--fs-xs);color:var(--tx3);margin-bottom:4px;">Cant. hallada</div>
                 <input id="auditoria-cantidad-${esc(t.id)}" type="number" min="0" value="0"
-                  style="width:100%;padding:9px;background:#0d0d0d;border:1px solid #333;border-radius:8px;color:#fff;font-size:13px;box-sizing:border-box;">
+                  style="width:100%;padding:9px;background:var(--bg-s);border:1px solid var(--brd);border-radius:8px;color:var(--tx);font-size:var(--fs-sm);box-sizing:border-box;">
               </div>
               <div>
-                <div style="font-size:11px;color:#666;margin-bottom:4px;">Ubicación hallada</div>
+                <div style="font-size:var(--fs-xs);color:var(--tx3);margin-bottom:4px;">Ubicación hallada</div>
                 <input id="auditoria-ubicacion-${esc(t.id)}" type="text" placeholder="Ej: A-01-02"
-                  style="width:100%;padding:9px;background:#0d0d0d;border:1px solid #333;border-radius:8px;color:#fff;font-size:13px;box-sizing:border-box;">
+                  style="width:100%;padding:9px;background:var(--bg-s);border:1px solid var(--brd);border-radius:8px;color:var(--tx);font-size:var(--fs-sm);box-sizing:border-box;">
               </div>
             </div>
             <textarea id="auditoria-obs-${esc(t.id)}" placeholder="Observaciones (opcional)..."
-              style="width:100%;padding:9px;background:#0d0d0d;border:1px solid #333;border-radius:8px;color:#fff;font-size:12px;resize:vertical;min-height:56px;box-sizing:border-box;margin-bottom:8px;"></textarea>
+              style="width:100%;padding:9px;background:var(--bg-s);border:1px solid var(--brd);border-radius:8px;color:var(--tx);font-size:var(--fs-xs);resize:vertical;min-height:56px;box-sizing:border-box;margin-bottom:8px;"></textarea>
             <div style="display:flex;gap:8px;">
               <button onclick="auditoriaCancelarPanel(${esc(t.id)})"
-                style="flex:1;padding:9px;background:#1a1a1a;border:1px solid #333;color:#aaa;border-radius:8px;font-size:12px;cursor:pointer;">
+                style="flex:1;padding:9px;background:var(--bg-input);border:1px solid var(--brd);color:var(--tx2);border-radius:8px;font-size:var(--fs-xs);cursor:pointer;">
                 Cancelar
               </button>
               <button onclick="auditoriaGuardar(${esc(t.id)})"
-                style="flex:2;padding:9px;background:#a78bfa;color:#000;border:none;border-radius:8px;font-size:12px;font-weight:800;cursor:pointer;">
+                style="flex:2;padding:9px;background:#a78bfa;color:#000;border:none;border-radius:8px;font-size:var(--fs-xs);font-weight:800;cursor:pointer;">
                 Guardar auditoría →
               </button>
             </div>
@@ -1644,17 +1644,17 @@ function _renderTareasBodegaHTML(tareas) {
         porPedido.get(key).push(t);
       });
 
-      html += `<div style="font-size:11px;font-weight:700;color:${color};text-transform:uppercase;letter-spacing:.8px;padding:10px 0 5px;border-bottom:1px solid #222;margin-bottom:8px;">${label} · ${esc(ts.length)} línea${ts.length!==1?'s':''} · ${esc(porPedido.size)} pedido${porPedido.size!==1?'s':''}</div>`;
+      html += `<div style="font-size:var(--fs-xs);font-weight:700;color:${color};text-transform:uppercase;letter-spacing:.8px;padding:10px 0 5px;border-bottom:1px solid var(--brd);margin-bottom:8px;">${label} · ${esc(ts.length)} línea${ts.length!==1?'s':''} · ${esc(porPedido.size)} pedido${porPedido.size!==1?'s':''}</div>`;
 
       html += Array.from(porPedido.entries()).map(([pedido, items]) => {
         const hayBloqueada = items.some(t => t.estado === 'BLOQUEADO');
         const esTraslado = items[0].tipo_documento === 'TRASLADO';
         return `
-        <div class="tabla-card" style="${hayBloqueada?'border-color:#7f1d1d;background:#110a0a;':''}">
+        <div class="tabla-card" style="${hayBloqueada?'border-color:#7f1d1d;background:var(--err-bg);':''}">
           <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:2px;">
-            <span style="font-size:14px;font-weight:700;">${pedido}</span>
-            ${esTraslado ? '<span style="font-size:10px;font-weight:700;padding:2px 7px;border-radius:10px;background:#1e3a5f;color:#60a5fa;letter-spacing:.5px;">🔄 TRANSFERENCIA</span>' : ''}
-            <span style="font-size:11px;color:#555;">· ${esc(items.length)} línea${items.length!==1?'s':''}</span>
+            <span style="font-size:var(--fs-sm);font-weight:700;">${pedido}</span>
+            ${esTraslado ? '<span style="font-size:var(--fs-xs);font-weight:700;padding:2px 7px;border-radius:10px;background:#1e3a5f;color:var(--info-tx);letter-spacing:.5px;">🔄 TRANSFERENCIA</span>' : ''}
+            <span style="font-size:var(--fs-xs);color:var(--tx3);">· ${esc(items.length)} línea${items.length!==1?'s':''}</span>
           </div>
           ${items.map((t, i) => _lineaHTML(t, i === 0)).join('')}
         </div>`;
@@ -1662,7 +1662,7 @@ function _renderTareasBodegaHTML(tareas) {
     });
     return html;
   } catch (e) {
-    return '<div style="color:#ef4444;text-align:center;">Error mostrando tareas de bodega</div>';
+    return '<div style="color:var(--err-tx);text-align:center;">Error mostrando tareas de bodega</div>';
   }
 }
 
@@ -1674,7 +1674,7 @@ function _renderTareasBodegaHTML(tareas) {
  */
 function _tareaActualHTML(t) {
   if (!t) {
-    return `<div style="font-size:11px;color:#3a3a3a;margin-bottom:4px;">⚪ Sin tarea asignada</div>`;
+    return `<div style="font-size:var(--fs-xs);color:var(--tx3);margin-bottom:4px;">⚪ Sin tarea asignada</div>`;
   }
   const COLORES = { PICKING: '#1d4ed8', REPOSICION: '#c2410c', CONTEO: '#b45309', PACKING: '#7c3aed' };
   const color = COLORES[t.tipo] || '#555';
@@ -1688,8 +1688,8 @@ function _tareaActualHTML(t) {
     : `${t.tipo}${t.referencia ? ' · ' + t.referencia : ''}`;
   const detalle = [t.ubicacion, t.producto].filter(Boolean).join(' · ');
   return `
-    <div style="font-size:11px;font-weight:700;color:${color};margin-bottom:1px;">${punto} Ahora: ${etiqueta}</div>
-    ${detalle ? `<div style="font-size:10px;color:#555;margin-bottom:4px;">${detalle}${tiempo}</div>` : ''}
+    <div style="font-size:var(--fs-xs);font-weight:700;color:${color};margin-bottom:1px;">${punto} Ahora: ${etiqueta}</div>
+    ${detalle ? `<div style="font-size:var(--fs-xs);color:var(--tx3);margin-bottom:4px;">${detalle}${tiempo}</div>` : ''}
   `;
 }
 
@@ -1707,47 +1707,47 @@ async function cargarOperarios() {
 
     // Todos los usuarios activos (operarios/jefe), con métricas si las tienen
     const todos = (usuariosData.usuarios || []).filter(u => u.activo);
-    if (!todos.length) { el.innerHTML = '<div style="color:#555;text-align:center;padding:40px;">Sin usuarios</div>'; return; }
+    if (!todos.length) { el.innerHTML = '<div style="color:var(--tx3);text-align:center;padding:40px;">Sin usuarios</div>'; return; }
 
     // Ordenar: más tareas primero
     todos.sort((a, b) => (metricas[b.id]?.total_tareas || 0) - (metricas[a.id]?.total_tareas || 0));
 
     el.innerHTML = todos.map((u, i) => {
       const op = metricas[u.id] || { total_tareas: 0, pickings_completados: 0, packings_completados: 0, conteos_completados: 0, reposiciones_completadas: 0, tarea_actual: null };
-      const badges = [u.puede_picar && '<span style="background:#1e40af;color:#fff;border-radius:4px;padding:1px 5px;font-size:10px;">Picker</span>',
-                      u.puede_empacar && '<span style="background:#6b21a8;color:#fff;border-radius:4px;padding:1px 5px;font-size:10px;">Empacador</span>',
-                      u.puede_abastecer && '<span style="background:#7c2d12;color:#fed7aa;border-radius:4px;padding:1px 5px;font-size:10px;">Abastecedor</span>',
-                      u.puede_organizar_layout && '<span style="background:#1e3a5f;color:#93c5fd;border-radius:4px;padding:1px 5px;font-size:10px;">Layout</span>'].filter(Boolean).join(' ');
+      const badges = [u.puede_picar && '<span style="background:#1e40af;color:var(--tx);border-radius:4px;padding:1px 5px;font-size:var(--fs-xs);">Picker</span>',
+                      u.puede_empacar && '<span style="background:#6b21a8;color:var(--tx);border-radius:4px;padding:1px 5px;font-size:var(--fs-xs);">Empacador</span>',
+                      u.puede_abastecer && '<span style="background:#7c2d12;color:#fdba74;border-radius:4px;padding:1px 5px;font-size:var(--fs-xs);">Abastecedor</span>',
+                      u.puede_organizar_layout && '<span style="background:#1e3a5f;color:var(--info-tx);border-radius:4px;padding:1px 5px;font-size:var(--fs-xs);">Layout</span>'].filter(Boolean).join(' ');
       const color = op.total_tareas > 0 ? (i === 0 ? '#4ade80' : '#fff') : '#555';
       return `
       <div class="tabla-card">
         <div style="display:flex;justify-content:space-between;align-items:center;">
           <div>
-            <div style="font-size:14px;font-weight:600;">${esc(u.nombre)}</div>
-            <div style="font-size:11px;color:#555;margin-bottom:2px;">${esc(u.rol)} ${badges}</div>
+            <div style="font-size:var(--fs-sm);font-weight:600;">${esc(u.nombre)}</div>
+            <div style="font-size:var(--fs-xs);color:var(--tx3);margin-bottom:2px;">${esc(u.rol)} ${badges}</div>
             ${_tareaActualHTML(op.tarea_actual)}
-            <div style="font-size:11px;color:#444;">Pick:${esc(op.pickings_completados)} Pack:${esc(op.packings_completados)} Repo:${esc(op.reposiciones_completadas || 0)} Conteos:${esc(op.conteos_completados)}</div>
+            <div style="font-size:var(--fs-xs);color:var(--tx3);">Pick:${esc(op.pickings_completados)} Pack:${esc(op.packings_completados)} Repo:${esc(op.reposiciones_completadas || 0)} Conteos:${esc(op.conteos_completados)}</div>
             ${u.puede_picar && u.capacidad_diaria_conteo != null ? (() => {
               const cap = u.capacidad_diaria_conteo;
               const hoy = op.conteos_hoy || 0;
               const pct = cap > 0 ? Math.min(100, Math.round(hoy / cap * 100)) : 0;
               const col = pct >= 100 ? '#ef4444' : pct >= 70 ? '#f59e0b' : '#4ade80';
               return `<div style="margin-top:4px;">
-                <div style="display:flex;justify-content:space-between;font-size:10px;color:#555;margin-bottom:2px;">
+                <div style="display:flex;justify-content:space-between;font-size:var(--fs-xs);color:var(--tx3);margin-bottom:2px;">
                   <span>Conteos hoy</span><span style="color:${col};font-weight:600;">${hoy}/${cap > 0 ? cap : '∞'}</span>
                 </div>
-                ${cap > 0 ? `<div style="background:#222;border-radius:3px;height:3px;overflow:hidden;"><div style="background:${col};width:${pct}%;height:100%;border-radius:3px;transition:width .3s;"></div></div>` : ''}
+                ${cap > 0 ? `<div style="background:var(--bg-s2);border-radius:3px;height:3px;overflow:hidden;"><div style="background:${col};width:${pct}%;height:100%;border-radius:3px;transition:width .3s;"></div></div>` : ''}
               </div>`;
             })() : ''}
           </div>
           <div style="text-align:right;">
-            <div style="font-size:28px;font-weight:800;color:${color}">${esc(op.total_tareas)}</div>
-            <div style="font-size:10px;color:#555;">tareas 7d</div>
+            <div style="font-size:var(--fs-2xl);font-weight:800;color:${color}">${esc(op.total_tareas)}</div>
+            <div style="font-size:var(--fs-xs);color:var(--tx3);">tareas 7d</div>
           </div>
         </div>
       </div>`;
     }).join('');
-  } catch (e) { el.innerHTML = '<div style="color:#ef4444;">Error</div>'; }
+  } catch (e) { el.innerHTML = '<div style="color:var(--err-tx);">Error</div>'; }
 }
 
 let _filtroAlmacenStockListo = false;
@@ -1777,21 +1777,21 @@ async function cargarStock() {
   try {
     const d = await get('/api/dashboard/alertas-stock?almacen_id=' + ALMACEN_ID);
     if (!d.alertas || !d.alertas.length) {
-      el.innerHTML = '<div style="color:#4ade80;text-align:center;padding:40px;">✓ Sin alertas</div>';
+      el.innerHTML = '<div style="color:var(--ok-tx);text-align:center;padding:40px;">✓ Sin alertas</div>';
     } else {
       el.innerHTML = d.alertas.map(a => `
       <div class="tabla-card">
         <div style="display:flex;justify-content:space-between;align-items:center;">
-          <div><div style="font-size:13px;font-weight:600;">${esc(a.nombre)}</div><div style="font-size:11px;color:#555;">${esc(a.codigo)} · Clase ${esc(a.clasificacion_abc||'—')}</div></div>
+          <div><div style="font-size:var(--fs-sm);font-weight:600;">${esc(a.nombre)}</div><div style="font-size:var(--fs-xs);color:var(--tx3);">${esc(a.codigo)} · Clase ${esc(a.clasificacion_abc||'—')}</div></div>
           <div style="text-align:right;">
             <span class="badge ${a.urgencia==='CRITICO'?'badge-red':'badge-yellow'}">${esc(a.urgencia)}</span>
-            <div style="font-size:20px;font-weight:800;color:${a.urgencia==='CRITICO'?'#f87171':'#facc15'}">${esc(a.stock_actual)}</div>
-            <div style="font-size:10px;color:#555;">mín:${esc(a.stock_minimo)}</div>
+            <div style="font-size:20px;font-weight:800;color:${a.urgencia==='CRITICO'?'var(--err-tx)':'var(--warn-tx)'}">${esc(a.stock_actual)}</div>
+            <div style="font-size:var(--fs-xs);color:var(--tx3);">mín:${esc(a.stock_minimo)}</div>
           </div>
         </div>
       </div>`).join('');
     }
-  } catch (e) { el.innerHTML = '<div style="color:#ef4444;">Error</div>'; }
+  } catch (e) { el.innerHTML = '<div style="color:var(--err-tx);">Error</div>'; }
 }
 
 let _catalogoPag = 1;
@@ -1811,34 +1811,34 @@ async function cargarCatalogo(pag) {
     const d = await get(`/api/productos/?page=${_catalogoPag}&per_page=20&q=${encodeURIComponent(q)}${filtroAlm}`);
     if (totalEl) totalEl.textContent = `${d.total} productos`;
     if (!d.productos || !d.productos.length) {
-      el.innerHTML = '<div style="color:#555;text-align:center;padding:20px;font-size:13px;">Sin productos</div>';
+      el.innerHTML = '<div style="color:var(--tx3);text-align:center;padding:20px;font-size:var(--fs-sm);">Sin productos</div>';
       if (pagEl) pagEl.innerHTML = '';
       return;
     }
     el.innerHTML = d.productos.map(p => `
       <div class="tabla-fila">
         <div>
-          <div style="font-size:13px;font-weight:600;">${esc(p.nombre)}</div>
-          <div style="font-size:11px;color:#555;">${esc(p.codigo)}${p.codigo_siesa && p.codigo_siesa !== p.codigo ? ' · Siesa: ' + p.codigo_siesa : ''} · Clase ${esc(p.clasificacion_abc || '—')}</div>
+          <div style="font-size:var(--fs-sm);font-weight:600;">${esc(p.nombre)}</div>
+          <div style="font-size:var(--fs-xs);color:var(--tx3);">${esc(p.codigo)}${p.codigo_siesa && p.codigo_siesa !== p.codigo ? ' · Siesa: ' + p.codigo_siesa : ''} · Clase ${esc(p.clasificacion_abc || '—')}</div>
         </div>
         <div style="text-align:right;">
-          <div style="font-size:16px;font-weight:700;color:${(p.stock_vendible ?? p.stock_total) > 0 ? '#4ade80' : (p.stock_total > 0 ? '#fbbf24' : '#555')}">${esc(p.stock_total)}</div>
-          ${p.stock_averiado > 0 ? `<div style="font-size:10px;color:#fbbf24;">${esc(p.stock_averiado)} averiadas</div>` : ''}
+          <div style="font-size:var(--fs-md);font-weight:700;color:${(p.stock_vendible ?? p.stock_total) > 0 ? 'var(--ok-tx)' : (p.stock_total > 0 ? 'var(--warn-tx)' : 'var(--tx3)')}">${esc(p.stock_total)}</div>
+          ${p.stock_averiado > 0 ? `<div style="font-size:var(--fs-xs);color:var(--warn-tx);">${esc(p.stock_averiado)} averiadas</div>` : ''}
           ${!almacenId && Array.isArray(p.stock_por_almacen) && p.stock_por_almacen.length
-            ? `<div style="font-size:10px;color:#93c5fd;">${p.stock_por_almacen.map(a => `${esc(a.almacen)} ${esc(a.stock_total)}`).join(' · ')}</div>`
+            ? `<div style="font-size:var(--fs-xs);color:var(--info-tx);">${p.stock_por_almacen.map(a => `${esc(a.almacen)} ${esc(a.stock_total)}`).join(' · ')}</div>`
             : ''}
-          <div style="font-size:10px;color:#555;">${esc(p.unidad_medida || 'UND')}</div>
+          <div style="font-size:var(--fs-xs);color:var(--tx3);">${esc(p.unidad_medida || 'UND')}</div>
         </div>
       </div>`).join('');
     // Paginación
     if (pagEl && d.paginas > 1) {
       let btns = '';
-      if (_catalogoPag > 1) btns += `<button onclick="cargarCatalogo(${_catalogoPag - 1})" style="padding:6px 12px;background:#222;border:1px solid #333;color:#aaa;border-radius:6px;cursor:pointer;">◀</button>`;
-      btns += `<span style="font-size:12px;color:#555;align-self:center;">${_catalogoPag} / ${esc(d.paginas)}</span>`;
-      if (_catalogoPag < d.paginas) btns += `<button onclick="cargarCatalogo(${_catalogoPag + 1})" style="padding:6px 12px;background:#222;border:1px solid #333;color:#aaa;border-radius:6px;cursor:pointer;">▶</button>`;
+      if (_catalogoPag > 1) btns += `<button onclick="cargarCatalogo(${_catalogoPag - 1})" style="padding:6px 12px;background:var(--bg-s2);border:1px solid var(--brd);color:var(--tx2);border-radius:6px;cursor:pointer;">◀</button>`;
+      btns += `<span style="font-size:var(--fs-xs);color:var(--tx3);align-self:center;">${_catalogoPag} / ${esc(d.paginas)}</span>`;
+      if (_catalogoPag < d.paginas) btns += `<button onclick="cargarCatalogo(${_catalogoPag + 1})" style="padding:6px 12px;background:var(--bg-s2);border:1px solid var(--brd);color:var(--tx2);border-radius:6px;cursor:pointer;">▶</button>`;
       pagEl.innerHTML = btns;
     } else if (pagEl) pagEl.innerHTML = '';
-  } catch (e) { el.innerHTML = '<div style="color:#ef4444;">Error cargando productos</div>'; }
+  } catch (e) { el.innerHTML = '<div style="color:var(--err-tx);">Error cargando productos</div>'; }
 }
 
 let _buscarTimer;
@@ -1886,79 +1886,79 @@ async function cargarConnekta() {
     el.innerHTML = `
       <div class="tabla-card">
         <div style="text-align:center;padding:20px 0;">
-          <div style="font-size:13px;color:#666;margin-bottom:8px;">Estado Connekta / Siesa</div>
-          <div style="font-size:28px;font-weight:800;color:${color};">${estado}</div>
-          <div style="font-size:12px;color:#666;margin-top:8px;line-height:1.5;">${detalle}</div>
+          <div style="font-size:var(--fs-sm);color:var(--tx3);margin-bottom:8px;">Estado Connekta / Siesa</div>
+          <div style="font-size:var(--fs-2xl);font-weight:800;color:${color};">${estado}</div>
+          <div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:8px;line-height:1.5;">${detalle}</div>
         </div>
         <div class="tabla-fila"><span class="tabla-nombre">Credenciales</span><span class="badge ${d.credenciales_configuradas?'badge-green':'badge-red'}">${d.credenciales_configuradas?'✓ Activas':'✗ Faltan'}</span></div>
         <div class="tabla-fila"><span class="tabla-nombre">GETs (lectura)</span><span class="badge ${!d.modo_simulacion?'badge-green':'badge-yellow'}">${!d.modo_simulacion?'✓ Real':'Simulado'}</span></div>
         <div class="tabla-fila"><span class="tabla-nombre">POSTs (escritura)</span><span class="badge ${(!d.modo_simulacion&&!d.modo_ensayo)?'badge-green':d.modo_ensayo?'badge-yellow':'badge-red'}">${(!d.modo_simulacion&&!d.modo_ensayo)?'✓ Activos':d.modo_ensayo?'Bloqueados (ensayo)':'Simulados'}</span></div>
-        <div class="tabla-fila"><span class="tabla-nombre">Bodega</span><span style="font-size:13px;color:#aaa;">${esc(d.bodega||'—')}</span></div>
-        <div class="tabla-fila"><span class="tabla-nombre">CO</span><span style="font-size:13px;color:#aaa;">${esc(d.centro_operacion||'—')}</span></div>
+        <div class="tabla-fila"><span class="tabla-nombre">Bodega</span><span style="font-size:var(--fs-sm);color:var(--tx2);">${esc(d.bodega||'—')}</span></div>
+        <div class="tabla-fila"><span class="tabla-nombre">CO</span><span style="font-size:var(--fs-sm);color:var(--tx2);">${esc(d.centro_operacion||'—')}</span></div>
       </div>
       <button id="btn-setup-inicial" onclick="setupInicial()"
-        style="width:100%;margin-top:12px;padding:14px;background:#1e3a5f;color:#93c5fd;border:none;border-radius:10px;font-size:14px;font-weight:700;cursor:pointer;">
+        style="width:100%;margin-top:12px;padding:14px;background:#1e3a5f;color:var(--info-tx);border:none;border-radius:10px;font-size:var(--fs-sm);font-weight:700;cursor:pointer;">
         ↻ Sincronizar catálogo + cargar stock inicial
       </button>
-      <div id="setup-resultado" style="margin-top:8px;font-size:12px;color:#666;text-align:center;"></div>
+      <div id="setup-resultado" style="margin-top:8px;font-size:var(--fs-xs);color:var(--tx3);text-align:center;"></div>
 
-      <div style="border-top:1px solid #222;margin-top:16px;padding-top:16px;">
-        <div style="font-size:13px;font-weight:700;margin-bottom:8px;">Inventario bilateral</div>
+      <div style="border-top:1px solid var(--brd);margin-top:16px;padding-top:16px;">
+        <div style="font-size:var(--fs-sm);font-weight:700;margin-bottom:8px;">Inventario bilateral</div>
         <button onclick="verReconciliacion()"
-          style="width:100%;padding:12px;background:#1a1a2e;color:#93c5fd;border:1px solid #2a2a5a;border-radius:10px;font-size:13px;font-weight:700;cursor:pointer;">
+          style="width:100%;padding:12px;background:var(--bg-s);color:var(--info-tx);border:1px solid var(--info-brd);border-radius:10px;font-size:var(--fs-sm);font-weight:700;cursor:pointer;">
           ⚖ Ver reconciliación WMS vs Siesa
         </button>
-        <div id="inv-resultado" style="margin-top:8px;font-size:12px;color:#666;text-align:center;"></div>
+        <div id="inv-resultado" style="margin-top:8px;font-size:var(--fs-xs);color:var(--tx3);text-align:center;"></div>
       </div>
       <div id="panel-reconciliacion" style="margin-top:8px;"></div>
 
       <!-- Sync barcodes EAN -->
-      <div style="border-top:1px solid #222;margin-top:16px;padding-top:16px;">
-        <div style="font-size:13px;font-weight:700;margin-bottom:4px;">📦 Sync códigos de barras EAN</div>
-        <div style="font-size:11px;color:#666;margin-bottom:10px;">Vuelca todos los barcodes de Siesa a la DB local. Corre automático a las 2am; este botón lo fuerza ahora.</div>
+      <div style="border-top:1px solid var(--brd);margin-top:16px;padding-top:16px;">
+        <div style="font-size:var(--fs-sm);font-weight:700;margin-bottom:4px;">📦 Sync códigos de barras EAN</div>
+        <div style="font-size:var(--fs-xs);color:var(--tx3);margin-bottom:10px;">Vuelca todos los barcodes de Siesa a la DB local. Corre automático a las 2am; este botón lo fuerza ahora.</div>
         <button onclick="syncBarcodes()"
-          style="width:100%;padding:12px;background:#1e3a5f;color:#93c5fd;border:none;border-radius:10px;font-size:13px;font-weight:700;cursor:pointer;">
+          style="width:100%;padding:12px;background:#1e3a5f;color:var(--info-tx);border:none;border-radius:10px;font-size:var(--fs-sm);font-weight:700;cursor:pointer;">
           ↻ Sincronizar barcodes ahora
         </button>
-        <div id="sync-barras-resultado" style="margin-top:8px;font-size:12px;color:#666;min-height:16px;"></div>
+        <div id="sync-barras-resultado" style="margin-top:8px;font-size:var(--fs-xs);color:var(--tx3);min-height:16px;"></div>
         <button onclick="barcodesCobertura()"
-          style="width:100%;margin-top:8px;padding:10px;background:#1a1a1a;color:#93c5fd;border:1px solid #333;border-radius:10px;font-size:12px;font-weight:700;cursor:pointer;">
+          style="width:100%;margin-top:8px;padding:10px;background:var(--bg-input);color:var(--info-tx);border:1px solid var(--brd);border-radius:10px;font-size:var(--fs-xs);font-weight:700;cursor:pointer;">
           ¿Cuántos NO se pueden escanear?
         </button>
-        <div id="barras-cobertura" style="margin-top:8px;font-size:12px;color:#666;"></div>
+        <div id="barras-cobertura" style="margin-top:8px;font-size:var(--fs-xs);color:var(--tx3);"></div>
         <!-- Cada SKU de esta lista es una pregunta que el recepcionista tiene
              que contestar en cada escaneo: «¿unidad o caja?». El sistema no lo
              puede saber —el proveedor pegó la EAN de unidad en la caja— y
              adivinarlo es lo que hacía que el CD sobre-recibiera. Poblar el EAN
              de empaque cierra la pregunta para siempre. -->
         <button onclick="skusSinEanEmpaque()"
-          style="width:100%;margin-top:8px;padding:10px;background:#1a1a1a;color:#fbbf24;border:1px solid #333;border-radius:10px;font-size:12px;font-weight:700;cursor:pointer;">
+          style="width:100%;margin-top:8px;padding:10px;background:var(--bg-input);color:var(--warn-tx);border:1px solid var(--brd);border-radius:10px;font-size:var(--fs-xs);font-weight:700;cursor:pointer;">
           ¿En cuántos hay que preguntar «unidad o caja»?
         </button>
-        <div id="skus-sin-ean-empaque" style="margin-top:8px;font-size:12px;color:#666;"></div>
+        <div id="skus-sin-ean-empaque" style="margin-top:8px;font-size:var(--fs-xs);color:var(--tx3);"></div>
       </div>
 
       <!-- Diagnóstico barcodes Siesa -->
-      <div style="border-top:1px solid #222;margin-top:16px;padding-top:16px;">
-        <div style="font-size:13px;font-weight:700;margin-bottom:8px;">🔍 Diagnóstico códigos de barras</div>
+      <div style="border-top:1px solid var(--brd);margin-top:16px;padding-top:16px;">
+        <div style="font-size:var(--fs-sm);font-weight:700;margin-bottom:8px;">🔍 Diagnóstico códigos de barras</div>
         <div style="display:flex;gap:8px;margin-bottom:8px;">
           <input id="debug-barras-input" type="text" placeholder="EAN a probar (ej: 49218787)"
-            style="flex:1;padding:10px;background:#111;border:1px solid #333;border-radius:8px;color:#fff;font-size:13px;">
+            style="flex:1;padding:10px;background:var(--bg-s);border:1px solid var(--brd);border-radius:8px;color:var(--tx);font-size:var(--fs-sm);">
           <button onclick="testBarras()"
-            style="padding:10px 14px;background:#1e3a5f;color:#93c5fd;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">
+            style="padding:10px 14px;background:#1e3a5f;color:var(--info-tx);border:none;border-radius:8px;font-size:var(--fs-sm);font-weight:700;cursor:pointer;">
             Probar
           </button>
         </div>
-        <div id="debug-barras-resultado" style="font-size:12px;color:#666;min-height:20px;white-space:pre-wrap;word-break:break-all;"></div>
+        <div id="debug-barras-resultado" style="font-size:var(--fs-xs);color:var(--tx3);min-height:20px;white-space:pre-wrap;word-break:break-all;"></div>
       </div>
 
       ${d.modo_ensayo ? `
-      <div style="background:#1a0f00;border:1px solid #7c2d12;border-radius:10px;padding:12px;margin-top:8px;font-size:12px;color:#fb923c;line-height:1.6;">
+      <div style="background:var(--warn-bg);border:1px solid var(--err-brd);border-radius:10px;padding:12px;margin-top:8px;font-size:var(--fs-xs);color:var(--orange);line-height:1.6;">
         <strong>MODO ENSAYO activo</strong><br>
         Los pedidos y OCs vienen de Siesa real. Al confirmar despacho o recepción, el payload se certifica en los logs del servidor pero <strong>no mueve inventario en Siesa</strong>.<br>
         Para activar producción: borrar la variable <code>MODO_ENSAYO</code> en Railway.
       </div>` : ''}`;
-  } catch (e) { el.innerHTML = '<div style="color:#ef4444;">Error</div>'; }
+  } catch (e) { el.innerHTML = '<div style="color:var(--err-tx);">Error</div>'; }
 }
 
 /** Trigger catalog sync + initial stock load from Siesa, polling for progress. */
@@ -1971,20 +1971,20 @@ async function setupInicial() {
 
   btn.disabled = true;
   btn.textContent = '↻ Procesando...';
-  res.style.color = '#93c5fd';
+  res.style.color = 'var(--info-tx)';
   res.textContent = 'Iniciando setup...';
 
   try {
     const d = await post('/api/siesa/setup-inicial', {});
     if (d.simulado) {
-      res.style.color = '#fb923c';
+      res.style.color = 'var(--orange)';
       res.textContent = d.mensaje || 'Modo simulación';
       btn.disabled = false;
       btn.textContent = '↻ Sincronizar catálogo + cargar stock inicial';
       return;
     }
     if (d.en_curso && !d.iniciado) {
-      res.style.color = '#fb923c';
+      res.style.color = 'var(--orange)';
       res.textContent = '⏳ Ya en proceso — monitoreando fase: ' + (d.fase || '...');
     }
 
@@ -1997,12 +1997,12 @@ async function setupInicial() {
           btn.disabled = false;
           btn.textContent = '↻ Sincronizar catálogo + cargar stock inicial';
           if (e.ultimo_error) {
-            res.style.color = '#ef4444';
+            res.style.color = 'var(--err-tx)';
             res.textContent = 'Error en fase ' + e.fase + ': ' + e.ultimo_error;
           } else {
             const cat = e.resultado_catalogo;
             const stk = e.resultado_stock;
-            res.style.color = '#4ade80';
+            res.style.color = 'var(--ok-tx)';
             const partesCat = cat ? `catálogo: ${cat.creados} creados · ${cat.actualizados} actualizados` : '';
             const partesStk = stk ? `stock: ${stk.cargados} nuevos · ${stk.actualizados} actualizados` : '';
             res.textContent = '✓ ' + [partesCat, partesStk].filter(Boolean).join(' — ');
@@ -2011,7 +2011,7 @@ async function setupInicial() {
       } catch (err) { clearInterval(iv); }
     }, 5000);
   } catch (e) {
-    res.style.color = '#ef4444';
+    res.style.color = 'var(--err-tx)';
     res.textContent = 'Error: ' + (e.message || e);
     btn.disabled = false;
     btn.textContent = '↻ Sincronizar catálogo + cargar stock inicial';
@@ -2033,38 +2033,38 @@ async function setupInicial() {
 async function barcodesCobertura() {
   const el = document.getElementById('barras-cobertura');
   if (!el) return;
-  el.innerHTML = '<span style="color:#93c5fd;">Contando…</span>';
+  el.innerHTML = '<span style="color:var(--info-tx);">Contando…</span>';
   let d;
   try {
     d = await get('/api/productos/sin-codigo-barras?per_page=20');
   } catch (e) {
-    el.innerHTML = `<span style="color:#f87171;">No se pudo consultar: ${esc(e.message)}</span>`;
+    el.innerHTML = `<span style="color:var(--err-tx);">No se pudo consultar: ${esc(e.message)}</span>`;
     return;
   }
   const c = d.cobertura || {};
   if (!c.hay_catalogo) {
-    el.innerHTML = '<span style="color:#fbbf24;">No hay catálogo cargado — '
+    el.innerHTML = '<span style="color:var(--warn-tx);">No hay catálogo cargado — '
       + 'sincronizalo antes de mirar cobertura.</span>';
     return;
   }
   const muestra = (d.productos || [])
-    .map(p => `<div style="padding:2px 0;border-bottom:1px solid #1a1a1a;">
-      <code style="color:#93c5fd;">${esc(p.codigo)}</code> ${esc(p.nombre || '')}</div>`)
+    .map(p => `<div style="padding:2px 0;border-bottom:1px solid var(--brd);">
+      <code style="color:var(--info-tx);">${esc(p.codigo)}</code> ${esc(p.nombre || '')}</div>`)
     .join('');
   el.innerHTML = `
-    <div style="color:#e5e5e5;margin-bottom:6px;">
+    <div style="color:var(--tx);margin-bottom:6px;">
       <strong>${c.con_codigo_barras.toLocaleString('es-CO')}</strong> de
       <strong>${c.productos_activos.toLocaleString('es-CO')}</strong> se pueden escanear
       (${esc(c.porcentaje)}%).
     </div>
-    <div style="color:${c.sin_codigo_barras ? '#fbbf24' : '#4ade80'};margin-bottom:8px;">
+    <div style="color:${c.sin_codigo_barras ? 'var(--warn-tx)' : 'var(--ok-tx)'};margin-bottom:8px;">
       ${c.sin_codigo_barras.toLocaleString('es-CO')} hay que teclearlos a mano.
     </div>
-    ${d.total ? `<div style="max-height:180px;overflow:auto;font-size:11px;">${muestra}</div>
-    <div style="margin-top:6px;font-size:11px;color:#666;">
+    ${d.total ? `<div style="max-height:180px;overflow:auto;font-size:var(--fs-xs);">${muestra}</div>
+    <div style="margin-top:6px;font-size:var(--fs-xs);color:var(--tx3);">
       Mostrando ${esc(d.productos.length)} de ${d.total.toLocaleString('es-CO')} ·
       <a href="#" onclick="barcodesDescargarFaltantes();return false;"
-         style="color:#93c5fd;">bajar la lista completa (CSV)</a>
+         style="color:var(--info-tx);">bajar la lista completa (CSV)</a>
     </div>` : ''}`;
 }
 
@@ -2088,12 +2088,12 @@ async function barcodesDescargarFaltantes() {
 async function syncBarcodes() {
   const res = document.getElementById('sync-barras-resultado');
   if (!res) return;
-  res.style.color = '#93c5fd';
+  res.style.color = 'var(--info-tx)';
   res.textContent = '⏳ Iniciando sync... (corre en background, puede tardar varios minutos)';
   try {
     await post('/api/siesa/sync-barcodes', {});
     res.textContent = '✓ Sync iniciado. Consulta el estado en unos minutos con "Probar" (sin código) para ver cuántos barcodes se cargaron.';
-    res.style.color = '#4ade80';
+    res.style.color = 'var(--ok-tx)';
     // Polling estado cada 10s hasta que termine
     const intervalo = setInterval(async () => {
       try {
@@ -2104,13 +2104,13 @@ async function syncBarcodes() {
           res.textContent = `✓ Sync completado — campo: ${r.campo_detectado || '?'} · actualizados: ${r.actualizados} · sin producto local: ${r.sin_producto_local} · errores: ${r.errores}`;
         } else if (!e.en_curso && e.ultimo_error) {
           clearInterval(intervalo);
-          res.style.color = '#ef4444';
+          res.style.color = 'var(--err-tx)';
           res.textContent = `✗ Error: ${e.ultimo_error}`;
         }
       } catch (_) {}
     }, 10000);
   } catch (e) {
-    res.style.color = '#ef4444';
+    res.style.color = 'var(--err-tx)';
     res.textContent = 'Error al iniciar: ' + (e.message || e);
   }
 }
@@ -2121,21 +2121,21 @@ async function testBarras() {
   const res = document.getElementById('debug-barras-resultado');
   if (!res) return;
   const codigo = (inp ? inp.value.trim() : '');
-  res.style.color = '#93c5fd';
+  res.style.color = 'var(--info-tx)';
   res.textContent = '⏳ Consultando Siesa...';
   try {
     const url = '/api/siesa/debug-barras-raw' + (codigo ? '?codigo=' + encodeURIComponent(codigo) : '');
     const d = await get(url);
     const tabla = d?.detalle?.Table || d?.Table || [];
     if (!tabla.length) {
-      res.style.color = '#ef4444';
+      res.style.color = 'var(--err-tx)';
       res.textContent = '✗ Sin resultados — Siesa no tiene barcode "' + (codigo || '(sin filtro)') + '" en API_v2_ItemsBarras.\nEl escaneo por EAN físico no funcionará hasta configurar barcodes en Siesa.';
     } else {
-      res.style.color = '#4ade80';
+      res.style.color = 'var(--ok-tx)';
       res.textContent = '✓ Siesa SÍ tiene barcodes.\nPrimeros resultados:\n' + JSON.stringify(tabla.slice(0, 3), null, 2);
     }
   } catch (e) {
-    res.style.color = '#ef4444';
+    res.style.color = 'var(--err-tx)';
     res.textContent = 'Error: ' + (e.message || e) + '\n(puede que el conector API_v2_ItemsBarras no esté configurado en Connekta)';
   }
 }
@@ -2163,12 +2163,12 @@ async function verReconciliacion() {
   const res = document.getElementById('inv-resultado');
   const panel = document.getElementById('panel-reconciliacion');
   if (!res || !panel) return;
-  res.style.color = '#93c5fd';
+  res.style.color = 'var(--info-tx)';
   res.textContent = '⏳ Iniciando reconciliación... (~2 min)';
   panel.innerHTML = '';
   try {
     const d = await post('/api/siesa/reconciliacion', {});
-    if (d.simulado) { res.style.color = '#fb923c'; res.textContent = 'Modo simulación'; return; }
+    if (d.simulado) { res.style.color = 'var(--orange)'; res.textContent = 'Modo simulación'; return; }
     if (d.en_curso && !d.iniciado) { res.textContent = '⏳ Ya en proceso — monitoreando...'; }
     const iv = setInterval(async () => {
       try {
@@ -2176,12 +2176,12 @@ async function verReconciliacion() {
         if (!e.en_curso) {
           clearInterval(iv);
           if (e.ultimo_error) {
-            res.style.color = '#ef4444'; res.textContent = 'Error: ' + e.ultimo_error; return;
+            res.style.color = 'var(--err-tx)'; res.textContent = 'Error: ' + e.ultimo_error; return;
           }
           const r = e.ultimo_resultado;
-          if (!r) { res.style.color = '#fb923c'; res.textContent = 'Sin resultado — intenta de nuevo'; return; }
+          if (!r) { res.style.color = 'var(--orange)'; res.textContent = 'Sin resultado — intenta de nuevo'; return; }
           if (r.abortado) {
-            res.style.color = '#fb923c'; res.textContent = '⚠ ' + (r.motivo || 'Reconciliación abortada'); return;
+            res.style.color = 'var(--orange)'; res.textContent = '⚠ ' + (r.motivo || 'Reconciliación abortada'); return;
           }
           const nc = r.no_comparable || {};
           const noComp = r.total_no_comparable || 0;
@@ -2202,25 +2202,25 @@ async function verReconciliacion() {
           // Veredicto. Verde SOLO si no hay diferencias Y no hay nada que se
           // haya quedado sin comparar.
           if (r.sin_diferencias) {
-            res.style.color = '#4ade80';
+            res.style.color = 'var(--ok-tx)';
             res.textContent = `✓ Sin diferencias — cada bodega cuadra con la suya `
               + `(${r.skus_cuadran}/${r.skus_comparados} SKU en ${comparadas} bodega(s))`
               + (noCompPrev ? ` · ${noCompPrev} SKU incomparables previstos` : '');
           } else if (r.total_discrepancias === 0) {
-            res.style.color = '#fb923c';
+            res.style.color = 'var(--orange)';
             res.textContent = `⚠ Cuadra lo comparable (${cuadre} de ${r.skus_comparados} SKU), `
               + `pero ${noCompImprev} SKU no se pueden comparar`;
           } else {
-            res.style.color = '#facc15';
+            res.style.color = 'var(--warn-tx)';
             res.textContent = `⚠ ${r.total_discrepancias} diferencias · cuadre ${cuadre} `
               + `de ${r.skus_comparados} SKU comparados`
               + (noCompImprev ? ` · ${noCompImprev} SKU sin comparar` : '');
           }
 
           const filaNoComparable = (etiqueta, detalle, color) => `
-            <div class="tabla-fila" style="font-size:12px;">
-              <div><div style="font-weight:600;color:${color || '#fb923c'};">${etiqueta}</div>
-                   <div style="color:#555;">${detalle}</div></div>
+            <div class="tabla-fila" style="font-size:var(--fs-xs);">
+              <div><div style="font-weight:600;color:${color || 'var(--orange)'};">${etiqueta}</div>
+                   <div style="color:var(--tx3);">${detalle}</div></div>
             </div>`;
           const filaBodegaSinAlmacen = (b, color) => filaNoComparable(
             `${b.bodega}: bodega de Siesa sin almacén en el WMS`,
@@ -2232,7 +2232,7 @@ async function verReconciliacion() {
 
           // Lo IMPREVISTO: naranja, y es lo que dejó el veredicto en ámbar.
           const bloqueNoComparable = noCompImprev ? `
-            <div style="font-size:12px;color:#fb923c;margin:12px 0 6px;">
+            <div style="font-size:var(--fs-xs);color:var(--orange);margin:12px 0 6px;">
               No se puede comparar y nadie lo previó — ${noCompImprev} SKU (no es «cuadra»):</div>
             ${(nc.almacenes_sin_bodega_siesa || []).map(a => filaNoComparable(
                 `Almacén ${esc(a.almacen)} sin bodega Siesa asignada`,
@@ -2249,49 +2249,49 @@ async function verReconciliacion() {
           // esconder — una exención que no se ve en la pantalla es una
           // exención silenciosa, que es de donde salen las listas que crecen.
           const bloquePrevisto = previstas.length ? `
-            <div style="font-size:12px;color:#94a3b8;margin:12px 0 6px;">
+            <div style="font-size:var(--fs-xs);color:var(--tx2);margin:12px 0 6px;">
               Incomparable previsto y declarado — ${noCompPrev} SKU
               (no descalifica el veredicto):</div>
             ${previstas.map(b => filaBodegaSinAlmacen(b, '#94a3b8')).join('')}` : '';
 
           panel.innerHTML = `
-            <div style="font-size:12px;color:#555;margin-bottom:6px;">
+            <div style="font-size:var(--fs-xs);color:var(--tx3);margin-bottom:6px;">
               Cuadre por bodega (SKU que coinciden / SKU comparados):</div>
             ${porBodega.map(b => `
-              <div class="tabla-fila" style="font-size:12px;">
+              <div class="tabla-fila" style="font-size:var(--fs-xs);">
                 <div><div style="font-weight:600;">${esc(b.bodega)}</div>
-                     <div style="color:#555;">${b.comparable ? (b.discrepancias + ' diferencia(s)') : b.motivo}</div></div>
+                     <div style="color:var(--tx3);">${b.comparable ? (b.discrepancias + ' diferencia(s)') : b.motivo}</div></div>
                 <div style="text-align:right;">
-                  <span style="color:${b.comparable ? (b.cuadre_pct === 100 ? '#4ade80' : '#facc15') : (b.esperado ? '#94a3b8' : '#fb923c')};font-weight:700;">
+                  <span style="color:${b.comparable ? (b.cuadre_pct === 100 ? 'var(--ok-tx)' : 'var(--warn-tx)') : (b.esperado ? 'var(--tx2)' : 'var(--orange)')};font-weight:700;">
                     ${b.comparable ? (b.cuadran + '/' + b.denominador + ' · ' + (b.cuadre_pct === null ? '—' : b.cuadre_pct + '%'))
                       : (b.esperado ? 'no comparable (previsto)' : 'no comparable')}</span>
-                  <div style="color:#555;font-size:11px;">WMS ${esc(b.unidades_wms)} und · Siesa ${esc(b.unidades_siesa)} und</div>
+                  <div style="color:var(--tx3);font-size:var(--fs-xs);">WMS ${esc(b.unidades_wms)} und · Siesa ${esc(b.unidades_siesa)} und</div>
                 </div>
               </div>`).join('')}
             ${bloqueNoComparable}
             ${bloquePrevisto}
-            <div style="font-size:11px;color:#555;margin:12px 0 6px;">
+            <div style="font-size:var(--fs-xs);color:var(--tx3);margin:12px 0 6px;">
               Cobertura de catálogo: ${esc(r.cobertura_pct)}% (${esc(r.total_productos_wms)} productos con stock en el WMS
               de ${esc(r.total_productos_siesa)} que Siesa reporta)</div>
             ${r.total_discrepancias ? `
-            <div style="font-size:12px;color:#555;margin:12px 0 6px;">Top diferencias (WMS vs Siesa):</div>
+            <div style="font-size:var(--fs-xs);color:var(--tx3);margin:12px 0 6px;">Top diferencias (WMS vs Siesa):</div>
             ${r.discrepancias.slice(0,20).map(x => `
-              <div class="tabla-fila" style="font-size:12px;">
+              <div class="tabla-fila" style="font-size:var(--fs-xs);">
                 <div>
                   <div style="font-weight:600;">${esc(x.nombre)}</div>
-                  <div style="color:#555;">${esc(x.codigo)} · ${esc(x.bodega || '—')}</div>
+                  <div style="color:var(--tx3);">${esc(x.codigo)} · ${esc(x.bodega || '—')}</div>
                 </div>
                 <div style="text-align:right;">
-                  <span style="color:${x.diferencia > 0 ? '#4ade80' : '#f87171'}">WMS: ${esc(x.stock_wms)}</span>
-                  <span style="color:#555;margin:0 4px;">·</span>
-                  <span style="color:#93c5fd;">Siesa: ${esc(x.stock_siesa)}</span>
-                  <div style="color:${x.diferencia > 0 ? '#4ade80':'#f87171'};font-size:11px;">${x.diferencia > 0 ? '+' : ''}${esc(x.diferencia)}</div>
+                  <span style="color:${x.diferencia > 0 ? 'var(--ok-tx)' : 'var(--err-tx)'}">WMS: ${esc(x.stock_wms)}</span>
+                  <span style="color:var(--tx3);margin:0 4px;">·</span>
+                  <span style="color:var(--info-tx);">Siesa: ${esc(x.stock_siesa)}</span>
+                  <div style="color:${x.diferencia > 0 ? 'var(--ok-tx)':'var(--err-tx)'};font-size:var(--fs-xs);">${x.diferencia > 0 ? '+' : ''}${esc(x.diferencia)}</div>
                 </div>
               </div>`).join('')}` : ''}`;
         } else { res.textContent = '⏳ Comparando WMS vs Siesa...'; }
-      } catch(err) { clearInterval(iv); res.style.color = '#ef4444'; res.textContent = 'Error polling'; }
+      } catch(err) { clearInterval(iv); res.style.color = 'var(--err-tx)'; res.textContent = 'Error polling'; }
     }, 8000);
-  } catch(e) { res.style.color = '#ef4444'; res.textContent = 'Error: ' + (e.message || e); }
+  } catch(e) { res.style.color = 'var(--err-tx)'; res.textContent = 'Error: ' + (e.message || e); }
 }
 
 
@@ -2485,7 +2485,7 @@ async function abrirCamara(lectorDivId = 'lector-qr', boxDivId = 'camara-box', o
           btnTorch.type = 'button';
           btnTorch.textContent = '🔦';
           btnTorch.title = 'Linterna';
-          btnTorch.style.cssText = 'position:absolute;top:8px;right:8px;z-index:5;width:44px;height:44px;border-radius:50%;border:none;background:#000000aa;color:#fff;font-size:18px;cursor:pointer;';
+          btnTorch.style.cssText = 'position:absolute;top:8px;right:8px;z-index:5;width:44px;height:44px;border-radius:50%;border:none;background:#000000aa;color:var(--tx);font-size:var(--fs-lg);cursor:pointer;';
           btnTorch.onclick = async () => {
             torchOn = !torchOn;
             try {
@@ -2633,7 +2633,7 @@ function set(id, val) {
  * @param {string} [tipo='info'] - Type: exito, error, advertencia, or info.
  */
 function alerta(msg, tipo = 'info') {
-  const c = { exito: '#16a34a', error: '#dc2626', advertencia: '#d97706', info: '#2563eb' }[tipo] || '#2563eb';
+  const c = { exito: '#15803d', error: '#dc2626', advertencia: '#d97706', info: '#2563eb' }[tipo] || '#2563eb';
   const d = document.createElement('div');
   d.style.cssText = `position:fixed;top:20px;left:50%;transform:translateX(-50%);background:${c};color:#fff;padding:14px 22px;border-radius:12px;font-size:17px;font-weight:600;z-index:9999;max-width:90%;text-align:center;`;
   d.textContent = msg;
@@ -2994,7 +2994,7 @@ async function cargarUsuarios() {
     const tabsEl = document.getElementById('usuarios-tabs');
     if (!usuarios.length) {
       if (tabsEl) tabsEl.innerHTML = '';
-      el.innerHTML = '<div style="color:#555;text-align:center;padding:40px;">Sin usuarios</div>';
+      el.innerHTML = '<div style="color:var(--tx3);text-align:center;padding:40px;">Sin usuarios</div>';
       return;
     }
     const grupos = {};
@@ -3020,18 +3020,18 @@ async function cargarUsuarios() {
         <div class="tabla-card" style="margin-bottom:10px;">
           <div style="display:flex;justify-content:space-between;align-items:flex-start;">
             <div>
-              <div style="font-size:15px;font-weight:700;">${esc(u.nombre)}</div>
-              <div style="font-size:12px;color:#555;margin-top:2px;">${esc(u.email)}</div>
+              <div style="font-size:var(--fs-md);font-weight:700;">${esc(u.nombre)}</div>
+              <div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:2px;">${esc(u.email)}</div>
               <div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap;">
-                <span style="font-size:11px;font-weight:600;color:${rolColor};background:#1a1a1a;padding:2px 8px;border-radius:8px;">${esc(u.rol)}</span>
-                ${u.puede_picar ? `<span style="font-size:11px;font-weight:600;color:#60a5fa;background:#1e3a5f;padding:2px 8px;border-radius:8px;">Picker</span>` : ''}
-                ${u.puede_empacar ? `<span style="font-size:11px;font-weight:600;color:#c084fc;background:#1a0a2e;padding:2px 8px;border-radius:8px;">Empacador</span>` : ''}
-                ${u.puede_abastecer ? `<span style="font-size:11px;font-weight:600;color:#fed7aa;background:#7c2d12;padding:2px 8px;border-radius:8px;">Abastecedor</span>` : ''}
-                ${u.puede_organizar_layout ? `<span style="font-size:11px;font-weight:600;color:#93c5fd;background:#1e3a5f;padding:2px 8px;border-radius:8px;">Layout</span>` : ''}
+                <span style="font-size:var(--fs-xs);font-weight:600;color:${rolColor};background:var(--bg-input);padding:2px 8px;border-radius:8px;">${esc(u.rol)}</span>
+                ${u.puede_picar ? `<span style="font-size:var(--fs-xs);font-weight:600;color:var(--info-tx);background:#1e3a5f;padding:2px 8px;border-radius:8px;">Picker</span>` : ''}
+                ${u.puede_empacar ? `<span style="font-size:var(--fs-xs);font-weight:600;color:var(--lila-tx);background:var(--lila-bg);padding:2px 8px;border-radius:8px;">Empacador</span>` : ''}
+                ${u.puede_abastecer ? `<span style="font-size:var(--fs-xs);font-weight:600;color:#fdba74;background:#7c2d12;padding:2px 8px;border-radius:8px;">Abastecedor</span>` : ''}
+                ${u.puede_organizar_layout ? `<span style="font-size:var(--fs-xs);font-weight:600;color:var(--info-tx);background:#1e3a5f;padding:2px 8px;border-radius:8px;">Layout</span>` : ''}
               </div>
             </div>
             <button onclick="editarUsuario(${esc(u.id)})"
-              style="background:#222;border:1px solid #333;color:#fff;padding:6px 12px;border-radius:8px;font-size:12px;cursor:pointer;flex-shrink:0;">
+              style="background:var(--bg-s2);border:1px solid var(--brd);color:var(--tx);padding:6px 12px;border-radius:8px;font-size:var(--fs-xs);cursor:pointer;flex-shrink:0;">
               Editar
             </button>
           </div>
@@ -3044,7 +3044,7 @@ async function cargarUsuarios() {
     }
     renderUsuariosTabsYLista();
   } catch (e) {
-    el.innerHTML = '<div style="color:#ef4444;text-align:center;padding:40px;">Error cargando usuarios</div>';
+    el.innerHTML = '<div style="color:var(--err-tx);text-align:center;padding:40px;">Error cargando usuarios</div>';
   }
 }
 
@@ -3059,7 +3059,7 @@ function renderUsuariosTabsYLista() {
   ).join('');
 
   const activo = USUARIOS_GRUPOS.find(g => g.clave === USUARIOS_TAB_ACTIVA);
-  el.innerHTML = activo ? activo.html : '<div style="color:#555;text-align:center;padding:40px;">Sin usuarios en esta bodega</div>';
+  el.innerHTML = activo ? activo.html : '<div style="color:var(--tx3);text-align:center;padding:40px;">Sin usuarios en esta bodega</div>';
 }
 
 /** @param {string} clave - User group key to switch to. */
@@ -3076,16 +3076,16 @@ function usuariosCambiarTab(clave) {
 function _formUsuario(u = {}) {
   const _TIENDA_ROLES = ['tienda', 'picker_traslado', 'packer_traslado', 'recepcionista'];
   return `
-    <div style="font-size:15px;font-weight:700;margin-bottom:16px;">${u.id ? 'Editar usuario' : 'Nuevo usuario'}</div>
+    <div style="font-size:var(--fs-md);font-weight:700;margin-bottom:16px;">${u.id ? 'Editar usuario' : 'Nuevo usuario'}</div>
     <div style="display:flex;flex-direction:column;gap:12px;">
       <input id="u-nombre" placeholder="Nombre completo" value="${esc(u.nombre || '')}"
-        style="padding:12px;background:#1a1a1a;border:1px solid #333;border-radius:8px;color:#fff;font-size:14px;">
+        style="padding:12px;background:var(--bg-input);border:1px solid var(--brd);border-radius:8px;color:var(--tx);font-size:var(--fs-sm);">
       <input id="u-email" placeholder="email@empresa.com" value="${esc(u.email || '')}" type="email" ${u.id ? 'readonly style="opacity:0.5;"' : ''}
-        style="padding:12px;background:#1a1a1a;border:1px solid #333;border-radius:8px;color:#fff;font-size:14px;">
+        style="padding:12px;background:var(--bg-input);border:1px solid var(--brd);border-radius:8px;color:var(--tx);font-size:var(--fs-sm);">
       <input id="u-password" placeholder="${u.id ? 'Nueva contraseña (dejar vacío para no cambiar)' : 'Contraseña'}" type="password"
-        style="padding:12px;background:#1a1a1a;border:1px solid #333;border-radius:8px;color:#fff;font-size:14px;">
+        style="padding:12px;background:var(--bg-input);border:1px solid var(--brd);border-radius:8px;color:var(--tx);font-size:var(--fs-sm);">
       <select id="u-rol" onchange="(function(v){var tr=['tienda','picker_traslado','packer_traslado','recepcionista'];document.getElementById('u-tienda-fields').style.display=tr.includes(v)?'block':'none';document.getElementById('u-conductor-fields').style.display=v==='conductor'?'block':'none';var canPicar=document.getElementById('u-puede-picar').checked;document.getElementById('u-conteo-wrapper').style.display=(canPicar&&!tr.includes(v))?'block':'none';})(this.value)"
-        style="padding:12px;background:#1a1a1a;border:1px solid #333;border-radius:8px;color:#fff;font-size:14px;">
+        style="padding:12px;background:var(--bg-input);border:1px solid var(--brd);border-radius:8px;color:var(--tx);font-size:var(--fs-sm);">
         <option value="operario" ${(u.rol||'operario')==='operario'?'selected':''}>Operario (pedidos)</option>
         <option value="recepcionista" ${u.rol==='recepcionista'?'selected':''}>Recepcionista</option>
         <option value="conductor" ${u.rol==='conductor'?'selected':''}>Conductor</option>
@@ -3113,18 +3113,18 @@ function _formUsuario(u = {}) {
         </optgroup>
       </select>
       <!-- Campos conductor (solo si rol=conductor) -->
-      <div id="u-conductor-fields" style="display:${u.rol==='conductor'?'block':'none'};background:#1a1a1a;border:1px solid #2d1b69;border-radius:8px;padding:14px;">
-        <div style="font-size:11px;font-weight:700;color:#a78bfa;text-transform:uppercase;letter-spacing:.05em;margin-bottom:10px;">Datos del conductor</div>
+      <div id="u-conductor-fields" style="display:${u.rol==='conductor'?'block':'none'};background:var(--bg-input);border:1px solid var(--info-brd);border-radius:8px;padding:14px;">
+        <div style="font-size:var(--fs-xs);font-weight:700;color:var(--lila-tx);text-transform:uppercase;letter-spacing:.05em;margin-bottom:10px;">Datos del conductor</div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
           <div>
-            <div style="font-size:11px;color:#888;margin-bottom:5px;">Cédula *</div>
+            <div style="font-size:var(--fs-xs);color:var(--tx2);margin-bottom:5px;">Cédula *</div>
             <input id="u-conductor-cedula" type="text" placeholder="12345678" value="${esc(u.conductor_cedula || '')}"
-              style="width:100%;padding:10px;background:#0d0d0d;border:1px solid #333;border-radius:8px;color:#fff;font-size:14px;box-sizing:border-box;">
+              style="width:100%;padding:10px;background:var(--bg-s);border:1px solid var(--brd);border-radius:8px;color:var(--tx);font-size:var(--fs-sm);box-sizing:border-box;">
           </div>
           <div>
-            <div style="font-size:11px;color:#888;margin-bottom:5px;">Teléfono</div>
+            <div style="font-size:var(--fs-xs);color:var(--tx2);margin-bottom:5px;">Teléfono</div>
             <input id="u-conductor-telefono" type="tel" placeholder="3001234567" value="${esc(u.conductor_telefono || '')}"
-              style="width:100%;padding:10px;background:#0d0d0d;border:1px solid #333;border-radius:8px;color:#fff;font-size:14px;box-sizing:border-box;">
+              style="width:100%;padding:10px;background:var(--bg-s);border:1px solid var(--brd);border-radius:8px;color:var(--tx);font-size:var(--fs-sm);box-sizing:border-box;">
           </div>
         </div>
       </div>
@@ -3132,7 +3132,7 @@ function _formUsuario(u = {}) {
       <div id="u-tienda-fields" style="display:${_TIENDA_ROLES.includes(u.rol)?'block':'none'};">
         <select id="u-bodega-siesa"
           onchange="(function(sel){const nombres={'NB1':'Bodega Principal','NC1':'Neiva Centro','NS1':'Neiva Sur Principal','FC1':'Florencia Centro','PC1':'Pitalito Centro','PT1':'Pitalito Terminal','FF1':'Feria Florencia','FN1':'Santa Lucía Plaza','FP1':'Feria Pitalito'};document.getElementById('u-nombre-pv').value=nombres[sel.value]||'';})(this)"
-          style="width:100%;padding:12px;background:#1a1a1a;border:1px solid #f59e0b;border-radius:8px;color:#fff;font-size:14px;box-sizing:border-box;">
+          style="width:100%;padding:12px;background:var(--bg-input);border:1px solid #f59e0b;border-radius:8px;color:var(--tx);font-size:var(--fs-sm);box-sizing:border-box;">
           <option value="">— Seleccionar bodega —</option>
           <option value="NB1" ${u.bodega_siesa_id==='NB1'?'selected':''}>NB1 — Bodega Principal</option>
           <option value="NC1" ${u.bodega_siesa_id==='NC1'?'selected':''}>NC1 — Neiva Centro</option>
@@ -3146,58 +3146,58 @@ function _formUsuario(u = {}) {
         </select>
         <input id="u-nombre-pv" type="hidden" value="${esc(u.nombre_punto_venta || '')}">
       </div>
-      <div style="background:#1a1a1a;border:1px solid #333;border-radius:8px;padding:14px;">
-        <div style="font-size:12px;font-weight:600;color:#aaa;margin-bottom:12px;text-transform:uppercase;letter-spacing:0.05em;">Capacidades operativas</div>
+      <div style="background:var(--bg-input);border:1px solid var(--brd);border-radius:8px;padding:14px;">
+        <div style="font-size:var(--fs-xs);font-weight:600;color:var(--tx2);margin-bottom:12px;text-transform:uppercase;letter-spacing:0.05em;">Capacidades operativas</div>
         <label style="display:flex;align-items:center;gap:12px;cursor:pointer;margin-bottom:10px;">
           <input type="checkbox" id="u-puede-picar" ${u.puede_picar!==false?'checked':''} style="width:20px;height:20px;accent-color:#60a5fa;" onchange="(function(cb){var tr=['tienda','picker_traslado','packer_traslado','recepcionista'];var v=document.getElementById('u-rol').value;document.getElementById('u-conteo-wrapper').style.display=(cb.checked&&!tr.includes(v))?'block':'none';})(this)">
           <div>
-            <div style="font-size:14px;font-weight:600;color:#60a5fa;">Picker</div>
-            <div style="font-size:11px;color:#555;">Puede recoger productos del almacén</div>
+            <div style="font-size:var(--fs-sm);font-weight:600;color:var(--info-tx);">Picker</div>
+            <div style="font-size:var(--fs-xs);color:var(--tx3);">Puede recoger productos del almacén</div>
           </div>
         </label>
         <label style="display:flex;align-items:center;gap:12px;cursor:pointer;margin-bottom:10px;">
           <input type="checkbox" id="u-puede-empacar" ${u.puede_empacar?'checked':''} style="width:20px;height:20px;accent-color:#c084fc;">
           <div>
-            <div style="font-size:14px;font-weight:600;color:#c084fc;">Empacador / Auditor</div>
-            <div style="font-size:11px;color:#555;">Verifica y cierra cajas en mesa de empaque</div>
+            <div style="font-size:var(--fs-sm);font-weight:600;color:var(--lila-tx);">Empacador / Auditor</div>
+            <div style="font-size:var(--fs-xs);color:var(--tx3);">Verifica y cierra cajas en mesa de empaque</div>
           </div>
         </label>
         <label style="display:flex;align-items:center;gap:12px;cursor:pointer;margin-bottom:10px;">
           <input type="checkbox" id="u-puede-abastecer" ${u.puede_abastecer?'checked':''} style="width:20px;height:20px;accent-color:#f97316;">
           <div>
-            <div style="font-size:14px;font-weight:600;color:#f97316;">Abastecedor</div>
-            <div style="font-size:11px;color:#555;">Puede mover pacas de zona RESERVA a zona PICKING</div>
+            <div style="font-size:var(--fs-sm);font-weight:600;color:var(--orange);">Abastecedor</div>
+            <div style="font-size:var(--fs-xs);color:var(--tx3);">Puede mover pacas de zona RESERVA a zona PICKING</div>
           </div>
         </label>
         <label style="display:flex;align-items:center;gap:12px;cursor:pointer;margin-bottom:10px;">
           <input type="checkbox" id="u-puede-organizar-layout" ${u.puede_organizar_layout?'checked':''} style="width:20px;height:20px;accent-color:#60a5fa;">
           <div>
-            <div style="font-size:14px;font-weight:600;color:#60a5fa;">Organiza Layout</div>
-            <div style="font-size:11px;color:#555;">Puede crear ubicaciones y registrar SKU en Layout (no editar/eliminar/reclasificar)</div>
+            <div style="font-size:var(--fs-sm);font-weight:600;color:var(--info-tx);">Organiza Layout</div>
+            <div style="font-size:var(--fs-xs);color:var(--tx3);">Puede crear ubicaciones y registrar SKU en Layout (no editar/eliminar/reclasificar)</div>
           </div>
         </label>
         <label style="display:flex;align-items:center;gap:12px;cursor:pointer;">
           <input type="checkbox" id="u-puede-camara" ${u.puede_usar_camara!==false?'checked':''} style="width:20px;height:20px;accent-color:#34d399;">
           <div>
-            <div style="font-size:14px;font-weight:600;color:#34d399;">Usar cámara para escanear</div>
-            <div style="font-size:11px;color:#555;">Muestra botón de cámara en picking y recepción</div>
+            <div style="font-size:var(--fs-sm);font-weight:600;color:var(--ok-tx);">Usar cámara para escanear</div>
+            <div style="font-size:var(--fs-xs);color:var(--tx3);">Muestra botón de cámara en picking y recepción</div>
           </div>
         </label>
-        <div id="u-conteo-wrapper" style="margin-top:14px;padding-top:14px;border-top:1px solid #222;display:${(u.puede_picar!==false && !_TIENDA_ROLES.includes(u.rol))?'block':'none'};">
-          <label style="font-size:12px;color:#888;display:block;margin-bottom:6px;">Conteos cíclicos por día (0 = sin límite)</label>
+        <div id="u-conteo-wrapper" style="margin-top:14px;padding-top:14px;border-top:1px solid var(--brd);display:${(u.puede_picar!==false && !_TIENDA_ROLES.includes(u.rol))?'block':'none'};">
+          <label style="font-size:var(--fs-xs);color:var(--tx2);display:block;margin-bottom:6px;">Conteos cíclicos por día (0 = sin límite)</label>
           <input id="u-capacidad-conteo" type="number" min="0" max="200" step="1"
             value="${u.capacidad_diaria_conteo ?? 15}"
-            style="width:100%;padding:10px;background:#0d0d0d;border:1px solid #333;color:#fff;border-radius:8px;font-size:14px;box-sizing:border-box;">
-          <div style="font-size:11px;color:#555;margin-top:4px;">Máximo de conteos intercalados que el sistema le asigna en un turno. Recomendado: 15–25.</div>
+            style="width:100%;padding:10px;background:var(--bg-s);border:1px solid var(--brd);color:var(--tx);border-radius:8px;font-size:var(--fs-sm);box-sizing:border-box;">
+          <div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:4px;">Máximo de conteos intercalados que el sistema le asigna en un turno. Recomendado: 15–25.</div>
         </div>
       </div>
       <div style="display:flex;gap:8px;">
         <button onclick="_guardarUsuario(${esc(u.id || 'null')})"
-          style="flex:1;padding:14px;background:#fff;color:#000;border:none;border-radius:10px;font-size:15px;font-weight:700;cursor:pointer;">
+          style="flex:1;padding:14px;background:#fff;color:#000;border:none;border-radius:10px;font-size:var(--fs-md);font-weight:700;cursor:pointer;">
           ${u.id ? 'Guardar cambios' : 'Crear usuario'}
         </button>
         <button onclick="ocultarFormUsuario()"
-          style="padding:14px 18px;background:#222;color:#fff;border:1px solid #333;border-radius:10px;font-size:14px;cursor:pointer;">
+          style="padding:14px 18px;background:var(--bg-s2);color:var(--tx);border:1px solid var(--brd);border-radius:10px;font-size:var(--fs-sm);cursor:pointer;">
           Cancelar
         </button>
       </div>
@@ -3489,7 +3489,7 @@ document.addEventListener('DOMContentLoaded', verificarModoSistema);
 async function siesaRecuperacionCargar() {
   const el = document.getElementById('siesa-recuperacion');
   if (!el) return;
-  el.innerHTML = '<div style="padding:14px;color:#666;">Consultando…</div>';
+  el.innerHTML = '<div style="padding:14px;color:var(--tx3);">Consultando…</div>';
 
   // Se piden en paralelo y CADA UNO declara si falló. Un panel de recuperación
   // que se cae entero porque una consulta falla es inútil justo cuando importa.
@@ -3500,7 +3500,7 @@ async function siesaRecuperacionCargar() {
 
   const bloque = (titulo, datos, render) => datos._error
     ? `<div class="tabla-fila"><span class="tabla-nombre">${titulo}</span>
-         <span style="color:var(--red);font-size:12px;">no se pudo consultar: ${esc(datos._error)}</span></div>`
+         <span style="color:var(--red);font-size:var(--fs-xs);">no se pudo consultar: ${esc(datos._error)}</span></div>`
     : render(datos);
 
   // Los cuatro semáforos de sincronización. `/api/siesa/monitor` los calculaba
@@ -3520,9 +3520,9 @@ async function siesaRecuperacionCargar() {
       : (m.estado === 'GRIS' ? 'nunca corrió en este proceso' : (d.ultimo_inicio || ''));
     return `
       <div class="tabla-fila">
-        <span class="tabla-nombre" style="font-size:12px;">${nombre}<br>
-          <span style="color:var(--tx3);font-size:11px;">${nota}</span></span>
-        <span style="color:${esc(COLOR_SEMAFORO[m.estado] || 'var(--tx3)')};font-weight:700;font-size:12px;">
+        <span class="tabla-nombre" style="font-size:var(--fs-xs);">${nombre}<br>
+          <span style="color:var(--tx3);font-size:var(--fs-xs);">${nota}</span></span>
+        <span style="color:${esc(COLOR_SEMAFORO[m.estado] || 'var(--tx3)')};font-weight:700;font-size:var(--fs-xs);">
           ${esc(m.estado)}</span>
       </div>`;
   };
@@ -3530,7 +3530,7 @@ async function siesaRecuperacionCargar() {
   el.innerHTML = `
     <div class="tabla-card">
       <div class="tabla-titulo">Recuperación Siesa</div>
-      <p style="font-size:12px;color:var(--tx2);margin:0 0 10px;">
+      <p style="font-size:var(--fs-xs);color:var(--tx2);margin:0 0 10px;">
         Herramientas para cuando algo no llegó a Siesa. Todas dejan registro con
         tu nombre.
       </p>
@@ -3546,15 +3546,15 @@ async function siesaRecuperacionCargar() {
         if (!js.length) return '<div class="tabla-fila"><span class="tabla-nombre">Sin jobs fallidos</span></div>';
         return js.slice(0, 10).map(j => `
           <div class="tabla-fila" style="align-items:flex-start;">
-            <span class="tabla-nombre" style="font-size:12px;">
+            <span class="tabla-nombre" style="font-size:var(--fs-xs);">
               <b>${esc(j.tipo || '?')}</b> #${esc(j.id)}<br>
-              <span style="color:var(--tx3);font-size:11px;">${esc((j.ultimo_error || '').slice(0, 90))}</span>
+              <span style="color:var(--tx3);font-size:var(--fs-xs);">${esc((j.ultimo_error || '').slice(0, 90))}</span>
             </span>
           </div>`).join('');
       })}
       <button class="btn-flota" style="width:100%;margin-top:10px;"
               onclick="siesaDispararDLQ()">Procesar la cola ahora</button>
-      <p style="font-size:11px;color:var(--tx3);margin:6px 0 0;">
+      <p style="font-size:var(--fs-xs);color:var(--tx3);margin:6px 0 0;">
         El cron la procesa cada 5 minutos. Esto la adelanta — no reintenta lo que
         ya agotó sus 3 intentos.
       </p>
@@ -3562,7 +3562,7 @@ async function siesaRecuperacionCargar() {
 
     <div class="tabla-card" style="margin-top:12px;">
       <div class="tabla-titulo">Resolver una tarea de packing</div>
-      <p style="font-size:12px;color:var(--tx2);margin:0 0 10px;">
+      <p style="font-size:var(--fs-xs);color:var(--tx2);margin:0 0 10px;">
         Cuando el WMS cree que no se despachó y Siesa ya lo procesó, o al revés.
       </p>
       <input id="rec-packing-id" type="number" inputmode="numeric"
@@ -3580,7 +3580,7 @@ async function siesaRecuperacionCargar() {
         <button class="btn-flota" style="flex:1" onclick="siesaVerRemision()">
           Ver remisión</button>
       </div>
-      <p style="font-size:11px;color:var(--tx3);margin:6px 0 0;">
+      <p style="font-size:var(--fs-xs);color:var(--tx3);margin:6px 0 0;">
         Los tres solo <b>leen</b>. <b>Reconciliar</b> pregunta a Siesa si la
         factura ya existe y, si existe, marca la tarea como despachada — no crea
         nada. <b>¿Por qué falló?</b> trae los compromisos del pedido (paso
@@ -3589,9 +3589,9 @@ async function siesaRecuperacionCargar() {
       <div id="rec-resultado" style="margin-top:10px;"></div>
 
       <hr style="border:0;border-top:1px solid var(--brd);margin:14px 0 10px;">
-      <div style="font-size:12px;font-weight:700;color:var(--red);margin-bottom:4px;">
+      <div style="font-size:var(--fs-xs);font-weight:700;color:var(--red);margin-bottom:4px;">
         Crean documentos en Siesa</div>
-      <p style="font-size:11px;color:var(--tx3);margin:0 0 8px;">
+      <p style="font-size:var(--fs-xs);color:var(--tx3);margin:0 0 8px;">
         Usar solo después de mirar arriba. Los dos pueden dejar una factura
         <b>duplicada</b> si el documento ya existía — y una factura duplicada se
         anula con una nota crédito, a mano, en contabilidad.
@@ -3604,7 +3604,7 @@ async function siesaRecuperacionCargar() {
         <button class="btn-flota" style="flex:1;min-width:130px;border-color:var(--red);color:var(--red);"
                 onclick="siesaFacturarRMManual()">Facturar esa RM</button>
       </div>
-      <p style="font-size:11px;color:var(--tx3);margin:6px 0 0;">
+      <p style="font-size:var(--fs-xs);color:var(--tx3);margin:6px 0 0;">
         Para cuando la remisión SÍ existe en Siesa y el WMS no guardó su número:
         se busca en Siesa y se escribe acá. Crea la factura (142943) sobre esa RM.
       </p>
@@ -3612,13 +3612,13 @@ async function siesaRecuperacionCargar() {
 
     <div class="tabla-card" style="margin-top:12px;">
       <div class="tabla-titulo">Traslados trabados</div>
-      <p style="font-size:12px;color:var(--tx2);margin:0 0 10px;">
+      <p style="font-size:var(--fs-xs);color:var(--tx2);margin:0 0 10px;">
         Un traslado que quedó a medias entre bodegas. Sin esto había que
         arreglarlo por consola.
       </p>
       <button class="btn-flota" style="width:100%;" onclick="siesaRecuperarPackingTraslados()">
         Recrear los packings que faltan</button>
-      <p style="font-size:11px;color:var(--tx3);margin:6px 0 0;">
+      <p style="font-size:var(--fs-xs);color:var(--tx3);margin:6px 0 0;">
         Crea la tarea de packing de las solicitudes que quedaron en EN_PICKING o
         EN_PACKING sin ella. No toca Siesa: solo repara el WMS.
       </p>
@@ -3629,7 +3629,7 @@ async function siesaRecuperacionCargar() {
         <button class="btn-flota" style="flex:1;min-width:150px;border-color:var(--red);color:var(--red);"
                 onclick="siesaReintentarTraslado()">Requisición formal (174646)</button>
       </div>
-      <p style="font-size:11px;color:var(--tx3);margin:6px 0 0;">
+      <p style="font-size:var(--fs-xs);color:var(--tx3);margin:6px 0 0;">
         <b>174646 NO es parte del flujo normal</b> — el traslado real usa 173076
         al despachar y 173079 al recibir. Esto es para cuando el consultor de
         Siesa pide una requisición previa. Solo en EN_PICKING o APROBADA.
@@ -3649,17 +3649,17 @@ async function siesaVerCompromisos() {
   const id = parseInt(document.getElementById('rec-packing-id')?.value, 10);
   const out = document.getElementById('rec-resultado');
   if (!Number.isFinite(id)) { alerta('Poné el ID de la tarea', 'error'); return; }
-  out.innerHTML = '<p style="color:var(--tx3);font-size:12px;">Preguntando a Siesa…</p>';
+  out.innerHTML = '<p style="color:var(--tx3);font-size:var(--fs-xs);">Preguntando a Siesa…</p>';
   try {
     const r = await get(`/api/despacho_parcial/${id}/compromisos`);
     const filas = r.compromisos || [];
     if (!filas.length) {
-      out.innerHTML = `<p style="color:var(--yellow);font-size:12px;">
+      out.innerHTML = `<p style="color:var(--yellow);font-size:var(--fs-xs);">
         Siesa no reporta compromisos para el pedido ${r.pedido || id}. Si el
         pedido existe, es que el paso 244328 nunca corrió.</p>`;
       return;
     }
-    out.innerHTML = `<div style="font-size:12px;">
+    out.innerHTML = `<div style="font-size:var(--fs-xs);">
       <p style="margin:0 0 6px;color:var(--tx2);">Pedido <b>${esc(r.pedido || '')}</b> —
         ${esc(filas.length)} línea(s) comprometida(s) en Siesa:</p>
       ${filas.map(f => `<div class="tabla-fila">
@@ -3667,7 +3667,7 @@ async function siesaVerCompromisos() {
           <span>${f.f400_cant_comprometida_1 ?? '—'}</span>
         </div>`).join('')}</div>`;
   } catch (e) {
-    out.innerHTML = `<p style="color:var(--red);font-size:12px;">${esc(e.message)}</p>`;
+    out.innerHTML = `<p style="color:var(--red);font-size:var(--fs-xs);">${esc(e.message)}</p>`;
   }
 }
 
@@ -3692,14 +3692,14 @@ Si esa remisión ya estaba facturada, queda una ` +
 
 ` +
                `¿Verificaste en Siesa que no tiene factura?`)) return;
-  out.innerHTML = '<p style="color:var(--tx3);font-size:12px;">Facturando…</p>';
+  out.innerHTML = '<p style="color:var(--tx3);font-size:var(--fs-xs);">Facturando…</p>';
   try {
     const r = await post(`/api/despacho_parcial/${id}/facturar-rm-manual`,
                          { tipo_rm: tipo, consec_rm: consec });
-    out.innerHTML = `<p style="color:var(--green);font-size:12px;">
+    out.innerHTML = `<p style="color:var(--green);font-size:var(--fs-xs);">
       ${esc(r.mensaje || 'Factura creada')} ${r.consec_fe ? '· FE ' + r.consec_fe : ''}</p>`;
   } catch (e) {
-    out.innerHTML = `<p style="color:var(--red);font-size:12px;">${esc(e.message)}</p>`;
+    out.innerHTML = `<p style="color:var(--red);font-size:var(--fs-xs);">${esc(e.message)}</p>`;
   }
 }
 
@@ -3707,14 +3707,14 @@ Si esa remisión ya estaba facturada, queda una ` +
 /** Repara traslados sin tarea de packing. Solo toca el WMS, no Siesa. */
 async function siesaRecuperarPackingTraslados() {
   const out = document.getElementById('rec-traslado-resultado');
-  out.innerHTML = '<p style="color:var(--tx3);font-size:12px;">Buscando traslados sin packing…</p>';
+  out.innerHTML = '<p style="color:var(--tx3);font-size:var(--fs-xs);">Buscando traslados sin packing…</p>';
   try {
     const r = await post('/api/traslados/recuperar-packing', {});
     const n = r.creados ?? r.recuperados ?? 0;
-    out.innerHTML = `<p style="color:${n ? 'var(--green)' : 'var(--tx2)'};font-size:12px;">
+    out.innerHTML = `<p style="color:${n ? 'var(--green)' : 'var(--tx2)'};font-size:var(--fs-xs);">
       ${n ? `${n} packing(s) recreado(s)` : 'No había traslados sin packing'}</p>`;
   } catch (e) {
-    out.innerHTML = `<p style="color:var(--red);font-size:12px;">${esc(e.message)}</p>`;
+    out.innerHTML = `<p style="color:var(--red);font-size:var(--fs-xs);">${esc(e.message)}</p>`;
   }
 }
 
@@ -3728,13 +3728,13 @@ async function siesaReintentarTraslado() {
     `Esto NO es parte del flujo normal de traslados. Solo hacelo si el consultor de Siesa lo pidió.`,
     { titulo: '¿Continuar?', peligro: true }
   )) return;
-  out.innerHTML = '<p style="color:var(--tx3);font-size:12px;">Enviando…</p>';
+  out.innerHTML = '<p style="color:var(--tx3);font-size:var(--fs-xs);">Enviando…</p>';
   try {
     const r = await post(`/api/traslados/${id}/reintentar-siesa`, {});
-    out.innerHTML = `<p style="color:var(--green);font-size:12px;">
+    out.innerHTML = `<p style="color:var(--green);font-size:var(--fs-xs);">
       ${esc(r.mensaje || 'Requisición creada')} ${r.consecutivo ? '· ' + r.consecutivo : ''}</p>`;
   } catch (e) {
-    out.innerHTML = `<p style="color:var(--red);font-size:12px;">${esc(e.message)}</p>`;
+    out.innerHTML = `<p style="color:var(--red);font-size:var(--fs-xs);">${esc(e.message)}</p>`;
   }
 }
 
@@ -3754,13 +3754,13 @@ async function siesaReconciliarPacking() {
   const id = parseInt(document.getElementById('rec-packing-id')?.value, 10);
   const out = document.getElementById('rec-resultado');
   if (!Number.isFinite(id)) { alerta('Poné el ID de la tarea', 'error'); return; }
-  out.innerHTML = '<p style="color:var(--tx3);font-size:12px;">Preguntando a Siesa…</p>';
+  out.innerHTML = '<p style="color:var(--tx3);font-size:var(--fs-xs);">Preguntando a Siesa…</p>';
   try {
     const r = await post(`/api/packing/${id}/reconciliar`, {});
-    out.innerHTML = `<p style="color:var(--green);font-size:12px;">
+    out.innerHTML = `<p style="color:var(--green);font-size:var(--fs-xs);">
       ${esc(r.mensaje || 'Reconciliada')}</p>`;
   } catch (e) {
-    out.innerHTML = `<p style="color:var(--red);font-size:12px;">${esc(e.message)}</p>`;
+    out.innerHTML = `<p style="color:var(--red);font-size:var(--fs-xs);">${esc(e.message)}</p>`;
   }
 }
 
@@ -3771,10 +3771,10 @@ async function siesaVerRemision() {
   if (!Number.isFinite(id)) { alerta('Poné el ID de la tarea', 'error'); return; }
   try {
     const r = await get(`/api/packing/${id}/remision`);
-    out.innerHTML = `<pre style="font-size:11px;white-space:pre-wrap;color:var(--tx2);
+    out.innerHTML = `<pre style="font-size:var(--fs-xs);white-space:pre-wrap;color:var(--tx2);
       max-height:220px;overflow:auto;">${JSON.stringify(r, null, 2)}</pre>`;
   } catch (e) {
-    out.innerHTML = `<p style="color:var(--red);font-size:12px;">${esc(e.message)}</p>`;
+    out.innerHTML = `<p style="color:var(--red);font-size:var(--fs-xs);">${esc(e.message)}</p>`;
   }
 }
 
@@ -3800,7 +3800,7 @@ async function siesaVerRemision() {
 async function mapeoUnidadesCargar() {
   const el = document.getElementById('mapeo-unidades');
   if (!el) return;
-  el.innerHTML = '<div style="padding:14px;color:#666;">Cargando…</div>';
+  el.innerHTML = '<div style="padding:14px;color:var(--tx3);">Cargando…</div>';
 
   const [mapeos, diag] = await Promise.all([
     get('/api/config/mapeo-unidades').catch(e => ({ _error: e.message })),
@@ -3821,16 +3821,16 @@ async function mapeoUnidadesCargar() {
   const fila = (m) => {
     const vacio = !(m.unidad_negocio_id || '').trim();
     return `<div class="tabla-fila" style="align-items:center;gap:8px;">
-      <span class="tabla-nombre" style="flex:1;font-size:13px;">
+      <span class="tabla-nombre" style="flex:1;font-size:var(--fs-sm);">
         <b>${esc(m.tipo_inv_siesa)}</b>
-        <span style="display:block;font-size:11px;color:var(--tx3);">${esc(m.descripcion || '')}</span>
+        <span style="display:block;font-size:var(--fs-xs);color:var(--tx3);">${esc(m.descripcion || '')}</span>
       </span>
       <input id="mu-${esc(m.id)}" value="${esc(m.unidad_negocio_id || '')}"
              placeholder="unidad" maxlength="10"
-             style="width:90px;padding:5px;border-radius:6px;font-size:13px;
+             style="width:90px;padding:5px;border-radius:6px;font-size:var(--fs-sm);
                     border:1px solid ${vacio ? 'var(--red)' : 'var(--brd)'};
                     background:var(--bg);color:var(--tx);">
-      <button class="btn-flota" style="padding:4px 10px;font-size:12px;"
+      <button class="btn-flota" style="padding:4px 10px;font-size:var(--fs-xs);"
               onclick="mapeoUnidadesGuardar(${esc(m.id)})">Guardar</button>
     </div>`;
   };
@@ -3840,7 +3840,7 @@ async function mapeoUnidadesCargar() {
   el.innerHTML = `
     <div class="tabla-card">
       <div class="tabla-titulo">Unidades de negocio (Siesa)</div>
-      <p style="font-size:12px;color:var(--tx2);margin:0 0 10px;">
+      <p style="font-size:var(--fs-xs);color:var(--tx2);margin:0 0 10px;">
         Cada tipo de inventario de Siesa necesita su unidad de negocio.
         <b>Siesa no la hereda de la bodega</b>, así que sin este mapeo un
         traslado no se puede aprobar.
@@ -3849,28 +3849,28 @@ async function mapeoUnidadesCargar() {
       ${pendientes.length ? `
         <div style="border-left:3px solid var(--red);padding:8px 10px;margin-bottom:10px;
                     background:var(--bg-s);border-radius:6px;">
-          <b style="color:var(--red);font-size:13px;">
+          <b style="color:var(--red);font-size:var(--fs-sm);">
             ${esc(pendientes.length)} tipo(s) sin asignar</b>
-          <p style="font-size:11px;color:var(--tx2);margin:4px 0 0;">
+          <p style="font-size:var(--fs-xs);color:var(--tx2);margin:4px 0 0;">
             El sync los descubrió solo. Mientras estén vacíos, cualquier traslado
             que incluya uno de sus productos falla al aprobar.
           </p>
         </div>
         ${pendientes.map(fila).join('')}
         <hr style="border-color:var(--brd);margin:12px 0;">
-      ` : `<p style="font-size:12px;color:var(--green);margin-bottom:10px;">
+      ` : `<p style="font-size:var(--fs-xs);color:var(--green);margin-bottom:10px;">
              ✓ Todos los tipos tienen unidad asignada</p>`}
 
       ${completos.map(fila).join('')}
 
       ${bloqueados === null
-        ? `<p style="font-size:11px;color:var(--tx3);margin-top:10px;">
+        ? `<p style="font-size:var(--fs-xs);color:var(--tx3);margin-top:10px;">
              No se pudo consultar cuántos productos están sin unidad: ${esc(diag._error)}</p>`
         : bloqueados > 0
-          ? `<p style="font-size:12px;color:var(--yellow);margin-top:10px;">
+          ? `<p style="font-size:var(--fs-xs);color:var(--yellow);margin-top:10px;">
                <b>${bloqueados} producto(s) activos sin unidad de negocio.</b>
                No se pueden trasladar hasta que su tipo tenga mapeo.</p>`
-          : `<p style="font-size:12px;color:var(--green);margin-top:10px;">
+          : `<p style="font-size:var(--fs-xs);color:var(--green);margin-top:10px;">
                Ningún producto activo quedó sin unidad.</p>`}
     </div>`;
 }
@@ -3929,27 +3929,27 @@ async function syncEstadosCargar() {
   el.innerHTML = `
     <div class="tabla-card">
       <div class="tabla-titulo">Sincronizadores</div>
-      <p style="font-size:12px;color:var(--tx2);margin:0 0 10px;">
+      <p style="font-size:var(--fs-xs);color:var(--tx2);margin:0 0 10px;">
         Cuándo corrió cada uno y cómo le fue. <b>Un sincronizador que deja de
         correr no avisa</b> — los datos simplemente envejecen.
       </p>
       ${datos.map(x => {
         if (x._error) return `<div class="tabla-fila">
-          <span class="tabla-nombre" style="font-size:12.5px;">${esc(x.nombre)}</span>
-          <span style="font-size:11px;color:var(--red);">no se pudo consultar</span></div>`;
+          <span class="tabla-nombre" style="font-size:var(--fs-sm);">${esc(x.nombre)}</span>
+          <span style="font-size:var(--fs-xs);color:var(--red);">no se pudo consultar</span></div>`;
         const d = x.d || {};
         const err = d.ultimo_error;
         const color = d.en_curso ? 'var(--yellow)' : err ? 'var(--red)' : 'var(--green)';
         const texto = d.en_curso ? 'corriendo…' : err ? 'falló' : 'ok';
         return `<div class="tabla-fila" style="align-items:flex-start;">
-          <span class="tabla-nombre" style="font-size:12.5px;">
+          <span class="tabla-nombre" style="font-size:var(--fs-sm);">
             ${x.nombre}
-            <span style="display:block;font-size:10.5px;color:var(--tx3);">${x.cron}</span>
-            ${err ? `<span style="display:block;font-size:10.5px;color:var(--red);">${String(err).slice(0,110)}</span>` : ''}
+            <span style="display:block;font-size:var(--fs-xs);color:var(--tx3);">${x.cron}</span>
+            ${err ? `<span style="display:block;font-size:var(--fs-xs);color:var(--red);">${String(err).slice(0,110)}</span>` : ''}
           </span>
           <span style="text-align:right;">
-            <span style="font-size:11px;color:${color};font-weight:700;">${texto}</span>
-            <span style="display:block;font-size:10.5px;color:var(--tx3);">
+            <span style="font-size:var(--fs-xs);color:${color};font-weight:700;">${texto}</span>
+            <span style="display:block;font-size:var(--fs-xs);color:var(--tx3);">
               ${d.ultimo_inicio ? horaColombia(d.ultimo_inicio) : 'sin registro'}</span>
           </span>
         </div>`;
@@ -3993,24 +3993,24 @@ async function cargarAuditoriaFlujo() {
 
     const filas = (d.resultados || []).map(r => {
       const roto = r.total > 0 || r.error;
-      const color = roto ? (sev[r.severidad] || '#6b7280') : '#16a34a';
+      const color = roto ? (sev[r.severidad] || '#6b7280') : '#15803d';
       const detalle = r.error
-        ? `<div style="color:#f87171;font-size:11px;">no se pudo evaluar: ${esc(r.error)}</div>`
+        ? `<div style="color:var(--err-tx);font-size:var(--fs-xs);">no se pudo evaluar: ${esc(r.error)}</div>`
         : (r.hallazgos || []).slice(0, 5).map(h =>
-            `<div style="font-size:11px;color:var(--tx3);padding-left:8px;">
+            `<div style="font-size:var(--fs-xs);color:var(--tx3);padding-left:8px;">
                · <b>${esc(h.referencia)}</b> — ${esc(h.detalle)}</div>`).join('');
       return `
         <div style="padding:8px 0;border-bottom:1px solid var(--brd);">
           <div style="display:flex;align-items:center;gap:8px;">
             <span style="width:8px;height:8px;border-radius:50%;background:${color};flex:none;"></span>
-            <b style="font-size:12px;">${esc(r.codigo)}</b>
-            <span style="font-size:11px;color:var(--tx3);">${esc(r.frontera)}</span>
-            <span style="margin-left:auto;font-size:11px;color:${color};font-weight:700;">
+            <b style="font-size:var(--fs-xs);">${esc(r.codigo)}</b>
+            <span style="font-size:var(--fs-xs);color:var(--tx3);">${esc(r.frontera)}</span>
+            <span style="margin-left:auto;font-size:var(--fs-xs);color:${color};font-weight:700;">
               ${r.error ? 'ERROR' : (r.total || 0)}</span>
           </div>
-          ${roto ? `<div style="font-size:11px;color:var(--tx2);margin:4px 0 2px 16px;">${esc(r.consecuencia)}</div>` : ''}
+          ${roto ? `<div style="font-size:var(--fs-xs);color:var(--tx2);margin:4px 0 2px 16px;">${esc(r.consecuencia)}</div>` : ''}
           ${detalle}
-          ${r.truncado ? '<div style="font-size:10px;color:var(--tx3);padding-left:8px;">(mostrando los primeros 100)</div>' : ''}
+          ${r.truncado ? '<div style="font-size:var(--fs-xs);color:var(--tx3);padding-left:8px;">(mostrando los primeros 100)</div>' : ''}
         </div>`;
     }).join('');
 
@@ -4028,8 +4028,8 @@ async function cargarAuditoriaFlujo() {
     const truncadas = d.consultas_truncadas || [];
     const bloqueTruncadas = truncadas.length ? `
       <div style="border:1px solid #f59e0b;border-radius:8px;padding:8px 10px;
-                  margin-bottom:10px;font-size:11px;color:var(--tx2);">
-        <b style="color:#f59e0b;">Universo parcial — no le creas al 0</b>
+                  margin-bottom:10px;font-size:var(--fs-xs);color:var(--tx2);">
+        <b style="color:var(--warn-tx);">Universo parcial — no le creas al 0</b>
         <div style="margin-top:4px;">
           ${esc(truncadas.length)} consulta(s) chocaron con su tope de filas: los
           hallazgos de abajo salen de una muestra, no de todo. Subí el tope
@@ -4040,20 +4040,20 @@ async function cargarAuditoriaFlujo() {
     el.innerHTML = `
       <div class="tabla-card">
         <div class="tabla-titulo">Auditoría de flujo
-          <span style="font-size:11px;font-weight:400;color:var(--tx3);">
+          <span style="font-size:var(--fs-xs);font-weight:400;color:var(--tx3);">
             · ${esc(d.invariantes_corridos)} invariantes · ${bloq} hallazgo(s) bloqueante(s)
             · <span title="hora de esta corrida">${hora}</span></span>
         </div>
-        <div style="font-size:11px;color:var(--tx3);margin-bottom:8px;">${esc(d.nota || '')}</div>
+        <div style="font-size:var(--fs-xs);color:var(--tx3);margin-bottom:8px;">${esc(d.nota || '')}</div>
         ${bloqueTruncadas}
         ${filas}
         <button onclick="cargarAuditoriaFlujo()"
-          style="margin-top:10px;padding:8px 14px;border:none;border-radius:8px;cursor:pointer;background:var(--brd);color:var(--tx);font-size:12px;font-weight:700;">
+          style="margin-top:10px;padding:8px 14px;border:none;border-radius:8px;cursor:pointer;background:var(--brd);color:var(--tx);font-size:var(--fs-xs);font-weight:700;">
           Volver a auditar
         </button>
       </div>`;
   } catch (e) {
-    el.innerHTML = `<div class="tabla-card" style="color:#f87171;">
+    el.innerHTML = `<div class="tabla-card" style="color:var(--err-tx);">
       No se pudo correr la auditoría: ${e.message || e}
       <button onclick="cargarAuditoriaFlujo()"
         style="margin-left:10px;padding:6px 12px;border:none;border-radius:8px;cursor:pointer;">
@@ -4079,10 +4079,10 @@ async function skusSinEanEmpaque() {
     const top = (d.skus || []).slice(0, 10)
       .map(s => `${s.codigo_siesa || s.codigo} · x${s.factor_conversion}${s.clasificacion_abc ? ' · ' + s.clasificacion_abc : ''}`)
       .join('<br>');
-    el.innerHTML = `<b style="color:#fbbf24;">${esc(d.total)}</b> SKU sin EAN de empaque` +
+    el.innerHTML = `<b style="color:var(--warn-tx);">${esc(d.total)}</b> SKU sin EAN de empaque` +
       (d.truncado ? ' (lista truncada en 500)' : '') +
       `<div style="margin-top:6px;line-height:1.5;">${top}</div>` +
-      (d.total > 10 ? `<div style="margin-top:4px;color:#555;">…y ${d.total - 10} más</div>` : '');
+      (d.total > 10 ? `<div style="margin-top:4px;color:var(--tx3);">…y ${d.total - 10} más</div>` : '');
   } catch (e) {
     if (el) el.textContent = 'Error consultando el backlog de EAN';
   }

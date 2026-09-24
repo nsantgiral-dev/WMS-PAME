@@ -494,7 +494,9 @@ class TestElFiltroViajaDesdeLaPantalla:
         assert str(js['badge']) == '5'
 
     def test_el_boton_activo_se_marca(self, js):
-        activos = [k for k, bg in js['botones'] if bg == 'var(--pm)']
+        # El botón activo lleva texto blanco: su relleno es --pm-fill (5.4:1),
+        # no el teal de marca --pm (4.43:1, bajo AA). tests/test_legibilidad_pwa.py
+        activos = [k for k, bg in js['botones'] if bg == 'var(--pm-fill)']
         assert activos == ['accion'], js['botones']
 
     def test_al_cambiar_de_pestana_no_quedan_las_tarjetas_viejas(self, js):
@@ -506,7 +508,7 @@ class TestElFiltroViajaDesdeLaPantalla:
 
     def test_recargar_conserva_la_pestana(self, js):
         assert _qs(js['urlRecarga']).get('vista') == 'resueltos'
-        assert [k for k, bg in js['botonesRecarga'] if bg == 'var(--pm)'] == ['resueltos']
+        assert [k for k, bg in js['botonesRecarga'] if bg == 'var(--pm-fill)'] == ['resueltos']
 
     def test_el_aviso_de_marca_se_pinta_escapado(self, js):
         assert 'Ningún producto &lt;b&gt;tiene&lt;/b&gt; marca' in js['aviso']

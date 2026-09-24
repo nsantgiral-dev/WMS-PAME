@@ -49,7 +49,7 @@ function tiendaIniciar() {
     const opciones = _BODEGAS_ORIGEN.filter(b => b.id !== miTienda);
     sel.innerHTML = opciones.map(b =>
       `<option value="${esc(b.id)}" data-nombre="${esc(b.nombre)}"
-        style="background:#0d2137;color:#fff;">${esc(b.nombre)} (${esc(b.id)})</option>`
+        style="background:var(--bg-s);color:var(--tx);">${esc(b.nombre)} (${esc(b.id)})</option>`
     ).join('');
     // Pre-seleccionar NB1 como origen por defecto
     const porDefecto = opciones.find(b => b.id === 'NB1') || opciones[0];
@@ -100,47 +100,47 @@ function tiendaSubtab(nombre) {
 async function tiendaCargarSolicitudes() {
   const el = document.getElementById('tienda-lista-solicitudes');
   if (!el) return;
-  el.innerHTML = '<div style="text-align:center;padding:20px;color:#555;">Cargando...</div>';
+  el.innerHTML = '<div style="text-align:center;padding:20px;color:var(--tx3);">Cargando...</div>';
   try {
     const d = await get('/api/traslados/');
     const solicitudes = d.solicitudes || [];
     if (!solicitudes.length) {
-      el.innerHTML = '<div style="text-align:center;padding:30px;color:#555;">No hay pedidos aún</div>';
+      el.innerHTML = '<div style="text-align:center;padding:30px;color:var(--tx3);">No hay pedidos aún</div>';
       return;
     }
     el.innerHTML = solicitudes.map(s => {
-      const col = TRAS_COL[s.estado] || '#333';
+      const col = TRAS_COL[s.estado] || '#374151';
       return `
-      <div style="background:#111;border:1px solid #222;border-radius:12px;padding:14px;margin-bottom:10px;">
+      <div style="background:var(--bg-s);border:1px solid var(--brd);border-radius:12px;padding:14px;margin-bottom:10px;">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
-          <div style="font-size:13px;font-weight:700;">${esc(s.codigo)}</div>
-          <span style="background:${col};color:#fff;font-size:10px;font-weight:700;padding:3px 8px;border-radius:8px;">${esc(s.estado)}</span>
+          <div style="font-size:var(--fs-sm);font-weight:700;">${esc(s.codigo)}</div>
+          <span style="background:${col};color:#fff;font-size:var(--fs-xs);font-weight:700;padding:3px 8px;border-radius:8px;">${esc(s.estado)}</span>
         </div>
-        <div style="font-size:11px;color:#666;">${esc(s.total_items)} ítem${s.total_items !== 1 ? 's' : ''} · ${s.fecha_creacion ? new Date(s.fecha_creacion).toLocaleDateString('es-CO') : ''}</div>
-        ${s.motivo_rechazo ? `<div style="font-size:11px;color:#f87171;margin-top:4px;">Motivo: ${esc(s.motivo_rechazo)}</div>` : ''}
-        ${s.es_averia ? `<div style="font-size:11px;color:#fbbf24;margin-top:4px;">⚠ Avería · hacia ${esc(s.bodega_destino_siesa)}</div>` : ''}
+        <div style="font-size:var(--fs-xs);color:var(--tx3);">${esc(s.total_items)} ítem${s.total_items !== 1 ? 's' : ''} · ${s.fecha_creacion ? new Date(s.fecha_creacion).toLocaleDateString('es-CO') : ''}</div>
+        ${s.motivo_rechazo ? `<div style="font-size:var(--fs-xs);color:var(--err-tx);margin-top:4px;">Motivo: ${esc(s.motivo_rechazo)}</div>` : ''}
+        ${s.es_averia ? `<div style="font-size:var(--fs-xs);color:var(--warn-tx);margin-top:4px;">⚠ Avería · hacia ${esc(s.bodega_destino_siesa)}</div>` : ''}
         ${s.estado === 'BORRADOR' ? `
         <div style="display:flex;gap:8px;margin-top:10px;">
           <button onclick="tiendaEnviarSolicitudId(${esc(s.id)})"
-            style="flex:1;padding:10px;background:#1d4ed8;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">
+            style="flex:1;padding:10px;background:#1d4ed8;color:#fff;border:none;border-radius:8px;font-size:var(--fs-sm);font-weight:700;cursor:pointer;">
             Enviar al almacén
           </button>
         </div>` : ''}
         ${s.es_averia && s.estado === 'ENVIADA' && !s.averia_evidencia ? `
-        <div style="margin-top:10px;border-top:1px solid #222;padding-top:10px;">
-          <div style="font-size:11px;color:#a8a29e;margin-bottom:6px;">Falta tu visto bueno. Declarar y validar son dos actos distintos: acá va por escrito qué revisaste.</div>
+        <div style="margin-top:10px;border-top:1px solid var(--brd);padding-top:10px;">
+          <div style="font-size:var(--fs-xs);color:var(--tx2);margin-bottom:6px;">Falta tu visto bueno. Declarar y validar son dos actos distintos: acá va por escrito qué revisaste.</div>
           <button onclick="tiendaValidarAveria(${esc(s.id)})"
-            style="width:100%;padding:10px;background:#92400e;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">
+            style="width:100%;padding:10px;background:#92400e;color:var(--tx);border:none;border-radius:8px;font-size:var(--fs-sm);font-weight:700;cursor:pointer;">
             Validar y dejar evidencia
           </button>
         </div>` : ''}
-        ${s.averia_evidencia ? `<div style="font-size:11px;color:#666;margin-top:6px;">Tu evidencia: ${esc(s.averia_evidencia)}</div>` : ''}
-        ${s.averia_veredicto === false ? `<div style="font-size:11px;color:#4ade80;margin-top:4px;">El CD dictaminó que NO estaba averiada${s.averia_veredicto_nota ? `: ${esc(s.averia_veredicto_nota)}` : ''}</div>` : ''}
-        ${s.averia_veredicto === true ? `<div style="font-size:11px;color:#f87171;margin-top:4px;">El CD confirmó la avería</div>` : ''}
+        ${s.averia_evidencia ? `<div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:6px;">Tu evidencia: ${esc(s.averia_evidencia)}</div>` : ''}
+        ${s.averia_veredicto === false ? `<div style="font-size:var(--fs-xs);color:var(--ok-tx);margin-top:4px;">El CD dictaminó que NO estaba averiada${s.averia_veredicto_nota ? `: ${esc(s.averia_veredicto_nota)}` : ''}</div>` : ''}
+        ${s.averia_veredicto === true ? `<div style="font-size:var(--fs-xs);color:var(--err-tx);margin-top:4px;">El CD confirmó la avería</div>` : ''}
       </div>`;
     }).join('');
   } catch (e) {
-    el.innerHTML = '<div style="text-align:center;padding:20px;color:#ef4444;">Error cargando pedidos</div>';
+    el.innerHTML = '<div style="text-align:center;padding:20px;color:var(--err-tx);">Error cargando pedidos</div>';
   }
 }
 
@@ -182,13 +182,13 @@ function tiendaAveriasRender() {
   const el = document.getElementById('tienda-panel-averias-lista');
   if (!el) return;
   if (_TAV_ESTADO === 'cargando') {
-    el.innerHTML = '<div style="text-align:center;padding:20px;color:#555;">Cargando tu inventario...</div>'; return;
+    el.innerHTML = '<div style="text-align:center;padding:20px;color:var(--tx3);">Cargando tu inventario...</div>'; return;
   }
   if (_TAV_ESTADO === 'sin-bodega') {
-    el.innerHTML = '<div style="padding:20px;color:#f87171;font-size:13px;">Tu usuario no tiene una bodega asignada, así que no se puede saber de qué punto sale la avería. Pedí que te la configuren.</div>'; return;
+    el.innerHTML = '<div style="padding:20px;color:var(--err-tx);font-size:var(--fs-sm);">Tu usuario no tiene una bodega asignada, así que no se puede saber de qué punto sale la avería. Pedí que te la configuren.</div>'; return;
   }
   if (_TAV_ESTADO === 'error') {
-    el.innerHTML = '<div style="text-align:center;padding:20px;color:#ef4444;">Error cargando tu inventario</div>'; return;
+    el.innerHTML = '<div style="text-align:center;padding:20px;color:var(--err-tx);">Error cargando tu inventario</div>'; return;
   }
 
   const filtrados = _TAV_FILTRO
@@ -197,32 +197,32 @@ function tiendaAveriasRender() {
     : _TAV_STOCK.slice(0, 30);
 
   const carrito = _TAV_CARRITO.length ? `
-    <div style="background:#1a1206;border:1px solid #92400e;border-radius:10px;padding:10px;margin-bottom:10px;">
-      <div style="font-size:12px;color:#fbbf24;font-weight:700;margin-bottom:6px;">${esc(_TAV_CARRITO.length)} producto${_TAV_CARRITO.length !== 1 ? 's' : ''} por declarar</div>
+    <div style="background:var(--warn-bg);border:1px solid var(--warn-brd);border-radius:10px;padding:10px;margin-bottom:10px;">
+      <div style="font-size:var(--fs-xs);color:var(--warn-tx);font-weight:700;margin-bottom:6px;">${esc(_TAV_CARRITO.length)} producto${_TAV_CARRITO.length !== 1 ? 's' : ''} por declarar</div>
       ${_TAV_CARRITO.map(c => `
-        <div style="display:flex;justify-content:space-between;padding:3px 0;font-size:12px;">
-          <span>${esc(c.nombre)} · ${esc(c.cantidad)} und<div style="color:#666;font-size:11px;">${esc(c.motivo)}</div></span>
-          <button onclick="tiendaAveriasQuitar('${esc(c.codigo_siesa)}')" style="background:none;border:none;color:#ef4444;cursor:pointer;">✕</button>
+        <div style="display:flex;justify-content:space-between;padding:3px 0;font-size:var(--fs-xs);">
+          <span>${esc(c.nombre)} · ${esc(c.cantidad)} und<div style="color:var(--tx3);font-size:var(--fs-xs);">${esc(c.motivo)}</div></span>
+          <button onclick="tiendaAveriasQuitar('${esc(c.codigo_siesa)}')" style="background:none;border:none;color:var(--err-tx);cursor:pointer;">✕</button>
         </div>`).join('')}
-      <button onclick="tiendaAveriasEnviar()" style="width:100%;margin-top:8px;padding:10px;background:#92400e;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">Declarar y mandar al CD</button>
+      <button onclick="tiendaAveriasEnviar()" style="width:100%;margin-top:8px;padding:10px;background:#92400e;color:var(--tx);border:none;border-radius:8px;font-size:var(--fs-sm);font-weight:700;cursor:pointer;">Declarar y mandar al CD</button>
     </div>` : '';
 
   el.innerHTML = carrito + (filtrados.length ? filtrados.map(i => {
     const key = (i.codigo_siesa || '').replace(/[^a-zA-Z0-9]/g, '-');
     return `
-    <div style="background:#111;border:1px solid #222;border-radius:10px;padding:10px;margin-bottom:8px;">
-      <div style="font-size:13px;font-weight:600;">${esc(i.nombre)}</div>
-      <div style="font-size:11px;color:#666;margin-bottom:6px;">${esc(i.codigo_siesa)} · tenés ${esc(i.disponible)}</div>
+    <div style="background:var(--bg-s);border:1px solid var(--brd);border-radius:10px;padding:10px;margin-bottom:8px;">
+      <div style="font-size:var(--fs-sm);font-weight:600;">${esc(i.nombre)}</div>
+      <div style="font-size:var(--fs-xs);color:var(--tx3);margin-bottom:6px;">${esc(i.codigo_siesa)} · tenés ${esc(i.disponible)}</div>
       <div style="display:flex;gap:6px;">
         <input id="tav-qty-${key}" type="number" min="1" max="${esc(i.disponible)}" value="1"
-          style="width:70px;padding:8px;background:#0a0a0a;color:#fff;border:1px solid #333;border-radius:6px;font-size:13px;">
+          style="width:70px;padding:8px;background:var(--bg-s);color:var(--tx);border:1px solid var(--brd);border-radius:6px;font-size:var(--fs-sm);">
         <input id="tav-mot-${key}" type="text" placeholder="¿Qué le pasó?" maxlength="200"
-          style="flex:1;padding:8px;background:#0a0a0a;color:#fff;border:1px solid #333;border-radius:6px;font-size:13px;">
+          style="flex:1;padding:8px;background:var(--bg-s);color:var(--tx);border:1px solid var(--brd);border-radius:6px;font-size:var(--fs-sm);">
         <button onclick="tiendaAveriasAgregar('${esc(i.codigo_siesa)}', ${esc(i.producto_id)})"
-          style="padding:8px 12px;background:#292524;color:#fbbf24;border:1px solid #57534e;border-radius:6px;font-size:13px;font-weight:700;cursor:pointer;">+</button>
+          style="padding:8px 12px;background:var(--warn-bg);color:var(--warn-tx);border:1px solid var(--warn-brd);border-radius:6px;font-size:var(--fs-sm);font-weight:700;cursor:pointer;">+</button>
       </div>
     </div>`;
-  }).join('') : '<div style="text-align:center;padding:20px;color:#555;">Sin resultados</div>');
+  }).join('') : '<div style="text-align:center;padding:20px;color:var(--tx3);">Sin resultados</div>');
 }
 
 function tiendaAveriasAgregar(codigoSiesa, productoId) {
@@ -363,7 +363,7 @@ function tiendaRenderFrescura() {
   const tiempo = minutos === null ? '' : (minutos < 1 ? ' · hace instantes' : ` · hace ${minutos} min`);
 
   el.innerHTML = `
-    <div style="display:flex;align-items:center;gap:6px;font-size:11px;color:${color};">
+    <div style="display:flex;align-items:center;gap:6px;font-size:var(--fs-xs);color:${color};">
       <span style="width:7px;height:7px;border-radius:50%;background:${color};flex-shrink:0;"></span>
       <span>${rotulo}${tiempo}</span>
     </div>`;
@@ -410,24 +410,24 @@ function tiendaRenderStock() {
   const el = document.getElementById('tienda-stock-lista');
   if (!el) return;
   if (_TIENDA_STOCK_ESTADO === 'cargando') {
-    el.innerHTML = '<div style="text-align:center;padding:40px;color:#555;">Consultando stock en bodega...</div>';
+    el.innerHTML = '<div style="text-align:center;padding:40px;color:var(--tx3);">Consultando stock en bodega...</div>';
     return;
   }
   if (_TIENDA_STOCK_ESTADO === 'error') {
     el.innerHTML = `
       <div style="text-align:center;padding:40px 20px;">
         <div style="font-size:32px;margin-bottom:12px;">⚠️</div>
-        <div style="font-size:15px;font-weight:600;color:#f87171;margin-bottom:8px;">No se pudo cargar el stock</div>
-        <div style="font-size:13px;color:#555;margin-bottom:20px;">Verifica la conexión con Siesa o intenta de nuevo</div>
+        <div style="font-size:var(--fs-md);font-weight:600;color:var(--err-tx);margin-bottom:8px;">No se pudo cargar el stock</div>
+        <div style="font-size:var(--fs-sm);color:var(--tx3);margin-bottom:20px;">Verifica la conexión con Siesa o intenta de nuevo</div>
         <button onclick="tiendaCargarStock()"
-          style="padding:12px 24px;background:#1d4ed8;color:#fff;border:none;border-radius:10px;font-size:14px;font-weight:700;cursor:pointer;">
+          style="padding:12px 24px;background:#1d4ed8;color:#fff;border:none;border-radius:10px;font-size:var(--fs-sm);font-weight:700;cursor:pointer;">
           Reintentar
         </button>
       </div>`;
     return;
   }
   if (!_TIENDA_STOCK.length) {
-    el.innerHTML = '<div style="text-align:center;padding:30px;color:#555;">Sin productos disponibles en bodega</div>';
+    el.innerHTML = '<div style="text-align:center;padding:30px;color:var(--tx3);">Sin productos disponibles en bodega</div>';
     return;
   }
 
@@ -438,7 +438,7 @@ function tiendaRenderStock() {
     : _TIENDA_STOCK;
 
   if (!filtrado.length) {
-    el.innerHTML = '<div style="text-align:center;padding:20px;color:#555;">Sin resultados para "' + _TIENDA_FILTRO + '"</div>';
+    el.innerHTML = '<div style="text-align:center;padding:20px;color:var(--tx3);">Sin resultados para "' + _TIENDA_FILTRO + '"</div>';
     return;
   }
 
@@ -452,23 +452,23 @@ function tiendaRenderStock() {
   const desde = Math.max(1, _TIENDA_PAGINA - rango);
   const hasta = Math.min(totalPags, _TIENDA_PAGINA + rango);
   const nums = [];
-  if (desde > 1) nums.push('<span style="color:#555;padding:0 4px;">…</span>');
+  if (desde > 1) nums.push('<span style="color:var(--tx3);padding:0 4px;">…</span>');
   for (let p = desde; p <= hasta; p++) {
     const activo = p === _TIENDA_PAGINA;
     nums.push(`<button onclick="tiendaIrPagina(${p})"
-      style="min-width:44px;min-height:44px;padding:6px 8px;background:${activo?'#1E8395':'#222'};color:#fff;border:none;border-radius:6px;font-size:12px;font-weight:${activo?'700':'400'};cursor:pointer;">${p}</button>`);
+      style="min-width:44px;min-height:44px;padding:6px 8px;background:${activo?'var(--pm-fill)':'var(--bg-s2)'};color:#fff;border:none;border-radius:6px;font-size:var(--fs-xs);font-weight:${activo?'700':'400'};cursor:pointer;">${p}</button>`);
   }
-  if (hasta < totalPags) nums.push('<span style="color:#555;padding:0 4px;">…</span>');
+  if (hasta < totalPags) nums.push('<span style="color:var(--tx3);padding:0 4px;">…</span>');
 
   const navHtml = totalPags > 1 ? `
     <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:10px 0 14px;flex-wrap:wrap;">
       <button onclick="tiendaIrPagina(${_TIENDA_PAGINA - 1})" ${_TIENDA_PAGINA===1?'disabled':''}
-        style="padding:7px 14px;background:#222;color:${_TIENDA_PAGINA===1?'#444':'#fff'};border:none;border-radius:8px;font-size:13px;cursor:pointer;">← Ant</button>
+        style="padding:7px 14px;background:var(--bg-s2);color:${_TIENDA_PAGINA===1?'var(--tx3)':'var(--tx)'};border:none;border-radius:8px;font-size:var(--fs-sm);cursor:pointer;">← Ant</button>
       <div style="display:flex;align-items:center;gap:4px;flex-wrap:wrap;justify-content:center;">${nums.join('')}</div>
       <button onclick="tiendaIrPagina(${_TIENDA_PAGINA + 1})" ${_TIENDA_PAGINA===totalPags?'disabled':''}
-        style="padding:7px 14px;background:#222;color:${_TIENDA_PAGINA===totalPags?'#444':'#fff'};border:none;border-radius:8px;font-size:13px;cursor:pointer;">Sig →</button>
+        style="padding:7px 14px;background:var(--bg-s2);color:${_TIENDA_PAGINA===totalPags?'var(--tx3)':'var(--tx)'};border:none;border-radius:8px;font-size:var(--fs-sm);cursor:pointer;">Sig →</button>
     </div>
-    <div style="text-align:center;font-size:11px;color:#555;margin-bottom:10px;">
+    <div style="text-align:center;font-size:var(--fs-xs);color:var(--tx3);margin-bottom:10px;">
       ${esc(filtrado.length)} productos · página ${_TIENDA_PAGINA} de ${totalPags}
     </div>` : '';
 
@@ -477,17 +477,17 @@ function tiendaRenderStock() {
     const qid = 'qty-' + (item.codigo_siesa || '').replace(/[^a-zA-Z0-9]/g, '-');
     const nombreEsc = (item.nombre || '').replace(/\\/g,'\\\\').replace(/'/g,"\\'");
     return `
-    <div style="background:#111;border:1px solid ${enCarrito?'#4ade80':'#222'};border-radius:10px;padding:12px;margin-bottom:8px;display:flex;align-items:center;gap:12px;">
+    <div style="background:var(--bg-s);border:1px solid ${enCarrito?'#4ade80':'var(--brd)'};border-radius:10px;padding:12px;margin-bottom:8px;display:flex;align-items:center;gap:12px;">
       <div style="flex:1;min-width:0;">
-        <div style="font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(item.nombre || '—')}</div>
-        <div style="font-size:11px;color:#666;">${esc(item.codigo_siesa || '')} · Disponible: <span style="color:#4ade80;font-weight:700;">${esc(item.disponible)}</span></div>
+        <div style="font-size:var(--fs-sm);font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(item.nombre || '—')}</div>
+        <div style="font-size:var(--fs-xs);color:var(--tx3);">${esc(item.codigo_siesa || '')} · Disponible: <span style="color:var(--ok-tx);font-weight:700;">${esc(item.disponible)}</span></div>
       </div>
       <div style="display:flex;align-items:center;gap:6px;flex-shrink:0;">
         <input type="number" min="1" max="${esc(item.disponible)}" value="${enCarrito?.cantidad || 1}"
           id="${qid}"
-          style="width:56px;padding:7px;background:#000;border:1px solid #333;border-radius:6px;color:#fff;font-size:13px;text-align:center;">
+          style="width:56px;padding:7px;background:var(--bg-s);border:1px solid var(--brd);border-radius:6px;color:var(--tx);font-size:var(--fs-sm);text-align:center;">
         <button onclick="tiendaAgregarCarrito('${esc(item.codigo_siesa)}','${nombreEsc}',${esc(item.disponible)},${esc(item.producto_id||'null')})"
-          style="padding:8px 12px;background:${enCarrito?'#4ade80':'#fff'};color:#000;border:none;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;">
+          style="padding:8px 12px;background:${enCarrito?'#4ade80':'#fff'};color:#000;border:none;border-radius:8px;font-size:var(--fs-xs);font-weight:700;cursor:pointer;">
           ${enCarrito ? '✓' : '+'}
         </button>
       </div>
@@ -527,8 +527,8 @@ function tiendaActualizarCarrito() {
   itemsEl.innerHTML = _TIENDA_CARRITO.map(c =>
     `<div style="display:flex;justify-content:space-between;padding:3px 0;">
       <span>${esc(c.nombre)}</span>
-      <span style="color:#4ade80;font-weight:700;">${esc(c.cantidad)} und
-        <button onclick="tiendaQuitarCarrito('${esc(c.codigo_siesa)}')" style="background:none;border:none;color:#ef4444;cursor:pointer;font-size:11px;margin-left:4px;">✕</button>
+      <span style="color:var(--ok-tx);font-weight:700;">${esc(c.cantidad)} und
+        <button onclick="tiendaQuitarCarrito('${esc(c.codigo_siesa)}')" style="background:none;border:none;color:var(--err-tx);cursor:pointer;font-size:var(--fs-xs);margin-left:4px;">✕</button>
       </span>
     </div>`
   ).join('');
@@ -611,7 +611,7 @@ async function tiendaCargarRecibir() {
 
   const el = document.getElementById('tienda-lista-recibir');
   if (!el) return;
-  el.innerHTML = '<div style="text-align:center;padding:20px;color:#555;">Cargando...</div>';
+  el.innerHTML = '<div style="text-align:center;padding:20px;color:var(--tx3);">Cargando...</div>';
   try {
     const r1 = await get('/api/traslados/?estado=EN_TRANSITO');
     // «Recibir» significa «llegó ACÁ». El backend le devuelve a una tienda los
@@ -638,32 +638,32 @@ async function tiendaCargarRecibir() {
     }
 
     if (!_TIENDA_PENDIENTES.length) {
-      el.innerHTML = '<div style="text-align:center;padding:30px;color:#555;">Nada pendiente de recibir</div>';
+      el.innerHTML = '<div style="text-align:center;padding:30px;color:var(--tx3);">Nada pendiente de recibir</div>';
       return;
     }
     el.innerHTML = _TIENDA_PENDIENTES.map(s => {
       const totalEsperado = (s.items || []).reduce((a, i) => a + (i.cantidad_enviada || i.cantidad_aprobada || i.cantidad_solicitada || 0), 0);
       return `
-      <div style="background:#0a1a0a;border:1px solid #166534;border-radius:12px;padding:14px;margin-bottom:10px;">
+      <div style="background:var(--ok-bg);border:1px solid var(--ok-brd);border-radius:12px;padding:14px;margin-bottom:10px;">
         <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px;">
-          <div style="font-size:14px;font-weight:700;">${esc(s.codigo)}</div>
-          <div style="font-size:11px;color:#4ade80;font-weight:600;">${esc(s.bodega_origen_siesa || '')}</div>
+          <div style="font-size:var(--fs-sm);font-weight:700;">${esc(s.codigo)}</div>
+          <div style="font-size:var(--fs-xs);color:var(--ok-tx);font-weight:600;">${esc(s.bodega_origen_siesa || '')}</div>
         </div>
-        <div style="font-size:12px;color:#4ade80;margin-bottom:8px;">📦 ${esc(s.total_items)} ítem${s.total_items !== 1 ? 's' : ''} · ${totalEsperado} und esperadas</div>
+        <div style="font-size:var(--fs-xs);color:var(--ok-tx);margin-bottom:8px;">📦 ${esc(s.total_items)} ítem${s.total_items !== 1 ? 's' : ''} · ${totalEsperado} und esperadas</div>
         ${(s.items || []).slice(0, 3).map(i => `
-          <div style="font-size:11px;color:#aaa;padding:2px 0;">
+          <div style="font-size:var(--fs-xs);color:var(--tx2);padding:2px 0;">
             ${esc(i.producto_nombre || i.producto_codigo)} · ${esc(i.cantidad_enviada || i.cantidad_aprobada || i.cantidad_solicitada)} und
           </div>
         `).join('')}
-        ${(s.items || []).length > 3 ? `<div style="font-size:11px;color:#555;padding:2px 0;">+ ${s.items.length - 3} más...</div>` : ''}
+        ${(s.items || []).length > 3 ? `<div style="font-size:var(--fs-xs);color:var(--tx3);padding:2px 0;">+ ${s.items.length - 3} más...</div>` : ''}
         <button onclick="tiendaAbrirPickingTraslado(${esc(s.id)})"
-          style="width:100%;padding:13px;margin-top:12px;background:#1E8395;color:#fff;border:none;border-radius:10px;font-size:15px;font-weight:700;cursor:pointer;">
+          style="width:100%;padding:13px;margin-top:12px;background:var(--pm-fill);color:#fff;border:none;border-radius:10px;font-size:var(--fs-md);font-weight:700;cursor:pointer;">
           📋 Contar productos
         </button>
       </div>`;
     }).join('');
   } catch (e) {
-    el.innerHTML = '<div style="text-align:center;padding:20px;color:#ef4444;">Error cargando traslados</div>';
+    el.innerHTML = '<div style="text-align:center;padding:20px;color:var(--err-tx);">Error cargando traslados</div>';
   }
 }
 
@@ -706,41 +706,41 @@ function _tiendaRenderPickingTraslado() {
   const items = s.items || [];
   const todoContado = items.every(i => (_TIENDA_CONTEOS[i.producto_id] || 0) >= (i.cantidad_enviada || i.cantidad_aprobada || i.cantidad_solicitada || 0));
   const algoContado = items.some(i => (_TIENDA_CONTEOS[i.producto_id] || 0) > 0);
-  const btnColor = todoContado ? '#16a34a' : '#b45309';
+  const btnColor = todoContado ? '#15803d' : '#b45309';
   const btnTexto = todoContado ? '✓ Confirmar recepción' : '⚠ Confirmar recepción parcial';
 
   el.innerHTML = `
     <div>
       <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px;">
         <button onclick="tiendaVolverListaRecibir()"
-          style="background:#222;border:1px solid #333;color:#fff;padding:8px 14px;border-radius:8px;cursor:pointer;font-size:14px;flex-shrink:0;">
+          style="background:var(--bg-s2);border:1px solid var(--brd);color:var(--tx);padding:8px 14px;border-radius:8px;cursor:pointer;font-size:var(--fs-sm);flex-shrink:0;">
           ← Volver
         </button>
         <div style="min-width:0;">
-          <div style="font-size:16px;font-weight:800;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(s.codigo)}</div>
-          <div style="font-size:12px;color:#666;">Desde ${esc(s.bodega_origen_siesa || '—')} → ${esc(s.bodega_destino_siesa || '—')}</div>
+          <div style="font-size:var(--fs-md);font-weight:800;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(s.codigo)}</div>
+          <div style="font-size:var(--fs-xs);color:var(--tx3);">Desde ${esc(s.bodega_origen_siesa || '—')} → ${esc(s.bodega_destino_siesa || '—')}</div>
         </div>
       </div>
 
       <!-- Escaneo / entrada manual -->
-      <div style="background:#111;border-radius:10px;padding:12px;margin-bottom:14px;">
-        <div style="font-size:12px;color:#666;text-align:center;margin-bottom:8px;">Escanea el código de barras o usá los botones +/−</div>
+      <div style="background:var(--bg-s);border-radius:10px;padding:12px;margin-bottom:14px;">
+        <div style="font-size:var(--fs-xs);color:var(--tx3);text-align:center;margin-bottom:8px;">Escanea el código de barras o usá los botones +/−</div>
         ${OPERARIO && OPERARIO.puede_usar_camara ? `
         <button onclick="abrirCamara('lector-qr-tt','camara-box-tt', tiendaScanTraslado, this)"
-          style="width:100%;padding:13px;font-size:16px;background:#fff;color:#000;border:2px solid #000;border-radius:10px;cursor:pointer;margin-bottom:8px;">
+          style="width:100%;padding:13px;font-size:var(--fs-md);background:#fff;color:#000;border:2px solid var(--brd);border-radius:10px;cursor:pointer;margin-bottom:8px;">
           📷 Escanear con cámara
         </button>
         <div id="camara-box-tt" style="display:none;margin-bottom:8px;">
           <div id="lector-qr-tt" style="border-radius:10px;overflow:hidden;"></div>
-          <button onclick="cerrarCamara('camara-box-tt')" style="width:100%;padding:9px;margin-top:6px;font-size:14px;background:#333;color:#fff;border:none;border-radius:8px;cursor:pointer;">Cerrar cámara</button>
+          <button onclick="cerrarCamara('camara-box-tt')" style="width:100%;padding:9px;margin-top:6px;font-size:var(--fs-sm);background:var(--bg-s2);color:var(--tx);border:none;border-radius:8px;cursor:pointer;">Cerrar cámara</button>
         </div>` : ''}
         <div style="display:flex;gap:8px;">
           <input id="tienda-scan-input" type="text" placeholder="Escanea o escribe el código..."
-            style="flex:1;padding:10px;background:#0d0d0d;border:1px solid #333;border-radius:8px;color:#fff;font-size:14px;"
+            style="flex:1;padding:10px;background:var(--bg-s);border:1px solid var(--brd);border-radius:8px;color:var(--tx);font-size:var(--fs-sm);"
             onkeydown="if(event.key==='Enter'){ const v=this.value.trim(); if(v){ tiendaScanTraslado(v); this.value=''; } }"
             autocomplete="off" autocorrect="off" spellcheck="false">
           <button onclick="const v=document.getElementById('tienda-scan-input').value.trim();if(v){tiendaScanTraslado(v);document.getElementById('tienda-scan-input').value='';}"
-            style="padding:10px 14px;background:#1E8395;color:#fff;border:none;border-radius:8px;font-size:18px;cursor:pointer;">↵</button>
+            style="padding:10px 14px;background:var(--pm-fill);color:#fff;border:none;border-radius:8px;font-size:var(--fs-lg);cursor:pointer;">↵</button>
         </div>
       </div>
 
@@ -750,12 +750,12 @@ function _tiendaRenderPickingTraslado() {
 
       <button id="btn-confirmar-traslado" onclick="tiendaConfirmarRecepcionTraslado()"
         ${algoContado || todoContado ? '' : 'disabled'}
-        style="width:100%;padding:18px;font-size:18px;font-weight:700;background:${algoContado || todoContado ? btnColor : '#222'};color:#fff;border:none;border-radius:14px;cursor:${algoContado || todoContado ? 'pointer' : 'default'};margin-bottom:10px;">
+        style="width:100%;padding:18px;font-size:var(--fs-lg);font-weight:700;background:${algoContado || todoContado ? btnColor : 'var(--bg-s2)'};color:var(--tx);border:none;border-radius:14px;cursor:${algoContado || todoContado ? 'pointer' : 'default'};margin-bottom:10px;">
         ${algoContado || todoContado ? btnTexto : 'Contá al menos un ítem para continuar'}
       </button>
 
       <button onclick="tiendaVolverListaRecibir()"
-        style="width:100%;padding:12px;font-size:14px;background:#1a1a1a;color:#555;border:1px solid #222;border-radius:10px;cursor:pointer;">
+        style="width:100%;padding:12px;font-size:var(--fs-sm);background:var(--bg-input);color:var(--tx3);border:1px solid var(--brd);border-radius:10px;cursor:pointer;">
         Cancelar — volver a la lista
       </button>
     </div>`;
@@ -773,25 +773,25 @@ function _tiendaRenderItemsPickingTraslado(items) {
     const pct = esperado > 0 ? Math.min((contado / esperado) * 100, 100) : 0;
     return `
       <div id="tienda-item-pick-${esc(i.producto_id)}"
-        style="background:${completo ? '#0d1a0d' : '#111'};border:1px solid ${completo ? '#166534' : '#222'};border-radius:12px;padding:14px;margin-bottom:8px;">
+        style="background:${completo ? 'var(--ok-bg)' : 'var(--bg-s)'};border:1px solid ${completo ? '#166534' : 'var(--brd)'};border-radius:12px;padding:14px;margin-bottom:8px;">
         <div style="display:flex;justify-content:space-between;align-items:center;">
           <div style="min-width:0;flex:1;">
-            <div style="font-size:14px;font-weight:600;color:${completo ? '#4ade80' : '#fff'};overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(i.producto_nombre || i.producto_codigo)}</div>
-            <div style="font-size:11px;color:#555;margin-top:2px;">${esc(i.producto_codigo_siesa || i.producto_codigo)}</div>
+            <div style="font-size:var(--fs-sm);font-weight:600;color:${completo ? 'var(--ok-tx)' : 'var(--tx)'};overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(i.producto_nombre || i.producto_codigo)}</div>
+            <div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:2px;">${esc(i.producto_codigo_siesa || i.producto_codigo)}</div>
           </div>
           <div style="display:flex;align-items:center;gap:8px;flex-shrink:0;padding-left:8px;">
             <button onclick="tiendaContarItem(${esc(i.producto_id)}, -1)"
-              style="width:44px;height:44px;background:#222;border:1px solid #333;color:#fff;border-radius:8px;font-size:20px;font-weight:700;cursor:pointer;line-height:1;">−</button>
+              style="width:44px;height:44px;background:var(--bg-s2);border:1px solid var(--brd);color:var(--tx);border-radius:8px;font-size:20px;font-weight:700;cursor:pointer;line-height:1;">−</button>
             <div style="text-align:center;min-width:54px;">
-              <div style="font-size:26px;font-weight:900;line-height:1;color:${completo ? '#4ade80' : '#fff'};">${contado}</div>
-              <div style="font-size:10px;color:#6b7280;">/ ${esperado}</div>
+              <div style="font-size:26px;font-weight:900;line-height:1;color:${completo ? 'var(--ok-tx)' : 'var(--tx)'};">${contado}</div>
+              <div style="font-size:var(--fs-xs);color:var(--tx3);">/ ${esperado}</div>
             </div>
             <button onclick="tiendaContarItem(${esc(i.producto_id)}, 1)"
-              style="width:44px;height:44px;background:#1E8395;border:none;color:#fff;border-radius:8px;font-size:20px;font-weight:700;cursor:pointer;line-height:1;">+</button>
+              style="width:44px;height:44px;background:var(--pm-fill);border:none;color:#fff;border-radius:8px;font-size:20px;font-weight:700;cursor:pointer;line-height:1;">+</button>
           </div>
         </div>
-        <div style="height:5px;background:#222;border-radius:3px;margin-top:8px;">
-          <div style="height:100%;background:${completo ? '#16a34a' : '#2563eb'};border-radius:3px;width:${pct}%;transition:width 0.2s;"></div>
+        <div style="height:5px;background:var(--bg-s2);border-radius:3px;margin-top:8px;">
+          <div style="height:100%;background:${completo ? '#15803d' : '#2563eb'};border-radius:3px;width:${pct}%;transition:width 0.2s;"></div>
         </div>
       </div>`;
   }).join('');
@@ -856,7 +856,7 @@ function tiendaContarItem(productoId, delta) {
   const btn = document.getElementById('btn-confirmar-traslado');
   if (btn) {
     btn.disabled = !(algoContado || todoContado);
-    btn.style.background = !algoContado && !todoContado ? '#222' : (todoContado ? '#16a34a' : '#b45309');
+    btn.style.background = !algoContado && !todoContado ? '#222' : (todoContado ? '#15803d' : '#b45309');
     btn.textContent = !algoContado && !todoContado ? 'Contá al menos un ítem para continuar' : (todoContado ? '✓ Confirmar recepción' : '⚠ Confirmar recepción parcial');
     btn.style.cursor = algoContado || todoContado ? 'pointer' : 'default';
   }
@@ -947,7 +947,7 @@ async function tiendaOCCargar() {
 
   const el = document.getElementById('tienda-oc-lista');
   if (!el) return;
-  el.innerHTML = '<div style="text-align:center;padding:20px;color:#555;">Cargando OCs...</div>';
+  el.innerHTML = '<div style="text-align:center;padding:20px;color:var(--tx3);">Cargando OCs...</div>';
 
   try {
     const siesa = await get('/api/tienda-oc/').catch(() => ({ ordenes: [] }));
@@ -961,18 +961,18 @@ async function tiendaOCCargar() {
     }
 
     if (siesa.simulado) {
-      el.innerHTML = `<div style="background:#1a1a00;border-radius:10px;padding:10px 12px;margin-bottom:12px;font-size:12px;color:#facc15;border:1px solid #333300;">
+      el.innerHTML = `<div style="background:var(--warn-bg);border-radius:10px;padding:10px 12px;margin-bottom:12px;font-size:var(--fs-xs);color:var(--warn-tx);border:1px solid var(--warn-brd);">
         Connekta en simulación — conecta credenciales para ver OCs reales de Siesa
       </div>`;
       return;
     }
 
     if (!_TIENDA_OCS.length) {
-      el.innerHTML = '<div style="text-align:center;padding:30px;color:#555;">No hay OCs pendientes para este punto de venta</div>';
+      el.innerHTML = '<div style="text-align:center;padding:30px;color:var(--tx3);">No hay OCs pendientes para este punto de venta</div>';
       return;
     }
 
-    let html = '<div style="font-size:12px;font-weight:600;color:#aaa;padding:4px 0 6px;border-bottom:1px solid #222;margin-bottom:8px;">OCs PENDIENTES EN SIESA</div>';
+    let html = '<div style="font-size:var(--fs-xs);font-weight:600;color:var(--tx2);padding:4px 0 6px;border-bottom:1px solid var(--brd);margin-bottom:8px;">OCs PENDIENTES EN SIESA</div>';
     html += _TIENDA_OCS.map((oc, i) => {
       const sinProd = oc.items.filter(it => !it.producto_id).length;
       const totalUds = oc.items.reduce((s, it) => s + (it.cantidad_pendiente || 0), 0);
@@ -980,10 +980,10 @@ async function tiendaOCCargar() {
 
       if (wmsEstado === 'CONFIRMADA') {
         return `
-          <div style="background:#111;border:1px solid #222;border-radius:12px;padding:14px;margin-bottom:10px;opacity:0.6;">
-            <div style="font-size:16px;font-weight:800;">OC: ${esc(oc.numero_oc)}</div>
-            <div style="font-size:12px;color:#888;margin-bottom:8px;">${esc(oc.proveedor || 'Sin proveedor')} · ${esc(oc.items.length)} productos · ${totalUds} uds</div>
-            <div style="padding:10px;background:#0d1a0d;border-radius:8px;font-size:14px;font-weight:700;color:#4ade80;text-align:center;">
+          <div style="background:var(--bg-s);border:1px solid var(--brd);border-radius:12px;padding:14px;margin-bottom:10px;opacity:0.6;">
+            <div style="font-size:var(--fs-md);font-weight:800;">OC: ${esc(oc.numero_oc)}</div>
+            <div style="font-size:var(--fs-xs);color:var(--tx2);margin-bottom:8px;">${esc(oc.proveedor || 'Sin proveedor')} · ${esc(oc.items.length)} productos · ${totalUds} uds</div>
+            <div style="padding:10px;background:var(--ok-bg);border-radius:8px;font-size:var(--fs-sm);font-weight:700;color:var(--ok-tx);text-align:center;">
               Recepcionada en WMS
             </div>
           </div>`;
@@ -994,19 +994,19 @@ async function tiendaOCCargar() {
       const btnBg = enProceso ? '#1d4ed8' : '#1E8395';
       const btnClick = enProceso ? `tiendaOCContinuar(${esc(oc.recepcion_wms_id)})` : `tiendaOCIniciar(${i})`;
       return `
-        <div style="background:#111;border:1px solid #222;border-radius:12px;padding:14px;margin-bottom:10px;">
-          <div style="font-size:16px;font-weight:800;">OC: ${esc(oc.numero_oc)}</div>
-          <div style="font-size:12px;color:#888;margin-bottom:4px;">${esc(oc.proveedor || 'Sin proveedor')} · ${esc(oc.items.length)} productos · ${totalUds} uds</div>
-          ${sinProd ? `<div style="font-size:11px;color:#f59e0b;margin-bottom:4px;">${sinProd} producto(s) sin registrar en WMS</div>` : ''}
+        <div style="background:var(--bg-s);border:1px solid var(--brd);border-radius:12px;padding:14px;margin-bottom:10px;">
+          <div style="font-size:var(--fs-md);font-weight:800;">OC: ${esc(oc.numero_oc)}</div>
+          <div style="font-size:var(--fs-xs);color:var(--tx2);margin-bottom:4px;">${esc(oc.proveedor || 'Sin proveedor')} · ${esc(oc.items.length)} productos · ${totalUds} uds</div>
+          ${sinProd ? `<div style="font-size:var(--fs-xs);color:var(--warn-tx);margin-bottom:4px;">${sinProd} producto(s) sin registrar en WMS</div>` : ''}
           <button onclick="${btnClick}"
-            style="width:100%;padding:14px;margin-top:8px;background:${btnBg};color:#fff;border:none;border-radius:10px;font-size:15px;font-weight:700;cursor:pointer;">
+            style="width:100%;padding:14px;margin-top:8px;background:${btnBg};color:#fff;border:none;border-radius:10px;font-size:var(--fs-md);font-weight:700;cursor:pointer;">
             ${btnLabel}
           </button>
         </div>`;
     }).join('');
     el.innerHTML = html;
   } catch (e) {
-    el.innerHTML = '<div style="text-align:center;padding:20px;color:#ef4444;">Error cargando OCs</div>';
+    el.innerHTML = '<div style="text-align:center;padding:20px;color:var(--err-tx);">Error cargando OCs</div>';
   }
 }
 
@@ -1063,7 +1063,7 @@ function _tiendaOCRenderScan() {
   const itemsOC = (rec.items || []).filter(it => it.tipo !== 'BONIFICACION');
   const todoCompleto = itemsOC.length > 0 && itemsOC.every(it => it.cantidad_recibida >= it.cantidad_ordenada);
   const algoEscaneado = (rec.items || []).some(it => it.cantidad_recibida > 0);
-  const btnColor = todoCompleto ? '#16a34a' : '#b45309';
+  const btnColor = todoCompleto ? '#15803d' : '#b45309';
   const btnTexto = todoCompleto ? 'Confirmar recepción' : 'Confirmar recepción parcial';
   const btnActivo = algoEscaneado || todoCompleto;
 
@@ -1071,36 +1071,36 @@ function _tiendaOCRenderScan() {
     <div>
       <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px;">
         <button onclick="tiendaOCVolverLista()"
-          style="background:#222;border:1px solid #333;color:#fff;padding:8px 14px;border-radius:8px;cursor:pointer;font-size:14px;flex-shrink:0;">
+          style="background:var(--bg-s2);border:1px solid var(--brd);color:var(--tx);padding:8px 14px;border-radius:8px;cursor:pointer;font-size:var(--fs-sm);flex-shrink:0;">
           ← Volver
         </button>
         <div style="min-width:0;">
-          <div style="font-size:16px;font-weight:800;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">OC: ${esc(rec.numero_oc_siesa)}</div>
-          <div style="font-size:12px;color:#666;">${esc(rec.proveedor_nombre || '')}</div>
+          <div style="font-size:var(--fs-md);font-weight:800;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">OC: ${esc(rec.numero_oc_siesa)}</div>
+          <div style="font-size:var(--fs-xs);color:var(--tx3);">${esc(rec.proveedor_nombre || '')}</div>
         </div>
       </div>
 
-      <div style="background:#111;border-radius:10px;padding:12px;margin-bottom:12px;">
-        <div style="font-size:12px;color:#666;text-align:center;margin-bottom:10px;">Escanea unidad, caja o paca — el sistema calcula las unidades</div>
+      <div style="background:var(--bg-s);border-radius:10px;padding:12px;margin-bottom:12px;">
+        <div style="font-size:var(--fs-xs);color:var(--tx3);text-align:center;margin-bottom:10px;">Escanea unidad, caja o paca — el sistema calcula las unidades</div>
         ${OPERARIO && OPERARIO.puede_usar_camara ? `
         <button onclick="abrirCamara('lector-qr-toc','camara-box-toc', tiendaOCProcesarScan, this)"
-          style="width:100%;padding:13px;font-size:16px;background:#fff;color:#000;border:2px solid #000;border-radius:10px;cursor:pointer;margin-bottom:8px;">
+          style="width:100%;padding:13px;font-size:var(--fs-md);background:#fff;color:#000;border:2px solid var(--brd);border-radius:10px;cursor:pointer;margin-bottom:8px;">
           📷 Escanear con cámara
         </button>
         <div id="camara-box-toc" style="display:none;margin-bottom:8px;">
           <div id="lector-qr-toc" style="border-radius:10px;overflow:hidden;"></div>
-          <button onclick="cerrarCamara('camara-box-toc')" style="width:100%;padding:9px;margin-top:6px;font-size:14px;background:#333;color:#fff;border:none;border-radius:8px;cursor:pointer;">Cerrar cámara</button>
+          <button onclick="cerrarCamara('camara-box-toc')" style="width:100%;padding:9px;margin-top:6px;font-size:var(--fs-sm);background:var(--bg-s2);color:var(--tx);border:none;border-radius:8px;cursor:pointer;">Cerrar cámara</button>
         </div>` : ''}
         <div style="display:flex;gap:8px;margin-bottom:8px;">
           <input id="toc-codigo-manual" type="text" placeholder="O escribe / pega el código aquí"
-            style="flex:1;padding:10px;background:#0d0d0d;border:1px solid #333;border-radius:8px;color:#fff;font-size:14px;"
+            style="flex:1;padding:10px;background:var(--bg-s);border:1px solid var(--brd);border-radius:8px;color:var(--tx);font-size:var(--fs-sm);"
             onkeydown="if(event.key==='Enter'){ const v=this.value.trim(); if(v){ tiendaOCProcesarScan(v); this.value=''; } }"
             autocomplete="off" autocorrect="off" spellcheck="false">
           <button onclick="const v=document.getElementById('toc-codigo-manual').value.trim();if(v){tiendaOCProcesarScan(v);document.getElementById('toc-codigo-manual').value='';}"
-            style="padding:10px 14px;background:#1d4ed8;color:#fff;border:none;border-radius:8px;font-size:18px;cursor:pointer;">↵</button>
+            style="padding:10px 14px;background:#1d4ed8;color:#fff;border:none;border-radius:8px;font-size:var(--fs-lg);cursor:pointer;">↵</button>
         </div>
         <button onclick="tiendaOCBuscarManual()"
-          style="width:100%;padding:10px;font-size:14px;background:#1a1a1a;color:#9ca3af;border:1px solid #333;border-radius:8px;cursor:pointer;">
+          style="width:100%;padding:10px;font-size:var(--fs-sm);background:var(--bg-input);color:var(--tx2);border:1px solid var(--brd);border-radius:8px;cursor:pointer;">
           📦 Sin código — buscar producto manualmente
         </button>
       </div>
@@ -1110,17 +1110,17 @@ function _tiendaOCRenderScan() {
       </div>
 
       <button id="btn-confirmar-toc" onclick="tiendaOCConfirmar()" ${btnActivo ? '' : 'disabled'}
-        style="width:100%;padding:18px;font-size:20px;font-weight:700;background:${btnActivo ? btnColor : '#222'};color:#fff;border:none;border-radius:14px;cursor:${btnActivo ? 'pointer' : 'default'};margin-bottom:10px;">
+        style="width:100%;padding:18px;font-size:20px;font-weight:700;background:${btnActivo ? btnColor : 'var(--bg-s2)'};color:var(--tx);border:none;border-radius:14px;cursor:${btnActivo ? 'pointer' : 'default'};margin-bottom:10px;">
         ${btnActivo ? (todoCompleto ? '✓ ' : '⚠ ') + btnTexto : 'Escanea al menos un ítem para continuar'}
       </button>
 
       <button onclick="tiendaOCModalObsequio()"
-        style="width:100%;padding:13px;font-size:15px;font-weight:600;background:#1a1a2e;color:#a78bfa;border:1px solid #4c1d95;border-radius:10px;cursor:pointer;margin-bottom:8px;">
+        style="width:100%;padding:13px;font-size:var(--fs-md);font-weight:600;background:var(--bg-s);color:var(--lila-tx);border:1px solid var(--lila-brd);border-radius:10px;cursor:pointer;margin-bottom:8px;">
         🎁 Registrar Obsequio / Bonificación
       </button>
 
       <button onclick="tiendaOCVolverLista()"
-        style="width:100%;padding:12px;font-size:14px;background:#1a1a1a;color:#555;border:1px solid #222;border-radius:10px;cursor:pointer;">
+        style="width:100%;padding:12px;font-size:var(--fs-sm);background:var(--bg-input);color:var(--tx3);border:1px solid var(--brd);border-radius:10px;cursor:pointer;">
         Guardar y salir (continuar más tarde)
       </button>
     </div>`;
@@ -1140,18 +1140,18 @@ function _tiendaOCRenderItems(items) {
     const esBono = it.tipo === 'BONIFICACION';
     if (esBono) {
       return `
-        <div style="background:#0d0d1a;border:1px solid #4c1d95;border-radius:12px;padding:14px;margin-bottom:8px;">
+        <div style="background:var(--lila-bg);border:1px solid var(--lila-brd);border-radius:12px;padding:14px;margin-bottom:8px;">
           <div style="display:flex;justify-content:space-between;align-items:center;">
             <div style="min-width:0;flex:1;">
               <div style="display:flex;align-items:center;gap:8px;">
-                <span style="background:#4c1d95;color:#a78bfa;font-size:10px;font-weight:700;padding:2px 7px;border-radius:20px;">🎁 BONO</span>
-                <div style="font-size:14px;font-weight:600;color:#a78bfa;">${esc(it.producto_nombre || it.producto_codigo)}</div>
+                <span style="background:#4c1d95;color:var(--lila-tx);font-size:var(--fs-xs);font-weight:700;padding:2px 7px;border-radius:20px;">🎁 BONO</span>
+                <div style="font-size:var(--fs-sm);font-weight:600;color:var(--lila-tx);">${esc(it.producto_nombre || it.producto_codigo)}</div>
               </div>
-              <div style="font-size:11px;color:#555;margin-top:2px;">${esc(it.producto_codigo)}</div>
+              <div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:2px;">${esc(it.producto_codigo)}</div>
             </div>
             <div style="text-align:right;flex-shrink:0;padding-left:8px;">
-              <div style="font-size:28px;font-weight:900;color:#a78bfa;">${esc(it.cantidad_recibida)}</div>
-              <div style="font-size:10px;color:#6b7280;">und recibidas</div>
+              <div style="font-size:var(--fs-2xl);font-weight:900;color:var(--lila-tx);">${esc(it.cantidad_recibida)}</div>
+              <div style="font-size:var(--fs-xs);color:var(--tx3);">und recibidas</div>
             </div>
           </div>
         </div>`;
@@ -1166,25 +1166,25 @@ function _tiendaOCRenderItems(items) {
 
     const contadorDerecha = modoEmpaque ? `
       <div style="text-align:right;flex-shrink:0;padding-left:8px;">
-        <div style="font-size:42px;font-weight:900;line-height:1;color:${completo ? '#4ade80' : '#fff'};">${empaques}</div>
-        <div style="font-size:13px;font-weight:700;color:${completo ? '#4ade80' : '#facc15'};">${esc(it.cantidad_recibida)}/${esc(it.cantidad_ordenada)} und</div>
-        <div style="font-size:10px;color:#6b7280;">${unidadEmpaque} · ×${factor}</div>
+        <div style="font-size:42px;font-weight:900;line-height:1;color:${completo ? 'var(--ok-tx)' : 'var(--tx)'};">${empaques}</div>
+        <div style="font-size:var(--fs-sm);font-weight:700;color:${completo ? 'var(--ok-tx)' : 'var(--warn-tx)'};">${esc(it.cantidad_recibida)}/${esc(it.cantidad_ordenada)} und</div>
+        <div style="font-size:var(--fs-xs);color:var(--tx3);">${unidadEmpaque} · ×${factor}</div>
       </div>` : `
       <div style="text-align:right;flex-shrink:0;padding-left:8px;">
-        <div style="font-size:28px;font-weight:900;color:${completo ? '#4ade80' : '#fff'};">${esc(it.cantidad_recibida)}/${esc(it.cantidad_ordenada)}</div>
+        <div style="font-size:var(--fs-2xl);font-weight:900;color:${completo ? 'var(--ok-tx)' : 'var(--tx)'};">${esc(it.cantidad_recibida)}/${esc(it.cantidad_ordenada)}</div>
       </div>`;
 
     return `
-      <div style="background:${completo ? '#0d1a0d' : '#111'};border:1px solid ${completo ? '#166534' : '#222'};border-radius:12px;padding:14px;margin-bottom:8px;">
+      <div style="background:${completo ? 'var(--ok-bg)' : 'var(--bg-s)'};border:1px solid ${completo ? '#166534' : 'var(--brd)'};border-radius:12px;padding:14px;margin-bottom:8px;">
         <div style="display:flex;justify-content:space-between;align-items:center;">
           <div style="min-width:0;flex:1;">
-            <div style="font-size:14px;font-weight:600;color:${completo ? '#4ade80' : '#fff'};">${esc(it.producto_nombre || it.producto_codigo)}</div>
-            <div style="font-size:11px;color:#555;">${esc(it.producto_codigo)}</div>
+            <div style="font-size:var(--fs-sm);font-weight:600;color:${completo ? 'var(--ok-tx)' : 'var(--tx)'};">${esc(it.producto_nombre || it.producto_codigo)}</div>
+            <div style="font-size:var(--fs-xs);color:var(--tx3);">${esc(it.producto_codigo)}</div>
           </div>
           ${contadorDerecha}
         </div>
-        <div style="height:5px;background:#222;border-radius:3px;margin-top:8px;">
-          <div style="height:100%;background:${completo ? '#16a34a' : '#2563eb'};border-radius:3px;width:${pct}%;transition:width 0.3s;"></div>
+        <div style="height:5px;background:var(--bg-s2);border-radius:3px;margin-top:8px;">
+          <div style="height:100%;background:${completo ? '#15803d' : '#2563eb'};border-radius:3px;width:${pct}%;transition:width 0.3s;"></div>
         </div>
       </div>`;
   }).join('');
@@ -1294,7 +1294,7 @@ async function _tiendaOCRegistrarScan(productoId, cantidad, esEmpaque, esBonific
   const btn = document.getElementById('btn-confirmar-toc');
   if (btn) {
     btn.disabled = false;
-    btn.style.background = todoCompleto ? '#16a34a' : '#b45309';
+    btn.style.background = todoCompleto ? '#15803d' : '#b45309';
     btn.style.cursor = 'pointer';
     btn.textContent = todoCompleto ? '✓ Confirmar recepción' : '⚠ Confirmar recepción parcial';
     if (todoCompleto) alerta('Todo escaneado — confirma la recepción', 'exito');
@@ -1318,19 +1318,19 @@ function tiendaOCModalObsequio() {
   const overlay = document.createElement('div');
   overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:9000;display:flex;align-items:center;justify-content:center;padding:24px;';
   overlay.innerHTML = `
-    <div style="background:#0d0d1a;border:1px solid #4c1d95;border-radius:16px;padding:28px;max-width:360px;width:100%;text-align:center;">
+    <div style="background:var(--lila-bg);border:1px solid var(--lila-brd);border-radius:16px;padding:28px;max-width:360px;width:100%;text-align:center;">
       <div style="font-size:40px;margin-bottom:12px;">🎁</div>
-      <div style="font-size:18px;font-weight:800;color:#a78bfa;margin-bottom:10px;">¿Hay obsequios o bonificaciones?</div>
-      <div style="font-size:14px;color:#9ca3af;margin-bottom:24px;">¿El proveedor envió productos adicionales que <strong style="color:#fff;">no están en la OC</strong>?</div>
+      <div style="font-size:var(--fs-lg);font-weight:800;color:var(--lila-tx);margin-bottom:10px;">¿Hay obsequios o bonificaciones?</div>
+      <div style="font-size:var(--fs-sm);color:var(--tx2);margin-bottom:24px;">¿El proveedor envió productos adicionales que <strong style="color:var(--tx);">no están en la OC</strong>?</div>
       <div style="display:flex;gap:8px;margin-bottom:10px;">
         <input id="toc-bono-codigo" type="text" placeholder="Código del producto"
-          style="flex:1;padding:10px;background:#0a0a0a;border:1px solid #4c1d95;border-radius:8px;color:#fff;font-size:14px;"
+          style="flex:1;padding:10px;background:var(--bg-s);border:1px solid var(--lila-brd);border-radius:8px;color:var(--tx);font-size:var(--fs-sm);"
           onkeydown="if(event.key==='Enter'){ const v=this.value.trim(); if(v){ _tiendaOCEscanearBono(v); this.closest('div[style*=fixed]').remove(); } }">
         <button onclick="const v=document.getElementById('toc-bono-codigo').value.trim();if(v){_tiendaOCEscanearBono(v);this.closest('div[style*=fixed]').remove();}"
-          style="padding:10px 14px;background:#4c1d95;color:#fff;border:none;border-radius:8px;font-size:18px;cursor:pointer;">↵</button>
+          style="padding:10px 14px;background:#4c1d95;color:var(--tx);border:none;border-radius:8px;font-size:var(--fs-lg);cursor:pointer;">↵</button>
       </div>
       <button onclick="this.closest('div[style*=fixed]').remove()"
-        style="width:100%;padding:12px;font-size:14px;background:#1a1a1a;color:#555;border:1px solid #222;border-radius:10px;cursor:pointer;">
+        style="width:100%;padding:12px;font-size:var(--fs-sm);background:var(--bg-input);color:var(--tx3);border:1px solid var(--brd);border-radius:10px;cursor:pointer;">
         Cancelar
       </button>
     </div>`;

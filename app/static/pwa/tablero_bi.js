@@ -69,7 +69,7 @@ function biFechaHora(iso) {
 
 function biUltimaActualizacion() {
   const ahora = new Date().toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit' });
-  return `<div style="font-size:11px;color:var(--tx3);margin-top:6px;">Última actualización: ${ahora} · Fuente: WMS</div>`;
+  return `<div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:6px;">Última actualización: ${ahora} · Fuente: WMS</div>`;
 }
 
 function biBadges(obj) {
@@ -86,12 +86,12 @@ function biPaginacionHTML(total, page, perPage) {
   return `
     <div style="display:flex;justify-content:space-between;align-items:center;width:100%;">
       <button onclick="biCambiarPagina(${page - 1})" ${page <= 1 ? 'disabled' : ''}
-        style="padding:8px 14px;background:var(--bg-s);border:1px solid var(--brd);color:${page <= 1 ? 'var(--tx3)' : 'var(--tx)'};border-radius:8px;font-size:13px;cursor:${page <= 1 ? 'default' : 'pointer'};">
+        style="padding:8px 14px;background:var(--bg-s);border:1px solid var(--brd);color:${page <= 1 ? 'var(--tx3)' : 'var(--tx)'};border-radius:8px;font-size:var(--fs-sm);cursor:${page <= 1 ? 'default' : 'pointer'};">
         ← Anterior
       </button>
-      <span style="font-size:12px;color:var(--tx3);">${total.toLocaleString()} · Pág ${page}/${totalPag}</span>
+      <span style="font-size:var(--fs-xs);color:var(--tx3);">${total.toLocaleString()} · Pág ${page}/${totalPag}</span>
       <button onclick="biCambiarPagina(${page + 1})" ${page >= totalPag ? 'disabled' : ''}
-        style="padding:8px 14px;background:var(--bg-s);border:1px solid var(--brd);color:${page >= totalPag ? 'var(--tx3)' : 'var(--tx)'};border-radius:8px;font-size:13px;cursor:${page >= totalPag ? 'default' : 'pointer'};">
+        style="padding:8px 14px;background:var(--bg-s);border:1px solid var(--brd);color:${page >= totalPag ? 'var(--tx3)' : 'var(--tx)'};border-radius:8px;font-size:var(--fs-sm);cursor:${page >= totalPag ? 'default' : 'pointer'};">
         Siguiente →
       </button>
     </div>`;
@@ -137,7 +137,7 @@ function biRenderChart(porDia, label, color) {
 }
 
 function biErrorHTML(mensaje, reintentarFn) {
-  return `<div style="text-align:center;padding:20px;color:#ef4444;">${mensaje}<br>
+  return `<div style="text-align:center;padding:20px;color:var(--err-tx);">${mensaje}<br>
     <button onclick="${reintentarFn}" style="margin-top:8px;padding:6px 12px;background:var(--bg-s);border:1px solid var(--brd);border-radius:8px;color:var(--tx);cursor:pointer;">Reintentar</button></div>`;
 }
 
@@ -183,7 +183,7 @@ async function biCargarDespachados() {
       <div class="tabla-fila">
         <div>
           <div class="tabla-nombre">${esc(t.codigo)} — ${esc(t.cliente || 'Sin cliente')}</div>
-          <div style="font-size:11px;color:var(--tx3);">${biFechaHora(t.fecha_despachado)} · ${esc(t.total_items)} línea(s)</div>
+          <div style="font-size:var(--fs-xs);color:var(--tx3);">${biFechaHora(t.fecha_despachado)} · ${esc(t.total_items)} línea(s)</div>
         </div>
         <div style="font-weight:700;">${biMoneda(t.valor_factura)}</div>
       </div>`).join('')
@@ -234,9 +234,9 @@ async function biCargarPendientes() {
       <div class="tabla-fila">
         <div>
           <div class="tabla-nombre">${esc(p.numero_pedido)} — ${esc(p.item_descripcion || '')}</div>
-          <div style="font-size:11px;color:var(--tx3);">${esc(p.cliente || 'Sin cliente')} · ${esc(p.motivo)} · ${p.dias_atraso ?? '—'} día(s) de atraso</div>
+          <div style="font-size:var(--fs-xs);color:var(--tx3);">${esc(p.cliente || 'Sin cliente')} · ${esc(p.motivo)} · ${p.dias_atraso ?? '—'} día(s) de atraso</div>
         </div>
-        <div style="text-align:right;font-size:13px;">${esc(p.cantidad_pendiente)} / ${esc(p.cantidad_pedida)}</div>
+        <div style="text-align:right;font-size:var(--fs-sm);">${esc(p.cantidad_pendiente)} / ${esc(p.cantidad_pedida)}</div>
       </div>`).join('')
       : '<div style="text-align:center;padding:30px;color:var(--tx3);">Sin pedidos pendientes en este rango</div>';
 
@@ -254,7 +254,7 @@ async function biCargarPendientes() {
 function _biSinPrecioHtml(kpi) {
   const sp = (kpi && kpi.sin_precio) || {};
   if (!sp.eventos) return '';
-  return `<div style="font-size:12px;color:var(--tx3);margin:4px 0 8px;">⚠ El total es un piso: ${esc(sp.eventos)} agotado(s) (${esc(sp.unidades)} und) no tienen precio de venta y no están sumados.</div>`;
+  return `<div style="font-size:var(--fs-xs);color:var(--tx3);margin:4px 0 8px;">⚠ El total es un piso: ${esc(sp.eventos)} agotado(s) (${esc(sp.unidades)} und) no tienen precio de venta y no están sumados.</div>`;
 }
 
 async function biCargarVentaPerdida() {
@@ -293,11 +293,11 @@ async function biCargarVentaPerdida() {
       <div class="tabla-fila">
         <div>
           <div class="tabla-nombre">${esc(ev.producto_codigo || ('SKU ' + ev.producto_id))} — ${esc(ev.producto_nombre || '')}</div>
-          <div style="font-size:11px;color:var(--tx3);">${esc(ev.pedido_siesa_ref || 'Sin pedido')} · ${esc(ev.categoria_producto || 'Sin categoría')} · ${biFechaHora(ev.creado_en)}</div>
+          <div style="font-size:var(--fs-xs);color:var(--tx3);">${esc(ev.pedido_siesa_ref || 'Sin pedido')} · ${esc(ev.categoria_producto || 'Sin categoría')} · ${biFechaHora(ev.creado_en)}</div>
         </div>
         <div style="text-align:right;">
           <div style="font-weight:700;">${ev.precio_venta_capturado == null ? 'sin precio' : biMoneda(ev.cantidad_faltante * ev.precio_venta_capturado)}</div>
-          <div style="font-size:11px;color:var(--tx3);">${esc(ev.cantidad_faltante)} und</div>
+          <div style="font-size:var(--fs-xs);color:var(--tx3);">${esc(ev.cantidad_faltante)} und</div>
         </div>
       </div>`).join('')
       : '<div style="text-align:center;padding:30px;color:var(--tx3);">Sin eventos de agotado en este rango — histórico solo desde que se activó la captura</div>';

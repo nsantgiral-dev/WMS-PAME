@@ -81,7 +81,7 @@ function layoutSubtab(sec) {
     cont.style.display = activo ? 'block' : 'none';
     // Tabs reales (subrayado), no segmented control — Ubicaciones e Importar
     // Excel son pantallas distintas, no una misma vista filtrada de dos formas.
-    btn.style.color = activo ? 'var(--pm)' : 'var(--tx3)';
+    btn.style.color = activo ? 'var(--acento-tx)' : 'var(--tx3)';
     btn.style.borderBottomColor = activo ? 'var(--pm)' : 'transparent';
     btn.style.fontWeight = activo ? '700' : '400';
   });
@@ -117,36 +117,36 @@ function _layoutRenderUbicacionCard(u) {
     <div class="tabla-card" style="margin-bottom:10px;">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px;">
         <div>
-          <div style="font-size:15px;font-weight:800;font-family:monospace;color:var(--tx);">${esc(u.codigo)}</div>
-          ${skuLabel ? `<div style="font-size:11px;color:${u.producto_asignado_codigo ? '#60a5fa' : '#555'};margin-top:3px;font-weight:600;">${skuLabel}</div>` : ''}
+          <div style="font-size:var(--fs-md);font-weight:800;font-family:monospace;color:var(--tx);">${esc(u.codigo)}</div>
+          ${skuLabel ? `<div style="font-size:var(--fs-xs);color:${u.producto_asignado_codigo ? 'var(--info-tx)' : 'var(--tx3)'};margin-top:3px;font-weight:600;">${skuLabel}</div>` : ''}
         </div>
         <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;justify-content:flex-end;">
-          <span style="font-size:11px;font-weight:700;color:${color};background:${color}22;padding:3px 8px;border-radius:20px;">${esc(u.tipo_zona)}</span>
-          ${badgeMueble ? `<span style="font-size:10px;font-weight:700;color:var(--tx3);background:var(--bg-s2);padding:3px 8px;border-radius:20px;">${badgeMueble}</span>` : ''}
-          ${!u.activo ? `<span style="font-size:10px;color:#888;background:#88888822;padding:3px 8px;border-radius:20px;">INACTIVA</span>` : ''}
+          <span style="font-size:var(--fs-xs);font-weight:700;color:${color};background:${color}22;padding:3px 8px;border-radius:20px;">${esc(u.tipo_zona)}</span>
+          ${badgeMueble ? `<span style="font-size:var(--fs-xs);font-weight:700;color:var(--tx3);background:var(--bg-s2);padding:3px 8px;border-radius:20px;">${badgeMueble}</span>` : ''}
+          ${!u.activo ? `<span style="font-size:var(--fs-xs);color:var(--tx2);background:#88888822;padding:3px 8px;border-radius:20px;">INACTIVA</span>` : ''}
         </div>
       </div>
-      <div style="display:flex;gap:16px;font-size:11px;color:var(--tx3);margin-bottom:10px;">
+      <div style="display:flex;gap:16px;font-size:var(--fs-xs);color:var(--tx3);margin-bottom:10px;">
         <span>Stock <strong style="color:var(--tx);">${u.stock_actual ?? 0}</strong></span>
         ${u.capacidad_maxima != null ? `<span>Capacidad <strong style="color:var(--tx);">${esc(u.capacidad_maxima)}</strong></span>` : ''}
-        <span style="color:#666;">${u.origen === 'MANUAL' ? 'WMS' : 'Siesa'}</span>
+        <span style="color:var(--tx3);">${u.origen === 'MANUAL' ? 'WMS' : 'Siesa'}</span>
       </div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;">
         <button onclick="layoutAbrirModalAsignar(${esc(u.id)}, '${esc(u.codigo)}', '${esc(u.tipo_zona)}', ${u.capacidad_maxima ?? 'null'})"
-          style="flex:1;min-width:90px;padding:8px;background:var(--bg);border:1px solid var(--brd);border-radius:6px;color:var(--tx2);font-size:12px;cursor:pointer;">
+          style="flex:1;min-width:90px;padding:8px;background:var(--bg);border:1px solid var(--brd);border-radius:6px;color:var(--tx2);font-size:var(--fs-xs);cursor:pointer;">
           Asignar SKU
         </button>
         ${_layoutEsAdminCompleto() ? `
         <button onclick="layoutAbrirModalEditarUbicacion(${esc(u.id)})"
-          style="flex:1;min-width:90px;padding:8px;background:var(--bg);border:1px solid var(--brd);border-radius:6px;color:var(--tx2);font-size:12px;cursor:pointer;">
+          style="flex:1;min-width:90px;padding:8px;background:var(--bg);border:1px solid var(--brd);border-radius:6px;color:var(--tx2);font-size:var(--fs-xs);cursor:pointer;">
           Editar
         </button>
         <button onclick="layoutEliminarUbicacion(${esc(u.id)}, '${esc(u.codigo)}')"
-          style="flex:1;min-width:90px;padding:8px;background:var(--bg);border:1px solid #7f1d1d;border-radius:6px;color:#f87171;font-size:12px;cursor:pointer;">
+          style="flex:1;min-width:90px;padding:8px;background:var(--bg);border:1px solid var(--err-brd);border-radius:6px;color:var(--err-tx);font-size:var(--fs-xs);cursor:pointer;">
           Eliminar
         </button>
         <button onclick="layoutAbrirModalReclasificar(${esc(u.id)})"
-          style="flex:1;min-width:90px;padding:8px;background:var(--bg);border:1px solid var(--brd);border-radius:6px;color:var(--tx2);font-size:12px;cursor:pointer;">
+          style="flex:1;min-width:90px;padding:8px;background:var(--bg);border:1px solid var(--brd);border-radius:6px;color:var(--tx2);font-size:var(--fs-xs);cursor:pointer;">
           Reclasificar
         </button>` : ''}
       </div>
@@ -157,13 +157,13 @@ function _layoutRenderUbicacionCard(u) {
 async function layoutCargarUbicaciones() {
   const el = document.getElementById('layout-lista-ubicaciones');
   if (!el) return;
-  el.innerHTML = '<div style="text-align:center;padding:30px;color:#555;">Cargando...</div>';
+  el.innerHTML = '<div style="text-align:center;padding:30px;color:var(--tx3);">Cargando...</div>';
   try {
     const d = await get(`/api/almacenes/${ALMACEN_ID}/layout`);
     _layoutUbicacionesCache = d.ubicaciones || [];
     layoutZonaTab(_layoutZonaActual);
   } catch (e) {
-    el.innerHTML = '<div style="text-align:center;padding:30px;color:#ef4444;">Error cargando el layout</div>';
+    el.innerHTML = '<div style="text-align:center;padding:30px;color:var(--err-tx);">Error cargando el layout</div>';
   }
 }
 
@@ -188,10 +188,10 @@ function layoutRenderUbicaciones() {
 
   if (!items.length) {
     el.innerHTML = `
-      <div style="text-align:center;padding:40px;color:#555;">
+      <div style="text-align:center;padding:40px;color:var(--tx3);">
         <div style="font-size:32px;margin-bottom:12px;opacity:0.4;">🧭</div>
-        <div style="font-size:15px;font-weight:600;">Sin ubicaciones en ${_layoutZonaActual}</div>
-        <div style="font-size:12px;margin-top:6px;">Usa "+ Crear ubicación" para empezar a armar el layout de esta bodega</div>
+        <div style="font-size:var(--fs-md);font-weight:600;">Sin ubicaciones en ${_layoutZonaActual}</div>
+        <div style="font-size:var(--fs-xs);margin-top:6px;">Usa "+ Crear ubicación" para empezar a armar el layout de esta bodega</div>
       </div>`;
     return;
   }
@@ -252,15 +252,15 @@ function layoutRenderUbicaciones() {
       const codigoFila = `${esc(g.pasillo)}${String(g.estante).padStart(2, '0')}`;
       html += `
         <div style="display:flex;justify-content:space-between;align-items:center;background:var(--bg-s2);border-radius:8px;padding:8px 12px;margin:16px 0 8px;">
-          <div style="font-size:12px;font-weight:700;color:var(--tx2);">Fila ${codigoFila} · ${_layoutZonaActual} · ${esc(g.items.length)} posición(es)</div>
+          <div style="font-size:var(--fs-xs);font-weight:700;color:var(--tx2);">Fila ${codigoFila} · ${_layoutZonaActual} · ${esc(g.items.length)} posición(es)</div>
           ${_layoutEsAdminCompleto() ? `
           <div style="display:flex;gap:6px;">
             <button onclick="layoutAbrirModalEditarFila('${esc(g.pasillo)}','${esc(g.estante)}')"
-              style="padding:10px 14px;background:var(--bg);border:1px solid var(--brd);border-radius:6px;color:var(--tx2);font-size:11px;cursor:pointer;">
+              style="padding:10px 14px;background:var(--bg);border:1px solid var(--brd);border-radius:6px;color:var(--tx2);font-size:var(--fs-xs);cursor:pointer;">
               ✏ Editar
             </button>
             <button onclick="layoutAbrirModalEliminarFila('${esc(g.pasillo)}','${esc(g.estante)}')"
-              style="padding:10px 14px;background:var(--bg);border:1px solid #7f1d1d;border-radius:6px;color:#f87171;font-size:11px;cursor:pointer;">
+              style="padding:10px 14px;background:var(--bg);border:1px solid var(--err-brd);border-radius:6px;color:var(--err-tx);font-size:var(--fs-xs);cursor:pointer;">
               🗑 Eliminar
             </button>
           </div>` : ''}
@@ -287,11 +287,11 @@ function layoutRenderUbicaciones() {
           <svg width="17" height="17" viewBox="0 0 20 20" fill="none" style="flex-shrink:0;color:var(--tx3);">
             <path d="M7 4l6 6-6 6" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
           </svg>
-          <div style="min-width:120px;font-size:15px;font-weight:800;font-family:monospace;color:var(--tx);">${codigoCuerpo}</div>
+          <div style="min-width:120px;font-size:var(--fs-md);font-weight:800;font-family:monospace;color:var(--tx);">${codigoCuerpo}</div>
           <div style="flex:1;min-width:140px;">
-            <div style="font-size:12px;font-weight:700;color:var(--tx2);"><b style="color:var(--tx);">${asignados}</b> de ${total} huecos asignados</div>
+            <div style="font-size:var(--fs-xs);font-weight:700;color:var(--tx2);"><b style="color:var(--tx);">${asignados}</b> de ${total} huecos asignados</div>
             <div style="height:5px;border-radius:3px;background:var(--bg-s2);overflow:hidden;margin-top:4px;">
-              <span style="display:block;height:100%;border-radius:3px;background:var(--green,#16a34a);width:${pct}%;"></span>
+              <span style="display:block;height:100%;border-radius:3px;background:var(--green,#15803d);width:${pct}%;"></span>
             </div>
           </div>
           ${chip}
@@ -340,7 +340,7 @@ function layoutCuerpoSetTipoMueble(tipo) {
     const btn = document.getElementById(`layout-cuerpo-tipo-${t}`);
     if (!btn) return;
     const activo = t === tipo;
-    btn.style.background = activo ? 'var(--pm)' : 'var(--bg)';
+    btn.style.background = activo ? 'var(--pm-fill)' : 'var(--bg)';
     btn.style.color = activo ? '#fff' : 'var(--tx2)';
   });
   const esMuebleSuelto = tipo !== 'estanteria';
@@ -475,9 +475,9 @@ function layoutCuerpoIrAPaso2() {
     const valor = (_layoutCuerpoHuecosPrevios && _layoutCuerpoHuecosPrevios[nivel - 1]) || 1;
     html += `
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
-        <div style="flex:1;font-size:12px;color:var(--tx2);">Entrepaño ${nivel}</div>
+        <div style="flex:1;font-size:var(--fs-xs);color:var(--tx2);">Entrepaño ${nivel}</div>
         <input id="layout-cuerpo-hueco-nivel-${nivel}" type="number" min="1" value="${valor}"
-          style="width:72px;padding:8px;background:var(--bg);border:1px solid var(--brd);border-radius:8px;color:var(--tx);font-size:14px;box-sizing:border-box;text-align:center;">
+          style="width:72px;padding:8px;background:var(--bg);border:1px solid var(--brd);border-radius:8px;color:var(--tx);font-size:var(--fs-sm);box-sizing:border-box;text-align:center;">
       </div>`;
   }
   cont.innerHTML = html;
@@ -559,9 +559,9 @@ function layoutEditarCuerpoIrAPaso2() {
   for (let nivel = 1; nivel <= cantidad_entrepanos; nivel++) {
     html += `
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
-        <div style="flex:1;font-size:12px;color:var(--tx2);">Entrepaño ${nivel}</div>
+        <div style="flex:1;font-size:var(--fs-xs);color:var(--tx2);">Entrepaño ${nivel}</div>
         <input id="layout-editar-cuerpo-hueco-nivel-${nivel}" type="number" min="1" value="1"
-          style="width:72px;padding:8px;background:var(--bg);border:1px solid var(--brd);border-radius:8px;color:var(--tx);font-size:14px;box-sizing:border-box;text-align:center;">
+          style="width:72px;padding:8px;background:var(--bg);border:1px solid var(--brd);border-radius:8px;color:var(--tx);font-size:var(--fs-sm);box-sizing:border-box;text-align:center;">
       </div>`;
   }
   cont.innerHTML = html;
@@ -759,12 +759,12 @@ async function layoutGuardarEditarFila() {
     if (!r.ok) { alerta(d.error || 'Error editando la fila', 'error'); return; }
     const resEl = document.getElementById('layout-editar-fila-resultado');
     const bloqueadasCodigos = Object.keys(d.bloqueadas || {});
-    let html = `<div style="color:#4ade80;">✓ ${esc(d.actualizadas.length)}/${esc(d.total_posiciones)} posición(es) actualizada(s)</div>`;
+    let html = `<div style="color:var(--ok-tx);">✓ ${esc(d.actualizadas.length)}/${esc(d.total_posiciones)} posición(es) actualizada(s)</div>`;
     if (bloqueadasCodigos.length) {
-      html += bloqueadasCodigos.map(c => `<div style="color:#f87171;margin-top:4px;">✗ ${c}: ${esc(d.bloqueadas[c])}</div>`).join('');
+      html += bloqueadasCodigos.map(c => `<div style="color:var(--err-tx);margin-top:4px;">✗ ${c}: ${esc(d.bloqueadas[c])}</div>`).join('');
     }
     if (d.advertencias && d.advertencias.length) {
-      html += d.advertencias.map(a => `<div style="color:#facc15;margin-top:4px;">⚠ ${a}</div>`).join('');
+      html += d.advertencias.map(a => `<div style="color:var(--warn-tx);margin-top:4px;">⚠ ${a}</div>`).join('');
     }
     resEl.innerHTML = html;
     alerta(`${d.actualizadas.length}/${d.total_posiciones} posición(es) actualizada(s)`, bloqueadasCodigos.length ? 'advertencia' : 'ok');
@@ -823,9 +823,9 @@ async function layoutGuardarEliminarFila(forzar) {
 
     const resEl = document.getElementById('layout-eliminar-fila-resultado');
     const bloqueadasCodigos = Object.keys(d.bloqueadas || {});
-    let html = `<div style="color:#4ade80;">✓ ${esc(d.eliminadas.length)}/${esc(d.total_posiciones)} posición(es) eliminada(s)</div>`;
+    let html = `<div style="color:var(--ok-tx);">✓ ${esc(d.eliminadas.length)}/${esc(d.total_posiciones)} posición(es) eliminada(s)</div>`;
     if (bloqueadasCodigos.length) {
-      html += bloqueadasCodigos.map(c => `<div style="color:#f87171;margin-top:4px;">✗ ${c}: ${esc(d.bloqueadas[c])}</div>`).join('');
+      html += bloqueadasCodigos.map(c => `<div style="color:var(--err-tx);margin-top:4px;">✗ ${c}: ${esc(d.bloqueadas[c])}</div>`).join('');
     }
     resEl.innerHTML = html;
     alerta(`${d.eliminadas.length}/${d.total_posiciones} posición(es) eliminada(s)`, bloqueadasCodigos.length ? 'advertencia' : 'ok');
@@ -993,7 +993,7 @@ async function layoutGuardarEditarUbicacion() {
 
     const resEl = document.getElementById('layout-editar-ub-resultado');
     resEl.innerHTML = (d.advertencias && d.advertencias.length)
-      ? d.advertencias.map(a => `<div style="color:#facc15;margin-top:4px;">⚠ ${a}</div>`).join('')
+      ? d.advertencias.map(a => `<div style="color:var(--warn-tx);margin-top:4px;">⚠ ${a}</div>`).join('')
       : '';
     alerta('Ubicación actualizada', 'ok');
     layoutCargarUbicaciones();
@@ -1125,13 +1125,13 @@ async function layoutImportarExcel(btn) {
     if (!r.ok) { alerta(d.error || 'Error procesando el archivo', 'error'); return; }
 
     const erroresHtml = (d.errores || []).map(e =>
-      `<div style="font-size:12px;color:#f87171;padding:4px 0;">Fila ${esc(e.fila)}: ${esc(e.error)}</div>`
+      `<div style="font-size:var(--fs-xs);color:var(--err-tx);padding:4px 0;">Fila ${esc(e.fila)}: ${esc(e.error)}</div>`
     ).join('');
 
     resultado.innerHTML = `
       <div class="tabla-card">
-        <div style="font-size:13px;font-weight:700;color:#4ade80;margin-bottom:8px;">✓ ${esc(d.ok)} fila(s) importada(s) correctamente</div>
-        ${d.errores?.length ? `<div style="font-size:12px;font-weight:700;color:#f87171;margin-bottom:4px;">${esc(d.errores.length)} fila(s) con error:</div>${erroresHtml}` : ''}
+        <div style="font-size:var(--fs-sm);font-weight:700;color:var(--ok-tx);margin-bottom:8px;">✓ ${esc(d.ok)} fila(s) importada(s) correctamente</div>
+        ${d.errores?.length ? `<div style="font-size:var(--fs-xs);font-weight:700;color:var(--err-tx);margin-bottom:4px;">${esc(d.errores.length)} fila(s) con error:</div>${erroresHtml}` : ''}
       </div>`;
     alerta(`Importación completa — ${d.ok} ok, ${d.errores?.length || 0} error(es)`, d.errores?.length ? 'advertencia' : 'ok');
     layoutCargarUbicaciones();
@@ -1219,8 +1219,8 @@ function _layoutRenderEntrepanoSeccion(huecos, esPrimero) {
   // el popup que llama a esta función (layoutAbrirModalCuerpoDetalle) ya la
   // muestra una vez en el título — un cuerpo es 100% de una sola zona.
   const asignarBtnStyle = ok
-    ? 'background:transparent;color:var(--pm);border:1px solid var(--brd);'
-    : 'background:var(--pm);color:#fff;border:none;';
+    ? 'background:transparent;color:var(--acento-tx);border:1px solid var(--brd);'
+    : 'background:var(--pm-fill);color:#fff;border:none;';
   return `
     <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;
       padding:11px 14px;border-radius:10px;border-left:3px solid ${ok ? 'transparent' : 'var(--warn,#d97706)'};
@@ -1228,20 +1228,20 @@ function _layoutRenderEntrepanoSeccion(huecos, esPrimero) {
       ${esPrimero ? '' : 'margin-top:6px;'}">
       <div style="display:flex;align-items:center;gap:11px;min-width:0;">
         <span style="width:24px;height:24px;border-radius:50%;flex-shrink:0;display:flex;align-items:center;
-          justify-content:center;font-size:12px;font-weight:900;
+          justify-content:center;font-size:var(--fs-xs);font-weight:900;
           background:${ok ? 'var(--gbg,#DCFCE7)' : 'var(--warn-bg,#FEF3C7)'};
-          color:${ok ? 'var(--green,#16a34a)' : 'var(--warn,#d97706)'};">${ok ? '✓' : '!'}</span>
+          color:${ok ? 'var(--green,#15803d)' : 'var(--warn,#d97706)'};">${ok ? '✓' : '!'}</span>
         <div style="min-width:0;">
-          <div style="font-size:13.5px;font-weight:800;color:var(--tx);">Entrepaño ${nivel}</div>
-          <div style="font-size:11.5px;margin-top:1px;font-weight:${ok ? 600 : 700};
+          <div style="font-size:var(--fs-sm);font-weight:800;color:var(--tx);">Entrepaño ${nivel}</div>
+          <div style="font-size:var(--fs-xs);margin-top:1px;font-weight:${ok ? 600 : 700};
             color:${ok ? 'var(--tx3)' : 'var(--warn,#d97706)'};font-variant-numeric:tabular-nums;">${subtitulo}</div>
         </div>
       </div>
       <div style="display:flex;gap:6px;flex-shrink:0;">
         <button onclick="layoutAbrirModalAsignarEntrepano('${idsCsv}', '${zona}')"
-          style="padding:8px 12px;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap;${asignarBtnStyle}">Asignar SKU</button>
+          style="padding:8px 12px;border-radius:6px;font-size:var(--fs-xs);font-weight:700;cursor:pointer;white-space:nowrap;${asignarBtnStyle}">Asignar SKU</button>
         <button onclick="layoutAbrirModalVerEntrepano('${idsCsv}')"
-          style="padding:8px 12px;background:transparent;border:1px solid var(--brd);border-radius:6px;color:var(--tx2);font-size:12px;cursor:pointer;">Ver</button>
+          style="padding:8px 12px;background:transparent;border:1px solid var(--brd);border-radius:6px;color:var(--tx2);font-size:var(--fs-xs);cursor:pointer;">Ver</button>
       </div>
     </div>`;
 }
@@ -1293,11 +1293,11 @@ function _layoutAsignarEntFilaVista(u, huecoLabel) {
     <div class="tabla-card" style="margin-bottom:8px;padding:10px;">
       <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;">
         <div style="min-width:0;">
-          <div style="font-size:11px;font-weight:700;font-family:monospace;color:var(--tx3);">${huecoLabel}</div>
-          <div style="font-size:16px;font-weight:800;color:var(--tx);margin-top:2px;line-height:1.3;">${referencia}</div>
+          <div style="font-size:var(--fs-xs);font-weight:700;font-family:monospace;color:var(--tx3);">${huecoLabel}</div>
+          <div style="font-size:var(--fs-md);font-weight:800;color:var(--tx);margin-top:2px;line-height:1.3;">${referencia}</div>
         </div>
         <button onclick="layoutEditarSkuEntrepano(${esc(u.id)})"
-          style="flex-shrink:0;padding:9px 16px;background:var(--bg);border:1px solid var(--brd);border-radius:6px;color:var(--tx2);font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap;">
+          style="flex-shrink:0;padding:9px 16px;background:var(--bg);border:1px solid var(--brd);border-radius:6px;color:var(--tx2);font-size:var(--fs-xs);font-weight:700;cursor:pointer;white-space:nowrap;">
           Cambiar SKU
         </button>
       </div>
@@ -1312,22 +1312,22 @@ function _layoutAsignarEntFilaEdicion(u, huecoLabel, zona) {
   return `
     <div class="tabla-card" style="margin-bottom:8px;padding:10px;">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
-        <div style="font-size:12px;font-weight:700;font-family:monospace;color:var(--tx);">${huecoLabel}</div>
-        <div id="layout-asignar-ent-estado-${esc(u.id)}" style="font-size:11px;color:#60a5fa;">${cambiando}</div>
+        <div style="font-size:var(--fs-xs);font-weight:700;font-family:monospace;color:var(--tx);">${huecoLabel}</div>
+        <div id="layout-asignar-ent-estado-${esc(u.id)}" style="font-size:var(--fs-xs);color:var(--info-tx);">${cambiando}</div>
       </div>
       <div style="display:flex;gap:6px;">
         <input id="layout-asignar-ent-codigo-${esc(u.id)}" type="text" placeholder="Código o código de barras" autocomplete="off"
           onkeydown="if(event.key==='Enter'){event.preventDefault();layoutBuscarProductoEntrepano(${esc(u.id)});}"
           onblur="layoutBuscarProductoEntrepano(${esc(u.id)})"
-          style="flex:1;min-width:0;padding:9px;background:var(--bg);border:1px solid var(--brd);border-radius:6px;color:var(--tx);font-size:13px;box-sizing:border-box;">
+          style="flex:1;min-width:0;padding:9px;background:var(--bg);border:1px solid var(--brd);border-radius:6px;color:var(--tx);font-size:var(--fs-sm);box-sizing:border-box;">
         <input id="layout-asignar-ent-cantidad-${esc(u.id)}" type="number" min="1" placeholder="Cant."
           onkeydown="if(event.key==='Enter'){event.preventDefault();layoutAsignarEntSiguiente(${esc(u.id)});}"
-          style="width:64px;padding:9px;background:var(--bg);border:1px solid var(--brd);border-radius:6px;color:var(--tx);font-size:13px;text-align:center;box-sizing:border-box;">
+          style="width:64px;padding:9px;background:var(--bg);border:1px solid var(--brd);border-radius:6px;color:var(--tx);font-size:var(--fs-sm);text-align:center;box-sizing:border-box;">
       </div>
       ${_ZONAS_SLOT_UNICO.includes(zona) ? `
       <div style="display:flex;gap:6px;margin-top:6px;">
-        <input id="layout-asignar-ent-capacidad-${esc(u.id)}" type="number" min="0" placeholder="${u.capacidad_maxima != null ? 'Capacidad máxima (ya configurada)' : 'Capacidad máxima — obligatoria'}" value="${u.capacidad_maxima ?? ''}" style="flex:1;min-width:0;padding:8px;background:var(--bg);border:1px solid var(--brd);border-radius:6px;color:var(--tx);font-size:12px;box-sizing:border-box;">
-        <input id="layout-asignar-ent-minimo-${esc(u.id)}" type="number" min="0" placeholder="Mínimo reposición (opcional)" value="${u.stock_minimo ?? ''}" title="Bajo este número, Reposición genera tarea de reabastecimiento desde RESERVA" style="flex:1;min-width:0;padding:8px;background:var(--bg);border:1px solid var(--brd);border-radius:6px;color:var(--tx);font-size:12px;box-sizing:border-box;">
+        <input id="layout-asignar-ent-capacidad-${esc(u.id)}" type="number" min="0" placeholder="${u.capacidad_maxima != null ? 'Capacidad máxima (ya configurada)' : 'Capacidad máxima — obligatoria'}" value="${u.capacidad_maxima ?? ''}" style="flex:1;min-width:0;padding:8px;background:var(--bg);border:1px solid var(--brd);border-radius:6px;color:var(--tx);font-size:var(--fs-xs);box-sizing:border-box;">
+        <input id="layout-asignar-ent-minimo-${esc(u.id)}" type="number" min="0" placeholder="Mínimo reposición (opcional)" value="${u.stock_minimo ?? ''}" title="Bajo este número, Reposición genera tarea de reabastecimiento desde RESERVA" style="flex:1;min-width:0;padding:8px;background:var(--bg);border:1px solid var(--brd);border-radius:6px;color:var(--tx);font-size:var(--fs-xs);box-sizing:border-box;">
       </div>` : ''}
     </div>`;
 }
@@ -1367,11 +1367,11 @@ async function layoutBuscarProductoEntrepano(huecoId) {
   try {
     const d = await get(`/api/productos/?q=${encodeURIComponent(codigo)}&per_page=1`);
     const prod = (d.productos || [])[0];
-    if (!prod) { delete _layoutAsignarEntProductos[huecoId]; if (estado) { estado.textContent = 'No encontrado'; estado.style.color = '#f87171'; } return; }
+    if (!prod) { delete _layoutAsignarEntProductos[huecoId]; if (estado) { estado.textContent = 'No encontrado'; estado.style.color = 'var(--err-tx)'; } return; }
     _layoutAsignarEntProductos[huecoId] = prod.id;
-    if (estado) { estado.textContent = `✓ ${prod.codigo} — ${prod.nombre}`; estado.style.color = '#4ade80'; }
+    if (estado) { estado.textContent = `✓ ${prod.codigo} — ${prod.nombre}`; estado.style.color = 'var(--ok-tx)'; }
     document.getElementById(`layout-asignar-ent-cantidad-${huecoId}`)?.focus();
-  } catch (e) { if (estado) { estado.textContent = 'Error buscando'; estado.style.color = '#f87171'; } }
+  } catch (e) { if (estado) { estado.textContent = 'Error buscando'; estado.style.color = 'var(--err-tx)'; } }
 }
 
 function layoutAsignarEntSiguiente(huecoId) {
@@ -1418,7 +1418,7 @@ async function layoutConfirmarAsignarEntrepano() {
   alerta(`${ok} hueco(s) asignado(s)${errores.length ? ` — ${errores.length} error(es)` : ''}`, errores.length ? 'advertencia' : 'ok');
   layoutCargarUbicaciones();
   if (errores.length === 0) { layoutCerrarModalAsignarEntrepano(); }
-  else { const resEl = document.getElementById('layout-asignar-ent-resultado'); if (resEl) resEl.innerHTML = errores.map(e => `<div style="color:#f87171;font-size:11px;margin-top:2px;">✗ ${e}</div>`).join(''); }
+  else { const resEl = document.getElementById('layout-asignar-ent-resultado'); if (resEl) resEl.innerHTML = errores.map(e => `<div style="color:var(--err-tx);font-size:var(--fs-xs);margin-top:2px;">✗ ${e}</div>`).join(''); }
 }
 
 function layoutAbrirModalVerEntrepano(idsCsv) {
@@ -1433,7 +1433,7 @@ function layoutAbrirModalVerEntrepano(idsCsv) {
   cont.innerHTML = huecos.map(u => {
     const huecoLabel = u.codigo.split('-').pop();
     const skuLabel = u.producto_asignado_codigo ? `📦 ${u.producto_asignado_nombre || u.producto_asignado_codigo} · ${u.stock_actual ?? 0} UND` : 'Sin SKU asignado';
-    return `<div style="display:flex;align-items:center;gap:8px;padding:9px 0;border-top:1px solid var(--brd);"><div style="font-size:12px;font-family:monospace;font-weight:700;color:var(--tx);min-width:34px;">${huecoLabel}</div><div style="flex:1;font-size:12px;color:${u.producto_asignado_codigo ? '#60a5fa' : '#888'};overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${skuLabel}${!u.activo ? ' · INACTIVA' : ''}</div><div style="display:flex;gap:4px;flex-shrink:0;"><button title="Editar" onclick="layoutAbrirModalEditarUbicacion(${esc(u.id)})" style="padding:10px 12px;background:var(--bg);border:1px solid var(--brd);border-radius:5px;color:var(--tx2);font-size:11px;cursor:pointer;">✏</button><button title="Eliminar" onclick="layoutEliminarUbicacion(${esc(u.id)}, '${esc(u.codigo)}')" style="padding:10px 12px;background:var(--bg);border:1px solid #7f1d1d;border-radius:5px;color:#f87171;font-size:11px;cursor:pointer;">🗑</button><button title="Reclasificar" onclick="layoutAbrirModalReclasificar(${esc(u.id)})" style="padding:10px 12px;background:var(--bg);border:1px solid var(--brd);border-radius:5px;color:var(--tx2);font-size:11px;cursor:pointer;">⇄</button></div></div>`;
+    return `<div style="display:flex;align-items:center;gap:8px;padding:9px 0;border-top:1px solid var(--brd);"><div style="font-size:var(--fs-xs);font-family:monospace;font-weight:700;color:var(--tx);min-width:34px;">${huecoLabel}</div><div style="flex:1;font-size:var(--fs-xs);color:${u.producto_asignado_codigo ? 'var(--info-tx)' : 'var(--tx2)'};overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${skuLabel}${!u.activo ? ' · INACTIVA' : ''}</div><div style="display:flex;gap:4px;flex-shrink:0;"><button title="Editar" onclick="layoutAbrirModalEditarUbicacion(${esc(u.id)})" style="padding:10px 12px;background:var(--bg);border:1px solid var(--brd);border-radius:5px;color:var(--tx2);font-size:var(--fs-xs);cursor:pointer;">✏</button><button title="Eliminar" onclick="layoutEliminarUbicacion(${esc(u.id)}, '${esc(u.codigo)}')" style="padding:10px 12px;background:var(--bg);border:1px solid var(--err-brd);border-radius:5px;color:var(--err-tx);font-size:var(--fs-xs);cursor:pointer;">🗑</button><button title="Reclasificar" onclick="layoutAbrirModalReclasificar(${esc(u.id)})" style="padding:10px 12px;background:var(--bg);border:1px solid var(--brd);border-radius:5px;color:var(--tx2);font-size:var(--fs-xs);cursor:pointer;">⇄</button></div></div>`;
   }).join('');
   m.style.display = 'flex';
 }
@@ -1522,7 +1522,7 @@ function _layoutRenderEsquemaFila(nivel, huecos, color) {
     .map(u => _layoutRenderEsquemaHuecoBox(u, color)).join('');
   return `
     <div style="position:relative;margin-bottom:16px;">
-      <div style="position:absolute;left:0;top:-13px;font-size:var(--esq-font-hueco);font-weight:800;color:#fff;background:#3d4148;padding:1px 5px;border-radius:3px;white-space:nowrap;">Entrepaño ${nivel}</div>
+      <div style="position:absolute;left:0;top:-13px;font-size:var(--esq-font-hueco);font-weight:800;color:var(--tx);background:#3d4148;padding:1px 5px;border-radius:3px;white-space:nowrap;">Entrepaño ${nivel}</div>
       <div style="display:flex;align-items:flex-end;gap:var(--esq-gap);min-height:calc(var(--esq-caja-h) + 4px);">${boxes}</div>
       <div style="height:6px;margin-top:4px;background:linear-gradient(180deg,#c89b6c,#9c7248);border-radius:2px;box-shadow:0 3px 4px rgba(0,0,0,.3);"></div>
     </div>`;

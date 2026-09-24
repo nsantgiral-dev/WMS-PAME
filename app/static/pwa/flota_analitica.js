@@ -66,7 +66,7 @@ function flotaSubtab(nombre) {
     const activo = k === FLOTA_SUBTAB;
     const t = document.getElementById(tab);
     if (t) {
-      t.style.background = activo ? '#1E8395' : 'transparent';
+      t.style.background = activo ? 'var(--pm-fill)' : 'transparent';
       t.style.color = activo ? '#fff' : '#415A70';
       t.style.fontWeight = activo ? '700' : '400';
     }
@@ -90,7 +90,7 @@ function flotaAnPanelVacio(titulo, base, gesto) {
     <div class="tabla-titulo">${titulo}</div>
     <p style="color:var(--tx2);margin:6px 0 0">
       <b>Esperando el primer registro.</b> ${base}</p>
-    <p style="color:var(--tx2);font-size:12px;margin:6px 0 0">Se enciende: ${gesto}</p>
+    <p style="color:var(--tx2);font-size:var(--fs-xs);margin:6px 0 0">Se enciende: ${gesto}</p>
   </div>`;
 }
 
@@ -171,8 +171,8 @@ function flotaAnSemana(h) {
       ? '<span style="color:var(--tx2)">sin dato</span>'
       : `<b style="color:${pide ? 'var(--red)' : 'var(--tx2)'}">${n}</b>`;
     return `<div style="display:flex;justify-content:space-between;gap:10px;
-                        font-size:13px;margin-bottom:4px">
-      <span>${que} <span style="color:var(--tx3,var(--tx2));font-size:11px">·
+                        font-size:var(--fs-sm);margin-bottom:4px">
+      <span>${que} <span style="color:var(--tx3,var(--tx2));font-size:var(--fs-xs)">·
         ${donde}</span></span>
       ${valor}
     </div>`;
@@ -180,13 +180,13 @@ function flotaAnSemana(h) {
 
   return `<div class="tabla-card">
     <div class="tabla-titulo">El recorrido de la semana</div>
-    <p style="font-size:12px;color:var(--tx2);margin:0 0 10px">
+    <p style="font-size:var(--fs-xs);color:var(--tx2);margin:0 0 10px">
       Las cinco señales de control de flota, con el panel donde vive cada una.
       <b>Treinta minutos, una vez por semana.</b> Un número en rojo es alguien a
       quien llamar; el panel de abajo dice quién. Los ceros también son
       respuesta y por eso no se esconden.</p>
     ${filas}
-    <p style="font-size:11px;color:var(--tx3,var(--tx2));margin:8px 0 0">
+    <p style="font-size:var(--fs-xs);color:var(--tx3,var(--tx2));margin:8px 0 0">
       <b>Esta no es la pantalla de todos.</b> La decisión mensual sobre el gasto
       es de gestión y se toma en «Costo por kilómetro» y «Pesos por mes»; acá no
       hay nada que decidir sobre plata.</p>
@@ -217,11 +217,11 @@ function flotaAnProcedencia(h) {
   const rojo = p.datos_reales === false;
   return `<div class="tabla-card" style="border-left:3px solid var(--${rojo ? 'yellow' : 'tx2'})">
     <div class="tabla-titulo">De dónde salen estos números</div>
-    <p style="margin:4px 0;font-size:13px">
+    <p style="margin:4px 0;font-size:var(--fs-sm)">
       Ambiente: <b>${esc(p.ambiente || 'sin declarar')}</b> ·
       día operativo <b>${esc(p.dia_operativo || '—')}</b> (Bogotá) ·
       calculado ${(p.calculado_ts || '—').replace('T', ' ').slice(0, 19)}</p>
-    ${rojo ? `<p style="color:var(--yellow);font-size:12px;margin:6px 0 0">
+    ${rojo ? `<p style="color:var(--yellow);font-size:var(--fs-xs);margin:6px 0 0">
       <b>NO son de la operación real.</b> Sirven para probar la pantalla, no
       para decidir nada.</p>` : ''}
   </div>`;
@@ -254,26 +254,26 @@ function flotaAnLecturas(h) {
     const verif = c.verificada || 0, decl = c.declarada || 0, dud = c.dudosa || 0;
     const sinFoto = f.n - (f.con_foto || 0);
     return `<div style="margin-bottom:12px">
-      <div style="display:flex;justify-content:space-between;font-size:13px">
+      <div style="display:flex;justify-content:space-between;font-size:var(--fs-sm)">
         <b>${esc(f.placa)}</b>
         <span style="color:var(--tx2)">${esc(f.n)} lectura(s)${f.n ? ` · ${esc(f.vigentes)} vigente(s)` : ''}</span>
       </div>
       ${flotaAnBarra([['verificada', verif, 'var(--green,#3fb950)'],
                       ['declarada', decl, 'var(--tx2)'],
                       ['dudosa', dud, 'var(--red)']], f.n)}
-      <div style="font-size:12px;color:var(--tx2);margin-top:3px">
+      <div style="font-size:var(--fs-xs);color:var(--tx2);margin-top:3px">
         ${f.motivo
           ? f.motivo
           : `${verif} verificada(s) · ${decl} declarada(s) · ${dud} dudosa(s) ·
              <b style="color:var(--${sinFoto ? 'red' : 'tx2'})">${sinFoto} sin foto</b>
              ${f.primera ? ` · desde ${esc(f.primera)}` : ''}`}
       </div>
-      <div style="font-size:11px;color:var(--tx3,var(--tx2))">${esc(f.base)} · ${esc(f.etiqueta)}</div>
+      <div style="font-size:var(--fs-xs);color:var(--tx3,var(--tx2))">${esc(f.base)} · ${esc(f.etiqueta)}</div>
     </div>`;
   }).join('');
   return `<div class="tabla-card">
     <div class="tabla-titulo">Calidad del kilómetro, por vehículo</div>
-    <p style="font-size:12px;color:var(--tx2);margin:0 0 10px">
+    <p style="font-size:var(--fs-xs);color:var(--tx2);margin:0 0 10px">
       Sin un kilómetro que se pueda sostener no hay CPK, ni km por llanta, ni
       preventivo por kilometraje. <b>Una lectura sin foto no se puede
       verificar</b>, y una dudosa no divide nada hasta que alguien la mire.</p>
@@ -309,24 +309,24 @@ function flotaAnCobertura(h) {
     : (v ? '<span style="color:var(--green,#3fb950)">✓</span>'
          : '<span style="color:var(--red)">✗</span>');
   const cabecera = cols.map(([, t]) =>
-    `<th style="font-weight:400;color:var(--tx2);font-size:11px;padding:2px 6px">${t}</th>`).join('');
+    `<th style="font-weight:400;color:var(--tx2);font-size:var(--fs-xs);padding:2px 6px">${t}</th>`).join('');
   const cuerpo = filas.map(f => `<tr>
       <td style="padding:2px 6px"><b>${esc(f.placa)}</b></td>
       ${cols.map(([k]) => `<td style="text-align:center;padding:2px 6px">${marca(f[k])}</td>`).join('')}
     </tr>`).join('');
   return `<div class="tabla-card">
     <div class="tabla-titulo">Lo que la ficha no dice</div>
-    <p style="font-size:12px;color:var(--tx2);margin:0 0 10px">
+    <p style="font-size:var(--fs-xs);color:var(--tx2);margin:0 0 10px">
       Cada ✗ apaga una medición aguas abajo: sin capacidad de tanque no hay
       detector de sobre-tanqueo, sin posiciones no hay vida de llanta.
       <b>«?» no es «no»</b>: es que la tabla no existe y no se pudo mirar.</p>
     <div style="overflow-x:auto">
-      <table style="width:100%;border-collapse:collapse;font-size:13px">
+      <table style="width:100%;border-collapse:collapse;font-size:var(--fs-sm)">
         <thead><tr><th style="text-align:left;padding:2px 6px"></th>${cabecera}</tr></thead>
         <tbody>${cuerpo}</tbody>
       </table>
     </div>
-    <p style="font-size:11px;color:var(--tx3,var(--tx2));margin:8px 0 0">
+    <p style="font-size:var(--fs-xs);color:var(--tx3,var(--tx2));margin:8px 0 0">
       Base: ficha técnica, documentos y lecturas registradas por vehículo ·
       vehículos activos al día de hoy</p>
   </div>`;
@@ -364,7 +364,7 @@ function flotaAnHallazgos(h) {
 
   const fila = (c, texto, color) => `<li style="margin-bottom:6px">
       <b style="color:var(--${color})">${esc(c.placa)}</b>
-      <span style="color:var(--tx2);font-size:13px"> · ${esc(c.criticidad)} · ${texto}</span>
+      <span style="color:var(--tx2);font-size:var(--fs-sm)"> · ${esc(c.criticidad)} · ${texto}</span>
     </li>`;
 
   // El reloj corriendo primero: es lo único de este panel sobre lo que alguien
@@ -387,7 +387,7 @@ function flotaAnHallazgos(h) {
   // El denominador, visible. Un indicador que solo reporta lo que mira
   // devolvería «0 días promedio» sobre una flota llena de línea base.
   const excluidos = fuera.length
-    ? `<p style="font-size:12px;color:var(--tx2);margin:10px 0 0">
+    ? `<p style="font-size:var(--fs-xs);color:var(--tx2);margin:10px 0 0">
          <b>${esc(fuera.length)} fuera del indicador</b>: ${
            [...new Set(fuera.map(c => c.motivo_fuera))].join(' · ')}</p>`
     : '';
@@ -403,9 +403,9 @@ function flotaAnHallazgos(h) {
     ${excluidos}
     <p style="margin:12px 0 0;padding-top:8px;border-top:1px solid var(--bg2)">
       ${promedio}</p>
-    <p style="font-size:11px;color:var(--tx3,var(--tx2));margin:4px 0 0">
+    <p style="font-size:var(--fs-xs);color:var(--tx3,var(--tx2));margin:4px 0 0">
       ${esc(d.base)} · ${esc(d.etiqueta)}</p>
-    <p style="font-size:12px;color:var(--tx2);margin:8px 0 0">
+    <p style="font-size:var(--fs-xs);color:var(--tx2);margin:8px 0 0">
       Mide riesgo real, no gestión: el reloj para cuando el vehículo
       <b>vuelve reparado</b>, no al aprobar la orden ni al entrar al taller.
       <b>No compara zonas</b> — los tiempos de repuesto son distintos en Neiva,
@@ -437,22 +437,22 @@ function flotaAnRendimiento(h) {
       'dar de alta un vehículo en Rutas → Vehículos.');
   }
   const cuerpo = filas.map(f => `<div style="margin-bottom:10px">
-      <div style="display:flex;justify-content:space-between;font-size:13px">
+      <div style="display:flex;justify-content:space-between;font-size:var(--fs-sm)">
         <b>${esc(f.placa)}</b>
         <span style="color:var(--${f.publicable ? 'tx2' : 'yellow'})">${
           f.km_galon === 'sin_dato' ? 'sin dato' : `${esc(f.km_galon)} km/gal`}${
           f.publicable ? '' : ' · provisional'}</span>
       </div>
-      <div style="font-size:12px;color:var(--tx2)">
+      <div style="font-size:var(--fs-xs);color:var(--tx2)">
         ${f.motivo || `${esc(f.ventanas)} ventana(s) · ${esc(f.dias_historia)} día(s) de historia`}${
           f.tanqueos_fuera_por_parcial
             ? ` · ${esc(f.tanqueos_fuera_por_parcial)} tanqueo(s) fuera por no estar marcados «lleno»`
             : ''}</div>
-      <div style="font-size:11px;color:var(--tx3,var(--tx2))">${esc(f.base)} · ${esc(f.etiqueta)}</div>
+      <div style="font-size:var(--fs-xs);color:var(--tx3,var(--tx2))">${esc(f.base)} · ${esc(f.etiqueta)}</div>
     </div>`).join('');
   return `<div class="tabla-card">
     <div class="tabla-titulo">Rendimiento km/galón, por vehículo</div>
-    <p style="font-size:12px;color:var(--tx2);margin:0 0 10px">
+    <p style="font-size:var(--fs-xs);color:var(--tx2);margin:0 0 10px">
       Se mide de <b>tanque lleno a tanque lleno</b>: entre dos llenos, lo que
       entró al tanque es lo que se gastó. Un tanqueo sin marcar «lleno» no
       empeora la medición — la impide. <b>No compara vehículos</b> ni mide a
@@ -470,10 +470,10 @@ function flotaAnRendimiento(h) {
  */
 function flotaAnFilasContador(filas) {
   return filas.map(([n, etiqueta, nota]) => `<div style="margin-bottom:8px">
-      <b style="font-size:16px;color:var(--${n === null || n === undefined ? 'yellow' : (n ? 'red' : 'tx2')})">${
+      <b style="font-size:var(--fs-md);color:var(--${n === null || n === undefined ? 'yellow' : (n ? 'red' : 'tx2')})">${
         n === null || n === undefined ? '—' : n}</b>
-      <span style="font-size:13px"> ${etiqueta}</span>
-      <div style="font-size:12px;color:var(--tx2)">${nota}</div>
+      <span style="font-size:var(--fs-sm)"> ${etiqueta}</span>
+      <div style="font-size:var(--fs-xs);color:var(--tx2)">${nota}</div>
     </div>`).join('');
 }
 
@@ -481,10 +481,10 @@ function flotaAnFilasContador(filas) {
 function flotaAnContadores(titulo, intro, filas, pie, lista) {
   return `<div class="tabla-card">
     <div class="tabla-titulo">${titulo}</div>
-    ${intro ? `<p style="font-size:12px;color:var(--tx2);margin:0 0 10px">${intro}</p>` : ''}
+    ${intro ? `<p style="font-size:var(--fs-xs);color:var(--tx2);margin:0 0 10px">${intro}</p>` : ''}
     ${flotaAnFilasContador(filas)}
     ${lista || ''}
-    ${pie ? `<p style="font-size:11px;color:var(--tx3,var(--tx2));margin:6px 0 0">${pie}</p>` : ''}
+    ${pie ? `<p style="font-size:var(--fs-xs);color:var(--tx3,var(--tx2));margin:6px 0 0">${pie}</p>` : ''}
   </div>`;
 }
 
@@ -509,19 +509,19 @@ function flotaAnCPK(h) {
       'dar de alta un vehículo en Rutas → Vehículos.');
   }
   const cuerpo = filas.map(f => `<div style="margin-bottom:10px">
-      <div style="display:flex;justify-content:space-between;font-size:13px">
+      <div style="display:flex;justify-content:space-between;font-size:var(--fs-sm)">
         <b>${esc(f.placa)}</b>
         <span style="color:var(--tx2)">${
           f.cpk === 'sin_dato' ? 'sin dato'
             : `${flotaPesos(f.cpk)}/km · ${flotaPesos(f.pesos)} ÷ ${
                 Number(f.km).toLocaleString('es-CO')} km · odómetro ${esc(f.marca)}`}</span>
       </div>
-      ${f.motivo ? `<div style="font-size:12px;color:var(--tx2)">${esc(f.motivo)}</div>` : ''}
-      <div style="font-size:11px;color:var(--tx3,var(--tx2))">${esc(f.base)} · ${esc(f.desde)} a ${esc(f.hasta)} · ${esc(f.n)} lectura(s)</div>
+      ${f.motivo ? `<div style="font-size:var(--fs-xs);color:var(--tx2)">${esc(f.motivo)}</div>` : ''}
+      <div style="font-size:var(--fs-xs);color:var(--tx3,var(--tx2))">${esc(f.base)} · ${esc(f.desde)} a ${esc(f.hasta)} · ${esc(f.n)} lectura(s)</div>
     </div>`).join('');
   return `<div class="tabla-card">
     <div class="tabla-titulo">Costo por kilómetro · mes en curso</div>
-    <p style="font-size:12px;color:var(--tx2);margin:0 0 10px">
+    <p style="font-size:var(--fs-xs);color:var(--tx2);margin:0 0 10px">
       Es lo que se registró, no el costo de tener el camión: no incluye
       depreciación ni financiación. <b>No se compara entre vehículos</b> — un
       NHR y un motocarro no cuestan igual y la diferencia mide la composición
@@ -586,7 +586,7 @@ function flotaAnPesosMes(h) {
   const v = filas[0];
   const total = con.reduce((s, f) => s + Number(f.pesos), 0);
   const orden = con.slice().sort((a, b) => Number(b.pesos) - Number(a.pesos));
-  const cuerpo = orden.map(f => `<div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:6px">
+  const cuerpo = orden.map(f => `<div style="display:flex;justify-content:space-between;font-size:var(--fs-sm);margin-bottom:6px">
       <b>${esc(f.placa)}</b>
       <span>${flotaPesos(f.pesos)}${
         Number(f.pesos) === 0
@@ -594,24 +594,24 @@ function flotaAnPesosMes(h) {
           : ''}</span>
     </div>`).join('');
   const cola = sin.length ? `<div style="margin-top:10px;padding-top:8px;border-top:1px solid var(--brd)">
-      <div style="font-size:12px;color:var(--tx2);margin-bottom:6px"><b>Sin registro</b> —
+      <div style="font-size:var(--fs-xs);color:var(--tx2);margin-bottom:6px"><b>Sin registro</b> —
         van aparte y no entran al orden. Cero gastos registrados no es un camión
         barato: es un camión del que no se sabe.</div>
-      ${sin.map(f => `<div style="display:flex;justify-content:space-between;font-size:13px">
+      ${sin.map(f => `<div style="display:flex;justify-content:space-between;font-size:var(--fs-sm)">
         <b>${esc(f.placa)}</b><span style="color:var(--tx2)">sin registro</span></div>`).join('')}
     </div>` : '';
   return `<div class="tabla-card">
     <div class="tabla-titulo">Pesos por mes · ¿qué camión se come la plata?</div>
-    <p style="font-size:12px;color:var(--tx2);margin:0 0 10px">
+    <p style="font-size:var(--fs-xs);color:var(--tx2);margin:0 0 10px">
       <b>Esta sí se compara entre vehículos</b> y es la única del tab que se
       puede: son pesos que salieron. Para eso está acá y no arriba — el costo
       por kilómetro no se compara, porque un NHR y un motocarro no cuestan
       igual. <b>No explica una subida</b>: dice cuánto, no por qué.</p>
     ${cuerpo}
-    <div style="display:flex;justify-content:space-between;font-size:13px;font-weight:700;margin-top:8px;padding-top:8px;border-top:1px solid var(--brd)">
+    <div style="display:flex;justify-content:space-between;font-size:var(--fs-sm);font-weight:700;margin-top:8px;padding-top:8px;border-top:1px solid var(--brd)">
       <span>Total</span><span>${flotaPesos(total)}</span></div>
     ${cola}
-    <div style="font-size:11px;color:var(--tx3,var(--tx2));margin-top:6px">
+    <div style="font-size:var(--fs-xs);color:var(--tx3,var(--tx2));margin-top:6px">
       ${esc(v.base)} · ${esc(v.desde)} a ${esc(v.hasta)} · sobre ${esc(con.length)} de ${esc(filas.length)}
       vehículo(s) con gastos registrados${
         sin.length ? ` — el total NO incluye ${esc(sin.length)} sin registro` : ''}</div>
@@ -650,9 +650,9 @@ function flotaAnLlantas(h) {
   const porPlaca = {};
   filas.forEach(f => { (porPlaca[f.placa] = porPlaca[f.placa] || []).push(f); });
   const cuerpo = Object.entries(porPlaca).map(([placa, ps]) => `<div style="margin-bottom:12px">
-      <b style="font-size:13px">${placa}</b>
+      <b style="font-size:var(--fs-sm)">${placa}</b>
       <ul style="list-style:none;padding:0;margin:4px 0 0">${ps.map(p => `
-        <li style="font-size:13px;color:var(--tx2)">
+        <li style="font-size:var(--fs-sm);color:var(--tx2)">
           posición ${esc(p.posicion)}: ${p.mediana_km === 'sin_dato'
             ? `sin dato — ${esc(p.n)} vida(s) cerrada(s), faltan ${esc(p.faltan)}`
             : `<b>${Number(p.mediana_km).toLocaleString('es-CO')} km</b> de mediana sobre ${esc(p.n)} vida(s)`}
@@ -660,7 +660,7 @@ function flotaAnLlantas(h) {
     </div>`).join('');
   return `<div class="tabla-card">
     <div class="tabla-titulo">Vida de llanta por posición</div>
-    <p style="font-size:12px;color:var(--tx2);margin:0 0 10px">
+    <p style="font-size:var(--fs-xs);color:var(--tx2);margin:0 0 10px">
       <b>Acá sí se comparan filas — pero solo dentro del mismo camión.</b> Las
       posiciones de un vehículo comparten ruta, conductor y mes, así que una que
       dura la mitad que su vecina no es azar: es alineación, presión o un eje.
@@ -714,18 +714,18 @@ function flotaAnRitmo(h) {
       'No hay vehículos activos que medir.',
       'dar de alta un vehículo en Rutas → Vehículos.');
   }
-  const cuerpo = filas.map(f => `<div style="margin-bottom:8px;font-size:13px">
+  const cuerpo = filas.map(f => `<div style="margin-bottom:8px;font-size:var(--fs-sm)">
       <div style="display:flex;justify-content:space-between">
         <b>${esc(f.placa)}</b>
         <span style="color:var(--tx2)">${
           f.km_dia === 'sin_dato' ? 'sin dato'
             : `${esc(f.km_dia)} km/día · ${esc(f.n)} lectura(s) en ${esc(f.dias)} día(s) · ${esc(f.marca)}`}</span>
       </div>
-      ${f.motivo ? `<div style="font-size:12px;color:var(--tx2)">${esc(f.motivo)}</div>` : ''}
+      ${f.motivo ? `<div style="font-size:var(--fs-xs);color:var(--tx2)">${esc(f.motivo)}</div>` : ''}
     </div>`).join('');
   return `<div class="tabla-card">
     <div class="tabla-titulo">Ritmo de uso · km por día</div>
-    <p style="font-size:12px;color:var(--tx2);margin:0 0 10px">
+    <p style="font-size:var(--fs-xs);color:var(--tx2);margin:0 0 10px">
       Un hecho, <b>sin umbral</b>. Nadie sabe todavía cuántos km/día son muchos
       en esta flota, y un techo escrito hoy sería a ojo. Se publica para poder
       fijarlo con dato dentro de un mes.</p>
@@ -788,15 +788,15 @@ function flotaAnInspeccion(h) {
         [h.inspecciones_incompletas_hoy, 'mirado(s) a medias',
          '<b>Incompleta no es «no apto»</b>: es «no sé», y no habilita despacho.'],
       ])}
-      <div style="font-size:12px;color:var(--tx2)">Sin dato del tiempo de
+      <div style="font-size:var(--fs-xs);color:var(--tx2)">Sin dato del tiempo de
         llenado. Nace con la primera inspección contestada.</div>
     </div>`;
   }
   const tiempo = s.nota
-    ? `<div style="font-size:12px;color:var(--tx2)">${esc(s.nota)}</div>`
-    : `<div style="font-size:13px">Mediana de llenado: <b>${esc(s.mediana)}s</b>
+    ? `<div style="font-size:var(--fs-xs);color:var(--tx2)">${esc(s.nota)}</div>`
+    : `<div style="font-size:var(--fs-sm)">Mediana de llenado: <b>${esc(s.mediana)}s</b>
          <span style="color:var(--tx2)">sobre ${esc(s.n)} inspección(es)</span></div>
-       ${s.minimo ? `<div style="font-size:12px;color:var(--tx2)">
+       ${s.minimo ? `<div style="font-size:var(--fs-xs);color:var(--tx2)">
          La más rápida: ${esc(s.minimo.segundos)}s para ${esc(s.minimo.items)} ítem(s)
          · veredicto ${esc(s.minimo.veredicto)}</div>` : ''}`;
   return `<div class="tabla-card">
@@ -808,7 +808,7 @@ function flotaAnInspeccion(h) {
        '<b>Incompleta no es «no apto»</b>: es «no sé», y no habilita despacho.'],
     ])}
     ${tiempo}
-    <p style="font-size:12px;color:var(--tx2);margin:8px 0 0">
+    <p style="font-size:var(--fs-xs);color:var(--tx2);margin:8px 0 0">
       El tiempo de llenado está acá por la regla 11: la forma de maximizar una
       inspección sin hacerla es <b>marcar todo óptimo en veinte segundos</b>. Se
       publica la mediana y el caso más rápido, no un promedio — el promedio
@@ -840,10 +840,10 @@ function flotaAnInspeccion(h) {
 function flotaAnListaConPlaca(filas, vacio, render) {
   if (filas === null || filas === undefined) return '';
   if (!filas.length) {
-    return `<p style="font-size:12px;color:var(--tx2);margin:10px 0 0">${vacio}</p>`;
+    return `<p style="font-size:var(--fs-xs);color:var(--tx2);margin:10px 0 0">${vacio}</p>`;
   }
   return `<div style="margin-top:10px;padding-top:8px;border-top:1px solid var(--brd)">
-    ${filas.map(f => `<div style="font-size:13px;margin-bottom:5px">
+    ${filas.map(f => `<div style="font-size:var(--fs-sm);margin-bottom:5px">
       <b>${esc(f.placa)}</b> <span style="color:var(--tx2)">${render(f)}</span></div>`).join('')}
   </div>`;
 }

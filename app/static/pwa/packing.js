@@ -47,7 +47,7 @@ async function empCargarTareas() {
 
     empRenderListaTareas();
   } catch (e) {
-    el.innerHTML = '<div style="color:#ef4444;text-align:center;padding:40px;">Error cargando tareas</div>';
+    el.innerHTML = '<div style="color:var(--err-tx);text-align:center;padding:40px;">Error cargando tareas</div>';
   }
 }
 
@@ -65,9 +65,9 @@ function empRenderListaTareas() {
   if (!EMP_TAREAS_ALL.length) {
     const titulo = document.getElementById('emp-modo-titulo');
     if (titulo) titulo.textContent = '';
-    el.innerHTML = `<div style="text-align:center;padding:60px 20px;color:#555;">
+    el.innerHTML = `<div style="text-align:center;padding:60px 20px;color:var(--tx3);">
       Sin tareas de empaque pendientes ✓<br>
-      <button onclick="_refreshBtn(event, empCargarTareas)" style="margin-top:20px;background:#222;border:1px solid #333;color:#fff;padding:10px 20px;border-radius:10px;cursor:pointer;">↻ Actualizar</button>
+      <button onclick="_refreshBtn(event, empCargarTareas)" style="margin-top:20px;background:var(--bg-s2);border:1px solid var(--brd);color:var(--tx);padding:10px 20px;border-radius:10px;cursor:pointer;">↻ Actualizar</button>
     </div>`;
     return;
   }
@@ -79,10 +79,10 @@ function empRenderListaTareas() {
   if (titulo) {
     if (hayTraslados && !hayPedidos) {
       titulo.textContent = '📦 Packing Traslado';
-      titulo.style.color = '#c2410c';
+      titulo.style.color = 'var(--orange)';
     } else if (hayPedidos && !hayTraslados) {
       titulo.textContent = '🛒 Packing Pedido';
-      titulo.style.color = '#1d4ed8';
+      titulo.style.color = 'var(--info-tx)';
     } else {
       titulo.textContent = '📦 Packing Mixto';
       titulo.style.color = 'var(--tx)';
@@ -97,7 +97,7 @@ function empRenderListaTareas() {
     const tab = (tipo, label, count, colorActivo) => {
       const activo = EMP_FILTRO_TIPO === tipo;
       return `<button onclick="empSetFiltroTipo('${tipo}')"
-        style="flex:1;padding:9px 6px;border-radius:8px;border:1px solid ${activo ? colorActivo : '#333'};background:${activo ? colorActivo : 'transparent'};color:${activo ? '#fff' : '#aaa'};font-size:12px;font-weight:700;cursor:pointer;transition:.15s;">
+        style="flex:1;padding:9px 6px;border-radius:8px;border:1px solid ${activo ? colorActivo : 'var(--brd)'};background:${activo ? colorActivo : 'transparent'};color:${activo ? 'var(--tx)' : '#aaa'};font-size:var(--fs-xs);font-weight:700;cursor:pointer;transition:.15s;">
         ${label} (${count})
       </button>`;
     };
@@ -110,13 +110,13 @@ function empRenderListaTareas() {
   const tareas = EMP_TAREAS_ALL.filter(t => (t.tipo_documento === 'TRASLADO') === (EMP_FILTRO_TIPO === 'TRASLADO'));
 
   if (!tareas.length) {
-    el.innerHTML = `${tabsHtml}<div style="text-align:center;padding:40px 20px;color:#555;">Sin tareas en esta pestaña</div>`;
+    el.innerHTML = `${tabsHtml}<div style="text-align:center;padding:40px 20px;color:var(--tx3);">Sin tareas en esta pestaña</div>`;
     return;
   }
 
   el.innerHTML = `
       ${tabsHtml}
-      <div style="font-size:12px;font-weight:600;color:#aaa;padding:4px 0 12px;">TAREAS DE EMPAQUE</div>
+      <div style="font-size:var(--fs-xs);font-weight:600;color:var(--tx2);padding:4px 0 12px;">TAREAS DE EMPAQUE</div>
       ${tareas.map(t => {
         const verificados = t.items_verificados || 0;
         const total = t.total_items || 0;
@@ -137,29 +137,29 @@ function empRenderListaTareas() {
         const label = pedidoAnulado ? '🚫 PEDIDO ANULADO EN SIESA' : enAuditoria ? '🔍 En auditoría' : bloqueado ? 'Esperando picking' : siesaFallo ? '⚠ Reintentar Siesa' : enProceso ? 'En proceso' : 'Pendiente';
         const anulado_banner = pedidoAnulado ? `
           <div style="margin-top:10px;background:var(--rbg);border:1px solid var(--rbrd);border-radius:8px;padding:10px 12px;">
-            <div style="font-size:12px;font-weight:700;color:var(--red);margin-bottom:4px;">🚫 Pedido anulado en Siesa (estado ${esc(t.pedido_estado_siesa_detectado || '9')})</div>
-            <div style="font-size:11px;color:var(--tx2);line-height:1.4;">
+            <div style="font-size:var(--fs-xs);font-weight:700;color:var(--red);margin-bottom:4px;">🚫 Pedido anulado en Siesa (estado ${esc(t.pedido_estado_siesa_detectado || '9')})</div>
+            <div style="font-size:var(--fs-xs);color:var(--tx2);line-height:1.4;">
               El área comercial anuló este pedido en el ERP.<br>
               <strong>Acción:</strong> ${_puedeCancelarPacking ? 'Cancelar este packing y esperar el nuevo pedido clonado.' : 'Avisa a tu supervisor para que cancele este packing.'}
             </div>
             ${_puedeCancelarPacking ? `
             <button onclick="event.stopPropagation();empCancelarPacking(${esc(t.id)})"
-              style="margin-top:8px;width:100%;padding:8px;background:var(--red);border:none;color:#fff;border-radius:8px;cursor:pointer;font-size:12px;font-weight:700;">
+              style="margin-top:8px;width:100%;padding:8px;background:#dc2626;border:none;color:#fff;border-radius:8px;cursor:pointer;font-size:var(--fs-xs);font-weight:700;">
               Cancelar packing
             </button>` : ''}
           </div>` : '';
         const limpiarBtn = siesaFallo ? `
           <button onclick="event.stopPropagation();empLimpiarSiesa(${esc(t.id)})"
-            style="margin-top:8px;width:100%;padding:8px;background:#1a1a1a;border:1px solid #444;color:#aaa;border-radius:8px;cursor:pointer;font-size:12px;">
+            style="margin-top:8px;width:100%;padding:8px;background:var(--bg-input);border:1px solid #444;color:var(--tx2);border-radius:8px;cursor:pointer;font-size:var(--fs-xs);">
             🗑 Limpiar bultos y redeclarar piezas
           </button>` : '';
         const esTraslado = t.tipo_documento === 'TRASLADO';
         const refDisplay = t.referencia_doc || t.numero_pedido_siesa || '—';
         const etiquetaHtml = esTraslado
-          ? `<span style="font-size:10px;font-weight:700;padding:2px 8px;border-radius:10px;background:#431407;color:#fb923c;letter-spacing:.5px;margin-left:8px;">TRASLADO</span>`
-          : `<span style="font-size:10px;font-weight:700;padding:2px 8px;border-radius:10px;background:#1e3a5f;color:#93c5fd;letter-spacing:.5px;margin-left:8px;">PEDIDO</span>`;
+          ? `<span style="font-size:var(--fs-xs);font-weight:700;padding:2px 8px;border-radius:10px;background:var(--warn-bg);color:var(--orange);letter-spacing:.5px;margin-left:8px;">TRASLADO</span>`
+          : `<span style="font-size:var(--fs-xs);font-weight:700;padding:2px 8px;border-radius:10px;background:#1e3a5f;color:var(--info-tx);letter-spacing:.5px;margin-left:8px;">PEDIDO</span>`;
         const destinoHtml = esTraslado && t.tienda_destino
-          ? `<div style="font-size:11px;color:#fb923c;margin-top:2px;">→ ${esc(t.tienda_destino)}</div>` : '';
+          ? `<div style="font-size:var(--fs-xs);color:var(--orange);margin-top:2px;">→ ${esc(t.tienda_destino)}</div>` : '';
         // Franja lateral: naranja = traslado, azul = pedido — mismo lenguaje de color del badge,
         // solo se omite si la tarjeta ya tiene su propio borde de error (pedido anulado).
         const acentoLateral = `border-left:4px solid ${esTraslado ? '#c2410c' : '#1d4ed8'};`;
@@ -169,7 +169,7 @@ function empRenderListaTareas() {
           <div class="emp-task-pedido" style="display:flex;align-items:center;">${refDisplay}${etiquetaHtml}</div>
           ${destinoHtml}
           <div class="emp-task-sub">${total} producto(s) · ${esc(t.items_verificados || 0)}/${total} verificados</div>
-          ${total > 0 ? `<div style="margin-top:10px;background:#1a1a1a;border-radius:8px;height:6px;overflow:hidden;">
+          ${total > 0 ? `<div style="margin-top:10px;background:var(--bg-input);border-radius:8px;height:6px;overflow:hidden;">
             <div style="height:100%;background:#4ade80;width:${pct}%;border-radius:8px;transition:width 0.3s;"></div>
           </div>` : ''}
           <span class="emp-task-badge" style="background:${bg};color:${color};">${label}</span>
@@ -511,7 +511,7 @@ function empFlash(color, mensaje) {
     // Mostrar brevemente qué se registró (ej. "CAJA completa — 24 und").
     // Al expirar, re-renderizar el ítem ACTUAL (no restaurar prevText:
     // empRenderHUDItem ya pudo haber avanzado al siguiente producto).
-    msgEl.style.color = '#4ade80';
+    msgEl.style.color = 'var(--ok-tx)';
     msgEl.textContent = mensaje;
     setTimeout(() => {
       msgEl.style.color = '';
@@ -519,7 +519,7 @@ function empFlash(color, mensaje) {
     }, 900);
   } else if (!esVerde && mensaje && msgEl) {
     hud.style.background = '#1a0000';
-    msgEl.style.color = '#f87171';
+    msgEl.style.color = 'var(--err-tx)';
     msgEl.textContent = '⚠ ' + mensaje;
     setTimeout(() => {
       msgEl.style.color = '';
@@ -555,21 +555,21 @@ function _modalAmbiguedadPackingEmp(codigo, ambiguos) {
   _AMBIGUEDAD_PACKING_EMP = { codigo, empaques: ambiguos.slice() };
   const opciones = ambiguos.map((e, i) => `
     <button onclick="_elegirEmpaqueAmbiguoPacking(${i}, this.closest('.modal-ambig-emp'))"
-      style="width:100%;padding:16px;font-size:18px;font-weight:700;background:#1a1a1a;color:#fff;border:1px solid #333;border-radius:12px;cursor:pointer;margin-bottom:8px;">
+      style="width:100%;padding:16px;font-size:var(--fs-lg);font-weight:700;background:var(--bg-input);color:var(--tx);border:1px solid var(--brd);border-radius:12px;cursor:pointer;margin-bottom:8px;">
       ${esc(e.unidad_medida)} — ${esc(e.factor_conversion)} und
-      <div style="font-size:12px;color:#666;font-weight:400;margin-top:2px;">${esc(e.producto_nombre || e.referencia_item || '')}</div>
+      <div style="font-size:var(--fs-xs);color:var(--tx3);font-weight:400;margin-top:2px;">${esc(e.producto_nombre || e.referencia_item || '')}</div>
     </button>`).join('');
 
   const modal = document.createElement('div');
   modal.className = 'modal-ambig-emp';
   modal.style.cssText = 'position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,.85);display:flex;align-items:flex-end;';
   modal.innerHTML = `
-    <div style="background:#0a0a0a;border-top:2px solid #7c3aed;border-radius:20px 20px 0 0;padding:24px;width:100%;max-height:70vh;overflow-y:auto;">
-      <div style="font-size:16px;font-weight:700;color:#a78bfa;margin-bottom:4px;">Código en múltiples empaques</div>
-      <div style="font-size:13px;color:#666;margin-bottom:16px;">${esc(codigo)} — ¿Cuál estás empacando?</div>
+    <div style="background:var(--bg-s);border-top:2px solid #7c3aed;border-radius:20px 20px 0 0;padding:24px;width:100%;max-height:70vh;overflow-y:auto;">
+      <div style="font-size:var(--fs-md);font-weight:700;color:var(--lila-tx);margin-bottom:4px;">Código en múltiples empaques</div>
+      <div style="font-size:var(--fs-sm);color:var(--tx3);margin-bottom:16px;">${esc(codigo)} — ¿Cuál estás empacando?</div>
       ${opciones}
       <button onclick="this.closest('.modal-ambig-emp').remove()"
-        style="width:100%;padding:12px;font-size:14px;background:#111;color:#666;border:1px solid #222;border-radius:10px;cursor:pointer;margin-top:4px;">
+        style="width:100%;padding:12px;font-size:var(--fs-sm);background:var(--bg-s);color:var(--tx3);border:1px solid var(--brd);border-radius:10px;cursor:pointer;margin-top:4px;">
         Cancelar
       </button>
     </div>`;
@@ -686,16 +686,16 @@ function bultosRenderLineas() {
   const el = document.getElementById('modal-bultos-lineas');
   if (!el) return;
   if (!_BULTOS_LINEAS.length) {
-    el.innerHTML = '<div style="color:#555;font-size:13px;text-align:center;padding:12px;">Agrega al menos una pieza ↑</div>';
+    el.innerHTML = '<div style="color:var(--tx3);font-size:var(--fs-sm);text-align:center;padding:12px;">Agrega al menos una pieza ↑</div>';
     return;
   }
   el.innerHTML = _BULTOS_LINEAS.map((l, i) => `
     <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;">
-      <div style="flex:1;font-size:14px;font-weight:600;">${esc(l.tipo)}</div>
-      <button onclick="bultosAjustarCantidad(${i},-1)" style="width:44px;height:44px;background:#222;border:1px solid #333;color:#fff;border-radius:6px;cursor:pointer;font-size:18px;">−</button>
+      <div style="flex:1;font-size:var(--fs-sm);font-weight:600;">${esc(l.tipo)}</div>
+      <button onclick="bultosAjustarCantidad(${i},-1)" style="width:44px;height:44px;background:var(--bg-s2);border:1px solid var(--brd);color:var(--tx);border-radius:6px;cursor:pointer;font-size:var(--fs-lg);">−</button>
       <div style="min-width:28px;text-align:center;font-size:17px;font-weight:700;">${esc(l.cantidad)}</div>
-      <button onclick="bultosAjustarCantidad(${i},1)" style="width:44px;height:44px;background:#222;border:1px solid #333;color:#fff;border-radius:6px;cursor:pointer;font-size:18px;">+</button>
-      <button onclick="bultosEliminarLinea(${i})" style="width:44px;height:44px;background:#1a1a1a;border:1px solid #333;color:#ef4444;border-radius:6px;cursor:pointer;font-size:14px;">✕</button>
+      <button onclick="bultosAjustarCantidad(${i},1)" style="width:44px;height:44px;background:var(--bg-s2);border:1px solid var(--brd);color:var(--tx);border-radius:6px;cursor:pointer;font-size:var(--fs-lg);">+</button>
+      <button onclick="bultosEliminarLinea(${i})" style="width:44px;height:44px;background:var(--bg-input);border:1px solid var(--brd);color:var(--err-tx);border-radius:6px;cursor:pointer;font-size:var(--fs-sm);">✕</button>
     </div>`).join('');
 }
 
@@ -824,15 +824,15 @@ function _empMostrarBloqueoOffline() {
   if (!info || document.getElementById('emp-bloqueo-offline')) return;
   const overlay = document.createElement('div');
   overlay.id = 'emp-bloqueo-offline';
-  overlay.style.cssText = 'position:fixed;inset:0;z-index:9999;background:#0B1117;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;padding:30px;text-align:center;';
+  overlay.style.cssText = 'position:fixed;inset:0;z-index:9999;background:var(--bg-s);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;padding:30px;text-align:center;';
   overlay.innerHTML = `
     <div style="font-size:56px;">📡</div>
-    <div style="font-size:20px;font-weight:900;color:#FBBF24;">Cierre pendiente de conexión</div>
-    <div style="font-size:15px;color:#aaa;line-height:1.6;max-width:320px;">
+    <div style="font-size:20px;font-weight:900;color:var(--warn-tx);">Cierre pendiente de conexión</div>
+    <div style="font-size:var(--fs-md);color:var(--tx2);line-height:1.6;max-width:320px;">
       Pedido ${esc(info.numero_pedido || '—')} · ${esc(info.cliente || '')}<br><br>
       No muevas esta pieza. Se cierra y la etiqueta se imprime sola apenas vuelva la señal.
     </div>
-    <div style="font-size:13px;color:#666;">Reintentando automáticamente…</div>`;
+    <div style="font-size:var(--fs-sm);color:var(--tx3);">Reintentando automáticamente…</div>`;
   document.body.appendChild(overlay);
   // navigator.onLine no siempre avisa a tiempo (ver rutas.js) — reintentar también por polling.
   if (!_EMP_BLOQUEO_TIMER) _EMP_BLOQUEO_TIMER = setInterval(() => { if (navigator.onLine) syncOffline(); }, 8000);
@@ -870,15 +870,15 @@ function empMostrarBotonFactura(packingId, numeroPedido) {
   div.id = 'btn-remision-flotante';
   div.style.cssText = 'position:fixed;bottom:90px;left:50%;transform:translateX(-50%);z-index:9999;display:flex;flex-direction:column;align-items:center;gap:8px;';
   div.innerHTML = `
-    <div style="background:#14532d;border:1px solid #16a34a;color:#bbf7d0;font-size:11px;font-weight:600;padding:6px 14px;border-radius:20px;text-align:center;">
+    <div style="background:#14532d;border:1px solid #15803d;color:#bbf7d0;font-size:var(--fs-xs);font-weight:600;padding:6px 14px;border-radius:20px;text-align:center;">
       Pedido ${numeroPedido || ''} cerrado
     </div>
     <button onclick="empImprimirFactura(${packingId})"
-      style="background:#16a34a;color:#fff;border:none;border-radius:12px;padding:14px 28px;font-size:15px;font-weight:700;cursor:pointer;box-shadow:0 4px 20px rgba(0,0,0,0.5);">
+      style="background:#15803d;color:#fff;border:none;border-radius:12px;padding:14px 28px;font-size:var(--fs-md);font-weight:700;cursor:pointer;box-shadow:0 4px 20px rgba(0,0,0,0.5);">
       🖨 Imprimir Factura
     </button>
     <button onclick="document.getElementById('btn-remision-flotante').remove()"
-      style="background:transparent;color:#6b7280;border:none;font-size:12px;cursor:pointer;padding:4px;">
+      style="background:transparent;color:var(--tx3);border:none;font-size:var(--fs-xs);cursor:pointer;padding:4px;">
       Cerrar
     </button>`;
   document.body.appendChild(div);

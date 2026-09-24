@@ -49,19 +49,19 @@ function muelleRenderGrupos(grupos) {
   el.innerHTML = grupos.map((g, gi) => `
     <div id="muelle-grupo-${gi}" style="margin-bottom:20px;">
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
-        <div style="flex:1;font-size:13px;font-weight:700;color:#f59e0b;text-transform:uppercase;letter-spacing:.06em;">
+        <div style="flex:1;font-size:var(--fs-sm);font-weight:700;color:var(--warn-tx);text-transform:uppercase;letter-spacing:.06em;">
           📍 ${esc(g.destino)}
-          <span style="color:#555;font-weight:400;font-size:11px;">(${esc(g.total)} pieza${g.total !== 1 ? 's' : ''})</span>
+          <span style="color:var(--tx3);font-weight:400;font-size:var(--fs-xs);">(${esc(g.total)} pieza${g.total !== 1 ? 's' : ''})</span>
         </div>
         <div style="display:flex;gap:4px;">
           ${gi > 0
-            ? `<button onclick="muelleMoverGrupo(${gi},-1)" style="background:#222;border:1px solid #333;color:#fff;width:44px;height:44px;border-radius:6px;cursor:pointer;font-size:14px;">↑</button>`
+            ? `<button onclick="muelleMoverGrupo(${gi},-1)" style="background:var(--bg-s2);border:1px solid var(--brd);color:var(--tx);width:44px;height:44px;border-radius:6px;cursor:pointer;font-size:var(--fs-sm);">↑</button>`
             : `<div style="width:44px;"></div>`}
           ${gi < grupos.length - 1
-            ? `<button onclick="muelleMoverGrupo(${gi},1)" style="background:#222;border:1px solid #333;color:#fff;width:44px;height:44px;border-radius:6px;cursor:pointer;font-size:14px;">↓</button>`
+            ? `<button onclick="muelleMoverGrupo(${gi},1)" style="background:var(--bg-s2);border:1px solid var(--brd);color:var(--tx);width:44px;height:44px;border-radius:6px;cursor:pointer;font-size:var(--fs-sm);">↓</button>`
             : `<div style="width:44px;"></div>`}
         </div>
-        <div style="font-size:11px;color:#444;min-width:40px;text-align:right;">
+        <div style="font-size:var(--fs-xs);color:var(--tx3);min-width:40px;text-align:right;">
           Carga<br>#${gi + 1}
         </div>
       </div>
@@ -69,13 +69,13 @@ function muelleRenderGrupos(grupos) {
         <div id="muelle-bulto-${esc(b.id)}" class="tabla-card" style="border-left:3px solid #f59e0b;margin-bottom:8px;transition:opacity .3s;">
           <div style="display:flex;justify-content:space-between;align-items:center;">
             <div>
-              <div style="font-size:14px;font-weight:700;font-family:monospace;">${esc(b.codigo_barras)}</div>
-              <div style="font-size:12px;color:#888;margin-top:2px;">${esc(b.numero_pedido)} · ${esc(b.cliente || '')}</div>
-              <div style="font-size:11px;color:#555;">${esc(b.tipo)} · pieza ${esc(b.numero)} de ${esc(b.total)}</div>
+              <div style="font-size:var(--fs-sm);font-weight:700;font-family:monospace;">${esc(b.codigo_barras)}</div>
+              <div style="font-size:var(--fs-xs);color:var(--tx2);margin-top:2px;">${esc(b.numero_pedido)} · ${esc(b.cliente || '')}</div>
+              <div style="font-size:var(--fs-xs);color:var(--tx3);">${esc(b.tipo)} · pieza ${esc(b.numero)} de ${esc(b.total)}</div>
             </div>
             <div style="text-align:right;">
-              <div style="font-size:20px;color:#555;font-weight:800;">${bi + 1}</div>
-              <div style="font-size:9px;color:#333;">LIFO</div>
+              <div style="font-size:20px;color:var(--tx3);font-weight:800;">${bi + 1}</div>
+              <div style="font-size:var(--fs-xs);color:var(--tx3);">LIFO</div>
             </div>
           </div>
         </div>`).join('')}
@@ -192,12 +192,12 @@ function muelleSeleccionarRuta(idStr) {
   const scanLabel = document.getElementById('muelle-scan-label');
 
   if (!RUTA_ACTIVA_ID) {
-    if (info) { info.style.color = '#555'; info.textContent = 'Sin ruta — los bultos no se asignarán a ningún viaje.'; }
+    if (info) { info.style.color = 'var(--tx3)'; info.textContent = 'Sin ruta — los bultos no se asignarán a ningún viaje.'; }
     if (scanLabel) scanLabel.textContent = 'ESCANEAR CAJA AL CARGAR VEHÍCULO';
   } else {
     const sel = document.getElementById('muelle-ruta-select');
     const txt = sel?.options[sel.selectedIndex]?.textContent || '';
-    if (info) { info.style.color = '#4ade80'; info.textContent = `Ruta activa: ${txt}`; }
+    if (info) { info.style.color = 'var(--ok-tx)'; info.textContent = `Ruta activa: ${txt}`; }
     if (scanLabel) scanLabel.textContent = 'ESCANEAR PARA CONFIRMAR CARGA FÍSICA';
   }
 
@@ -224,9 +224,9 @@ async function cargarMuelle() {
     }
   } catch (e) {
     console.error('[MUELLE] Error:', e);
-    el.innerHTML = `<div style="color:#ef4444;text-align:center;padding:40px;">
+    el.innerHTML = `<div style="color:var(--err-tx);text-align:center;padding:40px;">
       Error cargando muelle<br>
-      <span style="font-size:11px;color:#555;">${esc(e.message || 'Error desconocido')}</span>
+      <span style="font-size:var(--fs-xs);color:var(--tx3);">${esc(e.message || 'Error desconocido')}</span>
     </div>`;
   }
 
@@ -247,26 +247,26 @@ async function cargarMuelleSinRuta() {
   if (contador) contador.textContent = total > 0 ? `${total} bulto${total !== 1 ? 's' : ''} sin asignar` : 'Sin pedidos pendientes';
 
   if (!grupos.length) {
-    el.innerHTML = '<div style="color:#4ade80;text-align:center;padding:40px;font-size:32px;">✓<br><span style="font-size:14px;">Sin bultos pendientes</span></div>';
+    el.innerHTML = '<div style="color:var(--ok-tx);text-align:center;padding:40px;font-size:32px;">✓<br><span style="font-size:var(--fs-sm);">Sin bultos pendientes</span></div>';
     return;
   }
 
   el.innerHTML = `
-    <div style="background:#1a1a1a;border-radius:10px;padding:12px;margin-bottom:16px;text-align:center;font-size:13px;color:#666;">
+    <div style="background:var(--bg-input);border-radius:10px;padding:12px;margin-bottom:16px;text-align:center;font-size:var(--fs-sm);color:var(--tx3);">
       Selecciona una ruta arriba para empezar a planificar el cargue
     </div>
     ${grupos.map(g => `
-      <div style="background:#111;border:1px solid #222;border-radius:12px;padding:14px;margin-bottom:8px;">
-        <div style="font-size:14px;font-weight:700;color:#f59e0b;">📍 ${esc(g.destino)}
-          <span style="font-size:12px;color:#555;font-weight:400;"> · ${esc(g.total)} bulto${g.total !== 1 ? 's' : ''}</span>
+      <div style="background:var(--bg-s);border:1px solid var(--brd);border-radius:12px;padding:14px;margin-bottom:8px;">
+        <div style="font-size:var(--fs-sm);font-weight:700;color:var(--warn-tx);">📍 ${esc(g.destino)}
+          <span style="font-size:var(--fs-xs);color:var(--tx3);font-weight:400;"> · ${esc(g.total)} bulto${g.total !== 1 ? 's' : ''}</span>
         </div>
         ${g.bultos.map(b => `
-          <div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-top:1px solid #1a1a1a;margin-top:6px;">
+          <div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-top:1px solid var(--brd);margin-top:6px;">
             <div>
-              <span style="font-family:monospace;font-size:13px;color:#ccc;">${esc(b.codigo_barras)}</span>
-              <span style="font-size:11px;color:#555;margin-left:8px;">${esc(b.tipo)} ${esc(b.numero)}/${esc(b.total)}</span>
+              <span style="font-family:monospace;font-size:var(--fs-sm);color:var(--tx);">${esc(b.codigo_barras)}</span>
+              <span style="font-size:var(--fs-xs);color:var(--tx3);margin-left:8px;">${esc(b.tipo)} ${esc(b.numero)}/${esc(b.total)}</span>
             </div>
-            <span style="font-size:11px;color:#555;">${esc(b.numero_pedido)}</span>
+            <span style="font-size:var(--fs-xs);color:var(--tx3);">${esc(b.numero_pedido)}</span>
           </div>`).join('')}
       </div>`).join('')}`;
 }
@@ -329,10 +329,10 @@ async function cargarMuelleConRuta(rutaId) {
   // este botón solo decide cuándo OFRECERLA, no duplica la regla.
   if (totalEnRuta > 0 && totalPlan === 0) {
     html += `
-      <div style="background:#0a1a0a;border:1px solid #166534;border-radius:12px;padding:14px;margin-bottom:16px;text-align:center;">
-        <div style="font-size:14px;color:#4ade80;font-weight:700;margin-bottom:8px;">✓ Los ${totalConf} bulto${totalConf !== 1 ? 's' : ''} de esta ruta ya están cargados</div>
+      <div style="background:var(--ok-bg);border:1px solid var(--ok-brd);border-radius:12px;padding:14px;margin-bottom:16px;text-align:center;">
+        <div style="font-size:var(--fs-sm);color:var(--ok-tx);font-weight:700;margin-bottom:8px;">✓ Los ${totalConf} bulto${totalConf !== 1 ? 's' : ''} de esta ruta ya están cargados</div>
         <button onclick="conBotonOcupado(event, () => muelleConfirmarCargueCompleto(${rutaId}))"
-          style="width:100%;padding:14px;background:#14532d;color:#4ade80;border:none;border-radius:10px;font-size:16px;font-weight:800;cursor:pointer;">
+          style="width:100%;padding:14px;background:#14532d;color:#bbf7d0;border:none;border-radius:10px;font-size:var(--fs-md);font-weight:800;cursor:pointer;">
           🚛 Confirmar cargue completo — Ruta lista para salir
         </button>
       </div>`;
@@ -340,7 +340,7 @@ async function cargarMuelleConRuta(rutaId) {
 
   // — Sección 1: bultos ya en la ruta —
   if (_RUTA_MANIFIESTO_ACTUAL.length) {
-    html += `<div style="font-size:13px;font-weight:600;color:#555;text-transform:uppercase;letter-spacing:.08em;margin-bottom:10px;">
+    html += `<div style="font-size:var(--fs-sm);font-weight:600;color:var(--tx3);text-transform:uppercase;letter-spacing:.08em;margin-bottom:10px;">
       En esta ruta · ${totalConf} confirmado${totalConf !== 1 ? 's' : ''} · ${totalPlan} por confirmar
     </div>`;
     html += _RUTA_MANIFIESTO_ACTUAL.map((grupo, gi) =>
@@ -348,26 +348,26 @@ async function cargarMuelleConRuta(rutaId) {
     ).join('');
   } else {
     html += `
-      <div style="text-align:center;padding:20px;background:#111;border-radius:12px;border:1px dashed #333;margin-bottom:16px;">
-        <div style="font-size:28px;margin-bottom:6px;">🚛</div>
-        <div style="font-size:14px;font-weight:700;color:#eee;">Ruta vacía</div>
-        <div style="font-size:12px;color:#555;margin-top:4px;">Asigna pedidos desde la lista de abajo</div>
+      <div style="text-align:center;padding:20px;background:var(--bg-s);border-radius:12px;border:1px dashed var(--brd);margin-bottom:16px;">
+        <div style="font-size:var(--fs-2xl);margin-bottom:6px;">🚛</div>
+        <div style="font-size:var(--fs-sm);font-weight:700;color:var(--tx);">Ruta vacía</div>
+        <div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:4px;">Asigna pedidos desde la lista de abajo</div>
       </div>`;
   }
 
   // — Sección 2: pendientes sin asignar —
   if (gruposPendientes.length) {
     html += `
-      <div style="margin-top:20px;padding-top:16px;border-top:1px solid #222;">
+      <div style="margin-top:20px;padding-top:16px;border-top:1px solid var(--brd);">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
-          <span style="font-size:13px;font-weight:600;color:#555;text-transform:uppercase;letter-spacing:.08em;">📦 Pendientes por asignar</span>
-          <span style="background:#333;color:#ccc;font-size:13px;padding:2px 10px;border-radius:10px;">${esc(dPendientes.total_bultos)}</span>
+          <span style="font-size:var(--fs-sm);font-weight:600;color:var(--tx3);text-transform:uppercase;letter-spacing:.08em;">📦 Pendientes por asignar</span>
+          <span style="background:var(--bg-s2);color:var(--tx);font-size:var(--fs-sm);padding:2px 10px;border-radius:10px;">${esc(dPendientes.total_bultos)}</span>
         </div>
         ${gruposPendientes.map(g => _htmlGrupoPendiente(g, rutaId)).join('')}
       </div>`;
   } else if (_RUTA_MANIFIESTO_ACTUAL.length > 0) {
     html += `
-      <div style="margin-top:20px;padding-top:16px;border-top:1px solid #222;text-align:center;font-size:13px;color:#555;">
+      <div style="margin-top:20px;padding-top:16px;border-top:1px solid var(--brd);text-align:center;font-size:var(--fs-sm);color:var(--tx3);">
         ✓ Todos los bultos del muelle están en esta ruta
       </div>`;
   }
@@ -425,34 +425,34 @@ function _htmlGrupoRuta(grupo, gi, totalGrupos, rutaId) {
     <div id="ruta-grupo-${gi}" style="margin-bottom:16px;">
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
         <div style="flex:1;">
-          <span style="font-size:16px;font-weight:800;color:${todoConfirmado ? '#15803d' : '#b45309'};text-transform:uppercase;">
+          <span style="font-size:var(--fs-md);font-weight:800;color:${todoConfirmado ? 'var(--ok-tx)' : 'var(--warn-tx)'};text-transform:uppercase;">
             📍 ${esc(grupo.destino)}
           </span>
-          <span style="font-size:13px;color:#555;"> · ${confirmados}/${totalGrupo} conf.</span>
+          <span style="font-size:var(--fs-sm);color:var(--tx3);"> · ${confirmados}/${totalGrupo} conf.</span>
         </div>
         <div style="display:flex;gap:4px;">
           ${gi > 0
-            ? `<button onclick="rutaMoverGrupo(${gi},-1,${rutaId})" style="background:#222;border:1px solid #333;color:#fff;width:44px;height:44px;border-radius:6px;cursor:pointer;font-size:14px;">↑</button>`
+            ? `<button onclick="rutaMoverGrupo(${gi},-1,${rutaId})" style="background:var(--bg-s2);border:1px solid var(--brd);color:var(--tx);width:44px;height:44px;border-radius:6px;cursor:pointer;font-size:var(--fs-sm);">↑</button>`
             : `<div style="width:44px;"></div>`}
           ${gi < totalGrupos - 1
-            ? `<button onclick="rutaMoverGrupo(${gi},1,${rutaId})" style="background:#222;border:1px solid #333;color:#fff;width:44px;height:44px;border-radius:6px;cursor:pointer;font-size:14px;">↓</button>`
+            ? `<button onclick="rutaMoverGrupo(${gi},1,${rutaId})" style="background:var(--bg-s2);border:1px solid var(--brd);color:var(--tx);width:44px;height:44px;border-radius:6px;cursor:pointer;font-size:var(--fs-sm);">↓</button>`
             : `<div style="width:44px;"></div>`}
         </div>
-        <div style="font-size:12px;color:#444;text-align:right;min-width:40px;">Parada<br>#${gi + 1}</div>
+        <div style="font-size:var(--fs-xs);color:var(--tx3);text-align:right;min-width:40px;">Parada<br>#${gi + 1}</div>
       </div>
       ${grupo.bultos.map(b => {
         const conf = b.estado === 'CARGADO';
         return `
-          <div style="background:#111;border:1px solid ${conf ? '#14532d' : '#333'};border-left:4px solid ${conf ? '#4ade80' : '#f59e0b'};border-radius:10px;padding:10px 12px;margin-bottom:6px;">
+          <div style="background:var(--bg-s);border:1px solid ${conf ? 'var(--ok-brd)' : 'var(--brd)'};border-left:4px solid ${conf ? '#4ade80' : '#f59e0b'};border-radius:10px;padding:10px 12px;margin-bottom:6px;">
             <div style="display:flex;justify-content:space-between;align-items:center;">
               <div style="flex:1;">
-                <div style="font-size:15px;font-weight:700;font-family:monospace;color:${conf ? '#fff' : '#f59e0b'};">${esc(b.codigo_barras)}</div>
-                <div style="font-size:13px;color:#999;margin-top:2px;">${esc(b.numero_pedido)} · ${esc(b.cliente || '')}</div>
-                <div style="font-size:12px;color:#777;">${esc(b.tipo)} · pieza ${esc(b.numero)}/${esc(b.total)}</div>
+                <div style="font-size:var(--fs-md);font-weight:700;font-family:monospace;color:${conf ? 'var(--tx)' : 'var(--warn-tx)'};">${esc(b.codigo_barras)}</div>
+                <div style="font-size:var(--fs-sm);color:var(--tx2);margin-top:2px;">${esc(b.numero_pedido)} · ${esc(b.cliente || '')}</div>
+                <div style="font-size:var(--fs-xs);color:var(--tx3);">${esc(b.tipo)} · pieza ${esc(b.numero)}/${esc(b.total)}</div>
               </div>
               <div style="display:flex;align-items:center;gap:8px;">
-                ${!conf ? `<button onclick="conBotonOcupado(event, () => muelleDesasignar(${esc(b.id)}))" title="Quitar de la ruta" style="background:none;border:none;color:#444;font-size:18px;cursor:pointer;line-height:1;padding:4px;">×</button>` : ''}
-                <span style="background:${conf ? '#14532d' : '#451a03'};color:${conf ? '#4ade80' : '#f59e0b'};font-size:11px;padding:3px 10px;border-radius:20px;font-weight:700;white-space:nowrap;">
+                ${!conf ? `<button onclick="conBotonOcupado(event, () => muelleDesasignar(${esc(b.id)}))" title="Quitar de la ruta" style="background:none;border:none;color:var(--tx3);font-size:var(--fs-lg);cursor:pointer;line-height:1;padding:4px;">×</button>` : ''}
+                <span style="background:${conf ? '#14532d' : 'var(--warn-bg)'};color:${conf ? '#4ade80' : '#f59e0b'};font-size:var(--fs-xs);padding:3px 10px;border-radius:20px;font-weight:700;white-space:nowrap;">
                   ${conf ? '✓ Cargado' : '⏳ Pendiente'}
                 </span>
               </div>
@@ -471,26 +471,26 @@ function _htmlGrupoRuta(grupo, gi, totalGrupos, rutaId) {
 function _htmlGrupoPendiente(grupo, rutaId) {
   const numeroPedido = grupo.bultos[0]?.numero_pedido || '';
   return `
-    <div style="background:#111;border:1px solid #222;border-radius:12px;padding:14px;margin-bottom:8px;">
+    <div style="background:var(--bg-s);border:1px solid var(--brd);border-radius:12px;padding:14px;margin-bottom:8px;">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
         <div>
-          <div style="font-size:16px;font-weight:800;color:#b45309;">📍 ${esc(grupo.destino)}</div>
-          <div style="font-size:13px;color:#555;margin-top:2px;">${esc(grupo.total)} bulto${grupo.total !== 1 ? 's' : ''}</div>
+          <div style="font-size:var(--fs-md);font-weight:800;color:var(--warn-tx);">📍 ${esc(grupo.destino)}</div>
+          <div style="font-size:var(--fs-sm);color:var(--tx3);margin-top:2px;">${esc(grupo.total)} bulto${grupo.total !== 1 ? 's' : ''}</div>
         </div>
         <button onclick="conBotonOcupado(event, () => muelleAsignar(null,'${numeroPedido}'))"
-          style="background:#fff;color:#000;border:none;padding:8px 14px;border-radius:8px;font-size:14px;font-weight:700;cursor:pointer;white-space:nowrap;">
+          style="background:#fff;color:#000;border:none;padding:8px 14px;border-radius:8px;font-size:var(--fs-sm);font-weight:700;cursor:pointer;white-space:nowrap;">
           + Todo el pedido
         </button>
       </div>
       ${grupo.bultos.map(b => `
-        <div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-top:1px solid #1a1a1a;">
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-top:1px solid var(--brd);">
           <div>
-            <span style="font-family:monospace;font-size:14px;color:#ddd;">${esc(b.codigo_barras)}</span>
-            <span style="font-size:12px;color:#999;margin-left:8px;">${esc(b.tipo)} ${esc(b.numero)}/${esc(b.total)}</span>
-            ${b.cliente ? `<span style="font-size:12px;color:#999;margin-left:8px;">· ${esc(b.cliente)}</span>` : ''}
+            <span style="font-family:monospace;font-size:var(--fs-sm);color:var(--tx);">${esc(b.codigo_barras)}</span>
+            <span style="font-size:var(--fs-xs);color:var(--tx2);margin-left:8px;">${esc(b.tipo)} ${esc(b.numero)}/${esc(b.total)}</span>
+            ${b.cliente ? `<span style="font-size:var(--fs-xs);color:var(--tx2);margin-left:8px;">· ${esc(b.cliente)}</span>` : ''}
           </div>
           <button onclick="conBotonOcupado(event, () => muelleAsignar(${esc(b.id)},null))"
-            style="background:#1a1a1a;color:#ccc;border:1px solid #333;padding:4px 10px;border-radius:6px;font-size:13px;cursor:pointer;">
+            style="background:var(--bg-input);color:var(--tx);border:1px solid var(--brd);padding:4px 10px;border-radius:6px;font-size:var(--fs-sm);cursor:pointer;">
             + Solo esta
           </button>
         </div>`).join('')}
@@ -572,12 +572,12 @@ async function muelleCargarCaja() {
   if (!codigo) return;
 
   if (!RUTA_ACTIVA_ID) {
-    feedback.style.color = '#f59e0b';
+    feedback.style.color = 'var(--warn-tx)';
     feedback.textContent = '⚠ Selecciona una ruta antes de escanear';
     return;
   }
 
-  feedback.style.color = '#888';
+  feedback.style.color = 'var(--tx2)';
   feedback.textContent = 'Verificando...';
 
   try {
@@ -590,10 +590,10 @@ async function muelleCargarCaja() {
 
     if (r.ok) {
       if (d.ya_cargado) {
-        feedback.style.color = '#60a5fa';
+        feedback.style.color = 'var(--info-tx)';
         feedback.textContent = `ℹ Ya estaba cargado: ${d.codigo_barras}`;
       } else {
-        feedback.style.color = '#4ade80';
+        feedback.style.color = 'var(--ok-tx)';
         const rutaLista = d.pedido_completo_en_ruta ? ' · ✓ Pedido completo en ruta' : ` · ${d.bultos_pendientes_pedido_ruta} bulto${d.bultos_pendientes_pedido_ruta !== 1 ? 's' : ''} pendientes en pedido`;
         feedback.textContent = `✓ ${d.codigo_barras} · ${d.tipo} ${d.numero}/${d.total}${rutaLista}`;
         if (navigator.vibrate) navigator.vibrate(50);
@@ -610,12 +610,12 @@ async function muelleCargarCaja() {
       await cargarMuelleConRuta(RUTA_ACTIVA_ID);
       await cargarRutaSelector();
     } else {
-      feedback.style.color = '#ef4444';
+      feedback.style.color = 'var(--err-tx)';
       feedback.textContent = d.error || 'Error de verificación';
       if (navigator.vibrate) navigator.vibrate([100, 50, 100]);
     }
   } catch (e) {
-    feedback.style.color = '#ef4444';
+    feedback.style.color = 'var(--err-tx)';
     feedback.textContent = 'Error de conexión';
   }
   // Solo re-enfocar en desktop (donde hay escáner físico con cable)
@@ -645,7 +645,7 @@ function rutasSubTab(nombre) {
   ['rutas','maestras','vehiculos','conductores'].forEach(k => {
     const btn = document.getElementById('rutas-subnav-' + k);
     if (btn) {
-      btn.style.background = k === nombre ? '#1E8395' : 'none';
+      btn.style.background = k === nombre ? 'var(--pm-fill)' : 'none';
       btn.style.color      = k === nombre ? '#fff' : '#415A70';
     }
   });
@@ -678,12 +678,12 @@ async function cargarListaRutas() {
     const d = await get(`/api/rutas/?fecha_desde=${desde}&fecha_hasta=${hasta}`);
     const rutas = d.rutas || [];
     if (!rutas.length) {
-      el.innerHTML = '<div style="color:#555;text-align:center;padding:40px;">Sin rutas para este rango de fechas</div>';
+      el.innerHTML = '<div style="color:var(--tx3);text-align:center;padding:40px;">Sin rutas para este rango de fechas</div>';
       return;
     }
     el.innerHTML = rutas.map(r => rutaCard(r)).join('');
   } catch (e) {
-    el.innerHTML = `<div style="color:#ef4444;text-align:center;padding:40px;">${esc(e.message || 'Error cargando rutas')}<br><button onclick="cargarListaRutas()" style="margin-top:10px;padding:8px 16px;background:var(--pm);color:#fff;border:none;border-radius:8px;cursor:pointer;">Reintentar</button></div>`;
+    el.innerHTML = `<div style="color:var(--err-tx);text-align:center;padding:40px;">${esc(e.message || 'Error cargando rutas')}<br><button onclick="cargarListaRutas()" style="margin-top:10px;padding:8px 16px;background:var(--pm-fill);color:#fff;border:none;border-radius:8px;cursor:pointer;">Reintentar</button></div>`;
   }
 }
 
@@ -694,10 +694,10 @@ async function cargarListaRutas() {
  */
 function rutaCard(r) {
   const estadoBadge = {
-    PROGRAMADO:  '<span style="background:#2d1b69;color:#a78bfa;padding:3px 10px;border-radius:10px;font-size:11px;font-weight:700;">PROGRAMADO</span>',
-    EN_CARGUE:   '<span style="background:#713f12;color:#facc15;padding:3px 10px;border-radius:10px;font-size:11px;font-weight:700;">EN CARGUE</span>',
-    EN_TRANSITO: '<span style="background:#1e3a5f;color:#60a5fa;padding:3px 10px;border-radius:10px;font-size:11px;font-weight:700;">EN TRÁNSITO</span>',
-    ENTREGADA:   '<span style="background:#14532d;color:#4ade80;padding:3px 10px;border-radius:10px;font-size:11px;font-weight:700;">ENTREGADA</span>',
+    PROGRAMADO:  '<span style="background:var(--lila-bg);color:var(--lila-tx);padding:3px 10px;border-radius:10px;font-size:var(--fs-xs);font-weight:700;">PROGRAMADO</span>',
+    EN_CARGUE:   '<span style="background:#713f12;color:var(--warn-tx);padding:3px 10px;border-radius:10px;font-size:var(--fs-xs);font-weight:700;">EN CARGUE</span>',
+    EN_TRANSITO: '<span style="background:#1e3a5f;color:var(--info-tx);padding:3px 10px;border-radius:10px;font-size:var(--fs-xs);font-weight:700;">EN TRÁNSITO</span>',
+    ENTREGADA:   '<span style="background:#14532d;color:#bbf7d0;padding:3px 10px;border-radius:10px;font-size:var(--fs-xs);font-weight:700;">ENTREGADA</span>',
   }[r.estado] || r.estado;
 
   const tipoIcon = r.tipo_ruta === 'Urbana' ? '🏙️' : '🛣️';
@@ -706,45 +706,45 @@ function rutaCard(r) {
     : new Date(r.fecha_creacion).toLocaleString('es-CO', { month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' });
 
   const btnIniciar = r.estado === 'PROGRAMADO'
-    ? `<button onclick="conBotonOcupado(event, () => rutaIniciar(${esc(r.id)}))" style="flex:1;padding:10px;background:#2d1b69;color:#a78bfa;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">▶ Iniciar Cargue</button>`
+    ? `<button onclick="conBotonOcupado(event, () => rutaIniciar(${esc(r.id)}))" style="flex:1;padding:10px;background:var(--lila-bg);color:var(--lila-tx);border:none;border-radius:8px;font-size:var(--fs-sm);font-weight:700;cursor:pointer;">▶ Iniciar Cargue</button>`
     : '';
   const btnCerrar = r.estado === 'EN_CARGUE'
-    ? `<button onclick="conBotonOcupado(event, () => rutaCerrar(${esc(r.id)}))" style="flex:1;padding:10px;background:#1e3a5f;color:#60a5fa;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">🚛 Salió</button>`
+    ? `<button onclick="conBotonOcupado(event, () => rutaCerrar(${esc(r.id)}))" style="flex:1;padding:10px;background:#1e3a5f;color:var(--info-tx);border:none;border-radius:8px;font-size:var(--fs-sm);font-weight:700;cursor:pointer;">🚛 Salió</button>`
     : '';
   // EN_TRANSITO: estado informativo — solo el conductor marca como entregada desde su app
   const btnEntregar = r.estado === 'EN_TRANSITO'
-    ? `<div style="flex:1;padding:10px;background:#1e3a5f22;color:#60a5fa;border:1px solid #1e3a5f;border-radius:8px;font-size:13px;font-weight:700;text-align:center;pointer-events:none;">🚛 En camino</div>`
+    ? `<div style="flex:1;padding:10px;background:#1e3a5f22;color:var(--info-tx);border:1px solid var(--info-brd);border-radius:8px;font-size:var(--fs-sm);font-weight:700;text-align:center;pointer-events:none;">🚛 En camino</div>`
     : '';
   const btnManifiesto = r.total_bultos > 0
-    ? `<button onclick="rutaVerManifiesto(${esc(r.id)})" style="flex:1;padding:10px;background:#1a1a1a;color:#aaa;border:1px solid #333;border-radius:8px;font-size:13px;cursor:pointer;">📋 Ver</button>`
+    ? `<button onclick="rutaVerManifiesto(${esc(r.id)})" style="flex:1;padding:10px;background:var(--bg-input);color:var(--tx2);border:1px solid var(--brd);border-radius:8px;font-size:var(--fs-sm);cursor:pointer;">📋 Ver</button>`
     : '';
   const btnPlanilla = ['EN_TRANSITO','ENTREGADA'].includes(r.estado)
-    ? `<button onclick="rutaVerPlanilla(${esc(r.id)})" style="flex:1;padding:10px;background:#1a1a2a;color:#a78bfa;border:1px solid #2d1b69;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">💰 Planilla${r.estado_financiero === 'LIQUIDADA' ? ' ✓' : ''}</button>`
+    ? `<button onclick="rutaVerPlanilla(${esc(r.id)})" style="flex:1;padding:10px;background:var(--lila-bg);color:var(--lila-tx);border:1px solid var(--info-brd);border-radius:8px;font-size:var(--fs-sm);font-weight:700;cursor:pointer;">💰 Planilla${r.estado_financiero === 'LIQUIDADA' ? ' ✓' : ''}</button>`
     : '';
   const btnForzarCierre = r.estado === 'EN_TRANSITO'
-    ? `<button onclick="conBotonOcupado(event, () => rutaForzarCierre(${esc(r.id)}))" style="flex:1;padding:10px;background:#110a00;color:#f59e0b;border:1px solid #78350f;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;">⚡ Forzar cierre</button>`
+    ? `<button onclick="conBotonOcupado(event, () => rutaForzarCierre(${esc(r.id)}))" style="flex:1;padding:10px;background:var(--warn-bg);color:var(--warn-tx);border:1px solid var(--warn-brd);border-radius:8px;font-size:var(--fs-xs);font-weight:700;cursor:pointer;">⚡ Forzar cierre</button>`
     : '';
 
   return `
-    <div id="ruta-card-${esc(r.id)}" style="background:#111;border:1px solid ${r.estado === 'PROGRAMADO' ? '#2d1b69' : '#222'};border-radius:14px;padding:16px;margin-bottom:10px;">
+    <div id="ruta-card-${esc(r.id)}" style="background:var(--bg-s);border:1px solid ${r.estado === 'PROGRAMADO' ? 'var(--info-brd)' : 'var(--brd)'};border-radius:14px;padding:16px;margin-bottom:10px;">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px;">
         <div>
-          <div style="font-size:16px;font-weight:800;">${tipoIcon} ${esc(r.ruta_maestra_nombre || 'Ruta')} <span style="color:#555;font-weight:400;font-size:13px;">#${esc(r.id)}</span></div>
-          <div style="font-size:13px;color:#ccc;margin-top:2px;">${esc(r.conductor_nombre)}</div>
-          <div style="font-size:11px;color:#555;margin-top:1px;">${r.vehiculo_placa ? r.vehiculo_placa + ' · ' + r.vehiculo_tipo + ' · ' : ''}${fechaRef}</div>
+          <div style="font-size:var(--fs-md);font-weight:800;">${tipoIcon} ${esc(r.ruta_maestra_nombre || 'Ruta')} <span style="color:var(--tx3);font-weight:400;font-size:var(--fs-sm);">#${esc(r.id)}</span></div>
+          <div style="font-size:var(--fs-sm);color:var(--tx);margin-top:2px;">${esc(r.conductor_nombre)}</div>
+          <div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:1px;">${r.vehiculo_placa ? r.vehiculo_placa + ' · ' + r.vehiculo_tipo + ' · ' : ''}${fechaRef}</div>
         </div>
         <div style="text-align:right;">
           ${estadoBadge}
           <div style="font-size:20px;font-weight:800;margin-top:6px;">${esc(r.total_bultos)}</div>
-          <div style="font-size:10px;color:#555;">
+          <div style="font-size:var(--fs-xs);color:var(--tx3);">
             ${r.total_confirmados > 0 || r.total_planificados > 0
               ? `${esc(r.total_confirmados)} conf · ${esc(r.total_planificados)} plan`
               : 'bultos'}
           </div>
         </div>
       </div>
-      ${r.pedidos?.length ? `<div style="font-size:11px;color:#555;margin-bottom:10px;">Pedidos: ${r.pedidos.join(', ')}</div>` : ''}
-      ${r.notas ? `<div style="font-size:12px;color:#666;font-style:italic;margin-bottom:10px;">"${esc(r.notas)}"</div>` : ''}
+      ${r.pedidos?.length ? `<div style="font-size:var(--fs-xs);color:var(--tx3);margin-bottom:10px;">Pedidos: ${r.pedidos.join(', ')}</div>` : ''}
+      ${r.notas ? `<div style="font-size:var(--fs-xs);color:var(--tx3);font-style:italic;margin-bottom:10px;">"${esc(r.notas)}"</div>` : ''}
       ${(btnIniciar || btnCerrar || btnEntregar || btnManifiesto || btnPlanilla || btnForzarCierre)
         ? `<div style="display:flex;gap:6px;flex-wrap:wrap;">${btnIniciar}${btnCerrar}${btnEntregar}${btnManifiesto}${btnPlanilla}${btnForzarCierre}</div>`
         : ''}
@@ -842,22 +842,22 @@ function _renderEntregaLista() {
   const rechazados = _ENTREGA_BULTOS.filter(b => !b.entregado).length;
   document.getElementById('modal-entrega-resumen').innerHTML =
     rechazados > 0
-      ? `<span style="color:#ef4444;font-weight:700;">${rechazados} bulto${rechazados !== 1 ? 's' : ''} marcado${rechazados !== 1 ? 's' : ''} como rechazado${rechazados !== 1 ? 's' : ''}</span> — aparecerán en Devoluciones`
-      : `<span style="color:#4ade80;">Todos los bultos entregados</span>`;
+      ? `<span style="color:var(--err-tx);font-weight:700;">${rechazados} bulto${rechazados !== 1 ? 's' : ''} marcado${rechazados !== 1 ? 's' : ''} como rechazado${rechazados !== 1 ? 's' : ''}</span> — aparecerán en Devoluciones`
+      : `<span style="color:var(--ok-tx);">Todos los bultos entregados</span>`;
 
   el.innerHTML = _ENTREGA_BULTOS.map((b, i) => `
-    <div style="background:${b.entregado ? '#0d1a0d' : '#1a0d0d'};border:1px solid ${b.entregado ? '#166534' : '#7f1d1d'};border-radius:10px;padding:12px;margin-bottom:8px;">
+    <div style="background:${b.entregado ? 'var(--ok-bg)' : 'var(--err-bg)'};border:1px solid ${b.entregado ? 'var(--ok-brd)' : 'var(--err-brd)'};border-radius:10px;padding:12px;margin-bottom:8px;">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">
         <div style="flex:1;min-width:0;">
-          <div style="font-size:13px;font-weight:700;color:#fff;">${esc(b.codigo_barras)}</div>
-          <div style="font-size:11px;color:#666;margin-top:2px;">${esc(b.tipo)} ${esc(b.numero)}/${esc(b.total)} · ${esc(b.numero_pedido)} · ${esc(b.cliente || '—')}</div>
+          <div style="font-size:var(--fs-sm);font-weight:700;color:var(--tx);">${esc(b.codigo_barras)}</div>
+          <div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:2px;">${esc(b.tipo)} ${esc(b.numero)}/${esc(b.total)} · ${esc(b.numero_pedido)} · ${esc(b.cliente || '—')}</div>
           ${!b.entregado ? `<select onchange="_setMotivo(${i}, this.value)"
-            style="margin-top:8px;width:100%;padding:6px;background:#1a1a1a;border:1px solid #333;color:#fff;border-radius:6px;font-size:12px;">
+            style="margin-top:8px;width:100%;padding:6px;background:var(--bg-input);border:1px solid var(--brd);color:var(--tx);border-radius:6px;font-size:var(--fs-xs);">
             ${MOTIVOS_RECHAZO.map(m => `<option value="${m}" ${b.motivo_rechazo===m?'selected':''}>${m}</option>`).join('')}
           </select>` : ''}
         </div>
         <button onclick="_toggleEntrega(${i})"
-          style="flex-shrink:0;padding:8px 14px;background:${b.entregado ? '#166534' : '#7f1d1d'};color:${b.entregado ? '#4ade80' : '#f87171'};border:none;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap;">
+          style="flex-shrink:0;padding:8px 14px;background:${b.entregado ? '#166534' : '#7f1d1d'};color:${b.entregado ? '#4ade80' : '#f87171'};border:none;border-radius:8px;font-size:var(--fs-xs);font-weight:700;cursor:pointer;white-space:nowrap;">
           ${b.entregado ? '✓ Entregado' : '✗ Rechazado'}
         </button>
       </div>
@@ -958,7 +958,7 @@ async function rutaVerManifiesto(id) {
 
     // Paleta modo día
     const EST = {
-      ENTREGADO: { border: '#16a34a', bg: '#f0fdf4', badge: '#15803d', badgeBg: '#dcfce7', label: '✓ Entregado' },
+      ENTREGADO: { border: '#15803d', bg: '#f0fdf4', badge: '#15803d', badgeBg: '#dcfce7', label: '✓ Entregado' },
       PARCIAL:   { border: '#d97706', bg: '#fffbeb', badge: '#b45309', badgeBg: '#fef3c7', label: '⚠ Parcial'   },
       RECHAZADO: { border: '#dc2626', bg: '#fef2f2', badge: '#b91c1c', badgeBg: '#fee2e2', label: '✗ Rechazado' },
     };
@@ -974,18 +974,18 @@ async function rutaVerManifiesto(id) {
         filas += `<div style="background:${esc(e.bg)};border:1px solid ${esc(e.border)};border-radius:10px;padding:12px;margin-bottom:8px;">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
             <div>
-              <div style="font-size:13px;font-weight:800;color:#111827;">${esc(p.numero_pedido)}</div>
-              <div style="font-size:11px;color:#6b7280;">${esc(p.cliente)} · 📍 ${esc(p.municipio)}</div>
+              <div style="font-size:var(--fs-sm);font-weight:800;color:var(--tx);">${esc(p.numero_pedido)}</div>
+              <div style="font-size:var(--fs-xs);color:var(--tx3);">${esc(p.cliente)} · 📍 ${esc(p.municipio)}</div>
             </div>
-            <span style="font-size:11px;font-weight:700;color:${esc(e.badge)};background:${esc(e.badgeBg)};padding:3px 10px;border-radius:8px;">${esc(e.label)}</span>
+            <span style="font-size:var(--fs-xs);font-weight:700;color:${esc(e.badge)};background:${esc(e.badgeBg)};padding:3px 10px;border-radius:8px;">${esc(e.label)}</span>
           </div>`;
 
         // Bultos
         const rechazadosIds = new Set(r ? (r.bultos_rechazados_ids || []) : []);
-        filas += `<div style="font-size:11px;margin-bottom:${est && est !== 'ENTREGADO' ? 6 : 0}px;">`;
+        filas += `<div style="font-size:var(--fs-xs);margin-bottom:${est && est !== 'ENTREGADO' ? 6 : 0}px;">`;
         (p.bultos_detalle || []).forEach(b => {
           const rechazado = rechazadosIds.has(b.id);
-          filas += `<span style="color:${rechazado ? '#b91c1c' : '#15803d'};margin-right:8px;">
+          filas += `<span style="color:${rechazado ? 'var(--err-tx)' : 'var(--ok-tx)'};margin-right:8px;">
             ${rechazado ? '✗' : '✓'} ${esc(b.codigo_barras)} (${esc(b.tipo)} ${esc(b.numero)}/${esc(b.total)})</span>`;
         });
         filas += '</div>';
@@ -993,12 +993,12 @@ async function rutaVerManifiesto(id) {
         // Detalle PARCIAL
         if (est === 'PARCIAL' && r.items_entregados && r.items_entregados.length) {
           filas += `<div style="margin-top:8px;padding-top:8px;border-top:1px solid #fde68a;">
-            <div style="font-size:10px;color:#92400e;font-weight:700;margin-bottom:4px;">DETALLE PARCIAL</div>
-            <div style="display:grid;grid-template-columns:1fr auto auto;gap:3px 10px;font-size:11px;">
+            <div style="font-size:var(--fs-xs);color:var(--warn-tx);font-weight:700;margin-bottom:4px;">DETALLE PARCIAL</div>
+            <div style="display:grid;grid-template-columns:1fr auto auto;gap:3px 10px;font-size:var(--fs-xs);">
               ${r.items_entregados.map(it => `
-                <div style="color:#374151;">${esc(it.nombre || it.codigo)}</div>
-                <div style="color:#15803d;text-align:right;font-weight:700;">✓ ${esc(it.cantidad_entregada)}</div>
-                <div style="color:${it.cantidad_devuelta > 0 ? '#b91c1c' : '#9ca3af'};text-align:right;font-weight:700;">↩ ${esc(it.cantidad_devuelta)}</div>
+                <div style="color:var(--tx2);">${esc(it.nombre || it.codigo)}</div>
+                <div style="color:var(--ok-tx);text-align:right;font-weight:700;">✓ ${esc(it.cantidad_entregada)}</div>
+                <div style="color:${it.cantidad_devuelta > 0 ? 'var(--err-tx)' : 'var(--tx3)'};text-align:right;font-weight:700;">↩ ${esc(it.cantidad_devuelta)}</div>
               `).join('')}
             </div>
           </div>`;
@@ -1007,11 +1007,11 @@ async function rutaVerManifiesto(id) {
         // Motivo + evidencia RECHAZADO
         if (est === 'RECHAZADO') {
           if (r.observaciones) {
-            filas += `<div style="margin-top:6px;font-size:11px;color:#b91c1c;font-style:italic;">"${esc(r.observaciones)}"</div>`;
+            filas += `<div style="margin-top:6px;font-size:var(--fs-xs);color:var(--err-tx);font-style:italic;">"${esc(r.observaciones)}"</div>`;
           }
           if (r.foto_entrega) {
             filas += `<button onclick="(function(){const w=window.open();w.document.write('<img src=\\'data:image/jpeg;base64,${esc(r.foto_entrega)}\\' style=\\'max-width:100%;\\'>');w.document.title='Evidencia ${esc(p.numero_pedido)}';})()"
-              style="margin-top:8px;padding:6px 14px;background:#fee2e2;color:#b91c1c;border:1px solid #dc2626;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;">
+              style="margin-top:8px;padding:6px 14px;background:#fee2e2;color:var(--err-tx);border:1px solid #dc2626;border-radius:8px;font-size:var(--fs-xs);font-weight:700;cursor:pointer;">
               📷 Ver evidencia fotográfica
             </button>`;
           }
@@ -1020,24 +1020,25 @@ async function rutaVerManifiesto(id) {
         filas += '</div>';
       });
     } else if (!dp.ok) {
-      filas = `<div style="color:#b45309;background:#fffbeb;border:1px solid #fcd34d;border-radius:10px;text-align:center;padding:20px;font-size:13px;">
+      filas = `<div style="color:var(--warn-tx);background:#fffbeb;border:1px solid #fcd34d;border-radius:10px;text-align:center;padding:20px;font-size:var(--fs-sm);">
         ${dp.status === 403
           ? 'No tienes permiso para ver el detalle de paradas de esta ruta.'
           : 'No se pudo cargar el detalle de paradas.'}
-        <div style="font-size:11px;color:#92400e;margin-top:6px;">La ruta puede tener paradas — esta pantalla no las pudo leer.</div>
+        <div style="font-size:var(--fs-xs);color:var(--warn-tx);margin-top:6px;">La ruta puede tener paradas — esta pantalla no las pudo leer.</div>
       </div>`;
     } else {
-      filas = '<div style="color:#9ca3af;text-align:center;padding:20px;">Sin paradas registradas</div>';
+      filas = '<div style="color:var(--tx2);text-align:center;padding:20px;">Sin paradas registradas</div>';
     }
 
     const modal = document.createElement('div');
+    modal.className = 'tema-claro-fijo';   // paleta modo día: tokens claros en los dos temas
     modal.style.cssText = 'position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;padding:16px;';
     modal.innerHTML = `
       <div style="background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:20px;max-width:560px;width:100%;max-height:85vh;display:flex;flex-direction:column;box-shadow:0 20px 40px rgba(0,0,0,.15);">
-        <div style="font-size:16px;font-weight:800;color:#111827;margin-bottom:4px;">${esc(ruta.ruta_maestra_nombre || 'Ruta')} <span style="color:#9ca3af;font-weight:400;font-size:13px;">#${esc(ruta.id)}</span></div>
-        <div style="font-size:12px;color:#6b7280;margin-bottom:14px;">${esc(ruta.conductor_nombre)} · ${esc(ruta.tipo_ruta)} · ${dp.ok ? `${esc(paradas.length)} pedido${paradas.length !== 1 ? 's' : ''}` : 'pedidos: sin dato'}</div>
+        <div style="font-size:var(--fs-md);font-weight:800;color:var(--tx);margin-bottom:4px;">${esc(ruta.ruta_maestra_nombre || 'Ruta')} <span style="color:var(--tx3);font-weight:400;font-size:var(--fs-sm);">#${esc(ruta.id)}</span></div>
+        <div style="font-size:var(--fs-xs);color:var(--tx3);margin-bottom:14px;">${esc(ruta.conductor_nombre)} · ${esc(ruta.tipo_ruta)} · ${dp.ok ? `${esc(paradas.length)} pedido${paradas.length !== 1 ? 's' : ''}` : 'pedidos: sin dato'}</div>
         <div style="overflow-y:auto;flex:1;">${filas}</div>
-        <button onclick="this.closest('div[style*=fixed]').remove()" style="margin-top:16px;padding:10px;background:#f3f4f6;color:#374151;border:1px solid #e5e7eb;border-radius:8px;font-size:13px;cursor:pointer;width:100%;font-weight:600;">Cerrar</button>
+        <button onclick="this.closest('div[style*=fixed]').remove()" style="margin-top:16px;padding:10px;background:#f3f4f6;color:var(--tx2);border:1px solid #e5e7eb;border-radius:8px;font-size:var(--fs-sm);cursor:pointer;width:100%;font-weight:600;">Cerrar</button>
       </div>`;
     document.body.appendChild(modal);
     modal.addEventListener('click', e => { if (e.target === modal) modal.remove(); });
@@ -1187,25 +1188,25 @@ async function rutasCargarCoberturaGeo() {
     const solas = d.con_una_sola_captura || 0;
     el.innerHTML = `
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
-        <div style="font-size:12px;color:var(--tx3);font-weight:700;">UBICACIÓN DE CLIENTES</div>
+        <div style="font-size:var(--fs-xs);color:var(--tx3);font-weight:700;">UBICACIÓN DE CLIENTES</div>
         <button onclick="rutasCargarCoberturaGeo()"
-          style="padding:4px 10px;background:#1a1a1a;border:1px solid #333;color:#9ca3af;border-radius:6px;font-size:11px;cursor:pointer;">↻</button>
+          style="padding:4px 10px;background:var(--bg-input);border:1px solid var(--brd);color:var(--tx2);border-radius:6px;font-size:var(--fs-xs);cursor:pointer;">↻</button>
       </div>
       <div style="display:flex;align-items:baseline;gap:8px;">
-        <div style="font-size:26px;font-weight:800;color:#4ade80;">${con}</div>
-        <div style="font-size:12px;color:#9ca3af;">de ${base} clientes visitados tienen coordenada (${pct}%)</div>
+        <div style="font-size:26px;font-weight:800;color:var(--ok-tx);">${con}</div>
+        <div style="font-size:var(--fs-xs);color:var(--tx2);">de ${base} clientes visitados tienen coordenada (${pct}%)</div>
       </div>
-      <div style="height:6px;background:#1a1a1a;border-radius:3px;margin:8px 0;overflow:hidden;">
-        <div style="height:100%;width:${pct}%;background:#16a34a;"></div>
+      <div style="height:6px;background:var(--bg-input);border-radius:3px;margin:8px 0;overflow:hidden;">
+        <div style="height:100%;width:${pct}%;background:#15803d;"></div>
       </div>
-      <div style="font-size:11px;color:#666;line-height:1.6;">
+      <div style="font-size:var(--fs-xs);color:var(--tx3);line-height:1.6;">
         ${solas} con una sola visita · ${esc(d.capturas_con_punto || 0)} capturas con punto de ${esc(d.capturas_totales || 0)}<br>
-        Ruteo no se construye hasta llegar a <b style="color:#9ca3af;">${umbral}</b> clientes con coordenada.
-        ${con >= umbral ? '<span style="color:#4ade80;">Umbral alcanzado — ver docs/flota/ESTADO.md.</span>' : ''}
+        Ruteo no se construye hasta llegar a <b style="color:var(--tx2);">${umbral}</b> clientes con coordenada.
+        ${con >= umbral ? '<span style="color:var(--ok-tx);">Umbral alcanzado — ver docs/flota/ESTADO.md.</span>' : ''}
       </div>`;
   } catch (e) {
-    el.innerHTML = `<div style="font-size:11px;color:#ef4444;">No se pudo leer la cobertura: ${esc(e.message || 'error')}
-      <button onclick="rutasCargarCoberturaGeo()" style="margin-left:8px;padding:3px 8px;background:#1a1a1a;border:1px solid #333;color:#9ca3af;border-radius:6px;font-size:11px;cursor:pointer;">Reintentar</button></div>`;
+    el.innerHTML = `<div style="font-size:var(--fs-xs);color:var(--err-tx);">No se pudo leer la cobertura: ${esc(e.message || 'error')}
+      <button onclick="rutasCargarCoberturaGeo()" style="margin-left:8px;padding:3px 8px;background:var(--bg-input);border:1px solid var(--brd);color:var(--tx2);border-radius:6px;font-size:var(--fs-xs);cursor:pointer;">Reintentar</button></div>`;
   }
 }
 
@@ -1219,30 +1220,30 @@ async function cargarListaMaestras() {
     // Más reciente primero: la que se acaba de crear queda de primera.
     const maestras = (d.maestras || []).slice().sort((a, b) => b.id - a.id);
     if (!maestras.length) {
-      el.innerHTML = '<div style="color:#555;text-align:center;padding:40px;">Sin rutas maestras. Crea la primera con el botón +</div>';
+      el.innerHTML = '<div style="color:var(--tx3);text-align:center;padding:40px;">Sin rutas maestras. Crea la primera con el botón +</div>';
       return;
     }
     el.innerHTML = maestras.map(m => `
-      <div style="background:#111;border:1px solid ${m.activa ? '#222' : '#1a1a1a'};border-radius:12px;padding:14px;margin-bottom:8px;opacity:${m.activa ? '1' : '0.5'};">
+      <div style="background:var(--bg-s);border:1px solid ${m.activa ? 'var(--brd)' : 'var(--brd)'};border-radius:12px;padding:14px;margin-bottom:8px;opacity:${m.activa ? '1' : '0.5'};">
         <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px;">
           <div>
-            <div style="font-size:15px;font-weight:800;">${m.tipo_ruta === 'Urbana' ? '🏙️' : '🛣️'} ${esc(m.nombre)}</div>
-            <div style="font-size:11px;color:#555;margin-top:2px;">${esc(m.tipo_ruta)} · ${(m.paradas || []).length} parada${(m.paradas || []).length !== 1 ? 's' : ''}</div>
+            <div style="font-size:var(--fs-md);font-weight:800;">${m.tipo_ruta === 'Urbana' ? '🏙️' : '🛣️'} ${esc(m.nombre)}</div>
+            <div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:2px;">${esc(m.tipo_ruta)} · ${(m.paradas || []).length} parada${(m.paradas || []).length !== 1 ? 's' : ''}</div>
           </div>
           <div style="display:flex;gap:5px;align-items:center;flex-wrap:wrap;justify-content:flex-end;">
             ${m.activa
-              ? '<span style="background:#14532d;color:#4ade80;padding:2px 8px;border-radius:6px;font-size:10px;font-weight:700;">ACTIVA</span>'
-              : '<span style="background:#3f1515;color:#f87171;padding:2px 8px;border-radius:6px;font-size:10px;font-weight:700;">INACTIVA</span>'}
+              ? '<span style="background:#14532d;color:#bbf7d0;padding:2px 8px;border-radius:6px;font-size:var(--fs-xs);font-weight:700;">ACTIVA</span>'
+              : '<span style="background:var(--err-bg);color:var(--err-tx);padding:2px 8px;border-radius:6px;font-size:var(--fs-xs);font-weight:700;">INACTIVA</span>'}
             <button onclick="maestraEditar(${esc(m.id)})"
-              style="padding:5px 10px;background:#1a1a2a;border:1px solid #2d1b69;color:#a78bfa;border-radius:6px;font-size:11px;font-weight:700;cursor:pointer;">
+              style="padding:5px 10px;background:var(--lila-bg);border:1px solid var(--info-brd);color:var(--lila-tx);border-radius:6px;font-size:var(--fs-xs);font-weight:700;cursor:pointer;">
               ✏ Editar
             </button>
             <button onclick="conBotonOcupado(event, () => maestraToggle(${esc(m.id)},${!m.activa}))"
-              style="padding:5px 10px;background:#1a1a1a;border:1px solid #333;color:#aaa;border-radius:6px;font-size:11px;cursor:pointer;">
+              style="padding:5px 10px;background:var(--bg-input);border:1px solid var(--brd);color:var(--tx2);border-radius:6px;font-size:var(--fs-xs);cursor:pointer;">
               ${m.activa ? 'Desactivar' : 'Activar'}
             </button>
             <button onclick="conBotonOcupado(event, () => maestraEliminar(${esc(m.id)},${JSON.stringify(m.nombre)}))"
-              style="padding:5px 10px;background:#1a0000;border:1px solid #5c1a1a;color:#f87171;border-radius:6px;font-size:11px;cursor:pointer;">
+              style="padding:5px 10px;background:var(--err-bg);border:1px solid var(--err-brd);color:var(--err-tx);border-radius:6px;font-size:var(--fs-xs);cursor:pointer;">
               🗑
             </button>
           </div>
@@ -1250,13 +1251,13 @@ async function cargarListaMaestras() {
         ${(m.paradas || []).length ? `
           <div style="display:flex;flex-wrap:wrap;gap:5px;margin-top:6px;">
             ${m.paradas.map((p, i) => `
-              <span style="background:#1a1a1a;border:1px solid #333;border-radius:20px;padding:3px 10px;font-size:11px;color:#aaa;">
+              <span style="background:var(--bg-input);border:1px solid var(--brd);border-radius:20px;padding:3px 10px;font-size:var(--fs-xs);color:var(--tx2);">
                 ${i + 1}. ${esc(p.municipio)}
               </span>`).join('')}
           </div>` : ''}
       </div>`).join('');
   } catch (e) {
-    el.innerHTML = '<div style="color:#ef4444;text-align:center;">Error cargando rutas maestras</div>';
+    el.innerHTML = '<div style="color:var(--err-tx);text-align:center;">Error cargando rutas maestras</div>';
   }
 }
 
@@ -1289,13 +1290,13 @@ function maestraInputParada(input) {
   if (!el) return;
   if (!q) { el.style.display = 'none'; return; }
   if (!_MUNICIPIOS_CACHE.length) {
-    el.innerHTML = '<div style="padding:12px;font-size:13px;color:var(--tx2);text-align:center;">Cargando municipios…</div>';
+    el.innerHTML = '<div style="padding:12px;font-size:var(--fs-sm);color:var(--tx2);text-align:center;">Cargando municipios…</div>';
     el.style.display = 'block';
     _cargarMunicipios().then(() => {
       const inp = document.getElementById('maestras-parada-input');
       if (!inp || !inp.value.trim()) { el.style.display = 'none'; return; }
       if (!_MUNICIPIOS_CACHE.length) {
-        el.innerHTML = '<div style="padding:12px;font-size:13px;color:var(--red);text-align:center;">Error cargando municipios</div>';
+        el.innerHTML = '<div style="padding:12px;font-size:var(--fs-sm);color:var(--red);text-align:center;">Error cargando municipios</div>';
         return;
       }
       maestraInputParada(inp);
@@ -1306,7 +1307,7 @@ function maestraInputParada(input) {
   if (!matches.length) { el.style.display = 'none'; return; }
   el.innerHTML = matches.map(m =>
     `<div onmousedown="maestraSeleccionarMunicipio(this)" data-municipio="${m.replace(/"/g, '&quot;')}"
-      style="padding:9px 12px;cursor:pointer;font-size:13px;color:var(--tx);border-bottom:1px solid var(--brd);"
+      style="padding:9px 12px;cursor:pointer;font-size:var(--fs-sm);color:var(--tx);border-bottom:1px solid var(--brd);"
       onmouseover="this.style.background='var(--bg-s2)'" onmouseout="this.style.background=''">${m}</div>`
   ).join('');
   el.style.display = 'block';
@@ -1424,16 +1425,16 @@ function _maestraRenderParadas() {
   const el = document.getElementById('maestras-paradas-lista');
   if (!el) return;
   if (!_MAESTRAS_PARADAS.length) {
-    el.innerHTML = '<div style="color:#444;font-size:12px;text-align:center;padding:10px;">Agrega las paradas en orden de entrega (1ª = primera entrega)</div>';
+    el.innerHTML = '<div style="color:var(--tx3);font-size:var(--fs-xs);text-align:center;padding:10px;">Agrega las paradas en orden de entrega (1ª = primera entrega)</div>';
     return;
   }
   el.innerHTML = _MAESTRAS_PARADAS.map((m, i) => `
-    <div style="display:flex;align-items:center;gap:6px;padding:7px 0;border-bottom:1px solid #1a1a1a;">
-      <span style="background:#1a1a1a;color:#666;border-radius:50%;width:22px;height:22px;display:flex;align-items:center;justify-content:center;font-size:11px;flex-shrink:0;">${i+1}</span>
-      <span style="flex:1;font-size:13px;">${m}</span>
-      <button onclick="maestraMoverParada(${i},-1)" ${i===0?'disabled':''} style="background:none;border:none;color:#555;cursor:pointer;font-size:14px;padding:2px 4px;">↑</button>
-      <button onclick="maestraMoverParada(${i},1)" ${i===_MAESTRAS_PARADAS.length-1?'disabled':''} style="background:none;border:none;color:#555;cursor:pointer;font-size:14px;padding:2px 4px;">↓</button>
-      <button onclick="maestraQuitarParada(${i})" style="background:none;border:none;color:#444;cursor:pointer;font-size:18px;padding:2px 4px;">×</button>
+    <div style="display:flex;align-items:center;gap:6px;padding:7px 0;border-bottom:1px solid var(--brd);">
+      <span style="background:var(--bg-input);color:var(--tx3);border-radius:50%;width:22px;height:22px;display:flex;align-items:center;justify-content:center;font-size:var(--fs-xs);flex-shrink:0;">${i+1}</span>
+      <span style="flex:1;font-size:var(--fs-sm);">${m}</span>
+      <button onclick="maestraMoverParada(${i},-1)" ${i===0?'disabled':''} style="background:none;border:none;color:var(--tx3);cursor:pointer;font-size:var(--fs-sm);padding:2px 4px;">↑</button>
+      <button onclick="maestraMoverParada(${i},1)" ${i===_MAESTRAS_PARADAS.length-1?'disabled':''} style="background:none;border:none;color:var(--tx3);cursor:pointer;font-size:var(--fs-sm);padding:2px 4px;">↓</button>
+      <button onclick="maestraQuitarParada(${i})" style="background:none;border:none;color:var(--tx3);cursor:pointer;font-size:var(--fs-lg);padding:2px 4px;">×</button>
     </div>`).join('');
 }
 
@@ -1539,7 +1540,7 @@ async function cargarListaVehiculos() {
     const d = await get('/api/rutas/vehiculos?activos=false');
     const vehiculos = d.vehiculos || [];
     if (!vehiculos.length) {
-      el.innerHTML = '<div style="color:#555;text-align:center;padding:40px;">Sin vehículos registrados</div>';
+      el.innerHTML = '<div style="color:var(--tx3);text-align:center;padding:40px;">Sin vehículos registrados</div>';
       return;
     }
     el.innerHTML = vehiculos.map(v => `
@@ -1558,7 +1559,7 @@ async function cargarListaVehiculos() {
           Ver expediente →</button>` : ''}
       </div>`).join('');
   } catch (e) {
-    el.innerHTML = '<div style="color:#ef4444;text-align:center;">Error cargando vehículos</div>';
+    el.innerHTML = '<div style="color:var(--err-tx);text-align:center;">Error cargando vehículos</div>';
   }
 }
 
@@ -1669,36 +1670,36 @@ async function cargarListaConductores() {
     const d = await get('/api/rutas/conductores?activos=false');
     const conductores = d.conductores || [];
     if (!conductores.length) {
-      el.innerHTML = '<div style="color:#555;text-align:center;padding:40px;">Sin conductores registrados</div>';
+      el.innerHTML = '<div style="color:var(--tx3);text-align:center;padding:40px;">Sin conductores registrados</div>';
       return;
     }
     el.innerHTML = conductores.map(c => `
-      <div style="background:#111;border:1px solid #222;border-radius:12px;padding:14px;margin-bottom:8px;">
+      <div style="background:var(--bg-s);border:1px solid var(--brd);border-radius:12px;padding:14px;margin-bottom:8px;">
         <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px;">
           <div>
-            <div style="font-size:14px;font-weight:700;">${esc(c.nombre)}</div>
-            <div style="font-size:12px;color:#555;margin-top:2px;">${identidadConductor(c, conductores)}${c.telefono ? ' · ' + c.telefono : ''}</div>
+            <div style="font-size:var(--fs-sm);font-weight:700;">${esc(c.nombre)}</div>
+            <div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:2px;">${identidadConductor(c, conductores)}${c.telefono ? ' · ' + c.telefono : ''}</div>
             ${conCuentaPwa(c)
-              ? `<div style="font-size:11px;color:#facc15;margin-top:3px;">👤 ${esc(c.usuario_email || 'tiene cuenta')}</div>`
-              : `<div style="font-size:11px;color:#fbbf24;margin-top:3px;">Sin cuenta PWA — no puede entrar a la app</div>`}
+              ? `<div style="font-size:var(--fs-xs);color:var(--warn-tx);margin-top:3px;">👤 ${esc(c.usuario_email || 'tiene cuenta')}</div>`
+              : `<div style="font-size:var(--fs-xs);color:var(--warn-tx);margin-top:3px;">Sin cuenta PWA — no puede entrar a la app</div>`}
           </div>
           ${c.activo
-            ? '<span style="background:#14532d;color:#4ade80;padding:3px 8px;border-radius:8px;font-size:10px;font-weight:700;height:fit-content;">ACTIVO</span>'
-            : '<span style="background:#3f1515;color:#f87171;padding:3px 8px;border-radius:8px;font-size:10px;font-weight:700;height:fit-content;">INACTIVO</span>'}
+            ? '<span style="background:#14532d;color:#bbf7d0;padding:3px 8px;border-radius:8px;font-size:var(--fs-xs);font-weight:700;height:fit-content;">ACTIVO</span>'
+            : '<span style="background:var(--err-bg);color:var(--err-tx);padding:3px 8px;border-radius:8px;font-size:var(--fs-xs);font-weight:700;height:fit-content;">INACTIVO</span>'}
         </div>
         <div style="display:flex;gap:6px;">
           <button onclick="conBotonOcupado(event, () => conductorToggle(${esc(c.id)}, ${!c.activo}))"
-            style="flex:1;padding:8px;background:#1a1a1a;border:1px solid #333;color:#aaa;border-radius:8px;font-size:12px;cursor:pointer;">
+            style="flex:1;padding:8px;background:var(--bg-input);border:1px solid var(--brd);color:var(--tx2);border-radius:8px;font-size:var(--fs-xs);cursor:pointer;">
             ${c.activo ? 'Desactivar' : 'Activar'}
           </button>
           ${(conCuentaPwa(c) || !puedeCrearCuentaPwa()) ? '' : `<button onclick="conBotonOcupado(event, () => conductorCrearCuenta(${esc(c.id)}, '${c.nombre.replace(/'/g, "\\'")}'))"
-            style="flex:1;padding:8px;background:#1e3a5f;border:1px solid #2563eb;color:#93c5fd;border-radius:8px;font-size:12px;cursor:pointer;">
+            style="flex:1;padding:8px;background:#1e3a5f;border:1px solid #2563eb;color:var(--info-tx);border-radius:8px;font-size:var(--fs-xs);cursor:pointer;">
             Crear cuenta PWA
           </button>`}
         </div>
       </div>`).join('');
   } catch (e) {
-    el.innerHTML = '<div style="color:#ef4444;text-align:center;">Error cargando conductores</div>';
+    el.innerHTML = '<div style="color:var(--err-tx);text-align:center;">Error cargando conductores</div>';
   }
 }
 
@@ -1815,7 +1816,7 @@ async function cargarRutasConductor() {
     if (cached !== null) {
       _COND_RUTAS = cached;
     } else if (!_COND_RUTA_ACTIVA) {
-      el.innerHTML = '<div style="color:#b91c1c;text-align:center;padding:40px;">Sin conexión y sin datos en caché. Abre la app con señal primero.</div>';
+      el.innerHTML = '<div style="color:var(--err-tx);text-align:center;padding:40px;">Sin conexión y sin datos en caché. Abre la app con señal primero.</div>';
       return;
     }
   }
@@ -1833,9 +1834,9 @@ async function cargarRutasConductor() {
   if (!_COND_RUTAS.length) {
     el.innerHTML = `<div style="text-align:center;padding:80px 20px;">
       <div style="font-size:60px;">✅</div>
-      <div style="font-size:20px;font-weight:700;color:#16a34a;margin-top:16px;">Sin rutas en tránsito</div>
-      <div style="font-size:13px;color:#6b7280;margin-top:8px;">El jefe de almacén te asignará una cuando salgas</div>
-      <button onclick="cargarRutasConductor()" style="margin-top:24px;padding:14px 28px;background:#1d4ed8;border:none;color:#fff;border-radius:12px;font-size:15px;cursor:pointer;">🔄 Actualizar</button>
+      <div style="font-size:20px;font-weight:700;color:var(--ok-tx);margin-top:16px;">Sin rutas en tránsito</div>
+      <div style="font-size:var(--fs-sm);color:var(--tx3);margin-top:8px;">El jefe de almacén te asignará una cuando salgas</div>
+      <button onclick="cargarRutasConductor()" style="margin-top:24px;padding:14px 28px;background:#1d4ed8;border:none;color:#fff;border-radius:12px;font-size:var(--fs-md);cursor:pointer;">🔄 Actualizar</button>
     </div>`;
     return;
   }
@@ -1844,11 +1845,11 @@ async function cargarRutasConductor() {
     const totalBultos = r.total_bultos || 0;
     return `
       <div style="background:#fff;border:2px solid #bfdbfe;border-radius:16px;padding:20px;margin-bottom:12px;box-shadow:0 1px 3px rgba(0,0,0,.06);">
-        <div style="font-size:18px;font-weight:800;color:#1d4ed8;margin-bottom:4px;">🚛 Ruta #${esc(r.id)}</div>
-        <div style="font-size:14px;color:#374151;margin-bottom:12px;">${esc(r.ruta_maestra_nombre || r.tipo_ruta)} · ${esc(r.vehiculo_placa || 'Sin vehículo')}</div>
-        <div style="font-size:12px;color:#6b7280;margin-bottom:16px;">${totalBultos} bulto${totalBultos !== 1 ? 's' : ''}</div>
+        <div style="font-size:var(--fs-lg);font-weight:800;color:var(--info-tx);margin-bottom:4px;">🚛 Ruta #${esc(r.id)}</div>
+        <div style="font-size:var(--fs-sm);color:var(--tx2);margin-bottom:12px;">${esc(r.ruta_maestra_nombre || r.tipo_ruta)} · ${esc(r.vehiculo_placa || 'Sin vehículo')}</div>
+        <div style="font-size:var(--fs-xs);color:var(--tx3);margin-bottom:16px;">${totalBultos} bulto${totalBultos !== 1 ? 's' : ''}</div>
         <button onclick="condAbrirParadas(${esc(r.id)})"
-          style="width:100%;padding:18px;background:#1d4ed8;color:#fff;border:none;border-radius:12px;font-size:18px;font-weight:800;cursor:pointer;letter-spacing:0.02em;">
+          style="width:100%;padding:18px;background:#1d4ed8;color:#fff;border:none;border-radius:12px;font-size:var(--fs-lg);font-weight:800;cursor:pointer;letter-spacing:0.02em;">
           📦 Ver Paradas y Cobros
         </button>
       </div>`;
@@ -1863,7 +1864,7 @@ async function cargarRutasConductor() {
  */
 async function condAbrirParadas(rutaId) {
   const el = document.getElementById('cond-contenido');
-  el.innerHTML = '<div style="text-align:center;padding:60px;color:#6b7280;">Cargando paradas...</div>';
+  el.innerHTML = '<div style="text-align:center;padding:60px;color:var(--tx3);">Cargando paradas...</div>';
   let data = null;
   try {
     // `navigator.onLine` NO confirma internet real — solo dice si el
@@ -1881,7 +1882,7 @@ async function condAbrirParadas(rutaId) {
   } catch (e) {
     data = await _condDB.get('paradas_' + rutaId);
     if (!data) {
-      el.innerHTML = '<div style="color:#b91c1c;text-align:center;padding:40px;">Sin conexión y sin datos en caché para esta ruta.</div>';
+      el.innerHTML = '<div style="color:var(--err-tx);text-align:center;padding:40px;">Sin conexión y sin datos en caché para esta ruta.</div>';
       return;
     }
   }
@@ -1917,27 +1918,27 @@ function _condRenderParadas(d) {
 
   let html = `
     <div style="margin-bottom:16px;display:flex;justify-content:space-between;align-items:center;">
-      <button onclick="cargarRutasConductor()" style="background:none;border:none;color:#6b7280;font-size:14px;cursor:pointer;padding:0;">← Volver</button>
-      <span style="font-size:13px;color:#6b7280;">${gestionadas}/${total} gestionadas</span>
+      <button onclick="cargarRutasConductor()" style="background:none;border:none;color:var(--tx3);font-size:var(--fs-sm);cursor:pointer;padding:0;">← Volver</button>
+      <span style="font-size:var(--fs-sm);color:var(--tx3);">${gestionadas}/${total} gestionadas</span>
     </div>
     <div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:14px;padding:14px;margin-bottom:16px;">
-      <div style="font-size:14px;color:#374151;">Ruta #${esc(_COND_RUTA_ACTIVA.id)} · <span style="color:${todasGestionadas ? '#16a34a' : '#b45309'};font-weight:700;">${todasGestionadas ? 'Lista para cerrar' : 'En curso'}</span></div>
+      <div style="font-size:var(--fs-sm);color:var(--tx2);">Ruta #${esc(_COND_RUTA_ACTIVA.id)} · <span style="color:${todasGestionadas ? 'var(--ok-tx)' : 'var(--warn-tx)'};font-weight:700;">${todasGestionadas ? 'Lista para cerrar' : 'En curso'}</span></div>
       <div style="display:flex;gap:16px;margin-top:10px;">
-        <div style="text-align:center;"><div style="font-size:24px;font-weight:800;color:#16a34a;">${gestionadas}</div><div style="font-size:10px;color:#6b7280;">GESTIONADAS</div></div>
-        <div style="text-align:center;"><div style="font-size:24px;font-weight:800;color:#6b7280;">${total - gestionadas}</div><div style="font-size:10px;color:#6b7280;">PENDIENTES</div></div>
+        <div style="text-align:center;"><div style="font-size:24px;font-weight:800;color:var(--ok-tx);">${gestionadas}</div><div style="font-size:var(--fs-xs);color:var(--tx3);">GESTIONADAS</div></div>
+        <div style="text-align:center;"><div style="font-size:24px;font-weight:800;color:var(--tx3);">${total - gestionadas}</div><div style="font-size:var(--fs-xs);color:var(--tx3);">PENDIENTES</div></div>
       </div>
     </div>`;
 
   paradas.forEach((p, idx) => {
     const r = p.recaudo;
     const EST_C = {
-      ENTREGADO: { borde: '#16a34a', fondo: '#f0fdf4', badgeBg: '#dcfce7', badgeColor: '#15803d', label: 'ENTREGADO' },
+      ENTREGADO: { borde: '#15803d', fondo: '#f0fdf4', badgeBg: '#dcfce7', badgeColor: '#15803d', label: 'ENTREGADO' },
       PARCIAL:   { borde: '#d97706', fondo: '#fffbeb', badgeBg: '#fef3c7', badgeColor: '#b45309', label: 'PARCIAL'   },
       RECHAZADO: { borde: '#dc2626', fondo: '#fef2f2', badgeBg: '#fee2e2', badgeColor: '#b91c1c', label: 'RECHAZADO' },
     };
     const est = r ? r.estado_entrega : null;
     const c = est ? EST_C[est] : { borde: '#d1d5db', fondo: '#f9fafb', badgeBg: '#f3f4f6', badgeColor: '#6b7280', label: 'PENDIENTE' };
-    const badge = `<span style="background:${esc(c.badgeBg)};color:${esc(c.badgeColor)};padding:2px 8px;border-radius:8px;font-size:10px;font-weight:700;">${esc(c.label)}</span>`;
+    const badge = `<span style="background:${esc(c.badgeBg)};color:${esc(c.badgeColor)};padding:2px 8px;border-radius:8px;font-size:var(--fs-xs);font-weight:700;">${esc(c.label)}</span>`;
     const monto = r ? ` · $${Number(r.monto_cobrado || 0).toLocaleString('es-CO')}` : '';
 
     html += `
@@ -1945,13 +1946,13 @@ function _condRenderParadas(d) {
            onclick="condAbrirFormParada(${idx})">
         <div style="display:flex;justify-content:space-between;align-items:flex-start;">
           <div style="flex:1;min-width:0;">
-            <div style="font-size:14px;font-weight:800;color:#111827;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(p.cliente)}</div>
-            <div style="font-size:12px;color:#6b7280;margin-top:2px;">📍 ${esc(p.municipio)} · ${esc(p.numero_pedido)}</div>
-            <div style="font-size:11px;color:#9ca3af;margin-top:2px;">${esc(p.bultos.length)} bulto${p.bultos.length !== 1 ? 's' : ''}${monto}</div>
+            <div style="font-size:var(--fs-sm);font-weight:800;color:var(--tx);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(p.cliente)}</div>
+            <div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:2px;">📍 ${esc(p.municipio)} · ${esc(p.numero_pedido)}</div>
+            <div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:2px;">${esc(p.bultos.length)} bulto${p.bultos.length !== 1 ? 's' : ''}${monto}</div>
           </div>
           <div style="margin-left:10px;flex-shrink:0;">${badge}</div>
         </div>
-        ${r ? `<div style="font-size:11px;color:#6b7280;margin-top:6px;">${esc(r.forma_pago || '')}${r.observaciones ? ' · ' + r.observaciones.substring(0,40) : ''}</div>` : ''}
+        ${r ? `<div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:6px;">${esc(r.forma_pago || '')}${r.observaciones ? ' · ' + r.observaciones.substring(0,40) : ''}</div>` : ''}
       </div>`;
   });
 
@@ -1959,7 +1960,7 @@ function _condRenderParadas(d) {
     html += `
       <div style="position:sticky;bottom:16px;margin-top:12px;">
         <button onclick="conBotonOcupado(event, () => condCerrarRuta())"
-          style="width:100%;padding:20px;background:#16a34a;color:#fff;border:none;border-radius:14px;font-size:18px;font-weight:800;cursor:pointer;">
+          style="width:100%;padding:20px;background:#15803d;color:#fff;border:none;border-radius:14px;font-size:var(--fs-lg);font-weight:800;cursor:pointer;">
           ✅ Cerrar Ruta — Todo Gestionado
         </button>
       </div>`;
@@ -2007,10 +2008,10 @@ function _condItemsAjustados() {
 function _condDesgloseHTML(p) {
   if (p.base_gravable == null || p.iva_factura == null) return '';
   return `
-    <div style="display:flex;justify-content:space-between;font-size:15px;color:#6b7280;margin-bottom:4px;">
+    <div style="display:flex;justify-content:space-between;font-size:var(--fs-md);color:var(--tx3);margin-bottom:4px;">
       <span>Base</span><span>$${Number(p.base_gravable).toLocaleString('es-CO')}</span>
     </div>
-    <div style="display:flex;justify-content:space-between;font-size:15px;color:#6b7280;margin-bottom:8px;padding-bottom:8px;border-bottom:1px solid #e5e7eb;">
+    <div style="display:flex;justify-content:space-between;font-size:var(--fs-md);color:var(--tx3);margin-bottom:8px;padding-bottom:8px;border-bottom:1px solid #e5e7eb;">
       <span>IVA</span><span>$${Number(p.iva_factura).toLocaleString('es-CO')}</span>
     </div>`;
 }
@@ -2094,52 +2095,52 @@ function _condRenderFormParada() {
 
   el.innerHTML = `
     <div style="margin-bottom:16px;display:flex;justify-content:space-between;align-items:center;">
-      <button onclick="condVolverAParadas()" style="background:none;border:none;color:#6b7280;font-size:14px;cursor:pointer;padding:0;">← Paradas</button>
-      ${r ? `<span style="font-size:11px;color:#6b7280;">Editando confirmación</span>` : ''}
+      <button onclick="condVolverAParadas()" style="background:none;border:none;color:var(--tx3);font-size:var(--fs-sm);cursor:pointer;padding:0;">← Paradas</button>
+      ${r ? `<span style="font-size:var(--fs-xs);color:var(--tx3);">Editando confirmación</span>` : ''}
     </div>
 
     <div style="background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:14px;margin-bottom:16px;">
-      <div style="font-size:16px;font-weight:800;color:#111827;">${esc(p.cliente)}</div>
-      <div style="font-size:13px;color:#374151;margin-top:4px;">📍 ${esc(p.municipio)}</div>
-      <div style="font-size:12px;color:#9ca3af;margin-top:2px;">${esc(p.numero_pedido)} · ${esc(p.bultos.length)} bulto${p.bultos.length !== 1 ? 's' : ''}</div>
+      <div style="font-size:var(--fs-md);font-weight:800;color:var(--tx);">${esc(p.cliente)}</div>
+      <div style="font-size:var(--fs-sm);color:var(--tx2);margin-top:4px;">📍 ${esc(p.municipio)}</div>
+      <div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:2px;">${esc(p.numero_pedido)} · ${esc(p.bultos.length)} bulto${p.bultos.length !== 1 ? 's' : ''}</div>
     </div>
 
     ${(p.vendedor_nombre || p.vendedor_telefono) ? `
     <div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:12px;padding:10px 14px;margin-bottom:16px;display:flex;align-items:center;gap:10px;">
-      <span style="font-size:18px;">🧑‍💼</span>
+      <span style="font-size:var(--fs-lg);">🧑‍💼</span>
       <div>
-        <div style="font-size:10px;color:#1d4ed8;font-weight:700;letter-spacing:.5px;">ASESOR DEL PEDIDO</div>
-        <div style="font-size:14px;font-weight:700;color:#111827;">${esc(p.vendedor_nombre || '—')}</div>
-        ${p.vendedor_telefono ? `<a href="tel:${esc(p.vendedor_telefono)}" style="color:#16a34a;font-size:13px;text-decoration:none;">📞 ${esc(p.vendedor_telefono)}</a>` : ''}
+        <div style="font-size:var(--fs-xs);color:var(--info-tx);font-weight:700;letter-spacing:.5px;">ASESOR DEL PEDIDO</div>
+        <div style="font-size:var(--fs-sm);font-weight:700;color:var(--tx);">${esc(p.vendedor_nombre || '—')}</div>
+        ${p.vendedor_telefono ? `<a href="tel:${esc(p.vendedor_telefono)}" style="color:var(--ok-tx);font-size:var(--fs-sm);text-decoration:none;">📞 ${esc(p.vendedor_telefono)}</a>` : ''}
       </div>
     </div>
     ` : ''}
 
     <div style="margin-bottom:14px;">
-      <label style="font-size:12px;color:#374151;font-weight:700;display:block;margin-bottom:8px;">RESULTADO</label>
+      <label style="font-size:var(--fs-xs);color:var(--tx2);font-weight:700;display:block;margin-bottom:8px;">RESULTADO</label>
       <div style="display:flex;gap:6px;" id="cond-estado-btns">
         ${['ENTREGADO','RECHAZADO'].map(e => `
           <button onclick="condSelEstado('${e}')"
             id="cond-estado-${e}"
-            style="flex:1;padding:14px 4px;border-radius:10px;font-size:13px;font-weight:700;cursor:pointer;border:2px solid ${e===estadoUi ? (e==='ENTREGADO'?'#16a34a':'#dc2626') : '#d1d5db'};background:${e===estadoUi ? (e==='ENTREGADO'?'#f0fdf4':'#fef2f2') : '#fff'};color:${e===estadoUi ? (e==='ENTREGADO'?'#15803d':'#b91c1c') : '#6b7280'};">
+            style="flex:1;padding:14px 4px;border-radius:10px;font-size:var(--fs-sm);font-weight:700;cursor:pointer;border:2px solid ${e===estadoUi ? (e==='ENTREGADO'?'#15803d':'#dc2626') : '#d1d5db'};background:${e===estadoUi ? (e==='ENTREGADO'?'#f0fdf4':'#fef2f2') : '#fff'};color:${e===estadoUi ? (e==='ENTREGADO'?'var(--ok-tx)':'var(--err-tx)') : 'var(--tx3)'};">
             ${e === 'ENTREGADO' ? '✓ Entregado' : '✗ Rechazado'}
           </button>`).join('')}
       </div>
     </div>
 
     <div id="cond-bultos-rechazo" style="margin-bottom:14px;display:${estadoUi === 'RECHAZADO' ? 'block' : 'none'};">
-      <label style="font-size:12px;color:#374151;font-weight:700;display:block;margin-bottom:8px;">BULTOS RECHAZADOS</label>
+      <label style="font-size:var(--fs-xs);color:var(--tx2);font-weight:700;display:block;margin-bottom:8px;">BULTOS RECHAZADOS</label>
       ${p.bultos.map(b => `
         <label style="display:flex;align-items:center;gap:10px;padding:10px;background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;margin-bottom:6px;cursor:pointer;">
           <input type="checkbox" value="${esc(b.id)}" ${rechazadosActuales.includes(b.id) ? 'checked' : ''}
             style="width:18px;height:18px;cursor:pointer;" id="chk-bulto-${esc(b.id)}">
-          <span style="font-size:13px;color:#374151;">${esc(b.codigo_barras)} · ${esc(b.tipo)} ${esc(b.numero)}/${esc(b.total)}</span>
+          <span style="font-size:var(--fs-sm);color:var(--tx2);">${esc(b.codigo_barras)} · ${esc(b.tipo)} ${esc(b.numero)}/${esc(b.total)}</span>
         </label>`).join('')}
     </div>
 
     <div id="cond-items-parcial" style="margin-bottom:14px;display:${estadoUi === 'ENTREGADO' ? 'block' : 'none'};">
-      <label style="font-size:12px;color:#374151;font-weight:700;display:block;margin-bottom:8px;">REFERENCIAS</label>
-      <div style="font-size:11px;color:#9ca3af;margin-bottom:10px;">Precargadas con la cantidad del pedido. Ajusta solo si algo no se entregó — lo que baje queda como devolución.</div>
+      <label style="font-size:var(--fs-xs);color:var(--tx2);font-weight:700;display:block;margin-bottom:8px;">REFERENCIAS</label>
+      <div style="font-size:var(--fs-xs);color:var(--tx2);margin-bottom:10px;">Precargadas con la cantidad del pedido. Ajusta solo si algo no se entregó — lo que baje queda como devolución.</div>
       ${(p.items && p.items.length ? p.items : []).map((it, idx) => {
         const pedido = it.cantidad_pedida || 0;
         const prevEntregado = (() => {
@@ -2151,23 +2152,23 @@ function _condRenderFormParada() {
         })();
         return `
         <div style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:10px;padding:12px;margin-bottom:8px;">
-          <div style="font-size:13px;font-weight:700;color:#111827;margin-bottom:2px;">${it.nombre || it.codigo}</div>
-          <div style="font-size:11px;color:#6b7280;margin-bottom:10px;">${it.codigo} · ${it.unidad || 'und'}</div>
+          <div style="font-size:var(--fs-sm);font-weight:700;color:var(--tx);margin-bottom:2px;">${it.nombre || it.codigo}</div>
+          <div style="font-size:var(--fs-xs);color:var(--tx3);margin-bottom:10px;">${it.codigo} · ${it.unidad || 'und'}</div>
           <div style="display:flex;align-items:center;gap:10px;">
             <div style="flex:1;text-align:center;">
-              <div style="font-size:10px;color:#9ca3af;margin-bottom:2px;">PEDIDO</div>
-              <div style="font-size:18px;font-weight:800;color:#374151;">${pedido}</div>
+              <div style="font-size:var(--fs-xs);color:var(--tx3);margin-bottom:2px;">PEDIDO</div>
+              <div style="font-size:var(--fs-lg);font-weight:800;color:var(--tx2);">${pedido}</div>
             </div>
             <div style="flex:2;">
-              <div style="font-size:10px;color:#9ca3af;margin-bottom:4px;">ENTREGADO</div>
+              <div style="font-size:var(--fs-xs);color:var(--tx3);margin-bottom:4px;">ENTREGADO</div>
               <input type="number" id="item-entregado-${idx}"
                 value="${prevEntregado}" min="0" max="${pedido}" step="1"
                 oninput="condActualizarDevuelto(${idx}, ${pedido})"
-                style="width:100%;padding:10px;border:2px solid #d1d5db;border-radius:8px;font-size:18px;font-weight:800;color:#15803d;text-align:center;box-sizing:border-box;">
+                style="width:100%;padding:10px;border:2px solid #d1d5db;border-radius:8px;font-size:var(--fs-lg);font-weight:800;color:var(--ok-tx);text-align:center;box-sizing:border-box;">
             </div>
             <div style="flex:1;text-align:center;">
-              <div style="font-size:10px;color:#9ca3af;margin-bottom:2px;">DEVUELTO</div>
-              <div id="item-devuelto-${idx}" style="font-size:18px;font-weight:800;color:#b91c1c;">${pedido - prevEntregado}</div>
+              <div style="font-size:var(--fs-xs);color:var(--tx3);margin-bottom:2px;">DEVUELTO</div>
+              <div id="item-devuelto-${idx}" style="font-size:var(--fs-lg);font-weight:800;color:var(--err-tx);">${pedido - prevEntregado}</div>
             </div>
           </div>
         </div>`;
@@ -2175,13 +2176,13 @@ function _condRenderFormParada() {
     </div>
 
     <div id="cond-bultos-devolucion" style="margin-bottom:14px;display:none;">
-      <label style="font-size:12px;color:#374151;font-weight:700;display:block;margin-bottom:8px;">BULTOS CON DEVOLUCIÓN</label>
-      <div style="font-size:11px;color:#9ca3af;margin-bottom:10px;">Opcional — en cuál caja/bulto físico va lo que vuelve a bodega.</div>
+      <label style="font-size:var(--fs-xs);color:var(--tx2);font-weight:700;display:block;margin-bottom:8px;">BULTOS CON DEVOLUCIÓN</label>
+      <div style="font-size:var(--fs-xs);color:var(--tx2);margin-bottom:10px;">Opcional — en cuál caja/bulto físico va lo que vuelve a bodega.</div>
       ${p.bultos.map(b => `
         <label style="display:flex;align-items:center;gap:10px;padding:10px;background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;margin-bottom:6px;cursor:pointer;">
           <input type="checkbox" value="${esc(b.id)}" ${rechazadosActuales.includes(b.id) ? 'checked' : ''}
             style="width:18px;height:18px;cursor:pointer;" id="chk-bulto-dev-${esc(b.id)}">
-          <span style="font-size:13px;color:#374151;">${esc(b.codigo_barras)} · ${esc(b.tipo)} ${esc(b.numero)}/${esc(b.total)}</span>
+          <span style="font-size:var(--fs-sm);color:var(--tx2);">${esc(b.codigo_barras)} · ${esc(b.tipo)} ${esc(b.numero)}/${esc(b.total)}</span>
         </label>`).join('')}
     </div>
 
@@ -2189,77 +2190,77 @@ function _condRenderFormParada() {
       ${modoPago === 'CREDITO' ? `
       ${hayValorConocido ? `
       <div id="cond-valorfactura-wrap" style="margin-bottom:14px;">
-        <label style="font-size:12px;color:#374151;font-weight:700;display:block;margin-bottom:8px;">VALOR FACTURA</label>
+        <label style="font-size:var(--fs-xs);color:var(--tx2);font-weight:700;display:block;margin-bottom:8px;">VALOR FACTURA</label>
         <div id="cond-valorfactura-monto" style="padding:14px;background:#f9fafb;border:1px solid #e5e7eb;border-radius:10px;">
           ${_condDesgloseHTML(p)}
-          <div id="cond-valorfactura-total" style="font-size:20px;font-weight:800;color:#16a34a;">$${Number(p.valor_factura).toLocaleString('es-CO')}</div>
+          <div id="cond-valorfactura-total" style="font-size:20px;font-weight:800;color:var(--ok-tx);">$${Number(p.valor_factura).toLocaleString('es-CO')}</div>
         </div>
       </div>
       ` : ''}
-      <div style="margin-bottom:14px;padding:14px;background:#f9fafb;border:1px solid #e5e7eb;border-radius:10px;font-size:13px;color:#374151;display:flex;align-items:center;gap:10px;">
+      <div style="margin-bottom:14px;padding:14px;background:#f9fafb;border:1px solid #e5e7eb;border-radius:10px;font-size:var(--fs-sm);color:var(--tx2);display:flex;align-items:center;gap:10px;">
         💳 Pedido a crédito — no se cobra en la entrega. La cartera se gestiona aparte.
       </div>
       ` : `
       ${modoPago === 'DINAMICO' ? `
       <div id="cond-valorfactura-wrap" style="margin-bottom:14px;">
-        <label style="font-size:12px;color:#374151;font-weight:700;display:block;margin-bottom:8px;">VALOR A COBRAR</label>
+        <label style="font-size:var(--fs-xs);color:var(--tx2);font-weight:700;display:block;margin-bottom:8px;">VALOR A COBRAR</label>
         <div id="cond-valorfactura-monto" style="padding:14px;background:#f9fafb;border:1px solid #e5e7eb;border-radius:10px;">
           ${_condDesgloseHTML(p)}
-          <div id="cond-valorfactura-total" style="font-size:20px;font-weight:800;color:#16a34a;">$${Number(p.valor_factura).toLocaleString('es-CO')}</div>
+          <div id="cond-valorfactura-total" style="font-size:20px;font-weight:800;color:var(--ok-tx);">$${Number(p.valor_factura).toLocaleString('es-CO')}</div>
         </div>
       </div>
 
       <div id="cond-pago-toggle-wrap" style="margin-bottom:14px;">
-        <label style="font-size:12px;color:#374151;font-weight:700;display:block;margin-bottom:8px;">PAGO</label>
+        <label style="font-size:var(--fs-xs);color:var(--tx2);font-weight:700;display:block;margin-bottom:8px;">PAGO</label>
         <div style="display:flex;gap:6px;">
           <button type="button" onclick="condSelTipoPago('TOTAL')" id="cond-tipopago-TOTAL"
-            style="flex:1;padding:14px 4px;border-radius:10px;font-size:13px;font-weight:700;cursor:pointer;border:2px solid #d1d5db;background:#fff;color:#6b7280;">
+            style="flex:1;padding:14px 4px;border-radius:10px;font-size:var(--fs-sm);font-weight:700;cursor:pointer;border:2px solid #d1d5db;background:#fff;color:var(--tx3);">
             ✓ Pago Total
           </button>
           <button type="button" onclick="condSelTipoPago('PARCIAL')" id="cond-tipopago-PARCIAL"
-            style="flex:1;padding:14px 4px;border-radius:10px;font-size:13px;font-weight:700;cursor:pointer;border:2px solid #d1d5db;background:#fff;color:#6b7280;">
+            style="flex:1;padding:14px 4px;border-radius:10px;font-size:var(--fs-sm);font-weight:700;cursor:pointer;border:2px solid #d1d5db;background:#fff;color:var(--tx3);">
             ⚠ Pago Parcial
           </button>
         </div>
       </div>
 
       <div id="cond-parcial-detalle" style="margin-bottom:14px;display:none;">
-        <label style="font-size:12px;color:#374151;font-weight:700;display:block;margin-bottom:8px;">MONTO PAGADO ($)</label>
+        <label style="font-size:var(--fs-xs);color:var(--tx2);font-weight:700;display:block;margin-bottom:8px;">MONTO PAGADO ($)</label>
         <input type="number" id="cond-monto-parcial" value="${motivoActual ? montoActual : ''}" min="0" max="${Math.floor(p.valor_factura)}" step="1"
           oninput="condActualizarMotivoVisible()"
-          style="width:100%;padding:14px;background:#fff;border:2px solid #d1d5db;color:#111827;border-radius:10px;font-size:18px;font-weight:700;box-sizing:border-box;">
+          style="width:100%;padding:14px;background:#fff;border:2px solid #d1d5db;color:var(--tx);border-radius:10px;font-size:var(--fs-lg);font-weight:700;box-sizing:border-box;">
 
         <div id="cond-motivo-descuento-wrap" style="margin-top:12px;display:none;">
-          <label style="font-size:12px;color:#374151;font-weight:700;display:block;margin-bottom:8px;">MOTIVO DEL DESCUENTO</label>
+          <label style="font-size:var(--fs-xs);color:var(--tx2);font-weight:700;display:block;margin-bottom:8px;">MOTIVO DEL DESCUENTO</label>
           <select id="cond-motivo-descuento" onchange="condActualizarPreviewDescuento()"
-            style="width:100%;padding:14px;background:#fff;border:1px solid #d1d5db;color:#111827;border-radius:10px;font-size:15px;">
+            style="width:100%;padding:14px;background:#fff;border:1px solid #d1d5db;color:var(--tx);border-radius:10px;font-size:var(--fs-md);">
             <option value="">— Seleccionar —</option>
             ${_COND_RETENCIONES.map(ret =>
               `<option value="${esc(ret.tipo)}" ${ret.tipo===motivoActual?'selected':''}>${esc(ret.nombre)}</option>`
             ).join('')}
           </select>
-          <div id="cond-motivo-descuento-preview" style="margin-top:8px;font-size:13px;color:#6b7280;"></div>
+          <div id="cond-motivo-descuento-preview" style="margin-top:8px;font-size:var(--fs-sm);color:var(--tx3);"></div>
           ${(p.vendedor_nombre || p.vendedor_telefono) ? `
           <div style="margin-top:10px;padding:12px;background:#fffbeb;border:1px solid #d97706;border-radius:10px;">
-            <div style="font-size:12px;color:#92400e;font-weight:700;margin-bottom:6px;">⚠ Comunícate con el vendedor para validar este pago parcial</div>
-            <div style="font-size:14px;color:#111827;font-weight:700;">${esc(p.vendedor_nombre || '—')}</div>
-            ${p.vendedor_telefono ? `<a href="tel:${esc(p.vendedor_telefono)}" style="display:inline-block;margin-top:4px;color:#16a34a;font-size:14px;text-decoration:none;">📞 ${esc(p.vendedor_telefono)}</a>` : ''}
+            <div style="font-size:var(--fs-xs);color:var(--warn-tx);font-weight:700;margin-bottom:6px;">⚠ Comunícate con el vendedor para validar este pago parcial</div>
+            <div style="font-size:var(--fs-sm);color:var(--tx);font-weight:700;">${esc(p.vendedor_nombre || '—')}</div>
+            ${p.vendedor_telefono ? `<a href="tel:${esc(p.vendedor_telefono)}" style="display:inline-block;margin-top:4px;color:var(--ok-tx);font-size:var(--fs-sm);text-decoration:none;">📞 ${esc(p.vendedor_telefono)}</a>` : ''}
           </div>
           ` : ''}
         </div>
       </div>
       ` : `
       <div id="cond-monto-wrap" style="margin-bottom:14px;">
-        <label style="font-size:12px;color:#374151;font-weight:700;display:block;margin-bottom:8px;">MONTO COBRADO ($)</label>
+        <label style="font-size:var(--fs-xs);color:var(--tx2);font-weight:700;display:block;margin-bottom:8px;">MONTO COBRADO ($)</label>
         <input type="number" id="cond-monto" value="${montoActual}" min="0" step="100"
-          style="width:100%;padding:14px;background:#fff;border:2px solid #d1d5db;color:#111827;border-radius:10px;font-size:18px;font-weight:700;box-sizing:border-box;">
+          style="width:100%;padding:14px;background:#fff;border:2px solid #d1d5db;color:var(--tx);border-radius:10px;font-size:var(--fs-lg);font-weight:700;box-sizing:border-box;">
       </div>
       `}
 
       <div id="cond-forma-pago-wrap" style="margin-bottom:14px;">
-        <label style="font-size:12px;color:#374151;font-weight:700;display:block;margin-bottom:8px;">FORMA DE PAGO</label>
+        <label style="font-size:var(--fs-xs);color:var(--tx2);font-weight:700;display:block;margin-bottom:8px;">FORMA DE PAGO</label>
         <select id="cond-forma-pago"
-          style="width:100%;padding:14px;background:#fff;border:1px solid #d1d5db;color:#111827;border-radius:10px;font-size:15px;">
+          style="width:100%;padding:14px;background:#fff;border:1px solid #d1d5db;color:var(--tx);border-radius:10px;font-size:var(--fs-md);">
           <option value="">— Seleccionar —</option>
           ${_FORMAS_PAGO_COBRO.map(f =>
             `<option value="${esc(f.v)}" ${f.v===formaActual?'selected':''}>${esc(f.l)}</option>`
@@ -2276,59 +2277,59 @@ function _condRenderFormParada() {
          services/motivos_rechazo.py, para no tener dos listas.
          Sin backticks: esto vive DENTRO de un template literal. -->
     <div id="cond-motivo-wrap" style="margin-bottom:14px;display:${estadoUi === 'RECHAZADO' ? 'block' : 'none'};">
-      <label style="font-size:12px;color:#374151;font-weight:700;display:block;margin-bottom:8px;">MOTIVO DEL RECHAZO *</label>
+      <label style="font-size:var(--fs-xs);color:var(--tx2);font-weight:700;display:block;margin-bottom:8px;">MOTIVO DEL RECHAZO *</label>
       <select id="cond-motivo"
-        style="width:100%;padding:12px;background:#fff;border:1px solid #d1d5db;color:#111827;border-radius:10px;font-size:14px;box-sizing:border-box;">
+        style="width:100%;padding:12px;background:#fff;border:1px solid #d1d5db;color:var(--tx);border-radius:10px;font-size:var(--fs-sm);box-sizing:border-box;">
         <option value="">— Elegí el motivo —</option>
         ${(_COND_MOTIVOS || []).map(m => `
         <option value="${esc(m.codigo)}" ${motivoRechazoActual === m.codigo ? 'selected' : ''}>${esc(m.etiqueta)}</option>`).join('')}
       </select>
-      <p id="cond-motivo-aviso" style="font-size:11px;color:#b45309;margin:6px 0 0;display:none;">
+      <p id="cond-motivo-aviso" style="font-size:var(--fs-xs);color:var(--warn-tx);margin:6px 0 0;display:none;">
         La mercancía se queda con el cliente. El inventario NO vuelve al camión.
       </p>
     </div>
 
     <div style="margin-bottom:14px;">
-      <label style="font-size:12px;color:#374151;font-weight:700;display:block;margin-bottom:8px;">OBSERVACIONES</label>
+      <label style="font-size:var(--fs-xs);color:var(--tx2);font-weight:700;display:block;margin-bottom:8px;">OBSERVACIONES</label>
       <textarea id="cond-obs" rows="2"
-        style="width:100%;padding:12px;background:#fff;border:1px solid #d1d5db;color:#111827;border-radius:10px;font-size:14px;resize:none;box-sizing:border-box;"
+        style="width:100%;padding:12px;background:#fff;border:1px solid #d1d5db;color:var(--tx);border-radius:10px;font-size:var(--fs-sm);resize:none;box-sizing:border-box;"
         placeholder="Ej: Cliente solicitó factura electrónica...">${obsActual}</textarea>
     </div>
 
     <div style="margin-bottom:20px;">
-      <label style="font-size:12px;color:#374151;font-weight:700;display:block;margin-bottom:8px;">FOTO EVIDENCIA <span style="color:#9ca3af;font-weight:400;">(opcional)</span></label>
+      <label style="font-size:var(--fs-xs);color:var(--tx2);font-weight:700;display:block;margin-bottom:8px;">FOTO EVIDENCIA <span style="color:var(--tx2);font-weight:400;">(opcional)</span></label>
       <input type="file" id="cond-foto" accept="image/*" capture="environment"
         style="display:none;" onchange="condPrevisualizarFoto()">
       <button type="button" onclick="document.getElementById('cond-foto').click()"
-        style="width:100%;padding:16px;background:#f0f9ff;color:#0369a1;border:2px dashed #7dd3fc;border-radius:12px;font-size:16px;font-weight:700;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:10px;">
+        style="width:100%;padding:16px;background:#f0f9ff;color:var(--info-tx);border:2px dashed #7dd3fc;border-radius:12px;font-size:var(--fs-md);font-weight:700;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:10px;">
         📷 Tomar foto con la cámara
       </button>
       <div id="cond-foto-preview" style="margin-top:8px;display:none;">
         <img id="cond-foto-img" src="" style="width:100%;border-radius:10px;border:2px solid #7dd3fc;max-height:200px;object-fit:cover;">
         <button type="button" onclick="condEliminarFoto()"
-          style="margin-top:6px;width:100%;padding:8px;background:#fef2f2;color:#b91c1c;border:1px solid #dc2626;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;">
+          style="margin-top:6px;width:100%;padding:8px;background:#fef2f2;color:var(--err-tx);border:1px solid #dc2626;border-radius:8px;font-size:var(--fs-xs);font-weight:700;cursor:pointer;">
           ✕ Quitar foto
         </button>
       </div>
-      ${r && r.foto_entrega ? `<div style="margin-top:8px;font-size:11px;color:#16a34a;">✓ Foto guardada — toma una nueva para reemplazarla</div>` : ''}
+      ${r && r.foto_entrega ? `<div style="margin-top:8px;font-size:var(--fs-xs);color:var(--ok-tx);">✓ Foto guardada — toma una nueva para reemplazarla</div>` : ''}
     </div>
 
     <div style="margin-bottom:20px;">
-      <label style="font-size:12px;color:#aaa;font-weight:700;display:block;margin-bottom:8px;">
-        UBICACIÓN DEL CLIENTE <span style="color:#555;font-weight:400;">(opcional)</span>
+      <label style="font-size:var(--fs-xs);color:var(--tx2);font-weight:700;display:block;margin-bottom:8px;">
+        UBICACIÓN DEL CLIENTE <span style="color:var(--tx3);font-weight:400;">(opcional)</span>
       </label>
       <button type="button" onclick="condCapturarUbicacion()" id="cond-geo-btn"
-        style="width:100%;padding:16px;background:#f0fdf4;color:#15803d;border:2px dashed #86efac;border-radius:12px;font-size:16px;font-weight:700;cursor:pointer;">
+        style="width:100%;padding:16px;background:#f0fdf4;color:var(--ok-tx);border:2px dashed #86efac;border-radius:12px;font-size:var(--fs-md);font-weight:700;cursor:pointer;">
         📍 Estoy aquí
       </button>
-      <div id="cond-geo-estado" style="margin-top:8px;font-size:11px;color:#9ca3af;">
+      <div id="cond-geo-estado" style="margin-top:8px;font-size:var(--fs-xs);color:var(--tx2);">
         Tocalo parado en la puerta del cliente. Queda guardado para que la próxima ruta sepa dónde es.
       </div>
     </div>
 
     <div style="position:sticky;bottom:16px;">
       <button onclick="condGuardarParada()"
-        style="width:100%;padding:20px;background:#1d4ed8;color:#fff;border:none;border-radius:14px;font-size:18px;font-weight:800;cursor:pointer;">
+        style="width:100%;padding:20px;background:#1d4ed8;color:#fff;border:none;border-radius:14px;font-size:var(--fs-lg);font-weight:800;cursor:pointer;">
         ${r ? '💾 Actualizar Confirmación' : '✓ Confirmar Parada'}
       </button>
     </div>`;
@@ -2370,7 +2371,7 @@ function condRecalcularPago() {
   const campoValor = document.getElementById('cond-valorfactura-total');
   if (campoValor) {
     campoValor.innerHTML = hayAjuste
-      ? `<span style="text-decoration:line-through;color:#888;font-size:12px;font-weight:500;display:block;margin-bottom:2px;">$${Number(p.valor_factura).toLocaleString('es-CO')}</span>$${valorAjustado.toLocaleString('es-CO')}`
+      ? `<span style="text-decoration:line-through;color:var(--tx2);font-size:var(--fs-xs);font-weight:500;display:block;margin-bottom:2px;">$${Number(p.valor_factura).toLocaleString('es-CO')}</span>$${valorAjustado.toLocaleString('es-CO')}`
       : `$${valorAjustado.toLocaleString('es-CO')}`;
   }
 
@@ -2395,7 +2396,7 @@ function condSelTipoPago(tipo) {
     const btn = document.getElementById('cond-tipopago-' + t);
     if (!btn) return;
     const activo = t === tipo;
-    btn.style.borderColor = activo ? (t === 'TOTAL' ? '#16a34a' : '#d97706') : '#d1d5db';
+    btn.style.borderColor = activo ? (t === 'TOTAL' ? '#15803d' : '#d97706') : '#d1d5db';
     btn.style.background  = activo ? (t === 'TOTAL' ? '#f0fdf4' : '#fffbeb') : '#fff';
     btn.style.color       = activo ? (t === 'TOTAL' ? '#15803d' : '#b45309') : '#6b7280';
   });
@@ -2445,12 +2446,12 @@ function condActualizarPreviewDescuento() {
   const baseGravable = p.base_gravable;
   const iva = p.iva_factura;
   if (!ret || !ret.tasa || baseGravable == null || iva == null) {
-    prev.innerHTML = '<span style="color:#b45309;">No se pudo calcular el valor estimado — falta el desglose de Siesa para esta factura.</span>';
+    prev.innerHTML = '<span style="color:var(--warn-tx);">No se pudo calcular el valor estimado — falta el desglose de Siesa para esta factura.</span>';
     return;
   }
   const base = tipo === 'RETEIVA' ? iva : baseGravable;
   const valor = Math.round(base * ret.tasa * 100) / 100;
-  let html = `Descuento estimado: <strong style="color:#16a34a;">${_condFmt(valor)}</strong>` +
+  let html = `Descuento estimado: <strong style="color:var(--ok-tx);">${_condFmt(valor)}</strong>` +
     ` (${(ret.tasa * 100).toLocaleString('es-CO', {maximumFractionDigits: 3})}% sobre ${_condFmt(base)})`;
 
   // Total con el descuento ya aplicado — lo que de verdad debería cobrar el
@@ -2461,7 +2462,7 @@ function condActualizarPreviewDescuento() {
   if (p.valor_factura != null) {
     const totalConDescuento = Math.max(0, Math.round((p.valor_factura - valor) * 100) / 100);
     html += `<div style="margin-top:4px;">Total a cobrar con descuento: ` +
-      `<strong style="color:#16a34a;">${_condFmt(totalConDescuento)}</strong></div>`;
+      `<strong style="color:var(--ok-tx);">${_condFmt(totalConDescuento)}</strong></div>`;
   }
   prev.innerHTML = html;
 }
@@ -2494,7 +2495,7 @@ function condSelEstado(estado) {
     const btn = document.getElementById('cond-estado-' + e);
     if (!btn) return;
     const activo = e === estado;
-    const colores = { ENTREGADO: ['#16a34a','#f0fdf4','#15803d'], RECHAZADO: ['#dc2626','#fef2f2','#b91c1c'] };
+    const colores = { ENTREGADO: ['#15803d','#f0fdf4','#15803d'], RECHAZADO: ['#dc2626','#fef2f2','#b91c1c'] };
     const [borde, fondo, texto] = activo ? colores[e] : ['#d1d5db','#fff','#6b7280'];
     btn.style.borderColor = borde;
     btn.style.background  = fondo;
@@ -2544,10 +2545,10 @@ function condSelEstado(estado) {
  */
 function _condBloqueNavegacion(p) {
   const g = p.geo;
-  const aviso = (txt) => `<div style="margin-top:10px;padding:10px;background:#1a1a1a;border:1px solid #2a2a2a;border-radius:10px;font-size:11px;color:#9ca3af;line-height:1.5;">${txt}</div>`;
+  const aviso = (txt) => `<div style="margin-top:10px;padding:10px;background:var(--bg-input);border:1px solid var(--brd);border-radius:10px;font-size:var(--fs-xs);color:var(--tx2);line-height:1.5;">${txt}</div>`;
 
   if (!g) {
-    return aviso('📍 <b style="color:#d1d5db;">No sabemos dónde queda.</b><br>Tocá «Estoy aquí» al confirmar y la próxima ruta ya lo va a tener.');
+    return aviso('📍 <b style="color:var(--tx);">No sabemos dónde queda.</b><br>Tocá «Estoy aquí» al confirmar y la próxima ruta ya lo va a tener.');
   }
   if (g.lat == null || g.lon == null) {
     const motivos = {
@@ -2556,7 +2557,7 @@ function _condBloqueNavegacion(p) {
       capturas_dispersas:     'las capturas no coinciden entre sí — puede haber dos clientes con el mismo nombre',
     };
     const razon = motivos[g.motivo_sin_maestro] || 'no se pudo determinar';
-    return aviso(`📍 <b style="color:#d1d5db;">No sabemos dónde queda</b> — ${razon}.<br>Tocá «Estoy aquí» al confirmar.`);
+    return aviso(`📍 <b style="color:var(--tx);">No sabemos dónde queda</b> — ${razon}.<br>Tocá «Estoy aquí» al confirmar.`);
   }
 
   const ll = `${esc(g.lat)},${esc(g.lon)}`;
@@ -2565,15 +2566,15 @@ function _condBloqueNavegacion(p) {
   return `
     <div style="display:flex;gap:8px;margin-top:12px;">
       <a href="https://waze.com/ul?ll=${ll}&navigate=yes" target="_blank" rel="noopener"
-        style="flex:1;text-align:center;padding:12px;background:#0a3d62;color:#7dd3fc;border:1px solid #1e5f8a;border-radius:10px;font-size:13px;font-weight:700;text-decoration:none;">
+        style="flex:1;text-align:center;padding:12px;background:#0a3d62;color:#7dd3fc;border:1px solid #1e5f8a;border-radius:10px;font-size:var(--fs-sm);font-weight:700;text-decoration:none;">
         🧭 Waze
       </a>
       <a href="https://www.google.com/maps/dir/?api=1&destination=${ll}" target="_blank" rel="noopener"
-        style="flex:1;text-align:center;padding:12px;background:#14532d;color:#86efac;border:1px solid #166534;border-radius:10px;font-size:13px;font-weight:700;text-decoration:none;">
+        style="flex:1;text-align:center;padding:12px;background:#14532d;color:#bbf7d0;border:1px solid #166534;border-radius:10px;font-size:var(--fs-sm);font-weight:700;text-decoration:none;">
         🗺️ Maps
       </a>
     </div>
-    <div style="font-size:10px;color:#555;margin-top:6px;">
+    <div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:6px;">
       Punto de ${n} visita${n !== 1 ? 's' : ''}${prec} · lo pusieron los conductores
     </div>`;
 }
@@ -3070,7 +3071,7 @@ async function rutaVerPlanilla(id) {
   const modal = document.getElementById('modal-planilla');
   if (!modal) return;
   document.getElementById('modal-planilla-body').innerHTML =
-    '<div style="text-align:center;padding:60px;color:#555;">Cargando planilla...</div>';
+    '<div style="text-align:center;padding:60px;color:var(--tx3);">Cargando planilla...</div>';
   modal.style.display = 'flex';
   await _cargarPlanilla(id);
 }
@@ -3087,9 +3088,9 @@ async function _cargarPlanilla(id) {
 
     const ruta = d.ruta;
     const finBadge = {
-      PENDIENTE:      '<span style="background:#1a1a1a;color:#555;padding:2px 10px;border-radius:8px;font-size:11px;font-weight:700;">PENDIENTE</span>',
-      EN_LIQUIDACION: '<span style="background:#78350f;color:#fbbf24;padding:2px 10px;border-radius:8px;font-size:11px;font-weight:700;">EN LIQUIDACIÓN</span>',
-      LIQUIDADA:      '<span style="background:#14532d;color:#4ade80;padding:2px 10px;border-radius:8px;font-size:11px;font-weight:700;">LIQUIDADA</span>',
+      PENDIENTE:      '<span style="background:var(--bg-input);color:var(--tx3);padding:2px 10px;border-radius:8px;font-size:var(--fs-xs);font-weight:700;">PENDIENTE</span>',
+      EN_LIQUIDACION: '<span style="background:#78350f;color:var(--warn-tx);padding:2px 10px;border-radius:8px;font-size:var(--fs-xs);font-weight:700;">EN LIQUIDACIÓN</span>',
+      LIQUIDADA:      '<span style="background:#14532d;color:#bbf7d0;padding:2px 10px;border-radius:8px;font-size:var(--fs-xs);font-weight:700;">LIQUIDADA</span>',
     }[d.estado_financiero] || d.estado_financiero;
 
     const fmt = v => '$' + Number(v || 0).toLocaleString('es-CO');
@@ -3098,27 +3099,27 @@ async function _cargarPlanilla(id) {
 
     let html = `
       <div style="margin-bottom:16px;">
-        <div style="font-size:16px;font-weight:800;">Ruta #${esc(ruta.id)} — ${esc(ruta.conductor_nombre)}</div>
-        <div style="font-size:13px;color:#aaa;margin-top:4px;">${esc(ruta.ruta_maestra_nombre || ruta.tipo_ruta)} · ${esc(ruta.vehiculo_placa || '')}</div>
+        <div style="font-size:var(--fs-md);font-weight:800;">Ruta #${esc(ruta.id)} — ${esc(ruta.conductor_nombre)}</div>
+        <div style="font-size:var(--fs-sm);color:var(--tx2);margin-top:4px;">${esc(ruta.ruta_maestra_nombre || ruta.tipo_ruta)} · ${esc(ruta.vehiculo_placa || '')}</div>
         <div style="margin-top:8px;">${finBadge}</div>
       </div>
 
-      <div style="background:#111;border:1px solid #222;border-radius:12px;padding:14px;margin-bottom:16px;">
-        <div style="font-size:12px;color:#aaa;font-weight:700;margin-bottom:10px;">RESUMEN FINANCIERO</div>
+      <div style="background:var(--bg-s);border:1px solid var(--brd);border-radius:12px;padding:14px;margin-bottom:16px;">
+        <div style="font-size:var(--fs-xs);color:var(--tx2);font-weight:700;margin-bottom:10px;">RESUMEN FINANCIERO</div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
           ${Object.entries(totales).filter(([,v]) => v > 0).map(([k,v]) => `
-            <div style="background:#1a1a1a;border-radius:8px;padding:10px;">
-              <div style="font-size:10px;color:#555;">${k}</div>
-              <div style="font-size:16px;font-weight:800;color:#fff;">${fmt(v)}</div>
+            <div style="background:var(--bg-input);border-radius:8px;padding:10px;">
+              <div style="font-size:var(--fs-xs);color:var(--tx3);">${k}</div>
+              <div style="font-size:var(--fs-md);font-weight:800;color:var(--tx);">${fmt(v)}</div>
             </div>`).join('')}
         </div>
-        <div style="margin-top:12px;padding-top:12px;border-top:1px solid #222;display:flex;justify-content:space-between;align-items:center;">
-          <span style="font-size:13px;color:#aaa;">Total recaudado</span>
-          <span style="font-size:22px;font-weight:800;color:#4ade80;">${fmt(total)}</span>
+        <div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--brd);display:flex;justify-content:space-between;align-items:center;">
+          <span style="font-size:var(--fs-sm);color:var(--tx2);">Total recaudado</span>
+          <span style="font-size:var(--fs-xl);font-weight:800;color:var(--ok-tx);">${fmt(total)}</span>
         </div>
       </div>
 
-      <div style="font-size:12px;color:#aaa;font-weight:700;margin-bottom:10px;">
+      <div style="font-size:var(--fs-xs);color:var(--tx2);font-weight:700;margin-bottom:10px;">
         PARADAS (${d.total_paradas - d.sin_gestionar}/${esc(d.total_paradas)} gestionadas)
       </div>`;
 
@@ -3128,49 +3129,49 @@ async function _cargarPlanilla(id) {
         ? (r.estado_entrega === 'ENTREGADO' ? '#166534' : r.estado_entrega === 'PARCIAL' ? '#78350f' : '#7f1d1d')
         : '#333';
       html += `
-        <div style="background:#111;border:1px solid ${colorBorde};border-radius:10px;padding:12px;margin-bottom:8px;">
+        <div style="background:var(--bg-s);border:1px solid ${colorBorde};border-radius:10px;padding:12px;margin-bottom:8px;">
           <div style="display:flex;justify-content:space-between;align-items:flex-start;">
             <div>
-              <div style="font-size:14px;font-weight:700;color:#fff;">${esc(p.cliente)}</div>
-              <div style="font-size:12px;color:#555;margin-top:2px;">📍 ${esc(p.municipio)} · ${esc(p.numero_pedido)}</div>
+              <div style="font-size:var(--fs-sm);font-weight:700;color:var(--tx);">${esc(p.cliente)}</div>
+              <div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:2px;">📍 ${esc(p.municipio)} · ${esc(p.numero_pedido)}</div>
             </div>
             <div style="text-align:right;">
               ${r
-                ? `<div style="font-size:13px;font-weight:700;color:${r.estado_entrega === 'ENTREGADO' ? '#4ade80' : r.estado_entrega === 'PARCIAL' ? '#fbbf24' : '#f87171'};">${esc(r.estado_entrega)}</div>
-                   <div style="font-size:12px;color:#aaa;">${fmt(r.monto_cobrado)}</div>
-                   <div style="font-size:11px;color:#555;">${esc(r.forma_pago || '—')}</div>`
-                : `<div style="font-size:12px;color:#555;">Sin gestionar</div>`}
+                ? `<div style="font-size:var(--fs-sm);font-weight:700;color:${r.estado_entrega === 'ENTREGADO' ? 'var(--ok-tx)' : r.estado_entrega === 'PARCIAL' ? 'var(--warn-tx)' : 'var(--err-tx)'};">${esc(r.estado_entrega)}</div>
+                   <div style="font-size:var(--fs-xs);color:var(--tx2);">${fmt(r.monto_cobrado)}</div>
+                   <div style="font-size:var(--fs-xs);color:var(--tx3);">${esc(r.forma_pago || '—')}</div>`
+                : `<div style="font-size:var(--fs-xs);color:var(--tx3);">Sin gestionar</div>`}
             </div>
           </div>
-          <div style="font-size:11px;color:#555;margin-top:6px;">
+          <div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:6px;">
             ${esc(p.bultos_entregados)} entregado${p.bultos_entregados !== 1 ? 's' : ''} · ${esc(p.bultos_rechazados)} rechazado${p.bultos_rechazados !== 1 ? 's' : ''}
             ${r && d.estado_financiero === 'LIQUIDADA' ? `<span style="margin-left:8px;">
-              ${r.siesa_nc_triggered ? '<span title="Nota crédito enviada" style="color:#60a5fa;">NC</span>' : ''}
-              ${r.siesa_rc_triggered ? '<span title="Recibo de caja enviado" style="color:#4ade80;margin-left:4px;">RC</span>' : ''}
-              ${r.siesa_dc_triggered ? '<span title="Documento contable enviado" style="color:#c084fc;margin-left:4px;">DC</span>' : ''}
+              ${r.siesa_nc_triggered ? '<span title="Nota crédito enviada" style="color:var(--info-tx);">NC</span>' : ''}
+              ${r.siesa_rc_triggered ? '<span title="Recibo de caja enviado" style="color:var(--ok-tx);margin-left:4px;">RC</span>' : ''}
+              ${r.siesa_dc_triggered ? '<span title="Documento contable enviado" style="color:var(--lila-tx);margin-left:4px;">DC</span>' : ''}
             </span>` : ''}
           </div>
           ${r && r.estado_entrega === 'RECHAZADO' ? `
-          <div style="margin-top:10px;border-top:1px solid #3f1515;padding-top:10px;">
-            <div style="font-size:10px;color:#f87171;font-weight:700;margin-bottom:6px;">BULTOS RECHAZADOS</div>
+          <div style="margin-top:10px;border-top:1px solid var(--err-brd);padding-top:10px;">
+            <div style="font-size:var(--fs-xs);color:var(--err-tx);font-weight:700;margin-bottom:6px;">BULTOS RECHAZADOS</div>
             ${(p.bultos_detalle || []).filter(b => b.rechazado).map(b =>
-              `<div style="font-size:12px;color:#fca5a5;padding:3px 0;">${esc(b.codigo_barras)} · ${esc(b.tipo)} ${esc(b.numero)}/${esc(b.total)}</div>`
+              `<div style="font-size:var(--fs-xs);color:var(--err-tx);padding:3px 0;">${esc(b.codigo_barras)} · ${esc(b.tipo)} ${esc(b.numero)}/${esc(b.total)}</div>`
             ).join('')}
-            ${r.observaciones ? `<div style="margin-top:8px;font-size:12px;color:#fbbf24;font-style:italic;">"${esc(r.observaciones)}"</div>` : ''}
+            ${r.observaciones ? `<div style="margin-top:8px;font-size:var(--fs-xs);color:var(--warn-tx);font-style:italic;">"${esc(r.observaciones)}"</div>` : ''}
           </div>` : ''}
           ${r && r.estado_entrega === 'PARCIAL' && r.items_entregados && r.items_entregados.length ? `
-          <div style="margin-top:10px;border-top:1px solid #222;padding-top:10px;">
-            <div style="font-size:10px;color:#fbbf24;font-weight:700;margin-bottom:6px;">DETALLE PARCIAL</div>
-            <div style="display:grid;grid-template-columns:1fr auto auto auto;gap:4px 10px;font-size:11px;">
-              <div style="color:#555;font-weight:700;">REFERENCIA</div>
-              <div style="color:#555;font-weight:700;text-align:right;">PEDIDO</div>
-              <div style="color:#4ade80;font-weight:700;text-align:right;">ENTREGADO</div>
-              <div style="color:#f87171;font-weight:700;text-align:right;">DEVUELTO</div>
+          <div style="margin-top:10px;border-top:1px solid var(--brd);padding-top:10px;">
+            <div style="font-size:var(--fs-xs);color:var(--warn-tx);font-weight:700;margin-bottom:6px;">DETALLE PARCIAL</div>
+            <div style="display:grid;grid-template-columns:1fr auto auto auto;gap:4px 10px;font-size:var(--fs-xs);">
+              <div style="color:var(--tx3);font-weight:700;">REFERENCIA</div>
+              <div style="color:var(--tx3);font-weight:700;text-align:right;">PEDIDO</div>
+              <div style="color:var(--ok-tx);font-weight:700;text-align:right;">ENTREGADO</div>
+              <div style="color:var(--err-tx);font-weight:700;text-align:right;">DEVUELTO</div>
               ${r.items_entregados.map(it => `
-                <div style="color:#ccc;">${esc(it.nombre || it.codigo)}</div>
-                <div style="color:#555;text-align:right;">${esc(it.cantidad_pedida)}</div>
-                <div style="color:#4ade80;text-align:right;font-weight:700;">${esc(it.cantidad_entregada)}</div>
-                <div style="color:${it.cantidad_devuelta > 0 ? '#f87171' : '#555'};text-align:right;font-weight:700;">${esc(it.cantidad_devuelta)}</div>
+                <div style="color:var(--tx);">${esc(it.nombre || it.codigo)}</div>
+                <div style="color:var(--tx3);text-align:right;">${esc(it.cantidad_pedida)}</div>
+                <div style="color:var(--ok-tx);text-align:right;font-weight:700;">${esc(it.cantidad_entregada)}</div>
+                <div style="color:${it.cantidad_devuelta > 0 ? 'var(--err-tx)' : 'var(--tx3)'};text-align:right;font-weight:700;">${esc(it.cantidad_devuelta)}</div>
               `).join('')}
             </div>
           </div>` : ''}
@@ -3181,7 +3182,7 @@ async function _cargarPlanilla(id) {
       html += `
         <div style="position:sticky;bottom:0;padding-top:12px;background:var(--bg,#0a0a0a);">
           <button onclick="conBotonOcupado(event, () => rutaLiquidar(${esc(ruta.id)}))"
-            style="width:100%;padding:18px;background:#14532d;color:#4ade80;border:none;border-radius:12px;font-size:16px;font-weight:800;cursor:pointer;">
+            style="width:100%;padding:18px;background:#14532d;color:#bbf7d0;border:none;border-radius:12px;font-size:var(--fs-md);font-weight:800;cursor:pointer;">
             Liquidar Ruta — ${fmt(total)}
           </button>
         </div>`;
@@ -3199,14 +3200,14 @@ async function _cargarPlanilla(id) {
         html += `
           <div style="position:sticky;bottom:0;padding-top:12px;background:var(--bg,#0a0a0a);">
             <button onclick="conBotonOcupado(event, () => rutaLiquidarSiesa(${esc(ruta.id)}))"
-              style="width:100%;padding:18px;background:#1e3a5f;color:#60a5fa;border:none;border-radius:12px;font-size:16px;font-weight:800;cursor:pointer;">
+              style="width:100%;padding:18px;background:#1e3a5f;color:var(--info-tx);border:none;border-radius:12px;font-size:var(--fs-md);font-weight:800;cursor:pointer;">
               Enviar a Siesa (NC/RC/DC)
             </button>
           </div>`;
       }
     } else if (d.sin_gestionar > 0) {
       html += `
-        <div style="background:#1a1a0d;border:1px solid #78350f;border-radius:10px;padding:12px;margin-top:8px;text-align:center;color:#fbbf24;font-size:13px;">
+        <div style="background:var(--warn-bg);border:1px solid var(--warn-brd);border-radius:10px;padding:12px;margin-top:8px;text-align:center;color:var(--warn-tx);font-size:var(--fs-sm);">
           Faltan ${esc(d.sin_gestionar)} parada${d.sin_gestionar !== 1 ? 's' : ''} por gestionar
         </div>`;
     }
@@ -3214,7 +3215,7 @@ async function _cargarPlanilla(id) {
     body.innerHTML = html;
   } catch (e) {
     const body = document.getElementById('modal-planilla-body');
-    if (body) body.innerHTML = '<div style="color:#ef4444;text-align:center;padding:40px;">Error cargando planilla</div>';
+    if (body) body.innerHTML = '<div style="color:var(--err-tx);text-align:center;padding:40px;">Error cargando planilla</div>';
   }
 }
 

@@ -22,20 +22,20 @@ async function pedirTarea() {
       document.getElementById('contenido-tarea').innerHTML = _esTiendaOp ? `
         <div style="text-align:center;padding:40px 20px 16px;">
           <div style="font-size:60px;">📦</div>
-          <div style="font-size:22px;font-weight:700;margin-top:12px;">No hay tareas pendientes</div>
-          <div style="font-size:14px;color:#666;margin-top:6px;">Serás asignado automáticamente cuando haya traslados o conteos disponibles</div>
+          <div style="font-size:var(--fs-xl);font-weight:700;margin-top:12px;">No hay tareas pendientes</div>
+          <div style="font-size:var(--fs-sm);color:var(--tx3);margin-top:6px;">Serás asignado automáticamente cuando haya traslados o conteos disponibles</div>
           <div style="display:flex;gap:10px;justify-content:center;margin-top:14px;">
-            <span style="font-size:11px;padding:3px 10px;border-radius:10px;background:#431407;color:#fb923c;font-weight:700;">TRASLADO</span>
-            <span style="font-size:11px;padding:3px 10px;border-radius:10px;background:#78350f;color:#fcd34d;font-weight:700;">CONTEO</span>
+            <span style="font-size:var(--fs-xs);padding:3px 10px;border-radius:10px;background:var(--warn-bg);color:var(--orange);font-weight:700;">TRASLADO</span>
+            <span style="font-size:var(--fs-xs);padding:3px 10px;border-radius:10px;background:#78350f;color:var(--warn-tx);font-weight:700;">CONTEO</span>
           </div>
         </div>` : `
         <div style="text-align:center;padding:40px 20px 16px;">
           <div style="font-size:60px;">✓</div>
           <div style="font-size:24px;font-weight:700;margin-top:12px;">Sin tareas pendientes</div>
-          <div style="font-size:14px;color:#666;margin-top:6px;">El sistema te asignará la próxima automáticamente</div>
+          <div style="font-size:var(--fs-sm);color:var(--tx3);margin-top:6px;">El sistema te asignará la próxima automáticamente</div>
           <div style="display:flex;gap:10px;justify-content:center;margin-top:14px;">
-            <span style="font-size:11px;padding:3px 10px;border-radius:10px;background:#1e3a5f;color:#93c5fd;font-weight:700;">PEDIDO</span>
-            <span style="font-size:11px;padding:3px 10px;border-radius:10px;background:#431407;color:#fb923c;font-weight:700;">TRASLADO</span>
+            <span style="font-size:var(--fs-xs);padding:3px 10px;border-radius:10px;background:#1e3a5f;color:var(--info-tx);font-weight:700;">PEDIDO</span>
+            <span style="font-size:var(--fs-xs);padding:3px 10px;border-radius:10px;background:var(--warn-bg);color:var(--orange);font-weight:700;">TRASLADO</span>
           </div>
         </div>`;
       return;
@@ -55,9 +55,9 @@ async function pedirTarea() {
     if (el) el.innerHTML = `
       <div style="text-align:center;padding:40px 20px;">
         <div style="font-size:40px;">⚠️</div>
-        <div style="font-size:16px;font-weight:700;color:#f87171;margin-top:12px;">Error al cargar tareas</div>
-        <div style="font-size:13px;color:#666;margin-top:6px;">${esc(e.message || 'Error de conexión')}</div>
-        <button onclick="pedirTarea()" style="margin-top:16px;padding:12px 24px;background:#1e3a5f;color:#93c5fd;border:none;border-radius:10px;font-size:14px;font-weight:700;cursor:pointer;">
+        <div style="font-size:var(--fs-md);font-weight:700;color:var(--err-tx);margin-top:12px;">Error al cargar tareas</div>
+        <div style="font-size:var(--fs-sm);color:var(--tx3);margin-top:6px;">${esc(e.message || 'Error de conexión')}</div>
+        <button onclick="pedirTarea()" style="margin-top:16px;padding:12px 24px;background:#1e3a5f;color:var(--info-tx);border:none;border-radius:10px;font-size:var(--fs-sm);font-weight:700;cursor:pointer;">
           🔄 Reintentar
         </button>
       </div>`;
@@ -107,23 +107,23 @@ function renderTarea(t) {
   const faltanSiesa = dispInsuficiente ? pedida - dispSiesa : 0;
 
   const htmlContador = tieneEmpaque
-    ? `<div style="background:#1a1a1a;border-radius:16px;padding:16px 20px;margin-bottom:12px;">
+    ? `<div style="background:var(--bg-input);border-radius:16px;padding:16px 20px;margin-bottom:12px;">
         <div style="display:flex;justify-content:space-between;align-items:flex-start;">
-          <div style="font-size:12px;color:#555;padding-top:6px;letter-spacing:1px;">CANTIDAD</div>
+          <div style="font-size:var(--fs-xs);color:var(--tx3);padding-top:6px;letter-spacing:1px;">CANTIDAD</div>
           <div style="text-align:right;">
-            <div id="contador-pkg" style="font-size:80px;font-weight:900;color:#22c55e;line-height:1;">${pkgs}</div>
-            <div id="contador-und" style="font-size:20px;font-weight:700;color:#22c55e;margin-top:2px;">de ${pkgsReq} ${unidadLabel}${sueltas > 0 ? ` +${sueltas} und` : ''}</div>
-            <div id="contador-factor" style="font-size:12px;color:#555;margin-top:4px;">${unds}/${req} und totales</div>
+            <div id="contador-pkg" style="font-size:80px;font-weight:900;color:var(--ok-tx);line-height:1;">${pkgs}</div>
+            <div id="contador-und" style="font-size:20px;font-weight:700;color:var(--ok-tx);margin-top:2px;">de ${pkgsReq} ${unidadLabel}${sueltas > 0 ? ` +${sueltas} und` : ''}</div>
+            <div id="contador-factor" style="font-size:var(--fs-xs);color:var(--tx3);margin-top:4px;">${unds}/${req} und totales</div>
           </div>
         </div>
-        <div style="height:8px;background:#333;border-radius:4px;margin-top:12px;">
+        <div style="height:8px;background:var(--bg-s2);border-radius:4px;margin-top:12px;">
           <div id="barra" style="height:100%;background:#22c55e;border-radius:4px;width:${pct}%;transition:width 0.3s;"></div>
         </div>
       </div>`
-    : `<div style="background:#1a1a1a;border-radius:16px;padding:20px;margin-bottom:12px;text-align:center;">
-          <div style="font-size:13px;color:#666;">CANTIDAD</div>
+    : `<div style="background:var(--bg-input);border-radius:16px;padding:20px;margin-bottom:12px;text-align:center;">
+          <div style="font-size:var(--fs-sm);color:var(--tx3);">CANTIDAD</div>
           <div id="contador" style="font-size:64px;font-weight:900;">${unds}/${req}</div>
-          <div style="height:8px;background:#333;border-radius:4px;margin-top:10px;">
+          <div style="height:8px;background:var(--bg-s2);border-radius:4px;margin-top:10px;">
             <div id="barra" style="height:100%;background:#22c55e;border-radius:4px;width:${pct}%;transition:width 0.3s;"></div>
           </div>
         </div>`;
@@ -131,8 +131,8 @@ function renderTarea(t) {
   // Etiqueta de tipo de documento (PEDIDO / TRASLADO) para picking
   const _tipoDoc = t.tipo_documento || (t.referencia_documento && t.referencia_documento.startsWith('ST-') ? 'TRASLADO' : 'PEDIDO');
   const _etiquetaTipoDoc = _tipoDoc === 'TRASLADO'
-    ? `<span style="font-size:11px;font-weight:700;padding:2px 9px;border-radius:10px;background:#431407;color:#fb923c;margin-left:8px;letter-spacing:.5px;">TRASLADO</span>`
-    : `<span style="font-size:11px;font-weight:700;padding:2px 9px;border-radius:10px;background:#1e3a5f;color:#93c5fd;margin-left:8px;letter-spacing:.5px;">PEDIDO</span>`;
+    ? `<span style="font-size:var(--fs-xs);font-weight:700;padding:2px 9px;border-radius:10px;background:var(--warn-bg);color:var(--orange);margin-left:8px;letter-spacing:.5px;">TRASLADO</span>`
+    : `<span style="font-size:var(--fs-xs);font-weight:700;padding:2px 9px;border-radius:10px;background:#1e3a5f;color:var(--info-tx);margin-left:8px;letter-spacing:.5px;">PEDIDO</span>`;
   // Misma franja lateral que en Packing Mixto — naranja traslado, azul pedido.
   const _acentoTipoDoc = esPicking ? `border-left:4px solid ${_tipoDoc === 'TRASLADO' ? '#c2410c' : '#1d4ed8'};` : '';
 
@@ -140,30 +140,30 @@ function renderTarea(t) {
     <div style="padding:16px;${_acentoTipoDoc}">
       <div style="background:${color};color:#fff;border-radius:12px;padding:10px 16px;font-size:20px;font-weight:700;text-align:center;margin-bottom:16px;display:flex;align-items:center;justify-content:center;">${esc(t.tipo)}${esPicking ? _etiquetaTipoDoc : ''}</div>
 
-      <div style="background:#000;border:1px solid #222;border-radius:16px;padding:20px;margin-bottom:12px;">
-        <div style="font-size:13px;color:#666;">UBICACIÓN</div>
+      <div style="background:var(--bg-s);border:1px solid var(--brd);border-radius:16px;padding:20px;margin-bottom:12px;">
+        <div style="font-size:var(--fs-sm);color:var(--tx3);">UBICACIÓN</div>
         <div style="font-size:44px;font-weight:900;letter-spacing:2px;">${esc(t.ubicacion)}</div>
       </div>
 
-      <div style="background:#111;border-radius:16px;padding:16px;margin-bottom:12px;">
-        <div style="font-size:13px;color:#666;">PRODUCTO</div>
+      <div style="background:var(--bg-s);border-radius:16px;padding:16px;margin-bottom:12px;">
+        <div style="font-size:var(--fs-sm);color:var(--tx3);">PRODUCTO</div>
         <div style="font-size:20px;font-weight:700;">${esc(t.producto_nombre)}</div>
-        <div style="font-size:15px;color:#aaa;font-weight:400;">${esc(t.producto_codigo)}</div>
+        <div style="font-size:var(--fs-md);color:var(--tx2);font-weight:400;">${esc(t.producto_codigo)}</div>
       </div>
 
       ${dispSiesa !== null ? `
-      <div style="background:${dispInsuficiente ? '#2a1005' : '#0a1a0a'};border:1px solid ${dispInsuficiente ? '#b45309' : '#166534'};border-radius:12px;padding:12px 14px;margin-bottom:12px;text-align:center;">
-        <div style="font-size:11px;color:${dispInsuficiente ? '#fbbf24' : '#4ade80'};font-weight:700;letter-spacing:.5px;">${dispInsuficiente ? '⚠ ' : ''}DISPONIBLE EN SIESA PARA ESTE PEDIDO</div>
-        <div style="font-size:20px;font-weight:800;color:#fff;margin-top:2px;">${dispSiesa} de ${pedida}</div>
-        ${dispInsuficiente ? `<div style="font-size:12px;color:#fbbf24;margin-top:4px;">El pedido pedía ${pedida} y Siesa solo comprometió ${dispSiesa}. Recoge ${req} — las ${faltanSiesa} restantes pasan a Auditoría.</div>` : ''}
+      <div style="background:${dispInsuficiente ? 'var(--warn-bg)' : 'var(--ok-bg)'};border:1px solid ${dispInsuficiente ? '#b45309' : '#166534'};border-radius:12px;padding:12px 14px;margin-bottom:12px;text-align:center;">
+        <div style="font-size:var(--fs-xs);color:${dispInsuficiente ? 'var(--warn-tx)' : 'var(--ok-tx)'};font-weight:700;letter-spacing:.5px;">${dispInsuficiente ? '⚠ ' : ''}DISPONIBLE EN SIESA PARA ESTE PEDIDO</div>
+        <div style="font-size:20px;font-weight:800;color:var(--tx);margin-top:2px;">${dispSiesa} de ${pedida}</div>
+        ${dispInsuficiente ? `<div style="font-size:var(--fs-xs);color:var(--warn-tx);margin-top:4px;">El pedido pedía ${pedida} y Siesa solo comprometió ${dispSiesa}. Recoge ${req} — las ${faltanSiesa} restantes pasan a Auditoría.</div>` : ''}
       </div>` : ''}
 
       ${esPicking && t.producto_id ? `
-      <div id="card-descomposicion" style="background:#0a1a0a;border:2px solid #166534;border-radius:16px;padding:16px;margin-bottom:12px;text-align:center;">
-        <div style="font-size:12px;color:#4ade80;font-weight:700;margin-bottom:6px;letter-spacing:1px;">EMPAQUE SUGERIDO</div>
-        <div id="descomp-texto" style="font-size:22px;font-weight:800;color:#fff;">Calculando...</div>
-        <div id="descomp-hint" style="font-size:12px;color:#166534;margin-top:4px;"></div>
-        <button id="btn-generar-lpn-picking" onclick="_generarLPNEnPicking()" style="display:none;margin-top:10px;width:100%;padding:10px;font-size:13px;font-weight:700;background:#1a2a1a;color:#4ade80;border:1px solid #166534;border-radius:10px;cursor:pointer;">
+      <div id="card-descomposicion" style="background:var(--ok-bg);border:2px solid var(--ok-brd);border-radius:16px;padding:16px;margin-bottom:12px;text-align:center;">
+        <div style="font-size:var(--fs-xs);color:var(--ok-tx);font-weight:700;margin-bottom:6px;letter-spacing:1px;">EMPAQUE SUGERIDO</div>
+        <div id="descomp-texto" style="font-size:var(--fs-xl);font-weight:800;color:var(--tx);">Calculando...</div>
+        <div id="descomp-hint" style="font-size:var(--fs-xs);color:var(--ok-tx);margin-top:4px;"></div>
+        <button id="btn-generar-lpn-picking" onclick="_generarLPNEnPicking()" style="display:none;margin-top:10px;width:100%;padding:10px;font-size:var(--fs-sm);font-weight:700;background:var(--ok-bg);color:var(--ok-tx);border:1px solid var(--ok-brd);border-radius:10px;cursor:pointer;">
           📦 Paca sin etiqueta — Generar LPN e imprimir
         </button>
       </div>` : ''}
@@ -171,45 +171,45 @@ function renderTarea(t) {
       ${htmlContador}
 
       ${puedeCamara ? `
-      <button onclick="abrirCamara('lector-qr','camara-box',null,this)" style="width:100%;padding:14px;font-size:17px;background:#fff;color:#000;border:2px solid #000;border-radius:12px;cursor:pointer;margin-bottom:10px;">
+      <button onclick="abrirCamara('lector-qr','camara-box',null,this)" style="width:100%;padding:14px;font-size:17px;background:#fff;color:#000;border:2px solid var(--brd);border-radius:12px;cursor:pointer;margin-bottom:10px;">
         📷 Escanear con cámara
       </button>
       <div id="camara-box" style="display:none;margin-bottom:10px;">
         <div id="lector-qr" style="border-radius:12px;overflow:hidden;"></div>
-        <button onclick="cerrarCamara()" style="width:100%;padding:10px;margin-top:6px;font-size:15px;background:#333;color:#fff;border:none;border-radius:10px;cursor:pointer;">Cerrar cámara</button>
+        <button onclick="cerrarCamara()" style="width:100%;padding:10px;margin-top:6px;font-size:var(--fs-md);background:var(--bg-s2);color:var(--tx);border:none;border-radius:10px;cursor:pointer;">Cerrar cámara</button>
       </div>` : ''}
 
       <button id="btn-ok" onclick="${esPicking ? 'confirmarConGuard()' : 'confirmar()'}" ${(esPicking || (req > 0 && unds >= req)) ? '' : 'disabled'}
-        style="width:100%;padding:20px;font-size:22px;font-weight:700;background:${esPicking ? (unds >= req ? '#16a34a' : (unds > 0 ? '#b45309' : '#4b5563')) : ((req > 0 && unds >= req) ? '#16a34a' : '#000')};color:#fff;border:none;border-radius:16px;cursor:pointer;opacity:${(esPicking || (req > 0 && unds >= req)) ? 1 : 0.3};margin-bottom:10px;">
+        style="width:100%;padding:20px;font-size:var(--fs-xl);font-weight:700;background:${esPicking ? (unds >= req ? '#15803d' : (unds > 0 ? '#b45309' : '#4b5563')) : ((req > 0 && unds >= req) ? '#15803d' : 'var(--bg-s)')};color:#fff;border:none;border-radius:16px;cursor:pointer;opacity:${(esPicking || (req > 0 && unds >= req)) ? 1 : 0.3};margin-bottom:10px;">
         ✓ Confirmar
       </button>
 
       
       <button onclick="confirmarManual(${esc(t.id)}, ${esc(t.cantidad_requerida)})"
-        style="width:100%;padding:14px;font-size:15px;font-weight:600;background:#1a2a1a;color:#4ade80;border:1px solid #166534;border-radius:12px;cursor:pointer;margin-bottom:10px;">
+        style="width:100%;padding:14px;font-size:var(--fs-md);font-weight:600;background:var(--ok-bg);color:var(--ok-tx);border:1px solid var(--ok-brd);border-radius:12px;cursor:pointer;margin-bottom:10px;">
         ✓ Confirmar conteo manual
       </button>
 
       <button onclick="reportarProblema(${esc(t.id)})"
-        style="width:100%;padding:14px;font-size:15px;font-weight:600;background:#7f1d1d;color:#f87171;border:none;border-radius:12px;cursor:pointer;">
+        style="width:100%;padding:14px;font-size:var(--fs-md);font-weight:600;background:#7f1d1d;color:var(--err-tx);border:none;border-radius:12px;cursor:pointer;">
         ⚠ Reportar problema
       </button>
 
       ${(t.cliente || t.referencia) ? `
-      <div style="background:#0a1628;border:1px solid #1e3a5f;border-radius:12px;padding:10px 14px;margin-top:8px;display:flex;align-items:center;gap:10px;">
-        <span style="font-size:18px;">🏪</span>
+      <div style="background:var(--info-bg);border:1px solid var(--info-brd);border-radius:12px;padding:10px 14px;margin-top:8px;display:flex;align-items:center;gap:10px;">
+        <span style="font-size:var(--fs-lg);">🏪</span>
         <div>
-          ${t.cliente ? `<div style="font-size:14px;font-weight:700;color:#60a5fa;">${esc(t.cliente)}</div>` : ''}
-          ${t.referencia ? `<div style="font-size:11px;color:#3b82f6;">Pedido ${esc(t.referencia)}</div>` : ''}
+          ${t.cliente ? `<div style="font-size:var(--fs-sm);font-weight:700;color:var(--info-tx);">${esc(t.cliente)}</div>` : ''}
+          ${t.referencia ? `<div style="font-size:var(--fs-xs);color:var(--info-tx);">Pedido ${esc(t.referencia)}</div>` : ''}
         </div>
       </div>` : ''}
 
       ${t.conteo_intercalado ? `
-      <div style="background:#1c1a0a;border:1px solid #b45309;border-radius:12px;padding:14px;margin-top:12px;">
-        <div style="font-size:12px;color:#f59e0b;font-weight:700;margin-bottom:4px;">📊 CONTEO PENDIENTE AQUÍ</div>
-        <div style="font-size:14px;font-weight:700;color:#fde68a;">${esc(t.conteo_intercalado.producto_codigo)}</div>
-        <div style="font-size:12px;color:#d97706;">${esc(t.conteo_intercalado.producto_nombre)}</div>
-        <div style="font-size:11px;color:#78350f;margin-top:4px;">Clase ${esc(t.conteo_intercalado.clasificacion)} · Hazlo al terminar el picking</div>
+      <div style="background:var(--warn-bg);border:1px solid var(--warn-brd);border-radius:12px;padding:14px;margin-top:12px;">
+        <div style="font-size:var(--fs-xs);color:var(--warn-tx);font-weight:700;margin-bottom:4px;">📊 CONTEO PENDIENTE AQUÍ</div>
+        <div style="font-size:var(--fs-sm);font-weight:700;color:var(--warn-tx);">${esc(t.conteo_intercalado.producto_codigo)}</div>
+        <div style="font-size:var(--fs-xs);color:var(--warn-tx);">${esc(t.conteo_intercalado.producto_nombre)}</div>
+        <div style="font-size:var(--fs-xs);color:var(--warn-tx);margin-top:4px;">Clase ${esc(t.conteo_intercalado.clasificacion)} · Hazlo al terminar el picking</div>
       </div>` : ''}
     </div>`;
 
@@ -294,7 +294,7 @@ async function _generarLPNEnPicking() {
   const cantidad = await _modalCantidad(
     'Paca sin etiqueta',
     `¿Cuántas unidades tiene esta <strong>${unidad}</strong>?<br>` +
-    `<span style="color:#666;font-size:12px;">Factor estándar: ${factor} und</span>`,
+    `<span style="color:var(--tx3);font-size:var(--fs-xs);">Factor estándar: ${factor} und</span>`,
     { min: 1, valorInicial: factor, textoConfirmar: 'Generar etiqueta' }
   );
   if (cantidad === null) return;
@@ -451,7 +451,7 @@ function _actualizarContadorPicking(r) {
     undEl.textContent = `de ${pkgsReq} ${unidad}${sueltas > 0 ? ` +${sueltas} und` : ''}`;
     const factorEl = document.getElementById('contador-factor');
     if (factorEl) factorEl.textContent = `${unds}/${req} und totales`;
-    if (r.puede_confirmar) { pkgEl.style.color = '#4ade80'; undEl.style.color = '#4ade80'; }
+    if (r.puede_confirmar) { pkgEl.style.color = 'var(--ok-tx)'; undEl.style.color = 'var(--ok-tx)'; }
   } else {
     // Vista simple (unidades sueltas)
     const contador = document.getElementById('contador');
@@ -467,7 +467,7 @@ function _actualizarContadorPicking(r) {
 
   if (r.puede_confirmar) {
     const btn = document.getElementById('btn-ok');
-    if (btn) { btn.disabled = false; btn.style.opacity = '1'; btn.style.background = '#16a34a'; }
+    if (btn) { btn.disabled = false; btn.style.opacity = '1'; btn.style.background = '#15803d'; }
     alerta(r.mensaje || '¡Listo!', 'exito');
   }
 }
@@ -492,21 +492,21 @@ function _modalAmbiguedadPicking(codigo, empaques) {
   _EMPAQUES_AMBIGUOS_PICKING = empaques.slice();
   const opciones = empaques.map((e, i) => `
     <button onclick="_elegirEmpaqueAmbiguoPicking(${i}, this.closest('.modal-ambig'))"
-      style="width:100%;padding:16px;font-size:18px;font-weight:700;background:#1a1a1a;color:#fff;border:1px solid #333;border-radius:12px;cursor:pointer;margin-bottom:8px;">
+      style="width:100%;padding:16px;font-size:var(--fs-lg);font-weight:700;background:var(--bg-input);color:var(--tx);border:1px solid var(--brd);border-radius:12px;cursor:pointer;margin-bottom:8px;">
       ${esc(e.unidad_medida)} — ${esc(e.factor_conversion)} und
-      <div style="font-size:12px;color:#666;font-weight:400;margin-top:2px;">${esc(e.producto_nombre || '')}</div>
+      <div style="font-size:var(--fs-xs);color:var(--tx3);font-weight:400;margin-top:2px;">${esc(e.producto_nombre || '')}</div>
     </button>`).join('');
 
   const modal = document.createElement('div');
   modal.className = 'modal-ambig';
   modal.style.cssText = 'position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,.85);display:flex;align-items:flex-end;';
   modal.innerHTML = `
-    <div style="background:#0a0a0a;border-top:2px solid #1d4ed8;border-radius:20px 20px 0 0;padding:24px;width:100%;max-height:70vh;overflow-y:auto;">
-      <div style="font-size:16px;font-weight:700;color:#60a5fa;margin-bottom:4px;">Código en múltiples empaques</div>
-      <div style="font-size:13px;color:#666;margin-bottom:16px;">${esc(codigo)} — ¿Cuál estás recogiendo?</div>
+    <div style="background:var(--bg-s);border-top:2px solid #1d4ed8;border-radius:20px 20px 0 0;padding:24px;width:100%;max-height:70vh;overflow-y:auto;">
+      <div style="font-size:var(--fs-md);font-weight:700;color:var(--info-tx);margin-bottom:4px;">Código en múltiples empaques</div>
+      <div style="font-size:var(--fs-sm);color:var(--tx3);margin-bottom:16px;">${esc(codigo)} — ¿Cuál estás recogiendo?</div>
       ${opciones}
       <button onclick="this.closest('.modal-ambig').remove()"
-        style="width:100%;padding:12px;font-size:14px;background:#111;color:#666;border:1px solid #222;border-radius:10px;cursor:pointer;margin-top:4px;">
+        style="width:100%;padding:12px;font-size:var(--fs-sm);background:var(--bg-s);color:var(--tx3);border:1px solid var(--brd);border-radius:10px;cursor:pointer;margin-top:4px;">
         Cancelar
       </button>
     </div>`;
@@ -594,21 +594,21 @@ function _modalEtiquetaCanasto(canasto) {
   const overlay = document.createElement('div');
   overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.93);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px;';
   overlay.innerHTML = `
-    <div style="background:#111;border-radius:16px;padding:28px 24px;width:100%;max-width:360px;max-height:90vh;overflow-y:auto;border:2px solid #16a34a;text-align:center;">
+    <div style="background:var(--bg-s);border-radius:16px;padding:28px 24px;width:100%;max-width:360px;max-height:90vh;overflow-y:auto;border:2px solid #15803d;text-align:center;">
       <div style="font-size:56px;margin-bottom:8px;">✅</div>
-      <div style="font-size:22px;font-weight:900;color:#4ade80;margin-bottom:8px;">Picking completado</div>
-      <div style="font-size:14px;color:#aaa;margin-bottom:20px;line-height:1.6;">
+      <div style="font-size:var(--fs-xl);font-weight:900;color:var(--ok-tx);margin-bottom:8px;">Picking completado</div>
+      <div style="font-size:var(--fs-sm);color:var(--tx2);margin-bottom:20px;line-height:1.6;">
         ¿Cuántos canastos usaste para este pedido?
       </div>
       <div style="display:flex;align-items:center;justify-content:center;gap:16px;margin-bottom:24px;">
-        <button id="_ecan-menos" style="width:48px;height:48px;background:#1a1a1a;color:#fff;border:2px solid #333;border-radius:12px;font-size:24px;font-weight:900;cursor:pointer;">−</button>
-        <span id="_ecan-num" style="font-size:40px;font-weight:900;color:#fff;min-width:48px;">1</span>
-        <button id="_ecan-mas" style="width:48px;height:48px;background:#1a1a1a;color:#fff;border:2px solid #333;border-radius:12px;font-size:24px;font-weight:900;cursor:pointer;">+</button>
+        <button id="_ecan-menos" style="width:48px;height:48px;background:var(--bg-input);color:var(--tx);border:2px solid var(--brd);border-radius:12px;font-size:24px;font-weight:900;cursor:pointer;">−</button>
+        <span id="_ecan-num" style="font-size:40px;font-weight:900;color:var(--tx);min-width:48px;">1</span>
+        <button id="_ecan-mas" style="width:48px;height:48px;background:var(--bg-input);color:var(--tx);border:2px solid var(--brd);border-radius:12px;font-size:24px;font-weight:900;cursor:pointer;">+</button>
       </div>
-      <button id="_ecan-print" style="width:100%;padding:16px;background:#16a34a;color:#fff;border:none;border-radius:12px;font-size:16px;font-weight:800;cursor:pointer;margin-bottom:12px;">
+      <button id="_ecan-print" style="width:100%;padding:16px;background:#15803d;color:#fff;border:none;border-radius:12px;font-size:var(--fs-md);font-weight:800;cursor:pointer;margin-bottom:12px;">
         🖨 Imprimir etiquetas
       </button>
-      <button id="_ecan-skip" style="width:100%;padding:14px;background:#1a1a1a;color:#666;border:1px solid #333;border-radius:12px;font-size:14px;font-weight:600;cursor:pointer;">
+      <button id="_ecan-skip" style="width:100%;padding:14px;background:var(--bg-input);color:var(--tx3);border:1px solid var(--brd);border-radius:12px;font-size:var(--fs-sm);font-weight:600;cursor:pointer;">
         Continuar sin imprimir
       </button>
     </div>`;
@@ -667,16 +667,16 @@ function _modalFaltanteParcial(encontradas, requeridas) {
     const overlay = document.createElement('div');
     overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.92);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px;';
     overlay.innerHTML = `
-      <div style="background:#111;border-radius:16px;padding:24px;width:100%;max-width:360px;border:2px solid #b45309;">
-        <div style="font-size:20px;font-weight:800;color:#fb923c;margin-bottom:8px;">⚠ Faltante parcial</div>
-        <div style="font-size:14px;color:#aaa;margin-bottom:20px;line-height:1.6;">
-          Encontraste <strong style="color:#fb923c;font-size:18px;font-weight:800;">${encontradas}</strong> de
-          <strong style="color:#fb923c;font-size:18px;font-weight:800;">${requeridas}</strong> unidades.<br>
-          <span style="font-size:12px;color:#666;">Se notificará al administrador para revisar el faltante.</span>
+      <div style="background:var(--bg-s);border-radius:16px;padding:24px;width:100%;max-width:360px;border:2px solid #b45309;">
+        <div style="font-size:20px;font-weight:800;color:var(--orange);margin-bottom:8px;">⚠ Faltante parcial</div>
+        <div style="font-size:var(--fs-sm);color:var(--tx2);margin-bottom:20px;line-height:1.6;">
+          Encontraste <strong style="color:var(--orange);font-size:var(--fs-lg);font-weight:800;">${encontradas}</strong> de
+          <strong style="color:var(--orange);font-size:var(--fs-lg);font-weight:800;">${requeridas}</strong> unidades.<br>
+          <span style="font-size:var(--fs-xs);color:var(--tx3);">Se notificará al administrador para revisar el faltante.</span>
         </div>
         <div style="display:flex;gap:10px;">
-          <button id="_fp-no" style="flex:1;padding:14px;background:#1a1a1a;color:#aaa;border:1px solid #333;border-radius:10px;font-size:14px;font-weight:700;cursor:pointer;">Cancelar</button>
-          <button id="_fp-si" style="flex:1;padding:14px;background:#b45309;color:#fff;border:none;border-radius:10px;font-size:14px;font-weight:700;cursor:pointer;">Continuar</button>
+          <button id="_fp-no" style="flex:1;padding:14px;background:var(--bg-input);color:var(--tx2);border:1px solid var(--brd);border-radius:10px;font-size:var(--fs-sm);font-weight:700;cursor:pointer;">Cancelar</button>
+          <button id="_fp-si" style="flex:1;padding:14px;background:#b45309;color:#fff;border:none;border-radius:10px;font-size:var(--fs-sm);font-weight:700;cursor:pointer;">Continuar</button>
         </div>
       </div>`;
     document.body.appendChild(overlay);
@@ -703,7 +703,7 @@ async function confirmarManual(tareaId, cantMax) {
   const cant = await _modalCantidad(
     'Confirmación manual',
     `¿Cuántas unidades encontraste físicamente? (máx. ${cantMax})<br>` +
-    `<span style="color:#666;font-size:12px;">Si no hay stock usa "Reportar problema" en vez de esto.</span>`,
+    `<span style="color:var(--tx3);font-size:var(--fs-xs);">Si no hay stock usa "Reportar problema" en vez de esto.</span>`,
     { min: 1, max: cantMax, textoConfirmar: 'Confirmar recogida' }
   );
   if (cant === null) return;
@@ -731,38 +731,38 @@ async function reportarProblema(tareaId) {
   modal.id = 'modal-problema';
   modal.innerHTML = `
     <div style="position:fixed;inset:0;background:rgba(0,0,0,0.92);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px;">
-      <div style="background:#111;border-radius:16px;padding:24px;width:100%;max-width:380px;border:1px solid #7f1d1d;">
-        <div style="font-size:18px;font-weight:700;margin-bottom:4px;color:#f87171;">⚠ Reportar problema</div>
-        <div style="font-size:12px;color:#555;margin-bottom:16px;">La tarea se bloquea. El jefe auditará y ajustará el inventario.</div>
+      <div style="background:var(--bg-s);border-radius:16px;padding:24px;width:100%;max-width:380px;border:1px solid var(--err-brd);">
+        <div style="font-size:var(--fs-lg);font-weight:700;margin-bottom:4px;color:var(--err-tx);">⚠ Reportar problema</div>
+        <div style="font-size:var(--fs-xs);color:var(--tx3);margin-bottom:16px;">La tarea se bloquea. El jefe auditará y ajustará el inventario.</div>
 
         <button onclick="confirmarProblema(${tareaId},'UBICACION_VACIA',0)"
-          style="width:100%;padding:14px;margin-bottom:8px;font-size:14px;font-weight:600;background:#7f1d1d;color:#f87171;border:none;border-radius:10px;cursor:pointer;text-align:left;">
+          style="width:100%;padding:14px;margin-bottom:8px;font-size:var(--fs-sm);font-weight:600;background:#7f1d1d;color:var(--err-tx);border:none;border-radius:10px;cursor:pointer;text-align:left;">
           📦 Ubicación vacía — no había nada
         </button>
 
         <button onclick="confirmarProblema(${tareaId},'FALTANTE',0)"
-          style="width:100%;padding:14px;margin-bottom:8px;font-size:14px;font-weight:600;background:#7f1d1d;color:#f87171;border:none;border-radius:10px;cursor:pointer;text-align:left;">
+          style="width:100%;padding:14px;margin-bottom:8px;font-size:var(--fs-sm);font-weight:600;background:#7f1d1d;color:var(--err-tx);border:none;border-radius:10px;cursor:pointer;text-align:left;">
           📉 Agotado — hay ubicación pero no queda stock
         </button>
 
         <button onclick="confirmarProblema(${tareaId},'MERCANCIA_AVERIADA',0)"
-          style="width:100%;padding:14px;margin-bottom:8px;font-size:14px;font-weight:600;background:#7f1d1d;color:#f87171;border:none;border-radius:10px;cursor:pointer;text-align:left;">
+          style="width:100%;padding:14px;margin-bottom:8px;font-size:var(--fs-sm);font-weight:600;background:#7f1d1d;color:var(--err-tx);border:none;border-radius:10px;cursor:pointer;text-align:left;">
           🚫 Mercancía averiada
         </button>
 
         <button onclick="confirmarProblema(${tareaId},'PRODUCTO_INCORRECTO',0)"
-          style="width:100%;padding:14px;margin-bottom:8px;font-size:14px;font-weight:600;background:#7f1d1d;color:#f87171;border:none;border-radius:10px;cursor:pointer;text-align:left;">
+          style="width:100%;padding:14px;margin-bottom:8px;font-size:var(--fs-sm);font-weight:600;background:#7f1d1d;color:var(--err-tx);border:none;border-radius:10px;cursor:pointer;text-align:left;">
           ❌ Producto incorrecto
         </button>
 
         <div style="margin-top:4px;margin-bottom:8px;">
-          <div style="font-size:11px;color:#555;margin-bottom:4px;">Observaciones (opcional)</div>
+          <div style="font-size:var(--fs-xs);color:var(--tx3);margin-bottom:4px;">Observaciones (opcional)</div>
           <textarea id="obs-problema" rows="2" placeholder="Describe lo que encontraste..."
-            style="width:100%;padding:10px;background:#000;border:1px solid #333;border-radius:8px;color:#ccc;font-size:14px;resize:none;box-sizing:border-box;"></textarea>
+            style="width:100%;padding:10px;background:var(--bg-s);border:1px solid var(--brd);border-radius:8px;color:var(--tx);font-size:var(--fs-sm);resize:none;box-sizing:border-box;"></textarea>
         </div>
 
         <button onclick="document.getElementById('modal-problema').remove()"
-          style="width:100%;padding:12px;font-size:14px;background:#222;color:#666;border:none;border-radius:10px;cursor:pointer;margin-top:4px;">
+          style="width:100%;padding:12px;font-size:var(--fs-sm);background:var(--bg-s2);color:var(--tx3);border:none;border-radius:10px;cursor:pointer;margin-top:4px;">
           Cancelar
         </button>
       </div>

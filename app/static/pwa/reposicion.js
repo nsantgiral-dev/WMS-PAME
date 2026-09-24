@@ -22,7 +22,7 @@ function repSubtab(sec) {
     if (!cont || !btn) return;
     const activo = s === sec;
     cont.style.display = activo ? 'block' : 'none';
-    btn.style.background = activo ? 'var(--pm)' : 'transparent';
+    btn.style.background = activo ? 'var(--pm-fill)' : 'transparent';
     btn.style.color = activo ? '#fff' : 'var(--tx3)';
     btn.style.fontWeight = activo ? '700' : '400';
   });
@@ -103,20 +103,20 @@ function _repRenderUbicacionCard(u) {
     <div class="tabla-card" style="margin-bottom:10px;">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px;">
         <div>
-          <div style="font-size:16px;font-weight:800;font-family:monospace;color:var(--tx);">${esc(u.codigo)}</div>
+          <div style="font-size:var(--fs-md);font-weight:800;font-family:monospace;color:var(--tx);">${esc(u.codigo)}</div>
           ${skuLabel
-            ? `<div style="font-size:11px;color:#60a5fa;margin-top:3px;font-weight:600;">📦 ${skuLabel} <span style="color:#555;font-weight:400;">· SKU asignado (Layout)</span></div>`
-            : `<div style="font-size:11px;color:#555;margin-top:3px;">Sin SKU asignado en Layout</div>`
+            ? `<div style="font-size:var(--fs-xs);color:var(--info-tx);margin-top:3px;font-weight:600;">📦 ${skuLabel} <span style="color:var(--tx3);font-weight:400;">· SKU asignado (Layout)</span></div>`
+            : `<div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:3px;">Sin SKU asignado en Layout</div>`
           }
           ${invLabel
-            ? `<div style="font-size:11px;color:#f59e0b;margin-top:3px;">⚠ Inventario detectado sin coincidir: ${invLabel}</div>`
+            ? `<div style="font-size:var(--fs-xs);color:var(--warn-tx);margin-top:3px;">⚠ Inventario detectado sin coincidir: ${invLabel}</div>`
             : ''
           }
         </div>
         <div style="display:flex;align-items:center;gap:8px;">
-          <span style="font-size:11px;font-weight:700;color:${color};background:${color}22;padding:3px 8px;border-radius:20px;">${label}</span>
+          <span style="font-size:var(--fs-xs);font-weight:700;color:${color};background:${color}22;padding:3px 8px;border-radius:20px;">${label}</span>
           <button onclick="repAbrirModal(${esc(u.id)}, '${esc(u.codigo)}', '${minimo ?? ''}', '${maximo ?? ''}', '${u.secuencia_ruteo ?? ''}', '${skuEsc}')"
-            style="padding:5px 10px;background:var(--bg);border:1px solid var(--brd);border-radius:6px;color:var(--tx2);font-size:11px;cursor:pointer;">
+            style="padding:5px 10px;background:var(--bg);border:1px solid var(--brd);border-radius:6px;color:var(--tx2);font-size:var(--fs-xs);cursor:pointer;">
             Configurar
           </button>
         </div>
@@ -127,17 +127,17 @@ function _repRenderUbicacionCard(u) {
         <div style="flex:1;background:var(--brd);border-radius:6px;height:8px;overflow:hidden;">
           <div style="width:${sinLimite ? 0 : pct}%;height:100%;background:${color};border-radius:6px;transition:width .3s;"></div>
         </div>
-        <div style="font-size:13px;font-weight:700;color:var(--tx);min-width:36px;text-align:right;">${actual}</div>
+        <div style="font-size:var(--fs-sm);font-weight:700;color:var(--tx);min-width:36px;text-align:right;">${actual}</div>
       </div>
 
       <!-- Límites -->
-      <div style="display:flex;gap:16px;font-size:11px;color:var(--tx3);">
+      <div style="display:flex;gap:16px;font-size:var(--fs-xs);color:var(--tx3);">
         ${sinLimite
-          ? `<span style="color:#f59e0b;">⚠ Sin mínimo/máximo — toca "Configurar" para activar reposición</span>`
+          ? `<span style="color:var(--warn-tx);">⚠ Sin mínimo/máximo — toca "Configurar" para activar reposición</span>`
           : `<span>Mín <strong style="color:var(--tx);">${minimo}</strong></span>
              <span>Máx <strong style="color:var(--tx);">${maximo ?? '—'}</strong></span>
              ${u.secuencia_ruteo != null ? `<span>Seq <strong style="color:var(--tx);">${esc(u.secuencia_ruteo)}</strong></span>` : ''}
-             <span style="color:#22c55e;">✓ Motor activo</span>`
+             <span style="color:var(--ok-tx);">✓ Motor activo</span>`
         }
       </div>
     </div>`;
@@ -147,13 +147,13 @@ function _repRenderUbicacionCard(u) {
 async function repCargarUbicaciones() {
   const el = document.getElementById('rep-lista-ubicaciones');
   if (!el) return;
-  el.innerHTML = '<div style="text-align:center;padding:30px;color:#555;">Cargando...</div>';
+  el.innerHTML = '<div style="text-align:center;padding:30px;color:var(--tx3);">Cargando...</div>';
   try {
     const d = await get('/api/reposicion/ubicaciones');
     _repUbicacionesCache = d.ubicaciones || [];
     repRenderUbicaciones();
   } catch (e) {
-    el.innerHTML = '<div style="text-align:center;padding:30px;color:#ef4444;">Error cargando ubicaciones</div>';
+    el.innerHTML = '<div style="text-align:center;padding:30px;color:var(--err-tx);">Error cargando ubicaciones</div>';
   }
 }
 
@@ -171,10 +171,10 @@ function repRenderUbicaciones() {
   const ubs = _repUbicacionesCache;
   if (!ubs.length) {
     el.innerHTML = `
-      <div style="text-align:center;padding:40px;color:#555;">
+      <div style="text-align:center;padding:40px;color:var(--tx3);">
         <div style="font-size:32px;margin-bottom:12px;opacity:0.4;">📍</div>
-        <div style="font-size:15px;font-weight:600;">Sin ubicaciones PICKING registradas</div>
-        <div style="font-size:12px;margin-top:6px;">Haz sync desde Siesa para importar ubicaciones PIK-*</div>
+        <div style="font-size:var(--fs-md);font-weight:600;">Sin ubicaciones PICKING registradas</div>
+        <div style="font-size:var(--fs-xs);margin-top:6px;">Haz sync desde Siesa para importar ubicaciones PIK-*</div>
       </div>`;
     return;
   }
@@ -222,11 +222,11 @@ function repRenderUbicaciones() {
         <svg width="17" height="17" viewBox="0 0 20 20" fill="none" style="flex-shrink:0;color:var(--tx3);">
           <path d="M7 4l6 6-6 6" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
         </svg>
-        <div style="min-width:120px;font-size:15px;font-weight:800;font-family:monospace;color:var(--tx);">${codigoCuerpo}</div>
+        <div style="min-width:120px;font-size:var(--fs-md);font-weight:800;font-family:monospace;color:var(--tx);">${codigoCuerpo}</div>
         <div style="flex:1;min-width:140px;">
-          <div style="font-size:12px;font-weight:700;color:var(--tx2);"><b style="color:var(--tx);">${configurados}</b> de ${total} con reposición activa</div>
+          <div style="font-size:var(--fs-xs);font-weight:700;color:var(--tx2);"><b style="color:var(--tx);">${configurados}</b> de ${total} con reposición activa</div>
           <div style="height:5px;border-radius:3px;background:var(--bg-s2);overflow:hidden;margin-top:4px;">
-            <span style="display:block;height:100%;border-radius:3px;background:var(--green,#16a34a);width:${pct}%;"></span>
+            <span style="display:block;height:100%;border-radius:3px;background:var(--green,#15803d);width:${pct}%;"></span>
           </div>
         </div>
         ${chip}
@@ -257,7 +257,7 @@ function repAbrirModalCuerpoDetalle(pasillo, fila, cuerpo) {
     const sinLimiteEnt = hs.filter(u => u.stock_minimo == null).length;
     if (nivel != null) {
       body += `
-        <div style="font-size:12px;font-weight:700;color:var(--tx2);margin:14px 0 8px;">
+        <div style="font-size:var(--fs-xs);font-weight:700;color:var(--tx2);margin:14px 0 8px;">
           Entrepaño ${nivel} <span style="font-weight:400;color:var(--tx3);">· ${esc(hs.length)} hueco(s)${sinLimiteEnt ? ' · ' + sinLimiteEnt + ' sin configurar' : ''}</span>
         </div>`;
     }
@@ -367,7 +367,7 @@ async function repSyncUbicaciones() {
 async function repCargarTareas() {
   const el = document.getElementById('rep-lista-tareas');
   if (!el) return;
-  el.innerHTML = '<div style="text-align:center;padding:30px;color:#555;">Cargando...</div>';
+  el.innerHTML = '<div style="text-align:center;padding:30px;color:var(--tx3);">Cargando...</div>';
 
   const estado = document.getElementById('rep-filtro-estado')?.value || 'PENDIENTE';
 
@@ -381,7 +381,7 @@ async function repCargarTareas() {
     const tareas = d.tareas || [];
 
     if (!tareas.length) {
-      el.innerHTML = `<div style="text-align:center;padding:40px;color:#555;">Sin tareas ${estado.toLowerCase()}s</div>`;
+      el.innerHTML = `<div style="text-align:center;padding:40px;color:var(--tx3);">Sin tareas ${estado.toLowerCase()}s</div>`;
       return;
     }
 
@@ -394,26 +394,26 @@ async function repCargarTareas() {
         <div class="tabla-card" style="margin-bottom:10px;">
           <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px;">
             <div>
-              <div style="font-size:13px;font-weight:700;font-family:monospace;color:var(--tx);">${esc(t.codigo)}</div>
-              <div style="font-size:12px;color:var(--tx3);margin-top:2px;">${fecha}</div>
+              <div style="font-size:var(--fs-sm);font-weight:700;font-family:monospace;color:var(--tx);">${esc(t.codigo)}</div>
+              <div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:2px;">${fecha}</div>
             </div>
-            <span style="font-size:11px;font-weight:700;color:${color};background:${color}22;padding:3px 8px;border-radius:20px;">${esc(t.estado)}</span>
+            <span style="font-size:var(--fs-xs);font-weight:700;color:${color};background:${color}22;padding:3px 8px;border-radius:20px;">${esc(t.estado)}</span>
           </div>
 
-          <div style="font-size:13px;font-weight:600;color:var(--tx);margin-bottom:6px;">${esc(t.producto_nombre || t.producto_codigo || '—')}</div>
+          <div style="font-size:var(--fs-sm);font-weight:600;color:var(--tx);margin-bottom:6px;">${esc(t.producto_nombre || t.producto_codigo || '—')}</div>
 
           <div style="display:flex;gap:6px;align-items:center;margin-bottom:8px;flex-wrap:wrap;">
-            <span style="font-size:12px;font-family:monospace;background:#166534;color:#4ade80;padding:3px 8px;border-radius:6px;">${esc(t.ubicacion_reserva || '—')}</span>
-            <span style="font-size:14px;color:#555;">→</span>
-            <span style="font-size:12px;font-family:monospace;background:#1e3a5f;color:#60a5fa;padding:3px 8px;border-radius:6px;">${esc(t.ubicacion_picking || '—')}</span>
-            <span style="font-size:12px;color:var(--tx3);">${esc(t.cantidad_unidades)} uds</span>
+            <span style="font-size:var(--fs-xs);font-family:monospace;background:#166534;color:var(--tx);padding:3px 8px;border-radius:6px;">${esc(t.ubicacion_reserva || '—')}</span>
+            <span style="font-size:var(--fs-sm);color:var(--tx3);">→</span>
+            <span style="font-size:var(--fs-xs);font-family:monospace;background:#1e3a5f;color:var(--info-tx);padding:3px 8px;border-radius:6px;">${esc(t.ubicacion_picking || '—')}</span>
+            <span style="font-size:var(--fs-xs);color:var(--tx3);">${esc(t.cantidad_unidades)} uds</span>
           </div>
 
           <div style="display:flex;gap:6px;justify-content:flex-end;">
-            ${t.lpn_codigo ? `<span style="font-size:11px;color:#555;font-family:monospace;">LPN: ${esc(t.lpn_codigo)}</span>` : ''}
+            ${t.lpn_codigo ? `<span style="font-size:var(--fs-xs);color:var(--tx3);font-family:monospace;">LPN: ${esc(t.lpn_codigo)}</span>` : ''}
             ${(t.estado === 'PENDIENTE' || t.estado === 'EN_PROCESO') ? `
               <button onclick="repCancelarTarea(${esc(t.id)}, '${esc(t.codigo)}')"
-                style="padding:5px 10px;background:var(--bg);border:1px solid #7f1d1d;border-radius:6px;color:#f87171;font-size:11px;cursor:pointer;">
+                style="padding:5px 10px;background:var(--bg);border:1px solid var(--err-brd);border-radius:6px;color:var(--err-tx);font-size:var(--fs-xs);cursor:pointer;">
                 Cancelar
               </button>` : ''
             }
@@ -422,12 +422,12 @@ async function repCargarTareas() {
                  se pone en true, así que el badge mostraba "⏳ Pendiente Siesa" para siempre
                  en toda tarea COMPLETADA. Columnas/rama muerta quedan documentadas en
                  tarea_reposicion.py y siesa_job_service.py, sin migración por ahora. -->
-            ${t.siesa_enviado ? `<span style="font-size:11px;color:#22c55e;">✓ Siesa</span>` : ''}
+            ${t.siesa_enviado ? `<span style="font-size:var(--fs-xs);color:var(--ok-tx);">✓ Siesa</span>` : ''}
           </div>
         </div>`;
     }).join('');
   } catch (e) {
-    el.innerHTML = '<div style="text-align:center;padding:30px;color:#ef4444;">Error cargando tareas</div>';
+    el.innerHTML = '<div style="text-align:center;padding:30px;color:var(--err-tx);">Error cargando tareas</div>';
   }
 }
 
@@ -451,44 +451,44 @@ async function repCancelarTarea(id, codigo) {
 async function repCargarHuerfanas() {
   const el = document.getElementById('rep-lista-huerfanas');
   if (!el) return;
-  el.innerHTML = '<div style="text-align:center;padding:30px;color:#555;">Cargando...</div>';
+  el.innerHTML = '<div style="text-align:center;padding:30px;color:var(--tx3);">Cargando...</div>';
   try {
     const d = await get('/api/reposicion/ubicaciones-huerfanas');
     const items = d.huerfanas || [];
 
     if (!items.length) {
       el.innerHTML = `
-        <div style="text-align:center;padding:40px;color:#555;">
+        <div style="text-align:center;padding:40px;color:var(--tx3);">
           <div style="font-size:32px;margin-bottom:12px;opacity:0.4;">✅</div>
-          <div style="font-size:15px;font-weight:600;">Sin ubicaciones huérfanas</div>
-          <div style="font-size:12px;margin-top:6px;">Todos los códigos de Siesa tienen prefijo válido.</div>
+          <div style="font-size:var(--fs-md);font-weight:600;">Sin ubicaciones huérfanas</div>
+          <div style="font-size:var(--fs-xs);margin-top:6px;">Todos los códigos de Siesa tienen prefijo válido.</div>
         </div>`;
       return;
     }
 
     el.innerHTML = `
-      <div style="font-size:12px;color:#f59e0b;margin-bottom:10px;font-weight:600;">${esc(items.length)} ubicación${items.length > 1 ? 'es' : ''} requiere${items.length === 1 ? '' : 'n'} corrección en Siesa</div>
+      <div style="font-size:var(--fs-xs);color:var(--warn-tx);margin-bottom:10px;font-weight:600;">${esc(items.length)} ubicación${items.length > 1 ? 'es' : ''} requiere${items.length === 1 ? '' : 'n'} corrección en Siesa</div>
       ${items.map(h => {
         const ultima = h.fecha_ultima_vez ? new Date(h.fecha_ultima_vez).toLocaleString('es-CO', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' }) : '—';
         return `
           <div class="tabla-card" style="margin-bottom:10px;border-left:3px solid #f59e0b;">
             <div style="display:flex;justify-content:space-between;align-items:flex-start;">
               <div>
-                <div style="font-size:15px;font-weight:800;font-family:monospace;color:#fbbf24;">${h.codigo_siesa}</div>
-                <div style="font-size:11px;color:var(--tx3);margin-top:2px;">${h.descripcion || 'Sin descripción'} · Bodega: ${h.bodega_id}</div>
+                <div style="font-size:var(--fs-md);font-weight:800;font-family:monospace;color:var(--warn-tx);">${h.codigo_siesa}</div>
+                <div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:2px;">${h.descripcion || 'Sin descripción'} · Bodega: ${h.bodega_id}</div>
               </div>
-              <span style="font-size:11px;color:#f59e0b;background:#78350f44;padding:3px 8px;border-radius:20px;">${h.veces_detectada}x detectada</span>
+              <span style="font-size:var(--fs-xs);color:var(--warn-tx);background:#78350f44;padding:3px 8px;border-radius:20px;">${h.veces_detectada}x detectada</span>
             </div>
-            <div style="font-size:11px;color:var(--tx3);margin-top:8px;">
+            <div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:8px;">
               Última vez: ${ultima} · Estado Siesa: ${h.activo_siesa ? 'Activo' : 'Inactivo'}
             </div>
-            <div style="font-size:11px;color:#92400e;margin-top:6px;background:#78350f22;padding:6px 8px;border-radius:6px;">
+            <div style="font-size:var(--fs-xs);color:var(--warn-tx);margin-top:6px;background:#78350f22;padding:6px 8px;border-radius:6px;">
               Acción: renombrar en Siesa con prefijo <strong>PIK-</strong>, <strong>RES-</strong> o <strong>AVE-</strong> y esperar sync nocturno (03:00)
             </div>
           </div>`;
       }).join('')}`;
   } catch (e) {
-    el.innerHTML = '<div style="text-align:center;padding:30px;color:#ef4444;">Error cargando datos</div>';
+    el.innerHTML = '<div style="text-align:center;padding:30px;color:var(--err-tx);">Error cargando datos</div>';
   }
 }
 
@@ -498,7 +498,7 @@ async function repCargarHuerfanas() {
 async function repCargarJobs() {
   const el = document.getElementById('rep-lista-jobs');
   if (!el) return;
-  el.innerHTML = '<div style="text-align:center;padding:30px;color:#555;">Cargando...</div>';
+  el.innerHTML = '<div style="text-align:center;padding:30px;color:var(--tx3);">Cargando...</div>';
 
   const filtro = document.getElementById('rep-filtro-job')?.value || 'FALLIDO';
 
@@ -510,10 +510,10 @@ async function repCargarJobs() {
 
       if (!jobs.length) {
         el.innerHTML = `
-          <div style="text-align:center;padding:40px;color:#555;">
+          <div style="text-align:center;padding:40px;color:var(--tx3);">
             <div style="font-size:32px;margin-bottom:12px;opacity:0.4;">✅</div>
-            <div style="font-size:15px;font-weight:600;">Sin jobs fallidos</div>
-            <div style="font-size:12px;margin-top:6px;">Todas las transferencias a Siesa se procesaron correctamente.</div>
+            <div style="font-size:var(--fs-md);font-weight:600;">Sin jobs fallidos</div>
+            <div style="font-size:var(--fs-xs);margin-top:6px;">Todas las transferencias a Siesa se procesaron correctamente.</div>
           </div>`;
         return;
       }
@@ -523,13 +523,13 @@ async function repCargarJobs() {
       d = await get(`/api/reposicion/siesa-jobs?estado=${filtro}`);
       const jobs = d.jobs || [];
       if (!jobs.length) {
-        el.innerHTML = `<div style="text-align:center;padding:40px;color:#555;">Sin jobs ${filtro.toLowerCase()}s</div>`;
+        el.innerHTML = `<div style="text-align:center;padding:40px;color:var(--tx3);">Sin jobs ${filtro.toLowerCase()}s</div>`;
         return;
       }
       el.innerHTML = jobs.map(j => _repJobCard(j, false)).join('');
     }
   } catch (e) {
-    el.innerHTML = '<div style="text-align:center;padding:30px;color:#ef4444;">Error cargando jobs</div>';
+    el.innerHTML = '<div style="text-align:center;padding:30px;color:var(--err-tx);">Error cargando jobs</div>';
   }
 }
 
@@ -549,29 +549,29 @@ function _repJobCard(j, mostrarReintentar) {
     <div class="tabla-card" style="margin-bottom:10px;${j.estado === 'FALLIDO' ? 'border-left:3px solid #ef4444;' : ''}">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px;">
         <div>
-          <div style="font-size:12px;font-weight:700;color:var(--tx);">${esc(j.tipo || '—')}</div>
-          <div style="font-size:11px;color:var(--tx3);margin-top:2px;">${fecha}</div>
+          <div style="font-size:var(--fs-xs);font-weight:700;color:var(--tx);">${esc(j.tipo || '—')}</div>
+          <div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:2px;">${fecha}</div>
         </div>
         <div style="display:flex;align-items:center;gap:6px;">
-          <span style="font-size:11px;color:#666;">${esc(j.intentos || 0)}/${j.max_intentos || 3} intentos</span>
-          <span style="font-size:11px;font-weight:700;color:${color};background:${color}22;padding:3px 8px;border-radius:20px;">${esc(j.estado)}</span>
+          <span style="font-size:var(--fs-xs);color:var(--tx3);">${esc(j.intentos || 0)}/${j.max_intentos || 3} intentos</span>
+          <span style="font-size:var(--fs-xs);font-weight:700;color:${color};background:${color}22;padding:3px 8px;border-radius:20px;">${esc(j.estado)}</span>
         </div>
       </div>
       ${j.error_ultimo ? `
-        <div style="font-size:11px;color:#f87171;background:#7f1d1d22;padding:6px 8px;border-radius:6px;margin-bottom:8px;font-family:monospace;word-break:break-all;">
+        <div style="font-size:var(--fs-xs);color:var(--err-tx);background:#7f1d1d22;padding:6px 8px;border-radius:6px;margin-bottom:8px;font-family:monospace;word-break:break-all;">
           ${esc(j.error_ultimo.slice(0, 200))}
         </div>` : ''
       }
       ${proximo && j.estado === 'PENDIENTE' ? `
-        <div style="font-size:11px;color:#f59e0b;margin-bottom:8px;">Próximo intento: ${proximo}</div>` : ''
+        <div style="font-size:var(--fs-xs);color:var(--warn-tx);margin-bottom:8px;">Próximo intento: ${proximo}</div>` : ''
       }
       ${j.referencia_tipo ? `
-        <div style="font-size:11px;color:var(--tx3);">Ref: ${esc(j.referencia_tipo)} #${esc(j.referencia_id || '—')}</div>` : ''
+        <div style="font-size:var(--fs-xs);color:var(--tx3);">Ref: ${esc(j.referencia_tipo)} #${esc(j.referencia_id || '—')}</div>` : ''
       }
       ${mostrarReintentar ? `
         <div style="display:flex;justify-content:flex-end;margin-top:8px;">
           <button onclick="repReintentar(${esc(j.id)})"
-            style="padding:6px 14px;background:var(--pm);border:none;border-radius:6px;color:#fff;font-size:12px;font-weight:700;cursor:pointer;">
+            style="padding:6px 14px;background:var(--pm-fill);border:none;border-radius:6px;color:#fff;font-size:var(--fs-xs);font-weight:700;cursor:pointer;">
             Reintentar ahora
           </button>
         </div>` : ''
@@ -679,15 +679,15 @@ async function abastCargarTarea() {
       if (cont) cont.innerHTML = `
         <div style="text-align:center;padding:60px 20px;">
           <div style="font-size:48px;margin-bottom:16px;opacity:0.3;">📦</div>
-          <div style="font-size:18px;font-weight:700;color:#555;">Sin tareas de reposición</div>
-          <div style="font-size:13px;color:#444;margin-top:8px;">El stock está en niveles correctos.</div>
-          <div style="font-size:12px;color:#333;margin-top:24px;">Revisando automáticamente...</div>
+          <div style="font-size:var(--fs-lg);font-weight:700;color:var(--tx3);">Sin tareas de reposición</div>
+          <div style="font-size:var(--fs-sm);color:var(--tx3);margin-top:8px;">El stock está en niveles correctos.</div>
+          <div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:24px;">Revisando automáticamente...</div>
         </div>`;
       if (OPERARIO?.puede_picar !== false) {
         if (cont) cont.innerHTML += `
           <div style="padding:0 16px 24px;">
             <button onclick="abastCambiarAModo('picker')"
-              style="width:100%;padding:14px;background:#1e3a5f;border:1px solid #1e40af;border-radius:12px;color:#60a5fa;font-size:14px;font-weight:700;cursor:pointer;">
+              style="width:100%;padding:14px;background:#1e3a5f;border:1px solid var(--info-brd);border-radius:12px;color:var(--info-tx);font-size:var(--fs-sm);font-weight:700;cursor:pointer;">
               Cambiar a modo Picker
             </button>
           </div>`;
@@ -697,7 +697,7 @@ async function abastCargarTarea() {
     ABAST_TAREA = d;
     abastMostrarHUD(d);
   } catch (e) {
-    if (cont) cont.innerHTML = `<div style="text-align:center;padding:40px;color:#ef4444;">Error de conexión</div>`;
+    if (cont) cont.innerHTML = `<div style="text-align:center;padding:40px;color:var(--err-tx);">Error de conexión</div>`;
   }
 }
 

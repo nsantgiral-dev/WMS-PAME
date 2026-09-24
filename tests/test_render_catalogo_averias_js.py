@@ -50,14 +50,14 @@ def test_todo_averiado_no_se_pinta_en_verde(tmp_path):
     """12 unidades de las cuales 12 están rotas no son «hay stock»."""
     html = _catalogo(tmp_path, [_p(stock_total=12, stock_averiado=12,
                                    stock_vendible=0)])
-    assert '#4ade80' not in html, 'el total se pintó como disponible'
+    assert 'var(--ok-tx)' not in html, 'el total se pintó como disponible'
     assert '12 averiadas' in html
 
 
 def test_stock_sano_sigue_en_verde(tmp_path):
     html = _catalogo(tmp_path, [_p(stock_total=40, stock_averiado=0,
                                    stock_vendible=40)])
-    assert '#4ade80' in html
+    assert 'var(--ok-tx)' in html
 
 
 def test_una_cifra_hostil_no_llega_al_DOM(tmp_path):
@@ -92,13 +92,13 @@ def test_payload_viejo_sin_stock_vendible_no_miente(tmp_path):
     que lo explica. Fallaba hacia afirmar algo falso, no hacia neutro."""
     html = _catalogo(tmp_path, [_sin_campo(
         _p(stock_total=40, stock_averiado=0, stock_vendible=40), 'stock_vendible')])
-    assert '#4ade80' in html, html
-    assert '#fbbf24' not in html
+    assert 'var(--ok-tx)' in html, html
+    assert 'var(--warn-tx)' not in html
 
 
 def test_con_stock_vendible_en_cero_si_va_ambar(tmp_path):
     """Dirección contraria: el fallback no puede tapar el caso real."""
     html = _catalogo(tmp_path, [_p(stock_total=12, stock_averiado=12,
                                    stock_vendible=0)])
-    assert '#fbbf24' in html
+    assert 'var(--warn-tx)' in html
     assert '12 averiadas' in html

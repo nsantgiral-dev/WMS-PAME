@@ -26,15 +26,15 @@ function cargarManuales() {
     <div class="tabla-fila">
       <div>
         <div class="tabla-nombre">${esc(m.rol)}</div>
-        <div style="font-size:11px;color:var(--tx3);">Bodega ${esc(m.bodega)}</div>
+        <div style="font-size:var(--fs-xs);color:var(--tx3);">Bodega ${esc(m.bodega)}</div>
       </div>
       <div style="display:flex;gap:8px;">
         <a href="${esc(m.archivo)}" target="_blank" rel="noopener"
-           style="padding:8px 14px;background:var(--pm);border-radius:8px;color:#fff;font-size:13px;font-weight:700;text-decoration:none;">
+           style="padding:8px 14px;background:var(--pm-fill);border-radius:8px;color:#fff;font-size:var(--fs-sm);font-weight:700;text-decoration:none;">
           Ver PDF
         </a>
         <a href="${esc(m.archivo)}" download
-           style="padding:8px 14px;background:var(--bg-s);border:1px solid var(--brd);border-radius:8px;color:var(--tx);font-size:13px;font-weight:700;text-decoration:none;">
+           style="padding:8px 14px;background:var(--bg-s);border:1px solid var(--brd);border-radius:8px;color:var(--tx);font-size:var(--fs-sm);font-weight:700;text-decoration:none;">
           Descargar
         </a>
       </div>

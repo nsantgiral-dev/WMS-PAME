@@ -1757,6 +1757,11 @@ class TestModoClaroCubreFondosOscuros:
         # tarjeta ENTREGADO) y #0a3d62 es un botón sólido saturado — se lee
         # sobre los dos fondos, como los demás acentos de esta lista.
         '#f0fdf4', '#0a3d62',
+        # 2026-09-24 (legibilidad): el verde de botón sólido pasó de #16a34a a
+        # #15803d porque el blanco daba 3.3:1 sobre el anterior. Es el mismo
+        # acento vivo, un paso más oscuro: 5.0:1 con blanco en los dos temas.
+        # Lo mide tests/test_legibilidad_pwa.py::TestLosParesFijosPasanAA.
+        '#15803d',
     }
 
     _HEX_RE = re.compile(r'background:\s*#([0-9a-fA-F]{6}|[0-9a-fA-F]{3})')

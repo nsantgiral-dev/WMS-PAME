@@ -40,7 +40,7 @@ def test_sin_bodega_el_total_lleva_su_desglose(tmp_path):
 def test_sin_desglose_no_inventa_la_linea(tmp_path):
     """Una API vieja, o un producto sin stock en ningún almacén: nada extra."""
     html = _catalogo(tmp_path, [_p(stock_total=0, stock_vendible=0)])
-    assert '#93c5fd' not in html, html
+    assert 'var(--info-tx)' not in html, html
 
 
 def test_el_nombre_de_bodega_va_escapado(tmp_path):
