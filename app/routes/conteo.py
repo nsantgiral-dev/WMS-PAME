@@ -548,20 +548,21 @@ def editar_conteo(id):
             db.session.rollback()
             return jsonify({'error': str(e)}), 409
 
-    # Reasignar operario
+    # Reasignar operario — la política (qué estados, doble ciego, lo contado
+    # en curso) vive en el servicio.
     if 'operario_id' in data:
-        nuevo_op = data['operario_id']
-        if nuevo_op is not None:
-            op_usr = Usuario.query.get(nuevo_op)
-            if not op_usr:
-                return jsonify({'error': f'Operario {nuevo_op} no encontrado'}), 404
-            no_puede = ConteoService.motivo_no_puede_contar(sesion, op_usr.id)
-            if no_puede:
-                return jsonify({'error': no_puede}), 400
-        sesion.operario_id = nuevo_op
-        cambios.append(f'operario_id → {nuevo_op}')
-        if sesion.estado == EstadoConteo.PENDIENTE and nuevo_op:
-            sesion.estado = EstadoConteo.PENDIENTE  # mantener — asignación no cambia estado
+        from app.services.conteo_service import ConteoNoReasignable
+        try:
+            cambios.extend(ConteoService.reasignar_operario(sesion, data['operario_id']))
+        except LookupError as e:
+            db.session.rollback()
+            return jsonify({'error': str(e)}), 404
+        except ConteoNoReasignable as e:
+            db.session.rollback()
+            return jsonify({'error': str(e)}), 409
+        except ValueError as e:
+            db.session.rollback()
+            return jsonify({'error': str(e)}), 400
 
     if not cambios:
         return jsonify({'error': 'No se enviaron campos a modificar'}), 400

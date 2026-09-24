@@ -18,6 +18,10 @@ class CadenaNoCancelable(ValueError):
     """La cadena no está en un estado que se pueda cancelar (la ruta: 409)."""
 
 
+class ConteoNoReasignable(ValueError):
+    """El conteo ya se contó o cerró: no cambia de dueño (la ruta: 409)."""
+
+
 class ConteoService:
 
     @staticmethod
@@ -2585,6 +2589,58 @@ class ConteoService:
                 sesion.fecha_cierre = None
                 cambios.append(f'estado → DESCUADRE (dif={resultado["diferencia"]})')
         return cambios
+
+    #: Los únicos estados en los que un conteo cambia de dueño: todavía no se
+    #: contó. Después, `operario_id` es quién CONTÓ —lo leen el doble ciego
+    #: (`_operarios_previos_de_la_cadena`) y las estadísticas por persona—, no
+    #: a quién le toca.
+    ESTADOS_REASIGNABLES = (EstadoConteo.PENDIENTE, EstadoConteo.EN_PROCESO)
+
+    @staticmethod
+    def reasignar_operario(sesion: SesionConteo, operario_id) -> list:
+        """Un líder le da un conteo a otra persona (`PUT /api/conteo/<id>/editar`
+        con `operario_id`; `None` lo devuelve a la cola). Devuelve los cambios;
+        no hace commit.
+
+        **Vivía en la ruta, y le faltaban las dos reglas del resto de las
+        puertas** (2026-09-23, visto por `tests/flujo/test_e2e_inventario_ciclico.py`):
+
+        - **Un conteo en curso se pasaba con lo contado adentro.** El nuevo
+          dueño seguía, a ciegas, desde el parcial y la foto de apertura del
+          anterior, y lo del anterior se perdía sin rastro. Ahora pasa por
+          `devolver_al_pool` (`REASIGNADO`): lo parcial queda en
+          `conteos_descartados` y el nuevo arranca desde cero, con su propia
+          foto al abrirlo.
+        - **Un conteo ya contado cambiaba de autor.** Reescribir el
+          `operario_id` de un CC1 contado lo sacaba del doble ciego: el CC2 se
+          le podía dar después a quien contó el CC1. Solo se reasigna lo que
+          nadie contó todavía (`ESTADOS_REASIGNABLES`); un BLOQUEADO se
+          devuelve con dueño por `reabrir_bloqueado`.
+
+        Levanta `LookupError` (no existe el operario), `ConteoNoReasignable`
+        (estado) o `ValueError` (`motivo_no_puede_contar`: CC3 o doble ciego).
+        """
+        from app.models.usuario import Usuario
+        if sesion.estado not in ConteoService.ESTADOS_REASIGNABLES:
+            como = ('usá «Reabrir», que lo devuelve con el dueño que elijas'
+                    if sesion.estado == EstadoConteo.BLOQUEADO
+                    else 'su operario es quien lo contó, y cambiarlo reescribiría '
+                         'quién contó (y con eso el doble ciego)')
+            raise ConteoNoReasignable(
+                f'Un conteo en {sesion.estado} no se reasigna: {como}.')
+        if operario_id is not None:
+            op = db.session.get(Usuario, operario_id)
+            if not op:
+                raise LookupError(f'Operario {operario_id} no encontrado')
+            no_puede = ConteoService.motivo_no_puede_contar(sesion, op.id)
+            if no_puede:
+                raise ValueError(no_puede)
+        if operario_id == sesion.operario_id:
+            return []
+        if sesion.estado == EstadoConteo.EN_PROCESO or sesion.cantidad_fisica is not None:
+            ConteoService.devolver_al_pool(sesion, MotivoDescarteConteo.REASIGNADO)
+        sesion.operario_id = operario_id
+        return [f'operario_id → {operario_id}']
 
     @staticmethod
     def _crear_conteo_verificacion(sesion_origen: SesionConteo, operario_excluido: int):
