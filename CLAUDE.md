@@ -3637,12 +3637,9 @@ devolvía todo).
 datos); la salud del kardex en QA será siempre `SIN_DATOS` (la consulta da
 401); las fotos nacen apagadas; Conteo y Flota no escriben en la bitácora.
 
-**Para el integrador:** en este worktree `test_frontend_integrity::
-test_ningun_endpoint_nuevo_sin_consumidor` queda rojo con las tres rutas
-porque el shell (`analitica.js`, con `AN_VISTAS`) lo escribe otro agente;
-verificado que con la tabla del contrato presente el guard pasa.
-Las dos vistas quedan declaradas en `tests/test_permisos_por_pantalla.py::PANTALLAS`
-(rol `admin`); el shell `analitica.js` tendrá que declararse igual.
+**Integración (2026-09-24):** el shell `analitica.js` y las tres vistas están
+declarados en `tests/test_permisos_por_pantalla.py::PANTALLAS`; las rutas
+tienen consumidor y no quedan en `DEUDA_SIN_UI`.
 
 Suite completa en este worktree (2026-09-24): **7256 passed**, 1 failed (el
 guard de consumidor de arriba, que espera al shell), 5 skipped, 19 xfailed.
@@ -3695,12 +3692,12 @@ mutaciones, las 16 rojas):
   casos de las fugas con valor) primero; después por pesos; en el detalle, los
   casos sin valor van arriba. Cada caso trae `pedido_clave` cuando existe.
 
-**Integración pendiente (la hace el integrador):** las dos rutas están en
-`DEUDA_SIN_UI` porque la vista la llama el shell `analitica.js`, que no está en
-este worktree; al unir, `test_la_lista_solo_encoge` exige borrarlas. El botón
-«🧭 Recorrido» llama `anRecorridoAbrir(pedido_clave)` **si existe** (si no,
-muestra la clave): hay que cablearla al recorrido. La vista asume que
-`anCargarPanel` asigna a `el.innerHTML` lo que devuelven `html(d)`/`error(e)`.
+**Integrada con el shell (2026-09-24):** las dos rutas salieron de
+`DEUDA_SIN_UI`. El botón «🧭 Recorrido» de un caso llama
+`anRecorridoAbrir(pedido_clave)` (`analitica_recorrido.js`), que espera a que
+`anSubtab('recorrido')` —ahora devuelve la carga— pinte la vista y después abre
+la línea de tiempo de ese pedido. `tests/test_analitica_integracion_js.py`
+prueba el cable en Node.
 
 **Lo que NO se puede medir todavía, y por qué:**
 - Venta perdida en pesos: `Producto.precio_venta` no lo llena ningún sync → casi
