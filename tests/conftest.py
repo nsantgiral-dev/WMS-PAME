@@ -417,3 +417,28 @@ def foto_siesa(existencia, cant_pos=0.0, salida_sin_conf=None):
         'teorico': ConteoService.teorico(float(existencia), float(cant_pos)),
         'leido_at': datetime.utcnow(),
     }
+
+
+@pytest.fixture(autouse=True)
+def _connekta_sin_metodos_pegados_a_la_instancia():
+    """Después de cada test, ningún método de `ConnektaGateway` queda pegado a
+    la instancia `connekta`.
+
+    `monkeypatch.setattr(connekta, '_get', fn)` restaura con `setattr` y deja
+    un atributo de INSTANCIA que tapa al de la clase. Desde ahí, todo test de
+    otro archivo que parchea la CLASE (`ConnektaGateway._get`, la forma
+    recomendada en CLAUDE.md) queda sordo: su parche nunca se llama. Rompió el
+    build de f56ba07 — pasaba solo, fallaba en la suite completa.
+
+    Se arregla acá y no archivo por archivo: la próxima vez que alguien parchee
+    la instancia, el daño termina con su test.
+    """
+    yield
+    try:
+        from app.services.connekta_gateway import ConnektaGateway, connekta
+    except Exception:
+        return
+    for nombre in list(vars(connekta)):
+        de_clase = ConnektaGateway.__dict__.get(nombre)
+        if callable(de_clase) or isinstance(de_clase, (staticmethod, classmethod)):
+            connekta.__dict__.pop(nombre, None)
