@@ -3154,3 +3154,31 @@ eso es la verdad, no un falso negativo. El arreglo es de Siesa: la consulta
 necesita un `ORDER BY` por clave única (consecutivo + línea / `f470_rowid`) y
 devolver esa clave. Sin la clave natural, dos ventas POS iguales del mismo día
 colapsan en un movimiento (`filas_sin_clave_natural` lo cuenta).
+
+---
+
+## Conteo: los filtros filtran lo que dicen (2026-09-24)
+
+La clase: **un filtro que la pantalla ofrece y el servidor no aplica, o aplica
+sobre otra cosa.** Política en `app/services/conteo_listado.py` (la ruta solo
+parsea); la barra de números cuenta con las mismas consultas que la lista.
+Trinquete: `tests/test_conteo_filtros.py` (backend con datos que distinguen +
+`conteo.js` en Node con `util.js` real).
+
+| Filtro | Qué pasaba | Ahora |
+|---|---|---|
+| **Marca** | Buscaba en `Producto.categoria` | `Producto.marca_siesa`; si ningún producto la tiene, `marca.aviso` lo dice en pantalla |
+| **⚠ Acción** | El JS sacaba los CC2/CC3 **después** de paginar; como quedan en DESCUADRE para siempre, el contador crecía sin techo y había páginas cortas | Solo raíces, en la consulta (`VISTAS`) |
+| **✓ Resueltos** | Raíz y CC2 como dos resueltos del mismo hueco | Solo raíces |
+| **Almacén** | La barra, «Asignar» y «Exportar» leían el selector escondido de ABC; la lista no filtraba | `inv-filtro-almacen` para los cuatro |
+| **Texto y pestañas** | Una petición por tecla; pintaba la última en llegar; al cambiar de pestaña quedaban las tarjetas viejas | Debounce, la respuesta vieja no pinta, «Cargando» al cambiar |
+| **«Hoy» / Exportar** | Día UTC; una fecha ilegible exportaba todo | Día Bogotá; ilegible → 400 |
+
+**Decisión pendiente — la marca no tiene fuente.** `marca_siesa` (y
+`categoria`) no los escribe ningún sync: el contrato de `API_v2_Items` no trae
+marca. En Siesa la marca es un **criterio de clasificación del ítem** (`t125`,
+plan + criterio mayor, el plano del 238920), y el código `M003/M175` del
+comentario del modelo sugiere ese origen. Hace falta decidir qué plan es «marca»
+y registrar una consulta que la lea (sin contrato: descubrimiento en vivo), o
+cambiar el filtro por otro dato. Hasta entonces el filtro devuelve vacío **y lo
+dice**. El Armador (`MARCAS_CHINA`) depende del mismo dato.

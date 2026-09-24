@@ -1825,11 +1825,17 @@
           + Manual
         </button>
       </div>
-      <!-- Filtros secundarios -->
-      <div style="display:flex;gap:8px;margin-bottom:12px;">
+      <!-- Filtros secundarios. El almacén es el de la lista, la barra de
+           arriba, «Asignar» y «Exportar» (antes esos tres leían el selector
+           escondido de la pestaña ABC y la lista no filtraba por almacén). -->
+      <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:6px;">
+        <select id="inv-filtro-almacen" onchange="conteosFiltrar()"
+          style="flex:1;min-width:0;padding:8px;background:var(--bg-input);border:1px solid var(--brd);border-radius:8px;color:var(--tx);font-size:13px;">
+          <option value="">Todos los almacenes</option>
+        </select>
         <input id="inv-filtro-marca" type="text" placeholder="Filtrar por marca..."
-          style="flex:1;padding:8px 10px;background:var(--bg-input);border:1px solid var(--brd);border-radius:8px;color:var(--tx);font-size:13px;"
-          oninput="conteosFiltrar()">
+          style="flex:1;min-width:0;padding:8px 10px;background:var(--bg-input);border:1px solid var(--brd);border-radius:8px;color:var(--tx);font-size:13px;"
+          oninput="conteosFiltrarTexto()" onkeydown="if(event.key==='Enter')conteosFiltrar()">
         <select id="inv-filtro-clase" onchange="conteosFiltrar()"
           style="padding:8px;background:var(--bg-input);border:1px solid var(--brd);border-radius:8px;color:var(--tx);font-size:13px;">
           <option value="">A+B+C</option>
@@ -1838,6 +1844,9 @@
           <option value="C">Solo C</option>
         </select>
       </div>
+      <!-- Lo llena cargarConteos cuando el filtro no puede filtrar (p. ej.
+           ningún producto tiene marca cargada): se dice, no se pinta vacío. -->
+      <div id="inv-filtro-aviso" style="margin-bottom:12px;"></div>
 
       <!-- Form conteo manual (oculto por defecto) -->
       <div id="conteo-form-manual" style="display:none;background:var(--bg-s);border:1px solid var(--brd);border-radius:12px;padding:14px;margin-bottom:12px;">
@@ -3832,7 +3841,7 @@
   <script defer src="/static/pwa/recepcion.js?v=20260923ambig"></script>
   <script defer src="/static/pwa/rutas.js?v=20260923esc"></script>
   <script defer src="/static/pwa/traslados.js?v=20260923esc"></script>
-  <script defer src="/static/pwa/conteo.js?v=20260924stats"></script>
+  <script defer src="/static/pwa/conteo.js?v=20260924integra"></script>
   <script defer src="/static/pwa/reposicion.js?v=20260923esc"></script>
   <script defer src="/static/pwa/liquidacion.js?v=20260923esc"></script>
   <script defer src="/static/pwa/layout.js?v=20260921a"></script>

@@ -27,62 +27,37 @@ def listar_sesiones():
     u = Usuario.query.get(uid)
     if not u or u.rol not in Roles.SUPERVISION:
         return jsonify({'error': 'Sin permiso para listar sesiones de conteo'}), 403
-    estado = request.args.get('estado')
-    almacen_id = request.args.get('almacen_id', type=int)
-    clasificacion = request.args.get('clasificacion')
-    operario_id = request.args.get('operario_id', type=int)
-    categoria = request.args.get('categoria', request.args.get('marca', '')).strip()
-    page = request.args.get('page', 1, type=int)
+    # La ruta solo parsea: qué muestra cada pestaña y qué deja pasar cada
+    # filtro vive en `app/services/conteo_listado.py`.
+    from app.services import conteo_listado
+    try:
+        filtros = conteo_listado.normalizar_filtros(
+            vista=request.args.get('vista'),
+            estados=request.args.get('estados'),
+            estado=request.args.get('estado'),
+            almacen_id=_entero_o_400('almacen_id'),
+            clasificacion=request.args.get('clasificacion'),
+            operario_id=_entero_o_400('operario_id'),
+            marca=request.args.get('marca'),
+            categoria=request.args.get('categoria'),
+        )
+        page = _entero_o_400('page') or 1
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    return jsonify(conteo_listado.listar(filtros, page)), 200
 
-    from sqlalchemy.orm import joinedload as _jl
-    query = (SesionConteo.query
-             .options(
-                 _jl(SesionConteo.producto),
-                 _jl(SesionConteo.ubicacion),
-                 _jl(SesionConteo.almacen),      # evita N+1 en to_dict() almacen_nombre/bodega
-                 _jl(SesionConteo.operario),
-                 _jl(SesionConteo.aprobador),
-                 _jl(SesionConteo.editor),
-                 # CC2 y su operario...
-                 _jl(SesionConteo.hijo_conteo)
-                 .joinedload(SesionConteo.operario),
-                 # ...y CC3, que `to_dict()` lee cuando CC1≠CC2. Sin esto son
-                 # dos lazy loads por sesión con descuadre, en una página de 30.
-                 _jl(SesionConteo.hijo_conteo)
-                 .joinedload(SesionConteo.hijo_conteo)
-                 .joinedload(SesionConteo.operario),
-             )
-             .order_by(SesionConteo.fecha_creacion.desc()))
 
-    # Soporte para múltiples estados separados por coma (ej: "SEGUNDO_CONTEO,DESCUADRE")
-    estados_multi = request.args.get('estados', '')
-    if estados_multi:
-        estados_list = [e.strip() for e in estados_multi.split(',') if e.strip()]
-        query = query.filter(SesionConteo.estado.in_(estados_list))
-    elif estado:
-        query = query.filter_by(estado=estado)
-    if almacen_id:
-        query = query.filter_by(almacen_id=almacen_id)
-    if clasificacion:
-        query = query.filter_by(clasificacion_abc=clasificacion)
-    if operario_id:
-        query = query.filter_by(operario_id=operario_id)
-    if categoria:
-        from app.models.producto import Producto
-        categoria_safe = categoria.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_')
-        query = (query
-                 .join(Producto, SesionConteo.producto_id == Producto.id)
-                 .filter(Producto.categoria.ilike(f'%{categoria_safe}%', escape='\\')))
-
-    sesiones = query.paginate(page=page, per_page=30, error_out=False)
-
-    return jsonify({
-        'sesiones': [s.to_dict() for s in sesiones.items],
-        'total': sesiones.total,
-        'pagina_actual': page,
-        'total_paginas': sesiones.pages,
-        'por_pagina': 30,
-    }), 200
+def _entero_o_400(nombre):
+    """Un parámetro entero de la query. Vacío es None; ilegible es ValueError
+    (400): con `type=int` Flask lo convertía en None y la lista salía sin ese
+    filtro, con cara de ser la pedida."""
+    crudo = (request.args.get(nombre) or '').strip()
+    if not crudo:
+        return None
+    try:
+        return int(crudo)
+    except ValueError:
+        raise ValueError(f'{nombre} inválido: {crudo!r}')
 
 
 @conteo_bp.route('/mis-tareas', methods=['GET'])
@@ -586,7 +561,6 @@ def stats_conteo():
     Retorna contadores: pendientes, en_proceso, hoy_completados, atrasados.
     """
     from app.models.usuario import Usuario
-    from sqlalchemy import func as _fn, case as _case
     try:
         uid = int(get_jwt_identity())
     except (TypeError, ValueError):
@@ -595,74 +569,14 @@ def stats_conteo():
     if not u or u.rol not in Roles.SUPERVISION:
         return jsonify({'error': 'Sin permiso'}), 403
 
-    almacen_id = request.args.get('almacen_id', type=int)
-
-    # Un solo query — COUNT por estado agrupado
-    q = db.session.query(
-        SesionConteo.estado,
-        _fn.count(SesionConteo.id)
-    ).group_by(SesionConteo.estado)
-    if almacen_id:
-        q = q.filter(SesionConteo.almacen_id == almacen_id)
-    counts = {estado: cnt for estado, cnt in q.all()}
-
-    pendientes = counts.get('PENDIENTE', 0)
-    en_proceso = counts.get('EN_PROCESO', 0)
-    segundo_conteo = counts.get('SEGUNDO_CONTEO', 0)
-    tercer_conteo = counts.get('TERCER_CONTEO', 0)
-    descuadre = counts.get('DESCUADRE', 0)
-    match = counts.get('MATCH', 0)
-    ajustado = counts.get('AJUSTADO', 0)
-    ajustando = counts.get('AJUSTANDO', 0)
-
-    # Completados hoy (MATCH + AJUSTADO con fecha_cierre de hoy)
-    hoy_inicio = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
-    q_hoy = SesionConteo.query.filter(
-        SesionConteo.estado.in_(['MATCH', 'AJUSTADO']),
-        SesionConteo.fecha_cierre >= hoy_inicio
-    )
-    if almacen_id:
-        q_hoy = q_hoy.filter(SesionConteo.almacen_id == almacen_id)
-    hoy_completados = q_hoy.count()
-
-    # Atrasados: PENDIENTE con fecha_creacion > 2 días
-    umbral_atraso = datetime.utcnow() - __import__('datetime').timedelta(days=2)
-    q_atraso = SesionConteo.query.filter(
-        SesionConteo.estado == 'PENDIENTE',
-        SesionConteo.fecha_creacion < umbral_atraso
-    )
-    if almacen_id:
-        q_atraso = q_atraso.filter(SesionConteo.almacen_id == almacen_id)
-    atrasados = q_atraso.count()
-
-    # Pendientes sin operario asignado
-    q_sin_asignar = SesionConteo.query.filter(
-        SesionConteo.estado == 'PENDIENTE',
-        SesionConteo.operario_id.is_(None)
-    )
-    if almacen_id:
-        q_sin_asignar = q_sin_asignar.filter(SesionConteo.almacen_id == almacen_id)
-    sin_asignar = q_sin_asignar.count()
-
-    # Jobs DLQ fallidos (ajustes que Siesa rechazó después de 3 reintentos)
-    from app.models.siesa_job import SiesaJob
-    fallos_dlq = SiesaJob.query.filter(
-        SiesaJob.tipo == 'AJUSTE_CONTEO',
-        SiesaJob.estado == 'FALLIDO',
-    ).count()
-
-    return jsonify({
-        'pendientes': pendientes,
-        'en_proceso': en_proceso,
-        'segundo_conteo': segundo_conteo,
-        'descuadre': descuadre,
-        'hoy_completados': hoy_completados,
-        'atrasados_2d': atrasados,
-        'sin_asignar': sin_asignar,
-        'accion_requerida': segundo_conteo + tercer_conteo + descuadre,
-        'resueltos': match + ajustado + ajustando,
-        'fallos_dlq': fallos_dlq,
-    }), 200
+    try:
+        almacen_id = _entero_o_400('almacen_id')
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    # Cuenta con las mismas consultas que la lista (`conteo_listado`): el
+    # contador de «Acción» es el total de la pestaña Acción.
+    from app.services import conteo_listado
+    return jsonify(conteo_listado.barra(almacen_id)), 200
 
 
 @conteo_bp.route('/estadisticas', methods=['GET'])
@@ -1279,9 +1193,14 @@ def exportar_conteos():
     if not u or u.rol not in Roles.SUPERVISION:
         return jsonify({'error': 'Sin permiso'}), 403
 
-    desde_str = request.args.get('desde')
-    hasta_str = request.args.get('hasta')
-    almacen_id = request.args.get('almacen_id', type=int)
+    from app.services import conteo_listado
+    desde_str = (request.args.get('desde') or '').strip()
+    hasta_str = (request.args.get('hasta') or '').strip()
+    try:
+        desde_utc, hasta_utc = conteo_listado.rango_de_dias(desde_str, hasta_str)
+        almacen_id = _entero_o_400('almacen_id')
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
 
     q = (SesionConteo.query
          .options(
@@ -1299,18 +1218,10 @@ def exportar_conteos():
          ]))
          .order_by(SesionConteo.fecha_creacion.desc()))
 
-    if desde_str:
-        try:
-            desde = datetime.strptime(desde_str, '%Y-%m-%d')
-            q = q.filter(SesionConteo.fecha_creacion >= desde)
-        except ValueError:
-            pass
-    if hasta_str:
-        try:
-            hasta = datetime.strptime(hasta_str, '%Y-%m-%d').replace(hour=23, minute=59, second=59)
-            q = q.filter(SesionConteo.fecha_creacion <= hasta)
-        except ValueError:
-            pass
+    if desde_utc:
+        q = q.filter(SesionConteo.fecha_creacion >= desde_utc)
+    if hasta_utc:
+        q = q.filter(SesionConteo.fecha_creacion < hasta_utc)
     if almacen_id:
         q = q.filter(SesionConteo.almacen_id == almacen_id)
 

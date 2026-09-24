@@ -375,9 +375,10 @@ class TestUnaCadenaViejaNoSeAjusta:
 #: Funciones que consultan conteos sin dueño SIN repartirlos, con su motivo.
 #: Solo encoge. Una puerta nueva que reparte no entra acá: usa la política.
 LEEN_EL_POOL_SIN_REPARTIR = {
-    ('app/routes/conteo.py', 'stats_conteo'):
-        'Solo cuenta cuántos conteos PENDIENTE siguen sin dueño para el tablero; '
-        'no asigna ninguno, así que no hay regla de reparto que aplicar.',
+    ('app/services/conteo_listado.py', 'barra'):
+        'Solo cuenta cuántos conteos PENDIENTE siguen sin dueño para la barra de '
+        'Conteos (antes vivía en la ruta `stats_conteo`); no asigna ninguno, así '
+        'que no hay regla de reparto que aplicar. Excluye el CC3 como la política.',
     ('app/services/abc_service.py', '_filtros_rezago_cancelable'):
         'Define qué rezago del plan se CANCELA (P0-4, 2026-09-23): lo sin dueño '
         'es justo lo que se puede cancelar sin quitarle trabajo a nadie. No asigna '

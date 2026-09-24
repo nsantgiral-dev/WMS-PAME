@@ -212,6 +212,13 @@ async function cargarInventario(desdeTimer = false) {
       if (sel) sel.innerHTML = opts;
       const selM = document.getElementById('conteo-manual-almacen');
       if (selM) selM.innerHTML = opts;
+      // El filtro de Conteos: arranca en «Todos» y conserva lo elegido.
+      const selF = document.getElementById('inv-filtro-almacen');
+      if (selF) {
+        const elegido = selF.value;
+        selF.innerHTML = '<option value="">Todos los almacenes</option>' + opts;
+        selF.value = elegido;
+      }
       mostrarConfigBodega();
     } catch (e) { /* silencioso */ }
   }
@@ -331,8 +338,26 @@ function conteoVista(v) {
 
 /** Reset to page 1 and reload conteos with the current filter values. */
 function conteosFiltrar() {
+  clearTimeout(_CONTEO_TEXTO_TIMER);
   _CONTEO_PAGE = 1;
   cargarConteos();
+}
+
+let _CONTEO_TEXTO_TIMER = null;
+
+/** El texto (marca) filtra cuando se deja de escribir, no en cada tecla: una
+ * petición por tecla llegaba en cualquier orden y la última en llegar —no la
+ * última escrita— era la que quedaba pintada. Enter filtra ya. */
+function conteosFiltrarTexto() {
+  clearTimeout(_CONTEO_TEXTO_TIMER);
+  _CONTEO_TEXTO_TIMER = setTimeout(conteosFiltrar, 350);
+}
+
+/** El almacén elegido en Conteos. Lo usan la lista, la barra de números,
+ * «Asignar» y «Exportar»: antes los tres últimos leían el selector escondido
+ * de la pestaña ABC y la lista no filtraba por almacén. */
+function _conteoAlmacenFiltro() {
+  return document.getElementById('inv-filtro-almacen')?.value || '';
 }
 
 // ── Render helpers por vista ──────────────────────────────────────────────────
@@ -611,9 +636,14 @@ async function cargarConteoStats() {
   if (!bar) return;
   try {
     const qs = new URLSearchParams();
-    const almId = document.getElementById('inv-abc-almacen')?.value;
+    const almId = _conteoAlmacenFiltro();
     if (almId) qs.set('almacen_id', almId);
     const d = await get('/api/conteo/stats?' + qs);
+    // El contador de «Acción» es el total de esa pestaña, contado por el
+    // servidor con la misma consulta que su lista (`conteo_listado`). Antes
+    // solo se pintaba estando en Acción, y contaba CC2/CC3 viejos.
+    const badge = document.getElementById('cv-badge-accion');
+    if (badge) badge.textContent = d.accion_requerida > 0 ? d.accion_requerida : '';
     document.getElementById('cs-pendientes').textContent = d.pendientes || 0;
     document.getElementById('cs-en-curso').textContent = d.en_proceso || 0;
     document.getElementById('cs-hoy').textContent = d.hoy_completados || 0;
@@ -715,7 +745,7 @@ async function conteoOmitirSegundo(id) {
 
 /** Export conteo sessions to a CSV file with optional date range filter. */
 async function conteoExportar() {
-  const almId = document.getElementById('inv-abc-almacen')?.value;
+  const almId = _conteoAlmacenFiltro();
   const desde = (await _modalTexto('Exportar conteos', 'Desde (YYYY-MM-DD, vacío = todo):', { obligatorio: false })) || '';
   const hasta = (await _modalTexto('Exportar conteos', 'Hasta (YYYY-MM-DD, vacío = hoy):', { obligatorio: false })) || '';
   const qs = new URLSearchParams();
@@ -724,7 +754,12 @@ async function conteoExportar() {
   if (almId) qs.set('almacen_id', almId);
   try {
     const r = await _fetchConTimeout('/api/conteo/exportar?' + qs);
-    if (!r.ok) { alerta('Error al exportar', 'error'); return; }
+    if (!r.ok) {
+      let msg = 'Error al exportar';
+      try { msg = (await r.json()).error || msg; } catch (_) { /* sin cuerpo */ }
+      alerta(msg, 'error');
+      return;
+    }
     const blob = await r.blob();
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -776,7 +811,7 @@ function conteoCerrarAsignar() {
 async function conteoAsignarLote() {
   const operarioId = document.getElementById('conteo-asignar-operario')?.value;
   const limite = parseInt(document.getElementById('conteo-asignar-limite')?.value) || 10;
-  const almId = document.getElementById('inv-abc-almacen')?.value;
+  const almId = _conteoAlmacenFiltro();
   if (!operarioId) { alerta('Selecciona un operario', 'error'); return; }
   try {
     const d = await post('/api/conteo/asignar-lote', { operario_id: parseInt(operarioId), almacen_id: almId ? parseInt(almId) : null, limite });
@@ -819,27 +854,40 @@ async function cargarConteos(page) {
 
   const marca = document.getElementById('inv-filtro-marca')?.value?.trim() || '';
   const clase = document.getElementById('inv-filtro-clase')?.value || '';
+  const almId = _conteoAlmacenFiltro();
 
-  const VISTA_ESTADOS = {
-    accion:    'SEGUNDO_CONTEO,TERCER_CONTEO,DESCUADRE',
-    progreso:  'PENDIENTE,EN_PROCESO',
-    resueltos: 'MATCH,AJUSTADO,AJUSTANDO,CANCELADO',
-  };
-
-  const qs = new URLSearchParams({ page: _CONTEO_PAGE });
-  qs.set('estados', VISTA_ESTADOS[_CONTEO_VISTA] || '');
+  // Qué muestra cada pestaña lo decide el servidor (`conteo_listado.VISTAS`):
+  // acá solo viaja el nombre.
+  const qs = new URLSearchParams({ page: _CONTEO_PAGE, vista: _CONTEO_VISTA });
+  if (almId) qs.set('almacen_id', almId);
   if (marca) qs.set('marca', marca);
   if (clase) qs.set('clasificacion', clase);
+
   const vista = _CONTEO_VISTA;
+  // La clave del panel es el filtro SIN la página: cambiar de pestaña o de
+  // filtro muestra «Cargando…» (lo pintado ya no corresponde); pasar de
+  // página o un refresco no vacía lo que se ve.
+  const clave = (() => { const c = new URLSearchParams(qs); c.delete('page'); return c.toString(); })();
 
   await invCargarPanel({
-    subtab: 'conteos', el: lista, params: `${vista}?${qs}`,
+    subtab: 'conteos', el: lista, params: clave,
     cargando: '<div style="text-align:center;padding:20px;color:#555;">Cargando...</div>',
     pedir: () => get('/api/conteo/?' + qs),
     html: (d) => _conteosListaHtml(d, vista),
-    despues: (d) => _conteosPaginacion(d, vista),
-    error: () => '<div style="text-align:center;padding:20px;color:#ef4444;">Error cargando conteos</div>',
+    despues: (d) => { _conteosAvisoFiltro(d); _conteosPaginacion(d, vista); },
+    error: (e) => `<div style="text-align:center;padding:20px;color:#ef4444;">${esc((e && e.message) || 'Error cargando conteos')}</div>`,
   });
+}
+
+/** Un filtro que no puede filtrar se dice (hoy: la marca, que ningún
+ *  producto tiene cargada). Sin esto se leía «No hay conteos». */
+function _conteosAvisoFiltro(d) {
+  const aviso = document.getElementById('inv-filtro-aviso');
+  if (!aviso) return;
+  const avisoTxt = d && d.marca && d.marca.aviso;
+  aviso.innerHTML = avisoTxt
+    ? `<div style="font-size:12px;color:#f59e0b;line-height:1.5;">⚠ ${esc(avisoTxt)}</div>`
+    : '';
 }
 
 /** Las tarjetas de la lista de Conteos para la vista `vista`, ya escapadas. */
@@ -848,9 +896,11 @@ function _conteosListaHtml(d, vista) {
   if (!sesiones.length) {
     return `<div style="text-align:center;padding:30px;color:#555;">${vista === 'accion' ? '✓ Sin conteos pendientes de revisión' : 'No hay conteos con este filtro'}</div>`;
   }
-  // En vista acción mostrar solo padres — los hijos van embebidos en segundo_conteo
-  const filas = vista === 'accion' ? sesiones.filter(s => !s.es_segundo_conteo) : sesiones;
-  return filas.map(s => {
+  // Acción y Resueltos llegan solo con raíces (el CC2/CC3 va embebido en
+  // `segundo_conteo`): lo filtra el servidor, ANTES de paginar. Filtrarlo
+  // acá, después, dejaba páginas cortas o vacías y un total que no era el
+  // de la lista.
+  return sesiones.map(s => {
     if (vista === 'accion')    return _renderCardAccion(s);
     if (vista === 'progreso')  return _renderCardProgreso(s);
     return _renderCardResuelto(s);
@@ -861,10 +911,8 @@ function _conteosListaHtml(d, vista) {
 function _conteosPaginacion(d, vista) {
   const total    = d.total || 0;
   const totalPag = d.total_paginas || 1;
-  if (vista === 'accion') {
-    const badge = document.getElementById('cv-badge-accion');
-    if (badge) badge.textContent = total > 0 ? total : '';
-  }
+  // El contador de «Acción» lo pone `cargarConteoStats` (por almacén, con la
+  // misma consulta que la lista): una sola fuente, no dos que se pisan.
   const pag = document.getElementById('inv-conteos-paginacion');
   if (!pag) return;
   if (!(d.sesiones || []).length || totalPag <= 1) { pag.innerHTML = ''; return; }
