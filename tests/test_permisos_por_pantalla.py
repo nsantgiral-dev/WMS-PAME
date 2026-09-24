@@ -60,6 +60,10 @@ PANTALLAS = [
     # La bandeja (Hoy · Pendientes · Señales · Vehículos), la pantalla de
     # entrada del tab Flota desde el 2026-09-24. Mismos roles que el tab.
     ('flota_bandeja.js',   None,    ['admin', 'control_flota']),
+    # 🕒 Jornada del conductor: sub-vista de Flota (la cablea el integrador).
+    # Los endpoints piden `Roles.VISTA_FLOTA`; el conductor NO — es el registro
+    # de trabajo de sus compañeros.
+    ('flota_jornada.js',   None,    ['admin', 'control_flota']),
     # Sub-pestaña de 📈 Analítica: la pestaña se muestra a quien pasa
     # `_es_gestion` (contrato de la Fase 1), y los endpoints piden lo mismo.
     ('analitica_fugas.js', None,    ['admin', 'supervisor', 'jefe_almacen', 'gerente']),
