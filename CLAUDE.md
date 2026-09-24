@@ -3901,3 +3901,12 @@ ver el cambio): ahora copia profunda.
 - La advertencia de flota se pide en el servicio: `scripts/qa_*` y los tests
   que despachan sin mundo de flota pasan un motivo explícito.
 - `flota/CLAUDE.md` no se tocó (este frente no edita `flota/`).
+
+`tests/test_cond_pago.py::test_el_payload_de_confirmacion_manda_el_modo` medía
+una ventana fija de 6.000 caracteres de `condGuardarParada`: al crecer la
+función, `modo_pantalla` quedó fuera y el test se puso rojo con el payload
+intacto. Ahora mide la función entera (mutación verificada: quitar el campo lo
+pone rojo).
+
+Suite completa (2026-09-24, este worktree, sqlite): **7529 passed, 0 failed**
+(5 skipped, 19 xfailed) — 7528 + el test de arriba ya corregido.

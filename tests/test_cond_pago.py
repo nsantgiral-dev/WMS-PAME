@@ -273,7 +273,12 @@ class TestLaCadenaDelModoNoSeCortaEnElNavegador:
         fuente = self._RUTAS_JS.read_text(encoding='utf-8')
         i = fuente.find('async function condGuardarParada()')
         assert i != -1, 'no está condGuardarParada — ¿se renombró?'
-        bloque = fuente[i:i + 6000]
+        # La función entera, hasta la siguiente de nivel superior — no una
+        # ventana de N caracteres, que se rompía cada vez que la función crecía
+        # (2026-09-24: comprobante y evidencia la alargaron).
+        j = fuente.find('\n}\n', i)
+        assert j != -1
+        bloque = fuente[i:j]
         assert 'modo_pantalla:' in bloque, (
             'el payload de confirmación dejó de mandar `modo_pantalla`. La '
             'columna se llenaría con NULL siempre y el conteo de paradas en '
