@@ -2493,8 +2493,7 @@ function flotaCondAvisoCola(cola, rechazos) {
   if (cola && cola.length) {
     const que = cola.map(o => FLOTA_COLA_QUE[o.que] || o.que).join(', ');
     html += `<div class="flota-hoy-pendiente">
-      <span>⏳ ${esc(cola.length)} registro${cola.length !== 1 ? 's' : ''} pendiente${cola.length !== 1 ? 's' : ''}
-        de sincronizar: ${esc(que)}</span>
+      <span>⏳ ${esc(cola.length)} ${cola.length !== 1 ? 'registros pendientes' : 'registro pendiente'} de sincronizar: ${esc(que)}</span>
       <button class="flota-hoy-link" onclick="flotaColaSincronizarAhora()">Sincronizar</button>
     </div>`;
   }
