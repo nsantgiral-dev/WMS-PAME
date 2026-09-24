@@ -1018,6 +1018,7 @@ class RutaService:
         from app.services.liquidacion_service import CATALOGO_RETENCIONES
         from app.services.liquidacion_service import tope_diferencia_recaudo as _tope_cobro
         from app.services import senales_ruta as _sr_p
+        from app.services import devolucion_ruta as _dr_p
         retenciones_disponibles = [
             {'tipo': k, 'nombre': v['nombre'], 'puc': v['puc'], 'tasa': v['tasa']}
             for k, v in CATALOGO_RETENCIONES.items()
@@ -1048,8 +1049,10 @@ class RutaService:
             'tolerancia_cobro':        _tope_cobro(),
             # La versión que este servidor sabe exigir: evidencia (2) y
             # contado contraentrega sin crédito en el select (3).
+            # Y una PARCIAL que dice qué volvió (4, m045devol).
             'version_formulario':      max(_sr_p.VERSION_FORMULARIO_CON_EVIDENCIA,
-                                           _cp_tabla.VERSION_FORMULARIO_CONTADO),
+                                           _cp_tabla.VERSION_FORMULARIO_CONTADO,
+                                           _dr_p.VERSION_FORMULARIO_DEVOLUCION),
         }
 
     # La unidad que el sync roto inventó en TODO el catálogo. No es una lista

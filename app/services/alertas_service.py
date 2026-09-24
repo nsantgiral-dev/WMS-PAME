@@ -782,6 +782,14 @@ def enviar_resumen_diario(app=None):
                     anomalias.append(f'🚨 {_subq} tarea(s) con bultos en >1 ruta activa')
             except Exception:
                 logger.error('[RESUMEN] Sweep INV_BULTO_UNA_RUTA falló', exc_info=True)
+            try:
+                # Devoluciones (m045devol): sin contar 24/48 h, NC sin aprobar
+                # 3 días o anulada, RC esperando su NC 48 h. La misma función
+                # que pinta el tablero de recepción — un universo, no dos.
+                from app.services import devolucion_ruta as _dr_res
+                anomalias.extend(_dr_res.lineas_de_aviso())
+            except Exception:
+                logger.error('[RESUMEN] Sweep de devoluciones falló', exc_info=True)
             if anomalias:
                 logger.warning(f'[RESUMEN] Anomalías detectadas: {anomalias}')
 

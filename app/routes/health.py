@@ -380,6 +380,15 @@ def health_siesa():
         resultado['corte_auditoria'] = _corte_h.estado()
     except Exception as _e_corte:
         resultado['corte_auditoria'] = {'error': str(_e_corte)[:200]}
+    # VERIFICACIÓN DE LA NC DE DEVOLUCIONES (m045devol). Cuántas NC esperan
+    # aprobación, cuántas se marcaron por Siesa y cuántas a mano, y si el cron
+    # (que nace apagado) corre en este proceso.
+    try:
+        from app.services import devolucion_nc_verificador as _dev_nc
+        resultado['devoluciones_nc'] = _dev_nc.estado()
+        resultado['devoluciones_nc']['cron_en_este_proceso'] = '[DEVOLUCIONES_NC]' in _activos
+    except Exception as _e_dev_nc:
+        resultado['devoluciones_nc'] = {'error': str(_e_dev_nc)[:200]}
 
     # CONTADO CONTRAENTREGA vs CRÉDITO REAL (2026-09-24). Umbral, tabla de
     # días vigente y su fuente (copia del PDF, env o la consulta dinámica), y

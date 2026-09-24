@@ -1354,10 +1354,19 @@ function recTab(tab) {
 // ─────────────────────────────────────────────────────────────
 
 /**
- * Carga bultos rechazados (panel informativo, sin cambios) y muestra el
- * buscador de pedido para iniciar una devolución de cliente.
+ * Pantalla de devoluciones de recepción:
+ *  · 🚚 «Llegó el camión» — por ruta: los bultos que el conductor declaró de
+ *    vuelta (escanear → RETORNADO; «Cerrar llegada» → lo que no apareció queda
+ *    FALTANTE) y las devoluciones sin contar de esa ruta (m045devol: nacen
+ *    EN_CAMION al confirmar la parada, no al liquidar).
+ *  · Avisos (sin contar 24/48 h, NC sin aprobar 3 días, RC esperando su NC).
+ *  · El buscador de pedido para una devolución de mostrador.
+ * Antes el panel de bultos era solo informativo, y el recepcionista ni lo
+ * podía cargar (su endpoint era de admin).
  * @param {boolean} [silencioso=false] - true omite el spinner de carga inicial
  */
+let _REC_LLEGADAS = [];
+
 async function cargarDevoluciones(silencioso = false) {
   if (DEVOLUCION_ACTUAL) return;
   const el = document.getElementById('contenido-devoluciones');
@@ -1365,36 +1374,23 @@ async function cargarDevoluciones(silencioso = false) {
   if (!el) return;
 
   try {
-    const rechResp = await get('/api/rutas/bultos-rechazados').catch(() => ({ bultos: [] }));
-    const rechazados = rechResp.bultos || [];
+    const r = await get('/api/devoluciones/llegadas').catch(() => ({ rutas: [] }));
+    _REC_LLEGADAS = r.rutas || [];
+    const pendientes = _REC_LLEGADAS.reduce(
+      (n, ru) => n + (ru.cuadre ? ru.cuadre.en_camion_sin_recibir : 0) + (ru.devoluciones || []).length, 0);
 
     if (badge) {
-      badge.style.display = rechazados.length ? 'inline' : 'none';
-      badge.textContent = rechazados.length;
+      badge.style.display = pendientes ? 'inline' : 'none';
+      badge.textContent = pendientes;
     }
 
-    let html = '';
-
-    if (rechazados.length) {
-      html += `<div style="font-size:var(--fs-xs);font-weight:600;color:var(--err-tx);padding:4px 0 8px;border-bottom:1px solid var(--err-brd);margin-bottom:10px;">
-        🔴 ${esc(rechazados.length)} BULTO${rechazados.length !== 1 ? 'S' : ''} RECHAZADO${rechazados.length !== 1 ? 'S' : ''} — RE-INGRESAR A BODEGA
-      </div>`;
-      html += rechazados.map(b => `
-        <div class="rec-card" style="border-color:#7f1d1d;background:var(--bg-s);">
-          <div class="rec-titulo" style="font-size:var(--fs-md);color:var(--err-tx);">${esc(b.codigo_barras)}</div>
-          <div class="rec-sub">${esc(b.tipo)} ${esc(b.numero)}/${esc(b.total)} · ${esc(b.numero_pedido)} · ${esc(b.cliente || '—')}</div>
-          <div style="margin-top:6px;font-size:var(--fs-xs);color:var(--err-tx);">Motivo: ${esc(b.motivo_rechazo || 'Sin especificar')}</div>
-          <div style="margin-top:10px;padding:10px;background:var(--err-bg);border-radius:8px;font-size:var(--fs-xs);color:var(--err-tx);">
-            📦 Ubicar físicamente en bodega
-          </div>
-        </div>`).join('');
-    }
-
+    let html = '<div id="panel-avisos-devoluciones"></div>';
+    html += recLlegadasHtml(_REC_LLEGADAS);
     html += `<div id="panel-pendientes-ruta"></div>`;
 
     html += `
       <div style="font-size:var(--fs-xs);font-weight:600;color:var(--tx2);padding:4px 0 8px;border-bottom:1px solid var(--brd);margin-bottom:10px;margin-top:16px;">
-        DEVOLUCIÓN DE CLIENTE
+        DEVOLUCIÓN DE MOSTRADOR
       </div>
       <div class="rec-card">
         <div style="font-size:var(--fs-sm);color:var(--tx3);margin-bottom:10px;">Busca el pedido del cliente que devuelve mercancía</div>
@@ -1414,6 +1410,7 @@ async function cargarDevoluciones(silencioso = false) {
     el.innerHTML = html;
 
     cargarPendientesDeRuta();
+    recCargarAvisosDevoluciones();
 
     // Solo admin/jefe_almacen — coincide con el gate del backend (Roles.SUPERVISION)
     if (OPERARIO && ['admin', 'jefe_almacen'].includes(OPERARIO.rol)) {
@@ -1426,11 +1423,151 @@ async function cargarDevoluciones(silencioso = false) {
 }
 
 /**
- * Devoluciones que Liquidación de ruta armó solas (entrega Parcial/Rechazada
- * de un conductor) y siguen esperando que recepción las confirme. Ya vienen
- * con las líneas exactas — parcial trae solo lo que el conductor declaró
- * devuelto, total trae el pedido completo — la recepcionista solo verifica
- * y ajusta si hace falta, no arma nada desde cero.
+ * HTML de la cola «Llegó el camión». Solo POSICIONES en los `onclick`: los
+ * datos se buscan en `_REC_LLEGADAS` (un dato dentro de JS dentro de un
+ * atributo no se protege con `esc`).
+ * @param {Array} rutas - `GET /api/devoluciones/llegadas` → rutas
+ * @returns {string}
+ */
+function recLlegadasHtml(rutas) {
+  if (!rutas || !rutas.length) return '';
+  let html = `<div style="font-size:var(--fs-xs);font-weight:600;color:var(--acento-tx);padding:4px 0 8px;border-bottom:1px solid var(--brd);margin-bottom:10px;">
+      🚚 LLEGÓ EL CAMIÓN — ${esc(rutas.length)} RUTA${rutas.length !== 1 ? 'S' : ''} CON MERCANCÍA DE VUELTA
+    </div>`;
+  rutas.forEach((ru, i) => {
+    const c = ru.cuadre || {};
+    const horas = ru.horas_sin_contar;
+    const tono = horas == null ? 'var(--tx3)' : (horas >= 48 ? 'var(--err-tx)' : (horas >= 24 ? 'var(--warn-tx)' : 'var(--tx3)'));
+    const devs = ru.devoluciones || [];
+    html += `
+      <div class="rec-card" style="margin-bottom:10px;">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">
+          <div>
+            <div class="rec-titulo" style="font-size:var(--fs-sm);color:var(--tx);">Ruta #${esc(ru.ruta_id)} · ${esc(ru.conductor || 'Sin conductor')}</div>
+            <div class="rec-sub">${esc(ru.placa || 'Sin placa')}${ru.llegada_cerrada_at ? ' · llegada cerrada' : ''}</div>
+          </div>
+          ${horas != null ? `<span style="font-size:var(--fs-xs);color:${tono};font-weight:700;">${esc(Math.round(horas))} h sin contar</span>` : ''}
+        </div>
+        <div style="margin-top:8px;font-size:var(--fs-xs);color:var(--tx2);">
+          Salieron ${esc(c.salieron)} · entregados ${esc(c.entregados)} · volvieron ${esc(c.retornados)} ·
+          faltantes ${esc(c.faltantes)} · <b style="color:${c.en_camion_sin_recibir ? 'var(--warn-tx)' : 'var(--ok-tx)'};">por recibir ${esc(c.en_camion_sin_recibir)}</b>
+          ${c.exacto ? ' · <span style="color:var(--ok-tx);">cuadre exacto</span>' : ''}
+        </div>
+        ${c.en_camion_sin_recibir ? `
+        <div style="display:flex;gap:8px;margin-top:10px;">
+          <input id="rec-lleg-bulto-${i}" type="text" placeholder="Escanea el bulto que volvió"
+            style="flex:1;padding:10px;background:var(--bg-s);border:1px solid var(--brd);border-radius:8px;color:var(--tx);font-size:var(--fs-sm);"
+            onkeydown="if(event.key==='Enter') recLlegadaEscanear(${i})" autocomplete="off" autocorrect="off" spellcheck="false">
+          <button onclick="recLlegadaEscanear(${i})"
+            style="padding:10px 14px;background:var(--pm-fill);color:#fff;border:none;border-radius:8px;font-size:var(--fs-sm);cursor:pointer;">↵</button>
+        </div>
+        <button onclick="recLlegadaCerrar(${i})"
+          style="margin-top:8px;width:100%;padding:10px;background:var(--warn-bg);color:var(--warn-tx);border:1px solid var(--warn-brd);border-radius:8px;font-size:var(--fs-sm);font-weight:600;cursor:pointer;">
+          Cerrar llegada — lo no escaneado queda FALTANTE
+        </button>` : ''}
+        ${devs.map((d, k) => `
+          <div style="margin-top:10px;padding:10px;background:var(--bg-s);border:1px solid ${d.problema_factura ? 'var(--err-brd)' : 'var(--brd)'};border-radius:8px;cursor:pointer;" onclick="recLlegadaContar(${i}, ${k})">
+            <div style="display:flex;justify-content:space-between;gap:8px;">
+              <span style="font-size:var(--fs-sm);font-weight:700;color:var(--tx);">${esc(d.pedido || '—')} · ${esc(d.cliente || 'Cliente sin nombre')}</span>
+              <span style="font-size:var(--fs-xs);color:${d.estado === 'EN_CAMION' ? 'var(--info-tx)' : 'var(--acento-tx)'};">${d.estado === 'EN_CAMION' ? 'En el camión' : 'En bodega'}</span>
+            </div>
+            <div style="font-size:var(--fs-xs);color:var(--tx2);margin-top:4px;">
+              ${d.es_total ? 'Devolución total' : 'Devolución parcial'}${d.motivo ? ' · ' + esc(d.motivo) : ''}${d.sin_declaracion ? ' · el conductor no dijo qué volvió: contá contra la factura' : ''} · toca para contar
+            </div>
+            ${d.problema_factura ? `<div style="font-size:var(--fs-xs);color:var(--err-tx);margin-top:4px;">${esc(d.problema_factura)}</div>` : ''}
+          </div>`).join('')}
+      </div>`;
+  });
+  return html;
+}
+
+/** Escanea un bulto que volvió (posición en `_REC_LLEGADAS`). */
+async function recLlegadaEscanear(i) {
+  const ru = _REC_LLEGADAS[i];
+  const inp = document.getElementById('rec-lleg-bulto-' + i);
+  const codigo = (inp ? inp.value : '').trim();
+  if (!ru || !codigo) return;
+  try {
+    const r = await post(`/api/devoluciones/llegadas/${ru.ruta_id}/bulto`, { codigo_barras: codigo });
+    vibrar(); flash();
+    alerta(r.ya_estaba ? 'Ese bulto ya estaba recibido' :
+      (r.no_declarado ? 'Recibido — el conductor no lo había marcado como devolución' : 'Bulto recibido'),
+      r.no_declarado ? 'advertencia' : 'exito');
+    cargarDevoluciones();
+  } catch (e) {
+    alerta('No se pudo recibir: ' + (e.status ? e.message : 'Error de conexión'), 'error');
+  }
+  if (inp) inp.value = '';
+}
+
+/** Cierra la llegada del camión: lo que no se escaneó queda FALTANTE (medido). */
+async function recLlegadaCerrar(i) {
+  const ru = _REC_LLEGADAS[i];
+  if (!ru) return;
+  const n = ru.cuadre ? ru.cuadre.en_camion_sin_recibir : 0;
+  if (!confirm(`${n} bulto(s) sin escanear quedan como FALTANTE (no volvieron). ¿Cerrar la llegada de la ruta #${ru.ruta_id}?`)) return;
+  try {
+    const r = await post(`/api/devoluciones/llegadas/${ru.ruta_id}/cerrar`, {});
+    vibrar(); flash();
+    alerta(`Llegada cerrada · ${r.bultos_faltantes} faltante(s) · ${r.devoluciones_en_bodega} devolución(es) por contar`, r.bultos_faltantes ? 'advertencia' : 'exito');
+    cargarDevoluciones();
+  } catch (e) {
+    alerta('No se pudo cerrar: ' + (e.status ? e.message : 'Error de conexión'), 'error');
+  }
+}
+
+/** Abre el conteo de una devolución de la cola (posiciones, no datos). */
+function recLlegadaContar(i, k) {
+  const ru = _REC_LLEGADAS[i];
+  const d = ru && (ru.devoluciones || [])[k];
+  if (d) abrirPendienteDeRuta(d.id);
+}
+
+/**
+ * Avisos de devoluciones (misma función que el resumen diario por correo) y,
+ * para supervisión, «Verificar en Siesa» (lee `f350_ind_estado` de las NC).
+ */
+async function recCargarAvisosDevoluciones() {
+  const cont = document.getElementById('panel-avisos-devoluciones');
+  if (!cont) return;
+  try {
+    const t = await get('/api/devoluciones/tablero');
+    cont.innerHTML = recAvisosHtml(t);
+  } catch (e) {
+    cont.innerHTML = '';
+  }
+}
+
+/**
+ * @param {Object} t - `GET /api/devoluciones/tablero`
+ * @returns {string}
+ */
+function recAvisosHtml(t) {
+  const a = (t && t.avisos) || {};
+  const filas = [];
+  const n = (x) => (x || []).length;
+  if (n(a.sin_contar_48h)) filas.push(['var(--err-tx)', `${n(a.sin_contar_48h)} devolución(es) sin contar hace más de 48 h`]);
+  if (n(a.sin_contar_24h)) filas.push(['var(--warn-tx)', `${n(a.sin_contar_24h)} devolución(es) sin contar hace más de 24 h`]);
+  if (n(a.nc_anuladas)) filas.push(['var(--err-tx)', `${n(a.nc_anuladas)} nota(s) crédito ANULADA(S) en Siesa`]);
+  if (n(a.nc_sin_aprobar_3d)) filas.push(['var(--warn-tx)', `${n(a.nc_sin_aprobar_3d)} nota(s) crédito sin aprobar hace más de 3 días`]);
+  if (n(a.rc_esperando_nc_48h)) filas.push(['var(--warn-tx)', `${n(a.rc_esperando_nc_48h)} recibo(s) de caja esperando su nota crédito hace más de 48 h`]);
+  const m = (t && t.medicion) || {};
+  const h = m.horas_rechazo_a_conteo || {};
+  const f = m.faltante_de_retorno || {};
+  const medida = h.n ? `Del rechazo al conteo: mediana ${esc(h.mediana)} h · p90 ${esc(h.p90)} h (n=${esc(h.n)})` +
+    (f.unidades ? ` · faltante de retorno ${esc(f.unidades)} und ($${esc(Math.round(f.valor || 0).toLocaleString('es-CO'))}${f.lineas_sin_valor ? ', ' + esc(f.lineas_sin_valor) + ' sin valor' : ''})` : '') : '';
+  if (!filas.length && !medida) return '';
+  return `<div class="rec-card" style="margin-bottom:10px;">
+      ${filas.map(([tono, txt]) => `<div style="font-size:var(--fs-xs);color:${tono};font-weight:600;margin-bottom:4px;">${esc(txt)}</div>`).join('')}
+      ${medida ? `<div style="font-size:var(--fs-xs);color:var(--tx3);">${medida}</div>` : ''}
+    </div>`;
+}
+
+/**
+ * Devoluciones de ruta SIN CONTAR, en una sola lista (la de «Llegó el camión»
+ * las agrupa por ruta). Nacen al confirmar la parada Parcial/Rechazada con lo
+ * que declaró el conductor — la recepcionista cuenta y ajusta, no arma nada
+ * desde cero. Las que siguen en el camión dicen «En el camión».
  */
 async function cargarPendientesDeRuta() {
   const cont = document.getElementById('panel-pendientes-ruta');
@@ -1442,7 +1579,7 @@ async function cargarPendientesDeRuta() {
 
     cont.innerHTML = `
       <div style="font-size:var(--fs-xs);font-weight:600;color:var(--acento-tx);padding:4px 0 8px;border-bottom:1px solid var(--brd);margin-bottom:10px;">
-        🔵 ${esc(pendientes.length)} DEVOLUCIÓN${pendientes.length !== 1 ? 'ES' : ''} DE RUTA PENDIENTE${pendientes.length !== 1 ? 'S' : ''} DE CONFIRMAR
+        🔵 ${esc(pendientes.length)} DEVOLUCIÓN${pendientes.length !== 1 ? 'ES' : ''} DE RUTA SIN CONTAR
       </div>` +
       pendientes.map(d => `
         <div class="rec-card" style="margin-bottom:8px;cursor:pointer;" onclick="abrirPendienteDeRuta(${esc(d.id)})">
@@ -1452,7 +1589,7 @@ async function cargarPendientesDeRuta() {
               <div class="rec-sub">${esc(d.cliente || 'Cliente sin nombre')}</div>
             </div>
             <span class="badge ${d.es_total ? 'badge-red' : 'badge-green'}">
-              ${d.es_total ? 'DEVOLUCIÓN TOTAL' : 'DEVOLUCIÓN PARCIAL'}
+              ${d.es_total ? 'DEVOLUCIÓN TOTAL' : 'DEVOLUCIÓN PARCIAL'}${d.estado === 'EN_CAMION' ? ' · EN EL CAMIÓN' : ''}
             </span>
           </div>
           <div style="margin-top:8px;font-size:var(--fs-xs);color:var(--tx2);">
@@ -1464,9 +1601,13 @@ async function cargarPendientesDeRuta() {
   }
 }
 
-/** Abre la pantalla de confirmación con una devolución de ruta ya armada. */
+/**
+ * Abre el conteo de una devolución de ruta. Antes la amarra a su factura
+ * (`preparar-conteo`, con red): las líneas quedan una por línea de factura —
+ * en un producto de doble unidad (PQ + UND) se cuenta cada una.
+ */
 function abrirPendienteDeRuta(devolucionId) {
-  get('/api/devoluciones/' + devolucionId).then(devolucion => {
+  post(`/api/devoluciones/${devolucionId}/preparar-conteo`, {}).then(devolucion => {
     DEVOLUCION_ACTUAL = devolucion;
     renderLineasDevolucion(devolucion);
   }).catch(() => alerta('No se pudo abrir la devolución', 'error'));
@@ -1489,17 +1630,21 @@ async function cargarPendientesAprobacionNC() {
     cont.innerHTML = `
       <div style="font-size:var(--fs-xs);font-weight:600;color:var(--warn-tx);padding:4px 0 8px;border-bottom:1px solid var(--warn-brd);margin:16px 0 10px;">
         🟡 ${esc(pendientes.length)} NC PENDIENTE${pendientes.length !== 1 ? 'S' : ''} DE APROBAR EN SIESA
-      </div>` +
+      </div>
+      <button onclick="recVerificarNCSiesa()"
+        style="width:100%;margin-bottom:10px;padding:10px;background:var(--info-bg);color:var(--info-tx);border:1px solid var(--info-brd);border-radius:8px;font-size:var(--fs-sm);font-weight:600;cursor:pointer;">
+        Verificar en Siesa
+      </button>` +
       pendientes.map(d => `
         <div class="rec-card" style="border-color:#78350f;background:var(--warn-bg);margin-bottom:8px;">
           <div class="rec-titulo" style="font-size:var(--fs-sm);color:var(--warn-tx);">${esc(d.codigo)} — ${esc(d.numero_pedido_siesa || '—')}</div>
           <div class="rec-sub" style="color:var(--warn-tx);">${esc(d.cliente || 'Cliente sin nombre')} · FE ${esc(d.tipo_docto_fe)}-${esc(d.consec_fe)}</div>
           <div style="margin-top:4px;font-size:var(--fs-xs);color:var(--warn-tx);">
-            NC creada en Siesa: ${d.siesa_nc_triggered_at ? new Date(d.siesa_nc_triggered_at).toLocaleString('es-CO') : '—'}
+            NC creada en Siesa: ${d.siesa_nc_triggered_at ? esc(new Date(d.siesa_nc_triggered_at).toLocaleString('es-CO')) : '—'}${d.siesa_nc_consec ? ' · NCE-' + esc(d.siesa_nc_consec) : ''}${d.nc_estado_siesa === 2 ? ' · ANULADA en Siesa' : ''}
           </div>
           <button onclick="marcarNCAprobada(${esc(d.id)})"
             style="margin-top:10px;width:100%;padding:10px;background:#78350f;color:var(--warn-tx);border:none;border-radius:8px;font-size:var(--fs-sm);font-weight:600;cursor:pointer;">
-            Ya la aprobé y crucé en Siesa
+            Marcar aprobada a mano (con motivo)
           </button>
         </div>`).join('');
   } catch (e) {
@@ -1507,15 +1652,36 @@ async function cargarPendientesAprobacionNC() {
   }
 }
 
-/** Contabilidad confirma que ya aprobó+cruzó la NC en Siesa manualmente. */
+/**
+ * RESPALDO manual: alguien declara que aprobó la NC en Siesa. La verificación
+ * normal la hace el cron (lee `f350_ind_estado`); esto pide motivo y queda en
+ * la bitácora (FORZAR), y libera lo devuelto a picking.
+ */
 async function marcarNCAprobada(devolucionId) {
-  if (!confirm('¿Confirmas que ya aprobaste y cruzaste esta Nota Crédito en Siesa?')) return;
+  const motivo = prompt('¿Por qué la marcás a mano? (la verificación automática no la vio aprobada)');
+  if (motivo == null) return;
+  if (!motivo.trim()) { alerta('El motivo es obligatorio', 'advertencia'); return; }
   try {
-    await post(`/api/devoluciones/${devolucionId}/marcar-nc-aprobada`, {});
+    await post(`/api/devoluciones/${devolucionId}/marcar-nc-aprobada`, { motivo });
     vibrar(); flash();
     cargarPendientesAprobacionNC();
   } catch (e) {
     alerta('Error: ' + (e.status ? e.message : 'Error de conexión'), 'error');
+  }
+}
+
+/** Lee en Siesa el estado de las NC pendientes y marca las aprobadas. */
+async function recVerificarNCSiesa() {
+  try {
+    const r = await post('/api/devoluciones/verificar-nc', {});
+    const txt = r.omitido ? r.omitido :
+      `${r.aprobadas || 0} aprobada(s) · ${r.en_elaboracion || 0} en elaboración · ` +
+      `${r.sin_consecutivo || 0} sin consecutivo · ${r.fuera_de_la_consulta || 0} fuera de la consulta` +
+      (r.anuladas ? ` · ${r.anuladas} ANULADA(S)` : '');
+    alerta(txt, r.anuladas ? 'advertencia' : 'exito');
+    cargarPendientesAprobacionNC();
+  } catch (e) {
+    alerta('No se pudo verificar: ' + (e.status ? e.message : 'Error de conexión'), 'error');
   }
 }
 
@@ -1551,25 +1717,32 @@ function renderLineasDevolucion(datos) {
   const el = document.getElementById('contenido-devoluciones');
   if (!el) return;
 
-  // Si datos.id existe, es una devolución que Liquidación de ruta ya armó
-  // (ver abrirPendienteDeRuta) — las cantidades vienen precargadas con lo
-  // que el conductor declaró; la recepcionista verifica/ajusta, no cuenta
-  // desde cero. Si no, es la búsqueda manual de siempre (todo en 0).
+  // Si datos.id existe, es una devolución de ruta ya armada (nació al
+  // confirmar la parada): las cantidades vienen con lo que declaró el
+  // conductor; la recepcionista cuenta y ajusta. Si no, es la búsqueda de
+  // mostrador (todo en 0, con el tope = facturado − lo ya devuelto).
   const esPendienteDeRuta = !!datos.id;
+  const problema = datos.problema_factura || null;
+  const avisos = ((datos.declaracion_conductor || {}).avisos_vinculacion) || [];
 
-  const filas = (datos.lineas || []).map((l, i) => `
+  const filas = (datos.lineas || []).map((l, i) => {
+    const tope = Math.max(0, Number(l.cantidad_facturada || 0) - Number(l.ya_devuelto || 0));
+    const declarado = l.cantidad_declarada;
+    const averiadas = l.cantidad_averiada != null ? l.cantidad_averiada : (l.es_averiado ? l.cantidad_devuelta : 0);
+    return `
     <div class="rec-card" style="margin-bottom:10px;">
       <div style="font-size:var(--fs-md);font-weight:700;">${esc(l.producto_nombre)}</div>
-      <div style="font-size:var(--fs-xs);color:var(--tx3);margin-bottom:8px;">${esc(l.producto_codigo)} · Facturado: ${esc(l.cantidad_facturada)}</div>
-      <div style="display:flex;align-items:center;gap:10px;">
-        <span style="font-size:var(--fs-xs);color:var(--tx2);">Devuelto:</span>
-        <input id="cant-dev-${i}" type="number" min="0" max="${esc(l.cantidad_facturada)}" step="1" value="${esc(l.cantidad_devuelta || 0)}"
+      <div style="font-size:var(--fs-xs);color:var(--tx3);margin-bottom:8px;">${esc(l.producto_codigo)} · Facturado: ${esc(l.cantidad_facturada)}${l.f470_id_unidad_medida ? ' ' + esc(l.f470_id_unidad_medida) : ''}${l.ya_devuelto ? ' · ya devuelto ' + esc(l.ya_devuelto) : ''}${esPendienteDeRuta ? (declarado != null ? ' · el conductor dijo ' + esc(declarado) : ' · el conductor no lo declaró por línea') : ''}</div>
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+        <span style="font-size:var(--fs-xs);color:var(--tx2);">Volvió:</span>
+        <input id="cant-dev-${i}" type="number" min="0" max="${esc(tope)}" step="1" value="${esc(l.cantidad_devuelta || 0)}"
           style="width:90px;padding:10px;background:var(--bg-s);border:1px solid var(--brd);border-radius:8px;color:var(--tx);font-size:var(--fs-md);text-align:center;" />
-        <label style="display:flex;align-items:center;gap:6px;font-size:var(--fs-sm);color:var(--err-tx);cursor:pointer;margin-left:auto;">
-          <input id="averiado-dev-${i}" type="checkbox" style="width:18px;height:18px;" ${l.es_averiado ? 'checked' : ''} /> Averiado
-        </label>
+        <span style="font-size:var(--fs-xs);color:var(--err-tx);">De esas, averiadas:</span>
+        <input id="averiadas-dev-${i}" type="number" min="0" step="1" value="${esc(averiadas || 0)}"
+          style="width:80px;padding:10px;background:var(--bg-s);border:1px solid var(--err-brd);border-radius:8px;color:var(--tx);font-size:var(--fs-md);text-align:center;" />
       </div>
-    </div>`).join('');
+    </div>`;
+  }).join('');
 
   el.innerHTML = `
     <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;">
@@ -1580,9 +1753,14 @@ function renderLineasDevolucion(datos) {
       <span style="font-size:var(--fs-sm);font-weight:700;">Pedido ${esc(datos.numero_pedido_siesa)} · ${esc(datos.cliente || '—')}</span>
     </div>
 
+    ${problema ? `
+    <div style="margin-bottom:10px;padding:10px 12px;background:var(--err-bg);border:1px solid var(--err-brd);border-radius:8px;font-size:var(--fs-sm);color:var(--err-tx);">
+      ⛔ ${esc(problema)}
+    </div>` : ''}
+    ${avisos.map(a => `<div style="margin-bottom:6px;font-size:var(--fs-xs);color:var(--warn-tx);">⚠ ${esc(a)}</div>`).join('')}
     ${esPendienteDeRuta ? `
     <div style="margin-bottom:10px;padding:10px 12px;background:var(--bg-s2);border:1px solid var(--brd);border-radius:8px;font-size:var(--fs-xs);color:var(--acento-tx);">
-      🔵 Declarado por el conductor en la entrega — verifica físicamente y ajusta si algo no coincide antes de confirmar.
+      🔵 Declarado por el conductor — contá lo que volvió de verdad. Si no volvió nada, dejá todo en 0: queda como FALTANTE (medido), no se cancela. Lo sano queda fuera de la venta hasta que la nota crédito se apruebe en Siesa.
     </div>
     ` : `
     <div style="font-size:var(--fs-xs);color:var(--tx3);margin-bottom:10px;">Cuenta cuánto trajo el conductor de cada línea — deja en 0 lo que no se devolvió</div>
@@ -1627,23 +1805,22 @@ async function confirmarDevolucionCliente() {
   if (!datos) return;
   const estado = document.getElementById('estado-confirmar-dev');
 
-  const lineas = (datos.lineas || []).map((l, i) => {
-    const inpCant = document.getElementById(`cant-dev-${i}`);
-    const inpAv = document.getElementById(`averiado-dev-${i}`);
-    return {
-      producto_id: l.producto_id,
-      codigo_siesa: l.codigo_siesa,
-      cantidad_facturada: l.cantidad_facturada,
-      cantidad_devuelta: inpCant ? (parseFloat(inpCant.value) || 0) : 0,
-      es_averiado: inpAv ? inpAv.checked : false,
-      f470_id_unidad_medida: l.f470_id_unidad_medida,
-      f150_id_bodega: l.f150_id_bodega,
-      f470_rowid: l.f470_rowid,
-    };
-  });
+  const lineas = recLineasContadas(datos);
+  if (lineas.some(l => l.cantidad_averiada > l.cantidad_devuelta)) {
+    alerta('Las averiadas no pueden ser más que las que volvieron', 'advertencia');
+    return;
+  }
 
   const esPendienteDeRuta = !!datos.id;
   let devolucionId = datos.id;
+
+  if (esPendienteDeRuta && datos.problema_factura) {
+    alerta(datos.problema_factura, 'error');
+    return;
+  }
+  if (esPendienteDeRuta && !lineas.some(l => l.cantidad_devuelta > 0)) {
+    if (!confirm('No contaste nada: se registra FALTANTE TOTAL (el conductor dijo que volvía y no llegó). No entra inventario ni sale nota crédito. ¿Confirmás?')) return;
+  }
 
   if (esPendienteDeRuta) {
     // Ya existe (Liquidación de ruta la armó) — no se crea de nuevo, solo se
@@ -1665,7 +1842,9 @@ async function confirmarDevolucionCliente() {
       return;
     }
     vibrar(); flash();
-    alerta('✓ Devolución confirmada — stock ingresado, Nota Crédito en proceso', 'exito');
+    alerta(lineas.some(l => l.cantidad_devuelta > 0)
+      ? '✓ Devolución contada — queda en la zona de devoluciones hasta que la NC se apruebe'
+      : 'Registrado como FALTANTE TOTAL', 'exito');
     DEVOLUCION_ACTUAL = null;
     setTimeout(cargarDevoluciones, 800);
     return;
@@ -1717,6 +1896,33 @@ async function confirmarDevolucionCliente() {
   alerta('✓ Devolución confirmada — stock ingresado, Nota Crédito en proceso', 'exito');
   DEVOLUCION_ACTUAL = null;
   setTimeout(cargarDevoluciones, 800);
+}
+
+/**
+ * Lo contado en pantalla, línea por línea. `linea_id` va cuando existe: en un
+ * producto de doble unidad dos líneas tienen el mismo producto.
+ * @param {Object} datos - la devolución en pantalla (`DEVOLUCION_ACTUAL`)
+ * @returns {Array}
+ */
+function recLineasContadas(datos) {
+  return (datos.lineas || []).map((l, i) => {
+    const inpCant = document.getElementById(`cant-dev-${i}`);
+    const inpAv = document.getElementById(`averiadas-dev-${i}`);
+    const devuelta = inpCant ? (parseFloat(inpCant.value) || 0) : 0;
+    const averiadas = inpAv ? (parseFloat(inpAv.value) || 0) : 0;
+    return {
+      linea_id: l.id || null,
+      producto_id: l.producto_id,
+      codigo_siesa: l.codigo_siesa,
+      cantidad_facturada: l.cantidad_facturada,
+      cantidad_devuelta: devuelta,
+      cantidad_averiada: averiadas,
+      es_averiado: devuelta > 0 && averiadas >= devuelta,
+      f470_id_unidad_medida: l.f470_id_unidad_medida,
+      f150_id_bodega: l.f150_id_bodega,
+      f470_rowid: l.f470_rowid,
+    };
+  });
 }
 
 /**

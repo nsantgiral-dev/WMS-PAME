@@ -1044,8 +1044,14 @@ console.log(JSON.stringify({a, b, pintado: esc(a.texto)}));
         assert cuerpo.count('${esc(avisoCobro.texto)}') == 2
 
     def test_el_formulario_declara_la_version_3(self):
+        """El formulario sabe lo de contado (≥ 3). Desde m045devol declara la
+        4 (una PARCIAL dice qué volvió), que incluye a la 3."""
+        import re as _re
+        from app.services import devolucion_ruta as _dr
         js = (_RAIZ / 'app' / 'static' / 'pwa' / 'rutas.js').read_text(encoding='utf-8')
-        assert f'const COND_VERSION_FORMULARIO = {cp.VERSION_FORMULARIO_CONTADO};' in js
+        m = _re.search(r'const COND_VERSION_FORMULARIO = (\d+);', js)
+        assert m and int(m.group(1)) >= cp.VERSION_FORMULARIO_CONTADO
+        assert int(m.group(1)) == _dr.VERSION_FORMULARIO_DEVOLUCION
 
     def test_el_muelle_dice_el_informe_de_cobro(self, tmp_path):
         js = (_RAIZ / 'app' / 'static' / 'pwa' / 'rutas.js').read_text(encoding='utf-8')

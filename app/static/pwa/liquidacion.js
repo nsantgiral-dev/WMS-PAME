@@ -958,7 +958,15 @@ function liqQuitarRetencion(recaudoId, idx, baseGravable) {
 async function liqLiquidarWMS(rutaId) {
   if (!await _modalConfirmar(`¿Liquidar Ruta #${rutaId} en WMS?\nDespués podrás documentar NC/RC/NI por parada.`, { titulo: 'Liquidar ruta' })) return;
   try {
-    await postConReintento(`/api/rutas/${rutaId}/liquidar`, {});
+    try {
+      await postConReintento(`/api/rutas/${rutaId}/liquidar`, {});
+    } catch (e) {
+      // Mercancía de vuelta sin contar (m045devol): la ruta no se liquida
+      // salvo forzado con motivo, que queda en la bitácora.
+      const motivo = liqMotivoDevolucionesSinContar(e);
+      if (motivo == null) throw e;
+      await postConReintento(`/api/rutas/${rutaId}/liquidar`, { motivo_devoluciones: motivo });
+    }
     alerta('Ruta liquidada en WMS — ahora documenta NC/RC/NI por parada', 'exito');
     // Recargar detalle para mostrar Fase 2
     _liqDetalleRuta = await get(`/api/rutas/${rutaId}/liquidacion-detalle`);
@@ -966,6 +974,20 @@ async function liqLiquidarWMS(rutaId) {
   } catch (e) {
     alerta(e.message || 'Error al liquidar', 'error');
   }
+}
+
+/**
+ * Si el servidor rechazó la liquidación por devoluciones sin contar, pide el
+ * motivo para forzarla. `null` = no era eso, o el usuario no quiso forzar.
+ * @param {Error} e - el error del POST
+ * @returns {string|null}
+ */
+function liqMotivoDevolucionesSinContar(e) {
+  const txt = String((e && e.message) || '');
+  if (!txt.startsWith('devoluciones_sin_contar')) return null;
+  const motivo = prompt(txt.replace(/^devoluciones_sin_contar:\s*/, '') +
+    '\n\nPara liquidar igual, escribí el motivo (queda en la bitácora):');
+  return motivo && motivo.trim() ? motivo.trim() : null;
 }
 
 // ── Fase 2: Acciones per-recaudo ──────────────────────────────────────────

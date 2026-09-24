@@ -1821,7 +1821,10 @@ let _COND_FORMAS_COMPROBANTE = null;
 //: offline no queda trabado para siempre.
 //: 3 = sabe ofrecer el select sin CRÉDITO/EXENTO en una parada de contado
 //: contraentrega (`cond_pago.VERSION_FORMULARIO_CONTADO`, 2026-09-24).
-const COND_VERSION_FORMULARIO = 3;
+//: 4 = una PARCIAL siempre dice qué volvió, referencia por referencia
+//: (`devolucion_ruta.VERSION_FORMULARIO_DEVOLUCION`, m045devol): el servidor la
+//: exige; un ítem de la cola con versión < 4 no se traba.
+const COND_VERSION_FORMULARIO = 4;
 //: Formas que declaran «no entró plata». Del servidor (`cond_pago.FORMAS_QUE_NO_COBRAN`),
 //: dentro del payload que se cachea; el literal es solo el respaldo de una caché vieja.
 let _COND_FORMAS_NO_COBRAN = ['CREDITO', 'EXENTO'];
@@ -3532,11 +3535,21 @@ async function _cargarPlanilla(id) {
 async function rutaLiquidar(id) {
   if (!confirm(`¿Liquidar Ruta #${id}?\nEsto confirma el cuadre financiero en WMS.\nLuego usa el módulo Liquidación para documentar NC/RC/DC en Siesa por parada.`)) return;
   try {
-    const r = await fetch(API + '/api/rutas/' + id + '/liquidar', {
+    const liquidar = (cuerpo) => fetch(API + '/api/rutas/' + id + '/liquidar', {
       method: 'POST',
-      headers: { Authorization: 'Bearer ' + TOKEN },
+      headers: { Authorization: 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
+      body: JSON.stringify(cuerpo || {}),
     });
-    const d = await r.json();
+    let r = await liquidar({});
+    let d = await r.json();
+    // Mercancía de vuelta sin contar (m045devol): se fuerza solo con motivo.
+    if (!r.ok && String(d.error || '').startsWith('devoluciones_sin_contar')) {
+      const motivo = prompt(String(d.error).replace(/^devoluciones_sin_contar:\s*/, '') +
+        '\n\nPara liquidar igual, escribí el motivo (queda en la bitácora):');
+      if (!motivo || !motivo.trim()) return;
+      r = await liquidar({ motivo_devoluciones: motivo.trim() });
+      d = await r.json();
+    }
     if (!r.ok) {
       alerta(d.error || 'Error al liquidar', 'error');
       return;

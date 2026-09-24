@@ -12,7 +12,15 @@ POST /api/devoluciones/<id>/confirmar                → entrada física + NC au
 POST /api/devoluciones/<id>/cancelar                 → descarta una ABIERTA
 GET  /api/devoluciones/<id>                          → detalle (para reanudar una ABIERTA)
 GET  /api/devoluciones/pendientes-aprobacion-nc       → NC creadas en Siesa (Elaboración) sin aprobar
-POST /api/devoluciones/<id>/marcar-nc-aprobada        → contabilidad confirma que ya aprobó+cruzó en Siesa
+POST /api/devoluciones/<id>/marcar-nc-aprobada        → respaldo manual (motivo, bitácora FORZAR)
+
+«Llegó el camión» (m045devol — la devolución de ruta nace EN_CAMION):
+GET  /api/devoluciones/llegadas                        → cola por ruta: bultos por recibir + devoluciones sin contar
+POST /api/devoluciones/llegadas/<ruta_id>/bulto        → escanear un bulto que volvió (RETORNADO)
+POST /api/devoluciones/llegadas/<ruta_id>/cerrar       → lo no escaneado queda FALTANTE; EN_CAMION → ABIERTA
+POST /api/devoluciones/<id>/preparar-conteo            → amarra las líneas a la factura (con red) y devuelve el detalle
+GET  /api/devoluciones/tablero                         → avisos (24/48 h, NC 3 días, RC 48 h) + medición
+POST /api/devoluciones/verificar-nc                    → lee f350_ind_estado de las NC y marca las aprobadas
 """
 import logging
 from flask import Blueprint, request, jsonify
@@ -172,8 +180,115 @@ def marcar_nc_aprobada(devolucion_id):
     u = db.session.get(Usuario, uid)
     if not u or u.rol not in Roles.SUPERVISION:
         return jsonify({'error': 'Sin permiso'}), 403
+    data = request.get_json(silent=True) or {}
     try:
-        devolucion = DevolucionClienteService.marcar_nc_aprobada(devolucion_id, uid)
+        devolucion = DevolucionClienteService.marcar_nc_aprobada(
+            devolucion_id, uid, motivo=data.get('motivo'))
         return jsonify({'mensaje': 'NC marcada como aprobada', 'devolucion': devolucion.to_dict()}), 200
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
+
+
+# ── «Llegó el camión» (m045devol) ────────────────────────────────────────────
+
+@devoluciones_bp.route('/llegadas', methods=['GET'])
+@jwt_required()
+def cola_llegadas():
+    """Rutas con bultos que el conductor declaró de vuelta sin recibir, o con
+    devoluciones sin contar. Se vacía sola."""
+    if not _es_recepcion():
+        return jsonify({'error': 'Sin permiso para ver devoluciones'}), 403
+    from app.services import devolucion_ruta as _dr
+    rutas = _dr.cola_llegadas()
+    return jsonify({'rutas': rutas, 'total': len(rutas)}), 200
+
+
+@devoluciones_bp.route('/llegadas/<int:ruta_id>/bulto', methods=['POST'])
+@jwt_required()
+def escanear_bulto_de_vuelta(ruta_id):
+    usuario = _es_recepcion()
+    if not usuario:
+        return jsonify({'error': 'Sin permiso para recibir devoluciones'}), 403
+    from app.services import devolucion_ruta as _dr
+    data = request.get_json(silent=True) or {}
+    try:
+        return jsonify(_dr.escanear_bulto_de_vuelta(
+            ruta_id, data.get('codigo_barras'), usuario.id)), 200
+    except LookupError as e:
+        return jsonify({'error': str(e)}), 404
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+
+
+@devoluciones_bp.route('/llegadas/<int:ruta_id>/cerrar', methods=['POST'])
+@jwt_required()
+def cerrar_llegada(ruta_id):
+    usuario = _es_recepcion()
+    if not usuario:
+        return jsonify({'error': 'Sin permiso para recibir devoluciones'}), 403
+    from app.services import devolucion_ruta as _dr
+    try:
+        return jsonify(_dr.cerrar_llegada(ruta_id, usuario.id)), 200
+    except LookupError as e:
+        return jsonify({'error': str(e)}), 404
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+
+
+@devoluciones_bp.route('/<int:devolucion_id>/preparar-conteo', methods=['POST'])
+@jwt_required()
+def preparar_conteo(devolucion_id):
+    """Amarra las líneas a la factura (con red) antes de contar. Si Siesa no
+    responde, devuelve el detalle igual y lo dice (`vinculacion.error`): el
+    conteo lo vuelve a intentar al confirmar."""
+    if not _es_recepcion():
+        return jsonify({'error': 'Sin permiso para ver devoluciones'}), 403
+    from app.services import devolucion_ruta as _dr
+    from app.services.devolucion_cliente_service import connekta as _cx
+    devolucion = DevolucionCliente.query.get_or_404(devolucion_id)
+    vinculacion = {}
+    if devolucion.es_de_ruta and devolucion.estado in ('EN_CAMION', 'ABIERTA'):
+        try:
+            vinculacion = _dr.vincular_a_factura(devolucion, gateway=_cx)
+            db.session.commit()
+        except Exception as e:
+            db.session.rollback()
+            vinculacion = {'ok': False, 'error': f'Siesa no respondió: {e}'[:300]}
+            devolucion = DevolucionCliente.query.get_or_404(devolucion_id)
+    return jsonify({**devolucion.to_dict(), 'vinculacion': vinculacion}), 200
+
+
+@devoluciones_bp.route('/tablero', methods=['GET'])
+@jwt_required()
+def tablero():
+    """Lo que lleva demasiado esperando y cuánto tarda la mercancía en volver a
+    ser inventario. Mismas funciones que el resumen diario por correo."""
+    if not _es_recepcion():
+        return jsonify({'error': 'Sin permiso para ver devoluciones'}), 403
+    from app.services import devolucion_nc_verificador as _ver
+    from app.services import devolucion_ruta as _dr
+    return jsonify({'avisos': _dr.avisos(), 'medicion': _dr.medicion(),
+                    'verificacion_nc': _ver.estado()}), 200
+
+
+@devoluciones_bp.route('/verificar-nc', methods=['POST'])
+@jwt_required()
+def verificar_nc():
+    """Lee `f350_ind_estado` de las NC pendientes y marca las aprobadas (con
+    lo que la consulta ya registrada trae). Supervisión: escribe aprobaciones
+    y libera inventario a picking."""
+    from app.models.usuario import Usuario
+    try:
+        uid = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
+    u = db.session.get(Usuario, uid)
+    if not u or u.rol not in Roles.SUPERVISION:
+        return jsonify({'error': 'Sin permiso'}), 403
+    from app.services import devolucion_nc_verificador as _ver
+    try:
+        return jsonify(_ver.verificar()), 200
+    except Exception as e:
+        db.session.rollback()
+        logger.exception('[DEVOLUCIONES] verificar-nc falló')
+        return jsonify({'error': f'No se pudo leer Siesa: {e}'[:300]}), 502

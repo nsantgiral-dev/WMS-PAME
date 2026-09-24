@@ -436,6 +436,13 @@ def create_app():
                 # Bogotá. **Nace apagado** por `ANALITICA_KPI`: el interruptor
                 # vive en `correr_kpi`, no acá. No toca Siesa.
                 ('app.services.analitica_kpi',              'init_scheduler',          '[ANALITICA_KPI]'),
+                # ¿La NC de la devolución ya está APROBADA en Siesa? Lee
+                # `f350_ind_estado` con la consulta ya registrada y marca sola
+                # (m045devol); al aprobarse, lo devuelto sale de la zona
+                # DEVOLUCION a picking. Cada 30 min en la ventana 7–19:30.
+                # **Nace apagado** (`DEVOLUCIONES_VERIFICAR_NC`): el interruptor
+                # vive en `correr`, no acá.
+                ('app.services.devolucion_nc_verificador',  'init_scheduler',          '[DEVOLUCIONES_NC]'),
             ]
             for _mod_path, _fn_name, _tag in _scheduler_pesados:
                 _registrar_scheduler(app, _il, _app_logger, _mod_path, _fn_name, _tag)
