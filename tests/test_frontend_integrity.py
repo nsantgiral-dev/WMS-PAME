@@ -757,6 +757,17 @@ _EXENTOS_POR_REGLA = (
 # necesita un tab. La pregunta correcta es QUÉ DECISIÓN DEBERÍA ESTAR INFORMANDO.
 # Un número que el usuario no puede auditar no se obedece: se ignora.
 DEUDA_SIN_UI = {
+    # 2026-09-24 · Fase 0 de analítica. La bitácora empieza a escribirse
+    # antes del acta de corte; la pantalla que la lee es de la Fase 1.
+    #
+    # Lo que se pierde mientras tanto: nada del dato (se escribe igual y
+    # sobrevive al corte), solo la vista. Quien necesite saber quién canceló,
+    # borró o reabrió algo lo consulta por API con rol de gestión.
+    '/api/analitica/bitacora':
+        'Lectura de la bitácora de acciones: pantalla en Fase 1. Informa la '
+        'decisión de a quién preguntar por un pedido que no llegó a caja '
+        '(quién canceló, borró, reabrió o editó, cuándo y por qué).',
+
     # ── flota/ (entró al guard el 2026-09-21, ver el comentario del filtro) ──
     #
     # 2026-09-21 · Webhook ENTRANTE de Gupshup: lo llama el proveedor, no una
