@@ -250,7 +250,9 @@ Motivos son códigos **obligatorios** en Siesa (Inventarios > Maestros > Concept
 | `SIESA_MEDIO_PAGO_EFECTIVO` | `EFE` | Medio de pago efectivo |
 | `SIESA_MEDIO_PAGO_TRANSFERENCIA` | `TBA` | Medio de pago transferencia bancaria |
 | `SIESA_MEDIO_PAGO_TARJETA` | `TDC` | Medio de pago tarjeta |
-| `SIESA_COND_PAGO_VENTAS` | `''` | **El código de CONTADO (C01).** No se emite — se configura para reconocerlo y NO emitirlo. Una FE de contado no se aprueba sin recaudo |
+| `SIESA_COND_PAGO_VENTAS` | `''` | **El código de CONTADO (C01).** No se emite — se configura para reconocerlo y NO emitirlo. Dos FE de contado quedaron en Elaboración (2026-08-13); **no es universal**: en QA ~24 FE C01 del WMS quedaron Aprobadas (ver «Contado contraentrega») |
+| `COBRO_CONTRAENTREGA_MAX_DIAS` | `15` | Hasta cuántos días de crédito una FE se **cobra al entregar**; también el vencimiento de la FE de contado. Ver «Contado contraentrega vs crédito real» |
+| `SIESA_COND_PAGO_DIAS` / `CONNEKTA_CONSULTA_COND_PAGO` | — | Días por condición (JSON) / consulta del maestro (sin default). Misma sección |
 | `SIESA_COND_PAGO_RUTA` | `''` | **OBLIGATORIO** — la condición que lleva la FE de ruta si el pedido no trae ninguna. Crédito a un día (C02); el RC del conductor la salda |
 
 ### Transporte (173076/173079)
@@ -1120,6 +1122,10 @@ valida contra `tareas_packing.cond_pago` (anotada al cargar la ruta), **no
 contra Siesa**: la confirmación tiene que funcionar sin señal. Si la condición
 no se alcanzó a anotar **no se bloquea** — no saber no es evidencia de contado
 (Regla 0), y una parada trabada en la calle no la desbloquea nadie.
+
+> **Superado el 2026-09-24** («Contado contraentrega vs crédito real»): sin
+> condición anotada la parada **se cobra** como contado supuesto, y la guarda
+> rechaza CREDITO y EXENTO por días de la condición (≤ 15), no por código.
 
 ### Dos cosas que se arreglaron de paso
 
@@ -4284,3 +4290,225 @@ Rendimiento medido (SQLite, 12 conductores, 183 días, 26.352 paradas):
 resumen de 92 días 2,5 s; un día 0,9 s.
 
 Suite completa en este worktree (2026-09-24, sobre qa `ed730f7`): **7524 passed, 0 failed** (5 skipped, 19 xfailed).
+
+## Contado contraentrega vs crédito real (2026-09-24)
+
+**Regla del dueño:** las facturas de ruta salen en Siesa como «crédito» corto
+solo por lo que tarda la ruta; en la calle se cobran **contraentrega**. *«Hasta
+15 días las condiciones de pago son de contado, después es crédito. Si digamos
+tiene 1 día, debes tener en cuenta que toca esperar el despacho y también el
+tiempo de ruta.»* Si un cliente de contado no paga, la mercancía **vuelve**
+(`NO_PAGO`); «no pagó y se quedó» sigue siendo la excepción con evidencia.
+
+**La clase, no el caso:** *una decisión de cobro tomada fuera de la política*.
+El caso era C03 (8 días): `cobra_en_la_puerta` cobraba solo con C01 o
+exactamente `SIESA_COND_PAGO_RUTA`, así que C03 salía «💳 no se cobra», la
+forma de pago quedaba CREDITO sola, la liquidación no hacía nada y la
+reconciliación la sacaba del denominador. EXENTO pasaba en contado, un
+ENTREGADO con $0 pasaba, y sin condición («no sé», `None`) la guarda no
+actuaba.
+
+### Una política, una función — `app/services/cond_pago.py`
+
+`cobro_contraentrega(codigo) → {cobrar, dias, codigo, origen, umbral}`. **Solo
+`cobrar=False` si los días se CONOCEN y superan el umbral.**
+
+| Origen | Cuándo | ¿Cobra? |
+|---|---|---|
+| `MAESTRO` | código en la tabla | ≤ umbral sí (C01 0, C02 1, C03 8); > umbral no (C04 30 … P10 180) |
+| `SUPUESTO_AUSENTE` | sin código (vacío o no se pudo leer) | sí, y la pantalla lo dice |
+| `SUPUESTO_DESCONOCIDO` | código que la tabla no tiene | sí, declarado |
+| `SIN_MAESTRO` | tabla vacía | sí, declarado |
+| `NO_APLICA` | traslado entre sedes (no se guarda) | no: no es una venta |
+
+**La tabla** es copia del reporte «CONDICIONES DE PAGO» de Siesa
+(`docs/siesa-specs/Condiciones de pago.pdf`, 17/04/2026), columna **«Dias
+Vcto», nunca la descripción** (P08 dice «40 DIAS» y vence a 180; P09 y P10
+también a 180). Un test la compara contra el PDF con `pdftotext`.
+
+| Variable | Defecto | Qué hace |
+|---|---|---|
+| `COBRO_CONTRAENTREGA_MAX_DIAS` | `15` | Umbral. Inválido (vacío, texto, negativo) → 15, declarado en el health |
+| `SIESA_COND_PAGO_DIAS` | — | JSON `{"C10": 20}`: sobreescribe por código. Entradas inválidas se ignoran y se declaran |
+| `CONNEKTA_CONSULTA_COND_PAGO` | — (sin default) | Gancho para una consulta dinámica del maestro (probablemente `t208_mm_condiciones_pago`; hoy **no hay API, 401**). Si existe y responde, **manda**; `/api/health/siesa` → `cobro_contraentrega.divergencias_con_siesa`. Se refresca con TTL de 6 h en los momentos con señal (listar paradas, health); **ninguna decisión de cobro sale a la red** |
+
+Las tres están en `vars_criticas` (con default / condicional) y el health
+publica `cobro_contraentrega` (umbral, tabla, fuente, problemas, divergencias).
+
+`cobra_en_la_puerta` y `modo_pantalla` derivan de ella; `clasificar` y
+`aprobable_en_ruta` (¿Siesa aprueba la FE?) **no cambiaron**: es otra pregunta.
+
+### El snapshot (m043contado, aditiva, nullable, sin backfill)
+
+`tareas_packing`: `cond_pago_fe` (lo que la FE lleva de verdad), `dias_credito`,
+`cobro_contraentrega`, `clasif_origen` (CHECK), `clasif_en`. Se escribe lo
+antes posible, **sin red**: al crear el packing (`pedidos_historia.cond_pago`
+por `pedido_clave`), al emitir la FE (el gateway devuelve `cond_pago_emitida`;
+no en ensayo), al iniciar/despachar la ruta y al listar paradas (lee
+`f461_id_cond_pago`, que ya viene en `get_rowids_factura` — **verificado en
+vivo contra QA: FEW-1467 → C04**). **Si la FE difiere del pedido, gana la FE y
+se declara** (`cond_pago_difiere` en la parada, log). La primera lectura del
+pedido no se pisa (condición cambiada en Siesa después de cargar).
+
+`cobro_de_tarea` **recalcula** sobre los códigos anotados (barato, sin red): un
+cambio de tabla o de umbral aplica ya, y el snapshot no puede desfasarse de los
+códigos que lo produjeron. Las columnas son la copia para reportes.
+
+`recaudos_entrega`: `cobro_contraentrega` **congelado al confirmar, solo si la
+clasificación era leída** (MAESTRO). Un supuesto no se congela —queda NULL,
+declarado— para que la condición real, si aparece después, decida. Más
+`credito_autorizado_por`/`_razon`/`_en`.
+
+### La guarda — en el SERVICIO (`confirmar_parada`)
+
+Con `version_formulario >= 3` (`cond_pago.VERSION_FORMULARIO_CONTADO`), sobre
+una parada que se cobra (incluido el supuesto):
+
+- **CREDITO y EXENTO se rechazan** en ENTREGADO y PARCIAL;
+- **ENTREGADO con $0**, o con `monto + descuento < valor_factura − tolerancia`
+  (`tope_diferencia_recaudo`, $100) → «si no pagó, marcá No pagó; si pagó una
+  parte, Parcial»;
+- RECHAZADO (`NO_PAGO`, `NO_PAGO_SE_QUEDO`) **siempre disponible**: la guarda no
+  lo toca, aunque el select traiga un CREDITO viejo.
+
+Un ítem viejo de la cola (sin versión o < 3) **no se traba**: conserva solo la
+regla de antes (`regla_anterior_rechaza_credito`: CREDITO sobre contado o ruta)
+y lo demás llega a la liquidación como `credito_no_autorizado`. Aplica también
+al admin que confirma a mano (la salida para él es «autorizar como crédito»).
+
+### La pantalla del conductor (`rutas.js`, offline)
+
+Todo viaja en el payload de paradas que el teléfono cachea:
+`cobro_contraentrega`, `dias_credito`, `cond_pago_fe`, `clasif_origen`,
+`cobro_etiqueta` (`etiqueta_conductor`), y arriba `formas_que_no_cobran`,
+`tolerancia_cobro`, `version_formulario`. `_condFormasPago(p)`: en contado (y
+supuesto) el select **no ofrece CREDITO ni EXENTO**. El aviso:
+«Contado contraentrega · C02 (1 día) — cobrá al entregar» · «Crédito 30 días —
+no se cobra» · «Sin condición de pago: cobrá al entregar» (tono de advertencia).
+Una caché vieja sin los campos cae a `modo_pago`. Validación local de la misma
+regla del servidor, para no encolar una parada que va a volver rechazada.
+
+### La liquidación
+
+`cond_pago.trato_de_cobro(recaudo)` → `CONTADO` (entró plata: RC) · `CREDITO`
+(crédito real o autorizado) · `CREDITO_NO_AUTORIZADO`. Ramifican por él
+`_procesar_recaudo`, `preview_acciones_recaudo`, `registrar_cobro_recaudo` y
+`liquidacion.js`, **no por `forma_pago`**. Un no autorizado:
+
+- **nunca al contador `credito`**: va a `errores` con `codigo:
+  'credito_no_autorizado'` y a `resumen.credito_no_autorizado`;
+- en PARCIAL la devolución pendiente se arma igual (la mercancía volvió y
+  recepción tiene que poder recibirla);
+- **`RutaService.liquidar_ruta` no marca LIQUIDADA** mientras haya uno.
+
+**Autorizar como crédito**: `POST /api/rutas/<ruta>/recaudos/<id>/autorizar-credito`
+(`_solo_admin`, como liquidar), **razón obligatoria**, columnas del recaudo +
+bitácora `EDITAR` (sin verbo nuevo). Solo sobre lo que hoy es no autorizado.
+No toca forma de pago ni monto: cambia cómo lo trata la liquidación. Botón en
+la tarjeta del recaudo (`liqAutorizarCredito`, solo ids en el `onclick`).
+
+### El despacho informa, no bloquea
+
+`RutaService._informe_de_cobro` al iniciar el cargue y al despachar:
+`cobro_supuesto`, `fe_contado` (contado documental) y `fe_saldada` (solo si
+`cxc_cruce.esta_saldada` lo sabe: `None` no dice nada; tope 40 consultas, se
+deja de preguntar al primer fallo; nunca en simulación). No pide motivo —la
+política ya cobra ante la duda— y de paso escribe el snapshot de cada tarea.
+Llega en `informe_cobro` y el muelle lo muestra como aviso. Traslados excluidos.
+
+### Vencimiento de la FE — `cond_pago.vencimiento_fe` (decisión del dueño)
+
+`F353_FECHA_VCTO` del **142943** y del **238925** (muerto): contado
+contraentrega (incluido el supuesto) → `fecha_factura + umbral` (15: despacho
++ ruta; C02 a 1 día vencería antes de que salga el camión); crédito real →
+`fecha_factura + sus días` (C04 +30, C05 +45). Fecha Bogotá (la de
+`F350_FECHA`), `YYYYMMDD`. El campo y su formato no cambiaron: el
+`test_payload_vs_docx` del 142943 sigue verde. **Las FE ya emitidas quedan con
++30 (sin backfill)**: hasta este cambio el gateway mandaba `hoy + 30` fijo a
+toda FE y Siesa lo respeta — por eso la cartera no servía para saber la
+condición. `F353_FECHA_DSCTO_PP` va con la misma fecha.
+
+### Reportes que leen la política
+
+| Dónde | Qué |
+|---|---|
+| `/api/rutas/liquidacion/desglose` | `por_dias_credito` (código, días, contado/supuesto/crédito real) y `credito_no_autorizado` (lista, `valor_sin_cobrar`, `sin_valor`); cada parada CRÉDITO trae `credito_no_autorizado`/`credito_autorizado` |
+| 💸 Fugas | fuga nueva **«Crédito no autorizado»** (`valor_factura − cobrado`; en PARCIAL es cota superior) |
+| 🧭 Recorrido | un CREDITO sobre contado **ya no es «cobro ok»**: corte `CREDITO_NO_AUTORIZADO` |
+| Auditoría | **VTA-62** (BLOQUEA, detector ciego en `test_contado_contraentrega.py`) |
+| Reconciliación | `_debia_cobrarse` usa la política; el supuesto entra al denominador y se cuenta en `paradas_sin_condicion`; el crédito autorizado sale |
+
+### Hallazgos (sin cambiar comportamiento)
+
+- **«Una FE de contado no se aprueba» no es universal.** En QA ~24 FE C01
+  emitidas por el WMS quedaron **Aprobadas**, con cartera a 30 días (el `+30`
+  fijo). Lo del 2026-08-13 (dos FE de contado en Elaboración) sigue siendo
+  cierto para esos casos, pero no alcanza para afirmar que ninguna se aprueba.
+  `aprobable_en_ruta`, VTA-61 y la alerta `FE_CONTADO_NO_APROBABLE` no se
+  tocaron.
+- **La cartera de las FE del WMS se indexa por FACTURA**, no por pedido
+  (comentario corregido en `cxc_cruce.py`; la búsqueda sigue probando pedido y
+  después FE, sin cambio).
+- En vivo (QA, solo GET, 2026-09-24): de 50 FE del CO 003 desde agosto, C02
+  22, C01 13, C04 15; `get_rowids_factura` trae `f461_id_cond_pago` (FEW-1467 →
+  C04). Del coordinador: `f430_id_cond_pago` (pedido) = `f461` (FE) en 72/72, y
+  el maestro de clientes difiere del pedido en ~37 % — por eso no se usa.
+
+### Trinquetes — `tests/test_contado_contraentrega.py` (151 tests)
+
+- Por AST, **ninguna comparación de una forma de pago contra CREDITO/EXENTO**
+  (`==`, `!=`, `in`, `not in`, literal o `FormaPago.X`) fuera de `cond_pago.py`;
+  inventario de 2 (desglose y tablero, reportes) que solo encoge.
+- Por AST, **ninguna función lee `.cond_pago`/`.cond_pago_fe` sin llamar a la
+  política de cobro**; inventario de 2 (`to_dict`, VTA-61 documental).
+- Por AST, **ningún `F353_FECHA_VCTO` fuera de `vencimiento_fe`**; inventario
+  de 2 (NC 251126 con el vencimiento real de la factura que cruza; DC de
+  retención con la fecha del día).
+- Meta-tests (las escrituras que debe ver, lo sano que no, docstrings y
+  comentarios), pisos, y Node con `util.js` real para el select y el aviso.
+- **20 mutaciones, las 20 rojas**, entre ellas `<=`→`<` (15 días), quitar EXENTO
+  de la guarda, el vencimiento a los días de la condición, volver a `+30`, el
+  pedido mandando sobre la FE, congelar el supuesto, autorizar sin bitácora.
+
+Tests viejos que codificaban la política anterior se reescribieron con su
+porqué (`test_cond_pago.py`, `test_cobra_en_la_puerta.py`, reconciliación,
+e2e, recorrido, `test_ruta_despacho_service`): donde un test necesitaba un
+CREDITO legítimo, ahora el cliente es C04 (en el recorrido, sembrado en la
+historia del pedido: ejercita el snapshot al crear el packing); donde una
+entrega de contado pasaba con $0, ahora trae su cobro. EXENTO salió de la
+lista de formas del select de contado en `test_flujo_conductor_pagos`.
+
+Suite completa (2026-09-24, este worktree, `-m "not postgres"`, TZ=UTC):
+**8037 passed, 1 failed** (el test de liquidación con $0, corregido y verde
+por separado), 5 skipped, 19 xfailed. Después se agregó un test (el aviso del
+muelle), verde.
+
+### Lo que NO cubre, dicho
+
+- **Granularidad por función** del trinquete de condición cruda: una lectura
+  cruda agregada dentro de una función que YA llama a la política no se ve
+  (probado: la mutación en `_procesar_recaudo` sobrevive; en `_obtener_tercero`
+  es roja).
+- **El trinquete de forma de pago mira Python**; en el JS quedan comparaciones
+  de presentación (`liquidacion.js` usa `trato_cobro` del servidor con
+  respaldo a `forma_pago` para un servidor viejo).
+- **La tabla es una copia**: sin la consulta dinámica, una condición nueva en
+  Siesa es `SUPUESTO_DESCONOCIDO` (se cobra) hasta que alguien la agregue a
+  `SIESA_COND_PAGO_DIAS`.
+- **Paradas anteriores al deploy** sin snapshot se juzgan con la tarea de hoy:
+  un CREDITO viejo sobre contado aparece como no autorizado y bloquea la
+  liquidación de su ruta hasta autorizarlo.
+- **El KPI diario** (capa semántica) no tiene todavía la métrica de crédito no
+  autorizado.
+- La consulta de cartera del despacho (`fe_saldada`) sale a la red: acotada y
+  sin insistir, pero agrega latencia al despacho con Siesa lento.
+
+### Decisiones abiertas para el dueño
+
+1. ¿Quién autoriza crédito? Hoy `_solo_admin`. ¿También supervisor/jefe con tope?
+2. ¿El vencimiento de contado es la ventana entera (15) aunque la ruta sea del
+   mismo día? Es lo decidido; alternativa: días de la condición + margen fijo.
+3. Registrar la consulta del maestro de condiciones en Connekta
+   (`CONNEKTA_CONSULTA_COND_PAGO`) para no depender de la copia del PDF.
+4. Paradas viejas bloqueadas por `credito_no_autorizado`: ¿autorizarlas en lote
+   con una razón común, o una por una?
