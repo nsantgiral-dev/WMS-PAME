@@ -121,6 +121,13 @@ OPERATIVAS = [
     # `flota_respuesta_item` apunta a `flota_inspeccion` Y a `flota_hallazgo`;
     # `flota_tanqueo` a `flota_gasto`. Los cuatro apuntan además a
     # `flota_lectura_odometro`, que se vacía más abajo.
+    #
+    # `flota_idempotencia` (2026-09-24): las claves de reenvío de la cola del
+    # conductor. Registro del ensayo como cualquier otro, y sin FK hacia las
+    # tablas de flota (solo a `usuarios`, que se protege): el orden no importa.
+    # Si sobreviviera al corte, un reenvío tardío de un celular de prueba
+    # recibiría «ya se hizo» sobre un hecho que el corte borró.
+    'flota_idempotencia',
     'flota_respuesta_item',
     'flota_inspeccion',
     # ── Taller (agregado 2026-09-02, fase 2) ───────────────────────────────

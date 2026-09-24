@@ -51,6 +51,7 @@ from app.routes._auth_helpers import Roles
 from app.utils.fecha import dia_operativo
 from flota.adaptadores import inspecciones as adaptador
 from flota.adaptadores.modelos import Inspeccion
+from flota.api._idempotencia import idempotente
 from flota.api._permisos import exige, sin_derecho_sobre_vehiculo
 from flota.api._tiempo import iso_utc
 from flota.dominio import inspeccion as dom
@@ -195,6 +196,7 @@ def items_del_dia(placa):
 @inspecciones_bp.route('/inspeccion', methods=['POST'])
 @jwt_required()
 @exige(Roles.LECTURA_FLOTA, 'registrar la inspección preoperacional')
+@idempotente('inspeccion', 'id')
 def registrar():
     """Registra la inspección respondida y devuelve su veredicto.
 

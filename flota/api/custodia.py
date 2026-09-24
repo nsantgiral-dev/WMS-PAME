@@ -17,6 +17,7 @@ from flask_jwt_extended import get_jwt_identity, jwt_required
 
 from app.extensions import db
 from app.routes._auth_helpers import Roles
+from flota.api._idempotencia import idempotente
 from flota.api._permisos import (
     MAESTROS_FLOTA,
     _usuario,
@@ -348,6 +349,7 @@ def cierres_forzados():
 @custodia_bp.route('/custodia/traspaso', methods=['POST'])
 @jwt_required()
 @exige(Roles.LECTURA_FLOTA, 'registrar un traspaso de turno')
+@idempotente('traspaso', 'custodia_id')
 def custodia_traspaso():
     """Cierra el turno anterior y abre el nuevo, atómicamente.
 

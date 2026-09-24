@@ -44,6 +44,7 @@ from flota.adaptadores import gastos as adaptador
 from flota.adaptadores.gastos import numero_legible
 from flota.adaptadores.medicion import _motivo_cpk
 from flota.adaptadores.modelos import Gasto
+from flota.api._idempotencia import idempotente
 from flota.api._permisos import (MAESTROS_FLOTA, exige,
                                  sin_derecho_sobre_vehiculo)
 from flota.dominio import costos
@@ -297,6 +298,7 @@ def vocabulario():
 @gastos_bp.route('/tanqueos', methods=['POST'])
 @jwt_required()
 @exige(Roles.LECTURA_FLOTA, 'registrar un tanqueo')
+@idempotente('tanqueo', 'id')
 def registrar_tanqueo():
     """Registra un tanqueo: el gasto y su extremidad, en una transacción.
 
@@ -343,6 +345,10 @@ def registrar_tanqueo():
             documento_numero=datos['documento_numero'] if 'documento_numero' in datos else None,
             centro_op=datos['centro_op'] if 'centro_op' in datos else None,
             descripcion=datos['descripcion'] if 'descripcion' in datos else None,
+            # La foto del recibo. Opcional para el servidor —el panel de
+            # escritorio registra facturas que llegan por correo—; la pantalla
+            # del conductor la pide primero.
+            fotos=datos['fotos'] if 'fotos' in datos else None,
         )
     except PermisoInsuficiente as e:
         return jsonify({'error': str(e)}), 403

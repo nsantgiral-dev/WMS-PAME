@@ -29,7 +29,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, Tuple
 
-from flota.dominio.fotos import validar_formato
+from flota.dominio.fotos import LADO_LARGO_MINIMO_FOTO_DATO, validar_formato
 from flota.dominio.valores import ClaseFoto
 
 logger = logging.getLogger(__name__)
@@ -239,6 +239,18 @@ def guardar_foto(datos: dict) -> dict:
             'hash_sha256': '',
             'estado': 'pendiente_evidencia',
         })
+    # Una `foto_dato` por debajo del mínimo SE GUARDA, pero declarada rota.
+    #
+    # La pantalla lo promete desde la tanda 1 —«por debajo de 1600 px: queda
+    # como pendiente_evidencia»— y nadie lo escribía: la fila salía `ok`, el
+    # CHECK `ck_flota_foto_dato_resolucion` la rechazaba al hacer commit, y el
+    # recibo entero terminaba en un 500. Un tablero fotografiado con la cámara
+    # en baja resolución dejaba el camión sin turno. Se declara acá, sobre lo
+    # MEDIDO, que es lo que el CHECK juzga.
+    if (clase == ClaseFoto.FOTO_DATO and campos['estado'] == 'ok'
+            and campos['ancho'] and campos['alto']
+            and max(campos['ancho'], campos['alto']) < LADO_LARGO_MINIMO_FOTO_DATO):
+        campos['estado'] = 'pendiente_evidencia'
     return campos
 
 

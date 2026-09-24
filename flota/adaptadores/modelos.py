@@ -86,7 +86,12 @@ UBICACION        = ('sede', 'taller', 'fuera_de_sede')
 # El vocabulario vive en el dominio: la tabla lo sigue, no al reves. Escrito
 # asi y no a mano para que agregar una clase no exija acordarse de esta linea.
 CLASE_FOTO       = tuple(c.value for c in ClaseFoto)
-ENTIDAD_FOTO     = ('custodia_inicio', 'custodia_fin', 'odometro', 'documento', 'hallazgo')
+# `gasto` (2026-09-24): la foto del recibo de un tanqueo. No se reusó
+# `documento` porque ese padre es la vigencia del vehículo (SOAT, tarjeta de
+# propiedad) y el conductor no debe poder bajar esos escaneos: una foto de recibo
+# colgada ahí quedaría detrás del mismo filtro, o lo agujerearía.
+ENTIDAD_FOTO     = ('custodia_inicio', 'custodia_fin', 'odometro', 'documento', 'hallazgo',
+                    'gasto')
 ESTADO_FOTO      = ('ok', 'pendiente_evidencia')
 # El vocabulario vive en el dominio: la tabla lo sigue, no al reves.
 ANGULO_FOTO      = ANGULOS_FOTO
@@ -2697,4 +2702,66 @@ class EjecucionTarea(db.Model):
         # `plan_id` sería un prefijo de éste y se pagaría en cada INSERT sin
         # devolver nada.
         db.Index('ix_flota_ejecucion_plan', 'plan_id', 'ejecutado_ts'),
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# idempotencia — la clave con la que el celular reenvía sin duplicar
+# ═══════════════════════════════════════════════════════════════════════════
+
+#: Las operaciones del conductor que viajan por la cola sin señal. Cerrado: una
+#: operación nueva que entre a la cola tiene que declararse acá, y el CHECK la
+#: rechaza si alguien la manda sin hacerlo.
+OPERACION_IDEMPOTENTE = ('traspaso', 'hallazgo', 'inspeccion', 'tanqueo')
+
+
+class OperacionIdempotente(db.Model):
+    """Una operación que ya se ejecutó, identificada por la clave del celular.
+
+    ## Por qué hace falta, si el traspaso ya tenía una ventana de 90 segundos
+
+    `traspaso._traspaso_reciente_identico` cubre el doble toque y el reintento
+    del navegador. **No cubre la cola sin señal**: el conductor recibe el camión
+    a las 5 a.m. en un patio sin cobertura, el POST sale a las 7 cuando el
+    teléfono agarra señal, la respuesta se pierde, y el reenvío de las 7:05 ya
+    no cae en ninguna ventana. Para el mismo conductor sobre el mismo camión eso
+    es el no-op «el custodio se re-declara», que **cierra la custodia y abre otra
+    con los mismos kilómetros**: dos turnos donde hubo uno.
+
+    La clave la genera el celular al ENCOLAR, no al enviar: viaja con cada
+    reintento, y el segundo que llegue encuentra esta fila.
+
+    ## Qué afirma y qué no
+
+    Afirma que una operación con esta clave terminó bien y cuál fue su
+    resultado (`respuesta`, el JSON que se devolvió). `respuesta` en NULL
+    significa que el hecho se escribió pero el proceso murió antes de anotar la
+    respuesta — sigue siendo «ya se hizo», que es lo que importa para no
+    duplicar.
+
+    `ts_dispositivo` es la hora que el TELÉFONO dice que tenía cuando se tomó el
+    registro. **No se le cree para nada**: el hecho queda con la hora del
+    servidor, como siempre. Se guarda para poder ver después cuánto tardó un
+    registro en llegar —un recibo de las 5 a.m. que entra a las 11 dice algo— y
+    para que esa diferencia no se pierda en silencio.
+    """
+
+    __tablename__ = 'flota_idempotencia'
+
+    id        = db.Column(db.Integer, primary_key=True)
+    clave     = db.Column(db.String(64), nullable=False, unique=True)
+    operacion = db.Column(db.String(20), nullable=False)
+    usuario_id = db.Column(db.Integer, db.ForeignKey('usuarios.id'),
+                           nullable=False)
+    #: El id de lo que se creó (custodia, hallazgo, inspección, gasto). NULL
+    #: solo si el proceso murió entre el hecho y la anotación.
+    entidad_id = db.Column(db.Integer, nullable=True)
+    respuesta  = db.Column(db.Text, nullable=True)
+    creado_ts  = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    ts_dispositivo = db.Column(db.DateTime, nullable=True)
+
+    __table_args__ = (
+        db.CheckConstraint(
+            'operacion IN (%s)' % ', '.join(f"'{o}'" for o in OPERACION_IDEMPOTENTE),
+            name='ck_flota_idempotencia_operacion'),
     )

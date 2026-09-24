@@ -479,6 +479,7 @@ def registrar_tanqueo(
     documento_numero: Optional[str] = None,
     centro_op: Optional[str] = None,
     descripcion: Optional[str] = None,
+    fotos: Optional[list] = None,
     ts: Optional[datetime] = None,
 ) -> Tanqueo:
     """Registra un tanqueo: la fila de `flota_gasto` y su extremidad, juntas.
@@ -535,6 +536,12 @@ def registrar_tanqueo(
         fila = Tanqueo(gasto_id=gasto.id, galones=cuantos,
                        tanque=tanque, estacion=estacion.strip())
         db.session.add(fila)
+        # La foto del recibo cuelga del GASTO, en la misma transacción: un
+        # recibo sin su gasto es un archivo sin padre (regla 7), y un gasto que
+        # se escribió con su foto no puede quedar sin ella por un fallo a mitad.
+        if fotos:
+            from flota.adaptadores.almacen_fotos import colgar_fotos
+            colgar_fotos(fotos, 'gasto', gasto.id, registrado_por_usuario_id, ahora)
         db.session.commit()
         return fila
     except Exception:

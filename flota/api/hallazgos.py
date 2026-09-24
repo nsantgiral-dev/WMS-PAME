@@ -27,6 +27,7 @@ from app.models.vehiculo import Vehiculo
 from app.routes._auth_helpers import Roles
 from flota.adaptadores import hallazgos as adaptador
 from flota.adaptadores.modelos import Hallazgo
+from flota.api._idempotencia import idempotente
 from flota.api._permisos import (DECIDE_FLOTA, MAESTROS_FLOTA, exige,
                                  sin_derecho_sobre_vehiculo)
 from flota.api._tiempo import iso_utc
@@ -125,6 +126,7 @@ def listar(placa):
 @hallazgos_bp.route('/hallazgos', methods=['POST'])
 @jwt_required()
 @exige(Roles.LECTURA_FLOTA, 'reportar un daño')
+@idempotente('hallazgo', 'id')
 def reportar():
     """Registra un daño con su reloj corriendo.
 
