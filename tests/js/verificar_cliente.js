@@ -98,19 +98,25 @@ cargar(RAIZ + '/app/static/pwa/rutas.js');
       f3.innerHTML.includes('CENSURADA') && f3.innerHTML.includes('Reconstruir stock diario'));
 
   // ── Semáforo del kardex ───────────────────────────────────────────────
-  RESPUESTAS['/api/kardex/reconciliar'] = {
-    compuerta_ok: true, total_registros_kardex: 1234, conceptos_desconocidos: [],
+  // El veredicto es del servidor (`GET /api/kardex/salud`): la pantalla no
+  // decide por `compuerta_ok`, que un kardex vacío también cumple.
+  RESPUESTAS['/api/kardex/salud'] = {
+    veredicto: 'AL_DIA', confiable: true, problemas: [],
+    movimientos: { total: 1234, ultima_fecha: '2026-09-23' },
   };
   await modelosSemaforoKardex();
-  chk('semáforo verde con compuerta abierta',
-      document.getElementById('modelos-semaforo').innerHTML.includes('Kardex completo'));
-  RESPUESTAS['/api/kardex/reconciliar'] = {
-    compuerta_ok: false, total_registros_kardex: 9, conceptos_desconocidos: [77, 88],
+  chk('semáforo verde cuando el servidor dice al día',
+      document.getElementById('modelos-semaforo').innerHTML.includes('Kardex al día'));
+  RESPUESTAS['/api/kardex/salud'] = {
+    veredicto: 'SIN_DATOS', confiable: false,
+    problemas: [{ titulo: 'No hay movimientos <b>descargados</b>' }], movimientos: {},
   };
   await modelosSemaforoKardex();
   const s = document.getElementById('modelos-semaforo').innerHTML;
-  chk('semáforo rojo nombra cuántos conceptos', s.includes('2 concepto(s)'));
+  chk('semáforo rojo nombra el problema, escapado',
+      s.includes('No hay movimientos &lt;b&gt;descargados&lt;/b&gt;'));
   chk('semáforo rojo manda a Datos', s.includes('Inventario › Datos'));
+  chk('semáforo rojo no dice «al día»', !s.includes('Kardex al día'));
 
   // ── Manifiesto: el escape de lo que viene de la base ──────────────────
   RESPUESTAS['/api/muelle/manifiesto'] = {

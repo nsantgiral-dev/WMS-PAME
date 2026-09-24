@@ -440,6 +440,10 @@ class TestNingunCampoDelHealthQuedaMudo:
             'app.js usa la palabra `ambiente` para el banner global de '
             'QA/producción, que existía antes que el health de flota. No es un '
             'lector de `/flota/health`.'),
+        ('kardex.js', 'ambiente'): (
+            'kardex.js dice «(ambiente de PRUEBAS)» en el semáforo de salud del '
+            'kardex cuando el host de Siesa es QA (`/api/kardex/salud`). No es '
+            'un lector de `/flota/health`.'),
     }
 
     def _colisiones_nuevas(self, campos, ajenos):
