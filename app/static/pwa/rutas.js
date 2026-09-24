@@ -390,7 +390,9 @@ async function muelleConfirmarCargueCompleto(rutaId) {
     const { r, d } = await _rutaPostConFlota('/api/rutas/' + rutaId + '/cerrar', 'despachar');
     if (!r) return;
     if (r.ok) {
-      alerta(`Ruta #${rutaId} confirmada — salió a reparto`, 'exito');
+      const _avisoCobro = _rutaAvisoCobro(d);
+      alerta(`Ruta #${rutaId} confirmada — salió a reparto${_avisoCobro}`,
+             _avisoCobro ? 'advertencia' : 'exito');
       // No hace falta limpiar RUTA_ACTIVA_ID a mano: cargarRutaSelector()
       // ya nota que la ruta dejó de estar EN_CARGUE y se reinicia sola
       // (mismo mecanismo que usa rutaCerrar() en la pestaña Rutas) — el
@@ -760,6 +762,22 @@ function rutaCard(r) {
  * @param {string} ruta - '/api/rutas/<id>/iniciar' o '/cerrar'
  * @param {string} accion - para el texto del cuadro
  */
+/**
+ * El informe de cobro del despacho (`RutaService._informe_de_cobro`) en una
+ * frase. Informa, no bloquea. `''` si no hay nada que decir.
+ */
+function _rutaAvisoCobro(d) {
+  const inf = (d && Array.isArray(d.informe_cobro)) ? d.informe_cobro : [];
+  if (!inf.length) return '';
+  const n = (clave) => inf.filter(x => x.clave === clave).length;
+  const partes = [];
+  const sup = n('cobro_supuesto'), cont = n('fe_contado'), sald = n('fe_saldada');
+  if (sup) partes.push(`${sup} sin condición de pago conocida (se cobran)`);
+  if (cont) partes.push(`${cont} declarada${cont !== 1 ? 's' : ''} de contado`);
+  if (sald) partes.push(`${sald} ya pagada${sald !== 1 ? 's' : ''} según la cartera (no cobrar otra vez)`);
+  return partes.length ? ' · Facturas: ' + partes.join(', ') : '';
+}
+
 async function _rutaPostConFlota(ruta, accion) {
   const enviar = (cuerpo) => fetch(API + ruta, {
     method: 'POST',
@@ -826,6 +844,8 @@ async function rutaCerrar(id) {
       // Limpiar ruta activa si era esta
       if (RUTA_ACTIVA_ID === id) { RUTA_ACTIVA_ID = null; }
       await cargarRutaSelector();
+      const _avisoCobro = _rutaAvisoCobro(d);
+      if (_avisoCobro) alerta('Ruta despachada' + _avisoCobro, 'advertencia');
     } else { alert(d.error || 'Error al cerrar ruta'); }
   } catch (e) { alert('Error de conexión'); }
 }

@@ -302,6 +302,10 @@ class TestLiquidarRutaCreaDevolucionesPendientes:
 
         ruta, recaudo = self._crear_recaudo(
             db, almacen, conductor, vehiculo, ruta_maestra, 'ENTREGADO')
+        # Una entrega de contado se cobra: con $0 sería `credito_no_autorizado`
+        # y la ruta no se liquidaría (contado contraentrega, 2026-09-24).
+        recaudo.monto_cobrado = 100000
+        db.session.commit()
 
         resultado = RutaService.liquidar_ruta(ruta.id)
 

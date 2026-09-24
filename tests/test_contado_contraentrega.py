@@ -1046,3 +1046,20 @@ console.log(JSON.stringify({a, b, pintado: esc(a.texto)}));
     def test_el_formulario_declara_la_version_3(self):
         js = (_RAIZ / 'app' / 'static' / 'pwa' / 'rutas.js').read_text(encoding='utf-8')
         assert f'const COND_VERSION_FORMULARIO = {cp.VERSION_FORMULARIO_CONTADO};' in js
+
+    def test_el_muelle_dice_el_informe_de_cobro(self, tmp_path):
+        js = (_RAIZ / 'app' / 'static' / 'pwa' / 'rutas.js').read_text(encoding='utf-8')
+        prog = _extraer(js, 'function _rutaAvisoCobro(') + """
+console.log(JSON.stringify({
+  nada: _rutaAvisoCobro({}),
+  algo: _rutaAvisoCobro({informe_cobro: [{clave: 'cobro_supuesto'}, {clave: 'cobro_supuesto'},
+                                         {clave: 'fe_saldada'}]}),
+}));
+"""
+        f = tmp_path / 'aviso.js'
+        f.write_text(prog, encoding='utf-8')
+        out = json.loads(subprocess.run(['node', str(f)], capture_output=True, text=True,
+                                        check=True).stdout)
+        assert out['nada'] == ''
+        assert '2 sin condición' in out['algo'] and '1 ya pagada' in out['algo']
+        assert js.count('_rutaAvisoCobro(d)') == 3   # la definición y los dos despachos
