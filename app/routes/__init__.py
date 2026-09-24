@@ -6,6 +6,7 @@ def register_routes(app):
     from app.routes.analitica_fugas import analitica_fugas_bp
     from app.routes.analitica_kpi import analitica_kpi_bp
     from app.routes.jornada import jornada_bp
+    from app.routes.cartera import cartera_bp
     from app.routes.health import health_bp
     from app.routes.auth import auth_bp
     from app.routes.productos import productos_bp
@@ -43,6 +44,7 @@ def register_routes(app):
     app.register_blueprint(analitica_fugas_bp, url_prefix='/api/analitica')
     app.register_blueprint(analitica_kpi_bp, url_prefix='/api/analitica')
     app.register_blueprint(jornada_bp, url_prefix='/api/jornada')
+    app.register_blueprint(cartera_bp, url_prefix='/api/cartera')
     app.register_blueprint(auth_bp, url_prefix='/api/auth')
     app.register_blueprint(productos_bp, url_prefix='/api/productos')
     app.register_blueprint(inventario_bp, url_prefix='/api/inventario')

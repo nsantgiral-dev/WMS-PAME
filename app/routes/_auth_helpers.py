@@ -213,3 +213,72 @@ def _get_uid():
         return int(get_jwt_identity())
     except (TypeError, ValueError):
         return None
+
+
+def _puede_autorizar_cartera():
+    """El usuario si puede autorizar una excepción de cartera desde el WMS.
+
+    Un permiso por persona (`puede_autorizar_cartera`), no un rol: la vía
+    principal es el Gestor de Cartera y esto es el respaldo. Nace apagado; ni
+    el admin lo tiene por rol. Conductor y tienda nunca, aunque alguien les
+    marque la casilla: no operan despachos.
+    """
+    try:
+        uid = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return None
+    u = Usuario.query.get(uid)
+    if not u or not u.activo:
+        return None
+    if u.rol in (Roles.CONDUCTOR, Roles.TIENDA):
+        return None
+    return u if bool(getattr(u, 'puede_autorizar_cartera', False)) else None
+
+
+def _ve_cartera():
+    """El usuario si puede VER las retenciones de cartera en el WMS: gestión
+    (el tablero, la cola de despacho) o quien puede autorizarlas."""
+    try:
+        uid = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return None
+    u = Usuario.query.get(uid)
+    if not u or not u.activo:
+        return None
+    if u.rol in Roles.GESTION:
+        return u
+    if u.rol in (Roles.CONDUCTOR, Roles.TIENDA):
+        return None
+    return u if bool(getattr(u, 'puede_autorizar_cartera', False)) else None
+
+
+def exige_token_servicio(variable: str, que: str = ''):
+    """Para lo que llama OTRO SISTEMA (el Gestor de Cartera), no una persona.
+
+    `Authorization: Bearer <token>` comparado con `hmac.compare_digest` contra
+    la variable de entorno. **Nace cerrado**: sin la variable, 503 y nada
+    pasa. A diferencia de `flota.api._permisos.exige_secreto`, el token NO va
+    en la URL (`?token=`): las URL quedan en los logs de acceso.
+
+    Es un decorador con nombre para que `test_todo_endpoint_verifica_rol` lo
+    reconozca: una ruta de servicio sin él sigue siendo un endpoint sin rol.
+    """
+    import hmac
+    import os
+    from functools import wraps
+
+    def decorador(f):
+        @wraps(f)
+        def envoltura(*args, **kwargs):
+            from flask import jsonify, request
+            esperado = (os.getenv(variable) or '').strip()
+            if not esperado:
+                return jsonify({'error': f'{que or f.__name__} no está configurado',
+                                'detalle': f'falta {variable}'}), 503
+            cab = request.headers.get('Authorization') or ''
+            dado = cab[7:].strip() if cab[:7].lower() == 'bearer ' else ''
+            if not dado or not hmac.compare_digest(dado.encode(), esperado.encode()):
+                return jsonify({'error': 'token inválido'}), 401
+            return f(*args, **kwargs)
+        return envoltura
+    return decorador

@@ -576,6 +576,13 @@ def pedidos_aprobados():
                 'siesa_triggered_at': packing.siesa_triggered_at.isoformat() if packing.siesa_triggered_at else None,
             })
 
+    # Retenido por cartera: la cola lo dice en vez de mostrar «Aprobar» o
+    # «Error Siesa» sobre un pedido que cartera frenó.
+    from app.services import cartera_service as _cartera
+    retenidos = _cartera.resumen_por_pedido(nums)
+    for num, pedido in pedidos.items():
+        pedido['retencion_cartera'] = retenidos.get(num)
+
     lista = sorted(pedidos.values(), key=lambda x: x['fecha_entrega'] or '', reverse=True)
     return jsonify({'pedidos': lista, 'total': len(lista)}), 200
 
@@ -1066,7 +1073,8 @@ def iniciar_despacho():
     Los campos tipo_docto y consec_docto se guardan en el packing
     para que trigger_despacho los inyecte en Connekta al confirmar.
     """
-    if not _solo_admin():
+    admin = _solo_admin()
+    if not admin:
         return jsonify({'error': 'Solo admin puede iniciar despacho'}), 403
     data = request.get_json()
     for campo in ['numero_pedido', 'tipo_docto', 'consec_docto', 'almacen_id', 'items']:
@@ -1102,6 +1110,21 @@ def iniciar_despacho():
             'error': f'{numero_pedido} ya está en proceso de picking '
                      f'(packing {existing_packing.codigo}).'
         }), 409
+
+    # Compuerta de cartera (G1): un pedido de CRÉDITO REAL de un cliente con
+    # facturas vencidas, sin cupo o que lo supera no llega al picking. Contado
+    # pasa sin mirar nada. El lock del NIT se suelta al terminar la petición,
+    # con el packing ya creado: así el pedido siguiente del mismo cliente lo
+    # cuenta en su cupo. Ver `cartera_service.compuerta_inicio`.
+    from app.services import cartera_service as _cartera
+    try:
+        puerta = _cartera.compuerta_inicio(
+            numero_pedido, tipo_docto, consec_docto, co=data.get('co'), items=items,
+            almacen_id=almacen_id, usuario_id=admin.id)
+    except _cartera.DespachoEnCurso as e:
+        return jsonify({'error': str(e)}), 409
+    if not puerta.pasa:
+        return jsonify(puerta.cuerpo()), 409
 
     # Backorder Siesa: qué líneas comprometió Siesa de verdad para este pedido
     # (API_v2_Ventas_Pedidos_Compromisos), ANTES de mandar al operario a
@@ -1267,6 +1290,9 @@ def iniciar_despacho():
             'tareas_picking': tareas_picking_ids,
             'errores': errores
         }), 207
+    _cartera.anotar_inicio(packing, admin.id)
+    from app.extensions import db as _db_cartera
+    _db_cartera.session.commit()
 
     return jsonify({
         'mensaje': f'{len(tareas_picking_ids)} tarea(s) de picking en cola — packing listo para empacador',

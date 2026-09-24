@@ -22,6 +22,10 @@ class Usuario(db.Model):
     # eliminación/import masivo — eso sigue exclusivo de admin/jefe_almacen,
     # ver _puede_organizar_layout en app/routes/_auth_helpers.py)
     puede_organizar_layout = db.Column(db.Boolean, default=False)
+    # Autorizar la excepción de cartera («dejarlo salir a crédito igual») desde
+    # el WMS. Respaldo: la vía principal es el Gestor de Cartera. Nace en
+    # False; ni el admin lo tiene por rol (m044cartera).
+    puede_autorizar_cartera = db.Column(db.Boolean, default=False)
     # Límite de conteos cíclicos intercalados por día (0 = sin límite)
     capacidad_diaria_conteo = db.Column(db.Integer, default=15, nullable=False)
 
@@ -51,6 +55,7 @@ class Usuario(db.Model):
             'puede_empacar': self.puede_empacar or False,
             'puede_abastecer': self.puede_abastecer or False,
             'puede_organizar_layout': self.puede_organizar_layout or False,
+            'puede_autorizar_cartera': bool(self.puede_autorizar_cartera),
             'capacidad_diaria_conteo': self.capacidad_diaria_conteo if self.capacidad_diaria_conteo is not None else 15,
             'bodega_siesa_id': self.bodega_siesa_id,
             'siesa_co_id': self.siesa_co_id,

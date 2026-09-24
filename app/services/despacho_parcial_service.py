@@ -89,6 +89,15 @@ class DespachoParialService:
         if not cabecera:
             raise ValueError(f'Pedido {tarea.numero_pedido_siesa} no encontrado en Siesa')
 
+        # Compuerta de cartera en la emisión: con la condición que la FE va a
+        # llevar DE VERDAD. Sin decisión previa (job anterior a la compuerta,
+        # carril admin, o una condición supuesta que la cabecera desmiente)
+        # evalúa acá; si retiene, levanta `RetenidoPorCartera` ANTES del
+        # 244328 — el DLQ espera sin gastar reintento. Una conversión a
+        # contado cambia la condición de la cabecera (C02).
+        from app.services import cartera_service as _cartera
+        cabecera = _cartera.compuerta_emision(tarea, cabecera)
+
         # 2. Compromisos Siesa — fuente única para rowid_map Y payload 244328.
         # f431_rowid → f431_nro_registro en 244328 (campo obligatorio del conector).
         f430_rowid = cabecera.get('f430_rowid')
@@ -424,6 +433,10 @@ class DespachoParialService:
                 f'Pedido {tarea.numero_pedido_siesa} no encontrado en Siesa — '
                 'no se puede construir la factura sin datos del tercero.'
             )
+        # La RM ya existe: no hay compuerta que valga (retener la FE no
+        # devuelve la mercancía). Solo la condición de una conversión a contado.
+        from app.services import cartera_service as _cartera
+        cabecera = _cartera.cabecera_para_factura(tarea, cabecera)
 
         # 4. POST 142943
         resp_fe = connekta.trigger_factura_desde_remision(tipo_rm, consec_rm, cabecera)
@@ -456,6 +469,8 @@ class DespachoParialService:
         cabecera = connekta.get_pedido_cabecera(tipo_docto, consec_docto)
         if not cabecera:
             raise ValueError(f'Pedido {tarea.numero_pedido_siesa} no encontrado en Siesa')
+        from app.services import cartera_service as _cartera
+        cabecera = _cartera.cabecera_para_factura(tarea, cabecera)
 
         # Guardar consec en BD ANTES de llamar 142943 — idempotencia futura
         tarea.rm_tipo   = tipo_rm

@@ -96,6 +96,7 @@ LOCK_REPOSICION_BARRIDO = 2018          # reposicion_service._barrido_stock_pick
 LOCK_ALERTA_RUTAS_SIN_LIQUIDAR = 2019   # alertas_service (era 2007, el de la DLQ)
 LOCK_FOTOS_SIESA = 2020                 # fotos_siesa_service (fotos diarias de Siesa, m036fotos)
 LOCK_ANALITICA_KPI = 2021               # analitica_kpi (cron y recálculo manual del KPI diario, m037kpi)
+LOCK_CARTERA_BARRIDO = 2022             # cartera_service.barrido (re-evaluación de retenidos, m044cartera)
 
 # De transacción (`lock_de_transaccion`): serializan un «leer y después insertar».
 LOCK_CODIGO_LPN = 3001                  # LPN.generar_codigo
@@ -109,6 +110,10 @@ RANGO_WATCHDOG_ABC = (5000, 1000)       # abc_service watchdog, n = almacen_id (
 # clave fija. Con 3000/4000 + crc32 en [0, 2^31) el choque era improbable pero
 # posible; con este rango es imposible.
 RANGO_PEDIDO_CHICO = (1 << 32, 1 << 31)  # mobile_service, n = crc32(documento)
+# Un despacho a crédito por cliente a la vez: sin esto, dos pedidos del mismo
+# NIT evaluados a la par ven el mismo cupo libre y pasan los dos. Justo después
+# del rango anterior, también fuera de int32. n = crc32(nit) % tamaño.
+RANGO_CARTERA_NIT = ((1 << 32) + (1 << 31), 1 << 31)  # cartera_service, n = crc32(nit)
 
 
 def _claves_fijas() -> dict:

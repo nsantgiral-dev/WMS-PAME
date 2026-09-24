@@ -377,6 +377,11 @@ def create_app():
                 # docstring de reposicion_service.py llevaba tiempo diciendo que
                 # este scheduler existía — no era cierto hasta ahora.
                 ('app.services.reposicion_service',         'init_scheduler',          '[REPOSICION_SCHEDULER]'),
+                # Esencial: re-evalúa los pedidos retenidos por cartera cada 30
+                # min (7:00–19:30). Sin él, un cliente que pagó sigue retenido
+                # hasta que alguien toque «Re-evaluar» — y nadie se entera.
+                # Solo GET a Siesa; lock propio (LOCK_CARTERA_BARRIDO).
+                ('app.services.cartera_service',            'init_scheduler',          '[CARTERA_BARRIDO]'),
             ]
             for _mod_path, _fn_name, _tag in _scheduler_esenciales:
                 _registrar_scheduler(app, _il, _app_logger, _mod_path, _fn_name, _tag)

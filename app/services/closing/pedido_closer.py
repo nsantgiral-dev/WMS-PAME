@@ -37,6 +37,17 @@ class PedidoPackingCloser(IPackingCloser):
             if error:
                 return CierreResult(exitoso=False, error=error, mensaje=error)
 
+        # Compuerta de cartera (G2): el último punto reversible antes del
+        # 244328, con el valor EMPACADO. Se evalúa antes del lock pesimista
+        # (puede ir a Siesa por GET) y se aplica después de crear los bultos:
+        # si retiene, la caja queda VERIFICADA con sus piezas declaradas y se
+        # cierra de nuevo cuando cartera la libere. Ver
+        # `cartera_service.compuerta_cierre`.
+        puerta_cartera = None
+        if tarea_pre.estado == 'VERIFICADO' and not tarea_pre.siesa_triggered:
+            from app.services import cartera_service as _cartera
+            puerta_cartera = _cartera.compuerta_cierre(tarea_pre, usuario_id)
+
         # Adquirir lock pesimista
         tarea = (TareaPacking.query
                  .options(selectinload(TareaPacking.items).selectinload(ItemPacking.producto))
@@ -57,6 +68,15 @@ class PedidoPackingCloser(IPackingCloser):
 
         # Crear bultos si no existen
         self._crear_bultos(tarea, tarea_id, bultos_data, total)
+
+        if puerta_cartera is not None and not puerta_cartera.pasa:
+            if not tarea.cerrado_por_id:
+                tarea.cerrado_por_id = usuario_id or None
+            db.session.commit()
+            logger.info('[PEDIDO_CLOSER] tarea=%s retenida por cartera (retención %s)',
+                        tarea_id, getattr(puerta_cartera.retencion, 'id', None))
+            return CierreResult(exitoso=False, error=puerta_cartera.mensaje,
+                                mensaje=puerta_cartera.mensaje)
 
         # Construir payload para 238925
         items_payload, error = self._construir_items_payload(tarea)

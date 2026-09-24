@@ -576,6 +576,9 @@ class RutaService:
                 informe.append({**base, 'clave': 'cobro_supuesto',
                                 'texto': 'Sin condición de pago conocida: el conductor la '
                                          'cobra como contado. Confirmala con el asesor.'})
+            # Cartera (G3): autorizado, convertido a contado o retenido. Sin red.
+            from app.services.cartera_service import informe_de_tarea as _inf_cartera
+            informe.extend(_inf_cartera(t, base))
             if cobro['codigo'] and _cp.clasificar(
                     cobro['codigo'], connekta.cond_pago_ventas) == _cp.CONTADO:
                 informe.append({**base, 'clave': 'fe_contado',

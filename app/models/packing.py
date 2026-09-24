@@ -105,6 +105,18 @@ class TareaPacking(db.Model):
     clasif_origen = db.Column(db.String(24), nullable=True)
     clasif_en = db.Column(db.DateTime, nullable=True)
 
+    # ── Retención de cartera (m044cartera, aditiva, sin backfill) ────────
+    #: Quién tocó «Aprobar» en la cola de despacho. Quien inició el pedido no
+    #: puede autorizar su propia excepción de cartera.
+    despacho_iniciado_por_id = db.Column(db.Integer, nullable=True)
+    #: Lo que la compuerta de cartera decidió para esta tarea, y cuándo:
+    #: PASA | AUTORIZADO | CONTADO | NO_APLICA. `NULL` = nunca se evaluó (una
+    #: tarea anterior a la compuerta, o que no llegó al cierre). La emisión
+    #: (244328/142945/142943) exige una decisión o la toma ella
+    #: (`cartera_service.compuerta_emision`).
+    cartera_decision = db.Column(db.String(12), nullable=True)
+    cartera_decidido_en = db.Column(db.DateTime, nullable=True)
+
     __table_args__ = (
         # Una tarea activa por pedido. `packing_service.py:48` lo comprueba y
         # `.first()`-inserta sin lock: dos cierres del mismo pedido casi a la
@@ -126,6 +138,11 @@ class TareaPacking(db.Model):
         # mal leída. Cero sí es posible (factura anulada, líneas en cero).
         db.CheckConstraint('valor_factura IS NULL OR valor_factura >= 0',
                            name='ck_packing_valor_no_negativo'),
+        # Mismo CHECK que m044cartera.
+        db.CheckConstraint(
+            "cartera_decision IS NULL OR cartera_decision IN "
+            "('PASA','AUTORIZADO','CONTADO','NO_APLICA')",
+            name='ck_packing_cartera_decision'),
         db.CheckConstraint('dias_credito IS NULL OR dias_credito >= 0',
                            name='ck_packing_dias_credito'),
         db.CheckConstraint(
@@ -181,6 +198,7 @@ class TareaPacking(db.Model):
             'dias_credito': self.dias_credito,
             'cobro_contraentrega': self.cobro_contraentrega,
             'clasif_origen': self.clasif_origen,
+            'cartera_decision': self.cartera_decision,
             'valor_factura': float(self.valor_factura) if self.valor_factura is not None else None,
             'fe_tipo': self.fe_tipo,
             'fe_consec': self.fe_consec,

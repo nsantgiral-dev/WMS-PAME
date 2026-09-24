@@ -65,6 +65,7 @@ def despachar_parcial(packing_id: int):
         return jsonify({'error': 'Se requiere body {"cantidades": {"codigo": qty}}'}), 400
 
     from app.services.despacho_parcial_service import DespachoParialService
+    from app.services.cartera_service import RetenidoPorCartera
     try:
         resultado = DespachoParialService.despachar_parcial(tarea, cantidades)
         logger.info(
@@ -74,6 +75,9 @@ def despachar_parcial(packing_id: int):
         return jsonify({'ok': True, **resultado}), 200
     except ValueError as e:
         return jsonify({'error': str(e)}), 409
+    except RetenidoPorCartera as e:
+        return jsonify({'error': str(e), 'retenido_por_cartera': True,
+                        'retencion_id': e.retencion_id}), 409
     except Exception as e:
         logger.exception('[DESPACHO_PARCIAL] Error Siesa packing_id=%s: %s', packing_id, e)
         return jsonify({'error': f'Error Siesa: {str(e)}'}), 502
