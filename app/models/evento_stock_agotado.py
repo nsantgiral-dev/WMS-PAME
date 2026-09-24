@@ -27,19 +27,31 @@ class EventoStockAgotado(db.Model):
     __tablename__ = 'eventos_stock_agotado'
 
     id = db.Column(db.Integer, primary_key=True)
-    tarea_picking_id = db.Column(db.Integer, db.ForeignKey('tareas_picking.id'), nullable=False)
+    # Nullable con SET NULL (m034agotado): esta tabla es PROTEGIDA_ANALITICA y
+    # `tareas_picking` es OPERATIVA. Con la FK NOT NULL sin `ondelete` el acta
+    # de corte no podía vaciar las tareas del ensayo. La tarea se va; el evento
+    # se queda con lo que necesitaba de ella (`tarea_codigo`,
+    # `cantidad_solicitada`, más pedido/producto/faltante ya copiados).
+    tarea_picking_id = db.Column(
+        db.Integer, db.ForeignKey('tareas_picking.id', ondelete='SET NULL'),
+        nullable=True)
+    tarea_codigo = db.Column(db.String(50))
+    cantidad_solicitada = db.Column(db.Integer)
     producto_id = db.Column(db.Integer, db.ForeignKey('productos.id'), nullable=False)
     almacen_id = db.Column(db.Integer, db.ForeignKey('almacenes.id'), nullable=False)
 
     # Copia de TareaPicking.referencia_documento — no hay FK real a pedidos_siesa,
     # la correlación en todo el proyecto es por igualdad de string (ver picking.py).
     pedido_siesa_ref = db.Column(db.String(50))
-    # 'PEDIDO' | 'TRASLADO', copiado de la tarea. Un traslado bloqueado no es
-    # venta perdida — se excluye en la agregación de la métrica 5.
+    # Copiado de la tarea (ver app/models/tipo_documento.py). Un traslado
+    # bloqueado no es venta perdida — se excluye en la agregación de la métrica 5.
     tipo_documento = db.Column(db.String(30))
 
     cantidad_faltante = db.Column(db.Integer, nullable=False)
-    precio_venta_capturado = db.Column(db.Numeric(12, 2), nullable=False)
+    #: `None` = SIN PRECIO, no $0. `Producto.precio_venta` no lo puebla ninguna
+    #: sincronización; el `or 0` de antes hacía que la venta perdida sumara
+    #: ceros que parecían dato (Regla 0). La métrica los cuenta aparte.
+    precio_venta_capturado = db.Column(db.Numeric(12, 2), nullable=True)
     categoria_producto = db.Column(db.String(100))
     clasificacion_abc = db.Column(db.String(1))
 
@@ -61,6 +73,8 @@ class EventoStockAgotado(db.Model):
         return {
             'id': self.id,
             'tarea_picking_id': self.tarea_picking_id,
+            'tarea_codigo': self.tarea_codigo,
+            'cantidad_solicitada': self.cantidad_solicitada,
             'producto_id': self.producto_id,
             'producto_codigo': self.producto.codigo if self.producto else None,
             'producto_nombre': self.producto.nombre if self.producto else None,
@@ -69,6 +83,7 @@ class EventoStockAgotado(db.Model):
             'tipo_documento': self.tipo_documento,
             'cantidad_faltante': self.cantidad_faltante,
             'precio_venta_capturado': float(self.precio_venta_capturado) if self.precio_venta_capturado is not None else None,
+            'sin_precio': self.precio_venta_capturado is None,
             'categoria_producto': self.categoria_producto,
             'clasificacion_abc': self.clasificacion_abc,
             'creado_en': self.creado_en.isoformat() if self.creado_en else None,

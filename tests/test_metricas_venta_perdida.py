@@ -173,3 +173,34 @@ class TestLaCreacionManualNoInventaTipos:
             headers={'Authorization': f'Bearer {jwt_token_admin}'})
         assert r.status_code == 400
         assert 'tipo_documento' in r.get_json()['error']
+
+
+class TestSinPrecioNoEsCero:
+    """Regla 0: un evento sin precio no suma $0 al total — se declara."""
+
+    def test_se_declara_y_el_total_es_cota_inferior(self, app, db, almacen, producto,
+                                                     producto2, ub_picking):
+        from app.utils.fecha import inicio_del_dia_utc
+        from tests.conftest import hoy_operativo
+        hoy = hoy_operativo()
+        cuando = inicio_del_dia_utc(hoy) + timedelta(hours=8)
+        t1 = _tarea_picking(almacen, producto, ub_picking, 'TP-VP-SP-1')
+        t2 = _tarea_picking(almacen, producto2, ub_picking, 'TP-VP-SP-2')
+        _evento(t1, producto, almacen, cuando, cantidad_faltante=3, precio=100)
+        _evento(t2, producto2, almacen, cuando, cantidad_faltante=7, precio=None)
+
+        r = calcular_venta_perdida(almacen.id, hoy, hoy)
+        assert r['venta_perdida_total'] == 300.0
+        assert r['sin_precio'] == {'eventos': 1, 'unidades': 7}
+        assert r['total_es_cota_inferior'] is True
+        assert r['eventos'] == 2
+
+    def test_con_todo_precio_no_es_cota(self, app, db, almacen, producto, ub_picking):
+        from app.utils.fecha import inicio_del_dia_utc
+        from tests.conftest import hoy_operativo
+        hoy = hoy_operativo()
+        t = _tarea_picking(almacen, producto, ub_picking, 'TP-VP-SP-3')
+        _evento(t, producto, almacen, inicio_del_dia_utc(hoy) + timedelta(hours=8))
+        r = calcular_venta_perdida(almacen.id, hoy, hoy)
+        assert r['sin_precio'] == {'eventos': 0, 'unidades': 0}
+        assert r['total_es_cota_inferior'] is False

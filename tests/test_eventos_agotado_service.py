@@ -97,7 +97,10 @@ class TestRegistraEventoSoloEnAgotadoReal:
         )
         assert EventoStockAgotado.query.count() == 0
 
-    def test_producto_sin_precio_venta_captura_cero_sin_fallar(self, app, db, picking_setup):
+    def test_producto_sin_precio_declara_sin_precio_no_cero(self, app, db, picking_setup):
+        """Regla 0. `Producto.precio_venta` no lo puebla ninguna sincronización:
+        el `or 0` de antes guardaba $0 y la venta perdida sumaba ceros que
+        parecían dato. Sin precio se guarda `None` y el evento lo declara."""
         s = picking_setup
         assert not s['producto'].precio_venta  # default del modelo (0)
         tarea = _crear_tarea_en_proceso(s, cantidad=5)
@@ -106,7 +109,21 @@ class TestRegistraEventoSoloEnAgotadoReal:
             motivo='FALTANTE', cantidad_encontrada=0,
         )
         ev = EventoStockAgotado.query.one()
-        assert float(ev.precio_venta_capturado) == 0
+        assert ev.precio_venta_capturado is None
+        assert ev.to_dict()['sin_precio'] is True
+
+    def test_el_evento_guarda_el_contexto_de_la_tarea(self, app, db, picking_setup):
+        """El evento sobrevive al acta de corte (la tarea no): lo que necesita
+        de la tarea tiene que estar en la fila."""
+        s = picking_setup
+        tarea = _crear_tarea_en_proceso(s, cantidad=5, referencia_documento='PD7')
+        PickingService.reportar_problema(
+            tarea_id=tarea.id, operario_id=s['usuario'].id,
+            motivo='FALTANTE', cantidad_encontrada=1,
+        )
+        ev = EventoStockAgotado.query.one()
+        assert (ev.tarea_codigo, ev.cantidad_solicitada, ev.pedido_siesa_ref) == (
+            tarea.codigo, 5, 'PD7')
 
 
 class TestRegistrarEventoAgotadoAislado:

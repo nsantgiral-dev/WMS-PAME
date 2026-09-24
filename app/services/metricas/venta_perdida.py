@@ -12,6 +12,12 @@ hasta el 2026-09-24 este archivo filtraba `== 'PEDIDO'`, y el flujo real escribe
 `'PEDIDO_SIESA'` — la métrica daba ≈ 0 todos los días. Ver
 `app/models/tipo_documento.py`.
 
+**«Sin precio» no es $0** (Regla 0). `precio_venta_capturado = NULL` es un
+evento cuyo producto no tenía precio al capturarse — hoy casi todos, porque
+`Producto.precio_venta` no lo puebla ninguna sincronización. Esos eventos NO
+suman al total (no se inventa el precio) y se declaran en `sin_precio`: con
+`sin_precio.eventos > 0` el total es una **cota inferior**, no la venta perdida.
+
 Evento hacia adelante (ya acordado con el usuario): un rango de fechas
 anterior al despliegue de esta funcionalidad simplemente no tendrá eventos
 — no es un bug, es la ausencia de histórico documentada en la migración.
@@ -50,16 +56,28 @@ def calcular_venta_perdida(almacen_id: int, fecha_desde: date, fecha_hasta: date
     # columna UTC cruda — un evento de las 7-11:59 p.m. Colombia cae en la
     # fecha UTC del día siguiente (Regla 5 del proyecto).
     por_dia: dict = {}
+    sin_precio = {'eventos': 0, 'unidades': 0}
+    eventos = 0
     filas = db.session.query(
         EventoStockAgotado.creado_en, EventoStockAgotado.cantidad_faltante,
         EventoStockAgotado.precio_venta_capturado,
     ).filter(*filtros).all()
     for creado_en, cantidad, precio in filas:
+        eventos += 1
+        if precio is None:
+            sin_precio['eventos'] += 1
+            sin_precio['unidades'] += int(cantidad or 0)
+            continue
         clave = dia_operativo_de(creado_en).isoformat()
-        por_dia[clave] = por_dia.get(clave, 0) + float(cantidad or 0) * float(precio or 0)
+        por_dia[clave] = por_dia.get(clave, 0) + float(cantidad or 0) * float(precio)
 
     return {
         'venta_perdida_total': float(total or 0),
+        # El total solo suma eventos CON precio. Si hay eventos sin precio, el
+        # total es una cota inferior: se declara, no se rellena con cero.
+        'eventos': eventos,
+        'sin_precio': sin_precio,
+        'total_es_cota_inferior': sin_precio['eventos'] > 0,
         'por_categoria': por_categoria,
         'por_dia': por_dia,
         'fecha_desde': fecha_desde.isoformat(),

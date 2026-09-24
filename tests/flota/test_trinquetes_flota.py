@@ -881,7 +881,9 @@ class TestTrinqueteResetConoceAFlota:
         """Al revés dejaría referencias apuntando a nada — un hueco silencioso
         contra disco ocupado, y el hueco es peor."""
         reset = _leer(self._RESET)
-        i_borrado = reset.index("db.session.execute(text(f'DELETE FROM {t}'))")
+        # Desde el 2026-09-24 el DELETE vive en `_vaciar` (con su savepoint por
+        # tabla y las referencias protegidas); lo que cuenta es la LLAMADA.
+        i_borrado = reset.index('in _vaciar(db.session):')
         # La LLAMADA, no la definición. Comparar la posición del `def` mide
         # dónde está escrita la función, no cuándo se ejecuta.
         i_fotos = reset.index("print(f'  {_limpiar_fotos_huerfanas(db)}')")

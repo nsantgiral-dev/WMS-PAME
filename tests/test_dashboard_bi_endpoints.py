@@ -142,8 +142,11 @@ class TestBiVentaPerdida:
         )
         assert resp.status_code == 200
         data = resp.get_json()
+        # `sin_precio` / `total_es_cota_inferior`: un evento sin precio no suma
+        # $0 al total, se declara (Regla 0, 2026-09-24).
         assert set(data.keys()) == {'venta_perdida_total', 'por_categoria', 'por_dia',
-                                     'fecha_desde', 'fecha_hasta'}
+                                     'fecha_desde', 'fecha_hasta', 'eventos',
+                                     'sin_precio', 'total_es_cota_inferior'}
         assert data['venta_perdida_total'] == 0.0
 
 

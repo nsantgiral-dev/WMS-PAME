@@ -19,14 +19,20 @@ def registrar_evento_agotado(tarea: TareaPicking, cantidad_faltante: int) -> Eve
         return None
 
     producto = tarea.producto
+    # «Sin precio» se declara como `None`, no como $0: `precio_venta` no lo
+    # puebla ninguna sincronización (ver costo_service) y ningún producto se
+    # vende a cero. Un 0 acá se suma en la venta perdida como si fuera dato.
+    precio = producto.precio_venta
     evento = EventoStockAgotado(
         tarea_picking_id=tarea.id,
+        tarea_codigo=tarea.codigo,
+        cantidad_solicitada=tarea.cantidad_solicitada,
         producto_id=tarea.producto_id,
         almacen_id=tarea.almacen_id,
         pedido_siesa_ref=tarea.referencia_documento,
         tipo_documento=tarea.tipo_documento,
         cantidad_faltante=cantidad_faltante,
-        precio_venta_capturado=producto.precio_venta or 0,
+        precio_venta_capturado=precio if precio and precio > 0 else None,
         categoria_producto=producto.categoria,
         clasificacion_abc=producto.clasificacion_abc,
     )

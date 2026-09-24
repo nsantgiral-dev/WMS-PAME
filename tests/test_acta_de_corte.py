@@ -240,3 +240,196 @@ class TestNadieVaciaUnaBaseSinNombrarla:
         monkeypatch.setattr(mod, '_describir_destino', lambda: ('host-real', 'railway'))
         args = argparse.Namespace(ejecutar=True, confirmar_destino='host-real')
         assert mod._destino_confirmado(args) is True
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Lo que sobrevive no puede apuntar a lo que se vacía (2026-09-24)
+# ═══════════════════════════════════════════════════════════════════════════
+
+def _script():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location('_rt_fk', _SCRIPT)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def fks_de_protegidas_a_operativas(metadata, operativas, protegidas):
+    """[(hija, columna, padre, ondelete, nullable)] — el escáner, aparte del
+    veredicto, para que los meta-tests lo ejerciten sobre un esquema fabricado."""
+    out = []
+    for nombre in sorted(protegidas):
+        tabla = metadata.tables.get(nombre)
+        if tabla is None:
+            continue
+        for fk in tabla.foreign_keys:
+            padre = fk.column.table.name
+            if padre in operativas:
+                out.append((nombre, fk.parent.name, padre,
+                            (fk.ondelete or '').upper(), fk.parent.nullable))
+    return out
+
+
+def problemas_de_referencia(fks, declaradas):
+    """Veredicto: una FK de protegida a operativa está resuelta si el esquema
+    la suelta sola (`ON DELETE SET NULL` sobre columna nullable) o si el script
+    la declara en REFERENCIAS_PROTEGIDAS con modo y motivo."""
+    malos = []
+    for hija, col, padre, ondelete, nullable in fks:
+        if ondelete == 'SET NULL' and nullable:
+            continue
+        decl = declaradas.get((hija, col, padre))
+        if decl is None:
+            malos.append(f'{hija}.{col} → {padre} (ondelete={ondelete or "—"}, '
+                         f'nullable={nullable}): sin resolver')
+        elif decl[0] == 'desligar' and not nullable:
+            malos.append(f'{hija}.{col} → {padre}: «desligar» sobre NOT NULL')
+        elif decl[0] not in ('desligar', 'conservar'):
+            malos.append(f'{hija}.{col} → {padre}: modo {decl[0]!r} desconocido')
+    return malos
+
+
+class TestLoProtegidoNoApuntaAlEnsayo:
+    """El trinquete de orden solo cruzaba FKs **entre operativas**: hijos antes
+    que padres. No veía la clase en que el hijo NO se borra.
+
+    `eventos_stock_agotado` (PROTEGIDA_ANALITICA) tenía `tarea_picking_id` NOT
+    NULL sin `ondelete` hacia `tareas_picking` (OPERATIVA): en Postgres el
+    `DELETE FROM tareas_picking` del corte fallaba con un solo evento guardado.
+    Y había otras tres, nullable, que hacían fallar igual el DELETE del padre.
+    """
+
+    def _todo(self, app, clasificacion):
+        from app.extensions import db
+        with app.app_context():
+            return fks_de_protegidas_a_operativas(
+                db.metadata, set(clasificacion['operativas']),
+                clasificacion['analiticas'] | clasificacion['maestras'])
+
+    def test_toda_referencia_de_lo_protegido_al_ensayo_esta_resuelta(
+            self, app, clasificacion):
+        malos = problemas_de_referencia(self._todo(app, clasificacion),
+                                        _script().REFERENCIAS_PROTEGIDAS)
+        assert not malos, (
+            '\nUna tabla que el corte CONSERVA apunta a una que VACÍA. En '
+            'Postgres el DELETE del padre falla y el corte queda a medias.\n'
+            'Resolverla en el esquema (nullable + ondelete=SET NULL, y que la '
+            'fila guarde el contexto que necesita) o declararla en '
+            'REFERENCIAS_PROTEGIDAS con su modo y su porqué:\n  '
+            + '\n  '.join(malos))
+
+    def test_las_declaradas_existen_y_dicen_por_que(self, app, clasificacion):
+        """Solo encoge: una declaración que ya no corresponde a ninguna FK es
+        un «resuelto» que nadie verifica."""
+        reales = {(h, c, p) for h, c, p, *_ in self._todo(app, clasificacion)}
+        decl = _script().REFERENCIAS_PROTEGIDAS
+        assert set(decl) <= reales, f'declaradas sin FK real: {set(decl) - reales}'
+        assert all(len(razon) > 40 for _, razon in decl.values())
+
+    def test_el_evento_de_agotado_la_resuelve_en_el_esquema(self, app, clasificacion):
+        """El caso que originó la regla: no se desliga en el script, se arregla
+        en el esquema (m034agotado) — el evento guarda su contexto."""
+        fks = {(h, c): (o, n) for h, c, _p, o, n in self._todo(app, clasificacion)}
+        assert fks[('eventos_stock_agotado', 'tarea_picking_id')] == ('SET NULL', True)
+
+    def test_piso(self, app, clasificacion):
+        """Si el escáner deja de ver FKs devuelve cero, y cero se lee «todo bien»."""
+        assert len(self._todo(app, clasificacion)) >= 4
+
+
+class TestElDetectorDeReferenciasMuerde:
+
+    @staticmethod
+    def _meta(ondelete=None, nullable=False):
+        import sqlalchemy as sa
+        md = sa.MetaData()
+        sa.Table('op', md, sa.Column('id', sa.Integer, primary_key=True))
+        sa.Table('prot', md, sa.Column('id', sa.Integer, primary_key=True),
+                 sa.Column('op_id', sa.Integer,
+                           sa.ForeignKey('op.id', ondelete=ondelete),
+                           nullable=nullable))
+        sa.Table('op2', md, sa.Column('id', sa.Integer, primary_key=True),
+                 sa.Column('op_id', sa.Integer, sa.ForeignKey('op.id')))
+        return md
+
+    def test_ve_la_forma_rota(self):
+        """NOT NULL sin ondelete: el caso de eventos_stock_agotado."""
+        fks = fks_de_protegidas_a_operativas(self._meta(), {'op', 'op2'}, {'prot'})
+        assert fks == [('prot', 'op_id', 'op', '', False)]
+        assert problemas_de_referencia(fks, {})
+
+    def test_nullable_sin_ondelete_tambien_rompe(self):
+        fks = fks_de_protegidas_a_operativas(self._meta(nullable=True), {'op'}, {'prot'})
+        assert problemas_de_referencia(fks, {})
+
+    def test_no_marca_lo_sano(self):
+        fks = fks_de_protegidas_a_operativas(
+            self._meta('SET NULL', True), {'op', 'op2'}, {'prot'})
+        assert problemas_de_referencia(fks, {}) == []
+        # declarada con modo válido, también sana
+        fks = fks_de_protegidas_a_operativas(self._meta(nullable=True), {'op'}, {'prot'})
+        assert problemas_de_referencia(fks, {('prot', 'op_id', 'op'): ('desligar', 'x')}) == []
+
+    def test_desligar_una_not_null_no_vale(self):
+        fks = fks_de_protegidas_a_operativas(self._meta(), {'op'}, {'prot'})
+        assert problemas_de_referencia(fks, {('prot', 'op_id', 'op'): ('desligar', 'x')})
+
+
+class TestElCorteCorreConClavesForaneasDeVerdad:
+    """Ejecuta `_vaciar` —lo que corre `--ejecutar`— sobre la base de tests con
+    `PRAGMA foreign_keys=ON`, que es lo que Postgres hace siempre. Un detector
+    del esquema dice que la FK está resuelta; esto dice que el corte corre."""
+
+    def test_el_evento_sobrevive_y_el_ensayo_se_va(
+            self, app, db, almacen, producto, ub_picking, usuario):
+        from sqlalchemy import text
+        from app.models.picking import TareaPicking
+        from app.models.evento_stock_agotado import EventoStockAgotado
+        from app.services.eventos_agotado_service import registrar_evento_agotado
+        mod = _script()
+
+        t = TareaPicking(codigo='TP-CORTE-1', producto_id=producto.id,
+                         cantidad_solicitada=5, ubicacion_id=ub_picking.id,
+                         almacen_id=almacen.id, estado='BLOQUEADO',
+                         referencia_documento='PD-CORTE', tipo_documento='PEDIDO_SIESA')
+        db.session.add(t)
+        db.session.flush()
+        registrar_evento_agotado(t, 3)
+        rec_id = db.session.execute(text(
+            "INSERT INTO recepciones (codigo, numero_oc_siesa, almacen_id, estado) "
+            "VALUES ('REC-CORTE', 'OC-1', :a, 'ABIERTA') RETURNING id"),
+            {'a': almacen.id}).scalar()
+        db.session.execute(text(
+            "INSERT INTO lpn (codigo, producto_id, factor_conversion, cantidad_actual, "
+            "estado, recepcion_id) VALUES ('LPN-CORTE', :p, 1, 1, 'ACTIVO', :r)"),
+            {'p': producto.id, 'r': rec_id})
+        db.session.commit()
+
+        db.session.execute(text('PRAGMA foreign_keys=ON'))
+        try:
+            assert db.session.execute(text('PRAGMA foreign_keys')).scalar() == 1
+            errores = mod._vaciar(db.session)
+            db.session.commit()
+            propios = [(tb, str(e)) for tb, e in errores
+                       if tb in ('tareas_picking', 'recepciones', 'lpn.recepcion_id')]
+            assert not propios, propios
+
+            assert db.session.execute(text('SELECT COUNT(*) FROM tareas_picking')).scalar() == 0
+            assert db.session.execute(text('SELECT COUNT(*) FROM recepciones')).scalar() == 0
+            ev = EventoStockAgotado.query.one()
+            db.session.refresh(ev)
+            assert ev.tarea_picking_id is None
+            assert (ev.tarea_codigo, ev.cantidad_solicitada, ev.pedido_siesa_ref,
+                    ev.cantidad_faltante) == ('TP-CORTE-1', 5, 'PD-CORTE', 3)
+            assert db.session.execute(text(
+                "SELECT recepcion_id FROM lpn WHERE codigo='LPN-CORTE'")).scalar() is None
+        finally:
+            db.session.rollback()
+            db.session.execute(text('PRAGMA foreign_keys=OFF'))
+            db.session.commit()
+
+    def test_conservar_deja_en_pie_lo_que_una_protegida_referencia(self):
+        mod = _script()
+        donde = mod._donde_se_vacia('flota_foto')
+        assert 'NOT IN (SELECT foto_id FROM flota_documento_vehiculo' in donde
+        assert mod._donde_se_vacia('tareas_picking') == ''

@@ -310,6 +310,43 @@ PROTEGIDAS_MAESTRAS = {
     'clientes_geo',
 }
 
+# Claves foráneas de una tabla que SOBREVIVE (protegida) hacia una que SE
+# VACÍA (operativa). Es la otra mitad del orden por FK, y la que nadie miraba:
+# hijos antes que padres no alcanza cuando el hijo no se borra. El DELETE del
+# padre falla en Postgres, el bucle lo imprime como aviso y el corte termina a
+# medias — o, peor, la fila protegida queda apuntando a nada.
+#
+# Encontradas el 2026-09-24 por el trinquete de `test_acta_de_corte.py`, que
+# hasta entonces solo cruzaba FKs entre operativas. Eran cuatro:
+#
+#   eventos_stock_agotado.tarea_picking_id → tareas_picking   (NOT NULL: el
+#       corte no podía correr). Resuelta en el esquema: m034agotado la dejó
+#       nullable con ON DELETE SET NULL, y el evento guarda su contexto.
+#   las tres de abajo, nullable, resueltas acá.
+#
+# Cada una declara qué pasa con la referencia, y por qué:
+#   'desligar'  → se pone en NULL antes de vaciar: la fila protegida sobrevive
+#                 sin el vínculo al registro del ensayo.
+#   'conservar' → las filas del padre que una protegida referencia NO se
+#                 borran: son parte de lo protegido aunque vivan en una tabla
+#                 operativa.
+REFERENCIAS_PROTEGIDAS = {
+    ('lpn', 'recepcion_id', 'recepciones'): (
+        'desligar',
+        'El LPN es la etiqueta física de la estiba y sigue pegada después del '
+        'corte; la recepción del ensayo que la creó no. Queda sin recepción de '
+        'origen, que es lo cierto.'),
+    ('lpn', 'traslado_id', 'solicitudes_traslado'): (
+        'desligar',
+        'Mismo caso que recepcion_id: la estiba existe, el traslado de prueba '
+        'que la movió se borra con el resto del ensayo.'),
+    ('flota_documento_vehiculo', 'foto_id', 'flota_foto'): (
+        'conservar',
+        'La foto del SOAT o de la tecnomecánica es parte del expediente '
+        'protegido: borrarla obliga a volver a fotografiar el documento. Las '
+        'fotos de custodia del ensayo sí se van.'),
+}
+
 CANONES = ['docs/canon_florencia.json', 'docs/canon_PLANTILLA.json',
            'docs/canones/facturas_co.json', 'docs/canones/rop_dual.json',
            'docs/canones/clasificacion_sb.json']
@@ -327,6 +364,43 @@ def _guard():
         print()
         return False
     return True
+
+
+def _donde_se_vacia(tabla: str) -> str:
+    """El `WHERE` que deja en pie las filas de `tabla` que una protegida
+    referencia (modo 'conservar'). Cadena vacía = se vacía entera."""
+    conds = [f'id NOT IN (SELECT {col} FROM {hija} WHERE {col} IS NOT NULL)'
+             for (hija, col, padre), (modo, _) in REFERENCIAS_PROTEGIDAS.items()
+             if padre == tabla and modo == 'conservar']
+    return (' WHERE ' + ' AND '.join(conds)) if conds else ''
+
+
+def _vaciar(sesion) -> list:
+    """Desliga las referencias protegidas y vacía OPERATIVAS, en orden.
+
+    Devuelve `[(tabla, error)]`. Cada tabla va en su propio SAVEPOINT: en
+    Postgres una sentencia que falla aborta la transacción entera, y sin
+    savepoint el primer error convertía todos los DELETE siguientes en
+    «current transaction is aborted» — impresos como avisos independientes.
+    """
+    from sqlalchemy import text
+    errores = []
+    for (hija, col, _padre), (modo, _) in REFERENCIAS_PROTEGIDAS.items():
+        if modo != 'desligar':
+            continue
+        try:
+            with sesion.begin_nested():
+                sesion.execute(text(
+                    f'UPDATE {hija} SET {col} = NULL WHERE {col} IS NOT NULL'))
+        except Exception as e:
+            errores.append((f'{hija}.{col}', e))
+    for t in OPERATIVAS:
+        try:
+            with sesion.begin_nested():
+                sesion.execute(text(f'DELETE FROM {t}{_donde_se_vacia(t)}'))
+        except Exception as e:
+            errores.append((t, e))
+    return errores
 
 
 def _limpiar_fotos_huerfanas(db):
@@ -460,14 +534,28 @@ def main():
         total = 0
         for t in OPERATIVAS:
             try:
-                n = db.session.execute(text(f'SELECT COUNT(*) FROM {t}')).scalar()
+                n = db.session.execute(text(
+                    f'SELECT COUNT(*) FROM {t}{_donde_se_vacia(t)}')).scalar()
             except Exception:
+                # En Postgres la sentencia fallida aborta la transacción: sin
+                # rollback, todas las tablas siguientes salían «no existe».
+                db.session.rollback()
                 print(f'    {GRIS}{"—":>9}  {t} (no existe){FIN}')
                 continue
             total += n or 0
             print(f'    {n:>9}  {t}')
 
         print(f'\n  {GRIS}Total de filas a borrar: {total:,}{FIN}')
+
+        print(f'\n  {AMAR}Referencias de lo protegido hacia el ensayo:{FIN}')
+        for (hija, col, padre), (modo, razon) in REFERENCIAS_PROTEGIDAS.items():
+            try:
+                n = db.session.execute(text(
+                    f'SELECT COUNT(*) FROM {hija} WHERE {col} IS NOT NULL')).scalar()
+            except Exception:
+                db.session.rollback()
+                n = '?'
+            print(f'    {n:>9}  {hija}.{col} → {padre}: {modo}  {GRIS}{razon[:70]}…{FIN}')
 
         if not args.ejecutar:
             print(f'\n  {AMAR}Simulacro terminado. Nada se tocó.{FIN}\n')
@@ -486,11 +574,8 @@ def main():
             db.session.execute(text(
                 'ALTER TABLE flota_lectura_odometro DISABLE TRIGGER USER'))
         try:
-            for t in OPERATIVAS:
-                try:
-                    db.session.execute(text(f'DELETE FROM {t}'))
-                except Exception as e:
-                    print(f'  {AMAR}aviso: {t} — {e}{FIN}')
+            for t, e in _vaciar(db.session):
+                print(f'  {AMAR}aviso: {t} — {e}{FIN}')
         finally:
             if es_pg:
                 db.session.execute(text(
@@ -502,11 +587,12 @@ def main():
         sobrantes = []
         for t in OPERATIVAS:
             try:
-                n = db.session.execute(text(f'SELECT count(*) FROM {t}')).scalar()
+                n = db.session.execute(text(
+                    f'SELECT count(*) FROM {t}{_donde_se_vacia(t)}')).scalar()
                 if n:
                     sobrantes.append(f'{t}: {n}')
             except Exception:
-                pass
+                db.session.rollback()
         # Hasta hoy esto se imprimía en rojo y el script devolvía 0 igual: el
         # corte terminaba diciendo «RESET COMPLETO» con tablas operativas
         # llenas. `ok` solo medía que la memoria analítica hubiera sobrevivido
