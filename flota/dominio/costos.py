@@ -408,6 +408,12 @@ def ventanas_lleno_a_lleno(tanqueos: Sequence[dict]) -> list:
             # descarta la ventana en vez de publicar un número imposible.
             continue
         ventanas.append({
+            # Las posiciones de los dos llenos en la lista recibida. Existen
+            # para que quien juzga UNA ventana (la señal de galones de la
+            # bandeja) pueda decir qué tanqueo la cierra —fecha, estación,
+            # gasto— sin volver a armar las ventanas por su cuenta.
+            'i_desde': a,
+            'i_hasta': b,
             'km_desde': tanqueos[a]['km'],
             'km_hasta': tanqueos[b]['km'],
             'km': km,

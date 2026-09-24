@@ -18,6 +18,7 @@ def registrar_flota(app):
     # una tabla no llegue a producción.
     from flota.adaptadores import modelos  # noqa: F401
     from flota.api.avisos import avisos_bp
+    from flota.api.bandeja import bandeja_bp
     from flota.api.conductor import conductor_bp
     from flota.api.custodia import custodia_bp
     from flota.api.documentos import documentos_bp
@@ -42,6 +43,7 @@ def registrar_flota(app):
     app.register_blueprint(taller_bp, url_prefix='/flota')
     app.register_blueprint(llantas_bp, url_prefix='/flota')
     app.register_blueprint(preventivo_bp, url_prefix='/flota')
+    app.register_blueprint(bandeja_bp, url_prefix='/flota')
 
 
 __all__ = ['registrar_flota']
