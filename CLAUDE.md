@@ -4479,9 +4479,7 @@ entrega de contado pasaba con $0, ahora trae su cobro. EXENTO salió de la
 lista de formas del select de contado en `test_flujo_conductor_pagos`.
 
 Suite completa (2026-09-24, este worktree, `-m "not postgres"`, TZ=UTC):
-**8037 passed, 1 failed** (el test de liquidación con $0, corregido y verde
-por separado), 5 skipped, 19 xfailed. Después se agregó un test (el aviso del
-muelle), verde.
+**8039 passed, 0 failed**, 5 skipped, 19 xfailed.
 
 ### Lo que NO cubre, dicho
 
