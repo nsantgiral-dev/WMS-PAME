@@ -132,6 +132,7 @@ async function liqCargarDashboard() {
   try {
     _liqDashboard = await get(`/api/rutas/liquidacion/dashboard?fecha_desde=${desde}&fecha_hasta=${hasta}`);
     _liqRenderKpis(_liqDashboard.resumen || {});
+    _liqRenderSenalesConductor(_liqDashboard.senales_conductor || null);
     liqCargarDesglose();
     if (_liqSubActual === 'pendientes') liqCargarPendientes();
     else if (_liqSubActual === 'liquidadas') liqCargarLiquidadas();
@@ -161,6 +162,71 @@ function _liqRenderKpis(r) {
     kpi('Efectivo', _liqFmt(r.total_efectivo), '#4ade80') +
     kpi('Transferencia', _liqFmt(r.total_transferencia), '#60a5fa') +
     kpi('Crédito', _liqFmt(r.total_credito), '#a78bfa');
+}
+
+// ── Señales por conductor ───────────────────────────────────────────────────
+//
+// Plata en poder de cada conductor y cuántas veces declaró «no pagó y se quedó
+// con la mercancía». Son SEÑALES para quien liquida, nunca una sanción: la
+// política vive en `senales_ruta.efectivo_en_poder_por_conductor` y
+// `analitica_fugas.tasa_sin_pago_por_conductor`. El contenedor se crea al lado
+// de los KPI para no depender de un cambio en index.html.
+
+/** Pinta el bloque de señales por conductor debajo de los KPI. */
+function _liqRenderSenalesConductor(sc) {
+  let el = document.getElementById('liq-senales');
+  if (!el) {
+    const kpis = document.getElementById('liq-kpis');
+    if (!kpis || !kpis.parentNode) return;
+    el = document.createElement('div');
+    el.id = 'liq-senales';
+    el.style.marginBottom = '16px';
+    kpis.parentNode.insertBefore(el, kpis.nextSibling);
+  }
+  if (!sc) { el.innerHTML = ''; return; }
+  const efectivo = sc.efectivo_en_poder || [];
+  const sinPago = (sc.sin_pago_por_conductor || []).filter(f => f.sin_pago > 0);
+  if (!efectivo.length && !sinPago.length) { el.innerHTML = ''; return; }
+  const dias = (n) => n === null || n === undefined ? 'sin fecha' : (n === 0 ? 'hoy' : `${n} día${n !== 1 ? 's' : ''}`);
+  const filaEfectivo = f => `
+    <div style="display:flex;justify-content:space-between;gap:8px;padding:6px 0;border-bottom:1px solid var(--brd);font-size:var(--fs-sm);">
+      <span style="color:var(--tx);min-width:0;overflow-wrap:anywhere;">${esc(f.conductor || ('Conductor #' + f.conductor_id))}</span>
+      <span style="white-space:nowrap;color:${(f.dias || 0) >= 1 ? 'var(--warn-tx)' : 'var(--tx2)'};font-weight:700;">${esc(_liqFmt(f.efectivo))} · ${esc(dias(f.dias))}</span>
+    </div>`;
+  const filaSinPago = f => `
+    <div style="display:flex;justify-content:space-between;gap:8px;padding:6px 0;border-bottom:1px solid var(--brd);font-size:var(--fs-sm);">
+      <span style="color:var(--tx);min-width:0;overflow-wrap:anywhere;">${esc(f.conductor || ('Conductor #' + f.conductor_id))}</span>
+      <span style="white-space:nowrap;color:var(--tx2);">${esc(f.sin_pago)} de ${esc(f.paradas)} paradas (${esc(Math.round(f.tasa * 100))} %)${f.sin_evidencia ? ` · <b style="color:var(--warn-tx);">${esc(f.sin_evidencia)} sin foto</b>` : ''}</span>
+    </div>`;
+  el.innerHTML = `
+    <div style="display:flex;flex-wrap:wrap;gap:12px;">
+      ${efectivo.length ? `<div style="flex:1 1 280px;min-width:0;background:var(--bg-s);border:1px solid var(--brd);border-radius:10px;padding:12px;">
+        <div style="font-size:var(--fs-xs);font-weight:700;color:var(--tx2);margin-bottom:4px;">💵 EFECTIVO EN PODER DEL CONDUCTOR (sin liquidar)</div>
+        ${efectivo.map(filaEfectivo).join('')}
+      </div>` : ''}
+      ${sinPago.length ? `<div style="flex:1 1 280px;min-width:0;background:var(--bg-s);border:1px solid var(--brd);border-radius:10px;padding:12px;">
+        <div style="font-size:var(--fs-xs);font-weight:700;color:var(--tx2);margin-bottom:4px;">📦 «NO PAGÓ Y SE QUEDÓ» POR CONDUCTOR (rango)</div>
+        ${sinPago.map(filaSinPago).join('')}
+        <div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:6px;">Señal para preguntar, no una sanción.</div>
+      </div>` : ''}
+    </div>`;
+}
+
+/** Texto corto de las señales de una ruta, para su tarjeta. */
+function _liqTextoSenalesRuta(r) {
+  const s = r.senales || {};
+  const n = Object.values(s).reduce((a, b) => a + (b || 0), 0);
+  if (!n) return '';
+  return `⚠ ${n} señal${n !== 1 ? 'es' : ''} para revisar`;
+}
+
+/** Las señales de una parada en el detalle: una línea por señal. */
+function _liqBloqueSenales(rec) {
+  const lista = rec.senales || [];
+  if (!lista.length) return '';
+  return `<div style="margin-bottom:8px;padding:8px 10px;background:var(--warn-bg);border:1px solid var(--warn-brd);border-radius:8px;">
+    ${lista.map(x => `<div style="font-size:var(--fs-xs);color:var(--warn-tx);">⚠ ${esc(x.texto)}</div>`).join('')}
+  </div>`;
 }
 
 // ── Lista de rutas pendientes ───────────────────────────────────────────────
@@ -231,6 +297,7 @@ function _liqRutaCard(r, esLiquidada) {
           </div>
         </div>
       </div>
+      ${_liqTextoSenalesRuta(r) ? `<div style="margin-top:6px;font-size:var(--fs-xs);font-weight:700;color:var(--warn-tx);">${esc(_liqTextoSenalesRuta(r))}</div>` : ''}
       ${esLiquidada ? `
         <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap;">
           <span style="font-size:var(--fs-xs);padding:3px 8px;border-radius:20px;background:#1e3a5f22;color:var(--info-tx);">${ncInfo}</span>
@@ -510,9 +577,11 @@ function _liqRenderDetalle() {
           </div>
           <div style="text-align:right;">
             <span style="font-size:var(--fs-xs);font-weight:700;color:${colorEstado};">${estado}</span>
-            <div style="font-size:var(--fs-xs);color:var(--tx2);">${_liqFmt(monto)} · ${fp}</div>
+            <div style="font-size:var(--fs-xs);color:var(--tx2);">${_liqFmt(monto)} · ${esc(fp)}</div>
+            ${rec.referencia_pago ? `<div style="font-size:var(--fs-xs);color:var(--tx3);">Ref. ${esc(rec.referencia_pago)}</div>` : ''}
           </div>
-        </div>`;
+        </div>
+        ${_liqBloqueSenales(rec)}`;
 
     // Siesa flags + badges fallidos si ya liquidada
     if (esLiquidada) {

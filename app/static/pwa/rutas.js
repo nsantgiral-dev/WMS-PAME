@@ -387,10 +387,8 @@ async function cargarMuelleConRuta(rutaId) {
 async function muelleConfirmarCargueCompleto(rutaId) {
   if (!confirm(`¿Confirmar que la Ruta #${rutaId} se cargó físicamente completa?\n\nPasará a EN TRÁNSITO — ya no se podrán agregar ni escanear más bultos.`)) return;
   try {
-    const r = await fetch(API + '/api/rutas/' + rutaId + '/cerrar', {
-      method: 'POST', headers: { Authorization: 'Bearer ' + TOKEN }
-    });
-    const d = await r.json();
+    const { r, d } = await _rutaPostConFlota('/api/rutas/' + rutaId + '/cerrar', 'despachar');
+    if (!r) return;
     if (r.ok) {
       alerta(`Ruta #${rutaId} confirmada — salió a reparto`, 'exito');
       // No hace falta limpiar RUTA_ACTIVA_ID a mano: cargarRutaSelector()
@@ -752,15 +750,45 @@ function rutaCard(r) {
 }
 
 /**
+ * POST de una transición de ruta que puede traer advertencias de flota
+ * (SOAT/RTM vencido, sin inspección apta hoy, en taller, custodia de otro).
+ *
+ * **Informa, no bloquea**: si el servidor responde 409 con
+ * `advertencias_flota`, se muestran y se pide el motivo; con motivo se reenvía
+ * y la ruta sigue — el motivo queda en la bitácora como FORZAR. Cancelar el
+ * cuadro no hace nada (devuelve `{r: null}`).
+ * @param {string} ruta - '/api/rutas/<id>/iniciar' o '/cerrar'
+ * @param {string} accion - para el texto del cuadro
+ */
+async function _rutaPostConFlota(ruta, accion) {
+  const enviar = (cuerpo) => fetch(API + ruta, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + TOKEN },
+    body: JSON.stringify(cuerpo || {}),
+  });
+  let r = await enviar({});
+  let d = await r.json().catch(() => ({}));
+  if (r.status === 409 && Array.isArray(d.advertencias_flota)) {
+    const lista = d.advertencias_flota.map(a => '• ' + a.texto).join('\n');
+    const motivo = prompt(
+      `El vehículo tiene advertencias de flota:\n\n${lista}\n\n` +
+      `Podés ${accion} igual. Escribí el motivo (queda registrado):`);
+    if (motivo === null) return { r: null, d: null };
+    if (!motivo.trim()) { alerta('Sin motivo no se puede continuar', 'error'); return { r: null, d: null }; }
+    r = await enviar({ motivo_advertencias: motivo.trim() });
+    d = await r.json().catch(() => ({}));
+  }
+  return { r, d };
+}
+
+/**
  * Inicia el cargue de una ruta programada y redirige al muelle.
  * @param {number} id - ID de la ruta a iniciar
  */
 async function rutaIniciar(id) {
   try {
-    const r = await fetch(API + '/api/rutas/' + id + '/iniciar', {
-      method: 'POST', headers: { Authorization: 'Bearer ' + TOKEN }
-    });
-    const d = await r.json();
+    const { r, d } = await _rutaPostConFlota('/api/rutas/' + id + '/iniciar', 'iniciar el cargue');
+    if (!r) return;
     if (r.ok) {
       const card = document.getElementById('ruta-card-' + id);
       if (card) card.outerHTML = rutaCard(d.ruta);
@@ -788,8 +816,8 @@ async function rutaIniciar(id) {
 async function rutaCerrar(id) {
   if (!confirm(`¿Confirmar que la Ruta #${id} salió? Ya no se podrán agregar bultos.`)) return;
   try {
-    const r = await fetch(API + '/api/rutas/' + id + '/cerrar', { method: 'POST', headers: { Authorization: 'Bearer ' + TOKEN } });
-    const d = await r.json();
+    const { r, d } = await _rutaPostConFlota('/api/rutas/' + id + '/cerrar', 'despachar');
+    if (!r) return;
     if (r.ok) {
       // Actualizar card sin recargar todo
       const card = document.getElementById('ruta-card-' + id);
@@ -921,7 +949,11 @@ async function _enviarConfirmacionEntrega(id, payload) {
     const d = await r.json();
     if (r.ok) {
       const rechazados = d.rechazados || 0;
-      if (rechazados > 0) {
+      const sinDeclarar = (d.sin_declarar || []).length;
+      if (sinDeclarar > 0) {
+        // No se dan por entregados: conservan su estado y hay que ir a mirarlos.
+        alerta(`Ruta entregada · ${sinDeclarar} bulto${sinDeclarar !== 1 ? 's' : ''} sin declarar — quedaron como estaban`, 'advertencia');
+      } else if (rechazados > 0) {
         alerta(`Ruta entregada · ${rechazados} bulto${rechazados !== 1 ? 's' : ''} rechazado${rechazados !== 1 ? 's' : ''} → Devoluciones`, 'advertencia');
       } else {
         alerta('Ruta marcada como entregada', 'exito');
@@ -1737,6 +1769,15 @@ let _COND_PARADA_FORM = null;   // parada en formulario de confirmación
 let _COND_SYNCING = false;
 let _COND_OFFLINE_INIT = false;
 let _COND_RETENCIONES = [];     // catálogo de motivos (mismo que Liquidación de escritorio)
+//: Formas de pago que piden comprobante. Vienen del servidor dentro del payload
+//: de paradas (`senales_ruta.requiere_comprobante`), que se cachea offline.
+let _COND_FORMAS_COMPROBANTE = null;
+//: Lo que este formulario sabe pedir. El servidor exige comprobante y
+//: evidencia solo a los formularios que lo declaran: un ítem viejo de la cola
+//: offline no queda trabado para siempre.
+const COND_VERSION_FORMULARIO = 2;
+//: Mínimo de caracteres de la referencia (mismo que `senales_ruta.MIN_REFERENCIA`).
+const COND_MIN_REFERENCIA = 4;
 
 // ── IndexedDB helper (módulo conductor) ──────────────────────────
 const _condDB = (() => {
@@ -1896,6 +1937,7 @@ async function condAbrirParadas(rutaId) {
     catch (e) { console.warn('[RUTAS] no se pudo traer el catálogo de motivos', e); }
   }
   _COND_RETENCIONES = data.retenciones_disponibles || _COND_RETENCIONES;
+  if (Array.isArray(data.formas_con_comprobante)) _COND_FORMAS_COMPROBANTE = data.formas_con_comprobante;
   _condRenderParadas(data);
 }
 
@@ -1952,7 +1994,7 @@ function _condRenderParadas(d) {
           </div>
           <div style="margin-left:10px;flex-shrink:0;">${badge}</div>
         </div>
-        ${r ? `<div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:6px;">${esc(r.forma_pago || '')}${r.observaciones ? ' · ' + r.observaciones.substring(0,40) : ''}</div>` : ''}
+        ${r ? `<div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:6px;">${esc(r.forma_pago || '')}${r.observaciones ? ' · ' + esc(r.observaciones.substring(0,40)) : ''}</div>` : ''}
       </div>`;
   });
 
@@ -2259,13 +2301,32 @@ function _condRenderFormParada() {
 
       <div id="cond-forma-pago-wrap" style="margin-bottom:14px;">
         <label style="font-size:var(--fs-xs);color:var(--tx2);font-weight:700;display:block;margin-bottom:8px;">FORMA DE PAGO</label>
-        <select id="cond-forma-pago"
+        <select id="cond-forma-pago" onchange="condFormaPagoCambio()"
           style="width:100%;padding:14px;background:#fff;border:1px solid #d1d5db;color:var(--tx);border-radius:10px;font-size:var(--fs-md);">
           <option value="">— Seleccionar —</option>
           ${_FORMAS_PAGO_COBRO.map(f =>
             `<option value="${esc(f.v)}" ${f.v===formaActual?'selected':''}>${esc(f.l)}</option>`
           ).join('')}
         </select>
+      </div>
+
+      <!-- Solo cuando la plata entra por un banco o un datáfono. La parada en
+           efectivo no pide nada nuevo. -->
+      <div id="cond-comprobante-wrap" style="margin-bottom:14px;display:none;padding:14px;background:var(--info-bg);border:1px solid var(--info-brd);border-radius:12px;">
+        <label style="font-size:var(--fs-xs);color:var(--info-tx);font-weight:700;display:block;margin-bottom:8px;">REFERENCIA DEL COMPROBANTE *</label>
+        <input type="text" id="cond-referencia" inputmode="text" autocomplete="off" maxlength="30"
+          value="${esc((r && r.referencia_pago) || '')}"
+          placeholder="Últimos dígitos del comprobante"
+          style="width:100%;padding:14px;background:#fff;border:2px solid #d1d5db;color:var(--tx);border-radius:10px;font-size:var(--fs-lg);font-weight:700;box-sizing:border-box;letter-spacing:1px;">
+        <input type="file" id="cond-foto-comprobante" accept="image/*" capture="environment"
+          style="display:none;" onchange="condPrevisualizarComprobante()">
+        <button type="button" onclick="document.getElementById('cond-foto-comprobante').click()"
+          style="margin-top:10px;width:100%;padding:14px;background:#fff;color:var(--info-tx);border:2px dashed var(--info-brd);border-radius:12px;font-size:var(--fs-md);font-weight:700;cursor:pointer;">
+          📷 Foto del comprobante *
+        </button>
+        <div id="cond-comprobante-estado" style="margin-top:8px;font-size:var(--fs-xs);color:var(--tx2);">
+          ${r && r.tiene_foto_comprobante ? '✓ Foto del comprobante guardada — tomá otra para reemplazarla' : 'Sin foto todavía'}
+        </div>
       </div>
       `}
     </div>
@@ -2278,26 +2339,32 @@ function _condRenderFormParada() {
          Sin backticks: esto vive DENTRO de un template literal. -->
     <div id="cond-motivo-wrap" style="margin-bottom:14px;display:${estadoUi === 'RECHAZADO' ? 'block' : 'none'};">
       <label style="font-size:var(--fs-xs);color:var(--tx2);font-weight:700;display:block;margin-bottom:8px;">MOTIVO DEL RECHAZO *</label>
-      <select id="cond-motivo"
+      <select id="cond-motivo" onchange="condMotivoCambio()"
         style="width:100%;padding:12px;background:#fff;border:1px solid #d1d5db;color:var(--tx);border-radius:10px;font-size:var(--fs-sm);box-sizing:border-box;">
         <option value="">— Elegí el motivo —</option>
         ${(_COND_MOTIVOS || []).map(m => `
         <option value="${esc(m.codigo)}" ${motivoRechazoActual === m.codigo ? 'selected' : ''}>${esc(m.etiqueta)}</option>`).join('')}
       </select>
-      <p id="cond-motivo-aviso" style="font-size:var(--fs-xs);color:var(--warn-tx);margin:6px 0 0;display:none;">
-        La mercancía se queda con el cliente. El inventario NO vuelve al camión.
-      </p>
+      <div id="cond-motivo-aviso" style="margin-top:8px;padding:12px;background:var(--warn-bg);border:1px solid var(--warn-brd);border-radius:10px;display:none;">
+        <div style="font-size:var(--fs-sm);color:var(--warn-tx);font-weight:700;">La mercancía se queda con el cliente. El inventario NO vuelve al camión.</div>
+        <div style="font-size:var(--fs-xs);color:var(--tx);margin-top:6px;">Obligatorio: <b>una foto</b> (la mercancía en el local o la fachada) y tocar <b>📍 Estoy aquí</b>.</div>
+        ${(p.vendedor_nombre || p.vendedor_telefono) ? `
+        <div style="margin-top:8px;font-size:var(--fs-xs);color:var(--tx2);">Antes de dejarla, llamá al asesor del pedido:</div>
+        <div style="font-size:var(--fs-sm);color:var(--tx);font-weight:700;">${esc(p.vendedor_nombre || '—')}</div>
+        ${p.vendedor_telefono ? `<a href="tel:${esc(p.vendedor_telefono)}" style="display:inline-block;margin-top:4px;color:var(--ok-tx);font-size:var(--fs-md);font-weight:700;text-decoration:none;">📞 ${esc(p.vendedor_telefono)}</a>` : ''}
+        ` : `<div style="margin-top:8px;font-size:var(--fs-xs);color:var(--tx2);">Este pedido no trae el teléfono del asesor: avisá a la oficina.</div>`}
+      </div>
     </div>
 
     <div style="margin-bottom:14px;">
       <label style="font-size:var(--fs-xs);color:var(--tx2);font-weight:700;display:block;margin-bottom:8px;">OBSERVACIONES</label>
       <textarea id="cond-obs" rows="2"
         style="width:100%;padding:12px;background:#fff;border:1px solid #d1d5db;color:var(--tx);border-radius:10px;font-size:var(--fs-sm);resize:none;box-sizing:border-box;"
-        placeholder="Ej: Cliente solicitó factura electrónica...">${obsActual}</textarea>
+        placeholder="Ej: Cliente solicitó factura electrónica...">${esc(obsActual)}</textarea>
     </div>
 
     <div style="margin-bottom:20px;">
-      <label style="font-size:var(--fs-xs);color:var(--tx2);font-weight:700;display:block;margin-bottom:8px;">FOTO EVIDENCIA <span style="color:var(--tx2);font-weight:400;">(opcional)</span></label>
+      <label style="font-size:var(--fs-xs);color:var(--tx2);font-weight:700;display:block;margin-bottom:8px;">FOTO EVIDENCIA <span id="cond-foto-oblig" style="color:var(--tx2);font-weight:400;">(opcional)</span></label>
       <input type="file" id="cond-foto" accept="image/*" capture="environment"
         style="display:none;" onchange="condPrevisualizarFoto()">
       <button type="button" onclick="document.getElementById('cond-foto').click()"
@@ -2346,6 +2413,83 @@ function _condRenderFormParada() {
     condSelTipoPago(el._tipoPagoSel);
   }
   condRecalcularPago();
+  condFormaPagoCambio();
+  condMotivoCambio();
+}
+
+/** ¿Esta forma de pago pide comprobante? La lista la manda el servidor. */
+function _condRequiereComprobante(forma) {
+  const f = String(forma || '').toUpperCase();
+  if (!f) return false;
+  if (Array.isArray(_COND_FORMAS_COMPROBANTE)) return _COND_FORMAS_COMPROBANTE.includes(f);
+  // Caché de paradas anterior al campo: el lado conservador es pedirlo.
+  return f.startsWith('TRANSFERENCIA') || ['CONSIGNACION', 'TARJETA', 'CHEQUE'].includes(f);
+}
+
+/** Muestra el bloque del comprobante solo si la forma de pago lo pide. */
+function condFormaPagoCambio() {
+  const wrap = document.getElementById('cond-comprobante-wrap');
+  if (!wrap) return;
+  const forma = document.getElementById('cond-forma-pago')?.value || '';
+  wrap.style.display = _condRequiereComprobante(forma) ? 'block' : 'none';
+}
+
+/** ¿El motivo elegido deja la mercancía con el cliente? (catálogo del servidor) */
+function _condMotivoExigeEvidencia(codigo) {
+  const m = (_COND_MOTIVOS || []).find(x => x.codigo === codigo);
+  if (!m) return false;
+  return m.exige_evidencia ?? (m.retorna === false);
+}
+
+/** Muestra el aviso + asesor y marca la foto como obligatoria para «se quedó sin pagar». */
+function condMotivoCambio() {
+  const codigo = document.getElementById('cond-motivo')?.value || '';
+  const exige = _condMotivoExigeEvidencia(codigo);
+  const aviso = document.getElementById('cond-motivo-aviso');
+  if (aviso) aviso.style.display = exige ? 'block' : 'none';
+  const obl = document.getElementById('cond-foto-oblig');
+  if (obl) {
+    obl.textContent = exige ? '(obligatoria)' : '(opcional)';
+    obl.style.color = exige ? 'var(--err-tx)' : 'var(--tx2)';
+    obl.style.fontWeight = exige ? '700' : '400';
+  }
+}
+
+/** Confirma en pantalla que la foto del comprobante quedó tomada. */
+function condPrevisualizarComprobante() {
+  const input = document.getElementById('cond-foto-comprobante');
+  const estado = document.getElementById('cond-comprobante-estado');
+  if (!input || !estado) return;
+  estado.textContent = input.files && input.files[0] ? '✓ Foto del comprobante tomada' : 'Sin foto todavía';
+  estado.style.color = input.files && input.files[0] ? 'var(--ok-tx)' : 'var(--tx2)';
+}
+
+/**
+ * Lee un archivo de imagen y lo devuelve como JPEG base64, con el lado largo
+ * acotado. La foto de evidencia va chica; la del comprobante es una foto-dato
+ * (regla 7 de flota): el número tiene que poder leerse, así que va a 1600 px y
+ * calidad 0.8, y el servidor no la recomprime.
+ */
+function _condLeerFoto(file, ladoMax, calidad) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = reject;
+    reader.onload = ev => {
+      const img = new Image();
+      img.onerror = reject;
+      img.onload = () => {
+        let w = img.width, h = img.height;
+        const ratio = Math.min(1, ladoMax / Math.max(w, h));
+        w = Math.round(w * ratio); h = Math.round(h * ratio);
+        const canvas = document.createElement('canvas');
+        canvas.width = w; canvas.height = h;
+        canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+        resolve(canvas.toDataURL('image/jpeg', calidad));
+      };
+      img.src = ev.target.result;
+    };
+    reader.readAsDataURL(file);
+  });
 }
 
 /** Recalcula valor a cobrar + visibilidad de "Bultos con devolución" según lo tecleado en Referencias. */
@@ -2617,6 +2761,8 @@ function condCapturarUbicacion() {
         // ubicar la tienda o solo para saber que el camion anduvo cerca.
         precision_m: pos.coords.accuracy,
         fuente: 'gps_conductor',
+        // Cuándo fijó el GPS esta posición, según el teléfono.
+        pos_ts: pos.timestamp,
       };
       decir(`Ubicación tomada · ±${Math.round(pos.coords.accuracy || 0)} m de precisión`, '#4ade80');
     },
@@ -2744,34 +2890,30 @@ async function condGuardarParada() {
     return;
   }
 
-  // Foto (base64 comprimida — máx 800×600 @ JPEG 0.65)
+  // Foto de evidencia (chica: 800 px @ 0.65 — el servidor la recomprime).
   let fotoBase64 = '';
   const fotoInput = document.getElementById('cond-foto');
   if (fotoInput && fotoInput.files[0]) {
-    try {
-      fotoBase64 = await new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onerror = reject;
-        reader.onload = ev => {
-          const img = new Image();
-          img.onerror = reject;
-          img.onload = () => {
-            const MAX_W = 800, MAX_H = 600;
-            let w = img.width, h = img.height;
-            if (w > MAX_W || h > MAX_H) {
-              const ratio = Math.min(MAX_W / w, MAX_H / h);
-              w = Math.round(w * ratio); h = Math.round(h * ratio);
-            }
-            const canvas = document.createElement('canvas');
-            canvas.width = w; canvas.height = h;
-            canvas.getContext('2d').drawImage(img, 0, 0, w, h);
-            resolve(canvas.toDataURL('image/jpeg', 0.65));
-          };
-          img.src = ev.target.result;
-        };
-        reader.readAsDataURL(fotoInput.files[0]);
-      });
-    } catch (_) { alerta('Error procesando la foto', 'error'); return; }
+    try { fotoBase64 = await _condLeerFoto(fotoInput.files[0], 800, 0.65); }
+    catch (_) { alerta('Error procesando la foto', 'error'); return; }
+  }
+  const rPrevio = p.recaudo || null;
+
+  // «No pagó y se quedó con la mercancía»: foto y «Estoy aquí» obligatorios.
+  // Solo en esa excepción; el rechazo normal y la entrega no piden nada nuevo.
+  const motivoRechazo = document.getElementById('cond-motivo')?.value || '';
+  if (estadoUi === 'RECHAZADO' && _condMotivoExigeEvidencia(motivoRechazo)) {
+    if (!fotoBase64 && !(rPrevio && rPrevio.tiene_foto_entrega)) {
+      alerta('Tomá una foto: la mercancía en el local o la fachada', 'error');
+      return;
+    }
+    const g = el._geo || {};
+    const intentado = (g.lat != null && g.lon != null) || (g.motivo && g.motivo !== 'no_se_pidio');
+    if (!intentado && !rPrevio) {
+      alerta('Tocá «📍 Estoy aquí» antes de confirmar', 'error');
+      document.getElementById('cond-geo-btn')?.focus();
+      return;
+    }
   }
 
   // ── Monto: crédito confirmado → 0 fijo, nada que preguntar. Si no, Valor a
@@ -2819,7 +2961,38 @@ async function condGuardarParada() {
     }
   }
 
+  // Pago bancario: referencia + foto del comprobante. La foto es una foto-dato
+  // (el número tiene que leerse): 1600 px, calidad 0.8, sin recompresión.
+  let referenciaPago = null;
+  let fotoComprobante = '';
+  if (cobraEnLaPuerta && !esCredito && _condRequiereComprobante(formaPago) && montoFinal > 0) {
+    referenciaPago = (document.getElementById('cond-referencia')?.value || '').trim();
+    const alnum = referenciaPago.replace(/[^0-9A-Za-z]/g, '');
+    if (alnum.length < COND_MIN_REFERENCIA) {
+      alerta(`Escribí la referencia del comprobante (al menos los últimos ${COND_MIN_REFERENCIA} dígitos)`, 'error');
+      document.getElementById('cond-referencia')?.focus();
+      return;
+    }
+    const fc = document.getElementById('cond-foto-comprobante');
+    if (fc && fc.files[0]) {
+      try { fotoComprobante = await _condLeerFoto(fc.files[0], 1600, 0.8); }
+      catch (_) { alerta('Error procesando la foto del comprobante', 'error'); return; }
+    }
+    if (!fotoComprobante && !(rPrevio && rPrevio.tiene_foto_comprobante)) {
+      alerta('Tomale una foto al comprobante del pago', 'error');
+      return;
+    }
+  }
+
   const payload = {
+    // Qué sabe pedir este formulario: el servidor exige comprobante y
+    // evidencia solo a los que lo declaran.
+    version_formulario: COND_VERSION_FORMULARIO,
+    // La hora del TELÉFONO al confirmar. Viaja aparte de la del servidor y no
+    // la reemplaza; `ts_envio` se pone al mandar (ver `_condEnviarParada`).
+    ts_dispositivo:    new Date().toISOString(),
+    referencia_pago:   referenciaPago,
+    foto_comprobante:  fotoComprobante || null,
     estado_entrega:    estadoEntrega,
     forma_pago:        formaPago || null,
     // Qué modo tenía la pantalla al confirmar, no solo qué eligió el
@@ -2828,7 +3001,7 @@ async function condGuardarParada() {
     // —y no se recalcula en el servidor— porque la confirmación tiene que
     // funcionar offline, sin volver a preguntarle a Siesa.
     modo_pantalla:     el._modoPago || null,
-    motivo_rechazo:    document.getElementById('cond-motivo')?.value || null,
+    motivo_rechazo:    motivoRechazo || null,
     monto_cobrado:     montoFinal,
     motivo_descuento:  motivoDescuentoFinal,
     monto_descuento:   montoDescuentoFinal,
@@ -2860,6 +3033,9 @@ async function condGuardarParada() {
         monto_descuento:       montoDescuentoFinal,
         observaciones:         obs || null,
         foto_entrega:          fotoBase64 || null,
+        tiene_foto_entrega:    !!fotoBase64 || !!(rPrevio && rPrevio.tiene_foto_entrega),
+        referencia_pago:       referenciaPago,
+        tiene_foto_comprobante: !!fotoComprobante || !!(rPrevio && rPrevio.tiene_foto_comprobante),
         bultos_rechazados_ids: payload.bultos_rechazados,
         items_entregados:      itemsEntregados.length ? itemsEntregados : null,
       };
@@ -2879,7 +3055,7 @@ async function condGuardarParada() {
     const r = await fetch(API + '/api/rutas/' + _COND_RUTA_ACTIVA.id + '/paradas/' + p.tarea_id + '/confirmar', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + TOKEN },
-      body: JSON.stringify(payload),
+      body: JSON.stringify(_condSelloDeEnvio(payload, false, null)),
     });
     const d = await r.json();
     if (r.ok) {
@@ -2893,6 +3069,24 @@ async function condGuardarParada() {
     alerta('Error de conexión', 'error');
     if (btn) { btn.disabled = false; btn.textContent = 'Confirmar Parada'; }
   }
+}
+
+/**
+ * Le pone al payload de una parada la hora del teléfono AL ENVIAR y si viene
+ * de la cola. Con `ts_envio` el servidor mide el desfase del reloj en el mismo
+ * instante (teléfono − servidor), que separa «llegó tarde porque no había
+ * señal» de «el reloj del teléfono miente».
+ *
+ * Un ítem encolado por una versión anterior no traía `ts_dispositivo`: se usa
+ * la hora a la que se encoló (`item.ts`), que es la del teléfono al confirmar.
+ * @param {Object} payload
+ * @param {boolean} viaCola
+ * @param {number|null} tsEncolado - `Date.now()` del momento de encolar
+ */
+function _condSelloDeEnvio(payload, viaCola, tsEncolado) {
+  const out = { ...payload, ts_envio: new Date().toISOString(), via_cola: viaCola };
+  if (!out.ts_dispositivo && tsEncolado) out.ts_dispositivo = new Date(tsEncolado).toISOString();
+  return out;
 }
 
 /**
@@ -2999,10 +3193,13 @@ async function condSyncQueue() {
       const url = item.tipo === 'confirmar'
         ? `${API}/api/rutas/${item.rutaId}/paradas/${item.tareaId}/confirmar`
         : `${API}/api/rutas/${item.rutaId}/entregar`;
+      const cuerpo = item.tipo === 'confirmar'
+        ? _condSelloDeEnvio(item.payload, true, item.ts)
+        : item.payload;
       const r = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + TOKEN },
-        body: JSON.stringify(item.payload),
+        body: JSON.stringify(cuerpo),
       });
       if (!r.ok) {
         const d = await r.json().catch(() => ({}));

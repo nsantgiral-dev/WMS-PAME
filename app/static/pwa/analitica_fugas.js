@@ -181,7 +181,7 @@ function anFugasTablaGrupo(filas, etiqueta, clave) {
 
 function anFugasDetalleCaso(c, i) {
   const det = c.detalle || {};
-  const hechos = ['cliente', 'producto', 'nombre', 'que', 'lo_hizo', 'lo_tiro', 'nota_credito', 'como', 'error', 'dias', 'bodega']
+  const hechos = ['cliente', 'producto', 'nombre', 'que', 'lo_hizo', 'lo_tiro', 'nota_credito', 'faltante_retorno', 'como', 'error', 'dias', 'bodega']
     .filter(k => det[k] !== null && det[k] !== undefined && det[k] !== '')
     .map(k => `${esc(AN_FUGAS_ETIQUETAS[k] || k)}: ${esc(det[k])}`).join(' · ');
   const recorrido = c.pedido_clave
@@ -202,9 +202,32 @@ function anFugasDetalleCaso(c, i) {
   </div>`;
 }
 
+// Desgloses por conductor que algunas fugas traen en `extra`: la tasa de «no
+// pagó y se quedó» (entregado sin pago) y el faltante de retorno —declarado
+// por el conductor vs contado por recepción— (rechazos). Son señales para el
+// encargado, con su denominador; nunca un ranking de culpables.
+function anFugasPorConductor(extra) {
+  const nombre = (x) => esc(x.conductor || ('Conductor #' + x.conductor_id));
+  const tasa = (extra.por_conductor || []).filter(x => x.sin_pago > 0);
+  const falt = (extra.faltante_de_retorno || []).filter(x => x.faltante_unidades > 0 || x.sobrante_unidades > 0);
+  if (!tasa.length && !falt.length) return '';
+  const filaTasa = x => `<div style="display:flex;justify-content:space-between;gap:8px;padding:3px 0;border-bottom:1px solid var(--brd);font-size:var(--fs-xs);">
+      <span style="color:var(--tx);">${nombre(x)}</span>
+      <span style="color:var(--tx2);white-space:nowrap;">${esc(anNum(x.sin_pago))} de ${esc(anNum(x.paradas))} paradas · ${esc(anPct(x.tasa, x.paradas))}${x.sin_evidencia ? ' · ' + esc(anNum(x.sin_evidencia)) + ' sin foto' : ''}</span>
+    </div>`;
+  const filaFalt = x => `<div style="display:flex;justify-content:space-between;gap:8px;padding:3px 0;border-bottom:1px solid var(--brd);font-size:var(--fs-xs);">
+      <span style="color:var(--tx);">${nombre(x)}</span>
+      <span style="color:var(--tx2);white-space:nowrap;">faltan ${esc(anNum(x.faltante_unidades))} und${x.sobrante_unidades ? ' · sobran ' + esc(anNum(x.sobrante_unidades)) : ''} · ${esc(anNum(x.devoluciones))} devol.</span>
+    </div>`;
+  return `<div style="display:flex;flex-wrap:wrap;gap:12px;margin:8px 0;">
+    ${tasa.length ? `<div style="flex:1 1 240px;min-width:0;"><div style="font-size:var(--fs-xs);font-weight:600;color:var(--tx2);margin-bottom:4px;">Por conductor (señal, no sanción)</div>${tasa.slice(0, 10).map(filaTasa).join('')}</div>` : ''}
+    ${falt.length ? `<div style="flex:1 1 240px;min-width:0;"><div style="font-size:var(--fs-xs);font-weight:600;color:var(--tx2);margin-bottom:4px;">Faltante de retorno (declarado − contado)</div>${falt.slice(0, 10).map(filaFalt).join('')}</div>` : ''}
+  </div>`;
+}
+
 const AN_FUGAS_ETIQUETAS = {
   cliente: 'Cliente', producto: 'Producto', nombre: 'Nombre', que: 'Qué pasó', lo_hizo: 'Lo hizo',
-  lo_tiro: 'Lo tiró', nota_credito: 'NC', como: 'Cómo', error: 'Error', dias: 'Días', bodega: 'Bodega',
+  lo_tiro: 'Lo tiró', nota_credito: 'NC', faltante_retorno: 'Faltó al volver (und)', como: 'Cómo', error: 'Error', dias: 'Días', bodega: 'Bodega',
 };
 
 function anFugasDetalleHtml(d) {
@@ -234,6 +257,7 @@ function anFugasDetalleHtml(d) {
       ${anFugasTablaGrupo(f.por_almacen, 'Por almacén', 'almacen')}
       ${anFugasTablaGrupo(f.por_motivo, 'Por ' + (f.dimension_motivo || 'motivo').toLowerCase(), 'motivo')}
     </div>
+    ${anFugasPorConductor(f.extra || {})}
     <div style="font-size:var(--fs-xs);color:var(--tx3);">Los casos sin valor van primero: no saber cuánto valen no los vuelve chicos.</div>
     ${casos}
     ${nav}
