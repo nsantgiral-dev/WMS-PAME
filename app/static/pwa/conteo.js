@@ -2106,7 +2106,7 @@ async function cargarConteoRecogidoSinDespachar(almacenId) {
   if (almacenId !== undefined) _RECOGIDO_ALMACEN = almacenId ? String(almacenId) : '';
   const qs = _RECOGIDO_ALMACEN ? `?almacen_id=${encodeURIComponent(_RECOGIDO_ALMACEN)}` : '';
   try {
-    const d = await get(`/api/conteo/recogido-sin-despachar${qs}`);
+    const d = await get('/api/conteo/recogido-sin-despachar' + qs);
     _RECOGIDO_SIN_DESPACHAR = d.pedidos || [];
     if (!_RECOGIDO_SIN_DESPACHAR.length) {
       el.innerHTML = '<div style="text-align:center;padding:14px;color:var(--tx3);font-size:13px;">Nada recogido sin despachar ✓</div>';
