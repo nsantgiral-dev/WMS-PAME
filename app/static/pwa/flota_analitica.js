@@ -42,40 +42,69 @@
 
 /** El sub-tab elegido sobrevive al F5.
  *
- * `control_flota` va a vivir en Analítica; rebotarlo a Operación en cada
+ * `control_flota` va a vivir en la bandeja; rebotarlo a otra pestaña en cada
  * recarga es cómo se deja de usar una pantalla.
+ *
+ * Desde el 2026-09-24 son cinco: Hoy · Pendientes · Señales · Vehículos ·
+ * Analítica. Las cuatro primeras pintan la bandeja (`flota_bandeja.js`) en
+ * `#flota-contenido`; Analítica pinta acá, en `#flota-analitica`. El valor
+ * viejo `operacion` —el que quedó guardado en los teléfonos— se lee como Hoy.
  */
-let FLOTA_SUBTAB = 'operacion';
-try { FLOTA_SUBTAB = localStorage.getItem('flota_subtab') || 'operacion'; } catch (e) { /* modo privado */ }
+const FLOTA_SUBTABS = ['hoy', 'pendientes', 'senales', 'vehiculos', 'analitica'];
+
+function flotaNormalizarSubtab(nombre) {
+  if (nombre === 'operacion') return 'hoy';
+  return FLOTA_SUBTABS.includes(nombre) ? nombre : 'hoy';
+}
+
+let FLOTA_SUBTAB = 'hoy';
+try { FLOTA_SUBTAB = flotaNormalizarSubtab(localStorage.getItem('flota_subtab')); } catch (e) { /* modo privado */ }
 
 /** Punto de entrada del tab. Despacha; no es una capa. */
 async function flotaEntrar() {
   flotaSubtab(FLOTA_SUBTAB);
 }
 
-/** Enciende un panel y apaga el otro. Mismo patrón que `invSubtab`. */
+/** Enciende una pestaña y apaga las otras. Mismo patrón que `invSubtab`. */
 function flotaSubtab(nombre) {
-  FLOTA_SUBTAB = (nombre === 'analitica') ? 'analitica' : 'operacion';
+  FLOTA_SUBTAB = flotaNormalizarSubtab(nombre);
   try { localStorage.setItem('flota_subtab', FLOTA_SUBTAB); } catch (e) { /* modo privado */ }
 
-  const pares = {
-    operacion: ['flota-sub-operacion', 'flota-contenido'],
-    analitica: ['flota-sub-analitica', 'flota-analitica'],
-  };
-  Object.entries(pares).forEach(([k, [tab, panel]]) => {
+  FLOTA_SUBTABS.forEach(k => {
     const activo = k === FLOTA_SUBTAB;
-    const t = document.getElementById(tab);
+    const t = document.getElementById('flota-sub-' + k);
     if (t) {
       t.style.background = activo ? 'var(--pm-fill)' : 'transparent';
-      t.style.color = activo ? '#fff' : '#415A70';
+      t.style.color = activo ? '#fff' : 'var(--tx2)';
       t.style.fontWeight = activo ? '700' : '400';
     }
-    const p = document.getElementById(panel);
-    if (p) p.style.display = activo ? 'block' : 'none';
   });
+  const analitica = FLOTA_SUBTAB === 'analitica';
+  const pAn = document.getElementById('flota-analitica');
+  const pCo = document.getElementById('flota-contenido');
+  if (pAn) pAn.style.display = analitica ? 'block' : 'none';
+  if (pCo) pCo.style.display = analitica ? 'none' : 'block';
 
-  if (FLOTA_SUBTAB === 'analitica') flotaCargarAnalitica();
-  else cargarFlota();
+  if (analitica) return flotaCargarAnalitica();
+  // Sin forzar: cambiar de pestaña repinta la bandeja que ya se leyó, si es
+  // reciente. `cargarFlota()` —la que llaman Rutas y las acciones— sí fuerza.
+  return flotaBandejaCargar(false);
+}
+
+/** `/flota/health`, pedido UNA vez por carga y compartido.
+ *
+ * Lo leen Analítica y el Diagnóstico plegado de la bandeja. Antes lo pedían
+ * dos bloques de la misma pantalla, uno detrás del otro. `refrescar` lo vuelve
+ * a pedir (al entrar a Analítica); un fallo no queda guardado.
+ */
+let FLOTA_HEALTH_PROMESA = null;
+
+function flotaHealth(refrescar) {
+  if (refrescar || !FLOTA_HEALTH_PROMESA) {
+    FLOTA_HEALTH_PROMESA = get('/flota/health');
+    FLOTA_HEALTH_PROMESA.catch(() => { FLOTA_HEALTH_PROMESA = null; });
+  }
+  return FLOTA_HEALTH_PROMESA;
 }
 
 /** Un panel que todavía no tiene datos. **No es un `return ''`.**
@@ -954,7 +983,7 @@ async function flotaCargarAnalitica() {
   cont.innerHTML = '<p style="color:var(--tx2)">Cargando…</p>';
   let h;
   try {
-    h = await get('/flota/health');
+    h = await flotaHealth(true);
   } catch (e) {
     // Se DECLARA la falla en vez de dejar el panel vacío: un tab en blanco es
     // indistinguible de uno sin datos, y las dos cosas se atienden distinto.
@@ -986,5 +1015,10 @@ async function flotaCargarAnalitica() {
     flotaAnInspeccion(h),
     flotaAnPapeles(h),
     flotaAnCustodia(h),
-  ].join('');
+  ].join('') +
+  // «Salud de la flota» vivía arriba de la pestaña operativa: 41 renglones de
+  // prosa como lo primero que veía el encargado. Es estadística, y acá es
+  // donde se lee la estadística; lo accionable ya está en Pendientes, con
+  // placa y botón. Va con el MISMO health: no se vuelve a pedir.
+  await flotaBloqueSalud(h);
 }

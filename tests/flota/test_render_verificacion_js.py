@@ -30,7 +30,6 @@ from pathlib import Path
 import pytest
 
 from tests.flota.test_render_gastos_js import HARNESS as HARNESS_PINTADO
-from tests.flota.test_render_salud_js import HARNESS as HARNESS_RETORNO
 from tests.flota.test_render_salud_js import _pintar, _sano
 
 RAIZ = Path(__file__).resolve().parents[2]
@@ -49,12 +48,6 @@ def _correr(tmp_path, harness, guion) -> str:
                           capture_output=True, text=True, timeout=60)
     assert proc.returncode == 0, f'la pantalla reventó:\n{proc.stderr}'
     return json.loads(proc.stdout)['html']
-
-
-def _bloque(tmp_path, cola) -> str:
-    """El aviso del tablero: `flotaBloqueDudosas()` y lo que devuelve."""
-    return _correr(tmp_path, HARNESS_RETORNO,
-                   {'fn': 'flotaBloqueDudosas', 'rutas': {_RUTA: cola}})
 
 
 def _pantalla(tmp_path, cola) -> str:
@@ -78,28 +71,11 @@ def _cola(*filas):
     return {'pendientes': list(filas), 'total': len(filas)}
 
 
-class TestElBloqueDelTableroNoGritaSinMotivo:
-
-    def test_una_cola_vacia_no_ocupa_espacio(self, tmp_path):
-        assert _bloque(tmp_path, _cola()) == ''
-
-    def test_con_pendientes_se_ve_el_numero_y_el_botón(self, tmp_path):
-        html = _bloque(tmp_path, _cola(_fila(), _fila(lectura_id=8)))
-        assert '2 kilometraje(s) sin verificar' in html
-        assert 'flotaAbrirVerificacion()' in html
-
-    def test_dice_que_el_CPK_no_se_publica_en_vez_de_sonar_a_tramite(
-            self, tmp_path):
-        """«Pendiente de verificación» se lee como papeleo. Lo que de verdad
-        pasa es que el costo por kilómetro de ese vehículo no existe."""
-        html = _bloque(tmp_path, _cola(_fila()))
-        assert 'se publica' in html
-        assert 'sin dato' in html
-
-    def test_un_servidor_que_no_responde_no_tumba_el_tablero(self, tmp_path):
-        """El bloque vive en la pantalla del administrador, arriba de todo."""
-        assert _correr(tmp_path, HARNESS_RETORNO,
-                       {'fn': 'flotaBloqueDudosas', 'rutas': {}}) == ''
+# `TestElBloqueDelTableroNoGritaSinMotivo` probaba `flotaBloqueDudosas`, el
+# aviso que el tablero viejo pintaba arriba. Se retiró el 2026-09-24 con la
+# bandeja: los kilometrajes en duda son ahora filas de Pendientes, con placa y
+# el botón «Verificar kilometrajes», y los prueba
+# `tests/flota/test_bandeja_js.py::TestPendientes`.
 
 
 class TestLaColaMuestraLoQueHaceFaltaParaDecidir:

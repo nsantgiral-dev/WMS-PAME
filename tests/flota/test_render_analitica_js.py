@@ -112,9 +112,18 @@ def _correr(tmp_path, health, fn='flotaCargarAnalitica', args=None,
     g = tmp_path / 'g.json'
     g.write_text(json.dumps({
         'fn': fn, 'args': args or [],
+        # La bandeja entra desde el 2026-09-24: las otras cuatro pestañas del
+        # tab la pintan, y `flotaSubtab` cae a Hoy.
         'archivos': [str(PWA / 'util.js'), str(PWA / 'flota.js'),
-                     str(PWA / 'flota_analitica.js')],
+                     str(PWA / 'flota_analitica.js'),
+                     str(PWA / 'flota_bandeja.js')],
         'rutas': {'/flota/health': health,
+                  '/flota/bandeja': {'hoy': [], 'pendientes': [], 'senales': [],
+                                     'senales_no_evaluables': [],
+                                     'umbrales': {}, 'filtro': None,
+                                     'dia_operativo': '2026-09-24',
+                                     'calculado_ts': '2026-09-24T12:00:00+00:00',
+                                     'puede_decidir': False},
                   '/api/rutas/vehiculos': {'vehiculos': []}},
         'revienta': revienta,
     }), encoding='utf-8')
@@ -288,12 +297,20 @@ class TestElSubTabRecuerdaDondeEstabas:
         assert r['visible']['analitica'] == 'block'
         assert r['visible']['operacion'] == 'none'
 
-    def test_un_valor_desconocido_cae_a_operacion_y_no_a_una_pantalla_muerta(
+    def test_un_valor_desconocido_cae_a_hoy_y_no_a_una_pantalla_muerta(
             self, tmp_path):
         """Regla 0: ante entrada que no se entiende, el lado conservador es la
-        pantalla que siempre funcionó, no una en blanco."""
+        pantalla que siempre funcionó, no una en blanco. Desde el 2026-09-24
+        esa pantalla es Hoy, la bandeja."""
         r = _correr(tmp_path, _hoy_real(), fn='flotaSubtab', args=['inventado'])
-        assert r['subtab'] == 'operacion'
+        assert r['subtab'] == 'hoy'
+        assert r['visible']['operacion'] == 'block'
+
+    def test_el_valor_viejo_operacion_se_lee_como_hoy(self, tmp_path):
+        """`operacion` quedó guardado en los teléfonos de antes de la bandeja:
+        tiene que seguir llevando a la pantalla operativa."""
+        r = _correr(tmp_path, _hoy_real(), fn='flotaSubtab', args=['operacion'])
+        assert r['subtab'] == 'hoy'
         assert r['visible']['operacion'] == 'block'
 
 

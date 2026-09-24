@@ -57,6 +57,9 @@ PANTALLAS = [
     # y un CPK visible en su pantalla está a un paso de leerse como una medida
     # suya, que es lo que la regla 2 del módulo prohíbe.
     ('flota_analitica.js', None,    ['admin', 'control_flota']),
+    # La bandeja (Hoy · Pendientes · Señales · Vehículos), la pantalla de
+    # entrada del tab Flota desde el 2026-09-24. Mismos roles que el tab.
+    ('flota_bandeja.js',   None,    ['admin', 'control_flota']),
     # Sub-pestaña de 📈 Analítica: la pestaña se muestra a quien pasa
     # `_es_gestion` (contrato de la Fase 1), y los endpoints piden lo mismo.
     ('analitica_fugas.js', None,    ['admin', 'supervisor', 'jefe_almacen', 'gerente']),

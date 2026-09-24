@@ -189,53 +189,25 @@ function flotaNotaLlantas() {
     Cargá la ficha para que el número sea un dato.</p>`;
 }
 
-/** Carga la pestaña de flota: lista de vehículos y estado de custodia. */
+/** Carga la pestaña de flota. **Delega en la bandeja** (`flota_bandeja.js`).
+ *
+ * Antes pintaba, en serie, seis bloques —salud, dudosas, fuera de sede,
+ * forzados, avisos y la lista de vehículos—: seis `fetch` uno detrás de otro y
+ * `/flota/health` pedido dos veces. Lo primero que veía el encargado eran 41
+ * renglones de prosa sin placa ni botón, y cada vehículo era una tarjeta con
+ * nueve botones iguales.
+ *
+ * Ahora es UN viaje, `GET /flota/bandeja`, y la pestaña elegida (Hoy,
+ * Pendientes, Señales o Vehículos) se pinta de esa respuesta. La salud se
+ * mudó a Analítica; los avisos, al Diagnóstico plegado; fuera de sede y los
+ * cierres forzados, a Pendientes.
+ *
+ * Se conserva con este nombre porque la llaman el despachador de sub-pestañas,
+ * `rutas.js` (antes de abrir una ficha desde Rutas) y las acciones del
+ * preventivo al terminar. Devuelve la promesa: `rutas.js` espera a que pinte.
+ */
 async function cargarFlota() {
-  const cont = document.getElementById('flota-contenido');
-  if (!cont) return;
-  try {
-    const d = await get('/api/rutas/vehiculos?activos=true');
-    const vehiculos = d.vehiculos || [];
-    if (!vehiculos.length) {
-      cont.innerHTML = `<div class="tabla-card"><p>No hay vehículos activos.
-        Se dan de alta en <b>Rutas → maestras → vehículo nuevo</b>.</p>
-        <p style="color:var(--yellow)">Sin vehículos no hay dónde cargar una ficha técnica
-        ni dónde registrar un turno.</p></div>`;
-      return;
-    }
-    let html = await flotaBloqueSalud();
-    // Antes de los otros bloques y después del health: es trabajo que alguien
-    // puede hacer HOY en dos minutos, y hasta que se haga el CPK de esos
-    // vehículos no existe.
-    html += await flotaBloqueDudosas();
-    html += await flotaBloqueFueraDeSede();
-    html += await flotaBloqueForzados();
-    html += await flotaBloqueAvisos();
-    html += '<div class="tabla-card"><div class="tabla-titulo">Expedientes de flota</div>' +
-      '<p style="font-size:var(--fs-xs);color:var(--tx2);margin:0 0 12px">El alta y la baja de ' +
-      'vehículos se hacen en <b>Rutas → Vehículos</b>. Acá vive el expediente de cada uno.</p><div>';
-    vehiculos.forEach(v => {
-      html += `<div class="flota-veh">
-        <div class="flota-placa">${esc(v.placa)}</div>
-        <div class="flota-tipo">${esc(v.tipo)}${v.capacidad_kg ? ' · ' + v.capacidad_kg + ' kg' : ''}</div>
-        <button class="btn-flota" onclick="flotaAbrirRecibo('${esc(v.placa)}')">Recibo de turno</button>
-        <button class="btn-flota" onclick="flotaAbrirFicha('${esc(v.placa)}')">Ficha técnica</button>
-        <button class="btn-flota" onclick="flotaAbrirOdometro('${esc(v.placa)}')">Odómetro</button>
-        <button class="btn-flota" onclick="flotaAbrirDocumentos('${esc(v.placa)}')">Documentos</button>
-        <button class="btn-flota" onclick="flotaAbrirDanos('${esc(v.placa)}')">Daños</button>
-        <button class="btn-flota" onclick="flotaAbrirGastos('${esc(v.placa)}')">Gastos</button>
-        <button class="btn-flota" onclick="flotaAbrirTaller('${esc(v.placa)}')">Taller</button>
-        <button class="btn-flota" onclick="flotaAbrirLlantas('${esc(v.placa)}')">Llantas</button>
-        <button class="btn-flota" onclick="flotaAbrirPreventivo('${esc(v.placa)}')">Preventivo</button>
-      </div>`;
-    });
-    html += '</div></div>';
-    cont.innerHTML = html;
-    flotaAsegurarModal();
-  } catch (e) {
-    cont.innerHTML = `<div class="tabla-card" style="color:var(--red)">
-      No se pudo cargar la flota: ${esc(e.message)}</div>`;
-  }
+  return flotaBandejaCargar(true);
 }
 
 /** Crea el modal una sola vez y lo deja oculto.
@@ -934,32 +906,6 @@ async function flotaRegistrarOdometro(placa, valorKm, origen, motivo) {
 const FLOTA_DUDOSAS_URL = '/flota/odometro/dudosas';
 const FLOTA_VERIFICAR_URL = (id) => `/flota/odometro/${id}/verificar`;
 
-/** El aviso del tablero: cuántos kilometrajes esperan a que alguien los mire.
- *
- * Devuelve vacío cuando no hay ninguno — la disciplina de todos los bloques de
- * esta pantalla. Un tablero que siempre muestra algo se deja de mirar.
- */
-async function flotaBloqueDudosas() {
-  let d;
-  try {
-    d = await get(FLOTA_DUDOSAS_URL);
-  } catch (e) {
-    return '';
-  }
-  const n = (d && d.total) || 0;
-  if (!n) return '';
-  return `<div class="tabla-card" style="border-left:3px solid var(--yellow)">
-    <h3>${n} kilometraje(s) sin verificar</h3>
-    <p style="color:var(--tx2);font-size:var(--fs-sm);margin:4px 0 10px">
-      No es que estén mal: es que nadie los pudo cotejar todavía. Mientras uno de
-      estos sea un extremo del mes, el <b>costo por kilómetro de ese vehículo no
-      se publica</b> — sale «sin dato», que es lo que corresponde y no un número
-      inventado.</p>
-    <button class="btn-primary" onclick="flotaAbrirVerificacion()">
-      Verificar kilometrajes</button>
-  </div>`;
-}
-
 /** Abre la cola. La foto grande, el número al lado, y dos salidas. */
 async function flotaAbrirVerificacion() {
   // Sin placa en el encabezado: la cola es de TODA la flota y cada fila trae la
@@ -1554,12 +1500,17 @@ async function flotaGuardarDocumento() {
  * "el salto más grande del mes fue X" es una medición; decir "X está mal" sin
  * base sería un número inventado.
  */
-async function flotaBloqueSalud() {
-  let h;
-  try {
-    h = await get('/flota/health');
-  } catch (e) {
-    return '';
+async function flotaBloqueSalud(hLeido) {
+  // Recibe el health ya leído cuando lo pinta Analítica: pedirlo otra vez
+  // sería el segundo viaje que la bandeja vino a quitar. Sin argumento lo pide
+  // él mismo, que es como lo prueba su arnés.
+  let h = hLeido;
+  if (!h) {
+    try {
+      h = await get('/flota/health');
+    } catch (e) {
+      return '';
+    }
   }
   const filas = [];
 
@@ -2706,7 +2657,10 @@ async function flotaBarrerAvisos() {
            `enviados ${d.enviados} · ya avisados ${d.ya_avisados}` +
            (d.sin_destinatario ? ` · SIN DESTINATARIO ${d.sin_destinatario}` : ''),
            d.sin_destinatario ? 'advertencia' : 'exito');
-    flotaTablero();
+    // Antes llamaba a `flotaTablero()`, que no existe desde que el tablero se
+    // llama `cargarFlota`: el barrido salía bien y la pantalla tiraba un
+    // ReferenceError. Se relee el diagnóstico, que es donde vive este bloque.
+    if (typeof flotaBandejaDiagnostico === 'function') flotaBandejaDiagnostico();
   } catch (e) {
     alerta('Sin conexión: ' + e.message, 'error');
   }

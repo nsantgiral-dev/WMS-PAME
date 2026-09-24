@@ -117,8 +117,10 @@ for (const [k, v] of Object.entries(GUION.globales || {})) {
     salida.pasos.push(typeof r === 'string' ? r : null);
   }
   salida.html = {};
+  salida.texto = {};
   for (const id of (GUION.leer || [])) {
     salida.html[id] = elementos[id] ? elementos[id].innerHTML : null;
+    salida.texto[id] = elementos[id] ? elementos[id].textContent : null;
   }
   salida.pedidas = pedidas;
   salida.enviados = enviados;
@@ -212,3 +214,90 @@ class TestLaPrimeraFichaSePuedeCrear:
             'leer': ['flota-recibo'],
         })
         assert 'data-placa="A&quot;B"' in r['html']['flota-recibo']
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# La CLASE, no el caso: todo expediente abre con un vehículo recién dado de alta
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# El P0 fue un campo leído de un objeto que el servidor declara nullable. No se
+# arregla buscando `d.ficha.` con una regex —la próxima vez será otro campo de
+# otra pantalla—: se ejecuta cada pantalla del expediente contra las
+# respuestas REALES del servidor para un vehículo que no tiene nada todavía.
+# Esas respuestas son el contrato: si el servidor dice `null`, la pantalla
+# recibe `null`, no el `{}` que un test escrito a mano habría supuesto.
+
+#: Las pantallas del expediente, con placa. **Inventario declarado**: una
+#: función `flotaAbrir…(placa)` nueva en `flota.js` tiene que entrar acá o en
+#: `SIN_EXPEDIENTE` con su motivo; `test_el_inventario_esta_completo` lo exige.
+EXPEDIENTE = ('flotaAbrirRecibo', 'flotaAbrirOdometro', 'flotaAbrirFicha',
+              'flotaAbrirDocumentos', 'flotaAbrirDanos', 'flotaAbrirGastos',
+              'flotaAbrirTanqueo', 'flotaAbrirTaller', 'flotaAbrirLlantas',
+              'flotaAbrirPreventivo')
+
+SIN_EXPEDIENTE = {}
+
+#: Las lecturas que esas pantallas hacen. Se piden al servidor real.
+_LECTURAS = ('/api/almacenes/', '/api/rutas/conductores?activos=true',
+             '/flota/custodia/activa/VAC001', '/flota/vehiculo/VAC001/ficha',
+             '/flota/vehiculo/VAC001/documentos', '/flota/hallazgos/VAC001',
+             '/flota/vocabulario', '/flota/gastos/VAC001',
+             '/flota/ordenes/VAC001', '/flota/llantas/VAC001',
+             '/flota/preventivo/VAC001', '/flota/odometro/dudosas')
+
+
+@pytest.fixture
+def vacio(client, db):
+    """Un vehículo recién dado de alta y las respuestas REALES para él."""
+    from flask_jwt_extended import create_access_token
+
+    from app.models.usuario import Usuario
+    from app.models.vehiculo import Vehiculo
+
+    u = Usuario(email='vacio@bandeja.test', nombre='Admin', rol='admin',
+                activo=True)
+    u.set_password('x')
+    db.session.add_all([u, Vehiculo(placa='VAC001', tipo='NHR', activo=True)])
+    db.session.commit()
+    t = create_access_token(identity=str(u.id))
+    rutas = {}
+    for url in _LECTURAS:
+        r = client.get(url, headers={'Authorization': f'Bearer {t}'})
+        assert r.status_code == 200, (url, r.status_code, r.get_json())
+        rutas[url] = r.get_json()
+    return rutas
+
+
+class TestTodoExpedienteAbreConUnVehiculoNuevo:
+
+    @pytest.mark.parametrize('fn', EXPEDIENTE)
+    def test_abre_sin_reventar_y_sin_quedarse_cargando(self, tmp_path, vacio, fn):
+        r = correr(tmp_path, {
+            'archivos': ARCHIVOS_FICHA,
+            'operario': {'rol': 'admin'},
+            'rutas': vacio,
+            'pasos': [{'fn': fn, 'args': ['VAC001']}],
+            'leer': ['flota-recibo'],
+        })
+        html = r['html']['flota-recibo']
+        assert html, f'{fn} no pintó nada'
+        assert 'Cargando' not in html, f'{fn} se quedó en «Cargando…»'
+        assert 'undefined' not in html, f'{fn} pintó undefined'
+
+    def test_el_inventario_esta_completo(self):
+        import re
+        texto = (PWA / 'flota.js').read_text(encoding='utf-8')
+        declaradas = set(re.findall(
+            r'^(?:async\s+)?function\s+(flotaAbrir\w+)\(placa\)', texto, re.M))
+        assert len(declaradas) >= 10, 'el escáner no ve las pantallas'
+        faltan = declaradas - set(EXPEDIENTE) - set(SIN_EXPEDIENTE)
+        assert not faltan, (
+            f'Pantallas de expediente sin probar con un vehículo nuevo: {faltan}. '
+            'Agregalas a EXPEDIENTE (o a SIN_EXPEDIENTE con el motivo).')
+        sobran = set(EXPEDIENTE) - declaradas
+        assert not sobran, f'EXPEDIENTE nombra funciones que ya no existen: {sobran}'
+
+    def test_el_servidor_de_verdad_dice_null(self, vacio):
+        """Lo que hace que este test sea el del P0 y no uno inventado: la
+        respuesta real para un vehículo sin ficha trae `ficha: null`."""
+        assert vacio['/flota/vehiculo/VAC001/ficha']['ficha'] is None
