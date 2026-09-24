@@ -11,25 +11,32 @@
 // — la demanda corregida junto al SKU que se va a reponer, no en un tab.
 // ══════════════════════════════════════════════════════════════════════════
 
-let _KARDEX_POLL = null;
-
+// El panel vive en Inventario › Datos y se pinta con la política de refresco
+// del módulo (`invCargarPanel`, conteo.js): no se vacía si ya tenía datos, una
+// respuesta vieja no pisa y, si la pestaña ya no se ve, no pinta. El sondeo
+// mientras la descarga corre es un intervalo de la pestaña (`invIntervalo`):
+// se limpia al salir de Datos o de Inventario, y al volver se reanuda solo.
 async function kardexCargarPanel() {
   const el = document.getElementById('inv-datos-container');
   if (!el) return;
-  el.innerHTML = '<div style="color:var(--tx3);padding:20px;">Cargando estado…</div>';
-  try {
-    // La salud se pide aparte y no tumba el panel: sin ella los botones siguen
-    // sirviendo, y su ausencia se DICE (no se pinta un verde por omisión).
-    const [estado, salud] = await Promise.all([
+  // Un solo cargador para el módulo (`invCargarPanel`): sin «Cargando…» si ya
+  // hay datos, y una respuesta vieja no pisa. La salud se pide aparte y no
+  // tumba el panel: sin ella los botones siguen sirviendo, y su ausencia se
+  // DICE (no se pinta un verde por omisión).
+  await invCargarPanel({
+    subtab: 'datos', el,
+    cargando: '<div style="color:var(--tx3);padding:20px;">Cargando estado…</div>',
+    pedir: () => Promise.all([
       get('/api/kardex/descargar/estado'),
       get('/api/kardex/salud').catch(e => ({ _error: e.message || String(e) })),
-    ]);
-    _kardexRender(el, estado);
-    el.insertAdjacentHTML('afterbegin', `<div id="kardex-salud">${_kardexSaludHtml(salud)}</div>`);
-    if (estado.en_curso) _kardexIniciarPoll();
-  } catch (e) {
-    el.innerHTML = `<div style="color:var(--red);padding:20px;">Error: ${esc(e.message || e)}</div>`;
-  }
+    ]),
+    pintar: (el, [estado, salud]) => {
+      _kardexRender(el, estado);
+      el.insertAdjacentHTML('afterbegin', `<div id="kardex-salud">${_kardexSaludHtml(salud)}</div>`);
+    },
+    despues: ([estado]) => { if (estado.en_curso) _kardexIniciarPoll(); },
+    error: (e) => `<div style="color:var(--red);padding:20px;">Error: ${esc(e.message || e)}</div>`,
+  });
 }
 
 /** Vuelve a pedir la salud sin repintar el resto del panel (que tiene el
@@ -249,18 +256,15 @@ function _kardexPerfil(p) {
 }
 
 function _kardexIniciarPoll() {
-  if (_KARDEX_POLL) clearInterval(_KARDEX_POLL);
-  _KARDEX_POLL = setInterval(async () => {
+  invIntervalo('datos', 'kardex', async () => {
     try {
       const e = await get('/api/kardex/descargar/estado');
       if (!e.en_curso) {
-        clearInterval(_KARDEX_POLL);
-        _KARDEX_POLL = null;
+        invQuitarIntervalo('datos', 'kardex');
         kardexCargarPanel();
       }
     } catch (_) {
-      clearInterval(_KARDEX_POLL);
-      _KARDEX_POLL = null;
+      invQuitarIntervalo('datos', 'kardex');
     }
   }, 10000);
 }

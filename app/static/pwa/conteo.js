@@ -9,6 +9,167 @@
 let _INV_SUBTAB = 'lider';
 let _INV_ALMACENES = [];
 
+// ── Refresco de las pestañas de Inventario Cíclico: una política (2026-09-24) ──
+// «En Estadísticas la interfaz parpadea cada tanto.» La causa: TIMER_ADMIN
+// (app.js) llama cada 30 s a cargarAdmin(true) → cargarInventario() →
+// invSubtab(_INV_SUBTAB) → el cargador de la pestaña activa, y TODOS empezaban
+// con `el.innerHTML = 'Cargando…'`. Cada 30 s el panel se vaciaba, el área
+// scrolleable se encogía (el scroll saltaba arriba) y se volvía a pintar; en
+// Estadísticas, además, se volvía a pedir un reporte que nadie había cambiado.
+// Líder, Definitivo, ABC y Datos hacían lo mismo; Datos, de paso, devolvía la
+// fecha «Desde» del kardex a 2024-01-01 en cada tick.
+//
+// La política vive acá, y cada cargador del módulo pasa por invCargarPanel():
+//  1. El tick refresca solo la pestaña visible, y solo si es de datos vivos
+//     (`vivo` en INV_SUBTABS). Estadísticas, ABC y Datos son consulta o
+//     configuración: cargan al entrar y con su botón, igual que Layout y Vigía.
+//  2. Con datos ya pintados para los MISMOS parámetros el panel no se vacía:
+//     lo nuevo reemplaza a lo viejo cuando llega. «Cargando…» sale la primera
+//     vez o cuando cambió lo que se pide (otro almacén, otro filtro, otra página).
+//  3. Cada carga lleva su número: una respuesta vieja que llega tarde no pisa a
+//     una más nueva.
+//  4. Una respuesta que llega con la pestaña ya oculta no se pinta; al volver,
+//     la pestaña recarga.
+//  5. El scroll se conserva.
+//  6. Si un refresco falla con datos a la vista, los datos se quedan y se dice
+//     que son de la carga anterior (Regla 0: declararlo, no vaciar ni callar).
+//  7. Los intervalos propios del módulo (el sondeo del kardex) se registran por
+//     pestaña con invIntervalo() y se limpian al salir de ella o de Inventario.
+// Trinquete: tests/test_inventario_refresco_sin_parpadeo.py
+
+/** Las pestañas del módulo. `vivo`: el tick de 30 s la refresca (en silencio). */
+const INV_SUBTABS = {
+  lider:        { tab: 'inv-tab-lider',        panel: 'inv-panel-lider',        vivo: true,  cargar: () => liderCargar() },
+  conteos:      { tab: 'inv-tab-conteos',      panel: 'inv-panel-conteos',      vivo: true,  cargar: () => cargarConteos() },
+  abc:          { tab: 'inv-tab-abc',          panel: 'inv-panel-abc',          vivo: false, cargar: () => cargarResumenAbc() },
+  datos:        { tab: 'inv-tab-datos',        panel: 'inv-panel-datos',        vivo: false, cargar: () => kardexCargarPanel() },
+  definitivo:   { tab: 'inv-tab-definitivo',   panel: 'inv-panel-definitivo',   vivo: true,  cargar: () => cargarConteoDefinitivos() },
+  estadisticas: { tab: 'inv-tab-estadisticas', panel: 'inv-panel-estadisticas', vivo: false, cargar: () => conteoEstIniciar() },
+};
+
+const _INV_CARGA = {};       // canal → { seq, el, params, html }
+const _INV_INTERVALOS = {};  // subtab → { clave: id de setInterval }
+const _INV_CARGANDO = '<div style="text-align:center;padding:30px;color:var(--tx3);">Cargando…</div>';
+
+/** ¿Se está viendo esta pestaña de Inventario ahora mismo? */
+function invPanelVisible(subtab) {
+  if (typeof TAB !== 'undefined' && TAB !== 'tab-inventario') return false;
+  return _INV_SUBTAB === subtab;
+}
+
+/** Guarda el scroll de los contenedores de `el` y devuelve con qué restaurarlo. */
+function _invGuardarScroll(el) {
+  const pos = [];
+  for (let n = el.parentElement; n; n = n.parentElement) {
+    if (n.scrollTop) pos.push([n, n.scrollTop]);
+  }
+  const w = typeof window !== 'undefined' ? window : null;
+  const y = (w && w.scrollY) || 0;
+  return () => {
+    pos.forEach(([n, t]) => { if (n.scrollTop !== t) n.scrollTop = t; });
+    if (y && w.scrollY !== y && typeof w.scrollTo === 'function') w.scrollTo(0, y);
+  };
+}
+
+/** Aviso sobre datos que se quedan porque el refresco falló. */
+function _invAvisoViejo(e) {
+  return `<div class="inv-aviso-refresco" style="font-size:11px;color:var(--tx3);padding:6px 0;">No se pudo actualizar (${esc((e && e.message) || 'sin conexión')}) — lo que ves es de la carga anterior.</div>`;
+}
+
+/**
+ * Pinta un panel de Inventario Cíclico con la política de arriba.
+ * @param {object} o
+ * @param {string} o.subtab   pestaña dueña del panel (decide si se ve)
+ * @param {Element} o.el      el contenedor que se reemplaza
+ * @param {() => Promise<*>} o.pedir
+ * @param {(d:*) => string} [o.html]      HTML ya escapado, o bien
+ * @param {(el:Element, d:*) => void} [o.pintar]  pinta él mismo
+ * @param {string} [o.canal]  si el panel tiene varias listas (default: subtab)
+ * @param {*} [o.params]      lo que se pide; si cambia, sí sale «Cargando…»
+ * @param {string|false} [o.cargando]  HTML del placeholder, o false para ninguno
+ * @param {(e:Error) => string} [o.error]  HTML de error cuando no hay datos
+ * @param {(d:*) => void} [o.despues]      efectos fuera del panel (badges…)
+ * @param {(d:*) => *} [o.paramsEfectivos] lo que quedó pedido tras pintar, si
+ *   el servidor completó parámetros (las fechas por defecto de Estadísticas)
+ * @returns {Promise<boolean>} true si pintó datos nuevos
+ *
+ * Los renders van envueltos en una flecha que los LLAMA (`html: (d) => f(d)`),
+ * no pasados por nombre: el grafo de alcance de test_frontend_integrity solo ve
+ * llamadas, y los `onclick` de un render pasado por nombre quedan «huérfanos».
+ */
+async function invCargarPanel(o) {
+  const el = o.el;
+  if (!el) return false;
+  const canal = o.canal || o.subtab;
+  const est = _INV_CARGA[canal] || (_INV_CARGA[canal] = { seq: 0, el: null, params: null, html: null });
+  const params = o.params === undefined ? '' : String(o.params);
+  const conDatos = est.el === el && est.html !== null && est.params === params;
+  const mio = ++est.seq;
+  if (!conDatos && o.cargando !== false) el.innerHTML = o.cargando || _INV_CARGANDO;
+  let d, err = null;
+  try { d = await o.pedir(); } catch (e) { err = e || new Error('Error'); }
+  if (mio !== est.seq) return false;           // llegó después de una más nueva
+  if (!invPanelVisible(o.subtab)) return false; // oculta: al volver, recarga
+  const restaurar = _invGuardarScroll(el);
+  if (err) {
+    if (conDatos) el.innerHTML = _invAvisoViejo(err) + est.html;
+    else {
+      el.innerHTML = o.error ? o.error(err)
+        : `<div style="text-align:center;padding:30px;color:var(--red);">${esc(err.message || 'Error cargando')}</div>`;
+      est.html = null;
+    }
+    restaurar();
+    return false;
+  }
+  if (o.pintar) o.pintar(el, d); else el.innerHTML = o.html(d);
+  est.el = el; est.html = el.innerHTML;
+  if (o.despues) o.despues(d);
+  est.params = o.paramsEfectivos ? String(o.paramsEfectivos(d)) : params;
+  restaurar();
+  return true;
+}
+
+/** Pinta un texto fijo (p. ej. «Elegí un almacén») y anula la carga en vuelo. */
+function invPintarFijo(canal, el, html) {
+  if (!el) return;
+  const est = _INV_CARGA[canal] || (_INV_CARGA[canal] = { seq: 0, el: null, params: null, html: null });
+  est.seq++; est.html = null;
+  el.innerHTML = html;
+}
+
+/** Un intervalo que pertenece a una pestaña: se limpia al salir de ella. */
+function invIntervalo(subtab, clave, fn, ms) {
+  const regs = _INV_INTERVALOS[subtab] || (_INV_INTERVALOS[subtab] = {});
+  if (regs[clave]) clearInterval(regs[clave]);
+  regs[clave] = setInterval(fn, ms);
+  return regs[clave];
+}
+
+/** Limpia un intervalo registrado. */
+function invQuitarIntervalo(subtab, clave) {
+  const regs = _INV_INTERVALOS[subtab];
+  if (regs && regs[clave]) { clearInterval(regs[clave]); delete regs[clave]; }
+}
+
+/** Limpia los intervalos de todas las pestañas menos `excepto`. */
+function invLimpiarIntervalos(excepto) {
+  Object.keys(_INV_INTERVALOS).forEach(s => {
+    if (s === excepto) return;
+    Object.keys(_INV_INTERVALOS[s]).forEach(k => invQuitarIntervalo(s, k));
+  });
+}
+
+/** Salir de Inventario (otra pestaña del admin, o logout): nada suyo sigue corriendo. */
+function invSalir() { invLimpiarIntervalos(null); }
+
+/** El tick de TIMER_ADMIN: solo la pestaña visible, y solo si es de datos vivos. */
+function invRefrescoPeriodico() {
+  const s = INV_SUBTABS[_INV_SUBTAB];
+  if (!s || !s.vivo || !invPanelVisible(_INV_SUBTAB)) return;
+  if (typeof document !== 'undefined' && document.hidden) return;
+  return s.cargar();
+}
+
 // ── Aviso de cajas POS al iniciar un conteo ─────────────────────────────
 // Una caja que vende sin conexión no sube `f400_cant_pos_1` a Siesa central
 // hasta que sincroniza. Mientras tanto el teórico (existencia − POS) queda
@@ -36,8 +197,10 @@ function avisoCajasPosHtml() {
     </div>`;
 }
 
-/** Load almacenes for the ABC selector (once) and refresh the active inventory panel. */
-async function cargarInventario() {
+/** Load almacenes for the ABC selector (once) and refresh the active inventory panel.
+ * @param {boolean} [desdeTimer=false] el tick de TIMER_ADMIN: refresca en
+ *   silencio solo la pestaña visible y viva (invRefrescoPeriodico). */
+async function cargarInventario(desdeTimer = false) {
   // Cargar almacenes para el selector ABC (solo una vez)
   if (_INV_ALMACENES.length === 0) {
     try {
@@ -55,6 +218,9 @@ async function cargarInventario() {
   // La pestaña que esté activa, con su propio cargador: antes todo lo que no
   // fuera Conteos o Líder recargaba el resumen ABC (volver a Inventario desde
   // Definitivo dejaba la cola de definitivos sin refrescar).
+  // El tick NO pasa por invSubtab: esa es la entrada del usuario (recarga todo,
+  // restiliza las pestañas). El tick era el parpadeo de Estadísticas.
+  if (desdeTimer) return invRefrescoPeriodico();
   invSubtab(_INV_SUBTAB);
 }
 
@@ -112,26 +278,21 @@ async function guardarConfigBodega() {
  */
 function invSubtab(nombre) {
   _INV_SUBTAB = nombre;
-  const tabs = { lider: 'inv-tab-lider', conteos: 'inv-tab-conteos', abc: 'inv-tab-abc', datos: 'inv-tab-datos', definitivo: 'inv-tab-definitivo', estadisticas: 'inv-tab-estadisticas' };
-  const panels = { lider: 'inv-panel-lider', conteos: 'inv-panel-conteos', abc: 'inv-panel-abc', datos: 'inv-panel-datos', definitivo: 'inv-panel-definitivo', estadisticas: 'inv-panel-estadisticas' };
-  Object.entries(tabs).forEach(([k, id]) => {
-    const el = document.getElementById(id);
+  // Lo que corría para la pestaña anterior (el sondeo del kardex) se apaga acá.
+  invLimpiarIntervalos(nombre);
+  Object.entries(INV_SUBTABS).forEach(([k, s]) => {
+    const el = document.getElementById(s.tab);
     if (!el) return;
     const activo = k === nombre;
     el.style.background = activo ? '#1E8395' : 'transparent';
     el.style.color = activo ? '#fff' : '#415A70';
     el.style.fontWeight = activo ? '700' : '400';
   });
-  Object.entries(panels).forEach(([k, id]) => {
-    const el = document.getElementById(id);
+  Object.entries(INV_SUBTABS).forEach(([k, s]) => {
+    const el = document.getElementById(s.panel);
     if (el) el.style.display = k === nombre ? 'block' : 'none';
   });
-  if (nombre === 'lider') liderCargar();
-  else if (nombre === 'conteos') cargarConteos();
-  else if (nombre === 'abc') cargarResumenAbc();
-  else if (nombre === 'datos') kardexCargarPanel();
-  else if (nombre === 'definitivo') cargarConteoDefinitivos();
-  else if (nombre === 'estadisticas') conteoEstIniciar();
+  if (INV_SUBTABS[nombre]) INV_SUBTABS[nombre].cargar();
 }
 
 /** Refresca el contador de la pestaña "Definitivo" sin cambiar de subtab —
@@ -652,7 +813,6 @@ async function conteoCancelar(id) {
 async function cargarConteos(page) {
   if (page !== undefined) _CONTEO_PAGE = page;
   const lista = document.getElementById('inv-conteos-lista');
-  const pag   = document.getElementById('inv-conteos-paginacion');
   if (!lista) return;
 
   cargarConteoStats();
@@ -666,61 +826,60 @@ async function cargarConteos(page) {
     resueltos: 'MATCH,AJUSTADO,AJUSTANDO,CANCELADO',
   };
 
-  const esVacia = !lista.innerHTML.trim() || lista.innerHTML.includes('Cargando');
-  if (esVacia) lista.innerHTML = '<div style="text-align:center;padding:20px;color:#555;">Cargando...</div>';
+  const qs = new URLSearchParams({ page: _CONTEO_PAGE });
+  qs.set('estados', VISTA_ESTADOS[_CONTEO_VISTA] || '');
+  if (marca) qs.set('marca', marca);
+  if (clase) qs.set('clasificacion', clase);
+  const vista = _CONTEO_VISTA;
 
-  try {
-    const qs = new URLSearchParams({ page: _CONTEO_PAGE });
-    qs.set('estados', VISTA_ESTADOS[_CONTEO_VISTA] || '');
-    if (marca) qs.set('marca', marca);
-    if (clase) qs.set('clasificacion', clase);
+  await invCargarPanel({
+    subtab: 'conteos', el: lista, params: `${vista}?${qs}`,
+    cargando: '<div style="text-align:center;padding:20px;color:#555;">Cargando...</div>',
+    pedir: () => get('/api/conteo/?' + qs),
+    html: (d) => _conteosListaHtml(d, vista),
+    despues: (d) => _conteosPaginacion(d, vista),
+    error: () => '<div style="text-align:center;padding:20px;color:#ef4444;">Error cargando conteos</div>',
+  });
+}
 
-    const d = await get('/api/conteo/?' + qs);
-    const sesiones  = d.sesiones  || [];
-    const total     = d.total     || 0;
-    const totalPag  = d.total_paginas || 1;
-
-    // Badge contador en tab "Acción"
-    if (_CONTEO_VISTA === 'accion') {
-      const badge = document.getElementById('cv-badge-accion');
-      if (badge) badge.textContent = total > 0 ? total : '';
-    }
-
-    if (!sesiones.length) {
-      lista.innerHTML = `<div style="text-align:center;padding:30px;color:#555;">${_CONTEO_VISTA === 'accion' ? '✓ Sin conteos pendientes de revisión' : 'No hay conteos con este filtro'}</div>`;
-      if (pag) pag.innerHTML = '';
-      return;
-    }
-
-    // En vista acción mostrar solo padres — los hijos van embebidos en segundo_conteo
-    const filas = _CONTEO_VISTA === 'accion'
-      ? sesiones.filter(s => !s.es_segundo_conteo)
-      : sesiones;
-
-    lista.innerHTML = filas.map(s => {
-      if (_CONTEO_VISTA === 'accion')    return _renderCardAccion(s);
-      if (_CONTEO_VISTA === 'progreso')  return _renderCardProgreso(s);
-      return _renderCardResuelto(s);
-    }).join('');
-
-    if (pag) {
-      if (totalPag <= 1) { pag.innerHTML = ''; return; }
-      pag.innerHTML = `
-        <div style="display:flex;justify-content:space-between;align-items:center;width:100%;padding:4px 0;">
-          <button onclick="cargarConteos(${_CONTEO_PAGE - 1})" ${_CONTEO_PAGE <= 1 ? 'disabled' : ''}
-            style="padding:8px 14px;background:#1a1a1a;border:1px solid #333;color:${_CONTEO_PAGE <= 1 ? '#333' : '#aaa'};border-radius:8px;font-size:13px;cursor:${_CONTEO_PAGE <= 1 ? 'default' : 'pointer'};">
-            ← Anterior
-          </button>
-          <span style="font-size:12px;color:#555;">${total.toLocaleString()} conteos · Pág ${_CONTEO_PAGE}/${totalPag}</span>
-          <button onclick="cargarConteos(${_CONTEO_PAGE + 1})" ${_CONTEO_PAGE >= totalPag ? 'disabled' : ''}
-            style="padding:8px 14px;background:#1a1a1a;border:1px solid #333;color:${_CONTEO_PAGE >= totalPag ? '#333' : '#aaa'};border-radius:8px;font-size:13px;cursor:${_CONTEO_PAGE >= totalPag ? 'default' : 'pointer'};">
-            Siguiente →
-          </button>
-        </div>`;
-    }
-  } catch (e) {
-    lista.innerHTML = '<div style="text-align:center;padding:20px;color:#ef4444;">Error cargando conteos</div>';
+/** Las tarjetas de la lista de Conteos para la vista `vista`, ya escapadas. */
+function _conteosListaHtml(d, vista) {
+  const sesiones = d.sesiones || [];
+  if (!sesiones.length) {
+    return `<div style="text-align:center;padding:30px;color:#555;">${vista === 'accion' ? '✓ Sin conteos pendientes de revisión' : 'No hay conteos con este filtro'}</div>`;
   }
+  // En vista acción mostrar solo padres — los hijos van embebidos en segundo_conteo
+  const filas = vista === 'accion' ? sesiones.filter(s => !s.es_segundo_conteo) : sesiones;
+  return filas.map(s => {
+    if (vista === 'accion')    return _renderCardAccion(s);
+    if (vista === 'progreso')  return _renderCardProgreso(s);
+    return _renderCardResuelto(s);
+  }).join('');
+}
+
+/** El badge de «Acción» y los botones de página, después de pintar la lista. */
+function _conteosPaginacion(d, vista) {
+  const total    = d.total || 0;
+  const totalPag = d.total_paginas || 1;
+  if (vista === 'accion') {
+    const badge = document.getElementById('cv-badge-accion');
+    if (badge) badge.textContent = total > 0 ? total : '';
+  }
+  const pag = document.getElementById('inv-conteos-paginacion');
+  if (!pag) return;
+  if (!(d.sesiones || []).length || totalPag <= 1) { pag.innerHTML = ''; return; }
+  pag.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:center;width:100%;padding:4px 0;">
+      <button onclick="cargarConteos(${_CONTEO_PAGE - 1})" ${_CONTEO_PAGE <= 1 ? 'disabled' : ''}
+        style="padding:8px 14px;background:#1a1a1a;border:1px solid #333;color:${_CONTEO_PAGE <= 1 ? '#333' : '#aaa'};border-radius:8px;font-size:13px;cursor:${_CONTEO_PAGE <= 1 ? 'default' : 'pointer'};">
+        ← Anterior
+      </button>
+      <span style="font-size:12px;color:#555;">${esc(total.toLocaleString())} conteos · Pág ${esc(_CONTEO_PAGE)}/${esc(totalPag)}</span>
+      <button onclick="cargarConteos(${_CONTEO_PAGE + 1})" ${_CONTEO_PAGE >= totalPag ? 'disabled' : ''}
+        style="padding:8px 14px;background:#1a1a1a;border:1px solid #333;color:${_CONTEO_PAGE >= totalPag ? '#333' : '#aaa'};border-radius:8px;font-size:13px;cursor:${_CONTEO_PAGE >= totalPag ? 'default' : 'pointer'};">
+        Siguiente →
+      </button>
+    </div>`;
 }
 
 /** Show the manual conteo creation form, load operarios, and focus the code input. */
@@ -846,14 +1005,14 @@ async function cargarResumenAbc() {
   if (!almacenId) return;
   const resumenEl = document.getElementById('inv-abc-resumen');
   if (!resumenEl) return;
-  resumenEl.innerHTML = '<div style="text-align:center;padding:20px;color:#555;">Cargando...</div>';
-  try {
-    const d = await get(`/api/conteo/abc/resumen?almacen_id=${encodeURIComponent(almacenId)}`);
-    resumenEl.innerHTML = _abcResumenHtml(d);
-    _abcPintarEtiquetas(d);
-  } catch (e) {
-    resumenEl.innerHTML = '<div style="color:#ef4444;font-size:12px;">Error cargando resumen</div>';
-  }
+  await invCargarPanel({
+    subtab: 'abc', el: resumenEl, params: almacenId,
+    cargando: '<div style="text-align:center;padding:20px;color:#555;">Cargando...</div>',
+    pedir: () => get(`/api/conteo/abc/resumen?almacen_id=${encodeURIComponent(almacenId)}`),
+    html: (d) => _abcResumenHtml(d),
+    despues: (d) => _abcPintarEtiquetas(d),
+    error: () => '<div style="color:#ef4444;font-size:12px;">Error cargando resumen</div>',
+  });
 }
 
 /** HTML del resumen ABC + el plan vigente (cupo, pendientes, lo que haría hoy). */
@@ -1322,33 +1481,39 @@ async function cargarConteoDefinitivos() {
   cargarConteoNovedades();
   const el = document.getElementById('inv-definitivo-lista');
   if (!el) return;
-  el.innerHTML = '<div style="text-align:center;padding:30px;color:var(--tx3);">Cargando…</div>';
-  try {
-    const d = await get('/api/conteo/definitivos');
-    const pend = d.pendientes || [];
-    const badge = document.getElementById('inv-tab-definitivo-badge');
-    if (badge) {
-      badge.textContent = pend.length;
-      badge.style.display = pend.length > 0 ? 'inline' : 'none';
-    }
-    if (!pend.length) {
-      el.innerHTML = '<div style="text-align:center;padding:40px 20px;color:var(--tx3);">Sin conteos definitivos pendientes ✓</div>';
-      return;
-    }
-    el.innerHTML = pend.map(s => `
-      <div style="background:var(--bg-s);border:1px solid var(--brd);border-radius:12px;padding:14px;margin-bottom:10px;">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
-          <span style="font-size:11px;font-weight:700;color:#f59e0b;background:rgba(120,53,15,.35);padding:2px 8px;border-radius:8px;">1º y 2º conteo no coinciden</span>
-          <span style="font-size:11px;color:var(--tx3);">${esc(s.almacen_nombre || '')}</span>
-        </div>
-        <div style="font-size:15px;font-weight:700;color:var(--tx);">${esc(s.producto_nombre || s.producto_codigo || '—')}</div>
-        <div style="font-size:13px;color:var(--tx3);">${esc(s.producto_codigo || '')} · Ubicación ${esc(s.ubicacion_codigo || '—')}</div>
-        <div style="font-size:11px;color:var(--tx3);margin-top:4px;">${s.operario_nombre ? `En proceso por ${esc(s.operario_nombre)}` : 'Sin asignar — tómalo vos'}</div>
-        <button onclick="defAbrirConteo(${esc(s.id)})" style="width:100%;margin-top:10px;padding:12px;background:var(--pm);color:#fff;border:none;border-radius:10px;font-size:14px;font-weight:700;cursor:pointer;">🎯 Contar ahora</button>
-      </div>`).join('');
-  } catch (e) {
-    el.innerHTML = '<div style="text-align:center;padding:30px;color:#ef4444;">Error cargando la cola</div>';
+  await invCargarPanel({
+    subtab: 'definitivo', el,
+    pedir: () => get('/api/conteo/definitivos'),
+    html: (d) => _definitivosHtml(d),
+    despues: (d) => {
+      const pend = d.pendientes || [];
+      const badge = document.getElementById('inv-tab-definitivo-badge');
+      if (badge) {
+        badge.textContent = pend.length;
+        badge.style.display = pend.length > 0 ? 'inline' : 'none';
+      }
+    },
+    error: () => '<div style="text-align:center;padding:30px;color:#ef4444;">Error cargando la cola</div>',
+  });
+}
+
+/** La cola de conteos definitivos, ya escapada. */
+function _definitivosHtml(d) {
+  const pend = d.pendientes || [];
+  if (!pend.length) {
+    return '<div style="text-align:center;padding:40px 20px;color:var(--tx3);">Sin conteos definitivos pendientes ✓</div>';
   }
+  return pend.map(s => `
+    <div style="background:var(--bg-s);border:1px solid var(--brd);border-radius:12px;padding:14px;margin-bottom:10px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+        <span style="font-size:11px;font-weight:700;color:#f59e0b;background:rgba(120,53,15,.35);padding:2px 8px;border-radius:8px;">1º y 2º conteo no coinciden</span>
+        <span style="font-size:11px;color:var(--tx3);">${esc(s.almacen_nombre || '')}</span>
+      </div>
+      <div style="font-size:15px;font-weight:700;color:var(--tx);">${esc(s.producto_nombre || s.producto_codigo || '—')}</div>
+      <div style="font-size:13px;color:var(--tx3);">${esc(s.producto_codigo || '')} · Ubicación ${esc(s.ubicacion_codigo || '—')}</div>
+      <div style="font-size:11px;color:var(--tx3);margin-top:4px;">${s.operario_nombre ? `En proceso por ${esc(s.operario_nombre)}` : 'Sin asignar — tómalo vos'}</div>
+      <button onclick="defAbrirConteo(${esc(s.id)})" style="width:100%;margin-top:10px;padding:12px;background:var(--pm);color:#fff;border:none;border-radius:10px;font-size:14px;font-weight:700;cursor:pointer;">🎯 Contar ahora</button>
+    </div>`).join('');
 }
 
 /** Abre el conteo definitivo de una sesión CC3 — se auto-asigna al supervisor.
@@ -1994,30 +2159,34 @@ const _MOTIVO_BLOQUEO_TXT = {
 async function cargarConteoBloqueados() {
   const el = document.getElementById('inv-bloqueados-lista');
   if (!el) return;
-  try {
-    const d = await get('/api/conteo/bloqueados');
-    const filas = d.bloqueados || [];
-    if (!filas.length) {
-      el.innerHTML = '<div style="text-align:center;padding:14px;color:var(--tx3);font-size:13px;">Ningún conteo bloqueado ✓</div>';
-      return;
-    }
-    el.innerHTML = filas.map(b => `
-      <div style="background:var(--bg-s);border:1px solid var(--brd);border-radius:12px;padding:12px 14px;margin-bottom:8px;">
-        <div style="display:flex;justify-content:space-between;gap:8px;">
-          <span style="font-size:11px;font-weight:700;color:#f59e0b;">${esc(_MOTIVO_BLOQUEO_TXT[b.motivo_bloqueo] || b.motivo_bloqueo)} · ${esc(_nivelConteoTxt(b.nivel))}</span>
-          <span style="font-size:11px;color:var(--tx3);">${esc(b.almacen_nombre || '')}</span>
-        </div>
-        <div style="font-size:14px;font-weight:700;color:var(--tx);margin-top:4px;">${esc(b.producto_nombre || b.producto_codigo || '—')}</div>
-        <div style="font-size:12px;color:var(--tx3);">${esc(b.producto_codigo || '')} · ${esc(b.codigo)}${b.reportado_por_nombre ? ` · reportó ${esc(b.reportado_por_nombre)}` : ''}</div>
-        ${b.nota ? `<div style="font-size:12px;color:var(--tx2);margin-top:4px;">${esc(b.nota)}</div>` : ''}
-        <div style="display:flex;gap:8px;margin-top:10px;">
-          <button onclick="conteoReabrirBloqueado(${esc(b.id)})" style="flex:1;padding:10px;background:var(--pm);color:#fff;border:none;border-radius:10px;font-size:13px;font-weight:700;cursor:pointer;">↻ Reabrir</button>
-          <button onclick="conteoCancelarBloqueado(${esc(b.id)})" style="flex:1;padding:10px;background:#7f1d1d;color:#fca5a5;border:none;border-radius:10px;font-size:13px;font-weight:700;cursor:pointer;">✕ Cancelar</button>
-        </div>
-      </div>`).join('');
-  } catch (e) {
-    el.innerHTML = '<div style="text-align:center;padding:14px;color:#ef4444;font-size:13px;">Error cargando los bloqueados</div>';
+  await invCargarPanel({
+    subtab: 'definitivo', canal: 'definitivo:bloqueados', el, cargando: false,
+    pedir: () => get('/api/conteo/bloqueados'),
+    html: (d) => _bloqueadosHtml(d),
+    error: () => '<div style="text-align:center;padding:14px;color:#ef4444;font-size:13px;">Error cargando los bloqueados</div>',
+  });
+}
+
+/** La lista de conteos bloqueados, ya escapada. */
+function _bloqueadosHtml(d) {
+  const filas = d.bloqueados || [];
+  if (!filas.length) {
+    return '<div style="text-align:center;padding:14px;color:var(--tx3);font-size:13px;">Ningún conteo bloqueado ✓</div>';
   }
+  return filas.map(b => `
+    <div style="background:var(--bg-s);border:1px solid var(--brd);border-radius:12px;padding:12px 14px;margin-bottom:8px;">
+      <div style="display:flex;justify-content:space-between;gap:8px;">
+        <span style="font-size:11px;font-weight:700;color:#f59e0b;">${esc(_MOTIVO_BLOQUEO_TXT[b.motivo_bloqueo] || b.motivo_bloqueo)} · ${esc(_nivelConteoTxt(b.nivel))}</span>
+        <span style="font-size:11px;color:var(--tx3);">${esc(b.almacen_nombre || '')}</span>
+      </div>
+      <div style="font-size:14px;font-weight:700;color:var(--tx);margin-top:4px;">${esc(b.producto_nombre || b.producto_codigo || '—')}</div>
+      <div style="font-size:12px;color:var(--tx3);">${esc(b.producto_codigo || '')} · ${esc(b.codigo)}${b.reportado_por_nombre ? ` · reportó ${esc(b.reportado_por_nombre)}` : ''}</div>
+      ${b.nota ? `<div style="font-size:12px;color:var(--tx2);margin-top:4px;">${esc(b.nota)}</div>` : ''}
+      <div style="display:flex;gap:8px;margin-top:10px;">
+        <button onclick="conteoReabrirBloqueado(${esc(b.id)})" style="flex:1;padding:10px;background:var(--pm);color:#fff;border:none;border-radius:10px;font-size:13px;font-weight:700;cursor:pointer;">↻ Reabrir</button>
+        <button onclick="conteoCancelarBloqueado(${esc(b.id)})" style="flex:1;padding:10px;background:#7f1d1d;color:#fca5a5;border:none;border-radius:10px;font-size:13px;font-weight:700;cursor:pointer;">✕ Cancelar</button>
+      </div>
+    </div>`).join('');
 }
 
 /** Devuelve un conteo bloqueado a la cola, desde cero. */
@@ -2054,22 +2223,26 @@ async function conteoCancelarBloqueado(id) {
 async function cargarConteoNovedades() {
   const el = document.getElementById('inv-novedades-lista');
   if (!el) return;
-  try {
-    const d = await get('/api/conteo/novedades');
-    const filas = d.novedades || [];
-    if (!filas.length) {
-      el.innerHTML = '<div style="text-align:center;padding:14px;color:var(--tx3);font-size:13px;">Nada reportado ✓</div>';
-      return;
-    }
-    el.innerHTML = filas.map(n => `
-      <div style="background:var(--bg-s);border:1px solid var(--brd);border-radius:12px;padding:12px 14px;margin-bottom:8px;">
-        <div style="font-size:11px;color:var(--tx3);">${esc(n.almacen_nombre || '')} · ${esc(n.reportado_por_nombre || '')} · contando ${esc(n.producto_en_conteo || '—')}</div>
-        <div style="font-size:14px;color:var(--tx);margin-top:4px;">${esc(n.descripcion)}</div>
-        <button onclick="conteoResolverNovedad(${esc(n.id)})" style="width:100%;margin-top:8px;padding:10px;background:var(--pm);color:#fff;border:none;border-radius:10px;font-size:13px;font-weight:700;cursor:pointer;">✓ Resuelta</button>
-      </div>`).join('');
-  } catch (e) {
-    el.innerHTML = '<div style="text-align:center;padding:14px;color:#ef4444;font-size:13px;">Error cargando las novedades</div>';
+  await invCargarPanel({
+    subtab: 'definitivo', canal: 'definitivo:novedades', el, cargando: false,
+    pedir: () => get('/api/conteo/novedades'),
+    html: (d) => _novedadesHtml(d),
+    error: () => '<div style="text-align:center;padding:14px;color:#ef4444;font-size:13px;">Error cargando las novedades</div>',
+  });
+}
+
+/** La lista de mercancía sin código, ya escapada. */
+function _novedadesHtml(d) {
+  const filas = d.novedades || [];
+  if (!filas.length) {
+    return '<div style="text-align:center;padding:14px;color:var(--tx3);font-size:13px;">Nada reportado ✓</div>';
   }
+  return filas.map(n => `
+    <div style="background:var(--bg-s);border:1px solid var(--brd);border-radius:12px;padding:12px 14px;margin-bottom:8px;">
+      <div style="font-size:11px;color:var(--tx3);">${esc(n.almacen_nombre || '')} · ${esc(n.reportado_por_nombre || '')} · contando ${esc(n.producto_en_conteo || '—')}</div>
+      <div style="font-size:14px;color:var(--tx);margin-top:4px;">${esc(n.descripcion)}</div>
+      <button onclick="conteoResolverNovedad(${esc(n.id)})" style="width:100%;margin-top:8px;padding:10px;background:var(--pm);color:#fff;border:none;border-radius:10px;font-size:13px;font-weight:700;cursor:pointer;">✓ Resuelta</button>
+    </div>`).join('');
 }
 
 /** Marca una novedad como resuelta, diciendo qué se hizo. */
@@ -2105,26 +2278,31 @@ async function cargarConteoRecogidoSinDespachar(almacenId) {
   if (!el) return;
   if (almacenId !== undefined) _RECOGIDO_ALMACEN = almacenId ? String(almacenId) : '';
   const qs = _RECOGIDO_ALMACEN ? `?almacen_id=${encodeURIComponent(_RECOGIDO_ALMACEN)}` : '';
-  try {
-    const d = await get('/api/conteo/recogido-sin-despachar' + qs);
-    _RECOGIDO_SIN_DESPACHAR = d.pedidos || [];
-    if (!_RECOGIDO_SIN_DESPACHAR.length) {
-      el.innerHTML = '<div style="text-align:center;padding:14px;color:var(--tx3);font-size:13px;">Nada recogido sin despachar ✓</div>';
-      return;
-    }
-    el.innerHTML = _RECOGIDO_SIN_DESPACHAR.map((p, i) => `
-      <div style="background:var(--bg-s);border:1px solid var(--brd);border-radius:12px;padding:12px 14px;margin-bottom:8px;">
-        <div style="display:flex;justify-content:space-between;gap:8px;">
-          <span style="font-size:11px;font-weight:700;color:#f59e0b;">${p.situacion === 'EMPAQUE_CANCELADO' ? 'Empaque cancelado sin remisión' : 'Recogido y nunca empacado'}</span>
-          <span style="font-size:11px;color:var(--tx3);">${esc(p.almacen_nombre || '')}</span>
-        </div>
-        <div style="font-size:14px;font-weight:700;color:var(--tx);margin-top:4px;">Pedido ${esc(p.pedido)}</div>
-        ${(p.productos || []).map(x => `<div style="font-size:12px;color:var(--tx2);">${esc(x.producto_codigo || '')} · ${esc(x.producto_nombre || '')} — ${esc(x.cantidad_recogida)} und</div>`).join('')}
-        <button onclick="conteoDevolverAlEstante(${i})" style="width:100%;margin-top:8px;padding:10px;background:var(--pm);color:#fff;border:none;border-radius:10px;font-size:13px;font-weight:700;cursor:pointer;">↩ Volvió al estante</button>
-      </div>`).join('');
-  } catch (e) {
-    el.innerHTML = '<div style="text-align:center;padding:14px;color:#ef4444;font-size:13px;">Error cargando lo recogido sin despachar</div>';
+  await invCargarPanel({
+    subtab: 'lider', canal: 'lider:recogido', el, params: qs, cargando: false,
+    pedir: () => get('/api/conteo/recogido-sin-despachar' + qs),
+    html: (d) => _recogidoHtml(d),
+    error: () => '<div style="text-align:center;padding:14px;color:#ef4444;font-size:13px;">Error cargando lo recogido sin despachar</div>',
+  });
+}
+
+/** La lista de «Recogido sin despachar». Deja la lista en _RECOGIDO_SIN_DESPACHAR:
+ * los botones pasan su posición. */
+function _recogidoHtml(d) {
+  _RECOGIDO_SIN_DESPACHAR = d.pedidos || [];
+  if (!_RECOGIDO_SIN_DESPACHAR.length) {
+    return '<div style="text-align:center;padding:14px;color:var(--tx3);font-size:13px;">Nada recogido sin despachar ✓</div>';
   }
+  return _RECOGIDO_SIN_DESPACHAR.map((p, i) => `
+    <div style="background:var(--bg-s);border:1px solid var(--brd);border-radius:12px;padding:12px 14px;margin-bottom:8px;">
+      <div style="display:flex;justify-content:space-between;gap:8px;">
+        <span style="font-size:11px;font-weight:700;color:#f59e0b;">${p.situacion === 'EMPAQUE_CANCELADO' ? 'Empaque cancelado sin remisión' : 'Recogido y nunca empacado'}</span>
+        <span style="font-size:11px;color:var(--tx3);">${esc(p.almacen_nombre || '')}</span>
+      </div>
+      <div style="font-size:14px;font-weight:700;color:var(--tx);margin-top:4px;">Pedido ${esc(p.pedido)}</div>
+      ${(p.productos || []).map(x => `<div style="font-size:12px;color:var(--tx2);">${esc(x.producto_codigo || '')} · ${esc(x.producto_nombre || '')} — ${esc(x.cantidad_recogida)} und</div>`).join('')}
+      <button onclick="conteoDevolverAlEstante(${i})" style="width:100%;margin-top:8px;padding:10px;background:var(--pm);color:#fff;border:none;border-radius:10px;font-size:13px;font-weight:700;cursor:pointer;">↩ Volvió al estante</button>
+    </div>`).join('');
 }
 
 /** El líder declara que la mercancía del pedido volvió al estante. @param {number} i índice en la lista */
@@ -2205,27 +2383,37 @@ async function conteoEstIniciar() {
   await conteoEstCargar();
 }
 
-/** Lee los filtros, pide el reporte y lo pinta. */
-async function conteoEstCargar() {
-  const el = document.getElementById('inv-estadisticas-contenido');
-  if (!el) return;
+/** La consulta que arman los filtros de Estadísticas, tal como están. */
+function _ceQuery() {
   const qs = new URLSearchParams();
   [['desde', 'ce-desde'], ['hasta', 'ce-hasta'], ['almacen_id', 'ce-almacen'],
    ['clase', 'ce-clase'], ['tipo', 'ce-tipo']].forEach(([k, id]) => {
     const v = document.getElementById(id)?.value;
     if (v) qs.set(k, v);
   });
-  el.innerHTML = '<div style="text-align:center;padding:30px;color:var(--tx3);">Cargando…</div>';
-  try {
-    const d = await get(`/api/conteo/estadisticas?${qs.toString()}`);
-    const desde = document.getElementById('ce-desde');
-    const hasta = document.getElementById('ce-hasta');
-    if (desde && !desde.value) desde.value = d.parametros.desde;
-    if (hasta && !hasta.value) hasta.value = d.parametros.hasta;
-    el.innerHTML = _ceRender(d);
-  } catch (e) {
-    el.innerHTML = `<div style="text-align:center;padding:30px;color:var(--red);">${esc(e.message || 'Error cargando estadísticas')}</div>`;
-  }
+  return qs.toString();
+}
+
+/** Lee los filtros, pide el reporte y lo pinta. */
+async function conteoEstCargar() {
+  const el = document.getElementById('inv-estadisticas-contenido');
+  if (!el) return;
+  const q = _ceQuery();
+  await invCargarPanel({
+    subtab: 'estadisticas', el, params: q,
+    // La primera carga va sin fechas y el servidor pone las suyas, que quedan
+    // en los filtros: lo pintado corresponde a los filtros YA llenos.
+    paramsEfectivos: () => _ceQuery(),
+    pedir: () => get(`/api/conteo/estadisticas?${q}`),
+    html: (d) => _ceRender(d),
+    despues: (d) => {
+      const desde = document.getElementById('ce-desde');
+      const hasta = document.getElementById('ce-hasta');
+      if (desde && !desde.value) desde.value = d.parametros.desde;
+      if (hasta && !hasta.value) hasta.value = d.parametros.hasta;
+    },
+    error: (e) => `<div style="text-align:center;padding:30px;color:var(--red);">${esc(e.message || 'Error cargando estadísticas')}</div>`,
+  });
 }
 
 function _ceRender(d) {
@@ -2606,18 +2794,19 @@ async function liderCargar() {
   }
   const almId = _liderAlmacenId();
   if (!almId) {
-    el.innerHTML = '<div style="text-align:center;padding:30px;color:var(--tx3);">Elegí un almacén</div>';
+    invPintarFijo('lider', el, '<div style="text-align:center;padding:30px;color:var(--tx3);">Elegí un almacén</div>');
     return;
   }
-  el.innerHTML = '<div style="text-align:center;padding:30px;color:var(--tx3);">Cargando…</div>';
   // Lo recogido que no salió: su propio endpoint, debajo del tablero.
   cargarConteoRecogidoSinDespachar(almId);
-  try {
-    _LIDER_DATOS = await get(`/api/conteo/lider/tablero?almacen_id=${encodeURIComponent(almId)}`);
-    el.innerHTML = liderTableroHtml(_LIDER_DATOS);
-  } catch (e) {
-    el.innerHTML = `<div style="text-align:center;padding:30px;color:var(--red);">${esc(e.message || 'Error cargando el tablero')}</div>`;
-  }
+  await invCargarPanel({
+    subtab: 'lider', el, params: almId,
+    pedir: () => get(`/api/conteo/lider/tablero?almacen_id=${encodeURIComponent(almId)}`),
+    // _LIDER_DATOS solo cambia con lo que se pinta: los botones buscan su fila
+    // ahí, y una respuesta vieja descartada no puede dejarlos desalineados.
+    html: (d) => { _LIDER_DATOS = d; return liderTableroHtml(d); },
+    error: (e) => `<div style="text-align:center;padding:30px;color:var(--red);">${esc(e.message || 'Error cargando el tablero')}</div>`,
+  });
 }
 
 /** Busca una fila del tablero por id dentro de un bloque. */

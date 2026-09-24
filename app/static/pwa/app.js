@@ -302,6 +302,7 @@ function pararTimers() {
   clearInterval(TIMER_REC);
   if (typeof COMP_TIMER !== 'undefined') clearInterval(COMP_TIMER);
   if (typeof ABAST_TIMER !== 'undefined') clearInterval(ABAST_TIMER);
+  if (typeof invSalir === 'function') invSalir();
   RECEPCION_ACTUAL = null;
   DEVOLUCION_ACTUAL = null;
 }
@@ -989,7 +990,9 @@ async function cargarAdmin(desdeTimer = false) {
   else if (TAB === 'tab-connekta') { await cargarConnekta(); await siesaRecuperacionCargar(); await syncEstadosCargar(); await mapeoUnidadesCargar(); await cargarAuditoriaFlujo(); }
   else if (TAB === 'tab-muelle') await cargarMuelle();
   else if (TAB === 'tab-rutas') await cargarRutas();
-  else if (TAB === 'tab-inventario') await cargarInventario();
+  // Inventario decide solo qué refresca el tick: solo la sub-pestaña visible y
+  // de datos vivos, sin vaciarla (conteo.js, «Refresco de las pestañas»).
+  else if (TAB === 'tab-inventario') await cargarInventario(desdeTimer);
   else if (TAB === 'tab-traslados') await cargarTrasladosAdmin();
   else if (TAB === 'tab-reposicion') await cargarReposicion();
   else if (TAB === 'tab-liquidacion') await cargarLiquidacion();
@@ -1017,6 +1020,8 @@ function tab(id) {
   document.querySelectorAll('.nav-tab').forEach((t, i) => {
     t.classList.toggle('active', TABS[i] === id);
   });
+  // Lo que Inventario dejó corriendo (el sondeo del kardex) no sigue en otra pestaña.
+  if (TAB === 'tab-inventario' && id !== 'tab-inventario' && typeof invSalir === 'function') invSalir();
   TAB = id;
   cargarAdmin();
 }
