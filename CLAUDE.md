@@ -3642,5 +3642,6 @@ test_ningun_endpoint_nuevo_sin_consumidor` queda rojo con las tres rutas
 porque el shell (`analitica.js`, con `AN_VISTAS`) lo escribe otro agente;
 verificado que con la tabla del contrato presente el guard pasa.
 
-Trinquete: `tests/test_analitica_salud.py` (servicio con datos que distinguen
-los cinco veredictos, endpoints, render real en Node con `util.js`).
+Trinquete: `tests/test_analitica_salud.py` (68 tests: servicio con datos que
+distinguen los cinco veredictos, endpoints, render real en Node con `util.js`;
+17 mutaciones, las 17 rojas).
