@@ -230,9 +230,17 @@ class TestLaReferenciaViajaAlRecibo:
 
     def test_el_largo_coincide_con_el_docx(self):
         """Se lee del .docx, no de un número copiado a mano."""
-        import docx as _docx
-        d = _docx.Document(str(_RAIZ / 'docs' / 'siesa-specs' / '142888 API_v1_ReciboCaja.docx'))
-        filas = [[c.text.strip() for c in r.cells] for t in d.tables for r in t.rows]
+        # Con zipfile, como test_payload_vs_docx: python-docx no está en
+        # requirements.txt y el build de Railway no lo tiene (rompió 0b1d9daa).
+        import re as _re
+        import zipfile as _zip
+        ruta = _RAIZ / 'docs' / 'siesa-specs' / '142888 API_v1_ReciboCaja.docx'
+        xml = _zip.ZipFile(ruta).read('word/document.xml').decode('utf-8')
+        filas = []
+        for tr in _re.findall(r'<w:tr[ >].*?</w:tr>', xml, flags=_re.S):
+            filas.append([_re.sub(r'\s+', ' ', ''.join(
+                _re.findall(r'<w:t[^>]*>([^<]*)</w:t>', tc))).strip()
+                for tc in _re.findall(r'<w:tc[ >].*?</w:tc>', tr, flags=_re.S)])
         fila = next(f for f in filas if f and f[0] == 'F358_REFERENCIA_OTROS')
         from app.services.connekta_liquidacion_gateway import LARGO_REFERENCIA_OTROS
         assert int(fila[-1]) == LARGO_REFERENCIA_OTROS
