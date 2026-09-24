@@ -273,10 +273,13 @@ def assert_ciego(respuesta, *numeros):
     hueco) escrito en un texto de la respuesta. Las fechas y horas no cuentan."""
     malas = [k for k in _claves(respuesta) if CLAVES_PROHIBIDAS.search(k.split('.')[-1])]
     assert not malas, f'la respuesta al operario trae {malas}: {respuesta}'
+    # Número suelto: ni pegado a otra cifra ni a una letra. Un código de
+    # sesión (`CC3-…-47BCD4`, sufijo hexadecimal aleatorio) no es «decir 47»:
+    # con solo `\d` de frontera el e2e fallaba al azar en el build.
     for texto in _textos(respuesta):
         texto = _FECHA_U_HORA.sub(' ', texto)
         for n in numeros:
-            assert not re.search(rf'(?<![\d.]){re.escape(str(n))}(?![\d])', texto), \
+            assert not re.search(rf'(?<![\w.]){re.escape(str(n))}(?![\w])', texto), \
                 f'la respuesta al operario dice {n!r}: {texto!r}'
 
 
