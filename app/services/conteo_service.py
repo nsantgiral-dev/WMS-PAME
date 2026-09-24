@@ -695,6 +695,51 @@ class ConteoService:
             'factor_conversion': factor if factor > 1 else 1,
         }
 
+    #: Lo único que viaja a quien CUENTA después de cerrar un conteo. Todo lo
+    #: demás del resultado de `registrar_conteo` —`ajuste_bloqueado`,
+    #: `detalle_ajuste`, `no_sale_solo`, `auto_encolado`, `raiz_id`— explica el
+    #: ajuste, y el ajuste se explica con las cifras de Siesa: «salida sin
+    #: confirmar 5, POS 3», «el ajuste vale $3.000».
+    CLAVES_PARA_QUIEN_CUENTA = ('resultado', 'mensaje', 'sesion_id', 'segundo_conteo_id',
+                                'tercer_conteo_id', 'motivo', 'motivo_bloqueo')
+
+    #: El mensaje de un resultado cuyo texto se arma con el motivo del ajuste
+    #: (el CC2 que confirma o no al CC1). Neutro, como el de tolerancia.
+    MENSAJE_NEUTRO_POR_RESULTADO = {'DESCUADRE': 'Conteo registrado — gracias.'}
+
+    @staticmethod
+    def respuesta_para_quien_cuenta(resultado: dict, usuario_id: int) -> dict:
+        """Lo que se le devuelve a quien acaba de cerrar un conteo. **Una
+        política, una función**: la aplican las dos puertas que cierran un
+        conteo por HTTP (`MobileService.confirmar_tarea` y
+        `POST /api/conteo/<id>/registrar`); `tests/flujo/test_e2e_inventario_ciclico.py`
+        exige por AST que toda llamada a `registrar_conteo` en `app/` pase por acá.
+
+        El conteo es ciego para el operario. El 2026-09-23 se cerró el caso del
+        RECONTAR («existencia 10→9, cant_pos 2→3» en la respuesta), pero el de
+        tolerancia y el del segundo conteo seguían devolviendo el motivo del
+        ajuste entero: `ajuste_bloqueado` con «salida sin confirmar 5, POS 3»,
+        `no_sale_solo` con «el ajuste vale $3.000», y el mismo texto dentro del
+        `mensaje` del CC2. La pantalla no los pinta, pero viajaban al teléfono
+        del operario — y la regla es que el ciego no dependa de lo que la
+        pantalla decida no mostrar.
+
+        Supervisión (quien hace el Conteo Definitivo y aprueba) recibe el
+        resultado completo: necesita el bloqueo en el momento, no cuando
+        apriete «Aprobar».
+        """
+        from app.models.usuario import Usuario
+        from app.routes._auth_helpers import Roles
+        usuario = db.session.get(Usuario, usuario_id) if usuario_id else None
+        if usuario is not None and usuario.rol in Roles.SUPERVISION:
+            return resultado
+        ciega = {k: resultado[k] for k in ConteoService.CLAVES_PARA_QUIEN_CUENTA
+                 if k in resultado}
+        neutro = ConteoService.MENSAJE_NEUTRO_POR_RESULTADO.get(resultado.get('resultado'))
+        if neutro:
+            ciega['mensaje'] = neutro
+        return ciega
+
     # ── Bloqueo: «no lo encontré» y otros problemas ──────────────────────────
 
     @staticmethod

@@ -501,8 +501,8 @@ class TestDentroDeTolerancia:
         # −2 × $1.000 = $2.000 ≤ tope $2.500 → sale solo.
         sid = b.raiz_de(chico).id
         r = b.contar(b.op_a, sid, 98)
-        assert r['resultado'] == 'DENTRO_TOLERANCIA' and r['auto_encolado'] is True, r
-        assert r['mensaje'] == 'Conteo registrado — gracias.'
+        assert r == {'resultado': 'DENTRO_TOLERANCIA', 'mensaje': 'Conteo registrado — gracias.',
+                     'sesion_id': sid}, r
         s = b.sesion(sid)
         assert (s.estado, s.ajuste_por_tolerancia, s.hijo_conteo) == (EstadoConteo.AJUSTANDO, True, None)
         assert s.aprobador_id is None and s.tolerancia_primer_conteo == 'DENTRO'
@@ -514,7 +514,7 @@ class TestDentroDeTolerancia:
         # −3 × $1.000 = $3.000 > tope → dentro de tolerancia, pero NO sale solo.
         sid2 = b.raiz_de(grande).id
         r = b.contar(b.op_a, sid2, 97)
-        assert r['resultado'] == 'DENTRO_TOLERANCIA' and r['auto_encolado'] is False, r
+        assert r['resultado'] == 'DENTRO_TOLERANCIA', r
         s2 = b.sesion(sid2)
         assert (s2.estado, s2.ajuste_por_tolerancia) == (EstadoConteo.DESCUADRE, True)
         assert b.jobs_ajuste(sid2) == []
@@ -1100,7 +1100,7 @@ def _un_dia(b, monkeypatch):
     assert b.confirmar(b.op_a, ids['ok1_mov'], 29)[1]['resultado'] == 'MATCH'
     # AJUSTE_EN_TOLERANCIA, sale solo y la DLQ lo lleva a Siesa
     r = b.contar(b.op_a, ids['tol'], 98)
-    assert r['resultado'] == 'DENTRO_TOLERANCIA' and r['auto_encolado'], r
+    assert r['resultado'] == 'DENTRO_TOLERANCIA', r
     _ejecutar_job(b.jobs_ajuste(ids['tol'])[0])
     assert b.sesion(ids['tol']).estado == 'AJUSTADO'
 
@@ -1113,7 +1113,8 @@ def _un_dia(b, monkeypatch):
 
     # ERROR_CONFIRMADO, ajuste automático (CC1 == CC2)
     cc2 = cc1_fuera('err_conf', 46)
-    assert b.contar(b.op_b, cc2, 46)['auto_encolado'] is True
+    assert b.contar(b.op_b, cc2, 46)['resultado'] == 'DESCUADRE'
+    assert b.sesion(ids['err_conf']).estado == 'AJUSTANDO'
     # ERROR_CC3 aprobado por el supervisor
     cc2 = cc1_fuera('err_cc3', 45)
     cc3 = b.contar(b.op_b, cc2, 47)['tercer_conteo_id']
@@ -1129,7 +1130,8 @@ def _un_dia(b, monkeypatch):
     # ERROR_CONFIRMADO que no puede ajustar: salidas sin confirmar que no son POS
     cc2 = cc1_fuera('ajuste_bloqueado', 46)
     r = b.contar(b.op_b, cc2, 46)
-    assert r['auto_encolado'] is False and b.sesion(ids['ajuste_bloqueado']).estado == 'DESCUADRE'
+    assert r['resultado'] == 'DESCUADRE' and b.sesion(ids['ajuste_bloqueado']).estado == 'DESCUADRE'
+    assert b.jobs_ajuste(ids['ajuste_bloqueado']) == []
     # «No lo encontré»
     b.abrir(b.op_a, ids['no_encontrado'])
     assert _no_lo_encontre(b, b.op_a, ids['no_encontrado'])[0] == 200
@@ -1311,3 +1313,107 @@ class TestAuditoria:
                  for x in r['resultados'] if x['severidad'] == 'BLOQUEA' and x['total']]
         assert not rotos, rotos
         assert len(r['resultados']) >= 9, 'la auditoría de conteo dejó de correr invariantes'
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Defecto encontrado: la respuesta al que cuenta traía el motivo del ajuste
+# ═════════════════════════════════════════════════════════════════════════════
+#
+# La clase: **lo que se le devuelve a quien cuenta explica el ajuste**, y el
+# ajuste se explica con las cifras de Siesa. El 2026-09-23 se había cerrado la
+# instancia del RECONTAR; quedaban la de tolerancia (`ajuste_bloqueado`,
+# `detalle_ajuste`, `no_sale_solo`) y la del CC2 (lo mismo, y dentro del
+# `mensaje`). La política vive en `ConteoService.respuesta_para_quien_cuenta`
+# y el trinquete de abajo exige que toda llamada a `registrar_conteo` en
+# `app/` pase su resultado por ella.
+
+import ast  # noqa: E402
+import pathlib  # noqa: E402
+
+RAIZ = pathlib.Path(__file__).resolve().parents[2]
+
+
+class TestLaRespuestaAlQueCuentaEsCiega:
+
+    @pytest.mark.parametrize('puerta', ['mobile', 'registrar'])
+    def test_segundo_conteo_con_ajuste_bloqueado(self, bodega, puerta):
+        b = bodega
+        sku = b.hueco('A', teorico=50, pos=2, salida_sin_conf=5)
+        b.programar(b.admin, 'A')
+        raiz = b.raiz_de(sku).id
+        b.contar(b.op_a, raiz, 46)
+        st, r = b.confirmar(b.op_a, raiz, 46)
+        cc2 = r['segundo_conteo_id']
+        st, _ = b.abrir(b.op_b, cc2)
+        if puerta == 'mobile':
+            st, r = b.confirmar(b.op_b, cc2, 46)
+        else:
+            st, r = b.post(b.op_b, f'/api/conteo/{cc2}/registrar', {'cantidad_fisica': 46})
+        assert st == 200 and r['resultado'] == 'DESCUADRE', r
+        # Lo que pasó adentro, igual: la verdad de bodega no ajusta (salidas no POS).
+        assert b.sesion(raiz).estado == 'DESCUADRE' and b.jobs_ajuste(raiz) == []
+        assert_ciego(r, 50, 52, 46, 4, 2, 5, 3)
+        assert set(r) <= set(ConteoService_claves()), r
+
+    def test_dentro_de_tolerancia_por_la_otra_puerta(self, bodega, monkeypatch):
+        b = bodega
+        monkeypatch.setenv('CONTEO_TOLERANCIA_TOPE_VALOR', '1000000')
+        monkeypatch.setenv('CONTEO_TOPE_AUTOAJUSTE', '2500')
+        sku = b.hueco('C', teorico=100)
+        b.programar(b.admin, 'C')
+        sid = b.raiz_de(sku).id
+        b.abrir(b.op_a, sid)
+        st, r = b.post(b.op_a, f'/api/conteo/{sid}/registrar', {'cantidad_fisica': 97})
+        assert st == 200 and r['resultado'] == 'DENTRO_TOLERANCIA', r
+        assert_ciego(r, 100, 97, 3, 3000, '3.000', 2500, '2.500')
+
+    def test_la_supervision_si_recibe_el_motivo(self, bodega):
+        """El Conteo Definitivo lo hace un supervisor, que es quien aprueba:
+        necesita saber YA que el ajuste no va a poder salir."""
+        b = bodega
+        sku = b.hueco('A', teorico=50, pos=2, salida_sin_conf=5)
+        b.programar(b.admin, 'A')
+        raiz, _, cc3 = _cadena_hasta_definitivo(b, sku, 45, 47)
+        r = b.contar(b.supervisor, cc3, 48)
+        assert r['resultado'] == 'DESCUADRE' and r['raiz_id'] == raiz, r
+        assert 'salidas sin confirmar' in (r['ajuste_bloqueado'] or ''), r
+
+    # ── el trinquete ─────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _llamadores(fuentes):
+        """`{archivo::funcion: pasa_por_la_politica}` para cada función de
+        `app/` que llama `registrar_conteo`."""
+        out = {}
+        for rel, src in fuentes.items():
+            for nodo in ast.walk(ast.parse(src)):
+                if not isinstance(nodo, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    continue
+                llamadas = {getattr(c.func, 'attr', getattr(c.func, 'id', None))
+                            for c in ast.walk(nodo) if isinstance(c, ast.Call)}
+                if 'registrar_conteo' in llamadas:
+                    out[f'{rel}::{nodo.name}'] = 'respuesta_para_quien_cuenta' in llamadas
+        return out
+
+    def test_toda_puerta_que_cierra_un_conteo_pasa_por_la_politica(self):
+        fuentes = {str(f.relative_to(RAIZ)): f.read_text(encoding='utf-8')
+                   for f in sorted((RAIZ / 'app').rglob('*.py'))}
+        llamadores = self._llamadores(fuentes)
+        assert len(llamadores) >= 2, f'el escáner dejó de ver las puertas: {llamadores}'
+        sin_politica = [k for k, ok in llamadores.items() if not ok]
+        assert not sin_politica, (
+            f'Cierran un conteo y devuelven el resultado crudo: {sin_politica}. '
+            'Pasalo por ConteoService.respuesta_para_quien_cuenta.')
+
+    def test_el_escaner_ve_la_puerta_sin_politica(self):
+        src = ('def confirmar(x):\n'
+               '    return ConteoService.registrar_conteo(1, 2, x)\n'
+               'def bien(x):\n'
+               '    r = ConteoService.registrar_conteo(1, 2, x)\n'
+               '    return ConteoService.respuesta_para_quien_cuenta(r, 2)\n')
+        assert self._llamadores({'x.py': src}) == {'x.py::confirmar': False, 'x.py::bien': True}
+
+
+def ConteoService_claves():
+    from app.services.conteo_service import ConteoService
+    return ConteoService.CLAVES_PARA_QUIEN_CUENTA

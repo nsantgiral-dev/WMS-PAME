@@ -1322,11 +1322,14 @@ class MobileService:
             # — un «no lo encontré» cerraba en cero, CC1 = CC2 = 0 coincidían y
             # Siesa se ajustaba a cero. La validación (None, negativos, el cero
             # sin confirmar) vive en `registrar_conteo`, por donde pasa todo.
-            return ConteoService.registrar_conteo(
+            resultado = ConteoService.registrar_conteo(
                 sesion_id=tarea_id,
                 operario_id=operario_id,
                 cantidad_fisica=total_contado,
                 cero_confirmado=bool(cero_confirmado),
             )
+            # Ciego también en la respuesta: el motivo del ajuste lleva las
+            # cifras de Siesa, y esto viaja al teléfono de quien contó.
+            return ConteoService.respuesta_para_quien_cuenta(resultado, operario_id)
 
         raise ValueError(f'Tipo desconocido: {tipo}')

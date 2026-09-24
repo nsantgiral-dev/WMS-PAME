@@ -191,7 +191,7 @@ def registrar_conteo(id):
             lote_id=data.get('lote_id'),
             cero_confirmado=data.get('cero_confirmado') is True,
         )
-        return jsonify(resultado), 200
+        return jsonify(ConteoService.respuesta_para_quien_cuenta(resultado, operario_id)), 200
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
     except Exception as e:
