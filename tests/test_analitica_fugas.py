@@ -745,7 +745,9 @@ const el = { innerHTML: '' };
   const handlers = [...new Set([...html.matchAll(/onclick="([A-Za-z_$][\w$]*)\(/g)].map(m => m[1]))];
   const sinDefinir = handlers.filter(h => typeof ctx[h] !== 'function');
   const anchos = [...html.matchAll(/(?:^|[;"\s])(?:min-)?width:\s*(\d+)px/g)].map(m => +m[1]);
-  const onclickConDato = [...html.matchAll(/onclick="[^"]*\(([^)]*)\)"/g)].map(m => m[1]).filter(a => !/^-?\d*$/.test(a));
+  // Todo onclick es `funcion(<entero o nada>)`: cualquier otra cosa lleva un dato.
+  const onclickConDato = [...html.matchAll(/onclick="([^"]*)"/g)].map(m => m[1])
+    .filter(a => !/^[A-Za-z_$][\w$]*\(-?\d*\)$/.test(a));
   console.log(JSON.stringify({
     crudos: (html.match(/<img/g) || []).length,
     escapados: (html.match(/&lt;img/g) || []).length,

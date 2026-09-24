@@ -3650,3 +3650,66 @@ guard de consumidor de arriba, que espera al shell), 5 skipped, 19 xfailed.
 Trinquete: `tests/test_analitica_salud.py` (68 tests: servicio con datos que
 distinguen los cinco veredictos, endpoints, render real en Node con `util.js`;
 17 mutaciones, las 17 rojas).
+
+---
+
+## Analítica — 💸 Fugas (Fase 1, 2026-09-24)
+
+**Fuga = plata que la operación deja ir en el rango.** Servicio
+`app/services/analitica_fugas.py`, rutas `app/routes/analitica_fugas.py`
+(`GET /api/analitica/fugas` y `GET /api/analitica/fugas/<clave_fuga>`, rol
+`_es_gestion`, `almacen_id`/`desde`/`hasta` validados: basura → 400, clave
+desconocida → 404), vista `app/static/pwa/analitica_fugas.js`
+(`anFugasCargar(el, f)`, cuelga de `AN_VISTAS.fugas` del shell). Cero Siesa.
+
+**No define políticas: las lee.** Cada fuga llama a la función que ya decide y
+solo agrega la valorización del caso, escrita en su docstring:
+
+| Fuga | Política que lee | Pesos del caso | Sin valor cuando… |
+|---|---|---|---|
+| Venta perdida | `filtros_venta_perdida` (nuevo: el filtro de `metricas/venta_perdida.py` hecho función, `almacen_id=None` = todos) | faltante × precio capturado | el evento no tiene precio (hoy casi todos) |
+| Faltantes ajustados | `metricas.conteo._cargar_cadenas` + `_ajustes` | −diferencia × costo de la foto (faltante +, sobrante −); total = **neto perdido** | costo ausente o ≤ 0 |
+| Rechazos en ruta | `RECHAZADO`/`PARCIAL` por `fecha_confirmacion`, `motivos_rechazo.etiqueta`, desenlace `siesa_nc_*` | total: `valor_factura`; parcial: devuelto × precio unitario de `foto_ventas_lineas` del pedido | sin `valor_factura`, o **una** referencia devuelta sin precio único (un parcial a medias engaña más que ninguno) |
+| Entregado sin pago | `ENTREGADO_SIN_PAGO` | `valor_factura − monto_cobrado` | sin `valor_factura` |
+| Plata en la calle | `rezago_liquidacion` (rutas entregadas sin liquidar HOY, entrega en el rango; sin fecha → período actual, declarado) | Σ `monto_cobrado` por ruta × almacén | ninguna parada confirmada |
+| Mercancía en limbo | `filas_vigentes` de la última foto completa del rango, `bodegas_de_limbo()` = `_BODEGAS_SERVICIO` − `_BODEGAS_PV`, filas `vendible=False`; + TRA-30/TRA-31 | existencia × costo del SKU en la foto de NB1 del mismo día | sin costo en NB1. Sin foto completa → **sin dato** (no cero) |
+| Trabajo perdido | `bitacora_acciones`: picking CANCELAR/REABRIR con `antes.cantidad_recogida > 0` (no la de auditoría), empaque CANCELAR ya empezado | — | **siempre**: es trabajo, no mercancía |
+| Documentos trabados | `siesa_jobs` FALLIDO creados en el rango (sin ALERTA_EMAIL) | `valor_de_job`: RC/retención `payload.monto`, despacho `valor_factura`, ajuste cantidad × costo | todos los demás tipos |
+
+**Las reglas** (trinquete `tests/test_analitica_fugas.py`, 52 tests, 16
+mutaciones, las 16 rojas):
+
+- **Sin valor ≠ 0.** Una fuga sin ningún caso valorizado tiene `pesos: null`;
+  con algunos, `pesos` suma solo esos y `es_cota_inferior: true`. `casos: 0` sí
+  es `pesos: 0`: no hubo fuga.
+- **Período anterior de igual duración** (`periodo_anterior`): `[desde − n,
+  desde − 1]`, n = días del rango. Tendencia por pesos si los dos lados tienen
+  valor; si no, por casos; si no, `sin_base`.
+- **AV1/TRA1 nunca vendibles**: el caso del Armador (NB1 100 + AV1 40 + TRA1
+  25) da 65 en limbo, no 165. Con almacén filtrado el limbo se muestra pero no
+  suma (no pertenece a un almacén).
+- **«Fugas del período» suma solo el `aporte_al_total` de las fugas con valor
+  conocido** (nunca negativo: un sobrante neto de conteo no devuelve la plata
+  de un rechazo) y lista en `fuera_del_total` las que quedan fuera y por qué.
+- **Orden**: sin dato y sin valor con volumen relevante (casos ≥ mediana de
+  casos de las fugas con valor) primero; después por pesos; en el detalle, los
+  casos sin valor van arriba. Cada caso trae `pedido_clave` cuando existe.
+
+**Integración pendiente (la hace el integrador):** las dos rutas están en
+`DEUDA_SIN_UI` porque la vista la llama el shell `analitica.js`, que no está en
+este worktree; al unir, `test_la_lista_solo_encoge` exige borrarlas. El botón
+«🧭 Recorrido» llama `anRecorridoAbrir(pedido_clave)` **si existe** (si no,
+muestra la clave): hay que cablearla al recorrido. La vista asume que
+`anCargarPanel` asigna a `el.innerHTML` lo que devuelven `html(d)`/`error(e)`.
+
+**Lo que NO se puede medir todavía, y por qué:**
+- Venta perdida en pesos: `Producto.precio_venta` no lo llena ningún sync → casi
+  todo es sin valor (cota inferior). Tampoco hay venta POS de tienda.
+- Entregado sin pago «sigue abierta»: el WMS no ve si el cliente pagó por
+  fuera; cruzar con `foto_cartera_diaria` queda para cuando la foto corra.
+- Limbo y precio de parciales dependen de `FOTOS_SIESA` encendido; hoy apagado
+  → limbo sale **sin dato**.
+- Trabajo perdido empieza con `m035bitacora`; `meta.fuentes.bitacora.completa`
+  dice si el rango es anterior. Costo de mano de obra: no existe en el WMS.
+- Documentos trabados solo valoriza tres tipos; NC y traslados no llevan monto
+  en el payload.
