@@ -292,6 +292,10 @@ class TestElGuardDelCiegoMide:
     def test_una_fecha_o_una_hora_no_es_un_numero_de_siesa(self, hora):
         assert_ciego({'fecha_inicio': hora, 'mensaje': f'Contado {hora}'}, 40, 14, 9, 24, 56)
 
+    @pytest.mark.parametrize('codigo', ['CC3-20260924093645-47BCD4', 'CC2-20260924-A40F1E'])
+    def test_un_codigo_de_sesion_no_es_un_numero_de_siesa(self, codigo):
+        assert_ciego({'codigo': codigo, 'mensaje': f'Tarea {codigo}'}, 47, 40)
+
     @pytest.mark.parametrize('texto', [
         'existencia 40', 'Siesa dice 40 unidades', '40', 'contado el 2026-09-24: 40'])
     def test_el_numero_de_siesa_sigue_rojo(self, texto):
