@@ -558,10 +558,8 @@ def _cadena_hasta_definitivo(b, sku, cc1=45, cc2=47):
     assert st == 200 and r['resultado'] == 'SEGUNDO_CONTEO', r
     cc2_id = r['segundo_conteo_id']
     assert b.sesion(cc2_id).operario_id == b.op_b.id
-    st, t = b.get(b.op_b, '/api/mobile/tarea-actual')
-    assert t['id'] == cc2_id, t
-    st, r = b.confirmar(b.op_b, cc2_id, cc2)
-    assert st == 200 and r['resultado'] == 'TERCER_CONTEO', r
+    r = b.contar(b.op_b, cc2_id, cc2)
+    assert r['resultado'] == 'TERCER_CONTEO', r
     return raiz, cc2_id, r['tercer_conteo_id']
 
 
@@ -959,3 +957,357 @@ class TestCancelarUnSegundoConteo:
         st, cola = b.get(b.supervisor, f'/api/conteo/definitivos?almacen_id={b.almacen.id}')
         assert cola['total'] == 0
         assert b.programar(b.admin, 'A')['tareas_creadas'] == 1
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 8 · /editar: solo se corrige la raíz ya contada
+# ═════════════════════════════════════════════════════════════════════════════
+
+class TestEditar:
+
+    def _editar(self, b, sid, cantidad, usuario=None):
+        return b.put(usuario or b.admin, f'/api/conteo/{sid}/editar',
+                     {'cantidad_fisica': cantidad, 'motivo_edicion': 'error de digitación'})
+
+    def test_que_se_corrige_y_que_no(self, bodega):
+        from app.models.conteo import EstadoConteo
+        b = bodega
+        pendiente, cancelado, con_cc2, descuadre = (b.hueco('A', teorico=50) for _ in range(4))
+        b.programar(b.admin, 'A')
+
+        # PENDIENTE: nadie contó — no se «corrige» a MATCH.
+        sid = b.raiz_de(pendiente).id
+        st, r = self._editar(b, sid, 50)
+        assert st == 409 and 'PENDIENTE' in r['error'], r
+        assert b.sesion(sid).estado == EstadoConteo.PENDIENTE
+
+        # CANCELADO: no resucita.
+        sid = b.raiz_de(cancelado).id
+        st, _ = b.put(b.supervisor, f'/api/conteo/{sid}/cancelar', {'motivo': 'no aplica'})
+        st, r = self._editar(b, sid, 50)
+        assert st == 409 and 'CANCELADO' in r['error'], r
+        assert b.sesion(sid).estado == EstadoConteo.CANCELADO
+
+        # Un CC2 (y su raíz con el CC2 vivo colgando): 409 con el porqué.
+        raiz = b.raiz_de(con_cc2).id
+        b.contar(b.op_a, raiz, 40)
+        st, r = b.confirmar(b.op_a, raiz, 40)
+        cc2 = r['segundo_conteo_id']
+        st, r = self._editar(b, cc2, 50)
+        assert st == 409 and 'CC2' in r['error'], r
+        st, r = self._editar(b, raiz, 50)
+        assert st == 409 and 'en curso' in r['error'], r
+        assert b.sesion(raiz).estado == EstadoConteo.SEGUNDO_CONTEO
+
+        # Un jefe no edita (LEAD).
+        raiz_d, cc2_d, cc3_d = _cadena_hasta_definitivo(b, descuadre)
+        b.contar(b.supervisor, cc3_d, 48)
+        assert b.sesion(raiz_d).estado == EstadoConteo.DESCUADRE
+        st, r = self._editar(b, raiz_d, 50, usuario=b.jefe)
+        assert st == 403, r
+        # El CC3 que resolvió tampoco: la cantidad que decide es la de la raíz.
+        st, r = self._editar(b, cc3_d, 50)
+        assert st == 409 and 'CC3' in r['error'], r
+        # Sin motivo, no.
+        st, r = b.put(b.admin, f'/api/conteo/{raiz_d}/editar', {'cantidad_fisica': 50})
+        assert st == 400, r
+
+        # Raíz en DESCUADRE: se corrige, y cuadrando pasa a MATCH.
+        st, r = self._editar(b, raiz_d, 49)
+        assert st == 200, r
+        s = b.sesion(raiz_d)
+        assert (s.estado, s.cantidad_fisica, s.diferencia) == (EstadoConteo.DESCUADRE, 49, -1)
+        assert s.editado_por == b.admin.id and s.motivo_edicion == 'error de digitación'
+        st, r = self._editar(b, raiz_d, 50)
+        assert st == 200 and 'estado → MATCH' in r['cambios'], r
+        assert b.sesion(raiz_d).estado == EstadoConteo.MATCH
+        # Y un MATCH que se corrige a otra cifra vuelve a DESCUADRE.
+        st, r = self._editar(b, raiz_d, 52)
+        assert st == 200 and b.sesion(raiz_d).estado == EstadoConteo.DESCUADRE
+
+        # En vuelo a Siesa: no.
+        st, r = b.put(b.supervisor, f'/api/conteo/{raiz_d}/ajustar')
+        assert st == 202, r
+        st, r = self._editar(b, raiz_d, 50)
+        assert st == 409, r
+
+    def test_la_pantalla_sabe_por_que_no_se_edita(self, bodega):
+        """La lista del supervisor trae el motivo por fila: la pantalla no
+        promete un campo editable que el servidor va a rechazar."""
+        b = bodega
+        sku = b.hueco('A', teorico=50)
+        b.programar(b.admin, 'A')
+        sid = b.raiz_de(sku).id
+        st, lista = b.get(b.supervisor, f'/api/conteo/?almacen_id={b.almacen.id}')
+        fila = next(x for x in lista['sesiones'] if x['id'] == sid)
+        motivo_pantalla = fila['no_se_corrige_cantidad']
+        st, r = b.put(b.admin, f'/api/conteo/{sid}/editar',
+                      {'cantidad_fisica': 50, 'motivo_edicion': 'x'})
+        assert st == 409
+        assert motivo_pantalla == r['error'], (fila, r)
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# El día completo — lo que miran el tablero, las estadísticas y la auditoría
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _un_dia(b, monkeypatch):
+    """Doce cadenas de un día, todas por HTTP (menos la auditoría por faltante,
+    que nace de un picking, y la DLQ, que es un proceso). Devuelve las raíces."""
+    from app.models.producto import Producto
+    from app.models.siesa_job import SiesaJob
+    from app.models.ubicacion import Ubicacion
+    from app.services.connekta_gateway import ConnektaGateway
+    from app.services.conteo_service import ConteoService
+    from app.services.siesa_job_service import _ejecutar_job
+
+    monkeypatch.setattr(ConnektaGateway, 'enviar_ajuste_inventario',
+                        lambda self, **kw: {'codigo': 0})
+    h = {
+        'ok1': b.hueco('C', teorico=20),
+        'ok1_mov': b.hueco('C', teorico=30),
+        'tol': b.hueco('C', teorico=100),
+        'err_conf': b.hueco('A', teorico=50),
+        'err_cc3': b.hueco('A', teorico=50),
+        'aprobable': b.hueco('A', teorico=50),
+        'ok_cc2': b.hueco('A', teorico=50),
+        'ajuste_bloqueado': b.hueco('A', teorico=50, pos=2, salida_sin_conf=5),
+        'no_encontrado': b.hueco('B', teorico=10),
+        'cancelada': b.hueco('B', teorico=10),
+        'con_novedad': b.hueco('C', teorico=10),
+        'auditoria': b.hueco('B', teorico=10),
+    }
+    auditoria = h.pop('auditoria')
+    st, r = b.post(b.admin, '/api/conteo/abc/generar-todas', {'almacen_id': b.almacen.id})
+    assert st == 201 and r['total_tareas_creadas'] == 12, r
+    ids = {k: b.raiz_de(sku).id for k, sku in h.items()}
+
+    # La auditoría por faltante: el picker no encontró el producto. Ya había un
+    # conteo del plan pendiente sobre ese hueco: la auditoría lo CONVIERTE.
+    p = Producto.query.filter_by(codigo=auditoria).one()
+    u = Ubicacion.query.filter_by(codigo=f'E2E-UB-{int(auditoria[3:]):03d}').one()
+    aud = ConteoService.generar_auditoria_por_excepcion(None, u.id, p.id, b.almacen.id)
+    b.db.session.commit()
+    ids['auditoria'] = aud.id
+    assert b.raiz_de(auditoria).id == aud.id and aud.tipo == 'EXCEPCION_PICKING'
+
+    # OK_CC1
+    assert b.contar(b.op_a, ids['ok1'], 20)['resultado'] == 'MATCH'
+    # OK_CC1 con un recuento por venta durante el conteo
+    b.abrir(b.op_a, ids['ok1_mov'])
+    b.siesa.poner(h['ok1_mov'], existencia=30, pos=1)
+    assert b.confirmar(b.op_a, ids['ok1_mov'], 29)[1]['resultado'] == 'RECONTAR'
+    assert b.confirmar(b.op_a, ids['ok1_mov'], 29)[1]['resultado'] == 'MATCH'
+    # AJUSTE_EN_TOLERANCIA, sale solo y la DLQ lo lleva a Siesa
+    r = b.contar(b.op_a, ids['tol'], 98)
+    assert r['resultado'] == 'DENTRO_TOLERANCIA' and r['auto_encolado'], r
+    _ejecutar_job(b.jobs_ajuste(ids['tol'])[0])
+    assert b.sesion(ids['tol']).estado == 'AJUSTADO'
+
+    def cc1_fuera(clave, fisico):
+        r = b.contar(b.op_a, ids[clave], fisico)
+        assert r['resultado'] == 'RECONTAR_TU', r
+        st, r = b.confirmar(b.op_a, ids[clave], fisico)
+        assert r['resultado'] == 'SEGUNDO_CONTEO', r
+        return r['segundo_conteo_id']
+
+    # ERROR_CONFIRMADO, ajuste automático (CC1 == CC2)
+    cc2 = cc1_fuera('err_conf', 46)
+    assert b.contar(b.op_b, cc2, 46)['auto_encolado'] is True
+    # ERROR_CC3 aprobado por el supervisor
+    cc2 = cc1_fuera('err_cc3', 45)
+    cc3 = b.contar(b.op_b, cc2, 47)['tercer_conteo_id']
+    assert b.contar(b.supervisor, cc3, 48)['resultado'] == 'DESCUADRE'
+    assert b.put(b.supervisor, f'/api/conteo/{ids["err_cc3"]}/ajustar')[0] == 202
+    # ERROR_CC3 esperando la firma
+    cc2 = cc1_fuera('aprobable', 45)
+    cc3 = b.contar(b.op_b, cc2, 47)['tercer_conteo_id']
+    assert b.contar(b.supervisor, cc3, 48)['resultado'] == 'DESCUADRE'
+    # OK_CC2
+    cc2 = cc1_fuera('ok_cc2', 45)
+    assert b.contar(b.op_b, cc2, 50)['resultado'] == 'MATCH'
+    # ERROR_CONFIRMADO que no puede ajustar: salidas sin confirmar que no son POS
+    cc2 = cc1_fuera('ajuste_bloqueado', 46)
+    r = b.contar(b.op_b, cc2, 46)
+    assert r['auto_encolado'] is False and b.sesion(ids['ajuste_bloqueado']).estado == 'DESCUADRE'
+    # «No lo encontré»
+    b.abrir(b.op_a, ids['no_encontrado'])
+    assert _no_lo_encontre(b, b.op_a, ids['no_encontrado'])[0] == 200
+    # Cancelada antes de contarse
+    assert b.put(b.supervisor, f'/api/conteo/{ids["cancelada"]}/cancelar',
+                 {'motivo': 'producto descontinuado'})[0] == 200
+    # En curso, con mercancía sin código anotada para el líder
+    b.abrir(b.op_c, ids['con_novedad'])
+    st, r = b.post(b.op_c, '/api/mobile/conteo/sin-codigo',
+                   {'tarea_id': ids['con_novedad'], 'descripcion': '3 cajas sin etiqueta al fondo'})
+    assert st == 200, r
+    ids['novedad'] = r['novedad_id']
+    assert SiesaJob.query.filter_by(tipo='AJUSTE_CONTEO').count() == 3
+    return ids
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 9 · El tablero del líder
+# ═════════════════════════════════════════════════════════════════════════════
+
+#: Cada permiso del tablero y cómo preguntárselo al endpoint que lo exige, con
+#: un id que no existe: si el rol pasa el permiso el endpoint sigue y contesta
+#: otra cosa (404/400/200); si no, 403. Nada se modifica.
+SONDAS = {
+    'reabrir_cancelar_bloqueado': ('post', '/api/conteo/999999/reabrir', {}),
+    'resolver_novedad': ('post', '/api/conteo/novedades/999999/resolver', {'nota': 'x'}),
+    'aprobar_ajuste': ('put', '/api/conteo/999999/ajustar', {}),
+    'recontar': ('post', '/api/conteo/manual', {'almacen_id': None, 'producto_codigo': 'NO-EXISTE'}),
+    'cancelar_conteo': ('put', '/api/conteo/999999/cancelar', {'motivo': 'x'}),
+    'reintentar_descartar_fallos': ('get', '/api/conteo/descartar-fallos/preview', None),
+    'cancelar_rezago': ('get', '/api/conteo/abc/limpiar-pendientes/preview?almacen_id={alm}', None),
+}
+
+
+class TestTableroDelLider:
+
+    def test_cada_bloque_refleja_el_dia(self, bodega, monkeypatch):
+        from app.models.siesa_job import EstadoSiesaJob
+        b = bodega
+        ids = _un_dia(b, monkeypatch)
+        # Siesa rechazó el ajuste de la verdad de bodega.
+        job = b.jobs_ajuste(ids['err_conf'])[0]
+        job.estado = EstadoSiesaJob.FALLIDO
+        job.error_ultimo = 'Siesa: el tipo de documento no está autorizado'
+        b.db.session.commit()
+
+        st, t = b.get(b.supervisor, f'/api/conteo/lider/tablero?almacen_id={b.almacen.id}')
+        assert st == 200, t
+        d = t['decisiones']
+        assert [f['id'] for f in d['bloqueados']['filas']] == [ids['no_encontrado']]
+        assert d['bloqueados']['por_motivo'] == {'NO_ENCONTRADO': 1}
+        assert [f['id'] for f in d['novedades']['filas']] == [ids['novedad']]
+        aj = d['ajustes']
+        assert [f['id'] for f in aj['aprobables']['filas']] == [ids['aprobable']]
+        assert aj['aprobables']['valor_total'] == 2000.0 and aj['aprobables']['sin_costo'] == 0
+        assert [f['id'] for f in aj['bloqueados']['filas']] == [ids['ajuste_bloqueado']]
+        assert aj['bloqueados']['por_motivo'] == {'SALIDAS_NO_POS': 1}
+        assert aj['bloqueados']['filas'][0]['accion']['tipo'] == 'RECONTAR'
+        assert aj['total_descuadres'] == 2, 'solo raíces: los CC2/CC3 resueltos no son decisiones'
+        aud = d['auditorias']
+        assert [f['id'] for f in aud['filas']] == [ids['auditoria']]
+        assert aud['esperan_al_lider'] == 0 and aud['filas'][0]['accion']['tipo'] == 'EN_COLA'
+        assert [f['id'] for f in d['rechazados_siesa']['filas']] == [ids['err_conf']]
+        assert d['rechazados_siesa']['total_sistema'] == 1
+        assert t['resumen'] == {'decisiones_pendientes': 5, 'por_bloque': {
+            'bloqueados': 1, 'novedades': 1, 'ajustes': 2, 'auditorias': 0, 'rechazados_siesa': 1}}
+        hoy = t['hoy']
+        assert hoy['cerrados'] == 8, hoy
+        assert hoy['pendientes_vivas'] == 2, hoy       # la auditoría y el que se está contando
+        # El KPI del dashboard es el mismo número que el bloque.
+        from app.services.tablero_lider_conteo import contar_auditorias_urgentes
+        assert contar_auditorias_urgentes(b.almacen.id) == aud['total']
+
+        # Las acciones del tablero, por HTTP, lo vacían.
+        st, r = b.post(b.supervisor, f'/api/conteo/novedades/{ids["novedad"]}/resolver',
+                       {'nota': 'eran del producto E2E011, se sumaron'})
+        assert st == 200, r
+        st, r = b.post(b.supervisor, '/api/conteo/reintentar-fallos')
+        assert st == 200 and r['reencolados'] == 1, r
+        st, r = b.put(b.supervisor, f'/api/conteo/{ids["ajuste_bloqueado"]}/cancelar',
+                      {'motivo': 'recontar cuando confirmen la remisión'})
+        assert st == 200, r
+        st, r = b.put(b.supervisor, f'/api/conteo/{ids["aprobable"]}/ajustar')
+        assert st == 202, r
+        st, r = b.put(b.supervisor, f'/api/conteo/{ids["no_encontrado"]}/cancelar',
+                      {'motivo': 'no está en la bodega'})
+        assert st == 200, r
+        st, t = b.get(b.supervisor, f'/api/conteo/lider/tablero?almacen_id={b.almacen.id}')
+        assert t['resumen']['decisiones_pendientes'] == 0, t['resumen']
+
+    @pytest.mark.parametrize('tope_jefe', ['0', '5000'])
+    def test_ningun_boton_promete_un_403(self, bodega, monkeypatch, tope_jefe):
+        b = bodega
+        monkeypatch.setenv('CONTEO_TOPE_APROBACION_JEFE', tope_jefe)
+        for usuario in (b.jefe, b.supervisor, b.admin):
+            st, t = b.get(usuario, f'/api/conteo/lider/tablero?almacen_id={b.almacen.id}')
+            assert st == 200, t
+            assert set(t['permisos']) == set(SONDAS), 'un permiso nuevo necesita su sonda'
+            for permiso, (metodo, url, body) in SONDAS.items():
+                url = url.format(alm=b.almacen.id)
+                if body and 'almacen_id' in body:
+                    body = {**body, 'almacen_id': b.almacen.id}
+                st, r = getattr(b, metodo)(usuario, url, *([body] if body is not None else []))
+                assert (st != 403) == t['permisos'][permiso], (usuario.rol, permiso, st, r)
+        # El operario ni siquiera ve el tablero.
+        st, _ = b.get(b.op_a, f'/api/conteo/lider/tablero?almacen_id={b.almacen.id}')
+        assert st == 403
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 10 · Las estadísticas cuadran con lo que pasó
+# ═════════════════════════════════════════════════════════════════════════════
+
+class TestEstadisticas:
+
+    def test_cuadran_con_el_dia(self, bodega, monkeypatch):
+        b = bodega
+        ids = _un_dia(b, monkeypatch)
+        st, r = b.get(b.op_a, '/api/conteo/estadisticas')
+        assert st == 403
+        st, e = b.get(b.supervisor, f'/api/conteo/estadisticas?almacen_id={b.almacen.id}')
+        assert st == 200, e
+        v = e['volumen']
+        assert v['iniciadas'] == 12 and v['cerradas'] == 8, v
+        assert v['por_veredicto'] == {
+            'OK_CC1': 2, 'OK_CC2': 1, 'OK_CC3': 0, 'ERROR_CONFIRMADO': 2, 'ERROR_CC3': 2,
+            'ERROR_AUDITORIA': 0, 'AJUSTE_EN_TOLERANCIA': 1}, v['por_veredicto']
+        assert v['sin_veredicto'] == {'cancelada': 1, 'en_curso': 1, 'no_encontrado': 1,
+                                      'pendiente': 1}, v['sin_veredicto']
+        assert (v['a_cc2']['numerador'], v['a_cc2']['denominador']) == (5, 8)
+        assert (v['a_cc3']['numerador'], v['a_cc3']['denominador']) == (2, 8)
+        # Recuentos: por venta durante el conteo (1) vs propios por tolerancia (5).
+        assert v['recuentos']['numerador'] == 1, v['recuentos']
+        assert v['recuentos_propios'] == 5
+        assert v['por_tipo']['EXCEPCION_PICKING'] == {'iniciadas': 1, 'cerradas': 0}
+
+        a = e['ajustes']
+        assert a['cantidad'] == 3, a
+        assert (a['automaticos'], a['por_tolerancia'], a['aprobados_por_supervisor']) == (2, 1, 1)
+        assert (a['unidades_ent'], a['unidades_sal']) == (0, 2 + 4 + 2)
+        assert a['valor']['sal'] == 8000.0
+        assert a['bloqueados_hoy']['por_motivo'] == {'SALIDAS_NO_POS': 1}
+        assert a['bloqueados_hoy']['descuadres_aprobables'] == 1
+
+        # Exactitud: 3 OK de 8 (exacta); con tolerancia el primer conteo de
+        # ok1, ok1_mov y tol quedó dentro.
+        exact = e['exactitud']
+        oks = sum(g['numerador'] for cl in exact['por_clase'].values() for g in cl.values())
+        tot = sum(g['denominador'] for cl in exact['por_clase'].values() for g in cl.values())
+        assert (oks, tot) == (3, 8), exact
+        # Por persona: solo volumen.
+        filas = {f.get('operario') or f.get('nombre'): f for f in e['por_operario']['filas']}
+        assert filas, e['por_operario']
+
+        # El mismo reporte por clase no inventa nada.
+        st, ea = b.get(b.supervisor, f'/api/conteo/estadisticas?almacen_id={b.almacen.id}&clase=A')
+        assert ea['volumen']['cerradas'] == 5 and ea['volumen']['recuentos']['numerador'] == 0
+        st, r = b.get(b.supervisor, '/api/conteo/estadisticas?clase=Z')
+        assert st == 400
+        st, r = b.get(b.supervisor, '/api/conteo/estadisticas?desde=ayer')
+        assert st == 400
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 11 · La auditoría no ve nada roto en un día sano
+# ═════════════════════════════════════════════════════════════════════════════
+
+class TestAuditoria:
+
+    def test_ningun_bloqueante_sobre_el_dia(self, bodega, monkeypatch):
+        b = bodega
+        _un_dia(b, monkeypatch)
+        st, r = b.get(b.op_a, '/api/auditoria/flujo?flujo=conteo')
+        assert st == 403
+        st, r = b.get(b.supervisor, '/api/auditoria/flujo?flujo=conteo')
+        assert st == 200, r
+        assert not r['errores'], r['errores']
+        rotos = [(x['codigo'], x['total'], x.get('muestra') or x.get('hallazgos'))
+                 for x in r['resultados'] if x['severidad'] == 'BLOQUEA' and x['total']]
+        assert not rotos, rotos
+        assert len(r['resultados']) >= 9, 'la auditoría de conteo dejó de correr invariantes'
