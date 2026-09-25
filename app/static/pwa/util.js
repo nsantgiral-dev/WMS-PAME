@@ -86,3 +86,31 @@ function fmtUsd(x) {
   if (!Number.isFinite(n)) return String(x);
   return 'US$ ' + n.toLocaleString('es-CO', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
+
+/** El día de Bogotá (`YYYY-MM-DD`) de un instante: **la única** del PWA.
+ *
+ * Una fecha que alguien LEE como día (un filtro «hoy», la fecha de un
+ * tanqueo, el período de un KPI) es el día de Bogotá, no el de UTC (Regla 5).
+ * `toISOString().slice(0, 10)` da el día UTC: entre las 7 p. m. y la
+ * medianoche de Neiva ya es «mañana». Había cinco copias de esta función
+ * (liquidación, tablero, flota, analítica) y tres sitios de rutas con
+ * `toISOString()` (2026-09-25); ahora hay una, y el trinquete
+ * `test_hoy_bogota_una_sola.py` impide que vuelva otra.
+ *
+ * @param {Date|string|number} [fecha] - el instante (por defecto, ahora)
+ * @param {number} [desplazamientoDias] - días a sumar (negativo = atrás)
+ * @returns {string} `YYYY-MM-DD`
+ */
+function hoyBogota(fecha, desplazamientoDias) {
+  const base = fecha instanceof Date ? fecha : (fecha != null ? new Date(fecha) : new Date());
+  const d = new Date(base.getTime() + (Number(desplazamientoDias) || 0) * 86400000);
+  try {
+    return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Bogota',
+      year: 'numeric', month: '2-digit', day: '2-digit' }).format(d);
+  } catch (_) {
+    // Bogotá no tiene horario de verano: UTC−5 fijo.
+    const b = new Date(d.getTime() - 5 * 3600 * 1000);
+    const dos = (n) => String(n).padStart(2, '0');
+    return `${b.getUTCFullYear()}-${dos(b.getUTCMonth() + 1)}-${dos(b.getUTCDate())}`;
+  }
+}

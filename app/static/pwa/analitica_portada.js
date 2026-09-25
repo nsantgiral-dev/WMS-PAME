@@ -343,15 +343,15 @@ const AN_PORT_TANDA_RECALCULO = 5;
 async function anPortRecalcular() {
   const p = (AN_PORT.d && AN_PORT.d.portada) || {};
   const dias = anPortDiasRecalculo(p);
-  const hasta = anHoyBogota(-1);
-  const desde = anHoyBogota(-dias);
+  const hasta = hoyBogota(null, -1);
+  const desde = hoyBogota(null, -dias);
   if (typeof confirm === 'function' && !confirm(`¿Calcular el KPI diario del ${desde} al ${hasta}? Puede tardar un par de minutos.`)) return;
   const almacen = (AN_PORT.f && AN_PORT.f.almacen_id) || null;
   try {
     for (let fin = -1; fin >= -dias; fin -= AN_PORT_TANDA_RECALCULO) {
       const ini = Math.max(-dias, fin - AN_PORT_TANDA_RECALCULO + 1);
-      if (typeof alerta === 'function') alerta(`Calculando del ${anHoyBogota(ini)} al ${anHoyBogota(fin)}…`, 'info');
-      const r = await post('/api/analitica/kpi/recalcular', { desde: anHoyBogota(ini), hasta: anHoyBogota(fin), almacen_id: almacen });
+      if (typeof alerta === 'function') alerta(`Calculando del ${hoyBogota(null, ini)} al ${hoyBogota(null, fin)}…`, 'info');
+      const r = await post('/api/analitica/kpi/recalcular', { desde: hoyBogota(null, ini), hasta: hoyBogota(null, fin), almacen_id: almacen });
       if (r && r.error) throw new Error(r.error);
     }
     if (typeof alerta === 'function') alerta('KPI diario calculado. Actualizando la portada…', 'ok');

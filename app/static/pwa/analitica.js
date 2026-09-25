@@ -43,12 +43,6 @@ const _AN_CARGA = {};
 let _AN_SUBTAB = null;
 let _AN_ALMACENES = null;
 
-/** Día operativo de Bogotá (UTC−5, sin horario de verano) como `YYYY-MM-DD`. */
-function anHoyBogota(desplazamientoDias = 0) {
-  const ms = Date.now() - 5 * 3600 * 1000 + desplazamientoDias * 86400 * 1000;
-  return new Date(ms).toISOString().slice(0, 10);
-}
-
 /** Entrada a la pestaña. Pinta el shell la primera vez y abre la sub-pestaña. */
 async function cargarAnalitica() {
   const raiz = document.getElementById('tab-analitica');
@@ -58,8 +52,8 @@ async function cargarAnalitica() {
     raiz.dataset.pintado = '1';
     const d = document.getElementById('an-f-desde');
     const h = document.getElementById('an-f-hasta');
-    if (d && !d.value) d.value = anHoyBogota(-(AN_DIAS_POR_DEFECTO - 1));
-    if (h && !h.value) h.value = anHoyBogota(0);
+    if (d && !d.value) d.value = hoyBogota(null, -(AN_DIAS_POR_DEFECTO - 1));
+    if (h && !h.value) h.value = hoyBogota();
     anCargarAlmacenes();
   }
   // Abre en la portada. Lo recordado solo vale dentro de la misma sesión de la
@@ -127,8 +121,8 @@ function anFiltros() {
   const v = (id) => { const el = document.getElementById(id); return el ? String(el.value || '') : ''; };
   return {
     almacen_id: v('an-f-almacen'),
-    desde: v('an-f-desde') || anHoyBogota(-(AN_DIAS_POR_DEFECTO - 1)),
-    hasta: v('an-f-hasta') || anHoyBogota(0),
+    desde: v('an-f-desde') || hoyBogota(null, -(AN_DIAS_POR_DEFECTO - 1)),
+    hasta: v('an-f-hasta') || hoyBogota(),
   };
 }
 
@@ -242,9 +236,9 @@ function anFechaUtc(iso) {
 function anCuando(iso) {
   const d = anFechaUtc(iso);
   if (!d) return 'sin fecha';
-  const dia = new Date(d.getTime() - 5 * 3600 * 1000).toISOString().slice(0, 10);
+  const dia = hoyBogota(d);
   const hora = d.toLocaleTimeString('es-CO', { timeZone: 'America/Bogota', hour: '2-digit', minute: '2-digit' });
-  return dia === anHoyBogota(0) ? `hoy ${hora}` : `${dia} ${hora}`;
+  return dia === hoyBogota() ? `hoy ${hora}` : `${dia} ${hora}`;
 }
 
 /**

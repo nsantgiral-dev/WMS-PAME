@@ -1210,8 +1210,8 @@ class TestLasPantallas:
     def test_liquidacion_hoy_es_bogota(self):
         d = _node(_CARGA % 'liquidacion.js' + r"""
 console.log(JSON.stringify({
-  noche: vm.runInContext("liqHoyBogota(new Date('2026-09-25T02:30:00Z'))", ctx),
-  dia: vm.runInContext("liqHoyBogota(new Date('2026-09-24T15:00:00Z'))", ctx)}));
+  noche: vm.runInContext("hoyBogota(new Date('2026-09-25T02:30:00Z'))", ctx),
+  dia: vm.runInContext("hoyBogota(new Date('2026-09-24T15:00:00Z'))", ctx)}));
 """, tz='UTC')
         assert d == {'noche': '2026-09-24', 'dia': '2026-09-24'}
 
@@ -1235,7 +1235,7 @@ vm.runInContext('liqCargarDesglose()', ctx).then(() => console.log(JSON.stringif
     def test_tablero_bi_dia_bogota_y_hora_sin_z(self):
         d = _node(_CARGA % 'tablero_bi.js' + r"""
 console.log(JSON.stringify({
-  hoy: vm.runInContext("biHoyBogota(new Date('2026-09-25T02:30:00Z'))", ctx),
+  hoy: vm.runInContext("hoyBogota(new Date('2026-09-25T02:30:00Z'))", ctx),
   hora: vm.runInContext("biFechaHora('2026-09-25T01:10:00')", ctx),
   conZ: vm.runInContext("biFechaHora('2026-09-25T01:10:00Z')", ctx)}));
 """, tz='America/Bogota')

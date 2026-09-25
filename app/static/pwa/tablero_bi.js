@@ -45,21 +45,9 @@ function biRenderSubtabs() {
   ).join('');
 }
 
-/** Día operativo de Bogotá (`YYYY-MM-DD`): `toISOString()` es el día UTC y
- *  después de las 7 p. m. el tablero abría en «mañana» (Regla 5). */
-function biHoyBogota(fecha) {
-  const d = fecha || new Date();
-  try {
-    return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Bogota',
-      year: 'numeric', month: '2-digit', day: '2-digit' }).format(d);
-  } catch (_) {
-    return new Date(d.getTime() - 5 * 3600 * 1000).toISOString().slice(0, 10);
-  }
-}
-
 /** Lee bi-fecha-desde/hasta, inicializándolos a "hoy" (Bogotá) si están vacíos. */
 function biRangoFechas() {
-  const hoy = biHoyBogota();
+  const hoy = hoyBogota();
   const desdeEl = document.getElementById('bi-fecha-desde');
   const hastaEl = document.getElementById('bi-fecha-hasta');
   if (desdeEl && !desdeEl.value) desdeEl.value = hoy;

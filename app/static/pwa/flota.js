@@ -1668,22 +1668,6 @@ function flotaFechaCorta(iso) {
   return m ? `${m[3]}/${m[2]}/${m[1]}` : String(iso || '');
 }
 
-/** Hoy en Bogotá, `YYYY-MM-DD`. La fecha que alguien LEE como día (Regla 5).
- *
- * Con la hora del teléfono en UTC, un tanqueo de las 8 p. m. quedaría del día
- * siguiente — la misma forma que ya costó en el cupo de conteo y en el KPI de
- * «completado hoy». `en-CA` da el orden año-mes-día sin armarlo a mano. */
-function flotaHoyBogota(fecha) {
-  const d = fecha || new Date();
-  try {
-    return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Bogota',
-      year: 'numeric', month: '2-digit', day: '2-digit' }).format(d);
-  } catch (_) {
-    const b = new Date(d.getTime() - 5 * 3600 * 1000);   // Bogotá no tiene horario de verano
-    return b.toISOString().slice(0, 10);
-  }
-}
-
 /** Kilómetros con separador de miles. */
 function flotaKm(km) {
   const n = Number(km);
@@ -2117,11 +2101,11 @@ function flotaCondPaso(d, cola) {
   let abierto = !!d.tiene_turno_abierto;
   const insp = (d.estado_vehiculo && d.estado_vehiculo.inspeccion_de_hoy) || {};
   let inspeccionado = !!insp.hecha;
-  const hoy = flotaHoyBogota();
+  const hoy = hoyBogota();
   (cola || []).forEach(o => {
     if (o.que === 'recibo') abierto = true;
     if (o.que === 'entrega') { abierto = false; }
-    if (o.que === 'inspeccion' && flotaHoyBogota(new Date(o.creado)) === hoy) inspeccionado = true;
+    if (o.que === 'inspeccion' && hoyBogota(new Date(o.creado)) === hoy) inspeccionado = true;
   });
   // Sin turno y con la ruta de hoy ya cerrada, el día terminó: no se vuelve a
   // ofrecer «Recibir el camión» (e2e 2026-09-25). `recibir_igual` es el
@@ -3443,7 +3427,7 @@ function flotaTanqueoHTML() {
       <p class="flota-paso-guia">Con la foto el kilometraje nuevo queda respaldado; sin ella queda en duda hasta que alguien lo revise.</p>`
       : flotaCondKmHTML('tq', flotaCondKmConocido(FLOTA_PLACA),
         'Si ya rodaste desde entonces, tocá «Cambió» y escribí el del tablero.')}
-    <p class="flota-paso-guia">Fecha: hoy, ${esc(flotaFechaCorta(flotaHoyBogota()))}.
+    <p class="flota-paso-guia">Fecha: hoy, ${esc(flotaFechaCorta(hoyBogota()))}.
       «Lo llené» solo si de verdad quedó lleno: el rendimiento se mide de lleno a lleno.</p>
     <button class="btn-primary" id="tq-guardar" data-placa="${esc(FLOTA_PLACA)}"
             onclick="flotaCondGuardarTanqueo()">Registrar tanqueo</button>
@@ -3524,7 +3508,7 @@ async function flotaCondGuardarTanqueo() {
   if (!placa) return;
 
   const cuerpo = {
-    placa: placa, fecha: flotaHoyBogota(), valor: valor, galones: galones,
+    placa: placa, fecha: hoyBogota(), valor: valor, galones: galones,
     tanque: t.tanque, origen_costo: t.origen, estacion: estacion, proveedor: estacion,
     km: km, fotos: t.foto ? [flotaFotoPayload(t.foto, 'foto_dato', null)] : [],
   };

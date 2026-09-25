@@ -333,9 +333,7 @@ function temporadaExportar() {
   const _bog = new Intl.DateTimeFormat('es-CO', {
     timeZone: 'America/Bogota', dateStyle: 'short', timeStyle: 'short',
   }).format(new Date());
-  const hoy = new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'America/Bogota', year: 'numeric', month: '2-digit', day: '2-digit',
-  }).format(new Date());
+  const hoy = hoyBogota();
   const sello = `${_bog} (hora de Colombia, UTC−5)`;
   const w = window.open('', '_blank');
   if (!w) { alerta('Permite ventanas emergentes para exportar', 'error'); return; }

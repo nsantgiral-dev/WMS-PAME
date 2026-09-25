@@ -69,22 +69,9 @@ function liqSubtab(sec) {
   else if (sec === 'jobs') liqCargarJobs();
 }
 
-/** Día operativo de Bogotá (`YYYY-MM-DD`). `toISOString()` es el día UTC:
- *  entre las 7 p. m. y la medianoche daba mañana, y el filtro por defecto
- *  mostraba un día vacío en pleno cierre de rutas (Regla 5). */
-function liqHoyBogota(fecha) {
-  const d = fecha || new Date();
-  try {
-    return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Bogota',
-      year: 'numeric', month: '2-digit', day: '2-digit' }).format(d);
-  } catch (_) {
-    return new Date(d.getTime() - 5 * 3600 * 1000).toISOString().slice(0, 10);
-  }
-}
-
 /** Set today's date range as default and load the liquidacion dashboard. */
 async function cargarLiquidacion() {
-  const hoy = liqHoyBogota();
+  const hoy = hoyBogota();
   const desde = document.getElementById('liq-fecha-desde');
   const hasta = document.getElementById('liq-fecha-hasta');
   if (desde && !desde.value) desde.value = hoy;
@@ -187,7 +174,7 @@ async function liqCargarDesglose() {
 }
 
 async function liqCargarDashboard() {
-  const hoy = liqHoyBogota();
+  const hoy = hoyBogota();
   const desde = document.getElementById('liq-fecha-desde')?.value || hoy;
   const hasta = document.getElementById('liq-fecha-hasta')?.value || hoy;
   try {

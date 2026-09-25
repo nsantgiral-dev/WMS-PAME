@@ -121,9 +121,8 @@ function fjPct(x) {
 }
 
 function fjSumarDias(iso, n) {
-  const d = new Date(iso + 'T12:00:00Z');
-  d.setUTCDate(d.getUTCDate() + n);
-  return d.toISOString().slice(0, 10);
+  // Mediodía UTC es de mañana en Bogotá, del mismo día: la suma no cruza.
+  return hoyBogota(new Date(iso + 'T12:00:00Z'), n);
 }
 
 const FJ_BOTON = 'padding:10px 14px;min-height:44px;font-size:var(--fs-sm);font-weight:600;background:var(--bg-s2);color:var(--tx);border:1px solid var(--brd-b);border-radius:10px;cursor:pointer;';

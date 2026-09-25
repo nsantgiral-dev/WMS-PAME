@@ -683,7 +683,7 @@ function rutasSubTab(nombre) {
 
 /** Despacha la carga del sub-tab activo de rutas. */
 async function cargarRutas() {
-  const hoy = new Date().toISOString().split('T')[0];
+  const hoy = hoyBogota();
   const desde = document.getElementById('rutas-fecha-desde');
   const hasta = document.getElementById('rutas-fecha-hasta');
   if (desde && !desde.value) desde.value = hoy;
@@ -701,7 +701,7 @@ async function cargarListaRutas() {
   const el = document.getElementById('lista-rutas');
   if (!el) return;
   try {
-    const hoy = new Date().toISOString().split('T')[0];
+    const hoy = hoyBogota();
     const desde = document.getElementById('rutas-fecha-desde')?.value || hoy;
     const hasta = document.getElementById('rutas-fecha-hasta')?.value || hoy;
     const d = await get(`/api/rutas/?fecha_desde=${desde}&fecha_hasta=${hasta}`);
@@ -1127,7 +1127,7 @@ function rutasMostrarForm() {
   document.getElementById('rutas-form-error').textContent = '';
   // Fecha por defecto = hoy
   const fechaEl = document.getElementById('rutas-form-fecha');
-  if (fechaEl && !fechaEl.value) fechaEl.value = new Date().toISOString().slice(0, 10);
+  if (fechaEl && !fechaEl.value) fechaEl.value = hoyBogota();
   cargarListaMaestrasEnSelect('rutas-form-maestra');
   cargarListaConductoresEnSelect('rutas-form-conductor');
   cargarListaVehiculosEnSelect('rutas-form-vehiculo');

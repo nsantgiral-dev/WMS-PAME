@@ -650,7 +650,7 @@ class TestLaFechaEsDeBogota:
 
     def test_a_las_9_de_la_noche_sigue_siendo_hoy(self, tmp_path):
         # 2026-09-25 02:00 UTC = 2026-09-24 21:00 en Bogotá.
-        s = _correr(tmp_path, 'flotaHoyBogota(new Date("2026-09-25T02:00:00Z"))')
+        s = _correr(tmp_path, 'hoyBogota(new Date("2026-09-25T02:00:00Z"))')
         assert s == '2026-09-24'
 
     def test_el_tanqueo_manda_la_fecha_de_hoy_y_sus_cinco_datos(self, tmp_path):
@@ -660,7 +660,7 @@ class TestLaFechaEsDeBogota:
             ' document.getElementById("tq-galones").value = "10.5";'
             ' document.getElementById("tq-valor").value = "150000";'
             ' document.getElementById("tq-estacion").value = "Terpel";'
-            ' await flotaCondGuardarTanqueo(); return {envios: __ENVIOS, hoy: flotaHoyBogota()}; })()'),
+            ' await flotaCondGuardarTanqueo(); return {envios: __ENVIOS, hoy: hoyBogota()}; })()'),
             semilla=(f'FLOTA_COND = {json.dumps(_turno(tiene_turno_abierto=True))};'
                      'FLOTA_PLACA = "THP696";'
                      f'FLOTA_TQ = {{foto: {json.dumps(FOTO)}, tanque: "lleno",'
