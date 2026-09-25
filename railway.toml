@@ -1,6 +1,10 @@
 [build]
 builder = "nixpacks"
-buildCommand = "python -m pytest tests/ -x -q --tb=short -m \"not postgres\""
+# Sin buildCommand: la suite la corre GitHub Actions (.github/workflows/tests.yml)
+# y Railway no despliega hasta que salga verde («Wait for CI», encendido en cada
+# servicio de QA y production). Comprobado 2026-09-25: un commit con un test rojo
+# quedó SKIPPED «CI check suite failed». Antes el build corría pytest dos veces
+# por push (WMS-PAME y WMS-Worker) y QA tardaba más de 20 min en desplegar.
 
 [deploy]
 releaseCommand = "flask db upgrade"
