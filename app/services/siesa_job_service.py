@@ -340,13 +340,19 @@ def _run_dlq_jobs():
                 logger.warning(
                     f'[DLQ] Job {job.id} ({job.tipo}) falló (intento {job.intentos}/'
                     f'{job.max_intentos}) — reintento en '
-                    f'{_BACKOFF_LABELS[min(job.intentos - 1, 2)]}: {error_msg}'
+                    f'{_espera_de(job)}: {error_msg}'
                 )
 
     return procesados
 
 
-_BACKOFF_LABELS = ['5 min', '15 min', '45 min']
+def _espera_de(job) -> str:
+    """La espera real del próximo intento, leída de la misma tabla que la
+    programa (`siesa_job._BACKOFF_MINUTOS`). Había una copia de tres etiquetas
+    para cuatro esperas: del 4.º fallo en adelante el log decía «45 min» y el
+    job esperaba 120."""
+    from app.models.siesa_job import _BACKOFF_MINUTOS
+    return f'{_BACKOFF_MINUTOS[min(job.intentos - 1, len(_BACKOFF_MINUTOS) - 1)]} min'
 
 
 def encolar_traslado_averias(movimiento, codigo_siesa: str, cantidad: int,

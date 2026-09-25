@@ -6,7 +6,7 @@
   paquetes, no uno**: `app/` (127 archivos) y `flota/` (29) — ver abajo
 - **Frontend**: PWA vanilla JS modularizada (app.js + 16 módulos)
 - **Integración ERP**: Connekta V2/V3 → Siesa Enterprise
-- **DLQ**: SiesaJob con reintentos + backoff exponencial (5→15→45 min, max 3)
+- **DLQ**: SiesaJob con reintentos + backoff (5→15→45→120 min; `max_intentos` = 5, al 5.º fallo FALLIDO). Fuera de la ventana de Siesa (06:00–19:30) solo procesa `ALERTA_EMAIL`
 - **Tests**: pytest (612 passing), CI en Railway buildCommand
 
 ## Arquitectura JS (Frontend)
@@ -1932,10 +1932,11 @@ que nadie mira es el correo. Trinquete: `tests/test_rezago_liquidacion.py`.
 alerta —y las otras tres por correo— no salen. **Una alerta apagada no falla:
 se calla**, y callarse es indistinguible de «no hubo nada que avisar».
 
-Por eso `GET /api/health/siesa` publica `schedulers.activos` y
-`schedulers.alertas_por_correo`: **lo que arrancó de verdad en ese proceso**, no
-lo que la variable dice. Son cosas distintas — un import que revienta deja la
-variable en `true` y el cron sin correr. Se consulta por servicio.
+Por eso `GET /api/health/siesa` publica `schedulers.activos` (lo que arrancó
+en ESE proceso) y, desde el 2026-09-25, `schedulers.latido` y
+`schedulers.alertas_por_correo` **leídos de la base** (`cron_latido`, lo que
+corrió de verdad en cualquier servicio): ya no hace falta consultar servicio
+por servicio. Ver «Inventario, traslados, cartera, crons y alertas».
 
 ---
 
@@ -1949,7 +1950,7 @@ servicio por C.O.). `vigia_service.py`, panel en `vigia.js`.
 | Vía | Qué alimenta | Estado |
 |-----|--------------|--------|
 | `cargar_ventas_desde_txt()` | Línea base histórica (26 semanas de μ_ref/σ_ref) | Backfill admin, bloqueado salvo `VIGIA_CARGAR_TXT=true` |
-| `alimentar_adopcion_picking()` | `adopcion_picking`, `brecha_picking` | Cron lunes 05:30 Bogotá + botón en el panel |
+| `alimentar_adopcion_picking()` | `adopcion_picking`, `brecha_picking` | Cron lunes 06:30 Bogotá (dentro de la ventana de Siesa desde 2026-09-25; era 05:30) + botón en el panel |
 | Ingesta Connekta | Facturación, líneas, frecuencia | **Implementada, APAGADA** — `VIGIA_INGESTA_FACTURACION=true` |
 | Generic Transfer | Planillas de ruta | **No implementada** — requiere configuración en Siesa |
 
@@ -2020,7 +2021,7 @@ no se afloja el criterio.
 
 ### Backoff
 
-Intento 1: próximo ciclo DLQ (~5 min). Intento 2: +15 min. Intento 3: +45 min. Después: FALLIDO + alerta admin en dashboard.
+Tabla única: `siesa_job._BACKOFF_MINUTOS = [5, 15, 45, 120, 180]`, `max_intentos = 5`. Tras el 1.er fallo espera 5 min, tras el 2.º 15, tras el 3.º 45, tras el 4.º 120; el 5.º fallo lo deja FALLIDO + alerta admin en el dashboard. (Decía «máx. 3» y «5/15/45»; el log usaba una copia de tres etiquetas, `_BACKOFF_LABELS`, retirada el 2026-09-25: ahora `_espera_de` lee la misma tabla.) `DependenciaPendiente` y `ConnektaCircuitOpenError` no gastan intento; fuera de la ventana de Siesa el job ni se intenta.
 
 ### Pre-flag Pattern (previene duplicados en crash)
 
@@ -3492,7 +3493,7 @@ nuevas marcadas `completa=False`. Nunca escribe un cero.
 | `FOTOS_SIESA_COSTO` | `true` | Costo por InvFecha (~50-70 páginas por bodega operada, ~1 min c/u) |
 | `FOTOS_SIESA_DIAS_VENTAS` | `3` | Días hacia atrás que se re-fotografían (facturas tardías, anulaciones) |
 
-Corre solo entre **7:00 y 19:30 Bogotá** (Regla 14); si la ventana se cierra a
+Corre solo dentro de la ventana de Siesa (**06:00–19:30 Bogotá**, `ventana_siesa`; era 7:00–19:30) (Regla 14); si la ventana se cierra a
 mitad, lo que falta va a `no_corrieron`. Lock `LOCK_FOTOS_SIESA = 2020`.
 `GET /api/health/siesa` → `fotos_siesa`: encendido, última corrida por tipo y
 `huecos_ultimos_dias`, leídos **de la base** (el cron corre en el worker).
@@ -5153,7 +5154,7 @@ cartera leída: `valor_factura` o, sin ella, el valor pendiente de la historia.
 Sin esto, dos pedidos seguidos ven el mismo cupo libre.
 
 **Foto** (`cartera_cliente`): cada lectura completa se guarda por NIT; si Siesa
-no responde (o es de noche: fuera de 6:00–20:00 no se le pregunta, Regla 14),
+no responde (o es de noche: fuera de la ventana de Siesa, 06:00–19:30, no se le pregunta, Regla 14),
 vale la foto de < 24 h. Dentro de 2 min no se relee el mismo NIT.
 
 ### Las compuertas
@@ -5415,7 +5416,7 @@ sigue hasta el inventario vendible*. Lo que había:
 | PARCIAL sin ítems → devolución TOTAL; el servidor no exigía `items_entregados` | Con `version_formulario >= 4` (el PWA nuevo: `COND_VERSION_FORMULARIO = 4`) una PARCIAL exige al menos una referencia devuelta. Un ítem viejo de la cola **no se traba**: su devolución nace con `sin_items` y recepción cuenta contra la factura |
 | El reingreso iba directo a picking (vendible) con la NC en Elaboración | Lo **sano** entra al bin `DEVOLUCIONES`, zona **`DEVOLUCION`** (`String(10)`), **no vendible**: `picking_service.ZONAS_NO_VENDIBLES` — la misma política que AVERIAS, así que FEFO, alerta de mínimos, carga inicial, ABC y traslados la heredan (reposición filtra PICKING/RESERVA en positivo; conteo ya la trata como «mercancía en proceso» mientras la NC no conste aprobada). Lo **averiado** va a `AVERIADOS`. Con la NC aprobada, `liberar_reingreso` (la única puerta, trinquete AST) lo mueve al slot de picking o a la ubicación óptima con dos `MovimientoInventario` `LIBERACION_DEVOLUCION` |
 | No se podía partir una línea entre sanas y averiadas; `MERCANCIA_AVERIADA` no llegaba premarcada | `lineas_devolucion_cliente.cantidad_averiada`. Premarcada si el motivo es MERCANCIA_AVERIADA. La NC de una línea **mixta** va entera a la bodega de la factura (forma verificada: una línea por `f470_rowid_movto`); lo averiado se traslada a AV1 con el 142951 **al aprobarse la NC**, anclado al movimiento que lo metió en AVERIADOS. Toda averiada → la NC la manda a AV1 como siempre |
-| «Ya la aprobé» era un clic sin verificar | Cron **`[DEVOLUCIONES_NC]`** (`_scheduler_pesados`, cada 30 min 7–19:30 Bogotá, `LOCK_DEVOLUCIONES_NC = 2022`, **nace apagado**: `DEVOLUCIONES_VERIFICAR_NC=true`) lee `f350_ind_estado` con la consulta ya registrada (`CONNEKTA_CONSULTA_NC_CONSECUTIVO`) y marca `nc_aprobada_fuente='SIESA'` solo si leyó `1` en la fila de ESE consecutivo, tipo y CO. El botón queda de respaldo: **motivo obligatorio y FORZAR** (`MANUAL`). Supervisión tiene «Verificar en Siesa» (`POST /api/devoluciones/verificar-nc`). `/api/health/siesa` → `devoluciones_nc` |
+| «Ya la aprobé» era un clic sin verificar | Cron **`[DEVOLUCIONES_NC]`** (`_scheduler_pesados`, cada 30 min 7–19:30 Bogotá, `LOCK_DEVOLUCIONES_NC = 2023` (este archivo decía 2022, que es `LOCK_CARTERA_BARRIDO`), **nace apagado**: `DEVOLUCIONES_VERIFICAR_NC=true`) lee `f350_ind_estado` con la consulta ya registrada (`CONNEKTA_CONSULTA_NC_CONSECUTIVO`) y marca `nc_aprobada_fuente='SIESA'` solo si leyó `1` en la fila de ESE consecutivo, tipo y CO. El botón queda de respaldo: **motivo obligatorio y FORZAR** (`MANUAL`). Supervisión tiene «Verificar en Siesa» (`POST /api/devoluciones/verificar-nc`). `/api/health/siesa` → `devoluciones_nc` |
 | DEV-04 contaba las NC ya aprobadas, sin antigüedad (y DEV-05 igual) | Solo las sin aprobar, con días, las más viejas primero. DEV-05 excluye las aprobadas |
 | Un producto de doble unidad declarado por referencia bloqueaba la devolución (`LineaDevueltaAmbigua`) | `vincular_a_factura` **no reparte**: abre una línea por fila de factura en 0 y recepción cuenta cuál volvió (`linea_id`); lo declarado queda por producto (`declaracion_conductor.declarado_por_producto`) y el faltante se mide contra la suma. Con rowid declarado, manda el rowid. Un producto con UNA línea: lo declarado sin rowid se suma a ella |
 
@@ -6132,3 +6133,77 @@ y los de compras, verdes por separado (108).
    para China?
 5. **Meta de servicio 95 %** para toda la bandeja (sigue abierta la de la
    canasta constitucional).
+
+---
+
+## Inventario, traslados, cartera, crons y alertas — auditoría del 2026-09-25
+
+La clase que atraviesa casi todo: **«no pude preguntar» se leía como «no
+existe» o «ya está hecho»**, y **un cron muerto o una alerta callada no se
+veían**. Migración **`m048inv`** (down `m047comprasvivo`; tablas nuevas
+`sello_ambiente` y `cron_latido`, aditiva). Locks nuevos: 2040
+(`LOCK_FLOTA_REPORTE_SEMANAL`), 2041 (`LOCK_REFRESCO_EXISTENCIAS`).
+
+| | Qué pasaba | Ahora | Trinquete |
+|---|---|---|---|
+| **P0-6** traslados | `get_sts_info_by_alterno` / `get_consec_entrada_transito_by_alterno` devolvían `None` en el `except`; reintentar-despacho/recepción lo leían «no existe» y posteaban otro STS/ETS | Tres respuestas: dato / `None` (Siesa contestó que no) / `RecuperacionNoDisponible` (red, circuito abierto, sin alterno, consecutivo ilegible). Los botones responden 409 sin POST ante «no sé»; un traslado DIRECTA (173066) no se reenvía (la consulta del STS no lo ve). El DLQ ya no borra `siesa_error` si el STS salió sin consecutivo | `test_recuperacion_tres_estados.py`: todo `get_*` del gateway que traga una excepción amplia está declarado (11, solo encoge) |
+| **P0-7** picking | `reabrir_picking` ponía `cantidad_recogida` en 0 y el nuevo pick restaba todo otra vez | Con empaque vivo/remisión (`_empaque_que_la_explica`, compartida con «devuelto al estante»): la original queda COMPLETADO por lo recogido y nace una tarea por el faltante. Sin empaque: lo recogido se reingresa (`REINGRESO_REAPERTURA`) | `test_inventario_no_se_resta_sin_destino.py::TestReabrirNoRestaDosVeces` |
+| **P0-8** carga física | La carga de las 7:00 escribía `UbicacionProducto` con la foto vieja de `stock_siesa` cuando Siesa no respondía; una página perdida por 429 dejaba la pasada «completa» | **Decisión del dueño:** sigue automática, pero solo escribe con dato fresco y completo (`fuente_para_escribir`: no degradado, sello de hoy Bogotá, la bodega vino en la descarga, sin páginas perdidas). Si no, no escribe nada, queda en `registros_sync`, se ve en 🩺 Salud (`carga_fisica`) y en el resumen diario; se reintenta con `POST /api/siesa/cargar-inventario` dentro de la ventana (409 fuera) | `test_carga_fisica_fuente_confiable.py`: fuente degradada → cero escrituras; AST: todo escritor de inventario que lee Siesa pasa por la política |
+| **P0-9** ambiente | Una copia de producción restaurada en QA: la DLQ de QA ejecutaba sus `siesa_jobs` contra el Siesa compartido | `sello_ambiente`: el primer proceso que va a hablar con Siesa sobre una base sin sello la sella con su `RAILWAY_ENVIRONMENT_NAME`. Otro ambiente no postea: la DLQ omite el ciclo sin tocar un job y `_post` levanta `AmbienteNoCoincide` antes de la red. Sin variable (local/tests) no bloquea, declarado; sello ilegible bloquea. `/api/health/siesa` → `sello_ambiente`; `POST /api/health/sello-ambiente` re-sella (admin, motivo, nombre escrito, bitácora). Acta de corte: sello PROTEGIDO; `verificar_restauracion`: IRRECUPERABLE y avisa el sello de la copia | `test_sello_ambiente.py`: todo `requests.post` declarado; el único a Siesa llama a la pared antes de la red |
+| **P0-10** contenedor | `armar_contenedor` no propagaba `insumo_en_camino.hay_dato`: sin OCs sincronizadas el faltante salía inflado con cara de bueno | `aptitud_de_la_propuesta` (una política): NO APTA sin dato, con una fuente que falló o sin el espejo de OCs completo. `compras_bandeja.js` y `compras_ia.js` lo dicen en grande | `test_contenedor_no_apto.py`: nadie más lee `hay_dato` |
+| **P1-1** cupo | Una FE PAGADA (fuera de la cartera abierta) consumía cupo para siempre; un valor desconocido sumaba 0 | Consume solo sin FE o con FE < 48 h (`VENTANA_FE_SIN_INDEXAR`; sin fecha, consume). Valor desconocido o parcial → `pedidos_wms_sin_valor` y `VALOR_DESCONOCIDO` (retiene) | `test_cartera_cupo_y_autorizadores.py` |
+| **P1-12** cartera | RETIENE sin nadie que decida | `puede_autorizar` (una política para la ruta y la salud: permiso por persona o el rol de cartera que se cree). `salud()` cuenta autorizadores y avisa «NADIE puede decidir» (sin autorizador ni token) o «solo el Gestor» | ídem |
+| **P1-11** crons | `SCHEDULERS_ACTIVOS` en memoria: la web no veía los crons del worker; un cron que reventaba seguía «activo» | Los 28 `add_job` pasan su función por `con_latido(<id>, fn)`: cada corrida escribe `cron_latido` (cron × servicio, conexión propia, nunca rompe el cron). Health y 🩺 Salud leen el latido (`fallando`, `callados`, `alertas_por_correo` = algún cron de alertas corrió en 26 h) | `test_cron_latido.py`: todo `add_job` envuelto con su mismo id |
+| **P1-14** resumen diario | Importaba `PedidoPicking` (no existe) → «N/D» cada día; ventana naive corrida 5 h; reescribía VTA-30 sin corte | Despachos por `metricas.pedidos_despachados` en el día Bogotá; la auditoría por `auditoria.auditar` (con corte; los hallazgos publican `fecha`) | `test_resumen_diario.py`: todo `from app…/flota… import X` resuelve (un import roto se escondía en un `except`) |
+| **Alertas sin canal** | Retenido por cartera > 3 días, traslado en tránsito > 24 h, BLOQUEA de la auditoría, carga física no escrita, cron fallando/callado, sello, existencias sin refrescar > 24 h: ningún correo | `alertas_service.avisos_sin_canal` → líneas del resumen diario (el correo). Una fuente que revienta se declara en su línea | ídem |
+| **P2** ventana | Cuatro ventanas (7–20, 6–20, 7–19:30, 7–21); crons contra Siesa a las 2:00/2:30/3:00/5:55 o 24/7; RC de las 20:30 amanecía FALLIDO | `ventana_siesa` (**06:00–19:30**): 15 crons envueltos en `solo_en_ventana_siesa`; barcodes 06:05, empaques 06:20, ubicaciones 06:35, prewarm pre-turno 06:00, Vigía lunes 06:30, pedidos 6–19 h; el refresco de existencias (hilo propio) la mira; el DLQ fuera de ella solo procesa `ALERTA_EMAIL` | `test_ventana_siesa.py`: todo `add_job` clasificado (habla → envuelto; no habla → con su porqué); nadie más declara una ventana. La suite fija la ventana abierta (`_RELOJ_FIJO`) |
+| **P2** frescura | Vigía: MAX global de `stock_siesa.updated_at` (una bodega refrescada hacía ver fresco todo) | `frescura_stock_siesa`: una bodega = su último refresco; un conjunto = su bodega menos reciente (el Armador aplica la misma regla por SKU) | AST: nadie más lee `StockSiesa.updated_at` |
+| **P2** cola | La Salud contaba como «cola atascada» un despacho retenido por cartera | `cola_siesa` lo cuenta aparte (`en_espera_de_cartera`, `cartera_service.tareas_retenidas`) | `test_ventana_siesa.py` |
+| **P2** vars | `vars_criticas` declaraba `DC` (el código usa `NI`); faltaban variables | `NI`; `CONNEKTA_ID_SISTEMA`, `CONNEKTA_IKEY` (condicional), `SIESA_NIT_EMPRESA`, `RESEND_API_KEY`, `ALERTA_EMAIL_DEST`; `MODO_ENSAYO=true` en production es combinación peligrosa | `test_vars_criticas.py` |
+| **P3** | Web y worker con `HEAVY_SCHEDULERS` duplicaban el reporte semanal y el refresco; `post_fork` de `wsgi.py` nunca corría | Lock 2040 + latido (`corrio_bien_desde`) para el reporte; lock 2041 para el refresco; `post_fork` en `gunicorn.conf.py` (Gunicorn 25 lo lee solo) | `test_procesos_duplicados.py` |
+| **QA** almacenes | `/api/almacenes/` sin NS2, FP1, FF1 | **Dato, no filtro**: el endpoint lista almacenes activos y esas bodegas nunca tuvieron uno (se crean en el primer uso). `bodegas.almacenes_faltantes()`; `flask asegurar-almacenes [--ejecutar]` los crea con la función del primer uso (CO del maestro); uno INACTIVO no se reactiva solo | `test_almacenes_operados.py` |
+
+**e2e del 2026-09-25 (tres xfail quitados):** la bitácora nombra «<persona>
+(Gestor de Cartera)» (`analitica_salud.actor_externo`, también en «Por
+persona»); «Packing completado hoy» y la productividad del empacador cuentan
+la caja cerrada en cualquier estado posterior (`filtro_caja_cerrada_desde`);
+la portada no juzga contra la meta un período del KPI diario sin medir
+(`semaforo(sin_medir=True)` → gris «Sin juicio…»).
+
+### Lo que NO cubre, dicho
+
+- **Sello, transición**: una copia de producción tomada ANTES de que
+  producción corra esta versión no trae sello, y el primer proceso de QA que
+  la use la sella `QA`. Producción tiene que desplegar esto (y correr un ciclo
+  de DLQ) antes del próximo respaldo para QA. Un proceso sin
+  `RAILWAY_ENVIRONMENT_NAME` postea sobre cualquier base.
+- **El latido dice que corrió, no que hizo su trabajo**: un cron que atrapa
+  sus propios errores figura «bien». Los hilos que no son APScheduler (carga
+  de las 7:00, refresco de existencias) no dejan latido: su rastro es
+  `registros_sync`.
+- **La carga física** que se salta una bodega por operaciones activas solo lo
+  loguea. `tamPag=1000` de la consulta de existencias (`_descargar_una_pasada_custom`)
+  sigue violando la Regla 10 (no se tocó: cambiarlo cambia el costo de la
+  descarga y no era el defecto).
+- **Consumo de cupo**: la hora de emisión de la FE es `fecha_despachado` (o
+  `siesa_triggered_at`); no hay una columna propia.
+- **Ventana**: un POST inline (un usuario a las 20:00) no se frena; Siesa caído
+  o de noche = se para todo (decisión del dueño, sin contingencia). La
+  generación de conteo ABC sigue a las 2:00 (no habla con Siesa, declarada).
+- **La recuperación de la RIT** (`get_consec_rit_by_referencia`) sigue
+  tragando el «no sé» (declarada: con `TRASLADO_USA_RIT` apagada no decide
+  nada). `get_remision_desde_pedido` también (P0-2, frente de RM).
+- **El pedido de temporada** sin dato de «en camino» sigue proponiendo `pedir`
+  sin marcarlo NO APTO (solo el contenedor).
+
+### Decisiones para el dueño
+
+1. **Ventana 06:00–19:30.** El inicio a las 06:00 (antes, según el sitio, 6 o
+   7) permite el prewarm pre-turno y las sincronizaciones de madrugada movidas;
+   el cierre 19:30 deja media hora de margen a la Regla 14. ¿Confirma?
+2. **Re-sellar**: el endpoint existe sin botón a propósito. ¿Quién decide qué
+   se hace con los `siesa_jobs` PENDIENTE de una copia antes de re-sellarla?
+3. **Almacenes de NS2/FP1/FF1**: ¿se crean (`flask asegurar-almacenes
+   --ejecutar`) o se dejan hasta su primer uso?
+4. **Consumo de cupo**: ventana de 48 h para una FE no indexada (medido: de
+   instantáneo a minutos). ¿Más corta?
