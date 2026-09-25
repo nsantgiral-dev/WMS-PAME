@@ -92,6 +92,12 @@ PANTALLAS = [
     ('analitica_recorrido.js', None, ['admin', 'supervisor', 'jefe_almacen', 'gerente']),
     ('analitica_salud.js',     None, ['admin', 'supervisor', 'jefe_almacen', 'gerente']),
     ('analitica_bitacora.js',  None, ['admin', 'supervisor', 'jefe_almacen', 'gerente']),
+    # 🎯 ¿Cómo vamos? — la portada: la ve toda gestión (el recálculo es POST y
+    # solo admin; los POST no entran a este guard).
+    ('analitica_portada.js',   None, ['admin', 'supervisor', 'jefe_almacen', 'gerente']),
+    # 🩺 Diagnóstico: la PESTAÑA es de admin (`soloAdmin` en AN_VISTAS), pero
+    # sus GET son los de gestión — lo mínimo que tiene que cargar es admin.
+    ('analitica_diagnostico.js', None, ['admin']),
 ]
 
 _MODULOS = {m for m, _, _ in PANTALLAS}

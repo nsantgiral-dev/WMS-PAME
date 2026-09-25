@@ -17,16 +17,10 @@
 const _AN_REC = { f: null, d: null, filas: [], sueltos: [], etapa: null, vista: 'en', pagina: 1 };
 const _AN_REC_POR_PAGINA = 25;
 
-/**
- * Referencias con las que se pinta la píldora. **Provisionales**: no son metas
- * del negocio, son el punto a partir del cual la cifra merece mirarse.
- * Ciclo de caja: la factura de ruta nace a crédito de un día y la ruta se
- * liquida el mismo día (ver «Alerta de ruta entregada sin liquidar»).
- */
-const AN_REC_REFERENCIAS = {
-  ciclo_dias: { ok: 2, advertencia: 5 },
-  sin_fuga: { ok: 0.95, advertencia: 0.85 },
-};
+/** Semáforo del servidor (contra la META del catálogo, `analitica_kpi.semaforo`)
+ *  → nivel de la píldora. Antes esta pantalla tenía sus propias «referencias
+ *  provisionales» escritas acá; ahora es la misma meta que la portada. */
+const _AN_REC_SEMAFORO = { verde: 'ok', amarillo: 'advertencia', rojo: 'critico', sin_dato: 'neutro', sin_meta: 'neutro' };
 
 const _AN_REC_ESTADO = {
   COMPLETO_SIN_FUGA: 'ok', COMPLETO_CON_FUGA: 'advertencia', FUGA: 'critico',
@@ -64,26 +58,20 @@ function anRecDuracion(horas) {
   return h < 48 ? `${anNum(h)} h` : `${anNum(h / 24)} días`;
 }
 
-function anRecNivelCiclo(dias) {
-  if (dias === null || dias === undefined) return ['neutro', 'sin medición'];
-  const r = AN_REC_REFERENCIAS.ciclo_dias;
-  if (dias <= r.ok) return ['ok', 'a tiempo'];
-  if (dias <= r.advertencia) return ['advertencia', 'lento'];
-  return ['critico', 'muy lento'];
+/** `[nivel de píldora, texto]` del semáforo que manda el servidor. */
+function anRecSemaforo(sem) {
+  const s = sem || {};
+  return [_AN_REC_SEMAFORO[s.nivel] || 'neutro', s.texto || 'sin meta'];
 }
 
-function anRecNivelSinFuga(tasa) {
-  if (tasa === null || tasa === undefined) return ['neutro', 'sin base'];
-  const r = AN_REC_REFERENCIAS.sin_fuga;
-  if (tasa >= r.ok) return ['ok', 'sano'];
-  if (tasa >= r.advertencia) return ['advertencia', 'con pérdidas'];
-  return ['critico', 'pérdidas altas'];
-}
-
-function anRecKpi(valor, etiqueta, sub, pildora) {
-  return `<div class="kpi-card">
-    <div class="kpi-valor" style="font-size:var(--fs-2xl);">${valor}</div>
-    <div class="kpi-label">${etiqueta} ${pildora || ''}</div>
+/** Una tarjeta: valor, etiqueta, frase de gerencia; lo técnico en el `title`
+ *  (el «?» de la esquina), no en la frase. */
+function anRecKpi(valor, etiqueta, sub, pildora, tecnico) {
+  const ayuda = tecnico
+    ? ` <span title="${esc(tecnico)}" style="cursor:help;color:var(--tx3);border:1px solid var(--brd);border-radius:50%;padding:0 6px;font-size:var(--fs-xs);">?</span>` : '';
+  return `<div class="kpi-card"${tecnico ? ` title="${esc(tecnico)}"` : ''}>
+    <div class="kpi-valor" style="font-size:var(--fs-2xl);white-space:nowrap;">${valor}</div>
+    <div class="kpi-label">${etiqueta} ${pildora || ''}${ayuda}</div>
     <div class="kpi-sub">${sub}</div></div>`;
 }
 
@@ -101,23 +89,33 @@ function anRecHtml(d) {
   const fuga = comp.find(c => c.estado === 'FUGA') || {};
   const det = comp.find(c => c.estado === 'DETENIDO') || {};
   const se = d.sin_enlazar || {};
-  const [nC, tC] = anRecNivelCiclo(ciclo.mediana_dias);
-  const [nF, tF] = anRecNivelSinFuga(sfc.tasa);
+  const sem = d.semaforos || {};
+  const [nC, tC] = anRecSemaforo(sem.ciclo_caja);
+  const [nF, tF] = anRecSemaforo(sem.llega_a_caja);
+  const dias = (x) => x === null || x === undefined ? 'sin dato'
+    : (Number(x) < 1 ? `${anNum(Math.round(Number(x) * 24))} h` : `${anNum(Math.round(Number(x) * 10) / 10)} días`);
+  const sinCiclo = ciclo.mediana_dias === null || ciclo.mediana_dias === undefined;
+  const cien = sfc.tasa === null || sfc.tasa === undefined ? null : Math.round(Number(sfc.tasa) * 100);
 
   const kpis = [
     anRecKpi(esc(anNum(d.pedidos)), 'Pedidos que entraron',
       `del ${esc(d.meta && d.meta.desde)} al ${esc(d.meta && d.meta.hasta)}`, ''),
-    anRecKpi(ciclo.mediana_dias === null || ciclo.mediana_dias === undefined ? 'sin dato'
-      : `${esc(anNum(ciclo.mediana_dias))} días`, 'Ciclo de caja (mediana)',
-      `p90 ${esc(ciclo.p90_dias === null || ciclo.p90_dias === undefined ? 'sin dato' : anNum(ciclo.p90_dias) + ' días')} · n=${esc(anNum(ciclo.n))} de ${esc(anNum(ciclo.liquidados))} liquidados`
-        + (ciclo.sin_marca ? ` · ${esc(anNum(ciclo.sin_marca))} sin marca de aprobación` : ''),
-      anRecPildora(nC, tC)),
-    anRecKpi(esc(anPct(sfc.tasa, sfc.pedidos_base)), 'Valor que cerró sin fuga',
-      `de lo ya cerrado · ${esc(anPesos(sfc.valor_base))}. Sobre toda la cohorte: ${esc(anPct(sf.tasa, sf.pedidos_base))}`
-        + (sf.pedidos_sin_valor ? ` · ${esc(anNum(sf.pedidos_sin_valor))} sin valor` : ''),
-      anRecPildora(nF, tF)),
-    anRecKpi(esc(anNum(fuga.pedidos || 0)), 'Se cayeron',
-      `${esc(anPesos(fuga.valor))}` + (det.pedidos ? ` · ${esc(anNum(det.pedidos))} detenidos` : ''),
+    anRecKpi(sinCiclo ? 'sin dato' : esc(dias(ciclo.mediana_dias)), 'Ciclo de caja',
+      sinCiclo ? 'Ningún pedido del período llegó todavía a caja liquidada.'
+        : `Un pedido típico tarda ${esc(dias(ciclo.mediana_dias))} de aprobado a caja liquidada (${esc(anNum(ciclo.n))} pedidos).`,
+      anRecPildora(nC, tC),
+      `mediana ${dias(ciclo.mediana_dias)} · p90 ${dias(ciclo.p90_dias)} · n = ${anNum(ciclo.n)} de ${anNum(ciclo.liquidados)} liquidados`
+        + (ciclo.sin_marca ? ` · ${anNum(ciclo.sin_marca)} sin marca de aprobación` : '')),
+    anRecKpi(cien === null ? 'sin dato' : `$${esc(anNum(cien))}<span style="font-size:var(--fs-sm);font-weight:400;color:var(--tx3);"> de cada $100</span>`,
+      'Llega a caja completo',
+      cien === null ? 'Ningún pedido del período terminó todavía.'
+        : `De cada $100 que cerraron, $${esc(anNum(cien))} llegaron completos a caja (${esc(anNum(sfc.pedidos_base))} pedidos · ${esc(anPesos(sfc.valor_base))}).`,
+      anRecPildora(nF, tF),
+      `${anPct(sfc.tasa, sfc.pedidos_base)} de lo ya cerrado · sobre toda la cohorte: ${anPct(sf.tasa, sf.pedidos_base)}`
+        + (sf.pedidos_sin_valor ? ` · ${anNum(sf.pedidos_sin_valor)} sin valor en Siesa no entran` : '')),
+    anRecKpi(esc(anNum(fuga.pedidos || 0)), 'Se cayeron en el camino',
+      fuga.pedidos ? `${esc(anPesos(fuga.valor))} que no llegó a caja` + (det.pedidos ? ` · ${esc(anNum(det.pedidos))} más detenidos esperando decisión` : '')
+        : (det.pedidos ? `${esc(anNum(det.pedidos))} detenidos esperando decisión` : 'Ninguno se cayó.'),
       fuga.pedidos ? anRecPildora('critico', 'revisar') : anRecPildora('ok', 'ninguno')),
   ].join('');
 
@@ -131,9 +129,10 @@ function anRecHtml(d) {
        <span style="color:var(--tx2);">${esc(anNum(c.pedidos))} pedidos · ${esc(anPesos(c.valor))}${c.sin_valor ? ` · ${esc(anNum(c.sin_valor))} sin valor` : ''}</span>
      </div>`).join('') || '<div style="color:var(--tx3);font-size:var(--fs-sm);">Ningún pedido en el rango.</div>';
 
-  const defs = d.definiciones || {};
-  const defsHtml = Object.keys(defs).map(k =>
-    `<div style="margin:4px 0;"><b>${esc(k.replace(/_/g, ' '))}</b>: ${esc(defs[k])}</div>`).join('');
+  // Lo que no se pudo unir se dice en una línea; el detalle vive en 🩺 Diagnóstico.
+  const sueltos = (se.empaques || 0) + (se.picking_sin_clave || 0) + (se.historia_sin_clave || 0);
+  const sinClave = sueltos
+    ? `<div style="font-size:var(--fs-xs);color:var(--tx3);margin:4px 0 10px;">⚪ ${esc(anNum(se.empaques || 0))} empaque(s), ${esc(anNum(se.picking_sin_clave || 0))} picking(s) y ${esc(anNum(se.historia_sin_clave || 0))} línea(s) de Siesa sin clave de pedido no entran al embudo${anEsAdmin() ? ' — detalle en 🩺 Diagnóstico' : ''}.</div>` : '';
 
   return `${anFrescura(d.meta)}
     <div class="kpi-grid">${kpis}</div>
@@ -144,30 +143,26 @@ function anRecHtml(d) {
       </div>
       ${filas}
     </div>
+    ${sinClave}
     <div id="an-rec-detalle"></div>
     <div class="tabla-card">
       <div class="tabla-titulo">Cómo terminó cada pedido</div>${compHtml}
-    </div>
-    ${anRecSinEnlazarHtml(se)}
-    <details class="tabla-card" style="font-size:var(--fs-xs);color:var(--tx2);">
-      <summary style="cursor:pointer;font-size:var(--fs-sm);color:var(--tx);">Cómo se mide cada cifra</summary>
-      ${defsHtml}
-      <div style="margin-top:6px;">Las píldoras usan referencias provisionales (ciclo ≤ ${esc(AN_REC_REFERENCIAS.ciclo_dias.ok)} días a tiempo; sin fuga ≥ ${esc(AN_REC_REFERENCIAS.sin_fuga.ok * 100)} % sano), no metas del negocio.</div>
-    </details>`;
+    </div>`;
 }
 
 /** Una etapa del embudo: barra, cifras, conversión, tiempo y fugas. */
 function anRecFilaEtapa(e, i, n0) {
   const ancho = n0 ? Math.max(2, Math.round(100 * e.pedidos / n0)) : 0;
   const conv = e.conversion_anterior
-    ? `${esc(anPct(e.conversion_anterior.tasa, e.conversion_anterior.n))} de la anterior`
+    ? `llegaron ${esc(anNum(e.conversion_anterior.num))} de ${esc(anNum(e.conversion_anterior.n))} (${esc(anPct(e.conversion_anterior.tasa, e.conversion_anterior.n).split(' de ')[0])})`
     : 'punto de partida';
   const t = e.tiempo_desde_anterior;
-  const tiempo = t
-    ? (t.n ? `mediana ${esc(anRecDuracion(t.mediana_horas))} · p90 ${esc(anRecDuracion(t.p90_horas))} · n=${esc(anNum(t.n))}`
-      : 'tiempo sin medición (n=0)')
-      + (t.sin_marca ? ` · ${esc(anNum(t.sin_marca))} sin marca` : '')
-      + (t.negativos ? ` · ${esc(anNum(t.negativos))} con marcas en orden imposible` : '')
+  // Frase: cuánto tarda el típico. Lo técnico (p90, n, sin marca) va en el title.
+  const tiempo = t && t.n ? `tardan ${esc(anRecDuracion(t.mediana_horas))} (típico)` : '';
+  const tecnico = t
+    ? (t.n ? `mediana ${anRecDuracion(t.mediana_horas)} · p90 ${anRecDuracion(t.p90_horas)} · n = ${anNum(t.n)}` : 'tiempo sin medición (n = 0)')
+      + (t.sin_marca ? ` · ${anNum(t.sin_marca)} sin marca de hora` : '')
+      + (t.negativos ? ` · ${anNum(t.negativos)} con marcas en orden imposible` : '')
     : '';
   const valor = `${esc(anPesos(e.valor))}${e.sin_valor ? ` · ${esc(anNum(e.sin_valor))} sin valor` : ''}`;
   let extra = '';
@@ -182,7 +177,7 @@ function anRecFilaEtapa(e, i, n0) {
     `<span onclick="event.stopPropagation();anRecEtapa(${i},'${vista}')" style="cursor:pointer;margin:2px 4px 0 0;display:inline-block;">${anRecPildora(nivel, f.motivo + ' · ' + anNum(f.pedidos) + ' · ' + anPesos(f.valor))}</span>`).join('');
   const fugas = chips(e.fugas, 'critico', 'fuga') + chips(e.detenidos, 'advertencia', 'fuga')
     + chips(e.perdidas_parciales, 'advertencia', 'llegaron');
-  return `<div onclick="anRecEtapa(${i},'en')" style="cursor:pointer;padding:8px 0;border-bottom:1px solid var(--brd);">
+  return `<div onclick="anRecEtapa(${i},'en')"${tecnico ? ` title="${esc(tecnico)}"` : ''} style="cursor:pointer;padding:8px 0;border-bottom:1px solid var(--brd);">
     <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;font-size:var(--fs-sm);">
       <b>${esc(e.titulo)}</b>
       <span>${esc(anNum(e.pedidos))} pedidos · ${valor}</span>
@@ -190,7 +185,7 @@ function anRecFilaEtapa(e, i, n0) {
     <div style="height:14px;background:var(--bg-s2);border-radius:7px;margin:4px 0;overflow:hidden;">
       <div style="height:100%;width:${ancho}%;background:var(--pm-fill);border-radius:7px;"></div>
     </div>
-    <div style="font-size:var(--fs-xs);color:var(--tx2);">${conv}${tiempo ? ' · ' + tiempo : ''}${e.en_etapa ? ` · <b>${esc(anNum(e.en_etapa))} esperando aquí</b>` : ''}${e.sin_marca ? ` · ${esc(anNum(e.sin_marca))} sin marca de hora` : ''}</div>
+    <div style="font-size:var(--fs-xs);color:var(--tx2);">${conv}${tiempo ? ' · ' + tiempo : ''}${e.en_etapa ? ` · <b>${esc(anNum(e.en_etapa))} esperando aquí</b>` : ''}</div>
     ${extra ? `<div style="font-size:var(--fs-xs);color:var(--tx3);">${extra}</div>` : ''}
     ${fugas ? `<div style="margin-top:2px;">${fugas}</div>` : ''}
   </div>`;
@@ -288,9 +283,11 @@ function anRecPedido(k) {
   if (p) anRecAbrirPedido(p.clave);
 }
 
+/** Un registro sin clave (se listan en 🩺 Diagnóstico): abre su línea de
+ *  tiempo en 🧭 Recorrido. */
 function anRecPedidoSuelto(k) {
   const p = _AN_REC.sueltos[k];
-  if (p) anRecAbrirPedido(p.clave);
+  if (p) anRecorridoAbrir(p.clave);
 }
 
 function anRecAbrirPedido(clave) {

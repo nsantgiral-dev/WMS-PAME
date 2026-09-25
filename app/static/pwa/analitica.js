@@ -6,10 +6,12 @@
  * contesta una parte de esa pregunta y vive en SU archivo, cargado después de
  * este:
  *
- *   analitica_recorrido.js  → anRecorridoCargar(el, f)
- *   analitica_fugas.js      → anFugasCargar(el, f)
- *   analitica_salud.js      → anSaludCargar(el, f)
- *   analitica_bitacora.js   → anBitacoraCargar(el, f)
+ *   analitica_portada.js     → anPortadaCargar(el, f)      🎯 ¿Cómo vamos? (abre por defecto)
+ *   analitica_recorrido.js   → anRecorridoCargar(el, f)
+ *   analitica_fugas.js       → anFugasCargar(el, f)
+ *   analitica_diagnostico.js → anDiagnosticoCargar(el, f)  (solo admin: junta
+ *       analitica_salud.js → anSaludCargar y analitica_bitacora.js →
+ *       anBitacoraCargar, más los registros sin clave y cómo se mide cada cifra)
  *
  * Este archivo pone lo común: la barra de filtros (almacén, desde, hasta), la
  * sub-navegación, el cargador de paneles y los formatos. **No se refresca por
@@ -20,12 +22,19 @@
  * parse-time: el orden de carga de los archivos no importa para eso.
  */
 
+// La portada primero: la pestaña contesta «¿cómo vamos?» antes que nada. El
+// juicio de confianza y el detalle técnico (salud, bitácora, sin clave, cómo
+// se mide) se juntan en 🩺 Diagnóstico, que es de administración.
 const AN_VISTAS = {
-  recorrido: { titulo: '🧭 Recorrido del pedido', cargar: (el, f) => anRecorridoCargar(el, f) },
-  fugas:     { titulo: '💸 Fugas',                 cargar: (el, f) => anFugasCargar(el, f) },
-  salud:     { titulo: '🩺 Salud del dato',        cargar: (el, f) => anSaludCargar(el, f) },
-  bitacora:  { titulo: '📜 Bitácora',              cargar: (el, f) => anBitacoraCargar(el, f) },
+  portada:     { titulo: '🎯 ¿Cómo vamos?',         cargar: (el, f) => anPortadaCargar(el, f) },
+  recorrido:   { titulo: '🧭 Recorrido del pedido', cargar: (el, f) => anRecorridoCargar(el, f) },
+  fugas:       { titulo: '💸 Fugas',                cargar: (el, f) => anFugasCargar(el, f) },
+  diagnostico: { titulo: '🩺 Diagnóstico',          cargar: (el, f) => anDiagnosticoCargar(el, f), soloAdmin: true },
 };
+const AN_VISTA_INICIAL = 'portada';
+/** Sub-pestañas de antes que ahora viven dentro de 🩺 Diagnóstico: una
+ *  preferencia guardada con esos nombres no deja la pestaña en blanco. */
+const _AN_VISTAS_MOVIDAS = { salud: 'diagnostico', bitacora: 'diagnostico' };
 
 const AN_DIAS_POR_DEFECTO = 30;
 const _AN_CLAVE_SUBTAB = 'wms_an_subtab';
@@ -53,15 +62,26 @@ async function cargarAnalitica() {
     if (h && !h.value) h.value = anHoyBogota(0);
     anCargarAlmacenes();
   }
-  let recordada = null;
-  try { recordada = localStorage.getItem(_AN_CLAVE_SUBTAB); } catch (e) { recordada = null; }
-  anSubtab(_AN_SUBTAB || (AN_VISTAS[recordada] ? recordada : 'recorrido'));
+  // Abre en la portada. Lo recordado solo vale dentro de la misma sesión de la
+  // página (`_AN_SUBTAB`): al volver a entrar, la pregunta es «¿cómo vamos?».
+  anSubtab(_AN_SUBTAB || AN_VISTA_INICIAL);
+}
+
+/** ¿El usuario es administrador? Diagnóstico y el recálculo son suyos. */
+function anEsAdmin() {
+  try { return typeof OPERARIO !== 'undefined' && !!OPERARIO && OPERARIO.rol === 'admin'; } catch (e) { return false; }
+}
+
+/** Las vistas que este usuario puede abrir. */
+function anVistaPermitida(clave) {
+  const v = AN_VISTAS[clave];
+  return !!v && (!v.soloAdmin || anEsAdmin());
 }
 
 /** El marco: título, filtros comunes, sub-pestañas y un panel por vista. */
 function anShellHtml() {
   const claves = Object.keys(AN_VISTAS);
-  const tabs = claves.map(k =>
+  const tabs = claves.filter(k => anVistaPermitida(k)).map(k =>
     `<div class="subtab" id="an-tab-${esc(k)}" onclick="anSubtab('${esc(k)}')">${esc(AN_VISTAS[k].titulo)}</div>`
   ).join('');
   const paneles = claves.map(k =>
@@ -71,7 +91,7 @@ function anShellHtml() {
   return `
     <div style="font-size:var(--fs-md);font-weight:700;margin-bottom:4px;">📈 Analítica</div>
     <div style="font-size:var(--fs-xs);color:var(--tx3);margin-bottom:12px;">
-      Del pedido aprobado a la caja liquidada: cuánto llega, cuánto tarda y dónde se pierde.
+      Del pedido aprobado a la plata en caja: cuánto llega, cuánto tarda y dónde se pierde, contra la meta.
       Solo lee la base del WMS y las fotos ya guardadas; no consulta Siesa.
     </div>
     <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end;margin-bottom:12px;">
@@ -121,7 +141,8 @@ function anQuery(f, extra) {
 
 /** Activa una sub-pestaña, muestra su panel y la carga con los filtros de hoy. */
 function anSubtab(clave) {
-  if (!AN_VISTAS[clave]) clave = 'recorrido';
+  if (_AN_VISTAS_MOVIDAS[clave]) clave = _AN_VISTAS_MOVIDAS[clave];
+  if (!anVistaPermitida(clave)) clave = AN_VISTA_INICIAL;
   _AN_SUBTAB = clave;
   try { localStorage.setItem(_AN_CLAVE_SUBTAB, clave); } catch (e) { /* sin almacenamiento: igual funciona */ }
   Object.keys(AN_VISTAS).forEach(k => {
@@ -144,7 +165,7 @@ function anSubtab(clave) {
 
 /** «Actualizar»: vuelve a pedir la vista abierta con los filtros del momento. */
 function anActualizar() {
-  anSubtab(_AN_SUBTAB || 'recorrido');
+  anSubtab(_AN_SUBTAB || AN_VISTA_INICIAL);
 }
 
 /**

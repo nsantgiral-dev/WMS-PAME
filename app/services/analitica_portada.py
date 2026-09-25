@@ -38,7 +38,6 @@ caja tiende a verse mejor de lo que es; se dice en «cómo se mide».
 Cero Siesa: todo sale de la base del WMS.
 """
 from datetime import date, datetime, timedelta
-from decimal import Decimal
 
 from app.utils.fecha import dia_operativo, rango_dia_operativo_utc
 
@@ -280,7 +279,8 @@ def _fila_pedido(p, extra=None):
     from app.services.analitica_recorrido import TITULOS, ETAPAS, TITULOS_ESTADO
     d = {'tipo': 'ver_pedido', 'pedido_clave': p.clave, 'numero': p.numero,
          'cliente': p.cliente, 'valor': float(p.valor) if p.valor is not None else None,
-         'etapa': TITULOS[ETAPAS[p.ultimo]], 'estado': TITULOS_ESTADO[p.estado_final],
+         'etapa': 'llegó hasta ' + TITULOS[ETAPAS[p.ultimo]].lower(),
+         'estado': TITULOS_ESTADO[p.estado_final],
          'motivo': (p.fuga or p.detenido or {}).get('motivo')}
     d.update(extra or {})
     return d
@@ -319,8 +319,11 @@ def _por_que_ciclo(m: Medicion):
         i = ETAPAS.index(e['etapa'])
         tramos.append({'desde': TITULOS[ETAPAS[i - 1]], 'hasta': e['titulo'],
                        'mediana_horas': t.get('mediana_horas'), 'n': t.get('n') or 0})
-    medidos = [t for t in tramos if t['mediana_horas'] is not None]
-    lento = max(medidos, key=lambda t: t['mediana_horas']) if medidos else None
+    # «El más lento» solo si de verdad se lleva la mayor parte: con todo en 0
+    # (o empatado arriba) no hay uno que señalar.
+    medidos = sorted((t for t in tramos if t['mediana_horas']), key=lambda t: -t['mediana_horas'])
+    lento = medidos[0] if medidos and (len(medidos) == 1
+                                       or medidos[0]['mediana_horas'] > medidos[1]['mediana_horas']) else None
     liquidados = []
     for p in ps:
         if p.ultimo == len(ETAPAS) - 1 and not p.fuga:
@@ -357,8 +360,9 @@ def _por_que_plata(m: Medicion):
             det = c.detalle or {}
             acciones.append({'tipo': 'ver_pedido' if c.pedido_clave else 'sin_accion',
                              'pedido_clave': c.pedido_clave, 'titulo': c.referencia,
-                             'cliente': det.get('cliente'), 'pesos': c.pesos,
-                             'dias': det.get('dias'), 'detalle': c.motivo,
+                             'cliente': det.get('cliente') or None, 'pesos': c.pesos,
+                             'dias': det.get('dias'),
+                             'detalle': (None if clave == 'entregado_sin_pago' else c.motivo),
                              'fuente': fg.FUGAS[clave].titulo})
     for c in m.fuga('documentos_trabados', m.desde, m.hasta).casos:
         det = c.detalle or {}
