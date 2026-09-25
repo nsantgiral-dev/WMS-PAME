@@ -137,6 +137,16 @@ class Mundo:
                          custodio_tipo=CustodioTipo.SEDE, custodio_sede_id=self.sede.id,
                          quien_pide=QuienPide.CONDUCTOR, ubicacion=Ubicacion.SEDE, ts=ts)
 
+    def verificar_km(self, placa):
+        """Una persona coteja contra la foto las lecturas en duda del vehículo.
+        Sin esto los km de un traspaso sin foto nacen `dudosa` y la señal de km
+        entre turnos no se juzga (mismo criterio que la bandeja)."""
+        from flota.adaptadores.modelos import LecturaOdometro
+        from flota.adaptadores.verificacion import verificar
+        for l in LecturaOdometro.query.filter_by(
+                vehiculo_id=self.vehiculos[placa].id, confianza='dudosa').all():
+            verificar(lectura_id=l.id, usuario_id=self.admin.id)
+
     def inspeccion(self, c, placa, ts, km, segundos):
         from flota.adaptadores import inspecciones
         v = self.vehiculos[placa]
@@ -500,8 +510,13 @@ class TestKmEntreTurnos:
         mundo.recibe(beto, 'JOR001', _t(ayer, '06:00'), 1000)
         mundo.entrega(beto, 'JOR001', _t(ayer, '18:00'), 1100)
         mundo.recibe(ana, 'JOR001', _t(DIA, '06:00'), 1180)
+        mundo.verificar_km('JOR001')
         s = _senales(_jornada(ana), 'km_entre_turnos')
         assert len(s) == 1
+        # Ni el título ni el texto nombran a nadie: los turnos van en la
+        # evidencia, como contexto (regla 2 de flota).
+        assert 'Beto' not in s[0]['titulo'] + s[0]['texto']
+        assert 'Ana' not in s[0]['titulo'] + s[0]['texto']
         ev = s[0]['evidencia'][0]
         assert ev['km'] == 80 and ev['entrego'] == 'Beto' and ev['recibio'] == 'Ana'
         assert ev['rol'] == 'recibió'
@@ -509,6 +524,23 @@ class TestKmEntreTurnos:
         # y el mismo caso aparece en el día de quien lo entregó antes
         sb = _senales(_jornada(beto, ayer), 'km_entre_turnos')
         assert len(sb) == 1 and sb[0]['evidencia'][0]['rol'] == 'entregó antes'
+
+    def test_un_km_en_duda_no_se_juzga_y_se_dice(self, db, mundo):
+        """El mismo criterio que la bandeja (`senales.km_sin_explicar`): un
+        tramo con un extremo sin foto no es una señal con dos nombres al lado;
+        es «verificalo primero», y la respuesta lo declara."""
+        from flota.dominio.senales import MOTIVO_TRAMO_EN_DUDA
+        beto = mundo.conductor('Beto')
+        ana = mundo.conductor('Ana')
+        ayer = DIA - timedelta(days=1)
+        mundo.recibe(beto, 'JOR001', _t(ayer, '06:00'), 1000)
+        mundo.entrega(beto, 'JOR001', _t(ayer, '18:00'), 1100)
+        mundo.recibe(ana, 'JOR001', _t(DIA, '06:00'), 1180)
+        j = _jornada(ana)
+        assert _senales(j, 'km_entre_turnos') == []
+        [ne] = j['senales_no_evaluables']
+        assert ne['clave'] == 'km_entre_turnos' and ne['motivo'] == MOTIVO_TRAMO_EN_DUDA
+        assert 'Beto' not in ne['texto'] and 'Ana' not in ne['texto']
 
     def test_sin_km_de_mas_no_hay_senal(self, db, mundo):
         beto = mundo.conductor('Beto')
@@ -1044,6 +1076,7 @@ class TestFormaDeLoQueSeEntrega:
         mundo.recibe(beto, 'JOR003', _t(ayer, '06:00'), 1000)
         mundo.entrega(beto, 'JOR003', _t(ayer, '18:00'), 1100)
         mundo.recibe(ana, 'JOR003', _t(DIA, '16:00'), 1180)
+        mundo.verificar_km('JOR003')
         mundo.inspeccion(ana, 'JOR003', _t(DIA, '16:05'), 1180, segundos=20)
         return _jornada(ana)
 

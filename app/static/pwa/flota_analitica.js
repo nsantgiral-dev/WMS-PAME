@@ -23,11 +23,11 @@
  *     gastos» sí.
  *  5. Cada fila declara su base y su ventana (regla 13), no la página.
  *
- * ## Y la disciplina es la OPUESTA a la del bloque de salud
+ * ## Y la disciplina es la OPUESTA a la de Pendientes
  *
- * `flotaBloqueSalud` devuelve vacío cuando no hay nada que hacer, y eso está
- * bien ahí: es una lista de pendientes, y una que siempre muestra algo se deja
- * de mirar — la lección de los 639 avisos.
+ * Pendientes (la bandeja) no muestra nada cuando no hay nada que hacer, y eso
+ * está bien ahí: una lista de trabajo que siempre muestra algo se deja de
+ * mirar — la lección de los 639 avisos.
  *
  * Acá es al revés, y hay que dejarlo escrito o alguien lo va a «arreglar»: el
  * trabajo entero de este tab es mostrar **lo que todavía no se puede medir**.
@@ -129,105 +129,6 @@ function flotaAnPanelVacio(titulo, base, gesto) {
   </div>`;
 }
 
-/** El recorrido de la semana: las cinco señales, arriba, con su destino.
- *
- * ## El problema que resuelve, medido
- *
- * `especialista-control-flota.md` define el trabajo del rol como **30 minutos,
- * una vez por semana**, sobre cinco señales concretas, y dice que *«los paneles
- * que necesitan trabajo van arriba»*. En el orden real, cuatro de las cinco
- * caen en los paneles 11, 13 y 14 de 14 — arriba está lo que **todavía no se
- * puede medir** (CPK, rendimiento, taller, llantas, preventivo, ritmo salen
- * `sin dato` hasta que el kilómetro se sostenga).
- *
- * Las dos cosas son ciertas a la vez y ninguna está mal: el orden de abajo es
- * de **dependencia** —cada panel dice qué gesto enciende el siguiente— y es un
- * orden para quien construye. Lo que faltaba era el de quien opera.
- *
- * ## Por qué es un índice y no un panel más
- *
- * Repite cinco números que ya están abajo, y eso normalmente es la receta para
- * que dos pantallas digan cosas distintas. Acá no puede pasar: **los lee del
- * mismo objeto `h`, en el mismo render**. Lo que no repite es la
- * interpretación — ni el motivo, ni la base, ni el gesto. Para eso está el
- * panel, y este bloque dice cuál.
- *
- * ## Y no esconde las que están limpias
- *
- * La disciplina de este tab, otra vez: un renglón que desaparece por estar en
- * cero es indistinguible de uno que nunca se escribió. Un cero acá es una
- * afirmación —«esta semana no hay nada que perseguir por este lado»— y es
- * media respuesta de las cinco.
- */
-function flotaAnSemana(h) {
-  const dhc = h.dias_hallazgo_abierto;
-  // `fichas_completas` va al revés que las otras cuatro: pide trabajo cuando es
-  // MENOR que el parque, no cuando crece.
-  //
-  // **Y NO se calcula como `vehiculos_activos - fichas_completas`.** Se intentó
-  // y estaba mal: `fichas_completas` cuenta fichas completas de TODOS los
-  // vehículos y `vehiculos_activos` solo los activos, así que un vehículo dado
-  // de baja con la ficha completa hace la resta negativa — «-1 fichas sin
-  // completar». Es el defecto contra el que advierte el comentario de
-  // `cpk_mes`: dos denominadores que se calculan distinto hacen que el tablero
-  // diga una cosa donde el health dice otra.
-  //
-  // `cobertura_por_vehiculo` YA enumera exactamente los vehículos activos con
-  // su `ficha_completa`, que es el mismo predicado del panel al que este
-  // renglón manda. Se cuenta de ahí: una fuente, no dos.
-  const cob = h.cobertura_por_vehiculo;
-  // Lista vacía → `sin dato`, no `0`. «Ninguna ficha pendiente» y «no hay
-  // vehículos que medir» se ven idénticos en un cero, y el primero autoriza a
-  // no hacer nada. Es la misma distinción que hace el panel al que manda.
-  const fichasFaltan = (cob === null || cob === undefined || !cob.length)
-    ? null : cob.filter(v => !v.ficha_completa).length;
-
-  const señales = [
-    ['Fichas técnicas sin completar', fichasFaltan, 'Lo que la ficha no dice'],
-    // `dhc.n_vencidos` y NO `casos.filter(c => c.vencido).length`. El campo ya
-    // viaja calculado por el dominio sobre los hallazgos que ENTRAN al
-    // indicador; el filtro del cliente daba el mismo número solo porque los
-    // casos que no entran no traen la clave `vencido`. Dos implementaciones del
-    // mismo número, una apoyada en un accidente del serializador.
-    ['Daños que pasaron su fecha límite',
-     dhc ? dhc.n_vencidos : null,
-     'Días de hallazgo abierto'],
-    ['Documentos vencidos', h.documentos_vencidos, 'Papeles'],
-    ['Turnos cerrados a la fuerza', h.custodias_cerradas_forzadas, 'Custodia'],
-    ['Custodias sin las fotos completas', h.custodias_sin_foto_completa, 'Custodia'],
-  ];
-
-  const filas = señales.map(([que, n, donde]) => {
-    // `null` es «no se pudo mirar», no «cero». Son estados distintos y el
-    // segundo autoriza a no hacer nada; el primero no.
-    const sinDato = (n === null || n === undefined);
-    const pide = !sinDato && n > 0;
-    const valor = sinDato
-      ? '<span style="color:var(--tx2)">sin dato</span>'
-      : `<b style="color:${pide ? 'var(--red)' : 'var(--tx2)'}">${n}</b>`;
-    return `<div style="display:flex;justify-content:space-between;gap:10px;
-                        font-size:var(--fs-sm);margin-bottom:4px">
-      <span>${que} <span style="color:var(--tx3,var(--tx2));font-size:var(--fs-xs)">·
-        ${donde}</span></span>
-      ${valor}
-    </div>`;
-  }).join('');
-
-  return `<div class="tabla-card">
-    <div class="tabla-titulo">El recorrido de la semana</div>
-    <p style="font-size:var(--fs-xs);color:var(--tx2);margin:0 0 10px">
-      Las cinco señales de control de flota, con el panel donde vive cada una.
-      <b>Treinta minutos, una vez por semana.</b> Un número en rojo es alguien a
-      quien llamar; el panel de abajo dice quién. Los ceros también son
-      respuesta y por eso no se esconden.</p>
-    ${filas}
-    <p style="font-size:var(--fs-xs);color:var(--tx3,var(--tx2));margin:8px 0 0">
-      <b>Esta no es la pantalla de todos.</b> La decisión mensual sobre el gasto
-      es de gestión y se toma en «Costo por kilómetro» y «Pesos por mes»; acá no
-      hay nada que decidir sobre plata.</p>
-  </div>`;
-}
-
 /** Una barra apilada de segmentos `[etiqueta, cantidad, color]`. Sin canvas.
  *
  * Con total 0 devuelve una barra hueca y no una división por cero: un vehículo
@@ -282,7 +183,7 @@ function flotaAnLecturas(h) {
   if (!filas.length) {
     return flotaAnPanelVacio('Calidad del kilómetro',
       'No hay vehículos activos que medir.',
-      'dar de alta un vehículo en Rutas → Vehículos.');
+      `dar de alta un vehículo ${flotaDondeSeDaDeAlta()}.`);
   }
   const cuerpo = filas.map(f => {
     const c = f.por_confianza || {};
@@ -330,7 +231,7 @@ function flotaAnCobertura(h) {
   if (!filas || !filas.length) {
     return flotaAnPanelVacio('Lo que la ficha no dice',
       'No hay vehículos activos que revisar.',
-      'dar de alta un vehículo en Rutas → Vehículos.');
+      `dar de alta un vehículo ${flotaDondeSeDaDeAlta()}.`);
   }
   const cols = [
     ['ficha_completa', 'Ficha'],
@@ -469,7 +370,7 @@ function flotaAnRendimiento(h) {
   if (!filas.length) {
     return flotaAnPanelVacio('Rendimiento km/galón',
       'No hay vehículos activos que medir.',
-      'dar de alta un vehículo en Rutas → Vehículos.');
+      `dar de alta un vehículo ${flotaDondeSeDaDeAlta()}.`);
   }
   const cuerpo = filas.map(f => `<div style="margin-bottom:10px">
       <div style="display:flex;justify-content:space-between;font-size:var(--fs-sm)">
@@ -541,7 +442,7 @@ function flotaAnCPK(h) {
   if (!filas.length) {
     return flotaAnPanelVacio('Costo por kilómetro',
       'No hay vehículos activos que medir.',
-      'dar de alta un vehículo en Rutas → Vehículos.');
+      `dar de alta un vehículo ${flotaDondeSeDaDeAlta()}.`);
   }
   const cuerpo = filas.map(f => `<div style="margin-bottom:10px">
       <div style="display:flex;justify-content:space-between;font-size:var(--fs-sm)">
@@ -608,7 +509,7 @@ function flotaAnPesosMes(h) {
   if (!filas.length) {
     return flotaAnPanelVacio('Pesos por mes',
       'No hay vehículos activos que medir.',
-      'dar de alta un vehículo en Rutas → Vehículos.');
+      `dar de alta un vehículo ${flotaDondeSeDaDeAlta()}.`);
   }
   const con = filas.filter(f => f.hubo_gastos);
   const sin = filas.filter(f => !f.hubo_gastos);
@@ -747,7 +648,7 @@ function flotaAnRitmo(h) {
   if (!filas.length) {
     return flotaAnPanelVacio('Ritmo de uso (km/día)',
       'No hay vehículos activos que medir.',
-      'dar de alta un vehículo en Rutas → Vehículos.');
+      `dar de alta un vehículo ${flotaDondeSeDaDeAlta()}.`);
   }
   const cuerpo = filas.map(f => `<div style="margin-bottom:8px;font-size:var(--fs-sm)">
       <div style="display:flex;justify-content:space-between">
@@ -789,194 +690,6 @@ function flotaAnTaller(h) {
     'Sin umbral de duración de visita: no hay una sola medición todavía.');
 }
 
-/** Inspección diaria — y el número que contesta la regla 11.
- *
- * `segundos_llenado_30d` existe porque la respuesta de quien no quiere trabajar
- * es **marcar todo óptimo en veinte segundos**. Publica la mediana y el caso
- * mínimo con su vehículo, no un promedio: el promedio esconde justo al que la
- * llenó corriendo.
- */
-function flotaAnInspeccion(h) {
-  if (h.vehiculos_sin_inspeccion_hoy === null
-      || h.vehiculos_sin_inspeccion_hoy === undefined) {
-    return flotaAnPanelVacio('Inspección diaria',
-      'La tabla de inspecciones todavía no existe en esta base.',
-      'la migración del módulo de flota.');
-  }
-  // **No `|| {}`.** Ese fallback convertía un `null` en un objeto vacío y el
-  // panel publicaba «Mediana de llenado: undefineds sobre undefined
-  // inspección(es)» — basura con autoridad, que es peor que un hueco.
-  //
-  // Hoy no se alcanza, y por un accidente: `segundos_llenado_30d` y
-  // `vehiculos_sin_inspeccion_hoy` guardan la MISMA tabla, así que el guard de
-  // arriba corta antes. Eso es un acuerdo entre dos campos, no un invariante —
-  // el día que uno gane una dependencia que el otro no tiene, el `undefineds`
-  // se publica y nadie lo va a ver venir. Se cierra acá en vez de confiar en la
-  // coincidencia.
-  const s = h.segundos_llenado_30d;
-  if (s === null || s === undefined) {
-    return `<div class="tabla-card">
-      <div class="tabla-titulo">Inspección diaria</div>
-      ${flotaAnFilasContador([
-        [h.vehiculos_sin_inspeccion_hoy, 'camión(es) que nadie miró hoy',
-         'La hace el conductor, con el turno ya recibido.'],
-        [h.inspecciones_incompletas_hoy, 'mirado(s) a medias',
-         '<b>Incompleta no es «no apto»</b>: es «no sé», y no habilita despacho.'],
-      ])}
-      <div style="font-size:var(--fs-xs);color:var(--tx2)">Sin dato del tiempo de
-        llenado. Nace con la primera inspección contestada.</div>
-    </div>`;
-  }
-  const tiempo = s.nota
-    ? `<div style="font-size:var(--fs-xs);color:var(--tx2)">${esc(s.nota)}</div>`
-    : `<div style="font-size:var(--fs-sm)">Mediana de llenado: <b>${esc(s.mediana)}s</b>
-         <span style="color:var(--tx2)">sobre ${esc(s.n)} inspección(es)</span></div>
-       ${s.minimo ? `<div style="font-size:var(--fs-xs);color:var(--tx2)">
-         La más rápida: ${esc(s.minimo.segundos)}s para ${esc(s.minimo.items)} ítem(s)
-         · veredicto ${esc(s.minimo.veredicto)}</div>` : ''}`;
-  return `<div class="tabla-card">
-    <div class="tabla-titulo">Inspección diaria</div>
-    ${flotaAnFilasContador([
-      [h.vehiculos_sin_inspeccion_hoy, 'camión(es) que nadie miró hoy',
-       'La hace el conductor, con el turno ya recibido.'],
-      [h.inspecciones_incompletas_hoy, 'mirado(s) a medias',
-       '<b>Incompleta no es «no apto»</b>: es «no sé», y no habilita despacho.'],
-    ])}
-    ${tiempo}
-    <p style="font-size:var(--fs-xs);color:var(--tx2);margin:8px 0 0">
-      El tiempo de llenado está acá por la regla 11: la forma de maximizar una
-      inspección sin hacerla es <b>marcar todo óptimo en veinte segundos</b>. Se
-      publica la mediana y el caso más rápido, no un promedio — el promedio
-      esconde justo al que la llenó corriendo.</p>
-  </div>`;
-}
-
-/** Papeles: qué vence y en cuántos días.
- *
- * Los tres separados. `documentos_no_encontrados` no es «vencido»: es que nadie
- * cargó el papel, y se corrige distinto — uno se renueva, el otro se busca.
- */
-/** La lista con placa que va DEBAJO de los contadores.
- *
- * El criterio 1 de este archivo dice que no hay un panel que muestre un solo
- * número. Cinco paneles lo incumplían: Taller, Preventivo, Inspección, Papeles
- * y Custodia. Los dos últimos son también **dos de las cinco señales con las
- * que se mide a control de flota**, y su ficha describe el trabajo como
- * «persigue lo vencido» — que con un contador pelado obliga a abrir los seis
- * expedientes para saber a cuál.
- *
- * Los contadores se quedan: *«vencido»* y *«sin cargar»* se atienden llamando a
- * personas distintas y sumarlos esconde el peor. Lo que se agrega es la otra
- * mitad, la que dice a quién llamar.
- *
- * `null` no pinta nada: el panel ya declaró arriba que la tabla no existe, y
- * repetirlo con otras palabras es cómo un renglón deja de leerse.
- */
-function flotaAnListaConPlaca(filas, vacio, render) {
-  if (filas === null || filas === undefined) return '';
-  if (!filas.length) {
-    return `<p style="font-size:var(--fs-xs);color:var(--tx2);margin:10px 0 0">${vacio}</p>`;
-  }
-  return `<div style="margin-top:10px;padding-top:8px;border-top:1px solid var(--brd)">
-    ${filas.map(f => `<div style="font-size:var(--fs-sm);margin-bottom:5px">
-      <b>${esc(f.placa)}</b> <span style="color:var(--tx2)">${render(f)}</span></div>`).join('')}
-  </div>`;
-}
-
-/** Cómo se lee un documento que pide trabajo.
- *
- * Las tres banderas se pintan **juntas y no como una categoría**: un papel
- * `no_encontrado` cuya fecha ya pasó es las dos cosas, y elegir una escondería
- * la otra. `dias` viene firmado — el signo es la diferencia entre «sacá la
- * cita» y «bajá el camión».
- */
-function flotaAnTextoDocumento(f) {
-  const partes = [];
-  if (f.vencido) {
-    partes.push(`<span style="color:var(--red)">venció hace ${Math.abs(f.dias)} día(s)</span>`);
-  }
-  if (f.por_vencer_30d) {
-    // `dias === 0` es hoy. «Vence en 0 día(s)» hace pensar en un error de
-    // cálculo justo el día en que el camión no debería salir mañana.
-    partes.push(`<span style="color:var(--yellow)">${
-      f.dias === 0 ? 'vence hoy' : `vence en ${esc(f.dias)} día(s)`}</span>`);
-  }
-  if (f.no_encontrado) partes.push('nadie lo ha podido mostrar');
-  return `${f.tipo} — ${partes.join(' · ')}`;
-}
-
-function flotaAnPapeles(h) {
-  if (h.documentos_vencidos === null || h.documentos_vencidos === undefined) {
-    return flotaAnPanelVacio('Papeles',
-      'La tabla de documentos todavía no existe en esta base.',
-      'la migración del módulo de flota.');
-  }
-  const lista = flotaAnListaConPlaca(
-    h.documentos_por_vehiculo,
-    'Ningún documento vencido, por vencer ni sin cargar. Los que hay están al día.',
-    flotaAnTextoDocumento);
-  return flotaAnContadores('Papeles', '',
-    [[h.documentos_vencidos, 'documento(s) vencido(s)', 'El vehículo no debería salir.'],
-     [h.documentos_por_vencer_30d, 'vence(n) en 30 días',
-      'Todavía hay tiempo. Una cita de tecnomecánica en Neiva tarda unos quince días.'],
-     [h.documentos_no_encontrados, 'sin cargar',
-      '<b>No es lo mismo que vencido</b>: uno se renueva, el otro se busca. Un papel que nadie subió no se puede juzgar.']],
-    'Corte en día operativo de Bogotá, no UTC: un SOAT que vence hoy aparecería vencido una noche antes.',
-    lista);
-}
-
-/** Custodia: quién responde por cada camión, y qué turnos se cerraron solos.
- *
- * `custodias_cerradas_forzadas` es la señal que `gestion-admin.md` y
- * `especialista-control-flota.md` mandan revisar cada semana. Si crece, el
- * problema no es el sistema: es que nadie está cerrando turno.
- */
-/** Cómo se lee un turno que pide trabajo.
- *
- * Las dos cosas que un turno puede tener mal son independientes y se atienden
- * distinto: un cierre forzado es una conducta —alguien cerró el turno de otro—
- * y unas fotos incompletas son un registro que no va a servir de evidencia. Un
- * mismo turno puede ser las dos, y las dos se dicen.
- *
- * `mitad_incompleta` va en el texto porque es lo que hace la fila accionable:
- * «faltan las de inicio» y «faltan las de cierre» se arreglan hablando con
- * personas distintas y en momentos distintos del día.
- */
-function flotaAnTextoCustodia(f) {
-  const dia = (f.inicio_ts || '').slice(0, 10) || 'sin fecha';
-  const partes = [];
-  if (f.cierre_forzado) {
-    partes.push(`<span style="color:var(--red)">cerrado a la fuerza</span>${
-      f.cierre_forzado_motivo ? `: «${esc(f.cierre_forzado_motivo)}»` : ' (sin motivo escrito)'}`);
-  }
-  if (f.sin_foto_completa) {
-    partes.push(`faltan fotos de ${f.mitad_incompleta} (${f.fotos} de ${f.fotos_exigidas})`);
-  }
-  return `turno del ${dia}${f.abierta ? ', todavía abierto' : ''} — ${partes.join(' · ')}`;
-}
-
-function flotaAnCustodia(h) {
-  if (h.vehiculos_sin_custodia_activa === null
-      || h.vehiculos_sin_custodia_activa === undefined) {
-    return flotaAnPanelVacio('Custodia',
-      'La tabla de custodias todavía no existe en esta base.',
-      'la migración del módulo de flota.');
-  }
-  const lista = flotaAnListaConPlaca(
-    h.custodias_por_vehiculo,
-    'Ningún turno cerrado a la fuerza ni con fotos incompletas.',
-    flotaAnTextoCustodia);
-  return flotaAnContadores('Custodia', '',
-    [[h.vehiculos_sin_custodia_activa, 'vehículo(s) sin nadie que responda ahora', ''],
-     [h.custodias_cerradas_forzadas, 'turno(s) cerrado(s) a la fuerza',
-      'Si crece, el problema no es el sistema: es que nadie está cerrando turno.'],
-     [h.custodias_sin_foto_completa, 'custodia(s) sin las fotos completas',
-      'Sin fotos comparables, un golpe nuevo no se le puede atribuir a nadie — ni al conductor ni al turno anterior.'],
-     [h.custodias_pendiente_sede, 'sin declarar dónde quedó el vehículo',
-      'Un camión fuera de sede sin motivo escrito es un activo pasando la noche fuera del control de la empresa.']],
-    '', lista);
-}
-
 /** Arma el tab. UN solo `get`: una foto, un estado.
  *
  * Si cada panel pidiera lo suyo, dos paneles del mismo tablero podrían quedar
@@ -997,19 +710,15 @@ async function flotaCargarAnalitica() {
       No se pudo leer el estado de la flota: ${esc(e.message)}</div>`;
     return;
   }
-  // El orden no es temático: es **qué panel le dice al que mira qué gesto
-  // hacer para encender el siguiente**. Con seis vehículos y seis tablas
-  // vacías, este tab es sobre todo un mapa de lo que falta.
-  //
-  // El kilómetro va primero porque mientras esté en rojo, el CPK, el km/día y
-  // el km por llanta salen `sin_dato` por diseño. La cobertura va segunda
-  // porque es el índice: cada ✗ es la condición de existencia de un panel de
-  // abajo.
+  // **Solo lo que no es accionable del día**, y primero lo que decide plata
+  // (2026-09-24). Papeles, custodia, inspección y el «recorrido de la semana»
+  // repetían la bandeja —Hoy y Pendientes, con placa y botón— con otro
+  // número y otro texto; «Salud de la flota» (41 renglones de prosa) se
+  // retiró: lo accionable está en Pendientes y lo técnico en el Diagnóstico
+  // plegado de abajo, junto con la calidad del kilómetro y lo que la ficha no
+  // dice, que son del que mantiene el dato.
   cont.innerHTML = [
     flotaAnProcedencia(h),
-    flotaAnSemana(h),
-    flotaAnLecturas(h),
-    flotaAnCobertura(h),
     flotaAnCPK(h),
     flotaAnPesosMes(h),
     flotaAnRendimiento(h),
@@ -1018,13 +727,17 @@ async function flotaCargarAnalitica() {
     flotaAnPreventivo(h),
     flotaAnRitmo(h),
     flotaAnHallazgos(h),
-    flotaAnInspeccion(h),
-    flotaAnPapeles(h),
-    flotaAnCustodia(h),
-  ].join('') +
-  // «Salud de la flota» vivía arriba de la pestaña operativa: 41 renglones de
-  // prosa como lo primero que veía el encargado. Es estadística, y acá es
-  // donde se lee la estadística; lo accionable ya está en Pendientes, con
-  // placa y botón. Va con el MISMO health: no se vuelve a pedir.
-  await flotaBloqueSalud(h);
+  ].join('') + flotaAnDiagnosticoPlegado();
+}
+
+/** El diagnóstico técnico, plegado al final de Analítica. Se arma a pedido
+ * (`flotaBandejaDiagnostico`, con el mismo health) y trae los contadores
+ * técnicos, la calidad del kilómetro, lo que la ficha no dice y los avisos. */
+function flotaAnDiagnosticoPlegado() {
+  return `<div class="tabla-card"><details>
+    <summary style="cursor:pointer" onclick="flotaBandejaDiagnostico()"><b>Diagnóstico técnico</b>
+      <span style="font-size:var(--fs-xs);color:var(--tx2)">— para quien mantiene el sistema</span></summary>
+    <div id="flota-diagnostico" style="font-size:var(--fs-sm)">
+      <p style="color:var(--tx2)">Tocá «Diagnóstico técnico» para cargarlo.</p></div>
+  </details></div>`;
 }

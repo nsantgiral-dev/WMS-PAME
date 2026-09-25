@@ -332,6 +332,13 @@ function fjHtmlDia(j) {
   const bloqueSenales = senales
     ? `<div style="font-size:var(--fs-lg);font-weight:700;color:var(--tx);margin:14px 0 4px;">Para revisar con el conductor</div>${senales}`
     : `<div style="font-size:var(--fs-sm);color:var(--tx2);margin:10px 0;">Ninguna señal ese día.</div>`;
+  // Lo que se miró y no se pudo juzgar (un tramo de km en duda). No es
+  // «normal»: se dice, y se dice qué falta.
+  const noEval = (j.senales_no_evaluables || []).map((x) =>
+    `<li>${esc(x.texto)}</li>`).join('');
+  const bloqueNoEval = noEval
+    ? fjCaja('neutro', `<strong>No se pudo revisar.</strong><ul style="margin:6px 0 0 18px;padding:0;">${noEval}</ul>`)
+    : '';
   return `<div style="max-width:980px;margin:0 auto;">
     <button style="${FJ_BOTON}" onclick="fjVolverConductor()">← Sus días</button>
     <div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px;align-items:center;margin:10px 0 2px;">
@@ -341,6 +348,7 @@ function fjHtmlDia(j) {
     ${estado}
     ${fjHtmlIndicadores(j)}
     ${bloqueSenales}
+    ${bloqueNoEval}
     <div style="font-size:var(--fs-lg);font-weight:700;color:var(--tx);margin:14px 0 4px;">Línea de tiempo</div>
     ${fjHtmlLinea(j)}
     ${fjHtmlPie(j)}
