@@ -467,7 +467,7 @@ async function repCargarHuerfanas() {
     }
 
     el.innerHTML = `
-      <div style="font-size:var(--fs-xs);color:var(--warn-tx);margin-bottom:10px;font-weight:600;">${esc(items.length)} ubicación${items.length > 1 ? 'es' : ''} requiere${items.length === 1 ? '' : 'n'} corrección en Siesa</div>
+      <div style="font-size:var(--fs-xs);color:var(--warn-tx);margin-bottom:10px;font-weight:600;">${esc(items.length)} ${items.length > 1 ? 'ubicaciones' : 'ubicación'} requiere${items.length === 1 ? '' : 'n'} corrección en Siesa</div>
       ${items.map(h => {
         const ultima = h.fecha_ultima_vez ? new Date(h.fecha_ultima_vez).toLocaleString('es-CO', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' }) : '—';
         return `

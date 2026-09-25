@@ -3485,7 +3485,7 @@ async function _condActualizarBarras() {
       ? ` · ${trabados.length} sin salir: ${trabados[0].ultimo_error || 'sin respuesta'}`
       : '';
     if (syncStatus && !_COND_SYNCING)
-      syncStatus.textContent = `⏳ ${n} confirmación${n !== 1 ? 'es' : ''} pendiente${n !== 1 ? 's' : ''} de sincronizar${detalle}`;
+      syncStatus.textContent = `⏳ ${n} ${n !== 1 ? 'confirmaciones pendientes' : 'confirmación pendiente'} de sincronizar${detalle}`;
     if (syncBtn) syncBtn.disabled = _COND_SYNCING || !navigator.onLine;
   } else {
     syncBar.style.display = 'none';
