@@ -153,3 +153,62 @@ class TestElCatalogoPasaPorLaPolitica:
                     if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
                     and n.func.id == '_producto_para']
         assert len(llamadas) >= 4, 'listar, obtener, crear y actualizar pasan por la política'
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# La clase de la búsqueda rota: un parámetro que el servidor no lee
+# ═════════════════════════════════════════════════════════════════════════════
+
+_PWA = RAIZ / 'app' / 'static' / 'pwa'
+
+
+def parametros_leidos(fuente: str, funcion: str) -> set:
+    """Los `request.args.get('<x>')` de una función de rutas (AST)."""
+    for fn in ast.walk(ast.parse(fuente)):
+        if isinstance(fn, ast.FunctionDef) and fn.name == funcion:
+            return {n.args[0].value for n in ast.walk(fn)
+                    if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+                    and n.func.attr == 'get' and n.args and isinstance(n.args[0], ast.Constant)
+                    and isinstance(n.func.value, ast.Attribute) and n.func.value.attr == 'args'}
+    raise AssertionError(f'no encontré {funcion}')
+
+
+def parametros_enviados(js: str) -> list:
+    """`[(parámetro, línea)]` que el JS (sin comentarios) le manda a
+    `/api/productos/?…`: todo `?x=` / `&x=` desde la URL hasta el fin de la
+    línea (la concatenación con `+` y el `${filtro}` suelto quedan en la misma
+    línea en este código)."""
+    import re
+    from tests.test_frontend_integrity import _sin_comentarios
+    out = []
+    for i, linea in enumerate(_sin_comentarios(js).splitlines(), 1):
+        k = linea.find('/api/productos/?')
+        if k >= 0:
+            out += [(m.group(1), i) for m in re.finditer(r'[?&]([a-z_]+)=', linea[k:])]
+    return out
+
+
+class TestLaPantallaSoloMandaLoQueElServidorLee:
+    """`?search=` y `&limit=` no los lee `listar_productos`: la búsqueda
+    devolvía el catálogo entero (y se registraba el primero) y el límite no
+    limitaba. Todo parámetro que el PWA le manda al catálogo lo lee el servidor."""
+
+    def test_todo_parametro_se_lee(self):
+        leidos = parametros_leidos(
+            (RAIZ / 'app' / 'routes' / 'productos.py').read_text(encoding='utf-8'), 'listar_productos')
+        sobran = [(f.name, p, n) for f in sorted(_PWA.glob('*.js'))
+                  for p, n in parametros_enviados(f.read_text(encoding='utf-8')) if p not in leidos]
+        assert not sobran, f'parámetros que el servidor no lee: {sobran} (lee {sorted(leidos)})'
+
+    def test_meta(self):
+        js = ("// get('/api/productos/?search=' + x)\n"
+              "get('/api/productos/?search=' + x + '&limit=8');\n"
+              "get(`/api/productos/?q=${a}&per_page=1`);\n")
+        assert [p for p, _ in parametros_enviados(js)] == ['search', 'limit', 'q', 'per_page']
+        src = ("def listar_productos():\n    a = request.args.get('q', '')\n"
+               "    b = request.args.get('page', 1, type=int)\n    c = data.get('x')\n")
+        assert parametros_leidos(src, 'listar_productos') == {'q', 'page'}
+
+    def test_piso(self):
+        n = sum(len(parametros_enviados(f.read_text(encoding='utf-8'))) for f in _PWA.glob('*.js'))
+        assert n >= 10, f'solo {n} parámetros al catálogo: ¿se rompió el lector?'

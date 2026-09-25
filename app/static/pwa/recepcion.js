@@ -868,7 +868,7 @@ async function _buscarProductoModal(q) {
   clearTimeout(_buscarModalTimer);
   if (q.length < 2) { document.getElementById('modal-buscar-resultados').innerHTML = ''; return; }
   _buscarModalTimer = setTimeout(async () => {
-    const res = await get('/api/productos/?q=' + encodeURIComponent(q) + '&limit=8').catch(() => ({ productos: [] }));
+    const res = await get('/api/productos/?q=' + encodeURIComponent(q) + '&per_page=8').catch(() => ({ productos: [] }));
     const productos = res.productos || [];
     const el = document.getElementById('modal-buscar-resultados');
     if (!el) return;
