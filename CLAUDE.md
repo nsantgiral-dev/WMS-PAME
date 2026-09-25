@@ -427,12 +427,10 @@ blanca, una bodega nueva es invisible hasta que se declare operada.
 > es **acumulativa — upsert sin borrado**: una fila persistida una vez se sigue
 > devolviendo aunque la API deje de reportarla.
 
-**Hueco conocido, declarado y NO arreglado:** `ItemEnTransito` no tiene ningún
-escritor en `app/` —solo lecturas en `armador_service`—, así que el
-`en_transito` de `posicion` es **siempre 0** en producción. La fórmula está
-bien; el término no tiene fuente. Desde el 2026-09-24 **se declara**
-(`rop_dual.insumo_en_camino`) y las fuentes se enchufan en
-`armador_service.FUENTES_EN_CAMINO` — ver «Compras: los números correctos».
+~~**Hueco conocido:** `ItemEnTransito` no tiene ningún escritor en `app/`, así
+que el `en_transito` de `posicion` es siempre 0.~~ **Cerrado el 2026-09-24**
+(m046compras): el término sale de `compras_fuentes.en_camino` (OCs abiertas de
+Siesa + contenedores cargados). Ver «Compras: las fuentes de datos».
 
 #### Lo que sigue repartido (y por qué se deja)
 
@@ -5561,3 +5559,228 @@ Suite completa en el worktree (2026-09-24, `-m "not postgres"`, TZ=UTC):
    ¿Los precios en USD de los acuerdos son FOB (hoy se asume que sí)?
 4. **«Sin venta reciente»**: 90 días y el umbral de Poisson (≥ 3 ventas
    esperadas) son provisionales.
+
+---
+
+## Compras: las fuentes de datos (m046compras, 2026-09-24)
+
+**Diagnóstico:** compras no tenía datos de entrada que se llenaran solos. El
+término de tránsito del armador leía `ItemEnTransito`, sin escritor (valía 0);
+`proveedores` estaba vacía; el lead time era una constante (5 d nacional,
+105 d China); `origen`, `marca_siesa` y `ficha_importacion` no tenían ninguna
+fuente; el kardex solo se descargaba con un botón. Esto construye **las
+fuentes**, no las pantallas de compras (salvo lo mínimo de carga).
+
+Migración **`m046compras`** (down `m045devol`, aditiva, nullable, sin
+backfill): tabla `oc_linea_siesa`; `proveedores.fuente/sincronizado_en`;
+`items_en_transito.oc_referencia/bodega_destino`;
+`productos.origen_fuente/marca_fuente`.
+
+### Una política, una función — `app/services/compras_fuentes.py`
+
+| Pregunta | Función | Regla |
+|---|---|---|
+| ¿Cuánto falta por entrar de una línea de OC? | `pendiente_de_linea(fila)` | En unidad **base** (`f421_cant_pedida_base − f421_cant_entrada_base`); sin `_base`, `(pedida − entrada) × factor`; sin factor, **`None`** (no se inventa: se cuenta como «sin unidad base») |
+| ¿Cuánto viene en camino? | `en_camino(skus, bodegas)` | Líneas de OC **abiertas** + ítems de contenedor sin recibir, **solo a `_BODEGAS_PV`** (lista blanca: AV1/TRA1 nunca; una bodega pedida no operada se ignora y se declara). Un contenedor que cita su OC (`oc_referencia` = `CO-TIPO-CONSEC`) y la OC sigue abierta **no se suma dos veces**; si cita una OC ya cerrada no se suma (ya entró o se anuló); sin cita, sobre un SKU con OC abierta, se suma y se marca `solapamiento_posible` (contar de más achica el déficit: es el lado corregible, Regla 0) |
+| ¿Cuánto tarda? | `lead_time(proveedor, origen)` | Cascada **proveedor (≥3 OCs medidas) → origen → default declarado**, con `n`, `fuente` (MEDIDO ≥6 · PARCIAL ≥3 · DEFAULT_CONSERVADOR), `confianza` y `nivel`. China → contenedores (`fecha_oc → fecha_recepcion_cedi`); nacional → OCs en COP de proveedores no chinos. Observación de una OC: fecha de la OC → **primera entrada**: la confirmación de la recepción del WMS si existe (fecha física), si no la primera marca de Siesa (`f420_fecha_ts_parcial`/`_cumplido`); una entrada anterior a la OC se descarta y se cuenta |
+| ¿A cuánto lo compramos? | `precios_oc(refs)` | OC más reciente, **solo COP**, por unidad base (`precio / factor`), sin obsequios ni anuladas; a igual fecha la más alta |
+| ¿La OC respetó el acuerdo? | `precio_oc_vs_acuerdo()` | Acuerdo vigente vs OC más reciente del MISMO proveedor y SKU. Es el insumo para `detectar_deriva` (no se tocó `detectar_deriva`: lo arregla el frente del motor) |
+
+**Armador** (`armador_service.rop_dual`, cambio localizado): el término de
+tránsito es `compras_fuentes.en_camino()['por_sku']` y el lead time de cada
+SKU es `lead_time(proveedor_habitual(ref), origen)` — el proveedor de su OC más
+reciente. Cada fila publica `lt_fuente`, `lt_nivel`, `lt_n`, `lt_proveedor`; el
+resultado trae `en_camino` (la declaración: frescura del espejo, líneas sin
+unidad, solapamientos). `calcular_sigma_lt_real` delega en
+`lead_time(origen='CHINA')`. Los defaults `LT_*`/`SIGMA_LT_*` viven en
+`compras_fuentes` y el armador solo los re-exporta.
+
+**Costo** (`costo_service`): capa nueva **`OC_SIESA`** entre `COTIZACION` y
+`KARDEX_PROMEDIO`, con antigüedad (`anejo` > 180 días). No cuenta como «costo
+hacia adelante» (`confiable`/`pct_hacia_adelante` siguen siendo acuerdo y
+cotización): es la última compra real, no un compromiso.
+
+### El espejo de OCs — `app/services/compras_oc_sync.py`
+
+Fuente: `API_v2_Compras_Ordenes` (**contrato completo**, 89 campos, Regla 1).
+
+| Corrida | Filtro | Cuándo |
+|---|---|---|
+| `sincronizar_ocs` | `f420_ind_estado = 1` y `= 2` (Aprobada, Parcial) | cada 30 min, 7:10–19:40 |
+| `sincronizar_historial` | `f420_ind_estado = 3 AND f420_fecha >= ''AAAAMMDD''` (`lit_fecha`), `COMPRAS_OC_HISTORIAL_DIAS` (365) | 7:20 |
+| `sincronizar_proveedores_terceros` | `API_v2_Terceros`: `f200_ind_proveedor = 1 AND f200_ind_estado = 1` (spec `42 - API_v2_Terceros.docx`; **nunca consultada antes desde el WMS**) | 7:20 |
+
+- **tamPag = 100** (Regla 10); se pagina hasta una página corta, tope
+  `COMPRAS_OC_MAX_PAGINAS` (60).
+- **La paginación incompleta no cierra nada**: una página que falla (red,
+  429, 401, 5xx), el circuito abierto (`_get` → `None`), el rechazo `alerta`,
+  el tope con la última página llena, o **un `f421_rowid` repetido dentro de la
+  misma enumeración** (orden inestable, como el kardex y InvFecha) dejan la
+  corrida INCOMPLETA: lo visto se guarda (upsert) y **ninguna línea no vista se
+  cierra**. Solo un barrido completo marca `abierta=False`,
+  `motivo_cierre='NO_APARECE_EN_ABIERTAS'`. **Nada se borra nunca.**
+- `registros_sync` tipos `compras_oc` / `compras_oc_historial`: `ok=True` solo
+  con paginación completa. `compras_fuentes.frescura_oc` lee la última
+  completa: sin ninguna, «en camino» desde Siesa vale 0 **y lo dice**.
+- Proveedores: upsert por `codigo` = `f200_id_prov`; Siesa es maestro de la
+  razón social y el NIT; contacto y país cargados a mano no se tocan.
+- **Nace apagado** (`COMPRAS_OC_SYNC=true`), en `_scheduler_pesados`
+  (`[COMPRAS_OC_SYNC]`), ventana 7:00–19:30 (Regla 14),
+  `LOCK_COMPRAS_OC_SYNC = 2024`. El botón de la pantalla sincroniza aunque el
+  cron esté apagado, pero **no fuera de la ventana** (409).
+
+| Variable | Defecto | Qué es |
+|---|---|---|
+| `COMPRAS_OC_SYNC` | ausente = apagado | Enciende el cron |
+| `COMPRAS_OC_MAX_PAGINAS` | `60` | Tope por consulta (6.000 líneas) |
+| `COMPRAS_OC_PAUSA_S` | `0.5` | Pausa entre páginas |
+| `COMPRAS_OC_HISTORIAL_DIAS` | `365` | Ventana del historial |
+| `CONNEKTA_API_TERCEROS` | `API_v2_Terceros` | Nombre de la consulta de proveedores |
+
+### Kardex automático — `app/services/kardex_auto.py`
+
+El disparo programado de lo que ya existía; **no toca la descarga ni la
+reconstrucción** (el defecto del reconstructor lo arregla el frente del motor).
+
+- **Nace apagado** (`KARDEX_AUTO=true`), `[KARDEX_AUTO]` en
+  `_scheduler_pesados`, :02 y :32 de 7 a 19 h; `ciclo` decide si está en su
+  ventana: `KARDEX_AUTO_VENTANA` (`HH:MM-HH:MM` Bogotá, default `07:00-07:55`,
+  **recortada a la de Siesa**; ilegible → default, declarado). Cada corrida
+  dura **como mucho lo que queda de ventana** y nunca más que
+  `KARDEX_MAX_MINUTOS`. `LOCK_KARDEX_AUTO = 2025`.
+- Respeta `estado_descarga`: en curso → no arranca; INTERRUMPIDA → página 1;
+  PARCIAL → `reanudar_desde`; COMPLETA de hoy → no se repite.
+- **Solo reconstruye sobre una descarga COMPLETA** (nunca `forzar`), o si ya
+  hubo una completa hoy y `salud_kardex` dice `STOCK_DIARIO_ATRASADO`.
+- `kardex_auto.descargar_con_registro` es **la única** que llama
+  `descargar_kardex` (la usan el botón y el cron: un registro, una forma);
+  `salud_kardex.actualizacion_automatica` lee el interruptor del cron
+  (trinquete `TestNadieDescargaElKardexSolo`, actualizado).
+- `KARDEX_AUTO_DESDE` (AAAAMMDD, default `20240101`).
+- `/api/health/siesa` → `kardex_auto` (ventana pedida/efectiva, minutos por
+  día, dónde quedó la última) y `compras_oc` (frescura, líneas, proveedores por
+  fuente), con `cron_en_este_proceso`.
+
+⚠️ **En QA el kardex sigue en 401** (permiso de la consulta, no código) y la
+paginación de las dinámicas no es determinista: encendido, cada corrida deja
+el error escrito o termina INCOMPLETA, y no reconstruye. Una vuelta completa
+son ~17.000 páginas: con 55 min/día tarda semanas; ampliar la ventana es
+decisión del dueño (choca con la facturación de las tiendas).
+
+### Origen, marca y fichas — `app/services/maestro_compras_carga.py`
+
+Tres vías, todas con **vista previa que es el mismo cálculo que la aplicación**:
+archivo CSV/Excel (`ORIGEN_MARCA`: `codigo, origen, marca` · `FICHAS`:
+`codigo, unidades_por_caja, cbm_por_caja, peso_kg_por_caja[, moq_cajas,
+proveedor_china, costo_fob_usd, fuente]`), un SKU a mano, y **la marca leída de
+Siesa**. Queda `origen_fuente`/`marca_fuente` = `CARGA_ARCHIVO` | `MANUAL` |
+`SIESA_238920`. Una celda vacía **no borra**; sobrescribir un valor queda en la
+bitácora (EDITAR). Código desconocido, origen fuera de NACIONAL/CHINA/IMPORTADO,
+número ambiguo (`1.234,5`), fuera de rango o fila repetida → inválida con su
+motivo. Una ficha nueva sin `fuente` nace `ESTIMADO` (el armador la excluye del
+armado automático) y `moq_cajas=1`.
+
+**`SIESA_CRITERIO_MARCA` — sin default, lo decide el dueño.** En Siesa la marca
+es un criterio de clasificación del ítem (plan + criterio mayor, t125; el plano
+del 238920). La variable es el **plan** que es «marca». Sin ella no se lee nada.
+La respuesta GET del 238920 **no tiene contrato**: se buscan los campos del
+plano (`f125_id_plan`, `f125_id_criterio_mayor`, `f120_referencia`) y, si no
+vienen, se devuelven los que sí vinieron — no se adivina.
+
+### Pantalla mínima — Compras → 🧾 Fuentes (`compras_fuentes.js`)
+
+Estado del espejo de OCs (con botones de sincronizar), en camino (top 20 y lo
+que no suma), lead time por proveedor con `n`, kardex automático, carga de
+archivo (vista previa → aplicar), un SKU a mano, marca desde Siesa, y
+**contenedores**: registrar (el `POST /api/compras/armador/contenedores` que ya
+existía sin pantalla), cargar ítems (`codigo,cantidad` + OC citada; todo o
+nada) y cambiar estado. **`RECIBIDO` saca los ítems de «en camino» y fecha la
+llegada al CDI** —esa fecha es la observación de lead time de China—;
+`BORRADOR` no cuenta; `EN_PRODUCCION` sí. Endpoints en `/api/compras/fuentes/*`,
+todos `_es_compras()`.
+
+### Acta de corte y respaldo
+
+`oc_linea_siesa` es **OPERATIVA** (se vacía en el corte: si el ensayo corrió
+contra Siesa QA, sus OCs ensuciarían el lead time y el precio reales) y
+**REGENERABLE** en `verificar_restauracion` (abiertas con la próxima
+sincronización, cumplidas con el historial). `proveedores`, `contenedores`,
+`items_en_transito`, `ficha_importacion` siguen como maestras protegidas.
+
+### Trinquetes y mutaciones
+
+`tests/test_compras_fuentes.py` (68, Siesa falsa con los campos del contrato),
+`tests/test_compras_fuentes_trinquetes.py` (23, AST) y
+`tests/test_compras_fuentes_js.py` (5, Node con `util.js` real).
+
+- **Nadie calcula «en camino» fuera de `compras_fuentes`**: restar cantidades
+  de OC (`f421_cant_*` o atributos `cant_pedida*`/`cant_entrada*`), leer
+  `ItemEnTransito.cantidad` o leer `pendiente_base`. Inventario de 3 (el muelle
+  de recepción `ordenes_compra`, `debug_oc`, y la recepción de tienda: cuánto
+  falta RECIBIR de una OC puntual, no posición de compra), solo encoge.
+- **Nadie decide un lead time fuera de `lead_time`**: leer `LT_*`/`SIGMA_LT_*`,
+  `.lead_time_real` o restar una `fecha_oc`. Inventario vacío.
+- **El sync no cierra sin ver todo y nada borra una línea de OC**: el cierre
+  vive bajo `if completa` (AST) y ningún `.delete(` toca `OcLineaSiesa`.
+- Meta-tests (las formas que ve, lo sano que no: docstring, comentario,
+  escritura, constructor, función anidada) y pisos (el dueño aparece; ≥200
+  archivos recorridos).
+- **30 mutaciones, las 30 rojas** (cierre con barrido incompleto, rowid
+  repetido, circuito abierto, tope, lista blanca, doble conteo del contenedor
+  —dos variantes—, factor, armador sin en camino / con su propia suma / con LT
+  constante, proveedor ignorado, Siesa sobre la recepción, USD, unidad base del
+  precio, capa de costo, bitácora, celda vacía que borra, ventana del kardex,
+  reconstruir sobre parcial, los dos crons naciendo encendidos, marca sin
+  filtrar plan, contenedor a medias, `esc`, aplicar sin vista previa,
+  RECIBIDO, salud del kardex, segundo llamador de la descarga, historial sin
+  comillas). Corridas con `-B` (sin `.pyc` viejo) y verificando que cada
+  reemplazo aplicara exactamente una vez.
+
+### Qué verificar mañana en vivo (7:00–19:30)
+
+`venv/bin/python scripts/qa_compras_fuentes_real.py` (solo GET, `MODO_ENSAYO`,
+`.env.qa`, SQLite desechable, `_post` bloqueado): (1) OCs abiertas con estado 1
+y 2 — que la paginación termine sin rowids repetidos, **qué campos del contrato
+no vienen**, cuántas líneas sin `_base`, a qué bodegas y en qué monedas;
+(2) que `pedida_base = pedida × factor`; (3) el historial con la fecha entre
+comillas vs sin comillas, y cuántas cumplidas traen `ts_parcial`/`ts_cumplido`
+(de eso depende el lead time medido); (4) si `API_v2_Terceros` está registrada
+(o 401); (5) los campos reales del GET 238920 y los **planes** que existen,
+para elegir `SIESA_CRITERIO_MARCA`; (6) una página del kardex (¿sigue 401?);
+(7) en camino, lead time por proveedor y precios con lo sincronizado.
+
+### Lo que NO cubre, dicho
+
+- **`f420_fecha_ts_parcial` como «primera entrada» no está verificado**; si
+  Siesa lo llena con otra cosa, el lead time medido desde Siesa está corrido
+  (el de la recepción del WMS no).
+- **El filtro `IN (1,2)` no se usa**: son dos consultas; una OC que pasa de 2 a
+  3 entre las dos no se pierde (la siguiente completa la cierra).
+- **OCs de importación en USD** no dan precio (no se convierte con la tasa del
+  documento) ni entran al pool nacional de lead time.
+- **`solapamiento_posible`** se suma igual: el WMS no puede saber si el
+  contenedor sin OC citada es la misma mercancía de la OC abierta.
+- **El lead time por SKU** usa el proveedor de su OC más reciente; un SKU que
+  se compra a varios proveedores usa el último.
+- **El kardex automático** no cambia el defecto del reconstructor ni la
+  inestabilidad de la paginación de Siesa; solo lo dispara.
+- **La marca de Siesa** puede traer miles de ítems que el WMS no tiene: salen
+  como inválidos («no existe en el catálogo»), recortados a 300 en la pantalla.
+- `Contenedor` no tiene estado de «cancelado»: uno que no va a llegar se deja
+  en «En armado» (no cuenta).
+
+### Qué tiene que hacer el dueño
+
+1. **Permiso del kardex en Siesa**: la consulta `…_KardexWMS` da 401 en QA
+   (Administración → Permisos servicios → consultas dinámicas) y pedir al
+   consultor un `ORDER BY` estable por clave única. Sin eso, `KARDEX_AUTO` no
+   sirve.
+2. **Elegir el plan de marca**: correr el script, mirar los planes del 238920
+   y poner `SIESA_CRITERIO_MARCA=<plan>` en Railway. Después «Ver qué
+   cambiaría» → «Aplicar» en 🧾 Fuentes.
+3. **Cargar el origen y las fichas de importación** (CSV/Excel en 🧾 Fuentes):
+   sin `origen` el régimen China del armador no se activa; sin fichas
+   verificadas (`PACKING_LIST`/`AGENTE`) el armador sigue en shadow.
+4. **Encender** `COMPRAS_OC_SYNC=true` (y `KARDEX_AUTO=true` cuando el 401 se
+   resuelva) **en el worker** con `HEAVY_SCHEDULERS=true`.
+5. **Registrar los contenedores en curso** con sus ítems y la OC que mueven.
