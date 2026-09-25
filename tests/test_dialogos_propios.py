@@ -209,3 +209,6 @@ class TestElErrorSeQueda:
     def test_el_mismo_error_no_se_apila_y_caben_tres(self):
         t = _alertas([['A', 'error'], ['A', 'error'], ['B', 'error'], ['C', 'error'], ['D', 'error']])
         assert t['despues'] == ['B', 'C', 'D']
+
+    def test_el_mismo_error_dos_veces_es_uno(self):
+        assert _alertas([['A', 'error'], ['A', 'error']])['despues'] == ['A']
