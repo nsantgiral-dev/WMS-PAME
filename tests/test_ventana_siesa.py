@@ -82,9 +82,13 @@ class TestLaVentana:
         vs.solo_en_ventana_siesa(lambda: llamado.append(1))()
         assert llamado == [1]
 
-    def test_el_dlq_fuera_de_ventana_no_toca_lo_que_va_a_siesa(self, db):
+    def test_el_dlq_fuera_de_ventana_no_toca_lo_que_va_a_siesa(self, db, monkeypatch):
         from app.models.siesa_job import SiesaJob
+        from app.services.connekta_gateway import connekta
         from app.services.siesa_job_service import _run_dlq_jobs
+        # Con Siesa «real»: en simulación la cola no tiene a quién proteger
+        # (`dlq_puede_postear`), y la suite corre en simulación.
+        monkeypatch.setattr(connekta, 'modo_simulacion', False)
         rc = SiesaJob.encolar('RECIBO_CAJA', {'recaudo_id': 1})
         correo = SiesaJob.encolar('ALERTA_EMAIL', {'asunto': 'x', 'cuerpo_texto': 'y'})
         db.session.commit()
@@ -96,6 +100,48 @@ class TestLaVentana:
             'el recibo de caja se intentó fuera de la ventana de Siesa')
         c = db.session.get(SiesaJob, correo.id)
         assert c.estado != 'PENDIENTE' or c.intentos > 0, 'el correo tenía que salir igual'
+
+
+class TestLaVentanaEsUnaParaTodos:
+    """Integración 2026-09-25: fiscal traía 06:00–20:00 (vía cartera) y
+    liquidación 07:00–20:00 en `app/utils/fecha`. Quedó la de inventario."""
+
+    def test_un_instante_consciente_de_zona_se_juzga_en_bogota(self):
+        from zoneinfo import ZoneInfo
+        # 01:30 UTC = 20:30 Bogotá del día anterior; 15:00 UTC = 10:00.
+        assert vs.ventana_abierta(datetime(2026, 9, 26, 1, 30, tzinfo=ZoneInfo('UTC'))) is False
+        assert vs.ventana_abierta(datetime(2026, 9, 25, 15, 0, tzinfo=ZoneInfo('UTC'))) is True
+
+    def test_facturar_usa_la_misma(self):
+        from app.services import documento_fiscal
+        assert documento_fiscal.ventana_facturacion() is vs.VENTANA
+
+    def test_facturar_a_las_1945_se_niega(self, monkeypatch):
+        from app.services import documento_fiscal
+        from app.services.connekta_gateway import connekta
+        monkeypatch.setattr(connekta, 'modo_simulacion', False)
+        monkeypatch.setattr(connekta, '_cb_state', 'CLOSED', raising=False)
+        ok, motivo = documento_fiscal.siesa_disponible_para_facturar(datetime(2026, 9, 25, 19, 45))
+        assert ok is False and '19:30' in motivo
+        ok, _ = documento_fiscal.siesa_disponible_para_facturar(datetime(2026, 9, 25, 19, 30))
+        assert ok is True
+
+    def test_la_dlq_usa_la_misma_salvo_en_simulacion(self, monkeypatch):
+        from app.services import siesa_job_service as s
+        from app.services.connekta_gateway import connekta
+        monkeypatch.setattr(connekta, 'modo_simulacion', False)
+        monkeypatch.setattr(connekta, 'modo_ensayo', True)
+        # En ensayo los GET son reales: la ventana aplica.
+        assert s.dlq_puede_postear(datetime(2026, 9, 25, 19, 45)) is False
+        assert s.dlq_puede_postear(datetime(2026, 9, 25, 6, 0)) is True
+        monkeypatch.setattr(connekta, 'modo_simulacion', True)
+        assert s.dlq_puede_postear(datetime(2026, 9, 25, 23, 0)) is True
+
+    def test_la_vista_previa_de_la_liquidacion_no_declara_otra(self):
+        """`fecha.py` ya no tiene ventana: la vista previa pregunta a
+        `ventana_siesa` (lo exige también `TestUnaSolaVentana`)."""
+        from app.utils import fecha
+        assert not hasattr(fecha, 'en_ventana_siesa') and not hasattr(fecha, 'VENTANA_SIESA')
 
 
 def _jobs(base=None):

@@ -13,7 +13,12 @@ media hora antes de que Siesa deje de responder (un POST tarda 30–60 s; una
 foto, minutos). **Siesa caído o fuera de ventana = no se le habla** (decisión
 del dueño 2026-09-25: sin contingencia).
 
-- `ventana_abierta(momento)` — la pregunta, una función.
+- `ventana_abierta(momento)` — la pregunta, una función. La usan los crons,
+  la DLQ (`siesa_job_service.dlq_puede_postear`, que solo agrega «en
+  simulación no aplica»), el cierre de caja y la emisión fiscal
+  (`documento_fiscal.siesa_disponible_para_facturar`) y la vista previa de la
+  liquidación. Los frentes fiscal (06:00–20:00) y liquidación (07:00–20:00)
+  traían la suya; se integraron a ésta el 2026-09-25.
 - `solo_en_ventana_siesa(fn)` — envuelve un job de APScheduler que habla con
   Siesa: fuera de ventana no corre y lo dice (`{'omitido': …}`).
 - El DLQ, fuera de ventana, solo procesa los tipos que no van a Siesa
@@ -27,7 +32,7 @@ import functools
 import logging
 from datetime import time
 
-from app.utils.fecha import ahora_bogota
+from app.utils.fecha import TZ_BOGOTA, ahora_bogota
 
 logger = logging.getLogger(__name__)
 
@@ -47,10 +52,14 @@ _RELOJ_FIJO = {'abierta': None}
 
 
 def ventana_abierta(momento=None) -> bool:
-    """¿Se le puede hablar a Siesa ahora? `momento` en hora de Bogotá."""
+    """¿Se le puede hablar a Siesa ahora? `momento`: naive en hora de Bogotá,
+    o consciente de zona (se juzga en Bogotá: 01:30 UTC son las 20:30 del día
+    anterior allá)."""
     if momento is None and _RELOJ_FIJO['abierta'] is not None:
         return _RELOJ_FIJO['abierta']
     momento = momento or ahora_bogota()
+    if momento.tzinfo is not None:
+        momento = momento.astimezone(TZ_BOGOTA)
     return VENTANA[0] <= momento.time() <= VENTANA[1]
 
 

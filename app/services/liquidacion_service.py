@@ -418,8 +418,8 @@ class LiquidacionService:
             })
 
         # ── Siesa horario check — la ventana es UNA (Regla 14) ──────
-        from app.utils.fecha import en_ventana_siesa
-        siesa_horario_ok = en_ventana_siesa()
+        from app.services.ventana_siesa import ventana_abierta
+        siesa_horario_ok = ventana_abierta()
 
         # ── SiesaJob states for this recaudo ─────────────────────────
         jobs_recaudo = SiesaJob.query.filter_by(

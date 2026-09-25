@@ -872,7 +872,7 @@ class TestElCierreSinSiesaSeNiegaLimpio:
         t = _caja_para_cerrar(db, almacen, producto)
         r = self._cerrar(t)
         assert not r.exitoso and 'la caja queda esperando' in r.mensaje
-        assert 'factura de 06:00 a 20:00' in r.mensaje and preguntas == []
+        assert 'factura de 06:00 a 19:30' in r.mensaje and preguntas == []  # ventana_siesa.VENTANA
         self._nada_cambio(db, t)
 
     def test_siesa_no_contesta_el_precheck(self, db, almacen, producto, siesa_real,
