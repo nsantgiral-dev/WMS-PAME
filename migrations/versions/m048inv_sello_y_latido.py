@@ -1,7 +1,7 @@
 """Sello de ambiente de la base y latido de los crons
 
 Revision ID: m048inv
-Revises: m047comprasvivo
+Revises: m048fiscal
 Create Date: 2026-09-25
 
 Aditiva, sin backfill.
@@ -19,7 +19,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision = 'm048inv'
-down_revision = 'm047comprasvivo'
+down_revision = 'm048fiscal'
 branch_labels = None
 depends_on = None
 
