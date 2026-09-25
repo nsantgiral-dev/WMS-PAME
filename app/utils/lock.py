@@ -98,6 +98,8 @@ LOCK_FOTOS_SIESA = 2020                 # fotos_siesa_service (fotos diarias de 
 LOCK_ANALITICA_KPI = 2021               # analitica_kpi (cron y recálculo manual del KPI diario, m037kpi)
 LOCK_CARTERA_BARRIDO = 2022             # cartera_service.barrido (re-evaluación de retenidos, m044cartera)
 LOCK_DEVOLUCIONES_NC = 2023             # devolucion_nc_verificador (lee f350_ind_estado de las NC, m045devol)
+LOCK_COMPRAS_OC_SYNC = 2024             # compras_oc_sync (espejo de OCs de Siesa, m046compras)
+LOCK_KARDEX_AUTO = 2025                 # kardex_auto (descarga + reconstrucción programadas, m046compras)
 
 # De transacción (`lock_de_transaccion`): serializan un «leer y después insertar».
 LOCK_CODIGO_LPN = 3001                  # LPN.generar_codigo

@@ -1,0 +1,570 @@
+"""
+Espejo de las órdenes de compra de Siesa → `oc_linea_siesa` y `proveedores`.
+
+Fuente: `API_v2_Compras_Ordenes`, contrato completo en `docs/siesa-specs/`
+(89 campos). Es la única lectura de compras que cumple la Regla 1 sin
+descubrimiento en vivo. `API_v2_Terceros` (proveedores del maestro) también
+tiene spec (`42 - API_v2_Terceros.docx`) pero **nunca se consultó desde el WMS**:
+no se sabe si está registrada en Connekta. Si falla, se declara y el resto sigue.
+
+## Tres corridas
+
+| Qué | Filtro | Para qué |
+|---|---|---|
+| `sincronizar_ocs`        | `f420_ind_estado = 1` y `= 2` (Aprobada, Parcial) | «en camino» |
+| `sincronizar_historial`  | `f420_ind_estado = 3 AND f420_fecha >= ''AAAAMMDD''` | lead time y precio |
+| `sincronizar_proveedores_terceros` | `f200_ind_proveedor = 1 AND f200_ind_estado = 1` | maestro de proveedores |
+
+## Reglas
+
+- **Nace apagado** (`COMPRAS_OC_SYNC=true` lo enciende). Apagado no lee ni escribe.
+- **Solo en la ventana de Siesa** (7:00–19:30 Bogotá, Regla 14).
+- **Lock del registro** (`LOCK_COMPRAS_OC_SYNC`).
+- **tamPag = 100** (Regla 10). Se pagina hasta una página corta.
+- **La paginación incompleta no cierra nada.** Una línea abierta que no
+  apareció solo se da por cerrada si el barrido fue COMPLETO: una página que
+  falló, el tope de páginas, el circuito abierto o un rowid repetido dentro de
+  la misma enumeración (orden inestable, lo que ya se midió en el kardex) dejan
+  la corrida INCOMPLETA y **no se toca ninguna fila no vista**. Es la regla del
+  hallazgo K del sync de pedidos, que borraba lo de las páginas no leídas.
+- **Nada se borra.** Cerrar es `abierta=False` + `cerrada_en` + motivo.
+- Filtros de texto con doble comilla simple (Regla 15), vía `siesa_filtro.lit`.
+"""
+import logging
+import os
+import time
+from collections import Counter
+from datetime import datetime, timedelta
+
+from app.extensions import db
+
+logger = logging.getLogger(__name__)
+
+TAM_PAG = 100          # Regla 10: ≥500 fabrica filas fantasma
+REGISTRO = 'compras_oc'
+REGISTRO_HISTORIAL = 'compras_oc_historial'
+
+ESTADOS_ABIERTOS = (1, 2)   # Aprobado, Parcial (f420_desc_estado del spec)
+ESTADO_CUMPLIDO = 3
+
+MOTIVO_NO_APARECE = 'NO_APARECE_EN_ABIERTAS'
+MOTIVO_CUMPLIDA = 'CUMPLIDA_EN_HISTORIAL'
+
+
+def encendido() -> bool:
+    """`COMPRAS_OC_SYNC=true`. **Nace apagado**: un cron que escribe no se
+    enciende solo."""
+    return os.getenv('COMPRAS_OC_SYNC', 'false').strip().lower() == 'true'
+
+
+def _max_paginas() -> int:
+    try:
+        return max(1, int(os.getenv('COMPRAS_OC_MAX_PAGINAS', '60')))
+    except ValueError:
+        return 60
+
+
+def _pausa_default() -> float:
+    try:
+        return max(0.0, float(os.getenv('COMPRAS_OC_PAUSA_S', '0.5')))
+    except ValueError:
+        return 0.5
+
+
+def _dias_historial() -> int:
+    try:
+        return max(30, int(os.getenv('COMPRAS_OC_HISTORIAL_DIAS', '365')))
+    except ValueError:
+        return 365
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Conversión
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _txt(v, n=None):
+    s = '' if v is None else str(v).strip()
+    return (s[:n] if n else s) or None
+
+
+def _int(v):
+    try:
+        return int(float(v)) if v not in (None, '') else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _dt(v):
+    """`2023-10-25T14:30:00` → datetime (hora local de Siesa, sin zona)."""
+    if not v:
+        return None
+    if isinstance(v, datetime):
+        return v
+    s = str(v).strip().replace('Z', '')
+    try:
+        return datetime.fromisoformat(s[:19])
+    except ValueError:
+        try:
+            return datetime.strptime(s[:8], '%Y%m%d')
+        except ValueError:
+            return None
+
+
+def _d(v):
+    x = _dt(v)
+    return x.date() if x else None
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Descarga
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _descargar(gateway, nombre_api, parametros, pausa_s, url=None):
+    """Todas las páginas de UNA consulta. Nunca levanta.
+
+    Returns: (filas, completa: bool, motivo | None, paginas)
+    """
+    from app.services.connekta_gateway import _exigir_datos
+
+    filas, vistos = [], set()
+    tope = _max_paginas()
+    for pag in range(1, tope + 1):
+        params = {'parametros': parametros,
+                  'paginacion': f'numPag={pag}|tamPag={TAM_PAG}'}
+        try:
+            resp = (gateway._get(nombre_api, params, url=url) if url
+                    else gateway._get(nombre_api, params))
+        except Exception as e:  # red, 429, 5xx, 401: la corrida no está completa
+            return filas, False, f'página {pag}: {str(e)[:300]}', pag - 1
+        if resp is None:
+            return filas, False, f'página {pag}: circuito de Siesa abierto', pag - 1
+        detalle = resp.get('detalle') if isinstance(resp, dict) else None
+        rows = (detalle or {}).get('Table') if isinstance(detalle, dict) else None
+        if rows is None:
+            return filas, False, f'página {pag}: respuesta sin detalle.Table', pag - 1
+        try:
+            _exigir_datos(rows, nombre_api, parametros)
+        except Exception as e:
+            return filas, False, str(e)[:300], pag - 1
+        for r in rows:
+            rid = r.get('f421_rowid', r.get('f200_rowid'))
+            if rid is not None and rid in vistos:
+                # El mismo registro en dos páginas de la misma enumeración: el
+                # orden no es estable y pudo saltarse otros. No se puede afirmar
+                # que se vio todo.
+                return filas, False, (f'página {pag}: registro {rid} repetido — '
+                                      'paginación inestable'), pag
+            if rid is not None:
+                vistos.add(rid)
+            filas.append(r)
+        if len(rows) < TAM_PAG:
+            return filas, True, None, pag
+        if pausa_s:
+            time.sleep(pausa_s)
+    return filas, False, (f'tope de {tope} páginas con la última llena: hay más '
+                          'del otro lado (COMPRAS_OC_MAX_PAGINAS)'), tope
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Escritura
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _upsert_proveedores(pares, fuente, ahora):
+    """`pares`: {codigo: (nit, nombre)} → {codigo: Proveedor}. Siesa es el
+    maestro de la razón social; el contacto y el país que alguien cargó a mano
+    no se tocan."""
+    from app.models.acuerdo_marco import Proveedor
+    if not pares:
+        return {}, 0, 0
+    existentes = {p.codigo: p for p in
+                  Proveedor.query.filter(Proveedor.codigo.in_(list(pares))).all()}
+    nuevos = actualizados = 0
+    for codigo, (nit, nombre) in pares.items():
+        p = existentes.get(codigo)
+        if p is None:
+            p = Proveedor(codigo=codigo, nombre=nombre or codigo, nit=nit,
+                          fuente=fuente, sincronizado_en=ahora, activo=True)
+            db.session.add(p)
+            existentes[codigo] = p
+            nuevos += 1
+            continue
+        cambio = False
+        if nombre and p.nombre != nombre:
+            p.nombre = nombre
+            cambio = True
+        if nit and p.nit != nit:
+            p.nit = nit
+            cambio = True
+        if p.fuente is None:
+            p.fuente = fuente
+        p.sincronizado_en = ahora
+        actualizados += int(cambio)
+    db.session.flush()
+    return existentes, nuevos, actualizados
+
+
+def _aplicar_lineas(filas, ahora, *, abierta: bool):
+    """Upsert por `f421_rowid`. Devuelve (vistos, contadores)."""
+    from app.models.compras_fuentes import OcLineaSiesa
+    from app.services.compras_fuentes import pendiente_de_linea
+
+    cont = Counter()
+    por_rowid = {}
+    for f in filas:
+        rid = _int(f.get('f421_rowid'))
+        if rid is None:
+            cont['sin_rowid'] += 1
+            continue
+        por_rowid[rid] = f
+
+    provs = {}
+    for f in por_rowid.values():
+        c = _txt(f.get('f200_id_prov'), 20)
+        if c:
+            provs[c] = (_txt(f.get('f200_nit_prov'), 20),
+                        _txt(f.get('f200_razon_social_prov'), 200))
+    mapa_prov, n_prov_nuevos, n_prov_act = _upsert_proveedores(provs, 'SIESA_OC', ahora)
+    cont['proveedores_nuevos'] = n_prov_nuevos
+    cont['proveedores_actualizados'] = n_prov_act
+
+    ids = list(por_rowid)
+    existentes = {}
+    for i in range(0, len(ids), 500):
+        for l in OcLineaSiesa.query.filter(
+                OcLineaSiesa.rowid_linea.in_(ids[i:i + 500])).all():
+            existentes[l.rowid_linea] = l
+
+    for rid, f in por_rowid.items():
+        l = existentes.get(rid)
+        if l is None:
+            l = OcLineaSiesa(rowid_linea=rid, primera_vista_en=ahora)
+            db.session.add(l)
+            cont['nuevas'] += 1
+        else:
+            cont['actualizadas'] += 1
+        pendiente, como = pendiente_de_linea(f)
+        if pendiente is None:
+            cont['sin_unidad_base'] += 1
+        prov = _txt(f.get('f200_id_prov'), 20)
+        l.rowid_oc = _int(f.get('f420_rowid'))
+        l.co = _txt(f.get('f420_id_co'), 10)
+        l.tipo_docto = _txt(f.get('f420_id_tipo_docto'), 10)
+        l.consec_docto = _int(f.get('f420_consec_docto'))
+        l.fecha_oc = _d(f.get('f420_fecha'))
+        l.estado_oc = _int(f.get('f420_ind_estado'))
+        l.fecha_aprobacion = _dt(f.get('f420_fecha_ts_aprobacion'))
+        l.fecha_parcial = _dt(f.get('f420_fecha_ts_parcial'))
+        l.fecha_cumplido = _dt(f.get('f420_fecha_ts_cumplido'))
+        l.moneda = _txt(f.get('f420_id_moneda_docto'), 5)
+        l.tasa_conv = f.get('f420_tasa_conv')
+        l.proveedor_codigo = prov
+        l.proveedor_nit = _txt(f.get('f200_nit_prov'), 20)
+        l.proveedor_nombre = _txt(f.get('f200_razon_social_prov'), 200)
+        l.proveedor_sucursal = _txt(f.get('f202_id_sucursal_prov'), 10)
+        l.proveedor_id = mapa_prov[prov].id if prov in mapa_prov else None
+        l.referencia = _txt(f.get('f120_referencia'), 50)
+        l.bodega = _txt(f.get('f150_id'), 10)
+        l.co_movto = _txt(f.get('f421_id_co_movto'), 10)
+        l.estado_linea = _int(f.get('f421_ind_estado'))
+        l.ind_obsequio = _int(f.get('f421_ind_obsequio'))
+        l.unidad_medida = _txt(f.get('f421_id_unidad_medida'), 10)
+        l.factor = f.get('f421_factor')
+        l.cant_pedida = f.get('f421_cant_pedida')
+        l.cant_entrada = f.get('f421_cant_entrada')
+        l.cant_pedida_base = f.get('f421_cant_pedida_base')
+        l.cant_entrada_base = f.get('f421_cant_entrada_base')
+        l.cant_importacion_base = f.get('f421_cant_importacion_base')
+        l.pendiente_base = pendiente
+        l.precio_unitario = f.get('f421_precio_unitario')
+        l.fecha_entrega = _d(f.get('f421_fecha_entrega'))
+        l.vista_en = ahora
+        if abierta:
+            l.abierta = True
+            l.cerrada_en = None
+            l.motivo_cierre = None
+        else:
+            if l.abierta or l.cerrada_en is None:
+                l.cerrada_en = ahora
+            l.abierta = False
+            l.motivo_cierre = MOTIVO_CUMPLIDA
+    return set(por_rowid), cont
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Las corridas
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _gateway(gateway):
+    if gateway is None:
+        from app.services.connekta_gateway import connekta as gateway
+    return gateway
+
+
+def sincronizar_ocs(gateway=None, pausa_s=None, ahora=None) -> dict:
+    """Las OCs abiertas (Aprobada + Parcial) → `oc_linea_siesa`.
+
+    No mira el interruptor ni la ventana (eso es `correr`): es también lo que
+    corre el botón de la pantalla. Deja su fila en `registros_sync`.
+    """
+    from app.models.compras_fuentes import OcLineaSiesa
+    from app.services import registro_sync_service as _reg
+
+    gw = _gateway(gateway)
+    if getattr(gw, 'modo_simulacion', False):
+        return {'omitido': 'Connekta en modo simulación: no hay OCs reales que leer'}
+    pausa = _pausa_default() if pausa_s is None else pausa_s
+    ahora = ahora or datetime.utcnow()
+    registro = _reg.abrir(REGISTRO)
+
+    filas, completa, motivos, paginas = [], True, [], 0
+    for estado in ESTADOS_ABIERTOS:
+        f, ok, motivo, pags = _descargar(gw, gw.api_ordenes,
+                                         f'f420_ind_estado = {estado}', pausa)
+        filas.extend(f)
+        paginas += pags
+        if not ok:
+            completa = False
+            motivos.append(f'estado {estado}: {motivo}')
+
+    try:
+        vistos, cont = _aplicar_lineas(filas, ahora, abierta=True)
+        cerradas = 0
+        if completa:
+            for l in OcLineaSiesa.query.filter(OcLineaSiesa.abierta.is_(True)).all():
+                if l.rowid_linea not in vistos:
+                    l.abierta = False
+                    l.cerrada_en = ahora
+                    l.motivo_cierre = MOTIVO_NO_APARECE
+                    cerradas += 1
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        logger.error('[COMPRAS_OC] no se pudo escribir: %s', e, exc_info=True)
+        _reg.cerrar_error(registro, f'escritura: {e}')
+        return {'ok': False, 'error': str(e)[:300]}
+
+    resultado = {
+        'ok': completa,
+        'paginacion_completa': completa,
+        'motivo_incompleta': '; '.join(motivos) or None,
+        'paginas': paginas,
+        'filas_recibidas': len(filas),
+        'lineas_vistas': len(vistos),
+        'lineas_cerradas': cerradas,
+        'cierre_omitido_por_incompleta': not completa,
+        **dict(cont),
+    }
+    if completa:
+        _reg.cerrar_ok(registro, resultado)
+    else:
+        # Lo que sí llegó se guardó (upsert): una línea vista es cierta. Lo que
+        # NO se hizo es cerrar las no vistas — eso exige haber visto todo.
+        _reg.cerrar_error(registro, 'paginación incompleta: '
+                          + (resultado['motivo_incompleta'] or ''), resultado)
+    logger.info('[COMPRAS_OC] %s', resultado)
+    return resultado
+
+
+def sincronizar_historial(gateway=None, desde=None, pausa_s=None, ahora=None) -> dict:
+    """OCs CUMPLIDAS desde `desde` (date; default hoy − COMPRAS_OC_HISTORIAL_DIAS).
+
+    Alimenta el lead time medido (fecha OC → entrada) y el precio de compra.
+    Solo agrega o actualiza: no cierra ni reabre nada que no haya visto.
+
+    El filtro de fecha va por `siesa_filtro.lit_fecha` (`''AAAAMMDD''`, con
+    comillas): verificado en vivo sobre otra consulta estándar el 2026-09-24 —
+    sin comillas Siesa contesta «no hay registros» en vez de rechazar—. Sobre
+    ESTA consulta **no está verificado**; `qa_compras_fuentes_real.py` lo prueba.
+    """
+    from app.services import registro_sync_service as _reg
+    from app.services.siesa_filtro import lit_fecha
+    from app.utils.fecha import dia_operativo
+
+    gw = _gateway(gateway)
+    if getattr(gw, 'modo_simulacion', False):
+        return {'omitido': 'Connekta en modo simulación'}
+    pausa = _pausa_default() if pausa_s is None else pausa_s
+    ahora = ahora or datetime.utcnow()
+    desde = desde or (dia_operativo() - timedelta(days=_dias_historial()))
+    registro = _reg.abrir(REGISTRO_HISTORIAL)
+    parametros = (f'f420_ind_estado = {ESTADO_CUMPLIDO} AND '
+                  f'f420_fecha >= {lit_fecha(desde)}')
+    filas, completa, motivo, paginas = _descargar(gw, gw.api_ordenes, parametros, pausa)
+    try:
+        vistos, cont = _aplicar_lineas(filas, ahora, abierta=False)
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        _reg.cerrar_error(registro, f'escritura: {e}')
+        return {'ok': False, 'error': str(e)[:300]}
+    resultado = {'ok': completa, 'paginacion_completa': completa,
+                 'motivo_incompleta': motivo, 'desde': desde.isoformat(),
+                 'paginas': paginas, 'lineas_vistas': len(vistos), **dict(cont)}
+    if completa:
+        _reg.cerrar_ok(registro, resultado)
+    else:
+        _reg.cerrar_error(registro, f'paginación incompleta: {motivo}', resultado)
+    return resultado
+
+
+def sincronizar_proveedores_terceros(gateway=None, pausa_s=None, ahora=None) -> dict:
+    """Proveedores activos del maestro de terceros (`API_v2_Terceros`).
+
+    Un proveedor sin OC en el último año también existe, y es a quien se le
+    pide cotización. Nunca consultada antes desde el WMS: si Connekta la
+    rechaza, se devuelve el motivo y no se escribe nada.
+    """
+    gw = _gateway(gateway)
+    if getattr(gw, 'modo_simulacion', False):
+        return {'omitido': 'Connekta en modo simulación'}
+    pausa = _pausa_default() if pausa_s is None else pausa_s
+    ahora = ahora or datetime.utcnow()
+    nombre = os.getenv('CONNEKTA_API_TERCEROS', 'API_v2_Terceros')
+    filas, completa, motivo, paginas = _descargar(
+        gw, nombre, 'f200_ind_proveedor = 1 AND f200_ind_estado = 1', pausa)
+    pares = {}
+    for f in filas:
+        c = _txt(f.get('f200_id'), 20)
+        if not c:
+            continue
+        nombre_t = _txt(f.get('f200_razon_social'), 200) or _txt(
+            ' '.join(x for x in (f.get('f200_nombres'), f.get('f200_apellido1'),
+                                 f.get('f200_apellido2')) if x), 200)
+        pares[c] = (_txt(f.get('f200_nit'), 20), nombre_t)
+    try:
+        _, nuevos, act = _upsert_proveedores(pares, 'SIESA_TERCEROS', ahora)
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        return {'ok': False, 'error': str(e)[:300]}
+    return {'ok': completa, 'paginacion_completa': completa, 'motivo_incompleta': motivo,
+            'paginas': paginas, 'proveedores_leidos': len(pares),
+            'proveedores_nuevos': nuevos, 'proveedores_actualizados': act}
+
+
+def _en_ventana(reloj=None):
+    from app.services.fotos_siesa_service import VENTANA, ventana_abierta
+    return ventana_abierta(reloj() if reloj else None), VENTANA
+
+
+def correr(gateway=None, reloj=None) -> dict:
+    """El cron de cada 30 min: interruptor + ventana + OCs abiertas."""
+    if not encendido():
+        return {'omitido': 'COMPRAS_OC_SYNC no está en true — nace apagado'}
+    abierta, v = _en_ventana(reloj)
+    if not abierta:
+        return {'omitido': f'fuera de la ventana de Siesa ({v[0]}–{v[1]} Bogotá)'}
+    return sincronizar_ocs(gateway=gateway)
+
+
+def correr_diario(gateway=None, reloj=None) -> dict:
+    """El cron de las 7:20: historial de cumplidas + maestro de proveedores."""
+    if not encendido():
+        return {'omitido': 'COMPRAS_OC_SYNC no está en true — nace apagado'}
+    abierta, v = _en_ventana(reloj)
+    if not abierta:
+        return {'omitido': f'fuera de la ventana de Siesa ({v[0]}–{v[1]} Bogotá)'}
+    return {'historial': sincronizar_historial(gateway=gateway),
+            'proveedores': sincronizar_proveedores_terceros(gateway=gateway)}
+
+
+def _con_lock(fn, etiqueta):
+    from app.utils.lock import LOCK_COMPRAS_OC_SYNC, advisory_lock
+    with advisory_lock(LOCK_COMPRAS_OC_SYNC, 'compras_oc_sync') as tomado:
+        if not tomado:
+            logger.info('[COMPRAS_OC] %s: otro worker ya sincroniza', etiqueta)
+            return {'omitido': 'otro proceso ya está sincronizando las OCs'}
+        try:
+            return fn()
+        except Exception as e:
+            db.session.rollback()
+            logger.error('[COMPRAS_OC] %s falló: %s', etiqueta, e, exc_info=True)
+            return {'ok': False, 'error': str(e)[:300]}
+
+
+def init_scheduler(app):
+    """Cada 30 min en la ventana 7–19:30 (OCs abiertas) y 7:20 (historial +
+    proveedores). Nace apagado: sin `COMPRAS_OC_SYNC=true`, `correr` devuelve su
+    motivo sin tocar Siesa."""
+    try:
+        from apscheduler.schedulers.background import BackgroundScheduler
+        from apscheduler.triggers.cron import CronTrigger
+    except ImportError:
+        logger.error('[COMPRAS_OC] APScheduler no instalado')
+        return None
+
+    def _job():
+        with app.app_context():
+            logger.info('[COMPRAS_OC] %s', _con_lock(correr, 'abiertas'))
+
+    def _job_diario():
+        with app.app_context():
+            logger.info('[COMPRAS_OC] diario %s', _con_lock(correr_diario, 'diario'))
+
+    scheduler = BackgroundScheduler(timezone='America/Bogota')
+    scheduler.add_job(func=_job,
+                      trigger=CronTrigger(hour='7-19', minute='10,40',
+                                          timezone='America/Bogota'),
+                      id='compras_oc_abiertas', replace_existing=True,
+                      max_instances=1, misfire_grace_time=900)
+    scheduler.add_job(func=_job_diario,
+                      trigger=CronTrigger(hour='7', minute='20',
+                                          timezone='America/Bogota'),
+                      id='compras_oc_diario', replace_existing=True,
+                      max_instances=1, misfire_grace_time=1800)
+    scheduler.start()
+    logger.info('[COMPRAS_OC] Scheduler 7–19:30 Bogotá (encendido=%s)', encendido())
+    return scheduler
+
+
+def disparar_en_segundo_plano(app, que: str = 'abiertas'):
+    """El botón de la pantalla. Corre en un hilo con el mismo lock del cron.
+    No mira el interruptor (es una decisión humana explícita) pero SÍ la
+    ventana: la Regla 14 no la dobla un botón."""
+    import threading
+
+    abierta, v = _en_ventana()
+    if not abierta:
+        return {'ok': False,
+                'error': f'Fuera de la ventana de Siesa ({v[0]}–{v[1]} Bogotá). Regla 14.'}
+    fn = sincronizar_ocs if que == 'abiertas' else (
+        lambda: {'historial': sincronizar_historial(),
+                 'proveedores': sincronizar_proveedores_terceros()})
+
+    def _run():
+        with app.app_context():
+            _con_lock(fn, f'manual {que}')
+
+    threading.Thread(target=_run, daemon=True).start()
+    return {'ok': True, 'mensaje': 'Sincronización iniciada en segundo plano.'}
+
+
+def estado() -> dict:
+    """Para `/api/health/siesa` y la pantalla. Nunca levanta."""
+    try:
+        from sqlalchemy import func
+        from app.models.compras_fuentes import OcLineaSiesa
+        from app.models.acuerdo_marco import Proveedor
+        from app.services import registro_sync_service as _reg
+        from app.services.compras_fuentes import frescura_oc
+        abiertas = OcLineaSiesa.query.filter(OcLineaSiesa.abierta.is_(True)).count()
+        con_pend = OcLineaSiesa.query.filter(OcLineaSiesa.abierta.is_(True),
+                                             OcLineaSiesa.pendiente_base > 0).count()
+        sin_unidad = OcLineaSiesa.query.filter(OcLineaSiesa.abierta.is_(True),
+                                               OcLineaSiesa.pendiente_base.is_(None)).count()
+        por_fuente = dict(db.session.query(Proveedor.fuente, func.count(Proveedor.id))
+                          .group_by(Proveedor.fuente).all())
+        hist = _reg.ultimo(REGISTRO_HISTORIAL)
+        return {
+            'encendido': encendido(),
+            'lineas_total': OcLineaSiesa.query.count(),
+            'lineas_abiertas': abiertas,
+            'lineas_abiertas_con_pendiente': con_pend,
+            'lineas_abiertas_sin_unidad_base': sin_unidad,
+            'proveedores_por_fuente': {str(k): v for k, v in por_fuente.items()},
+            'sync_abiertas': frescura_oc(),
+            'ultimo_historial': ({k: hist.get(k) for k in ('inicio', 'ok', 'error')}
+                                 if isinstance(hist, dict) else None),
+        }
+    except Exception as e:
+        return {'encendido': encendido(), 'error': str(e)[:200]}

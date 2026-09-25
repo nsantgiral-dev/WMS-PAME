@@ -26,6 +26,11 @@ class Producto(db.Model):
     unidad_negocio_id = db.Column(db.String(10))  # Unidad de negocio Siesa p.ej. '001'=PAPELERIA
     origen = db.Column(db.String(10))  # NACIONAL, CHINA — determina régimen de reposición
     marca_siesa = db.Column(db.String(50))  # Código marca Siesa (M003, M009, M175, etc.)
+    #: Quién escribió `origen` / `marca_siesa` (m046compras): `CARGA_ARCHIVO`,
+    #: `MANUAL` o `SIESA_238920`. Sin esto una marca leída de Siesa y una
+    #: tecleada son indistinguibles, y el armador decide régimen China con ella.
+    origen_fuente = db.Column(db.String(20))
+    marca_fuente = db.Column(db.String(20))
     activo = db.Column(db.Boolean, default=True)
     fecha_creacion = db.Column(db.DateTime, default=datetime.utcnow)
     fecha_actualizacion = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -102,6 +107,8 @@ class Producto(db.Model):
             'unidad_negocio_id': self.unidad_negocio_id,
             'origen': self.origen,
             'marca_siesa': self.marca_siesa,
+            'origen_fuente': self.origen_fuente,
+            'marca_fuente': self.marca_fuente,
             'stock_total': self.stock_total,
             'stock_averiado': self.stock_averiado,
             'stock_vendible': self.stock_vendible,

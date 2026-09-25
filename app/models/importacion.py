@@ -96,6 +96,14 @@ class ItemEnTransito(db.Model):
     estado = db.Column(db.String(20), default='NAVEGANDO')
     # NAVEGANDO, EN_PUERTO, NACIONALIZACION, EN_RUTA_CEDI, RECIBIDO
     fecha_registro = db.Column(db.DateTime, default=datetime.utcnow)
+    #: La OC de Siesa de la que es el movimiento físico (`CO-TIPO-CONSEC`,
+    #: m046compras). Con ella, `en_camino` NO la suma dos veces: esa cantidad ya
+    #: está en el pendiente de la OC. Sin ella, se suma y se declara el posible
+    #: solapamiento. Ver `compras_fuentes.en_camino`.
+    oc_referencia = db.Column(db.String(40))
+    #: Bodega a la que llega. NULL = el CDI (`CONNEKTA_BODEGA`, NB1): los
+    #: contenedores se reciben en el CDI de Neiva (`fecha_recepcion_cedi`).
+    bodega_destino = db.Column(db.String(10))
 
     producto = db.relationship('Producto', backref='en_transito', lazy='select')
     contenedor = db.relationship('Contenedor', backref='items', lazy='select')

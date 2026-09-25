@@ -42,7 +42,13 @@ from app.extensions import db
 #: vivía solo en memoria: un reinicio borraba la única evidencia de qué se
 #: eliminó y por qué. ~780 filas por día hábil; la tabla es OPERATIVA y el
 #: acta de corte la vacía.
-TIPOS = ('catalogo', 'barcodes', 'stock', 'stock_ns1', 'stock_nc1', 'setup_inicial', 'reconciliacion', 'kardex', 'pedidos')
+#:
+#: `compras_oc` / `compras_oc_historial` (m046compras): el espejo de OCs de
+#: Siesa. `ok=True` SOLO con paginación completa — es la corrida que puede
+#: afirmar que una OC que no apareció se cerró. `compras_fuentes.frescura_oc`
+#: lee `ultimo_ok('compras_oc')` para decir de cuándo es el «en camino».
+TIPOS = ('catalogo', 'barcodes', 'stock', 'stock_ns1', 'stock_nc1', 'setup_inicial',
+         'reconciliacion', 'kardex', 'pedidos', 'compras_oc', 'compras_oc_historial')
 
 
 class RegistroSync(db.Model):

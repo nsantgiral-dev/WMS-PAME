@@ -29,6 +29,11 @@ class Proveedor(db.Model):
     condicion_pago_default = db.Column(db.String(20))  # C01=contado, C30=30 días, etc.
     activo = db.Column(db.Boolean, default=True)
     fecha_creacion = db.Column(db.DateTime, default=datetime.utcnow)
+    #: De dónde salió la fila (m046compras): `SIESA_OC` (visto en una orden de
+    #: compra), `SIESA_TERCEROS` (maestro de terceros con `f200_ind_proveedor`)
+    #: o `MANUAL`. NULL = fila anterior a la migración: no se sabe.
+    fuente = db.Column(db.String(20))
+    sincronizado_en = db.Column(db.DateTime)   # última vez que Siesa la confirmó (UTC)
 
     def to_dict(self):
         return {
@@ -36,6 +41,7 @@ class Proveedor(db.Model):
             'nit': self.nit, 'pais': self.pais,
             'condicion_pago_default': self.condicion_pago_default,
             'activo': self.activo,
+            'fuente': self.fuente,
         }
 
 
