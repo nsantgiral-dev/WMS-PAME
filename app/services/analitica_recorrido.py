@@ -68,6 +68,7 @@ suma de las líneas). Si una línea no lo trae, el pedido queda **sin valor**
 
 Cero llamadas a Siesa: todo sale de la base del WMS.
 """
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from decimal import Decimal
@@ -1050,6 +1051,15 @@ def _pedido_por_clave(clave: str):
     return p
 
 
+_PREFIJO_JOB = re.compile(r'^\s*[A-Z][A-Z0-9_]*\s+job=\d+\s*:\s*')
+
+
+def _error_legible(texto) -> str:
+    """El error de un job sin el prefijo técnico «TIPO job=N:» con que lo arma
+    la cola (el tipo ya está en el título, en palabras). Recortado a 200."""
+    return _PREFIJO_JOB.sub('', str(texto or ''))[:200]
+
+
 def linea_de_tiempo(clave: str, ahora: datetime = None) -> dict:
     """Todo lo que el WMS sabe de un pedido, en orden. `None` si no existe.
 
@@ -1185,9 +1195,11 @@ def linea_de_tiempo(clave: str, ahora: datetime = None) -> dict:
                     documento={'documentos': [consec] if consec else None,
                                'resultado': res,
                                'consecutivo_sin_dato': consec is None})
+    from app.models.devolucion_cliente import EstadoDevolucionCliente as _EDC
     for d in p.devoluciones:
         add(d.fecha_confirmacion or d.fecha_creacion, 'entregado',
-            f'Devolución del cliente {d.codigo}', d.estado,
+            f'Devolución del cliente {d.codigo}',
+            _EDC.PALABRAS.get(d.estado, (d.estado or '').lower().replace('_', ' ')),
             documento={'documentos': [f'NCE-{d.siesa_nc_consec}'] if d.siesa_nc_consec else None,
                        'resultado': 'ENVIADO' if d.siesa_nc_triggered else 'PENDIENTE'})
 
@@ -1200,7 +1212,7 @@ def linea_de_tiempo(clave: str, ahora: datetime = None) -> dict:
             add(j.fecha_completado or j.fecha_creacion, None,
                 f'Envío a Siesa: {_texto_documento(j.tipo)}',
                 _ESTADO_JOB.get(j.estado, (j.estado or '').lower())
-                + (f' · {j.error_ultimo[:200]}' if j.error_ultimo else ''),
+                + (f' · {_error_legible(j.error_ultimo)}' if j.error_ultimo else ''),
                 quien_id=j.creado_por_id, tipo='cola',
                 cifras=[num('intentos', j.intentos or 0)] if j.intentos else None)
     entidades = (refs + [('TareaPicking', t.id) for t in p.pickings]

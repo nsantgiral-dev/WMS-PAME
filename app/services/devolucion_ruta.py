@@ -677,12 +677,22 @@ def cola_llegadas() -> list:
     return out
 
 
+def _motivo_en_palabras(codigo):
+    if not codigo:
+        return None
+    from app.services import motivos_rechazo
+    return motivos_rechazo.etiqueta(codigo)
+
+
 def _resumen_devolucion(d: DevolucionCliente) -> dict:
     return {
         'id': d.id, 'codigo': d.codigo, 'estado': d.estado,
         'pedido': d.numero_pedido_siesa, 'cliente': d.cliente, 'es_total': d.es_total,
         'lineas': len(d.lineas), 'problema_factura': d.problema_factura,
         'motivo': (d.declaracion_conductor or {}).get('motivo'),
+        # En palabras, del catálogo único (`motivos_rechazo.etiqueta`): la
+        # pantalla pintaba el código crudo (NO_PAGO, CLIENTE_CERRADO).
+        'motivo_texto': _motivo_en_palabras((d.declaracion_conductor or {}).get('motivo')),
         'sin_declaracion': bool((d.declaracion_conductor or {}).get('sin_items')),
         'fecha_creacion': d.fecha_creacion.isoformat() if d.fecha_creacion else None,
     }

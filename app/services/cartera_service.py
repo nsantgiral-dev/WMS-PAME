@@ -1772,6 +1772,8 @@ def retencion_publica(r) -> dict:
     ahora = datetime.utcnow()
     return {
         'id': r.id, 'estado': r.estado, 'compuerta': r.compuerta,
+        # Aditivo (2026-09-25): la pantalla pintaba «G1»/«EMISION».
+        'compuerta_texto': Compuerta.PALABRAS.get(r.compuerta, 'retenido'),
         'pedido': r.numero_pedido, 'pedido_clave': r.pedido_clave,
         'tarea_packing_id': r.tarea_packing_id,
         'cliente': r.cliente, 'nit': r.nit, 'sucursal': r.sucursal,

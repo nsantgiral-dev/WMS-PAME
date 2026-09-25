@@ -96,3 +96,19 @@ def test_el_lote_solo_con_su_permiso():
 
 def test_un_403_esconde_el_bloque():
     assert _render({'status': 403})['display'] == 'none'
+
+
+def test_la_compuerta_se_dice_en_palabras():
+    """E2E 2026-09-25: el bloque pintaba «G1» / «EMISION». El texto viene del
+    servidor (`Compuerta.PALABRAS`); un servidor viejo sin el campo dice
+    «retenido», nunca el código."""
+    d = _render({'cuerpo': {'retenciones': [_ret(compuerta='EMISION', compuerta_texto='retenido al facturar'),
+                                            _ret(id=8, compuerta='G1')],
+                            'puede_autorizar': False, 'usuario_id': 1}})
+    assert 'retenido al facturar' in d['html']
+    assert 'EMISION' not in d['html'] and '· G1' not in d['html']
+
+
+def test_el_servidor_publica_la_compuerta_en_palabras():
+    from app.models.cartera import Compuerta
+    assert set(Compuerta.PALABRAS) == set(Compuerta.TODAS)

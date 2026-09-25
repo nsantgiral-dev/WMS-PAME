@@ -39,6 +39,10 @@ class Compuerta:
     CIERRE = 'G2'      # al cerrar el packing, antes del 244328 (último punto reversible)
     EMISION = 'EMISION'  # dentro de la emisión (DLQ o carril admin) sin decisión previa
     TODAS = (INICIO, CIERRE, EMISION)
+    #: Cómo se dice en pantalla dónde se retuvo (el código queda en la API).
+    PALABRAS = {INICIO: 'retenido al aprobar el pedido',
+                CIERRE: 'retenido al cerrar la caja',
+                EMISION: 'retenido al facturar'}
 
 
 class RetencionCartera(db.Model):

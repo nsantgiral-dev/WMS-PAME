@@ -1429,6 +1429,16 @@ async function cargarDevoluciones(silencioso = false) {
  * @param {Array} rutas - `GET /api/devoluciones/llegadas` → rutas
  * @returns {string}
  */
+/**
+ * Un código que el servidor mandó sin su texto (un servidor viejo en caché):
+ * se dice en palabras, nunca crudo. «NO_PAGO» → «no pago». El texto bueno es
+ * el del servidor (`motivo_texto`, del catálogo de motivos).
+ * @param {string} codigo
+ */
+function recPalabraDeCodigo(codigo) {
+  return String(codigo || '').toLowerCase().replace(/_/g, ' ');
+}
+
 function recLlegadasHtml(rutas) {
   if (!rutas || !rutas.length) return '';
   let html = `<div style="font-size:var(--fs-xs);font-weight:600;color:var(--acento-tx);padding:4px 0 8px;border-bottom:1px solid var(--brd);margin-bottom:10px;">
@@ -1472,7 +1482,7 @@ function recLlegadasHtml(rutas) {
               <span style="font-size:var(--fs-xs);color:${d.estado === 'EN_CAMION' ? 'var(--info-tx)' : 'var(--acento-tx)'};">${d.estado === 'EN_CAMION' ? 'En el camión' : 'En bodega'}</span>
             </div>
             <div style="font-size:var(--fs-xs);color:var(--tx2);margin-top:4px;">
-              ${d.es_total ? 'Devolución total' : 'Devolución parcial'}${d.motivo ? ' · ' + esc(d.motivo) : ''}${d.sin_declaracion ? ' · el conductor no dijo qué volvió: contá contra la factura' : ''} · toca para contar
+              ${d.es_total ? 'Devolución total' : 'Devolución parcial'}${d.motivo ? ' · ' + esc(d.motivo_texto || recPalabraDeCodigo(d.motivo)) : ''}${d.sin_declaracion ? ' · el conductor no dijo qué volvió: cuente contra la factura' : ''} · toque para contar
             </div>
             ${d.problema_factura ? `<div style="font-size:var(--fs-xs);color:var(--err-tx);margin-top:4px;">${esc(d.problema_factura)}</div>` : ''}
           </div>`).join('')}

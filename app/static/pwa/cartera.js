@@ -66,7 +66,7 @@ async function carteraCargarBloque() {
           <div style="font-size:var(--fs-sm);font-weight:700;color:var(--tx);">${esc(r.pedido || r.pedido_clave)} · ${esc(r.cliente || r.nit)}</div>
           <div style="font-size:var(--fs-xs);color:var(--tx3);white-space:nowrap;">${esc(_carteraAntiguedad(r.antiguedad_horas))}</div>
         </div>
-        <div style="font-size:var(--fs-xs);color:var(--tx2);margin-top:2px;">${esc(_carteraPesos(r.valor))} · ${esc(r.cond_pago || '')} · ${esc(r.compuerta)}</div>
+        <div style="font-size:var(--fs-xs);color:var(--tx2);margin-top:2px;">${esc(_carteraPesos(r.valor))} · ${esc(r.cond_pago || '')} · ${esc(r.compuerta_texto || 'retenido')}</div>
         <div style="font-size:var(--fs-xs);color:var(--warn-tx);margin-top:2px;">${esc(motivos)}</div>
         ${nota}
         <div style="margin-top:6px;display:flex;flex-wrap:wrap;gap:6px;">${botones}</div>

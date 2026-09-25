@@ -40,6 +40,10 @@ class EstadoDevolucionCliente:
     CANCELADA      = 'CANCELADA'
 
     TODOS = (EN_CAMION, ABIERTA, CONFIRMADA, FALTANTE_TOTAL, CANCELADA)
+    #: Cómo se dice en pantalla (el código queda en la API).
+    PALABRAS = {EN_CAMION: 'viene en el camión', ABIERTA: 'por contar en bodega',
+                CONFIRMADA: 'contada', FALTANTE_TOTAL: 'no volvió nada (faltante total)',
+                CANCELADA: 'cancelada'}
     #: Sin contar todavía: la mercancía viene en el camión o espera en bodega.
     ACTIVAS = (EN_CAMION, ABIERTA)
     #: Ya contadas: lo que volvió (o que no volvió nada) está medido.

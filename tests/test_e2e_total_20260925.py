@@ -345,7 +345,6 @@ class TestLlegoElCamionSinCodigos:
                           'sin_declaracion': False,
                           'fecha_creacion': '2026-09-25T18:24:03.602086'}]}]
 
-    @pytest.mark.xfail(strict=True, reason='P3: recepcion.js pinta el motivo de rechazo crudo')
     def test_el_motivo_sale_en_palabras(self, tmp_path):
         out = _node(tmp_path, ['util.js', 'recepcion.js'], {},
                     'return { html: recLlegadasHtml(LLEGADAS) };',
@@ -361,7 +360,6 @@ class TestElRecorridoSinCodigos:
     devolución como detalle) y `:1203` (`error_ultimo` del job, que empieza con
     el tipo y el id del job)."""
 
-    @pytest.mark.xfail(strict=True, reason='P3: el recorrido publica el estado y el error del job crudos')
     def test_la_linea_de_tiempo_no_trae_codigos(self, db, almacen):
         from app.models.siesa_job import SiesaJob
         from app.services.analitica_recorrido import linea_de_tiempo
