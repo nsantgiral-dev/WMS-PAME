@@ -1343,6 +1343,14 @@ def liquidacion_dashboard():
                      RutaDespacho.fecha_programada >= fecha_desde,
                      RutaDespacho.fecha_programada <= fecha_hasta,
                  ),
+                 # Lo que falta liquidar no se sale de la cola por ser de otro
+                 # día (2026-09-25): con el filtro en «hoy», una ruta entregada
+                 # ayer y sin liquidar no aparecía en «Por liquidar».
+                 and_(
+                     RutaDespacho.estado == 'ENTREGADA',
+                     RutaDespacho.estado_financiero != 'LIQUIDADA',
+                     RutaDespacho.fecha_programada <= fecha_hasta,
+                 ),
              ))
              .filter(or_(
                  RutaDespacho.estado == 'ENTREGADA',

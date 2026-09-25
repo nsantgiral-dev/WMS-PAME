@@ -183,3 +183,32 @@ class TestFechaProgramadaNulaEsRedDeSeguridad:
 
         pag = RutaService.listar_rutas()
         assert ruta.id in [r.id for r in pag.items]
+
+
+class TestLaColaPorLiquidarNoSeCortaPorDia:
+    """Auditoría «operación diaria por rol» (2026-09-25): con el filtro en
+    «hoy», una ruta entregada AYER y sin liquidar no aparecía en «Por
+    liquidar». Lo pendiente no se sale de la cola por ser de otro día; lo ya
+    liquidado sí respeta el rango."""
+
+    def _ruta(self, db, dias_atras, financiero):
+        from datetime import timedelta
+        from app.models.ruta_despacho import RutaDespacho
+        from app.utils.fecha import dia_operativo
+        r = RutaDespacho(conductor_id=_conductor(db).id, tipo_ruta='Urbana', estado='ENTREGADA',
+                         estado_financiero=financiero,
+                         fecha_programada=dia_operativo() - timedelta(days=dias_atras))
+        db.session.add(r)
+        db.session.commit()
+        return r.id
+
+    def test_la_de_ayer_sin_liquidar_aparece_hoy_y_la_liquidada_no(
+            self, db, almacen, client, jwt_token_admin):
+        from app.utils.fecha import dia_operativo
+        pendiente = self._ruta(db, 3, 'PENDIENTE')
+        liquidada = self._ruta(db, 3, 'LIQUIDADA')
+        hoy = dia_operativo().isoformat()
+        d = client.get(f'/api/rutas/liquidacion/dashboard?fecha_desde={hoy}&fecha_hasta={hoy}',
+                       headers={'Authorization': f'Bearer {jwt_token_admin}'}).get_json()
+        ids = [r['id'] for r in d['rutas']]
+        assert pendiente in ids and liquidada not in ids
