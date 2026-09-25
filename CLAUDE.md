@@ -1284,7 +1284,7 @@ confirmadas**. El texto que ve la pantalla lo pone el servidor:
 «Siesa no está disponible: no se puede facturar, la caja queda esperando.»
 
 **La clase:** *«no pude preguntarle a Siesa» leído como «no existe» o como «ya
-está hecho».* Trinquete: `tests/test_documento_fiscal.py` (106 tests).
+está hecho».* Trinquete: `tests/test_documento_fiscal.py` (87 tests, 24 mutaciones, las 24 rojas).
 
 | Qué pasaba | Ahora |
 |---|---|
