@@ -49,11 +49,14 @@ def _adjunto(d):
     """
     if not d.foto_id:
         return None
+    from flota.adaptadores.almacen_fotos import estado_verificable
     f = db.session.get(Foto, d.foto_id)
     if f is None:
         return None
     return {
-        'id': f.id, 'mime': f.mime, 'clase': f.clase, 'estado': f.estado,
+        # `ok` solo si el archivo está (2026-09-25): la fila sola decía «ok»
+        # sobre adjuntos que devolvían 410.
+        'id': f.id, 'mime': f.mime, 'clase': f.clase, 'estado': estado_verificable(f),
         'es_pdf': f.mime == 'application/pdf',
         'bytes': f.bytes, 'ancho': f.ancho, 'alto': f.alto,
     }

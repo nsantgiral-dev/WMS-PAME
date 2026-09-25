@@ -628,10 +628,14 @@ async function flotaVerFoto(fotoId, titulo) {
       // 410 = la fila existe y afirma que hay foto, pero el archivo no está.
       // Se dice con esas palabras: es una inconsistencia, no un "no encontrado".
       const d = await r.json().catch(() => ({}));
-      cont.innerHTML = `<p style="color:var(--red)">
-        ${r.status === 410 ? 'La fila dice que hay foto, pero el archivo no está en el almacén.'
-                           : 'No se pudo traer la foto.'}
-        ${d.error ? '<br><small>' + d.error + '</small>' : ''}</p>`;
+      const porQue = {
+        nunca_se_guardo: 'La foto se registró pero el archivo nunca se guardó.',
+        archivo_ausente: 'La fila dice que hay foto, pero el archivo no está en el almacén de este servidor.',
+        almacen_sin_configurar: 'Este servidor no tiene configurado el almacén de fotos.',
+      }[d.motivo] || (r.status === 410 ? 'La fila dice que hay foto, pero el archivo no está en el almacén.'
+                                        : 'No se pudo traer la foto.');
+      cont.innerHTML = `<p style="color:var(--red)">${esc(porQue)}
+        ${d.error ? '<br><small>' + esc(d.error) + '</small>' : ''}</p>`;
       return;
     }
     const blob = await r.blob();
@@ -659,6 +663,11 @@ async function flotaVerFotosDeCustodia(custodiaId) {
       if (f.estado === 'pendiente_evidencia') {
         return `<li style="color:var(--red)">${flotaNombreAngulo(a)} —
           se registró pero <b>el archivo no se guardó</b></li>`;
+      }
+      if (f.estado === 'sin_archivo' || f.estado === 'almacen_sin_configurar') {
+        return `<li style="color:var(--red)">${flotaNombreAngulo(a)} —
+          ${f.estado === 'sin_archivo' ? 'la fila dice que se guardó, pero <b>el archivo no está en este servidor</b>'
+                                         : '<b>este servidor no tiene configurado el almacén de fotos</b>'}</li>`;
       }
       return `<li>${flotaNombreAngulo(a)} · ${esc(f.ancho)}×${esc(f.alto)} ·
         ${Math.round(f.bytes / 1024)} KB
@@ -1003,7 +1012,9 @@ function flotaFilaDudosa(p) {
   const foto = p.tiene_foto
     ? `<button class="btn-flota" style="padding:4px 10px;font-size:var(--fs-xs)"
                onclick="flotaVerFoto(${esc(p.foto_id)}, 'Tablero de ${esc(p.placa)}')">Ver la foto</button>`
-    : `<span style="color:var(--yellow);font-size:var(--fs-xs)">sin foto del tablero —
+    : `<span style="color:var(--yellow);font-size:var(--fs-xs)">${p.estado_foto
+         ? 'la foto del tablero se registró pero no está guardada'
+         : 'sin foto del tablero'} —
          confirmarla es tu palabra, no la de una foto</span>`;
   return `<li style="margin-bottom:14px;border-left:2px solid var(--bd);padding-left:10px">
     <div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap">
@@ -1125,7 +1136,7 @@ async function flotaAbrirFicha(placa) {
 
     ${!d.existe ? '<p style="color:var(--yellow)">Este vehículo todavía no tiene ficha.</p>'
                 : `<p>${d.completa ? '<span style="color:var(--green)">Ficha completa</span>'
-                                   : '<span style="color:var(--yellow)">Falta: ' + esc((d.atributos_sin_dato || []).map(c => flotaPalabra('ficha_campo', c)).join(', ')) + '</span>'}</p>`}
+                                   : '<span style="color:var(--yellow)">Falta: ' + esc((d.falta || d.atributos_sin_dato || []).map(c => flotaPalabra('ficha_campo', c)).join(', ')) + '</span>'}</p>`}
 
     <label>Kilometraje actual (del tablero) *</label>
     <input type="number" id="fi-km_inicial" inputmode="numeric" value="${v('km_inicial')}"
@@ -1274,7 +1285,7 @@ async function flotaGuardarFicha() {
     const d = await r.json();
     if (!r.ok) { err.textContent = d.detalle || d.error || 'No se pudo guardar'; return; }
     alerta((d.completa ? 'Ficha guardada y completa ✓'
-                       : 'Ficha guardada — falta: ' + d.atributos_sin_dato.map(c => flotaPalabra('ficha_campo', c)).join(', '))
+                       : 'Ficha guardada — falta: ' + (d.falta || d.atributos_sin_dato || []).map(c => flotaPalabra('ficha_campo', c)).join(', '))
            + ' · ' + placa, 'exito');
     flotaAbrirFicha(placa);
   } catch (e) {
@@ -1320,10 +1331,12 @@ async function flotaAbrirDocumentos(placa) {
     let foto;
     if (!a) {
       foto = ' · <span style="color:var(--tx3)">sin archivo</span>';
-    } else if (a.estado === 'pendiente_evidencia') {
+    } else if (a.estado === 'pendiente_evidencia' || a.estado === 'sin_archivo') {
       // La fila afirma que hay un archivo y el almacén no lo tiene. Decirlo
       // acá y no al abrirlo: si se ve igual que uno sano, nadie lo revisa.
       foto = ' · <span style="color:var(--red)">archivo NO guardado</span>';
+    } else if (a.estado === 'almacen_sin_configurar') {
+      foto = ' · <span style="color:var(--red)">este servidor no tiene el almacén de fotos</span>';
     } else {
       foto = ` · <button class="btn-flota" style="padding:2px 8px;font-size:var(--fs-xs)"
              onclick="flotaVerFoto(${esc(a.id)}, '${esc(x.tipo)}')">ver ${a.es_pdf ? 'PDF' : 'imagen'}</button>`;
@@ -1641,7 +1654,8 @@ const FLOTA_PALABRAS = {
   // Los campos que le faltan a la ficha («Falta: sistema de frenos»).
   ficha_campo: { combustible: 'combustible', sistema_frenos: 'sistema de frenos',
                  tiene_freno_escape: 'freno de escape', distribucion: 'distribución',
-                 transmision_final: 'transmisión final' },
+                 transmision_final: 'transmisión final',
+                 capacidad_tanque: 'capacidad del tanque' },
 };
 
 /** La palabra de un código. `grupo` es una clave de `FLOTA_PALABRAS`. */

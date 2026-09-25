@@ -107,9 +107,7 @@ def ficha_de(ficha) -> Tuple[str, Tuple[str, ...]]:
     con un detector ciego es la evidencia falsa de la regla 1."""
     if ficha is None:
         return 'sin_ficha', ()
-    falta = list(ficha.atributos_sin_dato())
-    if ficha.capacidad_tanque_galones is None:
-        falta.append('capacidad_tanque')
+    falta = ficha.faltantes()        # la única definición (modelos.FichaTecnica)
     return ('completa' if not falta else 'incompleta'), tuple(falta)
 
 

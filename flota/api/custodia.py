@@ -186,7 +186,8 @@ def ver_foto(foto_id):
     """
     from flask import Response
 
-    from flota.adaptadores.almacen_fotos import AlmacenLocal, ErrorAlmacen
+    from flota.adaptadores.almacen_fotos import (AlmacenLocal, AlmacenNoConfigurado,
+                                                 ArchivoAusente, ErrorAlmacen)
     from flota.adaptadores.modelos import Foto
 
     foto = db.session.get(Foto, foto_id)
@@ -195,17 +196,23 @@ def ver_foto(foto_id):
     denegado = sin_derecho_sobre_foto(foto, 'ver esta foto')
     if denegado is not None:
         return denegado
+    # Tres respuestas distintas (2026-09-25): antes las tres eran «410», y un
+    # servicio sin FLOTA_FOTOS_DIR se leía igual que una foto perdida.
     if foto.estado == 'pendiente_evidencia':
         return jsonify({
             'error': 'Esta foto nunca se guardó',
+            'motivo': 'nunca_se_guardo',
             'detalle': foto.storage_ref,
         }), 410
     try:
         contenido = AlmacenLocal().leer(foto.storage_ref)
-    except ErrorAlmacen as e:
+    except AlmacenNoConfigurado as e:
+        # No es la foto: es este servicio, que no sabe dónde mirar.
+        return jsonify({'error': str(e), 'motivo': 'almacen_sin_configurar'}), 503
+    except (ArchivoAusente, ErrorAlmacen) as e:
         # 410 y no 404: la fila existe y afirma que hay una foto. Que el archivo
         # no esté es una inconsistencia, no un "no encontrado" cualquiera.
-        return jsonify({'error': str(e)}), 410
+        return jsonify({'error': str(e), 'motivo': 'archivo_ausente'}), 410
     return Response(contenido, mimetype=foto.mime)
 
 
@@ -227,6 +234,7 @@ def fotos_de_custodia(custodia_id):
     fotos de apertura de su propia custodia, y nada de su pantalla pide las de
     otro.
     """
+    from flota.adaptadores.almacen_fotos import estado_verificable
     from flota.adaptadores.modelos import Custodia, Foto
 
     custodia = db.session.get(Custodia, custodia_id)
@@ -260,7 +268,9 @@ def fotos_de_custodia(custodia_id):
             'angulo': f.angulo,
             'clase': f.clase,
             'momento': f.entidad_tipo,
-            'estado': f.estado,
+            # `ok` solo si el archivo está: la fila sola ya dijo «ok» sobre
+            # fotos que devolvían 410 (QA 2026-09-25).
+            'estado': estado_verificable(f),
             'ancho': f.ancho, 'alto': f.alto, 'bytes': f.bytes,
             'ts_captura': iso_utc(f.ts_captura),
         } for f in filas],
@@ -585,8 +595,15 @@ def odometro_dudosas():
     un recuadro vacío que se lee como un error de carga.
     """
     from flota.adaptadores import verificacion
+    from flota.adaptadores.almacen_fotos import estado_verificable
+    from flota.adaptadores.modelos import Foto
 
     filas = verificacion.pendientes()
+    # «Tiene foto» = hay un archivo que mirar: un `foto_id` cuya foto nunca se
+    # guardó (o cuyo archivo no está) es un botón que da 410 (QA 2026-09-25).
+    _ids = [l.foto_id for l, _p in filas if l.foto_id is not None]
+    _verif = ({f.id: estado_verificable(f) for f in Foto.query.filter(Foto.id.in_(_ids)).all()}
+              if _ids else {})
     return jsonify({
         'pendientes': [{
             'lectura_id': l.id,
@@ -596,8 +613,9 @@ def odometro_dudosas():
             'ts': iso_utc(l.ts),
             'origen': l.origen,
             'motivo': l.motivo_dudosa,
-            'tiene_foto': l.foto_id is not None,
+            'tiene_foto': _verif.get(l.foto_id) == 'ok',
             'foto_id': l.foto_id,
+            'estado_foto': _verif.get(l.foto_id),
         } for l, placa in filas],
         'total': len(filas),
     }), 200

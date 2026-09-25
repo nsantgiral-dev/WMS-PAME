@@ -68,7 +68,7 @@ def _serializar(placa, ficha):
         # `None` no es "ficha vacía": es "no hay ficha". La pantalla tiene que
         # poder distinguir un vehículo sin levantar de uno levantado a medias.
         return {'placa': placa, 'existe': False, 'ficha': None,
-                'atributos_sin_dato': None, 'completa': None}
+                'atributos_sin_dato': None, 'falta': None, 'completa': None}
     datos = {}
     for campo in _EDITABLES:
         valor = getattr(ficha, campo)
@@ -77,6 +77,9 @@ def _serializar(placa, ficha):
         )
     return {'placa': placa, 'existe': True, 'ficha': datos,
             'atributos_sin_dato': ficha.atributos_sin_dato(),
+            # Lo que le falta para estar completa (incluye la capacidad del
+            # tanque): la misma definición que la bandeja y el despacho.
+            'falta': ficha.faltantes(),
             'completa': ficha.completa()}
 
 

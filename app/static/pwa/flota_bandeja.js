@@ -559,6 +559,23 @@ async function flotaSenalAbrir(k) {
 // Vehículos — el catálogo, al final
 // ═══════════════════════════════════════════════════════════════════════════
 
+/** El almacén de fotos en una línea: dónde mira este servidor, si es un
+ * volumen, y cuántas fotos `ok` no tienen archivo (almacen_fotos del health). */
+function flotaDiagAlmacen(a) {
+  if (!a) return 'sin dato';
+  if (!a.configurada) return `sin configurar: ${a.problema || 'falta la carpeta'}`;
+  const partes = [a.raiz || '—'];
+  if (a.existe === false) partes.push('la carpeta no existe');
+  if (a.escribible === false) partes.push('no se puede escribir');
+  if (a.mismo_disco_que_el_contenedor === true) {
+    partes.push('NO es un volumen: lo que se guarde se pierde en el próximo despliegue');
+  }
+  if (a.fotos_ok_revisadas != null) {
+    partes.push(`${a.fotos_ok_sin_archivo} de ${a.fotos_ok_revisadas} fotos recientes sin archivo acá`);
+  }
+  return partes.join(' · ');
+}
+
 function flotaBandejaVehiculosHtml(b) {
   const alta = `El alta y la baja de vehículos se hacen ${flotaDondeSeDaDeAlta()}.`;
   const FICHA = { completa: 'ficha completa', incompleta: 'ficha incompleta', sin_ficha: 'sin ficha' };
@@ -806,6 +823,7 @@ function flotaBandejaDiagnosticoHtml(h) {
       ['Tanqueos de vehículos sin capacidad de tanque en la ficha (el detector no los puede mirar)', n(h.tanqueos_sin_capacidad_declarada)],
       ['Gastos sin documento', n(h.gastos_sin_documento)],
       ['Fotos registradas cuyo archivo no se guardó', n(h.fotos_pendiente_evidencia)],
+      ['Almacén de fotos de este servidor', flotaDiagAlmacen(h.almacen_fotos)],
     ]],
   ];
   return grupos.map(([titulo, filas]) => `<p style="margin:10px 0 4px"><b>${esc(titulo)}</b></p>

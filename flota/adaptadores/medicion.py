@@ -627,6 +627,14 @@ class MedidorSQL:
             return None
         return _contar(Foto.query.filter(Foto.estado == 'pendiente_evidencia'))
 
+    def almacen_fotos(self) -> Optional[dict]:
+        """`almacen_fotos.diagnostico_almacen()`: la carpeta de este proceso y
+        cuántas fotos `ok` no tienen el archivo. `None` sin la tabla."""
+        if not _tabla_existe('flota_foto'):
+            return None
+        from flota.adaptadores.almacen_fotos import diagnostico_almacen
+        return diagnostico_almacen()
+
     def documentos_por_vehiculo(self) -> Optional[List[dict]]:
         """Los papeles que piden trabajo, **con placa**. Una fila por documento.
 

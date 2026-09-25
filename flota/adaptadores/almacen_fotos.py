@@ -73,6 +73,16 @@ class ErrorAlmacen(Exception):
     """No se pudo guardar. Se propaga: el llamador marca `pendiente_evidencia`."""
 
 
+class AlmacenNoConfigurado(ErrorAlmacen):
+    """`FLOTA_FOTOS_DIR` falta o no es una ruta absoluta en ESTE proceso. No es
+    un problema de la foto: es de la configuración del servicio."""
+
+
+class ArchivoAusente(ErrorAlmacen):
+    """La fila dice que hay foto y el archivo no está (o no es el que se
+    guardó) bajo la raíz de este proceso."""
+
+
 def _raiz() -> Path:
     """Carpeta raíz del almacén. Sin default silencioso.
 
@@ -84,12 +94,20 @@ def _raiz() -> Path:
     """
     d = os.getenv('FLOTA_FOTOS_DIR')
     if d is None or not d.strip():
-        raise ErrorAlmacen(
+        raise AlmacenNoConfigurado(
             'FLOTA_FOTOS_DIR no está configurada. Sin almacén, una foto '
             'guardada es una evidencia que no existe — el registro queda en '
             'pendiente_evidencia y el health lo cuenta.'
         )
-    return Path(d.strip())
+    raiz = Path(d.strip())
+    # Relativa, se resuelve contra el directorio de trabajo de CADA proceso:
+    # el que escribe y el que sirve pueden mirar dos carpetas distintas y la
+    # foto «guardada» no aparece nunca (2026-09-25).
+    if not raiz.is_absolute():
+        raise AlmacenNoConfigurado(
+            f'FLOTA_FOTOS_DIR={d.strip()!r} no es una ruta absoluta: cada proceso '
+            f'la resolvería contra su propio directorio de trabajo.')
+    return raiz
 
 
 class AlmacenLocal:
@@ -114,17 +132,38 @@ class AlmacenLocal:
         destino = _raiz() / relativa
         try:
             destino.parent.mkdir(parents=True, exist_ok=True)
-            if not destino.exists():           # direccionado por contenido: ya está
-                destino.write_bytes(contenido)
+            # Direccionado por contenido: si ya está Y es este contenido, no se
+            # reescribe. Uno que está con otro contenido (truncado, corrupto) se
+            # reemplaza.
+            if not (destino.is_file() and _sha_de_archivo(destino) == digest):
+                with open(destino, 'wb') as fh:
+                    fh.write(contenido)
+                    fh.flush()
+                    os.fsync(fh.fileno())
         except OSError as e:
             raise ErrorAlmacen(f'no se pudo escribir {relativa}: {e}') from e
+        # **«ok» solo con el archivo releído** (2026-09-25). La fila decía `ok`
+        # apenas `write_bytes` volvía; si el archivo no quedó donde el que
+        # sirve lo va a buscar, la evidencia no existe y nadie se entera hasta
+        # el 410. Releer y comparar el hash es lo mínimo que se puede afirmar
+        # desde este proceso.
+        if _sha_de_archivo(destino) != digest:
+            raise ErrorAlmacen(f'{relativa} se escribió y al releerlo no es la misma foto')
         return str(relativa)
+
+    def existe(self, storage_ref: str, bytes_esperados=None) -> bool:
+        """¿El archivo está bajo la raíz de este proceso (y con su tamaño)?
+        Levanta `AlmacenNoConfigurado` si este proceso no tiene almacén."""
+        destino = _raiz() / str(storage_ref or '')
+        if not storage_ref or not destino.is_file():
+            return False
+        return bytes_esperados in (None, 0) or destino.stat().st_size == bytes_esperados
 
     def leer(self, storage_ref: str) -> bytes:
         """Devuelve el archivo. Levanta si no está — no un placeholder."""
         destino = _raiz() / storage_ref
         if not destino.is_file():
-            raise ErrorAlmacen(f'la foto {storage_ref} no está en el almacén')
+            raise ArchivoAusente(f'la foto {storage_ref} no está en el almacén')
         return destino.read_bytes()
 
     def dimensiones(self, storage_ref: str) -> Dict[str, int]:
@@ -134,6 +173,72 @@ class AlmacenLocal:
 
         with Image.open(BytesIO(self.leer(storage_ref))) as img:
             return {'ancho': img.width, 'alto': img.height}
+
+
+def _sha_de_archivo(ruta: Path):
+    try:
+        return hashlib.sha256(ruta.read_bytes()).hexdigest()
+    except OSError:
+        return None
+
+
+#: Lo que dice `estado_verificable` además de los dos estados de la fila.
+SIN_ARCHIVO = 'sin_archivo'
+ALMACEN_SIN_CONFIGURAR = 'almacen_sin_configurar'
+
+
+def estado_verificable(foto) -> str:
+    """El estado de una foto **como se puede afirmar hoy**: `ok` solo si la
+    fila dice `ok` Y el archivo está bajo la raíz de este proceso con su
+    tamaño. Si no, `sin_archivo` (la fila miente) o `almacen_sin_configurar`
+    (este proceso no puede mirar). Una política para toda lista de fotos."""
+    if foto.estado != 'ok':
+        return foto.estado
+    try:
+        return 'ok' if AlmacenLocal().existe(foto.storage_ref, foto.bytes) else SIN_ARCHIVO
+    except AlmacenNoConfigurado:
+        return ALMACEN_SIN_CONFIGURAR
+
+
+def diagnostico_almacen(muestra: int = 200) -> dict:
+    """¿Dónde guarda este proceso las fotos y están ahí las que la base dice?
+
+    Contesta lo que el 410 de QA preguntaba sin poder mirar Railway:
+    · `raiz`/`absoluta`/`existe`/`escribible`: la carpeta de ESTE proceso;
+    · `mismo_disco_que_el_contenedor`: si la carpeta está en el mismo
+      dispositivo que `/`, **no es un volumen montado** y lo que se escriba se
+      pierde en el próximo deploy (así se ve «ok» en la base y 410 después);
+    · `muestra`: las últimas N fotos `ok` de la base, y cuántas no tienen el
+      archivo acá.
+    Lo que no se puede escribir lo dice; lo que revienta, levanta."""
+    out = {'raiz': os.getenv('FLOTA_FOTOS_DIR'), 'configurada': False, 'absoluta': None,
+           'existe': None, 'escribible': None, 'mismo_disco_que_el_contenedor': None,
+           'fotos_ok_revisadas': None, 'fotos_ok_sin_archivo': None, 'ejemplos_sin_archivo': []}
+    try:
+        raiz = _raiz()
+    except AlmacenNoConfigurado as e:
+        out['problema'] = str(e)
+        return out
+    out.update(configurada=True, absoluta=True, existe=raiz.is_dir())
+    if out['existe']:
+        try:
+            prueba = raiz / f'.prueba-{os.getpid()}'
+            prueba.write_bytes(b'x')
+            prueba.unlink()
+            out['escribible'] = True
+        except OSError as e:
+            out['escribible'] = False
+            out['problema'] = f'no se puede escribir en {raiz}: {e}'
+        out['mismo_disco_que_el_contenedor'] = os.stat(raiz).st_dev == os.stat('/').st_dev
+    # Sin try: si la muestra revienta, el health devuelve error — un health
+    # que responde ceros porque algo falló adentro es evidencia falsa.
+    from flota.adaptadores.modelos import Foto
+    filas = (Foto.query.filter(Foto.estado == 'ok')
+             .order_by(Foto.id.desc()).limit(muestra).all())
+    faltan = [f.id for f in filas if estado_verificable(f) == SIN_ARCHIVO]
+    out.update(fotos_ok_revisadas=len(filas), fotos_ok_sin_archivo=len(faltan),
+               ejemplos_sin_archivo=faltan[:10])
+    return out
 
 
 def desde_data_url(data_url: str) -> Tuple[bytes, str]:
@@ -326,5 +431,6 @@ def colgar_fotos(fotos, entidad_tipo, entidad_id, autor_id, ahora):
     return creadas
 
 
-__all__ = ['AlmacenLocal', 'ErrorAlmacen', 'desde_data_url', 'guardar_foto',
-           'colgar_fotos', 'validar_fotos']
+__all__ = ['AlmacenLocal', 'ErrorAlmacen', 'AlmacenNoConfigurado', 'ArchivoAusente',
+           'desde_data_url', 'guardar_foto', 'colgar_fotos', 'validar_fotos',
+           'estado_verificable', 'diagnostico_almacen', 'SIN_ARCHIVO', 'ALMACEN_SIN_CONFIGURAR']

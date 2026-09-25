@@ -331,8 +331,12 @@ def traspasar(
         # tabla es append-only por trigger y ese `UPDATE` se rechaza. La primera
         # versión de este cambio lo intentó y el invariante la frenó —
         # exactamente para lo que existe.
-        _tablero = next((f for f in (colgadas_inicio + colgadas_fin)
-                         if f.clase == ClaseFoto.FOTO_DATO.value), None)
+        # La que se GUARDÓ primero; si ninguna se guardó, igual se ata (queda
+        # el rastro) y la lectura nace en duda (`confianza_al_nacer`).
+        _tableros = [f for f in (colgadas_inicio + colgadas_fin)
+                     if f.clase == ClaseFoto.FOTO_DATO.value]
+        _tablero = next((f for f in _tableros if f.estado == 'ok'),
+                        _tableros[0] if _tableros else None)
         if _tablero is not None:
             db.session.flush()          # para que la foto tenga id
 

@@ -73,6 +73,11 @@ _CAMPOS = (
     # nadie lo note: los dos siguen devolviendo un entero plausible.
     'custodias_por_vehiculo',
     'fotos_pendiente_evidencia',
+    # ── Dónde están de verdad las fotos (2026-09-25) ─────────────────────
+    # En QA toda foto daba 410 con la fila en `ok`. Este campo dice, desde el
+    # proceso que sirve, qué carpeta mira, si es un volumen o el disco efímero
+    # del contenedor, y cuántas fotos `ok` no tienen el archivo.
+    'almacen_fotos',
     'conductores_activos_sin_cuenta',
     'documentos_no_encontrados',
     'documentos_vencidos',

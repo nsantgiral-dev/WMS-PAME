@@ -273,8 +273,19 @@ class FichaTecnica(db.Model):
             if getattr(self, campo) == 'sin_dato'
         ]
 
+    def faltantes(self) -> list:
+        """Lo que le falta a la ficha para estar completa. **La única definición
+        de «ficha completa»** (2026-09-25): la pantalla de la ficha decía
+        «Ficha completa» con la capacidad del tanque vacía mientras la bandeja
+        decía «ficha incompleta» del mismo camión. Completa exige además la
+        capacidad del tanque: sin ella el detector de sobre-tanqueo está ciego."""
+        falta = list(self.atributos_sin_dato())
+        if self.capacidad_tanque_galones is None:
+            falta.append('capacidad_tanque')
+        return falta
+
     def completa(self) -> bool:
-        return not self.atributos_sin_dato()
+        return not self.faltantes()
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -521,10 +532,19 @@ def _marcar_confianza(mapper, connection, target):
         .limit(1)
     ).first()
 
+    # «Tiene foto» es tener una foto GUARDADA (`estado = 'ok'`), no un
+    # `foto_id` (2026-09-25): el tablero de un recibo cuyo archivo no se guardó
+    # quedaba colgado de la lectura y la lectura nacía sin marca, como si
+    # tuviera con qué verificarse.
+    tiene_foto = False
+    if target.foto_id is not None:
+        ft = Foto.__table__
+        tiene_foto = connection.execute(
+            select(ft.c.estado).where(ft.c.id == target.foto_id)).scalar() == 'ok'
     confianza, motivo = confianza_al_nacer(
         valor_km=target.valor_km,
         ts=target.ts,
-        tiene_foto=target.foto_id is not None,
+        tiene_foto=tiene_foto,
         previa_valor_km=previa.valor_km if previa is not None else None,
         previa_ts=previa.ts if previa is not None else None,
     )

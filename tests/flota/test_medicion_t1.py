@@ -130,10 +130,19 @@ class TestFichasCompletas:
         )
 
     def test_una_ficha_sin_huecos_si_cuenta(self, mundo):
+        # «Completa» tiene una sola definición desde el 2026-09-25
+        # (`FichaTecnica.faltantes`): exige la capacidad del tanque, como la
+        # bandeja y el despacho.
+        medidor = MedidorSQL()
+        antes = medidor.fichas_completas()
+        _ficha(mundo, capacidad_tanque_galones=40, capacidad_tanque_fuente='manual_fabricante')
+        assert medidor.fichas_completas() == antes + 1
+
+    def test_sin_capacidad_del_tanque_no_cuenta(self, mundo):
         medidor = MedidorSQL()
         antes = medidor.fichas_completas()
         _ficha(mundo)
-        assert medidor.fichas_completas() == antes + 1
+        assert medidor.fichas_completas() == antes
 
 
 class TestAtributosSinDato:
