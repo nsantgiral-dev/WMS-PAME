@@ -6291,3 +6291,64 @@ texto positivo).
 3. Formulario de parada tardía para la oficina, o basta con cerrar lo que
    falta y dejar que la cola del conductor la mande.
 
+---
+
+## Integración de los frentes del 2026-09-25 (fiscal, inventario, dinero)
+
+Tres frentes arreglaron en paralelo y dos inventaron la misma idea con otro
+nombre. Una política, una función (Regla 0): esto es lo que quedó.
+
+### Una jerarquía de excepciones del POST (`connekta_gateway`)
+
+```
+ConnektaNoEnviado              «no entró» — el ÚNICO permiso para revertir un pre-flag
+├── ConnektaRechazado          Siesa/Connekta dijo que no: 4xx, 429, codigo≠0
+├── ConnektaPayloadInvalido    no se pudo armar (también ValueError): nunca salió
+└── ConnektaCircuitOpenError   circuito abierto: nunca salió (el DLQ no gasta intento)
+(ConnectTimeout levanta la base: la conexión no se abrió)
+
+ConnektaResultadoDesconocido   «no sé»: ReadTimeout. RemisionNoIdentificada es hija
+Exception genérica             5xx, conexión cortada, JSON ilegible: «no sé» también
+```
+
+Para fiscal, `ConnektaNoEnviado` era solo el `ConnectTimeout` y el «no» se
+llamaba `ConnektaRechazoExplicito`; para dinero era la base de toda prueba de
+que no entró. Las dos clases homónimas convivieron en el módulo al juntar los
+frentes, y en Python **la segunda definición gana sin avisar**: los `except`
+de liquidación habrían dejado de atrapar el 4xx. `ConnektaRechazoExplicito`
+se renombró a `ConnektaRechazado` en todos sus usos (sin alias). Trinquete:
+`test_documento_fiscal.py::TestUnaJerarquiaDeExcepcionesDelPost` (quién es
+«no entró», quién no, y ningún nombre definido dos veces en el gateway — por
+AST, con su detector probado).
+
+### Una ventana de Siesa: `ventana_siesa.VENTANA` = 06:00–19:30 Bogotá
+
+La de inventario (con su trinquete «nadie más declara una»). Fiscal traía
+06:00–20:00 semiabierta (leía la de cartera y comparaba por su cuenta);
+dinero, `fecha.VENTANA_SIESA` 07:00–20:00 con `en_ventana_siesa`. El mismo
+recibo podía salir de la DLQ a las 19:45 y la misma caja no poder cerrarse.
+
+| Quién pregunta | Cómo |
+|---|---|
+| Crons que hablan con Siesa | `solo_en_ventana_siesa` |
+| DLQ | `siesa_job_service.dlq_puede_postear` → `ventana_abierta`. **En simulación no aplica** (no hay Siesa); **en ensayo sí** (los GET son reales y de noche gastan reintentos igual — dinero la eximía también en ensayo; se integró sin eso). Fuera: solo `TIPOS_SIN_SIESA` (= `TIPOS_SIN_DOCUMENTO`, una lista) |
+| Cierre de caja / emisión fiscal | `documento_fiscal.siesa_disponible_para_facturar` → `ventana_abierta(ahora)` |
+| Vista previa de la liquidación | `ventana_abierta()` |
+| 🩺 Salud | `analitica_salud.VENTANA_SIESA` es la misma tupla |
+
+`ventana_abierta` acepta instantes conscientes de zona (los juzga en Bogotá).
+El horario es **recomendación pendiente de confirmar por el dueño**: se cambia
+en una sola constante. Trinquete: `test_ventana_siesa.py::TestLaVentanaEsUnaParaTodos`.
+
+### Lo que convive sin chocar
+
+- **Idempotencia**: el pre-flag del 142945 (`rm_enviada_at`, fiscal) y «la
+  bandera sola no es idempotente» del RC (dinero) son la misma regla: la
+  bandera es de pre-envío y solo `ConnektaNoEnviado` la baja.
+- **Permisos**: `permisos_liquidacion` (dinero, una función por operación),
+  `cartera_service.puede_autorizar` (inventario) — preguntas distintas.
+- **Migraciones**: `m048fiscal` → `m048inv` (una cabeza). Dinero no trae.
+- **Locks**: fiscal 2030–2034, inventario 2040–2041; dinero no registró.
+- `/despacho_parcial/<id>/despachar` pregunta primero si Siesa está disponible
+  para facturar (fiscal, 503) y después toma el lock de la DLQ (dinero, 409).
+
