@@ -160,6 +160,13 @@ BAJO_EL_RELOJ = (
     # es la hora en que el servidor recibió el recibo, la inspección o el
     # tanqueo — parte del día del conductor.
     ('flota.api._idempotencia', 'datetime'),
+    # La política de salida (costuras, 2026-09-24): no escribe horas, pero
+    # `hechos_de_vehiculo` LEE `datetime.utcnow()` cuando no le pasan `ahora`
+    # —el despacho y la pantalla del conductor (`mi-turno`)— para decidir «la
+    # inspección de hoy» y «daño vencido». Fuera del reloj, el semáforo del
+    # conductor se juzgaría con la hora de la máquina y el resto del día con
+    # la del arnés (integración 2026-09-24).
+    ('flota.adaptadores.salida', 'datetime'),
 )
 
 #: Módulos de `flota/` que enlazan `datetime` y **no** están bajo el reloj, con
