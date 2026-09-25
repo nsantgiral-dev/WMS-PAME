@@ -158,12 +158,23 @@ def _estado_del_vehiculo(vehiculo_id):
             .filter_by(vehiculo_id=vehiculo_id, dia=hoy)
             .order_by(Inspeccion.respondida_ts.desc()).first())
 
-    vencidos = [d for d in DocumentoVehiculo.query.filter_by(
-        vehiculo_id=vehiculo_id, estado='vigente').all()
-        if d.fecha_vencimiento is not None
-        and (d.fecha_vencimiento - hoy).days < 0]
+    # **El nivel y el texto no se deciden acá.** La política «¿puede salir
+    # este camión?» es UNA (`flota/dominio/salida.py`): la misma que pinta el
+    # semáforo de la bandeja y la que pide motivo al despachar. Hasta el
+    # 2026-09-24 el teléfono armaba su propia lista, decidía el color en JS y
+    # le decía «amarillo» a lo que la bandeja llamaba «ámbar»; y no sabía de
+    # la orden de taller abierta.
+    from flota.adaptadores.salida import evaluar_vehiculo, papeles_de_filas
+    from flota.dominio.salida import VENCIDO
+
+    evaluacion = evaluar_vehiculo(vehiculo_id, ahora=ahora)
+    vencidos = [p for p in papeles_de_filas(
+        DocumentoVehiculo.query.filter_by(vehiculo_id=vehiculo_id).all(), hoy)
+        if p.estado == VENCIDO]
 
     return {
+        # Lo que la tarjeta pinta: color y renglones, ya decididos.
+        'salida': evaluacion.aviso_del_conductor(),
         'hallazgos_abiertos': len(abiertos),
         'hallazgos_vencidos': sum(1 for h in abiertos
                                   if vencido(h.a_dominio(), ahora)),
@@ -218,8 +229,7 @@ def _estado_del_vehiculo(vehiculo_id):
             {'tarea': d['nombre'], 'faltan_km': d.get('km_restante')}
             for d in _preventivo_urgente(vehiculo_id)],
         'documentos_vencidos': [
-            {'tipo': d.tipo, 'vencio': d.fecha_vencimiento.isoformat()}
-            for d in vencidos],
+            {'tipo': p.tipo, 'vencio': p.vence.isoformat()} for p in vencidos],
     }
 
 

@@ -519,6 +519,7 @@ class Mundo:
         self._dias_cache = {}
         self._rutas_por_dia = None
         self._casos_km = None
+        self._lecturas_borde = None
         self._agregados = {}
         self._referencias = {}
 
@@ -1103,10 +1104,35 @@ def _senal(clave, titulo, texto, evidencia, comparacion, confianza='alta', nivel
             'que_hacer': QUE_HACER}
 
 
+def _lectura_del_borde(m: Mundo, vehiculo_id, ts, km):
+    """La lectura de odómetro que escribió el traspaso en ese borde de turno.
+
+    `traspasar` escribe UNA lectura con `ts` = el instante del traspaso y el
+    mismo km: es la que sostiene (o no) el número del turno. `None` si no está
+    (un turno de antes de que el traspaso escribiera su lectura)."""
+    if m._lecturas_borde is None:
+        from flota.adaptadores.modelos import LecturaOdometro
+        ids = {k.vehiculo_id for k in m.custodias}
+        m._lecturas_borde = {}
+        if ids:
+            for l in LecturaOdometro.query.filter(
+                    LecturaOdometro.vehiculo_id.in_(ids)).all():
+                m._lecturas_borde.setdefault((l.vehiculo_id, l.ts, l.valor_km), l)
+    return m._lecturas_borde.get((vehiculo_id, ts, km))
+
+
 def _casos_km_entre_turnos(m: Mundo):
-    """`[(antes, k, km, en_medio)]`: el turno de conductor `k` recibió el
-    vehículo con más km que con los que lo entregó el turno de conductor
-    anterior (`antes`), con una o más custodias de sede en medio.
+    """`[(antes, k, km, en_medio, veredicto)]`: el turno de conductor `k`
+    recibió el vehículo con otros km que con los que lo entregó el turno de
+    conductor anterior (`antes`), con una o más custodias de sede en medio.
+
+    **El juicio es `senales.km_sin_explicar`, el mismo de la bandeja** (km en
+    días sin ruta): con una de las dos lecturas en duda —o sin lectura— el
+    tramo NO se juzga (`no_evaluable`, con su motivo). Hasta el 2026-09-24 la
+    jornada restaba los dos km sin mirar si se les podía creer: un número
+    tecleado sin foto salía como «km que no le tocan a ningún turno» al lado del
+    nombre de dos conductores, mientras la bandeja lo declaraba «verificalo
+    primero».
 
     Un traspaso directo conductor → conductor no entra: `traspasar` escribe el
     mismo km en el cierre y en la apertura, así que ahí la diferencia es cero
@@ -1114,6 +1140,9 @@ def _casos_km_entre_turnos(m: Mundo):
     """
     if m._casos_km is not None:
         return m._casos_km
+    from flota.dominio import senales as dom_sen
+    from flota.dominio.odometro import confianza_del_tramo
+
     casos = []
     for lista in m._por_vehiculo.values():
         ultimo = None           # índice del último turno de conductor
@@ -1124,8 +1153,21 @@ def _casos_km_entre_turnos(m: Mundo):
                 antes = lista[ultimo]
                 if antes.km_fin is not None:
                     km = k.km_inicio - antes.km_fin
-                    if km >= m.U['km_entre_turnos_min']:
-                        casos.append((antes, k, km, lista[ultimo + 1:i]))
+                    a = _lectura_del_borde(m, k.vehiculo_id, antes.fin_ts, antes.km_fin)
+                    b = _lectura_del_borde(m, k.vehiculo_id, k.inicio_ts, k.km_inicio)
+                    if a is None or b is None:
+                        ver = dom_sen.Veredicto(
+                            dom_sen.NO_EVALUABLE,
+                            'falta la lectura de odómetro de uno de los dos '
+                            'traspasos: el tramo no se puede sostener')
+                    else:
+                        marca = confianza_del_tramo(a.a_dominio(), b.a_dominio())
+                        ver = dom_sen.km_sin_explicar(
+                            km=km, marca=marca,
+                            # «desde cuántos km se marca» → tolerancia = uno menos
+                            tolerancia=m.U['km_entre_turnos_min'] - 1)
+                    if ver.estado != dom_sen.NORMAL:
+                        casos.append((antes, k, km, lista[ultimo + 1:i], ver))
             ultimo = i
     m._casos_km = casos
     return casos
@@ -1134,26 +1176,39 @@ def _casos_km_entre_turnos(m: Mundo):
 def _s_km_entre_turnos(ctx):
     """km que el vehículo sumó entre el turno de un conductor y el siguiente,
     con la sede como custodio: no le tocan a ningún turno. Aparece en el día
-    de quien entregó ANTES y en el de quien recibió DESPUÉS, sin culpar a
-    ninguno de los dos."""
+    de quien entregó ANTES y en el de quien recibió DESPUÉS, **sin nombrar a
+    ninguno de los dos en el título ni en el texto**: los turnos van en la
+    evidencia como contexto (regla 2 de flota). Un tramo en duda no es señal:
+    va a `senales_no_evaluables` con su motivo."""
+    from flota.dominio import senales as dom_sen
+
     m, c, dia = ctx['m'], ctx['c'], ctx['dia']
     lo, hi = inicio_del_dia_utc(dia), inicio_del_dia_utc(dia + timedelta(days=1))
     out = []
-    for antes, k, km, medio in _casos_km_entre_turnos(m):
+    for antes, k, km, medio, ver in _casos_km_entre_turnos(m):
         recibe_hoy = k.custodio_conductor_id == c.id and lo <= k.inicio_ts < hi
         entrego_hoy = (antes.custodio_conductor_id == c.id and antes.fin_ts is not None
                        and lo <= antes.fin_ts < hi)
         if not (recibe_hoy or entrego_hoy):
             continue
         placa = m.placas.get(k.vehiculo_id, k.vehiculo_id)
+        if ver.estado == dom_sen.NO_EVALUABLE:
+            ctx['no_evaluables'].append({
+                'clave': 'km_entre_turnos', 'placa': placa,
+                'titulo': 'Kilómetros entre dos turnos que no se pueden juzgar',
+                'motivo': ver.motivo,
+                'texto': (f'El {placa} marca {km} km entre la entrega '
+                          f'({_cuando(antes.fin_ts)}) y el recibo siguiente '
+                          f'({_cuando(k.inicio_ts)}), pero {ver.motivo}.')})
+            continue
         en_medio = [{'custodio': m.custodio_txt(x), 'desde': _cuando(x.inicio_ts),
                      'ubicacion': x.ubicacion, 'km_inicio': x.km_inicio, 'km_fin': x.km_fin}
                     for x in medio]
         out.append(_senal(
             'km_entre_turnos', 'Kilómetros que no le tocan a ningún turno',
-            (f'El {placa} sumó {km} km entre el turno de {m.nombre(antes.custodio_conductor_id)} '
-             f'(lo entregó con {antes.km_fin} km) y el de {m.nombre(k.custodio_conductor_id)} '
-             f'(lo recibió con {k.km_inicio} km). En ese tramo lo tenía la sede.'),
+            (f'El {placa} sumó {km} km mientras lo tenía la sede: se entregó con '
+             f'{antes.km_fin} km ({_cuando(antes.fin_ts)}) y el turno siguiente lo '
+             f'recibió con {k.km_inicio} km ({_cuando(k.inicio_ts)}).'),
             [{'placa': placa, 'km': km, 'rol': 'recibió' if recibe_hoy else 'entregó antes',
               'entrego': m.nombre(antes.custodio_conductor_id), 'km_entrega': antes.km_fin,
               'entrega': _cuando(antes.fin_ts), 'recibio': m.nombre(k.custodio_conductor_id),
@@ -1472,7 +1527,7 @@ def _jornada_de(m: Mundo, c, dia, eventos) -> dict:
     estado, motivo = estado_de(eventos, cob, U)
     huecos = _huecos(m, c.id, dia, eventos) if estado in CON_TRAMO else []
     ctx = {'m': m, 'c': c, 'dia': dia, 'eventos': eventos, 'huecos': huecos,
-           'rutas_dia': rutas_dia, 'estado': estado}
+           'rutas_dia': rutas_dia, 'estado': estado, 'no_evaluables': []}
     senales = []
     for s in SENALES:
         senales += s(ctx)
@@ -1549,6 +1604,9 @@ def _jornada_de(m: Mundo, c, dia, eventos) -> dict:
                                                       for e in paradas), 2)},
                     'evidencia': evidencia},
         'senales': senales,
+        # Lo que se miró y no se pudo juzgar (un tramo de km en duda): no es
+        # «normal», y se dice (regla 14 de flota).
+        'senales_no_evaluables': ctx['no_evaluables'],
     }
 
 

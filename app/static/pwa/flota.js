@@ -2395,48 +2395,29 @@ function flotaCondRendimiento(r) {
   </div>`;
 }
 
-/** Lo que el sistema sabe del camión, renglón por renglón: `[nivel, texto]`.
+/** Lo que el sistema sabe del camión, renglón por renglón: `[nivel, texto, corto]`.
+ *
+ * **El nivel NO se decide acá.** Lo decide el servidor con la política de
+ * salida (`flota/dominio/salida.py`), la misma que pinta el semáforo de la
+ * bandeja del encargado y la que pide motivo al despachar: `e.salida` trae el
+ * color y los renglones ya escritos. Hasta el 2026-09-24 esta función armaba
+ * su propia lista, decidía rojo o «amarillo» en el teléfono y no sabía de la
+ * orden de taller abierta.
  *
  * Una sola fuente para las dos vistas —la línea del semáforo y el detalle de
- * la hoja «Más»—. Si cada una armara su lista, la de la tarjeta diría «al día»
- * sobre un SOAT que la hoja muestra vencido. `nivel` ∈ `rojo` · `amarillo` ·
- * `info`. */
+ * la hoja «Más»—. `nivel` ∈ `rojo` · `ambar` · `info`. Un estado guardado por
+ * una versión anterior (sin `salida`) se dice, no se adivina. */
 function flotaCondAvisos(e) {
   if (!e) return [];
-  const lineas = [];
-  (e.documentos_vencidos || []).forEach(d => {
-    lineas.push(['rojo', `${flotaPalabra('documento', d.tipo)} vencido desde ${flotaFechaCorta(d.vencio)}`,
-                 `${flotaPalabra('documento', d.tipo)} vencido`]);
-  });
-  const i = e.inspeccion_de_hoy || {};
-  if (i.hecha && i.habilita_despacho === false) {
-    // `habilita_despacho` tenía un solo lector —un mensaje que desaparecía— y
-    // ahora le llega a quien decide si arranca.
-    lineas.push(['rojo', `Inspección de hoy: ${flotaPalabra('veredicto', i.veredicto)} · NO habilita despacho`,
-                 `Inspección ${flotaPalabra('veredicto', i.veredicto)}`]);
+  const s = e.salida;
+  if (!s || !Array.isArray(s.motivos)) {
+    return [['info', 'El estado del camión no está actualizado: se ve con señal.', null]];
   }
-  // `preventivo_vencido` se calculaba, se serializaba y se testeaba — y NINGUNA
-  // pantalla lo leía. `faltan_km` es NEGATIVO cuando ya venció — el signo es el
-  // dato. Se muestra en valor absoluto con la palabra «pasado» adelante, que es
-  // como lo diría alguien: «correa: 5.000 km pasado», no «-5.000 km».
-  (e.preventivo_vencido || []).forEach(t => {
-    const km = (typeof t.faltan_km === 'number')
-      ? ` · ${Math.abs(t.faltan_km).toLocaleString('es-CO')} km pasado` : '';
-    lineas.push(['rojo', `${t.tarea} VENCIDO${km}`, 'Mantenimiento vencido']);
-  });
-  if (e.hallazgos_vencidos > 0) {
-    lineas.push(['rojo', `${e.hallazgos_vencidos} daño(s) pasados de su fecha límite`,
-                 `${e.hallazgos_vencidos} daño(s) vencido(s)`]);
-  } else if (e.hallazgos_abiertos > 0) {
-    lineas.push(['amarillo', `${e.hallazgos_abiertos} daño(s) abiertos`,
-                 `${e.hallazgos_abiertos} daño(s) abierto(s)`]);
-  }
-  // El peor, con su nombre: un contador dice cuántos, no cuál mirar.
+  const lineas = s.motivos.map(m => [m.nivel, m.texto, m.corto]);
+  // El peor daño, con su nombre: un contador dice cuántos, no cuál mirar.
   if (e.hallazgo_peor) {
-    lineas.push([e.hallazgo_peor.vencido ? 'rojo' : 'info',
-      `${e.hallazgo_peor.criticidad}: ${e.hallazgo_peor.descripcion}`, null]);
+    lineas.push(['info', `Daño más grave (${e.hallazgo_peor.criticidad}): ${e.hallazgo_peor.descripcion}`, null]);
   }
-  if (!i.hecha) lineas.push(['amarillo', 'Falta la inspección de hoy', null]);
   return lineas;
 }
 
@@ -2444,23 +2425,25 @@ function flotaCondAvisos(e) {
 function flotaCondEstado(e) {
   const lineas = flotaCondAvisos(e);
   if (!lineas.length) return '';
-  const color = { rojo: 'var(--err-tx)', amarillo: 'var(--warn-tx)', info: 'var(--tx2)' };
+  const color = { rojo: 'var(--err-tx)', ambar: 'var(--warn-tx)', info: 'var(--tx2)' };
   const filas = lineas.map(([n, txt]) => {
-    const c = color[n];
+    const c = color[n] || 'var(--tx2)';
     return `<div style="color:${c};font-size:var(--fs-sm);line-height:1.5">${esc(txt)}</div>`;
   }).join('');
   return `<div class="flota-avisos">${filas}</div>`;
 }
 
-/** El semáforo de la franja: UNA línea, lo más grave primero. `''` sin avisos. */
+/** El semáforo de la franja: UNA línea, lo más grave primero. `''` sin avisos.
+ * El color es el que mandó el servidor (`e.salida.color`), no uno deducido acá. */
 function flotaCondSemaforo(e) {
   const lineas = flotaCondAvisos(e).filter(l => l[2]);
-  if (!lineas.length) return '';
-  const nivel = lineas.some(l => l[0] === 'rojo') ? 'rojo' : 'amarillo';
-  const orden = lineas.filter(l => l[0] === 'rojo').concat(lineas.filter(l => l[0] !== 'rojo'));
-  let txt = orden.slice(0, 2).map(l => l[2]).join(' · ');
-  if (orden.length > 2) txt += ` · +${orden.length - 2}`;
-  return `<span class="flota-sem flota-sem-${nivel}">● ${esc(txt)}</span>`;
+  if (!lineas.length || !e.salida) return '';
+  // La clase ES el color del servidor (`flota-sem-rojo` / `flota-sem-ambar`):
+  // con renglones el servidor nunca manda verde.
+  const nivel = String(e.salida.color);
+  let txt = lineas.slice(0, 2).map(l => l[2]).join(' · ');
+  if (lineas.length > 2) txt += ` · +${lineas.length - 2}`;
+  return `<span class="flota-sem flota-sem-${esc(nivel)}">● ${esc(txt)}</span>`;
 }
 
 /** En qué paso del día está el conductor, contando lo que espera en la cola.

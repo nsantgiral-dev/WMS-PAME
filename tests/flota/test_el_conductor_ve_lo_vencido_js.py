@@ -50,6 +50,11 @@ process.stdout.write(ctx.flotaCondEstado(ESTADO) || '');
 
 
 def _render(tmp_path, estado):
+    """Pinta el estado con `salida` calculada por la política REAL del
+    servidor (`flota/dominio/salida.py`): el teléfono ya no decide qué es rojo
+    — desde el 2026-09-24 pinta lo que le mandan."""
+    from tests.flota.test_mi_camion_hoy_js import _salida_de
+    estado = dict(estado, salida=_salida_de(estado))
     if not shutil.which('node'):
         pytest.skip('node no disponible en este entorno')
     h = tmp_path / 'h.mjs'
@@ -63,7 +68,8 @@ def _render(tmp_path, estado):
 
 
 BASE = {'hallazgos_vencidos': 0, 'hallazgos_abiertos': 0, 'hallazgo_peor': None,
-        'documentos_vencidos': [], 'inspeccion_de_hoy': {},
+        'documentos_vencidos': [],
+        'inspeccion_de_hoy': {'hecha': True, 'veredicto': 'apto', 'habilita_despacho': True},
         'preventivo_vencido': []}
 
 
@@ -72,7 +78,7 @@ def test_una_tarea_vencida_aparece_con_su_nombre(tmp_path):
         {'tarea': 'Cambio de correa de distribución', 'faltan_km': -5000}]))
     assert 'correa de distribución' in html.lower(), (
         'el conductor no ve QUÉ venció: un contador dice cuántos, no cuál')
-    assert 'VENCIDO' in html
+    assert 'Mantenimiento vencido' in html
 
 
 def test_dice_cuantos_km_lleva_pasado(tmp_path):
@@ -99,20 +105,20 @@ def test_sin_km_igual_se_avisa(tmp_path):
     menos vencida — callarla sería peor que decirla sin número."""
     html = _render(tmp_path, dict(BASE, preventivo_vencido=[
         {'tarea': 'Correa', 'faltan_km': None}]))
-    assert 'Correa' in html and 'VENCIDO' in html
+    assert 'Correa' in html and 'Mantenimiento vencido' in html
 
 
 def test_sin_nada_vencido_no_inventa_una_linea(tmp_path):
     """La otra dirección. Un aviso que aparece sobre operación sana se vuelve
     ruido y el canal deja de leerse."""
     html = _render(tmp_path, BASE)
-    assert 'VENCIDO' not in html
+    assert 'vencido' not in html.lower()
 
 
 def test_el_bloque_sigue_mostrando_lo_de_antes(tmp_path):
     """Agregar el preventivo no puede haber tapado los daños ni los papeles."""
     html = _render(tmp_path, dict(
         BASE, hallazgos_vencidos=2,
-        documentos_vencidos=[{'tipo': 'SOAT', 'vencio': '2026-01-01'}]))
+        documentos_vencidos=[{'tipo': 'soat', 'vencio': '2026-01-01'}]))
     assert 'daño' in html.lower()
     assert 'SOAT' in html

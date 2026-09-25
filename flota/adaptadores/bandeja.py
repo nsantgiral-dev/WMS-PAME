@@ -63,7 +63,7 @@ TABLAS_REQUERIDAS = (
     'vehiculos', 'conductores', 'rutas_despacho', 'flota_ficha_tecnica',
     'flota_documento_vehiculo', 'flota_lectura_odometro', 'flota_custodia',
     'flota_foto', 'flota_hallazgo', 'flota_inspeccion', 'flota_gasto',
-    'flota_tanqueo', 'flota_plan_tarea',
+    'flota_tanqueo', 'flota_plan_tarea', 'flota_orden_trabajo',
 )
 
 
@@ -73,16 +73,10 @@ class BandejaNoDisponible(Exception):
 
 # ── Palabras en vez de códigos ───────────────────────────────────────────────
 
-NOMBRE_DOCUMENTO = {
-    'soat': 'SOAT',
-    'rtm': 'revisión técnico-mecánica',
-    'poliza_rc': 'póliza de responsabilidad civil',
-    'tarjeta_propiedad': 'tarjeta de propiedad',
-}
-
-#: Los papeles sin los cuales un vehículo no debería circular. Uno sin cargar
-#: pinta ámbar: no se sabe si está al día.
-PAPELES_PARA_CIRCULAR = ('soat', 'rtm')
+#: El nombre de cada papel sale de la política de salida: un solo texto para
+#: el mismo SOAT en las tres pantallas.
+from flota.dominio.salida import NOMBRE_PAPEL as _NOMBRE_PAPEL  # noqa: E402
+NOMBRE_DOCUMENTO = {t: n for t, (n, _g) in _NOMBRE_PAPEL.items()}
 
 ESTADO_RUTA = {
     'PROGRAMADO': 'programada',
@@ -175,7 +169,8 @@ class _Mundo:
         from app.models.vehiculo import Vehiculo
         from flota.adaptadores.modelos import (Custodia, DocumentoVehiculo,
                                                FichaTecnica, Hallazgo,
-                                               Inspeccion, LecturaOdometro)
+                                               Inspeccion, LecturaOdometro,
+                                               OrdenTrabajo)
         from flota.dominio.hallazgo import EstadoHallazgo
 
         self.ahora = ahora
@@ -221,9 +216,13 @@ class _Mundo:
         self.maestras = {r.id: r for r in RutaMaestra.query.all()}
         self.fichas = {f.vehiculo_id: f for f in FichaTecnica.query.all()}
 
-        self.docs_tipos = defaultdict(set)
+        self.docs = defaultdict(list)
         for d in DocumentoVehiculo.query.all():
-            self.docs_tipos[d.vehiculo_id].add(d.tipo)
+            self.docs[d.vehiculo_id].append(d)
+
+        self.ordenes = defaultdict(list)
+        for o in OrdenTrabajo.query.all():
+            self.ordenes[o.vehiculo_id].append(o)
 
         self.lecturas = defaultdict(list)
         for l in (LecturaOdometro.query
@@ -240,17 +239,15 @@ class _Mundo:
                   .order_by(Inspeccion.respondida_ts, Inspeccion.id).all()):
             self.inspeccion_hoy[i.vehiculo_id] = i      # la última del día
 
-        # Las rutas, con el día en que ocurrieron. `fecha_programada` manda;
-        # sin ella, el día en que salió o, en último caso, el que se creó.
+        # Las rutas, con el día en que ocurrieron (`salida.dia_de_ruta`: el
+        # mismo criterio con el que el despacho decide si «sale hoy»).
+        from flota.adaptadores.salida import dia_de_ruta
         self.rutas = RutaDespacho.query.order_by(RutaDespacho.id).all()
         self.dia_ruta = {}
         for r in self.rutas:
-            if r.fecha_programada is not None:
-                self.dia_ruta[r.id] = r.fecha_programada
-            elif r.fecha_cierre is not None:
-                self.dia_ruta[r.id] = dia_operativo_de(r.fecha_cierre)
-            elif r.fecha_creacion is not None:
-                self.dia_ruta[r.id] = dia_operativo_de(r.fecha_creacion)
+            d = dia_de_ruta(r)
+            if d is not None:
+                self.dia_ruta[r.id] = d
         self.dias_con_ruta = defaultdict(set)
         self.rutas_por_dia = defaultdict(list)
         self.dias_con_ruta_sin_placa = set()
@@ -378,14 +375,10 @@ def _km(m: _Mundo, v, dudosas_por_placa: Dict[str, int]) -> dict:
 
 
 def _inspeccion(m: _Mundo, v) -> dict:
-    from flota.dominio.inspeccion import APTO, INCOMPLETA, NO_APTO
+    from flota.adaptadores.salida import inspeccion_de_fila
 
     i = m.inspeccion_hoy[v.id] if v.id in m.inspeccion_hoy else None
-    if i is None:
-        estado = 'sin_hacer'
-    else:
-        estado = {APTO: 'apta', NO_APTO: 'no_apta',
-                  INCOMPLETA: 'incompleta'}[i.veredicto]
+    estado = inspeccion_de_fila(i)
     return {'estado': estado, 'texto': INSPECCION_TEXTO[estado],
             'inspeccion_id': i.id if i else None}
 
@@ -407,39 +400,36 @@ def _rutas_hoy(m: _Mundo, v) -> List[dict]:
     return salida
 
 
-def _documentos_por_placa(filas) -> Dict[str, dict]:
-    salida = defaultdict(lambda: {'vencidos': [], 'por_vencer': [],
-                                  'no_encontrados': []})
-    for f in filas:
-        nombre = _palabra(NOMBRE_DOCUMENTO, f['tipo'])
-        if f['vencido']:
-            salida[f['placa']]['vencidos'].append(nombre)
-        elif f['por_vencer_30d']:
-            salida[f['placa']]['por_vencer'].append(nombre)
-        if f['no_encontrado']:
-            salida[f['placa']]['no_encontrados'].append(nombre)
-    return salida
-
-
-def _danos_clasificados(m: _Mundo, v) -> dict:
-    """Daños abiertos en tres cubos disjuntos (ver `HechosDelVehiculo`)."""
-    from flota.dominio.hallazgo import vencido
-
-    cubos = {'bloqueantes': 0, 'vencidos': 0, 'en_plazo': 0}
-    for h in m.danos[v.id]:
-        if h.criticidad == 'bloqueante':
-            cubos['bloqueantes'] += 1
-        elif vencido(h.a_dominio(), m.ahora):
-            cubos['vencidos'] += 1
-        else:
-            cubos['en_plazo'] += 1
-    return cubos
-
-
 def _ficha_estado(m: _Mundo, v) -> str:
-    if v.id not in m.fichas:
-        return 'sin_ficha'
-    return 'completa' if m.fichas[v.id].completa() else 'incompleta'
+    from flota.adaptadores.salida import ficha_de
+    return ficha_de(m.fichas[v.id] if v.id in m.fichas else None)[0]
+
+
+def _hechos(m: _Mundo, v, *, km_conocido: bool, km_dudoso: bool,
+            prev_diag: list, sale_hoy: bool):
+    """Los hechos de salida de un vehículo, con las MISMAS funciones que usa
+    `salida.hechos_de_vehiculo` (el despacho y el conductor). Leer en bloque
+    cambia las consultas, no el significado."""
+    from flota.adaptadores import salida as ad
+    from flota.dominio import salida as dom_sal
+
+    c = m.activa[v.id] if v.id in m.activa else None
+    tipo, custodio, fuera = ad.custodia_de(c)
+    vencidas, por_vencer = ad.preventivo_de_diagnostico(prev_diag)
+    estado_ficha, falta = ad.ficha_de(m.fichas[v.id] if v.id in m.fichas else None)
+    b, ve, p = ad.danos_de_filas(m.danos[v.id], m.ahora)
+    return dom_sal.Hechos(
+        hoy=m.hoy, papeles=ad.papeles_de_filas(m.docs[v.id], m.hoy),
+        danos_bloqueantes=b, danos_vencidos=ve, danos_en_plazo=p,
+        inspeccion=_inspeccion(m, v)['estado'], sale_hoy=sale_hoy,
+        preventivo_vencidas=vencidas, preventivo_por_vencer=por_vencer,
+        ot_abiertas=ad.ot_abiertas_de(m.ordenes[v.id]),
+        km_conocido=km_conocido, km_dudoso=km_dudoso,
+        custodia=tipo, custodio_conductor_id=custodio,
+        # La bandeja no compara el turno con la ruta en el semáforo: eso es la
+        # señal `turno_de_la_ruta`, con su contexto.
+        conductor_de_la_ruta=None,
+        fuera_de_sede=fuera, ficha=estado_ficha, ficha_falta=falta)
 
 
 # ── Pendientes ───────────────────────────────────────────────────────────────
@@ -453,42 +443,55 @@ def _pendiente(*, clase, placa, urgencia, texto, detalle, accion, desde=None,
     return fila
 
 
-def _pendientes(m: _Mundo, medidor, docs_filas, dudosas, diag_prev) -> List[dict]:
+#: Qué se aconseja según el papel más grave del vehículo.
+_CONSEJO_PAPEL = {
+    'vencido': 'Cargá el nuevo. Con el papel vencido el vehículo no debería salir.',
+    'no_encontrado': 'No es lo mismo que vencido: no se sabe si existe. Buscalo y cargalo.',
+    'sin_cargar': 'Mientras no se cargue, no se sabe si está al día.',
+    'por_vencer': 'Sacá la cita o compralo antes de que venza.',
+}
+
+
+def _pendientes(m: _Mundo, medidor, dudosas, diag_prev,
+                forzados: List[dict]) -> List[dict]:
+    """Lo que alguien tiene que hacer, con placa y acción.
+
+    **El nivel y el texto de todo lo que es del vehículo salen de la política
+    de salida** (`flota/dominio/salida.py`): el SOAT vencido se dice igual acá,
+    en el semáforo, al despachar y en el teléfono del conductor. Lo que es de un
+    TURNO (cierre forzado, fotos que faltan, despacho con advertencias) va con
+    `salida.NIVEL_TURNO_A_REVISAR`.
+    """
+    from flota.adaptadores import salida as ad
+    from flota.dominio import salida as dom_sal
     from flota.dominio.hallazgo import dias_transcurridos, vencido
     from flota.dominio.senales import VENTANA_RECIENTE_DIAS
-    from flota.dominio.valores import TIPOS_DOCUMENTO
 
     salida = []
     limite_reciente = m.ahora - timedelta(days=VENTANA_RECIENTE_DIAS)
     por_id = {v.id: v for v in m.vehiculos}
+    placa_de = {v.id: v.placa for v in m.vehiculos}
 
-    # 1 · Papeles
-    for f in docs_filas:
-        if f['placa'] not in m.placas:
-            continue
-        nombre = _palabra(NOMBRE_DOCUMENTO, f['tipo'])
-        if f['vencido']:
-            texto = f'{nombre} vencido hace {-f["dias"]} día(s)'
-            urg, det = 'rojo', 'Cargá el nuevo. Con el papel vencido el vehículo no debería salir.'
-        elif f['por_vencer_30d']:
-            texto = f'{nombre} vence en {f["dias"]} día(s)'
-            urg, det = 'ambar', 'Sacá la cita o compralo antes de que venza.'
-        else:
-            texto = f'{nombre}: nadie lo pudo mostrar'
-            urg, det = 'ambar', 'No es lo mismo que vencido: no se sabe si existe.'
-        salida.append(_pendiente(
-            clase='documento', placa=f['placa'], urgencia=urg, texto=texto,
-            detalle=det, accion={'tipo': 'expediente', 'pestana': 'documentos'},
-            desde=f['vence']))
+    # 1 · Papeles — UNO por vehículo, con sus renglones (los sin cargar juntos)
     for v in m.vehiculos:
-        faltan = [t for t in TIPOS_DOCUMENTO if t not in m.docs_tipos[v.id]]
-        if faltan:
-            salida.append(_pendiente(
-                clase='documento_sin_cargar', placa=v.placa, urgencia='ambar',
-                texto='sin cargar: ' + ', '.join(
-                    _palabra(NOMBRE_DOCUMENTO, t) for t in faltan),
-                detalle='Mientras no se cargue, no se sabe si está al día.',
-                accion={'tipo': 'expediente', 'pestana': 'documentos'}))
+        motivos = [x for x in (dom_sal.motivo_papel(p, m.hoy)
+                               for p in ad.papeles_de_filas(m.docs[v.id], m.hoy))
+                   if x is not None]
+        if not motivos:
+            continue
+        motivos.sort(key=lambda x: dom_sal.orden_de_nivel(x.nivel))
+        lineas = dom_sal.lineas(motivos)
+        peor = motivos[0].clave
+        consejo = next(c for sufijo, c in (
+            ('_vencido', _CONSEJO_PAPEL['vencido']),
+            ('_no_encontrado', _CONSEJO_PAPEL['no_encontrado']),
+            ('_sin_registro', _CONSEJO_PAPEL['sin_cargar']),
+            ('_por_vencer', _CONSEJO_PAPEL['por_vencer'])) if peor.endswith(sufijo))
+        salida.append(_pendiente(
+            clase='documento', placa=v.placa, urgencia=dom_sal.color_de(motivos),
+            texto=' · '.join(l['texto'] for l in lineas), detalle=consejo,
+            accion={'tipo': 'expediente', 'pestana': 'documentos'},
+            lineas=[l['texto'] for l in lineas]))
 
     # 2 · Daños — la cola de decisiones de toda la flota
     for v in m.vehiculos:
@@ -496,14 +499,15 @@ def _pendientes(m: _Mundo, medidor, docs_filas, dudosas, diag_prev) -> List[dict
             dom = h.a_dominio()
             es_vencido = vencido(dom, m.ahora)
             dias = dias_transcurridos(dom, m.ahora)
-            urg = 'rojo' if (h.criticidad == 'bloqueante' or es_vencido) else 'ambar'
             salida.append(_pendiente(
-                clase='dano', placa=v.placa, urgencia=urg,
+                clase='dano', placa=v.placa,
+                urgencia=dom_sal.nivel_de_dano(criticidad=h.criticidad,
+                                               vencido=es_vencido),
                 texto=h.descripcion,
-                detalle=(f'{h.criticidad} · lleva {dias} día(s) · '
+                detalle=(f'{h.criticidad} · lleva {dom_sal.plural(dias, "día", "días")} · '
                          + ('VENCIDO' if es_vencido
                             else f'límite {_cuando(h.fecha_limite, m.hoy)}')
-                         + (f' · aplazado {h.aplazado_veces} vez/veces'
+                         + (f' · aplazado {dom_sal.plural(h.aplazado_veces, "vez", "veces")}'
                             if h.aplazado_veces else '')
                          + (' · preexistente (no le cuenta a nadie)'
                             if h.linea_base else '')),
@@ -513,17 +517,25 @@ def _pendientes(m: _Mundo, medidor, docs_filas, dudosas, diag_prev) -> List[dict
                 criticidad=h.criticidad, vencido=es_vencido,
                 dias_abierto=dias, aplazado_veces=h.aplazado_veces))
 
-    # 3 · Kilometrajes en duda
+    # 3 · Kilometrajes en duda — UNO por placa («GAL001: 8 lecturas en duda»)
+    por_placa = defaultdict(list)
     for l, placa in dudosas:
-        if placa not in m.placas:
-            continue
+        if placa in m.placas:
+            por_placa[placa].append(l)
+    nivel_km = dom_sal.motivos_de_km(True, True)[0].nivel
+    for placa in sorted(por_placa):
+        filas = sorted(por_placa[placa], key=lambda l: (l.ts, l.id))
+        ultima = filas[-1]
+        motivo = ultima.motivo_dudosa or 'sin motivo escrito'
         salida.append(_pendiente(
-            clase='km_dudoso', placa=placa, urgencia='ambar',
-            texto=f'kilometraje {_num(l.valor_km, 0)} en duda',
-            detalle=(l.motivo_dudosa or 'sin motivo escrito')
-                    + f' · registrado {_cuando(l.ts, m.hoy)}',
-            accion={'tipo': 'verificar_km', 'lectura_id': l.id},
-            desde=l.ts, lectura_id=l.id))
+            clase='km_dudoso', placa=placa, urgencia=nivel_km,
+            texto=(dom_sal.plural(len(filas), 'lectura de kilometraje en duda',
+                                  'lecturas de kilometraje en duda')),
+            detalle=(f'La última: {_num(ultima.valor_km, 0)} km, registrada '
+                     f'{_cuando(ultima.ts, m.hoy)} · {motivo}'),
+            accion={'tipo': 'verificar_km', 'lectura_id': ultima.id},
+            desde=filas[0].ts, lectura_id=ultima.id,
+            lectura_ids=[l.id for l in filas]))
 
     # 4 y 5 · Turnos: cierres forzados recientes y turnos sin fotos de inicio
     custodia_por_id = {c.id: c for c in m.custodias}
@@ -536,7 +548,8 @@ def _pendientes(m: _Mundo, medidor, docs_filas, dudosas, diag_prev) -> List[dict
         if f['cierre_forzado'] and c.fin_ts is not None \
                 and c.fin_ts >= limite_reciente:
             salida.append(_pendiente(
-                clase='cierre_forzado', placa=f['placa'], urgencia='ambar',
+                clase='cierre_forzado', placa=f['placa'],
+                urgencia=dom_sal.NIVEL_TURNO_A_REVISAR,
                 texto=(f'turno de {a_nombre} cerrado a la fuerza por '
                        f'{m.nombre_usuario(c.cierre_forzado_por_usuario_id)} '
                        f'{_cuando(c.fin_ts, m.hoy)}'),
@@ -548,7 +561,8 @@ def _pendientes(m: _Mundo, medidor, docs_filas, dudosas, diag_prev) -> List[dict
         if f['mitad_incompleta'] == 'inicio' and (
                 c.fin_ts is None or c.inicio_ts >= limite_reciente):
             salida.append(_pendiente(
-                clase='turno_sin_fotos', placa=f['placa'], urgencia='ambar',
+                clase='turno_sin_fotos', placa=f['placa'],
+                urgencia=dom_sal.NIVEL_TURNO_A_REVISAR,
                 texto=(f'turno de {a_nombre} desde {_cuando(c.inicio_ts, m.hoy)}'
                        f' sin fotos de inicio ({f["fotos"]} de '
                        f'{f["fotos_exigidas"]})'),
@@ -557,33 +571,48 @@ def _pendientes(m: _Mundo, medidor, docs_filas, dudosas, diag_prev) -> List[dict
                 accion={'tipo': 'fotos_turno', 'custodia_id': c.id},
                 desde=c.inicio_ts, custodia_id=c.id))
 
-    # 6 · Ficha
+    # 6 · Despachos que salieron reconociendo advertencias de flota (el FORZAR
+    # del muelle). control_flota no ve 📈: si no está acá, no lo ve nadie de
+    # flota.
+    for f in forzados:
+        if f['vehiculo_id'] not in m.ids:
+            continue
+        textos = [a['texto'] for a in f['advertencias'] if 'texto' in a] \
+            or [str(c) for c in f['claves']]
+        salida.append(_pendiente(
+            clase='despacho_forzado', placa=placa_de[f['vehiculo_id']],
+            urgencia=dom_sal.NIVEL_TURNO_A_REVISAR,
+            texto=(f'salió {_cuando(f["ts"], m.hoy)} con '
+                   + dom_sal.plural(len(textos), 'advertencia', 'advertencias')
+                   + ': ' + '; '.join(textos)),
+            detalle=(f'Lo autorizó {m.nombre_usuario(f["usuario_id"])} · ruta '
+                     f'#{f["ruta_id"]} · motivo: {f["motivo"] or "sin motivo"}'),
+            accion={'tipo': 'expediente', 'pestana': 'resumen'},
+            desde=f['ts'], ruta_id=f['ruta_id']))
+
+    # 7 · Ficha
     for v in m.vehiculos:
-        estado = _ficha_estado(m, v)
-        if estado == 'sin_ficha':
+        estado, falta = ad.ficha_de(m.fichas[v.id] if v.id in m.fichas else None)
+        for mo in dom_sal.motivos_de_ficha(estado, falta):
             salida.append(_pendiente(
-                clase='ficha', placa=v.placa, urgencia='ambar',
-                texto='sin ficha técnica: crear la primera',
+                clase='ficha', placa=v.placa, urgencia=mo.nivel,
+                texto=('sin ficha técnica: crear la primera' if estado == 'sin_ficha'
+                       else mo.texto),
                 detalle=('Sin ficha no hay capacidad de tanque, ni posiciones '
-                         'de llanta, ni preventivo.'),
-                accion={'tipo': 'expediente', 'pestana': 'ficha'}))
-        elif estado == 'incompleta':
-            falta = m.fichas[v.id].atributos_sin_dato()
-            salida.append(_pendiente(
-                clase='ficha', placa=v.placa, urgencia='ambar',
-                texto='ficha técnica incompleta',
-                detalle='Falta: ' + ', '.join(str(x).replace('_', ' ')
-                                               for x in falta),
+                         'de llanta, ni preventivo.' if estado == 'sin_ficha'
+                         else 'Completala en la pestaña Ficha del expediente.'),
                 accion={'tipo': 'expediente', 'pestana': 'ficha'}))
 
-    # 7 · Preventivo vencido
+    # 8 · Preventivo vencido
     from flota.dominio.preventivo import EstadoTarea
     for d in diag_prev:
         if d['vehiculo_id'] not in m.ids or d['estado'] != EstadoTarea.VENCIDA:
             continue
+        (tarea,), _n = ad.preventivo_de_diagnostico([d])
+        mo = dom_sal.motivo_preventivo_vencido(tarea)
         salida.append(_pendiente(
             clase='preventivo', placa=por_id[d['vehiculo_id']].placa,
-            urgencia='rojo', texto=f'{d["nombre"]}: mantenimiento vencido',
+            urgencia=mo.nivel, texto=mo.texto,
             detalle=(f'tocaba a los {_num(d["proximo_km"], 0)} km'
                      if isinstance(d['proximo_km'], int) else
                      'vencido según el plan'),
@@ -591,10 +620,10 @@ def _pendientes(m: _Mundo, medidor, docs_filas, dudosas, diag_prev) -> List[dict
             plan_id=d['plan_id']))
 
     orden_clase = {c: i for i, c in enumerate((
-        'dano', 'documento', 'preventivo', 'cierre_forzado', 'turno_sin_fotos',
-        'km_dudoso', 'ficha', 'documento_sin_cargar'))}
-    salida.sort(key=lambda p: (p['urgencia'] != 'rojo', orden_clase[p['clase']],
-                               p['placa']))
+        'dano', 'documento', 'preventivo', 'despacho_forzado', 'cierre_forzado',
+        'turno_sin_fotos', 'km_dudoso', 'ficha'))}
+    salida.sort(key=lambda p: (dom_sal.orden_de_nivel(p['urgencia']),
+                               orden_clase[p['clase']], p['placa']))
     return salida
 
 
@@ -916,7 +945,6 @@ def armar_bandeja(*, almacen_id: Optional[int] = None,
     from flota.adaptadores.preventivo import diagnostico_de_la_flota
     from flota.adaptadores.verificacion import pendientes as dudosas_pendientes
     from flota.dominio import senales as dom
-    from flota.dominio.preventivo import EstadoTarea
 
     faltan = [t for t in TABLAS_REQUERIDAS if not _tabla_existe(t)]
     if faltan:
@@ -924,27 +952,28 @@ def armar_bandeja(*, almacen_id: Optional[int] = None,
 
     m = _Mundo(almacen_id, ahora or datetime.utcnow())
     medidor = MedidorSQL()
-    docs_filas = medidor.documentos_por_vehiculo() or []
-    docs = _documentos_por_placa(docs_filas)
     dudosas = dudosas_pendientes()
     dudosas_por_placa = defaultdict(int)
     for _l, placa in dudosas:
         dudosas_por_placa[placa] += 1
     diag_prev = diagnostico_de_la_flota()
-    prev = defaultdict(lambda: {'vencidas': 0, 'por_vencer': 0})
+    prev_de = defaultdict(list)
     for d in diag_prev:
-        if d['estado'] == EstadoTarea.VENCIDA:
-            prev[d['vehiculo_id']]['vencidas'] += 1
-        elif d['estado'] == EstadoTarea.POR_VENCER:
-            prev[d['vehiculo_id']]['por_vencer'] += 1
+        prev_de[d['vehiculo_id']].append(d)
 
-    pendientes = _pendientes(m, medidor, docs_filas, dudosas, diag_prev)
+    from app.services.senales_ruta import despachos_forzados
+    from flota.dominio.senales import VENTANA_RECIENTE_DIAS
+    forzados = despachos_forzados(
+        desde=m.ahora - timedelta(days=VENTANA_RECIENTE_DIAS))
+
+    pendientes = _pendientes(m, medidor, dudosas, diag_prev, forzados)
     rec = _Recolector()
     _senales_turno_de_la_ruta(m, rec)
     _senales_km_sin_ruta(m, rec)
     _senales_km_de_ruta(m, rec)
     _senales_combustible(m, rec)
 
+    from flota.dominio import salida as dom_sal
     hoy = []
     for pos, v in enumerate(m.vehiculos):
         custodio = _custodio(m, v)
@@ -952,35 +981,11 @@ def armar_bandeja(*, almacen_id: Optional[int] = None,
         km = _km(m, v, dudosas_por_placa)
         insp = _inspeccion(m, v)
         rutas = _rutas_hoy(m, v)
-        danos = _danos_clasificados(m, v)
         ficha = _ficha_estado(m, v)
-        d = docs[v.placa] if v.placa in docs else {
-            'vencidos': [], 'por_vencer': [], 'no_encontrados': []}
-        # Solo los dos que habilitan circular pintan el semáforo; los otros
-        # dos van a la lista de pendientes.
-        sin_cargar = [_palabra(NOMBRE_DOCUMENTO, t) for t in PAPELES_PARA_CIRCULAR
-                      if t not in m.docs_tipos[v.id]]
-        c = m.activa[v.id] if v.id in m.activa else None
-        hechos = dom.HechosDelVehiculo(
-            documentos_vencidos=d['vencidos'],
-            documentos_por_vencer=d['por_vencer'],
-            documentos_no_encontrados=d['no_encontrados'],
-            documentos_sin_cargar=sin_cargar,
-            danos_bloqueantes=danos['bloqueantes'],
-            danos_vencidos=danos['vencidos'],
-            danos_en_plazo=danos['en_plazo'],
-            inspeccion=insp['estado'],
-            sale_hoy=bool(rutas),
-            preventivo_vencidas=prev[v.id]['vencidas'],
-            preventivo_por_vencer=prev[v.id]['por_vencer'],
-            km_conocido=km['ts'] is not None,
-            km_dudoso=v.placa in dudosas_por_placa,
-            custodia=('sin_turno' if c is None else
-                      'pendiente_sede' if c.custodio_estado == 'pendiente_sede'
-                      else c.custodio_tipo),
-            fuera_de_sede=donde['codigo'] == 'fuera_de_sede',
-            ficha=ficha,
-        )
+        hechos = _hechos(m, v, km_conocido=km['ts'] is not None,
+                         km_dudoso=v.placa in dudosas_por_placa,
+                         prev_diag=prev_de[v.id], sale_hoy=bool(rutas))
+        evaluacion = dom_sal.evaluar(hechos)
         hoy.append({
             'pos': pos,
             'vehiculo_id': v.id,
@@ -994,8 +999,9 @@ def armar_bandeja(*, almacen_id: Optional[int] = None,
             'inspeccion': insp,
             'rutas_hoy': rutas,
             'ficha': ficha,
-            'danos_abiertos': sum(danos.values()),
-            'semaforo': dom.semaforo(hechos),
+            'danos_abiertos': (hechos.danos_bloqueantes + hechos.danos_vencidos
+                               + hechos.danos_en_plazo),
+            'semaforo': evaluacion.semaforo(),
             'pendientes': sum(1 for p in pendientes if p['placa'] == v.placa),
             'senales': sum(1 for s in rec.senales if s['placa'] == v.placa),
         })

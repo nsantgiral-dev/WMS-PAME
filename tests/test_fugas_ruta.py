@@ -736,9 +736,13 @@ def flota_sana(db, monkeypatch):
                         lambda vid, dia: [SimpleNamespace(veredicto=estado['veredicto'])])
     monkeypatch.setattr(taller, 'ordenes_de',
                         lambda vid: [SimpleNamespace(estado='abierta')] if estado['taller'] else [])
+    # La forma de una `Custodia` activa: la política de salida también lee su
+    # estado de sede y dónde pasa la noche.
     monkeypatch.setattr(traspaso, 'custodia_activa',
                         lambda vid: SimpleNamespace(custodio_tipo='conductor',
-                                                    custodio_conductor_id=estado['custodio']))
+                                                    custodio_conductor_id=estado['custodio'],
+                                                    custodio_estado='resuelto',
+                                                    ubicacion=None))
     return v, estado
 
 

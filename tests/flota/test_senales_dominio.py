@@ -147,63 +147,8 @@ class TestTurnoDeLaRuta:
         assert self._v(conductor_ruta_id=None).estado == dom.NO_EVALUABLE
 
 
-def _hechos(**kw):
-    base = dict(documentos_vencidos=[], documentos_por_vencer=[],
-                documentos_no_encontrados=[], documentos_sin_cargar=[],
-                danos_bloqueantes=0, danos_vencidos=0, danos_en_plazo=0,
-                inspeccion='sin_hacer', sale_hoy=False, preventivo_vencidas=0,
-                preventivo_por_vencer=0, km_conocido=True, km_dudoso=False,
-                custodia='conductor', fuera_de_sede=False, ficha='completa')
-    base.update(kw)
-    return dom.HechosDelVehiculo(**base)
-
-
-class TestSemaforo:
-    def test_verde_dice_que_es_lo_conocido(self):
-        s = dom.semaforo(_hechos())
-        assert s['color'] == dom.VERDE
-        assert s['porque'][0]['texto'] == 'sin pendientes conocidos'
-
-    @pytest.mark.parametrize('kw,frase', [
-        ({'documentos_vencidos': ['SOAT']}, 'papel vencido'),
-        ({'danos_bloqueantes': 1}, 'bloqueante'),
-        ({'danos_vencidos': 1}, 'pasado(s) de su fecha'),
-        ({'inspeccion': 'no_apta'}, 'NO apta'),
-        ({'sale_hoy': True, 'inspeccion': 'incompleta'}, 'quedó incompleta'),
-        ({'sale_hoy': True}, 'no tiene inspección apta'),
-        ({'preventivo_vencidas': 2}, 'preventivo(s) vencido(s)'),
-    ])
-    def test_cada_rojo(self, kw, frase):
-        s = dom.semaforo(_hechos(**kw))
-        assert s['color'] == dom.ROJO
-        assert any(frase in p['texto'] and p['nivel'] == dom.ROJO
-                   for p in s['porque'])
-
-    @pytest.mark.parametrize('kw,frase', [
-        ({'documentos_por_vencer': ['SOAT']}, 'por vencer'),
-        ({'documentos_no_encontrados': ['SOAT']}, 'nadie pudo mostrar'),
-        ({'documentos_sin_cargar': ['SOAT']}, 'sin cargar'),
-        ({'danos_en_plazo': 1}, 'dentro de plazo'),
-        ({'preventivo_por_vencer': 1}, 'por vencer'),
-        ({'km_conocido': False}, 'no se sabe'),
-        ({'km_dudoso': True}, 'en duda'),
-        ({'custodia': 'sin_turno'}, 'nadie tiene el turno'),
-        ({'custodia': 'pendiente_sede'}, 'no está en el maestro'),
-        ({'fuera_de_sede': True}, 'fuera de sede'),
-        ({'ficha': 'sin_ficha'}, 'sin ficha'),
-        ({'ficha': 'incompleta'}, 'incompleta'),
-    ])
-    def test_cada_ambar(self, kw, frase):
-        s = dom.semaforo(_hechos(**kw))
-        assert s['color'] == dom.AMBAR
-        assert any(frase in p['texto'] for p in s['porque'])
-
-    def test_con_ruta_hoy_y_apta_no_es_rojo(self):
-        assert dom.semaforo(_hechos(sale_hoy=True, inspeccion='apta'))['color'] \
-            == dom.VERDE
-
-    def test_sin_ruta_no_exige_inspeccion(self):
-        assert dom.semaforo(_hechos(inspeccion='sin_hacer'))['color'] == dom.VERDE
+# El semáforo se mudó a `flota/dominio/salida.py` (2026-09-24): sus casos viven
+# en `tests/flota/test_una_politica_de_salida.py`.
 
 
 class TestNingunJuicioRecibeUnaPersona:
@@ -214,7 +159,7 @@ class TestNingunJuicioRecibeUnaPersona:
     def test_ninguna_firma_recibe_nombre_ni_usuario(self):
         import inspect
         for nombre in ('km_sin_ruta', 'km_de_ruta', 'galones_de_ventana',
-                       'precio_de_galon', 'turno_de_la_ruta', 'semaforo'):
+                       'precio_de_galon', 'turno_de_la_ruta', 'km_sin_explicar'):
             params = inspect.signature(getattr(dom, nombre)).parameters
             for p in params:
                 assert 'nombre' not in p and 'usuario' not in p, (nombre, p)

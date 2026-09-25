@@ -40,6 +40,14 @@ def _auth(t):
 HOY = dia_operativo()
 
 
+#: El texto ÚNICO de la política de salida (`flota/dominio/salida.py`), el mismo
+#: que ven el despacho y el conductor.
+SOAT_VENCIDO = (f'SOAT vencido desde {(HOY - timedelta(days=5)).strftime("%d/%m/%Y")}'
+                ' (hace 5 días)')
+SOAT_POR_VENCER = (f'SOAT vence el {(HOY + timedelta(days=10)).strftime("%d/%m/%Y")}'
+                   ' (en 10 días)')
+
+
 def T(dias_atras: int, hora: float) -> datetime:
     """Un instante UTC naive a la `hora` de Bogotá de hace `dias_atras` días."""
     return inicio_del_dia_utc(HOY - timedelta(days=dias_atras)) + timedelta(hours=hora)
@@ -163,7 +171,11 @@ def mundo(db):
             sistema_frenos='hidraulico', frenos_fuente='manual_fabricante',
             tiene_freno_escape='no', distribucion='correa',
             distribucion_fuente='manual_fabricante', transmision_final='cardan',
-            posiciones_llanta=4, km_inicial=km, km_inicial_ts=T(60, 6)))
+            posiciones_llanta=4, km_inicial=km, km_inicial_ts=T(60, 6),
+            # Completa exige la capacidad del tanque (2026-09-24): sin ella el
+            # detector de sobre-tanqueo está ciego.
+            capacidad_tanque_galones=Decimal('40'),
+            capacidad_tanque_fuente='manual_fabricante'))
 
     def ruta(p, dias_atras, conductor, maestra=None, estado='ENTREGADA'):
         r = RutaDespacho(
@@ -375,7 +387,7 @@ class TestHoy:
     def test_verde_solo_cuando_no_hay_nada(self, client, mundo):
         f = _fila(_bandeja(client, mundo), 'VRD001')
         assert f['semaforo']['color'] == 'verde', _textos(f)
-        assert 'sin pendientes conocidos' in _textos(f)
+        assert 'Sin pendientes conocidos' in _textos(f)
         assert f['pendientes'] == 0
 
     def test_quien_lo_tiene_en_palabras(self, client, mundo):
@@ -398,36 +410,40 @@ class TestHoy:
     def test_papel_vencido_pinta_rojo_con_su_nombre(self, client, mundo):
         f = _fila(_bandeja(client, mundo), 'ROJ001')
         assert f['semaforo']['color'] == 'rojo'
-        assert 'papel vencido: SOAT' in _textos(f)
+        # El mismo texto que el despacho y el teléfono del conductor.
+        assert SOAT_VENCIDO in _textos(f)
 
     def test_ruta_de_hoy_sin_inspeccion_apta_es_rojo(self, client, mundo):
         """Regla 1: no saber tampoco autoriza a salir."""
         f = _fila(_bandeja(client, mundo), 'ROJ001')
-        assert 'tiene ruta hoy y no tiene inspección apta' in _textos(f)
+        assert 'Tiene ruta hoy y todavía no tiene la inspección de hoy' in _textos(f)
         assert f['rutas_hoy'][0]['texto'] == 'sin ruta maestra con Beto · en la calle'
 
     def test_preventivo_vencido_es_rojo(self, client, mundo):
         f = _fila(_bandeja(client, mundo), 'ROJ001')
-        assert 'mantenimiento(s) preventivo(s) vencido(s)' in _textos(f)
+        assert 'Mantenimiento vencido: aceite de motor (600 km pasado)' in _textos(f)
 
     def test_por_vencer_y_dano_en_plazo_son_ambar(self, client, mundo):
         f = _fila(_bandeja(client, mundo), 'AMB001')
         assert f['semaforo']['color'] == 'ambar', _textos(f)
         t = _textos(f)
-        assert 'papel por vencer: SOAT' in t
-        assert '1 daño(s) abierto(s) dentro de plazo' in t
-        assert 'póliza de responsabilidad civil' in t      # no encontrado
-        assert 'sin ficha técnica' in t
-        assert 'el último kilometraje está en duda' in t
+        assert SOAT_POR_VENCER in t
+        assert '1 daño abierto dentro de plazo' in t
+        assert 'Póliza de responsabilidad civil: nadie la pudo mostrar' in t
+        assert 'Sin ficha técnica' in t
+        assert 'El último kilometraje está en duda' in t
 
     def test_sin_dato_es_ambar_y_lo_dice_nunca_verde(self, client, mundo):
         """Un vehículo del que no se sabe nada no está bien: no se sabe."""
         f = _fila(_bandeja(client, mundo), 'SIN001')
         assert f['semaforo']['color'] == 'ambar'
         t = _textos(f)
-        assert 'no se sabe cuánto tiene' in t
-        assert 'nadie tiene el turno registrado' in t
-        assert 'papel sin cargar' in t
+        assert 'no se sabe cuántos km tiene' in t
+        assert 'Nadie tiene el turno registrado' in t
+        # Los cuatro papeles sin cargar van en UN renglón, no en cuatro.
+        assert ('Sin cargar, no se sabe si están al día: SOAT, revisión '
+                'técnico-mecánica, póliza de responsabilidad civil, tarjeta de '
+                'propiedad') in t
         assert f['km']['valor'] == 'sin_dato'
 
     def test_en_custodia_de_la_sede(self, client, mundo):
@@ -444,16 +460,21 @@ class TestPendientes:
     def test_papel_vencido_por_vencer_y_no_encontrado(self, client, mundo):
         b = _bandeja(client, mundo)
         roj = _pend(b, 'ROJ001', 'documento')
-        assert roj[0]['texto'] == 'SOAT vencido hace 5 día(s)'
+        assert roj[0]['texto'] == SOAT_VENCIDO
         assert roj[0]['urgencia'] == 'rojo'
         assert roj[0]['accion'] == {'tipo': 'expediente', 'pestana': 'documentos'}
-        amb = {p['texto'] for p in _pend(b, 'AMB001', 'documento')}
-        assert 'SOAT vence en 10 día(s)' in amb
-        assert 'póliza de responsabilidad civil: nadie lo pudo mostrar' in amb
+        # Un pendiente de papeles POR VEHÍCULO, con sus renglones.
+        amb = _pend(b, 'AMB001', 'documento')
+        assert len(amb) == 1
+        assert amb[0]['lineas'] == [
+            SOAT_POR_VENCER,
+            'Póliza de responsabilidad civil: nadie la pudo mostrar (no se sabe si existe)',
+            'Tarjeta de propiedad sin cargar: no se sabe si está al día']
 
     def test_papeles_sin_cargar(self, client, mundo):
-        p = _pend(_bandeja(client, mundo), 'SIN001', 'documento_sin_cargar')
-        assert p and 'SOAT' in p[0]['texto']
+        p = _pend(_bandeja(client, mundo), 'SIN001', 'documento')
+        assert len(p) == 1
+        assert p[0]['texto'].startswith('Sin cargar, no se sabe si están al día: SOAT')
 
     def test_la_cola_de_danos_trae_el_id_para_decidir(self, client, mundo):
         p = _pend(_bandeja(client, mundo), 'AMB001', 'dano')
@@ -464,8 +485,13 @@ class TestPendientes:
         assert p[0]['criticidad'] == 'mayor' and p[0]['vencido'] is False
 
     def test_km_en_duda_para_verificar(self, client, mundo):
+        """Agrupado por placa: «2 lecturas de kilometraje en duda», no dos
+        renglones iguales salvo el número."""
         p = _pend(_bandeja(client, mundo), 'AMB001', 'km_dudoso')
-        assert len(p) == 2
+        assert len(p) == 1
+        assert p[0]['texto'] == '2 lecturas de kilometraje en duda'
+        assert len(p[0]['lectura_ids']) == 2
+        assert p[0]['detalle'].startswith('La última: 30.050 km')
         assert p[0]['accion']['tipo'] == 'verificar_km'
 
     def test_cierre_forzado_reciente_con_quien_y_por_que(self, client, mundo):

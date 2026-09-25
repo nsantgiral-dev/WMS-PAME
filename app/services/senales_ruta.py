@@ -438,88 +438,88 @@ def senales_de_recaudo(recaudo, ruta=None, faltante=None) -> list:
 # 8 · Condición del vehículo al despachar — informa, no bloquea
 # ═════════════════════════════════════════════════════════════════════════════
 
-#: Los papeles sin los que el camión no debería rodar.
-DOCUMENTOS_OBLIGATORIOS = ('soat', 'rtm')
-
-
 def advertencias_de_flota(ruta, hoy=None) -> list:
     """Lo que la flota sabe de este vehículo que debería frenar un despacho.
 
-    Lee el módulo `flota/` **solo por sus funciones públicas** y nunca lo
-    escribe. Cada advertencia: `{clave, texto}`. La clave es estable (sirve
-    para saber si ya se reconoció); el texto es para la pantalla.
+    **No decide nada acá.** La pregunta «¿puede salir este camión?» tiene UNA
+    política, `flota/dominio/salida.py`, la misma que pinta el semáforo de la
+    bandeja y el aviso del conductor. Esta función le pasa el conductor de la
+    ruta (para comparar contra quién tiene el turno) y devuelve los motivos que
+    `frenan`: papeles para circular vencidos o sin cargar, daño bloqueante o
+    vencido, preventivo vencido, orden de taller abierta, inspección de hoy y
+    custodia. Hasta el 2026-09-24 esta lista se armaba a mano y **no sumaba el
+    daño bloqueante ni el preventivo vencido**: un camión con el freno reportado
+    como bloqueante salía sin que nadie tuviera que escribir por qué.
+
+    Cada advertencia: `{clave, texto}`. La clave es estable (sirve para saber si
+    ya se reconoció en un FORZAR anterior); el texto es el mismo que ve el
+    conductor.
 
     Si la flota no está disponible (tablas ausentes, import que falla) se
     devuelve UNA advertencia `flota_sin_dato` — no una lista vacía: «no pude
     mirar» no es «está en orden» (Regla 0).
     """
-    from app.utils.fecha import dia_operativo
     if ruta is None or not ruta.vehiculo_id:
         return [{'clave': 'sin_vehiculo', 'texto': 'La ruta no tiene vehículo asignado'}]
-    hoy = hoy or dia_operativo()
     try:
-        from app.models.vehiculo import Vehiculo
-        from flota.adaptadores import inspecciones as _insp
-        from flota.adaptadores import taller as _taller
-        from flota.adaptadores import traspaso as _trasp
-        from flota.adaptadores.medicion import MedidorSQL
-        from flota.adaptadores.modelos import DocumentoVehiculo
-        from flota.dominio.inspeccion import APTO
+        from flota.adaptadores.salida import evaluar_vehiculo
     except Exception as e:  # pragma: no cover — el módulo vive en el mismo repo
         logger.warning('[SENALES] flota no disponible: %s', e)
         return [{'clave': 'flota_sin_dato', 'texto': 'No se pudo consultar el estado del vehículo'}]
-
-    vehiculo = Vehiculo.query.get(ruta.vehiculo_id)
-    placa = vehiculo.placa if vehiculo else f'#{ruta.vehiculo_id}'
-    salida = []
     try:
-        # Papeles: vencidos según la política del medidor (una sola definición
-        # de «vencido»); ausentes, contados acá — un SOAT que nadie registró no
-        # está al día, no se sabe.
-        problemas = MedidorSQL().documentos_por_vehiculo() or []
-        for tipo in DOCUMENTOS_OBLIGATORIOS:
-            vencido = next((d for d in problemas if d['placa'] == placa and d['tipo'] == tipo
-                            and d['vencido']), None)
-            if vencido:
-                salida.append({'clave': f'{tipo}_vencido',
-                               'texto': f'{tipo.upper()} vencido desde {vencido["vence"]}'})
-                continue
-            registrado = DocumentoVehiculo.query.filter_by(
-                vehiculo_id=ruta.vehiculo_id, tipo=tipo).first()
-            if registrado is None:
-                salida.append({'clave': f'{tipo}_sin_registro',
-                               'texto': f'{tipo.upper()} no registrado en flota'})
-            elif registrado.estado == 'no_encontrado':
-                salida.append({'clave': f'{tipo}_no_encontrado',
-                               'texto': f'{tipo.upper()} marcado como no encontrado'})
-
-        inspecciones = _insp.del_dia(ruta.vehiculo_id, hoy)
-        if not inspecciones:
-            salida.append({'clave': 'sin_inspeccion_hoy',
-                           'texto': 'Sin inspección preoperacional hoy'})
-        elif inspecciones[0].veredicto != APTO:
-            salida.append({'clave': 'inspeccion_no_apta',
-                           'texto': f'La inspección de hoy salió «{inspecciones[0].veredicto}»'})
-
-        if any(o.estado == 'abierta' for o in _taller.ordenes_de(ruta.vehiculo_id)):
-            salida.append({'clave': 'en_taller',
-                           'texto': 'El vehículo tiene una orden de taller abierta'})
-
-        cust = _trasp.custodia_activa(ruta.vehiculo_id)
-        if cust is None:
-            salida.append({'clave': 'sin_custodia',
-                           'texto': 'Nadie tiene la custodia del vehículo'})
-        elif cust.custodio_tipo == 'conductor' and cust.custodio_conductor_id != ruta.conductor_id:
-            salida.append({'clave': 'custodio_distinto',
-                           'texto': 'La custodia del vehículo la tiene otro conductor'})
-        elif cust.custodio_tipo != 'conductor':
-            salida.append({'clave': 'custodia_en_sede',
-                           'texto': 'El vehículo figura en custodia de la sede, no del conductor'})
+        ev = evaluar_vehiculo(ruta.vehiculo_id, conductor_de_la_ruta=ruta.conductor_id,
+                              sale_hoy=True)
     except Exception as e:
         logger.warning('[SENALES] no se pudo leer el estado de flota del vehículo %s: %s',
                        ruta.vehiculo_id, e)
-        salida.append({'clave': 'flota_sin_dato',
-                       'texto': 'No se pudo consultar el estado completo del vehículo'})
+        return [{'clave': 'flota_sin_dato',
+                 'texto': 'No se pudo consultar el estado completo del vehículo'}]
+    return [{'clave': m.clave, 'texto': m.texto} for m in ev.para_despachar()]
+
+
+def despachos_forzados(desde=None, hasta=None) -> list:
+    """Las rutas que salieron **reconociendo** advertencias de flota: el FORZAR
+    que escribe `RutaService._reconocer_advertencias_flota`.
+
+    **Una función** para leerlos. La bitácora guarda con la misma acción
+    `FORZAR` el cierre forzado de una ruta (`forzar_cierre`), que es otra cosa:
+    acá se distinguen por lo que el escritor puso en `despues` —
+    `advertencias_flota`—, no por la acción. Quien lea la bitácora por su
+    cuenta y cuente todos los FORZAR como «despachó con advertencias» (o todos
+    como «cierre forzado») mezcla los dos.
+
+    Cada fila: ruta, vehículo, cuándo (UTC naive), quién lo autorizó, el motivo
+    escrito, el momento (iniciar el cargue / despachar) y las advertencias tal
+    como se vieron. Sin placa, sin nombre: eso lo pone quien pinta.
+    """
+    from app.extensions import db
+    from app.models.bitacora import BitacoraAccion
+    from app.models.ruta_despacho import RutaDespacho
+    q = BitacoraAccion.query.filter(BitacoraAccion.accion == 'FORZAR',
+                                    BitacoraAccion.entidad == 'RutaDespacho')
+    if desde is not None:
+        q = q.filter(BitacoraAccion.ocurrido_en >= desde)
+    if hasta is not None:
+        q = q.filter(BitacoraAccion.ocurrido_en < hasta)
+    salida = []
+    for b in q.order_by(BitacoraAccion.ocurrido_en, BitacoraAccion.id).all():
+        despues = b.despues if isinstance(b.despues, dict) else {}
+        if 'advertencias_flota' not in despues:
+            continue            # cierre forzado de la ruta, no un despacho
+        ruta = db.session.get(RutaDespacho, b.entidad_id) if b.entidad_id else None
+        detalle = despues['detalle'] if isinstance(despues.get('detalle'), list) else []
+        salida.append({
+            'bitacora_id': b.id,
+            'ruta_id': b.entidad_id,
+            'vehiculo_id': ruta.vehiculo_id if ruta is not None else None,
+            'conductor_id': ruta.conductor_id if ruta is not None else None,
+            'ts': b.ocurrido_en,
+            'usuario_id': b.usuario_id,
+            'motivo': b.motivo,
+            'momento': despues.get('momento'),
+            'claves': list(despues['advertencias_flota'] or []),
+            'advertencias': [a for a in detalle if isinstance(a, dict)],
+        })
     return salida
 
 
@@ -530,4 +530,5 @@ __all__ = [
     'MOTIVOS_AFIRMAN_PRESENCIA', 'umbral_rechazo_lejos_m', 'distancia_al_maestro',
     'senal_rechazo_lejos', 'efectivo_en_poder_por_conductor', 'faltante_de_retorno',
     'faltantes_de_retorno_de_recaudos', 'senales_de_recaudo', 'advertencias_de_flota',
+    'despachos_forzados',
 ]

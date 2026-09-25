@@ -154,7 +154,42 @@ def _turno(**extra):
             d['estado_vehiculo'][k] = v
         else:
             d[k] = v
+    d['estado_vehiculo']['salida'] = _salida_de(d['estado_vehiculo'])
     return d
+
+
+def _salida_de(e):
+    """`estado_vehiculo.salida` calculada con la política REAL
+    (`flota/dominio/salida.py`) a partir de los hechos del doble. El teléfono no
+    decide niveles: un doble que escribiera el color a mano probaría el doble."""
+    from datetime import date
+
+    from flota.dominio import salida as dom
+
+    hoy = date(2026, 9, 24)
+    vencidos = {x['tipo']: date.fromisoformat(x['vencio'])
+                for x in e['documentos_vencidos']}
+    papeles = tuple(
+        dom.Papel(t, dom.VENCIDO, vencidos[t]) if t in vencidos
+        else dom.Papel(t, dom.VIGENTE, date(2027, 6, 1))
+        for t in dom.NOMBRE_PAPEL)
+    i = e['inspeccion_de_hoy']
+    insp = ('sin_hacer' if not i['hecha'] else
+            {'apto': 'apta', 'no_apto': 'no_apta', 'incompleta': 'incompleta'}[i['veredicto']])
+    peor = e['hallazgo_peor']
+    bloq = 1 if peor and peor['criticidad'] == 'bloqueante' else 0
+    venc = max(0, e['hallazgos_vencidos'] - bloq)
+    return dom.evaluar(dom.Hechos(
+        hoy=hoy, papeles=papeles, danos_bloqueantes=bloq, danos_vencidos=venc,
+        danos_en_plazo=max(0, e['hallazgos_abiertos'] - bloq - venc),
+        inspeccion=insp, sale_hoy=False,
+        preventivo_vencidas=tuple(
+            dom.TareaVencida(t['tarea'], -t['faltan_km']
+                             if isinstance(t['faltan_km'], int) else None)
+            for t in e['preventivo_vencido']),
+        preventivo_por_vencer=0, ot_abiertas=0, km_conocido=True, km_dudoso=False,
+        custodia='conductor', custodio_conductor_id=7, conductor_de_la_ruta=None,
+        fuera_de_sede=False, ficha='completa', ficha_falta=())).aviso_del_conductor()
 
 
 def _tarjeta(tmp_path, d, cola=None, rechazos=None):
@@ -276,10 +311,30 @@ class TestElSemaforo:
         assert 'flota-sem-rojo' in html
         assert 'SOAT vencido' in sem[0]
 
-    def test_un_dano_abierto_es_amarillo(self, tmp_path):
+    def test_un_dano_abierto_es_ambar(self, tmp_path):
+        """Un vocabulario: el teléfono dice «ámbar» como la bandeja, no
+        «amarillo» (2026-09-24)."""
         html = self._franja(tmp_path, hallazgos_abiertos=2)
-        assert 'flota-sem-amarillo' in html
-        assert '2 daño(s) abierto(s)' in html
+        assert 'flota-sem-ambar' in html
+        assert 'amarillo' not in html
+        assert '2 daños abiertos' in html
+
+    def test_el_color_lo_manda_el_servidor(self, tmp_path):
+        """El teléfono no decide rojo o ámbar: pinta `salida.color`. Con un
+        renglón ámbar y el servidor diciendo rojo, manda el servidor."""
+        d = _turno(tiene_turno_abierto=True, origen='custodia',
+                   inspeccion={'hecha': True, 'veredicto': 'apto', 'habilita_despacho': True},
+                   hallazgos_abiertos=1)
+        d['estado_vehiculo']['salida']['color'] = 'rojo'
+        assert 'flota-sem-rojo' in _tarjeta(tmp_path, d)
+
+    def test_un_estado_viejo_sin_salida_se_dice(self, tmp_path):
+        """Un estado guardado por una versión anterior no trae `salida`: se
+        dice que no está actualizado, no se inventa un verde."""
+        d = _turno(tiene_turno_abierto=True)
+        del d['estado_vehiculo']['salida']
+        html = _correr(tmp_path, 'flotaCondHojaHTML(D, [])', semilla=f'var D = {json.dumps(d)};')
+        assert 'no está actualizado' in html
 
     def test_lo_mas_grave_va_primero_y_el_resto_se_cuenta(self, tmp_path):
         html = self._franja(tmp_path, hallazgos_abiertos=1, documentos_vencidos=[

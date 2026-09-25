@@ -36,7 +36,7 @@ bandeja en producción se fijan con dato.
 from dataclasses import dataclass, field
 from datetime import date
 from decimal import Decimal
-from typing import Dict, List, Optional, Sequence, Union
+from typing import Dict, Optional, Sequence, Union
 
 from flota.dominio.valores import SIN_DATO, Confianza
 
@@ -146,15 +146,42 @@ def km_sin_ruta(*, km: int, dias: Sequence[date], dias_con_ruta: set,
     Con un extremo dudoso no se juzga: primero se verifica el kilometraje —eso
     ya es un pendiente propio—, y un salto mal tecleado no es un paseo.
     """
-    if _dudoso(marca):
-        return Veredicto(NO_EVALUABLE,
-                         'uno de los kilometrajes del tramo está en duda: '
-                         'verificalo primero contra su foto')
-    if km <= KM_TOLERANCIA_SIN_RUTA:
-        return Veredicto(NORMAL)
+    base = km_sin_explicar(km=km, marca=marca, tolerancia=KM_TOLERANCIA_SIN_RUTA)
+    if base.estado != SENAL:
+        return base
     if any(d in dias_con_ruta for d in dias):
         return Veredicto(NORMAL)
     return Veredicto(SENAL, datos={'km': km, 'dias': len(dias)})
+
+
+#: El motivo de un tramo que no se juzga. Uno solo, para la bandeja y para la
+#: jornada: el encargado lo lee en las dos y tiene que reconocerlo.
+MOTIVO_TRAMO_EN_DUDA = ('uno de los kilometrajes del tramo está en duda: '
+                        'verificalo primero contra su foto')
+
+
+def km_sin_explicar(*, km: int, marca, tolerancia: int) -> Veredicto:
+    """El núcleo de «kilómetros que nadie explica». UNA función para las dos
+    preguntas que lo hacen:
+
+        bandeja   ¿se movió en días sin ruta?            (`km_sin_ruta`)
+        jornada   ¿sumó km mientras la sede tenía el turno? (`km_entre_turnos`)
+
+    Hasta el 2026-09-24 la jornada restaba `km_inicio − km_fin` de dos turnos
+    **sin mirar la confianza de las lecturas**: un número mal tecleado, sin
+    foto, salía como «120 km que no le tocan a ningún turno» con el nombre de
+    dos conductores al lado. La bandeja ya no lo juzgaba. Ahora ninguna.
+
+    `marca` es `odometro.confianza_del_tramo(a, b)` (o `SIN_DATO` si falta una
+    de las dos lecturas). Con un extremo dudoso no se juzga: primero se
+    verifica el kilometraje —eso ya es un pendiente propio—, y un salto mal
+    tecleado no es un paseo. `km <= tolerancia` es normal.
+    """
+    if _dudoso(marca):
+        return Veredicto(NO_EVALUABLE, MOTIVO_TRAMO_EN_DUDA)
+    if km <= tolerancia:
+        return Veredicto(NORMAL)
+    return Veredicto(SENAL, datos={'km': km})
 
 
 # ── Km de una ruta contra la mediana de su ruta maestra ─────────────────────
@@ -270,123 +297,17 @@ def turno_de_la_ruta(*, conductor_ruta_id: Optional[int], estado_ruta: str,
 
 
 # ── El semáforo ─────────────────────────────────────────────────────────────
-
-ROJO = 'rojo'
-AMBAR = 'ambar'
-VERDE = 'verde'
-
-
-@dataclass(frozen=True)
-class HechosDelVehiculo:
-    """Lo que el adaptador sabe de un vehículo, ya contado.
-
-    Todos los campos son obligatorios: un hecho que el adaptador no pudo leer
-    viaja como `None` y el semáforo lo trata como «no sé», nunca como cero.
-    """
-    documentos_vencidos: List[str]
-    documentos_por_vencer: List[str]
-    documentos_no_encontrados: List[str]
-    documentos_sin_cargar: List[str]
-    # Los tres son DISJUNTOS: un daño abierto cae en uno solo. Bloqueante
-    # primero (su plazo es el mismo día, así que casi siempre también está
-    # vencido), después vencido, después el resto.
-    danos_bloqueantes: int
-    danos_vencidos: int
-    danos_en_plazo: int
-    inspeccion: str            # apta | no_apta | incompleta | sin_hacer | sin_dato
-    sale_hoy: bool
-    preventivo_vencidas: int
-    preventivo_por_vencer: int
-    km_conocido: bool
-    km_dudoso: bool
-    custodia: str              # conductor | sede | pendiente_sede | sin_turno
-    fuera_de_sede: bool
-    ficha: str                 # completa | incompleta | sin_ficha
-
-
-def _lista(nombres: List[str]) -> str:
-    return ', '.join(nombres)
-
-
-def semaforo(h: HechosDelVehiculo) -> dict:
-    """Rojo, ámbar o verde, **con el porqué de cada color**.
-
-    Rojo = no debería salir o hay que actuar hoy: un papel vencido, un daño
-    bloqueante o vencido, una inspección no apta, una ruta de hoy sin
-    inspección apta, un preventivo vencido.
-
-    Ámbar = hay trabajo con plazo, **o no se sabe**: un papel por vencer o sin
-    cargar, un daño abierto, el km sin dato o en duda, el turno sin dueño claro,
-    la ficha incompleta. Lo que no se sabe va a ámbar y no a verde — un verde
-    sobre un vehículo sin SOAT cargado es la evidencia falsa de seguridad de la
-    regla 1.
-
-    Verde = nada de lo anterior. Dice «sin pendientes conocidos», no «todo
-    bien»: la bandeja solo conoce lo que se registró.
-    """
-    porque = []
-
-    def rojo(texto):
-        porque.append({'nivel': ROJO, 'texto': texto})
-
-    def ambar(texto):
-        porque.append({'nivel': AMBAR, 'texto': texto})
-
-    if h.documentos_vencidos:
-        rojo('papel vencido: ' + _lista(h.documentos_vencidos))
-    if h.danos_bloqueantes:
-        rojo(f'{h.danos_bloqueantes} daño(s) bloqueante(s) abierto(s)')
-    if h.danos_vencidos:
-        rojo(f'{h.danos_vencidos} daño(s) pasado(s) de su fecha límite')
-    if h.inspeccion == 'no_apta':
-        rojo('la inspección de hoy salió NO apta')
-    elif h.sale_hoy and h.inspeccion != 'apta':
-        rojo('tiene ruta hoy y no tiene inspección apta'
-             + (' (quedó incompleta)' if h.inspeccion == 'incompleta' else ''))
-    if h.preventivo_vencidas:
-        rojo(f'{h.preventivo_vencidas} mantenimiento(s) preventivo(s) vencido(s)')
-
-    if h.documentos_por_vencer:
-        ambar('papel por vencer: ' + _lista(h.documentos_por_vencer))
-    if h.documentos_no_encontrados:
-        ambar('papel que nadie pudo mostrar: '
-              + _lista(h.documentos_no_encontrados))
-    if h.documentos_sin_cargar:
-        ambar('papel sin cargar, no se sabe si está al día: '
-              + _lista(h.documentos_sin_cargar))
-    if h.danos_en_plazo:
-        ambar(f'{h.danos_en_plazo} daño(s) abierto(s) dentro de plazo')
-    if h.preventivo_por_vencer:
-        ambar(f'{h.preventivo_por_vencer} preventivo(s) por vencer')
-    if not h.km_conocido:
-        ambar('sin ninguna lectura de kilometraje: no se sabe cuánto tiene')
-    elif h.km_dudoso:
-        ambar('el último kilometraje está en duda: verificar contra la foto')
-    if h.custodia == 'sin_turno':
-        ambar('nadie tiene el turno registrado')
-    elif h.custodia == 'pendiente_sede':
-        ambar('el turno quedó en una sede que no está en el maestro')
-    if h.fuera_de_sede:
-        ambar('está pasando la noche fuera de sede')
-    if h.ficha == 'sin_ficha':
-        ambar('sin ficha técnica')
-    elif h.ficha == 'incompleta':
-        ambar('ficha técnica incompleta')
-
-    if any(p['nivel'] == ROJO for p in porque):
-        color = ROJO
-    elif porque:
-        color = AMBAR
-    else:
-        color = VERDE
-        porque.append({'nivel': VERDE, 'texto': 'sin pendientes conocidos'})
-    return {'color': color, 'porque': porque}
+#
+# Se mudó a `flota/dominio/salida.py` el 2026-09-24: «¿puede salir este
+# camión?» la contestaban tres pantallas con tres políticas (esta, el despacho
+# y el teléfono del conductor). Ahora hay una, y este módulo se queda con las
+# señales de fuga.
 
 
 __all__ = [
     'Veredicto', 'SENAL', 'NORMAL', 'NO_EVALUABLE', 'mediana', 'umbrales',
     'km_sin_ruta', 'km_de_ruta', 'galones_de_ventana', 'precio_de_galon',
-    'turno_de_la_ruta', 'HechosDelVehiculo', 'semaforo', 'ROJO', 'AMBAR',
-    'VERDE', 'VENTANA_SENALES_DIAS', 'VENTANA_RECIENTE_DIAS',
+    'turno_de_la_ruta', 'km_sin_explicar', 'MOTIVO_TRAMO_EN_DUDA',
+    'VENTANA_SENALES_DIAS', 'VENTANA_RECIENTE_DIAS',
     'VENTANA_PRECIO_DIAS', 'ESTADOS_RUTA_EN_LA_CALLE',
 ]
