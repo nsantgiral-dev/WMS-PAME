@@ -524,8 +524,10 @@ def confirmar_parada(id, tarea_id):
     conductor_ruta = Conductor.query.filter_by(usuario_id=uid, activo=True).first()
     es_conductor = bool(conductor_ruta and conductor_ruta.id == ruta.conductor_id)
     # La oficina en tránsito corrige lo del conductor (quien corrige cobros);
-    # con la ruta cerrada registra la parada tardía (admin + liquidador).
-    es_oficina = bool(_con_permiso(puede_corregir_cobro))
+    # con la ruta cerrada solo registra la parada tardía quien liquida (admin +
+    # liquidador): corregir cobros no abre la puerta de una ruta ya cerrada.
+    es_oficina = bool(ruta.estado != 'ENTREGADA'
+                      and _con_permiso(puede_corregir_cobro))
     registra_tardia = bool(ruta.estado == 'ENTREGADA'
                            and _con_permiso(puede_registrar_parada_tardia))
     if not (es_oficina or es_conductor or registra_tardia):
@@ -1546,7 +1548,5 @@ def liquidacion_detalle(id):
         'resolver_documento': puede_resolver_documento(u),
         'parada_tardia': puede_registrar_parada_tardia(u),
         'forzar_cierre': puede_forzar_cierre_ruta(u),
-        # El formulario de parada tardía de la oficina (tanda 2 · B).
-        'registrar_parada_tardia': puede_registrar_parada_tardia(u),
     }
     return jsonify(resultado), 200

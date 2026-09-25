@@ -16,7 +16,8 @@ import re
 
 APP = pathlib.Path(__file__).resolve().parents[1] / 'app' / 'static' / 'pwa' / 'app.js'
 
-#: Pestañas que el timer recarga a propósito, con su motivo. Solo encoge.
+#: Pestañas que el timer recarga a propósito, con su motivo. Crece solo con una
+#: pestaña nueva que de verdad es de datos vivos, declarada con su porqué.
 VIVAS = {
     'tab-dashboard': 'colas y KPIs del turno en vivo',
     'tab-pedidos': 'pedidos que entran de Siesa',
@@ -31,6 +32,7 @@ VIVAS = {
     'tab-traslados': 'traslados en curso',
     'tab-reposicion': 'tareas de reposición en curso',
     'tab-liquidacion': 'rutas que llegan a liquidar',
+    'tab-cartera': 'retenciones que el Gestor de Cartera libera (el mismo bloque vivo del tablero)',
 }
 
 

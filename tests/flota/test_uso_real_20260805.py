@@ -146,7 +146,9 @@ class TestSalirAvisa:
         js = _js()
         i = js.index('function flotaCerrarModal')
         cuerpo = js[i:i + 800]
-        assert 'confirm(' in cuerpo
+        # Desde que el modal propio reemplazó a confirm() (modal.js), la
+        # pregunta es `_modalConfirmar(`; sigue siendo una pregunta.
+        assert '_modalConfirmar(' in cuerpo or 'confirm(' in cuerpo
         assert 'flotaTrabajoSinGuardar()' in cuerpo
 
     def test_cuenta_el_tablero_ademas_de_la_grilla(self):

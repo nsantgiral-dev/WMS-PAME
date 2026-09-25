@@ -883,7 +883,7 @@ function _liqHace(horas) {
 function _liqBloqueSinGestionar(ruta) {
   const lista = (_liqDetalleRuta && _liqDetalleRuta.paradas_sin_gestionar) || [];
   if (!lista.length) return '';
-  const puede = !(_liqDetalleRuta.permisos && _liqDetalleRuta.permisos.registrar_parada_tardia === false);
+  const puede = !(_liqDetalleRuta.permisos && _liqDetalleRuta.permisos.parada_tardia === false);
   return `
     <div style="margin-bottom:12px;padding:12px;background:var(--warn-bg);border:1px solid var(--warn-brd);border-radius:10px;">
       <div style="font-size:var(--fs-sm);font-weight:800;color:var(--warn-tx);">Paradas sin gestionar (${esc(lista.length)})</div>

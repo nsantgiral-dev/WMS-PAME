@@ -68,7 +68,7 @@ class TestLiquidacionMuestraLoQueFalta:
         assert p['horas'] is not None and p['horas'] >= 0
         assert p['items'] and all(it['cantidad_pedida'] for it in p['items'])
         assert p['cobro_contraentrega'] is True       # C02: se cobra al entregar
-        assert d['permisos']['registrar_parada_tardia'] is True
+        assert d['permisos']['parada_tardia'] is True
         assert d['formulario_oficina']['version_formulario'] >= 4
 
     def test_el_dashboard_cuenta_las_que_faltan(self, app, client, db, mundo):
@@ -169,8 +169,10 @@ class TestLaOficinaRegistra:
         jefe = _usuario(db, rol='jefe_almacen')
         r = client.post(_url(f), headers=_jwt(app, jefe),
                         json=_oficina(estado_entrega='RECHAZADO', motivo_rechazo='NO_PAGO'))
-        assert r.status_code == 400 and 'quien liquida' in r.get_json()['error']
-        assert _detalle(client, app, f, jefe).get_json()['permisos']['registrar_parada_tardia'] is False
+        # 403 en la puerta: el jefe ya no corrige cobros (roles de la plata) ni
+        # registra paradas tardías, así que no atraviesa ni siquiera el guard.
+        assert r.status_code == 403, r.get_json()
+        assert _detalle(client, app, f, jefe).get_json()['permisos']['parada_tardia'] is False
 
     def test_con_la_ruta_en_camino_la_oficina_no_registra(self, db, mundo):
         from app.services.ruta_service import RutaService
