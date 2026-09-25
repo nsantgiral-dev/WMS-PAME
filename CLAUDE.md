@@ -5590,7 +5590,7 @@ backfill): tabla `oc_linea_siesa`; `proveedores.fuente/sincronizado_en`;
 
 | Pregunta | Función | Regla |
 |---|---|---|
-| ¿Cuánto falta por entrar de una línea de OC? | `pendiente_de_linea(fila)` | En unidad **base** (`f421_cant_pedida_base − f421_cant_entrada_base`); sin `_base`, `(pedida − entrada) × factor`; sin factor, **`None`** (no se inventa: se cuenta como «sin unidad base») |
+| ¿Cuánto falta por entrar de una línea de OC? | `pendiente_de_linea(fila)` | En unidad de **inventario**: `f421_cant_pedida − f421_cant_entrada` (**en la API, `f421_cant_*` ya es unidad de inventario y `f421_cant_*_base` la de la LÍNEA** — corregido 2026-09-25, ver «lo que encontró la verificación en vivo»); sin ellas, `(pedida_base − entrada_base) × factor`; sin factor, **`None`** (no se inventa: se cuenta como «sin unidad base») |
 | ¿Cuánto viene en camino? | `en_camino(skus, bodegas)` | **La única.** Líneas de OC **abiertas** + ítems de contenedor comprados y sin recibir (cuenta el estado del **contenedor** si lo tiene —`ESTADOS_EN_CAMINO`, con `EN_PRODUCCION`—, si no el del ítem; `RECIBIDO` nunca), **solo a `_BODEGAS_PV`** (lista blanca: AV1/TRA1 nunca; una bodega pedida no operada se ignora y se declara). Un contenedor que cita su OC (`oc_referencia` = `CO-TIPO-CONSEC`) y la OC sigue abierta **no se suma dos veces**; si cita una OC ya cerrada no se suma (ya entró o se anuló); sin cita, sobre un SKU con OC abierta, se suma y se marca `solapamiento_posible` (contar de más achica el déficit: es el lado corregible, Regla 0) |
 | ¿Cuánto tarda? | `lead_time(proveedor, origen)` | Cascada **proveedor (≥3 OCs medidas) → origen → default declarado** (`default_lead_time`: 5±2 nacional, configurable con `ROP_LT_NACIONAL_DIAS`/`ROP_SIGMA_LT_NACIONAL` → `CONFIGURADO`; 105±15 China), con `n`, `fuente` (MEDIDO ≥6 · PARCIAL ≥3 · CONFIGURADO · DEFAULT_CONSERVADOR), `confianza` y `nivel`. **PARCIAL no baja del default** (D9 del motor): con 3 a 5 observaciones, el mayor entre lo medido y el default, para la media y la σ (`lt_medido`/`sigma_lt_medida` publican lo medido). China → contenedores (`fecha_oc → fecha_recepcion_cedi`); nacional → OCs en COP de proveedores no chinos. Observación de una OC: fecha de la OC → **primera entrada**: la confirmación de la recepción del WMS si existe (fecha física), si no la primera marca de Siesa (`f420_fecha_ts_parcial`/`_cumplido`); una entrada anterior a la OC se descarta y se cuenta |
 | ¿A cuánto dice cada OC? | `lineas_precio_oc(refs, desde, proveedor)` | **La única lectura del precio de una OC**: por unidad base (`precio / factor`), en la moneda de la OC, con la cantidad pedida base; sin obsequios ni anuladas |
@@ -5621,7 +5621,7 @@ Fuente: `API_v2_Compras_Ordenes` (**contrato completo**, 89 campos, Regla 1).
 |---|---|---|
 | `sincronizar_ocs` | `f420_ind_estado = 1` y `= 2` (Aprobada, Parcial) | cada 30 min, 7:10–19:40 |
 | `sincronizar_historial` | `f420_ind_estado = 3 AND f420_fecha >= ''AAAAMMDD''` (`lit_fecha`), `COMPRAS_OC_HISTORIAL_DIAS` (365) | 7:20 |
-| `sincronizar_proveedores_terceros` | `API_v2_Terceros`: `f200_ind_proveedor = 1 AND f200_ind_estado = 1` (spec `42 - API_v2_Terceros.docx`; **nunca consultada antes desde el WMS**) | 7:20 |
+| `sincronizar_proveedores` | `API_v2_Proveedores`: `f202_ind_estado = 1`; en Python, compañía `SIESA_ID_CIA` y `COMPRAS_TIPOS_PROVEEDOR` (reemplazó a la de `API_v2_Terceros` el 2026-09-25) | 7:20 |
 
 - **tamPag = 100** (Regla 10); se pagina hasta una página corta, tope
   `COMPRAS_OC_MAX_PAGINAS` (60).
@@ -5651,7 +5651,12 @@ Fuente: `API_v2_Compras_Ordenes` (**contrato completo**, 89 campos, Regla 1).
 | `COMPRAS_OC_MAX_PAGINAS` | `60` | Tope por consulta (6.000 líneas) |
 | `COMPRAS_OC_PAUSA_S` | `0.5` | Pausa entre páginas |
 | `COMPRAS_OC_HISTORIAL_DIAS` | `365` | Ventana del historial |
-| `CONNEKTA_API_TERCEROS` | `API_v2_Terceros` | Nombre de la consulta de proveedores |
+| `CONNEKTA_API_PROVEEDORES` | `API_v2_Proveedores` | Maestro de proveedores (reemplazó `CONNEKTA_API_TERCEROS`, 2026-09-25) |
+| `COMPRAS_TIPOS_PROVEEDOR` | — (sin default) | Tipos de proveedor que son mercancía (`0001,0002`…); sin ella, solo los de las OCs |
+| `COMPRAS_OC_VENCIDA_DIAS` | `90` | Desde cuántos días de entrega vencida una OC abierta se declara vieja |
+| `COMPRAS_OC_EXCLUIR_MAS_DE_DIAS` | — (sin default) | Corte: las más viejas que esto no se suman a «en camino» |
+| `SIESA_CRITERIO_MARCA` | — (sin default) | Plan de clasificación que es «marca» (QA: `P03`) |
+| `COMPRAS_MARCA_MAX_PAGINAS` / `COMPRAS_MARCA_PAUSA_S` / `CONNEKTA_API_ITEMS_CRITERIOS` | `400` / `0.2` / `API_v2_ItemsCriterios` | Lectura de la marca |
 
 ### Kardex automático — `app/services/kardex_auto.py`
 
@@ -5697,11 +5702,10 @@ motivo. Una ficha nueva sin `fuente` nace `ESTIMADO` (el armador la excluye del
 armado automático) y `moq_cajas=1`.
 
 **`SIESA_CRITERIO_MARCA` — sin default, lo decide el dueño.** En Siesa la marca
-es un criterio de clasificación del ítem (plan + criterio mayor, t125; el plano
-del 238920). La variable es el **plan** que es «marca». Sin ella no se lee nada.
-La respuesta GET del 238920 **no tiene contrato**: se buscan los campos del
-plano (`f125_id_plan`, `f125_id_criterio_mayor`, `f120_referencia`) y, si no
-vienen, se devuelven los que sí vinieron — no se adivina.
+es un criterio de clasificación del ítem (plan + criterio mayor, t125). La
+variable es el **plan** que es «marca» (en QA, `P03`). Sin ella no se lee nada.
+**Desde el 2026-09-25 se lee de `API_v2_ItemsCriterios`, en segundo plano**, y
+no del 238920 (ver «lo que encontró la verificación en vivo»).
 
 ### Pantalla mínima — Compras → 🧾 Fuentes (`compras_fuentes.js`)
 
@@ -5764,7 +5768,7 @@ lo que viene y del lead time**, fusionado con el del motor) y
 `.env.qa`, SQLite desechable, `_post` bloqueado): (1) OCs abiertas con estado 1
 y 2 — que la paginación termine sin rowids repetidos, **qué campos del contrato
 no vienen**, cuántas líneas sin `_base`, a qué bodegas y en qué monedas;
-(2) que `pedida_base = pedida × factor`; (3) el historial con la fecha entre
+(2) que `pedida = pedida_base × factor` (inventario = línea × factor, corregido 2026-09-25); (3) el historial con la fecha entre
 comillas vs sin comillas, y cuántas cumplidas traen `ts_parcial`/`ts_cumplido`
 (de eso depende el lead time medido); (4) si `API_v2_Terceros` está registrada
 (o 401); (5) los campos reales del GET 238920 y los **planes** que existen,
@@ -5853,3 +5857,60 @@ de la deriva de vuelta en `SIN_FUENTE`; `ROP_LT_NACIONAL_DIAS` ignorada;
 `hay_dato` siempre verdadero; la posición sin lo que viene; el ROP ignorando
 al proveedor habitual; la capa de costo tomando un costo `None`; y los dos
 escáneres ciegos a la suma por instancia y a la variable de entorno.
+
+### Lo que encontró la verificación en vivo (2026-09-25)
+
+La primera corrida de `qa_compras_fuentes_real.py` contra Siesa QA (solo GET,
+`MODO_ENSAYO`, SQLite desechable) encontró cinco defectos. Cada uno se cerró
+por su clase, con tests que usan **la forma real** de los datos (copiada de la
+respuesta cruda, no del supuesto). Migración **`m047comprasvivo`** (down
+`m046compras`, aditiva, nullable, sin backfill).
+
+| | Clase | Qué pasaba | Ahora |
+|---|---|---|---|
+| **D1** GRAVE | Leer una cantidad de OC en la unidad equivocada | `API_v2_Compras_Ordenes` trae `f421_cant_*` en unidad de **inventario** y `f421_cant_*_base` en la de la **línea** (OC 003-OC-28: PQ de 12, pedida 36, pedida_base 3, `vlr_bruto` 3.750 = 3 × 1.250; `API_v2_Items` dice UND; `ItemsUnidadesMedida` 1 PQ = 12 UND). `pendiente_de_linea` y `_cantidad_base` restaban las `_base`: **«en camino» ×12 de menos en toda línea PQ** → déficit inflado → contenedor de más (Regla 0). En las 280 líneas con factor 1 coincidían; el fixture de los tests fijaba la relación al revés | `pendiente = pedida − entrada`; sin ellas `(pedida_base − entrada_base) × factor`. `_cantidad_base` igual; `_precio_base` (precio ÷ factor) se queda. El fixture `fila_oc` tiene la relación real y `LINEAS_REALES` son las líneas crudas. Trinquete: **la unidad de la línea solo la lee quien la multiplica por el factor** (`LECTORES_UNIDAD_LINEA`, 3, solo encoge). El espejo se recalcula en la próxima sincronización |
+| **D2** | Una observación que no mide lo que dice medir entra a la estadística | Lead time **0 días, MEDIDO, confianza ALTA** para DISPAPELES (n=24): las 24 OCs se crearon y cumplieron el mismo día, con minutos de diferencia — se digitaron **al recibir** | Entrada < 1 día después de la OC → `descartadas['oc_registrada_al_recibir']` (y por proveedor), fuera de la media y la σ. Sin muestra válida, cae al origen y al default declarado; la nota y la pantalla lo dicen (`(+24 al recibir)`) |
+| **D3** | Una lectura multicompañía sin filtro de compañía | `API_v2_Terceros` trae las compañías 1 y 2 (gana la última fila: YIWU salía COP siendo USD en la 1) y todo tercero con `ind_proveedor`: EPS, fondos de pensiones, cédulas | `sincronizar_proveedores` lee **`API_v2_Proveedores`** (una fila por **sucursal**: la clave de paginación es cía + rowid + sucursal, si no dos sucursales parecían una página repetida), solo `SIESA_ID_CIA`. Qué es mercancía: `COMPRAS_TIPOS_PROVEEDOR` (**sin default**); sin ella solo los proveedores de las OCs, y nunca crea uno desde el maestro. Guarda `Proveedor.moneda` y `tipo_proveedor` (si todas las sucursales coinciden) y la condición de pago; no pisa el nombre que pone el sync de OCs. Las filas del sync viejo (`SIESA_TERCEROS`) que no son mercancía se **desactivan con bitácora** en un barrido completo. `_aplicar_lineas` descarta líneas de otra compañía (`otra_compania`). La moneda del proveedor cubre la OC que no la trae (`moneda_fuente`: OC · PROVEEDOR · SUPUESTA_COP). Trinquete: **toda descarga de compras filtra la compañía** (ella o una función del módulo que llama) |
+| **D4** | Una lectura larga de Siesa dentro de un request | La marca leía el **238920** (plano de importación: el GET da 401) dentro del request: el plan P03 son **261 páginas, 292 s**, y gunicorn corta a los 60 | `API_v2_ItemsCriterios` con `f125_id_plan = ''P03''` (`lit`), en un **hilo** (`disparar_lectura_marca`, `LOCK_MARCA_SIESA = 2026`, registro `compras_marca`, techo 20 min para una lectura muerta), `COMPRAS_MARCA_MAX_PAGINAS` (400) y clave (ítem, plan): un rowid repetido o el tope → **INCOMPLETA, no se guarda ni se aplica, se declara**. Queda en **`marca_siesa_lectura`** (OPERATIVA en el acta de corte, REGENERABLE en el respaldo); la vista previa y «Aplicar» leen de ahí, solo los ítems del catálogo (`fuera_del_catalogo` contado). **`Producto.marca_siesa` es el NOMBRE** (NORMA) y **`Producto.marca_codigo`** (m047) el código (M001); el Armador compara `MARCAS_CHINA` contra el código (y contra `marca_siesa` por compatibilidad). Fuente `SIESA_CRITERIOS`. Trinquete: **ninguna ruta llama una lectura larga de compras** (`leer_marca_siesa`, `sincronizar_*`, `_descargar`) |
+| **D5** | Un insumo que se suma sin declarar su antigüedad | En QA el 90 % de lo pendiente es de OCs de más de un año (con 90 días, el 100 %: 293.680 u de 293.750) | `en_camino` **las suma igual** (decisión del dueño) y declara `ocs_vencidas` (líneas, unidades, % del total, SKUs, la entrega más vieja) con `COMPRAS_OC_VENCIDA_DIAS` (default declarado **90**); cada SKU trae `oc_vencida`. Corte opcional `COMPRAS_OC_EXCLUIR_MAS_DE_DIAS` (**sin default**): lo más viejo no se suma y se dice. Una variable ilegible no corta y se declara. La pantalla lo muestra (columna «Vieja») |
+
+**Revisado y sin cambio:** el muelle (`routes/siesa.ordenes_compra`,
+`debug_oc`) y la recepción de tienda leen `f421_cant_pedida/_entrada` como
+unidades — correcto con la regla verificada. **Riesgo declarado, sin probar:**
+la entrada 142948 manda `f470_cant_base` = unidades contadas con
+`f470_id_unidad_medida` = la unidad de la línea (PQ). Si en el movimiento
+`_base` también fuera la unidad de la línea, una recepción de una línea PQ
+entraría ×12. Ninguna OC con factor ≠ 1 se ha recibido nunca en QA; probarlo
+con una OC fresca en paquetes antes de recibir una en producción.
+
+**Verificado en vivo después de los arreglos** (Siesa QA, solo GET, scripts
+`cmpfix_*` del scratchpad): en camino `PAPELSP6948` = **432** y `PAPELSP6741`
+= **5.509**; precio de la OC-28 104,17 × 36 = 3.750; lead time: 1 observación
+válida, 31 al recibir, DISPAPELES en el default declarado 5 ± 2; proveedores:
+sin `COMPRAS_TIPOS_PROVEEDOR`, 21 (los de las OCs), 832 filas de la compañía 2
+descartadas, cero EPS, YIWU en USD; con `0001,0002,0018`, 632. Marca P03 por
+el mismo camino del botón (hilo): el botón respondió en 0 s y un segundo
+disparo dio 409 «en curso»; la lectura, **261 páginas, 26.053 ítems, 141 marcas,
+276 s, sin rowids repetidos, completa**; aplicada a 4 SKU del catálogo local:
+`PAPELSP016 → NORMA (M001)`, `FIESTSF104 → QUIROND (M003)`,
+`PAPELSP6948 → SANFORD (M008)`. Migración `m047comprasvivo` upgrade → downgrade →
+upgrade contra un PostgreSQL 17 desechable.
+
+Trinquetes nuevos en `tests/test_compras_fuentes_trinquetes.py` (clases 4, 5 y
+6, con meta-tests y pisos); tests con datos reales en `test_compras_fuentes.py`
+(`LINEAS_REALES`, `OCS_DISPAPELES_QA`, `PROVEEDORES_QA`, `CRITERIOS_P03_QA`) y
+`test_compras_fuentes_js.py`. **34 mutaciones, las 34 rojas** (cada reemplazo
+verificado a aplicar exactamente una vez, con `-B` y sin `.pyc`).
+
+Suite completa en el worktree (2026-09-25, `-m "not postgres"`, TZ=UTC):
+**8756 passed, 0 failed** (5 skipped, 19 xfailed).
+
+**Decisiones para el dueño:**
+1. `COMPRAS_TIPOS_PROVEEDOR`: en el maestro «Tipo de proveedor», 0001 =
+   nacionales, 0002 = del extranjero, 0017 = gastos diversos, **0018 = NÓMINA**,
+   0019 = aportes y seguridad social. Las OCs de QA usan 0001, 0018, 0017 y 0002:
+   ¿cuáles son mercancía? Probablemente `0001,0002`.
+2. `SIESA_CRITERIO_MARCA=P03` (en QA: P01 línea de negocio, P02 sub línea, P03
+   marca). Después «Leer de Siesa» → «Ver qué cambiaría» → «Aplicar».
+3. OCs viejas abiertas: anularlas en Siesa, o fijar
+   `COMPRAS_OC_EXCLUIR_MAS_DE_DIAS`. El umbral de aviso (90) es provisional.
