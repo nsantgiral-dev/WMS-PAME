@@ -796,21 +796,35 @@ class TestElCierreSinSiesaSeNiegaLimpio:
         assert Bulto.query.filter_by(tarea_id=t.id).count() == 0
         assert SiesaJob.query.filter_by(referencia_id=t.id).count() == 0
 
-    def test_circuito_abierto(self, db, almacen, producto, siesa_real, monkeypatch):
+    @pytest.fixture
+    def preguntas(self, monkeypatch):
+        """Sin Siesa disponible el cierre se niega ANTES de preguntarle nada
+        (una consulta a un Siesa caído son 30 s del request)."""
+        from app.services.connekta_gateway import ConnektaGateway
+        hechas = []
+        monkeypatch.setattr(ConnektaGateway, 'get_estado_pedido',
+                            lambda self, t, c: hechas.append('estado') or 3)
+        monkeypatch.setattr(ConnektaGateway, 'get_factura_desde_pedido',
+                            lambda self, t, c: hechas.append('fe') or [])
+        return hechas
+
+    def test_circuito_abierto(self, db, almacen, producto, siesa_real, monkeypatch, preguntas):
         from app.services.documento_fiscal import MENSAJE_SIESA_NO_DISPONIBLE
         monkeypatch.setattr(siesa_real, '_cb_state', 'OPEN')
         t = _caja_para_cerrar(db, almacen, producto)
         r = self._cerrar(t)
         assert not r.exitoso and r.mensaje.startswith(MENSAJE_SIESA_NO_DISPONIBLE)
+        assert 'no responde' in r.mensaje and preguntas == []
         self._nada_cambio(db, t)
 
-    def test_fuera_de_ventana(self, db, almacen, producto, siesa_real, monkeypatch):
+    def test_fuera_de_ventana(self, db, almacen, producto, siesa_real, monkeypatch, preguntas):
         from app.services import documento_fiscal
         monkeypatch.setattr(documento_fiscal, '_ahora_bogota',
                             lambda: datetime(2026, 9, 25, 20, 30))
         t = _caja_para_cerrar(db, almacen, producto)
         r = self._cerrar(t)
         assert not r.exitoso and 'la caja queda esperando' in r.mensaje
+        assert 'factura de 06:00 a 20:00' in r.mensaje and preguntas == []
         self._nada_cambio(db, t)
 
     def test_siesa_no_contesta_el_precheck(self, db, almacen, producto, siesa_real,
@@ -1086,9 +1100,10 @@ class TestLaAuditoriaLoVe:
 # 12 · Trinquete: toda operación que deshace o rehace una caja pregunta
 # ═════════════════════════════════════════════════════════════════════════════
 
+#: Solo las funciones de `documento_fiscal`: un ayudante que las llama por
+#: dentro (`_retencion_que_frena`) no protege la operación que lo usa.
 _POLITICA = {'exigir_sin_documento', 'exigir_pedido_sin_documento',
-             'tiene_documento_en_siesa', 'filtro_tiene_documento',
-             '_retencion_que_frena'}
+             'tiene_documento_en_siesa', 'filtro_tiene_documento'}
 
 #: Funciones que, por su nombre, la política debe cubrir. Solo crece con una
 #: decisión escrita; un sitio que pierde la llamada se pone rojo.
