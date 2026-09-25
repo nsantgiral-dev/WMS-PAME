@@ -1134,7 +1134,7 @@ ENTIDADES = {
     'LineaDevolucionCliente': 'la línea de devolución', 'TareaDevolucion': 'la tarea de devolución',
     'JuicioTemporada': 'el juicio de temporada', 'SiesaMapeoUnidades': 'el mapeo de unidades',
     'LPN': 'el LPN', 'MovimientoInventario': 'el movimiento de inventario',
-    'Usuario': 'el usuario',
+    'Usuario': 'el usuario', 'RetencionCartera': 'la retención de cartera',
 }
 
 _CAMPOS_PEDIDO = ('pedido_clave', 'numero_pedido_siesa', 'referencia_doc',

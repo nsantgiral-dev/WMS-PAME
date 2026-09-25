@@ -16,7 +16,8 @@ from app.models.ruta_maestra import RutaMaestra, RutaMaestraParada
 from app.models.ruta_despacho import RutaDespacho, EstadoRutaDespacho, EstadoFinancieroRuta
 from app.utils.fecha import dia_operativo as _dia_operativo
 from app.services.bitacora import (registrar_accion, motivo_obligatorio, foto as foto_fila,
-                                   FORZADO_ADVERTENCIAS_FLOTA, FORZADO_CIERRE_RUTA)
+                                   FORZADO_ADVERTENCIAS_FLOTA, FORZADO_CIERRE_RUTA,
+                                   FORZADO_LIQUIDACION_SIN_CONTAR)
 
 logger = logging.getLogger(__name__)
 
@@ -2061,7 +2062,8 @@ class RutaService:
             registrar_accion(
                 'FORZAR', ruta, usuario_id=usuario_id, motivo=motivo_devoluciones,
                 entidad_codigo=f'RUTA-{ruta.id}',
-                despues={'liquidada_con_devoluciones_sin_contar': _sin_contar})
+                despues={'forzado': FORZADO_LIQUIDACION_SIN_CONTAR,
+                         'liquidada_con_devoluciones_sin_contar': _sin_contar})
 
         RutaService._marcar_liquidada(
             ruta, usuario_id,

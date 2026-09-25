@@ -54,6 +54,17 @@ class TestTipoDeForzado:
         assert b.tipo_de_forzado('RutaDespacho', None) is None
         assert 'cierre' not in b.verbo_de_forzado('RutaDespacho', {})
 
+    def test_los_forzar_de_cartera_y_devoluciones_no_son_cierres(self):
+        # Integración 2026-09-24: cartera, devoluciones y la liquidación con
+        # devoluciones sin contar escribían FORZAR sin tipo. La liquidación
+        # cae sobre `RutaDespacho`, igual que el cierre forzado: con su tipo
+        # la jornada no la cuenta como «ruta cerrada a la fuerza».
+        from app.services import bitacora as b
+        for t in (b.FORZADO_AUTORIZACION_CARTERA, b.FORZADO_LIQUIDACION_SIN_CONTAR,
+                  b.FORZADO_NC_APROBADA_A_MANO):
+            assert b.tipo_de_forzado('RutaDespacho', {'forzado': t}) == t
+            assert 'cierre' not in b.verbo_de_forzado('RutaDespacho', {'forzado': t})
+
     def test_registrar_un_forzar_sin_decir_que_forzo_se_rechaza(self, db):
         from app.services.bitacora import registrar_accion
         with pytest.raises(ValueError, match='forzado'):

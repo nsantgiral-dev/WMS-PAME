@@ -1451,7 +1451,8 @@ def autorizar(retencion_id: int, usuario, motivo: str, tope_valor, vence_en=None
               usuario_id: int = None) -> RetencionCartera:
     """Deja salir el pedido a crédito igual. Motivo y tope obligatorios;
     vigencia ≤ 30 días; quien inició el pedido no puede autorizarlo."""
-    from app.services.bitacora import motivo_obligatorio, registrar_accion
+    from app.services.bitacora import (FORZADO_AUTORIZACION_CARTERA,
+                                       motivo_obligatorio, registrar_accion)
     r = db.session.get(RetencionCartera, retencion_id)
     if r is None:
         raise LookupError(f'Retención {retencion_id} no encontrada')
@@ -1486,7 +1487,8 @@ def autorizar(retencion_id: int, usuario, motivo: str, tope_valor, vence_en=None
     r.tope_valor, r.vence_en, r.codigo_excepcion = tope, vence, codigo_excepcion
     registrar_accion('FORZAR', r, usuario_id=usuario_id, motivo=texto,
                      entidad_codigo=r.numero_pedido, antes=antes,
-                     despues={'estado': r.estado, 'autorizado_por': quien,
+                     despues={'forzado': FORZADO_AUTORIZACION_CARTERA,
+                              'estado': r.estado, 'autorizado_por': quien,
                               'origen': origen, 'tope_valor': float(tope),
                               'vence_en': vence.isoformat(),
                               'codigo_excepcion': codigo_excepcion,

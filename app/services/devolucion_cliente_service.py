@@ -791,7 +791,8 @@ class DevolucionClienteService:
         Al aprobarse, lo sano sale de la zona DEVOLUCION a picking
         (`liberar_reingreso`).
         """
-        from app.services.bitacora import foto, motivo_obligatorio, registrar_accion
+        from app.services.bitacora import (FORZADO_NC_APROBADA_A_MANO, foto,
+                                           motivo_obligatorio, registrar_accion)
         motivo = motivo_obligatorio(motivo, 'marcar una nota crédito como aprobada sin '
                                             'verificarla en Siesa')
         devolucion = db.session.get(DevolucionCliente, devolucion_id)
@@ -807,7 +808,8 @@ class DevolucionClienteService:
         DevolucionClienteService._aprobar(devolucion, FuenteAprobacionNC.MANUAL, usuario_id)
         registrar_accion('FORZAR', devolucion, usuario_id=usuario_id,
                          motivo=f'NC marcada aprobada a mano (sin verificar en Siesa): {motivo}',
-                         antes=antes, despues=foto(devolucion, _campos))
+                         antes=antes, despues={'forzado': FORZADO_NC_APROBADA_A_MANO,
+                                               **foto(devolucion, _campos)})
         DevolucionClienteService.liberar_reingreso(devolucion, usuario_id)
         db.session.commit()
         return devolucion

@@ -68,6 +68,13 @@ ACCIONES = (
 #: la forma de su `despues`.
 FORZADO_CIERRE_RUTA = 'cierre_de_ruta'
 FORZADO_ADVERTENCIAS_FLOTA = 'despacho_con_advertencias_de_flota'
+# Los tres de abajo llegaron en la integración del 2026-09-24: cartera y
+# devoluciones escribían FORZAR en paralelo al frente que exigió declararlo.
+# Uno cae sobre la MISMA entidad (`RutaDespacho`): sin su tipo, la jornada lo
+# habría leído como un cierre forzado de ruta.
+FORZADO_AUTORIZACION_CARTERA = 'despacho_autorizado_por_cartera'
+FORZADO_LIQUIDACION_SIN_CONTAR = 'liquidacion_con_devoluciones_sin_contar'
+FORZADO_NC_APROBADA_A_MANO = 'nc_aprobada_sin_verificar_en_siesa'
 
 #: tipo → (verbo en pasado para la bitácora legible, qué se saltó).
 TIPOS_FORZADO = {
@@ -75,6 +82,12 @@ TIPOS_FORZADO = {
                           'cerró la ruta dando por rechazado lo no gestionado'),
     FORZADO_ADVERTENCIAS_FLOTA: ('despachó pese a las advertencias de flota',
                                  'la ruta salió con advertencias de flota reconocidas'),
+    FORZADO_AUTORIZACION_CARTERA: ('levantó con tope',
+                                   'el pedido retenido por cartera sale con un tope'),
+    FORZADO_LIQUIDACION_SIN_CONTAR: ('liquidó con devoluciones sin contar',
+                                     'la ruta se liquidó sin que bodega contara lo devuelto'),
+    FORZADO_NC_APROBADA_A_MANO: ('marcó aprobada a mano la nota crédito de',
+                                 'la NC se dio por aprobada sin verificarla en Siesa'),
 }
 
 #: Un FORZAR que no dice qué forzó (fila vieja de forma desconocida).
