@@ -3129,7 +3129,9 @@ página. Escribe `kardex_movimientos` (idempotente por `hash_origen`).
 (el ancla). Consumidores: `costo_service` (solo concepto 601), `armador_service`
 (demanda descensurada → ROP / contenedor), `temporada_service` (newsvendor), S-B
 y TSB. Vigía **no** lo lee. **Ningún cron lo descarga**: se actualiza solo cuando
-alguien pulsa «Descargar» (trinquete: `TestNadieDescargaElKardexSolo`).
+alguien pulsa «Descargar» (trinquete: `TestNadieDescargaElKardexSolo`). *(Desde
+m046compras existe `KARDEX_AUTO`, que nace apagado: ver «Compras: las fuentes
+de datos».)*
 
 **Lo medido en QA.** La consulta del kardex responde **401** por el endpoint
 dinámico y por el estándar, con los dos nombres que tuvo (doble y simple
