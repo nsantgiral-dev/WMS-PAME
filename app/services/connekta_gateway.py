@@ -237,11 +237,6 @@ class ConnektaResultadoDesconocido(Exception):
     """
 
 
-#: Nombre del frente fiscal para `ConnektaRechazado`. **Es la misma clase**:
-#: se retira en el commit siguiente, que renombra sus usos.
-ConnektaRechazoExplicito = ConnektaRechazado
-
-
 
 class ConnektaGateway:
 

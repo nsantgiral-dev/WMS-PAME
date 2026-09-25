@@ -302,13 +302,12 @@ class DespachoParialService:
             '[DESPACHO_PARCIAL] 142945 enviando RM — tarea=%s pedido=%s ítems=%d',
             tarea.id, tarea.numero_pedido_siesa, len(_items_rm),
         )
-        # Regla 6: pre-flag ANTES del POST. Solo se revierte ante un «no»
-        # explícito de Siesa (o una petición que no salió); un timeout de
-        # lectura o un 5xx dejan la bandera puesta: la RM PUEDE existir, y el
-        # próximo intento la identifica en vez de reenviar el 142945.
-        from app.services.connekta_gateway import (
-            ConnektaCircuitOpenError, ConnektaNoEnviado, ConnektaRechazoExplicito,
-        )
+        # Regla 6: pre-flag ANTES del POST. Solo se revierte con prueba de que
+        # no entró (`ConnektaNoEnviado`: un «no» de Siesa, un 429, el circuito
+        # abierto o una conexión que no se abrió); un timeout de lectura o un
+        # 5xx dejan la bandera puesta: la RM PUEDE existir, y el próximo
+        # intento la identifica en vez de reenviar el 142945.
+        from app.services.connekta_gateway import ConnektaNoEnviado
         tarea.rm_enviada_at = datetime.utcnow()
         db.session.commit()
         try:
@@ -317,7 +316,7 @@ class DespachoParialService:
                 # Sin url/extra_params → usa url_post (v3/conectoresimportarestandar)
                 # 142945 formato sectioned requiere v3; v3.1 rechaza con "Error en la Estructura"
             )
-        except (ConnektaRechazoExplicito, ConnektaNoEnviado, ConnektaCircuitOpenError):
+        except ConnektaNoEnviado:
             tarea.rm_enviada_at = None
             db.session.commit()
             raise

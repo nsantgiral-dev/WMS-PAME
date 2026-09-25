@@ -428,25 +428,73 @@ class TestElTimeoutDeConexionNoEsDesconocido:
             _post_con(_gw(), requests.exceptions.ReadTimeout('leyendo'))
 
     def test_un_rechazo_explicito_se_tipa(self):
-        from app.services.connekta_gateway import ConnektaRechazoExplicito
+        from app.services.connekta_gateway import ConnektaRechazado
         gw = _gw()
         with patch('app.services.connekta_gateway.requests.post',
                    return_value=_resp(200, {'codigo': 1, 'mensaje': 'no'})):
-            with pytest.raises(ConnektaRechazoExplicito):
+            with pytest.raises(ConnektaRechazado):
                 gw._post('142945', 'X', {})
         with patch('app.services.connekta_gateway.requests.post',
                    return_value=_resp(400, {'detalle': 'mal'})):
-            with pytest.raises(ConnektaRechazoExplicito):
+            with pytest.raises(ConnektaRechazado):
                 gw._post('142945', 'X', {})
 
     def test_un_5xx_no_es_un_no(self):
-        from app.services.connekta_gateway import ConnektaRechazoExplicito
+        from app.services.connekta_gateway import ConnektaRechazado
         gw = _gw()
         with patch('app.services.connekta_gateway.requests.post',
                    return_value=_resp(502, {'detalle': 'gateway'})):
             with pytest.raises(Exception) as e:
                 gw._post('142945', 'X', {})
-        assert not isinstance(e.value, ConnektaRechazoExplicito)
+        assert not isinstance(e.value, ConnektaRechazado)
+
+
+class TestUnaJerarquiaDeExcepcionesDelPost:
+    """Integración 2026-09-25. Los frentes fiscal y dinero inventaron la misma
+    idea con los nombres cruzados: para fiscal `ConnektaNoEnviado` era solo el
+    `ConnectTimeout`; para dinero, toda prueba de que no entró. Las dos
+    `class ConnektaNoEnviado` convivieron un momento en el mismo módulo, y en
+    Python **la segunda gana en silencio**: los `except` de liquidación habrían
+    dejado de atrapar el 4xx sin que nada fallara al importar."""
+
+    def test_toda_prueba_de_que_no_entro_es_un_no_enviado(self):
+        from app.services import connekta_gateway as g
+        for cls in (g.ConnektaRechazado, g.ConnektaPayloadInvalido,
+                    g.ConnektaCircuitOpenError):
+            assert issubclass(cls, g.ConnektaNoEnviado), cls
+        assert issubclass(g.ConnektaPayloadInvalido, ValueError)
+
+    def test_no_se_no_es_un_no_enviado(self):
+        from app.services import connekta_gateway as g
+        from app.services.despacho_parcial_service import RemisionNoIdentificada
+        for cls in (g.ConnektaResultadoDesconocido, RemisionNoIdentificada):
+            assert not issubclass(cls, g.ConnektaNoEnviado), cls
+
+    @staticmethod
+    def _clases_repetidas(fuente: str) -> set:
+        import ast
+        vistas, repetidas = set(), set()
+        for n in ast.parse(fuente).body:
+            nombre = (n.name if isinstance(n, ast.ClassDef) else
+                      n.targets[0].id if isinstance(n, ast.Assign) and len(n.targets) == 1
+                      and isinstance(n.targets[0], ast.Name) else None)
+            if nombre is None:
+                continue
+            if nombre in vistas:
+                repetidas.add(nombre)
+            vistas.add(nombre)
+        return repetidas
+
+    def test_ningun_nombre_se_define_dos_veces_en_el_gateway(self):
+        import pathlib
+        raiz = pathlib.Path(__file__).resolve().parents[1]
+        fuente = (raiz / 'app/services/connekta_gateway.py').read_text(encoding='utf-8')
+        assert not self._clases_repetidas(fuente)
+
+    def test_el_detector_ve_la_redefinicion(self):
+        assert self._clases_repetidas(
+            'class A(Exception): pass\nclass B: pass\nclass A(Exception): pass\n'
+            '"""class B: pass"""\n') == {'A'}
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -463,10 +511,10 @@ class TestLaRemisionNoSeReenvia:
         assert t.rm_consec == 321 and t.estado == 'DESPACHADO' and t.fe_confirmada_at
 
     def test_un_no_explicito_revierte_el_pre_flag(self, db, almacen, siesa):
-        from app.services.connekta_gateway import ConnektaRechazoExplicito
-        siesa.error_142945 = ConnektaRechazoExplicito('codigo=1')
+        from app.services.connekta_gateway import ConnektaRechazado
+        siesa.error_142945 = ConnektaRechazado('codigo=1')
         t = _tarea(db, almacen)
-        with pytest.raises(ConnektaRechazoExplicito):
+        with pytest.raises(ConnektaRechazado):
             _despachar(t)
         db.session.refresh(t)
         assert t.rm_enviada_at is None
