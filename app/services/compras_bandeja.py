@@ -170,7 +170,8 @@ def confianza() -> dict:
             renglones.append({
                 'clave': 'origen', 'nivel': 'mal',
                 'titulo': 'Ningún producto tiene origen: no se sabe qué se trae de China',
-                'detalle': f"{ins.get('skus_sin_origen')} productos sin origen. El contenedor no se puede calcular.",
+                'detalle': (f"{ins.get('skus_sin_origen')} productos sin origen. El contenedor no se puede calcular."
+                            if ins.get('skus_totales') else 'No hay productos en el catálogo del WMS.'),
                 'que_hacer': 'Cargar origen y marca en 🧾 Fuentes.'})
         else:
             renglones.append({
@@ -194,7 +195,7 @@ def confianza() -> dict:
             'clave': 'supuestos', 'nivel': 'aviso' if supuesto else 'ok',
             'titulo': ('Tiempo de entrega nacional y ciclo de compra supuestos' if supuesto
                        else 'Tiempo de entrega y ciclo de compra medidos o configurados'),
-            'detalle': (f"Entrega nacional {lt.get('lt_dias')} días "
+            'detalle': (f"Entrega nacional {lt.get('lt_dias'):g} días "
                         f"({TEXTO_FUENTE_LT.get(lt.get('fuente'), 'sin fuente')}) · "
                         f"se compra cada {ciclo.get('dias')} días"),
             'que_hacer': ('Fijar ROP_LT_NACIONAL_DIAS y ROP_CICLO_NACIONAL_DIAS, o sincronizar '
@@ -468,8 +469,10 @@ def contenedor(tipo: str = '40STD') -> dict:
         valor_nacionalizado_cop=p.get('valor_nacionalizado_cop_estimado'),
         conversion=p.get('conversion_moneda'),
         ventana_llegada=ventana,
-        lead_time={'dias': (p.get('sigma_lt') or {}).get('valor'),
-                   'fuente': TEXTO_FUENTE_LT.get((p.get('sigma_lt') or {}).get('fuente'))},
+        # El lead time de la ventana es el de China por origen (el mismo con
+        # que `armar_contenedor` arma `ventana_llegada`).
+        lead_time={'dias': china.get('lt_dias'), 'variacion_dias': china.get('sigma_lt'),
+                   'fuente': TEXTO_FUENTE_LT.get(china.get('fuente'), china.get('fuente'))},
         alerta_temporada=({
             'titulo': 'Llega con la temporada escolar ya empezada',
             'temporada_inicio': limites['inicio'],

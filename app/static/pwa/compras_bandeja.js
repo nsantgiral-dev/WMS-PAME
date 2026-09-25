@@ -72,6 +72,14 @@ function cmpHace(min) {
   return `hace ${Math.round(m / 1440)} días`;
 }
 
+/** Un decimal (volumen en m³): «1,1». */
+function cmpDec(x) {
+  if (x === null || x === undefined || x === '') return 'sin dato';
+  const n = Number(x);
+  if (!Number.isFinite(n)) return String(x);
+  return n.toLocaleString('es-CO', { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+}
+
 function cmpPct(x) {
   if (x === null || x === undefined) return 'sin dato';
   return `${Math.round(Number(x) * 100)} %`;
@@ -185,7 +193,7 @@ function cmpFranjaHtml(d) {
     return `<div style="display:flex;gap:8px;align-items:flex-start;padding:4px 0;font-size:var(--fs-sm);">
       <span style="color:${esc(c.tinta)};font-weight:700;min-width:1em;">${esc(c.icono)}</span>
       <div style="min-width:0;overflow-wrap:anywhere;">
-        <span style="color:var(--tx);font-weight:600;">${esc(x.titulo)}</span>${extra}
+        <span style="color:var(--tx);font-weight:600;">${esc(x.titulo)}</span> ${extra}
         ${x.detalle ? `<div style="color:var(--tx2);font-size:var(--fs-xs);">${esc(x.detalle)}</div>` : ''}
         ${x.que_hacer ? `<div style="color:var(--tx3);font-size:var(--fs-xs);">Qué hacer: ${esc(x.que_hacer)}</div>` : ''}
       </div></div>`;
@@ -523,23 +531,23 @@ function cmpContenedorHtml(d) {
     html += cmpCaja(a.titulo, `Llegaría entre el ${esc(cmpFecha(v.desde))} y el ${esc(cmpFecha(v.hasta))}; la temporada empieza el ${esc(cmpFecha(a.temporada_inicio))}. ${a.vencida ? 'La fecha para pedir de China a tiempo era' : 'Para llegar a tiempo hay que pedir antes del'} ${esc(cmpFecha(a.fecha_limite_pedido))}.`, 'mal');
   }
   html += `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,220px),1fr));gap:8px;margin-bottom:12px;">
-    ${cmpBarra('Volumen (m³)', cmpN(b.cbm_acumulado), cmpN(b.cbm_objetivo), b.cbm_pct)}
+    ${cmpBarra('Volumen (m³)', cmpDec(b.cbm_acumulado), cmpDec(b.cbm_objetivo), b.cbm_pct)}
     ${cmpBarra('Peso (kg)', cmpN(b.peso_acumulado), cmpN(b.peso_limite), b.peso_pct)}
   </div>
   <div style="font-size:var(--fs-sm);color:var(--tx);margin-bottom:12px;line-height:var(--lh-texto);">
     Valor en origen (FOB): <b>${esc(fmtUsd(d.valor_fob_usd))}</b> · puesto en bodega, estimado: <b>${esc(fmtPesos(d.valor_nacionalizado_cop))}</b><br>
-    Llegaría entre el <b>${esc(cmpFecha(v.desde))}</b> y el <b>${esc(cmpFecha(v.hasta))}</b> (tarda unos ${esc(cmpDias(lt.dias))}; ${esc(lt.fuente || 'sin fuente')})
+    Llegaría entre el <b>${esc(cmpFecha(v.desde))}</b> y el <b>${esc(cmpFecha(v.hasta))}</b> (de China tarda unos ${esc(cmpDias(lt.dias))} ± ${esc(cmpDias(lt.variacion_dias))}; ${esc(lt.fuente || 'sin fuente')})
   </div>
   <div style="display:flex;justify-content:flex-end;margin-bottom:8px;">
     <button onclick="cmpExportarPackingList()" style="min-height:44px;padding:8px 14px;border-radius:8px;border:1px solid var(--brd);background:var(--bg-s);color:var(--tx);font-size:var(--fs-sm);font-weight:600;cursor:pointer;">Exportar packing list</button></div>`;
   (d.proveedores || []).forEach(g => {
     html += `<section style="border:1px solid var(--brd);background:var(--bg-s);border-radius:14px;padding:12px;margin-bottom:12px;">
       <div style="font-size:var(--fs-md);font-weight:800;color:var(--tx);">${esc(g.proveedor || 'Sin proveedor en la ficha')}</div>
-      <div style="font-size:var(--fs-xs);color:var(--tx2);margin-bottom:8px;">${esc(cmpN(g.cajas))} cajas · ${esc(cmpN(g.unidades))} unidades · ${esc(cmpN(g.cbm))} m³ · ${esc(fmtUsd(g.fob_usd))}${g.lineas_sin_fob ? ` al menos (${esc(cmpN(g.lineas_sin_fob))} sin precio FOB)` : ''}</div>
+      <div style="font-size:var(--fs-xs);color:var(--tx2);margin-bottom:8px;">${esc(cmpN(g.cajas))} cajas · ${esc(cmpN(g.unidades))} unidades · ${esc(cmpDec(g.cbm))} m³ · ${esc(fmtUsd(g.fob_usd))}${g.lineas_sin_fob ? ` al menos (${esc(cmpN(g.lineas_sin_fob))} sin precio FOB)` : ''}</div>
       ${(g.lineas || []).map(l => `<div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;border-top:1px solid var(--brd);padding:8px 0;font-size:var(--fs-sm);">
         <div style="min-width:0;flex:1 1 200px;"><div style="color:var(--tx);font-weight:600;overflow-wrap:anywhere;">${esc(l.nombre || 'Producto sin nombre')}${l.tipo === 'RELLENO' ? ' <span style="font-size:var(--fs-xs);color:var(--info-tx);">relleno</span>' : ''}</div>
           <div style="font-size:var(--fs-xs);color:var(--tx3);">${esc(l.referencia)}</div></div>
-        <div style="color:var(--tx2);text-align:right;">${esc(cmpN(l.unidades))} u · ${esc(cmpN(l.cajas))} cajas de ${esc(cmpN(l.unidades_por_caja))} · ${esc(cmpN(l.cbm))} m³<br><b style="color:var(--tx);">${esc(fmtUsd(l.costo_fob_usd))}</b>${l.costo_fob_usd_unidad !== null && l.costo_fob_usd_unidad !== undefined ? ` <span style="color:var(--tx3);">(${esc(fmtUsd(l.costo_fob_usd_unidad))} c/u)</span>` : ''}</div>
+        <div style="color:var(--tx2);text-align:right;">${esc(cmpN(l.unidades))} u · ${esc(cmpN(l.cajas))} cajas de ${esc(cmpN(l.unidades_por_caja))} · ${esc(cmpDec(l.cbm))} m³<br><b style="color:var(--tx);">${esc(fmtUsd(l.costo_fob_usd))}</b>${l.costo_fob_usd_unidad !== null && l.costo_fob_usd_unidad !== undefined ? ` <span style="color:var(--tx3);">(${esc(fmtUsd(l.costo_fob_usd_unidad))} c/u)</span>` : ''}</div>
       </div>`).join('')}
     </section>`;
   });
