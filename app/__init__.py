@@ -327,6 +327,18 @@ def create_app():
             db.session.commit()
             click.echo(f'Admin {email} creado correctamente.')
 
+    # ── CLI: flask asegurar-almacenes ──────────────────────────────────────
+    @app.cli.command('asegurar-almacenes')
+    @click.option('--ejecutar', is_flag=True, default=False,
+                  help='Crea los que faltan. Sin esto solo dice qué haría.')
+    def cmd_asegurar_almacenes(ejecutar):
+        """Bodegas operadas sin almacén en el WMS (no salen en /api/almacenes/)."""
+        from app.services.bodegas import asegurar_almacenes
+        r = asegurar_almacenes(ejecutar=ejecutar)
+        for f in r['faltantes']:
+            click.echo(f"{f['bodega']} (CO {f['co']}): {f['estado']}")
+        click.echo(f"creados: {r['creados']}" if ejecutar else 'Simulacro: usá --ejecutar para crear.')
+
     # ── CLI: flask sync-productos ──────────────────────────────────────────
     @app.cli.command('sync-productos')
     def cmd_sync_productos():

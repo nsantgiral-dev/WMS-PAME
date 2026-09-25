@@ -135,3 +135,42 @@ def co_de_bodega(bodega_siesa_id, por_defecto=None):
         'equivocado o va a ser rechazado.', bodega,
     )
     return por_defecto
+
+
+def almacenes_faltantes() -> list:
+    """Bodegas operadas (`_BODEGAS_PV`) sin almacén ACTIVO en el WMS.
+
+    `GET /api/almacenes/` lista la tabla `almacenes` y nada más: una bodega
+    operada existe como sede recién cuando alguien la usa (la primera
+    recepción de OC de tienda o el primer traslado desde ella la crean). Por
+    eso en QA faltaban NS2 (parqueo de licitaciones), FP1 y FF1 (ferias
+    temporales): no es un filtro, es que nunca se crearon (2026-09-25).
+
+    `[{bodega, co, estado: 'FALTA'|'INACTIVO'}]`."""
+    from app.models.almacen import Almacen
+    from app.services.inventario_siesa_service import _BODEGAS_PV
+    out = []
+    for bod in _BODEGAS_PV:
+        filas = Almacen.query.filter_by(bodega_siesa_id=bod).all()
+        if any(a.activo for a in filas):
+            continue
+        out.append({'bodega': bod, 'co': co_de_bodega(bod),
+                    'estado': 'INACTIVO' if filas else 'FALTA'})
+    return out
+
+
+def asegurar_almacenes(ejecutar: bool = False) -> dict:
+    """Crea el almacén de cada bodega operada que no tiene ninguno, con la
+    MISMA función que lo crea en la primera recepción de tienda
+    (`TiendaOCService.resolver_almacen`, con el CO del maestro). No reactiva
+    uno INACTIVO: eso fue una decisión de alguien. Sin `ejecutar`, solo dice
+    qué haría."""
+    from app.services.tienda_oc_service import TiendaOCService
+    faltan = almacenes_faltantes()
+    creados = []
+    if ejecutar:
+        for f in faltan:
+            if f['estado'] == 'FALTA':
+                a = TiendaOCService.resolver_almacen(f['bodega'], f['co'])
+                creados.append({'bodega': f['bodega'], 'almacen_id': a.id, 'codigo': a.codigo})
+    return {'faltantes': faltan, 'creados': creados, 'ejecutado': bool(ejecutar)}
