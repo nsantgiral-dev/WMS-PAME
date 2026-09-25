@@ -1,0 +1,53 @@
+# Suite de tests — la corre GitHub, una vez por push a qa o main.
+#
+# Hasta 2026-09-25 la corría el `buildCommand` de railway.toml, DENTRO de la
+# construcción de la imagen, y dos veces por push: WMS-PAME y WMS-Worker leen el
+# mismo railway.toml y cada uno construía y probaba por su lado. Medido: 6.847
+# tests en ~12 min; el despliegue de QA pasaba de 20 min.
+#
+# Railway espera este resultado con «Wait for CI» (Settings → Source, en cada
+# servicio y cada ambiente): si este job sale rojo, NO se despliega. Esa es la
+# protección que antes daba el buildCommand — por eso el orden para quitar
+# pytest del buildCommand es: este workflow en verde → «Wait for CI» encendido
+# en los dos servicios → comprobar que un rojo frena → recién ahí quitarlo.
+name: tests
+
+on:
+  push:
+    branches: [qa, main]
+  workflow_dispatch:
+
+# Dos pushes seguidos a la misma rama: el primero ya no importa, Railway va a
+# desplegar el último. Cancelarlo ahorra minutos de Actions.
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      # Varios tests de la PWA corren el JS real con Node (el nixpacks.toml
+      # instala nodejs por lo mismo). El runner ya trae Node; se fija la versión
+      # para que no cambie sola.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - run: pip install -r requirements.txt
+
+      # El mismo comando que corría el buildCommand. TZ=UTC como Railway: un test
+      # que arma fechas con date.today() tiene que romper acá igual que allá.
+      - name: pytest
+        env:
+          TZ: UTC
+          PYTHONUTF8: '1'
+        run: python -m pytest tests/ -x -q --tb=short -m "not postgres"
