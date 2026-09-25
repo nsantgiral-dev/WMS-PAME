@@ -168,7 +168,7 @@ El despacho no sumaba el daño bloqueante ni el preventivo vencido, el semáforo
 de la orden de taller, el teléfono decía «amarillo», y el mismo SOAT se escribía de
 tres formas. La que se queda atrás es la que deja salir el camión.*
 
-## 17. Lo que ya terminó se juzga con el turno de entonces, y la sede no se fotografía (2026-09-24)
+## 18. Lo que ya terminó se juzga con el turno de entonces, y la sede no se fotografía (2026-09-24)
 
 Una ruta ENTREGADA se compara contra el turno vigente **al cierre de la ruta**
 (`bandeja._turno_en`), no contra el de ahora: al final de un día normal el
