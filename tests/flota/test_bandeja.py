@@ -283,16 +283,19 @@ def mundo(db):
         galones = 16 if dias_atras == 3 else 10
         tanquear('GAL001', dias_atras, km, galones, 15_000 * galones)
         km += 300
-    # Los km de los tanqueos de GAL001 se cotejaron contra la foto: sin eso la
-    # ventana no es evidencia de galones (mismo criterio que km en duda).
-    from flota.adaptadores.verificacion import verificar
-    for l in LecturaOdometro.query.filter_by(vehiculo_id=veh['GAL001'].id,
-                                             confianza='dudosa').all():
-        verificar(lectura_id=l.id, usuario_id=A)
     km = 90_000
     for dias_atras in (12, 8, 4):
         tanquear('GAL002', dias_atras, km, 10, 150_000)
         km += 300
+    # Los km de los tanqueos de GAL001 se cotejaron contra la foto: sin eso la
+    # ventana no es evidencia de galones (mismo criterio que km en duda).
+    from flota.adaptadores.verificacion import verificar
+    # GAL002 también: su «no evaluable» tiene que ser el rendimiento corto,
+    # no el km en duda.
+    for l in LecturaOdometro.query.filter(
+            LecturaOdometro.vehiculo_id.in_([veh['GAL001'].id, veh['GAL002'].id]),
+            LecturaOdometro.confianza == 'dudosa').all():
+        verificar(lectura_id=l.id, usuario_id=A)
     tanquear('PRC001', 5, 40_000, 10, 200_000)
 
     # ── SAL001 — salió sin turno: custodia en la sede ────────────────────

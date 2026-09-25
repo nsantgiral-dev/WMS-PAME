@@ -1228,7 +1228,7 @@ class TestLaPantalla:
         r = out['resumen']
         assert 'Cerró cargue 07:30' in r and 'su ruta suele 07:00' in r
         assert 'entregas' in r and 'sin explicar' in r
-        assert '1 rechazo por cliente cerrado, sus compañeros en esa ruta: 0,3' in r
+        assert '1 rechazo por cliente cerrado / no había nadie, sus compañeros en esa ruta: 0,3' in r
         assert _MALO not in r and '&lt;img' in r
         assert out['pedidas'][0].startswith('/api/jornada/resumen')
 

@@ -355,7 +355,7 @@ class TestElIndicadorDeHallazgosVaDespromediado:
         """Un promedio de 2 casos y uno de 200 son el mismo número con distinta
         autoridad, y desde el número no se distinguen."""
         html = _correr(tmp_path, _hoy_real(**_hallazgos()))['html']
-        assert '9 días' in html and 'sobre <b>1</b> hallazgo(s) cerrado(s)' in html
+        assert '9 días' in html and 'sobre <b>1</b> daño cerrado' in html
 
     def test_abiertos_y_cerrados_NO_se_mezclan(self, tmp_path):
         """El canon §6 lo prohíbe: `dias` mide duración cerrada y `dias_lleva`

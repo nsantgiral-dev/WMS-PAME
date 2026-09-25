@@ -324,7 +324,7 @@ class TestExpediente:
         r = correr(tmp_path, {'pasos': [{'fn': 'flotaExpBarraHtml', 'args': [3, 1]}]})
         html = r['pasos'][0]
         for nombre in ('Resumen', 'Daños', 'Gastos', 'Taller', 'Llantas',
-                       'Preventivo', 'Documentos', 'Ficha'):
+                       'Preventivo', 'Papeles', 'Ficha'):
             assert f'>{nombre}</button>' in html
         for k in range(8):
             assert f'flotaExpediente(3, {k})' in html
