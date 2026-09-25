@@ -1,7 +1,7 @@
 """Si el cliente no paga, la mercancía vuelve — sin cabos sueltos
 
 Revision ID: m045devol
-Revises: m043contado
+Revises: m044cartera
 Create Date: 2026-09-24
 
 La devolución de ruta nacía recién al liquidar: entre el regreso del camión y
@@ -41,7 +41,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision = 'm045devol'
-down_revision = 'm043contado'
+down_revision = 'm044cartera'
 branch_labels = None
 depends_on = None
 
