@@ -143,7 +143,7 @@ def _turno(**extra):
         },
         'rendimiento': None, 'origen': 'ruta', 'vehiculo_id': 3, 'placa': 'THP696',
         'requiere_confirmacion': True, 'odometro_actual': 120500,
-        'tiene_turno_abierto': False,
+        'tiene_turno_abierto': False, 'ruta_de_hoy_cerrada': False,
         'candidatos': [{'vehiculo_id': 3, 'placa': 'THP696', 'tipo': 'NHR',
                         'ocupado_por': None}],
     }
@@ -777,3 +777,28 @@ def test_el_turno_sembrado_tiene_la_forma_del_endpoint():
     ret2 = [n for n in ast.walk(fn2) if isinstance(n, ast.Return) and isinstance(n.value, ast.Dict)][-1]
     claves2 = {k.value for k in ret2.value.keys if isinstance(k, ast.Constant)}
     assert claves2 == set(_turno()['estado_vehiculo'])
+
+
+# ═════════════════════════════════════════════════════════════════════════
+# De noche: el día cerrado no vuelve a ofrecer «Recibir el camión»
+# ═════════════════════════════════════════════════════════════════════════
+
+class TestElDiaCerradoNoOfreceRecibir:
+    """E2E 2026-09-25: entregado el turno y cerrada la ruta del día, la tarjeta
+    volvía a ofrecer «Recibir el camión — Según tu ruta de hoy»."""
+
+    def test_con_la_ruta_cerrada_y_sin_turno_dice_dia_cerrado(self, tmp_path):
+        html = _tarjeta(tmp_path, _turno(ruta_de_hoy_cerrada=True, origen='eleccion',
+                                         vehiculo_id=None, placa=''))
+        v = _visible(html)
+        assert 'Día cerrado' in v and 'Recibir el camión' not in v and 'Según tu ruta' not in v
+        assert 'flotaCondRecibirIgual()' in html, 'sin escape para el que sí sale otra vez'
+
+    def test_el_escape_vuelve_a_la_eleccion(self, tmp_path):
+        d = _turno(ruta_de_hoy_cerrada=True, origen='eleccion', vehiculo_id=None, placa='',
+                   recibir_igual=True)
+        assert 'Día cerrado' not in _visible(_tarjeta(tmp_path, d))
+
+    def test_con_turno_abierto_no_es_dia_cerrado(self, tmp_path):
+        d = _turno(ruta_de_hoy_cerrada=True, tiene_turno_abierto=True)
+        assert 'Día cerrado' not in _visible(_tarjeta(tmp_path, d))

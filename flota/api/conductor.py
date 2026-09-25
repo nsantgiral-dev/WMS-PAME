@@ -255,11 +255,19 @@ def mi_turno():
 
     # La ruta de hoy es SUGERENCIA. Si no está armada, la cascada sigue de largo
     # y el conductor elige — nunca se queda sin poder registrar.
-    ruta_hoy = RutaDespacho.query.filter(
+    #
+    # Una ruta ya ENTREGADA no sugiere nada (e2e 2026-09-25): de noche, con el
+    # turno entregado, la tarjeta volvía a ofrecer «Recibir el camión — según
+    # tu ruta de hoy» sobre la ruta que ya había cerrado.
+    from app.services.ruta_service import RutaService as _RS
+    rutas_hoy = RutaDespacho.query.filter(
         RutaDespacho.conductor_id == conductor.id,
         RutaDespacho.fecha_programada == dia_operativo(),
-        RutaDespacho.vehiculo_id.isnot(None),
-    ).first()
+    ).order_by(RutaDespacho.id).all()
+    ruta_hoy = next((r for r in rutas_hoy if r.vehiculo_id is not None
+                     and r.estado not in _RS.ESTADOS_RUTA_CERRADA), None)
+    ruta_de_hoy_cerrada = bool(rutas_hoy) and all(
+        r.estado in _RS.ESTADOS_RUTA_CERRADA for r in rutas_hoy)
 
     # Quién tiene cada vehículo ahora — para poder decir el nombre en pantalla
     # en vez de un 409 crudo.
@@ -334,6 +342,9 @@ def mi_turno():
         # `sin_dato` viaja como palabra: un vehículo sin lecturas no tiene 0 km.
         'odometro_actual': km if km is not SIN_DATO else str(SIN_DATO),
         'tiene_turno_abierto': vigente is not None,
+        # Todas sus rutas de hoy ya se cerraron: sin turno abierto, el día
+        # terminó (la tarjeta no ofrece recibir otra vez; queda el escape).
+        'ruta_de_hoy_cerrada': ruta_de_hoy_cerrada,
         'candidatos': [
             {'vehiculo_id': c.vehiculo_id, 'placa': c.placa, 'tipo': c.tipo,
              'ocupado_por': c.ocupado_por}

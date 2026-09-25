@@ -517,3 +517,40 @@ class TestLasCuatroCondicionesMUERDEN:
             'el tanqueo que no entró a ninguna ventana no se contó: un '
             'rendimiento sobre 3 de 20 se vería igual que uno sobre 19 de 20')
         assert r['publicable'] is True
+
+
+
+class TestLaRutaCerradaNoSeSugiere:
+    """E2E 2026-09-25: la ruta del día ya ENTREGADA seguía proponiendo su
+    vehículo para recibir. El servidor la excluye y declara el día cerrado."""
+
+    def _ruta(self, db, mundo, estado):
+        from app.models.ruta_despacho import RutaDespacho
+        from app.utils.fecha import dia_operativo
+        r = RutaDespacho(conductor_id=mundo['cond'], vehiculo_id=mundo['veh'], tipo_ruta='URBANA',
+                         fecha_programada=dia_operativo(), estado=estado)
+        db.session.add(r)
+        db.session.commit()
+        return r
+
+    def _entregar(self, mundo):
+        from flota.adaptadores.traspaso import traspasar
+        from flota.dominio.valores import CustodioTipo
+        from app.models.almacen import Almacen
+        alm = Almacen.query.first()
+        traspasar(vehiculo_id=mundo['veh'], km=1010, registrado_por_usuario_id=mundo['usr'],
+                  custodio_tipo=CustodioTipo.SEDE, custodio_sede_id=alm.id)
+
+    def test_ruta_entregada_y_turno_entregado(self, client, db, mundo):
+        self._ruta(db, mundo, 'ENTREGADA')
+        self._entregar(mundo)
+        d = _turno(client, mundo)
+        assert d['tiene_turno_abierto'] is False
+        assert d['ruta_de_hoy_cerrada'] is True
+        assert d['origen'] != 'ruta', 'sigue sugiriendo el camión de una ruta cerrada'
+
+    def test_ruta_en_transito_se_sigue_sugiriendo(self, client, db, mundo):
+        self._ruta(db, mundo, 'EN_TRANSITO')
+        self._entregar(mundo)
+        d = _turno(client, mundo)
+        assert d['origen'] == 'ruta' and d['ruta_de_hoy_cerrada'] is False

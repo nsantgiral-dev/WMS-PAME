@@ -2110,7 +2110,7 @@ function flotaCondSemaforo(e) {
  * camión. Se recorre en orden —un recibo y después una entrega es turno
  * cerrado—.
  *
- * `elegir` · `recibir` · `inspeccionar` · `en_ruta`.
+ * `elegir` · `recibir` · `inspeccionar` · `en_ruta` · `dia_cerrado`.
  */
 function flotaCondPaso(d, cola) {
   if (!d) return 'elegir';
@@ -2123,8 +2123,18 @@ function flotaCondPaso(d, cola) {
     if (o.que === 'entrega') { abierto = false; }
     if (o.que === 'inspeccion' && flotaHoyBogota(new Date(o.creado)) === hoy) inspeccionado = true;
   });
+  // Sin turno y con la ruta de hoy ya cerrada, el día terminó: no se vuelve a
+  // ofrecer «Recibir el camión» (e2e 2026-09-25). `recibir_igual` es el
+  // escape de un toque, para el que sí sale otra vez.
+  if (!abierto && d.ruta_de_hoy_cerrada && !d.recibir_igual) return 'dia_cerrado';
   if (!abierto) return d.placa ? 'recibir' : 'elegir';
   return inspeccionado ? 'en_ruta' : 'inspeccionar';
+}
+
+/** El escape del día cerrado: quiere recibir un camión igual. */
+function flotaCondRecibirIgual() {
+  if (FLOTA_COND) FLOTA_COND.recibir_igual = true;
+  flotaCondRender();
 }
 
 /** El aviso de lo que espera señal, y los rechazos que nadie vio. */
@@ -2161,6 +2171,19 @@ function flotaCondTarjetaHTML(d, cola, rechazos) {
       ${flotaCondSemaforo(d.estado_vehiculo) || '<span class="flota-sem"></span>'}
       <button class="flota-hoy-mas" onclick="flotaCondMasAbrir()">Más</button>
     </div>${sinSenal}`;
+  }
+
+  if (paso === 'dia_cerrado') {
+    return `${aviso}<div class="flota-hoy">
+      <div class="flota-hoy-cabeza">
+        <span class="flota-hoy-placa">✅ Día cerrado</span>
+        <span class="flota-hoy-sub">Entregó el camión y su ruta de hoy ya se cerró.</span>
+      </div>
+      <div class="flota-hoy-pie">
+        <button class="flota-hoy-link" onclick="flotaCondRecibirIgual()">Recibir un camión igual</button>
+        <button class="flota-hoy-link" onclick="flotaCondMasAbrir()">Mis turnos</button>
+      </div>
+    </div>`;
   }
 
   if (paso === 'inspeccionar') {
