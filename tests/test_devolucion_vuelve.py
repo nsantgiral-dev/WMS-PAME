@@ -1022,6 +1022,19 @@ class TestDetectoresDeDevolucionDeRuta:
         db.session.commit()
         assert _correr('DEV-04') == []
 
+    def test_dev05_no_cuenta_las_ya_aprobadas(self, db, almacen, producto):
+        m = _mundo(db, almacen, producto)
+        _rechazar(m)
+        _, dev = _dev(m)
+        _contar(dev, _gw([_fila(producto)]))
+        dev.siesa_nc_triggered = True
+        dev.siesa_nc_consec = '62'
+        db.session.commit()
+        assert len(_correr('DEV-05')) == 1
+        dev.nc_aprobada_siesa = True
+        db.session.commit()
+        assert _correr('DEV-05') == []
+
 
 # ═════════════════════════════════════════════════════════════════════════════
 # 10 · Trinquetes de clase por AST (con meta-tests y pisos)

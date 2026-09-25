@@ -186,7 +186,10 @@ def la_nc_lleva_su_motivo_dian(ctx=None):
             datos={'cliente': d.cliente},
         )
         for d in _devoluciones(('CONFIRMADA',))
+        # Una NC ya aprobada tiene su concepto (Siesa no la aprueba sin él):
+        # contarla la dejaba en la lista para siempre.
         if d.siesa_nc_triggered and d.siesa_nc_consec and not d.siesa_motivo_dian
+        and not d.nc_aprobada_siesa
     ]
 
 
