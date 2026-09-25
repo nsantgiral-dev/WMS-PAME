@@ -1011,7 +1011,10 @@ async function cargarAdmin(desdeTimer = false) {
   // cada 30s (rompía el scroll y cualquier modal abierto mientras se revisaba).
   // Solo carga al entrar manualmente a la pestaña.
   else if (TAB === 'tab-layout') { if (!desdeTimer) await cargarLayout(); }
-  else if (TAB === 'tab-compras') await cargarCompras();
+  // Compras es de consulta y decisión: el timer de 30 s repintaba la pantalla
+  // entera (sub-pestaña, «¿por qué?» abiertos, filtros, lo tecleado en la
+  // lista de temporada) y la devolvía a «Cargando…». Carga al entrar.
+  else if (TAB === 'tab-compras') { if (!desdeTimer) await cargarCompras(); }
   else if (TAB === 'tab-vigia') { if (!desdeTimer) await cargarVigia(); }
   // `flotaEntrar` y no `cargarFlota`: despacha al sub-tab que el usuario dejó
   // abierto. Sin esto, cada F5 rebota a Expedientes — y `control_flota`, que va
