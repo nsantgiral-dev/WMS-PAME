@@ -12,7 +12,7 @@
 ## Arquitectura JS (Frontend)
 
 ```
-util.js                         Base sin dependencias: `esc()` y `fmtPesos()`. Carga PRIMERO
+util.js                         Base sin dependencias: `esc()`, `fmtPesos()`, `fmtUsd()` y `hoyBogota()` (el día de Bogotá: la única). Carga PRIMERO
 app.js          (2,294 líneas)  Core: auth, helpers, dashboard, camera, admin
 picking.js        (747)         Escaneo operario, confirmación
 packing.js        (865)         Empacador HUD, bultos, etiquetas
@@ -66,7 +66,7 @@ print([str(r) for r in create_app().url_map.iter_rules() if 'flota' in str(r)])"
 | `FLOTA_AVISOS_REALES` | Segunda decisión explícita: sin ella el barrido registra pero no manda |
 | `FLOTA_AVISO_TELEFONOS` | Destinatarios |
 | `FLOTA_PREVENTIVO` | Enciende el cron de **siembra del plan preventivo** desde la ficha técnica (05:30 Bogotá). **Nace apagado**, default ausente = `false`. El primer ciclo escribe hasta ~36 filas de plan y **manda cero avisos**: ninguna tarea tiene ejecución registrada todavía, y una tarea sin línea base no está al día ni vencida. Nace apagado igual, porque la regla 10 no se dobla con un argumento y porque el ciclo peligroso no es el primero sino el que sigue a una carga masiva del historial del taller |
-| `FLOTA_FOTOS_DIR` | Almacén de fotos de custodia |
+| `FLOTA_FOTOS_DIR` | Almacén de fotos de custodia. **Ruta absoluta** en un volumen montado (relativa = error de configuración). El health (`almacen_fotos`) dice desde el proceso que sirve qué carpeta mira, si es un volumen y cuántas fotos `ok` no tienen archivo — ver «Pantallas de la operación diaria» |
 | `GUPSHUP_API_KEY` · `GUPSHUP_SOURCE` · `GUPSHUP_APP_NAME` · `GUPSHUP_TEMPLATE_IDS` | Canal WhatsApp. **`GUPSHUP_SOURCE` es la línea de mensajería cuya habilitación a producción depende de un tercero** — la misma que BK-OPS-01 §4.3 lista bajo Gestor de Cartera. Un número, dos consumidores |
 
 ### Dispatchers fuera de su módulo
@@ -6290,6 +6290,68 @@ texto positivo).
 2. ¿Confirmar retención queda en admin y jefe, o pasa al «líder de cartera»?
 3. Formulario de parada tardía para la oficina, o basta con cerrar lo que
    falta y dejar que la cola del conductor la mande.
+
+---
+
+## Pantallas de la operación diaria: lo que cada rol ve y toca (2026-09-25)
+
+Frente «operación diaria por rol» + «QA real con flota@/victor@» + cinco puntos
+del e2e del día completo. Voz nueva en **usted** (decisión del dueño); el
+barrido de voz del resto va aparte. Cada fila, con su clase y su trinquete.
+
+| | Qué pasaba | Ahora | Trinquete |
+|---|---|---|---|
+| Picker «Reportar problema» | Los cuatro botones mandaban `cantidad_encontrada: 0`; con 3 escaneadas, «encontró 0» | `picking_service.cantidad_encontrada_declarada` (las dos rutas): sin cantidad → 400 (salvo «Ubicación vacía», que la declara); la pantalla la **pide** con lo escaneado de valor inicial | `test_picking_reportar_problema_declarado.py`: ningún `.get('<cant…>', 0)` nuevo en `app/routes` (AST, inventario de 10) |
+| Conductor sin señal | Con señal débil el envío moría y la entrega se perdía («Error de conexión»); un rechazo quedaba en la cola para siempre; el cierre de ruta salía antes que las confirmaciones | `_condEnviarUno` (contrato de la cola de flota: hecho · rechazado · sin red · reintentar); lo que no tuvo respuesta se guarda; un rechazo sale y queda anotado (`#cond-rechazos`) hasta «Entendido»; el cierre no sale con confirmaciones pendientes o rechazadas (sin señal, se encola detrás y la sincronización lo retiene). `/entregar` es idempotente; un reenvío idéntico no es un EDITAR | `test_cola_conductor_rutas_js.py` (Node, IndexedDB en memoria) |
+| Packing | «Siesa procesó la factura» cuando solo se encoló; retenido por cartera como «Error Siesa»; con Siesa caído, «reintentando» sin decir por qué | `CierreResult.estado` (`RETENIDO_CARTERA` 409 · `SIESA_NO_DISPONIBLE` 503: «Siesa no está disponible: no se puede facturar»), `estado_siesa` `CONFIRMADO`/`EN_COLA`; `empMensajeCierre` una función para cierre, reintento, cola y cartera; pestaña RETENIDO POR CARTERA; `/api/mobile/sync` marca `definitivo` y la cola offline lo saca | `test_packing_cierre_dice_lo_que_paso.py`: ninguna cadena del PWA afirma «Siesa procesó» |
+| Fechas | `new Date().toISOString()` en Rutas (después de las 7 p. m. era mañana) y cinco copias de «el día de Bogotá» | `hoyBogota()` en util.js | `test_hoy_bogota_una_sola.py` (sin toISOString recortado a día, sin `en-CA` fuera de util.js, sin `…HoyBogota`) |
+| Avisos y diálogos | `alerta()` borraba todo a los 2,5 s; ~60 `confirm()`/`prompt()` nativos | El error se queda hasta «Cerrar» (pila, sin duplicados, tope 3); 29 decisiones de plata/inventario al modal propio | `test_dialogos_propios.py`: inventario por (archivo, función) de los 25 nativos que quedan, solo encoge |
+| Permisos | `_es_personal_almacen` y `_ROLES_SIN_ALMACEN` eran listas negras: `control_flota` veía `precio_compra` y pasaba `/api/mobile/conteo/*` | `Roles.PERSONAL_ALMACEN` (lista blanca; un rol nuevo = una línea) | `test_permisos_lista_blanca.py`: por rol (control_flota, conductor, tienda), las escrituras que atraviesan la puerta, medidas sobre el url_map; AST sin listas negras {conductor, tienda} |
+| `GET /api/rutas/<id>/paradas` | Hacía commit y tardaba ~7 s en frío | Lectura pura (`anotar=False` hasta el fondo; `cond_pago.clasificar_tarea`); la escritura es `POST …/paradas/anotar` (`anotar_paradas`), que la pantalla dispara aparte; Siesa en paralelo, ítems precargados | `test_lista_paradas_no_escribe.py`: cero INSERT/UPDATE/DELETE en el GET; AST: ningún GET hace commit (inventario: `picking.siguiente_tarea`) |
+| Fotos de flota | 410 con la fila en `ok` | Relectura con hash antes de `ok`; `FLOTA_FOTOS_DIR` absoluta; 410 `nunca_se_guardo`/`archivo_ausente` y 503 `almacen_sin_configurar`; `estado_verificable` en toda lista; `almacen_fotos` en el health | `tests/flota/test_foto_verificable.py` |
+| Tablero y ficha | Una lectura con la foto del tablero sin guardar «tenía foto»; «Ficha completa» en la ficha y «incompleta» en la bandeja | El gancho mira el estado de la foto; `FichaTecnica.faltantes()` es la única definición (incluye el tanque) | ídem |
+
+**Del e2e (2026-09-25):** login sin importar mayúsculas (`normalizar_email`,
+`Usuario.por_email`; trinquete `test_correo_una_forma.py`); códigos crudos en
+«Llegó el camión», el recorrido y el bloque de cartera; «Mi camión hoy» con
+la ruta del día cerrada ya no ofrece recibir (`ruta_de_hoy_cerrada`); la
+jornada ya no dice «a menos de 0 m»; los plurales «DEVOLUCIÓNES»,
+«confirmaciónes», «ubicaciónes»; y la bandeja de compras le dice «pídale a
+administración» a quien no puede tocar variables. Liquidación: una ruta
+entregada y sin liquidar de otro día aparece en «Por liquidar».
+
+### Las fotos 410 de QA — qué verificar en Railway (no se pudo mirar)
+
+El código ya no puede decir `ok` sin un archivo releído en el proceso que
+escribe. Lo que queda es de infraestructura, y `GET /flota/health` →
+`almacen_fotos` lo contesta desde el servicio que sirve:
+
+1. `configurada` y `absoluta` en `true` y `raiz` = `/data/flota-fotos`
+   **en el servicio web** (el que atiende `/flota/*`). Si el worker tiene la
+   variable y el web no, el web contesta 503 `almacen_sin_configurar`.
+2. `mismo_disco_que_el_contenedor` en `false`. Si da `true`, la carpeta NO está
+   en el volumen: lo escrito se pierde en cada despliegue — exactamente «ok en
+   la base, 410 después». Revisar el *mount path* del volumen (`/data`) y que
+   sea el mismo servicio.
+3. Un solo reemplazo (réplica) del web: un volumen de Railway se monta en una
+   réplica; con dos, una escribe y la otra no tiene el archivo.
+4. `fotos_ok_sin_archivo` / `ejemplos_sin_archivo`: las fotos ya perdidas (las
+   de antes de montar el volumen, o las de una base copiada de otro ambiente).
+   No vuelven; sus lecturas deberían re-verificarse con foto nueva.
+
+### Lo que NO cubre
+
+- **Flota** sigue con 18 `confirm()`/`prompt()` nativos (incluido el tanqueo sin
+  recibo): sus arneses de prueba no cargan app.js, donde vive el modal.
+- El inventario por rol mide con ids inexistentes: un endpoint que contesta 404
+  por el id **antes** de mirar el rol no se puede medir así.
+- El GET de paradas ya no anota: si la pantalla no llega a llamar
+  `…/paradas/anotar` (sin señal), la guarda de `confirmar_parada` juzga con lo
+  anotado al crear el packing y al despachar (supuesto = se cobra, Regla 0).
+- `tienda.js` busca en `/api/productos/`, que a la tienda le da 403 desde
+  antes: pendiente decidir si la tienda ve el catálogo sin costo.
+- `/api/almacenes/` sin NS2, FP1, FF1 en QA: son filas de la tabla, no código.
+- `/api/cartera/salud` 503 sin `CARTERA_GESTOR_TOKEN`: nace cerrado a propósito.
 
 ---
 
