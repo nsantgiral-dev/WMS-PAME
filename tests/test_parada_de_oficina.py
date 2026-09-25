@@ -228,6 +228,17 @@ class TestLaVersionDelConductor:
         assert 'registrada_por_oficina' not in claves
         assert 'diferencia_con_el_conductor' not in claves
 
+    def test_el_servicio_tampoco_deja_pisarla(self, app, client, db, mundo):
+        """Un guard en la ruta protege la ruta; en el servicio, la operación."""
+        from app.services.ruta_service import RutaService
+        f, uc, ad = mundo
+        _registrada_no_pago(app, client, db, f, uc, ad)
+        with pytest.raises(ValueError, match='la registró la oficina'):
+            RutaService.confirmar_parada(f.ruta_id, f.packing_id, uc.id,
+                                         {'estado_entrega': 'ENTREGADO', 'forma_pago': 'EFECTIVO',
+                                          'monto_cobrado': 1},
+                                         motivo_tardia='La confirmación llegó por la cola')
+
     def test_la_jornada_la_nombra(self, app, client, db, mundo):
         from app.models.conductor import Conductor
         from app.utils.fecha import dia_operativo

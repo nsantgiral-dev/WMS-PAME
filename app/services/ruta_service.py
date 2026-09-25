@@ -1834,6 +1834,11 @@ class RutaService:
         from app.services import senales_ruta as _sr
         from app.models.geo_entrega import EntregaGeo as _EntregaGeo
         _previo = RecaudoEntrega.query.filter_by(ruta_id=ruta_id, tarea_id=tarea_id).first()
+        if _previo is not None and _previo.registrada_por_oficina and not por_oficina:
+            # Tanda 2 · B: lo que registró la oficina no lo pisa una confirmación
+            # del teléfono — va aparte (`guardar_version_conductor`).
+            raise ValueError('Esta parada la registró la oficina: lo que mande el conductor '
+                             'se guarda aparte, no la cambia.')
         _exige = _sr.formulario_con_evidencia(data)
 
         referencia_pago = _sr.limpiar_referencia(data.get('referencia_pago'))
