@@ -171,10 +171,11 @@ class RutaService:
                 f'{conductor.nombre} ya tiene cuenta ({conductor.usuario.email}). '
                 f'Vincularlo a otra dejaría la anterior sin dueño y sin aviso.'
             )
-        email = (email or '').strip().lower()
+        from app.models.usuario import normalizar_email
+        email = normalizar_email(email)
         if not email or not password:
             raise ValueError('Email y contraseña son obligatorios')
-        if Usuario.query.filter_by(email=email).first():
+        if Usuario.por_email(email):
             raise ConflictError(f'Ya existe un usuario con el email {email}')
 
         usuario = Usuario(email=email, nombre=conductor.nombre,

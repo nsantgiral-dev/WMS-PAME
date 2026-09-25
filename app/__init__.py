@@ -312,8 +312,14 @@ def create_app():
         if not password:
             click.echo('ERROR: debes pasar --password. Ejemplo: flask create-admin --password MiClave123')
             return
-        from app.models.usuario import Usuario
-        u = Usuario.query.filter_by(email=email).first()
+        from app.models.usuario import Usuario, normalizar_email
+        email = normalizar_email(email)
+        existentes = Usuario.por_email(email)
+        if len(existentes) > 1:
+            click.echo(f'ERROR: hay {len(existentes)} usuarios con el correo {email} '
+                       f'(distintas mayúsculas). Resuélvalo a mano antes.')
+            return
+        u = existentes[0] if existentes else None
         if u:
             u.set_password(password)
             u.activo = True

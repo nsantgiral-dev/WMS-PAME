@@ -3,6 +3,18 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from app.extensions import db
 
 
+def normalizar_email(email) -> str:
+    """El correo como se guarda y como se busca: sin espacios y en minúsculas.
+
+    **Una función** para toda puerta que crea, edita o busca un usuario por
+    correo (2026-09-25). «Crear cuenta» del conductor guardaba en minúsculas y
+    el login comparaba exacto: la cuenta creada como `condA@e2e.co` no entraba
+    con `condA@e2e.co` — y el teclado del teléfono pone la mayúscula inicial
+    solo. Trinquete: `tests/test_correo_una_forma.py`.
+    """
+    return str(email or '').strip().lower()
+
+
 class Usuario(db.Model):
     __tablename__ = 'usuarios'
 
@@ -34,6 +46,17 @@ class Usuario(db.Model):
     siesa_co_id = db.Column(db.String(20), nullable=True)          # ej. '003' — C.O. de la tienda
     nombre_punto_venta = db.Column(db.String(100), nullable=True)  # ej. 'Neiva Centro'
     fecha_creacion = db.Column(db.DateTime, default=datetime.utcnow)
+
+    @staticmethod
+    def por_email(email, solo_activos=False):
+        """Los usuarios con ese correo, sin importar mayúsculas. Una lista: las
+        filas viejas guardadas con mayúsculas podrían chocar entre sí, y quien
+        llama decide qué hacer con más de una (Regla 0: no se adivina)."""
+        from sqlalchemy import func
+        q = Usuario.query.filter(func.lower(func.trim(Usuario.email)) == normalizar_email(email))
+        if solo_activos:
+            q = q.filter(Usuario.activo.is_(True))
+        return q.order_by(Usuario.id).all()
 
     def set_password(self, password):
         self.password_hash = generate_password_hash(password)

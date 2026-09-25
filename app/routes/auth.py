@@ -2,7 +2,7 @@ from datetime import timedelta
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity
 from app.extensions import db
-from app.models.usuario import Usuario
+from app.models.usuario import Usuario, normalizar_email
 
 auth_bp = Blueprint('auth', __name__)
 
@@ -37,9 +37,13 @@ def login():
     if not data or not data.get('email') or not data.get('password'):
         return jsonify({'error': 'Email y password requeridos'}), 400
 
-    usuario = Usuario.query.filter_by(email=data['email'], activo=True).first()
+    # Sin importar mayúsculas: el teclado del teléfono pone la inicial solo.
+    # Si dos filas viejas chocan en minúsculas, entra la que tenga esa clave.
+    candidatos = [u for u in Usuario.por_email(data['email'], solo_activos=True)
+                  if u.check_password(data['password'])]
+    usuario = candidatos[0] if len(candidatos) == 1 else None
 
-    if not usuario or not usuario.check_password(data['password']):
+    if not usuario:
         return jsonify({'error': 'Credenciales inválidas'}), 401
 
     expires = timedelta(days=30) if usuario.rol == 'conductor' else timedelta(days=7)
@@ -74,7 +78,7 @@ def register():
     if not data or not data.get('email') or not data.get('password') or not data.get('nombre'):
         return jsonify({'error': 'Nombre, email y password requeridos'}), 400
 
-    if Usuario.query.filter_by(email=data['email']).first():
+    if Usuario.por_email(data['email']):
         return jsonify({'error': 'El email ya existe'}), 409
 
     # [40] Validar campos numéricos antes de convertir para evitar ValueError/500
@@ -90,7 +94,7 @@ def register():
 
     usuario = Usuario(
         nombre=data['nombre'],
-        email=data['email'],
+        email=normalizar_email(data['email']),
         rol=_rol_nuevo,
         almacen_id=data.get('almacen_id'),
         puede_usar_camara=data.get('puede_usar_camara', False),

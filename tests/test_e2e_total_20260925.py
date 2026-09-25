@@ -212,8 +212,6 @@ class TestLaCuentaDelConductorEntraConSuCorreo:
     del teléfono pone mayúscula inicial solo.
     """
 
-    @pytest.mark.xfail(strict=True, reason='P2: login sensible a mayúsculas tras crear la cuenta en '
-                                           'minúsculas')
     def test_entra_con_el_correo_tal_como_se_lo_dieron(self, app, client, db):
         admin = _usuario(db)
         r = client.post('/api/rutas/conductores', headers=_jwt(app, admin),
