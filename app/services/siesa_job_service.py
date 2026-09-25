@@ -1317,7 +1317,14 @@ def _ejecutar_job(job: SiesaJob) -> dict:
             if consec:
                 solicitud.siesa_salida_consec = consec
             else:
-                consec_rec = _st.recuperar_consec_salida(solicitud.codigo)
+                # Tres respuestas (P0-6): «no sé» no se confunde con «no está».
+                from app.services.connekta_gateway import RecuperacionNoDisponible
+                try:
+                    consec_rec = _st.recuperar_consec_salida(solicitud.codigo)
+                except RecuperacionNoDisponible as _e_rec:
+                    logger.error('[DLQ] DESPACHO_TRASLADO %s: recovery sin respuesta: %s',
+                                 solicitud.codigo, _e_rec)
+                    consec_rec = None
                 solicitud.siesa_salida_consec = consec_rec
             solicitud.estado = EstadoTraslado.EN_TRANSITO
             # `fecha_despacho` se escribía SOLO en `TrasladoService.despachar`
@@ -1329,7 +1336,13 @@ def _ejecutar_job(job: SiesaJob) -> dict:
             # fecha de despacho» sin que nadie supiera por qué.
             if solicitud.fecha_despacho is None:
                 solicitud.fecha_despacho = datetime.utcnow()
-            solicitud.siesa_error = None
+            # Sin consecutivo el STS salió (el POST fue aceptado) pero el WMS
+            # no lo sabe leer: borrar el error dejaba el traslado «en verde»
+            # con el ETS imposible de emitir. Se declara.
+            solicitud.siesa_error = None if solicitud.siesa_salida_consec else (
+                'AVISO: el 173076 fue aceptado por Siesa pero el WMS no pudo leer '
+                'su consecutivo. Use Reintentar despacho para recuperarlo — el '
+                'botón verifica antes de reenviar.')
             from app.extensions import db as _db
             _db.session.commit()
         logger.info('[DLQ] DESPACHO_TRASLADO job=%s solicitud=%s → EN_TRANSITO',

@@ -508,14 +508,23 @@ class ConnektaTrasladosGateway:
         Consulta el STS por f450_docto_alterno y devuelve consec + bodega_transito real.
         Útil para diagnosticar/corregir mismatch entre bodega_transito_siesa en WMS
         y la bodega_entrada que Siesa asignó al STS.
-        Retorna {'consec': int, 'bodega_transito': str} o None si no encuentra.
+
+        Tres respuestas, no dos (P0-6, 2026-09-25):
+        · `{'consec': int, 'bodega_transito': str}` — el STS existe;
+        · `None` — Siesa contestó y **no hay** STS con ese alterno;
+        · levanta `RecuperacionNoDisponible` — **no se pudo preguntar**, o la
+          fila existe y su consecutivo no se puede leer. Antes esto devolvía
+          `None` y el reintento lo leía como «no existe» → segundo STS.
         """
+        from app.services.connekta_gateway import RecuperacionNoDisponible
         from app.services.siesa_filtro import lit as _lit
 
         core = self._core
         alterno = core._fmt_alterno(codigo_solicitud)
         if not alterno:
-            return None
+            raise RecuperacionNoDisponible(
+                f'STS de {codigo_solicitud!r}: sin código alterno no hay con qué '
+                f'preguntarle a Siesa — no se reenvía.')
         try:
             res = core._get(
                 'API_v2_Inventarios_Transferencia_Salida_Transito',
@@ -526,26 +535,34 @@ class ConnektaTrasladosGateway:
                     'parametros': f"f450_docto_alterno = {_lit(alterno)}",
                 },
             )
-            rows = (
-                res.get('detalle', {}).get('Table') or
-                res.get('detalle', {}).get('Datos') or []
-            )
-            if rows:
-                row = rows[0]
-                consec = row.get('f350_consec_docto')
-                bodega_ent = (row.get('f150_id_bodega_entrada') or '').strip() or None
-                logger.info(
-                    '[CONNEKTA] STS %s: consec=%s bodega_transito=%s',
-                    codigo_solicitud, consec, bodega_ent,
-                )
-                return {
-                    'consec': int(consec) if consec else None,
-                    'bodega_transito': bodega_ent,
-                }
         except Exception as e:
-            logger.warning('[CONNEKTA] get_sts_info_by_alterno(%s): %s',
-                           codigo_solicitud, e)
-        return None
+            raise RecuperacionNoDisponible(
+                f'STS de {codigo_solicitud}: no se pudo consultar Siesa ({e}). '
+                f'No se sabe si el documento existe — no se reenvía.') from e
+        if res is None:
+            # `_get` devuelve None con el circuito abierto: no preguntó.
+            raise RecuperacionNoDisponible(
+                f'STS de {codigo_solicitud}: circuito de Siesa abierto — no se '
+                f'preguntó. No se reenvía.')
+        rows = (
+            res.get('detalle', {}).get('Table') or
+            res.get('detalle', {}).get('Datos') or []
+        )
+        if not rows:
+            return None
+        row = rows[0]
+        try:
+            consec = int(row.get('f350_consec_docto'))
+        except (TypeError, ValueError):
+            raise RecuperacionNoDisponible(
+                f'STS de {codigo_solicitud}: Siesa tiene el documento pero su '
+                f'consecutivo no se puede leer ({row.get("f350_consec_docto")!r}).')
+        bodega_ent = (row.get('f150_id_bodega_entrada') or '').strip() or None
+        logger.info(
+            '[CONNEKTA] STS %s: consec=%s bodega_transito=%s',
+            codigo_solicitud, consec, bodega_ent,
+        )
+        return {'consec': consec, 'bodega_transito': bodega_ent}
 
     def get_consec_entrada_transito_by_alterno(self, codigo_solicitud: str) -> int | None:
         """
@@ -567,31 +584,51 @@ class ConnektaTrasladosGateway:
         `f350_consec_docto=19`, `f350_consec_docto_salida=53` (coincide con el STS
         de ese mismo traslado) — el documento YA EXISTÍA en Siesa y el WMS nunca
         había capturado su consecutivo.
+        Tres respuestas, igual que `get_sts_info_by_alterno` (P0-6): el
+        consecutivo si existe, `None` si Siesa contestó que no, y
+        `RecuperacionNoDisponible` si no se pudo preguntar.
         """
+        from app.services.connekta_gateway import RecuperacionNoDisponible
         from app.services.siesa_filtro import lit as _lit
 
         core = self._core
+        alterno = core._fmt_alterno(codigo_solicitud)
+        if not alterno:
+            raise RecuperacionNoDisponible(
+                f'ETS de {codigo_solicitud!r}: sin código alterno no hay con qué '
+                f'preguntarle a Siesa — no se reenvía.')
         try:
             res = core._get(
                 core.consulta_transito_entrada,
                 params_extra={
                     'paginacion': 'numPag=1|tamPag=5',
-                    'parametros': f"f450_docto_alterno = {_lit(core._fmt_alterno(codigo_solicitud))}",
+                    'parametros': f"f450_docto_alterno = {_lit(alterno)}",
                 },
             )
-            rows = (
-                res.get('detalle', {}).get('Table') or
-                res.get('detalle', {}).get('Datos') or []
-            )
-            if rows:
-                consec = rows[0].get('f350_consec_docto')
-                logger.info('[CONNEKTA] ETS %s: consec recuperado=%s',
-                            codigo_solicitud, consec)
-                return int(consec) if consec else None
         except Exception as e:
-            logger.warning('[CONNEKTA] get_consec_entrada_transito_by_alterno(%s): %s',
-                           codigo_solicitud, e)
-        return None
+            raise RecuperacionNoDisponible(
+                f'ETS de {codigo_solicitud}: no se pudo consultar Siesa ({e}). '
+                f'No se sabe si el documento existe — no se reenvía.') from e
+        if res is None:
+            # `_get` devuelve None con el circuito abierto: no preguntó.
+            raise RecuperacionNoDisponible(
+                f'ETS de {codigo_solicitud}: circuito de Siesa abierto — no se '
+                f'preguntó. No se reenvía.')
+        rows = (
+            res.get('detalle', {}).get('Table') or
+            res.get('detalle', {}).get('Datos') or []
+        )
+        if not rows:
+            return None
+        try:
+            consec = int(rows[0].get('f350_consec_docto'))
+        except (TypeError, ValueError):
+            raise RecuperacionNoDisponible(
+                f'ETS de {codigo_solicitud}: Siesa tiene el documento pero su '
+                f'consecutivo no se puede leer ({rows[0].get("f350_consec_docto")!r}).')
+        logger.info('[CONNEKTA] ETS %s: consec recuperado=%s',
+                    codigo_solicitud, consec)
+        return consec
 
     # Clave con la que SQL Server devuelve un `FOR JSON`: el texto JSON completo,
     # partido en trozos de ~2000 caracteres, uno por fila.

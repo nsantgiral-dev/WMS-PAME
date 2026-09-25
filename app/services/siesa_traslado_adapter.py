@@ -82,7 +82,10 @@ class SiesaTrasladoAdapter:
         )
 
     def recuperar_consec_salida(self, codigo: str) -> 'int | None':
-        """Recovery: consulta API v2 cuando el consecutivo de 173076 no llegó en la respuesta."""
+        """Recovery: consulta API v2 cuando el consecutivo de 173076 no llegó en la respuesta.
+
+        consecutivo = existe · None = Siesa contestó que no existe · levanta
+        `RecuperacionNoDisponible` = no se pudo preguntar (no reenviar)."""
         return connekta.get_consec_salida_transito_by_alterno(codigo)
 
     def recuperar_consec_rit(self, codigo: str) -> 'int | None':
@@ -142,7 +145,10 @@ class SiesaTrasladoAdapter:
         )
 
     def recuperar_consec_entrada(self, codigo: str) -> 'int | None':
-        """Recovery: consulta API v2 cuando el consecutivo de 173079 no llegó en la respuesta."""
+        """Recovery: consulta API v2 cuando el consecutivo de 173079 no llegó en la respuesta.
+
+        consecutivo = existe · None = Siesa contestó que no existe · levanta
+        `RecuperacionNoDisponible` = no se pudo preguntar (no reenviar)."""
         return connekta.get_consec_entrada_transito_by_alterno(codigo)
 
 

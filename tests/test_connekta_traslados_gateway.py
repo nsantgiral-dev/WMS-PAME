@@ -201,12 +201,15 @@ class TestRecoverySTS:
                 lambda codigo: {'consec': 77, 'bodega_transito': 'TRA1'})
             assert connekta.get_consec_salida_transito_by_alterno('ST-1') == 77
 
-    def test_get_sts_info_by_alterno_sin_alterno_retorna_none(self, app, monkeypatch):
+    def test_get_sts_info_by_alterno_sin_alterno_no_sabe(self, app, monkeypatch):
+        """Sin alterno no se preguntó nada: es «no sé», no «no existe»
+        (P0-6, 2026-09-25). Antes devolvía None y el reintento reenviaba."""
         with app.app_context():
-            from app.services.connekta_gateway import connekta
+            from app.services.connekta_gateway import connekta, RecuperacionNoDisponible
 
             monkeypatch.setattr(connekta, '_fmt_alterno', lambda x: None)
-            assert connekta.get_sts_info_by_alterno('') is None
+            with pytest.raises(RecuperacionNoDisponible):
+                connekta.get_sts_info_by_alterno('')
 
     def test_get_sts_info_by_alterno_parsea_consec_y_bodega(self, app, monkeypatch):
         with app.app_context():
@@ -229,15 +232,18 @@ class TestRecoverySTS:
             monkeypatch.setattr(connekta, '_get', lambda *a, **k: {'detalle': {'Table': []}})
             assert connekta.get_sts_info_by_alterno('ST-1') is None
 
-    def test_get_sts_info_by_alterno_excepcion_no_propaga(self, app, monkeypatch):
+    def test_get_sts_info_by_alterno_excepcion_es_no_se(self, app, monkeypatch):
+        """Este test afirmaba el defecto: «la excepción no propaga» era
+        exactamente lo que dejaba a `reintentar-despacho` postear otro STS."""
         with app.app_context():
-            from app.services.connekta_gateway import connekta
+            from app.services.connekta_gateway import connekta, RecuperacionNoDisponible
 
             def _boom(*a, **k):
                 raise RuntimeError('caído')
 
             monkeypatch.setattr(connekta, '_get', _boom)
-            assert connekta.get_sts_info_by_alterno('ST-1') is None
+            with pytest.raises(RecuperacionNoDisponible):
+                connekta.get_sts_info_by_alterno('ST-1')
 
 
 class TestRecoveryETS:
@@ -251,15 +257,16 @@ class TestRecoveryETS:
             monkeypatch.setattr(connekta, '_get', _fake_get)
             assert connekta.get_consec_entrada_transito_by_alterno('ST-1') == 19
 
-    def test_get_consec_entrada_transito_by_alterno_excepcion_no_propaga(self, app, monkeypatch):
+    def test_get_consec_entrada_transito_by_alterno_excepcion_es_no_se(self, app, monkeypatch):
         with app.app_context():
-            from app.services.connekta_gateway import connekta
+            from app.services.connekta_gateway import connekta, RecuperacionNoDisponible
 
             def _boom(*a, **k):
                 raise RuntimeError('caído')
 
             monkeypatch.setattr(connekta, '_get', _boom)
-            assert connekta.get_consec_entrada_transito_by_alterno('ST-1') is None
+            with pytest.raises(RecuperacionNoDisponible):
+                connekta.get_consec_entrada_transito_by_alterno('ST-1')
 
 
 def _respuesta_for_json(requisiciones, trozo=2000):

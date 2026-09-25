@@ -60,7 +60,27 @@ class CompromisosNoDisponibles(Exception):
     """
 
 
-class RemisionNoDisponible(Exception):
+class RecuperacionNoDisponible(Exception):
+    """No se pudo preguntarle a Siesa si el documento ya existe.
+
+    El tercer estado de toda lectura de recuperación (2026-09-25, P0-6):
+
+    · devuelve el dato  → **existe**, con su consecutivo;
+    · devuelve `None`   → Siesa contestó y **no existe** (tabla vacía o el
+      400 «No se encontraron registros» que `_get` ya normaliza a vacío);
+    · levanta esto      → **no sé**: red, timeout, 401, 429, circuito abierto,
+      o una fila que existe pero cuyo consecutivo no se puede leer.
+
+    `get_sts_info_by_alterno` y `get_consec_entrada_transito_by_alterno`
+    devolvían `None` en el `except`, y `reintentar-despacho` /
+    `reintentar-recepcion` leían ese `None` como «no existe» y **volvían a
+    postear**: STS o ETS duplicado, mercancía descargada o cargada dos veces.
+    Es la misma forma de `CompromisosNoDisponibles`. Ante «no sé», nadie hace
+    POST ni marca hecho.
+    """
+
+
+class RemisionNoDisponible(RecuperacionNoDisponible):
     """No se pudo preguntar por la remisión de un pedido.
 
     **No es lo mismo que «el pedido no tiene remisión».** Es la misma forma de

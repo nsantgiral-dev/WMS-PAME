@@ -843,7 +843,29 @@ def reintentar_despacho(id):
     # un intento previo puede haber recibido 200 de Siesa sin un consecutivo
     # parseable en la respuesta. Sin este chequeo, reintentar sobre uno de esos
     # casos manda un 173076 SEGUNDO y descarga el origen dos veces.
-    consec_existente = siesa_traslado.recuperar_consec_salida(s.codigo)
+    #
+    # Y la verificación tiene TRES respuestas (P0-6, 2026-09-25): solo «Siesa
+    # contestó que no existe» autoriza otro POST. «No se pudo preguntar»
+    # devolvía None igual que «no existe», y este botón posteaba un segundo STS.
+    from app.services.connekta_gateway import RecuperacionNoDisponible
+    if s.modo_transferencia != 'EN_TRANSITO':
+        # La consulta de recuperación es la del STS (173076); un 173066 directo
+        # no aparece ahí, así que su «no está» no confirma nada.
+        return jsonify({
+            'ok': False, 'resultado_desconocido': True,
+            'error': ('Este traslado salió por transferencia directa (173066) y '
+                      'no hay consulta que confirme si ya existe en Siesa. '
+                      'Verifíquelo en Siesa y registre el consecutivo a mano; '
+                      'no se reenvía.'),
+        }), 409
+    try:
+        consec_existente = siesa_traslado.recuperar_consec_salida(s.codigo)
+    except RecuperacionNoDisponible as e:
+        return jsonify({
+            'ok': False, 'resultado_desconocido': True,
+            'error': (f'No se pudo verificar en Siesa si el STS ya existe: {e} '
+                      'Intente de nuevo cuando Siesa responda.'),
+        }), 409
     if consec_existente:
         s.siesa_salida_consec = consec_existente
         s.siesa_error = None
@@ -902,7 +924,10 @@ def reintentar_despacho(id):
                 logger.warning(
                     '[TRASLADO] %s: consecutivo null en respuesta 173076 — '
                     'intentando recovery', s.codigo)
-                consec = siesa_traslado.recuperar_consec_salida(s.codigo)
+                try:
+                    consec = siesa_traslado.recuperar_consec_salida(s.codigo)
+                except RecuperacionNoDisponible:
+                    consec = None   # no sé → la rama de resultado desconocido
             if consec:
                 s.siesa_salida_consec = consec
             else:
@@ -962,7 +987,19 @@ def reintentar_recepcion_siesa(id):
     # reintentar sobre uno de esos casos manda un 173079 SEGUNDO y crea un
     # documento de entrada duplicado en Siesa — exactamente lo que el aviso
     # "Verificá primero en Siesa que el documento no exista" advierte.
-    consec_existente = siesa_traslado.recuperar_consec_entrada(s.codigo)
+    #
+    # Tres respuestas (P0-6): solo «Siesa contestó que no existe» autoriza el
+    # POST. «No se pudo preguntar» devolvía None y este botón posteaba un
+    # segundo ETS.
+    from app.services.connekta_gateway import RecuperacionNoDisponible
+    try:
+        consec_existente = siesa_traslado.recuperar_consec_entrada(s.codigo)
+    except RecuperacionNoDisponible as e:
+        return jsonify({
+            'ok': False, 'resultado_desconocido': True,
+            'error': (f'No se pudo verificar en Siesa si el ETS ya existe: {e} '
+                      'Intente de nuevo cuando Siesa responda.'),
+        }), 409
     if consec_existente:
         s.siesa_entrada_consec = consec_existente
         s.siesa_error = None

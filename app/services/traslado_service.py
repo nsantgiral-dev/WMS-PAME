@@ -867,7 +867,13 @@ class TrasladoService:
                         'intentando recovery via API_v2_Inventarios_Transferencia_Salida_Transito',
                         s.codigo
                     )
-                    consec_recuperado = siesa_traslado.recuperar_consec_salida(s.codigo)
+                    from app.services.connekta_gateway import RecuperacionNoDisponible
+                    try:
+                        consec_recuperado = siesa_traslado.recuperar_consec_salida(s.codigo)
+                    except RecuperacionNoDisponible as _e_rec:
+                        logger.error('[TRASLADO] %s: recovery del STS sin respuesta: %s',
+                                     s.codigo, _e_rec)
+                        consec_recuperado = None
                     if consec_recuperado:
                         s.siesa_salida_consec = consec_recuperado
                         s.siesa_error = None
@@ -2177,7 +2183,12 @@ class TrasladoService:
         logger.warning(
             '[TRASLADO] %s: consecutivo null en respuesta 173079 — '
             'intentando recovery via API v2 (Transferencia Entrada Tránsito)', codigo)
-        consec_recuperado = siesa_traslado.recuperar_consec_entrada(codigo)
+        from app.services.connekta_gateway import RecuperacionNoDisponible
+        try:
+            consec_recuperado = siesa_traslado.recuperar_consec_entrada(codigo)
+        except RecuperacionNoDisponible as e:
+            logger.error('[TRASLADO] %s: recovery del ETS sin respuesta: %s', codigo, e)
+            consec_recuperado = None
         if consec_recuperado:
             logger.info(
                 '[TRASLADO] %s: consecutivo de entrada recuperado via API v2: %s',
