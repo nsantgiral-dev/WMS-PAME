@@ -48,6 +48,24 @@ Dos cosas, y hacen falta las dos:
 
 Trinquete: `tests/test_sync_catalogo_completitud.py`, que mide las sentencias
 SQL por página y exige que no crezcan con el número de ítems.
+
+## Declarar no bastaba: el barrido reanuda donde se cortó
+
+Medido en producción el 2026-09-25 (`registros_sync`, tipo `catalogo`): todas
+las corridas duraban 5:00 exactos y se cortaban entre la página 151 y la 228,
+declarándolo bien — `paginacion_completa: false`, «cota temporal alcanzada». Y
+la siguiente **volvía a empezar por la página 1**, así que la cola del catálogo
+no se leía nunca: **3.231 productos con el nombre de relleno
+`Producto <referencia>`** en picking, packing y conteo.
+
+Subir la cota no lo arregla: la misma cota dio 151 páginas en una corrida y 228
+en otra, y el catálogo crece. Lo que se cambia es el punto de partida: una
+corrida truncada deja en su `resultado` la página donde se cortó (`reanudar_en`)
+y la siguiente arranca ahí (`_pagina_de_arranque`). Una que llega al final deja
+`reanudar_en: None` y la siguiente vuelve a la 1. Sin tabla ni migración nueva:
+el cursor vive en `registros_sync`, que ya sobrevive al reinicio del contenedor.
+
+Trinquete: `tests/test_sync_catalogo_reanuda.py`.
 """
 import logging
 import os
@@ -95,6 +113,27 @@ _TAM_LOTE_IN = 500
 #: sentencias SQL (ver `_mapas_de_productos`); ahora emite ~3, y el motivo del
 #: throttle —dar respiro al pool que el worker comparte— se cumple con 0,1.
 _SYNC_PAGE_DELAY_DEFAULT = '0.1'
+
+
+def _pagina_de_arranque():
+    """La página donde empieza esta corrida: donde se cortó la anterior, o la 1.
+
+    Se lee de la última corrida **exitosa** (`ultimo_ok`) y no de la última a
+    secas: una que murió por excepción no deja `resultado`, y leerla haría
+    perder el cursor de la anterior — se volvería a la 1, que es el defecto.
+    Repetir las páginas de la corrida fallida cuesta tiempo; saltarlas no se
+    puede, porque no se sabe cuáles llegó a escribir.
+
+    Cualquier cosa que no sea un entero ≥ 1 —corrida vieja sin la clave,
+    `None` de un barrido completo, error leyendo la tabla— arranca en la 1.
+    Empezar de cero es el lado seguro: relee de más, no deja nada sin leer.
+    """
+    from app.services import registro_sync_service as _reg
+    previa = _reg.ultimo_ok('catalogo') or {}
+    cursor = (previa.get('resultado') or {}).get('reanudar_en')
+    if isinstance(cursor, int) and not isinstance(cursor, bool) and cursor >= 1:
+        return cursor
+    return 1
 
 
 def _mapas_de_productos(codigos):
@@ -182,6 +221,11 @@ def _run_sync(app):
         # (una página corta o vacía), no lo que se asume mientras nada falle.
         paginacion_completa = False
         motivo_incompleta = None
+        # Dónde arranca y dónde tiene que arrancar la siguiente. `reanudar_en`
+        # queda en `None` solo si el barrido llegó al final; cada salida corta
+        # lo fija en la primera página que NO quedó escrita.
+        pagina_inicial = _pagina_de_arranque()
+        reanudar_en = None
 
         # Se abre DESPUÉS del advisory lock: una corrida que no llegó a
         # ejecutar porque otro worker la tenía no es una corrida.
@@ -199,7 +243,14 @@ def _run_sync(app):
             }
             tipos_sin_mapeo = set()  # tipos que Siesa devuelve pero no están en nuestra tabla
 
-            for pag in range(1, _MAX_PAGINAS + 1):
+            if pagina_inicial > 1:
+                logger.info('[SYNC] Reanuda en la página %s (la corrida anterior '
+                            'se cortó ahí)', pagina_inicial)
+
+            # El tope cuenta páginas de ESTA corrida, no números de página: con
+            # un tope absoluto, un cursor en la 500 daría un rango vacío y cada
+            # corrida declararía «se agotó el tope» sin leer nada, para siempre.
+            for pag in range(pagina_inicial, pagina_inicial + _MAX_PAGINAS):
                 _elapsed = (_dt_sync.utcnow() - _sync_inicio).total_seconds()
                 if _elapsed > _MAX_MINUTOS_PAGINACION * 60:
                     # Se acabó el tiempo. NO es «no hay más»: quedó catálogo sin
@@ -207,6 +258,7 @@ def _run_sync(app):
                     motivo_incompleta = (
                         f'cota temporal alcanzada tras {_elapsed:.0f}s en la '
                         f'página {pag} — {total_procesados} ítems leídos')
+                    reanudar_en = pag
                     logger.warning('[SYNC] Paginación abortada: %s', motivo_incompleta)
                     break
                 try:
@@ -229,6 +281,9 @@ def _run_sync(app):
                     # no menciona los miles de productos que sí se escribieron.
                     # «Falló» y «se leyó el 40%» son afirmaciones distintas.
                     motivo_incompleta = f'la página {pag} falló: {e}'
+                    # La siguiente la reintenta: saltarla dejaría 100 productos
+                    # fuera de la vuelta sin que nada lo dijera.
+                    reanudar_en = pag
                     logger.error('[SYNC] %s', motivo_incompleta)
                     break
 
@@ -424,6 +479,7 @@ def _run_sync(app):
                 motivo_incompleta = (
                     f'se agotó el tope de {_MAX_PAGINAS} páginas con '
                     f'{total_procesados} ítems leídos — el catálogo es mayor')
+                reanudar_en = pagina_inicial + _MAX_PAGINAS
                 logger.warning('[SYNC] %s', motivo_incompleta)
 
         except Exception as e:
@@ -472,8 +528,8 @@ def _run_sync(app):
                 '[SYNC] BARRIDO INCOMPLETO (%s). %s páginas, %s ítems: el resto '
                 'del catálogo NO se leyó. Los productos no leídos conservan lo '
                 'que ya tenían — no se borra ni se desactiva nada por no haber '
-                'llegado a leerlo.',
-                motivo_incompleta, paginas_leidas, total_procesados)
+                'llegado a leerlo. La próxima corrida reanuda en la página %s.',
+                motivo_incompleta, paginas_leidas, total_procesados, reanudar_en)
 
         resultado = {
             'timestamp': datetime.utcnow().isoformat(),
@@ -495,6 +551,12 @@ def _run_sync(app):
             # más» no pueden devolver lo mismo.
             'paginacion_completa': paginacion_completa,
             'motivo_incompleta': motivo_incompleta,
+            # El cursor. `pagina_inicial > 1` dice que esta corrida continuó una
+            # vuelta: su `paginacion_completa` significa «la vuelta llegó al
+            # final», no «esta corrida sola leyó el catálogo entero».
+            # `reanudar_en` es lo que lee `_pagina_de_arranque` la próxima vez.
+            'pagina_inicial': pagina_inicial,
+            'reanudar_en': reanudar_en,
         }
         logger.info(f'[SYNC] Completado: {resultado}')
         _sync_estado['ultimo_resultado'] = resultado
