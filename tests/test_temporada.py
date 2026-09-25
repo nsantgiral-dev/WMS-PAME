@@ -152,7 +152,11 @@ class TestCuCoPorSku:
         r = KardexService.newsvendor(
             [{'referencia': 'A', 'ventas_pasadas': [100, 120], 'costo_unitario': 10}],
             margen_pct=0.40, costo_exceso_pct=0.60)
-        assert abs(r['items'][0]['ratio_critico'] - 0.40) < 0.01
+        # m sobre precio, e sobre costo: m / (m + e·(1−m)) = 0,526 (D12). El
+        # 0,40 que fijaba este test era m/(m+e), que suma bases distintas.
+        assert abs(r['items'][0]['ratio_critico'] - 0.40 / (0.40 + 0.60 * 0.60)) < 0.01
+        # Y la cabecera es la misma función, no otra fórmula.
+        assert r['ratio_critico'] == r['items'][0]['ratio_critico']
 
     def test_una_sola_temporada_infla_la_incertidumbre(self, app, db):
         """Con 2025-26 sola, el sigma se infla ×1.5 y queda marcado."""
@@ -225,12 +229,18 @@ class TestDescensuraNoSobreestima:
         from app.services.kardex_service import (
             KardexService, KardexMovimiento)
         from datetime import date, timedelta
-        hoy = date.today()
+        from app.utils.fecha import dia_operativo
+        hoy = dia_operativo()
         # 3 ventas de 40 unidades, sin StockDiario alguno
         for i in range(3):
             db.session.add(KardexMovimiento(
                 referencia='LUMPY', bodega='NB1', fecha=hoy - timedelta(days=30 * (i + 1)),
                 concepto=501, naturaleza=2, cantidad=40))
+        # El kardex observa los 12 meses: un movimiento de otro SKU en el primer
+        # día de la ventana (la ventana se recorta a la cobertura del kardex).
+        db.session.add(KardexMovimiento(
+            referencia='OTRO', bodega='NB1', fecha=hoy - timedelta(days=359),
+            concepto=601, naturaleza=1, cantidad=1))
         db.session.commit()
 
         r = KardexService.demanda_descensurada(ventana_meses=12, nivel='red')

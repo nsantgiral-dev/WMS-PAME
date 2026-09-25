@@ -69,52 +69,56 @@ class TemporadaService:
 
         Returns: {referencia: {concentracion, demanda_temporada, demanda_anual}}
         """
-        from app.services.kardex_service import (
-            KardexMovimiento, StockDiario, CONCEPTOS_VENTA, CONCEPTOS_DEVOLUCION)
-        from sqlalchemy import func
         from collections import defaultdict
+        from datetime import timedelta
 
-        desde = _dia_operativo().replace(year=_dia_operativo().year - anios)
+        from app.services.kardex_service import (
+            dias_en, inicio_cobertura_kardex, intervalos_con_stock, serie_demanda)
 
-        def _por_dia(conceptos, naturaleza):
-            return (
-                db.session.query(KardexMovimiento.referencia,
-                                 KardexMovimiento.fecha,
-                                 func.sum(KardexMovimiento.cantidad))
-                .filter(KardexMovimiento.fecha >= desde)
-                .filter(KardexMovimiento.concepto.in_(conceptos))
-                .filter(KardexMovimiento.naturaleza == naturaleza)
-                .group_by(KardexMovimiento.referencia, KardexMovimiento.fecha)
-                .all()
-            )
+        hasta = _dia_operativo()
+        try:
+            desde = hasta.replace(year=hasta.year - anios)
+        except ValueError:          # 29 de febrero
+            desde = date(hasta.year - anios, 2, 28)
+        cobertura = inicio_cobertura_kardex()
+        if cobertura is None or cobertura > hasta:
+            return {}
+        # Un día anterior a la cobertura del kardex no es un día sin venta: no
+        # se observó. Ni se cuenta en la demanda ni en el denominador.
+        desde = max(desde, cobertura)
 
-        neto = defaultdict(float)
-        for ref, f, c in _por_dia(CONCEPTOS_VENTA, 2):
-            neto[(ref, f)] += float(c or 0)
-        for ref, f, c in _por_dia(CONCEPTOS_DEVOLUCION, 1):
-            neto[(ref, f)] -= float(c or 0)
-
-        # Días con stock por (ref, temporada) y por (ref, año) — el denominador
-        # de la descensura tiene que ser del mismo periodo que el numerador.
-        dias_stock = defaultdict(int)
-        # `.distinct()`: `StockDiario` es único en (referencia, bodega, fecha),
-        # así que sin él un SKU en 3 bodegas suma 3 días por cada día real —
-        # y este denominador decide **qué SKU es de temporada**.
-        for ref, f in db.session.query(StockDiario.referencia, StockDiario.fecha) \
-                .filter(StockDiario.fecha >= desde) \
-                .filter(StockDiario.tuvo_stock == True).distinct().all():  # noqa: E712
-            dias_stock[(ref, temporada_de(f))] += 1
+        # EL NUMERADOR Y EL DENOMINADOR DE SIEMPRE (ver kardex_service): la
+        # demanda neta por día y los días con stock contados sobre el escalón,
+        # no sobre los días con movimiento. Antes esta función leía los
+        # conceptos y `StockDiario` por su cuenta, y como `StockDiario` solo
+        # tenía filas en días con movimiento, «días con stock en la temporada»
+        # era «días con venta»: un SKU que vendió cada tres días con el estante
+        # lleno salía con demanda ×3.
+        serie = serie_demanda(desde, hasta, 'red')
+        tramos = intervalos_con_stock(desde, hasta, 'red')
 
         dem_temp = defaultdict(lambda: defaultdict(float))
         dem_anual = defaultdict(float)
-        for (ref, f), v in neto.items():
-            v = max(v, 0.0)
-            if v <= 0:
-                continue
-            dem_anual[ref] += v
-            t = temporada_de(f)
-            if t:
-                dem_temp[ref][t] += v
+        for ref, s in serie.items():
+            for f, v in s['por_dia'].items():
+                if v <= 0:
+                    continue
+                dem_anual[ref] += v
+                t = temporada_de(f)
+                if t:
+                    dem_temp[ref][t] += v
+
+        def _limites(t):
+            anio = int(t.split('-')[0])
+            a = date(anio, TEMPORADA_INICIO[0], TEMPORADA_INICIO[1])
+            # Hasta el último día de febrero (29 en bisiesto: temporada_de lo
+            # cuenta dentro).
+            return a, date(anio + 1, 3, 1) - timedelta(days=1)
+
+        def _dias_de(t):
+            """(inicio, fin) observados de la temporada `t` dentro de la ventana."""
+            a, b = _limites(t)
+            return max(a, desde), min(b, hasta)
 
         salida = {}
         for ref, total_anual in dem_anual.items():
@@ -130,7 +134,19 @@ class TemporadaService:
                 'demanda_anual': round(total_anual, 1),
                 'por_temporada': {t: round(v, 1) for t, v in sorted(dem_temp[ref].items())},
                 'dias_stock_por_temporada': {
-                    t: dias_stock.get((ref, t), 0) for t in dem_temp[ref]
+                    t: (dias_en(tramos.get(ref), *_dias_de(t)) if ref in tramos else 0)
+                    for t in dem_temp[ref]
+                },
+                # Los días que el kardex OBSERVÓ de cada temporada: una
+                # temporada recortada por la cobertura (o la que está en curso)
+                # no tiene 90 días, y proyectarla a 90 la inventaría.
+                'dias_observados_por_temporada': {
+                    t: (lambda ab: (ab[1] - ab[0]).days + 1)(_dias_de(t))
+                    for t in dem_temp[ref]
+                },
+                'dias_totales_por_temporada': {
+                    t: (lambda ab: (ab[1] - ab[0]).days + 1)(_limites(t))
+                    for t in dem_temp[ref]
                 },
             }
         return salida
@@ -199,7 +215,8 @@ class TemporadaService:
             if p.codigo_siesa
         }
 
-        items, excluidos = [], {'lista_negra': [], 'costo_fantasma': [], 'sin_producto': []}
+        items, excluidos = [], {'lista_negra': [], 'costo_fantasma': [], 'sin_producto': [],
+                                'sin_temporada_completa': []}
 
         # CABLE DE COSTO Y PRECIO. Antes se leía Producto.precio_compra, que la
         # sincronización de Siesa NUNCA puebla: todos los SKU salían con costo 0
@@ -228,14 +245,27 @@ class TemporadaService:
 
             ventas_pasadas = []
             temporadas_censuradas = []
+            temporadas_incompletas = []
             for t, dem in sorted(info['por_temporada'].items()):
                 dias = info['dias_stock_por_temporada'].get(t, 0)
-                corregida, censurada = TemporadaService._descensurar(dem, dias)
+                observados = info.get('dias_observados_por_temporada', {}).get(t, 90)
+                totales = info.get('dias_totales_por_temporada', {}).get(t, observados)
+                if observados < totales:
+                    # Una temporada que el kardex vio a medias (la cobertura
+                    # empieza adentro, o está en curso) no es una observación de
+                    # la demanda de una temporada: es un pedazo. Proyectarla a
+                    # la temporada entera supondría demanda pareja, y enero no
+                    # vende como diciembre. Fuera, y dicho.
+                    temporadas_incompletas.append(t)
+                    continue
+                corregida, censurada = TemporadaService._descensurar(
+                    dem, dias, dias_ventana=observados)
                 ventas_pasadas.append(round(corregida, 1))
                 if censurada:
                     temporadas_censuradas.append(t)
 
             if not ventas_pasadas:
+                excluidos['sin_temporada_completa'].append(ref)
                 continue
 
             # **Sin `or`.** `costo_service` calcula `cu = max(venta − costo, 0)`,
@@ -280,6 +310,7 @@ class TemporadaService:
                 # comentario de arriba aplica al costo.
                 'demanda_censurada': bool(temporadas_censuradas),
                 'temporadas_censuradas': temporadas_censuradas,
+                'temporadas_incompletas': temporadas_incompletas,
                 'precio_es_supuesto': info_costo.get('precio_es_supuesto', False),
                 'margen_supuesto': info_costo.get('margen_supuesto'),
                 'cu_rango': info_costo.get('cu_rango'),
@@ -288,6 +319,18 @@ class TemporadaService:
 
         resultado = KardexService.newsvendor(items, margen_pct=margen_pct,
                                              costo_exceso_pct=tasa_capital + tasa_liquidacion)
+
+        # ── TENER, HAY, VIENE, PEDIR (D2) ─────────────────────────────────
+        #
+        # Q* es cuánto hay que TENER al empezar la temporada, no cuánto pedir.
+        # Antes se publicaba Q* como pedido: un SKU con 800 en bodega y Q* de
+        # 1.000 salía «pedir 1.000». La posición es la MISMA función del
+        # Armador (`posicion_inventario`): disponible en bodegas operadas
+        # menos lo comprometido, más lo que ya viene.
+        from app.services.armador_service import posicion_inventario
+        refs_items = [i['referencia'] for i in items]
+        posiciones, info_camino = (posicion_inventario(refs_items)
+                                   if refs_items else ({}, {'hay_dato': False}))
 
         # Devolver el nombre y la concentración a cada fila (el calculador es
         # agnóstico y solo conoce referencias)
@@ -299,8 +342,48 @@ class TemporadaService:
             fila['precio_venta'] = m.get('precio_venta')
             for k in ('fuente_costo', 'costo_confiable', 'costo_anejo',
                       'dias_antiguedad_costo', 'precio_es_supuesto',
-                      'margen_supuesto', 'cu_rango', 'convencion_margen'):
+                      'margen_supuesto', 'cu_rango', 'convencion_margen',
+                      'demanda_censurada', 'temporadas_censuradas',
+                      'temporadas_incompletas'):
                 fila[k] = m.get(k)
+
+            pos = posiciones.get(fila['referencia'])
+            tener = fila.get('q_optimo')
+            if tener is None:
+                continue
+            hay = pos['disponible'] if pos else 0.0
+            viene = pos['en_camino'] if pos else 0.0
+            pedir = max(0, round(tener - hay - viene))
+            costo = float(fila.get('costo_unitario') or 0)
+            fila.update({
+                'tener': tener,
+                'hay': round(hay),
+                'viene': round(viene),
+                'pedir': pedir,
+                'inversion_pedido': round(pedir * costo) if costo else None,
+                # Sin ninguna fila de stock no es «hay 0»: es no saber.
+                'hay_sin_dato': pos is None,
+                'stock_frescura': (pos['frescura'].isoformat()
+                                   if pos and pos.get('frescura') else None),
+            })
+
+        filas_ = resultado.get('items', [])
+        resultado['total_pedir_unidades'] = sum(f.get('pedir') or 0 for f in filas_)
+        resultado['total_inversion_pedido'] = sum(
+            f.get('inversion_pedido') or 0 for f in filas_)
+        resultado['posicion'] = {
+            'fuente': 'armador_service.posicion_inventario',
+            'en_camino': info_camino,
+            'filas_sin_stock_conocido': sum(1 for f in filas_ if f.get('hay_sin_dato')),
+            'nota': ('pedir = max(0, tener − hay − viene). «hay» es el disponible '
+                     'de HOY: lo que se venda entre hoy y el inicio de la temporada '
+                     'no está descontado.'),
+        }
+        ratios = [f['ratio_critico'] for f in filas_ if f.get('ratio_critico') is not None]
+        # La cabecera ya no muestra un ratio que ninguna fila usa (D12): cada
+        # fila trae el suyo (Cu/Co propios) y acá va el rango.
+        resultado['ratio_critico_filas'] = (
+            {'min': min(ratios), 'max': max(ratios)} if ratios else None)
 
         total = len(estacionales)
         cubiertos = len(items)
@@ -311,6 +394,7 @@ class TemporadaService:
             'excluidos_lista_negra': len(excluidos['lista_negra']),
             'excluidos_costo_fantasma': len(excluidos['costo_fantasma']),
             'excluidos_sin_producto': len(excluidos['sin_producto']),
+            'excluidos_sin_temporada_completa': len(excluidos['sin_temporada_completa']),
             'detalle_excluidos': excluidos,
             'advertencia': (
                 f'El modelo cubre {cubiertos} de {total} SKUs de temporada. '

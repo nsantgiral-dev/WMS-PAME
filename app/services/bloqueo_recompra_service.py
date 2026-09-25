@@ -20,24 +20,84 @@ logger = logging.getLogger(__name__)
 ROLES_DESBLOQUEADORES = ('admin', 'gerente')
 
 
+def capital_inmovilizado(refs_stock):
+    """Σ costo × stock de [(referencia, stock)], con el costo de la jerarquía.
+
+    Returns: (capital_conocido, skus_sin_costo). Un SKU sin costo de ninguna
+    fuente NO suma cero en silencio: se cuenta aparte (Regla 0).
+    """
+    from app.services.costo_service import resolver_costos
+    refs_stock = [(r, s) for r, s in refs_stock if r]
+    if not refs_stock:
+        return 0, 0
+    costos = resolver_costos([r for r, _s in refs_stock])
+    total, sin_costo = 0.0, 0
+    for r, stock in refs_stock:
+        c = float((costos.get(r) or {}).get('costo') or 0)
+        if c <= 0:
+            sin_costo += 1
+            continue
+        total += c * stock
+    return total, sin_costo
+
+
 class BloqueoRecompraService:
 
     @staticmethod
     def poblar_lista_inicial():
         """
-        Genera la lista inicial de bloqueos basada en:
-        1. Velocity=0 en 12 meses móviles + stock>0
-        2. Productos genéricos sin conteo físico (si los hay marcados)
+        Genera la lista inicial de bloqueos: velocidad CERO en 12 meses móviles
+        + stock > 0.
 
-        Retorna: {bloqueados_nuevos, ya_bloqueados, total_capital_inmovilizado}
+        LA VELOCIDAD SALE DEL KARDEX, no de `TareaPicking`. Antes «sin picks en
+        12 meses» era el criterio, y el picking del WMS solo ve lo que sale por
+        pedido: todo lo que se vende por POS en tienda —la mayoría del
+        catálogo de mostrador— no tiene una sola `TareaPicking` y salía
+        bloqueado en masa como cadáver. La velocidad es la demanda neta de
+        `KardexService.demanda_descensurada` (red, todas las bodegas, ventas
+        menos devoluciones): la MISMA función que usan el ROP y el contenedor.
+
+        SIN KARDEX NO SE BLOQUEA (Regla 0: no saber no es «no se vende»). Si el
+        kardex no cubre los 12 meses completos, o su último movimiento es más
+        viejo que `KARDEX_DIAS_FRESCURA`, no se bloquea NADA y se dice por qué.
+        Un SKU sin `codigo_siesa` no se puede buscar en el kardex: tampoco.
+
+        Retorna: {bloqueados_nuevos, ya_bloqueados, total_capital_inmovilizado,
+                  capital_sin_costo, ...}
         """
         from app.models.producto import Producto
         from app.models.inventario import UbicacionProducto
-        from app.models.picking import TareaPicking
+        from app.services.kardex_service import (
+            KardexService, KardexMovimiento, dias_frescura, ventana_demanda,
+            ventana_observada)
         from sqlalchemy import func
 
-        # Fecha límite: 12 meses atrás
-        fecha_limite = datetime.utcnow() - timedelta(days=365)
+        desde_12m, hasta = ventana_demanda(12)
+        desde_obs, _h, cobertura = ventana_observada(12)
+        ultimo = db.session.query(func.max(KardexMovimiento.fecha)).scalar()
+        motivo_no = None
+        if desde_obs is None:
+            motivo_no = 'KARDEX_VACIO'
+        elif desde_obs > desde_12m:
+            motivo_no = 'KARDEX_NO_CUBRE_12_MESES'
+        elif ultimo is None or (hasta - ultimo).days > dias_frescura():
+            motivo_no = 'KARDEX_DESACTUALIZADO'
+        if motivo_no:
+            logger.warning('[BLOQUEO] No se bloquea nada: %s (cobertura desde %s, '
+                           'último movimiento %s)', motivo_no, cobertura, ultimo)
+            return {
+                'bloqueados_nuevos': 0,
+                'ya_bloqueados': db.session.query(ProductoBloqueado.producto_id)
+                                   .filter(ProductoBloqueado.activo == True).count(),  # noqa: E712
+                'total_capital_inmovilizado': 0,
+                'no_se_bloqueo_por': motivo_no,
+                'nota': (
+                    'No se bloqueó ningún SKU: sin un kardex que cubra los 12 meses y '
+                    'esté al día no se puede afirmar que algo NO se vende. Descargar '
+                    'el kardex y volver a correr.'),
+                'kardex': {'cobertura_desde': cobertura.isoformat() if cobertura else None,
+                           'ultimo_movimiento': ultimo.isoformat() if ultimo else None},
+            }
 
         # Productos con stock > 0 en cualquier ubicación
         productos_con_stock = (
@@ -51,75 +111,66 @@ class BloqueoRecompraService:
         )
         stock_map = {r.producto_id: int(r.stock_total) for r in productos_con_stock}
 
-        # Productos con al menos 1 pick en los últimos 12 meses
-        productos_con_picks = set(
-            r[0] for r in
-            db.session.query(TareaPicking.producto_id)
-            .filter(TareaPicking.fecha_creacion >= fecha_limite)
-            .filter(TareaPicking.producto_id.isnot(None))
-            .distinct()
-            .all()
-        )
+        # Velocidad de 12 meses por referencia — la demanda neta de la red.
+        demanda = KardexService.demanda_descensurada(12, 'red')
+        con_venta = {ref for ref, d in demanda.items() if d['demanda_neta'] > 0}
 
         # Ya bloqueados (para no duplicar)
         ya_bloqueados_ids = set(
             r[0] for r in
             db.session.query(ProductoBloqueado.producto_id)
-            .filter(ProductoBloqueado.activo == True)
+            .filter(ProductoBloqueado.activo == True)  # noqa: E712
             .all()
         )
 
-        bloqueados_nuevos = 0
-        capital_inmovilizado = 0
-
-        # Los productos que el loop va a necesitar, en UNA consulta. Antes era
-        # `Producto.query.get(id)` por iteración: con 2000 SKUs y 25% sin
-        # movimiento, ~500 consultas individuales.
-        _candidatos = [pid for pid in stock_map
-                       if pid not in ya_bloqueados_ids
-                       and pid not in productos_con_picks]
+        _candidatos = [pid for pid in stock_map if pid not in ya_bloqueados_ids]
         _productos = {p.id: p for p in
                       Producto.query.filter(Producto.id.in_(_candidatos)).all()} \
             if _candidatos else {}
 
+        bloqueados = []
+        sin_codigo = 0
         for producto_id, stock in stock_map.items():
             if producto_id in ya_bloqueados_ids:
                 continue
-            if producto_id in productos_con_picks:
-                continue  # tiene demanda en 12 meses — no bloquear
-
-            # Velocity=0 + stock>0 → cadáver
             producto = _productos.get(producto_id)
             if not producto:
                 continue
+            ref = (producto.codigo_siesa or '').strip()
+            if not ref:
+                sin_codigo += 1       # no se puede buscar en el kardex: no se bloquea
+                continue
+            if ref in con_venta:
+                continue              # se vendió en 12 meses — no bloquear
 
-            bloqueo = ProductoBloqueado(
+            db.session.add(ProductoBloqueado(
                 producto_id=producto_id,
                 motivo='VELOCITY_CERO_12M',
                 bloqueado_por_sistema=True,
                 notas_bloqueo=(
-                    f'Sin picks en 12 meses (desde {fecha_limite.strftime("%Y-%m-%d")}). '
-                    f'Stock actual: {stock} UND.'
+                    f'Sin venta neta en el kardex (todas las bodegas) desde '
+                    f'{desde_12m.isoformat()}. Stock actual: {stock} UND.'
                 ),
-            )
-            db.session.add(bloqueo)
-            bloqueados_nuevos += 1
+            ))
+            bloqueados.append((ref, stock))
 
-            # Capital inmovilizado (costo × stock)
-            costo = float(producto.costo_unitario or 0) if hasattr(producto, 'costo_unitario') else 0
-            capital_inmovilizado += costo * stock
-
+        capital, sin_costo = capital_inmovilizado(bloqueados)
         db.session.commit()
 
         logger.info(
-            '[BLOQUEO] Población inicial: %d nuevos bloqueados, $%.0f capital inmovilizado',
-            bloqueados_nuevos, capital_inmovilizado
+            '[BLOQUEO] Población inicial: %d nuevos bloqueados, $%.0f capital '
+            'inmovilizado (%d sin costo conocido)',
+            len(bloqueados), capital, sin_costo
         )
 
         return {
-            'bloqueados_nuevos': bloqueados_nuevos,
+            'bloqueados_nuevos': len(bloqueados),
             'ya_bloqueados': len(ya_bloqueados_ids),
-            'total_capital_inmovilizado': capital_inmovilizado,
+            'total_capital_inmovilizado': capital,
+            'capital_sin_costo': sin_costo,
+            'capital_es_cota_inferior': sin_costo > 0,
+            'sin_codigo_siesa_no_evaluados': sin_codigo,
+            'velocidad_fuente': 'KardexService.demanda_descensurada (red, 12 meses)',
         }
 
     @staticmethod
@@ -283,8 +334,14 @@ class BloqueoRecompraService:
         )
         stock_map = {r.producto_id: int(r.stock) for r in stocks}
 
+        from app.services.costo_service import resolver_costos
+        _refs = [b.producto.codigo_siesa for b in bloqueos
+                 if b.esta_bloqueado() and b.producto and b.producto.codigo_siesa]
+        costos = resolver_costos(_refs) if _refs else {}
+
         items = []
         total = 0
+        sin_costo = 0
         for b in bloqueos:
             if not b.esta_bloqueado():
                 continue
@@ -292,8 +349,14 @@ class BloqueoRecompraService:
             if not producto:
                 continue
             stock = stock_map.get(b.producto_id, 0)
-            costo = float(producto.costo_unitario or 0) if hasattr(producto, 'costo_unitario') else 0
-            capital = costo * stock
+            # El costo de la jerarquía (`resolver_costos`). Antes se leía
+            # `Producto.costo_unitario`, que NO EXISTE: `hasattr` daba False y
+            # el capital inmovilizado era 0 para todos, siempre (D11).
+            c = costos.get(producto.codigo_siesa) or {}
+            costo = float(c.get('costo') or 0) or None
+            capital = costo * stock if costo else None
+            if capital is None:
+                sin_costo += 1
 
             items.append({
                 'bloqueo_id': b.id,
@@ -302,17 +365,22 @@ class BloqueoRecompraService:
                 'motivo': b.motivo,
                 'stock': stock,
                 'costo_unitario': costo,
+                'costo_fuente': c.get('fuente', 'SIN_COSTO'),
                 'capital_inmovilizado': capital,
                 'fecha_bloqueo': b.fecha_bloqueo.isoformat() if b.fecha_bloqueo else None,
             })
-            total += capital
+            total += capital or 0
 
-        # Ordenar por capital descendente
-        items.sort(key=lambda x: x['capital_inmovilizado'], reverse=True)
+        # Ordenar por capital descendente; los sin costo ADELANTE (Regla 0: el
+        # que no se sabe cuánto vale es el que hay que mirar primero).
+        items.sort(key=lambda x: (x['capital_inmovilizado'] is not None,
+                                  -(x['capital_inmovilizado'] or 0)))
 
         return {
             'total_inmovilizado': total,
             'total_skus': len(items),
+            'skus_sin_costo': sin_costo,
+            'total_es_cota_inferior': sin_costo > 0,
             'items': items,
         }
 

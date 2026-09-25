@@ -465,7 +465,10 @@ class TestElAnclaAusenteSeDeclara:
 
         r = KardexService.reconstruir_stock_diario('NB1')
         assert r['referencias_procesadas'] == 1
-        assert r['dias_generados'] == 2
+        # Dos días con movimiento + la APERTURA (el cierre del día anterior al
+        # primer movimiento), que el reconstructor escribe desde 2026-09-24 para
+        # que `StockDiario` se lea como función escalón.
+        assert r['dias_generados'] == 3
 
         def _cierre(f):
             fila = StockDiario.query.filter_by(
@@ -474,6 +477,8 @@ class TestElAnclaAusenteSeDeclara:
 
         assert _cierre(hoy) == (100.0, True)
         assert _cierre(ayer) == (70.0, True)
+        # Apertura: antes de la venta de ayer había 70 + 10.
+        assert _cierre(ayer - timedelta(days=1)) == (80.0, True)
 
     def test_el_ancla_declara_su_fuente(self, app, db, hoy_operativo):
         """«No hay ancla» necesita su propio valor: 0 no puede significar las dos cosas.

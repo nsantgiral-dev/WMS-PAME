@@ -2468,7 +2468,8 @@ async function compCargarAudit(prefix) {
 // BLOQUEOS DE RECOMPRA — el sistema que dice NO
 // ══════════════════════════════════════════════════════════════════════════════
 
-const _liqFmtComp = v => '$' + Number(v || 0).toLocaleString('es-CO');
+// Sin costo conocido el servidor manda null: se dice, no se pinta $0.
+const _liqFmtComp = v => (v == null ? 'sin costo' : '$' + Number(v).toLocaleString('es-CO'));
 
 async function compCargarBloqueos() {
   const lista = document.getElementById('comp-bloqueos-lista');
@@ -2529,7 +2530,8 @@ async function compPoblarBloqueos() {
   if (!await _confirmarModal('Generar bloqueos', 'Se bloquearán todos los SKUs con velocity=0 en 12 meses y stock existente.', 'Generar', 'Cancelar')) return;
   try {
     const d = await postConReintento('/api/compras/bloqueados/poblar', {});
-    alerta(`${d.bloqueados_nuevos} SKU(s) bloqueado(s) — ${_liqFmtComp(d.total_capital_inmovilizado)} inmovilizado`, 'exito');
+    if (d.no_se_bloqueo_por) { alerta(d.nota, 'advertencia'); return; }
+    alerta(`${d.bloqueados_nuevos} SKU(s) bloqueado(s) — ${d.capital_es_cota_inferior ? 'al menos ' : ''}${_liqFmtComp(d.total_capital_inmovilizado)} inmovilizado`, 'exito');
     compCargarBloqueos();
   } catch (e) { alerta(e.message || 'Error de conexión', 'error'); }
 }

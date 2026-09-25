@@ -12,6 +12,8 @@ Cisnes negros que estos tests previenen:
 """
 import pytest
 from datetime import date, timedelta
+
+from app.utils.fecha import dia_operativo as _hoy
 from unittest.mock import patch, MagicMock
 
 
@@ -63,7 +65,7 @@ class TestCompuertaConceptos:
 
         # Insertar movimiento con concepto desconocido (999)
         mov = KardexMovimiento(
-            fecha=date.today(), tipo_docto='XX', bodega='NB1',
+            fecha=_hoy(), tipo_docto='XX', bodega='NB1',
             referencia='TEST001', concepto=999, naturaleza=2,
             cantidad=10, costo_promedio=100,
         )
@@ -92,13 +94,13 @@ class TestReconstruccionStock:
         ))
         # Movimiento: entrada de 30 hoy
         db.session.add(KardexMovimiento(
-            fecha=date.today(), tipo_docto='EA', bodega='NB1',
+            fecha=_hoy(), tipo_docto='EA', bodega='NB1',
             referencia='PROD1', concepto=601, naturaleza=1,
             cantidad=30, costo_promedio=50,
         ))
         # Movimiento: salida de 10 ayer
         db.session.add(KardexMovimiento(
-            fecha=date.today() - timedelta(days=1), tipo_docto='RM', bodega='NB1',
+            fecha=_hoy() - timedelta(days=1), tipo_docto='RM', bodega='NB1',
             referencia='PROD1', concepto=501, naturaleza=2,
             cantidad=10, costo_promedio=50,
         ))
@@ -106,11 +108,12 @@ class TestReconstruccionStock:
 
         result = KardexService.reconstruir_stock_diario('NB1')
         assert result['referencias_procesadas'] == 1
-        assert result['dias_generados'] == 2
+        # 2 días con movimiento + la apertura (el día antes del primero).
+        assert result['dias_generados'] == 3
 
         # Hoy: stock 100 (saldo actual antes de deshacer movimientos del día)
         hoy = StockDiario.query.filter_by(
-            referencia='PROD1', bodega='NB1', fecha=date.today()
+            referencia='PROD1', bodega='NB1', fecha=_hoy()
         ).first()
         assert hoy is not None
         assert hoy.tuvo_stock is True
@@ -126,7 +129,7 @@ class TestReconstruccionStock:
             comprometido=0, salida_sin_conf=0,
         ))
         db.session.add(KardexMovimiento(
-            fecha=date.today(), tipo_docto='RM', bodega='NB1',
+            fecha=_hoy(), tipo_docto='RM', bodega='NB1',
             referencia='NEG1', concepto=501, naturaleza=2,
             cantidad=100, costo_promedio=50,
         ))
@@ -149,7 +152,7 @@ class TestTasaServida:
             KardexMovimiento, StockDiario, KardexService
         )
 
-        hoy = date.today()
+        hoy = _hoy()
         # Stock diario: tuvo stock hoy
         db.session.add(StockDiario(
             referencia='DEV1', bodega='NB1', fecha=hoy,
@@ -183,7 +186,7 @@ class TestTasaServida:
             KardexMovimiento, StockDiario, KardexService
         )
 
-        hoy = date.today()
+        hoy = _hoy()
         for bod in ['NB1', 'NC1']:
             db.session.add(StockDiario(
                 referencia='RED1', bodega=bod, fecha=hoy,
@@ -213,7 +216,7 @@ class TestSyntetosBoylan:
             KardexMovimiento, StockDiario, KardexService
         )
 
-        hoy = date.today()
+        hoy = _hoy()
         # SKU suave: vende todos los días, cantidad estable
         for i in range(30):
             fecha = hoy - timedelta(days=i)
@@ -247,7 +250,7 @@ class TestSyntetosBoylan:
             KardexMovimiento, StockDiario, KardexService
         )
 
-        hoy = date.today()
+        hoy = _hoy()
         db.session.add(StockDiario(
             referencia='ESCOLAR1', bodega='NB1', fecha=hoy,
             stock_cierre=50, tuvo_stock=True,
@@ -401,7 +404,7 @@ class TestTSB:
         from app.services.kardex_service import KardexService
         # Crear datos sintéticos de demanda intermitente
         from app.services.kardex_service import KardexMovimiento
-        base_date = date.today() - timedelta(days=200)
+        base_date = _hoy() - timedelta(days=200)
         # Item con demanda cada ~15 días, cantidad variable
         for i in range(10):
             db.session.add(KardexMovimiento(
@@ -416,13 +419,15 @@ class TestTSB:
         result = KardexService.pronostico_tsb(12, alpha=0.15,
                                                solo_cuadrantes=['SUAVE', 'ERRATICA', 'INTERMITENTE', 'GRUMOSA'])
 
-        for p in result['pronosticos']:
-            if p['referencia'] == 'TSB-TEST-001':
-                # TSB siempre < Croston (corrección de sesgo)
-                assert p['tsb_diario'] < p['croston_diario'], (
-                    f'TSB ({p["tsb_diario"]}) debería ser menor que Croston ({p["croston_diario"]})')
-                assert p['tsb_diario'] > 0
-                break
+        # Antes este test era vacuo: la serie tenía 10 semanas con venta y el
+        # corte pedía 12 PUNTOS con venta, así que el SKU nunca se evaluaba y
+        # el `for` no entraba (y la clave `croston_diario` no existió nunca).
+        # Con la rejilla hasta la semana actual (D7) sí se evalúa, y la
+        # propiedad es la de TSB: tras semanas sin venta DECAE, Croston no.
+        fila = next((p for p in result['pronosticos']
+                     if p['referencia'] == 'TSB-TEST-001'), None)
+        assert fila is not None, 'el SKU intermitente no se evaluó'
+        assert 0 < fila['tsb_semanal'] < fila['croston_semanal'], fila
 
     def test_tsb_incluye_tamiz(self, app, db):
         """El resultado incluye el tamiz MASE — que NO es una compuerta.
@@ -459,13 +464,14 @@ class TestNewsvendor:
         assert 'error' in result
 
     def test_newsvendor_ratio_critico_correcto(self, app, db):
-        """ratio_critico = margen / (margen + costo_exceso)."""
+        """ratio_critico = m / (m + e·(1−m)): margen sobre PRECIO, exceso sobre
+        COSTO (D12). Antes este test fijaba m/(m+e), que suma bases distintas."""
         from app.services.kardex_service import KardexService
         result = KardexService.newsvendor(
             [{'referencia': 'CUAD-001', 'ventas_pasadas': [100, 120, 90], 'costo_unitario': 5000}],
             margen_pct=0.40, costo_exceso_pct=0.60
         )
-        expected = 0.40 / (0.40 + 0.60)
+        expected = 0.40 / (0.40 + 0.60 * (1 - 0.40))
         assert abs(result['ratio_critico'] - expected) < 0.01
 
     def test_newsvendor_q_optimo_positivo(self, app, db):
@@ -534,6 +540,12 @@ class TestLaTasaServidaNoEsconde_a_los_censurados:
             db.session.add(KardexMovimiento(
                 referencia=ref, bodega='NB1', fecha=hoy - timedelta(days=5),
                 concepto=501, naturaleza=2, cantidad=100, tipo_docto='XX'))
+        # Cobertura del kardex: otro SKU con movimiento al inicio de la ventana.
+        # Sin esto el kardex «empieza» hace 5 días y la ventana observada es de
+        # 6 días (ver `ventana_observada`).
+        db.session.add(KardexMovimiento(
+            referencia='COBERTURA', bodega='NB1', fecha=hoy - timedelta(days=359),
+            concepto=601, naturaleza=1, cantidad=1, tipo_docto='XX'))
         # Solo uno tiene serie de stock reconstruida.
         for i in range(30):
             db.session.add(StockDiario(
@@ -575,15 +587,22 @@ class TestLaTasaServidaNoEsconde_a_los_censurados:
         assert r['censurados'] == 1
 
     def test_consume_la_politica_unica(self):
-        """TRINQUETE — era la cuarta reimplementación del denominador."""
+        """TRINQUETE — era la cuarta reimplementación del denominador.
+
+        Desde 2026-09-24 no calcula nada: delega en `demanda_descensurada`,
+        que es la que llama a `dias_expuestos` (ver el trinquete de clase en
+        tests/test_demanda_una_funcion.py)."""
         import ast
         import inspect
         import textwrap
 
         from app.services.kardex_service import KardexService
 
-        fuente = textwrap.dedent(
-            inspect.getsource(KardexService.calcular_tasa_servida_corregida))
-        llamadas = {n.func.id for n in ast.walk(ast.parse(fuente))
-                    if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)}
-        assert 'dias_expuestos' in llamadas
+        def _llamadas(fn):
+            fuente = textwrap.dedent(inspect.getsource(fn))
+            return {getattr(n.func, 'id', None) or getattr(n.func, 'attr', None)
+                    for n in ast.walk(ast.parse(fuente)) if isinstance(n, ast.Call)}
+
+        assert 'demanda_descensurada' in _llamadas(
+            KardexService.calcular_tasa_servida_corregida)
+        assert 'dias_expuestos' in _llamadas(KardexService.demanda_descensurada)

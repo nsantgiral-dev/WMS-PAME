@@ -18,6 +18,21 @@ DOBLE USO, y el segundo no estaba previsto:
 from datetime import datetime
 from app.extensions import db
 
+# ── Periodos del precio realizado VIVO, SIN IMPUESTO (2026-09-24, D5) ──────
+#
+# La ingesta viva del Vigía escribía el precio con `f470_vlr_neto`, que en
+# Siesa INCLUYE el IVA, y `costo_service` lo restaba de un costo SIN IVA: con
+# IVA del 19%, un margen real de $400 sobre $1.000 salía $590 (+47%), Cu
+# inflado, ratio crítico hacia COMPRAR MÁS. Las filas nuevas se escriben con
+# el valor sin impuesto bajo ETIQUETAS NUEVAS, a propósito: las viejas
+# ('VIVO', 'S-AAAA-MM-DD') tienen el IVA adentro y quedan sin leer, sin
+# necesidad de borrarlas ni de adivinar cuáles eran.
+PERIODO_VIVO = 'VIVO_SIN_IMP'
+PREFIJO_SEMANA = 'SI-'
+#: El export TXT del cargador histórico. Su base («Valor neto local») NO está
+#: verificada: puede traer impuesto. Se lee, y se declara.
+PERIODO_TOTAL = 'TOTAL'
+
 
 class PrecioRealizado(db.Model):
     __tablename__ = 'precios_realizados'

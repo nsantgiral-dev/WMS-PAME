@@ -24,6 +24,22 @@ logger = logging.getLogger(__name__)
 DIAS_ALERTA_VENCIMIENTO = 21  # 3 semanas antes
 
 
+def precios_de_compra_recibidos(desde, producto_ids):
+    """ENCHUFE: precios unitarios de compra efectivamente facturados/recibidos.
+
+    Devuelve `([{producto_id, precio_unitario, moneda, cantidad, fecha,
+    proveedor}], fuente)`.
+
+    Hoy NO HAY FUENTE: `RecepcionMercancia`/`ItemRecepcion` guardan unidades,
+    no el precio de la factura del proveedor, y el kardex trae el COSTO
+    PROMEDIO del movimiento, que no es el precio pactado ni el facturado. Las
+    líneas de las OC de Siesa (`API_v2_Compras_Ordenes`: precio unitario de la
+    orden, 89 campos con contrato) son la fuente natural; quien las sincronice
+    las devuelve ACÁ y `detectar_deriva` empieza a comparar sin más cambios.
+    """
+    return [], 'SIN_FUENTE'
+
+
 class ComprasInteligenciaService:
 
     @staticmethod
@@ -98,22 +114,34 @@ class ComprasInteligenciaService:
         """
         Dock Lock de compras: detecta diferencia entre precio facturado y precio pactado.
 
-        Cruza las recepciones recientes contra los acuerdos marco vigentes.
-        Un 2-3% de deriva silenciosa son millones al año.
+        Cruza los precios de compra RECIBIDOS (`precios_de_compra_recibidos`)
+        contra los acuerdos marco vigentes y activos, en la misma moneda
+        (`costo_service.a_cop`).
 
-        Returns: {derivas: [{referencia, proveedor, precio_pactado, precio_facturado, diferencia_pct}]}
+        ANTES (D10): leía `ItemRecepcion.costo_unitario` y
+        `RecepcionMercancia.fecha_recepcion`, dos columnas que NO EXISTEN. Con
+        cero acuerdos devolvía la nota y nadie lo notaba; con el primer acuerdo
+        registrado, `AttributeError` → 500. El WMS no guarda el precio de la
+        factura del proveedor: la recepción cuenta unidades, no pesos. Mientras
+        no haya fuente, la deriva lo DECLARA («sin precio de compra recibido»)
+        en vez de reventar o de pintar «los precios coinciden».
+
+        `impacto_estimado_cop` = Σ (facturado − pactado) × cantidad recibida, solo
+        sobrecostos: la plata de más, no un porcentaje sin volumen.
+
+        Returns: {derivas, total, sobrecostos, impacto_estimado_cop, fuente_precio_compra,
+                  sin_precio_de_compra, nota}
         """
         from app.models.acuerdo_marco import AcuerdoMarco
-        from app.models.recepcion import RecepcionMercancia, ItemRecepcion
         from app.models.producto import Producto
-        from sqlalchemy import func
+        from app.services.costo_service import a_cop
 
         hoy = _dia_operativo()
         fecha_limite = hoy - timedelta(days=meses * 30)
 
         # Acuerdos vigentes indexados por producto
         acuerdos = AcuerdoMarco.query.filter(
-            AcuerdoMarco.activo == True,
+            AcuerdoMarco.activo == True,  # noqa: E712
             AcuerdoMarco.vigencia_desde <= hoy,
             AcuerdoMarco.vigencia_hasta >= hoy,
         ).all()
@@ -125,61 +153,64 @@ class ComprasInteligenciaService:
         if not acuerdos_por_prod:
             return {'derivas': [], 'total': 0, 'nota': 'Sin acuerdos vigentes para comparar'}
 
-        # Recepciones recientes con costo
-        recepciones = (
-            db.session.query(
-                ItemRecepcion.producto_id,
-                ItemRecepcion.costo_unitario,
-                RecepcionMercancia.fecha_recepcion,
-                RecepcionMercancia.proveedor_nombre,
-            )
-            .join(RecepcionMercancia, ItemRecepcion.recepcion_id == RecepcionMercancia.id)
-            .filter(RecepcionMercancia.fecha_recepcion >= fecha_limite)
-            .filter(ItemRecepcion.costo_unitario > 0)
-            .all()
-        )
+        recibidos, fuente = precios_de_compra_recibidos(
+            fecha_limite, list(acuerdos_por_prod))
+
+        productos = {p.id: p for p in Producto.query.filter(
+            Producto.id.in_(list(acuerdos_por_prod))).all()}
+        con_precio = {r['producto_id'] for r in recibidos}
+        sin_precio = sorted(
+            (productos[pid].codigo_siesa if pid in productos else str(pid))
+            for pid in acuerdos_por_prod if pid not in con_precio)
 
         derivas = []
-        for r in recepciones:
-            acuerdo = acuerdos_por_prod.get(r.producto_id)
+        for r in recibidos:
+            acuerdo = acuerdos_por_prod.get(r['producto_id'])
             if not acuerdo:
                 continue
-
-            precio_pactado = float(acuerdo.precio_unitario)
-            precio_facturado = float(r.costo_unitario)
-            if precio_pactado == 0:
+            precio_pactado, _c1 = a_cop(acuerdo.precio_unitario, acuerdo.moneda)
+            precio_facturado, _c2 = a_cop(r['precio_unitario'], r.get('moneda', 'COP'))
+            if not precio_pactado or precio_facturado is None:
                 continue
 
             diferencia_pct = round((precio_facturado - precio_pactado) / precio_pactado * 100, 2)
 
             if abs(diferencia_pct) > 1.0:  # Solo reportar derivas >1%
-                prod = db.session.get(Producto, r.producto_id)
+                prod = productos.get(r['producto_id'])
+                cantidad = float(r.get('cantidad') or 0)
                 derivas.append({
-                    'producto_id': r.producto_id,
+                    'producto_id': r['producto_id'],
                     'referencia': prod.codigo_siesa if prod else '?',
                     'nombre': prod.nombre if prod else '?',
                     'proveedor_acuerdo': acuerdo.proveedor.nombre if acuerdo.proveedor else '?',
-                    'proveedor_factura': r.proveedor_nombre,
-                    'precio_pactado': precio_pactado,
-                    'precio_facturado': precio_facturado,
+                    'proveedor_factura': r.get('proveedor'),
+                    'precio_pactado': round(precio_pactado, 2),
+                    'precio_facturado': round(precio_facturado, 2),
+                    'cantidad': cantidad,
+                    'impacto_cop': round((precio_facturado - precio_pactado) * cantidad, 2),
                     'diferencia_pct': diferencia_pct,
-                    'fecha_recepcion': r.fecha_recepcion.isoformat() if r.fecha_recepcion else None,
+                    'fecha_recepcion': r['fecha'].isoformat() if r.get('fecha') else None,
                     'alerta': 'SOBRECOSTO' if diferencia_pct > 0 else 'SUBCOSTO',
                 })
 
         derivas.sort(key=lambda x: abs(x['diferencia_pct']), reverse=True)
 
-        impacto_total = sum(
-            d['diferencia_pct'] / 100 * d['precio_pactado']
-            for d in derivas if d['diferencia_pct'] > 0
-        )
+        impacto_total = sum(d['impacto_cop'] for d in derivas if d['impacto_cop'] > 0)
 
+        nota = None
+        if not recibidos:
+            nota = (f'Sin precio de compra recibido para comparar ({fuente}): el WMS '
+                    f'no guarda el precio facturado por el proveedor. '
+                    f'{len(acuerdos_por_prod)} acuerdo(s) vigente(s) sin contrastar.')
         return {
             'derivas': derivas,
             'total': len(derivas),
             'sobrecostos': sum(1 for d in derivas if d['alerta'] == 'SOBRECOSTO'),
-            'impacto_estimado_por_unidad': round(impacto_total, 2),
+            'impacto_estimado_cop': round(impacto_total, 2),
             'periodo_meses': meses,
+            'fuente_precio_compra': fuente,
+            'sin_precio_de_compra': sin_precio,
+            'nota': nota,
         }
 
     @staticmethod

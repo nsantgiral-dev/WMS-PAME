@@ -169,9 +169,16 @@ class TestSerieSemanalDescensurada:
     def test_una_semana_a_medio_stock_se_proyecta_a_siete_dias(self, app, db):
         from app.services.kardex_service import (
             KardexService, KardexMovimiento, StockDiario)
-        from datetime import date, timedelta
-        lunes = date.today() - timedelta(days=date.today().weekday() + 28)
-        # Vendió 30 unidades y solo tuvo stock 3 de los 7 días
+        from datetime import timedelta
+        from app.utils.fecha import dia_operativo
+        hoy = dia_operativo()
+        lunes = hoy - timedelta(days=hoy.weekday() + 28)
+        # Vendió 30 unidades y solo tuvo stock 3 de los 7 días.
+        #
+        # `StockDiario` es una función escalón (el cierre vale hasta la próxima
+        # fila): «tuvo stock 3 días» se escribe con el cierre del cuarto en 0.
+        # Antes bastaba con no escribir el cuarto día, y esa misma ausencia era
+        # la que convertía «días con stock» en «días con movimiento» (D1).
         db.session.add(KardexMovimiento(
             referencia='SEMI', bodega='NB1', fecha=lunes,
             concepto=501, naturaleza=2, cantidad=30))
@@ -179,6 +186,9 @@ class TestSerieSemanalDescensurada:
             db.session.add(StockDiario(referencia='SEMI', bodega='NB1',
                                        fecha=lunes + timedelta(days=i),
                                        stock_cierre=5, tuvo_stock=True))
+        db.session.add(StockDiario(referencia='SEMI', bodega='NB1',
+                                   fecha=lunes + timedelta(days=3),
+                                   stock_cierre=0, tuvo_stock=False))
         db.session.commit()
 
         s = KardexService.serie_semanal_descensurada()

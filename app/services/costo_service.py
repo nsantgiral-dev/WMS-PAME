@@ -94,6 +94,79 @@ def precio_desde_margen(costo, margen_sobre_precio):
 
 FUENTES = ('ACUERDO_VIGENTE', 'COTIZACION', 'KARDEX_PROMEDIO', 'MAESTRO', 'SIN_COSTO')
 
+# ══════════════════════════════════════════════════════════════════════════
+# MONEDA — una TRM y un factor de nacionalización para todo el sistema (D4).
+#
+# Antes: el Armador multiplicaba por `1.45 * 4200` escritos a mano, y
+# `resolver_costos` tomaba el precio de un acuerdo en USD como si fueran pesos
+# (0,50 USD entraba como costo de $0,50: Cu ≈ precio entero, ratio crítico ≈ 1,
+# Q* al tope). Ningún número de moneda se escribe fuera de estas funciones
+# (trinquete AST en tests/test_compras_numeros_correctos.py).
+# ══════════════════════════════════════════════════════════════════════════
+TRM_COP_USD_DEFAULT = 4200.0
+FACTOR_NACIONALIZACION_DEFAULT = 1.45
+
+
+def _numero_env(nombre, defecto):
+    import os
+    try:
+        v = float(os.environ[nombre])
+        if v > 0:
+            return v, 'CONFIGURADA'
+    except (KeyError, TypeError, ValueError):
+        pass
+    return float(defecto), 'SUPUESTA'
+
+
+def trm_cop_por_usd():
+    """La TRM (pesos por dólar) que usa el sistema: `TRM_COP_USD`.
+
+    Sin la variable, 4.200 — un SUPUESTO, declarado en `fuente`. No hay lectura
+    de la TRM oficial todavía: quien la conecte, la conecta acá.
+
+    Returns: {'valor', 'fuente': 'CONFIGURADA' | 'SUPUESTA'}
+    """
+    v, f = _numero_env('TRM_COP_USD', TRM_COP_USD_DEFAULT)
+    return {'valor': v, 'fuente': f}
+
+
+def factor_nacionalizacion():
+    """Costo puesto en bodega / valor FOB (flete + arancel + IVA de importación).
+
+    `FACTOR_NACIONALIZACION`, default 1,45 — SUPUESTO declarado.
+    """
+    v, f = _numero_env('FACTOR_NACIONALIZACION', FACTOR_NACIONALIZACION_DEFAULT)
+    return {'valor': v, 'fuente': f}
+
+
+def a_cop(monto, moneda='COP', es_fob=True):
+    """Un monto en su moneda → pesos puestos en bodega, con procedencia.
+
+    COP pasa igual. USD se toma como FOB y se nacionaliza: `monto × TRM ×
+    factor` — subestimar el costo empuja a comprar de más (Regla 0), así que
+    ante la duda de si el precio en dólares ya incluye flete y arancel, se
+    asume que NO. Otra moneda no se convierte: `None`, y quien llama la
+    excluye y lo dice.
+
+    Returns: (valor_cop | None, detalle)
+    """
+    m = (moneda or 'COP').strip().upper()
+    monto = float(monto or 0)
+    if m == 'COP':
+        return monto, None
+    if m == 'USD':
+        trm, fac = trm_cop_por_usd(), factor_nacionalizacion()
+        factor = fac['valor'] if es_fob else 1.0
+        return monto * trm['valor'] * factor, {
+            'moneda_origen': 'USD', 'monto_origen': monto,
+            'trm': trm['valor'], 'trm_fuente': trm['fuente'],
+            'factor_nacionalizacion': factor if es_fob else None,
+            'factor_fuente': fac['fuente'] if es_fob else None,
+            'supuesto': 'Precio en USD tomado como FOB y nacionalizado.' if es_fob else None,
+        }
+    return None, {'moneda_origen': m, 'monto_origen': monto,
+                  'motivo': f'Moneda {m} sin conversión: excluido.'}
+
 
 def _costos_acuerdo_vigente(refs):
     """Precio pactado hoy. Costo hacia adelante, la fuente más confiable."""
@@ -103,9 +176,13 @@ def _costos_acuerdo_vigente(refs):
     hoy = _dia_operativo()
     filas = (
         db.session.query(Producto.codigo_siesa, AcuerdoMarco.precio_unitario,
-                         AcuerdoMarco.vigencia_hasta)
+                         AcuerdoMarco.vigencia_hasta, AcuerdoMarco.moneda)
         .join(Producto, AcuerdoMarco.producto_id == Producto.id)
         .filter(Producto.codigo_siesa.in_(refs))
+        # Un acuerdo DESACTIVADO no es un precio pactado hoy, aunque su
+        # vigencia lo cubra (D4): todas las demás lecturas de acuerdos del
+        # sistema ya filtraban `activo`; esta —la que pone el costo— no.
+        .filter(AcuerdoMarco.activo == True)  # noqa: E712
         .filter(AcuerdoMarco.vigencia_desde <= hoy)
         .filter(AcuerdoMarco.vigencia_hasta >= hoy)
         .all()
@@ -113,13 +190,14 @@ def _costos_acuerdo_vigente(refs):
     # Ante varios acuerdos vigentes, el MÁS ALTO. Regla 0: subestimar el costo
     # empuja a comprar de más, que es el lado irreversible.
     salida = {}
-    for ref, precio, hasta in filas:
-        p = float(precio or 0)
-        if p <= 0:
+    for ref, precio, hasta, moneda in filas:
+        p, conversion = a_cop(precio, moneda)
+        if p is None or p <= 0:
             continue
         if ref not in salida or p > salida[ref]['costo']:
             salida[ref] = {'costo': p, 'fuente': 'ACUERDO_VIGENTE',
-                           'vigencia_hasta': hasta.isoformat() if hasta else None}
+                           'vigencia_hasta': hasta.isoformat() if hasta else None,
+                           'conversion': conversion}
     return salida
 
 
@@ -131,23 +209,26 @@ def _costos_cotizacion(refs, meses=6):
     desde = _dia_operativo() - timedelta(days=meses * 30)
     filas = (
         db.session.query(Producto.codigo_siesa, PrecioProveedor.precio_unitario,
-                         PrecioProveedor.fecha)
+                         PrecioProveedor.fecha, PrecioProveedor.moneda)
         .join(Producto, PrecioProveedor.producto_id == Producto.id)
         .filter(Producto.codigo_siesa.in_(refs))
         .filter(PrecioProveedor.fecha >= desde)
+        # Una cotización marcada no vigente no es precio de hoy (D4).
+        .filter(PrecioProveedor.vigente.isnot(False))
         .all()
     )
     salida = {}
-    for ref, precio, fecha in filas:
-        p = float(precio or 0)
-        if p <= 0:
+    for ref, precio, fecha, moneda in filas:
+        p, conversion = a_cop(precio, moneda)
+        if p is None or p <= 0:
             continue
         # La más RECIENTE; a igualdad de fecha, la más alta.
         prev = salida.get(ref)
         if (prev is None or fecha > prev['_fecha']
                 or (fecha == prev['_fecha'] and p > prev['costo'])):
             salida[ref] = {'costo': p, 'fuente': 'COTIZACION',
-                           'fecha_costo': fecha.isoformat(), '_fecha': fecha}
+                           'fecha_costo': fecha.isoformat(), '_fecha': fecha,
+                           'conversion': conversion}
     for v in salida.values():
         v.pop('_fecha', None)
     return salida
@@ -239,41 +320,51 @@ def _costos_kardex(refs):
     return salida
 
 
-def _precios_realizados(refs):
-    """Precio al que de verdad se vende: valor/cantidad de las ventas reales.
+def _precios_realizados_con_base(refs):
+    """Precio al que de verdad se vende, con la BASE de impuesto declarada.
 
     Reemplaza el margen supuesto por margen MEDIDO. Neto de descuentos y de la
     escalera clandestina — el margen que sale de aquí es el que se obtiene.
+
+    Returns: {ref: {'precio', 'periodo', 'sin_impuesto': True | None}}.
+    `sin_impuesto=None` = no se sabe (la fila TOTAL del export TXT).
     """
-    from app.models.precio_realizado import PrecioRealizado
+    from app.models.precio_realizado import (
+        PrecioRealizado, PERIODO_VIVO, PERIODO_TOTAL)
 
     filas = (PrecioRealizado.query
              .filter(PrecioRealizado.referencia.in_(refs))
              .filter(PrecioRealizado.centro_operacion.is_(None))
-             .filter(PrecioRealizado.periodo.in_(('VIVO', 'TOTAL')))
+             .filter(PrecioRealizado.periodo.in_((PERIODO_VIVO, PERIODO_TOTAL)))
              .all())
 
-    # VIVO (últimas 12 semanas, alimentado por la ingesta del Vigía) gana sobre
-    # TOTAL (toda la historia del export TXT). El motivo es de negocio: un
-    # precio del último trimestre describe mejor lo que hoy se cobra que un
-    # promedio que arrastra listas de hace dos años.
+    # VIVO (últimas 12 semanas, alimentado por la ingesta del Vigía, SIN
+    # impuesto) gana sobre TOTAL (toda la historia del export TXT). El motivo es
+    # de negocio: un precio del último trimestre describe mejor lo que hoy se
+    # cobra que un promedio que arrastra listas de hace dos años.
     #
     # **Sin ingesta viva, esto se comporta EXACTAMENTE como antes**: si no hay
-    # fila VIVO, gana TOTAL, que es la única que existía. Es la garantía de que
-    # encender la ingesta no cambia nada hasta que haya datos que lo justifiquen.
+    # fila VIVO, gana TOTAL, que es la única que existía.
     #
-    # Y el filtro por periodo no es cosmético: sin él la consulta traía TODAS
-    # las filas del SKU —incluidas las semanales— y cuál ganaba en el dict era
-    # arbitrario.
+    # La fila vieja `'VIVO'` —la que se escribía CON IVA— no se lee (D5): ver
+    # `app/models/precio_realizado.py`.
     salida = {}
     for f in filas:
         precio = float(f.precio_realizado or 0)
         if precio <= 0:
             continue
         anterior = salida.get(f.referencia)
-        if anterior is None or (f.periodo == 'VIVO'):
-            salida[f.referencia] = precio
+        if anterior is None or f.periodo == PERIODO_VIVO:
+            salida[f.referencia] = {
+                'precio': precio, 'periodo': f.periodo,
+                'sin_impuesto': True if f.periodo == PERIODO_VIVO else None,
+            }
     return salida
+
+
+def _precios_realizados(refs):
+    """{ref: precio} — ver `_precios_realizados_con_base`."""
+    return {r: d['precio'] for r, d in _precios_realizados_con_base(refs).items()}
 
 
 def dispersion_precio_por_co(ref):
@@ -322,7 +413,8 @@ def resolver_costos(refs, margen_supuesto=MARGEN_SOBRE_PRECIO_DEFAULT):
     capas = [_costos_acuerdo_vigente(refs), _costos_cotizacion(refs),
              _costos_kardex(refs)]
 
-    realizados = _precios_realizados(refs)
+    realizados_base = _precios_realizados_con_base(refs)
+    realizados = {r: d['precio'] for r, d in realizados_base.items()}
 
     maestro = {
         p.codigo_siesa: p for p in
@@ -382,6 +474,13 @@ def resolver_costos(refs, margen_supuesto=MARGEN_SOBRE_PRECIO_DEFAULT):
                 round(max(precio_desde_margen(costo, min(0.95, (margen_usado or 0) + 0.10)) - costo, 0), 2),
             ] if precio_supuesto and costo > 0 else None),
             'confiable': elegido['fuente'] in ('ACUERDO_VIGENTE', 'COTIZACION'),
+            # BASE DEL PRECIO: el costo es sin impuesto, así que el precio
+            # también tiene que serlo o Cu sale inflado en el IVA (D5). True =
+            # verificado sin impuesto; None = no se sabe (TOTAL del export, o
+            # el maestro); no aplica si el precio es supuesto.
+            'precio_sin_impuesto': (
+                realizados_base[ref]['sin_impuesto'] if fuente_precio == 'REALIZADO'
+                else None),
             'nombre': getattr(prod, 'nombre', '') if prod else '',
         })
         salida[ref] = elegido
@@ -396,8 +495,11 @@ def resumen_por_fuente(costos):
     tienen la misma calidad, y el comité tiene derecho a ver cuál es cuál.
     """
     conteo = {f: 0 for f in FUENTES}
-    anejos = supuestos = 0
+    anejos = supuestos = base_no_verificada = 0
     for d in costos.values():
+        if (not d.get('precio_es_supuesto')
+                and d.get('precio_sin_impuesto') is not True):
+            base_no_verificada += 1
         conteo[d.get('fuente', 'SIN_COSTO')] = conteo.get(d.get('fuente', 'SIN_COSTO'), 0) + 1
         if d.get('anejo'):
             anejos += 1
@@ -415,6 +517,9 @@ def resumen_por_fuente(costos):
         'costo_hacia_adelante': hacia_adelante,
         'costo_anejo': anejos,
         'precio_supuesto': supuestos,
+        # Precios medidos cuya base de impuesto no se sabe (export TXT o
+        # maestro): si traen IVA, su Cu está inflado en esa proporción.
+        'precio_base_no_verificada': base_no_verificada,
         'pct_con_costo': round(con_costo / total * 100, 1) if total else 0,
         'pct_hacia_adelante': round(hacia_adelante / total * 100, 1) if total else 0,
         'nota': (

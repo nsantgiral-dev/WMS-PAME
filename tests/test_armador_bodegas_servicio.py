@@ -123,11 +123,11 @@ def _rop_nacional_esperado(d_avg=D_AVG):
 
 
 def _s_objetivo_esperado(d_avg=D_AVG):
+    # Sin el tope de 180 días: ese tope es del RELLENO y cortaba el S de la
+    # política (R, S) por debajo de LT + R (D3, 2026-09-24).
     from app.services.armador_service import (
-        LT_CHINA_DIAS, SIGMA_LT_CHINA, R_CHINA_DIAS,
-        MAX_COBERTURA_RELLENO_DIAS)
-    s = d_avg * (LT_CHINA_DIAS + R_CHINA_DIAS) + _z() * d_avg * SIGMA_LT_CHINA
-    return min(s, d_avg * MAX_COBERTURA_RELLENO_DIAS)
+        LT_CHINA_DIAS, SIGMA_LT_CHINA, R_CHINA_DIAS)
+    return d_avg * (LT_CHINA_DIAS + R_CHINA_DIAS) + _z() * d_avg * SIGMA_LT_CHINA
 
 
 class TestLaAveriaNoEsStockVendible:

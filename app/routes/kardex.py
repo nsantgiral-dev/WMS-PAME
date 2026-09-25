@@ -316,7 +316,11 @@ def newsvendor():
     margen = data.get('margen_pct', 0.40)
     costo_exceso = data.get('costo_exceso_pct', 0.60)
     from app.services.kardex_service import KardexService
-    resultado = KardexService.newsvendor(items, margen, costo_exceso)
+    try:
+        resultado = KardexService.newsvendor(items, float(margen), float(costo_exceso))
+    except (TypeError, ValueError) as e:
+        # Un margen ≥ 1 es un markup mal pasado: se rechaza, no se calcula.
+        return jsonify({'error': str(e)}), 400
     if 'error' in resultado:
         return jsonify(resultado), 400
     return jsonify(resultado), 200

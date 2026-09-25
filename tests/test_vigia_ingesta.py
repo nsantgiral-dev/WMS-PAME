@@ -314,6 +314,9 @@ class TestLaComparacionContraLaLineaBase:
         assert js.count('vigiaCompararIngesta') >= 2, 'definida y sin caller'
 
 
+from app.models.precio_realizado import PERIODO_VIVO, PREFIJO_SEMANA  # noqa: E402
+
+
 class TestPrecioRealizadoHaciaAdelante:
     """`PrecioRealizado` solo se llenaba con el TXT bloqueado.
 
@@ -332,8 +335,11 @@ class TestPrecioRealizadoHaciaAdelante:
             return VigiaService.alimentar_series_facturacion(cos=[co])
 
     def _fila_ref(self, ref, cant, valor, doc='A'):
+        # Sin impuesto (exenta): el precio realizado se calcula SIN IVA desde
+        # 2026-09-24 (D5) y la línea tiene que traer con qué separarlo.
         f = _fila(cant, valor, doc)
         f['f120_referencia'] = ref
+        f['f470_vlr_imp'] = 0
         return f
 
     def test_escribe_el_precio_de_la_semana(self, app, db, base_historica):
@@ -342,7 +348,7 @@ class TestPrecioRealizadoHaciaAdelante:
         self._correr([self._fila_ref('SKU1', 10, 1000)])
         semanal = PrecioRealizado.query.filter_by(
             referencia='SKU1', centro_operacion=None,
-            periodo=f'S-{_lunes_pasado().isoformat()}').first()
+            periodo=f'{PREFIJO_SEMANA}{_lunes_pasado().isoformat()}').first()
         assert semanal is not None
         assert float(semanal.precio_realizado) == 100.0
 
@@ -359,7 +365,7 @@ class TestPrecioRealizadoHaciaAdelante:
                       self._fila_ref('SKU1', 99, 9900)])
         f = PrecioRealizado.query.filter_by(
             referencia='SKU1', centro_operacion=None,
-            periodo=f'S-{_lunes_pasado().isoformat()}').first()
+            periodo=f'{PREFIJO_SEMANA}{_lunes_pasado().isoformat()}').first()
         assert float(f.precio_realizado) == pytest.approx(104.0, abs=0.01)
 
     def test_correr_la_misma_semana_dos_veces_NO_duplica(self, app, db, base_historica):
@@ -370,7 +376,7 @@ class TestPrecioRealizadoHaciaAdelante:
         self._correr([self._fila_ref('SKU1', 10, 1000)])
         self._correr([self._fila_ref('SKU1', 10, 1000)])
         vivo = PrecioRealizado.query.filter_by(
-            referencia='SKU1', centro_operacion=None, periodo='VIVO').first()
+            referencia='SKU1', centro_operacion=None, periodo=PERIODO_VIVO).first()
         assert float(vivo.cantidad_total) == 10, 'se contó dos veces'
         assert float(vivo.precio_realizado) == 100.0
 
@@ -414,7 +420,7 @@ class TestLaLecturaDeCostoNoCambiaSinIngesta:
         db.session.add_all([
             PrecioRealizado(referencia='SKU9', centro_operacion=None, periodo='TOTAL',
                             valor_total=1000, cantidad_total=10, precio_realizado=100),
-            PrecioRealizado(referencia='SKU9', centro_operacion=None, periodo='VIVO',
+            PrecioRealizado(referencia='SKU9', centro_operacion=None, periodo=PERIODO_VIVO,
                             valor_total=1400, cantidad_total=10, precio_realizado=140),
         ])
         db.session.commit()

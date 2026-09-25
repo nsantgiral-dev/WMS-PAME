@@ -248,6 +248,34 @@ def _lunes_semana_actual():
     return _lunes_de_semana(hoy_bogota())
 
 
+def valor_linea_sin_impuesto(r):
+    """Valor de una línea de venta de Siesa SIN impuesto, o `None`.
+
+    `f470_vlr_neto − f470_vlr_imp` (exacto, sea cual sea la semántica del
+    descuento); si falta alguno, `f470_vlr_bruto − descuentos` (línea +
+    global, la misma suma de `fotos_siesa_service`). Sin ninguno de los dos
+    pares, `None`: no se inventa una tasa de IVA (dividir por 1,19 es lo que
+    CLAUDE.md prohíbe para las retenciones, por lo mismo: hay líneas exentas).
+    """
+    def _f(k):
+        v = r.get(k)
+        if v in (None, ''):
+            return None
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return None
+
+    neto, imp = _f('f470_vlr_neto'), _f('f470_vlr_imp')
+    if neto is not None and imp is not None:
+        return neto - imp
+    bruto = _f('f470_vlr_bruto')
+    dl, dg = _f('f470_vlr_dscto_linea'), _f('f470_vlr_dscto_global')
+    if bruto is not None and (dl is not None or dg is not None):
+        return bruto - (dl or 0.0) - (dg or 0.0)
+    return None
+
+
 class VigiaService:
 
     @staticmethod
@@ -773,19 +801,32 @@ class VigiaService:
         """
         from app.models.precio_realizado import PrecioRealizado
 
+        from app.models.precio_realizado import PREFIJO_SEMANA
+
         acumulado = defaultdict(lambda: {'valor': 0.0, 'cantidad': 0.0, 'lineas': 0})
+        sin_base = 0
         for f in filas:
             ref = f.get('referencia')
             if not ref or f['cantidad'] <= 0:
                 continue
+            # Sin el valor SIN impuesto la línea no entra al precio: usar el
+            # neto con IVA inflaría Cu (D5). Se cuenta y se loguea.
+            valor = f.get('valor_sin_impuesto')
+            if valor is None:
+                sin_base += 1
+                continue
             # Por C.O. y agregado de red, igual que el TXT.
             for clave in ((ref, co), (ref, None)):
                 a = acumulado[clave]
-                a['valor'] += f['valor']
+                a['valor'] += valor
                 a['cantidad'] += f['cantidad']
                 a['lineas'] += 1
+        if sin_base:
+            logger.warning(
+                '[VIGIA] CO %s semana %s: %d línea(s) sin valor separable del '
+                'impuesto — fuera del precio realizado.', co, semana, sin_base)
 
-        etiqueta = f'S-{semana.isoformat()}'
+        etiqueta = f'{PREFIJO_SEMANA}{semana.isoformat()}'
         for (ref, centro), a in acumulado.items():
             fila = PrecioRealizado.query.filter_by(
                 referencia=ref, centro_operacion=centro, periodo=etiqueta).first()
@@ -818,10 +859,11 @@ class VigiaService:
         """
         from datetime import timedelta
 
-        from app.models.precio_realizado import PrecioRealizado
+        from app.models.precio_realizado import (
+            PrecioRealizado, PERIODO_VIVO, PREFIJO_SEMANA)
 
-        desde = f'S-{(hasta_semana - timedelta(weeks=VigiaService.VENTANA_PRECIO_REALIZADO_SEMANAS)).isoformat()}'
-        hasta = f'S-{hasta_semana.isoformat()}'
+        desde = f'{PREFIJO_SEMANA}{(hasta_semana - timedelta(weeks=VigiaService.VENTANA_PRECIO_REALIZADO_SEMANAS)).isoformat()}'
+        hasta = f'{PREFIJO_SEMANA}{hasta_semana.isoformat()}'
 
         for ref in refs:
             for centro in (None,):   # el agregado de red es el que lee costo_service
@@ -830,17 +872,17 @@ class VigiaService:
                                      PrecioRealizado.centro_operacion.is_(centro),
                                      PrecioRealizado.periodo >= desde,
                                      PrecioRealizado.periodo <= hasta,
-                                     PrecioRealizado.periodo.like('S-%'))
+                                     PrecioRealizado.periodo.like(f'{PREFIJO_SEMANA}%'))
                              .all())
                 valor = sum(float(x.valor_total or 0) for x in semanales)
                 cant = sum(float(x.cantidad_total or 0) for x in semanales)
                 if cant <= 0:
                     continue
                 vivo = PrecioRealizado.query.filter_by(
-                    referencia=ref, centro_operacion=centro, periodo='VIVO').first()
+                    referencia=ref, centro_operacion=centro, periodo=PERIODO_VIVO).first()
                 if vivo is None:
                     vivo = PrecioRealizado(referencia=ref, centro_operacion=centro,
-                                           periodo='VIVO')
+                                           periodo=PERIODO_VIVO)
                     db.session.add(vivo)
                 vivo.valor_total = valor
                 vivo.cantidad_total = cant
@@ -958,7 +1000,13 @@ class VigiaService:
                         continue
                     filas.append({
                         'cantidad': float(r.get('f470_cant_base') or 0),
+                        # `valor` alimenta la serie de FACTURACIÓN y se queda
+                        # como está: es la misma base que el TXT histórico y
+                        # cambiarla rompería la comparación con la línea base
+                        # (el canon de Florencia).
                         'valor': float(r.get('f470_vlr_neto') or 0),
+                        # El PRECIO REALIZADO usa este otro: sin impuesto (D5).
+                        'valor_sin_impuesto': valor_linea_sin_impuesto(r),
                         'documento': f"{r.get('f350_id_tipo_docto', '')}"
                                      f"-{r.get('f350_consec_docto', '')}",
                         # Misma consulta, segunda salida — igual que hace el

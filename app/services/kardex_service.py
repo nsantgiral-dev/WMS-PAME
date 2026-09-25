@@ -648,6 +648,287 @@ def perfil_mensual_kardex():
     }
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# LA DEMANDA DIARIA — UNA FUNCIÓN PARA EL NUMERADOR, UNA PARA EL DENOMINADOR
+#
+# (2026-09-24) Toda demanda diaria del sistema —ROP, contenedor, S-B, TSB,
+# temporada, tasa servida, bloqueo de recompra— sale de estas dos:
+#
+#   serie_demanda(desde, hasta, nivel)        el NUMERADOR: ventas netas por día
+#   intervalos_con_stock(desde, hasta, nivel) el DENOMINADOR: qué días hubo stock
+#
+# y del reparto de `dias_expuestos()` cuando falta el denominador. Ningún otro
+# sitio lee los conceptos 501/502 para demanda ni cuenta `StockDiario`
+# (trinquete AST: tests/test_demanda_una_funcion.py).
+#
+# QUÉ COSTABA NO TENERLO — el defecto D1 de la auditoría de compras.
+# `reconstruir_stock_diario` escribía una fila de `StockDiario` SOLO en los días
+# con movimiento, y los consumidores contaban `count(distinct fecha) WHERE
+# tuvo_stock`. Un día sin movimiento no existía, así que «días con stock» era
+# «días con venta»: el mismo error que `dias_expuestos` prohíbe por escrito
+# («NUNCA usar días-con-venta como denominador»), entrado por la tabla en vez
+# de por la fórmula. Medido con el reconstructor real: un SKU que vende 40
+# cada 25 días con stock siempre salía a 40/día en vez de 1,56 (×25,7), el ROP
+# a 332 en vez de 37, S-B lo ponía en SUAVE (ADI 1) y la temporada ×3.
+#
+# LA CURA: `StockDiario` sigue guardando el cierre de los días con movimiento
+# (más el saldo de APERTURA, el día antes del primer movimiento) y se lee como
+# lo que es —una FUNCIÓN ESCALÓN—: el stock al cierre del día t es el de la
+# última fila con fecha ≤ t. No hace falta una fila por día calendario (serían
+# ~20 millones); hace falta contar intervalos.
+# ══════════════════════════════════════════════════════════════════════════════
+
+#: Días por mes de la ventana de demanda. La ventana de 12 meses son 360 días.
+DIAS_POR_MES = 30
+
+#: «Sin venta reciente»: cuántos días hacia atrás se miran. Configurable.
+DIAS_SIN_VENTA_DEFAULT = 90
+
+#: Cuántas ventas habría que esperar en esos días para que cero sea evidencia.
+#: Poisson: P(0 ventas | λ ≥ 3) = e⁻³ ≈ 5%. Con λ < 3, no vender es azar.
+VENTAS_ESPERADAS_MIN_PARA_DESCONTINUAR = 3.0
+
+
+def dias_sin_venta():
+    """Días sin venta que declaran un SKU «sin venta reciente» (`ROP_DIAS_SIN_VENTA`)."""
+    try:
+        v = int(os.environ.get('ROP_DIAS_SIN_VENTA', DIAS_SIN_VENTA_DEFAULT))
+    except (TypeError, ValueError):
+        v = DIAS_SIN_VENTA_DEFAULT
+    return max(7, v)
+
+
+def ventana_demanda(ventana_meses=12, hasta=None):
+    """(desde, hasta) de la ventana de demanda, AMBOS INCLUSIVE, día Bogotá.
+
+    `ventana_meses * 30` días exactos que terminan hoy: la ventana de 12 meses
+    son 360 días, y 360 es el denominador cuando el stock nunca faltó.
+    """
+    hasta = hasta or _dia_operativo()
+    dias = max(1, int(round(float(ventana_meses) * DIAS_POR_MES)))
+    return hasta - timedelta(days=dias - 1), hasta
+
+
+def inicio_cobertura_kardex():
+    """El primer día que el kardex almacenado observa (o `None` si está vacío).
+
+    Antes de ese día no se sabe ni cuánto se vendió ni si había stock: no es
+    un día sin venta, es un día no observado. Las ventanas se recortan acá en
+    vez de contarlo como cero — contarlo como cero diluye la demanda de toda
+    la ventana en la proporción del hueco (un kardex de 3 meses leído sobre 12
+    divide la demanda por 4).
+    """
+    from sqlalchemy import func
+    return db.session.query(func.min(KardexMovimiento.fecha)).scalar()
+
+
+def ventana_observada(ventana_meses=12, hasta=None):
+    """La ventana de demanda recortada a la cobertura del kardex.
+
+    Returns: (desde, hasta, cobertura) — `desde` es `None` si el kardex está
+    vacío o empieza después de `hasta`.
+    """
+    desde, hasta = ventana_demanda(ventana_meses, hasta)
+    cob = inicio_cobertura_kardex()
+    if cob is None or cob > hasta:
+        return None, hasta, cob
+    return max(desde, cob), hasta, cob
+
+
+def _clave(ref, bod, nivel):
+    ref = (ref or '').strip()
+    if nivel == 'red':
+        return ref
+    return f'{ref}|{(bod or "").strip()}'
+
+
+def serie_demanda(desde, hasta, nivel='red'):
+    """EL NUMERADOR. Demanda neta por día y por clave, ambos extremos inclusive.
+
+    Venta = concepto 501 en salida; devolución = 502 en entrada
+    (`CONCEPTO_DEFINICION`). **La devolución se netea contra la venta que
+    devuelve, no contra el día en que llega** (D6): se descuenta primero de la
+    venta de su mismo día y el resto de los días de venta anteriores, del más
+    reciente hacia atrás. Lo que no encuentra venta dentro de la ventana es la
+    devolución de una venta anterior a la ventana y NO se resta de la demanda
+    de esta ventana (restarla subestimaría una demanda que no la contiene): se
+    cuenta aparte en `devolucion_sin_venta`.
+
+    Antes el neteo era por día —«ventas menos devoluciones del MISMO día»—, así
+    que una venta de 100 devuelta al otro día en 30 quedaba en 100 en la
+    descensura y en 70 en la tasa servida, que neteaba por ventana: el mismo
+    concepto con dos políticas.
+
+    Returns: {clave: {'por_dia': {fecha: neto > 0}, 'bruta', 'devuelta',
+              'devolucion_sin_venta'}}. Clave: referencia (red) o 'ref|bodega'.
+    """
+    from sqlalchemy import func
+
+    if desde is None or hasta is None or desde > hasta:
+        return {}
+
+    k_bod = KardexMovimiento.bodega
+
+    def _por_dia(conceptos, naturaleza):
+        return (
+            db.session.query(KardexMovimiento.referencia, k_bod,
+                             KardexMovimiento.fecha,
+                             func.sum(KardexMovimiento.cantidad))
+            .filter(KardexMovimiento.fecha >= desde)
+            .filter(KardexMovimiento.fecha <= hasta)
+            .filter(KardexMovimiento.concepto.in_(conceptos))
+            .filter(KardexMovimiento.naturaleza == naturaleza)
+            .group_by(KardexMovimiento.referencia, k_bod, KardexMovimiento.fecha)
+            .all()
+        )
+
+    ventas = defaultdict(lambda: defaultdict(float))
+    devol = defaultdict(lambda: defaultdict(float))
+    for ref, bod, fecha, cant in _por_dia(CONCEPTOS_VENTA, NATURALEZA_SALIDA):
+        if (ref or '').strip():
+            ventas[_clave(ref, bod, nivel)][fecha] += float(cant or 0)
+    for ref, bod, fecha, cant in _por_dia(CONCEPTOS_DEVOLUCION, NATURALEZA_ENTRADA):
+        if (ref or '').strip():
+            devol[_clave(ref, bod, nivel)][fecha] += float(cant or 0)
+
+    salida = {}
+    for clave in set(ventas) | set(devol):
+        v, d = ventas.get(clave, {}), devol.get(clave, {})
+        neto = {}
+        orden = []            # días de venta ya vistos, en orden cronológico
+        sin_venta = 0.0
+        devuelta = 0.0
+        for fecha in sorted(set(v) | set(d)):
+            q = v.get(fecha, 0.0)
+            if q > 0:
+                neto[fecha] = q
+                orden.append(fecha)
+            resto = d.get(fecha, 0.0)
+            # Del día más reciente hacia atrás: el mismo día primero.
+            i = len(orden) - 1
+            while resto > 1e-9 and i >= 0:
+                f = orden[i]
+                usar = min(resto, neto[f])
+                neto[f] -= usar
+                resto -= usar
+                devuelta += usar
+                i -= 1
+            sin_venta += max(resto, 0.0)
+        salida[clave] = {
+            'por_dia': {f: x for f, x in neto.items() if x > 1e-9},
+            'bruta': round(sum(v.values()), 4),
+            'devuelta': round(devuelta, 4),
+            'devolucion_sin_venta': round(sin_venta, 4),
+        }
+    return salida
+
+
+def intervalos_con_stock(desde, hasta, nivel='red'):
+    """EL DENOMINADOR. Qué días de [desde, hasta] tuvieron stock, por clave.
+
+    `StockDiario` es una función escalón: el stock al cierre del día t es el
+    `stock_cierre` de la última fila con fecha ≤ t (el reconstructor escribe
+    los días con movimiento y el saldo de apertura, el día antes del primero;
+    entre dos movimientos el saldo no cambia). Antes del primer registro de una
+    clave vale su primer registro — que es la apertura.
+
+    Un día tiene stock si el cierre es > 0. A nivel red, si alguna bodega lo
+    tuvo (unión de intervalos, no suma: 3 bodegas el mismo día son UN día).
+
+    Returns: {clave: [(inicio, fin_exclusivo), ...]} en ordinales de fecha,
+    ordenados y fusionados. Una clave SIN ninguna fila de `StockDiario` no
+    aparece: no hay denominador medido, y el llamador cae a `dias_expuestos`.
+    """
+    from sqlalchemy import and_, func
+
+    if desde is None or hasta is None or desde > hasta:
+        return {}
+    a0, b0 = desde.toordinal(), hasta.toordinal() + 1
+
+    previas = db.session.query(
+        StockDiario.referencia.label('r'), StockDiario.bodega.label('b'),
+        func.max(StockDiario.fecha).label('f'),
+    ).filter(StockDiario.fecha < desde).group_by(
+        StockDiario.referencia, StockDiario.bodega).subquery()
+    filas_previas = (
+        db.session.query(StockDiario.referencia, StockDiario.bodega,
+                         StockDiario.stock_cierre)
+        .join(previas, and_(StockDiario.referencia == previas.c.r,
+                            StockDiario.bodega == previas.c.b,
+                            StockDiario.fecha == previas.c.f))
+        .all()
+    )
+    filas = (
+        db.session.query(StockDiario.referencia, StockDiario.bodega,
+                         StockDiario.fecha, StockDiario.stock_cierre)
+        .filter(StockDiario.fecha >= desde, StockDiario.fecha <= hasta)
+        .order_by(StockDiario.referencia, StockDiario.bodega, StockDiario.fecha)
+        .all()
+    )
+
+    inicial = {(r, b): float(s or 0) for r, b, s in filas_previas}
+    puntos = defaultdict(list)
+    for r, b, f, s in filas:
+        puntos[(r, b)].append((f.toordinal(), float(s or 0)))
+
+    por_clave = defaultdict(list)
+    for rb in set(inicial) | set(puntos):
+        pts = puntos.get(rb, [])
+        v0 = inicial[rb] if rb in inicial else pts[0][1]
+        escalones = [(a0, v0)] + [p for p in pts if p[0] > a0]
+        if pts and pts[0][0] == a0:
+            escalones[0] = (a0, pts[0][1])
+        for i, (ini, valor) in enumerate(escalones):
+            fin = escalones[i + 1][0] if i + 1 < len(escalones) else b0
+            if valor > 0 and fin > ini:
+                por_clave[_clave(rb[0], rb[1], nivel)].append((ini, fin))
+
+    salida = {}
+    for clave, tramos in por_clave.items():
+        tramos.sort()
+        unidos = [list(tramos[0])]
+        for ini, fin in tramos[1:]:
+            if ini <= unidos[-1][1]:
+                unidos[-1][1] = max(unidos[-1][1], fin)
+            else:
+                unidos.append([ini, fin])
+        salida[clave] = [tuple(t) for t in unidos]
+    # Las claves con filas pero sin un solo día con stock existen igual: tienen
+    # denominador medido (cero), que no es lo mismo que no tener denominador.
+    for rb in set(inicial) | set(puntos):
+        salida.setdefault(_clave(rb[0], rb[1], nivel), [])
+    return salida
+
+
+def dias_en(tramos, desde, hasta):
+    """Días de [desde, hasta] (inclusive) cubiertos por `tramos`."""
+    if not tramos or desde is None or hasta is None or desde > hasta:
+        return 0
+    a, b = desde.toordinal(), hasta.toordinal() + 1
+    return sum(max(0, min(fin, b) - max(ini, a)) for ini, fin in tramos)
+
+
+def sin_venta_reciente(ventas_recientes, dias_stock_recientes, d_avg, dias_tramo):
+    """¿Dejó de venderse? La política de «descontinuado» del ROP (D14).
+
+    Un SKU que vendió 10/día en el primer semestre y nada en los últimos 90
+    días con el estante lleno tiene d_avg ≈ 5 sobre la ventana de 12 meses, y
+    el ROP lo seguía reponiendo. Sin venta en el tramo reciente NO basta: un
+    SKU lento (0,01/día) pasa 90 días sin vender por azar, y uno agotado no
+    vende porque no hay. Se exigen las tres:
+
+      · cero ventas en el tramo;
+      · stock al menos la mitad del tramo (si no, es agotado, no descontinuado);
+      · que con su propia tasa se hubieran esperado ≥ 3 ventas en esos días
+        (P(0 | Poisson 3) ≈ 5%: el cero es evidencia, no azar).
+    """
+    if ventas_recientes > 0 or dias_tramo <= 0:
+        return False
+    if dias_stock_recientes < dias_tramo / 2.0:
+        return False
+    return d_avg * dias_stock_recientes >= VENTAS_ESPERADAS_MIN_PARA_DESCONTINUAR
+
+
 class KardexService:
 
     @staticmethod
@@ -1124,21 +1405,42 @@ class KardexService:
             for m in movimientos:
                 dias_mov[m.fecha].append(m)
 
+            # ── LA APERTURA Y LAS FILAS QUE YA ESTABAN ─────────────────────
+            #
+            # `StockDiario` se lee como función escalón (`intervalos_con_stock`):
+            # el cierre de un día vale hasta el siguiente registro. Para eso
+            # hacen falta dos cosas que antes no estaban:
+            #
+            #  · el saldo de APERTURA, el cierre del día anterior al primer
+            #    movimiento. Sin él, los días entre el inicio de la ventana y el
+            #    primer movimiento de este SKU no tenían valor —y un SKU lento
+            #    que vendió por primera vez en marzo parecía no haber tenido
+            #    stock en enero y febrero, con el estante lleno—;
+            #  · que TODA fila existente de esta clave quede con el saldo
+            #    correcto de su fecha, también la de un día que dejó de tener
+            #    movimiento (la apertura de una reconstrucción anterior, cuando
+            #    una descarga trae historia más vieja). No se borra ninguna: se
+            #    recalcula su cierre con la misma caminata hacia atrás.
+            existentes = {
+                r.fecha: r for r in
+                StockDiario.query.filter_by(referencia=ref, bodega=bod).all()
+            }
+            apertura = min(dias_mov) - timedelta(days=1)
+            fechas_ordenadas = sorted(
+                set(dias_mov) | set(existentes) | {apertura}, reverse=True)
+
             saldo = float(saldo_actual)
-            fechas_ordenadas = sorted(dias_mov.keys(), reverse=True)
             dias_negativos = 0
-            total_dias = len(fechas_ordenadas)
+            total_dias = len(dias_mov)
 
             for fecha in fechas_ordenadas:
                 stock_cierre = saldo
 
                 # Marcar saldos negativos (dato podrido — no corregir, solo marcar)
-                if stock_cierre < 0:
+                if stock_cierre < 0 and fecha in dias_mov:
                     dias_negativos += 1
 
-                existing = StockDiario.query.filter_by(
-                    referencia=ref, bodega=bod, fecha=fecha
-                ).first()
+                existing = existentes.get(fecha)
                 if existing:
                     existing.stock_cierre = stock_cierre
                     existing.tuvo_stock = stock_cierre > 0
@@ -1150,7 +1452,7 @@ class KardexService:
                     ))
                 dias_generados += 1
 
-                for m in dias_mov[fecha]:
+                for m in dias_mov.get(fecha, ()):
                     cant = float(m.cantidad)
                     if m.naturaleza == 1:
                         saldo -= cant
@@ -1343,8 +1645,12 @@ class KardexService:
         PRECONDICIÓN: reconciliar_kardex().compuerta_ok == True.
         Si hay conceptos sin clasificar, DETIENE con error.
 
-        Demanda neta = ventas(501) - devoluciones(502) por SKU.
-        Denominador = solo días donde tuvo_stock=True.
+        **No calcula nada propio: es una vista de `demanda_descensurada`.** Antes
+        era una segunda implementación del mismo concepto, con OTRA política de
+        devoluciones (neteaba por ventana mientras la descensura neteaba por
+        día): la misma venta devuelta al día siguiente daba 70 acá y 100 allá.
+        Ahora las dos leen `serie_demanda` y no pueden divergir.
+
         NO es "demanda real" — es demanda SERVIDA corregida por quiebres.
         La cobertura de rutas sigue siendo parámetro exógeno.
 
@@ -1354,8 +1660,6 @@ class KardexService:
 
         Returns: {total_skus, con_demanda, sin_demanda, tasas: [...]}
         """
-        from sqlalchemy import func
-
         # COMPUERTA: verificar que no hay conceptos sin clasificar
         conceptos_en_kardex = set(
             r[0] for r in db.session.query(KardexMovimiento.concepto).distinct().all()
@@ -1368,93 +1672,24 @@ class KardexService:
                 f'antes de calcular. El sistema prefiere no responder a responder con hueco.'
             )
 
-        fecha_limite = _dia_operativo() - timedelta(days=ventana_meses * 30)
-
-        if nivel == 'red':
-            # Clasificación: agregar toda la red, no por bodega
-            group_key = KardexMovimiento.referencia
-            stock_group_key = StockDiario.referencia
-        else:
-            # Reposición: por bodega
-            group_key = KardexMovimiento.referencia + '|' + KardexMovimiento.bodega
-            stock_group_key = StockDiario.referencia + '|' + StockDiario.bodega
-
-        # Días con stock
-        dias_stock = dict(
-            # `count(distinct(fecha))`, **no `count()`**. `StockDiario` es único
-            # en (referencia, bodega, fecha): agrupando solo por referencia, un
-            # `count()` cuenta **bodega-día** y no día. Con 3 bodegas, un SKU con
-            # stock 100 días reportaba 300, la demanda diaria salía dividida por
-            # 3, y el `min(n, dias_calendario)` de `dias_expuestos` saturaba el
-            # factor de censura en 1,00 — la pantalla pintaba «360d con stock ·
-            # +0%» en verde justo donde la corrección se había perdido.
-            #
-            # Dirección del error: **comprar de menos**. Y `clasificar_syntetos_boylan`
-            # contaba bien sobre la misma tabla, así que S-B y ROP daban números
-            # distintos del mismo SKU.
-            #
-            # Agrupando por referencia|bodega da lo mismo que `count()` —las
-            # filas ya son únicas por fecha dentro del grupo—, así que el
-            # `distinct` es correcto en los dos modos.
-            db.session.query(stock_group_key, func.count(func.distinct(StockDiario.fecha)))
-            .filter(StockDiario.fecha >= fecha_limite)
-            .filter(StockDiario.tuvo_stock == True)
-            .group_by(stock_group_key)
-            .all()
-        )
-
-        # Ventas brutas (501, salidas)
-        ventas = dict(
-            db.session.query(group_key, func.sum(KardexMovimiento.cantidad))
-            .filter(KardexMovimiento.fecha >= fecha_limite)
-            .filter(KardexMovimiento.concepto.in_(CONCEPTOS_VENTA))
-            .filter(KardexMovimiento.naturaleza == 2)
-            .group_by(group_key)
-            .all()
-        )
-
-        # Devoluciones (502, entradas — restan demanda)
-        devoluciones = dict(
-            db.session.query(group_key, func.sum(KardexMovimiento.cantidad))
-            .filter(KardexMovimiento.fecha >= fecha_limite)
-            .filter(KardexMovimiento.concepto.in_(CONCEPTOS_DEVOLUCION))
-            .filter(KardexMovimiento.naturaleza == 1)
-            .group_by(group_key)
-            .all()
-        )
-
-        # UNIÓN de claves, no solo las que tienen StockDiario.
-        #
-        # El bucle iteraba `dias_stock.items()`: un SKU que VENDIÓ y no tiene
-        # serie de stock reconstruida **no aparecía en el resultado**. Y ese es
-        # exactamente el censurado — el que más importa declarar. Desaparecer no
-        # es conservador: es indistinguible de "no se vendió".
-        dias_ventana = (_dia_operativo() - fecha_limite).days
-        claves = set(dias_stock) | set(ventas)
+        nivel = 'red' if nivel == 'red' else 'bodega'
+        desde, _hasta, cobertura = ventana_observada(ventana_meses)
+        dem = KardexService.demanda_descensurada(
+            ventana_meses, nivel, incluir_sin_venta=True)
 
         tasas = []
-        for key in claves:
-            venta_bruta = float(ventas.get(key, 0))
-            devolucion = float(devoluciones.get(key, 0))
-            demanda_neta = max(venta_bruta - devolucion, 0)
-            # Política única — la misma que usan la descensura y S-B. Topa los
-            # días a la ventana y DECLARA cuando no hubo con qué corregir.
-            # Antes dividía por `dias` crudo: era la cuarta implementación del
-            # mismo denominador, y la única que no decía nada.
-            dias_int, censurado = dias_expuestos(dias_stock.get(key, 0), dias_ventana)
-            tasa = round(demanda_neta / dias_int, 4) if dias_int > 0 else 0
-
+        for key, d in dem.items():
             entry = {
                 'referencia': key.split('|')[0] if '|' in key else key,
-                'demanda_bruta': venta_bruta,
-                'devoluciones': devolucion,
-                'demanda_neta': demanda_neta,
-                'dias_con_stock': dias_int,
-                'tasa_servida_corregida': tasa,
-                'velocity_cero': demanda_neta == 0,
+                'demanda_bruta': d['demanda_bruta'],
+                'devoluciones': d['devoluciones'],
+                'demanda_neta': d['demanda_neta'],
+                'dias_con_stock': d['dias_con_stock'],
+                'tasa_servida_corregida': round(d['d_avg'], 4),
+                'velocity_cero': d['demanda_neta'] == 0,
                 # False = corregido de verdad. True = no había StockDiario y el
-                # número SUBESTIMA. Mismo contrato que `demanda_diaria_corregida`.
-                'censurado': censurado,
+                # número SUBESTIMA. Mismo contrato que la descensura.
+                'censurado': d['censurado'],
             }
             if nivel == 'bodega' and '|' in key:
                 entry['bodega'] = key.split('|')[1]
@@ -1471,7 +1706,8 @@ class KardexService:
             'sin_demanda': sin_demanda,
             'ventana_meses': ventana_meses,
             'nivel': nivel,
-            'fecha_limite': fecha_limite.isoformat(),
+            'fecha_limite': desde.isoformat() if desde else None,
+            'cobertura_kardex_desde': cobertura.isoformat() if cobertura else None,
             'censurados': sum(1 for x in tasas if x['censurado']),
             'nota': (
                 'tasa_servida_corregida = demanda servida corregida por quiebres. '
@@ -1483,102 +1719,77 @@ class KardexService:
         }
 
     @staticmethod
-    def demanda_descensurada(ventana_meses: int = 12, nivel: str = 'red') -> dict:
+    def demanda_descensurada(ventana_meses: int = 12, nivel: str = 'red',
+                             incluir_sin_venta: bool = False) -> dict:
         """
-        M0.2 → M0.4. Demanda diaria descensurada POR SKU, con su sigma.
+        LA demanda diaria descensurada por SKU, con su sigma. Única en el sistema.
 
-        Este es el cable que faltaba: el ROP calculaba d_avg = total / 365 días
-        calendario, metiendo los días sin stock en el denominador con demanda
-        cero. Un SKU agotado 62 de 365 días quedaba subestimado ~20%, el ROP
-        bajaba, se agotaba más, y la estimación bajaba otra vez. Bucle endógeno:
-        el sistema aprendía a comprar poco de lo que siempre faltó.
+        Numerador: `serie_demanda` (ventas netas por día, devoluciones neteadas
+        contra la venta que devuelven). Denominador: `intervalos_con_stock`
+        (días con stock, contando TODOS los días del escalón, no solo los días
+        con movimiento), y `dias_expuestos` cuando no hay StockDiario.
 
         UNIDAD CANÓNICA: día. Todo lo que salga de aquí es unidades/día.
 
         sigma_d se calcula sobre los días CON stock, contando como demanda cero
         los días con stock y sin venta — que es lo que hace grumosa a la demanda
-        rural. Con suma y suma de cuadrados sobre los días con movimiento basta:
-        los días en cero no aportan ni a una ni a otra.
+        rural:
 
             media = suma / N
             var   = (suma_cuadrados - N * media^2) / (N - 1)
 
-        Returns: {referencia: {d_avg, sigma_d, dias_con_stock, dias_ventana,
-                               demanda_neta, factor_censura}}
+        La ventana es `ventana_meses * 30` días que terminan hoy, recortada al
+        inicio de la cobertura del kardex (`ventana_observada`): un día que el
+        kardex no observa no es un día sin venta.
+
+        Además, por fila, la política de «sin venta reciente» (`sin_venta_reciente`):
+        el ROP no repone lo que dejó de venderse, y lo DECLARA.
+
+        Args:
+            incluir_sin_venta: también las claves con StockDiario y sin una sola
+                venta en la ventana (d_avg 0) — las pide la tasa servida.
+
+        Returns: {clave: {d_avg, sigma_d, dias_con_stock, dias_ventana,
+                          demanda_neta, demanda_bruta, devoluciones,
+                          factor_censura, censurado, ventas_recientes,
+                          dias_stock_recientes, sin_venta_reciente, desde, hasta}}
         """
-        from sqlalchemy import func
+        desde, hasta, _cob = ventana_observada(ventana_meses)
+        if desde is None:
+            return {}
+        nivel = 'red' if nivel == 'red' else 'bodega'
+        dias_ventana = (hasta - desde).days + 1
 
-        fecha_limite = _dia_operativo() - timedelta(days=ventana_meses * 30)
-        dias_ventana = (_dia_operativo() - fecha_limite).days
+        serie = serie_demanda(desde, hasta, nivel)
+        tramos = intervalos_con_stock(desde, hasta, nivel)
 
-        if nivel == 'red':
-            k_kardex = KardexMovimiento.referencia
-            k_stock = StockDiario.referencia
-        else:
-            k_kardex = KardexMovimiento.referencia + '|' + KardexMovimiento.bodega
-            k_stock = StockDiario.referencia + '|' + StockDiario.bodega
+        n_rec = dias_sin_venta()
+        desde_rec = max(desde, hasta - timedelta(days=n_rec - 1))
+        dias_tramo_rec = (hasta - desde_rec).days + 1
 
-        dias_stock = dict(
-            # `count(distinct(fecha))`, **no `count()`**. `StockDiario` es único
-            # en (referencia, bodega, fecha): agrupando solo por referencia, un
-            # `count()` cuenta **bodega-día** y no día. Con 3 bodegas, un SKU con
-            # stock 100 días reportaba 300, la demanda diaria salía dividida por
-            # 3, y el `min(n, dias_calendario)` de `dias_expuestos` saturaba el
-            # factor de censura en 1,00 — la pantalla pintaba «360d con stock ·
-            # +0%» en verde justo donde la corrección se había perdido.
-            #
-            # Dirección del error: **comprar de menos**. Y `clasificar_syntetos_boylan`
-            # contaba bien sobre la misma tabla, así que S-B y ROP daban números
-            # distintos del mismo SKU.
-            #
-            # Agrupando por referencia|bodega da lo mismo que `count()` —las
-            # filas ya son únicas por fecha dentro del grupo—, así que el
-            # `distinct` es correcto en los dos modos.
-            db.session.query(k_stock, func.count(func.distinct(StockDiario.fecha)))
-            .filter(StockDiario.fecha >= fecha_limite)
-            .filter(StockDiario.tuvo_stock == True)  # noqa: E712
-            .group_by(k_stock)
-            .all()
-        )
-
-        def _por_dia(conceptos, naturaleza):
-            return (
-                db.session.query(k_kardex, KardexMovimiento.fecha,
-                                 func.sum(KardexMovimiento.cantidad))
-                .filter(KardexMovimiento.fecha >= fecha_limite)
-                .filter(KardexMovimiento.concepto.in_(conceptos))
-                .filter(KardexMovimiento.naturaleza == naturaleza)
-                .group_by(k_kardex, KardexMovimiento.fecha)
-                .all()
-            )
-
-        # Demanda neta por (sku, día): ventas menos devoluciones del mismo día
-        neto = defaultdict(float)
-        for key, fecha, cant in _por_dia(CONCEPTOS_VENTA, 2):
-            neto[(key, fecha)] += float(cant or 0)
-        for key, fecha, cant in _por_dia(CONCEPTOS_DEVOLUCION, 1):
-            neto[(key, fecha)] -= float(cant or 0)
-
-        acum = defaultdict(lambda: {'suma': 0.0, 'suma_cuad': 0.0, 'dias_mov': 0})
-        for (key, _fecha), valor in neto.items():
-            v = max(valor, 0.0)
-            if v <= 0:
-                continue
-            a = acum[key]
-            a['suma'] += v
-            a['suma_cuad'] += v * v
-            a['dias_mov'] += 1
+        claves = set(serie)
+        if incluir_sin_venta:
+            claves |= set(tramos)
 
         salida = {}
-        for key, a in acum.items():
+        for key in claves:
+            s = serie.get(key) or {'por_dia': {}, 'bruta': 0.0, 'devuelta': 0.0}
+            por_dia = s['por_dia']
+            suma = sum(por_dia.values())
+            if suma <= 0 and not incluir_sin_venta:
+                continue
+            suma_cuad = sum(v * v for v in por_dia.values())
+
+            con_tramos = key in tramos
             # Política única — ver dias_expuestos()
-            n, censurado = dias_expuestos(dias_stock.get(key, 0), dias_ventana)
+            n, censurado = dias_expuestos(
+                dias_en(tramos.get(key), desde, hasta), dias_ventana)
             if n <= 0:
                 continue
 
-            media = a['suma'] / n
+            media = suma / n
             if n > 1:
-                var = (a['suma_cuad'] - n * media * media) / (n - 1)
+                var = (suma_cuad - n * media * media) / (n - 1)
             else:
                 var = 0.0
             sigma = math.sqrt(var) if var > 0 else 0.0
@@ -1587,16 +1798,32 @@ class KardexService:
             # se agotó; 1.25 = se estimaba 25% por debajo.
             factor = (dias_ventana / n) if n > 0 else 1.0
 
+            ventas_rec = sum(v for f, v in por_dia.items() if f >= desde_rec)
+            # Sin StockDiario, el tramo reciente cuenta como expuesto entero:
+            # la misma caída a días calendario de `dias_expuestos`, declarada
+            # en `censurado`.
+            stock_rec = (dias_en(tramos.get(key), desde_rec, hasta)
+                         if con_tramos and not censurado else dias_tramo_rec)
+
             salida[key] = {
                 'd_avg': round(media, 6),
                 'sigma_d': round(sigma, 6),
                 'dias_con_stock': n,
                 'dias_ventana': dias_ventana,
-                'demanda_neta': round(a['suma'], 2),
+                'demanda_neta': round(suma, 2),
+                'demanda_bruta': round(float(s['bruta']), 2),
+                'devoluciones': round(float(s['devuelta']), 2),
                 'factor_censura': round(factor, 4),
                 # False = descensurado de verdad. True = no había StockDiario y
                 # el número quedó censurado (subestima). Reconstruir stock diario.
                 'censurado': censurado,
+                'ventas_recientes': round(ventas_rec, 2),
+                'dias_stock_recientes': stock_rec,
+                'dias_sin_venta_mirados': dias_tramo_rec,
+                'sin_venta_reciente': sin_venta_reciente(
+                    ventas_rec, stock_rec, media, dias_tramo_rec),
+                'desde': desde.isoformat(),
+                'hasta': hasta.isoformat(),
             }
 
         n_cens = sum(1 for v in salida.values() if v['censurado'])
@@ -1612,64 +1839,64 @@ class KardexService:
         """
         Serie semanal de demanda DESCENSURADA por SKU, a nivel red.
 
-        Rejilla regular (semanas ISO) en vez de eventos irregulares. Es lo que
-        hace posible un MASE de verdad: el naive de un paso necesita periodos
-        consecutivos comparables, y "el evento anterior" no lo es cuando los
-        intervalos varían.
+        Rejilla regular (semanas ISO, lunes) que llega HASTA LA SEMANA ACTUAL.
+        Antes terminaba en la semana de la ÚLTIMA VENTA: las semanas sin venta
+        del final no existían, y un SKU que dejó de venderse hace cinco meses
+        seguía con su pronóstico de cuando se vendía — TSB existe justo para
+        decaer en esas semanas (D7).
 
-        Cada semana se descensura con sus PROPIOS días con stock: una semana en
+        Cada semana se descensura con sus PROPIOS días con stock (y sus días
+        observados: la primera y la actual pueden ser parciales). Una semana en
         que el SKU estuvo agotado 4 de 7 días vendió lo que pudo en 3, y esa
         tasa proyectada a 7 es la demanda que hubo.
 
-        Returns: {referencia: [(lunes, valor_descensurado), ...]} ordenado.
-        """
-        from sqlalchemy import func
+        Una semana SIN stock y SIN venta es `None`: no se sabe cuánto se habría
+        vendido, y un cero ahí le enseña al modelo que un agotado «no se
+        vendía». Un SKU sin ningún StockDiario cae a días calendario (la regla
+        de `dias_expuestos`): su rejilla empieza en la semana de su primera
+        venta y sus ceros cuentan.
 
-        fecha_limite = _dia_operativo() - timedelta(days=ventana_meses * 30)
+        Returns: {referencia: [(lunes, valor | None), ...]} ordenado.
+        """
+        desde, hasta, _cob = ventana_observada(ventana_meses)
+        if desde is None:
+            return {}
 
         def _lunes(f):
             return f - timedelta(days=f.weekday())
 
-        def _por_dia(conceptos, naturaleza):
-            return (
-                db.session.query(KardexMovimiento.referencia,
-                                 KardexMovimiento.fecha,
-                                 func.sum(KardexMovimiento.cantidad))
-                .filter(KardexMovimiento.fecha >= fecha_limite)
-                .filter(KardexMovimiento.concepto.in_(conceptos))
-                .filter(KardexMovimiento.naturaleza == naturaleza)
-                .group_by(KardexMovimiento.referencia, KardexMovimiento.fecha)
-                .all()
-            )
+        serie = serie_demanda(desde, hasta, 'red')
+        tramos = intervalos_con_stock(desde, hasta, 'red')
 
-        neto = defaultdict(float)
-        for ref, f, c in _por_dia(CONCEPTOS_VENTA, 2):
-            neto[(ref, f)] += float(c or 0)
-        for ref, f, c in _por_dia(CONCEPTOS_DEVOLUCION, 1):
-            neto[(ref, f)] -= float(c or 0)
-
-        # Días con stock por (ref, semana) — el denominador de cada semana
-        dias_stock = defaultdict(int)
-        # `.distinct()`: sin él, un SKU con stock el mismo día en 3 bodegas
-        # devuelve 3 filas y suma 3 al denominador de esa semana.
-        for ref, f in (db.session.query(StockDiario.referencia, StockDiario.fecha)
-                       .filter(StockDiario.fecha >= fecha_limite)
-                       .filter(StockDiario.tuvo_stock == True)
-                       .distinct().all()):  # noqa: E712
-            dias_stock[(ref, _lunes(f))] += 1
-
-        crudo = defaultdict(float)
-        for (ref, f), v in neto.items():
-            if not ref:
+        salida = {}
+        for ref, s in serie.items():
+            por_dia = s['por_dia']
+            if not por_dia:
                 continue
-            crudo[(ref.strip(), _lunes(f))] += max(v, 0.0)
-
-        series = defaultdict(list)
-        for (ref, semana), valor in crudo.items():
-            n, _cens = dias_expuestos(dias_stock.get((ref, semana), 0), 7)
-            series[ref].append((semana, round(valor * (7.0 / n), 4)))
-
-        return {ref: sorted(puntos) for ref, puntos in series.items()}
+            crudo = defaultdict(float)
+            for f, v in por_dia.items():
+                crudo[_lunes(f)] += v
+            con_tramos = ref in tramos and dias_en(tramos[ref], desde, hasta) > 0
+            semana = _lunes(desde) if con_tramos else _lunes(min(por_dia))
+            puntos = []
+            while semana <= hasta:
+                a = max(semana, desde)
+                b = min(semana + timedelta(days=6), hasta)
+                observados = (b - a).days + 1
+                venta = crudo.get(semana, 0.0)
+                if con_tramos:
+                    n_stock = dias_en(tramos[ref], a, b)
+                    if n_stock <= 0 and venta <= 0:
+                        puntos.append((semana, None))
+                        semana += timedelta(days=7)
+                        continue
+                else:
+                    n_stock = observados
+                n, _cens = dias_expuestos(n_stock, observados)
+                puntos.append((semana, round(venta * (7.0 / n), 4)))
+                semana += timedelta(days=7)
+            salida[ref] = puntos
+        return salida
 
     @staticmethod
     def mase(reales: list, pronostico: float) -> float:
@@ -1702,10 +1929,21 @@ class KardexService:
 
         REGLAS DEL CONSULTOR:
         1. Clasificar a nivel de RED (no por bodega) — el rol del SKU es global
-        2. Estacionales se EXCLUYEN — se leen de tabla producto_clasificacion_abc
-           (campo rol='ESTACIONAL') + parámetro extra para override
+        2. Estacionales se EXCLUYEN — los que `TemporadaService.identificar_skus_temporada`
+           declara de temporada (la misma política que arma el pedido escolar)
+           + parámetro extra para override
         3. La clasificación PROPONE sentencias, no ejecuta bloqueos automáticos
         4. Si un constitucional cae en 'grumosa', es señal de alarma
+
+        ESTACIONALES (D8). Antes se leían de `ProductoClasificacionABC.clasificacion
+        == 'ESTACIONAL'`, una columna `String(1)` donde esa palabra no cabe: el
+        filtro no podía dar verdadero nunca y la exclusión estaba muerta. Ahora
+        es la política del pedido de temporada — un SKU es de temporada en un
+        solo sitio del sistema.
+
+        DEMANDA: `serie_demanda` (neta, D6) sobre días con stock de
+        `intervalos_con_stock` (D1). Con el denominador viejo —días con
+        movimiento— un SKU que vende cada 25 días daba ADI = 1 y caía en SUAVE.
 
         Cuadrantes:
         - Suave: ADI ≤ 1.32 y CV² ≤ 0.49 → reposición automática
@@ -1715,87 +1953,58 @@ class KardexService:
 
         Returns: {clasificacion: [...], resumen: {...}, alertas: [...]}
         """
-        from sqlalchemy import func
+        from app.services.temporada_service import TemporadaService
 
-        # Leer estacionales de tabla persistida (no parámetro volátil)
         estacionales_set = set()
         try:
-            from app.models.producto import Producto
-            from app.models.producto_clasificacion_abc import ProductoClasificacionABC
-            est_db = (
-                db.session.query(Producto.codigo_siesa)
-                .join(ProductoClasificacionABC, Producto.id == ProductoClasificacionABC.producto_id)
-                .filter(ProductoClasificacionABC.clasificacion == 'ESTACIONAL')
-                .all()
-            )
-            estacionales_set = {r[0].strip() for r in est_db if r[0]}
-        except Exception as e:
-            logger.warning('[KARDEX] No se pudo leer estacionales de DB: %s', e)
+            estacionales_set = set(TemporadaService.identificar_skus_temporada())
+        except Exception as e:   # noqa: BLE001 — se declara abajo, no se calla
+            logger.warning('[KARDEX] No se pudo identificar estacionales: %s', e)
+            estacionales_error = str(e)
+        else:
+            estacionales_error = None
 
         # Override: estacionales adicionales pasados explícitamente
         if estacionales_extra:
-            estacionales_set.update(estacionales_extra)
+            estacionales_set.update(x.strip() for x in estacionales_extra if x)
 
-        fecha_limite = _dia_operativo() - timedelta(days=ventana_meses * 30)
-        dias_ventana = ventana_meses * 30
-
-        # Demanda diaria por SKU a nivel RED (agregando todas las bodegas)
-        demanda_diaria = (
-            db.session.query(
-                KardexMovimiento.referencia,
-                KardexMovimiento.fecha,
-                func.sum(KardexMovimiento.cantidad).label('cantidad')
-            )
-            .filter(KardexMovimiento.fecha >= fecha_limite)
-            .filter(KardexMovimiento.concepto.in_(CONCEPTOS_VENTA))
-            .filter(KardexMovimiento.naturaleza == 2)  # salidas
-            .group_by(KardexMovimiento.referencia, KardexMovimiento.fecha)
-            .all()
-        )
-
-        # Agrupar por referencia: lista de cantidades por día con demanda
-        from collections import defaultdict
-        ref_demandas = defaultdict(list)  # ref → [(fecha, cantidad)]
-        for row in demanda_diaria:
-            ref = row.referencia.strip() if row.referencia else ''
-            if not ref or ref in estacionales_set:
-                continue
-            ref_demandas[ref].append((row.fecha, float(row.cantidad)))
-
-        # Días con stock a nivel RED (al menos una bodega con stock)
-        dias_stock_red = dict(
-            db.session.query(
-                StockDiario.referencia,
-                func.count(func.distinct(StockDiario.fecha))
-            )
-            .filter(StockDiario.fecha >= fecha_limite)
-            .filter(StockDiario.tuvo_stock == True)
-            .group_by(StockDiario.referencia)
-            .all()
-        )
+        desde, hasta, _cob = ventana_observada(ventana_meses)
+        if desde is None:
+            return {
+                'total_clasificados': 0, 'estacionales_excluidos': len(estacionales_set),
+                'resumen': {c: {'cantidad': 0, 'porcentaje': 0}
+                            for c in ('SUAVE', 'ERRATICA', 'INTERMITENTE', 'GRUMOSA')},
+                'nota': 'Kardex vacío: no hay demanda que clasificar.',
+                'clasificacion': [],
+            }
+        dias_ventana = (hasta - desde).days + 1
+        serie = serie_demanda(desde, hasta, 'red')
+        tramos = intervalos_con_stock(desde, hasta, 'red')
 
         # Calcular ADI y CV² por SKU
         ADI_CORTE = 1.32
         CV2_CORTE = 0.49
 
         clasificacion = []
-        alertas = []
+        excluidos = []
 
-        for ref, eventos in ref_demandas.items():
-            dias_con_demanda = len(eventos)
-            cantidades = [e[1] for e in eventos]
-            # Política única — la misma que usa la descensura (ver dias_expuestos)
-            dias_stock, sb_censurado = dias_expuestos(
-                dias_stock_red.get(ref, 0), dias_ventana)
-
+        for ref, s in serie.items():
+            if ref in estacionales_set:
+                excluidos.append(ref)
+                continue
+            cantidades = list(s['por_dia'].values())
+            dias_con_demanda = len(cantidades)
             if dias_con_demanda == 0:
                 continue
+            # Política única — la misma que usa la descensura (ver dias_expuestos)
+            dias_stock, sb_censurado = dias_expuestos(
+                dias_en(tramos.get(ref), desde, hasta), dias_ventana)
 
             # ADI: días promedio entre demandas (sobre días con stock, no calendario)
-            adi = dias_stock / dias_con_demanda if dias_con_demanda > 0 else 999
+            adi = dias_stock / dias_con_demanda
 
             # CV²: varianza relativa del tamaño de cada demanda
-            media = sum(cantidades) / len(cantidades) if cantidades else 0
+            media = sum(cantidades) / len(cantidades)
             if media > 0 and len(cantidades) > 1:
                 varianza = sum((c - media) ** 2 for c in cantidades) / len(cantidades)
                 cv2 = varianza / (media ** 2)
@@ -1824,7 +2033,8 @@ class KardexService:
                 'politica': politica,
                 'dias_con_demanda': dias_con_demanda,
                 'dias_con_stock': dias_stock,
-                'demanda_total': sum(cantidades),
+                'censurado': sb_censurado,
+                'demanda_total': round(sum(cantidades), 2),
                 'demanda_promedio_evento': round(media, 2),
             })
 
@@ -1837,14 +2047,14 @@ class KardexService:
                 'porcentaje': round(len(items) / len(clasificacion) * 100, 1) if clasificacion else 0,
             }
 
-        # Alertas: constitucionales que caen en grumosa (dato censurado o rol incorrecto)
-        # (Las referencias constitucionales se pasan externamente para cruce)
-
         clasificacion.sort(key=lambda x: ('SUAVE ERRATICA INTERMITENTE GRUMOSA'.split().index(x['cuadrante']), -x['demanda_total']))
 
         return {
             'total_clasificados': len(clasificacion),
-            'estacionales_excluidos': len(estacionales_set),
+            'estacionales_excluidos': len(excluidos),
+            'estacionales_detalle': sorted(excluidos)[:200],
+            'estacionales_fuente': 'TemporadaService.identificar_skus_temporada',
+            'estacionales_error': estacionales_error,
             'resumen': resumen,
             'nota': (
                 'Clasificación a nivel de RED (todas las bodegas agregadas). '
@@ -1931,12 +2141,14 @@ class KardexService:
             if c['cuadrante'] in solo_cuadrantes
         }
 
-        # Costo unitario para ponderar por importancia economica
-        from app.models.producto import Producto
-        costos = dict(
-            db.session.query(Producto.codigo_siesa, Producto.precio_compra)
-            .filter(Producto.codigo_siesa.isnot(None)).all()
-        )
+        # Costo unitario para ponderar por importancia económica — de la
+        # jerarquía de costo (`resolver_costos`), no de `Producto.precio_compra`,
+        # que ningún sync puebla: con él todos los pesos valían 0 y el tamiz
+        # «gana donde hay plata» se evaluaba sobre una suma de ceros.
+        from app.services.costo_service import resolver_costos
+        _costos = resolver_costos(sorted(refs_objetivo)) if refs_objetivo else {}
+        costos = {r: float(c.get('costo') or 0) for r, c in _costos.items()}
+        sin_costo_peso = sorted(r for r in refs_objetivo if costos.get(r, 0) <= 0)
 
         pronosticos = []
         tsb_gana = 0
@@ -1944,36 +2156,39 @@ class KardexService:
         peso_gana = 0.0
         peso_total = 0.0
 
+        def _tsb(serie_):
+            z_ = next((v for v in serie_ if v > 0), 0.0)
+            p_ = 1.0 if serie_ and serie_[0] > 0 else 0.5
+            for y_ in serie_:
+                hubo_ = 1.0 if y_ > 0 else 0.0
+                p_ = alpha * hubo_ + (1 - alpha) * p_
+                if hubo_:
+                    z_ = alpha * y_ + (1 - alpha) * z_
+            return p_, z_
+
         for ref in refs_objetivo:
             puntos = series.get(ref, [])
-            if len(puntos) < 12:
-                continue  # sin semanas suficientes no hay backtest honesto
-
-            # Rejilla completa: las semanas SIN demanda valen cero y cuentan.
-            # Omitirlas es exactamente el sesgo que TSB existe para evitar.
-            inicio, fin = puntos[0][0], puntos[-1][0]
-            mapa = dict(puntos)
-            semanas, cur = [], inicio
-            while cur <= fin:
-                semanas.append(mapa.get(cur, 0.0))
-                cur += timedelta(days=7)
-
+            # Rejilla completa hasta la semana actual: las semanas SIN demanda y
+            # CON stock valen cero y cuentan —omitirlas es el sesgo que TSB
+            # existe para evitar—. Las semanas sin stock y sin venta (`None`)
+            # no se saben y no se usan: un agotado no es un «no se vendía».
+            semanas = [v for _l, v in puntos if v is not None]
             if len(semanas) < 12:
-                continue
+                continue  # sin semanas suficientes no hay backtest honesto
 
             n_test = max(4, len(semanas) // 5)
             train, test = semanas[:-n_test], semanas[-n_test:]
             if len(train) < 8:
                 continue
 
-            # TSB sobre el train
-            z = next((v for v in train if v > 0), 0.0)
-            p = 1.0 if train and train[0] > 0 else 0.5
-            for y in train:
-                hubo = 1.0 if y > 0 else 0.0
-                p = alpha * hubo + (1 - alpha) * p
-                if hubo:
-                    z = alpha * y + (1 - alpha) * z
+            # TSB sobre el train — solo para el backtest.
+            p_train, z_train = _tsb(train)
+            tsb_train = p_train * z_train
+            # EL PRONÓSTICO sale de la serie ENTERA, hasta la semana actual.
+            # Antes se publicaba el ajuste del train: el pronóstico ignoraba las
+            # últimas n_test semanas, que son justo las que dicen si el SKU
+            # dejó de moverse.
+            p, z = _tsb(semanas)
             tsb_semanal = p * z
 
             # Croston: solo actualiza en periodos con demanda (sin decaimiento)
@@ -1991,7 +2206,7 @@ class KardexService:
             mm8_semanal = sum(train[-8:]) / min(8, len(train))
 
             # MASE real — mismo denominador para ambos, así son comparables
-            mase_tsb = KardexService.mase(test, tsb_semanal)
+            mase_tsb = KardexService.mase(test, tsb_train)
             mase_mm8 = KardexService.mase(test, mm8_semanal)
 
             # Peso economico: valor anual movido por ese SKU. Ganar en la cola
@@ -2016,6 +2231,8 @@ class KardexService:
                 'p_probabilidad': round(p, 4),
                 'z_tamano': round(z, 2),
                 'semanas': len(semanas),
+                'semanas_rejilla': len(puntos),
+                'semanas_sin_dato': len(puntos) - len(semanas),
                 'semanas_test': n_test,
                 'mase_tsb': mase_tsb,
                 'mase_mm8': mase_mm8,
@@ -2067,6 +2284,9 @@ class KardexService:
                 'ic95_victorias': [round(lo * 100, 1), round(hi * 100, 1)],
                 'porcentaje_ponderado_por_valor': pct_peso,
                 'valor_evaluado': round(peso_total),
+                # Los que pesaron CERO por no tener costo de ninguna fuente: el
+                # porcentaje ponderado no los ve, y eso se dice.
+                'sin_costo_para_ponderar': len(sin_costo_peso),
                 'azar_descartado': lo > 0.5,
                 'supera_tamiz': supera_tamiz,
                 'criterio': (
@@ -2100,7 +2320,12 @@ class KardexService:
         """
         Newsvendor: cantidad óptima de compra para temporada con demanda incierta.
 
-        Q* = F⁻¹(ratio_critico) donde ratio_critico = margen / (margen + costo_exceso)
+        Q* = F⁻¹(ratio_critico), con ratio_critico = Cu / (Cu + Co) — UNA función,
+        `ratio_critico()`, para la fila y para la cabecera (D12).
+
+        El ratio por defecto (filas sin Cu/Co) sale de `ratio_critico_desde_tasas`:
+        el margen es sobre PRECIO y el exceso sobre COSTO, así que no se suman
+        directo — ver esa función.
 
         Usa distribución empírica de temporadas pasadas. Si solo hay 1 temporada,
         infla la incertidumbre multiplicando σ × 1.5 (factor de ignorancia).
@@ -2120,7 +2345,7 @@ class KardexService:
         if not items_temporada:
             return {'error': 'Se requiere al menos un item con ventas_pasadas'}
 
-        ratio_critico = margen_pct / (margen_pct + costo_exceso_pct)
+        ratio_defecto = ratio_critico_desde_tasas(margen_pct, costo_exceso_pct)
 
         resultados = []
 
@@ -2141,10 +2366,9 @@ class KardexService:
             # Cu = margen que se pierde si falta. Co = lo que cuesta que sobre.
             cu = item.get('cu')
             co = item.get('co')
-            if cu is not None and co is not None and (float(cu) + float(co)) > 0:
-                ratio_item = float(cu) / (float(cu) + float(co))
-            else:
-                ratio_item = ratio_critico
+            ratio_item = ratio_critico(cu, co)
+            if ratio_item is None:
+                ratio_item = ratio_defecto
 
             n_temporadas = len(ventas)
             mu = sum(ventas) / n_temporadas
@@ -2215,7 +2439,10 @@ class KardexService:
                        for r in resultados)
 
         return {
-            'ratio_critico': round(ratio_critico, 3),
+            # El ratio de las filas que NO traen Cu/Co. Las que lo traen usan
+            # el suyo, con la misma función.
+            'ratio_critico': round(ratio_defecto, 3),
+            'ratio_critico_es': 'POR_DEFECTO_PARA_FILAS_SIN_CU_CO',
             'margen_pct': margen_pct,
             'costo_exceso_pct': costo_exceso_pct,
             'total_items': len(resultados),
@@ -2235,11 +2462,45 @@ class KardexService:
             'items_1_temporada': sum(1 for r in resultados if r.get('advertencia_1_temporada')),
             'nota': (
                 'Q* = cantidad óptima que maximiza utilidad esperada bajo incertidumbre. '
-                'ratio_critico = margen/(margen+costo_exceso). '
+                'ratio_critico = Cu/(Cu+Co); por defecto m/(m + e·(1−m)), con m '
+                'margen sobre precio y e exceso sobre costo. '
                 'Items con 1 sola temporada tienen sigma inflado ×1.5 por factor de ignorancia.'
             ),
             'items': resultados,
         }
+
+
+def ratio_critico(cu, co):
+    """Cu / (Cu + Co). `None` si falta alguno o la suma no es positiva.
+
+    La única fórmula del ratio crítico del sistema: la usan la fila del
+    newsvendor, su cabecera y el pedido de temporada.
+    """
+    if cu is None or co is None:
+        return None
+    cu, co = float(cu), float(co)
+    if cu + co <= 0:
+        return None
+    return cu / (cu + co)
+
+
+def ratio_critico_desde_tasas(margen_sobre_precio, exceso_sobre_costo):
+    """El ratio crítico cuando solo se conocen tasas, no pesos (D12).
+
+    `margen_sobre_precio` m está en base PRECIO; `exceso_sobre_costo` e en base
+    COSTO. Con precio p y costo c = p·(1−m):
+
+        Cu = p − c = m·p          Co = e·c = e·(1−m)·p
+        ratio = m / (m + e·(1−m))
+
+    El POST /newsvendor hacía m / (m + e): sumaba una fracción del precio con
+    una del costo. Con m = 0,40 y e = 0,60 daba 0,400 en vez de 0,526, y la
+    cabecera del pedido de temporada mostraba un ratio que ninguna fila usaba.
+    """
+    m, e = float(margen_sobre_precio), float(exceso_sobre_costo)
+    if not 0 <= m < 1:
+        raise ValueError(f'margen_sobre_precio debe estar en [0,1), llegó {m}')
+    return ratio_critico(m, e * (1 - m)) or 0.0
 
 
 def _norm_ppf(p):

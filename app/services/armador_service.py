@@ -88,11 +88,213 @@ R_NACIONAL_DIAS = 0
 # el colchón debe absorber lo que el modelo NO vio venir, no la varianza cruda.
 ESTIMADOR_SIGMA_D = 'SIGMA_EMPIRICA_DESCENSURADA'
 
-# Restricción anti-500-días
+# Restricción anti-500-días — SOLO para el RELLENO (lo que se mete al
+# contenedor sin déficit, por margen/CBM). NO topa el S objetivo del déficit:
+# con LT+R = 195 días en China, un tope de 180 cortaba TODO S objetivo por
+# debajo de lo que la política (R, S) necesita para cubrir su exposición, y el
+# nivel de servicio implícito caía del 95% al 16,7% (D3).
 MAX_COBERTURA_RELLENO_DIAS = 180
+
+# Estados en los que la mercancía YA ESTÁ PEDIDA y todavía no llegó. Incluye
+# EN_PRODUCCION: un contenedor en fábrica es plata comprometida, y no contarlo
+# pediría dos veces lo mismo (el caso que `ItemEnTransito` existe para evitar).
+ESTADOS_EN_CAMINO = ('EN_PRODUCCION', 'NAVEGANDO', 'EN_PUERTO',
+                     'NACIONALIZACION', 'EN_RUTA_CEDI')
+
+#: Cómo se lee `FichaImportacion.moq_cajas` (D13). La ficha no dice si el MOQ
+#: es un MÍNIMO por pedido o un LOTE (múltiplo), y leerlo como múltiplo
+#: convertía un déficit de 60 u (5 cajas, MOQ 4) en 8 cajas = 96 u: +60% sobre
+#: lo que hace falta, en el lado irreversible. Mientras la ficha no lo diga, se
+#: lee como MÍNIMO y se redondea a caja completa. Declarado en cada fila.
+MOQ_INTERPRETACION = 'MINIMO_POR_PEDIDO_REDONDEADO_A_CAJA'
+
+
+def cajas_a_pedir(deficit_unidades, unidades_por_caja, moq_cajas):
+    """Cajas para cubrir un déficit: redondeo a caja completa y el MOQ como
+    MÍNIMO (no como múltiplo). Ver `MOQ_INTERPRETACION`."""
+    u = max(1, int(unidades_por_caja or 1))
+    moq = max(1, int(moq_cajas or 1))
+    necesarias = math.ceil(max(0.0, float(deficit_unidades)) / u)
+    return max(necesarias, moq) if necesarias > 0 else 0
 
 # Marcas China conocidas (se cruzan con producto.marca_siesa)
 MARCAS_CHINA = {'M003', 'M009', 'M175'}
+
+
+def _numero_env(nombre, defecto):
+    try:
+        return float(os.environ[nombre]), 'CONFIGURADO'
+    except (KeyError, TypeError, ValueError):
+        return float(defecto), 'DEFAULT_DECLARADO'
+
+
+def _lead_time_de_proveedor(proveedor):
+    """ENCHUFE: el lead time MEDIDO de un proveedor, o `None` si no se sabe.
+
+    Hoy no hay fuente: el WMS no guarda la fecha de la OC contra la de la
+    recepción por proveedor. Quien la tenga (OCs de Siesa con su fecha de
+    emisión + `RecepcionMercancia.fecha_confirmacion`) la conecta ACÁ y
+    devuelve `{'lt_dias', 'sigma_lt', 'n', 'fuente': 'MEDIDO_PROVEEDOR'}`.
+    Ningún otro sitio del sistema decide un lead time: ver `lead_time()`.
+    """
+    return None
+
+
+def lead_time(origen='NACIONAL', proveedor=None):
+    """EL lead time de reposición. Una política, una función (D14).
+
+    Orden: lo medido del proveedor (`_lead_time_de_proveedor`) > para CHINA,
+    los contenedores con fechas completas (`calcular_sigma_lt_real`, con su
+    piso conservador) > el default configurado por origen.
+
+    Nacional: `ROP_LT_NACIONAL_DIAS` (5) y `ROP_SIGMA_LT_NACIONAL` (2). Son un
+    SUPUESTO y se declaran así (`fuente='DEFAULT_DECLARADO'`): nadie midió
+    todavía cuánto tarda un proveedor nacional.
+
+    Returns: {lt_dias, sigma_lt, fuente, n, nota}
+    """
+    medido = _lead_time_de_proveedor(proveedor) if proveedor else None
+    if medido:
+        return medido
+    if (origen or '').upper() == 'CHINA':
+        info = ArmadorService.calcular_sigma_lt_real()
+        return {'lt_dias': info['lt_medio'], 'sigma_lt': info['sigma_lt'],
+                'fuente': info['fuente'], 'n': info['n'],
+                'nota': info.get('nota')}
+    lt, f1 = _numero_env('ROP_LT_NACIONAL_DIAS', LT_NACIONAL_DIAS)
+    slt, f2 = _numero_env('ROP_SIGMA_LT_NACIONAL', SIGMA_LT_NACIONAL)
+    fuente = 'CONFIGURADO' if 'CONFIGURADO' in (f1, f2) else 'DEFAULT_DECLARADO'
+    return {
+        'lt_dias': lt, 'sigma_lt': slt, 'fuente': fuente, 'n': 0,
+        'nota': (None if fuente == 'CONFIGURADO' else
+                 f'Lead time nacional SUPUESTO ({lt:g} d ± {slt:g}): nadie lo midió. '
+                 f'Configurable con ROP_LT_NACIONAL_DIAS / ROP_SIGMA_LT_NACIONAL, '
+                 f'y por proveedor cuando haya fuente.'),
+    }
+
+
+def _en_camino_importacion():
+    """Unidades pedidas a China que no han llegado: `ItemEnTransito`.
+
+    Cuenta un ítem si su CONTENEDOR está en un estado de `ESTADOS_EN_CAMINO`
+    (incluido EN_PRODUCCION), o —si no tiene contenedor— si el ítem mismo lo
+    está. Un contenedor BORRADOR no está pedido; uno RECIBIDO ya llegó.
+    """
+    from sqlalchemy import func, or_, and_
+    from app.models.importacion import ItemEnTransito, Contenedor
+    from app.models.producto import Producto
+
+    filas = (
+        db.session.query(Producto.codigo_siesa, func.sum(ItemEnTransito.cantidad),
+                         func.count(ItemEnTransito.id))
+        .join(Producto, ItemEnTransito.producto_id == Producto.id)
+        .outerjoin(Contenedor, ItemEnTransito.contenedor_id == Contenedor.id)
+        .filter(ItemEnTransito.estado != 'RECIBIDO')
+        .filter(or_(
+            Contenedor.estado.in_(ESTADOS_EN_CAMINO),
+            and_(ItemEnTransito.contenedor_id.is_(None),
+                 ItemEnTransito.estado.in_(ESTADOS_EN_CAMINO)),
+        ))
+        .group_by(Producto.codigo_siesa)
+        .all()
+    )
+    return {(r or '').strip(): float(q or 0) for r, q, _n in filas if r}
+
+
+#: Las fuentes de «lo que ya viene». Una función por fuente, que devuelve
+#: {referencia: unidades}. Las OCs abiertas de Siesa entran acá como una fuente
+#: más (`('OC_SIESA', _en_camino_oc_siesa)`) y nadie más tiene que cambiar.
+FUENTES_EN_CAMINO = (('IMPORTACION', _en_camino_importacion),)
+
+
+def en_camino(refs=None):
+    """LO QUE YA VIENE, por referencia. Una política, una función.
+
+    Suma todas las `FUENTES_EN_CAMINO`. Una fuente que revienta NO suma cero
+    en silencio: se declara en `fuentes_con_error` y `completo` queda False —
+    «viene 0» y «no sé qué viene» empujan la compra al mismo lado, y solo el
+    segundo es cierto.
+
+    Returns: {'por_ref': {ref: unidades}, 'fuentes': {nombre: {refs, unidades}},
+              'fuentes_con_error': [...], 'completo': bool, 'nota'}
+    """
+    por_ref = defaultdict(float)
+    fuentes, errores = {}, []
+    for nombre, fn in FUENTES_EN_CAMINO:
+        try:
+            datos = fn() or {}
+        except Exception as e:     # noqa: BLE001 — se declara, no se calla
+            logger.error('[ARMADOR] fuente en camino %s falló: %s', nombre, e)
+            errores.append({'fuente': nombre, 'error': str(e)})
+            continue
+        fuentes[nombre] = {'refs': len(datos),
+                           'unidades': round(sum(datos.values()), 2)}
+        for r, q in datos.items():
+            if refs is None or r in refs:
+                por_ref[r] += q
+    hay_dato = any(f['refs'] for f in fuentes.values())
+    return {
+        'por_ref': dict(por_ref),
+        'fuentes': fuentes,
+        'fuentes_con_error': errores,
+        'completo': not errores,
+        'hay_dato': hay_dato,
+        'nota': (None if hay_dato else
+                 'Ninguna fuente de «en camino» tiene datos: `ItemEnTransito` no '
+                 'tiene escritor y las OCs abiertas de Siesa todavía no se leen. '
+                 'El término en tránsito de la posición vale 0 porque NO SE SABE, '
+                 'no porque no venga nada.'),
+    }
+
+
+def posicion_inventario(refs=None):
+    """¿Cuánto hay y cuánto viene?, por referencia. La del Armador y la del
+    pedido de temporada: una función (D2).
+
+        disponible = existencia − comprometido − salida sin confirmar
+                     (solo bodegas OPERADAS, `_BODEGAS_PV`: lista blanca)
+        posicion   = disponible + en_camino
+
+    Con signo, sin `max(0, ...)`: más comprometido que stock es mercancía
+    vendida que todavía se debe (ver el comentario de `rop_dual`).
+
+    Returns: ({ref: {existencia, comprometido, salida_sin_conf, disponible,
+                     en_camino, posicion, frescura}}, info_en_camino)
+    """
+    from sqlalchemy import func
+    from app.models.stock_siesa import StockSiesa
+    from app.services.inventario_siesa_service import _BODEGAS_PV
+
+    q = (db.session.query(
+            StockSiesa.codigo_siesa,
+            func.sum(StockSiesa.existencia),
+            func.sum(StockSiesa.comprometido),
+            func.sum(StockSiesa.salida_sin_conf),
+            func.min(StockSiesa.updated_at),
+        )
+        .filter(StockSiesa.bodega.in_(_BODEGAS_PV)))
+    if refs is not None:
+        q = q.filter(StockSiesa.codigo_siesa.in_(list(refs)))
+    filas = q.group_by(StockSiesa.codigo_siesa).all()
+
+    camino = en_camino(set(refs) if refs is not None else None)
+    salida = {}
+    for ref, ex, comp, sal, fres in filas:
+        r = (ref or '').strip()
+        if not r:
+            continue
+        ex, comp, sal = float(ex or 0), float(comp or 0), float(sal or 0)
+        salida[r] = {'existencia': ex, 'comprometido': comp,
+                     'salida_sin_conf': sal, 'disponible': ex - comp - sal,
+                     'frescura': fres, 'en_camino': 0.0}
+    for r, qv in camino['por_ref'].items():
+        salida.setdefault(r, {'existencia': 0.0, 'comprometido': 0.0,
+                              'salida_sin_conf': 0.0, 'disponible': 0.0,
+                              'frescura': None, 'en_camino': 0.0})
+        salida[r]['en_camino'] = qv
+    for d in salida.values():
+        d['posicion'] = d['disponible'] + d['en_camino']
+    return salida, camino
 
 
 class ArmadorService:
@@ -101,7 +303,12 @@ class ArmadorService:
     def calcular_sigma_lt_real() -> dict:
         """
         Calcula σ_LT real de contenedores con fechas completas.
-        Con ≥6 observaciones, reemplaza el default conservador.
+
+        Con < 3: el default conservador. Con 3 a 5: **el mayor** entre lo medido
+        y el default, para la media y para la σ (D9) — antes tres contenedores
+        de 118/120/122 días reemplazaban σ=15 por σ=2 y el colchón de
+        Buenaventura caía a la séptima parte con una muestra que no alcanza ni
+        para estimar una varianza. Desde 6, lo medido manda.
         """
         from app.models.importacion import Contenedor
         import statistics
@@ -122,16 +329,28 @@ class ArmadorService:
                 'nota': f'Solo {len(lead_times)} contenedores con fechas completas — usando defaults',
             }
 
-        lt_medio = statistics.mean(lead_times)
-        sigma_lt = statistics.stdev(lead_times) if len(lead_times) > 1 else SIGMA_LT_CHINA
-        fuente = 'MEDIDO' if len(lead_times) >= 6 else 'PARCIAL'
+        lt_medido = statistics.mean(lead_times)
+        sigma_medida = statistics.stdev(lead_times) if len(lead_times) > 1 else SIGMA_LT_CHINA
+        if len(lead_times) >= 6:
+            fuente, lt_medio, sigma_lt = 'MEDIDO', lt_medido, sigma_medida
+            nota = None
+        else:
+            fuente = 'PARCIAL'
+            lt_medio = max(lt_medido, LT_CHINA_DIAS)
+            sigma_lt = max(sigma_medida, SIGMA_LT_CHINA)
+            nota = (f'{len(lead_times)} contenedores: se usa el MAYOR entre lo medido '
+                    f'(LT {lt_medido:.1f}, σ {sigma_medida:.1f}) y el conservador '
+                    f'(LT {LT_CHINA_DIAS}, σ {SIGMA_LT_CHINA}) hasta tener 6.')
 
         return {
             'n': len(lead_times),
             'lt_medio': round(lt_medio, 1),
             'sigma_lt': round(sigma_lt, 1),
+            'lt_medido': round(lt_medido, 1),
+            'sigma_lt_medida': round(sigma_medida, 1),
             'lead_times': lead_times,
             'fuente': fuente,
+            'nota': nota,
         }
 
     @staticmethod
@@ -166,19 +385,20 @@ class ArmadorService:
 
         Returns: {nacional: [...], china: [...], sigma_lt_china}
         """
-        from app.services.kardex_service import KardexService, KardexMovimiento, CONCEPTOS_VENTA
+        from app.services.kardex_service import KardexService
         from app.models.producto import Producto
-        from app.models.importacion import ItemEnTransito
-        from sqlalchemy import func
 
         # z-score para nivel de servicio
         from app.services.kardex_service import _norm_ppf
         z = _norm_ppf(nivel_servicio)
 
-        # σ_LT China (medido o conservador)
-        sigma_lt_info = ArmadorService.calcular_sigma_lt_real()
-        lt_china = sigma_lt_info['lt_medio']
-        sigma_lt_china = sigma_lt_info['sigma_lt']
+        # Lead times: UNA función (`lead_time`), por origen. China sale de los
+        # contenedores medidos con su piso conservador; nacional es un supuesto
+        # configurable y DECLARADO.
+        lt_chi = lead_time('CHINA')
+        lt_nac = lead_time('NACIONAL')
+        lt_china, sigma_lt_china = lt_chi['lt_dias'], lt_chi['sigma_lt']
+        lt_nacional, sigma_lt_nacional = lt_nac['lt_dias'], lt_nac['sigma_lt']
 
         # CABLE M0.2 → M0.4. La demanda entra DESCENSURADA: d_avg sobre días con
         # stock, no sobre días calendario. Antes se dividía por 365 con los días
@@ -186,116 +406,22 @@ class ArmadorService:
         # lo que siempre faltaba.
         demanda_por_sku = KardexService.demanda_descensurada(
             ventana_meses=12, nivel='red')
-        dias_ventana = 360
 
-        # En tránsito por producto
-        transito = dict(
-            db.session.query(
-                Producto.codigo_siesa,
-                func.sum(ItemEnTransito.cantidad),
-            )
-            .join(Producto, ItemEnTransito.producto_id == Producto.id)
-            .filter(ItemEnTransito.estado.in_(['NAVEGANDO', 'EN_PUERTO', 'NACIONALIZACION', 'EN_RUTA_CEDI']))
-            .group_by(Producto.codigo_siesa)
-            .all()
-        )
-
-        # Stock actual — existencia VENDIBLE Y lo que ya tiene dueño.
+        # Stock actual — existencia VENDIBLE, lo que ya tiene dueño y lo que
+        # viene. `posicion_inventario` es la ÚNICA respuesta a «¿cuánto hay y
+        # cuánto viene?» para comprar, y la usa también el pedido de temporada.
         #
-        # El repo ya contestaba «¿cuánto hay de verdad?» en tres sitios, los
-        # tres con la MISMA forma: `existencia - comprometida - salida_sin_conf`
-        # (`routes/siesa.py::debug_stock_bodega`,
-        # `routes/siesa.py::debug_traza_ref`,
-        # `services/traslado_service.py::get_stock_disponible`). Este es el
-        # cuarto y el único que COMPRA — usa esa política, no una cuarta
-        # variante (Regla 0: «la tercera implementación divergirá y esa vez
-        # nadie estará comparando»).
-        #
-        # Se citan por NOMBRE DE FUNCIÓN y no por línea a propósito: las tres
-        # citas anteriores —`siesa.py:1472`, `siesa.py:1616`,
-        # `traslado_service.py:1436`— se corrieron las tres cuando un vecino
-        # editó esos archivos, y una cita rota manda a leer código que no tiene
-        # nada que ver. Un nombre de función sobrevive a que le agreguen
-        # líneas encima.
-        #
-        # ── POR QUÉ HAY FILTRO DE BODEGA, Y POR QUÉ ES LISTA BLANCA ─────────
-        #
-        # El comentario que estaba acá decía «se suman sobre TODAS las
-        # bodegas», y era cierto cuando «todas» eran las 10 que el WMS opera.
-        # Después `inventario_siesa_service` agregó `AV1` (averías) y `TRA1`
-        # (tránsito) al universo que se le pide a Siesa, y esas filas se
-        # PERSISTEN en `stock_siesa` igual que las de un punto de venta. Esta
-        # consulta no cambió: cambió lo que hay en la tabla.
-        #
-        # Medido sobre un SKU real:
-        #     filas persistidas: {'NB1': 100.0, 'AV1': 40.0, 'TRA1': 25.0}
-        #     stock_actual que veía el Armador: 165.0   ·   vendible: 100
-        #
-        # Lo que costaba: `posicion` se infla, `deficit = max(0, s_objetivo -
-        # posicion)` sale corto exactamente en las averías más el tránsito, y
-        # ese déficit es el número que ARMA EL CONTENEDOR. Irreversible 120
-        # días (Regla 0): el error no se corrige el mes que viene, se descubre
-        # agotado cuatro meses después. Y es lo peor que puede inflar un
-        # número de compra —mercancía que no se va a vender nunca: una avería
-        # está en AV1 justo porque salió del universo vendible—.
-        #
-        # Era además la única de tres respuestas que las incluía:
-        # `dashboard_service` declara AVERIAS zona no vendible y
-        # `picking_service` la excluye del FEFO. El único de los tres que
-        # compra era el que las sumaba.
-        #
-        # Agravante: `stock_siesa` es acumulativa (upsert sin borrado).
-        # Persistidas una vez, `_leer_stock_de_bd` las devuelve para siempre
-        # aunque la API deje de reportarlas.
-        #
-        # LISTA BLANCA, no negra: `notin_(['AV1','TRA1'])` deja pasar `BC99`
-        # (Bodega Contratación), las «DUPLICADA» `FD1`/`ND1`/`PD1`, y sobre
-        # todo la bodega de servicio que alguien agregue mañana — el defecto
-        # que se está arreglando es exactamente eso, una bodega nueva que entró
-        # a la tabla sin que nadie tocara esta línea. Con lista blanca, una
-        # bodega nueva es invisible hasta que se declara operada, que es el
-        # lado conservador.
-        #
-        # Y es `_BODEGAS_PV`, la constante que ya existe, no una lista nueva:
-        # tres `_BODEGA_CO_MAP` con 10, 9 y 8 entradas ya costaron un traslado
-        # rechazado por Siesa. Su nombre dice «PV» pero su contenido es
-        # «bodegas que el WMS OPERA» (incluye NS2, que es parqueo y no punto de
-        # venta), y `tests/test_bodegas_coherentes.py` la vigila contra el
-        # maestro. `_BODEGAS_SERVICIO` vive aparte a propósito, y por eso
-        # excluirla es no incluirla, sin escribir sus códigos acá.
-        #
-        # Las CUATRO columnas salen de la misma consulta filtrada: dejar fuera
-        # la existencia de AV1 y adentro su comprometido descontaría contra un
-        # stock que no está, y la posición saldría por debajo de la real.
-        from app.models.stock_siesa import StockSiesa
-        from app.services.inventario_siesa_service import _BODEGAS_PV
-        _filas_stock = (
-            db.session.query(
-                StockSiesa.codigo_siesa,
-                func.sum(StockSiesa.existencia),
-                func.sum(StockSiesa.comprometido),
-                func.sum(StockSiesa.salida_sin_conf),
-                # La foto más vieja que entra en esta suma.
-                #
-                # `stock_siesa` es acumulativa y no guarda marca de corrida: una
-                # bodega que dejó de refrescarse conserva sus filas para siempre
-                # y **suma igual** que una fresca. Antes de esto, una posición
-                # calculada con la foto de hace tres semanas de PC1 era
-                # indistinguible de una calculada con la de hoy.
-                #
-                # No se filtra por antigüedad ni se descarta nada: descartar
-                # stock sube el déficit y el contenedor es irreversible 120
-                # días. Se **declara** y decide el comprador (Regla 0).
-                func.min(StockSiesa.updated_at),
-            )
-            .filter(StockSiesa.bodega.in_(_BODEGAS_PV))
-            .group_by(StockSiesa.codigo_siesa)
-            .all()
-        )
-        stock = {f[0]: float(f[1] or 0) for f in _filas_stock}
-        comprometido = {f[0]: float(f[2] or 0) for f in _filas_stock}
-        salida_sin_conf = {f[0]: float(f[3] or 0) for f in _filas_stock}
-        frescura = {f[0]: f[4] for f in _filas_stock}
+        # Suma solo las bodegas OPERADAS (`_BODEGAS_PV`, lista blanca): `AV1`
+        # (averías) y `TRA1` (tránsito) se persisten en `stock_siesa` igual que
+        # un punto de venta, y sumarlas inflaba la posición y achicaba el
+        # déficit que ARMA EL CONTENEDOR. Ver el comentario de esa función y
+        # CLAUDE.md «Las tres listas de bodegas».
+        posiciones, info_en_camino = posicion_inventario()
+        stock = {r: d['existencia'] for r, d in posiciones.items()}
+        comprometido = {r: d['comprometido'] for r, d in posiciones.items()}
+        salida_sin_conf = {r: d['salida_sin_conf'] for r, d in posiciones.items()}
+        frescura = {r: d['frescura'] for r, d in posiciones.items()}
+        transito = {r: d['en_camino'] for r, d in posiciones.items()}
 
         # Origen Y marca. **Eran dos defectos apilados.**
         #
@@ -321,17 +447,26 @@ class ArmadorService:
         # Delta agregado — el "backtest" posible del ROP: no se puede certificar
         # una fórmula contra la historia, pero sí cuantificar el salto.
         delta = {'skus': 0, 'ss_antes': 0.0, 'ss_despues': 0.0,
-                 'topados_por_cobertura': 0, 'censurados': 0}
+                 'topados_por_cobertura': 0, 'censurados': 0,
+                 'sin_venta_reciente': 0}
 
         for ref, dem in demanda_por_sku.items():
             ref = (ref or '').strip()
             if not ref:
                 continue
 
-            d_avg = dem['d_avg']        # u/día sobre días CON stock
-            sigma_d = dem['sigma_d']    # u/día
-            if d_avg <= 0:
+            d_hist = dem['d_avg']        # u/día sobre días CON stock
+            if d_hist <= 0:
                 continue
+            # DESCONTINUADO (D14): sin venta en el tramo reciente con el estante
+            # lleno —y con su propia tasa se esperaban ventas— NO se repone. Se
+            # publica con d = 0 y dicho, en vez de reponer con la tasa de hace
+            # seis meses.
+            parado = bool(dem.get('sin_venta_reciente'))
+            d_avg = 0.0 if parado else d_hist
+            sigma_d = 0.0 if parado else dem['sigma_d']    # u/día
+            if parado:
+                delta['sin_venta_reciente'] += 1
 
             origen = (productos_origen.get(ref) or '').upper()
             marca = (productos_marca.get(ref) or '').upper()
@@ -365,8 +500,8 @@ class ArmadorService:
             posicion = (stock_actual + qty_transito
                         - qty_comprometido - qty_salida_sin_conf)
 
-            lt = lt_china if es_china else LT_NACIONAL_DIAS
-            sigma_lt = sigma_lt_china if es_china else SIGMA_LT_NACIONAL
+            lt = lt_china if es_china else lt_nacional
+            sigma_lt = sigma_lt_china if es_china else sigma_lt_nacional
             r = R_CHINA_DIAS if es_china else R_NACIONAL_DIAS
 
             s_ltd = sigma_ltd(lt, sigma_d, d_avg, sigma_lt, r_dias=0)
@@ -386,6 +521,14 @@ class ArmadorService:
             fila = {
                 'referencia': ref,
                 'd_avg_diaria': round(d_avg, 4),
+                'd_avg_historica': round(d_hist, 4),
+                'sin_venta_reciente': parado,
+                'motivo_d_cero': (
+                    f"Sin venta en los últimos {dem.get('dias_sin_venta_mirados')} días "
+                    f"con stock {dem.get('dias_stock_recientes')} de ellos: se "
+                    f"esperaban {d_hist * (dem.get('dias_stock_recientes') or 0):.0f} "
+                    f"ventas a su tasa histórica. No se repone; revisar si se descontinuó."
+                ) if parado else None,
                 'sigma_d_diaria': round(sigma_d, 4),
                 'rop': round(rop),
                 'safety_stock': round(safety_stock),
@@ -409,6 +552,7 @@ class ArmadorService:
                     (datetime.utcnow() - _frescura).days
                     if _frescura is not None else None),
                 'cobertura_dias': round(cobertura, 1),
+                'en_transito': round(qty_transito),
                 'lt_dias': lt,
                 'sigma_lt': sigma_lt,
                 # Procedencia: el comprador tiene que poder auditar el número
@@ -424,22 +568,20 @@ class ArmadorService:
                 s_ltr = sigma_ltd(lt, sigma_d, d_avg, sigma_lt, r_dias=r)
                 s_objetivo = d_avg * (lt + r) + z * s_ltr
 
-                # Baranda dura: nada por encima de MAX_COBERTURA_RELLENO_DIAS.
-                tope = d_avg * MAX_COBERTURA_RELLENO_DIAS
-                topado = s_objetivo > tope
-                if topado:
-                    s_objetivo = tope
-                    delta['topados_por_cobertura'] += 1
+                # SIN TOPE (D3). La baranda anti-500-días es del RELLENO. Acá
+                # topaba el S de la política (R, S) a 180 días de demanda, por
+                # debajo de LT + R = 195: cortaba el objetivo de TODO SKU China
+                # y el servicio caía del 95% pedido al 16,7%.
 
                 fila.update({
                     'r_dias': r,
                     'sigma_ltr': round(s_ltr, 2),
                     's_objetivo': round(s_objetivo),
-                    'en_transito': round(qty_transito),
+                    'cobertura_objetivo_dias': (
+                        round(s_objetivo / d_avg, 1) if d_avg > 0 else None),
                     # `posicion` ya viene en la fila base — no se repite acá
                     # para que no haya dos sitios donde cambiarla.
                     'deficit': round(max(0, s_objetivo - posicion)),
-                    'topado_por_cobertura': topado,
                 })
                 resultados_chi.append(fila)
             else:
@@ -486,11 +628,18 @@ class ArmadorService:
             'nivel_servicio': nivel_servicio,
             'z_score': round(z, 3),
             'insumo_origen': _insumo,
+            # EL TÉRMINO EN TRÁNSITO, declarado. Sin fuente con dato vale 0 y
+            # eso se dice: «viene 0» y «no sé qué viene» empujan la compra al
+            # mismo lado, y solo el segundo es cierto hoy.
+            'insumo_en_camino': info_en_camino,
+            'lead_time': {'nacional': lt_nac, 'china': lt_chi},
             # Procedencia del cálculo — sin esto el número no es auditable
             'estimador_sigma_d': ESTIMADOR_SIGMA_D,
             'formula': 'sigma_LTD = sqrt((LT+R)*sigma_d^2 + d^2*sigma_LT^2)  §M0.4',
             'unidad_canonica': 'dias',
+            # Solo el RELLENO: el S objetivo del déficit ya no se topa (D3).
             'cobertura_max_dias': MAX_COBERTURA_RELLENO_DIAS,
+            'cobertura_max_aplica_a': 'RELLENO',
             # Reporte de delta: cuánto salta el colchón al corregir la fórmula
             'delta_vs_formula_anterior': {
                 'skus': delta['skus'],
@@ -499,6 +648,7 @@ class ArmadorService:
                 'multiplicador': round(mult, 2),
                 'topados_por_cobertura': delta['topados_por_cobertura'],
                 'skus_censurados': delta['censurados'],
+                'skus_sin_venta_reciente': delta['sin_venta_reciente'],
                 'aviso_censura': (
                     f"{delta['censurados']} SKU(s) sin StockDiario: su demanda esta "
                     f"CENSURADA (subestima). Correr POST /api/kardex/reconstruir."
@@ -508,8 +658,9 @@ class ArmadorService:
                          'sobre la exposición. Subestimaba el colchón.'),
             },
             'nacional': {
-                'lt_dias': LT_NACIONAL_DIAS,
-                'sigma_lt': SIGMA_LT_NACIONAL,
+                'lt_dias': lt_nacional,
+                'sigma_lt': sigma_lt_nacional,
+                'lt_fuente': lt_nac['fuente'],
                 'total': len(resultados_nac),
                 'bajo_rop': sum(1 for r in resultados_nac if r.get('bajo_rop')),
                 'items': resultados_nac,
@@ -517,7 +668,7 @@ class ArmadorService:
             'china': {
                 'lt_dias': lt_china,
                 'sigma_lt': sigma_lt_china,
-                'sigma_lt_fuente': sigma_lt_info['fuente'],
+                'sigma_lt_fuente': lt_chi['fuente'],
                 'r_dias': R_CHINA_DIAS,
                 'total': len(resultados_chi),
                 'con_deficit': sum(1 for r in resultados_chi if r['deficit'] > 0),
@@ -599,10 +750,7 @@ class ArmadorService:
 
             u_por_caja = ficha.unidades_por_caja or 1
             moq_cajas = ficha.moq_cajas or 1
-            cajas_necesarias = math.ceil(deficit_u / u_por_caja)
-            # Redondear a MOQ
-            if cajas_necesarias % moq_cajas != 0:
-                cajas_necesarias = math.ceil(cajas_necesarias / moq_cajas) * moq_cajas
+            cajas_necesarias = cajas_a_pedir(deficit_u, u_por_caja, moq_cajas)
 
             cbm = cajas_necesarias * float(ficha.cbm_por_caja or 0)
             peso = cajas_necesarias * float(ficha.peso_kg_por_caja or 0)
@@ -612,6 +760,9 @@ class ArmadorService:
                 'referencia': ref,
                 'deficit_unidades': deficit_u,
                 'cajas': cajas_necesarias,
+                'unidades': cajas_necesarias * u_por_caja,
+                'moq_cajas': moq_cajas,
+                'moq_interpretacion': MOQ_INTERPRETACION,
                 'cbm': round(cbm, 3),
                 'peso_kg': round(peso, 1),
                 'costo_fob_usd': round(costo_fob, 2),
@@ -747,25 +898,49 @@ class ArmadorService:
                 cbm_acum += item['cbm']
                 peso_acum += item['peso_kg']
 
-        # Restricción de caja (presupuesto tesorería)
-        valor_fob_total = sum(i['costo_fob_usd'] for i in contenedor_items)
-        factor_nac = 1.45  # estimado nacionalización (flete+arancel+IVA)
-        valor_nac_estimado = valor_fob_total * factor_nac * 4200  # USD→COP aprox
+        # Restricción de caja (presupuesto tesorería). La moneda sale de UNA
+        # función (`costo_service.a_cop`): antes eran `1.45 * 4200` escritos
+        # a mano acá (D4).
+        from app.services.costo_service import a_cop, trm_cop_por_usd, factor_nacionalizacion
+
+        def _valor_cop(items_):
+            fob = sum(i['costo_fob_usd'] for i in items_)
+            cop, _det = a_cop(fob, 'USD', es_fob=True)
+            return fob, cop
+
+        valor_fob_total, valor_nac_estimado = _valor_cop(contenedor_items)
 
         recorte_sugerido = []
+        presupuesto_insuficiente = False
         if presupuesto_cop and valor_nac_estimado > presupuesto_cop:
-            # Recortar relleno en orden inverso de ranking
-            rellenos = [i for i in contenedor_items if i['tipo'] == 'RELLENO']
-            rellenos.reverse()
-            for item in rellenos:
+            # 1. Recortar RELLENO en orden inverso de ranking.
+            # 2. Si aun así no alcanza, el DÉFICIT: del menos urgente (mayor
+            #    cobertura) al más urgente. Antes el recorte paraba en el
+            #    relleno y devolvía un contenedor que costaba más que el
+            #    presupuesto sin decirlo (D13). Ahora se recorta EXPLÍCITO, con
+            #    motivo por ítem, y se declara que el presupuesto no alcanza
+            #    para cubrir el déficit: esa conversación es de tesorería, no
+            #    del algoritmo.
+            orden = (list(reversed([i for i in contenedor_items if i['tipo'] == 'RELLENO']))
+                     + sorted([i for i in contenedor_items if i['tipo'] == 'DEFICIT'],
+                              key=lambda x: -x['cobertura_dias']))
+            for item in orden:
                 if valor_nac_estimado <= presupuesto_cop:
                     break
                 contenedor_items.remove(item)
-                recorte_sugerido.append(item)
+                if item['tipo'] == 'DEFICIT':
+                    presupuesto_insuficiente = True
+                recorte_sugerido.append(dict(item, motivo_recorte=(
+                    'PRESUPUESTO_DEFICIT' if item['tipo'] == 'DEFICIT'
+                    else 'PRESUPUESTO_RELLENO')))
                 cbm_acum -= item['cbm']
                 peso_acum -= item['peso_kg']
-                valor_fob_total -= item['costo_fob_usd']
-                valor_nac_estimado = valor_fob_total * factor_nac * 4200
+                valor_fob_total, valor_nac_estimado = _valor_cop(contenedor_items)
+
+        deficit_sin_cubrir = [
+            {'referencia': i['referencia'], 'deficit_unidades': i['deficit_unidades'],
+             'costo_fob_usd': i['costo_fob_usd']}
+            for i in recorte_sugerido if i['tipo'] == 'DEFICIT']
 
         # Ventana de llegada
         eta_min = _dia_operativo() + timedelta(days=int(lt_china - sigma_lt))
@@ -797,8 +972,13 @@ class ArmadorService:
             # sobre cotizaciones vigentes.
             'margen_cobertura': margen_cobertura,
             'recorte_presupuesto': recorte_sugerido,
+            'presupuesto_insuficiente': presupuesto_insuficiente,
+            'deficit_sin_cubrir_por_presupuesto': deficit_sin_cubrir,
             'valor_fob_usd': round(valor_fob_total, 2),
             'valor_nacionalizado_cop_estimado': round(valor_nac_estimado),
+            'conversion_moneda': {'trm': trm_cop_por_usd(),
+                                  'factor_nacionalizacion': factor_nacionalizacion()},
+            'moq_interpretacion': MOQ_INTERPRETACION,
             'presupuesto_cop': presupuesto_cop,
             'ventana_llegada': {
                 'desde': eta_min.isoformat(),

@@ -144,24 +144,20 @@ class TestNingunSitioVuelveAContarFilas:
             f'{sorted(set(crudos))}. La tabla es única en (referencia, bodega, '
             f'fecha): agrupando por referencia eso cuenta bodega-día.')
 
-    def test_las_lecturas_en_python_deduplican(self):
-        """Los dos sitios que cuentan en Python, no en SQL, necesitan
-        `.distinct()` — sin él suman una vez por bodega."""
-        import ast
-        import pathlib
+    def test_el_denominador_unico_cuenta_dias_no_bodega_dia(self, db):
+        """Desde 2026-09-24 hay UNA lectura de `StockDiario` para contar días
+        (`intervalos_con_stock`, con su trinquete de clase en
+        tests/test_demanda_una_funcion.py). Reemplaza al guard de `.distinct()`:
+        esa función une los intervalos de las bodegas, no los suma.
+        """
+        from app.services.kardex_service import dias_en, intervalos_con_stock
+        from app.utils.fecha import dia_operativo
 
-        sin_distinct = []
-        for ruta in self.ARCHIVOS:
-            arbol = ast.parse(pathlib.Path(ruta).read_text())
-            for n in ast.walk(arbol):
-                if not (isinstance(n, ast.Call)
-                        and getattr(n.func, 'attr', None) == 'all'):
-                    continue
-                cadena = ast.dump(n)
-                if 'StockDiario' not in cadena or 'fecha' not in cadena:
-                    continue
-                if "attr='distinct'" not in cadena:
-                    sin_distinct.append(f'{ruta}:{n.lineno}')
-        assert not sin_distinct, (
-            f'lee (referencia, fecha) de StockDiario sin `.distinct()`: '
-            f'{sin_distinct}. Un SKU con stock el mismo día en 3 bodegas suma 3.')
+        hoy = dia_operativo()
+        desde = hoy - timedelta(days=99)
+        _sembrar(db, 'SKU-UNION', ['B1', 'B2', 'B3'], dias=100, desde=desde)
+        tramos = intervalos_con_stock(desde, hoy, 'red')
+        assert dias_en(tramos['SKU-UNION'], desde, hoy) == 100
+        por_bodega = intervalos_con_stock(desde, hoy, 'bodega')
+        assert all(dias_en(por_bodega[f'SKU-UNION|B{i}'], desde, hoy) == 100
+                   for i in range(1, 4))
