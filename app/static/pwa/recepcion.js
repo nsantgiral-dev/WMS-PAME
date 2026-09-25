@@ -1589,7 +1589,7 @@ async function cargarPendientesDeRuta() {
 
     cont.innerHTML = `
       <div style="font-size:var(--fs-xs);font-weight:600;color:var(--acento-tx);padding:4px 0 8px;border-bottom:1px solid var(--brd);margin-bottom:10px;">
-        🔵 ${esc(pendientes.length)} DEVOLUCIÓN${pendientes.length !== 1 ? 'ES' : ''} DE RUTA SIN CONTAR
+        🔵 ${esc(pendientes.length)} ${pendientes.length !== 1 ? 'DEVOLUCIONES' : 'DEVOLUCIÓN'} DE RUTA SIN CONTAR
       </div>` +
       pendientes.map(d => `
         <div class="rec-card" style="margin-bottom:8px;cursor:pointer;" onclick="abrirPendienteDeRuta(${esc(d.id)})">

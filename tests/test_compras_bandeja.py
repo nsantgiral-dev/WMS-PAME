@@ -523,3 +523,55 @@ class TestLaBandejaNoCalcula:
     ])
     def test_no_marca_lo_sano(self, src):
         assert escanear_calculos(src) == [], src
+
+
+class TestLoQueSoloAdministracionPuedeHacer:
+    """E2E 2026-09-25: la bandeja le pedía al rol compras encender variables de
+    Railway. A quien no es admin se le dice «pídale a administración…»."""
+
+    def test_quien_no_es_admin_no_lee_variables(self):
+        from app.services.compras_bandeja import para_quien_mira
+        r = {'falta': [{'titulo': 'x', 'que_hacer': 'En Railway: KARDEX_AUTO=true',
+                        'que_hacer_otros': 'Pídale a administración que la encienda.'}],
+             'confianza': {'renglones': [{'que_hacer': 'Cargar fichas.'}]}}
+        otros = para_quien_mira(r, es_admin=False)
+        assert otros['falta'][0]['que_hacer'].startswith('Pídale a administración')
+        assert 'que_hacer_otros' not in otros['falta'][0]
+        assert otros['confianza']['renglones'][0]['que_hacer'] == 'Cargar fichas.'
+        admin = para_quien_mira(r, es_admin=True)
+        assert 'KARDEX_AUTO' in admin['falta'][0]['que_hacer']
+
+    def test_toda_instruccion_de_variables_trae_su_version_para_otros(self):
+        """Por AST: en compras_bandeja, un `que_hacer` que nombra una variable
+        del servidor (MAYÚSCULAS_CON_GUIONES) va con su `que_hacer_otros`."""
+        import ast
+        import re
+        from pathlib import Path
+        f = Path(__file__).resolve().parents[1] / 'app' / 'services' / 'compras_bandeja.py'
+        variable = re.compile(r'\b[A-Z]{2,}(?:_[A-Z0-9]+)+\b')
+        faltan = []
+        for n in ast.walk(ast.parse(f.read_text(encoding='utf-8'))):
+            if not isinstance(n, ast.Dict):
+                continue
+            claves = [k.value for k in n.keys if isinstance(k, ast.Constant)]
+            for k, v in zip(n.keys, n.values):
+                if isinstance(k, ast.Constant) and k.value == 'que_hacer':
+                    textos = [c.value for c in ast.walk(v) if isinstance(c, ast.Constant)
+                              and isinstance(c.value, str)]
+                    if any(variable.search(t) for t in textos) and 'que_hacer_otros' not in claves:
+                        faltan.append(n.lineno)
+        assert not faltan, f'instrucciones de administración sin versión para otros: líneas {faltan}'
+
+    def test_la_ruta_la_aplica_por_rol(self, app, client, db, almacen):
+        from flask_jwt_extended import create_access_token
+        from app.models.usuario import Usuario
+        u = Usuario(nombre='Comp', email='comp-rol@t.co', rol='compras', password_hash='x',
+                    almacen_id=almacen.id, activo=True)
+        db.session.add(u)
+        db.session.commit()
+        with app.app_context():
+            tok = create_access_token(identity=str(u.id))
+        d = client.get('/api/compras/bandeja/confianza', headers={'Authorization': f'Bearer {tok}'}).get_json()
+        texto = str(d)
+        assert 'que_hacer_otros' not in texto
+        assert 'KARDEX_AUTO' not in texto and 'COMPRAS_OC_SYNC' not in texto

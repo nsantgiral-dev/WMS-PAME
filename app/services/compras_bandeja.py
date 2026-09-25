@@ -155,7 +155,9 @@ def confianza() -> dict:
                               'titulo': 'Órdenes de compra nunca sincronizadas: «ya pedido» vale 0 porque no se sabe',
                               'detalle': f.get('nota') or f.get('error_lectura'),
                               'minutos': None,
-                              'que_hacer': 'Sincronizar en 🧾 Fuentes (y encender COMPRAS_OC_SYNC en el worker).'})
+                              'que_hacer': 'Sincronizar en 🧾 Fuentes (y encender COMPRAS_OC_SYNC en el worker).',
+                              'que_hacer_otros': ('Sincronizar en 🧾 Fuentes. Para que se sincronice sola, '
+                                                  'pídale a administración que la encienda.')})
     except Exception as e:                                    # noqa: BLE001
         renglones.append({'clave': 'ocs', 'nivel': 'aviso',
                           'titulo': 'No se pudo leer el estado de las órdenes de compra',
@@ -199,7 +201,10 @@ def confianza() -> dict:
                         f"({TEXTO_FUENTE_LT.get(lt.get('fuente'), 'sin fuente')}) · "
                         f"se compra cada {ciclo.get('dias')} días"),
             'que_hacer': ('Fijar ROP_LT_NACIONAL_DIAS y ROP_CICLO_NACIONAL_DIAS, o sincronizar '
-                          'órdenes cumplidas para medirlo.') if supuesto else None})
+                          'órdenes cumplidas para medirlo.') if supuesto else None,
+            'que_hacer_otros': ('Pídale a administración que fije el tiempo de entrega y el ciclo '
+                                'de compra nacional, o sincronice órdenes cumplidas en 🧾 Fuentes '
+                                'para medirlo.') if supuesto else None})
     except Exception as e:                                    # noqa: BLE001
         renglones.append({'clave': 'supuestos', 'nivel': 'aviso',
                           'titulo': 'No se pudo leer el tiempo de entrega',
@@ -224,8 +229,27 @@ def _falta_kardex(salud):
     falta.append({'titulo': 'Nada descarga el kardex solo mientras KARDEX_AUTO esté apagado.',
                   'que_hacer': 'En Siesa: dar permiso a la consulta del kardex (hoy 401 en QA). '
                                'En Railway: KARDEX_AUTO=true en el worker con HEAVY_SCHEDULERS=true. '
-                               'Después: Inventario › Datos › Descargar y Reconstruir stock diario.'})
+                               'Después: Inventario › Datos › Descargar y Reconstruir stock diario.',
+                  'que_hacer_otros': 'Pídale a administración que habilite la descarga automática '
+                                     'del kardex (el permiso en Siesa y el encendido en el servidor).'})
     return falta
+
+
+def para_quien_mira(respuesta, es_admin: bool):
+    """Las instrucciones que solo administración puede cumplir (variables del
+    servidor, permisos en Siesa) se le dicen así a quien no lo es (e2e
+    2026-09-25: la bandeja le pedía al rol compras «KARDEX_AUTO=true en el
+    worker»). Donde hay `que_hacer_otros`, quien no es admin lee ese; la clave
+    no viaja. Recorre la respuesta entera: dict y listas."""
+    if isinstance(respuesta, list):
+        return [para_quien_mira(x, es_admin) for x in respuesta]
+    if not isinstance(respuesta, dict):
+        return respuesta
+    salida = {k: para_quien_mira(v, es_admin) for k, v in respuesta.items()
+              if k != 'que_hacer_otros'}
+    if 'que_hacer_otros' in respuesta and not es_admin:
+        salida['que_hacer'] = respuesta['que_hacer_otros']
+    return salida
 
 
 def _porque(fila, pedido, nivel_servicio):

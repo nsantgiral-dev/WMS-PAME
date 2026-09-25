@@ -1115,6 +1115,16 @@ def _huecos(m: Mundo, conductor_id, dia, eventos):
 # Señales (nivel CONDUCTOR). Las de vehículo son de la bandeja del encargado.
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _cercania_de(dist) -> str:
+    """Cuán juntas estaban las confirmaciones, en palabras. «A menos de 0 m» no
+    se dice (e2e 2026-09-25): bajo un metro es el mismo punto."""
+    if dist is None:
+        return ''
+    if dist < 1:
+        return ', todas desde el mismo punto'
+    return f', todas a no más de {round(dist)} m una de otra'
+
+
 def _senal(clave, titulo, texto, evidencia, comparacion, confianza='alta', nivel='revisar'):
     return {'clave': clave, 'titulo': titulo, 'nivel': nivel, 'texto': texto,
             'evidencia': evidencia, 'comparacion': comparacion, 'confianza': confianza,
@@ -1311,7 +1321,7 @@ def _s_rafaga(ctx):
                 (f'Confirmó {len(grupo)} paradas en '
                  f'{max(1, round(_minutos(grupo[0].ts, grupo[-1].ts)))} min según la hora '
                  f'de su teléfono'
-                 + (f', todas a menos de {round(dist)} m una de otra' if dist is not None else '')
+                 + _cercania_de(dist)
                  + '. ¿Las confirmó en la puerta de cada cliente?'),
                 [{'hora': _hora_local(e.ts), 'hora_gps': e.detalle.get('gps_hora'),
                   'cliente': e.detalle.get('cliente'), 'estado': e.detalle.get('estado'),

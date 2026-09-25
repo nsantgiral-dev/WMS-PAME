@@ -26,8 +26,11 @@ _SIN_PERMISO = 'La pantalla de compras es de admin, jefe de almacén, gerente o 
 
 
 def _responder(nombre, fn):
+    from app.routes._auth_helpers import Roles
+    from app.services import compras_bandeja as cb
+    u = _es_compras()
     try:
-        return jsonify(fn()), 200
+        return jsonify(cb.para_quien_mira(fn(), bool(u) and u.rol == Roles.ADMIN)), 200
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
     except Exception as e:                                    # noqa: BLE001
