@@ -342,8 +342,10 @@ def faltante_de_retorno(devolucion) -> Optional[dict]:
     if devolucion is None or not devolucion.recaudo_entrega_id:
         return None
     # FALTANTE_TOTAL (m045devol) es una devolución contada en cero: el caso más
-    # grande de faltante, no uno que se saque de la medición.
-    if devolucion.estado not in ('CONFIRMADA', 'FALTANTE_TOTAL'):
+    # grande de faltante, no uno que se saque de la medición. «Contada» tiene
+    # UNA definición: `EstadoDevolucionCliente.CONTADAS`.
+    from app.models.devolucion_cliente import EstadoDevolucionCliente as _E
+    if devolucion.estado not in _E.CONTADAS:
         return None
     lineas, faltante, sobrante, medidas = [], 0.0, 0.0, 0
 
@@ -384,14 +386,18 @@ def faltante_de_retorno(devolucion) -> Optional[dict]:
 
 def faltantes_de_retorno_de_recaudos(recaudo_ids) -> dict:
     """`{recaudo_id: faltante_de_retorno(...)}` solo de los que tienen algo."""
-    from app.models.devolucion_cliente import DevolucionCliente
+    from app.models.devolucion_cliente import DevolucionCliente, EstadoDevolucionCliente as _E
     ids = [i for i in (recaudo_ids or []) if i]
     if not ids:
         return {}
     salida = {}
+    # `CONTADAS`, no `'CONFIRMADA'`: una devolución contada en cero
+    # (FALTANTE_TOTAL) es el faltante más grande, y este lote es el que leen
+    # Liquidación y 💸 Fugas. Filtrando solo CONFIRMADA quedaba invisible donde
+    # se liquida (P1-13, e2e 2026-09-25: 8 und, $152.320).
     for dev in (DevolucionCliente.query
                 .filter(DevolucionCliente.recaudo_entrega_id.in_(ids),
-                        DevolucionCliente.estado == 'CONFIRMADA').all()):
+                        DevolucionCliente.estado.in_(_E.CONTADAS)).all()):
         f = faltante_de_retorno(dev)
         if f and (f['faltante_unidades'] or f['sobrante_unidades']):
             salida[dev.recaudo_entrega_id] = f

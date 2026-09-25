@@ -341,7 +341,7 @@ class TestRechazosEnRuta:
 
     def test_total_y_parcial_valorizados_sin_precio_aparte(self, ruta):
         _, f = _fugas()
-        r = f['rechazos_ruta']
+        r = f['devoluciones_ruta']
         assert r['casos'] == 4
         assert r['pesos'] == 52000.0, 'rechazo 50.000 + parcial 2 × 1.000'
         assert r['sin_valor']['casos'] == 2
@@ -353,7 +353,7 @@ class TestRechazosEnRuta:
 
     def test_cada_caso_trae_su_nota_credito_y_su_clave(self, ruta):
         d, h = _rango()
-        det = _svc().detalle_fuga('rechazos_ruta', d, h)
+        det = _svc().detalle_fuga('devoluciones_ruta', d, h)
         assert all(c['detalle']['nota_credito'] for c in det['casos'])
         assert any(c['pedido_clave'] for c in det['casos'])
 
@@ -597,7 +597,7 @@ class TestCeroSiesa:
         monkeypatch.setattr(ConnektaGateway, '_post', _prohibido)
         _agotado(db, almacen, actores['op'], precio=100)
         res, _ = _fugas()
-        assert len(res["fugas"]) == 9
+        assert len(res["fugas"]) == 10
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -615,7 +615,7 @@ class TestEndpoint:
         r = client.get('/api/analitica/fugas', headers=_tok(app, actores[rol]))
         assert r.status_code == 200, r.get_json()
         d = r.get_json()
-        assert [f['clave'] for f in d['fugas']] and len(d["fugas"]) == 9
+        assert [f['clave'] for f in d['fugas']] and len(d["fugas"]) == 10
         assert set(d) == {'meta', 'resumen', 'fugas'}
         hoy = _hoy()
         assert d['meta']['hasta'] == hoy.isoformat()

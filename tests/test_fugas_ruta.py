@@ -541,12 +541,10 @@ class TestRecepcionNoPisaLoDeclarado:
         lineas, _ = dr._declaracion(rec, tarea)
         assert lineas[0]['cantidad_declarada'] == 6
 
-    def test_liquidar_completo_guarda_lo_del_conductor_antes_de_corregir(self):
-        texto = (_APP / 'routes' / 'rutas.py').read_text(encoding='utf-8')
-        i = texto.find("it['cantidad_devuelta'] = cant_devuelta")
-        assert i != -1
-        antes = texto[max(0, i - 600):i]
-        assert "setdefault('cantidad_devuelta_conductor'" in antes
+    # `test_liquidar_completo_guarda_lo_del_conductor_antes_de_corregir` se
+    # retiró el 2026-09-25 junto con `/liquidar-completo` (sin pantalla,
+    # declarado en DEUDA_SIN_UI; ver `test_permiso_compuesto.py`): la
+    # corrección del líder que protegía ya no tiene puerta.
 
 
 # ═════════════════════════════════════════════════════════════════════════════

@@ -3215,6 +3215,21 @@ async function condVolverAParadas(recargar = false) {
 async function condCerrarRuta() {
   if (!_COND_RUTA_ACTIVA) return;
   if (!confirm('¿Confirmar cierre de ruta? Ya no podrás agregar más confirmaciones de parada.')) return;
+  // Con paradas de esta ruta todavía en la cola, primero salen ellas: una
+  // ruta cerrada con una parada sin confirmar quedaba sin salida (P1-4).
+  if (navigator.onLine) {
+    const rutaId = _COND_RUTA_ACTIVA.id;
+    const pendientes = async () => (await _condDB.queue())
+      .filter(x => x.tipo === 'confirmar' && x.rutaId === rutaId).length;
+    if (await pendientes()) {
+      await condSyncQueue();
+      const quedan = await pendientes();
+      if (quedan) {
+        alerta(`Quedan ${quedan} parada${quedan !== 1 ? 's' : ''} sin enviar. Revíselas antes de cerrar la ruta.`, 'error');
+        return;
+      }
+    }
+  }
   if (!navigator.onLine) {
     await _condDB.enqueue({ tipo: 'cerrar', rutaId: _COND_RUTA_ACTIVA.id, payload: { bultos: [] } });
     await _condActualizarBarras();
@@ -3232,7 +3247,12 @@ async function condCerrarRuta() {
     });
     const d = await r.json();
     if (r.ok) {
-      alerta('Ruta cerrada — ¡Buen trabajo!', 'exito');
+      const faltan = (d.paradas_sin_gestionar || []).length;
+      if (faltan) {
+        alerta(`Ruta cerrada con ${faltan} parada${faltan !== 1 ? 's' : ''} sin confirmar: la oficina las tiene que revisar.`, 'advertencia');
+      } else {
+        alerta('Ruta cerrada — ¡Buen trabajo!', 'exito');
+      }
       _COND_RUTA_ACTIVA = null;
       _COND_PARADAS = [];
       cargarRutasConductor();
@@ -3291,10 +3311,18 @@ async function condSyncQueue() {
   // ya hechas, detrás en la cola, con el conductor sin ningún camino para
   // desbloquearlas salvo que ese primer ítem por fin sincronice solo.
   const fallidos = [];
+  // Rutas con alguna confirmación que no salió en esta vuelta: su cierre
+  // espera (P1-4). Cerrar la ruta con una parada sin confirmar la dejaba sin
+  // salida — el servidor ya no aceptaba la confirmación.
+  const rutasConParadaPendiente = new Set();
   for (let i = 0; i < items.length; i++) {
     const item = items[i];
     if (syncStatus)
       syncStatus.textContent = `🔄 Sincronizando ${i + 1}/${items.length}…`;
+    if (item.tipo !== 'confirmar' && rutasConParadaPendiente.has(item.rutaId)) {
+      fallidos.push({ item, error: 'El cierre de la ruta espera a que salgan sus paradas pendientes' });
+      continue;
+    }
     try {
       const url = item.tipo === 'confirmar'
         ? `${API}/api/rutas/${item.rutaId}/paradas/${item.tareaId}/confirmar`
@@ -3314,6 +3342,7 @@ async function condSyncQueue() {
       await _condDB.dequeue(item.id);
     } catch (e) {
       fallidos.push({ item, error: e.message });
+      if (item.tipo === 'confirmar') rutasConParadaPendiente.add(item.rutaId);
       // No return: sigue con el resto de la cola en vez de trabarla entera.
     }
   }
@@ -3456,7 +3485,7 @@ async function _cargarPlanilla(id) {
             ${esc(p.bultos_entregados)} entregado${p.bultos_entregados !== 1 ? 's' : ''} · ${esc(p.bultos_rechazados)} rechazado${p.bultos_rechazados !== 1 ? 's' : ''}
             ${r && d.estado_financiero === 'LIQUIDADA' ? `<span style="margin-left:8px;">
               ${r.siesa_nc_triggered ? '<span title="Nota crédito enviada" style="color:var(--info-tx);">NC</span>' : ''}
-              ${r.siesa_rc_triggered ? '<span title="Recibo de caja enviado" style="color:var(--ok-tx);margin-left:4px;">RC</span>' : ''}
+              ${p.rc_llego ? '<span title="Recibo de caja en Siesa" style="color:var(--ok-tx);margin-left:4px;">RC</span>' : (r.siesa_rc_triggered ? '<span title="Recibo de caja sin verificar en Siesa" style="color:var(--warn-tx);margin-left:4px;">RC ?</span>' : '')}
               ${r.siesa_dc_triggered ? '<span title="Documento contable enviado" style="color:var(--lila-tx);margin-left:4px;">DC</span>' : ''}
             </span>` : ''}
           </div>
@@ -3496,15 +3525,10 @@ async function _cargarPlanilla(id) {
           </button>
         </div>`;
     } else if (d.estado_financiero === 'LIQUIDADA') {
-      // Detectar si hay documentos Siesa pendientes de enviar
-      const hayPendientesSiesa = (d.paradas || []).some(p => {
-        const r = p.recaudo;
-        if (!r) return false;
-        if (r.estado_entrega === 'RECHAZADO' && !r.siesa_nc_triggered) return true;
-        if (r.estado_entrega === 'PARCIAL' && !r.siesa_nc_triggered) return true;
-        if (r.forma_pago && r.forma_pago !== 'CREDITO' && r.forma_pago !== 'EXENTO' && r.estado_entrega !== 'RECHAZADO' && !r.siesa_rc_triggered) return true;
-        return false;
-      });
+      // Qué falta mandar lo dice el servidor (`pendiente_siesa`, de la
+      // política de cobro): una devolución contada en cero no va a tener NC,
+      // y con la regla copiada acá el botón quedaba visible para siempre.
+      const hayPendientesSiesa = (d.paradas || []).some(p => (p.pendiente_siesa || []).length > 0);
       if (hayPendientesSiesa) {
         html += `
           <div style="position:sticky;bottom:0;padding-top:12px;background:var(--bg,#0a0a0a);">
@@ -3519,6 +3543,20 @@ async function _cargarPlanilla(id) {
         <div style="background:var(--warn-bg);border:1px solid var(--warn-brd);border-radius:10px;padding:12px;margin-top:8px;text-align:center;color:var(--warn-tx);font-size:var(--fs-sm);">
           Faltan ${esc(d.sin_gestionar)} parada${d.sin_gestionar !== 1 ? 's' : ''} por gestionar
         </div>`;
+      // Ruta ya cerrada con paradas sin gestionar: la salida que no tenía
+      // (P1-4). Lo que falta se da por rechazado con motivo (FORZAR); una
+      // confirmación que llegue después por la cola del conductor entra sola.
+      if (ruta.estado === 'ENTREGADA') {
+        html += `
+        <div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:6px;text-align:center;">
+          La ruta ya se cerró. Si el conductor no va a enviar esas paradas, cierre lo que falta:
+          quedan como rechazadas y recepción cuenta lo que volvió.
+        </div>
+        <button onclick="conBotonOcupado(event, () => rutaForzarCierre(${esc(ruta.id)}))"
+          style="width:100%;margin-top:8px;padding:12px;background:var(--warn-bg);color:var(--warn-tx);border:1px solid var(--warn-brd);border-radius:10px;font-size:var(--fs-sm);font-weight:700;cursor:pointer;">
+          ⚡ Cerrar las paradas que faltan
+        </button>`;
+      }
     }
 
     body.innerHTML = html;

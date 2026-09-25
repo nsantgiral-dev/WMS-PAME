@@ -101,18 +101,16 @@ def _debia_cobrarse(recaudo, tarea, connekta=None) -> bool:
     return _cp.cobro_de_recaudo(recaudo, tarea)['cobrar']
 
 
-def _rc_llego_a_siesa(recaudo_id: int) -> bool:
-    """`COMPLETADO`, y **solo** `COMPLETADO`.
+def _rc_llego_a_siesa(recaudo) -> bool:
+    """¿El recibo llegó? `politica_cobro.rc_llego_a_siesa`, la única.
 
-    `siesa_rc_triggered` no sirve acá: se enciende ANTES del POST (Regla 6),
-    así que un job que falló deja la bandera puesta. Y `DESCARTADO` tampoco
-    cuenta — un humano decidió no intentarlo más, no que haya llegado.
+    `siesa_rc_triggered` no sirve: se enciende ANTES del POST (Regla 6). Y
+    «hay un job COMPLETADO» tampoco alcanzaba: un RC cuyo POST falló y no se
+    pudo verificar terminaba COMPLETADO con `verificacion_imposible` y se
+    contaba como cruzado en Siesa (P1-6c). Señal positiva o nada.
     """
-    from app.models.siesa_job import EstadoSiesaJob, SiesaJob
-    return SiesaJob.query.filter_by(
-        tipo='RECIBO_CAJA', referencia_tipo='RecaudoEntrega',
-        referencia_id=recaudo_id, estado=EstadoSiesaJob.COMPLETADO,
-    ).first() is not None
+    from app.services.politica_cobro import rc_llego_a_siesa
+    return rc_llego_a_siesa(recaudo)
 
 
 def _monto_del_recibo(recaudo_id: int):
@@ -164,7 +162,7 @@ def reconciliar(ruta_id: int) -> dict:
 
         esperado = _monto(getattr(tarea, 'valor_factura', None))
         cobrado = _monto(r.monto_cobrado)
-        en_siesa = _rc_llego_a_siesa(r.id)
+        en_siesa = _rc_llego_a_siesa(r)
         del_recibo = _monto_del_recibo(r.id)
 
         cols['debian_cobrarse']['n'] += 1

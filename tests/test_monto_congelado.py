@@ -84,7 +84,7 @@ class TestConElReciboAfuera:
         f = _parada(db, almacen, actores)
         _rc_salio(db, f.recaudo_id)
 
-        with pytest.raises(ValueError, match='ya se registró en Siesa'):
+        with pytest.raises(ValueError, match='no se puede cambiar desde el WMS'):
             RutaService.confirmar_parada(
                 f.ruta_id, f.packing_id, actores['conductor'].id,
                 {'estado_entrega': 'ENTREGADO', 'forma_pago': 'EFECTIVO',
@@ -98,7 +98,7 @@ class TestConElReciboAfuera:
         f = _parada(db, almacen, actores)
         _rc_salio(db, f.recaudo_id)
 
-        with pytest.raises(ValueError, match='ya se registró en Siesa'):
+        with pytest.raises(ValueError, match='no se puede cambiar desde el WMS'):
             RutaService.confirmar_parada(
                 f.ruta_id, f.packing_id, actores['conductor'].id,
                 {'estado_entrega': 'ENTREGADO', 'forma_pago': 'EFECTIVO',

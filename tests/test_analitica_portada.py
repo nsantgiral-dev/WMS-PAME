@@ -112,9 +112,13 @@ class TestUnaCifraUnaFuente:
         t = _tarjetas(_port().portada(d, h))['plata_en_riesgo']
         # Documentos trabados: solo el recibo de caja ($85.000) es plata; la
         # nota crédito trabada es un descuadre y no entra.
+        # «Cobrado sin recibo en Siesa» (2026-09-25): lo cobrado en rutas ya
+        # liquidadas cuyo recibo no consta. No se solapa con la calle (rutas
+        # sin liquidar) ni con los trabados (el RC FALLIDO se cuenta allá).
         esperado = (f['plata_en_la_calle']['pesos'] + 85000.0
                     + (f['entregado_sin_pago']['pesos'] or 0)
-                    + (f['credito_no_autorizado']['pesos'] or 0))
+                    + (f['credito_no_autorizado']['pesos'] or 0)
+                    + (f['cobrado_sin_recibo']['pesos'] or 0))
         assert t['periodo']['valor'] == esperado
         assert f['documentos_trabados']['casos'] == 2, 'el mundo tiene RC y NC trabados'
         comp = {c['clave']: c for c in t['periodo']['componentes']}

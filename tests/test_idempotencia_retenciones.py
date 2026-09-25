@@ -43,11 +43,18 @@ class TestUnaBanderaNoPuedeSignificarDosCosas:
             'guarda de idempotencia del ejecutor. Con eso, cada job encolado '
             'se declara idempotente y se completa SIN ENVIAR NADA.')
 
-    def test_el_endpoint_deduplica_mirando_la_cola(self):
+    def test_el_encolador_deduplica_mirando_la_cola(self):
+        """`/liquidar-completo` se borró el 2026-09-25; el único encolador de
+        retenciones (`_encolar_retencion`) deduplica por la cola."""
+        import ast
         import pathlib
         fuente = (pathlib.Path(__file__).resolve().parents[1]
-                  / 'app' / 'routes' / 'rutas.py').read_text(encoding='utf-8')
-        assert '_pucs_en_cola' in fuente
+                  / 'app' / 'services' / 'liquidacion_service.py').read_text(encoding='utf-8')
+        fn = next(n for n in ast.walk(ast.parse(fuente))
+                  if isinstance(n, ast.FunctionDef) and n.name == '_encolar_retencion')
+        llamadas = {getattr(c.func, 'id', getattr(c.func, 'attr', None))
+                    for c in ast.walk(fn) if isinstance(c, ast.Call)}
+        assert '_pucs_en_cola' in llamadas
 
 
 class TestLasRetencionesSonNYLaBanderaEsUna:

@@ -16,7 +16,7 @@ lee la función que ya lo decide en su pantalla de detalle:
 |---|---|---|
 | Llega a caja completo | `analitica_recorrido._guia` (valor sin fuga, cerrados) | 🧭 Recorrido |
 | Ciclo de caja | `analitica_recorrido._guia` (mediana aprobado → liquidado) | 🧭 Recorrido |
-| Plata en riesgo | `analitica_fugas.FUGAS` (calle + sin pago + crédito no autorizado + documentos de plata) | 💸 Fugas |
+| Plata en riesgo | `analitica_fugas.FUGAS` (calle + sin pago + crédito no autorizado + cobrado sin recibo + documentos de plata) | 💸 Fugas |
 | Venta perdida | `analitica_fugas.FUGAS['venta_perdida']` | 💸 Fugas |
 | Nivel de servicio | KPI diario `fill_rate` (`metricas/fill_rate.py`) | `/api/analitica/serie` |
 | Exactitud de inventario | KPI diario `exactitud_inventario` | `/api/analitica/serie` |
@@ -53,7 +53,8 @@ SEMANAS_TENDENCIA = 8
 #: Las fugas que son **plata** que salió del cliente o de la bodega y todavía
 #: no llegó a caja ni a Siesa. Las demás fugas son mercancía o trabajo.
 FUGAS_PLATA_EN_RIESGO = ('plata_en_la_calle', 'entregado_sin_pago',
-                         'credito_no_autorizado', 'documentos_trabados')
+                         'credito_no_autorizado', 'cobrado_sin_recibo',
+                         'documentos_trabados')
 
 #: De los documentos trabados, solo los que llevan plata: el recibo de caja, la
 #: retención y la factura del despacho. Una nota crédito o un ajuste de conteo

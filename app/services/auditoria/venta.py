@@ -549,23 +549,28 @@ def un_cobro_registrado_llego_a_siesa(ctx=None):
     if not candidatos:
         return []
 
-    # El job COMPLETADO es la única evidencia de que Siesa lo procesó.
-    # `FALLIDO` y `DESCARTADO` significan que no entró — y `DESCARTADO` es
+    # Señal positiva y nada más (`politica_cobro.rc_llegaron`, la única):
+    # `siesa_rc_resultado` ENVIADO/YA_SALDADA, o —en filas anteriores a esa
+    # columna— un COMPLETADO que no diga `verificacion_imposible`. Contar
+    # cualquier COMPLETADO daba por llegado un recibo que nadie verificó
+    # (P1-6c, 2026-09-25). `FALLIDO` y `DESCARTADO` tampoco: `DESCARTADO` es
     # «un humano decidió no intentarlo más», que ya costó una vez con 103
-    # ajustes contados como enviados.
-    llegaron = {j.referencia_id for j in SiesaJob.query.filter(
+    # ajustes contados como enviados. Un envío todavía en la cola no es fuga.
+    from app.services.politica_cobro import rc_llegaron
+    llegaron = rc_llegaron(candidatos)
+    en_cola = {j.referencia_id for j in SiesaJob.query.filter(
         SiesaJob.tipo == 'RECIBO_CAJA',
         SiesaJob.referencia_tipo == 'RecaudoEntrega',
         SiesaJob.referencia_id.in_([r.id for r in candidatos]),
-        SiesaJob.estado == EstadoSiesaJob.COMPLETADO,
+        SiesaJob.estado.in_(list(EstadoSiesaJob.ACTIVOS)),
     ).all()}
 
-    filas = [r for r in candidatos if r.id not in llegaron]
+    filas = [r for r in candidatos if r.id not in llegaron and r.id not in en_cola]
     return [
         Hallazgo(
             referencia=f'ruta#{r.ruta_id}/tarea#{r.tarea_id}',
             detalle=(f'cobró {r.monto_cobrado}, el recibo de caja se intentó '
-                     f'y no hay job COMPLETADO: el ERP no tiene ese dinero'),
+                     f'y no consta en Siesa: el ERP no tiene ese dinero'),
             datos={'forma_pago': r.forma_pago, 'estado': r.estado_entrega},
             fecha=r.fecha_confirmacion,
         ) for r in filas
@@ -655,3 +660,105 @@ def ninguna_parada_de_contado_sale_sin_cobro(ctx=None):
             fecha=r.fecha_confirmacion,
         ))
     return salida
+
+
+# ── Frontera 7 (cont.): la cadena NC → RC → DC no espera para siempre ──────
+
+#: Una espera de la cola que ya no puede resolverse sola se nota después de
+#: esto. Los encadenamientos NC → RC → DC resuelven en el mismo ciclo (min).
+ESPERA_SIN_SALIDA_H = 1
+
+
+@invariante(
+    codigo='VTA-63',
+    flujo='venta',
+    frontera='recaudo → Siesa',
+    consecuencia='Una retención (NI) espera un recibo de caja que no está en la '
+                 'cola: esperaba para siempre, reprogramándose sin que nadie lo '
+                 'viera, y la factura queda con el saldo de la retención.',
+    severidad=BLOQUEA,
+    detector_ciego='tests/test_cadena_nc_rc_dc_con_salida.py::TestLaAuditoriaLoVe::test_vta63_ve_un_dc_esperando_un_rc_que_no_esta',
+)
+def ninguna_retencion_espera_un_recibo_que_no_va_a_salir(ctx=None):
+    """P1-6a (2026-09-25). El ejecutor de `DOCUMENTO_CONTABLE_RET` ahora falla
+    declarado cuando su RC no está en la cola; esto ve lo que quedó esperando
+    antes (o por un camino que no pase por el ejecutor): un DC PENDIENTE hace
+    más de `ESPERA_SIN_SALIDA_H` cuyo recaudo no tiene el RC puesto ni un RC
+    vivo en la cola."""
+    from datetime import datetime, timedelta
+    from app.models.recaudo_entrega import RecaudoEntrega
+    from app.models.siesa_job import EstadoSiesaJob, SiesaJob
+    corte = datetime.utcnow() - timedelta(hours=ESPERA_SIN_SALIDA_H)
+    dcs = (SiesaJob.query
+           .filter(SiesaJob.tipo == 'DOCUMENTO_CONTABLE_RET',
+                   SiesaJob.referencia_tipo == 'RecaudoEntrega',
+                   SiesaJob.estado.in_(list(EstadoSiesaJob.ACTIVOS)),
+                   SiesaJob.fecha_creacion <= corte)
+           .order_by(SiesaJob.id.desc()).limit(500).all())
+    if not dcs:
+        return []
+    ids = {j.referencia_id for j in dcs}
+    recaudos = {r.id: r for r in RecaudoEntrega.query.filter(RecaudoEntrega.id.in_(ids))}
+    rc_vivos = {j.referencia_id for j in SiesaJob.query.filter(
+        SiesaJob.tipo == 'RECIBO_CAJA', SiesaJob.referencia_tipo == 'RecaudoEntrega',
+        SiesaJob.referencia_id.in_(ids),
+        SiesaJob.estado.in_(list(EstadoSiesaJob.ACTIVOS)))}
+    out = []
+    for j in dcs:
+        r = recaudos.get(j.referencia_id)
+        if r is None or r.siesa_rc_triggered or r.id in rc_vivos:
+            continue
+        out.append(Hallazgo(
+            referencia=f'job#{j.id}/recaudo#{r.id}',
+            detalle=('la retención espera el recibo de caja de su parada y ese recibo '
+                     'no está en la cola (falló, se descartó o nunca se encoló)'),
+            datos={'cuenta_puc': (j.get_payload() or {}).get('cuenta_puc'),
+                   'ruta_id': r.ruta_id},
+            fecha=j.fecha_creacion,
+        ))
+    return out
+
+
+@invariante(
+    codigo='VTA-64',
+    flujo='venta',
+    frontera='devolución → recaudo',
+    consecuencia='El recibo de caja de una entrega parcial espera una nota '
+                 'crédito que YA salió: el cobro no llega a Siesa porque el '
+                 'puente devolución → recaudo falló.',
+    severidad=BLOQUEA,
+    detector_ciego='tests/test_cadena_nc_rc_dc_con_salida.py::TestLaAuditoriaLoVe::test_vta64_ve_un_rc_esperando_una_nc_que_ya_salio',
+)
+def ningun_recibo_espera_una_nc_que_ya_salio(ctx=None):
+    """P1-6b (2026-09-25). El RC con `depende_de_nc` espera
+    `recaudo.siesa_nc_triggered`, que enciende el job de la NC al terminar
+    (`devolucion_ruta.puentear_nc_al_recaudo`). Si ese commit falló, la NC
+    existe y el RC esperaba para siempre. El ejecutor ahora reconstruye el
+    puente (`nc_ya_salio`); esto ve el que sigue esperando."""
+    from datetime import datetime, timedelta
+    from app.models.recaudo_entrega import RecaudoEntrega
+    from app.models.siesa_job import EstadoSiesaJob, SiesaJob
+    from app.services import devolucion_ruta as _dr
+    corte = datetime.utcnow() - timedelta(hours=ESPERA_SIN_SALIDA_H)
+    rcs = (SiesaJob.query
+           .filter(SiesaJob.tipo == 'RECIBO_CAJA',
+                   SiesaJob.referencia_tipo == 'RecaudoEntrega',
+                   SiesaJob.estado.in_(list(EstadoSiesaJob.ACTIVOS)),
+                   SiesaJob.fecha_creacion <= corte)
+           .order_by(SiesaJob.id.desc()).limit(500).all())
+    out = []
+    for j in rcs:
+        if not (j.get_payload() or {}).get('depende_de_nc'):
+            continue
+        r = db.session.get(RecaudoEntrega, j.referencia_id)
+        if r is None or not _dr.nc_ya_salio(r):
+            continue
+        d = _dr.devolucion_vigente(r.id)
+        out.append(Hallazgo(
+            referencia=f'job#{j.id}/recaudo#{r.id}',
+            detalle=(f'el recibo espera la nota crédito de la devolución '
+                     f'{d.codigo if d else "?"}, que ya salió a Siesa'),
+            datos={'ruta_id': r.ruta_id},
+            fecha=j.fecha_creacion,
+        ))
+    return out

@@ -438,9 +438,16 @@ def reintentar_job(job_id):
         uid = int(get_jwt_identity())
     except (TypeError, ValueError):
         return jsonify({'error': 'Token inválido'}), 401
-    u = Usuario.query.get(uid)
-    if not u or u.rol not in Roles.SUPERVISION:
-        return jsonify({'error': 'Sin permiso — solo admin/supervisor/jefe_almacen puede reintentar jobs'}), 403
+    from app.extensions import db as _db
+    from app.models.siesa_job import SiesaJob as _SJ
+    from app.services.permisos_liquidacion import puede_reintentar_job
+    u = _db.session.get(Usuario, uid)
+    job = _db.session.get(_SJ, job_id)
+    # Un documento de la liquidación (RC, retención, NC de la ruta) es plata
+    # del conductor: reintentarlo pide el permiso de liquidar (P1-8). El resto,
+    # supervisión, como siempre.
+    if not puede_reintentar_job(u, job.tipo if job else None):
+        return jsonify({'error': 'Sin permiso para reintentar este envío a Siesa'}), 403
     try:
         data = request.get_json(silent=True) or {}
         resultado = _reintentar(job_id, usuario_id=uid, motivo=data.get('motivo'))

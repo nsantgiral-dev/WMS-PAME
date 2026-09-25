@@ -957,8 +957,6 @@ DEUDA_SIN_UI = {
         'DUPLICADO de /api/reposicion/tarea-actual.',
     '/api/reposicion/pre-verificar-ola':
         'Simulación de una ola de reposición antes de lanzarla.',
-    '/api/rutas/<int:id>/liquidar-completo':
-        'Liquidación en un paso. La pantalla liquida por partes (NC→RC→DC), que es lo que permite ver dónde falla la cadena. El atajo esconde el punto de fallo.',
     '/api/rutas/<int:id>/sugeridos':
         'Bultos sugeridos para una ruta. El muelle asigna a mano.',
     '/api/siesa/cargar-inventario':

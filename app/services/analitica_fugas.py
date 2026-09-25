@@ -57,9 +57,9 @@ from app.utils.fecha import ahora_bogota, dia_operativo_de, rango_dia_operativo_
 # ─────────────────────────────────────────────────────────────────────────────
 
 #: Una clave que no está acá es un 404, no una fuga vacía.
-CLAVES = ('venta_perdida', 'faltantes_inventario', 'rechazos_ruta',
+CLAVES = ('venta_perdida', 'faltantes_inventario', 'devoluciones_ruta',
           'entregado_sin_pago', 'credito_no_autorizado', 'plata_en_la_calle',
-          'mercancia_en_limbo',
+          'cobrado_sin_recibo', 'mercancia_en_limbo',
           'trabajo_perdido', 'documentos_trabados')
 
 POR_PAGINA_MAX = 200
@@ -648,6 +648,113 @@ def _plata_en_la_calle(desde, hasta, ctx) -> Resultado:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# 5b · Cobrado sin recibo en Siesa
+# ─────────────────────────────────────────────────────────────────────────────
+
+#: Un recibo de caja en la cola más de esto ya no está «saliendo»: está trabado.
+HORAS_RC_EN_COLA = 24
+
+_MOTIVO_SIN_RC = {
+    'NUNCA_ENCOLADO': 'Sin recibo encolado',
+    'EN_COLA_VIEJO': 'Recibo en la cola hace más de un día',
+    'DESCARTADO': 'Recibo descartado sin constancia en Siesa',
+    'COMPLETADO_SIN_VERIFICAR': 'Recibo dado por hecho sin verificar',
+}
+
+
+def _cobrado_sin_recibo(desde, hasta, ctx) -> Resultado:
+    """Plata que el conductor cobró, en rutas **ya liquidadas**, cuyo recibo de
+    caja no consta en Siesa (`politica_cobro.rc_llegaron`, la única). Un caso
+    por parada, fechado el día (Bogotá) en que se liquidó la ruta.
+
+    Solo paradas que debían producir recibo: ENTREGADO/PARCIAL con monto > 0 y
+    trato CONTADO (`cond_pago.trato_de_cobro`). Motivos: el recibo nunca se
+    encoló, lleva más de `HORAS_RC_EN_COLA` en la cola, se descartó, o quedó
+    COMPLETADO sin verificar (filas anteriores a m036fotos). Un recibo FALLIDO
+    ya está en «Documentos trabados»: se cuenta en `extra` y **no se suma
+    dos veces**.
+
+    Valor: `monto_cobrado`. `plata_en_la_calle` mira las rutas SIN liquidar:
+    no se solapan.
+    """
+    from app.models.packing import TareaPacking
+    from app.models.recaudo_entrega import EstadoEntrega, RecaudoEntrega
+    from app.models.ruta_despacho import EstadoFinancieroRuta, RutaDespacho
+    from app.models.siesa_job import EstadoSiesaJob, SiesaJob
+    from app.services import cond_pago as _cp
+    from app.services import corte as _corte
+    from app.services.politica_cobro import rc_llegaron, completado_confirma
+    from app.services.siesa_job_service import fallidos_vigentes
+
+    rutas = RutaDespacho.query.filter(
+        RutaDespacho.estado_financiero == EstadoFinancieroRuta.LIQUIDADA).all()
+    def _dia(r):
+        m = r.liquidada_en or r.fecha_entregada
+        return dia_operativo_de(m) if m else None
+    rutas = [r for r in rutas
+             if _dia(r) is not None and desde <= _dia(r) <= hasta
+             and not _corte.es_anterior(r.liquidada_en or r.fecha_entregada)]
+    if not rutas:
+        return Resultado([])
+    dia_de = {r.id: _dia(r) for r in rutas}
+    q = (RecaudoEntrega.query.join(TareaPacking, TareaPacking.id == RecaudoEntrega.tarea_id)
+         .filter(RecaudoEntrega.ruta_id.in_(list(dia_de)),
+                 RecaudoEntrega.estado_entrega.in_((EstadoEntrega.ENTREGADO,
+                                                    EstadoEntrega.PARCIAL)),
+                 RecaudoEntrega.monto_cobrado > 0))
+    if ctx.almacen_id is not None:
+        q = q.filter(TareaPacking.almacen_id == ctx.almacen_id)
+    recaudos = [r for r in q.all()
+                if _cp.trato_de_cobro(r, r.tarea) == _cp.TRATO_CONTADO]
+    if not recaudos:
+        return Resultado([])
+    ids = [r.id for r in recaudos]
+    llegaron = rc_llegaron(recaudos)
+    trabados = {j.referencia_id for j in fallidos_vigentes(
+        tipos=('RECIBO_CAJA',), referencia_tipo='RecaudoEntrega',
+        referencia_ids=ids)['jobs']}
+    jobs = defaultdict(list)
+    for j in SiesaJob.query.filter(SiesaJob.tipo == 'RECIBO_CAJA',
+                                   SiesaJob.referencia_tipo == 'RecaudoEntrega',
+                                   SiesaJob.referencia_id.in_(ids)).all():
+        jobs[j.referencia_id].append(j)
+    ahora = datetime.utcnow()
+    casos, en_trabados = [], 0
+    for r in recaudos:
+        if r.id in llegaron:
+            continue
+        if r.id in trabados:
+            en_trabados += 1
+            continue
+        js = jobs.get(r.id, [])
+        vivos = [j for j in js if j.estado in EstadoSiesaJob.ACTIVOS]
+        if vivos:
+            if all(ahora - (j.fecha_creacion or ahora) < timedelta(hours=HORAS_RC_EN_COLA)
+                   for j in vivos):
+                continue  # sigue saliendo: no es fuga todavía
+            motivo = 'EN_COLA_VIEJO'
+        elif any(j.estado == EstadoSiesaJob.COMPLETADO and not completado_confirma(j)
+                 for j in js):
+            motivo = 'COMPLETADO_SIN_VERIFICAR'
+        elif any(j.estado == EstadoSiesaJob.DESCARTADO for j in js):
+            motivo = 'DESCARTADO'
+        else:
+            motivo = 'NUNCA_ENCOLADO'
+        t = r.tarea
+        casos.append(Caso(
+            referencia=(t.numero_pedido_siesa or t.codigo) if t else f'Parada {r.id}',
+            pesos=_f(r.monto_cobrado), unidades=1,
+            almacen_id=t.almacen_id if t else None,
+            motivo=_MOTIVO_SIN_RC[motivo], dia=dia_de.get(r.ruta_id),
+            pedido_clave=t.pedido_clave if t else None,
+            detalle={'ruta_id': r.ruta_id, 'recaudo_id': r.id,
+                     'forma_pago': r.forma_pago, 'cliente': t.cliente if t else None},
+        ))
+    return Resultado(casos, extra={'en_documentos_trabados': en_trabados,
+                                   'horas_rc_en_cola': HORAS_RC_EN_COLA})
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # 6 · Mercancía en limbo
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -947,7 +1054,11 @@ FUGAS = {f.clave: f for f in (
     Fuga('faltantes_inventario', 'Faltantes de inventario ajustados',
          'Ajustes de conteo enviados a Siesa, a costo de la foto del conteo: faltantes menos sobrantes.',
          'Faltante o sobrante', 'unidades netas perdidas', True, _faltantes_inventario),
-    Fuga('rechazos_ruta', 'Rechazos en ruta',
+    # Se llamaba «Rechazos en ruta», igual que el KPI diario `rechazos_ruta`,
+    # que mide OTRA cosa (la tasa de paradas RECHAZADAS, sin parciales). Dos
+    # números con el mismo nombre midiendo distinto: esta es la plata de lo
+    # que volvió, total o en parte (2026-09-25).
+    Fuga('devoluciones_ruta', 'Devoluciones en ruta',
          'Mercancía que salió en ruta y volvió, total o en parte, con su nota crédito.',
          'Motivo', 'unidades devueltas', True, _rechazos_ruta),
     Fuga('entregado_sin_pago', 'Entregado sin pago',
@@ -959,6 +1070,9 @@ FUGAS = {f.clave: f for f in (
     Fuga('plata_en_la_calle', 'Plata en la calle',
          'Lo que el conductor cobró en rutas entregadas que nadie ha liquidado.',
          'Urgencia', 'paradas', True, _plata_en_la_calle),
+    Fuga('cobrado_sin_recibo', 'Cobrado sin recibo en Siesa',
+         'Plata que el conductor cobró, en rutas ya liquidadas, cuyo recibo de caja no consta en Siesa.',
+         'Qué pasó con el recibo', 'paradas', True, _cobrado_sin_recibo),
     Fuga('mercancia_en_limbo', 'Mercancía en limbo',
          'Existencias en averías (AV1) y en tránsito (TRA1): no se venden y nadie las mira.',
          'Bodega', 'unidades', False, _mercancia_en_limbo),

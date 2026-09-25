@@ -91,15 +91,12 @@ class TestElFaltanteTotalSeVeDondeSeLiquida:
         _t, _r, d = _faltante_total(db, almacen)
         assert senales_ruta.faltante_de_retorno(d)['faltante_unidades'] == 8
 
-    @pytest.mark.xfail(strict=True, reason='P0: faltantes_de_retorno_de_recaudos filtra CONFIRMADA y '
-                                           'deja fuera FALTANTE_TOTAL (senales_ruta.py:394)')
     def test_el_lote_que_usan_liquidacion_y_fugas_tambien(self, db, almacen):
         from app.services import senales_ruta
         _t, r, _d = _faltante_total(db, almacen)
         lote = senales_ruta.faltantes_de_retorno_de_recaudos([r.id])
         assert r.id in lote and lote[r.id]['faltante_unidades'] == 8
 
-    @pytest.mark.xfail(strict=True, reason='P0: la Liquidación de la ruta no muestra el faltante total')
     def test_liquidacion_detalle_lo_trae(self, app, client, db, almacen):
         _t, r, _d = _faltante_total(db, almacen)
         admin = _usuario(db)
@@ -118,8 +115,6 @@ class TestLiquidacionNoPrometeLoQueNoVaAPasar:
     que exista `devolucion_pendiente`, nunca su `estado`.
     """
 
-    @pytest.mark.xfail(strict=True, reason='P0: liquidacion.js ignora devolucion_pendiente.estado '
-                                           '(FALTANTE_TOTAL) y promete conteo y NC')
     def test_la_tarjeta_dice_faltante_y_no_pendiente(self, app, client, db, almacen, tmp_path):
         _t, r, _d = _faltante_total(db, almacen)
         admin = _usuario(db)
@@ -306,7 +301,6 @@ class TestElReenvioIdenticoNoEsUnaEdicion:
     un conductor al que nadie le pidió motivo. `confirmar_parada` no tiene clave
     de reenvío (las operaciones de flota sí: `@idempotente`)."""
 
-    @pytest.mark.xfail(strict=True, reason='P3: el reenvío idéntico de la cola deja un EDITAR')
     def test_la_misma_confirmacion_dos_veces_no_edita(self, db, almacen):
         from app.models.bitacora import BitacoraAccion
         from app.models.conductor import Conductor

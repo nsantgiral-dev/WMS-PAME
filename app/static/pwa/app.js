@@ -3777,10 +3777,17 @@ Si esa remisión ya estaba facturada, queda una ` +
 
 ` +
                `¿Verificaste en Siesa que no tiene factura?`)) return;
+  // El servidor exige el documento repetido y un motivo (queda en la bitácora):
+  // la remisión la digitó una persona y el WMS no la puede verificar en Siesa.
+  const motivo = await _modalTexto('Facturar sobre la remisión ' + tipo + '-' + consec,
+    '¿Por qué se factura sobre esta remisión digitada a mano? (obligatorio — queda en la bitácora con su nombre)',
+    { obligatorio: true });
+  if (!motivo || !motivo.trim()) return;
   out.innerHTML = '<p style="color:var(--tx3);font-size:var(--fs-xs);">Facturando…</p>';
   try {
     const r = await post(`/api/despacho_parcial/${id}/facturar-rm-manual`,
-                         { tipo_rm: tipo, consec_rm: consec });
+                         { tipo_rm: tipo, consec_rm: consec,
+                           confirmacion: `${tipo}-${consec}`, motivo: motivo.trim() });
     out.innerHTML = `<p style="color:var(--green);font-size:var(--fs-xs);">
       ${esc(r.mensaje || 'Factura creada')} ${r.consec_fe ? '· FE ' + r.consec_fe : ''}</p>`;
   } catch (e) {

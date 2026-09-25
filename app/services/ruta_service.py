@@ -18,7 +18,7 @@ from app.utils.fecha import dia_operativo as _dia_operativo
 from app.services.documento_fiscal import filtro_despachable as _filtro_despachable
 from app.services.bitacora import (registrar_accion, motivo_obligatorio, foto as foto_fila,
                                    FORZADO_ADVERTENCIAS_FLOTA, FORZADO_CIERRE_RUTA,
-                                   FORZADO_LIQUIDACION_SIN_CONTAR)
+                                   FORZADO_LIQUIDACION_SIN_CONTAR, FORZADO_PARADA_TARDIA)
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +45,34 @@ class AdvertenciasDeFlota(ValueError):
 # los mismos valores y distinto nombre de tupla. Se importa la del modelo: un
 # estado agregado en un solo lado era cuestión de tiempo.
 from app.models.recaudo_entrega import EstadoEntrega  # noqa: E402,F401
+
+#: Lo que cada envío de una parada escribe aunque no cambie nada: la hora del
+#: servidor, quién reenvió y la hora del teléfono. Por sí solos no son una
+#: edición (reenvío idéntico de la cola, e2e 2026-09-25).
+_VOLATILES_PARADA = ('fecha_confirmacion', 'editado_por', 'editado_en',
+                     'ts_dispositivo', 'ts_desfase_s', 'via_cola')
+
+
+def _mismo_valor(a, b) -> bool:
+    """¿Dos valores de una foto de la parada son el mismo dato? Los montos se
+    comparan como números (Decimal '35700.00' == float 35700.0) y las listas de
+    ids sin orden."""
+    if a == b:
+        return True
+    try:
+        if a is not None and b is not None and not isinstance(a, (list, dict, bool)) \
+                and not isinstance(b, (list, dict, bool)):
+            return abs(float(a) - float(b)) < 0.005
+    except (TypeError, ValueError):
+        pass
+    if isinstance(a, list) and isinstance(b, list):
+        try:
+            return sorted(a) == sorted(b)
+        except TypeError:
+            return False
+    if (a in (None, '', [], {})) and (b in (None, '', [], {})):
+        return True
+    return False
 
 
 class FormaPago:
@@ -785,6 +813,17 @@ class RutaService:
                 sin_declarar.append({'id': bulto.id, 'codigo_barras': bulto.codigo_barras,
                                      'estado': bulto.estado, 'tarea_id': bulto.tarea_id})
 
+        # Las paradas que nadie gestionó (P1-4). El cierre no se niega —la
+        # cola sin señal manda el cierre de un conductor que sí entregó, y un
+        # cierre trabado en el teléfono no lo destraba nadie—, pero lo DICE:
+        # la ruta queda ENTREGADA con N paradas por gestionar, y la salida es
+        # confirmarlas después del cierre (con motivo, FORZAR) o forzar el
+        # cierre de lo que falta. `liquidar_ruta` sigue exigiéndolas todas.
+        _gestionadas = {r.tarea_id for r in RecaudoEntrega.query.filter_by(ruta_id=id).all()}
+        paradas_sin_gestionar = [
+            {'tarea_id': t.id, 'pedido': t.numero_pedido_siesa, 'cliente': t.cliente}
+            for t in ruta.tareas_unicas() if t.id not in _gestionadas]
+
         ruta.estado = EstadoRutaDespacho.ENTREGADA
         ruta.fecha_entregada = ahora
         _ruta_id = ruta.id
@@ -792,6 +831,10 @@ class RutaService:
         if sin_declarar:
             logger.warning('[RUTAS] Ruta %s entregada con %d bulto(s) sin declarar: %s',
                            _ruta_id, len(sin_declarar), [b['id'] for b in sin_declarar])
+        if paradas_sin_gestionar:
+            logger.warning('[RUTAS] Ruta %s entregada con %d parada(s) sin gestionar: %s',
+                           _ruta_id, len(paradas_sin_gestionar),
+                           [x['tarea_id'] for x in paradas_sin_gestionar])
 
         ruta = (RutaDespacho.query
                 .options(
@@ -807,6 +850,8 @@ class RutaService:
             # Bultos que nadie declaró, con el estado que conservan. No es un
             # error del cierre: es lo que alguien tiene que ir a mirar.
             'sin_declarar': sin_declarar,
+            # Paradas sin confirmar: la ruta no se liquida hasta gestionarlas.
+            'paradas_sin_gestionar': paradas_sin_gestionar,
             'ruta': ruta.to_dict(),
         }
 
@@ -1446,8 +1491,29 @@ class RutaService:
                 base_gravable, iva_factura, codigo_vendedor)
 
     @staticmethod
-    def confirmar_parada(ruta_id: int, tarea_id: int, usuario_id: int, data: dict) -> tuple:
-        """Registra entrega y recaudo de una parada. Retorna (recaudo_id, es_edicion)."""
+    def confirmar_parada(ruta_id: int, tarea_id: int, usuario_id: int, data: dict,
+                         motivo_tardia: str = None) -> tuple:
+        """Registra entrega y recaudo de una parada. Retorna (recaudo_id, es_edicion).
+
+        **Con la ruta ya ENTREGADA** (P1-4): la cola sin señal del conductor
+        podía mandar el cierre aunque una confirmación hubiera fallado, y
+        después esa parada no tenía salida —confirmar exigía EN_TRANSITO,
+        forzar también, y liquidar exige todas gestionadas—. Una parada tardía
+        entra con `motivo_tardia` (obligatorio) y queda FORZAR en la bitácora.
+        Nunca sobre una ruta LIQUIDADA.
+        """
+        _ruta = db.session.get(RutaDespacho, ruta_id)
+        if _ruta is None:
+            raise LookupError('Ruta no encontrada')
+        _tardia = None
+        if _ruta.estado == EstadoRutaDespacho.ENTREGADA:
+            if (_ruta.estado_financiero or '') == EstadoFinancieroRuta.LIQUIDADA:
+                raise ValueError('La ruta ya está liquidada: la parada no se puede '
+                                 'confirmar ni corregir desde acá')
+            _tardia = motivo_obligatorio(
+                motivo_tardia, 'confirmar una parada después del cierre de la ruta')
+        elif _ruta.estado != EstadoRutaDespacho.EN_TRANSITO:
+            raise ValueError(f'La ruta debe estar EN_TRANSITO, está {_ruta.estado}')
         bultos_tarea = (Bulto.query
                         .filter_by(tarea_id=tarea_id, ruta_despacho_id=ruta_id)
                         .with_for_update()
@@ -1739,7 +1805,15 @@ class RutaService:
         #
         # Todo lo demás —observaciones, foto, motivo de rechazo— sigue
         # editable: nada de eso cambia una cifra que Siesa ya tiene.
-        if es_edicion and recaudo.siesa_rc_triggered:
+        #
+        # Desde el 2026-09-25 se congela **al encolar** el recibo (o una
+        # retención), no al enviarlo: `puede_editar_cobro` (P1-3). Entre
+        # encolar y el POST, el monto y el estado se reescribían y el RC salía
+        # con la cifra vieja. Y congela también el estado y la forma de pago:
+        # una parada ENTREGADA con su RC en cola que pasa a RECHAZADA dejaba un
+        # recibo por plata que ya no se declara.
+        from app.services import politica_cobro as _pc_cp
+        if es_edicion and not _pc_cp.puede_editar_cobro(recaudo):
             _nuevo_monto = float(data.get('monto_cobrado', 0) or 0)
             _cambios = []
             if abs(_nuevo_monto - float(recaudo.monto_cobrado or 0)) > 0.01:
@@ -1748,9 +1822,20 @@ class RutaService:
             if abs(monto_descuento - float(recaudo.monto_descuento or 0)) > 0.01:
                 _cambios.append(
                     f'monto_descuento ({recaudo.monto_descuento} → {monto_descuento})')
+            if (motivo_descuento or None) != (recaudo.motivo_descuento or None):
+                _cambios.append(
+                    f'motivo_descuento ({recaudo.motivo_descuento} → {motivo_descuento})')
+            if estado_entrega != recaudo.estado_entrega:
+                _cambios.append(
+                    f'estado_entrega ({recaudo.estado_entrega} → {estado_entrega})')
+            _fp_nueva = forma_pago_de(estado_entrega, forma_pago)
+            if (_fp_nueva or None) != (forma_pago_de(recaudo.estado_entrega,
+                                                      recaudo.forma_pago) or None):
+                _cambios.append(f'forma_pago ({recaudo.forma_pago} → {_fp_nueva})')
             if _cambios:
                 raise ValueError(
-                    'El recibo de caja de esta parada ya se registró en Siesa: '
+                    f'El cobro de esta parada ya no se puede cambiar: '
+                    f'{_pc_cp.motivo_cobro_congelado(recaudo)}. '
                     f'{" y ".join(_cambios)} no se puede cambiar desde el WMS. '
                     'Una corrección de un valor ya contabilizado se hace con '
                     'nota crédito. Las observaciones y la foto sí se pueden '
@@ -1770,6 +1855,11 @@ class RutaService:
                           # 2026-09-24). Queda en el EDITAR.
                           'ts_dispositivo', 'ts_desfase_s', 'via_cola')
         antes_parada = foto_fila(recaudo, list(_CAMPOS_PARADA)) if recaudo else None
+        # Lo que una re-confirmación pisa aunque no cambie nada. Si el reenvío
+        # resulta idéntico (la cola sin señal manda dos veces lo mismo), se
+        # restituye y no hay EDITAR.
+        _volatiles_previos = ({k: getattr(recaudo, k) for k in _VOLATILES_PARADA}
+                              if recaudo else None)
 
         if not recaudo:
             recaudo = RecaudoEntrega(
@@ -1870,16 +1960,42 @@ class RutaService:
 
         if es_edicion:
             despues_parada = foto_fila(recaudo, list(_CAMPOS_PARADA))
+            # Un cambio es de VALOR, no de representación: 35700.00 (Decimal
+            # guardado) y 35700.0 (float recibido) son el mismo monto. Y la
+            # hora del teléfono y la del servidor cambian en cada envío: por sí
+            # solas no son una edición.
             _cambios = [k for k in _CAMPOS_PARADA
-                        if k not in ('fecha_confirmacion', 'editado_por')
-                        and antes_parada.get(k) != despues_parada.get(k)]
+                        if k not in _VOLATILES_PARADA
+                        and not _mismo_valor(antes_parada.get(k), despues_parada.get(k))]
+            if not _cambios:
+                # Reenvío idéntico (la cola del conductor manda dos veces lo
+                # mismo): no es una edición. Se deja la parada como estaba.
+                for _k, _v in (_volatiles_previos or {}).items():
+                    setattr(recaudo, _k, _v)
+            else:
+                # Con un cambio real, la hora anterior del teléfono también
+                # queda escrita (QA e2e 2026-09-24: re-confirmar la pisaba).
+                _reg = _cambios + [k for k in _CAMPOS_PARADA
+                                   if k in _VOLATILES_PARADA
+                                   and k not in ('fecha_confirmacion', 'editado_por')
+                                   and antes_parada.get(k) != despues_parada.get(k)]
+                _reg += ['fecha_confirmacion', 'editado_por']
+                registrar_accion(
+                    'EDITAR', recaudo, usuario_id=usuario_id,
+                    entidad_codigo=(bultos_tarea[0].tarea.numero_pedido_siesa
+                                    if bultos_tarea[0].tarea else None),
+                    motivo=(data.get('motivo_edicion') or None),
+                    antes={k: antes_parada[k] for k in _reg},
+                    despues={k: despues_parada[k] for k in _reg})
+
+        if _tardia:
             registrar_accion(
-                'EDITAR', recaudo, usuario_id=usuario_id,
+                'FORZAR', recaudo, usuario_id=usuario_id, motivo=_tardia,
                 entidad_codigo=(bultos_tarea[0].tarea.numero_pedido_siesa
                                 if bultos_tarea[0].tarea else None),
-                motivo=(data.get('motivo_edicion') or None),
-                antes={k: antes_parada[k] for k in _cambios + ['fecha_confirmacion', 'editado_por']},
-                despues={k: despues_parada[k] for k in _cambios + ['fecha_confirmacion', 'editado_por']})
+                despues={'forzado': FORZADO_PARADA_TARDIA,
+                         'ruta_id': ruta_id, 'estado_ruta': _ruta.estado,
+                         'estado_entrega': recaudo.estado_entrega})
 
         db.session.commit()
 
@@ -1945,8 +2061,10 @@ class RutaService:
         if not ruta:
             raise LookupError('Ruta no encontrada')
 
+        from app.services import politica_cobro as _pc_pl
         tareas = ruta.tareas_unicas()
         recaudos_map = {r.tarea_id: r for r in ruta.recaudos}
+        _rc_llegaron = _pc_pl.rc_llegaron(ruta.recaudos)
         paradas = []
         totales = {'EFECTIVO': 0, 'TRANSFERENCIA': 0, 'TARJETA': 0, 'CHEQUE': 0,
                    'CREDITO': 0, 'EXENTO': 0}
@@ -1970,6 +2088,13 @@ class RutaService:
                     for b in bultos_t
                 ],
                 'recaudo':            r.to_dict(include_foto=True) if r else None,
+                # Qué documento de esta parada falta mandar a Siesa, según la
+                # política (`politica_cobro.documentos_pendientes`): el botón
+                # «Enviar a Siesa» no lo recalcula en el teléfono. Una
+                # devolución contada en cero no va a tener NC.
+                'pendiente_siesa':    (_pc_pl.documentos_pendientes(r, t) if r else []),
+                # El recibo, con señal positiva (no la bandera de pre-envío).
+                'rc_llego':           bool(r and r.id in _rc_llegaron),
             }
             paradas.append(parada)
             if r:
@@ -2095,19 +2220,29 @@ class RutaService:
 
     @staticmethod
     def forzar_cierre_ruta(id: int, admin_id: int, motivo: str = None) -> dict:
-        """Cierra una ruta EN_TRANSITO dando por rechazadas las paradas sin gestionar.
+        """Cierra una ruta dando por rechazadas las paradas sin gestionar.
 
         Motivo obligatorio: es un FORZAR que decide por el conductor. Antes
         pisaba `fecha_cierre` (que es cuándo SALIÓ la ruta) con la hora del
         forzado y dejaba `fecha_entregada` en blanco; ahora la salida se
         conserva y el cierre queda en `fecha_entregada`.
+
+        **Deja la ruta ENTREGADA, no LIQUIDADA** (P1-5, 2026-09-25). Antes la
+        marcaba liquidada saltándose las guardas de `liquidar_ruta`
+        (`credito_no_autorizado`, `devoluciones_sin_contar`): el cierre forzado
+        era una puerta trasera a la liquidación. Solo `liquidar_ruta` llama a
+        `_marcar_liquidada` (trinquete AST). Sirve también sobre una ruta ya
+        ENTREGADA con paradas sin gestionar (P1-4): la salida que no tenía.
         """
         motivo = motivo_obligatorio(motivo, 'forzar el cierre de una ruta')
         ruta = RutaDespacho.query.get(id)
         if not ruta:
             raise LookupError('Ruta no encontrada')
-        if ruta.estado != EstadoRutaDespacho.EN_TRANSITO:
-            raise ValueError(f'La ruta debe estar EN_TRANSITO para forzar cierre (estado: {ruta.estado})')
+        if ruta.estado not in (EstadoRutaDespacho.EN_TRANSITO, EstadoRutaDespacho.ENTREGADA):
+            raise ValueError(f'La ruta debe estar EN_TRANSITO o ENTREGADA para forzar cierre '
+                             f'(estado: {ruta.estado})')
+        if (ruta.estado_financiero or '') == EstadoFinancieroRuta.LIQUIDADA:
+            raise ValueError('La ruta ya está liquidada')
         antes_ruta = foto_fila(ruta, ['estado', 'estado_financiero', 'fecha_cierre',
                                  'fecha_entregada'])
 
@@ -2148,7 +2283,7 @@ class RutaService:
         ruta.estado = EstadoRutaDespacho.ENTREGADA
         if not ruta.fecha_cierre:
             ruta.fecha_cierre = ahora
-        ruta.fecha_entregada = ahora
+        ruta.fecha_entregada = ruta.fecha_entregada or ahora
         registrar_accion(
             'FORZAR', ruta, usuario_id=admin_id, motivo=motivo,
             entidad_codigo=f'RUTA-{ruta.id}',
@@ -2156,7 +2291,6 @@ class RutaService:
             despues={'forzado': FORZADO_CIERRE_RUTA,
                      **foto_fila(ruta, ['estado', 'fecha_cierre', 'fecha_entregada']),
                      'paradas_auto_rechazadas': [t.id for t in pendientes]})
-        RutaService._marcar_liquidada(ruta, admin_id, motivo=f'Cierre forzado: {motivo}')
         _ruta_id = ruta.id
         db.session.flush()
 
@@ -2175,7 +2309,8 @@ class RutaService:
         return {
             'ok': True,
             'paradas_auto_cerradas': auto_cerradas,
-            'mensaje': f'Ruta cerrada. {auto_cerradas} parada(s) registradas como rechazadas automáticamente.',
+            'mensaje': (f'Ruta cerrada. {auto_cerradas} parada(s) registradas como rechazadas '
+                        f'automáticamente. Falta liquidarla.'),
             'ruta': ruta.to_dict(),
         }
 

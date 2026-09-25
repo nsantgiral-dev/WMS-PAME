@@ -376,6 +376,10 @@ class TestUnPedidoPorMotivoDeDescuento:
                     'motivo_descuento': motivo,
                     'monto_descuento': retencion,
                 })
+            # La retención que declaró el conductor la decide la oficina
+            # antes de que salga cualquier documento (política única,
+            # 2026-09-25): sin esto el botón masivo emitía la NI igual.
+            LiquidacionService.confirmar_retencion(recaudo_id, admin_full, True)
             resumen = LiquidacionService.liquidar_ruta_siesa(
                 flujo.ruta_id, admin_id=admin_full)
 

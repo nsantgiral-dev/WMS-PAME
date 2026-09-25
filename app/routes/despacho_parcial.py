@@ -70,21 +70,31 @@ def despachar_parcial(packing_id: int):
     _disponible, _motivo = siesa_disponible_para_facturar()
     if not _disponible:
         return jsonify({'error': _motivo}), 503
-    try:
-        resultado = DespachoParialService.despachar_parcial(tarea, cantidades)
-        logger.info(
-            '[DESPACHO_PARCIAL] usuario=%s despachó packing_id=%s → %s',
-            u.email, packing_id, resultado.get('rm')
-        )
-        return jsonify({'ok': True, **resultado}), 200
-    except ValueError as e:
-        return jsonify({'error': str(e)}), 409
-    except RetenidoPorCartera as e:
-        return jsonify({'error': str(e), 'retenido_por_cartera': True,
-                        'retencion_id': e.retencion_id}), 409
-    except Exception as e:
-        logger.exception('[DESPACHO_PARCIAL] Error Siesa packing_id=%s: %s', packing_id, e)
-        return jsonify({'error': f'Error Siesa: {str(e)}'}), 502
+    # Segunda puerta al cierre (244328→142945→142943), sin la idempotencia de
+    # la vía viva (declarada BORRAR en DEUDA_SIN_UI). Mientras exista, no corre
+    # a la vez que la cola de Siesa ni que otro clic: el mismo lock que la
+    # DLQ (P1-8). Un doble clic o el job DESPACHO_F470 de la misma tarea
+    # procesándose en paralelo eran una segunda remisión.
+    from app.utils.lock import LOCK_DLQ, advisory_lock
+    with advisory_lock(LOCK_DLQ, 'despacho_parcial_manual') as tomado:
+        if not tomado:
+            return jsonify({'error': 'Hay un envío a Siesa en curso. Intente de nuevo en un '
+                                     'minuto.'}), 409
+        try:
+            resultado = DespachoParialService.despachar_parcial(tarea, cantidades)
+            logger.info(
+                '[DESPACHO_PARCIAL] usuario=%s despachó packing_id=%s → %s',
+                u.email, packing_id, resultado.get('rm')
+            )
+            return jsonify({'ok': True, **resultado}), 200
+        except ValueError as e:
+            return jsonify({'error': str(e)}), 409
+        except RetenidoPorCartera as e:
+            return jsonify({'error': str(e), 'retenido_por_cartera': True,
+                            'retencion_id': e.retencion_id}), 409
+        except Exception as e:
+            logger.exception('[DESPACHO_PARCIAL] Error Siesa packing_id=%s: %s', packing_id, e)
+            return jsonify({'error': f'Error Siesa: {str(e)}'}), 502
 
 
 @despacho_parcial_bp.route('/<int:packing_id>/facturar-remision', methods=['POST'])
@@ -175,6 +185,27 @@ def facturar_rm_manual(packing_id: int):
     if consec_rm <= 0 or not tipo_rm.isalnum() or len(tipo_rm) > 10:
         return jsonify({'error': 'La remisión se escribe como tipo (letras, hasta 10) '
                                  'y consecutivo mayor que cero.'}), 400
+
+    # La remisión la digita una persona y el WMS no la puede verificar contra
+    # Siesa (`f460_*` no existe en la API: no hay forma de preguntar si esa
+    # remisión es de este pedido ni si ya tiene factura por remisión). Se exige
+    # la confirmación explícita —el documento repetido tal cual— y un motivo,
+    # y queda FORZAR en la bitácora (P1-8). Una factura sobre la remisión
+    # equivocada es un documento fiscal que se anula con nota crédito.
+    documento = f'{tipo_rm}-{consec_rm}'
+    if str(body.get('confirmacion') or '').strip().upper() != documento:
+        return jsonify({'error': f'Confirme la remisión escribiendo exactamente {documento}',
+                        'requiere_confirmacion': documento}), 400
+    from app.services.bitacora import (FORZADO_FE_SOBRE_RM_DIGITADA, MotivoRequerido,
+                                       motivo_obligatorio, registrar_accion)
+    try:
+        motivo = motivo_obligatorio(body.get('motivo'), 'facturar sobre una remisión digitada')
+    except MotivoRequerido as e:
+        return jsonify({'error': str(e)}), 400
+    registrar_accion('FORZAR', tarea, usuario_id=u.id, motivo=motivo,
+                     entidad_codigo=tarea.numero_pedido_siesa,
+                     despues={'forzado': FORZADO_FE_SOBRE_RM_DIGITADA,
+                              'remision': documento})
 
     from app.services.despacho_parcial_service import DespachoParialService
     try:

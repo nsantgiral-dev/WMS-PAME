@@ -859,11 +859,14 @@ class TestRuta:
         ruta = db.session.get(RutaDespacho, f.ruta_id)
         assert ruta.fecha_cierre == salida            # la hora de salida se conserva
         assert ruta.fecha_entregada is not None
-        assert ruta.liquidada_por_id == usuario_admin.id and ruta.liquidada_en
+        # P1-5 (2026-09-25): el cierre forzado deja la ruta ENTREGADA, sin
+        # liquidar — liquidarla saltaba las guardas de `liquidar_ruta`.
+        assert ruta.estado == 'ENTREGADA'
+        assert ruta.estado_financiero != 'LIQUIDADA' and ruta.liquidada_en is None
         [ff] = _filas(accion='FORZAR')
         assert ff.motivo == 'conductor sin señal'
         assert ff.despues['paradas_auto_rechazadas'] == [f.packing_id]
-        assert len(_filas(accion='LIQUIDAR')) == 1
+        assert _filas(accion='LIQUIDAR') == []
 
     def test_liquidar_guarda_fecha_y_autor(self, client, db, h, usuario_admin, almacen,
                                            actores, monkeypatch):

@@ -296,9 +296,12 @@ function _liqBloqueSenales(rec) {
 function liqCargarPendientes() {
   const el = document.getElementById('liq-lista-pendientes');
   if (!el || !_liqDashboard) return;
-  const rutas = (_liqDashboard.rutas || []).filter(r =>
+  // Las atrasadas (entregadas sin liquidar de días anteriores al rango) van
+  // primero: el servidor las manda aparte porque no suman a los totales de hoy.
+  const atrasadas = _liqDashboard.rutas_atrasadas || [];
+  const rutas = atrasadas.concat((_liqDashboard.rutas || []).filter(r =>
     r.estado_financiero !== 'LIQUIDADA' && r.estado === 'ENTREGADA'
-  );
+  ));
   if (!rutas.length) {
     el.innerHTML = `
       <div style="text-align:center;padding:40px;color:var(--tx3);">
@@ -341,7 +344,8 @@ function _liqRutaCard(r, esLiquidada) {
          onclick="liqAbrirRuta(${esc(r.id)})">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;">
         <div>
-          <div style="font-size:var(--fs-sm);font-weight:700;color:var(--tx);">Ruta #${esc(r.id)}</div>
+          <div style="font-size:var(--fs-sm);font-weight:700;color:var(--tx);">Ruta #${esc(r.id)}${r.atrasada
+            ? ` <span style="font-size:var(--fs-xs);padding:2px 8px;border-radius:20px;background:var(--err-bg);color:var(--err-tx);">Atrasada${r.dias_rezago != null ? ` · ${esc(r.dias_rezago)} día${r.dias_rezago !== 1 ? 's' : ''}` : ''}</span>` : ''}</div>
           <div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:2px;">
             ${esc(r.conductor_nombre)} · ${esc(r.vehiculo_placa || '—')}
           </div>
@@ -653,7 +657,10 @@ function _liqRenderDetalle() {
       const retDet = rec.retenciones_detalle || [];
       html += `<div style="display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap;">`;
       if (rec.siesa_nc_triggered) html += '<span style="font-size:var(--fs-xs);padding:2px 8px;border-radius:20px;background:#1e3a5f33;color:var(--info-tx);">NC ✓</span>';
-      if (rec.siesa_rc_triggered) html += '<span style="font-size:var(--fs-xs);padding:2px 8px;border-radius:20px;background:#14532d33;color:var(--ok-tx);">RC ✓</span>';
+      // «RC ✓» solo con el desenlace confirmado (`rc_llego`): la bandera es de
+      // PRE-envío y queda puesta cuando el envío no se pudo verificar.
+      if (rec.rc_llego) html += '<span style="font-size:var(--fs-xs);padding:2px 8px;border-radius:20px;background:#14532d33;color:var(--ok-tx);">RC ✓</span>';
+      else if (rec.rc_sin_verificar) html += '<span style="font-size:var(--fs-xs);padding:2px 8px;border-radius:20px;background:var(--warn-bg);color:var(--warn-tx);">RC sin verificar</span>';
       retDet.forEach(rd => {
         if (rd.siesa_triggered) html += `<span style="font-size:var(--fs-xs);padding:2px 8px;border-radius:20px;background:#3b076633;color:var(--lila-tx);">DC ${rd.tipo.replace('RETEFUENTE_','RF').replace('RETEIVA','RIVA').replace('ICA_','ICA')} ✓</span>`;
       });
@@ -711,7 +718,7 @@ function _liqRenderDetalle() {
         <div style="margin-bottom:8px;">
           <div style="font-size:var(--fs-xs);color:var(--err-tx);font-weight:700;margin-bottom:4px;">RECHAZO TOTAL</div>
           <div style="font-size:var(--fs-xs);color:var(--err-tx);">${esc(rec.observaciones || 'Sin motivo registrado')}</div>
-          ${factura ? `<div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:4px;">NCE por: ${_liqFmt(factura.total_neto)} (total factura)</div>` : ''}
+          ${factura && !(rec.devolucion_pendiente && rec.devolucion_pendiente.sin_nc) ? `<div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:4px;">NCE por: ${_liqFmt(factura.total_neto)} (total factura)</div>` : ''}
         </div>`;
     }
 
@@ -730,16 +737,35 @@ function _liqRenderDetalle() {
 
     // ── FASE 2: Acciones per-parada (solo si LIQUIDADA) ──────────
     if (esLiquidada) {
+      // Un recibo que el WMS no pudo verificar no se reenvía solo (un segundo
+      // recibo se reversa a mano): una persona busca en Siesa y dice qué vio.
+      if (rec.rc_sin_verificar) html += _liqBloqueRcSinVerificar(ruta.id, rec);
       // Botones de acción por tipo de parada
       if ((estado === 'RECHAZADO' || estado === 'PARCIAL') && !rec.siesa_nc_triggered) {
         // Ya no se dispara la NC directo desde acá — Liquidar en WMS ya armó
         // la devolución pendiente; recepción la confirma en el módulo de
         // Devoluciones (verifica físicamente y ESO dispara la NC real, con
         // cruce automático de cartera).
-        if (rec.devolucion_pendiente) {
+        // El estado de la devolución lo dice el servidor (`sin_nc`, `contada`):
+        // una contada en cero no va a tener nota crédito, y la pantalla no
+        // puede prometerla (e2e 2026-09-25).
+        const dev = rec.devolucion_pendiente;
+        if (dev && dev.sin_nc) {
+          const falt = rec.faltante_retorno;
+          html += `
+            <div style="padding:8px;color:var(--err-tx);font-size:var(--fs-xs);font-weight:700;margin-top:8px;background:var(--err-bg);border-radius:8px;">
+              Faltante de retorno (${esc(dev.codigo)}): bodega contó cero de lo que el conductor declaró de vuelta${falt ? ` (${esc(falt.faltante_unidades)} unidades)` : ''}.
+              <div style="font-weight:400;margin-top:4px;">No habrá nota crédito: la factura queda con su saldo en cartera. Revise con el conductor dónde quedó la mercancía.</div>
+            </div>`;
+        } else if (dev && dev.contada) {
           html += `
             <div style="text-align:center;padding:8px;color:var(--info-tx);font-size:var(--fs-xs);font-weight:700;margin-top:8px;background:var(--info-bg);border-radius:8px;">
-              🔵 Enviado a Devoluciones (${esc(rec.devolucion_pendiente.codigo)}) — pendiente de que recepción confirme
+              🔵 Devolución ${esc(dev.codigo)} contada en bodega — la nota crédito va en camino a Siesa
+            </div>`;
+        } else if (dev) {
+          html += `
+            <div style="text-align:center;padding:8px;color:var(--info-tx);font-size:var(--fs-xs);font-weight:700;margin-top:8px;background:var(--info-bg);border-radius:8px;">
+              🔵 Enviado a Devoluciones (${esc(dev.codigo)}) — pendiente de que recepción confirme
             </div>`;
         } else {
           html += `
@@ -774,7 +800,7 @@ function _liqRenderDetalle() {
         const rcEsperaNC = (estado === 'PARCIAL' && !rec.siesa_nc_triggered);
         html += _liqBloqueRetencion(ruta.id, rec, factura);
         const trabado = _liqRetencionTraba(rec);
-        html += !trabado
+        html += !_liqPuedeCobrar() ? _liqSinPermisoCobro() : !trabado
           ? `
           <button onclick="liqToggleCobro(${esc(ruta.id)}, ${esc(rec.id)})"
             style="width:100%;margin-top:8px;padding:12px;background:#14532d;color:#bbf7d0;border:none;border-radius:8px;font-size:var(--fs-sm);font-weight:700;cursor:pointer;">
@@ -855,6 +881,63 @@ function _liqBloqueCreditoNoAutorizado(rutaId, rec) {
 }
 
 /** Pide la razón y autoriza como crédito una parada de contado sin cobro. */
+/** ¿Quien mira puede registrar el cobro? Lo manda el servidor (las mismas
+ *  funciones que cortan con 403): registrar el cobro encola el recibo de caja,
+ *  y lo hace quien puede liquidar. Sin el dato (servidor viejo), se ofrece. */
+function _liqPuedeCobrar() {
+  return !(_liqDetalleRuta && _liqDetalleRuta.permisos
+           && _liqDetalleRuta.permisos.liquidar === false);
+}
+
+function _liqSinPermisoCobro() {
+  return `
+          <div style="text-align:center;padding:8px;color:var(--tx3);font-size:var(--fs-xs);margin-top:8px;background:var(--bg);border-radius:8px;">
+            El cobro de esta parada lo registra quien liquida la ruta.
+          </div>`;
+}
+
+/** El recibo de caja que no se pudo verificar: qué pasó y cómo se resuelve. */
+function _liqBloqueRcSinVerificar(rutaId, rec) {
+  const puede = !(_liqDetalleRuta && _liqDetalleRuta.permisos
+                  && _liqDetalleRuta.permisos.resolver_documento === false);
+  return `
+    <div style="margin:8px 0;padding:10px;background:var(--warn-bg);border:1px solid var(--warn-brd);border-radius:8px;">
+      <div style="font-size:var(--fs-xs);color:var(--warn-tx);font-weight:700;">Recibo de caja sin verificar</div>
+      <div style="font-size:var(--fs-xs);color:var(--tx2);margin-top:4px;">
+        El envío a Siesa falló sin respuesta clara y el WMS no pudo confirmar si el recibo quedó creado.
+        No se reenvía solo: un recibo duplicado se reversa a mano. Búsquelo en Siesa (Auditoría de documentos)
+        y registre lo que encontró.
+      </div>
+      ${puede ? `
+      <div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap;">
+        <button onclick="liqResolverRC(${esc(rutaId)}, ${esc(rec.id)}, 1)"
+          style="flex:1;padding:8px;background:var(--ok-bg);color:var(--ok-tx);border:1px solid var(--ok-brd);border-radius:8px;font-size:var(--fs-xs);font-weight:700;cursor:pointer;">Sí está en Siesa</button>
+        <button onclick="liqResolverRC(${esc(rutaId)}, ${esc(rec.id)}, 0)"
+          style="flex:1;padding:8px;background:var(--bg);color:var(--tx2);border:1px solid var(--brd);border-radius:8px;font-size:var(--fs-xs);font-weight:700;cursor:pointer;">No está en Siesa</button>
+      </div>` : `
+      <div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:6px;">Lo resuelve quien liquida la ruta.</div>`}
+    </div>`;
+}
+
+/** Registra lo que una persona encontró en Siesa sobre un recibo sin verificar. */
+async function liqResolverRC(rutaId, recaudoId, entro) {
+  const encontro = entro === 1;
+  const motivo = await _modalTexto(encontro ? 'El recibo sí está en Siesa' : 'El recibo no está en Siesa',
+    encontro
+      ? '¿Dónde lo vio y con qué número? (obligatorio — queda en la bitácora con su nombre)'
+      : '¿Dónde lo buscó? (obligatorio — queda en la bitácora). El cobro se podrá registrar de nuevo.',
+    { obligatorio: true });
+  if (!motivo || !motivo.trim()) return;
+  try {
+    await post(`/api/rutas/${rutaId}/recaudos/${recaudoId}/resolver-rc`,
+               { entro: encontro, motivo: motivo.trim() });
+    alerta(encontro ? 'Recibo registrado como creado en Siesa' : 'Recibo marcado como no creado', 'exito');
+    await liqAbrirRuta(rutaId);
+  } catch (e) {
+    alerta(e.message || 'No se pudo registrar', 'error');
+  }
+}
+
 async function liqAutorizarCredito(rutaId, recaudoId) {
   const razon = await _modalTexto('Autorizar como crédito',
     '¿Por qué esta factura de contado queda como crédito? (obligatorio — queda en la bitácora con tu nombre)');
@@ -1289,12 +1372,21 @@ function liqPreviewCobro(recaudoId) {
     }
   });
 
-  const neto = monto - totalRet;
+  // Si el RC sale neto de la retención lo decide el servidor
+  // (`politica_cobro.monto_rc`, `rc_resta_retencion`): en una entrega parcial
+  // lo cobrado YA viene neto — restarle otra vez dejaba el recibo corto.
+  const restaRetencion = preview.rc_resta_retencion !== false;
+  const neto = restaRetencion ? monto - totalRet : monto;
+  const cierra = restaRetencion ? monto : monto + totalRet;
+  const baseSinDato = preview.base_retencion_disponible === false && checks.length;
   previewDiv.innerHTML = `
     <div style="font-size:var(--fs-xs);font-weight:700;color:var(--tx3);margin-bottom:4px;">Se enviará a Siesa:</div>
-    <div style="color:var(--ok-tx);">• RC por ${_liqFmt(neto)} (neto: ${_liqFmt(monto)} - ${_liqFmt(totalRet)} retenciones)</div>
+    <div style="color:var(--ok-tx);">• RC por ${_liqFmt(neto)}${restaRetencion
+      ? ` (neto: ${_liqFmt(monto)} - ${_liqFmt(totalRet)} retenciones)`
+      : ' (lo cobrado, que ya viene neto de la retención)'}</div>
     ${detalleHtml}
-    <div style="margin-top:6px;font-weight:700;color:var(--tx);">Total CxC cerrado: ${_liqFmt(monto)}</div>`;
+    ${baseSinDato ? '<div style="color:var(--warn-tx);">La devolución todavía no está amarrada a la factura: la base de la retención no se puede calcular.</div>' : ''}
+    <div style="margin-top:6px;font-weight:700;color:var(--tx);">Total CxC cerrado: ${_liqFmt(cierra)}</div>`;
 }
 
 /**

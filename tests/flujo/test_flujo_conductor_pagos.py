@@ -268,6 +268,9 @@ class TestEntregaTotalPagoParcial:
                     'motivo_descuento': 'RETEFUENTE_2.5',
                     'monto_descuento': retencion,
                 })
+            # Sin decisión de la oficina no sale ni RC ni DC (política única,
+            # 2026-09-25) — el pendiente se prueba en `test_politica_cobro.py`.
+            LiquidacionService.confirmar_retencion(recaudo_id, None, True)
             resumen = LiquidacionService.liquidar_ruta_siesa(flujo.ruta_id)
 
         assert resumen['rc_encolados'] == 1

@@ -394,7 +394,8 @@ class TestLoQueCarteraNecesitaCruzar:
         pc = client.get(_URL, headers=h).get_json()['paradas_credito']
         assert pc['total'] == 1
         fila = pc['detalle'][0]
-        assert fila['pedido'] == 'PD-777'
+        # Como lo escribe Siesa: «PD777», sin guion (e2e 2026-09-25).
+        assert fila['pedido'] == 'PD777'
         assert 'ruta_id' in fila and 'cliente' in fila
 
     def test_una_parada_sin_modo_registrado_igual_aparece(self, client, db, h, ruta_con_tarea):

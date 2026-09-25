@@ -198,6 +198,8 @@ class LiquidacionService:
 
         resultado_recaudos = []
         warnings = []
+        from app.services import politica_cobro as _pc_lote
+        _rc_llegaron = _pc_lote.rc_llegaron(recaudos)
         from app.services import senales_ruta as _sr
         _faltantes = _sr.faltantes_de_retorno_de_recaudos([r.id for r in recaudos])
 
@@ -286,14 +288,29 @@ class LiquidacionService:
             # Parcial/Rechazado ya no disparan la NC directo — arman una
             # DevolucionCliente pendiente que recepción confirma (ver
             # devolucion_ruta). El admin ve acá si ya se envió.
-            devolucion = (DevolucionCliente.query
-                          .filter_by(recaudo_entrega_id=recaudo.id)
-                          .filter(DevolucionCliente.estado != 'CANCELADA')
-                          .first())
+            from app.models.devolucion_cliente import EstadoDevolucionCliente as _EDC
+            from app.services import devolucion_ruta as _dr_det
+            devolucion = _dr_det.devolucion_vigente(recaudo.id)
+            # El estado de la devolución viaja con lo que significa: una
+            # contada en cero (FALTANTE_TOTAL) no va a tener nota crédito, y la
+            # pantalla decía «pendiente de que recepción confirme» y «NCE por
+            # $X» sobre ella (e2e 2026-09-25). La pantalla no lo deduce.
             rd['devolucion_pendiente'] = (
-                {'id': devolucion.id, 'codigo': devolucion.codigo, 'estado': devolucion.estado}
+                {'id': devolucion.id, 'codigo': devolucion.codigo, 'estado': devolucion.estado,
+                 'contada': devolucion.estado in _EDC.CONTADAS,
+                 'sin_nc': _dr_det.nc_no_llegara(recaudo)}
                 if devolucion else None
             )
+            # Lo que «Enviar a Siesa» produciría hoy para esta parada, de la
+            # política (`politica_cobro.documentos_pendientes`).
+            from app.services import politica_cobro as _pc_det
+            rd['documentos_pendientes'] = _pc_det.documentos_pendientes(recaudo, tarea)
+            # «Llegó» con señal positiva, no con la bandera de pre-envío.
+            rd['rc_llego'] = recaudo.id in _rc_llegaron
+            rd['rc_sin_verificar'] = bool(recaudo.siesa_rc_triggered and not rd['rc_llego']
+                                          and not rd['rc_en_cola'])
+            rd['cobro_editable'] = _pc_det.puede_editar_cobro(recaudo)
+            rd['decision_retencion'] = _pc_det.decision_retencion(recaudo)
 
             resultado_recaudos.append(rd)
 
@@ -532,10 +549,13 @@ class LiquidacionService:
             raise ValueError(
                 f'Recaudo {recaudo_id} no tiene motivo de retención declarado '
                 'por el conductor — no hay nada que confirmar')
-        if recaudo.siesa_rc_triggered:
+        # Congelada al ENCOLAR el recibo, no al enviarlo (P1-3): el monto del
+        # RC ya se armó con esta decisión.
+        from app.services import politica_cobro as _pc
+        if not _pc.puede_editar_cobro(recaudo):
             raise ValueError(
-                f'RC ya fue disparado para recaudo {recaudo_id} — la decisión '
-                'ya no aplica')
+                f'La decisión sobre la retención ya no aplica: '
+                f'{_pc.motivo_cobro_congelado(recaudo)}')
 
         recaudo.retencion_confirmada = bool(confirmar)
         recaudo.retencion_confirmada_por = admin_id
@@ -1164,6 +1184,60 @@ class LiquidacionService:
             'dc_jobs': dc_jobs_info,
             'monto_neto_rc': monto_neto_rc,
         }
+
+    @staticmethod
+    def resolver_recibo_sin_verificar(recaudo_id: int, usuario_id: int, entro: bool,
+                                      motivo: str, consecutivo=None) -> dict:
+        """Una persona dice cómo terminó un recibo de caja que el WMS no pudo
+        verificar. **La salida que no existía** (P0-4): un RC cuyo POST falló
+        sin que Siesa dijera que no queda con la bandera puesta y el job
+        FALLIDO — no se reenvía solo (Regla 3) —, y hasta ahora nada lo
+        destrababa.
+
+        · `entro=True`: quien buscó en Siesa encontró el recibo. Queda
+          ENVIADO (con el consecutivo si lo dio) y la retención puede seguir.
+        · `entro=False`: no está en Siesa. Se baja la bandera y el cobro se
+          puede registrar de nuevo (o reintentar el job).
+
+        Motivo obligatorio; FORZAR en la bitácora. No hace POST. No sobre un
+        recibo con envío en curso, ni sobre uno que ya consta como llegado.
+        """
+        from app.services import politica_cobro as _pc
+        from app.services.bitacora import (FORZADO_RC_RESUELTO_A_MANO, foto,
+                                           motivo_obligatorio, registrar_accion)
+        texto = motivo_obligatorio(motivo, 'resolver a mano un recibo de caja')
+        recaudo = db.session.query(RecaudoEntrega).with_for_update().get(recaudo_id)
+        if not recaudo:
+            raise LookupError(f'RecaudoEntrega {recaudo_id} no encontrado')
+        if not recaudo.siesa_rc_triggered or _pc.rc_llego_a_siesa(recaudo):
+            raise ValueError('Este recibo de caja no está pendiente de verificar: no hay '
+                             'nada que resolver')
+        from app.models.siesa_job import EstadoSiesaJob
+        vivo = SiesaJob.query.filter(
+            SiesaJob.tipo == 'RECIBO_CAJA', SiesaJob.referencia_tipo == 'RecaudoEntrega',
+            SiesaJob.referencia_id == recaudo.id,
+            SiesaJob.estado.in_(list(EstadoSiesaJob.ACTIVOS))).first()
+        if vivo is not None:
+            raise ValueError(f'Hay un envío de este recibo en curso (job {vivo.id}): '
+                             'espere a que termine')
+        antes = foto(recaudo, ['siesa_rc_triggered', 'siesa_rc_resultado', 'siesa_rc_consec'])
+        if entro:
+            recaudo.anotar_documento_siesa('RC', 'ENVIADO', consec=(consecutivo or None))
+        else:
+            recaudo.siesa_rc_triggered = False
+            recaudo.anotar_documento_siesa('RC', 'FALLIDO')
+        tarea = recaudo.tarea
+        registrar_accion(
+            'FORZAR', recaudo, usuario_id=usuario_id, motivo=texto,
+            entidad_codigo=getattr(tarea, 'numero_pedido_siesa', None),
+            antes=antes,
+            despues={'forzado': FORZADO_RC_RESUELTO_A_MANO, 'entro': bool(entro),
+                     **foto(recaudo, ['siesa_rc_triggered', 'siesa_rc_resultado',
+                                      'siesa_rc_consec'])})
+        db.session.commit()
+        logger.info('[LIQUIDACION] RC del recaudo %d resuelto a mano por %s: %s',
+                    recaudo_id, usuario_id, 'entró' if entro else 'no entró')
+        return recaudo.to_dict()
 
     @staticmethod
     def corregir_monto_declarado(recaudo_id: int, nuevo_monto: float, razon: str,

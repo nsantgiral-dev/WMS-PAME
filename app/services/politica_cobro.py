@@ -210,8 +210,6 @@ def base_retencion_entregada(recaudo, lineas_factura: list):
 # 4 · ¿Se puede cambiar el cobro de esta parada?
 # ═════════════════════════════════════════════════════════════════════════════
 
-#: Estados de la cola en los que un job **todavía cuenta** (vivo o ya hecho).
-_JOB_NO_CUENTA = ('FALLIDO', 'DESCARTADO')
 
 
 def motivo_cobro_congelado(recaudo) -> str | None:
@@ -227,12 +225,14 @@ def motivo_cobro_congelado(recaudo) -> str | None:
         return None
     if recaudo.siesa_rc_triggered:
         return 'el recibo de caja de esta parada ya se envió a Siesa'
-    from app.models.siesa_job import SiesaJob
+    from app.models.siesa_job import EstadoSiesaJob, SiesaJob
+    # Vivo o ya hecho. FALLIDO y DESCARTADO no congelan: con la guarda abajo no
+    # hay documento que proteger.
     vivo = SiesaJob.query.filter(
         SiesaJob.tipo.in_(('RECIBO_CAJA', 'DOCUMENTO_CONTABLE_RET')),
         SiesaJob.referencia_tipo == 'RecaudoEntrega',
         SiesaJob.referencia_id == recaudo.id,
-        SiesaJob.estado.notin_(_JOB_NO_CUENTA),
+        SiesaJob.estado.in_(list(EstadoSiesaJob.ACTIVOS) + [EstadoSiesaJob.COMPLETADO]),
     ).first()
     if vivo is not None:
         doc = 'el recibo de caja' if vivo.tipo == 'RECIBO_CAJA' else 'una retención'
@@ -286,7 +286,7 @@ LLEGO = ('ENVIADO', 'YA_SALDADA')
 _COMPLETADO_SIN_CONFIRMAR = ('verificacion_imposible', 'modo_ensayo', 'idempotente')
 
 
-def _completado_confirma(job) -> bool:
+def completado_confirma(job) -> bool:
     try:
         res = json.loads(job.resultado or '{}')
     except (ValueError, TypeError):
@@ -315,7 +315,7 @@ def rc_llegaron(recaudos) -> set:
                 SiesaJob.referencia_tipo == 'RecaudoEntrega',
                 SiesaJob.referencia_id.in_(legado),
                 SiesaJob.estado == EstadoSiesaJob.COMPLETADO).all():
-            if _completado_confirma(j):
+            if completado_confirma(j):
                 ok.add(j.referencia_id)
     return ok
 
