@@ -1308,6 +1308,32 @@ def estado_carga_inventario(bodega: str = None):
 _BODEGAS_CALIBRACION_FISICA = (None, 'NS1', 'NC1')
 
 
+def estado_carga_fisica(ahora=None) -> list:
+    """La última carga física de cada bodega calibrada, leída de
+    `registros_sync` (no de memoria). La leen 🩺 Salud y el resumen diario:
+    una carga que **no escribió** (fuente degradada, P0-8) se ve, no se calla.
+
+    `[{bodega, ultima_inicio, ok, error, no_escribio, de_hoy}]`."""
+    from app.services import registro_sync_service as _reg
+    from app.utils.fecha import dia_operativo, dia_operativo_de
+    out = []
+    for bod in _BODEGAS_CALIBRACION_FISICA:
+        bod_real = bod or connekta.bodega
+        u = _reg.ultimo(_tipo_registro_stock(bod_real)) or {}
+        inicio = u.get('inicio')
+        de_hoy = False
+        if inicio:
+            try:
+                de_hoy = dia_operativo_de(datetime.fromisoformat(inicio)) == dia_operativo()
+            except (TypeError, ValueError):
+                de_hoy = False
+        err = u.get('error') or u.get('_error_lectura')
+        out.append({'bodega': bod_real, 'ultima_inicio': inicio, 'ok': u.get('ok'),
+                    'error': err, 'de_hoy': de_hoy,
+                    'no_escribio': bool(err and 'No se escribe inventario' in str(err))})
+    return out
+
+
 def _ejecutar_carga_fisica_diaria(app):
     """Corre `_run_carga_inicial` para cada bodega calibrada, EN SECUENCIA.
 

@@ -658,6 +658,89 @@ Compras debe ordenar o trasladar mercancía para estos SKUs.
 
 # ── Resumen operativo diario ──────────────────────────────────────────────────
 
+def despachados_del_dia(dia) -> int:
+    """Pedidos despachados ese día Bogotá, en todos los almacenes —
+    `metricas.pedidos_despachados`, la misma del tablero."""
+    from app.models.almacen import Almacen
+    from app.services.metricas.pedidos_despachados import calcular_pedidos_despachados
+    return sum(calcular_pedidos_despachados(a.id, dia, dia)['pedidos']
+               for a in Almacen.query.all())
+
+
+def avisos_sin_canal(ayer_inicio, ayer_fin) -> list:
+    """Líneas del resumen diario para lo que no tenía canal (2026-09-25).
+
+    Cada fuente es la función que ya decide —no una consulta nueva—; una que
+    revienta se declara en su propia línea, no tumba las demás."""
+    lineas = []
+
+    def _seguro(nombre, fn):
+        try:
+            fn()
+        except Exception as e:     # noqa: BLE001
+            logger.error('[RESUMEN] aviso %s falló: %s', nombre, e, exc_info=True)
+            lineas.append(f'⚠ No se pudo revisar {nombre}: {str(e)[:120]}')
+
+    def _auditoria():
+        from app.services.auditoria import auditar
+        rep = auditar()
+        bloq = [r for r in rep['resultados'] if r['severidad'] == 'BLOQUEA' and r['total']]
+        if not bloq:
+            return
+        nuevos = 0
+        for r in bloq:
+            for h in r['hallazgos']:
+                if h.get('fecha') and ayer_inicio.isoformat() <= h['fecha'] < ayer_fin.isoformat():
+                    nuevos += 1
+        detalle = ', '.join(f"{r['codigo']} ({r['total']})" for r in bloq[:8])
+        lineas.append(f'🚨 Auditoría: {rep["bloqueantes"]} hallazgo(s) que BLOQUEAN '
+                      f'({nuevos} nuevos ayer): {detalle}')
+
+    def _cartera():
+        from app.services import cartera_service
+        viejas = cartera_service.salud().get('alertas') or []
+        if viejas:
+            lineas.append(f'⚠ {len(viejas)} pedido(s) retenidos por cartera hace más de 3 días: '
+                          + ', '.join(str(a.get('pedido')) for a in viejas[:10]))
+
+    def _traslados():
+        from app.services.traslado_monitor_service import _traslados_en_riesgo
+        crit = _traslados_en_riesgo()['criticos']
+        if crit:
+            lineas.append(f'🚨 {len(crit)} traslado(s) en tránsito hace más de 24 h (mercancía '
+                          'en la bodega puente): ' + ', '.join(t['codigo'] for t in crit[:10]))
+
+    def _carga_fisica():
+        from app.services.inventario_siesa_service import estado_carga_fisica
+        for c in estado_carga_fisica():
+            if c['no_escribio'] or (c['ok'] is False and c['de_hoy']):
+                lineas.append(f"⚠ Carga física de {c['bodega']} NO escribió inventario: "
+                              f"{str(c['error'])[:160]}. Se reintenta desde Siesa → Cargar inventario.")
+
+    def _crons():
+        from app.services import cron_latido
+        lat = cron_latido.estado()
+        if lat.get('fallando'):
+            lineas.append('⚠ Crons cuya última corrida falló: ' + ', '.join(lat['fallando']))
+        if lat.get('callados'):
+            lineas.append('⚠ Crons que no corren hace más de lo esperado: '
+                          + ', '.join(lat['callados']))
+
+    def _sello():
+        from app.services import sello_ambiente
+        e = sello_ambiente.estado()
+        if e.get('bloquea'):
+            lineas.append(f"🚨 {e['texto']}")
+
+    _seguro('la auditoría', _auditoria)
+    _seguro('la cartera retenida', _cartera)
+    _seguro('los traslados en tránsito', _traslados)
+    _seguro('la carga física', _carga_fisica)
+    _seguro('los crons', _crons)
+    _seguro('el sello de ambiente', _sello)
+    return lineas
+
+
 def enviar_resumen_diario(app=None):
     """
     Cron diario a las 08:00 Bogotá.
@@ -678,18 +761,17 @@ def enviar_resumen_diario(app=None):
             from app.extensions import db
             from sqlalchemy import func
 
-            ayer_inicio = datetime.combine(_dia_operativo() - timedelta(days=1),
-                                           datetime.min.time())
-            ayer_fin    = datetime.combine(_dia_operativo(), datetime.min.time())
+            # El día de AYER en Bogotá (Regla 5). Antes eran medianoches naive
+            # comparadas contra columnas UTC: la ventana quedaba corrida 5 h.
+            from app.utils.fecha import rango_dia_operativo_utc
+            ayer = _dia_operativo() - timedelta(days=1)
+            ayer_inicio, ayer_fin = rango_dia_operativo_utc(ayer, ayer)
 
-            # Pedidos despachados ayer (picking completado)
+            # Pedidos despachados ayer: la métrica de siempre (`metricas`), por
+            # almacén. Antes importaba `PedidoPicking`, que no existe: salía
+            # «N/D» todos los días.
             try:
-                from app.models.picking import PedidoPicking
-                pedidos_despachados = PedidoPicking.query.filter(
-                    PedidoPicking.estado == 'COMPLETADO',
-                    PedidoPicking.fecha_completado >= ayer_inicio,
-                    PedidoPicking.fecha_completado < ayer_fin,
-                ).count()
+                pedidos_despachados = despachados_del_dia(ayer)
             except Exception as _e:
                 logger.warning(f'[RESUMEN] No se pudo calcular pedidos_despachados: {_e}')
                 pedidos_despachados = 'N/D'
@@ -734,20 +816,17 @@ def enviar_resumen_diario(app=None):
                 logger.error(f'[RESUMEN] No se pudo calcular jobs Siesa: {_e}', exc_info=True)
                 jobs_ok = jobs_fallidos = 'N/D'
 
-            # Sweep de invariantes: detectar violaciones que solo app code previene
+            # Lo que ningún otro canal avisa (P1-14 / alertas sin canal): la
+            # auditoría (con el corte) en vez de consultas propias —la de
+            # «DESPACHADO sin bultos» reescribía VTA-30 sin corte—, cartera
+            # retenida > 3 días, traslados en limbo > 24 h, la carga física que
+            # no escribió, crons que fallan o callan y el sello de ambiente.
             anomalias = []
             try:
-                from app.models.packing import TareaPacking
-                from app.models.bulto import Bulto
-                # INV_PACKING_BULTO: DESPACHADO sin bultos
-                _sin_bultos = (db.session.query(TareaPacking.id)
-                    .outerjoin(Bulto, Bulto.tarea_id == TareaPacking.id)
-                    .filter(TareaPacking.estado == 'DESPACHADO', Bulto.id.is_(None))
-                    .count())
-                if _sin_bultos:
-                    anomalias.append(f'⚠ {_sin_bultos} packing(s) DESPACHADO sin bultos')
+                anomalias.extend(avisos_sin_canal(ayer_inicio, ayer_fin))
             except Exception:
-                logger.error('[RESUMEN] Sweep INV_PACKING_BULTO falló', exc_info=True)
+                logger.error('[RESUMEN] avisos sin canal fallaron', exc_info=True)
+                anomalias.append('⚠ No se pudieron calcular los avisos del día (ver el log)')
             try:
                 # Jobs FALLIDO >24h (no solo ayer)
                 # Desde el corte (FECHA_INICIO_AUDITORIA): el ensayo no es

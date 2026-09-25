@@ -234,7 +234,9 @@ def auditar(flujo: Optional[str] = None, ctx=None) -> dict:
             'consecuencia': i.consecuencia,
             'error': error,
             'hallazgos': [
-                {'referencia': h.referencia, 'detalle': h.detalle, 'datos': h.datos}
+                {'referencia': h.referencia, 'detalle': h.detalle, 'datos': h.datos,
+                 # El resumen diario cuenta los NUEVOS con esto (P1-14).
+                 'fecha': h.fecha.isoformat() if h.fecha else None}
                 for h in hallazgos[:100]
             ],
             'total': len(hallazgos),
