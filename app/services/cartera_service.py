@@ -1000,11 +1000,16 @@ def _registrar_retencion(ev: dict, compuerta: str, pedido: dict, tarea=None,
         reevaluaciones=0)
     db.session.add(r)
     db.session.flush()
-    registrar_accion('BLOQUEAR', r, usuario_id=iniciado_por_id,
+    # La retiene la COMPUERTA, no quien tocó «Aprobar» o cerró la caja: la
+    # bitácora la firma el sistema, y quien inició el pedido va como dato.
+    # Con `usuario_id=iniciador` se leía «Laura bloqueó la retención».
+    registrar_accion('BLOQUEAR', r, usuario_id=None,
                      entidad_codigo=pedido.get('numero_pedido'),
                      motivo=f'Retenido por cartera ({compuerta}): {ev.get("resumen")}',
                      despues={'motivos': [m['codigo'] for m in motivos if m['retiene']],
-                              'valor': ev.get('valor'), 'nit': ev['nit']},
+                              'valor': ev.get('valor'), 'nit': ev['nit'],
+                              'compuerta': compuerta,
+                              'iniciado_por_id': iniciado_por_id},
                      almacen_id=r.almacen_id,
                      origen=None if _en_request() else 'cartera_service')
     return r
@@ -1141,7 +1146,8 @@ class Paso:
 
 
 def _mensaje(ev: dict, retencion) -> str:
-    return (f'Retenido por cartera: {ev.get("resumen") or "sin detalle"}. '
+    resumen = (ev.get('resumen') or 'sin detalle').rstrip().rstrip('.')
+    return (f'Retenido por cartera: {resumen}. '
             f'Lo libera un usuario de cartera (Gestor de Cartera) o el pago del cliente'
             + (f' — retención #{retencion.id}' if retencion is not None else '') + '.')
 
@@ -1446,6 +1452,14 @@ def _disparar_dlq_si_emision(r):
             logger.warning('[CARTERA] no se pudo disparar el DLQ: %s', e)
 
 
+def solo_contado(r) -> bool:
+    """Decisión del dueño: con acuerdo de pago vigente el pedido sale **solo
+    de contado**. Una retención así no se autoriza a crédito — ni el Gestor ni
+    el panel del WMS; la salida es convertir a contado."""
+    return any(m.get('codigo') == ACUERDO_VIGENTE and m.get('retiene')
+               for m in (r.motivos or []))
+
+
 def autorizar(retencion_id: int, usuario, motivo: str, tope_valor, vence_en=None,
               codigo_excepcion: str = None, origen: str = 'GESTOR',
               usuario_id: int = None) -> RetencionCartera:
@@ -1467,6 +1481,9 @@ def autorizar(retencion_id: int, usuario, motivo: str, tope_valor, vence_en=None
     if _identidades(usuario) & iniciadores(r):
         raise AccionRechazada('Quien inició el pedido no puede autorizar su propia '
                               'excepción de cartera', r.estado)
+    if solo_contado(r):
+        raise AccionRechazada('El cliente tiene un acuerdo de pago vigente: el pedido solo '
+                              'sale de contado. Conviértalo a contado.', r.estado)
     tope = _dec(tope_valor)
     if tope is None or tope <= 0:
         raise ValueError('tope_valor es obligatorio y mayor que cero')
@@ -1708,6 +1725,11 @@ def retencion_publica(r) -> dict:
         'valor': float(r.valor) if r.valor is not None else None,
         'motivos': r.motivos or [],
         'motivos_codigos': [m.get('codigo') for m in (r.motivos or []) if m.get('retiene')],
+        # Acuerdo de pago vigente → solo contado: el Gestor y el panel no
+        # ofrecen «autorizar crédito» (el servidor tampoco lo acepta).
+        'acciones': (['convertir_contado', 'reevaluar'] if solo_contado(r)
+                     else ['autorizar', 'convertir_contado', 'reevaluar'])
+                    if r.estado == EstadoRetencion.RETENIDO else [],
         'resumen': ev.get('resumen'),
         'vencidas': ev.get('vencidas') or [],
         'vencidas_n': ev.get('vencidas_n'), 'vencido': ev.get('vencido'),

@@ -169,7 +169,7 @@ texto.
 | `papeleriamedellin_WMS_Stock_Bodega_v2` | `inventario_siesa_service._descargar_una_pasada_custom()` | **Existencias multi-bodega** — la que llena `stock_siesa` |
 | `papeleriamedellin_papeleriamedellin_API_custom_KardexWMS` | `kardex_service` (`KARDEX_CONSULTA_NOMBRE`) | Movimientos de kardex para demanda y costeo |
 | `papeleriamedellin_compromisos_wms` | `get_compromisos_t405()` | Compromisos por pedido (variante dinámica, lee t405) |
-| `papeleriamedellin_WMS_Remision_DesdePedido` | `get_remision_desde_pedido()` | Remisión asociada a un pedido |
+| `papeleriamedellin_WMS_Remision_DesdePedido` | `get_remision_desde_pedido()` | Remisión asociada a un pedido. **Tres estados** (encontrada / `None` = barrido completo sin ella / `RemisionNoDisponible` = no se sabe), `tamPag=100` paginado (2026-09-25) |
 | `papeleriamedellin_WMS_PuntoEnvio_FE` | `get_punto_envio_factura()` | Punto de envío para la FE (fallback de `SIESA_PUNTO_ENVIO_DEFAULT`) |
 | `papeleriamedellin_API_custom_TercerosContacto` | `get_terceros_contacto()` | Contacto del tercero |
 | `papeleriamedellin_monitos_facturas_wms` | `get_factura_desde_pedido()`, `get_monitor_facturas_raw()` | Factura del día por pedido — **es la guarda anti-duplicado de FE**, no solo un monitor |
@@ -1269,6 +1269,70 @@ costaba.
 
 Trinquete: `tests/test_compromisos_vacios.py`.
 
+> **Superado el 2026-09-25** («Fiscal y despacho», abajo): la rama de
+> compromisos vacíos ya **no marca DESPACHADO**. Busca la remisión que los
+> consumió y la factura; sin RM identificada, resultado desconocido.
+
+---
+
+## Fiscal y despacho: ninguna mercancía sale sin documento (2026-09-25)
+
+**Decisión del dueño:** *si Siesa está caído y no se puede facturar, se para
+todo.* No hay modo contingencia: ninguna caja se cierra, ningún pedido queda
+DESPACHADO y ningún bulto va al muelle ni a la ruta sin **remisión Y factura
+confirmadas**. El texto que ve la pantalla lo pone el servidor:
+«Siesa no está disponible: no se puede facturar, la caja queda esperando.»
+
+**La clase:** *«no pude preguntarle a Siesa» leído como «no existe» o como «ya
+está hecho».* Trinquete: `tests/test_documento_fiscal.py` (106 tests).
+
+| Qué pasaba | Ahora |
+|---|---|
+| `reconciliacion_service._ESTADOS_CUMPLIDO = {'9'}`: un pedido **anulado** mientras la caja esperaba (p. ej. retenida por cartera) quedaba `siesa_triggered` + DESPACHADO, y el muelle lo dejaba subir sin RM ni FE | **Una tabla de estados de pedido**, `estado_pedido_siesa` (9 = ANULADO en sync, cierre, historia y reconciliación). La reconciliación solo reconcilia con **la factura y su consecutivo**; el estado sirve para declarar un anulado (`pedido_anulado_siesa`), nunca `siesa_triggered`. Tres respuestas (`reconciliado` / `no_se: False` / `no_se: True`); el DLQ no manda nada si «no se sabe». El barrido rota por `reconciliacion_intento_at` (antes `.limit(10)` sin orden) y no mira anulados |
+| `get_remision_desde_pedido` devolvía `None` ante cualquier error y pedía `tamPag=200`; un 142945 sin consecutivo terminaba en `ValueError` → el reintento **reenviaba el 142945** (RM #2), o caía en compromisos vacíos → `244328-AUTO` DESPACHADO sin RM ni FE | Pre-flag **`rm_enviada_at`** antes del 142945 (Regla 6): se revierte solo ante un «no» explícito (`ConnektaRechazoExplicito`: 4xx, 429, `codigo≠0`) o una petición que no salió. Con el flag y sin RM, **nunca se reenvía**: se identifica la RM (tres estados). Recién enviada, `EsperandoRemision` (Regla 20, sin gastar reintento, gracia 15 min); después, `RemisionNoIdentificada` (subclase de `ConnektaResultadoDesconocido` → FALLIDO sin reintento). La salida: **facturar-rm-manual** (con la RM que se ve en Siesa) o `{"rm_inexistente": true, "motivo"}` en el mismo endpoint, que vuelve a preguntar antes de quitar el flag. `_persistir_resultado` se niega sin `rm_consec` |
+| Compromisos vacíos = DESPACHADO `244328-AUTO` | Busca la RM que los consumió y factura (con el anti-duplicado de FE por pedido); sin RM, resultado desconocido. Nunca DESPACHADO sin `rm_consec` |
+| El cierre de caja marcaba **DESPACHADO al encolar** el job, antes de Siesa; el precheck caído decía «Reintentá…» | La caja queda **VERIFICADA con sus bultos** hasta que `_persistir_resultado` (RM + FE) la despacha. Con el circuito abierto, fuera de la ventana de la Regla 14 (`cartera_service.VENTANA_SIESA`, 6–20) o sin respuesta del precheck, el cierre **se niega sin tocar nada** (ni bultos, ni job, ni estado). Con una RM enviada sin confirmar no se re-encola. El DLQ tampoco intenta el DESPACHO_F470 fuera de ventana (espera sin gastar reintento) |
+| El muelle y la ruta decidían con `siesa_triggered`; `asignar_a_ruta` no miraba nada y una ruta quedaba trabada en `cerrar_ruta` | **`documento_fiscal.despachable`** (+ gemela SQL `filtro_despachable`): pedido = `siesa_triggered` + `rm_consec` + FE confirmada (`fe_consec` o `fe_confirmada_at`); traslado = su regla de siempre. La usan la lista del muelle, asignar (por bultos y por pedido), cargar, los sugeridos y `cerrar_ruta` (una ruta no sale con un bulto sin documento, aunque ya esté cargado) |
+| Cancelar, resetear-siesa, iniciar-despacho y «devuelto al estante» contestaban cada uno a su manera «¿esta caja tiene documento?» (cancelar solo miraba jobs vivos: RM + job FALLIDO → otra caja → RM #2) | **`documento_fiscal.tiene_documento_en_siesa`** (+ `filtro_tiene_documento`): `siesa_triggered`, RM, FE o el pre-flag. `cancelar`, `resetear_siesa`, `confirmar_packing` (re-confirmar), `crear_manual`, `crear_desde_picking`, `iniciar-despacho` (**antes** de crear el picking) y el filtro de «devuelto al estante» |
+| `except Timeout` atrapaba `ConnectTimeout` (la petición nunca salió) como «resultado desconocido» | `ConnektaNoEnviado`: se reintenta. `ReadTimeout` sigue siendo desconocido (Regla 3). Un 5xx sigue siendo `Exception` genérica (no es un «no») |
+| Una caja retenida por cartera en la emisión: job PENDIENTE sin fin, cancelar se negaba por «job vivo», la tarea figuraba DESPACHADO | Cancelar la caja **descarta el job** (`descartar_job_retenido`, solo PENDIENTE y sin documento) y **cancela la retención** (`cartera_service.cancelar`), con bitácora. La política de retención no cambió |
+| `descartar_job` de un DESPACHO_F470 con RM y sin FE lo sacaba de todo contador | Se niega salvo `reconoce_remision_sin_factura: true` (queda en la bitácora) |
+
+**Invariantes nuevos:** **VTA-31** BLOQUEA — `siesa_triggered` o DESPACHADO
+sin RM + FE confirmadas (misma política del muelle); `defecto_corregido`
+`m048fiscal`: lo anterior es artefacto. **VTA-32** BLOQUEA — remisión (o
+142945 sin confirmar) sin factura hace más de 24 h (factura extemporánea).
+
+**Migración `m048fiscal`** (aditiva, nullable): `tareas_packing.rm_enviada_at`,
+`fe_confirmada_at`, `reconciliacion_intento_at`. **Un backfill,
+imprescindible:** `fe_confirmada_at` de las filas con `siesa_triggered` y
+`rm_consec` (hasta hoy esa combinación solo la escribía `_persistir_resultado`
+después de la FE); sin él, sus bultos pendientes desaparecían del muelle.
+
+**Trinquetes (AST):** todo llamador de `get_estado_pedido` interpreta el número
+con la tabla (inventario: el delegado del gateway); toda función que crea,
+cancela o reabre una caja o borra sus bultos pregunta la política (exento: el
+traslado); los módulos del muelle y la ruta no leen `siesa_triggered`; toda
+caja de pedido nace con su condición (`anotar_desde_historia` — `crear_manual`
+no la anotaba y la compuerta G2 daba por contado un C04). Meta-tests y pisos.
+`tests/conftest.py` fija el reloj de la ventana (`_siesa_en_horario_de_facturacion`):
+con el reloj real, todo cierre con Siesa mockeada fallaba de noche y en el CI.
+
+**Lo que NO cubre:**
+- Un `ConnectionError` que no es timeout (conexión cortada a mitad) sigue
+  siendo `Exception` genérica: puede haber salido. No se separó.
+- El 142943 no tiene pre-flag propio: un timeout de la FE queda FALLIDO
+  (desconocido) y su reintento pregunta la FE **por pedido** (el mismo
+  anti-duplicado de siempre, con el riesgo del doble parcial ya declarado).
+- La ventana usa `cartera_service.VENTANA_SIESA` hasta que exista una
+  `ventana_siesa()` única (P2 de la auditoría, de otro frente).
+- El reset de PROCESANDO a 10 min se dejó: con el pre-flag, el reintento de
+  un 142945 colgado identifica la RM en vez de reenviarla.
+- Las tareas DESPACHADO sin documento de antes de este cambio siguen así
+  (VTA-31 las cuenta como artefacto); la salida es facturar-rm-manual o, si
+  el pedido no salió, anular en Siesa y cancelar.
+- El botón «la RM no existe» no tiene pantalla todavía (el endpoint sí).
+
 ---
 
 ## El trinquete de rutas huérfanas medía presencia, no adyacencia (2026-08-13)
@@ -1942,7 +2006,7 @@ no se afloja el criterio.
 | Job tipo | Conector | Idempotencia | Secuencia |
 |----------|----------|-------------|-----------|
 | TRANSFERENCIA_UBICACIONES | 173066 | NON-idempotent (abort en retry) | — |
-| DESPACHO_F470 | 244328→142945→142943 (`DespachoParialService`) | `tarea.siesa_triggered` | — |
+| DESPACHO_F470 | 244328→142945→142943 (`DespachoParialService`) | `tarea.siesa_triggered` + pre-flag `rm_enviada_at` del 142945 (m048fiscal) | — (espera fuera de ventana o sin poder preguntar por la FE) |
 | ENTRADA_OC | 142948 | `recepcion.siesa_triggered` | — |
 | AJUSTE_CONTEO | 142951 | `sesion.siesa_triggered` | — |
 | TRASLADO_AVERIAS | 142951 | `tarea_dev.siesa_triggered` | — |
@@ -5243,10 +5307,11 @@ viene del Gestor (`habilitaciones`); sin él no se exime.
   del pedido no se prorratean aparte.
 - **PARCIAL sin NC** cuenta el resto como deuda aunque parte sea mercancía que
   volvió (el WMS no separa «devuelto» de «pagó una parte» sin la NC).
-- **Retenciones en la emisión dentro del DLQ** dejan la tarea DESPACHADO en el
-  WMS hasta que cartera resuelva (el job espera). Solo pasa con jobs
-  anteriores a la compuerta o una condición supuesta que la cabecera
-  desmiente.
+- ~~**Retenciones en la emisión dentro del DLQ** dejan la tarea DESPACHADO~~
+  Corregido el 2026-09-25 (m048fiscal): el cierre ya no marca DESPACHADO al
+  encolar; la caja retenida queda VERIFICADA, y **cancelarla es su salida**
+  (el job PENDIENTE pasa a DESCARTADO y la retención a CANCELADA, con
+  bitácora). Ver «Fiscal y despacho».
 - **Ninguna alerta por correo** del retenido > 3 días: log + salud + health.
 - **Modo INFORMA** no deja fila: lo que habría retenido solo va al log.
 - **No se re-cierra solo** una caja liberada: alguien toca «Cerrar caja».

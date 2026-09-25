@@ -49,7 +49,9 @@ def _ret(**k):
     base = {'id': 7, 'pedido': 'PD1', 'cliente': MALO, 'nit': '900', 'valor': 1000,
             'cond_pago': 'C04', 'compuerta': 'G1', 'antiguedad_horas': 80,
             'motivos': [{'codigo': 'MORA', 'texto': MALO, 'retiene': True}],
-            'iniciado_por': {'id': 5}}
+            'iniciado_por': {'id': 5},
+            # Lo que el servidor permite hacer con ella (`retencion_publica`).
+            'acciones': ['autorizar', 'convertir_contado', 'reevaluar']}
     base.update(k)
     return base
 
@@ -73,6 +75,17 @@ def test_quien_inicio_el_pedido_no_ve_el_boton_de_autorizarlo():
     d = _render({'cuerpo': {'retenciones': [_ret()], 'puede_autorizar': True,
                             'usuario_id': 5}})
     assert 'carteraAutorizar' not in d['html'] and 'Lo iniciaste vos' in d['html']
+
+
+def test_con_acuerdo_vigente_solo_se_ofrece_contado():
+    """Decisión del dueño: acuerdo de pago vigente → solo contado. El panel
+    no ofrece «Autorizar crédito» (el servidor tampoco lo acepta) y lo dice."""
+    d = _render({'cuerpo': {'retenciones': [_ret(
+        motivos=[{'codigo': 'ACUERDO_VIGENTE', 'texto': 'acuerdo', 'retiene': True}],
+        acciones=['convertir_contado', 'reevaluar'])], 'puede_autorizar': True,
+        'usuario_id': 1}})
+    assert 'carteraAutorizar' not in d['html'] and 'carteraConvertir(0)' in d['html']
+    assert 'solo puede salir de contado' in d['html']
 
 
 def test_el_lote_solo_con_su_permiso():

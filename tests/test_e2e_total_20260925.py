@@ -190,15 +190,11 @@ class TestElPedidoAprobadoNaceConSuCondicion:
         t = self._aprobar(app, client, db, almacen)
         assert t is not None and fake.lecturas >= 1
 
-    @pytest.mark.xfail(strict=True, reason='P2: crear_manual no anota la condición del pedido '
-                                           '(anotar_desde_historia)')
     def test_el_packing_nace_con_la_condicion_del_pedido(self, app, client, db, almacen, fake):  # noqa: F811
         fake.cliente(cupo=10_000_000)
         t = self._aprobar(app, client, db, almacen)
         assert t.cond_pago == 'C04'
 
-    @pytest.mark.xfail(strict=True, reason='P2: G2 marca NO_APLICA un crédito real aprobado por la '
-                                           'cola (no evalúa)')
     def test_g2_evalua_el_credito_real(self, app, client, db, almacen, fake):  # noqa: F811
         from app.services import cartera_service as cs
         fake.cliente(cupo=10_000_000)
@@ -278,7 +274,6 @@ class TestElBloqueoNoSeLeAtribuyeAQuienAprobo:
     inició el despacho.
     """
 
-    @pytest.mark.xfail(strict=True, reason='P3: «<persona> bloqueó» cuando la bloqueó la compuerta')
     def test_la_frase_no_dice_que_la_persona_bloqueo(self, db, fake, almacen):  # noqa: F811
         u = _usuario(db)
         _retener(db, fake, almacen, iniciador=u.id)
@@ -293,7 +288,6 @@ class TestElMensajeDeRetencionSinDoblePunto:
     contado..»). `cartera_service._mensaje` agrega `'. '` a un resumen que ya
     termina en punto."""
 
-    @pytest.mark.xfail(strict=True, reason='P3: doble punto en el mensaje de retención')
     def test_sin_doble_punto(self):
         from app.services import cartera_service as cs
         m = cs._mensaje({'resumen': 'Crédito real sin cupo asignado en Siesa.'}, None)

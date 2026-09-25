@@ -51,13 +51,16 @@ async function carteraCargarBloque() {
     const motivos = (r.motivos || []).filter(m => m.retiene).map(m => m.texto).join(' · ');
     const propio = CARTERA_USUARIO_ID && r.iniciado_por && r.iniciado_por.id === CARTERA_USUARIO_ID;
     const botones = [
-      CARTERA_PUEDE_AUTORIZAR && !propio
+      CARTERA_PUEDE_AUTORIZAR && !propio && (r.acciones || []).includes('autorizar')
         ? `<button onclick="carteraAutorizar(${i})" style="padding:6px 10px;border-radius:6px;border:1px solid var(--warn-brd);background:var(--warn-bg);color:var(--warn-tx);font-size:var(--fs-xs);font-weight:700;cursor:pointer;">Autorizar crédito</button>` : '',
       CARTERA_PUEDE_AUTORIZAR && !propio
         ? `<button onclick="carteraConvertir(${i})" style="padding:6px 10px;border-radius:6px;border:1px solid var(--info-brd);background:var(--info-bg);color:var(--info-tx);font-size:var(--fs-xs);font-weight:700;cursor:pointer;">Pasar a contado</button>` : '',
       `<button onclick="carteraReevaluar(${i})" style="padding:6px 10px;border-radius:6px;border:1px solid var(--brd);background:var(--bg-input);color:var(--tx);font-size:var(--fs-xs);font-weight:600;cursor:pointer;">Re-evaluar</button>`,
     ].filter(Boolean).join(' ');
-    const nota = propio ? `<div style="font-size:var(--fs-xs);color:var(--tx3);">Lo iniciaste vos: lo autoriza otra persona.</div>` : '';
+    const soloContado = (r.acciones || []).includes('convertir_contado')
+      && !(r.acciones || []).includes('autorizar');
+    const nota = (propio ? `<div style="font-size:var(--fs-xs);color:var(--tx3);">Lo iniciaste vos: lo autoriza otra persona.</div>` : '')
+      + (soloContado ? `<div style="font-size:var(--fs-xs);color:var(--tx3);">El cliente tiene un acuerdo de pago vigente: este pedido solo puede salir de contado.</div>` : '');
     return `<div style="border-top:1px solid var(--brd);padding:8px 0;">
         <div style="display:flex;justify-content:space-between;gap:8px;">
           <div style="font-size:var(--fs-sm);font-weight:700;color:var(--tx);">${esc(r.pedido || r.pedido_clave)} · ${esc(r.cliente || r.nit)}</div>

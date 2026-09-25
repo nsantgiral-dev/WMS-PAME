@@ -135,6 +135,12 @@ class PackingService:
         )
         db.session.add(tarea)
         db.session.flush()
+        # La condición del pedido desde la historia del sync, como en
+        # `crear_desde_picking`. Sin esto, todo packing de «Aprobar pedido»
+        # llegaba al cierre con `cond_pago = NULL` y la compuerta de cartera
+        # G2 lo daba por contado supuesto (NO_APLICA), también un C04.
+        from app.services import cond_pago as _cp_hist
+        _cp_hist.anotar_desde_historia(tarea)
 
         for item_data in items:
             item = ItemPacking(
@@ -288,6 +294,11 @@ class PackingService:
 
         if tarea.estado == 'DESPACHADO':
             raise ValueError('Este pedido ya fue despachado')
+        # Desde m048fiscal la caja cerrada queda VERIFICADA hasta que Siesa
+        # emite: re-confirmarla cambiaría cantidades de una caja que ya tiene
+        # (o puede tener) remisión.
+        from app.services.documento_fiscal import exigir_sin_documento
+        exigir_sin_documento(tarea, 'volver a confirmar el empaque')
         if tarea.estado not in ['EN_PROCESO', 'PENDIENTE', 'VERIFICADO']:
             raise ValueError(f'No se puede confirmar en estado {tarea.estado}')
 
@@ -361,7 +372,10 @@ class PackingService:
             'mensaje': (
                 f'{len(bultos_resp)} pieza(s) registradas — Siesa confirmó la remisión'
                 if tarea.siesa_triggered else
-                f'{len(bultos_resp)} pieza(s) registradas — Siesa procesando (se confirma en segundos)'
+                # No promete lo que no pasó: la caja espera la remisión y la
+                # factura (o a cartera) y solo entonces sale al muelle.
+                f'{len(bultos_resp)} pieza(s) registradas — la remisión y la factura se '
+                f'están emitiendo en Siesa; la caja sale al muelle cuando estén confirmadas'
             ),
             'siesa_triggered': tarea.siesa_triggered,
             'numero_pedido': tarea.numero_pedido_siesa,
