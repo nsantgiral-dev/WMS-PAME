@@ -345,7 +345,8 @@ async function anPortRecalcular() {
   const dias = anPortDiasRecalculo(p);
   const hasta = hoyBogota(null, -1);
   const desde = hoyBogota(null, -dias);
-  if (typeof confirm === 'function' && !confirm(`¿Calcular el KPI diario del ${desde} al ${hasta}? Puede tardar un par de minutos.`)) return;
+  if (!(await _modalConfirmar(`Del ${esc(desde)} al ${esc(hasta)}. Puede tardar un par de minutos.`,
+      { titulo: '¿Calcular el KPI diario?', textoConfirmar: 'Calcular' }))) return;
   const almacen = (AN_PORT.f && AN_PORT.f.almacen_id) || null;
   try {
     for (let fin = -1; fin >= -dias; fin -= AN_PORT_TANDA_RECALCULO) {

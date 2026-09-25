@@ -94,6 +94,11 @@ const ctx = {
   },
   prompt: () => (GUION.prompt === undefined ? 'motivo de prueba' : GUION.prompt),
   confirm: () => true,
+  // El modal propio (modal.js) no se carga: se guiona con los mismos
+  // `confirm`/`prompt` del arnés, leídos en el momento de la llamada.
+  _modalConfirmar: async (m) => ctx.confirm(m),
+  _modalTexto: async (t, m) => ctx.prompt(m),
+  _modalCantidad: async (t, m) => { const v = ctx.prompt(m); return v == null ? null : parseInt(v, 10); },
   alerta: (m, t) => { enviados.push({ alerta: String(m), tipo: t }); },
   horaColombia: (x) => String(x),
 };

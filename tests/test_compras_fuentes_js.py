@@ -23,7 +23,7 @@ const ctx = { console, document: { getElementById: el }, alertas, subidas,
   get: (url) => url.includes('contenedores') ? Promise.resolve(r.contenedores)
                                             : Promise.resolve(r.estado),
   post: () => Promise.resolve({}), put: () => Promise.resolve({}),
-  alerta: (m, t) => alertas.push([m, t]), confirm: () => true,
+  alerta: (m, t) => alertas.push([m, t]), _modalConfirmar: async () => true,
   FormData: class { append() {} },
   subirArchivoConProgreso: (url) => { subidas.push(url); return Promise.resolve(r.previa || {}); },
   conBotonOcupado: async (ev, fn) => { await fn(); } };

@@ -381,7 +381,7 @@ const mkEl = (id) => (els[id] = els[id] || { id, innerHTML: '', value: '', style
 const llamadas = [];
 const ctx = { console, window: {}, localStorage: { getItem: () => null, setItem(){} },
   document: { getElementById: (id) => mkEl(id), querySelectorAll: () => [], querySelector: () => null },
-  setTimeout, clearTimeout, confirm: () => true };
+  setTimeout, clearTimeout, _modalConfirmar: async () => true };
 vm.createContext(ctx);
 vm.runInContext(fs.readFileSync(base + '/util.js', 'utf8'), ctx);
 vm.runInContext(`var OPERARIO = { rol: '${rol}' };

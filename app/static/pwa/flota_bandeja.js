@@ -373,13 +373,18 @@ async function flotaBandejaDecidir(j, k) {
   if (!verbo) return;
   let cuerpo;
   if (verbo === 'cerrar') {
-    cuerpo = { nota: prompt('¿Qué se hizo? (opcional)') || '' };
+    const nota = await _modalTexto('Daño reparado', '¿Qué se hizo? (opcional)',
+      { obligatorio: false, textoConfirmar: 'Cerrar el daño' });
+    if (nota === null) return;
+    cuerpo = { nota: nota };
   } else {
     const pregunta = verbo === 'aplazar'
       ? '¿Por qué se aplaza? (obligatorio — queda en la bitácora)'
       : '¿Por qué no era un daño? (obligatorio)';
-    const motivo = prompt(pregunta);
-    if (!motivo || !motivo.trim()) {
+    const motivo = await _modalTexto(verbo === 'aplazar' ? 'Aplazar el daño' : 'No era un daño', pregunta,
+      { textoConfirmar: verbo === 'aplazar' ? 'Aplazar' : 'Descartar' });
+    if (motivo === null) return;
+    if (!motivo.trim()) {
       alerta(verbo === 'aplazar'
         ? 'Un plazo que se mueve sin razón anotada es un plazo que no existe.'
         : 'Un descarte sin motivo escrito no se puede distinguir de hacer desaparecer un daño incómodo.',

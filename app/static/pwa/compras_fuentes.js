@@ -298,7 +298,8 @@ async function fuentesAplicar(event) {
   const f = _fuentesFormulario();
   if (!f) return;
   if (FUENTES_PREVIA_TIPO !== f.tipo) { alerta('Primero la vista previa de este archivo', 'error'); return; }
-  if (!confirm('¿Escribir las filas válidas? Las inválidas se ignoran.')) return;
+  if (!(await _modalConfirmar('Las filas inválidas se ignoran.',
+      { titulo: '¿Escribir las filas válidas?', textoConfirmar: 'Escribir' }))) return;
   const out = document.getElementById('fuentes-resultado');
   await conBotonOcupado(event, async () => {
     try {
@@ -393,7 +394,8 @@ async function fuentesMarcaPrevia(event) {
 
 async function fuentesMarcaAplicar(event) {
   if (!FUENTES_MARCA_VISTA) { alerta('Primero «Ver qué cambiaría»', 'error'); return; }
-  if (!confirm('¿Escribir las marcas leídas de Siesa?')) return;
+  if (!(await _modalConfirmar('Se escriben en el catálogo las marcas de la última lectura completa.',
+      { titulo: '¿Escribir las marcas leídas de Siesa?', textoConfirmar: 'Escribir' }))) return;
   const out = document.getElementById('fuentes-marca');
   await conBotonOcupado(event, async () => {
     try {

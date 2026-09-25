@@ -83,6 +83,11 @@ const ctx = {
   // Devuelve `true`: el arnés quiere ver qué se manda CON huecos, que es el
   // caso que la regla 1 gobierna.
   confirm: () => true,
+  // El modal propio (modal.js) no se carga: se guiona con los mismos
+  // `confirm`/`prompt` del arnés, leídos en el momento de la llamada.
+  _modalConfirmar: async (m) => ctx.confirm(m),
+  _modalTexto: async (t, m) => ctx.prompt(m),
+  _modalCantidad: async (t, m) => { const v = ctx.prompt(m); return v == null ? null : parseInt(v, 10); },
   fetch: async (url, opts) => {
     ULTIMO = { url, body: opts && opts.body };
     return { ok: true, json: async () => ({

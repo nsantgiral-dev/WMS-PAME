@@ -34,30 +34,11 @@ PWA = RAIZ / 'app' / 'static' / 'pwa'
 _NATIVO = re.compile(r'(?<![\w.$])(confirm|prompt)\s*\(')
 _FUNCION = re.compile(r'(?m)^(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\s*\(')
 
-_FLOTA = ('Flota: sus arneses de prueba cargan util.js + flota.js sin app.js, donde '
-          'vive el modal; pasarlo exige que los arneses lo stubbeen. Pendiente')
-
-#: (archivo, función) → (cuántos, por qué). **Solo encoge.**
-DIALOGOS_NATIVOS_DECLARADOS = {
-    ('analitica_portada.js', 'anPortRecalcular'): (1, 'recalcular el KPI: no mueve plata ni inventario'),
-    ('compras_fuentes.js', 'fuentesAplicar'): (1, 'aplicar una carga de maestros (origen/fichas), no mueve plata ni inventario'),
-    ('compras_fuentes.js', 'fuentesMarcaAplicar'): (1, 'aplicar la marca leída de Siesa al catálogo'),
-    ('flota.js', 'flotaAnularOT'): (1, _FLOTA),
-    ('flota.js', 'flotaAplazarHallazgo'): (1, _FLOTA),
-    ('flota.js', 'flotaCerrarHallazgo'): (1, _FLOTA),
-    ('flota.js', 'flotaCerrarModal'): (1, _FLOTA),
-    ('flota.js', 'flotaCerrarOT'): (1, _FLOTA),
-    ('flota.js', 'flotaCondEntregar'): (1, _FLOTA),
-    ('flota.js', 'flotaCondGuardarInspeccion'): (1, _FLOTA),
-    ('flota.js', 'flotaCondGuardarTanqueo'): (2, _FLOTA + ' — y es plata: el tanqueo sin foto del recibo'),
-    ('flota.js', 'flotaConfirmarKm'): (1, _FLOTA),
-    ('flota.js', 'flotaCorregirKm'): (2, _FLOTA),
-    ('flota.js', 'flotaDescartarHallazgo'): (1, _FLOTA),
-    ('flota.js', 'flotaFijarIntervalo'): (2, _FLOTA),
-    ('flota.js', 'flotaGuardarRecibo'): (1, _FLOTA),
-    ('flota.js', 'flotaRegistrarEjecucion'): (2, _FLOTA),
-    ('flota_bandeja.js', 'flotaBandejaDecidir'): (2, _FLOTA),
-}
+#: (archivo, función) → (cuántos, por qué). **Solo encoge.** Vacío desde el
+#: 2026-09-25: el modal pasó a `modal.js` (flota lo necesitaba sin `app.js`)
+#: y los 18 de flota, los 3 de analítica/compras y las dos búsquedas de código
+#: (recepción, tienda) lo usan.
+DIALOGOS_NATIVOS_DECLARADOS: dict = {}
 
 #: Las que deciden plata o inventario: nunca más un diálogo nativo.
 DECIDEN_PLATA_O_INVENTARIO = [
@@ -76,6 +57,10 @@ DECIDEN_PLATA_O_INVENTARIO = [
     ('cartera.js', '_carteraMotivo'), ('cartera.js', 'carteraAutorizar'),
     ('cartera.js', 'carteraCerrarLiberado'),
     ('kardex.js', 'kardexReconstruirForzar'),
+    # Flota (2026-09-25): el tanqueo sin foto del recibo es plata; cerrar una
+    # orden decide si el daño queda abierto.
+    ('flota.js', 'flotaCondGuardarTanqueo'), ('flota.js', 'flotaCerrarOT'),
+    ('flota.js', 'flotaCorregirKm'), ('flota_bandeja.js', 'flotaBandejaDecidir'),
 ]
 
 
@@ -108,7 +93,7 @@ class TestTrinqueteDialogosNativos:
                  if n > DIALOGOS_NATIVOS_DECLARADOS.get(k, (0, ''))[0]}
         assert not malos, (
             f'confirm()/prompt() nativos nuevos: {malos}. Use _modalConfirmar / _modalTexto '
-            f'/ _modalCantidad (app.js) o declárelo con su porqué.')
+            f'/ _modalCantidad (modal.js) o declárelo con su porqué.')
 
     def test_solo_encoge(self):
         hoy = _todos()
@@ -145,7 +130,21 @@ class TestTrinqueteDialogosNativos:
         assert dialogos(src) == Counter()
 
     def test_piso(self):
-        assert sum(_todos().values()) >= 20, 'el escáner devolvió casi nada: ¿se rompió?'
+        """Con el inventario en cero, un escáner roto también da cero: que
+        recorra de verdad el PWA — funciones vistas y usos del modal propio."""
+        fuentes = [_sin_comentarios(f.read_text(encoding='utf-8')) for f in PWA.glob('*.js')]
+        funciones = sum(len(_FUNCION.findall(c)) for c in fuentes)
+        modales = sum(len(re.findall(r'\b_modal(?:Confirmar|Texto|Cantidad)\s*\(', c)) for c in fuentes)
+        assert funciones >= 1000, f'solo {funciones} funciones en el PWA: ¿se rompió el lector?'
+        assert modales >= 60, f'solo {modales} usos del modal propio: ¿se rompió el lector?'
+
+    def test_el_modal_vive_en_la_capa_base(self):
+        """`modal.js` define los tres y nadie más: si vuelve a `app.js`, flota
+        (que se prueba sin `app.js`) se queda sin modal."""
+        for f in PWA.glob('*.js'):
+            for nombre in ('_modalConfirmar', '_modalTexto', '_modalCantidad'):
+                define = re.search(rf'(?m)^function {nombre}\(', f.read_text(encoding='utf-8'))
+                assert bool(define) is (f.name == 'modal.js'), (f.name, nombre)
 
 
 # ═════════════════════════════════════════════════════════════════════════════

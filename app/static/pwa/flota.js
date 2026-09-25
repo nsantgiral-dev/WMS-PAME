@@ -336,11 +336,12 @@ function flotaTrabajoSinGuardar() {
  * error le pedía apretar, la segunda cuando la entrega falló. Trece fotos son
  * quince minutos parado al lado del camión — no se descartan en silencio.
  */
-function flotaCerrarModal() {
+async function flotaCerrarModal() {
   const n = flotaTrabajoSinGuardar();
-  if (n && !confirm(
-        `Tenés ${n} foto(s) tomadas y sin guardar. Si salís se pierden y hay ` +
-        `que tomarlas de nuevo.\n\n¿Salir igual?`)) return;
+  if (n && !(await _modalConfirmar(
+        `Tiene ${esc(n)} foto(s) tomadas y sin guardar. Si sale, se pierden y hay ` +
+        `que tomarlas de nuevo.`,
+        { titulo: '¿Salir sin guardar?', textoConfirmar: 'Salir igual', textoCancelar: 'Seguir aquí', peligro: true }))) return;
   FLOTA_FOTOS = {};
   FLOTA_FOTO_TABLERO = null;
   if (typeof FLOTA_DANO !== 'undefined') FLOTA_DANO = null;
@@ -827,8 +828,9 @@ async function flotaGuardarRecibo() {
   // hacía que el aviso dijera "faltan N" incluyendo una foto que sí estaba.
   const grilla = flotaAngulosDeGrilla(FLOTA_ANGULOS);
   const faltan = grilla.filter(a => !FLOTA_FOTOS[a]).length;
-  if (faltan && !confirm(`Faltan ${faltan} de las ${grilla.length} fotos. El turno se ` +
-                         `registra igual y queda contado como incompleto. ¿Confirmás?`)) return;
+  if (faltan && !(await _modalConfirmar(`Faltan ${esc(faltan)} de las ${esc(grilla.length)} fotos. ` +
+      `El turno se registra igual y queda contado como incompleto.`,
+      { titulo: '¿Registrar el turno sin todas las fotos?', textoConfirmar: 'Registrar así' }))) return;
 
   const n = payload.fotos_inicio.length;
   const restaurar = flotaBotonOcupado(
@@ -1035,8 +1037,9 @@ function flotaFilaDudosa(p) {
 
 /** Confirma que el número es el del tablero. Queda quién y cuándo. */
 async function flotaConfirmarKm(lecturaId) {
-  if (!confirm('Vas a afirmar que ese kilometraje es el que muestra el tablero.\n' +
-               'Queda tu nombre y la fecha en la fila.\n\n¿Confirmar?')) return;
+  if (!(await _modalConfirmar('Va a afirmar que ese kilometraje es el que muestra el tablero. ' +
+      'Queda su nombre y la fecha en la fila.',
+      { titulo: '¿Confirmar el kilometraje?', textoConfirmar: 'Es el del tablero' }))) return;
   try {
     const r = await fetch(API + FLOTA_VERIFICAR_URL(lecturaId), {
       method: 'POST',
@@ -1064,17 +1067,15 @@ async function flotaConfirmarKm(lecturaId) {
  * adelante, esto es lo cierto» y el servidor aplica esa misma ventana.
  */
 async function flotaCorregirKm(placa, kmActual) {
-  const dicho = prompt(`Kilometraje correcto de ${placa} (el registrado dice ` +
-                       `${kmActual}):`);
-  if (dicho === null) return;
-  const km = parseInt(dicho, 10);
-  if (!Number.isFinite(km) || km < 0) {
-    alerta('El kilometraje corregido tiene que ser un número.', 'advertencia');
-    return;
-  }
-  const motivo = prompt('¿Por qué se corrige? (obligatorio — sin motivo, una ' +
-                        'corrección es indistinguible de un error de digitación)');
-  if (!motivo || !motivo.trim()) {
+  const km = await _modalCantidad('Corregir el kilometraje',
+    `Kilometraje correcto de ${esc(placa)} (el registrado dice ${esc(kmActual)}):`,
+    { min: 0, textoConfirmar: 'Siguiente' });
+  if (km === null) return;
+  const motivo = await _modalTexto('¿Por qué se corrige?',
+    'Obligatorio: sin motivo, una corrección es indistinguible de un error de digitación.',
+    { textoConfirmar: 'Corregir' });
+  if (motivo === null) return;
+  if (!motivo.trim()) {
     alerta('Una corrección sin motivo escrito no se puede distinguir de un ' +
            'error de digitación.', 'advertencia');
     return;
@@ -2809,9 +2810,10 @@ async function flotaCondEntregar() {
   }
 
   const faltan = FLOTA_ANGULOS_ENTREGA.filter(a => !FLOTA_FOTOS[a]).length;
-  if (faltan && !confirm(`Faltan ${faltan} de las 4 fotos. El turno se cierra igual ` +
-      `y queda contado como incompleto — pero sin ellas, un golpe que aparezca ` +
-      `mañana no se le puede atribuir a nadie. ¿Confirmás?`)) return;
+  if (faltan && !(await _modalConfirmar(`Faltan ${esc(faltan)} de las 4 fotos. El turno se cierra ` +
+      `igual y queda contado como incompleto — pero sin ellas, un golpe que aparezca ` +
+      `mañana no se le puede atribuir a nadie.`,
+      { titulo: '¿Entregar sin todas las fotos?', textoConfirmar: 'Entregar así' }))) return;
 
   const restaurar = flotaBotonOcupado(
     'cf-guardar',
@@ -3166,14 +3168,18 @@ async function flotaAccionHallazgo(id, verbo, cuerpo) {
   }
 }
 
-function flotaCerrarHallazgo(id) {
-  const nota = prompt('¿Qué se hizo? (opcional)') || '';
+async function flotaCerrarHallazgo(id) {
+  const nota = await _modalTexto('Daño reparado', '¿Qué se hizo? (opcional)',
+    { obligatorio: false, textoConfirmar: 'Cerrar el daño' });
+  if (nota === null) return;
   flotaAccionHallazgo(id, 'cerrar', { nota: nota });
 }
 
-function flotaDescartarHallazgo(id) {
-  const motivo = prompt('¿Por qué no era un daño? (obligatorio)');
-  if (!motivo || !motivo.trim()) {
+async function flotaDescartarHallazgo(id) {
+  const motivo = await _modalTexto('No era un daño', '¿Por qué no era un daño? (obligatorio)',
+    { textoConfirmar: 'Descartar' });
+  if (motivo === null) return;
+  if (!motivo.trim()) {
     alerta('Un descarte sin motivo escrito no se puede distinguir de hacer ' +
            'desaparecer un daño incómodo.', 'advertencia');
     return;
@@ -3181,9 +3187,11 @@ function flotaDescartarHallazgo(id) {
   flotaAccionHallazgo(id, 'descartar', { motivo: motivo.trim() });
 }
 
-function flotaAplazarHallazgo(id) {
-  const motivo = prompt('¿Por qué se aplaza? (obligatorio — queda en la bitácora)');
-  if (!motivo || !motivo.trim()) {
+async function flotaAplazarHallazgo(id) {
+  const motivo = await _modalTexto('Aplazar el daño', '¿Por qué se aplaza? (obligatorio — queda en la bitácora)',
+    { textoConfirmar: 'Aplazar' });
+  if (motivo === null) return;
+  if (!motivo.trim()) {
     alerta('Un plazo que se mueve sin razón anotada es un plazo que no existe.',
            'advertencia');
     return;
@@ -3512,12 +3520,14 @@ async function flotaCondGuardarTanqueo() {
   if (!estacion) { err.textContent = 'Falta la estación.'; return; }
   const km = flotaCondKmLeido('tq');
   if (km === null) { err.textContent = 'Falta el kilometraje del tablero.'; return; }
-  if (!t.foto && !confirm('Sin foto del recibo el tanqueo queda sin respaldo: nadie va a ' +
-      'poder comprobar los galones ni el valor. ¿Registrarlo igual?')) return;
+  if (!t.foto && !(await _modalConfirmar('Sin foto del recibo el tanqueo queda sin respaldo: nadie va a ' +
+      'poder comprobar los galones ni el valor.',
+      { titulo: '¿Registrar el tanqueo sin el recibo?', textoConfirmar: 'Registrar así', peligro: true }))) return;
   // El km cambió y no hay foto del tablero: se pregunta, no se bloquea.
   const kmNuevo = t.kmCambio && km !== flotaCondKmConocido(FLOTA_PLACA);
-  if (kmNuevo && !t.fotoTablero && !confirm('Sin foto del tablero el kilometraje nuevo queda ' +
-      'en duda y no sirve para medir el rendimiento hasta que alguien lo revise. ¿Registrarlo igual?')) return;
+  if (kmNuevo && !t.fotoTablero && !(await _modalConfirmar('Sin foto del tablero el kilometraje nuevo queda ' +
+      'en duda y no sirve para medir el rendimiento hasta que alguien lo revise.',
+      { titulo: '¿Registrar sin la foto del tablero?', textoConfirmar: 'Registrar así' }))) return;
   const placa = flotaPlacaDelFormulario('tq-guardar', 'tq-error');
   if (!placa) return;
 
@@ -3764,11 +3774,12 @@ async function flotaCondGuardarInspeccion() {
 
   const faltan = items.filter(i => !FLOTA_INSP_RESP[i.item_id]);
   const bloqueantesEnBlanco = faltan.filter(i => i.bloqueante).length;
-  if (faltan.length && !confirm(
-      `Quedan ${faltan.length} ítem(s) sin contestar` +
-      (bloqueantesEnBlanco ? `, ${bloqueantesEnBlanco} de ellos bloqueantes` : '') +
+  if (faltan.length && !(await _modalConfirmar(
+      `Quedan ${esc(faltan.length)} ítem(s) sin contestar` +
+      (bloqueantesEnBlanco ? `, ${esc(bloqueantesEnBlanco)} de ellos bloqueantes` : '') +
       `.\n\nLa inspección queda INCOMPLETA: no dice que el vehículo esté bien, ` +
-      `dice que no se sabe — y no habilita despacho. ¿Mandarla así?`)) return;
+      `dice que no se sabe — y no habilita despacho.`,
+      { titulo: '¿Mandar la inspección incompleta?', textoConfirmar: 'Mandarla así' }))) return;
 
   const payload = {
     placa: placa,
@@ -4633,10 +4644,12 @@ async function flotaRegistrarTrabajo(id) {
  * reparación.
  */
 async function flotaCerrarOT(id, tieneHallazgo) {
+  // «No» es la respuesta por defecto y no aborta: cierra la orden y deja el
+  // daño abierto (lo correcto si volvió sin arreglar).
   const cerrarDano = tieneHallazgo
-    ? confirm('¿El daño que abrió esta orden quedó reparado?\n\n' +
-              'Aceptar lo cierra. Cancelar cierra la orden y deja el daño ' +
-              'abierto — que es lo correcto si volvió sin arreglar.')
+    ? await _modalConfirmar('Si volvió sin arreglar, la orden se cierra y el daño queda abierto.',
+        { titulo: '¿El daño que abrió esta orden quedó reparado?',
+          textoConfirmar: 'Sí, quedó reparado', textoCancelar: 'No, sigue abierto' })
     : false;
   const ok = await flotaPostTaller(FLOTA_OT_URL.cerrar(id),
     { cerrar_hallazgo: cerrarDano }, `cerrar-ot-${id}`, null, 'Cerrando…');
@@ -4647,8 +4660,10 @@ async function flotaCerrarOT(id, tieneHallazgo) {
 
 /** La visita no ocurrió. Exige motivo escrito y no toca el daño. */
 async function flotaAnularOT(id) {
-  const motivo = prompt('¿Por qué se anula? (obligatorio — el daño sigue abierto)');
-  if (!motivo || !motivo.trim()) {
+  const motivo = await _modalTexto('Anular la orden', '¿Por qué se anula? (obligatorio — el daño sigue abierto)',
+    { textoConfirmar: 'Anular' });
+  if (motivo === null) return;
+  if (!motivo.trim()) {
     alerta('Una anulación sin motivo escrito no se distingue de hacer ' +
            'desaparecer una visita incómoda.', 'advertencia');
     return;
@@ -5246,12 +5261,14 @@ async function flotaSembrarPlan() {
 async function flotaRegistrarEjecucion(planId) {
   const err = document.getElementById('prev-err');
   err.textContent = '';
-  const km = prompt('¿Qué kilometraje marca el tablero AHORA?\n\n' +
-                    'Es el que establece desde dónde se cuenta el próximo cambio.');
-  if (km === null) return;
-  const n = parseInt(String(km).replace(/\D/g, ''), 10);
-  if (!Number.isFinite(n)) { err.textContent = 'Kilometraje inválido'; return; }
-  const taller = prompt('¿Quién lo hizo? (taller, opcional)') || '';
+  // Sin valor inicial a propósito: el km se lee del tablero (regla 3).
+  const n = await _modalCantidad('¿Qué kilometraje marca el tablero AHORA?',
+    'Es el que establece desde dónde se cuenta el próximo cambio.',
+    { min: 0, textoConfirmar: 'Siguiente' });
+  if (n === null) return;
+  const taller = await _modalTexto('¿Quién lo hizo?', 'El taller (opcional).',
+    { obligatorio: false, textoConfirmar: 'Registrar' });
+  if (taller === null) return;
 
   const listo = flotaBotonOcupado('prev-hecho-' + planId, 'Registrando…');
   try {
@@ -5282,18 +5299,20 @@ async function flotaRegistrarEjecucion(planId) {
 async function flotaFijarIntervalo(planId) {
   const err = document.getElementById('prev-err');
   err.textContent = '';
-  const km = prompt('¿Cada cuántos kilómetros toca esta tarea?\n\n' +
-                    'Dejalo vacío para retirar el intervalo y volver a «sin dato».');
+  const km = await _modalTexto('¿Cada cuántos kilómetros toca esta tarea?',
+    'Déjelo vacío para retirar el intervalo y volver a «sin dato».',
+    { obligatorio: false, textoConfirmar: 'Siguiente' });
   if (km === null) return;
   const limpio = String(km).replace(/\D/g, '');
   const n = limpio === '' ? null : parseInt(limpio, 10);
 
   let fuente = 'sin_dato';
   if (n !== null) {
-    fuente = prompt('¿De dónde salió ese número?\n\n' +
-                    'manual_fabricante · concesionario · placa_motor · taller · estimado\n\n' +
-                    'Un intervalo sin procedencia se lee después como si alguien ' +
-                    'lo hubiera verificado.') || '';
+    fuente = await _modalTexto('¿De dónde salió ese número?',
+      'Manual del fabricante, concesionario, placa del motor, taller o estimado.<br><br>' +
+      'Un intervalo sin procedencia se lee después como si alguien lo hubiera verificado.',
+      { textoConfirmar: 'Guardar' });
+    if (fuente === null) return;
     if (!fuente.trim()) { err.textContent = 'Sin procedencia no se guarda'; return; }
   }
 

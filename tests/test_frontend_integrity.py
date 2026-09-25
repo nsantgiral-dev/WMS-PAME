@@ -100,7 +100,9 @@ class TestScriptIntegrity:
     #: orden entre las dos no se nota porque nadie llama a `esc` en tiempo de
     #: carga; se fija igual, porque el día que alguien lo haga el fallo sería
     #: un `esc is not defined` en producción y en ningún test.
-    BASE = ['util.js', 'app.js']
+    #: `modal.js` se sumó el 2026-09-25 entre las dos: el modal propio, que
+    #: flota necesita sin `app.js` (ver su encabezado).
+    BASE = ['util.js', 'modal.js', 'app.js']
 
     def test_la_capa_base_carga_primero_y_en_orden(self):
         """Antes decía «app.js debe ser el primer script» y protegía la misma

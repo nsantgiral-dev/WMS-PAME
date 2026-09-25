@@ -90,6 +90,11 @@ const ctx = {
   localStorage: { getItem: () => null, setItem() {}, removeItem() {} },
   alerta: (m, t) => ALERTAS.push([m, t]), TOKEN: 'x', API: '',
   confirm: () => true, horaColombia: (x) => String(x),
+  // El modal propio (modal.js) no se carga: se guiona con los mismos
+  // `confirm`/`prompt` del arnés, leídos en el momento de la llamada.
+  _modalConfirmar: async (m) => ctx.confirm(m),
+  _modalTexto: async (t, m) => ctx.prompt(m),
+  _modalCantidad: async (t, m) => { const v = ctx.prompt(m); return v == null ? null : parseInt(v, 10); },
   get: async (url) => {
     if (GUION.get && url in GUION.get) return JSON.parse(JSON.stringify(GUION.get[url]));
     const e = new Error('Sin señal'); throw e;
