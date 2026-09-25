@@ -5620,7 +5620,10 @@ Fuente: `API_v2_Compras_Ordenes` (**contrato completo**, 89 campos, Regla 1).
   misma enumeración** (orden inestable, como el kardex y InvFecha) dejan la
   corrida INCOMPLETA: lo visto se guarda (upsert) y **ninguna línea no vista se
   cierra**. Solo un barrido completo marca `abierta=False`,
-  `motivo_cierre='NO_APARECE_EN_ABIERTAS'`. **Nada se borra nunca.**
+  `motivo_cierre='NO_APARECE_EN_ABIERTAS'`. **Nada se borra nunca.** Y un
+  barrido que devuelve **cero** OCs abiertas cuando el espejo tenía abiertas
+  tampoco cierra (más probable un filtro contestado con «sin registros» o un
+  ambiente vacío que «se cumplieron todas»): se declara incompleto.
 - `registros_sync` tipos `compras_oc` / `compras_oc_historial`: `ok=True` solo
   con paginación completa. `compras_fuentes.frescura_oc` lee la última
   completa: sin ninguna, «en camino» desde Siesa vale 0 **y lo dice**.
@@ -5711,7 +5714,7 @@ sincronización, cumplidas con el historial). `proveedores`, `contenedores`,
 
 ### Trinquetes y mutaciones
 
-`tests/test_compras_fuentes.py` (68, Siesa falsa con los campos del contrato),
+`tests/test_compras_fuentes.py` (69, Siesa falsa con los campos del contrato),
 `tests/test_compras_fuentes_trinquetes.py` (23, AST) y
 `tests/test_compras_fuentes_js.py` (5, Node con `util.js` real).
 
@@ -5727,7 +5730,7 @@ sincronización, cumplidas con el historial). `proveedores`, `contenedores`,
 - Meta-tests (las formas que ve, lo sano que no: docstring, comentario,
   escritura, constructor, función anidada) y pisos (el dueño aparece; ≥200
   archivos recorridos).
-- **30 mutaciones, las 30 rojas** (cierre con barrido incompleto, rowid
+- **31 mutaciones, las 31 rojas** (cierre con barrido incompleto, cero OCs que cierran todo, rowid
   repetido, circuito abierto, tope, lista blanca, doble conteo del contenedor
   —dos variantes—, factor, armador sin en camino / con su propia suma / con LT
   constante, proveedor ignorado, Siesa sobre la recepción, USD, unidad base del

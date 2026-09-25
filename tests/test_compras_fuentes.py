@@ -213,11 +213,17 @@ class TestSyncDeOcs:
         assert r['proveedores_nuevos'] == 1
         assert Proveedor.query.filter_by(codigo='900555').one().fuente == 'SIESA_TERCEROS'
 
+    def test_cero_ocs_abiertas_no_cierra_todo(self, app, db, producto):
+        _sync(SiesaFalsa({ABIERTAS_1: [fila_oc(1)]}))
+        r = _sync(SiesaFalsa({}))
+        assert r['paginacion_completa'] is False and 'CERO' in r['motivo_incompleta']
+        assert _linea(1).abierta is True
+
     def test_nada_se_borra(self, app, db, producto):
         from app.models.compras_fuentes import OcLineaSiesa
         _sync(SiesaFalsa({ABIERTAS_1: [fila_oc(1), fila_oc(2, consec=12)]}))
-        _sync(SiesaFalsa({}))
-        assert OcLineaSiesa.query.count() == 2
+        _sync(SiesaFalsa({ABIERTAS_1: [fila_oc(3, consec=13)]}))
+        assert OcLineaSiesa.query.count() == 3 and not _linea(1).abierta
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -263,8 +269,8 @@ class TestEnCamino:
     def test_cerrada_no_cuenta(self, app, db, producto):
         from app.services.compras_fuentes import en_camino
         _sync(SiesaFalsa({ABIERTAS_1: [fila_oc(1)]}))
-        _sync(SiesaFalsa({}))
-        assert en_camino()['por_sku'] == {}
+        _sync(SiesaFalsa({ABIERTAS_1: [fila_oc(2, ref='PROD-XX', consec=12)]}))
+        assert 'PROD-001' not in en_camino()['por_sku']
 
     def test_sin_unidad_base_no_se_suma_y_se_declara(self, app, db, producto):
         from app.services.compras_fuentes import en_camino

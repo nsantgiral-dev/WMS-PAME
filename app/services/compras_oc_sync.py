@@ -326,6 +326,17 @@ def sincronizar_ocs(gateway=None, pausa_s=None, ahora=None) -> dict:
             completa = False
             motivos.append(f'estado {estado}: {motivo}')
 
+    # Cero OCs abiertas cuando el espejo tenía abiertas no es «se cerraron
+    # todas»: es más probable un filtro que Siesa contestó con «sin registros»
+    # (la fecha sin comillas ya lo hizo) o un ambiente vacío. Cerrarlas todas
+    # pondría «en camino» en 0 y subiría el déficit, que es el lado
+    # irreversible (Regla 0). Se declara y no se cierra nada.
+    if completa and not filas and OcLineaSiesa.query.filter(
+            OcLineaSiesa.abierta.is_(True)).count():
+        completa = False
+        motivos.append('Siesa devolvió CERO OCs abiertas y el espejo tenía abiertas: '
+                       'no se cierra nada (¿filtro o ambiente?)')
+
     try:
         vistos, cont = _aplicar_lineas(filas, ahora, abierta=True)
         cerradas = 0
