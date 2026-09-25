@@ -46,6 +46,17 @@ APTO       = 'apto'
 INCOMPLETA = 'incompleta'
 VEREDICTOS = (APTO, NO_APTO, INCOMPLETA)
 
+#: El veredicto en palabras, en femenino: califica a la INSPECCIÓN («inspección
+#: no apta»). El código crudo llegó a la pantalla del muelle («salió
+#: «no_apto»») el 2026-09-24. Lo que no esté acá se muestra sin guiones bajos.
+PALABRA_VEREDICTO = {APTO: 'apta', NO_APTO: 'no apta', INCOMPLETA: 'incompleta'}
+
+
+def palabra_de_veredicto(veredicto) -> str:
+    if veredicto in PALABRA_VEREDICTO:
+        return PALABRA_VEREDICTO[veredicto]
+    return str(veredicto or 'sin dato').replace('_', ' ')
+
 
 @dataclass(frozen=True)
 class ItemRespondido:

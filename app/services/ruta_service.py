@@ -10,7 +10,7 @@ from app.extensions import db
 from app.models.bulto import Bulto, EstadoBulto
 from app.models.conductor import Conductor
 from app.models.packing import TareaPacking, EstadoPacking
-from app.models.recaudo_entrega import RecaudoEntrega
+from app.models.recaudo_entrega import RecaudoEntrega, forma_pago_de
 from app.models.vehiculo import Vehiculo
 from app.models.ruta_maestra import RutaMaestra, RutaMaestraParada
 from app.models.ruta_despacho import RutaDespacho, EstadoRutaDespacho, EstadoFinancieroRuta
@@ -216,7 +216,8 @@ class RutaService:
         placa = data['placa'].strip().upper()
         if Vehiculo.query.filter_by(placa=placa).first():
             raise ConflictError(f'Ya existe un vehículo con placa {placa}')
-        v = Vehiculo(placa=placa, tipo=data['tipo'].strip(),
+        from flota.dominio.valores import tipo_de_vehiculo
+        v = Vehiculo(placa=placa, tipo=tipo_de_vehiculo(data['tipo']),
                      capacidad_kg=data.get('capacidad_kg') or None,
                      codigo_siesa=data.get('codigo_siesa', '').strip() or None)
         db.session.add(v)
@@ -229,7 +230,13 @@ class RutaService:
         if not v:
             raise LookupError('Vehículo no encontrado')
         _activo_antes = v.activo
-        if 'tipo'         in data: v.tipo         = data['tipo'].strip()
+        if 'tipo' in data:
+            # Se valida solo si CAMBIA: un vehículo viejo con un tipo fuera del
+            # catálogo se sigue pudiendo editar en lo demás.
+            from flota.dominio.valores import normalizar_tipo, tipo_de_vehiculo
+            if normalizar_tipo(data['tipo'] if isinstance(data['tipo'], str) else '') \
+                    != normalizar_tipo(v.tipo):
+                v.tipo = tipo_de_vehiculo(data['tipo'])
         if 'capacidad_kg' in data: v.capacidad_kg = data['capacidad_kg'] or None
         if 'codigo_siesa' in data: v.codigo_siesa = (data['codigo_siesa'] or '').strip() or None
         if 'activo'       in data: v.activo       = bool(data['activo'])
@@ -1731,7 +1738,11 @@ class RutaService:
                           'referencia_pago',
                           'observaciones', 'bultos_rechazados_ids',
                           'items_entregados', 'fecha_confirmacion',
-                          'confirmado_por', 'editado_por')
+                          'confirmado_por', 'editado_por',
+                          # La hora del teléfono de la confirmación ANTERIOR:
+                          # re-confirmar la pisa, y sin esto se perdía (QA e2e
+                          # 2026-09-24). Queda en el EDITAR.
+                          'ts_dispositivo', 'ts_desfase_s', 'via_cola')
         antes_parada = foto_fila(recaudo, list(_CAMPOS_PARADA)) if recaudo else None
 
         if not recaudo:
@@ -1747,7 +1758,9 @@ class RutaService:
             recaudo.editado_en  = ahora
 
         recaudo.estado_entrega        = estado_entrega
-        recaudo.forma_pago            = forma_pago
+        # Sin cobro (rechazo, «no pagó y se quedó») no hay forma de pago,
+        # aunque el select traiga la de antes.
+        recaudo.forma_pago            = forma_pago_de(estado_entrega, forma_pago)
         # La clasificación con la que se juzgó esta confirmación, CONGELADA:
         # la liquidación la lee de acá aunque la tabla cambie después. Solo si
         # era LEÍDA (MAESTRO): un supuesto no se congela —queda NULL,

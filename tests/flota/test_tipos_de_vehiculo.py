@@ -64,3 +64,59 @@ class TestElFormularioNoOfreceTiposQueElDominioIgnora:
         si no, el tipo más común del parque cae al fallback."""
         assert normalizar_tipo('Camión') in POSICIONES_LLANTA_POR_TIPO
         assert normalizar_tipo('CAMIONETA') in POSICIONES_LLANTA_POR_TIPO
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# El backend valida contra el mismo catálogo (QA e2e 2026-09-24)
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# `Vehiculo.tipo` era texto libre también en el BACKEND: un POST a mano con
+# «Tractomula» daba de alta un vehículo que cae al fallback de llantas. El
+# desplegable es una lista; la API tiene que ser la misma lista.
+
+class TestElBackendValidaElTipo:
+
+    def test_el_catalogo_es_el_del_desplegable(self):
+        from flota.dominio.valores import TIPOS_VEHICULO
+        assert list(TIPOS_VEHICULO) == _opciones_del_desplegable()
+
+    def _admin(self, db):
+        from flask_jwt_extended import create_access_token
+        from app.models.usuario import Usuario
+        u = Usuario(email='tipos@veh.test', nombre='Admin', rol='admin', activo=True)
+        u.set_password('x')
+        db.session.add(u)
+        db.session.commit()
+        return {'Authorization': f'Bearer {create_access_token(identity=str(u.id))}'}
+
+    def test_un_tipo_fuera_del_catalogo_es_400_claro(self, client, db):
+        r = client.post('/api/rutas/vehiculos', json={'placa': 'TIP001', 'tipo': 'Tractomula'},
+                        headers=self._admin(db))
+        assert r.status_code == 400, r.get_json()
+        assert 'Tractomula' in r.get_json()['error'] and 'NHR' in r.get_json()['error']
+
+    def test_se_guarda_el_nombre_canonico(self, client, db):
+        r = client.post('/api/rutas/vehiculos', json={'placa': 'TIP002', 'tipo': 'camion'},
+                        headers=self._admin(db))
+        assert r.status_code == 201, r.get_json()
+        assert r.get_json()['vehiculo']['tipo'] == 'Camión'
+
+    def test_cambiar_a_un_tipo_desconocido_es_400(self, client, db):
+        from app.models.vehiculo import Vehiculo
+        h = self._admin(db)
+        v = Vehiculo(placa='TIP003', tipo='NHR', activo=True)
+        db.session.add(v)
+        db.session.commit()
+        r = client.put(f'/api/rutas/vehiculos/{v.id}', json={'tipo': 'Bus'}, headers=h)
+        assert r.status_code == 400, r.get_json()
+
+    def test_un_vehiculo_viejo_fuera_del_catalogo_se_sigue_editando(self, client, db):
+        """Validar solo cuando el tipo CAMBIA: un tipo viejo no traba lo demás."""
+        from app.models.vehiculo import Vehiculo
+        h = self._admin(db)
+        v = Vehiculo(placa='TIP004', tipo='sencillo', activo=True)
+        db.session.add(v)
+        db.session.commit()
+        r = client.put(f'/api/rutas/vehiculos/{v.id}',
+                       json={'tipo': 'sencillo', 'capacidad_kg': 3000}, headers=h)
+        assert r.status_code == 200, r.get_json()

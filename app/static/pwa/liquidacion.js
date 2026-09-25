@@ -10,6 +10,21 @@ let _liqRetenciones = {}; // { recaudoId: [{tipo, nombre, puc, tasa, base, valor
 
 const _liqFmt = v => '$' + Number(v || 0).toLocaleString('es-CO');
 
+/** El estado de una entrega en palabras — los cuatro de `EstadoEntrega.TODOS`
+ * (trinquete: tests/test_mapas_estado_entrega_pwa.py). El badge pintaba
+ * «ENTREGADO_SIN_PAGO» tal cual (QA e2e 2026-09-24). */
+const LIQ_ESTADO_ENTREGA = {
+  ENTREGADO: 'Entregado', PARCIAL: 'Parcial', RECHAZADO: 'Rechazado',
+  ENTREGADO_SIN_PAGO: 'Se quedó sin pagar',
+};
+
+/** Un código en palabras: del mapa, o sin guiones bajos si no está. */
+function _liqPalabra(mapa, codigo) {
+  if (codigo === null || codigo === undefined || codigo === '') return 'sin dato';
+  if (Object.prototype.hasOwnProperty.call(mapa, codigo)) return mapa[codigo];
+  return String(codigo).replace(/_/g, ' ');
+}
+
 // ── Catálogo de retenciones (se sobreescribe con datos del backend) ──────────
 // Fallback únicamente — la fuente real es CATALOGO_RETENCIONES en
 // liquidacion_service.py (retenciones_disponibles en la respuesta del
@@ -110,8 +125,25 @@ async function liqCargarDesglose() {
   }
   const filas = Object.entries(r.matriz || {})
     .sort((a, b) => b[1] - a[1])
-    .map(([k, n]) => `<div class="tabla-fila"><span class="tabla-nombre">${k}</span>
-        <span>${n} · ${Math.round(100 * n / r.total)}%</span></div>`).join('');
+    .map(([k, n]) => {
+      const [forma, estado] = String(k).split(' | ');
+      const nombre = `${_liqPalabra({}, forma)} · ${_liqPalabra(LIQ_ESTADO_ENTREGA, estado)}`;
+      return `<div class="tabla-fila"><span class="tabla-nombre">${esc(nombre)}</span>
+        <span>${esc(n)} · ${esc(Math.round(100 * n / r.total))}%</span></div>`;
+    }).join('');
+  // Contado contraentrega vs crédito real: cómo clasifica la política cada
+  // parada, y las de contado que salieron sin plata y sin autorización.
+  const pd = d.por_dias_credito || {};
+  const cna = d.credito_no_autorizado || {};
+  const filasDias = Object.entries(pd.conteo || {})
+    .sort((a, b) => b[1] - a[1])
+    .map(([k, n]) => `<div class="tabla-fila"><span class="tabla-nombre">${esc(k)}</span>
+        <span>${esc(n)}</span></div>`).join('');
+  const filasNoAut = (cna.detalle || []).slice(0, 20).map(x => `<div class="tabla-fila">
+      <span class="tabla-nombre">${esc(x.cliente || 'sin cliente')} · ${esc(x.pedido || '—')}
+        <span style="color:var(--tx3)">(${esc(_liqPalabra(LIQ_ESTADO_ENTREGA, x.estado_entrega))},
+        ${esc(_liqPalabra({}, x.forma_pago))})</span></span>
+      <span>${x.valor === null || x.valor === undefined ? 'sin valor' : esc(_liqFmt(x.valor))}</span></div>`).join('');
   el.innerHTML = `
     <div class="tabla-card">
       <div class="tabla-titulo">Entregas por forma de pago y estado (${esc(r.total)})</div>
@@ -130,6 +162,19 @@ async function liqCargarDesglose() {
       <div class="tabla-fila"><span class="tabla-nombre">Días promedio</span><span>${z.dias_promedio ?? '—'}</span></div>
       ${z.antes_del_corte ? `<div class="tabla-fila"><span class="tabla-nombre">Anteriores al corte (no cuentan)</span><span>${esc(z.antes_del_corte)}</span></div>` : ''}
       <p style="font-size:var(--fs-xs);color:var(--tx3);margin:8px 0 0;">${esc(z.nota || '')}</p>
+    </div>
+    <div class="tabla-card" style="margin-top:12px;">
+      <div class="tabla-titulo">Paradas por condición de pago${pd.umbral_dias !== undefined ? ` (contado hasta ${esc(pd.umbral_dias)} días)` : ''}</div>
+      ${filasDias || '<div class="tabla-fila"><span class="tabla-nombre">Sin paradas</span><span>0</span></div>'}
+      <p style="font-size:var(--fs-xs);color:var(--tx3);margin:8px 0 0;">${esc(pd.nota || '')}</p>
+    </div>
+    <div class="tabla-card" style="margin-top:12px;">
+      <div class="tabla-titulo">Crédito no autorizado</div>
+      <div class="tabla-fila"><span class="tabla-nombre">Paradas</span>
+        <span class="badge ${cna.total ? 'badge-red' : 'badge-green'}">${esc(cna.total || 0)}${cna.truncado ? '+' : ''}</span></div>
+      <div class="tabla-fila"><span class="tabla-nombre">Sin cobrar</span><span>${esc(_liqFmt(cna.valor_sin_cobrar))}${cna.sin_valor ? ` · ${esc(cna.sin_valor)} sin valor` : ''}</span></div>
+      ${filasNoAut}
+      <p style="font-size:var(--fs-xs);color:var(--tx3);margin:8px 0 0;">${esc(cna.nota || '')}</p>
     </div>
     <div class="tabla-card" style="margin-top:12px;">
       <div class="tabla-titulo">Facturas emitidas como contado por dato faltante</div>
@@ -595,7 +640,7 @@ function _liqRenderDetalle() {
             <div style="font-size:var(--fs-xs);color:var(--tx3);">${esc(rec.cliente || '—')}</div>
           </div>
           <div style="text-align:right;">
-            <span style="font-size:var(--fs-xs);font-weight:700;color:${colorEstado};">${estado}</span>
+            <span style="font-size:var(--fs-xs);font-weight:700;color:${colorEstado};">${esc(_liqPalabra(LIQ_ESTADO_ENTREGA, estado))}</span>
             <div style="font-size:var(--fs-xs);color:var(--tx2);">${_liqFmt(monto)} · ${esc(fp)}</div>
             ${rec.referencia_pago ? `<div style="font-size:var(--fs-xs);color:var(--tx3);">Ref. ${esc(rec.referencia_pago)}</div>` : ''}
           </div>

@@ -39,6 +39,26 @@ class EstadoEntrega:
     #: reingreso de bodega se define por acá y no por el estado del bulto.
     SIN_RETORNO = (ENTREGADO, PARCIAL, ENTREGADO_SIN_PAGO)
 
+    #: Estados en los que **no hubo cobro**: la mercancía volvió o se quedó sin
+    #: pagar. Una forma de pago ahí no significa nada — y guardarla la
+    #: convertía en «parada CRÉDITO» en el desglose y en la liquidación.
+    SIN_COBRO = (RECHAZADO, ENTREGADO_SIN_PAGO)
+
+
+def forma_pago_de(estado_entrega, forma_pago):
+    """La forma de pago que vale para una parada: ninguna si no hubo cobro.
+
+    QA e2e 2026-09-24: «No pagó y se quedó» con el select trayendo CREDITO
+    quedaba `forma_pago='CREDITO'` sobre un ENTREGADO_SIN_PAGO, y el desglose
+    la listaba como parada a crédito — sobre una factura de contado. **La única
+    función que contesta esto**: la usa quien escribe (`confirmar_parada`) y
+    quien lee (`to_dict`, desglose), así las filas viejas también se leen bien.
+    Trinquete: `tests/test_forma_pago_sin_cobro.py`.
+    """
+    if estado_entrega in EstadoEntrega.SIN_COBRO:
+        return None
+    return forma_pago
+
 
 class RecaudoEntrega(db.Model):
     """
@@ -334,7 +354,7 @@ class RecaudoEntrega(db.Model):
             'ruta_id':               self.ruta_id,
             'tarea_id':              self.tarea_id,
             'estado_entrega':        self.estado_entrega,
-            'forma_pago':            self.forma_pago or '',
+            'forma_pago':            forma_pago_de(self.estado_entrega, self.forma_pago) or '',
             'modo_pantalla':         self.modo_pantalla,
             'motivo_rechazo':        self.motivo_rechazo,
             'monto_cobrado':         float(self.monto_cobrado) if self.monto_cobrado else 0,

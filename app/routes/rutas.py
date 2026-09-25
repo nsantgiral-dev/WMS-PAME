@@ -875,7 +875,10 @@ def liquidacion_desglose():
     _TOPE_CREDITO = 500
     total = 0
     for r in RecaudoEntrega.query.all():
-        fp = (r.forma_pago or '(sin forma de pago)').upper()
+        # Sin cobro no hay forma de pago (`forma_pago_de`): una parada «no
+        # pagó y se quedó» vieja con CREDITO guardado no es una parada CRÉDITO.
+        from app.models.recaudo_entrega import forma_pago_de as _fp_de
+        fp = (_fp_de(r.estado_entrega, r.forma_pago) or '(sin forma de pago)').upper()
         ee = (r.estado_entrega or '(sin estado)').upper()
         matriz[f'{fp} | {ee}'] = matriz.get(f'{fp} | {ee}', 0) + 1
         por_pago[fp] = por_pago.get(fp, 0) + 1
@@ -889,18 +892,19 @@ def liquidacion_desglose():
         # `(sin consultar)` no es `(sin condición)`: el primero es que nadie
         # abrió esa ruta en línea; el segundo es que Siesa respondió sin el
         # dato. Colapsarlos es el defecto que ya costó una vez.
-        if _tv is None or _tv.cond_pago is None:
-            _clase = '(sin consultar)'
-        else:
-            from app.services import cond_pago as _cpd
-            _clase = _cpd.clasificar(_tv.cond_pago, connekta.cond_pago_ventas)
-            _clase = f'{_clase} ({_tv.cond_pago or "vacío"})'
-        por_condicion[_clase] = por_condicion.get(_clase, 0) + 1
         _cobro_d = _cp_des.cobro_de_recaudo(r, _tv)
         _dias_d = (f'{_cobro_d["dias"]} día{"" if _cobro_d["dias"] == 1 else "s"}'
                    if _cobro_d['dias'] is not None else 'días desconocidos')
         _clase_d = ('crédito real' if not _cobro_d['cobrar'] else
                     'contado' if _cobro_d['origen'] == _cp_des.MAESTRO else 'contado supuesto')
+        # Con la MISMA política de cobro que `por_dias_credito`: antes salía de
+        # `clasificar`, que rotula «credito» todo lo que no es el código de
+        # contado — C02 (1 día) y C03 (8) incluidos, que se cobran en la puerta.
+        if _tv is None or (_tv.cond_pago is None and _tv.cond_pago_fe is None):
+            _clase = '(sin consultar)'
+        else:
+            _clase = f'{_clase_d} ({_cobro_d["codigo"] or "vacío"})'
+        por_condicion[_clase] = por_condicion.get(_clase, 0) + 1
         _k_d = f'{_cobro_d["codigo"] or "(sin condición)"} ({_dias_d}) · {_clase_d}'
         por_dias[_k_d] = por_dias.get(_k_d, 0) + 1
         _no_aut = _cp_des.credito_no_autorizado(r, _tv)
@@ -1095,10 +1099,10 @@ def liquidacion_desglose():
         'por_dias_credito': {
             'umbral_dias': _cp_des.umbral_dias()[0],
             'conteo': por_dias,
-            'nota': ('Clasificación de cada parada según la política '
-                     '(`cond_pago.cobro_contraentrega`): ≤ umbral es contado '
-                     'contraentrega, > umbral crédito real; «supuesto» = sin '
-                     'condición conocida, se cobra.'),
+            'nota': ('Clasificación de cada parada según la política de '
+                     'cobro: hasta el umbral es contado contraentrega, por '
+                     'encima crédito real; «supuesto» = sin condición '
+                     'conocida, se cobra.'),
         },
         'credito_no_autorizado': {
             'total': len(sin_autorizar),
@@ -1156,10 +1160,10 @@ def liquidacion_desglose():
             # factura en Elaboración **con el inventario ya descargado** — que
             # es peor que no facturar, porque la mercancía ya salió.
             'a_revisar_en_siesa': sum(1 for d in _docs_cond if d['revisar_en_siesa']),
-            'nota': ('Veces que el pedido no traía f430_id_cond_pago. Contar '
+            'nota': ('Veces que el pedido no traía condición de pago. Contar '
                      'facturas NO lo detecta: el fallback rellena el campo antes '
-                     'de emitir. `a_revisar_en_siesa` son las emitidas bajo el '
-                     'fallback viejo (contado): revisar si la FE quedó en '
+                     'de emitir. «A revisar en Siesa» son las emitidas con el '
+                     'fallback viejo (contado): revisar si la factura quedó en '
                      'Elaboración. Las nuevas salen con la condición de ruta.'),
         },
         'fe_contado_no_aprobable': {

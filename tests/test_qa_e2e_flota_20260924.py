@@ -319,8 +319,6 @@ class TestRechazoNoGuardaFormaDePago:
     `paradas_credito` («Una parada marcada CRÉDITO nunca dispara recibo de
     caja») — sobre una factura de contado contraentrega."""
 
-    @pytest.mark.xfail(strict=True, reason='P3 QA 2026-09-24: RECHAZADO/ENTREGADO_SIN_PAGO '
-                       'conserva la forma de pago vieja del select')
     def test_no_pago_se_quedo_no_queda_como_credito(self, db, mundo):
         from app.models.recaudo_entrega import RecaudoEntrega
         from app.services.ruta_service import RutaService
@@ -344,8 +342,6 @@ class TestAdvertenciaSinCodigoCrudo:
     bloqueante no apto) → 409 con «La inspección de hoy salió «no_apto»»
     (`senales_ruta.py:502`). El texto viaja tal cual al modal del muelle."""
 
-    @pytest.mark.xfail(strict=True, reason='P3 QA 2026-09-24: «no_apto» crudo en el texto de '
-                       'la advertencia')
     def test_el_texto_no_lleva_el_codigo(self, db, mundo, monkeypatch):
         from flota.adaptadores import inspecciones
         from app.services import senales_ruta

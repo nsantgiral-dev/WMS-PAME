@@ -176,9 +176,13 @@ def registrar_ausencia(contexto: str, tercero: str = ''):
 
     Lo que sí lo detecta es esto.
     """
+    # El texto dice lo que la política HACE con el hueco. Decía «no se asume
+    # contado» mientras `cobro_contraentrega` cobra lo ausente como contado
+    # supuesto: el log contradecía a la pantalla (QA e2e 2026-09-24).
     logger.warning(
-        '[COND_PAGO] ausente en %s%s — no se asume contado',
-        contexto, f' (tercero {tercero})' if tercero else '',
+        '[COND_PAGO] ausente en %s%s — se cobra en la puerta como contado '
+        'supuesto (%s), declarado',
+        contexto, f' (tercero {tercero})' if tercero else '', SUPUESTO_AUSENTE,
     )
 
 

@@ -350,7 +350,7 @@ def _donde(m: _Mundo, v) -> dict:
             'texto': 'con el conductor (no se registra dónde)'}
 
 
-def _km(m: _Mundo, v, dudosas_por_placa: Dict[str, int]) -> dict:
+def _km(m: _Mundo, v, ids_dudosas) -> dict:
     from flota.dominio import odometro as dom_odo
     from flota.dominio.valores import SIN_DATO
 
@@ -362,7 +362,11 @@ def _km(m: _Mundo, v, dudosas_por_placa: Dict[str, int]) -> dict:
                 'texto': 'sin ninguna lectura: no se sabe cuántos km tiene'}
     ts_max = max(l.ts for l in filas)
     ultima = next(l for l in filas if l.ts == ts_max and l.valor_km == valor)
-    en_duda = v.placa in dudosas_por_placa
+    # En duda es la ÚLTIMA lectura, no «alguna lectura de la placa»: una
+    # lectura vieja sin verificar no vuelve dudoso un kilometraje que ya se
+    # leyó después con foto (QA e2e 2026-09-24). Las viejas siguen en
+    # Pendientes, una por una.
+    en_duda = ultima.id in ids_dudosas
     return {
         'valor': valor,
         'confianza': ultima.confianza,
@@ -999,9 +1003,7 @@ def armar_bandeja(*, almacen_id: Optional[int] = None,
     m = _Mundo(almacen_id, ahora or datetime.utcnow())
     medidor = MedidorSQL()
     dudosas = dudosas_pendientes()
-    dudosas_por_placa = defaultdict(int)
-    for _l, placa in dudosas:
-        dudosas_por_placa[placa] += 1
+    ids_dudosas = {l.id for l, _placa in dudosas}
     diag_prev = diagnostico_de_la_flota()
     prev_de = defaultdict(list)
     for d in diag_prev:
@@ -1024,12 +1026,12 @@ def armar_bandeja(*, almacen_id: Optional[int] = None,
     for pos, v in enumerate(m.vehiculos):
         custodio = _custodio(m, v)
         donde = _donde(m, v)
-        km = _km(m, v, dudosas_por_placa)
+        km = _km(m, v, ids_dudosas)
         insp = _inspeccion(m, v)
         rutas = _rutas_hoy(m, v)
         ficha = _ficha_estado(m, v)
         hechos = _hechos(m, v, km_conocido=km['ts'] is not None,
-                         km_dudoso=v.placa in dudosas_por_placa,
+                         km_dudoso=km['en_duda'],
                          prev_diag=prev_de[v.id], sale_hoy=bool(rutas))
         evaluacion = dom_sal.evaluar(hechos)
         hoy.append({

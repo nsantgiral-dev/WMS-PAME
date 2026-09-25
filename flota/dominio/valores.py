@@ -262,6 +262,13 @@ POSICIONES_LLANTA_POR_TIPO = {
 }
 POSICIONES_LLANTA_FALLBACK = 4
 
+#: Los tipos que ofrece el alta de vehículos (`<select id="veh-form-tipo">` de
+#: index.html; `tests/flota/test_tipos_de_vehiculo.py` exige que coincidan).
+#: El backend aceptaba cualquier texto: un POST a mano con «Tractomula» daba de
+#: alta un vehículo que pide 4 fotos de llanta por fallback (QA e2e
+#: 2026-09-24). Ahora valida contra esta lista y guarda el nombre canónico.
+TIPOS_VEHICULO = ('NHR', 'Turbo', 'Camión', 'Camioneta', 'Van', 'Moto')
+
 
 def normalizar_tipo(texto: str) -> str:
     """`Vehiculo.tipo` es texto libre: se compara normalizado o no se compara.
@@ -273,6 +280,17 @@ def normalizar_tipo(texto: str) -> str:
     """
     tildes = str.maketrans('áéíóúü', 'aeiouu')
     return (texto or '').strip().lower().translate(tildes)
+
+
+def tipo_de_vehiculo(texto) -> str:
+    """El tipo canónico del catálogo del alta, o `ValueError` que dice cuáles
+    hay. Compara normalizado: «camion», «CAMIÓN» y «Camión» son el mismo."""
+    n = normalizar_tipo(texto if isinstance(texto, str) else '')
+    for t in TIPOS_VEHICULO:
+        if normalizar_tipo(t) == n:
+            return t
+    raise ValueError(f'Tipo de vehículo desconocido: «{texto}». Elegí uno de: '
+                     f'{", ".join(TIPOS_VEHICULO)}')
 
 
 def posiciones_llanta(ficha_posiciones, tipo_vehiculo):

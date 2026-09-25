@@ -643,10 +643,16 @@ class TestLaCondicionDeclaradaPorElPedido:
         ruta, tarea = ruta_con_tarea
         self._parada(db, ruta, tarea, 'C01')
         self._parada(db, ruta, tarea, 'C02')
+        self._parada(db, ruta, tarea, 'C04')
 
         d = client.get(_URL, headers=h).get_json()['recaudos']['condicion_declarada']
+        # Con la política de cobro (2026-09-24, QA e2e): C02 (1 día) se cobra
+        # en la puerta — antes salía «credito (C02)» porque el rótulo venía de
+        # `clasificar` (¿es el código de contado?), no de los días.
         assert d['contado (C01)'] == 1
-        assert d['credito (C02)'] == 1
+        assert d['contado (C02)'] == 1
+        assert d['crédito real (C04)'] == 1
+        assert not any(k.startswith('credito') for k in d), d
 
     def test_sin_consultar_no_es_sin_condicion(self, client, db, h, ruta_con_tarea):
         """`(sin consultar)` = nadie abrió esa ruta en línea. `''` = Siesa
@@ -658,7 +664,7 @@ class TestLaCondicionDeclaradaPorElPedido:
 
         d = client.get(_URL, headers=h).get_json()['recaudos']['condicion_declarada']
         assert d['(sin consultar)'] == 1
-        assert d['ausente (vacío)'] == 1
+        assert d['contado supuesto (vacío)'] == 1
 
 
 class TestDeContadorAListaDeTrabajo:

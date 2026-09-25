@@ -1116,7 +1116,7 @@ async function flotaAbrirFicha(placa) {
   el.innerHTML = `<div class="tabla-card">
     <p style="color:var(--tx2);font-size:var(--fs-sm)">Se llena parado al lado del vehículo: el
     kilometraje está en el tablero, el aceite en la tapa del motor o en la última factura,
-    la medida de llanta en el flanco. <b>Lo que no sepas, dejalo vacío o en <code>sin_dato</code></b> —
+    la medida de llanta en el flanco. <b>Lo que no sepas, dejalo vacío o en «Sin dato»</b> —
     el sistema lo declara y lo persigue. Inventarlo es peor que no tenerlo.</p>
     <p style="color:var(--yellow);font-size:var(--fs-sm)">El texto gris de cada campo es un
     <b>ejemplo de formato</b>, no la respuesta de este vehículo. Copiarlo sin mirar llena
@@ -1125,7 +1125,7 @@ async function flotaAbrirFicha(placa) {
 
     ${!d.existe ? '<p style="color:var(--yellow)">Este vehículo todavía no tiene ficha.</p>'
                 : `<p>${d.completa ? '<span style="color:var(--green)">Ficha completa</span>'
-                                   : '<span style="color:var(--yellow)">Falta: ' + esc((d.atributos_sin_dato || []).join(', ')) + '</span>'}</p>`}
+                                   : '<span style="color:var(--yellow)">Falta: ' + esc((d.atributos_sin_dato || []).map(c => flotaPalabra('ficha_campo', c)).join(', ')) + '</span>'}</p>`}
 
     <label>Kilometraje actual (del tablero) *</label>
     <input type="number" id="fi-km_inicial" inputmode="numeric" value="${v('km_inicial')}"
@@ -1274,7 +1274,7 @@ async function flotaGuardarFicha() {
     const d = await r.json();
     if (!r.ok) { err.textContent = d.detalle || d.error || 'No se pudo guardar'; return; }
     alerta((d.completa ? 'Ficha guardada y completa ✓'
-                       : 'Ficha guardada — falta: ' + d.atributos_sin_dato.join(', '))
+                       : 'Ficha guardada — falta: ' + d.atributos_sin_dato.map(c => flotaPalabra('ficha_campo', c)).join(', '))
            + ' · ' + placa, 'exito');
     flotaAbrirFicha(placa);
   } catch (e) {
@@ -1602,7 +1602,8 @@ const FLOTA_PALABRAS = {
   documento: { soat: 'SOAT', rtm: 'Revisión técnico-mecánica',
                poliza_rc: 'Póliza de responsabilidad civil',
                tarjeta_propiedad: 'Tarjeta de propiedad' },
-  veredicto: { apto: 'apto', no_apto: 'no apto', incompleta: 'incompleta' },
+  // En femenino: califica a la INSPECCIÓN («inspección no apta»).
+  veredicto: { apto: 'apta', no_apto: 'no apta', incompleta: 'incompleta' },
   rol: { admin: 'administración', gerente: 'gerencia', supervisor: 'supervisión',
          jefe_almacen: 'jefe de almacén', control_flota: 'control de flota',
          conductor: 'conductor' },
@@ -1633,6 +1634,11 @@ const FLOTA_PALABRAS = {
                 pinchazo: 'Pinchazo', corte_flanco: 'Corte en el flanco',
                 reencauche: 'Va a reencauche', rotacion: 'Rotación' },
 };
+
+/** Un `<option>` con el código de valor y la palabra de texto. */
+function flotaOpcion(grupo, codigo, elegido) {
+  return `<option value="${esc(codigo)}"${elegido ? ' selected' : ''}>${esc(flotaPalabra(grupo, codigo))}</option>`;
+}
 
 /** La palabra de un código. `grupo` es una clave de `FLOTA_PALABRAS`. */
 function flotaPalabra(grupo, codigo) {
@@ -3882,7 +3888,7 @@ function flotaFilaGasto(g) {
   return `<li style="margin-bottom:12px;border-left:2px solid var(--bd);padding-left:10px">
     <div><b>${esc(g.categoria)}</b> · ${fmtPesos(g.valor)} · ${esc(g.fecha)}</div>
     <div style="font-size:var(--fs-xs);color:var(--tx2)">${esc(g.proveedor)} · ${doc}
-      · ${esc(g.km)} km · origen ${esc(g.origen_costo)}</div>
+      · ${esc(g.km)} km · ${esc(flotaPalabra('costo', g.origen_costo))}</div>
     ${periodo}${extra}
   </li>`;
 }
@@ -4212,7 +4218,7 @@ function flotaTextoVigencia(g) {
  */
 function flotaFilaGarantia(g) {
   return `<li style="margin-bottom:8px">
-    <b>${esc(g.sistema)}</b>${g.descripcion ? ' · ' + g.descripcion : ''}
+    <b>${esc(flotaPalabra('sistema', g.sistema))}</b>${g.descripcion ? ' · ' + g.descripcion : ''}
     <div style="font-size:var(--fs-xs);color:var(--tx2)">${flotaTextoVigencia(g)}</div>
   </li>`;
 }
@@ -4228,7 +4234,7 @@ function flotaFilaTrabajo(t) {
       ? 'la factura dice que no trae garantía'
       : 'no se preguntó si traía garantía — que no es lo mismo que no tenerla');
   return `<li style="margin-bottom:8px">
-    <b>${esc(t.sistema)}</b>${t.descripcion ? ' · ' + t.descripcion : ''}
+    <b>${esc(flotaPalabra('sistema', t.sistema))}</b>${t.descripcion ? ' · ' + t.descripcion : ''}
     <div style="font-size:var(--fs-xs);color:var(--tx2)">${gar}</div>
     <div style="font-size:var(--fs-xs);color:var(--tx2)">${factura}</div>
   </li>`;
@@ -4334,7 +4340,7 @@ function flotaFormFactura(o) {
   const casillas = pendientes.map(t => `
     <label style="display:block;font-weight:400">
       <input type="checkbox" checked id="fa-${esc(o.id)}-i-${esc(t.intervencion_id)}"
-             data-interv="${esc(t.intervencion_id)}"> ${esc(t.sistema)}
+             data-interv="${esc(t.intervencion_id)}"> ${esc(flotaPalabra('sistema', t.sistema))}
       ${t.descripcion ? '· ' + t.descripcion : ''}
     </label>`).join('');
   const cats = flotaOpciones('categoria', FLOTA_TALLER.categorias);
@@ -4821,7 +4827,7 @@ async function flotaRenderLlantas() {
     : '<p style="color:var(--tx2)">Sin montajes registrados.</p>';
 
   const disponibles = (d.disponibles || []).map(ll =>
-    `<option value="${esc(ll.id)}">${esc(ll.codigo)} · ${esc(ll.medida)}${ll.ultimo_motivo ? ' · salió por ' + ll.ultimo_motivo : ''}</option>`
+    `<option value="${esc(ll.id)}">${esc(ll.codigo)} · ${esc(ll.medida)}${ll.ultimo_motivo ? ' · salió por ' + esc(flotaPalabra('desmontaje', ll.ultimo_motivo)) : ''}</option>`
   ).join('');
 
   cont.innerHTML = `<div class="tabla-card">
@@ -5107,7 +5113,7 @@ function flotaFilaTarea(t) {
     ? `<span style="color:var(--yellow)">sin intervalo declarado</span>`
     : `cada ${Number(t.intervalo_km).toLocaleString('es-CO')} km` +
       ` <span style="color:var(--${t.fuente_blanda ? 'yellow' : 'tx2'})">` +
-      `(fuente: ${esc(t.fuente)}${t.fuente_blanda ? ' — no es documental' : ''})</span>`;
+      `(fuente: ${esc(flotaPalabra('opcion', t.fuente))}${t.fuente_blanda ? ' — no es documental' : ''})</span>`;
   const ultima = t.ultima_ejecucion_km === 'sin_dato'
     ? 'nunca registrada'
     : `última a ${Number(t.ultima_ejecucion_km).toLocaleString('es-CO')} km`;

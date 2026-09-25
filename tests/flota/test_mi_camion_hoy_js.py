@@ -407,7 +407,8 @@ class TestNingunCodigoCrudo:
     def test_los_codigos_salen_en_palabras(self, tmp_path):
         todo = ' '.join(_visible(h) for h in _pantallas(tmp_path))
         for palabra in ('Tarjeta de propiedad', 'Póliza de responsabilidad civil',
-                        'no apto', 'Mi plata (efectivo)', 'Tarjeta de la empresa',
+                        # femenino: califica a la inspección (QA e2e 2026-09-24)
+                        'no apta', 'Mi plata (efectivo)', 'Tarjeta de la empresa',
                         'control de flota', 'jefe de almacén', 'No puede salir'):
             assert palabra in todo, palabra
 

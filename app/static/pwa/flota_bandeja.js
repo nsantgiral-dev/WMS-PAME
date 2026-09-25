@@ -59,6 +59,22 @@ const FLOTA_CLASE_SENAL = {
   turno_de_la_ruta: 'La ruta de hoy no es de quien tiene el turno',
 };
 
+/** Los códigos que viajan como VALOR en la evidencia de una señal. Antes se
+ * pintaban tal cual («forma: salio_sin_turno», QA e2e 2026-09-24). */
+const FLOTA_VALOR_EVIDENCIA = {
+  turno_de_otro: 'el turno está a nombre de otro conductor',
+  salio_sin_turno: 'la ruta salió sin el turno del conductor',
+  conductor_con_otro_vehiculo: 'el conductor tiene abierto el turno de otro vehículo',
+};
+
+/** Un valor de la evidencia en palabras: el código conocido por su frase, el
+ * desconocido sin guiones bajos (se ve, y alguien lo agrega arriba). */
+function flotaValorEvidencia(v) {
+  if (typeof v !== 'string') return v;
+  if (Object.prototype.hasOwnProperty.call(FLOTA_VALOR_EVIDENCIA, v)) return FLOTA_VALOR_EVIDENCIA[v];
+  return /^[a-z]+(_[a-z0-9]+)+$/.test(v) ? v.replace(/_/g, ' ') : v;
+}
+
 /** Una palabra para un código. Si no está, el código tal cual: se ve y se
  * agrega, en vez de esconderse detrás de un texto inventado. */
 function flotaPalabraDe(mapa, codigo) {

@@ -50,6 +50,21 @@ const FJ_ENTREGA = {
 
 const FJ_UBICACION = { sede: 'en la sede', taller: 'en el taller', fuera_de_sede: 'fuera de sede' };
 
+/** Por qué una parada no tiene ubicación (`geo_cliente.MOTIVOS_SIN_DATO`). Antes
+ * se pintaba el código: «sin ubicación (no_se_pidio)» (QA e2e 2026-09-24). */
+const FJ_SIN_UBICACION = {
+  permiso_denegado: 'sin permiso de ubicación', sin_senal: 'sin señal de GPS',
+  no_soportado: 'el teléfono no da ubicación', timeout: 'el GPS no respondió',
+  no_se_pidio: 'no se pidió', fuera_de_rango: 'fuera de rango', no_declarado: 'sin motivo',
+};
+
+/** Un código en palabras: del mapa, o sin guiones bajos si no está. */
+function fjPalabra(mapa, codigo) {
+  if (codigo === null || codigo === undefined || codigo === '') return 'sin dato';
+  if (Object.prototype.hasOwnProperty.call(mapa, codigo)) return mapa[codigo];
+  return String(codigo).replace(/_/g, ' ').toLowerCase();
+}
+
 /** Entrada desde Flota. */
 function flotaJornadaCargar(el) {
   const cont = (typeof el === 'string') ? document.getElementById(el) : el;
@@ -271,7 +286,7 @@ function fjVolverConductor() {
 function fjHtmlConductor(f) {
   const ci = _FJ.i;
   const dias = (f.dias || []).map((d, j) => {
-    const [niv, txt] = FJ_ESTADO[d.estado] || ['neutro', d.estado];
+    const [niv, txt] = FJ_ESTADO[d.estado] || ['neutro', fjPalabra({}, d.estado)];
     const horas = d.horas !== null && d.horas !== undefined
       ? `${d.primer_evento}–${d.ultimo_evento} · ${fjNum(d.horas)} h`
       : (d.tramo_observado_h !== null && d.tramo_observado_h !== undefined
@@ -324,7 +339,7 @@ async function fjAbrirDia(i, j) {
 }
 
 function fjHtmlDia(j) {
-  const [niv, txt] = FJ_ESTADO[j.estado] || ['neutro', j.estado];
+  const [niv, txt] = FJ_ESTADO[j.estado] || ['neutro', fjPalabra({}, j.estado)];
   const cob = j.cobertura || {};
   const faltan = (cob.faltan || []).map((x) => `<li>${esc(x)}</li>`).join('');
   const estado = j.estado === 'reconstruida' ? '' : fjCaja(
@@ -414,9 +429,13 @@ function fjValor(v) {
   if (v === false) return 'no';
   if (Array.isArray(v)) return `${v.length}`;
   if (typeof v === 'object') {
-    if ('motivo_sin_dato' in v && v.motivo_sin_dato) return `sin ubicación (${v.motivo_sin_dato})`;
+    if ('motivo_sin_dato' in v && v.motivo_sin_dato) return `sin ubicación (${fjPalabra(FJ_SIN_UBICACION, v.motivo_sin_dato)})`;
     if ('precision_m' in v) return `ubicación ±${v.precision_m} m`;
     return Object.keys(v).join(', ');
+  }
+  // Un código suelto (`ENTREGADO_SIN_PAGO`, `no_se_pidio`) no se pinta tal cual.
+  if (typeof v === 'string' && /^[A-Za-z]+(_[A-Za-z0-9]+)+$/.test(v)) {
+    return fjPalabra(Object.assign({ no_apto: 'no apta' }, FJ_ENTREGA, FJ_MOTIVOS, FJ_SIN_UBICACION), v);
   }
   return String(v);
 }
@@ -503,13 +522,13 @@ function fjDetalleEvento(e) {
     default:
       if (e.tipo.indexOf('parada') === 0) {
         p.push(d.cliente ? `${d.cliente}${d.municipio ? ` (${d.municipio})` : ''}` : 'cliente sin nombre');
-        p.push(FJ_ENTREGA[d.estado] || d.estado);
+        p.push(fjPalabra(FJ_ENTREGA, d.estado));
         if (d.motivo_rechazo) p.push(fjMotivo(d.motivo_rechazo));
         if (d.forma_pago) p.push(`${d.forma_pago.toLowerCase()} ${fmtPesos(d.monto_cobrado)}`);
         if (d.monto_descuento > 0) p.push(`descuento ${fmtPesos(d.monto_descuento)}`);
         p.push(e.lat !== null && e.lat !== undefined
           ? `con ubicación${e.precision_m ? ` ±${e.precision_m} m` : ''}`
-          : `sin ubicación${d.gps && d.gps.motivo_sin_dato ? ` (${d.gps.motivo_sin_dato})` : ''}`);
+          : `sin ubicación${d.gps && d.gps.motivo_sin_dato ? ` (${fjPalabra(FJ_SIN_UBICACION, d.gps.motivo_sin_dato)})` : ''}`);
         p.push(d.con_foto ? 'con foto' : 'sin foto');
         if (d.reconfirmada) p.push('la corrigió después');
       }
