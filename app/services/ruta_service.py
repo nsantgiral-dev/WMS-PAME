@@ -15,7 +15,8 @@ from app.models.vehiculo import Vehiculo
 from app.models.ruta_maestra import RutaMaestra, RutaMaestraParada
 from app.models.ruta_despacho import RutaDespacho, EstadoRutaDespacho, EstadoFinancieroRuta
 from app.utils.fecha import dia_operativo as _dia_operativo
-from app.services.bitacora import registrar_accion, motivo_obligatorio, foto as foto_fila
+from app.services.bitacora import (registrar_accion, motivo_obligatorio, foto as foto_fila,
+                                   FORZADO_ADVERTENCIAS_FLOTA, FORZADO_CIERRE_RUTA)
 
 logger = logging.getLogger(__name__)
 
@@ -529,7 +530,8 @@ class RutaService:
             'FORZAR', ruta, usuario_id=usuario_id, motivo=texto,
             entidad_codigo=f'RUTA-{ruta.id}',
             antes={'estado': ruta.estado},
-            despues={'momento': momento,
+            despues={'forzado': FORZADO_ADVERTENCIAS_FLOTA,
+                     'momento': momento,
                      'advertencias_flota': sorted(claves),
                      'detalle': advertencias})
         return advertencias
@@ -2056,7 +2058,8 @@ class RutaService:
             'FORZAR', ruta, usuario_id=admin_id, motivo=motivo,
             entidad_codigo=f'RUTA-{ruta.id}',
             antes=antes_ruta,
-            despues={**foto_fila(ruta, ['estado', 'fecha_cierre', 'fecha_entregada']),
+            despues={'forzado': FORZADO_CIERRE_RUTA,
+                     **foto_fila(ruta, ['estado', 'fecha_cierre', 'fecha_entregada']),
                      'paradas_auto_rechazadas': [t.id for t in pendientes]})
         RutaService._marcar_liquidada(ruta, admin_id, motivo=f'Cierre forzado: {motivo}')
         _ruta_id = ruta.id

@@ -50,11 +50,56 @@ ACCIONES = (
     'DESASIGNAR',   # se quita la asignación (bulto ↔ ruta)
     'REINTENTAR',   # un job FALLIDO vuelve a la cola — su error queda acá
     'DESCARTAR',    # se decide no hacer algo pendiente
-    'FORZAR',       # se salta una guarda (cierre forzado de ruta)
+    'FORZAR',       # se salta una guarda — cuál, en despues['forzado'] (TIPOS_FORZADO)
     'LIQUIDAR',     # la ruta pasa a LIQUIDADA
     'DESACTIVAR',   # baja lógica de un maestro (producto, conductor, vehículo)
     'BLOQUEAR',     # una tarea sale del flujo esperando a un humano
 )
+
+
+#: Qué guarda se saltó un FORZAR. El verbo es uno (vocabulario cerrado) y lo
+#: escriben dos sitios sobre la MISMA entidad (`RutaDespacho`): el cierre
+#: forzado de una ruta y el despacho con advertencias de flota. Hasta el
+#: 2026-09-24 nadie los distinguía: la jornada leía «despachó con el SOAT
+#: vencido» como «ruta cerrada a la fuerza por la oficina» y la bitácora
+#: legible decía «forzó el cierre» de una ruta que cerró el conductor.
+#: Todo FORZAR declara cuál es en `despues['forzado']` (lo exige
+#: `registrar_accion`); `tipo_de_forzado` lee eso y, para las filas de antes,
+#: la forma de su `despues`.
+FORZADO_CIERRE_RUTA = 'cierre_de_ruta'
+FORZADO_ADVERTENCIAS_FLOTA = 'despacho_con_advertencias_de_flota'
+
+#: tipo → (verbo en pasado para la bitácora legible, qué se saltó).
+TIPOS_FORZADO = {
+    FORZADO_CIERRE_RUTA: ('forzó el cierre de',
+                          'cerró la ruta dando por rechazado lo no gestionado'),
+    FORZADO_ADVERTENCIAS_FLOTA: ('despachó pese a las advertencias de flota',
+                                 'la ruta salió con advertencias de flota reconocidas'),
+}
+
+#: Un FORZAR que no dice qué forzó (fila vieja de forma desconocida).
+VERBO_FORZADO_GENERICO = 'se saltó una guarda en'
+
+
+def tipo_de_forzado(entidad, despues):
+    """Qué guarda se saltó un FORZAR: una clave de `TIPOS_FORZADO` o `None` si
+    la fila no lo dice ni su forma lo delata. **La única función que contesta
+    esto**: jornada, bitácora legible y quien venga después la llaman."""
+    d = despues if isinstance(despues, dict) else {}
+    t = d.get('forzado')
+    if t in TIPOS_FORZADO:
+        return t
+    # Filas escritas antes de `forzado` (2026-09-24): la forma las delata.
+    if 'advertencias_flota' in d:
+        return FORZADO_ADVERTENCIAS_FLOTA
+    if entidad == 'RutaDespacho' and 'paradas_auto_rechazadas' in d:
+        return FORZADO_CIERRE_RUTA
+    return None
+
+
+def verbo_de_forzado(entidad, despues) -> str:
+    t = tipo_de_forzado(entidad, despues)
+    return TIPOS_FORZADO[t][0] if t else VERBO_FORZADO_GENERICO
 
 
 class MotivoRequerido(ValueError):
@@ -140,6 +185,13 @@ def registrar_accion(accion: str, entidad, entidad_id: int = None, *,
     if accion not in ACCIONES:
         raise ValueError(f'Acción de bitácora desconocida: {accion!r}. '
                          f'Vocabulario: {", ".join(ACCIONES)}')
+
+    if accion == 'FORZAR' and (despues if isinstance(despues, dict) else {}).get(
+            'forzado') not in TIPOS_FORZADO:
+        raise ValueError(
+            "Un FORZAR declara qué forzó: despues['forzado'] ∈ "
+            f"{sorted(TIPOS_FORZADO)}. Sin eso, cualquier lector lo confunde "
+            'con un cierre forzado de ruta.')
 
     if not isinstance(entidad, str):
         fila = entidad

@@ -467,10 +467,16 @@ class Mundo:
                 self.bultos[rid] = {'primero': _a_utc_naive(mn), 'ultimo': _a_utc_naive(mx),
                                     'bultos': nb, 'paradas': nt}
             from app.models.bitacora import BitacoraAccion
-            for (eid,) in db.session.query(BitacoraAccion.entidad_id).filter(
+            from app.services.bitacora import FORZADO_CIERRE_RUTA, tipo_de_forzado
+            # Solo el FORZAR que CERRÓ la ruta: el de «despachar con
+            # advertencias de flota» vive en la misma entidad y no cierra nada.
+            for eid, ent, despues in db.session.query(
+                    BitacoraAccion.entidad_id, BitacoraAccion.entidad,
+                    BitacoraAccion.despues).filter(
                     BitacoraAccion.accion == 'FORZAR', BitacoraAccion.entidad == 'RutaDespacho',
                     BitacoraAccion.entidad_id.in_(trozo)):
-                self.forzadas.add(eid)
+                if tipo_de_forzado(ent, despues) == FORZADO_CIERRE_RUTA:
+                    self.forzadas.add(eid)
         for r in recaudos:
             self.recaudos_por_ruta.setdefault(r.ruta_id, []).append(r)
         rec_ids = {r.id for r in recaudos}

@@ -214,8 +214,6 @@ class TestFORZARDeAdvertenciasNoEsCierreForzado:
         RutaService.entregar_ruta(ruta.id, {'bultos': []}, m.u_cond.id)
         return ruta
 
-    @pytest.mark.xfail(strict=True, reason='P2 QA 2026-09-24: jornada lee el FORZAR de '
-                       'advertencias de flota como cierre forzado de ruta')
     def test_la_jornada_no_dice_cierre_forzado(self, client, db, mundo):
         from app.utils.fecha import dia_operativo
         self._despachar_con_motivo_y_entregar(db, mundo)
@@ -225,8 +223,6 @@ class TestFORZARDeAdvertenciasNoEsCierreForzado:
         tipos = [e.get('tipo') for e in r.get_json()['eventos']]
         assert 'cierre_ruta' in tipos and 'cierre_ruta_forzado' not in tipos, tipos
 
-    @pytest.mark.xfail(strict=True, reason='P2 QA 2026-09-24: la bitácora legible dice '
-                       '«forzó el cierre de la ruta» para un despacho con advertencias')
     def test_la_bitacora_no_dice_que_forzo_el_cierre(self, client, db, mundo):
         self._despachar_con_motivo_y_entregar(db, mundo)
         r = client.get('/api/analitica/bitacora?accion=FORZAR&entidad=RutaDespacho',

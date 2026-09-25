@@ -1092,7 +1092,9 @@ VERBOS = {
     'ELIMINAR': 'eliminó', 'ANULAR': 'anuló', 'CANCELAR': 'canceló',
     'REABRIR': 'reabrió', 'EDITAR': 'editó', 'REASIGNAR': 'reasignó',
     'DESASIGNAR': 'desasignó', 'REINTENTAR': 'reintentó', 'DESCARTAR': 'descartó',
-    'FORZAR': 'forzó el cierre de', 'LIQUIDAR': 'liquidó',
+    # FORZAR es genérico acá: la frase de UNA fila la da `verbo_de_forzado`
+    # (cierre de ruta ≠ despacho con advertencias de flota).
+    'FORZAR': 'forzó', 'LIQUIDAR': 'liquidó',
     'DESACTIVAR': 'desactivó', 'BLOQUEAR': 'bloqueó',
 }
 
@@ -1225,6 +1227,14 @@ def _nombres(modelo, ids):
     return {r.id: r.nombre for r in modelo.query.filter(modelo.id.in_(ids)).all()}
 
 
+def _verbo_de_la_fila(f):
+    accion = f.get('accion')
+    if accion == 'FORZAR':
+        from app.services.bitacora import verbo_de_forzado
+        return verbo_de_forzado(f.get('entidad'), f.get('despues'))
+    return VERBOS.get(accion, (accion or '').lower())
+
+
 def describir_acciones(filas):
     """Agrega a cada `to_dict()` de la bitácora lo que una persona lee:
     quién (nombre), qué (frase), de qué pedido, cuándo (hora Bogotá), dónde
@@ -1245,8 +1255,8 @@ def describir_acciones(filas):
             quien = usuarios.get(uid) or f'Usuario #{uid} (ya no existe)'
         doc = _documento(f, vivos)
         cod = f.get('entidad_codigo') or (f"#{f['entidad_id']}" if f.get('entidad_id') else '')
-        frase = f"{quien} {VERBOS.get(f.get('accion'), (f.get('accion') or '').lower())} " \
-                f"{nombre_entidad(f.get('entidad'))}"
+        verbo = _verbo_de_la_fila(f)
+        frase = f"{quien} {verbo} {nombre_entidad(f.get('entidad'))}"
         if cod:
             frase += f' {cod}'
         if doc and doc['codigo'] != f.get('entidad_codigo'):
@@ -1258,7 +1268,7 @@ def describir_acciones(filas):
             'almacen_nombre': (almacenes.get(f.get('almacen_id'))
                                if f.get('almacen_id') is not None else None),
             'entidad_nombre': nombre_entidad(f.get('entidad')),
-            'verbo': VERBOS.get(f.get('accion')),
+            'verbo': verbo if f.get('accion') in VERBOS else None,
             'motivo_legible': motivo_legible(f.get('accion'), f.get('motivo')),
             'pide_motivo': f.get('accion') not in ACCIONES_SIN_MOTIVO_ESPERADO,
             'documento': doc,
