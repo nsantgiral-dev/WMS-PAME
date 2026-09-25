@@ -331,8 +331,10 @@ def pedido_temporada():
 
     DEADLINE: comité del 7 de agosto 2026.
     """
-    if not _es_admin_o_jefe():
-        return jsonify({'error': 'Solo admin puede ver el pedido de temporada'}), 403
+    # Lectura: `_es_compras()` desde el 2026-09-25 (pantalla de Compras). El
+    # rol `compras` recibía 403 en la pestaña que decide el pedido escolar.
+    if not _es_compras():
+        return jsonify({'error': 'Sin permiso para ver el pedido de temporada'}), 403
 
     margen = request.args.get('margen_pct', 0.40, type=float)
     capital = request.args.get('tasa_capital', 0.30, type=float)
@@ -353,8 +355,10 @@ def pedido_temporada():
 @jwt_required()
 def listar_juicios():
     """Lista paralela registrada para una temporada."""
-    if not _es_admin_o_jefe():
-        return jsonify({'error': 'Solo admin puede ver juicios'}), 403
+    # Leer la lista paralela: `_es_compras()`. ESCRIBIRLA (POST) sigue en
+    # admin/jefe: el juicio es del comité, y no hay un rol «líder de compras».
+    if not _es_compras():
+        return jsonify({'error': 'Sin permiso para ver juicios'}), 403
     from app.models.juicio_temporada import JuicioTemporada
     temporada = request.args.get('temporada', '2026-27')
     # Un juicio retractado queda ANULADO, no borrado: no se lista como vigente.

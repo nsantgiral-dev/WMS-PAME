@@ -559,3 +559,31 @@ def resumen_por_fuente(costos):
             f'en ninguna fuente. Su Cu no es un dato: es una hipótesis.'
         ) if supuestos else None,
     }
+
+
+def valorizar(unidades, info_costo) -> dict:
+    """Cuánto cuesta comprar `unidades` al costo que eligió `resolver_costos`.
+
+    Sin costo de ninguna fuente (`SIN_COSTO`, o costo ≤ 0) el valor es
+    `None`, nunca $0: no saber cuánto vale no lo vuelve gratis (Regla 0).
+
+    Returns: {valor_cop | None, costo_unitario | None, fuente}"""
+    info = info_costo or {}
+    costo = float(info.get('costo') or 0)
+    fuente = info.get('fuente') or 'SIN_COSTO'
+    if costo <= 0 or fuente == 'SIN_COSTO':
+        return {'valor_cop': None, 'costo_unitario': None, 'fuente': 'SIN_COSTO'}
+    return {'valor_cop': round(float(unidades or 0) * costo),
+            'costo_unitario': round(costo, 2), 'fuente': fuente}
+
+
+def sumar_valores(valores) -> dict:
+    """Subtotal de varios valores en pesos: los `None` no suman y se cuentan.
+    Con alguno sin valor, el total es una **cota inferior** y lo dice.
+
+    Returns: {total_cop | None, sin_valor, es_cota_inferior}"""
+    vals = list(valores or [])
+    con = [float(v) for v in vals if v is not None]
+    sin = len(vals) - len(con)
+    return {'total_cop': round(sum(con)) if con else None,
+            'sin_valor': sin, 'es_cota_inferior': sin > 0}

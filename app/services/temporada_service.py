@@ -55,6 +55,91 @@ def temporada_de(fecha):
     return None
 
 
+def proxima_temporada(hoy=None) -> dict:
+    """La temporada escolar que viene (o la que está corriendo), por fecha.
+
+    Del 1-mar al 30-nov la próxima empieza el 1-dic de este año; de dic a feb
+    la temporada ESTÁ corriendo (`en_curso`). Reemplaza la etiqueta fija
+    `'2026-27'` y los plazos escritos a mano («comité del 7 de agosto»), que
+    envejecían solos."""
+    hoy = hoy or _dia_operativo()
+    if hoy.month == 12:
+        inicio = date(hoy.year, 12, 1)
+    elif hoy.month in (1, 2):
+        inicio = date(hoy.year - 1, 12, 1)
+    else:
+        inicio = date(hoy.year, 12, 1)
+    import calendar
+    fin = date(inicio.year + 1, 2, calendar.monthrange(inicio.year + 1, 2)[1])
+    return {'etiqueta': temporada_de(inicio), 'inicio': inicio, 'fin': fin,
+            'en_curso': inicio <= hoy <= fin,
+            'dias_para_empezar': max(0, (inicio - hoy).days)}
+
+
+def fechas_limite_pedido(hoy=None) -> dict:
+    """¿Hasta cuándo se puede pedir para que llegue ANTES de que empiece la
+    temporada? — por origen, con el lead time de `compras_fuentes.lead_time`
+    (la única función que lo decide).
+
+        fecha límite = inicio de temporada − (lead time + σ del lead time)
+
+    Con una σ de margen llega a tiempo en ~5 de cada 6 casos (normal a una
+    cola). Es un supuesto declarado (`criterio`), no un dato: el dueño puede
+    pedir más margen.
+
+    Returns: {temporada, inicio, en_curso, por_origen: {NACIONAL|CHINA:
+              {fecha_limite, dias_restantes, vencida, lt_dias, sigma_lt, fuente}},
+              criterio}"""
+    from datetime import timedelta
+    from app.services import compras_fuentes
+    hoy = hoy or _dia_operativo()
+    t = proxima_temporada(hoy)
+    por_origen = {}
+    for origen in (compras_fuentes.ORIGEN_NACIONAL, compras_fuentes.ORIGEN_CHINA):
+        lt = compras_fuentes.lead_time(origen=origen)
+        margen = int(round(float(lt['lt_dias']) + float(lt['sigma_lt'])))
+        limite = t['inicio'] - timedelta(days=margen)
+        por_origen[origen] = {
+            'fecha_limite': limite.isoformat(),
+            'dias_restantes': (limite - hoy).days,
+            'vencida': limite < hoy,
+            'lt_dias': lt['lt_dias'], 'sigma_lt': lt['sigma_lt'],
+            'fuente': lt['fuente'],
+        }
+    return {'temporada': t['etiqueta'], 'inicio': t['inicio'].isoformat(),
+            'fin': t['fin'].isoformat(), 'en_curso': t['en_curso'],
+            'por_origen': por_origen,
+            'criterio': 'inicio de temporada − (lead time + una σ)'}
+
+
+def conciliar_con_contenedor(filas_temporada, items_contenedor) -> dict:
+    """Una cifra por SKU cuando la temporada y el contenedor hablan del mismo.
+
+    El pedido de temporada (newsvendor: lo que hay que TENER al empezar) y el
+    déficit del contenedor (S objetivo de reposición) son dos modelos. Para un
+    SKU de temporada que además va en la propuesta de contenedor, **manda la
+    temporada**: es el modelo de la demanda escolar, y el que el comité firma.
+    La cifra del contenedor se muestra como lo que HOY propone y la diferencia
+    como el ajuste a hacerle — no como un segundo número a pedir.
+
+    Returns: {ref: {cifra, fuente='TEMPORADA', en_contenedor_unidades,
+                    ajuste_contenedor_unidades}}"""
+    en_cont = {}
+    for it in items_contenedor or []:
+        r = it.get('referencia')
+        if r:
+            en_cont[r] = en_cont.get(r, 0) + int(it.get('unidades') or 0)
+    salida = {}
+    for f in filas_temporada or []:
+        r = f.get('referencia')
+        if r not in en_cont or f.get('pedir') is None:
+            continue
+        salida[r] = {'cifra': int(f['pedir']), 'fuente': 'TEMPORADA',
+                     'en_contenedor_unidades': en_cont[r],
+                     'ajuste_contenedor_unidades': int(f['pedir']) - en_cont[r]}
+    return salida
+
+
 class TemporadaService:
 
     @staticmethod
@@ -299,6 +384,7 @@ class TemporadaService:
                 # PROCEDENCIA POR FILA: un Q* sobre cotización vigente y uno
                 # sobre promedio de hace 18 meses no valen lo mismo.
                 'fuente_costo': info_costo.get('fuente'),
+                'origen': (info_costo.get('origen') or '').strip().upper() or None,
                 'costo_confiable': info_costo.get('confiable', False),
                 'costo_anejo': info_costo.get('anejo', False),
                 'dias_antiguedad_costo': info_costo.get('dias_antiguedad'),
@@ -340,7 +426,7 @@ class TemporadaService:
             fila['nombre'] = m.get('nombre', '')
             fila['concentracion'] = m.get('concentracion')
             fila['precio_venta'] = m.get('precio_venta')
-            for k in ('fuente_costo', 'costo_confiable', 'costo_anejo',
+            for k in ('fuente_costo', 'origen', 'costo_confiable', 'costo_anejo',
                       'dias_antiguedad_costo', 'precio_es_supuesto',
                       'margen_supuesto', 'cu_rango', 'convencion_margen',
                       'demanda_censurada', 'temporadas_censuradas',

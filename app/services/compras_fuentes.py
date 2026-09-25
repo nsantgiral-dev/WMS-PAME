@@ -480,8 +480,17 @@ def frescura_oc() -> dict:
     ok = _reg.ultimo_ok('compras_oc')
     if isinstance(ult, dict) and '_error_lectura' in ult:
         return {'error_lectura': ult['_error_lectura']}
+    completa = (ok or {}).get('inicio') if ok else None
+    hace_min = None
+    if completa:
+        try:
+            hace_min = int((datetime.utcnow() - datetime.fromisoformat(
+                str(completa).replace('Z', '').split('+')[0])).total_seconds() // 60)
+        except (TypeError, ValueError):
+            hace_min = None
     return {
         'nunca_corrio': ult is None,
+        'completa_hace_min': hace_min,
         'ultima_utc': (ult or {}).get('inicio'),
         'ultima_ok': (ult or {}).get('ok'),
         'completa_utc': (ok or {}).get('inicio') if ok else None,
@@ -916,3 +925,211 @@ def precios_oc(refs, proveedor: str = None) -> dict:
     for v in salida.values():
         v.pop('_fecha', None)
     return salida
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Lo que el comprador necesita para armar una OC (2026-09-25, la bandeja)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def empaque_de_compra(refs) -> dict:
+    """¿En qué empaque se le compra este SKU al proveedor? — por SKU, con su
+    procedencia. La cantidad a pedir se redondea a este empaque
+    (`armador_service.pedido_en_empaques`).
+
+    Cascada, de lo más cercano a la compra a lo más lejano:
+      1. `OC_SIESA`: la unidad y el factor de la línea de la OC más reciente
+         (lo que el proveedor factura: una caja de 12, una paca de 500).
+      2. `MAESTRO_SIESA`: `Producto.factor_conversion`/`unidad_empaque` que
+         trae el sync del catálogo (el empaque de venta, no necesariamente el
+         de compra — declarado).
+      3. `SIN_EMPAQUE`: se pide por unidad y se dice.
+
+    El MOQ del proveedor nacional no vive en ninguna fuente: `moq_empaques=1`
+    con `moq_fuente='SIN_DATO'` (Regla 0: no se inventa un mínimo).
+
+    Returns: {ref: {unidades_por_empaque, unidad, moq_empaques, moq_fuente,
+                    fuente, oc, nota}}
+    """
+    from app.models.compras_fuentes import OcLineaSiesa
+    from app.models.producto import Producto
+    refs = [r for r in (refs or []) if r]
+    if not refs:
+        return {}
+    mejor = {}
+    q = (OcLineaSiesa.query
+         .filter(OcLineaSiesa.referencia.in_(refs), OcLineaSiesa.fecha_oc.isnot(None)))
+    for l in q.all():
+        if l.estado_oc == ESTADO_OC_ANULADA or (l.ind_obsequio or 0) == 1:
+            continue
+        fac = _dec(l.factor)
+        if fac is None or fac <= 0:
+            continue
+        ref = (l.referencia or '').strip()
+        clave = (l.fecha_oc, l.consec_docto or 0)
+        if ref not in mejor or clave > mejor[ref][0]:
+            mejor[ref] = (clave, l)
+    maestro = {p.codigo_siesa: p for p in
+               Producto.query.filter(Producto.codigo_siesa.in_(refs)).all()}
+    salida = {}
+    for ref in refs:
+        base = {'moq_empaques': 1, 'moq_fuente': 'SIN_DATO', 'oc': None, 'nota': None}
+        if ref in mejor:
+            l = mejor[ref][1]
+            u = int(_dec(l.factor))
+            salida[ref] = dict(base, unidades_por_empaque=max(1, u),
+                               unidad=(l.unidad_medida or '').strip() or 'UND',
+                               fuente='OC_SIESA', oc=l.oc_referencia)
+            continue
+        p = maestro.get(ref)
+        fc = int(getattr(p, 'factor_conversion', 1) or 1) if p else 1
+        if p is not None and fc > 1:
+            salida[ref] = dict(base, unidades_por_empaque=fc,
+                               unidad=(p.unidad_empaque or '').strip() or 'EMPAQUE',
+                               fuente='MAESTRO_SIESA',
+                               nota='Empaque del catálogo de Siesa: puede no ser el '
+                                    'del proveedor.')
+            continue
+        salida[ref] = dict(base, unidades_por_empaque=1,
+                           unidad=((p.unidad_medida if p else None) or 'UND'),
+                           fuente='SIN_EMPAQUE',
+                           nota='Sin empaque conocido: se pide por unidad.')
+    return salida
+
+
+def proveedores_info(codigos) -> dict:
+    """{codigo: {codigo, nombre, nit, pais, fuente}} — el maestro de
+    proveedores, con la razón social y el NIT de la OC más reciente cuando el
+    maestro no la tiene (el espejo trae los dos)."""
+    from app.models.acuerdo_marco import Proveedor
+    from app.models.compras_fuentes import OcLineaSiesa
+    codigos = [c for c in (codigos or []) if c]
+    if not codigos:
+        return {}
+    salida = {}
+    for p in Proveedor.query.filter(Proveedor.codigo.in_(codigos)).all():
+        salida[p.codigo] = {'codigo': p.codigo, 'nombre': p.nombre, 'nit': p.nit,
+                            'pais': p.pais, 'fuente': p.fuente or 'MAESTRO'}
+    faltan = [c for c in codigos if c not in salida or not salida[c].get('nit')]
+    if faltan:
+        filas = (db.session.query(OcLineaSiesa.proveedor_codigo, OcLineaSiesa.proveedor_nombre,
+                                  OcLineaSiesa.proveedor_nit, OcLineaSiesa.fecha_oc)
+                 .filter(OcLineaSiesa.proveedor_codigo.in_(faltan))
+                 .order_by(OcLineaSiesa.fecha_oc.desc()).all())
+        for cod, nom, nit, _f in filas:
+            d = salida.setdefault(cod, {'codigo': cod, 'nombre': None, 'nit': None,
+                                        'pais': None, 'fuente': 'SIESA_OC'})
+            d['nombre'] = d['nombre'] or nom
+            d['nit'] = d['nit'] or nit
+    return salida
+
+
+def ocs_abiertas(hoy=None) -> dict:
+    """Las OCs abiertas del espejo, por proveedor, con lo que falta por entrar
+    de cada línea (`pendiente_base`, en unidad de inventario) y si ya pasó su
+    fecha de entrega. Lectura del espejo: sin sincronización completa lo dice
+    (`frescura`).
+
+    Una línea está **atrasada** si le falta mercancía y su `f421_fecha_entrega`
+    ya pasó (día Bogotá). Una línea sin fecha de entrega no es «al día»: se
+    cuenta en `sin_fecha_entrega`.
+
+    Returns: {proveedores: [{codigo, nombre, nit, ocs: [{oc, fecha_oc,
+              fecha_entrega, dias_atraso, atrasada, moneda, lineas: [...]}],
+              atrasadas}], total_ocs, atrasadas, sin_fecha_entrega,
+              lineas_sin_unidad_base, frescura}
+    """
+    from app.models.compras_fuentes import OcLineaSiesa
+    from app.models.producto import Producto
+    from app.utils.fecha import dia_operativo
+    hoy = hoy or dia_operativo()
+    lineas = (OcLineaSiesa.query.filter(OcLineaSiesa.abierta.is_(True))
+              .order_by(OcLineaSiesa.fecha_oc, OcLineaSiesa.consec_docto).all())
+    refs = sorted({(l.referencia or '').strip() for l in lineas if l.referencia})
+    nombres = {p.codigo_siesa: p.nombre for p in
+               Producto.query.filter(Producto.codigo_siesa.in_(refs)).all()} if refs else {}
+    por_oc, sin_fecha, sin_base = {}, 0, 0
+    for l in lineas:
+        if l.estado_oc == ESTADO_OC_ANULADA:
+            continue
+        pend = _dec(l.pendiente_base)
+        if pend is None:
+            sin_base += 1
+        elif pend <= 0:
+            continue
+        ref = (l.referencia or '').strip()
+        atrasada = bool(pend is not None and pend > 0 and l.fecha_entrega
+                        and l.fecha_entrega < hoy)
+        if l.fecha_entrega is None:
+            sin_fecha += 1
+        oc = por_oc.setdefault(l.oc_referencia, {
+            'oc': l.oc_referencia, 'proveedor_codigo': l.proveedor_codigo,
+            'proveedor_nombre': l.proveedor_nombre, 'proveedor_nit': l.proveedor_nit,
+            'fecha_oc': l.fecha_oc.isoformat() if l.fecha_oc else None,
+            'moneda': (l.moneda or 'COP').strip().upper() or 'COP',
+            'estado_oc': l.estado_oc, 'lineas': [], '_entregas': []})
+        precio = _precio_base(l)
+        oc['lineas'].append({
+            'referencia': ref, 'nombre': nombres.get(ref),
+            'bodega': l.bodega,
+            'pendiente_unidades': float(pend) if pend is not None else None,
+            'fecha_entrega': l.fecha_entrega.isoformat() if l.fecha_entrega else None,
+            'atrasada': atrasada,
+            'dias_atraso': (hoy - l.fecha_entrega).days if atrasada else 0,
+            'precio_unidad': float(precio) if precio is not None else None,
+            'valor_pendiente': (float(precio * pend) if precio is not None and pend is not None
+                                else None),
+        })
+        if l.fecha_entrega:
+            oc['_entregas'].append(l.fecha_entrega)
+    proveedores = {}
+    for oc in por_oc.values():
+        entregas = oc.pop('_entregas')
+        oc['fecha_entrega'] = min(entregas).isoformat() if entregas else None
+        oc['atrasada'] = any(x['atrasada'] for x in oc['lineas'])
+        oc['dias_atraso'] = max((x['dias_atraso'] for x in oc['lineas']), default=0)
+        vals = [x['valor_pendiente'] for x in oc['lineas']]
+        oc['valor_pendiente'] = sum(v for v in vals if v is not None) if any(
+            v is not None for v in vals) else None
+        oc['valor_es_cota_inferior'] = any(v is None for v in vals)
+        p = proveedores.setdefault(oc['proveedor_codigo'], {
+            'codigo': oc['proveedor_codigo'], 'nombre': oc['proveedor_nombre'],
+            'nit': oc['proveedor_nit'], 'ocs': []})
+        p['ocs'].append(oc)
+    lista = list(proveedores.values())
+    for p in lista:
+        p['atrasadas'] = sum(1 for o in p['ocs'] if o['atrasada'])
+        p['ocs'].sort(key=lambda o: (not o['atrasada'], o['fecha_entrega'] or '9999'))
+    lista.sort(key=lambda p: (-p['atrasadas'], (p['nombre'] or '')))
+    return {
+        'proveedores': lista,
+        'total_ocs': len(por_oc),
+        'atrasadas': sum(1 for o in por_oc.values() if o['atrasada']),
+        'sin_fecha_entrega': sin_fecha,
+        'lineas_sin_unidad_base': sin_base,
+        'frescura': frescura_oc(),
+    }
+
+
+def llegadas_recientes(dias: int = 30) -> dict:
+    """Recepciones CONFIRMADAS en el WMS en los últimos `dias` (día Bogotá):
+    qué llegó, de quién, contra qué OC y si fue parcial. Es la otra mitad de
+    «lo pedido»: lo que ya entró."""
+    from datetime import timedelta
+    from app.models.recepcion import EstadoRecepcion, RecepcionMercancia
+    from app.utils.fecha import dia_operativo_de
+    desde = datetime.utcnow() - timedelta(days=int(dias))
+    filas = (RecepcionMercancia.query
+             .filter(RecepcionMercancia.estado == EstadoRecepcion.CONFIRMADA,
+                     RecepcionMercancia.fecha_confirmacion >= desde)
+             .order_by(RecepcionMercancia.fecha_confirmacion.desc()).limit(200).all())
+    return {
+        'dias': int(dias),
+        'recepciones': [{
+            'codigo': r.codigo, 'oc': r.numero_oc_siesa,
+            'proveedor_codigo': r.proveedor_codigo, 'proveedor_nombre': r.proveedor_nombre,
+            'dia': dia_operativo_de(r.fecha_confirmacion).isoformat(),
+            'parcial': bool(r.es_parcial),
+            'lineas': len(r.items),
+            'unidades': sum(int(i.cantidad_recibida or 0) for i in r.items),
+        } for r in filas],
+    }
