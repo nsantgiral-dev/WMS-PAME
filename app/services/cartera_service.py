@@ -1238,7 +1238,8 @@ def _decidir_inicio(clave, pedido, nit, items, usuario_id) -> Paso:
 
 def anotar_inicio(packing, usuario_id):
     """Después de crear el packing en G1: quién lo inició (sin commit)."""
-    if packing is not None and usuario_id and not packing.despacho_iniciado_por_id:
+    if (packing is not None and usuario_id and hasattr(packing, 'despacho_iniciado_por_id')
+            and not packing.despacho_iniciado_por_id):
         packing.despacho_iniciado_por_id = usuario_id
 
 
