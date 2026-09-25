@@ -235,6 +235,25 @@ class TestElSemaforo:
         assert r['semaforos']['ciclo_caja'] == _kpi().semaforo(
             'ciclo_caja', g['ciclo_caja']['mediana_dias'])
 
+    def test_el_recorrido_pregunta_por_la_cifra_de_lo_cerrado(self, app, mundo_portada,
+                                                              monkeypatch):
+        """Con el mundo, cohorte y cerrados caen en el mismo color: el test de
+        arriba no vería que el recorrido le pase al semáforo la tasa de toda la
+        cohorte. Este mira los argumentos."""
+        from app.services import analitica_kpi
+        from app.services.analitica_recorrido import recorrido
+        vistos = {}
+        real = analitica_kpi.semaforo
+        def _espia(clave, valor, **kw):
+            vistos[clave] = valor
+            return real(clave, valor, **kw)
+        monkeypatch.setattr(analitica_kpi, 'semaforo', _espia)
+        d, h = _rango()
+        g = recorrido({'desde': d, 'hasta': h, 'almacen_id': None})['guia']
+        assert vistos['llega_a_caja'] == g['valor_sin_fuga_cerrados']['tasa']
+        assert vistos['llega_a_caja'] != g['valor_sin_fuga']['tasa'], 'el mundo las distingue'
+        assert vistos['ciclo_caja'] == g['ciclo_caja']['mediana_dias']
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 3 · Nace útil y lo dice

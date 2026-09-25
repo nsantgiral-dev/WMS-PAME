@@ -4861,3 +4861,142 @@ hasta tener 8 semanas cerradas después del corte** — declarado en la respuest
 Suite completa en este worktree (2026-09-24, `-m "not postgres"`, TZ=UTC, sobre
 el primer commit del cambio): **8158 passed, 0 failed**, 5 skipped, 19 xfailed.
 Después solo se agregó `corte_auditoria` al health y se corrió lo afectado.
+
+---
+
+## Analítica — 🎯 ¿Cómo vamos?: la portada contra la meta (2026-09-24)
+
+El dueño: *la analítica no se ve clara.* El diagnóstico: la pestaña no
+contestaba «¿cómo vamos?»; ningún número tenía meta; **el mismo hecho daba
+cifras distintas según la pantalla**; los avisos de calidad del dato iban
+pegados a cada cifra; y el juicio de confianza (Salud) estaba escondido y en
+lenguaje de sistemas. La empresa gana convirtiendo pedido en caja **rápido y
+sin fugas**: la portada contesta eso primero.
+
+### La portada — `app/services/analitica_portada.py` · `analitica_portada.js`
+
+Primera sub-pestaña y la que abre por defecto (`AN_VISTA_INICIAL`). Llega por
+`GET /api/analitica/resumen` → `portada` (salió de `DEUDA_SIN_UI` con
+`/metricas` y `/kpi/recalcular`; queda `/serie`). Seis indicadores, cada uno
+con valor, **semáforo contra la meta**, tendencia de 8 ventanas de 7 días
+(sparkline SVG sin librerías, colores de tokens, un hueco es una semana sin
+dato y no un cero, la línea punteada es la meta), variación contra el período
+anterior de igual duración, dueño y —al tocarlo— **su porqué y su lista de qué
+hacer** con botón a la pantalla que resuelve.
+
+| Indicador | Meta provisional | Amarillo hasta | Dueño | De dónde sale (la MISMA cifra que…) |
+|---|---|---|---|---|
+| Llega a caja completo | ≥ 95 % | 90 % | Gerencia de operaciones | `analitica_recorrido._guia` (valor sin fuga, cerrados) — 🧭 Recorrido |
+| Ciclo de caja | ≤ 2 días | 3 días | Tesorería | `_guia` (mediana aprobado → liquidado) — 🧭 Recorrido |
+| Plata en riesgo | $0 | $1.000.000 | Tesorería | fugas calle + sin pago + crédito no autorizado + documentos de plata (RC, retención, despacho) — 💸 Fugas |
+| Nivel de servicio | ≥ 92 % | 85 % | Jefe de bodega | KPI diario `fill_rate` (`metricas/fill_rate.py`) |
+| Venta perdida por agotados | $0 | $100.000 **por día** del período | Compras | fuga `venta_perdida` — 💸 Fugas |
+| Exactitud de inventario | ≥ 95 % | 90 % | Líder de inventario | KPI diario `exactitud_inventario` |
+
+- **Una cifra, una fuente.** La portada no calcula nada: llama a la función
+  que ya decide en la pantalla de detalle. `Medicion` carga la cohorte del
+  recorrido UNA vez sobre la ventana más ancha (período + anterior + 8
+  semanas) y la reparte por día de entrada con la regla de `cohorte()`; las
+  fugas se piden por ventana con un solo `_Ctx`. El test exige igualdad con el
+  Recorrido y con Fugas, con y sin almacén.
+- **Las metas viven en el catálogo** (`Metrica.meta`, `umbral_amarillo`,
+  `meta_por_dia`, `meta_provisional`) y **el semáforo es una función**:
+  `analitica_kpi.semaforo(clave, valor, dias, es_piso)`. Sin dato → gris
+  (`sin_dato`), nunca rojo; **un piso nunca es verde** (lo que sería verde
+  queda amarillo «Sin confirmar: hay casos sin valor», Regla 0). El Recorrido
+  pinta sus píldoras con el mismo semáforo (`recorrido.semaforos`): se
+  retiraron sus «referencias provisionales» escritas en el JS.
+- **Tres métricas de COHORTE** entran al catálogo (`llega_a_caja`,
+  `ciclo_caja`, `plata_en_riesgo`, `agregacion = COHORTE`): se miden en vivo
+  por período, **no se guardan por día** (una mediana no se agrega sumando
+  días, y un «hoy» recalculado para un día viejo mentiría). `/serie` las
+  devuelve AUSENTE «en vivo»; `/resumen` las mide con la misma `Medicion` que
+  la portada.
+- **Nace útil.** Las cuatro en vivo tienen número aunque `ANALITICA_KPI` esté
+  apagado. Las dos del KPI diario salen «Sin dato» en gris, y la portada lo
+  dice **una vez** con cómo se enciende; el admin tiene «Calcular ahora los
+  últimos N días» (POST en tandas de 5 días: `post()` corta a los 25 s).
+- **Confianza en una línea** arriba: el veredicto global de 🩺 Salud en
+  palabras («Todavía no decidas con estos números · 3 problemas graves y 7
+  avisos»), pedido aparte para no frenar las cifras. «Ver por qué ›»: el admin
+  va a Diagnóstico; los demás ven la lista ahí mismo.
+- **«al menos»** se dice una vez al pie; el valor va en un renglón
+  (`white-space:nowrap`) y la tendencia baja al siguiente si no cabe. Grilla
+  `minmax(min(100%,270px),1fr)`: una columna en el teléfono.
+- **Qué hacer** (`por_que.que_hacer`, botones con posiciones): plata en riesgo
+  → «Liquidar ruta ›» (`tab-liquidacion` + `liqAbrirRuta`), «Ver pedido ›»
+  (recorrido), «Ir a reintentar ›» (jobs de Liquidación o pestaña Siesa);
+  ciclo de caja → cuánto tarda cada tramo (el más lento marcado) + los que más
+  llevan esperando y los que más tardaron; llega a caja → dónde se pierde la
+  plata + los pedidos con pérdida; venta perdida → por categoría + «Ver en
+  Fugas ›». Destinos en lista blanca (`AN_PORT_TABS`), y un botón solo aparece
+  si el rol ve esa pestaña.
+
+### 🩺 Diagnóstico (solo admin) — `analitica_diagnostico.js`
+
+Junta lo que sirve para **juzgar** los números: Salud completa, Bitácora,
+registros sin clave (antes al pie del Recorrido) y «cómo se mide cada cifra»
+(catálogo de `/metricas` con meta, dueño, agregación y fuente, más las
+definiciones del recorrido). Salud y Bitácora dejaron de ser sub-pestañas
+sueltas; una preferencia vieja con esos nombres lleva a Diagnóstico.
+
+### Arreglos de claridad sin rediseño
+
+- **Fugas**: `estado_de` tiene cinco estados; `sin_dato` y `sin_base` son
+  **grises y aparte** (antes «Crece o sin dato» en rojo); la tendencia compara
+  en la misma moneda (pesos con pesos, casos con casos). `meta.fuentes` con la
+  convención `{nombre, completa, motivo, actualizado_en}` y `completa` global
+  que no confunde `None` con `False`.
+- **Frescura en una línea**: `anFrescura` es un `<details>` «Dato de hoy 06:44
+  p. m. · 2 fuentes incompletas ›» que nombra cada una al abrirse.
+- **Bitácora**: el motivo de bloqueo en palabras (`motivo_legible`, con
+  `analitica_recorrido.MOTIVOS_BLOQUEO`: una tabla); LIQUIDAR y BLOQUEAR fuera
+  de «sin motivo» (`ACCIONES_SIN_MOTIVO_ESPERADO`, `sin_motivo_base`).
+- **Recorrido en frases de gerencia**: «De cada $100 que cerraron, $27
+  llegaron completos a caja (6 pedidos)», «Un pedido típico tarda…»; n, p90 y
+  sin marca en el `title` (el «?»).
+- **Línea de tiempo**: los números viajan como números (`cifras:
+  [{etiqueta, valor, formato}]`) y la pantalla los formatea con
+  `anNum`/`anPesos`; las líneas de Siesa se agrupan en «Siesa aprobó el
+  pedido» (códigos de ítem en el `title`); estados, formas de pago y
+  documentos en palabras (`Envío a Siesa: Recibo de caja — enviado`).
+- **Tablero BI**: sin valor ≠ $0 (`biValorDespachado`, categorías «sin precio
+  (N)» con `sin_precio_por_categoria` nuevo en `metricas/venta_perdida.py`),
+  filas con pedido y cliente, `esc()` en las etiquetas. «Fill rate» pasó a
+  «Servido de lo pendiente»: sale de `pedidos_siesa`, que borra lo cumplido, y
+  **no es** el nivel de servicio de la portada — dos números para dos
+  preguntas, ahora con nombres distintos.
+- **Nav**: «🟢 Operación hoy» (el dashboard) y «📈 Analítica».
+
+### El Tablero BI se queda (decisión)
+
+La portada cubre venta perdida y un nivel de servicio (distinto del BI), pero
+**no** los despachos del día (pedidos, líneas, unidades, valor). Retirarlo
+dejaría la operación sin ese número: se queda en el Dashboard, con su timer.
+Retirarlo exige antes una tarjeta de despachos o llevarlo a Operación hoy como
+cifra operativa, no de gerencia.
+
+### Lo que NO cubre (declarado)
+
+- **Censura de cohorte**: en las últimas semanas el ciclo de caja sale más
+  corto (los lentos todavía no llegan a caja) y «llega a caja» mira solo lo
+  cerrado. Se dice en «Cómo se mide la portada».
+- **Plata en riesgo es de lo que pasó en el período, con su estado de hoy**:
+  no es un saldo histórico al cierre de cada semana. Una ruta sin fecha cuenta
+  solo en el período elegido.
+- **Venta perdida** en pesos sigue siendo casi siempre un piso (el precio no lo
+  llena ningún sync).
+- **Nivel de servicio y exactitud** dependen del KPI diario: sin
+  `ANALITICA_KPI` ni recálculo manual, gris.
+- `get()` corta a los 15 s: con mucho volumen, `/resumen` (catálogo completo +
+  portada) puede acercarse. Medido en el mundo de pruebas: < 2 s.
+- La confianza hereda de Salud: la auditoría se guarda 10 min por proceso.
+
+### Metas provisionales — las confirma el dueño
+
+Todas nacen `meta_provisional: true` y la pantalla lo dice. A confirmar: ciclo
+≤ 2 días (¿la ruta se liquida el mismo día?), llega a caja ≥ 95 %, plata en
+riesgo $0 con amarillo hasta $1.000.000, nivel de servicio ≥ 92 %, venta
+perdida $0 con amarillo hasta $100.000 por día, exactitud ≥ 95 %.
+Se cambian en `analitica_kpi._CATALOGO`; el semáforo, la portada, el
+Recorrido y Diagnóstico las leen de ahí.
