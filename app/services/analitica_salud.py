@@ -1254,6 +1254,20 @@ def _verbo_de_la_fila(f):
     return VERBOS.get(accion, (accion or '').lower())
 
 
+def actor_externo(fila) -> str:
+    """Quién actuó cuando no fue un usuario del WMS: el Gestor de Cartera
+    registra con `usuario_id=None`, `origen='gestor_cartera'` y la persona en
+    `despues.usuario`. **Una función** para la frase y para «Por persona»
+    (e2e 2026-09-25: se leía «El sistema levantó con tope…»). `None` si no hay
+    a quién nombrar."""
+    if (fila.get('origen') or '') != 'gestor_cartera':
+        return None
+    despues = fila.get('despues') if isinstance(fila.get('despues'), dict) else {}
+    u = despues.get('usuario') if isinstance(despues.get('usuario'), dict) else {}
+    nombre = u.get('nombre') or u.get('username')
+    return f'{nombre} (Gestor de Cartera)' if nombre else 'Gestor de Cartera'
+
+
 def describir_acciones(filas):
     """Agrega a cada `to_dict()` de la bitácora lo que una persona lee:
     quién (nombre), qué (frase), de qué pedido, cuándo (hora Bogotá), dónde
@@ -1269,7 +1283,7 @@ def describir_acciones(filas):
     for f in filas:
         uid = f.get('usuario_id')
         if uid is None:
-            quien = 'El sistema'
+            quien = actor_externo(f) or 'El sistema'
         else:
             quien = usuarios.get(uid) or f'Usuario #{uid} (ya no existe)'
         doc = _documento(f, vivos)
@@ -1361,6 +1375,23 @@ def patrones_bitacora(desde, hasta, almacen_id=None, accion=None, entidad=None,
                                       'acciones': {}})
         p['n'] += n
         p['acciones'][acc] = n
+    # Lo que registró el Gestor de Cartera (usuario_id None) no es «El sistema»:
+    # se separa por la persona que viene en `despues.usuario`.
+    if None in personas:
+        for fila in filtrada.filter(B.usuario_id.is_(None), B.origen == 'gestor_cartera').all():
+            nombre = actor_externo(fila.to_dict())
+            clave = ('gestor', nombre)
+            p = personas.setdefault(clave, {'usuario_id': None, 'nombre': nombre, 'n': 0,
+                                            'acciones': {}})
+            p['n'] += 1
+            p['acciones'][fila.accion] = p['acciones'].get(fila.accion, 0) + 1
+            sis = personas[None]
+            sis['n'] -= 1
+            sis['acciones'][fila.accion] -= 1
+            if not sis['acciones'][fila.accion]:
+                del sis['acciones'][fila.accion]
+        if personas[None]['n'] <= 0:
+            del personas[None]
     por_persona = sorted(personas.values(), key=lambda p: (-p['n'], p['nombre']))
 
     por_accion = sorted(({'accion': a, 'verbo': VERBOS.get(a), 'n': n}

@@ -233,6 +233,19 @@ def semaforo_de_conteo(descuadres: int, definitivos: int, pendientes: int, tope:
     return {'color': 'gris', 'texto': 'sin pendientes'}
 
 
+
+def filtro_caja_cerrada_desde(inicio_utc) -> tuple:
+    """«Caja cerrada» desde `inicio_utc`: **una definición** para el KPI de
+    packing y la productividad del empacador (e2e 2026-09-25).
+
+    Se filtraba `estado == 'VERIFICADO'`, un estado de paso: al cerrar la caja
+    pasa a DESPACHADO (con `fecha_verificado` puesta) y dejaba de contar — 13
+    cajas cerradas se leían «Packing completado hoy: 0». Cuenta la fecha en que
+    se verificó, en cualquier estado posterior salvo CANCELADO."""
+    return (TareaPacking.fecha_verificado.isnot(None),
+            TareaPacking.fecha_verificado >= inicio_utc,
+            TareaPacking.estado != 'CANCELADO')
+
 class DashboardService:
 
     @staticmethod
@@ -269,8 +282,7 @@ class DashboardService:
                        TareaPacking.estado == 'EN_PROCESO')
         pk_row = db.session.query(
             func.count(TareaPacking.id).filter(
-                TareaPacking.estado == 'VERIFICADO',
-                TareaPacking.fecha_verificado >= inicio_hoy
+                *filtro_caja_cerrada_desde(inicio_hoy)
             ).label('completado_hoy'),
             func.count(TareaPacking.id).filter(
                 TareaPacking.siesa_triggered == True,
@@ -420,8 +432,7 @@ class DashboardService:
                 func.count(TareaPacking.id).label('cnt')
             ).filter(
                 TareaPacking.empacador_id.in_(operario_ids),
-                TareaPacking.estado == 'VERIFICADO',
-                TareaPacking.fecha_verificado >= fecha_inicio
+                *filtro_caja_cerrada_desde(fecha_inicio)
             ).group_by(TareaPacking.empacador_id).all()
         }
 

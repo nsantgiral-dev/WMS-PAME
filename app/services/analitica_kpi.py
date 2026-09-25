@@ -596,7 +596,8 @@ TEXTO_SEMAFORO = {'verde': 'En meta', 'amarillo': 'Cerca de la meta', 'rojo': 'F
                   'sin_dato': 'Sin dato', 'sin_meta': 'Sin meta'}
 
 
-def semaforo(clave: str, valor, dias: int = 1, es_piso: bool = False) -> dict:
+def semaforo(clave: str, valor, dias: int = 1, es_piso: bool = False,
+             sin_medir: bool = False) -> dict:
     """El semáforo de una métrica **contra su meta**. Una política, una función:
     la portada, el recorrido y cualquier pantalla futura la leen de acá.
 
@@ -618,6 +619,12 @@ def semaforo(clave: str, valor, dias: int = 1, es_piso: bool = False) -> dict:
         return {**base, 'nivel': 'sin_meta', 'texto': TEXTO_SEMAFORO['sin_meta']}
     if valor is None:
         return {**base, 'nivel': 'sin_dato', 'texto': TEXTO_SEMAFORO['sin_dato']}
+    if sin_medir:
+        # Un período que no se terminó de medir (todos sus días en curso o
+        # incompletos) no se juzga contra la meta: gris y dicho (e2e
+        # 2026-09-25: «Fuera de meta 0 %» un día que ni se había medido).
+        return {**base, 'nivel': 'sin_dato', 'sin_medir': True,
+                'texto': 'Sin juicio: el período todavía no se termina de medir'}
     v = float(valor)
     if m.direccion == SUBE_ES_BUENO:
         nivel = 'verde' if v >= meta else ('amarillo' if amarillo is not None and v >= amarillo

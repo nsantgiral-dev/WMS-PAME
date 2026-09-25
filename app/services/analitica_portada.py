@@ -254,6 +254,12 @@ def _medir_kpi(clave, puntos):
     return _medida(a['valor'], a.get('n'), a['estado'], a.get('motivo'), **extra)
 
 
+def _sin_medir(medida) -> bool:
+    """Todos los días del período del KPI diario están sin medir o en curso."""
+    faltan = medida.get('dias_sin_medir') or 0
+    return bool(faltan) and faltan >= (medida.get('dias') or 1)
+
+
 def _series_kpi(m: Medicion):
     """Una lectura de la tabla por métrica, sobre la ventana más ancha."""
     from app.services import analitica_kpi as kpi
@@ -480,7 +486,8 @@ def portada(desde: date, hasta: date, almacen_id=None, hoy: date = None,
             'origen': origen,
             'periodo': actual,
             'semaforo': kpi.semaforo(clave, actual['valor'], dias=dias,
-                                     es_piso=actual.get('es_piso', False)),
+                                     es_piso=actual.get('es_piso', False),
+                                     sin_medir=_sin_medir(actual)),
             'variacion': _variacion(met, actual, anterior),
             'tendencia': [dict(s, semaforo=kpi.semaforo(clave, s['valor'], dias=7,
                                                         es_piso=s.get('es_piso', False))['nivel'])

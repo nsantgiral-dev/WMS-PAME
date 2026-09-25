@@ -256,7 +256,6 @@ class TestLaBitacoraNombraAQuienAutorizoEnElGestor:
     mira `usuario_id`, que es `None` para el Gestor.
     """
 
-    @pytest.mark.xfail(strict=True, reason='P2: la acción del Gestor se lee «El sistema …»')
     def test_la_frase_lleva_el_nombre_del_gestor(self, db, fake, almacen):  # noqa: F811
         from app.services import cartera_service as cs
         r = _retener(db, fake, almacen)
@@ -398,7 +397,6 @@ class TestLaPortadaNoJuzgaUnDiaSinMedir:
     el día no se midió (`analitica_kpi.semaforo` recibe el valor sin el estado;
     `analitica_portada.js` no pinta el estado del período)."""
 
-    @pytest.mark.xfail(strict=True, reason='P2: la tarjeta juzga en rojo un período sin medir y no lo dice')
     def test_la_tarjeta_dice_que_el_dia_no_se_midio(self, app, client, db, almacen, tmp_path):
         from app.models.pedido_historia import PedidoHistoria
         from app.utils.fecha import dia_operativo
@@ -443,8 +441,6 @@ class TestElDashboardCuentaLasCajasCerradas:
     caja pasa a `DESPACHADO` (con `fecha_verificado` puesta) y deja de contar.
     Solo cuentan las cajas que quedaron trabadas antes de cerrar."""
 
-    @pytest.mark.xfail(strict=True, reason='P2: el dashboard cuenta solo VERIFICADO; una caja cerrada '
-                                           '(DESPACHADO) no suma al empacador')
     def test_la_caja_cerrada_hoy_cuenta(self, app, client, db, almacen):
         emp = _usuario(db, rol='empacador')
         emp.almacen_id = almacen.id
