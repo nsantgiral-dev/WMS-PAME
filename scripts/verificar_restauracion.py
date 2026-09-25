@@ -58,6 +58,10 @@ IRRECUPERABLES = (
     # Fase 1 (m037kpi): el KPI de cada día. Sus fuentes operativas se vacían
     # en el corte; el número no se puede volver a calcular.
     'analitica_kpi_diario',
+    # El sello de ambiente (m048inv): sin él, la copia se sella con el
+    # ambiente del primer proceso que la use — una copia de producción
+    # levantada en QA quedaría adoptada por QA y su DLQ postearía.
+    'sello_ambiente',
 )
 
 #: Se pueden volver a cargar desde Siesa. Que la copia tenga menos no es un
@@ -71,7 +75,9 @@ REGENERABLES = ('pedidos_siesa', 'stock_siesa', 'siesa_jobs',
                 # sincronización, cumplidas con el historial de 365 días.
                 'oc_linea_siesa',
                 # Lectura de la marca de Siesa (m047): se vuelve a leer.
-                'marca_siesa_lectura')
+                'marca_siesa_lectura',
+                # Latido de los crons (m048inv): lo reescribe la próxima corrida.
+                'cron_latido')
 
 
 def _destino():
@@ -105,7 +111,12 @@ def _radiografia():
                 text('SELECT version_num FROM alembic_version')).scalar()
         except Exception:
             head = None
-    return {'tablas': tablas, 'head': head}
+        try:
+            sello = db.session.execute(text(
+                'SELECT ambiente FROM sello_ambiente ORDER BY id DESC LIMIT 1')).scalar()
+        except Exception:
+            sello = None
+    return {'tablas': tablas, 'head': head, 'sello': sello}
 
 
 def _comparar(foto: dict, copia: dict) -> int:
@@ -115,6 +126,12 @@ def _comparar(foto: dict, copia: dict) -> int:
         problemas.append(
             f'cabeza de migraciones distinta: la foto dice {foto.get("head")!r} '
             f'y la copia {copia.get("head")!r} — la app no levanta sobre eso')
+
+    if copia.get('sello'):
+        avisos.append(
+            f'la copia está sellada «{copia["sello"]}»: un proceso de otro '
+            f'ambiente (p. ej. QA) no postea a Siesa sobre ella hasta que un '
+            f'admin la re-selle (POST /api/health/sello-ambiente)')
 
     for nombre, n_foto in sorted(foto['tablas'].items()):
         n_copia = copia['tablas'].get(nombre)

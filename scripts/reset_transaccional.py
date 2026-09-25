@@ -243,6 +243,9 @@ OPERATIVAS = [
     # Bitácora de corridas de sincronización. Se vuelve a llenar sola en la
     # primera sync después del corte.
     'registros_sync',
+    # Latido de los crons (m048inv): la próxima corrida de cada uno lo
+    # vuelve a escribir. El del ensayo no dice nada del después.
+    'cron_latido',
     # Declaraciones de ambiente. **Se borran a propósito, y es la decisión
     # menos obvia de esta lista.**
     #
@@ -313,6 +316,10 @@ PROTEGIDAS_MAESTRAS = {
     'producto_empaques', 'siesa_mapeo_unidades', 'productos_bloqueados',
     'producto_clasificacion_abc', 'contenedores', 'ficha_importacion',
     'items_en_transito', 'stock_siesa',
+    # El sello de ambiente de la base (m048inv, P0-9): la identidad de ESTA
+    # base, no un registro del ensayo. Vaciarlo en el corte dejaría que el
+    # primer proceso que la use —de cualquier ambiente— la vuelva a sellar.
+    'sello_ambiente',
     # Flota: el expediente del vehículo y el catálogo de inspección.
     # `flota_ficha_tecnica` es levantamiento de campo, no registro de ensayo.
     # `flota_documento_vehiculo` es la vigencia real de SOAT y tecnomecánica.

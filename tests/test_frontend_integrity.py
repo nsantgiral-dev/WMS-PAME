@@ -757,6 +757,14 @@ _EXENTOS_POR_REGLA = (
 # necesita un tab. La pregunta correcta es QUÉ DECISIÓN DEBERÍA ESTAR INFORMANDO.
 # Un número que el usuario no puede auditar no se obedece: se ignora.
 DEUDA_SIN_UI = {
+    # 2026-09-25 · P0-9, m048inv. Re-sellar la base para el ambiente del
+    # proceso: se usa una vez, a propósito, después de restaurar una copia y
+    # decidir qué hacer con sus siesa_jobs PENDIENTE. Sin botón A PROPÓSITO:
+    # un botón haría fácil lo que tiene que ser deliberado. Se llama con curl y
+    # un JWT de admin; `/api/health/siesa` → `sello_ambiente` dice cuándo hace falta.
+    '/api/health/sello-ambiente':
+        'Adoptar una copia restaurada para este ambiente (admin, motivo, nombre del '
+        'ambiente escrito). Sin él, la DLQ de QA no postea sobre una copia de producción.',
     # 2026-09-24 · Retención de cartera (m044cartera). API servicio a servicio
     # para el Gestor de Cartera (`exige_token_servicio('CARTERA_GESTOR_TOKEN')`,
     # Bearer). Sin consumidor en el PWA A PROPÓSITO: la llama el Gestor, no una

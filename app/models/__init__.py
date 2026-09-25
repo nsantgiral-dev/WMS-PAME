@@ -40,3 +40,5 @@ from app.models.fotos_siesa import (FotoCorrida, FotoVentaLinea, FotoStockDiaria
 from app.models.analitica_kpi import AnaliticaKpiDiario
 from app.models.cartera import (RetencionCartera, CarteraCliente,
                                  CarteraHabilitacion, CarteraIdempotencia)
+from app.models.sello_ambiente import SelloAmbiente
+from app.models.cron_latido import CronLatido

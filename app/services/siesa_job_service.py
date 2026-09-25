@@ -117,6 +117,14 @@ def _procesar_jobs_pendientes_interno(_app):
 def _run_dlq_jobs():
     """Procesa hasta 20 jobs elegibles. Llamado solo cuando el advisory lock está tomado."""
     from datetime import timedelta
+    # P0-9: una base sellada para otro ambiente (una copia de producción
+    # restaurada en QA) no se procesa. Ni el barrido de atascados: los jobs
+    # quedan tal cual llegaron, PENDIENTE, para que alguien decida.
+    from app.services import sello_ambiente
+    _ok_sello, _motivo_sello = sello_ambiente.puede_postear()
+    if not _ok_sello:
+        logger.error('[DLQ] Ciclo omitido: %s', _motivo_sello)
+        return 0
     ahora = datetime.utcnow()
 
     # Recuperar jobs atascados en PROCESANDO por más de 10 min (worker colgado / crash).

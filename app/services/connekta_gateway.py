@@ -935,6 +935,11 @@ class ConnektaGateway:
                 'timestamp': ConnektaGateway._ahora_bogota().isoformat()
             }
 
+        # P0-9: la base tiene que ser de este ambiente. Antes que el circuito:
+        # no consume su permiso ni sale a la red.
+        from app.services.sello_ambiente import exigir_para_postear
+        exigir_para_postear()
+
         # Circuit breaker: si OPEN, fail-fast sin HTTP
         if not self._cb_consumir_permiso():
             raise ConnektaCircuitOpenError(

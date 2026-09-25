@@ -352,6 +352,20 @@ def health_siesa():
                  'Se consulta en cada servicio por separado.'),
     }
 
+    # SELLO DE AMBIENTE DE LA BASE (P0-9, m048inv). Si la base está sellada
+    # para otro ambiente (una copia de producción restaurada en QA), ni la DLQ
+    # ni ningún POST salen a Siesa. Solo se lee: el sello lo pone el primer
+    # envío a Siesa, no este endpoint.
+    try:
+        from app.services import sello_ambiente as _sello
+        resultado['sello_ambiente'] = _sello.estado()
+        if resultado['sello_ambiente'].get('bloquea'):
+            resultado['ok'] = False
+            resultado['advertencias'].append(
+                'Sello de ambiente: ' + resultado['sello_ambiente']['texto'])
+    except Exception as _e_sello:
+        resultado['sello_ambiente'] = {'error': str(_e_sello)[:200]}
+
     # FOTOS DIARIAS DE SIESA (m036fotos). La frescura sale de la base —de las
     # corridas— y no del proceso: el cron corre en el worker y este endpoint
     # puede contestar desde el web. Un hueco es «no hay total de ese día», no
@@ -594,3 +608,23 @@ def ambiente_declarar():
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
     return jsonify({'ok': True, 'declaracion': dec.to_dict()}), 201
+
+
+@health_bp.route('/sello-ambiente', methods=['POST'])
+@jwt_required()
+def resellar_ambiente():
+    """Adopta esta base para el ambiente de este proceso (P0-9). Solo admin,
+    con motivo y el nombre del ambiente escrito. Antes de hacerlo: decidir qué
+    pasa con los `siesa_jobs` PENDIENTE que trajo la copia — al re-sellar, la
+    DLQ los ejecuta."""
+    u = _solo_admin()
+    if not u:
+        return jsonify({'error': 'Solo administración puede re-sellar la base'}), 403
+    from flask import request
+    from app.services import sello_ambiente as _sello
+    datos = request.get_json(silent=True) or {}
+    try:
+        sello = _sello.resellar(datos.get('ambiente'), datos.get('motivo'), u.id)
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    return jsonify({'ok': True, 'sello': sello}), 200
