@@ -283,10 +283,18 @@ def posicion_inventario(refs=None):
         r = (ref or '').strip()
         if not r:
             continue
+        # Dos códigos crudos que difieren en espacios son la MISMA referencia
+        # (Siesa manda algunas con espacios a la derecha): se suman.
+        d = salida.setdefault(r, {'existencia': 0.0, 'comprometido': 0.0,
+                                  'salida_sin_conf': 0.0, 'disponible': 0.0,
+                                  'frescura': None, 'en_camino': 0.0})
         ex, comp, sal = float(ex or 0), float(comp or 0), float(sal or 0)
-        salida[r] = {'existencia': ex, 'comprometido': comp,
-                     'salida_sin_conf': sal, 'disponible': ex - comp - sal,
-                     'frescura': fres, 'en_camino': 0.0}
+        d['existencia'] += ex
+        d['comprometido'] += comp
+        d['salida_sin_conf'] += sal
+        d['disponible'] += ex - comp - sal
+        if fres is not None and (d['frescura'] is None or fres < d['frescura']):
+            d['frescura'] = fres
     for r, qv in camino['por_ref'].items():
         salida.setdefault(r, {'existencia': 0.0, 'comprometido': 0.0,
                               'salida_sin_conf': 0.0, 'disponible': 0.0,

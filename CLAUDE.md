@@ -430,7 +430,9 @@ blanca, una bodega nueva es invisible hasta que se declare operada.
 **Hueco conocido, declarado y NO arreglado:** `ItemEnTransito` no tiene ningún
 escritor en `app/` —solo lecturas en `armador_service`—, así que el
 `en_transito` de `posicion` es **siempre 0** en producción. La fórmula está
-bien; el término no tiene fuente.
+bien; el término no tiene fuente. Desde el 2026-09-24 **se declara**
+(`rop_dual.insumo_en_camino`) y las fuentes se enchufan en
+`armador_service.FUENTES_EN_CAMINO` — ver «Compras: los números correctos».
 
 #### Lo que sigue repartido (y por qué se deja)
 
@@ -5437,3 +5439,122 @@ auditoría (deuda legacy), `faltante_de_retorno` sobre un doble sin
 3. ¿Encender `DEVOLUCIONES_VERIFICAR_NC` en producción? Solo lee (GET) y marca;
    la liberación a picking mueve inventario.
 4. Umbrales de aviso (24/48 h, 3 días, 48 h): son constantes provisionales.
+
+---
+
+## Compras: los números correctos (2026-09-24)
+
+Auditoría numérica del motor de compras (ROP dual, Armador de contenedor, S-B,
+TSB, newsvendor de temporada, costo, deriva, bloqueo de recompra), con scripts
+que corrían el código real y comparaban contra respuestas calculadas a mano.
+Catorce defectos; el primero multiplicaba la demanda de los SKU grumosos por
+25. Trinquetes: `tests/test_demanda_una_funcion.py` y
+`tests/test_compras_numeros_correctos.py` (77 tests, **33 mutaciones, las 33
+rojas**, cada una verificada a aplicar exactamente una vez antes de correr).
+
+### D1 — «días con stock» eran «días con movimiento»
+
+`reconstruir_stock_diario` escribía una fila de `StockDiario` **solo en los
+días con movimiento**, y todos los consumidores contaban `count(distinct fecha)
+WHERE tuvo_stock`. Un día sin movimiento no existía: el denominador era «días
+con venta», justo lo que `dias_expuestos` prohíbe por escrito. Los tests lo
+escondían porque **fabricaban `StockDiario` a mano**, una fila por día.
+
+Medido con el reconstructor real: 40 u cada 25 días con el estante lleno daba
+40/día en vez de 1,56 (×25,7), ROP 332 en vez de 37, S-B en SUAVE (ADI 1) y la
+temporada ×3.
+
+**La cura, sin una fila por día calendario** (serían ~20 millones):
+`StockDiario` se lee como **función escalón** — el cierre de un día vale hasta
+la siguiente fila — y el reconstructor escribe además la **apertura** (el
+cierre del día anterior al primer movimiento) y recalcula toda fila existente
+de la clave (sin borrar ninguna). Toda demanda diaria sale de:
+
+| Función (`kardex_service`) | Qué es |
+|---|---|
+| `serie_demanda(desde, hasta, nivel)` | EL numerador: ventas netas por día. La única que lee 501/502 |
+| `intervalos_con_stock(desde, hasta, nivel)` | EL denominador: tramos con stock > 0, unidos entre bodegas. La única que lee `StockDiario` |
+| `dias_expuestos` | Sin `StockDiario`: días calendario, `censurado=True` (Regla 0) |
+| `demanda_descensurada` | d, σ, censura y «sin venta reciente» por SKU. La usan el ROP, el contenedor, la tasa servida (que ahora es una vista de ella) y el bloqueo |
+| `ventana_observada` | La ventana recortada a la **cobertura del kardex** (su primer movimiento): un día que el kardex no observó no es un día sin venta |
+
+Trinquete AST: ninguna función fuera de `LECTORES_DECLARADOS` (6, solo encoge,
+cada una con su porqué) nombra `StockDiario`, `tuvo_stock` ni los conceptos de
+venta. **Después de desplegar hay que correr `POST /api/kardex/reconstruir`**:
+las filas viejas no tienen apertura (se extiende hacia atrás la primera fila,
+que es una aproximación).
+
+### Los otros trece
+
+| | Qué pasaba | Ahora |
+|---|---|---|
+| **D2** | El pedido de temporada publicaba Q* como pedido: no restaba lo que hay ni lo que viene | Cada fila trae `tener` (Q*), `hay`, `viene`, `pedir = max(0, tener − posición)`, con la posición de `armador_service.posicion_inventario` — **la misma del Armador**. Sin fila de stock: `hay_sin_dato`. La pantalla sigue mostrando Q*: el rediseño viene después |
+| **D3** | El tope anti-500-días (180) topaba el **S objetivo** de China, por debajo de LT+R = 195: servicio implícito 16,7% | El tope es solo del **relleno** (`cobertura_max_aplica_a`) |
+| **D4** | `resolver_costos` tomaba acuerdos **inactivos** y precios en **USD como pesos**; el Armador tenía `1.45 * 4200` quemados | Acuerdos `activo`, cotizaciones `vigente`; `costo_service.a_cop` (USD = FOB × TRM × factor, declarado), `trm_cop_por_usd()` (`TRM_COP_USD`) y `factor_nacionalizacion()` (`FACTOR_NACIONALIZACION`). Otra moneda: excluida. Trinquete AST: ningún 4200/1,45 fuera de `costo_service` |
+| **D5** | El precio realizado VIVO salía de `f470_vlr_neto` (**con IVA**) y se restaba de un costo sin IVA: Cu +47% | `vigia_service.valor_linea_sin_impuesto` (neto − impuesto, o bruto − descuentos; si no, la línea no entra). Etiquetas nuevas `VIVO_SIN_IMP` / `SI-AAAA-MM-DD`: las viejas (con IVA) quedan **sin leer**, sin borrarlas. **La serie de facturación de Vigía no cambia** (misma base que el TXT: el canon de Florencia intacto). El `TOTAL` del TXT tiene base no verificada: `precio_sin_impuesto: None` y `resumen_por_fuente.precio_base_no_verificada` |
+| **D6** | La descensura neteaba devoluciones del mismo día; la tasa servida, por ventana | `serie_demanda` netea la devolución contra la venta que devuelve (el mismo día y hacia atrás); la de una venta anterior a la ventana no resta (`devolucion_sin_venta`) |
+| **D7** | TSB armaba la rejilla hasta la **última venta** y publicaba el ajuste del train: un SKU parado seguía pronosticado | Rejilla hasta la **semana actual**; semanas sin stock y sin venta = `None` (un agotado no es «no se vendía»); el pronóstico sale de la serie entera |
+| **D8** | S-B excluía estacionales comparando `'ESTACIONAL'` contra una columna `String(1)`: nunca | `TemporadaService.identificar_skus_temporada`, la misma política del pedido escolar |
+| **D9** | Con 3 contenedores, σ_LT medido (2) reemplazaba al conservador (15) | Entre 3 y 5: el **mayor** de los dos (media y σ); desde 6 manda lo medido |
+| **D10** | `detectar_deriva` leía `ItemRecepcion.costo_unitario` y `RecepcionMercancia.fecha_recepcion`, que **no existen**: 500 con el primer acuerdo | Enchufe `compras_inteligencia_service.precios_de_compra_recibidos` (hoy `SIN_FUENTE`, declarado en `nota` y `sin_precio_de_compra`); `impacto_estimado_cop` = (facturado − pactado) × cantidad, en la misma moneda |
+| **D11** | Capital inmovilizado siempre 0 (`Producto.costo_unitario` no existe) | `resolver_costos`; sin costo → `None`, `skus_sin_costo`, `total_es_cota_inferior`, y adelante en la lista |
+| **D12** | `POST /newsvendor` hacía m/(m+e) con m sobre precio y e sobre costo; la cabecera de temporada mostraba otro ratio que las filas | `ratio_critico(cu, co)` y `ratio_critico_desde_tasas(m, e) = m/(m + e·(1−m))`, una fórmula para filas y cabecera; margen ≥ 1 → 400 |
+| **D13** | El MOQ se usaba como **múltiplo** (60 u, caja 12, MOQ 4 → 96 u); el presupuesto recortaba solo relleno y devolvía un contenedor más caro que el presupuesto sin decirlo | `cajas_a_pedir`: MOQ como **mínimo**, redondeo a caja (`MOQ_INTERPRETACION`, en cada fila). Presupuesto: relleno y después déficit (del menos urgente), `presupuesto_insuficiente` + `deficit_sin_cubrir_por_presupuesto` |
+| **D14** | LT nacional 5 d fijo; un SKU que dejó de venderse seguía con d > 0 en el ROP | `armador_service.lead_time(origen, proveedor)` (`ROP_LT_NACIONAL_DIAS`, `ROP_SIGMA_LT_NACIONAL`; default **declarado**; enchufe `_lead_time_de_proveedor`). «Sin venta reciente» (`kardex_service.sin_venta_reciente`): 0 ventas en `ROP_DIAS_SIN_VENTA` (90) días, con stock ≥ la mitad, y ≥ 3 ventas esperadas a su tasa (Poisson) → d = 0 en el ROP, con `motivo_d_cero` |
+
+Además:
+
+- **En camino, declarado**: `armador_service.en_camino()` suma
+  `FUENTES_EN_CAMINO` (hoy `ItemEnTransito`, contando contenedores
+  `EN_PRODUCCION`; BORRADOR no, RECIBIDO no). Sin dato,
+  `insumo_en_camino.nota` dice que el 0 es «no se sabe». Las OCs abiertas de
+  Siesa entran como una fuente más.
+- **Una posición**: `posicion_inventario()` (bodegas operadas + en camino),
+  la misma para el ROP y la temporada.
+- **Tamiz de TSB**: pesa con `resolver_costos` (antes `precio_compra`, siempre
+  0); `sin_costo_para_ponderar` declarado.
+- **Bloqueo de recompra**: la velocidad sale de `demanda_descensurada` (red,
+  todas las bodegas) y no de `TareaPicking` —lo que se vende por POS salía
+  bloqueado en masa—. Sin kardex que cubra 12 meses y esté al día
+  (`KARDEX_DIAS_FRESCURA`) **no se bloquea nada** (`no_se_bloqueo_por`).
+- Trinquetes AST de clase: el lead time (constantes solo en `lead_time` /
+  `calcular_sigma_lt_real`), lo que viene (`ItemEnTransito` solo en
+  `_en_camino_importacion` y la compuerta G5), y el costo de un producto solo
+  desde `costo_service` (ningún `precio_compra`/`costo_unitario` de maestro
+  en `app/services`).
+
+### Lo que NO cubre, dicho
+
+- **La pantalla**: temporada sigue mostrando Q* (no «pedir»); el ROP muestra
+  las filas con d = 0 sin explicación visual (el `motivo_d_cero` está en la
+  respuesta). El rediseño de pantallas viene después. Cambios mínimos: el
+  capital sin costo se pinta «sin costo» (no $0), el poblado de bloqueos avisa
+  cuando no bloqueó por falta de kardex, y la leyenda del ROP ya no promete el
+  tope ▲.
+- **«Hay» es de hoy**: lo que se venda entre hoy y el inicio de la temporada
+  no está descontado del pedido.
+- **Las bodegas de servicio en el denominador**: un día con stock solo en `AV1`
+  cuenta como día con stock (sesgo conservador: demanda más baja). No se filtró
+  por `_BODEGAS_PV` a propósito — cambiaría todas las series y no era el defecto.
+- **La deriva no compara nada** hasta que alguien enchufe
+  `precios_de_compra_recibidos` (las líneas de OC de Siesa).
+- **El lead time nacional sigue siendo un supuesto** (5 ± 2 días) hasta que
+  haya OCs con fecha contra recepciones.
+- **Rendimiento**: `intervalos_con_stock` trae las filas de `StockDiario` de la
+  ventana (del orden de las que ya traía la numeración por día de la
+  demanda). No se midió contra el volumen de producción.
+- El `TOTAL` del TXT de Vigía puede traer IVA: se usa y se declara.
+
+### Decisiones para el dueño
+
+1. **MOQ**: la ficha no dice si es mínimo por pedido o lote (múltiplo). Hoy se
+   lee como **mínimo** y se redondea a caja. Si algún proveedor exige múltiplo,
+   hace falta el dato en la ficha.
+2. **Nivel de servicio**: el ROP y el S objetivo usan 95% por defecto; sin el
+   tope de 180 días los S de China **suben** (a ~LT + R + colchón). ¿95% para
+   todo, o distinto para la canasta constitucional?
+3. **TRM y factor de nacionalización**: hoy 4.200 y 1,45 **supuestos**
+   (`TRM_COP_USD`, `FACTOR_NACIONALIZACION`). ¿Quién los fija y cada cuánto?
+   ¿Los precios en USD de los acuerdos son FOB (hoy se asume que sí)?
+4. **«Sin venta reciente»**: 90 días y el umbral de Poisson (≥ 3 ventas
+   esperadas) son provisionales.
