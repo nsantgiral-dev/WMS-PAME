@@ -3781,8 +3781,9 @@ async function _cargarPlanilla(id) {
       if (ruta.estado === 'ENTREGADA') {
         html += `
         <div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:6px;text-align:center;">
-          La ruta ya se cerró. Si el conductor no va a enviar esas paradas, cierre lo que falta:
-          quedan como rechazadas y recepción cuenta lo que volvió.
+          La ruta ya se cerró. Primero pídale al conductor que abra la app con señal (la confirmación
+          suele estar en su cola). Si sabe qué pasó, regístrela en Liquidación → la ruta → «Registrar desde
+          la oficina». Si no se sabe, cierre lo que falta: quedan como rechazadas y recepción cuenta lo que volvió.
         </div>
         <button onclick="conBotonOcupado(event, () => rutaForzarCierre(${esc(ruta.id)}))"
           style="width:100%;margin-top:8px;padding:12px;background:var(--warn-bg);color:var(--warn-tx);border:1px solid var(--warn-brd);border-radius:10px;font-size:var(--fs-sm);font-weight:700;cursor:pointer;">

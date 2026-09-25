@@ -190,6 +190,7 @@ class LiquidacionService:
         recaudos = RecaudoEntrega.query.filter_by(ruta_id=ruta_id).all()
         from app.services.connekta_gateway import connekta
         from app.models.devolucion_cliente import DevolucionCliente
+        from app.services import parada_tardia as _pt_det
 
         retenciones_disponibles = [
             {'tipo': k, 'nombre': v['nombre'], 'puc': v['puc'], 'tasa': v['tasa']}
@@ -317,6 +318,11 @@ class LiquidacionService:
         result = {
             'ruta': ruta.to_dict(),
             'recaudos': resultado_recaudos,
+            # Tanda 2 · B: lo que nadie gestionó (cliente, valor, hace cuánto,
+            # referencias). La liquidación no pasa hasta resolverlas
+            # (`RutaService.liquidar_ruta`); el formulario de la oficina sale de acá.
+            'paradas_sin_gestionar': _pt_det.sin_gestionar(ruta),
+            'formulario_oficina': _pt_det.formulario_oficina(),
         }
         if warnings:
             result['warnings'] = warnings

@@ -453,6 +453,29 @@ def senales_de_recaudo(recaudo, ruta=None, faltante=None) -> list:
                         'texto': (f'Llegó a bodega más de lo declarado: '
                                   f'{faltante["sobrante_unidades"]:g} und de más'),
                         'unidades': faltante['sobrante_unidades']})
+    # Tanda 2 · B: la oficina la registró después del cierre. Señal, no
+    # sanción; si el conductor la confirmó igual después, ya no hay nada que
+    # mirar. Si mandó otra cosa, eso es lo que hay que mirar.
+    from app.services import parada_tardia as _pt
+    if recaudo.registrada_por_oficina and recaudo.diferencia_conductor is not False:
+        senales.append({'clave': 'registrada_por_oficina',
+                        'texto': ('La registró la oficina después del cierre de la ruta: '
+                                  'el conductor no la confirmó')})
+    _dif = _pt.texto_diferencia(recaudo)
+    if _dif:
+        senales.append({'clave': 'diferencia_con_el_conductor', 'texto': _dif})
+    # Tanda 2 · D: la retención de una PARCIAL espera el conteo de la devolución.
+    if recaudo.estado_entrega == EstadoEntrega.PARCIAL and recaudo.motivo_descuento:
+        from app.services.devolucion_ruta import retencion_esperando_conteo
+        esp = retencion_esperando_conteo(recaudo)
+        if esp is not None:
+            hace = (f' hace {esp["horas"]:g} h' if esp['horas'] is not None else '')
+            senales.append({'clave': 'retencion_espera_conteo',
+                            'texto': (f'La retención espera que bodega cuente la devolución '
+                                      f'{esp["codigo"]}{hace}: su documento no sale antes'
+                                      + (' — pídale a bodega que la cuente' if esp['vencida']
+                                         else '')),
+                            'horas': esp['horas'], 'vencida': esp['vencida']})
     return senales
 
 

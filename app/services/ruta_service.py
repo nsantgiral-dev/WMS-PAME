@@ -1187,7 +1187,7 @@ class RutaService:
         from app.services.liquidacion_service import CATALOGO_RETENCIONES
         from app.services.liquidacion_service import tope_diferencia_recaudo as _tope_cobro
         from app.services import senales_ruta as _sr_p
-        from app.services import devolucion_ruta as _dr_p
+        from app.services import parada_tardia as _pt_p
         retenciones_disponibles = [
             {'tipo': k, 'nombre': v['nombre'], 'puc': v['puc'], 'tasa': v['tasa']}
             for k, v in CATALOGO_RETENCIONES.items()
@@ -1219,9 +1219,7 @@ class RutaService:
             # La versión que este servidor sabe exigir: evidencia (2) y
             # contado contraentrega sin crédito en el select (3).
             # Y una PARCIAL que dice qué volvió (4, m045devol).
-            'version_formulario':      max(_sr_p.VERSION_FORMULARIO_CON_EVIDENCIA,
-                                           _cp_tabla.VERSION_FORMULARIO_CONTADO,
-                                           _dr_p.VERSION_FORMULARIO_DEVOLUCION),
+            'version_formulario':      _pt_p.version_formulario_actual(),
         }
 
     # La unidad que el sync roto inventó en TODO el catálogo. No es una lista
@@ -1614,7 +1612,7 @@ class RutaService:
 
     @staticmethod
     def confirmar_parada(ruta_id: int, tarea_id: int, usuario_id: int, data: dict,
-                         motivo_tardia: str = None) -> tuple:
+                         motivo_tardia: str = None, por_oficina: bool = False) -> tuple:
         """Registra entrega y recaudo de una parada. Retorna (recaudo_id, es_edicion).
 
         **Con la ruta ya ENTREGADA** (P1-4): la cola sin señal del conductor
@@ -1623,6 +1621,11 @@ class RutaService:
         forzar también, y liquidar exige todas gestionadas—. Una parada tardía
         entra con `motivo_tardia` (obligatorio) y queda FORZAR en la bitácora.
         Nunca sobre una ruta LIQUIDADA.
+
+        `por_oficina` (tanda 2 · B): la registra la oficina con el formulario de
+        Liquidación. Mismas validaciones que el conductor; la parada queda
+        `registrada_por_oficina`. La oficina no tiene GPS: si no manda `geo`,
+        se registra «sin dato» (`NO_DECLARADO`) — la evidencia es la foto.
         """
         _ruta = db.session.get(RutaDespacho, ruta_id)
         if _ruta is None:
@@ -1634,6 +1637,12 @@ class RutaService:
                                  'confirmar ni corregir desde acá')
             _tardia = motivo_obligatorio(
                 motivo_tardia, 'confirmar una parada después del cierre de la ruta')
+            if por_oficina and not isinstance(data.get('geo'), dict):
+                from app.services import geo_cliente as _geo_of
+                data = {**data, 'geo': {'motivo': _geo_of.NO_DECLARADO}}
+        elif por_oficina:
+            raise ValueError('La oficina registra una parada solo con la ruta ya cerrada: '
+                             'mientras la ruta está en camino, la confirma el conductor.')
         elif _ruta.estado != EstadoRutaDespacho.EN_TRANSITO:
             raise ValueError(f'La ruta debe estar EN_TRANSITO, está {_ruta.estado}')
         bultos_tarea = (Bulto.query
@@ -2111,13 +2120,16 @@ class RutaService:
                     despues={k: despues_parada[k] for k in _reg})
 
         if _tardia:
+            if por_oficina:
+                recaudo.registrada_por_oficina = True
             registrar_accion(
                 'FORZAR', recaudo, usuario_id=usuario_id, motivo=_tardia,
                 entidad_codigo=(bultos_tarea[0].tarea.numero_pedido_siesa
                                 if bultos_tarea[0].tarea else None),
                 despues={'forzado': FORZADO_PARADA_TARDIA,
                          'ruta_id': ruta_id, 'estado_ruta': _ruta.estado,
-                         'estado_entrega': recaudo.estado_entrega})
+                         'estado_entrega': recaudo.estado_entrega,
+                         'registrada_por_oficina': bool(por_oficina)})
 
         db.session.commit()
 
@@ -2171,6 +2183,22 @@ class RutaService:
                            '%s/%s: %s', ruta_id, tarea_id, _e_geo)
 
         return recaudo.id, es_edicion
+
+    @staticmethod
+    def guardar_version_conductor(ruta_id: int, tarea_id: int, data: dict) -> dict:
+        """La confirmación del teléfono que llega DESPUÉS de que la oficina
+        registró la parada (tanda 2 · B). **No pisa lo registrado**: se guarda
+        aparte y se marca si difiere (`parada_tardia.version_del_conductor`).
+        Vale también con la ruta ya liquidada: no cambia ninguna cifra."""
+        from app.services import parada_tardia as _pt
+        recaudo = (RecaudoEntrega.query.filter_by(ruta_id=ruta_id, tarea_id=tarea_id)
+                   .with_for_update().first())
+        if recaudo is None or not recaudo.registrada_por_oficina:
+            raise ValueError('Esta parada no la registró la oficina: no hay versión aparte '
+                             'que guardar')
+        res = _pt.version_del_conductor(recaudo, data or {})
+        db.session.commit()
+        return {'recaudo': recaudo.to_dict(), **res}
 
     @staticmethod
     def planilla_ruta(id: int) -> dict:
@@ -2286,7 +2314,10 @@ class RutaService:
         sin_gestionar = len(tareas) - gestionadas
         if sin_gestionar > 0:
             raise ValueError(
-                f'Faltan {sin_gestionar} parada{"s" if sin_gestionar != 1 else ""} por gestionar antes de liquidar.'
+                f'Faltan {sin_gestionar} parada{"s" if sin_gestionar != 1 else ""} por gestionar '
+                f'antes de liquidar. Pídale al conductor que abra la app con señal (la '
+                f'confirmación suele estar en su cola); si no llega, regístrela desde '
+                f'Liquidación con un motivo.'
             )
 
         # Contado que salió sin plata y sin autorización: la ruta no se da por

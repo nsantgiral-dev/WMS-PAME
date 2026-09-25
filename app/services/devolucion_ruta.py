@@ -923,6 +923,41 @@ def _momento_del_rechazo(d: DevolucionCliente):
     return d.fecha_creacion
 
 
+#: Desde cuántas horas una retención de una PARCIAL esperando el conteo de su
+#: devolución va al resumen diario (tanda 2 · D). La misma vara que «sin contar».
+HORAS_RETENCION_ESPERANDO_CONTEO = HORAS_SIN_CONTAR_AVISO
+
+
+def retencion_esperando_conteo(recaudo, ahora: datetime = None):
+    """¿La retención (NI) de esta parada PARCIAL está esperando que bodega
+    cuente su devolución? **La única** que lo contesta (tanda 2 · D).
+
+    El documento contable de una PARCIAL con retención se calcula sobre lo que
+    el cliente se quedó (`politica_cobro.base_retencion_entregada`), y eso no se
+    sabe hasta que la devolución se cuenta: el DC espera — decisión del dueño,
+    se queda así. Lo que faltaba era que la espera se viera.
+
+    `None` si no espera (no es PARCIAL, no hay retención que vaya a salir, ya
+    salió, o la devolución ya se contó). Si espera: `{devolucion, codigo,
+    horas, vencida}` — `vencida` pasadas `HORAS_RETENCION_ESPERANDO_CONTEO`."""
+    from app.services import politica_cobro as _pc
+    if recaudo is None or recaudo.estado_entrega != EstadoEntrega.PARCIAL:
+        return None
+    if _pc.decision_retencion(recaudo) not in (_pc.PENDIENTE, _pc.CONFIRMADA):
+        return None
+    if recaudo.siesa_dc_triggered:
+        return None
+    d = devolucion_vigente(recaudo.id)
+    if d is None or d.estado not in E.ACTIVAS:
+        return None
+    t0 = _momento_del_rechazo(d)
+    horas = (round(((ahora or datetime.utcnow()) - t0).total_seconds() / 3600, 1)
+             if t0 is not None else None)
+    return {'devolucion': d.id, 'codigo': d.codigo, 'horas': horas,
+            # Sin fecha cuenta como vencida (Regla 0: no saber no es reciente).
+            'vencida': horas is None or horas >= HORAS_RETENCION_ESPERANDO_CONTEO}
+
+
 def avisos(ahora: datetime = None) -> dict:
     """Lo que lleva demasiado esperando. Para el tablero y el resumen diario.
 
@@ -957,6 +992,17 @@ def avisos(ahora: datetime = None) -> dict:
                               'cliente': d.cliente,
                               'dias': round((ahora - d.siesa_nc_triggered_at).total_seconds()
                                             / 86400, 1)})
+    # Retenciones de PARCIALES esperando el conteo de su devolución (tanda 2 · D).
+    retencion_esperando = []
+    for d in (DevolucionCliente.query
+              .filter(DevolucionCliente.recaudo_entrega_id.isnot(None),
+                      DevolucionCliente.estado.in_(E.ACTIVAS)).all()):
+        rec = d.recaudo_entrega
+        esp = retencion_esperando_conteo(rec, ahora)
+        if esp is not None and esp['vencida']:
+            retencion_esperando.append({**_resumen_devolucion(d), 'horas': esp['horas'],
+                                        'recaudo_id': rec.id,
+                                        'retencion': rec.motivo_descuento})
     rc_esperando = []
     limite = ahora - timedelta(hours=HORAS_RC_ESPERANDO_NC)
     for job in SiesaJob.query.filter(SiesaJob.tipo == 'RECIBO_CAJA',
@@ -980,8 +1026,9 @@ def avisos(ahora: datetime = None) -> dict:
         'nc_sin_aprobar_3d': nc_viejas,
         'nc_anuladas': nc_anuladas,
         'rc_esperando_nc_48h': rc_esperando,
+        'retencion_parcial_sin_contar_24h': retencion_esperando,
         'total': (len(sin_contar) + len(urgentes) + len(nc_viejas) + len(nc_anuladas)
-                  + len(rc_esperando)),
+                  + len(rc_esperando) + len(retencion_esperando)),
     }
 
 
@@ -1003,6 +1050,11 @@ def lineas_de_aviso(a: dict = None) -> list:
     if a['rc_esperando_nc_48h']:
         out.append(f'⚠ {len(a["rc_esperando_nc_48h"])} recibo(s) de caja esperando su nota '
                    f'crédito hace más de {HORAS_RC_ESPERANDO_NC} h')
+    if a.get('retencion_parcial_sin_contar_24h'):
+        out.append(f'⚠ {len(a["retencion_parcial_sin_contar_24h"])} retención(es) de entregas '
+                   f'parciales esperando que bodega cuente la devolución hace más de '
+                   f'{HORAS_RETENCION_ESPERANDO_CONTEO} h: el documento de la retención no '
+                   f'sale hasta que se cuente')
     return out
 
 

@@ -747,8 +747,14 @@ def avisos_sin_canal(ayer_inicio, ayer_fin) -> list:
     _seguro('los traslados en tránsito', _traslados)
     _seguro('la carga física', _carga_fisica)
     _seguro('los crons', _crons)
+    def _paradas_sin_gestionar():
+        # Tanda 2 · B: paradas de rutas cerradas que nadie gestionó > 24 h.
+        from app.services import parada_tardia
+        lineas.extend(parada_tardia.lineas_de_aviso())
+
     _seguro('las existencias de Siesa', _stock_viejo)
     _seguro('el sello de ambiente', _sello)
+    _seguro('las paradas sin gestionar', _paradas_sin_gestionar)
     return lineas
 
 

@@ -151,6 +151,7 @@ TITULOS = {
     'cierre_cargue':       'Cierre del cargue',
     'parada':              'Confirmó una parada',
     'parada_por_otro':     'Parada confirmada por otra persona',
+    'parada_oficina':      'Parada registrada por la oficina después del cierre',
     'parada_forzada':      'Parada cerrada por la oficina (cierre forzado)',
     'tanqueo':             'Tanqueo',
     'cierre_ruta':         'Ruta cerrada',
@@ -246,7 +247,7 @@ class Evento:
 
     @property
     def es_parada(self):
-        return self.tipo in ('parada', 'parada_por_otro', 'parada_forzada')
+        return self.tipo in ('parada', 'parada_por_otro', 'parada_oficina', 'parada_forzada')
 
     def a_dict(self) -> dict:
         return {
@@ -898,7 +899,10 @@ def _eventos_de_ruta(m: Mundo, c, lo, hi) -> List[Evento]:
             if not (lo <= p['ts'] < hi):
                 continue
             rec = p['rec']
-            tipo = 'parada_forzada' if p['auto'] else ('parada' if p['propio'] else 'parada_por_otro')
+            # Tanda 2 · B: la que registró la oficina tras el cierre se nombra
+            # así (señal, no sanción), con lo que el conductor mandó después.
+            tipo = ('parada_forzada' if p['auto'] else 'parada' if p['propio']
+                    else 'parada_oficina' if rec.registrada_por_oficina else 'parada_por_otro')
             g = m.geo.get(rec.id)
             t = m.tareas.get(rec.tarea_id, {})
             tel = m.telefono.get(rec.id, {})
@@ -920,7 +924,9 @@ def _eventos_de_ruta(m: Mundo, c, lo, hi) -> List[Evento]:
                                   'precision_m': _redondo(g.precision_m)}),
                          'via_cola': tel.get('via_cola'),
                          'desfase_s': tel.get('ts_desfase_s'),
-                         'gps_hora': _hora_local(tel_geo.get('pos_ts_dispositivo'))},
+                         'gps_hora': _hora_local(tel_geo.get('pos_ts_dispositivo')),
+                         'registrada_por_oficina': bool(rec.registrada_por_oficina),
+                         'diferencia_conductor': rec.diferencia_conductor},
                 ts_servidor=rec.fecha_creacion,
                 lat=float(g.lat) if g is not None and g.lat is not None else None,
                 lon=float(g.lon) if g is not None and g.lon is not None else None,

@@ -350,6 +350,7 @@ function _liqRutaCard(r, esLiquidada) {
         </div>
       </div>
       ${_liqTextoSenalesRuta(r) ? `<div style="margin-top:6px;font-size:var(--fs-xs);font-weight:700;color:var(--warn-tx);">${esc(_liqTextoSenalesRuta(r))}</div>` : ''}
+      ${!esLiquidada && r.paradas_sin_gestionar ? `<div style="margin-top:6px;font-size:var(--fs-xs);font-weight:700;color:var(--err-tx);">${esc(r.paradas_sin_gestionar)} parada${r.paradas_sin_gestionar !== 1 ? 's' : ''} sin gestionar: no se liquida hasta resolverlas</div>` : ''}
       ${esLiquidada ? `
         <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap;">
           <span style="font-size:var(--fs-xs);padding:3px 8px;border-radius:20px;background:#1e3a5f22;color:var(--info-tx);">${ncInfo}</span>
@@ -611,7 +612,8 @@ function _liqRenderDetalle() {
       <div style="font-size:var(--fs-sm);font-weight:700;">Ruta #${esc(ruta.id)} · ${esc(ruta.conductor_nombre)}</div>
       <div style="font-size:var(--fs-xs);color:var(--tx3);">${esc(ruta.vehiculo_placa || '—')} · ${esc(ruta.ruta_maestra_nombre || ruta.tipo_ruta)}</div>
       ${esLiquidada ? '<div style="font-size:var(--fs-xs);color:var(--ok-tx);font-weight:700;margin-top:4px;">LIQUIDADA</div>' : ''}
-    </div>`;
+    </div>
+    ${_liqBloqueSinGestionar(ruta)}`;
 
   let totalFacturas = 0;
   let totalRetenciones = 0;
@@ -829,8 +831,17 @@ function _liqRenderDetalle() {
     html += '</div>';
   });
 
-  // ── FASE 1: Botón de liquidación WMS (solo si NO liquidada y a quien liquida) ────
-  if (!esLiquidada && _liqPermiso('liquidar')) {
+  // ── FASE 1: Botón de liquidación WMS (solo si NO liquidada) ────
+  // Con paradas sin gestionar el servidor no liquida: el botón lo dice en vez
+  // de rebotar (tanda 2 · B).
+  const faltanParadas = ((_liqDetalleRuta.paradas_sin_gestionar) || []).length;
+  if (!esLiquidada && faltanParadas && _liqPermiso('liquidar')) {
+    html += `
+      <button disabled
+        style="width:100%;margin-top:16px;padding:16px;background:var(--bg);color:var(--tx3);border:1px solid var(--brd);border-radius:10px;font-size:var(--fs-md);font-weight:800;cursor:not-allowed;">
+        🔒 Liquidar — faltan ${esc(faltanParadas)} parada${faltanParadas !== 1 ? 's' : ''} por gestionar
+      </button>`;
+  } else if (!esLiquidada && _liqPermiso('liquidar')) {
     html += `
       <div style="background:var(--bg-s);border:2px solid var(--pm);border-radius:12px;padding:16px;margin-top:16px;">
         <div style="display:flex;justify-content:space-between;font-size:var(--fs-sm);margin-bottom:6px;">
@@ -849,6 +860,183 @@ function _liqRenderDetalle() {
   }
 
   body.innerHTML = html;
+}
+
+// ── Paradas sin gestionar: el formulario de la oficina (tanda 2 · B) ────────
+//
+// La ruta se cerró con paradas que nadie confirmó (la cola del conductor no
+// alcanzó a mandarlas). Primero se le pide al conductor que abra la app con
+// señal; si no llega, quien liquida la registra acá con un motivo. Mismas
+// validaciones que la pantalla del conductor (las hace el servidor); queda
+// FORZAR en la bitácora y la parada marcada «registrada por la oficina». En
+// los `onclick` viajan solo el id de la ruta y la posición.
+
+/** «hace N h» / «hace N días», o «sin fecha» (no se inventa). */
+function _liqHace(horas) {
+  if (horas === null || horas === undefined) return 'sin fecha';
+  if (horas < 1) return 'hace menos de 1 h';
+  if (horas < 48) return `hace ${Math.round(horas)} h`;
+  return `hace ${Math.floor(horas / 24)} días`;
+}
+
+/** El bloque «Paradas sin gestionar», arriba del detalle de la ruta. */
+function _liqBloqueSinGestionar(ruta) {
+  const lista = (_liqDetalleRuta && _liqDetalleRuta.paradas_sin_gestionar) || [];
+  if (!lista.length) return '';
+  const puede = !(_liqDetalleRuta.permisos && _liqDetalleRuta.permisos.registrar_parada_tardia === false);
+  return `
+    <div style="margin-bottom:12px;padding:12px;background:var(--warn-bg);border:1px solid var(--warn-brd);border-radius:10px;">
+      <div style="font-size:var(--fs-sm);font-weight:800;color:var(--warn-tx);">Paradas sin gestionar (${esc(lista.length)})</div>
+      <div style="font-size:var(--fs-xs);color:var(--tx2);margin:4px 0 8px;line-height:1.4;">
+        La ruta no se liquida hasta resolverlas. Primero pídale al conductor que abra la app con señal:
+        la confirmación suele estar en su cola y entra sola. Si no llega, regístrela desde la oficina con un motivo.
+      </div>
+      ${lista.map((p, i) => `
+        <div style="padding:8px 0;border-top:1px solid var(--warn-brd);">
+          <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;">
+            <span style="font-size:var(--fs-sm);color:var(--tx);min-width:0;overflow-wrap:anywhere;"><b>${esc(p.pedido || '—')}</b> · ${esc(p.cliente || 'cliente sin nombre')}</span>
+            <span style="font-size:var(--fs-xs);color:var(--tx2);white-space:nowrap;">${p.valor === null || p.valor === undefined ? 'sin valor' : esc(_liqFmt(p.valor))} · ${esc(_liqHace(p.horas))}</span>
+          </div>
+          ${puede ? `
+          <button onclick="liqAbrirParadaTardia(${esc(ruta.id)}, ${i})"
+            style="width:100%;margin-top:6px;padding:10px;background:var(--bg);color:var(--warn-tx);border:1px solid var(--warn-brd);border-radius:8px;font-size:var(--fs-sm);font-weight:700;cursor:pointer;">
+            Registrar desde la oficina…
+          </button>
+          <div id="liq-tardia-${i}" style="display:none;"></div>` : `
+          <div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:4px;">La registra quien liquida la ruta.</div>`}
+        </div>`).join('')}
+    </div>`;
+}
+
+/** Las formas de pago del formulario: las mismas que ve el conductor en esa
+ *  parada (`_condFormasPago`, rutas.js); de contado no ofrece crédito. */
+function _liqFormasTardia(p) {
+  return typeof _condFormasPago === 'function'
+    ? _condFormasPago({ cobro_contraentrega: p.cobro_contraentrega }) : [];
+}
+
+/** Abre (o cierra) el formulario de una parada sin gestionar. */
+function liqAbrirParadaTardia(rutaId, i) {
+  const p = ((_liqDetalleRuta || {}).paradas_sin_gestionar || [])[i];
+  const el = document.getElementById(`liq-tardia-${i}`);
+  if (!p || !el) return;
+  if (el.style.display === 'block') { el.style.display = 'none'; return; }
+  const campo = 'width:100%;padding:8px;background:var(--bg);border:1px solid var(--brd);border-radius:6px;color:var(--tx);font-size:var(--fs-sm);box-sizing:border-box;';
+  const etiqueta = 'font-size:var(--fs-xs);color:var(--tx2);margin:8px 0 2px;display:block;';
+  const formas = _liqFormasTardia(p);
+  el.innerHTML = `
+    <div style="margin-top:8px;padding:10px;background:var(--bg-s);border:1px solid var(--brd);border-radius:8px;">
+      <label style="${etiqueta}" for="liq-tardia-res-${i}">¿Qué pasó en la parada?</label>
+      <select id="liq-tardia-res-${i}" onchange="liqTardiaResultado(${i})" style="${campo}">
+        <option value="">Elija…</option>
+        <option value="ENTREGADO">Se entregó y pagó</option>
+        <option value="PARCIAL">Devolvió una parte</option>
+        <option value="NO_PAGO">No pagó: la mercancía volvió</option>
+        <option value="NO_PAGO_SE_QUEDO">No pagó y se quedó con la mercancía</option>
+      </select>
+      <div id="liq-tardia-pago-${i}" style="display:none;">
+        <label style="${etiqueta}" for="liq-tardia-forma-${i}">Forma de pago</label>
+        <select id="liq-tardia-forma-${i}" style="${campo}">
+          <option value="">Elija…</option>
+          ${formas.map(f => `<option value="${esc(f.v)}">${esc(f.l)}</option>`).join('')}
+        </select>
+        <label style="${etiqueta}" for="liq-tardia-monto-${i}">Monto cobrado</label>
+        <input id="liq-tardia-monto-${i}" type="number" min="0" step="1" inputmode="numeric" style="${campo}">
+        <label style="${etiqueta}" for="liq-tardia-ref-${i}">Referencia del comprobante (si fue transferencia, tarjeta o cheque)</label>
+        <input id="liq-tardia-ref-${i}" type="text" maxlength="30" style="${campo}">
+      </div>
+      <div id="liq-tardia-items-${i}" style="display:none;">
+        <div style="${etiqueta}">Cuánto se entregó de cada referencia</div>
+        ${(p.items || []).map((it, k) => `
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:4px 0;">
+            <span style="font-size:var(--fs-xs);color:var(--tx);min-width:0;overflow-wrap:anywhere;">${esc(it.nombre || it.codigo)} · pedido ${esc(it.cantidad_pedida)}</span>
+            <input id="liq-tardia-it-${i}-${k}" type="number" min="0" max="${esc(it.cantidad_pedida)}" value="${esc(it.cantidad_pedida)}" step="1"
+              style="width:70px;padding:6px;background:var(--bg);border:1px solid var(--brd);border-radius:6px;color:var(--tx);font-size:var(--fs-sm);text-align:right;">
+          </div>`).join('')}
+      </div>
+      <div id="liq-tardia-aviso-${i}" style="display:none;font-size:var(--fs-xs);color:var(--warn-tx);margin-top:6px;">
+        Si el cliente se quedó con la mercancía sin pagar, la foto es obligatoria.
+      </div>
+      <label style="${etiqueta}" for="liq-tardia-motivo-${i}">Motivo (obligatorio — queda en la bitácora con su nombre)</label>
+      <textarea id="liq-tardia-motivo-${i}" rows="2" style="${campo}resize:vertical;font-family:inherit;"
+        placeholder="Por qué la registra la oficina y cómo lo supo"></textarea>
+      <label style="${etiqueta}" for="liq-tardia-foto-${i}">Evidencia: foto de la factura firmada o pantallazo</label>
+      <input id="liq-tardia-foto-${i}" type="file" accept="image/*" style="${campo}">
+      <button onclick="liqGuardarParadaTardia(${esc(rutaId)}, ${i})"
+        style="width:100%;margin-top:10px;padding:12px;background:var(--ok-bg);color:var(--ok-tx);border:1px solid var(--ok-brd);border-radius:8px;font-size:var(--fs-sm);font-weight:700;cursor:pointer;">
+        Registrar la parada
+      </button>
+    </div>`;
+  el.style.display = 'block';
+}
+
+/** Muestra lo que pide cada resultado: pago, referencias devueltas, foto. */
+function liqTardiaResultado(i) {
+  const res = (document.getElementById(`liq-tardia-res-${i}`) || {}).value || '';
+  const ver = (id, si) => { const x = document.getElementById(id); if (x) x.style.display = si ? 'block' : 'none'; };
+  ver(`liq-tardia-pago-${i}`, res === 'ENTREGADO' || res === 'PARCIAL');
+  ver(`liq-tardia-items-${i}`, res === 'PARCIAL');
+  ver(`liq-tardia-aviso-${i}`, res === 'NO_PAGO_SE_QUEDO');
+}
+
+/** El cuerpo del POST a partir del formulario. `null` + alerta si falta algo. */
+function _liqDatosTardia(p, i) {
+  const val = id => ((document.getElementById(id) || {}).value || '').trim();
+  const form = (_liqDetalleRuta && _liqDetalleRuta.formulario_oficina) || {};
+  const res = val(`liq-tardia-res-${i}`);
+  const motivo = val(`liq-tardia-motivo-${i}`);
+  if (!res) { alerta('Elija qué pasó en la parada', 'error'); return null; }
+  if (!motivo) { alerta('El motivo es obligatorio: queda en la bitácora con su nombre', 'error'); return null; }
+  const d = { motivo_tardia: motivo, version_formulario: form.version_formulario,
+              observaciones: `Registrada por la oficina: ${motivo}` };
+  if (res === 'NO_PAGO' || res === 'NO_PAGO_SE_QUEDO') {
+    d.estado_entrega = 'RECHAZADO';
+    d.motivo_rechazo = res;
+    return d;
+  }
+  d.estado_entrega = res;
+  d.forma_pago = val(`liq-tardia-forma-${i}`);
+  if (!d.forma_pago) { alerta('Elija la forma de pago', 'error'); return null; }
+  d.monto_cobrado = Number(val(`liq-tardia-monto-${i}`)) || 0;
+  const ref = val(`liq-tardia-ref-${i}`);
+  if (ref) d.referencia_pago = ref;
+  if (res === 'PARCIAL') {
+    d.items_entregados = (p.items || []).map((it, k) => ({
+      codigo: it.codigo, nombre: it.nombre, unidad: it.unidad,
+      cantidad_pedida: it.cantidad_pedida,
+      cantidad_entregada: Number(val(`liq-tardia-it-${i}-${k}`)),
+    }));
+  }
+  return d;
+}
+
+/** Registra la parada desde la oficina. El servidor valida lo mismo que al conductor. */
+async function liqGuardarParadaTardia(rutaId, i) {
+  const p = ((_liqDetalleRuta || {}).paradas_sin_gestionar || [])[i];
+  if (!p) return;
+  const d = _liqDatosTardia(p, i);
+  if (!d) return;
+  const form = (_liqDetalleRuta && _liqDetalleRuta.formulario_oficina) || {};
+  const archivo = (document.getElementById(`liq-tardia-foto-${i}`) || {}).files;
+  if (archivo && archivo[0] && typeof _condLeerFoto === 'function') {
+    const bancaria = (form.formas_con_comprobante || []).includes(d.forma_pago);
+    try {
+      // La del comprobante es una foto-dato (1600 px, 0.8); la de evidencia va chica.
+      if (bancaria) d.foto_comprobante = await _condLeerFoto(archivo[0], 1600, 0.8);
+      else d.foto_entrega = await _condLeerFoto(archivo[0], 800, 0.65);
+    } catch (e) {
+      alerta('No se pudo leer la foto: tómela de nuevo', 'error');
+      return;
+    }
+  }
+  try {
+    await post(`/api/rutas/${Number(rutaId)}/paradas/${Number(p.tarea_id)}/confirmar`, d);
+    alerta('Parada registrada por la oficina — quedó en la bitácora', 'exito');
+    _liqDetalleRuta = await get(`/api/rutas/${Number(rutaId)}/liquidacion-detalle`);
+    _liqRenderDetalle();
+  } catch (e) {
+    alerta(e.message || 'No se pudo registrar la parada', 'error');
+  }
 }
 
 /**

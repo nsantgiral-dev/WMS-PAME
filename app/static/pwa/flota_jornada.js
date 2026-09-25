@@ -537,6 +537,14 @@ function fjDetalleEvento(e) {
           : `sin ubicación${d.gps && d.gps.motivo_sin_dato ? ` (${fjPalabra(FJ_SIN_UBICACION, d.gps.motivo_sin_dato)})` : ''}`);
         p.push(d.con_foto ? 'con foto' : 'sin foto');
         if (d.reconfirmada) p.push('la corrigió después');
+        // Tanda 2 · B: la registró la oficina. Señal, no sanción.
+        if (d.registrada_por_oficina) {
+          p.push(d.diferencia_conductor === true
+            ? 'el conductor mandó después otra versión: revisar'
+            : d.diferencia_conductor === false
+              ? 'el conductor la confirmó igual después'
+              : 'el conductor no la confirmó');
+        }
       }
   }
   return p.filter(Boolean).map((x) => esc(x)).join(' · ');
