@@ -35,6 +35,7 @@ def register_routes(app):
     from app.routes.tienda_oc import tienda_oc_bp
     from app.routes.vigia import vigia_bp
     from app.routes.armador import armador_bp
+    from app.routes.compras_fuentes import compras_fuentes_bp
 
     app.register_blueprint(health_bp, url_prefix='/api/health')
     app.register_blueprint(auditoria_bp, url_prefix='/api/auditoria')
@@ -72,6 +73,7 @@ def register_routes(app):
     app.register_blueprint(tienda_oc_bp, url_prefix='/api/tienda-oc')
     app.register_blueprint(vigia_bp, url_prefix='/api/vigia')
     app.register_blueprint(armador_bp, url_prefix='/api/compras')
+    app.register_blueprint(compras_fuentes_bp, url_prefix='/api/compras/fuentes')
 
     # Módulo flota — vive fuera de `app/` para que su dominio no pueda importar
     # framework ni base. Esta es la única línea de acoplamiento (tanda 1).

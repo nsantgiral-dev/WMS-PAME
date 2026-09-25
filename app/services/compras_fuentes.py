@@ -61,9 +61,11 @@ SIGMA_LT_CHINA = 15  # conservador — se reemplaza con ≥3 contenedores medido
 N_MIN_PARCIAL = 3
 N_MIN_MEDIDO = 6
 
-#: Estados de `ItemEnTransito` que todavía no llegaron.
-ESTADOS_CONTENEDOR_EN_CAMINO = ('NAVEGANDO', 'EN_PUERTO', 'NACIONALIZACION',
-                                'EN_RUTA_CEDI')
+#: Estados de `ItemEnTransito` que todavía no llegaron y ya están comprados.
+#: `EN_PRODUCCION` cuenta (la compra está hecha); `BORRADOR` no (un contenedor
+#: en armado no es una compra) y `RECIBIDO` tampoco (ya está en el stock).
+ESTADOS_CONTENEDOR_EN_CAMINO = ('EN_PRODUCCION', 'NAVEGANDO', 'EN_PUERTO',
+                                'NACIONALIZACION', 'EN_RUTA_CEDI')
 
 #: `f420_ind_estado` de una OC anulada (spec API_v2_Compras_Ordenes).
 ESTADO_OC_ANULADA = 9
