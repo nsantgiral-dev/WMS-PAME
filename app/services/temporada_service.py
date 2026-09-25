@@ -491,6 +491,9 @@ class TemporadaService:
         }
         # Cobertura POR FUENTE, no binaria
         resultado['cobertura']['costo'] = resumen_por_fuente(costos)
+        # La temporada a la que corresponde este pedido (por fecha, no una
+        # etiqueta escrita a mano): los juicios del comité se guardan con ella.
+        resultado['temporada'] = proxima_temporada()['etiqueta']
         resultado['parametros'] = {
             'margen_pct': margen_pct,
             'tasa_capital': tasa_capital,

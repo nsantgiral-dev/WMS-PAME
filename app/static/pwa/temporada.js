@@ -11,30 +11,36 @@
 
 let _TEMP_DATA = null;
 let _TEMP_JUICIOS = {};
-let _TEMP_ESCENARIO = 0;      // % de ajuste a la demanda para el "¿y si...?"
-const TEMPORADA_ACTUAL = '2026-27';
+let _TEMP_ESCENARIO = 0;
+let _TEMP_ORDEN = [];         // referencias en el orden de la tabla: el onclick lleva la posición      // % de ajuste a la demanda para el "¿y si...?"
+/** Temporada a la que se le registran los juicios. La decide el servidor por
+ *  fecha (`temporada_service.proxima_temporada`); este valor solo vale hasta
+ *  que llegue la primera respuesta. */
+let TEMPORADA_ACTUAL = '2026-27';
 
 async function temporadaCargar() {
   const el = document.getElementById('temporada-container');
   if (!el) return;
   el.innerHTML = '<div style="color:var(--tx3);padding:20px;">Calculando Q* de temporada…</div>';
   try {
-    const [pedido, juicios] = await Promise.all([
-      get('/api/kardex/temporada/pedido'),
-      get('/api/kardex/temporada/juicios?temporada=' + TEMPORADA_ACTUAL),
-    ]);
+    const pedido = await get('/api/kardex/temporada/pedido');
+    if (pedido && pedido.temporada) TEMPORADA_ACTUAL = pedido.temporada;
+    const juicios = await get('/api/kardex/temporada/juicios?temporada=' + encodeURIComponent(TEMPORADA_ACTUAL));
     _TEMP_DATA = pedido;
     _TEMP_JUICIOS = juicios.juicios || {};
     _tempRender(el, _TEMP_DATA);
   } catch (e) {
-    el.innerHTML = `<div style="color:var(--red);padding:20px;">Error: ${e.message || e}</div>`;
+    el.innerHTML = `<div style="color:var(--red);padding:20px;">Error: ${esc(e.message || e)}</div>`;
   }
 }
 
 /** Registra el juicio en el SERVIDOR, con autor y fecha, junto a la foto del
  *  modelo en ese momento. En enero de 2027 este es el dataset que compara lo
  *  que ella pidió, lo que el modelo pidió y lo que se vendió. */
-async function temporadaSetParalela(ref, valor) {
+/** @param {number} pos - Posición de la fila en la tabla pintada (no el dato). */
+async function temporadaSetParalela(pos, valor) {
+  const ref = _TEMP_ORDEN[Number(pos)];
+  if (!ref) return;
   const fila = (_TEMP_DATA.items || []).find(i => i.referencia === ref) || {};
   const n = parseInt(valor, 10);
   try {
@@ -52,6 +58,17 @@ async function temporadaSetParalela(ref, valor) {
   } catch (e) {
     alerta('No se pudo registrar el juicio: ' + (e.message || e), 'error');
   }
+}
+
+/** Quién registra la lista paralela: los roles de `Roles.ALMACEN` (admin y
+ *  jefe de almacén), los mismos que `POST /api/kardex/temporada/juicios`
+ *  deja pasar. El rol `compras` la ve y no la escribe: el juicio es del comité.
+ *  `tests/test_compras_bandeja_js.py` cruza esta lista contra `Roles.ALMACEN`. */
+const TEMP_ROLES_REGISTRAN_JUICIO = ['admin', 'jefe_almacen'];
+
+function _tempPuedeRegistrar() {
+  return typeof OPERARIO !== 'undefined' && !!OPERARIO
+    && TEMP_ROLES_REGISTRAN_JUICIO.includes(OPERARIO.rol);
 }
 
 function _tempLeerParalela() {
@@ -233,7 +250,11 @@ function _tempRender(el, d) {
       <th style="padding:6px;">Dif. $</th>
     </tr></thead><tbody>`;
 
-  for (const f of conDif) {
+  const puede = _tempPuedeRegistrar();
+  if (!puede) html = html.replace('<div style="overflow-x:auto;"><table', `<div style="font-size:var(--fs-xs);color:var(--tx3);margin-bottom:6px;">La lista paralela la registra el comité (admin o jefe de almacén); acá se ve.</div><div style="overflow-x:auto;"><table`);
+  const _filasOrdenadas = conDif;
+  _TEMP_ORDEN = _filasOrdenadas.map(f => f.referencia);
+  for (const [i, f] of conDif.entries()) {
     const alerta = f.advertencia_1_temporada;
     const difColor = f._difU == null ? 'var(--tx3)'
       : (f._difU > 0 ? 'var(--yellow)' : (f._difU < 0 ? 'var(--green)' : 'var(--tx3)'));
@@ -249,9 +270,10 @@ function _tempRender(el, d) {
       <td style="padding:6px;color:var(--tx3);">${esc(f.demanda_esperada)}</td>
       <td style="padding:6px;color:var(--tx);font-weight:700;">${_tempQ(f)}</td>
       <td style="padding:6px;">
-        <input type="number" value="${f._p != null ? f._p : ''}" placeholder="—"
-          onchange="temporadaSetParalela('${esc(f.referencia)}', this.value)"
-          style="width:70px;padding:3px;text-align:right;background:var(--bg);border:1px solid var(--brd);border-radius:4px;color:var(--tx);font-size:var(--fs-xs);">
+        ${puede ? `<input type="number" value="${f._p != null ? esc(f._p) : ''}" placeholder="—"
+          onchange="temporadaSetParalela(${i}, this.value)"
+          style="width:70px;padding:3px;text-align:right;background:var(--bg);border:1px solid var(--brd);border-radius:4px;color:var(--tx);font-size:var(--fs-xs);">`
+          : (f._p != null ? esc(f._p) : '—')}
       </td>
       <td style="padding:6px;color:${difColor};font-weight:700;">
         ${f._difU != null ? (f._difU > 0 ? '+' : '') + f._difU : '—'}
@@ -269,8 +291,7 @@ function _tempRender(el, d) {
     SUBESTIMA el costo de reposición — y subestimar el costo empuja a comprar más.
     ▲ = costo de más de 180 días · ≈ = Cu con margen supuesto (no hay precio de venta).<br>
     ⚠ = una sola temporada: distribución <strong>Normal inflada</strong> (CV 30% ×1.5), incertidumbre ALTA.
-    Una observación no es una distribución — con la empírica el Q* colapsaría a "pide lo que vendiste".
-    El export del 1 de agosto lleva n de 1 a 3 y cambia la distribución a empírica.<br>
+    Una observación no es una distribución — con la empírica el Q* colapsaría a "pide lo que vendiste".<br>
     Demanda DESCENSURADA por días con stock — lo que se agotó en enero no se lee como "no se vendía".<br>
     Ratio crítico por SKU: Cu = precio − costo · Co = costo × (capital ${((d.parametros || {}).tasa_capital * 100) || 30}% + liquidación ${((d.parametros || {}).tasa_liquidacion * 100) || 60}%).
   </div>`;

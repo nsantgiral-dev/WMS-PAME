@@ -84,6 +84,8 @@ PANTALLAS = [
     ('compras_ia.js', None,         ['admin', 'compras']),
     # 🧾 Fuentes de compras (m046compras): sub-tab de Compras, mismos roles.
     ('compras_fuentes.js', None,    ['admin', 'compras']),
+    # 🛒 La pantalla del comprador (2026-09-25): la misma para admin y compras.
+    ('compras_bandeja.js', None,    ['admin', 'compras']),
     ('picking.js',    None,         ['admin', 'operario']),
     ('packing.js',    None,         ['admin', 'empacador']),
     ('app.js',        None,         ['admin']),
@@ -93,7 +95,9 @@ PANTALLAS = [
     ('layout.js',     None,         ['admin']),
     ('traslados.js',  None,         ['admin']),
     ('kardex.js',     None,         ['admin']),
-    ('temporada.js',  None,         ['admin']),
+    # 🎒 Temporada es pestaña de Compras desde el 2026-09-25: el rol `compras`
+    # la abre (lee el pedido y la lista paralela; escribirla sigue en admin/jefe).
+    ('temporada.js',  None,         ['admin', 'compras']),
     ('vigia.js',      None,         ['admin']),
     ('etiquetas.js',  None,         ['admin']),
     # 📈 Analítica (Fase 1): la pestaña la ven `_ROLES_ANALITICA` = Roles.GESTION.

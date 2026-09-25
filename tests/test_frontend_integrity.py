@@ -1368,17 +1368,29 @@ class TestOrganizacionPorDecision:
             'el panel de Inteligencia debe haber salido de Inventario'
         assert 'inv-tab-inteligencia' not in html
 
-    def test_compras_agrupa_operacion_y_decision(self):
-        """Lo continuo arriba, lo que compromete plata abajo."""
+    def test_compras_abre_en_la_decision_y_pliega_lo_tecnico(self):
+        """Desde el 2026-09-25 la pantalla abre en lo que el comprador decide
+        (Bandeja, Contenedor, Temporada, Lo pedido, Fuentes) y todo lo técnico
+        —modelos, tablas de detalle, operación de bodega— vive plegado en
+        ⚙️ Avanzado. La unidad de organización sigue siendo la decisión."""
         html = self._html()
-        assert 'OPERACIÓN' in html and 'DECISIÓN' in html
-        for sub in ('comp-sub-temporada', 'comp-sub-modelos', 'comp-sub-armador'):
-            assert f'id="{sub}"' in html, f'falta la sub-pestaña {sub}'
+        for t in ('bandeja', 'contenedor', 'temporada', 'lopedido', 'fuentes', 'avanzado'):
+            assert f'id="cmp-tab-{t}"' in html, f'falta la pestaña {t}'
+            assert f'id="comp-sec-{t}"' in html, f'falta la sección {t}'
+        for sub in ('comp-sub-modelos', 'comp-sub-armador', 'comp-sub-nacional',
+                    'comp-sub-velocity'):
+            assert f'id="{sub}"' in html, f'falta la sub-pestaña de Avanzado {sub}'
+        i = html.index('id="comp-sec-avanzado"')
+        assert html.index('id="comp-sec-modelos"') > i, 'los modelos van dentro de Avanzado'
 
     def test_el_dispatcher_de_compras_cubre_las_secciones_nuevas(self):
-        src = _read('recepcion.js')
-        assert "'temporada'" in src and "'modelos'" in src
-        assert 'temporadaCargar()' in src and 'modelosCargar()' in src
+        """Dos dispatchers: `cmpTab` (compras_bandeja.js) para las pestañas y
+        `compSubtab` (recepcion.js) para las secciones de Avanzado."""
+        src = _read('compras_bandeja.js')
+        assert 'cmpCargarTemporada()' in src and 'fuentesCargar()' in src
+        assert 'temporadaCargar()' in src, 'el instrumento del comité se carga desde Temporada'
+        rec = _read('recepcion.js')
+        assert "'modelos'" in rec and 'modelosCargar()' in rec
 
     def test_inventario_no_dispara_modelos(self):
         """invSubtab quedó con conteos, abc y datos. Nada de modelos."""
@@ -1440,12 +1452,16 @@ class TestReposicionNacional:
     """
 
     def test_existe_la_pantalla(self):
+        """La decisión semanal es la 🛒 Bandeja; la tabla técnica del punto de
+        pedido queda en ⚙️ Avanzado."""
         html = _read('index.html')
+        assert 'id="cmp-tab-bandeja"' in html and 'id="cmp-bandeja"' in html
         assert 'id="comp-sub-nacional"' in html
         assert 'id="comp-sec-nacional"' in html
 
     def test_el_dispatcher_la_carga(self):
         assert 'compCargarNacional()' in _read('recepcion.js')
+        assert 'cmpCargarBandeja()' in _read('compras_bandeja.js')
 
     def test_muestra_procedencia_por_fila(self):
         """Misma exigencia que el déficit China: la señal donde está el número."""

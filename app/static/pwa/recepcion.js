@@ -1983,81 +1983,54 @@ async function procesarScanDevolucion(codigo) {
 
 // Compras — movido desde app.js 2026-07-21
 // ═══════════════════════════════════════════════════════════════════════════════
-// COMPRAS — 4 paneles: Velocity+ABC, Dock Lock, Cuarentena, Audit Trail
+// COMPRAS — la pantalla del comprador vive en `compras_bandeja.js` (2026-09-25).
+// Acá quedan la entrada por rol y el dispatcher de ⚙️ Avanzado: modelos, las
+// tablas técnicas del punto de pedido y del contenedor, acuerdos, bloqueos y la
+// operación de bodega (reposición interna PICKING, recepciones con problema,
+// cuarentena, rastro de recepciones).
 // ═══════════════════════════════════════════════════════════════════════════════
 
-let COMP_SUBTAB = 'velocity';
+let COMP_SUBTAB = 'modelos';
 let COMP_VELOCITY_DATA = [];    // cache para filtros client-side
-let COMP_TIMER = null;
-let COMP_PANTALLA = false;      // true si es pantalla-compras (rol compras)
 
-/** Initialize the purchasing (compras) screen and load data. */
+/** Rol `compras`: la MISMA pantalla del admin, montada en `#pantalla-compras`. */
 function compIniciarPantalla() {
-  COMP_PANTALLA = true;
-  compCargarResumen('comp2');
-  compCargarVelocity('comp2');
-  COMP_TIMER = setInterval(() => {
-    compCargarResumen(COMP_PANTALLA ? 'comp2' : 'comp');
-  }, 60000);
+  cmpMontar('compras');
+  cmpIniciar();
 }
 
-/** Fetch and render the active purchasing sub-tab content. */
+/** Admin: pestaña Compras. */
 async function cargarCompras() {
-  COMP_PANTALLA = false;
-  await Promise.all([
-    compCargarResumen('comp'),
-    compCargarVelocity('comp'),
-  ]);
+  cmpMontar('admin');
+  cmpIniciar();
 }
 
-// ── Sub-tabs (admin tab-compras) ──────────────────────────────────────────
-/** @param {string} id - Purchasing primary sub-tab to activate. */
+// ── Sub-pestañas de ⚙️ Avanzado ────────────────────────────────────────────
+/** @param {string} id - Sección de Avanzado a mostrar (palabra fija). */
 function compSubtab(id) {
+  const secs = ['modelos','nacional','armador','acuerdos','bloqueos','velocity','dock','cuarentena','audit'];
+  if (!secs.includes(id)) id = 'modelos';
   COMP_SUBTAB = id;
-  const secs = ['velocity','dock','cuarentena','audit','bloqueos','fuentes','acuerdos','armador','deriva','temporada','modelos','nacional'];
   secs.forEach(s => {
     const el = document.getElementById('comp-sec-' + s);
     const tab = document.getElementById('comp-sub-' + s);
     if (el) el.style.display = s === id ? 'block' : 'none';
     if (tab) {
-      tab.style.background = s === id ? 'var(--pm-fill)' : 'transparent';
-      tab.style.color = s === id ? '#fff' : 'var(--tx3)';
-      tab.style.fontWeight = s === id ? '700' : '400';
+      tab.style.background = s === id ? 'var(--acento-bg)' : 'transparent';
+      tab.style.color = s === id ? 'var(--acento-tx)' : 'var(--tx2)';
+      tab.style.borderColor = s === id ? 'var(--acento-brd)' : 'var(--brd)';
+      tab.style.fontWeight = s === id ? '700' : '500';
     }
   });
   if (id === 'velocity') compCargarVelocity('comp');
   else if (id === 'dock') compCargarDock('comp');
   else if (id === 'cuarentena') compCargarCuarentena('comp');
   else if (id === 'bloqueos') compCargarBloqueos();
-  else if (id === 'fuentes') fuentesCargar();
   else if (id === 'acuerdos') compCargarAcuerdos();
   else if (id === 'armador') compCargarArmador();
-  else if (id === 'deriva') compCargarDeriva();
   else if (id === 'nacional') compCargarNacional();
-  else if (id === 'temporada') temporadaCargar();
   else if (id === 'modelos') modelosCargar();
-  // audit: manual search — no auto-load
-}
-
-// ── Sub-tabs (pantalla-compras dedicada) ──────────────────────────────────
-/** @param {string} id - Purchasing secondary sub-tab to activate. */
-function compSubtab2(id) {
-  COMP_SUBTAB = id;
-  const secs = ['velocity','dock','cuarentena','audit'];
-  secs.forEach(s => {
-    const tab = document.getElementById('comp2-sub-' + s);
-    if (tab) {
-      tab.style.background = s === id ? 'var(--pm-fill)' : 'transparent';
-      tab.style.color = s === id ? '#fff' : 'var(--tx3)';
-      tab.style.fontWeight = s === id ? '700' : '400';
-    }
-  });
-  const cont = document.getElementById('comp2-contenido');
-  if (!cont) return;
-  if (id === 'velocity') compCargarVelocity('comp2');
-  else if (id === 'dock') compCargarDock('comp2');
-  else if (id === 'cuarentena') compCargarCuarentena('comp2');
-  else if (id === 'audit') compRenderAuditForm('comp2');
+  // audit: búsqueda manual — no carga sola
 }
 
 // ── RESUMEN (KPIs header) ─────────────────────────────────────────────────
@@ -2078,70 +2051,30 @@ async function compCargarResumen(prefix) {
 
 /** @param {string} prefix - DOM prefix for the velocity analytics panel to load. */
 async function compCargarVelocity(prefix) {
-  prefix = prefix || 'comp';
-  const target = prefix === 'comp2'
-    ? document.getElementById('comp2-contenido')
-    : document.getElementById('comp-lista-velocity');
+  const target = document.getElementById('comp-lista-velocity');
   if (!target) return;
-
   const diasSel = document.getElementById('comp-vel-dias');
   const dias = diasSel ? diasSel.value : 30;
-
-  target.innerHTML = '<div style="text-align:center;padding:30px;color:var(--tx3);">Cargando velocity...</div>';
-
+  target.innerHTML = '<div style="text-align:center;padding:30px;color:var(--tx3);">Cargando la reposición interna…</div>';
   try {
     const r = await get(`/api/compras/velocity?dias=${dias}&almacen_id=${ALMACEN_ID}`);
     COMP_VELOCITY_DATA = r.items || [];
-
-    if (prefix === 'comp2') {
-      // Render filters + list into comp2-contenido
-      target.innerHTML = _compVelocityFiltersHtml() + '<div id="comp2-vel-list"></div>';
-      _compRenderVelocityList(document.getElementById('comp2-vel-list'), COMP_VELOCITY_DATA, r);
-    } else {
-      _compRenderVelocityList(target, COMP_VELOCITY_DATA, r);
-    }
+    _compRenderVelocityList(target, COMP_VELOCITY_DATA, r);
   } catch (e) {
-    target.innerHTML = '<div style="color:var(--err-tx);text-align:center;padding:20px;">Error cargando velocity</div>';
+    target.innerHTML = '<div style="color:var(--err-tx);text-align:center;padding:20px;">No se pudo cargar la reposición interna</div>';
   }
-}
-
-/**
- * Build HTML for the velocity analytics filter controls.
- * @returns {string} HTML string.
- */
-function _compVelocityFiltersHtml() {
-  return `<div style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap;align-items:center;">
-    <select id="comp2-vel-dias" onchange="compCargarVelocity('comp2')"
-      style="padding:8px 12px;background:var(--bg-s);border:1px solid var(--brd);border-radius:8px;color:var(--tx);font-size:var(--fs-sm);">
-      <option value="7">7 días</option><option value="15">15 días</option>
-      <option value="30" selected>30 días</option><option value="60">60 días</option>
-    </select>
-    <select id="comp2-vel-abc" onchange="compFiltrarVelocity('comp2')"
-      style="padding:8px 12px;background:var(--bg-s);border:1px solid var(--brd);border-radius:8px;color:var(--tx);font-size:var(--fs-sm);">
-      <option value="">Todos ABC</option><option value="A">Solo A</option>
-      <option value="B">Solo B</option><option value="C">Solo C</option>
-    </select>
-    <label style="display:flex;align-items:center;gap:6px;font-size:var(--fs-xs);color:var(--tx3);cursor:pointer;">
-      <input type="checkbox" id="comp2-vel-alertas" onchange="compFiltrarVelocity('comp2')"> Solo alertas
-    </label>
-  </div>`;
 }
 
 /** @param {string} prefix - DOM prefix; apply ABC/text filters to the velocity list. */
 function compFiltrarVelocity(prefix) {
-  prefix = prefix || 'comp';
-  const abcSel = document.getElementById((prefix === 'comp2' ? 'comp2' : 'comp') + '-vel-abc');
-  const alertaSel = document.getElementById((prefix === 'comp2' ? 'comp2' : 'comp') + '-vel-alertas');
+  const abcSel = document.getElementById('comp-vel-abc');
+  const alertaSel = document.getElementById('comp-vel-alertas');
   const abcFiltro = abcSel ? abcSel.value : '';
   const soloAlertas = alertaSel ? alertaSel.checked : false;
-
   let filtered = COMP_VELOCITY_DATA;
   if (abcFiltro) filtered = filtered.filter(i => i.abc === abcFiltro);
   if (soloAlertas) filtered = filtered.filter(i => i.alerta);
-
-  const target = prefix === 'comp2'
-    ? document.getElementById('comp2-vel-list')
-    : document.getElementById('comp-lista-velocity');
+  const target = document.getElementById('comp-lista-velocity');
   if (target) _compRenderVelocityList(target, filtered, { total_items: filtered.length, alertas_a: filtered.filter(i => i.alerta).length });
 }
 
@@ -2153,35 +2086,36 @@ function compFiltrarVelocity(prefix) {
  */
 function _compRenderVelocityList(el, items, meta) {
   if (!items.length) {
-    el.innerHTML = '<div style="text-align:center;padding:30px;color:var(--tx3);">Sin datos de velocity en este período</div>';
+    el.innerHTML = '<div style="text-align:center;padding:30px;color:var(--tx3);">Nada salió de los huecos de PICKING de NB1 en este período</div>';
     return;
   }
 
   const alertas = meta.alertas_a || 0;
   let html = alertas > 0
     ? `<div style="background:var(--err-bg);border:1px solid var(--err-brd);border-radius:10px;padding:10px 14px;margin-bottom:12px;">
-         <span style="color:var(--err-tx);font-weight:700;">⚠ ${alertas} item(s) A agotándose</span>
-         <span style="color:var(--err-tx);font-size:var(--fs-xs);"> — consumo > entrada, stock PICKING <15 días</span>
+         <span style="color:var(--err-tx);font-weight:700;">⚠ ${esc(alertas)} producto${alertas === 1 ? '' : 's'} A con menos de 15 días en su hueco de PICKING</span>
+         <span style="color:var(--err-tx);font-size:var(--fs-xs);"> — sale más de lo que se repone: reponer desde RESERVA (no es una alerta de compra)</span>
        </div>`
     : '';
 
-  html += `<div style="font-size:var(--fs-xs);color:var(--tx3);margin-bottom:8px;">${esc(items.length)} productos con movimiento</div>`;
+  html += `<div style="font-size:var(--fs-xs);color:var(--tx3);margin-bottom:8px;">${esc(items.length)} productos salieron de PICKING en NB1</div>`;
 
   html += '<div style="display:flex;flex-direction:column;gap:6px;">';
   for (const it of items) {
-    const abcColor = it.abc === 'A' ? '#ef4444' : it.abc === 'B' ? '#f59e0b' : it.abc === 'C' ? '#3b82f6' : '#555';
-    const alertaBg = it.alerta ? 'background:var(--err-bg);border-color:#7f1d1d;' : '';
+    const abcTinta = it.abc === 'A' ? 'var(--err-tx)' : it.abc === 'B' ? 'var(--warn-tx)' : it.abc === 'C' ? 'var(--info-tx)' : 'var(--tx3)';
+    const abcFondo = it.abc === 'A' ? 'var(--err-bg)' : it.abc === 'B' ? 'var(--warn-bg)' : it.abc === 'C' ? 'var(--info-bg)' : 'var(--bg)';
+    const alertaBg = it.alerta ? 'background:var(--err-bg);border-color:var(--err-brd);' : '';
     html += `<div style="background:var(--bg-s);border:1px solid var(--brd);border-radius:10px;padding:10px 12px;${alertaBg}">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
         <div style="font-size:var(--fs-sm);font-weight:700;color:var(--tx);">${esc(it.codigo)}</div>
-        <span style="font-size:var(--fs-xs);font-weight:800;color:${abcColor};background:${abcColor}22;padding:2px 8px;border-radius:6px;">${esc(it.abc)}</span>
+        <span style="font-size:var(--fs-xs);font-weight:800;color:${abcTinta};background:${abcFondo};padding:2px 8px;border-radius:6px;">${esc(it.abc || 'sin clase')}</span>
       </div>
       <div style="font-size:var(--fs-xs);color:var(--tx3);margin-bottom:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(it.nombre)}</div>
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(70px,1fr));gap:4px;font-size:var(--fs-xs);">
-        <div><span style="color:var(--tx3);">Picks/día</span><br><strong style="color:var(--tx);">${esc(it.picks_dia)}</strong></div>
-        <div><span style="color:var(--tx3);">Total período</span><br><strong style="color:var(--tx);">${esc(it.picks_periodo)}</strong></div>
-        <div><span style="color:var(--tx3);">Stock PICK</span><br><strong style="color:var(--tx);">${esc(it.stock_picking)}</strong></div>
-        <div><span style="color:var(--tx3);">Días stock</span><br><strong style="color:${it.dias_stock_estimado < 15 ? 'var(--err-tx)' : it.dias_stock_estimado < 30 ? 'var(--warn-tx)' : 'var(--tx)'};">${it.dias_stock_estimado >= 999 ? '∞' : it.dias_stock_estimado}</strong></div>
+        <div><span style="color:var(--tx3);">Sale por día</span><br><strong style="color:var(--tx);">${esc(it.picks_dia)} u</strong></div>
+        <div><span style="color:var(--tx3);">Salió en el período</span><br><strong style="color:var(--tx);">${esc(it.picks_periodo)} u</strong></div>
+        <div><span style="color:var(--tx3);">En el hueco</span><br><strong style="color:var(--tx);">${esc(it.stock_picking)} u</strong></div>
+        <div><span style="color:var(--tx3);">Alcanza en el hueco</span><br><strong style="color:${it.dias_stock_estimado < 15 ? 'var(--err-tx)' : it.dias_stock_estimado < 30 ? 'var(--warn-tx)' : 'var(--tx)'};">${it.dias_stock_estimado >= 999 ? 'no sale' : esc(Math.floor(it.dias_stock_estimado)) + ' días'}</strong></div>
       </div>
     </div>`;
   }
@@ -2368,23 +2302,6 @@ async function compCargarCuarentena(prefix) {
 // ═══════════════════════════════════════════════════════════════════════════
 // AUDIT TRAIL — búsqueda por OC/proveedor
 // ═══════════════════════════════════════════════════════════════════════════
-
-function compRenderAuditForm(prefix) {
-  const target = document.getElementById('comp2-contenido');
-  if (!target) return;
-  target.innerHTML = `<div style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap;align-items:center;">
-    <input type="text" id="comp2-audit-buscar" placeholder="Buscar por OC, proveedor, remisión..."
-      style="flex:1;min-width:200px;padding:10px 14px;background:var(--bg-s);border:1px solid var(--brd);border-radius:8px;color:var(--tx);font-size:var(--fs-sm);"
-      onkeydown="if(event.key==='Enter')compCargarAudit('comp2')">
-    <button onclick="compCargarAudit('comp2')"
-      style="padding:10px 18px;background:var(--pm-fill);border:none;border-radius:8px;color:#fff;font-size:var(--fs-sm);font-weight:700;cursor:pointer;">
-      Buscar
-    </button>
-  </div>
-  <div id="comp2-audit-results">
-    <div style="text-align:center;padding:30px;color:var(--tx3);">Escribe OC, proveedor o remisión y presiona Buscar</div>
-  </div>`;
-}
 
 async function compCargarAudit(prefix) {
   prefix = prefix || 'comp';

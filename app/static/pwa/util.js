@@ -75,3 +75,14 @@ function fmtPesos(x) {
   if (!Number.isFinite(n)) return String(x);
   return '$' + Math.round(n).toLocaleString('es-CO');
 }
+
+/** Dólares para leer: «US$ 4.291,20» — con su signo, para que nunca se lean
+ * como pesos (el Armador pintaba «$4.291,2 FOB USD»: un «$» suelto que en
+ * Colombia es pesos). Dos decimales siempre: un FOB unitario de US$ 0,45 es
+ * un precio, no un redondeo. `null`/vacío es «sin dato», nunca «US$ 0». */
+function fmtUsd(x) {
+  if (x === null || x === undefined || x === '') return 'sin dato';
+  const n = Number(x);
+  if (!Number.isFinite(n)) return String(x);
+  return 'US$ ' + n.toLocaleString('es-CO', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}

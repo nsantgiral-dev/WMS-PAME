@@ -25,7 +25,7 @@ const AN_PORT = { f: null, d: null, abierta: null, salud: null, saludError: null
 
 /** Pantallas a las que la portada puede mandar (lista blanca: el destino viene
  *  del servidor y nunca se pasa a `tab()` sin estar acá). */
-const AN_PORT_TABS = ['tab-pedidos', 'tab-inventario', 'tab-liquidacion', 'tab-connekta'];
+const AN_PORT_TABS = ['tab-pedidos', 'tab-inventario', 'tab-liquidacion', 'tab-connekta', 'tab-compras'];
 
 const AN_PORT_NIVEL = {
   verde:    { punto: '●', estilo: 'background:var(--ok-bg);color:var(--ok-tx);border:1px solid var(--ok-brd);', trazo: 'var(--ok-tx)' },
@@ -520,6 +520,7 @@ function anPortBotonAccion(a) {
     case 'liquidar_ruta': return anPortPuedeAbrir('tab-liquidacion') ? 'Liquidar ruta ›' : '';
     case 'reintentar': return anPortPuedeAbrir(a.destino === 'liquidacion' ? 'tab-liquidacion' : 'tab-connekta') ? 'Ir a reintentar ›' : '';
     case 'ver_fuga': return 'Ver en Fugas ›';
+    case 'ver_bandeja': return anPortPuedeAbrir('tab-compras') ? 'Ver en la Bandeja de compras ›' : '';
     case 'ir_tab': return anPortPuedeAbrir(a.tab) ? 'Ir ›' : '';
     default: return '';
   }
@@ -556,6 +557,9 @@ async function anPortAccion(i, k) {
     const fugas = (AN_FUGAS.datos && AN_FUGAS.datos.fugas) || [];
     const idx = fugas.findIndex(x => x.clave === a.fuga);
     if (idx >= 0) anFugasAbrir(idx);
+  } else if (a.tipo === 'ver_bandeja' && a.referencia && anPortPuedeAbrir('tab-compras')) {
+    comprasIrABandeja(a.referencia);   // marca la fila; la pestaña la abre
+    await tab('tab-compras');
   } else if (a.tipo === 'ir_tab' && anPortPuedeAbrir(a.tab)) {
     await tab(a.tab);
   }

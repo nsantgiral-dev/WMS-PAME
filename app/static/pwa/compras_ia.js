@@ -185,8 +185,8 @@ function _tablaDeficitChina(rop) {
   }
   if (d.multiplicador && d.multiplicador !== 1) {
     html += `<div style="font-size:var(--fs-xs);color:var(--tx3);margin-bottom:8px;">
-      Colchón: $${''}${(d.safety_stock_antes || 0).toLocaleString('es-CO')} u → ${(d.safety_stock_despues || 0).toLocaleString('es-CO')} u
-      (<strong>${esc(d.multiplicador)}×</strong> por la fórmula §M0.4)${d.topados_por_cobertura ? ` · ${esc(d.topados_por_cobertura)} topado(s) por cobertura máx.` : ''}
+      Reserva de seguridad total: ${esc(Math.round(d.safety_stock_antes || 0).toLocaleString('es-CO'))} u con la fórmula anterior → ${esc(Math.round(d.safety_stock_despues || 0).toLocaleString('es-CO'))} u con la actual
+      (<strong>${esc(d.multiplicador)}×</strong>, §M0.4)${d.topados_por_cobertura ? ` · ${esc(d.topados_por_cobertura)} topado(s) por cobertura máx.` : ''}
     </div>`;
   }
 
@@ -275,7 +275,7 @@ function _renderArmador(el, propuesta, g5, sigma, rop) {
   html += _compKpi(propuesta.total_items, 'Items total', 'var(--tx)');
   html += _compKpi(propuesta.items_deficit, 'Por deficit', 'var(--red)');
   html += _compKpi(propuesta.items_relleno, 'Relleno', 'var(--blue)');
-  html += _compKpi('$' + (propuesta.valor_fob_usd || 0).toLocaleString('es-CO'), 'FOB USD', 'var(--green)');
+  html += _compKpi(esc(fmtUsd(propuesta.valor_fob_usd)), 'Valor FOB', 'var(--green)');
   html += '</div>';
 
   // Ventana de llegada
@@ -370,13 +370,15 @@ function _barraProgreso(label, actual, total, pct, color) {
 // SUB-TAB: DETECTOR DE DERIVA
 // ═══════════════════════════════════════════════════════════════════
 
-async function compCargarDeriva() {
+/** @param {number} [meses=3] - Ventana de OCs a comparar contra los acuerdos. */
+async function compCargarDeriva(meses) {
   const el = document.getElementById('comp-sec-deriva');
   if (!el) return;
-  el.innerHTML = '<div style="color:var(--tx3);padding:20px;">Analizando deriva de precios...</div>';
+  const m = [3, 6, 12].includes(Number(meses)) ? Number(meses) : 3;
+  el.innerHTML = '<div style="color:var(--tx3);padding:20px;">Comparando las órdenes contra los acuerdos…</div>';
 
   try {
-    const result = await get('/api/compras/deriva?meses=3');
+    const result = await get('/api/compras/deriva?meses=' + m);
     _renderDeriva(el, result);
   } catch (e) {
     el.innerHTML = `<div style="color:var(--red);padding:20px;">Error: ${e.message || e}</div>`;
@@ -417,13 +419,13 @@ function _renderDeriva(el, data) {
       html += `<div style="background:var(--bg-s);border:1px solid var(--brd);border-radius:6px;padding:8px 12px;margin-bottom:4px;">
         <div style="display:flex;justify-content:space-between;align-items:center;">
           <div>
-            <span style="font-size:var(--fs-xs);color:var(--tx);">${esc(d.referencia)}</span>
-            <span style="font-size:var(--fs-xs);color:var(--tx3);margin-left:6px;">${esc(d.nombre)}</span>
+            <span style="font-size:var(--fs-sm);color:var(--tx);font-weight:600;">${esc(d.nombre || 'Producto sin nombre')}</span>
+            <span style="font-size:var(--fs-xs);color:var(--tx3);margin-left:6px;">${esc(d.referencia)}</span>
           </div>
           <span style="font-size:var(--fs-sm);font-weight:700;color:${color};">${d.diferencia_pct > 0 ? '+' : ''}${esc(d.diferencia_pct)}%</span>
         </div>
         <div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:2px;">
-          Pactado: $${d.precio_pactado.toLocaleString('es-CO')} | En la OC ${esc(d.oc || '')}: $${d.precio_facturado.toLocaleString('es-CO')} | ${esc(d.proveedor_factura)}
+          Pactado: ${esc(fmtPesos(d.precio_pactado))} · en la OC ${esc(d.oc || 'sin número')}: ${esc(fmtPesos(d.precio_facturado))} · ${esc(d.proveedor_factura || 'proveedor sin dato')}${d.impacto_cop > 0 ? ` · de más: ${esc(fmtPesos(d.impacto_cop))}` : ''}
         </div>
       </div>`;
     }
@@ -513,7 +515,7 @@ async function _cargarTSB(el) {
 
     const lista = r.pronosticos || [];
     if (!lista.length) {
-      html += '<div style="font-size:var(--fs-xs);color:var(--tx3);padding:14px 0;">Sin SKUs con 12+ semanas de historia. ¿Está descargado el kardex?</div>';
+      html += '<div style="font-size:var(--fs-sm);color:var(--tx3);padding:14px 0;">Ningún producto tiene 12 semanas con dato (con existencias o con venta) en los últimos 12 meses: el TSB no tiene contra qué medirse. El semáforo de arriba dice si el kardex y el stock diario están al día.</div>';
     } else {
       html += `<div style="overflow-x:auto;max-height:420px;overflow-y:auto;">
         <table style="width:100%;border-collapse:collapse;font-size:var(--fs-xs);">
@@ -900,7 +902,7 @@ async function repoVerEvidencia(referencia, idFila) {
   const dias = d.dias || [];
   if (!dias.length) {
     fila.innerHTML = `<td colspan="7" style="padding:8px;font-size:var(--fs-xs);color:var(--yellow);">
-      Sin stock diario reconstruido para ${referencia}. Por eso su demanda figura
+      Sin stock diario reconstruido para ${esc(referencia)}. Por eso su demanda figura
       como CENSURADA: no hay con qué saber qué días estuvo agotado.
       Correr <b>Reconstruir stock diario</b> en Inventario › Datos.</td>`;
     return;
@@ -945,10 +947,10 @@ async function repoVerEvidencia(referencia, idFila) {
 
   fila.innerHTML = `<td colspan="7" style="padding:10px;background:var(--bg-s);">
     <div style="font-size:var(--fs-xs);color:var(--tx2);line-height:1.7;">
-      <b style="color:var(--tx);">${referencia}</b> —
+      <b style="color:var(--tx);">${esc(referencia)}</b> —
       ${esc(dias.length)} día-bodega registrado(s) ·
       ${fechas.length ? _d(fechas[0]) + ' → ' + _d(fechas[fechas.length - 1]) : '—'} ·
-      bodega(s): ${bodegas.join(', ')}<br>
+      bodega(s): ${esc(bodegas.join(', '))}<br>
       <span style="color:${sinStock.length ? 'var(--red)' : 'var(--green)'};">
         ${esc(sinStock.length)} día-bodega SIN stock</span>
       ${tramos.length ? ` en ${esc(tramos.length)} racha(s)` : ''}
@@ -962,7 +964,10 @@ async function repoVerEvidencia(referencia, idFila) {
         ${esc(t.bodega)}: ${_d(t.desde)}${t.desde === t.hasta ? '' : '–' + _d(t.hasta)}
         <b>(${_largo(t)}d)</b></span>`).join('')}
       ${tramos.length > 12 ? `<span style="font-size:var(--fs-xs);color:var(--tx3);align-self:center;">+${tramos.length - 12} racha(s) más</span>` : ''}
-    </div>` : `<div style="margin-top:6px;font-size:var(--fs-xs);color:var(--green);">
-      Nunca se agotó en la ventana registrada — su demanda no necesita corrección.</div>`}
+    </div>` : (truncado
+      ? `<div style="margin-top:6px;font-size:var(--fs-xs);color:var(--yellow);">
+      No se agotó en los días que alcanzó a traer la consulta (los más recientes). Del resto de la ventana del modelo, esta vista no sabe.</div>`
+      : `<div style="margin-top:6px;font-size:var(--fs-xs);color:var(--green);">
+      No se agotó en la ventana registrada — su demanda no necesita corrección.</div>`)}
   </td>`;
 }

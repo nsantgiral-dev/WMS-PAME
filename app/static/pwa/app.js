@@ -309,7 +309,6 @@ function pararTimers() {
   clearInterval(TIMER_ADMIN);
   clearInterval(TIMER_OPERARIO);
   clearInterval(TIMER_REC);
-  if (typeof COMP_TIMER !== 'undefined') clearInterval(COMP_TIMER);
   if (typeof ABAST_TIMER !== 'undefined') clearInterval(ABAST_TIMER);
   if (typeof invSalir === 'function') invSalir();
   RECEPCION_ACTUAL = null;

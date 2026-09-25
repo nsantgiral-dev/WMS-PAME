@@ -380,12 +380,33 @@ def _por_que_plata(m: Medicion):
     return {'que_hacer': acciones[:MAX_ACCIONES], 'total_acciones': len(acciones)}
 
 
+#: Cuántos productos de la venta perdida llevan su botón a la Bandeja de compras.
+MAX_SKUS_A_LA_BANDEJA = 5
+
+
 def _por_que_venta_perdida(m: Medicion):
+    """Por categoría, y los productos que más se dejaron de vender con su
+    botón a 🛒 Bandeja de compras (`ver_bandeja`, por referencia de Siesa: la
+    clave de la bandeja). La pantalla solo muestra el botón a quien ve Compras."""
     from app.services import analitica_fugas as fg
     casos = m.fuga('venta_perdida', m.desde, m.hasta).casos
-    return {'categorias': fg._agrupar(casos, lambda c: c.motivo)[:6],
-            'que_hacer': [{'tipo': 'ver_fuga', 'fuga': 'venta_perdida',
-                           'titulo': 'Ver cada agotado en 💸 Fugas'}] if casos else []}
+    if not casos:
+        return {'categorias': [], 'que_hacer': []}
+    nombres = {}
+    for c in casos:
+        ref = (c.detalle or {}).get('referencia_siesa')
+        if ref:
+            nombres.setdefault(ref, (c.detalle or {}).get('nombre'))
+    con_ref = [c for c in casos if (c.detalle or {}).get('referencia_siesa')]
+    por_sku = fg._agrupar(con_ref, lambda c: c.detalle['referencia_siesa'])[:MAX_SKUS_A_LA_BANDEJA]
+    acciones = [{'tipo': 'ver_bandeja', 'referencia': g['motivo'],
+                 'titulo': f"{nombres.get(g['motivo']) or 'Producto'} · {g['motivo']}",
+                 'pesos': g['pesos'] if g['casos'] != g['sin_valor'] else None,
+                 'detalle': f"{g['casos']} agotado(s) · {int(g['unidades'])} u no vendidas",
+                 'fuente': 'Venta perdida'} for g in por_sku]
+    acciones.append({'tipo': 'ver_fuga', 'fuga': 'venta_perdida',
+                     'titulo': 'Ver cada agotado en 💸 Fugas'})
+    return {'categorias': fg._agrupar(casos, lambda c: c.motivo)[:6], 'que_hacer': acciones}
 
 
 _POR_QUE = {

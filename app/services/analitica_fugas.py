@@ -215,6 +215,7 @@ def _venta_perdida(desde, hasta, ctx) -> Resultado:
             dia=dia_operativo_de(e.creado_en),
             pedido_clave=claves.get(e.tarea_picking_id),
             detalle={'producto': prod.codigo if prod else None,
+                     'referencia_siesa': prod.codigo_siesa if prod else None,
                      'nombre': prod.nombre if prod else None,
                      'clase_abc': e.clasificacion_abc,
                      'precio_unitario': precio,
