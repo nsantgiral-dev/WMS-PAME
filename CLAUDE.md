@@ -4992,6 +4992,8 @@ cifra operativa, no de gerencia.
   portada) puede acercarse. Medido en el mundo de pruebas: < 2 s.
 - La confianza hereda de Salud: la auditoría se guarda 10 min por proceso.
 
+Suite completa en este worktree (2026-09-24, `-m "not postgres"`, TZ=UTC): **8109 passed**, 2 failed —dos contratos del Tablero BI que codificaban la forma vieja (la clave nueva `sin_precio_por_categoria` y el texto de la fila «sin precio»), actualizados y verdes por separado—, 5 skipped, 19 xfailed. Tests nuevos: `tests/test_analitica_portada.py` (51) y `tests/test_analitica_claridad.py` (15); 26 mutaciones, las 26 rojas (M25 sobrevivía y obligó a probar el semáforo del recorrido por sus argumentos).
+
 ### Metas provisionales — las confirma el dueño
 
 Todas nacen `meta_provisional: true` y la pantalla lo dice. A confirmar: ciclo
