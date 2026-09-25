@@ -228,11 +228,12 @@ def todo_rechazo_de_ruta_liquidada_tiene_devolucion(ctx=None):
     devolución (ni siquiera cancelada). La vía sana la crea al confirmar la
     parada, o la liquidación la asegura; una que no pase por
     `devolucion_ruta` deja exactamente esto."""
+    from app.extensions import db
     from app.models.devolucion_cliente import DevolucionCliente
     from app.models.ruta_despacho import EstadoFinancieroRuta, RutaDespacho
     out = []
     for r in _recaudos_que_devuelven():
-        ruta = RutaDespacho.query.get(r.ruta_id)
+        ruta = db.session.get(RutaDespacho, r.ruta_id)
         if ruta is None or ruta.estado_financiero != EstadoFinancieroRuta.LIQUIDADA:
             continue
         if DevolucionCliente.query.filter_by(recaudo_entrega_id=r.id).first() is None:
@@ -317,6 +318,7 @@ def ningun_rc_espera_una_nc_que_no_llegara(ctx=None):
     from app.models.siesa_job import EstadoSiesaJob, SiesaJob
     from app.services import devolucion_ruta as _dr
     from app.models.devolucion_cliente import DevolucionCliente
+    from app.extensions import db
     hace_una_hora = datetime.utcnow() - timedelta(hours=1)
     out = []
     for job in SiesaJob.query.filter(SiesaJob.tipo == 'RECIBO_CAJA',
@@ -327,7 +329,7 @@ def ningun_rc_espera_una_nc_que_no_llegara(ctx=None):
             continue
         if not payload.get('depende_de_nc'):
             continue
-        rec = RecaudoEntrega.query.get(payload.get('recaudo_id') or job.referencia_id)
+        rec = db.session.get(RecaudoEntrega, payload.get('recaudo_id') or job.referencia_id)
         if rec is None or not _dr.nc_no_llegara(rec):
             continue
         ultima = (DevolucionCliente.query.filter_by(recaudo_entrega_id=rec.id)

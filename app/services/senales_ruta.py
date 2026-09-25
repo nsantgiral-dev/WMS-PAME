@@ -366,7 +366,8 @@ def faltante_de_retorno(devolucion) -> Optional[dict]:
                float(l.cantidad_devuelta or 0))
     # Doble unidad declarada por referencia (`devolucion_ruta.vincular_a_factura`):
     # lo declarado vive por producto y lo contado en sus líneas.
-    decl_prod = ((devolucion.declaracion_conductor or {}).get('declarado_por_producto') or {})
+    decl_prod = ((getattr(devolucion, 'declaracion_conductor', None) or {})
+                 .get('declarado_por_producto') or {})
     for pid, dec in decl_prod.items():
         medidas += 1
         lns = [l for l in devolucion.lineas if str(l.producto_id) == str(pid)]

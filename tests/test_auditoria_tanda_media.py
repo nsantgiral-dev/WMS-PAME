@@ -123,8 +123,16 @@ class TestEsperarNoGastaReintento:
         import pathlib
         fuente = (pathlib.Path(__file__).resolve().parents[1] / 'app' / 'services'
                   / 'siesa_job_service.py').read_text(encoding='utf-8')
-        i = fuente.find("if payload.get('depende_de_nc')")
-        assert 'raise DependenciaPendiente' in fuente[i:i + 500]
+        # Por AST y no por una ventana de 500 caracteres: el bloque creció
+        # (m045devol: el RC sale si la NC ya no va a llegar) y la ventana medía
+        # el largo del comentario, no la propiedad.
+        import ast
+        arbol = ast.parse(fuente)
+        bloques = [n for n in ast.walk(arbol) if isinstance(n, ast.If)
+                   and 'depende_de_nc' in ast.unparse(n.test)]
+        assert bloques, 'el RC dejó de mirar depende_de_nc'
+        assert any(isinstance(x, ast.Raise) and 'DependenciaPendiente' in ast.unparse(x)
+                   for b in bloques for x in ast.walk(b))
 
 
 # ── J · el guard anti-duplicado, revertido de remisión a pedido ──────────

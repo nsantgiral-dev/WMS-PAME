@@ -5328,7 +5328,8 @@ tiene que volver a entrar al inventario, sin cabos sueltos.* Migración
 el integrador re-encadena). Política en **`app/services/devolucion_ruta.py`**;
 cuenta y liberación en `devolucion_cliente_service`; verificación de la NC en
 `devolucion_nc_verificador`. Trinquete: `tests/test_devolucion_vuelve.py`
-(84 tests, **22 mutaciones, las 22 rojas**).
+(84 tests, **22 mutaciones, las 22 rojas**; corridas sobre una copia del
+worktree, verificando antes que el reemplazo aplicaba exactamente una vez).
 
 **La clase, no el caso:** *mercancía declarada de vuelta que ningún registro
 sigue hasta el inventario vendible*. Lo que había:
@@ -5417,6 +5418,14 @@ resincroniza la devolución con la corrección del líder si no se contó.
   no trae se ve recién ahí (aviso, y se cuenta en 0).
 - El conductor sigue sin mandar el `f470_rowid` por referencia: la doble unidad
   la resuelve recepción contando por línea.
+
+**Suite completa** (2026-09-24, este worktree, `-m "not postgres"`, TZ=UTC,
+máquina saturada): **8126 passed, 5 failed**, 5 skipped, 19 xfailed. Los 5
+eran de esta tanda y se arreglaron corriendo solo los afectados (el integrador
+corre la suite sobre lo integrado): la ventana de 500 caracteres de
+`test_auditoria_tanda_media` (ahora AST), dos `.query.get` nuevos en la
+auditoría (deuda legacy), `faltante_de_retorno` sobre un doble sin
+`declaracion_conductor`, y el registro de schedulers.
 
 ### Decisiones abiertas para el dueño
 

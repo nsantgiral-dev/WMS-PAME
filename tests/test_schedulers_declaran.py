@@ -62,6 +62,9 @@ REGISTRADOS = {
     'analitica_kpi': 'init_scheduler',
     # Re-evaluación de retenidos por cartera cada 30 min (m044cartera).
     'cartera_service': 'init_scheduler',
+    # Verificación de la NC de devoluciones (m045devol, 2026-09-24). Nace
+    # apagado por `DEVOLUCIONES_VERIFICAR_NC`; el interruptor vive en `correr`.
+    'devolucion_nc_verificador': 'init_scheduler',
 }
 
 #: Fuera de `app/services/`. El barrido de vencimientos de flota vivía sin
