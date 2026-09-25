@@ -42,12 +42,20 @@ jobs:
         with:
           node-version: '20'
 
-      - run: pip install -r requirements.txt
+      # pytest-xdist solo acá, no en requirements.txt: la imagen de producción no
+      # lo necesita.
+      - run: pip install -r requirements.txt pytest-xdist
 
-      # El mismo comando que corría el buildCommand. TZ=UTC como Railway: un test
-      # que arma fechas con date.today() tiene que romper acá igual que allá.
+      # El mismo comando que corría el buildCommand, repartido en los núcleos del
+      # runner (`-n auto`). Medido 2026-09-25: 1 proceso 19 min en el runner;
+      # en local, 12:22 → 3:43 con 4 procesos y la MISMA lista de fallos — ningún
+      # test depende del orden de los demás. Si alguno llega a depender, se
+      # arregla el test: correr en serie para taparlo es esconderlo.
+      #
+      # TZ=UTC como Railway: un test que arma fechas con date.today() tiene que
+      # romper acá igual que allá.
       - name: pytest
         env:
           TZ: UTC
           PYTHONUTF8: '1'
-        run: python -m pytest tests/ -x -q --tb=short -m "not postgres"
+        run: python -m pytest tests/ -x -q --tb=short -m "not postgres" -n auto
