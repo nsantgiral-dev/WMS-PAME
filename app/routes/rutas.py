@@ -1130,6 +1130,8 @@ def liquidacion_desglose():
         },
         'rezago_liquidacion': {
             'rutas_entregadas_sin_liquidar': len(sin_liquidar),
+            # Entregadas antes de FECHA_INICIO_AUDITORIA: fuera de la cuenta.
+            'antes_del_corte': _diag.get('antes_del_corte', 0),
             'atrasadas': len(_diag['atrasadas']),
             # La entrega ocurrió en un mes y el recaudo va a registrarse en
             # otro. Liquidar rápido ya no lo corrige — el período no se mueve.
@@ -1270,17 +1272,12 @@ def liquidacion_dashboard():
         recaudo_ids = [r.id for r in recaudos]
         jobs_fallidos = 0
         if recaudo_ids:
-            jobs_fallidos = (SiesaJob.query
-                             .filter(
-                                 SiesaJob.referencia_tipo == 'RecaudoEntrega',
-                                 SiesaJob.referencia_id.in_(recaudo_ids),
-                                 SiesaJob.tipo.in_([
-                                     'NOTA_CREDITO_FACTURA', 'RECIBO_CAJA',
-                                     'DOCUMENTO_CONTABLE_RET',
-                                 ]),
-                                 SiesaJob.estado == 'FALLIDO',
-                             )
-                             .count())
+            # Trabados de verdad (`fallidos_vigentes`): un FALLIDO superado
+            # por un reintento que entró ya no es un documento pendiente.
+            from app.services.siesa_job_service import fallidos_vigentes
+            jobs_fallidos = len(fallidos_vigentes(
+                tipos=('NOTA_CREDITO_FACTURA', 'RECIBO_CAJA', 'DOCUMENTO_CONTABLE_RET'),
+                referencia_tipo='RecaudoEntrega', referencia_ids=recaudo_ids)['jobs'])
 
         # Montos por forma de pago
         ruta_recaudado = 0

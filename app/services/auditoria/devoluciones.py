@@ -65,6 +65,7 @@ def no_se_devuelve_mas_de_lo_facturado(ctx=None):
     return [
         Hallazgo(
             referencia=f'devolucion#{ln.devolucion_id} / {ln.codigo_siesa}',
+            fecha=ln.fecha_creacion,
             detalle=f'devuelta {ln.cantidad_devuelta} > facturada '
                     f'{ln.cantidad_facturada}',
             datos={'producto_id': ln.producto_id},
@@ -91,6 +92,7 @@ def una_confirmada_tiene_su_nota_credito(ctx=None):
     return [
         Hallazgo(
             referencia=d.codigo or f'devolucion#{d.id}',
+            fecha=d.fecha_creacion,
             detalle=f'CONFIRMADA sin nota crédito disparada · cliente '
                     f'{d.cliente or "?"} · FE {d.tipo_docto_fe}-{d.consec_fe}',
             datos={'total': d.es_total},
@@ -113,6 +115,7 @@ def una_cancelada_no_dejo_nota_credito(ctx=None):
     return [
         Hallazgo(
             referencia=d.codigo or f'devolucion#{d.id}',
+            fecha=d.fecha_creacion,
             detalle=f'CANCELADA pero la NC ya salió'
                     + (f' (NCE-{d.siesa_nc_consec})' if d.siesa_nc_consec else ''),
             datos={'cliente': d.cliente},

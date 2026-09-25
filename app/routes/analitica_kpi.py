@@ -76,7 +76,16 @@ def _meta(desde, hasta, almacen_id):
             'hasta': hasta.isoformat() if hasta else None,
             'almacen_id': almacen_id,
             'calculado_en': datetime.utcnow().isoformat(),
-            'fuentes': {'kpi_diario': kpi.estado()}}
+            'fuentes': {'kpi_diario': kpi.estado()},
+            # FECHA_INICIO_AUDITORIA: los días anteriores se muestran marcados
+            # (`antes_del_corte`) y no entran al período ni a la alerta.
+            'corte': _estado_corte(),
+            'metricas_sin_corte': sorted(kpi.METRICAS_SIN_CORTE)}
+
+
+def _estado_corte():
+    from app.services import corte
+    return corte.estado()
 
 
 @analitica_kpi_bp.route('/metricas', methods=['GET'])

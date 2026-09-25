@@ -93,6 +93,11 @@ def _debia_cobrarse(recaudo, tarea, connekta=None) -> bool:
         return False
     if _cp.credito_autorizado(recaudo):
         return False
+    # Una parada anterior a la regla de contado se juzga con la de entonces:
+    # si esa regla la dejaba como crédito, nadie esperaba plata de ella.
+    if (_cp.anterior_a_la_regla(recaudo)
+            and _cp.trato_de_cobro(recaudo, tarea) == _cp.TRATO_CREDITO):
+        return False
     return _cp.cobro_de_recaudo(recaudo, tarea)['cobrar']
 
 

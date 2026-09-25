@@ -249,7 +249,7 @@ def modo_pantalla(se_cobra_en_puerta, hay_valor_conocido: bool) -> str:
 
 import json as _json
 import os as _os
-from datetime import date as _date, datetime as _datetime, timedelta as _timedelta
+from datetime import date as _date, datetime as _datetime, timedelta as _timedelta, timezone as _timezone
 
 #: Umbral por defecto: hasta 15 días inclusive es contado contraentrega.
 UMBRAL_DEFECTO = 15
@@ -559,6 +559,54 @@ def credito_autorizado(recaudo) -> bool:
     return getattr(recaudo, 'credito_autorizado_en', None) is not None
 
 
+#: Desde cuándo rige la regla ≤ 15 días: el commit d5010187 (m043contado).
+#: Es la fecha MÁS TEMPRANA posible del despliegue: ninguna parada confirmada
+#: antes pudo pasar por la guarda nueva ni congelar su clasificación. Una
+#: confirmada entre este instante y el despliegue real se juzga con la regla
+#: nueva (se muestra de más, no de menos — Regla 0).
+REGLA_CONTADO_DESDE = '2026-09-24T17:35:31-05:00'
+
+
+def regla_contado_desde():
+    """`REGLA_CONTADO_DESDE` en UTC naive (el marco de `fecha_confirmacion`)."""
+    return (_datetime.fromisoformat(REGLA_CONTADO_DESDE)
+            .astimezone(_timezone.utc).replace(tzinfo=None))
+
+
+def anterior_a_la_regla(recaudo) -> bool:
+    """¿Se confirmó antes de que existiera la regla de contado?
+
+    Sí solo si **no tiene snapshot** (`cobro_contraentrega` NULL: la regla
+    nueva lo congela al confirmar sobre una clasificación leída) **y** su
+    `fecha_confirmacion` es anterior a `REGLA_CONTADO_DESDE`. Sin fecha → no
+    (no saber cuándo no la vuelve vieja). La regla no es retroactiva: a esas
+    paradas se les aplica la de antes (`regla_anterior_rechaza_credito`)."""
+    if getattr(recaudo, 'cobro_contraentrega', None) is not None:
+        return False
+    cuando = getattr(recaudo, 'fecha_confirmacion', None)
+    if not isinstance(cuando, _datetime):
+        return False
+    if cuando.tzinfo is not None:
+        cuando = cuando.astimezone(_timezone.utc).replace(tzinfo=None)
+    return cuando < regla_contado_desde()
+
+
+def _trato_regla_anterior(recaudo, tarea) -> str:
+    """El trato de una parada anterior a la regla: la regla de ENTONCES.
+    Solo es no autorizado lo que esa regla ya rechazaba (CREDITO sobre el
+    código de contado o de ruta); lo demás que no trajo plata es crédito, y un
+    ENTREGADO con forma que cobra y $0 es contado sin recibo (como era)."""
+    from app.services.connekta_gateway import connekta
+    fp = _norm(getattr(recaudo, 'forma_pago', None))
+    if not forma_no_cobra(fp):
+        return TRATO_CONTADO
+    tarea = tarea if tarea is not None else getattr(recaudo, 'tarea', None)
+    if regla_anterior_rechaza_credito(fp, codigo_vigente(tarea),
+                                      connekta.cond_pago_ventas, connekta.cond_pago_ruta):
+        return TRATO_NO_AUTORIZADO
+    return TRATO_CREDITO
+
+
 #: Cómo trata la liquidación una parada entregada. Una función, no un
 #: `forma_pago == 'CREDITO'` en cada sitio.
 TRATO_CONTADO = 'CONTADO'                  # entró plata: RC (y DC si hay retención)
@@ -578,6 +626,10 @@ def trato_de_cobro(recaudo, tarea=None) -> str:
     · PARCIAL contado con forma que cobra y $0 → CONTADO (no hay RC que
       mandar; la NC de lo devuelto sigue su camino) — la guarda del servidor
       ya exige monto > 0 en un parcial.
+    · **No es retroactiva**: una parada confirmada antes de la regla
+      (`anterior_a_la_regla`) se juzga con la regla de entonces
+      (`_trato_regla_anterior`). Sin esto, cada crédito viejo aparecía como
+      no autorizado y trababa la liquidación de rutas ya cerradas.
     """
     from app.models.recaudo_entrega import EstadoEntrega
     fp = _norm(getattr(recaudo, 'forma_pago', None))
@@ -586,6 +638,8 @@ def trato_de_cobro(recaudo, tarea=None) -> str:
         return TRATO_CONTADO
     if credito_autorizado(recaudo):
         return TRATO_CREDITO
+    if anterior_a_la_regla(recaudo):
+        return _trato_regla_anterior(recaudo, tarea)
     cobro = cobro_de_recaudo(recaudo, tarea)
     if not cobro['cobrar']:
         return TRATO_CREDITO

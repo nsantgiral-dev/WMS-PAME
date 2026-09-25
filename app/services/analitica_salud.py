@@ -726,11 +726,18 @@ def _resumen_de_flujo(flujo, rep):
                              if r['severidad'] == 'OBSERVA'),
         'errores': rep['errores'],
         'consultas_truncadas': rep['consultas_truncadas'],
+        # Contados, nunca en `bloqueantes`: lo anterior al corte y la huella de
+        # defectos ya corregidos (`auditoria.base._clasificar`).
+        'antes_del_corte': rep.get('antes_del_corte', 0),
+        'artefactos': [dict(r['artefacto'], codigo=r['codigo'])
+                       for r in rep['resultados']
+                       if r.get('artefacto') and r['artefacto']['casos']],
         'peores': [{
             'codigo': r['codigo'], 'severidad': r['severidad'], 'frontera': r['frontera'],
             'consecuencia': r['consecuencia'], 'total': r['total'],
             'error': r['error'],
             'ejemplos': [h['referencia'] for h in r['hallazgos'][:3]],
+            'antes_del_corte': r.get('antes_del_corte', 0),
         } for r in rot[:5]],
     }
 
@@ -779,8 +786,12 @@ def resumen_auditoria(ahora_utc=None, forzar=False, reloj=_time_mod.monotonic):
         nivel = ADVERTENCIA
     else:
         nivel = OK
+    from app.services import corte as _corte
     res = {
         'por_flujo': por_flujo,
+        'antes_del_corte': sum(x.get('antes_del_corte', 0) for x in por_flujo),
+        'artefactos': [a for x in por_flujo for a in x.get('artefactos', [])],
+        'corte': _corte.estado(),
         'flujos_no_evaluados': no_evaluados,
         'bloqueantes': bloq,
         'avisos': avisos,
@@ -811,16 +822,32 @@ def _tope():
 # Cola de Siesa
 # ──────────────────────────────────────────────────────────────────────────────
 
+def _estado_corte():
+    from app.services import corte
+    return corte.estado()
+
+
 def cola_siesa(ahora_utc):
+    """La cola de Siesa. Lo trabado sale de `siesa_job_service.fallidos_vigentes`
+    (la única que lo cuenta): un FALLIDO superado por un COMPLETADO posterior o
+    cerrado por la reconciliación ya no está trabado. Desde el corte
+    (`FECHA_INICIO_AUDITORIA`); lo anterior se cuenta aparte.
+
+    **Solo los recientes (último intento en 7 días) ponen CRÍTICO.** Uno viejo
+    sigue siendo un documento que no llegó, pero su arreglo no es de hoy: sale
+    como ADVERTENCIA con su edad, para que el rojo del día no lo gaste un
+    ensayo de hace meses."""
     from sqlalchemy import func
     from app.models.siesa_job import EstadoSiesaJob as E, SiesaJob
+    from app.services import corte as _corte
+    from app.services.siesa_job_service import fallidos_vigentes
+    corte = _corte.inicio_auditoria()
     try:
         por_estado = dict(db.session.query(SiesaJob.estado, func.count(SiesaJob.id))
                           .group_by(SiesaJob.estado).all())
-        fallidos_tipo = (db.session.query(SiesaJob.tipo, func.count(SiesaJob.id),
-                                          func.min(SiesaJob.fecha_creacion))
-                         .filter(SiesaJob.estado == E.FALLIDO)
-                         .group_by(SiesaJob.tipo).all())
+        trabados = fallidos_vigentes(desde=corte, ahora=ahora_utc)
+        antes = (len(fallidos_vigentes(hasta=corte, ahora=ahora_utc)['jobs'])
+                 if corte is not None else 0)
         vivos = (E.PENDIENTE, E.REINTENTANDO, E.PROCESANDO)
         mas_viejo = (db.session.query(func.min(SiesaJob.fecha_creacion))
                      .filter(SiesaJob.estado.in_(vivos)).scalar())
@@ -830,15 +857,25 @@ def cola_siesa(ahora_utc):
     except Exception as e:                                    # noqa: BLE001
         return {'error': str(e)[:200], 'nivel': ADVERTENCIA,
                 'texto': 'No se pudo leer la cola de Siesa.'}
-    fallidos = int(por_estado.get(E.FALLIDO, 0))
+    recientes, viejos = len(trabados['recientes']), len(trabados['viejos'])
+    fallidos = recientes + viejos
+    edad_max = max((t['edad_dias_max'] or 0 for t in trabados['por_tipo']), default=None)
     pendientes = sum(int(por_estado.get(x, 0)) for x in vivos)
     edad = tiempo_operativo(mas_viejo, ahora_utc) if mas_viejo else None
     atascada = edad is not None and edad > TOLERANCIA_JOB_PENDIENTE
-    if fallidos:
+    ventana = trabados['ventana_reciente_dias']
+    if recientes:
         nivel = CRITICO
-        texto = (f'{fallidos} envío(s) a Siesa en FALLIDO: documentos (factura, '
-                 'recibo, ajuste…) que el WMS dejó de intentar.')
+        texto = (f'{recientes} envío(s) a Siesa trabados en los últimos {ventana} días: '
+                 'documentos (factura, recibo, ajuste…) que el WMS dejó de intentar'
+                 + (f'; y {viejos} más viejos.' if viejos else '.'))
         que = 'Revisar y reintentar o descartar desde el panel de la DLQ.'
+    elif viejos:
+        nivel = ADVERTENCIA
+        texto = (f'{viejos} envío(s) a Siesa trabados desde hace más de {ventana} días '
+                 f'(el más viejo, {edad_max} días). Ninguno de esta semana.')
+        que = ('Decidir si se reintentan o se descartan (con motivo) en el panel de '
+               'la DLQ: descartar no reenvía nada.')
     elif colgados or atascada:
         nivel = ADVERTENCIA
         texto = (f'{pendientes} envío(s) pendientes; el más viejo lleva '
@@ -847,23 +884,37 @@ def cola_siesa(ahora_utc):
         que = 'Verificar que la DLQ corra en la web ([DLQ_SCHEDULER]) y que Siesa responda.'
     else:
         nivel = OK
-        texto = (f'{pendientes} envío(s) en cola, ninguno fallido.' if pendientes
-                 else 'Cola de Siesa vacía, ninguno fallido.')
+        texto = (f'{pendientes} envío(s) en cola, ninguno trabado.' if pendientes
+                 else 'Cola de Siesa vacía, ninguno trabado.')
         que = None
+    if nivel == OK and (trabados['superados'] or antes):
+        texto += ' ' + ', '.join(filter(None, (
+            f'{trabados["superados"]} fallido(s) ya superados por un envío posterior'
+            if trabados['superados'] else None,
+            f'{antes} anterior(es) al corte' if antes else None))) + ' (no cuentan).'
     return {
         'fallidos': fallidos,
+        'fallidos_recientes': recientes,
+        'fallidos_viejos': viejos,
+        'fallidos_superados': trabados['superados'],
+        'fallidos_antes_del_corte': antes,
+        'ventana_reciente_dias': ventana,
+        'edad_de': trabados['edad_de'],
         'pendientes': pendientes,
         'colgados_procesando': colgados,
         'pendiente_mas_viejo_utc': _iso(mas_viejo),
         'edad_operativa_min': int(edad.total_seconds() // 60) if edad is not None else None,
         'por_estado': {k: int(v) for k, v in por_estado.items()},
-        'fallidos_por_tipo': [{'tipo': t, 'n': int(n), 'desde_utc': _iso(d)}
-                              for t, n, d in sorted(fallidos_tipo, key=lambda x: -x[1])],
+        'fallidos_por_tipo': [{'tipo': t['tipo'], 'n': t['n'], 'recientes': t['recientes'],
+                               'viejos': t['viejos'], 'desde_utc': t['desde_utc'],
+                               'edad_dias': t['edad_dias_max']}
+                              for t in trabados['por_tipo']],
         'nivel': nivel,
         'texto': texto,
         'que_hacer': que,
         'tolerancias': {'pendiente_min': int(TOLERANCIA_JOB_PENDIENTE.total_seconds() // 60),
-                        'procesando_min': int(TOLERANCIA_JOB_PROCESANDO.total_seconds() // 60)},
+                        'procesando_min': int(TOLERANCIA_JOB_PROCESANDO.total_seconds() // 60),
+                        'fallido_reciente_dias': ventana},
     }
 
 
@@ -878,8 +929,13 @@ def cobertura_claves(desde, hasta, almacen_id=None):
     from sqlalchemy import func
     from app.models.packing import TareaPacking
     from app.models.picking import TareaPicking
+    from app.services import corte as _corte
     from app.services.cadena_pedido import TIPOS_DE_PEDIDO
     ini, fin = rango_dia_operativo_utc(desde, hasta)
+    # Desde el corte: una tarea del ensayo sin clave no mide la cadena de hoy.
+    corte_utc = _corte.inicio_auditoria()
+    if corte_utc is not None and corte_utc > ini:
+        ini = corte_utc
     out = {}
     for clave, M in (('picking', TareaPicking), ('packing', TareaPacking)):
         q = (db.session.query(func.count(M.id), func.count(M.pedido_clave))
@@ -1006,6 +1062,9 @@ def salud_del_dato(desde, hasta, almacen_id=None, ahora_utc=None):
             'almacen_id': almacen_id,
             'calculado_en': ahora_utc.isoformat(),
             'hoy_bogota': dia_operativo_de(ahora_utc).isoformat(),
+            # FECHA_INICIO_AUDITORIA: desde cuándo cuenta lo que se ve. Sin
+            # variable, «sin corte» también se declara.
+            'corte': _estado_corte(),
             'respeta_filtros': {
                 'rango': ['cobertura_claves'],
                 'almacen': ['cobertura_claves', 'stock_siesa'],
@@ -1208,12 +1267,22 @@ def patrones_bitacora(desde, hasta, almacen_id=None, accion=None, entidad=None,
                       usuario_id=None):
     """Por persona, por acción, por entidad y por hora del día (Bogotá), cada
     uno con su `n`. `opciones` se calcula solo con rango y almacén, para que
-    los selectores no se encojan al filtrar."""
+    los selectores no se encojan al filtrar.
+
+    Desde el corte (`FECHA_INICIO_AUDITORIA`): las acciones del ensayo no
+    hacen patrón de nadie. Se cuentan en `antes_del_corte`; la lista de la
+    bitácora (`/bitacora`) sigue mostrando todo, es el registro."""
     from sqlalchemy import func
     from app.models.bitacora import BitacoraAccion as B
     from app.models.usuario import Usuario
+    from app.services import corte as _corte
     from app.services.bitacora import ACCIONES
 
+    pedido_desde = desde
+    desde, hasta, info_corte = _corte.recortar_rango(desde, hasta)
+    antes_del_corte = (_query_bitacora(*info_corte['antes'], almacen_id, accion, entidad,
+                                       usuario_id).count()
+                       if info_corte['aplicado'] else 0)
     base = _query_bitacora(desde, hasta, almacen_id)
     filtrada = _query_bitacora(desde, hasta, almacen_id, accion, entidad, usuario_id)
 
@@ -1273,8 +1342,11 @@ def patrones_bitacora(desde, hasta, almacen_id=None, accion=None, entidad=None,
         'por_hora_n': min(len(momentos), BITACORA_TOPE_HORAS),
         'opciones': opciones,
         'tope': {'filas_por_hora': BITACORA_TOPE_HORAS, 'truncado': truncado},
+        'antes_del_corte': antes_del_corte,
         'meta': {
-            'desde': desde.isoformat(), 'hasta': hasta.isoformat(),
+            'desde': pedido_desde.isoformat(), 'hasta': hasta.isoformat(),
+            'desde_efectivo': desde.isoformat(),
+            'corte': _estado_corte(),
             'almacen_id': almacen_id, 'accion': accion, 'entidad': entidad,
             'usuario_id': usuario_id,
             'calculado_en': datetime.utcnow().isoformat(),

@@ -31,6 +31,15 @@ from app.services.auditoria.base import _AUDITORIA_TRUNCADA,  AVISA, BLOQUEA, OB
 _TERMINALES = ('ENTREGADA', 'RECHAZADA', 'CANCELADA', 'REVERTIDA')
 
 
+def _mas_nueva(fechas):
+    """La fecha del miembro más nuevo de un hallazgo agregado. Si alguno no
+    tiene fecha, `None`: el agregado cuenta como vigente (Regla 0)."""
+    fechas = list(fechas)
+    if not fechas or any(f is None for f in fechas):
+        return None
+    return max(fechas)
+
+
 def _solicitudes(estados=None, limite=1000):
     """Las solicitudes a auditar, **las más recientes primero**.
 
@@ -70,6 +79,9 @@ def _solicitudes(estados=None, limite=1000):
     # invariante venía reportando y que alguien tiene que corregir con el
     # conteo físico en la mano.
     detector_ciego='tests/flujo/test_flujo_traslados.py::TestElDetectorNoEstaCiego::test_la_base_impide_enviar_mas_de_lo_aprobado',
+    # Las filas anteriores al CHECK de m013 son las únicas que pueden violarlo:
+    # huella del defecto, no un error de hoy.
+    defecto_corregido=('d5e78970', '2026-08-20T06:57:39-05:00'),
 )
 def las_cantidades_solo_bajan(ctx=None):
     """`solicitada ≥ aprobada ≥ enviada ≥ recibida`.
@@ -96,6 +108,7 @@ def las_cantidades_solo_bajan(ctx=None):
                                f'{it.producto_codigo_siesa or it.producto_id}',
                     detalle=f'{n2}={v2} supera {n1}={v1}',
                     datos={'solicitud_id': it.solicitud_id},
+                    fecha=it.solicitud.fecha_creacion if it.solicitud else None,
                 ))
                 break
     return out
@@ -118,6 +131,7 @@ def todo_despacho_tiene_su_salida_en_siesa(ctx=None):
     return [
         Hallazgo(
             referencia=s.codigo or f'traslado#{s.id}',
+            fecha=s.fecha_creacion,
             detalle=f'estado {s.estado} sin consecutivo de salida en Siesa'
                     + (f' · error: {s.siesa_error[:120]}' if s.siesa_error else ''),
             datos={'modo': s.modo_transferencia, 'origen': s.bodega_origen_siesa},
@@ -150,6 +164,7 @@ def nada_se_queda_en_la_bodega_puente(ctx=None):
     return [
         Hallazgo(
             referencia=s.codigo or f'traslado#{s.id}',
+            fecha=s.fecha_creacion,
             detalle=f'ENTREGADA sin entrada en Siesa — el stock quedó en '
                     f'{s.bodega_transito_siesa or "la bodega de tránsito"}',
             datos={'destino': s.bodega_destino_siesa,
@@ -200,6 +215,9 @@ def un_error_de_siesa_no_se_queda_callado(ctx=None):
             detalle=firma,
             datos={'codigos': [x.codigo for x in ss[:15]],
                    'estados': sorted({x.estado for x in ss})},
+            # Agregado: vigente si ALGUNO de sus miembros lo es (la fecha del
+            # más nuevo). Mostrar de más, no de menos.
+            fecha=_mas_nueva(x.fecha_creacion for x in ss),
         )
         for firma, ss in sorted(grupos.items(), key=lambda kv: -len(kv[1]))
     ]
@@ -222,6 +240,7 @@ def una_cancelada_no_movio_inventario(ctx=None):
     return [
         Hallazgo(
             referencia=s.codigo or f'traslado#{s.id}',
+            fecha=s.fecha_creacion,
             detalle=f'{s.estado} pero tiene salida en Siesa '
                     f'({s.siesa_salida_consec})',
             datos={'entrada': s.siesa_entrada_consec},
@@ -244,6 +263,7 @@ def no_hay_entrada_sin_salida(ctx=None):
     return [
         Hallazgo(
             referencia=s.codigo or f'traslado#{s.id}',
+            fecha=s.fecha_creacion,
             detalle=f'entrada {s.siesa_entrada_consec} sin salida previa',
             datos={'estado': s.estado},
         )
@@ -294,16 +314,18 @@ def se_pueden_contar_los_traslados_en_vuelo(ctx=None):
     from app.utils.fecha import ahora_bogota, dia_operativo_de
     hoy = ahora_bogota().date()
     out = []
-    sin_fecha = []
+    sin_fecha, nacidos = [], []
     for s in _solicitudes(('EN_TRANSITO',)):
         if not s.fecha_despacho:
             sin_fecha.append(s.codigo or f'traslado#{s.id}')
+            nacidos.append(s.fecha_creacion)
             continue
         dias = (hoy - dia_operativo_de(s.fecha_despacho)).days
         if dias < DIAS_EN_TRANSITO_ANORMAL:
             continue
         out.append(Hallazgo(
             referencia=s.codigo or f'traslado#{s.id}',
+            fecha=s.fecha_creacion,
             detalle=f'{dias} día(s) en tránsito',
             datos={'origen': s.bodega_origen_siesa,
                    'destino': s.bodega_destino_siesa,
@@ -317,6 +339,7 @@ def se_pueden_contar_los_traslados_en_vuelo(ctx=None):
                      f'Causa conocida —el despacho por cierre de packing no la '
                      f'escribía hasta el 2026-09-16— y sin arreglo retroactivo.'),
             datos={'codigos': sin_fecha[:20], 'total': len(sin_fecha)},
+            fecha=_mas_nueva(nacidos),
         ))
     return out
 
@@ -383,6 +406,7 @@ def toda_averia_recibida_termina_dictaminada(ctx=None):
             continue
         dias = (hoy - dia_operativo_de(s.fecha_entrega)).days if s.fecha_entrega else None
         pendientes.append({
+            '_nacio': s.fecha_creacion,
             'codigo': s.codigo or f'traslado#{s.id}',
             'origen': s.bodega_origen_siesa,
             'destino': s.bodega_destino_siesa,
@@ -392,6 +416,7 @@ def toda_averia_recibida_termina_dictaminada(ctx=None):
     if not pendientes:
         return []
 
+    nacidos = [p.pop('_nacio') for p in pendientes]
     _con_dias = [p['dias_desde_entrega'] for p in pendientes
                  if p['dias_desde_entrega'] is not None]
     _viejo = max(_con_dias) if _con_dias else None
@@ -404,4 +429,5 @@ def toda_averia_recibida_termina_dictaminada(ctx=None):
             + '. Hasta que alguien decida, esas unidades cuentan como vendibles.'),
         datos={'total': len(pendientes), 'pendientes': pendientes[:20],
                'dias_mas_viejo': _viejo},
+        fecha=_mas_nueva(nacidos),
     )]

@@ -91,13 +91,7 @@ def urgencia(ruta, hoy=None):
     return ATRASADA if (hoy - ref).days >= 1 else OK
 
 
-def rutas_entregadas_sin_liquidar():
-    """Las rutas entregadas cuyo cierre financiero no ocurrió.
-
-    Vive acá y no repetida en el endpoint y en el cron: si las dos consultas
-    divergieran, la alerta avisaría de un universo y el tablero mostraría otro
-    — y el que manda el correo es el que nadie está mirando.
-    """
+def _todas_entregadas_sin_liquidar():
     from app.models.ruta_despacho import EstadoFinancieroRuta, RutaDespacho
     return (RutaDespacho.query
             .filter(RutaDespacho.estado == 'ENTREGADA')
@@ -105,12 +99,33 @@ def rutas_entregadas_sin_liquidar():
             .all())
 
 
+def separar_por_corte(rutas):
+    """`(vigentes, anteriores)`: entregadas antes del corte
+    (`FECHA_INICIO_AUDITORIA`, por `fecha_de_referencia`) van aparte. Una ruta
+    sin fecha es vigente (Regla 0: no saber cuándo no la vuelve vieja)."""
+    from app.services import corte
+    return corte.separar(rutas, fecha_de_referencia)
+
+
+def rutas_entregadas_sin_liquidar():
+    """Las rutas entregadas cuyo cierre financiero no ocurrió, **desde el
+    corte**. Las anteriores (el ensayo) no se esconden: `diagnostico` las
+    cuenta en `antes_del_corte`, pero no entran a la alerta ni a la fuga.
+
+    Vive acá y no repetida en el endpoint y en el cron: si las dos consultas
+    divergieran, la alerta avisaría de un universo y el tablero mostraría otro
+    — y el que manda el correo es el que nadie está mirando.
+    """
+    return separar_por_corte(_todas_entregadas_sin_liquidar())[0]
+
+
 def diagnostico(hoy=None):
     """`{rutas, atrasadas, cruzan_mes, dias:[...]}` — lo que leen el desglose y
     el cron, calculado una sola vez y de una sola forma."""
     hoy = hoy or ahora_bogota().date()
     filas, dias = [], []
-    for ruta in rutas_entregadas_sin_liquidar():
+    vigentes, anteriores = separar_por_corte(_todas_entregadas_sin_liquidar())
+    for ruta in vigentes:
         d = dias_de_rezago(ruta, hoy)
         if d is not None:
             dias.append(d)
@@ -125,6 +140,8 @@ def diagnostico(hoy=None):
         'atrasadas': [f for f in filas if f['urgencia'] == ATRASADA],
         'cruzan_mes': [f for f in filas if f['urgencia'] == CRUZA_MES],
         'dias': dias,
+        # Contadas, fuera de la alerta: entregadas antes de FECHA_INICIO_AUDITORIA.
+        'antes_del_corte': len(anteriores),
     }
 
 
@@ -155,9 +172,14 @@ def rutas_sin_liquidar_al_cierre(dia):
     primera = db.session.query(func.min(RutaDespacho.liquidada_en)).scalar()
     registro_desde = dia_operativo_de(primera) if primera else None
 
-    filas, desconocidas = [], 0
+    from app.services import corte
+    corte_utc = corte.inicio_auditoria()
+    filas, desconocidas, antes_del_corte = [], 0, 0
     for ruta in RutaDespacho.query.filter(RutaDespacho.estado == 'ENTREGADA').all():
         ref = fecha_de_referencia(ruta)
+        if corte.es_anterior(ref, corte_utc):
+            antes_del_corte += 1          # del ensayo: se cuenta, no sube el nivel
+            continue
         if ref is not None and ref > dia:
             continue                      # se entregó después de ese día
         if ref is None and (ruta.fecha_creacion is None or ruta.fecha_creacion >= fin):
@@ -176,4 +198,5 @@ def rutas_sin_liquidar_al_cierre(dia):
     atrasadas = sum(1 for f in filas if f['urgencia'] == ATRASADA)
     cruzan = sum(1 for f in filas if f['urgencia'] == CRUZA_MES)
     return {'rutas': filas, 'con_rezago': atrasadas + cruzan, 'atrasadas': atrasadas,
-            'cruzan_mes': cruzan, 'desconocidas': desconocidas}
+            'cruzan_mes': cruzan, 'desconocidas': desconocidas,
+            'antes_del_corte': antes_del_corte}

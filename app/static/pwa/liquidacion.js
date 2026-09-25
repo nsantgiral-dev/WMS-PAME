@@ -54,9 +54,22 @@ function liqSubtab(sec) {
   else if (sec === 'jobs') liqCargarJobs();
 }
 
+/** Día operativo de Bogotá (`YYYY-MM-DD`). `toISOString()` es el día UTC:
+ *  entre las 7 p. m. y la medianoche daba mañana, y el filtro por defecto
+ *  mostraba un día vacío en pleno cierre de rutas (Regla 5). */
+function liqHoyBogota(fecha) {
+  const d = fecha || new Date();
+  try {
+    return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Bogota',
+      year: 'numeric', month: '2-digit', day: '2-digit' }).format(d);
+  } catch (_) {
+    return new Date(d.getTime() - 5 * 3600 * 1000).toISOString().slice(0, 10);
+  }
+}
+
 /** Set today's date range as default and load the liquidacion dashboard. */
 async function cargarLiquidacion() {
-  const hoy = new Date().toISOString().split('T')[0];
+  const hoy = liqHoyBogota();
   const desde = document.getElementById('liq-fecha-desde');
   const hasta = document.getElementById('liq-fecha-hasta');
   if (desde && !desde.value) desde.value = hoy;
@@ -115,18 +128,21 @@ async function liqCargarDesglose() {
         <span class="badge ${z.rutas_entregadas_sin_liquidar ? 'badge-yellow' : 'badge-green'}">${esc(z.rutas_entregadas_sin_liquidar)}</span></div>
       <div class="tabla-fila"><span class="tabla-nombre">Días máximo</span><span>${z.dias_max ?? '—'}</span></div>
       <div class="tabla-fila"><span class="tabla-nombre">Días promedio</span><span>${z.dias_promedio ?? '—'}</span></div>
+      ${z.antes_del_corte ? `<div class="tabla-fila"><span class="tabla-nombre">Anteriores al corte (no cuentan)</span><span>${esc(z.antes_del_corte)}</span></div>` : ''}
       <p style="font-size:var(--fs-xs);color:var(--tx3);margin:8px 0 0;">${esc(z.nota || '')}</p>
     </div>
     <div class="tabla-card" style="margin-top:12px;">
       <div class="tabla-titulo">Facturas emitidas como contado por dato faltante</div>
-      <div class="tabla-fila"><span class="tabla-nombre">Veces</span>
-        <span class="badge ${c.alertas ? 'badge-red' : 'badge-green'}">${esc(c.alertas)}</span></div>
+      <div class="tabla-fila"><span class="tabla-nombre">A revisar en Siesa</span>
+        <span class="badge ${c.a_revisar_en_siesa ? 'badge-red' : 'badge-green'}">${esc(c.a_revisar_en_siesa ?? '—')}</span></div>
+      <div class="tabla-fila"><span class="tabla-nombre">Pedidos sin condición (hoy salen con la de ruta)</span>
+        <span>${esc(c.alertas ?? '—')}</span></div>
       <p style="font-size:var(--fs-xs);color:var(--tx3);margin:8px 0 0;">${esc(c.nota || '')}</p>
     </div>`;
 }
 
 async function liqCargarDashboard() {
-  const hoy = new Date().toISOString().split('T')[0];
+  const hoy = liqHoyBogota();
   const desde = document.getElementById('liq-fecha-desde')?.value || hoy;
   const hasta = document.getElementById('liq-fecha-hasta')?.value || hoy;
   try {

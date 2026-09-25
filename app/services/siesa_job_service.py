@@ -2058,8 +2058,150 @@ def _crear_alerta_admin(job: SiesaJob):
 
 
 def get_jobs_fallidos():
-    """Para el dashboard del admin."""
+    """Todos los FALLIDO, para ACTUAR sobre ellos (reintentar, descartar). Para
+    CONTAR cuántos documentos siguen trabados: `fallidos_vigentes`."""
     return SiesaJob.query.filter_by(estado=EstadoSiesaJob.FALLIDO).order_by(SiesaJob.fecha_creacion.desc()).all()
+
+
+#: Un FALLIDO de hace más de esto se muestra con su edad y no pone CRÍTICO: el
+#: rojo es para lo que falló esta semana, que todavía tiene arreglo barato.
+DIAS_FALLIDO_RECIENTE = 7
+
+#: Jobs que no son documentos de Siesa: no cuentan como «documento trabado».
+TIPOS_SIN_DOCUMENTO = ('ALERTA_EMAIL',)
+
+
+def momento_del_fallo(job):
+    """Cuándo falló, lo mejor que se sabe: el último intento
+    (`fecha_procesando`) o, si nunca entró a PROCESANDO, su creación.
+    `siesa_jobs` no guarda «falló el…» — se declara en `fallidos_vigentes`."""
+    return job.fecha_procesando or job.fecha_creacion
+
+
+def fallidos_vigentes(desde=None, hasta=None, *, tipos=None,
+                      excluir_tipos=TIPOS_SIN_DOCUMENTO, referencia_tipo=None,
+                      referencia_ids=None, ahora=None) -> dict:
+    """Los jobs FALLIDO que **siguen** trabados. **La única** que los cuenta.
+
+    Un FALLIDO deja de estar trabado cuando:
+
+    · **lo superó un COMPLETADO posterior** del mismo tipo y referencia (un
+      reintento que se encoló como job nuevo y entró): el documento existe;
+    · **la reconciliación lo resolvió** — `ReconciliacionService` lo cierra
+      como COMPLETADO con `resultado.reconciliado` al encontrar la factura en
+      Siesa, así que ya no llega acá como FALLIDO.
+
+    `desde`/`hasta` (UTC naive) acotan por **creación** del job (la cohorte):
+    no hay columna «falló el…». Lo que queda se separa en **recientes**
+    (último intento dentro de `DIAS_FALLIDO_RECIENTE`) y **viejos**, con su
+    edad en días: solo los recientes ponen CRÍTICO en la salud.
+
+    Un FALLIDO sin referencia no puede estar superado: sigue contando
+    (`sin_referencia` lo dice). Devuelve `{'jobs', 'recientes', 'viejos',
+    'superados', 'sin_referencia', 'por_tipo', 'ventana_reciente_dias',
+    'edad_de'}`; `jobs` = recientes + viejos, más nuevos primero.
+
+    Trinquete: `tests/test_analitica_solo_lo_actual.py` — ningún otro sitio
+    consulta `estado == FALLIDO` para contar.
+    """
+    ahora = ahora or datetime.utcnow()
+    q = SiesaJob.query.filter(SiesaJob.estado == EstadoSiesaJob.FALLIDO)
+    if tipos:
+        q = q.filter(SiesaJob.tipo.in_(list(tipos)))
+    if excluir_tipos:
+        q = q.filter(SiesaJob.tipo.notin_(list(excluir_tipos)))
+    if referencia_tipo is not None:
+        q = q.filter(SiesaJob.referencia_tipo == referencia_tipo)
+    if referencia_ids is not None:
+        ids = list(referencia_ids)
+        if not ids:
+            q = q.filter(db.false())
+        else:
+            q = q.filter(SiesaJob.referencia_id.in_(ids))
+    if desde is not None:
+        q = q.filter(SiesaJob.fecha_creacion >= desde)
+    if hasta is not None:
+        q = q.filter(SiesaJob.fecha_creacion < hasta)
+    fallidos = q.order_by(SiesaJob.fecha_creacion.desc(), SiesaJob.id.desc()).all()
+
+    # El COMPLETADO más reciente (por id: la secuencia dice qué se escribió
+    # después) de cada tipo + referencia de los fallidos.
+    claves = {(j.tipo, j.referencia_tipo, j.referencia_id)
+              for j in fallidos if j.referencia_id is not None}
+    ultimo_ok = {}
+    if claves:
+        for tipo, rtipo, rid, jid in (
+                db.session.query(SiesaJob.tipo, SiesaJob.referencia_tipo,
+                                 SiesaJob.referencia_id, SiesaJob.id)
+                .filter(SiesaJob.estado == EstadoSiesaJob.COMPLETADO,
+                        SiesaJob.tipo.in_(sorted({c[0] for c in claves})),
+                        SiesaJob.referencia_id.in_(sorted({c[2] for c in claves})))
+                .all()):
+            k = (tipo, rtipo, rid)
+            if k in claves and jid > ultimo_ok.get(k, 0):
+                ultimo_ok[k] = jid
+
+    frontera = ahora - timedelta(days=DIAS_FALLIDO_RECIENTE)
+    recientes, viejos, superados, sin_ref = [], [], 0, 0
+    por_tipo = {}
+    for j in fallidos:
+        if j.referencia_id is None:
+            sin_ref += 1
+        elif ultimo_ok.get((j.tipo, j.referencia_tipo, j.referencia_id), 0) > j.id:
+            superados += 1
+            continue
+        cuando = momento_del_fallo(j)
+        reciente = cuando is None or cuando >= frontera   # sin fecha: reciente (Regla 0)
+        (recientes if reciente else viejos).append(j)
+        t = por_tipo.setdefault(j.tipo, {'tipo': j.tipo, 'n': 0, 'recientes': 0,
+                                         'viejos': 0, 'desde_utc': None,
+                                         'edad_dias_max': None})
+        t['n'] += 1
+        t['recientes' if reciente else 'viejos'] += 1
+        if cuando is not None:
+            if t['desde_utc'] is None or cuando.isoformat() < t['desde_utc']:
+                t['desde_utc'] = cuando.isoformat()
+            edad = (ahora - cuando).days
+            t['edad_dias_max'] = max(edad, t['edad_dias_max'] or 0)
+    return {
+        'jobs': recientes + viejos,
+        'recientes': recientes,
+        'viejos': viejos,
+        'superados': superados,
+        'sin_referencia': sin_ref,
+        'por_tipo': sorted(por_tipo.values(), key=lambda x: (-x['recientes'], -x['n'], x['tipo'])),
+        'ventana_reciente_dias': DIAS_FALLIDO_RECIENTE,
+        'edad_de': ('último intento (fecha_procesando) o, si nunca se procesó, la '
+                    'creación: siesa_jobs no guarda cuándo falló'),
+    }
+
+
+def descartar_job(job_id: int, *, usuario_id: int, motivo: str, origen: str = None) -> SiesaJob:
+    """Un humano decide que un job FALLIDO no se intenta más → DESCARTADO.
+
+    **Regla 3: descartar NO reenvía nada.** No toca el documento ni las
+    banderas de su referencia: si el POST pudo haber entrado a Siesa, sigue
+    pudiendo haber entrado — descartar solo dice «el WMS deja de contarlo como
+    trabado». Motivo obligatorio; queda en la bitácora (DESCARTAR) con el
+    error que se deja de mirar. No hace commit.
+    """
+    from app.services.bitacora import foto, motivo_obligatorio, registrar_accion
+    motivo = motivo_obligatorio(motivo, 'descartar un envío a Siesa')
+    job = db.session.get(SiesaJob, job_id)
+    if job is None:
+        raise LookupError(f'Job {job_id} no encontrado')
+    if job.estado != EstadoSiesaJob.FALLIDO:
+        raise ValueError(f'Solo se descarta un job FALLIDO — el {job_id} está {job.estado}')
+    registrar_accion(
+        'DESCARTAR', 'SiesaJob', job.id,
+        entidad_codigo=f'{job.tipo}#{job.id}',
+        usuario_id=usuario_id, motivo=motivo, origen=origen,
+        antes=foto(job, ['estado', 'intentos', 'error_ultimo',
+                         'referencia_tipo', 'referencia_id']),
+        despues={'estado': EstadoSiesaJob.DESCARTADO},
+    )
+    job.estado = EstadoSiesaJob.DESCARTADO
+    return job
 
 
 def reencolar_job_fallido(job: SiesaJob, *, usuario_id: int = None,

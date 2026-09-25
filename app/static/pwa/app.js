@@ -1109,6 +1109,14 @@ async function cargarDashboard() {
 
     set('kpi-conteos-desc', k.conteo.en_descuadre || 0);
 
+    // La edad de lo más viejo de cada cola: un número sin edad no distingue
+    // la cola de hoy de la del ensayo (el servidor ya cuenta desde el corte).
+    _dashEdad('kpi-pick-pend', k.picking);
+    _dashEdad('kpi-tras-activos', tras);
+    _dashEdad('kpi-rutas-activas', rutas);
+    _dashEdad('kpi-conteos-desc', k.conteo.en_descuadre_edad);
+    _dashEdad('kpi-definitivos', k.conteo.definitivos_edad);
+
     const nAud = d.auditorias_urgentes || 0;
     set('kpi-auditorias', nAud);
     const cardAud = document.getElementById('kpi-card-auditorias');
@@ -1129,10 +1137,18 @@ async function cargarDashboard() {
     _semaforo('sem-rutas',
       rutasActivas > 0 ? 'amarillo' : (rutas.entregadas_hoy > 0 ? 'verde' : 'gris'),
       rutasActivas + ' en marcha');
-    _semaforo('sem-conteos',
-      (k.conteo.en_descuadre > 0 || nDef > 0) ? 'rojo' : (k.conteo.pendientes > 0 ? 'verde' : 'gris'),
-      nDef > 0 ? nDef + ' definitivo(s) pendiente(s)'
-        : (k.conteo.en_descuadre > 0 ? k.conteo.en_descuadre + ' descuadres' : k.conteo.pendientes + ' pendientes'));
+    // El semáforo de conteo lo decide el servidor (`semaforo_de_conteo`:
+    // pendientes vivas contra el cupo diario). El respaldo es para un
+    // servidor viejo que todavía no lo manda.
+    const semC = k.conteo.semaforo;
+    if (semC && _DASH_COLORES.includes(semC.color)) {
+      _semaforo('sem-conteos', semC.color, semC.texto || '');
+    } else {
+      _semaforo('sem-conteos',
+        (k.conteo.en_descuadre > 0 || nDef > 0) ? 'rojo' : (k.conteo.pendientes > 0 ? 'verde' : 'gris'),
+        nDef > 0 ? nDef + ' definitivo(s) pendiente(s)'
+          : (k.conteo.en_descuadre > 0 ? k.conteo.en_descuadre + ' con diferencia' : k.conteo.pendientes + ' pendientes'));
+    }
     _semaforo('sem-recepciones',
       k.recepcion.confirmadas_hoy > 0 ? 'verde' : 'gris',
       k.recepcion.confirmadas_hoy + ' hoy');
@@ -1212,6 +1228,28 @@ async function cargarDashboard() {
  * @param {string} color - Status color key (verde, amarillo, rojo, gris).
  * @param {string} texto - Label text to display.
  */
+const _DASH_COLORES = ['rojo', 'amarillo', 'verde', 'gris'];
+
+/** «lo más viejo: 3 h» / «lo más viejo: 4 días» — vacío si no hay nada en cola. */
+function _dashEdadTexto(b) {
+  if (!b || b.edad_horas == null) return '';
+  const h = Number(b.edad_horas);
+  return h < 48 ? `lo más viejo: ${Math.round(h)} h` : `lo más viejo: ${Math.round(h / 24)} días`;
+}
+
+/** Pone la edad de la cola bajo el valor de su tarjeta (crea la línea si no existe). */
+function _dashEdad(idValor, bloque) {
+  const v = document.getElementById(idValor);
+  if (!v || !v.parentElement) return;
+  let sub = v.parentElement.querySelector('.kpi-edad');
+  if (!sub) {
+    sub = document.createElement('div');
+    sub.className = 'kpi-sub kpi-edad';
+    v.parentElement.appendChild(sub);
+  }
+  sub.textContent = _dashEdadTexto(bloque);
+}
+
 function _semaforo(id, color, texto) {
   const el = document.getElementById(id);
   if (!el) return;
@@ -3556,12 +3594,16 @@ async function siesaRecuperacionCargar() {
       ${bloque('Fallidos', fallidos, d => {
         const js = d.jobs || [];
         if (!js.length) return '<div class="tabla-fila"><span class="tabla-nombre">Sin jobs fallidos</span></div>';
+        // `error_ultimo` (así lo manda `SiesaJob.to_dict`): esto leía
+        // `ultimo_error`, que no existe, y el motivo del fallo salía vacío.
         return js.slice(0, 10).map(j => `
           <div class="tabla-fila" style="align-items:flex-start;">
             <span class="tabla-nombre" style="font-size:var(--fs-xs);">
-              <b>${esc(j.tipo || '?')}</b> #${esc(j.id)}<br>
-              <span style="color:var(--tx3);font-size:var(--fs-xs);">${esc((j.ultimo_error || '').slice(0, 90))}</span>
+              <b>${esc(j.tipo || '?')}</b> #${esc(j.id)} · ${esc((j.fecha_creacion || '').slice(0, 10))}<br>
+              <span style="color:var(--tx3);font-size:var(--fs-xs);">${esc((j.error_ultimo || '').slice(0, 90))}</span>
             </span>
+            <button class="btn-flota" style="flex:0 0 auto;"
+                    onclick="siesaDescartarJob(${Number(j.id)})">Descartar</button>
           </div>`).join('');
       })}
       <button class="btn-flota" style="width:100%;margin-top:10px;"
@@ -3747,6 +3789,22 @@ async function siesaReintentarTraslado() {
       ${esc(r.mensaje || 'Requisición creada')} ${r.consecutivo ? '· ' + r.consecutivo : ''}</p>`;
   } catch (e) {
     out.innerHTML = `<p style="color:var(--red);font-size:var(--fs-xs);">${esc(e.message)}</p>`;
+  }
+}
+
+/** Descarta un job FALLIDO con motivo. NO reenvía nada a Siesa (Regla 3):
+ *  solo deja de contarlo como trabado. Queda en la bitácora con tu nombre. */
+async function siesaDescartarJob(id) {
+  const motivo = prompt('¿Por qué se descarta este envío? (queda en la bitácora)\n' +
+    'Descartar NO reenvía nada: si el documento pudo haber llegado a Siesa, sigue ahí.');
+  if (motivo === null) return;
+  if (!motivo.trim()) { alerta('El motivo es obligatorio', 'error'); return; }
+  try {
+    const r = await post(`/api/siesa/jobs/${Number(id)}/descartar`, { motivo: motivo.trim() });
+    alerta(r.mensaje || 'Descartado', 'exito');
+    siesaRecuperacionCargar();
+  } catch (e) {
+    alerta('No se pudo descartar: ' + e.message, 'error');
   }
 }
 

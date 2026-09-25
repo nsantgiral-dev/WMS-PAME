@@ -128,6 +128,7 @@ def no_se_pickea_mas_de_lo_pedido(ctx=None):
             detalle=f'recogió {t.cantidad_recogida} de {t.cantidad_solicitada} '
                     f'solicitadas',
             datos={'producto_id': t.producto_id, 'estado': t.estado},
+            fecha=t.fecha_creacion,
         ) for t in filas
     ]
 
@@ -167,6 +168,7 @@ def lo_empacado_no_supera_lo_que_el_picking_entrego(ctx=None):
             detalle=f'empacado {i.cantidad_real} > lo que entregó el picking '
                     f'({i.cantidad_esperada})',
             datos={'packing': t.codigo, 'estado': t.estado},
+            fecha=t.fecha_creacion,
         ) for i, t in filas
     ]
 
@@ -219,6 +221,7 @@ def el_picking_actual_coincide_con_lo_que_el_packing_consumio(ctx=None):
                 detalle=f'el packing consumió {i.cantidad_esperada}; el picking '
                         f'hoy suma {recogido[clave]}',
                 datos={'packing': t.codigo},
+                fecha=t.fecha_creacion,
             ))
     return out
 
@@ -260,6 +263,7 @@ def todo_packing_viene_de_un_picking(ctx=None):
             detalle=f'el pedido {t.numero_pedido_siesa} no tiene ninguna tarea '
                     f'de picking',
             datos={'estado': t.estado},
+            fecha=t.fecha_creacion,
         ) for t in filas if t.numero_pedido_siesa not in con_picking
     ]
 
@@ -288,6 +292,7 @@ def toda_tarea_despachada_tiene_bultos(ctx=None):
             referencia=t.codigo or f'packing#{t.id}',
             detalle='marcada DESPACHADO y no tiene ningún bulto',
             datos={'pedido': t.numero_pedido_siesa},
+            fecha=t.fecha_creacion,
         ) for t in filas if t.id not in con_bultos
     ]
 
@@ -314,6 +319,7 @@ def todo_bulto_entregado_pertenece_a_una_ruta(ctx=None):
             referencia=b.codigo_barras or f'bulto#{b.id}',
             detalle=f'estado {b.estado} sin ruta asignada',
             datos={'tarea_id': b.tarea_id},
+            fecha=b.fecha_creacion,
         ) for b in filas
     ]
 
@@ -328,6 +334,10 @@ def todo_bulto_entregado_pertenece_a_una_ruta(ctx=None):
                  'que no. Bodega va a buscar mercancía que no está.',
     severidad=BLOQUEA,
     detector_ciego='tests/flujo/test_flujo_venta.py::TestElDetectorNoEstaCiego::test_ve_la_contradiccion_entre_parada_y_bultos',
+    # `entregar_ruta` marcaba ENTREGADO todo bulto que el conductor no
+    # declaraba, también los de una parada rechazada. Corregido en 359eac0f:
+    # lo anterior es la huella de ese defecto, no un error de hoy.
+    defecto_corregido=('359eac0f', '2026-09-24T15:44:58-05:00'),
 )
 def el_estado_de_la_parada_concuerda_con_el_de_sus_bultos(ctx=None):
     """La contradicción que costó el cuarto estado.
@@ -354,6 +364,7 @@ def el_estado_de_la_parada_concuerda_con_el_de_sus_bultos(ctx=None):
                 detalle='parada RECHAZADA pero todos sus bultos figuran '
                         'ENTREGADOS',
                 datos={'motivo': r.motivo_rechazo},
+                fecha=r.fecha_confirmacion,
             ))
     return out
 
@@ -384,6 +395,7 @@ def las_paradas_en_modo_libre_se_pueden_contar(ctx=None):
             detalle=f'el conductor eligió sin restricción · '
                     f'{r.estado_entrega} / {r.forma_pago or "sin forma de pago"}',
             datos={'monto': float(r.monto_cobrado or 0)},
+            fecha=r.fecha_confirmacion,
         ) for r in filas
     ]
 
@@ -461,6 +473,7 @@ def un_cobro_registrado_llego_a_siesa(ctx=None):
             detalle=(f'cobró {r.monto_cobrado}, el recibo de caja se intentó '
                      f'y no hay job COMPLETADO: el ERP no tiene ese dinero'),
             datos={'forma_pago': r.forma_pago, 'estado': r.estado_entrega},
+            fecha=r.fecha_confirmacion,
         ) for r in filas
     ]
 
@@ -473,6 +486,9 @@ def un_cobro_registrado_llego_a_siesa(ctx=None):
                  'inventario ya descargado.',
     severidad=BLOQUEA,
     detector_ciego='tests/flujo/test_flujo_venta.py::TestElDetectorNoEstaCiego::test_ve_una_parada_de_contado',
+    # El fallback del gateway emitía contado a todo pedido sin condición
+    # (75c168c8, 2026-08-13). Lo anotado antes es huella de ese fallback.
+    defecto_corregido=('75c168c8', '2026-08-13T19:56:10-05:00'),
 )
 def ninguna_parada_de_ruta_declara_contado(ctx=None):
     """Probado en producción el 2026-08-13: una FE de contado no se aprueba sin
@@ -492,6 +508,7 @@ def ninguna_parada_de_ruta_declara_contado(ctx=None):
             referencia=t.codigo or f'packing#{t.id}',
             detalle=f'el pedido declara condición «{t.cond_pago}», que es CONTADO',
             datos={'pedido': t.numero_pedido_siesa},
+            fecha=t.fecha_creacion,
         ) for t in filas
         if cp.clasificar(t.cond_pago, connekta.cond_pago_ventas) == cp.CONTADO
     ]
@@ -506,6 +523,10 @@ def ninguna_parada_de_ruta_declara_contado(ctx=None):
                  'cliente y la factura abierta.',
     severidad=BLOQUEA,
     detector_ciego='tests/test_contado_contraentrega.py::TestLaAuditoriaLoVe::test_vta62_ve_un_credito_no_autorizado',
+    # La regla ≤ 15 días nació en d5010187 (m043contado). Una parada
+    # confirmada antes se juzga con la regla anterior (`cond_pago.
+    # anterior_a_la_regla`); si aun así sale acá, es huella, no bloqueo.
+    defecto_corregido=('d5010187', '2026-09-24T17:35:31-05:00'),
 )
 def ninguna_parada_de_contado_sale_sin_cobro(ctx=None):
     """Regla del dueño (2026-09-24): ≤ 15 días de crédito es contado — el
@@ -537,5 +558,6 @@ def ninguna_parada_de_contado_sale_sin_cobro(ctx=None):
                      f'con {float(r.monto_cobrado or 0):,.0f} cobrados y sin autorización'),
             datos={'forma_pago': r.forma_pago, 'estado': r.estado_entrega,
                    'monto': float(r.monto_cobrado or 0)},
+            fecha=r.fecha_confirmacion,
         ))
     return salida

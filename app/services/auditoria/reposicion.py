@@ -65,6 +65,7 @@ def no_se_mueve_mas_de_lo_pedido(ctx=None):
     return [
         Hallazgo(
             referencia=t.codigo or f'reposicion#{t.id}',
+            fecha=t.fecha_creacion,
             detalle=f'movidas {t.unidades_movidas} sobre {t.cantidad_unidades} '
                     f'solicitadas',
             datos={'producto_id': t.producto_id},
@@ -88,6 +89,7 @@ def el_origen_y_el_destino_son_distintos(ctx=None):
     return [
         Hallazgo(
             referencia=t.codigo or f'reposicion#{t.id}',
+            fecha=t.fecha_creacion,
             detalle=f'reserva y picking apuntan a la ubicación '
                     f'{t.ubicacion_reserva_id}',
             datos={'estado': t.estado},
@@ -115,6 +117,7 @@ def se_pueden_contar_las_reposiciones_en_curso(ctx=None):
         dias = (hoy - ref).days if ref else None
         out.append(Hallazgo(
             referencia=t.codigo or f'reposicion#{t.id}',
+            fecha=t.fecha_creacion,
             detalle=(f'EN_PROCESO hace {dias} día(s)' if dias is not None
                      else 'EN_PROCESO sin fecha de inicio'),
             datos={'abastecedor_id': t.abastecedor_id},

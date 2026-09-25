@@ -822,7 +822,6 @@ def _es_ensayo(r: SesionConteo) -> bool:
 
 
 def _ajustes(cadenas, desde, hasta) -> tuple:
-    from app.models.siesa_job import EstadoSiesaJob, SiesaJob
     from app.services.conteo_service import ConteoService
 
     excl = Counter()
@@ -877,9 +876,12 @@ def _ajustes(cadenas, desde, hasta) -> tuple:
             esperan_aprobacion[no_solo['codigo'] if no_solo else 'FIRMA_DEL_PROCESO'] += 1
 
     ids_raices = {c.raiz.id for c in cadenas}
-    fallidos = SiesaJob.query.filter(SiesaJob.tipo == 'AJUSTE_CONTEO',
-                                     SiesaJob.estado == EstadoSiesaJob.FALLIDO).all()
-    jobs_fallidos = sum(1 for j in fallidos if j.referencia_id in ids_raices)
+    # Rechazados que SIGUEN trabados (`fallidos_vigentes`): un ajuste que un
+    # reintento posterior hizo entrar no es un rechazo pendiente.
+    from app.services.siesa_job_service import fallidos_vigentes
+    jobs_fallidos = (len(fallidos_vigentes(tipos=('AJUSTE_CONTEO',), excluir_tipos=(),
+                                           referencia_ids=sorted(ids_raices))['jobs'])
+                     if ids_raices else 0)
 
     auditoria = Counter(c.raiz.motivo_codigo for c in cadenas
                         if _en(c.dia_creacion, desde, hasta)

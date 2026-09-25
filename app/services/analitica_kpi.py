@@ -397,7 +397,12 @@ def m_rechazos_ruta(dia, alm, ctx) -> Resultado:
 
 
 def m_jobs_siesa_fallidos(dia, alm, ctx) -> Resultado:
+    """Cohorte de jobs encolados ese día que **siguen** trabados. Lo trabado lo
+    decide `siesa_job_service.fallidos_vigentes` (la única que cuenta
+    FALLIDO): un FALLIDO superado por un COMPLETADO posterior del mismo tipo y
+    referencia, o cerrado por la reconciliación, no cuenta."""
     from app.models.siesa_job import EstadoSiesaJob, SiesaJob
+    from app.services.siesa_job_service import fallidos_vigentes
     motivo = _antes_de(ctx, dia, 'jobs', SiesaJob.fecha_creacion, que='documentos a Siesa')
     if motivo:
         return _ausente(motivo)
@@ -405,7 +410,8 @@ def m_jobs_siesa_fallidos(dia, alm, ctx) -> Resultado:
     filas = (db.session.query(SiesaJob.tipo, SiesaJob.estado)
              .filter(SiesaJob.fecha_creacion >= ini, SiesaJob.fecha_creacion < fin,
                      SiesaJob.tipo.notin_(TIPOS_JOB_SIN_SIESA)).all())
-    fallidos = [t for t, e in filas if e == EstadoSiesaJob.FALLIDO]
+    trabados = fallidos_vigentes(desde=ini, hasta=fin, excluir_tipos=TIPOS_JOB_SIN_SIESA)
+    fallidos = [j.tipo for j in trabados['jobs']]
     activos = sum(1 for _, e in filas if e in EstadoSiesaJob.ACTIVOS)
     por_tipo = {}
     for t in fallidos:
@@ -415,6 +421,7 @@ def m_jobs_siesa_fallidos(dia, alm, ctx) -> Resultado:
                    if activos else None),
                   numerador=len(fallidos), denominador=len(filas),
                   detalle={'fallidos_por_tipo': por_tipo, 'en_cola': activos,
+                           'superados': trabados['superados'],
                            'descartados': sum(1 for _, e in filas
                                               if e == EstadoSiesaJob.DESCARTADO)})
 
@@ -422,8 +429,23 @@ def m_jobs_siesa_fallidos(dia, alm, ctx) -> Resultado:
 #: Acciones de la bitácora que dan de baja algo: se canceló, se borró o se anuló.
 ACCIONES_DE_BAJA = ('CANCELAR', 'ELIMINAR', 'ANULAR')
 
+#: Entidades del FLUJO DE NEGOCIO: su baja es trabajo o mercancía que se cayó
+#: entre el pedido y la caja. Lista blanca, no negra: una entidad nueva que
+#: empiece a escribir en la bitácora queda en `detalle.tecnicas` hasta que
+#: alguien decida que es del flujo — contarla por descuido es lo que convertía
+#: la limpieza del layout (ELIMINAR Ubicacion × 3) en «4 cancelaciones».
+ENTIDADES_DE_NEGOCIO = frozenset({
+    'TareaPicking', 'TareaPacking', 'Bulto', 'RecepcionMercancia',
+    'SolicitudTraslado', 'TareaReposicion', 'DevolucionCliente',
+    'TareaDevolucion', 'RutaDespacho', 'RecaudoEntrega', 'SesionConteo',
+})
+
 
 def m_cancelaciones(dia, alm, ctx) -> Resultado:
+    """Bajas (CANCELAR/ELIMINAR/ANULAR) de entidades del flujo de negocio
+    (`ENTIDADES_DE_NEGOCIO`). Las técnicas —ubicaciones del layout, mapeo de
+    unidades, remodular, maestros, juicios— van a `detalle.tecnicas`: se
+    cuentan, no suben el número."""
     from app.models.bitacora import BitacoraAccion
     motivo = _antes_de(ctx, dia, 'bitacora', BitacoraAccion.dia_operativo,
                        que='acciones en la bitácora')
@@ -436,14 +458,19 @@ def m_cancelaciones(dia, alm, ctx) -> Resultado:
     if alm is not None:
         q = q.filter(BitacoraAccion.almacen_id == alm.id)
     filas = q.all()
-    por_accion, por_entidad = {}, {}
-    for accion, entidad, _ in filas:
+    negocio = [f for f in filas if f[1] in ENTIDADES_DE_NEGOCIO]
+    por_accion, por_entidad, tecnicas = {}, {}, {}
+    for accion, entidad, _ in negocio:
         por_accion[accion] = por_accion.get(accion, 0) + 1
         por_entidad[entidad] = por_entidad.get(entidad, 0) + 1
-    detalle = {'por_accion': por_accion, 'por_entidad': por_entidad}
+    for _, entidad, _ in filas:
+        if entidad not in ENTIDADES_DE_NEGOCIO:
+            tecnicas[entidad] = tecnicas.get(entidad, 0) + 1
+    detalle = {'por_accion': por_accion, 'por_entidad': por_entidad,
+               'tecnicas': tecnicas}
     if alm is None:
-        detalle['sin_almacen'] = sum(1 for *_, a in filas if a is None)
-    return _ok(len(filas), len(filas), detalle=detalle)
+        detalle['sin_almacen'] = sum(1 for *_, a in negocio if a is None)
+    return _ok(len(negocio), len(negocio), detalle=detalle)
 
 
 def m_ventas_facturadas(dia, alm, ctx) -> Resultado:
@@ -754,6 +781,23 @@ def correr_kpi(hoy: date = None) -> dict:
 # Lectura: serie, agregación, resumen
 # ──────────────────────────────────────────────────────────────────────────────
 
+#: Métricas que leen la verdad de Siesa (fotos de ventas y cartera), no la
+#: operación del WMS: el ensayo del WMS no las ensucia, así que el corte
+#: (`FECHA_INICIO_AUDITORIA`) no se les aplica.
+METRICAS_SIN_CORTE = frozenset({'ventas_facturadas', 'cartera_abierta', 'cartera_vencida'})
+
+
+def dia_de_corte_de(clave: str):
+    """El día Bogotá desde el que cuenta la métrica, o `None` (sin corte, o
+    métrica de Siesa). Los días anteriores **se guardan y se muestran** (con
+    `antes_del_corte`), pero no entran al período, a la comparación ni a la
+    alerta: son del ensayo."""
+    if clave in METRICAS_SIN_CORTE:
+        return None
+    from app.services import corte
+    return corte.dia_de_corte()
+
+
 def _punto(dia, r: Resultado = None, fila: AnaliticaKpiDiario = None, en_curso=False,
            motivo=None) -> dict:
     if fila is not None:
@@ -791,6 +835,7 @@ def serie(clave: str, desde: date, hasta: date, almacen_id: int = None,
     q = (q.filter(AnaliticaKpiDiario.almacen_id == almacen_id) if almacen_id is not None
          else q.filter(AnaliticaKpiDiario.almacen_id.is_(None)))
     filas = {f.dia_operativo: f for f in q.all()}
+    dia_corte = dia_de_corte_de(clave)
     puntos = []
     dia = desde
     while dia <= hasta:
@@ -805,6 +850,7 @@ def serie(clave: str, desde: date, hasta: date, almacen_id: int = None,
             puntos.append(_punto(dia, fila=filas[dia]))
         else:
             puntos.append(_punto(dia, motivo=SIN_CALCULAR))
+        puntos[-1]['antes_del_corte'] = bool(dia_corte and dia < dia_corte)
         dia += timedelta(days=1)
     return puntos
 
@@ -822,10 +868,17 @@ def agregar(clave: str, puntos: list) -> dict:
     """El valor de un período a partir de sus días, según la agregación de la
     métrica. Declara cuántos días faltan o están incompletos."""
     m = METRICAS[clave]
+    # Lo anterior al corte se cuenta, no se suma (`dia_de_corte_de`).
+    antes = sum(1 for p in puntos if p.get('antes_del_corte'))
+    puntos = [p for p in puntos if not p.get('antes_del_corte')]
     dias = len(puntos)
     faltan = [p['dia'] for p in puntos if not _medido(p)]
     res = {'valor': None, 'n': None, 'estado': EstadoKpi.AUSENTE, 'motivo': None,
-           'dias': dias, 'dias_medidos': dias - len(faltan), 'dias_sin_medir': len(faltan)}
+           'dias': dias, 'dias_medidos': dias - len(faltan), 'dias_sin_medir': len(faltan),
+           'dias_antes_del_corte': antes}
+    if not puntos and antes:
+        res['motivo'] = 'todo el período es anterior al corte (FECHA_INICIO_AUDITORIA)'
+        return res
     if m.agregacion == TASA:
         con = [p for p in puntos if p.get('denominador') is not None]
         num = sum(p['numerador'] or 0 for p in con)
@@ -905,9 +958,12 @@ def alerta_de_cambio(clave: str, desde: date, hasta: date, almacen_id: int = Non
     primer_lunes = _lunes(ultimo_domingo) - timedelta(weeks=SEMANAS_HISTORIA_CUSUM - 1)
     puntos = serie(clave, primer_lunes, ultimo_domingo, almacen_id, hoy=hoy) \
         if primer_lunes <= ultimo_domingo else []
-    semanas, excluidas = [], 0
+    semanas, excluidas, antes_del_corte = [], 0, 0
     for i in range(0, len(puntos), 7):
         semana = puntos[i:i + 7]
+        if any(p.get('antes_del_corte') for p in semana):
+            antes_del_corte += 1          # ensayo: fuera de la referencia del CUSUM
+            continue
         if len(semana) < 7 or not all(_medido(p) for p in semana):
             excluidas += 1
             continue
@@ -918,6 +974,7 @@ def alerta_de_cambio(clave: str, desde: date, hasta: date, almacen_id: int = Non
         semanas.append((semana[0]['dia'], valor))
     base = {'metodo': 'CUSUM de Vigía sobre semanas cerradas (vigia_service.cusum_bilateral)',
             'semanas_usadas': len(semanas), 'semanas_excluidas': excluidas,
+            'semanas_antes_del_corte': antes_del_corte,
             'minimo_semanas': MIN_SEMANAS_CUSUM}
     if len(semanas) < MIN_SEMANAS_CUSUM:
         return {**base, 'disponible': False,

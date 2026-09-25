@@ -426,8 +426,11 @@ class TestCancelaciones:
             a.dia_operativo = D
         db.session.commit()
         total = _calc('cancelaciones')
-        assert (total.valor, total.detalle['sin_almacen']) == (3, 1)
-        assert total.detalle['por_accion'] == {'CANCELAR': 1, 'ELIMINAR': 1, 'ANULAR': 1}
+        # Anular un juicio de temporada no es una baja del flujo pedido → caja:
+        # va a `tecnicas` (2026-09-24, `ENTIDADES_DE_NEGOCIO`). Antes sumaba.
+        assert (total.valor, total.detalle['sin_almacen']) == (2, 0)
+        assert total.detalle['por_accion'] == {'CANCELAR': 1, 'ELIMINAR': 1}
+        assert total.detalle['tecnicas'] == {'JuicioTemporada': 1}
         assert _calc('cancelaciones', almacen_id=almacen.id).valor == 2
         assert _calc('cancelaciones', D - timedelta(days=1)).estado == 'AUSENTE'
 

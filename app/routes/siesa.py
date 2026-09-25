@@ -238,10 +238,12 @@ def monitor_sincronizacion():
     # produciría un número que nadie puede cruzar con lo que el cron hace.
     try:
         from app.models.siesa_job import EstadoSiesaJob, SiesaJob
+        from app.services.siesa_job_service import fallidos_vigentes
         pendientes = SiesaJob.query.filter_by(
             estado=EstadoSiesaJob.PENDIENTE).count()
-        fallidos = SiesaJob.query.filter_by(
-            estado=EstadoSiesaJob.FALLIDO).count()
+        # Trabados de verdad: sin los superados por un envío posterior ni los
+        # que la reconciliación cerró (`fallidos_vigentes`, la única que cuenta).
+        fallidos = len(fallidos_vigentes()['jobs'])
     except Exception:
         # Un contador que no se pudo leer no puede tumbar el monitor: es lo que
         # se mira cuando algo ya está roto.
@@ -1474,6 +1476,38 @@ def listar_jobs_fallidos():
         'por_tipo': por_tipo,
         'jobs': [j.to_dict() for j in jobs]
     }), 200
+
+
+@siesa_bp.route('/jobs/<int:job_id>/descartar', methods=['POST'])
+@jwt_required()
+def descartar_job_fallido(job_id):
+    """Un admin decide que un job FALLIDO no se intenta más → DESCARTADO.
+
+    **Regla 3: descartar NO reenvía nada** ni toca el documento: si el POST
+    pudo haber entrado a Siesa, sigue pudiendo. Solo deja de contarse como
+    trabado. Motivo obligatorio (`{"motivo": "..."}`), queda en la bitácora
+    como DESCARTAR con el error que se deja de mirar.
+    """
+    admin = _solo_admin()
+    if not admin:
+        return jsonify({'error': 'Solo admin puede descartar jobs'}), 403
+    from app.extensions import db
+    from app.services.bitacora import MotivoRequerido
+    from app.services.siesa_job_service import descartar_job
+    motivo = (request.get_json(silent=True) or {}).get('motivo')
+    try:
+        job = descartar_job(job_id, usuario_id=admin.id, motivo=motivo,
+                            origen=request.path)
+    except LookupError as e:
+        return jsonify({'error': str(e)}), 404
+    except MotivoRequerido as e:
+        return jsonify({'error': str(e)}), 400
+    except ValueError as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 409
+    db.session.commit()
+    return jsonify({'mensaje': f'Job {job.id} descartado — no se reenvió nada a Siesa',
+                    'job': job.to_dict()}), 200
 
 
 @siesa_bp.route('/resetear-jobs-fallidos', methods=['POST'])

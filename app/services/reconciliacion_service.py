@@ -79,7 +79,11 @@ class ReconciliacionService:
             tarea.estado = EstadoPacking.DESPACHADO
             tarea.fecha_despachado = tarea.fecha_despachado or datetime.utcnow()
             tarea.siesa_response = json.dumps(factura_encontrada)
+            cerrados = ReconciliacionService._cerrar_jobs_fallidos(tarea, factura_encontrada)
             db.session.commit()
+            if cerrados:
+                logger.info(f'[RECONCILIACION] Tarea {tarea.id}: {cerrados} job(s) '
+                            f'DESPACHO_F470 FALLIDO cerrados — Siesa ya tiene el documento')
             logger.info(
                 f'[RECONCILIACION] Tarea {tarea.id} ({tarea.numero_pedido_siesa}) '
                 f'reconciliada → DESPACHADO'
@@ -92,6 +96,30 @@ class ReconciliacionService:
                 f'para tarea {tarea.id}: {e}'
             )
             return {'reconciliado': False}
+
+    @staticmethod
+    def _cerrar_jobs_fallidos(tarea, evidencia) -> int:
+        """Los DESPACHO_F470 FALLIDO de esta tarea pasan a COMPLETADO con
+        `resultado.reconciliado`: Siesa **ya tiene** el documento, así que el
+        job no está trabado y no puede seguir contando como tal en la salud,
+        las fugas ni el KPI (`siesa_job_service.fallidos_vigentes`).
+
+        No se tocan los jobs vivos (PENDIENTE/REINTENTANDO/PROCESANDO): la DLQ
+        los resuelve sola por la guarda `siesa_triggered` que se acaba de
+        poner. Sin commit: va en la transacción de la reconciliación."""
+        from app.models.siesa_job import EstadoSiesaJob, SiesaJob
+        jobs = SiesaJob.query.filter(
+            SiesaJob.tipo == 'DESPACHO_F470',
+            SiesaJob.referencia_tipo == 'TareaPacking',
+            SiesaJob.referencia_id == tarea.id,
+            SiesaJob.estado == EstadoSiesaJob.FALLIDO,
+        ).all()
+        for job in jobs:
+            job.marcar_completado({'reconciliado': True,
+                                   'por': 'ReconciliacionService.reconciliar_despacho',
+                                   'evidencia': evidencia,
+                                   'error_que_tenia': (job.error_ultimo or '')[:500]})
+        return len(jobs)
 
     @staticmethod
     def sweep_despachos_pendientes(app=None):

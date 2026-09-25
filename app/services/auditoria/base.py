@@ -63,6 +63,14 @@ class Hallazgo:
     referencia: str
     detalle: str
     datos: dict = field(default_factory=dict)
+    #: Cuándo nació la entidad (UTC naive, o día Bogotá). Es lo que decide si
+    #: el hallazgo es de hoy o es anterior al corte (`FECHA_INICIO_AUDITORIA`)
+    #: o a la corrección de su defecto (`vigente_desde`). **Sin fecha cuenta
+    #: como vigente**: no saber cuándo pasó no lo vuelve viejo (Regla 0).
+    #: El trinquete de `tests/test_analitica_solo_lo_actual.py` exige que todo
+    #: `Hallazgo(...)` la pase, salvo los invariantes de estado actual
+    #: declarados en su inventario.
+    fecha: object = None
 
 
 @dataclass
@@ -79,9 +87,30 @@ class Invariante:
     #: `archivo::Clase::test` del test que hace DISPARAR este invariante
     #: construyendo la violación. Ver el docstring de `invariante()`.
     detector_ciego: str = None
+    #: Invariante que vigila un defecto YA CORREGIDO: `(commit, fecha ISO)`.
+    #: Lo anterior a la corrección se reporta como «artefacto de <commit>: N
+    #: casos» y **no sube el nivel**: no es un error de hoy, es la huella de
+    #: uno que ya no se puede repetir. Lo posterior sí bloquea: si reaparece,
+    #: el arreglo se cayó. Ver `vigente_desde_utc`.
+    defecto_corregido: tuple = None
 
     def __post_init__(self):
         assert self.severidad in _SEVERIDADES, f'severidad inválida: {self.severidad}'
+        if self.defecto_corregido is not None:
+            commit, fecha = self.defecto_corregido
+            assert commit and fecha, f'{self.codigo}: defecto_corregido pide (commit, fecha)'
+            self.vigente_desde_utc   # valida la fecha al registrar, no al auditar
+
+    @property
+    def vigente_desde_utc(self):
+        """La fecha de la corrección en UTC naive (`None` si no vigila un
+        defecto corregido). Se interpreta con la misma regla que el corte."""
+        if self.defecto_corregido is None:
+            return None
+        from app.services.corte import _parsear
+        utc, motivo = _parsear(self.defecto_corregido[1])
+        assert utc is not None, f'{self.codigo}: vigente_desde ilegible ({motivo})'
+        return utc
 
     def evaluar(self, ctx=None) -> List[Hallazgo]:
         return list(self.fn(ctx) or [])
@@ -91,7 +120,8 @@ _REGISTRO: List[Invariante] = []
 
 
 def invariante(codigo: str, flujo: str, frontera: str, consecuencia: str,
-               severidad: str = BLOQUEA, detector_ciego: str = None):
+               severidad: str = BLOQUEA, detector_ciego: str = None,
+               defecto_corregido: tuple = None):
     """Registra la función como invariante.
 
     El decorador y no una lista al final del archivo: una lista que hay que
@@ -123,6 +153,13 @@ def invariante(codigo: str, flujo: str, frontera: str, consecuencia: str,
     Se pide como referencia `archivo::Clase::test` y
     `tests/test_detector_ciego_obligatorio.py` verifica que **exista**: una
     referencia que no resuelve es peor que ninguna, porque afirma cobertura.
+
+    ## `defecto_corregido` — `(commit, 'AAAA-MM-DDTHH:MM:SS-05:00')`
+
+    Para el invariante que vigila un defecto ya arreglado: lo anterior a esa
+    fecha es artefacto del defecto, se cuenta aparte y no bloquea. La fecha es
+    la del commit que lo corrigió (la más temprana posible del despliegue:
+    ante la duda, se muestra de más).
     """
     def _wrap(fn):
         assert not any(i.codigo == codigo for i in _REGISTRO), \
@@ -130,7 +167,7 @@ def invariante(codigo: str, flujo: str, frontera: str, consecuencia: str,
         _REGISTRO.append(Invariante(
             codigo=codigo, flujo=flujo, frontera=frontera,
             consecuencia=consecuencia, severidad=severidad, fn=fn,
-            detector_ciego=detector_ciego))
+            detector_ciego=detector_ciego, defecto_corregido=defecto_corregido))
         return fn
     return _wrap
 
@@ -174,16 +211,21 @@ def auditar(flujo: Optional[str] = None, ctx=None) -> dict:
     """
     # Limpio en cada corrida: un tope alcanzado una vez no puede ensuciar el
     # reporte para siempre.
+    from app.services import corte as _corte
     _AUDITORIA_TRUNCADA.clear()
     inv = registrados(flujo)
-    resultados, total = [], 0
+    corte = _corte.inicio_auditoria()
+    resultados, total, total_antes, total_artefactos = [], 0, 0, 0
     for i in inv:
         try:
-            hallazgos = i.evaluar(ctx)
+            crudos = i.evaluar(ctx)
             error = None
         except Exception as e:                      # noqa: BLE001
-            hallazgos, error = [], f'{type(e).__name__}: {e}'
+            crudos, error = [], f'{type(e).__name__}: {e}'
+        hallazgos, antes, artefactos = _clasificar(i, crudos, corte)
         total += len(hallazgos)
+        total_antes += antes
+        total_artefactos += artefactos
         resultados.append({
             'codigo': i.codigo,
             'flujo': i.flujo,
@@ -197,6 +239,11 @@ def auditar(flujo: Optional[str] = None, ctx=None) -> dict:
             ],
             'total': len(hallazgos),
             'truncado': len(hallazgos) > 100,
+            # Lo anterior al corte y los artefactos de un defecto corregido:
+            # contados, nunca en `total` ni en `bloqueantes`.
+            'antes_del_corte': antes,
+            'artefacto': _artefacto(i, artefactos),
+            'sin_fecha': sum(1 for h in hallazgos if h.fecha is None),
         })
     rotos = [r for r in resultados if r['total'] or r['error']]
     consultas_truncadas = sorted(_AUDITORIA_TRUNCADA)
@@ -211,5 +258,33 @@ def auditar(flujo: Optional[str] = None, ctx=None) -> dict:
         'bloqueantes': sum(r['total'] for r in resultados
                            if r['severidad'] == BLOQUEA),
         'errores': [r['codigo'] for r in resultados if r['error']],
+        'antes_del_corte': total_antes,
+        'artefactos': total_artefactos,
+        'corte': _corte.estado(),
         'resultados': resultados,
     }
+
+
+def _clasificar(inv: Invariante, hallazgos, corte):
+    """`(vigentes, n_antes_del_corte, n_artefactos)`. **La única** que decide
+    si un hallazgo es de hoy: primero el corte, después la corrección del
+    defecto. Sin fecha → vigente."""
+    from app.services.corte import es_anterior
+    desde = inv.vigente_desde_utc
+    vigentes, antes, artefactos = [], 0, 0
+    for h in hallazgos:
+        if es_anterior(h.fecha, corte):
+            antes += 1
+        elif desde is not None and es_anterior(h.fecha, desde):
+            artefactos += 1
+        else:
+            vigentes.append(h)
+    return vigentes, antes, artefactos
+
+
+def _artefacto(inv: Invariante, n: int):
+    if inv.defecto_corregido is None:
+        return None
+    commit, fecha = inv.defecto_corregido
+    return {'commit': commit, 'vigente_desde': fecha, 'casos': n,
+            'texto': f'artefacto de {commit}: {n} caso(s) anteriores a la corrección'}

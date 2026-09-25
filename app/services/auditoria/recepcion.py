@@ -81,6 +81,7 @@ def una_recepcion_confirmada_entro_a_siesa(ctx=None):
         if not r.siesa_triggered:
             out.append(Hallazgo(
                 referencia=r.codigo or f'recepcion#{r.id}',
+                fecha=r.fecha_creacion,
                 detalle=f'{r.estado} sin entrada disparada a Siesa · OC '
                         f'{r.numero_oc_siesa} · {r.proveedor_nombre or ""}',
                 datos={'parcial': r.es_parcial, 'causa': 'nunca se disparó'},
@@ -88,6 +89,7 @@ def una_recepcion_confirmada_entro_a_siesa(ctx=None):
         elif not (r.siesa_response or '').strip():
             out.append(Hallazgo(
                 referencia=r.codigo or f'recepcion#{r.id}',
+                fecha=r.fecha_creacion,
                 detalle=f'{r.estado} marcada como enviada pero SIN respuesta de '
                         f'Siesa guardada · OC {r.numero_oc_siesa} — la bandera la '
                         f'forzó el bloque de emergencia y nadie sabe si entró',
@@ -119,6 +121,7 @@ def el_exceso_respeta_la_tolerancia(ctx=None):
         if recibida > tope:
             out.append(Hallazgo(
                 referencia=f'recepcion#{it.recepcion_id} / producto#{it.producto_id}',
+                fecha=it.recepcion.fecha_creacion if it.recepcion else None,
                 detalle=f'recibida {recibida:g} sobre {ordenada:g} ordenadas '
                         f'(tope con tolerancia: {tope:g})',
                 datos={'tolerancia_pct': it.tolerancia_exceso_pct},
@@ -149,6 +152,7 @@ def ninguna_entrada_sin_mercancia(ctx=None):
         if total <= 0:
             out.append(Hallazgo(
                 referencia=r.codigo or f'recepcion#{r.id}',
+                fecha=r.fecha_creacion,
                 detalle='entrada disparada con 0 unidades recibidas',
                 datos={'oc': r.numero_oc_siesa},
             ))
@@ -173,6 +177,7 @@ def se_pueden_contar_las_recepciones_abiertas(ctx=None):
         dias = (hoy - ref).days if ref else None
         out.append(Hallazgo(
             referencia=r.codigo or f'recepcion#{r.id}',
+            fecha=r.fecha_creacion,
             detalle=(f'{r.estado} hace {dias} día(s)' if dias is not None
                      else f'{r.estado} sin fecha de creación'),
             datos={'oc': r.numero_oc_siesa, 'proveedor': r.proveedor_nombre},

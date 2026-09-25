@@ -153,35 +153,121 @@ def _tendencia_7d():
     return dias
 
 
+def _cola_vacia():
+    return {'n': 0, 'antes': 0, 'mas_viejo': None}
+
+
+def _cola(col_fecha, *filtros):
+    """Una cola del tablero: `{n, antes, mas_viejo}`. `n` cuenta desde el corte
+    (`FECHA_INICIO_AUDITORIA`, sobre `col_fecha`); lo anterior va en `antes`.
+    Una fila **sin fecha** cuenta como vigente (Regla 0: no saber cuándo no la
+    vuelve vieja)."""
+    from sqlalchemy import or_
+    from app.services import corte
+    c = corte.inicio_auditoria()
+    q = db.session.query(func.count(), func.min(col_fecha)).filter(*filtros)
+    antes = 0
+    if c is not None:
+        antes = (db.session.query(func.count()).filter(*filtros)
+                 .filter(col_fecha < c).scalar() or 0)
+        q = q.filter(or_(col_fecha >= c, col_fecha.is_(None)))
+    n, mas_viejo = q.one()
+    return {'n': int(n or 0), 'antes': int(antes), 'mas_viejo': mas_viejo}
+
+
+def _edad_de(*colas):
+    """`{mas_viejo_utc, edad_horas}` de lo más viejo entre varias colas."""
+    fechas = [c['mas_viejo'] for c in colas if c['mas_viejo'] is not None]
+    if not fechas:
+        return {'mas_viejo_utc': None, 'edad_horas': None}
+    viejo = min(fechas)
+    horas = (datetime.utcnow() - viejo).total_seconds() / 3600
+    return {'mas_viejo_utc': viejo.isoformat(), 'edad_horas': round(horas, 1)}
+
+
+def _ira_del_dia(dia, almacen_id) -> dict:
+    """IRA exacta de las cadenas cerradas `dia`: `metricas.conteo.exactitud_total`,
+    la misma que usan el KPI diario y las estadísticas. Con menos de
+    `MIN_N_EXACTITUD` no hay tasa (`muestra_chica`), pero sí la cuenta."""
+    from app.services.metricas.conteo import (MIN_N_EXACTITUD, cadenas_del_dia,
+                                              exactitud_total)
+    ex = exactitud_total([c for c in cadenas_del_dia(dia, almacen_id) if c.cerrada])
+    num, den = ex['numerador'], ex['denominador']
+    return {'numerador': num, 'denominador': den,
+            'tasa': (num / den) if den >= MIN_N_EXACTITUD else None,
+            'muestra_chica': 0 < den < MIN_N_EXACTITUD,
+            'min_n': MIN_N_EXACTITUD, 'definicion': ex['definicion'],
+            'excluidos': ex['excluidos']}
+
+
+def _tope_de_conteo(almacen_id) -> dict:
+    try:
+        from app.services.conteo_politica import tope_de_generacion
+        return tope_de_generacion(almacen_id)
+    except Exception:                                     # noqa: BLE001
+        logger.warning('[DASHBOARD] tope de conteo no disponible', exc_info=True)
+        return {}
+
+
+def semaforo_de_conteo(descuadres: int, definitivos: int, pendientes: int, tope: dict) -> dict:
+    """El semáforo de conteo del tablero, **una función**:
+
+    · rojo — hay decisiones esperando (descuadres por decidir o definitivos);
+    · amarillo — las pendientes vivas superan el cupo diario (rezago: el
+      generador ya no alcanza), o el cupo no se pudo leer;
+    · verde — hay trabajo dentro del cupo;
+    · gris — nada pendiente.
+    """
+    cupo, vivas = tope.get('cupo_diario'), tope.get('pendientes_vivas')
+    if definitivos:
+        return {'color': 'rojo', 'texto': f'{definitivos} definitivo(s) pendiente(s)'}
+    if descuadres:
+        return {'color': 'rojo', 'texto': f'{descuadres} con diferencia por decidir'}
+    if cupo is None or vivas is None:
+        return {'color': 'amarillo', 'texto': f'{pendientes} pendientes (cupo sin dato)'}
+    if cupo and vivas > cupo:
+        return {'color': 'amarillo',
+                'texto': f'{vivas} pendientes para un cupo de {cupo}/día'}
+    if pendientes:
+        return {'color': 'verde', 'texto': f'{pendientes} pendientes (cupo {cupo}/día)'}
+    return {'color': 'gris', 'texto': 'sin pendientes'}
+
+
 class DashboardService:
 
     @staticmethod
     def kpis_operativos(almacen_id: int):
-        """KPIs principales del almacén en tiempo real."""
+        """KPIs principales del almacén en tiempo real.
+
+        Cada cola cuenta **desde el corte** (`FECHA_INICIO_AUDITORIA`, por
+        `fecha_creacion`): lo anterior —el ensayo— va en `antes_del_corte` de
+        su bloque y no enciende el semáforo. Y cada cola dice cuánto lleva
+        esperando lo más viejo (`mas_viejo_utc`, `edad_horas`): un número sin
+        edad no distingue la cola de hoy de la de abril.
+        """
         # "Completado hoy" con corte UTC se REINICIA A LAS 7 P.M. Colombia, en
         # mitad del turno de la tarde, y arrastra el trabajo de la noche
         # anterior. El día operativo empieza a medianoche de acá.
         from app.utils.fecha import dia_operativo, inicio_del_dia_utc
+        from app.services.tablero_lider_conteo import filtro_descuadres_por_decidir
         hoy = dia_operativo()
         inicio_hoy = inicio_del_dia_utc(hoy)
 
-        # --- PICKING — 3 counts en 1 query con aggregación condicional ---
-        p_row = db.session.query(
-            func.count(TareaPicking.id).filter(TareaPicking.estado == 'PENDIENTE').label('pendiente'),
-            func.count(TareaPicking.id).filter(TareaPicking.estado == 'EN_PROCESO').label('en_proceso'),
-            func.count(TareaPicking.id).filter(
-                TareaPicking.estado == 'COMPLETADO',
-                TareaPicking.fecha_completado >= inicio_hoy
-            ).label('completado_hoy'),
-        ).filter(TareaPicking.almacen_id == almacen_id).one()
-        picking_pendiente      = p_row.pendiente
-        picking_en_proceso     = p_row.en_proceso
-        picking_completado_hoy = p_row.completado_hoy
+        # --- PICKING ---
+        p_pend = _cola(TareaPicking.fecha_creacion, TareaPicking.almacen_id == almacen_id,
+                       TareaPicking.estado == 'PENDIENTE')
+        p_proc = _cola(TareaPicking.fecha_creacion, TareaPicking.almacen_id == almacen_id,
+                       TareaPicking.estado == 'EN_PROCESO')
+        picking_completado_hoy = TareaPicking.query.filter(
+            TareaPicking.almacen_id == almacen_id, TareaPicking.estado == 'COMPLETADO',
+            TareaPicking.fecha_completado >= inicio_hoy).count()
 
-        # --- PACKING — 3 counts en 1 query ---
+        # --- PACKING ---
+        k_pend = _cola(TareaPacking.fecha_creacion, TareaPacking.almacen_id == almacen_id,
+                       TareaPacking.estado == 'PENDIENTE')
+        k_proc = _cola(TareaPacking.fecha_creacion, TareaPacking.almacen_id == almacen_id,
+                       TareaPacking.estado == 'EN_PROCESO')
         pk_row = db.session.query(
-            func.count(TareaPacking.id).filter(TareaPacking.estado == 'PENDIENTE').label('pendiente'),
-            func.count(TareaPacking.id).filter(TareaPacking.estado == 'EN_PROCESO').label('en_proceso'),
             func.count(TareaPacking.id).filter(
                 TareaPacking.estado == 'VERIFICADO',
                 TareaPacking.fecha_verificado >= inicio_hoy
@@ -191,10 +277,6 @@ class DashboardService:
                 TareaPacking.siesa_triggered_at >= inicio_hoy
             ).label('siesa_hoy'),
         ).filter(TareaPacking.almacen_id == almacen_id).one()
-        packing_pendiente      = pk_row.pendiente
-        packing_en_proceso     = pk_row.en_proceso
-        packing_completado_hoy = pk_row.completado_hoy
-        siesa_triggers_hoy     = pk_row.siesa_hoy
 
         # --- RECEPCIÓN ---
         recepciones_hoy = RecepcionMercancia.query.filter(
@@ -202,69 +284,88 @@ class DashboardService:
             RecepcionMercancia.fecha_confirmacion >= inicio_hoy
         ).count()
 
-        # --- CONTEO CÍCLICO — 3 counts en 1 query ---
-        c_row = db.session.query(
-            func.count(SesionConteo.id).filter(SesionConteo.estado == 'PENDIENTE').label('pendientes'),
-            func.count(SesionConteo.id).filter(SesionConteo.estado == 'SEGUNDO_CONTEO').label('descuadre'),
-            func.count(SesionConteo.id).filter(
-                SesionConteo.estado == 'MATCH',
-                SesionConteo.fecha_cierre >= inicio_hoy
-            ).label('match_hoy'),
-        ).filter(SesionConteo.almacen_id == almacen_id).one()
-        conteos_pendientes = c_row.pendientes
-        conteos_descuadre  = c_row.descuadre
-        conteos_match_hoy  = c_row.match_hoy
+        # --- CONTEO CÍCLICO ---
+        # «Con diferencia» = raíces en DESCUADRE esperando decisión: la MISMA
+        # definición que el tablero del líder. Antes contaba SEGUNDO_CONTEO —un
+        # 1er conteo esperando el 2º—, que no es una diferencia confirmada.
+        c_pend = _cola(SesionConteo.fecha_creacion, SesionConteo.almacen_id == almacen_id,
+                       SesionConteo.estado == 'PENDIENTE')
+        c_desc = _cola(SesionConteo.fecha_creacion, *filtro_descuadres_por_decidir(almacen_id))
+        c_seg = _cola(SesionConteo.fecha_creacion, SesionConteo.almacen_id == almacen_id,
+                      SesionConteo.es_segundo_conteo.is_(False),
+                      SesionConteo.estado == 'SEGUNDO_CONTEO')
 
         # CC3 ("Conteo Definitivo") esperando que un supervisor lo tome —
-        # mismo criterio que ConteoService.listar_definitivos(). El CC1==CC2
-        # va a TERCER_CONTEO (no SEGUNDO_CONTEO ni DESCUADRE), así que
-        # `conteos_descuadre` de arriba no lo ve: sin este contador aparte,
-        # un CC3 podía quedar esperando indefinidamente sin ninguna señal en
-        # el dashboard — semáforo en verde con el trabajo bloqueado.
+        # mismo criterio que ConteoService.listar_definitivos(). Sin este
+        # contador aparte, un CC3 podía quedar esperando indefinidamente sin
+        # ninguna señal en el dashboard.
         from sqlalchemy.orm import aliased as _aliased_origen
         _origen_cc3 = _aliased_origen(SesionConteo)
-        conteos_definitivos = db.session.query(func.count(SesionConteo.id)).join(
+        d_ids = [i for (i,) in db.session.query(SesionConteo.id).join(
             _origen_cc3, SesionConteo.sesion_origen_id == _origen_cc3.id
         ).filter(
             SesionConteo.almacen_id == almacen_id,
             SesionConteo.es_segundo_conteo.is_(True),
             _origen_cc3.es_segundo_conteo.is_(True),
             SesionConteo.estado.in_(['PENDIENTE', 'EN_PROCESO']),
-        ).scalar() or 0
+        ).all()]
+        c_def = (_cola(SesionConteo.fecha_creacion, SesionConteo.id.in_(d_ids))
+                 if d_ids else _cola_vacia())
+
+        ira = _ira_del_dia(hoy, almacen_id)
+        tope = _tope_de_conteo(almacen_id)
+        semaforo = semaforo_de_conteo(c_desc['n'], c_def['n'], c_pend['n'], tope)
 
         # --- ALERTAS DE STOCK ---
-        # LA MISMA consulta que alertas_stock(), no «la misma lógica»: acá
-        # había una copia, y las copias divergen. El KPI del tablero y la lista
-        # de alertas tienen que dar siempre el mismo número.
+        # LA MISMA consulta que alertas_stock(), no «la misma lógica».
         productos_bajo_minimo = consulta_productos_bajo_minimo(almacen_id).count()
 
+        from app.services import corte as _corte
         return {
             'fecha': hoy.isoformat(),
             'almacen_id': almacen_id,
+            'corte': _corte.estado(),
             'picking': {
-                'pendiente': picking_pendiente,
-                'en_proceso': picking_en_proceso,
+                'pendiente': p_pend['n'],
+                'en_proceso': p_proc['n'],
                 'completado_hoy': picking_completado_hoy,
-                'total_activo': picking_pendiente + picking_en_proceso
+                'total_activo': p_pend['n'] + p_proc['n'],
+                **_edad_de(p_pend, p_proc),
+                'antes_del_corte': p_pend['antes'] + p_proc['antes'],
             },
             'packing': {
-                'pendiente': packing_pendiente,
-                'en_proceso': packing_en_proceso,
-                'completado_hoy': packing_completado_hoy,
-                'facturas_generadas_hoy': siesa_triggers_hoy
+                'pendiente': k_pend['n'],
+                'en_proceso': k_proc['n'],
+                'completado_hoy': pk_row.completado_hoy,
+                'facturas_generadas_hoy': pk_row.siesa_hoy,
+                **_edad_de(k_pend, k_proc),
+                'antes_del_corte': k_pend['antes'] + k_proc['antes'],
             },
             'recepcion': {
                 'confirmadas_hoy': recepciones_hoy
             },
             'conteo': {
-                'pendientes': conteos_pendientes,
-                'en_descuadre': conteos_descuadre,
-                'match_hoy': conteos_match_hoy,
-                'definitivos_pendientes': conteos_definitivos
+                'pendientes': c_pend['n'],
+                'pendientes_edad': _edad_de(c_pend),
+                'en_descuadre': c_desc['n'],
+                'en_descuadre_edad': _edad_de(c_desc),
+                'en_segundo_conteo': c_seg['n'],
+                'definitivos_pendientes': c_def['n'],
+                'definitivos_edad': _edad_de(c_def),
+                'antes_del_corte': c_pend['antes'] + c_desc['antes'] + c_seg['antes'] + c_def['antes'],
+                # IRA de HOY por cadenas: la misma definición que el KPI diario
+                # y las estadísticas (`metricas.conteo.exactitud_total`).
+                'ira_hoy': ira,
+                # Antes: MATCH de sesiones cerradas hoy (un CC2 que confirma
+                # contaba dos). Ahora: cadenas exactas de hoy.
+                'match_hoy': ira['numerador'],
+                'cupo_diario': tope.get('cupo_diario'),
+                'pendientes_vivas': tope.get('pendientes_vivas'),
+                'semaforo': semaforo,
             },
             'alertas': {
                 'productos_bajo_minimo': productos_bajo_minimo,
-                'conteos_descuadre': conteos_descuadre
+                'conteos_descuadre': c_desc['n']
             },
             'connekta': connekta.estado()
         }
@@ -583,7 +684,8 @@ class DashboardService:
 
     @staticmethod
     def kpis_traslados_rutas():
-        """KPIs de traslados y rutas — 4 counts en 2 queries con agregación condicional."""
+        """KPIs de traslados y rutas en marcha, desde el corte
+        (`FECHA_INICIO_AUDITORIA`) y con la edad de lo más viejo de cada cola."""
         from app.models.traslado import SolicitudTraslado
         from app.models.ruta_despacho import RutaDespacho
 
@@ -594,39 +696,37 @@ class DashboardService:
         hoy = dia_operativo()
         inicio_hoy = inicio_del_dia_utc(hoy)
 
-        t_row = db.session.query(
-            func.count(SolicitudTraslado.id).filter(SolicitudTraslado.estado == 'EN_PICKING').label('en_picking'),
-            func.count(SolicitudTraslado.id).filter(SolicitudTraslado.estado == 'PREPARADO').label('preparado'),
-            func.count(SolicitudTraslado.id).filter(SolicitudTraslado.estado == 'EN_TRANSITO').label('en_transito'),
-            func.count(SolicitudTraslado.id).filter(
-                SolicitudTraslado.estado == 'ENTREGADA',
-                SolicitudTraslado.fecha_entrega >= inicio_hoy
-            ).label('entregadas_hoy'),
-        ).one()
+        t_pick = _cola(SolicitudTraslado.fecha_creacion, SolicitudTraslado.estado == 'EN_PICKING')
+        t_prep = _cola(SolicitudTraslado.fecha_creacion, SolicitudTraslado.estado == 'PREPARADO')
+        t_tran = _cola(SolicitudTraslado.fecha_creacion, SolicitudTraslado.estado == 'EN_TRANSITO')
+        t_hoy = SolicitudTraslado.query.filter(
+            SolicitudTraslado.estado == 'ENTREGADA',
+            SolicitudTraslado.fecha_entrega >= inicio_hoy).count()
 
-        r_row = db.session.query(
-            func.count(RutaDespacho.id).filter(RutaDespacho.estado == 'EN_CARGUE').label('en_cargue'),
-            func.count(RutaDespacho.id).filter(RutaDespacho.estado == 'EN_TRANSITO').label('en_transito'),
-            func.count(RutaDespacho.id).filter(
-                RutaDespacho.estado == 'ENTREGADA',
-                RutaDespacho.fecha_entregada >= inicio_hoy
-            ).label('entregadas_hoy'),
-        ).one()
+        r_carg = _cola(RutaDespacho.fecha_creacion, RutaDespacho.estado == 'EN_CARGUE')
+        r_tran = _cola(RutaDespacho.fecha_creacion, RutaDespacho.estado == 'EN_TRANSITO')
+        r_hoy = RutaDespacho.query.filter(
+            RutaDespacho.estado == 'ENTREGADA',
+            RutaDespacho.fecha_entregada >= inicio_hoy).count()
 
         traslados = {
-            'en_picking':     t_row.en_picking,
-            'preparado':      t_row.preparado,
-            'en_transito':    t_row.en_transito,
-            'entregadas_hoy': t_row.entregadas_hoy,
+            'en_picking':     t_pick['n'],
+            'preparado':      t_prep['n'],
+            'en_transito':    t_tran['n'],
+            'entregadas_hoy': t_hoy,
+            **_edad_de(t_pick, t_prep, t_tran),
+            'antes_del_corte': t_pick['antes'] + t_prep['antes'] + t_tran['antes'],
         }
         traslados['total_activos'] = (
             traslados['en_picking'] + traslados['preparado'] + traslados['en_transito']
         )
 
         rutas = {
-            'en_cargue':      r_row.en_cargue,
-            'en_transito':    r_row.en_transito,
-            'entregadas_hoy': r_row.entregadas_hoy,
+            'en_cargue':      r_carg['n'],
+            'en_transito':    r_tran['n'],
+            'entregadas_hoy': r_hoy,
+            **_edad_de(r_carg, r_tran),
+            'antes_del_corte': r_carg['antes'] + r_tran['antes'],
         }
 
         return {'traslados': traslados, 'rutas': rutas}

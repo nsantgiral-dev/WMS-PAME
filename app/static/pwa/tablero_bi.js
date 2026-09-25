@@ -45,9 +45,21 @@ function biRenderSubtabs() {
   ).join('');
 }
 
-/** Lee bi-fecha-desde/hasta, inicializándolos a "hoy" si están vacíos. */
+/** Día operativo de Bogotá (`YYYY-MM-DD`): `toISOString()` es el día UTC y
+ *  después de las 7 p. m. el tablero abría en «mañana» (Regla 5). */
+function biHoyBogota(fecha) {
+  const d = fecha || new Date();
+  try {
+    return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Bogota',
+      year: 'numeric', month: '2-digit', day: '2-digit' }).format(d);
+  } catch (_) {
+    return new Date(d.getTime() - 5 * 3600 * 1000).toISOString().slice(0, 10);
+  }
+}
+
+/** Lee bi-fecha-desde/hasta, inicializándolos a "hoy" (Bogotá) si están vacíos. */
 function biRangoFechas() {
-  const hoy = new Date().toISOString().split('T')[0];
+  const hoy = biHoyBogota();
   const desdeEl = document.getElementById('bi-fecha-desde');
   const hastaEl = document.getElementById('bi-fecha-hasta');
   if (desdeEl && !desdeEl.value) desdeEl.value = hoy;
@@ -60,11 +72,17 @@ function biMoneda(v) {
   return '$' + Number(v).toLocaleString('es-CO', { maximumFractionDigits: 0 });
 }
 
+/** Hora Bogotá de un instante del servidor. Las columnas son UTC **sin zona**
+ *  (`2026-09-24T22:10:00`): `new Date` las leía como hora local y el tablero
+ *  corría la hora cinco horas. Sin designador de zona, se lee como UTC. */
 function biFechaHora(iso) {
   if (!iso) return '—';
-  const d = new Date(iso);
+  const texto = String(iso);
+  const conZona = /(Z|[+-]\d{2}:?\d{2})$/.test(texto) ? texto : texto + 'Z';
+  const d = new Date(conZona);
   if (isNaN(d.getTime())) return iso;
-  return d.toLocaleString('es-CO', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+  return d.toLocaleString('es-CO', { day: '2-digit', month: '2-digit', hour: '2-digit',
+    minute: '2-digit', timeZone: 'America/Bogota' });
 }
 
 function biUltimaActualizacion() {

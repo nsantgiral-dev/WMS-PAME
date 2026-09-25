@@ -725,11 +725,11 @@ def enviar_resumen_diario(app=None):
                     SiesaJob.fecha_creacion >= ayer_inicio,
                     SiesaJob.fecha_creacion < ayer_fin,
                 ).count()
-                jobs_fallidos = SiesaJob.query.filter(
-                    SiesaJob.estado == EstadoSiesaJob.FALLIDO,
-                    SiesaJob.fecha_creacion >= ayer_inicio,
-                    SiesaJob.fecha_creacion < ayer_fin,
-                ).count()
+                # Trabados de verdad (`fallidos_vigentes`): un FALLIDO que un
+                # reintento posterior superó ya no es un movimiento perdido.
+                from app.services.siesa_job_service import fallidos_vigentes
+                jobs_fallidos = len(fallidos_vigentes(
+                    desde=ayer_inicio, hasta=ayer_fin, excluir_tipos=())['jobs'])
             except Exception as _e:
                 logger.error(f'[RESUMEN] No se pudo calcular jobs Siesa: {_e}', exc_info=True)
                 jobs_ok = jobs_fallidos = 'N/D'
@@ -750,10 +750,13 @@ def enviar_resumen_diario(app=None):
                 logger.error('[RESUMEN] Sweep INV_PACKING_BULTO falló', exc_info=True)
             try:
                 # Jobs FALLIDO >24h (no solo ayer)
-                _fallidos_viejos = SiesaJob.query.filter(
-                    SiesaJob.estado == EstadoSiesaJob.FALLIDO,
-                    SiesaJob.fecha_creacion < ayer_inicio,
-                ).count()
+                # Desde el corte (FECHA_INICIO_AUDITORIA): el ensayo no es
+                # «sin resolver» de nadie.
+                from app.services import corte as _corte
+                from app.services.siesa_job_service import fallidos_vigentes
+                _fallidos_viejos = len(fallidos_vigentes(
+                    desde=_corte.inicio_auditoria(), hasta=ayer_inicio,
+                    excluir_tipos=())['jobs'])
                 if _fallidos_viejos:
                     anomalias.append(f'⚠ {_fallidos_viejos} job(s) Siesa FALLIDO >24h sin resolver')
             except Exception:

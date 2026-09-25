@@ -372,6 +372,7 @@ def el_ultimo_saldo_declarado_es_el_saldo_vivo(ctx=None):
                    'diferencia': suma - ultimo.saldo_despues,
                    'motivo': (ultimo.motivo or '')[:120],
                    'ventana_dias': dias},
+            fecha=ultimo.fecha,
         )
         for clave, ultimo, suma, filas in rotas
     ]
@@ -423,6 +424,8 @@ def la_cadena_de_saldos_no_tiene_saltos(ctx=None):
                    'primer_salto': [a.id, b.id],
                    'diferencia': b.saldo_antes - a.saldo_despues,
                    'ventana_dias': dias},
+            # El salto más reciente: la clave es de hoy si alguno lo es.
+            fecha=saltos[-1][1].fecha,
         )
         for clave, saltos in rotas
         for a, b in [saltos[0]]
@@ -501,7 +504,8 @@ def el_movimiento_se_firma_contra_el_almacen_de_su_bin(ctx=None):
                               MovimientoInventario.tipo,
                               MovimientoInventario.almacen_id,
                               Ubicacion.almacen_id,
-                              MovimientoInventario.numero_documento)
+                              MovimientoInventario.numero_documento,
+                              MovimientoInventario.fecha)
              .join(Ubicacion, Ubicacion.id == MovimientoInventario.ubicacion_id)
              .filter(MovimientoInventario.fecha >= desde)
              .filter(MovimientoInventario.almacen_id != Ubicacion.almacen_id)
@@ -512,8 +516,8 @@ def el_movimiento_se_firma_contra_el_almacen_de_su_bin(ctx=None):
         _AUDITORIA_TRUNCADA.add(f'{__name__}:desalineados:{_TOPE_DESALINEADOS}')
 
     grupos = {}
-    for mid, tipo, alm_mov, alm_ub, doc in filas:
-        grupos.setdefault((alm_mov, alm_ub), []).append((mid, tipo, doc))
+    for mid, tipo, alm_mov, alm_ub, doc, cuando in filas:
+        grupos.setdefault((alm_mov, alm_ub), []).append((mid, tipo, doc, cuando))
 
     return [
         Hallazgo(
@@ -524,6 +528,8 @@ def el_movimiento_se_firma_contra_el_almacen_de_su_bin(ctx=None):
             datos={'almacen_firmado': alm_mov, 'almacen_del_bin': alm_ub,
                    'movimientos': [x[0] for x in v[:15]],
                    'tipos': sorted({x[1] for x in v})},
+            # Agregado: la fecha del más nuevo (sin fecha → vigente).
+            fecha=(None if any(x[3] is None for x in v) else max(x[3] for x in v)),
         )
         for (alm_mov, alm_ub), v in sorted(grupos.items(), key=lambda kv: -len(kv[1]))
     ]

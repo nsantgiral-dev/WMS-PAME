@@ -445,10 +445,14 @@ def health_siesa():
 
     # ── 3. DLQ — jobs fallidos pendientes ───────────────────────────────────
     try:
-        from app.services.siesa_job_service import get_jobs_fallidos
-        fallidos = get_jobs_fallidos()
+        from app.services.siesa_job_service import fallidos_vigentes
+        _trab = fallidos_vigentes(excluir_tipos=())
+        fallidos = _trab['jobs']
         resultado['dlq'] = {
             'jobs_fallidos': len(fallidos),
+            'recientes': len(_trab['recientes']),
+            'viejos': len(_trab['viejos']),
+            'superados': _trab['superados'],
             'alerta': (
                 f'{len(fallidos)} job(s) en FALLIDO — requieren reintento manual'
                 if fallidos else None

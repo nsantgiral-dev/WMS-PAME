@@ -600,19 +600,27 @@ def cohorte(desde, hasta, almacen_id=None):
     from app.models.picking import TareaPicking
     from app.services.cadena_pedido import TIPOS_DE_PEDIDO, clave_pedido
 
+    from app.services import corte as _corte
     ini, fin = rango_dia_operativo_utc(desde, hasta)
+    # Lo que entró antes de FECHA_INICIO_AUDITORIA es del ensayo: se cuenta en
+    # `antes_del_corte` y no entra al embudo ni a las fugas.
+    corte_utc = _corte.inicio_auditoria()
+    desde_utc = max(ini, corte_utc) if corte_utc is not None else ini
     entradas = _entradas()
-    pedidos = {}
+    pedidos, antes_del_corte = {}, 0
     for clave, (t_siesa, t_wms) in entradas.items():
         t = min([x for x in (t_siesa, t_wms) if x], default=None)
         if t is not None and ini <= t < fin:
+            if _corte.es_anterior(t, corte_utc):
+                antes_del_corte += 1
+                continue
             pedidos[clave] = Pedido(clave=clave)
 
     # Empaques de pedido sin clave: se siguen hacia adelante, aparte.
     for x in (TareaPacking.query
               .filter(TareaPacking.pedido_clave.is_(None),
                       TareaPacking.tipo_documento.in_(TIPOS_DE_PEDIDO),
-                      TareaPacking.fecha_creacion >= ini, TareaPacking.fecha_creacion < fin)):
+                      TareaPacking.fecha_creacion >= desde_utc, TareaPacking.fecha_creacion < fin)):
         pedidos[f'{PREFIJO_SIN_CLAVE}{x.id}'] = Pedido(clave=f'{PREFIJO_SIN_CLAVE}{x.id}',
                                                        enlazado=False, packings=[x])
 
@@ -644,17 +652,18 @@ def cohorte(desde, hasta, almacen_id=None):
     picking_sin_clave = _en_almacen(TareaPicking.query.filter(
         TareaPicking.pedido_clave.is_(None),
         TareaPicking.tipo_documento.in_(TIPOS_DE_PEDIDO),
-        TareaPicking.fecha_creacion >= ini, TareaPicking.fecha_creacion < fin),
+        TareaPicking.fecha_creacion >= desde_utc, TareaPicking.fecha_creacion < fin),
         TareaPicking).count()
     historia_sin_clave = PedidoHistoria.query.filter(
         PedidoHistoria.pedido_clave.is_(None),
-        PedidoHistoria.primera_vez_vista_at >= ini,
+        PedidoHistoria.primera_vez_vista_at >= desde_utc,
         PedidoHistoria.primera_vez_vista_at < fin).count()
     extra = {
         'sin_fecha_de_entrada': sum(1 for c in pendientes if c not in entradas),
         'fuera_de_alcance': fuera_de_alcance,
         'picking_sin_clave': picking_sin_clave,
         'historia_sin_clave': historia_sin_clave,
+        'antes_del_corte': antes_del_corte,
     }
     return elegidos, extra
 
@@ -662,6 +671,11 @@ def cohorte(desde, hasta, almacen_id=None):
 # ─────────────────────────────────────────────────────────────────────────────
 # Frescura
 # ─────────────────────────────────────────────────────────────────────────────
+
+def _estado_corte():
+    from app.services import corte
+    return corte.estado()
+
 
 def _meta(filtros, pedidos, extra, ahora):
     from sqlalchemy import func
@@ -714,6 +728,10 @@ def _meta(filtros, pedidos, extra, ahora):
         },
         'sin_fecha_de_entrada': extra['sin_fecha_de_entrada'],
         'fuera_de_alcance': extra['fuera_de_alcance'],
+        # FECHA_INICIO_AUDITORIA: pedidos del rango que entraron antes del
+        # corte, fuera del embudo (se cuentan, no se esconden).
+        'antes_del_corte': extra.get('antes_del_corte', 0),
+        'corte_auditoria': _estado_corte(),
     }
 
 

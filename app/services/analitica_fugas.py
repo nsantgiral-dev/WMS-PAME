@@ -732,6 +732,11 @@ def _limbo_de_traslados() -> dict:
         averias = toda_averia_recibida_termina_dictaminada()
     except Exception as e:  # la auditoría no puede tumbar la fuga
         return {'traslados': {'error': str(e)[:200]}}
+    # Lo anterior al corte no suma a la fuga (`corte.separar`, la misma regla
+    # que la auditoría aplica a estos hallazgos).
+    from app.services import corte as _corte
+    vuelo, _antes_vuelo = _corte.separar(vuelo, lambda h: h.fecha)
+    averias, _antes_averias = _corte.separar(averias, lambda h: h.fecha)
     atascados = [h for h in vuelo if h.referencia != 'sin-fecha-de-despacho']
     sin_fecha = next((h.datos.get('total', 0) for h in vuelo
                       if h.referencia == 'sin-fecha-de-despacho'), 0)
@@ -741,6 +746,7 @@ def _limbo_de_traslados() -> dict:
         'sin_fecha_de_despacho': sin_fecha,
         'averias_sin_dictaminar': sum(h.datos.get('total', 0) for h in averias),
         'codigos': [h.referencia for h in atascados][:20],
+        'antes_del_corte': len(_antes_vuelo) + len(_antes_averias),
     }}
 
 
@@ -895,21 +901,20 @@ def valor_de_job(job) -> tuple:
 
 
 def _documentos_trabados(desde, hasta, ctx) -> Resultado:
-    """Jobs de Siesa en `FALLIDO` —el WMS dejó de intentar— **creados** en el
-    rango. No es «no existe en Siesa»: es «nadie lo va a reintentar solo».
-    Valor por `valor_de_job`. `extra.fallidos_hoy` cuenta todos los que hoy
-    están FALLIDO sin importar cuándo se crearon, para que uno viejo no
-    desaparezca por salirse del rango.
+    """Jobs de Siesa que **siguen** trabados —`siesa_job_service.fallidos_vigentes`,
+    la única que los cuenta: sin los superados por un COMPLETADO posterior ni
+    los que la reconciliación cerró— **creados** en el rango. No es «no existe
+    en Siesa»: es «nadie lo va a reintentar solo». Valor por `valor_de_job`.
+    `extra.fallidos_hoy` cuenta todos los que hoy siguen trabados desde el
+    corte, sin importar cuándo se crearon, para que uno viejo no desaparezca
+    por salirse del rango; `extra.recientes`/`viejos` los separa por edad.
     """
-    from app.models.siesa_job import EstadoSiesaJob, SiesaJob
+    from app.services import corte as _corte
+    from app.services.siesa_job_service import fallidos_vigentes
     ini, fin = _rango_utc(desde, hasta)
-    jobs = (SiesaJob.query
-            .filter(SiesaJob.estado == EstadoSiesaJob.FALLIDO,
-                    SiesaJob.tipo.notin_(TIPOS_NO_DOCUMENTO),
-                    SiesaJob.fecha_creacion >= ini, SiesaJob.fecha_creacion < fin)
-            .order_by(SiesaJob.fecha_creacion.desc()).all())
+    trabados = fallidos_vigentes(desde=ini, hasta=fin, excluir_tipos=TIPOS_NO_DOCUMENTO)
     casos = []
-    for j in jobs:
+    for j in trabados['jobs']:
         pesos, alm, clave = valor_de_job(j)
         if ctx.almacen_id is not None and alm != ctx.almacen_id:
             continue
@@ -920,11 +925,13 @@ def _documentos_trabados(desde, hasta, ctx) -> Resultado:
             detalle={'tipo': j.tipo, 'intentos': j.intentos,
                      'error': (j.error_ultimo or '')[:300] or None},
         ))
-    extra = {}
+    extra = {'superados': trabados['superados']}
     if ctx.una_vez('periodo_actual', lambda: (desde, hasta)) == (desde, hasta):
-        extra['fallidos_hoy'] = (SiesaJob.query
-                                 .filter(SiesaJob.estado == EstadoSiesaJob.FALLIDO,
-                                         SiesaJob.tipo.notin_(TIPOS_NO_DOCUMENTO)).count())
+        hoy = fallidos_vigentes(desde=_corte.inicio_auditoria(),
+                                excluir_tipos=TIPOS_NO_DOCUMENTO)
+        extra.update(fallidos_hoy=len(hoy['jobs']), recientes=len(hoy['recientes']),
+                     viejos=len(hoy['viejos']),
+                     ventana_reciente_dias=hoy['ventana_reciente_dias'])
     return Resultado(casos, extra=extra)
 
 
@@ -1127,17 +1134,63 @@ def _fuentes(desde, hasta) -> dict:
     }
 
 
+class _Rangos:
+    """El rango pedido llevado al corte (`FECHA_INICIO_AUDITORIA`).
+
+    · El período actual empieza en el corte si el rango lo cruza.
+    · El anterior, de igual duración que el pedido, también se recorta; si cae
+      entero antes del corte **no hay base** (`sin_dato`): comparar contra el
+      ensayo diría «bajó» o «subió» sobre datos que no son operación.
+    · El tramo recortado se evalúa aparte y se publica en `antes_del_corte`
+      por fuga: se cuenta, no suma ni cambia el estado.
+    """
+
+    def __init__(self, desde, hasta):
+        from app.services import corte
+        self.pedido = (desde, hasta)
+        self.desde, self.hasta, self.info = corte.recortar_rango(desde, hasta)
+        ant = periodo_anterior(desde, hasta)
+        a_desde, a_hasta, _ = corte.recortar_rango(*ant)
+        self.anterior = (a_desde, a_hasta)
+        self.anterior_vacio = a_desde > a_hasta
+        self.corte = corte.estado()
+
+    def evaluar(self, fuga, ctx):
+        vacio = self.desde > self.hasta
+        res = Resultado([]) if vacio else fuga.fn(self.desde, self.hasta, ctx)
+        res_ant = (Resultado([], sin_dato='el período anterior es anterior al corte')
+                   if self.anterior_vacio else fuga.fn(*self.anterior, ctx))
+        antes = None
+        if self.info['aplicado']:
+            pre = fuga.fn(*self.info['antes'], ctx)
+            t = totales(pre)
+            antes = {'casos': t['casos'], 'pesos': t['pesos']}
+        return res, res_ant, antes
+
+    def meta(self):
+        return {'desde_efectivo': self.desde.isoformat() if self.desde else None,
+                'anterior_efectivo': ({'desde': self.anterior[0].isoformat(),
+                                       'hasta': self.anterior[1].isoformat()}
+                                      if not self.anterior_vacio else None),
+                **self.corte,
+                'dias_antes_del_corte': self.info.get('dias_antes_del_corte', 0)}
+
+
 def calcular_fugas(desde: date, hasta: date, almacen_id: int = None) -> dict:
-    """Las ocho fugas del rango, ordenadas, con el total del período."""
+    """Las ocho fugas del rango, ordenadas, con el total del período. Desde el
+    corte (`FECHA_INICIO_AUDITORIA`): lo anterior se cuenta en
+    `antes_del_corte` de cada fuga y no suma."""
     almacenes = _almacenes()
     ant_desde, ant_hasta = periodo_anterior(desde, hasta)
+    rangos = _Rangos(desde, hasta)
     ctx = _Ctx(almacen_id)
-    ctx.una_vez('periodo_actual', lambda: (desde, hasta))
+    ctx.una_vez('periodo_actual', lambda: (rangos.desde, rangos.hasta))
     fugas = []
     for fuga in FUGAS.values():
-        res = fuga.fn(desde, hasta, ctx)
-        res_ant = fuga.fn(ant_desde, ant_hasta, ctx)
-        fugas.append(_resumen_fuga(fuga, res, res_ant, almacenes, almacen_id))
+        res, res_ant, antes = rangos.evaluar(fuga, ctx)
+        r = _resumen_fuga(fuga, res, res_ant, almacenes, almacen_id)
+        r['antes_del_corte'] = antes
+        fugas.append(r)
     fugas = ordenar(fugas)
 
     suman = [f for f in fugas if f['aporte_al_total'] is not None]
@@ -1160,6 +1213,7 @@ def calcular_fugas(desde: date, hasta: date, almacen_id: int = None) -> dict:
             'calculado_en': ahora.isoformat() + 'Z',
             'completa': all(v.get('completa', True) for v in fuentes.values()),
             'fuentes': fuentes,
+            'corte': rangos.meta(),
         },
         'resumen': {
             'total_pesos': total,
@@ -1186,12 +1240,12 @@ def detalle_fuga(clave: str, desde: date, hasta: date, almacen_id: int = None,
         raise KeyError(clave)
     fuga = FUGAS[clave]
     almacenes = _almacenes()
-    ant_desde, ant_hasta = periodo_anterior(desde, hasta)
+    rangos = _Rangos(desde, hasta)
     ctx = _Ctx(almacen_id)
-    ctx.una_vez('periodo_actual', lambda: (desde, hasta))
-    res = fuga.fn(desde, hasta, ctx)
-    res_ant = fuga.fn(ant_desde, ant_hasta, ctx)
+    ctx.una_vez('periodo_actual', lambda: (rangos.desde, rangos.hasta))
+    res, res_ant, antes = rangos.evaluar(fuga, ctx)
     resumen = _resumen_fuga(fuga, res, res_ant, almacenes, almacen_id)
+    resumen['antes_del_corte'] = antes
     casos = sorted(res.casos, key=lambda c: (c.pesos is not None, -(c.pesos or 0),
                                              -(c.unidades or 0)))
     per_page = max(1, min(int(per_page), POR_PAGINA_MAX))
@@ -1202,7 +1256,8 @@ def detalle_fuga(clave: str, desde: date, hasta: date, almacen_id: int = None,
                  'almacen_id': almacen_id,
                  'calculado_en': datetime.utcnow().isoformat() + 'Z',
                  'completa': not res.faltan and not res.sin_dato,
-                 'fuentes': _fuentes(desde, hasta)},
+                 'fuentes': _fuentes(desde, hasta),
+                 'corte': rangos.meta()},
         'fuga': resumen,
         'casos': [c.to_dict(almacenes) for c in casos[ini:ini + per_page]],
         'total': len(casos),

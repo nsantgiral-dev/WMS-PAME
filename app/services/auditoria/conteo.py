@@ -79,6 +79,7 @@ def la_diferencia_es_la_resta(ctx=None):
         if s.diferencia is not None and s.diferencia != esperada:
             out.append(Hallazgo(
                 referencia=s.codigo or f'conteo#{s.id}',
+                fecha=s.fecha_creacion,
                 detalle=f'diferencia={s.diferencia} pero '
                         f'{s.cantidad_fisica} − {base} = {esperada}',
                 datos={'estado': s.estado},
@@ -110,6 +111,7 @@ def el_motivo_concuerda_con_el_signo(ctx=None):
         if mot != esperado:
             out.append(Hallazgo(
                 referencia=s.codigo or f'conteo#{s.id}',
+                fecha=s.fecha_creacion,
                 detalle=f'diferencia={s.diferencia} con motivo {mot} '
                         f'(correspondía {esperado})',
                 datos={'estado': s.estado},
@@ -136,6 +138,7 @@ def ningun_ajuste_sin_cuenta_fisica(ctx=None):
     return [
         Hallazgo(
             referencia=s.codigo or f'conteo#{s.id}',
+            fecha=s.fecha_creacion,
             detalle='ajuste disparado a Siesa sin cantidad física registrada',
             datos={'estado': s.estado, 'producto': s.producto_codigo_siesa},
         )
@@ -199,6 +202,7 @@ def un_descuadre_se_cuenta_dos_veces(ctx=None):
         if not hay:
             out.append(Hallazgo(
                 referencia=s.codigo or f'conteo#{s.id}',
+                fecha=s.fecha_creacion,
                 detalle=f'ajustado con diferencia {s.diferencia} sin segundo conteo',
                 datos={'producto': s.producto_codigo_siesa},
             ))
@@ -247,6 +251,7 @@ def ninguna_sesion_se_queda_ajustando(ctx=None):
     return [
         Hallazgo(
             referencia=s.codigo or f'conteo#{s.id}',
+            fecha=s.fecha_creacion,
             detalle=f'atascada en AJUSTANDO sin ajuste vivo en la cola · '
                     f'diferencia={s.diferencia} · '
                     f'siesa_triggered={bool(s.siesa_triggered)}',
@@ -281,6 +286,7 @@ def se_pueden_contar_los_descuadres_abiertos(ctx=None):
     return [
         Hallazgo(
             referencia=s.codigo or f'conteo#{s.id}',
+            fecha=s.fecha_creacion,
             detalle=f'{s.estado} · diferencia {s.diferencia}',
             datos={'producto': s.producto_codigo_siesa},
         )
@@ -299,6 +305,9 @@ def se_pueden_contar_los_descuadres_abiertos(ctx=None):
                  'las dos bases discrepaban**, que es la única razón para contar.',
     severidad=BLOQUEA,
     detector_ciego='tests/test_fuente_existencia.py::TestCNT07::test_un_ajuste_sobre_base_del_wms_bloquea',
+    # Desde 02d4a80f la aprobación se niega sin foto de Siesa. Lo anterior es
+    # huella del fallback al WMS; lo posterior sería que alguien lo reintrodujo.
+    defecto_corregido=('02d4a80f', '2026-08-15T08:26:30-05:00'),
 )
 def ningun_ajuste_sobre_una_base_del_wms(ctx=None):
     """El defecto que era inauditable hasta que existió la columna.
@@ -319,6 +328,7 @@ def ningun_ajuste_sobre_una_base_del_wms(ctx=None):
     return [
         Hallazgo(
             referencia=s.codigo or f'conteo#{s.id}',
+            fecha=s.fecha_creacion,
             detalle=f'ajuste de {s.diferencia} enviado a Siesa con la existencia '
                     f'tomada del WMS ({s.existencia_siesa}) — la base no era la '
                     f'fiscal',
@@ -354,6 +364,7 @@ def ningun_ajuste_con_salidas_no_pos(ctx=None):
     return [
         Hallazgo(
             referencia=s.codigo or f'conteo#{s.id}',
+            fecha=s.fecha_creacion,
             detalle=f'ajuste de {s.diferencia} enviado con salida sin confirmar '
                     f'{s.salida_sin_conf_siesa} y POS {s.cant_pos_siesa} en la '
                     f'foto: {s.salida_sin_conf_siesa - s.cant_pos_siesa} und de '
@@ -413,6 +424,7 @@ def ninguna_cadena_queda_sin_salida(ctx=None):
         if esperado is None or esperado.estado not in vivos:
             out.append(Hallazgo(
                 referencia=raiz.codigo or f'conteo#{raiz.id}',
+                fecha=raiz.fecha_creacion,
                 detalle=(f'raíz en {raiz.estado} esperando su {nivel}, que '
                          + (f'está {esperado.estado} ({esperado.codigo})' if esperado
                             else 'no existe')),
@@ -428,6 +440,7 @@ def ninguna_cadena_queda_sin_salida(ctx=None):
         if raiz is s or raiz.estado != _RAIZ_QUE_ESPERA[nivel]:
             out.append(Hallazgo(
                 referencia=s.codigo or f'conteo#{s.id}',
+                fecha=s.fecha_creacion,
                 detalle=(f'{nivel} {s.estado} bajo una raíz en '
                          f'{raiz.estado if raiz is not s else "(sin raíz)"} '
                          f'({raiz.codigo}): lo que se cuente no llega a ningún lado'),

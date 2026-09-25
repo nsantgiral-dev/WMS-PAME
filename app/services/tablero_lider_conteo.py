@@ -252,6 +252,18 @@ def _quien_decidio(s: SesionConteo) -> str:
     return 'Queda el 1er conteo'
 
 
+def filtro_descuadres_por_decidir(almacen_id: int) -> tuple:
+    """«Conteo con diferencia» — **la** definición: raíces (CC1) en
+    DESCUADRE, contadas con diferencia y esperando que alguien apruebe o
+    recuente. Solo raíces: el CC2/CC3 que resolvió queda en DESCUADRE para
+    siempre y no es una decisión pendiente. La usan este tablero y la tarjeta
+    del dashboard (antes contaba SEGUNDO_CONTEO, que es otra cosa: un 1er
+    conteo con diferencia esperando el 2º)."""
+    return (SesionConteo.almacen_id == almacen_id,
+            SesionConteo.es_segundo_conteo.is_(False),
+            SesionConteo.estado == EstadoConteo.DESCUADRE)
+
+
 def _ajustes(almacen_id, rol: str = None) -> dict:
     """Raíces en DESCUADRE: las que se pueden aprobar, con su plata, y las que
     no, con el porqué resumido y la acción. Solo raíces: el ajuste sale de la
@@ -261,9 +273,7 @@ def _ajustes(almacen_id, rol: str = None) -> dict:
     from app.services.metricas.conteo import resumir_motivo_bloqueo
     from app.utils.fecha import dia_operativo_de
     raices = (SesionConteo.query
-              .filter(SesionConteo.almacen_id == almacen_id,
-                      SesionConteo.es_segundo_conteo.is_(False),
-                      SesionConteo.estado == EstadoConteo.DESCUADRE)
+              .filter(*filtro_descuadres_por_decidir(almacen_id))
               .order_by(SesionConteo.id.asc())
               .all())
     aprobables, bloqueados = [], []
