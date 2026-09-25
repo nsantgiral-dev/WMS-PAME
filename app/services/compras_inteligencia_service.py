@@ -7,7 +7,8 @@ Tres ramas:
   3. Cola C → precio lista proveedor preferente, sin cotizar
 
 Detector de deriva:
-  Compara precio facturado en recepción vs precio pactado en acuerdo.
+  Compara el precio de las OC de Siesa (con su cantidad) vs el pactado en el
+  acuerdo. Es el ÚNICO comparador OC ↔ acuerdo del repo.
   Un 2-3% de deriva no detectada son decenas de millones al año.
 
 Calendario de vencimientos:
@@ -25,19 +26,46 @@ DIAS_ALERTA_VENCIMIENTO = 21  # 3 semanas antes
 
 
 def precios_de_compra_recibidos(desde, producto_ids):
-    """ENCHUFE: precios unitarios de compra efectivamente facturados/recibidos.
+    """Precios de compra de las OC de Siesa, por línea, con su cantidad.
 
     Devuelve `([{producto_id, precio_unitario, moneda, cantidad, fecha,
-    proveedor}], fuente)`.
+    proveedor, proveedor_codigo, oc}], fuente)`.
 
-    Hoy NO HAY FUENTE: `RecepcionMercancia`/`ItemRecepcion` guardan unidades,
-    no el precio de la factura del proveedor, y el kardex trae el COSTO
-    PROMEDIO del movimiento, que no es el precio pactado ni el facturado. Las
-    líneas de las OC de Siesa (`API_v2_Compras_Ordenes`: precio unitario de la
-    orden, 89 campos con contrato) son la fuente natural; quien las sincronice
-    las devuelve ACÁ y `detectar_deriva` empieza a comparar sin más cambios.
+    Fuente: `compras_fuentes.lineas_precio_oc` — el espejo de
+    `API_v2_Compras_Ordenes` (m046compras), la única lectura del precio de una
+    OC. Precio y cantidad por unidad BASE, en la moneda de la OC (la conversión
+    es de quien compara: `a_cop`). Cuenta toda OC no anulada desde `desde`,
+    abierta o cumplida: el precio se pactó al aprobarla, antes de recibir.
+
+    La recepción del WMS no sirve: `ItemRecepcion` guarda unidades, no el
+    precio de la factura del proveedor, y el kardex trae el costo PROMEDIO.
+    Sin OCs sincronizadas la lista sale vacía y `detectar_deriva` lo declara.
     """
-    return [], 'SIN_FUENTE'
+    from app.models.producto import Producto
+    from app.services.compras_fuentes import lineas_precio_oc
+
+    ids_por_ref = {}
+    for pid, ref in (db.session.query(Producto.id, Producto.codigo_siesa)
+                     .filter(Producto.id.in_(list(producto_ids or [])))
+                     .all()):
+        if ref:
+            ids_por_ref[ref.strip()] = pid
+    if not ids_por_ref:
+        return [], 'OC_SIESA'
+    salida = []
+    for l in lineas_precio_oc(list(ids_por_ref), desde=desde):
+        salida.append({
+            'producto_id': ids_por_ref.get(l['referencia']),
+            'precio_unitario': float(l['precio_base']),
+            'moneda': l['moneda'],
+            'cantidad': (float(l['cantidad_base'])
+                         if l['cantidad_base'] is not None else None),
+            'fecha': l['fecha_oc'],
+            'proveedor': l['proveedor_codigo'],
+            'proveedor_codigo': l['proveedor_codigo'],
+            'oc': l['oc'],
+        })
+    return [r for r in salida if r['producto_id'] is not None], 'OC_SIESA'
 
 
 class ComprasInteligenciaService:
@@ -114,9 +142,12 @@ class ComprasInteligenciaService:
         """
         Dock Lock de compras: detecta diferencia entre precio facturado y precio pactado.
 
-        Cruza los precios de compra RECIBIDOS (`precios_de_compra_recibidos`)
+        Cruza los precios de compra de las OC de Siesa
+        (`precios_de_compra_recibidos` → `compras_fuentes.lineas_precio_oc`)
         contra los acuerdos marco vigentes y activos, en la misma moneda
-        (`costo_service.a_cop`).
+        (`costo_service.a_cop`). Compara toda OC del SKU, sea o no del
+        proveedor del acuerdo: comprarle más caro a otro también es plata de
+        más. `mismo_proveedor` lo distingue (None = no se sabe).
 
         ANTES (D10): leía `ItemRecepcion.costo_unitario` y
         `RecepcionMercancia.fecha_recepcion`, dos columnas que NO EXISTEN. Con
@@ -126,8 +157,10 @@ class ComprasInteligenciaService:
         no haya fuente, la deriva lo DECLARA («sin precio de compra recibido»)
         en vez de reventar o de pintar «los precios coinciden».
 
-        `impacto_estimado_cop` = Σ (facturado − pactado) × cantidad recibida, solo
-        sobrecostos: la plata de más, no un porcentaje sin volumen.
+        `impacto_estimado_cop` = Σ (OC − pactado) × cantidad pedida en la OC,
+        solo sobrecostos: la plata de más, no un porcentaje sin volumen. Una
+        línea sin cantidad en unidad base aporta 0 y se cuenta
+        (`sin_cantidad`).
 
         Returns: {derivas, total, sobrecostos, impacto_estimado_cop, fuente_precio_compra,
                   sin_precio_de_compra, nota}
@@ -164,6 +197,7 @@ class ComprasInteligenciaService:
             for pid in acuerdos_por_prod if pid not in con_precio)
 
         derivas = []
+        sin_cantidad = 0
         for r in recibidos:
             acuerdo = acuerdos_por_prod.get(r['producto_id'])
             if not acuerdo:
@@ -177,13 +211,20 @@ class ComprasInteligenciaService:
 
             if abs(diferencia_pct) > 1.0:  # Solo reportar derivas >1%
                 prod = productos.get(r['producto_id'])
+                if r.get('cantidad') is None:
+                    sin_cantidad += 1
                 cantidad = float(r.get('cantidad') or 0)
+                prov_oc = r.get('proveedor_codigo')
+                prov_acuerdo = acuerdo.proveedor.codigo if acuerdo.proveedor else None
                 derivas.append({
                     'producto_id': r['producto_id'],
                     'referencia': prod.codigo_siesa if prod else '?',
                     'nombre': prod.nombre if prod else '?',
                     'proveedor_acuerdo': acuerdo.proveedor.nombre if acuerdo.proveedor else '?',
                     'proveedor_factura': r.get('proveedor'),
+                    'mismo_proveedor': (prov_oc == prov_acuerdo
+                                        if prov_oc and prov_acuerdo else None),
+                    'oc': r.get('oc'),
                     'precio_pactado': round(precio_pactado, 2),
                     'precio_facturado': round(precio_facturado, 2),
                     'cantidad': cantidad,
@@ -199,9 +240,12 @@ class ComprasInteligenciaService:
 
         nota = None
         if not recibidos:
-            nota = (f'Sin precio de compra recibido para comparar ({fuente}): el WMS '
-                    f'no guarda el precio facturado por el proveedor. '
-                    f'{len(acuerdos_por_prod)} acuerdo(s) vigente(s) sin contrastar.')
+            from app.services.compras_fuentes import frescura_oc
+            espejo = frescura_oc()
+            nota = (f'Sin precio de compra recibido para comparar ({fuente}): ninguna '
+                    f'OC de Siesa de los últimos {meses} meses para los SKU con acuerdo. '
+                    f'{len(acuerdos_por_prod)} acuerdo(s) vigente(s) sin contrastar.'
+                    + (f' {espejo["nota"]}' if espejo.get('nota') else ''))
         return {
             'derivas': derivas,
             'total': len(derivas),
@@ -210,6 +254,7 @@ class ComprasInteligenciaService:
             'periodo_meses': meses,
             'fuente_precio_compra': fuente,
             'sin_precio_de_compra': sin_precio,
+            'sin_cantidad': sin_cantidad,
             'nota': nota,
         }
 

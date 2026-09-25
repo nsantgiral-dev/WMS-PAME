@@ -423,7 +423,7 @@ function _renderDeriva(el, data) {
           <span style="font-size:var(--fs-sm);font-weight:700;color:${color};">${d.diferencia_pct > 0 ? '+' : ''}${esc(d.diferencia_pct)}%</span>
         </div>
         <div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:2px;">
-          Pactado: $${d.precio_pactado.toLocaleString('es-CO')} | Facturado: $${d.precio_facturado.toLocaleString('es-CO')} | ${esc(d.proveedor_factura)}
+          Pactado: $${d.precio_pactado.toLocaleString('es-CO')} | En la OC ${esc(d.oc || '')}: $${d.precio_facturado.toLocaleString('es-CO')} | ${esc(d.proveedor_factura)}
         </div>
       </div>`;
     }

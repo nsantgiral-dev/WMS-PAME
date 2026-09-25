@@ -12,8 +12,9 @@ fantasma", y la cobertura del comité no es 40% — es CERO.
 JERARQUÍA DE COSTO — de más a menos confiable, y el criterio es económico:
   1. ACUERDO_VIGENTE   precio pactado hoy con el proveedor
   2. COTIZACION        cotización reciente del proveedor
-  2b. OC_SIESA         precio de la OC más reciente en Siesa, COP por unidad
-                       base (`compras_fuentes.precios_oc`, m046compras). Es lo
+  2b. OC_SIESA         precio de la OC más reciente en Siesa, por unidad
+                       base y en pesos vía `a_cop` (`compras_fuentes.precios_oc`,
+                       m046compras). Es lo
                        que se pactó en la última compra real: hacia adelante
                        como la cotización pero sin acuerdo detrás; por eso va
                        después de ella y antes del promedio del kardex
@@ -241,13 +242,16 @@ def _costos_cotizacion(refs, meses=6):
 
 
 def _costos_oc_siesa(refs):
-    """Precio de la OC más reciente de Siesa (COP, unidad base). La política
-    —qué OC, qué moneda, cómo se lleva a unidad base— vive en
-    `compras_fuentes.precios_oc`; acá solo se enchufa a la jerarquía."""
+    """Precio de la OC más reciente de Siesa (unidad base, en pesos). La
+    política —qué OC, cómo se lleva a unidad base— vive en
+    `compras_fuentes.precios_oc`, y la moneda en `a_cop` (D4: una OC en USD se
+    nacionaliza como un acuerdo en USD, declarado en `conversion`); acá solo se
+    enchufa a la jerarquía. Un SKU cuyas OCs están todas en una moneda sin
+    conversión no entra a la capa (`costo: None`): cae a la siguiente."""
     from datetime import date as _date
     from app.services.compras_fuentes import precios_oc
     hoy = _dia_operativo()
-    salida = precios_oc(refs)
+    salida = {r: v for r, v in precios_oc(refs).items() if v.get('costo')}
     for v in salida.values():
         f = _date.fromisoformat(v['fecha_costo']) if v.get('fecha_costo') else None
         v['dias_antiguedad'] = (hoy - f).days if f else None

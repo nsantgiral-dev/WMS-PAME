@@ -497,11 +497,34 @@ class TestPrecioDeCompra:
         from app.services.compras_fuentes import precios_oc
         _oc_precio(db, 1, date(2026, 5, 1), 1000)
         _oc_precio(db, 2, date(2026, 8, 1), 12000, factor=12)       # caja de 12
-        _oc_precio(db, 3, date(2026, 9, 1), 9, moneda='USD')
+        # La de USD es más vieja: su conversión se prueba aparte (D4).
+        _oc_precio(db, 3, date(2026, 7, 1), 9, moneda='USD')
         _oc_precio(db, 4, date(2026, 9, 2), 0, obsequio=1)
         _oc_precio(db, 5, date(2026, 9, 3), 5000, estado=9)          # anulada
         p = precios_oc(['PROD-001'])['PROD-001']
         assert p['costo'] == 1000 and p['fecha_costo'] == '2026-08-01'
+
+    def test_una_oc_en_usd_se_nacionaliza_con_a_cop(self, app, db, producto, monkeypatch):
+        """Integración con D4: la moneda se lleva a pesos con UNA política
+        (`costo_service.a_cop`, la de acuerdos y cotizaciones), declarada en
+        `conversion`. Antes las OCs en USD se excluían sin más."""
+        from app.services.compras_fuentes import precios_oc
+        monkeypatch.setenv('TRM_COP_USD', '4000')
+        monkeypatch.setenv('FACTOR_NACIONALIZACION', '1.5')
+        _oc_precio(db, 1, date(2026, 8, 1), 1000)
+        _oc_precio(db, 2, date(2026, 9, 1), 24, moneda='USD', factor=12)   # 2 USD/u
+        p = precios_oc(['PROD-001'])['PROD-001']
+        assert p['costo'] == 2 * 4000 * 1.5 and p['moneda'] == 'USD'
+        assert p['conversion']['trm'] == 4000 and p['fecha_costo'] == '2026-09-01'
+
+    def test_otra_moneda_se_excluye_declarada(self, app, db, producto):
+        from app.services.compras_fuentes import precios_oc
+        from app.services.costo_service import resolver_costos
+        _oc_precio(db, 1, date(2026, 9, 1), 9, moneda='EUR')
+        p = precios_oc(['PROD-001'])['PROD-001']
+        assert p['costo'] is None and p['lineas_otra_moneda'] == 1
+        assert 'EUR' in p['motivo_exclusion']
+        assert resolver_costos(['PROD-001'])['PROD-001']['fuente'] != 'OC_SIESA'
 
     def test_a_igual_fecha_la_mas_alta(self, app, db, producto):
         from app.services.compras_fuentes import precios_oc
@@ -523,9 +546,14 @@ class TestPrecioDeCompra:
         db.session.commit()
         assert resolver_costos(['PROD-001'])['PROD-001']['fuente'] == 'COTIZACION'
 
-    def test_contra_el_acuerdo_marco(self, app, db, producto):
+    def test_la_deriva_compara_la_oc_contra_el_acuerdo(self, app, db, producto):
+        """Integración: el enchufe del motor (`precios_de_compra_recibidos`)
+        lee las OCs de Siesa, y `detectar_deriva` es el ÚNICO comparador OC ↔
+        acuerdo (se retiró `compras_fuentes.precio_oc_vs_acuerdo`, que hacía lo
+        mismo sin cantidades ni moneda). Con cantidad: el impacto es plata."""
         from app.models.acuerdo_marco import AcuerdoMarco, Proveedor
-        from app.services.compras_fuentes import precio_oc_vs_acuerdo
+        from app.models.compras_fuentes import OcLineaSiesa
+        from app.services.compras_inteligencia_service import ComprasInteligenciaService
         from app.utils.fecha import dia_operativo
         hoy_operativo = dia_operativo()
         prov = Proveedor(codigo='800123', nombre='P')
@@ -534,10 +562,18 @@ class TestPrecioDeCompra:
         db.session.add(AcuerdoMarco(producto_id=producto.id, proveedor_id=prov.id,
                                     precio_unitario=1000, vigencia_desde=hoy_operativo - timedelta(days=30),
                                     vigencia_hasta=hoy_operativo + timedelta(days=30)))
+        db.session.add(OcLineaSiesa(
+            rowid_linea=1, co='003', tipo_docto='OC', consec_docto=1, fecha_oc=hoy_operativo,
+            estado_oc=1, referencia='PROD-001', precio_unitario=1050, factor=1,
+            cant_pedida_base=10, moneda='COP', ind_obsequio=0, proveedor_codigo='800123',
+            abierta=True))
         db.session.commit()
-        _oc_precio(db, 1, hoy_operativo, 1050)
-        d = precio_oc_vs_acuerdo()
-        assert len(d) == 1 and d[0]['diferencia_pct'] == 5.0
+        r = ComprasInteligenciaService.detectar_deriva()
+        assert r['fuente_precio_compra'] == 'OC_SIESA' and r['total'] == 1
+        d = r['derivas'][0]
+        assert d['diferencia_pct'] == 5.0 and d['cantidad'] == 10
+        assert r['impacto_estimado_cop'] == 500 and d['mismo_proveedor'] is True
+        assert d['oc'] == '003-OC-1' and r['nota'] is None
 
 
 # ══════════════════════════════════════════════════════════════════════════════

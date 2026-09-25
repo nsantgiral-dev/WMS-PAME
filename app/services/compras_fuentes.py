@@ -7,8 +7,10 @@ UNA respuesta en el repo y vive acá:
   · ¿cuánto de este SKU viene en camino?      → `en_camino(skus, bodegas)`
   · ¿cuánto tarda este proveedor / origen?     → `lead_time(proveedor, origen)`
   · ¿cuánto queda por entrar de esta línea?    → `pendiente_de_linea(fila)`
-  · ¿a cuánto lo compramos la última vez?      → `precios_oc(refs)`
-  · ¿la OC respetó el acuerdo marco?           → `precio_oc_vs_acuerdo()`
+  · ¿a cuánto lo compramos la última vez?      → `precios_oc(refs)` (en COP)
+  · ¿a cuánto dice cada OC? (una lectura)      → `lineas_precio_oc(...)` — la
+    usan el costo y la deriva contra el acuerdo marco
+    (`compras_inteligencia_service.detectar_deriva`, el único comparador)
 
 `tests/test_compras_fuentes_trinquetes.py` impide, por AST, que otro módulo
 vuelva a sumar cantidades en tránsito o a elegir un lead time por su cuenta.
@@ -626,8 +628,9 @@ def proveedor_habitual(refs=None) -> dict:
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _precio_base(linea):
-    """Precio por unidad de INVENTARIO: el de la OC es por su unidad
-    (`f421_id_unidad_medida`). Sin factor no se convierte — no se inventa."""
+    """Precio por unidad de INVENTARIO, en la moneda de la OC: el de la OC es
+    por su unidad (`f421_id_unidad_medida`). Sin factor no se convierte — no se
+    inventa."""
     p = _dec(linea.precio_unitario)
     fac = _dec(linea.factor)
     if p is None or p <= 0 or fac is None or fac <= 0:
@@ -635,79 +638,97 @@ def _precio_base(linea):
     return p / fac
 
 
-def precios_oc(refs, proveedor: str = None) -> dict:
-    """El precio de la OC más reciente por SKU, en COP y por unidad base.
+def _cantidad_base(linea):
+    """Lo pedido en la línea, en unidad base (lo que se paga al precio de la OC)."""
+    pb = _dec(linea.cant_pedida_base)
+    if pb is not None:
+        return pb
+    p, fac = _dec(linea.cant_pedida), _dec(linea.factor)
+    if p is not None and fac is not None and fac > 0:
+        return p * fac
+    return None
 
-    Solo COP: una OC en USD no es un costo en pesos sin la tasa del día de
-    nacionalizar, y convertirla con la del documento sería inventar el costo de
-    importación. Obsequios (`f421_ind_obsequio=1`) y anuladas fuera.
 
-    A igual fecha, el MÁS ALTO (misma regla de `costo_service`: subestimar el
-    costo empuja a comprar de más, que es el lado irreversible).
+def lineas_precio_oc(refs=None, desde=None, proveedor: str = None) -> list:
+    """Las líneas de OC que dicen a cuánto se compró. **La única lectura del
+    precio de una OC**: la usan el costo (`precios_oc` → capa `OC_SIESA`) y la
+    deriva contra el acuerdo (`compras_inteligencia_service.
+    precios_de_compra_recibidos`).
 
-    Returns: {ref: {costo, fuente='OC_SIESA', fecha_costo, proveedor, oc}}
+    Una por línea, por unidad base y **en la moneda de la OC** (la conversión a
+    pesos es de `costo_service.a_cop`, una política). Fuera: anuladas,
+    obsequios (`f421_ind_obsequio=1`) y líneas sin precio o sin factor.
+
+    Returns: [{referencia, precio_base (Decimal), moneda, cantidad_base
+               (Decimal | None), fecha_oc (date), proveedor_codigo, oc}]
     """
     from app.models.compras_fuentes import OcLineaSiesa
-    refs = [r for r in (refs or []) if r]
-    if not refs:
-        return {}
-    q = OcLineaSiesa.query.filter(OcLineaSiesa.referencia.in_(refs),
-                                  OcLineaSiesa.fecha_oc.isnot(None))
+    q = OcLineaSiesa.query.filter(OcLineaSiesa.fecha_oc.isnot(None))
+    if refs is not None:
+        refs = [r for r in refs if r]
+        if not refs:
+            return []
+        q = q.filter(OcLineaSiesa.referencia.in_(refs))
+    if desde is not None:
+        q = q.filter(OcLineaSiesa.fecha_oc >= desde)
     if proveedor:
         q = q.filter(OcLineaSiesa.proveedor_codigo == proveedor)
-    salida = {}
+    salida = []
     for l in q.all():
         if l.estado_oc == ESTADO_OC_ANULADA or (l.ind_obsequio or 0) == 1:
-            continue
-        if (l.moneda or '').strip().upper() not in ('COP',):
             continue
         p = _precio_base(l)
         if p is None:
             continue
-        prev = salida.get(l.referencia)
-        if (prev is None or l.fecha_oc > prev['_fecha']
-                or (l.fecha_oc == prev['_fecha'] and p > Decimal(str(prev['costo'])))):
-            salida[l.referencia] = {
-                'costo': float(round(p, 4)), 'fuente': 'OC_SIESA',
-                'fecha_costo': l.fecha_oc.isoformat(), '_fecha': l.fecha_oc,
-                'proveedor': l.proveedor_codigo, 'oc': l.oc_referencia,
-            }
-    for v in salida.values():
-        v.pop('_fecha', None)
+        salida.append({
+            'referencia': (l.referencia or '').strip(), 'precio_base': p,
+            'moneda': (l.moneda or 'COP').strip().upper() or 'COP',
+            'cantidad_base': _cantidad_base(l), 'fecha_oc': l.fecha_oc,
+            'proveedor_codigo': l.proveedor_codigo, 'oc': l.oc_referencia,
+        })
     return salida
 
 
-def precio_oc_vs_acuerdo() -> list:
-    """Cada acuerdo marco vigente contra la OC más reciente del MISMO proveedor
-    y SKU. Es el insumo de `detectar_deriva` (compras_inteligencia_service): la
-    deriva se mide contra lo que se pidió en la OC, que existe desde que se
-    aprueba, y no solo contra la recepción.
+def precios_oc(refs, proveedor: str = None) -> dict:
+    """El precio de la OC más reciente por SKU, **en COP** y por unidad base.
 
-    Returns: [{producto_id, referencia, proveedor_codigo, precio_pactado,
-               precio_oc, diferencia_pct, oc, fecha_oc}]
+    La moneda se lleva a pesos con `costo_service.a_cop` —la misma política de
+    los acuerdos y las cotizaciones (D4)—: USD como FOB × TRM × factor de
+    nacionalización, declarado en `conversion`. Otra moneda no se convierte:
+    esa línea se excluye y se cuenta; un SKU que solo tiene líneas así sale con
+    `costo: None` y `motivo_exclusion` (la capa de costo lo salta).
+
+    A igual fecha, el MÁS ALTO (misma regla de `costo_service`: subestimar el
+    costo empuja a comprar de más, que es el lado irreversible).
+
+    Returns: {ref: {costo, fuente='OC_SIESA', fecha_costo, proveedor, oc,
+                    moneda, conversion, lineas_otra_moneda}}
     """
-    from app.models.acuerdo_marco import AcuerdoMarco
-    from app.utils.fecha import dia_operativo
-    hoy = dia_operativo()
-    salida = []
-    acuerdos = AcuerdoMarco.query.filter(AcuerdoMarco.activo.is_(True),
-                                         AcuerdoMarco.vigencia_desde <= hoy,
-                                         AcuerdoMarco.vigencia_hasta >= hoy).all()
-    for a in acuerdos:
-        if (a.moneda or 'COP').upper() != 'COP' or not a.producto or not a.proveedor:
+    from app.services.costo_service import a_cop
+    salida, excluidas, motivo = {}, defaultdict(int), {}
+    for l in lineas_precio_oc(refs, proveedor=proveedor):
+        ref = l['referencia']
+        p, conversion = a_cop(l['precio_base'], l['moneda'])
+        if p is None or p <= 0:
+            excluidas[ref] += 1
+            motivo[ref] = (conversion or {}).get('motivo')
             continue
-        ref = a.producto.codigo_siesa
-        prov = a.proveedor.codigo
-        p = precios_oc([ref], proveedor=prov).get(ref)
-        if not p:
-            continue
-        pactado = float(a.precio_unitario)
-        salida.append({
-            'producto_id': a.producto_id, 'referencia': ref,
-            'proveedor_codigo': prov, 'precio_pactado': pactado,
-            'precio_oc': p['costo'],
-            'diferencia_pct': (round((p['costo'] - pactado) / pactado * 100, 2)
-                               if pactado > 0 else None),
-            'oc': p['oc'], 'fecha_oc': p['fecha_costo'],
-        })
+        prev = salida.get(ref)
+        if (prev is None or l['fecha_oc'] > prev['_fecha']
+                or (l['fecha_oc'] == prev['_fecha'] and p > prev['costo'])):
+            salida[ref] = {
+                'costo': round(float(p), 4), 'fuente': 'OC_SIESA',
+                'fecha_costo': l['fecha_oc'].isoformat(), '_fecha': l['fecha_oc'],
+                'proveedor': l['proveedor_codigo'], 'oc': l['oc'],
+                'moneda': l['moneda'], 'conversion': conversion,
+            }
+    for ref, n in excluidas.items():
+        if ref in salida:
+            salida[ref]['lineas_otra_moneda'] = n
+        else:
+            salida[ref] = {'costo': None, 'fuente': 'OC_SIESA',
+                           'lineas_otra_moneda': n,
+                           'motivo_exclusion': motivo.get(ref) or 'Moneda sin conversión.'}
+    for v in salida.values():
+        v.pop('_fecha', None)
     return salida
