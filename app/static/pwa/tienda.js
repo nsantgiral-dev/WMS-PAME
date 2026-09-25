@@ -1305,14 +1305,14 @@ async function _tiendaOCRegistrarScan(productoId, cantidad, esEmpaque, esBonific
 
 /** Open manual product search for store OC reception. */
 async function tiendaOCBuscarManual() {
-  const codigo = prompt('Ingresa el código WMS del producto:');
+  const codigo = await _modalTexto('Buscar producto',
+    'Escriba el código del producto (WMS, de barras o de Siesa).', { textoConfirmar: 'Buscar' });
   if (!codigo) return;
   try {
-    const prod = await get('/api/productos/?search=' + encodeURIComponent(codigo));
-    if (!prod || !prod.productos || prod.productos.length === 0) { alerta('Producto no encontrado', 'error'); return; }
-    const p = prod.productos[0];
+    const p = await productoPorCodigoExacto(codigo);
+    if (!p) return;
     await _tiendaOCRegistrarScan(p.id, 1, false, false);
-  } catch (e) { alerta('Error buscando producto', 'error'); }
+  } catch (e) { alerta(e.message || 'No se pudo buscar el producto', 'error'); }
 }
 
 /** Show bonus/gift registration modal for store OC reception. */

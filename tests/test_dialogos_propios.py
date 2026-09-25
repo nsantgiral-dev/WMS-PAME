@@ -42,8 +42,6 @@ DIALOGOS_NATIVOS_DECLARADOS = {
     ('analitica_portada.js', 'anPortRecalcular'): (1, 'recalcular el KPI: no mueve plata ni inventario'),
     ('compras_fuentes.js', 'fuentesAplicar'): (1, 'aplicar una carga de maestros (origen/fichas), no mueve plata ni inventario'),
     ('compras_fuentes.js', 'fuentesMarcaAplicar'): (1, 'aplicar la marca leída de Siesa al catálogo'),
-    ('recepcion.js', 'abrirBusquedaManualBono'): (1, 'buscar un código: una búsqueda, no una decisión'),
-    ('tienda.js', 'tiendaOCBuscarManual'): (1, 'buscar un código: una búsqueda, no una decisión'),
     ('flota.js', 'flotaAnularOT'): (1, _FLOTA),
     ('flota.js', 'flotaAplazarHallazgo'): (1, _FLOTA),
     ('flota.js', 'flotaCerrarHallazgo'): (1, _FLOTA),

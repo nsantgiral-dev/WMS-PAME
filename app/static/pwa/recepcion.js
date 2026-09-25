@@ -730,11 +730,13 @@ async function _escanearBono(codigo, panelEl) {
  * @param {HTMLElement} panelEl - Elemento overlay del panel para cerrarlo tras registrar
  */
 async function abrirBusquedaManualBono(panelEl) {
-  const codigo = prompt('Ingresa el código WMS del producto:');
+  const codigo = await _modalTexto('Buscar producto',
+    'Escriba el código del producto (WMS, de barras o de Siesa).', { textoConfirmar: 'Buscar' });
   if (!codigo) return;
-  const prod = await get('/api/productos/?search=' + encodeURIComponent(codigo));
-  if (!prod || !prod.productos || prod.productos.length === 0) { alerta('Producto no encontrado', 'error'); return; }
-  const p = prod.productos[0];
+  let p;
+  try { p = await productoPorCodigoExacto(codigo); }
+  catch (e) { alerta(e.message || 'No se pudo buscar el producto', 'error'); return; }
+  if (!p) return;
   await _registrarEscaneoRecepcion(p.id, 1, false, null, true);
   if (panelEl) panelEl.remove();
 }

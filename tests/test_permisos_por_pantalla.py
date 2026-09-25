@@ -91,6 +91,9 @@ PANTALLAS = [
     ('compras_bandeja.js', None,    ['admin', 'compras']),
     ('picking.js',    None,         ['admin', 'operario']),
     ('packing.js',    None,         ['admin', 'empacador']),
+    # La búsqueda de un código exacto la usan la recepción (bonificaciones) y
+    # la tienda (recibir su OC): el catálogo sin costo (2026-09-25).
+    ('app.js',        'productoPorCodigo', ['admin', 'recepcionista', 'tienda']),
     ('app.js',        None,         ['admin']),
     ('conteo.js',     None,         ['admin']),
     ('reposicion.js', None,         ['admin']),
@@ -154,7 +157,6 @@ BASELINE_HEREDADO = {
     # usuario de prueba no la tiene. Puede ser del fixture o del guard — hay
     # que mirarlo con un usuario de tienda real.
     ('tienda', '/api/tienda-oc/'),
-    ('tienda', '/api/productos/?search='),
     # Paneles de admin que viven dentro de `recepcion.js`: el recepcionista no
     # los abre, pero comparten archivo. Si el mapa se afina, salen solos.
     ('recepcionista', '/api/devoluciones/pendientes-aprobacion-nc'),

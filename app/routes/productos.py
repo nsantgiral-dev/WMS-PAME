@@ -6,16 +6,38 @@ from app.models.producto import Producto
 productos_bp = Blueprint('productos', __name__)
 
 
-from app.routes._auth_helpers import _solo_admin, _es_personal_almacen
+from app.routes._auth_helpers import (_solo_admin, _es_personal_almacen, _ve_catalogo,
+                                      ve_costo_de_compra)
+
+#: Lo que el catálogo solo muestra a quien ve el costo de compra.
+CAMPOS_DE_COSTO = ('precio_compra',)
+
+
+def _producto_para(usuario, producto) -> dict:
+    """**La única** forma de un producto en las respuestas del catálogo: sin
+    `CAMPOS_DE_COSTO` para quien no ve el costo de compra (la tienda, el
+    operario). Trinquete: `tests/test_catalogo_sin_costo.py`."""
+    d = producto.to_dict()
+    if not ve_costo_de_compra(usuario):
+        for campo in CAMPOS_DE_COSTO:
+            d.pop(campo, None)
+    return d
+
 
 @productos_bp.route('/', methods=['GET'])
 @jwt_required()
 def listar_productos():
-    if not _es_personal_almacen():
+    """El catálogo. `q` busca por parte del nombre o de un código; `codigo`
+    trae solo el producto con ESE código exacto (WMS, barras, Siesa o barras
+    del empaque) — la búsqueda manual de la recepción y de la tienda, que no
+    puede quedarse con «el primero que se parezca»."""
+    usuario = _ve_catalogo()
+    if not usuario:
         return jsonify({'error': 'Sin permiso para listar productos'}), 403
     page = request.args.get('page', 1, type=int)
     per_page = min(request.args.get('per_page', 50, type=int), 200)
     buscar = request.args.get('q', '')
+    codigo_exacto = (request.args.get('codigo') or '').strip()
     categoria = request.args.get('categoria', '')
     almacen_id = request.args.get('almacen_id', type=int)
 
@@ -38,6 +60,14 @@ def listar_productos():
             )
         )
 
+    if codigo_exacto:
+        query = query.filter(db.or_(
+            Producto.codigo == codigo_exacto,
+            Producto.codigo_barras == codigo_exacto,
+            Producto.codigo_siesa == codigo_exacto,
+            Producto.codigo_barras_empaque == codigo_exacto,
+        ))
+
     if categoria:
         query = query.filter_by(categoria=categoria)
 
@@ -48,7 +78,7 @@ def listar_productos():
 
     salida = []
     for p in productos.items:
-        d = p.to_dict()
+        d = _producto_para(usuario, p)
         por_almacen = desglose.get(p.id, {})
         if almacen_id is not None:
             # Mismos nombres de campo, acotados al almacén pedido: el total de
@@ -133,16 +163,18 @@ def productos_sin_codigo_barras():
 @productos_bp.route('/<int:id>', methods=['GET'])
 @jwt_required()
 def obtener_producto(id):
-    if not _es_personal_almacen():
+    usuario = _ve_catalogo()
+    if not usuario:
         return jsonify({'error': 'Sin permiso para consultar productos'}), 403
-    producto = Producto.query.get_or_404(id)
-    return jsonify(producto.to_dict()), 200
+    producto = db.get_or_404(Producto, id)
+    return jsonify(_producto_para(usuario, producto)), 200
 
 
 @productos_bp.route('/', methods=['POST'])
 @jwt_required()
 def crear_producto():
-    if not _solo_admin():
+    admin = _solo_admin()
+    if not admin:
         return jsonify({'error': 'Solo admin puede crear productos'}), 403
     data = request.get_json()
     if not data or not data.get('codigo') or not data.get('nombre'):
@@ -169,13 +201,14 @@ def crear_producto():
     db.session.add(producto)
     db.session.commit()
 
-    return jsonify(producto.to_dict()), 201
+    return jsonify(_producto_para(admin, producto)), 201
 
 
 @productos_bp.route('/<int:id>', methods=['PUT'])
 @jwt_required()
 def actualizar_producto(id):
-    if not _solo_admin():
+    admin = _solo_admin()
+    if not admin:
         return jsonify({'error': 'Solo admin puede modificar productos'}), 403
     producto = Producto.query.get_or_404(id)
     data = request.get_json()
@@ -187,7 +220,7 @@ def actualizar_producto(id):
             setattr(producto, campo, data[campo])
 
     db.session.commit()
-    return jsonify(producto.to_dict()), 200
+    return jsonify(_producto_para(admin, producto)), 200
 
 
 @productos_bp.route('/<int:id>', methods=['DELETE'])

@@ -429,6 +429,24 @@ async function postConReintento(url, payload, intentos = 2, esperaMs = 600) {
 }
 
 /**
+ * El producto con ESE código exacto (WMS, barras, Siesa o barras del empaque),
+ * o `null` con el aviso dicho. La búsqueda manual de la recepción y de la
+ * tienda mandaba `?search=`, un parámetro que el servidor no lee: recibía el
+ * catálogo entero y registraba **el primer producto**, fuera cual fuera.
+ * @param {string} codigo
+ * @returns {Promise<Object|null>}
+ */
+async function productoPorCodigoExacto(codigo) {
+  const d = await get('/api/productos/?codigo=' + encodeURIComponent(codigo));
+  const ps = (d && d.productos) || [];
+  if (ps.length === 1) return ps[0];
+  alerta(ps.length
+    ? `El código ${codigo} corresponde a ${ps.length} productos: escanee el producto o use su código WMS`
+    : `No hay ningún producto con el código ${codigo}`, 'error');
+  return null;
+}
+
+/**
  * Modal propio para capturar una cantidad numérica — reemplaza `prompt()`.
  * Teclado numérico garantizado (`inputmode="numeric"`), valida el rango
  * antes de dejar confirmar (no substituye silenciosamente un valor inválido

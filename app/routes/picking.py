@@ -333,12 +333,16 @@ def calcular_fefo():
     return jsonify(resultado), 200
 
 
-@picking_bp.route('/siguiente-tarea', methods=['GET'])
+@picking_bp.route('/siguiente-tarea', methods=['POST'])
 @jwt_required()
 def siguiente_tarea():
     """
     Dispensador automático — el operario pide trabajo, el sistema asigna.
     Nunca espera asignación manual.
+
+    **POST** desde el 2026-09-25: asigna la tarea al que la pide (escribe), y
+    un GET que escribe lo repite cualquier reintento, precarga o caché del
+    navegador. Era la única excepción de `test_lista_paradas_no_escribe`.
     """
     from app.models.usuario import Usuario
     try:

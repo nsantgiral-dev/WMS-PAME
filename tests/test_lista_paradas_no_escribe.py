@@ -189,12 +189,9 @@ class TestEnFrioNoSeSumaTodo:
 # AST: ningún GET hace commit directo
 # ═════════════════════════════════════════════════════════════════════════════
 
-#: (archivo, función) → por qué. **Solo encoge.**
-GET_QUE_ESCRIBEN = {
-    ('picking.py', 'siguiente_tarea'):
-        'asigna la siguiente tarea al operario que la pide: una lectura que escribe; '
-        'pendiente de pasar a POST',
-}
+#: (archivo, función) → por qué. **Solo encoge.** Vacío desde el 2026-09-25:
+#: `picking.siguiente_tarea` pasó a POST.
+GET_QUE_ESCRIBEN: dict = {}
 
 
 def _metodos(fn):
@@ -246,3 +243,15 @@ class TestNingunGetHaceCommit:
     def test_piso(self):
         n = sum(1 for base in ('app/routes', 'flota/api') for _ in (RAIZ / base).rglob('*.py'))
         assert n >= 40
+
+
+class TestElDispensadorDePickingEsPost:
+    """`/api/picking/siguiente-tarea` asigna la tarea al que la pide: escribe.
+    Era la única excepción de arriba; pasó a POST (2026-09-25)."""
+
+    def test_post_asigna_y_get_no_existe(self, app, client, db, almacen):
+        from tests.test_cartera_retencion import _jwt, _usuario
+        h = _jwt(app, _usuario(db, rol='operario'))
+        r = client.post('/api/picking/siguiente-tarea', headers=h)
+        assert r.status_code == 200 and r.get_json().get('sin_tareas') is True
+        assert client.get('/api/picking/siguiente-tarea', headers=h).status_code == 405

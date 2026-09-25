@@ -107,6 +107,14 @@ class Roles:
         PICKER_TRASLADO, PACKER_TRASLADO,
     )
 
+    #: **Quién ve el catálogo de productos** (`/api/productos/`): el personal
+    #: de almacén y la tienda, que busca un producto para recibir una OC
+    #: (decisión del 2026-09-25: la tienda lo ve, **sin costos**).
+    CATALOGO = PERSONAL_ALMACEN + (TIENDA,)
+    #: **Quién ve el costo de compra** de un producto (`precio_compra`):
+    #: gestión y compras. El resto del catálogo lo recibe sin ese campo.
+    VEN_COSTO_DE_COMPRA = GESTION + (COMPRAS,)
+
     #: **Quién decide una retención de cartera por su ROL** (sin casilla). El
     #: líder de cartera es el que autoriza (decisión del dueño, 2026-09-25).
     CARTERA_POR_ROL = (LIDER_CARTERA,)
@@ -200,6 +208,22 @@ def _es_personal_almacen():
         return None
     u = Usuario.query.get(uid)
     return u if u and u.activo and u.rol in Roles.PERSONAL_ALMACEN else None
+
+
+def _ve_catalogo():
+    """El usuario si puede consultar el catálogo de productos (`Roles.CATALOGO`,
+    lista blanca). Lo que ve de cada producto lo decide `ve_costo_de_compra`."""
+    uid = _get_uid()
+    from app.extensions import db
+    u = db.session.get(Usuario, uid) if uid else None
+    return u if u and u.activo and u.rol in Roles.CATALOGO else None
+
+
+def ve_costo_de_compra(usuario) -> bool:
+    """¿Esta persona ve el costo de compra (`precio_compra`) de un producto?
+    **Una política** para toda respuesta del catálogo: gestión y compras."""
+    return bool(usuario is not None and getattr(usuario, 'activo', False)
+                and usuario.rol in Roles.VEN_COSTO_DE_COMPRA)
 
 
 def _puede_organizar_layout():
