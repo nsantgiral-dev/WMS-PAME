@@ -6,7 +6,7 @@
   paquetes, no uno**: `app/` (127 archivos) y `flota/` (29) — ver abajo
 - **Frontend**: PWA vanilla JS modularizada (app.js + 16 módulos)
 - **Integración ERP**: Connekta V2/V3 → Siesa Enterprise
-- **DLQ**: SiesaJob con reintentos + backoff (5→15→45→120 min; `max_intentos` = 5, al 5.º fallo FALLIDO). Fuera de la ventana de Siesa (06:00–19:30, `ventana_siesa.VENTANA`) solo procesa `ALERTA_EMAIL` (en simulación la ventana no aplica: `dlq_puede_postear`)
+- **DLQ**: SiesaJob con reintentos + backoff (5→15→45→120 min; `max_intentos` = 5, al 5.º fallo FALLIDO). Con `SIESA_VENTANA` configurada y fuera de ella solo procesa `ALERTA_EMAIL`; **sin la variable no hay restricción de horario** (en simulación la ventana no aplica: `dlq_puede_postear`). Ver «Tanda 2 del 2026-09-25»
 - **Tests**: pytest (612 passing), CI en Railway buildCommand
 
 ## Arquitectura JS (Frontend)
@@ -282,6 +282,7 @@ Motivos son códigos **obligatorios** en Siesa (Inventarios > Maestros > Concept
 | `SIESA_BODEGA_AVERIAS` | `AV1` | Bodega destino para transferencias de averías |
 | `SIESA_CAUSAL_DEVOLUCION` | `01` | Causal DIAN para notas crédito (142946) |
 | `SKIP_FE_CHECK` | `''` | `'true'` = skip anti-duplicado FE. Solo QA |
+| `SIESA_VENTANA` | — (**sin restricción**) | `HH:MM-HH:MM` Bogotá: fuera de ella ni los crons que hablan con Siesa, ni la DLQ, ni el cierre de caja le hablan a Siesa. Sugerida en QA: `06:00-19:30` (lo medido allá). **Producción: sin la variable.** Ilegible = sin restricción y declarado en `/api/health/siesa` → `ventana_siesa`. Ver Regla 14 y «Tanda 2 del 2026-09-25 · H» |
 
 ---
 
@@ -608,7 +609,15 @@ buscaba vivía en la otra línea. El verde era de la mutación, no del código.
 11. **F353_ID_AUXILIAR_DOCTO_CRUCE = f253_id real** — NUNCA hardcodear. Propagar desde API 20
 12. **F358_ID_BANCO vacío para transferencias** — la cuenta bancaria va en maestro de medios de pago en Siesa
 13. **F350_ID_CLASE_DOCTO = 30 en 142882** — NI requiere clase 30 (documento contable genérico)
-14. **Siesa no opera después de ~8 PM Colombia** — TCP timeout de 30s
+14. **Siesa QA no operó después de ~8 PM Colombia** — TCP timeout de 30 s.
+    **Es un hecho medido en Siesa QA, no probado en producción** (reescrita el
+    2026-09-25, decisión del dueño). En temporada la operación trabaja hasta
+    las 12 a. m. y la facturación no puede quedar bloqueada por reloj: la
+    ventana es **`SIESA_VENTANA`** (`HH:MM-HH:MM`, Bogotá; sugerida en QA
+    `06:00-19:30`, **en producción sin la variable = sin restricción**). Lo que
+    protege cuando Siesa no responde es el circuit breaker, el precheck del
+    cierre de caja y la jerarquía «no sé ≠ no» — no la hora. Ver «Tanda 2 del
+    2026-09-25 · H».
 15. **Strings en filtros SQL con doble comilla simple** — `''texto''` no `'texto'`
 16. **Consultas dinámicas usan clave "Datos", no "Table"** — endpoint y respuesta diferentes
 17. **F353_PREFIJO_CRUCE NO existe en 142888** — el prefijo va DENTRO de F353_ID_TIPO_DOCTO_CRUCE
@@ -1298,7 +1307,7 @@ está hecho».* Trinquete: `tests/test_documento_fiscal.py` (87 tests, 24 mutaci
 | `reconciliacion_service._ESTADOS_CUMPLIDO = {'9'}`: un pedido **anulado** mientras la caja esperaba (p. ej. retenida por cartera) quedaba `siesa_triggered` + DESPACHADO, y el muelle lo dejaba subir sin RM ni FE | **Una tabla de estados de pedido**, `estado_pedido_siesa` (9 = ANULADO en sync, cierre, historia y reconciliación). La reconciliación solo reconcilia con **la factura y su consecutivo**; el estado sirve para declarar un anulado (`pedido_anulado_siesa`), nunca `siesa_triggered`. Tres respuestas (`reconciliado` / `no_se: False` / `no_se: True`); el DLQ no manda nada si «no se sabe». El barrido rota por `reconciliacion_intento_at` (antes `.limit(10)` sin orden) y no mira anulados |
 | `get_remision_desde_pedido` devolvía `None` ante cualquier error y pedía `tamPag=200`; un 142945 sin consecutivo terminaba en `ValueError` → el reintento **reenviaba el 142945** (RM #2), o caía en compromisos vacíos → `244328-AUTO` DESPACHADO sin RM ni FE | Pre-flag **`rm_enviada_at`** antes del 142945 (Regla 6): se revierte solo ante un «no» explícito (`ConnektaRechazado`: 4xx, 429, `codigo≠0`) o una petición que no salió. Con el flag y sin RM, **nunca se reenvía**: se identifica la RM (tres estados). Recién enviada, `EsperandoRemision` (Regla 20, sin gastar reintento, gracia 15 min); después, `RemisionNoIdentificada` (subclase de `ConnektaResultadoDesconocido` → FALLIDO sin reintento). La salida: **facturar-rm-manual** (con la RM que se ve en Siesa) o `{"rm_inexistente": true, "motivo"}` en el mismo endpoint, que vuelve a preguntar antes de quitar el flag. `_persistir_resultado` se niega sin `rm_consec` |
 | Compromisos vacíos = DESPACHADO `244328-AUTO` | Busca la RM que los consumió y factura (con el anti-duplicado de FE por pedido); sin RM, resultado desconocido. Nunca DESPACHADO sin `rm_consec` |
-| El cierre de caja marcaba **DESPACHADO al encolar** el job, antes de Siesa; el precheck caído decía «Reintentá…» | La caja queda **VERIFICADA con sus bultos** hasta que `_persistir_resultado` (RM + FE) la despacha. Con el circuito abierto, fuera de la ventana de la Regla 14 (`ventana_siesa.VENTANA`, 06:00–19:30 desde la integración) o sin respuesta del precheck, el cierre **se niega sin tocar nada** (ni bultos, ni job, ni estado). Con una RM enviada sin confirmar no se re-encola. El DLQ tampoco intenta el DESPACHO_F470 fuera de ventana (espera sin gastar reintento) |
+| El cierre de caja marcaba **DESPACHADO al encolar** el job, antes de Siesa; el precheck caído decía «Reintentá…» | La caja queda **VERIFICADA con sus bultos** hasta que `_persistir_resultado` (RM + FE) la despacha. Con el circuito abierto, fuera de la ventana de la Regla 14 (solo si `SIESA_VENTANA` está configurada, tanda 2 · H) o sin respuesta del precheck, el cierre **se niega sin tocar nada** (ni bultos, ni job, ni estado). Con una RM enviada sin confirmar no se re-encola. El DLQ tampoco intenta el DESPACHO_F470 fuera de ventana (espera sin gastar reintento) |
 | El muelle y la ruta decidían con `siesa_triggered`; `asignar_a_ruta` no miraba nada y una ruta quedaba trabada en `cerrar_ruta` | **`documento_fiscal.despachable`** (+ gemela SQL `filtro_despachable`): pedido = `siesa_triggered` + `rm_consec` + FE confirmada (`fe_consec` o `fe_confirmada_at`); traslado = su regla de siempre. La usan la lista del muelle, asignar (por bultos y por pedido), cargar, los sugeridos y `cerrar_ruta` (una ruta no sale con un bulto sin documento, aunque ya esté cargado) |
 | Cancelar, resetear-siesa, iniciar-despacho y «devuelto al estante» contestaban cada uno a su manera «¿esta caja tiene documento?» (cancelar solo miraba jobs vivos: RM + job FALLIDO → otra caja → RM #2) | **`documento_fiscal.tiene_documento_en_siesa`** (+ `filtro_tiene_documento`): `siesa_triggered`, RM, FE o el pre-flag. `cancelar`, `resetear_siesa`, `confirmar_packing` (re-confirmar), `crear_manual`, `crear_desde_picking`, `iniciar-despacho` (**antes** de crear el picking) y el filtro de «devuelto al estante» |
 | `except Timeout` atrapaba `ConnectTimeout` (la petición nunca salió) como «resultado desconocido» | `ConnektaNoEnviado`: se reintenta. `ReadTimeout` sigue siendo desconocido (Regla 3). Un 5xx sigue siendo `Exception` genérica (no es un «no») |
@@ -1955,7 +1964,7 @@ servicio por C.O.). `vigia_service.py`, panel en `vigia.js`.
 | Vía | Qué alimenta | Estado |
 |-----|--------------|--------|
 | `cargar_ventas_desde_txt()` | Línea base histórica (26 semanas de μ_ref/σ_ref) | Backfill admin, bloqueado salvo `VIGIA_CARGAR_TXT=true` |
-| `alimentar_adopcion_picking()` | `adopcion_picking`, `brecha_picking` | Cron lunes 06:30 Bogotá (dentro de la ventana de Siesa desde 2026-09-25; era 05:30) + botón en el panel |
+| `alimentar_adopcion_picking()` | `adopcion_picking`, `brecha_picking` | Cron lunes 05:30 Bogotá (vuelto a su hora el 2026-09-25, tanda 2 · H; respeta `SIESA_VENTANA` si está configurada) + botón en el panel |
 | Ingesta Connekta | Facturación, líneas, frecuencia | **Implementada, APAGADA** — `VIGIA_INGESTA_FACTURACION=true` |
 | Generic Transfer | Planillas de ruta | **No implementada** — requiere configuración en Siesa |
 
@@ -2013,9 +2022,9 @@ no se afloja el criterio.
 |----------|----------|-------------|-----------|
 | TRANSFERENCIA_UBICACIONES | 173066 | NON-idempotent (abort en retry) | — |
 | DESPACHO_F470 | 244328→142945→142943 (`DespachoParialService`) | `tarea.siesa_triggered` + pre-flag `rm_enviada_at` del 142945 (m048fiscal) | — (espera fuera de ventana o sin poder preguntar por la FE) |
-| ENTRADA_OC | 142948 | `recepcion.siesa_triggered` | — |
-| AJUSTE_CONTEO | 142951 | `sesion.siesa_triggered` | — |
-| TRASLADO_AVERIAS | 142951 | `tarea_dev.siesa_triggered` | — |
+| ENTRADA_OC | 142948 | `recepcion.siesa_triggered` (pre-flag; solo `ConnektaNoEnviado` lo baja, «no sé» = FALLIDO sin reintento y se resuelve «¿Está en Siesa?», tanda 2) | — |
+| AJUSTE_CONTEO | 142951 | `sesion.siesa_triggered` (ídem) | — |
+| TRASLADO_AVERIAS | 142951 | `movimiento.siesa_sync` (pre-flag `ENVIANDO` desde la tanda 2; `tarea_dev.siesa_triggered` en el camino viejo) | — |
 | DESPACHO_TRASLADO | 174930/173076 | `solicitud.siesa_salida_consec` | — |
 | NOTA_CREDITO_FACTURA | 251126 (unificado con el job de abajo desde `07cb5df`, ver "NCE — qué conector usar") | `recaudo.siesa_nc_triggered` (pre-flag) | 1ro |
 | NOTA_CREDITO_DEVOLUCION_CLIENTE | 251126 | `devolucion.siesa_nc_triggered` (pre-flag) | — (bridge marca `recaudo.siesa_nc_triggered` si viene de ruta) |
@@ -3507,7 +3516,7 @@ nuevas marcadas `completa=False`. Nunca escribe un cero.
 | `FOTOS_SIESA_COSTO` | `true` | Costo por InvFecha (~50-70 páginas por bodega operada, ~1 min c/u) |
 | `FOTOS_SIESA_DIAS_VENTAS` | `3` | Días hacia atrás que se re-fotografían (facturas tardías, anulaciones) |
 
-Corre solo dentro de la ventana de Siesa (**06:00–19:30 Bogotá**, `ventana_siesa`; era 7:00–19:30) (Regla 14); si la ventana se cierra a
+Corre solo dentro de la ventana de Siesa **si `SIESA_VENTANA` está configurada** (`ventana_siesa`, tanda 2 · H; Regla 14); si la ventana se cierra a
 mitad, lo que falta va a `no_corrieron`. Lock `LOCK_FOTOS_SIESA = 2020`.
 `GET /api/health/siesa` → `fotos_siesa`: encendido, última corrida por tipo y
 `huecos_ultimos_dias`, leídos **de la base** (el cron corre en el worker).
@@ -5167,7 +5176,7 @@ cartera leída: `valor_factura` o, sin ella, el valor pendiente de la historia.
 Sin esto, dos pedidos seguidos ven el mismo cupo libre.
 
 **Foto** (`cartera_cliente`): cada lectura completa se guarda por NIT; si Siesa
-no responde (o es de noche: fuera de la ventana de Siesa, 06:00–19:30, no se le pregunta, Regla 14),
+no responde (o, con `SIESA_VENTANA` configurada, está fuera de ella: no se le pregunta, Regla 14),
 vale la foto de < 24 h. Dentro de 2 min no se relee el mismo NIT.
 
 ### Las compuertas
@@ -6171,7 +6180,7 @@ veían**. Migración **`m048inv`** (down `m047comprasvivo`; tablas nuevas
 | **P1-11** crons | `SCHEDULERS_ACTIVOS` en memoria: la web no veía los crons del worker; un cron que reventaba seguía «activo» | Los 28 `add_job` pasan su función por `con_latido(<id>, fn)`: cada corrida escribe `cron_latido` (cron × servicio, conexión propia, nunca rompe el cron). Health y 🩺 Salud leen el latido (`fallando`, `callados`, `alertas_por_correo` = algún cron de alertas corrió en 26 h) | `test_cron_latido.py`: todo `add_job` envuelto con su mismo id |
 | **P1-14** resumen diario | Importaba `PedidoPicking` (no existe) → «N/D» cada día; ventana naive corrida 5 h; reescribía VTA-30 sin corte | Despachos por `metricas.pedidos_despachados` en el día Bogotá; la auditoría por `auditoria.auditar` (con corte; los hallazgos publican `fecha`) | `test_resumen_diario.py`: todo `from app…/flota… import X` resuelve (un import roto se escondía en un `except`) |
 | **Alertas sin canal** | Retenido por cartera > 3 días, traslado en tránsito > 24 h, BLOQUEA de la auditoría, carga física no escrita, cron fallando/callado, sello, existencias sin refrescar > 24 h: ningún correo | `alertas_service.avisos_sin_canal` → líneas del resumen diario (el correo). Una fuente que revienta se declara en su línea | ídem |
-| **P2** ventana | Cuatro ventanas (7–20, 6–20, 7–19:30, 7–21); crons contra Siesa a las 2:00/2:30/3:00/5:55 o 24/7; RC de las 20:30 amanecía FALLIDO | `ventana_siesa` (**06:00–19:30**): 15 crons envueltos en `solo_en_ventana_siesa`; barcodes 06:05, empaques 06:20, ubicaciones 06:35, prewarm pre-turno 06:00, Vigía lunes 06:30, pedidos 6–19 h; el refresco de existencias (hilo propio) la mira; el DLQ fuera de ella solo procesa `ALERTA_EMAIL` | `test_ventana_siesa.py`: todo `add_job` clasificado (habla → envuelto; no habla → con su porqué); nadie más declara una ventana. La suite fija la ventana abierta (`_RELOJ_FIJO`) |
+| **P2** ventana | Cuatro ventanas (7–20, 6–20, 7–19:30, 7–21); crons contra Siesa a las 2:00/2:30/3:00/5:55 o 24/7; RC de las 20:30 amanecía FALLIDO | **Superado por la tanda 2 · H (2026-09-25): la ventana sale de `SIESA_VENTANA`, los crons de madrugada volvieron a su hora y los pedidos corren todo el día.** Lo que decía: `ventana_siesa` (**06:00–19:30**): 15 crons envueltos en `solo_en_ventana_siesa`; barcodes 06:05, empaques 06:20, ubicaciones 06:35, prewarm pre-turno 06:00, Vigía lunes 06:30, pedidos 6–19 h; el refresco de existencias (hilo propio) la mira; el DLQ fuera de ella solo procesa `ALERTA_EMAIL` | `test_ventana_siesa.py`: todo `add_job` clasificado (habla → envuelto; no habla → con su porqué); nadie más declara una ventana. La suite fija la ventana abierta (`_RELOJ_FIJO`) |
 | **P2** frescura | Vigía: MAX global de `stock_siesa.updated_at` (una bodega refrescada hacía ver fresco todo) | `frescura_stock_siesa`: una bodega = su último refresco; un conjunto = su bodega menos reciente (el Armador aplica la misma regla por SKU) | AST: nadie más lee `StockSiesa.updated_at` |
 | **P2** cola | La Salud contaba como «cola atascada» un despacho retenido por cartera | `cola_siesa` lo cuenta aparte (`en_espera_de_cartera`, `cartera_service.tareas_retenidas`) | `test_ventana_siesa.py` |
 | **P2** vars | `vars_criticas` declaraba `DC` (el código usa `NI`); faltaban variables | `NI`; `CONNEKTA_ID_SISTEMA`, `CONNEKTA_IKEY` (condicional), `SIESA_NIT_EMPRESA`, `RESEND_API_KEY`, `ALERTA_EMAIL_DEST`; `MODO_ENSAYO=true` en production es combinación peligrosa | `test_vars_criticas.py` |
@@ -6213,9 +6222,8 @@ la portada no juzga contra la meta un período del KPI diario sin medir
 
 ### Decisiones para el dueño
 
-1. **Ventana 06:00–19:30.** El inicio a las 06:00 (antes, según el sitio, 6 o
-   7) permite el prewarm pre-turno y las sincronizaciones de madrugada movidas;
-   el cierre 19:30 deja media hora de margen a la Regla 14. ¿Confirma?
+1. ~~**Ventana 06:00–19:30.** ¿Confirma?~~ **Decidido (2026-09-25):** la
+   ventana no es una regla de producción; sale de `SIESA_VENTANA` (tanda 2 · H).
 2. **Re-sellar**: el endpoint existe sin botón a propósito. ¿Quién decide qué
    se hace con los `siesa_jobs` PENDIENTE de una copia antes de re-sellarla?
 3. **Almacenes de NS2/FP1/FF1**: ¿se crean (`flask asegurar-almacenes
@@ -6243,9 +6251,9 @@ función de permiso por operación). Sin migración.
 | **P1-5** | `forzar_cierre_ruta` llamaba `_marcar_liquidada` saltándose `credito_no_autorizado` y `devoluciones_sin_contar` | Deja la ruta ENTREGADA | solo `RutaService.liquidar_ruta` llama `_marcar_liquidada` |
 | **P1-6** | DC esperando un RC FALLIDO/DESCARTADO para siempre; RC esperando una NC que ya salió; `verificacion_imposible` COMPLETADO contado como llegado | DC sin RC vivo → falla declarado; el RC reconstruye el puente (`devolucion_ruta.nc_ya_salio` / `puentear_nc_al_recaudo`, la única que lo escribe); `politica_cobro.rc_llegaron` (señal positiva) en VTA-60, reconciliación, fuga y pantallas | **VTA-63**, **VTA-64** (BLOQUEA, detector ciego en `test_cadena_nc_rc_dc_con_salida.py`) |
 | **P1-8** | Registrar cobro (encola RC/DC) pedía admin-o-jefe; «Enviar a Siesa», admin. Reintentar un RC FALLIDO, supervisión. `/liquidar-completo` mandaba el DC sin cuenta ni UN (Bug 3) | `puede_liquidar` en todo lo que encola plata (y en reintentar un job de la liquidación: `puede_reintentar_job`). `/liquidar-completo` borrado. `facturar-rm-manual` exige el documento repetido + motivo (FORZAR); `/despacho_parcial/<id>/despachar` toma el lock de la DLQ | `test_permiso_compuesto.py` **descubre por AST** toda ruta que llega a un encolador de plata (antes, lista a mano) |
-| **P1-10** | DLQ 24/7: un RC de las 20:30 amanecía FALLIDO | `dlq_puede_postear` → `ventana_siesa.ventana_abierta` (la de inventario, 06:00–19:30; en simulación no aplica). El frente traía su propia `fecha.en_ventana_siesa` (7:00–20:00): se retiró al integrar | `test_dlq_ventana_siesa.py`, `test_ventana_siesa.py` |
+| **P1-10** | DLQ 24/7: un RC de las 20:30 amanecía FALLIDO | `dlq_puede_postear` → `ventana_siesa.ventana_abierta` (en simulación no aplica; **desde la tanda 2 · H solo frena si `SIESA_VENTANA` está configurada**). El frente traía su propia `fecha.en_ventana_siesa` (7:00–20:00): se retiró al integrar | `test_dlq_ventana_siesa.py`, `test_ventana_siesa.py` |
 | **P1-13** | `faltantes_de_retorno_de_recaudos` filtraba `'CONFIRMADA'`: FALTANTE_TOTAL invisible en Liquidación y Fugas | `EstadoDevolucionCliente.CONTADAS`. Liquidación dice «Faltante de retorno… No habrá nota crédito» (`devolucion_pendiente.sin_nc`) | ninguna comparación del estado de una devolución contra el literal (`test_devolucion_contada_una_definicion.py`, inventario de 3) |
-| **P2** | `F357_FECHA_RECAUDO`/`F358_FECHA_CONSIGNACION` con el día del envío | el día Bogotá de `fecha_confirmacion` (`fecha_bogota_de`); `F350_FECHA` sigue siendo hoy | `test_rc_verificado_por_documento.py` |
+| **P2** | `F357_FECHA_RECAUDO`/`F358_FECHA_CONSIGNACION` con el día del envío | el día Bogotá de `fecha_confirmacion` (`fecha_bogota_de`); `F350_FECHA` sigue siendo hoy. **Precisado en la tanda 2 · C**: F357 solo si es el mismo mes | `test_rc_verificado_por_documento.py`, `test_fecha_rc.py` |
 | **P2** | Faltaba la fuga «Cobrado sin recibo en Siesa»; la fuga `rechazos_ruta` se llamaba igual que el KPI y medía otra cosa | `cobrado_sin_recibo` (en «Plata en riesgo»; los FALLIDO quedan en «Documentos trabados»); la fuga pasa a `devoluciones_ruta` | `test_fuga_cobrado_sin_recibo.py` |
 | Pantalla | Rutas atrasadas invisibles en Liquidación; «Enviar a Siesa» visible siempre sobre una FALTANTE_TOTAL; «RC ✓» con la bandera de pre-envío | `rutas_atrasadas` (de `rezago_liquidacion`); `pendiente_siesa` de la política; `rc_llego`/`rc_sin_verificar`; `permisos` en el detalle (Registrar cobro solo a quien liquida) | `test_liquidacion_pantalla_dinero.py` (Node, `util.js` real) |
 
@@ -6270,16 +6278,14 @@ texto positivo).
 
 ### Lo que NO cubre, dicho
 
-- **`_ejecutar_con_preflag`** (ENTRADA_OC, TRASLADO_AVERIAS, AJUSTE_CONTEO)
-  sigue revirtiendo ante un 5xx: misma clase, declarada en el inventario del
-  trinquete para el frente de inventario.
+- ~~**`_ejecutar_con_preflag`** sigue revirtiendo ante un 5xx~~ — cerrado en la
+  tanda 2 (2026-09-25): solo `ConnektaNoEnviado` lo baja; el inventario del
+  trinquete quedó vacío.
 - **El «entró» por saldo** exige que la fila de cartera exista antes y después
   del POST; con la cartera todavía sin indexar la FE (ver «RESUELTO
   2026-09-04») no hay prueba y el RC queda para una persona.
-- **Una parada tardía de la oficina** no tiene formulario propio: la ruta
-  acepta `motivo_tardia`, y la pantalla ofrece hoy «Cerrar las paradas que
-  faltan» (quedan rechazadas). La confirmación real llega sola si viene de la
-  cola del conductor.
+- ~~**Una parada tardía de la oficina** no tiene formulario propio~~ — cerrado en
+  la tanda 2 · B: formulario en Liquidación (quien liquida).
 - **El grafo del trinquete de permisos es por nombre** y no ve guards
   condicionales (el reintento se prueba por comportamiento).
 - **La base de retención de una PARCIAL** usa lo declarado por el conductor
@@ -6290,8 +6296,7 @@ texto positivo).
 
 1. ~~¿El jefe vuelve a registrar cobros? ¿Confirmar retención pasa al líder
    de cartera?~~ Decidido el 2026-09-25: ver «Roles de la plata».
-3. Formulario de parada tardía para la oficina, o basta con cerrar lo que
-   falta y dejar que la cola del conductor la mande.
+3. ~~Formulario de parada tardía para la oficina~~ — decidido y hecho (tanda 2 · B).
 
 ---
 
@@ -6386,7 +6391,7 @@ se renombró a `ConnektaRechazado` en todos sus usos (sin alias). Trinquete:
 «no entró», quién no, y ningún nombre definido dos veces en el gateway — por
 AST, con su detector probado).
 
-### Una ventana de Siesa: `ventana_siesa.VENTANA` = 06:00–19:30 Bogotá
+### Una ventana de Siesa: `ventana_siesa` (desde la tanda 2 · H, de `SIESA_VENTANA`; sin ella, sin restricción)
 
 La de inventario (con su trinquete «nadie más declara una»). Fiscal traía
 06:00–20:00 semiabierta (leía la de cartera y comparaba por su cuenta);
@@ -6399,11 +6404,11 @@ recibo podía salir de la DLQ a las 19:45 y la misma caja no poder cerrarse.
 | DLQ | `siesa_job_service.dlq_puede_postear` → `ventana_abierta`. **En simulación no aplica** (no hay Siesa); **en ensayo sí** (los GET son reales y de noche gastan reintentos igual — dinero la eximía también en ensayo; se integró sin eso). Fuera: solo `TIPOS_SIN_SIESA` (= `TIPOS_SIN_DOCUMENTO`, una lista) |
 | Cierre de caja / emisión fiscal | `documento_fiscal.siesa_disponible_para_facturar` → `ventana_abierta(ahora)` |
 | Vista previa de la liquidación | `ventana_abierta()` |
-| 🩺 Salud | `analitica_salud.VENTANA_SIESA` es la misma tupla |
+| 🩺 Salud | `analitica_salud.tiempo_operativo` pregunta a `ventana_siesa.ventana()`; sin ventana, tiempo de reloj |
 
 `ventana_abierta` acepta instantes conscientes de zona (los juzga en Bogotá).
-El horario es **recomendación pendiente de confirmar por el dueño**: se cambia
-en una sola constante. Trinquete: `test_ventana_siesa.py::TestLaVentanaEsUnaParaTodos`.
+**Decidido el 2026-09-25 (tanda 2 · H):** la ventana sale de `SIESA_VENTANA`;
+sin ella no hay restricción. Trinquete: `test_ventana_siesa.py`.
 
 ### Lo que convive sin chocar
 
@@ -6508,3 +6513,75 @@ de parámetros).
    admin? (hoy nadie más la tiene en QA; producción no se miró).
 2. ¿Forzar el cierre de una ruta pasa también al liquidador? (hoy admin).
 3. ¿El supervisor o el gerente ven Liquidación? (hoy no).
+
+---
+
+## Tanda 2 del 2026-09-25 — parada de oficina, fecha del RC, retención PARCIAL, candado local, pre-flag, ventana
+
+Decisiones del dueño ejecutadas en el frente de dinero. Migración
+**`m049tardia`** (down `m048inv`, aditiva, nullable, sin backfill: columnas en
+`recaudos_entrega`). Sin locks nuevos.
+
+| | Qué pasaba | Ahora | Trinquete |
+|---|---|---|---|
+| **B** parada tardía | Una ruta cerrada con una parada sin gestionar solo salía con «cerrar lo que falta» (todo rechazado) o esperando la cola del conductor | Liquidación muestra **Paradas sin gestionar** (cliente, valor, hace cuánto, referencias) con el texto guía (primero el conductor con señal) y el botón de liquidar bloqueado. Quien liquida (`puede_liquidar`) la registra con el formulario: resultado, pago y comprobante, lo devuelto, **motivo obligatorio**, foto. Mismo endpoint (`motivo_tardia`) y **las mismas validaciones del servicio** (contado/crédito, comprobante, evidencia de «se quedó»; la oficina no tiene GPS: se registra «sin dato»). FORZAR `parada_confirmada_despues_del_cierre` con `registrada_por_oficina`, y la parada marcada. Lo que el teléfono mande después **no pisa** (ni la ruta ni el servicio): `version_conductor` + `diferencia_conductor` → señal en Liquidación y evento `parada_oficina` en la jornada. > 24 h sin gestionar → resumen diario. Política: `app/services/parada_tardia.py` | `test_parada_de_oficina.py` |
+| **C** fecha del RC | `F357` = día del cobro aunque el mes hubiera cambiado | `politica_cobro.fechas_del_recibo` (una función): `F350` = día del envío; `F357` = día del cobro **si es el mismo mes**, si no `F350` y el día real al frente de `F350_NOTAS`; `F358_FECHA_CONSIGNACION` = **siempre** el día del cobro. El recibo queda marcado (`rc_cobro_otro_mes`) y `rezago_liquidacion.recibos_de_otro_mes` lo lista en el diagnóstico, el desglose y el correo de rutas sin liquidar | `test_fecha_rc.py` (AST: ninguna escritura de las dos claves fuera de `fechas_rc[...]`) |
+| **D** retención PARCIAL | La NI de una PARCIAL espera el conteo de la devolución sin que se viera | Se queda así (decisión). `devolucion_ruta.retencion_esperando_conteo`: señal `retencion_espera_conteo` en Liquidación y, pasadas 24 h, línea en el resumen diario (`avisos()['retencion_parcial_sin_contar_24h']`) | `test_parada_de_oficina.py::TestLaRetencion…` |
+| **E** candado local | Un script local con el `DATABASE_URL` de producción arrancó los crons contra producción | Sin `RAILWAY_ENVIRONMENT_NAME` y con base `*.rlwy.net`/`*.railway.internal`: `create_app` no registra **ningún** scheduler y `disparar_dlq_inmediato` no lanza su hilo; log CRITICAL y `SCHEDULERS_OMITIDOS`. `app/utils/candado_local.py` | `test_candado_produccion_local.py` (AST: todo `_registrar_scheduler` cuelga del `else` del candado) |
+| **Pre-flag** | `_ejecutar_con_preflag` (ENTRADA_OC, TRASLADO_AVERIAS, AJUSTE_CONTEO) revertía ante un 5xx; el traslado a averías por movimiento no tenía pre-flag | Solo `ConnektaNoEnviado` baja la bandera; lo demás es «no sé» → FALLIDO sin reintento. El movimiento de avería gana `siesa_sync = ENVIANDO`. Salida humana: `preflag_sin_verificar` decide; «Reintentar» (uno, en lote, el de conteo) se niega o lo salta; Siesa → Recuperación ofrece «¿Está en Siesa?» (`POST /api/siesa/jobs/<id>/resolver-sin-verificar`, admin, motivo, FORZAR `envio_sin_verificar_resuelto_a_mano`). Los `ValueError` previos al POST de ajustes/compras son `ConnektaPayloadInvalido`; `AmbienteNoCoincide` es `ConnektaNoEnviado` | `test_rc_verificado_por_documento.py::TestSoloUnaPruebaBajaLaBandera` (inventario **vacío**, ve también `siesa_sync`), `test_preflag_no_se.py` |
+| **H** ventana | La ventana 06:00–19:30 (medida en QA) frenaba la facturación y los crons en producción | `SIESA_VENTANA` (`HH:MM-HH:MM`, cruza la medianoche si hace falta). **Sin la variable: 24 h.** Ilegible: sin restricción y declarado (`/api/health/siesa` → `ventana_siesa`). Crons de madrugada a su hora (barcodes 2:00, empaques 2:30, ubicaciones 3:00, prewarm 5:55, Vigía lunes 5:30), envueltos: con ventana la respetan. **Pedidos cada minuto todo el día** (antes 6–19 h). La salud mide tiempo de reloj sin ventana. El cierre de caja con Siesa caído se sigue negando sin ventana (circuito, precheck) | `test_ventana_siesa.py` (nadie más lee la variable ni declara una ventana), `test_documento_fiscal.py::TestElCierreSinSiesaSeNiegaLimpio` |
+
+**Cambios de comportamiento:** el jefe de almacén ya no registra paradas
+tardías (es de quien liquida); un «Reintentar» sobre un envío sin verificar
+ahora se niega (antes lo cerraba como hecho sin preguntar); los tests que
+fijaban 06:00–19:30 piden la ventana con el fixture `ventana_qa` y la suite
+corre sin la variable (`conftest` la borra).
+
+### Lo que NO cubre, dicho
+
+- **La fecha del RC no está probada contra Siesa real** (abajo, la prueba).
+- **ENTRADA_OC resuelta «sí está en Siesa»** se cierra por la guarda
+  idempotente y **no encola el traslado a averías** de esa recepción: queda a
+  mano.
+- **Un crash entre el pre-flag y el POST** (job PROCESANDO reseteado) sigue
+  leyéndose como «ya enviado» en los tres tipos: la guarda por bandera sola no
+  se cambió (solo el «no sé» del POST).
+- **El formulario de la oficina**: la foto es opcional salvo donde el servicio
+  la exige; una parada registrada sin evidencia queda solo con la señal
+  «registrada por la oficina».
+- **Con `SIESA_VENTANA` puesta en QA**, los crons de madrugada se **omiten**
+  (quedan fuera de la ventana): en QA no corren.
+- **El candado** no reconoce una base de producción fuera de Railway, ni frena
+  un proceso local que se ponga `RAILWAY_ENVIRONMENT_NAME` a mano.
+
+### La prueba de la fecha del RC en Siesa QA (fin de mes; la hace el dueño o el consultor)
+
+1. **El último día del mes, antes de las 7 p. m.**: en QA, una ruta con una
+   parada de contado confirmada por el conductor con **TRANSFERENCIA** (con
+   referencia) y otra en **EFECTIVO**. No liquidar.
+2. **Sin postear, el mismo día** (con `MODO_ENSAYO=true`):
+   `connekta.trigger_recibo_caja(..., fecha_recaudo='AAAAMM<último día>')`
+   devuelve el payload: `F357 = F358 = día del cobro`, `F350` = hoy.
+3. **El día 1 o 2 del mes siguiente**: liquidar la ruta y registrar el cobro de
+   las dos paradas. Antes de que el DLQ postee, revisar en ensayo el payload:
+   `F350_FECHA` = hoy, `F357_FECHA_RECAUDO` = hoy, `F350_NOTAS` empieza con
+   «Cobrado por el conductor el DD/MM/AAAA…», y en la transferencia
+   `F358_FECHA_CONSIGNACION` = el último día del mes anterior.
+4. **Postear** (sin ensayo) y en Siesa QA → Tesorería → el RC: fecha del
+   documento y de recaudo = día del envío; en Caja, la fecha de consignación
+   del mes anterior; las notas con el día real. `API_v2_CxC_General`: la
+   factura quedó saldada. En el WMS, `rc_cobro_otro_mes` puesto y la ruta en
+   «recibos fechados en otro mes».
+5. **Control**: una parada cobrada y enviada el mismo mes lleva `F357` = día
+   del cobro.
+6. **Si Siesa rechaza** `F358_FECHA_CONSIGNACION` de un período cerrado, o
+   `F357 < F350`: anotar el mensaje exacto acá; la corrección es una línea en
+   `fechas_del_recibo` (p. ej. `F358 = F350` también, con el día en las notas).
+
+### Decisiones para el dueño
+
+1. `SIESA_VENTANA` en QA (`06:00-19:30`) apaga allá los crons de madrugada.
+   ¿Se deja así o QA va sin ventana?
+2. El sync de pedidos pasó a correr todo el día: ¿alguna hora en que no deba
+   preguntarle a Siesa producción?
+3. ¿La evidencia (foto) del formulario de la oficina es obligatoria siempre?
