@@ -87,6 +87,51 @@ from app.services.compras_fuentes import (  # noqa: E402,F401
 R_CHINA_DIAS = int(os.environ.get('ROP_R_CHINA_DIAS', '90'))
 R_NACIONAL_DIAS = 0
 
+# ── Ciclo de compra NACIONAL: hasta dónde se pide (2026-09-25) ────────────────
+#
+# El punto de pedido nacional es de revisión continua (R = 0): dice CUÁNDO
+# pedir. Faltaba CUÁNTO. Pedir hasta el punto de pedido deja la posición justo
+# en el umbral y al día siguiente hay que volver a pedir; la cantidad sale de
+# un NIVEL OBJETIVO que cubre el lead time MÁS el ciclo de compra (cada cuánto
+# se vuelve a mirar la bandeja), con la misma fórmula que el S de China
+# (`nivel_objetivo`, una función para los dos regímenes).
+#
+# El ciclo es una DECISIÓN del dueño (¿se compra a nacionales cada semana?):
+# default 7 días, declarado como supuesto; `ROP_CICLO_NACIONAL_DIAS` lo fija.
+CICLO_NACIONAL_DIAS_DEFAULT = 7
+VAR_CICLO_NACIONAL = 'ROP_CICLO_NACIONAL_DIAS'
+
+
+def ciclo_pedido_nacional() -> dict:
+    """Cada cuánto se compra a un proveedor nacional, con su procedencia.
+
+    Returns: {'dias': int, 'fuente': 'CONFIGURADO' | 'DEFAULT_SUPUESTO', 'nota'}
+    Un valor ilegible o fuera de 1..90 cae al default y lo dice."""
+    crudo = (os.environ.get(VAR_CICLO_NACIONAL) or '').strip()
+    if crudo:
+        try:
+            n = int(float(crudo))
+            if 1 <= n <= 90:
+                return {'dias': n, 'fuente': 'CONFIGURADO', 'nota': None}
+        except ValueError:
+            pass
+        return {'dias': CICLO_NACIONAL_DIAS_DEFAULT, 'fuente': 'DEFAULT_SUPUESTO',
+                'nota': f'{VAR_CICLO_NACIONAL}={crudo!r} no es un número de días '
+                        f'entre 1 y 90: se usó el default.'}
+    return {'dias': CICLO_NACIONAL_DIAS_DEFAULT, 'fuente': 'DEFAULT_SUPUESTO',
+            'nota': 'Ciclo de compra nacional supuesto (una vez por semana): '
+                    f'se fija con {VAR_CICLO_NACIONAL}.'}
+
+
+def nivel_objetivo(d_avg, sigma_d, lt_dias, sigma_lt, r_dias, z):
+    """Hasta dónde se pide: S = d·(LT + R) + z·σ_LT+R (§M0.4).
+
+    UNA función para los dos regímenes: China con R = el ciclo del contenedor
+    (`R_CHINA_DIAS`), nacional con R = el ciclo de compra
+    (`ciclo_pedido_nacional`). La reserva de seguridad es el segundo término."""
+    return (float(d_avg) * (float(lt_dias) + float(r_dias))
+            + z * sigma_ltd(lt_dias, sigma_d, d_avg, sigma_lt, r_dias=r_dias))
+
 # Estimador de sigma_d activo. INTERINO: sigma empírica de la serie
 # descensurada. DEFINITIVO (pendiente): RMSE de un paso adelante del TSB —
 # el colchón debe absorber lo que el modelo NO vio venir, no la varianza cruda.
@@ -114,6 +159,60 @@ def cajas_a_pedir(deficit_unidades, unidades_por_caja, moq_cajas):
     moq = max(1, int(moq_cajas or 1))
     necesarias = math.ceil(max(0.0, float(deficit_unidades)) / u)
     return max(necesarias, moq) if necesarias > 0 else 0
+
+
+def pedido_en_empaques(deficit_unidades, unidades_por_empaque, moq_empaques):
+    """Un déficit en unidades → lo que se pide de verdad: empaques completos y
+    el MOQ como mínimo (`cajas_a_pedir`, la misma regla del contenedor).
+
+    Returns: {empaques, unidades, unidades_por_empaque, moq_empaques,
+              redondeo_unidades (lo que se pide de más por empaque/MOQ),
+              moq_interpretacion}"""
+    u = max(1, int(unidades_por_empaque or 1))
+    moq = max(1, int(moq_empaques or 1))
+    deficit = max(0.0, float(deficit_unidades or 0))
+    empaques = cajas_a_pedir(deficit, u, moq)
+    unidades = empaques * u
+    return {
+        'empaques': empaques,
+        'unidades': unidades,
+        'unidades_por_empaque': u,
+        'moq_empaques': moq,
+        'redondeo_unidades': max(0, unidades - math.ceil(deficit)) if empaques else 0,
+        'moq_interpretacion': MOQ_INTERPRETACION,
+    }
+
+
+def composicion_por_proveedor(items):
+    """La propuesta de contenedor agrupada por proveedor chino, con sus
+    subtotales (cajas, unidades, CBM, kg, FOB USD). Solo agrupa y suma lo que
+    `armar_contenedor` ya calculó por línea.
+
+    Returns: [{proveedor, lineas, cajas, unidades, cbm, peso_kg, fob_usd,
+               lineas_sin_fob}] — el de más CBM primero."""
+    grupos = {}
+    for it in items or []:
+        prov = (it.get('proveedor_china') or '').strip() or None
+        g = grupos.setdefault(prov, {'proveedor': prov, 'lineas': [], 'cajas': 0,
+                                     'unidades': 0, 'cbm': 0.0, 'peso_kg': 0.0,
+                                     'fob_usd': 0.0, 'lineas_sin_fob': 0})
+        g['lineas'].append(it)
+        g['cajas'] += int(it.get('cajas') or 0)
+        g['unidades'] += int(it.get('unidades') or 0)
+        g['cbm'] += float(it.get('cbm') or 0)
+        g['peso_kg'] += float(it.get('peso_kg') or 0)
+        if it.get('costo_fob_usd'):
+            g['fob_usd'] += float(it['costo_fob_usd'])
+        else:
+            g['lineas_sin_fob'] += 1
+    salida = list(grupos.values())
+    for g in salida:
+        g['cbm'] = round(g['cbm'], 3)
+        g['peso_kg'] = round(g['peso_kg'], 1)
+        g['fob_usd'] = round(g['fob_usd'], 2)
+    salida.sort(key=lambda g: (g['proveedor'] is None, -g['cbm']))
+    return salida
+
 
 # Marcas China conocidas: CÓDIGOS del criterio de marca de Siesa (se cruzan con
 # `producto.marca_codigo`; ver rop_dual)
@@ -183,6 +282,58 @@ def posicion_inventario(refs=None):
     return salida, camino['declaracion']
 
 
+def es_de_china(origen=None, marca=None, marca_codigo=None) -> bool:
+    """¿Este SKU se compra en el régimen China? UNA regla para el ROP y la
+    franja de confianza: origen declarado CHINA, o una marca China conocida
+    (`MARCAS_CHINA` son CÓDIGOS del criterio de Siesa: se comparan contra
+    `marca_codigo`, y contra el texto de `marca_siesa` solo por compatibilidad
+    con las cargas por archivo anteriores a m047, que ponían el código ahí)."""
+    if (origen or '').strip().upper() == 'CHINA':
+        return True
+    if (marca_codigo or '').strip().upper() in MARCAS_CHINA:
+        return True
+    texto = (marca or '').upper()
+    return any(m.upper() in texto for m in MARCAS_CHINA if m)
+
+
+def insumo_origen(productos_origen=None, productos_marca=None,
+                  productos_marca_cod=None) -> dict:
+    """¿Hay con qué distinguir lo que viene de China? — la declaración del
+    régimen China, UNA función: la publican el ROP (`insumo_origen`) y la franja
+    de confianza de Compras.
+
+    `Producto.origen` y `marca_siesa` se cargan desde 🧾 Fuentes; sin ninguno
+    de los dos, todo SKU se calcula como nacional y la propuesta de contenedor
+    sale vacía por construcción, no porque no haga falta comprar."""
+    if productos_origen is None or productos_marca is None:
+        from app.models.producto import Producto
+        filas = (db.session.query(Producto.codigo_siesa, Producto.origen,
+                                  Producto.marca_siesa, Producto.marca_codigo)
+                 .filter(Producto.codigo_siesa.isnot(None)).all())
+        productos_origen = {f[0]: f[1] for f in filas}
+        productos_marca = {f[0]: (f[2] or f[3]) for f in filas}
+        productos_marca_cod = {f[0]: f[3] for f in filas}
+    productos_marca_cod = productos_marca_cod or {}
+    con_origen = sum(1 for v in productos_origen.values() if (v or '').strip())
+    con_marca = sum(1 for v in productos_marca.values() if (v or '').strip())
+    china = sum(1 for r, v in productos_origen.items()
+                if es_de_china(v, productos_marca.get(r), productos_marca_cod.get(r)))
+    return {
+        'skus_con_origen': con_origen,
+        'skus_con_marca': con_marca,
+        'skus_totales': len(productos_origen),
+        'skus_sin_origen': len(productos_origen) - con_origen,
+        'skus_china': china,
+        'regimen_china_operativo': bool(con_origen or con_marca),
+        'nota': (
+            'Ningún producto tiene `origen` ni `marca_siesa`: el régimen '
+            'China no puede activarse y TODOS los SKU se calcularon con '
+            'lead time nacional y R=0. La propuesta de contenedor sale '
+            'vacía por construcción, no porque no haga falta comprar.'
+            if not (con_origen or con_marca) else None),
+    }
+
+
 class ArmadorService:
 
     @staticmethod
@@ -235,6 +386,8 @@ class ArmadorService:
         # z-score para nivel de servicio
         from app.services.kardex_service import _norm_ppf
         z = _norm_ppf(nivel_servicio)
+        _ciclo_nac = ciclo_pedido_nacional()
+        _hoy_rop = _dia_operativo()
 
         # Lead times: UNA función decide (`compras_fuentes.lead_time`:
         # proveedor → origen → default, con la regla D9). Las observaciones se
@@ -334,9 +487,7 @@ class ArmadorService:
 
             origen = (productos_origen.get(ref) or '').upper()
             marca = (productos_marca.get(ref) or '').upper()
-            marca_cod = (productos_marca_cod.get(ref) or '').strip().upper()
-            es_china = (origen == 'CHINA' or marca_cod in MARCAS_CHINA
-                        or any(m.upper() in marca for m in MARCAS_CHINA if m))
+            es_china = es_de_china(origen, marca, productos_marca_cod.get(ref))
 
             stock_actual = float(stock.get(ref, 0) or 0)
             qty_comprometido = float(comprometido.get(ref, 0) or 0)
@@ -408,6 +559,9 @@ class ArmadorService:
                 'comprometido': round(qty_comprometido),
                 'salida_sin_conf': round(qty_salida_sin_conf),
                 'posicion': round(posicion),
+                # Lo que se puede vender hoy: existencia − comprometido −
+                # salida sin confirmar (sin lo que viene). De `posicion_inventario`.
+                'disponible': round(float((posiciones.get(ref) or {}).get('disponible', 0.0))),
                 # Y la tercera pata de la procedencia: **de cuándo es la foto**.
                 # `None` = este SKU no tiene ninguna fila en `stock_siesa`, que
                 # no es lo mismo que tener cero — otra vez el hueco y el cero
@@ -439,7 +593,7 @@ class ArmadorService:
                 # Revisión periódica: la exposición es LT + R. sigma_LT sigue
                 # aplicando SOLO a LT — R es el propio ciclo, es determinístico.
                 s_ltr = sigma_ltd(lt, sigma_d, d_avg, sigma_lt, r_dias=r)
-                s_objetivo = d_avg * (lt + r) + z * s_ltr
+                s_objetivo = nivel_objetivo(d_avg, sigma_d, lt, sigma_lt, r, z)
 
                 # SIN TOPE (D3). La baranda anti-500-días es del RELLENO. Acá
                 # topaba el S de la política (R, S) a 180 días de demanda, por
@@ -458,7 +612,28 @@ class ArmadorService:
                 })
                 resultados_chi.append(fila)
             else:
-                fila['bajo_rop'] = posicion < rop
+                # CUÁNTO pedir (2026-09-25): hasta el nivel objetivo, que cubre
+                # el lead time MÁS el ciclo de compra. Mismo `nivel_objetivo`
+                # que el S de China; el punto de pedido (R = 0) sigue diciendo
+                # CUÁNDO. `deficit` conserva su `max(0, …)`: no se compra una
+                # cantidad negativa.
+                s_nac = nivel_objetivo(d_avg, sigma_d, lt, sigma_lt,
+                                       _ciclo_nac['dias'], z)
+                fila.update({
+                    'bajo_rop': posicion < rop,
+                    'ciclo_dias': _ciclo_nac['dias'],
+                    'nivel_objetivo': round(s_nac),
+                    'deficit': round(max(0, s_nac - posicion)),
+                    # Cuántos días faltan para cruzar el punto de pedido a la
+                    # tasa de hoy (negativo = ya lo cruzó). Sin demanda, None.
+                    'dias_hasta_punto_de_pedido': (
+                        round((posicion - rop) / d_avg, 1) if d_avg > 0 else None),
+                    # «Se agota antes de que llegue»: aun pidiendo hoy, lo que
+                    # hay y lo que viene no cubre el lead time.
+                    'se_agota_antes_de_llegar': bool(d_avg > 0 and posicion < d_avg * lt),
+                    # Si se pide hoy, cuándo llegaría (día Bogotá + lead time).
+                    'llegaria_el': (_hoy_rop + timedelta(days=math.ceil(lt))).isoformat(),
+                })
                 resultados_nac.append(fila)
 
         resultados_nac.sort(key=lambda x: x['cobertura_dias'])
@@ -477,20 +652,7 @@ class ArmadorService:
         # dual como si existiera. Ahora se declara, porque un modelo que corre
         # sobre un insumo ausente y no lo dice es la forma más cara de este
         # repo: el número sale con cara de bueno y alguien compra con él.
-        _con_origen = sum(1 for v in productos_origen.values() if (v or '').strip())
-        _con_marca = sum(1 for v in productos_marca.values() if (v or '').strip())
-        _insumo = {
-            'skus_con_origen': _con_origen,
-            'skus_con_marca': _con_marca,
-            'skus_totales': len(productos_origen),
-            'regimen_china_operativo': bool(_con_origen or _con_marca),
-            'nota': (
-                'Ningún producto tiene `origen` ni `marca_siesa`: el régimen '
-                'China no puede activarse y TODOS los SKU se calcularon con '
-                'lead time nacional y R=0. La propuesta de contenedor sale '
-                'vacía por construcción, no porque no haga falta comprar.'
-                if not (_con_origen or _con_marca) else None),
-        }
+        _insumo = insumo_origen(productos_origen, productos_marca, productos_marca_cod)
         if not _insumo['regimen_china_operativo']:
             logger.warning(
                 '[ARMADOR] ROP dual sin insumo de origen: %d SKU calculados '
@@ -532,6 +694,7 @@ class ArmadorService:
                          'sobre la exposición. Subestimaba el colchón.'),
             },
             'nacional': {
+                'ciclo': _ciclo_nac,
                 'lt_dias': lt_nacional,
                 'sigma_lt': sigma_lt_nacional,
                 'lt_fuente': lt_nac['fuente'],
@@ -633,6 +796,11 @@ class ArmadorService:
 
             items_deficit.append({
                 'referencia': ref,
+                'nombre': ficha.producto.nombre if ficha.producto else None,
+                'proveedor_china': ficha.proveedor_china,
+                'costo_fob_usd_unidad': (float(ficha.costo_fob_usd)
+                                         if ficha.costo_fob_usd is not None else None),
+                'unidades_por_caja': u_por_caja,
                 'deficit_unidades': deficit_u,
                 'cajas': cajas_necesarias,
                 'unidades': cajas_necesarias * u_por_caja,
@@ -733,6 +901,12 @@ class ArmadorService:
 
                 items_relleno.append({
                     'referencia': ref,
+                    'nombre': ficha.producto.nombre if ficha.producto else None,
+                    'proveedor_china': ficha.proveedor_china,
+                    'costo_fob_usd_unidad': (float(ficha.costo_fob_usd)
+                                             if ficha.costo_fob_usd is not None else None),
+                    'unidades_por_caja': u_por_caja,
+                    'unidades': u_por_caja,
                     'cajas': 1,
                     'cbm': round(cbm_caja, 3),
                     'peso_kg': round(peso_caja, 1),
