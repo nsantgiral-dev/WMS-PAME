@@ -141,7 +141,12 @@ class TestElMuelle:
                             lambda vid, dia: [SimpleNamespace(veredicto='no_apto')])
         adv = senales_ruta.advertencias_de_flota(ruta)
         textos = ' · '.join(a['texto'] for a in adv)
-        assert 'Inspección de hoy no apta' in textos, textos
+        # Integración 2026-09-24: desde las costuras el texto lo escribe la
+        # política única de salida (`flota/dominio/salida.py`: «La inspección
+        # de hoy salió no apta»), no `senales_ruta`. La propiedad es la misma:
+        # en palabras y en femenino, nunca «no apto» ni el código.
+        assert 'no apta' in textos, textos
+        assert 'no apto' not in textos and 'no_apto' not in textos, textos
         assert not codigos_crudos(textos), textos
 
 
@@ -298,8 +303,31 @@ class TestLaJornada:
                     f" fjAbrirConductor({i}); const cond = c.innerHTML;"
                     f" await fjAbrirDia({i}, {j});"
                     " return { resumen, cond, dia: c.innerHTML };")
-        assert 'no guarda quién' in visible(out['dia'])
+        # Integración 2026-09-24: «Lo que esta vista no puede ver» va UNA vez,
+        # al pie de la lista de conductores (costuras), no en cada día. Lo que
+        # este test protege es que diga en palabras quién cerró la ruta, sin
+        # el nombre de una función (`entregar_ruta`).
+        assert 'Quién cerró la ruta' in visible(out['resumen'])
+        assert 'entregar_ruta' not in out['resumen'] + out['dia']
         for k, html in out.items():
+            assert not codigos_crudos(html), (k, codigos_crudos(html))
+
+
+    def test_el_preoperacional_dice_el_veredicto_en_palabras(self, tmp_path):
+        """Integración 2026-09-24: el día pintaba `d.veredicto` tal cual
+        («no_apto»). El servidor manda la palabra (`palabra_de_veredicto`) y un
+        servidor viejo, sin ella, cae a `fjValor`."""
+        from flota.dominio.inspeccion import palabra_de_veredicto
+        ev = {'tipo': 'preoperacional', 'detalle': {
+            'placa': 'ABC123', 'veredicto': 'no_apto', 'segundos_llenado': 40, 'items': 12,
+            'veredicto_en_palabras': palabra_de_veredicto('no_apto')}}
+        viejo = {'tipo': 'preoperacional', 'detalle': {
+            'placa': 'ABC123', 'veredicto': 'no_apto', 'segundos_llenado': 40, 'items': 12}}
+        out = _node(tmp_path, ['util.js', 'flota_jornada.js'], {},
+                    'return { n: fjDetalleEvento(E), v: fjDetalleEvento(V) };',
+                    globales={'E': ev, 'V': viejo})
+        for k, html in out.items():
+            assert 'no apta' in html, (k, html)
             assert not codigos_crudos(html), (k, codigos_crudos(html))
 
 
@@ -310,11 +338,13 @@ def test_piso_de_pantallas_medidas():
 
 class TestLaAnaliticaDeFlota:
     def test_la_inspeccion_mas_rapida_dice_el_veredicto_en_palabras(self, tmp_path):
-        h = {'vehiculos_sin_inspeccion_hoy': 0, 'inspecciones_incompletas_hoy': 0,
-             'segundos_llenado_30d': {'mediana': 90, 'n': 12,
-                                      'minimo': {'segundos': 20, 'items': 14,
-                                                 'veredicto': 'no_apto'}}}
-        out = _node(tmp_path, ['util.js', 'flota.js', 'flota_analitica.js'], {},
-                    'return { p: flotaAnInspeccion(H) };', globales={'H': h})
+        # Integración 2026-09-24: el panel `flotaAnInspeccion` de Analítica se
+        # retiró en las costuras; el tiempo de llenado vive en el diagnóstico
+        # plegado (`flotaDiagLlenado`), que ahora también dice el veredicto.
+        s = {'mediana': 90, 'n': 12,
+             'minimo': {'segundos': 20, 'items': 14, 'veredicto': 'no_apto'}}
+        out = _node(tmp_path, ['util.js', 'flota.js', 'flota_analitica.js',
+                               'flota_bandeja.js'], {},
+                    'return { p: flotaDiagLlenado(H) };', globales={'H': s})
         assert 'no apta' in visible(out['p'])
         assert not codigos_crudos(out['p']), codigos_crudos(out['p'])

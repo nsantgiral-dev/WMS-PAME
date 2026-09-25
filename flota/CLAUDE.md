@@ -171,16 +171,15 @@ tres formas. La que se queda atrás es la que deja salir el camión.*
 ## 18. Lo que ya terminó se juzga con el turno de entonces, y la sede no se fotografía (2026-09-24)
 
 Una ruta ENTREGADA se compara contra el turno vigente **al cierre de la ruta**
-(`bandeja._turno_en`), no contra el de ahora: al final de un día normal el
-camión está en la sede y eso no es «salió sin turno». El turno de la **sede**
-no tiene fotos exigidas: las de cada relevo las firma el conductor y cuelgan
-de su turno. Una foto con ángulo o clase fuera del vocabulario se rechaza con
-400 **antes** de escribir (`almacen_fotos.validar_fotos`), nunca con el 500
-del CHECK que la cola reintentaría para siempre. Y ningún código del
-vocabulario llega crudo a una pantalla: `FLOTA_PALABRAS`/`flotaOpcion`, con
-el veredicto en femenino («inspección no apta»).
+(`bandeja._turno_en`), no contra el de ahora: al final de un día normal el camión
+está en la sede y eso no es «salió sin turno». El turno de la **sede** no tiene
+fotos exigidas: las de cada relevo las firma el conductor en su turno. Una foto
+con ángulo o clase fuera del vocabulario se rechaza con 400 **antes** de escribir
+(`almacen_fotos.validar_fotos`), nunca con el 500 del CHECK que la cola
+reintentaría para siempre. Ningún código del vocabulario llega crudo a una
+pantalla (`FLOTA_PALABRAS`/`flotaOpciones`; veredicto en femenino: «no apta»).
 
-*Motivo: QA e2e por rol, 2026-09-24. Cada noche normal producía una señal y
-un pendiente falsos — la forma más rápida de que el encargado deje de mirar
-la bandeja. Trinquetes: `tests/flota/test_fin_del_dia_normal.py`,
+*Motivo: QA e2e por rol, 2026-09-24. Cada noche normal producía una señal y un
+pendiente falsos — la forma más rápida de que el encargado deje de mirar la
+bandeja. Trinquetes: `tests/flota/test_fin_del_dia_normal.py`,
 `test_foto_invalida_es_400.py`, `tests/test_sin_codigos_en_pantalla.py`.*

@@ -752,8 +752,12 @@ function flotaDiagSalto(s) {
 function flotaDiagLlenado(s) {
   if (s === null || s === undefined) return 'sin dato (la tabla no existe)';
   if (!s.minimo) return s.nota || 'ninguna inspección';
+  // El veredicto de la más rápida, en palabras y en femenino («no apta»): el
+  // panel de Analítica que lo pintaba se mudó acá (costuras 2026-09-24) y el
+  // dato no se pierde con la mudanza.
+  const ver = s.minimo.veredicto ? ` (${flotaPalabra('veredicto', s.minimo.veredicto)})` : '';
   return `mediana ${s.mediana} s · la más rápida ${s.minimo.segundos} s para `
-    + `${s.minimo.items} ítems · ${s.n} inspecciones`;
+    + `${s.minimo.items} ítems${ver} · ${s.n} inspecciones`;
 }
 
 /** Los números del health, en palabras y agrupados. Lo accionable de cada uno

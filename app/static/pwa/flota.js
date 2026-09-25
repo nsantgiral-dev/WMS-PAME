@@ -1611,6 +1611,11 @@ const FLOTA_PALABRAS = {
   origen: { tarjeta_convenio: 'Tarjeta de la empresa',
             credito_proveedor: 'Crédito de la estación',
             efectivo_conductor: 'Mi plata (efectivo)' },
+  // El mismo origen visto desde gestión (gastos, taller): «Mi plata» es la
+  // voz del conductor, no la del que registra una factura. `sin_dato` no va:
+  // cae en «No se sabe», como en todos los formularios.
+  costo: { tarjeta_convenio: 'Tarjeta de la empresa', credito_proveedor: 'Crédito del proveedor',
+           efectivo_conductor: 'Efectivo del conductor' },
   gravedad: { bloqueante: 'No puede salir', mayor: 'Hay que arreglarlo pronto',
               menor: 'Puede esperar' },
   // Los formularios de gestión (2026-09-24): ficha, gastos, taller, llantas.
@@ -1633,12 +1638,11 @@ const FLOTA_PALABRAS = {
   desmontaje: { desgaste_normal: 'Desgaste normal', desgaste_irregular: 'Desgaste irregular',
                 pinchazo: 'Pinchazo', corte_flanco: 'Corte en el flanco',
                 reencauche: 'Va a reencauche', rotacion: 'Rotación' },
+  // Los campos que le faltan a la ficha («Falta: sistema de frenos»).
+  ficha_campo: { combustible: 'combustible', sistema_frenos: 'sistema de frenos',
+                 tiene_freno_escape: 'freno de escape', distribucion: 'distribución',
+                 transmision_final: 'transmisión final' },
 };
-
-/** Un `<option>` con el código de valor y la palabra de texto. */
-function flotaOpcion(grupo, codigo, elegido) {
-  return `<option value="${esc(codigo)}"${elegido ? ' selected' : ''}>${esc(flotaPalabra(grupo, codigo))}</option>`;
-}
 
 /** La palabra de un código. `grupo` es una clave de `FLOTA_PALABRAS`. */
 function flotaPalabra(grupo, codigo) {
@@ -3969,7 +3973,7 @@ async function flotaRenderGastos() {
     <label>A quién se le pagó</label>
     <input id="gs-prov" style="width:100%;padding:6px" placeholder="Ej: Terpel Neiva">
     <label>De dónde salió la plata</label>
-    <select id="gs-origen" style="width:100%;padding:6px">${opciones(d.origenes_costo, 'origen')}</select>
+    <select id="gs-origen" style="width:100%;padding:6px">${opciones(d.origenes_costo, 'costo')}</select>
     <label>Número de factura o documento <span style="color:var(--tx2)">(opcional)</span></label>
     <input id="gs-doc" style="width:100%;padding:6px" placeholder="Sin esto no se puede cruzar con Siesa">
     <label>Centro de operación <span style="color:var(--tx2)">(opcional)</span></label>
@@ -4344,7 +4348,7 @@ function flotaFormFactura(o) {
       ${t.descripcion ? '· ' + t.descripcion : ''}
     </label>`).join('');
   const cats = flotaOpciones('categoria', FLOTA_TALLER.categorias);
-  const orgs = flotaOpciones('origen', FLOTA_TALLER.origenes);
+  const orgs = flotaOpciones('costo', FLOTA_TALLER.origenes);
   return `<div class="tabla-card" style="margin-top:8px">
     <div class="tabla-titulo">Llegó la factura de esta visita</div>
     <p style="font-size:var(--fs-xs);color:var(--tx2);margin:0 0 6px">
@@ -5113,7 +5117,7 @@ function flotaFilaTarea(t) {
     ? `<span style="color:var(--yellow)">sin intervalo declarado</span>`
     : `cada ${Number(t.intervalo_km).toLocaleString('es-CO')} km` +
       ` <span style="color:var(--${t.fuente_blanda ? 'yellow' : 'tx2'})">` +
-      `(fuente: ${esc(flotaPalabra('opcion', t.fuente))}${t.fuente_blanda ? ' — no es documental' : ''})</span>`;
+      `(fuente: ${esc(flotaPalabra('fuente', t.fuente))}${t.fuente_blanda ? ' — no es documental' : ''})</span>`;
   const ultima = t.ultima_ejecucion_km === 'sin_dato'
     ? 'nunca registrada'
     : `última a ${Number(t.ultima_ejecucion_km).toLocaleString('es-CO')} km`;

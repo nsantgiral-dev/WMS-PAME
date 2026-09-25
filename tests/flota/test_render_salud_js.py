@@ -148,7 +148,10 @@ class TestElTiempoDeLlenadoEsUnHecho:
         html = _diag(tmp_path, _sano(segundos_llenado_30d={
             'n': 12, 'mediana': 95, 'minimo': {'segundos': 20, 'items': 27,
                                                'veredicto': 'apto'}}))
-        assert 'mediana 95 s · la más rápida 20 s para 27 ítems · 12 inspecciones' in html
+        # El veredicto de la más rápida va en palabras al lado (integración
+        # 2026-09-24: el panel de Analítica que lo decía se mudó acá).
+        assert ('mediana 95 s · la más rápida 20 s para 27 ítems (apta) · 12 inspecciones'
+                in html)
 
     def test_sin_inspecciones_dice_la_nota(self, tmp_path):
         assert 'ninguna inspección' in _diag(tmp_path, _sano())

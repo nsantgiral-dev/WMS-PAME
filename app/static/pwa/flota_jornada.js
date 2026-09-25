@@ -435,7 +435,11 @@ function fjValor(v) {
   }
   // Un código suelto (`ENTREGADO_SIN_PAGO`, `no_se_pidio`) no se pinta tal cual.
   if (typeof v === 'string' && /^[A-Za-z]+(_[A-Za-z0-9]+)+$/.test(v)) {
-    return fjPalabra(Object.assign({ no_apto: 'no apta' }, FJ_ENTREGA, FJ_MOTIVOS, FJ_SIN_UBICACION), v);
+    // Integración 2026-09-24: la copia `FJ_MOTIVOS` se retiró (los motivos
+    // los sirve el servidor, `fjMotivo`) y esta línea la seguía nombrando:
+    // ReferenceError en todo día con un código suelto en la evidencia.
+    const mapa = Object.assign({ no_apto: 'no apta' }, FJ_ENTREGA, FJ_SIN_UBICACION);
+    return Object.prototype.hasOwnProperty.call(mapa, v) ? mapa[v] : fjMotivo(v);
   }
   return String(v);
 }
@@ -500,7 +504,10 @@ function fjDetalleEvento(e) {
       if (d.cierre_forzado) p.push(`cierre forzado por la oficina: ${d.motivo_cierre_forzado || 'sin motivo'}`);
       break;
     case 'preoperacional':
-      p.push(d.placa, d.veredicto, `${d.segundos_llenado} s para ${d.items} ítems`);
+      // El servidor manda la palabra (`palabra_de_veredicto`, en femenino);
+      // un servidor viejo solo trae el código y pasa por `fjValor`.
+      p.push(d.placa, d.veredicto_en_palabras || fjValor(d.veredicto),
+             `${d.segundos_llenado} s para ${d.items} ítems`);
       if (d.hecha_por_otra_persona) p.push('la hizo otra persona');
       break;
     case 'cargue':

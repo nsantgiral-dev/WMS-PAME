@@ -845,6 +845,7 @@ def _eventos_de_turno(m: Mundo, c, lo, hi) -> List[Evento]:
 
 
 def _eventos_de_inspeccion(m: Mundo, c, lo, hi) -> List[Evento]:
+    from flota.dominio.inspeccion import palabra_de_veredicto
     uid = c.usuario_id
     suyas = {k.id for k in m.custodias if k.custodio_conductor_id == c.id}
     out = []
@@ -858,7 +859,9 @@ def _eventos_de_inspeccion(m: Mundo, c, lo, hi) -> List[Evento]:
             'preoperacional', i.respondida_ts, 'servidor', *_EN_LINEA, propio=propio,
             fuente='flota_inspeccion.respondida_ts',
             detalle={'placa': m.placas.get(i.vehiculo_id, i.vehiculo_id),
-                     'veredicto': i.veredicto, 'segundos_llenado': i.segundos_llenado,
+                     'veredicto': i.veredicto,
+                     'veredicto_en_palabras': palabra_de_veredicto(i.veredicto),
+                     'segundos_llenado': i.segundos_llenado,
                      'items': i.items_esperados, 'sin_dato': i.items_sin_dato,
                      'plantilla_id': i.plantilla_id, 'inspeccion_id': i.id,
                      'hecha_por_otra_persona': not propio},
@@ -1446,7 +1449,8 @@ def _s_inspeccion(ctx):
              + (f'El 90 % de sus compañeros tarda más de {limite} s.' if base == 'con_base'
                 else f'Sin base de compañeros: se compara contra {limite} s fijos.')),
             [{'hora': _hora_local(e.ts), 'placa': e.detalle['placa'], 'segundos': seg,
-              'veredicto': e.detalle['veredicto'], 'sin_dato': e.detalle['sin_dato']}],
+              'veredicto': e.detalle['veredicto_en_palabras'],
+              'sin_dato': e.detalle['sin_dato']}],
             {'valor': seg, 'p10': limite if base == 'con_base' else None,
              'umbral': limite if base == 'sin_base' else None, 'n': len(vals), 'base': base,
              'pares': 'otros conductores, misma plantilla de inspección'},
