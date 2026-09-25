@@ -534,6 +534,43 @@ def _guardar_stock_en_bd(inventario_global: dict, degradado: bool = False):
         logger.error('[INV-SIESA] Error guardando en BD: %s', exc)
 
 
+def frescura_stock_siesa(bodegas=None) -> dict:
+    """¿Qué tan fresco es `stock_siesa`? **Una definición** (P2, 2026-09-25).
+
+    Había tres: Vigía tomaba el MAX global (una sola bodega refrescada hacía
+    ver fresco todo), la 🩺 Salud el MAX por bodega y el Armador el MIN por
+    SKU. La regla es una, la de `_leer_stock_de_bd`: **un conjunto es tan
+    fresco como su parte más vieja** (Regla 0).
+
+    · La frescura de una BODEGA es su última actualización (`MAX(updated_at)`:
+      un refresco completo reescribe todas sus filas).
+    · La de un CONJUNTO de bodegas es la de la bodega menos reciente.
+    · (El Armador la aplica por SKU: la fila más vieja del SKU —misma regla—.)
+
+    `{'por_bodega': {b: {'actualizada': dt, 'filas': n}}, 'actualizado_en':
+    dt | None, 'sin_dato': [bodegas sin ninguna fila]}`.
+    """
+    from sqlalchemy import func
+    from app.models.stock_siesa import StockSiesa
+    q = db.session.query(StockSiesa.bodega, func.max(StockSiesa.updated_at),
+                         func.count(StockSiesa.id))
+    if bodegas is not None:
+        q = q.filter(StockSiesa.bodega.in_(list(bodegas)))
+    por = {}
+    for b, u, n in q.group_by(StockSiesa.bodega).all():
+        clave = (b or '').strip()
+        prev = por.get(clave)
+        if prev is None or (u and (prev['actualizada'] is None or u > prev['actualizada'])):
+            por[clave] = {'actualizada': u, 'filas': (prev['filas'] if prev else 0) + n}
+        else:
+            prev['filas'] += n
+    esperadas = [b for b in (bodegas if bodegas is not None else por)]
+    sin_dato = sorted(b for b in esperadas if b not in por)
+    fechas = [v['actualizada'] for v in por.values() if v['actualizada']]
+    return {'por_bodega': por, 'actualizado_en': min(fechas) if fechas else None,
+            'sin_dato': sin_dato}
+
+
 def _leer_stock_de_bd(bodega_id: str):
     """Lee inventario de una bodega desde PostgreSQL (sobrevive deploys).
 

@@ -1011,6 +1011,7 @@ class ABCService:
 
         scheduler = BackgroundScheduler(timezone='America/Bogota')
         from app.services.cron_latido import con_latido  # P1-11
+        from app.services.ventana_siesa import solo_en_ventana_siesa  # P2
         scheduler.add_job(
             func=con_latido('abc_conteo_diario', _job),
             trigger=CronTrigger(hour=2, minute=0, timezone='America/Bogota'),
@@ -1021,11 +1022,13 @@ class ABCService:
             misfire_grace_time=3600,
         )
         scheduler.add_job(
-            func=con_latido('abc_prewarm_pre_turno', _prewarm_pre_turno),
-            trigger=CronTrigger(hour=5, minute=55, timezone='America/Bogota'),
+            func=con_latido('abc_prewarm_pre_turno', solo_en_ventana_siesa(_prewarm_pre_turno)),
+            # 06:00, el primer minuto de la ventana de Siesa (P2 2026-09-25): a
+            # las 05:55 le preguntaba a Siesa fuera de ella.
+            trigger=CronTrigger(hour=6, minute=0, timezone='America/Bogota'),
             kwargs={'app': app},
             id='abc_prewarm_pre_turno',
-            name='Pre-calentar caché Siesa antes del turno — 5:55am Bogotá',
+            name='Pre-calentar caché Siesa al abrir la ventana — 6:00am Bogotá',
             replace_existing=True,
             max_instances=1,
             misfire_grace_time=300,

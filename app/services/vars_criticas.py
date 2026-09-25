@@ -119,11 +119,32 @@ VARS_CRITICAS: tuple = (
                'Nota crédito de devolución — conectores 142946 y 251126'),
     VarCritica('SIESA_TIPO_DOCTO_RECIBO_CAJA', 'RC',
                'Recibo de caja de liquidación de ruta — conector 142888'),
-    VarCritica('SIESA_TIPO_DOCTO_DOCTO_CONTABLE', 'DC',
-               'Documento contable de retenciones — conector 142882'),
+    # 'NI' (Nota de legalización), no 'DC': el default del gateway cambió el
+    # 2026-09-04 y el catálogo seguía declarando 'DC', que es de compras.
+    VarCritica('SIESA_TIPO_DOCTO_DOCTO_CONTABLE', 'NI',
+               'Documento contable de retenciones — conector 142882 (NI, clase 30)'),
     VarCritica('SIESA_ID_CIA', '1',
                'F_CIA de TODO payload. Si queda en 8215 (el tenant Connekta) '
                'no hay POST que pase'),
+
+    # ── Las que faltaban (auditoría 2026-09-25) ─────────────────────────────
+    VarCritica('CONNEKTA_ID_SISTEMA', None,
+               'Conectores dinámicos v3.1 (244328 compromisos, 142945 remisión, '
+               '173079 dinámico): sin idSistema el POST dinámico se rechaza'),
+    # Ausente = modo simulación, que es un estado legítimo en local y lo publica
+    # `modo` del health. Declarada VACÍA en un servicio es el error: apaga la
+    # integración sin decirlo.
+    VarCritica('CONNEKTA_IKEY', None,
+               'Credencial de Connekta: sin ella el WMS entra en modo simulación y '
+               'NADA llega a Siesa', condicional=True),
+    VarCritica('SIESA_NIT_EMPRESA', None,
+               'NIT de la empresa: comprador de la entrada por OC 142948 y tercero '
+               'del ajuste 142951 (Siesa rechaza vacío)'),
+    VarCritica('RESEND_API_KEY', None,
+               'Correo (Resend): sin ella NINGUNA alerta por correo sale — ni el '
+               'resumen diario ni la de rutas sin liquidar'),
+    VarCritica('ALERTA_EMAIL_DEST', None,
+               'Destinatario de las alertas por correo: sin él no hay a quién mandarlas'),
 
     # ── Contado contraentrega (2026-09-24) — `cond_pago.cobro_contraentrega` ──
     #
@@ -240,6 +261,20 @@ def _combinaciones_peligrosas() -> List[dict]:
     fuera = []
     url = (os.getenv('CONNEKTA_URL') or '').lower()
     apunta_a_qa = 'serviciosqa' in url or 'localhost' in url
+
+    # MODO_ENSAYO bloquea todo POST. En QA es la red de seguridad; en el
+    # servicio de producción es que nada llegue a Siesa con la pantalla en verde.
+    if (os.getenv('MODO_ENSAYO', '').lower() == 'true'
+            and (os.getenv('RAILWAY_ENVIRONMENT_NAME') or '').strip().lower() == 'production'):
+        fuera.append({
+            'variable': 'MODO_ENSAYO + RAILWAY_ENVIRONMENT_NAME',
+            'estado': 'PELIGROSA',
+            'rompe': 'ningún documento llega a Siesa en producción',
+            'valor_efectivo': 'MODO_ENSAYO=true en production',
+            'detalle': ('MODO_ENSAYO=true bloquea TODO POST (remisión, factura, recibo de '
+                        'caja, ajustes). En producción eso es mercancía saliendo sin '
+                        'documento fiscal y con el tablero en verde. Borrarla del servicio.'),
+        })
 
     if os.getenv('SKIP_FE_CHECK', '').lower() == 'true' and not apunta_a_qa:
         fuera.append({

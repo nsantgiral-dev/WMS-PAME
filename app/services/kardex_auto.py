@@ -67,7 +67,7 @@ def ventana() -> dict:
 
     Returns: {pedida: (ini, fin), efectiva: (ini, fin) | None, valida, problema}
     """
-    from app.services.fotos_siesa_service import VENTANA as VENTANA_SIESA
+    from app.services.ventana_siesa import VENTANA as VENTANA_SIESA
     crudo = (os.getenv('KARDEX_AUTO_VENTANA') or '').strip()
     problema = None
     pedida = VENTANA_DEFAULT
@@ -250,7 +250,8 @@ def init_scheduler(app):
 
     scheduler = BackgroundScheduler(timezone='America/Bogota')
     from app.services.cron_latido import con_latido  # P1-11
-    scheduler.add_job(func=con_latido('kardex_auto', _job),
+    from app.services.ventana_siesa import solo_en_ventana_siesa  # P2
+    scheduler.add_job(func=con_latido('kardex_auto', solo_en_ventana_siesa(_job)),
                       trigger=CronTrigger(hour='7-19', minute='2,32',
                                           timezone='America/Bogota'),
                       id='kardex_auto', replace_existing=True,

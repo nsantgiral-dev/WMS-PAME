@@ -603,7 +603,7 @@ def sincronizar_proveedores(gateway=None, pausa_s=None, ahora=None) -> dict:
 
 
 def _en_ventana(reloj=None):
-    from app.services.fotos_siesa_service import VENTANA, ventana_abierta
+    from app.services.ventana_siesa import VENTANA, ventana_abierta
     return ventana_abierta(reloj() if reloj else None), VENTANA
 
 
@@ -663,12 +663,13 @@ def init_scheduler(app):
 
     scheduler = BackgroundScheduler(timezone='America/Bogota')
     from app.services.cron_latido import con_latido  # P1-11
-    scheduler.add_job(func=con_latido('compras_oc_abiertas', _job),
+    from app.services.ventana_siesa import solo_en_ventana_siesa  # P2
+    scheduler.add_job(func=con_latido('compras_oc_abiertas', solo_en_ventana_siesa(_job)),
                       trigger=CronTrigger(hour='7-19', minute='10,40',
                                           timezone='America/Bogota'),
                       id='compras_oc_abiertas', replace_existing=True,
                       max_instances=1, misfire_grace_time=900)
-    scheduler.add_job(func=con_latido('compras_oc_diario', _job_diario),
+    scheduler.add_job(func=con_latido('compras_oc_diario', solo_en_ventana_siesa(_job_diario)),
                       trigger=CronTrigger(hour='7', minute='20',
                                           timezone='America/Bogota'),
                       id='compras_oc_diario', replace_existing=True,

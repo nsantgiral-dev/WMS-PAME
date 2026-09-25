@@ -116,10 +116,10 @@ TEXTO_GLOBAL = {
     NO_CONFIABLE: 'No decidas con estos números todavía',
 }
 
-#: Ventana en que cada fuente PUEDE refrescarse (Bogotá). El sync de pedidos
-#: corre `hour='7-20'` → hasta las 20:59; Siesa deja de operar ~8 p. m.
-VENTANA_PEDIDOS = (time(7, 0), time(21, 0))
-VENTANA_SIESA = (time(7, 0), time(20, 0))
+#: Ventana en que cada fuente PUEDE refrescarse (Bogotá): la de Siesa, que es
+#: UNA (`ventana_siesa`). El sync de pedidos solo corre dentro de ella.
+from app.services.ventana_siesa import VENTANA as VENTANA_SIESA  # noqa: E402
+VENTANA_PEDIDOS = VENTANA_SIESA
 
 #: El sync de pedidos corre cada minuto; 15 minutos operativos sin una
 #: corrida completa es que dejó de correr, no que está lento.
@@ -131,8 +131,8 @@ TOLERANCIA_STOCK = timedelta(hours=2)
 CORRIDA_ABIERTA_MUERTA = timedelta(minutes=30)
 #: Las fotos corren a las 18:00; pasada la ventana (19:30) la de hoy ya debe estar.
 HORA_FOTO_DEL_DIA = time(19, 30)
-#: La serie de adopción de Vigía corre los lunes 05:30.
-HORA_VIGIA_LUNES = time(6, 0)
+#: La serie de adopción de Vigía corre los lunes 06:30 (dentro de la ventana).
+HORA_VIGIA_LUNES = time(7, 0)
 
 #: Cola de Siesa: un job pendiente más de esto (tiempo operativo) está atascado.
 TOLERANCIA_JOB_PENDIENTE = timedelta(hours=1)
@@ -348,9 +348,10 @@ def fuente_stock(ahora_utc, almacen_id=None, activos=()):
         bod = _bodega_de_almacen(almacen_id)
         if almacen_id:
             esperadas = [bod] if bod else []
-        filas = (db.session.query(StockSiesa.bodega, func.max(StockSiesa.updated_at),
-                                  func.count(StockSiesa.id))
-                 .group_by(StockSiesa.bodega).all())
+        # Una definición de frescura (`frescura_stock_siesa`), por bodega.
+        from app.services.inventario_siesa_service import frescura_stock_siesa
+        _fr = frescura_stock_siesa()
+        filas = [(b, v['actualizada'], v['filas']) for b, v in _fr['por_bodega'].items()]
     except Exception as e:                                    # noqa: BLE001
         return _fuente_ilegible('stock_siesa', nombre, e, alimenta, critica=True)
 
@@ -854,8 +855,17 @@ def cola_siesa(ahora_utc):
         antes = (len(fallidos_vigentes(hasta=corte, ahora=ahora_utc)['jobs'])
                  if corte is not None else 0)
         vivos = (E.PENDIENTE, E.REINTENTANDO, E.PROCESANDO)
+        # Un despacho retenido por cartera espera una decisión de cartera, no
+        # a la cola: no es «cola atascada» (P2, 2026-09-25). Se cuenta aparte.
+        from app.services.cartera_service import tareas_retenidas
+        _ret = tareas_retenidas()
+        _q_vivos = SiesaJob.query.filter(SiesaJob.estado.in_(vivos))
+        en_espera_cartera = [j.id for j in _q_vivos.filter(
+            SiesaJob.referencia_tipo == 'TareaPacking',
+            SiesaJob.referencia_id.in_(list(_ret) or [-1])).all()]
         mas_viejo = (db.session.query(func.min(SiesaJob.fecha_creacion))
-                     .filter(SiesaJob.estado.in_(vivos)).scalar())
+                     .filter(SiesaJob.estado.in_(vivos),
+                             ~SiesaJob.id.in_(en_espera_cartera or [-1])).scalar())
         colgados = (SiesaJob.query.filter(
             SiesaJob.estado == E.PROCESANDO,
             SiesaJob.fecha_procesando < ahora_utc - TOLERANCIA_JOB_PROCESANDO).count())
@@ -865,7 +875,7 @@ def cola_siesa(ahora_utc):
     recientes, viejos = len(trabados['recientes']), len(trabados['viejos'])
     fallidos = recientes + viejos
     edad_max = max((t['edad_dias_max'] or 0 for t in trabados['por_tipo']), default=None)
-    pendientes = sum(int(por_estado.get(x, 0)) for x in vivos)
+    pendientes = sum(int(por_estado.get(x, 0)) for x in vivos) - len(en_espera_cartera)
     edad = tiempo_operativo(mas_viejo, ahora_utc) if mas_viejo else None
     atascada = edad is not None and edad > TOLERANCIA_JOB_PENDIENTE
     ventana = trabados['ventana_reciente_dias']
@@ -891,6 +901,9 @@ def cola_siesa(ahora_utc):
         nivel = OK
         texto = (f'{pendientes} envío(s) en cola, ninguno trabado.' if pendientes
                  else 'Cola de Siesa vacía, ninguno trabado.')
+        if en_espera_cartera:
+            texto += (f' {len(en_espera_cartera)} despacho(s) esperan una decisión de '
+                      'cartera (no es la cola).')
         que = None
     if nivel == OK and (trabados['superados'] or antes):
         texto += ' ' + ', '.join(filter(None, (
@@ -906,6 +919,7 @@ def cola_siesa(ahora_utc):
         'ventana_reciente_dias': ventana,
         'edad_de': trabados['edad_de'],
         'pendientes': pendientes,
+        'en_espera_de_cartera': len(en_espera_cartera),
         'colgados_procesando': colgados,
         'pendiente_mas_viejo_utc': _iso(mas_viejo),
         'edad_operativa_min': int(edad.total_seconds() // 60) if edad is not None else None,

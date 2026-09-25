@@ -70,7 +70,8 @@ TAM_PAG = 100
 #: NC1 = 69. Doscientas es holgura, no expectativa: agotarla es truncado.
 MAX_PAGINAS = 200
 
-VENTANA = (time(7, 0), time(19, 30))
+#: La ventana de Siesa es UNA (`app/services/ventana_siesa.py`).
+from app.services.ventana_siesa import VENTANA  # noqa: E402
 
 #: Una fila de `stock_siesa` que no se refrescó en la última descarga de su
 #: bodega (su `updated_at` quedó más de esto por detrás del de la bodega).
@@ -115,9 +116,9 @@ def dias_ventas() -> int:
 
 
 def ventana_abierta(momento=None) -> bool:
-    """¿Estamos entre las 7:00 y las 19:30 de Bogotá?"""
-    momento = momento or ahora_bogota()
-    return VENTANA[0] <= momento.time() <= VENTANA[1]
+    """¿Se le puede hablar a Siesa? Delega en `ventana_siesa` (una función)."""
+    from app.services.ventana_siesa import ventana_abierta as _abierta
+    return _abierta(momento)
 
 
 def cos_operados() -> list:
@@ -858,7 +859,8 @@ def init_scheduler(app):
 
     scheduler = BackgroundScheduler(timezone='America/Bogota')
     from app.services.cron_latido import con_latido  # P1-11
-    scheduler.add_job(func=con_latido('fotos_siesa_diarias', _job), trigger=CronTrigger(hour=18, minute=0,
+    from app.services.ventana_siesa import solo_en_ventana_siesa  # P2
+    scheduler.add_job(func=con_latido('fotos_siesa_diarias', solo_en_ventana_siesa(_job)), trigger=CronTrigger(hour=18, minute=0,
                                                      timezone='America/Bogota'),
                       id='fotos_siesa_diarias', replace_existing=True,
                       max_instances=1, misfire_grace_time=1800)

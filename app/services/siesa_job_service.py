@@ -183,7 +183,14 @@ def _run_dlq_jobs():
             SiesaJob.proximo_intento.is_(None),
             SiesaJob.proximo_intento <= ahora,
         )
-    ).limit(20)
+    )
+    # Fuera de la ventana de Siesa (Regla 14) solo sale lo que no va a Siesa
+    # (un correo de alerta). Un recibo de caja intentado a las 20:30 amanecía
+    # FALLIDO: ahora espera PENDIENTE, sin gastar reintentos, a las 06:00.
+    from app.services.ventana_siesa import TIPOS_SIN_SIESA, ventana_abierta
+    if not ventana_abierta():
+        q = q.filter(SiesaJob.tipo.in_(TIPOS_SIN_SIESA))
+    q = q.limit(20)
     # skip_locked solo disponible en PostgreSQL — en SQLite lo ignoramos
     try:
         jobs = q.with_for_update(skip_locked=True).all()

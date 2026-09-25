@@ -64,10 +64,11 @@ class TestRelojOperativo:
 
     def test_la_noche_no_cuenta(self):
         s = _svc()
-        # 20:55 Bogotá → 06:30 del día siguiente: solo 5 min de ventana (hasta 21:00).
+        # 20:55 Bogotá → 06:30 del día siguiente: solo 30 min de ventana (desde
+        # las 06:00; la ventana de Siesa es UNA, 06:00–19:30, desde 2026-09-25).
         desde = datetime(2026, 9, 25, 1, 55)
         hasta = datetime(2026, 9, 25, 11, 30)
-        assert s.tiempo_operativo(desde, hasta, s.VENTANA_PEDIDOS) == timedelta(minutes=5)
+        assert s.tiempo_operativo(desde, hasta, s.VENTANA_PEDIDOS) == timedelta(minutes=30)
 
     def test_de_dia_es_el_reloj(self):
         s = _svc()
@@ -75,8 +76,9 @@ class TestRelojOperativo:
 
     def test_dos_dias_cuentan_dos_ventanas(self):
         s = _svc()
-        # 12:00 Bogotá del 22 → 12:00 del 24: 8 h + 13 h + 5 h = 26 h de ventana 7-20.
-        assert s.tiempo_operativo(MEDIODIA - timedelta(days=2), MEDIODIA) == timedelta(hours=26)
+        # 12:00 Bogotá del 22 → 12:00 del 24: 7,5 h + 13,5 h + 6 h = 27 h de
+        # ventana 06:00–19:30.
+        assert s.tiempo_operativo(MEDIODIA - timedelta(days=2), MEDIODIA) == timedelta(hours=27)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -113,9 +115,10 @@ class TestPedidos:
         assert f['nivel'] == 'advertencia'
 
     def test_al_amanecer_no_esta_atrasada(self, db):
-        """La última corrida fue 20:55 de anoche; a las 6:30 no pudo haber otra."""
-        _registro_pedidos(db, datetime(2026, 9, 25, 1, 54), datetime(2026, 9, 25, 1, 55), True)
-        f = _svc().fuente_pedidos(datetime(2026, 9, 25, 11, 30))
+        """La última corrida fue 19:29 de anoche (la ventana cierra 19:30); a las
+        06:10 lleva 11 min operativos: al día."""
+        _registro_pedidos(db, datetime(2026, 9, 25, 0, 28), datetime(2026, 9, 25, 0, 29), True)
+        f = _svc().fuente_pedidos(datetime(2026, 9, 25, 11, 10))
         assert f['veredicto'] == 'AL_DIA', f
 
     def test_barrido_incompleto(self, db):

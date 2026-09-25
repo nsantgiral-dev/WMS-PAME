@@ -1062,10 +1062,11 @@ class VigiaService:
         ahora = datetime.utcnow()
         resultado = {'conectores': [], 'g0_ok': True}
 
-        # Stock Siesa: última sincronización
-        ultimo_stock = db.session.query(
-            func.max(StockSiesa.updated_at)
-        ).scalar()
+        # Stock Siesa: la frescura de las bodegas operadas, con UNA definición
+        # (`frescura_stock_siesa`: tan fresco como la bodega menos reciente).
+        # Antes era el MAX global: una bodega refrescada hacía ver fresco todo.
+        from app.services.inventario_siesa_service import _BODEGAS_PV, frescura_stock_siesa
+        ultimo_stock = frescura_stock_siesa(_BODEGAS_PV)['actualizado_en']
         if ultimo_stock:
             delta_h = (ahora - ultimo_stock).total_seconds() / 3600
             ok = delta_h < 24
@@ -1595,12 +1596,15 @@ def init_scheduler(app):
 
     scheduler = BackgroundScheduler(timezone='America/Bogota')
     from app.services.cron_latido import con_latido  # P1-11
+    from app.services.ventana_siesa import solo_en_ventana_siesa  # P2
     scheduler.add_job(
-        func=con_latido('vigia_alimentar_series', alimentar_series_vivas),
-        trigger=CronTrigger(day_of_week='mon', hour=5, minute=30, timezone='America/Bogota'),
+        func=con_latido('vigia_alimentar_series', solo_en_ventana_siesa(alimentar_series_vivas)),
+        # 06:30: la ingesta de facturación le pregunta a Siesa; dentro de la
+        # ventana (P2 2026-09-25).
+        trigger=CronTrigger(day_of_week='mon', hour=6, minute=30, timezone='America/Bogota'),
         kwargs={'app': app},
         id='vigia_alimentar_series',
-        name='Vigía — alimenta series vivas (lunes 05:30 Bogotá)',
+        name='Vigía — alimenta series vivas (lunes 06:30 Bogotá)',
         replace_existing=True, max_instances=1, misfire_grace_time=3600,
     )
 

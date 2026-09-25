@@ -1086,28 +1086,28 @@ class TestMarcaDesdeSiesa:
         assert 'P03' in marca_desde_siesa()['sin_lectura']
 
     def test_el_boton_no_lee_siesa_dentro_del_request(self, app, db, monkeypatch):
-        from app.services import fotos_siesa_service, maestro_compras_carga as m
+        from app.services import ventana_siesa, maestro_compras_carga as m
         monkeypatch.setenv('SIESA_CRITERIO_MARCA', 'P03')
-        monkeypatch.setattr(fotos_siesa_service, 'ventana_abierta', lambda *a: True)
+        monkeypatch.setattr(ventana_siesa, 'ventana_abierta', lambda *a: True)
         lanzados = []
         monkeypatch.setattr(m, 'leer_marca_siesa', lambda *a, **k: pytest.fail('dentro del request'))
         r = m.disparar_lectura_marca(app, lanzar=lanzados.append)
         assert r['ok'] and r['codigo'] == 202 and len(lanzados) == 1
 
     def test_con_una_lectura_en_curso_no_arranca_otra(self, app, db, monkeypatch):
-        from app.services import fotos_siesa_service, registro_sync_service as reg
+        from app.services import ventana_siesa, registro_sync_service as reg
         from app.services.maestro_compras_carga import disparar_lectura_marca
         monkeypatch.setenv('SIESA_CRITERIO_MARCA', 'P03')
-        monkeypatch.setattr(fotos_siesa_service, 'ventana_abierta', lambda *a: True)
+        monkeypatch.setattr(ventana_siesa, 'ventana_abierta', lambda *a: True)
         reg.abrir('compras_marca')
         r = disparar_lectura_marca(app, lanzar=lambda fn: pytest.fail('no debía lanzar'))
         assert r['codigo'] == 409 and 'en curso' in r['error']
 
     def test_fuera_de_la_ventana_no_lee(self, app, db, monkeypatch):
-        from app.services import fotos_siesa_service
+        from app.services import ventana_siesa
         from app.services.maestro_compras_carga import disparar_lectura_marca
         monkeypatch.setenv('SIESA_CRITERIO_MARCA', 'P03')
-        monkeypatch.setattr(fotos_siesa_service, 'ventana_abierta', lambda *a: False)
+        monkeypatch.setattr(ventana_siesa, 'ventana_abierta', lambda *a: False)
         r = disparar_lectura_marca(app, lanzar=lambda fn: pytest.fail('no debía lanzar'))
         assert r['codigo'] == 409 and 'Regla 14' in r['error']
 
@@ -1214,7 +1214,8 @@ class TestKardexAutomatico:
         from app.services.kardex_auto import ventana
         monkeypatch.setenv('KARDEX_AUTO_VENTANA', '05:00-07:30')
         v = ventana()
-        assert v['efectiva'] == (time(7, 0), time(7, 30)) and 'Recortada' in v['problema']
+        # La ventana de Siesa es UNA desde el 2026-09-25: 06:00–19:30.
+        assert v['efectiva'] == (time(6, 0), time(7, 30)) and 'Recortada' in v['problema']
         monkeypatch.setenv('KARDEX_AUTO_VENTANA', '21:00-22:00')
         assert ventana()['efectiva'] is None
         monkeypatch.setenv('KARDEX_AUTO_VENTANA', 'basura')
@@ -1298,15 +1299,15 @@ class TestEndpoints:
         assert r.status_code == 400 and ItemEnTransito.query.count() == 0
 
     def test_sync_fuera_de_ventana_es_409(self, client, token_compras, monkeypatch):
-        from app.services import fotos_siesa_service
-        monkeypatch.setattr(fotos_siesa_service, 'ventana_abierta', lambda *a: False)
+        from app.services import ventana_siesa
+        monkeypatch.setattr(ventana_siesa, 'ventana_abierta', lambda *a: False)
         r = client.post('/api/compras/fuentes/sync-oc', headers=token_compras, json={})
         assert r.status_code == 409 and 'Regla 14' in r.get_json()['error']
 
     def test_marca_leer_y_estado(self, client, token_compras, monkeypatch):
-        from app.services import fotos_siesa_service, maestro_compras_carga as m
+        from app.services import ventana_siesa, maestro_compras_carga as m
         monkeypatch.setenv('SIESA_CRITERIO_MARCA', 'P03')
-        monkeypatch.setattr(fotos_siesa_service, 'ventana_abierta', lambda *a: True)
+        monkeypatch.setattr(ventana_siesa, 'ventana_abierta', lambda *a: True)
         lanzados = []
         orig = m.disparar_lectura_marca
         monkeypatch.setattr(m, 'disparar_lectura_marca',

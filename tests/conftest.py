@@ -155,6 +155,17 @@ def _sin_hilos_dlq_reales(monkeypatch):
     )
 
 
+@pytest.fixture(autouse=True)
+def _ventana_siesa_abierta_en_tests():
+    """La suite corre a cualquier hora: sin esto, de noche (Bogotá) la DLQ no
+    procesaría nada y los tests del DLQ fallarían cinco horas al día. Un test
+    de la ventana pasa `momento` explícito, o fija `_RELOJ_FIJO` a su gusto."""
+    from app.services import ventana_siesa
+    ventana_siesa._RELOJ_FIJO['abierta'] = True
+    yield
+    ventana_siesa._RELOJ_FIJO['abierta'] = True
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Factories de datos de prueba
 # ─────────────────────────────────────────────────────────────────────────────

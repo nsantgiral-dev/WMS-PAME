@@ -72,9 +72,9 @@ TOLERANCIA_DEFECTO = Decimal('5000')
 FRESCURA_FOTO = timedelta(hours=24)
 #: Dentro de una misma petición o barrido no se relee el mismo NIT.
 REUSO_LECTURA = timedelta(minutes=2)
-#: Regla 14: Siesa no opera después de ~8 p. m. Fuera de esta ventana no se le
-#: pregunta (30 s de timeout por consulta) y se usa la foto.
-VENTANA_SIESA = (time(6, 0), time(20, 0))
+#: Regla 14: fuera de la ventana de Siesa no se le pregunta (30 s de timeout
+#: por consulta) y se usa la foto. La ventana es UNA: `ventana_siesa`.
+from app.services.ventana_siesa import VENTANA as VENTANA_SIESA  # noqa: E402
 #: Un recibo de caja tarda en verse en la cartera (la indexación de una FE ya
 #: tardó minutos en QA). Dentro de esta ventana lo cobrado se sigue restando.
 MARGEN_RC = timedelta(hours=48)
@@ -247,8 +247,8 @@ class FuenteSiesa:
         return bool(getattr(self.gateway, 'modo_simulacion', False))
 
     def en_ventana(self, ahora=None) -> bool:
-        h = (ahora or ahora_bogota()).time()
-        return VENTANA_SIESA[0] <= h < VENTANA_SIESA[1]
+        from app.services.ventana_siesa import ventana_abierta
+        return ventana_abierta(ahora)
 
     def _leer(self, api, filtro, clave):
         from app.services.fotos_siesa_service import leer_paginado
@@ -1670,11 +1670,8 @@ def reevaluar(retencion_id: int, usuario=None, origen: str = 'WMS',
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# Barrido (cron cada 30 min, 7:00–19:30 Bogotá)
+# Barrido (cron cada 30 min, dentro de la ventana de Siesa)
 # ═════════════════════════════════════════════════════════════════════════════
-
-VENTANA_BARRIDO = (time(7, 0), time(19, 30))
-
 
 def barrido(ahora_bog: datetime = None) -> dict:
     """Re-evalúa las retenciones vivas (una lectura por NIT) y cancela las de
@@ -1684,8 +1681,9 @@ def barrido(ahora_bog: datetime = None) -> dict:
     from app.models.pedido_historia import MotivoSalidaPedido, PedidoHistoria
     from app.utils.lock import LOCK_CARTERA_BARRIDO, advisory_lock
     ahora_bog = ahora_bog or ahora_bogota()
-    if not (VENTANA_BARRIDO[0] <= ahora_bog.time() < VENTANA_BARRIDO[1]):
-        return {'omitido': 'fuera de la ventana 7:00–19:30 Bogotá'}
+    from app.services.ventana_siesa import texto_ventana, ventana_abierta
+    if not ventana_abierta(ahora_bog):
+        return {'omitido': f'fuera de la ventana de Siesa ({texto_ventana()})'}
     res = {'reevaluadas': 0, 'liberadas': 0, 'canceladas': 0, 'errores': 0, 'alertas': []}
     with advisory_lock(LOCK_CARTERA_BARRIDO, 'cartera_barrido') as tomado:
         if not tomado:
@@ -1749,7 +1747,8 @@ def init_scheduler(app):
 
     scheduler = BackgroundScheduler(timezone='America/Bogota')
     from app.services.cron_latido import con_latido  # P1-11
-    scheduler.add_job(func=con_latido('cartera_barrido', _job), trigger=CronTrigger(minute='0,30', hour='7-19',
+    from app.services.ventana_siesa import solo_en_ventana_siesa  # P2
+    scheduler.add_job(func=con_latido('cartera_barrido', solo_en_ventana_siesa(_job)), trigger=CronTrigger(minute='0,30', hour='7-19',
                                                      timezone='America/Bogota'),
                       id='cartera_barrido', replace_existing=True, max_instances=1,
                       misfire_grace_time=600)
@@ -1829,6 +1828,20 @@ def listar(estado=None, nit=None, cambiados_desde=None, limite: int = 200) -> di
     return {'retenciones': [retencion_publica(r) for r in filas], 'cursor': cursor,
             'politica': {'version': VERSION_POLITICA, 'parametros': parametros()},
             'generado_en': datetime.utcnow().isoformat()}
+
+
+def tareas_retenidas() -> set:
+    """Ids de `TareaPacking` con una retención de cartera viva: su job de
+    despacho espera a cartera, no a la cola (la 🩺 Salud no lo cuenta como
+    atascado)."""
+    from app.models.packing import TareaPacking
+    vivas = RetencionCartera.query.filter_by(estado=EstadoRetencion.RETENIDO).all()
+    ids = {r.tarea_packing_id for r in vivas if r.tarea_packing_id}
+    claves = {r.pedido_clave for r in vivas if r.pedido_clave}
+    if claves:
+        ids |= {t.id for t in TareaPacking.query.filter(
+            TareaPacking.pedido_clave.in_(list(claves))).all()}
+    return ids
 
 
 def puede_autorizar(usuario) -> bool:

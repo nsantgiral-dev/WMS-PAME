@@ -206,12 +206,15 @@ def init_scheduler(app):
 
     scheduler = BackgroundScheduler(timezone='America/Bogota')
     from app.services.cron_latido import con_latido  # P1-11
+    from app.services.ventana_siesa import solo_en_ventana_siesa  # P2
     scheduler.add_job(
-        func=con_latido('sync_barcodes_siesa', ejecutar_sync),
-        trigger=CronTrigger(hour=2, minute=0, timezone='America/Bogota'),
+        func=con_latido('sync_barcodes_siesa', solo_en_ventana_siesa(ejecutar_sync)),
+        # 06:05: dentro de la ventana de Siesa (`ventana_siesa`, P2 2026-09-25).
+        # A las 02:00 Siesa no respondía y el fallo no dejaba registro.
+        trigger=CronTrigger(hour=6, minute=5, timezone='America/Bogota'),
         kwargs={'app': app},
         id='sync_barcodes_siesa',
-        name='Sync barcodes EAN Siesa → WMS (02:00 Bogotá)',
+        name='Sync barcodes EAN Siesa → WMS (06:05 Bogotá)',
         replace_existing=True,
         max_instances=1,
         misfire_grace_time=300

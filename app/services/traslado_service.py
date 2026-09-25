@@ -2498,8 +2498,9 @@ def init_scheduler(app):
 
     scheduler = BackgroundScheduler()
     from app.services.cron_latido import con_latido  # P1-11
+    from app.services.ventana_siesa import solo_en_ventana_siesa  # P2
     scheduler.add_job(
-        con_latido('stock_prewarm', _warm_all), 'interval', minutes=4,
+        con_latido('stock_prewarm', solo_en_ventana_siesa(_warm_all)), 'interval', minutes=4,
         id='stock_prewarm',
         next_run_time=datetime.utcnow(),
     )

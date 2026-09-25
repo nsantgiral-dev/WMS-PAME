@@ -124,7 +124,7 @@ def correr(gateway=None, reloj=None) -> dict:
     """El cron: interruptor + ventana + verificar."""
     if not encendido():
         return {'omitido': 'DEVOLUCIONES_VERIFICAR_NC no está en true — nace apagado'}
-    from app.services.fotos_siesa_service import VENTANA, ventana_abierta
+    from app.services.ventana_siesa import VENTANA, ventana_abierta
     if not ventana_abierta(reloj() if reloj else None):
         return {'omitido': f'fuera de la ventana de Siesa ({VENTANA[0]}–{VENTANA[1]} Bogotá)'}
     return verificar(gateway=gateway)
@@ -176,7 +176,8 @@ def init_scheduler(app):
 
     scheduler = BackgroundScheduler(timezone='America/Bogota')
     from app.services.cron_latido import con_latido  # P1-11
-    scheduler.add_job(func=con_latido('devoluciones_verificar_nc', _job),
+    from app.services.ventana_siesa import solo_en_ventana_siesa  # P2
+    scheduler.add_job(func=con_latido('devoluciones_verificar_nc', solo_en_ventana_siesa(_job)),
                       trigger=CronTrigger(hour='7-19', minute='5,35',
                                           timezone='America/Bogota'),
                       id='devoluciones_verificar_nc', replace_existing=True,

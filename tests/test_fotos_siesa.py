@@ -322,7 +322,8 @@ class TestLaCorridaDelDia:
         assert 'omitido' in f.correr_fotos(
             s, ahora=datetime(2026, 9, 24, 12, 0, tzinfo=TZ_BOGOTA))
 
-    @pytest.mark.parametrize('hora,minuto', [(6, 59), (19, 31), (22, 0)])
+    # La ventana de Siesa es UNA (06:00–19:30, `ventana_siesa`) desde el 2026-09-25.
+    @pytest.mark.parametrize('hora,minuto', [(5, 59), (19, 31), (22, 0)])
     def test_fuera_de_la_ventana_no_toca_siesa(self, db, hora, minuto):
         from app.services import fotos_siesa_service as f
         s = self._siesa()

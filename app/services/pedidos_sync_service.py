@@ -425,9 +425,12 @@ def init_scheduler(app):
 
     scheduler = BackgroundScheduler(timezone='America/Bogota')
     from app.services.cron_latido import con_latido  # P1-11
+    from app.services.ventana_siesa import solo_en_ventana_siesa  # P2
     scheduler.add_job(
-        func=con_latido('pedidos_siesa_sync', lambda: iniciar_sync_background(app)),
-        trigger=CronTrigger(minute='*', hour='7-20', timezone='America/Bogota'),
+        func=con_latido('pedidos_siesa_sync', solo_en_ventana_siesa(lambda: iniciar_sync_background(app))),
+        # Dentro de la ventana de Siesa (06:00–19:30, `ventana_siesa`): el
+        # disparo cubre 6–19 h y el envoltorio corta a las 19:30.
+        trigger=CronTrigger(minute='*', hour='6-19', timezone='America/Bogota'),
         id='pedidos_siesa_sync',
         replace_existing=True,
         max_instances=1,        # [44] Evita ejecuciones concurrentes del sync

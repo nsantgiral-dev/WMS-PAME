@@ -633,8 +633,9 @@ def init_scheduler(app):
 
     scheduler = BackgroundScheduler(timezone='America/Bogota')
     from app.services.cron_latido import con_latido  # P1-11
+    from app.services.ventana_siesa import solo_en_ventana_siesa  # P2
     scheduler.add_job(
-        func=con_latido('sync_productos_siesa', ejecutar_sync),
+        func=con_latido('sync_productos_siesa', solo_en_ventana_siesa(ejecutar_sync)),
         trigger=CronTrigger(hour='7-20', minute='*/30', timezone='America/Bogota'),
         kwargs={'app': app},
         id='sync_productos_siesa',
