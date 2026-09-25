@@ -34,7 +34,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.flota.test_render_salud_js import _pintar, _sano
+from tests.flota.test_render_salud_js import _diag, _sano
 
 RAIZ = Path(__file__).resolve().parents[2]
 FLOTA_JS = RAIZ / 'app' / 'static' / 'pwa' / 'flota.js'
@@ -52,111 +52,29 @@ def _plata(**extra):
     return _sano(**base)
 
 
-class TestLaPlataNoGritaCuandoNoHayNada:
+class TestElDiagnosticoCuentaLaPlataSinAcusar:
+    """«Salud de la flota» (`flotaBloqueSalud`) pintaba estos contadores en
+    prosa arriba de la pestaña; se retiró el 2026-09-24. Los números viven en
+    el Diagnóstico técnico plegado de Analítica; el exceso de un tanqueo
+    concreto se dice en su fila del expediente (abajo)."""
 
-    def test_sin_gastos_registrados_no_pinta_nada(self, tmp_path):
-        """La disciplina de los otros bloques. Un tablero que siempre muestra
-        algo se deja de mirar — la lección de los 639 avisos conocidos."""
-        assert _pintar(tmp_path, _plata()) == ''
+    def test_el_exceso_y_lo_que_no_se_pudo_revisar_van_separados(self, tmp_path):
+        html = _diag(tmp_path, _plata(tanqueos_sobre_capacidad=2,
+                                      tanqueos_sin_capacidad_declarada=5))
+        assert 'Tanqueos por encima de la capacidad del tanque: <b>2</b>' in html
+        assert 'el detector no los puede mirar' in html and '<b>5</b>' in html
 
-    def test_un_health_sin_los_campos_nuevos_no_revienta(self, tmp_path):
-        """Un health viejo —o el de un despliegue a medias— no puede dejar al
-        administrador sin tablero."""
-        assert _pintar(tmp_path, _sano()) == ''
-
-
-class TestElDetectorDeCapacidadSeVeYNoAcusa:
-
-    def test_el_exceso_sale_en_rojo(self, tmp_path):
-        html = _pintar(tmp_path, _plata(tanqueos_sobre_capacidad=2))
-        assert '2 tanqueo(s) con más galones de los que caben' in html
-        assert 'var(--red)' in html
-
-    def test_el_renglon_enumera_las_explicaciones_en_vez_de_dictar_sentencia(
-            self, tmp_path):
-        """**Regla 2 en la línea que alguien lee.**
-
-        Sin las alternativas escritas, «más galones de los que caben» se lee
-        como una acusación — y una imputación automática es un pasivo laboral
-        que mata la adopción, que es el recurso más escaso del proyecto."""
-        html = _pintar(tmp_path, _plata(tanqueos_sobre_capacidad=1))
-        assert 'no pueden ser los dos' in html
-        assert 'tanque auxiliar' in html
-        assert 'hay que mirar cuál' in html
+    def test_los_gastos_sin_factura_se_cuentan(self, tmp_path):
+        assert 'Gastos sin documento: <b>7</b>' in _diag(
+            tmp_path, _plata(gastos_sin_documento=7))
 
     def test_ninguna_palabra_imputa_un_delito(self, tmp_path):
-        html = _pintar(tmp_path, _plata(tanqueos_sobre_capacidad=9,
-                                        tanqueos_sin_capacidad_declarada=3,
-                                        gastos_sin_documento=4)).lower()
+        html = _diag(tmp_path, _plata(tanqueos_sobre_capacidad=9,
+                                      tanqueos_sin_capacidad_declarada=3,
+                                      gastos_sin_documento=4)).lower()
         for palabra in ('robo', 'hurto', 'ladrón', 'ladron', 'culpable',
                         'sisar', 'sifón'):
             assert palabra not in html
-
-    def test_los_que_no_se_pudieron_revisar_tienen_su_PROPIA_linea(self, tmp_path):
-        """**El campo que impide que el detector se apague en silencio.**
-
-        Cero excesos con cien tanqueos sin revisar se ve idéntico a una flota
-        limpia. Sin este renglón, un parque entero sin capacidad en la ficha
-        sale verde para siempre — la misma forma que `REC-01` y las otras cinco
-        de la auditoría del 2026-08-15."""
-        html = _pintar(tmp_path, _plata(tanqueos_sin_capacidad_declarada=5))
-        assert '5 tanqueo(s) que no se pudieron revisar' in html
-        assert 'no es que estén bien' in html.lower()
-
-    def test_sin_excesos_no_se_pinta_la_linea_roja(self, tmp_path):
-        """La otra dirección: una flota con tanqueos normales no está en rojo.
-
-        Sin esto, un renglón incondicional pasaría los dos tests de arriba y
-        marcaría todos los tanqueos del parque."""
-        html = _pintar(tmp_path, _plata(tanqueos_sin_capacidad_declarada=5))
-        assert 'con más galones de los que caben' not in html
-
-
-class TestLosGastosSinFacturaSeCuentan:
-
-    def test_se_ven_y_se_explican(self, tmp_path):
-        html = _pintar(tmp_path, _plata(gastos_sin_documento=7))
-        assert '7 gasto(s) sin número de factura' in html
-        assert 'causación' in html
-
-    def test_cero_no_ocupa_espacio(self, tmp_path):
-        assert _pintar(tmp_path, _plata(gastos_sin_documento=0)) == ''
-
-
-class TestElCPKEsUnHechoPorVehiculo:
-
-    def test_se_pinta_por_placa_con_su_numero(self, tmp_path):
-        html = _pintar(tmp_path, _plata(cpk_mes=[
-            {'placa': 'TGZ653', 'cpk': '840.00', 'marca': 'declarada',
-             'pesos': '840000.00', 'km': 1000}]))
-        assert 'TGZ653' in html
-        assert '840' in html
-
-    def test_dos_vehiculos_salen_los_dos_y_sin_promediarse(self, tmp_path):
-        """El canon §3: el CPK **no compara vehículos**. Un promedio de flota
-        mediría la composición del parque, no la operación — y sería el número
-        que alguien usaría para decir que un camión es caro."""
-        html = _pintar(tmp_path, _plata(cpk_mes=[
-            {'placa': 'TGZ653', 'cpk': '840.00', 'marca': 'declarada',
-             'pesos': '840000.00', 'km': 1000},
-            {'placa': 'UPQ606', 'cpk': '1200.00', 'marca': 'declarada',
-             'pesos': '600000.00', 'km': 500}]))
-        assert 'TGZ653' in html and 'UPQ606' in html
-        assert 'promedio' not in html.lower()
-        assert 'comparan entre sí' in html
-
-    def test_sin_dato_se_dice_con_palabras_no_como_cero_pesos(self, tmp_path):
-        """**Nunca `$0`.** Un CPK de cero se lee como un vehículo gratis, y un
-        vehículo gratis no se investiga."""
-        html = _pintar(tmp_path, _plata(cpk_mes=[
-            {'placa': 'THP696', 'cpk': 'sin_dato', 'marca': 'sin_dato',
-             'pesos': '0.00', 'km': 0}]))
-        assert 'THP696: sin dato' in html
-        assert '$0' not in html
-
-    def test_una_lista_vacia_no_pinta_el_renglon(self, tmp_path):
-        """`[]` es «todavía no hay un peso registrado», no un CPK de cero."""
-        assert _pintar(tmp_path, _plata(cpk_mes=[])) == ''
 
 
 # ══════════════════════════════════════════════════════════════════════════

@@ -12,7 +12,7 @@
 ## Arquitectura JS (Frontend)
 
 ```
-util.js                         Base sin dependencias. Hoy solo `esc()`. Carga PRIMERO
+util.js                         Base sin dependencias: `esc()` y `fmtPesos()`. Carga PRIMERO
 app.js          (2,294 líneas)  Core: auth, helpers, dashboard, camera, admin
 picking.js        (747)         Escaneo operario, confirmación
 packing.js        (865)         Empacador HUD, bultos, etiquetas

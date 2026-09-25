@@ -35,75 +35,14 @@ from pathlib import Path
 
 import pytest
 
-from tests.flota.test_render_salud_js import _pintar, _sano
 
 RAIZ = Path(__file__).resolve().parents[2]
 FLOTA_JS = RAIZ / 'app' / 'static' / 'pwa' / 'flota.js'
 
 
-# ══════════════════════════════════════════════════════════════════════════
-# 1 — El bloque de salud
-# ══════════════════════════════════════════════════════════════════════════
-
-def _taller(**extra):
-    """Una flota **sin una sola visita al taller**: el estado de hoy."""
-    base = {'ot_abiertas': 0, 'trabajos_sin_factura': 0,
-            'garantias_vigentes': 0}
-    base.update(extra)
-    return _sano(**base)
-
-
-class TestElTallerNoGritaCuandoNoHayNada:
-
-    def test_sin_ordenes_no_pinta_nada(self, tmp_path):
-        """La disciplina de los otros bloques. Un tablero que siempre muestra
-        algo se deja de mirar — la lección de los 639 avisos conocidos."""
-        assert _pintar(tmp_path, _taller()) == ''
-
-    def test_un_health_sin_los_campos_nuevos_no_revienta(self, tmp_path):
-        """Un despliegue a medias no puede dejar al administrador sin tablero."""
-        assert _pintar(tmp_path, _sano()) == ''
-
-
-class TestLosTresCamposSeVenYNoSeSuman:
-
-    def test_las_ordenes_abiertas_se_ven(self, tmp_path):
-        html = _pintar(tmp_path, _taller(ot_abiertas=3))
-        assert '3 orden(es) de trabajo abiertas' in html
-
-    def test_y_se_publican_SIN_umbral(self, tmp_path):
-        """Regla 13: no hay una sola medición de cuánto dura una visita, así que
-        no se dice si tres es mucho. Un techo escrito hoy sería a ojo."""
-        html = _pintar(tmp_path, _taller(ot_abiertas=3))
-        assert 'no hay una sola medición' in html
-
-    def test_los_trabajos_sin_factura_tienen_su_propia_linea(self, tmp_path):
-        """**El precio de que la orden no lleve valor.** Si se sumaran a las
-        órdenes abiertas, el número que dice «la factura no llegó» quedaría
-        escondido detrás del que dice «el camión está adentro»."""
-        html = _pintar(tmp_path, _taller(ot_abiertas=3, trabajos_sin_factura=5))
-        assert '3 orden(es) de trabajo abiertas' in html
-        assert '5 trabajo(s) de taller sin factura recibida' in html
-
-    def test_las_garantias_vivas_se_publican_como_dato(self, tmp_path):
-        """Es el campo que dice si la fase está haciendo algo: en cero durante
-        meses significa que la búsqueda que evita pagar dos veces no tiene sobre
-        qué pronunciarse."""
-        html = _pintar(tmp_path, _taller(garantias_vigentes=4))
-        assert '4 reparación(es) todavía en garantía' in html
-        assert 'se paga dos veces' in html
-
-    def test_cero_garantias_no_ocupa_espacio(self, tmp_path):
-        assert _pintar(tmp_path, _taller(garantias_vigentes=0)) == ''
-
-    def test_ninguna_palabra_del_bloque_imputa_nada_a_nadie(self, tmp_path):
-        """Regla 2 en la línea que alguien lee. Un camión que entra al taller
-        no es culpa de quien lo manejaba."""
-        html = _pintar(tmp_path, _taller(ot_abiertas=3, trabajos_sin_factura=5,
-                                         garantias_vigentes=4)).lower()
-        for palabra in ('culpable', 'responsable', 'negligencia', 'descuido',
-                        'conductor'):
-            assert palabra not in html
+# «Salud de la flota» repetía los tres contadores del taller en prosa; se
+# retiró el 2026-09-24. Viven en el panel «Taller y garantía» de Analítica
+# (`test_render_analitica_js.py`) y en el expediente (abajo).
 
 
 # ══════════════════════════════════════════════════════════════════════════

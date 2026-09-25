@@ -30,7 +30,7 @@ from pathlib import Path
 import pytest
 
 from tests.flota.test_render_gastos_js import HARNESS as HARNESS_PINTADO
-from tests.flota.test_render_salud_js import _pintar, _sano
+from tests.flota.test_render_salud_js import _diag, _sano
 
 RAIZ = Path(__file__).resolve().parents[2]
 FLOTA_JS = RAIZ / 'app' / 'static' / 'pwa' / 'flota.js'
@@ -133,29 +133,21 @@ class TestLaColaMuestraLoQueHaceFaltaParaDecidir:
         assert 'foto del tablero' in html
 
 
-class TestElBloqueDeSaludPublicaLaDeudaYElTrabajo:
-    """Los dos campos nuevos del health, en el tablero. Un campo que nadie mira
-    es el defecto que este módulo lleva la semana arreglando."""
+class TestElDiagnosticoPublicaLaDeudaYElTrabajo:
+    """Las dudosas pendientes (la deuda) y las verificadas del mes (el trabajo)
+    en el Diagnóstico técnico, en renglones separados. Lo accionable —cada
+    lectura con su placa y el botón «Verificar»— está en Pendientes."""
 
     def test_las_dudosas_pendientes_se_ven(self, tmp_path):
-        html = _pintar(tmp_path, _sano(lecturas_dudosas_pendientes=26))
-        assert '26 kilometraje(s) esperan verificación' in html
-        assert 'no calculable' in html
+        html = _diag(tmp_path, _sano(lecturas_dudosas_pendientes=26))
+        assert 'Lecturas en duda esperando que alguien las mire: <b>26</b>' in html
 
     def test_las_verificadas_del_mes_tambien(self, tmp_path):
-        html = _pintar(tmp_path, _sano(lecturas_verificadas_30d=4))
-        assert '4 kilometraje(s) verificados este mes' in html
+        html = _diag(tmp_path, _sano(lecturas_verificadas_30d=4))
+        assert 'Lecturas verificadas en 30 días: <b>4</b>' in html
 
     def test_van_en_lineas_SEPARADAS(self, tmp_path):
-        """Sumadas —o convertidas en un porcentaje— «cero verificadas sobre
-        cero dudosas» (flota sana) se ve igual que «cero sobre veinte» (cola
-        que nadie abre), y esos son los dos estados que hay que distinguir."""
-        html = _pintar(tmp_path, _sano(lecturas_dudosas_pendientes=20,
-                                       lecturas_verificadas_30d=3))
-        assert '20 kilometraje(s) esperan verificación' in html
-        assert '3 kilometraje(s) verificados este mes' in html
+        html = _diag(tmp_path, _sano(lecturas_dudosas_pendientes=20,
+                                     lecturas_verificadas_30d=3))
+        assert html.count('<li>') >= 2 and '<b>20</b>' in html and '<b>3</b>' in html
 
-    def test_una_flota_sin_dudosas_ni_verificaciones_no_ocupa_espacio(
-            self, tmp_path):
-        assert _pintar(tmp_path, _sano(lecturas_dudosas_pendientes=0,
-                                       lecturas_verificadas_30d=0)) == ''

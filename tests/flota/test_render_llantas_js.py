@@ -38,111 +38,15 @@ from pathlib import Path
 import pytest
 
 from tests.flota.test_render_gastos_js import HARNESS as HARNESS_EXPEDIENTE
-from tests.flota.test_render_salud_js import _pintar, _sano
 
 RAIZ = Path(__file__).resolve().parents[2]
 FLOTA_JS = RAIZ / 'app' / 'static' / 'pwa' / 'flota.js'
 
 
-# ══════════════════════════════════════════════════════════════════════════
-# 1 — El bloque de salud
-# ══════════════════════════════════════════════════════════════════════════
-
-def _llantas(**extra):
-    """Una flota sana **y sin una sola llanta registrada**: el estado de hoy."""
-    base = {'posiciones_sin_llanta': 0, 'vehiculos_sin_posiciones_llanta': 0,
-            'llantas_montadas': 0, 'km_por_posicion': []}
-    base.update(extra)
-    return _sano(**base)
-
-
-class TestLasLlantasNoGritanCuandoNoHayNada:
-
-    def test_sin_nada_registrado_no_pinta(self, tmp_path):
-        """La disciplina de los otros bloques: un tablero que siempre muestra
-        algo se deja de mirar — la lección de los 639 avisos conocidos."""
-        assert _pintar(tmp_path, _llantas()) == ''
-
-    def test_un_health_sin_los_campos_nuevos_no_revienta(self, tmp_path):
-        """Un despliegue a medias no puede dejar al administrador sin tablero."""
-        assert _pintar(tmp_path, _sano()) == ''
-
-
-class TestLasPosicionesSinLlantaNoSeAnuncianComoFallaMecanica:
-
-    def test_se_ven_y_dicen_lo_que_de_verdad_significan(self, tmp_path):
-        html = _pintar(tmp_path, _llantas(posiciones_sin_llanta=10))
-        assert '10 posición(es) de llanta sin registrar' in html
-        assert 'no es que el camión ande sin rueda' in html.lower()
-
-    def test_los_que_no_se_pudieron_revisar_tienen_su_PROPIA_linea(self, tmp_path):
-        """**El campo que impide que el detector se apague en silencio.**
-
-        Un parque entero sin ficha da `posiciones_sin_llanta = 0`, igual que uno
-        con las 24 llantas registradas. Sin este renglón, los dos se ven verdes.
-        Es la forma exacta de `tanqueos_sin_capacidad_declarada`."""
-        html = _pintar(tmp_path, _llantas(vehiculos_sin_posiciones_llanta=2))
-        assert '2 vehículo(s) sin ficha' in html
-        assert 'no se miraron' in html.lower()
-
-    def test_sin_posiciones_libres_no_se_pinta_esa_linea(self, tmp_path):
-        """La otra dirección: un renglón incondicional pasaría el primer test y
-        marcaría una flota completa."""
-        html = _pintar(tmp_path, _llantas(vehiculos_sin_posiciones_llanta=2))
-        assert 'de llanta sin registrar' not in html
-
-    def test_las_montadas_se_cuentan_aparte_y_no_como_porcentaje(self, tmp_path):
-        """«0 de 0» (una flota sin ficha) y «0 de 24» (nadie registró nada) dan
-        el mismo porcentaje y son los dos estados que hay que distinguir."""
-        html = _pintar(tmp_path, _llantas(llantas_montadas=6))
-        assert '6 llanta(s) montadas' in html
-        assert '%' not in html
-
-
-class TestLaVidaPorPosicionSePublicaComoHechoYSinUmbral:
-
-    def test_con_pocas_vidas_dice_cuantas_faltan_y_ningun_kilometraje_de_cambio(
-            self, tmp_path):
-        """Regla 13: **no hay una sola llanta medida en esta flota.** Un «se
-        cambia a los X km» escrito hoy sería a ojo, y un detector que dispara
-        sobre operación sana se apaga en una semana."""
-        html = _pintar(tmp_path, _llantas(km_por_posicion=[
-            {'placa': 'TGZ653', 'posicion': 1, 'n': 2, 'km': [38000, 40000],
-             'mediana_km': 'sin_dato', 'faltan': 4}]))
-        assert 'TGZ653 pos 1: 2 de 6' in html
-        assert 'faltan' in html.lower()
-        assert 'se cambia a los' not in html.lower()
-
-    def test_con_suficientes_vidas_SI_publica_la_mediana(self, tmp_path):
-        """La otra dirección: el bloque no puede negarse para siempre, o el campo
-        no sirve para fijar nada."""
-        html = _pintar(tmp_path, _llantas(km_por_posicion=[
-            {'placa': 'TGZ653', 'posicion': 1, 'n': 6,
-             'km': [30000, 32000, 34000, 36000, 38000, 40000],
-             'mediana_km': '35000', 'faltan': 0}]))
-        assert '35.000 km' in html
-        assert 'mediana' in html.lower()
-
-    def test_no_compara_posiciones_entre_si(self, tmp_path):
-        """Una direccional y una de tracción no duran lo mismo y la diferencia no
-        dice nada — el mismo criterio que el canon del CPK sobre vehículos."""
-        html = _pintar(tmp_path, _llantas(km_por_posicion=[
-            {'placa': 'TGZ653', 'posicion': 1, 'n': 6, 'km': [1, 2, 3, 4, 5, 6],
-             'mediana_km': '3', 'faltan': 0}]))
-        assert 'no se compara' in html.lower()
-        assert 'promedio' not in html.lower()
-
-    def test_una_lista_vacia_no_pinta_el_renglon(self, tmp_path):
-        """`[]` es «todavía no se desmontó una sola llanta», no una vida de
-        cero."""
-        assert _pintar(tmp_path, _llantas(km_por_posicion=[])) == ''
-
-    def test_ninguna_palabra_imputa_un_delito(self, tmp_path):
-        html = _pintar(tmp_path, _llantas(
-            posiciones_sin_llanta=9, vehiculos_sin_posiciones_llanta=3,
-            llantas_montadas=12)).lower()
-        for palabra in ('culpable', 'negligencia', 'sanción', 'robo', 'descuido'):
-            assert palabra not in html
+# «Salud de la flota» (`flotaBloqueSalud`) repetía los contadores de llantas
+# en prosa; se retiró el 2026-09-24. Los mismos datos se pintan en el panel
+# «Vida de llanta por posición» de Analítica (`test_render_analitica_js.py`) y
+# en el expediente (abajo).
 
 
 # ══════════════════════════════════════════════════════════════════════════

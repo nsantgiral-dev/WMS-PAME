@@ -274,3 +274,72 @@ class TestLaEvidenciaSeLeeEnPalabras:
         assert 'AMB001, GAL001, VRD001' in html
         assert 'Lo que no se pudo revisar (2)' in html
         assert '2 casos' in html
+
+
+class TestNingunTextoPrometeLoQueNoExiste:
+    """Textos falsos que dejó el rediseño: «Rutas → Vehículos» (una pestaña que
+    control de flota no ve, y que ya se llama «Alta de vehículos»), «desde el
+    botón Daños» (hoy es una pestaña del expediente), «desde Inspección de hoy»
+    (el botón se llama «Inspeccionar»), «el barrido avisa por WhatsApp» (solo
+    si los avisos están encendidos)."""
+
+    FALSOS = ('Rutas → Vehículos', 'botón «Daños»', '«Inspección de hoy»',
+              'también avisa por WhatsApp')
+
+    def test_ninguno_vive_en_el_codigo_de_flota(self):
+        from tests.flota.test_trinquetes_flota import _sin_comentarios
+        for f in sorted(PWA.glob('flota*.js')):
+            codigo = _sin_comentarios(f.read_text(encoding='utf-8'))
+            for t in self.FALSOS:
+                assert t not in codigo, f'{f.name}: {t}'
+
+    def test_el_panel_vacio_de_analitica_manda_a_quien_da_de_alta(self, tmp_path):
+        html = _node(tmp_path, 'flotaAnRitmo({km_dia_por_vehiculo: []})', None)
+        assert 'administración' in html and 'Rutas' not in html
+
+
+class TestUnVocabulario:
+
+    def test_ninguna_opcion_muestra_el_codigo_crudo(self):
+        """`<option value="${c}">${c}</option>` pone `efectivo_conductor` o
+        `aire_sobre_hidraulico` a la vista. Las opciones de flota pasan por
+        `flotaOpciones` (código en el value, palabra a la vista)."""
+        import re
+        patron = re.compile(r'<option value="\$\{(\w+)\}"[^>]*>\$\{\1\}</option>')
+        for f in sorted(PWA.glob('flota*.js')):
+            assert not patron.findall(f.read_text(encoding='utf-8')), f.name
+
+    def test_el_detector_de_opciones_muerde(self):
+        import re
+        patron = re.compile(r'<option value="\$\{(\w+)\}"[^>]*>\$\{\1\}</option>')
+        assert patron.findall('.map(c => `<option value="${c}">${c}</option>`)')
+        assert not patron.findall('`<option value="${esc(c)}">${esc(flotaPalabra(g, c))}</option>`')
+
+    def test_los_motivos_de_rechazo_los_sirve_el_servidor(self):
+        """La jornada no copia el catálogo: lo recibe (`motivos_rechazo`)."""
+        from app.services import jornada_conductor as jc
+        from app.services.motivos_rechazo import MOTIVOS
+        assert jc._motivos_en_palabras() == {m.codigo: m.etiqueta for m in MOTIVOS}
+        js = (PWA / 'flota_jornada.js').read_text(encoding='utf-8')
+        for m in MOTIVOS:
+            assert f'{m.codigo}:' not in js, f'copia del catálogo en el JS: {m.codigo}'
+
+    def test_un_solo_formateador_de_pesos(self):
+        """Había tres (`flotaPesos`, `fjPesos` y el de la evidencia)."""
+        import re
+        for f in sorted(PWA.glob('flota*.js')):
+            codigo = f.read_text(encoding='utf-8')
+            assert not re.search(r'function \w*[Pp]esos\s*\(', codigo), f.name
+        assert 'function fmtPesos(' in (PWA / 'util.js').read_text(encoding='utf-8')
+
+    def test_los_plurales_con_parentesis_solo_bajan(self):
+        """«1 no reconstruibles», «daño(s)»: un plural con paréntesis se lee
+        como formulario. Tope que solo encoge (medido el 2026-09-24)."""
+        from tests.flota.test_trinquetes_flota import _sin_comentarios
+        total = sum(_sin_comentarios(f.read_text(encoding='utf-8')).count('(s)')
+                    for f in PWA.glob('flota*.js'))
+        assert total <= TOPE_PLURALES_CON_PARENTESIS, total
+
+
+#: Plurales «(s)» en el código de flota*.js (sin comentarios), 2026-09-24.
+TOPE_PLURALES_CON_PARENTESIS = 54

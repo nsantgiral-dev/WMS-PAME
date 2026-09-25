@@ -154,3 +154,17 @@ Toda puerta nueva que la cola reenvíe va con la marca, o el trinquete
 clave, el reenvío de un recibo horas después —fuera de la ventana de 90 s— cerraba la
 custodia recién abierta y abría otra con los mismos kilómetros (regla 9, del lado del
 teléfono).*
+
+
+## 17. «¿Puede salir este camión?» tiene UNA política, y nadie más decide un nivel
+
+`flota/dominio/salida.py` decide rojo / ámbar / verde y escribe el texto; el semáforo de
+la bandeja, las advertencias al despachar y el aviso del conductor lo pintan. Un
+`'rojo'`, `'ambar'`, `'amarillo'` o `'verde'` fuera de ese archivo pone rojo
+`tests/flota/test_una_politica_de_salida.py` (AST en Python, texto acotado en el JS).
+
+*Motivo: el 2026-09-24 tres pantallas contestaban la misma pregunta con tres políticas.
+El despacho no sumaba el daño bloqueante ni el preventivo vencido, el semáforo no sabía
+de la orden de taller, el teléfono decía «amarillo», y el mismo SOAT se escribía de
+tres formas. La que se queda atrás es la que deja salir el camión.*
+

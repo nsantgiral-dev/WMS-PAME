@@ -674,6 +674,48 @@ class TestLaFechaEsDeBogota:
         assert cuerpo['fotos'][0]['clase'] == 'foto_dato'
 
 
+    def _tanquear(self, tmp_path, km_nuevo, foto_tablero, confirma=True):
+        tablero = json.dumps(FOTO) if foto_tablero else 'null'
+        return _correr(tmp_path, (
+            '(async () => { flotaAbrirModal("x", "THP696");'
+            ' flotaTanqueoPintar();'
+            ' flotaCondKmCambio("tq");'
+            ' const html = document.getElementById("flota-recibo").innerHTML;'
+            f' FLOTA_TQ.fotoTablero = {tablero};'
+            ' document.getElementById("tq-galones").value = "10";'
+            ' document.getElementById("tq-valor").value = "150000";'
+            ' document.getElementById("tq-estacion").value = "Terpel";'
+            f' document.getElementById("tq-km").value = "{km_nuevo}";'
+            f' confirm = () => {str(confirma).lower()};'
+            ' await flotaCondGuardarTanqueo(); return {envios: __ENVIOS, html}; })()'),
+            semilla=(f'FLOTA_COND = {json.dumps(_turno(tiene_turno_abierto=True))};'
+                     'FLOTA_PLACA = "THP696";'
+                     f'FLOTA_TQ = {{foto: {json.dumps(FOTO)}, fotoTablero: null, kmCambio: false,'
+                     ' tanque: "lleno", origen: "efectivo_conductor", estados: ["lleno"], origenes: []};'),
+            respuestas=[{'status': 201, 'json': {'id': 3}}])
+
+    def test_cambio_pide_la_foto_del_tablero(self, tmp_path):
+        """Un km nuevo sin foto nace «en duda» y no sirve para el rendimiento:
+        al tocar «Cambió» aparece el botón de la foto del tablero."""
+        s = self._tanquear(tmp_path, 120_900, foto_tablero=True)
+        assert 'Foto del tablero' in s['html'] or 'Tablero fotografiado' in s['html']
+        cuerpo = s['envios'][0]['body']
+        assert cuerpo['km'] == 120_900
+        assert cuerpo['foto_tablero']['clase'] == 'foto_dato'
+
+    def test_sin_foto_del_tablero_pregunta_y_no_la_inventa(self, tmp_path):
+        s = self._tanquear(tmp_path, 120_900, foto_tablero=False, confirma=False)
+        assert s['envios'] == [], 'se registró sin preguntar'
+        s = self._tanquear(tmp_path, 120_900, foto_tablero=False, confirma=True)
+        assert 'foto_tablero' not in s['envios'][0]['body']
+
+    def test_con_el_km_de_siempre_no_manda_foto_del_tablero(self, tmp_path):
+        """El servidor reutiliza la lectura que ya tiene: no hace falta foto."""
+        s = self._tanquear(tmp_path, 120_500, foto_tablero=True)
+        cuerpo = s['envios'][0]['body']
+        assert cuerpo['km'] == 120_500 and 'foto_tablero' not in cuerpo
+
+
 # ═════════════════════════════════════════════════════════════════════════
 # 8 · El recibo guiado
 # ═════════════════════════════════════════════════════════════════════════

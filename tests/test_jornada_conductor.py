@@ -869,9 +869,22 @@ class TestResumen:
 
     def test_declara_lo_que_no_puede_ver_y_el_aviso_legal(self, db, mundo):
         r = _svc().resumen(DIA, DIA)
-        assert any('GPS del vehículo' in x for x in r['no_puede_ver'])
+        assert any('GPS en el vehículo' in x for x in r['no_puede_ver'])
         assert 'Ley 1581' in r['aviso_legal'] and 'POR ESCRITO' in r['aviso_legal']
         assert r['umbrales']['n_minimo_pares'] == 10
+
+    def test_lo_que_no_puede_ver_va_sin_jerga(self, db, mundo):
+        """Lo lee el encargado, no quien mantiene el sistema: sin nombres de
+        funciones, sin «Fase N», sin «manifiesto» ni «hora del servidor»."""
+        r = _svc().resumen(DIA, DIA)
+        texto = ' '.join(r['no_puede_ver'])
+        for jerga in ('`', 'Fase', 'entregar_ruta', 'manifiesto', 'servidor', '_'):
+            assert jerga not in texto, jerga
+
+    def test_los_motivos_de_rechazo_viajan_en_palabras(self, db, mundo):
+        from app.services.motivos_rechazo import MOTIVOS
+        r = _svc().resumen(DIA, DIA)
+        assert r['motivos_rechazo'] == {m.codigo: m.etiqueta for m in MOTIVOS}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1231,7 +1244,10 @@ class TestLaPantalla:
         assert 'Tiempo que ningún registro explica' in d
         assert 'no concluye' in d
         assert 'Ley 1581' in d
-        assert 'GPS del vehículo' in d
+        # «Lo que no puede ver» va UNA vez, al pie de la lista de conductores;
+        # en el día queda el aviso legal y la referencia (2026-09-24).
+        assert 'GPS' not in d and 'al pie de la lista de conductores' in d
+        assert 'GPS en el vehículo' in out['resumen']
         assert _MALO not in d and '&lt;img' in d
         assert f'conductor_id={dia["conductor"]["id"]}' in out['pedidas'][-1]
         assert f'dia={DIA.isoformat()}' in out['pedidas'][-1]
