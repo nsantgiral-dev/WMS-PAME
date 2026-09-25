@@ -355,60 +355,13 @@ class TestElSTSNoSeEmiteDosVeces:
             'a revisar el mapeo en vez del filtro')
 
 
-class TestLaBaseDeRetencionSaleDeSiesaONoSale:
-    def test_con_siesa_sana_las_retenciones_SI_se_encolan(self):
-        """**La pareja del `continue`.**
-
-        El arreglo hace que, sin base de Siesa, no se encole nada. Si el
-        `continue` quedara mal puesto —fuera del `if not _base_de_siesa`— el
-        endpoint dejaría de encolar retenciones **siempre**, y eso no daría
-        ningún error: la pantalla diría `ok: true` y los documentos contables
-        no existirían. Es la misma clase de fallo silencioso que el arreglo
-        vino a cerrar, por la puerta de al lado.
-
-        Se verifica por estructura: el `continue` tiene que estar dentro del
-        bloque que comprueba la procedencia, no después.
-        """
-        import ast
-        import pathlib as _pl
-        arbol = ast.parse(_pl.Path('app/routes/rutas.py').read_text())
-
-        culpables = []
-        for n in ast.walk(arbol):
-            if not isinstance(n, ast.If):
-                continue
-            # el `if not _base_de_siesa:`
-            if '_base_de_siesa' not in ast.dump(n.test):
-                continue
-            hijos = [x for x in n.body if isinstance(x, ast.Continue)]
-            if not hijos:
-                culpables.append(
-                    'el `continue` salió del bloque `if not _base_de_siesa`: '
-                    'o no corta cuando debe, o corta siempre')
-        assert not culpables, culpables
-
-        # Y que el `continue` no esté suelto en el cuerpo del for.
-        src = _pl.Path('app/routes/rutas.py').read_text()
-        i = src.index('_base_de_siesa = False')
-        bloque = src[i:i + 2000]
-        assert bloque.count('continue') == 1, (
-            'hay más de un `continue` en el bloque de retenciones: revisar '
-            'cuál corta qué')
-
-    def test_el_endpoint_declara_el_error_en_vez_de_estimar(self):
-        """Por AST no: por lectura del bloque, que es corto y explícito.
-
-        Los dos daños eran opuestos —reteIVA en cero que nunca se encola, y
-        retefuente/ICA sobre una base con IVA— y ninguno tocaba `errores`, así
-        que la respuesta salía con `ok: true`."""
-        import pathlib
-        src = pathlib.Path('app/routes/rutas.py').read_text()
-        i = src.index('_base_de_siesa')
-        bloque = src[i:i + 2500]
-        assert 'errores.append' in bloque, (
-            'el fallo de la consulta no entra en `errores`, así que el '
-            'endpoint responde ok: true')
-        assert 'continue' in bloque, (
-            'sigue calculando retenciones sobre una base que no vino de Siesa')
-        assert 'usando monto_cobrado como base' not in src, (
-            'volvió el fallback que calcula la retención sobre lo recaudado')
+# `TestLaBaseDeRetencionSaleDeSiesaONoSale` leía el bloque `_base_de_siesa`
+# de `/liquidar-completo`, que el frente de liquidación borró el 2026-09-25
+# (sin pantalla; mandaba el DC sin cuenta ni UN reales y la retención sin
+# decisión). La propiedad —sin la base real de Siesa no se encola la
+# retención, y se declara en `errores`— vive ahora en el único encolador de
+# la retención y está probada por comportamiento, con su pareja sana:
+# `tests/test_liquidacion_doble_unidad_y_dc.py`
+# (`test_factura_ilegible_no_encola_y_no_cuenta`,
+# `test_la_ruta_declara_el_dc_fallido_en_errores`,
+# `test_retencion_que_cuadra_encola_y_cuenta_uno`).

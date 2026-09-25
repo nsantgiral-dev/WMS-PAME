@@ -50,10 +50,6 @@ LECTURAS_QUE_TRAGAN = {
         'Detalle de líneas de una FE para mostrar/prorratear. [] se lee como '
         '«sin líneas» y bloquea el cálculo aguas abajo, no reenvía. Frente '
         'liquidación (NC).'),
-    'connekta_consultas_gateway.py::get_remision_desde_pedido': (
-        'P0-2 del 2026-09-25: None ante error se lee como «no hay RM» y puede '
-        'terminar en RM #2. Lo cierra el frente de despacho de pedidos (RM), '
-        'no este — al arreglarlo, esta entrada sale.'),
     'connekta_consultas_gateway.py::get_pedido_cabecera': (
         'Cabecera (NIT, condición de pago) del pedido. None cae al camino '
         'conservador del cond_pago (SIESA_COND_PAGO_RUTA o ValueError), no a '
@@ -85,6 +81,9 @@ LECTURAS_QUE_TRAGAN = {
 CERRADAS = (
     'connekta_traslados_gateway.py::get_sts_info_by_alterno',
     'connekta_traslados_gateway.py::get_consec_entrada_transito_by_alterno',
+    # Cerrada por el frente fiscal (RemisionNoDisponible, P0-2): el «no sé»
+    # de la remisión decidía un segundo 142945.
+    'connekta_consultas_gateway.py::get_remision_desde_pedido',
 )
 
 

@@ -2067,8 +2067,8 @@ def _encolar_documento_contable(recaudo: RecaudoEntrega, tipo_docto_fe: str,
             '[LIQUIDACION] recaudo %d: ya hay un DOCUMENTO_CONTABLE_RET en cola '
             'para la cuenta %s — no se duplica', recaudo.id, cuenta_puc
         )
-        # Sí hay documento para esa cuenta: lo encoló otro camino
-        # (`/liquidar-completo`) y sigue en la cola. Cuenta como documento
+        # Sí hay documento para esa cuenta: lo encoló otro camino («Registrar
+        # cobro» por parada) y sigue en la cola. Cuenta como documento
         # existente —el tablero no miente— y no es un error que declarar.
         return ResultadoDC(DC_YA_EN_COLA, None)
 

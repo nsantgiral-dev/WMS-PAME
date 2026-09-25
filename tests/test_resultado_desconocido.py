@@ -163,19 +163,40 @@ class TestLaNotaCreditoNoRevierteAntePocaCerteza:
     def test_un_rechazo_explicito_si_revierte(self, db, monkeypatch):
         """La otra mitad, que el arreglo no puede romper: si Siesa contestó
         que no, no se creó nada y el reintento es correcto. Congelar acá
-        dejaría la nota crédito sin emitir para siempre."""
+        dejaría la nota crédito sin emitir para siempre.
+
+        El «no» de Siesa es `ConnektaRechazado` (lo que el gateway levanta
+        ante un 4xx o `codigo != 0`). Este test lo modelaba con un
+        `ValueError` pelado, de cuando cualquier excepción que no fuera un
+        timeout contaba como rechazo; desde 2026-09-25 un error sin tipo es
+        «no sé» y NO revierte (ver el test siguiente)."""
         from app.models.recaudo_entrega import RecaudoEntrega
+        from app.services.connekta_gateway import ConnektaRechazado
         r, job = self._job_nc(db, monkeypatch,
-                              ValueError('Siesa rechazó el documento'))
+                              ConnektaRechazado('Siesa rechazó el documento (codigo=1)'))
         rid = r.id   # el pre-flag lo enciende el handler (Regla 6), no el test
 
         from app.services import siesa_job_service as sjs
-        with pytest.raises(ValueError):
+        with pytest.raises(ConnektaRechazado):
             sjs._ejecutar_job(job)
 
         assert RecaudoEntrega.query.get(rid).siesa_nc_triggered is False, (
             'un rechazo explícito de Siesa dejó el pre-flag arriba — la NC '
             'no se va a reintentar nunca')
+
+    def test_un_error_sin_tipo_es_no_se_y_no_revierte(self, db, monkeypatch):
+        """Un 5xx o una conexión cortada llegan como `Exception` sin tipo: la
+        NC PUEDE existir. El handler lo convierte en «no sé» y deja la bandera
+        (lo que el `ValueError` del test anterior probaba al revés)."""
+        from app.models.recaudo_entrega import RecaudoEntrega
+        r, job = self._job_nc(db, monkeypatch,
+                              ValueError('Siesa rechazó el documento (HTTP 502)'))
+        rid = r.id
+
+        from app.services import siesa_job_service as sjs
+        with pytest.raises(ConnektaResultadoDesconocido):
+            sjs._ejecutar_job(job)
+        assert RecaudoEntrega.query.get(rid).siesa_nc_triggered is True
 
 
 class TestElDlqNoReintentaLoDesconocido:
