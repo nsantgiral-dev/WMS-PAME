@@ -110,3 +110,18 @@ class TestElInsumoSeDeclara:
         from app.services.armador_service import ArmadorService
         r = ArmadorService.rop_dual()
         assert r['insumo_origen']['skus_con_marca'] >= 2
+
+
+def test_una_sola_regla_decide_china_con_el_codigo_de_marca():
+    """Desde m047 la marca guarda el NOMBRE en `marca_siesa` y el CÓDIGO en
+    `marca_codigo`. El ROP y la franja de confianza deciden «es China» con la
+    misma función, y esa función mira el código (la integración del
+    2026-09-25 encontró la franja comparando solo el nombre)."""
+    from app.services.armador_service import es_de_china, insumo_origen
+    assert es_de_china('', 'QUIROND', 'M003') is True
+    assert es_de_china('', 'NORMA', 'M001') is False
+    assert es_de_china('china', None, None) is True
+    assert es_de_china('', 'M009', None) is True   # carga por archivo vieja
+    ins = insumo_origen({'A': '', 'B': ''}, {'A': 'QUIROND', 'B': 'NORMA'},
+                        {'A': 'M003', 'B': 'M001'})
+    assert ins['skus_china'] == 1
