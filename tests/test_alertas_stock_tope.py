@@ -166,11 +166,17 @@ class TestProductividadOperariosNoRevienta:
         """
         from datetime import datetime, timedelta
         from app.models.conteo import SesionConteo
+        from app.utils.fecha import dia_operativo, inicio_del_dia_utc
 
         db.session.add(SesionConteo(
             codigo='CNT-HOY-001', almacen_id=almacen.id, operario_id=usuario.id,
             ubicacion_id=ub_picking.id, producto_id=producto.id,
-            estado='PENDIENTE', fecha_inicio=datetime.utcnow() - timedelta(minutes=30),
+            # Hace 30 min, pero nunca antes del inicio del día operativo: entre
+            # las 00:00 y las 00:30 de Bogotá «hace 30 min» cae en ayer y el test
+            # fallaba según la hora a la que corriera la suite (2026-09-25, 00:1x).
+            estado='PENDIENTE', fecha_inicio=max(
+                datetime.utcnow() - timedelta(minutes=30),
+                inicio_del_dia_utc(dia_operativo()) + timedelta(seconds=1)),
         ))
         db.session.commit()
 
