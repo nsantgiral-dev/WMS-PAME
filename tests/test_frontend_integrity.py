@@ -909,8 +909,6 @@ DEUDA_SIN_UI = {
 
     '/api/auth/me':
         'DUPLICADO: el login ya devuelve el usuario completo. Pedirlo otra vez es un viaje de red por un dato que el cliente tiene. Candidato a BORRAR, no a conectar.',
-    '/api/compras/armador/contenedores':
-        'Listado de contenedores. El armador muestra la propuesta, no el histórico.',
     '/api/compras/bloqueados/verificar':
         'Verifica una OC contra la lista de bloqueados. Sin gesto en compras.',
     '/api/compras/clasificar-rama/<int:producto_id>':

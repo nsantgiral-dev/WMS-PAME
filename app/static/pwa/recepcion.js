@@ -2014,7 +2014,7 @@ async function cargarCompras() {
 /** @param {string} id - Purchasing primary sub-tab to activate. */
 function compSubtab(id) {
   COMP_SUBTAB = id;
-  const secs = ['velocity','dock','cuarentena','audit','bloqueos','acuerdos','armador','deriva','temporada','modelos','nacional'];
+  const secs = ['velocity','dock','cuarentena','audit','bloqueos','fuentes','acuerdos','armador','deriva','temporada','modelos','nacional'];
   secs.forEach(s => {
     const el = document.getElementById('comp-sec-' + s);
     const tab = document.getElementById('comp-sub-' + s);
@@ -2029,6 +2029,7 @@ function compSubtab(id) {
   else if (id === 'dock') compCargarDock('comp');
   else if (id === 'cuarentena') compCargarCuarentena('comp');
   else if (id === 'bloqueos') compCargarBloqueos();
+  else if (id === 'fuentes') fuentesCargar();
   else if (id === 'acuerdos') compCargarAcuerdos();
   else if (id === 'armador') compCargarArmador();
   else if (id === 'deriva') compCargarDeriva();

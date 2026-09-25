@@ -2605,6 +2605,10 @@
         style="flex:1;min-width:74px;padding:9px 6px;font-size:var(--fs-xs);text-align:center;cursor:pointer;color:var(--tx3);">
         🚫 Bloqueos
       </div>
+      <div id="comp-sub-fuentes" onclick="compSubtab('fuentes')"
+        style="flex:1;min-width:74px;padding:9px 6px;font-size:var(--fs-xs);text-align:center;cursor:pointer;color:var(--tx3);">
+        🧾 Fuentes
+      </div>
       </div>
       <!-- DECISIÓN — lo que compromete plata: trimestral y anual -->
       <div style="width:100%;padding:8px 10px 2px;font-size:var(--fs-xs);font-weight:700;color:var(--tx3);letter-spacing:.4px;border-top:1px solid var(--brd);">DECISIÓN</div>
@@ -2765,6 +2769,11 @@
     <!-- ── SECCIÓN: DERIVA DE PRECIOS ─────────────────────────────── -->
     <div id="comp-sec-deriva" style="display:none;">
       <div style="text-align:center;padding:30px;color:var(--tx3);">Cargando deriva...</div>
+
+    <!-- ── OPERACIÓN: FUENTES DE DATOS DE COMPRAS (m046compras) ─────── -->
+    <div id="comp-sec-fuentes" style="display:none;">
+      <div id="fuentes-container"><div style="color:var(--tx3);padding:20px;">Cargando…</div></div>
+    </div>
 
     <!-- ── DECISIÓN: REPOSICIÓN NACIONAL (semanal) ───────────────── -->
     <div id="comp-sec-nacional" style="display:none;">
@@ -4003,8 +4012,9 @@
   <script defer src="/static/pwa/vigia.js?v=20260924leg2"></script>
   <script defer src="/static/pwa/flota.js?v=20260924bandeja"></script>
   <script defer src="/static/pwa/compras_ia.js?v=20260924leg2"></script>
+  <script defer src="/static/pwa/compras_fuentes.js?v=20260924cmpd"></script>
   <script defer src="/static/pwa/kardex.js?v=20260924leg2"></script>
-  <script defer src="/static/pwa/temporada.js?v=20260924leg2"></script>
+  <script defer src="/static/pwa/temporada.js?v=20260924cmpd"></script>
   <script defer src="/static/pwa/tablero_bi.js?v=20260924port"></script>
   <script defer src="/static/pwa/manuales.js?v=20260924leg2"></script>
   <script defer src="/static/pwa/flota_analitica.js?v=20260924bandeja"></script>

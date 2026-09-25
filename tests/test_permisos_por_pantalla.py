@@ -82,6 +82,8 @@ PANTALLAS = [
     ('recepcion.js',  None,         ['admin', 'recepcionista']),
     ('tienda.js',     None,         ['tienda']),   # admin no abre esta pantalla
     ('compras_ia.js', None,         ['admin', 'compras']),
+    # 🧾 Fuentes de compras (m046compras): sub-tab de Compras, mismos roles.
+    ('compras_fuentes.js', None,    ['admin', 'compras']),
     ('picking.js',    None,         ['admin', 'operario']),
     ('packing.js',    None,         ['admin', 'empacador']),
     ('app.js',        None,         ['admin']),
