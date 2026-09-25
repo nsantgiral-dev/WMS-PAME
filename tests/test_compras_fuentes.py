@@ -290,6 +290,7 @@ class TestEnCamino:
         r = en_camino()
         assert r['por_sku'] == {'PROD-001': 100.0}
         assert r['declaracion']['contenedor_cubierto_por_su_oc'] == 1
+        assert r['declaracion']['contenedor_cita_oc_cerrada'] == 0
 
     def test_contenedor_que_cita_una_oc_cerrada_no_se_suma(self, app, db, producto):
         from app.services.compras_fuentes import en_camino
