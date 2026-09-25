@@ -1033,7 +1033,7 @@ async function liqLiquidarWMS(rutaId) {
     } catch (e) {
       // Mercancía de vuelta sin contar (m045devol): la ruta no se liquida
       // salvo forzado con motivo, que queda en la bitácora.
-      const motivo = liqMotivoDevolucionesSinContar(e);
+      const motivo = await liqMotivoDevolucionesSinContar(e);
       if (motivo == null) throw e;
       await postConReintento(`/api/rutas/${rutaId}/liquidar`, { motivo_devoluciones: motivo });
     }
@@ -1052,11 +1052,13 @@ async function liqLiquidarWMS(rutaId) {
  * @param {Error} e - el error del POST
  * @returns {string|null}
  */
-function liqMotivoDevolucionesSinContar(e) {
+async function liqMotivoDevolucionesSinContar(e) {
   const txt = String((e && e.message) || '');
   if (!txt.startsWith('devoluciones_sin_contar')) return null;
-  const motivo = prompt(txt.replace(/^devoluciones_sin_contar:\s*/, '') +
-    '\n\nPara liquidar igual, escribí el motivo (queda en la bitácora):');
+  const motivo = await _modalTexto('Devoluciones sin contar',
+    esc(txt.replace(/^devoluciones_sin_contar:\s*/, '')) +
+    '<br><br>Para liquidar igual, escriba el motivo (queda en la bitácora):',
+    { obligatorio: true, textoConfirmar: 'Liquidar igual' });
   return motivo && motivo.trim() ? motivo.trim() : null;
 }
 

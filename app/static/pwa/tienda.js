@@ -260,7 +260,10 @@ function tiendaAveriasQuitar(codigoSiesa) {
  */
 async function tiendaAveriasEnviar() {
   if (!_TAV_CARRITO.length) return;
-  if (!confirm(`¿Declarar ${_TAV_CARRITO.length} producto${_TAV_CARRITO.length !== 1 ? 's' : ''} averiado${_TAV_CARRITO.length !== 1 ? 's' : ''} y mandarlos al centro de distribución?`)) return;
+  const _nAv = _TAV_CARRITO.length;
+  if (!(await _modalConfirmar('Salen del inventario de la tienda y viajan al centro de distribución.',
+      { titulo: `¿Declarar ${esc(_nAv)} ${_nAv !== 1 ? 'productos averiados' : 'producto averiado'}?`,
+        textoConfirmar: 'Declarar' }))) return;
 
   try {
     const r = await fetch(API + '/api/traslados/', {
@@ -294,12 +297,11 @@ async function tiendaAveriasEnviar() {
  * Aparte del primero a propósito — ver `tiendaAveriasEnviar`.
  */
 async function tiendaValidarAveria(id) {
-  const evidencia = prompt(
-    'Validar esta avería.\n\n'
-    + '¿Qué revisaste y qué encontraste? Lo van a leer quien la recibe en el '
-    + 'CD y quien decide si se confirma — ninguno estuvo acá.');
+  const evidencia = await _modalTexto('Validar esta avería',
+    '¿Qué revisó y qué encontró? Lo van a leer quien la recibe en el CD y quien '
+    + 'decide si se confirma — ninguno estuvo acá.',
+    { obligatorio: true, textoConfirmar: 'Validar' });
   if (evidencia === null) return;
-  if (!evidencia.trim()) { alerta('Hace falta la evidencia', 'error'); return; }
   try {
     const r = await fetch(API + `/api/traslados/${id}/aprobar`, {
       method: 'POST',

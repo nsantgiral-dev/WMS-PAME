@@ -435,14 +435,14 @@ async function kardexReconstruir(forzar) {
 }
 
 /** El override. Confirma nombrando lo que se está saltando. */
-function kardexReconstruirForzar() {
-  if (!confirm(
+async function kardexReconstruirForzar() {
+  if (!(await _modalConfirmar(
       'La última descarga del kardex NO quedó completa.\n\n' +
       'Reconstruir igual inventa días sin movimiento donde en realidad no se ' +
-      'descargaron los datos. Esos días falsos se leen como "agotado", inflan ' +
-      'la corrección por censura y contaminan el ROP y la temporada — sin una ' +
-      'sola alarma.\n\n' +
-      '¿Reconstruir de todos modos?')) return;
+      'descargaron los datos. Esos días falsos se leen como «agotado», inflan ' +
+      'la corrección por censura y contaminan el punto de pedido y la temporada — sin una ' +
+      'sola alarma.',
+      { titulo: '¿Reconstruir de todos modos?', textoConfirmar: 'Reconstruir igual', peligro: true }))) return;
   kardexReconstruir(true);
 }
 

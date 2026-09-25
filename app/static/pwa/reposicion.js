@@ -596,7 +596,8 @@ async function repReintentar(jobId) {
  * @param {HTMLButtonElement} btn - Button element to disable during processing.
  */
 async function repReintentarTodosFallidos(btn) {
-  if (!confirm('¿Reintentar TODOS los jobs DESPACHO_F470 fallidos? Esto enviará las facturas pendientes a Siesa.')) return;
+  if (!(await _modalConfirmar('Se vuelven a enviar a Siesa todos los despachos fallidos: remisión y factura de cada uno.',
+      { titulo: '¿Reintentar todos los despachos fallidos?', textoConfirmar: 'Reintentar todos', peligro: true }))) return;
   if (btn) { btn.disabled = true; btn.textContent = 'Procesando...'; }
   try {
     const r = await fetch(API + '/api/siesa/resetear-jobs-fallidos', {

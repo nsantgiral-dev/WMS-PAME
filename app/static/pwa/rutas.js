@@ -414,7 +414,8 @@ async function cargarMuelleConRuta(rutaId) {
  * @param {number} rutaId - ID de la ruta a cerrar
  */
 async function muelleConfirmarCargueCompleto(rutaId) {
-  if (!confirm(`¿Confirmar que la Ruta #${rutaId} se cargó físicamente completa?\n\nPasará a EN TRÁNSITO — ya no se podrán agregar ni escanear más bultos.`)) return;
+  if (!(await _modalConfirmar('Pasará a EN TRÁNSITO: ya no se podrán agregar ni escanear más bultos.',
+      { titulo: `¿La ruta #${esc(rutaId)} se cargó físicamente completa?`, textoConfirmar: 'Sí, completa' }))) return;
   try {
     const { r, d } = await _rutaPostConFlota('/api/rutas/' + rutaId + '/cerrar', 'despachar');
     if (!r) return;
@@ -576,7 +577,8 @@ async function muelleAsignar(bultoId, pedidoSiesa) {
  * @param {number} bultoId - ID del bulto a desasignar
  */
 async function muelleDesasignar(bultoId) {
-  if (!confirm('¿Quitar este bulto de la ruta?')) return;
+  if (!(await _modalConfirmar('El bulto vuelve al muelle, sin ruta.',
+      { titulo: '¿Quitar este bulto de la ruta?', textoConfirmar: 'Quitar' }))) return;
   try {
     const r = await fetch(API + '/api/muelle/desasignar/' + bultoId, {
       method: 'DELETE',
@@ -862,7 +864,8 @@ async function rutaIniciar(id) {
  * @param {number} id - ID de la ruta a cerrar
  */
 async function rutaCerrar(id) {
-  if (!confirm(`¿Confirmar que la Ruta #${id} salió? Ya no se podrán agregar bultos.`)) return;
+  if (!(await _modalConfirmar('Ya no se podrán agregar bultos.',
+      { titulo: `¿La ruta #${esc(id)} salió?`, textoConfirmar: 'Sí, salió' }))) return;
   try {
     const { r, d } = await _rutaPostConFlota('/api/rutas/' + id + '/cerrar', 'despachar');
     if (!r) return;
@@ -898,7 +901,8 @@ async function rutaEntregar(id) {
 
     if (!bultos.length) {
       // Sin bultos asignados — cierre directo (ruta sin bultos escaneados)
-      if (!confirm(`¿Confirmar entrega de Ruta #${id}?\nNo tiene bultos registrados.`)) return;
+      if (!(await _modalConfirmar('No tiene bultos registrados.',
+          { titulo: `¿Confirmar la entrega de la ruta #${esc(id)}?`, textoConfirmar: 'Confirmar entrega' }))) return;
       _enviarConfirmacionEntrega(id, []);
       return;
     }
@@ -1571,7 +1575,8 @@ async function maestraToggle(id, activar) {
  * @param {string} nombre - Nombre de la ruta (para el mensaje de confirmacion)
  */
 async function maestraEliminar(id, nombre) {
-  if (!confirm(`¿Eliminar la ruta "${nombre}"?\n\nEsta acción no se puede deshacer. Si tiene viajes asociados no se podrá eliminar.`)) return;
+  if (!(await _modalConfirmar('Esta acción no se puede deshacer. Si tiene viajes asociados no se podrá eliminar.',
+      { titulo: `¿Eliminar la ruta «${esc(nombre)}»?`, textoConfirmar: 'Eliminar', peligro: true }))) return;
   try {
     const r = await fetch(API + '/api/rutas/maestras/' + id, {
       method: 'DELETE',
@@ -3785,7 +3790,8 @@ async function _cargarPlanilla(id) {
  * @param {number} id - ID de la ruta a liquidar
  */
 async function rutaLiquidar(id) {
-  if (!confirm(`¿Liquidar Ruta #${id}?\nEsto confirma el cuadre financiero en WMS.\nLuego usa el módulo Liquidación para documentar NC/RC/DC en Siesa por parada.`)) return;
+  if (!(await _modalConfirmar('Esto confirma el cuadre financiero en el WMS. Después, en Liquidación, se documentan en Siesa la nota crédito, el recibo de caja y las retenciones de cada parada.',
+      { titulo: `¿Liquidar la ruta #${esc(id)}?`, textoConfirmar: 'Liquidar' }))) return;
   try {
     const liquidar = (cuerpo) => fetch(API + '/api/rutas/' + id + '/liquidar', {
       method: 'POST',
@@ -3796,8 +3802,10 @@ async function rutaLiquidar(id) {
     let d = await r.json();
     // Mercancía de vuelta sin contar (m045devol): se fuerza solo con motivo.
     if (!r.ok && String(d.error || '').startsWith('devoluciones_sin_contar')) {
-      const motivo = prompt(String(d.error).replace(/^devoluciones_sin_contar:\s*/, '') +
-        '\n\nPara liquidar igual, escribí el motivo (queda en la bitácora):');
+      const motivo = await _modalTexto('Devoluciones sin contar',
+        esc(String(d.error).replace(/^devoluciones_sin_contar:\s*/, '')) +
+        '<br><br>Para liquidar igual, escriba el motivo (queda en la bitácora):',
+        { obligatorio: true, textoConfirmar: 'Liquidar igual' });
       if (!motivo || !motivo.trim()) return;
       r = await liquidar({ motivo_devoluciones: motivo.trim() });
       d = await r.json();
@@ -3814,7 +3822,8 @@ async function rutaLiquidar(id) {
 }
 
 async function rutaLiquidarSiesa(id) {
-  if (!confirm(`¿Re-enviar documentos de Ruta #${id} a Siesa?\nSolo se procesarán los que no se hayan enviado aún.`)) return;
+  if (!(await _modalConfirmar('Solo se envían los que todavía no salieron.',
+      { titulo: `¿Reenviar a Siesa los documentos de la ruta #${esc(id)}?`, textoConfirmar: 'Reenviar' }))) return;
   try {
     const r = await fetch(API + '/api/rutas/' + id + '/liquidar-siesa', {
       method: 'POST',

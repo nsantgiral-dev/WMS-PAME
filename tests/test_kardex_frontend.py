@@ -97,9 +97,11 @@ class TestElRechazoDelServidorNoSeEsconde:
     def test_el_override_confirma_nombrando_la_consecuencia(self):
         js = _js('kardex.js')
         cuerpo = _cuerpo(js, 'function kardexReconstruirForzar(')
-        assert 'confirm(' in cuerpo
+        # El modal propio (2026-09-25), no el confirm() nativo: la decisión
+        # contamina el punto de pedido y la temporada.
+        assert '_modalConfirmar(' in cuerpo
         assert 'inventa días sin movimiento' in cuerpo
-        assert 'ROP' in cuerpo
+        assert 'punto de pedido' in cuerpo
 
     def test_lo_forzado_queda_declarado_en_el_resultado(self):
         """Si se forzó, el número resultante lleva su advertencia pegada. Un

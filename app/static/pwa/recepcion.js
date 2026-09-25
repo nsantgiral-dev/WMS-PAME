@@ -424,19 +424,16 @@ async function recepAbrirAveria(productoId) {
   if (!it) return;
   const restante = it.cantidad_recibida - (it.cantidad_averiada || 0);
 
-  const cant = prompt(
-    `¿Cuántas de las ${it.cantidad_recibida} recibidas llegaron averiadas?\n` +
-    `(quedan ${restante} sin declarar)`, '');
-  if (cant === null) return;
-  const n = parseInt(cant, 10);
-  if (!Number.isFinite(n) || n <= 0) {
-    toast('Cantidad inválida', 'error');
-    return;
-  }
+  const n = await _modalCantidad('Mercancía averiada',
+    `¿Cuántas de las ${esc(it.cantidad_recibida)} recibidas llegaron averiadas? ` +
+    `(quedan ${esc(restante)} sin declarar)`,
+    { min: 1, max: restante > 0 ? restante : undefined, textoConfirmar: 'Siguiente' });
+  if (n === null) return;
 
-  const motivo = prompt(
-    '¿Por qué? La auxiliar de compras necesita esto para reclamarle al proveedor.\n' +
-    'Ej: cajas mojadas, estiba volcada, empaque roto de fábrica', '');
+  const motivo = await _modalTexto('¿Por qué llegaron averiadas?',
+    'La auxiliar de compras lo necesita para reclamarle al proveedor.',
+    { obligatorio: false, placeholder: 'Ej: cajas mojadas, estiba volcada, empaque roto de fábrica',
+      textoConfirmar: 'Declarar avería' });
   if (motivo === null) return;
 
   let r;
@@ -891,9 +888,10 @@ async function _buscarProductoModal(q) {
  */
 async function _seleccionarProductoManual(productoId, nombre, modal) {
   // Producto seleccionado sin código → preguntar cantidad y generar LPN
-  const cant = prompt(`¿Cuántas unidades tiene esta paca de "${nombre}"?\n(Deja vacío si es 1 unidad suelta)`);
-  if (cant === null) return; // canceló
-  const cantidad = parseInt(cant) || 1;
+  const cantidad = await _modalCantidad('Unidades de la paca',
+    `¿Cuántas unidades tiene esta paca de «${esc(nombre)}»? Si es una unidad suelta, escriba 1.`,
+    { min: 1, valorInicial: 1, textoConfirmar: 'Continuar' });
+  if (cantidad === null) return; // canceló
 
   if (modal) modal.remove();
 
@@ -1515,7 +1513,8 @@ async function recLlegadaCerrar(i) {
   const ru = _REC_LLEGADAS[i];
   if (!ru) return;
   const n = ru.cuadre ? ru.cuadre.en_camion_sin_recibir : 0;
-  if (!confirm(`${n} bulto(s) sin escanear quedan como FALTANTE (no volvieron). ¿Cerrar la llegada de la ruta #${ru.ruta_id}?`)) return;
+  if (!(await _modalConfirmar(`${esc(n)} bulto(s) sin escanear quedan como FALTANTE (no volvieron).`,
+      { titulo: `¿Cerrar la llegada de la ruta #${esc(ru.ruta_id)}?`, textoConfirmar: 'Cerrar llegada', peligro: n > 0 }))) return;
   try {
     const r = await post(`/api/devoluciones/llegadas/${ru.ruta_id}/cerrar`, {});
     vibrar(); flash();
@@ -1668,9 +1667,10 @@ async function cargarPendientesAprobacionNC() {
  * la bitácora (FORZAR), y libera lo devuelto a picking.
  */
 async function marcarNCAprobada(devolucionId) {
-  const motivo = prompt('¿Por qué la marcás a mano? (la verificación automática no la vio aprobada)');
+  const motivo = await _modalTexto('Marcar la nota crédito como aprobada',
+    '¿Por qué la marca a mano? La verificación automática no la vio aprobada en Siesa.',
+    { obligatorio: true, textoConfirmar: 'Marcar aprobada' });
   if (motivo == null) return;
-  if (!motivo.trim()) { alerta('El motivo es obligatorio', 'advertencia'); return; }
   try {
     await post(`/api/devoluciones/${devolucionId}/marcar-nc-aprobada`, { motivo });
     vibrar(); flash();
@@ -1829,7 +1829,8 @@ async function confirmarDevolucionCliente() {
     return;
   }
   if (esPendienteDeRuta && !lineas.some(l => l.cantidad_devuelta > 0)) {
-    if (!confirm('No contaste nada: se registra FALTANTE TOTAL (el conductor dijo que volvía y no llegó). No entra inventario ni sale nota crédito. ¿Confirmás?')) return;
+    if (!(await _modalConfirmar('No contó nada: se registra FALTANTE TOTAL (el conductor dijo que volvía y no llegó). No entra inventario ni sale nota crédito.',
+        { titulo: '¿Registrar faltante total?', textoConfirmar: 'Sí, no llegó nada', peligro: true }))) return;
   }
 
   if (esPendienteDeRuta) {

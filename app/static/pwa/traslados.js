@@ -876,10 +876,12 @@ async function trasDictaminarAveria(id, confirmada) {
     : 'Dictaminar que NO estaba averiada.\n\nVuelve al inventario vendible y no sale ningún documento.';
   let nota = null;
   if (!confirmada) {
-    nota = prompt(titulo + '\n\n¿Por qué? (lo va a leer quien la declaró)');
+    nota = await _modalTexto('No estaba averiada', esc(titulo).replace(/\n/g, '<br>') +
+      '<br><br>¿Por qué? (lo va a leer quien la declaró)',
+      { obligatorio: true, textoConfirmar: 'Dictaminar' });
     if (nota === null) return;
-    if (!nota.trim()) { alerta('Hace falta el motivo', 'error'); return; }
-  } else if (!confirm(titulo + '\n\n¿Seguir?')) {
+  } else if (!(await _modalConfirmar(esc(titulo),
+      { titulo: 'Sí estaba averiada', textoConfirmar: 'Confirmar avería' }))) {
     return;
   }
   try {

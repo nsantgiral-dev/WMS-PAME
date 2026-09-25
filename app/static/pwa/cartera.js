@@ -88,24 +88,25 @@ async function carteraCargarBloque() {
     ${CARTERA_PUEDE_LOTE ? `<button onclick="carteraLoteVer()" style="width:100%;margin-top:10px;padding:8px;border-radius:8px;border:1px solid var(--brd);background:var(--bg-input);color:var(--tx2);font-size:var(--fs-xs);font-weight:600;cursor:pointer;">Paradas de crédito anteriores a la regla de contado</button>` : ''}`;
 }
 
-function _carteraMotivo(titulo) {
-  const m = prompt(titulo);
+async function _carteraMotivo(titulo) {
+  const m = await _modalTexto('Motivo', esc(titulo).replace(/\n/g, '<br>'),
+                              { obligatorio: true, textoConfirmar: 'Continuar' });
   if (m === null) return null;
-  if (!m.trim()) { alerta('El motivo es obligatorio', 'error'); return null; }
   return m.trim();
 }
 
 async function carteraAutorizar(i) {
   const r = CARTERA_RETENIDAS[i];
   if (!r) return;
-  const motivo = _carteraMotivo(`Autorizar a crédito el pedido ${r.pedido || ''} (${r.cliente || ''}).\nMotivo (queda en la bitácora con tu nombre):`);
+  const motivo = await _carteraMotivo(`Autorizar a crédito el pedido ${r.pedido || ''} (${r.cliente || ''}).\nMotivo (queda en la bitácora con su nombre):`);
   if (motivo === null) return;
-  const tope = prompt('Tope en pesos que cubre esta autorización (si lo empacado lo supera, vuelve a retener):',
-                      String(Math.round(Number(r.valor || 0))));
+  const tope = await _modalCantidad('Tope de la autorización',
+    'Tope en pesos que cubre esta autorización. Si lo empacado lo supera, vuelve a retener.',
+    { min: 1, valorInicial: Math.round(Number(r.valor || 0)), textoConfirmar: 'Autorizar' });
   if (tope === null) return;
   try {
     await post(`/api/cartera/panel/retenciones/${r.id}/autorizar`,
-               { motivo, tope_valor: Number(String(tope).replace(/[^\d.]/g, '')) });
+               { motivo, tope_valor: tope });
     alerta('Autorizado — el pedido puede seguir', 'exito');
   } catch (e) { alerta(e.message || 'No se pudo autorizar', 'error'); }
   carteraCargarBloque();
@@ -114,7 +115,7 @@ async function carteraAutorizar(i) {
 async function carteraConvertir(i) {
   const r = CARTERA_RETENIDAS[i];
   if (!r) return;
-  const motivo = _carteraMotivo(`Pasar a CONTADO el pedido ${r.pedido || ''}: la factura sale para cobrar al entregar.\nMotivo:`);
+  const motivo = await _carteraMotivo(`Pasar a CONTADO el pedido ${r.pedido || ''}: la factura sale para cobrar al entregar.\nMotivo:`);
   if (motivo === null) return;
   try {
     await post(`/api/cartera/panel/retenciones/${r.id}/convertir-contado`, { motivo });
@@ -142,7 +143,7 @@ async function carteraLoteVer() {
     d = await get('/api/cartera/panel/credito-lote');
   } catch (e) { alerta(e.message || 'No se pudo leer', 'error'); return; }
   if (!d.n) { alerta(`Ninguna parada anterior al ${d.corte} espera autorización`, 'info'); return; }
-  const motivo = _carteraMotivo(`${d.n} parada(s) confirmadas antes del ${d.corte} figuran como crédito no autorizado.\nMotivo común para autorizarlas (queda por parada en la bitácora):`);
+  const motivo = await _carteraMotivo(`${d.n} parada(s) confirmadas antes del ${d.corte} figuran como crédito no autorizado.\nMotivo común para autorizarlas (queda por parada en la bitácora):`);
   if (motivo === null) return;
   try {
     const r = await post('/api/cartera/panel/credito-lote', { motivo });
@@ -152,10 +153,15 @@ async function carteraLoteVer() {
 
 /** Una caja retenida en el cierre que cartera ya liberó: se cierra de nuevo con sus bultos. */
 async function carteraCerrarLiberado(packingId) {
-  if (!confirm('Cartera liberó este pedido. ¿Cerrar la caja con las piezas ya declaradas y enviarla a Siesa?')) return;
+  if (!(await _modalConfirmar('Se cierra con las piezas ya declaradas y se envía a Siesa.',
+      { titulo: 'Cartera liberó este pedido: ¿cerrar la caja?', textoConfirmar: 'Cerrar caja' }))) return;
+  // El texto del desenlace lo decide la misma función que el empaque
+  // (`empMensajeCierre`, packing.js): en cola no es «procesado».
+  const _msj = (d, s) => (typeof empMensajeCierre === 'function'
+    ? empMensajeCierre(d, s) : { texto: (d && d.error) || 'Caja cerrada', tipo: s < 300 ? 'exito' : 'error' });
   try {
-    await post(`/api/packing/${packingId}/cerrar`, { bultos: [] });
-    alerta('Caja cerrada — Siesa procesando', 'exito');
-  } catch (e) { alerta(e.message || 'No se pudo cerrar', 'error'); }
+    const d = await post(`/api/packing/${packingId}/cerrar`, { bultos: [] });
+    const m = _msj(d, 200); alerta(m.texto, m.tipo);
+  } catch (e) { const m = _msj(e.body || { error: e.message }, e.status); alerta(m.texto, m.tipo); }
   if (typeof cargarPedidos === 'function') setTimeout(cargarPedidos, 800);
 }

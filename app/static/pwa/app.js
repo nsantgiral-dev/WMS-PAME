@@ -2722,6 +2722,11 @@ function set(id, val) {
   if (el) el.textContent = val ?? '—';
 }
 
+/** Qué avisos no se van solos: los de error. */
+const ALERTA_SE_QUEDA = ['error'];
+/** Cuántos avisos fijos caben a la vez. */
+const ALERTA_MAX_FIJAS = 3;
+
 /**
  * Show a toast notification at the top of the screen.
  * @param {string} msg - Message text.
@@ -2729,11 +2734,38 @@ function set(id, val) {
  */
 function alerta(msg, tipo = 'info') {
   const c = { exito: '#15803d', error: '#dc2626', advertencia: '#d97706', info: '#2563eb' }[tipo] || '#2563eb';
+  // Una pila arriba: dos avisos seguidos ya no se tapan uno al otro.
+  let pila = document.getElementById('alertas-pila');
+  if (!pila) {
+    pila = document.createElement('div');
+    pila.id = 'alertas-pila';
+    pila.style.cssText = 'position:fixed;top:20px;left:50%;transform:translateX(-50%);z-index:10000;display:flex;flex-direction:column;gap:8px;align-items:center;width:90%;max-width:520px;pointer-events:none;';
+    document.body.appendChild(pila);
+  }
+  const texto = String(msg == null ? '' : msg);
   const d = document.createElement('div');
-  d.style.cssText = `position:fixed;top:20px;left:50%;transform:translateX(-50%);background:${c};color:#fff;padding:14px 22px;border-radius:12px;font-size:17px;font-weight:600;z-index:9999;max-width:90%;text-align:center;`;
-  d.textContent = msg;
-  document.body.appendChild(d);
-  setTimeout(() => d.remove(), 2500);
+  d.setAttribute('role', tipo === 'error' ? 'alert' : 'status');
+  d.style.cssText = `background:${c};color:#fff;padding:14px 22px;border-radius:12px;font-size:17px;font-weight:600;text-align:center;pointer-events:auto;box-shadow:0 4px 16px rgba(0,0,0,.35);`;
+  const cuerpo = document.createElement('div');
+  cuerpo.textContent = texto;
+  d.appendChild(cuerpo);
+  if (ALERTA_SE_QUEDA.includes(tipo)) {
+    // Un error se queda hasta que alguien lo cierra (2026-09-25): a los 2,5 s
+    // desaparecía el motivo de un rechazo antes de poder leerlo. El mismo
+    // error repetido no se apila, y como mucho quedan tres.
+    [...pila.children].filter(x => x.dataset && x.dataset.texto === texto).forEach(x => x.remove());
+    d.dataset.texto = texto;
+    const cerrar = document.createElement('button');
+    cerrar.textContent = '✕ Cerrar';
+    cerrar.style.cssText = 'margin-top:8px;background:rgba(255,255,255,.18);color:inherit;border:1px solid rgba(255,255,255,.5);border-radius:8px;padding:6px 14px;font-size:14px;font-weight:700;cursor:pointer;';
+    cerrar.onclick = () => d.remove();
+    d.appendChild(cerrar);
+    const quedan = [...pila.children].filter(x => x.dataset && x.dataset.texto);
+    if (quedan.length >= ALERTA_MAX_FIJAS) quedan[0].remove();
+  } else {
+    setTimeout(() => d.remove(), tipo === 'advertencia' ? 6000 : 2500);
+  }
+  pila.appendChild(d);
 }
 
 /** Brief white screen flash for scan feedback. */
@@ -2903,7 +2935,8 @@ async function imprimirRemisionAdmin(packingId) {
 
 /** @param {number} packingId - Packing ID to generate FE from an existing Siesa remision (recovery lane). */
 async function facturarRemisionExistente(packingId) {
-  if (!confirm('¿Facturar la remisión detectada en Siesa?\nEsto generará la Factura Electrónica (142943) desde la RM existente.')) return;
+  if (!(await _modalConfirmar('Se genera la factura electrónica en Siesa desde la remisión que ya existe.',
+      { titulo: '¿Facturar la remisión detectada?', textoConfirmar: 'Facturar' }))) return;
   try {
     const r = await post(`/api/despacho_parcial/${packingId}/facturar-remision`, {});
     if (r.idempotente) {
@@ -2930,7 +2963,8 @@ async function iniciarDespachoDesdeSiesa(idx) {
     return;
   }
   const totalUds = itemsValidos.reduce((s, it) => s + (it.cantidad_pendiente || 0), 0);
-  if (!confirm(`¿Aprobar pedido ${pedido.numero_pedido}?\n${itemsValidos.length} productos · ${totalUds} uds → ${pedido.cliente || 'cliente'}`)) return;
+  if (!(await _modalConfirmar(`${esc(itemsValidos.length)} productos · ${esc(totalUds)} uds → ${esc(pedido.cliente || 'cliente')}`,
+      { titulo: `¿Aprobar el pedido ${esc(pedido.numero_pedido)}?`, textoConfirmar: 'Aprobar' }))) return;
 
   try {
     const r = await post('/api/siesa/iniciar-despacho', {
@@ -3796,14 +3830,15 @@ async function siesaFacturarRMManual() {
   }
   // La confirmación nombra el documento y la consecuencia. Un «¿estás seguro?»
   // pelado se contesta que sí sin leerlo.
-  if (!confirm(`Se va a crear la FACTURA en Siesa sobre la remisión ${tipo}-${consec} ` +
-               `(tarea ${id}).
+  if (!(await _modalConfirmar(`Se va a crear la FACTURA en Siesa sobre la remisión ${esc(tipo)}-${esc(consec)} ` +
+               `(tarea ${esc(id)}).
 
 Si esa remisión ya estaba facturada, queda una ` +
                `factura DUPLICADA que hay que anular con nota crédito a mano.
 
 ` +
-               `¿Verificaste en Siesa que no tiene factura?`)) return;
+               `¿Verificó en Siesa que no tiene factura?`,
+      { titulo: 'Crear la factura en Siesa', textoConfirmar: 'Sí, crear la factura', peligro: true }))) return;
   // El servidor exige el documento repetido y un motivo (queda en la bitácora):
   // la remisión la digitó una persona y el WMS no la puede verificar en Siesa.
   const motivo = await _modalTexto('Facturar sobre la remisión ' + tipo + '-' + consec,
@@ -3860,10 +3895,11 @@ async function siesaReintentarTraslado() {
 /** Descarta un job FALLIDO con motivo. NO reenvía nada a Siesa (Regla 3):
  *  solo deja de contarlo como trabado. Queda en la bitácora con tu nombre. */
 async function siesaDescartarJob(id) {
-  const motivo = prompt('¿Por qué se descarta este envío? (queda en la bitácora)\n' +
-    'Descartar NO reenvía nada: si el documento pudo haber llegado a Siesa, sigue ahí.');
+  const motivo = await _modalTexto('Descartar el envío',
+    'Descartar NO reenvía nada: si el documento pudo haber llegado a Siesa, sigue ahí. ' +
+    '¿Por qué se descarta? (queda en la bitácora)',
+    { obligatorio: true, textoConfirmar: 'Descartar' });
   if (motivo === null) return;
-  if (!motivo.trim()) { alerta('El motivo es obligatorio', 'error'); return; }
   try {
     const r = await post(`/api/siesa/jobs/${Number(id)}/descartar`, { motivo: motivo.trim() });
     alerta(r.mensaje || 'Descartado', 'exito');
