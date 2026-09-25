@@ -241,7 +241,9 @@ def main():
         from app.models.compras_fuentes import OcLineaSiesa
         refs = [r for (r,) in db.session.query(OcLineaSiesa.referencia).distinct() if r]
         precios = compras_fuentes.precios_oc(refs)
-        print(f'    SKU con precio de OC (COP, unidad base): {len(precios)} de {len(refs)}')
+        con = sum(1 for v in precios.values() if v.get('costo'))
+        print(f'    SKU con precio de OC (en pesos vía a_cop, unidad base): {con} de {len(refs)} '
+              f'· solo con moneda sin conversión: {len(precios) - con}')
 
 
 if __name__ == '__main__':

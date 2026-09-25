@@ -30,7 +30,7 @@ const FUENTES_ESTADO_PALABRA = {
   EN_RUTA_CEDI: 'En ruta al CDI', RECIBIDO: 'Recibido',
 };
 const FUENTES_LT_FUENTE = {
-  MEDIDO: 'medido', PARCIAL: 'medido, pocas observaciones', DEFAULT_CONSERVADOR: 'supuesto (sin datos)',
+  MEDIDO: 'medido', PARCIAL: 'medido, pocas observaciones', DEFAULT_CONSERVADOR: 'supuesto (sin datos)', CONFIGURADO: 'configurado (ROP_LT_NACIONAL_DIAS)',
 };
 
 /** Número con separador de miles; `null` es «sin dato», nunca 0. */
@@ -122,6 +122,9 @@ function fuentesHtmlEnCamino(e) {
           ${t.lineas_sin_unidad_base ? `<span style="color:var(--warn-tx);">${esc(t.lineas_sin_unidad_base)} sin unidad</span>` : ''}</td>
     </tr>`).join('');
   const avisos = [];
+  (dec.fuentes_con_error || []).forEach(f => avisos.push(`La fuente ${f.fuente === 'OC_SIESA' ? 'de OCs de Siesa' : 'de contenedores'} falló: lo que viene está incompleto (${f.error}).`));
+  if (dec.nota) avisos.push(dec.nota);
+  if (dec.contenedor_oc_no_verificable) avisos.push(`${dec.contenedor_oc_no_verificable} ítem(s) de contenedor citan una OC que no se pudo verificar: se suman.`);
   if (dec.lineas_sin_unidad_base) avisos.push(`${dec.lineas_sin_unidad_base} línea(s) de OC sin unidad base: no se suman.`);
   if (dec.lineas_fuera_de_lista_blanca) avisos.push(`${dec.lineas_fuera_de_lista_blanca} línea(s) van a bodegas no operadas (p. ej. AV1/TRA1): no cuentan.`);
   if (dec.skus_con_solapamiento_posible) avisos.push(`${dec.skus_con_solapamiento_posible} SKU con posible doble conteo (contenedor sin OC citada).`);
@@ -157,7 +160,8 @@ function fuentesHtmlLeadTime(l) {
     <div style="font-size:var(--fs-sm);color:var(--tx2);line-height:1.8;">
       ${fuentesLtLinea('Nacional', l.nacional)}${fuentesLtLinea('China', l.china)}
       <div style="color:var(--tx3);">Medido de ${esc(fuentesNum(l.observaciones))} OC(s): fecha de la OC → primera entrada
-        (recepción del WMS, o la marca de Siesa). Con menos de 3 por proveedor se usa el del origen; sin datos, el supuesto.
+        (recepción del WMS, o la marca de Siesa). Con menos de 3 por proveedor se usa el del origen; sin datos, el supuesto. Con 3 a 5 observaciones
+        se usa el mayor entre lo medido y el supuesto.
         ${desc ? `Descartadas: ${desc}.` : ''}</div>
     </div>
     ${filas ? `<div style="overflow-x:auto;margin-top:8px;"><table style="width:100%;font-size:var(--fs-sm);color:var(--tx2);border-collapse:collapse;">
