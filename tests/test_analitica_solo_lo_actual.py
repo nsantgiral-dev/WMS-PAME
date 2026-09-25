@@ -458,6 +458,7 @@ LECTORES_CON_CORTE = {
     'app/services/analitica_fugas.py::detalle_fuga': {'_Rangos'},
     'app/services/analitica_fugas.py::_limbo_de_traslados': {'separar'},
     'app/services/analitica_fugas.py::_documentos_trabados': {'inicio_auditoria'},
+    'app/services/analitica_fugas.py::_cobrado_sin_recibo': {'es_anterior'},
     'app/services/analitica_recorrido.py::cohorte': {'es_anterior'},
     'app/services/analitica_salud.py::cola_siesa': {'inicio_auditoria'},
     'app/services/analitica_salud.py::cobertura_claves': {'inicio_auditoria'},

@@ -1494,7 +1494,10 @@ def _devolucion_de_ruta(recaudo, resultado: dict) -> bool:
             f'devolución {dev.codigo}: {problema}')
     if dev.estado in ('EN_CAMION', 'ABIERTA'):
         return True
-    return dev.estado == 'CONFIRMADA' and not dev.siesa_nc_triggered
+    # CONFIRMADA y no `CONTADAS`: acá la pregunta es «¿hay NC en camino?», y una
+    # contada en cero (FALTANTE_TOTAL) no la va a tener.
+    from app.models.devolucion_cliente import EstadoDevolucionCliente as _EDC
+    return dev.estado == _EDC.CONFIRMADA and not dev.siesa_nc_triggered
 
 
 def _contar_dc(resultado: dict, r_dc) -> None:
