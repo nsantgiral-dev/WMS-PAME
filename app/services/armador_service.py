@@ -296,6 +296,34 @@ def es_de_china(origen=None, marca=None, marca_codigo=None) -> bool:
     return any(m.upper() in marca for m in MARCAS_CHINA if m)
 
 
+def aptitud_de_la_propuesta(insumo_en_camino: dict) -> dict:
+    """¿Se puede pedir con esta propuesta de contenedor? (P0-10, 2026-09-25)
+
+    **Una política** para el Armador y para las dos pantallas. La posición
+    resta lo que viene en camino; si no se sabe qué viene, el déficit sale
+    inflado y el contenedor, que es irreversible 120 días (Regla 0), sale de
+    más. `rop_dual` ya lo declaraba (`insumo_en_camino.hay_dato`) y
+    `armar_contenedor` no lo propagaba: la propuesta salía con cara de buena.
+
+    No apta si: ninguna fuente de «en camino» tiene dato; una fuente falló; o
+    el espejo de OCs de Siesa nunca terminó un barrido completo (las OCs de
+    importación abiertas no se ven).
+    """
+    ins = insumo_en_camino or {}
+    motivos = []
+    if not ins.get('hay_dato'):
+        motivos.append(ins.get('nota') or
+                       'No se sabe qué viene en camino: el término en tránsito vale 0.')
+    for err in ins.get('fuentes_con_error') or []:
+        motivos.append(f"La fuente {err.get('fuente')} de «en camino» falló: "
+                       f"{str(err.get('error'))[:160]}")
+    oc = (ins.get('fuentes') or {}).get('OC_SIESA')
+    if ins.get('hay_dato') and not (oc and oc.get('espejo_completo')):
+        motivos.append('Las órdenes de compra de Siesa nunca se sincronizaron completas: '
+                       'lo que viene por OC abierta no se resta.')
+    return {'apta': not motivos, 'no_apta_por': motivos}
+
+
 def insumo_origen(productos_origen=None, productos_marca=None,
                   productos_marca_cod=None) -> dict:
     """¿Hay con qué distinguir lo que viene de China? — la declaración del
@@ -995,8 +1023,16 @@ class ArmadorService:
         eta_min = _dia_operativo() + timedelta(days=int(lt_china - sigma_lt))
         eta_max = _dia_operativo() + timedelta(days=int(lt_china + sigma_lt))
 
+        # P0-10: sin saber qué viene, la propuesta no es apta. Se devuelve igual
+        # (para verla), marcada, y las pantallas lo dicen.
+        _insumo_camino = rop.get('insumo_en_camino') or {}
+        _aptitud = aptitud_de_la_propuesta(_insumo_camino)
+
         return {
             'modo': modo,
+            'apta': _aptitud['apta'],
+            'no_apta_por': _aptitud['no_apta_por'],
+            'insumo_en_camino': _insumo_camino,
             'cobertura_fichas_pct': round(cobertura_fichas, 1),
             'gatillo': gatillo,
             'tipo_contenedor': tipo_contenedor,

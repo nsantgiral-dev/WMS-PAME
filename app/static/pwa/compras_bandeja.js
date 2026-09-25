@@ -519,6 +519,12 @@ function cmpContenedorHtml(d) {
   const v = d.ventana_llegada || {};
   const lt = d.lead_time || {};
   let html = cmpTiposHtml(d);
+  if (d.apta === false) {
+    html += cmpCaja('Propuesta NO APTA para pedir',
+      `No se sabe todo lo que ya viene en camino, así que el faltante puede estar inflado y el contenedor saldría de más.
+       <ul style="margin:6px 0 0 18px;padding:0;">${(d.no_apta_por || []).map(m => `<li>${esc(m)}</li>`).join('')}</ul>
+       Úsela solo como referencia hasta sincronizar las órdenes de compra en 🧾 Fuentes.${irFuentes}`, 'mal');
+  }
   if (d.modo === 'SHADOW') {
     html += cmpCaja('Borrador de prueba', `Las fichas cubren el ${esc(cmpN(d.cobertura_fichas_pct))} % de los productos de China: revisalo antes de pedir.`, 'aviso');
   }

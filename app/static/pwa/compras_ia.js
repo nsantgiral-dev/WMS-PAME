@@ -244,6 +244,14 @@ function _renderArmador(el, propuesta, g5, sigma, rop) {
     <span style="font-size:var(--fs-xs);color:var(--tx3);">Gatillo: ${esc(propuesta.gatillo)}</span>
   </div>`;
 
+  // P0-10: sin saber qué viene en camino, la propuesta no es apta.
+  if (propuesta.apta === false) {
+    html += `<div style="border:1px solid var(--err-brd);background:var(--err-bg);border-radius:8px;padding:10px 12px;margin-bottom:12px;font-size:var(--fs-sm);color:var(--tx);">
+      <b style="color:var(--err-tx);">Propuesta NO APTA para pedir.</b> No se sabe todo lo que ya viene en camino: el faltante puede estar inflado.
+      <ul style="margin:6px 0 0 18px;padding:0;">${(propuesta.no_apta_por || []).map(m => `<li>${esc(m)}</li>`).join('')}</ul>
+    </div>`;
+  }
+
   // Compuertas G5
   html += '<div style="display:flex;gap:6px;margin-bottom:12px;flex-wrap:wrap;">';
   for (const [key, val] of Object.entries(g5)) {

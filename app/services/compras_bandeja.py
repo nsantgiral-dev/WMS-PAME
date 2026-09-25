@@ -451,7 +451,9 @@ def contenedor(tipo: str = '40STD') -> dict:
                        and ventana['hasta'] >= limites['inicio'])
     comun = dict(base, sin_ficha=len(sin_ficha),
                  sin_ficha_refs=[e.get('referencia') for e in sin_ficha][:50],
-                 modo=p.get('modo'), cobertura_fichas_pct=p.get('cobertura_fichas_pct'))
+                 modo=p.get('modo'), cobertura_fichas_pct=p.get('cobertura_fichas_pct'),
+                 # P0-10: la aptitud la decide `aptitud_de_la_propuesta`.
+                 apta=p.get('apta'), no_apta_por=p.get('no_apta_por') or [])
     if not items and sin_ficha:
         return dict(comun, estado='SIN_FICHAS',
                     titulo=f'No se puede armar: {len(sin_ficha)} productos de China con faltante no tienen ficha verificada',
