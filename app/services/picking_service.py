@@ -820,6 +820,23 @@ class PickingService:
     # ── Recogido sin despachar: la salida con fecha ─────────────────────────
 
     @staticmethod
+    def _empaque_que_la_explica(referencia):
+        """Condición SQL «hay un empaque del pedido `referencia` que explica
+        la mercancía recogida»: vivo (no cancelado) o con remisión
+        (`siesa_triggered`/`rm_consec`). **Una definición** para la lista de
+        «devuelto al estante» y para `reabrir_picking`.
+        """
+        from sqlalchemy import and_, exists, or_
+        from app.models.packing import EstadoPacking, TareaPacking
+        from app.services.documento_fiscal import filtro_tiene_documento
+        # «Con remisión» es la política única de `documento_fiscal` (incluye
+        # la factura y el 142945 enviado sin confirmar).
+        return exists().where(and_(
+            TareaPacking.numero_pedido_siesa == referencia,
+            or_(TareaPacking.estado != EstadoPacking.CANCELADO,
+                filtro_tiene_documento(TareaPacking))))
+
+    @staticmethod
     def _filtro_devolvible_al_estante():
         """Condición SQL: «tarea de un pedido cuya mercancía se recogió y no
         salió ni va en camino de salir». **Una definición** para la lista y para
@@ -833,16 +850,9 @@ class PickingService:
           `siesa_triggered`) ya salió en Siesa — declararla «de vuelta al
           estante» sería inventar un sobrante.
         """
-        from sqlalchemy import and_, exists, or_
-        from app.models.packing import EstadoPacking, TareaPacking
-        from app.services.documento_fiscal import filtro_tiene_documento
+        from sqlalchemy import and_, or_
         T = TareaPicking
-        # «Con remisión» es la política única de `documento_fiscal` (incluye
-        # la factura y el 142945 enviado sin confirmar).
-        empaque_que_la_explica = exists().where(and_(
-            TareaPacking.numero_pedido_siesa == T.referencia_documento,
-            or_(TareaPacking.estado != EstadoPacking.CANCELADO,
-                filtro_tiene_documento(TareaPacking))))
+        empaque_que_la_explica = PickingService._empaque_que_la_explica(T.referencia_documento)
         return and_(
             or_(T.tipo_documento.is_(None), T.tipo_documento != 'TRASLADO'),
             T.referencia_documento.isnot(None),
@@ -948,28 +958,113 @@ class PickingService:
         Reabre una tarea BLOQUEADA → PENDIENTE.
         Libera el inventario congelado por el bloqueo y la devuelve al pool.
 
-        Pone `cantidad_recogida` en cero: lo recogido antes del bloqueo queda
-        en el `antes` de la bitácora, con el operario que lo recogió.
+        **Lo recogido antes del bloqueo ya salió de la ubicación.**
+        `reportar_problema` descontó lo encontrado (SHORT_PICK). Poner
+        `cantidad_recogida` en cero y dejar que el nuevo pick reste la
+        cantidad completa lo restaba **dos veces** (P0-7, 2026-09-25). Dos
+        caminos, según dónde esté esa mercancía:
+
+        · **Hay un empaque que la explica** (vivo o con remisión — la misma
+          condición de «devuelto al estante»): lo recogido está en la caja.
+          La tarea original queda COMPLETADO por lo recogido y se crea una
+          tarea PENDIENTE **solo por el faltante**.
+        · **No hay empaque**: lo recogido vuelve a la ubicación. Se reingresa
+          con su `MovimientoInventario` (REINGRESO_REAPERTURA) y la tarea
+          vuelve a PENDIENTE por la cantidad completa, como antes.
+
+        Devuelve la tarea que queda PENDIENTE (la original o la nueva).
         """
         motivo = motivo_obligatorio(motivo, 'reabrir una tarea de picking')
-        tarea = TareaPicking.query.get(tarea_id)
+        tarea = TareaPicking.query.filter_by(id=tarea_id).with_for_update().first()
         if not tarea:
             raise ValueError('Tarea no encontrada')
 
         if tarea.estado != EstadoPicking.BLOQUEADO:
             raise ValueError(f'Solo se pueden reabrir tareas BLOQUEADAS (estado actual: {tarea.estado})')
 
+        recogido = tarea.cantidad_recogida or 0
+        cantidad_faltante = max(0, tarea.cantidad_solicitada - recogido)
         reg = UbicacionProducto.query.filter_by(
             ubicacion_id=tarea.ubicacion_id,
             producto_id=tarea.producto_id
         ).with_for_update().first()
         if reg:
-            cantidad_faltante = max(0, tarea.cantidad_solicitada - (tarea.cantidad_recogida or 0))
             reg.bloqueado = max(0, reg.bloqueado - PickingService._cantidad_congelada(tarea, cantidad_faltante))
 
-        antes = foto(tarea, ['estado', 'operario_id', 'cantidad_recogida',
-                             'empaques_escaneados', 'motivo_bloqueo',
-                             'observaciones_bloqueo'])
+        antes = foto(tarea, ['estado', 'operario_id', 'cantidad_solicitada',
+                             'cantidad_recogida', 'empaques_escaneados',
+                             'motivo_bloqueo', 'observaciones_bloqueo'])
+
+        en_caja = recogido > 0 and tarea.referencia_documento and db.session.query(
+            PickingService._empaque_que_la_explica(tarea.referencia_documento)).scalar()
+
+        if en_caja:
+            # Lo recogido ya está empacado: la original se cierra por eso y el
+            # faltante sale en una tarea nueva. Nada se reingresa ni se resta.
+            tarea.cantidad_solicitada = recogido
+            tarea.estado = EstadoPicking.COMPLETADO
+            tarea.motivo_bloqueo = None
+            if not tarea.fecha_completado:
+                tarea.fecha_completado = datetime.utcnow()
+            PickingService._soltar_operario(tarea)
+            registrar_accion('REABRIR', tarea, usuario_id=usuario_id, motivo=motivo,
+                             antes=antes, despues=foto(tarea, list(antes)),
+                             entidad_codigo=tarea.codigo)
+            if cantidad_faltante <= 0:
+                db.session.commit()
+                return tarea
+            nueva = TareaPicking(
+                codigo=PickingService._codigo_tarea(),
+                producto_id=tarea.producto_id,
+                cantidad_solicitada=cantidad_faltante,
+                ubicacion_id=tarea.ubicacion_id,
+                almacen_id=tarea.almacen_id,
+                lote=tarea.lote,
+                fecha_vencimiento=tarea.fecha_vencimiento,
+                estado=EstadoPicking.PENDIENTE,
+                prioridad=tarea.prioridad,
+                referencia_documento=tarea.referencia_documento,
+                tipo_documento=tarea.tipo_documento,
+                bodega_origen_siesa=tarea.bodega_origen_siesa,
+                pedido_clave=tarea.pedido_clave,
+                observaciones_bloqueo=(f'Faltante de {tarea.codigo} reabierta: '
+                                       f'lo recogido ({recogido}) ya estaba empacado.'),
+            )
+            db.session.add(nueva)
+            if reg is not None:
+                # La tarea nueva reserva lo suyo, como toda tarea que nace de
+                # `crear_tareas`: su confirmación libera exactamente esto.
+                reg.reservado = (reg.reservado or 0) + cantidad_faltante
+            db.session.flush()
+            registrar_accion('REABRIR', nueva, usuario_id=usuario_id, motivo=motivo,
+                             antes={'origen': tarea.codigo},
+                             despues={'cantidad_solicitada': cantidad_faltante},
+                             entidad_codigo=nueva.codigo)
+            db.session.commit()
+            return nueva
+
+        if recogido > 0 and reg is not None:
+            # Sin empaque: lo recogido vuelve al hueco de donde salió.
+            saldo_antes = reg.cantidad
+            reg.cantidad = (reg.cantidad or 0) + recogido
+            db.session.add(MovimientoInventario(
+                producto_id=tarea.producto_id,
+                ubicacion_id=tarea.ubicacion_id,
+                almacen_id=tarea.almacen_id,
+                tipo='REINGRESO_REAPERTURA',
+                cantidad=recogido,
+                saldo_antes=saldo_antes,
+                saldo_despues=reg.cantidad,
+                motivo=f'Reapertura de {tarea.codigo}: lo recogido vuelve a la ubicación',
+                numero_documento=tarea.referencia_documento,
+                usuario_id=usuario_id,
+                idempotency_key=f'REAB-{tarea.id}-{int(datetime.utcnow().timestamp()*1000)}',
+            ))
+        if reg is not None and not tarea.bloqueo_sin_stock:
+            # Vuelve al pool por la cantidad completa: reserva la cantidad
+            # completa, que es lo que su confirmación libera.
+            reg.reservado = (reg.reservado or 0) + tarea.cantidad_solicitada
+
         tarea.estado = EstadoPicking.PENDIENTE
         PickingService._soltar_operario(tarea)
         tarea.cantidad_recogida = 0

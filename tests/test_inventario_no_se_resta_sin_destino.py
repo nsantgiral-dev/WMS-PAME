@@ -222,3 +222,94 @@ class TestElDetectorVeLasDosFormasDeRestar:
         """Piso mínimo: si esto da cero, el escáner se rompió — no es que el
         repo dejó de restar inventario."""
         assert sum(len(v) for v in _sitios_que_restan().values()) >= 8
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# La misma unidad restada dos veces — reabrir un picking (P0-7, 2026-09-25)
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# La otra cara de la clase: una resta **declarada** que corre dos veces sobre
+# las mismas unidades. `reportar_problema` descuenta lo encontrado (SHORT_PICK);
+# `reabrir_picking` ponía `cantidad_recogida` en 0 y el nuevo pick restaba la
+# cantidad completa. Con el empaque vivo, las 7 unidades que ya estaban en la
+# caja salían del hueco otra vez.
+#
+# La propiedad se mide sobre el dato, no sobre el código: **después de reabrir
+# y volver a recoger, del hueco salió exactamente lo pedido.**
+
+def _escenario(db, almacen, stock=20, pedido=10, encontrada=7, ref='PD7001'):
+    from app.models.usuario import Usuario
+    from app.services.picking_service import PickingService
+    from tests.flujo import conductor_de_flujo as cf
+    op = Usuario(nombre='Op reabrir', email=f'op-reab-{ref}@t.co', rol='operario',
+                 almacen_id=almacen.id, activo=True)
+    op.set_password('x') if hasattr(op, 'set_password') else None
+    sup = Usuario(nombre='Sup reabrir', email=f'sup-reab-{ref}@t.co', rol='supervisor',
+                  almacen_id=almacen.id, activo=True)
+    sup.set_password('x') if hasattr(sup, 'set_password') else None
+    db.session.add_all([op, sup])
+    db.session.commit()
+    productos, ub = cf.sembrar_catalogo(db, almacen, n=1, con_stock=stock)
+    p = productos[0]
+    t = PickingService.crear_tareas(producto_id=p.id, cantidad=pedido,
+                                    almacen_id=almacen.id, referencia_documento=ref,
+                                    tipo_documento='PEDIDO')[0]
+    PickingService.iniciar_picking(t.id, op.id)
+    PickingService.reportar_problema(t.id, op.id, 'FALTANTE', cantidad_encontrada=encontrada)
+    db.session.commit()
+    return t, p, ub, op, sup
+
+
+def _en_hueco(db, ub, p):
+    from app.models.inventario import UbicacionProducto
+    db.session.expire_all()
+    return UbicacionProducto.query.filter_by(ubicacion_id=ub.id, producto_id=p.id).first()
+
+
+class TestReabrirNoRestaDosVeces:
+
+    def test_con_empaque_vivo_solo_se_recoge_el_faltante(self, db, almacen):
+        from app.models.picking import TareaPicking
+        from app.services.packing_service import PackingService
+        from app.services.picking_service import PickingService
+        t, p, ub, op, sup = _escenario(db, almacen)
+        assert _en_hueco(db, ub, p).cantidad == 13          # salieron las 7 halladas
+        PackingService.crear_desde_picking(
+            tareas_picking_ids=[t.id], numero_pedido_siesa='PD7001',
+            almacen_id=almacen.id, tipo_docto_pedido_siesa='PD',
+            consec_docto_pedido_siesa='7001')
+
+        nueva = PickingService.reabrir_picking(t.id, sup.id, motivo='apareció el resto')
+        assert nueva.id != t.id and nueva.cantidad_solicitada == 3
+        original = db.session.get(TareaPicking, t.id)
+        assert original.estado == 'COMPLETADO' and original.cantidad_recogida == 7
+
+        PickingService.iniciar_picking(nueva.id, op.id)
+        PickingService.confirmar_picking(nueva.id, 3, op.id)
+        assert _en_hueco(db, ub, p).cantidad == 10, (
+            'del hueco salieron más de las 10 pedidas: la reapertura volvió a '
+            'restar lo que ya estaba empacado')
+
+    def test_sin_empaque_lo_recogido_vuelve_y_se_recoge_todo(self, db, almacen):
+        from app.models.inventario import MovimientoInventario
+        from app.services.picking_service import PickingService
+        t, p, ub, op, sup = _escenario(db, almacen, ref='PD7002')
+        misma = PickingService.reabrir_picking(t.id, sup.id, motivo='se equivocó de hueco')
+        assert misma.id == t.id and misma.cantidad_recogida == 0
+        assert _en_hueco(db, ub, p).cantidad == 20            # reingresadas las 7
+        assert MovimientoInventario.query.filter_by(
+            tipo='REINGRESO_REAPERTURA', cantidad=7).count() == 1, (
+            'el reingreso necesita su movimiento: una suma sin rastro es el '
+            'espejo de una resta sin destino')
+
+        PickingService.iniciar_picking(t.id, op.id)
+        PickingService.confirmar_picking(t.id, 10, op.id)
+        assert _en_hueco(db, ub, p).cantidad == 10
+
+    def test_sin_nada_recogido_no_toca_el_stock(self, db, almacen):
+        """La otra dirección: un reabrir que siempre reingresa inventaría
+        unidades que nunca salieron."""
+        from app.services.picking_service import PickingService
+        t, p, ub, op, sup = _escenario(db, almacen, encontrada=0, ref='PD7003')
+        PickingService.reabrir_picking(t.id, sup.id, motivo='no estaba en el hueco')
+        assert _en_hueco(db, ub, p).cantidad == 20
