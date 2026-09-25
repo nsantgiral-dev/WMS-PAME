@@ -36,6 +36,11 @@ _RUTAS = Path(__file__).resolve().parents[1] / 'app' / 'routes'
 _BASE = {
     '_solo_admin', '_es_admin_o_jefe', '_es_gestion', '_es_personal_almacen',
     '_es_compras', '_es_control_flota', '_lee_flota', '_puede_empacar', 'exige',
+    # La liquidación (2026-09-25): una función de permiso por operación en
+    # `services/permisos_liquidacion.py`; las rutas la aplican con
+    # `_con_permiso(puede_x)` (rutas.py), y el reintento de un job con
+    # `puede_reintentar_job` (el tipo de job decide cuál exige).
+    '_con_permiso', 'puede_reintentar_job',
 }
 
 # ══════════════════════════════════════════════════════════════════════════
