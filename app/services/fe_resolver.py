@@ -48,7 +48,7 @@ class FENoEncontrada(Exception):
     peor, encuentra otro documento que sí existe con esa numeración."""
 
 
-def resolver_fe(tarea, gateway=None) -> tuple:
+def resolver_fe(tarea, gateway=None, anotar=True) -> tuple:
     """`(tipo_docto_fe, consec_fe)` reales de la FE de esa tarea de packing.
 
     `TareaPacking` NO guarda la factura: guarda el pedido (`*_pedido_siesa`) y
@@ -62,6 +62,9 @@ def resolver_fe(tarea, gateway=None) -> tuple:
     parchean el `connekta` de su propio módulo —que son casi todos— dejan de
     controlar la resolución: el mock queda de adorno y el test verifica otra
     cosa. Un doble que no se usa es peor que no tenerlo.
+
+    `anotar=False`: resuelve sin guardar (la lista de paradas del conductor es
+    una lectura y no escribe — 2026-09-25). La anotación la hace quien escribe.
     """
     connekta = gateway
     if connekta is None:
@@ -114,7 +117,8 @@ def resolver_fe(tarea, gateway=None) -> tuple:
     logger.info('[FE] pedido %s-%s → factura %s-%s',
                 tarea.tipo_docto_pedido_siesa, tarea.consec_docto_pedido_siesa,
                 tipo, consec)
-    _anotar(tarea, tipo, consec)
+    if anotar:
+        _anotar(tarea, tipo, consec)
     return tipo, consec
 
 
@@ -155,7 +159,7 @@ def _anotar(tarea, tipo: str, consec: str):
                        tipo, consec, getattr(tarea, 'id', '?'), e)
 
 
-def resolver_fe_o_none(tarea, gateway=None) -> tuple:
+def resolver_fe_o_none(tarea, gateway=None, anotar=True) -> tuple:
     """Igual, pero `(None, None)` cuando no se puede — para las pantallas.
 
     Existe porque hay dos necesidades distintas y merecen respuestas distintas:
@@ -166,7 +170,7 @@ def resolver_fe_o_none(tarea, gateway=None) -> tuple:
     Lo que NO hace ninguna de las dos es devolver el pedido.
     """
     try:
-        return resolver_fe(tarea, gateway=gateway)
+        return resolver_fe(tarea, gateway=gateway, anotar=anotar)
     except Exception as e:
         logger.warning('[FE] no se pudo resolver para la tarea %s: %s',
                        getattr(tarea, 'id', '?'), e)

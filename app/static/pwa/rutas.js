@@ -1988,6 +1988,10 @@ async function condAbrirParadas(rutaId) {
     const d = await get('/api/rutas/' + rutaId + '/paradas');
     data = d;
     await _condDB.set('paradas_' + rutaId, d);
+    // Con señal, se deja escrito en el servidor lo que la entrega va a validar
+    // sin red (condición de pago, valor de la factura). La lista es una
+    // lectura y ya no lo escribe; esto sí, aparte y sin esperar.
+    _condAnotarParadas(rutaId);
   } catch (e) {
     data = await _condDB.get('paradas_' + rutaId);
     if (!data) {
@@ -2022,6 +2026,15 @@ async function condAbrirParadas(rutaId) {
   if (Array.isArray(data.formas_que_no_cobran)) _COND_FORMAS_NO_COBRAN = data.formas_que_no_cobran;
   if (typeof data.tolerancia_cobro === 'number') _COND_TOLERANCIA_COBRO = data.tolerancia_cobro;
   _condRenderParadas(data);
+}
+
+/** Pide al servidor que anote el snapshot de cobro de la ruta. No bloquea. */
+function _condAnotarParadas(rutaId) {
+  try {
+    fetch(API + `/api/rutas/${Number(rutaId)}/paradas/anotar`, {
+      method: 'POST', headers: { Authorization: 'Bearer ' + TOKEN },
+    }).catch(() => { /* sin señal: se anota la próxima vez */ });
+  } catch (_) { /* nada */ }
 }
 
 /**

@@ -491,6 +491,26 @@ def listar_paradas(id):
     return jsonify(resultado), 200
 
 
+@rutas_bp.route('/<int:id>/paradas/anotar', methods=['POST'])
+@jwt_required()
+def anotar_paradas(id):
+    """Escribe el snapshot de cobro de las paradas (FE, condición, valor).
+    Lo escribía el GET de la lista; ahora es esta escritura aparte, que la
+    pantalla del conductor dispara al abrir la ruta con señal. Mismo acceso que
+    la lista: el conductor de la ruta, o admin/jefe."""
+    ruta = RutaDespacho.query.get_or_404(id)
+    uid = _uid()
+    if not uid:
+        return jsonify({'error': 'Token inválido'}), 401
+    conductor_ruta = Conductor.query.filter_by(usuario_id=uid, activo=True).first()
+    if not _es_admin_o_jefe() and (not conductor_ruta or conductor_ruta.id != ruta.conductor_id):
+        return jsonify({'error': 'Sin acceso a esta ruta'}), 403
+    try:
+        return jsonify(RutaService.anotar_paradas(id)), 200
+    except LookupError as e:
+        return jsonify({'error': str(e)}), 404
+
+
 @rutas_bp.route('/<int:id>/paradas/<int:tarea_id>/confirmar', methods=['POST'])
 @jwt_required()
 def confirmar_parada(id, tarea_id):

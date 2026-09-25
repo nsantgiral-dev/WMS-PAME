@@ -509,6 +509,24 @@ def cobro_de_tarea(tarea) -> dict:
     return cobro_contraentrega(codigo_vigente(tarea))
 
 
+def clasificar_tarea(tarea, *, cond_fe=None, cond_pedido=None) -> dict:
+    """La clasificación que `anotar_en_tarea` dejaría, **sin escribir nada**
+    (2026-09-25): la lista de paradas del conductor es una lectura. Mismas
+    reglas: la FE gana; la condición del pedido solo cuenta si no había una
+    anotada; `difiere_del_pedido` si la FE y el pedido no coinciden."""
+    if tarea is None:
+        return cobro_contraentrega(None)
+    if _es_traslado(tarea):
+        return {**cobro_de_tarea(tarea), 'difiere_del_pedido': False}
+    ped = getattr(tarea, 'cond_pago', None)
+    if cond_pedido is not None and ped is None:
+        ped = str(cond_pedido).strip()[:10]
+    fe = _norm(cond_fe)[:10] if _norm(cond_fe) else getattr(tarea, 'cond_pago_fe', None)
+    cobro = cobro_contraentrega(fe or ped)
+    difiere = bool(_norm(fe) and _norm(ped) and _norm(ped) != _norm(fe))
+    return {**cobro, 'difiere_del_pedido': difiere}
+
+
 def anotar_en_tarea(tarea, *, cond_fe=None, cond_pedido=None) -> dict:
     """Escribe el snapshot en la tarea (sin commit). Devuelve la clasificación.
 
@@ -529,10 +547,13 @@ def anotar_en_tarea(tarea, *, cond_fe=None, cond_pedido=None) -> dict:
     fe = _norm(cond_fe)
     if fe:
         tarea.cond_pago_fe = fe[:10]
-    cobro = cobro_contraentrega(codigo_vigente(tarea))
+    # La clasificación es la de `clasificar_tarea` (una política, una función):
+    # esto solo agrega la escritura del snapshot.
+    _clasif = clasificar_tarea(tarea)
+    cobro = {k: v for k, v in _clasif.items() if k != 'difiere_del_pedido'}
     ped = _norm(getattr(tarea, 'cond_pago', None))
     fe_anotada = _norm(getattr(tarea, 'cond_pago_fe', None))
-    difiere = bool(fe_anotada and ped and ped != fe_anotada)
+    difiere = _clasif['difiere_del_pedido']
     if difiere:
         logger.warning('[COND_PAGO] tarea %s: la FE salió en %s y el pedido declara %s — '
                        'manda la FE', getattr(tarea, 'id', None), fe_anotada, ped)

@@ -3,6 +3,7 @@ RutaService — lógica de negocio de rutas de despacho.
 Cubre: Conductores, Vehículos, Rutas Maestras, Rutas de Despacho y Última Milla.
 """
 import logging
+import threading
 from datetime import datetime, date
 from sqlalchemy.orm import selectinload as _sl, joinedload as _jl
 from sqlalchemy.exc import IntegrityError as _IntegrityError
@@ -101,6 +102,31 @@ class FormaPago:
     #: reedición pueden seguir mandándolo).
     VALIDOS = (EFECTIVO, TRANSFERENCIA, 'CONSIGNACION', TARJETA, CHEQUE,
                CREDITO, EXENTO) + TRANSFERENCIAS_BANCO
+
+
+#: Una FE emitida no cambia sus líneas: se guardan unos minutos por proceso,
+#: para que la lista de paradas y la anotación que le sigue no vayan dos veces
+#: a Siesa por lo mismo. Solo se guarda lo que vino con líneas (una FE que
+#: todavía no aparece se vuelve a preguntar).
+_LINEAS_FE_TTL_S = 900
+_LINEAS_FE_CACHE = {}
+_LINEAS_FE_LOCK = threading.Lock()
+
+
+def _lineas_de_fe(gateway, tipo_fe, consec_fe):
+    """`gateway.get_rowids_factura(tipo, consec)` con el caché de arriba."""
+    import time as _t
+    clave = (str(tipo_fe), str(consec_fe))
+    ahora = _t.monotonic()
+    with _LINEAS_FE_LOCK:
+        hit = _LINEAS_FE_CACHE.get(clave)
+    if hit is not None and ahora - hit[0] < _LINEAS_FE_TTL_S:
+        return hit[1]
+    lineas = gateway.get_rowids_factura(tipo_fe, consec_fe)
+    if lineas:
+        with _LINEAS_FE_LOCK:
+            _LINEAS_FE_CACHE[clave] = (ahora, lineas)
+    return lineas
 
 
 class RutaService:
@@ -883,15 +909,88 @@ class RutaService:
 
     # ── Última Milla: paradas y recaudos ─────────────────────────────
 
+    #: Cuántas consultas a Siesa en paralelo arma la lista de paradas.
+    _PARALELO_SIESA = 6
+
+    #: Las columnas de la tarea que la lectura de la factura necesita. Una
+    #: copia (como `to_dict`), no una decisión: la condición se juzga después,
+    #: con `cond_pago.clasificar_tarea`.
+    _CAMPOS_DE_LECTURA = ('id', 'fe_tipo', 'fe_consec', 'rm_tipo', 'rm_consec',
+                          'tipo_docto_pedido_siesa', 'consec_docto_pedido_siesa',
+                          'cond_pago', 'cond_pago_fe', 'tipo_documento', 'valor_factura')
+    _CAMPOS_PRODUCTO = ('codigo', 'codigo_siesa', 'unidad_empaque', 'unidad_medida')
+
     @staticmethod
-    def listar_paradas(ruta_id: int) -> dict:
+    def _foto_para_leer(t):
+        """Lo que `_valor_y_cond_pago(anotar=False)` lee de una tarea, copiado
+        fuera de la sesión: así puede correr en otro hilo sin tocar la base."""
+        from types import SimpleNamespace as _NS
+        items = [_NS(producto=(_NS(**{c: getattr(i.producto, c) for c in RutaService._CAMPOS_PRODUCTO})
+                               if i.producto else None))
+                 for i in (t.items or [])]
+        return _NS(items=items, **{c: getattr(t, c) for c in RutaService._CAMPOS_DE_LECTURA})
+
+    @staticmethod
+    def _valor_y_cond_pago_seguro(foto, diag):
+        """`_valor_y_cond_pago` de lectura para un hilo: nunca levanta."""
+        try:
+            return RutaService._valor_y_cond_pago(foto, diagnostico=diag, anotar=False)
+        except Exception as e:                         # noqa: BLE001
+            logger.warning('[RUTAS] lectura de la factura de la tarea %s falló: %s',
+                           getattr(foto, 'id', '?'), e)
+            return None, None, {}, None, None, None, None
+
+    @staticmethod
+    def anotar_paradas(ruta_id: int) -> dict:
+        """El snapshot de cobro de cada parada, **escrito** (2026-09-25): FE
+        resuelta, condición de la FE y del pedido, valor de la factura y la
+        clasificación. Es lo que `confirmar_parada` usa para validar sin red, y
+        lo escribía la LECTURA de la lista de paradas. Ahora es esta escritura,
+        que la pantalla del conductor dispara aparte al abrir la ruta con señal.
+
+        Idempotente: sin cambios no escribe, y las líneas de la FE salen del
+        caché que la lista acaba de llenar."""
+        from app.services import cond_pago as _cpm
         ruta = (RutaDespacho.query
                 .options(_sl(RutaDespacho.bultos).joinedload(Bulto.tarea))
                 .get(ruta_id))
         if not ruta:
             raise LookupError('Ruta no encontrada')
+        vistas, anotadas = set(), 0
+        for b in ruta.bultos:
+            t = b.tarea
+            if t is None or t.id in vistas:
+                continue
+            vistas.add(t.id)
+            try:
+                RutaService._valor_y_cond_pago(t, anotar=True)
+                _cpm.anotar_en_tarea(t)
+                db.session.commit()
+                anotadas += 1
+            except Exception as e:                     # noqa: BLE001 — una no frena las otras
+                db.session.rollback()
+                logger.warning('[RUTAS] no se pudo anotar la parada %s de la ruta %s: %s',
+                               t.id, ruta_id, e)
+        return {'ok': True, 'paradas': len(vistas), 'anotadas': anotadas}
 
+    @staticmethod
+    def listar_paradas(ruta_id: int) -> dict:
+        """La lista de paradas del conductor. **Una lectura: no escribe nada**
+        (2026-09-25). Antes anotaba el snapshot de cobro, la FE resuelta y el
+        valor de la factura con un `commit` dentro del GET; eso vive ahora en
+        `anotar_paradas` (POST), que la pantalla dispara aparte.
+
+        Lo que va a Siesa (FE, líneas, cabecera, vendedores) sale en paralelo
+        sobre una foto de cada tarea: con N paradas, el tiempo en frío es el de
+        la consulta más lenta y no la suma de todas."""
         from app.models.packing import ItemPacking
+        ruta = (RutaDespacho.query
+                .options(_sl(RutaDespacho.bultos).joinedload(Bulto.tarea)
+                         .selectinload(TareaPacking.items).selectinload(ItemPacking.producto))
+                .get(ruta_id))
+        if not ruta:
+            raise LookupError('Ruta no encontrada')
+
         tareas_map: dict = {}
         for b in ruta.bultos:
             if not b.tarea:
@@ -899,10 +998,8 @@ class RutaService:
             tid = b.tarea_id
             if tid not in tareas_map:
                 t = b.tarea
-                items_raw = (ItemPacking.query
-                             .filter_by(tarea_id=tid)
-                             .options(_sl(ItemPacking.producto))
-                             .all())
+                # Precargado arriba (selectinload): sin una consulta por tarea.
+                items_raw = sorted(t.items or [], key=lambda i: i.id or 0)
                 tareas_map[tid] = {
                     '_tarea':        t,  # retirado antes de devolver — ver más abajo
                     'tarea_id':      tid,
@@ -945,12 +1042,29 @@ class RutaService:
         # cada tarea simplemente no muestra el bloque de asesor.
         from app.services.connekta_gateway import connekta as _connekta_vend
         # Si el maestro de condiciones tiene consulta dinámica, este es un
-        # momento con señal para refrescarlo (TTL; sin consulta, no hace nada).
+        # momento con señal para refrescarlo (TTL, en memoria; sin consulta,
+        # no hace nada).
         from app.services import cond_pago as _cp_tabla
-        _cp_tabla.refrescar_tabla_desde_siesa()
+        from concurrent.futures import ThreadPoolExecutor
+        _fotos = {tid: RutaService._foto_para_leer(p['_tarea']) for tid, p in tareas_map.items()}
+        _diags = {tid: {'valoradas': 0, 'ambiguas': 0, 'referencias': []} for tid in _fotos}
+        _pool = ThreadPoolExecutor(max_workers=max(1, min(RutaService._PARALELO_SIESA,
+                                                          len(_fotos) + 2)))
+        try:
+            _f_tabla = _pool.submit(_cp_tabla.refrescar_tabla_desde_siesa)
+            _f_vend = _pool.submit(_connekta_vend.get_vendedor_contacto)
+            _f_fe = {tid: _pool.submit(RutaService._valor_y_cond_pago_seguro,
+                                       foto, _diags[tid]) for tid, foto in _fotos.items()}
+            _valores = {tid: f.result() for tid, f in _f_fe.items()}
+            try:
+                _f_tabla.result()
+            except Exception as _e_tabla:          # noqa: BLE001 — informativo
+                logger.warning('[RUTAS] no se pudo refrescar la tabla de condiciones: %s', _e_tabla)
+        finally:
+            _pool.shutdown(wait=False)
         vendedores_map: dict = {}
         try:
-            for v in _connekta_vend.get_vendedor_contacto():
+            for v in _f_vend.result():
                 cod = str(v.get('codigo_vendedor', '')).strip()
                 if not cod:
                     continue
@@ -974,13 +1088,12 @@ class RutaService:
         _refs_valoradas = _refs_ambiguas = 0
         for tid, p in tareas_map.items():
             t = p.pop('_tarea')
-            _diag = {'valoradas': 0, 'ambiguas': 0, 'referencias': []}
+            _diag = _diags[tid]
             # Siete elementos desde el merge con main (2026-09-11): los tres
             # últimos son suyos —base gravable, IVA y código de vendedor— y no
             # tocan ningún campo del reparto por referencia.
             (valor_factura, es_contado, valores_ref, cond_pago_crudo,
-             base_gravable, iva_factura, codigo_vendedor) = \
-                RutaService._valor_y_cond_pago(t, diagnostico=_diag)
+             base_gravable, iva_factura, codigo_vendedor) = _valores[tid]
             _refs_valoradas += _diag['valoradas']
             _refs_ambiguas  += _diag['ambiguas']
             # Campos NUEVOS (aditivos, no reemplazan a nadie): el consumidor
@@ -1034,12 +1147,16 @@ class RutaService:
             # si no la del pedido, y si no, contado supuesto (se cobra, y la
             # pantalla lo dice). Lo que viaja acá se cachea entero en el
             # teléfono: la parada se confirma offline con esto.
-            _cobro = _cpm.anotar_en_tarea(t)
+            # La clasificación SIN escribirla (`clasificar_tarea`): con la FE y
+            # la cabecera recién leídas, como si se hubieran anotado.
+            _cobro = _cpm.clasificar_tarea(t, cond_fe=_diag.get('cond_fe'),
+                                           cond_pedido=cond_pago_crudo)
             p['se_cobra_en_puerta'] = _cobro['cobrar']
             p['modo_pago'] = _cpm.modo_pantalla(p['se_cobra_en_puerta'], _hay_valor)
             p['cobro_contraentrega'] = _cobro['cobrar']
             p['dias_credito'] = _cobro['dias']
-            p['cond_pago_fe'] = t.cond_pago_fe
+            p['cond_pago_fe'] = (str(_diag.get('cond_fe'))[:10].upper()
+                                 if _diag.get('cond_fe') else t.cond_pago_fe)
             p['clasif_origen'] = _cobro['origen']
             p['cond_pago_difiere'] = _cobro['difiere_del_pedido']
             p['cobro_etiqueta'] = _cpm.etiqueta_conductor(_cobro)
@@ -1058,15 +1175,6 @@ class RutaService:
             from app.services import geo_cliente as _geo_c
             _m = _geo_c.maestro_de(t.cliente, t.municipio)
             p['geo'] = _m.to_dict() if _m is not None else None
-
-        # El respaldo del snapshot, sin red: lo que `anotar_en_tarea` escribió
-        # arriba. Anotar no puede romper la lista del conductor.
-        try:
-            db.session.commit()
-        except Exception as _e_snap:
-            db.session.rollback()
-            logger.warning('[RUTAS] no se pudo guardar la clasificación de cobro de la '
-                           'ruta %s: %s', ruta_id, _e_snap)
 
         paradas = sorted(tareas_map.values(), key=lambda x: (x['municipio'], x['cliente']))
         # Ojo: `paradas` está indexado por tarea_id, así que cada entrada es una
@@ -1254,7 +1362,7 @@ class RutaService:
                          'referencias': sorted(ambiguas)}
 
     @staticmethod
-    def _valor_y_cond_pago(tarea, diagnostico: dict = None) -> tuple:
+    def _valor_y_cond_pago(tarea, diagnostico: dict = None, anotar: bool = True) -> tuple:
         """`(valor_factura, es_contado, valores_por_referencia, cond_pago_crudo,
         base_gravable, iva, codigo_vendedor)` de la FE real de una tarea.
         Cualquiera puede salir `None`/`{}` si Siesa no responde — nunca
@@ -1331,7 +1439,9 @@ class RutaService:
         from app.services.connekta_gateway import connekta
         from app.services.fe_resolver import resolver_fe_o_none
 
-        tipo_fe, consec_fe = resolver_fe_o_none(tarea)
+        # `anotar=False`: una LECTURA (la lista de paradas) que no escribe nada
+        # y que puede correr fuera de la sesión, sobre una foto de la tarea.
+        tipo_fe, consec_fe = resolver_fe_o_none(tarea, anotar=anotar)
         if not tipo_fe or not consec_fe:
             # Siete elementos, no tres. Este `return` devolvía una tupla
             # corta mientras los callers desempaquetan la larga: una tarea sin
@@ -1369,7 +1479,7 @@ class RutaService:
                 if _ref:
                     _uom_wms.setdefault(_ref, _uom)
         try:
-            lineas = connekta.get_rowids_factura(tipo_fe, consec_fe)
+            lineas = _lineas_de_fe(connekta, tipo_fe, consec_fe)
             if lineas:
                 # `valor_factura` suma TODAS las líneas y no lo toca nada de lo
                 # de abajo: es el dato sano de esta función. Que el unitario de
@@ -1398,6 +1508,7 @@ class RutaService:
             logger.warning('[RUTAS] valor_factura falló para tarea %s (FE %s-%s): %s',
                             tarea.id, tipo_fe, consec_fe, e)
 
+        diag['cond_fe'] = cond_fe
         if diagnostico is not None:
             diagnostico.update(diag)
 
@@ -1407,7 +1518,7 @@ class RutaService:
         #
         # Anotar no puede romper lo anotado: si el commit falla, el valor ya se
         # devolvió y lo único que se pierde es el ahorro de la próxima consulta.
-        if valor_factura is not None:
+        if anotar and valor_factura is not None:
             try:
                 from app.extensions import db as _db
                 if tarea.valor_factura is None or \
@@ -1424,7 +1535,7 @@ class RutaService:
                                tarea.id, _e_val)
 
         # Snapshot de cobro con la condición de la FE (sin red: ya se leyó).
-        if cond_fe:
+        if anotar and cond_fe:
             try:
                 from app.extensions import db as _db_fe
                 from app.services import cond_pago as _cp_fe
@@ -1458,7 +1569,8 @@ class RutaService:
         if getattr(tarea, 'cond_pago', None) is not None:
             from app.services import cond_pago as _cp0
             return (valor_factura,
-                    _cp0.cobro_de_tarea(tarea)['cobrar'],
+                    (_cp0.cobro_de_tarea(tarea) if anotar
+                     else _cp0.clasificar_tarea(tarea, cond_fe=cond_fe))['cobrar'],
                     valores_por_referencia,
                     tarea.cond_pago,
                     base_gravable,
@@ -1475,6 +1587,11 @@ class RutaService:
                     f'pedido {tarea.tipo_docto_pedido_siesa}-{tarea.consec_docto_pedido_siesa}')
             # Anotar no puede romper lo anotado: si el commit falla, el valor ya
             # se devolvió y solo se pierde el ahorro de la próxima consulta.
+            if not anotar:
+                es_contado = _cp.clasificar_tarea(
+                    tarea, cond_fe=cond_fe, cond_pedido=cond_pago_crudo)['cobrar']
+                return (valor_factura, es_contado, valores_por_referencia, cond_pago_crudo,
+                        base_gravable, iva_factura, codigo_vendedor)
             try:
                 from app.extensions import db as _db_cp
                 tarea.cond_pago = cond_pago_crudo

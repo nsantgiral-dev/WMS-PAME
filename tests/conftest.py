@@ -474,3 +474,15 @@ def _siesa_en_horario_de_facturacion(monkeypatch):
     monkeypatch.setattr(documento_fiscal, '_ahora_bogota',
                         lambda: datetime(2026, 9, 25, 10, 0))
 
+
+@pytest.fixture(autouse=True)
+def _sin_lineas_de_fe_de_otro_test():
+    """`ruta_service` guarda unos minutos las líneas de una FE (no cambian una
+    vez emitida). Entre tests, la misma FE falsa con otras líneas sería
+    contaminación: se vacía después de cada uno."""
+    yield
+    try:
+        from app.services import ruta_service as _rs
+        _rs._LINEAS_FE_CACHE.clear()
+    except Exception:
+        pass

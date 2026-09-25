@@ -441,12 +441,18 @@ class TestElSnapshot:
         assert p['cobro_etiqueta']['texto'].startswith('Contado contraentrega · C03')
         assert d['formas_que_no_cobran'] == ['CREDITO', 'EXENTO']
         assert d['version_formulario'] >= cp.VERSION_FORMULARIO_CONTADO
+        # La lista es una LECTURA (2026-09-25): no escribe el snapshot. Lo
+        # escribe `anotar_paradas`, el POST que la pantalla dispara aparte.
+        db.session.expire_all()
+        assert db.session.get(type(t), t.id).cobro_contraentrega is None
+        RutaService.anotar_paradas(ruta.id)
+        db.session.expire_all()
         assert db.session.get(type(t), t.id).cobro_contraentrega is True   # persistido
 
     def test_la_lista_toma_la_condicion_de_la_fe_sin_llamada_extra(self, db, almacen, monkeypatch):
         from app.services.connekta_gateway import connekta
         ruta, t, _c = _ruta(db, almacen, cond='C02')
-        monkeypatch.setattr('app.services.fe_resolver.resolver_fe_o_none', lambda _t: ('FEW', '9'))
+        monkeypatch.setattr('app.services.fe_resolver.resolver_fe_o_none', lambda _t, **_k: ('FEW', '9'))
         monkeypatch.setattr(type(connekta), 'get_rowids_factura', lambda self, *a, **k: [
             {'f470_vlr_neto': 1000, 'f470_vlr_bruto': 840, 'f470_vlr_imp': 160,
              'f461_id_cond_pago': 'C05', 'f120_referencia': 'X', 'f470_cant_base': 1}])
@@ -911,7 +917,10 @@ class TestNingunaFormaDePagoDecideCobroFueraDeLaPolitica:
 
 _FUNCIONES_DE_COBRO = {'cobro_contraentrega', 'cobro_de_tarea', 'cobro_de_recaudo',
                        'anotar_en_tarea', 'trato_de_cobro', 'credito_no_autorizado',
-                       'cobra_en_la_puerta'}
+                       'cobra_en_la_puerta',
+                       # 2026-09-25: la misma clasificación que anotar_en_tarea,
+                       # sin escribir (la lista de paradas es una lectura).
+                       'clasificar_tarea'}
 
 
 def lecturas_crudas(arbol) -> list:
