@@ -839,6 +839,44 @@ def nc_no_llegara(recaudo) -> bool:
     return d.estado == E.FALTANTE_TOTAL
 
 
+def nc_ya_salio(recaudo) -> bool:
+    """¿La NC de la devolución de este recaudo YA salió, aunque el recaudo no
+    se haya enterado?
+
+    El puente devolución → recaudo (`puentear_nc_al_recaudo`) corre dentro
+    del job de la NC; si ese commit falla, el RC dependiente esperaba para
+    siempre una NC que ya existe (P1-6b). Positivo solo con la marca de éxito
+    del job de la NC (`siesa_nc_response`, que se escribe después de un POST
+    que Siesa aceptó): un pre-flag sin respuesta puede ser un timeout sin
+    verificar, y eso no destraba nada."""
+    if recaudo is None or recaudo.siesa_nc_triggered:
+        return False
+    d = devolucion_vigente(recaudo.id)
+    return bool(d is not None and d.siesa_nc_triggered and d.siesa_nc_response)
+
+
+def puentear_nc_al_recaudo(devolucion: DevolucionCliente, respuesta=None) -> bool:
+    """Le avisa al recaudo de una devolución de ruta que su NC salió: es la
+    señal que el RC dependiente (`depende_de_nc`) espera. **La única que lo
+    escribe** — la llama el job de la NC y, si ese puente falló, el propio RC
+    al detectarlo (`nc_ya_salio`). No hace commit. Devuelve si marcó algo."""
+    if devolucion is None or not devolucion.recaudo_entrega_id:
+        return False
+    recaudo = db.session.get(RecaudoEntrega, devolucion.recaudo_entrega_id)
+    if recaudo is None or recaudo.siesa_nc_triggered:
+        return False
+    recaudo.siesa_nc_triggered = True
+    if respuesta is None and devolucion.siesa_nc_response:
+        try:
+            import json as _json
+            respuesta = _json.loads(devolucion.siesa_nc_response)
+        except (ValueError, TypeError):
+            respuesta = None
+    recaudo.anotar_documento_siesa('NC', 'ENVIADO', respuesta=respuesta,
+                                   consec=devolucion.siesa_nc_consec)
+    return True
+
+
 def destrabar_rc_de(devolucion: DevolucionCliente) -> int:
     """El RC que esperaba la NC de esta devolución se reprograma YA (no en 30
     min): su dependencia se resolvió sin NC. Nunca levanta."""

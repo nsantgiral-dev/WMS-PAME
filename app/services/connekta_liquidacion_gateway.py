@@ -37,6 +37,8 @@ La única llamada a un método de OTRO dominio ya delegado en `core` es
 """
 import logging
 
+from app.services.connekta_gateway import ConnektaPayloadInvalido  # noqa: E402 — definida arriba del singleton
+
 logger = logging.getLogger(__name__)
 
 #: `F358_REFERENCIA_OTROS` en el DOCX del 142888: Alfanumérico, 30 posiciones.
@@ -143,7 +145,7 @@ class ConnektaLiquidacionGateway:
         """
         core = self._core
         if not core.tipo_docto_nota_credito:
-            raise ValueError(
+            raise ConnektaPayloadInvalido(
                 'SIESA_TIPO_DOCTO_NOTA_CREDITO no configurado — requerido para 142946'
             )
 
@@ -243,7 +245,7 @@ class ConnektaLiquidacionGateway:
         """
         core = self._core
         if not core.tipo_docto_nota_credito:
-            raise ValueError(
+            raise ConnektaPayloadInvalido(
                 'SIESA_TIPO_DOCTO_NOTA_CREDITO no configurado — requerido para 251126'
             )
 
@@ -522,7 +524,8 @@ class ConnektaLiquidacionGateway:
                              notas: str = '',
                              ajuste_valor: float = 0.0,
                              ajuste_es_sobrante: bool = False,
-                             referencia_pago: str = '') -> dict:
+                             referencia_pago: str = '',
+                             fecha_recaudo: str = None) -> dict:
         """
         142888 → API_v1_ReciboCaja
         Registra cobro del conductor. Cruza automáticamente contra la factura (CxC).
@@ -548,6 +551,12 @@ class ConnektaLiquidacionGateway:
                     proyecto del mismo negocio, mismo Siesa) ya resuelve esto leyendo
                     `f353_id_un_cruce` de la fila de cartera real en vez de un env var — mismo
                     fix acá. Si vacío, cae a `core.unidad_negocio` (comportamiento previo).
+
+        fecha_recaudo: `YYYYMMDD` (Bogotá) del día en que el conductor COBRÓ.
+                    Va a `F357_FECHA_RECAUDO` y a `F358_FECHA_CONSIGNACION`
+                    (Regla 5: una fecha que alguien lee como día). `F350_FECHA`
+                    sigue siendo el día del documento. Sin ella (llamador
+                    viejo), la del día — el comportamiento de antes.
 
         referencia_pago: referencia del comprobante bancario que anotó el
                     conductor (`RecaudoEntrega.referencia_pago`). Va a
@@ -586,11 +595,15 @@ class ConnektaLiquidacionGateway:
         """
         core = self._core
         if not core.tipo_docto_recibo_caja:
-            raise ValueError(
+            raise ConnektaPayloadInvalido(
                 'SIESA_TIPO_DOCTO_RECIBO_CAJA no configurado — requerido para 142888'
             )
 
         fecha_hoy = core._fecha_hoy_bogota()
+        # El día del cobro, no el del envío (Regla 5). Solo se acepta
+        # `YYYYMMDD`: cualquier otra cosa cae al día del documento.
+        _fr = str(fecha_recaudo or '').strip()
+        fecha_cobro = _fr if (len(_fr) == 8 and _fr.isdigit()) else fecha_hoy
         cia = int(core.id_cia_siesa)
         consec_int = int(consec_fe) if str(consec_fe).isdigit() else consec_fe
         co = core.centro_op
@@ -612,7 +625,7 @@ class ConnektaLiquidacionGateway:
         # que sale mal casi nunca se nota hasta el cuadre de caja.
         _fp = (forma_pago or '').upper()
         if _fp not in core._forma_pago_map:
-            raise ValueError(
+            raise ConnektaPayloadInvalido(
                 f'forma_pago={_fp!r} sin medio de pago Siesa configurado '
                 f'(Maestros → Medios de pago) — el RC no se envía como '
                 f'EFECTIVO por defecto. Medios válidos: '
@@ -631,7 +644,7 @@ class ConnektaLiquidacionGateway:
         # abierto para siempre en la factura).
         ajuste_abs = abs(float(ajuste_valor or 0))
         if ajuste_abs and ajuste_abs >= float(monto):
-            raise ValueError(
+            raise ConnektaPayloadInvalido(
                 f'El ajuste al peso (${ajuste_abs:,.2f}) no puede ser mayor o '
                 f'igual al saldo que este RC cancela (${monto:,.2f}) — eso no '
                 'es un residuo de redondeo, es cobrar prácticamente nada.'
@@ -658,7 +671,7 @@ class ConnektaLiquidacionGateway:
             'F350_CONSEC_DOCTO': 0,
             'F350_FECHA': fecha_hoy,
             'F357_ID_CAJA': id_caja,
-            'F357_FECHA_RECAUDO': fecha_hoy,
+            'F357_FECHA_RECAUDO': fecha_cobro,
             'F350_ID_TERCERO': tercero_nit,
             'F357_ID_MONEDA_INGRESO': 'COP',
             'F357_VALOR_INGRESO': core._fmt_valor(cash_recibido),
@@ -754,7 +767,7 @@ class ConnektaLiquidacionGateway:
         if forma_upper == 'CONSIGNACION' or medio_pago.startswith('T'):
             if medio_pago != core.medio_pago_efectivo:
                 caja['F358_REFERENCIA_OTROS'] = referencia_otros_rc(referencia_pago, notas)
-                caja['F358_FECHA_CONSIGNACION'] = fecha_hoy
+                caja['F358_FECHA_CONSIGNACION'] = fecha_cobro
                 caja['f358_docto_banco_cg'] = 'CG'
 
         # --- Sección CxC (Cruce contra factura) ---
@@ -846,7 +859,7 @@ class ConnektaLiquidacionGateway:
         """
         core = self._core
         if not core.tipo_docto_docto_contable:
-            raise ValueError(
+            raise ConnektaPayloadInvalido(
                 'SIESA_TIPO_DOCTO_DOCTO_CONTABLE no configurado — requerido para 142882'
             )
 

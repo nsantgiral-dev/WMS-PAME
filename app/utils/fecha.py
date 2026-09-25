@@ -25,7 +25,7 @@ Regla: **ninguna fecha de negocio se calcula con `utcnow()`.** Los timestamps
 técnicos (`created_at`, `updated_at`) sí siguen en UTC — eso es correcto y no se
 toca; lo que no puede salir de UTC es una fecha que alguien va a LEER como día.
 """
-from datetime import datetime, timedelta
+from datetime import datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 TZ_BOGOTA = ZoneInfo('America/Bogota')
@@ -107,8 +107,34 @@ def rango_dia_operativo_utc(fecha_desde, fecha_hasta) -> tuple:
     return inicio_del_dia_utc(fecha_desde), inicio_del_dia_utc(fecha_hasta + timedelta(days=1))
 
 
+def fecha_bogota_de(momento_utc: datetime) -> str | None:
+    """`YYYYMMDD` del día Bogotá de un timestamp UTC **naive** de una columna
+    del WMS. Para una fecha de negocio que ocurrió antes del envío —la del
+    cobro en el recibo de caja, no la del día en que el DLQ lo manda—.
+    `None` si no hay momento: el llamador decide (no se inventa hoy)."""
+    if momento_utc is None:
+        return None
+    return dia_operativo_de(momento_utc).strftime('%Y%m%d')
+
+
+#: Horario en que Siesa opera (Regla 14: ~8 p. m. deja de responder, TCP
+#: timeout de 30 s). Hora de Bogotá, `[inicio, fin)`.
+VENTANA_SIESA = (time(7, 0), time(20, 0))
+
+
+def en_ventana_siesa(momento=None) -> bool:
+    """¿Siesa opera ahora? `momento`: datetime consciente de zona (o naive en
+    Bogotá). La usa la DLQ para no postear de noche (P1-10) y la vista previa
+    de la liquidación para avisar."""
+    m = momento or ahora_bogota()
+    if m.tzinfo is not None:
+        m = m.astimezone(TZ_BOGOTA)
+    return VENTANA_SIESA[0] <= m.time() < VENTANA_SIESA[1]
+
+
 __all__ = [
     'TZ_BOGOTA', 'ahora_bogota', 'fecha_hoy_bogota', 'fecha_iso_bogota',
     'fecha_bogota_mas', 'dia_operativo', 'inicio_del_dia_utc',
-    'dia_operativo_de', 'rango_dia_operativo_utc',
+    'dia_operativo_de', 'rango_dia_operativo_utc', 'fecha_bogota_de',
+    'VENTANA_SIESA', 'en_ventana_siesa',
 ]

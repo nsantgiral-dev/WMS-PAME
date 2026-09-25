@@ -95,9 +95,58 @@ class RemisionNoDisponible(RecuperacionNoDisponible):
     """
 
 
-class ConnektaCircuitOpenError(Exception):
+class ConnektaNoEnviado(Exception):
+    """**Prueba positiva de que el documento NO entró a Siesa.**
+
+    Es la otra mitad de `ConnektaResultadoDesconocido`, y la única excepción
+    ante la que un handler puede revertir su pre-flag (Regla 6) sin arriesgar
+    un duplicado. Hasta el 2026-09-25 los handlers revertían ante **cualquier**
+    excepción que no fuera un timeout de lectura: un 502 de un proxy, una
+    conexión cortada a mitad de la respuesta o un JSON ilegible sobre un 200
+    —casos en que el documento pudo haber entrado— bajaban la guarda y el DLQ
+    reenviaba. Es la forma del incidente RC-00002744 por la puerta que la
+    Regla 3 no nombraba.
+
+    Una jerarquía, integrada el 2026-09-25 (los frentes fiscal y dinero la
+    habían inventado por separado, con nombres cruzados: para fiscal
+    `ConnektaNoEnviado` era solo el `ConnectTimeout`; para dinero, toda prueba
+    de que no entró). Quedó así::
+
+        ConnektaNoEnviado                 ← «no entró»: revertir el pre-flag
+        ├── ConnektaRechazado             ← Siesa/Connekta dijo que no: 4xx,
+        │                                   429, `codigo != 0`
+        ├── ConnektaPayloadInvalido       ← no se pudo armar: nunca salió
+        └── ConnektaCircuitOpenError      ← circuito abierto: nunca salió
+        (ConnectTimeout levanta la base)  ← la conexión no se abrió
+
+        ConnektaResultadoDesconocido      ← «no sé»: ReadTimeout. Un 5xx, una
+        Exception genérica                  conexión cortada o un JSON ilegible
+                                            también son «no sé»: los handlers
+                                            los convierten en Desconocido.
+
+    Quien atrape `ConnektaNoEnviado` puede revertir su pre-flag y dejar que
+    la cola reintente; nada más autoriza a bajar una guarda. El DLQ trata
+    aparte el circuito abierto (no gasta intento) porque es una subclase: el
+    `isinstance` más específico se pregunta primero.
+
+    Trinquetes: `tests/test_rc_verificado_por_documento.py` (ningún `except`
+    baja un pre-flag sin esta clase) y `tests/test_documento_fiscal.py`
+    (la clasificación del gateway).
+    """
+
+
+class ConnektaRechazado(ConnektaNoEnviado):
+    """Siesa (o Connekta) contestó y dijo que **no**: 4xx, 429 o `codigo != 0`."""
+
+
+class ConnektaPayloadInvalido(ConnektaNoEnviado, ValueError):
+    """El documento no se pudo armar: el POST nunca salió. Hereda de
+    `ValueError` para que quien ya lo atrapaba así lo siga atrapando."""
+
+
+class ConnektaCircuitOpenError(ConnektaNoEnviado):
     """Raised when circuit breaker is OPEN — Siesa no disponible.
-    DLQ handlers catch this to NOT waste retries."""
+    DLQ handlers catch this to NOT waste retries. El POST no salió."""
     pass
 
 
@@ -188,30 +237,10 @@ class ConnektaResultadoDesconocido(Exception):
     """
 
 
-class ConnektaRechazoExplicito(Exception):
-    """Siesa **contestó** que no: HTTP 4xx, 429 o `codigo != 0` en el cuerpo.
+#: Nombre del frente fiscal para `ConnektaRechazado`. **Es la misma clase**:
+#: se retira en el commit siguiente, que renombra sus usos.
+ConnektaRechazoExplicito = ConnektaRechazado
 
-    El documento no se creó. Es el único fallo de un POST ante el que se puede
-    revertir un pre-flag (Regla 6) sin arriesgar un duplicado. Un 5xx NO es
-    esto: el servidor pudo haber procesado antes de romperse (Regla 3), y
-    sigue saliendo como `Exception` genérica.
-    """
-
-
-class ConnektaNoEnviado(Exception):
-    """El POST **no salió**: la conexión con Siesa ni siquiera se abrió
-    (`requests.ConnectTimeout`).
-
-    Es la mitad del timeout que sí se puede reintentar. `requests` hace de
-    `ConnectTimeout` una subclase de `Timeout`, así que el `except Timeout` del
-    POST lo atrapaba junto con el `ReadTimeout` y lo convertía en
-    `ConnektaResultadoDesconocido`: FALLIDO sin reintento y un humano mandado a
-    buscar en Siesa un documento que nunca pudo nacer.
-
-    Un timeout de **lectura** sigue siendo «no se sabe» (Regla 3): la petición
-    viajó. Uno de **conexión** no viajó: revertir el pre-flag y reintentar es
-    seguro.
-    """
 
 
 class ConnektaGateway:
@@ -980,20 +1009,19 @@ class ConnektaGateway:
                     f'[CONNEKTA] POST {id_conector}: rate-limit (429) — '
                     f'Retry-After={retry_after}s — DLQ reintentará con backoff'
                 )
-                raise ConnektaRechazoExplicito(
-                    f'Connekta rate-limit (429) — reintento en {retry_after}s')
+                raise ConnektaRechazado(f'Connekta rate-limit (429) — reintento en {retry_after}s')
             if not r.ok:
                 try:
                     detalle = r.json()
                 except Exception:
                     detalle = r.text
                 logger.error(f'[CONNEKTA] POST {id_conector} HTTP {r.status_code}: {detalle}')
-                _msg_http = f'Siesa rechazó el documento (HTTP {r.status_code}): {detalle}'
-                if r.status_code >= 500:
-                    # Un 5xx no es un «no»: el servidor pudo procesar antes de
-                    # romperse. Genérica, como siempre (Regla 3).
-                    raise Exception(_msg_http)
-                raise ConnektaRechazoExplicito(_msg_http)
+                # 4xx: Siesa leyó el documento y lo rechazó — no entró. Un 5xx
+                # (502/504 de un proxy, sobre todo) NO dice eso: la petición
+                # pudo llegar y procesarse. Se queda en `Exception` genérica,
+                # que los handlers tratan como «no sé» (ver ConnektaNoEnviado).
+                _tipo_err = ConnektaRechazado if 400 <= r.status_code < 500 else Exception
+                raise _tipo_err(f'Siesa rechazó el documento (HTTP {r.status_code}): {detalle}')
             resp_json = r.json()
             logger.info(f'[CONNEKTA] POST {id_conector} HTTP 200 — respuesta: {str(resp_json)[:300]}')
             # Connekta V2/V3.1: HTTP 200 no garantiza éxito — verificar codigo==0 en body.
@@ -1006,7 +1034,7 @@ class ConnektaGateway:
                         f'[CONNEKTA] POST {id_conector} rechazado por Siesa — '
                         f'codigo={codigo} mensaje={mensaje} detalle={detalle}'
                     )
-                    raise ConnektaRechazoExplicito(
+                    raise ConnektaRechazado(
                         f'Siesa rechazó el documento (codigo={codigo}): {mensaje}. {detalle}'
                     )
             elif isinstance(resp_json, list):
@@ -1020,7 +1048,7 @@ class ConnektaGateway:
                                 f'[CONNEKTA] POST {id_conector} (v3.1 list) rechazado — '
                                 f'codigo={_cod} mensaje={_msg}'
                             )
-                            raise ConnektaRechazoExplicito(
+                            raise ConnektaRechazado(
                                 f'Siesa rechazó el documento (codigo={_cod}): {_msg}'
                             )
             self._cb_record_success()
@@ -1560,14 +1588,15 @@ class ConnektaGateway:
                              notas: str = '',
                              ajuste_valor: float = 0.0,
                              ajuste_es_sobrante: bool = False,
-                             referencia_pago: str = '') -> dict:
+                             referencia_pago: str = '',
+                             fecha_recaudo: str = None) -> dict:
         """142888 — cobro del conductor, cruza contra la factura. Delegado —
         ver `ConnektaLiquidacionGateway.trigger_recibo_caja`."""
         return self._liquidacion.trigger_recibo_caja(
             tercero_nit, sucursal, monto, forma_pago, tipo_docto_fe, consec_fe,
             co_factura=co_factura, cuenta_cxc=cuenta_cxc, unidad_negocio=unidad_negocio,
             notas=notas, ajuste_valor=ajuste_valor, ajuste_es_sobrante=ajuste_es_sobrante,
-            referencia_pago=referencia_pago,
+            referencia_pago=referencia_pago, fecha_recaudo=fecha_recaudo,
         )
 
     def trigger_documento_contable(self, tercero_nit: str, sucursal: str,

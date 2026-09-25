@@ -341,12 +341,13 @@ class LiquidacionService:
         total_neto = 0
         co_factura = ''
         cuenta_cxc = ''
+        lineas_raw = []
 
         if _tipo_fe and _consec_fe:
             from app.services.connekta_gateway import connekta
             try:
                 # Factura lines: base_gravable, IVA, neto
-                lineas_raw = connekta.get_rowids_factura(_tipo_fe, _consec_fe)
+                lineas_raw = connekta.get_rowids_factura(_tipo_fe, _consec_fe) or []
                 if lineas_raw:
                     for ln in lineas_raw:
                         base_gravable += float(ln.get('f470_vlr_bruto', 0))
@@ -389,12 +390,24 @@ class LiquidacionService:
                 datos_disponibles = False
 
         # ── Retenciones disponibles ─────────────────────────────────
+        # Sobre lo que el cliente se quedó (`base_retencion_entregada`), la
+        # misma base con la que se va a emitir el DC. En una PARCIAL sin
+        # devolución amarrada no hay base: se dice, no se estima sobre la
+        # factura entera.
+        from app.services import politica_cobro as _pc_pv
+        _base_ent = (_pc_pv.base_retencion_entregada(recaudo, lineas_raw)
+                     if datos_disponibles else None)
+        base_retencion_disponible = _base_ent is not None
+        if _base_ent is not None:
+            base_gravable_ret, total_iva_ret = _base_ent
+        else:
+            base_gravable_ret, total_iva_ret = base_gravable, total_iva
         retenciones_disponibles = []
         for tipo_ret, datos_ret in CATALOGO_RETENCIONES.items():
             tasa = datos_ret['tasa']
-            base_calculo = base_de_retencion(tipo_ret, base_gravable, total_iva)
-            monto_estimado = (monto_de_retencion(tipo_ret, base_gravable, total_iva)
-                              if datos_disponibles else 0)
+            base_calculo = base_de_retencion(tipo_ret, base_gravable_ret, total_iva_ret)
+            monto_estimado = (monto_de_retencion(tipo_ret, base_gravable_ret, total_iva_ret)
+                              if base_retencion_disponible else 0)
             retenciones_disponibles.append({
                 'tipo': tipo_ret,
                 'nombre': datos_ret['nombre'],
@@ -404,14 +417,9 @@ class LiquidacionService:
                 'monto_estimado': monto_estimado,
             })
 
-        # ── Siesa horario check (7am-8pm Colombia) ──────────────────
-        try:
-            from datetime import timezone, timedelta
-            colombia_tz = timezone(timedelta(hours=-5))
-            hora_colombia = datetime.now(colombia_tz).hour
-            siesa_horario_ok = 7 <= hora_colombia < 20
-        except Exception:
-            siesa_horario_ok = True  # assume ok if tz check fails
+        # ── Siesa horario check — la ventana es UNA (Regla 14) ──────
+        from app.utils.fecha import en_ventana_siesa
+        siesa_horario_ok = en_ventana_siesa()
 
         # ── SiesaJob states for this recaudo ─────────────────────────
         jobs_recaudo = SiesaJob.query.filter_by(
@@ -471,6 +479,15 @@ class LiquidacionService:
                 'datos_disponibles': datos_disponibles,
             },
             'retenciones_disponibles': retenciones_disponibles,
+            # Si la base de retención (lo que el cliente se quedó) se pudo
+            # calcular. En una PARCIAL sin devolución amarrada no se puede.
+            'base_retencion_disponible': base_retencion_disponible,
+            # Lo que decide `politica_cobro.monto_rc`: en una PARCIAL el RC NO
+            # sale neto de la retención (lo cobrado ya viene neto). La vista
+            # previa no recalcula por su cuenta.
+            'rc_resta_retencion': _pc_pv.rc_resta_retencion(recaudo),
+            'decision_retencion': _pc_pv.decision_retencion(recaudo),
+            'cobro_editable': _pc_pv.puede_editar_cobro(recaudo),
             # Motivo que el conductor eligió en campo (Pago Parcial, pantalla
             # de última milla) — el admin lo ve premarcado abajo pero decide:
             # puede quitarlo o cambiarlo antes de confirmar el cobro.
@@ -688,19 +705,14 @@ class LiquidacionService:
         # casilla premarcada "sugerida" — nada impedía crear el RC sin que
         # nadie se pronunciara sobre si el cliente de verdad tenía derecho al
         # descuento. Ver `confirmar_retencion()`.
-        if recaudo.motivo_descuento and recaudo.retencion_confirmada is None:
-            raise ValueError(
-                f'El conductor declaró un motivo de retención '
-                f'({recaudo.motivo_descuento}) — confírmalo o recházalo '
-                'antes de registrar el cobro'
-            )
-        if recaudo.motivo_descuento and recaudo.retencion_confirmada is False and any(
-                (r.get('tipo') if isinstance(r, dict) else r) == recaudo.motivo_descuento
-                for r in (retenciones or [])):
-            raise ValueError(
-                f'La retención {recaudo.motivo_descuento} fue rechazada — '
-                'no se puede aplicar en este cobro'
-            )
+        #
+        # Una sola política para las dos puertas (`politica_cobro`): la misma
+        # que lee `_procesar_recaudo` y la que revalida el ejecutor del DLQ.
+        from app.services import politica_cobro as _pc
+        _pc.exigir_cobro_decidido(recaudo)
+        for _r in (retenciones or []):
+            _pc.exigir_retencion_aplicable(
+                recaudo, _r.get('tipo') if isinstance(_r, dict) else _r)
 
         # La FE, no el pedido: `get_rowids_factura` filtra por `f350_*`
         # —el documento consultado— y acá se pasaba `*_pedido_siesa` con la
@@ -727,9 +739,10 @@ class LiquidacionService:
         total_neto = 0
         datos_siesa_ok = False
 
+        lineas_raw = []
         try:
             # Factura lines
-            lineas_raw = connekta.get_rowids_factura(tipo_docto_fe, consec_fe)
+            lineas_raw = connekta.get_rowids_factura(tipo_docto_fe, consec_fe) or []
             if lineas_raw:
                 for ln in lineas_raw:
                     base_gravable += float(ln.get('f470_vlr_bruto', 0))
@@ -814,81 +827,14 @@ class LiquidacionService:
                 'RC usará fallback SIESA_CXC_AUXILIAR', recaudo_id
             )
 
-        # ── Determine monto ─────────────────────────────────────────
-        #
-        # PARCIAL: el RC es por lo que el conductor SÍ entregó al admin
-        # (`monto_cobrado`) — NUNCA `total_neto`, que es el valor COMPLETO de
-        # la factura en Siesa sin descontar lo devuelto. La factura misma no
-        # se toca (ni el RC ni la NC la editan): son documentos de cruce
-        # aparte. Usar `total_neto` acá facturaría de más el cobro; la
-        # diferencia (lo devuelto) la cierra la NC contra la factura, no el
-        # RC. ENTREGADO sí prefiere `total_neto` — sin devolución de por
-        # medio, es el dato verificado contra Siesa, más confiable que lo que
-        # el conductor tecleó.
-        if monto_override is not None:
-            monto = float(monto_override)
-        elif estado == EstadoEntrega.PARCIAL:
-            monto = float(recaudo.monto_cobrado or 0)
-        elif datos_siesa_ok and total_neto > 0:
-            monto = total_neto
-        else:
-            monto = float(recaudo.monto_cobrado or 0)
-        # La validación de diferencia va DESPUÉS de calcular retenciones
-        # (ver más abajo, antes de encolar nada) — comparar acá contra
-        # `total_neto` no sirve: la Liquidación real SIEMPRE manda
-        # `monto_override` (precargado con el neto de Siesa por el propio
-        # frontend), así que esta rama nunca corre en el flujo real y el
-        # guard quedaría muerto. Lo que hay que comparar contra lo que
-        # declaró el conductor es el resultado FINAL — `monto` ya con la
-        # retención real descontada —, sin importar de cuál rama salió
-        # `monto`.
-
-        # Retención rechazada: el cliente debe pagar lo que le correspondía.
-        # No hay un segundo estado de "ya pagó el resto" en el WMS a propósito
-        # (ver el campo en el modelo): el admin corrige el monto cuando el
-        # dinero llegó y el bloqueo se resuelve solo.
-        #
-        # La referencia NO es `total_neto`. En una entrega PARCIAL el cliente
-        # devolvió mercancía, así que nunca va a pagar el neto completo de la
-        # factura — exigirlo dejaba esos pedidos trabados para siempre, sin
-        # ninguna salida en la pantalla. Lo que sí debía pagar es la parte que
-        # se quedó: `monto_cobrado + monto_descuento`, o sea el "valor a
-        # cobrar" que el conductor tenía en la puerta antes de restarle el
-        # descuento que ahora el admin declaró improcedente. En un ENTREGADO
-        # esa suma es el neto de la factura, así que la regla es una sola para
-        # ambos estados.
-        #
-        # `monto_cobrado` no se reescribe con el override (el override solo
-        # decide `monto`, arriba), así que la referencia no se mueve por
-        # editar el monto: es exactamente lo que se busca.
-        if recaudo.motivo_descuento and recaudo.retencion_confirmada is False:
-            descuento_declarado = float(recaudo.monto_descuento or 0)
-            if descuento_declarado > 0:
-                esperado = float(recaudo.monto_cobrado or 0) + descuento_declarado
-            elif datos_siesa_ok and total_neto > 0:
-                # Sin monto declarado (el motivo pudo entrar por la liquidación
-                # masiva, que no guarda cuánto se descontó) queda el neto de la
-                # factura como única referencia disponible.
-                esperado = total_neto
-            else:
-                raise ValueError(
-                    'Retención rechazada y sin monto de descuento declarado ni '
-                    'datos de Siesa para verificar cuánto debía pagar el '
-                    'cliente — reintenta cuando Siesa esté disponible'
-                )
-            from app.services.cxc_cruce import TOLERANCIA as _TOL
-            if monto < esperado - _TOL:
-                raise ValueError(
-                    f'Retención rechazada — el cliente debe pagar el valor '
-                    f'completo (${esperado:,.2f}). Monto actual: '
-                    f'${monto:,.2f}. Ajusta el monto cuando el cliente pague '
-                    'la diferencia.'
-                )
-
         # ── Calculate retentions (sin encolar todavía) ────────────────
         # Se calcula la retención real ANTES de tocar la cola: el guard de
         # diferencia (más abajo) necesita el neto final, y si bloquea no
         # puede quedar un DC huérfano ya encolado para un RC que nunca sale.
+        #
+        # La base es lo que el cliente SE QUEDÓ (`base_retencion_entregada`):
+        # en una PARCIAL la mercancía que volvió no se retiene. Antes era la
+        # factura entera.
         import json
         dc_jobs_info = []
         retenciones_detalle = []
@@ -896,11 +842,16 @@ class LiquidacionService:
         total_retenciones = 0
 
         if retenciones:
-            # Validate base is available
-            if not datos_siesa_ok and base_gravable <= 0:
+            _base_ent = (_pc.base_retencion_entregada(recaudo, lineas_raw)
+                         if datos_siesa_ok else None)
+            if _base_ent is None:
                 raise ValueError(
                     'Base gravable no disponible — no se pueden calcular retenciones'
+                    + (' (la entrega fue parcial y la devolución todavía no está '
+                       'amarrada a la factura: sin saber qué se quedó el cliente '
+                       'no hay base)' if datos_siesa_ok else '')
                 )
+            base_gravable, total_iva = _base_ent
 
             for ret in retenciones:
                 tipo_ret = ret.get('tipo', '')
@@ -933,8 +884,64 @@ class LiquidacionService:
                 retenciones_validas.append(
                     (tipo_ret, cuenta_puc, tasa, base_ret, monto_ret))
 
-        # ── Calculate monto_neto_rc ─────────────────────────────────
-        monto_neto_rc = round(monto - total_retenciones, 2)
+        # ── El monto del RC: UNA función para las dos puertas ─────────────
+        #
+        # `politica_cobro.monto_rc`. PARCIAL: lo que entró (`monto_cobrado`, o
+        # el override de quien liquida), que YA viene neto de la retención que
+        # el cliente aplicó en la puerta — antes se le restaba otra vez acá y
+        # el RC salía corto por el valor de la retención. ENTREGADO: el neto
+        # real de Siesa (o el override) menos la retención que procede.
+        #
+        # La validación de diferencia va DESPUÉS (ver más abajo): la
+        # Liquidación real SIEMPRE manda `monto_override` (precargado con el
+        # neto de Siesa por el propio frontend), así que lo que hay que
+        # comparar contra lo que declaró el conductor es el resultado FINAL.
+        monto_neto_rc = _pc.monto_rc(
+            recaudo,
+            total_neto_siesa=(total_neto if datos_siesa_ok else None),
+            retencion=total_retenciones,
+            monto_override=monto_override,
+        )
+        # Lo que el cobro cubre de la factura (RC + retenciones que SÍ salen).
+        monto = monto_neto_rc + (total_retenciones if _pc.rc_resta_retencion(recaudo) else 0)
+
+        # Retención rechazada: el cliente debe pagar lo que le correspondía.
+        # No hay un segundo estado de "ya pagó el resto" en el WMS a propósito
+        # (ver el campo en el modelo): el admin corrige el monto cuando el
+        # dinero llegó y el bloqueo se resuelve solo.
+        #
+        # La referencia NO es `total_neto`. En una entrega PARCIAL el cliente
+        # devolvió mercancía, así que nunca va a pagar el neto completo de la
+        # factura — exigirlo dejaba esos pedidos trabados para siempre, sin
+        # ninguna salida en la pantalla. Lo que sí debía pagar es la parte que
+        # se quedó: `monto_cobrado + monto_descuento`, o sea el "valor a
+        # cobrar" que el conductor tenía en la puerta antes de restarle el
+        # descuento que ahora el admin declaró improcedente. En un ENTREGADO
+        # esa suma es el neto de la factura, así que la regla es una sola para
+        # ambos estados.
+        if _pc.decision_retencion(recaudo) == _pc.RECHAZADA:
+            descuento_declarado = float(recaudo.monto_descuento or 0)
+            if descuento_declarado > 0:
+                esperado = float(recaudo.monto_cobrado or 0) + descuento_declarado
+            elif datos_siesa_ok and total_neto > 0:
+                # Sin monto declarado (el motivo pudo entrar por la liquidación
+                # masiva, que no guarda cuánto se descontó) queda el neto de la
+                # factura como única referencia disponible.
+                esperado = total_neto
+            else:
+                raise ValueError(
+                    'Retención rechazada y sin monto de descuento declarado ni '
+                    'datos de Siesa para verificar cuánto debía pagar el '
+                    'cliente — reintenta cuando Siesa esté disponible'
+                )
+            from app.services.cxc_cruce import TOLERANCIA as _TOL
+            if monto < esperado - _TOL:
+                raise ValueError(
+                    f'Retención rechazada — el cliente debe pagar el valor '
+                    f'completo (${esperado:,.2f}). Monto actual: '
+                    f'${monto:,.2f}. Ajusta el monto cuando el cliente pague '
+                    'la diferencia.'
+                )
 
         # ── El ajuste al peso: decisión explícita, no un valor libre ──────
         # Se valida ANTES del guard de diferencia — si explica la diferencia
@@ -1032,35 +1039,19 @@ class LiquidacionService:
                 f'Liquidación per-recaudo | DC recaudo #{recaudo_id} | '
                 f'Retención {tipo_ret} | Admin: {admin_id}'
             )
-            dc_job = SiesaJob.encolar(
-                tipo='DOCUMENTO_CONTABLE_RET',
-                payload={
-                    'recaudo_id': recaudo_id,
-                    'tipo_docto_fe': tipo_docto_fe,
-                    'consec_fe': str(consec_fe),
-                    'tercero_nit': nit,
-                    'sucursal': sucursal,
-                    'cuenta_puc': cuenta_puc,
-                    'monto': monto_ret,
-                    'base_gravable': base_ret,
-                    'co_factura': co_factura,
-                    'cuenta_cxc': cuenta_cxc,
-                    # Misma fila de cartera que ya resuelve el RC (`un_cxc`,
-                    # `f353_id_un_cruce`) — sin esto el DC caía al fallback
-                    # global de `connekta.trigger_documento_contable`
-                    # (`SIESA_UNIDAD_NEGOCIO`), el mismo defecto que ya
-                    # rechazó el RC hermano (142888) el 2026-08-18. Job 470
-                    # (recaudo 19, PD1421, ruta 22, 2026-08-20) es la
-                    # primera liquidación con retención real: quedó
-                    # FALLIDO 5/5 con rechazo estructural de Siesa.
-                    'unidad_negocio': un_cxc,
-                    'notas': dc_notas,
-                    'accion_origen': 'liquidacion_per_recaudo',
-                },
-                referencia_tipo='RecaudoEntrega',
-                referencia_id=recaudo_id,
-                creado_por_id=admin_id,
+            # El único encolador de retenciones (`_encolar_retencion`): la
+            # misma política y la misma forma de payload que el botón masivo.
+            dc_job = _encolar_retencion(
+                recaudo, tipo_ret=tipo_ret, monto=monto_ret, base_gravable=base_ret,
+                tipo_docto_fe=tipo_docto_fe, consec_fe=consec_fe,
+                tercero_nit=nit, sucursal=sucursal, co_factura=co_factura,
+                cuenta_cxc=cuenta_cxc, unidad_negocio=un_cxc, notas=dc_notas,
+                admin_id=admin_id, accion_origen='liquidacion_per_recaudo',
             )
+            if dc_job is None:
+                logger.info('[LIQUIDACION] recaudo %d: la retención %s ya estaba en '
+                            'cola — no se duplica', recaudo_id, tipo_ret)
+                continue
             # Flush to get dc_job.id
             db.session.flush()
 
@@ -1214,16 +1205,13 @@ class LiquidacionService:
         # misma razón (ver ese comentario): el RC ya se arma desde este
         # campo; cambiarlo después de que salió deja al WMS y a Siesa
         # diciendo cifras distintas sin que ningún reintento lo reconcilie.
-        if recaudo.siesa_rc_triggered:
+        from app.services import politica_cobro as _pc
+        _congelado = _pc.motivo_cobro_congelado(recaudo)
+        if not _pc.puede_editar_cobro(recaudo):
             raise ValueError(
-                'El recibo de caja de esta parada ya se envió a Siesa — el '
-                'monto ya no se puede corregir desde acá. Una corrección de '
-                'un valor ya contabilizado se hace con nota crédito.'
-            )
-        if _hay_rc_en_cola(recaudo_id):
-            raise ValueError(
-                'Ya hay un Recibo de Caja en cola para este recaudo — espera '
-                'a que se procese (o falle) antes de corregir el monto.'
+                f'El monto ya no se puede corregir desde acá: {_congelado}. '
+                'Una corrección de un valor ya contabilizado se hace con nota '
+                'crédito; si el envío falla, se puede corregir de nuevo.'
             )
 
         nuevo_monto = round(float(nuevo_monto or 0), 2)
@@ -1608,33 +1596,66 @@ def _procesar_recaudo(recaudo: RecaudoEntrega, notas_base: str,
             resultado['ya_procesado'] = 1
         return resultado
 
+    # ── La retención declarada tiene que estar decidida ──────────────────
+    #
+    # La misma política que «Registrar cobro» (`politica_cobro`): con una
+    # retención declarada y sin decidir no sale ni el RC (su monto depende de
+    # si procede) ni el DC. Antes el botón masivo encolaba la NI con solo mirar
+    # `motivo_descuento` — una NI por plata que nadie verificó que el cliente
+    # pudiera descontar (P0-5). Lo físico (la devolución) sigue su camino.
+    from app.services import politica_cobro as _pc
+    try:
+        _pc.exigir_cobro_decidido(recaudo)
+        _decidido = True
+    except _pc.RetencionNoAplicable as _e_pend:
+        _decidido = False
+        resultado['errores'].append(f'Recaudo {recaudo.id}: {_e_pend}')
+
     # ── CONTADO + PARCIAL: devolución pendiente → RC espera esa NC ──────
     if not es_credito and estado == EstadoEntrega.PARCIAL:
         if not recaudo.siesa_nc_triggered:
             _devolucion_de_ruta(recaudo, resultado)
             resultado['nc'] = 1
+        if not _decidido:
+            return resultado
 
         if not recaudo.siesa_rc_triggered and monto > 0:
-            # Espera la NC —salvo que la devolución ya haya terminado SIN NC
-            # (contada en cero o cancelada): entonces sale por lo cobrado y la
-            # factura queda con el saldo de lo que no volvió
-            # (`devolucion_ruta.nc_no_llegara`; el ejecutor lo vuelve a mirar).
-            from app.services import devolucion_ruta as _dr_rc
-            _encolar_recibo_caja(
-                recaudo, tipo_docto_fe, consec_fe,
-                tercero_nit, sucursal, monto, forma_pago,
-                notas=f'{notas_base} | PARCIAL contado — cobro',
-                admin_id=admin_id,
-                depende_de_nc=not _dr_rc.nc_no_llegara(recaudo),
-                co_factura=co_factura,
-                cuenta_cxc=cuenta_cxc,
-                unidad_negocio=un_cxc,
-            )
-            resultado['rc'] = 1
+            # `monto_rc`: lo que entró, ya neto de la retención de la puerta.
+            monto_rc_parcial = _pc.monto_rc(recaudo)
+            # Retención rechazada: el cliente debía pagar lo que se quedó
+            # completo (`monto_cobrado + monto_descuento`). La misma regla que
+            # «Registrar cobro»; antes el botón masivo la ignoraba.
+            if (_pc.decision_retencion(recaudo) == _pc.RECHAZADA
+                    and float(recaudo.monto_descuento or 0) > 0.5):
+                resultado['errores'].append(
+                    f'Recaudo {recaudo.id}: la retención {recaudo.motivo_descuento} '
+                    f'fue rechazada y el cliente pagó '
+                    f'${float(recaudo.monto_cobrado or 0):,.0f} de '
+                    f'${float(recaudo.monto_cobrado or 0) + float(recaudo.monto_descuento or 0):,.0f}. '
+                    f'El recibo de caja no sale hasta que se corrija el monto.')
+            else:
+                # Espera la NC —salvo que la devolución ya haya terminado SIN NC
+                # (contada en cero o cancelada): entonces sale por lo cobrado y la
+                # factura queda con el saldo de lo que no volvió
+                # (`devolucion_ruta.nc_no_llegara`; el ejecutor lo vuelve a mirar).
+                from app.services import devolucion_ruta as _dr_rc
+                _encolar_recibo_caja(
+                    recaudo, tipo_docto_fe, consec_fe,
+                    tercero_nit, sucursal, monto_rc_parcial, forma_pago,
+                    notas=f'{notas_base} | PARCIAL contado — cobro',
+                    admin_id=admin_id,
+                    depende_de_nc=not _dr_rc.nc_no_llegara(recaudo),
+                    co_factura=co_factura,
+                    cuenta_cxc=cuenta_cxc,
+                    unidad_negocio=un_cxc,
+                )
+                resultado['rc'] = 1
 
-        # Retención (si aplica) — el contador refleja lo que quedó en la cola,
-        # no la intención de encolar. Ver `_encolar_documento_contable`.
-        if not recaudo.siesa_dc_triggered and recaudo.motivo_descuento:
+        # Retención (si aplica y está CONFIRMADA) — el contador refleja lo que
+        # quedó en la cola, no la intención de encolar. Ver
+        # `_encolar_documento_contable`.
+        if (not recaudo.siesa_dc_triggered
+                and _pc.decision_retencion(recaudo) == _pc.CONFIRMADA):
             _contar_dc(resultado, _encolar_documento_contable(
                 recaudo, tipo_docto_fe, consec_fe,
                 tercero_nit, sucursal,
@@ -1649,70 +1670,55 @@ def _procesar_recaudo(recaudo: RecaudoEntrega, notas_base: str,
 
     # ── CONTADO + ENTREGADO: RC (+ DC si retención) ──────────────
     if not es_credito and estado == EstadoEntrega.ENTREGADO:
+        if not _decidido:
+            return resultado
+        _retencion_procede = _pc.decision_retencion(recaudo) == _pc.CONFIRMADA
         if not recaudo.siesa_rc_triggered and monto > 0:
-            # Mismo criterio que `registrar_cobro_recaudo`: preferir el
-            # neto real de Siesa sobre lo declarado, validando antes que no
-            # difieran más que el residuo de redondeo
-            # (`_validar_diferencia_declarada`). Antes este camino (el botón
-            # masivo) mandaba `monto_cobrado` directo, sin consultar Siesa
-            # ni comparar nunca — la misma decisión ("¿de dónde sale el
-            # monto del RC?") escrita distinto en dos sitios.
+            # Mismo criterio que `registrar_cobro_recaudo` (`monto_rc`):
+            # preferir el neto real de Siesa sobre lo declarado, validando
+            # antes que no difieran más que el residuo de redondeo
+            # (`_validar_diferencia_declarada`).
             #
             # Un fallo de red al consultar la factura NO bloquea el cobro
             # —cae al monto declarado, igual que `registrar_cobro_recaudo`
             # cuando `datos_siesa_ok` es False—; lo que sí bloquea es una
             # diferencia real ya verificada contra Siesa.
-            monto_rc = monto
+            #
+            # La retención SIEMPRE se recalcula contra Siesa sobre lo que el
+            # cliente se quedó (`base_retencion_entregada`) — nunca desde
+            # `recaudo.monto_descuento` (ver `_encolar_documento_contable`) —
+            # y solo si está CONFIRMADA: una rechazada no se descuenta del RC.
+            total_neto_rc = None
+            retencion_preview = 0.0
             try:
                 from app.services.connekta_gateway import connekta as _connekta_rc
                 lineas_rc = _connekta_rc.get_rowids_factura(tipo_docto_fe, consec_fe)
                 if lineas_rc:
-                    total_neto_rc = round(
+                    _neto = round(
                         sum(float(ln.get('f470_vlr_neto', 0)) for ln in lineas_rc), 2)
-                    if total_neto_rc > 0:
-                        # Si hay retención, el RC debe salir NETO de ella —
-                        # RC + DC tiene que sumar la factura completa, no
-                        # sumar de más. Mandar el RC por el neto de Siesa
-                        # completo Y además un DC aparte (como hacía esto
-                        # antes) sobre-acreditaba la cartera del cliente por
-                        # el valor de la retención. Misma cuenta que ya hace
-                        # `registrar_cobro_recaudo` (`monto_neto_rc`).
-                        # SIEMPRE se recalcula contra Siesa — nunca se confía
-                        # en `recaudo.monto_descuento` directo (ver el mismo
-                        # criterio y su historia en `_encolar_documento_
-                        # contable`). Esto no es solo por consistencia: si el
-                        # estimado declarado está mal, usarlo acá bloquea un
-                        # pago que en realidad SÍ coincide con Siesa — el
-                        # guard de abajo compararía `monto` (correcto) contra
-                        # un `monto_neto_rc` armado con la retención
-                        # equivocada, y rechazaría un cobro que estaba bien.
-                        retencion_preview = 0.0
-                        if recaudo.motivo_descuento:
-                            base_gravable_rc = sum(
-                                float(ln.get('f470_vlr_bruto', 0))
-                                for ln in lineas_rc)
-                            total_iva_rc = sum(
-                                float(ln.get('f470_vlr_imp', 0))
-                                for ln in lineas_rc)
-                            retencion_preview = monto_de_retencion(
-                                recaudo.motivo_descuento,
-                                base_gravable_rc, total_iva_rc)
-                        monto_neto_rc = round(total_neto_rc - retencion_preview, 2)
-                        _validar_diferencia_declarada(
-                            monto, monto_neto_rc,
-                            contexto=(
-                                ' (neto, después de descontar la retención)'
-                                if retencion_preview else ''
-                            ),
-                        )
-                        monto_rc = monto_neto_rc
-            except ValueError:
-                raise
+                    if _neto > 0:
+                        total_neto_rc = _neto
+                        if _retencion_procede:
+                            _base_rc = _pc.base_retencion_entregada(recaudo, lineas_rc)
+                            if _base_rc is not None:
+                                retencion_preview = monto_de_retencion(
+                                    recaudo.motivo_descuento, *_base_rc)
             except Exception as e:
                 logger.warning(
                     '[LIQUIDACION] _procesar_recaudo: no se pudo verificar neto '
                     'Siesa para recaudo %d — usando monto declarado: %s',
                     recaudo.id, e,
+                )
+
+            monto_rc = _pc.monto_rc(
+                recaudo, total_neto_siesa=total_neto_rc, retencion=retencion_preview)
+            if total_neto_rc is not None:
+                _validar_diferencia_declarada(
+                    monto, monto_rc,
+                    contexto=(
+                        ' (neto, después de descontar la retención)'
+                        if retencion_preview else ''
+                    ),
                 )
 
             _encolar_recibo_caja(
@@ -1726,7 +1732,7 @@ def _procesar_recaudo(recaudo: RecaudoEntrega, notas_base: str,
             )
             resultado['rc'] = 1
 
-        if not recaudo.siesa_dc_triggered and recaudo.motivo_descuento:
+        if not recaudo.siesa_dc_triggered and _retencion_procede:
             _contar_dc(resultado, _encolar_documento_contable(
                 recaudo, tipo_docto_fe, consec_fe,
                 tercero_nit, sucursal,
@@ -1737,7 +1743,7 @@ def _procesar_recaudo(recaudo: RecaudoEntrega, notas_base: str,
                 unidad_negocio=un_cxc,
             ))
 
-        if recaudo.siesa_rc_triggered and not recaudo.motivo_descuento:
+        if recaudo.siesa_rc_triggered and not _retencion_procede:
             resultado['ya_procesado'] = 1
 
         return resultado
@@ -1846,8 +1852,9 @@ def _encolar_recibo_caja(recaudo: RecaudoEntrega, tipo_docto_fe: str,
             '[LIQUIDACION] recaudo %d: ya hay un RECIBO_CAJA en cola — no se duplica',
             recaudo.id
         )
-        return
-    SiesaJob.encolar(
+        return None
+    from app.services import politica_cobro as _pc
+    job = SiesaJob.encolar(
         tipo='RECIBO_CAJA',
         payload={
             'recaudo_id': recaudo.id,
@@ -1862,6 +1869,10 @@ def _encolar_recibo_caja(recaudo: RecaudoEntrega, tipo_docto_fe: str,
             'unidad_negocio': unidad_negocio,
             'notas': notas,
             'depende_de_nc': depende_de_nc,
+            # Lo que el RC da por cierto de la parada. El ejecutor lo compara
+            # antes del POST: si cambió por un camino que no pasó por
+            # `puede_editar_cobro`, el RC no sale (P1-3).
+            'instantanea': _pc.instantanea_cobro(recaudo),
         },
         referencia_tipo='RecaudoEntrega',
         referencia_id=recaudo.id,
@@ -1871,6 +1882,7 @@ def _encolar_recibo_caja(recaudo: RecaudoEntrega, tipo_docto_fe: str,
         '[LIQUIDACION] Encolado RECIBO_CAJA para recaudo %d (FE %s-%s, $%.2f)',
         recaudo.id, tipo_docto_fe, consec_fe, monto
     )
+    return job
 
 
 def _pucs_en_cola(recaudo_id: int) -> set:
@@ -1955,6 +1967,14 @@ def _encolar_documento_contable(recaudo: RecaudoEntrega, tipo_docto_fe: str,
     encola en este ciclo — la próxima liquidación lo reintenta.
     """
     motivo = recaudo.motivo_descuento or ''
+    # La política decide antes que nada: una retención pendiente o rechazada
+    # no llega ni a consultar la factura (P0-5, 2026-09-25).
+    from app.services import politica_cobro as _pc
+    try:
+        _pc.exigir_retencion_aplicable(recaudo, motivo)
+    except _pc.RetencionNoAplicable as _e_pol:
+        return ResultadoDC(DC_NO_ENCOLADO, (
+            f'Recaudo {recaudo.id}: {_e_pol}. El documento contable NO se encoló.'))
     cuenta_puc = RETENCION_PUC.get(motivo, '')
     if not cuenta_puc:
         logger.error(
@@ -1999,8 +2019,16 @@ def _encolar_documento_contable(recaudo: RecaudoEntrega, tipo_docto_fe: str,
             f'volvió sin líneas de Siesa — sin base gravable, el documento '
             f'contable de la retención {motivo} NO se encoló.'))
 
-    base_gravable = sum(float(ln.get('f470_vlr_bruto', 0)) for ln in lineas_raw)
-    total_iva = sum(float(ln.get('f470_vlr_imp', 0)) for ln in lineas_raw)
+    # La base es lo que el cliente SE QUEDÓ, no la factura entera: en una
+    # PARCIAL lo devuelto no se retiene (`politica_cobro.base_retencion_entregada`).
+    _base = _pc.base_retencion_entregada(recaudo, lineas_raw)
+    if _base is None:
+        return ResultadoDC(DC_NO_ENCOLADO, (
+            f'Recaudo {recaudo.id}: la entrega fue parcial y la devolución todavía '
+            f'no está amarrada a la factura {tipo_docto_fe}-{consec_fe} — sin saber '
+            f'qué se quedó el cliente no hay base para la retención {motivo}. El '
+            f'documento contable NO se encoló; sale en la próxima liquidación.'))
+    base_gravable, total_iva = _base
     monto_descuento = monto_de_retencion(motivo, base_gravable, total_iva)
     base_gravable_payload = base_de_retencion(motivo, base_gravable, total_iva)
     if monto_descuento <= 0:
@@ -2033,31 +2061,74 @@ def _encolar_documento_contable(recaudo: RecaudoEntrega, tipo_docto_fe: str,
                 recaudo.id, declarado, monto_descuento, motivo
             )
 
-    SiesaJob.encolar(
+    _encolar_retencion(
+        recaudo, tipo_ret=motivo, monto=monto_descuento,
+        base_gravable=base_gravable_payload,
+        tipo_docto_fe=tipo_docto_fe, consec_fe=consec_fe,
+        tercero_nit=tercero_nit, sucursal=sucursal,
+        co_factura=co_factura, cuenta_cxc=cuenta_cxc,
+        unidad_negocio=unidad_negocio, notas=notas, admin_id=admin_id,
+    )
+    return ResultadoDC(DC_ENCOLADO, None)
+
+
+def _encolar_retencion(recaudo: RecaudoEntrega, *, tipo_ret: str, monto: float,
+                       base_gravable: float, tipo_docto_fe: str, consec_fe,
+                       tercero_nit: str, sucursal: str, co_factura: str = '',
+                       cuenta_cxc: str = '', unidad_negocio: str = '',
+                       notas: str = '', admin_id: int = None,
+                       accion_origen: str = None):
+    """**El único sitio que encola un DOCUMENTO_CONTABLE_RET.**
+
+    Lo llaman las dos puertas —«Registrar cobro» por parada y «Liquidar ruta»
+    masivo— y los dos pasan por la misma política
+    (`politica_cobro.exigir_retencion_aplicable`): hasta el 2026-09-25 el botón
+    masivo encolaba la NI con solo mirar `motivo_descuento`, sin leer si quien
+    liquida había confirmado o rechazado esa retención. Una NI emitida por
+    plata que el cliente no tenía derecho a descontar.
+
+    La cuenta PUC ya en cola no se duplica (`_pucs_en_cola`). Devuelve el job,
+    o `None` si ya había uno para esa cuenta. Levanta `RetencionNoAplicable`.
+    Trinquete AST: `tests/test_politica_cobro.py`.
+    """
+    from app.services import politica_cobro as _pc
+    _pc.exigir_retencion_aplicable(recaudo, tipo_ret)
+    cuenta_puc = RETENCION_PUC.get(tipo_ret, '')
+    if not cuenta_puc:
+        raise ValueError(f'La retención {tipo_ret!r} no tiene cuenta PUC en el catálogo')
+    if cuenta_puc in _pucs_en_cola(recaudo.id):
+        return None
+    payload = {
+        'recaudo_id': recaudo.id,
+        'tipo_docto_fe': tipo_docto_fe,
+        'consec_fe': str(consec_fe),
+        'tercero_nit': tercero_nit,
+        'sucursal': sucursal,
+        'tipo_retencion': tipo_ret,
+        'cuenta_puc': cuenta_puc,
+        'monto': monto,
+        'base_gravable': base_gravable,
+        'co_factura': co_factura,
+        'cuenta_cxc': cuenta_cxc,
+        # `f353_id_un_cruce` real de la fila de cartera: sin él el DC caía al
+        # fallback global y Siesa lo rechazaba (job 470, 2026-08-20).
+        'unidad_negocio': unidad_negocio,
+        'notas': notas,
+    }
+    if accion_origen:
+        payload['accion_origen'] = accion_origen
+    job = SiesaJob.encolar(
         tipo='DOCUMENTO_CONTABLE_RET',
-        payload={
-            'recaudo_id': recaudo.id,
-            'tipo_docto_fe': tipo_docto_fe,
-            'consec_fe': str(consec_fe),
-            'tercero_nit': tercero_nit,
-            'sucursal': sucursal,
-            'cuenta_puc': cuenta_puc,
-            'monto': monto_descuento,
-            'base_gravable': base_gravable_payload,
-            'co_factura': co_factura,
-            'cuenta_cxc': cuenta_cxc,
-            'unidad_negocio': unidad_negocio,
-            'notas': notas,
-        },
+        payload=payload,
         referencia_tipo='RecaudoEntrega',
         referencia_id=recaudo.id,
         creado_por_id=admin_id,
     )
     logger.info(
-        '[LIQUIDACION] Encolado DOCUMENTO_CONTABLE_RET para recaudo %d (PUC %s, $%.2f)',
-        recaudo.id, cuenta_puc, monto_descuento
+        '[LIQUIDACION] Encolado DOCUMENTO_CONTABLE_RET para recaudo %d (%s, PUC %s, $%.2f)',
+        recaudo.id, tipo_ret, cuenta_puc, monto
     )
-    return ResultadoDC(DC_ENCOLADO, None)
+    return job
 
 
 def _nombre_retencion(tipo: str) -> str:

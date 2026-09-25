@@ -13,7 +13,7 @@ def recaudo_liq(db, almacen):
     """Factory para RecaudoEntrega con dependencias mínimas."""
     def _make(estado='ENTREGADO', pago='EFECTIVO', monto=1500000,
               rc=False, nc=False, dc=False, motivo_desc=None, items_ent=None,
-              monto_desc=0):
+              monto_desc=0, ret_confirmada=None):
         from app.models.recaudo_entrega import RecaudoEntrega
         from app.models.packing import TareaPacking
         from app.models.ruta_despacho import RutaDespacho
@@ -48,6 +48,9 @@ def recaudo_liq(db, almacen):
             motivo_descuento=motivo_desc,
             monto_descuento=monto_desc,
             items_entregados=items_ent,
+            # La política de retención (P0-5): una declarada sin decidir no
+            # produce ni RC ni DC en ninguna de las dos puertas.
+            retencion_confirmada=ret_confirmada,
         )
         db.session.add(recaudo)
         db.session.commit()
@@ -125,7 +128,8 @@ class TestContadoEntregado:
         ret_rf = round(840336 * 0.025, 2)
         neto_esperado = round(1000000 - ret_rf, 2)
         recaudo = recaudo_liq(estado='ENTREGADO', pago='EFECTIVO',
-                              motivo_desc='RETEFUENTE_2.5', monto=neto_esperado)
+                              motivo_desc='RETEFUENTE_2.5', monto=neto_esperado,
+                              ret_confirmada=True)
         with patch('app.services.connekta_gateway.connekta.get_rowids_factura',
                    return_value=[{'f470_vlr_bruto': 840336, 'f470_vlr_imp': 159664,
                                   'f470_vlr_neto': 1000000, 'f120_referencia': 'REF001',
@@ -158,7 +162,8 @@ class TestContadoEntregado:
         ret_iva_esperada = round(159664 * 0.15, 2)
         recaudo = recaudo_liq(estado='ENTREGADO', pago='EFECTIVO',
                               motivo_desc='RETEIVA',
-                              monto=round(1000000 - ret_iva_esperada, 2))
+                              monto=round(1000000 - ret_iva_esperada, 2),
+                              ret_confirmada=True)
         with patch('app.services.connekta_gateway.connekta.get_rowids_factura',
                    return_value=[{'f470_vlr_bruto': 840336, 'f470_vlr_imp': 159664,
                                   'f470_vlr_neto': 1000000, 'f120_referencia': 'REF001',
@@ -212,6 +217,7 @@ class TestContadoEntregado:
             motivo_desc='RETEFUENTE_2.5',
             monto=round(1000000 - ret_rf_real, 2),  # el conductor sí pagó el neto correcto
             monto_desc=999999,  # pero el "estimado" de descuento que declaró está mal
+            ret_confirmada=True,
         )
         with patch('app.services.connekta_gateway.connekta.get_rowids_factura',
                    return_value=[{'f470_vlr_bruto': 840336, 'f470_vlr_imp': 159664,
@@ -358,7 +364,8 @@ class TestRetencionesPUC:
         # comentario en `test_contado_entregado_con_retencion_encola_rc_y_dc`.
         recaudo = recaudo_liq(estado='ENTREGADO', pago='EFECTIVO',
                               motivo_desc='RETEFUENTE_2.5',
-                              monto=round(1000000 - round(840336 * 0.025, 2), 2))
+                              monto=round(1000000 - round(840336 * 0.025, 2), 2),
+                              ret_confirmada=True)
         with patch('app.services.connekta_gateway.connekta.get_rowids_factura',
                    return_value=[{'f470_vlr_bruto': 840336, 'f470_vlr_imp': 159664,
                                   'f470_vlr_neto': 1000000, 'f120_referencia': 'REF001',
@@ -880,7 +887,7 @@ class TestRetencionDeclaradaBloqueaElRC:
                               motivo_desc='RETEFUENTE_2.5')
         from app.services.liquidacion_service import LiquidacionService
         with patch('app.services.connekta_gateway.connekta', self._mock_siesa()):
-            with pytest.raises(ValueError, match='confírmalo o recházalo'):
+            with pytest.raises(ValueError, match='confírmela o rechácela'):
                 LiquidacionService.registrar_cobro_recaudo(recaudo.id, admin_id=1, retenciones=[])
 
     def test_confirmada_permite_el_rc(self, app, db, recaudo_liq):
@@ -937,7 +944,7 @@ class TestRetencionDeclaradaBloqueaElRC:
         db.session.commit()
         from app.services.liquidacion_service import LiquidacionService
         with patch('app.services.connekta_gateway.connekta', self._mock_siesa()):
-            with pytest.raises(ValueError, match='no se puede aplicar'):
+            with pytest.raises(ValueError, match='no se puede emitir'):
                 LiquidacionService.registrar_cobro_recaudo(
                     recaudo.id, admin_id=1,
                     retenciones=[{'tipo': 'RETEFUENTE_2.5'}], monto_override=2000000)

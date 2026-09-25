@@ -106,6 +106,10 @@ def recaudo_liq(db, almacen):
             siesa_rc_triggered=rc, siesa_nc_triggered=nc, siesa_dc_triggered=dc,
             motivo_descuento=motivo_desc, monto_descuento=monto_desc,
             items_entregados=items_ent,
+            # Estos tests miden el CONTADOR del DC, no la política: la
+            # retención declarada llega confirmada. Que una pendiente o
+            # rechazada no produzca DC lo prueba `test_politica_cobro.py`.
+            retencion_confirmada=(True if motivo_desc else None),
         )
         db.session.add(recaudo)
         db.session.commit()

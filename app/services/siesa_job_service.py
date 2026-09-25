@@ -49,6 +49,7 @@ def procesar_jobs_pendientes(app=None):
 
 
 from app.services.connekta_gateway import (
+    ConnektaNoEnviado,
     ConnektaResultadoDesconocido as _ResultadoDesconocido,
 )
 
@@ -85,6 +86,27 @@ class DependenciaPendiente(Exception):
         self.espera_minutos = espera_minutos
 
 
+
+
+def dlq_puede_postear(momento=None) -> bool:
+    """¿La DLQ puede mandar documentos a Siesa ahora? **La única que lo dice
+    para la cola.**
+
+    La ventana es UNA: `ventana_siesa.ventana_abierta` (Regla 14). Esta
+    función solo agrega la excepción de la cola: **en simulación no hay
+    Siesa** —ni POST ni GET reales— y la ventana no protege nada.
+
+    En **ensayo** sí aplica, a propósito: los POST se bloquean pero los GET
+    son reales (el RC consulta la cartera antes de postear, el despacho las
+    facturas), y de noche contra un Siesa que no contesta gastan reintentos
+    igual. El frente de liquidación la eximía también en ensayo; se integró
+    sin eso (2026-09-25). Trinquetes: `tests/test_dlq_ventana_siesa.py`,
+    `tests/test_ventana_siesa.py`."""
+    from app.services.connekta_gateway import connekta
+    if getattr(connekta, 'modo_simulacion', False):
+        return True
+    from app.services.ventana_siesa import ventana_abierta
+    return ventana_abierta(momento)
 
 
 def _procesar_jobs_pendientes_interno(_app):
@@ -184,11 +206,13 @@ def _run_dlq_jobs():
             SiesaJob.proximo_intento <= ahora,
         )
     )
-    # Fuera de la ventana de Siesa (Regla 14) solo sale lo que no va a Siesa
-    # (un correo de alerta). Un recibo de caja intentado a las 20:30 amanecía
-    # FALLIDO: ahora espera PENDIENTE, sin gastar reintentos, a las 06:00.
-    from app.services.ventana_siesa import TIPOS_SIN_SIESA, ventana_abierta
-    if not ventana_abierta():
+    # Fuera de la ventana de Siesa (Regla 14) no sale ningún POST: solo lo que
+    # no va a Siesa (el correo). Un RC encolado a las 20:30 no gasta sus
+    # reintentos contra un Siesa que no contesta y amanece FALLIDO: espera
+    # PENDIENTE, sin gastar nada, a que abra la ventana (P1-10). Decisión del
+    # dueño: Siesa caído = se para todo, sin caminos alternativos.
+    from app.services.ventana_siesa import TIPOS_SIN_SIESA
+    if not dlq_puede_postear():
         q = q.filter(SiesaJob.tipo.in_(TIPOS_SIN_SIESA))
     q = q.limit(20)
     # skip_locked solo disponible en PostgreSQL — en SQLite lo ignoramos
@@ -781,6 +805,16 @@ def _factura_saldada_en_siesa(connekta, nit: str, recaudo,
     a FE si no matchea (PD1411/FE-1416, 2026-08-18, no es universal); por eso
     este helper recibe también `tipo_docto_fe`/`consec_fe` del payload del job.
     """
+    from app.services.cxc_cruce import TOLERANCIA
+    saldo = _saldo_factura_en_siesa(connekta, nit, recaudo, tipo_docto_fe, consec_fe)
+    return None if saldo is None else saldo <= TOLERANCIA
+
+
+def _saldo_factura_en_siesa(connekta, nit: str, recaudo,
+                            tipo_docto_fe: str = None, consec_fe=None):
+    """El saldo abierto de la factura en la cartera de Siesa, o **`None`** si
+    no se pudo saber (red, fila que no aparece, datos del pedido ausentes).
+    La búsqueda de la fila vive en `cxc_cruce` — una sola."""
     from app.services import cxc_cruce as _cx
     try:
         tarea = getattr(recaudo, 'tarea', None) if recaudo else None
@@ -788,11 +822,39 @@ def _factura_saldada_en_siesa(connekta, nit: str, recaudo,
         consec_pedido = getattr(tarea, 'consec_docto_pedido_siesa', None)
         if not (nit and tipo_pedido and consec_pedido):
             return None
-        return _cx.esta_saldada(connekta.get_cxc_general(nit), tipo_pedido, consec_pedido,
-                                 tipo_docto_fe, consec_fe)
+        fila = _cx.fila_de_la_factura(connekta.get_cxc_general(nit), tipo_pedido,
+                                      consec_pedido, tipo_docto_fe, consec_fe)
+        return None if fila is None else _cx.saldo_de_la_fila(fila)
     except Exception as e:                       # noqa: BLE001
-        logger.warning('[DLQ] no se pudo verificar el saldo en Siesa: %s', e)
+        logger.warning('[DLQ] no se pudo leer el saldo en Siesa: %s', e)
         return None
+
+
+def _rc_entro_por_saldo(connekta, nit: str, recaudo, tipo_docto_fe, consec_fe,
+                        saldo_antes, monto) -> bool:
+    """¿El recibo entró? **Solo `True` con prueba**: el saldo de la factura
+    bajó, entre antes y después del POST, por al menos el monto del recibo.
+
+    Es la pregunta por el documento y no por «la factura quedó saldada»: un RC
+    de contado con retención sale neto y el DC va después, así que un recibo
+    que SÍ entró deja la factura con el saldo de la retención — «saldada»
+    contestaba que no, y la cola mandaba el segundo recibo. Sin saldo de antes
+    o sin fila después: no hay prueba (`False`), y el llamador lo trata como
+    «no sé» (Regla 3), nunca como «no entró»."""
+    from app.services.cxc_cruce import TOLERANCIA
+    if saldo_antes is None:
+        return False
+    saldo_despues = _saldo_factura_en_siesa(connekta, nit, recaudo, tipo_docto_fe, consec_fe)
+    if saldo_despues is None:
+        return False
+    return (float(saldo_antes) - float(saldo_despues)) >= float(monto) - TOLERANCIA
+
+
+def _tipo_de_retencion_por_puc(cuenta_puc):
+    """El tipo de retención de una cuenta PUC (payloads anteriores a
+    `tipo_retencion`). `None` si la cuenta no está en el catálogo."""
+    from app.services.liquidacion_service import RETENCION_PUC
+    return next((t for t, puc in RETENCION_PUC.items() if puc == cuenta_puc), None)
 
 
 def _ejecutar_con_preflag(obj, post_fn):
@@ -1484,8 +1546,9 @@ def _ejecutar_job(job: SiesaJob) -> dict:
                 'existir en Siesa. No se revierte el pre-flag ni se '
                 'reintenta — verificar en Auditoría de documentos.', job.id)
             raise
-        except Exception as _e_post:
-            # Fallo explícito: Siesa contestó que no. Acá sí no se creó nada,
+        except ConnektaNoEnviado:
+            # Prueba positiva de que no entró: Siesa contestó que no (4xx,
+            # `codigo != 0`, 429) o el POST no salió. Acá sí no se creó nada,
             # y se revierte para que el DLQ reintente. La otra mitad del
             # pre-flag.
             if recaudo:
@@ -1494,7 +1557,14 @@ def _ejecutar_job(job: SiesaJob) -> dict:
                     db.session.commit()
                 except Exception:
                     db.session.rollback()
-            raise _e_post
+            raise
+        except Exception as _e_post:
+            # Un 5xx, una conexión cortada, un JSON ilegible sobre un 200: la
+            # NC PUEDE existir. No se revierte (Regla 3) y se declara.
+            raise _ResultadoDesconocido(
+                f'NOTA_CREDITO_FACTURA job={job.id}: el envío falló sin respuesta '
+                f'clara de Siesa ({_e_post}). La nota crédito PUEDE existir: '
+                f'verificar en Siesa antes de reintentar.') from _e_post
 
         _es_ensayo = bool(resultado.get('modo_ensayo'))
         if recaudo and _es_ensayo:
@@ -1624,9 +1694,10 @@ def _ejecutar_job(job: SiesaJob) -> dict:
                 'PUEDE existir en Siesa. No se revierte el pre-flag ni se '
                 'reintenta — verificar en Auditoría de documentos.', job.id)
             raise
-        except Exception:
-            # Rechazo explícito de Siesa: acá sí no se creó nada, y revertir
-            # deja que el DLQ reintente. La otra mitad del pre-flag.
+        except ConnektaNoEnviado:
+            # Rechazo explícito de Siesa (o el POST no salió): acá sí no se
+            # creó nada, y revertir deja que el DLQ reintente. La otra mitad
+            # del pre-flag.
             if devolucion:
                 try:
                     devolucion.siesa_nc_triggered = False
@@ -1635,6 +1706,13 @@ def _ejecutar_job(job: SiesaJob) -> dict:
                 except Exception:
                     db.session.rollback()
             raise
+        except Exception as _e_post:
+            # Sin respuesta clara la NC PUEDE existir: no se revierte y se
+            # declara (Regla 3). Antes un 5xx revertía y el DLQ reenviaba.
+            raise _ResultadoDesconocido(
+                f'NOTA_CREDITO_DEVOLUCION_CLIENTE job={job.id}: el envío falló sin '
+                f'respuesta clara de Siesa ({_e_post}). La nota crédito PUEDE '
+                f'existir: verificar en Siesa antes de reintentar.') from _e_post
 
         _es_ensayo = bool(resultado.get('modo_ensayo'))
         if devolucion and _es_ensayo:
@@ -1669,20 +1747,16 @@ def _ejecutar_job(job: SiesaJob) -> dict:
         # dependiente (depende_de_nc) está esperando para poder dispararse.
         if devolucion and not _es_ensayo and devolucion.recaudo_entrega_id:
             try:
-                from app.models.recaudo_entrega import RecaudoEntrega as _REC
-                recaudo_origen = db.session.get(_REC, devolucion.recaudo_entrega_id)
-                if recaudo_origen and not recaudo_origen.siesa_nc_triggered:
-                    recaudo_origen.siesa_nc_triggered = True
-                    # El desenlace también, en la entidad (m036fotos). El
-                    # consecutivo llega después, con el motivo DIAN.
-                    recaudo_origen.anotar_documento_siesa(
-                        'NC', 'ENVIADO', respuesta=resultado,
-                        consec=devolucion.siesa_nc_consec)
+                # El desenlace también, en la entidad (m036fotos). El
+                # consecutivo llega después, con el motivo DIAN. Si este puente
+                # falla, el RC dependiente lo reconstruye (`nc_ya_salio`).
+                from app.services import devolucion_ruta as _dr_puente
+                if _dr_puente.puentear_nc_al_recaudo(devolucion, respuesta=resultado):
                     db.session.commit()
                     logger.info(
                         '[DLQ] NOTA_CREDITO_DEVOLUCION_CLIENTE job=%s: recaudo %s '
                         'marcado siesa_nc_triggered=True — RC dependiente puede dispararse',
-                        job.id, recaudo_origen.id
+                        job.id, devolucion.recaudo_entrega_id
                     )
             except Exception as _e:
                 db.session.rollback()
@@ -1783,26 +1857,66 @@ def _ejecutar_job(job: SiesaJob) -> dict:
 
     if job.tipo == 'RECIBO_CAJA':
         # 142888 — Recibo de caja (cobro del conductor)
-        from app.models.recaudo_entrega import RecaudoEntrega as _RE
+        from app.models.recaudo_entrega import EstadoEntrega as _EE, RecaudoEntrega as _RE
+        from app.services import politica_cobro as _pc
         recaudo = _RE.query.get(payload.get('recaudo_id'))
 
         if recaudo and recaudo.siesa_rc_triggered:
-            logger.info(
-                '[DLQ] RECIBO_CAJA job=%s: recaudo %s ya tiene '
-                'siesa_rc_triggered=True — idempotente', job.id, recaudo.id
-            )
-            return {'idempotente': True, 'recaudo_id': recaudo.id}
+            # La bandera es de PRE-envío (Regla 6): encendida dice «se intentó»,
+            # no «entró». Solo con el desenlace confirmado (`rc_llego_a_siesa`)
+            # esto es idempotente. Si no, un intento anterior se cortó (crash,
+            # PROCESANDO atascado) o no se pudo verificar: completar acá decía
+            # «llegó» sin saberlo, y reenviar puede duplicar. Se declara.
+            if _pc.rc_llego_a_siesa(recaudo):
+                logger.info(
+                    '[DLQ] RECIBO_CAJA job=%s: recaudo %s ya tiene su RC en Siesa '
+                    '— idempotente', job.id, recaudo.id)
+                return {'idempotente': True, 'recaudo_id': recaudo.id}
+            raise _ResultadoDesconocido(
+                f'RECIBO_CAJA job={job.id}: el recibo del recaudo {recaudo.id} ya se '
+                f'intentó y no hay constancia de que haya entrado. No se reenvía '
+                f'(un segundo recibo es un documento financiero que se reversa a '
+                f'mano): verificar en Siesa y resolverlo desde Liquidación.')
+
+        # El recibo solo sale si la parada sigue siendo la que se encoló (P1-3).
+        # El monto no se re-deriva (job 483: pisar el neto correcto con lo que
+        # tecleó el conductor ya costó $10.151,97); se comprueba que nadie
+        # reescribió la parada por un camino que no pasó por
+        # `puede_editar_cobro`.
+        if recaudo is not None:
+            if recaudo.estado_entrega not in (_EE.ENTREGADO, _EE.PARCIAL):
+                raise ErrorDeterminista(
+                    f'RECIBO_CAJA job={job.id}: la parada del recaudo {recaudo.id} '
+                    f'quedó {recaudo.estado_entrega} después de encolar el recibo — '
+                    f'no representa plata recibida. No se envía.')
+            _cambios = _pc.difiere_de_instantanea(recaudo, payload.get('instantanea'))
+            if _cambios:
+                raise ErrorDeterminista(
+                    f'RECIBO_CAJA job={job.id}: la parada del recaudo {recaudo.id} '
+                    f'cambió después de encolar el recibo ({"; ".join(_cambios)}). '
+                    f'No se envía una cifra que ya no es la de la parada: descartar '
+                    f'este envío y registrar el cobro de nuevo.')
 
         # Secuencialidad: si depende de NC, verificar que NC ya pasó.
         # `DependenciaPendiente` y no `Exception`: esperar no gasta reintento.
         if payload.get('depende_de_nc') and recaudo and not recaudo.siesa_nc_triggered:
-            # La NC ya no va a salir si la devolución terminó sin ella —contada
-            # en cero (FALTANTE_TOTAL) o cancelada—: el RC sale por lo cobrado
-            # y la factura queda con el saldo de lo que no volvió, en cartera.
-            # Antes esperaba para siempre. NC → RC → DC no se rompe: no hay NC
-            # que esperar, y el DC sigue esperando a este RC.
             from app.services import devolucion_ruta as _dr_rc
-            if _dr_rc.nc_no_llegara(recaudo):
+            if _dr_rc.nc_ya_salio(recaudo):
+                # La NC salió y el puente al recaudo falló en su job (P1-6b):
+                # se reconstruye acá, con la misma función.
+                _d_nc = _dr_rc.devolucion_vigente(recaudo.id)
+                _dr_rc.puentear_nc_al_recaudo(_d_nc)
+                db.session.commit()
+                logger.warning(
+                    '[DLQ] RECIBO_CAJA job=%s: la NC de la devolución %s ya había '
+                    'salido y el recaudo %s no lo sabía — puente reconstruido',
+                    job.id, _d_nc.codigo if _d_nc else '?', recaudo.id)
+            elif _dr_rc.nc_no_llegara(recaudo):
+                # La NC ya no va a salir si la devolución terminó sin ella
+                # —contada en cero (FALTANTE_TOTAL) o cancelada—: el RC sale por
+                # lo cobrado y la factura queda con el saldo de lo que no
+                # volvió, en cartera. NC → RC → DC no se rompe: no hay NC que
+                # esperar, y el DC sigue esperando a este RC.
                 logger.warning(
                     '[DLQ] RECIBO_CAJA job=%s: la devolución del recaudo %s terminó sin '
                     'nota crédito (faltante total o cancelada) — el RC sale por lo cobrado',
@@ -1815,30 +1929,53 @@ def _ejecutar_job(job: SiesaJob) -> dict:
                 )
 
         # El monto ya viene calculado por la lógica de negocio real
-        # (`registrar_cobro_recaudo`/`_procesar_recaudo`): para ENTREGADO es
-        # el neto de Siesa menos retenciones, no `recaudo.monto_cobrado` —
-        # ese campo es lo que el conductor declaró en la puerta, un dato
-        # independiente para detectar discrepancias (ver
-        # `confirmar_retencion`), no la fuente de lo que hay que cobrar.
-        #
-        # Job 483 (recaudo 22, PD1425, ruta 23, 2026-08-21): acá había un
-        # "re-lectura" que comparaba el monto del payload ($60.151,97,
-        # correcto) contra `monto_cobrado` ($50.000, el dato crudo del
-        # conductor) y, al no coincidir, pisaba el correcto con el crudo —
-        # asumiendo que cualquier diferencia significaba que alguien editó
-        # el recaudo después de encolar el job. La diferencia era
-        # intencional (retención + neto real de Siesa), no una edición, y
-        # el RC salió a Siesa por $10.151,97 de menos.
+        # (`politica_cobro.monto_rc`, la misma para las dos puertas): para
+        # ENTREGADO es el neto de Siesa menos retenciones, no
+        # `recaudo.monto_cobrado` — ese campo es lo que el conductor declaró en
+        # la puerta. Job 483 (recaudo 22, PD1425, ruta 23, 2026-08-21): una
+        # «re-lectura» que pisaba el monto del payload con el declarado mandó
+        # el RC por $10.151,97 de menos.
         monto_payload = float(payload['monto'])
 
+        # Los argumentos del POST se arman ANTES del pre-flag: un dato que falta
+        # en el payload revienta acá, sin bandera puesta y sin POST.
+        #
+        # `fecha_recaudo`: el día (Bogotá) en que el conductor cobró, no el del
+        # envío del DLQ (Regla 5; una ruta liquidada al día siguiente llevaba
+        # la fecha del envío). Sin fecha de confirmación, la del envío.
+        from app.utils.fecha import fecha_bogota_de
+        kwargs_rc = dict(
+            tercero_nit=payload['tercero_nit'],
+            sucursal=payload.get('sucursal', '001'),
+            monto=monto_payload,
+            forma_pago=payload.get('forma_pago', 'EFECTIVO'),
+            tipo_docto_fe=payload['tipo_docto_fe'],
+            consec_fe=payload['consec_fe'],
+            co_factura=payload.get('co_factura', ''),
+            cuenta_cxc=payload.get('cuenta_cxc', ''),
+            unidad_negocio=payload.get('unidad_negocio', ''),
+            notas=payload.get('notas', ''),
+            ajuste_valor=float(payload.get('ajuste_valor') or 0),
+            ajuste_es_sobrante=bool(payload.get('ajuste_es_sobrante', False)),
+            # Del recaudo y no del payload: el comprobante se puede haber
+            # anotado después de encolar el job (edición de la parada).
+            referencia_pago=(getattr(recaudo, 'referencia_pago', None) or ''),
+            fecha_recaudo=fecha_bogota_de(getattr(recaudo, 'fecha_confirmacion', None)),
+        )
+
         # Pre-flight: ¿la factura que vamos a pagar ya quedó sin saldo?
-        # (cross-flow WMS↔Cartera — alguien más ya la cruzó por otra vía)
+        # (cross-flow WMS↔Cartera — alguien más ya la cruzó por otra vía). De
+        # paso queda el saldo ANTES del POST: es la vara con que, si el POST
+        # falla sin decir que no, se decide si el recibo entró (P0-4).
         nit_rc = payload.get('tercero_nit', '')
-        # `is True` y no truthy: `None` significa «no pude verificar», y saltarse
-        # el envío por no saber dejaría la factura sin recibo para siempre.
-        if _factura_saldada_en_siesa(
-                connekta, nit_rc, recaudo,
-                payload.get('tipo_docto_fe'), payload.get('consec_fe')) is True:
+        saldo_antes = _saldo_factura_en_siesa(
+            connekta, nit_rc, recaudo,
+            payload.get('tipo_docto_fe'), payload.get('consec_fe'))
+        from app.services.cxc_cruce import TOLERANCIA as _TOL_RC
+        # `saldo_antes is not None` y no truthy: `None` significa «no pude
+        # verificar», y saltarse el envío por no saber dejaría la factura sin
+        # recibo para siempre.
+        if saldo_antes is not None and saldo_antes <= _TOL_RC:
             logger.info(
                 '[DLQ] RECIBO_CAJA job=%s: factura %s-%s ya sin saldo pendiente '
                 '(pre-flight) — marcando completado sin enviar',
@@ -1850,65 +1987,55 @@ def _ejecutar_job(job: SiesaJob) -> dict:
                 _anotar_en_recaudo(job, 'YA_SALDADA', recaudo=recaudo)
             return {'ya_existente': True, 'recaudo_id': payload.get('recaudo_id')}
 
-        # Pre-flag: marcar ANTES del POST para cerrar el crash window.
+        # Pre-flag: marcar ANTES del POST para cerrar el crash window. El saldo
+        # de antes queda escrito en el job, en la misma transacción.
         if recaudo:
             recaudo.siesa_rc_triggered = True
-            db.session.commit()
+        job.payload = json.dumps({**payload, 'saldo_antes_rc': saldo_antes},
+                                 ensure_ascii=False)
+        db.session.commit()
 
         try:
-            resultado = connekta.trigger_recibo_caja(
-                tercero_nit=payload['tercero_nit'],
-                sucursal=payload.get('sucursal', '001'),
-                monto=monto_payload,
-                forma_pago=payload.get('forma_pago', 'EFECTIVO'),
-                tipo_docto_fe=payload['tipo_docto_fe'],
-                consec_fe=payload['consec_fe'],
-                co_factura=payload.get('co_factura', ''),
-                cuenta_cxc=payload.get('cuenta_cxc', ''),
-                unidad_negocio=payload.get('unidad_negocio', ''),
-                notas=payload.get('notas', ''),
-                ajuste_valor=float(payload.get('ajuste_valor') or 0),
-                ajuste_es_sobrante=bool(payload.get('ajuste_es_sobrante', False)),
-                # Del recaudo y no del payload: el comprobante se puede haber
-                # anotado después de encolar el job (edición de la parada).
-                referencia_pago=(getattr(recaudo, 'referencia_pago', None) or ''),
-            )
-        except Exception as _e_post:
-            # POST falló — verificar el saldo real antes de revertir (Regla #3:
-            # un timeout no significa que falló, puede que sí haya entrado)
-            _rc_entro = _factura_saldada_en_siesa(
-                connekta, payload.get('tercero_nit', ''), recaudo,
-                payload.get('tipo_docto_fe'), payload.get('consec_fe'))
-            if _rc_entro is True:
-                logger.info(
-                    '[DLQ] RECIBO_CAJA job=%s: POST falló pero API 21 confirma '
-                    'que RC sí entró a Siesa — manteniendo flag', job.id
-                )
-                _anotar_en_recaudo(job, 'ENVIADO', recaudo=recaudo)
-                return {'timeout_pero_exitoso': True}
-            if _rc_entro is None:
-                # NO SE SABE. Regla 3: un timeout no significa que falló, y un
-                # recibo de caja duplicado es un documento financiero que
-                # alguien tiene que reversar a mano. Se conserva la bandera —el
-                # lado que NO reintenta— y se declara, porque la factura puede
-                # quedar sin recibo y eso lo ve el desglose como saldo abierto.
-                logger.error(
-                    '[DLQ] RECIBO_CAJA job=%s: POST falló y NO se pudo verificar '
-                    'el saldo del recaudo %s. No se reintenta (Regla 3) — revisar '
-                    'en Siesa si el RC entró.',
-                    job.id, getattr(recaudo, 'id', '?')
-                )
-                _anotar_en_recaudo(job, 'SIN_VERIFICAR', recaudo=recaudo)
-                return {'verificacion_imposible': True,
-                        'recaudo_id': getattr(recaudo, 'id', None)}
-            # Confirmado que NO entró — revertir pre-flag y reintentar
+            resultado = connekta.trigger_recibo_caja(**kwargs_rc)
+        except ConnektaNoEnviado:
+            # **Prueba positiva de que no entró**: Siesa contestó que no (4xx,
+            # `codigo != 0`, 429), el POST no salió (circuito abierto) o el
+            # documento no se pudo armar. Acá, y solo acá, se revierte la
+            # bandera para que la cola reintente.
             if recaudo:
                 try:
                     recaudo.siesa_rc_triggered = False
                     db.session.commit()
                 except Exception:
                     db.session.rollback()
-            raise _e_post
+            raise
+        except Exception as _e_post:
+            # «¿Entró?» se contesta por el DOCUMENTO, no por «saldo ≤ 0,5»: un
+            # RC de contado con retención sale neto y el DC va después, así que
+            # tras un recibo que SÍ entró la factura conserva el saldo de la
+            # retención — la pregunta vieja contestaba «no entró» y la cola
+            # mandaba el SEGUNDO recibo (RC-00002744 otra vez). Se compara el
+            # saldo de antes (escrito arriba) contra el de ahora: si bajó por
+            # el monto del recibo, entró. Cualquier otra cosa es «no sé», y
+            # ante «no sé» no se reintenta (Regla 3): la bandera queda puesta,
+            # el job va a FALLIDO sin reintento y se declara.
+            if _rc_entro_por_saldo(connekta, nit_rc, recaudo,
+                                   payload.get('tipo_docto_fe'), payload.get('consec_fe'),
+                                   saldo_antes, monto_payload):
+                logger.info(
+                    '[DLQ] RECIBO_CAJA job=%s: el POST falló pero el saldo de la '
+                    'factura bajó por el monto del recibo — el RC sí entró', job.id)
+                _anotar_en_recaudo(job, 'ENVIADO', recaudo=recaudo)
+                return {'timeout_pero_exitoso': True, 'verificado_por': 'saldo'}
+            logger.error(
+                '[DLQ] RECIBO_CAJA job=%s: el POST falló sin que Siesa dijera que no '
+                'y no se pudo confirmar por el saldo si el recibo del recaudo %s '
+                'entró. No se reintenta (Regla 3).', job.id, getattr(recaudo, 'id', '?'))
+            raise _ResultadoDesconocido(
+                f'RECIBO_CAJA job={job.id}: el envío falló sin respuesta clara de Siesa '
+                f'({_e_post}) y el saldo de la factura no confirma que el recibo haya '
+                f'entrado. No se reenvía: verificar en Siesa y resolverlo desde '
+                f'Liquidación.') from _e_post
 
         # Si modo ensayo, revertir flag (no se creó nada en Siesa)
         _es_ensayo = bool(resultado.get('modo_ensayo'))
@@ -1925,6 +2052,7 @@ def _ejecutar_job(job: SiesaJob) -> dict:
     if job.tipo == 'DOCUMENTO_CONTABLE_RET':
         # 142882 — Documento contable para retenciones
         from app.models.recaudo_entrega import RecaudoEntrega as _RE
+        from app.services import politica_cobro as _pc
         recaudo = _RE.query.get(payload.get('recaudo_id'))
 
         # La guarda es POR CUENTA PUC, no por recaudo.
@@ -1941,10 +2069,38 @@ def _ejecutar_job(job: SiesaJob) -> dict:
             )
             return {'idempotente': True, 'recaudo_id': recaudo.id, 'cuenta_puc': _puc}
 
+        # La política de retención se revalida antes del POST (P0-5): un job
+        # encolado antes de que alguien la rechazara —o reintentado a mano—
+        # no emite una NI por plata que el cliente no tenía derecho a
+        # descontar.
+        if recaudo is not None:
+            _tipo_ret = payload.get('tipo_retencion') or _tipo_de_retencion_por_puc(_puc)
+            try:
+                _pc.exigir_retencion_aplicable(recaudo, _tipo_ret)
+            except _pc.RetencionNoAplicable as _e_pol:
+                raise ErrorDeterminista(
+                    f'DOCUMENTO_CONTABLE_RET job={job.id}: {_e_pol}. No se envía.'
+                ) from _e_pol
+
         # Secuencialidad: NI de retenciones DEBE ir DESPUÉS del RC.
         # Si el RC no pasó aún, el cruce CxC del NI puede fallar porque
         # Siesa no ha reducido el saldo por el cash todavía.
         if recaudo and not recaudo.siesa_rc_triggered:
+            _rc_vivo = SiesaJob.query.filter(
+                SiesaJob.tipo == 'RECIBO_CAJA',
+                SiesaJob.referencia_tipo == 'RecaudoEntrega',
+                SiesaJob.referencia_id == recaudo.id,
+                SiesaJob.estado.in_(list(EstadoSiesaJob.ACTIVOS)),
+            ).first()
+            if _rc_vivo is None:
+                # El RC no está en la cola: FALLIDO, DESCARTADO o nunca
+                # encolado. Esperar era para siempre (P1-6a) — reintentar sin
+                # espera cada 2 minutos, sin que nadie lo viera. Se declara.
+                raise ErrorDeterminista(
+                    f'DOCUMENTO_CONTABLE_RET job={job.id}: espera el recibo de caja '
+                    f'del recaudo {recaudo.id} y ese recibo no está en la cola '
+                    f'(falló, se descartó o nunca se encoló). Resolver el recibo y '
+                    f'reintentar esta retención.')
             # Espera corta: el RC de este mismo recaudo suele resolverse en
             # el mismo ciclo del DLQ (segundos) — no es la recepción física
             # de horas/días que sí justifica el default de 30 min.
@@ -1954,45 +2110,49 @@ def _ejecutar_job(job: SiesaJob) -> dict:
                 espera_minutos=2,
             )
 
+        # Argumentos ANTES del pre-flag (un dato ausente no deja la cuenta
+        # marcada sin POST).
+        kwargs_dc = dict(
+            tercero_nit=payload['tercero_nit'],
+            sucursal=payload.get('sucursal', '001'),
+            cuenta_puc=payload['cuenta_puc'],
+            monto=float(payload['monto']),
+            base_gravable=float(payload.get('base_gravable', 0)),
+            tipo_docto_fe=payload['tipo_docto_fe'],
+            consec_fe=payload['consec_fe'],
+            co_factura=payload.get('co_factura', ''),
+            cuenta_cxc=payload.get('cuenta_cxc', ''),
+            unidad_negocio=payload.get('unidad_negocio', ''),
+            notas=payload.get('notas', ''),
+            ajuste_valor=float(payload.get('ajuste_valor') or 0),
+            ajuste_razon=payload.get('ajuste_razon', ''),
+        )
+
         # Pre-flag: cerrar crash window (misma lógica que RC), por cuenta.
         if recaudo and _puc:
             recaudo.marcar_puc_enviada(_puc)
             db.session.commit()
 
         try:
-            resultado = connekta.trigger_documento_contable(
-                tercero_nit=payload['tercero_nit'],
-                sucursal=payload.get('sucursal', '001'),
-                cuenta_puc=payload['cuenta_puc'],
-                monto=float(payload['monto']),
-                base_gravable=float(payload.get('base_gravable', 0)),
-                tipo_docto_fe=payload['tipo_docto_fe'],
-                consec_fe=payload['consec_fe'],
-                co_factura=payload.get('co_factura', ''),
-                cuenta_cxc=payload.get('cuenta_cxc', ''),
-                unidad_negocio=payload.get('unidad_negocio', ''),
-                notas=payload.get('notas', ''),
-                ajuste_valor=float(payload.get('ajuste_valor') or 0),
-                ajuste_razon=payload.get('ajuste_razon', ''),
-            )
-        except _ResultadoDesconocido:
-            # Regla 3: un timeout no significa que falló — Siesa tarda 30-60s
-            # y el documento PUEDE existir. NO revertir el flag: el dispatcher
-            # ya manda esto a FALLIDO sin reintento automático, y revertir acá
-            # dejaría la puerta abierta a que un reintento manual duplique el
-            # NI de retención (documento contable, se reversa a mano en Siesa).
-            raise
-        except Exception as _e_post:
-            # Cualquier otro error (rechazo confirmado de Siesa, red caída) —
-            # acá sí se sabe que no entró, es seguro revertir para permitir
-            # un reintento real.
+            resultado = connekta.trigger_documento_contable(**kwargs_dc)
+        except ConnektaNoEnviado:
+            # Prueba positiva de que no entró (Siesa dijo que no, o el POST no
+            # salió): la única revertible.
             if recaudo and _puc:
                 try:
                     recaudo.desmarcar_puc(_puc)
                     db.session.commit()
                 except Exception:
                     db.session.rollback()
-            raise _e_post
+            raise
+        except Exception as _e_post:
+            # Regla 3: sin respuesta clara el documento PUEDE existir. La
+            # cuenta queda marcada y el job va a FALLIDO sin reintento: un NI
+            # de retención duplicado se reversa a mano en Siesa.
+            raise _ResultadoDesconocido(
+                f'DOCUMENTO_CONTABLE_RET job={job.id}: el envío falló sin respuesta '
+                f'clara de Siesa ({_e_post}). El documento PUEDE existir: verificar '
+                f'en Siesa antes de reintentar.') from _e_post
 
         _es_ensayo = bool(resultado.get('modo_ensayo'))
         if recaudo and _puc and _es_ensayo:
@@ -2155,7 +2315,8 @@ def get_jobs_fallidos():
 DIAS_FALLIDO_RECIENTE = 7
 
 #: Jobs que no son documentos de Siesa: no cuentan como «documento trabado».
-TIPOS_SIN_DOCUMENTO = ('ALERTA_EMAIL',)
+#: Es la misma lista que la ventana deja pasar de noche: una, no dos.
+from app.services.ventana_siesa import TIPOS_SIN_SIESA as TIPOS_SIN_DOCUMENTO  # noqa: E402
 
 
 def momento_del_fallo(job):

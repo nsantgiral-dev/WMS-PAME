@@ -118,27 +118,57 @@ class TestPreFlagRC:
             f'Se mandó {montos_recibidos} en vez del neto correcto del payload'
         )
 
-    def test_revierte_si_se_CONFIRMA_que_el_rc_no_entro(self, app, db, recaudo_factory):
-        """El POST falló y la cartera confirma que la factura sigue con saldo:
-        el recibo no entró, revertir y reintentar es correcto."""
+    def test_revierte_solo_si_siesa_DICE_que_no(self, app, db, recaudo_factory):
+        """Prueba positiva de que no entró: Siesa contestó que no (4xx,
+        `codigo != 0`). Solo ahí se revierte la bandera y la cola reintenta."""
         recaudo = recaudo_factory()
         job = self._make_rc_job(db, recaudo)
         db.session.commit()
 
+        from app.services.connekta_gateway import ConnektaRechazado
         with patch('app.services.connekta_gateway.connekta') as mc:
-            mc.trigger_recibo_caja.side_effect = Exception('Connekta timeout')
+            mc.trigger_recibo_caja.side_effect = ConnektaRechazado(
+                'Siesa rechazó el documento (codigo=1): el documento de cruce no existe')
             mc.modo_simulacion = False
             mc.modo_ensayo = False
             mc.get_cxc_general.return_value = [
                 {'f353_id_tipo_docto_cruce': 'PD', 'f353_consec_docto_cruce': '100',
-                 'f353_total_db': 1500000, 'f353_total_cr': 0},   # sigue con saldo
+                 'f353_total_db': 1500000, 'f353_total_cr': 0},
             ]
             from app.services.siesa_job_service import _ejecutar_job
-            with pytest.raises(Exception, match='Connekta timeout'):
+            with pytest.raises(ConnektaRechazado):
                 _ejecutar_job(job)
 
         db.session.refresh(recaudo)
-        assert recaudo.siesa_rc_triggered is False, 'Flag debe revertir tras fallo confirmado'
+        assert recaudo.siesa_rc_triggered is False, 'Flag debe revertir tras un rechazo explícito'
+
+    def test_saldo_que_no_bajo_NO_es_prueba_de_que_no_entro(self, app, db, recaudo_factory):
+        """P0-4 (2026-09-25). Antes: un POST que fallaba sin decir que no y
+        una factura «con saldo» → «no entró» → revertir → segundo recibo. Un
+        RC de contado con retención sale NETO y el DC va después: tras un
+        recibo que SÍ entró la factura conserva el saldo de la retención, y
+        con Siesa procesando (Regla 20) puede no haber bajado todavía. Saldo
+        igual al de antes no prueba nada: la bandera queda puesta y se
+        declara (FALLIDO sin reintento)."""
+        recaudo = recaudo_factory()
+        job = self._make_rc_job(db, recaudo)
+        db.session.commit()
+
+        from app.services.connekta_gateway import ConnektaResultadoDesconocido
+        con_saldo = [{'f353_id_tipo_docto_cruce': 'PD', 'f353_consec_docto_cruce': '100',
+                      'f353_total_db': 1500000, 'f353_total_cr': 0}]
+        with patch('app.services.connekta_gateway.connekta') as mc:
+            mc.trigger_recibo_caja.side_effect = Exception('HTTP 502 Bad Gateway')
+            mc.modo_simulacion = False
+            mc.modo_ensayo = False
+            mc.get_cxc_general.return_value = con_saldo
+            from app.services.siesa_job_service import _ejecutar_job
+            with pytest.raises(ConnektaResultadoDesconocido):
+                _ejecutar_job(job)
+
+        db.session.refresh(recaudo)
+        assert recaudo.siesa_rc_triggered is True, (
+            'reintentar sin prueba de que no entró es lo que duplica el recibo')
 
     def test_NO_revierte_si_no_se_pudo_verificar(self, app, db, recaudo_factory):
         """Regla 3, y el incidente RC-00002744.
@@ -149,32 +179,33 @@ class TestPreFlagRC:
 
         **Reintentar ante «no sé» es lo que produce el recibo duplicado**, y un
         documento financiero duplicado hay que reversarlo a mano. El lado
-        conservador es conservar la bandera y declararlo: si el recibo no
-        entró, la factura queda con saldo abierto y eso el desglose lo ve.
-
-        Antes esto no se podía ni plantear: la verificación devolvía `False`
-        tanto ante «tiene saldo» como ante «no pude preguntar», y encima
-        buscaba por la clave equivocada, así que SIEMPRE decía «no entró».
+        conservador es conservar la bandera y declararlo: el job ya no termina
+        COMPLETADO con `verificacion_imposible` (VTA-60 y la reconciliación lo
+        contaban como «llegó»): levanta `ConnektaResultadoDesconocido`, que la
+        cola manda a FALLIDO sin reintento.
         """
         recaudo = recaudo_factory()
         job = self._make_rc_job(db, recaudo)
         db.session.commit()
 
+        from app.services.connekta_gateway import ConnektaResultadoDesconocido
         with patch('app.services.connekta_gateway.connekta') as mc:
             mc.trigger_recibo_caja.side_effect = Exception('Connekta timeout')
             mc.modo_simulacion = False
             mc.modo_ensayo = False
             mc.get_cxc_general.side_effect = Exception('Siesa tampoco responde')
             from app.services.siesa_job_service import _ejecutar_job
-            resultado = _ejecutar_job(job)
+            with pytest.raises(ConnektaResultadoDesconocido):
+                _ejecutar_job(job)
 
-        assert resultado.get('verificacion_imposible') is True
         db.session.refresh(recaudo)
         assert recaudo.siesa_rc_triggered is True, (
             'reintentar sin poder verificar es lo que duplica el recibo')
 
-    def test_idempotente_si_ya_triggered(self, app, db, recaudo_factory):
+    def test_idempotente_si_ya_llego(self, app, db, recaudo_factory):
         recaudo = recaudo_factory(rc=True)
+        recaudo.siesa_rc_resultado = 'ENVIADO'
+        db.session.commit()
         job = self._make_rc_job(db, recaudo)
         db.session.commit()
 
@@ -184,6 +215,23 @@ class TestPreFlagRC:
             resultado = _ejecutar_job(job)
 
         assert resultado.get('idempotente') is True
+        mc.trigger_recibo_caja.assert_not_called()
+
+    def test_bandera_puesta_sin_desenlace_no_es_idempotente(self, app, db, recaudo_factory):
+        """La bandera es de PRE-envío: puesta sin desenlace confirmado (un
+        intento anterior se cortó, o no se pudo verificar) no es «ya llegó».
+        Completar decía «llegó» sin saberlo; reenviar puede duplicar. Se
+        declara y no se reenvía."""
+        recaudo = recaudo_factory(rc=True)
+        job = self._make_rc_job(db, recaudo)
+        db.session.commit()
+
+        from app.services.connekta_gateway import ConnektaResultadoDesconocido
+        with patch('app.services.connekta_gateway.connekta') as mc:
+            mc.modo_simulacion = False
+            from app.services.siesa_job_service import _ejecutar_job
+            with pytest.raises(ConnektaResultadoDesconocido):
+                _ejecutar_job(job)
         mc.trigger_recibo_caja.assert_not_called()
 
     def test_preflight_factura_ya_saldada_no_llama_al_post(self, app, db, recaudo_factory):
@@ -276,6 +324,9 @@ class TestSecuencialidad:
         assert recaudo.siesa_rc_triggered is False
 
         from app.models.siesa_job import SiesaJob
+        # El RC de este recaudo está EN COLA: esperar tiene sentido.
+        SiesaJob.encolar('RECIBO_CAJA', {'recaudo_id': recaudo.id, 'monto': 1},
+                         referencia_tipo='RecaudoEntrega', referencia_id=recaudo.id)
         job = SiesaJob.encolar('DOCUMENTO_CONTABLE_RET', {
             'recaudo_id': recaudo.id,
             'tercero_nit': '900123456', 'sucursal': '001',
@@ -301,6 +352,8 @@ class TestSecuencialidad:
         del DLQ; no hay razón real para hacerla esperar media hora."""
         recaudo = recaudo_factory(estado_entrega='ENTREGADO', codigo='PK-SEQ2B')
         from app.models.siesa_job import SiesaJob
+        SiesaJob.encolar('RECIBO_CAJA', {'recaudo_id': recaudo.id, 'monto': 1},
+                         referencia_tipo='RecaudoEntrega', referencia_id=recaudo.id)
         job = SiesaJob.encolar('DOCUMENTO_CONTABLE_RET', {
             'recaudo_id': recaudo.id,
             'tercero_nit': '900123456', 'sucursal': '001',
@@ -317,6 +370,33 @@ class TestSecuencialidad:
             with pytest.raises(DependenciaPendiente) as exc_info:
                 _ejecutar_job(job)
         assert exc_info.value.espera_minutos == 2
+
+    @pytest.mark.parametrize('estado_rc', ['FALLIDO', 'DESCARTADO', None])
+    def test_dc_de_un_rc_que_no_va_a_salir_falla_declarado(
+            self, app, db, recaudo_factory, estado_rc):
+        """P1-6a. El DC esperaba al RC con `DependenciaPendiente` sin límite:
+        con el RC FALLIDO, DESCARTADO o nunca encolado, esperaba para siempre
+        —reprogramándose cada 2 minutos, sin que nadie lo viera—. Ahora falla
+        declarado (determinista: FALLIDO sin gastar reintentos, con alerta)."""
+        recaudo = recaudo_factory(estado_entrega='ENTREGADO', codigo=f'PK-SEQ3-{estado_rc}')
+        from app.models.siesa_job import SiesaJob
+        if estado_rc:
+            rc = SiesaJob.encolar('RECIBO_CAJA', {'recaudo_id': recaudo.id, 'monto': 1},
+                                  referencia_tipo='RecaudoEntrega', referencia_id=recaudo.id)
+            rc.estado = estado_rc
+        job = SiesaJob.encolar('DOCUMENTO_CONTABLE_RET', {
+            'recaudo_id': recaudo.id, 'tercero_nit': '900123456', 'sucursal': '001',
+            'cuenta_puc': '13551501', 'monto': 25000, 'base_gravable': 1000000,
+            'tipo_docto_fe': 'FE', 'consec_fe': '5020',
+        }, referencia_tipo='RecaudoEntrega', referencia_id=recaudo.id)
+        db.session.commit()
+
+        with patch('app.services.connekta_gateway.connekta') as mc:
+            mc.modo_simulacion = False
+            from app.services.siesa_job_service import ErrorDeterminista, _ejecutar_job
+            with pytest.raises(ErrorDeterminista, match='no está en la cola'):
+                _ejecutar_job(job)
+        mc.trigger_documento_contable.assert_not_called()
 
     def test_rc_espera_nc_sigue_siendo_espera_larga(self, app, db, recaudo_factory):
         """La recepción física de una devolución sí puede tardar horas —
