@@ -100,6 +100,40 @@ class TestLaListaNoEscribe:
         assert r.status_code == 403
 
 
+class TestAnotarFalseNoEscribeNiSobreLaTareaReal:
+    """La lista corre sobre una foto (no toca la sesión), pero el modo lectura
+    tiene que valer por sí solo: sobre la tarea REAL, `anotar=False` no deja
+    ninguna escritura."""
+
+    def test_valor_y_cond_pago(self, db, almacen):
+        from app.services.connekta_gateway import connekta
+        from app.services.ruta_service import RutaService
+        ruta, t, c = _ruta(db, almacen)
+        with patch('app.services.fe_resolver.resolver_fe_o_none', lambda _t, **_k: ('FEW', '31')), \
+             patch.object(type(connekta), 'get_rowids_factura', lambda self, *a, **k: _lineas(cond='C05')), \
+             patch.object(type(connekta), 'get_pedido_cabecera',
+                          lambda self, *a, **k: {'f430_id_cond_pago': 'C05'}):
+            with _sql(db) as vistas:
+                out = RutaService._valor_y_cond_pago(t, anotar=False)
+        assert out[0] == 1000
+        assert [v for v in vistas if v in ('INSERT', 'UPDATE', 'DELETE')] == []
+        assert t.valor_factura is None and t.cond_pago_fe is None
+
+    def test_resolver_fe(self, db, almacen):
+        from app.services.fe_resolver import resolver_fe
+
+        class _Gw:
+            modo_simulacion = False
+
+            def get_detalle_factura(self, **k):
+                return [{'f350_id_tipo_docto': 'FEW', 'f350_consec_docto': '44'}]
+        ruta, t, c = _ruta(db, almacen)
+        with _sql(db) as vistas:
+            assert resolver_fe(t, gateway=_Gw(), anotar=False) == ('FEW', '44')
+        assert [v for v in vistas if v in ('INSERT', 'UPDATE', 'DELETE')] == []
+        assert t.fe_tipo is None
+
+
 class TestEnFrioNoSeSumaTodo:
 
     def test_las_consultas_a_siesa_van_en_paralelo(self, db, almacen):
