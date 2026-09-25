@@ -470,11 +470,16 @@ class TestMOQYPresupuesto:
 class TestLeadTime:
 
     def test_nacional_por_defecto_se_declara(self, app, db, monkeypatch):
-        from app.services.armador_service import lead_time
+        # Integración: el lead time lo decide `compras_fuentes.lead_time` (la
+        # cascada proveedor → origen → default del frente de fuentes, con la
+        # regla D9 y las variables ROP_* de acá). El default se llama
+        # DEFAULT_CONSERVADOR —el nombre que ya usaban China, las fuentes y la
+        # pantalla—; DEFAULT_DECLARADO era el de una sola función.
+        from app.services.compras_fuentes import lead_time
         monkeypatch.delenv('ROP_LT_NACIONAL_DIAS', raising=False)
-        lt = lead_time('NACIONAL')
-        assert lt['lt_dias'] == 5 and lt['fuente'] == 'DEFAULT_DECLARADO'
-        assert lt['nota']
+        lt = lead_time(origen='NACIONAL')
+        assert lt['lt_dias'] == 5 and lt['fuente'] == 'DEFAULT_CONSERVADOR'
+        assert lt['nota'] and 'ROP_LT_NACIONAL_DIAS' in lt['nota']
 
     def test_configurado_mueve_el_rop(self, app, db, monkeypatch):
         from app.services.armador_service import ArmadorService
@@ -496,8 +501,11 @@ class TestLeadTime:
 class TestEnCamino:
 
     def test_estados(self, app, db):
+        # Integración: lo que viene lo calcula `compras_fuentes.en_camino`
+        # (OCs de Siesa + contenedores); `por_ref` pasó a `por_sku` y la
+        # declaración (`hay_dato`) vive en `declaracion`.
         from app.models.importacion import Contenedor, ItemEnTransito
-        from app.services.armador_service import en_camino
+        from app.services.compras_fuentes import en_camino
         p = _producto(db, 'EC1')
         for est, cant in (('EN_PRODUCCION', 10), ('BORRADOR', 100), ('RECIBIDO', 1000)):
             c = Contenedor(numero=est, estado=est)
@@ -509,8 +517,8 @@ class TestEnCamino:
         db.session.add(ItemEnTransito(producto_id=p.id, cantidad=7, estado='RECIBIDO'))
         db.session.commit()
         r = en_camino()
-        assert r['por_ref'] == {'EC1': 15.0}
-        assert r['hay_dato'] is True
+        assert r['por_sku'] == {'EC1': 15.0}
+        assert r['declaracion']['hay_dato'] is True
 
     def test_sin_fuente_se_declara(self, app, db):
         from app.services.armador_service import ArmadorService
@@ -664,54 +672,15 @@ class TestLaMonedaEnUnaFuncion:
 
 
 # ── El lead time y lo que viene, en una función ─────────────────────────────
-
-#: Nombre → funciones que pueden leerlo (fuera de su definición de módulo).
-LECTURAS_PERMITIDAS = {
-    'LT_NACIONAL_DIAS': {'lead_time'},
-    'SIGMA_LT_NACIONAL': {'lead_time'},
-    'LT_CHINA_DIAS': {'ArmadorService.calcular_sigma_lt_real'},
-    'SIGMA_LT_CHINA': {'ArmadorService.calcular_sigma_lt_real'},
-    'ItemEnTransito': {'_en_camino_importacion',
-                       # G5 cuenta si hay ítems registrados: es una compuerta
-                       # de completitud del insumo, no una cantidad que viene.
-                       'ArmadorService.verificar_g5'},
-}
-
-
-def _lecturas(src):
-    return [(f, n.id if isinstance(n, ast.Name) else n.attr)
-            for f, n in _por_funcion(src)
-            if (isinstance(n, ast.Name) and n.id in LECTURAS_PERMITIDAS)
-            or (isinstance(n, ast.Attribute) and n.attr in LECTURAS_PERMITIDAS)]
-
-
-class TestLeadTimeYEnCaminoEnUnaFuncion:
-
-    def test_nadie_mas_los_lee(self):
-        fuera = []
-        for a, src in _archivos():
-            if a.startswith('app/models/'):
-                continue           # la definición del modelo
-            for f, nombre in _lecturas(src):
-                if f is None:
-                    continue       # definición de la constante / import de módulo
-                if f not in LECTURAS_PERMITIDAS[nombre]:
-                    fuera.append((a, f, nombre))
-        assert not fuera, (
-            f'{fuera}: el lead time sale de `armador_service.lead_time` y lo que '
-            f'viene de `armador_service.en_camino`. Una segunda lectura es una '
-            f'segunda política.')
-
-    def test_el_detector_ve_la_constante(self):
-        src = 'def rop():\n    return d * LT_NACIONAL_DIAS\n'
-        assert _lecturas(src) == [('rop', 'LT_NACIONAL_DIAS')]
-
-    def test_el_detector_no_ve_el_texto(self):
-        assert _lecturas('def rop():\n    """LT_NACIONAL_DIAS"""\n    return 1\n') == []
-
-    def test_piso(self):
-        src = (RAIZ / 'app/services/armador_service.py').read_text(encoding='utf-8')
-        assert len(_lecturas(src)) >= 8
+#
+# Su trinquete vive en `tests/test_compras_fuentes_trinquetes.py` (clases 1 y
+# 2): al integrar el frente del motor con el de las fuentes quedó UNA función
+# por pregunta —`compras_fuentes.en_camino` y `compras_fuentes.lead_time`— y UN
+# trinquete por clase, que junta lo que veía el de acá (`LECTURAS_PERMITIDAS`:
+# las constantes de lead time y la suma de `ItemEnTransito`) con lo que veía
+# aquél (restas de OC, `pendiente_base`, `.lead_time_real`, `fecha_oc`, las
+# variables `ROP_*`). Dos trinquetes de la misma clase divergirían igual que
+# dos funciones.
 
 
 # ── El costo de un producto solo sale de costo_service ─────────────────────

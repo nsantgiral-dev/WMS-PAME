@@ -79,7 +79,6 @@ FACTOR_UTILIZACION = 0.90  # objetivo de armado: 90% del CBM útil
 # tests/test_compras_fuentes_trinquetes.py).
 from app.services.compras_fuentes import (  # noqa: E402,F401
     LT_NACIONAL_DIAS, SIGMA_LT_NACIONAL, LT_CHINA_DIAS, SIGMA_LT_CHINA,
-    ESTADOS_EN_CAMINO,
 )
 
 # Periodo de revisión. China se revisa por trimestre (un contenedor cada ~90d),

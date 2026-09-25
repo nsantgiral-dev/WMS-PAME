@@ -48,24 +48,35 @@ from app.extensions import db
 logger = logging.getLogger(__name__)
 
 # ── Defaults DECLARADOS del lead time (vivían en armador_service) ─────────────
-# Conservadores a propósito. `armador_service` los re-exporta por compatibilidad;
-# ningún otro módulo los lee para decidir (trinquete).
+# Conservadores a propósito. Un solo juego: `default_lead_time` los lee (y las
+# variables de entorno de nacional); `armador_service` los re-exporta por
+# compatibilidad y ningún otro módulo los lee para decidir (trinquete).
 LT_NACIONAL_DIAS = 5
 SIGMA_LT_NACIONAL = 2
 LT_CHINA_DIAS = 105
-SIGMA_LT_CHINA = 15  # conservador — se reemplaza con ≥3 contenedores medidos
+SIGMA_LT_CHINA = 15  # conservador — piso de lo medido hasta 6 contenedores (D9)
+
+#: Variables de entorno del lead time nacional (del frente del motor, D14).
+ENV_LT_NACIONAL = 'ROP_LT_NACIONAL_DIAS'
+ENV_SIGMA_LT_NACIONAL = 'ROP_SIGMA_LT_NACIONAL'
 
 #: Con menos observaciones que esto, el lead time es el default. Con al menos
-#: `N_MIN_MEDIDO`, la fuente es MEDIDO; entre los dos, PARCIAL. Es el mismo
-#: criterio que ya usaba `calcular_sigma_lt_real` para los contenedores.
+#: `N_MIN_MEDIDO`, la fuente es MEDIDO; entre los dos, PARCIAL — y PARCIAL no
+#: baja del default (D9, ver `_medido`).
 N_MIN_PARCIAL = 3
 N_MIN_MEDIDO = 6
 
-#: Estados de `ItemEnTransito` que todavía no llegaron y ya están comprados.
-#: `EN_PRODUCCION` cuenta (la compra está hecha); `BORRADOR` no (un contenedor
-#: en armado no es una compra) y `RECIBIDO` tampoco (ya está en el stock).
-ESTADOS_CONTENEDOR_EN_CAMINO = ('EN_PRODUCCION', 'NAVEGANDO', 'EN_PUERTO',
-                                'NACIONALIZACION', 'EN_RUTA_CEDI')
+#: Estados en los que la mercancía YA ESTÁ PEDIDA y todavía no llegó — de un
+#: contenedor o, sin contenedor, del ítem. `EN_PRODUCCION` cuenta (un
+#: contenedor en fábrica es plata comprometida: no contarlo pediría dos veces
+#: lo mismo); `BORRADOR` no (un contenedor en armado no es una compra) y
+#: `RECIBIDO` tampoco (ya está en el stock).
+ESTADOS_EN_CAMINO = ('EN_PRODUCCION', 'NAVEGANDO', 'EN_PUERTO',
+                     'NACIONALIZACION', 'EN_RUTA_CEDI')
+
+#: Las fuentes de «lo que ya viene». No es un registro de funciones: la de
+#: contenedores depende de la de OCs para no contar dos veces lo mismo.
+FUENTES_EN_CAMINO = ('OC_SIESA', 'IMPORTACION')
 
 #: `f420_ind_estado` de una OC anulada (spec API_v2_Compras_Ordenes).
 ESTADO_OC_ANULADA = 9
@@ -121,12 +132,23 @@ def pendiente_de_linea(fila: dict):
 # ══════════════════════════════════════════════════════════════════════════════
 
 def en_camino(skus=None, bodegas=None) -> dict:
-    """Cuánto de cada SKU viene en camino a las bodegas operadas.
+    """LO QUE YA VIENE, por SKU, a las bodegas operadas. **La única función del
+    repo que lo calcula** (Regla 0, corolario): el Armador (ROP, contenedor) y
+    el pedido de temporada lo leen por `armador_service.posicion_inventario`.
 
-    Dos fuentes, sumadas sin contar dos veces lo mismo:
-      1. Pendiente de las líneas de OC **abiertas** de Siesa (`oc_linea_siesa`).
-      2. Ítems de contenedor sin recibir (`ItemEnTransito`) — la carga manual
-         del contenedor. Si citan su OC y esa OC sigue abierta, ya están en (1).
+    Dos fuentes (`FUENTES_EN_CAMINO`), sumadas sin contar dos veces lo mismo:
+      1. `OC_SIESA` — pendiente de las líneas de OC **abiertas** de Siesa
+         (`oc_linea_siesa`).
+      2. `IMPORTACION` — ítems de contenedor sin recibir (`ItemEnTransito`).
+         Cuenta si su CONTENEDOR está en `ESTADOS_EN_CAMINO` (incluido
+         EN_PRODUCCION: una compra hecha en fábrica), o —sin contenedor— si el
+         ítem mismo lo está. BORRADOR no es una compra; RECIBIDO ya está en el
+         stock. Si el ítem cita su OC y esa OC sigue abierta, ya está en (1);
+         si cita una OC cerrada, ya entró o se anuló: no se suma.
+
+    Una fuente que revienta **no suma cero en silencio**: va a
+    `fuentes_con_error` y `completo` queda False. «Viene 0» y «no sé qué
+    viene» empujan la compra al mismo lado, y solo el segundo es cierto.
 
     Args:
         skus: iterable de `codigo_siesa`; None = todos.
@@ -134,11 +156,10 @@ def en_camino(skus=None, bodegas=None) -> dict:
             `_BODEGAS_PV` se ignora y se declara — nunca se suma AV1/TRA1.
 
     Returns:
-        {'por_sku': {ref: float}, 'detalle': {ref: {...}}, 'declaracion': {...}}
+        {'por_sku': {ref: float}, 'detalle': {ref: {...}},
+         'declaracion': {fuentes, fuentes_con_error, completo, hay_dato, nota,
+                         sync_oc, bodegas, …contadores}}
     """
-    from app.models.compras_fuentes import OcLineaSiesa
-    from app.models.importacion import ItemEnTransito
-    from app.models.producto import Producto
     from app.services.inventario_siesa_service import _BODEGAS_PV
 
     operadas = list(_BODEGAS_PV)
@@ -151,12 +172,90 @@ def en_camino(skus=None, bodegas=None) -> dict:
         ignoradas = sorted({b for b in bodegas if b not in operadas})
     filtro_skus = None if skus is None else {str(s).strip() for s in skus if s}
 
-    oc = defaultdict(Decimal)
+    errores = []
+    try:
+        oc = _pendiente_de_ocs_abiertas(filtro_skus, operadas, pedidas)
+    except Exception as e:     # noqa: BLE001 — se declara, no se calla
+        logger.error('[COMPRAS] en camino: la fuente OC_SIESA falló: %s', e)
+        errores.append({'fuente': 'OC_SIESA', 'error': str(e)})
+        oc = None
+    try:
+        cont = _contenedores_en_camino(
+            filtro_skus, pedidas, oc['abiertas_citables'] if oc else None)
+    except Exception as e:     # noqa: BLE001
+        logger.error('[COMPRAS] en camino: la fuente IMPORTACION falló: %s', e)
+        errores.append({'fuente': 'IMPORTACION', 'error': str(e)})
+        cont = None
+
+    por_oc = oc['por_sku'] if oc else {}
+    por_cont = cont['por_sku'] if cont else {}
+    sin_unidad = oc['sin_unidad'] if oc else {}
+    ocs_de = oc['ocs_de'] if oc else {}
+
+    por_sku, detalle = {}, {}
+    for ref in set(por_oc) | set(por_cont) | set(sin_unidad):
+        total = por_oc.get(ref, Decimal(0)) + por_cont.get(ref, Decimal(0))
+        por_sku[ref] = float(total)
+        detalle[ref] = {
+            'oc': float(por_oc.get(ref, 0)),
+            'contenedores': float(por_cont.get(ref, 0)),
+            'ocs': sorted(ocs_de.get(ref, ())),
+            'lineas_sin_unidad_base': sin_unidad.get(ref, 0),
+            'solapamiento_posible': bool(por_oc.get(ref) and por_cont.get(ref)),
+        }
+
+    sync = frescura_oc()
+    oc_sabe = bool(sync.get('completa_utc')) and oc is not None
+    fuentes = {}
+    if oc is not None:
+        fuentes['OC_SIESA'] = {'refs': len(por_oc),
+                               'unidades': round(float(sum(por_oc.values())), 2),
+                               'espejo_completo': oc_sabe}
+    if cont is not None:
+        fuentes['IMPORTACION'] = {'refs': len(por_cont),
+                                  'unidades': round(float(sum(por_cont.values())), 2)}
+    hay_dato = oc_sabe or bool(por_cont)
+
+    return {
+        'por_sku': por_sku,
+        'detalle': detalle,
+        'declaracion': {
+            'fuentes': fuentes,
+            'fuentes_con_error': errores,
+            'completo': not errores,
+            'hay_dato': hay_dato,
+            'nota': (None if hay_dato else
+                     'Ninguna fuente de «en camino» tiene datos: nunca hubo una '
+                     'sincronización completa de OCs de Siesa y no hay contenedores '
+                     'registrados en camino. El término en tránsito de la posición '
+                     'vale 0 porque NO SE SABE, no porque no venga nada.'),
+            'bodegas': sorted(pedidas),
+            'bodegas_ignoradas_no_operadas': ignoradas,
+            'lineas_oc_abiertas': oc['lineas'] if oc else None,
+            'lineas_sin_unidad_base': sum(sin_unidad.values()),
+            'lineas_fuera_de_lista_blanca': oc['fuera_lista_blanca'] if oc else None,
+            'lineas_fuera_del_filtro_de_bodega': oc['fuera_de_filtro'] if oc else None,
+            'lineas_sin_bodega': oc['sin_bodega'] if oc else None,
+            'contenedor_cubierto_por_su_oc': cont['cubiertos_por_oc'] if cont else None,
+            'contenedor_cita_oc_cerrada': cont['oc_citada_cerrada'] if cont else None,
+            'contenedor_oc_no_verificable': cont['oc_no_verificable'] if cont else None,
+            'contenedor_fuera_de_bodegas': cont['fuera'] if cont else None,
+            'skus_con_solapamiento_posible': sum(
+                1 for d in detalle.values() if d['solapamiento_posible']),
+            'sync_oc': sync,
+        },
+    }
+
+
+def _pendiente_de_ocs_abiertas(filtro_skus, operadas, pedidas) -> dict:
+    """Fuente `OC_SIESA` de `en_camino`: el pendiente (unidad base) de las
+    líneas de OC abiertas, por SKU, solo a bodegas operadas y pedidas."""
+    from app.models.compras_fuentes import OcLineaSiesa
+
+    por_sku = defaultdict(Decimal)
     ocs_de = defaultdict(set)
     sin_unidad = defaultdict(int)
-    fuera_lista_blanca = 0
-    fuera_de_filtro = 0
-    sin_bodega = 0
+    fuera_lista_blanca = fuera_de_filtro = sin_bodega = 0
 
     filas = (db.session.query(OcLineaSiesa.referencia, OcLineaSiesa.bodega,
                               OcLineaSiesa.pendiente_base, OcLineaSiesa.co,
@@ -183,18 +282,36 @@ def en_camino(skus=None, bodegas=None) -> dict:
             sin_unidad[ref] += 1
             continue
         if pendiente > 0:
-            oc[ref] += Decimal(pendiente)
+            por_sku[ref] += Decimal(pendiente)
             ocs_de[ref].add(f'{co or ""}-{tipo or ""}-{consec or ""}')
+    return {'por_sku': por_sku, 'ocs_de': ocs_de, 'sin_unidad': sin_unidad,
+            'abiertas_citables': abiertas_citables, 'lineas': len(filas),
+            'fuera_lista_blanca': fuera_lista_blanca,
+            'fuera_de_filtro': fuera_de_filtro, 'sin_bodega': sin_bodega}
 
-    cont = defaultdict(Decimal)
-    cubiertos_por_oc = 0
-    oc_citada_cerrada = 0
-    cont_fuera = 0
+
+def _contenedores_en_camino(filtro_skus, pedidas, abiertas_citables) -> dict:
+    """Fuente `IMPORTACION` de `en_camino`: ítems de contenedor comprados y sin
+    recibir. `abiertas_citables=None` = la fuente de OCs falló: un ítem que
+    cita su OC no se puede verificar y **se suma** (contar de más achica el
+    déficit, el lado que un humano corrige; Regla 0), declarado."""
+    from sqlalchemy import and_, or_
+    from app.models.importacion import Contenedor, ItemEnTransito
+    from app.models.producto import Producto
+
+    por_sku = defaultdict(Decimal)
+    cubiertos_por_oc = oc_citada_cerrada = oc_no_verificable = fuera = 0
     items = (db.session.query(Producto.codigo_siesa, ItemEnTransito.cantidad,
                               ItemEnTransito.oc_referencia,
                               ItemEnTransito.bodega_destino)
              .join(Producto, ItemEnTransito.producto_id == Producto.id)
-             .filter(ItemEnTransito.estado.in_(ESTADOS_CONTENEDOR_EN_CAMINO))
+             .outerjoin(Contenedor, ItemEnTransito.contenedor_id == Contenedor.id)
+             .filter(ItemEnTransito.estado != 'RECIBIDO')
+             .filter(or_(
+                 Contenedor.estado.in_(ESTADOS_EN_CAMINO),
+                 and_(ItemEnTransito.contenedor_id.is_(None),
+                      ItemEnTransito.estado.in_(ESTADOS_EN_CAMINO)),
+             ))
              .all())
     for ref, cantidad, oc_ref, bodega in items:
         ref = (ref or '').strip()
@@ -202,50 +319,24 @@ def en_camino(skus=None, bodegas=None) -> dict:
             continue
         bodega = (bodega or '').strip() or _bodega_cdi()
         if bodega not in pedidas:
-            cont_fuera += 1
+            fuera += 1
             continue
         oc_ref = (oc_ref or '').strip()
         if oc_ref:
-            if oc_ref in abiertas_citables:
+            if abiertas_citables is None:
+                oc_no_verificable += 1
+            elif oc_ref in abiertas_citables:
                 cubiertos_por_oc += 1     # ya está en el pendiente de la OC
                 continue
-            # La OC que cita ya no está abierta: o entró (y está en stock) o
-            # se anuló. Sumarla sería contar dos veces lo que ya entró.
-            oc_citada_cerrada += 1
-            continue
-        cont[ref] += Decimal(cantidad or 0)
-
-    por_sku, detalle = {}, {}
-    for ref in set(oc) | set(cont) | set(sin_unidad):
-        total = oc.get(ref, Decimal(0)) + cont.get(ref, Decimal(0))
-        por_sku[ref] = float(total)
-        detalle[ref] = {
-            'oc': float(oc.get(ref, 0)),
-            'contenedores': float(cont.get(ref, 0)),
-            'ocs': sorted(ocs_de.get(ref, ())),
-            'lineas_sin_unidad_base': sin_unidad.get(ref, 0),
-            'solapamiento_posible': bool(oc.get(ref) and cont.get(ref)),
-        }
-
-    return {
-        'por_sku': por_sku,
-        'detalle': detalle,
-        'declaracion': {
-            'bodegas': sorted(pedidas),
-            'bodegas_ignoradas_no_operadas': ignoradas,
-            'lineas_oc_abiertas': len(filas),
-            'lineas_sin_unidad_base': sum(sin_unidad.values()),
-            'lineas_fuera_de_lista_blanca': fuera_lista_blanca,
-            'lineas_fuera_del_filtro_de_bodega': fuera_de_filtro,
-            'lineas_sin_bodega': sin_bodega,
-            'contenedor_cubierto_por_su_oc': cubiertos_por_oc,
-            'contenedor_cita_oc_cerrada': oc_citada_cerrada,
-            'contenedor_fuera_de_bodegas': cont_fuera,
-            'skus_con_solapamiento_posible': sum(
-                1 for d in detalle.values() if d['solapamiento_posible']),
-            'sync_oc': frescura_oc(),
-        },
-    }
+            else:
+                # La OC que cita ya no está abierta: o entró (y está en stock)
+                # o se anuló. Sumarla sería contar dos veces lo que ya entró.
+                oc_citada_cerrada += 1
+                continue
+        por_sku[ref] += Decimal(cantidad or 0)
+    return {'por_sku': por_sku, 'cubiertos_por_oc': cubiertos_por_oc,
+            'oc_citada_cerrada': oc_citada_cerrada,
+            'oc_no_verificable': oc_no_verificable, 'fuera': fuera}
 
 
 def resumen_lineas_abiertas() -> dict:
@@ -372,16 +463,57 @@ def observaciones_lead_time() -> dict:
             'descartadas': dict(descartadas)}
 
 
-def _medido(dias, nivel, sigma_default, **extra):
+def _numero_env(nombre, defecto, minimo):
+    try:
+        v = float(os.environ[nombre])
+        if v >= minimo:
+            return v, True
+    except (KeyError, TypeError, ValueError):
+        pass
+    return float(defecto), False
+
+
+def default_lead_time(origen: str = None) -> dict:
+    """El default DECLARADO por origen — el último escalón de `lead_time` y el
+    piso conservador de la regla D9. Nacional es configurable
+    (`ROP_LT_NACIONAL_DIAS` / `ROP_SIGMA_LT_NACIONAL`); China no (sale de los
+    contenedores). Un valor ilegible o negativo cae al default, declarado.
+
+    Returns: {lt_dias, sigma_lt, fuente: CONFIGURADO | DEFAULT_CONSERVADOR}
+    """
+    if (origen or '').strip().upper() == ORIGEN_CHINA:
+        return {'lt_dias': float(LT_CHINA_DIAS), 'sigma_lt': float(SIGMA_LT_CHINA),
+                'fuente': 'DEFAULT_CONSERVADOR'}
+    lt, c1 = _numero_env(ENV_LT_NACIONAL, LT_NACIONAL_DIAS, minimo=1)
+    slt, c2 = _numero_env(ENV_SIGMA_LT_NACIONAL, SIGMA_LT_NACIONAL, minimo=0)
+    return {'lt_dias': lt, 'sigma_lt': slt,
+            'fuente': 'CONFIGURADO' if (c1 or c2) else 'DEFAULT_CONSERVADOR'}
+
+
+def _medido(dias, nivel, piso, **extra):
+    """Lo medido, con la regla D9: con 3 a 5 observaciones se usa **el mayor**
+    entre lo medido y el piso conservador (`default_lead_time`), para la media
+    y para la σ — tres contenedores de 118/120/122 días no reemplazan σ=15 por
+    σ=2: la muestra no alcanza ni para estimar una varianza. Desde
+    `N_MIN_MEDIDO`, lo medido manda."""
     n = len(dias)
-    lt = statistics.mean(dias)
-    sigma = statistics.stdev(dias) if n > 1 else sigma_default
-    fuente = 'MEDIDO' if n >= N_MIN_MEDIDO else 'PARCIAL'
+    lt_m = statistics.mean(dias)
+    sigma_m = statistics.stdev(dias) if n > 1 else piso['sigma_lt']
+    if n >= N_MIN_MEDIDO:
+        fuente, lt, sigma, nota = 'MEDIDO', lt_m, sigma_m, None
+    else:
+        fuente = 'PARCIAL'
+        lt = max(lt_m, piso['lt_dias'])
+        sigma = max(sigma_m, piso['sigma_lt'])
+        nota = (f'{n} observaciones: se usa el MAYOR entre lo medido (LT {lt_m:.1f}, '
+                f'σ {sigma_m:.1f}) y el conservador (LT {piso["lt_dias"]:g}, '
+                f'σ {piso["sigma_lt"]:g}) hasta tener {N_MIN_MEDIDO} (D9).')
     return {
         'lt_dias': round(lt, 1), 'lt_medio': round(lt, 1),
-        'sigma_lt': round(sigma, 1), 'n': n, 'lead_times': list(dias),
+        'sigma_lt': round(sigma, 1), 'lt_medido': round(lt_m, 1),
+        'sigma_lt_medida': round(sigma_m, 1), 'n': n, 'lead_times': list(dias),
         'fuente': fuente, 'confianza': 'ALTA' if fuente == 'MEDIDO' else 'MEDIA',
-        'nivel': nivel, 'nota': None, **extra,
+        'nivel': nivel, 'nota': nota, **extra,
     }
 
 
@@ -393,20 +525,23 @@ def lead_time(proveedor: str = None, origen: str = None,
       1. el proveedor (`Proveedor.codigo` = `f200_id_prov`), si tiene ≥3 OCs medidas;
       2. el origen: CHINA → contenedores; NACIONAL → OCs en COP de proveedores
          no chinos;
-      3. el default declarado (5±2 nacional, 105±15 China).
+      3. el default declarado (`default_lead_time`: 5±2 nacional, configurable
+         con `ROP_LT_NACIONAL_DIAS` / `ROP_SIGMA_LT_NACIONAL`; 105±15 China).
+    En los niveles medidos rige D9 (ver `_medido`): con < 6 observaciones, el
+    mayor entre lo medido y el default.
 
     `observaciones` se pasa cuando se consulta muchas veces seguidas (el ROP,
     un SKU por fila) para no releer la base en cada llamada.
 
     Returns: {lt_dias, lt_medio, sigma_lt, n, fuente (MEDIDO|PARCIAL|
-              DEFAULT_CONSERVADOR), confianza (ALTA|MEDIA|NINGUNA), nivel
-              (PROVEEDOR|ORIGEN|DEFAULT), proveedor, origen, lead_times, nota}
+              CONFIGURADO|DEFAULT_CONSERVADOR), confianza (ALTA|MEDIA|NINGUNA),
+              nivel (PROVEEDOR|ORIGEN|DEFAULT), proveedor, origen, lead_times,
+              lt_medido, sigma_lt_medida (solo medidos), nota}
     """
     obs = observaciones if observaciones is not None else observaciones_lead_time()
     org = (origen or ORIGEN_NACIONAL).strip().upper()
     es_china = org == ORIGEN_CHINA
-    lt_def, sigma_def = ((LT_CHINA_DIAS, SIGMA_LT_CHINA) if es_china
-                         else (LT_NACIONAL_DIAS, SIGMA_LT_NACIONAL))
+    piso = default_lead_time(ORIGEN_CHINA if es_china else ORIGEN_NACIONAL)
     extra = {'proveedor': proveedor, 'origen': ORIGEN_CHINA if es_china else ORIGEN_NACIONAL}
 
     n_prov = 0
@@ -414,26 +549,36 @@ def lead_time(proveedor: str = None, origen: str = None,
         dias = [o['dias'] for o in obs['por_oc'] if o['proveedor_codigo'] == proveedor]
         n_prov = len(dias)
         if n_prov >= N_MIN_PARCIAL:
-            return _medido(dias, 'PROVEEDOR', sigma_def, **extra)
+            return _medido(dias, 'PROVEEDOR', piso, **extra)
 
     pool = (list(obs['contenedores']) if es_china
             else [o['dias'] for o in obs['por_oc'] if o['nacional']])
     if len(pool) >= N_MIN_PARCIAL:
-        r = _medido(pool, 'ORIGEN', sigma_def, **extra)
+        r = _medido(pool, 'ORIGEN', piso, **extra)
         if proveedor:
-            r['nota'] = (f'El proveedor {proveedor} tiene {n_prov} OC(s) medida(s) '
-                         f'(mínimo {N_MIN_PARCIAL}): se usa el del origen.')
+            aviso = (f'El proveedor {proveedor} tiene {n_prov} OC(s) medida(s) '
+                     f'(mínimo {N_MIN_PARCIAL}): se usa el del origen.')
+            r['nota'] = f'{aviso} {r["nota"]}' if r['nota'] else aviso
         return r
 
     que = 'contenedores' if es_china else 'OCs nacionales'
+    lt_def, sigma_def = piso['lt_dias'], piso['sigma_lt']
+    if piso['fuente'] == 'CONFIGURADO':
+        nota = (f'Solo {len(pool)} {que} con fechas completas (mínimo {N_MIN_PARCIAL}): '
+                f'se usa el lead time CONFIGURADO ({ENV_LT_NACIONAL} / '
+                f'{ENV_SIGMA_LT_NACIONAL}) {lt_def:g}±{sigma_def:g} días.')
+    else:
+        nota = (f'Solo {len(pool)} {que} con fechas completas (mínimo {N_MIN_PARCIAL}) '
+                f'— usando el default declarado {lt_def:g}±{sigma_def:g} días, un '
+                f'SUPUESTO que nadie midió'
+                + ('' if es_china else
+                   f' (configurable con {ENV_LT_NACIONAL} / {ENV_SIGMA_LT_NACIONAL})')
+                + '.')
     return {
         'lt_dias': lt_def, 'lt_medio': lt_def, 'sigma_lt': sigma_def,
         'n': n_prov if proveedor else len(pool), 'lead_times': [],
-        'fuente': 'DEFAULT_CONSERVADOR', 'confianza': 'NINGUNA', 'nivel': 'DEFAULT',
-        'nota': (f'Solo {len(pool)} {que} con fechas completas (mínimo '
-                 f'{N_MIN_PARCIAL}) — usando el default declarado '
-                 f'{lt_def}±{sigma_def} días.'),
-        **extra,
+        'fuente': piso['fuente'], 'confianza': 'NINGUNA', 'nivel': 'DEFAULT',
+        'nota': nota, **extra,
     }
 
 

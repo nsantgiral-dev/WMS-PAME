@@ -317,6 +317,38 @@ class TestEnCamino:
         _item(db, producto, _contenedor(db), 20, bodega='AV1')
         assert en_camino()['por_sku'] == {}
 
+    def test_una_fuente_que_revienta_se_declara_no_suma_cero(self, app, db, producto,
+                                                               monkeypatch):
+        """Del motor: «viene 0» y «no sé qué viene» empujan la compra al mismo
+        lado. La fuente que falla va a `fuentes_con_error`; la otra sigue."""
+        from app.services import compras_fuentes
+        _sync(SiesaFalsa({ABIERTAS_1: [fila_oc(1, pedida_base=70)]}))
+
+        def _revienta(*a, **k):
+            raise RuntimeError('tabla de contenedores ilegible')
+        monkeypatch.setattr(compras_fuentes, '_contenedores_en_camino', _revienta)
+        r = compras_fuentes.en_camino()
+        assert r['por_sku'] == {'PROD-001': 70.0}
+        d = r['declaracion']
+        assert d['completo'] is False
+        assert d['fuentes_con_error'][0]['fuente'] == 'IMPORTACION'
+        assert 'IMPORTACION' not in d['fuentes'] and d['fuentes']['OC_SIESA']['refs'] == 1
+
+    def test_si_revientan_las_ocs_el_contenedor_que_cita_una_se_suma(self, app, db,
+                                                                     producto, monkeypatch):
+        """Sin saber qué OCs siguen abiertas, el ítem que cita su OC no se puede
+        descontar: se suma (contar de más achica el déficit, Regla 0) y se dice."""
+        from app.services import compras_fuentes
+        _item(db, producto, _contenedor(db), 25, oc='003-OC-10')
+
+        def _revienta(*a, **k):
+            raise RuntimeError('espejo ilegible')
+        monkeypatch.setattr(compras_fuentes, '_pendiente_de_ocs_abiertas', _revienta)
+        r = compras_fuentes.en_camino()
+        assert r['por_sku'] == {'PROD-001': 25.0}
+        assert r['declaracion']['contenedor_oc_no_verificable'] == 1
+        assert r['declaracion']['completo'] is False
+
     def test_sin_sync_lo_declara(self, app, db):
         from app.services.compras_fuentes import en_camino
         fr = en_camino()['declaracion']['sync_oc']
@@ -348,7 +380,10 @@ class TestElArmadorLoSuma:
         despues = r['china']['items'][0]
         assert despues['en_transito'] == 70 and despues['posicion'] == antes['posicion'] + 70
         assert despues['deficit'] == max(0, antes['deficit'] - 70)
-        assert r['en_camino']['lineas_fuera_de_lista_blanca'] == 1
+        # Integración: la declaración de lo que viene sale en `insumo_en_camino`
+        # (el nombre del motor; antes había dos claves para lo mismo).
+        assert r['insumo_en_camino']['lineas_fuera_de_lista_blanca'] == 1
+        assert r['insumo_en_camino']['hay_dato'] is True
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -422,7 +457,11 @@ class TestLeadTime:
                                       fecha_recepcion_cedi=date(2025, 1, 1) + timedelta(days=90 + i * 10)))
         db.session.commit()
         r = ArmadorService.calcular_sigma_lt_real()
-        assert r['nivel'] == 'ORIGEN' and r['lt_medio'] == 100 and r['n'] == 3
+        # Integración con el motor (D9): con 3 a 5 contenedores se usa el MAYOR
+        # entre lo medido (100 ± 10) y el conservador (105 ± 15). Antes esta
+        # prueba esperaba 100: lo medido reemplazaba al conservador desde 3.
+        assert r['nivel'] == 'ORIGEN' and r['n'] == 3 and r['fuente'] == 'PARCIAL'
+        assert r['lt_medido'] == 100 and r['lt_medio'] == 105 and r['sigma_lt'] == 15
 
     def test_el_rop_usa_el_lead_time_del_proveedor_habitual(self, app, db, producto, monkeypatch):
         from app.services.kardex_service import KardexService

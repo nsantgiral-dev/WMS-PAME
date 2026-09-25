@@ -1,16 +1,28 @@
-"""Trinquetes de las fuentes de compras (m046compras) — todo por AST.
+"""Trinquetes de «lo que viene» y del lead time — todo por AST.
+
+**Los únicos de estas dos clases.** El frente del motor («Compras: los números
+correctos») y el de las fuentes (m046compras) escribieron cada uno el suyo
+(`armador_service.en_camino` / `lead_time` con `LECTURAS_PERMITIDAS`, y éstos);
+al integrarlos quedó UNA función por pregunta —`compras_fuentes.en_camino` y
+`compras_fuentes.lead_time`— y UN trinquete por clase, que junta lo que veía
+cada uno.
 
 Tres clases, cada una con su inventario que solo encoge, meta-tests (lo que
 debe ver, lo sano que no) y un piso:
 
 1. **Nadie calcula «en camino» fuera de `compras_fuentes`.** Lo que se detecta:
    restar cantidades de una OC (`f421_cant_pedida` − `f421_cant_entrada`, o los
-   atributos `cant_pedida*`/`cant_entrada*`), leer `ItemEnTransito.cantidad` o
-   leer `pendiente_base`. Así nació el término que valía 0: el armador sumaba
-   `ItemEnTransito.cantidad` por su cuenta, sobre una tabla sin escritor.
+   atributos `cant_pedida*`/`cant_entrada*`), leer `ItemEnTransito.cantidad`,
+   leer `pendiente_base`, **sumar** (`sum(`/`func.sum(`) en una función que lee
+   `ItemEnTransito` (la suma de lo que viene, escrita por instancia), o leer
+   `ESTADOS_EN_CAMINO` (decidir qué estados cuentan como «viene»). Así nació el
+   término que valía 0: el armador sumaba `ItemEnTransito.cantidad` por su
+   cuenta, sobre una tabla sin escritor. Leer o escribir `ItemEnTransito` para
+   operarlo (cargar un contenedor, contar ítems en G5) no es calcular.
 2. **Nadie decide un lead time fuera de `lead_time`.** Leer los defaults
-   (`LT_NACIONAL_DIAS`…), la observación de un contenedor (`.lead_time_real`) o
-   restar una `fecha_oc` es elegir un lead time.
+   (`LT_NACIONAL_DIAS`…), sus variables de entorno (`ROP_LT_NACIONAL_DIAS`,
+   `ROP_SIGMA_LT_NACIONAL`), la observación de un contenedor
+   (`.lead_time_real`) o restar una `fecha_oc` es elegir un lead time.
 3. **El sync de OCs no cierra con paginación incompleta, y nada borra una
    línea de OC.** El cierre (`abierta = False`, `NO_APARECE_EN_ABIERTAS`) vive
    bajo `if completa`, y ningún `.delete(` toca `OcLineaSiesa`.
@@ -30,7 +42,12 @@ DEFINICIONES = {'app/models/compras_fuentes.py', 'app/models/importacion.py'}
 _CAMPOS_CANT_OC = {'f421_cant_pedida', 'f421_cant_entrada',
                    'f421_cant_pedida_base', 'f421_cant_entrada_base'}
 _ATRIB_CANT_OC = {'cant_pedida', 'cant_entrada', 'cant_pedida_base', 'cant_entrada_base'}
-_DEFAULTS_LT = {'LT_NACIONAL_DIAS', 'LT_CHINA_DIAS', 'SIGMA_LT_NACIONAL', 'SIGMA_LT_CHINA'}
+_DEFAULTS_LT = {'LT_NACIONAL_DIAS', 'LT_CHINA_DIAS', 'SIGMA_LT_NACIONAL', 'SIGMA_LT_CHINA',
+                'ENV_LT_NACIONAL', 'ENV_SIGMA_LT_NACIONAL'}
+#: Las variables de entorno del lead time: leerlas es decidirlo.
+_ENV_LT = {'ROP_LT_NACIONAL_DIAS', 'ROP_SIGMA_LT_NACIONAL'}
+#: Qué estados cuentan como «viene»: es parte de la política de `en_camino`.
+_ESTADOS_EN_CAMINO = {'ESTADOS_EN_CAMINO'}
 
 #: Sitios fuera del dueño que restan cantidades de una OC. **No son «en
 #: camino»**: contestan cuánto falta RECIBIR de una OC puntual en el muelle. Solo
@@ -111,6 +128,20 @@ def _menciona_cantidad_oc(nodos, docs):
     return False
 
 
+def _lee_item_en_transito(nodos):
+    return any(isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)
+               and n.id == 'ItemEnTransito' for n in nodos)
+
+
+def _es_suma(n):
+    """`sum(...)` o `func.sum(...)` / `sa.func.sum(...)`."""
+    if not isinstance(n, ast.Call):
+        return False
+    f = n.func
+    return ((isinstance(f, ast.Name) and f.id == 'sum')
+            or (isinstance(f, ast.Attribute) and f.attr == 'sum'))
+
+
 def escanear_en_camino(fuente: str) -> dict:
     """`{qualname: [líneas]}` de lo que calcula «en camino»."""
     arbol = ast.parse(fuente)
@@ -121,7 +152,14 @@ def escanear_en_camino(fuente: str) -> dict:
         if _menciona_cantidad_oc(nodos, docs):
             lineas += [n.lineno for n in nodos
                        if isinstance(n, ast.BinOp) and isinstance(n.op, ast.Sub)]
+        if _lee_item_en_transito(nodos):
+            lineas += [n.lineno for n in nodos if _es_suma(n)]
         for n in nodos:
+            if ((isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)
+                 and n.id in _ESTADOS_EN_CAMINO)
+                    or (isinstance(n, ast.Attribute) and isinstance(n.ctx, ast.Load)
+                        and n.attr in _ESTADOS_EN_CAMINO)):
+                lineas.append(n.lineno)
             if (isinstance(n, ast.Attribute) and isinstance(n.ctx, ast.Load)
                     and n.attr == 'cantidad' and isinstance(n.value, ast.Name)
                     and n.value.id == 'ItemEnTransito'):
@@ -137,10 +175,14 @@ def escanear_en_camino(fuente: str) -> dict:
 def escanear_lead_time(fuente: str) -> dict:
     """`{qualname: [líneas]}` de lo que elige un lead time."""
     arbol = ast.parse(fuente)
+    docs = _docstrings(arbol)
     out = {}
     for q, nodos in _unidades(arbol).items():
         lineas = []
         for n in nodos:
+            if (isinstance(n, ast.Constant) and isinstance(n.value, str)
+                    and n.value in _ENV_LT and id(n) not in docs):
+                lineas.append(n.lineno)
             if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load) and n.id in _DEFAULTS_LT:
                 lineas.append(n.lineno)
             if (isinstance(n, ast.Attribute) and isinstance(n.ctx, ast.Load)
@@ -196,7 +238,15 @@ class TestNadieCalculaEnCaminoPorFuera:
         """Si el escáner se rompe devuelve cero y todo pasa: el dueño tiene que
         aparecer."""
         hallados = escanear_en_camino((RAIZ / DUENO).read_text(encoding='utf-8'))
-        assert 'pendiente_de_linea' in hallados and 'en_camino' in hallados
+        assert {'pendiente_de_linea', '_pendiente_de_ocs_abiertas',
+                '_contenedores_en_camino'} <= set(hallados)
+
+    def test_piso_el_armador_no_calcula(self):
+        """El Armador (ROP, contenedor, posición) es el consumidor más grande:
+        que no aparezca es la mitad de la propiedad, no un cero tranquilo."""
+        src = (RAIZ / 'app/services/armador_service.py').read_text(encoding='utf-8')
+        assert 'ItemEnTransito' in src and 'compras_fuentes' in src
+        assert escanear_en_camino(src) == {}
 
 
 class TestElEscanerDeEnCaminoMuerde:
@@ -220,6 +270,29 @@ class TestElEscanerDeEnCaminoMuerde:
     def test_la_funcion_anidada_es_su_propia_unidad(self):
         src = "def f():\n    def g(l):\n        return l.pendiente_base\n    return g\n"
         assert set(escanear_en_camino(src)) == {'f.g'}
+
+    def test_ve_la_suma_por_instancia(self):
+        """La forma del motor: sumar lo que viene recorriendo los ítems."""
+        src = ("def f():\n"
+               "    items = ItemEnTransito.query.filter_by(estado='NAVEGANDO').all()\n"
+               "    return sum(i.cantidad for i in items)\n")
+        assert escanear_en_camino(src) == {'f': [3]}
+
+    def test_ve_decidir_que_estados_vienen(self):
+        src = 'def f(c):\n    return c.estado in armador.ESTADOS_EN_CAMINO\n'
+        assert 'f' in escanear_en_camino(src)
+        assert 'g' in escanear_en_camino('def g(c):\n    return c.estado in ESTADOS_EN_CAMINO\n')
+
+    def test_no_marca_operar_el_contenedor(self):
+        """Cargar, listar o contar ítems (G5) no es calcular lo que viene."""
+        src = ('def cargar(p, c):\n'
+               '    db.session.add(ItemEnTransito(producto_id=p, contenedor_id=c, cantidad=3))\n'
+               '    for i in ItemEnTransito.query.filter_by(contenedor_id=c).all():\n'
+               '        i.estado = "RECIBIDO"\n'
+               '    return ItemEnTransito.query.count()\n'
+               'def otra(xs):\n'
+               '    return sum(xs)\n')
+        assert escanear_en_camino(src) == {}
 
     def test_no_marca_lo_sano(self):
         src = (
@@ -253,7 +326,7 @@ class TestNadieDecideLeadTimePorFuera:
 
     def test_piso_el_dueno_si_decide(self):
         hallados = escanear_lead_time((RAIZ / DUENO).read_text(encoding='utf-8'))
-        assert 'lead_time' in hallados and 'observaciones_lead_time' in hallados
+        assert {'lead_time', 'observaciones_lead_time', 'default_lead_time'} <= set(hallados)
 
     def test_el_armador_solo_reexporta(self):
         """Importar los defaults para compatibilidad no es usarlos."""
@@ -271,6 +344,14 @@ class TestElEscanerDeLeadTimeMuerde:
 
     def test_ve_la_observacion_del_contenedor(self):
         assert 'f' in escanear_lead_time('def f(c):\n    return c.lead_time_real\n')
+
+    def test_ve_la_variable_de_entorno(self):
+        src = "def f():\n    return float(os.getenv('ROP_LT_NACIONAL_DIAS', 5))\n"
+        assert escanear_lead_time(src) == {'f': [2]}
+
+    def test_no_ve_la_variable_en_el_docstring(self):
+        src = 'def f():\n    """Configurable con ROP_LT_NACIONAL_DIAS."""\n    return 1\n'
+        assert escanear_lead_time(src) == {}
 
     def test_ve_una_resta_de_fechas_de_oc(self):
         src = 'def f(c):\n    return (c.fecha_recepcion_cedi - c.fecha_oc).days\n'

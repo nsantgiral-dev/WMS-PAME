@@ -116,11 +116,12 @@ class TestElDenominadorEsElDiaNoElMovimiento:
 
     def test_el_rop_de_la_grumosa(self, app, db):
         """El ROP nacional sale de la misma demanda: 37 y no 332."""
-        from app.services.armador_service import ArmadorService, lead_time, sigma_ltd
+        from app.services.armador_service import ArmadorService, sigma_ltd
+        from app.services.compras_fuentes import lead_time
         from app.services.kardex_service import _norm_ppf
         self._grumosa(db)
         m, s, _n = _referencia({5 + 25 * k: 40 for k in range(14)}, lambda i: True)
-        lt = lead_time('NACIONAL')
+        lt = lead_time(origen='NACIONAL')
         z = _norm_ppf(0.95)
         esperado = m * lt['lt_dias'] + z * sigma_ltd(lt['lt_dias'], s, m, lt['sigma_lt'])
         fila = next(f for f in ArmadorService.rop_dual(0.95)['nacional']['items']
