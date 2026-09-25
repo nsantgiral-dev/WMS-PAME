@@ -190,11 +190,15 @@ _NEGRA = {'CONDUCTOR', 'TIENDA'}
 
 #: (archivo, función) → por qué. **Solo encoge.**
 LISTAS_NEGRAS_DECLARADAS = {
-    ('_auth_helpers.py', '_puede_autorizar_cartera'):
-        'permiso por PERSONA (casilla); el rol solo descarta a quien nunca opera despachos. '
-        'Pasa a lista blanca cuando exista el rol «líder de cartera» (decisión del dueño)',
+    # Inventario movió la decisión de `_auth_helpers._puede_autorizar_cartera`
+    # a `cartera_service.puede_autorizar` (una política para la ruta y la
+    # salud); la entrada se muda con ella, no se agrega otra.
+    ('cartera_service.py', 'puede_autorizar'):
+        'permiso por PERSONA (casilla) o el rol de cartera cuando exista; el rol solo '
+        'descarta a quien nunca opera despachos (conductor, tienda). Pasa a lista blanca '
+        'cuando exista el rol «líder de cartera» (decisión del dueño)',
     ('_auth_helpers.py', '_ve_cartera'):
-        'mismo permiso por persona que _puede_autorizar_cartera',
+        'mismo permiso por persona que cartera_service.puede_autorizar',
 }
 
 

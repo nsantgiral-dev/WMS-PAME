@@ -218,11 +218,9 @@ CEROS_POR_OMISION_DECLARADOS = {
         'y la exige ahí — pendiente pasarla a la misma política',
     ('recepcion.py', 'cantidad_averiada'):
         'recepción: «no declaró averías» es 0 en el formulario de escaneo',
-    ('rutas.py', 'cantidad_devuelta'):
-        'verificación de devolución: pendiente — un renglón sin cantidad debería '
-        'rechazarse, no leerse como «no volvió nada»',
-    ('rutas.py', 'cantidad_pedida'):
-        'lee un ítem ya guardado en el recaudo, no una declaración',
+    # ('rutas.py', 'cantidad_devuelta') y ('rutas.py', 'cantidad_pedida') salieron
+    # al integrar: vivían en `/liquidar-completo`, que el frente de liquidación
+    # borró (2026-09-25).
     ('siesa.py', 'f421_cant_pedida'): 'fila de Siesa, no una declaración de persona',
     ('siesa.py', 'f421_cant_entrada'): 'fila de Siesa, no una declaración de persona',
     ('traslados.py', 'cantidad'): 'arma el payload de Siesa desde un ítem ya validado',
