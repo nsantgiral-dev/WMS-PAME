@@ -291,3 +291,24 @@ class TestTrinqueteNadieAfirmaProcesado:
 
     def test_piso(self):
         assert len(list(PWA.glob('*.js'))) >= 20
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 4 · Con el closer y la compuerta de cartera REALES
+# ═════════════════════════════════════════════════════════════════════════════
+
+from tests.test_cartera_retencion import fake, _historia, _tarea as _tarea_cartera  # noqa: E402,F401
+
+
+class TestConLaCompuertaReal:
+
+    def test_la_retencion_g2_llega_con_su_estado_y_su_id(self, db, fake, almacen):
+        from app.models.cartera import RetencionCartera
+        from app.services.closing.pedido_closer import PedidoPackingCloser
+        fake.cliente(cupo=0)
+        _historia(db, '003-PD-903')
+        t = _tarea_cartera(db, almacen, '003-PD-903', cond='C04')
+        with patch.object(PedidoPackingCloser, '_precheck_siesa', return_value=None):
+            res = PedidoPackingCloser().ejecutar_cierre(t.id, [{'tipo': 'Caja', 'cantidad': 1}], 0)
+        r = RetencionCartera.query.filter_by(pedido_clave='003-PD-903').one()
+        assert (res.exitoso, res.estado, res.retencion_id) == (False, 'RETENIDO_CARTERA', r.id)
