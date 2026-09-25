@@ -302,6 +302,25 @@ LA_POLITICA = RAIZ / 'flota' / 'dominio' / 'salida.py'
 #: Sitios fuera de la política que nombran un nivel, con su motivo. Solo encoge.
 INVENTARIO_PY: dict = {}
 
+#: OTROS semáforos, que no son el de un vehículo y usan las mismas palabras.
+#: Cada uno es la única función de SU pregunta (Regla 0: una política, una
+#: función), y el trinquete los exime solo en ese ámbito —la función o la
+#: constante de módulo—, no el archivo entero: un nivel de vehículo decidido
+#: en otra función del mismo archivo sigue rojo. Llegaron en la integración del
+#: 2026-09-24 (analítica «¿cómo vamos?» y «solo lo actual»), escritos en
+#: paralelo a este trinquete. Una entrada nueva es una decisión: `test_otros_
+#: semaforos_no_crecen` la frena.
+OTROS_SEMAFOROS = {
+    ('app/services/analitica_kpi.py', 'semaforo'):
+        'Semáforo de una métrica contra su META (portada de analítica); no mira vehículos',
+    ('app/services/analitica_kpi.py', 'NIVELES_SEMAFORO'):
+        'El vocabulario de ese mismo semáforo de metas',
+    ('app/services/analitica_kpi.py', 'TEXTO_SEMAFORO'):
+        'Las palabras de ese mismo semáforo de metas',
+    ('app/services/dashboard_service.py', 'semaforo_de_conteo'):
+        'Semáforo de la cola de conteo cíclico del tablero; no mira vehículos',
+}
+
 
 def _violaciones_py(fuente: str):
     """Constantes de texto que SON un nivel, y usos de ROJO/AMBAR/VERDE.
@@ -322,6 +341,38 @@ def _violaciones_py(fuente: str):
     return out
 
 
+def _violaciones_con_ambito(fuente: str):
+    """Como `_violaciones_py`, con el ámbito de cada una: la función de módulo
+    que la contiene o, fuera de toda función, el nombre de la constante de
+    módulo que se asigna (`None` si no hay)."""
+    arbol = ast.parse(fuente)
+    ambito = {}
+    for top in arbol.body:
+        nombre = None
+        if isinstance(top, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            nombre = top.name
+        elif isinstance(top, (ast.Assign, ast.AnnAssign)):
+            objetivos = top.targets if isinstance(top, ast.Assign) else [top.target]
+            nombre = next((t.id for t in objetivos if isinstance(t, ast.Name)), None)
+        for n in ast.walk(top):
+            if hasattr(n, 'lineno'):
+                ambito.setdefault((n.lineno, getattr(n, 'col_offset', 0)), nombre)
+    out = []
+    for n in ast.walk(arbol):
+        que = None
+        if isinstance(n, ast.Constant) and isinstance(n.value, str) \
+                and n.value in NIVELES_LITERALES:
+            que = repr(n.value)
+        elif isinstance(n, ast.Name) and n.id in NOMBRES_DE_NIVEL \
+                and isinstance(n.ctx, ast.Load):
+            que = n.id
+        elif isinstance(n, ast.Attribute) and n.attr in NOMBRES_DE_NIVEL:
+            que = n.attr
+        if que is not None:
+            out.append((n.lineno, que, ambito.get((n.lineno, n.col_offset))))
+    return out
+
+
 def _archivos_py():
     for base in ('flota', 'app'):
         for p in sorted((RAIZ / base).rglob('*.py')):
@@ -337,8 +388,8 @@ class TestNadieMasDecideElNivelPython:
             if p == LA_POLITICA:
                 continue
             rel = str(p.relative_to(RAIZ))
-            for linea, que in _violaciones_py(p.read_text(encoding='utf-8')):
-                if rel not in INVENTARIO_PY:
+            for linea, que, ambito in _violaciones_con_ambito(p.read_text(encoding='utf-8')):
+                if rel not in INVENTARIO_PY and (rel, ambito) not in OTROS_SEMAFOROS:
                     malos.append(f'{rel}:{linea} {que}')
         assert not malos, (
             '\nUn nivel de vehículo decidido fuera de flota/dominio/salida.py:\n  '
@@ -362,6 +413,27 @@ class TestNadieMasDecideElNivelPython:
                 "t = 'Rojo es no debería salir'\n"
                 "n = motivo.nivel\n")
         assert _violaciones_py(sano) == []
+
+    def test_otros_semaforos_no_crecen_y_dicen_por_que(self):
+        assert len(OTROS_SEMAFOROS) <= 4
+        for (archivo, ambito), motivo in OTROS_SEMAFOROS.items():
+            assert len(motivo) > 20, (archivo, ambito)
+            hits = [a for _l, _q, a in _violaciones_con_ambito(
+                (RAIZ / archivo).read_text(encoding='utf-8'))]
+            # Una exención que ya no exime nada se borra (solo encoge).
+            assert ambito in hits, (archivo, ambito)
+
+    def test_la_exencion_es_por_ambito_no_por_archivo(self):
+        """Un nivel de vehículo en OTRA función de un archivo con un semáforo
+        propio sigue siendo una violación."""
+        src = ("def semaforo(v):\n    return 'rojo'\n"
+               "def color_del_camion(v):\n    return 'rojo'\n"
+               "NIVELES_SEMAFORO = ('verde',)\n")
+        ambitos = [a for _l, _q, a in _violaciones_con_ambito(src)]
+        assert sorted(ambitos) == ['NIVELES_SEMAFORO', 'color_del_camion', 'semaforo']
+        malos = [a for a in ambitos
+                 if ('app/services/analitica_kpi.py', a) not in OTROS_SEMAFOROS]
+        assert malos == ['color_del_camion']
 
     def test_piso_el_escaner_ve_la_politica(self):
         """Si el escáner se rompe devuelve cero y el test de arriba pasa

@@ -590,6 +590,8 @@ class Metrica:
 #: Los niveles del semáforo. `sin_dato` es GRIS, nunca rojo: no saber no es una
 #: mala noticia del negocio, es un hueco del dato (y se dice por qué).
 NIVELES_SEMAFORO = ('verde', 'amarillo', 'rojo', 'sin_dato', 'sin_meta')
+#: Los que cuenta la portada (una métrica de la portada siempre tiene meta).
+NIVELES_CONTADOS = NIVELES_SEMAFORO[:4]
 TEXTO_SEMAFORO = {'verde': 'En meta', 'amarillo': 'Cerca de la meta', 'rojo': 'Fuera de meta',
                   'sin_dato': 'Sin dato', 'sin_meta': 'Sin meta'}
 

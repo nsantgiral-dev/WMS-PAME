@@ -470,7 +470,7 @@ def portada(desde: date, hasta: date, almacen_id=None, hoy: date = None,
     estado_kpi = kpi.estado(dias=dias, hoy=m.hoy)
     return {
         'tarjetas': tarjetas,
-        'conteo': {n: niveles.count(n) for n in ('verde', 'amarillo', 'rojo', 'sin_dato')},
+        'conteo': {n: niveles.count(n) for n in kpi.NIVELES_CONTADOS},
         'periodo': {'desde': desde.isoformat(), 'hasta': hasta.isoformat(), 'dias': dias},
         'anterior': {'desde': m.ant_desde.isoformat(), 'hasta': m.ant_hasta.isoformat()},
         'semanas': [{'desde': a.isoformat(), 'hasta': b.isoformat()} for a, b in m.semanas],

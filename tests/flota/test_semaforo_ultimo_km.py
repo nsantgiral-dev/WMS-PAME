@@ -37,7 +37,11 @@ def _fila(client, m):
     assert r.status_code == 200, r.get_json()
     b = r.get_json()
     [f] = [x for x in b['hoy'] if x['placa'] == m.placa]
-    return b, ' | '.join(p['texto'] for p in f['semaforo']['porque']), f
+    # En minúscula: desde las costuras el texto lo escribe `flota/dominio/
+    # salida.py` y abre la frase con mayúscula («El último kilometraje…»); lo
+    # que se prueba es CUÁNDO se dice, no la caja de la letra (integración
+    # 2026-09-24).
+    return b, ' | '.join(p['texto'] for p in f['semaforo']['porque']).lower(), f
 
 
 class TestElUltimoKmEnDuda:
