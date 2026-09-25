@@ -158,6 +158,7 @@ def se_pueden_contar_las_nc_sin_aprobar(ctx=None):
                           'buscarla a mano en Auditoría')
                     + (f' hace {(ahora - d.siesa_nc_triggered_at).days} día(s)'
                        if d.siesa_nc_triggered_at else ''),
+            fecha=d.fecha_creacion,
             datos={'cliente': d.cliente, 'motivo_dian': d.siesa_motivo_dian,
                    'dias': ((ahora - d.siesa_nc_triggered_at).total_seconds() / 86400
                             if d.siesa_nc_triggered_at else None)},
@@ -183,6 +184,7 @@ def la_nc_lleva_su_motivo_dian(ctx=None):
         Hallazgo(
             referencia=d.codigo or f'devolucion#{d.id}',
             detalle=f'NCE-{d.siesa_nc_consec or "?"} sin concepto DIAN',
+            fecha=d.fecha_creacion,
             datos={'cliente': d.cliente},
         )
         for d in _devoluciones(('CONFIRMADA',))
@@ -240,6 +242,7 @@ def todo_rechazo_de_ruta_liquidada_tiene_devolucion(ctx=None):
             out.append(Hallazgo(
                 referencia=f'ruta#{r.ruta_id}/tarea#{r.tarea_id}',
                 detalle=f'parada {r.estado_entrega} de una ruta LIQUIDADA sin devolución',
+                fecha=r.fecha_confirmacion,
                 datos={'recaudo_id': r.id, 'motivo': r.motivo_rechazo}))
     return out
 
@@ -268,6 +271,7 @@ def ninguna_devolucion_de_ruta_espera_mas_de_un_dia_sin_contar(ctx=None):
         if horas >= _dr.HORAS_SIN_CONTAR_AVISO:
             out.append(Hallazgo(
                 referencia=d.codigo, detalle=f'{d.estado} hace {horas:.0f} h sin contar',
+                fecha=d.fecha_creacion,
                 datos={'pedido': d.numero_pedido_siesa, 'horas': round(horas, 1)}))
     return out
 
@@ -294,6 +298,7 @@ def un_rechazo_no_queda_con_la_devolucion_cancelada(ctx=None):
             out.append(Hallazgo(
                 referencia=f'ruta#{r.ruta_id}/tarea#{r.tarea_id}',
                 detalle=f'parada {r.estado_entrega} con su devolución CANCELADA',
+                fecha=r.fecha_confirmacion,
                 datos={'recaudo_id': r.id}))
     return out
 
@@ -341,6 +346,7 @@ def ningun_rc_espera_una_nc_que_no_llegara(ctx=None):
             referencia=f'job#{job.id}/recaudo#{rec.id}',
             detalle='RC esperando una NC que no va a salir (devolución '
                     f'{ultima.estado if ultima else "?"})',
+            fecha=job.fecha_creacion,
             datos={'devolucion': ultima.codigo if ultima else None}))
     return out
 
@@ -361,6 +367,7 @@ def una_linea_de_factura_no_se_devuelve_de_mas(ctx=None):
     La de mostrador y la de ruta sobre la misma factura se suman."""
     from app.models.devolucion_cliente import DevolucionCliente, LineaDevolucionCliente
     from app.extensions import db
+    from app.services.auditoria.traslados import _mas_nueva
     filas = (db.session.query(LineaDevolucionCliente, DevolucionCliente)
              .join(DevolucionCliente, DevolucionCliente.id == LineaDevolucionCliente.devolucion_id)
              .filter(DevolucionCliente.estado.in_(('EN_CAMION', 'ABIERTA', 'CONFIRMADA')),
@@ -369,7 +376,9 @@ def una_linea_de_factura_no_se_devuelve_de_mas(ctx=None):
     grupos = {}
     for ln, d in filas:
         g = grupos.setdefault(str(ln.f470_rowid), {'activas': set(), 'suma': 0.0,
-                                                   'facturada': 0.0, 'codigos': set()})
+                                                   'facturada': 0.0, 'codigos': set(),
+                                                   'fechas': []})
+        g['fechas'].append(d.fecha_creacion)
         if d.estado in ('EN_CAMION', 'ABIERTA'):
             g['activas'].add(d.codigo)
         g['suma'] += float(ln.cantidad_devuelta or 0)
@@ -382,6 +391,8 @@ def una_linea_de_factura_no_se_devuelve_de_mas(ctx=None):
                 referencia=f'rowid {rowid}',
                 detalle=(f'{len(g["activas"])} devoluciones activas' if len(g['activas']) > 1
                          else f'devuelto {g["suma"]:g} > facturado {g["facturada"]:g}'),
+                # Agregado: la fecha del miembro más nuevo (la regla de TRA-12).
+                fecha=_mas_nueva(g['fechas']),
                 datos={'devoluciones': sorted(g['codigos'])}))
     return out
 
@@ -420,11 +431,13 @@ def ningun_reingreso_es_vendible_sin_nc_aprobada(ctx=None):
             out.append(Hallazgo(referencia=d.codigo,
                                 detalle=f'{ln.codigo_siesa}: lo devuelto entró a {ub.codigo} '
                                         f'(vendible) sin pasar por la zona de devoluciones',
+                                fecha=d.fecha_creacion,
                                 datos={'linea_id': ln.id}))
         elif ln.ubicacion_liberada_id and not d.nc_aprobada_siesa:
             out.append(Hallazgo(referencia=d.codigo,
                                 detalle=f'{ln.codigo_siesa}: liberado a picking con la NC sin '
                                         f'aprobar',
+                                fecha=d.fecha_creacion,
                                 datos={'linea_id': ln.id}))
     return out
 
@@ -440,14 +453,20 @@ def ningun_reingreso_es_vendible_sin_nc_aprobada(ctx=None):
     detector_ciego=_DET + 'test_ve_una_nc_sin_aprobar_hace_mas_de_tres_dias',
 )
 def ninguna_nc_espera_aprobacion_mas_de_tres_dias(ctx=None):
+    from app.models.devolucion_cliente import DevolucionCliente
     from app.services import devolucion_ruta as _dr
     a = _dr.avisos()
+    ids = {f['id'] for f in a['nc_sin_aprobar_3d'] + a['nc_anuladas']}
+    nacio = ({d.id: d.fecha_creacion for d in DevolucionCliente.query.filter(
+        DevolucionCliente.id.in_(ids)).all()} if ids else {})
     return ([Hallazgo(referencia=f['codigo'],
                       detalle=f'NC {f["nc"] or "sin consecutivo"} sin aprobar hace '
-                              f'{f["dias"]} días', datos={'cliente': f['cliente']})
+                              f'{f["dias"]} días', fecha=nacio.get(f['id']),
+                      datos={'cliente': f['cliente']})
              for f in a['nc_sin_aprobar_3d']]
             + [Hallazgo(referencia=f['codigo'],
                         detalle=f'NC {f["nc"]} ANULADA en Siesa (f350_ind_estado = 2)',
+                        fecha=nacio.get(f['id']),
                         datos={'cliente': f['cliente']})
                for f in a['nc_anuladas']])
 
@@ -476,5 +495,6 @@ def la_llegada_cerrada_no_deja_bultos_en_el_camion(ctx=None):
             out.append(Hallazgo(referencia=f'ruta#{ruta.id}',
                                 detalle=f'{n} bulto(s) declarados de vuelta sin recibir '
                                         f'tras cerrar la llegada',
+                                fecha=ruta.fecha_creacion,
                                 datos={'bultos': n}))
     return out

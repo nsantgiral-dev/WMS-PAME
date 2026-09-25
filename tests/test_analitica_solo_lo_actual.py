@@ -282,12 +282,10 @@ SIN_FECHA = {
         'VTA-02: compara el pendiente de hoy contra el catálogo de hoy',
     'la_ventana_mirada_se_declara':
         'INV-09: declara la cobertura de la corrida actual, no un hecho fechado',
-    'se_pueden_contar_las_nc_sin_aprobar':
-        'DEV-04: lo rehace el agente de devoluciones; su fecha va con ese cambio',
-    'la_nc_lleva_su_motivo_dian':
-        'DEV-05: lo rehace el agente de devoluciones; su fecha va con ese cambio',
+    # DEV-04/05 salieron en la integración del 2026-09-24: el agente de
+    # devoluciones los rehízo y ahí recibieron su fecha, igual que DEV-06..13.
 }
-TOPE_SIN_FECHA = 5
+TOPE_SIN_FECHA = 3
 
 
 def _funcion_de(tree):
