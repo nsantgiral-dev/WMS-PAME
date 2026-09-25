@@ -2566,6 +2566,12 @@ def disparar_dlq_inmediato(app=None):
     from flask import current_app
 
     _app = app or current_app._get_current_object()
+    # Candado anti-producción local (tanda 2 · E): el hilo automático de la
+    # DLQ tampoco arranca fuera de Railway contra una base de Railway.
+    if _app.config.get('CANDADO_PRODUCCION_LOCAL'):
+        logger.warning('[DLQ] disparar_dlq_inmediato omitido: %s',
+                       _app.config['CANDADO_PRODUCCION_LOCAL'])
+        return
 
     def _run():
         try:

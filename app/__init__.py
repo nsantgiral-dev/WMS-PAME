@@ -378,7 +378,21 @@ def create_app():
     from app.services.cron_latido import usar_app as _usar_app_latido
     _usar_app_latido(app)
 
-    if os.getenv('SYNC_SCHEDULER', 'true').lower() == 'true':
+    # Candado anti-producción local (tanda 2 · E): fuera de Railway y con la
+    # base de Railway no arranca NADA automático. Un script local levantó los
+    # crons contra producción dos segundos (2026-09-25).
+    from app.utils.candado_local import motivo_candado as _motivo_candado
+    _candado = _motivo_candado()
+    app.config['CANDADO_PRODUCCION_LOCAL'] = _candado
+    if _candado:
+        _lg = logging.getLogger(__name__)
+        _lg.critical('=' * 78)
+        _lg.critical('[STARTUP] %s', _candado)
+        _lg.critical('[STARTUP] Si de verdad necesita un cron, llámelo a mano; '
+                     'los schedulers corren en Railway.')
+        _lg.critical('=' * 78)
+        app.config['SCHEDULERS_OMITIDOS'].append(f'TODOS — {_candado}')
+    elif os.getenv('SYNC_SCHEDULER', 'true').lower() == 'true':
         _app_logger = logging.getLogger(__name__)
         import importlib as _il
 
