@@ -10,19 +10,22 @@ Qué verifica, en orden (cada paso imprime su veredicto):
    vienen SIN los campos `_base` (irían a «sin unidad base»), a qué bodegas
    (dentro/fuera de `_BODEGAS_PV`), y qué campos del contrato que usa el sync
    **no vinieron** en la respuesta real (Regla 1: contrato vs. respuesta).
-2. **Unidades**: que `f421_cant_pedida_base ≈ f421_cant_pedida × f421_factor`
-   en las líneas que traen las dos cosas (si no, la regla de unidad base está
-   mal y se dice).
+2. **Unidades**: que `f421_cant_pedida ≈ f421_cant_pedida_base × f421_factor`
+   (verificado el 2026-09-25: `f421_cant_*` es unidad de INVENTARIO y
+   `f421_cant_*_base` la de la LÍNEA — 36 = 3 PQ × 12) y que el valor bruto
+   sea `_base` × precio. Si alguna línea con factor ≠ 1 no cuadra así, la
+   regla de `pendiente_de_linea` está mal y se dice.
 3. **Historial** (`f420_ind_estado = 3 AND f420_fecha >= ''AAAAMMDD''`): que el
    filtro de fecha entre comillas traiga filas, y cuántas traen
    `f420_fecha_ts_parcial` / `_cumplido` — de ahí sale el lead time medido.
    Compara contra el mismo filtro SIN comillas (Siesa suele contestar «sin
    registros» en vez de rechazarlo).
-4. **Proveedores** (`API_v2_Terceros`, nunca consultada desde el WMS): si está
-   registrada en Connekta (o da 401) y cuántos proveedores activos trae.
-5. **Clasificación (238920)**: qué campos trae la respuesta GET (el `.docx` es
-   el del plano de importación) y, si están los del plano, los planes que
-   existen con cuántos ítems — para que el dueño elija `SIESA_CRITERIO_MARCA`.
+4. **Proveedores** (`API_v2_Proveedores`, una fila por sucursal): cuántos de
+   la compañía propia, por tipo de proveedor y moneda, y el sync con el
+   criterio configurado (`COMPRAS_TIPOS_PROVEEDOR`, o solo los de las OCs).
+5. **Marca** (`API_v2_ItemsCriterios`): los planes que existen (página 1) y,
+   con `SIESA_CRITERIO_MARCA`, la lectura completa del plan (~5 min para P03)
+   guardada en la base local y su vista previa.
 6. **Kardex**: una sola página de la consulta dinámica del kardex (¿sigue en
    401?). NO descarga el kardex.
 7. Con lo sincronizado en la base local: `en_camino`, `lead_time` por
@@ -37,7 +40,7 @@ Bogotá sale sin tocar Siesa (Regla 14).
 Uso:
     venv/bin/python scripts/qa_compras_fuentes_real.py
     venv/bin/python scripts/qa_compras_fuentes_real.py --desde 2026-01-01 --sin-terceros
-    SIESA_CRITERIO_MARCA=005 venv/bin/python scripts/qa_compras_fuentes_real.py --solo-marca
+    SIESA_CRITERIO_MARCA=P03 venv/bin/python scripts/qa_compras_fuentes_real.py --solo-marca
 """
 import argparse
 import os
@@ -113,7 +116,7 @@ def main():
     from app.services.connekta_gateway import ConnektaGateway, connekta
     from app.services.fotos_siesa_service import ventana_abierta
     from app.services.inventario_siesa_service import _BODEGAS_PV
-    from app.services.maestro_compras_carga import filas_marca_desde_siesa, _CLAVES_PLAN
+    from app.services import maestro_compras_carga as marca
 
     def _sin_post(self, *a, **k):
         raise RuntimeError('qa_compras_fuentes_real: un POST no debería ocurrir nunca acá')
@@ -154,17 +157,25 @@ def main():
                                   for r in crudas)
                 print(f'    monedas: {dict(monedas)}')
 
-                _paso(2, 'Unidades: pedida_base ≈ pedida × factor')
-                malas = []
+                _paso(2, 'Unidades: pedida (inventario) ≈ pedida_base (línea) × factor')
+                malas, con_factor = [], 0
                 for r in crudas:
                     try:
                         pb, pe, fac = (float(r['f421_cant_pedida_base']),
                                        float(r['f421_cant_pedida']), float(r['f421_factor']))
                     except (KeyError, TypeError, ValueError):
                         continue
-                    if abs(pb - pe * fac) > 0.01:
-                        malas.append((r.get('f421_rowid'), pe, fac, pb))
-                print(f'    líneas donde NO cuadra: {len(malas)} {malas[:5]}')
+                    if fac != 1:
+                        con_factor += 1
+                    bruto, precio = r.get('f421_vlr_bruto'), r.get('f421_precio_unitario')
+                    bruto_ok = (bruto is None or precio is None
+                                or abs(float(bruto) - pb * float(precio)) < 1)
+                    if abs(pe - pb * fac) > 0.01 or not bruto_ok:
+                        malas.append((r.get('f421_rowid'), pe, fac, pb, bruto, precio))
+                print(f'    líneas con factor ≠ 1: {con_factor} · donde NO cuadra: '
+                      f'{len(malas)} {malas[:5]}')
+                if not con_factor:
+                    print('    (sin líneas con factor ≠ 1: la regla no quedó ejercitada)')
 
             r = compras_oc_sync.sincronizar_ocs(gateway=connekta)
             print(f'    sync a la base local: {r}')
@@ -188,30 +199,28 @@ def main():
                       f'{sum(1 for l in cumpl if l.fecha_cumplido)}')
 
             if not args.sin_terceros:
-                _paso(4, 'Proveedores del maestro (API_v2_Terceros)')
-                t = compras_oc_sync.sincronizar_proveedores_terceros(gateway=connekta)
+                _paso(4, 'Proveedores del maestro (API_v2_Proveedores)')
+                t = compras_oc_sync.sincronizar_proveedores(gateway=connekta)
                 print(f'    {t}')
 
         if not args.sin_marca:
-            _paso(5, 'Clasificación de ítems (238920) — ¿cuál plan es «marca»?')
+            _paso(5, 'Marca (API_v2_ItemsCriterios) — ¿cuál plan es «marca»?')
             try:
-                resp = connekta.get_clasificacion_items(pagina=1)
+                resp = connekta._get(marca._api_criterios(), {'paginacion': 'numPag=1|tamPag=100'})
                 filas = _tabla(resp) or []
-                print(f'    página 1: {len(filas)} filas · campos: '
+                print(f'    página 1 sin filtro: {len(filas)} filas · campos: '
                       f'{sorted(filas[0]) if filas else "(sin filas)"}')
-                if filas:
-                    minus = {k.lower(): k for k in filas[0]}
-                    kp = next((minus[c] for c in _CLAVES_PLAN if c in minus), None)
-                    if kp:
-                        planes = Counter(str(f.get(kp)).strip() for f in filas)
-                        print(f'    planes en la página 1: {dict(planes.most_common())}')
+                planes = Counter((str(f.get('f125_id_plan')).strip(),
+                                  str(f.get('f105_descripcion')).strip()) for f in filas)
+                print(f'    planes en la página 1: {dict(planes.most_common())}')
             except Exception as e:
                 print(f'    ERROR: {e}')
             if os.getenv('SIESA_CRITERIO_MARCA'):
-                m = filas_marca_desde_siesa(connekta)
-                print(f'    plan {os.getenv("SIESA_CRITERIO_MARCA")}: '
-                      f'{len(m.get("filas", []))} ítems · completa={m.get("completa")} '
-                      f'{m.get("omitido") or m.get("campos_no_reconocidos") or ""}')
+                m = marca.leer_marca_siesa(gateway=connekta)
+                print(f'    lectura del plan {os.getenv("SIESA_CRITERIO_MARCA")}: '
+                      f'{ {k: v for k, v in m.items() if k != "campos"} }')
+                prev = marca.marca_desde_siesa()
+                print(f'    vista previa (de lo guardado): {prev.get("resumen") or prev}')
             else:
                 print('    SIESA_CRITERIO_MARCA sin configurar: no se aplica nada (lo decide el dueño)')
 

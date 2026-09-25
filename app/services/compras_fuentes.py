@@ -80,6 +80,22 @@ ESTADOS_EN_CAMINO = ('EN_PRODUCCION', 'NAVEGANDO', 'EN_PUERTO',
 #: contenedores depende de la de OCs para no contar dos veces lo mismo.
 FUENTES_EN_CAMINO = ('OC_SIESA', 'IMPORTACION')
 
+#: Una observación de lead time con menos días que esto no mide al proveedor:
+#: la OC se registró al recibir (entrada el mismo día de la OC). Ver
+#: `observaciones_lead_time`.
+DIAS_MIN_OBSERVACION = 1
+DESCARTE_OC_AL_RECIBIR = 'oc_registrada_al_recibir'
+
+#: Días de atraso sobre la fecha de entrega desde los que una línea abierta se
+#: DECLARA vieja en «en camino» (`COMPRAS_OC_VENCIDA_DIAS`). Supuesto
+#: declarado: 90 días es más que cualquier lead time nacional y casi el de
+#: China. En QA el 90 % de lo pendiente es de OCs de más de un año.
+DIAS_OC_VENCIDA = 90
+ENV_OC_VENCIDA = 'COMPRAS_OC_VENCIDA_DIAS'
+#: Corte opcional, **sin default** (decisión del dueño): con él, las líneas con
+#: la entrega vencida hace más de estos días NO se suman a «en camino».
+ENV_OC_EXCLUIR = 'COMPRAS_OC_EXCLUIR_MAS_DE_DIAS'
+
 #: `f420_ind_estado` de una OC anulada (spec API_v2_Compras_Ordenes).
 ESTADO_OC_ANULADA = 9
 
@@ -106,26 +122,43 @@ def _bodega_cdi() -> str:
 
 def pendiente_de_linea(fila: dict):
     """Lo que falta por entrar de una línea de `API_v2_Compras_Ordenes`, en
-    unidad de INVENTARIO (base).
+    unidad de INVENTARIO — la que suma `stock_siesa`.
 
-    `f421_cant_pedida`/`f421_cant_entrada` vienen en la unidad de la OC
-    (`f421_id_unidad_medida`: una caja, una paca); las `_base` en la unidad del
-    inventario, que es la que suma `stock_siesa`. Sumar cajas con unidades
-    sería el error de unidades que el armador no puede ver.
+    **Ojo con los nombres de Siesa, que dicen lo contrario de lo que parecen.**
+    Verificado en vivo contra Siesa QA el 2026-09-25 (OC 003-OC-28, línea de
+    `PAPELSP6948` en paquetes de 12):
 
-    Returns: `(Decimal | None, como)` — `como` ∈ BASE | FACTOR | SIN_UNIDAD_BASE.
-    Nunca negativo: una entrada mayor que lo pedido (exceso) no deja «menos que
-    nada» en camino.
+        f421_id_unidad_medida = PQ     f421_factor = 12
+        f421_cant_pedida      = 36     ← unidad de INVENTARIO (UND)
+        f421_cant_pedida_base = 3      ← unidad de la LÍNEA (PQ)
+        f421_vlr_bruto        = 3.750  = 3 × 1.250 (el precio es por PQ)
+
+    `API_v2_Items` da `UND` como unidad de inventario del ítem e
+    `ItemsUnidadesMedida`, 1 PQ = 12 UND. O sea: `f421_cant_*` ya viene en
+    unidad de inventario y `f421_cant_*_base` en la de la línea. La versión
+    anterior restaba las `_base` (3 − 0 = 3 paquetes contados como 3 unidades):
+    **«en camino» doce veces menor en toda línea PQ**, el déficit inflado en
+    lo ya pedido y un contenedor de más (Regla 0: el lado irreversible). En
+    las 280 líneas con factor 1 las dos lecturas coinciden; por eso los tests,
+    que fabricaban la relación al revés, no lo veían.
+
+    Regla: `f421_cant_pedida − f421_cant_entrada`; si faltan,
+    `(pedida_base − entrada_base) × factor`; sin factor, **`None`** (no se
+    inventa: se cuenta como línea sin unidad).
+
+    Returns: `(Decimal | None, como)` — `como` ∈ INVENTARIO | FACTOR |
+    SIN_UNIDAD_BASE. Nunca negativo: una entrada mayor que lo pedido (exceso)
+    no deja «menos que nada» en camino.
     """
-    pb = _dec(fila.get('f421_cant_pedida_base'))
-    eb = _dec(fila.get('f421_cant_entrada_base'))
-    if pb is not None and eb is not None:
-        return max(pb - eb, Decimal(0)), 'BASE'
     p = _dec(fila.get('f421_cant_pedida'))
     e = _dec(fila.get('f421_cant_entrada'))
+    if p is not None and e is not None:
+        return max(p - e, Decimal(0)), 'INVENTARIO'
+    pb = _dec(fila.get('f421_cant_pedida_base'))
+    eb = _dec(fila.get('f421_cant_entrada_base'))
     fac = _dec(fila.get('f421_factor'))
-    if p is not None and e is not None and fac is not None and fac > 0:
-        return max((p - e) * fac, Decimal(0)), 'FACTOR'
+    if pb is not None and eb is not None and fac is not None and fac > 0:
+        return max((pb - eb) * fac, Decimal(0)), 'FACTOR'
     return None, 'SIN_UNIDAD_BASE'
 
 
@@ -190,6 +223,7 @@ def en_camino(skus=None, bodegas=None) -> dict:
         cont = None
 
     por_oc = oc['por_sku'] if oc else {}
+    vencido = oc['vencido'] if oc else {}
     por_cont = cont['por_sku'] if cont else {}
     sin_unidad = oc['sin_unidad'] if oc else {}
     ocs_de = oc['ocs_de'] if oc else {}
@@ -200,6 +234,7 @@ def en_camino(skus=None, bodegas=None) -> dict:
         por_sku[ref] = float(total)
         detalle[ref] = {
             'oc': float(por_oc.get(ref, 0)),
+            'oc_vencida': float(vencido.get(ref, 0)),
             'contenedores': float(por_cont.get(ref, 0)),
             'ocs': sorted(ocs_de.get(ref, ())),
             'lineas_sin_unidad_base': sin_unidad.get(ref, 0),
@@ -244,28 +279,72 @@ def en_camino(skus=None, bodegas=None) -> dict:
             'contenedor_fuera_de_bodegas': cont['fuera'] if cont else None,
             'skus_con_solapamiento_posible': sum(
                 1 for d in detalle.values() if d['solapamiento_posible']),
+            'ocs_vencidas': oc['ocs_vencidas'] if oc else None,
+            'corte_antiguedad': oc['corte_antiguedad'] if oc else None,
+            'problemas_de_configuracion': oc['problemas'] if oc else [],
             'sync_oc': sync,
         },
     }
 
 
-def _pendiente_de_ocs_abiertas(filtro_skus, operadas, pedidas) -> dict:
-    """Fuente `OC_SIESA` de `en_camino`: el pendiente (unidad base) de las
-    líneas de OC abiertas, por SKU, solo a bodegas operadas y pedidas."""
-    from app.models.compras_fuentes import OcLineaSiesa
+def _dias_env(nombre, defecto):
+    """(días, problema). Ausente → `defecto`; ilegible o negativo → `defecto`
+    y el problema escrito (no se adivina)."""
+    v = (os.getenv(nombre) or '').strip()
+    if not v:
+        return defecto, None
+    try:
+        n = int(v)
+        if n >= 0:
+            return n, None
+    except ValueError:
+        pass
+    return defecto, f'{nombre}={v!r} no es un número de días ≥ 0: se ignora.'
 
+
+def politica_ocs_viejas() -> dict:
+    """Cuándo una OC abierta es «vieja» y si se corta. Una función: la usan
+    `en_camino` y la pantalla."""
+    dias, p1 = _dias_env(ENV_OC_VENCIDA, DIAS_OC_VENCIDA)
+    corte, p2 = _dias_env(ENV_OC_EXCLUIR, None)
+    return {'dias_vencida': dias,
+            'dias_vencida_fuente': 'CONFIGURADO' if os.getenv(ENV_OC_VENCIDA, '').strip()
+            and not p1 else 'DEFAULT_DECLARADO',
+            'excluir_mas_de_dias': corte,
+            'problemas': [p for p in (p1, p2) if p]}
+
+
+def _pendiente_de_ocs_abiertas(filtro_skus, operadas, pedidas) -> dict:
+    """Fuente `OC_SIESA` de `en_camino`: el pendiente (unidad de inventario)
+    de las líneas de OC abiertas, por SKU, solo a bodegas operadas y pedidas.
+
+    **Una OC abierta con la entrega vencida hace meses probablemente no va a
+    llegar** (en QA, el 90 % de lo pendiente es de OCs de más de un año). Se
+    suma igual —decisión del dueño: restarla sola sería decidir por él— pero
+    se DECLARA con su peso (`ocs_vencidas`); con `COMPRAS_OC_EXCLUIR_MAS_DE_DIAS`
+    las más viejas que eso no se suman y también se declara."""
+    from app.models.compras_fuentes import OcLineaSiesa
+    from app.utils.fecha import dia_operativo
+
+    pol = politica_ocs_viejas()
+    hoy = dia_operativo()
     por_sku = defaultdict(Decimal)
+    vencido = defaultdict(Decimal)
     ocs_de = defaultdict(set)
     sin_unidad = defaultdict(int)
     fuera_lista_blanca = fuera_de_filtro = sin_bodega = 0
+    v_lineas, v_skus, v_mas_vieja = 0, set(), None
+    x_lineas, x_unidades, x_skus = 0, Decimal(0), set()
+    sin_fecha = 0
 
     filas = (db.session.query(OcLineaSiesa.referencia, OcLineaSiesa.bodega,
                               OcLineaSiesa.pendiente_base, OcLineaSiesa.co,
-                              OcLineaSiesa.tipo_docto, OcLineaSiesa.consec_docto)
+                              OcLineaSiesa.tipo_docto, OcLineaSiesa.consec_docto,
+                              OcLineaSiesa.fecha_entrega, OcLineaSiesa.fecha_oc)
              .filter(OcLineaSiesa.abierta.is_(True))
              .all())
     abiertas_citables = set()
-    for ref, bodega, pendiente, co, tipo, consec in filas:
+    for ref, bodega, pendiente, co, tipo, consec, f_entrega, f_oc in filas:
         ref = (ref or '').strip()
         abiertas_citables.add(f'{co or ""}-{tipo or ""}-{consec or ""}')
         if not ref or (filtro_skus is not None and ref not in filtro_skus):
@@ -283,13 +362,54 @@ def _pendiente_de_ocs_abiertas(filtro_skus, operadas, pedidas) -> dict:
         if pendiente is None:
             sin_unidad[ref] += 1
             continue
-        if pendiente > 0:
-            por_sku[ref] += Decimal(pendiente)
-            ocs_de[ref].add(f'{co or ""}-{tipo or ""}-{consec or ""}')
-    return {'por_sku': por_sku, 'ocs_de': ocs_de, 'sin_unidad': sin_unidad,
+        if pendiente <= 0:
+            continue
+        pendiente = Decimal(pendiente)
+        ref_fecha = f_entrega or f_oc
+        atraso = (hoy - ref_fecha).days if ref_fecha else None
+        if atraso is None:
+            sin_fecha += 1
+        if (atraso is not None and pol['excluir_mas_de_dias'] is not None
+                and atraso > pol['excluir_mas_de_dias']):
+            x_lineas += 1
+            x_unidades += pendiente
+            x_skus.add(ref)
+            continue
+        por_sku[ref] += pendiente
+        ocs_de[ref].add(f'{co or ""}-{tipo or ""}-{consec or ""}')
+        if atraso is not None and atraso > pol['dias_vencida']:
+            vencido[ref] += pendiente
+            v_lineas += 1
+            v_skus.add(ref)
+            v_mas_vieja = ref_fecha if v_mas_vieja is None else min(v_mas_vieja, ref_fecha)
+
+    total = sum(por_sku.values())
+    unidades_v = sum(vencido.values())
+    pct = round(float(unidades_v / total * 100), 1) if total else None
+    ocs_vencidas = {
+        'dias': pol['dias_vencida'], 'dias_fuente': pol['dias_vencida_fuente'],
+        'lineas': v_lineas, 'unidades': round(float(unidades_v), 2), 'skus': len(v_skus),
+        'pct_unidades': pct if v_lineas else (0.0 if total else None),
+        'entrega_mas_vieja': v_mas_vieja.isoformat() if v_mas_vieja else None,
+        'lineas_sin_fecha_de_entrega': sin_fecha,
+        'nota': (f'{pct} % de lo que viene por OCs ({float(unidades_v):,.0f} u en '
+                 f'{v_lineas} línea(s)) es de OCs con la entrega vencida hace más de '
+                 f'{pol["dias_vencida"]} días (la más vieja, {v_mas_vieja.isoformat()}). '
+                 'Se suma igual; si ya no van a llegar, hay que anularlas en Siesa o '
+                 f'configurar {ENV_OC_EXCLUIR}.') if v_lineas else None,
+    }
+    corte = {'dias': pol['excluir_mas_de_dias'], 'lineas_excluidas': x_lineas,
+             'unidades_excluidas': round(float(x_unidades), 2), 'skus': len(x_skus),
+             'nota': (f'{x_lineas} línea(s) ({float(x_unidades):,.0f} u) con la entrega '
+                      f'vencida hace más de {pol["excluir_mas_de_dias"]} días NO se suman '
+                      f'({ENV_OC_EXCLUIR}).') if x_lineas else None}
+    return {'por_sku': por_sku, 'vencido': vencido, 'ocs_de': ocs_de,
+            'sin_unidad': sin_unidad,
             'abiertas_citables': abiertas_citables, 'lineas': len(filas),
             'fuera_lista_blanca': fuera_lista_blanca,
-            'fuera_de_filtro': fuera_de_filtro, 'sin_bodega': sin_bodega}
+            'fuera_de_filtro': fuera_de_filtro, 'sin_bodega': sin_bodega,
+            'ocs_vencidas': ocs_vencidas, 'corte_antiguedad': corte,
+            'problemas': pol['problemas']}
 
 
 def _contenedores_en_camino(filtro_skus, pedidas, abiertas_citables) -> dict:
@@ -393,6 +513,12 @@ def observaciones_lead_time() -> dict:
         vivo** que `ts_parcial` sea la primera entrada — `qa_compras_fuentes_real`
         lo mira.
     Para China, además, los contenedores con fecha de OC y de recepción en CDI.
+
+    **Una entrada el mismo día de la OC no es una observación** (`descartadas
+    ['oc_registrada_al_recibir']`, también por proveedor): la OC se digitó al
+    recibir la mercancía y los «0 días» miden eso, no al proveedor. Un
+    proveedor que solo tiene OCs así cae al origen y, sin muestra, al default
+    declarado.
     """
     from app.models.compras_fuentes import OcLineaSiesa
     from app.models.importacion import Contenedor
@@ -435,6 +561,7 @@ def observaciones_lead_time() -> dict:
               for p in Proveedor.query.all() if p.codigo}
 
     por_oc, descartadas = [], defaultdict(int)
+    por_proveedor = defaultdict(lambda: defaultdict(int))
     for k, o in ocs.items():
         entrada, fuente = (wms[k], 'WMS_RECEPCION') if k in wms else (o['siesa'], 'SIESA')
         if entrada is None:
@@ -443,6 +570,17 @@ def observaciones_lead_time() -> dict:
         dias = (entrada - o['fecha_oc']).days
         if dias < 0:
             descartadas['entrada_antes_de_la_oc'] += 1
+            por_proveedor[o['proveedor_codigo']]['entrada_antes_de_la_oc'] += 1
+            continue
+        if dias < DIAS_MIN_OBSERVACION:
+            # La OC se registró el mismo día que entró la mercancía: se hizo
+            # AL RECIBIR (verificado en QA: DISPAPELES, 24 de 24 con 0 días,
+            # creada y cumplida con minutos de diferencia). No mide cuánto
+            # tarda el proveedor sino cuánto tardó alguien en digitarla.
+            # Publicarla como «0 días, MEDIDO, confianza ALTA» achica el ROP
+            # (LT 0 → ni demanda de reposición ni colchón): se cuenta aparte.
+            descartadas[DESCARTE_OC_AL_RECIBIR] += 1
+            por_proveedor[o['proveedor_codigo']][DESCARTE_OC_AL_RECIBIR] += 1
             continue
         moneda = (o['moneda'] or '').strip().upper()
         por_oc.append({
@@ -462,7 +600,8 @@ def observaciones_lead_time() -> dict:
         if c.lead_time_real]
 
     return {'por_oc': por_oc, 'contenedores': contenedores,
-            'descartadas': dict(descartadas)}
+            'descartadas': dict(descartadas),
+            'descartadas_por_proveedor': {p: dict(v) for p, v in por_proveedor.items()}}
 
 
 def _numero_env(nombre, defecto, minimo):
@@ -547,11 +686,21 @@ def lead_time(proveedor: str = None, origen: str = None,
     extra = {'proveedor': proveedor, 'origen': ORIGEN_CHINA if es_china else ORIGEN_NACIONAL}
 
     n_prov = 0
+    aviso_desc = None
     if proveedor:
         dias = [o['dias'] for o in obs['por_oc'] if o['proveedor_codigo'] == proveedor]
         n_prov = len(dias)
+        desc = (obs.get('descartadas_por_proveedor') or {}).get(proveedor) or {}
+        n_al_recibir = desc.get(DESCARTE_OC_AL_RECIBIR, 0)
+        if n_al_recibir:
+            extra['descartadas_al_recibir'] = n_al_recibir
+            aviso_desc = (f'{n_al_recibir} OC(s) de {proveedor} se registraron el mismo día '
+                          'que entró la mercancía: no miden al proveedor y no se usan.')
         if n_prov >= N_MIN_PARCIAL:
-            return _medido(dias, 'PROVEEDOR', piso, **extra)
+            r = _medido(dias, 'PROVEEDOR', piso, **extra)
+            if aviso_desc:
+                r['nota'] = f'{aviso_desc} {r["nota"]}' if r['nota'] else aviso_desc
+            return r
 
     pool = (list(obs['contenedores']) if es_china
             else [o['dias'] for o in obs['por_oc'] if o['nacional']])
@@ -560,6 +709,8 @@ def lead_time(proveedor: str = None, origen: str = None,
         if proveedor:
             aviso = (f'El proveedor {proveedor} tiene {n_prov} OC(s) medida(s) '
                      f'(mínimo {N_MIN_PARCIAL}): se usa el del origen.')
+            if aviso_desc:
+                aviso = f'{aviso_desc} {aviso}'
             r['nota'] = f'{aviso} {r["nota"]}' if r['nota'] else aviso
         return r
 
@@ -576,6 +727,8 @@ def lead_time(proveedor: str = None, origen: str = None,
                 + ('' if es_china else
                    f' (configurable con {ENV_LT_NACIONAL} / {ENV_SIGMA_LT_NACIONAL})')
                 + '.')
+    if aviso_desc:
+        nota = f'{aviso_desc} {nota}'
     return {
         'lt_dias': lt_def, 'lt_medio': lt_def, 'sigma_lt': sigma_def,
         'n': n_prov if proveedor else len(pool), 'lead_times': [],
@@ -588,7 +741,11 @@ def lead_times_por_proveedor(observaciones: dict = None) -> list:
     """Una fila por proveedor con OCs medidas, con su veredicto de `lead_time`.
     Para la pantalla de fuentes: n y confianza a la vista."""
     obs = observaciones if observaciones is not None else observaciones_lead_time()
-    codigos = sorted({o['proveedor_codigo'] for o in obs['por_oc'] if o['proveedor_codigo']})
+    desc = obs.get('descartadas_por_proveedor') or {}
+    # También los que solo tienen OCs descartadas: que no aparezcan escondería
+    # justo al proveedor cuyo «0 días» se dejó de creer.
+    codigos = sorted({o['proveedor_codigo'] for o in obs['por_oc'] if o['proveedor_codigo']}
+                     | {c for c, d in desc.items() if c and d.get(DESCARTE_OC_AL_RECIBIR)})
     salida = []
     for c in codigos:
         nacional = all(o['nacional'] for o in obs['por_oc'] if o['proveedor_codigo'] == c)
@@ -596,6 +753,7 @@ def lead_times_por_proveedor(observaciones: dict = None) -> list:
                       observaciones=obs)
         r = {k: v for k, v in r.items() if k != 'lead_times'}
         r['n_proveedor'] = sum(1 for o in obs['por_oc'] if o['proveedor_codigo'] == c)
+        r['n_descartadas_al_recibir'] = (desc.get(c) or {}).get(DESCARTE_OC_AL_RECIBIR, 0)
         salida.append(r)
     return salida
 
@@ -629,8 +787,9 @@ def proveedor_habitual(refs=None) -> dict:
 
 def _precio_base(linea):
     """Precio por unidad de INVENTARIO, en la moneda de la OC: el de la OC es
-    por su unidad (`f421_id_unidad_medida`). Sin factor no se convierte — no se
-    inventa."""
+    por la unidad de la LÍNEA (`f421_id_unidad_medida`; verificado en vivo:
+    `f421_vlr_bruto` = `f421_cant_pedida_base` × precio). Precio ÷ factor. Sin
+    factor no se convierte — no se inventa."""
     p = _dec(linea.precio_unitario)
     fac = _dec(linea.factor)
     if p is None or p <= 0 or fac is None or fac <= 0:
@@ -639,13 +798,17 @@ def _precio_base(linea):
 
 
 def _cantidad_base(linea):
-    """Lo pedido en la línea, en unidad base (lo que se paga al precio de la OC)."""
-    pb = _dec(linea.cant_pedida_base)
-    if pb is not None:
-        return pb
-    p, fac = _dec(linea.cant_pedida), _dec(linea.factor)
-    if p is not None and fac is not None and fac > 0:
-        return p * fac
+    """Lo pedido en la línea, en unidad de INVENTARIO (la de `_precio_base`):
+    `cant_pedida` —que en la API de Siesa ya es unidad de inventario, ver
+    `pendiente_de_linea`—; sin ella, `cant_pedida_base × factor` (la `_base`
+    es la unidad de la línea). Precio base × esta cantidad = valor bruto de
+    la línea (verificado: 1.250/12 × 36 = 3.750 en la OC 003-OC-28)."""
+    p = _dec(linea.cant_pedida)
+    if p is not None:
+        return p
+    pb, fac = _dec(linea.cant_pedida_base), _dec(linea.factor)
+    if pb is not None and fac is not None and fac > 0:
+        return pb * fac
     return None
 
 
@@ -673,20 +836,40 @@ def lineas_precio_oc(refs=None, desde=None, proveedor: str = None) -> list:
         q = q.filter(OcLineaSiesa.fecha_oc >= desde)
     if proveedor:
         q = q.filter(OcLineaSiesa.proveedor_codigo == proveedor)
+    from app.models.acuerdo_marco import Proveedor
+    lineas = q.all()
+    moneda_prov = {}
+    if any(not (l.moneda or '').strip() for l in lineas):
+        moneda_prov = {c: (m or '').strip().upper() for c, m in db.session.query(
+            Proveedor.codigo, Proveedor.moneda).filter(Proveedor.moneda.isnot(None)).all()}
     salida = []
-    for l in q.all():
+    for l in lineas:
         if l.estado_oc == ESTADO_OC_ANULADA or (l.ind_obsequio or 0) == 1:
             continue
         p = _precio_base(l)
         if p is None:
             continue
+        moneda, moneda_fuente = _moneda_de_linea(l, moneda_prov)
         salida.append({
             'referencia': (l.referencia or '').strip(), 'precio_base': p,
-            'moneda': (l.moneda or 'COP').strip().upper() or 'COP',
+            'moneda': moneda, 'moneda_fuente': moneda_fuente,
             'cantidad_base': _cantidad_base(l), 'fecha_oc': l.fecha_oc,
             'proveedor_codigo': l.proveedor_codigo, 'oc': l.oc_referencia,
         })
     return salida
+
+
+def _moneda_de_linea(linea, moneda_prov):
+    """La moneda de la OC; si la OC no la trae, la del proveedor en el maestro
+    de Siesa (`Proveedor.moneda`, m047); si tampoco, COP **declarado**
+    (`SUPUESTA_COP`). Returns: (moneda, fuente ∈ OC | PROVEEDOR | SUPUESTA_COP)."""
+    m = (linea.moneda or '').strip().upper()
+    if m:
+        return m, 'OC'
+    m = moneda_prov.get(linea.proveedor_codigo)
+    if m:
+        return m, 'PROVEEDOR'
+    return 'COP', 'SUPUESTA_COP'
 
 
 def precios_oc(refs, proveedor: str = None) -> dict:
@@ -720,7 +903,8 @@ def precios_oc(refs, proveedor: str = None) -> dict:
                 'costo': round(float(p), 4), 'fuente': 'OC_SIESA',
                 'fecha_costo': l['fecha_oc'].isoformat(), '_fecha': l['fecha_oc'],
                 'proveedor': l['proveedor_codigo'], 'oc': l['oc'],
-                'moneda': l['moneda'], 'conversion': conversion,
+                'moneda': l['moneda'], 'moneda_fuente': l['moneda_fuente'],
+                'conversion': conversion,
             }
     for ref, n in excluidas.items():
         if ref in salida:

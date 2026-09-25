@@ -111,3 +111,58 @@ def test_aplicar_exige_la_vista_previa():
     assert d['subidas'] == ['/api/compras/fuentes/carga/vista-previa',
                             '/api/compras/fuentes/carga/aplicar']
     assert '<img' not in d['resultado'] and '&lt;img' in d['resultado']
+
+
+_ARNES_EXPR = r"""
+const fs = require('fs'); const vm = require('vm');
+const args = process.argv.slice(1).filter(a => a !== '--');
+const ctx = { console, document: { getElementById: () => null } };
+vm.createContext(ctx);
+for (const f of ['util.js', 'compras_fuentes.js'])
+  vm.runInContext(fs.readFileSync(args[0] + '/' + f, 'utf8'), ctx);
+ctx.__dato = JSON.parse(args[2]);
+console.log(JSON.stringify(vm.runInContext(args[1], ctx)));
+"""
+
+
+def _expr(expr, dato):
+    if not shutil.which('node'):
+        pytest.skip('sin node')
+    p = subprocess.run(['node', '-e', _ARNES_EXPR, '--', str(PWA), expr, json.dumps(dato)],
+                       capture_output=True, text=True, timeout=60)
+    assert p.returncode == 0, p.stderr
+    return json.loads(p.stdout.strip().splitlines()[-1])
+
+
+def test_las_ocs_viejas_se_ven_con_su_peso():
+    e = _estado()
+    e['en_camino']['declaracion'].update({
+        'ocs_vencidas': {'dias': 90, 'nota': '90 % de lo que viene es viejo ' + MALO},
+        'corte_antiguedad': {'nota': None}, 'problemas_de_configuracion': [MALO]})
+    e['en_camino']['top'][0]['oc_vencida'] = 70
+    d = _render({'estado': e, 'contenedores': _contenedores()})
+    assert '90 % de lo que viene es viejo' in d['html'] and 'Vieja' in d['html']
+    assert '<img' not in d['html']
+
+
+def test_el_lead_time_dice_las_ocs_registradas_al_recibir():
+    e = _estado()
+    e['lead_time']['descartadas'] = {'oc_registrada_al_recibir': 24}
+    e['lead_time']['por_proveedor'][0]['n_descartadas_al_recibir'] = 24
+    d = _render({'estado': e, 'contenedores': _contenedores()})
+    assert 'OC registrada el día que entró la mercancía' in d['html']
+    assert '(+24 al recibir)' in d['html']
+
+
+def test_el_estado_de_la_lectura_de_marca_escapa_y_no_dice_cero():
+    html = _expr('fuentesHtmlMarcaEstado(__dato)', {
+        'plan_configurado': 'P03', 'en_curso': False,
+        'ultima': {'inicio': None, 'ok': False, 'error': MALO, 'resultado': {'items': None}},
+        'vigente': {'plan': MALO, 'leida_utc': None}, 'vigente_es_del_plan': False})
+    assert '<img' not in html and '&lt;img' in html
+    assert 'sin dato ítems' in html and 'volvé a leer' in html
+
+
+def test_la_vista_previa_de_marca_sin_lectura_lo_dice():
+    html = _expr('fuentesHtmlMarca(__dato)', {'sin_lectura': 'Todavía no hay ' + MALO})
+    assert 'Todavía no hay' in html and '<img' not in html

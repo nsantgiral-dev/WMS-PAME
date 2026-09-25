@@ -100,6 +100,7 @@ LOCK_CARTERA_BARRIDO = 2022             # cartera_service.barrido (re-evaluació
 LOCK_DEVOLUCIONES_NC = 2023             # devolucion_nc_verificador (lee f350_ind_estado de las NC, m045devol)
 LOCK_COMPRAS_OC_SYNC = 2024             # compras_oc_sync (espejo de OCs de Siesa, m046compras)
 LOCK_KARDEX_AUTO = 2025                 # kardex_auto (descarga + reconstrucción programadas, m046compras)
+LOCK_MARCA_SIESA = 2026                 # maestro_compras_carga (lectura de la marca de Siesa en segundo plano, m047)
 
 # De transacción (`lock_de_transaccion`): serializan un «leer y después insertar».
 LOCK_CODIGO_LPN = 3001                  # LPN.generar_codigo

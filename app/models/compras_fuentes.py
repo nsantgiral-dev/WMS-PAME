@@ -66,13 +66,19 @@ class OcLineaSiesa(db.Model):
     ind_obsequio = db.Column(db.SmallInteger)                   # f421_ind_obsequio
     unidad_medida = db.Column(db.String(10))                    # f421_id_unidad_medida
     factor = db.Column(db.Numeric(18, 6))                       # f421_factor
-    cant_pedida = db.Column(db.Numeric(18, 4))                  # f421_cant_pedida
-    cant_entrada = db.Column(db.Numeric(18, 4))                 # f421_cant_entrada
-    cant_pedida_base = db.Column(db.Numeric(18, 4))             # f421_cant_pedida_base
-    cant_entrada_base = db.Column(db.Numeric(18, 4))            # f421_cant_entrada_base
-    cant_importacion_base = db.Column(db.Numeric(18, 4))        # f421_cant_importacion_base
-    #: En unidad de INVENTARIO (base). `None` = no se pudo llevar a base: el
-    #: dato no se inventa y `en_camino` lo cuenta como línea sin unidad.
+    #: **Los nombres de Siesa engañan** (verificado en vivo, 2026-09-25):
+    #: `f421_cant_*` viene en unidad de INVENTARIO y `f421_cant_*_base` en la
+    #: unidad de la LÍNEA (la de `unidad_medida`, p. ej. PQ). Se guardan tal
+    #: cual; quién las lee y cómo: `compras_fuentes.pendiente_de_linea`.
+    cant_pedida = db.Column(db.Numeric(18, 4))                  # f421_cant_pedida (inventario)
+    cant_entrada = db.Column(db.Numeric(18, 4))                 # f421_cant_entrada (inventario)
+    cant_pedida_base = db.Column(db.Numeric(18, 4))             # f421_cant_pedida_base (línea)
+    cant_entrada_base = db.Column(db.Numeric(18, 4))            # f421_cant_entrada_base (línea)
+    cant_importacion_base = db.Column(db.Numeric(18, 4))        # f421_cant_importacion_base (línea)
+    #: En unidad de INVENTARIO (la que suma `stock_siesa`; el sufijo `_base`
+    #: es de m046compras y NO es el `_base` de Siesa). `None` = no se pudo
+    #: llevar a inventario: el dato no se inventa y `en_camino` lo cuenta como
+    #: línea sin unidad.
     pendiente_base = db.Column(db.Numeric(18, 4))
     precio_unitario = db.Column(db.Numeric(18, 4))              # f421_precio_unitario (por unidad de la OC)
     fecha_entrega = db.Column(db.Date)                          # f421_fecha_entrega
@@ -115,3 +121,33 @@ class OcLineaSiesa(db.Model):
             'fecha_entrega': self.fecha_entrega.isoformat() if self.fecha_entrega else None,
             'abierta': self.abierta,
         }
+
+
+class MarcaSiesaLectura(db.Model):
+    """La última lectura COMPLETA de la marca de Siesa, por plan e ítem (m047).
+
+    `API_v2_ItemsCriterios` filtrado por el plan de `SIESA_CRITERIO_MARCA`:
+    ~26.000 ítems en 261 páginas (~5 min). Eso no cabe en un request (gunicorn
+    corta a los 60 s), así que se lee en segundo plano
+    (`maestro_compras_carga.leer_marca_siesa`) y la vista previa y la
+    aplicación leen **esta tabla**, nunca Siesa.
+
+    Upsert por (plan, referencia); nada se borra. Una fila vale para la vista
+    previa solo si `registro_id` es la última corrida COMPLETA de ese plan
+    (`registros_sync` tipo `compras_marca`): un ítem que Siesa dejó de
+    clasificar conserva el `registro_id` viejo y queda fuera.
+    """
+    __tablename__ = 'marca_siesa_lectura'
+
+    id = db.Column(db.Integer, primary_key=True)
+    plan = db.Column(db.String(10), nullable=False)             # f125_id_plan
+    referencia = db.Column(db.String(50), nullable=False)       # f120_referencia
+    criterio_codigo = db.Column(db.String(20))                  # f125_id_criterio_mayor
+    criterio_nombre = db.Column(db.String(100))                 # f106_descripcion
+    registro_id = db.Column(db.Integer)                         # registros_sync.id de la corrida
+    vista_en = db.Column(db.DateTime)                           # UTC
+
+    __table_args__ = (
+        db.Index('uq_marca_siesa_lectura_plan_ref', 'plan', 'referencia', unique=True),
+        db.Index('ix_marca_siesa_lectura_registro', 'registro_id'),
+    )

@@ -69,7 +69,9 @@ REGENERABLES = ('pedidos_siesa', 'stock_siesa', 'siesa_jobs',
                 'cartera_cliente',
                 # Espejo de OCs (m046compras): abiertas con la próxima
                 # sincronización, cumplidas con el historial de 365 días.
-                'oc_linea_siesa')
+                'oc_linea_siesa',
+                # Lectura de la marca de Siesa (m047): se vuelve a leer.
+                'marca_siesa_lectura')
 
 
 def _destino():

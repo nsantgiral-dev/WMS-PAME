@@ -25,9 +25,15 @@ class Producto(db.Model):
     factor_conversion = db.Column(db.Integer, default=1)  # unidades por empaque
     unidad_negocio_id = db.Column(db.String(10))  # Unidad de negocio Siesa p.ej. '001'=PAPELERIA
     origen = db.Column(db.String(10))  # NACIONAL, CHINA — determina régimen de reposición
-    marca_siesa = db.Column(db.String(50))  # Código marca Siesa (M003, M009, M175, etc.)
+    #: El NOMBRE de la marca (`f106_descripcion` del criterio de Siesa: NORMA,
+    #: SCRIBE…). Hasta m047 el comentario decía «código (M003…)» y la carga lo
+    #: aceptaba así: un valor con dos significados. El código va aparte.
+    marca_siesa = db.Column(db.String(50))
+    #: El CÓDIGO del criterio de marca en Siesa (`f125_id_criterio_mayor`:
+    #: M001, M003…), m047. Lo que compara `armador_service.MARCAS_CHINA`.
+    marca_codigo = db.Column(db.String(20))
     #: Quién escribió `origen` / `marca_siesa` (m046compras): `CARGA_ARCHIVO`,
-    #: `MANUAL` o `SIESA_238920`. Sin esto una marca leída de Siesa y una
+    #: `MANUAL` o `SIESA_CRITERIOS` (antes `SIESA_238920`). Sin esto una marca leída de Siesa y una
     #: tecleada son indistinguibles, y el armador decide régimen China con ella.
     origen_fuente = db.Column(db.String(20))
     marca_fuente = db.Column(db.String(20))
@@ -107,6 +113,7 @@ class Producto(db.Model):
             'unidad_negocio_id': self.unidad_negocio_id,
             'origen': self.origen,
             'marca_siesa': self.marca_siesa,
+            'marca_codigo': self.marca_codigo,
             'origen_fuente': self.origen_fuente,
             'marca_fuente': self.marca_fuente,
             'stock_total': self.stock_total,

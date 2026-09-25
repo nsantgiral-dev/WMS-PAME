@@ -18,7 +18,7 @@ let FUENTES_PREVIA_TIPO = null;
 let FUENTES_MARCA_VISTA = false;
 
 const FUENTES_TIPOS_CARGA = {
-  ORIGEN_MARCA: 'codigo, origen (NACIONAL / CHINA / IMPORTADO), marca',
+  ORIGEN_MARCA: 'codigo, origen (NACIONAL / CHINA / IMPORTADO), marca (el nombre), marca_codigo (el código de Siesa, opcional)',
   FICHAS: 'codigo, unidades_por_caja, cbm_por_caja, peso_kg_por_caja, moq_cajas, proveedor_china, costo_fob_usd, fuente (PACKING_LIST / AGENTE / ESTIMADO)',
 };
 
@@ -28,6 +28,11 @@ const FUENTES_ESTADO_PALABRA = {
   BORRADOR: 'En armado', EN_PRODUCCION: 'En producción', NAVEGANDO: 'Navegando',
   EN_PUERTO: 'En puerto', NACIONALIZACION: 'Nacionalización',
   EN_RUTA_CEDI: 'En ruta al CDI', RECIBIDO: 'Recibido',
+};
+const FUENTES_DESCARTE = {
+  sin_entrada_todavia: 'sin entrada todavía',
+  entrada_antes_de_la_oc: 'entrada anterior a la OC',
+  oc_registrada_al_recibir: 'OC registrada el día que entró la mercancía (no mide al proveedor)',
 };
 const FUENTES_LT_FUENTE = {
   MEDIDO: 'medido', PARCIAL: 'medido, pocas observaciones', DEFAULT_CONSERVADOR: 'supuesto (sin datos)', CONFIGURADO: 'configurado (ROP_LT_NACIONAL_DIAS)',
@@ -118,6 +123,7 @@ function fuentesHtmlEnCamino(e) {
       <td style="text-align:right;">${esc(fuentesNum(t.oc))}</td>
       <td style="text-align:right;">${esc(fuentesNum(t.contenedores))}</td>
       <td style="text-align:right;font-weight:700;">${esc(fuentesNum(t.total))}</td>
+      <td style="text-align:right;${t.oc_vencida ? 'color:var(--warn-tx);' : ''}">${t.oc_vencida ? esc(fuentesNum(t.oc_vencida)) : ''}</td>
       <td>${t.solapamiento_posible ? '<span style="color:var(--warn-tx);" title="Hay OC abierta y contenedor sin OC citada: puede estar contado dos veces">⚠ posible doble</span>' : ''}
           ${t.lineas_sin_unidad_base ? `<span style="color:var(--warn-tx);">${esc(t.lineas_sin_unidad_base)} sin unidad</span>` : ''}</td>
     </tr>`).join('');
@@ -129,6 +135,11 @@ function fuentesHtmlEnCamino(e) {
   if (dec.lineas_fuera_de_lista_blanca) avisos.push(`${dec.lineas_fuera_de_lista_blanca} línea(s) van a bodegas no operadas (p. ej. AV1/TRA1): no cuentan.`);
   if (dec.skus_con_solapamiento_posible) avisos.push(`${dec.skus_con_solapamiento_posible} SKU con posible doble conteo (contenedor sin OC citada).`);
   if (dec.contenedor_cita_oc_cerrada) avisos.push(`${dec.contenedor_cita_oc_cerrada} ítem(s) de contenedor citan una OC ya cerrada: no se suman.`);
+  const venc = dec.ocs_vencidas || {};
+  if (venc.nota) avisos.push(venc.nota);
+  const corte = dec.corte_antiguedad || {};
+  if (corte.nota) avisos.push(corte.nota);
+  (dec.problemas_de_configuracion || []).forEach(p => avisos.push(p));
   const cuerpo = `
     <div style="font-size:var(--fs-sm);color:var(--tx2);margin-bottom:6px;">
       ${esc(fuentesNum(e.skus))} SKU · ${esc(fuentesNum(e.unidades))} unidades en camino a las bodegas operadas.
@@ -136,7 +147,7 @@ function fuentesHtmlEnCamino(e) {
     </div>
     ${avisos.map(a => fuentesAviso(a)).join('')}
     ${filas ? `<div style="overflow-x:auto;"><table style="width:100%;font-size:var(--fs-sm);color:var(--tx2);border-collapse:collapse;">
-      <thead><tr style="color:var(--tx3);"><th style="text-align:left;">SKU</th><th style="text-align:right;">OC</th><th style="text-align:right;">Contenedor</th><th style="text-align:right;">Total</th><th></th></tr></thead>
+      <thead><tr style="color:var(--tx3);"><th style="text-align:left;">SKU</th><th style="text-align:right;">OC</th><th style="text-align:right;">Contenedor</th><th style="text-align:right;">Total</th><th style="text-align:right;" title="De OCs con la entrega vencida hace más de ${esc(fuentesNum(venc.dias))} días">Vieja</th><th></th></tr></thead>
       <tbody>${filas}</tbody></table></div>` : '<div style="color:var(--tx3);font-size:var(--fs-sm);">Nada en camino registrado.</div>'}`;
   return fuentesTarjeta('🚚 En camino', cuerpo);
 }
@@ -150,17 +161,18 @@ function fuentesLtLinea(nombre, lt) {
 function fuentesHtmlLeadTime(l) {
   const filas = (l.por_proveedor || []).map(p => `<tr>
       <td>${esc(p.proveedor)}</td>
-      <td style="text-align:right;">${esc(fuentesNum(p.n_proveedor))}</td>
+      <td style="text-align:right;">${esc(fuentesNum(p.n_proveedor))}${p.n_descartadas_al_recibir ? ` <span style="color:var(--warn-tx);" title="OCs registradas el mismo día que entró la mercancía: no miden al proveedor">(+${esc(fuentesNum(p.n_descartadas_al_recibir))} al recibir)</span>` : ''}</td>
       <td style="text-align:right;">${esc(fuentesNum(p.lt_dias, 1))}</td>
       <td style="text-align:right;">${esc(fuentesNum(p.sigma_lt, 1))}</td>
       <td>${esc(p.nivel === 'PROVEEDOR' ? 'del proveedor' : p.nivel === 'ORIGEN' ? 'del origen (pocas OCs suyas)' : 'supuesto')}</td>
     </tr>`).join('');
-  const desc = Object.entries(l.descartadas || {}).map(([k, n]) => `${esc(k.replace(/_/g, ' '))}: ${esc(n)}`).join(' · ');
+  const desc = Object.entries(l.descartadas || {}).map(([k, n]) => `${esc(FUENTES_DESCARTE[k] || k.replace(/_/g, ' '))}: ${esc(n)}`).join(' · ');
   const cuerpo = `
     <div style="font-size:var(--fs-sm);color:var(--tx2);line-height:1.8;">
       ${fuentesLtLinea('Nacional', l.nacional)}${fuentesLtLinea('China', l.china)}
       <div style="color:var(--tx3);">Medido de ${esc(fuentesNum(l.observaciones))} OC(s): fecha de la OC → primera entrada
-        (recepción del WMS, o la marca de Siesa). Con menos de 3 por proveedor se usa el del origen; sin datos, el supuesto. Con 3 a 5 observaciones
+        (recepción del WMS, o la marca de Siesa). Una OC con la entrada el mismo día se registró al recibir y no cuenta.
+        Con menos de 3 por proveedor se usa el del origen; sin datos, el supuesto. Con 3 a 5 observaciones
         se usa el mayor entre lo medido y el supuesto.
         ${desc ? `Descartadas: ${desc}.` : ''}</div>
     </div>
@@ -209,14 +221,17 @@ function fuentesHtmlCarga() {
           <option value="">Origen (sin cambio)</option><option value="NACIONAL">Nacional</option>
           <option value="CHINA">China</option><option value="IMPORTADO">Importado</option>
         </select>
-        <input id="fuentes-sku-marca" placeholder="Marca (p. ej. M003)" style="padding:8px;min-width:120px;">
+        <input id="fuentes-sku-marca" placeholder="Marca (p. ej. NORMA)" style="padding:8px;min-width:120px;">
         <button class="btn" onclick="fuentesGuardarSku(event)">Guardar</button>
       </div>
     </div>
     <div style="border-top:1px solid var(--brd);margin-top:12px;padding-top:10px;">
       <div style="font-weight:700;color:var(--tx);margin-bottom:6px;">Marca desde Siesa</div>
-      <div style="font-size:var(--fs-sm);color:var(--tx2);margin-bottom:6px;">Lee la clasificación del ítem en Siesa (plan configurado en SIESA_CRITERIO_MARCA).</div>
+      <div style="font-size:var(--fs-sm);color:var(--tx2);margin-bottom:6px;">Lee la clasificación del ítem en Siesa (plan configurado en SIESA_CRITERIO_MARCA).
+        La lectura tarda unos minutos y corre en segundo plano; «Ver qué cambiaría» usa la última lectura completa.</div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        <button class="btn" onclick="fuentesMarcaLeer(event)">Leer de Siesa</button>
+        <button class="btn" onclick="fuentesMarcaEstado(event)">¿Cómo va la lectura?</button>
         <button class="btn" onclick="fuentesMarcaPrevia(event)">Ver qué cambiaría</button>
         <button class="btn" onclick="fuentesMarcaAplicar(event)">Aplicar marcas de Siesa</button>
       </div>
@@ -313,13 +328,54 @@ async function fuentesGuardarSku(event) {
   }, 'Guardando…');
 }
 
+function fuentesHtmlMarcaEstado(e) {
+  const ult = e.ultima || {};
+  const res = ult.resultado || {};
+  const vig = e.vigente || null;
+  const partes = [];
+  if (!e.plan_configurado) partes.push(fuentesAviso('SIESA_CRITERIO_MARCA no está configurada: no se lee nada.', 'info'));
+  if (e.en_curso) partes.push(fuentesAviso('Hay una lectura en curso: volvé a mirar en unos minutos.', 'info'));
+  if (ult.ok === false) partes.push(fuentesAviso('La última lectura quedó incompleta y no se guardó: ' + (ult.error || ''), 'warn'));
+  partes.push(`<div style="font-size:var(--fs-sm);color:var(--tx2);line-height:1.8;">
+      Última lectura: ${esc(fuentesHora(ult.inicio))} ${ult.ok === true ? '· completa' : ult.ok === false ? '· incompleta' : ult.inicio ? '· sin terminar' : ''}
+      ${res.items !== undefined ? `· ${esc(fuentesNum(res.items))} ítems · ${esc(fuentesNum(res.criterios_distintos))} marcas · ${esc(fuentesNum(res.paginas))} páginas` : ''}<br>
+      Vigente para la vista previa: ${vig ? `${esc(fuentesHora(vig.leida_utc))} · plan ${esc(vig.plan)}${e.vigente_es_del_plan ? '' : ' (no es el plan configurado: volvé a leer)'}` : 'ninguna'}
+    </div>`);
+  return partes.join('');
+}
+
 function fuentesHtmlMarca(r) {
   if (r.omitido) return fuentesAviso(r.omitido, 'info');
-  if (r.campos_no_reconocidos) {
-    return fuentesAviso('Siesa respondió con campos que no son los del plano: ' + r.campos_no_reconocidos.join(', '));
-  }
-  return (r.completa === false ? fuentesAviso('Lectura incompleta: ' + (r.motivo_incompleta || '')) : '')
-    + (r.nota ? fuentesAviso(r.nota, 'info') : '') + fuentesHtmlPrevia(r);
+  if (r.sin_lectura) return fuentesAviso(r.sin_lectura, 'info') + (r.estado ? fuentesHtmlMarcaEstado(r.estado) : '');
+  const cab = r.plan ? `<div style="font-size:var(--fs-sm);color:var(--tx2);margin-bottom:4px;">
+      Plan ${esc(r.plan)} · leído ${esc(fuentesHora(r.leida_utc))} · ${esc(fuentesNum(r.items_leidos))} ítems en Siesa
+      · ${esc(fuentesNum(r.fuera_del_catalogo))} no están en el catálogo del WMS (no se tocan)</div>` : '';
+  return cab + (r.nota ? fuentesAviso(r.nota, 'info') : '') + fuentesHtmlPrevia(r);
+}
+
+async function fuentesMarcaLeer(event) {
+  const out = document.getElementById('fuentes-marca');
+  await conBotonOcupado(event, async () => {
+    try {
+      const r = await post('/api/compras/fuentes/marca-siesa/leer', {});
+      alerta(r.mensaje || 'Lectura iniciada', 'success');
+      FUENTES_MARCA_VISTA = false;
+    } catch (e) {
+      if (out) out.innerHTML = fuentesAviso(e.message || 'No se pudo iniciar la lectura', 'err');
+    }
+  }, 'Iniciando…');
+}
+
+async function fuentesMarcaEstado(event) {
+  const out = document.getElementById('fuentes-marca');
+  await conBotonOcupado(event, async () => {
+    try {
+      const e = await get('/api/compras/fuentes/marca-siesa/estado');
+      if (out) out.innerHTML = fuentesHtmlMarcaEstado(e);
+    } catch (e) {
+      if (out) out.innerHTML = fuentesAviso(e.message || 'No se pudo leer el estado', 'err');
+    }
+  }, 'Mirando…');
 }
 
 async function fuentesMarcaPrevia(event) {
@@ -327,12 +383,12 @@ async function fuentesMarcaPrevia(event) {
   await conBotonOcupado(event, async () => {
     try {
       const r = await get('/api/compras/fuentes/marca-siesa/vista-previa');
-      FUENTES_MARCA_VISTA = !r.omitido && !r.campos_no_reconocidos;
+      FUENTES_MARCA_VISTA = !r.omitido && !r.sin_lectura;
       if (out) out.innerHTML = fuentesHtmlMarca(r);
     } catch (e) {
-      if (out) out.innerHTML = fuentesAviso(e.message || 'No se pudo leer Siesa', 'err');
+      if (out) out.innerHTML = fuentesAviso(e.message || 'No se pudo armar la vista previa', 'err');
     }
-  }, 'Leyendo Siesa…');
+  }, 'Calculando…');
 }
 
 async function fuentesMarcaAplicar(event) {

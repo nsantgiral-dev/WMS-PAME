@@ -13,7 +13,7 @@ Tres vías, todas con **vista previa antes de escribir**:
 |---|---|---|
 | Archivo CSV / Excel (`vista_previa` → `aplicar`) | admin y compras | `CARGA_ARCHIVO` |
 | Un SKU a mano (`editar_producto`) | admin y compras | `MANUAL` |
-| Marca desde la clasificación de Siesa (`marca_desde_siesa`) | admin y compras | `SIESA_238920` |
+| Marca desde la clasificación de Siesa (`leer_marca_siesa` en segundo plano → `marca_desde_siesa`) | admin y compras | `SIESA_CRITERIOS` |
 
 ## Reglas
 
@@ -28,19 +28,34 @@ Tres vías, todas con **vista previa antes de escribir**:
 ## La marca en Siesa — `SIESA_CRITERIO_MARCA` (sin default)
 
 En Siesa la marca es un **criterio de clasificación** del ítem (plan + criterio
-mayor, la tabla t125; el plano del conector 238920 lo describe así:
-`f125_id_plan`, `f125_id_criterio_mayor`). Qué plan es «marca» **lo decide el
-dueño**: sin la variable, `marca_desde_siesa` no lee nada y lo dice. La
-respuesta GET del 238920 **no tiene contrato** (el `.docx` es el del plano de
-importación): los nombres de campo se buscan entre los del plano y, si no
-aparecen, se devuelven los que sí vinieron para configurarlo
-(`scripts/qa_compras_fuentes_real.py` los muestra).
+mayor, la tabla t125). Se lee de la consulta estándar `API_v2_ItemsCriterios`
+(**sin contrato** en `docs/siesa-specs/`; campos verificados en vivo el
+2026-09-25: `f120_rowid`, `f120_id_cia`, `f120_referencia`, `f125_id_plan`,
+`f105_descripcion` —nombre del plan—, `f125_id_criterio_mayor` —el código,
+M001— y `f106_descripcion` —el nombre, NORMA—), filtrada por el plan con
+`f125_id_plan = ''P03''`. En QA: P01 línea de negocio, P02 sub línea, **P03
+marca** (26.053 ítems, 261 páginas, ~5 min). Qué plan es «marca» **lo decide
+el dueño**: sin la variable no se lee nada.
+
+Se guarda el NOMBRE en `Producto.marca_siesa` y el código en
+`Producto.marca_codigo` (m047). **Ya no se usa el 238920**: su `.docx` es el
+del plano de importación (escribir clasificación) y su GET da 401.
+
+La lectura corre **en segundo plano** (`disparar_lectura_marca`, hilo con
+`LOCK_MARCA_SIESA` y registro `compras_marca`): cinco minutos no caben en un
+request (gunicorn corta a los 60 s). Queda en `marca_siesa_lectura`; la vista
+previa y la aplicación leen de ahí, nunca de Siesa. **Una lectura incompleta**
+(página que falla, tope, un `f120_rowid` repetido = paginación inestable) no
+se guarda ni se aplica: se declara.
 """
 import csv
 import io
 import logging
 import os
+import time
 import unicodedata
+from collections import Counter
+from datetime import datetime, timedelta
 from decimal import Decimal, InvalidOperation
 
 from app.extensions import db
@@ -56,13 +71,13 @@ FUENTES_FICHA = ('PACKING_LIST', 'AGENTE', 'ESTIMADO')
 
 FUENTE_CARGA = 'CARGA_ARCHIVO'
 FUENTE_MANUAL = 'MANUAL'
-FUENTE_SIESA = 'SIESA_238920'
+FUENTE_SIESA = 'SIESA_CRITERIOS'   # antes 'SIESA_238920' (nunca se escribió: el GET daba 401)
 
 MAX_FILAS = 20000
 
 COLUMNAS = {
     TIPO_ORIGEN_MARCA: {'obligatorias': ('codigo',),
-                        'opcionales': ('origen', 'marca')},
+                        'opcionales': ('origen', 'marca', 'marca_codigo')},
     TIPO_FICHAS: {'obligatorias': ('codigo', 'unidades_por_caja', 'cbm_por_caja',
                                    'peso_kg_por_caja'),
                   'opcionales': ('moq_cajas', 'proveedor_china', 'costo_fob_usd',
@@ -197,7 +212,7 @@ def _cambio(antes, despues):
     return {'antes': a, 'despues': d}
 
 
-def vista_previa(tipo: str, filas: list) -> dict:
+def vista_previa(tipo: str, filas: list, max_filas: int = MAX_FILAS) -> dict:
     """Qué pasaría si se aplica. No escribe nada.
 
     Returns: {tipo, validas[{fila, codigo, producto_id, cambios, nuevo}],
@@ -208,8 +223,8 @@ def vista_previa(tipo: str, filas: list) -> dict:
 
     if tipo not in TIPOS:
         raise ValueError(f'Tipo de carga desconocido: {tipo!r}. Válidos: {", ".join(TIPOS)}')
-    if len(filas) > MAX_FILAS:
-        raise ValueError(f'El archivo tiene {len(filas)} filas: el máximo es {MAX_FILAS}')
+    if max_filas is not None and len(filas) > max_filas:
+        raise ValueError(f'El archivo tiene {len(filas)} filas: el máximo es {max_filas}')
     cols = COLUMNAS[tipo]
     presentes = set().union(*[set(f) for f in filas]) if filas else set()
     faltan = [c for c in cols['obligatorias'] if c not in presentes]
@@ -218,7 +233,7 @@ def vista_previa(tipo: str, filas: list) -> dict:
         return {'tipo': tipo, 'validas': [], 'invalidas': [], 'sin_cambio': 0,
                 'faltan_columnas': faltan, 'columnas_desconocidas': desconocidas,
                 'resumen': {'filas': len(filas), 'validas': 0, 'invalidas': 0}}
-    if tipo == TIPO_ORIGEN_MARCA and not ({'origen', 'marca'} & presentes):
+    if tipo == TIPO_ORIGEN_MARCA and not ({'origen', 'marca', 'marca_codigo'} & presentes):
         return {'tipo': tipo, 'validas': [], 'invalidas': [], 'sin_cambio': 0,
                 'faltan_columnas': ['origen o marca'], 'columnas_desconocidas': desconocidas,
                 'resumen': {'filas': len(filas), 'validas': 0, 'invalidas': 0}}
@@ -260,8 +275,13 @@ def vista_previa(tipo: str, filas: list) -> dict:
             if marca and len(marca) > 50:
                 errores.append('marca: más de 50 caracteres')
                 marca = None
+            marca_codigo = _txt(f.get('marca_codigo')).upper() or None
+            if marca_codigo and len(marca_codigo) > 20:
+                errores.append('marca_codigo: más de 20 caracteres')
+                marca_codigo = None
             if not errores and prod is not None:
-                for campo, valor in (('origen', origen), ('marca_siesa', marca)):
+                for campo, valor in (('origen', origen), ('marca_siesa', marca),
+                                     ('marca_codigo', marca_codigo)):
                     c = _cambio(getattr(prod, campo), valor)
                     if c:
                         cambios[campo] = c
@@ -317,13 +337,13 @@ def vista_previa(tipo: str, filas: list) -> dict:
 
 
 def aplicar(tipo: str, filas: list, usuario_id=None, fuente: str = FUENTE_CARGA,
-            motivo: str = None) -> dict:
+            motivo: str = None, max_filas: int = MAX_FILAS) -> dict:
     """Escribe las filas válidas de `vista_previa` (recalculada acá). Commit."""
     from app.models.producto import Producto
     from app.models.importacion import FichaImportacion
     from app.services.bitacora import registrar_accion
 
-    prev = vista_previa(tipo, filas)
+    prev = vista_previa(tipo, filas, max_filas=max_filas)
     if prev['faltan_columnas']:
         return {'ok': False, 'error': 'Faltan columnas: ' + ', '.join(prev['faltan_columnas']),
                 **prev}
@@ -338,6 +358,9 @@ def aplicar(tipo: str, filas: list, usuario_id=None, fuente: str = FUENTE_CARGA,
                 prod.origen_fuente = fuente
             if 'marca_siesa' in cambios:
                 prod.marca_siesa = cambios['marca_siesa']['despues']
+                prod.marca_fuente = fuente
+            if 'marca_codigo' in cambios:
+                prod.marca_codigo = cambios['marca_codigo']['despues']
                 prod.marca_fuente = fuente
             entidad = prod
         else:
@@ -371,92 +394,254 @@ def editar_producto(codigo: str, origen=None, marca=None, usuario_id=None) -> di
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Marca desde Siesa (238920)
+# Marca desde Siesa (`API_v2_ItemsCriterios`, en segundo plano)
 # ──────────────────────────────────────────────────────────────────────────────
 
-_CLAVES_PLAN = ('f125_id_plan', 'f106_id_plan', 'id_plan', 'plan')
-_CLAVES_CRITERIO = ('f125_id_criterio_mayor', 'f106_id_criterio_mayor', 'f106_id',
-                    'id_criterio_mayor', 'criterio_mayor')
-_CLAVES_REF = ('f120_referencia', 'referencia')
+REGISTRO_MARCA = 'compras_marca'
+#: Una lectura abierta hace más que esto se da por muerta (reinicio, deploy):
+#: no bloquea una nueva.
+TECHO_LECTURA_MIN = 20
+_CAMPOS_CRITERIOS = ('f120_referencia', 'f125_id_plan', 'f125_id_criterio_mayor',
+                     'f106_descripcion')
 
 
 def criterio_marca():
-    """`SIESA_CRITERIO_MARCA` = el plan de clasificación que es «marca».
-    **Sin default**: lo decide el dueño. `None` = no configurado."""
+    """`SIESA_CRITERIO_MARCA` = el plan de clasificación que es «marca» (en QA,
+    `P03`). **Sin default**: lo decide el dueño. `None` = no configurado."""
     v = (os.getenv('SIESA_CRITERIO_MARCA') or '').strip()
     return v or None
 
 
-def _clave(fila, candidatas):
-    minus = {str(k).lower(): k for k in fila}
-    for c in candidatas:
-        if c in minus:
-            return minus[c]
-    return None
+def _api_criterios() -> str:
+    return (os.getenv('CONNEKTA_API_ITEMS_CRITERIOS') or 'API_v2_ItemsCriterios').strip()
 
 
-def filas_marca_desde_siesa(gateway=None, max_paginas: int = 200) -> dict:
-    """Lee la clasificación y devuelve las filas `{codigo, marca}` del plan
-    configurado. Nunca levanta."""
+def _max_paginas_marca() -> int:
+    """Tope de páginas de la lectura. P03 son 261 en QA: el default (400)
+    alcanza con margen; con la última página llena en el tope la lectura queda
+    INCOMPLETA, no se trunca callada."""
+    try:
+        return max(1, int(os.getenv('COMPRAS_MARCA_MAX_PAGINAS', '400')))
+    except ValueError:
+        return 400
+
+
+def _pausa_marca() -> float:
+    try:
+        return max(0.0, float(os.getenv('COMPRAS_MARCA_PAUSA_S', '0.2')))
+    except ValueError:
+        return 0.2
+
+
+def _sin_plan():
+    return {'omitido': 'SIESA_CRITERIO_MARCA no está configurada: el dueño tiene que '
+                       'decidir qué plan de clasificación de Siesa es «marca» (en QA, '
+                       'P03). No se lee nada hasta entonces.'}
+
+
+def leer_marca_siesa(gateway=None, pausa_s=None, ahora=None) -> dict:
+    """Descarga el plan de marca COMPLETO y lo guarda en `marca_siesa_lectura`.
+    **No toca ningún producto** (eso es `marca_desde_siesa(aplicar_=True)`).
+
+    Corre en segundo plano (`disparar_lectura_marca`); se puede llamar directo
+    desde un script. Nunca levanta. Una lectura incompleta no escribe nada y
+    deja el motivo en `registros_sync` (`compras_marca`).
+    """
+    from app.models.compras_fuentes import MarcaSiesaLectura
+    from app.services import registro_sync_service as _reg
+    from app.services.compras_oc_sync import _descargar, id_cia
+    from app.services.siesa_filtro import lit
+
     plan = criterio_marca()
     if not plan:
-        return {'omitido': 'SIESA_CRITERIO_MARCA no está configurada: el dueño '
-                           'tiene que decidir qué plan de clasificación de Siesa es '
-                           '«marca». No se lee nada hasta entonces.'}
+        return _sin_plan()
     if gateway is None:
         from app.services.connekta_gateway import connekta as gateway
     if getattr(gateway, 'modo_simulacion', False):
         return {'omitido': 'Connekta en modo simulación'}
-    filas, completa, motivo, claves_vistas = [], True, None, None
-    k_plan = k_crit = k_ref = None
-    for pag in range(1, max_paginas + 1):
-        try:
-            resp = gateway.get_clasificacion_items(pagina=pag)
-        except Exception as e:
-            completa, motivo = False, f'página {pag}: {str(e)[:300]}'
-            break
-        if resp is None:
-            completa, motivo = False, f'página {pag}: circuito de Siesa abierto'
-            break
-        det = resp.get('detalle') if isinstance(resp, dict) else None
-        rows = None
-        if isinstance(det, dict):
-            rows = det.get('Table', det.get('Datos'))
-        if rows is None:
-            completa, motivo = False, f'página {pag}: respuesta sin Table ni Datos'
-            break
-        if rows and k_plan is None:
-            claves_vistas = sorted(str(k) for k in rows[0])
-            k_plan, k_crit, k_ref = (_clave(rows[0], _CLAVES_PLAN),
-                                     _clave(rows[0], _CLAVES_CRITERIO),
-                                     _clave(rows[0], _CLAVES_REF))
-            if not (k_plan and k_crit and k_ref):
-                return {'campos_no_reconocidos': claves_vistas,
-                        'nota': ('La respuesta del 238920 no trae los campos del plano '
-                                 '(plan, criterio mayor, referencia). Con estos nombres '
-                                 'hay que ajustar `_CLAVES_*` — no se adivina.')}
-        for r in rows:
-            if _txt(r.get(k_plan)) == plan:
-                filas.append({'codigo': _txt(r.get(k_ref)), 'marca': _txt(r.get(k_crit))})
-        if len(rows) < 100:
-            break
-    else:
-        completa, motivo = False, f'tope de {max_paginas} páginas'
-    return {'filas': filas, 'completa': completa, 'motivo_incompleta': motivo,
-            'plan': plan, 'campos': claves_vistas}
+    pausa = _pausa_marca() if pausa_s is None else pausa_s
+    ahora = ahora or datetime.utcnow()
+    registro = _reg.abrir(REGISTRO_MARCA)
+    if registro is None:
+        return {'ok': False, 'error': 'No se pudo anotar la corrida en registros_sync: '
+                                      'sin eso la lectura no se podría identificar.'}
+    t0 = time.monotonic()
+    try:
+        parametros = f'f125_id_plan = {lit(plan, "SIESA_CRITERIO_MARCA")}'
+    except ValueError as e:
+        _reg.cerrar_error(registro, str(e))
+        return {'ok': False, 'error': str(e)}
+    # Clave (ítem, plan): si Siesa ignorara el filtro, el mismo ítem vendría una
+    # vez por plan y eso no es una página repetida — se cuenta como otro plan.
+    filas, completa, motivo, paginas = _descargar(
+        gateway, _api_criterios(), parametros, pausa,
+        clave=lambda r: (r.get('f120_rowid'), (r.get('f125_id_plan') or '').strip()),
+        tope=_max_paginas_marca())
+
+    cont = Counter()
+    por_ref = {}
+    campos = sorted(str(k) for k in filas[0]) if filas else []
+    faltan = [c for c in _CAMPOS_CRITERIOS if filas and c not in filas[0]]
+    if faltan:
+        completa, motivo = False, (f'la respuesta no trae {", ".join(faltan)} — '
+                                   f'vinieron: {", ".join(campos)}. No se adivina.')
+    for f in filas if completa else []:
+        if _txt(f.get('f125_id_plan')) != plan:
+            cont['otro_plan'] += 1
+            continue
+        cia = f.get('f120_id_cia')
+        if cia is not None and str(cia).strip() != str(id_cia()):
+            cont['otra_compania'] += 1
+            continue
+        ref = _txt(f.get('f120_referencia'))[:50]
+        if not ref:
+            cont['sin_referencia'] += 1
+            continue
+        if ref in por_ref:
+            cont['referencia_repetida'] += 1
+        por_ref[ref] = (_txt(f.get('f125_id_criterio_mayor'))[:20] or None,
+                        _txt(f.get('f106_descripcion'))[:100] or None)
+
+    resultado = {
+        'plan': plan, 'nombre_plan': _txt((filas or [{}])[0].get('f105_descripcion')) or None,
+        'paginas': paginas, 'filas_recibidas': len(filas), 'items': len(por_ref),
+        'criterios_distintos': len({v[0] for v in por_ref.values()}),
+        'segundos': round(time.monotonic() - t0, 1), 'campos': campos, **dict(cont),
+    }
+    if not completa:
+        _reg.cerrar_error(registro, f'lectura incompleta: {motivo}', resultado)
+        logger.warning('[MARCA_SIESA] incompleta, no se guarda: %s', motivo)
+        return {'ok': False, 'completa': False, 'motivo_incompleta': motivo, **resultado}
+    try:
+        existentes = {m.referencia: m for m in
+                      MarcaSiesaLectura.query.filter_by(plan=plan).all()}
+        for ref, (codigo, nombre) in por_ref.items():
+            m = existentes.get(ref)
+            if m is None:
+                m = MarcaSiesaLectura(plan=plan, referencia=ref)
+                db.session.add(m)
+            m.criterio_codigo, m.criterio_nombre = codigo, nombre
+            m.registro_id, m.vista_en = registro, ahora
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        _reg.cerrar_error(registro, f'escritura: {e}', resultado)
+        return {'ok': False, 'error': str(e)[:300], **resultado}
+    _reg.cerrar_ok(registro, resultado)
+    logger.info('[MARCA_SIESA] %s', resultado)
+    return {'ok': True, 'completa': True, **resultado}
 
 
-def marca_desde_siesa(gateway=None, aplicar_=False, usuario_id=None) -> dict:
-    """Vista previa (o aplicación) de la marca leída de Siesa."""
-    leido = filas_marca_desde_siesa(gateway)
-    if 'filas' not in leido:
-        return leido
-    extra = {k: leido[k] for k in ('completa', 'motivo_incompleta', 'plan', 'campos')}
-    if not leido['filas']:
+def _lectura_en_curso():
+    """La corrida abierta y reciente, si la hay (una abierta hace más de
+    `TECHO_LECTURA_MIN` se da por muerta)."""
+    from app.services import registro_sync_service as _reg
+    ult = _reg.ultimo(REGISTRO_MARCA)
+    if not isinstance(ult, dict) or ult.get('_error_lectura') or ult.get('ok') is not None:
+        return None
+    try:
+        inicio = datetime.fromisoformat(ult['inicio'])
+    except (TypeError, ValueError, KeyError):
+        return None
+    return ult if datetime.utcnow() - inicio < timedelta(minutes=TECHO_LECTURA_MIN) else None
+
+
+def lectura_vigente():
+    """La última lectura COMPLETA: `{registro_id, plan, leida_utc, resultado}`
+    o `None`."""
+    from app.services import registro_sync_service as _reg
+    ok = _reg.ultimo_ok(REGISTRO_MARCA)
+    if not isinstance(ok, dict) or ok.get('_error_lectura'):
+        return None
+    res = ok.get('resultado') or {}
+    return {'registro_id': ok['id'], 'plan': res.get('plan'), 'leida_utc': ok.get('fin'),
+            'resultado': res}
+
+
+def estado_lectura_marca() -> dict:
+    """Para la pantalla: plan configurado, lectura en curso, la última
+    (completa o no) y la vigente. No toca Siesa."""
+    from app.services import registro_sync_service as _reg
+    ult = _reg.ultimo(REGISTRO_MARCA)
+    vig = lectura_vigente()
+    plan = criterio_marca()
+    return {
+        'plan_configurado': plan,
+        'en_curso': _lectura_en_curso() is not None,
+        'ultima': ({k: ult.get(k) for k in ('inicio', 'fin', 'ok', 'error', 'resultado')}
+                   if isinstance(ult, dict) else None),
+        'vigente': vig,
+        'vigente_es_del_plan': bool(vig and plan and vig['plan'] == plan),
+    }
+
+
+def disparar_lectura_marca(app, lanzar=None) -> dict:
+    """El botón «Leer de Siesa»: la lectura corre en un hilo, con
+    `LOCK_MARCA_SIESA`, y la respuesta vuelve ya. La Regla 14 no la dobla un
+    botón (fuera de 7:00–19:30 → no). `lanzar` es para los tests."""
+    import threading
+    from app.services.fotos_siesa_service import VENTANA, ventana_abierta
+
+    if not criterio_marca():
+        return {'ok': False, 'codigo': 400, **_sin_plan()}
+    if not ventana_abierta():
+        return {'ok': False, 'codigo': 409,
+                'error': f'Fuera de la ventana de Siesa ({VENTANA[0]}–{VENTANA[1]} Bogotá). Regla 14.'}
+    en_curso = _lectura_en_curso()
+    if en_curso:
+        return {'ok': False, 'codigo': 409,
+                'error': f'Ya hay una lectura en curso (empezó {en_curso["inicio"]} UTC).'}
+
+    def _run():
+        from app.utils.lock import LOCK_MARCA_SIESA, advisory_lock
+        with app.app_context():
+            with advisory_lock(LOCK_MARCA_SIESA, 'marca_siesa') as tomado:
+                if not tomado:
+                    logger.info('[MARCA_SIESA] otro proceso ya está leyendo')
+                    return
+                try:
+                    leer_marca_siesa()
+                except Exception as e:      # noqa: BLE001 — un hilo no tiene a quién avisar
+                    db.session.rollback()
+                    logger.error('[MARCA_SIESA] falló: %s', e, exc_info=True)
+
+    (lanzar or (lambda fn: threading.Thread(target=fn, daemon=True).start()))(_run)
+    return {'ok': True, 'codigo': 202,
+            'mensaje': 'Lectura de Siesa iniciada en segundo plano (≈5 min). '
+                       'Después, «Ver qué cambiaría».'}
+
+
+def marca_desde_siesa(aplicar_=False, usuario_id=None) -> dict:
+    """Vista previa (o aplicación) de la marca **leída y guardada**: nunca
+    consulta Siesa. Solo los ítems que existen en el catálogo del WMS; los
+    demás se cuentan (`fuera_del_catalogo`)."""
+    from app.models.compras_fuentes import MarcaSiesaLectura
+
+    plan = criterio_marca()
+    if not plan:
+        return _sin_plan()
+    vig = lectura_vigente()
+    if vig is None:
+        return {'sin_lectura': 'Todavía no hay una lectura completa de la marca de Siesa: '
+                               'tocá «Leer de Siesa» y volvé en unos minutos.',
+                'estado': estado_lectura_marca()}
+    if vig['plan'] != plan:
+        return {'sin_lectura': f'La última lectura completa es del plan {vig["plan"]} y '
+                               f'SIESA_CRITERIO_MARCA dice {plan}: volvé a leer.',
+                'estado': estado_lectura_marca()}
+    lecturas = MarcaSiesaLectura.query.filter_by(plan=plan,
+                                                 registro_id=vig['registro_id']).all()
+    productos = _productos_por_codigo(m.referencia for m in lecturas)
+    filas = [{'codigo': m.referencia, 'marca': m.criterio_nombre or '',
+              'marca_codigo': m.criterio_codigo or ''}
+             for m in lecturas if m.referencia in productos]
+    extra = {'plan': plan, 'leida_utc': vig['leida_utc'], 'items_leidos': len(lecturas),
+             'fuera_del_catalogo': len(lecturas) - len(filas), 'lectura': vig['resultado']}
+    if not filas:
         return {'resumen': {'filas': 0}, 'validas': [], 'invalidas': [], **extra,
-                'nota': f'Ningún ítem clasificado en el plan {leido["plan"]}.'}
+                'nota': f'Ningún ítem del catálogo del WMS está clasificado en el plan {plan}.'}
     if aplicar_:
-        return {**aplicar(TIPO_ORIGEN_MARCA, leido['filas'], usuario_id=usuario_id,
-                          fuente=FUENTE_SIESA, motivo='Marca leída de Siesa (238920)'),
-                **extra}
-    return {**vista_previa(TIPO_ORIGEN_MARCA, leido['filas']), **extra}
+        return {**aplicar(TIPO_ORIGEN_MARCA, filas, usuario_id=usuario_id, fuente=FUENTE_SIESA,
+                          motivo=f'Marca leída de Siesa (API_v2_ItemsCriterios, plan {plan})',
+                          max_filas=None), **extra}
+    return {**vista_previa(TIPO_ORIGEN_MARCA, filas, max_filas=None), **extra}

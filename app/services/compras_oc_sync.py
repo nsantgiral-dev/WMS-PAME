@@ -3,9 +3,12 @@ Espejo de las órdenes de compra de Siesa → `oc_linea_siesa` y `proveedores`.
 
 Fuente: `API_v2_Compras_Ordenes`, contrato completo en `docs/siesa-specs/`
 (89 campos). Es la única lectura de compras que cumple la Regla 1 sin
-descubrimiento en vivo. `API_v2_Terceros` (proveedores del maestro) también
-tiene spec (`42 - API_v2_Terceros.docx`) pero **nunca se consultó desde el WMS**:
-no se sabe si está registrada en Connekta. Si falla, se declara y el resto sigue.
+descubrimiento en vivo. El maestro de proveedores sale de
+`API_v2_Proveedores` (una fila por sucursal; **sin contrato** en
+`docs/siesa-specs/`: campos descubiertos en vivo el 2026-09-25 — el `.docx`
+`API_v1_Proveedores` es el del POST). Antes se leía `API_v2_Terceros`, que no
+tiene tipo de proveedor ni moneda y trae las dos compañías: mezclaba la 1 y la
+2 (ganaba la última fila) y metía EPS, fondos de pensiones y cédulas.
 
 ## Tres corridas
 
@@ -13,7 +16,7 @@ no se sabe si está registrada en Connekta. Si falla, se declara y el resto sigu
 |---|---|---|
 | `sincronizar_ocs`        | `f420_ind_estado = 1` y `= 2` (Aprobada, Parcial) | «en camino» |
 | `sincronizar_historial`  | `f420_ind_estado = 3 AND f420_fecha >= ''AAAAMMDD''` | lead time y precio |
-| `sincronizar_proveedores_terceros` | `f200_ind_proveedor = 1 AND f200_ind_estado = 1` | maestro de proveedores |
+| `sincronizar_proveedores` | `API_v2_Proveedores`: `f202_ind_estado = 1`; en Python, compañía `SIESA_ID_CIA` y tipo en `COMPRAS_TIPOS_PROVEEDOR` | maestro de proveedores de mercancía |
 
 ## Reglas
 
@@ -29,6 +32,9 @@ no se sabe si está registrada en Connekta. Si falla, se declara y el resto sigu
   hallazgo K del sync de pedidos, que borraba lo de las páginas no leídas.
 - **Nada se borra.** Cerrar es `abierta=False` + `cerrada_en` + motivo.
 - Filtros de texto con doble comilla simple (Regla 15), vía `siesa_filtro.lit`.
+- **Solo la compañía propia** (`SIESA_ID_CIA`, Regla 2): las APIs de Siesa de
+  este ambiente devuelven las compañías 1 y 2. Una línea de OC o un proveedor de
+  otra compañía no se escribe y se cuenta (`otra_compania`).
 """
 import logging
 import os
@@ -78,6 +84,25 @@ def _dias_historial() -> int:
         return 365
 
 
+def id_cia() -> int:
+    """La compañía propia en Siesa (`SIESA_ID_CIA`, default 1 — Regla 2: nunca
+    el tenant 8215). Las consultas de este ambiente traen la 1 y la 2."""
+    try:
+        return int(str(os.getenv('SIESA_ID_CIA', '1')).strip())
+    except ValueError:
+        return 1
+
+
+def _de_otra_compania(fila, *campos) -> bool:
+    """True si la fila declara una compañía distinta de la propia. Una fila sin
+    el campo no se descarta (el contrato lo trae; faltar no es evidencia)."""
+    for c in campos:
+        v = _int(fila.get(c))
+        if v is not None:
+            return v != id_cia()
+    return False
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Conversión
 # ──────────────────────────────────────────────────────────────────────────────
@@ -119,15 +144,30 @@ def _d(v):
 # Descarga
 # ──────────────────────────────────────────────────────────────────────────────
 
-def _descargar(gateway, nombre_api, parametros, pausa_s, url=None):
+def _clave_por_rowid(r):
+    """La clave de una fila para detectar la paginación inestable: la línea de
+    OC (`f421_rowid`) o el tercero (`f200_rowid`)."""
+    return r.get('f421_rowid', r.get('f200_rowid'))
+
+
+def _descargar(gateway, nombre_api, parametros, pausa_s, url=None, clave=None,
+               tope=None):
     """Todas las páginas de UNA consulta. Nunca levanta.
+
+    `clave(fila)` identifica la fila: la misma clave dos veces en la misma
+    enumeración es paginación inestable. **Tiene que ser única por fila de
+    esa consulta**: `API_v2_Proveedores` trae una fila por SUCURSAL, así que
+    ahí `f200_rowid` solo se repite con dos sucursales del mismo tercero y lo
+    confundía con una página repetida (medido en vivo: se cortaba en la
+    página 1). `tope` = máximo de páginas (default `COMPRAS_OC_MAX_PAGINAS`).
 
     Returns: (filas, completa: bool, motivo | None, paginas)
     """
     from app.services.connekta_gateway import _exigir_datos
 
+    clave = clave or _clave_por_rowid
     filas, vistos = [], set()
-    tope = _max_paginas()
+    tope = tope or _max_paginas()
     for pag in range(1, tope + 1):
         params = {'parametros': parametros,
                   'paginacion': f'numPag={pag}|tamPag={TAM_PAG}'}
@@ -147,7 +187,7 @@ def _descargar(gateway, nombre_api, parametros, pausa_s, url=None):
         except Exception as e:
             return filas, False, str(e)[:300], pag - 1
         for r in rows:
-            rid = r.get('f421_rowid', r.get('f200_rowid'))
+            rid = clave(r)
             if rid is not None and rid in vistos:
                 # El mismo registro en dos páginas de la misma enumeración: el
                 # orden no es estable y pudo saltarse otros. No se puede afirmar
@@ -162,7 +202,7 @@ def _descargar(gateway, nombre_api, parametros, pausa_s, url=None):
         if pausa_s:
             time.sleep(pausa_s)
     return filas, False, (f'tope de {tope} páginas con la última llena: hay más '
-                          'del otro lado (COMPRAS_OC_MAX_PAGINAS)'), tope
+                          'del otro lado'), tope
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -211,6 +251,9 @@ def _aplicar_lineas(filas, ahora, *, abierta: bool):
     cont = Counter()
     por_rowid = {}
     for f in filas:
+        if _de_otra_compania(f, 'f420_id_cia', 'f421_id_cia'):
+            cont['otra_compania'] += 1
+            continue
         rid = _int(f.get('f421_rowid'))
         if rid is None:
             cont['sin_rowid'] += 1
@@ -363,6 +406,7 @@ def sincronizar_ocs(gateway=None, pausa_s=None, ahora=None) -> dict:
         'lineas_vistas': len(vistos),
         'lineas_cerradas': cerradas,
         'cierre_omitido_por_incompleta': not completa,
+        'otra_compania': 0,
         **dict(cont),
     }
     if completa:
@@ -418,39 +462,144 @@ def sincronizar_historial(gateway=None, desde=None, pausa_s=None, ahora=None) ->
     return resultado
 
 
-def sincronizar_proveedores_terceros(gateway=None, pausa_s=None, ahora=None) -> dict:
-    """Proveedores activos del maestro de terceros (`API_v2_Terceros`).
+#: Fuente de los proveedores que vienen del maestro (`API_v2_Proveedores`).
+FUENTE_PROVEEDORES = 'SIESA_PROVEEDORES'
+#: La fuente del sync anterior (`API_v2_Terceros`): mezclaba compañías y traía
+#: EPS, pensiones y cédulas. Sus filas que no son proveedores de mercancía se
+#: desactivan (con bitácora) en el primer barrido completo.
+FUENTE_TERCEROS_VIEJA = 'SIESA_TERCEROS'
 
-    Un proveedor sin OC en el último año también existe, y es a quien se le
-    pide cotización. Nunca consultada antes desde el WMS: si Connekta la
-    rechaza, se devuelve el motivo y no se escribe nada.
+
+def tipos_proveedor():
+    """`COMPRAS_TIPOS_PROVEEDOR` = los `f202_id_tipo_prov` que son proveedores
+    de MERCANCÍA (p. ej. `0001,0002,0018`). **Sin default: lo decide el
+    dueño.** Maestro «Tipo de proveedor» (`docs/siesa-specs/Tipo de
+    proveedor.xlsx`): 0001 PROVEEDORES NACIONALES, 0002 DEL EXTRANJERO, 0017
+    GASTOS DIVERSOS, **0018 NÓMINA**, 0019 aportes y seguridad social (las
+    EPS y los fondos de pensiones). Proveedores de OCs en QA por tipo: 0001
+    (17), 0018 (6), 0017 (3), 0002 (1). Sin la variable → `None`: solo se
+    sincronizan los proveedores que aparecen en OCs."""
+    v = (os.getenv('COMPRAS_TIPOS_PROVEEDOR') or '').strip()
+    tipos = {t.strip() for t in v.split(',') if t.strip()}
+    return tipos or None
+
+
+def _clave_proveedor(r):
+    return (r.get('f200_id_cia'), r.get('f200_rowid'),
+            (r.get('f202_id_sucursal') or '').strip())
+
+
+def _unico(valores):
+    """El valor si todas las sucursales coinciden; `None` si difieren o no hay
+    ninguno (no se elige uno: se declara)."""
+    vs = {v for v in valores if v}
+    return next(iter(vs)) if len(vs) == 1 else None
+
+
+def sincronizar_proveedores(gateway=None, pausa_s=None, ahora=None) -> dict:
+    """Proveedores de mercancía del maestro de Siesa (`API_v2_Proveedores`).
+
+    - **Solo la compañía propia** (`SIESA_ID_CIA`): el resto se cuenta.
+    - **Qué es un proveedor de mercancía** lo dice `COMPRAS_TIPOS_PROVEEDOR`
+      (tipos de proveedor de Siesa). Sin ella solo se toca a quien aparece en
+      una OC del espejo — nunca se crea un proveedor desde el maestro.
+    - Una fila por SUCURSAL: el proveedor (`f200_id`) junta sus sucursales
+      activas; moneda, tipo y condición de pago se guardan si coinciden entre
+      ellas (si no, `None`, contado en `*_ambigua`).
+    - A un proveedor que ya existe no se le toca el nombre ni el NIT (los
+      escribe el sync de OCs con la razón social del tercero; el maestro solo
+      trae la descripción de la sucursal).
+    - Con barrido completo, las filas del sync viejo (`SIESA_TERCEROS`) que no
+      son proveedores de mercancía se desactivan, con bitácora. Nada se borra.
     """
+    from app.models.acuerdo_marco import Proveedor
+    from app.models.compras_fuentes import OcLineaSiesa
+    from app.services.bitacora import registrar_accion
+
     gw = _gateway(gateway)
     if getattr(gw, 'modo_simulacion', False):
         return {'omitido': 'Connekta en modo simulación'}
     pausa = _pausa_default() if pausa_s is None else pausa_s
     ahora = ahora or datetime.utcnow()
-    nombre = os.getenv('CONNEKTA_API_TERCEROS', 'API_v2_Terceros')
+    nombre = os.getenv('CONNEKTA_API_PROVEEDORES', 'API_v2_Proveedores')
     filas, completa, motivo, paginas = _descargar(
-        gw, nombre, 'f200_ind_proveedor = 1 AND f200_ind_estado = 1', pausa)
-    pares = {}
+        gw, nombre, 'f202_ind_estado = 1', pausa, clave=_clave_proveedor)
+    tipos = tipos_proveedor()
+
+    cont = Counter()
+    sucursales = {}
     for f in filas:
-        c = _txt(f.get('f200_id'), 20)
-        if not c:
+        if _de_otra_compania(f, 'f200_id_cia'):
+            cont['otra_compania'] += 1
             continue
-        nombre_t = _txt(f.get('f200_razon_social'), 200) or _txt(
-            ' '.join(x for x in (f.get('f200_nombres'), f.get('f200_apellido1'),
-                                 f.get('f200_apellido2')) if x), 200)
-        pares[c] = (_txt(f.get('f200_nit'), 20), nombre_t)
+        c = _txt(f.get('f200_id'), 20)
+        if c:
+            sucursales.setdefault(c, []).append(f)
+
+    de_ocs = {c for (c,) in db.session.query(OcLineaSiesa.proveedor_codigo).distinct() if c}
+    universo = set(de_ocs)
+    if tipos:
+        universo |= {c for c, fs in sucursales.items()
+                     if any(_txt(x.get('f202_id_tipo_prov')) in tipos for x in fs)}
+    cont['fuera_de_tipo'] = sum(1 for c in sucursales if c not in universo)
+    cont['de_oc_sin_maestro'] = sum(1 for c in de_ocs if c not in sucursales)
+
     try:
-        _, nuevos, act = _upsert_proveedores(pares, 'SIESA_TERCEROS', ahora)
+        existentes = {p.codigo: p for p in Proveedor.query.all()}
+        for c in sorted(universo & set(sucursales)):
+            fs = sorted(sucursales[c], key=lambda x: _txt(x.get('f202_id_sucursal')) or '')
+            moneda = _unico(_txt(x.get('f202_id_moneda'), 5) for x in fs)
+            tipos_c = sorted({_txt(x.get('f202_id_tipo_prov')) for x in fs} - {None})
+            cond = _unico(_txt(x.get('f202_id_cond_pago'), 20) for x in fs)
+            if moneda is None and any(x.get('f202_id_moneda') for x in fs):
+                cont['moneda_ambigua'] += 1
+            p = existentes.get(c)
+            if p is None:
+                p = Proveedor(codigo=c,
+                              nombre=_txt(fs[0].get('f202_descripcion_sucursal'), 200) or c,
+                              nit=_txt(fs[0].get('f200_nit'), 20),
+                              fuente=FUENTE_PROVEEDORES, activo=True)
+                db.session.add(p)
+                existentes[c] = p
+                cont['proveedores_nuevos'] += 1
+            else:
+                cont['proveedores_actualizados'] += 1
+                if p.fuente in (None, FUENTE_TERCEROS_VIEJA):
+                    p.fuente = FUENTE_PROVEEDORES
+            p.moneda = moneda
+            p.tipo_proveedor = ','.join(tipos_c)[:20] or None
+            if cond:
+                p.condicion_pago_default = cond
+            p.sincronizado_en = ahora
+
+        if completa:
+            for p in existentes.values():
+                if (p.fuente == FUENTE_TERCEROS_VIEJA and p.activo
+                        and p.codigo not in universo):
+                    p.activo = False
+                    registrar_accion(
+                        'DESACTIVAR', p, motivo=(
+                            'Lo había creado el sync de API_v2_Terceros, que mezclaba '
+                            'compañías y traía EPS, pensiones y cédulas: no es proveedor '
+                            f'de mercancía de la compañía {id_cia()}'
+                            + (f' (tipos {",".join(sorted(tipos))})' if tipos else
+                               ' (sin COMPRAS_TIPOS_PROVEEDOR: solo los que aparecen en OCs)')),
+                        antes={'activo': True}, despues={'activo': False},
+                        origen='compras_oc_sync.sincronizar_proveedores')
+                    cont['desactivados_sync_viejo'] += 1
         db.session.commit()
     except Exception as e:
         db.session.rollback()
         return {'ok': False, 'error': str(e)[:300]}
     return {'ok': completa, 'paginacion_completa': completa, 'motivo_incompleta': motivo,
-            'paginas': paginas, 'proveedores_leidos': len(pares),
-            'proveedores_nuevos': nuevos, 'proveedores_actualizados': act}
+            'paginas': paginas, 'filas_leidas': len(filas),
+            'compania': id_cia(), 'tipos': sorted(tipos) if tipos else None,
+            'criterio': ('tipos de proveedor configurados + los de las OCs' if tipos else
+                         'sin COMPRAS_TIPOS_PROVEEDOR: solo los proveedores de las OCs'),
+            'proveedores_del_maestro': len(sucursales),
+            **{k: 0 for k in ('proveedores_nuevos', 'proveedores_actualizados', 'otra_compania',
+                              'moneda_ambigua', 'desactivados_sync_viejo')},
+            **dict(cont)}
 
 
 def _en_ventana(reloj=None):
@@ -476,7 +625,7 @@ def correr_diario(gateway=None, reloj=None) -> dict:
     if not abierta:
         return {'omitido': f'fuera de la ventana de Siesa ({v[0]}–{v[1]} Bogotá)'}
     return {'historial': sincronizar_historial(gateway=gateway),
-            'proveedores': sincronizar_proveedores_terceros(gateway=gateway)}
+            'proveedores': sincronizar_proveedores(gateway=gateway)}
 
 
 def _con_lock(fn, etiqueta):
@@ -540,7 +689,7 @@ def disparar_en_segundo_plano(app, que: str = 'abiertas'):
                 'error': f'Fuera de la ventana de Siesa ({v[0]}–{v[1]} Bogotá). Regla 14.'}
     fn = sincronizar_ocs if que == 'abiertas' else (
         lambda: {'historial': sincronizar_historial(),
-                 'proveedores': sincronizar_proveedores_terceros()})
+                 'proveedores': sincronizar_proveedores()})
 
     def _run():
         with app.app_context():

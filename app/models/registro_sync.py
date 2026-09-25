@@ -48,7 +48,8 @@ from app.extensions import db
 #: afirmar que una OC que no apareció se cerró. `compras_fuentes.frescura_oc`
 #: lee `ultimo_ok('compras_oc')` para decir de cuándo es el «en camino».
 TIPOS = ('catalogo', 'barcodes', 'stock', 'stock_ns1', 'stock_nc1', 'setup_inicial',
-         'reconciliacion', 'kardex', 'pedidos', 'compras_oc', 'compras_oc_historial')
+         'reconciliacion', 'kardex', 'pedidos', 'compras_oc', 'compras_oc_historial',
+         'compras_marca')
 
 
 class RegistroSync(db.Model):

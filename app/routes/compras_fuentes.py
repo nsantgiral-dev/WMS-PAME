@@ -6,7 +6,9 @@ POST /api/compras/fuentes/sync-oc                    sincronizar OCs ahora (en s
 POST /api/compras/fuentes/carga/vista-previa         archivo de origen/marca o fichas: qué pasaría
 POST /api/compras/fuentes/carga/aplicar              el mismo archivo: escribe lo válido
 PUT  /api/compras/fuentes/producto                   origen / marca de un SKU a mano
-GET  /api/compras/fuentes/marca-siesa/vista-previa   marca desde la clasificación de Siesa
+POST /api/compras/fuentes/marca-siesa/leer           leer la marca de Siesa (segundo plano)
+GET  /api/compras/fuentes/marca-siesa/estado         cómo va / cuándo fue la última lectura
+GET  /api/compras/fuentes/marca-siesa/vista-previa   qué cambiaría (de la lectura guardada)
 POST /api/compras/fuentes/marca-siesa/aplicar        ídem, escribiendo
 GET  /api/compras/fuentes/contenedores/<id>/items    ítems de un contenedor
 POST /api/compras/fuentes/contenedores/<id>/items    cargar ítems (código, cantidad)
@@ -144,22 +146,34 @@ def editar_producto():
     return jsonify(r), 200
 
 
-def _fuera_de_ventana():
-    from app.services.fotos_siesa_service import VENTANA, ventana_abierta
-    if not ventana_abierta():
-        return jsonify({'error': f'Fuera de la ventana de Siesa ({VENTANA[0]}–{VENTANA[1]} '
-                                 'Bogotá). Regla 14.'}), 409
-    return None
+@compras_fuentes_bp.route('/marca-siesa/leer', methods=['POST'])
+@jwt_required()
+def marca_siesa_leer():
+    """Arranca la lectura en un hilo y vuelve ya: ~5 minutos de Siesa no caben
+    en un request (gunicorn corta a los 60 s)."""
+    if not _es_compras():
+        return _sin_permiso()
+    from app.services.maestro_compras_carga import disparar_lectura_marca
+    r = disparar_lectura_marca(current_app._get_current_object())
+    codigo = r.pop('codigo', 202 if r.get('ok') else 409)
+    return jsonify(r), codigo
+
+
+@compras_fuentes_bp.route('/marca-siesa/estado', methods=['GET'])
+@jwt_required()
+def marca_siesa_estado():
+    if not _es_compras():
+        return _sin_permiso()
+    from app.services.maestro_compras_carga import estado_lectura_marca
+    return jsonify(estado_lectura_marca()), 200
 
 
 @compras_fuentes_bp.route('/marca-siesa/vista-previa', methods=['GET'])
 @jwt_required()
 def marca_siesa_vista_previa():
+    """Lee la lectura GUARDADA, no Siesa: no pide ventana."""
     if not _es_compras():
         return _sin_permiso()
-    fuera = _fuera_de_ventana()
-    if fuera:
-        return fuera
     from app.services.maestro_compras_carga import marca_desde_siesa
     return jsonify(_recortar(marca_desde_siesa())), 200
 
@@ -169,9 +183,6 @@ def marca_siesa_vista_previa():
 def marca_siesa_aplicar():
     if not _es_compras():
         return _sin_permiso()
-    fuera = _fuera_de_ventana()
-    if fuera:
-        return fuera
     from app.services.maestro_compras_carga import marca_desde_siesa
     return jsonify(_recortar(marca_desde_siesa(aplicar_=True, usuario_id=_get_uid()))), 200
 

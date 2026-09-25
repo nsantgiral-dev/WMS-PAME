@@ -30,10 +30,16 @@ class Proveedor(db.Model):
     activo = db.Column(db.Boolean, default=True)
     fecha_creacion = db.Column(db.DateTime, default=datetime.utcnow)
     #: De dónde salió la fila (m046compras): `SIESA_OC` (visto en una orden de
-    #: compra), `SIESA_TERCEROS` (maestro de terceros con `f200_ind_proveedor`)
-    #: o `MANUAL`. NULL = fila anterior a la migración: no se sabe.
+    #: compra), `SIESA_PROVEEDORES` (maestro `API_v2_Proveedores`, m047),
+    #: `SIESA_TERCEROS` (el sync anterior sobre `API_v2_Terceros`, retirado:
+    #: mezclaba compañías) o `MANUAL`. NULL = fila anterior a la migración.
     fuente = db.Column(db.String(20))
     sincronizado_en = db.Column(db.DateTime)   # última vez que Siesa la confirmó (UTC)
+    #: Del maestro de proveedores de Siesa (m047): `f202_id_moneda` y
+    #: `f202_id_tipo_prov` de sus sucursales activas. `None` = no se leyó o
+    #: las sucursales no coinciden (no se elige una).
+    moneda = db.Column(db.String(5))
+    tipo_proveedor = db.Column(db.String(20))
 
     def to_dict(self):
         return {
@@ -42,6 +48,8 @@ class Proveedor(db.Model):
             'condicion_pago_default': self.condicion_pago_default,
             'activo': self.activo,
             'fuente': self.fuente,
+            'moneda': self.moneda,
+            'tipo_proveedor': self.tipo_proveedor,
         }
 
 

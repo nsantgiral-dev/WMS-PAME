@@ -115,6 +115,10 @@ OPERATIVAS = [
     # la primera sincronización, las cumplidas con el historial (365 días).
     # Cuelga de `proveedores` (protegida): hijo antes que padre no aplica.
     'oc_linea_siesa',
+    # La lectura de la marca de Siesa (m047): si el ensayo leyó Siesa QA, la
+    # vista previa de producción mostraría la clasificación de QA. Sin FK; se
+    # vuelve a leer con un botón.
+    'marca_siesa_lectura',
     'ubicaciones_huerfanas',
     'fugas_recompra',
     # ── Flota (agregado 2026-08-03) ────────────────────────────────────────

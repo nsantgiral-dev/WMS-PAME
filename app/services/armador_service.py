@@ -115,7 +115,8 @@ def cajas_a_pedir(deficit_unidades, unidades_por_caja, moq_cajas):
     necesarias = math.ceil(max(0.0, float(deficit_unidades)) / u)
     return max(necesarias, moq) if necesarias > 0 else 0
 
-# Marcas China conocidas (se cruzan con producto.marca_siesa)
+# Marcas China conocidas: CÓDIGOS del criterio de marca de Siesa (se cruzan con
+# `producto.marca_codigo`; ver rop_dual)
 MARCAS_CHINA = {'M003', 'M009', 'M175'}
 
 
@@ -288,14 +289,21 @@ class ArmadorService:
         # al 100%**. El comentario de `MARCAS_CHINA` decía «se cruzan con
         # `producto.marca_siesa`» y describía un cruce que el código no hacía
         # — `marca_siesa` no aparecía en ninguna línea ejecutable del módulo.
+        #
+        # Y desde m047 la marca tiene DOS columnas: `marca_siesa` es el NOMBRE
+        # (NORMA, QUIROND) y `marca_codigo` el código del criterio de Siesa
+        # (M001, M003). `MARCAS_CHINA` son códigos: se comparan contra
+        # `marca_codigo`, y contra `marca_siesa` solo por compatibilidad con
+        # las cargas por archivo anteriores, que ponían el código ahí.
         filas_origen = (
             db.session.query(Producto.codigo_siesa, Producto.origen,
-                             Producto.marca_siesa)
+                             Producto.marca_siesa, Producto.marca_codigo)
             .filter(Producto.codigo_siesa.isnot(None))
             .all()
         )
         productos_origen = {f[0]: f[1] for f in filas_origen}
-        productos_marca = {f[0]: f[2] for f in filas_origen}
+        productos_marca = {f[0]: (f[2] or f[3]) for f in filas_origen}
+        productos_marca_cod = {f[0]: f[3] for f in filas_origen}
 
         resultados_nac = []
         resultados_chi = []
@@ -326,9 +334,9 @@ class ArmadorService:
 
             origen = (productos_origen.get(ref) or '').upper()
             marca = (productos_marca.get(ref) or '').upper()
-            es_china = origen == 'CHINA' or any(
-                m.upper() in marca for m in MARCAS_CHINA if m
-            )
+            marca_cod = (productos_marca_cod.get(ref) or '').strip().upper()
+            es_china = (origen == 'CHINA' or marca_cod in MARCAS_CHINA
+                        or any(m.upper() in marca for m in MARCAS_CHINA if m))
 
             stock_actual = float(stock.get(ref, 0) or 0)
             qty_comprometido = float(comprometido.get(ref, 0) or 0)

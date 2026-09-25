@@ -444,3 +444,184 @@ class TestElSyncNoCierraSinVerTodo:
                '    if ok:\n        l.abierta = False\n'
                '    l.abierta = True\n')
         assert _cierres_fuera_de_completa(src) == [5, 7]
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 4 · la unidad de la LÍNEA solo la lee quien la multiplica por el factor
+# ══════════════════════════════════════════════════════════════════════════════
+#
+# La clase (verificada en vivo el 2026-09-25): en `API_v2_Compras_Ordenes`,
+# `f421_cant_*` viene en unidad de INVENTARIO y `f421_cant_*_base` en la de la
+# LÍNEA (3 PQ de 12 → pedida 36, pedida_base 3). `pendiente_de_linea` restaba
+# las `_base`: «en camino» ×12 de menos en toda línea en paquetes, y un
+# contenedor de más. Leer una `_base` como si fuera unidades es el defecto; la
+# única lectura legítima la multiplica por `f421_factor`.
+
+_CAMPOS_LINEA = {'f421_cant_pedida_base', 'f421_cant_entrada_base',
+                 'f421_cant_importacion_base'}
+_ATRIB_LINEA = {'cant_pedida_base', 'cant_entrada_base', 'cant_importacion_base'}
+
+#: Quién lee una cantidad en unidad de la línea, y por qué. Solo encoge.
+LECTORES_UNIDAD_LINEA = {
+    ('app/services/compras_fuentes.py', 'pendiente_de_linea'):
+        'Solo si faltan las de inventario: (pedida_base − entrada_base) × factor.',
+    ('app/services/compras_fuentes.py', '_cantidad_base'):
+        'Solo si falta cant_pedida: cant_pedida_base × factor, la cantidad del precio.',
+    ('app/services/compras_oc_sync.py', '_aplicar_lineas'):
+        'Copia el dato crudo de Siesa a su columna del espejo; no lo usa como cantidad.',
+}
+
+
+def escanear_unidad_linea(fuente: str) -> dict:
+    arbol = ast.parse(fuente)
+    docs = _docstrings(arbol)
+    out = {}
+    for q, nodos in _unidades(arbol).items():
+        lineas = [n.lineno for n in nodos
+                  if (isinstance(n, ast.Constant) and isinstance(n.value, str)
+                      and n.value in _CAMPOS_LINEA and id(n) not in docs)
+                  or (isinstance(n, ast.Attribute) and isinstance(n.ctx, ast.Load)
+                      and n.attr in _ATRIB_LINEA)]
+        if lineas:
+            out[q] = sorted(set(lineas))
+    return out
+
+
+class TestLaUnidadDeLaLinea:
+
+    def test_nadie_nuevo_lee_la_unidad_de_la_linea(self):
+        hallados, archivos = _repo(escanear_unidad_linea, DEFINICIONES)
+        assert archivos >= 200
+        nuevos = {k: v for k, v in hallados.items() if k not in LECTORES_UNIDAD_LINEA}
+        assert not nuevos, (
+            'Leen `f421_cant_*_base` (unidad de la LÍNEA, no de inventario) fuera de '
+            '`compras_fuentes`:\n' + '\n'.join(f'  · {a}::{q} (líneas {ls})'
+                                              for (a, q), ls in nuevos.items()))
+
+    def test_el_inventario_solo_encoge(self):
+        hallados, _ = _repo(escanear_unidad_linea, DEFINICIONES)
+        assert not [k for k in LECTORES_UNIDAD_LINEA if k not in hallados]
+
+    def test_cada_lector_dice_por_que(self):
+        assert all(len(r) > 40 for r in LECTORES_UNIDAD_LINEA.values())
+
+    def test_ve_el_campo_y_el_atributo(self):
+        assert escanear_unidad_linea("def f(r):\n    return r['f421_cant_pedida_base']\n") == {'f': [2]}
+        assert escanear_unidad_linea("def f(l):\n    return l.cant_entrada_base\n") == {'f': [2]}
+
+    def test_no_marca_lo_sano(self):
+        src = ('def f(l, r):\n    """usa f421_cant_pedida_base"""\n'
+               "    # f421_cant_pedida_base\n    l.cant_pedida_base = 3\n"
+               "    return r['f421_cant_pedida']\n")
+        assert escanear_unidad_linea(src) == {}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 5 · toda descarga de compras filtra la compañía
+# ══════════════════════════════════════════════════════════════════════════════
+#
+# La clase: las consultas de Siesa de este ambiente traen las compañías 1 y 2.
+# el sync de proveedores sobre `API_v2_Terceros` no filtraba: EPS de la 2, y «gana la última
+# fila» (YIWU salía COP, siendo USD en la 1). Toda función que descarga con el
+# paginador de compras (`compras_oc_sync._descargar`) tiene que filtrar la
+# compañía —ella misma o una función del módulo que llama directo—.
+
+_MODULOS_DESCARGA = {'app/services/compras_oc_sync.py',
+                     'app/services/maestro_compras_carga.py'}
+_FILTRO_CIA = {'_de_otra_compania', 'id_cia'}
+
+
+def _nombres_llamados(nodos):
+    for n in nodos:
+        if isinstance(n, ast.Call):
+            f = n.func
+            if isinstance(f, ast.Name):
+                yield f.id
+            elif isinstance(f, ast.Attribute):
+                yield f.attr
+
+
+def descargas_sin_compania(fuente: str) -> list:
+    arbol = ast.parse(fuente)
+    unidades = _unidades(arbol)
+    filtra = {q for q, nodos in unidades.items()
+              if _FILTRO_CIA & set(_nombres_llamados(nodos))}
+    malas = []
+    for q, nodos in unidades.items():
+        llamadas = set(_nombres_llamados(nodos))
+        if '_descargar' in llamadas and q != '_descargar':
+            if not (q in filtra or llamadas & filtra):
+                malas.append(q)
+    return malas
+
+
+class TestTodaDescargaFiltraLaCompania:
+
+    def test_las_descargas_de_compras_filtran(self):
+        for rel in _MODULOS_DESCARGA:
+            assert descargas_sin_compania((RAIZ / rel).read_text(encoding='utf-8')) == [], rel
+
+    def test_nadie_mas_usa_el_paginador_de_compras(self):
+        """Un módulo nuevo que importe `_descargar` entra a este guard o lo pone
+        rojo: la lista de módulos no la escribe quien olvida filtrar."""
+        usan = set()
+        for base in PAQUETES:
+            for p in (RAIZ / base).rglob('*.py'):
+                src = p.read_text(encoding='utf-8')
+                if 'compras_oc_sync import' in src and '_descargar' in src:
+                    usan.add(p.relative_to(RAIZ).as_posix())
+        assert usan <= _MODULOS_DESCARGA, usan - _MODULOS_DESCARGA
+
+    def test_piso_hay_descargas_que_mirar(self):
+        n = sum(1 for rel in _MODULOS_DESCARGA
+                for q, nodos in _unidades(ast.parse((RAIZ / rel).read_text(encoding='utf-8'))).items()
+                if '_descargar' in set(_nombres_llamados(nodos)) and q != '_descargar')
+        assert n >= 4, 'sincronizar_ocs, _historial, _proveedores y leer_marca_siesa'
+
+    def test_ve_la_descarga_que_no_filtra(self):
+        src = ('def a(gw):\n    f = _descargar(gw, "X", "", 0)\n    return f\n'
+               'def b(gw):\n    f = _descargar(gw, "X", "", 0)\n    return _aplicar(f)\n'
+               'def _aplicar(f):\n    return [x for x in f if not _de_otra_compania(x)]\n')
+        assert descargas_sin_compania(src) == ['a']
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 6 · ninguna lectura larga de Siesa dentro de un request
+# ══════════════════════════════════════════════════════════════════════════════
+#
+# La clase: el plan de marca son 261 páginas (~5 min) y gunicorn corta a los 60 s.
+# Las lecturas de compras corren en un hilo (`disparar_*`); una ruta que las
+# llame directo tumba el worker o deja la lectura a medias.
+
+_LECTURAS_LARGAS = {'leer_marca_siesa', 'sincronizar_ocs', 'sincronizar_historial',
+                    'sincronizar_proveedores', '_descargar'}
+
+
+def lecturas_largas_en(fuente: str) -> dict:
+    out = {}
+    for q, nodos in _unidades(ast.parse(fuente)).items():
+        ls = [n.lineno for n in nodos if isinstance(n, ast.Call) and (
+            (isinstance(n.func, ast.Name) and n.func.id in _LECTURAS_LARGAS)
+            or (isinstance(n.func, ast.Attribute) and n.func.attr in _LECTURAS_LARGAS))]
+        if ls:
+            out[q] = ls
+    return out
+
+
+class TestNadaLargoDentroDeUnRequest:
+
+    def test_ninguna_ruta_lee_siesa_de_compras_directo(self):
+        rutas = sorted((RAIZ / 'app' / 'routes').rglob('*.py'))
+        assert len(rutas) >= 30
+        malas = {p.relative_to(RAIZ).as_posix(): h for p in rutas
+                 if (h := lecturas_largas_en(p.read_text(encoding='utf-8')))}
+        assert not malas, malas
+
+    def test_piso_el_boton_va_por_el_hilo(self):
+        src = (RAIZ / 'app/routes/compras_fuentes.py').read_text(encoding='utf-8')
+        assert 'disparar_lectura_marca' in src and 'disparar_en_segundo_plano' in src
+
+    def test_ve_las_dos_formas(self):
+        src = ('def r():\n    from x import leer_marca_siesa\n    leer_marca_siesa()\n'
+               'def s(m):\n    """sincronizar_ocs()"""\n    m.sincronizar_ocs()\n')
+        assert lecturas_largas_en(src) == {'r': [3], 's': [6]}
