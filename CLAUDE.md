@@ -4660,3 +4660,204 @@ reconociendo advertencias** (de `despachos_forzados`, ↓, dueño control de flo
 galones), **días de daño abierto** (ya en Analítica, sin meta).
 
 Suite completa: la corre el integrador (el Mac estaba saturado).
+
+---
+
+## Analítica: solo lo actual (2026-09-24)
+
+La Analítica, la 🩺 Salud del dato, la auditoría de invariantes y el tablero
+mostraban como «errores» cosas que no son de hoy: jobs FALLIDO del ensayo de
+abril ya superados por un reintento, hallazgos anteriores a la corrección de su
+defecto, paradas juzgadas con una regla de contado que no existía cuando se
+confirmaron, la limpieza técnica del layout contada como cancelación. **Un canal
+donde la mitad de lo que grita es viejo entrena a no mirarlo** (la lección de
+los 639 avisos conocidos).
+
+**La clase:** *un lector que no distingue lo vigente de lo histórico*. Nada se
+borra: lo viejo **se cuenta aparte y no sube el nivel ni el veredicto**.
+Trinquete: `tests/test_analitica_solo_lo_actual.py` (115 tests, 29 mutaciones,
+las 29 rojas).
+
+### 1 · `FECHA_INICIO_AUDITORIA` — `app/services/corte.py`
+
+| | |
+|---|---|
+| Formato | ISO en hora de **Bogotá**: `2026-10-01` (00:00 Bogotá = 05:00 UTC), `2026-10-01T06:00`, o con zona explícita (`…Z`, `…-05:00`) |
+| Sin variable | Sin corte, y **se declara** (`meta.corte.texto`: «Sin FECHA_INICIO_AUDITORIA: se muestra todo…») |
+| Inválida | **No corta nada** y se declara inválida (cortar con una fecha adivinada escondería errores reales — Regla 0) |
+| Futura | Se acepta y se declara (`futuro: true`): todo lo de hoy cuenta como anterior |
+| Registro sin fecha | **Vigente**: no saber cuándo pasó no lo vuelve viejo |
+
+Una función por pregunta: `inicio_auditoria()` (UTC naive), `dia_de_corte()`,
+`es_anterior(fecha)`, `recortar_rango(desde, hasta)`, `separar(filas,
+fecha_de)`, `estado()` (lo que va en el `meta` de cada vista).
+
+| Lector | Qué hace con lo anterior |
+|---|---|
+| Auditoría (`auditoria/base.auditar`) | Cada `Hallazgo` lleva `fecha=` (la columna de nacimiento de su entidad). Lo anterior va a `antes_del_corte` por invariante y en el total; **no** entra a `total` ni a `bloqueantes`. Los agregados (TRA-12, TRA-30, TRA-31, INV-03) llevan la fecha del miembro más nuevo |
+| Salud | Invariantes: `antes_del_corte` y `artefactos` por flujo; cola de Siesa desde el corte; cobertura de `pedido_clave` desde el corte; `meta.corte` |
+| Fugas | El período empieza en el corte; el anterior se recorta y, si cae entero antes, **no hay base** (`sin_base`, no «bajó»); el tramo recortado se evalúa aparte en `antes_del_corte` por fuga; `meta.corte` |
+| Recorrido | Pedidos que entraron antes del corte: fuera del embudo, en `meta.antes_del_corte` |
+| KPI diario | Los días anteriores se guardan y se muestran marcados (`antes_del_corte`), pero **no** entran al período, a la comparación ni a las semanas de la alerta. `ventas_facturadas`, `cartera_abierta`, `cartera_vencida` leen Siesa: **sin corte** (`METRICAS_SIN_CORTE`) |
+| Rezago de liquidación | `rutas_entregadas_sin_liquidar` = desde el corte; `diagnostico()` y `rutas_sin_liquidar_al_cierre()` cuentan `antes_del_corte`. La alerta de las 06:30 y la fuga «Plata en la calle» heredan |
+| Dashboard | Toda cola cuenta desde el corte (`_cola`), con `antes_del_corte` por bloque |
+| Patrones de la bitácora | Desde el corte, `antes_del_corte`; **la lista** (`/bitacora`) sigue mostrando todo: es el registro |
+| Resumen diario por correo | «FALLIDO > 24 h sin resolver» desde el corte |
+
+**Trinquetes (AST):** la variable la nombra solo `corte.py`; ningún invariante
+corta con una fecha literal (`datetime(2026, …)`); todo `Hallazgo(...)` pasa
+`fecha=` salvo `SIN_FECHA` (5, solo encoge: VTA-01/02 y INV-09 son estado
+actual, DEV-04/05 los rehace el agente de devoluciones); y cada lector de
+`LECTORES_CON_CORTE` (21) llama a la función del corte que le toca.
+
+### 2 · `siesa_job_service.fallidos_vigentes` — la única que cuenta FALLIDO
+
+Un FALLIDO **deja de estar trabado** si lo superó un COMPLETADO **posterior**
+(por id) del mismo tipo y referencia, o si la reconciliación lo cerró:
+`ReconciliacionService.reconciliar_despacho`, al encontrar la factura en Siesa,
+pasa los `DESPACHO_F470` FALLIDO de esa tarea a COMPLETADO con
+`resultado.reconciliado` (en la misma transacción). Separa **recientes** (último
+intento en `DIAS_FALLIDO_RECIENTE` = 7) de **viejos**, con edad por tipo
+(`desde_utc`, `edad_dias_max`). Edad = `fecha_procesando` o, si nunca se
+procesó, `fecha_creacion` (`siesa_jobs` no guarda «falló el…»: declarado).
+
+- **Salud**: solo los recientes ponen CRÍTICO; los viejos, ADVERTENCIA con su
+  edad; los superados y los anteriores al corte se nombran y no cuentan.
+- **Fuga «Documentos trabados»**, **KPI `jobs_siesa_fallidos`**, el monitor de
+  `/api/siesa/monitor`, `/api/health/siesa` (`dlq`; y `corte_auditoria` publica el corte de ese servicio), el desglose de rutas y el
+  resumen diario la usan.
+- **Descartar**: `POST /api/siesa/jobs/<id>/descartar` (`_solo_admin`,
+  `{"motivo"}` obligatorio) → DESCARTADO + bitácora `DESCARTAR` con el error que
+  se deja de mirar. **Regla 3: no reenvía nada** ni toca las banderas de su
+  referencia. Botón «Descartar» en Siesa → Recuperación (solo el id en el
+  `onclick`). De paso: ese panel leía `j.ultimo_error`, que no existe
+  (`error_ultimo`): el motivo del fallo salía vacío.
+
+**Trinquete:** ninguna función de `app/`/`flota/` lee `FALLIDO` de un
+`SiesaJob` (`EstadoSiesaJob.FALLIDO` fuera de una asignación, o
+`SiesaJob.estado` contra `'FALLIDO'`) salvo `CONSULTAS_FALLIDO_OPERATIVAS` (22,
+solo encoge): las que OPERAN —reintentar, descartar, reutilizar el job,
+decidir si una mercancía sigue en proceso—. Los módulos que muestran números
+(`analitica_*`, `dashboard_service`, `health`) no pueden estar en esa lista.
+
+### 3 · `@invariante(defecto_corregido=(commit, fecha))`
+
+Para el invariante que vigila un defecto **ya corregido**: lo anterior a la
+corrección se reporta como «artefacto de <commit>: N casos» y **no sube el
+nivel**; lo posterior sí bloquea (el arreglo se cayó). La fecha es la del
+commit, la más temprana posible del despliegue (ante la duda, se muestra de
+más).
+
+| Invariante | Commit | Defecto |
+|---|---|---|
+| VTA-50 | `359eac0f` (2026-09-24 15:44) | `entregar_ruta` marcaba ENTREGADO lo que el conductor no declaraba |
+| VTA-61 | `75c168c8` (2026-08-13 19:56) | el fallback emitía contado a todo pedido sin condición |
+| VTA-62 | `d5010187` (2026-09-24 17:35) | la regla ≤ 15 días nace con m043contado |
+| CNT-07 | `02d4a80f` (2026-08-15 08:26) | la aprobación sobre base del WMS se niega |
+| TRA-01 | `d5e78970` (2026-08-20 06:57) | el CHECK de m013 impide la cadena que crece |
+
+VTA-22 **no** se marcó: no vigila un defecto corregido, vigila un estado
+legítimo (la reapertura). El inventario es exacto en el test; un invariante con
+`defecto_corregido` no puede tener hallazgos sin fecha.
+
+### 4 · La regla de contado no es retroactiva
+
+`cond_pago.anterior_a_la_regla(recaudo)`: sin snapshot (`cobro_contraentrega`
+NULL) **y** `fecha_confirmacion` anterior a `REGLA_CONTADO_DESDE`
+(`2026-09-24T17:35:31-05:00`, commit d5010187). Esas paradas se juzgan con la
+regla de entonces (`_trato_regla_anterior` → `regla_anterior_rechaza_credito`):
+un CREDITO con $0 de antes **no** es crédito no autorizado, salvo que la regla
+vieja ya lo rechazara (CREDITO sobre el código de contado o de ruta). Lo leen
+`trato_de_cobro` —y por él la liquidación, el recorrido, las fugas, VTA-62 y
+`RutaService.liquidar_ruta`— y `reconciliacion_ruta._debia_cobrarse`. **Esto
+destraba la liquidación de las rutas viejas** que la sección «Contado
+contraentrega» dejaba bloqueadas hasta autorizar una por una.
+
+### 5 · KPI `cancelaciones` — solo el flujo de negocio
+
+`ENTIDADES_DE_NEGOCIO` (lista blanca): TareaPicking, TareaPacking, Bulto,
+RecepcionMercancia, SolicitudTraslado, TareaReposicion, DevolucionCliente,
+TareaDevolucion, RutaDespacho, RecaudoEntrega, SesionConteo. Lo demás
+(Ubicacion del layout, SiesaMapeoUnidades, maestros, juicios de temporada) va a
+`detalle.tecnicas`: se cuenta, no sube el número.
+
+### 6 · Dashboard
+
+- **«Conteos con diferencia» = raíces en DESCUADRE esperando decisión**
+  (`tablero_lider_conteo.filtro_descuadres_por_decidir`, la misma del tablero
+  del líder). Contaba SEGUNDO_CONTEO —un 1er conteo esperando el 2º—, que es
+  otra cosa: ahora va en `en_segundo_conteo`.
+- **Edad de lo más viejo** en cada cola (`mas_viejo_utc`, `edad_horas`):
+  picking, packing, conteos pendientes, con diferencia, definitivos, traslados
+  y rutas en marcha. La tarjeta la pinta («lo más viejo: 5 h / 4 días»).
+- **IRA de hoy por cadenas** (`conteo.ira_hoy`, `metricas.conteo.exactitud_total`:
+  la misma del KPI y de las estadísticas); sin tasa con n < 30. `match_hoy` pasa
+  a ser cadenas exactas (antes sumaba el CC2 que confirma).
+- **Semáforo de conteo** del servidor (`semaforo_de_conteo`): rojo con
+  decisiones esperando; amarillo si las pendientes vivas superan el cupo diario
+  (o el cupo no se pudo leer); verde dentro del cupo; gris sin nada.
+
+### 7 · 8 · Pantallas (lo mínimo, el resto lo rehace el agente de pantallas)
+
+- `liquidacion.js`: la tarjeta «Facturas emitidas como contado por dato
+  faltante» pinta **`a_revisar_en_siesa`** (el color lo manda eso), con los
+  pedidos sin condición al lado; el rezago muestra los anteriores al corte; el
+  día por defecto es **Bogotá** (`liqHoyBogota`; `toISOString()` daba mañana
+  después de las 7 p. m.).
+- `tablero_bi.js`: día por defecto Bogotá (`biHoyBogota`) y `biFechaHora` lee
+  una hora **sin zona** como UTC y la muestra en Bogotá (la corría 5 h).
+
+### 9 · Vigía — propuesta, NO hecha
+
+Reiniciar la línea base del CUSUM de Vigía (`serie_vigia`) en el corte
+**exige recertificar el canon de Florencia** (`docs/canon_florencia.json`,
+`scripts/verificar_carga_vigia.py`): cambia μ_ref/σ_ref y con ellos todas las
+alarmas. Costo: una corrida de certificación con los TXT originales y ~8
+semanas sin alarma nueva. Las series de facturación tienen su referencia en
+el **TXT histórico de Siesa** (anterior al ensayo): el ensayo del WMS no las
+ensucia. Las que sí la tienen del WMS son `adopcion_picking`/`brecha_picking`
+(`alimentar_adopcion_picking`): la propuesta es excluir de su ventana de
+referencia las semanas anteriores a `FECHA_INICIO_AUDITORIA`, **con
+recertificación** y con el costo dicho. **No se tocó.** La alerta del KPI diario (que usa `cusum_bilateral` sobre las
+semanas del KPI) sí excluye las semanas anteriores al corte
+(`semanas_antes_del_corte`): con un corte reciente, **no habrá alerta del KPI
+hasta tener 8 semanas cerradas después del corte** — declarado en la respuesta.
+
+### Lo que NO cubre, dicho
+
+- **Jobs reconciliados antes de este cambio** siguen FALLIDO: la marca
+  (`resultado.reconciliado`) solo existe hacia adelante. Si son anteriores al
+  corte no cuentan; si no, se descartan con motivo (el botón nuevo).
+- **Un superado sin referencia** no se puede detectar (`sin_referencia` lo
+  cuenta).
+- **La regla de contado**: una parada confirmada entre el commit d5010187 y el
+  despliegue real se juzga con la regla nueva (se muestra de más).
+- **El corte es por nacimiento de la entidad** (`fecha_creacion`/
+  `fecha_confirmacion`): una tarea del ensayo que se cierra mal después del
+  corte cuenta como anterior. El acta de corte (`reset_transaccional`) sigue
+  siendo la forma de vaciar lo operativo; el corte es para lo que no se vacía
+  (tablas protegidas) o mientras el acta no se corre.
+- **La bitácora como lista** no se filtra (es el registro); la **cola de la
+  DLQ** para operar tampoco: se ve todo lo que se puede reintentar o descartar.
+- **Pantallas**: la Analítica la rehace otro agente; los campos nuevos
+  (`antes_del_corte`, `artefactos`, `corte`, `fallidos_recientes/viejos`,
+  `edad_dias`) están en las respuestas para que las pinte.
+
+### Qué tiene que hacer el dueño para que el corte funcione
+
+1. **Desplegar** este cambio (QA primero; sin migración).
+2. **Elegir la fecha**: el primer día de operación real — el día siguiente al
+   acta de corte, o el día en que se empezó a operar de verdad si el acta no se
+   corrió. En hora de Bogotá.
+3. **Poner la variable en TODOS los servicios de Railway** (web y worker: la
+   alerta de las 06:30 y el resumen diario corren en el worker):
+   `FECHA_INICIO_AUDITORIA=2026-10-01` (ejemplo).
+4. **Verificar** en `GET /api/analitica/salud` → `meta.corte`: `valido: true` y
+   el día correcto. Si dice «inválida», no cortó nada.
+5. **Descartar con motivo** los FALLIDO posteriores al corte que ya se
+   resolvieron por fuera (Siesa → Recuperación → Descartar). No reenvía nada.
+6. **Recalcular el KPI** no hace falta: los días anteriores se marcan al leer.
+
+Suite completa en este worktree (2026-09-24, `-m "not postgres"`, TZ=UTC, sobre
+el primer commit del cambio): **8158 passed, 0 failed**, 5 skipped, 19 xfailed.
+Después solo se agregó `corte_auditoria` al health y se corrió lo afectado.

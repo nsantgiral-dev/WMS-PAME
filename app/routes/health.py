@@ -373,6 +373,14 @@ def health_siesa():
     except Exception as _e_kpi:
         resultado['analitica_kpi'] = {'error': str(_e_kpi)[:200]}
 
+    # FECHA_INICIO_AUDITORIA (2026-09-24): desde cuándo la analítica cuenta.
+    # Railway da variables por servicio: cada uno publica la suya.
+    try:
+        from app.services import corte as _corte_h
+        resultado['corte_auditoria'] = _corte_h.estado()
+    except Exception as _e_corte:
+        resultado['corte_auditoria'] = {'error': str(_e_corte)[:200]}
+
     # CONTADO CONTRAENTREGA vs CRÉDITO REAL (2026-09-24). Umbral, tabla de
     # días vigente y su fuente (copia del PDF, env o la consulta dinámica), y
     # en qué difiere la copia del maestro vivo si la consulta existe. Un

@@ -1176,11 +1176,16 @@ class TestElKpiMarcaLoAnteriorAlCorte:
 # 7 · 8 · Pantallas: día Bogotá, hora sin Z, «a revisar en Siesa», descartar
 # ═════════════════════════════════════════════════════════════════════════════
 
-def _node(script):
+def _node(script, tz=None):
+    """`tz`: la zona del proceso Node. Las pruebas de fecha corren con la de
+    Bogotá: con `TZ=UTC` (la del CI) leer una hora sin zona como local o como
+    UTC da lo mismo y el defecto no se vería."""
+    import os
     if not shutil.which('node'):
         pytest.skip('sin node')
+    env = dict(os.environ, **({'TZ': tz} if tz else {}))
     r = subprocess.run(['node', '-e', script, '--', str(PWA)],
-                       capture_output=True, text=True, timeout=60)
+                       capture_output=True, text=True, timeout=60, env=env)
     assert r.returncode == 0, r.stderr
     return json.loads(r.stdout.strip().splitlines()[-1])
 
@@ -1207,7 +1212,7 @@ class TestLasPantallas:
 console.log(JSON.stringify({
   noche: vm.runInContext("liqHoyBogota(new Date('2026-09-25T02:30:00Z'))", ctx),
   dia: vm.runInContext("liqHoyBogota(new Date('2026-09-24T15:00:00Z'))", ctx)}));
-""")
+""", tz='UTC')
         assert d == {'noche': '2026-09-24', 'dia': '2026-09-24'}
 
     def test_liquidacion_ya_no_usa_el_dia_utc(self):
@@ -1233,7 +1238,7 @@ console.log(JSON.stringify({
   hoy: vm.runInContext("biHoyBogota(new Date('2026-09-25T02:30:00Z'))", ctx),
   hora: vm.runInContext("biFechaHora('2026-09-25T01:10:00')", ctx),
   conZ: vm.runInContext("biFechaHora('2026-09-25T01:10:00Z')", ctx)}));
-""")
+""", tz='America/Bogota')
         assert d['hoy'] == '2026-09-24'
         assert '24/09' in d['hora'] or '24/9' in d['hora']
         assert d['hora'] == d['conZ'], 'sin Z es UTC, igual que con Z'
