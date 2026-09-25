@@ -136,10 +136,17 @@ class TestUnaPaginaPerdidaInvalidaLaPasada:
             {'f150_id': 'NB1', 'f120_referencia': f'R{i}', 'f400_cant_existencia_1': 1}
             for i in range(1000)]}}
 
+        ultima = {'detalle': {'Datos': [
+            {'f150_id': 'NB1', 'f120_referencia': 'FIN', 'f400_cant_existencia_1': 1}]}}
+
         def _get(api, params, url=None):
+            # Página 1 llena, página 2 perdida por 429, página 3 la última:
+            # saltarse la 2 devolvería una pasada que PARECE completa.
             if params['paginacion'].startswith('numPag=1|'):
                 return pagina_llena
-            raise RuntimeError('Connekta rate-limit (429)')
+            if params['paginacion'].startswith('numPag=2|'):
+                raise RuntimeError('Connekta rate-limit (429)')
+            return ultima
 
         with patch.object(iss.connekta, '_get', side_effect=_get), \
                 patch('time.sleep'):
