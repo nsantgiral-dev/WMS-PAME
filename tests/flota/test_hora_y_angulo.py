@@ -267,13 +267,36 @@ class TestElAnguloLlegaHastaLaFila:
 
     def test_un_angulo_inventado_no_entra(self, client, jwt_token_admin, mundo,
                                           tmp_path, monkeypatch):
-        """El CHECK de la tabla. El cliente no define el vocabulario."""
-        from sqlalchemy.exc import IntegrityError
+        """El cliente no define el vocabulario.
+
+        Hasta el 2026-09-24 esto lo frenaba solo el CHECK, en el commit: un
+        IntegrityError que en producción era un 500 —y la cola del conductor
+        reintenta todo 5xx para siempre (QA e2e)—. Ahora `validar_fotos` lo
+        rechaza ANTES de escribir, con 400 y sin dejar nada; el CHECK sigue
+        siendo la última línea (abajo)."""
+        from flota.adaptadores.modelos import Custodia, Foto
 
         monkeypatch.setenv('FLOTA_FOTOS_DIR', str(tmp_path))
-        with pytest.raises(IntegrityError):
-            self._traspaso(client, jwt_token_admin, mundo['placa'], mundo['con'],
+        antes = (Custodia.query.count(), Foto.query.count())
+        r = self._traspaso(client, jwt_token_admin, mundo['placa'], mundo['con'],
                            ['debajo_del_asiento'])
+        assert r.status_code == 400, r.get_json()
+        assert (Custodia.query.count(), Foto.query.count()) == antes
+
+    def test_el_check_sigue_siendo_la_ultima_linea(self, db, mundo):
+        """Una fila escrita por otra puerta (un script, una migración) con un
+        ángulo inventado la sigue rechazando la base."""
+        from sqlalchemy.exc import IntegrityError
+        from flota.adaptadores.modelos import Foto
+
+        db.session.add(Foto(clase='evidencia_estado', entidad_tipo='custodia_inicio',
+                            entidad_id=1, storage_ref='x', hash_sha256='0' * 64,
+                            bytes=10, ancho=800, alto=600, mime='image/jpeg',
+                            ts_captura=datetime(2026, 9, 1), autor_usuario_id=1,
+                            angulo='debajo_del_asiento'))
+        with pytest.raises(IntegrityError):
+            db.session.flush()
+        db.session.rollback()
 
 
 class TestElSelectorDeAngulosNoEstaQuemado:

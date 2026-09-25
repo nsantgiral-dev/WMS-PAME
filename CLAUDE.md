@@ -5260,3 +5260,62 @@ viene del Gestor (`habilitaciones`); sin él no se exime.
    la cierra una persona (hoy)?
 5. **`vence_en` y `codigo_excepcion`** opcionales en la autorización (sin
    `vence_en`, 30 días). ¿Obligatorios?
+
+## Lo que encontró el recorrido e2e por rol de flota (QA 960d2f1c, 2026-09-24)
+
+`tests/test_qa_e2e_flota_20260924.py` reproducía siete defectos con
+`xfail(strict)`; los siete están arreglados y sin marca. Cada uno se cerró por
+su **clase**, con trinquete:
+
+| | Clase | Qué pasaba | Ahora | Trinquete |
+|---|---|---|---|---|
+| **P1** (en producción) | Un mapa de estados en JS que no cubre `EstadoEntrega.TODOS` | «No pagó y se quedó» → `_condRenderParadas` hacía `EST_C['ENTREGADO_SIN_PAGO'].badgeBg` → TypeError: la lista del conductor quedaba en «Cargando paradas...» y **se iba el botón «Cerrar Ruta»**. El manifiesto, igual | Un solo `ENTREGA_ESTILO` en `rutas.js` con los cuatro estados y `estiloEntrega(est)`, que cae a un estilo neutro ante un estado desconocido | `test_mapas_estado_entrega_pwa.py`: todo objeto literal del PWA con ≥ 2 claves de estado cubre los valores del modelo (leídos por AST), inventario de parciales que solo encoge; las dos pantallas pintan en Node cada estado y uno desconocido |
+| **P2** | Un verbo de bitácora con dos significados sobre la misma entidad | El FORZAR de «despachar con advertencias de flota» se leía como cierre forzado: la jornada decía «Ruta cerrada a la fuerza por la oficina» (y la sacaba de la duración de ruta) y la bitácora «forzó el cierre» | `bitacora.TIPOS_FORZADO` + `tipo_de_forzado()` (filas viejas por su forma); `registrar_accion('FORZAR')` **exige** `despues['forzado']` | `test_forzar_dice_que_forzo.py`: AST sobre `app/ flota/ scripts/`, y el cierre forzado real se sigue viendo |
+| **P2** | Comparar contra el estado de AHORA algo que ya terminó | Ruta ENTREGADA + camión en la sede = señal `turno_de_la_ruta` cada noche normal; y el turno de la SEDE era «sin fotos de inicio (0 de 11)» | Una ruta entregada se juzga contra el turno vigente **al cierre** (`bandeja._turno_en`); sin hora de cierre, no evaluable. La sede no tiene fotos exigidas (su cierre forzado sí cuenta). `test_bandeja.py` sembraba fotos en la sede y lo escondía: corregido | `tests/flota/test_fin_del_dia_normal.py` (día normal, mismo instante, y los casos que DEBEN seguir siendo señal) |
+| **P3** | Un valor que un CHECK rechaza llega al commit sin validarse | Ángulo desconocido → 500 en el traspaso; la cola del conductor reintenta 5xx para siempre. Igual una clase desconocida y un data URL ilegible | `almacen_fotos.validar_fotos` (mismo vocabulario del CHECK), antes de escribir; traspaso, daño y tanqueo → 400 | `tests/flota/test_foto_invalida_es_400.py`: AST, toda función de `flota/api` que lee `fotos*` traduce `FotoInvalida`/`ErrorAlmacen` a 400 antes de `ErrorFlota` |
+| **P3** | Forma de pago guardada donde no hubo cobro | NO_PAGO_SE_QUEDO con el select en CREDITO quedaba CREDITO → desglose y liquidación la listaban como crédito | `recaudo_entrega.forma_pago_de(estado, forma)`: `None` en `EstadoEntrega.SIN_COBRO` (RECHAZADO, ENTREGADO_SIN_PAGO). La usa quien escribe y quien lee (`to_dict`, desglose): las filas viejas también | `test_forma_pago_sin_cobro.py`: AST, toda escritura de `forma_pago` pasa por la política o es `None` |
+| **P3** | Un código del vocabulario pintado crudo | `no_apto` en el muelle, `ENTREGADO_SIN_PAGO` en la liquidación, `salio_sin_turno` en la bandeja, `` `entregar_ruta` `` y `no_se_pidio` en la jornada, `veredicto no_apto` en la analítica, `a_revisar_en_siesa` y la matriz del desglose, y `soat`/`poliza_rc`/`efectivo_conductor`/`sin_dato`/`aire_acondicionado`… en el expediente | Los mapas de palabras de cada módulo (`FLOTA_PALABRAS` + `flotaOpcion`, `FLOTA_VALOR_EVIDENCIA`, `fjPalabra`, `LIQ_ESTADO_ENTREGA`, `palabra_de_veredicto` en el dominio). **«Inspección no apta», en femenino** | `test_sin_codigos_en_pantalla.py`: detector de FORMA (snake_case, MAYÚSCULAS_CON_GUIONES, `` `x` ``) sobre el texto visible de cada pantalla pintada en Node contra respuestas reales |
+
+**Menores:** `condicion_declarada` del desglose rotula con la política de cobro
+(C02/C03 = contado, no «credito»), y Liquidación → Desglose muestra
+`por_dias_credito` y `credito_no_autorizado`; el semáforo dice «el último
+kilometraje está en duda» solo si la **última** lectura lo está (las viejas
+siguen en Pendientes); re-confirmar una parada guarda `ts_dispositivo`,
+`ts_desfase_s` y `via_cola` anteriores en el EDITAR; el log de condición
+ausente dice «se cobra como contado supuesto» (decía «no se asume contado»);
+el tipo de vehículo se valida contra `flota.dominio.valores.TIPOS_VEHICULO`
+(= el desplegable, por test) → 400 claro; un vehículo viejo con otro tipo se
+sigue editando mientras no cambie el tipo.
+
+**Mutaciones: 34, las 34 rojas.** De paso se encontró una trampa del propio
+método: una mutación del **mismo tamaño** escrita en el mismo segundo deja el
+`.pyc` mutado vigente tras restaurar (Python valida por mtime en segundos +
+tamaño), y el test siguiente corre contra el código roto. Correr las
+mutaciones con `PYTHONDONTWRITEBYTECODE=1`/`-B`.
+
+**Lo que NO cubre, dicho:**
+- El detector de códigos crudos mira las pantallas que pinta; una pantalla
+  nueva no entra sola (el expediente sí: `EXPEDIENTE` tiene inventario).
+- Un estado de entrega nuevo en el modelo pone rojo el trinquete del PWA
+  hasta que alguien le dé estilo; en Python no hay trinquete equivalente.
+- `turno_de_la_ruta` sobre una ruta entregada usa el turno vigente al cierre;
+  si el traspaso se registró **antes** del cierre de ruta (el conductor dejó
+  el camión y cerró la ruta después), la señal «salió sin turno» aparece.
+- Las paradas RECHAZADO/ENTREGADO_SIN_PAGO viejas conservan su `forma_pago`
+  en la base (sin backfill); solo se LEEN sin ella.
+- Un vehículo viejo con un tipo fuera del catálogo no se corrige solo.
+
+Tests que codificaban el comportamiento viejo, reescritos con su porqué:
+`test_liquidacion_desglose` (rótulo «credito (C02)»), `test_mi_camion_hoy_js`
+(«no apto» → «no apta»), `test_hora_y_angulo` (el ángulo inventado esperaba
+el IntegrityError del commit: ahora 400 sin escribir nada, y un test aparte
+prueba que el CHECK sigue), `test_render_llantas_js`/`test_render_preventivo_js`
+(códigos → palabras) y `test_flujo_dia_de_conductor` (el contador pinchado
+`custodias_sin_foto_completa` baja de 3 a 1: las dos de la sede ya no cuentan;
+el xfail del «día bien hecho = 0» sigue rojo por la custodia del conductor).
+
+Suite completa en este worktree (2026-09-24, `-m "not postgres"`, TZ=UTC, una
+sola corrida con la máquina saturada): **8134 passed, 5 failed** (los cinco
+tests de arriba, corregidos después y verdes por archivo: 117 passed, 3
+xfailed), 5 skipped, 19 xfailed. No se volvió a correr entera a pedido del
+integrador.

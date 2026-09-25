@@ -229,4 +229,4 @@ class TestLaPantallaDiceLoQueFaltaSinInventarNada:
             'km_marca': 'verificada', 'montajes': 1,
             'ultimo_motivo': 'corte_flanco'}]))
         assert 'LL-007' in html
-        assert 'salió por corte_flanco' in html
+        assert 'salió por Corte en el flanco' in html   # en palabras (QA e2e 2026-09-24)

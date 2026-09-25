@@ -462,7 +462,8 @@ class TestElHealthAlFinalDelDia:
         '`ANGULOS_ENTREGA` + el tablero, asimetría deliberada y documentada— y '
         'un traspaso lleva un solo juego de fotos, así que la custodia que ABRE '
         'nace con cero de inicio y la que CIERRA queda con cero de fin. '
-        'Resultado medido: 3 tras un día perfecto y +2 por turno, para siempre. '
+        'Resultado medido: 3 tras un día perfecto y +2 por turno, para siempre '
+        '(1 y +1 desde el 2026-09-24: el turno de la SEDE ya no exige fotos). '
         'Un contador que no puede valer cero es un contador que nadie lee — la '
         'lección de los 639 avisos. El arreglo es rediseñar qué exige cada '
         'extremo (13 a la custodia abierta por un recibo, 5 a la cerrada por '
@@ -477,7 +478,11 @@ class TestElHealthAlFinalDelDia:
         Existe para que el día que alguien toque `custodias_sin_foto_completa`
         el cambio se vea, aunque el `xfail` siga rojo por otra razón.
         """
-        assert arnes.health(client, mundo)['custodias_sin_foto_completa'] == 3
+        # Era 3: las dos custodias de la SEDE (que nadie fotografía: las fotos
+        # de cada relevo cuelgan del turno del conductor) contaban como «sin
+        # foto completa». Desde el 2026-09-24 (QA e2e) la sede no tiene fotos
+        # exigidas; queda la del conductor, cerrada con 5 de 13 (el xfail).
+        assert arnes.health(client, mundo)['custodias_sin_foto_completa'] == 1
         assert len(arnes.custodias_de(mundo['vehiculo_id'])) == 3
 
 

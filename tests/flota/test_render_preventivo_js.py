@@ -151,13 +151,13 @@ class TestLaProcedenciaSeVeAlLadoDelNumero:
     def test_una_fuente_documental_sale_con_el_intervalo(self, tmp_path):
         html = _plan(tmp_path, [_tarea()])
         assert 'cada 60.000 km' in html
-        assert 'fuente: manual_fabricante' in html
+        assert 'fuente: Manual del fabricante' in html   # en palabras (QA e2e 2026-09-24)
 
     def test_una_fuente_BLANDA_se_marca_como_no_documental(self, tmp_path):
         """Un intervalo dicho por el taller suele ser el correcto; lo que no
         tiene es con qué demostrarlo, y eso es lo que hay que ver."""
         html = _plan(tmp_path, [_tarea(fuente='estimado', fuente_blanda=True)])
-        assert 'fuente: estimado — no es documental' in html
+        assert 'fuente: Estimado — no es documental' in html
         assert 'var(--yellow)' in html
 
     def test_y_una_documental_NO_lleva_esa_marca(self, tmp_path):
