@@ -3108,6 +3108,8 @@
       <span id="cond-sync-status" style="font-size:var(--fs-xs);color:#b45309;font-weight:700;"></span>
       <button onclick="condSyncQueue()" id="cond-sync-btn" style="background:#b45309;color:#fff;border:none;padding:5px 12px;border-radius:6px;font-size:var(--fs-xs);font-weight:700;cursor:pointer;">🔄 Sincronizar</button>
     </div>
+    <!-- Lo que el servidor rechazó de la cola: queda hasta que el conductor lo lee. -->
+    <div id="cond-rechazos" class="tema-claro-fijo" style="padding:0 16px;"></div>
     <!-- Zona clara fija igual que #cond-contenido (regla del bloque de tokens
          de arriba): «Mi camión hoy» también se lee al sol. -->
     <div id="cond-flota" style="padding:12px 16px 0 16px;"></div>

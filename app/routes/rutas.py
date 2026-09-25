@@ -420,6 +420,12 @@ def entregar_ruta(id):
     conductor_ruta = Conductor.query.filter_by(usuario_id=uid, activo=True).first()
     if not _es_admin_o_jefe() and (not conductor_ruta or conductor_ruta.id != ruta.conductor_id):
         return jsonify({'error': 'Sin acceso a esta ruta'}), 403
+    # Idempotente para la cola del conductor (2026-09-25): un cierre que llegó
+    # y cuya respuesta se perdió con la señal vuelve a mandarse desde el
+    # teléfono. Contestar 400 lo convertía en «rechazo» sobre una ruta que SÍ
+    # quedó cerrada. Nada se vuelve a escribir.
+    if ruta.estado in RutaService.ESTADOS_RUTA_CERRADA:
+        return jsonify({'ok': True, 'ya_cerrada': True, 'estado': ruta.estado}), 200
     try:
         resultado = RutaService.entregar_ruta(id, request.get_json() or {}, uid)
     except LookupError as e:

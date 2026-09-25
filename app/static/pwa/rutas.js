@@ -1892,6 +1892,15 @@ const _condDB = (() => {
         tx.objectStore('queue').delete(id);
         tx.oncomplete = res; tx.onerror = () => rej(tx.error);
       });
+    },
+    /** Reescribe un ítem de la cola (intentos, último error). */
+    async actualizar(item) {
+      const db = await _open();
+      return new Promise((res, rej) => {
+        const tx = db.transaction('queue', 'readwrite');
+        tx.objectStore('queue').put(item);
+        tx.oncomplete = res; tx.onerror = () => rej(tx.error);
+      });
     }
   };
 })();
@@ -1983,6 +1992,19 @@ async function condAbrirParadas(rutaId) {
   }
   _COND_RUTA_ACTIVA = { id: rutaId };
   _COND_PARADAS = data.paradas || [];
+  // Lo guardado en el teléfono y no enviado manda sobre lo que dice el
+  // servidor: si no, la parada aparece pendiente y el conductor la rehace.
+  try {
+    const enCola = await _condPendientesDeRuta(rutaId);
+    if (enCola.length) {
+      enCola.forEach(it => {
+        const x = _COND_PARADAS.find(q => q.tarea_id === it.tareaId);
+        if (x) x.recaudo = _condRecaudoLocal(it.payload, x.recaudo);
+      });
+      const g = _COND_PARADAS.filter(q => q.recaudo).length;
+      data = { ...data, facturas_gestionadas: g, paradas_gestionadas: g };
+    }
+  } catch (_) { /* sin cola legible, se muestra lo del servidor */ }
   // Se pide una vez por ruta, no por parada. Si falla, el select queda vacío y
   // la validación del servidor rechaza igual — el conductor ve el error en vez
   // de guardar un rechazo sin motivo.
@@ -2046,6 +2068,7 @@ function _condRenderParadas(d) {
           <div style="margin-left:10px;flex-shrink:0;">${badge}</div>
         </div>
         ${r ? `<div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:6px;">${esc(r.forma_pago || '')}${r.observaciones ? ' · ' + esc(r.observaciones.substring(0,40)) : ''}</div>` : ''}
+        ${r && r._en_cola ? `<div style="font-size:var(--fs-xs);color:var(--warn-tx);font-weight:700;margin-top:6px;">⏳ Guardada en el teléfono, todavía sin enviar</div>` : ''}
       </div>`;
   });
 
@@ -3126,55 +3149,207 @@ async function condGuardarParada() {
     geo:               el._geo || { fuente: 'sin_dato', motivo: 'no_se_pidio' },
   };
 
-  // ── Sin conexión: encolar y actualizar local ────────────────────
+  const btn = el.querySelector('button[onclick="condGuardarParada()"]');
+  await _condMandarConfirmacion(_COND_RUTA_ACTIVA.id, p, payload, rPrevio, btn);
+}
+
+/**
+ * Manda una confirmación ya armada, o la guarda en el teléfono. Separada del
+ * formulario para poder ejecutarla en un test con la cola real.
+ * @param {number} rutaId
+ * @param {Object} p - la parada
+ * @param {Object} payload
+ * @param {Object|null} rPrevio - el recaudo que la parada ya tenía
+ * @param {Object|null} btn - el botón «Confirmar Parada», si está
+ */
+async function _condMandarConfirmacion(rutaId, p, payload, rPrevio, btn) {
+  // ── Sin conexión: se guarda en el teléfono ─────────────────────
   if (!navigator.onLine) {
-    await _condDB.enqueue({ tipo: 'confirmar', rutaId: _COND_RUTA_ACTIVA.id, tareaId: p.tarea_id, payload });
-    const idx = _COND_PARADAS.findIndex(x => x.tarea_id === p.tarea_id);
-    if (idx >= 0) {
-      _COND_PARADAS[idx].recaudo = {
-        estado_entrega:        estadoEntrega,
-        forma_pago:            formaPago || null,
-        monto_cobrado:         montoFinal,
-        motivo_descuento:      motivoDescuentoFinal,
-        monto_descuento:       montoDescuentoFinal,
-        observaciones:         obs || null,
-        foto_entrega:          fotoBase64 || null,
-        tiene_foto_entrega:    !!fotoBase64 || !!(rPrevio && rPrevio.tiene_foto_entrega),
-        referencia_pago:       referenciaPago,
-        tiene_foto_comprobante: !!fotoComprobante || !!(rPrevio && rPrevio.tiene_foto_comprobante),
-        bultos_rechazados_ids: payload.bultos_rechazados,
-        items_entregados:      itemsEntregados.length ? itemsEntregados : null,
-      };
-      const gestionadas = _COND_PARADAS.filter(x => x.recaudo).length;
-      await _condDB.set('paradas_' + _COND_RUTA_ACTIVA.id, { paradas: _COND_PARADAS, facturas_gestionadas: gestionadas, paradas_gestionadas: gestionadas });
-    }
-    await _condActualizarBarras();
-    alerta('Guardado sin conexión — se enviará al reconectar', 'advertencia');
-    condVolverAParadas(false);
+    await _condEncolarConfirmacion(rutaId, p, payload, rPrevio,
+      'Guardado sin conexión — se enviará al reconectar');
     return;
   }
-
-  const btn = el.querySelector('button[onclick="condGuardarParada()"]');
   if (btn) { btn.disabled = true; btn.textContent = 'Guardando...'; }
 
+  // Con señal débil `navigator.onLine` dice «conectado» y el envío se muere
+  // en el camino. Antes eso terminaba en «Error de conexión» y la entrega —
+  // fotos, cobro, lo que volvió— se perdía: el conductor tenía que rehacerla.
+  // Ahora «no hubo respuesta» y «el servidor falló» se guardan en la cola
+  // igual que sin señal; solo un RECHAZO del servidor deja el formulario
+  // abierto, con su motivo, para corregirlo.
+  const res = await _condEnviarUno(
+    `/api/rutas/${rutaId}/paradas/${p.tarea_id}/confirmar`,
+    _condSelloDeEnvio(payload, false, null));
+  if (res.estado === 'hecho') {
+    alerta(res.datos && res.datos.es_edicion ? 'Confirmación actualizada' : 'Parada confirmada ✓', 'exito');
+    condVolverAParadas(true);
+    return;
+  }
+  if (res.estado === 'rechazado') {
+    alerta(res.mensaje || 'El servidor no aceptó la confirmación', 'error');
+    if (btn) { btn.disabled = false; btn.textContent = 'Confirmar Parada'; }
+    return;
+  }
+  await _condEncolarConfirmacion(rutaId, p, payload, rPrevio,
+    `${res.mensaje} La confirmación quedó guardada en el teléfono y se envía sola.`);
+}
+
+// ── Envío y cola del conductor ──────────────────────────────────────
+//
+// Mismo contrato que la cola de flota (`flotaColaEnviarUna`): una respuesta
+// se clasifica en cuatro, y cada una tiene UN destino.
+//
+//   · `hecho`      — el servidor la tiene (2xx).
+//   · `rechazado`  — el servidor dijo que no (4xx salvo 401/408/429): reenviarla
+//                     no la arregla, hay que hacerla de nuevo. Sale de la cola
+//                     y queda ANOTADA, con su motivo, hasta que el conductor la
+//                     lea. Antes quedaba en la cola para siempre, reintentándose
+//                     en silencio.
+//   · `sin_red`    — no hubo respuesta. Puede haber llegado: reenviar una
+//                     confirmación es seguro (el servidor la trata como edición).
+//   · `reintentar` — el servidor falló (5xx, 408, 429) o la sesión venció (401).
+
+/** Cuánto se espera una respuesta antes de darla por perdida. */
+const COND_TIMEOUT_MS = 25000;
+/** Llave (en la caché de `wms_cond`) de los rechazos que el conductor no leyó. */
+const COND_LLAVE_RECHAZOS = 'cond_rechazos';
+
+/**
+ * Manda UNA operación del conductor y clasifica la respuesta.
+ * @param {string} url - ruta de la API
+ * @param {Object} cuerpo
+ * @returns {Promise<{estado:string, mensaje?:string, datos?:Object}>}
+ */
+async function _condEnviarUno(url, cuerpo) {
+  const ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+  const timer = ctrl ? setTimeout(() => ctrl.abort(), COND_TIMEOUT_MS) : null;
+  let r;
   try {
-    const r = await fetch(API + '/api/rutas/' + _COND_RUTA_ACTIVA.id + '/paradas/' + p.tarea_id + '/confirmar', {
+    r = await fetch(API + url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + TOKEN },
-      body: JSON.stringify(_condSelloDeEnvio(payload, false, null)),
+      body: JSON.stringify(cuerpo),
+      signal: ctrl ? ctrl.signal : undefined,
     });
-    const d = await r.json();
-    if (r.ok) {
-      alerta(d.es_edicion ? 'Confirmación actualizada' : 'Parada confirmada ✓', 'exito');
-      condVolverAParadas(true);
-    } else {
-      alerta(d.error || 'Error al confirmar parada', 'error');
-      if (btn) { btn.disabled = false; btn.textContent = 'Confirmar Parada'; }
-    }
   } catch (e) {
-    alerta('Error de conexión', 'error');
-    if (btn) { btn.disabled = false; btn.textContent = 'Confirmar Parada'; }
+    return { estado: 'sin_red', mensaje: 'No hubo respuesta del servidor (señal débil).' };
+  } finally {
+    if (timer) clearTimeout(timer);
   }
+  let d = {};
+  try { d = await r.json(); } catch (_) { d = {}; }
+  if (r.ok) return { estado: 'hecho', datos: d };
+  if (r.status === 401) {
+    return { estado: 'reintentar', mensaje: 'La sesión venció. Entre de nuevo y se envía sola.' };
+  }
+  if (r.status >= 500 || r.status === 408 || r.status === 429) {
+    return { estado: 'reintentar', mensaje: 'El servidor no respondió bien.' };
+  }
+  return { estado: 'rechazado', datos: d,
+           mensaje: (d && d.error) ? String(d.error) : `El servidor la rechazó (error ${r.status}).` };
+}
+
+/** La URL de un ítem de la cola. Un tipo desconocido levanta: no se manda a ningún lado. */
+function _condUrlDe(item) {
+  if (item.tipo === 'confirmar') return `/api/rutas/${item.rutaId}/paradas/${item.tareaId}/confirmar`;
+  if (item.tipo === 'cerrar') return `/api/rutas/${item.rutaId}/entregar`;
+  throw new Error('operación del conductor desconocida: ' + item.tipo);
+}
+
+/**
+ * Lo que la pantalla muestra de una parada confirmada que todavía no llegó al
+ * servidor. Sale del MISMO payload que se va a mandar: la vista no puede
+ * decir una cosa y la cola otra.
+ * @param {Object} payload
+ * @param {Object|null} previo - el recaudo que la parada ya tenía
+ */
+function _condRecaudoLocal(payload, previo) {
+  return {
+    estado_entrega:         payload.estado_entrega,
+    forma_pago:             payload.forma_pago || null,
+    monto_cobrado:          payload.monto_cobrado,
+    motivo_descuento:       payload.motivo_descuento,
+    monto_descuento:        payload.monto_descuento,
+    observaciones:          payload.observaciones || null,
+    foto_entrega:           payload.foto_entrega || null,
+    tiene_foto_entrega:     !!payload.foto_entrega || !!(previo && previo.tiene_foto_entrega),
+    referencia_pago:        payload.referencia_pago,
+    tiene_foto_comprobante: !!payload.foto_comprobante || !!(previo && previo.tiene_foto_comprobante),
+    bultos_rechazados_ids:  payload.bultos_rechazados,
+    items_entregados:       payload.items_entregados,
+    _en_cola:               true,
+  };
+}
+
+/**
+ * Guarda una confirmación en la cola del teléfono y la refleja en la lista.
+ * La usan el camino sin señal y el de «no hubo respuesta»: una forma de
+ * guardar, no dos.
+ */
+async function _condEncolarConfirmacion(rutaId, parada, payload, previo, aviso) {
+  try {
+    await _condDB.enqueue({ tipo: 'confirmar', rutaId, tareaId: parada.tarea_id,
+                            cliente: parada.cliente || '', payload });
+  } catch (e) {
+    // No se pudo guardar: se dice, y el formulario queda como estaba.
+    alerta('El teléfono no pudo guardar la confirmación. No cierre esta pantalla ' +
+           'y vuelva a intentarlo con señal.', 'error');
+    return false;
+  }
+  const idx = _COND_PARADAS.findIndex(x => x.tarea_id === parada.tarea_id);
+  if (idx >= 0) {
+    _COND_PARADAS[idx].recaudo = _condRecaudoLocal(payload, previo);
+    const gestionadas = _COND_PARADAS.filter(x => x.recaudo).length;
+    try {
+      await _condDB.set('paradas_' + rutaId, { paradas: _COND_PARADAS,
+        facturas_gestionadas: gestionadas, paradas_gestionadas: gestionadas });
+    } catch (_) { /* la cola ya la tiene: la vista se rehace al recargar */ }
+  }
+  await _condActualizarBarras();
+  alerta(aviso, 'advertencia');
+  condVolverAParadas(false);
+  return true;
+}
+
+/** Los rechazos que el conductor todavía no leyó. */
+async function _condRechazos() {
+  try {
+    const v = await _condDB.get(COND_LLAVE_RECHAZOS);
+    return Array.isArray(v) ? v : [];
+  } catch (_) { return []; }
+}
+
+/** Anota un rechazo para que no se pierda aunque nadie esté mirando. */
+async function _condAnotarRechazo(item, mensaje) {
+  const lista = await _condRechazos();
+  lista.push({ tipo: item.tipo, rutaId: item.rutaId, tareaId: item.tareaId || null,
+               cliente: item.cliente || '', mensaje, ts: Date.now() });
+  try { await _condDB.set(COND_LLAVE_RECHAZOS, lista); } catch (_) { /* queda la alerta */ }
+}
+
+/** El conductor leyó el rechazo. Se quita por posición, no por texto. */
+async function condDescartarRechazo(i) {
+  const lista = (await _condRechazos()).filter((_, j) => j !== i);
+  try { await _condDB.set(COND_LLAVE_RECHAZOS, lista); } catch (_) { /* nada */ }
+  await _condActualizarBarras();
+}
+
+/** Las confirmaciones de una ruta que todavía no llegaron al servidor. */
+async function _condPendientesDeRuta(rutaId) {
+  return (await _condDB.queue()).filter(x => x.tipo === 'confirmar' && x.rutaId === rutaId);
+}
+
+/** HTML de los rechazos sin leer. Separado del pintado para ejecutarlo en un test. */
+function _condRechazosHtml(lista) {
+  return (lista || []).map((r, i) => {
+    const que = r.tipo === 'cerrar'
+      ? `El cierre de la ruta #${esc(r.rutaId)} no se envió`
+      : `No se registró la parada de ${esc(r.cliente || 'la factura ' + r.tareaId)}`;
+    return `<div style="background:var(--err-bg);border:1px solid var(--err-brd);color:var(--err-tx);border-radius:10px;padding:10px 12px;margin-top:8px;font-size:var(--fs-sm);">
+      <b>⚠ ${que}.</b> ${esc(r.mensaje || '')} Hágala de nuevo.
+      <button onclick="condDescartarRechazo(${i})" style="display:block;margin-top:8px;background:var(--bg-s);color:var(--err-tx);border:1px solid var(--err-brd);padding:6px 12px;border-radius:8px;font-size:var(--fs-xs);font-weight:700;cursor:pointer;">Entendido</button>
+    </div>`;
+  }).join('');
 }
 
 /**
@@ -3211,55 +3386,70 @@ async function condVolverAParadas(recargar = false) {
 }
 
 
-/** Cierra la ruta del conductor marcandola como entregada (online u offline). */
+/**
+ * Cierra la ruta del conductor marcándola como entregada (con o sin señal).
+ *
+ * **El cierre no sale con confirmaciones pendientes en el teléfono**
+ * (2026-09-25). Si cerraba antes de que llegaran, el servidor pasaba la ruta a
+ * ENTREGADA y cada confirmación rezagada se rechazaba después («la ruta debe
+ * estar EN_TRANSITO»): la entrega, el cobro y lo que volvió se perdían. Con
+ * señal se intenta mandar lo pendiente primero; si algo no sale, se dice cuál
+ * y el cierre espera. Sin señal el cierre se encola DETRÁS de ellas, y la
+ * sincronización no lo manda mientras alguna de su ruta siga sin llegar.
+ */
 async function condCerrarRuta() {
   if (!_COND_RUTA_ACTIVA) return;
-  if (!confirm('¿Confirmar cierre de ruta? Ya no podrás agregar más confirmaciones de parada.')) return;
-  // Con paradas de esta ruta todavía en la cola, primero salen ellas: una
-  // ruta cerrada con una parada sin confirmar quedaba sin salida (P1-4).
-  if (navigator.onLine) {
-    const rutaId = _COND_RUTA_ACTIVA.id;
-    const pendientes = async () => (await _condDB.queue())
-      .filter(x => x.tipo === 'confirmar' && x.rutaId === rutaId).length;
-    if (await pendientes()) {
-      await condSyncQueue();
-      const quedan = await pendientes();
-      if (quedan) {
-        alerta(`Quedan ${quedan} parada${quedan !== 1 ? 's' : ''} sin enviar. Revíselas antes de cerrar la ruta.`, 'error');
-        return;
-      }
-    }
+  const rutaId = _COND_RUTA_ACTIVA.id;
+  if (navigator.onLine && (await _condPendientesDeRuta(rutaId)).length) {
+    await condSyncQueue();
   }
+  const pendientes = await _condPendientesDeRuta(rutaId);
+  const rechazadas = (await _condRechazos()).filter(r => r.tipo === 'confirmar' && r.rutaId === rutaId);
+  if (rechazadas.length) {
+    alerta(`Hay ${rechazadas.length} parada(s) que el servidor no aceptó: ` +
+           `${rechazadas.map(r => r.cliente || r.tareaId).join(', ')}. Hágalas de nuevo antes de cerrar la ruta.`,
+           'error');
+    return;
+  }
+  if (pendientes.length && navigator.onLine) {
+    alerta(`Todavía hay ${pendientes.length} confirmación(es) sin enviar: ` +
+           `${pendientes.map(x => x.cliente || x.tareaId).join(', ')}. ` +
+           'Sincronice cuando haya señal y después cierre la ruta.', 'error');
+    return;
+  }
+  const aviso = pendientes.length
+    ? `Hay ${pendientes.length} confirmación(es) guardadas en el teléfono. El cierre ` +
+      'se envía después de ellas, cuando vuelva la señal.<br>'
+    : '';
+  if (!(await _modalConfirmar(aviso + 'Después de cerrar ya no podrá agregar más confirmaciones de parada.',
+      { titulo: '¿Cerrar la ruta?', textoConfirmar: 'Cerrar ruta' }))) return;
   if (!navigator.onLine) {
-    await _condDB.enqueue({ tipo: 'cerrar', rutaId: _COND_RUTA_ACTIVA.id, payload: { bultos: [] } });
+    await _condDB.enqueue({ tipo: 'cerrar', rutaId, payload: { bultos: [] } });
     await _condActualizarBarras();
-    alerta('Cierre en cola — se enviará al reconectar', 'advertencia');
+    alerta('Cierre guardado en el teléfono — se enviará al reconectar', 'advertencia');
     _COND_RUTA_ACTIVA = null;
     _COND_PARADAS = [];
     cargarRutasConductor();
     return;
   }
-  try {
-    const r = await fetch(API + '/api/rutas/' + _COND_RUTA_ACTIVA.id + '/entregar', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + TOKEN },
-      body: JSON.stringify({ bultos: [] }),
-    });
-    const d = await r.json();
-    if (r.ok) {
-      const faltan = (d.paradas_sin_gestionar || []).length;
-      if (faltan) {
-        alerta(`Ruta cerrada con ${faltan} parada${faltan !== 1 ? 's' : ''} sin confirmar: la oficina las tiene que revisar.`, 'advertencia');
-      } else {
-        alerta('Ruta cerrada — ¡Buen trabajo!', 'exito');
-      }
-      _COND_RUTA_ACTIVA = null;
-      _COND_PARADAS = [];
-      cargarRutasConductor();
+  const res = await _condEnviarUno(`/api/rutas/${rutaId}/entregar`, { bultos: [] });
+  if (res.estado === 'hecho') {
+    // El servidor no niega el cierre por una parada sin gestionar (la cola sin
+    // señal no se puede trabar), pero la declara: la oficina la revisa (P1-4).
+    const faltan = ((res.datos || {}).paradas_sin_gestionar || []).length;
+    if (faltan) {
+      alerta(`Ruta cerrada con ${faltan} parada${faltan !== 1 ? 's' : ''} sin confirmar: la oficina las tiene que revisar.`, 'advertencia');
     } else {
-      alerta(d.error || 'Error al cerrar ruta', 'error');
+      alerta('Ruta cerrada — ¡Buen trabajo!', 'exito');
     }
-  } catch (e) { alerta('Error de conexión', 'error'); }
+    _COND_RUTA_ACTIVA = null;
+    _COND_PARADAS = [];
+    cargarRutasConductor();
+  } else if (res.estado === 'rechazado') {
+    alerta(res.mensaje || 'El servidor no aceptó el cierre', 'error');
+  } else {
+    alerta(`${res.mensaje} La ruta no se cerró: inténtelo de nuevo con señal.`, 'error');
+  }
 }
 
 // ── Offline: init, barras de estado y motor de sync ──────────────
@@ -3288,15 +3478,33 @@ async function _condActualizarBarras() {
   const n = items.length;
   if (n > 0) {
     syncBar.style.display = 'flex';
+    // Lo que no sale se dice: con cuántos intentos y por qué. Un ítem que
+    // reintenta en silencio es un ítem trabado que nadie ve.
+    const trabados = items.filter(x => (x.intentos || 0) > 0);
+    const detalle = trabados.length
+      ? ` · ${trabados.length} sin salir: ${trabados[0].ultimo_error || 'sin respuesta'}`
+      : '';
     if (syncStatus && !_COND_SYNCING)
-      syncStatus.textContent = `⏳ ${n} confirmación${n !== 1 ? 'es' : ''} pendiente${n !== 1 ? 's' : ''} de sincronizar`;
+      syncStatus.textContent = `⏳ ${n} confirmación${n !== 1 ? 'es' : ''} pendiente${n !== 1 ? 's' : ''} de sincronizar${detalle}`;
     if (syncBtn) syncBtn.disabled = _COND_SYNCING || !navigator.onLine;
   } else {
     syncBar.style.display = 'none';
   }
+  const rechEl = document.getElementById('cond-rechazos');
+  if (rechEl) rechEl.innerHTML = _condRechazosHtml(await _condRechazos());
 }
 
-/** Sincroniza la cola offline de confirmaciones pendientes con el servidor. */
+/**
+ * Sincroniza la cola del conductor con el servidor.
+ *
+ * · Un ítem que no sale (sin red, servidor caído) NO frena a los demás: son
+ *   entregas independientes. Queda en la cola con sus intentos y su error.
+ * · Un RECHAZO sale de la cola y queda anotado con su motivo (se muestra hasta
+ *   que el conductor toque «Entendido»). Reenviarlo no lo arregla.
+ * · Un cierre de ruta no se manda mientras alguna confirmación de ESA ruta
+ *   siga en la cola; si alguna fue rechazada, el cierre tampoco sale y se
+ *   anota: la parada hay que rehacerla y la ruta cerrarla de nuevo.
+ */
 async function condSyncQueue() {
   if (_COND_SYNCING || !navigator.onLine) return;
   const items = await _condDB.queue();
@@ -3307,53 +3515,59 @@ async function condSyncQueue() {
   const syncBtn    = document.getElementById('cond-sync-btn');
   if (syncBtn) syncBtn.disabled = true;
 
-  // Un ítem con error NO debe congelar los demás — pueden ser entregas reales
-  // ya hechas, detrás en la cola, con el conductor sin ningún camino para
-  // desbloquearlas salvo que ese primer ítem por fin sincronice solo.
-  const fallidos = [];
-  // Rutas con alguna confirmación que no salió en esta vuelta: su cierre
-  // espera (P1-4). Cerrar la ruta con una parada sin confirmar la dejaba sin
-  // salida — el servidor ya no aceptaba la confirmación.
-  const rutasConParadaPendiente = new Set();
-  for (let i = 0; i < items.length; i++) {
-    const item = items[i];
-    if (syncStatus)
-      syncStatus.textContent = `🔄 Sincronizando ${i + 1}/${items.length}…`;
-    if (item.tipo !== 'confirmar' && rutasConParadaPendiente.has(item.rutaId)) {
-      fallidos.push({ item, error: 'El cierre de la ruta espera a que salgan sus paradas pendientes' });
-      continue;
-    }
-    try {
-      const url = item.tipo === 'confirmar'
-        ? `${API}/api/rutas/${item.rutaId}/paradas/${item.tareaId}/confirmar`
-        : `${API}/api/rutas/${item.rutaId}/entregar`;
-      const cuerpo = item.tipo === 'confirmar'
-        ? _condSelloDeEnvio(item.payload, true, item.ts)
-        : item.payload;
-      const r = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + TOKEN },
-        body: JSON.stringify(cuerpo),
-      });
-      if (!r.ok) {
-        const d = await r.json().catch(() => ({}));
-        throw new Error(d.error || `Error ${r.status}`);
+  const rutasConPendiente = new Set();   // confirmaciones que siguen en la cola
+  const rutasConRechazo = new Set();     // confirmaciones que el servidor no aceptó
+  let hechos = 0;
+  const rechazos = [];
+  const trabados = [];
+  try {
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      if (syncStatus) syncStatus.textContent = `🔄 Sincronizando ${i + 1}/${items.length}…`;
+      if (item.tipo === 'cerrar') {
+        if (rutasConRechazo.has(item.rutaId)) {
+          await _condDB.dequeue(item.id);
+          const msg = 'Una parada de esta ruta fue rechazada: rehágala y cierre la ruta de nuevo.';
+          await _condAnotarRechazo(item, msg);
+          rechazos.push(msg);
+          continue;
+        }
+        if (rutasConPendiente.has(item.rutaId)) continue;   // espera a sus confirmaciones
       }
-      await _condDB.dequeue(item.id);
-    } catch (e) {
-      fallidos.push({ item, error: e.message });
-      if (item.tipo === 'confirmar') rutasConParadaPendiente.add(item.rutaId);
-      // No return: sigue con el resto de la cola en vez de trabarla entera.
+      let res;
+      try {
+        const cuerpo = item.tipo === 'confirmar'
+          ? _condSelloDeEnvio(item.payload, true, item.ts)
+          : item.payload;
+        res = await _condEnviarUno(_condUrlDe(item), cuerpo);
+      } catch (e) {
+        res = { estado: 'rechazado', mensaje: e.message };
+      }
+      if (res.estado === 'hecho') {
+        await _condDB.dequeue(item.id);
+        hechos++;
+      } else if (res.estado === 'rechazado') {
+        await _condDB.dequeue(item.id);
+        await _condAnotarRechazo(item, res.mensaje);
+        rechazos.push(res.mensaje);
+        if (item.tipo === 'confirmar') rutasConRechazo.add(item.rutaId);
+      } else {
+        await _condDB.actualizar({ ...item, intentos: (item.intentos || 0) + 1,
+                                   ultimo_error: res.mensaje });
+        trabados.push(res.mensaje);
+        if (item.tipo === 'confirmar') rutasConPendiente.add(item.rutaId);
+      }
     }
+  } finally {
+    _COND_SYNCING = false;
   }
 
-  _COND_SYNCING = false;
-  if (fallidos.length) {
-    alerta(
-      `${items.length - fallidos.length} de ${items.length} sincronizadas — ` +
-      `${fallidos.length} con error, siguen en cola: ${fallidos[0].error}`,
-      'advertencia'
-    );
+  if (rechazos.length) {
+    alerta(`${rechazos.length} registro(s) no se aceptaron y salieron de la cola: ${rechazos[0]} ` +
+           'Están en la lista de arriba: hay que hacerlos de nuevo.', 'error');
+  } else if (trabados.length) {
+    alerta(`${hechos} de ${items.length} sincronizadas — ${trabados.length} siguen guardadas ` +
+           `en el teléfono: ${trabados[0]}`, 'advertencia');
   } else {
     alerta('✓ Sincronización completa', 'exito');
   }

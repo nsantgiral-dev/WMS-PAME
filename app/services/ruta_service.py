@@ -105,6 +105,10 @@ class FormaPago:
 
 class RutaService:
 
+    #: Estados en los que la ruta ya no recibe entregas: un segundo «cerrar»
+    #: sobre ellos no escribe nada (lo reenvía la cola del conductor).
+    ESTADOS_RUTA_CERRADA = (EstadoRutaDespacho.ENTREGADA,)
+
     # ── Conductores ──────────────────────────────────────────────────
 
     @staticmethod
