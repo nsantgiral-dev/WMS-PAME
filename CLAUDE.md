@@ -6,7 +6,7 @@
   paquetes, no uno**: `app/` (127 archivos) y `flota/` (29) — ver abajo
 - **Frontend**: PWA vanilla JS modularizada (app.js + 16 módulos)
 - **Integración ERP**: Connekta V2/V3 → Siesa Enterprise
-- **DLQ**: SiesaJob con reintentos + backoff (5→15→45→120 min; `max_intentos` = 5, al 5.º fallo FALLIDO). Fuera de la ventana de Siesa (06:00–19:30) solo procesa `ALERTA_EMAIL`
+- **DLQ**: SiesaJob con reintentos + backoff (5→15→45→120 min; `max_intentos` = 5, al 5.º fallo FALLIDO). Fuera de la ventana de Siesa (06:00–19:30, `ventana_siesa.VENTANA`) solo procesa `ALERTA_EMAIL` (en simulación la ventana no aplica: `dlq_puede_postear`)
 - **Tests**: pytest (612 passing), CI en Railway buildCommand
 
 ## Arquitectura JS (Frontend)
@@ -1189,6 +1189,12 @@ exigir menos que el más estricto de sus componentes.** La forma se repite sola
 permiso de quien va a usar la pantalla, no el de lo que el endpoint ejecuta.
 Trinquete: `tests/test_permiso_compuesto.py`.
 
+> **2026-09-25:** `/liquidar-completo` se borró (sin pantalla, y mandaba la
+> retención sin decisión y sin cuenta ni UN reales). La misma forma volvió por
+> «Registrar cobro» (encola RC y DC, pedía admin-o-jefe), que la lista a mano
+> del trinquete no nombraba: ahora el trinquete **descubre por AST** toda ruta
+> que llega a un encolador de plata. Ver «La plata del conductor hasta Siesa».
+
 ### Packing tenía dos puertas y una sin guardia
 
 ```
@@ -1291,7 +1297,7 @@ está hecho».* Trinquete: `tests/test_documento_fiscal.py` (87 tests, 24 mutaci
 | `reconciliacion_service._ESTADOS_CUMPLIDO = {'9'}`: un pedido **anulado** mientras la caja esperaba (p. ej. retenida por cartera) quedaba `siesa_triggered` + DESPACHADO, y el muelle lo dejaba subir sin RM ni FE | **Una tabla de estados de pedido**, `estado_pedido_siesa` (9 = ANULADO en sync, cierre, historia y reconciliación). La reconciliación solo reconcilia con **la factura y su consecutivo**; el estado sirve para declarar un anulado (`pedido_anulado_siesa`), nunca `siesa_triggered`. Tres respuestas (`reconciliado` / `no_se: False` / `no_se: True`); el DLQ no manda nada si «no se sabe». El barrido rota por `reconciliacion_intento_at` (antes `.limit(10)` sin orden) y no mira anulados |
 | `get_remision_desde_pedido` devolvía `None` ante cualquier error y pedía `tamPag=200`; un 142945 sin consecutivo terminaba en `ValueError` → el reintento **reenviaba el 142945** (RM #2), o caía en compromisos vacíos → `244328-AUTO` DESPACHADO sin RM ni FE | Pre-flag **`rm_enviada_at`** antes del 142945 (Regla 6): se revierte solo ante un «no» explícito (`ConnektaRechazado`: 4xx, 429, `codigo≠0`) o una petición que no salió. Con el flag y sin RM, **nunca se reenvía**: se identifica la RM (tres estados). Recién enviada, `EsperandoRemision` (Regla 20, sin gastar reintento, gracia 15 min); después, `RemisionNoIdentificada` (subclase de `ConnektaResultadoDesconocido` → FALLIDO sin reintento). La salida: **facturar-rm-manual** (con la RM que se ve en Siesa) o `{"rm_inexistente": true, "motivo"}` en el mismo endpoint, que vuelve a preguntar antes de quitar el flag. `_persistir_resultado` se niega sin `rm_consec` |
 | Compromisos vacíos = DESPACHADO `244328-AUTO` | Busca la RM que los consumió y factura (con el anti-duplicado de FE por pedido); sin RM, resultado desconocido. Nunca DESPACHADO sin `rm_consec` |
-| El cierre de caja marcaba **DESPACHADO al encolar** el job, antes de Siesa; el precheck caído decía «Reintentá…» | La caja queda **VERIFICADA con sus bultos** hasta que `_persistir_resultado` (RM + FE) la despacha. Con el circuito abierto, fuera de la ventana de la Regla 14 (`cartera_service.VENTANA_SIESA`, 6–20) o sin respuesta del precheck, el cierre **se niega sin tocar nada** (ni bultos, ni job, ni estado). Con una RM enviada sin confirmar no se re-encola. El DLQ tampoco intenta el DESPACHO_F470 fuera de ventana (espera sin gastar reintento) |
+| El cierre de caja marcaba **DESPACHADO al encolar** el job, antes de Siesa; el precheck caído decía «Reintentá…» | La caja queda **VERIFICADA con sus bultos** hasta que `_persistir_resultado` (RM + FE) la despacha. Con el circuito abierto, fuera de la ventana de la Regla 14 (`ventana_siesa.VENTANA`, 06:00–19:30 desde la integración) o sin respuesta del precheck, el cierre **se niega sin tocar nada** (ni bultos, ni job, ni estado). Con una RM enviada sin confirmar no se re-encola. El DLQ tampoco intenta el DESPACHO_F470 fuera de ventana (espera sin gastar reintento) |
 | El muelle y la ruta decidían con `siesa_triggered`; `asignar_a_ruta` no miraba nada y una ruta quedaba trabada en `cerrar_ruta` | **`documento_fiscal.despachable`** (+ gemela SQL `filtro_despachable`): pedido = `siesa_triggered` + `rm_consec` + FE confirmada (`fe_consec` o `fe_confirmada_at`); traslado = su regla de siempre. La usan la lista del muelle, asignar (por bultos y por pedido), cargar, los sugeridos y `cerrar_ruta` (una ruta no sale con un bulto sin documento, aunque ya esté cargado) |
 | Cancelar, resetear-siesa, iniciar-despacho y «devuelto al estante» contestaban cada uno a su manera «¿esta caja tiene documento?» (cancelar solo miraba jobs vivos: RM + job FALLIDO → otra caja → RM #2) | **`documento_fiscal.tiene_documento_en_siesa`** (+ `filtro_tiene_documento`): `siesa_triggered`, RM, FE o el pre-flag. `cancelar`, `resetear_siesa`, `confirmar_packing` (re-confirmar), `crear_manual`, `crear_desde_picking`, `iniciar-despacho` (**antes** de crear el picking) y el filtro de «devuelto al estante» |
 | `except Timeout` atrapaba `ConnectTimeout` (la petición nunca salió) como «resultado desconocido» | `ConnektaNoEnviado`: se reintenta. `ReadTimeout` sigue siendo desconocido (Regla 3). Un 5xx sigue siendo `Exception` genérica (no es un «no») |
@@ -1324,8 +1330,6 @@ con el reloj real, todo cierre con Siesa mockeada fallaba de noche y en el CI.
 - El 142943 no tiene pre-flag propio: un timeout de la FE queda FALLIDO
   (desconocido) y su reintento pregunta la FE **por pedido** (el mismo
   anti-duplicado de siempre, con el riesgo del doble parcial ya declarado).
-- La ventana usa `cartera_service.VENTANA_SIESA` hasta que exista una
-  `ventana_siesa()` única (P2 de la auditoría, de otro frente).
 - El reset de PROCESANDO a 10 min se dejó: con el pre-flag, el reintento de
   un 142945 colgado identifica la RM en vez de reenviarla.
 - Las tareas DESPACHADO sin documento de antes de este cambio siguen así
@@ -2014,7 +2018,7 @@ no se afloja el criterio.
 | DESPACHO_TRASLADO | 174930/173076 | `solicitud.siesa_salida_consec` | — |
 | NOTA_CREDITO_FACTURA | 251126 (unificado con el job de abajo desde `07cb5df`, ver "NCE — qué conector usar") | `recaudo.siesa_nc_triggered` (pre-flag) | 1ro |
 | NOTA_CREDITO_DEVOLUCION_CLIENTE | 251126 | `devolucion.siesa_nc_triggered` (pre-flag) | — (bridge marca `recaudo.siesa_nc_triggered` si viene de ruta) |
-| RECIBO_CAJA | 142888 | `recaudo.siesa_rc_triggered` (pre-flag) | 2do (espera NC) |
+| RECIBO_CAJA | 142888 | `recaudo.siesa_rc_triggered` (pre-flag) **+ desenlace confirmado** (`politica_cobro.rc_llego_a_siesa`): la bandera sola ya no es «idempotente» | 2do (espera NC; si la NC ya salió y el puente falló, lo reconstruye) |
 | DOCUMENTO_CONTABLE_RET | 142882 | `recaudo.siesa_dc_triggered` (pre-flag) | 3ro (espera RC) |
 | MOTIVO_DIAN_NC | 251546 | `devolucion.siesa_motivo_dian` | tras NOTA_CREDITO_DEVOLUCION_CLIENTE |
 | ALERTA_EMAIL | Resend API | N/A | — |
@@ -2022,6 +2026,8 @@ no se afloja el criterio.
 ### Backoff
 
 Tabla única: `siesa_job._BACKOFF_MINUTOS = [5, 15, 45, 120, 180]`, `max_intentos = 5`. Tras el 1.er fallo espera 5 min, tras el 2.º 15, tras el 3.º 45, tras el 4.º 120; el 5.º fallo lo deja FALLIDO + alerta admin en el dashboard. (Decía «máx. 3» y «5/15/45»; el log usaba una copia de tres etiquetas, `_BACKOFF_LABELS`, retirada el 2026-09-25: ahora `_espera_de` lee la misma tabla.) `DependenciaPendiente` y `ConnektaCircuitOpenError` no gastan intento; fuera de la ventana de Siesa el job ni se intenta.
+
+Un «no entró» (`ConnektaNoEnviado` y sus hijas: rechazo 4xx/429/`codigo≠0`, payload inválido, conexión que no se abrió) gasta intento y permite revertir el pre-flag; un «no sé» (`ConnektaResultadoDesconocido`, o un 5xx/conexión cortada que el handler convierte) va a FALLIDO sin reintento; esperar (`DependenciaPendiente`) y el circuito abierto no gastan. Ver «Integración de los frentes del 2026-09-25».
 
 ### Pre-flag Pattern (previene duplicados en crash)
 
@@ -2032,11 +2038,18 @@ db.session.commit()
 
 try:
     resultado = connekta.trigger_recibo_caja(...)
-except Exception:
-    # POST falló — revertir para permitir reintento
+except ConnektaNoEnviado:
+    # Prueba POSITIVA de que no entró (4xx, codigo != 0, 429, circuito
+    # abierto, payload inválido): solo acá se revierte y se reintenta.
     recaudo.siesa_rc_triggered = False
     db.session.commit()
     raise
+except Exception as e:
+    # 5xx, conexión cortada, timeout: «no sé». La bandera QUEDA (Regla 3).
+    # El RC compara el saldo de antes (guardado en el job) con el de
+    # después; si no bajó por el monto, FALLIDO sin reintento y lo resuelve
+    # una persona (`resolver-rc`).
+    raise ConnektaResultadoDesconocido(...) from e
 
 # Si modo ensayo, revertir (no se creó nada en Siesa)
 if resultado.get('modo_ensayo'):
@@ -3745,7 +3758,7 @@ solo agrega la valorización del caso, escrita en su docstring:
 |---|---|---|---|
 | Venta perdida | `filtros_venta_perdida` (nuevo: el filtro de `metricas/venta_perdida.py` hecho función, `almacen_id=None` = todos) | faltante × precio capturado | el evento no tiene precio (hoy casi todos) |
 | Faltantes ajustados | `metricas.conteo._cargar_cadenas` + `_ajustes` | −diferencia × costo de la foto (faltante +, sobrante −); total = **neto perdido** | costo ausente o ≤ 0 |
-| Rechazos en ruta | `RECHAZADO`/`PARCIAL` por `fecha_confirmacion`, `motivos_rechazo.etiqueta`, desenlace `siesa_nc_*` | total: `valor_factura`; parcial: devuelto × precio unitario de `foto_ventas_lineas` del pedido | sin `valor_factura`, o **una** referencia devuelta sin precio único (un parcial a medias engaña más que ninguno) |
+| Devoluciones en ruta (`devoluciones_ruta`, antes `rechazos_ruta`: el KPI diario de ese nombre mide otra cosa) | `RECHAZADO`/`PARCIAL` por `fecha_confirmacion`, `motivos_rechazo.etiqueta`, desenlace `siesa_nc_*` | total: `valor_factura`; parcial: devuelto × precio unitario de `foto_ventas_lineas` del pedido | sin `valor_factura`, o **una** referencia devuelta sin precio único (un parcial a medias engaña más que ninguno) |
 | Entregado sin pago | `ENTREGADO_SIN_PAGO` | `valor_factura − monto_cobrado` | sin `valor_factura` |
 | Plata en la calle | `rezago_liquidacion` (rutas entregadas sin liquidar HOY, entrega en el rango; sin fecha → período actual, declarado) | Σ `monto_cobrado` por ruta × almacén | ninguna parada confirmada |
 | Mercancía en limbo | `filas_vigentes` de la última foto completa del rango, `bodegas_de_limbo()` = `_BODEGAS_SERVICIO` − `_BODEGAS_PV`, filas `vendible=False`; + TRA-30/TRA-31 | existencia × costo del SKU en la foto de NB1 del mismo día | sin costo en NB1. Sin foto completa → **sin dato** (no cero) |
@@ -3931,7 +3944,7 @@ excepciones, que es donde está la plata:
 |---|---|---|
 | **Transferencia falsa** | Pago bancario (transferencias, consignación, tarjeta, cheque — `requiere_comprobante`) con monto > 0 exige **referencia** (≥ 4 alfanuméricos, `limpiar_referencia`) y **foto del comprobante** (foto-dato: 1600 px, calidad 0.8, **sin recomprimir** en servidor). La referencia viaja al RC en `F358_REFERENCIA_OTROS` (Alfanumérico 30 según el DOCX del 142888 — el test lo lee del `.docx`), leída del recaudo en el ejecutor del DLQ; sin referencia (parada vieja) se conserva lo de antes (`notas`/`'APP'`), porque el campo es obligatorio en consignación | `recaudos_entrega.referencia_pago`, `foto_comprobante`; `connekta_liquidacion_gateway.referencia_otros_rc` |
 | **«No pagó y se quedó» falso** | Foto y «📍 Estoy aquí» **intentado** obligatorios (sin señal o sin permiso se acepta: se intentó; `no_se_pidio` no). El conductor ve el aviso y el **contacto del asesor** al elegir el motivo. Tasa por conductor, con su denominador y cuántas sin foto, en Liquidación y en 💸 Fugas (`extra.por_conductor`) | `senales_ruta.exige_evidencia` (lee `motivos_rechazo.SIN_RETORNO`), `para_frontend().exige_evidencia` |
-| **Devolución parcial inflada** | `lineas_devolucion_cliente.cantidad_declarada` = lo que dijo el **conductor**; recepción sigue escribiendo lo contado en `cantidad_devuelta` y **no pisa** lo declarado (si falta, se congela lo vigente antes de ajustar). La corrección de recepción va a la bitácora (EDITAR). `/liquidar-completo` guarda lo del conductor en `cantidad_devuelta_conductor` antes de aplicar la corrección del líder. Faltante de retorno = declarado − contado, en Liquidación (señal por parada y total por ruta) y en 💸 Fugas (`rechazos_ruta.extra.faltante_de_retorno` por conductor) | `senales_ruta.faltante_de_retorno`, `liquidacion_service._declarado_por_el_conductor` |
+| **Devolución parcial inflada** | `lineas_devolucion_cliente.cantidad_declarada` = lo que dijo el **conductor**; recepción sigue escribiendo lo contado en `cantidad_devuelta` y **no pisa** lo declarado (si falta, se congela lo vigente antes de ajustar). La corrección de recepción va a la bitácora (EDITAR). (`/liquidar-completo`, que guardaba lo del conductor antes de la corrección del líder, se borró el 2026-09-25.) Faltante de retorno = declarado − contado, en Liquidación (señal por parada y total por ruta) y en 💸 Fugas (`devoluciones_ruta.extra.faltante_de_retorno` por conductor) | `senales_ruta.faltante_de_retorno`, `liquidacion_service._declarado_por_el_conductor` |
 | **Hora de la parada** | Nombres acordados con el integrador: `recaudos_entrega.ts_dispositivo` (hora del teléfono al confirmar, UTC), `ts_desfase_s` (teléfono − servidor **medido al enviar**, con `ts_envio`; positivo = adelantado), `via_cola`; `entregas_geo.ts_dispositivo` y `pos_ts_dispositivo` (`pos.timestamp`). **No reemplazan** `fecha_confirmacion`/`capturado_en`. La cola offline las manda (`_condSelloDeEnvio`); un ítem viejo usa la hora a la que se encoló. `clasificar_hora`: `reloj_desfasado` / `antes_de_salir` son señal; `diferida` (sin señal) es informativa | `senales_ruta.leer_ts/desfase_s/clasificar_hora` |
 | **Rechazo lejos del cliente** | `recaudos_entrega.distancia_cliente_m`, medida contra el maestro **antes** de que la captura vote (si no, se mide contra su propia sombra). Señal solo si el motivo afirma presencia (`CLIENTE_CERRADO`, `FUERA_DE_HORARIO`) y supera el umbral. Sin punto del cliente → sin señal | `senales_ruta.senal_rechazo_lejos` |
 | **Efectivo en la calle** | Por conductor: efectivo cobrado en rutas EN_TRANSITO/ENTREGADA no liquidadas, con antigüedad (día Bogotá de la confirmación más vieja). Cabecera de Liquidación | `senales_ruta.efectivo_en_poder_por_conductor` |
@@ -3974,9 +3987,8 @@ ver el cambio): ahora copia profunda.
   en el almacén de fotos de flota; nadie la cruza todavía contra el extracto.
 - El faltante de retorno se mide en unidades; en 💸 Fugas no se valoriza (el
   precio por línea existe en la foto de ventas, falta decidir si suma a la fuga).
-- Si el líder baja a 0 una línea en `/liquidar-completo`, la línea no entra a la
-  devolución y su declarado se pierde para el faltante (se conserva en
-  `items_entregados.cantidad_devuelta_conductor`).
+- (`/liquidar-completo`, donde el líder podía bajar a 0 una línea y perder su
+  declarado para el faltante, se borró el 2026-09-25.)
 - La advertencia de flota se pide en el servicio: `scripts/qa_*` y los tests
   que despachan sin mundo de flota pasan un motivo explícito.
 - `flota/CLAUDE.md` no se tocó (este frente no edita `flota/`).
@@ -5458,8 +5470,8 @@ llamador (`liberar_reingreso`, que empieza exigiendo `nc_aprobada_siesa`), y
 `POST /llegadas/<ruta>/cerrar`, `POST /<id>/preparar-conteo` (amarra a la
 factura, con red), `GET /tablero` (recepción); `POST /verificar-nc`
 (supervisión); `marcar-nc-aprobada` exige `motivo`. `/api/rutas/<id>/liquidar`
-y `/liquidar-completo` aceptan `motivo_devoluciones`; `/liquidar-completo`
-resincroniza la devolución con la corrección del líder si no se contó.
+acepta `motivo_devoluciones` (`/liquidar-completo`, que también lo aceptaba, se
+borró el 2026-09-25).
 
 ### Lo que NO cubre, dicho
 
@@ -6207,3 +6219,75 @@ la portada no juzga contra la meta un período del KPI diario sin medir
    --ejecutar`) o se dejan hasta su primer uso?
 4. **Consumo de cupo**: ventana de 48 h para una FE no indexada (medido: de
    instantáneo a minutos). ¿Más corta?
+
+---
+
+## La plata del conductor hasta Siesa (2026-09-25)
+
+Frente «dinero» de la auditoría del 2026-09-25: ningún recibo duplicado,
+ningún documento por plata no cobrada, ninguna ruta sin salida, ningún número
+que diga «llegó» sin confirmarlo. Política en **`app/services/politica_cobro.py`**
+(una función por pregunta) y **`app/services/permisos_liquidacion.py`** (una
+función de permiso por operación). Sin migración.
+
+| | Qué pasaba | Ahora | Trinquete |
+|---|---|---|---|
+| **P0-4** | Tras un POST de RC que fallaba, «¿entró?» era «¿saldo ≤ $0,5?». Un RC de contado con retención sale neto y el DC va después: el recibo que SÍ entró dejaba el saldo de la retención → «no entró» → segundo RC (RC-00002744). Y se revertía el pre-flag ante cualquier excepción que no fuera un timeout (un 502, una conexión cortada) | `ConnektaNoEnviado` (4xx, `codigo != 0`, 429, circuito abierto, payload inválido) es **la única** prueba de que no entró. Ante «no sé», el RC compara el saldo de antes del POST (guardado en el job, `saldo_antes_rc`) con el de después: si bajó por el monto, entró; si no, FALLIDO sin reintento, `SIN_VERIFICAR`, y **una persona lo resuelve** (Liquidación → «Sí/No está en Siesa», `POST …/recaudos/<id>/resolver-rc`, FORZAR). Mismo criterio de reversión en DC y en las dos NC. La bandera puesta sin desenlace ya no es «idempotente» | `test_rc_verificado_por_documento.py`: ningún `except` baja un pre-flag sin `ConnektaNoEnviado` (inventario: `_ejecutar_con_preflag`, frente de inventario) |
+| **P0-5** | «Liquidar ruta» encolaba la NI con solo mirar `motivo_descuento`, sin leer si la oficina confirmó o rechazó la retención | `decision_retencion` / `exigir_retencion_aplicable`: pendiente → ni RC ni DC; rechazada → esa NI no sale. Un solo encolador, `_encolar_retencion`; el ejecutor la revalida antes del POST | `test_politica_cobro.py`: solo `_encolar_retencion` encola `DOCUMENTO_CONTABLE_RET` y llama a la política |
+| **P1-7** | PARCIAL con retención: `monto_cobrado` ya es neto y «Registrar cobro» restaba la retención otra vez; la base de retención incluía lo devuelto | `monto_rc` para las dos puertas; `base_retencion_entregada` (la factura menos lo declarado de vuelta, por `f470_rowid`; sin devolución amarrada: `None`, el DC no sale y se declara). La vista previa lee `rc_resta_retencion` del servidor | toda llamada a `_encolar_recibo_caja` pasa un monto asignado de `monto_rc` |
+| **P1-3** | Monto/estado de la parada editables hasta que el DLQ hacía el POST | `puede_editar_cobro`: congelado al **encolar** RC o retención (monto, descuento, estado, forma de pago, decisión de retención). El RC lleva `instantanea` y el ejecutor no postea si la parada cambió | toda escritura de `monto_cobrado`/`estado_entrega` tiene `puede_editar_cobro` **en la condición de un `if`** |
+| **P1-4** | La cola sin señal mandaba el cierre aunque una parada fallara; después, confirmar y forzar exigían EN_TRANSITO y liquidar todas gestionadas: sin salida | `entregar_ruta` declara `paradas_sin_gestionar`; la cola no cierra una ruta con una parada suya pendiente; **parada tardía** sobre ENTREGADA no liquidada (oficina con `motivo_tardia`; la primera confirmación de la cola entra sola) → FORZAR `parada_confirmada_despues_del_cierre`; forzar cierre sirve sobre ENTREGADA | `test_parada_tardia.py` |
+| **P1-5** | `forzar_cierre_ruta` llamaba `_marcar_liquidada` saltándose `credito_no_autorizado` y `devoluciones_sin_contar` | Deja la ruta ENTREGADA | solo `RutaService.liquidar_ruta` llama `_marcar_liquidada` |
+| **P1-6** | DC esperando un RC FALLIDO/DESCARTADO para siempre; RC esperando una NC que ya salió; `verificacion_imposible` COMPLETADO contado como llegado | DC sin RC vivo → falla declarado; el RC reconstruye el puente (`devolucion_ruta.nc_ya_salio` / `puentear_nc_al_recaudo`, la única que lo escribe); `politica_cobro.rc_llegaron` (señal positiva) en VTA-60, reconciliación, fuga y pantallas | **VTA-63**, **VTA-64** (BLOQUEA, detector ciego en `test_cadena_nc_rc_dc_con_salida.py`) |
+| **P1-8** | Registrar cobro (encola RC/DC) pedía admin-o-jefe; «Enviar a Siesa», admin. Reintentar un RC FALLIDO, supervisión. `/liquidar-completo` mandaba el DC sin cuenta ni UN (Bug 3) | `puede_liquidar` en todo lo que encola plata (y en reintentar un job de la liquidación: `puede_reintentar_job`). `/liquidar-completo` borrado. `facturar-rm-manual` exige el documento repetido + motivo (FORZAR); `/despacho_parcial/<id>/despachar` toma el lock de la DLQ | `test_permiso_compuesto.py` **descubre por AST** toda ruta que llega a un encolador de plata (antes, lista a mano) |
+| **P1-10** | DLQ 24/7: un RC de las 20:30 amanecía FALLIDO | `dlq_puede_postear` → `ventana_siesa.ventana_abierta` (la de inventario, 06:00–19:30; en simulación no aplica). El frente traía su propia `fecha.en_ventana_siesa` (7:00–20:00): se retiró al integrar | `test_dlq_ventana_siesa.py`, `test_ventana_siesa.py` |
+| **P1-13** | `faltantes_de_retorno_de_recaudos` filtraba `'CONFIRMADA'`: FALTANTE_TOTAL invisible en Liquidación y Fugas | `EstadoDevolucionCliente.CONTADAS`. Liquidación dice «Faltante de retorno… No habrá nota crédito» (`devolucion_pendiente.sin_nc`) | ninguna comparación del estado de una devolución contra el literal (`test_devolucion_contada_una_definicion.py`, inventario de 3) |
+| **P2** | `F357_FECHA_RECAUDO`/`F358_FECHA_CONSIGNACION` con el día del envío | el día Bogotá de `fecha_confirmacion` (`fecha_bogota_de`); `F350_FECHA` sigue siendo hoy | `test_rc_verificado_por_documento.py` |
+| **P2** | Faltaba la fuga «Cobrado sin recibo en Siesa»; la fuga `rechazos_ruta` se llamaba igual que el KPI y medía otra cosa | `cobrado_sin_recibo` (en «Plata en riesgo»; los FALLIDO quedan en «Documentos trabados»); la fuga pasa a `devoluciones_ruta` | `test_fuga_cobrado_sin_recibo.py` |
+| Pantalla | Rutas atrasadas invisibles en Liquidación; «Enviar a Siesa» visible siempre sobre una FALTANTE_TOTAL; «RC ✓» con la bandera de pre-envío | `rutas_atrasadas` (de `rezago_liquidacion`); `pendiente_siesa` de la política; `rc_llego`/`rc_sin_verificar`; `permisos` en el detalle (Registrar cobro solo a quien liquida) | `test_liquidacion_pantalla_dinero.py` (Node, `util.js` real) |
+
+Además (e2e del 2026-09-25): un **reenvío idéntico** de la cola ya no es
+«editó la entrega» (compara por valor —35700.00 = 35700.0— y la hora del
+teléfono sola no es edición; se conserva la de la primera confirmación); el
+desglose rotula la **condición declarada** con la del PEDIDO y agrega
+`condicion_de_cobro` (la de la factura si ya salió, con su fuente), y escribe
+«PD1004», no «PD-1004».
+
+**Permisos (decisión del dueño):** los roles «líder de cartera» y
+«liquidador» se agregan en `permisos_liquidacion` — una línea en la función de
+su operación. Hoy: liquidar/registrar cobro/resolver RC/autorizar crédito/
+forzar cierre = admin; confirmar retención y corregir cobro = admin y jefe.
+**Cambio de comportamiento:** el jefe de almacén ya no registra cobros ni
+reintenta RC/DC/NC de la liquidación.
+
+**35 mutaciones, las 35 rojas** (con `-B` y `PYTHONDONTWRITEBYTECODE`, cada
+reemplazo verificado a aplicar una vez; dos sobrevivían al primer intento y se
+reforzaron los tests: la guarda en la condición y el aviso de faltante por
+texto positivo).
+
+### Lo que NO cubre, dicho
+
+- **`_ejecutar_con_preflag`** (ENTRADA_OC, TRASLADO_AVERIAS, AJUSTE_CONTEO)
+  sigue revirtiendo ante un 5xx: misma clase, declarada en el inventario del
+  trinquete para el frente de inventario.
+- **El «entró» por saldo** exige que la fila de cartera exista antes y después
+  del POST; con la cartera todavía sin indexar la FE (ver «RESUELTO
+  2026-09-04») no hay prueba y el RC queda para una persona.
+- **Una parada tardía de la oficina** no tiene formulario propio: la ruta
+  acepta `motivo_tardia`, y la pantalla ofrece hoy «Cerrar las paradas que
+  faltan» (quedan rechazadas). La confirmación real llega sola si viene de la
+  cola del conductor.
+- **El grafo del trinquete de permisos es por nombre** y no ve guards
+  condicionales (el reintento se prueba por comportamiento).
+- **La base de retención de una PARCIAL** usa lo declarado por el conductor
+  por línea; un producto de doble unidad declarado por referencia no se reparte
+  hasta que bodega lo cuente.
+
+### Decisiones para el dueño
+
+1. ¿El jefe de almacén vuelve a registrar cobros? (hoy no: la operación
+   encola plata). Con el rol «liquidador», es una línea.
+2. ¿Confirmar retención queda en admin y jefe, o pasa al «líder de cartera»?
+3. Formulario de parada tardía para la oficina, o basta con cerrar lo que
+   falta y dejar que la cola del conductor la mande.
+
