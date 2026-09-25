@@ -1748,7 +1748,8 @@ def init_scheduler(app):
                 logger.error('[CARTERA] barrido falló: %s', e, exc_info=True)
 
     scheduler = BackgroundScheduler(timezone='America/Bogota')
-    scheduler.add_job(func=_job, trigger=CronTrigger(minute='0,30', hour='7-19',
+    from app.services.cron_latido import con_latido  # P1-11
+    scheduler.add_job(func=con_latido('cartera_barrido', _job), trigger=CronTrigger(minute='0,30', hour='7-19',
                                                      timezone='America/Bogota'),
                       id='cartera_barrido', replace_existing=True, max_instances=1,
                       misfire_grace_time=600)

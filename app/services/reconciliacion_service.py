@@ -252,8 +252,9 @@ def init_scheduler(app):
         return None
 
     scheduler = BackgroundScheduler(timezone='America/Bogota')
+    from app.services.cron_latido import con_latido  # P1-11
     scheduler.add_job(
-        func=ReconciliacionService.sweep_despachos_pendientes,
+        func=con_latido('reconciliacion_despachos', ReconciliacionService.sweep_despachos_pendientes),
         trigger=IntervalTrigger(minutes=5),
         kwargs={'app': app},
         id='reconciliacion_despachos',

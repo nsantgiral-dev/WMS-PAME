@@ -249,7 +249,8 @@ def init_scheduler(app):
                     logger.error('[KARDEX_AUTO] falló: %s', e, exc_info=True)
 
     scheduler = BackgroundScheduler(timezone='America/Bogota')
-    scheduler.add_job(func=_job,
+    from app.services.cron_latido import con_latido  # P1-11
+    scheduler.add_job(func=con_latido('kardex_auto', _job),
                       trigger=CronTrigger(hour='7-19', minute='2,32',
                                           timezone='America/Bogota'),
                       id='kardex_auto', replace_existing=True,

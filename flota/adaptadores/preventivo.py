@@ -646,8 +646,9 @@ def init_scheduler(app):
                                 r.get('vehiculos'))
 
     scheduler = BackgroundScheduler(timezone='America/Bogota')
+    from app.services.cron_latido import con_latido  # P1-11
     scheduler.add_job(
-        _job, CronTrigger(hour=5, minute=30),
+        con_latido('flota_preventivo_siembra', _job), CronTrigger(hour=5, minute=30),
         id='flota_preventivo_siembra', replace_existing=True,
         max_instances=1, misfire_grace_time=3600,
     )

@@ -2497,8 +2497,9 @@ def init_scheduler(app):
                 _tw.sleep(0.3)  # throttle: respiro entre bodegas
 
     scheduler = BackgroundScheduler()
+    from app.services.cron_latido import con_latido  # P1-11
     scheduler.add_job(
-        _warm_all, 'interval', minutes=4,
+        con_latido('stock_prewarm', _warm_all), 'interval', minutes=4,
         id='stock_prewarm',
         next_run_time=datetime.utcnow(),
     )

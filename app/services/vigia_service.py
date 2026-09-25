@@ -1594,8 +1594,9 @@ def init_scheduler(app):
         return None
 
     scheduler = BackgroundScheduler(timezone='America/Bogota')
+    from app.services.cron_latido import con_latido  # P1-11
     scheduler.add_job(
-        func=alimentar_series_vivas,
+        func=con_latido('vigia_alimentar_series', alimentar_series_vivas),
         trigger=CronTrigger(day_of_week='mon', hour=5, minute=30, timezone='America/Bogota'),
         kwargs={'app': app},
         id='vigia_alimentar_series',

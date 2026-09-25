@@ -342,15 +342,25 @@ def health_siesa():
     # distintas: un import que revienta deja la variable en `true` y el cron
     # sin correr.
     _activos = current_app.config.get('SCHEDULERS_ACTIVOS') or []
+    # P1-11: lo que corrió DE VERDAD, en cualquier servicio, sale del latido
+    # (`cron_latido`, escrito por cada corrida). `activos`/`omitidos` quedan
+    # como lo que arrancó ESTE proceso, que es otra pregunta.
+    from app.services import cron_latido as _latido
+    _lat = _latido.estado()
     resultado['schedulers'] = {
+        'activos_en_este_proceso': _activos,
         'activos': _activos,
         'omitidos': current_app.config.get('SCHEDULERS_OMITIDOS') or [],
-        'alertas_por_correo': '[ALERTAS_SCHEDULER]' in _activos,
-        'nota': ('`alertas_por_correo` en false significa que NINGUNA alerta por '
-                 'correo sale de este proceso — ni la de rutas sin liquidar, ni '
-                 'la de stock crítico. Si tampoco está en el worker, no existen. '
-                 'Se consulta en cada servicio por separado.'),
+        'latido': _lat,
+        'alertas_por_correo': bool(_lat.get('alertas_por_correo')),
+        'nota': ('`alertas_por_correo` sale del latido: algún cron de alertas corrió en '
+                 'las últimas 26 h en CUALQUIER servicio. En false, ninguna alerta por '
+                 'correo está saliendo — ni la de rutas sin liquidar ni el resumen diario.'),
     }
+    for _n in _lat.get('fallando') or []:
+        resultado['advertencias'].append(f'Cron {_n}: su última corrida terminó con error.')
+    for _n in _lat.get('callados') or []:
+        resultado['advertencias'].append(f'Cron {_n}: no corre hace más de lo esperado.')
 
     # SELLO DE AMBIENTE DE LA BASE (P0-9, m048inv). Si la base está sellada
     # para otro ambiente (una copia de producción restaurada en QA), ni la DLQ

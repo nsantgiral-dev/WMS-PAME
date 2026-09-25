@@ -689,13 +689,18 @@ def crons_del_proceso():
     sin_esenciales = os.getenv('WORKER_SKIP_ESSENTIAL', 'false').lower() == 'true'
     rol = ('worker' if heavy and sin_esenciales else
            'web + worker (todo en uno)' if heavy else 'web')
+    # P1-11: lo que corrió DE VERDAD, en cualquier servicio, sale de la base
+    # (`cron_latido`). `activos` sigue siendo lo que arrancó ESTE proceso.
+    from app.services import cron_latido as _latido
+    latido = _latido.estado()
     return {
         'rol_de_este_proceso': rol,
         'heavy_schedulers': heavy,
         'worker_skip_essential': sin_esenciales,
         'activos': activos,
         'omitidos': omitidos,
-        'alertas_por_correo': '[ALERTAS_SCHEDULER]' in activos,
+        'latido': latido,
+        'alertas_por_correo': bool(latido.get('alertas_por_correo')),
         'nota': ('La web y el worker son procesos distintos. Esta lista es la del '
                  'proceso que contestó (normalmente la web: DLQ, pedidos, Vigía, '
                  'reposición). Los crons del worker (fotos, refresco de '

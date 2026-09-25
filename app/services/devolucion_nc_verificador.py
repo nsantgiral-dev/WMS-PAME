@@ -175,7 +175,8 @@ def init_scheduler(app):
                     logger.error('[DEV_NC] falló: %s', e, exc_info=True)
 
     scheduler = BackgroundScheduler(timezone='America/Bogota')
-    scheduler.add_job(func=_job,
+    from app.services.cron_latido import con_latido  # P1-11
+    scheduler.add_job(func=con_latido('devoluciones_verificar_nc', _job),
                       trigger=CronTrigger(hour='7-19', minute='5,35',
                                           timezone='America/Bogota'),
                       id='devoluciones_verificar_nc', replace_existing=True,

@@ -662,12 +662,13 @@ def init_scheduler(app):
             logger.info('[COMPRAS_OC] diario %s', _con_lock(correr_diario, 'diario'))
 
     scheduler = BackgroundScheduler(timezone='America/Bogota')
-    scheduler.add_job(func=_job,
+    from app.services.cron_latido import con_latido  # P1-11
+    scheduler.add_job(func=con_latido('compras_oc_abiertas', _job),
                       trigger=CronTrigger(hour='7-19', minute='10,40',
                                           timezone='America/Bogota'),
                       id='compras_oc_abiertas', replace_existing=True,
                       max_instances=1, misfire_grace_time=900)
-    scheduler.add_job(func=_job_diario,
+    scheduler.add_job(func=con_latido('compras_oc_diario', _job_diario),
                       trigger=CronTrigger(hour='7', minute='20',
                                           timezone='America/Bogota'),
                       id='compras_oc_diario', replace_existing=True,

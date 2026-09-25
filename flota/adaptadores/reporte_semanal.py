@@ -273,7 +273,8 @@ def init_scheduler(app):
                 logger.exception('[FLOTA_REPORTE] el reporte semanal reventó')
 
     sch = BackgroundScheduler(timezone='America/Bogota')
-    sch.add_job(func=_correr,
+    from app.services.cron_latido import con_latido  # P1-11
+    sch.add_job(func=con_latido('flota_reporte_semanal', _correr),
                 trigger=CronTrigger(day_of_week='mon', hour=6, minute=15,
                                     timezone='America/Bogota'),
                 id='flota_reporte_semanal',

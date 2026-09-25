@@ -2414,8 +2414,9 @@ def init_scheduler(app):
         return None
 
     scheduler = BackgroundScheduler(timezone='America/Bogota')
+    from app.services.cron_latido import con_latido  # P1-11
     scheduler.add_job(
-        func=procesar_jobs_pendientes,
+        func=con_latido('dlq_siesa_jobs', procesar_jobs_pendientes),
         trigger=IntervalTrigger(minutes=1),
         kwargs={'app': app},
         id='dlq_siesa_jobs',

@@ -857,7 +857,8 @@ def init_scheduler(app):
                     logger.error('[FOTOS_SIESA] falló: %s', e, exc_info=True)
 
     scheduler = BackgroundScheduler(timezone='America/Bogota')
-    scheduler.add_job(func=_job, trigger=CronTrigger(hour=18, minute=0,
+    from app.services.cron_latido import con_latido  # P1-11
+    scheduler.add_job(func=con_latido('fotos_siesa_diarias', _job), trigger=CronTrigger(hour=18, minute=0,
                                                      timezone='America/Bogota'),
                       id='fotos_siesa_diarias', replace_existing=True,
                       max_instances=1, misfire_grace_time=1800)

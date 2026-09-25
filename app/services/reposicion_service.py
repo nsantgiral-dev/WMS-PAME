@@ -547,8 +547,9 @@ def init_scheduler(app):
         return None
 
     scheduler = BackgroundScheduler(timezone='America/Bogota')
+    from app.services.cron_latido import con_latido  # P1-11
     scheduler.add_job(
-        func=_barrido_stock_picking,
+        func=con_latido('reposicion_barrido_stock_picking', _barrido_stock_picking),
         trigger=IntervalTrigger(minutes=30),
         kwargs={'app': app},
         id='reposicion_barrido_stock_picking',

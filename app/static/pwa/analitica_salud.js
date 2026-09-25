@@ -166,7 +166,23 @@ function _anSaludCrons(c) {
   return `<div class="tabla-card"><div class="tabla-titulo">Crons de este proceso (${esc(c.rol_de_este_proceso)})</div>
     <div style="font-size:var(--fs-sm);color:var(--tx2);">Activos: ${lista}</div>
     ${(c.omitidos || []).length ? `<div style="font-size:var(--fs-sm);color:var(--tx3);">Omitidos: ${c.omitidos.map(t => esc(t)).join(' · ')}</div>` : ''}
+    ${_anSaludLatido(c.latido)}
     <div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:6px;">${esc(c.nota)}</div></div>`;
+}
+
+/** Lo que corrió de verdad (P1-11): el latido de cada cron, de cualquier servicio. */
+function _anSaludLatido(l) {
+  if (!l) return '';
+  if (l.error) return `<div style="font-size:var(--fs-sm);color:var(--err-tx);margin-top:6px;">${esc(l.error)}</div>`;
+  const filas = (l.crons || []).map(x => {
+    const estado = x.fallando ? 'la última corrida falló' : x.callado ? 'no corre hace más de lo esperado' : 'al día';
+    const color = x.fallando ? 'var(--err-tx)' : x.callado ? 'var(--warn-tx)' : 'var(--tx2)';
+    const hace = x.hace_min === null || x.hace_min === undefined ? 'nunca terminó' : `hace ${esc(_anSaludNum(x.hace_min))} min`;
+    return `<div style="font-size:var(--fs-sm);color:${color};margin-top:2px;">${esc(x.nombre)} · ${esc(x.servicio)} · ${hace} · ${esc(estado)}</div>`;
+  }).join('');
+  return `<div style="margin-top:8px;font-size:var(--fs-sm);font-weight:700;color:var(--tx);">Lo que corrió de verdad (cualquier servicio)</div>
+    ${filas || '<div style="font-size:var(--fs-sm);color:var(--tx3);">Ningún cron ha dejado latido todavía.</div>'}
+    <div style="font-size:var(--fs-sm);color:var(--tx2);margin-top:4px;">Alertas por correo: ${l.alertas_por_correo ? 'están saliendo' : 'ningún cron de alertas corrió en las últimas 26 h'}</div>`;
 }
 
 /** El HTML completo de la vista. Función pura: se prueba en Node. */

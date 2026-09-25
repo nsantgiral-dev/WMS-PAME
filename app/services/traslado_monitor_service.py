@@ -136,8 +136,9 @@ def init_scheduler(app):
         return None
 
     scheduler = BackgroundScheduler(timezone='America/Bogota')
+    from app.services.cron_latido import con_latido  # P1-11
     scheduler.add_job(
-        func=check_pending_transfers,
+        func=con_latido('monitor_traslados_transito', check_pending_transfers),
         trigger=IntervalTrigger(hours=1),
         kwargs={'app': app},
         id='monitor_traslados_transito',

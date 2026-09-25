@@ -424,8 +424,9 @@ def init_scheduler(app):
         return
 
     scheduler = BackgroundScheduler(timezone='America/Bogota')
+    from app.services.cron_latido import con_latido  # P1-11
     scheduler.add_job(
-        func=lambda: iniciar_sync_background(app),
+        func=con_latido('pedidos_siesa_sync', lambda: iniciar_sync_background(app)),
         trigger=CronTrigger(minute='*', hour='7-20', timezone='America/Bogota'),
         id='pedidos_siesa_sync',
         replace_existing=True,

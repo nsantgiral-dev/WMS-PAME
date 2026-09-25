@@ -356,6 +356,9 @@ def create_app():
     # alerta apagada no falla: se calla, que es indistinguible de «todo bien».
     app.config['SCHEDULERS_ACTIVOS'] = []
     app.config['SCHEDULERS_OMITIDOS'] = []
+    # El latido de cada corrida (P1-11): con esta app escribe `con_latido`.
+    from app.services.cron_latido import usar_app as _usar_app_latido
+    _usar_app_latido(app)
 
     if os.getenv('SYNC_SCHEDULER', 'true').lower() == 'true':
         _app_logger = logging.getLogger(__name__)

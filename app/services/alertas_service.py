@@ -914,8 +914,9 @@ def init_scheduler(app):
 
     # FM_SCHEDULER_PEAK: alejados del :00 exacto para no competir con el inicio del turno
     # de operarios (6:00am) ni entre sí. Separados 30min para escalonar carga en DB.
+    from app.services.cron_latido import con_latido  # P1-11
     scheduler.add_job(
-        func=verificar_y_alertar_huerfanas,
+        func=con_latido('alertas_huerfanas_email', verificar_y_alertar_huerfanas),
         trigger=CronTrigger(hour=5, minute=45, timezone='America/Bogota'),
         kwargs={'app': app},
         id='alertas_huerfanas_email',
@@ -923,7 +924,7 @@ def init_scheduler(app):
         replace_existing=True, max_instances=1, misfire_grace_time=600,
     )
     scheduler.add_job(
-        func=verificar_y_alertar_stock_critico,
+        func=con_latido('alertas_stock_critico', verificar_y_alertar_stock_critico),
         trigger=CronTrigger(hour=6, minute=15, timezone='America/Bogota'),
         kwargs={'app': app},
         id='alertas_stock_critico',
@@ -931,7 +932,7 @@ def init_scheduler(app):
         replace_existing=True, max_instances=1, misfire_grace_time=600,
     )
     scheduler.add_job(
-        func=verificar_y_alertar_rutas_sin_liquidar,
+        func=con_latido('alertas_rutas_sin_liquidar', verificar_y_alertar_rutas_sin_liquidar),
         trigger=CronTrigger(hour=6, minute=30, timezone='America/Bogota'),
         kwargs={'app': app},
         id='alertas_rutas_sin_liquidar',
@@ -939,7 +940,7 @@ def init_scheduler(app):
         replace_existing=True, max_instances=1, misfire_grace_time=600,
     )
     scheduler.add_job(
-        func=enviar_resumen_diario,
+        func=con_latido('resumen_operativo_diario', enviar_resumen_diario),
         trigger=CronTrigger(hour=6, minute=45, timezone='America/Bogota'),
         kwargs={'app': app},
         id='resumen_operativo_diario',

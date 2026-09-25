@@ -374,8 +374,9 @@ def init_scheduler(app):
                                 'en ventana', r.get('revisados'))
 
     scheduler = BackgroundScheduler(timezone='America/Bogota')
+    from app.services.cron_latido import con_latido  # P1-11
     scheduler.add_job(
-        _job, CronTrigger(hour=6, minute=0),
+        con_latido('flota_avisos_barrido', _job), CronTrigger(hour=6, minute=0),
         id='flota_avisos_barrido', replace_existing=True,
         max_instances=1, misfire_grace_time=3600,
     )

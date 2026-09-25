@@ -1010,8 +1010,9 @@ class ABCService:
         from apscheduler.triggers.interval import IntervalTrigger
 
         scheduler = BackgroundScheduler(timezone='America/Bogota')
+        from app.services.cron_latido import con_latido  # P1-11
         scheduler.add_job(
-            func=_job,
+            func=con_latido('abc_conteo_diario', _job),
             trigger=CronTrigger(hour=2, minute=0, timezone='America/Bogota'),
             id='abc_conteo_diario',
             name='Generar tareas conteo cíclico ABC — 2am Bogotá',
@@ -1020,7 +1021,7 @@ class ABCService:
             misfire_grace_time=3600,
         )
         scheduler.add_job(
-            func=_prewarm_pre_turno,
+            func=con_latido('abc_prewarm_pre_turno', _prewarm_pre_turno),
             trigger=CronTrigger(hour=5, minute=55, timezone='America/Bogota'),
             kwargs={'app': app},
             id='abc_prewarm_pre_turno',
@@ -1030,7 +1031,7 @@ class ABCService:
             misfire_grace_time=300,
         )
         scheduler.add_job(
-            func=_liberar_zombis,
+            func=con_latido('conteo_liberar_zombis', _liberar_zombis),
             trigger=IntervalTrigger(minutes=30),
             id='conteo_liberar_zombis',
             name='Liberar conteos EN_PROCESO >2h — cada 30 min',
