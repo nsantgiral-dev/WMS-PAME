@@ -995,9 +995,32 @@ def cobertura_claves(desde, hasta, almacen_id=None):
 # El veredicto global
 # ──────────────────────────────────────────────────────────────────────────────
 
-def veredicto_global(fuentes, auditoria, cola, cobertura):
+def carga_fisica():
+    """La última carga física (7:00) de cada bodega calibrada: si NO escribió
+    porque el dato de Siesa no servía (P0-8), se ve acá y no solo en el log."""
+    try:
+        from app.services.inventario_siesa_service import estado_carga_fisica
+        filas = estado_carga_fisica()
+    except Exception as e:                                    # noqa: BLE001
+        return {'error': str(e)[:200], 'nivel': ADVERTENCIA, 'bodegas': [],
+                'texto': 'No se pudo leer el registro de la carga física.'}
+    no = [f for f in filas if f['no_escribio'] or (f['ok'] is False and f['de_hoy'])]
+    if no:
+        return {'nivel': ADVERTENCIA, 'bodegas': filas,
+                'texto': 'Carga física de hoy NO escrita en ' + ', '.join(f['bodega'] for f in no)
+                         + ': ' + str(no[0]['error'])[:160],
+                'que_hacer': 'Reintentar desde Siesa → Cargar inventario (admin), dentro de la '
+                             'ventana de Siesa y con Siesa respondiendo.'}
+    return {'nivel': OK, 'bodegas': filas, 'texto': None, 'que_hacer': None}
+
+
+def veredicto_global(fuentes, auditoria, cola, cobertura, carga=None):
     """`CONFIABLE` solo si TODO está en `ok`. **Una política, una función.**"""
     razones = []
+    if carga and carga.get('nivel') not in (None, OK):
+        razones.append({'nivel': carga['nivel'], 'seccion': 'carga_fisica',
+                        'clave': 'carga_fisica', 'texto': carga.get('texto'),
+                        'que_hacer': carga.get('que_hacer')})
     for f in fuentes:
         if f['nivel'] != OK:
             razones.append({'nivel': f['nivel'], 'seccion': 'fuente', 'clave': f['clave'],
@@ -1058,7 +1081,8 @@ def salud_del_dato(desde, hasta, almacen_id=None, ahora_utc=None):
     auditoria = resumen_auditoria(ahora_utc)
     cola = cola_siesa(ahora_utc)
     cobertura = cobertura_claves(desde, hasta, almacen_id)
-    glob = veredicto_global(fuentes, auditoria, cola, cobertura)
+    carga = carga_fisica()
+    glob = veredicto_global(fuentes, auditoria, cola, cobertura, carga)
     al_dia = sum(1 for f in fuentes if f['veredicto'] == AL_DIA)
     return {
         'global': glob,
@@ -1076,6 +1100,7 @@ def salud_del_dato(desde, hasta, almacen_id=None, ahora_utc=None):
         'auditoria': auditoria,
         'cola_siesa': cola,
         'cobertura_claves': cobertura,
+        'carga_fisica': carga,
         'meta': {
             'desde': desde.isoformat(), 'hasta': hasta.isoformat(),
             'almacen_id': almacen_id,

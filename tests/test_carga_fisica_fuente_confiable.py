@@ -296,3 +296,29 @@ class TestElDetectorMuerde:
         """La carga física tiene que aparecer: si no, el escáner se rompió."""
         hallados = _escritores_desde_siesa()
         assert 'app/services/inventario_siesa_service.py::_run_carga_inicial' in hallados
+
+
+class TestSeVeYSeReintentaEnLaVentana:
+    """Decisión del dueño (2026-09-25): la carga que no escribió se ve en la
+    🩺 Salud y en el resumen diario, y se reintenta a mano dentro de la
+    ventana de Siesa."""
+
+    def test_la_salud_lo_dice(self, db):
+        from app.services import registro_sync_service as reg
+        from app.services.analitica_salud import carga_fisica
+        rid = reg.abrir('stock')
+        reg.cerrar_error(rid, iss.FuenteInventarioNoConfiable(
+            'No se escribe inventario de NB1: la última descarga de Siesa falló.'))
+        c = carga_fisica()
+        assert c['nivel'] == 'advertencia' and 'NO escrita' in c['texto']
+
+    def test_sin_fallas_no_dice_nada(self, db):
+        from app.services.analitica_salud import carga_fisica
+        assert carga_fisica()['nivel'] == 'ok'
+
+    def test_el_reintento_fuera_de_ventana_es_409(self, client, db, jwt_token_admin):
+        from app.services import ventana_siesa
+        ventana_siesa._RELOJ_FIJO['abierta'] = False
+        r = client.post('/api/siesa/cargar-inventario',
+                        headers={'Authorization': f'Bearer {jwt_token_admin}'})
+        assert r.status_code == 409 and 'ventana' in r.get_json()['error']

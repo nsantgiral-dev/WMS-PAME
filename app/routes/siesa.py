@@ -95,6 +95,12 @@ def cargar_inventario():
     """
     if not _solo_admin():
         return jsonify({'error': 'Solo admin puede cargar inventario'}), 403
+    # El reintento de la carga física (P0-8) solo tiene sentido con Siesa
+    # respondiendo: fuera de la ventana se dice, no se intenta.
+    from app.services.ventana_siesa import texto_ventana, ventana_abierta
+    if not ventana_abierta():
+        return jsonify({'error': f'Fuera de la ventana de Siesa ({texto_ventana()}). '
+                                 'Reintente dentro de ella.'}), 409
     from flask import current_app, request as _req
     from app.services.inventario_siesa_service import iniciar_carga_inventario
     forzar = _req.args.get('forzar', 'false').lower() == 'true'

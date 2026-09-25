@@ -170,6 +170,15 @@ function _anSaludCrons(c) {
     <div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:6px;">${esc(c.nota)}</div></div>`;
 }
 
+/** La carga física de las 7:00 (P0-8): si no escribió, se dice. */
+function _anSaludCargaFisica(c) {
+  if (!c || !c.texto) return '';
+  return `<div class="tabla-card" style="border-left:4px solid var(--warn-brd);">
+    <div class="tabla-titulo">Carga física de inventario</div>
+    <div style="font-size:var(--fs-sm);color:var(--tx);">${esc(c.texto)}</div>
+    ${c.que_hacer ? `<div style="font-size:var(--fs-sm);color:var(--tx2);margin-top:4px;">${esc(c.que_hacer)}</div>` : ''}</div>`;
+}
+
 /** Lo que corrió de verdad (P1-11): el latido de cada cron, de cualquier servicio. */
 function _anSaludLatido(l) {
   if (!l) return '';
@@ -218,5 +227,6 @@ function anSaludHtml(d, abierto) {
   ${_anSaludAuditoria(d.auditoria, abierto)}
   ${_anSaludCola(d.cola_siesa, abierto)}
   ${_anSaludCobertura(d.cobertura_claves)}
+  ${_anSaludCargaFisica(d.carga_fisica)}
   ${_anSaludCrons(d.crons)}`;
 }
