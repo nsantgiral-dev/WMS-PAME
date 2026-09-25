@@ -2036,9 +2036,19 @@ def _ejecutar_job(job: SiesaJob) -> dict:
             return {'ya_existente': True, 'recaudo_id': payload.get('recaudo_id')}
 
         # Pre-flag: marcar ANTES del POST para cerrar el crash window. El saldo
-        # de antes queda escrito en el job, en la misma transacción.
+        # de antes queda escrito en el job, en la misma transacción. Y la marca
+        # de un cobro de otro mes (tanda 2): el recibo se fecha en el mes del
+        # envío y el aviso de rutas que cruzan de mes lo lista
+        # (`rezago_liquidacion.recibos_de_otro_mes`). La decide la misma
+        # política que arma las fechas del payload.
         if recaudo:
             recaudo.siesa_rc_triggered = True
+            from app.services.politica_cobro import fechas_del_recibo
+            from app.utils import fecha as _fecha_rc
+            _f_rc = fechas_del_recibo(kwargs_rc['fecha_recaudo'], _fecha_rc.fecha_hoy_bogota())
+            recaudo.rc_cobro_otro_mes = (
+                datetime.strptime(_f_rc['fecha_cobro'], '%Y%m%d').date()
+                if _f_rc['cruza_mes'] else None)
         job.payload = json.dumps({**payload, 'saldo_antes_rc': saldo_antes},
                                  ensure_ascii=False)
         db.session.commit()
@@ -2053,6 +2063,7 @@ def _ejecutar_job(job: SiesaJob) -> dict:
             if recaudo:
                 try:
                     recaudo.siesa_rc_triggered = False
+                    recaudo.rc_cobro_otro_mes = None
                     db.session.commit()
                 except Exception:
                     db.session.rollback()
@@ -2090,6 +2101,7 @@ def _ejecutar_job(job: SiesaJob) -> dict:
         if recaudo and _es_ensayo:
             try:
                 recaudo.siesa_rc_triggered = False
+                recaudo.rc_cobro_otro_mes = None
                 db.session.commit()
             except Exception:
                 db.session.rollback()

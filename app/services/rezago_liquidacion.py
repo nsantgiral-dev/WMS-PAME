@@ -142,7 +142,30 @@ def diagnostico(hoy=None):
         'dias': dias,
         # Contadas, fuera de la alerta: entregadas antes de FECHA_INICIO_AUDITORIA.
         'antes_del_corte': len(anteriores),
+        # Los recibos que ya se fecharon en el mes del envío (tanda 2).
+        'recibos_de_otro_mes': recibos_de_otro_mes(hoy),
     }
+
+
+def recibos_de_otro_mes(hoy=None):
+    """Los recibos de caja cuyo cobro fue en un mes y se registraron en otro
+    (`RecaudoEntrega.rc_cobro_otro_mes`, lo marca el ejecutor del RC con
+    `politica_cobro.fechas_del_recibo`). Es la otra cara de `CRUZA_MES`: la
+    ruta ya se liquidó, pero el recaudo quedó en el período siguiente y
+    contabilidad tiene que saberlo al cerrar. Los del mes anterior y el actual
+    (lo más viejo ya se cerró). `[{recaudo_id, ruta_id, pedido, cobrado_el}]`."""
+    from app.models.recaudo_entrega import RecaudoEntrega
+    hoy = hoy or ahora_bogota().date()
+    primero = hoy.replace(day=1)
+    desde = (primero.replace(year=primero.year - 1, month=12) if primero.month == 1
+             else primero.replace(month=primero.month - 1))
+    filas = (RecaudoEntrega.query
+             .filter(RecaudoEntrega.rc_cobro_otro_mes.isnot(None))
+             .filter(RecaudoEntrega.rc_cobro_otro_mes >= desde)
+             .order_by(RecaudoEntrega.rc_cobro_otro_mes).all())
+    return [{'recaudo_id': r.id, 'ruta_id': r.ruta_id,
+             'pedido': getattr(r.tarea, 'numero_pedido_siesa', None),
+             'cobrado_el': r.rc_cobro_otro_mes.isoformat()} for r in filas]
 
 
 def rutas_sin_liquidar_al_cierre(dia):

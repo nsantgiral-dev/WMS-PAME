@@ -257,7 +257,11 @@ class TestElRCLlevaElDiaDelCobro:
             _ejecutar_job(job)
         assert mc.trigger_recibo_caja.call_args.kwargs['fecha_recaudo'] == '20260924'
 
-    def test_el_payload_lleva_la_fecha_del_cobro_y_el_documento_la_de_hoy(self, app):
+    def test_el_payload_lleva_la_fecha_del_cobro_y_el_documento_la_de_hoy(self, app, monkeypatch):
+        # El día del documento se fija: la regla del mes (tanda 2) hacía que
+        # este test dependiera de la fecha en que se corre.
+        from app.services.connekta_gateway import ConnektaGateway
+        monkeypatch.setattr(ConnektaGateway, '_fecha_hoy_bogota', staticmethod(lambda: '20260925'))
         gw = _gw()
         gw.modo_ensayo = True
         gw.tipo_docto_recibo_caja = 'RC'
@@ -271,7 +275,9 @@ class TestElRCLlevaElDiaDelCobro:
         assert header['F350_FECHA'] != '20260920'
         assert caja['F358_FECHA_CONSIGNACION'] == '20260920'
 
-    def test_una_fecha_ilegible_cae_al_dia_del_documento(self, app):
+    def test_una_fecha_ilegible_cae_al_dia_del_documento(self, app, monkeypatch):
+        from app.services.connekta_gateway import ConnektaGateway
+        monkeypatch.setattr(ConnektaGateway, '_fecha_hoy_bogota', staticmethod(lambda: '20260925'))
         gw = _gw()
         gw.modo_ensayo = True
         gw.tipo_docto_recibo_caja = 'RC'

@@ -1255,6 +1255,9 @@ def liquidacion_desglose():
             # La entrega ocurrió en un mes y el recaudo va a registrarse en
             # otro. Liquidar rápido ya no lo corrige — el período no se mueve.
             'cruzan_mes': len(_diag['cruzan_mes']),
+            # Los recibos que ya salieron fechados en el mes del envío, con el
+            # día real del cobro (en las notas del RC): para el cierre de mes.
+            'recibos_de_otro_mes': _diag.get('recibos_de_otro_mes') or [],
             'dias_max': max(dias) if dias else None,
             'dias_promedio': round(sum(dias) / len(dias), 1) if dias else None,
             'detalle': sorted(sin_liquidar,

@@ -351,3 +351,57 @@ def documentos_pendientes(recaudo, tarea=None) -> list:
         if not _hay_rc_en_cola(recaudo.id):
             faltan.append('RC')
     return faltan
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 7 · Las fechas del recibo de caja (142888) — regla del dueño, 2026-09-25
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _yyyymmdd(valor) -> str | None:
+    v = str(valor or '').strip()
+    if len(v) != 8 or not v.isdigit():
+        return None
+    try:
+        from datetime import date
+        date(int(v[:4]), int(v[4:6]), int(v[6:]))
+    except ValueError:
+        return None
+    return v
+
+
+def fechas_del_recibo(fecha_cobro, fecha_documento: str) -> dict:
+    """**La única** que decide las fechas de un recibo de caja.
+
+    - `F350_FECHA` = `fecha_documento`: el día (Bogotá) en que se envía.
+    - `F357_FECHA_RECAUDO` = el día real del cobro **si cae en el mismo mes**
+      que el documento. Si el mes cambió (ruta del 30 liquidada el 2), el
+      recaudo no puede registrarse en un período que ya cerró: va con la fecha
+      del documento y **el día real queda escrito en las notas** del recibo.
+    - `F358_FECHA_CONSIGNACION` = **siempre** el día real del cobro (es la
+      fecha del banco: el extracto se cruza con ella).
+
+    `fecha_cobro` ilegible o ausente (parada sin confirmación registrada):
+    todo va con el día del documento y se declara (`sin_fecha_cobro`). Un
+    cobro «posterior» al documento (reloj corrido) tampoco se registra en el
+    futuro: F357 va con el documento.
+
+    Devuelve `{f350, f357, f358, fecha_cobro, cruza_mes, sin_fecha_cobro,
+    nota}`; `nota` es `None` salvo que el mes haya cambiado.
+
+    **No probado contra Siesa real** (CLAUDE.md, «La fecha del recibo de
+    caja»): la prueba de fin de mes en QA está escrita allá.
+    """
+    doc = _yyyymmdd(fecha_documento)
+    if doc is None:
+        raise ValueError(f'fecha_documento ilegible: {fecha_documento!r} (se espera YYYYMMDD)')
+    cobro = _yyyymmdd(fecha_cobro)
+    real = cobro or doc
+    cruza_mes = real[:6] != doc[:6]
+    f357 = real if (not cruza_mes and real <= doc) else doc
+    nota = None
+    if cruza_mes:
+        nota = (f'Cobrado por el conductor el {real[6:]}/{real[4:6]}/{real[:4]}; el recaudo '
+                f'se registra el {doc[6:]}/{doc[4:6]}/{doc[:4]} porque el mes del cobro '
+                f'ya cambió.')
+    return {'f350': doc, 'f357': f357, 'f358': real, 'fecha_cobro': real,
+            'cruza_mes': cruza_mes, 'sin_fecha_cobro': cobro is None, 'nota': nota}

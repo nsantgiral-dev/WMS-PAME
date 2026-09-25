@@ -553,10 +553,12 @@ class ConnektaLiquidacionGateway:
                     fix acá. Si vacío, cae a `core.unidad_negocio` (comportamiento previo).
 
         fecha_recaudo: `YYYYMMDD` (Bogotá) del día en que el conductor COBRÓ.
-                    Va a `F357_FECHA_RECAUDO` y a `F358_FECHA_CONSIGNACION`
-                    (Regla 5: una fecha que alguien lee como día). `F350_FECHA`
-                    sigue siendo el día del documento. Sin ella (llamador
-                    viejo), la del día — el comportamiento de antes.
+                    Las tres fechas las decide `politica_cobro.fechas_del_recibo`
+                    (regla del dueño, 2026-09-25): `F350_FECHA` = hoy;
+                    `F357_FECHA_RECAUDO` = el cobro si es el mismo mes, si no
+                    hoy con el día real en `F350_NOTAS`;
+                    `F358_FECHA_CONSIGNACION` = siempre el cobro. Sin ella
+                    (llamador viejo), todo con el día de hoy.
 
         referencia_pago: referencia del comprobante bancario que anotó el
                     conductor (`RecaudoEntrega.referencia_pago`). Va a
@@ -600,10 +602,12 @@ class ConnektaLiquidacionGateway:
             )
 
         fecha_hoy = core._fecha_hoy_bogota()
-        # El día del cobro, no el del envío (Regla 5). Solo se acepta
-        # `YYYYMMDD`: cualquier otra cosa cae al día del documento.
-        _fr = str(fecha_recaudo or '').strip()
-        fecha_cobro = _fr if (len(_fr) == 8 and _fr.isdigit()) else fecha_hoy
+        # Las fechas del recibo: una política (`politica_cobro.fechas_del_recibo`).
+        from app.services.politica_cobro import fechas_del_recibo
+        fechas_rc = fechas_del_recibo(fecha_recaudo, fecha_hoy)
+        # Un cobro de otro mes se registra con la fecha del documento y el día
+        # real va a las notas — adelante, para que un recorte a 2000 no lo corte.
+        notas_rc = (f"{fechas_rc['nota']} {notas}".strip() if fechas_rc['nota'] else notas)
         cia = int(core.id_cia_siesa)
         consec_int = int(consec_fe) if str(consec_fe).isdigit() else consec_fe
         co = core.centro_op
@@ -669,9 +673,9 @@ class ConnektaLiquidacionGateway:
             'F350_ID_CO': co,
             'F350_ID_TIPO_DOCTO': core.tipo_docto_recibo_caja,
             'F350_CONSEC_DOCTO': 0,
-            'F350_FECHA': fecha_hoy,
+            'F350_FECHA': fechas_rc['f350'],
             'F357_ID_CAJA': id_caja,
-            'F357_FECHA_RECAUDO': fecha_cobro,
+            'F357_FECHA_RECAUDO': fechas_rc['f357'],
             'F350_ID_TERCERO': tercero_nit,
             'F357_ID_MONEDA_INGRESO': 'COP',
             'F357_VALOR_INGRESO': core._fmt_valor(cash_recibido),
@@ -684,7 +688,7 @@ class ConnektaLiquidacionGateway:
             'F350_ID_CLASE_DOCTO': 13,
             'F350_IND_ESTADO': 1,
             'F350_IND_IMPRESION': 0,
-            'F350_NOTAS': notas[:2000] if notas else '',
+            'F350_NOTAS': notas_rc[:2000] if notas_rc else '',
             # ── Ajuste y otros ingresos: OCUPAN SU ANCHO SIEMPRE ────
             #
             # Connekta convierte este JSON en un plano posicional. Omitir un
@@ -767,7 +771,7 @@ class ConnektaLiquidacionGateway:
         if forma_upper == 'CONSIGNACION' or medio_pago.startswith('T'):
             if medio_pago != core.medio_pago_efectivo:
                 caja['F358_REFERENCIA_OTROS'] = referencia_otros_rc(referencia_pago, notas)
-                caja['F358_FECHA_CONSIGNACION'] = fecha_cobro
+                caja['F358_FECHA_CONSIGNACION'] = fechas_rc['f358']
                 caja['f358_docto_banco_cg'] = 'CG'
 
         # --- Sección CxC (Cruce contra factura) ---

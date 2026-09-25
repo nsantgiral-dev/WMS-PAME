@@ -1077,7 +1077,8 @@ def verificar_y_alertar_rutas_sin_liquidar(app=None):
             logger.warning(
                 '[ALERTAS] %s ruta(s) entregadas sin liquidar (%s cruzan mes) — enviando email.',
                 len(atrasadas) + len(cruzan), len(cruzan))
-            _enviar_alerta_rutas_sin_liquidar(atrasadas, cruzan)
+            _enviar_alerta_rutas_sin_liquidar(atrasadas, cruzan,
+                                              d.get('recibos_de_otro_mes') or [])
 
         except Exception as e:
             logger.error(f'[ALERTAS] Error en verificar_y_alertar_rutas_sin_liquidar: {e}',
@@ -1099,9 +1100,11 @@ def verificar_y_alertar_rutas_sin_liquidar(app=None):
             _lock.liberar()
 
 
-def _enviar_alerta_rutas_sin_liquidar(atrasadas: list, cruzan_mes: list):
+def _enviar_alerta_rutas_sin_liquidar(atrasadas: list, cruzan_mes: list,
+                                      recibos_otro_mes: list = ()):
     """El correo. Las que cruzan mes van primero y con su propia explicación:
-    liquidar rápido ya no las arregla, y quien las reciba tiene que saberlo."""
+    liquidar rápido ya no las arregla, y quien las reciba tiene que saberlo.
+    Los recibos que ya salieron fechados en otro mes van al lado (tanda 2)."""
     def _fila(f):
         d = f['dias']
         return f"  · Ruta {f['ruta_id']} — {d if d is not None else '?'} día(s), {f['estado_financiero']}"
@@ -1111,8 +1114,15 @@ def _enviar_alerta_rutas_sin_liquidar(atrasadas: list, cruzan_mes: list):
         partes.append(
             f'CRUZAN EL MES ({len(cruzan_mes)}) — la entrega ocurrió en un mes y el '
             f'recaudo va a quedar registrado en otro. Liquidar ya no lo corrige: '
-            f'el período contable no se mueve.\n'
+            f'el período contable no se mueve. El recibo de caja se fechará en el '
+            f'mes del envío y llevará el día real del cobro en sus notas.\n'
             + '\n'.join(_fila(f) for f in cruzan_mes))
+    if recibos_otro_mes:
+        partes.append(
+            f'RECIBOS DE CAJA FECHADOS EN OTRO MES ({len(recibos_otro_mes)}) — '
+            f'cobrados en un mes y registrados en el siguiente (día real en las notas):\n'
+            + '\n'.join(f"  · Ruta {r['ruta_id']} — pedido {r.get('pedido') or '?'}, "
+                         f"cobrado el {r['cobrado_el']}" for r in recibos_otro_mes))
     if atrasadas:
         partes.append(
             f'ATRASADAS ({len(atrasadas)}) — debían liquidarse el mismo día.\n'

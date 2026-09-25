@@ -247,6 +247,21 @@ class RecaudoEntrega(db.Model):
 
     fecha_confirmacion = db.Column(db.DateTime, default=datetime.utcnow)
 
+    # ── Parada tardía registrada por la oficina (m049tardia) ─────────────
+    #: La oficina la registró con la ruta ya cerrada (formulario de Liquidación).
+    #: Señal para la jornada y la analítica, no sanción.
+    registrada_por_oficina = db.Column(db.Boolean, nullable=True)
+    #: Lo que mandó el teléfono DESPUÉS de lo registrado por la oficina: no lo
+    #: pisa (`ruta_service.version_del_conductor_tras_oficina`).
+    version_conductor = db.Column(db.JSON, nullable=True)
+    version_conductor_en = db.Column(db.DateTime, nullable=True)
+    #: True = difiere (para revisar) · False = coincide · NULL = no llegó.
+    diferencia_conductor = db.Column(db.Boolean, nullable=True)
+
+    #: El día real del cobro cuando el recibo de caja se fechó en el mes del
+    #: envío porque el mes ya había cambiado (`politica_cobro.fechas_del_recibo`).
+    rc_cobro_otro_mes = db.Column(db.Date, nullable=True)
+
     # ── Desenlace de los documentos Siesa ─────────────────────────────────
     #: El vocabulario. **Uno solo** para los tres documentos.
     #:
@@ -407,6 +422,13 @@ class RecaudoEntrega(db.Model):
             'editado_por':           self.editado_por,
             'editado_en':            self.editado_en.isoformat() if self.editado_en else None,
             'fecha_confirmacion':    self.fecha_confirmacion.isoformat(),
+            'registrada_por_oficina': bool(self.registrada_por_oficina),
+            'version_conductor':     self.version_conductor,
+            'version_conductor_en':  (self.version_conductor_en.isoformat()
+                                      if self.version_conductor_en else None),
+            'diferencia_conductor':  self.diferencia_conductor,
+            'rc_cobro_otro_mes':     (self.rc_cobro_otro_mes.isoformat()
+                                      if self.rc_cobro_otro_mes else None),
         }
         if include_foto:
             d['foto_entrega'] = self.foto_entrega or ''
