@@ -83,6 +83,16 @@ def crear_lpn():
       notas (opcional)
     }
     """
+    # Primero quién, después qué: validar el cuerpo antes del rol le contestaba
+    # 400 (y no 403) a quien no puede generar LPN.
+    try:
+        usuario_id = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
+    u = db.session.get(Usuario, usuario_id)
+    if not u or u.rol not in Roles.RECEPCION_ROLES:
+        return jsonify({'error': 'Sin permiso para generar LPNs'}), 403
+
     data = request.get_json() or {}
     producto_id = data.get('producto_id')
     cantidad = data.get('cantidad_actual')
@@ -90,14 +100,6 @@ def crear_lpn():
 
     if not all([producto_id, cantidad, almacen_id]):
         return jsonify({'error': 'producto_id, cantidad_actual y almacen_id son requeridos'}), 400
-
-    try:
-        usuario_id = int(get_jwt_identity())
-    except (TypeError, ValueError):
-        return jsonify({'error': 'Token inválido'}), 401
-    u = Usuario.query.get(usuario_id)
-    if not u or u.rol not in Roles.RECEPCION_ROLES:
-        return jsonify({'error': 'Sin permiso para generar LPNs'}), 403
 
     try:
         lpn = generar_lpn(

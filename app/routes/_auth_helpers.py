@@ -86,6 +86,21 @@ class Roles:
     #: pregunta si el rol declarado DEBERÍA estar en la tupla.
     VISTA_FLOTA    = GESTION + (CONTROL_FLOTA,)
 
+    #: **Personal de almacén: quien opera inventario y ve el catálogo con su
+    #: costo** (`precio_compra` en `/api/productos/`). Lista BLANCA desde el
+    #: 2026-09-25: antes `_es_personal_almacen` era «todo rol menos conductor y
+    #: tienda», así que `control_flota` —y todo rol que se cree mañana— veía el
+    #: costo de compra y podía registrar un conteo, descomponer un empaque o
+    #: sincronizar un packing. Un rol nuevo no entra solo: se agrega con una
+    #: línea acá (cuando existan «líder de cartera» o «liquidador», se decide
+    #: si operan almacén; hoy no).
+    PERSONAL_ALMACEN = (
+        ADMIN, SUPERVISOR, JEFE_ALMACEN, GERENTE,
+        OPERARIO, EMPACADOR, RECEPCIONISTA,
+        COMPRAS,
+        PICKER_TRASLADO, PACKER_TRASLADO,
+    )
+
 
 def _puede_empacar(usuario) -> bool:
     """Autorizado para operaciones de packing: rol en PACKING_ROLES O flag puede_empacar=True."""
@@ -163,13 +178,13 @@ def _lee_flota():
 
 
 def _es_personal_almacen():
-    """Retorna el usuario si pertenece al personal de almacén (excluye conductor y tienda)."""
+    """El usuario si su rol está en `Roles.PERSONAL_ALMACEN` (lista blanca)."""
     try:
         uid = int(get_jwt_identity())
     except (TypeError, ValueError):
         return None
     u = Usuario.query.get(uid)
-    return u if u and u.activo and u.rol not in (Roles.CONDUCTOR, Roles.TIENDA) else None
+    return u if u and u.activo and u.rol in Roles.PERSONAL_ALMACEN else None
 
 
 def _puede_organizar_layout():

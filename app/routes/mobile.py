@@ -21,8 +21,12 @@ def _operario_id():
         return None
 
 
-# Roles que NO pueden ejecutar tareas de almacén bajo ninguna circunstancia
-_ROLES_SIN_ALMACEN = {Roles.CONDUCTOR, Roles.TIENDA}
+def _opera_almacen(u) -> bool:
+    """¿Este usuario ejecuta tareas de almacén? Lista BLANCA
+    (`Roles.PERSONAL_ALMACEN`, la misma de `_es_personal_almacen`). Era una
+    lista negra —«todos menos conductor y tienda»— y `control_flota` registraba
+    conteos por `/api/mobile/conteo/*` (2026-09-25)."""
+    return bool(u) and u.rol in Roles.PERSONAL_ALMACEN
 
 
 def _verificar_rol_para_tipo(operario_id: int, tipo: str):
@@ -37,7 +41,7 @@ def _verificar_rol_para_tipo(operario_id: int, tipo: str):
     from app.extensions import db
     from app.models.usuario import Usuario
     u = db.session.get(Usuario, operario_id)
-    if not u or u.rol in _ROLES_SIN_ALMACEN:
+    if not _opera_almacen(u):
         return jsonify({'error': f'El rol "{u.rol if u else "desconocido"}" no puede ejecutar tareas de almacén (tipo={tipo})'}), 403
     return None
 
@@ -50,7 +54,7 @@ def mis_tareas():
     from app.extensions import db
     from app.models.usuario import Usuario
     u = db.session.get(Usuario, operario_id)
-    if not u or u.rol in _ROLES_SIN_ALMACEN:
+    if not _opera_almacen(u):
         return jsonify({'error': 'Sin permiso para acceder a tareas de almacén'}), 403
     resultado = MobileService.get_tareas_operario(operario_id)
     return jsonify(resultado), 200
@@ -64,7 +68,7 @@ def tarea_actual():
     from app.extensions import db
     from app.models.usuario import Usuario
     u = db.session.get(Usuario, operario_id)
-    if not u or u.rol in _ROLES_SIN_ALMACEN:
+    if not _opera_almacen(u):
         return jsonify({'error': 'Sin permiso para acceder a tareas de almacén'}), 403
     try:
         resultado = MobileService.get_tarea_actual(operario_id)
