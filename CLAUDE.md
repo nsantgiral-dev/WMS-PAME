@@ -26,7 +26,8 @@ layout.js       (1,186)         Ubicaciones físicas 5 ejes
 tienda.js       (1,160)         Módulo tienda
 etiquetas.js      (110)         Impresión de etiquetas
 vigia.js          (513)         Panel CUSUM, alarmas, carga de series
-compras_ia.js     (394)         Acuerdos marco, Armador, deriva, inteligencia inventario
+compras_ia.js     (394)         Acuerdos marco, Armador, deriva, inteligencia inventario (⚙️ Avanzado de Compras)
+compras_bandeja.js              La pantalla del comprador: franja, 🛒 Bandeja, 🚢 Contenedor, 🎒 Temporada, 📦 Lo pedido (`cmpTab`)
 flota.js        (2,198)         Custodia de vehículos, ficha, documentos, avisos, daños
 flota_analitica.js              Sub-tab de analítica de flota (15 paneles, sin canvas) + despachador de sub-pestañas
 flota_bandeja.js                Bandeja de flota: Hoy · Pendientes · Señales · Vehículos (GET /flota/bandeja)
@@ -75,7 +76,8 @@ Buscar aquí antes de darlos por inexistentes:
 
 | Dispatcher | Definido en | Invoca lógica de |
 |-----------|-------------|------------------|
-| `compSubtab()` | `recepcion.js:1352` | `compras_ia.js` (acuerdos, armador, deriva) |
+| `cmpTab()` | `compras_bandeja.js` | las pestañas de Compras; ⚙️ Avanzado delega en `compSubtab()` |
+| `compSubtab()` | `recepcion.js` | ⚙️ Avanzado de Compras: `compras_ia.js` (modelos, acuerdos, armador, punto de pedido) y la operación de bodega (`recepcion.js`) |
 | `invSubtab()` | `conteo.js:94` | `compras_ia.js` (inteligencia inventario) |
 
 ---
@@ -5914,3 +5916,148 @@ Suite completa en el worktree (2026-09-25, `-m "not postgres"`, TZ=UTC):
    marca). Después «Leer de Siesa» → «Ver qué cambiaría» → «Aplicar».
 3. OCs viejas abiertas: anularlas en Siesa, o fijar
    `COMPRAS_OC_EXCLUIR_MAS_DE_DIAS`. El umbral de aviso (90) es provisional.
+
+---
+
+## Compras: la bandeja del comprador (2026-09-25)
+
+El rol `compras` aterrizaba en una pantalla con Velocity, Dock Lock, Cuarentena
+y Audit: nada de lo que decide una compra. Reposición, Contenedor, Temporada y
+Acuerdos vivían solo en el admin, y la temporada le daba 403. Reposición no
+decía cuánto pedir, ni a quién, ni a qué precio; pintaba el stock bruto
+mientras decidía por la posición; el contenedor decía «Sin déficit China» cuando
+no podía calcular.
+
+### Una pantalla, dos entradas
+
+`#tab-compras` es **un** bloque: el admin lo ve en su panel y el rol `compras`
+en `#pantalla-compras` — `cmpMontar` mueve el nodo (dos copias de los mismos
+ids serían dos pantallas que divergen; `#tab-compras-ancla` marca dónde
+vuelve si en la misma sesión entra un admin). `compras_bandeja.js` (`cmpTab`):
+
+| Pestaña | Qué contesta | Endpoint |
+|---|---|---|
+| Franja (fija) | ¿Puedo decidir con estos números? Ventas (kardex) al día, existencias por sede con su antigüedad, OCs sincronizadas hace N, origen y fichas, supuestos (lead time nacional, ciclo) | `GET /api/compras/bandeja/confianza` |
+| 🛒 Bandeja | Por SKU nacional bajo su punto de pedido (o por cruzarlo en 7 días): **cuánto pedir** (a empaque y MOQ), **a quién**, **a qué precio**, valor, urgencia, y **¿por qué?** con la aritmética en palabras. Agrupada por proveedor con subtotal, «Copiar OC» y «Exportar CSV» | `GET /api/compras/bandeja` |
+| 🚢 Contenedor | Sin origen o sin fichas lo dice **en grande** con cuántos SKU y el enlace a 🧾 Fuentes, y no pinta barras ni ETA. Con datos: por proveedor chino, nombre, unidades, cajas, m³, US$ por línea, alerta si llega con la temporada empezada con la fecha límite, «Exportar packing list» | `GET /api/compras/bandeja/contenedor?tipo=` |
+| 🎒 Temporada | tener − hay − viene = pedir (del backend), fecha límite por origen, conciliada con el contenedor (**manda la temporada**: el contenedor muestra el ajuste, no una segunda cifra). El instrumento del comité (lista paralela, escenarios, acta) plegado debajo | `GET /api/compras/bandeja/temporada` |
+| 📦 Lo pedido | OCs abiertas por proveedor, atrasadas primero con sus días; lo que llegó (recepciones confirmadas, 30 días); deriva de precios contra los acuerdos (3/6/12 meses). Una sección que falla se declara: sin 500 | `GET /api/compras/bandeja/lo-pedido` |
+| 🧾 Fuentes | Sin cambios | `/api/compras/fuentes/*` |
+| ⚙️ Avanzado | Modelos (S-B/TSB), tablas técnicas del punto de pedido y del contenedor, acuerdos, bloqueos, **«Reposición interna PICKING»** (la Velocity: mide PICKING de NB1, no compras), recepciones con problema, cuarentena, rastro | los de siempre |
+
+Permisos: todo `_es_compras()` (admin, jefe de almacén, gerente, compras). La
+lectura de temporada (`/api/kardex/temporada/pedido`, `GET /juicios`) pasó a
+`_es_compras()`; **escribir la lista paralela sigue en admin/jefe**
+(`_es_admin_o_jefe`, no existe un rol «líder de compras»), y la pantalla la
+muestra sin campo a quien no puede escribirla (`TEMP_ROLES_REGISTRAN_JUICIO`,
+cruzada por test contra `Roles.ALMACEN`).
+
+### La bandeja compone; no calcula
+
+`app/services/compras_bandeja.py` **no tiene un solo operador aritmético** ni
+consulta la base. Lo que faltaba se escribió en su dueño:
+
+| Faltaba | Dónde quedó |
+|---|---|
+| Hasta dónde pedir en nacional (el punto de pedido decía cuándo, no cuánto) | `armador_service.nivel_objetivo(d, σ, LT, σ_LT, R, z)` — **una función para China (R = 90) y nacional (R = el ciclo de compra)**. El S de China la usa |
+| El ciclo de compra nacional | `armador_service.ciclo_pedido_nacional()`: `ROP_CICLO_NACIONAL_DIAS` (1–90), default **7, supuesto declarado**; ilegible → default y lo dice |
+| Déficit, disponible, días hasta el punto de pedido, «se agota antes de que llegue», cuándo llegaría | columnas nuevas de cada fila nacional de `rop_dual` |
+| Redondeo a empaque con MOQ | `armador_service.pedido_en_empaques` (usa `cajas_a_pedir`: MOQ como mínimo) |
+| El empaque de compra | `compras_fuentes.empaque_de_compra`: OC más reciente (unidad y factor) → catálogo de Siesa → por unidad. **El MOQ nacional no está en ninguna fuente**: 1, declarado («confirmalo al pedir») |
+| Proveedor con NIT | `compras_fuentes.proveedores_info` (maestro, o la OC más reciente) |
+| OCs abiertas con atraso; llegadas | `compras_fuentes.ocs_abiertas`, `llegadas_recientes` |
+| Valor y subtotal sin inventar $0 | `costo_service.valorizar` / `sumar_valores` (sin costo → `None`, cota inferior) |
+| Régimen China | `armador_service.insumo_origen()` (salió de `rop_dual`) |
+| Temporada que viene, fecha límite, conciliación | `temporada_service.proxima_temporada`, `fechas_limite_pedido` (inicio − (LT + σ)), `conciliar_con_contenedor` |
+| Nombre y proveedor en el contenedor | cada línea de `armar_contenedor`; `composicion_por_proveedor` agrupa |
+
+Urgencia (comparaciones sobre lo que el motor ya dio): **URGENTE** = aun
+pidiendo hoy se agota antes de que llegue (posición < venta diaria × lead time);
+**ESTA SEMANA** = bajo el punto de pedido; **PRÓXIMAS** = lo cruza en
+`DIAS_PROXIMAS` (7) días. No se propone: bloqueados
+(`BloqueoRecompraService.verificar_oc`, la que ya existía «antes de generar la
+OC»), SKU sin ninguna fila de existencias (Regla 0), sin venta reciente, y los
+de China (van por el contenedor) — todo declarado en «Lo que la bandeja no
+propone». Sin kardex: `SIN_KARDEX` con qué falta y cómo encenderlo.
+
+**El borrador de OC** (copiar o CSV con `;`) lleva NIT, proveedor, CO y bodega
+destino (el CDI, `co_de_bodega`), referencia, descripción, unidad de compra,
+cantidad en empaques, unidades base, precio, valor, fecha de entrega sugerida
+(hoy + lead time) y urgencia. **El formato de importación a Siesa no está
+especificado: es un borrador a confirmar con el consultor**, y lo dice.
+
+### Lenguaje
+
+Punto de pedido, disponible de verdad, reserva de seguridad, cantidad a tener,
+«le faltan datos de agotados»; unidades enteras; `fmtPesos` y `fmtUsd`
+(«US$ 4.291,20», en `util.js`); nombre del producto siempre junto a la
+referencia. La jerga (ROP, σ, TSB, S-B, CENSURADA) queda en ⚙️ Avanzado. La
+bandeja va en tarjetas (sin tablas: se lee en el teléfono); las pestañas se
+envuelven, nunca scroll horizontal.
+
+De paso en `compras_ia.js`: el «$» suelto del colchón, el FOB en dólares con su
+signo, `esc()` en la evidencia de días sin stock, «nunca se agotó» cuando la
+consulta llegó al tope (ahora «no se agotó en los días que alcanzó a traer»), el
+mensaje de TSB que culpaba al kardex sin mirarlo, y la deriva con nombre y el
+«de más» en pesos. En `temporada.js`: la etiqueta de temporada la da el
+servidor, se fue el texto vencido del «export del 1 de agosto», y la lista
+paralela viaja por posición (no la referencia en el `onchange`).
+
+**Analítica → «Venta perdida por agotados»**: el porqué trae los 5 productos que
+más se dejaron de vender con «Ver en la Bandeja de compras ›» (solo si el rol ve
+Compras); abre la Bandeja en su fila con el porqué desplegado, o dice por qué no
+está (`GET /api/compras/bandeja/sku`: bloqueado, China, sin ventas, sobre su
+punto de pedido y en cuántos días lo cruza).
+
+### Tests y mutaciones
+
+`tests/test_compras_bandeja.py` (55: mundo con kardex + reconstructor real,
+`stock_siesa`, espejo de OCs; urgente, esta semana, próximas, ya pedido cubre,
+bloqueado, sin kardex, sin costo, empaque/MOQ, proveedor por OC, sin
+existencias; contenedor sin origen/sin fichas/con propuesta; fecha límite;
+conciliación; lo pedido con atraso y con una sección que revienta; permisos:
+compras/admin/jefe/gerente entran, conductor/operario/supervisor/tienda no,
+compras no escribe juicios; **trinquete AST «la bandeja no calcula»** con
+meta-tests de las formas que ve y lo sano que no, y piso) y
+`tests/test_compras_bandeja_js.py` (23: Node con `util.js` real contra
+respuestas reales — sin códigos crudos, sin undefined/NaN/null, sin hex, nada
+< 12 px, `onclick` solo con posiciones, datos escapados, cada número con su
+contexto; borrador de OC y CSV; el enlace desde Analítica). **26 mutaciones, las
+26 rojas** (con `-B` y `PYTHONDONTWRITEBYTECODE`, cada reemplazo verificado a
+aplicar una vez).
+
+Tests que cambiaron y por qué: `test_frontend_integrity::TestOrganizacionPorDecision`
+y `TestReposicionNacional` describían la barra OPERACIÓN/DECISIÓN; ahora exigen
+las pestañas nuevas y lo técnico dentro de Avanzado.
+`test_permisos_por_pantalla`: `compras_bandeja.js` y `temporada.js` los abre
+también `compras`.
+
+### Lo que NO cubre, dicho
+
+- **El formato de importación de OCs a Siesa** no existe en el repo: el CSV es
+  un borrador (Regla 1: no hay DOCX del conector).
+- **El MOQ nacional** no tiene fuente; **el empaque del catálogo** de Siesa puede
+  no ser el del proveedor (se dice).
+- **El precio es por SKU, no por proveedor**: si el precio sale de un acuerdo de
+  otro proveedor que el habitual, se muestra igual (la fuente se dice).
+- **Un SKU que se compra a varios proveedores** va con el de su OC más reciente.
+- **La bandeja llama a `rop_dual` completo** en cada carga; la temporada además
+  arma el contenedor para conciliar. No se midió contra el volumen de producción.
+- **«Hay» es de hoy** (temporada) y la fecha límite es un supuesto (LT + una σ).
+- La lista de sedes de la franja incluye AV1/TRA1 (la de `analitica_salud`).
+- Los paneles viejos de Dock/Cuarentena/Audit conservan ramas `comp2` muertas
+  (no se tocaron para no mezclar).
+
+### Decisiones para el dueño
+
+1. **Ciclo de compra nacional**: 7 días supuesto (`ROP_CICLO_NACIONAL_DIAS`).
+   ¿Se le compra a cada proveedor nacional cada semana? Cambia la cantidad a
+   pedir (no el cuándo).
+2. **¿Quién escribe la lista paralela de temporada?** Hoy admin y jefe de
+   almacén. ¿Un «líder de compras»? Haría falta el rol.
+3. **Formato de la OC para Siesa**: pedir al consultor el plano/conector de
+   importación de órdenes de compra.
+4. **Fecha límite de temporada**: inicio − (lead time + una σ). ¿Más margen
+   para China?
+5. **Meta de servicio 95 %** para toda la bandeja (sigue abierta la de la
+   canasta constitucional).
