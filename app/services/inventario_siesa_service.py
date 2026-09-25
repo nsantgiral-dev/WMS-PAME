@@ -123,7 +123,10 @@ _cache_inventario_siesa: dict = {}  # {bodega: {'data': ..., 'ts': ...}}
 #: `ts` es la hora de la última descarga **que trajo datos de Siesa**, no la de
 #: la última vez que se armó el diccionario. `degradado` dice si lo que hay
 #: salió solo de la BD porque la API no respondió.
-_cache_inventario_multibodega = {'data': None, 'ts': None, 'degradado': False}
+#: `bodegas_frescas` son las bodegas que la ÚLTIMA descarga trajo de Siesa; el
+#: resto del diccionario salió de `stock_siesa` (la foto anterior).
+_cache_inventario_multibodega = {'data': None, 'ts': None, 'degradado': False,
+                                 'bodegas_frescas': frozenset()}
 _descarga_multibodega_en_curso = False
 _CACHE_TTL_SEGUNDOS = 3600  # 1 hora — evita re-descargar en reconciliaciones frecuentes
 _REFRESH_INTERVALO = 2700   # 45 min — refresh periódico del cache multi-bodega
@@ -311,9 +314,13 @@ def _descargar_una_pasada_custom():
                     _time.sleep(2)
 
         if resp is None:
-            if _errores_consecutivos >= 3:
-                return None
-            continue
+            # Una página que no se pudo leer (3 intentos, incluidos los 429)
+            # invalida la pasada entera. Antes, tras tres 429 la página se
+            # SALTABA en silencio y la pasada volvía «completa» sin sus filas:
+            # un SKU ausente se lee como existencia cero, no como desconocido.
+            logger.warning('[INV-SIESA] CUSTOM pág %d no se pudo leer — pasada '
+                           'descartada (incompleta)', pag)
+            return None
 
         rows = (
             resp.get('detalle', {}).get('Datos')
@@ -340,6 +347,11 @@ def _descargar_una_pasada_custom():
 
         if len(rows) < 1000:
             break
+    else:
+        # Se agotó el tope de páginas sin llegar a la última: incompleta.
+        logger.warning('[INV-SIESA] CUSTOM: tope de 199 páginas alcanzado — '
+                       'pasada descartada (incompleta)')
+        return None
 
     return inventario if inventario else None
 
@@ -425,6 +437,8 @@ def _descargar_inventario_siesa_raw(forzar=False):
 
     _cache_inventario_multibodega['data'] = inventario_global
     _cache_inventario_multibodega['degradado'] = _degradado
+    _cache_inventario_multibodega['bodegas_frescas'] = frozenset(
+        b for b, filas in api_data.items() if filas)
     if not _degradado:
         _cache_inventario_multibodega['ts'] = datetime.utcnow()
     else:
@@ -592,43 +606,78 @@ def obtener_bodegas_disponibles():
     return sorted(multi.keys())
 
 
+class FuenteInventarioNoConfiable(ValueError):
+    """El inventario de Siesa en memoria no sirve para ESCRIBIR inventario.
+
+    P0-8 (2026-09-25): la carga física de las 7:00 escribía `UbicacionProducto`
+    con lo que hubiera en el cache, y el cache se arma igual cuando Siesa no
+    responde —sale de `stock_siesa`, la foto de ayer o de la semana pasada—.
+    `_descargar_inventario_siesa_raw` ya lo marcaba `degradado`; nadie que
+    escribe lo miraba. Decisión del dueño (2026-09-25): la carga sigue
+    automática, pero **solo escribe con dato fresco y completo**; si no, no
+    escribe nada, lo declara en el registro de la corrida y se reintenta a
+    mano dentro de la ventana de Siesa.
+    """
+
+
+def fuente_para_escribir(bodega: str) -> str:
+    """`''` si el inventario de `bodega` en memoria sirve para escribir; si no,
+    el motivo. **Una política** para toda escritura de inventario desde Siesa.
+
+    Sirve solo si: (1) la última descarga no fue degradada; (2) su sello es de
+    HOY en Bogotá; (3) esa descarga trajo filas de esta bodega (no salió de
+    `stock_siesa`); (4) llegó por pasadas completas — una pasada con una
+    página sin leer se descarta en `_descargar_una_pasada_custom`.
+    """
+    from app.utils.fecha import dia_operativo, dia_operativo_de
+    c = _cache_inventario_multibodega
+    if c.get('data') is None:
+        return 'no hay descarga de Siesa en memoria'
+    if c.get('degradado'):
+        return ('la última descarga de Siesa falló: lo que hay en memoria es la '
+                'foto guardada en stock_siesa, no el dato de hoy')
+    ts = c.get('ts')
+    if ts is None or dia_operativo_de(ts) != dia_operativo():
+        return f'el dato de Siesa no es de hoy (sello: {ts.isoformat() if ts else "ninguno"})'
+    if bodega not in (c.get('bodegas_frescas') or ()):
+        return (f'la descarga de hoy no trajo filas de {bodega}: lo que hay para '
+                f'esa bodega es la foto guardada en stock_siesa')
+    return ''
+
+
+def _exigir_fuente_para_escribir(bodega: str):
+    motivo = fuente_para_escribir(bodega)
+    if motivo:
+        raise FuenteInventarioNoConfiable(
+            f'No se escribe inventario de {bodega}: {motivo}.')
+
+
 def _descargar_inventario_siesa(forzar=False, bodega: str = None, almacen_id: int = None):
     """
-    Retorna inventario de una bodega para carga inicial y reconciliación.
+    Inventario de una bodega **para escribirlo** en el WMS (carga física).
 
-    Sin `bodega`, preserva el comportamiento histórico (connekta.bodega,
-    típicamente NB1). El cache y el baseline de "respuesta sospechosa" están
-    keyed por bodega — antes de la Fase 1 (2026-08-27) eran un solo par
-    (data, ts) global: cargar una segunda bodega habría comparado su tamaño
-    contra el baseline de la primera y podido abortar por un falso "respuesta
-    parcial" (NC1 con 6.000 productos SIEMPRE se ve "parcial" al lado de un
-    baseline armado con el total de NB1).
+    Exige `fuente_para_escribir(bod)`: si lo que hay en memoria no es fresco y
+    completo, fuerza una descarga nueva; si tampoco sirve, levanta
+    `FuenteInventarioNoConfiable` y no se escribe nada (P0-8). Ya no hay atajo
+    por un cache propio de la bodega: ese cache se llenaba igual con un dato
+    degradado y el atajo saltaba la verificación.
 
     `almacen_id`: si se pasa, el baseline de UbicacionProducto se cuenta SOLO
     en ese almacén — sin esto, cargar NS1 por primera vez compara su tamaño
     contra el conteo GLOBAL (que ya incluye miles de filas de NB1) y aborta
     con "respuesta parcial" aunque NS1 nunca haya tenido ni una fila.
     """
-    global _cache_inventario_siesa
     bod = bodega or connekta.bodega
-    cache = _cache_inventario_siesa.setdefault(bod, {'data': None, 'ts': None})
-    ahora = datetime.utcnow()
-    if (not forzar
-            and cache['data'] is not None
-            and cache['ts'] is not None
-            and (ahora - cache['ts']).total_seconds() < _CACHE_TTL_SEGUNDOS):
-        logger.info('[INV-SIESA] Usando inventario cacheado (TTL 1h) — bodega %s', bod)
-        return cache['data']
-
-    multi = _descargar_inventario_siesa_raw(forzar=forzar)
+    if forzar or fuente_para_escribir(bod):
+        multi = _descargar_inventario_siesa_raw(forzar=True)
+    else:
+        multi = _cache_inventario_multibodega['data']
+    _exigir_fuente_para_escribir(bod)
     inventario = multi.get(bod, {})
 
     logger.info(f'[INV-SIESA] Bodega {bod}: {len(inventario)} productos')
 
     _verificar_respuesta_no_parcial(inventario, bod, almacen_id)
-
-    cache['data'] = inventario
-    cache['ts'] = datetime.utcnow()
     return inventario
 
 
@@ -1069,6 +1118,16 @@ def _run_carga_inicial(app, bodega: str = None):
             # sync puede detectar el gap con 'ultimo_inicio'.
             estado['ultimo_sync_completo'] = datetime.utcnow()
 
+        except FuenteInventarioNoConfiable as e:
+            # No se escribió nada: se declara en el registro de la corrida (lo
+            # leen 🩺 Salud y el resumen diario) y no se manda el correo de
+            # «bulk-zero incompleto», que describiría otra cosa.
+            logger.error('[INV-SIESA] Carga de %s NO escrita: %s', bod, e)
+            db.session.rollback()
+            estado['ultimo_error'] = str(e)
+            estado['en_curso'] = False
+            _reg.cerrar_error(_reg_id, e)
+            return
         except Exception as e:
             # FM_RAILWAY_RESTART: si el proceso se mató a mitad del loop de páginas,
             # el bulk-zero nunca se ejecutó → productos de páginas no procesadas
