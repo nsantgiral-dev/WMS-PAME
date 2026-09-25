@@ -146,7 +146,6 @@ BASELINE_HEREDADO = {
     ('tienda', '/api/productos/?search='),
     # Paneles de admin que viven dentro de `recepcion.js`: el recepcionista no
     # los abre, pero comparten archivo. Si el mapa se afina, salen solos.
-    ('recepcionista', '/api/rutas/bultos-rechazados'),
     ('recepcionista', '/api/devoluciones/pendientes-aprobacion-nc'),
 }
 

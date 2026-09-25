@@ -5319,3 +5319,112 @@ sola corrida con la máquina saturada): **8134 passed, 5 failed** (los cinco
 tests de arriba, corregidos después y verdes por archivo: 117 passed, 3
 xfailed), 5 skipped, 19 xfailed. No se volvió a correr entera a pedido del
 integrador.
+
+## Si el cliente no paga, la mercancía VUELVE — sin cabos sueltos (2026-09-24)
+
+**Regla del dueño:** *si el cliente no paga, la mercancía vuelve y el producto
+tiene que volver a entrar al inventario, sin cabos sueltos.* Migración
+**`m045devol`** (aditiva, nullable, sin backfill; `down_revision='m043contado'`,
+el integrador re-encadena). Política en **`app/services/devolucion_ruta.py`**;
+cuenta y liberación en `devolucion_cliente_service`; verificación de la NC en
+`devolucion_nc_verificador`. Trinquete: `tests/test_devolucion_vuelve.py`
+(84 tests, **22 mutaciones, las 22 rojas**).
+
+**La clase, no el caso:** *mercancía declarada de vuelta que ningún registro
+sigue hasta el inventario vendible*. Lo que había:
+
+| Cabo suelto | Ahora |
+|---|---|
+| La `DevolucionCliente` nacía **al liquidar**: entre el regreso del camión y la liquidación la mercancía no existía en el WMS | Nace **EN_CAMION** en `confirmar_parada`, **sin red**, con lo declarado (`sincronizar_con_parada` → `_crear_de_ruta`, la ÚNICA que crea devoluciones de ruta). En un SAVEPOINT: la entrega no se traba. Reconfirmar la rehace (bitácora EDITAR) o, si pasó a ENTREGADO/ENTREGADO_SIN_PAGO, la cancela el sistema (CANCELAR con motivo). La liquidación y el cierre forzado la **encuentran** (`asegurar_devolucion`, que solo crea la de una parada vieja) |
+| Después podía quedar ABIERTA sin plazo con la ruta LIQUIDADA | `liquidar_ruta` **no liquida con devoluciones sin contar** (`devoluciones_sin_contar: …`, 400); con `motivo_devoluciones` sí, y queda FORZAR en la bitácora. Las dos pantallas (`liqLiquidarWMS`, `rutaLiquidar`) piden el motivo |
+| El panel «BULTOS RECHAZADOS — RE-INGRESAR» era informativo (y el recepcionista recibía 403: su endpoint era de admin) | **🚚 Llegó el camión** (`GET /api/devoluciones/llegadas`, recepción): por ruta, escanear el bulto que volvió → `RETORNADO`; **Cerrar llegada** → lo no escaneado `FALTANTE` y EN_CAMION → ABIERTA; cuadre `salieron = entregados + retornados + faltantes` **exacto** solo sin nada colgando. Un bulto entregado de una parada ENTREGADA no se recibe sin corregir la parada; uno de una PARCIAL sí, declarado `no_declarado` |
+| Si no volvió nada había que CANCELAR y el faltante desaparecía | Contar en cero es **FALTANTE_TOTAL**: sin inventario ni NC, medido (`senales_ruta.faltante_de_retorno` lo incluye). Cancelar es solo de supervisión con motivo, para una devolución que no debía existir |
+| Doble reingreso: mostrador + ruta, y el tope no descontaba las previas | **Una devolución ACTIVA por línea de factura**: índice único parcial `uq_linea_devolucion_rowid_activo` (lo mantiene `cambiar_estado`, la única que escribe el estado) + mensaje claro antes. El tope es `ya devuelto (contadas) + esta ≤ facturado`, por `f470_rowid`. La de mostrador sobre un pedido con devolución de ruta sin contar **se rechaza** («contala en esa») |
+| El RC de un parcial de contado esperaba para siempre si la devolución se cancelaba o el job daba `sin_lineas` | `devolucion_ruta.nc_no_llegara`: si la devolución terminó sin NC (FALTANTE_TOTAL o cancelada) el ejecutor deja salir el RC **por lo cobrado** (NC → RC → DC intacto: no hay NC que esperar) y `destrabar_rc_de` lo reprograma ya. La NC sin líneas levanta `NotaCreditoSinLineas` (determinista: FALLIDO + alerta, sin gastar reintentos, antes del pre-flag) en vez de COMPLETADO sin nota |
+| Referencia de la factura sin producto WMS: WARNING y devolución corta | `problema_factura` en la devolución, **bloquea el conteo con el mensaje** y llega a `errores` de la liquidación. En `buscar_pedido` viaja `referencias_sin_producto` |
+| PARCIAL sin ítems → devolución TOTAL; el servidor no exigía `items_entregados` | Con `version_formulario >= 4` (el PWA nuevo: `COND_VERSION_FORMULARIO = 4`) una PARCIAL exige al menos una referencia devuelta. Un ítem viejo de la cola **no se traba**: su devolución nace con `sin_items` y recepción cuenta contra la factura |
+| El reingreso iba directo a picking (vendible) con la NC en Elaboración | Lo **sano** entra al bin `DEVOLUCIONES`, zona **`DEVOLUCION`** (`String(10)`), **no vendible**: `picking_service.ZONAS_NO_VENDIBLES` — la misma política que AVERIAS, así que FEFO, alerta de mínimos, carga inicial, ABC y traslados la heredan (reposición filtra PICKING/RESERVA en positivo; conteo ya la trata como «mercancía en proceso» mientras la NC no conste aprobada). Lo **averiado** va a `AVERIADOS`. Con la NC aprobada, `liberar_reingreso` (la única puerta, trinquete AST) lo mueve al slot de picking o a la ubicación óptima con dos `MovimientoInventario` `LIBERACION_DEVOLUCION` |
+| No se podía partir una línea entre sanas y averiadas; `MERCANCIA_AVERIADA` no llegaba premarcada | `lineas_devolucion_cliente.cantidad_averiada`. Premarcada si el motivo es MERCANCIA_AVERIADA. La NC de una línea **mixta** va entera a la bodega de la factura (forma verificada: una línea por `f470_rowid_movto`); lo averiado se traslada a AV1 con el 142951 **al aprobarse la NC**, anclado al movimiento que lo metió en AVERIADOS. Toda averiada → la NC la manda a AV1 como siempre |
+| «Ya la aprobé» era un clic sin verificar | Cron **`[DEVOLUCIONES_NC]`** (`_scheduler_pesados`, cada 30 min 7–19:30 Bogotá, `LOCK_DEVOLUCIONES_NC = 2022`, **nace apagado**: `DEVOLUCIONES_VERIFICAR_NC=true`) lee `f350_ind_estado` con la consulta ya registrada (`CONNEKTA_CONSULTA_NC_CONSECUTIVO`) y marca `nc_aprobada_fuente='SIESA'` solo si leyó `1` en la fila de ESE consecutivo, tipo y CO. El botón queda de respaldo: **motivo obligatorio y FORZAR** (`MANUAL`). Supervisión tiene «Verificar en Siesa» (`POST /api/devoluciones/verificar-nc`). `/api/health/siesa` → `devoluciones_nc` |
+| DEV-04 contaba las NC ya aprobadas, sin antigüedad (y DEV-05 igual) | Solo las sin aprobar, con días, las más viejas primero. DEV-05 excluye las aprobadas |
+| Un producto de doble unidad declarado por referencia bloqueaba la devolución (`LineaDevueltaAmbigua`) | `vincular_a_factura` **no reparte**: abre una línea por fila de factura en 0 y recepción cuenta cuál volvió (`linea_id`); lo declarado queda por producto (`declaracion_conductor.declarado_por_producto`) y el faltante se mide contra la suma. Con rowid declarado, manda el rowid. Un producto con UNA línea: lo declarado sin rowid se suma a ella |
+
+**Nuevos estados.** `EstadoDevolucionCliente`: `EN_CAMION → ABIERTA →
+CONFIRMADA | FALTANTE_TOTAL | CANCELADA` (CHECK; transiciones en
+`TRANSICIONES`). `EstadoBulto`: `RETORNADO`, `FALTANTE`.
+`rutas_despacho.llegada_cerrada_at/_por_id`.
+
+**Invariantes nuevos** (`auditoria/devoluciones.py`, detector ciego en
+`TestDetectoresDeDevolucionDeRuta`): **DEV-06** BLOQUEA (rechazo/parcial de
+ruta LIQUIDADA sin devolución), **DEV-07** AVISA (sin contar > 24 h), **DEV-08**
+AVISA (rechazo con la devolución cancelada), **DEV-09** BLOQUEA (RC esperando
+una NC que no llegará, > 1 h), **DEV-10** BLOQUEA (dos activas por línea de
+factura o suma > facturado), **DEV-11** BLOQUEA (reingreso vendible sin NC
+aprobada — solo líneas con `cantidad_averiada` escrita, la marca de m045devol:
+el histórico entraba a picking por diseño), **DEV-12** AVISA (NC sin aprobar
+> 3 días o anulada), **DEV-13** AVISA (bultos declarados de vuelta tras cerrar
+la llegada). El flujo `devoluciones` pasa de 5 a 13.
+
+**Avisos** (`devolucion_ruta.avisos` → tablero de recepción y resumen diario
+por correo): sin contar 24/48 h, NC sin aprobar 3 días, NC anulada, RC
+esperando su NC 48 h. **Medición** (`devolucion_ruta.medicion`,
+`GET /api/devoluciones/tablero`): horas rechazo → conteo y conteo → aprobación
+(mediana/p90, verificadas por Siesa aparte), faltante de retorno valorizado
+con `valor_unitario` de la línea de factura (`f470_vlr_neto / f470_cant_base`,
+sin valor → contado aparte, nunca cero), cuadre de bultos por ruta.
+
+**Trinquetes AST** (con meta-tests: lo que deben ver, lo sano que no, la hija
+que no cuenta, pisos): toda función de `app/` que escribe `estado_entrega`
+llama a `sincronizar_con_parada` (inventario vacío); solo `_crear_de_ruta`
+pasa `recaudo_entrega_id` a `crear_devolucion`; solo `cambiar_estado` escribe
+el estado (y `crear_devolucion` el inicial); `_destino_vendible` tiene un solo
+llamador (`liberar_reingreso`, que empieza exigiendo `nc_aprobada_siesa`), y
+`confirmar_entrada_fisica` solo resuelve el bin de averías con
+`es_averiado=True` literal. `RESTAS_DECLARADAS` suma
+`devolucion_cliente_service.py` (la liberación, con su contrapartida).
+
+**Endpoints** (`/api/devoluciones`): `GET /llegadas`, `POST /llegadas/<ruta>/bulto`,
+`POST /llegadas/<ruta>/cerrar`, `POST /<id>/preparar-conteo` (amarra a la
+factura, con red), `GET /tablero` (recepción); `POST /verificar-nc`
+(supervisión); `marcar-nc-aprobada` exige `motivo`. `/api/rutas/<id>/liquidar`
+y `/liquidar-completo` aceptan `motivo_devoluciones`; `/liquidar-completo`
+resincroniza la devolución con la corrección del líder si no se contó.
+
+### Lo que NO cubre, dicho
+
+- **El 251126 con dos líneas del mismo rowid (sanas a NB1 + averiadas a AV1)
+  no se probó contra Siesa**: por eso la línea mixta va entera a la bodega de
+  la factura y el traslado de averías sale después. Probarlo en QA antes de
+  cambiarlo.
+- **`f350_ind_estado = 2` como «anulada» es el valor estándar de Siesa, no
+  verificado en vivo**: solo se usa para avisar, nunca para decidir.
+- **La consulta de NC trae las 100 más recientes**: una NC más vieja queda
+  `fuera_de_la_consulta` y se marca a mano. Sin consecutivo conocido
+  (motivo DIAN manual), igual.
+- **Entre que Siesa aprueba y el cron lo lee** (hasta 30 min), la carga inicial
+  de stock puede contar esas unidades dos veces (Siesa ya las tiene; el WMS las
+  tiene en DEVOLUCION, que no resta del bucket). Se corrige en la liberación.
+- **`Producto.stock_averiado` significa «no vendible»**: ahora incluye la zona
+  de devoluciones y el catálogo de admin lo rotula «averiadas».
+- **Las devoluciones anteriores al deploy** quedan como estaban; las de rutas
+  aún no liquidadas las asegura la liquidación (EN_CAMION) y bloquean hasta
+  contarlas o forzar.
+- **`/api/rutas/bultos-rechazados`** quedó sin pantalla (la reemplaza
+  «Llegó el camión») y declarado en `DEUDA_SIN_UI`; candidato a borrar junto con
+  `RutaService.bultos_rechazados`, que sus tests ejercen.
+- La devolución se vincula a la factura al recibir/contar/liquidar, nunca al
+  confirmar la parada (sin red): una PARCIAL con una referencia que la factura
+  no trae se ve recién ahí (aviso, y se cuenta en 0).
+- El conductor sigue sin mandar el `f470_rowid` por referencia: la doble unidad
+  la resuelve recepción contando por línea.
+
+### Decisiones abiertas para el dueño
+
+1. ¿Quién puede forzar la liquidación con devoluciones sin contar? Hoy el mismo
+   `_solo_admin` que liquida.
+2. Un FALTANTE (total o parcial) deja la factura con saldo en cartera. ¿Se le
+   cobra al conductor, se da de baja, o se reclama al cliente? El sistema lo
+   mide y lo avisa; no decide.
+3. ¿Encender `DEVOLUCIONES_VERIFICAR_NC` en producción? Solo lee (GET) y marca;
+   la liberación a picking mueve inventario.
+4. Umbrales de aviso (24/48 h, 3 días, 48 h): son constantes provisionales.

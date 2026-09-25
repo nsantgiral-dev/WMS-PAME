@@ -780,6 +780,16 @@ DEUDA_SIN_UI = {
         'ningún institucional se exime de la mora y ningún acuerdo retiene el crédito.',
     '/api/cartera/salud':
         'Frescura de la cartera y retenidos por antigüedad para el Gestor de Cartera.',
+    # 2026-09-24 · m045devol. El panel «BULTOS RECHAZADOS — RE-INGRESAR» de
+    # recepción era solo informativo, y el recepcionista ni lo podía cargar
+    # (este endpoint es de admin: estaba en BASELINE_HEREDADO de permisos). Lo
+    # reemplaza «🚚 Llegó el camión» (`GET /api/devoluciones/llegadas`), que
+    # además recibe los bultos. No se pierde nada: candidato a borrar junto con
+    # `RutaService.bultos_rechazados`, que ejercen los tests de motivo de
+    # rechazo y de ENTREGADO_SIN_PAGO.
+    '/api/rutas/bultos-rechazados':
+        'Reemplazado por /api/devoluciones/llegadas («Llegó el camión», que recibe los '
+        'bultos). Candidato a borrar con RutaService.bultos_rechazados.',
     # 2026-09-24 · Fase 1 de analítica, capa semántica y KPI diario. `/resumen`
     # (la portada 🎯 ¿Cómo vamos?), `/metricas` («Cómo se mide cada cifra» de
     # 🩺 Diagnóstico) y `/kpi/recalcular` (botón de admin de la portada) ya
