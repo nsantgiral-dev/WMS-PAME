@@ -12,7 +12,8 @@ from app.models.recaudo_entrega import EstadoEntrega
 from app.services.ruta_service import RutaService, ConflictError, AdvertenciasDeFlota
 from app.services.permisos_liquidacion import (
     puede_autorizar_credito, puede_confirmar_retencion, puede_corregir_cobro,
-    puede_forzar_cierre_ruta, puede_liquidar, puede_resolver_documento, puede_ver_liquidacion)
+    puede_forzar_cierre_ruta, puede_liquidar, puede_registrar_parada_tardia,
+    puede_resolver_documento, puede_ver_liquidacion)
 from app.utils.fecha import dia_operativo as _dia_operativo, dia_operativo_de as _dia_operativo_de
 
 logger = logging.getLogger(__name__)
@@ -521,7 +522,10 @@ def confirmar_parada(id, tarea_id):
     if not uid:
         return jsonify({'error': 'Token inválido'}), 401
     conductor_ruta = Conductor.query.filter_by(usuario_id=uid, activo=True).first()
-    es_oficina = bool(_con_permiso(puede_corregir_cobro))
+    # La oficina: con la ruta cerrada es una parada tardía (quien liquida);
+    # en tránsito es corregir lo del conductor (quien corrige cobros).
+    es_oficina = bool(_con_permiso(puede_registrar_parada_tardia if ruta.estado == 'ENTREGADA'
+                                   else puede_corregir_cobro))
     if not es_oficina and (not conductor_ruta or conductor_ruta.id != ruta.conductor_id):
         return jsonify({'error': 'Sin acceso a esta ruta'}), 403
     data = request.get_json() or {}
@@ -562,7 +566,7 @@ def confirmar_parada(id, tarea_id):
 @jwt_required()
 def planilla_ruta(id):
     if not _con_permiso(puede_ver_liquidacion):
-        return jsonify({'error': 'Solo admin o jefe puede ver la planilla'}), 403
+        return jsonify({'error': 'Sin permiso para ver la liquidación'}), 403
     try:
         resultado = RutaService.planilla_ruta(id)
     except LookupError as e:
@@ -574,7 +578,7 @@ def planilla_ruta(id):
 @jwt_required()
 def liquidar_ruta(id):
     if not _con_permiso(puede_liquidar):
-        return jsonify({'error': 'Solo admin puede liquidar rutas'}), 403
+        return jsonify({'error': 'Solo admin o el liquidador liquidan rutas'}), 403
     try:
         resultado = RutaService.liquidar_ruta(
             id, usuario_id=_uid(),
@@ -609,7 +613,7 @@ def forzar_cierre_ruta(id):
 def liquidar_ruta_siesa(id):
     """Dispara la liquidación financiera: encola jobs Siesa (142888/142946/142882)."""
     if not _con_permiso(puede_liquidar):
-        return jsonify({'error': 'Solo admin puede liquidar rutas en Siesa'}), 403
+        return jsonify({'error': 'Solo admin o el liquidador envían la liquidación a Siesa'}), 403
     uid = _uid()
     if not uid:
         return jsonify({'error': 'Token inválido'}), 401
@@ -630,7 +634,7 @@ def liquidar_ruta_siesa(id):
 def preview_siesa_recaudo(ruta_id, recaudo_id):
     """Preview de acciones Siesa pendientes para un recaudo específico."""
     if not _con_permiso(puede_ver_liquidacion):
-        return jsonify({'error': 'Solo admin o jefe puede ver preview Siesa'}), 403
+        return jsonify({'error': 'Sin permiso para ver la liquidación'}), 403
     # Validate recaudo belongs to ruta
     from app.models.recaudo_entrega import RecaudoEntrega
     recaudo = RecaudoEntrega.query.get(recaudo_id)
@@ -651,7 +655,7 @@ def confirmar_retencion_recaudo(ruta_id, recaudo_id):
     conductor en campo — desbloquea (o bloquea a propósito) el registro de
     cobro. Ver LiquidacionService.confirmar_retencion."""
     if not _con_permiso(puede_confirmar_retencion):
-        return jsonify({'error': 'Solo admin o jefe puede confirmar retenciones'}), 403
+        return jsonify({'error': 'Solo admin o el líder de cartera confirman una retención'}), 403
     uid = _uid()
     if not uid:
         return jsonify({'error': 'Token inválido'}), 401
@@ -682,7 +686,7 @@ def corregir_monto_recaudo(ruta_id, recaudo_id):
     para cuando la ruta ya pasó de EN_TRANSITO y `confirmar_parada` ya no
     permite editarlo. Ver LiquidacionService.corregir_monto_declarado."""
     if not _con_permiso(puede_corregir_cobro):
-        return jsonify({'error': 'Solo admin o jefe puede corregir el monto declarado'}), 403
+        return jsonify({'error': 'Solo admin o el líder de cartera corrigen el monto declarado'}), 403
     uid = _uid()
     if not uid:
         return jsonify({'error': 'Token inválido'}), 401
@@ -779,11 +783,11 @@ def autorizar_credito_recaudo(ruta_id, recaudo_id):
     """La oficina autoriza como CRÉDITO una parada de contado contraentrega que
     no trajo plata (`credito_no_autorizado`). Razón obligatoria, a la bitácora.
 
-    `_solo_admin`, igual que `/liquidar` y `/liquidar-siesa`: otorgar crédito
-    que nadie evaluó no puede pedir menos que liquidar.
+    `puede_autorizar_credito`: admin y líder de cartera (decisión del dueño,
+    2026-09-25) — otorgar crédito es una decisión de cartera, no de caja.
     """
     if not _con_permiso(puede_autorizar_credito):
-        return jsonify({'error': 'Solo admin puede autorizar un crédito'}), 403
+        return jsonify({'error': 'Solo admin o el líder de cartera autorizan un crédito'}), 403
     uid = _uid()
     if not uid:
         return jsonify({'error': 'Token inválido'}), 401
@@ -902,8 +906,8 @@ def reconciliacion_ruta(ruta_id):
     """
     # Muestra montos cobrados, fugas y qué paradas quedaron sin recibo: es
     # información financiera de la ruta, no operativa. El conductor no la ve.
-    if not _es_admin_o_jefe():
-        return jsonify({'error': 'Solo admin o jefe de almacén'}), 403
+    if not _con_permiso(puede_ver_liquidacion):
+        return jsonify({'error': 'Solo quien ve la liquidación'}), 403
     from app.services.reconciliacion_ruta import reconciliar
     try:
         return jsonify(reconciliar(ruta_id)), 200
@@ -944,8 +948,8 @@ def liquidacion_desglose():
     lugar donde la evidencia está garantizada limpia. Lo que sí lo detecta es
     la alerta que el gateway encola, y que vive en esta base.
     """
-    if not _es_admin_o_jefe():
-        return jsonify({'error': 'Solo admin o jefe de almacén puede ver el desglose'}), 403
+    if not _con_permiso(puede_ver_liquidacion):
+        return jsonify({'error': 'Solo quien ve la liquidación puede ver el desglose'}), 403
 
     from app.models.recaudo_entrega import RecaudoEntrega
     from app.models.siesa_job import SiesaJob
@@ -1293,7 +1297,7 @@ def liquidacion_desglose():
 def liquidacion_dashboard():
     """Dashboard de liquidación: rutas del día agrupadas por estado financiero."""
     if not _con_permiso(puede_ver_liquidacion):
-        return jsonify({'error': 'Solo admin o jefe de almacén puede ver el dashboard de liquidación'}), 403
+        return jsonify({'error': 'Sin permiso para ver la liquidación'}), 403
 
     from datetime import date as _date
     from sqlalchemy import and_, func, or_
@@ -1504,7 +1508,7 @@ def liquidacion_dashboard():
 def liquidacion_detalle(id):
     """Detalle de liquidación de una ruta: recaudos + datos de factura Siesa."""
     if not _con_permiso(puede_ver_liquidacion):
-        return jsonify({'error': 'Solo admin o jefe de almacén puede ver detalle de liquidación'}), 403
+        return jsonify({'error': 'Sin permiso para ver la liquidación'}), 403
     try:
         from app.services.liquidacion_service import LiquidacionService
         resultado = LiquidacionService.preparar_detalle_ruta(id)
@@ -1519,5 +1523,7 @@ def liquidacion_detalle(id):
         'autorizar_credito': puede_autorizar_credito(u),
         'corregir_cobro': puede_corregir_cobro(u),
         'resolver_documento': puede_resolver_documento(u),
+        'parada_tardia': puede_registrar_parada_tardia(u),
+        'forzar_cierre': puede_forzar_cierre_ruta(u),
     }
     return jsonify(resultado), 200

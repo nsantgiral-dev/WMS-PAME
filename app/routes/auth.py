@@ -14,6 +14,7 @@ _ROLES_VALIDOS = (
     Roles.OPERARIO, Roles.EMPACADOR, Roles.RECEPCIONISTA, Roles.TIENDA, Roles.CONDUCTOR,
     Roles.COMPRAS, Roles.PICKER_TRASLADO, Roles.PACKER_TRASLADO,
     Roles.CONTROL_FLOTA,
+    Roles.LIDER_CARTERA, Roles.LIQUIDADOR,
 )
 
 def _usuario_dict_con_bodega(usuario):

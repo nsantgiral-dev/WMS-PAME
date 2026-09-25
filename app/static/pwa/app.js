@@ -161,16 +161,38 @@ const _TABS_OCULTAS_SUPERVISOR = ['tab-usuarios', 'tab-muelle', 'tab-liquidacion
 const _ROLES_ANALITICA = ['admin', 'supervisor', 'jefe_almacen', 'gerente'];
 
 /**
+ * Roles que entran al shell de admin pero SOLO ven sus pestañas; la primera es
+ * donde aterrizan. No es cosmético: dejarles a la vista pestañas que el
+ * backend les va a negar con 403 enseña a ignorar errores.
+ *
+ * - `control_flota`: el procedimiento dice que ve el tablero y no aprueba.
+ * - `liquidador` (2026-09-25): liquida rutas, registra cobros, reintenta los
+ *   envíos de la liquidación (`permisos_liquidacion`). No es admin: no toca
+ *   usuarios, maestros, inventario ni Siesa en general.
+ * - `lider_cartera` (2026-09-25): los retenidos por cartera y, en Liquidación,
+ *   confirmar retenciones, corregir cobros y autorizar crédito.
+ *
+ * `test_permisos_por_pantalla` exige que cada GET de esas pantallas le
+ * conteste a ese rol, y `test_roles_plata` corre esta función de verdad.
+ */
+const _TABS_DE_ROL = {
+  control_flota: ['tab-flota'],
+  liquidador:    ['tab-liquidacion'],
+  lider_cartera: ['tab-cartera', 'tab-liquidacion'],
+};
+
+// ⛔ Cartera: pestaña propia del líder de cartera. Los demás ven el mismo
+// bloque en «Operación hoy» (cartera.js pinta los dos contenedores).
+const _TABS_SOLO_DE_ROL = ['tab-cartera'];
+
+/**
  * Route user to the correct screen and start timers based on their role.
  * @param {string} rol - User role (admin, operario, recepcionista, conductor, tienda, compras, etc.).
  */
 function mostrarSegunRol(rol) {
   pararTimers();
-  const esAdmin = ['admin','gerente','jefe_almacen','supervisor','control_flota'].includes(rol);
-  // control_flota entra al shell de admin pero SOLO ve Flota. No es cosmética:
-  // el procedimiento dice que ve el tablero y no aprueba, y dejarle a la vista
-  // pestañas que el backend le va a negar con 403 enseña a ignorar errores.
-  const soloFlota = rol === 'control_flota';
+  const tabsDeRol = _TABS_DE_ROL[rol] || null;
+  const esAdmin = ['admin','gerente','jefe_almacen','supervisor'].includes(rol) || !!tabsDeRol;
   const esSupervisor = rol === 'supervisor';
   const esRecepcion = rol === 'recepcionista';
   const esConductor = rol === 'conductor';
@@ -208,19 +230,26 @@ function mostrarSegunRol(rol) {
     // traer pestañas escondidas por la sesión anterior (supervisor,
     // control_flota) — sin este reset, un admin que entra justo después de
     // un supervisor hereda sus pestañas ocultas hasta que alguien recarga.
-    document.querySelectorAll('.nav-tab').forEach(el => { el.style.display = ''; });
+    document.querySelectorAll('.nav-tab').forEach(el => {
+      const oc = el.getAttribute('onclick') || '';
+      el.style.display = _TABS_SOLO_DE_ROL.some(t => oc.includes(`'${t}'`)) ? 'none' : '';
+    });
     if (!_ROLES_ANALITICA.includes(rol)) {
       document.querySelectorAll('.nav-tab[onclick*="tab-analitica"]').forEach(el => { el.style.display = 'none'; });
     }
     const btnModoOp = document.getElementById('nav-modo-operario-supervisor');
     if (btnModoOp) btnModoOp.style.display = 'none';
-    if (soloFlota) {
+    if (tabsDeRol) {
       pantalla('pantalla-admin');
       if (OPERARIO) actualizarUI(OPERARIO);
       document.querySelectorAll('.nav-tab').forEach(el => {
-        if (!(el.getAttribute('onclick') || '').includes('tab-flota')) el.style.display = 'none';
+        const oc = el.getAttribute('onclick') || '';
+        el.style.display = tabsDeRol.some(t => oc.includes(`'${t}'`)) ? '' : 'none';
       });
-      tab('tab-flota');
+      tab(tabsDeRol[0]);
+      // Flota carga al entrar y no se refresca sola; las de plata sí, como
+      // para el admin (cargarAdmin decide qué refresca cada pestaña).
+      if (rol !== 'control_flota') TIMER_ADMIN = setInterval(() => cargarAdmin(true), 30000);
       return;
     }
     pantalla('pantalla-admin');
@@ -1016,6 +1045,7 @@ async function cargarAdmin(desdeTimer = false) {
   else if (TAB === 'tab-traslados') await cargarTrasladosAdmin();
   else if (TAB === 'tab-reposicion') await cargarReposicion();
   else if (TAB === 'tab-liquidacion') await cargarLiquidacion();
+  else if (TAB === 'tab-cartera') { if (typeof carteraCargarBloque === 'function') await carteraCargarBloque(); }
   // Layout es un módulo de configuración, no de datos en vivo — no se autorefresca
   // cada 30s (rompía el scroll y cualquier modal abierto mientras se revisaba).
   // Solo carga al entrar manualmente a la pestaña.
@@ -1035,7 +1065,7 @@ async function cargarAdmin(desdeTimer = false) {
 
 /** @param {string} id - Tab element ID to activate (e.g. 'tab-dashboard'). */
 function tab(id) {
-  const TABS = ['tab-dashboard','tab-analitica','tab-pedidos','tab-requisiciones','tab-traslados','tab-bodega','tab-operarios','tab-usuarios','tab-stock','tab-connekta','tab-muelle','tab-rutas','tab-inventario','tab-liquidacion','tab-layout','tab-reposicion','tab-compras','tab-etiquetas','tab-vigia','tab-flota','tab-manuales'];
+  const TABS = ['tab-dashboard','tab-analitica','tab-pedidos','tab-requisiciones','tab-traslados','tab-bodega','tab-operarios','tab-usuarios','tab-stock','tab-connekta','tab-muelle','tab-rutas','tab-inventario','tab-liquidacion','tab-cartera','tab-layout','tab-reposicion','tab-compras','tab-etiquetas','tab-vigia','tab-flota','tab-manuales'];
   TABS.forEach(t => {
     const el = document.getElementById(t);
     if (el) el.style.display = t === id ? 'block' : 'none';
@@ -3244,6 +3274,10 @@ function _formUsuario(u = {}) {
         <optgroup label="── Compras ──">
           <option value="compras" ${u.rol==='compras'?'selected':''}>Compras</option>
         </optgroup>
+        <optgroup label="── Plata de la ruta y cartera ──">
+          <option value="liquidador" ${u.rol==='liquidador'?'selected':''}>Liquidador (liquida rutas y registra cobros)</option>
+          <option value="lider_cartera" ${u.rol==='lider_cartera'?'selected':''}>Líder de cartera (autoriza crédito y retenciones)</option>
+        </optgroup>
       </select>
       <!-- Campos conductor (solo si rol=conductor) -->
       <div id="u-conductor-fields" style="display:${u.rol==='conductor'?'block':'none'};background:var(--bg-input);border:1px solid var(--info-brd);border-radius:8px;padding:14px;">
@@ -3313,7 +3347,7 @@ function _formUsuario(u = {}) {
           <input type="checkbox" id="u-puede-autorizar-cartera" ${u.puede_autorizar_cartera?'checked':''} style="width:20px;height:20px;">
           <div>
             <div style="font-size:var(--fs-sm);font-weight:600;color:var(--warn-tx);">Autoriza cartera</div>
-            <div style="font-size:var(--fs-xs);color:var(--tx3);">Puede dejar salir a crédito un pedido retenido por mora o cupo, con motivo (respaldo del Gestor de Cartera)</div>
+            <div style="font-size:var(--fs-xs);color:var(--tx3);">Puede dejar salir a crédito un pedido retenido por mora o cupo, con motivo (respaldo del Gestor de Cartera). Vale para admin, supervisor, jefe de almacén y gerente; el líder de cartera ya lo tiene por su rol</div>
           </div>
         </label>
         <label style="display:flex;align-items:center;gap:12px;cursor:pointer;">

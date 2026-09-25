@@ -27,20 +27,26 @@ function _carteraAntiguedad(h) {
   return `${Math.floor(h / 24)} d`;
 }
 
+/** Los contenedores del bloque: el del tablero («Operación hoy») y el de la
+ *  pestaña ⛔ Cartera del líder de cartera. Uno solo pinta los dos. */
+const _CARTERA_CONTENEDORES = ['cartera-bloque', 'cartera-bloque-tab'];
+
 /** Bloque del tablero: pedidos retenidos por cartera y su antigüedad. */
 async function carteraCargarBloque() {
-  const el = document.getElementById('cartera-bloque');
-  if (!el) return;
+  const els = _CARTERA_CONTENEDORES.map(id => document.getElementById(id)).filter(Boolean);
+  if (!els.length) return;
+  const pintar = (html, display) => els.forEach(el => {
+    el.style.display = display;
+    if (html !== null) el.innerHTML = html;
+  });
   let d;
   try {
     d = await get('/api/cartera/panel/retenciones?estado=RETENIDO');
   } catch (e) {
-    if (e.status === 403) { el.style.display = 'none'; return; }
-    el.style.display = '';
-    el.innerHTML = `<div style="font-size:var(--fs-xs);color:var(--err-tx);">No se pudo leer cartera: ${esc(e.message || '')}</div>`;
+    if (e.status === 403) { pintar(null, 'none'); return; }
+    pintar(`<div style="font-size:var(--fs-xs);color:var(--err-tx);">No se pudo leer cartera: ${esc(e.message || '')}</div>`, '');
     return;
   }
-  el.style.display = '';
   CARTERA_RETENIDAS = d.retenciones || [];
   CARTERA_PUEDE_AUTORIZAR = !!d.puede_autorizar;
   CARTERA_USUARIO_ID = d.usuario_id || null;
@@ -72,7 +78,7 @@ async function carteraCargarBloque() {
         <div style="margin-top:6px;display:flex;flex-wrap:wrap;gap:6px;">${botones}</div>
       </div>`;
   }).join('');
-  el.innerHTML = `
+  pintar(`
     <div style="display:flex;justify-content:space-between;align-items:center;">
       <div>
         <div style="font-size:var(--fs-sm);font-weight:800;color:var(--warn-tx);">⛔ Retenidos por cartera</div>
@@ -85,7 +91,7 @@ async function carteraCargarBloque() {
     </div>
     ${n ? filas : `<div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:6px;">Ningún pedido retenido.</div>`}
     ${n > 20 ? `<div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:6px;">Mostrando 20 de ${esc(n)}.</div>` : ''}
-    ${CARTERA_PUEDE_LOTE ? `<button onclick="carteraLoteVer()" style="width:100%;margin-top:10px;padding:8px;border-radius:8px;border:1px solid var(--brd);background:var(--bg-input);color:var(--tx2);font-size:var(--fs-xs);font-weight:600;cursor:pointer;">Paradas de crédito anteriores a la regla de contado</button>` : ''}`;
+    ${CARTERA_PUEDE_LOTE ? `<button onclick="carteraLoteVer()" style="width:100%;margin-top:10px;padding:8px;border-radius:8px;border:1px solid var(--brd);background:var(--bg-input);color:var(--tx2);font-size:var(--fs-xs);font-weight:600;cursor:pointer;">Paradas de crédito anteriores a la regla de contado</button>` : ''}`, '');
 }
 
 async function _carteraMotivo(titulo) {

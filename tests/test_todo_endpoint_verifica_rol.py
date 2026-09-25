@@ -42,6 +42,13 @@ _BASE = {
     # `puede_reintentar_job` (el tipo de job decide cuál exige).
     '_con_permiso', 'puede_reintentar_job',
 }
+# Y toda función `puede_*` de `permisos_liquidacion` (roles «liquidador» y
+# «líder de cartera», 2026-09-25): una ruta que la llama directo —la lista de
+# envíos (`puede_ver_jobs`), el lote de crédito de cartera— consulta el rol ahí.
+_BASE |= {n.name for n in ast.parse(
+    (Path(__file__).resolve().parents[1] / 'app' / 'services' / 'permisos_liquidacion.py')
+    .read_text(encoding='utf-8')).body
+    if isinstance(n, ast.FunctionDef) and n.name.startswith('puede_')}
 
 # ══════════════════════════════════════════════════════════════════════════
 # BASELINE — rutas SIN control de rol que hoy están así por diseño.

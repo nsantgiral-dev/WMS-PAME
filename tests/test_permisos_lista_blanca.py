@@ -65,7 +65,8 @@ class TestControlFlotaNoOperaAlmacen:
 
     def test_la_lista_blanca_no_tiene_a_quien_no_opera_almacen(self):
         from app.routes._auth_helpers import Roles
-        for rol in (Roles.CONDUCTOR, Roles.TIENDA, Roles.CONTROL_FLOTA):
+        for rol in (Roles.CONDUCTOR, Roles.TIENDA, Roles.CONTROL_FLOTA,
+                    Roles.LIQUIDADOR, Roles.LIDER_CARTERA):
             assert rol not in Roles.PERSONAL_ALMACEN
 
 
@@ -130,6 +131,29 @@ ABIERTAS_POR_ROL = {
         'POST /api/traslados/invalidar-cache-stock': 'solo vacía el caché de stock del proceso: no escribe datos',
         'POST /flota/avisos/entrega': 'flota: webhook del canal de mensajería (503 sin configurar)',
     },
+    # Los roles de la plata (2026-09-25). Sus escrituras propias (liquidar,
+    # registrar cobro, confirmar retención…) contestan 404 con ids que no
+    # existen **después** de mirar el rol: este inventario no las ve. Las mide
+    # con ids reales `test_roles_plata.py::TestPorHttp`.
+    'liquidador': {
+        'POST /api/auth/login': _LOGIN,
+        'POST /api/cartera/habilitaciones': _SERVICIO,
+        'POST /api/cartera/retenciones/<int:rid>/autorizar': _SERVICIO,
+        'POST /api/cartera/retenciones/<int:rid>/convertir-contado': _SERVICIO,
+        'POST /api/cartera/retenciones/<int:rid>/reevaluar': _SERVICIO,
+        'POST /api/mobile/sync': _SYNC,
+        'POST /flota/avisos/entrega': 'flota: webhook del canal de mensajería (503 sin configurar)',
+    },
+    'lider_cartera': {
+        'POST /api/auth/login': _LOGIN,
+        'POST /api/cartera/habilitaciones': _SERVICIO,
+        'POST /api/cartera/panel/credito-lote': 'autoriza en lote paradas de crédito no autorizado: es suyo (400 sin motivo)',
+        'POST /api/cartera/retenciones/<int:rid>/autorizar': _SERVICIO,
+        'POST /api/cartera/retenciones/<int:rid>/convertir-contado': _SERVICIO,
+        'POST /api/cartera/retenciones/<int:rid>/reevaluar': _SERVICIO,
+        'POST /api/mobile/sync': _SYNC,
+        'POST /flota/avisos/entrega': 'flota: webhook del canal de mensajería (503 sin configurar)',
+    },
 }
 
 
@@ -188,18 +212,12 @@ def test_piso_de_escrituras_medidas(app):
 
 _NEGRA = {'CONDUCTOR', 'TIENDA'}
 
-#: (archivo, función) → por qué. **Solo encoge.**
-LISTAS_NEGRAS_DECLARADAS = {
-    # Inventario movió la decisión de `_auth_helpers._puede_autorizar_cartera`
-    # a `cartera_service.puede_autorizar` (una política para la ruta y la
-    # salud); la entrada se muda con ella, no se agrega otra.
-    ('cartera_service.py', 'puede_autorizar'):
-        'permiso por PERSONA (casilla) o el rol de cartera cuando exista; el rol solo '
-        'descarta a quien nunca opera despachos (conductor, tienda). Pasa a lista blanca '
-        'cuando exista el rol «líder de cartera» (decisión del dueño)',
-    ('_auth_helpers.py', '_ve_cartera'):
-        'mismo permiso por persona que cartera_service.puede_autorizar',
-}
+#: (archivo, función) → por qué. **Solo encoge.** Vacío desde el 2026-09-25:
+#: `cartera_service.puede_autorizar` y `_ve_cartera` eran las dos últimas
+#: («todos menos conductor y tienda» con la casilla); con el rol «líder de
+#: cartera» pasaron a lista blanca (`Roles.CARTERA_POR_ROL`,
+#: `Roles.CARTERA_CON_CASILLA`).
+LISTAS_NEGRAS_DECLARADAS = {}
 
 
 def _conjunto_de_roles(nodo):
@@ -257,6 +275,18 @@ class TestNingunaListaNegraDeRoles:
 
     def test_solo_encoge(self):
         assert not set(LISTAS_NEGRAS_DECLARADAS) - _encontradas()
+
+    def test_piso_el_detector_recorre_el_codigo(self):
+        """Con el inventario en cero, un escáner roto también da cero: que
+        recorra de verdad `app/` (comparaciones de `.rol` contra un conjunto)."""
+        n = 0
+        for f in sorted((RAIZ / 'app').rglob('*.py')):
+            for nodo in ast.walk(ast.parse(f.read_text(encoding='utf-8'))):
+                if (isinstance(nodo, ast.Compare) and isinstance(nodo.left, ast.Attribute)
+                        and nodo.left.attr == 'rol'
+                        and any(isinstance(o, (ast.In, ast.NotIn)) for o in nodo.ops)):
+                    n += 1
+        assert n >= 100, f'solo {n} comparaciones de .rol en app/: ¿se rompió el recorrido?'
 
     def test_meta_ve_las_formas(self):
         src = ("_X = {Roles.CONDUCTOR, Roles.TIENDA}\n"

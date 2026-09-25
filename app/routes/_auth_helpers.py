@@ -17,6 +17,12 @@ class Roles:
     CONTROL_FLOTA     = 'control_flota'     # dueño del registro de flota — NO aprueba
     PICKER_TRASLADO   = 'picker_traslado'   # picking de solicitudes de traslado
     PACKER_TRASLADO   = 'packer_traslado'   # packing/verificacion de solicitudes de traslado
+    # La plata de la ruta y la cartera, sin operar almacén (decisión del dueño,
+    # 2026-09-25). Qué puede cada uno vive en `permisos_liquidacion` (una
+    # función por operación) y en `cartera_service.puede_autorizar`; acá solo
+    # el nombre. Ninguno está en `PERSONAL_ALMACEN` ni en `GESTION`.
+    LIDER_CARTERA     = 'lider_cartera'     # autoriza cartera y crédito, confirma retenciones, corrige cobros
+    LIQUIDADOR        = 'liquidador'        # liquida rutas, registra cobros, reintenta RC/DC/NC
 
     # Grupos reutilizables
     #
@@ -92,14 +98,23 @@ class Roles:
     #: tienda», así que `control_flota` —y todo rol que se cree mañana— veía el
     #: costo de compra y podía registrar un conteo, descomponer un empaque o
     #: sincronizar un packing. Un rol nuevo no entra solo: se agrega con una
-    #: línea acá (cuando existan «líder de cartera» o «liquidador», se decide
-    #: si operan almacén; hoy no).
+    #: línea acá. «Líder de cartera» y «liquidador» NO están (decisión del
+    #: 2026-09-25): trabajan la plata de la ruta, no el inventario.
     PERSONAL_ALMACEN = (
         ADMIN, SUPERVISOR, JEFE_ALMACEN, GERENTE,
         OPERARIO, EMPACADOR, RECEPCIONISTA,
         COMPRAS,
         PICKER_TRASLADO, PACKER_TRASLADO,
     )
+
+    #: **Quién decide una retención de cartera por su ROL** (sin casilla). El
+    #: líder de cartera es el que autoriza (decisión del dueño, 2026-09-25).
+    CARTERA_POR_ROL = (LIDER_CARTERA,)
+    #: **En qué roles vale la casilla `puede_autorizar_cartera`** (permiso por
+    #: persona, nace apagado). Lista blanca: gestión, que opera los despachos
+    #: que la compuerta retiene. Antes era «todos menos conductor y tienda»
+    #: (lista negra): un rol creado mañana con la casilla marcada decidía.
+    CARTERA_CON_CASILLA = GESTION
 
 
 def _puede_empacar(usuario) -> bool:
@@ -233,10 +248,9 @@ def _get_uid():
 def _puede_autorizar_cartera():
     """El usuario si puede autorizar una excepción de cartera desde el WMS.
 
-    Un permiso por persona (`puede_autorizar_cartera`), no un rol: la vía
-    principal es el Gestor de Cartera y esto es el respaldo. Nace apagado; ni
-    el admin lo tiene por rol. Conductor y tienda nunca, aunque alguien les
-    marque la casilla: no operan despachos.
+    La política es `cartera_service.puede_autorizar`: el líder de cartera por
+    su rol, o la casilla por persona (`puede_autorizar_cartera`, nace apagada)
+    en un rol de gestión. La vía principal sigue siendo el Gestor de Cartera.
     """
     try:
         uid = int(get_jwt_identity())
@@ -261,9 +275,8 @@ def _ve_cartera():
         return None
     if u.rol in Roles.GESTION:
         return u
-    if u.rol in (Roles.CONDUCTOR, Roles.TIENDA):
-        return None
-    return u if bool(getattr(u, 'puede_autorizar_cartera', False)) else None
+    from app.services.cartera_service import puede_autorizar
+    return u if puede_autorizar(u) else None
 
 
 def exige_token_servicio(variable: str, que: str = ''):

@@ -459,26 +459,35 @@ def reintentar_job(job_id):
 @reposicion_bp.route('/siesa-jobs', methods=['GET'])
 @jwt_required()
 def listar_jobs():
-    """Lista todos los jobs (filtrable por estado). Solo supervisores y admin."""
+    """Lista los jobs (filtrable por estado y tipos). Supervisión los ve
+    todos; quien ve la liquidación (liquidador, líder de cartera), solo los de
+    la liquidación (`permisos_liquidacion.puede_ver_jobs`). Cada job dice si
+    quien mira puede reintentarlo: la pantalla no ofrece un botón que rebota."""
+    from app.extensions import db as _db
     from app.models.usuario import Usuario
+    from app.services.permisos_liquidacion import puede_reintentar_job, puede_ver_jobs
     try:
         uid = int(get_jwt_identity())
     except (TypeError, ValueError):
         return jsonify({'error': 'Token inválido'}), 401
-    u = Usuario.query.get(uid)
-    if not u or u.rol not in Roles.SUPERVISION:
-        return jsonify({'error': 'Sin permiso — solo admin/supervisor/jefe_almacen'}), 403
+    u = _db.session.get(Usuario, uid)
     estado = request.args.get('estado')
     tipos = request.args.get('tipos')  # CSV: NOTA_CREDITO_FACTURA,RECIBO_CAJA,...
+    lista_tipos = [t.strip() for t in (tipos or '').split(',') if t.strip()]
+    if not puede_ver_jobs(u, lista_tipos):
+        return jsonify({'error': 'Sin permiso para ver estos envíos a Siesa'}), 403
     q = SiesaJob.query.order_by(SiesaJob.fecha_creacion.desc())
     if estado:
         q = q.filter(SiesaJob.estado == estado.upper())
-    if tipos:
-        lista_tipos = [t.strip() for t in tipos.split(',') if t.strip()]
-        if lista_tipos:
-            q = q.filter(SiesaJob.tipo.in_(lista_tipos))
+    if lista_tipos:
+        q = q.filter(SiesaJob.tipo.in_(lista_tipos))
     jobs = q.limit(100).all()
-    return jsonify({'jobs': [j.to_dict() for j in jobs], 'total': len(jobs)}), 200
+    salida = []
+    for j in jobs:
+        d = j.to_dict()
+        d['puede_reintentar'] = puede_reintentar_job(u, j.tipo)
+        salida.append(d)
+    return jsonify({'jobs': salida, 'total': len(jobs)}), 200
 
 
 # ──────────────────────────────────────────────────────────────────────────────

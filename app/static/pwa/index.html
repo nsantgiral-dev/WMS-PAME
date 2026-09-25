@@ -1307,6 +1307,10 @@
       <div class="nav-tab" onclick="tab('tab-rutas')">🗺️ Rutas</div>
       <div class="nav-tab" onclick="tab('tab-inventario')">📊 Inventario</div>
       <div class="nav-tab" onclick="tab('tab-liquidacion')">💰 Liquidación</div>
+      <!-- Solo el líder de cartera (app.js `_TABS_DE_ROL`); los demás ven el
+           mismo bloque en «Operación hoy». Va en la MISMA posición que en el
+           arreglo TABS de tab(): el match es por índice. -->
+      <div class="nav-tab" onclick="tab('tab-cartera')" style="display:none;">⛔ Cartera</div>
       <div class="nav-tab" onclick="tab('tab-layout')">🧭 Layout</div>
       <div class="nav-tab" onclick="tab('tab-reposicion')">📦 Reposición</div>
       <div class="nav-tab" onclick="tab('tab-compras')">🛒 Compras</div>
@@ -2354,6 +2358,12 @@
   </div><!-- /tab-reposicion -->
 
   <!-- ═══════════ TAB LIQUIDACIÓN ═══════════ -->
+  <div id="tab-cartera" class="admin-content" style="display:none;">
+    <div style="font-size:var(--fs-md);font-weight:700;margin-bottom:4px;">⛔ Cartera</div>
+    <div style="font-size:var(--fs-xs);color:var(--tx3);margin-bottom:16px;">Pedidos a crédito retenidos por mora o cupo. Autorice con motivo o páselos a contado; la vía principal sigue siendo el Gestor de Cartera.</div>
+    <div id="cartera-bloque-tab" style="display:none;background:var(--bg-s);border:1px solid var(--warn-brd);border-radius:14px;padding:14px;margin-bottom:10px;"></div>
+  </div>
+
   <div id="tab-liquidacion" class="admin-content" style="display:none;">
     <div style="font-size:var(--fs-md);font-weight:700;margin-bottom:4px;">💰 Liquidación Financiera</div>
     <div style="font-size:var(--fs-xs);color:var(--tx3);margin-bottom:16px;">Cuadre financiero de rutas — el Líder verifica plata, devoluciones y retenciones. Un click dispara NCE/RC/DC en Siesa.</div>

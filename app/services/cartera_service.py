@@ -1848,28 +1848,30 @@ def tareas_retenidas() -> set:
 
 def puede_autorizar(usuario) -> bool:
     """¿Esta persona puede decidir una retención desde el WMS? **Una política**
-    para la ruta (`_puede_autorizar_cartera`) y para la salud.
+    para la ruta (`_puede_autorizar_cartera`), la vista (`_ve_cartera`) y la
+    salud.
 
-    El permiso por persona (`puede_autorizar_cartera`) o el rol de cartera, si
-    existe (decisión del dueño 2026-09-25: «el líder de cartera es el que
-    autoriza»; otro frente crea el rol). Activo, y nunca conductor ni tienda.
+    Decisión del dueño (2026-09-25): **el líder de cartera autoriza por su
+    rol**; la casilla por persona (`puede_autorizar_cartera`, nace apagada)
+    vale en un rol de gestión (`Roles.CARTERA_CON_CASILLA`: el admin con la
+    casilla, como antes). Las dos son listas blancas: un rol que se cree
+    mañana no decide aunque alguien le marque la casilla. Que el iniciador no
+    autorice su propio pedido lo decide `autorizar`, no esta función.
     """
     from app.routes._auth_helpers import Roles
     if usuario is None or not getattr(usuario, 'activo', False):
         return False
-    if usuario.rol in (Roles.CONDUCTOR, Roles.TIENDA):
-        return False
-    if bool(getattr(usuario, 'puede_autorizar_cartera', False)):
+    if usuario.rol in roles_que_autorizan():
         return True
-    return usuario.rol in roles_que_autorizan()
+    return (usuario.rol in Roles.CARTERA_CON_CASILLA
+            and bool(getattr(usuario, 'puede_autorizar_cartera', False)))
 
 
 def roles_que_autorizan() -> tuple:
-    """Los roles que autorizan cartera por sí solos: los que `Roles` declare
-    como de cartera (`CARTERA`, `LIDER_CARTERA`). Hoy ninguno existe."""
+    """Los roles que autorizan cartera por sí solos (`Roles.CARTERA_POR_ROL`):
+    el líder de cartera."""
     from app.routes._auth_helpers import Roles
-    return tuple(v for v in (getattr(Roles, 'CARTERA', None),
-                             getattr(Roles, 'LIDER_CARTERA', None)) if v)
+    return tuple(Roles.CARTERA_POR_ROL)
 
 
 def autorizadores() -> list:

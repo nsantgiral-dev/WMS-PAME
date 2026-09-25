@@ -70,10 +70,13 @@ PANTALLAS = [
     # Bloque «Retenidos por cartera» del tablero (m044cartera): lo ve gestión;
     # decidir exige además el permiso `puede_autorizar_cartera` (POST, fuera
     # de este guard).
-    # El lote de paradas anteriores a la regla de contado es `_solo_admin`:
-    # su botón solo aparece con `puede_autorizar_lote`.
-    ('cartera.js',         'carteraLote', ['admin']),
-    ('cartera.js',         None,    ['admin', 'supervisor', 'jefe_almacen', 'gerente']),
+    # El lote de paradas anteriores a la regla de contado es autorizar crédito
+    # (`puede_autorizar_credito`: admin y líder de cartera); su botón solo
+    # aparece con `puede_autorizar_lote`.
+    ('cartera.js',         'carteraLote', ['admin', 'lider_cartera']),
+    # El líder de cartera lo abre en su pestaña ⛔ Cartera (app.js `_TABS_DE_ROL`).
+    ('cartera.js',         None,    ['admin', 'supervisor', 'jefe_almacen', 'gerente',
+                                     'lider_cartera']),
     ('rutas.js',      'condCargar', ['conductor']),
     ('rutas.js',      'condVer',    ['conductor']),
     ('rutas.js',      None,         ['admin']),
@@ -91,7 +94,9 @@ PANTALLAS = [
     ('app.js',        None,         ['admin']),
     ('conteo.js',     None,         ['admin']),
     ('reposicion.js', None,         ['admin']),
-    ('liquidacion.js', None,        ['admin']),
+    # 💰 Liquidación: la ven quien la ve (`permisos_liquidacion.puede_ver_liquidacion`):
+    # el liquidador y el líder de cartera aterrizan acá (app.js `_TABS_DE_ROL`).
+    ('liquidacion.js', None,        ['admin', 'jefe_almacen', 'liquidador', 'lider_cartera']),
     ('layout.js',     None,         ['admin']),
     ('traslados.js',  None,         ['admin']),
     ('kardex.js',     None,         ['admin']),

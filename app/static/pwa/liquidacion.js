@@ -418,14 +418,25 @@ function _liqJobCard(j, mostrarReintentar) {
         </div>` : ''}
       ${j.referencia_tipo ? `
         <div style="font-size:var(--fs-xs);color:var(--tx3);">Ref: ${esc(j.referencia_tipo)} #${esc(j.referencia_id || '—')}</div>` : ''}
-      ${mostrarReintentar ? `
+      ${mostrarReintentar && j.puede_reintentar !== false ? `
         <div style="display:flex;justify-content:flex-end;margin-top:8px;">
-          <button onclick="repReintentar(${esc(j.id)})"
+          <button onclick="liqReintentarJob(${esc(j.id)})"
             style="padding:6px 14px;background:var(--pm-fill);border:none;border-radius:6px;color:#fff;font-size:var(--fs-xs);font-weight:700;cursor:pointer;">
             Reintentar
           </button>
         </div>` : ''}
     </div>`;
+}
+
+/** Reintenta un envío de la liquidación y refresca ESTA lista (la de
+ *  Reposición no es de quien liquida). El permiso lo decide el servidor
+ *  (`puede_reintentar_job`); el botón solo sale con `puede_reintentar`. */
+async function liqReintentarJob(jobId) {
+  try {
+    await post(`/api/reposicion/siesa-jobs/${jobId}/reintentar`, {});
+    alerta('Envío puesto de nuevo en cola', 'exito');
+  } catch (e) { alerta(e.message || 'No se pudo reintentar', 'error'); }
+  liqCargarJobs();
 }
 
 // ── Modal: detalle de ruta para liquidar ─────────────────────────────────────
@@ -572,6 +583,8 @@ function _liqBloqueRetencion(rutaId, rec, factura) {
       <div style="font-size:var(--fs-xs);color:var(--tx3);margin-bottom:10px;">
         Es lo que el cliente dijo en la puerta — nadie lo ha verificado. ¿Le correspondía ese descuento?
       </div>
+      ${!_liqPermiso('confirmar_retencion') ? `
+      <div style="font-size:var(--fs-xs);color:var(--tx3);">La retención la confirma el líder de cartera.</div>` : `
       <div style="display:flex;gap:8px;">
         <button onclick="liqConfirmarRetencion(${rutaId}, ${esc(rec.id)}, true)"
           style="flex:1;padding:10px;background:#14532d;color:#bbf7d0;border:none;border-radius:6px;font-size:var(--fs-xs);font-weight:700;cursor:pointer;">
@@ -581,7 +594,7 @@ function _liqBloqueRetencion(rutaId, rec, factura) {
           style="flex:1;padding:10px;background:var(--err-bg);color:var(--err-tx);border:none;border-radius:6px;font-size:var(--fs-xs);font-weight:700;cursor:pointer;">
           ✗ No le correspondía
         </button>
-      </div>
+      </div>`}
     </div>`;
 }
 
@@ -787,7 +800,7 @@ function _liqRenderDetalle() {
         const rcEsperaNC = (estado === 'PARCIAL' && !rec.siesa_nc_triggered);
         html += _liqBloqueRetencion(ruta.id, rec, factura);
         const trabado = _liqRetencionTraba(rec);
-        html += !_liqPuedeCobrar() ? _liqSinPermisoCobro() : !trabado
+        html += !_liqPuedeCobrar() ? _liqSinPermisoCobro(ruta.id, rec) : !trabado
           ? `
           <button onclick="liqToggleCobro(${esc(ruta.id)}, ${esc(rec.id)})"
             style="width:100%;margin-top:8px;padding:12px;background:#14532d;color:#bbf7d0;border:none;border-radius:8px;font-size:var(--fs-sm);font-weight:700;cursor:pointer;">
@@ -816,8 +829,8 @@ function _liqRenderDetalle() {
     html += '</div>';
   });
 
-  // ── FASE 1: Botón de liquidación WMS (solo si NO liquidada) ────
-  if (!esLiquidada) {
+  // ── FASE 1: Botón de liquidación WMS (solo si NO liquidada y a quien liquida) ────
+  if (!esLiquidada && _liqPermiso('liquidar')) {
     html += `
       <div style="background:var(--bg-s);border:2px solid var(--pm);border-radius:12px;padding:16px;margin-top:16px;">
         <div style="display:flex;justify-content:space-between;font-size:var(--fs-sm);margin-bottom:6px;">
@@ -860,10 +873,12 @@ function _liqBloqueCreditoNoAutorizado(rutaId, rec) {
         Factura de contado contraentrega (${esc(cond)}) registrada ${esc(rec.forma_pago || 'sin forma de pago')}
         con ${_liqFmt(rec.monto_cobrado || 0)} cobrados. La ruta no se liquida hasta que se cobre o se autorice.
       </div>
+      ${_liqPermiso('autorizar_credito') ? `
       <button onclick="liqAutorizarCredito(${esc(rutaId)}, ${esc(rec.id)})"
         style="width:100%;margin-top:8px;padding:10px;background:var(--bg);color:var(--err-tx);border:1px solid var(--err-brd);border-radius:8px;font-size:var(--fs-sm);font-weight:700;cursor:pointer;">
         Autorizar como crédito…
-      </button>
+      </button>` : `
+      <div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:6px;">Lo autoriza como crédito el líder de cartera.</div>`}
     </div>`;
 }
 
@@ -872,21 +887,34 @@ function _liqBloqueCreditoNoAutorizado(rutaId, rec) {
  *  funciones que cortan con 403): registrar el cobro encola el recibo de caja,
  *  y lo hace quien puede liquidar. Sin el dato (servidor viejo), se ofrece. */
 function _liqPuedeCobrar() {
-  return !(_liqDetalleRuta && _liqDetalleRuta.permisos
-           && _liqDetalleRuta.permisos.liquidar === false);
+  return _liqPermiso('liquidar');
 }
 
-function _liqSinPermisoCobro() {
+/** ¿Quien mira puede hacer `operacion`? El servidor manda `permisos` en el
+ *  detalle de la ruta, de las mismas funciones de `permisos_liquidacion` que
+ *  cortan con 403 (liquidar, confirmar_retencion, autorizar_credito,
+ *  corregir_cobro, resolver_documento…). **Una** lectura para todos los
+ *  botones: con los roles liquidador y líder de cartera, cada uno ve solo lo
+ *  suyo. Sin el dato (servidor viejo), se ofrece. */
+function _liqPermiso(operacion) {
+  return !(_liqDetalleRuta && _liqDetalleRuta.permisos
+           && _liqDetalleRuta.permisos[operacion] === false);
+}
+
+function _liqSinPermisoCobro(rutaId, rec) {
+  const corregir = rec && _liqPermiso('corregir_cobro') && rec.estado_entrega !== 'PARCIAL'
+    ? `<div style="margin-top:6px;"><a href="#" onclick="event.preventDefault();liqCorregirMontoParada(${esc(rutaId)}, ${esc(rec.id)})"
+         style="font-size:var(--fs-xs);color:var(--tx3);text-decoration:underline;cursor:pointer;">¿El monto que declaró el conductor estaba mal? Corregirlo</a></div>`
+    : '';
   return `
           <div style="text-align:center;padding:8px;color:var(--tx3);font-size:var(--fs-xs);margin-top:8px;background:var(--bg);border-radius:8px;">
-            El cobro de esta parada lo registra quien liquida la ruta.
+            El cobro de esta parada lo registra quien liquida la ruta.${corregir}
           </div>`;
 }
 
 /** El recibo de caja que no se pudo verificar: qué pasó y cómo se resuelve. */
 function _liqBloqueRcSinVerificar(rutaId, rec) {
-  const puede = !(_liqDetalleRuta && _liqDetalleRuta.permisos
-                  && _liqDetalleRuta.permisos.resolver_documento === false);
+  const puede = _liqPermiso('resolver_documento');
   return `
     <div style="margin:8px 0;padding:10px;background:var(--warn-bg);border:1px solid var(--warn-brd);border-radius:8px;">
       <div style="font-size:var(--fs-xs);color:var(--warn-tx);font-weight:700;">Recibo de caja sin verificar</div>
@@ -1124,7 +1152,7 @@ async function _liqRenderPanelCobro(rutaId, recaudoId) {
           <input type="number" id="liq-monto-${recaudoId}" value="${mDefault}" step="0.01"
             onchange="liqPreviewCobro(${recaudoId})"
             style="width:100%;margin-top:6px;padding:6px;background:var(--bg-s);border:1px solid var(--brd);border-radius:4px;color:var(--tx);font-size:var(--fs-xs);">
-          ${!esParcial ? `
+          ${!esParcial && _liqPermiso('corregir_cobro') ? `
           <div style="margin-top:8px;">
             <a href="#" onclick="event.preventDefault();liqCorregirMonto(${rutaId},${recaudoId},${mCobrado})"
               style="font-size:var(--fs-xs);color:var(--tx3);text-decoration:underline;cursor:pointer;">
@@ -1216,7 +1244,7 @@ async function _liqRenderPanelCobro(rutaId, recaudoId) {
  * motivó esto llega tarde: la ruta ya está ENTREGADA cuando Liquidación
  * descubre el número mal, y para entonces esa vía ya no acepta la edición.
  */
-async function liqCorregirMonto(rutaId, recaudoId, montoActual) {
+async function liqCorregirMonto(rutaId, recaudoId, montoActual, alTerminar) {
   const nuevoStr = await _modalTexto('Corregir monto',
     `Monto declarado actualmente: ${_liqFmt(montoActual)}. ¿Cuál es el monto real (ya con lo que el cliente pagó de más, si aplica)?`,
     { valorInicial: String(montoActual) });
@@ -1237,10 +1265,20 @@ async function liqCorregirMonto(rutaId, recaudoId, montoActual) {
       monto: nuevo, razon: razon.trim(),
     });
     alerta('Monto corregido', 'exito');
-    await _liqRenderPanelCobro(rutaId, recaudoId);
+    if (typeof alTerminar === 'function') await alTerminar();
+    else await _liqRenderPanelCobro(rutaId, recaudoId);
   } catch (e) {
     alerta(e.message || 'Error al corregir el monto', 'error');
   }
+}
+
+/** Corregir el monto desde la tarjeta de la parada, para quien corrige cobros
+ *  sin registrarlos (líder de cartera). En el onclick viajan solo ids; el
+ *  monto se lee del detalle ya cargado. */
+async function liqCorregirMontoParada(rutaId, recaudoId) {
+  const rec = ((_liqDetalleRuta && _liqDetalleRuta.recaudos) || []).find(r => r.id === recaudoId);
+  if (!rec) return;
+  await liqCorregirMonto(rutaId, recaudoId, Number(rec.monto_cobrado || 0), () => liqAbrirRuta(rutaId));
 }
 
 /**

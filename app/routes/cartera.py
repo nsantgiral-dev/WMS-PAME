@@ -25,7 +25,7 @@ from flask import Blueprint, jsonify, request
 from flask_jwt_extended import jwt_required
 
 from app.extensions import db
-from app.routes._auth_helpers import (_puede_autorizar_cartera, _solo_admin, _ve_cartera,
+from app.routes._auth_helpers import (_get_uid, _puede_autorizar_cartera, _ve_cartera,
                                       exige_token_servicio)
 
 logger = logging.getLogger(__name__)
@@ -36,6 +36,18 @@ _QUE = 'la API de cartera para el Gestor'
 
 
 # ── utilidades ────────────────────────────────────────────────────────────
+
+def _autoriza_credito():
+    """El usuario si puede autorizar como crédito paradas de contado sin
+    plata (`permisos_liquidacion.puede_autorizar_credito`: admin y líder de
+    cartera). El lote de paradas anteriores a la regla de contado es eso
+    mismo, en lote: el mismo permiso que la parada suelta."""
+    from app.models.usuario import Usuario
+    from app.services.permisos_liquidacion import puede_autorizar_credito
+    uid = _get_uid()
+    u = db.session.get(Usuario, uid) if uid else None
+    return u if puede_autorizar_credito(u) else None
+
 
 def _fecha_iso(texto):
     if not texto:
@@ -239,8 +251,8 @@ def panel_listar():
         logger.exception('[CARTERA] panel: listar falló')
         return jsonify({'error': f'No se pudieron leer las retenciones: {e}'}), 503
     datos['puede_autorizar'] = bool(_puede_autorizar_cartera())
-    # El lote de paradas viejas es `_solo_admin`: el botón solo con él.
-    datos['puede_autorizar_lote'] = bool(_solo_admin())
+    # El lote de paradas viejas es autorizar crédito: el botón solo con él.
+    datos['puede_autorizar_lote'] = bool(_autoriza_credito())
     datos['usuario_id'] = u.id
     return jsonify(datos), 200
 
@@ -294,8 +306,8 @@ def panel_credito_lote_ver():
     """Paradas «crédito no autorizado» confirmadas antes de la regla de
     contado (`CONTADO_DESPLIEGUE_FECHA`). Vista previa de lo que autoriza el
     POST: el mismo cálculo."""
-    if not _solo_admin():
-        return jsonify({'error': 'Solo admin'}), 403
+    if not _autoriza_credito():
+        return jsonify({'error': 'Solo admin o el líder de cartera'}), 403
     from app.services import cartera_service as cs
     corte = cs.fecha_despliegue_contado()
     if corte is None:
@@ -317,9 +329,9 @@ def panel_credito_lote_ver():
 def panel_credito_lote():
     """Autoriza en lote, con UN motivo común («anterior a la regla de
     contado»), las paradas de la vista previa. Bitácora por parada."""
-    admin = _solo_admin()
+    admin = _autoriza_credito()
     if not admin:
-        return jsonify({'error': 'Solo admin'}), 403
+        return jsonify({'error': 'Solo admin o el líder de cartera'}), 403
     from app.services import cartera_service as cs
     data = request.get_json(silent=True) or {}
     ids = data.get('recaudo_ids')
