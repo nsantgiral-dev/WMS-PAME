@@ -299,6 +299,37 @@ class TestCongeladoAlEncolar:
         assert pc.puede_editar_cobro(recaudo(rc=True)) is False
 
 
+class TestLaParadaConElReciboEnCola:
+    """P1-3 por comportamiento: el RC está en la cola (encolado, sin POST
+    todavía): la parada no cambia monto ni estado; las observaciones sí."""
+
+    def test_el_monto_y_el_estado_quedan(self, db, almacen):
+        from app.models.siesa_job import SiesaJob
+        from app.models.usuario import Usuario
+        from app.services.ruta_service import RutaService
+        from tests.flujo import conductor_de_flujo as cf
+        u = Usuario(email=f'c_{uuid.uuid4().hex[:5]}@t.co', nombre='C', rol='conductor', activo=True)
+        u.set_password('x')
+        db.session.add(u)
+        db.session.commit()
+        cuerpo = {'estado_entrega': 'ENTREGADO', 'forma_pago': 'EFECTIVO', 'monto_cobrado': 1000}
+        f = cf.flujo_completo(db, almacen, u.id, 1, **cuerpo)
+        SiesaJob.encolar('RECIBO_CAJA', {'recaudo_id': f.recaudo_id},
+                         referencia_tipo='RecaudoEntrega', referencia_id=f.recaudo_id)
+        db.session.commit()
+        with pytest.raises(ValueError, match='en cola'):
+            RutaService.confirmar_parada(f.ruta_id, f.packing_id, u.id,
+                                         {**cuerpo, 'monto_cobrado': 900})
+        db.session.rollback()
+        with pytest.raises(ValueError, match='estado_entrega'):
+            RutaService.confirmar_parada(f.ruta_id, f.packing_id, u.id, {
+                'estado_entrega': 'RECHAZADO', 'motivo_rechazo': 'CLIENTE_CERRADO',
+                'observaciones': 'x'})
+        db.session.rollback()
+        RutaService.confirmar_parada(f.ruta_id, f.packing_id, u.id,
+                                     {**cuerpo, 'observaciones': 'dejó dicho que vuelve'})
+
+
 class TestElEjecutorComparaLaParada:
 
     def test_la_parada_cambio_despues_de_encolar(self, app, db, recaudo):
@@ -497,9 +528,21 @@ NO_SON_RECAUDOS = {
 }
 
 
+def _llamadas_en_condiciones(fn):
+    """Las Call que están en la CONDICIÓN de un `if`/`while`/ternario: una
+    guarda. Nombrar la política en el texto de un error no es preguntarle
+    (mutación M11: la guarda cambiada por la bandera y el mensaje intacto)."""
+    for n in ast.walk(fn):
+        if isinstance(n, (ast.If, ast.While, ast.IfExp)):
+            for c in ast.walk(n.test):
+                if isinstance(c, ast.Call):
+                    yield c
+
+
 def escritores_del_cobro(fuentes):
     """{sitio: pregunta a la política?} — toda función que asigna
-    `x.monto_cobrado`/`x.estado_entrega` (o `setattr` con ese nombre)."""
+    `x.monto_cobrado`/`x.estado_entrega` (o `setattr` con ese nombre), y si
+    `puede_editar_cobro` aparece en la condición de un `if`."""
     out = {}
     for archivo, src in fuentes.items():
         for nombre, fn in _funciones_con_nombre(ast.parse(src)):
@@ -518,8 +561,7 @@ def escritores_del_cobro(fuentes):
                     escribe = True
             if escribe:
                 out[f'{archivo}::{nombre}'] = any(
-                    _nombre(c) in ('puede_editar_cobro', 'motivo_cobro_congelado')
-                    for c in _llamadas(fn))
+                    _nombre(c) == 'puede_editar_cobro' for c in _llamadas_en_condiciones(fn))
     return out
 
 
@@ -543,10 +585,13 @@ class TestTodaEscrituraDelCobroPregunta:
         src = ("def a(r):\n    r.monto_cobrado = 1\n"
                "def b(r):\n    setattr(r, 'estado_entrega', 'X')\n"
                "def c(r):\n    if puede_editar_cobro(r):\n        r.monto_cobrado = 1\n"
+               "def g(r):\n    if r.siesa_rc_triggered:\n        raise E(puede_editar_cobro(r))\n"
+               "    r.monto_cobrado = 1\n"
                "def d(r):\n    '''r.monto_cobrado = 1'''\n    return r.monto_cobrado\n"
                "def e(r):\n    r.monto_cobrado += 5\n")
         s = escritores_del_cobro({'x.py': src})
-        assert s == {'x.py::a': False, 'x.py::b': False, 'x.py::c': True, 'x.py::e': False}
+        assert s == {'x.py::a': False, 'x.py::b': False, 'x.py::c': True, 'x.py::e': False,
+                     'x.py::g': False}
 
     def test_piso(self):
         sitios = escritores_del_cobro(_fuentes())

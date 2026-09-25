@@ -150,6 +150,15 @@ class TestLaTarjetaDeLaParada:
         assert 'Recibo de caja sin verificar' in txt and 'Sí está en Siesa' in txt
         assert not codigos_crudos(self._pintar(tmp_path, det)['html'])
 
+    def test_el_faltante_total_se_dice_y_no_promete_nc(self, app, client, db, almacen, tmp_path):
+        _t, r, _d = _faltante_total(db, almacen, liquidada=True)
+        det = _detalle(client, app, db, r.ruta_id)
+        [x] = det['recaudos']
+        assert x['devolucion_pendiente']['sin_nc'] is True
+        txt = visible(self._pintar(tmp_path, det)['html'])
+        assert 'Faltante de retorno' in txt and 'No habrá nota crédito' in txt, txt
+        assert 'va en camino' not in txt and 'pendiente de que recepción confirme' not in txt
+
     def test_quien_no_liquida_no_ve_registrar_cobro(self, app, client, db, almacen, tmp_path):
         ruta = _ruta_entregada(db, almacen, liquidada=True)
         jefe = _usuario(db, rol='jefe_almacen', email=f'jefe_{uuid.uuid4().hex[:4]}@t.co')
