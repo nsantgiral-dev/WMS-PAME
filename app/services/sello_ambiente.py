@@ -56,9 +56,14 @@ _TTL_S = 60.0
 _cache = {'ts': 0.0, 'respuesta': None}
 
 
-class AmbienteNoCoincide(Exception):
+from app.services.connekta_gateway import ConnektaNoEnviado  # noqa: E402
+
+
+class AmbienteNoCoincide(ConnektaNoEnviado):
     """La base está sellada para otro ambiente, o su sello no se pudo leer.
-    No es un fallo de Siesa: no se salió a la red."""
+    No es un fallo de Siesa: no se salió a la red. Por eso es un
+    `ConnektaNoEnviado` (tanda 2, 2026-09-25): quien tenía un pre-flag puesto
+    lo puede bajar — el documento no existe en ningún Siesa."""
 
 
 def ambiente_del_proceso():

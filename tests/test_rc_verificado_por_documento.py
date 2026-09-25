@@ -288,12 +288,11 @@ class TestElRCLlevaElDiaDelCobro:
 
 #: Reversiones fuera de `except ConnektaNoEnviado` que se aceptan, con su
 #: porqué. **Solo encoge.**
-REVERSIONES_DECLARADAS = {
-    'siesa_job_service.py::_ejecutar_con_preflag':
-        'ENTRADA_OC, TRASLADO_AVERIAS y AJUSTE_CONTEO (frente de inventario): '
-        'revierte ante toda excepción que no sea un timeout. Misma clase; '
-        'pendiente de ese frente para no cambiarle el reintento de los ajustes.',
-}
+#: Vacío desde la tanda 2 (2026-09-25): `_ejecutar_con_preflag` (ENTRADA_OC,
+#: TRASLADO_AVERIAS, AJUSTE_CONTEO) revertía ante toda excepción que no fuera
+#: un timeout; ahora solo ante `ConnektaNoEnviado`, y el traslado a averías por
+#: movimiento ganó su pre-flag (`siesa_sync = ENVIANDO`).
+REVERSIONES_DECLARADAS = {}
 
 _TIPOS_QUE_PRUEBAN = {'ConnektaNoEnviado', 'ConnektaRechazado', 'ConnektaPayloadInvalido',
                       'ConnektaCircuitOpenError'}
@@ -306,6 +305,11 @@ def _revierte(nodo) -> bool:
                 if (isinstance(t, ast.Attribute) and t.attr.startswith('siesa_')
                         and t.attr.endswith('triggered')
                         and isinstance(n.value, ast.Constant) and n.value.value is False):
+                    return True
+                # El pre-flag del traslado a averías vive en el ancla
+                # (`MovimientoInventario.siesa_sync`): devolverla a cualquier
+                # valor dentro de un `except` es bajar la bandera.
+                if isinstance(t, ast.Attribute) and t.attr == 'siesa_sync':
                     return True
         if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) \
                 and n.func.attr == 'desmarcar_puc':
@@ -354,14 +358,14 @@ class TestSoloUnaPruebaBajaLaBandera:
         sitios = {s.rsplit(':', 1)[0] for s, ok in reversiones(src, 'siesa_job_service.py').items()
                   if not ok}
         assert set(REVERSIONES_DECLARADAS) <= sitios | set(), 'inventario viejo'
-        assert len(REVERSIONES_DECLARADAS) <= 1
+        assert len(REVERSIONES_DECLARADAS) <= 0
         assert all(len(v) > 40 for v in REVERSIONES_DECLARADAS.values())
 
     def test_piso(self):
         """RC, DC y las dos NC revierten bajo prueba: un escáner roto daría 0."""
         src = (RAIZ / 'app' / 'services' / 'siesa_job_service.py').read_text(encoding='utf-8')
         sitios = reversiones(src, 'siesa_job_service.py')
-        assert sum(1 for ok in sitios.values() if ok) >= 4
+        assert sum(1 for ok in sitios.values() if ok) >= 6
 
     def test_meta(self):
         src = ("def a(r):\n    try:\n        x()\n    except Exception:\n"
@@ -375,3 +379,9 @@ class TestSoloUnaPruebaBajaLaBandera:
                "def f(r):\n    '''except Exception: r.siesa_rc_triggered = False'''\n")
         s = {k.split('::')[1].split(':')[0]: v for k, v in reversiones(src, 'x.py').items()}
         assert s == {'a': False, 'b': True, 'c': False, 'e': False}
+        src2 = ("def g(m):\n    try:\n        x()\n    except Exception:\n"
+                "        m.siesa_sync = 'PENDIENTE'\n"
+                "def h(m):\n    try:\n        x()\n    except ConnektaNoEnviado:\n"
+                "        m.siesa_sync = antes\n")
+        s2 = {k.split('::')[1].split(':')[0]: v for k, v in reversiones(src2, 'x.py').items()}
+        assert s2 == {'g': False, 'h': True}

@@ -713,7 +713,10 @@ async function conteoReintentarFallos() {
       { titulo: 'Reintentar ajustes rechazados', textoConfirmar: 'Reintentar todos', textoCancelar: 'Volver' })) return;
   try {
     const d = await post('/api/conteo/reintentar-fallos', {});
-    alerta(`${d.reencolados} ajustes re-encolados`, 'exito');
+    const sinVerif = (d.sin_verificar || []).length;
+    alerta(`${d.reencolados} ajustes re-encolados` + (sinVerif
+      ? ` · ${sinVerif} quedaron sin verificar (pudieron haber entrado): resuélvalos en Siesa → Recuperación`
+      : ''), sinVerif ? 'advertencia' : 'exito');
     await cargarConteoStats();
   } catch (e) { alerta(e.message || 'Error de conexión', 'error'); }
 }
@@ -740,7 +743,7 @@ async function conteoDescartarFallos() {
     reset_a_descuadre: 'vuelven a «contado con diferencia» (podés aprobarlos de nuevo o cancelarlos)',
     sin_tocar_ya_ajustada: 'ya estaban AJUSTADAS — no se tocan',
     sin_tocar_otro_estado: 'están en otro estado — no se tocan',
-    SE_CONSERVA_POSIBLE_ENVIO: '⚠ NO se descartan: el ajuste pudo haber llegado a Siesa (quedan para reintentar)',
+    SE_CONSERVA_POSIBLE_ENVIO: '⚠ NO se descartan: el ajuste pudo haber llegado a Siesa (se resuelven en Siesa → Recuperación: «¿Está en Siesa?»)',
     job_sin_sesion_en_payload: 'sin sesión en el payload',
     sesion_no_existe: 'su sesión ya no está en la base'
   };

@@ -886,6 +886,12 @@ def reintentar_fallos_dlq():
         SiesaJob.estado == EstadoSiesaJob.FALLIDO,
     ).all()
 
+    # Un ajuste que quedó sin verificar (pudo haber entrado) no se reencola:
+    # la guarda lo cerraría como hecho sin que nadie mire Siesa (tanda 2).
+    from app.services.siesa_job_service import preflag_sin_verificar
+    sin_verificar = [j.id for j in fallidos if preflag_sin_verificar(j)]
+    fallidos = [j for j in fallidos if j.id not in set(sin_verificar)]
+
     reencolados = 0
     for job in fallidos:
         job.estado = EstadoSiesaJob.PENDIENTE
@@ -898,7 +904,7 @@ def reintentar_fallos_dlq():
         db.session.commit()
         logger.info(f'[CONTEO DLQ] {reencolados} jobs FALLIDO re-encolados por usuario #{uid}')
 
-    return jsonify({'reencolados': reencolados}), 200
+    return jsonify({'reencolados': reencolados, 'sin_verificar': sin_verificar}), 200
 
 
 @conteo_bp.route('/<int:id>/omitir-segundo', methods=['POST'])
@@ -1011,9 +1017,10 @@ def _plan_descarte_ajustes():
                               'AJUSTANDO con siesa_triggered=True: el ajuste pudo haber '
                               'llegado a Siesa. Su job NO se descarta: sin job, ni el '
                               'barrido de sesiones atascadas ni nadie la volvería a '
-                              'mirar y la cadena quedaría sin salida. Queda FALLIDO; '
-                              '«Reintentar» la cierra como AJUSTADO sin volver a '
-                              'llamar a Siesa. Revisá en Siesa si el ajuste llegó.')})
+                              'mirar y la cadena quedaría sin salida. Queda FALLIDO '
+                              'sin verificar: búsquelo en Siesa y diga si llegó '
+                              '(Siesa → Recuperación, «¿Está en Siesa?»). Si llegó, '
+                              'se cierra como AJUSTADO sin volver a llamar a Siesa.')})
         else:
             items.append({'job_id': job.id, 'sesion_id': s.id,
                           'accion': _RESET, 'estado_sesion': s.estado,

@@ -691,10 +691,15 @@ CONSULTAS_FALLIDO_OPERATIVAS = {
     'app/services/siesa_job_service.py::fallidos_vigentes': 'LA función que cuenta',
     'app/services/siesa_job_service.py::descartar_job': 'solo se descarta un FALLIDO',
     'app/services/siesa_job_service.py::reintentar_job': 'solo se reintenta un FALLIDO',
+    # Tanda 2 (2026-09-25): un envío con pre-flag que quedó «no sé» es un job
+    # FALLIDO con su bandera puesta — la salida humana («¿Está en Siesa?») y
+    # la negativa de reintentar lo necesitan. Opera, no cuenta.
+    'app/services/siesa_job_service.py::preflag_sin_verificar':
+        'decide si un FALLIDO quedó sin verificar (pre-flag puesto): opera, no cuenta',
     'app/services/tablero_lider_conteo.py::_rechazados_siesa':
         'lista para reintentar/descartar desde el tablero del líder',
 }
-TOPE_CONSULTAS_FALLIDO = 22
+TOPE_CONSULTAS_FALLIDO = 23  # +1 tanda 2: preflag_sin_verificar
 
 #: Módulos que MUESTRAN números: acá no puede haber ninguna consulta propia.
 MODULOS_QUE_SOLO_CUENTAN = ('app/services/analitica_', 'app/services/dashboard_service.py',

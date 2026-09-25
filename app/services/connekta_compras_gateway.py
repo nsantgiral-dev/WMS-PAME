@@ -21,6 +21,11 @@ el singleton `connekta` y sus callers (`siesa_job_service.py`,
 """
 import logging
 
+# Un documento que no se puede armar nunca salió: `ConnektaPayloadInvalido`
+# (hija de `ValueError` y de `ConnektaNoEnviado`), la única que autoriza a
+# `_ejecutar_con_preflag` a bajar el pre-flag (tanda 2, 2026-09-25).
+from app.services.connekta_gateway import ConnektaPayloadInvalido  # noqa: E402
+
 logger = logging.getLogger(__name__)
 
 
@@ -48,7 +53,7 @@ class ConnektaComprasGateway:
         """
         core = self._core
         if not core.tipo_docto_entrada_oc:
-            raise ValueError(
+            raise ConnektaPayloadInvalido(
                 'SIESA_TIPO_DOCTO_ENTRADA_OC no está configurado en variables de entorno. '
                 'Agrega la variable en Railway con el código de tipo de documento de entrada OC en Siesa.'
             )
@@ -64,13 +69,13 @@ class ConnektaComprasGateway:
         # f350_id_tercero es OBLIGATORIO en spec 142948 (pos 43-58). Bloquear localmente antes
         # de gastar ancho de banda en un POST que Siesa rechazará con error 500.
         if not proveedor_id:
-            raise ValueError(
+            raise ConnektaPayloadInvalido(
                 'confirmar_entrada_compras: proveedor_id es None — '
                 'f350_id_tercero es obligatorio en 142948 (pos 43-58). '
                 'Verificar que la OC en Siesa expone f200_id_prov correctamente.'
             )
         if not sucursal_prov_fmt:
-            raise ValueError(
+            raise ConnektaPayloadInvalido(
                 'confirmar_entrada_compras: sucursal_prov es None o vacío — '
                 'f451_id_sucursal_prov es obligatorio en 142948 (pos 324-327).'
             )
@@ -82,7 +87,7 @@ class ConnektaComprasGateway:
         # Payload sanitizer anticipado — si todos los ítems tienen cantidad 0, abortar aquí.
         items_validos = [i for i in items if float(i.get('cantidad_recibida') or 0) > 0]
         if not items_validos:
-            raise ValueError(
+            raise ConnektaPayloadInvalido(
                 'confirmar_entrada_compras: todos los ítems tienen cantidad_recibida=0 — '
                 'nada que enviar a Siesa. Verificar recepción antes de confirmar.'
             )

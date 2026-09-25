@@ -3605,14 +3605,22 @@ async function siesaRecuperacionCargar() {
         if (!js.length) return '<div class="tabla-fila"><span class="tabla-nombre">Sin jobs fallidos</span></div>';
         // `error_ultimo` (así lo manda `SiesaJob.to_dict`): esto leía
         // `ultimo_error`, que no existe, y el motivo del fallo salía vacío.
+        // `sin_verificar`: el envío pudo haber entrado. No se reintenta ni se
+        // descarta a ciegas: una persona busca en Siesa y dice qué vio.
         return js.slice(0, 10).map(j => `
-          <div class="tabla-fila" style="align-items:flex-start;">
+          <div class="tabla-fila" style="align-items:flex-start;flex-wrap:wrap;">
             <span class="tabla-nombre" style="font-size:var(--fs-xs);">
               <b>${esc(j.tipo || '?')}</b> #${esc(j.id)} · ${esc((j.fecha_creacion || '').slice(0, 10))}<br>
+              ${j.sin_verificar ? `<span style="color:var(--warn-tx);font-weight:700;font-size:var(--fs-xs);">Sin verificar: pudo haber entrado a Siesa. Búsquelo y diga si está.</span><br>` : ''}
               <span style="color:var(--tx3);font-size:var(--fs-xs);">${esc((j.error_ultimo || '').slice(0, 90))}</span>
             </span>
+            ${j.sin_verificar ? `
             <button class="btn-flota" style="flex:0 0 auto;"
-                    onclick="siesaDescartarJob(${Number(j.id)})">Descartar</button>
+                    onclick="siesaResolverSinVerificar(${Number(j.id)}, 1)">Sí está en Siesa</button>
+            <button class="btn-flota" style="flex:0 0 auto;"
+                    onclick="siesaResolverSinVerificar(${Number(j.id)}, 0)">No está en Siesa</button>` : `
+            <button class="btn-flota" style="flex:0 0 auto;"
+                    onclick="siesaDescartarJob(${Number(j.id)})">Descartar</button>`}
           </div>`).join('');
       })}
       <button class="btn-flota" style="width:100%;margin-top:10px;"
@@ -3823,6 +3831,27 @@ async function siesaDescartarJob(id) {
     siesaRecuperacionCargar();
   } catch (e) {
     alerta('No se pudo descartar: ' + e.message, 'error');
+  }
+}
+
+/** Una persona dice si un envío sin verificar está en Siesa. No hace POST a
+ *  Siesa: con «sí» se cierra sin reenviar; con «no» vuelve a la cola. */
+async function siesaResolverSinVerificar(id, entro) {
+  const esta = Number(entro) === 1;
+  const motivo = await _modalTexto(esta ? 'El envío SÍ está en Siesa' : 'El envío NO está en Siesa',
+    (esta
+      ? 'Se cierra sin reenviar nada.'
+      : 'Vuelve a la cola y se envía de nuevo. Si en realidad sí estaba, quedaría duplicado.') +
+    ' ¿Qué encontró en Siesa? (obligatorio — queda en la bitácora con su nombre)',
+    { obligatorio: true, textoConfirmar: esta ? 'Sí está' : 'No está, enviar de nuevo' });
+  if (!motivo || !motivo.trim()) return;
+  try {
+    const r = await post(`/api/siesa/jobs/${Number(id)}/resolver-sin-verificar`,
+                         { entro: esta, motivo: motivo.trim() });
+    alerta(r.mensaje || 'Resuelto', 'exito');
+    siesaRecuperacionCargar();
+  } catch (e) {
+    alerta('No se pudo resolver: ' + e.message, 'error');
   }
 }
 

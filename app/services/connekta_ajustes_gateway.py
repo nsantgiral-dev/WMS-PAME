@@ -17,6 +17,11 @@ y su único caller (`siesa_job_service.py`) no cambian.
 """
 import logging
 
+# Un documento que no se puede armar nunca salió: `ConnektaPayloadInvalido`
+# (hija de `ValueError` y de `ConnektaNoEnviado`), la única que autoriza a
+# `_ejecutar_con_preflag` a bajar el pre-flag (tanda 2, 2026-09-25).
+from app.services.connekta_gateway import ConnektaPayloadInvalido  # noqa: E402
+
 logger = logging.getLogger(__name__)
 
 
@@ -40,12 +45,12 @@ class ConnektaAjustesGateway:
         core = self._core
         _tipo_docto_ajuste = core.tipo_docto_ajuste or os.getenv('SIESA_TIPO_DOCTO_AJUSTE', '')
         if not _tipo_docto_ajuste:
-            raise ValueError(
+            raise ConnektaPayloadInvalido(
                 'SIESA_TIPO_DOCTO_AJUSTE no está configurado en variables de entorno. '
                 'Agrega la variable en Railway con el código de tipo de documento de ajuste en Siesa.'
             )
         if motivo_codigo not in ['AJ-ENT', 'AJ-SAL']:
-            raise ValueError(f'Motivo inválido: {motivo_codigo}')
+            raise ConnektaPayloadInvalido(f'Motivo inválido: {motivo_codigo}')
 
         _bodega = bodega or core.bodega
         _centro_op = centro_op or core.centro_op

@@ -258,12 +258,16 @@ class TestSoloSeCorrigeLaRaizYaContada:
 
 class TestDescartarNoDejaAjustandoSinJob:
 
-    def test_la_posiblemente_enviada_sale_por_reintentar_sin_reenviar(
+    def test_la_posiblemente_enviada_sale_por_una_persona_sin_reenviar(
             self, app, client, db, siesa, tienda):
-        """Su job queda FALLIDO; «Reintentar» la cierra como AJUSTADO sin volver
-        a llamar a Siesa (la rama P4 del ejecutor)."""
+        """Su job queda FALLIDO sin verificar. Hasta la tanda 2 (2026-09-25)
+        «Reintentar» la cerraba como AJUSTADO sin preguntarle a nadie si el
+        ajuste llegó — la rama P4 leía la bandera sola como «entró». Ahora
+        reintentar la salta (`sin_verificar`) y la salida es una persona que
+        dice «está en Siesa»: entonces sí se cierra sin volver a llamar."""
         from app.models.siesa_job import EstadoSiesaJob, SiesaJob
-        from app.services.siesa_job_service import _ejecutar_job
+        from app.services.siesa_job_service import (_ejecutar_job,
+                                                    resolver_preflag_sin_verificar)
         cc1, r2 = _contar_cc1_cc2(tienda, siesa, 7, existencia=10)
         assert r2['auto_encolado'] is True
         (job,) = _jobs(cc1)
@@ -277,12 +281,36 @@ class TestDescartarNoDejaAjustandoSinJob:
         assert r['huerfanas'] == [cc1] and r['descartados'] == 0
         assert db.session.get(SiesaJob, job.id).estado == EstadoSiesaJob.FALLIDO
 
-        assert client.post('/api/conteo/reintentar-fallos', headers=h).get_json()['reencolados'] == 1
+        r = client.post('/api/conteo/reintentar-fallos', headers=h).get_json()
+        assert r['reencolados'] == 0 and r['sin_verificar'] == [job.id]
+        assert db.session.get(SiesaJob, job.id).estado == EstadoSiesaJob.FALLIDO
+
+        resolver_preflag_sin_verificar(job.id, usuario_id=tienda['supervisor'].id,
+                                       entro=True, motivo='El ADI está en Siesa')
+        db.session.commit()
         with patch('app.services.connekta_gateway.ConnektaGateway.enviar_ajuste_inventario',
                    side_effect=AssertionError('no se reenvía')):
             _ejecutar_job(db.session.get(SiesaJob, job.id))
         db.session.commit()
         assert _s(db, cc1).estado == 'AJUSTADO'
+
+    def test_si_no_llego_se_envia_de_nuevo(self, app, client, db, siesa, tienda):
+        from app.models.siesa_job import EstadoSiesaJob
+        from app.services.siesa_job_service import (_ejecutar_job,
+                                                    resolver_preflag_sin_verificar)
+        cc1, _r2 = _contar_cc1_cc2(tienda, siesa, 7, existencia=10)
+        (job,) = _jobs(cc1)
+        _s(db, cc1).siesa_triggered = True
+        job.estado = EstadoSiesaJob.FALLIDO
+        db.session.commit()
+        resolver_preflag_sin_verificar(job.id, usuario_id=tienda['supervisor'].id,
+                                       entro=False, motivo='No aparece el ADI')
+        db.session.commit()
+        assert _s(db, cc1).siesa_triggered is False
+        with patch('app.services.connekta_gateway.ConnektaGateway.enviar_ajuste_inventario',
+                   return_value={'codigo': 0}) as env:
+            _ejecutar_job(job)
+        env.assert_called_once()
 
 
 # ─────────────────────────────────────────────────────────────────────────────

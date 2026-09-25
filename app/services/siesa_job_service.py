@@ -53,6 +53,14 @@ from app.services.connekta_gateway import (
     ConnektaResultadoDesconocido as _ResultadoDesconocido,
 )
 
+#: Primera palabra del error de un envío que quedó sin verificar: el panel de
+#: recuperación y el aviso la reconocen sin parsear prosa (la condición real
+#: es `preflag_sin_verificar`: el objeto con su pre-flag puesto y el job FALLIDO).
+MARCA_SIN_VERIFICAR = 'SIN_VERIFICAR'
+
+#: Pre-flag del traslado a averías sobre su ancla (`MovimientoInventario.siesa_sync`).
+SIESA_SYNC_ENVIANDO = 'ENVIANDO'
+
 
 class DependenciaPendiente(Exception):
     """El job no puede correr todavía porque otro paso no ha ocurrido.
@@ -415,7 +423,7 @@ def encolar_traslado_averias(movimiento, codigo_siesa: str, cantidad: int,
             connekta.bodega, connekta.bodega_averias)
         return False
 
-    if movimiento is None or movimiento.siesa_sync == 'ENVIADO':
+    if movimiento is None or movimiento.siesa_sync in ('ENVIADO', SIESA_SYNC_ENVIANDO):
         return False
 
     # Dedup: un job vivo para el mismo movimiento ya cubre este traslado.
@@ -878,19 +886,23 @@ def _ejecutar_con_preflag(obj, post_fn):
        sin volver a llamar a Siesa. No hace falta ninguna consulta de
        verificación contra Siesa para esto — el orden solo ya cierra la
        ventana.
-    2. Ante `ConnektaResultadoDesconocido` (timeout — Regla 3: no significa
-       que falló) el flag se queda en `True`. El dispatcher del DLQ ya manda
-       este tipo de excepción directo a FALLIDO sin backoff ni reintento
-       automático — el registro queda marcado "posiblemente enviado" para
-       revisión manual, nunca se arriesga un duplicado automático (Regla 0).
-    3. Ante cualquier otra excepción (429, HTTP de error, `codigo != 0` en la
-       respuesta) Siesa contestó que NO — se revierte el flag para que el
-       backoff normal pueda reintentar de verdad.
+    2. **Solo `ConnektaNoEnviado` baja el flag** (4xx, 429, `codigo != 0`,
+       payload que no se pudo armar, circuito abierto, ambiente que no
+       coincide): es la prueba positiva de que el documento no entró, y el
+       backoff normal reintenta de verdad.
+    3. Todo lo demás es «no sé» (tanda 2, 2026-09-25): un timeout de lectura
+       (`ConnektaResultadoDesconocido`), un 5xx, una conexión cortada, un JSON
+       ilegible. El flag **queda** y se levanta `ConnektaResultadoDesconocido`:
+       el dispatcher lo manda a FALLIDO sin reintento automático (Regla 3).
+       Hasta esta tanda un 502 revertía el flag y la cola reenviaba: un ajuste
+       o una entrada por OC duplicados, que se reversan a mano en el ERP. La
+       salida es humana: `resolver_preflag_sin_verificar` («¿está en Siesa?»),
+       desde Siesa → Recuperación.
     4. Si el POST fue en `modo_ensayo`, se revierte: no se creó nada real.
 
-    Levanta la excepción original en los casos 2 y 3, después de dejar el
-    flag en el estado correcto — el caller no necesita manejar el error, solo
-    lo que pasa cuando el POST sale bien.
+    Levanta la excepción en los casos 2 y 3, después de dejar el flag en el
+    estado correcto — el caller no necesita manejar el error, solo lo que
+    pasa cuando el POST sale bien.
     """
     obj.siesa_triggered = True
     obj.siesa_triggered_at = datetime.utcnow()
@@ -900,10 +912,16 @@ def _ejecutar_con_preflag(obj, post_fn):
         resultado = post_fn()
     except _ResultadoDesconocido:
         raise
-    except Exception:
+    except ConnektaNoEnviado:
         obj.siesa_triggered = False
         db.session.commit()
         raise
+    except Exception as e_post:
+        raise _ResultadoDesconocido(
+            f'{MARCA_SIN_VERIFICAR}: el envío a Siesa falló sin respuesta clara '
+            f'({str(e_post)[:300]}) y el documento pudo haber entrado. No se reenvía '
+            f'solo (Regla 3): búsquelo en Siesa y resuélvalo en Siesa → Recuperación '
+            f'(«¿Está en Siesa?»).') from e_post
 
     if resultado.get('modo_ensayo'):
         obj.siesa_triggered = False
@@ -1077,21 +1095,51 @@ def _ejecutar_job(job: SiesaJob) -> dict:
                     'ENVIADO — omitido.', job.id, _mov.id)
                 return {'idempotente': True, 'movimiento_id': _mov.id}
 
+            if _mov.siesa_sync == SIESA_SYNC_ENVIANDO:
+                # El pre-flag de un intento anterior quedó puesto sin desenlace
+                # (crash o «no sé»): reenviar puede duplicar el traslado.
+                raise _ResultadoDesconocido(
+                    f'{MARCA_SIN_VERIFICAR}: TRASLADO_AVERIAS job={job.id}: el traslado '
+                    f'del movimiento {_mov.id} ya se intentó y no hay constancia de que '
+                    f'haya entrado. No se reenvía: resuélvalo en Siesa → Recuperación.')
+
             _item_codigo = payload.get('item_codigo')
             if not _item_codigo:
                 raise ValueError(
                     f'TRASLADO_AVERIAS job={job.id}: item_codigo faltante — '
                     f'Siesa no acepta el documento sin referencia del ítem.')
 
-            _res = connekta.transferir_a_averias(
-                item_codigo=_item_codigo,
-                cantidad=payload['cantidad'],
-                referencia=payload.get('referencia', ''),
-            )
+            # Pre-flag (Regla 6) sobre el ancla: ENVIANDO antes del POST. Solo
+            # `ConnektaNoEnviado` lo devuelve a su valor; un 5xx o una conexión
+            # cortada es «no sé» (tanda 2): queda ENVIANDO y se declara.
+            _sync_antes = _mov.siesa_sync
+            _mov.siesa_sync = SIESA_SYNC_ENVIANDO
+            db.session.commit()
+            try:
+                _res = connekta.transferir_a_averias(
+                    item_codigo=_item_codigo,
+                    cantidad=payload['cantidad'],
+                    referencia=payload.get('referencia', ''),
+                )
+            except _ResultadoDesconocido:
+                raise
+            except ConnektaNoEnviado:
+                _mov.siesa_sync = _sync_antes or 'PENDIENTE'
+                db.session.commit()
+                raise
+            except Exception as _e_av:
+                raise _ResultadoDesconocido(
+                    f'{MARCA_SIN_VERIFICAR}: TRASLADO_AVERIAS job={job.id}: el envío '
+                    f'falló sin respuesta clara ({str(_e_av)[:300]}) y el traslado pudo '
+                    f'haber entrado. No se reenvía: resuélvalo en Siesa → Recuperación.'
+                ) from _e_av
             # En modo ensayo el POST se bloquea del lado del servidor: no hubo
-            # traslado real, así que el movimiento NO se marca — o el reintento
-            # quedaría bloqueado por una idempotencia que no respalda nada.
-            if not _res.get('modo_ensayo'):
+            # traslado real, así que el movimiento vuelve a como estaba — o el
+            # reintento quedaría bloqueado por una idempotencia que no respalda nada.
+            if _res.get('modo_ensayo'):
+                _mov.siesa_sync = _sync_antes or 'PENDIENTE'
+                db.session.commit()
+            else:
                 try:
                     _mov.siesa_sync = 'ENVIADO'
                     db.session.commit()
@@ -2541,15 +2589,117 @@ def reencolar_job_fallido(job: SiesaJob, *, usuario_id: int = None,
 
 
 def reintentar_job(job_id: int, usuario_id: int = None, motivo: str = None) -> dict:
-    """Admin fuerza un reintento de un job FALLIDO."""
+    """Admin fuerza un reintento de un job FALLIDO. Un envío que quedó sin
+    verificar no se reintenta así: se resuelve (`resolver_preflag_sin_verificar`)."""
     job = SiesaJob.query.get(job_id)
     if not job:
         raise ValueError(f'Job {job_id} no encontrado')
     if job.estado != EstadoSiesaJob.FALLIDO:
         raise ValueError(f'Job {job_id} no está en estado FALLIDO — está {job.estado}')
+    exigir_no_sin_verificar(job)
     reencolar_job_fallido(job, usuario_id=usuario_id, motivo=motivo)
     db.session.commit()
     return job.to_dict()
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Envíos con pre-flag que quedaron sin verificar — la salida humana
+# ═════════════════════════════════════════════════════════════════════════════
+#
+# ENTRADA_OC, TRASLADO_AVERIAS y AJUSTE_CONTEO ponen su pre-flag antes del POST
+# (`_ejecutar_con_preflag`, y el ancla del movimiento de avería). Ante un «no
+# sé» la bandera queda y el job va a FALLIDO sin reintento (tanda 2). Con la
+# bandera puesta, «Reintentar» leería «ya enviado» y cerraría el job sin
+# preguntarle a nadie si el documento entró: por eso reintentar lo rechaza y la
+# salida es una persona que busca en Siesa y dice qué vio (como el recibo de
+# caja: `LiquidacionService.resolver_recibo_sin_verificar`).
+
+TIPOS_CON_PREFLAG = ('ENTRADA_OC', 'TRASLADO_AVERIAS', 'AJUSTE_CONTEO')
+
+
+def _preflag_de(job):
+    """`(objeto, atributo, valor_puesto, valor_libre)` del pre-flag de un job,
+    o `None` si el job no tiene (o su objeto ya no existe)."""
+    if job is None or job.tipo not in TIPOS_CON_PREFLAG:
+        return None
+    p = job.get_payload() or {}
+    if job.tipo == 'ENTRADA_OC':
+        from app.models.recepcion import RecepcionMercancia
+        obj = db.session.get(RecepcionMercancia, p.get('recepcion_id')) if p.get('recepcion_id') else None
+        return (obj, 'siesa_triggered', True, False) if obj is not None else None
+    if job.tipo == 'TRASLADO_AVERIAS':
+        if p.get('movimiento_id'):
+            from app.models.inventario import MovimientoInventario
+            obj = db.session.get(MovimientoInventario, p['movimiento_id'])
+            return (obj, 'siesa_sync', SIESA_SYNC_ENVIANDO, 'PENDIENTE') if obj is not None else None
+        from app.models.devolucion import TareaDevolucion
+        obj = db.session.get(TareaDevolucion, p.get('tarea_id')) if p.get('tarea_id') else None
+        return (obj, 'siesa_triggered', True, False) if obj is not None else None
+    from app.models.conteo import SesionConteo
+    obj = db.session.get(SesionConteo, p.get('sesion_id')) if p.get('sesion_id') else None
+    return (obj, 'siesa_triggered', True, False) if obj is not None else None
+
+
+def preflag_sin_verificar(job) -> bool:
+    """¿Este job FALLIDO dejó su pre-flag puesto sin desenlace? **La única**
+    que lo contesta (panel, reintentar, reintentos en lote)."""
+    if job is None or job.estado != EstadoSiesaJob.FALLIDO:
+        return False
+    pf = _preflag_de(job)
+    if pf is None:
+        return False
+    obj, attr, puesto, _libre = pf
+    return getattr(obj, attr, None) == puesto
+
+
+def exigir_no_sin_verificar(job) -> None:
+    """Levanta `ValueError` si el job quedó sin verificar: reintentarlo
+    cerraría el envío como hecho sin que nadie haya mirado Siesa."""
+    if preflag_sin_verificar(job):
+        raise ValueError(
+            f'El envío {job.id} ({job.tipo}) quedó sin verificar: pudo haber entrado a '
+            f'Siesa. No se reintenta así — búsquelo en Siesa y diga si está o no '
+            f'(Siesa → Recuperación, «¿Está en Siesa?»).')
+
+
+def resolver_preflag_sin_verificar(job_id: int, *, usuario_id: int, entro: bool,
+                                   motivo: str, origen: str = None) -> SiesaJob:
+    """Una persona dice cómo terminó un envío que quedó sin verificar.
+
+    · `entro=True`: lo encontró en Siesa. El pre-flag queda (o el movimiento
+      pasa a ENVIADO) y el job vuelve a la cola: su guarda lo cierra sin
+      POST (el conteo en AJUSTANDO termina de ajustar el WMS ahí mismo).
+    · `entro=False`: no está. Se baja el pre-flag y el job vuelve a la cola:
+      se envía de nuevo.
+
+    Motivo obligatorio; FORZAR en la bitácora. **No hace POST.** No hace commit.
+    """
+    from app.services.bitacora import (FORZADO_PREFLAG_RESUELTO_A_MANO, foto,
+                                       motivo_obligatorio, registrar_accion)
+    texto = motivo_obligatorio(motivo, 'resolver a mano un envío a Siesa sin verificar')
+    job = db.session.get(SiesaJob, job_id)
+    if job is None:
+        raise LookupError(f'Job {job_id} no encontrado')
+    if not preflag_sin_verificar(job):
+        raise ValueError(f'El envío {job_id} no está pendiente de verificar: no hay nada '
+                         f'que resolver.')
+    obj, attr, _puesto, libre = _preflag_de(job)
+    antes = {attr: getattr(obj, attr)}
+    if entro:
+        if attr == 'siesa_sync':
+            obj.siesa_sync = 'ENVIADO'
+    else:
+        setattr(obj, attr, libre)
+    registrar_accion(
+        'FORZAR', obj, usuario_id=usuario_id, motivo=texto, origen=origen,
+        entidad_codigo=f'{job.tipo}#{job.id}',
+        antes=antes,
+        despues={'forzado': FORZADO_PREFLAG_RESUELTO_A_MANO, 'job_id': job.id,
+                 'tipo': job.tipo, 'entro': bool(entro), attr: getattr(obj, attr)})
+    reencolar_job_fallido(job, usuario_id=usuario_id, origen=origen,
+                          motivo=f'Resuelto a mano: {"está" if entro else "no está"} en '
+                                 f'Siesa — {texto}')
+    return job
 
 
 def disparar_dlq_inmediato(app=None):

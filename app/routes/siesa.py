@@ -1516,6 +1516,7 @@ def listar_jobs_fallidos():
         query = query.filter_by(tipo=tipo)
 
     jobs = query.order_by(SiesaJob.fecha_creacion.desc()).limit(200).all()
+    from app.services.siesa_job_service import preflag_sin_verificar
 
     por_tipo = {}
     for j in jobs:
@@ -1525,8 +1526,45 @@ def listar_jobs_fallidos():
     return jsonify({
         'total': len(jobs),
         'por_tipo': por_tipo,
-        'jobs': [j.to_dict() for j in jobs]
+        # `sin_verificar`: pudo haber entrado; la salida es «¿Está en Siesa?»,
+        # no «Reintentar» (`preflag_sin_verificar`, la única que lo decide).
+        'jobs': [{**j.to_dict(), 'sin_verificar': preflag_sin_verificar(j)} for j in jobs]
     }), 200
+
+
+@siesa_bp.route('/jobs/<int:job_id>/resolver-sin-verificar', methods=['POST'])
+@jwt_required()
+def resolver_job_sin_verificar(job_id):
+    """Una persona dice si un envío que quedó sin verificar (ENTRADA_OC,
+    TRASLADO_AVERIAS, AJUSTE_CONTEO) está en Siesa. `{"entro": bool, "motivo"}`.
+    **No hace POST**: con «sí», el envío se cierra sin reenviar; con «no», se
+    baja el pre-flag y vuelve a la cola. FORZAR en la bitácora. Solo admin."""
+    admin = _solo_admin()
+    if not admin:
+        return jsonify({'error': 'Solo admin puede resolver envíos sin verificar'}), 403
+    from app.extensions import db
+    from app.services.bitacora import MotivoRequerido
+    from app.services.siesa_job_service import resolver_preflag_sin_verificar
+    cuerpo = request.get_json(silent=True) or {}
+    if not isinstance(cuerpo.get('entro'), bool):
+        return jsonify({'error': 'Diga si el documento está en Siesa (entro: true o false)'}), 400
+    try:
+        job = resolver_preflag_sin_verificar(job_id, usuario_id=admin.id,
+                                             entro=cuerpo['entro'],
+                                             motivo=cuerpo.get('motivo'),
+                                             origen=request.path)
+    except LookupError as e:
+        return jsonify({'error': str(e)}), 404
+    except MotivoRequerido as e:
+        return jsonify({'error': str(e)}), 400
+    except ValueError as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 409
+    db.session.commit()
+    return jsonify({'mensaje': (f'Envío {job.id}: se cierra sin reenviar'
+                                if cuerpo['entro'] else
+                                f'Envío {job.id}: vuelve a la cola para enviarse'),
+                    'job': job.to_dict()}), 200
 
 
 @siesa_bp.route('/jobs/<int:job_id>/descartar', methods=['POST'])
@@ -1586,11 +1624,17 @@ def resetear_jobs_fallidos():
         tipo=tipo,
         estado=EstadoSiesaJob.FALLIDO
     ).all()
+    # Un envío que quedó sin verificar no se reencola en lote: con su pre-flag
+    # puesto, la guarda lo cerraría como hecho sin que nadie mire Siesa.
+    from app.services.siesa_job_service import preflag_sin_verificar
+    sin_verificar = [j.id for j in jobs if preflag_sin_verificar(j)]
+    jobs = [j for j in jobs if j.id not in set(sin_verificar)]
 
     if not jobs:
         return jsonify({
-            'mensaje': f'No hay jobs {tipo} en estado FALLIDO',
-            'reseteados': 0
+            'mensaje': f'No hay jobs {tipo} en estado FALLIDO que se puedan reintentar',
+            'reseteados': 0,
+            'sin_verificar': sin_verificar,
         }), 200
 
     # El error de cada job va a la bitácora antes de limpiarlo (Fase 0).
@@ -1608,7 +1652,8 @@ def resetear_jobs_fallidos():
         'mensaje': f'{len(jobs)} job(s) reseteados a PENDIENTE — DLQ disparado',
         'reseteados': len(jobs),
         'tipo': tipo,
-        'job_ids': [j.id for j in jobs]
+        'job_ids': [j.id for j in jobs],
+        'sin_verificar': sin_verificar,
     }), 200
 
 

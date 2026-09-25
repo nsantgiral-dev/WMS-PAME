@@ -79,6 +79,8 @@ FORZADO_NC_APROBADA_A_MANO = 'nc_aprobada_sin_verificar_en_siesa'
 FORZADO_PARADA_TARDIA = 'parada_confirmada_despues_del_cierre'
 FORZADO_RC_RESUELTO_A_MANO = 'recibo_de_caja_resuelto_a_mano'
 FORZADO_FE_SOBRE_RM_DIGITADA = 'factura_sobre_remision_digitada'
+# Tanda 2 (2026-09-25).
+FORZADO_PREFLAG_RESUELTO_A_MANO = 'envio_sin_verificar_resuelto_a_mano'
 
 #: tipo → (verbo en pasado para la bitácora legible, qué se saltó).
 TIPOS_FORZADO = {
@@ -98,6 +100,8 @@ TIPOS_FORZADO = {
                                  'el desenlace de un recibo sin verificar lo decidió una persona'),
     FORZADO_FE_SOBRE_RM_DIGITADA: ('facturó sobre una remisión digitada a mano',
                                    'la factura salió sobre una remisión que el WMS no tenía'),
+    FORZADO_PREFLAG_RESUELTO_A_MANO: ('resolvió a mano el envío a Siesa de',
+                                      'el desenlace de un envío sin verificar lo decidió una persona'),
 }
 
 #: Un FORZAR que no dice qué forzó (fila vieja de forma desconocida).
