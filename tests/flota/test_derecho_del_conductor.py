@@ -101,7 +101,7 @@ SIN_VERIFICAR = {
     ('conductor.py', 'mi_turno'):
         'No recibe entidad: la identidad y el vehículo salen del token '
         '(`_conductor_del_token`), nunca del request.',
-    ('conductor.py', 'mis_reportes'):
+    ('conductor.py', 'mis_turnos'):
         'No recibe entidad: lista las custodias del conductor del token, '
         'filtradas por su propia ficha.',
 }

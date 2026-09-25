@@ -31,11 +31,17 @@ const FJ_ESTADO = {
   sin_actividad: ['neutro', 'Sin actividad registrada'],
 };
 
-const FJ_MOTIVOS = {
-  CLIENTE_CERRADO: 'cliente cerrado', FUERA_DE_HORARIO: 'fuera de horario',
-  NO_PAGO_SE_QUEDO: 'no pagó y se quedó la mercancía', DIRECCION_ERRADA: 'dirección errada',
-  NO_PIDIO: 'no pidió', MERCANCIA_AVERIADA: 'mercancía averiada', NO_PAGO: 'no pagó',
-};
+/** El motivo de rechazo en palabras. **Sale del servidor** (`motivos_rechazo`,
+ * el mismo catálogo del desplegable del conductor): una copia acá divergía en
+ * silencio el día que se agregara un motivo. En minúscula de frase para que
+ * entre en «3 rechazos por cliente cerrado…». Un código que el catálogo no
+ * trae se muestra sin guiones: se ve, y se agrega. */
+function fjMotivo(codigo) {
+  const m = (_FJ.dia && _FJ.dia.motivos_rechazo) || (_FJ.d && _FJ.d.motivos_rechazo) || {};
+  const t = Object.prototype.hasOwnProperty.call(m, codigo) ? m[codigo]
+    : String(codigo || '').replace(/_/g, ' ').toLowerCase();
+  return t.charAt(0).toLowerCase() + t.slice(1);
+}
 
 const FJ_ENTREGA = {
   ENTREGADO: 'entregado', PARCIAL: 'entrega parcial', RECHAZADO: 'rechazado',
@@ -93,10 +99,6 @@ function fjNum(x) {
   return Number(x).toFixed(1).replace('.', ',');
 }
 
-function fjPesos(x) {
-  if (x === null || x === undefined) return 'sin dato';
-  return '$' + Math.round(Number(x)).toLocaleString('es-CO');
-}
 
 function fjPct(x) {
   if (x === null || x === undefined) return 'sin dato';
@@ -163,7 +165,7 @@ function fjHtmlResumen(d) {
     <div style="display:flex;justify-content:space-between;align-items:flex-end;flex-wrap:wrap;gap:8px;">
       <div>
         <div style="font-size:var(--fs-xl);font-weight:800;color:var(--tx);">🕒 Jornada de los conductores</div>
-        <div style="font-size:var(--fs-sm);color:var(--tx2);">Del ${esc(d.desde)} al ${esc(d.hasta)} · lo que cada uno dejó registrado. Un tramo sin registro es «sin explicar»: pregúntele antes de concluir.</div>
+        <div style="font-size:var(--fs-sm);color:var(--tx2);">Del ${esc(d.desde)} al ${esc(d.hasta)} · lo que cada uno dejó registrado. Un tramo sin registro es «sin explicar»: preguntale antes de concluir.</div>
       </div>
       <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
         <input id="fj-desde" type="date" class="input-field" value="${esc(d.desde)}" style="max-width:160px;font-size:var(--fs-sm);">
@@ -204,7 +206,7 @@ function fjFraseResumen(f) {
   }
   for (const [mot, t] of Object.entries(f.rechazos || {})) {
     if (!t || !t.observado) continue;
-    const nombre = FJ_MOTIVOS[mot] || mot;
+    const nombre = fjMotivo(mot);
     const palabra = t.observado === 1 ? 'rechazo' : 'rechazos';
     partes.push(t.base === 'con_base'
       ? `${t.observado} ${palabra} por ${nombre}, sus compañeros en esa ruta: ${fjNum(t.esperado_pares)}`
@@ -228,7 +230,7 @@ function fjHtmlFila(f, i) {
     `${f.jornadas} ${f.jornadas === 1 ? 'jornada' : 'jornadas'}`,
     f.reconstruidas ? `${f.reconstruidas} ${f.reconstruidas === 1 ? 'completa' : 'completas'}` : '',
     f.parciales ? `${f.parciales} solo en tramo` : '',
-    f.no_reconstruibles ? `${f.no_reconstruibles} no reconstruibles` : '',
+    f.no_reconstruibles ? `${f.no_reconstruibles} no ${f.no_reconstruibles === 1 ? 'reconstruible' : 'reconstruibles'}` : '',
     hj.mediana !== null && hj.mediana !== undefined ? `jornada típica ${fjNum(hj.mediana)} h` : '',
     f.rutas && f.rutas.con_base ? `rutas más largas que el 90 % de sus compañeros: ${f.rutas.sobre_p90} de ${f.rutas.con_base}` : '',
   ].filter(Boolean).map((x) => esc(x)).join(' · ');
@@ -351,7 +353,7 @@ function fjHtmlDia(j) {
     ${bloqueNoEval}
     <div style="font-size:var(--fs-lg);font-weight:700;color:var(--tx);margin:14px 0 4px;">Línea de tiempo</div>
     ${fjHtmlLinea(j)}
-    ${fjHtmlPie(j)}
+    ${fjHtmlPie(j, false)}
   </div>`;
 }
 
@@ -423,7 +425,7 @@ function fjHtmlEvidencia(lista) {
   return (lista || []).slice(0, 12).map((item) => {
     const partes = Object.keys(FJ_ETIQUETAS)
       .filter((k) => k in item)
-      .map((k) => `${FJ_ETIQUETAS[k]}: ${fjValor(k === 'motivo_rechazo' ? (FJ_MOTIVOS[item[k]] || item[k]) : item[k])}`);
+      .map((k) => `${FJ_ETIQUETAS[k]}: ${fjValor(k === 'motivo_rechazo' ? fjMotivo(item[k]) : item[k])}`);
     return `<li>${esc(partes.join(' · '))}</li>`;
   }).join('');
 }
@@ -502,9 +504,9 @@ function fjDetalleEvento(e) {
       if (e.tipo.indexOf('parada') === 0) {
         p.push(d.cliente ? `${d.cliente}${d.municipio ? ` (${d.municipio})` : ''}` : 'cliente sin nombre');
         p.push(FJ_ENTREGA[d.estado] || d.estado);
-        if (d.motivo_rechazo) p.push(FJ_MOTIVOS[d.motivo_rechazo] || d.motivo_rechazo);
-        if (d.forma_pago) p.push(`${d.forma_pago.toLowerCase()} ${fjPesos(d.monto_cobrado)}`);
-        if (d.monto_descuento > 0) p.push(`descuento ${fjPesos(d.monto_descuento)}`);
+        if (d.motivo_rechazo) p.push(fjMotivo(d.motivo_rechazo));
+        if (d.forma_pago) p.push(`${d.forma_pago.toLowerCase()} ${fmtPesos(d.monto_cobrado)}`);
+        if (d.monto_descuento > 0) p.push(`descuento ${fmtPesos(d.monto_descuento)}`);
         p.push(e.lat !== null && e.lat !== undefined
           ? `con ubicación${e.precision_m ? ` ±${e.precision_m} m` : ''}`
           : `sin ubicación${d.gps && d.gps.motivo_sin_dato ? ` (${d.gps.motivo_sin_dato})` : ''}`);
@@ -556,7 +558,16 @@ function fjHtmlLinea(j) {
 
 // ── Lo que no se puede ver, y el aviso legal ───────────────────────────────
 
-function fjHtmlPie(d) {
+/** El pie. **«Lo que no puede ver» va UNA vez**, al pie de la lista de
+ * conductores (`completo`); en el día queda solo el aviso legal, que tiene que
+ * estar en toda pantalla que se use para hablar con un conductor. */
+function fjHtmlPie(d, completo = true) {
+  if (!completo) {
+    const caidasDia = (d.fuentes_no_disponibles || []).length
+      ? fjCaja('advertencia', `Fuentes que no se pudieron leer: ${esc(d.fuentes_no_disponibles.join('; '))}`) : '';
+    return `${caidasDia}<div style="font-size:var(--fs-xs);color:var(--tx2);margin:14px 0 6px;">Lo que esta vista no puede ver está al pie de la lista de conductores.</div>
+  ${fjCaja('neutro', `<span style="font-size:var(--fs-xs);">${esc(d.aviso_legal || '')}</span>`)}`;
+  }
   const nopuede = (d.no_puede_ver || []).map((x) => `<li>${esc(x)}</li>`).join('');
   const tel = d.hora_del_telefono ? `<div style="margin-top:6px;">${esc(d.hora_del_telefono.declaracion || '')}</div>` : '';
   const caidas = (d.fuentes_no_disponibles || []).length

@@ -283,12 +283,12 @@ function flotaAnCobertura(h) {
 function flotaAnHallazgos(h) {
   const d = h.dias_hallazgo_abierto;
   if (d === null || d === undefined) {
-    return flotaAnPanelVacio('Días de hallazgo abierto',
-      'La tabla de hallazgos todavía no existe en esta base.',
+    return flotaAnPanelVacio('Días de daño abierto',
+      'La tabla de daños todavía no existe en esta base.',
       'la migración del módulo de flota.');
   }
   if (!d.casos.length) {
-    return flotaAnPanelVacio('Días de hallazgo abierto',
+    return flotaAnPanelVacio('Días de daño abierto',
       'Ningún daño reportado todavía. El indicador nace al cerrar el primero, ' +
       'con su odómetro y su evidencia.',
       'reportar un daño desde «Daños» en el expediente del vehículo.');
@@ -312,7 +312,7 @@ function flotaAnHallazgos(h) {
                  (c.vencido ? ' · <b>VENCIDO</b>' : '') +
                  (c.aplazado_veces ? ` · aplazado ${esc(c.aplazado_veces)} vez/veces` : ''),
               c.vencido ? 'red' : 'yellow')).join('')}</ul>`
-    : '<p style="margin:8px 0 4px;color:var(--tx2)">Ningún hallazgo abierto.</p>';
+    : '<p style="margin:8px 0 4px;color:var(--tx2)">Ningún daño abierto.</p>';
 
   const resueltos = cerrados.length
     ? `<p style="margin:12px 0 4px"><b>Resueltos</b> — duración real</p>
@@ -329,11 +329,11 @@ function flotaAnHallazgos(h) {
     : '';
 
   const promedio = d.n
-    ? `<b>${esc(d.promedio_dias)} días</b> en promedio, sobre <b>${esc(d.n)}</b> hallazgo(s) cerrado(s)`
+    ? `<b>${esc(d.promedio_dias)} días</b> en promedio, sobre <b>${esc(d.n)}</b> ${d.n === 1 ? 'daño cerrado' : 'daños cerrados'}`
     : `<b>sin dato</b> — ${esc(d.motivo)}`;
 
   return `<div class="tabla-card">
-    <div class="tabla-titulo">Días de hallazgo abierto</div>
+    <div class="tabla-titulo">Días de daño abierto</div>
     ${vivos}
     ${resueltos}
     ${excluidos}
@@ -449,7 +449,7 @@ function flotaAnCPK(h) {
         <b>${esc(f.placa)}</b>
         <span style="color:var(--tx2)">${
           f.cpk === 'sin_dato' ? 'sin dato'
-            : `${flotaPesos(f.cpk)}/km · ${flotaPesos(f.pesos)} ÷ ${
+            : `${fmtPesos(f.cpk)}/km · ${fmtPesos(f.pesos)} ÷ ${
                 Number(f.km).toLocaleString('es-CO')} km · odómetro ${esc(f.marca)}`}</span>
       </div>
       ${f.motivo ? `<div style="font-size:var(--fs-xs);color:var(--tx2)">${esc(f.motivo)}</div>` : ''}
@@ -524,7 +524,7 @@ function flotaAnPesosMes(h) {
   const orden = con.slice().sort((a, b) => Number(b.pesos) - Number(a.pesos));
   const cuerpo = orden.map(f => `<div style="display:flex;justify-content:space-between;font-size:var(--fs-sm);margin-bottom:6px">
       <b>${esc(f.placa)}</b>
-      <span>${flotaPesos(f.pesos)}${
+      <span>${fmtPesos(f.pesos)}${
         Number(f.pesos) === 0
           ? ' <span style="color:var(--tx2);font-weight:400">· ningún gasto cayó en el mes</span>'
           : ''}</span>
@@ -545,7 +545,7 @@ function flotaAnPesosMes(h) {
       igual. <b>No explica una subida</b>: dice cuánto, no por qué.</p>
     ${cuerpo}
     <div style="display:flex;justify-content:space-between;font-size:var(--fs-sm);font-weight:700;margin-top:8px;padding-top:8px;border-top:1px solid var(--brd)">
-      <span>Total</span><span>${flotaPesos(total)}</span></div>
+      <span>Total</span><span>${fmtPesos(total)}</span></div>
     ${cola}
     <div style="font-size:var(--fs-xs);color:var(--tx3,var(--tx2));margin-top:6px">
       ${esc(v.base)} · ${esc(v.desde)} a ${esc(v.hasta)} · sobre ${esc(con.length)} de ${esc(filas.length)}
@@ -727,17 +727,23 @@ async function flotaCargarAnalitica() {
     flotaAnPreventivo(h),
     flotaAnRitmo(h),
     flotaAnHallazgos(h),
-  ].join('') + flotaAnDiagnosticoPlegado();
+  ].join('') + flotaAnDiagnosticoPlegado(h);
 }
 
-/** El diagnóstico técnico, plegado al final de Analítica. Se arma a pedido
- * (`flotaBandejaDiagnostico`, con el mismo health) y trae los contadores
- * técnicos, la calidad del kilómetro, lo que la ficha no dice y los avisos. */
-function flotaAnDiagnosticoPlegado() {
+/** El diagnóstico técnico, plegado al final de Analítica: los números del
+ * health en palabras, la calidad del kilómetro y lo que la ficha no dice — con
+ * el MISMO health, ya leído. Los avisos de vencimiento se piden solo si
+ * alguien los abre (`flotaBandejaDiagnostico`). */
+function flotaAnDiagnosticoPlegado(h) {
   return `<div class="tabla-card"><details>
-    <summary style="cursor:pointer" onclick="flotaBandejaDiagnostico()"><b>Diagnóstico técnico</b>
+    <summary style="cursor:pointer"><b>Diagnóstico técnico</b>
       <span style="font-size:var(--fs-xs);color:var(--tx2)">— para quien mantiene el sistema</span></summary>
-    <div id="flota-diagnostico" style="font-size:var(--fs-sm)">
-      <p style="color:var(--tx2)">Tocá «Diagnóstico técnico» para cargarlo.</p></div>
+    <div style="font-size:var(--fs-sm)">
+      ${flotaBandejaDiagnosticoHtml(h)}
+      ${flotaAnLecturas(h)}
+      ${flotaAnCobertura(h)}
+      <button class="btn-flota" onclick="flotaBandejaDiagnostico()">Ver los avisos de vencimiento</button>
+      <div id="flota-diagnostico"></div>
+    </div>
   </details></div>`;
 }

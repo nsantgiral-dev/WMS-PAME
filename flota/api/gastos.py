@@ -349,6 +349,10 @@ def registrar_tanqueo():
             # escritorio registra facturas que llegan por correo—; la pantalla
             # del conductor la pide primero.
             fotos=datos['fotos'] if 'fotos' in datos else None,
+            # La foto del tablero cuando el km cambió respecto del último
+            # registrado (la pantalla del conductor la pide al tocar «Cambió»).
+            # Con el km de siempre no hace falta: se reutiliza la lectura.
+            foto_tablero=datos['foto_tablero'] if datos.get('foto_tablero') else None,
         )
     except PermisoInsuficiente as e:
         return jsonify({'error': str(e)}), 403

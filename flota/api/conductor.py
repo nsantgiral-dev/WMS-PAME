@@ -2,7 +2,9 @@
 Lo que ve el conductor en su app. Solo lo suyo.
 
 `GET /flota/conductor/mi-turno` — qué vehículo le toca hoy y en qué estado está.
-`GET /flota/conductor/mis-reportes` — sus hallazgos y en qué van.
+`GET /flota/conductor/mis-turnos` — sus turnos y en qué van (se llamaba
+`mis-reportes` y devolvía turnos: el botón dice «Mis turnos», y desde el
+2026-09-24 la ruta también).
 
 No hay endpoint de escritura acá: el recibo de turno usa
 `POST /flota/custodia/traspaso` como todos, pero con `quien_pide=conductor`, que
@@ -340,13 +342,13 @@ def mi_turno():
     }), 200
 
 
-@conductor_bp.route('/conductor/mis-reportes', methods=['GET'])
+@conductor_bp.route('/conductor/mis-turnos', methods=['GET'])
 @jwt_required()
 @exige(Roles.LECTURA_FLOTA, 'ver tus reportes')
-def mis_reportes():
+def mis_turnos():
     """Sus turnos y en qué van.
 
-    **"Mis reportes y en qué van" no es una comodidad: es lo que hace que la app
+    **"Mis turnos y en qué van" no es una comodidad: es lo que hace que la app
     sea el respaldo del conductor** y no un registro sobre él hecho por otro. Si
     reporta y no ve qué pasó con lo que reportó, deja de reportar.
 

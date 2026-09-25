@@ -283,6 +283,12 @@ def mundo(db):
         galones = 16 if dias_atras == 3 else 10
         tanquear('GAL001', dias_atras, km, galones, 15_000 * galones)
         km += 300
+    # Los km de los tanqueos de GAL001 se cotejaron contra la foto: sin eso la
+    # ventana no es evidencia de galones (mismo criterio que km en duda).
+    from flota.adaptadores.verificacion import verificar
+    for l in LecturaOdometro.query.filter_by(vehiculo_id=veh['GAL001'].id,
+                                             confianza='dudosa').all():
+        verificar(lectura_id=l.id, usuario_id=A)
     km = 90_000
     for dias_atras in (12, 8, 4):
         tanquear('GAL002', dias_atras, km, 10, 150_000)
@@ -570,6 +576,27 @@ class TestSenales:
         assert ev['ventanas_del_rendimiento'] == 7
         assert s[0]['caso'] == {'tipo': 'expediente', 'pestana': 'gastos',
                                 'gasto_id': ev['gasto_id']}
+
+    def test_una_ventana_con_km_en_duda_no_es_evidencia_de_galones(self, client, mundo):
+        """La contradicción que había: el km en duda salía en Pendientes y el
+        MISMO número sostenía «galones de más» en Señales. Un tanqueo nuevo sin
+        foto del tablero cierra una ventana dudosa: no es señal, es «verificalo
+        primero»."""
+        from app.models.usuario import Usuario
+        from flota.adaptadores.gastos import registrar_tanqueo
+        from flota.dominio.senales import MOTIVO_TRAMO_EN_DUDA
+        a = Usuario.query.filter_by(email='jefa@bandeja.test').one()
+        registrar_tanqueo(
+            vehiculo_id=mundo['veh']['GAL001'], fecha=HOY - timedelta(days=1),
+            valor=Decimal(300_000), galones=Decimal(20), tanque='lleno',
+            estacion='Terpel Neiva', km=72_400, proveedor='Terpel',
+            origen_costo='tarjeta_convenio', registrado_por_usuario_id=a.id,
+            documento_numero='F-GAL001-dudoso', ts=T(1, 10))
+        b = _bandeja(client, mundo)
+        assert all(x['evidencia']['km_hasta'] != 72_400
+                   for x in _sen(b, 'GAL001', 'galones'))
+        assert any(x['motivo'] == MOTIVO_TRAMO_EN_DUDA
+                   for x in _no_eval(b, 'GAL001', 'galones'))
 
     def test_sin_rendimiento_sostenible_no_hay_senal(self, client, mundo):
         b = _bandeja(client, mundo)

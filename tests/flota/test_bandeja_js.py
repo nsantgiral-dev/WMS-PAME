@@ -142,8 +142,11 @@ class TestUnSoloViaje:
             'leer': ['flota-analitica'],
         })
         assert r['pedidas'].count('/flota/health') == 1
-        # La salud se mudó acá, con el MISMO health.
-        assert '2 documento(s) VENCIDOS' in r['html']['flota-analitica']
+        # El diagnóstico técnico vive acá, plegado, con el MISMO health.
+        html = r['html']['flota-analitica']
+        assert 'Diagnóstico técnico' in html
+        assert 'Papeles vencidos: <b>2</b>' in html
+        assert '/flota/avisos' not in r['pedidas']
 
     def test_un_fallo_se_dice_en_la_pestana(self, tmp_path):
         r = _pintar(tmp_path, bandeja={'__error__': '503 falta flota_hallazgo'})
@@ -179,10 +182,12 @@ class TestHoy:
         assert ataque not in html
         assert '&lt;img src=x onerror=alert(1)&gt;' in html
 
-    def test_el_diagnostico_va_plegado_y_no_se_pide_solo(self, tmp_path):
+    def test_hoy_no_trae_el_diagnostico_tecnico(self, tmp_path):
+        """Lo primero que ve el encargado es su trabajo del día: el
+        diagnóstico técnico se mudó, plegado, al final de Analítica."""
         r = _pintar(tmp_path)
-        assert '<details>' in r['html']['flota-contenido']
-        assert 'Diagnóstico' in r['html']['flota-contenido']
+        assert 'Diagnóstico' not in r['html']['flota-contenido']
+        assert '/flota/health' not in r['pedidas']
         assert '/flota/avisos' not in r['pedidas']
 
     def test_sin_vehiculos_manda_a_la_pestana_que_el_rol_ve(self, tmp_path):
@@ -281,7 +286,9 @@ class TestSenales:
         html = _pintar(tmp_path, 'senales')['html']['flota-contenido']
         assert '120 km en días sin ruta' in html
         assert 'turno a nombre de Eva' in html
-        assert 'km desde' in html and '20300' in html
+        # En palabras y con separador de miles (2026-09-24), no la clave cruda.
+        assert 'Km al empezar' in html and '20.300' in html
+        assert 'km desde' not in html
         assert 'onclick="flotaSenalAbrir(0)"' in html
         # Los ids internos no son evidencia para una persona.
         assert 'lectura desde id' not in html
@@ -289,7 +296,7 @@ class TestSenales:
     def test_lo_que_no_se_pudo_revisar_se_dice(self, tmp_path):
         html = _pintar(tmp_path, 'senales')['html']['flota-contenido']
         assert 'Lo que no se pudo revisar (1)' in html
-        assert 'GAL002' in html and '(2 casos)' in html
+        assert 'GAL002' in html and '2 casos' in html
 
     def test_la_vara_se_publica(self, tmp_path):
         html = _pintar(tmp_path, 'senales')['html']['flota-contenido']
@@ -354,22 +361,33 @@ class TestExpediente:
 
 class TestDiagnostico:
 
-    def test_traduce_los_codigos_y_trae_los_avisos(self, tmp_path):
+    def test_traduce_los_codigos_en_analitica_con_el_mismo_health(self, tmp_path):
+        """El diagnóstico técnico vive plegado al final de Analítica y se arma
+        con el MISMO health que ya leyó la pestaña."""
         r = correr(tmp_path, {
             'rutas': {'/flota/health': {'custodias_pendiente_sede': 3,
                                         'lecturas_ts_duplicado': 10,
                                         'ambiente': 'datos_de_prueba',
                                         'datos_reales': False},
-                      '/flota/avisos': {'avisos': [], 'encendido': False}},
-            'pasos': [{'fn': 'flotaBandejaDiagnostico'}],
-            'leer': ['flota-diagnostico'],
+                      '/flota/bandeja': _bandeja()},
+            'pasos': [{'fn': 'flotaSubtab', 'args': ['analitica']}],
+            'leer': ['flota-analitica'],
         })
-        html = r['html']['flota-diagnostico']
+        html = r['html']['flota-analitica']
         assert 'Turnos cerrados en una sede que no está en el maestro' in html
         assert 'pendiente_sede' not in html
         assert 'NO son de la operación real' in html
-        assert 'Los avisos están' in html               # el bloque de avisos
         assert r['pedidas'].count('/flota/health') == 1
+        assert '/flota/avisos' not in r['pedidas']
+
+    def test_los_avisos_se_piden_solo_si_alguien_los_abre(self, tmp_path):
+        r = correr(tmp_path, {
+            'rutas': {'/flota/avisos': {'avisos': [], 'encendido': False}},
+            'pasos': [{'fn': 'flotaBandejaDiagnostico'}],
+            'leer': ['flota-diagnostico'],
+        })
+        assert 'Los avisos están' in r['html']['flota-diagnostico']
+        assert r['pedidas'] == ['/flota/avisos']
 
 
 class TestLaFichaDeUnVehiculoNuevoSeAbreDesdeLaBandeja:

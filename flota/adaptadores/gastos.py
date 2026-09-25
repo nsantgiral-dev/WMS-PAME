@@ -195,7 +195,8 @@ def _periodo(categoria: str, fecha: date,
 
 def _lectura_para(*, vehiculo_id: int, categoria: str, km: Optional[int],
                   usuario_id: int, ahora: datetime,
-                  lectura_id: Optional[int] = None) -> LecturaOdometro:
+                  lectura_id: Optional[int] = None,
+                  foto_tablero: Optional[dict] = None) -> LecturaOdometro:
     """La lectura de la que cuelga el gasto. Ver el encabezado del módulo.
 
     De campo: se exige `km` y se ancla con la política de `hallazgos`.
@@ -253,8 +254,11 @@ def _lectura_para(*, vehiculo_id: int, categoria: str, km: Optional[int],
                 f'{categoria} se registra con el vehículo delante: el '
                 f'kilometraje es obligatorio (regla 3).'
             )
+        # Con el km de siempre se reutiliza la última lectura (no nace una
+        # dudosa); si cambió, la foto del tablero —cuando viene— la respalda.
         return anclar_odometro(vehiculo_id, km, usuario_id, ahora,
-                               origen=ORIGEN_DE_LECTURA[categoria])
+                               origen=ORIGEN_DE_LECTURA[categoria],
+                               foto_tablero=foto_tablero)
 
     if km is not None:
         raise GastoInvalido(
@@ -356,6 +360,7 @@ def registrar_gasto(
     periodo_hasta: Optional[date] = None,
     ts: Optional[datetime] = None,
     commit: bool = True,
+    foto_tablero: Optional[dict] = None,
 ) -> Gasto:
     """Registra un peso que salió por un vehículo.
 
@@ -432,7 +437,8 @@ def registrar_gasto(
     try:
         lectura = _lectura_para(vehiculo_id=vehiculo_id, categoria=categoria,
                                 km=km, usuario_id=registrado_por_usuario_id,
-                                ahora=ahora, lectura_id=lectura_id)
+                                ahora=ahora, lectura_id=lectura_id,
+                                foto_tablero=foto_tablero)
 
         fila = Gasto(
             vehiculo_id=vehiculo_id,
@@ -481,6 +487,7 @@ def registrar_tanqueo(
     descripcion: Optional[str] = None,
     fotos: Optional[list] = None,
     ts: Optional[datetime] = None,
+    foto_tablero: Optional[dict] = None,
 ) -> Tanqueo:
     """Registra un tanqueo: la fila de `flota_gasto` y su extremidad, juntas.
 
@@ -531,7 +538,10 @@ def registrar_tanqueo(
             valor=valor, proveedor=proveedor, origen_costo=origen_costo,
             registrado_por_usuario_id=registrado_por_usuario_id, km=km,
             documento_numero=documento_numero, centro_op=centro_op,
-            descripcion=descripcion, ts=ahora, commit=False)
+            descripcion=descripcion, ts=ahora, commit=False,
+            # El km que el conductor cambió llega con la foto del tablero: la
+            # lectura nace respaldada y no a la cola de verificación.
+            foto_tablero=foto_tablero)
 
         fila = Tanqueo(gasto_id=gasto.id, galones=cuantos,
                        tanque=tanque, estacion=estacion.strip())
@@ -636,9 +646,12 @@ def tanqueos_de(vehiculo_id: int) -> List[dict]:
              .join(LecturaOdometro, Gasto.lectura_id == LecturaOdometro.id)
              .filter(Gasto.vehiculo_id == vehiculo_id).all())
     ordenadas = sorted(filas, key=lambda f: (f[2].valor_km, f[0].gasto_id))
+    # `lectura_id` viaja para que quien juzgue una ventana pueda preguntar con
+    # qué confianza se sostienen sus dos extremos (la bandeja: una ventana con
+    # un km en duda no es evidencia de galones de más).
     return [{'km': lec.valor_km, 'galones': Decimal(tq.galones),
              'tanque': tq.tanque, 'gasto_id': tq.gasto_id,
-             'estacion': tq.estacion, 'fecha': g.fecha}
+             'estacion': tq.estacion, 'fecha': g.fecha, 'lectura_id': lec.id}
             for tq, g, lec in ordenadas]
 
 

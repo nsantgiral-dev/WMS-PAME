@@ -471,7 +471,7 @@ class TestVistaDelConductor:
         # Dice cómo, no solo que no. Ver el test hermano en test_traspaso_t1.
         assert 'Entregar turno' in r.get_json()['error']
 
-    def test_mis_reportes_muestra_si_le_cerraron_el_turno(
+    def test_mis_turnos_muestra_si_le_cerraron_el_turno(
             self, app, client, db, flota_mundo, conductor_con_cuenta):
         """Que se entere por su app, no por un tercero tres días después."""
         from flota.adaptadores import traspaso
@@ -500,7 +500,7 @@ class TestVistaDelConductor:
             custodio_tipo=CustodioTipo.SEDE, custodio_sede_id=flota_mundo['alm'],
             quien_pide=QuienPide.ADMIN_ZONA, motivo_forzado='se fue sin cerrar')
 
-        cuerpo = client.get('/flota/conductor/mis-reportes',
+        cuerpo = client.get('/flota/conductor/mis-turnos',
                             headers=_auth(self._token(app, usuario))).get_json()
         forzado = [t for t in cuerpo['turnos'] if t['cerrado_a_la_fuerza']]
         assert forzado and 'sin cerrar' in forzado[0]['motivo_del_cierre_forzado']

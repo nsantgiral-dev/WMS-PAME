@@ -325,6 +325,7 @@ function flotaTrabajoSinGuardar() {
   // cuentan igual que las del turno (las dos viven en su propio estado).
   if (typeof FLOTA_DANO !== 'undefined' && FLOTA_DANO && FLOTA_DANO.foto) n += 1;
   if (typeof FLOTA_TQ !== 'undefined' && FLOTA_TQ && FLOTA_TQ.foto) n += 1;
+  if (typeof FLOTA_TQ !== 'undefined' && FLOTA_TQ && FLOTA_TQ.fotoTablero) n += 1;
   return n;
 }
 
@@ -1092,10 +1093,9 @@ const FLOTA_OPCIONES = {
 
 /** Un <select> cuya primera opción es siempre `sin_dato` — ningún default optimista. */
 function flotaSelect(campo, valor) {
+  const grupo = /_fuente$/.test(campo) ? 'fuente' : 'ficha';
   return `<select id="fi-${campo}" style="width:100%;padding:6px">` +
-    FLOTA_OPCIONES[campo].map(o =>
-      `<option value="${o}" ${o === valor ? 'selected' : ''}>${o}</option>`).join('') +
-    '</select>';
+    flotaOpciones(grupo, FLOTA_OPCIONES[campo], valor) + '</select>';
 }
 
 /** Abre el formulario de ficha técnica de una placa. */
@@ -1286,7 +1286,7 @@ async function flotaGuardarFicha() {
 async function flotaAbrirDocumentos(placa) {
   FLOTA_PLACA = placa;
   FLOTA_FOTO_DOC = null;
-  flotaAbrirModal('Documentos', placa);
+  flotaAbrirModal('Papeles', placa);
   const el = document.getElementById('flota-recibo');
   let d;
   try {
@@ -1298,17 +1298,21 @@ async function flotaAbrirDocumentos(placa) {
 
   let filas = d.documentos.map(x => {
     if (x.estado === 'no_encontrado') {
-      return `<li style="color:var(--red)"><b>${esc(x.tipo)}</b> — NO ENCONTRADO
-        · hallazgo bloqueante</li>`;
+      return `<li style="color:var(--red)"><b>${esc(flotaPalabra('documento', x.tipo))}</b> —
+        nadie lo pudo mostrar (no se sabe si existe)</li>`;
     }
     // La tarjeta de propiedad NO vence: acredita titularidad mientras el
     // vehículo sea del titular. Antes había que inventarle una fecha para poder
     // guardar y quedaba «vence en 6955 días», que es ruido con aspecto de dato.
     const color = !x.vence ? 'var(--green)'
       : (x.vencido ? 'var(--red)' : (x.dias_para_vencer <= 30 ? 'var(--yellow)' : 'var(--green)'));
+    // Las mismas palabras que el semáforo, el despacho y el conductor
+    // (`flota/dominio/salida.py`): «vencido desde dd/mm/aaaa (hace N días)».
+    const dias = (n) => `${n} ${n === 1 ? 'día' : 'días'}`;
     const nota = !x.vence ? 'no vence'
-      : (x.vencido ? `VENCIDO hace ${-x.dias_para_vencer} días`
-                   : `vence en ${x.dias_para_vencer} días`);
+      : (x.vencido ? `vencido desde ${flotaFechaCorta(x.fecha_vencimiento)} (hace ${dias(-x.dias_para_vencer)})`
+                   : (x.dias_para_vencer === 0 ? 'vence hoy'
+                      : `vence el ${flotaFechaCorta(x.fecha_vencimiento)} (en ${dias(x.dias_para_vencer)})`));
     // Botón y no `<a href>`: el endpoint exige el token en un header y una
     // pestaña nueva no manda headers. Este enlace devolvía 401 siempre — y como
     // nadie lo abrió, pasó por bueno desde que se escribió.
@@ -1324,25 +1328,23 @@ async function flotaAbrirDocumentos(placa) {
       foto = ` · <button class="btn-flota" style="padding:2px 8px;font-size:var(--fs-xs)"
              onclick="flotaVerFoto(${esc(a.id)}, '${esc(x.tipo)}')">ver ${a.es_pdf ? 'PDF' : 'imagen'}</button>`;
     }
-    return `<li style="color:${color}"><b>${esc(x.tipo)}</b> ${esc(x.numero)} · ${esc(x.entidad)}
-      ${x.vence ? '· ' + x.fecha_vencimiento + ' ' : ''}— ${nota}${foto}</li>`;
+    return `<li style="color:${color}"><b>${esc(flotaPalabra('documento', x.tipo))}</b> ${esc(x.numero)} · ${esc(x.entidad)}
+      — ${esc(nota)}${foto}</li>`;
   }).join('');
   if (!filas) filas = '<li style="color:var(--tx2)">Ninguno registrado todavía.</li>';
 
   el.innerHTML = `<div class="tabla-card">
     <ul style="line-height:1.7">${filas}</ul>
-    ${d.sin_verificar.length ? `<p style="color:var(--yellow)">Sin verificar:
-      ${d.sin_verificar.join(', ')} — <b>no es lo mismo que no encontrado</b>:
-      esto significa que nadie lo ha mirado todavía.</p>` : ''}
+    ${d.sin_verificar.length ? `<p style="color:var(--yellow)">Sin cargar:
+      ${esc(d.sin_verificar.map(t => flotaPalabra('documento', t)).join(', '))} —
+      <b>no es lo mismo que «nadie lo pudo mostrar»</b>: sin cargar es que nadie
+      lo ha subido todavía, y no se sabe si está al día.</p>` : ''}
     <div id="flota-visor" style="margin-top:12px"></div>
 
     <hr style="border-color:var(--brd-b);margin:14px 0">
     <label>Tipo</label>
     <select id="doc-tipo" style="width:100%;padding:6px" onchange="flotaDocTipoCambio()">
-      <option value="soat">SOAT</option>
-      <option value="rtm">Tecnomecánica (RTM)</option>
-      <option value="poliza_rc">Póliza RC</option>
-      <option value="tarjeta_propiedad">Tarjeta de propiedad</option>
+      ${flotaOpciones('documento', ['soat', 'rtm', 'poliza_rc', 'tarjeta_propiedad'])}
     </select>
 
     <label>Estado</label>
@@ -1366,7 +1368,7 @@ async function flotaAbrirDocumentos(placa) {
         La tarjeta de propiedad <b>no vence</b>: acredita titularidad mientras el
         vehículo sea del titular. No se le pide fecha — inventarle una la volvería
         indistinguible de un documento que sí caduca.</p>
-      <label style="display:block;margin-top:8px">Archivo del documento</label>
+      <label style="display:block;margin-top:8px">Foto o PDF del papel</label>
       <!-- Dos entradas y no una: el atributo capture abre la cámara directo, y
            sin él el teléfono ofrece el explorador de archivos. Con una sola
            había que elegir cuál de las dos cosas hacer imposible — y el SOAT
@@ -1382,12 +1384,12 @@ async function flotaAbrirDocumentos(placa) {
       <span id="doc-foto-ok" style="margin-left:8px"></span>
     </div>
     <p id="doc-aviso-no" style="display:none;color:var(--red)">
-      Queda registrado como <b>no encontrado</b>. Eso es un hallazgo bloqueante,
-      no un campo vacío — y el health lo cuenta aparte de los vencidos.</p>
+      Queda registrado como <b>«nadie lo pudo mostrar»</b>: no es un campo vacío,
+      es una afirmación — y se cuenta aparte de los vencidos.</p>
 
     <button class="btn-primary" style="margin-top:14px;width:100%"
             onclick="flotaGuardarDocumento()" id="doc-guardar"
-            data-placa="${placa}">Guardar documento</button>
+            data-placa="${esc(placa)}">Guardar papel</button>
     <div id="doc-error" style="color:var(--red);margin-top:8px"></div>
   </div>`;
 
@@ -1500,7 +1502,7 @@ async function flotaGuardarDocumento() {
     });
     const d = await r.json();
     if (!r.ok) { err.textContent = d.detalle || d.error || 'No se pudo guardar'; return; }
-    alerta(estado === 'no_encontrado' ? 'Registrado como NO ENCONTRADO' : 'Documento guardado ✓',
+    alerta(estado === 'no_encontrado' ? 'Registrado: nadie lo pudo mostrar' : 'Papel guardado ✓',
            estado === 'no_encontrado' ? 'advertencia' : 'exito');
     flotaAbrirDocumentos(placa);
   } catch (e) {
@@ -1524,391 +1526,6 @@ async function flotaGuardarDocumento() {
  * Si un vehículo aparece acá tres semanas seguidas, dejó de ser una excepción y
  * es una costumbre que nadie decidió. Verla es el primer paso para decidirla.
  */
-/** Lo que el health mide del odómetro y de los papeles, y hasta hoy no se veía.
- *
- * `GET /flota/health` mide 21 campos y **no tenía un solo consumidor** en todo
- * el repo — está exento del guard de huérfanos «porque un health lo leen
- * monitores», y no hay monitores. El 2026-09-01 se le agregaron seis campos de
- * odómetro a un tablero que nadie abría; esto cierra ese círculo.
- *
- * Sigue la disciplina de los otros bloques: **devuelve vacío cuando no hay nada
- * que hacer.** No es una pared de números — un tablero que siempre muestra algo
- * se deja de mirar, que es la lección de los 639 avisos conocidos.
- *
- * El salto de kilometraje se pinta como HECHO y sin juzgarlo: no hay un umbral
- * de km/día porque todavía no hay un mes de mediciones con qué fijarlo. Decir
- * "el salto más grande del mes fue X" es una medición; decir "X está mal" sin
- * base sería un número inventado.
- */
-async function flotaBloqueSalud(hLeido) {
-  // Recibe el health ya leído cuando lo pinta Analítica: pedirlo otra vez
-  // sería el segundo viaje que la bandeja vino a quitar. Sin argumento lo pide
-  // él mismo, que es como lo prueba su arnés.
-  let h = hLeido;
-  if (!h) {
-    try {
-      h = await get('/flota/health');
-    } catch (e) {
-      return '';
-    }
-  }
-  const filas = [];
-
-  // Papeles: lo más grave arriba. `documentos_vencidos` existía desde la tanda
-  // 1 y era el número que nadie miraba — la "otra vía" a la que el aviso de
-  // vencimiento remitía sin que existiera.
-  if (h.documentos_vencidos > 0) {
-    filas.push(['red', `${h.documentos_vencidos} documento(s) VENCIDOS`,
-      'Un vehículo con SOAT o tecnomecánica vencida no puede circular. ' +
-      'Desde el 2026-09-01 el barrido también avisa por WhatsApp, una vez por semana.']);
-  }
-  if (h.documentos_no_encontrados > 0) {
-    filas.push(['red', `${h.documentos_no_encontrados} documento(s) que nadie pudo mostrar`,
-      'No es lo mismo que vencido: es que no se sabe si existe.']);
-  }
-
-  // Daños. Van arriba del odómetro porque un bloqueante vencido es un camión
-  // que no debería estar saliendo, y eso se decide hoy; el odómetro es el
-  // denominador de lo que se calcula después.
-  //
-  // Vencido primero y con su propia línea: sumado a «abiertos» desaparece,
-  // que es precisamente lo que hace ilegible un canal de avisos.
-  if (h.hallazgos_vencidos > 0) {
-    filas.push(['red', `${h.hallazgos_vencidos} daño(s) pasados de su fecha límite`,
-      'El plazo lo fijó la gravedad al reportarlos, no alguien a mano. ' +
-      'Se abren desde el botón «Daños» de cada vehículo.']);
-  }
-  if (h.hallazgos_abiertos > 0) {
-    filas.push(['yellow', `${h.hallazgos_abiertos} daño(s) abiertos en la flota`,
-      'Todavía dentro de plazo. Un daño aplazado varias veces no está ' +
-      'gestionado: el contador de aplazos lo dice en el expediente.']);
-  }
-
-  // Inspección diaria. Va acá porque decide HOY —igual que el daño vencido— y
-  // porque los dos números contestan preguntas distintas que no se pueden
-  // sumar: cuántos camiones nadie miró, y cuántos se miraron a medias.
-  //
-  // Un vehículo sin inspección no aparece en ningún otro lado del tablero: no
-  // tiene daño, no tiene aviso, no tiene fila. La ausencia es invisible salvo
-  // que alguien la cuente, y por eso este es el campo que este bloque más
-  // necesitaba.
-  if (h.vehiculos_sin_inspeccion_hoy > 0) {
-    filas.push(['yellow', `${h.vehiculos_sin_inspeccion_hoy} vehículo(s) sin inspección de hoy`,
-      'No es que estén bien: es que hoy nadie los miró. La hace el conductor ' +
-      'desde «Inspección de hoy», con el turno ya recibido.']);
-  }
-  if (h.inspecciones_incompletas_hoy > 0) {
-    filas.push(['yellow', `${h.inspecciones_incompletas_hoy} inspección(es) de hoy quedaron incompletas`,
-      'Incompleta no es «casi apta»: hay ítems que nadie contestó. No saber ' +
-      'tampoco habilita despacho, y se corrige mirando, no en el taller.']);
-  }
-
-  const llenado = h.segundos_llenado_30d;
-  if (llenado && llenado.minimo) {
-    filas.push(['tx2',
-      `Inspección más rápida del mes: ${llenado.minimo.segundos}s para ` +
-      `${llenado.minimo.items} ítems (mediana ${llenado.mediana}s, ${llenado.n} inspecciones)`,
-      'Es un dato, no una alarma: todavía no hay un piso medido con qué ' +
-      'compararlo. Se publica para poder fijarlo con dato en vez de a ojo.']);
-  }
-
-  // Odómetro: el denominador de todo lo que viene después (CPK, preventivo por
-  // kilometraje, consumo de combustible).
-  if (h.vehiculos_sin_lectura > 0) {
-    filas.push(['yellow', `${h.vehiculos_sin_lectura} vehículo(s) sin ninguna lectura de odómetro`,
-      'No es que tengan 0 km: es que no se sabe cuánto han rodado. Sin esto no hay costo por kilómetro.']);
-  }
-  if (h.lecturas_sin_foto > 0) {
-    filas.push(['yellow', `${h.lecturas_sin_foto} lectura(s) sin foto del tablero`,
-      'Un kilometraje sin foto es un número que nadie puede verificar contra el vehículo.']);
-  }
-  if (h.fichas_con_ancla_incoherente > 0) {
-    filas.push(['yellow', `${h.fichas_con_ancla_incoherente} ficha(s) con kilometraje inicial incoherente`,
-      'El km inicial de la ficha es mayor que la primera lectura registrada. Uno de los dos está mal y hay que mirar cuál.']);
-  }
-  if (h.lecturas_correccion_30d > 0) {
-    filas.push(['yellow', `${h.lecturas_correccion_30d} corrección(es) de odómetro este mes`,
-      'Una corrección salta la validación de monotonía. Si son muchas, la vía de escape se volvió la vía normal.']);
-  }
-
-  // La confianza del kilómetro. Los dos van juntos y en líneas separadas: uno
-  // es la deuda y el otro dice si alguien la está pagando. Sumados —o peor,
-  // convertidos en un porcentaje— «cero verificadas sobre cero dudosas» (una
-  // flota sana) se vería igual que «cero verificadas sobre veinte» (una cola
-  // que nadie abre), y esos son justo los dos estados que hay que distinguir.
-  if (h.lecturas_dudosas_pendientes > 0) {
-    filas.push(['yellow', `${h.lecturas_dudosas_pendientes} kilometraje(s) esperan verificación`,
-      'Mientras uno de estos sea un extremo del mes, el costo por kilómetro de ' +
-      'ese vehículo sale «sin dato» — no bajo: no calculable. Se resuelven en ' +
-      '«Verificar kilometrajes», con la foto al lado.']);
-  }
-  if (h.lecturas_verificadas_30d > 0) {
-    filas.push(['tx2', `${h.lecturas_verificadas_30d} kilometraje(s) verificados este mes`,
-      'Alguien los miró contra la foto y dejó su nombre. Es lo único que ' +
-      'distingue un número que se tecleó de uno que se puede sostener.']);
-  }
-
-  const salto = h.salto_km_maximo_30d;
-  if (salto && salto.delta_km) {
-    const horas = salto.horas === null ? 'sin fecha' : `${salto.horas} h`;
-    filas.push(['tx2', `Salto de kilometraje más grande del mes: ${salto.delta_km.toLocaleString('es-CO')} km en ${horas}`,
-      'Es un dato, no una alarma: todavía no hay un techo medido con qué compararlo. Se publica para poder fijarlo.']);
-  }
-
-  // La plata que sale (2026-09-02). Va después del odómetro porque el odómetro
-  // es su denominador: un CPK sobre kilómetros que nadie midió no dice nada.
-  //
-  // El primero es el ÚNICO detector de la fase, y **no acusa a nadie** (regla
-  // 2): dice que dos datos no pueden ser los dos ciertos.
-  if (h.tanqueos_sobre_capacidad > 0) {
-    filas.push(['red', `${h.tanqueos_sobre_capacidad} tanqueo(s) con más galones de los que caben`,
-      'La capacidad de la ficha y los galones registrados no pueden ser los dos ' +
-      'ciertos. Puede ser una capacidad mal levantada, un tanque auxiliar que la ' +
-      'ficha no conoce, dos vehículos en la misma factura o un dedo en el teclado: ' +
-      'hay que mirar cuál, y se mira igual de rápido en los cuatro casos.']);
-  }
-  // Y este es el que impide que el de arriba se apague sin que nadie lo note:
-  // sin capacidad en la ficha no hay contra qué revisar, y eso NO es «está
-  // bien». Cero exceso con cien sin revisar es un detector apagado.
-  if (h.tanqueos_sin_capacidad_declarada > 0) {
-    filas.push(['yellow', `${h.tanqueos_sin_capacidad_declarada} tanqueo(s) que no se pudieron revisar`,
-      'La ficha de esos vehículos no dice cuántos galones caben, así que nada ' +
-      'los compara contra nada. No es que estén bien: es que no se miraron.']);
-  }
-  if (h.gastos_sin_documento > 0) {
-    filas.push(['yellow', `${h.gastos_sin_documento} gasto(s) sin número de factura`,
-      'Existen operativamente y no se pueden cruzar con la causación de Siesa. ' +
-      'Es la medida de si la operación está entregando las facturas.']);
-  }
-
-  // El CPK, como HECHO y por vehículo. No hay promedio de flota a propósito:
-  // el canon dice que el CPK no compara vehículos, y promediar un NHR con un
-  // motocarro mide la composición del parque, no la operación.
-  const cpk = h.cpk_mes;
-  if (cpk && cpk.length) {
-    const linea = cpk.map(v => v.cpk === 'sin_dato'
-      ? `${v.placa}: sin dato`
-      : `${v.placa}: $${Number(v.cpk).toLocaleString('es-CO')}/km`).join(' · ');
-    filas.push(['tx2', `Costo por kilómetro del mes — ${linea}`,
-      'Es lo registrado dividido entre los kilómetros medidos, no el costo de ' +
-      'tener el camión. No se comparan entre sí: un NHR y un motocarro no ' +
-      'cuestan igual y la diferencia no dice nada.']);
-  }
-
-  // Taller y garantía (2026-09-02). Los tres van separados y ninguno se suma:
-  // al primero se le llama al taller, al segundo a contabilidad, y el tercero
-  // no se atiende — se consulta antes de mandar el camión.
-  if (h.ot_abiertas > 0) {
-    filas.push(['yellow', `${h.ot_abiertas} orden(es) de trabajo abiertas`,
-      'Son camiones que están en el taller ahora mismo. No dice si están ' +
-      'demorados: todavía no hay una sola medición de cuánto dura una visita, ' +
-      'y un techo escrito hoy sería a ojo.']);
-  }
-  // El precio de que la orden de trabajo NO lleve valor: el camión entra hoy y
-  // la factura llega el 30, y lo que impide que esa decisión se vuelva un
-  // agujero es que la ausencia se cuente. Solo cuenta órdenes ya cerradas — un
-  // camión que sigue adentro no es una factura perdida.
-  if (h.trabajos_sin_factura > 0) {
-    filas.push(['yellow', `${h.trabajos_sin_factura} trabajo(s) de taller sin factura recibida`,
-      'El vehículo ya volvió y el gasto no se puede cruzar con la causación. ' +
-      'La orden de trabajo no lleva valor a propósito: la factura llega ' +
-      'después, y esto mide si está llegando.']);
-  }
-  // Este es el que dice si la fase está haciendo algo. En cero durante meses
-  // significa que la búsqueda que evita pagar dos veces no tiene sobre qué
-  // pronunciarse — distinto de «no hubo taller», que se lee arriba.
-  if (h.garantias_vigentes > 0) {
-    filas.push(['tx2', `${h.garantias_vigentes} reparación(es) todavía en garantía`,
-      'Antes de mandar el camión al taller por el mismo sistema, conviene ' +
-      'mirarlas: el caso que evitan es el que se paga dos veces. Se ven en ' +
-      '«Taller», en el expediente de cada vehículo.']);
-  }
-
-  // Llantas (2026-09-02). Los dos primeros van en líneas separadas y el orden
-  // importa: el segundo es el que impide que el primero se apague en silencio.
-  //
-  // Y el renglón NO dice «el camión anda sin llanta», porque casi nunca es eso:
-  // dice que la llanta está puesta y nadie la registró. Un texto que sonara a
-  // falla mecánica mandaría a alguien a mirar un camión que está bien, y a la
-  // tercera vez el bloque se deja de leer.
-  if (h.posiciones_sin_llanta > 0) {
-    filas.push(['yellow', `${h.posiciones_sin_llanta} posición(es) de llanta sin registrar`,
-      'No es que el camión ande sin rueda: es que la llanta está puesta y ' +
-      'nadie la registró. Mide cuánto le falta al inventario para describir ' +
-      'el vehículo real. Se completa desde «Llantas», en cada vehículo.']);
-  }
-  if (h.vehiculos_sin_posiciones_llanta > 0) {
-    filas.push(['yellow', `${h.vehiculos_sin_posiciones_llanta} vehículo(s) sin ficha, que no se pudieron revisar`,
-      'Su ficha técnica no dice cuántas posiciones de llanta tiene, así que ' +
-      'nada los compara contra nada. No es que estén completos: es que no se ' +
-      'miraron.']);
-  }
-  if (h.llantas_montadas > 0) {
-    filas.push(['tx2', `${h.llantas_montadas} llanta(s) montadas y con su reloj corriendo`,
-      'Cada una acumula kilómetros desde el montaje. El kilometraje no se ' +
-      'guarda: se calcula entre las dos lecturas de odómetro, y sale con su ' +
-      'marca de confianza.']);
-  }
-  // El hecho medido por posición, SIN umbral (regla 13): no hay una sola llanta
-  // medida en esta flota, y un «se cambia a los X km» escrito hoy sería a ojo.
-  // Por posición y no por vehículo a secas porque el modo de fallo caro no es
-  // que se gasten, es que se gasten mal — y eso solo se ve por posición.
-  const pos = h.km_por_posicion;
-  if (pos && pos.length) {
-    const conMediana = pos.filter(p => p.mediana_km !== 'sin_dato');
-    const linea = conMediana.length
-      ? conMediana.map(p => `${p.placa} pos ${p.posicion}: ${Number(p.mediana_km).toLocaleString('es-CO')} km`).join(' · ')
-      : pos.map(p => `${p.placa} pos ${p.posicion}: ${p.n} de ${p.n + p.faltan}`).join(' · ');
-    filas.push(['tx2', `Vida de llanta medida por posición — ${linea}`,
-      conMediana.length
-        ? 'Es la mediana de las vidas ya cerradas de esa posición. No se ' +
-          'compara con otra posición ni con otro vehículo: una direccional y ' +
-          'una de tracción no duran lo mismo y la diferencia no dice nada.'
-        : 'Todavía no alcanzan para fijar una vida útil: se muestran cuántas ' +
-          'llantas desmontadas hay y cuántas faltan. Con menos, una sola ' +
-          'pinchada partiría la mediana a la mitad.']);
-  }
-
-  // ── Preventivo (2026-09-02) ──────────────────────────────────────────
-  //
-  // `distribucion_km_cambio` está cargado en la base desde la tanda 1 y nadie
-  // lo leía. Esto es el lector, y va en rojo arriba de todo lo amarillo por una
-  // razón concreta: una correa de distribución que revienta en un motor de
-  // interferencia no es una correa, es un motor.
-  //
-  // Los cuatro contadores van en LÍNEAS SEPARADAS y no sumados, porque cada uno
-  // se corrige llamando a una persona distinta: al taller, al que consigue el
-  // repuesto, al que sabe cuándo se hizo la última vez, y al concesionario.
-  if (h.tareas_vencidas > 0) {
-    filas.push(['red', `${h.tareas_vencidas} tarea(s) de mantenimiento VENCIDAS`,
-      'El odómetro ya pasó el kilometraje de cambio que dice la ficha. No hay ' +
-      'umbral acá: el número lo puso el fabricante. Se ven y se registran en ' +
-      'el botón «Preventivo» de cada vehículo.']);
-  }
-  if (h.tareas_por_vencer > 0) {
-    filas.push(['yellow', `${h.tareas_por_vencer} tarea(s) llegan al cambio pronto`,
-      'Calculado con el ritmo medido de cada vehículo, no con un promedio de ' +
-      'flota. Es el momento de conseguir el repuesto, que es lo que de verdad ' +
-      'tarda.']);
-  }
-  if (h.tareas_sin_linea_base > 0) {
-    filas.push(['yellow', `${h.tareas_sin_linea_base} tarea(s) sin saber cuándo se hizo la última vez`,
-      'No están al día ni vencidas: no hay contra qué comparar, y por eso no ' +
-      'avisan. Es el trabajo más barato del tablero — se cierra registrando ' +
-      'la última ejecución en «Preventivo».']);
-  }
-  // El que impide que los tres de arriba se apaguen sin que nadie lo note. La
-  // ficha dice QUÉ aceite lleva el motor y no CADA CUÁNTOS KM se cambia.
-  if (h.tareas_sin_intervalo > 0) {
-    filas.push(['yellow', `${h.tareas_sin_intervalo} tarea(s) sin intervalo declarado`,
-      'La ficha dice qué lleva el vehículo, no cada cuántos kilómetros se ' +
-      'cambia. Nada las compara contra nada: no es que estén bien, es que no ' +
-      'se pudieron mirar. Se arregla con una llamada y el intervalo se guarda ' +
-      'con de dónde salió.']);
-  }
-  // El HECHO que descarga la regla 13 sobre el único umbral de la fase. Se
-  // pinta sin juzgarlo: no hay un km/día «normal» medido con qué compararlo.
-  const ritmos = h.km_dia_por_vehiculo;
-  if (ritmos && ritmos.length) {
-    const conDato = ritmos.filter(r => r.km_dia !== 'sin_dato');
-    const linea = conDato.length
-      ? conDato.map(r => `${r.placa}: ${r.km_dia} km/día (${r.marca}, ${r.n} lecturas)`).join(' · ')
-      : ritmos.map(r => `${r.placa}: sin dato`).join(' · ');
-    filas.push(['tx2', `Ritmo de uso medido — ${linea}`,
-      conDato.length
-        ? 'Es lo que convierte «faltan 500 km» en «unos 6 días». No se compara ' +
-          'entre vehículos: un motocarro urbano y un camión de ruta no ruedan ' +
-          'igual y la diferencia no dice nada.'
-        : 'Ningún vehículo tiene dos lecturas vigentes con las que medirlo, ' +
-          'así que los días que faltan para cada mantenimiento salen «sin ' +
-          'dato». No es cero: es que no se puede calcular todavía.']);
-  }
-
-  // ── Los doce campos que se medían y no leía nadie (2026-09-03) ────────
-  //
-  // `/flota/health` publicaba 44 campos y la pantalla pintaba 32. Los otros
-  // doce eran **captura sin lector**: el mismo defecto que este bloque existe
-  // para cerrar, cometido dentro de él. Once venían de la tanda 1 y uno
-  // —`lecturas_ts_duplicado`— se agregó el 2026-09-01 y nació mudo.
-  //
-  // Van agrupados por lo que significan y no apilados: un tablero que suelta
-  // doce números seguidos se deja de mirar, que es la lección de los 639
-  // avisos conocidos.
-
-  // Custodia: quién responde por cada camión, y qué falta para poder decirlo.
-  if (h.vehiculos_sin_custodia_activa > 0) {
-    filas.push(['red', `${h.vehiculos_sin_custodia_activa} vehículo(s) sin responsable ahora mismo`,
-      'Nadie tiene la custodia. Si aparece un golpe hoy, no hay a quién preguntarle qué pasó.']);
-  }
-  if (h.custodias_cerradas_forzadas > 0) {
-    filas.push(['yellow', `${h.custodias_cerradas_forzadas} turno(s) cerrados sin la firma del custodio`,
-      'Mide conducta, no fallas: alguien cerró el turno de otro sin fotos de cierre, ' +
-      'y el turno siguiente arrancó sin nada con qué comparar.']);
-  }
-  if (h.custodias_pendiente_sede > 0) {
-    filas.push(['yellow', `${h.custodias_pendiente_sede} custodia(s) con la sede sin resolver`,
-      'El vehículo quedó en una sede que el WMS todavía no tiene como fila.']);
-  }
-  if (h.custodias_sin_foto_completa > 0) {
-    filas.push(['tx2', `${h.custodias_sin_foto_completa} turno(s) sin el juego completo de fotos`,
-      'No bloquea la salida a propósito — un camión no se queda en el patio por una foto. ' +
-      'Pero sin las dos puntas no hay con qué atribuir un daño.']);
-  }
-
-  // Papeles y cuentas: lo que hace falta para que el sistema sepa de quién habla.
-  if (h.conductores_activos_sin_cuenta > 0) {
-    filas.push(['yellow', `${h.conductores_activos_sin_cuenta} conductor(es) activos sin cuenta de usuario`,
-      'Sin cuenta no pueden recibir su propio turno ni reportar un daño con su nombre: ' +
-      'el sistema no puede distinguirlos de alguien que dice serlo.']);
-  }
-  if (h.documentos_por_vencer_30d > 0) {
-    filas.push(['tx2', `${h.documentos_por_vencer_30d} documento(s) vencen dentro de 30 días`,
-      'Todavía hay tiempo. Una cita de tecnomecánica en Neiva tarda unos quince días.']);
-  }
-  if (h.fotos_pendiente_evidencia > 0) {
-    filas.push(['yellow', `${h.fotos_pendiente_evidencia} foto(s) que el almacén no pudo guardar`,
-      'La fila quedó marcada en vez de fingir que el archivo existe. No hay evidencia detrás.']);
-  }
-
-  // Odómetro: el ruido que hay que poder contar antes de calcular sobre la serie.
-  if (h.lecturas_ts_duplicado > 0) {
-    filas.push(['tx2', `${h.lecturas_ts_duplicado} lectura(s) comparten vehículo y segundo con otra`,
-      'Vienen de reintentos. No rompen nada hoy, pero el orden de la serie se ' +
-      'resuelve por hora y un empate es ruido sobre el que después se calcula el CPK.']);
-  }
-
-  // Cobertura del levantamiento: cuánto del expediente está hecho.
-  if (h.vehiculos_activos > 0 && h.fichas_completas < h.vehiculos_activos) {
-    filas.push(['tx2', `${h.fichas_completas} de ${h.vehiculos_activos} fichas técnicas completas`,
-      'Lo que falta de la ficha apaga lo que cuelga de ella: sin capacidad de tanque no ' +
-      'hay control de sobre-tanqueo, y sin kilometraje de correa no hay preventivo.']);
-  }
-  if (h.rutas_historicas_sin_placa > 0) {
-    filas.push(['tx2', `${h.rutas_historicas_sin_placa} ruta(s) históricas sin placa`,
-      'No se pueden atribuir a ningún vehículo, así que no entran a ningún costo por kilómetro.']);
-  }
-
-  // Y de qué mundo salen todos los números de arriba. Va AL FINAL y siempre
-  // que no sean datos reales: un tablero de QA que no dice que es de QA es
-  // peor que ninguno — es el incidente de las ocho horas escribiendo en la
-  // base equivocada, con otra cara.
-  if (h.datos_reales === false) {
-    filas.push(['yellow', `Estos números NO son de la operación real (${h.ambiente || 'ambiente sin declarar'})`,
-      'Sirven para probar la pantalla, no para decidir nada.']);
-  }
-
-  if (!filas.length) return '';
-  const li = filas.map(([color, titulo, nota]) => `
-    <li style="margin-bottom:10px">
-      <b style="color:var(--${color})">${titulo}</b><br>
-      <span style="color:var(--tx2);font-size:var(--fs-sm)">${nota}</span>
-    </li>`).join('');
-  return `<div class="tabla-card" style="border-left:3px solid var(--yellow)">
-    <h3>Salud de la flota</h3>
-    <ul style="line-height:1.5;margin:0">${li}</ul>
-  </div>`;
-}
-
 async function flotaBloqueFueraDeSede() {
   let d;
   try {
@@ -1995,6 +1612,26 @@ const FLOTA_PALABRAS = {
             efectivo_conductor: 'Mi plata (efectivo)' },
   gravedad: { bloqueante: 'No puede salir', mayor: 'Hay que arreglarlo pronto',
               menor: 'Puede esperar' },
+  // Los formularios de gestión (2026-09-24): ficha, gastos, taller, llantas.
+  // Un `<option>` con `efectivo_conductor` o `aire_sobre_hidraulico` es un
+  // código crudo a la vista, igual que en la pantalla del conductor.
+  ficha: { gasolina: 'Gasolina', diesel: 'Diésel', hidraulico: 'Hidráulico',
+           aire_sobre_hidraulico: 'Aire sobre hidráulico', aire_full: 'Aire total',
+           si: 'Sí', no: 'No', correa: 'Correa', cadena: 'Cadena', cardan: 'Cardán' },
+  fuente: { manual_fabricante: 'Manual del fabricante', concesionario: 'Concesionario',
+            placa_motor: 'Placa del motor', taller: 'Taller', estimado: 'Estimado' },
+  categoria: { combustible: 'Combustible', mantenimiento: 'Mantenimiento', repuesto: 'Repuesto',
+               llanta: 'Llanta', soat: 'SOAT', rtm: 'Revisión técnico-mecánica',
+               impuesto_vehicular: 'Impuesto vehicular', seguro: 'Seguro', peaje: 'Peaje',
+               lavado: 'Lavado', parqueadero: 'Parqueadero', multa: 'Multa', otro: 'Otro' },
+  sistema: { motor: 'Motor', transmision: 'Transmisión', embrague: 'Embrague', frenos: 'Frenos',
+             suspension: 'Suspensión', direccion: 'Dirección', electrico: 'Eléctrico',
+             refrigeracion: 'Refrigeración', escape: 'Escape', llantas: 'Llantas',
+             carroceria: 'Carrocería', aire_acondicionado: 'Aire acondicionado', otro: 'Otro' },
+  tipo_ot: { correctiva: 'Correctiva (algo se dañó)', preventiva: 'Preventiva (tocaba por plan)' },
+  desmontaje: { desgaste_normal: 'Desgaste normal', desgaste_irregular: 'Desgaste irregular',
+                pinchazo: 'Pinchazo', corte_flanco: 'Corte en el flanco',
+                reencauche: 'Va a reencauche', rotacion: 'Rotación' },
 };
 
 /** La palabra de un código. `grupo` es una clave de `FLOTA_PALABRAS`. */
@@ -2002,7 +1639,17 @@ function flotaPalabra(grupo, codigo) {
   if (codigo === null || codigo === undefined || codigo === '') return 'sin dato';
   const mapa = FLOTA_PALABRAS[grupo] || {};
   if (Object.prototype.hasOwnProperty.call(mapa, codigo)) return mapa[codigo];
+  // `sin_dato` es la misma palabra en todos los formularios: «no se sabe».
+  if (codigo === 'sin_dato') return 'No se sabe';
   return String(codigo).replace(/_/g, ' ');
+}
+
+/** Las `<option>` de un `<select>` de gestión: el código en `value`, la
+ * palabra a la vista. `marcado` elige una; sin él no viene ninguna elegida
+ * salvo la primera, que en estos vocabularios es siempre `sin_dato`. */
+function flotaOpciones(grupo, lista, marcado) {
+  return (lista || []).map(c => `<option value="${esc(c)}"${c === marcado ? ' selected' : ''}>${
+    esc(flotaPalabra(grupo, c))}</option>`).join('');
 }
 
 /** «2026-01-05» → «05/01/2026». Lo que no es una fecha se devuelve como vino. */
@@ -2572,13 +2219,13 @@ function flotaCondHojaHTML(d, cola) {
         <span class="flota-hoja-icono">⛽</span>Tanqueo</button>
       <button class="flota-hoja-boton" onclick="flotaCondAbrirEntrega()">
         <span class="flota-hoja-icono">🔑</span>Entregar</button>
-      <button class="flota-hoja-boton" onclick="flotaCondMisReportes()">
+      <button class="flota-hoja-boton" onclick="flotaCondMisTurnos()">
         <span class="flota-hoja-icono">📋</span>Mis turnos</button>
     </div>
     ${reinspeccionar ? `<button class="flota-hoy-link" onclick="flotaCondInspeccion()">
       Inspeccionar otra vez</button>` : ''}` : `
     <div class="flota-hoja-grilla">
-      <button class="flota-hoja-boton" onclick="flotaCondMisReportes()">
+      <button class="flota-hoja-boton" onclick="flotaCondMisTurnos()">
         <span class="flota-hoja-icono">📋</span>Mis turnos</button>
     </div>`;
   return `<div class="flota-hoja-fondo" onclick="flotaCondMasCerrar()"></div>
@@ -2678,8 +2325,20 @@ function flotaCondKmHTML(pref, km, nota) {
          value="${esc(km)}" style="display:none">`;
 }
 
-/** «Cambió»: muestra el input para escribir el que marca el tablero ahora. */
+/** «Cambió»: muestra el input para escribir el que marca el tablero ahora.
+ *
+ * En el tanqueo además pide la foto del tablero: un km nuevo sin foto nace
+ * «en duda» y no sirve para medir el rendimiento (la bandeja lo manda a
+ * verificar). Con el km de siempre no hace falta: el servidor reutiliza la
+ * lectura que ya tiene. */
 function flotaCondKmCambio(pref) {
+  if (pref === 'tq' && FLOTA_TQ) {
+    FLOTA_TQ.kmCambio = true;
+    flotaTanqueoPintar();
+    const x = document.getElementById('tq-km');
+    if (x && x.focus) x.focus();
+    return;
+  }
   const caja = document.getElementById(pref + '-km-caja');
   const inp = document.getElementById(pref + '-km');
   if (caja) caja.style.display = 'none';
@@ -3136,14 +2795,14 @@ async function flotaCondEntregar() {
 }
 
 /** "Mis turnos y en qué van" — lo que hace que la app sea su respaldo. */
-async function flotaCondMisReportes() {
+async function flotaCondMisTurnos() {
   if (!FLOTA_COND_HOJA) { FLOTA_COND_HOJA = true; flotaCondRender(); }
   const el = document.getElementById('cond-flota-form');
   if (!el) return;
   el.innerHTML = '<div style="padding:12px;color:var(--tx2)">Cargando…</div>';
   let d;
   try {
-    d = await get('/flota/conductor/mis-reportes');
+    d = await get('/flota/conductor/mis-turnos');
   } catch (e) {
     el.innerHTML = `<div style="color:var(--err-tx);padding:12px">No se pudieron traer tus turnos:
       ${esc(e.message)}</div>`;
@@ -3485,7 +3144,7 @@ function flotaDescartarHallazgo(id) {
   const motivo = prompt('¿Por qué no era un daño? (obligatorio)');
   if (!motivo || !motivo.trim()) {
     alerta('Un descarte sin motivo escrito no se puede distinguir de hacer ' +
-           'desaparecer un hallazgo incómodo.', 'advertencia');
+           'desaparecer un daño incómodo.', 'advertencia');
     return;
   }
   flotaAccionHallazgo(id, 'descartar', { motivo: motivo.trim() });
@@ -3684,7 +3343,7 @@ async function flotaCondGuardarDano() {
 // pone nombre (`FLOTA_PALABRAS`).
 // ══════════════════════════════════════════════════════════════════════
 
-let FLOTA_TQ = null;   // { foto, tanque, origen, estados: [...], origenes: [...] }
+let FLOTA_TQ = null;   // { foto, fotoTablero, kmCambio, tanque, origen, estados: [...], origenes: [...] }
 
 /** Abre el tanqueo del conductor. */
 async function flotaCondTanquear() {
@@ -3693,7 +3352,8 @@ async function flotaCondTanquear() {
   FLOTA_PLACA = placa;
   FLOTA_COND_HOJA = false;
   flotaCondRender();
-  FLOTA_TQ = { foto: null, tanque: null, origen: null, estados: null, origenes: null };
+  FLOTA_TQ = { foto: null, fotoTablero: null, kmCambio: false, tanque: null, origen: null,
+               estados: null, origenes: null };
   flotaAbrirModal('Registrar tanqueo', placa);
   let voc = null;
   try {
@@ -3741,8 +3401,15 @@ function flotaTanqueoHTML() {
     <div class="flota-opciones">${(t.origenes || []).map(c => boton('origen', 'origen', c)).join('')}</div>
     <label class="input-label">Estación</label>
     <input id="tq-estacion" class="input-field" placeholder="Ej: Terpel Av. 26">
-    ${flotaCondKmHTML('tq', flotaCondKmConocido(FLOTA_PLACA),
-      'Si ya rodaste desde entonces, tocá «Cambió» y escribí el del tablero.')}
+    ${t.kmCambio ? flotaCondKmHTML('tq', null) + `
+      <input type="file" id="tq-foto-tablero" accept="image/*" capture="environment"
+             style="display:none" onchange="flotaTanqueoFotoTablero()">
+      <button type="button" class="btn-primary flota-camara"
+              onclick="document.getElementById('tq-foto-tablero').click()">
+        ${t.fotoTablero ? '✓ Tablero fotografiado — tocá para repetir' : '📷 Foto del tablero con el kilometraje'}</button>
+      <p class="flota-paso-guia">Con la foto el kilometraje nuevo queda respaldado; sin ella queda en duda hasta que alguien lo revise.</p>`
+      : flotaCondKmHTML('tq', flotaCondKmConocido(FLOTA_PLACA),
+        'Si ya rodaste desde entonces, tocá «Cambió» y escribí el del tablero.')}
     <p class="flota-paso-guia">Fecha: hoy, ${esc(flotaFechaCorta(flotaHoyBogota()))}.
       «Lo llené» solo si de verdad quedó lleno: el rendimiento se mide de lleno a lleno.</p>
     <button class="btn-primary" id="tq-guardar" data-placa="${esc(FLOTA_PLACA)}"
@@ -3755,7 +3422,7 @@ function flotaTanqueoHTML() {
 function flotaTanqueoPintar() {
   const el = document.getElementById('flota-recibo');
   if (!el) return;
-  const ids = ['tq-galones', 'tq-valor', 'tq-estacion'];
+  const ids = ['tq-galones', 'tq-valor', 'tq-estacion', 'tq-km'];
   const vals = {};
   ids.forEach(id => { const x = document.getElementById(id); vals[id] = x ? x.value : ''; });
   el.innerHTML = flotaTanqueoHTML();
@@ -3775,6 +3442,20 @@ async function flotaTanqueoFoto() {
   try {
     // Foto-dato (regla 7): los números del recibo tienen que leerse.
     FLOTA_TQ.foto = await flotaComprimir(f, 'foto_dato');
+  } catch (e) {
+    alerta('No se pudo leer la foto. Tomala de nuevo.', 'error');
+    return;
+  }
+  flotaTanqueoPintar();
+}
+
+async function flotaTanqueoFotoTablero() {
+  const inp = document.getElementById('tq-foto-tablero');
+  const f = inp && inp.files && inp.files[0];
+  if (!f) return;
+  try {
+    // Foto-dato (regla 7): el número del tablero tiene que leerse.
+    FLOTA_TQ.fotoTablero = await flotaComprimir(f, 'foto_dato');
   } catch (e) {
     alerta('No se pudo leer la foto. Tomala de nuevo.', 'error');
     return;
@@ -3802,6 +3483,10 @@ async function flotaCondGuardarTanqueo() {
   if (km === null) { err.textContent = 'Falta el kilometraje del tablero.'; return; }
   if (!t.foto && !confirm('Sin foto del recibo el tanqueo queda sin respaldo: nadie va a ' +
       'poder comprobar los galones ni el valor. ¿Registrarlo igual?')) return;
+  // El km cambió y no hay foto del tablero: se pregunta, no se bloquea.
+  const kmNuevo = t.kmCambio && km !== flotaCondKmConocido(FLOTA_PLACA);
+  if (kmNuevo && !t.fotoTablero && !confirm('Sin foto del tablero el kilometraje nuevo queda ' +
+      'en duda y no sirve para medir el rendimiento hasta que alguien lo revise. ¿Registrarlo igual?')) return;
   const placa = flotaPlacaDelFormulario('tq-guardar', 'tq-error');
   if (!placa) return;
 
@@ -3810,6 +3495,7 @@ async function flotaCondGuardarTanqueo() {
     tanque: t.tanque, origen_costo: t.origen, estacion: estacion, proveedor: estacion,
     km: km, fotos: t.foto ? [flotaFotoPayload(t.foto, 'foto_dato', null)] : [],
   };
+  if (kmNuevo && t.fotoTablero) cuerpo.foto_tablero = flotaFotoPayload(t.fotoTablero, 'foto_dato', null);
   const listo = flotaBotonOcupado('tq-guardar', 'Guardando…');
   let res;
   try {
@@ -4140,12 +3826,6 @@ const FLOTA_TANQUEO_URL = '/flota/tanqueos';
  */
 let FLOTA_GASTO_META = { periodo: [], campo: [] };
 
-/** Pesos con separador de miles. `1.400E+4` no es un precio que alguien lea. */
-function flotaPesos(x) {
-  const n = Number(x);
-  if (!Number.isFinite(n)) return String(x);
-  return '$' + n.toLocaleString('es-CO', { maximumFractionDigits: 0 });
-}
 
 /** El expediente de plata de un vehículo — la pantalla de control de flota.
  *
@@ -4188,7 +3868,7 @@ function flotaFilaGasto(g) {
              revisar</b>. No es que esté bien.</div>`
         : '');
     extra = `<div style="font-size:var(--fs-xs);color:var(--tx2)">
-        ${esc(tq.galones)} gal · ${flotaPesos(tq.precio_galon)}/gal · ${esc(tq.estacion)}
+        ${esc(tq.galones)} gal · ${fmtPesos(tq.precio_galon)}/gal · ${esc(tq.estacion)}
         · tanque <b>${esc(tq.tanque)}</b></div>${aviso}`;
   }
   const periodo = g.cubre_periodo
@@ -4200,7 +3880,7 @@ function flotaFilaGasto(g) {
     : `<span style="color:var(--yellow)">sin documento — no se puede cruzar
          con la causación</span>`;
   return `<li style="margin-bottom:12px;border-left:2px solid var(--bd);padding-left:10px">
-    <div><b>${esc(g.categoria)}</b> · ${flotaPesos(g.valor)} · ${esc(g.fecha)}</div>
+    <div><b>${esc(g.categoria)}</b> · ${fmtPesos(g.valor)} · ${esc(g.fecha)}</div>
     <div style="font-size:var(--fs-xs);color:var(--tx2)">${esc(g.proveedor)} · ${doc}
       · ${esc(g.km)} km · origen ${esc(g.origen_costo)}</div>
     ${periodo}${extra}
@@ -4242,8 +3922,8 @@ async function flotaRenderGastos() {
   // —este expediente y el tablero— muestran lo mismo.
   const cpk = d.cpk === 'sin_dato'
     ? `<b>sin dato</b> — ${esc(d.cpk_motivo || 'no se declaró el motivo.')}`
-    : `<b>${flotaPesos(d.cpk)} por kilómetro</b>
-       <span style="color:var(--tx2)">= ${flotaPesos(d.pesos_imputados)}
+    : `<b>${fmtPesos(d.cpk)} por kilómetro</b>
+       <span style="color:var(--tx2)">= ${fmtPesos(d.pesos_imputados)}
        ÷ ${d.km_recorridos.toLocaleString('es-CO')} km · odómetro ${esc(d.cpk_marca)}
        · ${esc(d.lecturas_en_ventana)} lectura(s) en la ventana</span>`;
   const rend = d.rendimiento_km_galon === 'sin_dato'
@@ -4256,7 +3936,7 @@ async function flotaRenderGastos() {
     ? `<ul style="list-style:none;padding:0">${d.gastos.map(g => flotaFilaGasto(g)).join('')}</ul>`
     : '<p style="color:var(--tx2)">Sin gastos registrados.</p>';
 
-  const opciones = (arr) => arr.map(c => `<option value="${c}">${c}</option>`).join('');
+  const opciones = (arr, grupo) => flotaOpciones(grupo, arr);
 
   const bloquesDeLectura = `<div class="tabla-card">
     <div class="tabla-titulo">Costo por kilómetro · ${esc(d.desde)} a ${esc(d.hasta)}</div>
@@ -4274,7 +3954,7 @@ async function flotaRenderGastos() {
     <div class="tabla-titulo">Registrar un gasto</div>
     <label>Qué fue</label>
     <select id="gs-cat" style="width:100%;padding:6px" onchange="flotaGastoCambioCategoria()">
-      ${opciones(d.categorias)}
+      ${opciones(d.categorias, 'categoria')}
     </select>
     <label>Fecha del hecho</label>
     <input type="date" id="gs-fecha" style="width:100%;padding:6px">
@@ -4283,7 +3963,7 @@ async function flotaRenderGastos() {
     <label>A quién se le pagó</label>
     <input id="gs-prov" style="width:100%;padding:6px" placeholder="Ej: Terpel Neiva">
     <label>De dónde salió la plata</label>
-    <select id="gs-origen" style="width:100%;padding:6px">${opciones(d.origenes_costo)}</select>
+    <select id="gs-origen" style="width:100%;padding:6px">${opciones(d.origenes_costo, 'origen')}</select>
     <label>Número de factura o documento <span style="color:var(--tx2)">(opcional)</span></label>
     <input id="gs-doc" style="width:100%;padding:6px" placeholder="Sin esto no se puede cruzar con Siesa">
     <label>Centro de operación <span style="color:var(--tx2)">(opcional)</span></label>
@@ -4314,7 +3994,7 @@ async function flotaRenderGastos() {
       <label>Cómo quedó el tanque</label>
       <select id="gs-tanque" style="width:100%;padding:6px">
         <option value="" selected>— elegí una —</option>
-        ${opciones(d.estados_tanque)}
+        ${opciones(d.estados_tanque, 'tanque')}
       </select>
       <p style="font-size:var(--fs-xs);color:var(--tx2);margin:4px 0 0">
         <b>Ninguna viene marcada, a propósito.</b> El rendimiento solo se puede
@@ -4606,8 +4286,7 @@ function flotaFilaOrden(o) {
  * sería una frase y no una garantía.
  */
 function flotaFormTrabajo(id) {
-  const ops = (FLOTA_TALLER.sistemas || [])
-    .map(s => `<option value="${s}">${s}</option>`).join('');
+  const ops = flotaOpciones('sistema', FLOTA_TALLER.sistemas);
   return `<div class="tabla-card" style="margin-top:8px">
     <div class="tabla-titulo">Registrar un trabajo de esta visita</div>
     <label>Qué parte se tocó</label>
@@ -4658,10 +4337,8 @@ function flotaFormFactura(o) {
              data-interv="${esc(t.intervencion_id)}"> ${esc(t.sistema)}
       ${t.descripcion ? '· ' + t.descripcion : ''}
     </label>`).join('');
-  const cats = (FLOTA_TALLER.categorias || [])
-    .map(c => `<option value="${c}">${c}</option>`).join('');
-  const orgs = (FLOTA_TALLER.origenes || [])
-    .map(c => `<option value="${c}">${c}</option>`).join('');
+  const cats = flotaOpciones('categoria', FLOTA_TALLER.categorias);
+  const orgs = flotaOpciones('origen', FLOTA_TALLER.origenes);
   return `<div class="tabla-card" style="margin-top:8px">
     <div class="tabla-titulo">Llegó la factura de esta visita</div>
     <p style="font-size:var(--fs-xs);color:var(--tx2);margin:0 0 6px">
@@ -4749,10 +4426,8 @@ async function flotaRenderTaller() {
         d.ordenes.map(o => flotaFilaOrden(o)).join('')}</ul>`
     : '<p style="color:var(--tx2)">Este vehículo no ha entrado al taller.</p>';
 
-  const ops = (d.sistemas || [])
-    .map(s => `<option value="${s}">${s}</option>`).join('');
-  const tipos = (d.tipos || [])
-    .map(t => `<option value="${t}">${t}</option>`).join('');
+  const ops = flotaOpciones('sistema', d.sistemas);
+  const tipos = flotaOpciones('tipo_ot', d.tipos);
 
   // Mandar el camión al taller compromete plata: es decisión, no registro.
   // Quien no decide ve por qué y a quién le toca, en vez de un formulario que
@@ -4987,7 +4662,7 @@ async function flotaGuardarFacturaOT(id) {
     documento_numero: document.getElementById(`fa-${id}-doc`).value.trim(),
   }, `fa-${id}-guardar`, `fa-${id}-error`, 'Registrando…');
   if (!ok) return;
-  alerta('Factura registrada ✓ · ' + flotaPesos(valor), 'exito');
+  alerta('Factura registrada ✓ · ' + fmtPesos(valor), 'exito');
   await flotaRenderTaller();
 }
 
@@ -5288,8 +4963,7 @@ async function flotaMontarLlanta() {
  */
 function flotaAbrirDesmontaje(montajeId, codigo, posicion) {
   const cont = document.getElementById('flota-recibo');
-  const opciones = (FLOTA_LLANTA_META.motivos || [])
-    .map(m => `<option value="${m}">${m}</option>`).join('');
+  const opciones = flotaOpciones('desmontaje', FLOTA_LLANTA_META.motivos);
   cont.innerHTML = `<div class="tabla-card">
     <div class="tabla-titulo">Desmontar la llanta ${codigo} (posición ${posicion})</div>
     <label>Kilometraje ahora</label>

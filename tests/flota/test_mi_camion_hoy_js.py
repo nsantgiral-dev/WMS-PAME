@@ -254,7 +254,7 @@ class TestUnBotonPorEstado:
         html = _correr(tmp_path, 'flotaCondHojaHTML(D, [])',
                        semilla=f'var D = {json.dumps(_turno(tiene_turno_abierto=True))};')
         for fn in ('flotaCondReportarDano', 'flotaCondTanquear',
-                   'flotaCondAbrirEntrega', 'flotaCondMisReportes'):
+                   'flotaCondAbrirEntrega', 'flotaCondMisTurnos'):
             assert f'onclick="{fn}()"' in html, fn
         assert 'Odómetro' not in html and 'Odometro' not in html
         assert 'Corrección' not in html

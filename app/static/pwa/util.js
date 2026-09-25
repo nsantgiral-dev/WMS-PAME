@@ -58,3 +58,20 @@ function esc(v) {
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
 }
+
+/** Pesos colombianos para leer: «$1.234.567», separador de miles con punto.
+ *
+ * **Uno para toda Flota** (2026-09-24): había tres —`flotaPesos`, `fjPesos` y
+ * el de la evidencia de las señales— y el mismo valor salía «$20.000» en una
+ * pantalla y «2.000E+4» en otra. Vive acá porque los arneses de Node cargan
+ * `util.js` de verdad y no todos cargan `flota.js`.
+ *
+ * `null`/vacío es «sin dato», nunca «$0»: un cero inventado se lee como un
+ * gasto que no hubo (Regla 0). Lo que no es un número se muestra tal cual.
+ */
+function fmtPesos(x) {
+  if (x === null || x === undefined || x === '') return 'sin dato';
+  const n = Number(x);
+  if (!Number.isFinite(n)) return String(x);
+  return '$' + Math.round(n).toLocaleString('es-CO');
+}

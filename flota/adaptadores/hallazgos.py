@@ -79,7 +79,8 @@ def _instante_limite(reportado_ts: datetime, criticidad: str) -> datetime:
 
 def anclar_odometro(vehiculo_id: int, km: int, autor_usuario_id: int,
                     ahora: datetime,
-                    origen: OrigenLectura = OrigenLectura.HALLAZGO
+                    origen: OrigenLectura = OrigenLectura.HALLAZGO,
+                    foto_tablero: Optional[dict] = None,
                     ) -> LecturaOdometro:
     """La lectura a la que se ata un evento de flota. Regla 3, con un hecho.
 
@@ -111,6 +112,20 @@ def anclar_odometro(vehiculo_id: int, km: int, autor_usuario_id: int,
 
     El default sigue siendo `HALLAZGO` para no cambiar el significado de la
     única llamada que existía.
+
+    ## `foto_tablero` — el km que cambió llega con su respaldo (2026-09-24)
+
+    Solo se usa cuando nace una lectura: si el número coincide con la última,
+    se reutiliza esa fila y no hace falta foto (no se crea una dudosa). Si el
+    odómetro se movió, la foto del tablero se guarda como `foto_dato` colgada
+    de la LECTURA (`entidad_tipo='odometro'`) y la lectura nace con su
+    `foto_id`: `confianza_al_nacer` la ve y no la marca dudosa por falta de foto.
+    Sin foto, la lectura nace como siempre —dudosa— y va a la cola de
+    verificación: pedirla no bloquea (regla 1: informa).
+
+    La foto va PRIMERO y la lectura nace con el vínculo puesto: la tabla de
+    lecturas es append-only por trigger. La foto se crea con el padre en 0 y
+    se le pone el id de la lectura en la misma transacción.
     """
     previas = LecturaOdometro.query.filter_by(vehiculo_id=vehiculo_id).all()
 
@@ -128,13 +143,24 @@ def anclar_odometro(vehiculo_id: int, km: int, autor_usuario_id: int,
         Lectura(valor_km=km, ts=ahora, origen=origen,
                 autor_usuario_id=autor_usuario_id),
     )
+    foto = None
+    if foto_tablero is not None:
+        from flota.adaptadores.almacen_fotos import colgar_fotos
+        from flota.dominio.valores import EntidadFoto
+        [foto] = colgar_fotos([foto_tablero], EntidadFoto.ODOMETRO.value, 0,
+                              autor_usuario_id, ahora)
+        db.session.flush()
     nueva = LecturaOdometro(
         vehiculo_id=vehiculo_id, valor_km=km, ts=ahora,
         origen=origen.value,
         autor_usuario_id=autor_usuario_id,
+        foto_id=foto.id if foto is not None else None,
     )
     db.session.add(nueva)
     db.session.flush()
+    if foto is not None:
+        foto.entidad_id = nueva.id
+        db.session.flush()
     return nueva
 
 

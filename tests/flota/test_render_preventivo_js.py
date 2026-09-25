@@ -10,10 +10,8 @@ mira **lo que quedó pintado**.
 
 ## Qué se afirma
 
-1. Que los cuatro contadores del health llegan al tablero, **separados**: un
-   solo total no dice a quién llamar.
-2. Que una flota sin nada que hacer **no pinta nada**. Un tablero que siempre
-   muestra algo se deja de mirar — la lección de los 639 avisos conocidos.
+1. (Los cuatro contadores del health, separados, se prueban en Analítica.)
+2. (Retirado con «Salud de la flota».)
 3. Que la **procedencia se ve al lado del intervalo**, y que una fuente blanda
    se distingue de una documental. Es la decisión 2 del plan, y si la pantalla
    la deja de pintar, el número vuelve a leerse como verificado.
@@ -112,30 +110,6 @@ def _correr(tmp_path, guion: dict) -> str:
     return json.loads(proc.stdout)['html']
 
 
-def _salud(tmp_path, health: dict) -> str:
-    return _correr(tmp_path, {'fn': 'flotaBloqueSalud',
-                              'rutas': {'/flota/health': health}})
-
-
-def _sano(**extra) -> dict:
-    """Una flota sin nada que reportar. Los campos del preventivo en cero."""
-    base = {
-        'documentos_vencidos': 0, 'documentos_no_encontrados': 0,
-        'vehiculos_sin_lectura': 0, 'lecturas_sin_foto': 0,
-        'fichas_con_ancla_incoherente': 0, 'lecturas_correccion_30d': 0,
-        'salto_km_maximo_30d': {'delta_km': None, 'nota': 'sin lecturas'},
-        'hallazgos_abiertos': 0, 'hallazgos_vencidos': 0,
-        'vehiculos_sin_inspeccion_hoy': 0, 'inspecciones_incompletas_hoy': 0,
-        'segundos_llenado_30d': {'n': 0, 'minimo': None, 'mediana': None,
-                                 'nota': 'ninguna inspección'},
-        'tareas_vencidas': 0, 'tareas_por_vencer': 0,
-        'tareas_sin_linea_base': 0, 'tareas_sin_intervalo': 0,
-        'km_dia_por_vehiculo': [],
-    }
-    base.update(extra)
-    return base
-
-
 def _plan(tmp_path, tareas, ritmo=None) -> str:
     payload = {
         'placa': 'TGZ653', 'tareas': tareas, 'dias_aviso': 15,
@@ -164,88 +138,11 @@ def _tarea(**extra) -> dict:
 # El bloque de salud
 # ══════════════════════════════════════════════════════════════════════════
 
-class TestNoGritaCuandoNoHayNadaQueHacer:
+# Los contadores del plan y el ritmo de uso se pintaban también en «Salud de la
+# flota» (`flotaBloqueSalud`), retirada el 2026-09-24: los cuatro contadores
+# separados viven en el panel «Plan preventivo» de Analítica y el ritmo en «Ritmo
+# de uso» (`test_render_analitica_js.py`, que los ejecuta con el tab completo).
 
-    def test_una_flota_sana_no_pinta_nada(self, tmp_path):
-        assert _salud(tmp_path, _sano()) == ''
-
-    def test_una_lista_de_ritmos_vacia_no_ocupa_espacio(self, tmp_path):
-        """`[]` es «no hay vehículos activos», no un ritmo de cero."""
-        assert _salud(tmp_path, _sano(km_dia_por_vehiculo=[])) == ''
-
-
-class TestLosCuatroContadoresVanSeparados:
-    """Cada uno se corrige llamando a una persona distinta: al taller, al que
-    consigue el repuesto, al que sabe cuándo se hizo, y al concesionario."""
-
-    def test_las_vencidas_salen_en_rojo(self, tmp_path):
-        html = _salud(tmp_path, _sano(tareas_vencidas=2))
-        assert '2 tarea(s) de mantenimiento VENCIDAS' in html
-        assert 'var(--red)' in html
-
-    def test_y_dicen_que_el_kilometraje_lo_puso_el_fabricante(self, tmp_path):
-        """No hay umbral acá, y la pantalla lo dice: es lo que hace que nadie
-        venga a «ajustar el número» dentro de tres meses."""
-        html = _salud(tmp_path, _sano(tareas_vencidas=1))
-        assert 'fabricante' in html
-
-    def test_las_por_vencer_salen_aparte(self, tmp_path):
-        html = _salud(tmp_path, _sano(tareas_por_vencer=3))
-        assert '3 tarea(s) llegan al cambio pronto' in html
-
-    def test_las_sin_linea_base_se_explican_como_NO_SE_SABE(self, tmp_path):
-        """Regla 4: no están al día ni vencidas."""
-        html = _salud(tmp_path, _sano(tareas_sin_linea_base=5))
-        assert '5 tarea(s) sin saber cuándo se hizo la última vez' in html
-        assert 'no están al día ni vencidas' in html.lower()
-
-    def test_las_sin_intervalo_dicen_que_NO_SE_PUDIERON_MIRAR(self, tmp_path):
-        """El campo que impide que los otros tres se apaguen sin que nadie lo
-        note. «No es que estén bien: es que no se pudieron mirar»."""
-        html = _salud(tmp_path, _sano(tareas_sin_intervalo=4))
-        assert '4 tarea(s) sin intervalo declarado' in html
-        assert 'no es que estén bien' in html.lower()
-
-    def test_las_cuatro_a_la_vez_producen_cuatro_lineas(self, tmp_path):
-        html = _salud(tmp_path, _sano(
-            tareas_vencidas=1, tareas_por_vencer=2,
-            tareas_sin_linea_base=3, tareas_sin_intervalo=4))
-        for trozo in ('1 tarea(s) de mantenimiento VENCIDAS',
-                      '2 tarea(s) llegan al cambio pronto',
-                      '3 tarea(s) sin saber cuándo',
-                      '4 tarea(s) sin intervalo declarado'):
-            assert trozo in html
-
-
-class TestElRitmoSePintaComoHechoYNoComoAlarma:
-    """Regla 13. Es el número que permite fijar el único umbral de la fase con
-    dato dentro de un mes."""
-
-    def test_se_pinta_con_su_marca_y_su_cantidad_de_lecturas(self, tmp_path):
-        html = _salud(tmp_path, _sano(km_dia_por_vehiculo=[
-            {'placa': 'TGZ653', 'km_dia': '112.5', 'marca': 'declarada',
-             'n': 8, 'dias': '30.0', 'motivo': None}]))
-        assert 'TGZ653: 112.5 km/día (declarada, 8 lecturas)' in html
-        assert 'var(--tx2)' in html
-
-    def test_no_se_compara_entre_vehiculos_y_lo_dice(self, tmp_path):
-        html = _salud(tmp_path, _sano(km_dia_por_vehiculo=[
-            {'placa': 'TGZ653', 'km_dia': '112.5', 'marca': 'declarada',
-             'n': 8, 'dias': '30.0', 'motivo': None}]))
-        assert 'No se compara' in html
-
-    def test_sin_dato_NO_se_pinta_como_cero(self, tmp_path):
-        """«No es cero: es que no se puede calcular todavía»."""
-        html = _salud(tmp_path, _sano(km_dia_por_vehiculo=[
-            {'placa': 'TGZ653', 'km_dia': 'sin_dato', 'marca': 'sin_dato',
-             'n': 1, 'dias': 'sin_dato', 'motivo': 'menos de dos lecturas'}]))
-        assert 'sin dato' in html
-        assert 'No es cero' in html
-
-
-# ══════════════════════════════════════════════════════════════════════════
-# La pantalla del plan
-# ══════════════════════════════════════════════════════════════════════════
 
 class TestLaProcedenciaSeVeAlLadoDelNumero:
     """Decisión 2 del plan. Si la pantalla la deja de pintar, el intervalo

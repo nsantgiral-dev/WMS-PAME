@@ -42,7 +42,7 @@ const FLOTA_BANDEJA_VIGENCIA_MS = 120000;
 const FLOTA_EXP_PESTANAS = [
   ['resumen', 'Resumen'], ['danos', 'Daños'], ['gastos', 'Gastos'],
   ['taller', 'Taller'], ['llantas', 'Llantas'], ['preventivo', 'Preventivo'],
-  ['documentos', 'Documentos'], ['ficha', 'Ficha'],
+  ['documentos', 'Papeles'], ['ficha', 'Ficha'],
 ];
 
 const FLOTA_SEMAFORO = {
@@ -176,8 +176,7 @@ function flotaBandejaHoyHtml(b) {
   const lista = filas.slice().sort((x, y) =>
     (orden[x.semaforo.color] - orden[y.semaforo.color]) || (x.pos - y.pos));
   return flotaBandejaCabecera(b) + resumen +
-    lista.map(f => flotaBandejaFilaHoy(f)).join('') +
-    flotaBandejaDiagnosticoPlegado();
+    lista.map(f => flotaBandejaFilaHoy(f)).join('');
 }
 
 /** Una fila por vehículo. Toda la fila abre el expediente en su resumen. */
@@ -214,7 +213,10 @@ function flotaBandejaFilaHoy(f) {
 /** Grupos en el orden en que se atienden. Cada pendiente cae en uno. */
 const FLOTA_GRUPOS_PENDIENTES = [
   ['Daños por decidir', ['dano']],
-  ['Papeles', ['documento', 'documento_sin_cargar']],
+  ['Papeles', ['documento']],
+  // Los despachos que salieron reconociendo advertencias de flota (el FORZAR
+  // del muelle): control de flota no ve 📈, así que acá es donde se entera.
+  ['Salidas con advertencias', ['despacho_forzado']],
   ['Turnos: cierres forzados y fotos que faltan', ['cierre_forzado', 'turno_sin_fotos']],
   ['Kilometrajes por verificar', ['km_dudoso']],
   ['Ficha y mantenimiento', ['ficha', 'preventivo']],
@@ -289,10 +291,15 @@ function flotaBandejaFilaPendiente(p, j, puedeDecidir) {
   } else if (p.accion && p.accion.tipo !== 'verificar_km') {
     botones = `<button class="btn-flota" onclick="flotaPendienteAccion(${Number(j)})">${esc(flotaTextoAccion(p.accion))}</button>`;
   }
+  // Un pendiente con varios renglones (los papeles de un vehículo) se lee
+  // como lista, no como una frase de cuatro cláusulas.
+  const cuerpo = (p.lineas && p.lineas.length > 1)
+    ? `<ul style="margin:4px 0 0 18px;padding:0">${p.lineas.map(l => `<li>${esc(l)}</li>`).join('')}</ul>`
+    : esc(p.texto);
   return `<li style="border-top:1px solid var(--brd);padding:8px 0">
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-      ${flotaChipUrgencia(p.urgencia)} <b>${esc(p.placa)}</b> ${esc(p.texto)}
-    </div>
+      ${flotaChipUrgencia(p.urgencia)} <b>${esc(p.placa)}</b> ${(p.lineas && p.lineas.length > 1) ? '' : cuerpo}
+    </div>${(p.lineas && p.lineas.length > 1) ? cuerpo : ''}
     <div style="font-size:var(--fs-xs);color:var(--tx2);margin:2px 0 6px">${esc(p.detalle || '')}</div>
     <div style="display:flex;gap:6px;flex-wrap:wrap">${botones}</div>
   </li>`;
@@ -359,7 +366,7 @@ async function flotaBandejaDecidir(j, k) {
     if (!motivo || !motivo.trim()) {
       alerta(verbo === 'aplazar'
         ? 'Un plazo que se mueve sin razón anotada es un plazo que no existe.'
-        : 'Un descarte sin motivo escrito no se puede distinguir de hacer desaparecer un hallazgo incómodo.',
+        : 'Un descarte sin motivo escrito no se puede distinguir de hacer desaparecer un daño incómodo.',
         'advertencia');
       return;
     }
@@ -404,11 +411,60 @@ function flotaBandejaSenalesHtml(b) {
   return html;
 }
 
+/** La evidencia de una señal, en palabras: cada clave con su etiqueta y su
+ * formato. Una clave que no está acá NO se pinta: una clave cruda
+ * («forma: turno_de_otro», «galones esperados: 10.857142857…») es ruido con
+ * autoridad, y lo que dice ya está en el texto de la señal. `tipo` decide el
+ * formato: hora de Bogotá, fecha, pesos, 2 decimales o entero con miles. */
+const FLOTA_EVIDENCIA = {
+  km_desde: ['Km al empezar', 'entero'], km_hasta: ['Km al terminar', 'entero'],
+  km: ['Kilómetros', 'entero'], desde: ['Desde', 'hora'], hasta: ['Hasta', 'hora'],
+  dias: ['Días sin ruta', 'fechas'],
+  rutas_del_vehiculo_esos_dias: ['Rutas del vehículo esos días', 'entero'],
+  dia: ['Día', 'fecha'], mediana_km: ['Lo habitual en esa ruta (mediana)', 'entero'],
+  n: ['Casos comparados', 'entero'], ruta_maestra: ['Ruta maestra', 'texto'],
+  galones: ['Galones que entraron', 'decimal'],
+  galones_esperados: ['Galones esperados', 'decimal'],
+  rendimiento_km_galon: ['Rendimiento medido (km por galón)', 'decimal'],
+  ventanas_del_rendimiento: ['Ventanas del rendimiento', 'entero'],
+  fecha: ['Fecha', 'fecha'], estacion: ['Estación', 'texto'],
+  valor: ['Valor de la factura', 'pesos'], precio_galon: ['Precio del galón', 'pesos'],
+  mediana_flota: ['Lo habitual en la flota (mediana)', 'pesos'],
+  conductor_de_la_ruta: ['Conductor de la ruta', 'texto'],
+};
+
+function flotaEvidenciaValor(tipo, v) {
+  if (v === null || v === undefined || v === '') return 'sin dato';
+  const num = Number(v);
+  if (tipo === 'entero') return Number.isFinite(num) ? Math.round(num).toLocaleString('es-CO') : String(v);
+  if (tipo === 'decimal') {
+    return Number.isFinite(num)
+      ? num.toLocaleString('es-CO', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+      : String(v);
+  }
+  if (tipo === 'pesos') return Number.isFinite(num) ? fmtPesos(num) : String(v);
+  if (tipo === 'fecha') return flotaFechaCorta(v);
+  if (tipo === 'fechas') return (Array.isArray(v) ? v : [v]).map(flotaFechaCorta).join(', ');
+  if (tipo === 'hora') {
+    // Bogotá es UTC−5 todo el año (sin horario de verano): se resta a mano y
+    // no se depende de la tabla de zonas del navegador (regla 5 del WMS).
+    const d = new Date(v);
+    if (isNaN(d)) return String(v);
+    const b = new Date(d.getTime() - 5 * 3600 * 1000);
+    const dos = (x) => String(x).padStart(2, '0');
+    return `${dos(b.getUTCDate())}/${dos(b.getUTCMonth() + 1)} ${dos(b.getUTCHours())}:${dos(b.getUTCMinutes())}`;
+  }
+  return String(v);
+}
+
 function flotaBandejaTarjetaSenal(s, k) {
-  const ev = Object.entries(s.evidencia || {})
-    .filter(([clave]) => !/_id$/.test(clave))
-    .map(([clave, v]) => `<li><span style="color:var(--tx2)">${esc(clave.replace(/_/g, ' '))}:</span>
-      ${esc(Array.isArray(v) ? v.join(', ') : v)}</li>`).join('');
+  const e = s.evidencia || {};
+  const ev = Object.keys(FLOTA_EVIDENCIA).filter(clave => clave in e)
+    .map(clave => {
+      const [etiqueta, tipo] = FLOTA_EVIDENCIA[clave];
+      return `<li><span style="color:var(--tx2)">${esc(etiqueta)}:</span>
+      ${esc(flotaEvidenciaValor(tipo, e[clave]))}</li>`;
+    }).join('');
   return `<div class="tabla-card" style="border-left:4px solid var(--warn-brd)">
     <div style="font-size:var(--fs-xs);color:var(--tx2)">${esc(flotaPalabraDe(FLOTA_CLASE_SENAL, s.clase))}</div>
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:4px 0">
@@ -423,13 +479,30 @@ function flotaBandejaTarjetaSenal(s, k) {
   </div>`;
 }
 
+/** «Lo que no se pudo revisar», agrupado por qué y por qué no: la misma
+ * frase cinco veces (una por placa) se deja de leer. Un renglón por
+ * (señal, motivo), con las placas y los casos al lado. */
 function flotaBandejaNoEvaluables(filas) {
   if (!filas.length) return '';
-  const li = filas.map(f => `<li style="margin-bottom:4px">
-    <b>${esc(f.placa || 'sin placa')}</b> · ${esc(flotaPalabraDe(FLOTA_CLASE_SENAL, f.clase))}:
-    ${esc(f.motivo)}${f.casos > 1 ? ` (${esc(f.casos)} casos)` : ''}</li>`).join('');
+  const grupos = [];
+  const idx = {};
+  filas.forEach(f => {
+    const clave = f.clase + '\u0000' + f.motivo;
+    if (!(clave in idx)) {
+      idx[clave] = grupos.length;
+      grupos.push({ clase: f.clase, motivo: f.motivo, placas: [], casos: 0 });
+    }
+    const g = grupos[idx[clave]];
+    const placa = f.placa || 'sin placa';
+    if (!g.placas.includes(placa)) g.placas.push(placa);
+    g.casos += f.casos || 1;
+  });
+  const li = grupos.map(g => `<li style="margin-bottom:6px">
+    <b>${esc(flotaPalabraDe(FLOTA_CLASE_SENAL, g.clase))}</b>: ${esc(g.motivo)}
+    <div style="font-size:var(--fs-xs);color:var(--tx2)">${esc(g.placas.join(', '))}${
+      g.casos > g.placas.length ? ` · ${esc(g.casos)} casos` : ''}</div></li>`).join('');
   return `<div class="tabla-card"><details>
-    <summary style="cursor:pointer"><b>Lo que no se pudo revisar (${esc(filas.length)})</b></summary>
+    <summary style="cursor:pointer"><b>Lo que no se pudo revisar (${esc(grupos.length)})</b></summary>
     <p style="font-size:var(--fs-xs);color:var(--tx2)">Sin el dato no hay señal, y eso no
     es lo mismo que «está bien». Cada renglón dice qué falta para poder mirarlo.</p>
     <ul style="font-size:var(--fs-sm);margin:0 0 0 18px;padding:0">${li}</ul>
@@ -624,43 +697,98 @@ function flotaExpFotosTurno(pos) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// Diagnóstico — lo técnico, plegado y a pedido
+// Diagnóstico técnico — plegado al final de Analítica, a pedido
 // ═══════════════════════════════════════════════════════════════════════════
+//
+// Vivía al pie de Hoy (2026-09-24 se mudó): lo primero que ve el encargado es
+// su trabajo del día, no los contadores de quien mantiene el sistema. El
+// plegado lo pinta `flotaAnDiagnosticoPlegado()` (flota_analitica.js).
 
-function flotaBandejaDiagnosticoPlegado() {
-  return `<div class="tabla-card"><details>
-    <summary style="cursor:pointer" onclick="flotaBandejaDiagnostico()"><b>Diagnóstico</b>
-      <span style="font-size:var(--fs-xs);color:var(--tx2)">— para quien mantiene el sistema</span></summary>
-    <div id="flota-diagnostico" style="font-size:var(--fs-sm)">
-      <p style="color:var(--tx2)">Tocá «Diagnóstico» para cargarlo.</p></div>
-  </details></div>`;
-}
-
-/** Arma el diagnóstico con el health (pedido una sola vez) y los avisos. */
+/** Los avisos de vencimiento, a pedido: son el único pedazo del diagnóstico
+ * que necesita otra lectura (`/flota/avisos`). */
 async function flotaBandejaDiagnostico() {
   const cont = document.getElementById('flota-diagnostico');
   if (!cont) return;
   cont.innerHTML = '<p style="color:var(--tx2)">Cargando…</p>';
-  let h;
-  try {
-    h = await flotaHealth();
-  } catch (e) {
-    cont.innerHTML = `<p style="color:var(--err-tx)">No se pudo leer el estado: ${esc(e.message)}</p>`;
-    return;
-  }
-  cont.innerHTML = flotaBandejaDiagnosticoHtml(h) + await flotaBloqueAvisos();
+  cont.innerHTML = (await flotaBloqueAvisos())
+    || '<p style="color:var(--tx2)">Sin avisos de vencimiento registrados.</p>';
 }
 
+/** Un contador del health para leer: `null` es «sin dato», no cero. */
+function flotaDiagNumero(x) {
+  if (x === null || x === undefined) return 'sin dato (la tabla no existe)';
+  if (Array.isArray(x)) return x.length === 1 ? '1 fila' : `${x.length.toLocaleString('es-CO')} filas`;
+  return Number(x).toLocaleString('es-CO');
+}
+
+/** El salto de kilometraje más grande del mes: un HECHO, sin juzgarlo (no
+ * hay todavía un mes de mediciones con qué fijar un umbral de km/día). */
+function flotaDiagSalto(s) {
+  if (s === null || s === undefined) return 'sin dato (la tabla no existe)';
+  if (s.delta_km === null || s.delta_km === undefined) return s.nota || 'sin lecturas';
+  const horas = (s.horas === null || s.horas === undefined) ? 'sin hora anterior'
+    : `en ${Number(s.horas).toLocaleString('es-CO', { maximumFractionDigits: 2 })} h`;
+  return `+${Number(s.delta_km).toLocaleString('es-CO')} km ${horas}`;
+}
+
+/** El tiempo de llenado de la inspección (regla 11: la forma de maximizarla
+ * sin hacerla es marcar todo óptimo en veinte segundos). */
+function flotaDiagLlenado(s) {
+  if (s === null || s === undefined) return 'sin dato (la tabla no existe)';
+  if (!s.minimo) return s.nota || 'ninguna inspección';
+  return `mediana ${s.mediana} s · la más rápida ${s.minimo.segundos} s para `
+    + `${s.minimo.items} ítems · ${s.n} inspecciones`;
+}
+
+/** Los números del health, en palabras y agrupados. Lo accionable de cada uno
+ * está en Hoy o en Pendientes, con placa y botón; acá quedan para quien
+ * mantiene el dato. Ningún campo del health queda mudo
+ * (`test_render_salud_js::TestNingunCampoDelHealthQuedaMudo`). */
 function flotaBandejaDiagnosticoHtml(h) {
-  const n = (x) => (x === null || x === undefined) ? 'sin dato (la tabla no existe)' : x;
-  const filas = [
-    ['Base', `${h.ambiente || 'sin declarar'}${h.datos_reales === false ? ' — estos números NO son de la operación real' : ''}`],
-    ['Turnos cerrados en una sede que no está en el maestro de almacenes', n(h.custodias_pendiente_sede)],
-    ['Lecturas de kilometraje con el mismo segundo que otra', n(h.lecturas_ts_duplicado)],
-    ['Fotos registradas cuyo archivo no se guardó', n(h.fotos_pendiente_evidencia)],
-    ['Fichas cuyo km inicial no cuadra con las lecturas', n(h.fichas_con_ancla_incoherente)],
-    ['Conductores activos sin cuenta para entrar a la app', n(h.conductores_activos_sin_cuenta)],
+  const n = flotaDiagNumero;
+  const grupos = [
+    ['De dónde salen', [
+      ['Base', `${h.ambiente || 'sin declarar'}${h.datos_reales === false ? ' — estos números NO son de la operación real' : ''}`],
+      ['Vehículos activos', n(h.vehiculos_activos)],
+      ['Fichas técnicas completas', n(h.fichas_completas)],
+      ['Conductores activos sin cuenta para entrar a la app', n(h.conductores_activos_sin_cuenta)],
+      ['Rutas viejas sin placa (no se pueden cruzar con ningún vehículo)', n(h.rutas_historicas_sin_placa)],
+    ]],
+    ['Kilometraje', [
+      ['Vehículos sin ninguna lectura', n(h.vehiculos_sin_lectura)],
+      ['Lecturas sin foto del tablero', n(h.lecturas_sin_foto)],
+      ['Lecturas en duda esperando que alguien las mire', n(h.lecturas_dudosas_pendientes)],
+      ['Lecturas verificadas en 30 días', n(h.lecturas_verificadas_30d)],
+      ['Correcciones de kilometraje en 30 días', n(h.lecturas_correccion_30d)],
+      ['Salto de kilometraje más grande del mes', flotaDiagSalto(h.salto_km_maximo_30d)],
+      ['Lecturas con el mismo segundo que otra', n(h.lecturas_ts_duplicado)],
+      ['Fichas cuyo km inicial no cuadra con las lecturas', n(h.fichas_con_ancla_incoherente)],
+    ]],
+    ['Papeles y turnos (lo accionable está en Pendientes)', [
+      ['Papeles vencidos', n(h.documentos_vencidos)],
+      ['Papeles por vencer en 30 días', n(h.documentos_por_vencer_30d)],
+      ['Papeles que nadie pudo mostrar', n(h.documentos_no_encontrados)],
+      ['Papeles que piden trabajo', n(h.documentos_por_vehiculo)],
+      ['Vehículos sin nadie que tenga el turno', n(h.vehiculos_sin_custodia_activa)],
+      ['Turnos cerrados a la fuerza', n(h.custodias_cerradas_forzadas)],
+      ['Turnos sin las fotos completas', n(h.custodias_sin_foto_completa)],
+      ['Turnos que piden trabajo', n(h.custodias_por_vehiculo)],
+      ['Turnos cerrados en una sede que no está en el maestro de almacenes', n(h.custodias_pendiente_sede)],
+    ]],
+    ['Daños e inspección (lo accionable está en Hoy y Pendientes)', [
+      ['Daños abiertos', n(h.hallazgos_abiertos)],
+      ['Vehículos sin inspección de hoy', n(h.vehiculos_sin_inspeccion_hoy)],
+      ['Inspecciones de hoy incompletas', n(h.inspecciones_incompletas_hoy)],
+      ['Tiempo de llenado de la inspección (30 días)', flotaDiagLlenado(h.segundos_llenado_30d)],
+    ]],
+    ['Combustible, gastos y fotos', [
+      ['Tanqueos por encima de la capacidad del tanque', n(h.tanqueos_sobre_capacidad)],
+      ['Tanqueos de vehículos sin capacidad de tanque en la ficha (el detector no los puede mirar)', n(h.tanqueos_sin_capacidad_declarada)],
+      ['Gastos sin documento', n(h.gastos_sin_documento)],
+      ['Fotos registradas cuyo archivo no se guardó', n(h.fotos_pendiente_evidencia)],
+    ]],
   ];
-  return `<ul style="margin:8px 0 8px 18px;padding:0">${filas.map(([t, v]) =>
-    `<li>${esc(t)}: <b>${esc(v)}</b></li>`).join('')}</ul>`;
+  return grupos.map(([titulo, filas]) => `<p style="margin:10px 0 4px"><b>${esc(titulo)}</b></p>
+    <ul style="margin:0 0 8px 18px;padding:0">${filas.map(([t, v]) =>
+      `<li>${esc(t)}: <b>${esc(v)}</b></li>`).join('')}</ul>`).join('');
 }

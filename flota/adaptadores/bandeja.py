@@ -774,7 +774,8 @@ def _senales_combustible(m: _Mundo, r: _Recolector):
     from flota.adaptadores.modelos import Gasto, Tanqueo
     from flota.dominio import costos
     from flota.dominio import senales as dom
-    from flota.dominio.valores import SIN_DATO
+    from flota.dominio.odometro import confianza_del_tramo
+    from flota.dominio.valores import SIN_DATO, Confianza
 
     desde_dia = m.hoy - timedelta(days=dom.VENTANA_SENALES_DIAS)
 
@@ -792,8 +793,18 @@ def _senales_combustible(m: _Mundo, r: _Recolector):
                            'ningún tramo reciente de tanque lleno a tanque '
                            'lleno: solo así se sabe cuánto se gastó')
             continue
+        lectura_por_id = {l.id: l for l in m.lecturas[v.id]}
         for w in ventanas:
             cierre = tanqueos[w['i_hasta']]
+            # El mismo criterio que Pendientes y que `km_sin_ruta`: un km en
+            # duda no es evidencia. Antes, «kilometraje en duda» aparecía en
+            # Pendientes y el mismo número sostenía «galones de más» en Señales.
+            a_l = lectura_por_id[tanqueos[w['i_desde']]['lectura_id']]
+            b_l = lectura_por_id[cierre['lectura_id']]
+            marca = confianza_del_tramo(a_l.a_dominio(), b_l.a_dominio())
+            if marca is SIN_DATO or marca == Confianza.DUDOSA:
+                r.no_evaluable('galones', v.placa, dom.MOTIVO_TRAMO_EN_DUDA)
+                continue
             ver = dom.galones_de_ventana(
                 km=w['km'], galones=w['galones'], km_galon=rp['km_galon'],
                 publicable=rp['publicable'], motivo_rendimiento=rp['motivo'])

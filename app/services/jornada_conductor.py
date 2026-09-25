@@ -177,21 +177,29 @@ _CONF_NUM = {'alta': 3, 'media': 2, 'baja': 1}
 
 #: Lo que esta vista no puede ver con los datos de hoy. Va en cada respuesta,
 #: para que nadie lea el silencio como «no pasó».
+#: En palabras de bodega, sin nombres de funciones ni fases del proyecto
+#: (2026-09-24): quien lo lee es el encargado, no quien mantiene el sistema.
 NO_PUEDE_VER = (
-    'La salida física del camión: «cierre del cargue» es cuando el muelle '
-    'cerró el manifiesto, no cuando el vehículo salió. No existe un evento '
-    '«salí de bodega» ni «volví» (Fase 1).',
-    'Dónde estuvo el vehículo entre dos eventos: sin GPS del vehículo, un '
-    'tramo no explicado no dice nada de a dónde fue (Fase 3).',
-    'La hora real de una parada confirmada sin señal, mientras la app no '
-    'mande la hora del teléfono: con hora del servidor es la de sincronizar.',
-    'Quién cerró la ruta: `entregar_ruta` no guarda el autor, así que el '
-    'cierre de ruta no cuenta como gesto del conductor.',
-    'El orden planeado de las paradas y la hora planeada de salida: la ruta '
-    'maestra solo ordena municipios (Fase 1: hora planeada por maestra).',
-    'Horas extra, pausas legales y viáticos: no existe registro de jornada '
-    'laboral. Esta vista no mide cumplimiento de horario.',
+    'A qué hora salió de verdad el camión: «cerró el cargue» es cuando el '
+    'muelle terminó de cargarlo, no cuando arrancó. Todavía no hay un botón '
+    'de «salí» ni de «volví».',
+    'Dónde estuvo el camión entre dos registros: sin GPS en el vehículo, un '
+    'tiempo sin explicar no dice a dónde fue.',
+    'La hora real de una entrega que se confirmó sin señal: se ve la hora en '
+    'que el teléfono la pudo enviar.',
+    'Quién cerró la ruta: el sistema no lo guarda, así que ese cierre no se '
+    'cuenta como un registro del conductor.',
+    'El orden y la hora planeados de las entregas: la ruta solo dice qué '
+    'municipios recorre.',
+    'Horas extra, pausas y viáticos: no hay registro de jornada laboral. Esta '
+    'vista no mide cumplimiento de horario.',
 )
+
+def _motivos_en_palabras() -> dict:
+    """`{código: etiqueta}` del catálogo de motivos de rechazo."""
+    from app.services.motivos_rechazo import MOTIVOS
+    return {m.codigo: m.etiqueta for m in MOTIVOS}
+
 
 AVISO_LEGAL = (
     'Datos personales (Ley 1581 de 2012): esta vista usa registros que el '
@@ -1635,6 +1643,9 @@ def _envoltura(m: Mundo, **cuerpo) -> dict:
         'hora_del_telefono': _hora_del_telefono(m),
         'umbrales': U, 'umbrales_rechazados': rechazados,
         'no_puede_ver': list(NO_PUEDE_VER),
+        # Las palabras de los motivos de rechazo salen del catálogo único
+        # (`motivos_rechazo`), no de una copia en la pantalla.
+        'motivos_rechazo': _motivos_en_palabras(),
         'fuentes_no_disponibles': m.fuentes_no_disponibles,
         'aviso_legal': AVISO_LEGAL,
         'procedencia': {
