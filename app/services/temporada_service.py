@@ -353,7 +353,9 @@ class TemporadaService:
                 continue
             hay = pos['disponible'] if pos else 0.0
             viene = pos['en_camino'] if pos else 0.0
-            pedir = max(0, round(tener - hay - viene))
+            # tener − (hay + viene): la posición de `posicion_inventario`, la
+            # misma que ve el Armador.
+            pedir = max(0, round(tener - (pos['posicion'] if pos else 0.0)))
             costo = float(fila.get('costo_unitario') or 0)
             fila.update({
                 'tener': tener,

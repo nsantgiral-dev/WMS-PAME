@@ -181,6 +181,27 @@ class TestElDenominadorEsElDiaNoElMovimiento:
         assert d['dias_con_stock'] == 360
         assert d['d_avg'] == pytest.approx(100 / 360, rel=1e-4)
 
+    def test_dos_bodegas_que_se_solapan_se_unen(self, app, db):
+        """NB1 tuvo stock de −100 a −41 (60 días), NC1 de −70 a −11 (60): la
+        red tuvo stock de −100 a −11 = 90 días, no 120. Por debajo del tope de
+        la ventana, para que `dias_expuestos` no tape una suma."""
+        from app.services.kardex_service import KardexService
+        hoy = _hoy()
+        _mov(db, 'SOLAPE', hoy - timedelta(days=100), 50, 601, 1, bod='NB1')
+        _venta(db, 'SOLAPE', 40, 50, bod='NB1')
+        _mov(db, 'SOLAPE', hoy - timedelta(days=70), 50, 601, 1, bod='NC1')
+        _venta(db, 'SOLAPE', 10, 50, bod='NC1')
+        _stock(db, 'SOLAPE', 0, bod='NB1')
+        _stock(db, 'SOLAPE', 0, bod='NC1')
+        _cobertura(db)
+        _reconstruir(db)
+        d = KardexService.demanda_descensurada(12, 'red')['SOLAPE']
+        assert d['dias_con_stock'] == 90
+        assert d['d_avg'] == pytest.approx(100 / 90, rel=1e-4)
+        b = KardexService.demanda_descensurada(12, 'bodega')
+        assert b['SOLAPE|NB1']['dias_con_stock'] == 60
+        assert b['SOLAPE|NC1']['dias_con_stock'] == 60
+
     def test_el_reconstructor_escribe_la_apertura(self, app, db):
         """El cierre del día anterior al primer movimiento: sin él, los días
         entre el inicio de la ventana y el primer movimiento no tenían valor."""

@@ -497,8 +497,10 @@ class ArmadorService:
             #
             # `deficit` sí conserva su `max(0, ...)` — no se puede comprar una
             # cantidad negativa.
-            posicion = (stock_actual + qty_transito
-                        - qty_comprometido - qty_salida_sin_conf)
+            # La posición de `posicion_inventario` — la misma fórmula que ve el
+            # pedido de temporada. Un SKU sin ninguna fila de stock ni nada en
+            # camino tiene posición 0 (se declara en `frescura_stock: None`).
+            posicion = float((posiciones.get(ref) or {}).get('posicion', 0.0))
 
             lt = lt_china if es_china else lt_nacional
             sigma_lt = sigma_lt_china if es_china else sigma_lt_nacional
