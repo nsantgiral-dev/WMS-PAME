@@ -146,7 +146,10 @@ class TestBiVentaPerdida:
         # $0 al total, se declara (Regla 0, 2026-09-24).
         assert set(data.keys()) == {'venta_perdida_total', 'por_categoria', 'por_dia',
                                      'fecha_desde', 'fecha_hasta', 'eventos',
-                                     'sin_precio', 'total_es_cota_inferior'}
+                                     'sin_precio', 'total_es_cota_inferior',
+                                     # por categoría: una con solo agotados sin
+                                     # precio suma $0 y no es «nada perdido».
+                                     'sin_precio_por_categoria'}
         assert data['venta_perdida_total'] == 0.0
 
 

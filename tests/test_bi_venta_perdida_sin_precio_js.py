@@ -43,4 +43,5 @@ def test_el_total_se_declara_piso_si_faltan_precios():
 
 def test_la_fila_sin_precio_no_dice_cero():
     src = (RAIZ / 'app' / 'static' / 'pwa' / 'tablero_bi.js').read_text(encoding='utf-8')
-    assert "ev.precio_venta_capturado == null ? 'sin precio'" in src
+    # La fila sin precio dice «sin precio» (en gris desde 2026-09-24), nunca un monto.
+    assert "ev.precio_venta_capturado == null ? '<span style=\"color:var(--tx3);font-weight:400;\">sin precio</span>'" in src
