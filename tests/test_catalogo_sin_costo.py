@@ -93,6 +93,31 @@ class TestLaBusquedaExacta:
         assert client.get('/api/productos/?codigo=BBB2', headers=h).get_json()['productos'] == []
 
 
+class TestLaPantallaNoTomaElPrimeroQueSeParezca:
+    """`productoPorCodigoExacto` (app.js, Node real): uno se usa; ninguno o
+    varios no se registran — se dice."""
+
+    @pytest.mark.parametrize('productos,esperado,aviso', [
+        ([{'id': 7}], 7, None),
+        ([], None, 'No hay ningún producto'),
+        ([{'id': 7}, {'id': 8}], None, 'corresponde a 2 productos'),
+    ])
+    def test_uno_ninguno_varios(self, tmp_path, productos, esperado, aviso):
+        from tests.test_sin_codigos_en_pantalla import _node
+        # app.js trae su propio get(): se reemplaza después de cargarlo, y la
+        # URL pedida queda anotada (tiene que ser la del código exacto).
+        out = _node(tmp_path, ['util.js', 'app.js'], {},
+                    """const avisos = [], urls = [];
+                       alerta = (m) => avisos.push(m);
+                       get = async (u) => { urls.push(u); return { productos: PRODUCTOS }; };
+                       const p = await productoPorCodigoExacto('X 1');
+                       return { id: p ? p.id : null, avisos, urls };""",
+                    globales={'PRODUCTOS': productos})
+        assert out['urls'] == ['/api/productos/?codigo=X%201']
+        assert out['id'] == esperado
+        assert (aviso is None and out['avisos'] == []) or any(aviso in a for a in out['avisos'])
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 # AST: el catálogo no arma un producto por fuera de la política
 # ═════════════════════════════════════════════════════════════════════════════
