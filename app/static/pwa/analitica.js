@@ -230,6 +230,11 @@ function anCuando(iso) {
  * La línea chica de frescura: de cuándo es el dato y si la fuente estaba
  * completa. Una fuente con `completa === false` se nombra con su motivo; no se
  * resume en «fuente incompleta» a secas, porque eso no dice qué falta.
+ *
+ * **Una línea, no un bloque** (2026-09-24): los avisos de calidad del dato
+ * pegados encima de cada cifra tapaban la cifra. La línea dice cuántas fuentes
+ * están incompletas y el detalle se abre al tocarla. El juicio de confianza
+ * completo vive en 🎯 ¿Cómo vamos? (arriba) y en 🩺 Diagnóstico.
  */
 function anFrescura(meta) {
   if (!meta) return '';
@@ -238,9 +243,12 @@ function anFrescura(meta) {
     .filter(f => f && f.completa === false);
   const base = `Dato de ${esc(anCuando(meta.calculado_en))}`;
   if (!incompletas.length) {
-    return `<div style="font-size:var(--fs-xs);color:var(--tx3);margin:4px 0 10px;">${base} · fuente completa</div>`;
+    return `<div style="font-size:var(--fs-xs);color:var(--tx3);margin:4px 0 10px;">${base} · fuentes completas</div>`;
   }
   const avisos = incompletas.map(f =>
-    `<div>⚠ <b>${esc(f.nombre || 'Fuente')}</b>: ${esc(f.motivo || 'incompleta')}</div>`).join('');
-  return `<div style="font-size:var(--fs-xs);margin:4px 0 10px;padding:6px 10px;border-radius:6px;background:var(--warn-bg);color:var(--warn-tx);border:1px solid var(--warn-brd);">${base} · fuente incompleta${avisos}</div>`;
+    `<div style="margin-top:2px;">⚪ <b>${esc(f.nombre || 'Fuente sin nombre')}</b>: ${esc(f.motivo || 'incompleta, sin motivo declarado')}</div>`).join('');
+  const n = incompletas.length;
+  return `<details style="font-size:var(--fs-xs);color:var(--tx3);margin:4px 0 10px;">
+    <summary style="cursor:pointer;">${base} · ${esc(anNum(n))} ${n === 1 ? 'fuente incompleta' : 'fuentes incompletas'} ›</summary>
+    <div style="color:var(--tx2);padding:4px 0 0 14px;">${avisos}</div></details>`;
 }

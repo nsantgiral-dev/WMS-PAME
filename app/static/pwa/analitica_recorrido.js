@@ -312,6 +312,15 @@ async function anRecorridoAbrir(clave) {
   if (det && det.scrollIntoView) det.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
+/** «2 líneas · 20 unidades pedidas · valor $100.000» — los números vienen
+ *  como números (`cifras`) y se formatean acá, nunca «10.0» ni «50000.0». */
+function anRecCifras(cifras) {
+  return (cifras || []).map(c => {
+    const v = c.formato === 'pesos' ? anPesos(c.valor) : anNum(c.valor);
+    return `${esc(c.etiqueta)} ${esc(v)}`;
+  }).join(' · ');
+}
+
 function anRecVolverEtapa() {
   if (_AN_REC.etapa === null || _AN_REC.etapa === undefined) anRecCerrarDetalle();
   else anRecEtapa(_AN_REC.etapa, _AN_REC.vista, _AN_REC.pagina);
@@ -331,11 +340,14 @@ function anRecPedidoHtml(d) {
     const doc = ev.documento;
     const docTxt = doc ? ` · ${esc((doc.documentos || []).join(', ') || 'consecutivo sin dato')} ${anRecPildora(doc.resultado === 'ENVIADO' || doc.resultado === 'YA_SALDADA' ? 'ok' : (doc.resultado === 'FALLIDO' ? 'critico' : 'advertencia'), doc.resultado || 'sin resultado')}` : '';
     const color = ev.tipo === 'bitacora' ? 'var(--lila-tx)' : ev.tipo === 'alerta' ? 'var(--warn-tx)' : ev.tipo === 'cola' ? 'var(--info-tx)' : 'var(--tx)';
+    const cifras = anRecCifras(ev.cifras);
+    const lineas = (ev.lineas || []).length ? ` title="${esc('Ítems: ' + ev.lineas.join(', '))}"` : '';
     return `<div style="display:flex;gap:10px;padding:6px 0;border-bottom:1px solid var(--brd);font-size:var(--fs-sm);">
-      <div style="min-width:110px;color:var(--tx3);font-size:var(--fs-xs);">${esc(ev.en ? anCuando(ev.en) : 'sin hora')}</div>
-      <div style="flex:1;">
+      <div style="min-width:92px;color:var(--tx3);font-size:var(--fs-xs);">${esc(ev.en ? anCuando(ev.en) : 'sin hora')}</div>
+      <div style="flex:1;min-width:0;"${lineas}>
         <div style="color:${color};font-weight:600;">${esc(ev.titulo)}${docTxt}</div>
-        ${ev.detalle ? `<div style="color:var(--tx2);font-size:var(--fs-xs);">${esc(ev.detalle)}</div>` : ''}
+        ${ev.detalle ? `<div style="color:var(--tx2);font-size:var(--fs-xs);overflow-wrap:anywhere;">${esc(ev.detalle)}</div>` : ''}
+        ${cifras ? `<div style="color:var(--tx2);font-size:var(--fs-xs);">${cifras}</div>` : ''}
         ${ev.quien ? `<div style="color:var(--tx3);font-size:var(--fs-xs);">por ${esc(ev.quien)}</div>` : ''}
       </div></div>`;
   }).join('') || '<div style="color:var(--tx3);font-size:var(--fs-sm);">Sin eventos registrados.</div>';

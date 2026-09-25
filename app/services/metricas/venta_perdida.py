@@ -72,16 +72,22 @@ def calcular_venta_perdida(almacen_id: int, fecha_desde: date, fecha_hasta: date
     # fecha UTC del día siguiente (Regla 5 del proyecto).
     por_dia: dict = {}
     sin_precio = {'eventos': 0, 'unidades': 0}
+    # Por categoría, cuántos agotados no tienen precio: una categoría con solo
+    # agotados sin precio suma $0 en `por_categoria`, y $0 ahí no significa
+    # «no se perdió nada» sino «no sabemos cuánto».
+    sin_precio_por_categoria: dict = {}
     eventos = 0
     filas = db.session.query(
         EventoStockAgotado.creado_en, EventoStockAgotado.cantidad_faltante,
-        EventoStockAgotado.precio_venta_capturado,
+        EventoStockAgotado.precio_venta_capturado, EventoStockAgotado.categoria_producto,
     ).filter(*filtros).all()
-    for creado_en, cantidad, precio in filas:
+    for creado_en, cantidad, precio, categoria in filas:
         eventos += 1
         if precio is None:
             sin_precio['eventos'] += 1
             sin_precio['unidades'] += int(cantidad or 0)
+            cat = categoria or 'Sin categoría'
+            sin_precio_por_categoria[cat] = sin_precio_por_categoria.get(cat, 0) + 1
             continue
         clave = dia_operativo_de(creado_en).isoformat()
         por_dia[clave] = por_dia.get(clave, 0) + float(cantidad or 0) * float(precio)
@@ -94,6 +100,7 @@ def calcular_venta_perdida(almacen_id: int, fecha_desde: date, fecha_hasta: date
         'sin_precio': sin_precio,
         'total_es_cota_inferior': sin_precio['eventos'] > 0,
         'por_categoria': por_categoria,
+        'sin_precio_por_categoria': sin_precio_por_categoria,
         'por_dia': por_dia,
         'fecha_desde': fecha_desde.isoformat(),
         'fecha_hasta': fecha_hasta.isoformat(),

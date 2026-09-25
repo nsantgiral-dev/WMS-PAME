@@ -71,6 +71,12 @@ _FLECHA = {SUBE_ES_BUENO: '↑', BAJA_ES_BUENO: '↓'}
 SUMA = 'SUMA'      # flujo: se suman los días
 TASA = 'TASA'      # proporción: Σ numerador / Σ denominador
 NIVEL = 'NIVEL'    # saldo al cierre: el último día con dato
+#: Se mide EN VIVO sobre la cohorte del período (pedidos que entraron, casos
+#: de la ventana con su estado de hoy), con la función de su pantalla de
+#: detalle (`analitica_portada`). No se guarda por día: una mediana no se
+#: agrega sumando días, y un «hoy» recalculado para un día viejo mentiría.
+COHORTE = 'COHORTE'
+AGREGACIONES = (SUMA, TASA, NIVEL, COHORTE)
 
 #: Máximo de días por recálculo manual. Cada día son ~15 métricas × almacenes;
 #: un rango más largo se pide en tandas (el recálculo es idempotente).
@@ -85,6 +91,8 @@ SEMANAS_HISTORIA_CUSUM = 52
 TIPOS_JOB_SIN_SIESA = ('ALERTA_EMAIL',)
 
 NO_POR_ALMACEN = 'esta métrica no se abre por almacén: se mide para toda la empresa'
+EN_VIVO = ('se mide en vivo sobre la cohorte del período (portada 🎯 ¿Cómo vamos?), '
+           'no se guarda por día')
 DIA_EN_CURSO = 'día en curso: parcial, calculado en vivo y no guardado'
 SIN_CALCULAR = ('sin calcular: el KPI diario no se calculó para ese día (el cron '
                 'ANALITICA_KPI está apagado o no corrió; se puede recalcular a mano)')
@@ -538,6 +546,11 @@ def m_cartera_vencida(dia, alm, ctx) -> Resultado:
 # El catálogo
 # ──────────────────────────────────────────────────────────────────────────────
 
+def m_en_vivo(dia, alm, ctx) -> Resultado:
+    """Las métricas de COHORTE no tienen valor por día: se miden por período."""
+    return _ausente(EN_VIVO)
+
+
 @dataclass(frozen=True)
 class Metrica:
     clave: str
@@ -551,13 +564,70 @@ class Metrica:
     por_almacen: bool
     calcular: Callable
     min_n: Optional[int] = None
+    #: La meta del negocio y el borde del amarillo, en la unidad de la métrica
+    #: (proporción 0–1, días, pesos). `None` = la métrica no tiene meta y no
+    #: lleva semáforo. **Provisionales** hasta que la gerencia las confirme:
+    #: sin meta ningún número dice si vamos bien, y una meta inventada que se
+    #: presenta como decidida es peor que ninguna — por eso se declaran.
+    meta: Optional[float] = None
+    umbral_amarillo: Optional[float] = None
+    #: La meta es por día del período (flujos en pesos: 30 días toleran 30
+    #: veces lo de un día). Si no, es la misma para cualquier período.
+    meta_por_dia: bool = False
+    meta_provisional: bool = True
 
     def to_dict(self) -> dict:
         return {'clave': self.clave, 'nombre': self.nombre, 'mide': self.mide,
                 'unidad': self.unidad, 'direccion': self.direccion,
                 'direccion_buena': _FLECHA[self.direccion], 'dueno': self.dueno,
                 'fuente': self.fuente, 'agregacion': self.agregacion,
-                'por_almacen': self.por_almacen, 'min_n': self.min_n}
+                'por_almacen': self.por_almacen, 'min_n': self.min_n,
+                'meta': self.meta, 'umbral_amarillo': self.umbral_amarillo,
+                'meta_por_dia': self.meta_por_dia,
+                'meta_provisional': self.meta_provisional if self.meta is not None else None}
+
+
+#: Los niveles del semáforo. `sin_dato` es GRIS, nunca rojo: no saber no es una
+#: mala noticia del negocio, es un hueco del dato (y se dice por qué).
+NIVELES_SEMAFORO = ('verde', 'amarillo', 'rojo', 'sin_dato', 'sin_meta')
+TEXTO_SEMAFORO = {'verde': 'En meta', 'amarillo': 'Cerca de la meta', 'rojo': 'Fuera de meta',
+                  'sin_dato': 'Sin dato', 'sin_meta': 'Sin meta'}
+
+
+def semaforo(clave: str, valor, dias: int = 1, es_piso: bool = False) -> dict:
+    """El semáforo de una métrica **contra su meta**. Una política, una función:
+    la portada, el recorrido y cualquier pantalla futura la leen de acá.
+
+    · `sin_meta` si la métrica no tiene meta; `sin_dato` si no hay valor.
+    · Si la dirección buena es ↑: verde ≥ meta, amarillo ≥ umbral, rojo abajo.
+      Si es ↓: verde ≤ meta, amarillo ≤ umbral, rojo arriba.
+    · Metas por día (`meta_por_dia`) se multiplican por los días del período.
+    · **Un piso nunca es verde** (Regla 0): con casos sin valor, «$0 de venta
+      perdida» puede ser cualquier cosa; lo que sería verde queda amarillo y
+      lo dice (`por_piso`).
+    """
+    m = METRICAS[clave]
+    escala = max(1, int(dias or 1)) if m.meta_por_dia else 1
+    meta = None if m.meta is None else m.meta * escala
+    amarillo = None if m.umbral_amarillo is None else m.umbral_amarillo * escala
+    base = {'meta': meta, 'umbral_amarillo': amarillo, 'provisional': m.meta_provisional,
+            'por_piso': False, 'direccion': m.direccion}
+    if meta is None:
+        return {**base, 'nivel': 'sin_meta', 'texto': TEXTO_SEMAFORO['sin_meta']}
+    if valor is None:
+        return {**base, 'nivel': 'sin_dato', 'texto': TEXTO_SEMAFORO['sin_dato']}
+    v = float(valor)
+    if m.direccion == SUBE_ES_BUENO:
+        nivel = 'verde' if v >= meta else ('amarillo' if amarillo is not None and v >= amarillo
+                                           else 'rojo')
+    else:
+        nivel = 'verde' if v <= meta else ('amarillo' if amarillo is not None and v <= amarillo
+                                           else 'rojo')
+    por_piso = False
+    if es_piso and nivel == 'verde':
+        nivel, por_piso = 'amarillo', True
+    texto = ('Sin confirmar: hay casos sin valor' if por_piso else TEXTO_SEMAFORO[nivel])
+    return {**base, 'nivel': nivel, 'texto': texto, 'por_piso': por_piso}
 
 
 def _min_n_exactitud():
@@ -582,12 +652,14 @@ _CATALOGO = (
             '(Σ min(remisionado, pedido) / Σ pedido). Sobre la historia del pedido, no sobre lo '
             'pendiente: lo cumplido también cuenta.',
             'proporcion', SUBE_ES_BUENO, 'Jefe de bodega',
-            'pedidos_historia · metricas.fill_rate', TASA, True, m_fill_rate),
+            'pedidos_historia · metricas.fill_rate', TASA, True, m_fill_rate,
+            meta=0.92, umbral_amarillo=0.85),
     Metrica('venta_perdida', 'Venta perdida por agotados',
             'Unidades faltantes × precio de los pickings de venta bloqueados por falta de '
             'inventario ese día. Un agotado sin precio no suma y vuelve el total cota inferior.',
             'pesos', BAJA_ES_BUENO, 'Compras',
-            'eventos_stock_agotado · metricas.venta_perdida', SUMA, True, m_venta_perdida),
+            'eventos_stock_agotado · metricas.venta_perdida', SUMA, True, m_venta_perdida,
+            meta=0.0, umbral_amarillo=100000.0, meta_por_dia=True),
     Metrica('conteos_cerrados', 'Conteos cerrados',
             'Conteos cíclicos (cadenas CC1→CC2→CC3) que llegaron a veredicto ese día.',
             'conteos', SUBE_ES_BUENO, 'Líder de inventario',
@@ -597,7 +669,7 @@ _CATALOGO = (
             '(IRA). Bajo 30 conteos no se publica la tasa.',
             'proporcion', SUBE_ES_BUENO, 'Líder de inventario',
             'sesiones_conteo · metricas.conteo', TASA, True, m_exactitud_inventario,
-            min_n=_min_n_exactitud()),
+            min_n=_min_n_exactitud(), meta=0.95, umbral_amarillo=0.90),
     Metrica('ajustes_valor', 'Ajustes de inventario',
             'Valor absoluto de los ajustes de conteo confirmados ese día (sobrantes + '
             'faltantes), a costo de la foto del conteo.',
@@ -640,6 +712,27 @@ _CATALOGO = (
             'De la cartera abierta del día, el saldo de los documentos con vencimiento pasado.',
             'pesos', BAJA_ES_BUENO, 'Tesorería',
             'foto_cartera_diaria · fotos_siesa_service', NIVEL, False, m_cartera_vencida),
+    # ── Las de la portada que se miden en vivo por cohorte (2026-09-24) ──────
+    Metrica('llega_a_caja', 'Llega a caja completo',
+            'De cada $100 de pedidos que ya terminaron (completos o caídos), cuántos llegaron '
+            'a caja liquidada sin ninguna pérdida: todo recogido, entregado completo, sin nota '
+            'crédito ni devolución. Lo que va en camino no la baja.',
+            'proporcion', SUBE_ES_BUENO, 'Gerencia de operaciones',
+            'analitica_recorrido (valor sin fuga, cerrados)', COHORTE, True, m_en_vivo,
+            meta=0.95, umbral_amarillo=0.90),
+    Metrica('ciclo_caja', 'Ciclo de caja',
+            'Días (mediana) entre que Siesa aprueba el pedido y su ruta se liquida, en los '
+            'pedidos del período que llegaron a caja sin caerse.',
+            'dias', BAJA_ES_BUENO, 'Tesorería',
+            'analitica_recorrido (aprobado → liquidado)', COHORTE, True, m_en_vivo,
+            meta=2.0, umbral_amarillo=3.0),
+    Metrica('plata_en_riesgo', 'Plata en riesgo',
+            'Plata que salió del cliente o de la bodega y todavía no llega a caja ni a Siesa: '
+            'cobros en rutas sin liquidar, entregas sin pago, crédito que nadie autorizó y '
+            'recibos, retenciones o facturas trabados en Siesa.',
+            'pesos', BAJA_ES_BUENO, 'Tesorería',
+            'analitica_fugas (calle, sin pago, crédito no autorizado, documentos de plata)',
+            COHORTE, True, m_en_vivo, meta=0.0, umbral_amarillo=1000000.0),
 )
 
 METRICAS = {m.clave: m for m in _CATALOGO}
@@ -720,6 +813,8 @@ def calcular_y_guardar_dia(dia: date, almacen_id: int = None) -> dict:
     cuenta = {'nueva': 0, 'actualizada': 0, 'conservada': 0}
     estados = {e: 0 for e in EstadoKpi.TODOS}
     for m in _CATALOGO:
+        if m.agregacion == COHORTE:
+            continue            # se miden en vivo por período: no hay valor del día
         destinos = ([None] if totales else []) + (almacenes if m.por_almacen else [])
         for alm_id in destinos:
             r = calcular(m.clave, dia, alm_id, ctx)
@@ -825,6 +920,9 @@ def serie(clave: str, desde: date, hasta: date, almacen_id: int = None,
     hoy = hoy or dia_operativo()
     if almacen_id is not None:
         _almacen(almacen_id)
+    if m.agregacion == COHORTE:
+        dias = (hasta - desde).days + 1
+        return [_punto(desde + timedelta(days=i), motivo=EN_VIVO) for i in range(dias)]
     if almacen_id is not None and not m.por_almacen:
         dias = (hasta - desde).days + 1
         return [_punto(desde + timedelta(days=i), motivo=NO_POR_ALMACEN) for i in range(dias)]
@@ -951,6 +1049,8 @@ def alerta_de_cambio(clave: str, desde: date, hasta: date, almacen_id: int = Non
     from app.services.vigia_service import MIN_SEMANAS_CUSUM, VENTANA_REF, cusum_bilateral
     m = METRICAS[clave]
     hoy = hoy or dia_operativo()
+    if m.agregacion == COHORTE:
+        return {'disponible': False, 'motivo': EN_VIVO + ': sin historia semanal guardada'}
     if almacen_id is not None and not m.por_almacen:
         return {'disponible': False, 'motivo': NO_POR_ALMACEN}
     tope = min(hasta, hoy - timedelta(days=1))
@@ -1002,23 +1102,50 @@ def alerta_de_cambio(clave: str, desde: date, hasta: date, almacen_id: int = Non
             'alarmas_en_periodo': en_periodo}
 
 
-def resumen(desde: date, hasta: date, almacen_id: int = None, hoy: date = None) -> list:
+def _es_piso(m: Metrica, periodo: dict) -> bool:
+    """Un total de pesos INCOMPLETO de algo malo (↓) es una cota inferior: lo
+    que falta solo puede empeorarlo."""
+    if periodo.get('es_piso'):
+        return True
+    return (periodo.get('estado') == EstadoKpi.INCOMPLETO and m.agregacion == SUMA
+            and m.direccion == BAJA_ES_BUENO)
+
+
+def _cohorte_como_periodo(medida: dict, desde, hasta) -> dict:
+    return {'valor': medida['valor'], 'n': medida['n'], 'estado': medida['estado'],
+            'motivo': medida['motivo'], 'es_piso': medida.get('es_piso', False),
+            'dias': (hasta - desde).days + 1}
+
+
+def resumen(desde: date, hasta: date, almacen_id: int = None, hoy: date = None,
+            medicion=None) -> list:
     """Cada métrica: el período, el anterior de igual duración, la variación y
-    la alerta de cambio."""
+    la alerta de cambio. Las de COHORTE se miden en vivo (`analitica_portada`);
+    `medicion` permite compartir la misma lectura con la portada."""
     hoy = hoy or dia_operativo()
     largo = (hasta - desde).days + 1
     ant_hasta = desde - timedelta(days=1)
     ant_desde = ant_hasta - timedelta(days=largo - 1)
     salida = []
     for m in _CATALOGO:
-        actual = agregar(m.clave, serie(m.clave, desde, hasta, almacen_id, hoy=hoy))
-        anterior = agregar(m.clave, serie(m.clave, ant_desde, ant_hasta, almacen_id, hoy=hoy))
+        if m.agregacion == COHORTE:
+            from app.services import analitica_portada as port
+            if medicion is None:
+                medicion = port.Medicion(desde, hasta, almacen_id, hoy)
+            actual = _cohorte_como_periodo(medicion.medir(m.clave, desde, hasta), desde, hasta)
+            anterior = _cohorte_como_periodo(medicion.medir(m.clave, ant_desde, ant_hasta),
+                                             ant_desde, ant_hasta)
+        else:
+            actual = agregar(m.clave, serie(m.clave, desde, hasta, almacen_id, hoy=hoy))
+            anterior = agregar(m.clave, serie(m.clave, ant_desde, ant_hasta, almacen_id, hoy=hoy))
         salida.append({
             **m.to_dict(),
             'periodo': {'desde': desde.isoformat(), 'hasta': hasta.isoformat(), **actual},
             'anterior': {'desde': ant_desde.isoformat(), 'hasta': ant_hasta.isoformat(),
                          **anterior},
             'variacion': _variacion(m, actual, anterior),
+            'semaforo': semaforo(m.clave, actual['valor'], dias=largo,
+                                 es_piso=_es_piso(m, actual)),
             'alerta': alerta_de_cambio(m.clave, desde, hasta, almacen_id, hoy=hoy),
         })
     return salida

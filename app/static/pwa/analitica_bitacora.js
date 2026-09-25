@@ -135,7 +135,12 @@ function _anBitBarras(filas, etiqueta, clic) {
 }
 
 function _anBitFila(a, i, abierta) {
-  const motivo = a.motivo ? `— motivo: «${esc(a.motivo)}»` : '— sin motivo';
+  // El motivo en palabras (un código de bloqueo llega traducido por el
+  // servidor). Liquidar y bloquear no piden un motivo escrito: no se les
+  // pinta «sin motivo», que acusaría una falta que no existe.
+  const texto = a.motivo_legible || a.motivo;
+  const motivo = texto ? `— motivo: «${esc(texto)}»`
+    : (a.pide_motivo === false ? '' : '— sin motivo');
   const cuando = `${esc(a.dia_operativo || '')} ${esc(a.hora_bogota || '')}`;
   const donde = a.almacen_nombre ? ` · ${esc(a.almacen_nombre)}` : '';
   let detalle = '';
@@ -168,7 +173,10 @@ function anBitHtml(s) {
   const frescura = (typeof anFrescura === 'function') ? anFrescura(pat.meta) : '';
   const total = pat.total;
   const sinMotivo = pat.sin_motivo;
-  const pctSinMotivo = total ? `${Math.round(100 * sinMotivo / total)} % de ${_anBitNum(total)}` : '—';
+  // Denominador: solo las acciones que piden un motivo escrito (el servidor
+  // excluye liquidar y bloquear, `sin_motivo_excluye`).
+  const baseMotivo = pat.sin_motivo_base === undefined || pat.sin_motivo_base === null ? total : pat.sin_motivo_base;
+  const pctSinMotivo = baseMotivo ? `${Math.round(100 * sinMotivo / baseMotivo)} % de ${_anBitNum(baseMotivo)}` : '—';
   const personas = pat.por_persona || [];
   const acciones = pat.por_accion || [];
   const horas = pat.por_hora || [];
@@ -193,7 +201,7 @@ function anBitHtml(s) {
     <div class="kpi-card"><div class="kpi-valor">${esc(_anBitNum(total))}</div>
       <div class="kpi-label">Acciones en el rango</div><div class="kpi-sub">eliminar, cancelar, reabrir, editar…</div></div>
     <div class="kpi-card"><div class="kpi-valor">${esc(pctSinMotivo)}</div>
-      <div class="kpi-label">Sin motivo escrito</div><div class="kpi-sub">${esc(_anBitNum(sinMotivo))} acciones</div></div>
+      <div class="kpi-label">Sin motivo escrito</div><div class="kpi-sub">${esc(_anBitNum(sinMotivo))} de las que piden motivo · liquidar y bloquear no cuentan</div></div>
     <div class="kpi-card"><div class="kpi-valor">${esc(_anBitNum(personas.length))}</div>
       <div class="kpi-label">Personas</div><div class="kpi-sub">${quien ? esc(quien.nombre) + ' encabeza con ' + esc(_anBitNum(quien.n)) : 'nadie en el rango'}</div></div>
   </div>`;

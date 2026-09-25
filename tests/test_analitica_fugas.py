@@ -420,7 +420,7 @@ class TestMercanciaEnLimbo:
         res, f = _fugas()
         lim = f['mercancia_en_limbo']
         assert lim['sin_dato'] and lim['pesos'] is None and lim['casos'] is None
-        assert lim['estado'] == 'critico'
+        assert lim['estado'] == 'sin_dato', 'no saber no es rojo'
         assert any(x['clave'] == 'mercancia_en_limbo' for x in res['resumen']['fuera_del_total'])
 
     def test_con_almacen_no_suma(self, db, almacen):

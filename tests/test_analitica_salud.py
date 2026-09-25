@@ -567,7 +567,8 @@ class TestBitacoraLegible:
         db.session.commit()
         h = {'Authorization': f'Bearer {jwt_token_admin}'}
         p = client.get('/api/analitica/bitacora/patrones', headers=h).get_json()
-        assert p['total'] == 5 and p['sin_motivo'] == 3
+        assert p['total'] == 5 and p['sin_motivo'] == 2, 'LIQUIDAR no pide motivo'
+        assert p['sin_motivo_base'] == 4
         assert p['por_persona'][0] == {'usuario_id': usuario_admin.id, 'nombre': 'Admin Test', 'n': 3,
                                        'acciones': {'CANCELAR': 3}}
         assert {x['nombre'] for x in p['por_persona']} == {'Admin Test', 'Operario Test', 'El sistema'}

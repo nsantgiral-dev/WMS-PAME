@@ -1037,14 +1037,30 @@ def tendencia(actual: dict, anterior: dict) -> dict:
             'delta_pesos': dp, 'delta_casos': dc, 'direccion': direccion}
 
 
+#: Los cinco estados de la píldora. Dos son GRISES a propósito: «no hay con
+#: qué medir» y «no hay con qué comparar» no son malas noticias del negocio —
+#: son huecos del dato, y pintarlos en rojo junto a «crece» enseña a ignorar el
+#: rojo (2026-09-24: «Crece o sin dato» mezclaba las dos cosas en una píldora).
+ESTADOS = ('ok', 'advertencia', 'critico', 'sin_base', 'sin_dato')
+
+
 def estado_de(t: dict, tend: dict) -> str:
-    """Píldora: `ok` sin casos; `critico` si hay casos y sube (o no se sabe);
-    `advertencia` si hay casos y no sube."""
+    """Píldora de una fuga:
+
+    · `sin_dato` — no hay con qué medirla (gris, nunca rojo);
+    · `ok` — sin casos;
+    · `sin_base` — hay casos pero el período anterior no se pudo medir: no se
+      sabe si crece (gris, aparte);
+    · `critico` — hay casos y **crece** contra el período anterior;
+    · `advertencia` — hay casos y no crece.
+    """
     if t['sin_dato']:
-        return 'critico'
+        return 'sin_dato'
     if not t['casos']:
         return 'ok'
-    return 'critico' if tend['direccion'] in ('sube', 'sin_base') else 'advertencia'
+    if tend['direccion'] == 'sin_base':
+        return 'sin_base'
+    return 'critico' if tend['direccion'] == 'sube' else 'advertencia'
 
 
 def aporte_al_total(fuga: Fuga, t: dict, almacen_id) -> tuple:
@@ -1115,22 +1131,55 @@ def ordenar(fugas: list) -> list:
 
 
 def _fuentes(desde, hasta) -> dict:
+    """`meta.fuentes` con la convención del shell (`{nombre, completa, motivo,
+    actualizado_en}`): `anFrescura` nombra cada fuente incompleta con su motivo.
+    Una fuente sin `nombre` salía «⚠ Fuente: incompleta» tres veces, que no dice
+    qué falta ni por qué."""
     from app.models.bitacora import BitacoraAccion
     from app.models.evento_stock_agotado import EventoStockAgotado
-    primera_bit = db.session.query(func.min(BitacoraAccion.dia_operativo)).scalar()
-    primer_ev = db.session.query(func.min(EventoStockAgotado.creado_en)).scalar()
+    primera_bit, ultima_bit = db.session.query(func.min(BitacoraAccion.dia_operativo),
+                                               func.max(BitacoraAccion.ocurrido_en)).one()
+    primer_ev, ultimo_ev = db.session.query(func.min(EventoStockAgotado.creado_en),
+                                            func.max(EventoStockAgotado.creado_en)).one()
     fotos = {b: _ultima_foto_completa(b, desde, hasta) for b in bodegas_de_limbo()}
+    ev_desde = dia_operativo_de(primer_ev) if primer_ev else None
+    bit_ok = bool(primera_bit and primera_bit <= desde)
+    ev_ok = bool(ev_desde and ev_desde <= desde)
+    fotos_ok = all(fotos.values())
+    sin_foto = [b for b, d in fotos.items() if not d]
+    con_foto = [d for d in fotos.values() if d]
     return {
-        'base_wms': {'descripcion': 'Base del WMS, en vivo', 'completa': True},
-        'bitacora': {'desde': primera_bit.isoformat() if primera_bit else None,
-                     'completa': bool(primera_bit and primera_bit <= desde),
+        'base_wms': {'nombre': 'Operación del WMS', 'descripcion': 'Base del WMS, en vivo',
+                     'completa': True, 'motivo': None,
+                     'actualizado_en': datetime.utcnow().isoformat() + 'Z'},
+        'bitacora': {'nombre': 'Bitácora de acciones',
+                     'desde': primera_bit.isoformat() if primera_bit else None,
+                     'completa': bit_ok,
+                     'motivo': None if bit_ok else (
+                         f'empieza el {primera_bit.isoformat()}: el trabajo perdido antes de '
+                         'esa fecha no se puede medir' if primera_bit else
+                         'todavía no tiene filas: el trabajo perdido no se puede medir'),
+                     'actualizado_en': ultima_bit.isoformat() if ultima_bit else None,
                      'nota': 'Trabajo perdido se lee de la bitácora: antes de su '
                              'primer registro no hay con qué medirlo.'},
-        'eventos_agotado': {'desde': dia_operativo_de(primer_ev).isoformat() if primer_ev else None,
-                            'completa': bool(primer_ev and dia_operativo_de(primer_ev) <= desde)},
-        'foto_stock_servicio': {'dia': {b: (d.isoformat() if d else None) for b, d in fotos.items()},
-                                'completa': all(fotos.values())},
-        'foto_ventas': {'nota': 'Precio de lo devuelto en entregas parciales.'},
+        'eventos_agotado': {'nombre': 'Registro de agotados',
+                            'desde': ev_desde.isoformat() if ev_desde else None,
+                            'completa': ev_ok,
+                            'motivo': None if ev_ok else (
+                                f'empieza el {ev_desde.isoformat()}: la venta perdida anterior '
+                                'no está registrada' if ev_desde else
+                                'todavía no tiene eventos: la venta perdida no se puede medir'),
+                            'actualizado_en': ultimo_ev.isoformat() if ultimo_ev else None},
+        'foto_stock_servicio': {'nombre': 'Foto de averías y tránsito (AV1, TRA1)',
+                                'dia': {b: (d.isoformat() if d else None) for b, d in fotos.items()},
+                                'completa': fotos_ok,
+                                'motivo': None if fotos_ok else (
+                                    f'sin foto completa de {", ".join(sin_foto)} en el rango: '
+                                    'la mercancía en limbo sale sin dato'),
+                                'actualizado_en': max(con_foto).isoformat() if con_foto else None},
+        'foto_ventas': {'nombre': 'Foto de ventas (precio de lo devuelto)',
+                        'completa': None, 'motivo': None, 'actualizado_en': None,
+                        'nota': 'Precio de lo devuelto en entregas parciales.'},
     }
 
 
@@ -1211,7 +1260,7 @@ def calcular_fugas(desde: date, hasta: date, almacen_id: int = None) -> dict:
             'almacen': _nombre_almacen(almacenes, almacen_id) if almacen_id else 'Todos',
             'periodo_anterior': {'desde': ant_desde.isoformat(), 'hasta': ant_hasta.isoformat()},
             'calculado_en': ahora.isoformat() + 'Z',
-            'completa': all(v.get('completa', True) for v in fuentes.values()),
+            'completa': all(v.get('completa') is not False for v in fuentes.values()),
             'fuentes': fuentes,
             'corte': rangos.meta(),
         },

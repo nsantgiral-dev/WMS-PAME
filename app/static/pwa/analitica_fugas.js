@@ -17,10 +17,16 @@
 
 const AN_FUGAS = { datos: null, detalle: null, clave: null, pagina: 1, filtros: null, carga: 0 };
 
+// Dos estados son GRISES: «sin dato» (no hay con qué medir) y «sin base» (no
+// hay con qué comparar). No son malas noticias del negocio: son huecos del
+// dato. Pintarlos en rojo al lado de «crece» enseñaba a ignorar el rojo.
+const _AN_FUGAS_GRIS = 'background:var(--bg-s2);color:var(--tx2);border:1px solid var(--brd);';
 const AN_FUGAS_ESTADO = {
   ok: { texto: 'Sin fugas', estilo: 'background:var(--ok-bg);color:var(--ok-tx);border:1px solid var(--ok-brd);' },
   advertencia: { texto: 'Hay fugas', estilo: 'background:var(--warn-bg);color:var(--warn-tx);border:1px solid var(--warn-brd);' },
-  critico: { texto: 'Crece o sin dato', estilo: 'background:var(--err-bg);color:var(--err-tx);border:1px solid var(--err-brd);' },
+  critico: { texto: 'Crece', estilo: 'background:var(--err-bg);color:var(--err-tx);border:1px solid var(--err-brd);' },
+  sin_base: { texto: '⚪ Sin base para comparar', estilo: _AN_FUGAS_GRIS },
+  sin_dato: { texto: '⚪ Sin dato', estilo: _AN_FUGAS_GRIS },
 };
 
 function anFugasQs(f) {
@@ -52,7 +58,7 @@ function anFugasPildora(estado) {
 }
 
 function anFugasValor(f) {
-  if (f.sin_dato) return `<span style="color:var(--err-tx);">Sin dato</span>`;
+  if (f.sin_dato) return `<span style="color:var(--tx3);">Sin dato</span>`;
   if (f.pesos === null || f.pesos === undefined) {
     return `<span style="color:var(--warn-tx);">Sin valor</span>`;
   }
@@ -62,15 +68,18 @@ function anFugasValor(f) {
 
 function anFugasTendencia(t) {
   if (!t || t.direccion === 'sin_base') {
-    return `<span style="color:var(--tx3);">sin base para comparar</span>`;
+    // Aparte y en gris: no es una mala noticia, es que no hay con qué comparar.
+    return `<span style="color:var(--tx3);">⚪ sin base para comparar con el período anterior</span>`;
   }
   const flecha = t.direccion === 'sube' ? '▲' : t.direccion === 'baja' ? '▼' : '＝';
   const color = t.direccion === 'sube' ? 'var(--err-tx)' : t.direccion === 'baja' ? 'var(--ok-tx)' : 'var(--tx3)';
-  const cuanto = (t.delta_pesos !== null && t.delta_pesos !== undefined && t.anterior && t.anterior.pesos !== null)
-    ? anPesos(Math.abs(t.delta_pesos))
-    : `${anNum(Math.abs(t.delta_casos || 0))} casos`;
-  const antes = t.anterior && t.anterior.pesos !== null && t.anterior.pesos !== undefined
-    ? anPesos(t.anterior.pesos) : `${anNum(t.anterior ? t.anterior.casos : 0)} casos`;
+  // Se compara en la misma moneda de los dos lados: si la diferencia es en
+  // pesos, «vs. $X»; si es en casos (porque un lado no tiene valor), «vs. N
+  // casos». «▲ 1 caso vs. $0» mezclaba las dos y no decía nada.
+  const enPesos = t.delta_pesos !== null && t.delta_pesos !== undefined
+    && t.anterior && t.anterior.pesos !== null && t.anterior.pesos !== undefined;
+  const cuanto = enPesos ? anPesos(Math.abs(t.delta_pesos)) : `${anNum(Math.abs(t.delta_casos || 0))} caso(s)`;
+  const antes = enPesos ? anPesos(t.anterior.pesos) : `${anNum(t.anterior ? t.anterior.casos : 0)} caso(s)`;
   return `<span style="color:${color};">${esc(flecha)} ${esc(cuanto)}</span> <span style="color:var(--tx3);">vs. ${esc(antes)} el período anterior</span>`;
 }
 

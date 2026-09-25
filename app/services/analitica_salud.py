@@ -1096,6 +1096,26 @@ VERBOS = {
     'DESACTIVAR': 'desactivó', 'BLOQUEAR': 'bloqueó',
 }
 
+#: Acciones que **no piden un motivo escrito**, y por eso no cuentan en «sin
+#: motivo»: LIQUIDAR es el cierre normal de una ruta (el flujo nunca pregunta
+#: por qué), y BLOQUEAR lleva un motivo **codificado** que el operario elige de
+#: una lista (`UBICACION_VACIA`, `FALTANTE`…), no un texto. Contarlas inflaba la
+#: tasa con acciones que nadie tenía que justificar (2026-09-24: 3 de 8 «sin
+#: motivo» eran liquidaciones).
+ACCIONES_SIN_MOTIVO_ESPERADO = ('LIQUIDAR', 'BLOQUEAR')
+
+
+def motivo_legible(accion, motivo):
+    """El motivo como lo lee una persona: un código de bloqueo se traduce con
+    la misma tabla que usa el recorrido (una política, una función); un texto
+    escrito va tal cual."""
+    if not motivo:
+        return None
+    from app.services.analitica_recorrido import MOTIVOS_BLOQUEO
+    return MOTIVOS_BLOQUEO.get(str(motivo).strip().upper(), motivo) \
+        if accion == 'BLOQUEAR' else motivo
+
+
 #: Palabras de bodega, no clases del modelo. Lo que no está acá se muestra
 #: con su nombre partido («Mapeo unidades»): nunca se oculta.
 ENTIDADES = {
@@ -1239,6 +1259,8 @@ def describir_acciones(filas):
                                if f.get('almacen_id') is not None else None),
             'entidad_nombre': nombre_entidad(f.get('entidad')),
             'verbo': VERBOS.get(f.get('accion')),
+            'motivo_legible': motivo_legible(f.get('accion'), f.get('motivo')),
+            'pide_motivo': f.get('accion') not in ACCIONES_SIN_MOTIVO_ESPERADO,
             'documento': doc,
             'frase': frase,
             'hora_bogota': _a_bogota(momento).strftime('%H:%M') if momento else None,
@@ -1290,7 +1312,9 @@ def patrones_bitacora(desde, hasta, almacen_id=None, accion=None, entidad=None,
         return q.with_entities(col, func.count(B.id)).group_by(col).all()
 
     total = filtrada.count()
-    sin_motivo = filtrada.filter((B.motivo.is_(None)) | (B.motivo == '')).count()
+    piden_motivo = filtrada.filter(B.accion.notin_(ACCIONES_SIN_MOTIVO_ESPERADO))
+    sin_motivo_base = piden_motivo.count()
+    sin_motivo = piden_motivo.filter((B.motivo.is_(None)) | (B.motivo == '')).count()
     por_persona_accion = (filtrada.with_entities(B.usuario_id, B.accion, func.count(B.id))
                           .group_by(B.usuario_id, B.accion).all())
     base_personas = _grupo(base, B.usuario_id)
@@ -1335,6 +1359,8 @@ def patrones_bitacora(desde, hasta, almacen_id=None, accion=None, entidad=None,
     return {
         'total': total,
         'sin_motivo': sin_motivo,
+        'sin_motivo_base': sin_motivo_base,
+        'sin_motivo_excluye': list(ACCIONES_SIN_MOTIVO_ESPERADO),
         'por_persona': por_persona,
         'por_accion': por_accion,
         'por_entidad': por_entidad,
@@ -1366,4 +1392,5 @@ __all__ = [
     'VEREDICTOS', 'nivel_de', 'tiempo_operativo', 'salud_del_dato', 'veredicto_global',
     'resumen_auditoria', 'cola_siesa', 'cobertura_claves', 'crons_del_proceso',
     'describir_acciones', 'patrones_bitacora', 'VERBOS', 'ENTIDADES',
+    'ACCIONES_SIN_MOTIVO_ESPERADO', 'motivo_legible',
 ]

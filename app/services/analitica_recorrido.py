@@ -111,7 +111,9 @@ TITULOS_ESTADO = {
 }
 
 #: Motivo de bloqueo del picking → palabras de bodega.
-_BLOQUEOS = {
+#: Motivos de bloqueo de picking, en palabras de bodega. Pública: la bitácora
+#: traduce con esta misma tabla (`analitica_salud.motivo_legible`).
+MOTIVOS_BLOQUEO = _BLOQUEOS = {
     'UBICACION_VACIA': 'Ubicación vacía',
     'FALTANTE': 'Faltante en la ubicación',
     'MERCANCIA_AVERIADA': 'Mercancía averiada',
@@ -894,10 +896,19 @@ def recorrido(filtros: dict, ahora: datetime = None) -> dict:
     enl = [p for p in pedidos if p.enlazado]
     sueltos = sorted((p for p in pedidos if not p.enlazado),
                      key=lambda p: p.entrada_at or datetime.min, reverse=True)
+    from app.services.analitica_kpi import semaforo
+    guia = _guia(enl)
     return {
         'pedidos': len(enl),
         'embudo': _embudo(enl),
-        'guia': _guia(enl),
+        'guia': guia,
+        # El semáforo contra la META del catálogo (`analitica_kpi.METRICAS`), el
+        # mismo que pinta la portada: antes esta pantalla tenía sus propias
+        # «referencias provisionales» escritas en el JS.
+        'semaforos': {
+            'ciclo_caja': semaforo('ciclo_caja', guia['ciclo_caja']['mediana_dias']),
+            'llega_a_caja': semaforo('llega_a_caja', guia['valor_sin_fuga_cerrados']['tasa']),
+        },
         'sin_enlazar': _sin_enlazar(sueltos, extra),
         'definiciones': DEFINICIONES,
         'meta': _meta(filtros, pedidos, extra, ahora),
@@ -1058,38 +1069,68 @@ def linea_de_tiempo(clave: str, ahora: datetime = None) -> dict:
 
     ev = []
 
-    def add(en, etapa, titulo, detalle=None, quien_id=None, documento=None, tipo='marca'):
+    def add(en, etapa, titulo, detalle=None, quien_id=None, documento=None, tipo='marca',
+            cifras=None):
+        # `cifras`: [{etiqueta, valor, formato}] — los números viajan como
+        # números y la pantalla los formatea (`anNum`/`anPesos`). Un «10.0» o
+        # un «50000.0» metidos en el texto no se pueden leer ni formatear.
         ev.append({'en': en, 'etapa': etapa, 'titulo': titulo, 'detalle': detalle,
-                   'quien_id': quien_id, 'documento': documento, 'tipo': tipo})
+                   'quien_id': quien_id, 'documento': documento, 'tipo': tipo,
+                   'cifras': cifras or []})
 
-    for h in sorted(p.historia, key=lambda h: h.primera_vez_vista_at or datetime.min):
-        add(h.primera_vez_vista_at, 'aprobado',
-            f'Línea vista en Siesa: {h.item_codigo or "—"}',
-            f'Pedida {_r(h.cantidad_pedida)} · remisionada {_r(h.cantidad_remisionada)}'
-            + (f' · valor {_r(h.vlr_neto)}' if h.vlr_neto is not None else ' · sin valor'))
+    def num(etiqueta, valor, formato='num'):
+        return {'etiqueta': etiqueta, 'valor': None if valor is None else float(valor),
+                'formato': formato}
+
+    # La historia de Siesa es por LÍNEA; para una persona el hecho es uno: Siesa
+    # aprobó el pedido. Se agrupa por momento en que se vio (una tanda por
+    # barrido), con cuántas líneas, unidades y valor; los códigos de ítem van
+    # aparte (`lineas`), no en el título.
+    tandas = {}
+    for h in p.historia:
+        tandas.setdefault(h.primera_vez_vista_at, []).append(h)
+    for i, (t_visto, hs) in enumerate(sorted(tandas.items(),
+                                              key=lambda x: x[0] or datetime.min)):
+        con_valor = [h.vlr_neto for h in hs if h.vlr_neto is not None]
+        sin_valor = len(hs) - len(con_valor)
+        add(t_visto, 'aprobado',
+            'Siesa aprobó el pedido' if i == 0 else 'Siesa agregó líneas al pedido',
+            (f'{sin_valor} línea(s) sin valor en Siesa' if sin_valor else None),
+            cifras=[num('líneas', len(hs)),
+                    num('unidades pedidas', sum(float(h.cantidad_pedida or 0) for h in hs)),
+                    num('remisionadas', sum(float(h.cantidad_remisionada or 0) for h in hs)),
+                    num('valor', sum(con_valor) if con_valor and not sin_valor else None,
+                        'pesos')])
+        ev[-1]['lineas'] = sorted({h.item_codigo for h in hs if h.item_codigo})
+    salidas = {}
+    for h in p.historia:
         if h.salida_at:
-            add(h.salida_at, 'aprobado', f'Línea salió de pendientes: {h.motivo_salida}',
-                h.item_codigo)
+            salidas.setdefault((h.salida_at, h.motivo_salida), []).append(h)
+    for (t_sal, motivo), hs in sorted(salidas.items(), key=lambda x: x[0][0]):
+        add(t_sal, 'aprobado', 'Salió de pendientes en Siesa',
+            _MOTIVO_SALIDA.get(motivo, motivo), cifras=[num('líneas', len(hs))])
     for t in p.pickings:
-        add(t.fecha_creacion, 'recogido', f'Picking creado {t.codigo}',
-            f'Solicitado {t.cantidad_solicitada}')
+        add(t.fecha_creacion, 'recogido', 'Se creó la tarea de picking',
+            f'Tarea {t.codigo}', cifras=[num('unidades a recoger', t.cantidad_solicitada)])
         if t.fecha_inicio:
-            add(t.fecha_inicio, 'recogido', f'Picking iniciado {t.codigo}',
+            add(t.fecha_inicio, 'recogido', 'Empezó el picking', f'Tarea {t.codigo}',
                 quien_id=t.ultimo_operario_id or t.operario_id)
         if t.fecha_completado:
-            add(t.fecha_completado, 'recogido', f'Picking completado {t.codigo}',
-                f'Recogido {t.cantidad_recogida} de {t.cantidad_solicitada}',
-                quien_id=t.ultimo_operario_id or t.operario_id)
+            add(t.fecha_completado, 'recogido', 'Terminó el picking', f'Tarea {t.codigo}',
+                quien_id=t.ultimo_operario_id or t.operario_id,
+                cifras=[num('recogidas', t.cantidad_recogida),
+                        num('de', t.cantidad_solicitada)])
         if t.estado == 'BLOQUEADO':
-            add(None, 'recogido', f'Picking bloqueado {t.codigo}',
-                _BLOQUEOS.get(t.motivo_bloqueo or '', t.motivo_bloqueo), tipo='alerta')
+            add(None, 'recogido', 'Picking bloqueado',
+                f"{_BLOQUEOS.get(t.motivo_bloqueo or '', t.motivo_bloqueo)} · tarea {t.codigo}",
+                tipo='alerta')
     for x in p.packings:
-        add(x.fecha_creacion, 'empacado', f'Empaque creado {x.codigo}')
+        add(x.fecha_creacion, 'empacado', 'Se creó el empaque', f'Empaque {x.codigo}')
         if x.fecha_inicio:
-            add(x.fecha_inicio, 'empacado', f'Empaque iniciado {x.codigo}',
+            add(x.fecha_inicio, 'empacado', 'Empezó el empaque', f'Empaque {x.codigo}',
                 quien_id=x.empacador_id)
         if x.fecha_verificado:
-            add(x.fecha_verificado, 'empacado', f'Empaque verificado {x.codigo}',
+            add(x.fecha_verificado, 'empacado', 'Empaque verificado', f'Empaque {x.codigo}',
                 quien_id=x.cerrado_por_id or x.empacador_id)
         if x.fecha_despachado or x.rm_consec or x.fe_consec:
             docs = []
@@ -1098,22 +1139,21 @@ def linea_de_tiempo(clave: str, ahora: datetime = None) -> dict:
             if x.fe_consec:
                 docs.append(f'{x.fe_tipo or "FE"}-{x.fe_consec}')
             add(x.fecha_despachado or x.siesa_triggered_at, 'despachado',
-                f'Despachado {x.codigo}',
-                ('Valor factura ' + str(_r(x.valor_factura))) if x.valor_factura is not None
-                else 'Valor de factura sin dato',
+                'Despachado', f'Empaque {x.codigo}',
                 documento={'documentos': docs or None,
-                           'resultado': 'ENVIADO' if x.siesa_triggered else 'PENDIENTE'})
+                           'resultado': 'ENVIADO' if x.siesa_triggered else 'PENDIENTE'},
+                cifras=[num('valor de factura', x.valor_factura, 'pesos')])
         if x.estado == 'CANCELADO':
-            add(None, 'empacado', f'Empaque cancelado {x.codigo}', tipo='alerta')
+            add(None, 'empacado', 'Empaque cancelado', f'Empaque {x.codigo}', tipo='alerta')
     bultos = Bulto.query.filter(Bulto.tarea_id.in_([x.id for x in p.packings])).all() \
         if p.packings else []
     for b in bultos:
         if b.asignado_ruta_at:
-            add(b.asignado_ruta_at, 'despachado', f'Bulto {b.codigo_barras} asignado a ruta',
-                f'Ruta {b.ruta_despacho_id}', quien_id=b.asignado_ruta_por_id)
+            add(b.asignado_ruta_at, 'despachado', f'Bulto asignado a la ruta {b.ruta_despacho_id}',
+                f'Bulto {b.codigo_barras}', quien_id=b.asignado_ruta_por_id)
         if b.fecha_cargado:
-            add(b.fecha_cargado, 'despachado', f'Bulto {b.codigo_barras} cargado',
-                quien_id=b.cargado_por_id)
+            add(b.fecha_cargado, 'despachado', 'Bulto cargado al camión',
+                f'Bulto {b.codigo_barras}', quien_id=b.cargado_por_id)
     for r in p.rutas.values():
         if r.fecha_cierre:
             add(r.fecha_cierre, 'despachado', f'Ruta {r.id} salió')
@@ -1124,12 +1164,14 @@ def linea_de_tiempo(clave: str, ahora: datetime = None) -> dict:
                 quien_id=r.liquidada_por_id)
     from app.services import motivos_rechazo
     for rc in p.recaudos:
-        det = f'{rc.estado_entrega} · {rc.forma_pago or "sin forma de pago"} · ' \
-              f'cobrado {_r(rc.monto_cobrado)}'
+        partes = [_ESTADO_ENTREGA.get(rc.estado_entrega, rc.estado_entrega or 'sin estado')]
+        if rc.forma_pago:
+            partes.append(_FORMA_PAGO.get(rc.forma_pago.upper(), rc.forma_pago.lower()))
         if rc.motivo_rechazo:
-            det += f' · {motivos_rechazo.etiqueta(rc.motivo_rechazo)}'
-        add(rc.fecha_confirmacion, 'entregado', 'Parada confirmada', det,
-            quien_id=rc.confirmado_por)
+            partes.append(motivos_rechazo.etiqueta(rc.motivo_rechazo))
+        add(rc.fecha_confirmacion, 'entregado', 'El conductor confirmó la entrega',
+            ' · '.join(partes), quien_id=rc.confirmado_por,
+            cifras=[num('cobrado', rc.monto_cobrado, 'pesos')])
         if rc.editado_en:
             add(rc.editado_en, 'entregado', 'Parada editada', quien_id=rc.editado_por,
                 tipo='alerta')
@@ -1155,10 +1197,12 @@ def linea_de_tiempo(clave: str, ahora: datetime = None) -> dict:
             + [('DevolucionCliente', d.id) for d in p.devoluciones])
     for tipo_ref, rid in refs:
         for j in SiesaJob.query.filter_by(referencia_tipo=tipo_ref, referencia_id=rid):
-            add(j.fecha_completado or j.fecha_creacion, None, f'Trabajo Siesa {j.tipo}',
-                f'{j.estado} · {j.intentos} intento(s)'
+            add(j.fecha_completado or j.fecha_creacion, None,
+                f'Envío a Siesa: {_texto_documento(j.tipo)}',
+                _ESTADO_JOB.get(j.estado, (j.estado or '').lower())
                 + (f' · {j.error_ultimo[:200]}' if j.error_ultimo else ''),
-                quien_id=j.creado_por_id, tipo='cola')
+                quien_id=j.creado_por_id, tipo='cola',
+                cifras=[num('intentos', j.intentos or 0)] if j.intentos else None)
     entidades = (refs + [('TareaPicking', t.id) for t in p.pickings]
                  + [('Bulto', b.id) for b in bultos]
                  + [('RutaDespacho', r) for r in p.rutas])
@@ -1166,8 +1210,11 @@ def linea_de_tiempo(clave: str, ahora: datetime = None) -> dict:
     for ent, eid in entidades:
         for a in BitacoraAccion.query.filter_by(entidad=ent, entidad_id=eid):
             bit.append(a)
-            add(a.ocurrido_en, None, f'{a.accion.capitalize()} · {ent_legible(ent)} '
-                f'{a.entidad_codigo or a.entidad_id}', a.motivo or SIN_MOTIVO,
+            from app.services.analitica_salud import VERBOS, motivo_legible
+            verbo = VERBOS.get(a.accion, (a.accion or '').lower())
+            add(a.ocurrido_en, None, f'{verbo[:1].upper()}{verbo[1:]} {ent_legible(ent)} '
+                f'{a.entidad_codigo or a.entidad_id}',
+                motivo_legible(a.accion, a.motivo) or SIN_MOTIVO,
                 quien_id=a.usuario_id, tipo='bitacora')
 
     ids = {e['quien_id'] for e in ev if e['quien_id']}
@@ -1197,6 +1244,26 @@ def linea_de_tiempo(clave: str, ahora: datetime = None) -> dict:
                  'fuentes': {'wms': {'nombre': 'Operación del WMS', 'completa': True,
                                      'motivo': None, 'actualizado_en': ahora.isoformat()}}},
     }
+
+
+#: Palabras de la línea de tiempo (no códigos de la base).
+_ESTADO_ENTREGA = {
+    'ENTREGADO': 'Entregado completo', 'PARCIAL': 'Entrega parcial',
+    'RECHAZADO': 'Rechazado: la mercancía volvió',
+    'ENTREGADO_SIN_PAGO': 'Entregado sin pago: la mercancía se quedó con el cliente',
+}
+_FORMA_PAGO = {'EFECTIVO': 'efectivo', 'TRANSFERENCIA': 'transferencia', 'TARJETA': 'tarjeta',
+               'CONSIGNACION': 'consignación', 'CREDITO': 'a crédito', 'EXENTO': 'exento'}
+_ESTADO_JOB = {'COMPLETADO': 'enviado', 'FALLIDO': 'falló: el WMS dejó de intentar',
+               'PENDIENTE': 'en cola', 'PROCESANDO': 'enviándose'}
+_MOTIVO_SALIDA = {'CUMPLIDO': 'cumplido', 'ANULADO': 'anulado en Siesa',
+                  'DESAPARECIDO': 'desapareció de pendientes sin explicación',
+                  'OTRO_ESTADO': 'cambió a otro estado en Siesa'}
+
+
+def _texto_documento(tipo):
+    from app.services.analitica_fugas import TEXTO_DOCUMENTO
+    return TEXTO_DOCUMENTO.get(tipo, 'documento')
 
 
 _ENT_LEGIBLE = {

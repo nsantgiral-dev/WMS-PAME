@@ -147,7 +147,7 @@ class TestCatalogo:
                 assert m[campo] and m[campo].strip(), (m['clave'], campo)
             assert m['direccion'] in (k.SUBE_ES_BUENO, k.BAJA_ES_BUENO)
             assert m['direccion_buena'] in ('↑', '↓')
-            assert m['agregacion'] in (k.SUMA, k.TASA, k.NIVEL)
+            assert m['agregacion'] in k.AGREGACIONES
             if m['agregacion'] == k.TASA:
                 assert m['unidad'] == 'proporcion', m['clave']
             assert callable(k.METRICAS[m['clave']].calcular)

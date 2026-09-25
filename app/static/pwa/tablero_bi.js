@@ -94,7 +94,7 @@ function biBadges(obj) {
   const entradas = Object.entries(obj || {});
   if (!entradas.length) return '';
   return `<div style="display:flex;gap:6px;flex-wrap:wrap;margin:10px 0;">` +
-    entradas.map(([k, v]) => `<span class="badge badge-blue">${k}: ${v}</span>`).join('') +
+    entradas.map(([k, v]) => `<span class="badge badge-blue">${esc(k)}: ${esc(v)}</span>`).join('') +
     `</div>`;
 }
 
@@ -192,18 +192,20 @@ async function biCargarDespachados() {
         <div class="kpi-card"><div class="kpi-valor">${esc(kpi.pedidos)}</div><div class="kpi-label">Pedidos</div></div>
         <div class="kpi-card"><div class="kpi-valor">${esc(kpi.lineas)}</div><div class="kpi-label">Líneas</div></div>
         <div class="kpi-card"><div class="kpi-valor">${esc(kpi.unidades)}</div><div class="kpi-label">Unidades</div></div>
-        <div class="kpi-card"><div class="kpi-valor">${biMoneda(kpi.valor_total)}</div><div class="kpi-label">Valor total</div></div>
+        <div class="kpi-card"><div class="kpi-valor">${esc(biValorDespachado(kpi))}</div><div class="kpi-label">Valor total</div></div>
       </div>
+      ${biNotaSinValor(kpi)}
       ${biUltimaActualizacion()}`;
     biRenderChart(kpi.por_dia, 'Valor despachado por día', '#2BAAB8');
 
     listaEl.innerHTML = det.items.length ? det.items.map(t => `
       <div class="tabla-fila">
-        <div>
-          <div class="tabla-nombre">${esc(t.codigo)} — ${esc(t.cliente || 'Sin cliente')}</div>
-          <div style="font-size:var(--fs-xs);color:var(--tx3);">${biFechaHora(t.fecha_despachado)} · ${esc(t.total_items)} línea(s)</div>
+        <div style="min-width:0;">
+          <div class="tabla-nombre">Pedido ${esc(biPedidoDe(t))} · ${esc(t.cliente || 'cliente sin dato')}</div>
+          <div style="font-size:var(--fs-xs);color:var(--tx3);">${esc(biFechaHora(t.fecha_despachado))} · ${esc(t.total_items)} línea(s) · empaque ${esc(t.codigo)}</div>
         </div>
-        <div style="font-weight:700;">${biMoneda(t.valor_factura)}</div>
+        <div style="font-weight:700;white-space:nowrap;">${t.valor_factura === null || t.valor_factura === undefined
+          ? '<span style="color:var(--tx3);font-weight:400;">sin valor</span>' : esc(biMoneda(t.valor_factura))}</div>
       </div>`).join('')
       : '<div style="text-align:center;padding:30px;color:var(--tx3);">Sin pedidos despachados en este rango</div>';
 
@@ -242,7 +244,7 @@ async function biCargarPendientes() {
     kpiEl.innerHTML = `
       <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-bottom:6px;">
         <div class="kpi-card"><div class="kpi-valor">${esc(kpi.lineas_pendientes)}</div><div class="kpi-label">Líneas pendientes</div></div>
-        <div class="kpi-card"><div class="kpi-valor">${fillRateTxt}</div><div class="kpi-label">Fill rate</div></div>
+        <div class="kpi-card" title="Sobre los pedidos que todavía están pendientes en Siesa: lo ya cumplido sale de la lista, así que no es el «Nivel de servicio» de 📈 Analítica (que mide la historia completa del pedido)."><div class="kpi-valor">${esc(fillRateTxt)}</div><div class="kpi-label">Servido de lo pendiente</div></div>
       </div>
       ${biUltimaActualizacion()}`;
     descEl.innerHTML = biBadges(kpi.por_motivo);
@@ -302,9 +304,7 @@ async function biCargarVentaPerdida() {
       </div>
       ${_biSinPrecioHtml(kpi)}
       ${biUltimaActualizacion()}`;
-    descEl.innerHTML = biBadges(
-      Object.fromEntries(Object.entries(kpi.por_categoria || {}).map(([k, v]) => [k, biMoneda(v)]))
-    );
+    descEl.innerHTML = biBadges(biCategoriasVentaPerdida(kpi));
     biRenderChart(kpi.por_dia, 'Venta perdida $ por día', '#F87171');
 
     listaEl.innerHTML = det.items.length ? det.items.map(ev => `
@@ -314,7 +314,7 @@ async function biCargarVentaPerdida() {
           <div style="font-size:var(--fs-xs);color:var(--tx3);">${esc(ev.pedido_siesa_ref || 'Sin pedido')} · ${esc(ev.categoria_producto || 'Sin categoría')} · ${biFechaHora(ev.creado_en)}</div>
         </div>
         <div style="text-align:right;">
-          <div style="font-weight:700;">${ev.precio_venta_capturado == null ? 'sin precio' : biMoneda(ev.cantidad_faltante * ev.precio_venta_capturado)}</div>
+          <div style="font-weight:700;">${ev.precio_venta_capturado == null ? '<span style="color:var(--tx3);font-weight:400;">sin precio</span>' : esc(biMoneda(ev.cantidad_faltante * ev.precio_venta_capturado))}</div>
           <div style="font-size:var(--fs-xs);color:var(--tx3);">${esc(ev.cantidad_faltante)} und</div>
         </div>
       </div>`).join('')
@@ -326,4 +326,41 @@ async function biCargarVentaPerdida() {
     listaEl.innerHTML = '';
     biRenderChart({}, 'Venta perdida $ por día', '#F87171');
   }
+}
+
+// ── Sin valor ≠ $0 (2026-09-24) ─────────────────────────────────────────────
+// Un despacho sin `valor_factura` o un agotado sin precio no valen $0: no se
+// sabe cuánto valen. El servidor ya los separa (`sin_valor_factura`,
+// `sin_precio_por_categoria`); estas funciones solo lo dicen.
+
+/** «sin valor», «$X al menos» o «$X». */
+function biValorDespachado(kpi) {
+  const sin = Number((kpi && kpi.sin_valor_factura) || 0);
+  const n = Number((kpi && kpi.pedidos) || 0);
+  if (n && sin >= n) return 'sin valor';
+  const v = biMoneda(kpi ? kpi.valor_total : null);
+  return sin ? v + ' al menos' : v;
+}
+
+function biNotaSinValor(kpi) {
+  const sin = Number((kpi && kpi.sin_valor_factura) || 0);
+  if (!sin) return '';
+  return `<div style="font-size:var(--fs-xs);color:var(--tx3);margin:4px 0 8px;">⚪ ${esc(sin)} despacho(s) sin valor de factura: no suman al total (no valen $0, no se sabe cuánto valen).</div>`;
+}
+
+/** El pedido que se ve: el número de Siesa, o la clave, o el documento. */
+function biPedidoDe(t) {
+  return (t && (t.numero_pedido_siesa || t.pedido_clave || t.referencia_doc)) || 'sin número';
+}
+
+/** `{categoría: texto}` sin pintar $0 donde solo hay agotados sin precio. */
+function biCategoriasVentaPerdida(kpi) {
+  const sin = (kpi && kpi.sin_precio_por_categoria) || {};
+  const out = {};
+  Object.entries((kpi && kpi.por_categoria) || {}).forEach(([k, v]) => {
+    const n = Number(sin[k] || 0);
+    if (n && !Number(v)) out[k] = `sin precio (${n})`;
+    else out[k] = biMoneda(v) + (n ? ' al menos' : '');
+  });
+  return out;
 }

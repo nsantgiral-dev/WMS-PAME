@@ -542,15 +542,31 @@ class TestDrillDown:
     def test_linea_de_tiempo_completa(self, mundo):
         d = _svc().linea_de_tiempo('003-PD-1501')
         titulos = ' | '.join(e['titulo'] for e in d['eventos'])
-        for esperado in ('Línea vista en Siesa', 'Picking completado', 'Empaque verificado',
-                         'Despachado', 'Parada confirmada', 'liquidada'):
+        for esperado in ('Siesa aprobó el pedido', 'Terminó el picking', 'Empaque verificado',
+                         'Despachado', 'El conductor confirmó la entrega', 'liquidada'):
             assert esperado in titulos, titulos
         desp = next(e for e in d['eventos'] if e['titulo'].startswith('Despachado'))
         assert desp['documento']['documentos'] == ['RM-10501']
         liq = next(e for e in d['eventos'] if 'liquidada' in e['titulo'])
         assert liq['quien'] == 'Admin Recorrido'
-        assert any(e['tipo'] == 'bitacora' and 'Liquidar' in e['titulo'] for e in d['eventos'])
+        assert any(e['tipo'] == 'bitacora' and 'Liquidó' in e['titulo'] for e in d['eventos'])
         assert all(x['alcanzada'] for x in d['etapas'])
+
+    def test_linea_de_tiempo_sin_numeros_crudos_ni_codigos(self, mundo):
+        """Los números viajan como números (`cifras`) y la pantalla los
+        formatea: nada de «10.0», «50000.0», nombres de jobs ni la línea de
+        Siesa una por una con su código de ítem en el título."""
+        import re
+        d = _svc().linea_de_tiempo('003-PD-1501')
+        texto = ' | '.join(f"{e['titulo']} {e['detalle'] or ''}" for e in d['eventos'])
+        assert not re.search(r'\d\.0\b', texto), texto
+        assert 'DESPACHO_F470' not in texto and 'Trabajo Siesa' not in texto, texto
+        aprob = [e for e in d['eventos'] if e['etapa'] == 'aprobado']
+        assert len(aprob) == 1, 'las líneas de Siesa se agrupan en un hecho'
+        cif = {c['etiqueta']: c for c in aprob[0]['cifras']}
+        assert cif['líneas']['valor'] == 2 and cif['valor']['formato'] == 'pesos'
+        assert all(isinstance(c['valor'], (int, float)) or c['valor'] is None
+                   for e in d['eventos'] for c in e['cifras'])
 
     def test_linea_de_tiempo_trae_la_cancelacion(self, mundo):
         d = _svc().linea_de_tiempo('003-PD-1502')

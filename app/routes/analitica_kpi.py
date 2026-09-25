@@ -1,15 +1,18 @@
 """
 Analítica — capa semántica y KPI diario (Fase 1, 2026-09-24).
 
-Todavía sin pantalla propia: la consumen las vistas del módulo y la pantalla
-de tendencias de la Fase 2. Declarados en `DEUDA_SIN_UI`.
+`/resumen` alimenta la portada 🎯 ¿Cómo vamos? (`analitica_portada.js`), que
+también usa `/kpi/recalcular` (botón de admin cuando el cron está apagado);
+`/metricas` alimenta «Cómo se mide cada cifra» de 🩺 Diagnóstico. `/serie`
+sigue sin pantalla (tendencia diaria de una métrica: Fase 2, `DEUDA_SIN_UI`).
 
 - `GET  /api/analitica/metricas` — el catálogo.
 - `GET  /api/analitica/serie?metrica=&desde=&hasta=&almacen_id=` — un punto
   por día con su estado; el día en curso, en vivo y marcado.
 - `GET  /api/analitica/resumen?desde=&hasta=&almacen_id=` — cada métrica:
-  período, período anterior de igual duración, variación y alerta de cambio
-  (CUSUM de Vigía).
+  período, período anterior de igual duración, variación, semáforo contra la
+  meta y alerta de cambio (CUSUM de Vigía); y `portada`: los seis indicadores
+  de 🎯 ¿Cómo vamos? con tendencia de 8 semanas, porqué y qué hacer.
 - `POST /api/analitica/kpi/recalcular` — solo admin, idempotente, con tope.
 
 Lectura: gestión (`_es_gestion`), el mismo criterio que `/api/auditoria/flujo`
@@ -136,8 +139,13 @@ def resumen_metricas():
         desde, hasta = _rango(request.args, tope=kpi.TOPE_DIAS_CONSULTA, hoy=hoy)
     except _Invalido as e:
         return jsonify({'error': str(e)}), 400
+    from app.services import analitica_portada as port
+    # Una sola lectura de la cohorte y de las fugas para las dos respuestas:
+    # la cifra del catálogo y la de la portada son la misma, no dos cálculos.
+    medicion = port.Medicion(desde, hasta, almacen_id, hoy)
     return jsonify({
-        'metricas': kpi.resumen(desde, hasta, almacen_id, hoy=hoy),
+        'metricas': kpi.resumen(desde, hasta, almacen_id, hoy=hoy, medicion=medicion),
+        'portada': port.portada(desde, hasta, almacen_id, hoy=hoy, medicion=medicion),
         'meta': _meta(desde, hasta, almacen_id),
     }), 200
 
