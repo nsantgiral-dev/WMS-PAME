@@ -194,6 +194,7 @@ class TestLosDefectosCorregidosSonArtefacto:
     #: Los invariantes que vigilan un defecto ya corregido. **Exacto**: uno
     #: nuevo con `defecto_corregido` pide entrar acá con su porqué.
     DEFECTOS = {
+        'VTA-31': 'm048fiscal',  # despachos sin RM+FE (244328-AUTO, estado 9, cierre)
         'VTA-50': '359eac0f',   # entregar_ruta marcaba ENTREGADO lo ausente
         'VTA-61': '75c168c8',   # el fallback de condición emitía contado
         'VTA-62': 'd5010187',   # la regla ≤ 15 días nació con m043contado

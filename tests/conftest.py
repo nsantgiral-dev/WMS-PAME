@@ -442,3 +442,24 @@ def _connekta_sin_metodos_pegados_a_la_instancia():
         de_clase = ConnektaGateway.__dict__.get(nombre)
         if callable(de_clase) or isinstance(de_clase, (staticmethod, classmethod)):
             connekta.__dict__.pop(nombre, None)
+
+
+@pytest.fixture(autouse=True)
+def _siesa_en_horario_de_facturacion(monkeypatch):
+    """El reloj de la ventana de facturación, fijo a media mañana de Bogotá.
+
+    `documento_fiscal.siesa_disponible_para_facturar` niega el cierre de caja
+    y la emisión fuera de la Regla 14 (decisión del dueño, 2026-09-25: sin
+    Siesa no se factura, se para todo). Con el reloj real, todo test que cierra
+    una caja con Siesa «real» (mockeada) pasaría de día y fallaría de noche —
+    y en el CI de Railway, que corre en UTC, cinco horas al día. Los tests de la
+    ventana lo vuelven a parchear.
+    """
+    from datetime import datetime
+    try:
+        from app.services import documento_fiscal
+    except Exception:
+        return
+    monkeypatch.setattr(documento_fiscal, '_ahora_bogota',
+                        lambda: datetime(2026, 9, 25, 10, 0))
+

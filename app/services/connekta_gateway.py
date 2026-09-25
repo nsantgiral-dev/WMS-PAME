@@ -60,6 +60,21 @@ class CompromisosNoDisponibles(Exception):
     """
 
 
+class RemisionNoDisponible(Exception):
+    """No se pudo preguntar por la remisión de un pedido.
+
+    **No es lo mismo que «el pedido no tiene remisión».** Es la misma forma de
+    `CompromisosNoDisponibles`, en la consulta que decide si el 142945 ya
+    entró: `get_remision_desde_pedido` devolvía `None` ante cualquier
+    excepción, y `None` ahí se lee «no hay RM».
+
+    Tres estados, y el que llama tiene que distinguirlos:
+    `dict` (encontrada) · `None` (Siesa respondió entero y no está) · esta
+    excepción (no se sabe). Ninguno de los dos últimos autoriza un POST del
+    142945: la remisión se identifica o se declara a mano.
+    """
+
+
 class ConnektaCircuitOpenError(Exception):
     """Raised when circuit breaker is OPEN — Siesa no disponible.
     DLQ handlers catch this to NOT waste retries."""
@@ -150,6 +165,32 @@ class ConnektaResultadoDesconocido(Exception):
     contra Siesa si el documento entró (lo que hace `RECIBO_CAJA` con
     `cxc_cruce.esta_saldada`), o **declararlo y parar**. Nunca reintentar a
     ciegas, y nunca revertir el pre-flag.
+    """
+
+
+class ConnektaRechazoExplicito(Exception):
+    """Siesa **contestó** que no: HTTP 4xx, 429 o `codigo != 0` en el cuerpo.
+
+    El documento no se creó. Es el único fallo de un POST ante el que se puede
+    revertir un pre-flag (Regla 6) sin arriesgar un duplicado. Un 5xx NO es
+    esto: el servidor pudo haber procesado antes de romperse (Regla 3), y
+    sigue saliendo como `Exception` genérica.
+    """
+
+
+class ConnektaNoEnviado(Exception):
+    """El POST **no salió**: la conexión con Siesa ni siquiera se abrió
+    (`requests.ConnectTimeout`).
+
+    Es la mitad del timeout que sí se puede reintentar. `requests` hace de
+    `ConnectTimeout` una subclase de `Timeout`, así que el `except Timeout` del
+    POST lo atrapaba junto con el `ReadTimeout` y lo convertía en
+    `ConnektaResultadoDesconocido`: FALLIDO sin reintento y un humano mandado a
+    buscar en Siesa un documento que nunca pudo nacer.
+
+    Un timeout de **lectura** sigue siendo «no se sabe» (Regla 3): la petición
+    viajó. Uno de **conexión** no viajó: revertir el pre-flag y reintentar es
+    seguro.
     """
 
 
@@ -914,14 +955,20 @@ class ConnektaGateway:
                     f'[CONNEKTA] POST {id_conector}: rate-limit (429) — '
                     f'Retry-After={retry_after}s — DLQ reintentará con backoff'
                 )
-                raise Exception(f'Connekta rate-limit (429) — reintento en {retry_after}s')
+                raise ConnektaRechazoExplicito(
+                    f'Connekta rate-limit (429) — reintento en {retry_after}s')
             if not r.ok:
                 try:
                     detalle = r.json()
                 except Exception:
                     detalle = r.text
                 logger.error(f'[CONNEKTA] POST {id_conector} HTTP {r.status_code}: {detalle}')
-                raise Exception(f'Siesa rechazó el documento (HTTP {r.status_code}): {detalle}')
+                _msg_http = f'Siesa rechazó el documento (HTTP {r.status_code}): {detalle}'
+                if r.status_code >= 500:
+                    # Un 5xx no es un «no»: el servidor pudo procesar antes de
+                    # romperse. Genérica, como siempre (Regla 3).
+                    raise Exception(_msg_http)
+                raise ConnektaRechazoExplicito(_msg_http)
             resp_json = r.json()
             logger.info(f'[CONNEKTA] POST {id_conector} HTTP 200 — respuesta: {str(resp_json)[:300]}')
             # Connekta V2/V3.1: HTTP 200 no garantiza éxito — verificar codigo==0 en body.
@@ -934,7 +981,7 @@ class ConnektaGateway:
                         f'[CONNEKTA] POST {id_conector} rechazado por Siesa — '
                         f'codigo={codigo} mensaje={mensaje} detalle={detalle}'
                     )
-                    raise Exception(
+                    raise ConnektaRechazoExplicito(
                         f'Siesa rechazó el documento (codigo={codigo}): {mensaje}. {detalle}'
                     )
             elif isinstance(resp_json, list):
@@ -948,11 +995,20 @@ class ConnektaGateway:
                                 f'[CONNEKTA] POST {id_conector} (v3.1 list) rechazado — '
                                 f'codigo={_cod} mensaje={_msg}'
                             )
-                            raise Exception(
+                            raise ConnektaRechazoExplicito(
                                 f'Siesa rechazó el documento (codigo={_cod}): {_msg}'
                             )
             self._cb_record_success()
             return resp_json
+        except requests.exceptions.ConnectTimeout as e:
+            # Antes que `Timeout` (es su subclase): la conexión no se abrió,
+            # la petición no salió. Ver `ConnektaNoEnviado`.
+            self._cb_record_failure()
+            logger.error(f'[CONNEKTA] POST {id_conector}: no se pudo conectar ({e}) '
+                         '— la petición no salió')
+            raise ConnektaNoEnviado(
+                f'No se pudo conectar con Siesa ({e}). La petición no salió: no se '
+                'creó ningún documento y se puede reintentar.')
         except requests.exceptions.Timeout:
             self._cb_record_failure()
             # **Un timeout no es un fallo: es no saber.** El POST pudo haberse

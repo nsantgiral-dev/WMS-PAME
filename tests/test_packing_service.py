@@ -193,9 +193,11 @@ class TestCerrarPackingCreaJobSiesa:
         assert job is not None
         assert job.estado == 'PENDIENTE'
 
-        # Verificar que la tarea cambió a DESPACHADO
+        # La tarea NO pasa a DESPACHADO al encolar (decisión del dueño,
+        # 2026-09-25): lo hace la emisión cuando la remisión y la factura
+        # existen. Hasta entonces queda VERIFICADA, con sus bultos.
         db.session.refresh(tarea)
-        assert tarea.estado == 'DESPACHADO'
+        assert tarea.estado == 'VERIFICADO'
 
         # DLQ fue disparado
         mock_dlq.assert_called_once()

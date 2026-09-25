@@ -150,6 +150,27 @@ def hacer_packing(db, flujo, bultos=1):
     return tarea
 
 
+def siesa_emitio(db, packing_id, rm_consec=None):
+    """Lo que el DESPACHO_F470 deja al terminar: la remisión identificada, la
+    factura confirmada, `siesa_triggered` y DESPACHADO — escrito por el mismo
+    `_persistir_resultado` que usa la emisión real.
+
+    El cierre de caja solo ENCOLA el job (lo procesa el DLQ, apagado en tests)
+    y desde el 2026-09-25 ya no marca DESPACHADO: el muelle y la ruta exigen
+    remisión y factura confirmadas (`documento_fiscal.despachable`). Un arnés
+    que sembrara solo `siesa_triggered` estaría sembrando exactamente el
+    despacho sin documento que esa regla prohíbe.
+    """
+    from app.models.packing import TareaPacking
+    from app.services.despacho_parcial_service import DespachoParialService
+    tarea = db.session.get(TareaPacking, packing_id)
+    tarea.rm_tipo = 'RM'
+    tarea.rm_consec = rm_consec or 1000 + tarea.id
+    DespachoParialService._persistir_resultado(
+        tarea, f'RM-{tarea.rm_consec}', {'codigo': 0, 'mensaje': 'Transacción Exitosa'})
+    return tarea
+
+
 def hacer_ruta(db, flujo, conductor_id):
     """Programa la ruta, le carga los bultos y la pone en tránsito."""
     from app.models.bulto import Bulto
@@ -182,7 +203,8 @@ def hacer_entrega(db, flujo, **datos):
 
 def flujo_completo(db, almacen, usuario_id, conductor_id,
                    cantidad_pedida=10, recoger=7, **entrega):
-    """Pedido → picking parcial → packing → bultos → ruta → entrega.
+    """Pedido → picking parcial → packing → (Siesa emite RM + FE) → bultos →
+    ruta → entrega.
 
     `recoger=7` de `10` por defecto: el caso real, no el feliz.
     """
@@ -192,6 +214,7 @@ def flujo_completo(db, almacen, usuario_id, conductor_id,
                   producto_ids=[p.id for p in productos])
     hacer_picking(db, flujo, cantidad_pedida, recoger)
     hacer_packing(db, flujo)
+    siesa_emitio(db, flujo.packing_id)
     hacer_ruta(db, flujo, conductor_id)
     hacer_entrega(db, flujo, **entrega)
     return flujo

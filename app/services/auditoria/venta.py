@@ -297,6 +297,100 @@ def toda_tarea_despachada_tiene_bultos(ctx=None):
     ]
 
 
+@invariante(
+    codigo='VTA-31',
+    flujo='venta',
+    frontera='packing → Siesa',
+    consecuencia='El WMS da por despachada una caja sin remisión y factura '
+                 'confirmadas en Siesa: la mercancía puede salir del CD sin '
+                 'documento fiscal, y nadie reintenta la emisión porque la '
+                 'caja ya figura como hecha.',
+    severidad=BLOQUEA,
+    detector_ciego='tests/test_documento_fiscal.py::TestLaAuditoriaLoVe::test_vta31_ve_un_despacho_sin_documento',
+    defecto_corregido=('m048fiscal', '2026-09-25T13:30:00-05:00'),
+)
+def ningun_despacho_sin_remision_y_factura(ctx=None):
+    """`siesa_triggered` o DESPACHADO sin RM y FE confirmadas
+    (`documento_fiscal.despachable`, la misma política del muelle).
+
+    **Qué escribe el valor, y puede el camino roto escribirlo igual:** hasta
+    el 2026-09-25 lo escribían tres caminos sin documento — la rama
+    `244328-AUTO` de compromisos vacíos, la reconciliación por estado 9
+    (ANULADO leído como «cumplido») y el cierre de caja, que marcaba
+    DESPACHADO al encolar. Los tres se corrigieron; si alguno vuelve, esto
+    lo ve. Lo anterior a la corrección es artefacto, no bloquea."""
+    from app.models.packing import EstadoPacking, TareaPacking
+    from app.services.documento_fiscal import filtro_despachable, motivo_no_despachable
+    filas = (TareaPacking.query
+             .filter(db.or_(TareaPacking.tipo_documento.is_(None),
+                            TareaPacking.tipo_documento != 'TRASLADO'))
+             .filter(db.or_(TareaPacking.siesa_triggered.is_(True),
+                            TareaPacking.estado == EstadoPacking.DESPACHADO))
+             .filter(~filtro_despachable(TareaPacking))
+             .order_by(TareaPacking.id.desc()).limit(1000).all())
+    return [
+        Hallazgo(
+            referencia=t.numero_pedido_siesa or t.codigo or f'packing#{t.id}',
+            detalle=motivo_no_despachable(t),
+            datos={'packing': t.codigo, 'estado': t.estado,
+                   'siesa_triggered': bool(t.siesa_triggered),
+                   'rm': f'{t.rm_tipo}-{t.rm_consec}' if t.rm_consec else None,
+                   'fe': f'{t.fe_tipo}-{t.fe_consec}' if t.fe_consec else None},
+            fecha=t.siesa_triggered_at or t.fecha_despachado or t.fecha_creacion,
+        ) for t in filas
+    ]
+
+
+#: Horas que una remisión puede esperar su factura antes de ser un hallazgo.
+HORAS_RM_SIN_FE = 24
+
+
+@invariante(
+    codigo='VTA-32',
+    flujo='venta',
+    frontera='remisión → factura',
+    consecuencia='Una remisión sin factura más de un día: el inventario de '
+                 'Siesa ya bajó y la venta no está facturada — la factura, '
+                 'cuando salga, será extemporánea.',
+    severidad=BLOQUEA,
+    detector_ciego='tests/test_documento_fiscal.py::TestLaAuditoriaLoVe::test_vta32_ve_una_remision_sin_factura',
+)
+def ninguna_remision_espera_su_factura_mas_de_un_dia(ctx=None):
+    """RM confirmada (o 142945 enviado sin confirmar) sin FE confirmada hace
+    más de `HORAS_RM_SIN_FE`, contadas desde el envío de la remisión.
+
+    Lo escribe `rm_enviada_at` (el pre-flag, antes del POST) y lo borra solo
+    `fe_confirmada_at`/`fe_consec`, que escriben la emisión y la
+    reconciliación **después** de ver la factura: un camino roto no puede
+    escribir la FE sin tenerla."""
+    from datetime import datetime, timedelta
+    from app.models.packing import TareaPacking
+    limite = datetime.utcnow() - timedelta(hours=HORAS_RM_SIN_FE)
+    desde = db.func.coalesce(TareaPacking.rm_enviada_at, TareaPacking.siesa_triggered_at,
+                             TareaPacking.fecha_verificado, TareaPacking.fecha_creacion)
+    filas = (TareaPacking.query
+             .filter(db.or_(TareaPacking.rm_consec.isnot(None),
+                            TareaPacking.rm_enviada_at.isnot(None)))
+             .filter(TareaPacking.fe_consec.is_(None),
+                     TareaPacking.fe_confirmada_at.is_(None))
+             .filter(desde < limite)
+             .order_by(TareaPacking.id.desc()).limit(1000).all())
+    out = []
+    for t in filas:
+        cuando = (t.rm_enviada_at or t.siesa_triggered_at or t.fecha_verificado
+                  or t.fecha_creacion)
+        horas = int((datetime.utcnow() - cuando).total_seconds() // 3600) if cuando else None
+        rm = (f'la remisión {t.rm_tipo or "RM"}-{t.rm_consec}' if t.rm_consec
+              else 'una remisión enviada sin confirmar')
+        out.append(Hallazgo(
+            referencia=t.numero_pedido_siesa or t.codigo or f'packing#{t.id}',
+            detalle=f'{rm} espera su factura hace {horas} h',
+            datos={'packing': t.codigo, 'estado': t.estado, 'horas': horas},
+            fecha=cuando,
+        ))
+    return out
+
+
 # ── Frontera 5: bultos → ruta ────────────────────────────────────────────
 
 @invariante(

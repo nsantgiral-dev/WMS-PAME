@@ -15,6 +15,7 @@ from app.models.vehiculo import Vehiculo
 from app.models.ruta_maestra import RutaMaestra, RutaMaestraParada
 from app.models.ruta_despacho import RutaDespacho, EstadoRutaDespacho, EstadoFinancieroRuta
 from app.utils.fecha import dia_operativo as _dia_operativo
+from app.services.documento_fiscal import filtro_despachable as _filtro_despachable
 from app.services.bitacora import (registrar_accion, motivo_obligatorio, foto as foto_fila,
                                    FORZADO_ADVERTENCIAS_FLOTA, FORZADO_CIERRE_RUTA,
                                    FORZADO_LIQUIDACION_SIN_CONTAR)
@@ -642,7 +643,7 @@ class RutaService:
                 .options(_sl(Bulto.tarea))
                 .join(TareaPacking, Bulto.tarea_id == TareaPacking.id)
                 .filter(
-                    TareaPacking.siesa_triggered == True,
+                    _filtro_despachable(TareaPacking),
                     TareaPacking.estado != EstadoPacking.CANCELADO,
                     Bulto.estado == EstadoBulto.PENDIENTE,
                     Bulto.ruta_despacho_id == None,
@@ -672,7 +673,7 @@ class RutaService:
             .options(_sl(Bulto.tarea))
             .join(TareaPacking, Bulto.tarea_id == TareaPacking.id)
             .filter(
-                TareaPacking.siesa_triggered == True,
+                _filtro_despachable(TareaPacking),
                 TareaPacking.estado != EstadoPacking.CANCELADO,
                 Bulto.estado == EstadoBulto.PENDIENTE,
                 Bulto.ruta_despacho_id == None,
@@ -699,6 +700,15 @@ class RutaService:
                 f'Faltan {sin_confirmar} bulto{"s" if sin_confirmar != 1 else ""} por confirmar. '
                 f'Escanéalos en el muelle antes de cerrar la ruta.'
             )
+
+        # La ruta no sale con un bulto cuya caja no tiene remisión y factura
+        # confirmadas (decisión del dueño, 2026-09-25). Ya cargado o no: un
+        # bulto que entró antes de la regla tampoco sale sin documento.
+        from app.services.documento_fiscal import motivo_no_despachable
+        _sin_doc = sorted({m for b in ruta.bultos if b.tarea is not None
+                           for m in [motivo_no_despachable(b.tarea)] if m})
+        if _sin_doc:
+            raise ValueError('La ruta no puede salir. ' + ' '.join(_sin_doc))
 
         # El despacho es cuando el camión sale: la última puerta donde la flota
         # puede decir algo. Informa, no bloquea — con motivo, sale.

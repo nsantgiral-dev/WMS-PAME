@@ -27,6 +27,7 @@ antes de este fix, las dos consultas ahora tratan
 `fecha_programada IS NULL` como "siempre visible", no como "nunca".
 """
 import uuid
+from datetime import datetime
 
 from app.models.recaudo_entrega import EstadoEntrega
 
@@ -61,6 +62,9 @@ def _tarea_con_bulto(db, almacen, ruta_id=None, estado_bulto='PENDIENTE'):
         codigo=f'PK-{uuid.uuid4().hex[:6]}', estado='DESPACHADO', almacen_id=almacen.id,
         tipo_docto_pedido_siesa='PD', consec_docto_pedido_siesa=int(uuid.uuid4().int % 100000),
         numero_pedido_siesa=f'PED-{uuid.uuid4().hex[:6]}',
+        # Despachada de verdad: RM + FE confirmadas (m048fiscal).
+        siesa_triggered=True, rm_tipo='RM', rm_consec=int(uuid.uuid4().int % 100000),
+        fe_confirmada_at=datetime.utcnow(),
     )
     db.session.add(tarea)
     db.session.flush()

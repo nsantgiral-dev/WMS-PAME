@@ -108,7 +108,9 @@ class TestDobleCierrePacking:
         db.session.add(tarea)
         db.session.commit()
 
-        with pytest.raises(ValueError, match='[Ss]iesa ya proces'):
+        # El mensaje es el de `documento_fiscal` (una política para cancelar,
+        # resetear y abrir otra caja): nombra lo que hay en Siesa.
+        with pytest.raises(ValueError, match='procesado en Siesa'):
             PackingService.resetear_siesa(tarea_id=tarea.id)
 
 

@@ -894,16 +894,30 @@ class ConnektaConsultasGateway:
                 f'indistinguible de un pedido ya procesado.'
             ) from e
 
+    #: Tope de páginas de la consulta de remisiones (100 filas cada una,
+    #: Regla 10). Con la ventana de 30 días del SQL de Siesa alcanza de sobra;
+    #: llegar al tope con la última página llena es «no se sabe».
+    REMISION_MAX_PAGINAS = 30
+
     def get_remision_desde_pedido(self, tipo_docto_pedido: str, consec_docto_pedido) -> dict | None:
         """
-        Consulta dinámica papeleriamedellin_WMS_Remision_DesdePedido.
-        Busca en BD Siesa la RM más reciente creada para el pedido dado.
-        Fallback cuando 142945 no devuelve el consecutivo en su response.
-        Retorna {'tipo': 'RM', 'consec': 1234} o None si no existe.
+        Consulta dinámica papeleriamedellin_WMS_Remision_DesdePedido: la RM más
+        reciente creada para el pedido (el SQL de Siesa trae el MAX(consec_rm)
+        por pedido de los últimos 30 días; se filtra en memoria por
+        `consec_pd` porque las dinámicas de este ambiente no aceptan
+        parámetros).
 
-        La query devuelve el MAX(consec_rm) por pedido de los últimos 30 días.
-        Filtramos client-side por consec_pd para aislar el pedido específico.
+        **Tres estados** (ver `RemisionNoDisponible`):
+          · `{'tipo': 'RM', 'consec': 1234}` — encontrada;
+          · `None` — Siesa respondió **todas** las páginas y no está;
+          · `RemisionNoDisponible` — red, circuito abierto, rechazo `alerta`,
+            una fila repetida entre páginas (orden inestable: una fila pudo
+            quedar sin leer) o el tope de páginas con la última llena.
+
+        Hasta el 2026-09-25 devolvía `None` ante cualquier excepción y pedía
+        `tamPag=200` (Regla 10: ≥ 500 da registros fantasma; 100 es el techo).
         """
+        from app.services.connekta_gateway import RemisionNoDisponible, _exigir_datos
         core = self._core
         if core.modo_simulacion:
             return None
@@ -911,23 +925,56 @@ class ConnektaConsultasGateway:
             return None
         try:
             consec_int = int(str(consec_docto_pedido).strip())
-            res = core._get(
-                'papeleriamedellin_WMS_Remision_DesdePedido',
-                params_extra={'paginacion': 'numPag=1|tamPag=200'},
-                url=core.url_get_dinamico,
-            )
-            rows = res.get('detalle', {}).get('Datos', [])
-            matches = [r for r in rows if r.get('consec_pd') == consec_int]
-            if not matches:
-                return None
-            fila = max(matches, key=lambda r: int(r.get('consec_rm', 0)))
-            return {
-                'tipo':   str(fila.get('tipo_rm', 'RM')).strip(),
-                'consec': int(fila['consec_rm']),
-            }
-        except Exception as e:
-            logger.warning('[CONNEKTA] get_remision_desde_pedido falló: %s', e)
+        except (TypeError, ValueError):
+            raise RemisionNoDisponible(
+                f'Consecutivo de pedido ilegible ({consec_docto_pedido!r}): no se '
+                f'puede buscar su remisión.')
+        vistas, matches = set(), []
+        for pagina in range(1, self.REMISION_MAX_PAGINAS + 1):
+            try:
+                res = core._get(
+                    'papeleriamedellin_WMS_Remision_DesdePedido',
+                    params_extra={'paginacion': f'numPag={pagina}|tamPag=100'},
+                    url=core.url_get_dinamico,
+                )
+                if res is None:
+                    raise RuntimeError('circuito de Siesa abierto')
+                rows = res.get('detalle', {}).get('Datos', [])
+                rows = _exigir_datos(rows, 'get_remision_desde_pedido')
+            except Exception as e:
+                logger.error('[CONNEKTA] get_remision_desde_pedido falló (página %s): %s',
+                             pagina, e)
+                raise RemisionNoDisponible(
+                    f'No se pudo consultar la remisión del pedido {tipo_docto_pedido}-'
+                    f'{consec_docto_pedido} (página {pagina}): {e}. No se sabe si la '
+                    f'remisión existe.') from e
+            for r in rows:
+                clave = (r.get('consec_pd'), r.get('tipo_rm'), r.get('consec_rm'))
+                if clave in vistas:
+                    raise RemisionNoDisponible(
+                        f'La consulta de remisiones repitió una fila entre páginas '
+                        f'(página {pagina}): el orden no es estable y una fila pudo '
+                        f'quedar sin leer. No se sabe si el pedido {consec_int} tiene '
+                        f'remisión.')
+                vistas.add(clave)
+                try:
+                    if int(r.get('consec_pd')) == consec_int:
+                        matches.append(r)
+                except (TypeError, ValueError):
+                    continue
+            if len(rows) < 100:
+                break
+        else:
+            raise RemisionNoDisponible(
+                f'La consulta de remisiones llegó al tope de {self.REMISION_MAX_PAGINAS} '
+                f'páginas con la última llena: no se leyó entera.')
+        if not matches:
             return None
+        fila = max(matches, key=lambda r: int(r.get('consec_rm') or 0))
+        return {
+            'tipo':   str(fila.get('tipo_rm', 'RM')).strip(),
+            'consec': int(fila['consec_rm']),
+        }
 
     def get_pedido_cabecera(self, tipo_docto: str, consec_docto) -> dict | None:
         """

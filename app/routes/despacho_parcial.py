@@ -66,6 +66,10 @@ def despachar_parcial(packing_id: int):
 
     from app.services.despacho_parcial_service import DespachoParialService
     from app.services.cartera_service import RetenidoPorCartera
+    from app.services.documento_fiscal import siesa_disponible_para_facturar
+    _disponible, _motivo = siesa_disponible_para_facturar()
+    if not _disponible:
+        return jsonify({'error': _motivo}), 503
     try:
         resultado = DespachoParialService.despachar_parcial(tarea, cantidades)
         logger.info(
@@ -136,6 +140,29 @@ def facturar_rm_manual(packing_id: int):
         return jsonify({'error': 'No se puede facturar una tarea cancelada'}), 409
 
     body = request.get_json(silent=True) or {}
+
+    # La otra salida de una remisión enviada sin confirmar: la RM NO existe.
+    # Se vuelve a preguntar a Siesa antes de quitar el pre-flag; motivo
+    # obligatorio y bitácora (`declarar_rm_inexistente`).
+    if body.get('rm_inexistente') is True:
+        from app.extensions import db
+        from app.services.bitacora import MotivoRequerido
+        from app.services.despacho_parcial_service import DespachoParialService
+        try:
+            r = DespachoParialService.declarar_rm_inexistente(
+                tarea, usuario_id=u.id, motivo=body.get('motivo'))
+        except MotivoRequerido as e:
+            return jsonify({'error': str(e)}), 400
+        except ValueError as e:
+            db.session.rollback()
+            return jsonify({'error': str(e)}), 409
+        if r.get('rm_encontrada'):
+            return jsonify({'ok': True, **r, 'mensaje': (
+                f"Siesa sí tiene la remisión {r['rm_encontrada']}: quedó registrada. "
+                f"Complete la factura con «Facturar remisión».")}), 200
+        return jsonify({'ok': True, **r, 'mensaje': (
+            'Registrado que la remisión no existe. Puede reintentar el envío a Siesa.')}), 200
+
     tipo_rm   = str(body.get('tipo_rm', '')).strip().upper()
     consec_rm = body.get('consec_rm')
 
@@ -145,6 +172,9 @@ def facturar_rm_manual(packing_id: int):
         consec_rm = int(consec_rm)
     except (TypeError, ValueError):
         return jsonify({'error': 'consec_rm debe ser un entero'}), 400
+    if consec_rm <= 0 or not tipo_rm.isalnum() or len(tipo_rm) > 10:
+        return jsonify({'error': 'La remisión se escribe como tipo (letras, hasta 10) '
+                                 'y consecutivo mayor que cero.'}), 400
 
     from app.services.despacho_parcial_service import DespachoParialService
     try:

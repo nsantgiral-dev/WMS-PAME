@@ -11,6 +11,11 @@ class EstadoPacking:
     CANCELADO   = 'CANCELADO'
 
 
+def _motivo_no_despachable(tarea):
+    from app.services.documento_fiscal import motivo_no_despachable
+    return motivo_no_despachable(tarea)
+
+
 class TareaPacking(db.Model):
     __tablename__ = 'tareas_packing'
 
@@ -66,6 +71,18 @@ class TareaPacking(db.Model):
     #: `fe_resolver.resolver_fe` la primera vez que alguien la pida.
     fe_tipo   = db.Column(db.String(10), nullable=True)
     fe_consec = db.Column(db.String(30), nullable=True)
+
+    # ── Documento fiscal antes de salir (m048fiscal) ─────────────────────
+    #: Pre-flag de la Regla 6 para el 142945: se escribe ANTES del POST de la
+    #: remisión y solo se revierte ante un rechazo explícito. Puesto y sin
+    #: `rm_consec` = la remisión PUEDE existir: nadie reenvía el 142945 hasta
+    #: identificarla (`documento_fiscal`, `DespachoParialService`).
+    rm_enviada_at = db.Column(db.DateTime, nullable=True)
+    #: La factura existe: el 142943 respondió bien, o se encontró en Siesa. El
+    #: muelle y la ruta exigen RM + FE confirmadas (`documento_fiscal.despachable`).
+    fe_confirmada_at = db.Column(db.DateTime, nullable=True)
+    #: Último intento del barrido de reconciliación: rota por acá.
+    reconciliacion_intento_at = db.Column(db.DateTime, nullable=True)
 
     #: `f430_id_cond_pago` del pedido — lo que el pedido DECLARA sobre cómo se
     #: va a pagar. Se anota para poder validar la entrega sin red y para saber
@@ -202,6 +219,12 @@ class TareaPacking(db.Model):
             'valor_factura': float(self.valor_factura) if self.valor_factura is not None else None,
             'fe_tipo': self.fe_tipo,
             'fe_consec': self.fe_consec,
+            # Documento fiscal (m048fiscal): lo que la pantalla necesita para
+            # decir por qué una caja no sale, sin recalcularlo en JS.
+            'rm': f'{self.rm_tipo or "RM"}-{self.rm_consec}' if self.rm_consec else None,
+            'rm_sin_confirmar': bool(self.rm_enviada_at and not self.rm_consec),
+            'fe_confirmada': bool(self.fe_consec or self.fe_confirmada_at),
+            'motivo_no_despachable': _motivo_no_despachable(self),
             'tipo_docto_pedido_siesa': self.tipo_docto_pedido_siesa,
             'consec_docto_pedido_siesa': self.consec_docto_pedido_siesa,
             'almacen_id': self.almacen_id,

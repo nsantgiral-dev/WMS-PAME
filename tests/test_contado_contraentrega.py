@@ -80,7 +80,11 @@ def _ruta(db, almacen, cond=None, valor=None, conductor=None, cliente='Tienda Un
     t = TareaPacking(codigo=f'PK-CC-{s}', estado='DESPACHADO', almacen_id=almacen.id,
                      tipo_docto_pedido_siesa='PD', consec_docto_pedido_siesa=1,
                      numero_pedido_siesa=f'PED-CC-{s}', cliente=cliente, municipio='Neiva',
-                     cond_pago=cond, valor_factura=valor, tipo_documento=tipo_documento)
+                     cond_pago=cond, valor_factura=valor, tipo_documento=tipo_documento,
+                     # Una parada en ruta está despachada de verdad: RM + FE
+                     # confirmadas (m048fiscal; sin ellas `cerrar_ruta` no la deja salir).
+                     siesa_triggered=True, rm_tipo='RM', rm_consec=int(s, 16) % 100000,
+                     fe_confirmada_at=datetime.utcnow())
     db.session.add(t); db.session.flush()
     for i in (1, 2):
         db.session.add(Bulto(tarea_id=t.id, ruta_despacho_id=ruta.id,

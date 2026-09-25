@@ -200,14 +200,13 @@ def _armar_parada_muelle_real(db, almacen, conductor, vehiculo, cantidad_pedida=
     # `test_liquidacion_de_punta_a_punta.py`, con Siesa estubado a
     # propósito). Lo que el muelle necesita es solo la bandera que ese job
     # deja al terminar (`MuelleService.listar_bultos_listos`/`cargar_bulto`
-    # filtran por `siesa_triggered=True`) — se sienta acá, en la frontera,
-    # igual que `ruta_entregada` (`test_liquidacion_de_punta_a_punta.py`)
-    # siembra el consecutivo de FE que solo Siesa puede asignar.
-    from app.models.packing import TareaPacking
-
-    tarea = TareaPacking.query.get(flujo.packing_id)
-    tarea.siesa_triggered = True
-    db.session.commit()
+    # exigen remisión y factura confirmadas, `documento_fiscal.despachable`)
+    # — se sienta acá, en la frontera, con el mismo `_persistir_resultado`
+    # de la emisión real (`siesa_emitio`), igual que `ruta_entregada`
+    # (`test_liquidacion_de_punta_a_punta.py`) siembra el consecutivo de FE
+    # que solo Siesa puede asignar.
+    from tests.flujo.conductor_de_flujo import siesa_emitio
+    siesa_emitio(db, flujo.packing_id)
 
     ruta = RutaService.crear_ruta({
         'conductor_id': conductor['conductor_id'],

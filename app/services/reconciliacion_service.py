@@ -5,97 +5,133 @@ from app.extensions import db
 
 logger = logging.getLogger(__name__)
 
-# Estado 9 = Anulado/ya procesado: único estado terminal confiable para reconciliación.
-# Estado 4 (Cumplido) se excluye deliberadamente: Siesa pone ind_estado=4 cuando el
-# conector 142945 procesa la RM internamente, antes de que la FE exista. Tratarlo como
-# señal de "RM+FE ya creados" hace que el DLQ omita la creación de la FE en el reintento.
-_ESTADOS_CUMPLIDO = {'9'}
+#: Cuántas tareas mira cada barrido. Rotan por `reconciliacion_intento_at`:
+#: antes era `.limit(10)` sin orden y diez tareas que nunca se reconcilian
+#: tapaban a la once para siempre.
+LOTE_SWEEP = 10
 
 
 class ReconciliacionService:
     """
-    Detecta y corrige la inconsistencia donde Siesa ya procesó el despacho
-    pero WMS aún tiene siesa_triggered=False.
+    Detecta y corrige la inconsistencia donde Siesa ya facturó el despacho
+    pero el WMS aún tiene siesa_triggered=False (la respuesta HTTP se perdió:
+    restart, timeout).
 
-    Ocurre cuando la respuesta HTTP de Siesa se pierde (restart del servidor,
-    timeout de red) después de que Siesa ya procesó el despacho.
+    **Solo con evidencia documental**: la factura, con su consecutivo. Hasta
+    el 2026-09-25 bastaba `get_estado_pedido == 9` (`_ESTADOS_CUMPLIDO`), y 9
+    es ANULADO en el resto del repo (ver `estado_pedido_siesa`): un pedido
+    anulado por comercial mientras la caja esperaba quedaba DESPACHADO y sus
+    bultos subían al camión sin remisión ni factura.
     """
 
     @staticmethod
-    def reconciliar_despacho(tarea, tipo_docto: str, consec_docto: str) -> dict:
-        """
-        Verifica si la factura ya existe en Siesa para el pedido dado.
-        Usa dos señales:
-          1. get_factura_desde_pedido() — factura directa
-          2. get_estado_pedido() == 9  — pedido marcado cumplido en Siesa
+    def _factura_con_consecutivo(facturas):
+        for f in facturas or []:
+            if isinstance(f, dict) and str(f.get('f350_consec_docto') or '').strip():
+                return f
+        return None
 
-        Retorna:
-          {'reconciliado': True}   — si se corrigió
-          {'reconciliado': False}  — si Siesa aún no tiene la factura
+    @staticmethod
+    def reconciliar_despacho(tarea, tipo_docto: str, consec_docto: str) -> dict:
+        """¿Siesa ya tiene la factura de este pedido? Tres respuestas:
+
+          {'reconciliado': True, ...}               — la FE existe (con consecutivo)
+          {'reconciliado': False, 'no_se': False}   — Siesa respondió: no hay FE
+          {'reconciliado': False, 'no_se': True}    — no se pudo preguntar
+
+        Además `anulado: True` si el pedido está anulado en Siesa (se marca
+        `pedido_anulado_siesa`; **nunca** `siesa_triggered`).
+
+        Con la FE: `siesa_triggered`, la factura en la tarea y, si la remisión
+        se identifica, DESPACHADO. **Sin remisión identificada no queda
+        DESPACHADO** (decisión del dueño, 2026-09-25): la caja sigue
+        esperando, sin reenvío posible, y se registra la RM a mano.
         """
-        from app.services.connekta_gateway import connekta
+        from app.services import estado_pedido_siesa as _eps
+        from app.services.connekta_gateway import RemisionNoDisponible, connekta
 
         if not tipo_docto or not consec_docto:
-            return {'reconciliado': False}
+            return {'reconciliado': False, 'no_se': True,
+                    'motivo': 'sin tipo/consecutivo del pedido'}
 
-        # Señal 1: factura directa.
-        # Si la consulta falla, advertir y continuar a Señal 2 — trigger_factura tiene
-        # su propio guard (get_estado_pedido == 4) que evita FE duplicada igualmente.
-        factura_encontrada = None
         try:
-            facturas = connekta.get_factura_desde_pedido(tipo_docto, consec_docto)
-            if facturas:
-                factura_encontrada = facturas[0]
+            factura = ReconciliacionService._factura_con_consecutivo(
+                connekta.get_factura_desde_pedido(tipo_docto, consec_docto))
         except Exception as e:
-            logger.warning(
-                f'[RECONCILIACION] Señal 1 (get_factura_desde_pedido) falló para '
-                f'{tarea.numero_pedido_siesa}: {e} — continuando con Señal 2'
-            )
+            logger.warning('[RECONCILIACION] no se pudo consultar la FE de %s: %s',
+                           tarea.numero_pedido_siesa, e)
+            return {'reconciliado': False, 'no_se': True, 'motivo': str(e)[:300]}
 
-        # Señal 2: estado del pedido en Siesa == 9 (cumplido/ya procesado)
-        if not factura_encontrada:
+        if factura is None:
+            # Sin factura. El estado del pedido solo sirve para declarar un
+            # anulado: no es evidencia de ningún documento.
+            anulado = False
             try:
-                estado_siesa = connekta.get_estado_pedido(tipo_docto, consec_docto)
-                if str(estado_siesa) in _ESTADOS_CUMPLIDO:
-                    factura_encontrada = {'via': 'estado_pedido', 'estado': estado_siesa}
-            except Exception as e:
-                logger.warning(
-                    f'[RECONCILIACION] get_estado_pedido falló '
-                    f'para {tarea.numero_pedido_siesa}: {e}'
-                )
+                estado = connekta.get_estado_pedido(tipo_docto, consec_docto)
+            except Exception as e:  # noqa: BLE001 — informativo
+                estado = None
+                logger.warning('[RECONCILIACION] get_estado_pedido falló para %s: %s',
+                               tarea.numero_pedido_siesa, e)
+            if _eps.es_anulado(estado):
+                anulado = True
+                if not tarea.pedido_anulado_siesa:
+                    tarea.pedido_anulado_siesa = True
+                    tarea.pedido_estado_siesa_detectado = str(estado)
+                    db.session.commit()
+                    logger.warning('[RECONCILIACION] pedido %s ANULADO en Siesa (estado %s) '
+                                   '— tarea %s marcada, sin tocar siesa_triggered',
+                                   tarea.numero_pedido_siesa, estado, tarea.id)
+            return {'reconciliado': False, 'no_se': False, 'anulado': anulado}
 
-        if not factura_encontrada:
-            return {'reconciliado': False}
+        # La factura existe. ¿Y la remisión?
+        rm = None
+        if tarea.rm_consec:
+            rm = {'tipo': tarea.rm_tipo or 'RM', 'consec': tarea.rm_consec}
+        else:
+            try:
+                rm = connekta.get_remision_desde_pedido(tipo_docto, consec_docto)
+            except RemisionNoDisponible as e:
+                logger.warning('[RECONCILIACION] FE de %s encontrada; la RM no se pudo '
+                               'consultar: %s', tarea.numero_pedido_siesa, e)
 
+        evidencia = {'via': 'factura',
+                     'fe': f"{factura.get('f350_id_tipo_docto') or ''}-"
+                           f"{factura.get('f350_consec_docto')}",
+                     'rm': f"{rm['tipo']}-{rm['consec']}" if rm else None}
         logger.warning(
             f'[RECONCILIACION] Pedido {tarea.numero_pedido_siesa} (tarea {tarea.id}) '
-            f'ya procesado en Siesa pero siesa_triggered=False — corrigiendo WMS'
+            f'ya facturado en Siesa ({evidencia}) pero siesa_triggered=False — corrigiendo WMS'
         )
-
         try:
             from app.models.packing import EstadoPacking
+            ahora = datetime.utcnow()
             tarea.siesa_triggered = True
-            tarea.siesa_triggered_at = datetime.utcnow()
-            tarea.estado = EstadoPacking.DESPACHADO
-            tarea.fecha_despachado = tarea.fecha_despachado or datetime.utcnow()
-            tarea.siesa_response = json.dumps(factura_encontrada)
-            cerrados = ReconciliacionService._cerrar_jobs_fallidos(tarea, factura_encontrada)
+            tarea.siesa_triggered_at = ahora
+            if not tarea.fe_consec:
+                tarea.fe_tipo = (str(factura.get('f350_id_tipo_docto') or '').strip()
+                                 or connekta.tipo_docto_factura)[:10]
+                tarea.fe_consec = str(factura.get('f350_consec_docto')).strip()[:30]
+            tarea.fe_confirmada_at = tarea.fe_confirmada_at or ahora
+            if rm and not tarea.rm_consec:
+                tarea.rm_tipo, tarea.rm_consec = rm['tipo'], rm['consec']
+            if tarea.rm_consec:
+                tarea.estado = EstadoPacking.DESPACHADO
+                tarea.fecha_despachado = tarea.fecha_despachado or ahora
+            tarea.siesa_response = json.dumps({**evidencia, 'reconciliado': True})
+            cerrados = ReconciliacionService._cerrar_jobs_fallidos(tarea, evidencia)
             db.session.commit()
             if cerrados:
                 logger.info(f'[RECONCILIACION] Tarea {tarea.id}: {cerrados} job(s) '
                             f'DESPACHO_F470 FALLIDO cerrados — Siesa ya tiene el documento')
-            logger.info(
-                f'[RECONCILIACION] Tarea {tarea.id} ({tarea.numero_pedido_siesa}) '
-                f'reconciliada → DESPACHADO'
-            )
-            return {'reconciliado': True}
+            return {'reconciliado': True, 'rm_identificada': bool(tarea.rm_consec),
+                    'evidencia': evidencia}
         except Exception as e:
             db.session.rollback()
             logger.error(
                 f'[RECONCILIACION] Fallo al guardar reconciliación '
                 f'para tarea {tarea.id}: {e}'
             )
-            return {'reconciliado': False}
+            return {'reconciliado': False, 'no_se': True, 'motivo': str(e)[:300]}
 
     @staticmethod
     def _cerrar_jobs_fallidos(tarea, evidencia) -> int:
@@ -161,7 +197,9 @@ class ReconciliacionService:
         # Tareas VERIFICADO o DESPACHADO con siesa_triggered=False.
         # No se exige bultos: tareas bloqueadas por guard anti-duplicado en cerrar_packing
         # nunca alcanzan a crear bultos pero Siesa ya procesó la factura.
-        # La doble señal de Connekta (factura activa o estado==4) es suficiente garantía.
+        # Rota por el último intento: primero las nunca intentadas, después la
+        # más vieja. Las de pedido anulado no se miran: no van a despacharse.
+        orden_nulos = db.case((TareaPacking.reconciliacion_intento_at.is_(None), 0), else_=1)
         tareas = (
             TareaPacking.query
             .filter(
@@ -169,10 +207,18 @@ class ReconciliacionService:
                 TareaPacking.estado.in_(['VERIFICADO', 'DESPACHADO']),
                 TareaPacking.tipo_docto_pedido_siesa.isnot(None),
                 TareaPacking.consec_docto_pedido_siesa.isnot(None),
+                db.or_(TareaPacking.pedido_anulado_siesa.is_(None),
+                       TareaPacking.pedido_anulado_siesa == False),
             )
-            .limit(10)
+            .order_by(orden_nulos, TareaPacking.reconciliacion_intento_at,
+                      TareaPacking.id)
+            .limit(LOTE_SWEEP)
             .all()
         )
+        ahora = datetime.utcnow()
+        for t in tareas:
+            t.reconciliacion_intento_at = ahora
+        db.session.commit()
 
         if not tareas:
             return

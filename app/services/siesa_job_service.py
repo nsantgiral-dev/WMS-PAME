@@ -847,8 +847,18 @@ def _ejecutar_job(job: SiesaJob) -> dict:
             )
             return {'idempotente': True, 'tarea_id': tarea.id}
 
+        # Fuera de la ventana de Siesa (Regla 14) o con el circuito abierto no
+        # se intenta: un POST que no va a tener respuesta es un documento que
+        # PUEDE existir. Esperar no gasta reintento.
+        from app.services.documento_fiscal import siesa_disponible_para_facturar
+        _disponible, _motivo = siesa_disponible_para_facturar()
+        if not _disponible:
+            raise DependenciaPendiente(_motivo, espera_minutos=15)
+
         # Reconciliación automática: Siesa puede tener la factura aunque WMS no lo sepa
         # (respuesta HTTP perdida por restart/timeout). Si ya existe → corregir WMS sin reenviar.
+        # **Tres respuestas**: «no se pudo preguntar» no es «no hay factura» —
+        # sin saberlo no se manda nada.
         if tarea and not tarea.siesa_triggered:
             from app.services.reconciliacion_service import ReconciliacionService
             rec = ReconciliacionService.reconciliar_despacho(
@@ -858,6 +868,16 @@ def _ejecutar_job(job: SiesaJob) -> dict:
             )
             if rec.get('reconciliado'):
                 return rec
+            if rec.get('no_se'):
+                raise DependenciaPendiente(
+                    f'No se pudo verificar en Siesa si el pedido '
+                    f'{payload.get("numero_pedido_siesa")} ya tiene factura '
+                    f'({rec.get("motivo")}). No se envía nada hasta saberlo.',
+                    espera_minutos=10)
+            if rec.get('anulado'):
+                raise ErrorDeterminista(
+                    f'El pedido {payload.get("numero_pedido_siesa")} está ANULADO en '
+                    f'Siesa: no se remisiona ni se factura. Cancele la caja.')
 
         # 142945→142943: RemisionPedido → FacturaRemision.
         # La RM descarga inventario cuenta 14 directamente — sin dependencia de automatización Siesa.
@@ -2209,7 +2229,25 @@ def fallidos_vigentes(desde=None, hasta=None, *, tipos=None,
     }
 
 
-def descartar_job(job_id: int, *, usuario_id: int, motivo: str, origen: str = None) -> SiesaJob:
+def _remision_sin_factura(job):
+    """La caja de un DESPACHO_F470 con remisión (o un 142945 sin confirmar)
+    y sin factura confirmada — o `None`. Descartar ese job deja mercancía
+    remisionada (descargada del inventario de Siesa) sin factura, fuera de
+    todo contador."""
+    if job.tipo != 'DESPACHO_F470' or job.referencia_tipo != 'TareaPacking':
+        return None
+    from app.models.packing import TareaPacking
+    from app.services.documento_fiscal import fe_confirmada
+    tarea = db.session.get(TareaPacking, job.referencia_id) if job.referencia_id else None
+    if tarea is None or fe_confirmada(tarea):
+        return None
+    if tarea.rm_consec or tarea.rm_enviada_at:
+        return tarea
+    return None
+
+
+def descartar_job(job_id: int, *, usuario_id: int, motivo: str, origen: str = None,
+                  reconoce_remision_sin_factura: bool = False) -> SiesaJob:
     """Un humano decide que un job FALLIDO no se intenta más → DESCARTADO.
 
     **Regla 3: descartar NO reenvía nada.** No toca el documento ni las
@@ -2217,6 +2255,12 @@ def descartar_job(job_id: int, *, usuario_id: int, motivo: str, origen: str = No
     pudiendo haber entrado — descartar solo dice «el WMS deja de contarlo como
     trabado». Motivo obligatorio; queda en la bitácora (DESCARTAR) con el
     error que se deja de mirar. No hace commit.
+
+    **Un DESPACHO_F470 con remisión y sin factura no se descarta** salvo que
+    quien descarta lo reconozca explícitamente (`reconoce_remision_sin_factura`,
+    queda en la bitácora): es la única huella de una mercancía remisionada sin
+    factura, y descartarlo la saca de todo contador. La salida normal es
+    «Facturar remisión».
     """
     from app.services.bitacora import foto, motivo_obligatorio, registrar_accion
     motivo = motivo_obligatorio(motivo, 'descartar un envío a Siesa')
@@ -2225,15 +2269,47 @@ def descartar_job(job_id: int, *, usuario_id: int, motivo: str, origen: str = No
         raise LookupError(f'Job {job_id} no encontrado')
     if job.estado != EstadoSiesaJob.FALLIDO:
         raise ValueError(f'Solo se descarta un job FALLIDO — el {job_id} está {job.estado}')
+    tarea_rm = _remision_sin_factura(job)
+    if tarea_rm is not None and not reconoce_remision_sin_factura:
+        rm = (f'{tarea_rm.rm_tipo or "RM"}-{tarea_rm.rm_consec}' if tarea_rm.rm_consec
+              else 'una remisión enviada sin confirmar')
+        raise ValueError(
+            f'La caja {tarea_rm.codigo} ({tarea_rm.numero_pedido_siesa}) tiene {rm} y no '
+            f'tiene factura: descartar este envío dejaría mercancía remisionada sin '
+            f'factura fuera de todo contador. Complete la factura con «Facturar '
+            f'remisión»; si de verdad hay que descartarlo, confírmelo explícitamente.')
     registrar_accion(
         'DESCARTAR', 'SiesaJob', job.id,
         entidad_codigo=f'{job.tipo}#{job.id}',
         usuario_id=usuario_id, motivo=motivo, origen=origen,
         antes=foto(job, ['estado', 'intentos', 'error_ultimo',
                          'referencia_tipo', 'referencia_id']),
-        despues={'estado': EstadoSiesaJob.DESCARTADO},
+        despues={'estado': EstadoSiesaJob.DESCARTADO,
+                 **({'remision_sin_factura_reconocida': True} if tarea_rm is not None else {})},
     )
     job.estado = EstadoSiesaJob.DESCARTADO
+    return job
+
+
+def descartar_job_retenido(job: SiesaJob, *, usuario_id: int, motivo: str) -> SiesaJob:
+    """El DESPACHO_F470 que espera a cartera deja de esperar: su caja se
+    canceló. **Solo PENDIENTE** (no se ejecuta ahora) y sin documento en Siesa
+    —lo garantiza `PackingService._retencion_que_frena`, el único llamador—.
+    Bitácora DESCARTAR. No hace commit."""
+    from app.services.bitacora import foto, motivo_obligatorio, registrar_accion
+    motivo = motivo_obligatorio(motivo, 'descartar un envío a Siesa')
+    if job.estado != EstadoSiesaJob.PENDIENTE:
+        raise ValueError(f'El envío {job.id} está {job.estado}: no se descarta.')
+    registrar_accion(
+        'DESCARTAR', 'SiesaJob', job.id,
+        entidad_codigo=f'{job.tipo}#{job.id}',
+        usuario_id=usuario_id, motivo=motivo,
+        antes=foto(job, ['estado', 'intentos', 'error_ultimo', 'proximo_intento',
+                         'referencia_tipo', 'referencia_id']),
+        despues={'estado': EstadoSiesaJob.DESCARTADO, 'retenido_por_cartera': True},
+    )
+    job.estado = EstadoSiesaJob.DESCARTADO
+    job.proximo_intento = None
     return job
 
 

@@ -254,7 +254,8 @@ class ConnektaFacturacionGateway:
         if not core.modo_simulacion:
             try:
                 estado_pre = core.get_estado_pedido(tipo_docto_pedido, consec_docto_pedido)
-                if estado_pre is not None and str(estado_pre) == '4':
+                from app.services import estado_pedido_siesa as _eps
+                if _eps.es_cumplido(estado_pre):
                     logger.warning(
                         f'[CONNEKTA] trigger_factura: pedido {tipo_docto_pedido}{consec_docto_pedido} '
                         f'ya está Cumplido (estado=4) en Siesa — omitiendo POST para evitar duplicado'

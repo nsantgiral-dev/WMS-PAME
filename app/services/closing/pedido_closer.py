@@ -1,7 +1,8 @@
 """PedidoPackingCloser — cierre de caja para Pedidos (PD).
 
-Extracción 1:1 de la lógica existente en PackingService.cerrar_packing().
-Genera Factura (FE) + Remisión (RM) en Siesa vía 238925 (DLQ).
+Crea los bultos y encola el DESPACHO_F470 (244328 → 142945 → 142943, en el
+DLQ). **No marca DESPACHADO**: eso lo hace la emisión cuando la remisión y la
+factura existen. Sin Siesa disponible el cierre se niega sin tocar nada.
 """
 import json
 import logging
@@ -30,6 +31,23 @@ class PedidoPackingCloser(IPackingCloser):
         total = self._calcular_total(tarea_id, bultos_data)
         if isinstance(total, str):  # es un mensaje de error
             return CierreResult(exitoso=False, error=total, mensaje=total)
+
+        # Decisión del dueño (2026-09-25): sin Siesa no se factura, y sin
+        # factura la caja no se cierra. Se niega ANTES de tocar nada —ni
+        # bultos, ni job, ni estado—: la caja queda VERIFICADA, esperando.
+        from app.services import documento_fiscal as _doc
+        _disponible, _motivo = _doc.siesa_disponible_para_facturar()
+        if not _disponible:
+            return CierreResult(exitoso=False, error=_motivo, mensaje=_motivo)
+
+        # El 142945 salió en un intento anterior y la remisión no se
+        # identificó: re-cerrar re-encolaría el job, y el job no puede saber
+        # si la RM existe. La salida es facturar-rm-manual.
+        if _doc.rm_resultado_desconocido(tarea_pre):
+            msg = (f'La remisión del pedido {tarea_pre.numero_pedido_siesa} se envió a '
+                   f'Siesa y no se pudo confirmar. No se vuelve a enviar: identifíquela '
+                   f'en Siesa y regístrela con «Facturar RM manual».')
+            return CierreResult(exitoso=False, error=msg, mensaje=msg)
 
         # Pre-check Siesa antes de adquirir lock
         if tarea_pre.tipo_docto_pedido_siesa and tarea_pre.consec_docto_pedido_siesa:
@@ -93,9 +111,12 @@ class PedidoPackingCloser(IPackingCloser):
         if not tarea.cerrado_por_id:
             tarea.cerrado_por_id = usuario_id or None
 
-        # Encolar SiesaJob DESPACHO_F470
+        # Encolar SiesaJob DESPACHO_F470. La tarea NO pasa a DESPACHADO acá:
+        # lo hace `DespachoParialService._persistir_resultado` cuando la
+        # remisión y la factura existen (decisión del dueño, 2026-09-25).
+        # Hasta entonces la caja queda VERIFICADA con sus bultos, y el muelle
+        # no la ve (`documento_fiscal.despachable`).
         self._encolar_job(tarea, tarea_id, items_payload)
-        tarea.estado = 'DESPACHADO'
         db.session.commit()
 
         from app.services.siesa_job_service import disparar_dlq_inmediato
@@ -137,7 +158,8 @@ class PedidoPackingCloser(IPackingCloser):
             fut_factura = pool.submit(connekta.get_factura_desde_pedido, tipo, consec)
 
             estado = fut_estado.result(timeout=_PRECHECK_TIMEOUT)
-            if estado is not None and str(estado) in ('-1', '5', '9'):
+            from app.services import estado_pedido_siesa as _eps
+            if _eps.impide_facturar(estado):
                 fut_factura.cancel()
                 return (f'Pedido {tarea_pre.numero_pedido_siesa} anulado en Siesa '
                         f'(estado {estado}) — no se puede facturar')
@@ -174,11 +196,11 @@ class PedidoPackingCloser(IPackingCloser):
                 'factura, y seguir sería arriesgar una FE duplicada.',
                 tipo, consec, e
             )
+            from app.services.documento_fiscal import MENSAJE_SIESA_NO_DISPONIBLE
             return (
-                f'No se pudo verificar en Siesa si el pedido '
-                f'{tarea_pre.numero_pedido_siesa} ya tiene factura ({e}). '
-                f'El cierre se detiene para no emitir una factura duplicada. '
-                f'Reintentá cuando Siesa responda.')
+                f'{MENSAJE_SIESA_NO_DISPONIBLE} No se pudo verificar si el pedido '
+                f'{tarea_pre.numero_pedido_siesa} ya tiene factura ({e}); cerrar '
+                f'ahora podría emitir una factura duplicada.')
         finally:
             # shutdown(wait=False) evita bloquear hasta 30s si un future aún
             # espera respuesta HTTP de Connekta después de nuestro timeout de 8s.

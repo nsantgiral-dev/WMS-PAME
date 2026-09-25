@@ -126,8 +126,11 @@ def _remisionar(db, packing):
     DESPACHADO con `siesa_triggered_at`. Lo anterior habla con Siesa."""
     from app.models.packing import TareaPacking
     from app.services.despacho_parcial_service import DespachoParialService
-    DespachoParialService._persistir_resultado(
-        db.session.get(TareaPacking, packing.id), 'RM-77', {'codigo': 0})
+    t = db.session.get(TareaPacking, packing.id)
+    # La remisión identificada va antes: desde m048fiscal nada queda
+    # DESPACHADO sin `rm_consec` (lo guarda `_guardar_rm` en el flujo real).
+    t.rm_tipo, t.rm_consec = 'RM', 77
+    DespachoParialService._persistir_resultado(t, 'RM-77', {'codigo': 0})
     db.session.commit()
 
 

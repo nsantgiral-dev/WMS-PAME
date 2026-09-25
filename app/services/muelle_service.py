@@ -1,6 +1,14 @@
 """
 MuelleService — lógica de negocio del monitor de muelle.
-Flujo: siesa_triggered → bultos PENDIENTE aparecen en muelle → scan-to-truck → CARGADO.
+Flujo: remisión + factura confirmadas → bultos PENDIENTE aparecen en muelle →
+scan-to-truck → CARGADO.
+
+**Qué puede salir lo decide `documento_fiscal.despachable`, y nada más**
+(decisión del dueño, 2026-09-25: ningún bulto va al muelle sin RM y FE
+confirmadas). Antes era `siesa_triggered`, que la rama `244328-AUTO` y la
+reconciliación por estado 9 encendían sin documento; y `asignar_a_ruta` no
+miraba nada, así que una ruta podía quedar con un bulto que nunca se iba a
+poder cargar y trabarse en `cerrar_ruta`.
 """
 import logging
 from datetime import datetime, date
@@ -11,6 +19,7 @@ from app.models.packing import TareaPacking, EstadoPacking
 from app.models.ruta_despacho import RutaDespacho, EstadoRutaDespacho
 from app.utils.fecha import dia_operativo as _dia_operativo
 from app.utils.fecha import rango_dia_operativo_utc as _rango_dia_operativo_utc
+from app.services.documento_fiscal import filtro_despachable, motivo_no_despachable
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +36,7 @@ class MuelleService:
             Bulto.query
             .join(TareaPacking, Bulto.tarea_id == TareaPacking.id)
             .filter(
-                TareaPacking.siesa_triggered == True,
+                filtro_despachable(TareaPacking),
                 TareaPacking.estado != EstadoPacking.CANCELADO,
                 Bulto.estado == EstadoBulto.PENDIENTE,
                 Bulto.ruta_despacho_id.is_(None),
@@ -78,6 +87,17 @@ class MuelleService:
         bultos = query.with_for_update().all()
         if not bultos:
             raise LookupError('No se encontraron bultos PENDIENTE con los criterios indicados')
+
+        # La misma política que el cargue y el cierre de la ruta: un bulto que
+        # no puede salir no entra a la ruta (si entrara, la ruta no cerraría).
+        sin_documento = {}
+        for b in bultos:
+            motivo = motivo_no_despachable(b.tarea) if b.tarea else 'El bulto no tiene caja.'
+            if motivo:
+                sin_documento.setdefault(motivo, []).append(b.codigo_barras or str(b.id))
+        if sin_documento:
+            raise ValueError(' '.join(
+                f'{m} Bultos: {", ".join(cods)}.' for m, cods in sin_documento.items()))
 
         ya_asignados = [b.id for b in bultos if b.ruta_despacho_id and b.ruta_despacho_id != ruta_id]
         if ya_asignados:
@@ -131,8 +151,9 @@ class MuelleService:
         )
         if not bulto:
             raise LookupError(f'Bulto {codigo_normalizado} no encontrado')
-        if not bulto.tarea.siesa_triggered:
-            raise ValueError('Este pedido aún no fue procesado por Siesa')
+        _motivo = motivo_no_despachable(bulto.tarea)
+        if _motivo:
+            raise ValueError(_motivo)
         if bulto.ruta_despacho_id != ruta_id:
             if bulto.ruta_despacho_id:
                 raise ValueError(f'Bulto planificado para ruta #{bulto.ruta_despacho_id}, no para #{ruta_id}')

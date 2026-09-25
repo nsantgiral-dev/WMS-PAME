@@ -1092,6 +1092,14 @@ def iniciar_despacho():
     if not items:
         return jsonify({'error': 'Ningún producto está registrado en el WMS — agrégalos primero'}), 400
 
+    # Una caja cancelada de este pedido con remisión o factura en Siesa: un
+    # despacho nuevo emitiría el segundo documento. Antes de crear el picking.
+    from app.services.documento_fiscal import DocumentoEnSiesa, exigir_pedido_sin_documento
+    try:
+        exigir_pedido_sin_documento(numero_pedido, 'iniciar el despacho')
+    except DocumentoEnSiesa as e:
+        return jsonify({'error': str(e)}), 409
+
     # Idempotencia: si ya existe packing no cancelado para este pedido → rechazar
     from app.models.packing import TareaPacking as _TP
     existing_packing = _TP.query.filter(
@@ -1531,10 +1539,13 @@ def descartar_job_fallido(job_id):
     from app.extensions import db
     from app.services.bitacora import MotivoRequerido
     from app.services.siesa_job_service import descartar_job
-    motivo = (request.get_json(silent=True) or {}).get('motivo')
+    cuerpo = request.get_json(silent=True) or {}
+    motivo = cuerpo.get('motivo')
     try:
         job = descartar_job(job_id, usuario_id=admin.id, motivo=motivo,
-                            origen=request.path)
+                            origen=request.path,
+                            reconoce_remision_sin_factura=(
+                                cuerpo.get('reconoce_remision_sin_factura') is True))
     except LookupError as e:
         return jsonify({'error': str(e)}), 404
     except MotivoRequerido as e:

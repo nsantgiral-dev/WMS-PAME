@@ -790,7 +790,10 @@ class TestMuelle:
                                                     almacen):
         from app.models.bulto import Bulto
         from app.models.ruta_despacho import RutaDespacho
-        t = _packing(db, almacen, estado='DESPACHADO', siesa_triggered=True)
+        from datetime import datetime
+        # Despachable: RM + FE confirmadas (m048fiscal), no solo la bandera.
+        t = _packing(db, almacen, estado='DESPACHADO', siesa_triggered=True,
+                     rm_tipo='RM', rm_consec=9, fe_confirmada_at=datetime.utcnow())
         b = _bulto(db, t)
         ruta = RutaDespacho(conductor_id=1, tipo_ruta='Urbana', estado='EN_CARGUE')
         db.session.add(ruta)

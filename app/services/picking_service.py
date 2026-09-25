@@ -835,12 +835,14 @@ class PickingService:
         """
         from sqlalchemy import and_, exists, or_
         from app.models.packing import EstadoPacking, TareaPacking
+        from app.services.documento_fiscal import filtro_tiene_documento
         T = TareaPicking
+        # «Con remisión» es la política única de `documento_fiscal` (incluye
+        # la factura y el 142945 enviado sin confirmar).
         empaque_que_la_explica = exists().where(and_(
             TareaPacking.numero_pedido_siesa == T.referencia_documento,
             or_(TareaPacking.estado != EstadoPacking.CANCELADO,
-                TareaPacking.siesa_triggered.is_(True),
-                TareaPacking.rm_consec.isnot(None))))
+                filtro_tiene_documento(TareaPacking))))
         return and_(
             or_(T.tipo_documento.is_(None), T.tipo_documento != 'TRASLADO'),
             T.referencia_documento.isnot(None),

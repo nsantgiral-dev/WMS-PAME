@@ -50,6 +50,10 @@ class PackingService:
 
         if existente:
             raise ValueError(f'Ya existe una tarea de packing para el pedido {numero_pedido_siesa}')
+        # Una caja cancelada del mismo pedido con remisión o factura: esta
+        # emitiría la segunda.
+        from app.services.documento_fiscal import exigir_pedido_sin_documento
+        exigir_pedido_sin_documento(numero_pedido_siesa, 'crear otra caja')
 
         codigo = f'PACK-{_ahora_bogota().strftime("%Y%m%d%H%M%S")}-{str(uuid.uuid4())[:6].upper()}'
 
@@ -110,6 +114,8 @@ class PackingService:
 
         if existente:
             raise ValueError(f'Ya existe una tarea de packing para el pedido {numero_pedido_siesa}')
+        from app.services.documento_fiscal import exigir_pedido_sin_documento
+        exigir_pedido_sin_documento(numero_pedido_siesa, 'crear otra caja')
 
         codigo = f'PACK-{_ahora_bogota().strftime("%Y%m%d%H%M%S")}-{str(uuid.uuid4())[:6].upper()}'
 
@@ -404,17 +410,10 @@ class PackingService:
             logger.info(
                 f'[PACKING] Pre-check resultado: {tarea_pre.numero_pedido_siesa} → estado_siesa={estado_siesa}'
             )
+            from app.services import estado_pedido_siesa as _eps
             if estado_siesa is not None and str(estado_siesa) not in ('3', '4'):
-                ESTADOS = {
-                    '-1': 'No encontrado en Siesa (eliminado)',
-                    '0': 'Ingresado (sin aprobar)',
-                    '1': 'Aprobado',
-                    '2': 'Aprobado',
-                    '5': 'Anulado',
-                    '9': 'Anulado / ya procesado en Siesa',
-                }
-                nombre_estado = ESTADOS.get(str(estado_siesa), f'desconocido (código {estado_siesa})')
-                anulado = str(estado_siesa) in ('-1', '5', '9')
+                nombre_estado = _eps.nombre(estado_siesa)
+                anulado = _eps.impide_facturar(estado_siesa)
                 if anulado:
                     logger.error(
                         f'[PACKING] ⛔ PRE-CHECK BLOQUEÓ cierre de {tarea_pre.numero_pedido_siesa}: '
@@ -646,25 +645,42 @@ class PackingService:
         from app.models.bulto import Bulto
         from app.models.siesa_job import SiesaJob as _SJ
         from app.services.bitacora import registrar_accion, motivo_obligatorio, foto
+        from app.services.documento_fiscal import exigir_sin_documento
         motivo = motivo_obligatorio(motivo, 'cancelar un empaque')
         tarea = TareaPacking.query.get(tarea_id)
         if not tarea:
             raise ValueError('Tarea no encontrada')
-        if tarea.estado == 'DESPACHADO' and tarea.siesa_triggered:
-            raise ValueError('No se puede cancelar — Siesa ya generó la remisión')
+        # Con remisión, factura o un 142945 sin confirmar, cancelar deja el
+        # documento en Siesa sin caja en el WMS — y la caja que se abra
+        # después para el mismo pedido emite el segundo.
+        exigir_sin_documento(tarea, 'cancelar el empaque')
 
         # [C2] Bloquear cancelación si hay un SiesaJob activo (PENDIENTE/PROCESANDO/REINTENTANDO).
         # Cancelar mientras Siesa está procesando podría dejar la remisión creada en Siesa
         # sin reflejo en el WMS — inconsistencia imposible de detectar automáticamente.
-        job_activo = _SJ.query.filter_by(
-            referencia_tipo='TareaPacking',
-            referencia_id=tarea_id,
-        ).filter(_SJ.estado.in_(['PENDIENTE', 'PROCESANDO', 'REINTENTANDO'])).first()
-        if job_activo:
+        #
+        # Excepción: el job PENDIENTE que solo espera a cartera (la retención
+        # frenó la emisión ANTES del 244328, sin documento). Esa espera no
+        # tiene fin propio; cancelar la caja es su salida: el job queda
+        # DESCARTADO y la retención CANCELADA, las dos con bitácora.
+        job_activo = (_SJ.query.filter_by(referencia_tipo='TareaPacking', referencia_id=tarea_id)
+                      .filter(_SJ.estado.in_(['PENDIENTE', 'PROCESANDO', 'REINTENTANDO']))
+                      .with_for_update().first())
+        retenido = None
+        if job_activo is not None:
+            retenido = PackingService._retencion_que_frena(tarea, job_activo)
+        if job_activo is not None and retenido is None:
             raise ValueError(
                 f'No se puede cancelar — hay un job Siesa {job_activo.estado} (id={job_activo.id}). '
                 'Espera a que termine o falle definitivamente antes de cancelar.'
             )
+        if retenido is not None:
+            from app.services import cartera_service as _cartera
+            from app.services.siesa_job_service import descartar_job_retenido
+            descartar_job_retenido(job_activo, usuario_id=usuario_id,
+                                   motivo=f'Caja cancelada: {motivo}')
+            _cartera.cancelar(retenido, f'La caja {tarea.codigo} se canceló: {motivo}',
+                              usuario_id=usuario_id, origen='WMS')
 
         # Si tiene bultos sin cargar, eliminarlos antes de cancelar — cada uno
         # deja su fila completa en la bitácora: es lo único que queda de él.
@@ -682,6 +698,21 @@ class PackingService:
         return tarea
 
     @staticmethod
+    def _retencion_que_frena(tarea, job):
+        """La retención de cartera viva que tiene al job esperando, o `None`.
+
+        Solo cuenta si el job está PENDIENTE (no ejecutándose) y la caja no
+        tiene documento en Siesa: la compuerta de emisión frena ANTES del
+        244328."""
+        from app.services.documento_fiscal import tiene_documento_en_siesa
+        if job is None or job.tipo != 'DESPACHO_F470' or job.estado != 'PENDIENTE':
+            return None
+        if tiene_documento_en_siesa(tarea) or not tarea.pedido_clave:
+            return None
+        from app.services import cartera_service as _cartera
+        return _cartera.retencion_viva(tarea.pedido_clave)
+
+    @staticmethod
     def resetear_siesa(tarea_id: int, usuario_id: int = None, motivo: str = None):
         """
         Elimina los bultos pendientes y vuelve el estado a VERIFICADO
@@ -694,11 +725,13 @@ class PackingService:
         """
         from app.models.bulto import Bulto
         from app.services.bitacora import registrar_accion, foto
+        from app.services.documento_fiscal import exigir_sin_documento
         tarea = TareaPacking.query.get(tarea_id)
         if not tarea:
             raise ValueError('Tarea no encontrada')
-        if tarea.siesa_triggered:
-            raise ValueError('Siesa ya procesó esta tarea')
+        # Resetear borra los bultos y vuelve a VERIFICADO para re-cerrar: con
+        # una remisión ya creada, el re-cierre sería la segunda.
+        exigir_sin_documento(tarea, 'resetear el envío a Siesa')
         if tarea.estado not in ['VERIFICADO', 'DESPACHADO']:
             raise ValueError('Solo se puede resetear una tarea VERIFICADA o con error Siesa')
 

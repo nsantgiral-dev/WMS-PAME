@@ -218,12 +218,12 @@ def clasificar_desaparecidas(gateway=None, maximo: int = MAX_CLASIFICAR_POR_CICL
                 estado = int(estado)
             except (TypeError, ValueError):
                 continue
-            motivo = {4: MotivoSalidaPedido.CUMPLIDO,
-                      9: MotivoSalidaPedido.ANULADO}.get(estado, MotivoSalidaPedido.OTRO_ESTADO)
-            if estado == 3:
-                # Sigue comprometido: el barrido lo reabrirá cuando lo vea.
-                # Se marca para no volver a preguntar en cada ciclo.
-                motivo = MotivoSalidaPedido.DESAPARECIDO
+            # La tabla única de estados (`estado_pedido_siesa`): el 9 es
+            # ANULADO acá, en el sync, en el cierre y en la reconciliación.
+            from app.services import estado_pedido_siesa as _eps
+            # `None` = sigue comprometido (3): el barrido lo reabrirá cuando
+            # lo vea. Se marca para no volver a preguntar en cada ciclo.
+            motivo = _eps.motivo_salida(estado) or MotivoSalidaPedido.DESAPARECIDO
             n = (PedidoHistoria.query
                  .filter(PedidoHistoria.tipo_docto == tipo,
                          PedidoHistoria.consec_docto == consec,

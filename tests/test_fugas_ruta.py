@@ -72,7 +72,12 @@ def _ruta(db, almacen, conductor=None, estado='EN_TRANSITO', vehiculo_id=None,
     tarea = TareaPacking(codigo=f'PK-FG-{sufijo}', estado='DESPACHADO',
                          almacen_id=almacen.id, tipo_docto_pedido_siesa='PD',
                          consec_docto_pedido_siesa=1, numero_pedido_siesa=f'PED-FG-{sufijo}',
-                         cliente=cliente, municipio=municipio, **tarea_kw)
+                         cliente=cliente, municipio=municipio,
+                         # Despachada de verdad (m048fiscal): sin RM + FE la
+                         # ruta no sale y el muelle no la ve.
+                         **{'siesa_triggered': True, 'rm_tipo': 'RM',
+                            'rm_consec': int(uuid.uuid4().int % 100000),
+                            'fe_confirmada_at': datetime.utcnow(), **tarea_kw})
     db.session.add(tarea); db.session.flush()
     for i in range(1, n_bultos + 1):
         db.session.add(Bulto(tarea_id=tarea.id, ruta_despacho_id=ruta.id,

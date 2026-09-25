@@ -255,10 +255,11 @@ def _run_sync(app):
                             pk.tipo_docto_pedido_siesa,
                             _consec
                         )
-                        # -1 = pedido no encontrado (eliminado de Siesa), 9 = Anulado
-                        # 1=En elaboración, 2=Aprobado, 3=Comprometido, 4=Cumplido: NO anular
-                        # None = error de red (no actuar para evitar falso positivo)
-                        if estado_real is not None and str(estado_real) not in ('1', '2', '3', '4'):
+                        # La lectura del número es la de `estado_pedido_siesa`
+                        # (una tabla para sync, cierre, historia y reconciliación).
+                        # None = error de red: no se actúa (falso positivo).
+                        from app.services import estado_pedido_siesa as _eps
+                        if _eps.dejo_de_estar_vivo(estado_real):
                             if not getattr(pk, 'pedido_anulado_siesa', False):
                                 pk.pedido_anulado_siesa = True
                                 pk.pedido_estado_siesa_detectado = str(estado_real)

@@ -107,7 +107,10 @@ def _ruta_con_parada(db, m, estado='EN_CARGUE', bulto_estado='CARGADO', cond='C0
                      tipo_docto_pedido_siesa='PD', consec_docto_pedido_siesa=1,
                      numero_pedido_siesa=f'PD-QA-{s}', cliente='Droguería QA',
                      municipio='Neiva', cond_pago=cond, valor_factura=90000,
-                     siesa_triggered=True, tipo_documento='PEDIDO')
+                     siesa_triggered=True, tipo_documento='PEDIDO',
+                     # RM + FE confirmadas: sin ellas la ruta no sale (m048fiscal).
+                     rm_tipo='RM', rm_consec=int(uuid.uuid4().int % 100000),
+                     fe_confirmada_at=datetime.utcnow())
     db.session.add(t)
     db.session.flush()
     for i in (1, 2):
