@@ -54,9 +54,12 @@ class TestElResumenCuentaAyerEnBogota:
         ayer = dia_operativo() - timedelta(days=1)
         inicio = inicio_del_dia_utc(ayer)                    # 00:00 Bogotá de ayer, en UTC
         _despacho(db, almacen, inicio + timedelta(hours=20, minutes=30), 1)   # 20:30 de ayer
-        _despacho(db, almacen, inicio - timedelta(hours=3, minutes=30), 2)    # 20:30 de antier
+        _despacho(db, almacen, inicio + timedelta(hours=3), 2)                # 03:00 de ayer
+        _despacho(db, almacen, inicio - timedelta(hours=7), 3)                # 17:00 de antier
         r = _correr(app)
-        assert r['pedidos'] == 1, r
+        # Con medianoches naive (UTC) la de las 20:30 de ayer (01:30 UTC de
+        # hoy) caía fuera: el resumen decía 1.
+        assert r['pedidos'] == 2, r
 
     def test_ya_no_es_nd(self, app, db):
         assert _correr(app)['pedidos'] == 0
