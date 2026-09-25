@@ -210,5 +210,12 @@ class TestLaColaPorLiquidarNoSeCortaPorDia:
         hoy = dia_operativo().isoformat()
         d = client.get(f'/api/rutas/liquidacion/dashboard?fecha_desde={hoy}&fecha_hasta={hoy}',
                        headers={'Authorization': f'Bearer {jwt_token_admin}'}).get_json()
-        ids = [r['id'] for r in d['rutas']]
-        assert pendiente in ids and liquidada not in ids
+        # Integración 2026-09-25: los frentes de pantallas y de dinero
+        # arreglaron lo mismo. Quedó el de dinero: la de otro día sale en
+        # `rutas_atrasadas` (política única `rezago_liquidacion`, con días de
+        # rezago y urgencia) y NO suma a los totales del rango que se miró.
+        atrasadas = [r['id'] for r in d['rutas_atrasadas']]
+        del_rango = [r['id'] for r in d['rutas']]
+        assert pendiente in atrasadas and pendiente not in del_rango
+        assert liquidada not in atrasadas and liquidada not in del_rango
+        assert d['resumen']['total_rutas'] == 0
