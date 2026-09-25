@@ -1161,7 +1161,11 @@ DEBEN_PREGUNTAR = {
     'app/services/packing_service.py::PackingService.crear_manual',
     'app/services/packing_service.py::PackingService.crear_desde_picking',
     'app/services/packing_service.py::PackingService.confirmar_packing',
-    'app/services/picking_service.py::PickingService._filtro_devolvible_al_estante',
+    # Inventario extrajo la condición «un empaque del pedido la explica» a un
+    # ayudante que comparten la lista de «devuelto al estante» y
+    # `reabrir_picking` (P0-7). La pregunta vive ahí: es SQL, no una llamada
+    # que el caller pueda saltarse.
+    'app/services/picking_service.py::PickingService._empaque_que_la_explica',
     'app/routes/siesa.py::iniciar_despacho',
 }
 
