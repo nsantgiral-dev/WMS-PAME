@@ -378,8 +378,8 @@ function anPortTarjeta(t, i) {
       <div style="font-size:var(--fs-sm);font-weight:700;color:var(--tx);">${esc(t.nombre)}</div>
       ${anPortPildora(nivel, sem.texto || 'Sin dato')}
     </div>
-    <div style="display:flex;justify-content:space-between;gap:8px;align-items:flex-end;">
-      <div style="font-size:var(--fs-2xl);font-weight:800;color:var(--tx);white-space:nowrap;line-height:1.1;min-width:0;">${valor}</div>
+    <div style="display:flex;flex-wrap:wrap;justify-content:space-between;gap:8px;align-items:flex-end;">
+      <div style="font-size:var(--fs-2xl);font-weight:800;color:var(--tx);white-space:nowrap;line-height:1.1;">${valor}</div>
       ${anPortSparkline(t)}
     </div>
     <div style="font-size:var(--fs-sm);color:${sinDato ? 'var(--tx3)' : 'var(--tx2)'};" title="${esc(anPortTecnico(t))}">${esc(anPortFrase(t))}</div>
@@ -497,9 +497,9 @@ function anPortAcciones(t, i) {
     const titulo = (a.numero ? `Pedido ${a.numero}` : (a.titulo || '')) + (a.cliente ? ' · ' + a.cliente : '');
     const sub = [a.fuente, a.estado, a.etapa, a.motivo, a.detalle, anPortCuanto(a)].filter(Boolean).join(' · ');
     return `<div style="display:flex;justify-content:space-between;gap:8px;align-items:center;padding:6px 0;border-bottom:1px solid var(--brd);">
-      <div style="min-width:0;overflow-wrap:anywhere;font-size:var(--fs-sm);"><div style="color:var(--tx);">${esc(titulo)}</div>
+      <div style="min-width:0;flex:1 1 140px;overflow-wrap:anywhere;font-size:var(--fs-sm);"><div style="color:var(--tx);">${esc(titulo)}</div>
         ${sub ? `<div style="font-size:var(--fs-xs);color:var(--tx3);">${esc(sub)}</div>` : ''}</div>
-      <div style="display:flex;gap:8px;align-items:center;flex:0 0 auto;"><span style="font-size:var(--fs-sm);color:var(--tx2);white-space:nowrap;">${esc(monto)}</span>${boton}</div></div>`;
+      <div style="display:flex;flex-wrap:wrap;justify-content:flex-end;gap:8px;align-items:center;flex:0 1 auto;"><span style="font-size:var(--fs-sm);color:var(--tx2);white-space:nowrap;">${esc(monto)}</span>${boton}</div></div>`;
   }).join('')).join('') + (total && total > lista.length ? `<div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:4px;">Se muestran ${esc(anNum(lista.length))} de ${esc(anNum(total))}: el resto está en 💸 Fugas.</div>` : '');
 }
 

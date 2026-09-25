@@ -678,7 +678,7 @@ ctx.__resp = (u) => {
 };
 vm.runInContext(fs.readFileSync(base + '/analitica.js', 'utf8'), ctx);
 vm.runInContext(fs.readFileSync(base + '/analitica_recorrido.js', 'utf8'), ctx);
-vm.runInContext('function anFugasCargar(el){el.innerHTML="fugas"} function anSaludCargar(el){el.innerHTML="salud"} function anBitacoraCargar(el){el.innerHTML="bitacora"}', ctx);
+vm.runInContext('function anFugasCargar(el){el.innerHTML="fugas"} function anSaludCargar(el){el.innerHTML="salud"} function anBitacoraCargar(el){el.innerHTML="bitacora"} function anPortadaCargar(el){el.innerHTML="portada"} function anDiagnosticoCargar(el){el.innerHTML="diagnostico"}', ctx);
 if (modo === 'esc-roto') vm.runInContext('esc = (x) => String(x);', ctx);
 (async () => {
   const html = {
@@ -697,13 +697,17 @@ if (modo === 'esc-roto') vm.runInContext('esc = (x) => String(x);', ctx);
     handlers, sinDefinir: handlers.filter(h => typeof ctx[h] !== 'function'),
     datoEnOnclick: /onclick="[^"]*\('[^"]*(<|&lt;)/.test(todo),
     shellTieneFiltros: ['an-f-almacen', 'an-f-desde', 'an-f-hasta'].every(i => shell.includes(i)),
-    subtabs: ['Recorrido', 'Fugas', 'Salud', 'Bitácora'].map(t => shell.indexOf(t)),
+    subtabs: ['¿Cómo vamos?', 'Recorrido', 'Fugas'].map(t => shell.indexOf(t)),
+    diagnosticoSinAdmin: shell.includes('Diagnóstico'),
+    abrio: vm.runInContext('_AN_SUBTAB', ctx),
     filtros: f,
     pesos: [vm.runInContext('anPesos', ctx)(null), vm.runInContext('anPesos', ctx)(1234567)],
     pct: [vm.runInContext('anPct', ctx)(0.5, 0), vm.runInContext('anPct', ctx)(0.82, 340)],
     frescura: vm.runInContext('anFrescura', ctx)(datos.recorrido.meta),
     sinValor: html.resumen.includes('sin valor'), sinEnlazar: html.resumen.includes('sin clave'),
-    textos: ['Ciclo de caja', 'sin fuga', 'Aprobado en Siesa', 'Liquidado'].map(t => html.resumen.indexOf(t)),
+    textos: ['Ciclo de caja', 'Llega a caja completo', 'Aprobado en Siesa', 'Liquidado'].map(t => html.resumen.indexOf(t)),
+    frase: html.resumen.includes('De cada $100 que cerraron'),
+    tecnicoEnTitle: /title="[^"]*p90[^"]*"/.test(html.resumen) && !/>[^<]*p90[^<]*</.test(html.resumen),
     fontMenor: /font-size:\s*(\d|1[01])px/.test(todo + shell),
   }));
 })().catch(e => { console.error(e && e.stack || e); process.exit(1); });
@@ -770,6 +774,9 @@ class TestLaPantalla:
         r = _render(datos_pantalla)
         assert r['shellTieneFiltros']
         assert all(p >= 0 for p in r['subtabs']) and r['subtabs'] == sorted(r['subtabs'])
+        # La portada abre por defecto; Diagnóstico es de admin (el arnés no lo es).
+        assert r['abrio'] == 'portada'
+        assert r['diagnosticoSinAdmin'] is False
         f = r['filtros']
         assert set(f) == {'almacen_id', 'desde', 'hasta'}
         assert len(f['desde']) == 10 and len(f['hasta']) == 10 and f['almacen_id'] == ''
@@ -785,6 +792,13 @@ class TestLaPantalla:
         assert r['sinValor'] and r['sinEnlazar']
         assert all(p >= 0 for p in r['textos']), r['textos']
         assert r['fontMenor'] is False
+
+    def test_frases_de_gerencia_y_lo_tecnico_en_el_title(self, datos_pantalla):
+        """«De cada $100 que cerraron, $27 llegaron completos», no «27 % de 6»;
+        el p90 y la n van en el `title`, no en el texto que se lee."""
+        r = _render(datos_pantalla)
+        assert r['frase'] is True
+        assert r['tecnicoEnTitle'] is True
 
 
 # ─────────────────────────────────────────────────────────────────────────────
