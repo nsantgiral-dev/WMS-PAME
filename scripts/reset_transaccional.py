@@ -109,6 +109,12 @@ OPERATIVAS = [
     'movimientos_inventario',
     'siesa_jobs',
     'pedidos_siesa',
+    # Espejo de las OCs de Siesa (m046compras). Se vacía: si el ensayo corrió
+    # contra Siesa QA, sus OCs mezcladas con las reales ensuciarían el lead
+    # time medido y el precio de compra. Se reconstruye solo: las abiertas con
+    # la primera sincronización, las cumplidas con el historial (365 días).
+    # Cuelga de `proveedores` (protegida): hijo antes que padre no aplica.
+    'oc_linea_siesa',
     'ubicaciones_huerfanas',
     'fugas_recompra',
     # ── Flota (agregado 2026-08-03) ────────────────────────────────────────

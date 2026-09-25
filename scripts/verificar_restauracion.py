@@ -66,7 +66,10 @@ REGENERABLES = ('pedidos_siesa', 'stock_siesa', 'siesa_jobs',
                 'movimientos_inventario', 'ubicaciones_huerfanas',
                 # Caché de la cartera por NIT (m044cartera): se relee de Siesa
                 # en la primera evaluación.
-                'cartera_cliente')
+                'cartera_cliente',
+                # Espejo de OCs (m046compras): abiertas con la próxima
+                # sincronización, cumplidas con el historial de 365 días.
+                'oc_linea_siesa')
 
 
 def _destino():
