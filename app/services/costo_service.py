@@ -12,6 +12,11 @@ fantasma", y la cobertura del comité no es 40% — es CERO.
 JERARQUÍA DE COSTO — de más a menos confiable, y el criterio es económico:
   1. ACUERDO_VIGENTE   precio pactado hoy con el proveedor
   2. COTIZACION        cotización reciente del proveedor
+  2b. OC_SIESA         precio de la OC más reciente en Siesa, COP por unidad
+                       base (`compras_fuentes.precios_oc`, m046compras). Es lo
+                       que se pactó en la última compra real: hacia adelante
+                       como la cotización pero sin acuerdo detrás; por eso va
+                       después de ella y antes del promedio del kardex
   3. KARDEX_PROMEDIO   costo promedio ponderado de las ENTRADAS POR COMPRA
                        (`kardex_service.CONCEPTOS_COMPRA`) — no de todos los
                        movimientos: saldos iniciales, traslados y ventas no
@@ -92,7 +97,8 @@ def precio_desde_margen(costo, margen_sobre_precio):
         )
     return costo / (1 - m)
 
-FUENTES = ('ACUERDO_VIGENTE', 'COTIZACION', 'KARDEX_PROMEDIO', 'MAESTRO', 'SIN_COSTO')
+FUENTES = ('ACUERDO_VIGENTE', 'COTIZACION', 'OC_SIESA', 'KARDEX_PROMEDIO', 'MAESTRO',
+           'SIN_COSTO')
 
 # ══════════════════════════════════════════════════════════════════════════
 # MONEDA — una TRM y un factor de nacionalización para todo el sistema (D4).
@@ -231,6 +237,22 @@ def _costos_cotizacion(refs, meses=6):
                            'conversion': conversion}
     for v in salida.values():
         v.pop('_fecha', None)
+    return salida
+
+
+def _costos_oc_siesa(refs):
+    """Precio de la OC más reciente de Siesa (COP, unidad base). La política
+    —qué OC, qué moneda, cómo se lleva a unidad base— vive en
+    `compras_fuentes.precios_oc`; acá solo se enchufa a la jerarquía."""
+    from datetime import date as _date
+    from app.services.compras_fuentes import precios_oc
+    hoy = _dia_operativo()
+    salida = precios_oc(refs)
+    for v in salida.values():
+        f = _date.fromisoformat(v['fecha_costo']) if v.get('fecha_costo') else None
+        v['dias_antiguedad'] = (hoy - f).days if f else None
+        # Una OC de hace un año tampoco es costo de reposición: se declara.
+        v['anejo'] = v['dias_antiguedad'] is not None and v['dias_antiguedad'] > DIAS_COSTO_ANEJO
     return salida
 
 
@@ -411,7 +433,7 @@ def resolver_costos(refs, margen_supuesto=MARGEN_SOBRE_PRECIO_DEFAULT):
 
     # Se consultan todas y se elige por jerarquía: una fuente mejor siempre gana
     capas = [_costos_acuerdo_vigente(refs), _costos_cotizacion(refs),
-             _costos_kardex(refs)]
+             _costos_oc_siesa(refs), _costos_kardex(refs)]
 
     realizados_base = _precios_realizados_con_base(refs)
     realizados = {r: d['precio'] for r, d in realizados_base.items()}

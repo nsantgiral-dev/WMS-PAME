@@ -71,11 +71,16 @@ def tipos_contenedor():
     ]
 FACTOR_UTILIZACION = 0.90  # objetivo de armado: 90% del CBM útil
 
-# Lead times conservadores (se actualizan con datos reales)
-LT_NACIONAL_DIAS = 5
-SIGMA_LT_NACIONAL = 2
-LT_CHINA_DIAS = 105
-SIGMA_LT_CHINA = 15  # conservador — se actualiza con ≥6 contenedores
+# Lead times: los defaults DECLARADOS (y sus variables de entorno
+# `ROP_LT_NACIONAL_DIAS` / `ROP_SIGMA_LT_NACIONAL`) viven en `compras_fuentes`,
+# y quien decide el lead time de un SKU es `compras_fuentes.lead_time`
+# (proveedor → origen → default, con la regla D9). Se re-exportan acá solo por
+# compatibilidad de import; ningún cálculo de este módulo los lee (trinquete:
+# tests/test_compras_fuentes_trinquetes.py).
+from app.services.compras_fuentes import (  # noqa: E402,F401
+    LT_NACIONAL_DIAS, SIGMA_LT_NACIONAL, LT_CHINA_DIAS, SIGMA_LT_CHINA,
+    ESTADOS_EN_CAMINO,
+)
 
 # Periodo de revisión. China se revisa por trimestre (un contenedor cada ~90d),
 # así que la exposición al riesgo es LT + R, no solo LT. Nacional se revisa de
@@ -94,12 +99,6 @@ ESTIMADOR_SIGMA_D = 'SIGMA_EMPIRICA_DESCENSURADA'
 # debajo de lo que la política (R, S) necesita para cubrir su exposición, y el
 # nivel de servicio implícito caía del 95% al 16,7% (D3).
 MAX_COBERTURA_RELLENO_DIAS = 180
-
-# Estados en los que la mercancía YA ESTÁ PEDIDA y todavía no llegó. Incluye
-# EN_PRODUCCION: un contenedor en fábrica es plata comprometida, y no contarlo
-# pediría dos veces lo mismo (el caso que `ItemEnTransito` existe para evitar).
-ESTADOS_EN_CAMINO = ('EN_PRODUCCION', 'NAVEGANDO', 'EN_PUERTO',
-                     'NACIONALIZACION', 'EN_RUTA_CEDI')
 
 #: Cómo se lee `FichaImportacion.moq_cajas` (D13). La ficha no dice si el MOQ
 #: es un MÍNIMO por pedido o un LOTE (múltiplo), y leerlo como múltiplo
@@ -121,132 +120,6 @@ def cajas_a_pedir(deficit_unidades, unidades_por_caja, moq_cajas):
 MARCAS_CHINA = {'M003', 'M009', 'M175'}
 
 
-def _numero_env(nombre, defecto):
-    try:
-        return float(os.environ[nombre]), 'CONFIGURADO'
-    except (KeyError, TypeError, ValueError):
-        return float(defecto), 'DEFAULT_DECLARADO'
-
-
-def _lead_time_de_proveedor(proveedor):
-    """ENCHUFE: el lead time MEDIDO de un proveedor, o `None` si no se sabe.
-
-    Hoy no hay fuente: el WMS no guarda la fecha de la OC contra la de la
-    recepción por proveedor. Quien la tenga (OCs de Siesa con su fecha de
-    emisión + `RecepcionMercancia.fecha_confirmacion`) la conecta ACÁ y
-    devuelve `{'lt_dias', 'sigma_lt', 'n', 'fuente': 'MEDIDO_PROVEEDOR'}`.
-    Ningún otro sitio del sistema decide un lead time: ver `lead_time()`.
-    """
-    return None
-
-
-def lead_time(origen='NACIONAL', proveedor=None):
-    """EL lead time de reposición. Una política, una función (D14).
-
-    Orden: lo medido del proveedor (`_lead_time_de_proveedor`) > para CHINA,
-    los contenedores con fechas completas (`calcular_sigma_lt_real`, con su
-    piso conservador) > el default configurado por origen.
-
-    Nacional: `ROP_LT_NACIONAL_DIAS` (5) y `ROP_SIGMA_LT_NACIONAL` (2). Son un
-    SUPUESTO y se declaran así (`fuente='DEFAULT_DECLARADO'`): nadie midió
-    todavía cuánto tarda un proveedor nacional.
-
-    Returns: {lt_dias, sigma_lt, fuente, n, nota}
-    """
-    medido = _lead_time_de_proveedor(proveedor) if proveedor else None
-    if medido:
-        return medido
-    if (origen or '').upper() == 'CHINA':
-        info = ArmadorService.calcular_sigma_lt_real()
-        return {'lt_dias': info['lt_medio'], 'sigma_lt': info['sigma_lt'],
-                'fuente': info['fuente'], 'n': info['n'],
-                'nota': info.get('nota')}
-    lt, f1 = _numero_env('ROP_LT_NACIONAL_DIAS', LT_NACIONAL_DIAS)
-    slt, f2 = _numero_env('ROP_SIGMA_LT_NACIONAL', SIGMA_LT_NACIONAL)
-    fuente = 'CONFIGURADO' if 'CONFIGURADO' in (f1, f2) else 'DEFAULT_DECLARADO'
-    return {
-        'lt_dias': lt, 'sigma_lt': slt, 'fuente': fuente, 'n': 0,
-        'nota': (None if fuente == 'CONFIGURADO' else
-                 f'Lead time nacional SUPUESTO ({lt:g} d ± {slt:g}): nadie lo midió. '
-                 f'Configurable con ROP_LT_NACIONAL_DIAS / ROP_SIGMA_LT_NACIONAL, '
-                 f'y por proveedor cuando haya fuente.'),
-    }
-
-
-def _en_camino_importacion():
-    """Unidades pedidas a China que no han llegado: `ItemEnTransito`.
-
-    Cuenta un ítem si su CONTENEDOR está en un estado de `ESTADOS_EN_CAMINO`
-    (incluido EN_PRODUCCION), o —si no tiene contenedor— si el ítem mismo lo
-    está. Un contenedor BORRADOR no está pedido; uno RECIBIDO ya llegó.
-    """
-    from sqlalchemy import func, or_, and_
-    from app.models.importacion import ItemEnTransito, Contenedor
-    from app.models.producto import Producto
-
-    filas = (
-        db.session.query(Producto.codigo_siesa, func.sum(ItemEnTransito.cantidad),
-                         func.count(ItemEnTransito.id))
-        .join(Producto, ItemEnTransito.producto_id == Producto.id)
-        .outerjoin(Contenedor, ItemEnTransito.contenedor_id == Contenedor.id)
-        .filter(ItemEnTransito.estado != 'RECIBIDO')
-        .filter(or_(
-            Contenedor.estado.in_(ESTADOS_EN_CAMINO),
-            and_(ItemEnTransito.contenedor_id.is_(None),
-                 ItemEnTransito.estado.in_(ESTADOS_EN_CAMINO)),
-        ))
-        .group_by(Producto.codigo_siesa)
-        .all()
-    )
-    return {(r or '').strip(): float(q or 0) for r, q, _n in filas if r}
-
-
-#: Las fuentes de «lo que ya viene». Una función por fuente, que devuelve
-#: {referencia: unidades}. Las OCs abiertas de Siesa entran acá como una fuente
-#: más (`('OC_SIESA', _en_camino_oc_siesa)`) y nadie más tiene que cambiar.
-FUENTES_EN_CAMINO = (('IMPORTACION', _en_camino_importacion),)
-
-
-def en_camino(refs=None):
-    """LO QUE YA VIENE, por referencia. Una política, una función.
-
-    Suma todas las `FUENTES_EN_CAMINO`. Una fuente que revienta NO suma cero
-    en silencio: se declara en `fuentes_con_error` y `completo` queda False —
-    «viene 0» y «no sé qué viene» empujan la compra al mismo lado, y solo el
-    segundo es cierto.
-
-    Returns: {'por_ref': {ref: unidades}, 'fuentes': {nombre: {refs, unidades}},
-              'fuentes_con_error': [...], 'completo': bool, 'nota'}
-    """
-    por_ref = defaultdict(float)
-    fuentes, errores = {}, []
-    for nombre, fn in FUENTES_EN_CAMINO:
-        try:
-            datos = fn() or {}
-        except Exception as e:     # noqa: BLE001 — se declara, no se calla
-            logger.error('[ARMADOR] fuente en camino %s falló: %s', nombre, e)
-            errores.append({'fuente': nombre, 'error': str(e)})
-            continue
-        fuentes[nombre] = {'refs': len(datos),
-                           'unidades': round(sum(datos.values()), 2)}
-        for r, q in datos.items():
-            if refs is None or r in refs:
-                por_ref[r] += q
-    hay_dato = any(f['refs'] for f in fuentes.values())
-    return {
-        'por_ref': dict(por_ref),
-        'fuentes': fuentes,
-        'fuentes_con_error': errores,
-        'completo': not errores,
-        'hay_dato': hay_dato,
-        'nota': (None if hay_dato else
-                 'Ninguna fuente de «en camino» tiene datos: `ItemEnTransito` no '
-                 'tiene escritor y las OCs abiertas de Siesa todavía no se leen. '
-                 'El término en tránsito de la posición vale 0 porque NO SE SABE, '
-                 'no porque no venga nada.'),
-    }
-
-
 def posicion_inventario(refs=None):
     """¿Cuánto hay y cuánto viene?, por referencia. La del Armador y la del
     pedido de temporada: una función (D2).
@@ -258,11 +131,16 @@ def posicion_inventario(refs=None):
     Con signo, sin `max(0, ...)`: más comprometido que stock es mercancía
     vendida que todavía se debe (ver el comentario de `rop_dual`).
 
+    «Lo que viene» es `compras_fuentes.en_camino` —la ÚNICA función que lo
+    calcula: OCs abiertas de Siesa + contenedores sin recibir, sin contar dos
+    veces lo mismo—; acá solo se suma.
+
     Returns: ({ref: {existencia, comprometido, salida_sin_conf, disponible,
-                     en_camino, posicion, frescura}}, info_en_camino)
+                     en_camino, posicion, frescura}}, declaracion_en_camino)
     """
     from sqlalchemy import func
     from app.models.stock_siesa import StockSiesa
+    from app.services.compras_fuentes import en_camino
     from app.services.inventario_siesa_service import _BODEGAS_PV
 
     q = (db.session.query(
@@ -277,7 +155,7 @@ def posicion_inventario(refs=None):
         q = q.filter(StockSiesa.codigo_siesa.in_(list(refs)))
     filas = q.group_by(StockSiesa.codigo_siesa).all()
 
-    camino = en_camino(set(refs) if refs is not None else None)
+    camino = en_camino(skus=set(refs) if refs is not None else None)
     salida = {}
     for ref, ex, comp, sal, fres in filas:
         r = (ref or '').strip()
@@ -295,14 +173,14 @@ def posicion_inventario(refs=None):
         d['disponible'] += ex - comp - sal
         if fres is not None and (d['frescura'] is None or fres < d['frescura']):
             d['frescura'] = fres
-    for r, qv in camino['por_ref'].items():
+    for r, qv in camino['por_sku'].items():
         salida.setdefault(r, {'existencia': 0.0, 'comprometido': 0.0,
                               'salida_sin_conf': 0.0, 'disponible': 0.0,
                               'frescura': None, 'en_camino': 0.0})
         salida[r]['en_camino'] = qv
     for d in salida.values():
         d['posicion'] = d['disponible'] + d['en_camino']
-    return salida, camino
+    return salida, camino['declaracion']
 
 
 class ArmadorService:
@@ -310,56 +188,14 @@ class ArmadorService:
     @staticmethod
     def calcular_sigma_lt_real() -> dict:
         """
-        Calcula σ_LT real de contenedores con fechas completas.
-
-        Con < 3: el default conservador. Con 3 a 5: **el mayor** entre lo medido
-        y el default, para la media y para la σ (D9) — antes tres contenedores
-        de 118/120/122 días reemplazaban σ=15 por σ=2 y el colchón de
-        Buenaventura caía a la séptima parte con una muestra que no alcanza ni
-        para estimar una varianza. Desde 6, lo medido manda.
+        Lead time de China: delega en `compras_fuentes.lead_time(origen='CHINA')`,
+        la única función que decide un lead time. Mide sobre los contenedores
+        con fechas completas: con < 3, el default conservador; con 3 a 5, **el
+        mayor** entre lo medido y el conservador, para la media y para la σ
+        (D9); desde 6, lo medido manda.
         """
-        from app.models.importacion import Contenedor
-        import statistics
-
-        contenedores = Contenedor.query.filter(
-            Contenedor.fecha_oc.isnot(None),
-            Contenedor.fecha_recepcion_cedi.isnot(None),
-        ).all()
-
-        lead_times = [c.lead_time_real for c in contenedores if c.lead_time_real]
-
-        if len(lead_times) < 3:
-            return {
-                'n': len(lead_times),
-                'lt_medio': LT_CHINA_DIAS,
-                'sigma_lt': SIGMA_LT_CHINA,
-                'fuente': 'DEFAULT_CONSERVADOR',
-                'nota': f'Solo {len(lead_times)} contenedores con fechas completas — usando defaults',
-            }
-
-        lt_medido = statistics.mean(lead_times)
-        sigma_medida = statistics.stdev(lead_times) if len(lead_times) > 1 else SIGMA_LT_CHINA
-        if len(lead_times) >= 6:
-            fuente, lt_medio, sigma_lt = 'MEDIDO', lt_medido, sigma_medida
-            nota = None
-        else:
-            fuente = 'PARCIAL'
-            lt_medio = max(lt_medido, LT_CHINA_DIAS)
-            sigma_lt = max(sigma_medida, SIGMA_LT_CHINA)
-            nota = (f'{len(lead_times)} contenedores: se usa el MAYOR entre lo medido '
-                    f'(LT {lt_medido:.1f}, σ {sigma_medida:.1f}) y el conservador '
-                    f'(LT {LT_CHINA_DIAS}, σ {SIGMA_LT_CHINA}) hasta tener 6.')
-
-        return {
-            'n': len(lead_times),
-            'lt_medio': round(lt_medio, 1),
-            'sigma_lt': round(sigma_lt, 1),
-            'lt_medido': round(lt_medido, 1),
-            'sigma_lt_medida': round(sigma_medida, 1),
-            'lead_times': lead_times,
-            'fuente': fuente,
-            'nota': nota,
-        }
+        from app.services.compras_fuentes import lead_time
+        return lead_time(origen='CHINA')
 
     @staticmethod
     def rop_dual(nivel_servicio: float = 0.95) -> dict:
@@ -400,13 +236,26 @@ class ArmadorService:
         from app.services.kardex_service import _norm_ppf
         z = _norm_ppf(nivel_servicio)
 
-        # Lead times: UNA función (`lead_time`), por origen. China sale de los
-        # contenedores medidos con su piso conservador; nacional es un supuesto
-        # configurable y DECLARADO.
-        lt_chi = lead_time('CHINA')
-        lt_nac = lead_time('NACIONAL')
+        # Lead times: UNA función decide (`compras_fuentes.lead_time`:
+        # proveedor → origen → default, con la regla D9). Las observaciones se
+        # leen una vez y se reusan por SKU; el de cada SKU es el de su
+        # proveedor habitual (el de su OC más reciente).
+        from app.services import compras_fuentes
+        _obs_lt = compras_fuentes.observaciones_lead_time()
+        lt_chi = compras_fuentes.lead_time(origen='CHINA', observaciones=_obs_lt)
+        lt_nac = compras_fuentes.lead_time(origen='NACIONAL', observaciones=_obs_lt)
         lt_china, sigma_lt_china = lt_chi['lt_dias'], lt_chi['sigma_lt']
         lt_nacional, sigma_lt_nacional = lt_nac['lt_dias'], lt_nac['sigma_lt']
+        _proveedor_de = compras_fuentes.proveedor_habitual()
+        _lt_cache = {}
+
+        def _lt_de(ref, es_china):
+            clave = (_proveedor_de.get(ref), es_china)
+            if clave not in _lt_cache:
+                _lt_cache[clave] = compras_fuentes.lead_time(
+                    proveedor=clave[0], origen='CHINA' if es_china else 'NACIONAL',
+                    observaciones=_obs_lt)
+            return _lt_cache[clave]
 
         # CABLE M0.2 → M0.4. La demanda entra DESCENSURADA: d_avg sobre días con
         # stock, no sobre días calendario. Antes se dividía por 365 con los días
@@ -510,8 +359,9 @@ class ArmadorService:
             # camino tiene posición 0 (se declara en `frescura_stock: None`).
             posicion = float((posiciones.get(ref) or {}).get('posicion', 0.0))
 
-            lt = lt_china if es_china else lt_nacional
-            sigma_lt = sigma_lt_china if es_china else sigma_lt_nacional
+            _lt_info = _lt_de(ref, es_china)
+            lt = _lt_info['lt_dias']
+            sigma_lt = _lt_info['sigma_lt']
             r = R_CHINA_DIAS if es_china else R_NACIONAL_DIAS
 
             s_ltd = sigma_ltd(lt, sigma_d, d_avg, sigma_lt, r_dias=0)
@@ -565,6 +415,12 @@ class ArmadorService:
                 'en_transito': round(qty_transito),
                 'lt_dias': lt,
                 'sigma_lt': sigma_lt,
+                # Procedencia del lead time: de qué nivel salió y con cuántas
+                # observaciones (`compras_fuentes.lead_time`).
+                'lt_fuente': _lt_info['fuente'],
+                'lt_nivel': _lt_info['nivel'],
+                'lt_n': _lt_info['n'],
+                'lt_proveedor': _lt_info.get('proveedor'),
                 # Procedencia: el comprador tiene que poder auditar el número
                 'dias_con_stock': dem['dias_con_stock'],
                 'factor_censura': dem['factor_censura'],
@@ -638,9 +494,10 @@ class ArmadorService:
             'nivel_servicio': nivel_servicio,
             'z_score': round(z, 3),
             'insumo_origen': _insumo,
-            # EL TÉRMINO EN TRÁNSITO, declarado. Sin fuente con dato vale 0 y
-            # eso se dice: «viene 0» y «no sé qué viene» empujan la compra al
-            # mismo lado, y solo el segundo es cierto hoy.
+            # EL TÉRMINO EN TRÁNSITO, declarado (`compras_fuentes.en_camino`):
+            # fuentes, frescura del espejo de OCs, líneas sin unidad base,
+            # solapamientos. Sin fuente con dato vale 0 y eso se dice: «viene
+            # 0» y «no sé qué viene» empujan la compra al mismo lado.
             'insumo_en_camino': info_en_camino,
             'lead_time': {'nacional': lt_nac, 'china': lt_chi},
             # Procedencia del cálculo — sin esto el número no es auditable
@@ -671,6 +528,7 @@ class ArmadorService:
                 'lt_dias': lt_nacional,
                 'sigma_lt': sigma_lt_nacional,
                 'lt_fuente': lt_nac['fuente'],
+                'lt_n': lt_nac['n'],
                 'total': len(resultados_nac),
                 'bajo_rop': sum(1 for r in resultados_nac if r.get('bajo_rop')),
                 'items': resultados_nac,

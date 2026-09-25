@@ -86,6 +86,7 @@ function _tempCoberturaCosto(c) {
     <strong>Origen del costo:</strong>
     acuerdo vigente ${esc(f.ACUERDO_VIGENTE || 0)} ·
     cotización ${esc(f.COTIZACION || 0)} ·
+    última OC ${esc(f.OC_SIESA || 0)} ·
     promedio kardex ${esc(f.KARDEX_PROMEDIO || 0)} ·
     maestro ${esc(f.MAESTRO || 0)} ·
     sin costo ${esc(f.SIN_COSTO || 0)}<br>
@@ -102,6 +103,7 @@ function _tempFuenteCosto(f) {
   const etiquetas = {
     ACUERDO_VIGENTE: ['acuerdo', 'var(--green)'],
     COTIZACION: ['cotización', 'var(--green)'],
+    OC_SIESA: ['última OC', 'var(--green)'],
     KARDEX_PROMEDIO: ['kardex', 'var(--yellow)'],
     MAESTRO: ['maestro', 'var(--tx3)'],
   };
