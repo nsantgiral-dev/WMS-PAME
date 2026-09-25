@@ -227,7 +227,8 @@ def _puede_autorizar_cartera():
         uid = int(get_jwt_identity())
     except (TypeError, ValueError):
         return None
-    u = Usuario.query.get(uid)
+    from app.extensions import db
+    u = db.session.get(Usuario, uid)
     if not u or not u.activo:
         return None
     if u.rol in (Roles.CONDUCTOR, Roles.TIENDA):
@@ -242,7 +243,8 @@ def _ve_cartera():
         uid = int(get_jwt_identity())
     except (TypeError, ValueError):
         return None
-    u = Usuario.query.get(uid)
+    from app.extensions import db
+    u = db.session.get(Usuario, uid)
     if not u or not u.activo:
         return None
     if u.rol in Roles.GESTION:

@@ -5208,6 +5208,13 @@ tablas (`retenciones_cartera`, `cartera_cliente`, `cartera_habilitaciones`,
   excepción sin tope, lote sin corte, NO_APLICA no re-evaluado, contado
   evaluado).
 
+Suite completa (2026-09-24, este worktree, `-m "not postgres"`, TZ=UTC, con la
+máquina saturada): **8160 passed, 1 failed** (`test_deuda_legacy`: las dos
+funciones de permiso nuevas usaban `Usuario.query.get`; pasadas a
+`db.session.get` y re-corridos los tests afectados, verdes), 5 skipped, 19
+xfailed. Los `@postgres` de cartera y de esquema, verdes contra un PostgreSQL 17
+desechable; `m044cartera` upgrade → downgrade → upgrade en el mismo.
+
 ### Medido en QA (solo GET, 2026-09-24)
 
 Filtros verificados en vivo: `API_v2_Clientes` por `f200_id` (0,5 s),
