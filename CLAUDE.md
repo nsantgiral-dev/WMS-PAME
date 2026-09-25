@@ -6355,7 +6355,7 @@ escribe. Lo que queda es de infraestructura, y `GET /flota/health` →
 
 ---
 
-## Integración de los frentes del 2026-09-25 (fiscal, inventario, dinero)
+## Integración de los frentes del 2026-09-25 (fiscal, inventario, dinero, pantallas)
 
 Tres frentes arreglaron en paralelo y dos inventaron la misma idea con otro
 nombre. Una política, una función (Regla 0): esto es lo que quedó.
@@ -6413,4 +6413,16 @@ en una sola constante. Trinquete: `test_ventana_siesa.py::TestLaVentanaEsUnaPara
 - **Locks**: fiscal 2030–2034, inventario 2040–2041; dinero no registró.
 - `/despacho_parcial/<id>/despachar` pregunta primero si Siesa está disponible
   para facturar (fiscal, 503) y después toma el lock de la DLQ (dinero, 409).
+- **Permisos**, también: `Roles.PERSONAL_ALMACEN` (pantallas, lista blanca de
+  quién opera almacén) no se cruza con los de liquidación ni con cartera.
+
+### Lo que dos frentes arreglaron a la vez (quedó una implementación)
+
+| Qué | Quedó | Salió |
+|---|---|---|
+| Cola del conductor: el cierre no sale antes que sus paradas | La de pantallas (`_condEnviarUno`: hecho · rechazado · sin red · reintentar; rechazos anotados) + el aviso de `paradas_sin_gestionar` de dinero | La cola de dinero en `rutas.js`. Su test (`test_parada_tardia`) se reescribió para las dos salidas: 4xx = rechazo anotado, 5xx = se queda |
+| Reenvío idéntico de una parada no es EDITAR | La de dinero (`_VOLATILES_PARADA`, restituye todo lo volátil; listas sin orden) | `_CAMPOS_DEL_ENVIO` de pantallas (el commit bbc31858 quedó vacío y se saltó) |
+| «Por liquidar» de otros días | `rutas_atrasadas` de dinero (política `rezago_liquidacion`, no suma a los totales del rango) | El predicado extra en la consulta del rango (pantallas); su test exige ahora `rutas_atrasadas` |
+| «Siesa no está disponible» en el cierre de caja | Un texto: `documento_fiscal.MENSAJE_SIESA_NO_DISPONIBLE`. Las dos negativas (compuerta fiscal y precheck) llevan `estado=SIESA_NO_DISPONIBLE` → 503, la cola offline reintenta | El texto propio de pantallas |
+| Facturar RM manual | Modal propio (pantallas) + motivo y documento repetido (dinero) | — |
 
