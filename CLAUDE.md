@@ -4510,3 +4510,153 @@ Suite completa (2026-09-24, este worktree, `-m "not postgres"`, TZ=UTC):
    (`CONNEKTA_CONSULTA_COND_PAGO`) para no depender de la copia del PDF.
 4. Paradas viejas bloqueadas por `credito_no_autorizado`: ¿autorizarlas en lote
    con una razón común, o una por una?
+
+## Flota: las costuras del rediseño (2026-09-24)
+
+El rediseño de Flota lo hicieron cinco frentes en paralelo (bandeja, conductor,
+permisos, jornada, fugas). Cada pieza quedó bien; **las uniones no**: tres
+pantallas contestaban la misma pregunta con tres políticas, dos detectores de
+«km que nadie explica» usaban criterios distintos, y la pantalla le prometía
+al encargado botones y pestañas que no existían.
+
+### P0 · «¿Puede salir este camión?» — UNA política
+
+`flota/dominio/salida.py` (puro) decide el nivel y escribe el texto;
+`flota/adaptadores/salida.py` traduce filas a hechos con **una función por
+hecho**, la misma para la bandeja (que lee en bloque) y para
+`evaluar_vehiculo` (uno: el despacho y el conductor).
+
+| Pantalla | Antes | Ahora |
+|---|---|---|
+| Semáforo de la bandeja | `senales.semaforo`; no sabía de la OT abierta | `Evaluacion.semaforo()` |
+| Advertencias al despachar (`senales_ruta.advertencias_de_flota`) | lista propia; **no sumaba el daño bloqueante ni el preventivo vencido** | `Evaluacion.para_despachar()` (los motivos que `frena`) |
+| Aviso del conductor (`mi-turno` → `flotaCondAvisos`) | decidía el color **en el teléfono** y lo llamaba «amarillo» | el servidor manda `estado_vehiculo.salida = {color, motivos}`; el JS pinta |
+
+- **Un vocabulario**: `rojo` (no debería salir / actuar hoy) · `ambar` (con
+  plazo **o no se sabe**) · `verde` («sin pendientes conocidos»).
+- **Un texto por hecho**: «SOAT vencido desde 19/09/2026 (hace 5 días)» en las
+  tres pantallas, en Pendientes y (con la misma forma) en Documentos.
+- Cada motivo lleva `ambito` (`salida` lo ve el conductor · `turno` el despacho
+  y el encargado · `gestion` solo el encargado) y `frena` (el despacho pide
+  motivo escrito, FORZAR). **Informa, no bloquea.**
+- Las claves del despacho se conservan (`soat_vencido`, `en_taller`,
+  `custodio_distinto`…): los FORZAR viejos las siguen reconociendo. Nuevas:
+  `dano_bloqueante`, `dano_vencido`, `preventivo_vencido`,
+  `inspeccion_incompleta` (antes caía en `inspeccion_no_apta`).
+- La bandeja **no** compara el turno con la ruta en el semáforo (eso es la
+  señal `turno_de_la_ruta`, que otro frente está corrigiendo); el despacho sí.
+- Papeles sin cargar se agrupan en UN renglón («Sin cargar, no se sabe si
+  están al día: SOAT, revisión técnico-mecánica»).
+- **Trinquete** `tests/flota/test_una_politica_de_salida.py`: por AST, ningún
+  `'rojo'/'ambar'/'amarillo'/'verde'` ni `ROJO/AMBAR/VERDE` en `flota/` ni en
+  `app/` fuera de `salida.py` (inventario vacío, solo encoge; meta-tests de lo
+  que ve y lo que no; piso: la política misma da ≥ 10 positivos y se escanean
+  ≥ 200 archivos). En el JS de flota, texto acotado sin comentarios: ningún
+  nivel nace en el teléfono (tupla `['rojo', …]`, ternario, `nivel = 'rojo'`) y
+  «amarillo» no existe. Y la costura entera: **un mundo, tres pantallas, los
+  mismos motivos con las mismas palabras** (`TestTresPantallasUnaRespuesta`).
+
+### P0 · Km entre turnos (jornada) con el criterio de la bandeja
+
+`senales.km_sin_explicar(km, marca, tolerancia)` es el núcleo de «km que nadie
+explica» para las dos preguntas: la bandeja (`km_sin_ruta`) y la jornada
+(`km_entre_turnos`). La jornada restaba `km_inicio − km_fin` **sin mirar si se
+les podía creer**: ahora busca la lectura que escribió cada traspaso y juzga el
+tramo con `confianza_del_tramo`; en duda (o sin lectura) va a
+`senales_no_evaluables` del día con el mismo motivo que la bandeja
+(`MOTIVO_TRAMO_EN_DUDA`). **Ni el título ni el texto nombran personas**: los
+turnos van en la evidencia, como contexto.
+
+### P0 · Textos que prometían lo que no existe
+
+«Rutas → Vehículos» (6 sitios de Analítica) → `flotaDondeSeDaDeAlta()`; «el
+barrido también avisa por WhatsApp», «el botón Daños», «desde Inspección de
+hoy» vivían en `flotaBloqueSalud`, que se retiró (abajo). Trinquete:
+`test_costuras_flota.py::TestNingunTextoPrometeLoQueNoExiste`.
+
+### P1
+
+| | Qué | Dónde |
+|---|---|---|
+| 4 | Pendientes: **un renglón de papeles por vehículo** (con `lineas`), **km en duda agrupados por placa** («2 lecturas de kilometraje en duda», la última y su motivo) | `bandeja._pendientes` |
+| 5 | Señales: evidencia con etiqueta y formato (hora de Bogotá, fecha, pesos, 2 decimales, miles); **una clave sin etiqueta no se pinta** (adiós `forma: turno_de_otro`, `1.500E+4`); «Lo que no se pudo revisar» agrupado por (señal, motivo) con sus placas. **Galones usa el criterio de confianza de Pendientes**: una ventana con un km en duda no es evidencia (`tanqueos_de` publica `lectura_id`) | `FLOTA_EVIDENCIA`, `flotaBandejaNoEvaluables`, `_senales_combustible` |
+| 6 | **Despachos que salieron reconociendo advertencias** (el FORZAR del muelle) → Pendientes «Salidas con advertencias», con quién autorizó y por qué. Una función los lee: `senales_ruta.despachos_forzados()` — distingue el FORZAR de despacho (trae `advertencias_flota`) del cierre forzado de ruta | `senales_ruta.py`, `bandeja.py` |
+| 7 | Tanqueo «Cambió»: pide **foto del tablero**; la lectura nace con `foto_id` (foto colgada de `entidad_tipo='odometro'`) y no «en duda». Con el km de siempre se reutiliza la lectura. Sin foto se pregunta y se registra igual (en duda) | `anclar_odometro(foto_tablero=)`, `POST /flota/tanqueos` `foto_tablero`, `flotaTanqueoFotoTablero` |
+| 8 | Diagnóstico técnico fuera de Hoy, **plegado al final de Analítica** con el mismo health: todos los números del health en palabras y agrupados + calidad del km + lo que la ficha no dice + avisos a pedido. **Se retiró `flotaBloqueSalud`** (41 renglones) y de Analítica los paneles que repetían la bandeja (Recorrido de la semana, Inspección, Papeles, Custodia). Orden: procedencia → CPK → pesos por mes → rendimiento → taller → llantas → preventivo → ritmo → días de daño abierto → diagnóstico | `flota_analitica.js`, `flota_bandeja.js` |
+
+### P2 · Un vocabulario
+
+- **Un formateador de pesos**: `fmtPesos` en `util.js` (se fueron `flotaPesos`
+  y `fjPesos`); `null` es «sin dato», nunca «$0».
+- `flotaOpciones(grupo, lista)` en los formularios de gestión (ficha, gastos,
+  taller, llantas, Documentos): el código en el `value`, la palabra a la vista;
+  `sin_dato` es «No se sabe» en todos. Trinquete: ninguna
+  `<option value="${x}">${x}</option>`.
+- Documentos: «vencido desde dd/mm/aaaa (hace N días)», «Sin cargar» (y no
+  «Sin verificar») ≠ «nadie lo pudo mostrar». Daño, no «hallazgo», en lo visible
+  que se tocó; panel «Días de daño abierto».
+- Jornada: los motivos de rechazo **los sirve el servidor**
+  (`motivos_rechazo` en la respuesta, del catálogo único); «1 no
+  reconstruible»; «Lo que esta vista no puede ver» **una vez** (al pie de la
+  lista de conductores) y sin jerga (sin `entregar_ruta`, «Fase 1»,
+  «manifiesto»); voseo («preguntale»).
+- Plurales «(s)» en `flota*.js`: tope 54, solo encoge.
+- **Ficha completa exige la capacidad del tanque** (`salida` y la bandeja):
+  sin ella el texto dice qué detector queda ciego.
+- `GET /flota/conductor/mis-reportes` → **`/mis-turnos`** (devolvía turnos y el
+  botón dice «Mis turnos»).
+
+### Tests y mutaciones
+
+`tests/flota/test_una_politica_de_salida.py` (política, tres pantallas contra un
+mundo, trinquete AST + JS con meta-tests y pisos) ·
+`tests/flota/test_costuras_flota.py` (tanqueo con foto, despachos forzados,
+ficha, evidencia, textos falsos, vocabulario) · reescritos:
+`test_render_salud_js.py` (el diagnóstico, con el trinquete de campos mudos
+intacto), las clases de «Salud» de gastos/llantas/taller/verificación/
+preventivo, `test_render_analitica_js.py` (paneles y orden nuevos),
+`test_bandeja.py`, `test_bandeja_js.py`, `test_mi_camion_hoy_js.py`,
+`test_el_conductor_ve_lo_vencido_js.py` (el doble se arma con la política real),
+`test_jornada_conductor.py`, `test_fugas_ruta.py`, `test_senales_dominio.py`.
+**24 mutaciones, las 24 rojas** (se verificó que cada texto a mutar existiera
+una sola vez; la M11 apuntaba primero a un texto que no estaba y se corrigió
+antes de contarla): política (vencido a ámbar, bloqueante sin frenar, OT fuera),
+despacho con lista propia, un nivel literal en Python y otro en el JS, teléfono
+sin `salida`, jornada sin confianza y con nombres, galones sin confianza, km en
+duda desagrupados, FORZAR confundido o no leído, foto del tablero perdida (servidor
+y teléfono), ficha completa sin tanque, evidencia cruda, no evaluables sin
+agrupar, papeles uno por papel, Papeles de vuelta en Analítica, campo del health
+mudo, copia del catálogo de motivos, opción con código crudo, «no puede ver» en
+cada día. Tanda de los tests de flota + jornada + fugas + guards de PWA: 3.257
+en verde y 6 rojos corregidos (455 re-corridos en verde).
+
+### Lo que NO se cubre, dicho
+
+- **Verde con pendientes de turno**: el semáforo no suma cierres forzados,
+  turnos sin fotos ni despachos forzados (son del turno, no de si el camión
+  puede salir). Un vehículo puede estar verde con un pendiente de turno.
+- El **rendimiento** de referencia de galones se sigue calculando con todas las
+  ventanas (dudosas incluidas): lo que cambió es qué ventana se juzga.
+- La jornada busca la lectura del traspaso por (vehículo, instante, km): un
+  turno anterior a que el traspaso escribiera su lectura sale «no evaluable».
+- El vocabulario visible (daño/turno/papel) se barrió en lo tocado; queda
+  «hallazgo»/«custodia» en textos de gestión que no se tocaron (medido: sin
+  trinquete, que tendría que separar identificadores de texto).
+- Coordinación con el frente que corrige en paralelo `turno_de_la_ruta` al fin
+  del día, fotos de inicio en custodias de sede, ángulo desconocido, FORZAR de
+  despacho leído como cierre forzado (jornada ~461, analitica_salud ~1036) y
+  códigos crudos: no se tocaron esos puntos. **Roces para el integrador**:
+  `senales.py` (quité `semaforo`/`HechosDelVehiculo` y cambié `__all__`), la
+  sección `_senales_turno_de_la_ruta` de `bandeja.py` no se tocó, y
+  `despachos_forzados()` ya distingue los dos FORZAR — la jornada y
+  `analitica_salud` pueden leerla en vez de su propia consulta.
+
+### Propuesto, no hecho (el catálogo `analitica_kpi.METRICAS` lo cambia otro frente)
+
+KPI diarios de flota con meta, cuando se integre: **% de despachos que salieron
+reconociendo advertencias** (de `despachos_forzados`, ↓, dueño control de flota),
+**vehículos en rojo al abrir el día** (de la política de salida, ↓),
+**% de lecturas de km verificadas o con foto** (↑; enciende las señales de km y
+galones), **días de daño abierto** (ya en Analítica, sin meta).
+
+Suite completa: la corre el integrador (el Mac estaba saturado).
