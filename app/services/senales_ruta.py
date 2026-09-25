@@ -499,8 +499,9 @@ def despachos_forzados(desde=None, hasta=None) -> list:
 
     **Una función** para leerlos. La bitácora guarda con la misma acción
     `FORZAR` el cierre forzado de una ruta (`forzar_cierre`), que es otra cosa:
-    acá se distinguen por lo que el escritor puso en `despues` —
-    `advertencias_flota`—, no por la acción. Quien lea la bitácora por su
+    acá se distinguen con `bitacora.tipo_de_forzado` —la única función que
+    contesta «¿qué se forzó?», que lee `despues['forzado']` y, en filas viejas,
+    la forma—, no por la acción. Quien lea la bitácora por su
     cuenta y cuente todos los FORZAR como «despachó con advertencias» (o todos
     como «cierre forzado») mezcla los dos.
 
@@ -511,6 +512,7 @@ def despachos_forzados(desde=None, hasta=None) -> list:
     from app.extensions import db
     from app.models.bitacora import BitacoraAccion
     from app.models.ruta_despacho import RutaDespacho
+    from app.services.bitacora import FORZADO_ADVERTENCIAS_FLOTA, tipo_de_forzado
     q = BitacoraAccion.query.filter(BitacoraAccion.accion == 'FORZAR',
                                     BitacoraAccion.entidad == 'RutaDespacho')
     if desde is not None:
@@ -520,8 +522,8 @@ def despachos_forzados(desde=None, hasta=None) -> list:
     salida = []
     for b in q.order_by(BitacoraAccion.ocurrido_en, BitacoraAccion.id).all():
         despues = b.despues if isinstance(b.despues, dict) else {}
-        if 'advertencias_flota' not in despues:
-            continue            # cierre forzado de la ruta, no un despacho
+        if tipo_de_forzado(b.entidad, despues) != FORZADO_ADVERTENCIAS_FLOTA:
+            continue            # cierre forzado, liquidación… no un despacho
         ruta = db.session.get(RutaDespacho, b.entidad_id) if b.entidad_id else None
         detalle = despues['detalle'] if isinstance(despues.get('detalle'), list) else []
         salida.append({
@@ -533,7 +535,7 @@ def despachos_forzados(desde=None, hasta=None) -> list:
             'usuario_id': b.usuario_id,
             'motivo': b.motivo,
             'momento': despues.get('momento'),
-            'claves': list(despues['advertencias_flota'] or []),
+            'claves': list(despues.get('advertencias_flota') or []),
             'advertencias': [a for a in detalle if isinstance(a, dict)],
         })
     return salida

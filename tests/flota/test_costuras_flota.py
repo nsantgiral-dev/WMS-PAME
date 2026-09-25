@@ -132,9 +132,14 @@ class TestLosDespachosForzadosLleganAControlDeFlota:
                          estado='EN_TRANSITO')
         db.session.add(r)
         db.session.flush()
+        from app.services.bitacora import FORZADO_ADVERTENCIAS_FLOTA
+        # Integración 2026-09-24: todo FORZAR declara `forzado` (lo exige
+        # `registrar_accion`), así que el fixture escribe lo mismo que el
+        # escritor real (`_reconocer_advertencias_flota`).
         registrar_accion('FORZAR', r, usuario_id=u.id, motivo=motivo,
                          entidad_codigo=f'RUTA-{r.id}', antes={'estado': 'EN_CARGUE'},
                          despues=despues if despues is not None else {
+                             'forzado': FORZADO_ADVERTENCIAS_FLOTA,
                              'momento': 'despachar',
                              'advertencias_flota': ['soat_vencido'],
                              'detalle': [{'clave': 'soat_vencido',
@@ -147,7 +152,9 @@ class TestLosDespachosForzadosLleganAControlDeFlota:
         v, u = camion
         r = self._forzar(db, v, u)
         # El cierre forzado de una ruta también es FORZAR, sin advertencias.
-        self._forzar(db, v, u, motivo='cerrada a mano', despues={'estado': 'ENTREGADA'})
+        from app.services.bitacora import FORZADO_CIERRE_RUTA
+        self._forzar(db, v, u, motivo='cerrada a mano',
+                     despues={'forzado': FORZADO_CIERRE_RUTA, 'estado': 'ENTREGADA'})
         filas = despachos_forzados()
         assert [f['ruta_id'] for f in filas] == [r.id]
         assert filas[0]['vehiculo_id'] == v.id
