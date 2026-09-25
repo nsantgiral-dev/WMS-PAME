@@ -248,6 +248,16 @@ def en_camino(skus=None, bodegas=None) -> dict:
     }
 
 
+def resumen_lineas_abiertas() -> dict:
+    """Cuántas líneas abiertas hay, cuántas con pendiente y cuántas sin unidad
+    base. Para el estado del sync: el pendiente solo se lee acá."""
+    from app.models.compras_fuentes import OcLineaSiesa
+    q = OcLineaSiesa.query.filter(OcLineaSiesa.abierta.is_(True))
+    return {'abiertas': q.count(),
+            'con_pendiente': q.filter(OcLineaSiesa.pendiente_base > 0).count(),
+            'sin_unidad_base': q.filter(OcLineaSiesa.pendiente_base.is_(None)).count()}
+
+
 def frescura_oc() -> dict:
     """¿De cuándo es el espejo de OCs? Leído de `registros_sync`, no del
     proceso. `completa_utc` es la última corrida con paginación completa: solo

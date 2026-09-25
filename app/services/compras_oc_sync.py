@@ -547,20 +547,17 @@ def estado() -> dict:
         from app.models.acuerdo_marco import Proveedor
         from app.services import registro_sync_service as _reg
         from app.services.compras_fuentes import frescura_oc
-        abiertas = OcLineaSiesa.query.filter(OcLineaSiesa.abierta.is_(True)).count()
-        con_pend = OcLineaSiesa.query.filter(OcLineaSiesa.abierta.is_(True),
-                                             OcLineaSiesa.pendiente_base > 0).count()
-        sin_unidad = OcLineaSiesa.query.filter(OcLineaSiesa.abierta.is_(True),
-                                               OcLineaSiesa.pendiente_base.is_(None)).count()
+        from app.services.compras_fuentes import resumen_lineas_abiertas
+        lin = resumen_lineas_abiertas()
         por_fuente = dict(db.session.query(Proveedor.fuente, func.count(Proveedor.id))
                           .group_by(Proveedor.fuente).all())
         hist = _reg.ultimo(REGISTRO_HISTORIAL)
         return {
             'encendido': encendido(),
             'lineas_total': OcLineaSiesa.query.count(),
-            'lineas_abiertas': abiertas,
-            'lineas_abiertas_con_pendiente': con_pend,
-            'lineas_abiertas_sin_unidad_base': sin_unidad,
+            'lineas_abiertas': lin['abiertas'],
+            'lineas_abiertas_con_pendiente': lin['con_pendiente'],
+            'lineas_abiertas_sin_unidad_base': lin['sin_unidad_base'],
             'proveedores_por_fuente': {str(k): v for k, v in por_fuente.items()},
             'sync_abiertas': frescura_oc(),
             'ultimo_historial': ({k: hist.get(k) for k in ('inicio', 'ok', 'error')}
