@@ -5452,6 +5452,14 @@ Catorce defectos; el primero multiplicaba la demanda de los SKU grumosos por
 `tests/test_compras_numeros_correctos.py` (78 tests, **33 mutaciones, las 33
 rojas**, cada una verificada a aplicar exactamente una vez antes de correr).
 
+> **Integrado con «Compras: las fuentes de datos» (abajo).** Lo que viene y el
+> lead time quedaron con **un dueño**: `compras_fuentes.en_camino` y
+> `compras_fuentes.lead_time` (ver «Integración de los dos frentes», al final
+> de esa sección). Donde esta sección nombra `armador_service.en_camino`,
+> `FUENTES_EN_CAMINO`, `armador_service.lead_time` o
+> `_lead_time_de_proveedor`, eso ya no existe; las reglas (EN_PRODUCCION
+> cuenta, D9, `ROP_LT_NACIONAL_DIAS`, `insumo_en_camino`) se conservaron.
+
 ### D1 — «días con stock» eran «días con movimiento»
 
 `reconstruir_stock_diario` escribía una fila de `StockDiario` **solo en los
@@ -5496,19 +5504,19 @@ que es una aproximación).
 | **D7** | TSB armaba la rejilla hasta la **última venta** y publicaba el ajuste del train: un SKU parado seguía pronosticado | Rejilla hasta la **semana actual**; semanas sin stock y sin venta = `None` (un agotado no es «no se vendía»); el pronóstico sale de la serie entera |
 | **D8** | S-B excluía estacionales comparando `'ESTACIONAL'` contra una columna `String(1)`: nunca | `TemporadaService.identificar_skus_temporada`, la misma política del pedido escolar |
 | **D9** | Con 3 contenedores, σ_LT medido (2) reemplazaba al conservador (15) | Entre 3 y 5: el **mayor** de los dos (media y σ); desde 6 manda lo medido |
-| **D10** | `detectar_deriva` leía `ItemRecepcion.costo_unitario` y `RecepcionMercancia.fecha_recepcion`, que **no existen**: 500 con el primer acuerdo | Enchufe `compras_inteligencia_service.precios_de_compra_recibidos` (hoy `SIN_FUENTE`, declarado en `nota` y `sin_precio_de_compra`); `impacto_estimado_cop` = (facturado − pactado) × cantidad, en la misma moneda |
+| **D10** | `detectar_deriva` leía `ItemRecepcion.costo_unitario` y `RecepcionMercancia.fecha_recepcion`, que **no existen**: 500 con el primer acuerdo | Enchufe `compras_inteligencia_service.precios_de_compra_recibidos`, **conectado a las OCs de Siesa** (`compras_fuentes.lineas_precio_oc`, con cantidad); sin OCs lo declara en `nota` y `sin_precio_de_compra`; `impacto_estimado_cop` = (OC − pactado) × cantidad, en la misma moneda |
 | **D11** | Capital inmovilizado siempre 0 (`Producto.costo_unitario` no existe) | `resolver_costos`; sin costo → `None`, `skus_sin_costo`, `total_es_cota_inferior`, y adelante en la lista |
 | **D12** | `POST /newsvendor` hacía m/(m+e) con m sobre precio y e sobre costo; la cabecera de temporada mostraba otro ratio que las filas | `ratio_critico(cu, co)` y `ratio_critico_desde_tasas(m, e) = m/(m + e·(1−m))`, una fórmula para filas y cabecera; margen ≥ 1 → 400 |
 | **D13** | El MOQ se usaba como **múltiplo** (60 u, caja 12, MOQ 4 → 96 u); el presupuesto recortaba solo relleno y devolvía un contenedor más caro que el presupuesto sin decirlo | `cajas_a_pedir`: MOQ como **mínimo**, redondeo a caja (`MOQ_INTERPRETACION`, en cada fila). Presupuesto: relleno y después déficit (del menos urgente), `presupuesto_insuficiente` + `deficit_sin_cubrir_por_presupuesto` |
-| **D14** | LT nacional 5 d fijo; un SKU que dejó de venderse seguía con d > 0 en el ROP | `armador_service.lead_time(origen, proveedor)` (`ROP_LT_NACIONAL_DIAS`, `ROP_SIGMA_LT_NACIONAL`; default **declarado**; enchufe `_lead_time_de_proveedor`). «Sin venta reciente» (`kardex_service.sin_venta_reciente`): 0 ventas en `ROP_DIAS_SIN_VENTA` (90) días, con stock ≥ la mitad, y ≥ 3 ventas esperadas a su tasa (Poisson) → d = 0 en el ROP, con `motivo_d_cero` |
+| **D14** | LT nacional 5 d fijo; un SKU que dejó de venderse seguía con d > 0 en el ROP | `compras_fuentes.lead_time(proveedor, origen)` (cascada proveedor → origen → default; `ROP_LT_NACIONAL_DIAS`, `ROP_SIGMA_LT_NACIONAL` configuran el default nacional, `CONFIGURADO`; sin ellas `DEFAULT_CONSERVADOR`, declarado). «Sin venta reciente» (`kardex_service.sin_venta_reciente`): 0 ventas en `ROP_DIAS_SIN_VENTA` (90) días, con stock ≥ la mitad, y ≥ 3 ventas esperadas a su tasa (Poisson) → d = 0 en el ROP, con `motivo_d_cero` |
 
 Además:
 
-- **En camino, declarado**: `armador_service.en_camino()` suma
-  `FUENTES_EN_CAMINO` (hoy `ItemEnTransito`, contando contenedores
-  `EN_PRODUCCION`; BORRADOR no, RECIBIDO no). Sin dato,
-  `insumo_en_camino.nota` dice que el 0 es «no se sabe». Las OCs abiertas de
-  Siesa entran como una fuente más.
+- **En camino, declarado**: `compras_fuentes.en_camino()` suma sus dos
+  fuentes (`FUENTES_EN_CAMINO`: OCs abiertas de Siesa y `ItemEnTransito`,
+  contando contenedores `EN_PRODUCCION`; BORRADOR no, RECIBIDO no). Sin dato,
+  `insumo_en_camino.nota` dice que el 0 es «no se sabe»; una fuente que
+  revienta va a `fuentes_con_error`.
 - **Una posición**: `posicion_inventario()` (bodegas operadas + en camino),
   la misma para el ROP y la temporada.
 - **Tamiz de TSB**: pesa con `resolver_costos` (antes `precio_compra`, siempre
@@ -5517,11 +5525,11 @@ Además:
   todas las bodegas) y no de `TareaPicking` —lo que se vende por POS salía
   bloqueado en masa—. Sin kardex que cubra 12 meses y esté al día
   (`KARDEX_DIAS_FRESCURA`) **no se bloquea nada** (`no_se_bloqueo_por`).
-- Trinquetes AST de clase: el lead time (constantes solo en `lead_time` /
-  `calcular_sigma_lt_real`), lo que viene (`ItemEnTransito` solo en
-  `_en_camino_importacion` y la compuerta G5), y el costo de un producto solo
-  desde `costo_service` (ningún `precio_compra`/`costo_unitario` de maestro
-  en `app/services`).
+- Trinquetes AST de clase: el costo de un producto solo desde
+  `costo_service` (ningún `precio_compra`/`costo_unitario` de maestro en
+  `app/services`) y la moneda solo en `costo_service`. Los del lead time y lo
+  que viene se fusionaron con los de las fuentes en
+  `tests/test_compras_fuentes_trinquetes.py`.
 
 ### Lo que NO cubre, dicho
 
@@ -5536,10 +5544,10 @@ Además:
 - **Las bodegas de servicio en el denominador**: un día con stock solo en `AV1`
   cuenta como día con stock (sesgo conservador: demanda más baja). No se filtró
   por `_BODEGAS_PV` a propósito — cambiaría todas las series y no era el defecto.
-- **La deriva no compara nada** hasta que alguien enchufe
-  `precios_de_compra_recibidos` (las líneas de OC de Siesa).
+- **La deriva compara solo cuando hay OCs sincronizadas** (el espejo nace
+  apagado, `COMPRAS_OC_SYNC`); hasta entonces lo declara.
 - **El lead time nacional sigue siendo un supuesto** (5 ± 2 días) hasta que
-  haya OCs con fecha contra recepciones.
+  el espejo tenga OCs cumplidas con su fecha de entrada.
 - **Rendimiento**: `intervalos_con_stock` trae las filas de `StockDiario` de la
   ventana (del orden de las que ya traía la numeración por día de la
   demanda). No se midió contra el volumen de producción.
@@ -5583,17 +5591,20 @@ backfill): tabla `oc_linea_siesa`; `proveedores.fuente/sincronizado_en`;
 | Pregunta | Función | Regla |
 |---|---|---|
 | ¿Cuánto falta por entrar de una línea de OC? | `pendiente_de_linea(fila)` | En unidad **base** (`f421_cant_pedida_base − f421_cant_entrada_base`); sin `_base`, `(pedida − entrada) × factor`; sin factor, **`None`** (no se inventa: se cuenta como «sin unidad base») |
-| ¿Cuánto viene en camino? | `en_camino(skus, bodegas)` | Líneas de OC **abiertas** + ítems de contenedor sin recibir, **solo a `_BODEGAS_PV`** (lista blanca: AV1/TRA1 nunca; una bodega pedida no operada se ignora y se declara). Un contenedor que cita su OC (`oc_referencia` = `CO-TIPO-CONSEC`) y la OC sigue abierta **no se suma dos veces**; si cita una OC ya cerrada no se suma (ya entró o se anuló); sin cita, sobre un SKU con OC abierta, se suma y se marca `solapamiento_posible` (contar de más achica el déficit: es el lado corregible, Regla 0) |
-| ¿Cuánto tarda? | `lead_time(proveedor, origen)` | Cascada **proveedor (≥3 OCs medidas) → origen → default declarado**, con `n`, `fuente` (MEDIDO ≥6 · PARCIAL ≥3 · DEFAULT_CONSERVADOR), `confianza` y `nivel`. China → contenedores (`fecha_oc → fecha_recepcion_cedi`); nacional → OCs en COP de proveedores no chinos. Observación de una OC: fecha de la OC → **primera entrada**: la confirmación de la recepción del WMS si existe (fecha física), si no la primera marca de Siesa (`f420_fecha_ts_parcial`/`_cumplido`); una entrada anterior a la OC se descarta y se cuenta |
-| ¿A cuánto lo compramos? | `precios_oc(refs)` | OC más reciente, **solo COP**, por unidad base (`precio / factor`), sin obsequios ni anuladas; a igual fecha la más alta |
-| ¿La OC respetó el acuerdo? | `precio_oc_vs_acuerdo()` | Acuerdo vigente vs OC más reciente del MISMO proveedor y SKU. Es el insumo para `detectar_deriva` (no se tocó `detectar_deriva`: lo arregla el frente del motor) |
+| ¿Cuánto viene en camino? | `en_camino(skus, bodegas)` | **La única.** Líneas de OC **abiertas** + ítems de contenedor comprados y sin recibir (cuenta el estado del **contenedor** si lo tiene —`ESTADOS_EN_CAMINO`, con `EN_PRODUCCION`—, si no el del ítem; `RECIBIDO` nunca), **solo a `_BODEGAS_PV`** (lista blanca: AV1/TRA1 nunca; una bodega pedida no operada se ignora y se declara). Un contenedor que cita su OC (`oc_referencia` = `CO-TIPO-CONSEC`) y la OC sigue abierta **no se suma dos veces**; si cita una OC ya cerrada no se suma (ya entró o se anuló); sin cita, sobre un SKU con OC abierta, se suma y se marca `solapamiento_posible` (contar de más achica el déficit: es el lado corregible, Regla 0) |
+| ¿Cuánto tarda? | `lead_time(proveedor, origen)` | Cascada **proveedor (≥3 OCs medidas) → origen → default declarado** (`default_lead_time`: 5±2 nacional, configurable con `ROP_LT_NACIONAL_DIAS`/`ROP_SIGMA_LT_NACIONAL` → `CONFIGURADO`; 105±15 China), con `n`, `fuente` (MEDIDO ≥6 · PARCIAL ≥3 · CONFIGURADO · DEFAULT_CONSERVADOR), `confianza` y `nivel`. **PARCIAL no baja del default** (D9 del motor): con 3 a 5 observaciones, el mayor entre lo medido y el default, para la media y la σ (`lt_medido`/`sigma_lt_medida` publican lo medido). China → contenedores (`fecha_oc → fecha_recepcion_cedi`); nacional → OCs en COP de proveedores no chinos. Observación de una OC: fecha de la OC → **primera entrada**: la confirmación de la recepción del WMS si existe (fecha física), si no la primera marca de Siesa (`f420_fecha_ts_parcial`/`_cumplido`); una entrada anterior a la OC se descarta y se cuenta |
+| ¿A cuánto dice cada OC? | `lineas_precio_oc(refs, desde, proveedor)` | **La única lectura del precio de una OC**: por unidad base (`precio / factor`), en la moneda de la OC, con la cantidad pedida base; sin obsequios ni anuladas |
+| ¿A cuánto lo compramos? | `precios_oc(refs)` | OC más reciente **en pesos vía `costo_service.a_cop`** (D4: USD = FOB × TRM × factor, declarado en `conversion`; otra moneda se excluye y se declara con `costo: None` + `motivo_exclusion`); a igual fecha la más alta |
+| ¿La OC respetó el acuerdo? | `compras_inteligencia_service.detectar_deriva` | **El único comparador.** El enchufe del motor `precios_de_compra_recibidos` lee `lineas_precio_oc`: OC vs acuerdo en la misma moneda, con cantidad e `impacto_estimado_cop`; `mismo_proveedor` distingue la OC del proveedor del acuerdo de la de otro. (`precio_oc_vs_acuerdo`, que hacía lo mismo sin cantidades ni moneda, se retiró) |
 
 **Armador** (`armador_service.rop_dual`, cambio localizado): el término de
 tránsito es `compras_fuentes.en_camino()['por_sku']` y el lead time de cada
 SKU es `lead_time(proveedor_habitual(ref), origen)` — el proveedor de su OC más
 reciente. Cada fila publica `lt_fuente`, `lt_nivel`, `lt_n`, `lt_proveedor`; el
-resultado trae `en_camino` (la declaración: frescura del espejo, líneas sin
-unidad, solapamientos). `calcular_sigma_lt_real` delega en
+resultado trae `insumo_en_camino` (la declaración: fuentes, errores,
+`hay_dato`, frescura del espejo, líneas sin unidad, solapamientos). La suma la
+hace `armador_service.posicion_inventario` (la misma del pedido de temporada,
+D2), que consume `en_camino` y no calcula nada. `calcular_sigma_lt_real` delega en
 `lead_time(origen='CHINA')`. Los defaults `LT_*`/`SIGMA_LT_*` viven en
 `compras_fuentes` y el armador solo los re-exporta.
 
@@ -5714,17 +5725,23 @@ sincronización, cumplidas con el historial). `proveedores`, `contenedores`,
 
 ### Trinquetes y mutaciones
 
-`tests/test_compras_fuentes.py` (69, Siesa falsa con los campos del contrato),
-`tests/test_compras_fuentes_trinquetes.py` (23, AST) y
+`tests/test_compras_fuentes.py` (73, Siesa falsa con los campos del contrato),
+`tests/test_compras_fuentes_trinquetes.py` (29, AST; **el único trinquete de
+lo que viene y del lead time**, fusionado con el del motor) y
 `tests/test_compras_fuentes_js.py` (5, Node con `util.js` real).
 
 - **Nadie calcula «en camino» fuera de `compras_fuentes`**: restar cantidades
   de OC (`f421_cant_*` o atributos `cant_pedida*`/`cant_entrada*`), leer
-  `ItemEnTransito.cantidad` o leer `pendiente_base`. Inventario de 3 (el muelle
+  `ItemEnTransito.cantidad`, leer `pendiente_base`, sumar (`sum`/`func.sum`)
+  en una función que lee `ItemEnTransito` (la forma del motor) o leer
+  `ESTADOS_EN_CAMINO`. Operar el contenedor (cargar, mover, contar en G5) no
+  cuenta. Inventario de 3 (el muelle
   de recepción `ordenes_compra`, `debug_oc`, y la recepción de tienda: cuánto
   falta RECIBIR de una OC puntual, no posición de compra), solo encoge.
-- **Nadie decide un lead time fuera de `lead_time`**: leer `LT_*`/`SIGMA_LT_*`,
-  `.lead_time_real` o restar una `fecha_oc`. Inventario vacío.
+- **Nadie decide un lead time fuera de `lead_time`**: leer `LT_*`/`SIGMA_LT_*`
+  (o `ENV_*`), las variables `ROP_LT_NACIONAL_DIAS`/`ROP_SIGMA_LT_NACIONAL`,
+  `.lead_time_real` o restar una `fecha_oc`. Inventario vacío. Piso: el
+  Armador no aparece en ninguno de los dos escáneres.
 - **El sync no cierra sin ver todo y nada borra una línea de OC**: el cierre
   vive bajo `if completa` (AST) y ningún `.delete(` toca `OcLineaSiesa`.
 - Meta-tests (las formas que ve, lo sano que no: docstring, comentario,
@@ -5761,8 +5778,9 @@ para elegir `SIESA_CRITERIO_MARCA`; (6) una página del kardex (¿sigue 401?);
   (el de la recepción del WMS no).
 - **El filtro `IN (1,2)` no se usa**: son dos consultas; una OC que pasa de 2 a
   3 entre las dos no se pierde (la siguiente completa la cierra).
-- **OCs de importación en USD** no dan precio (no se convierte con la tasa del
-  documento) ni entran al pool nacional de lead time.
+- **OCs de importación en USD** dan precio con la TRM y el factor del sistema
+  (`a_cop`), **no con la tasa del documento** (`f420_tasa_conv` queda en el
+  espejo sin usar), y no entran al pool nacional de lead time.
 - **`solapamiento_posible`** se suma igual: el WMS no puede saber si el
   contenedor sin OC citada es la misma mercancía de la OC abierta.
 - **El lead time por SKU** usa el proveedor de su OC más reciente; un SKU que
@@ -5789,3 +5807,49 @@ para elegir `SIESA_CRITERIO_MARCA`; (6) una página del kardex (¿sigue 401?);
 4. **Encender** `COMPRAS_OC_SYNC=true` (y `KARDEX_AUTO=true` cuando el 401 se
    resuelva) **en el worker** con `HEAVY_SCHEDULERS=true`.
 5. **Registrar los contenedores en curso** con sus ítems y la OC que mueven.
+
+### Integración de los dos frentes (motor + fuentes, 2026-09-25)
+
+Los dos frentes de Compras se escribieron en paralelo y cada uno dejó su
+propia función —y su propio trinquete— para las mismas dos preguntas. Al
+integrarlos quedó **un dueño por concepto**, sin aflojar ninguna regla:
+
+| Concepto | Dueño (la única función) | Qué aportó cada frente |
+|---|---|---|
+| Lo que viene | `compras_fuentes.en_camino(skus, bodegas)` | Fuentes: OCs abiertas, lista blanca de bodegas, anti doble conteo por OC citada. Motor: el estado del **contenedor** manda, `EN_PRODUCCION` cuenta, una fuente que revienta se declara (`fuentes_con_error`, `completo`), `hay_dato`/`nota` («no se sabe» ≠ 0), `insumo_en_camino` en `rop_dual` |
+| La posición | `armador_service.posicion_inventario` (motor, D2) | Consume `en_camino`; el ROP y la temporada la leen |
+| El lead time | `compras_fuentes.lead_time(proveedor, origen)` | Fuentes: la cascada proveedor → origen → default con OCs medidas. Motor: D9 (3 ≤ n < 6 → el mayor), `ROP_LT_NACIONAL_DIAS`/`ROP_SIGMA_LT_NACIONAL`. **Un juego de defaults**: `default_lead_time` |
+| Precio de una OC | `compras_fuentes.lineas_precio_oc` | Una lectura para el costo (`precios_oc`, capa `OC_SIESA`) y la deriva |
+| OC vs acuerdo | `compras_inteligencia_service.detectar_deriva` | El enchufe del motor, conectado a las OCs; se retiró `precio_oc_vs_acuerdo` |
+| Moneda | `costo_service.a_cop` (motor, D4) | Ahora también convierte la OC en USD |
+
+Salieron de `armador_service`: `en_camino`, `FUENTES_EN_CAMINO`,
+`_en_camino_importacion`, `ESTADOS_EN_CAMINO`, `lead_time`,
+`_lead_time_de_proveedor`. Siguen re-exportados `LT_*`/`SIGMA_LT_*` (solo
+import). El vocabulario del default es `DEFAULT_CONSERVADOR` (el de China, las
+fuentes y la pantalla); `DEFAULT_DECLARADO` se retiró.
+
+**Tests que cambiaron por la fusión, y por qué** (cada uno lo dice en su
+cuerpo): el de China con 3 contenedores de 90/100/110 espera 105 y no 100
+(D9); el ROP publica la declaración en `insumo_en_camino` y no en `en_camino`;
+`en_camino` devuelve `por_sku`/`declaracion` y no `por_ref`/`hay_dato` sueltos;
+el default nacional se llama `DEFAULT_CONSERVADOR`; la OC en USD se nacionaliza
+en vez de excluirse; el test de `precio_oc_vs_acuerdo` pasó a probar
+`detectar_deriva` con una OC real. `TestLeadTimeYEnCaminoEnUnaFuncion`
+(motor) se retiró: su detección vive en el trinquete de las fuentes.
+
+Locks: `LOCK_COMPRAS_OC_SYNC = 2024` y `LOCK_KARDEX_AUTO = 2025` en el
+registro de `app/utils/lock.py`, sin choques (el motor no agregó locks).
+Migraciones: `m046compras` cuelga de `m045devol`; una sola cabeza.
+
+**19 mutaciones de la fusión, las 19 rojas** (con `-B` y
+`PYTHONDONTWRITEBYTECODE`, cada reemplazo verificado a aplicar una vez): el
+Armador sumando lo que viene por su cuenta, decidiendo los estados, leyendo la
+constante de LT; otro módulo leyendo `ROP_LT_NACIONAL_DIAS`; D9 quitada;
+`EN_PRODUCCION` fuera; el estado del ítem mandando sobre el del contenedor;
+contenedor cubierto por su OC sumado dos veces; OC cerrada citada sumada;
+fuente que revienta sumando cero callada; OC en USD sin convertir; el enchufe
+de la deriva de vuelta en `SIN_FUENTE`; `ROP_LT_NACIONAL_DIAS` ignorada;
+`hay_dato` siempre verdadero; la posición sin lo que viene; el ROP ignorando
+al proveedor habitual; la capa de costo tomando un costo `None`; y los dos
+escáneres ciegos a la suma por instancia y a la variable de entorno.
