@@ -5,6 +5,35 @@
 //   API, TOKEN, ALMACEN_ID, OPERARIO
 // ══════════════════════════════════════════════════════════════════
 
+// ─── ESTADO DE ENTREGA → estilo (una política para todo rutas.js) ─────────────
+//
+// Un solo mapa por estado de entrega, con TODOS los valores del modelo
+// (`EstadoEntrega.TODOS` en app/models/recaudo_entrega.py), y un estilo neutro
+// para el que no conozca. Antes había dos mapas locales con tres de los cuatro
+// estados: con una parada ENTREGADO_SIN_PAGO, `MAPA[est].badgeBg` reventaba
+// (TypeError), la lista del conductor quedaba en «Cargando paradas...» y con
+// ella se iba el botón «Cerrar Ruta». Un estado que el servidor agregue mañana
+// se pinta neutro: nunca revienta la pantalla.
+// Trinquete: tests/test_mapas_estado_entrega_pwa.py.
+const ENTREGA_ESTILO = {
+  ENTREGADO:          { borde: '#15803d', fondo: '#f0fdf4', badgeBg: '#dcfce7', badgeColor: '#15803d', label: 'ENTREGADO',  etiqueta: '✓ Entregado' },
+  PARCIAL:            { borde: '#d97706', fondo: '#fffbeb', badgeBg: '#fef3c7', badgeColor: '#b45309', label: 'PARCIAL',    etiqueta: '⚠ Parcial' },
+  RECHAZADO:          { borde: '#dc2626', fondo: '#fef2f2', badgeBg: '#fee2e2', badgeColor: '#b91c1c', label: 'RECHAZADO',  etiqueta: '✗ Rechazado' },
+  ENTREGADO_SIN_PAGO: { borde: '#c2410c', fondo: '#fff7ed', badgeBg: '#ffedd5', badgeColor: '#9a3412', label: 'SIN PAGO',   etiqueta: '⚠ Se quedó sin pagar' },
+};
+const ENTREGA_ESTILO_NEUTRO = { borde: '#d1d5db', fondo: '#f9fafb', badgeBg: '#f3f4f6', badgeColor: '#4b5563', label: 'OTRO ESTADO', etiqueta: 'Estado no reconocido' };
+const ENTREGA_ESTILO_PENDIENTE = { borde: '#d1d5db', fondo: '#f9fafb', badgeBg: '#f3f4f6', badgeColor: '#6b7280', label: 'PENDIENTE', etiqueta: 'Sin gestionar' };
+
+/**
+ * Estilo de una parada según su estado de entrega. Sin recaudo → pendiente;
+ * estado desconocido → neutro (nunca `undefined`).
+ * @param {string|null} est - `recaudo.estado_entrega`
+ */
+function estiloEntrega(est) {
+  if (!est) return ENTREGA_ESTILO_PENDIENTE;
+  return Object.prototype.hasOwnProperty.call(ENTREGA_ESTILO, est) ? ENTREGA_ESTILO[est] : ENTREGA_ESTILO_NEUTRO;
+}
+
 // ─── MONITOR DE MUELLE ────────────────────────────────────────────────────────
 const MUELLE_ORDEN_KEY = 'wms_muelle_orden'; // localStorage key
 
@@ -1009,28 +1038,22 @@ async function rutaVerManifiesto(id) {
     const ruta    = dr.ruta;
     const paradas = dp.paradas;
 
-    // Paleta modo día
-    const EST = {
-      ENTREGADO: { border: '#15803d', bg: '#f0fdf4', badge: '#15803d', badgeBg: '#dcfce7', label: '✓ Entregado' },
-      PARCIAL:   { border: '#d97706', bg: '#fffbeb', badge: '#b45309', badgeBg: '#fef3c7', label: '⚠ Parcial'   },
-      RECHAZADO: { border: '#dc2626', bg: '#fef2f2', badge: '#b91c1c', badgeBg: '#fee2e2', label: '✗ Rechazado' },
-    };
-    const EST_DEF = { border: '#d1d5db', bg: '#f9fafb', badge: '#6b7280', badgeBg: '#f3f4f6', label: 'Sin gestionar' };
+    // Paleta modo día: `estiloEntrega` (todos los estados + neutro).
 
     let filas = '';
     if (paradas.length) {
       paradas.forEach(p => {
         const r   = p.recaudo;
         const est = r ? r.estado_entrega : null;
-        const e   = est ? EST[est] : EST_DEF;
+        const e   = estiloEntrega(est);
 
-        filas += `<div style="background:${esc(e.bg)};border:1px solid ${esc(e.border)};border-radius:10px;padding:12px;margin-bottom:8px;">
+        filas += `<div style="background:${esc(e.fondo)};border:1px solid ${esc(e.borde)};border-radius:10px;padding:12px;margin-bottom:8px;">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
             <div>
               <div style="font-size:var(--fs-sm);font-weight:800;color:var(--tx);">${esc(p.numero_pedido)}</div>
               <div style="font-size:var(--fs-xs);color:var(--tx3);">${esc(p.cliente)} · 📍 ${esc(p.municipio)}</div>
             </div>
-            <span style="font-size:var(--fs-xs);font-weight:700;color:${esc(e.badge)};background:${esc(e.badgeBg)};padding:3px 10px;border-radius:8px;">${esc(e.label)}</span>
+            <span style="font-size:var(--fs-xs);font-weight:700;color:${esc(e.badgeColor)};background:${esc(e.badgeBg)};padding:3px 10px;border-radius:8px;">${esc(e.etiqueta)}</span>
           </div>`;
 
         // Bultos
@@ -2003,13 +2026,8 @@ function _condRenderParadas(d) {
 
   paradas.forEach((p, idx) => {
     const r = p.recaudo;
-    const EST_C = {
-      ENTREGADO: { borde: '#15803d', fondo: '#f0fdf4', badgeBg: '#dcfce7', badgeColor: '#15803d', label: 'ENTREGADO' },
-      PARCIAL:   { borde: '#d97706', fondo: '#fffbeb', badgeBg: '#fef3c7', badgeColor: '#b45309', label: 'PARCIAL'   },
-      RECHAZADO: { borde: '#dc2626', fondo: '#fef2f2', badgeBg: '#fee2e2', badgeColor: '#b91c1c', label: 'RECHAZADO' },
-    };
     const est = r ? r.estado_entrega : null;
-    const c = est ? EST_C[est] : { borde: '#d1d5db', fondo: '#f9fafb', badgeBg: '#f3f4f6', badgeColor: '#6b7280', label: 'PENDIENTE' };
+    const c = estiloEntrega(est);
     const badge = `<span style="background:${esc(c.badgeBg)};color:${esc(c.badgeColor)};padding:2px 8px;border-radius:8px;font-size:var(--fs-xs);font-weight:700;">${esc(c.label)}</span>`;
     const monto = r ? ` · $${Number(r.monto_cobrado || 0).toLocaleString('es-CO')}` : '';
 

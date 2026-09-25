@@ -187,8 +187,6 @@ class TestListaDeParadasConEntregadoSinPago:
     def test_control_la_lista_con_una_entrega_normal_pinta(self, tmp_path):
         assert 'Droguería Pasteur' in _pintar_lista(tmp_path, 'ENTREGADO')
 
-    @pytest.mark.xfail(strict=True, reason='P1 QA 2026-09-24: EST_C de _condRenderParadas '
-                       'no conoce ENTREGADO_SIN_PAGO (rutas.js:2006-2013) → TypeError')
     def test_la_lista_pinta_con_entregado_sin_pago(self, tmp_path):
         html = _pintar_lista(tmp_path, 'ENTREGADO_SIN_PAGO')
         assert 'Droguería Pasteur' in html
