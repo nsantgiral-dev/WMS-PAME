@@ -180,28 +180,45 @@ def _node(tmp_path, js):
 
 
 class TestLaColaNoCierraConUnaParadaPendiente:
+    """Integración con el frente de pantallas (2026-09-25): la cola del
+    conductor distingue «rechazado» (4xx: sale de la cola y queda anotado para
+    que el conductor lo rehaga) de «reintentar» (5xx / sin red: se queda). En
+    los dos casos el cierre de ESA ruta no sale; el de otra ruta sí."""
 
-    def test_el_cierre_espera_a_la_parada_que_fallo(self, tmp_path):
+    def _correr(self, tmp_path, status_parada):
         out = _node(tmp_path, """
             const items = [
               { id: 1, tipo: 'confirmar', rutaId: 7, tareaId: 3, payload: {} },
               { id: 2, tipo: 'cerrar', rutaId: 7, payload: { bultos: [] } },
               { id: 3, tipo: 'cerrar', rutaId: 8, payload: { bultos: [] } },
             ];
-            const pedidos = [], sacados = [];
+            const pedidos = [], sacados = [], anotados = [];
             _condDB.queue = async () => items;
             _condDB.dequeue = async (id) => { sacados.push(id); };
+            _condDB.actualizar = async () => {};
+            _condAnotarRechazo = async (item) => { anotados.push(item.id); };
             fetch = async (url) => {
               pedidos.push(url);
-              if (url.includes('/paradas/')) return { ok: false, status: 400, json: async () => ({ error: 'no' }) };
+              if (url.includes('/paradas/')) return { ok: false, status: STATUS, json: async () => ({ error: 'no' }) };
               return { ok: true, status: 200, json: async () => ({}) };
             };
             _COND_RUTA_ACTIVA = null;
             cargarRutasConductor = async () => {};
             await condSyncQueue();
-            return { pedidos: JSON.stringify(pedidos), sacados: JSON.stringify(sacados) };
-        """)
-        pedidos = json.loads(out['pedidos'])
+            return { pedidos: JSON.stringify(pedidos), sacados: JSON.stringify(sacados),
+                     anotados: JSON.stringify(anotados) };
+        """.replace('STATUS', str(status_parada)))
+        return (json.loads(out['pedidos']), json.loads(out['sacados']),
+                json.loads(out['anotados']))
+
+    def test_rechazada_el_cierre_no_sale_y_queda_anotado(self, tmp_path):
+        pedidos, sacados, anotados = self._correr(tmp_path, 400)
         assert not any(u.endswith('/api/rutas/7/entregar') for u in pedidos), pedidos
         assert any(u.endswith('/api/rutas/8/entregar') for u in pedidos), 'otra ruta sí cierra'
-        assert json.loads(out['sacados']) == [3]
+        assert sorted(sacados) == [1, 2, 3] and sorted(anotados) == [1, 2]
+
+    def test_sin_respuesta_el_cierre_espera_en_la_cola(self, tmp_path):
+        pedidos, sacados, anotados = self._correr(tmp_path, 502)
+        assert not any(u.endswith('/api/rutas/7/entregar') for u in pedidos), pedidos
+        assert any(u.endswith('/api/rutas/8/entregar') for u in pedidos), 'otra ruta sí cierra'
+        assert sacados == [3] and anotados == []
