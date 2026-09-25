@@ -31,7 +31,8 @@ from flota.api._idempotencia import idempotente
 from flota.api._permisos import (DECIDE_FLOTA, MAESTROS_FLOTA, exige,
                                  sin_derecho_sobre_vehiculo)
 from flota.api._tiempo import iso_utc
-from flota.dominio.errores import ErrorFlota
+from flota.adaptadores.almacen_fotos import ErrorAlmacen
+from flota.dominio.errores import ErrorFlota, FotoInvalida
 from flota.dominio.hallazgo import (EstadoHallazgo, dias_transcurridos,
                                     entra_al_indicador, vencido)
 
@@ -165,6 +166,8 @@ def reportar():
             item_id=datos['item_id'] if 'item_id' in datos else None,
             fotos=datos['fotos'] if 'fotos' in datos else None,
         )
+    except (FotoInvalida, ErrorAlmacen) as e:
+        return jsonify({'error': f'Foto inválida: {e}', 'motivo': 'foto_invalida'}), 400
     except ErrorFlota as e:
         # 409 y no 400: el cuerpo puede estar perfecto y el estado del mundo no
         # admitirlo — un odómetro que retrocede es lo segundo.

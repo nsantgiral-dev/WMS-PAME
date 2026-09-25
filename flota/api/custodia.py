@@ -33,7 +33,8 @@ from flota.api._tiempo import iso_utc
 from flota.adaptadores import traspaso
 from flota.adaptadores.modelos import Custodia, FichaTecnica, LecturaOdometro
 from flota.dominio import odometro as dom_odo
-from flota.dominio.errores import ErrorFlota, PermisoInsuficiente
+from flota.adaptadores.almacen_fotos import ErrorAlmacen
+from flota.dominio.errores import ErrorFlota, FotoInvalida, PermisoInsuficiente
 from flota.dominio.valores import (
     MOTIVO_ORIGEN_NO_SUELTO,
     angulos_de_custodia,
@@ -431,6 +432,10 @@ def custodia_traspaso():
             ubicacion=ubicacion,
             ubicacion_motivo=datos['ubicacion_motivo'] if 'ubicacion_motivo' in datos else None,
         )
+    except (FotoInvalida, ErrorAlmacen) as e:
+        # 400: la foto del cuerpo no se puede aceptar (ángulo o clase fuera del
+        # vocabulario, data URL ilegible). Un 5xx la cola lo reintenta siempre.
+        return jsonify({'error': f'Foto inválida: {e}', 'motivo': 'foto_invalida'}), 400
     except PermisoInsuficiente as e:
         # 403 y no 409: el mundo admite el traspaso; ESTE usuario no puede
         # hacerlo — p. ej. un conductor dejando el camión a nombre de otro.

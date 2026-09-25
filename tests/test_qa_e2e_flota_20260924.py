@@ -297,8 +297,6 @@ class TestAnguloInvalidoNoEs500:
     La cola del conductor (`flotaColaEnviarUna`) trata todo 5xx como
     «reintentar»: un ítem así no sale nunca y bloquea los que vienen detrás."""
 
-    @pytest.mark.xfail(strict=True, reason='P3 QA 2026-09-24: ángulo inválido → 500 (CHECK) '
-                       'en vez de 400')
     def test_angulo_desconocido_es_400(self, client, db, mundo):
         from tests.flota._turno import dar_turno
         dar_turno(db, mundo.u_cond.id, mundo.placa, km=1000)

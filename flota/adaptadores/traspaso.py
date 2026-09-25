@@ -254,6 +254,12 @@ def traspasar(
         autor_usuario_id=registrado_por_usuario_id,
     ))
 
+    # Las fotos se validan con el resto, ANTES de escribir: un ángulo que el
+    # CHECK rechaza era un 500 en el commit (la cola lo reintentaba siempre).
+    from flota.adaptadores.almacen_fotos import validar_fotos
+    validar_fotos(fotos_fin)
+    validar_fotos(fotos_inicio)
+
     if vigente is not None and km < vigente.km_inicio:
         raise CustodiaInvalida(
             f'el cierre no puede tener menos kilómetros que la apertura: '

@@ -48,7 +48,8 @@ from flota.api._idempotencia import idempotente
 from flota.api._permisos import (MAESTROS_FLOTA, exige,
                                  sin_derecho_sobre_vehiculo)
 from flota.dominio import costos
-from flota.dominio.errores import ErrorFlota, PermisoInsuficiente
+from flota.adaptadores.almacen_fotos import ErrorAlmacen
+from flota.dominio.errores import ErrorFlota, FotoInvalida, PermisoInsuficiente
 from flota.dominio.valores import palabra_de_confianza
 
 gastos_bp = Blueprint('flota_gastos', __name__)
@@ -354,6 +355,8 @@ def registrar_tanqueo():
             # Con el km de siempre no hace falta: se reutiliza la lectura.
             foto_tablero=datos['foto_tablero'] if datos.get('foto_tablero') else None,
         )
+    except (FotoInvalida, ErrorAlmacen) as e:
+        return jsonify({'error': f'Foto inválida: {e}', 'motivo': 'foto_invalida'}), 400
     except PermisoInsuficiente as e:
         return jsonify({'error': str(e)}), 403
     except ErrorFlota as e:

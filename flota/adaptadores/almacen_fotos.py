@@ -254,6 +254,38 @@ def guardar_foto(datos: dict) -> dict:
     return campos
 
 
+def validar_fotos(fotos) -> None:
+    """Rechaza ANTES de escribir nada una foto que la base no va a aceptar.
+
+    La clase del defecto (QA e2e 2026-09-24): *un valor que un CHECK de la base
+    rechaza llega al commit sin validarse antes*. `angulo: 'lateral_izquierda'`
+    explotaba en `ck_flota_angulo` → 500, y la cola del conductor reintenta todo
+    5xx: el ítem no salía nunca y trababa los que venían detrás. Acá se valida
+    contra el MISMO vocabulario del CHECK (`ANGULO_FOTO`, `ClaseFoto`) y se
+    levanta `FotoInvalida`, que la frontera traduce a 400.
+    """
+    from flota.adaptadores.modelos import ANGULO_FOTO
+    from flota.dominio.errores import FotoInvalida
+    from flota.dominio.valores import ClaseFoto
+
+    if fotos is None:
+        return
+    if not isinstance(fotos, (list, tuple)):
+        raise FotoInvalida('las fotos van en una lista')
+    clases = {c.value for c in ClaseFoto}
+    for i, f in enumerate(fotos, 1):
+        if not isinstance(f, dict):
+            raise FotoInvalida(f'la foto {i} no es un objeto')
+        clase = f['clase'] if 'clase' in f else None
+        if clase not in clases:
+            raise FotoInvalida(f'la foto {i} tiene una clase desconocida: {clase!r}')
+        angulo = f['angulo'] if 'angulo' in f else None
+        if angulo is not None and angulo not in ANGULO_FOTO:
+            raise FotoInvalida(
+                f'la foto {i} tiene un ángulo desconocido: {angulo!r}. '
+                f'Ángulos válidos: {", ".join(ANGULO_FOTO)}')
+
+
 def colgar_fotos(fotos, entidad_tipo, entidad_id, autor_id, ahora):
     """Ata cada foto a su padre y GUARDA EL ARCHIVO. Devuelve las filas creadas.
 
@@ -275,6 +307,9 @@ def colgar_fotos(fotos, entidad_tipo, entidad_id, autor_id, ahora):
     from app.extensions import db
     from flota.adaptadores.modelos import Foto
 
+    # Todas antes que ninguna: una inválida en el medio no deja archivos
+    # escritos de las anteriores.
+    validar_fotos(fotos)
     creadas = []
     for f in fotos or []:
         campos = guardar_foto(f)
@@ -292,4 +327,4 @@ def colgar_fotos(fotos, entidad_tipo, entidad_id, autor_id, ahora):
 
 
 __all__ = ['AlmacenLocal', 'ErrorAlmacen', 'desde_data_url', 'guardar_foto',
-           'colgar_fotos']
+           'colgar_fotos', 'validar_fotos']
