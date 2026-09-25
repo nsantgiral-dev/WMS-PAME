@@ -292,8 +292,8 @@ def es_de_china(origen=None, marca=None, marca_codigo=None) -> bool:
         return True
     if (marca_codigo or '').strip().upper() in MARCAS_CHINA:
         return True
-    texto = (marca or '').upper()
-    return any(m.upper() in texto for m in MARCAS_CHINA if m)
+    marca = (marca or '').upper()
+    return any(m.upper() in marca for m in MARCAS_CHINA if m)
 
 
 def insumo_origen(productos_origen=None, productos_marca=None,

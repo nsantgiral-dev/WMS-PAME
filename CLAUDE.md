@@ -6032,6 +6032,12 @@ las pestañas nuevas y lo técnico dentro de Avanzado.
 `test_permisos_por_pantalla`: `compras_bandeja.js` y `temporada.js` los abre
 también `compras`.
 
+Suite completa (2026-09-25, `-m "not postgres"`, TZ=UTC, una corrida): **8769
+passed, 1 failed** (5 skipped, 19 xfailed): `test_regimen_china` exige por AST
+que el cruce por `MARCAS_CHINA` itere contra una variable `marca`, y la
+`insumo_origen` nueva lo hacía en línea. Reescrita con la variable; ese archivo
+y los de compras, verdes por separado (108).
+
 ### Lo que NO cubre, dicho
 
 - **El formato de importación de OCs a Siesa** no existe en el repo: el CSV es
