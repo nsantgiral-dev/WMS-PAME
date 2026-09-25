@@ -13,6 +13,7 @@
 
 ```
 util.js                         Base sin dependencias: `esc()`, `fmtPesos()`, `fmtUsd()` y `hoyBogota()` (el día de Bogotá: la única). Carga PRIMERO
+modal.js                        El modal propio: `_modalConfirmar`, `_modalTexto`, `_modalCantidad`. Después de util, antes de app (2026-09-25)
 app.js          (2,294 líneas)  Core: auth, helpers, dashboard, camera, admin
 picking.js        (747)         Escaneo operario, confirmación
 packing.js        (865)         Empacador HUD, bultos, etiquetas
@@ -36,7 +37,7 @@ cartera.js                      Bloque «Retenidos por cartera» del tablero + r
 temporada.js      (365)         Temporada escolar
 ```
 
-Orden de carga: util → app → picking → packing → recepcion → rutas → traslados → conteo → reposicion → liquidacion → layout → tienda → etiquetas → vigia → compras_ia → kardex → temporada → flota → flota_analitica → flota_bandeja. Todas las funciones son globales. Cross-module calls son runtime (onclick), nunca parse-time.
+Orden de carga: util → modal → app → picking → packing → recepcion → rutas → traslados → conteo → reposicion → liquidacion → layout → tienda → etiquetas → vigia → compras_ia → kardex → temporada → flota → flota_analitica → flota_bandeja. Todas las funciones son globales. Cross-module calls son runtime (onclick), nunca parse-time.
 
 La lista autoritativa del orden real es el `SHELL` de `app/static/pwa/sw.js` —
 es la que el service worker cachea. Si esta tabla y ese arreglo divergen, el
@@ -5237,12 +5238,14 @@ nombre, email}, siesa_usuario_creacion, contexto_siesa (retenido_cupo/mora/…,
 usuario_retenido, usuario_aprobacion_cart…), creada_en, actualizada_en,
 antiguedad_horas, resolucion, reevaluaciones`.
 
-**Respaldo en el WMS** (`/api/cartera/panel/*`, JWT): ver con gestión o el
-permiso; decidir solo con **`puede_autorizar_cartera`** (casilla por persona en
-Usuarios, nace apagada, ni el admin la tiene por rol; conductor y tienda
-nunca). Bloque «⛔ Retenidos por cartera» en el tablero (`cartera.js`), etiqueta
+**Respaldo en el WMS** (`/api/cartera/panel/*`, JWT): ver con gestión o quien
+puede decidir; decidir con **`cartera_service.puede_autorizar`**: el **líder de
+cartera por su rol**, o la casilla `puede_autorizar_cartera` (por persona, nace
+apagada) **solo en un rol de gestión** (lista blanca desde el 2026-09-25, ver
+«Roles de la plata»). Bloque «⛔ Retenidos por cartera» en el tablero
+(`cartera.js`) y en la pestaña ⛔ Cartera del líder, etiqueta
 en la cola de pedidos y en packing. `GET/POST /api/cartera/panel/credito-lote`
-(`_solo_admin`): autoriza en lote, con un motivo común y bitácora por parada,
+(`puede_autorizar_credito`: admin y líder de cartera): autoriza en lote, con un motivo común y bitácora por parada,
 las paradas `credito_no_autorizado` confirmadas **antes** de
 `CONTADO_DESPLIEGUE_FECHA` (sin la variable → 409, no se adivina).
 
@@ -6254,11 +6257,11 @@ desglose rotula la **condición declarada** con la del PEDIDO y agrega
 «PD1004», no «PD-1004».
 
 **Permisos (decisión del dueño):** los roles «líder de cartera» y
-«liquidador» se agregan en `permisos_liquidacion` — una línea en la función de
-su operación. Hoy: liquidar/registrar cobro/resolver RC/autorizar crédito/
-forzar cierre = admin; confirmar retención y corregir cobro = admin y jefe.
-**Cambio de comportamiento:** el jefe de almacén ya no registra cobros ni
-reintenta RC/DC/NC de la liquidación.
+«liquidador» existen desde el 2026-09-25 — ver «Roles de la plata» (la matriz
+vive en `permisos_liquidacion`, una línea por operación). **Cambio de
+comportamiento:** el jefe de almacén ya no registra cobros ni reintenta
+RC/DC/NC de la liquidación, ni confirma retenciones ni corrige cobros: sigue
+viendo la liquidación.
 
 **35 mutaciones, las 35 rojas** (con `-B` y `PYTHONDONTWRITEBYTECODE`, cada
 reemplazo verificado a aplicar una vez; dos sobrevivían al primer intento y se
@@ -6285,9 +6288,8 @@ texto positivo).
 
 ### Decisiones para el dueño
 
-1. ¿El jefe de almacén vuelve a registrar cobros? (hoy no: la operación
-   encola plata). Con el rol «liquidador», es una línea.
-2. ¿Confirmar retención queda en admin y jefe, o pasa al «líder de cartera»?
+1. ~~¿El jefe vuelve a registrar cobros? ¿Confirmar retención pasa al líder
+   de cartera?~~ Decidido el 2026-09-25: ver «Roles de la plata».
 3. Formulario de parada tardía para la oficina, o basta con cerrar lo que
    falta y dejar que la cola del conductor la mande.
 
@@ -6341,15 +6343,16 @@ escribe. Lo que queda es de infraestructura, y `GET /flota/health` →
 
 ### Lo que NO cubre
 
-- **Flota** sigue con 18 `confirm()`/`prompt()` nativos (incluido el tanqueo sin
-  recibo): sus arneses de prueba no cargan app.js, donde vive el modal.
+- ~~**Flota** sigue con 18 `confirm()`/`prompt()` nativos~~ Cerrado el
+  2026-09-25: el modal vive en `modal.js` y el inventario de nativos está en cero.
 - El inventario por rol mide con ids inexistentes: un endpoint que contesta 404
   por el id **antes** de mirar el rol no se puede medir así.
 - El GET de paradas ya no anota: si la pantalla no llega a llamar
   `…/paradas/anotar` (sin señal), la guarda de `confirmar_parada` juzga con lo
   anotado al crear el packing y al despachar (supuesto = se cobra, Regla 0).
-- `tienda.js` busca en `/api/productos/`, que a la tienda le da 403 desde
-  antes: pendiente decidir si la tienda ve el catálogo sin costo.
+- ~~`tienda.js` busca en `/api/productos/`, que a la tienda le da 403~~
+  Cerrado el 2026-09-25: la tienda ve el catálogo sin costo (ver «Roles de la
+  plata… y las decisiones de pantallas»).
 - `/api/almacenes/` sin NS2, FP1, FF1 en QA: son filas de la tabla, no código.
 - `/api/cartera/salud` 503 sin `CARTERA_GESTOR_TOKEN`: nace cerrado a propósito.
 
@@ -6414,7 +6417,8 @@ en una sola constante. Trinquete: `test_ventana_siesa.py::TestLaVentanaEsUnaPara
 - `/despacho_parcial/<id>/despachar` pregunta primero si Siesa está disponible
   para facturar (fiscal, 503) y después toma el lock de la DLQ (dinero, 409).
 - **Permisos**, también: `Roles.PERSONAL_ALMACEN` (pantallas, lista blanca de
-  quién opera almacén) no se cruza con los de liquidación ni con cartera.
+  quién opera almacén) no se cruza con los de liquidación ni con cartera. Los
+  roles «liquidador» y «líder de cartera» no están en ella.
 
 ### Lo que dos frentes arreglaron a la vez (quedó una implementación)
 
@@ -6426,3 +6430,81 @@ en una sola constante. Trinquete: `test_ventana_siesa.py::TestLaVentanaEsUnaPara
 | «Siesa no está disponible» en el cierre de caja | Un texto: `documento_fiscal.MENSAJE_SIESA_NO_DISPONIBLE`. Las dos negativas (compuerta fiscal y precheck) llevan `estado=SIESA_NO_DISPONIBLE` → 503, la cola offline reintenta | El texto propio de pantallas |
 | Facturar RM manual | Modal propio (pantallas) + motivo y documento repetido (dinero) | — |
 
+---
+
+## Roles de la plata (liquidador, líder de cartera) y las decisiones de pantallas (2026-09-25)
+
+**Qué pasaba.** La plata de la ruta solo se podía dar entera: liquidar,
+registrar un cobro o autorizar un crédito obligaba a hacer **admin** a alguien
+de oficina (usuarios, maestros, inventario, Siesa), y el jefe de almacén
+—que opera bodega— confirmaba retenciones y corregía cobros. La clase: *un
+permiso que solo se puede dar entero*.
+
+**Ahora** — dos roles (`Roles.LIQUIDADOR = 'liquidador'`,
+`Roles.LIDER_CARTERA = 'lider_cartera'`), creables desde Usuarios, **fuera de
+`PERSONAL_ALMACEN`, `GESTION` y `SUPERVISION`**. La matriz del dueño, una línea
+por operación en `app/services/permisos_liquidacion.py`:
+
+| Operación | Quién |
+|---|---|
+| Liquidar, «Enviar a Siesa», registrar cobro, reintentar RC/DC/NC, resolver un RC sin verificar | admin + liquidador |
+| Parada tardía desde la oficina (ruta ya cerrada: `puede_registrar_parada_tardia`) | admin + liquidador |
+| Confirmar retención, corregir cobro (y, con la ruta en tránsito, registrar la parada por el conductor) | admin + líder de cartera |
+| Autorizar crédito no autorizado (una parada, o en lote: `/api/cartera/panel/credito-lote`) | admin + líder de cartera |
+| Autorizar una retención de cartera | líder de cartera por su rol; la casilla `puede_autorizar_cartera` solo en gestión (`Roles.CARTERA_POR_ROL`, `CARTERA_CON_CASILLA`: listas blancas); el iniciador nunca |
+| Forzar el cierre de una ruta | admin |
+| Ver Liquidación, desglose, reconciliación, planilla, sus envíos a Siesa | admin + jefe + liquidador + líder de cartera |
+
+- `/api/reposicion/siesa-jobs`: supervisión ve todo; quien ve la liquidación
+  ve **solo** sus envíos (`puede_ver_jobs`), y cada job trae `puede_reintentar`.
+- **Aterrizaje** (`app.js` `_TABS_DE_ROL`, que también absorbió a
+  `control_flota`): liquidador → 💰 Liquidación; líder de cartera → **⛔
+  Cartera** (pestaña nueva, el mismo bloque del tablero: `cartera.js` pinta
+  `cartera-bloque` y `cartera-bloque-tab`) + Liquidación. La pestaña ⛔ Cartera
+  solo la ve el líder.
+- **Liquidación ofrece a cada rol solo lo suyo** (`_liqPermiso`, sobre los
+  `permisos` que el detalle calcula con las mismas funciones del 403): el
+  liquidador no ve «confirmar retención» ni «autorizar crédito», el líder no ve
+  «Liquidar» ni «Registrar cobro», y corrige el monto desde la tarjeta de la
+  parada (`liqCorregirMontoParada`). Reintentar un envío: `liqReintentarJob`.
+
+**Decisiones de pantallas (CTO, conservadoras):**
+
+| | Qué pasaba | Ahora |
+|---|---|---|
+| Tienda y catálogo | 403 en `/api/productos/`; y la búsqueda de la tienda y de las bonificaciones de recepción mandaba `?search=` (el servidor no lo lee): recibía el catálogo entero y **registraba el primer producto**. `&limit=8` tampoco se leía | `Roles.CATALOGO` (almacén + tienda); el costo de compra solo a `Roles.VEN_COSTO_DE_COMPRA` (gestión + compras), una forma: `productos._producto_para` — **el operario deja de recibir `precio_compra`**. `?codigo=` exacto (WMS, barras, Siesa, empaque) y `productoPorCodigoExacto` (uno, o el aviso de ninguno/varios) |
+| `picking.siguiente_tarea` | GET que asigna (escribe) | POST; el inventario de GET que escriben queda vacío. La pantalla usa `/api/mobile/tarea-actual`: no cambió |
+| Diálogos nativos | 18 en flota + 5 más, porque el modal vivía en `app.js` y los arneses de flota no lo cargan | `modal.js` (capa base, `util → modal → app`); **inventario en cero**. No va en `util.js`: los arneses guionan el modal y `util.js` se carga de verdad en todos. «Cancelar» ahora cancela en las notas opcionales (antes seguía con vacío) |
+
+**Trinquetes:** `tests/test_roles_plata.py` (matriz a mano por función; por
+HTTP con **ids reales** —el inventario de `test_permisos_lista_blanca` usa ids
+inexistentes y no ve un 404 posterior al rol—; aterrizaje en Node con `app.js`
+real; la tarjeta de Liquidación por rol), `test_catalogo_sin_costo.py` (por
+rol, búsqueda exacta, AST: ningún `to_dict()` del catálogo fuera de la
+política, y **ningún parámetro que el PWA mande al catálogo sin que el
+servidor lo lea**), `test_dialogos_propios.py` (vacío, piso, modal definido
+solo en `modal.js`), `test_permisos_lista_blanca.py` (inventario por rol de los
+dos roles nuevos; las listas negras declaradas quedaron en cero),
+`test_permisos_por_pantalla.py`. `test_todo_endpoint_verifica_rol` reconoce toda
+función `puede_*` de `permisos_liquidacion` como guard. **30 mutaciones, las 30
+rojas** (una sobrevivía —la tienda volviendo a `?search=`— y obligó al trinquete
+de parámetros).
+
+**Lo que NO cubre, dicho:**
+- **Sin migración ni CHECK de roles**: `usuarios.rol` sigue siendo texto libre;
+  `_ROLES_VALIDOS` y el desplegable (cruzados por test) son la puerta. Un CHECK
+  exige saber qué roles hay en producción (no se miró).
+- `/api/mobile/tarea-actual` también es un GET que asigna (escribe en el
+  servicio, no en la ruta): el trinquete de GET mira solo commits directos en
+  la ruta. Misma clase, declarada.
+- Otros endpoints que devuelven un producto entero a personal de almacén
+  (layout, stock, conteo) no pasan por `_producto_para`.
+- La matriz no tiene a «supervisor» ni «gerente» en nada de la plata (como
+  antes): la ven solo si son admin.
+- El formulario de parada tardía es de otro frente; acá solo su permiso.
+
+**Decisiones para el dueño:**
+1. La casilla de cartera vale para admin, supervisor, jefe y gerente. ¿Solo
+   admin? (hoy nadie más la tiene en QA; producción no se miró).
+2. ¿Forzar el cierre de una ruta pasa también al liquidador? (hoy admin).
+3. ¿El supervisor o el gerente ven Liquidación? (hoy no).
