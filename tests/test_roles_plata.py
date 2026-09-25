@@ -11,7 +11,7 @@ opera bodega, confirmaba retenciones y corregía cobros.
 es una función (`permisos_liquidacion`, `cartera_service.puede_autorizar`) y
 cada rol nuevo es una línea en la de su operación.
 
-Tres capas, las tres con la matriz del dueño **escrita acá a mano** (derivarla
+Cuatro capas, todas con la matriz del dueño **escrita acá a mano** (derivarla
 de las funciones sería medir el código contra sí mismo):
 
 1. **La matriz por función**: para cada operación, exactamente estos roles.
@@ -21,10 +21,11 @@ de las funciones sería medir el código contra sí mismo):
    puerta. Y las lecturas de la pantalla.
 3. **El aterrizaje** (Node, `util.js` + `app.js` reales): qué pestañas ve cada
    rol y dónde cae al entrar.
+4. **La tarjeta de Liquidación** (Node): cada botón de plata, solo a quien lo
+   puede usar, con los `permisos` reales del detalle.
 
-**Lo que NO cubre:** que la pantalla de Liquidación esconda cada botón que el
-servidor niega se prueba por las `permisos` del detalle (`_liqPermiso`), no
-botón por botón; el formulario de parada tardía es de otro frente.
+**Lo que NO cubre:** el formulario de parada tardía (otro frente); los botones
+de pantallas que estos roles no abren (Rutas, Operación hoy).
 """
 import json
 import re
@@ -329,3 +330,54 @@ class TestElAterrizaje:
         js = (PWA / 'app.js').read_text(encoding='utf-8')
         tabs = re.findall(r"'(tab-[a-z]+)'", re.search(r'const TABS = \[([^\]]+)\]', js).group(1))
         assert en_html == tabs[:len(en_html)] and len(en_html) == len(tabs), (en_html, tabs)
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 4 · La tarjeta de Liquidación ofrece a cada rol solo lo suyo (Node)
+# ═════════════════════════════════════════════════════════════════════════════
+
+class TestLaTarjetaOfreceSoloLoSuyo:
+    """Los botones salen de `permisos` del detalle (`_liqPermiso`), que el
+    servidor calcula con las mismas funciones que cortan con 403."""
+
+    def _pintar(self, app, client, db, almacen, tmp_path, rol):
+        import copy
+        from tests.test_liquidacion_pantalla_dinero import _ruta_entregada
+        from tests.test_sin_codigos_en_pantalla import _node
+        ruta = _ruta_entregada(db, almacen)
+        det = client.get(f'/api/rutas/{ruta.id}/liquidacion-detalle',
+                         headers=_jwt(app, _usuario(db, rol=rol))).get_json()
+        base = det['recaudos'][0]
+        con_ret = copy.deepcopy(base)
+        con_ret.update(id=base['id'] + 1, motivo_descuento='RETEFUENTE_2.5', monto_descuento=1000,
+                       retencion_confirmada=None)
+        sin_plata = copy.deepcopy(base)
+        sin_plata.update(id=base['id'] + 2, credito_no_autorizado=True, credito_autorizado_en=None)
+        det['recaudos'] = [base, con_ret, sin_plata]
+        # Dos momentos de la misma ruta: por liquidar (el botón de liquidar,
+        # el crédito sin plata) y liquidada (cobro, retención, corrección).
+        html = ''
+        for estado in ('PENDIENTE', 'LIQUIDADA'):
+            d = copy.deepcopy(det)
+            d['ruta']['estado_financiero'] = estado
+            html += _node(tmp_path, ['util.js', 'liquidacion.js'], {}, """
+                _liqDetalleRuta = DET;
+                _liqRenderDetalle();
+                return { html: document.getElementById('liq-modal-body').innerHTML };
+            """, globales={'DET': d})['html']
+        return html
+
+    #: función del onclick → quién la ve. A mano.
+    BOTONES = {
+        'liqToggleCobro(': {'admin', 'liquidador'},
+        'liqLiquidarWMS(': {'admin', 'liquidador'},
+        'liqConfirmarRetencion(': {'admin', 'lider_cartera'},
+        'liqAutorizarCredito(': {'admin', 'lider_cartera'},
+        'liqCorregirMontoParada(': {'lider_cartera'},   # el admin corrige dentro del panel de cobro
+    }
+
+    @pytest.mark.parametrize('rol', ['admin', 'liquidador', 'lider_cartera', 'jefe_almacen'])
+    def test_cada_boton_a_quien_lo_puede_usar(self, app, client, db, almacen, tmp_path, rol):
+        html = self._pintar(app, client, db, almacen, tmp_path, rol)
+        ve = {b for b in self.BOTONES if b in html}
+        assert ve == {b for b, roles in self.BOTONES.items() if rol in roles}, (rol, ve)
