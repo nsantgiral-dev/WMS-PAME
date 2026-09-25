@@ -847,7 +847,7 @@ class VigiaService:
 
     @staticmethod
     def _recalcular_precio_vivo(refs, hasta_semana):
-        """Promedio de las últimas N semanas → `periodo='VIVO'`.
+        """Promedio de las últimas N semanas → `periodo=PERIODO_VIVO` (sin impuesto).
 
         Se RECALCULA desde las filas semanales, no se acumula: correr dos veces
         la misma semana da el mismo resultado.

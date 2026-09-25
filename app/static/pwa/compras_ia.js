@@ -226,7 +226,7 @@ function _tablaDeficitChina(rop) {
   }
   html += `</tbody></table></div>
     <div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:6px;">
-      ▲ = topado por cobertura máxima (${esc(rop.cobertura_max_dias)}d). σ_d: ${esc(rop.estimador_sigma_d)}.
+      La cobertura máxima (${esc(rop.cobertura_max_dias)}d) topa solo el relleno, no el S objetivo. σ_d: ${esc(rop.estimador_sigma_d)}.
       Fórmula: ${esc(rop.formula)}
     </div></div>`;
   return html;
