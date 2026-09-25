@@ -564,7 +564,15 @@ class MedidorSQL:
             exigidas = _exigidas(c.vehiculo_id)
             inicio = _cuantas('custodia_inicio', c.id)
             mitad, tiene = None, None
-            if inicio < exigidas:
+            if c.custodio_tipo != 'conductor':
+                # El turno de la SEDE no se fotografía: las fotos de cada
+                # relevo las firma el conductor —las de fin del que entrega,
+                # las de inicio del que recibe— y cuelgan de SU turno. Exigirle
+                # fotos a la sede convertía cada noche normal en «turno de la
+                # sede sin fotos de inicio (0 de 11)» (QA e2e 2026-09-24).
+                # Su cierre forzado sí se cuenta: abajo.
+                pass
+            elif inicio < exigidas:
                 mitad, tiene = 'inicio', inicio
             elif c.fin_ts is not None:
                 fin = _cuantas('custodia_fin', c.id)

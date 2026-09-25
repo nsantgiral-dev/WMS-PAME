@@ -232,7 +232,10 @@ def mundo(db):
     custodia('AMB001', T(3, 6), 30_000, conductor='Dani', fin=T(2, 18),
              km_fin=30_050, forzado='el conductor no volvió a la sede',
              fotos=exigidas)
-    custodia('AMB001', T(2, 18), 30_050, sede_id=sede.id, fotos=exigidas)
+    # Sin fotos: el turno de la SEDE no se fotografía (las del relevo cuelgan
+    # del turno del conductor). Antes se sembraba `fotos=exigidas` y eso
+    # escondía el pendiente falso «turno de la sede sin fotos de inicio».
+    custodia('AMB001', T(2, 18), 30_050, sede_id=sede.id)
     lectura('AMB001', 30_000, T(3, 6), foto=False)
     lectura('AMB001', 30_050, T(2, 18), foto=False)
     db.session.commit()
@@ -301,7 +304,7 @@ def mundo(db):
     # ── SAL001 — salió sin turno: custodia en la sede ────────────────────
     papeles_al_dia('SAL001')
     lectura('SAL001', 60_000, T(1, 18))
-    custodia('SAL001', T(1, 18), 60_000, sede_id=sede.id, fotos=exigidas)
+    custodia('SAL001', T(1, 18), 60_000, sede_id=sede.id)
     ruta('SAL001', 0, 'Ana', estado='EN_TRANSITO')
     # Una ruta de hoy sin placa: no se puede cruzar contra ningún turno.
     ruta(None, 0, 'Dani', estado='PROGRAMADO')

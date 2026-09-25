@@ -272,16 +272,12 @@ class TestBandejaFinDelDiaNormal:
         assert b.status_code == 200, b.get_json()
         return b.get_json()
 
-    @pytest.mark.xfail(strict=True, reason='P2 QA 2026-09-24: ruta ENTREGADA + camión en la '
-                       'sede = señal turno_de_la_ruta (falso positivo cada noche)')
     def test_sin_senal_de_turno_de_la_ruta(self, client, db, mundo):
         b = self._dia_normal(client, db, mundo)
         senales = [s for s in b['senales']
                    if s['clase'] == 'turno_de_la_ruta' and s['placa'] == mundo.placa]
         assert not senales, [s['texto'] for s in senales]
 
-    @pytest.mark.xfail(strict=True, reason='P2 QA 2026-09-24: la custodia de la SEDE tras una '
-                       'entrega normal sale como turno sin fotos de inicio')
     def test_sin_pendiente_de_turno_de_sede_sin_fotos(self, client, db, mundo):
         b = self._dia_normal(client, db, mundo)
         pend = [p for p in b['pendientes']

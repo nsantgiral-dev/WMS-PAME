@@ -880,6 +880,19 @@ def _senales_combustible(m: _Mundo, r: _Recolector):
             caso={'tipo': 'expediente', 'pestana': 'gastos', 'gasto_id': g.id})
 
 
+def _vigente_en(c, ts) -> bool:
+    """¿El turno `c` estaba abierto en `ts`? Un turno que empieza justo en
+    `ts` no cuenta (es el que sigue); uno que termina justo en `ts` sí."""
+    return c.inicio_ts < ts and (c.fin_ts is None or c.fin_ts >= ts)
+
+
+def _turno_en(m: '_Mundo', vehiculo_id, ts):
+    """El turno del vehículo vigente en `ts` (el último que abrió), o `None`."""
+    vigentes = [c for c in m.custodias
+                if c.vehiculo_id == vehiculo_id and _vigente_en(c, ts)]
+    return vigentes[-1] if vigentes else None
+
+
 def _senales_turno_de_la_ruta(m: _Mundo, r: _Recolector):
     from flota.dominio import senales as dom
 
@@ -900,11 +913,28 @@ def _senales_turno_de_la_ruta(m: _Mundo, r: _Recolector):
             continue
         if ruta.vehiculo_id not in m.ids:
             continue
-        c = m.activa[ruta.vehiculo_id] if ruta.vehiculo_id in m.activa else None
-        cond_otro = None
-        if ruta.conductor_id in otro_vehiculo \
-                and otro_vehiculo[ruta.conductor_id] != ruta.vehiculo_id:
-            cond_otro = otro_vehiculo[ruta.conductor_id]
+        if ruta.estado in dom.ESTADOS_RUTA_TERMINADA:
+            # La ruta ya volvió: el turno de AHORA no dice quién la hizo (al
+            # final de un día normal el camión está en la sede, y eso no es
+            # «salió sin turno»). Se juzga contra el turno vigente cuando la
+            # ruta se cerró. Sin la hora del cierre, no se sabe cuál era.
+            if ruta.fecha_entregada is None:
+                r.no_evaluable('turno_de_la_ruta', placa_de[ruta.vehiculo_id],
+                               f'la ruta #{ruta.id} está entregada sin hora de '
+                               'cierre: no se sabe qué turno tenía el vehículo')
+                continue
+            c = _turno_en(m, ruta.vehiculo_id, ruta.fecha_entregada)
+            cond_otro = next((x.vehiculo_id for x in m.custodias
+                              if x.custodio_tipo == 'conductor'
+                              and x.custodio_conductor_id == ruta.conductor_id
+                              and x.vehiculo_id != ruta.vehiculo_id
+                              and _vigente_en(x, ruta.fecha_entregada)), None)
+        else:
+            c = m.activa[ruta.vehiculo_id] if ruta.vehiculo_id in m.activa else None
+            cond_otro = None
+            if ruta.conductor_id in otro_vehiculo \
+                    and otro_vehiculo[ruta.conductor_id] != ruta.vehiculo_id:
+                cond_otro = otro_vehiculo[ruta.conductor_id]
         ver = dom.turno_de_la_ruta(
             conductor_ruta_id=ruta.conductor_id, estado_ruta=ruta.estado,
             custodia_tipo=(None if c is None else
@@ -924,6 +954,11 @@ def _senales_turno_de_la_ruta(m: _Mundo, r: _Recolector):
             texto = (f'La ruta de hoy la hace {maneja}, pero el turno de '
                      f'{placa} está a nombre de '
                      f'{m.nombre_conductor(c.custodio_conductor_id)}.')
+        elif forma == 'salio_sin_turno' and ruta.estado in dom.ESTADOS_RUTA_TERMINADA:
+            texto = (f'La ruta de hoy de {placa} se cerró '
+                     f'({_palabra(ESTADO_RUTA, ruta.estado)}) y en ese momento el '
+                     'vehículo ' + ('no tenía turno abierto.' if c is None else
+                                    'estaba en custodia de la sede.'))
         elif forma == 'salio_sin_turno':
             texto = (f'La ruta de hoy de {placa} ya salió '
                      f'({_palabra(ESTADO_RUTA, ruta.estado)}) y el vehículo '

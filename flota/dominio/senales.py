@@ -265,6 +265,12 @@ def precio_de_galon(*, precio, historico: Sequence[Decimal]) -> Veredicto:
 #: salir.
 ESTADOS_RUTA_EN_LA_CALLE = ('EN_TRANSITO', 'ENTREGADA')
 
+#: De esos, los que ya VOLVIERON. Para ellos el turno que se compara no es el
+#: de ahora —al final de un día normal el camión está en la sede— sino el que
+#: estaba vigente cuando la ruta se cerró: lo elige el adaptador (QA e2e
+#: 2026-09-24: cada noche normal salía «ya salió y sigue en la sede»).
+ESTADOS_RUTA_TERMINADA = ('ENTREGADA',)
+
 
 def turno_de_la_ruta(*, conductor_ruta_id: Optional[int], estado_ruta: str,
                      custodia_tipo: Optional[str],
@@ -283,6 +289,11 @@ def turno_de_la_ruta(*, conductor_ruta_id: Optional[int], estado_ruta: str,
     3. el conductor de la ruta tiene abierto el turno de OTRO vehículo.
 
     Sin conductor en la ruta no hay contra qué comparar.
+
+    El «turno» que recibe es el del vehículo MIENTRAS la ruta estuvo en la
+    calle: el vigente para una ruta en tránsito, el vigente al cierre para una
+    ya entregada (`ESTADOS_RUTA_TERMINADA`). Compararla contra el turno de
+    ahora convierte cada fin de día normal en señal.
     """
     if conductor_ruta_id is None:
         return Veredicto(NO_EVALUABLE, 'la ruta no tiene conductor')
@@ -309,5 +320,5 @@ __all__ = [
     'km_sin_ruta', 'km_de_ruta', 'galones_de_ventana', 'precio_de_galon',
     'turno_de_la_ruta', 'km_sin_explicar', 'MOTIVO_TRAMO_EN_DUDA',
     'VENTANA_SENALES_DIAS', 'VENTANA_RECIENTE_DIAS',
-    'VENTANA_PRECIO_DIAS', 'ESTADOS_RUTA_EN_LA_CALLE',
+    'VENTANA_PRECIO_DIAS', 'ESTADOS_RUTA_EN_LA_CALLE', 'ESTADOS_RUTA_TERMINADA',
 ]
