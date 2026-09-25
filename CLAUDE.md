@@ -5449,7 +5449,7 @@ TSB, newsvendor de temporada, costo, deriva, bloqueo de recompra), con scripts
 que corrían el código real y comparaban contra respuestas calculadas a mano.
 Catorce defectos; el primero multiplicaba la demanda de los SKU grumosos por
 25. Trinquetes: `tests/test_demanda_una_funcion.py` y
-`tests/test_compras_numeros_correctos.py` (77 tests, **33 mutaciones, las 33
+`tests/test_compras_numeros_correctos.py` (78 tests, **33 mutaciones, las 33
 rojas**, cada una verificada a aplicar exactamente una vez antes de correr).
 
 ### D1 — «días con stock» eran «días con movimiento»
@@ -5544,6 +5544,9 @@ Además:
   ventana (del orden de las que ya traía la numeración por día de la
   demanda). No se midió contra el volumen de producción.
 - El `TOTAL` del TXT de Vigía puede traer IVA: se usa y se declara.
+
+Suite completa en el worktree (2026-09-24, `-m "not postgres"`, TZ=UTC):
+**8585 passed, 0 failed** (5 skipped, 19 xfailed).
 
 ### Decisiones para el dueño
 
