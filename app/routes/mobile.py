@@ -269,6 +269,25 @@ _SYNC_HANDLERS = {
 _SYNC_ID_FIELD = {'recepcion_escanear': 'recepcion_id'}
 
 
+def _clasificar_fallo_de_sync(e) -> dict:
+    """¿Reenviar este ítem de la cola lo arregla? (2026-09-25)
+
+    Antes todo fallo quedaba en la cola del teléfono para siempre: un cierre de
+    caja retenido por cartera dejaba al empacador frente a «Reintentando
+    automáticamente…» sin fin. `definitivo` = el servidor decidió (una regla de
+    negocio, un permiso, algo que no existe): sale de la cola y se dice.
+    Siesa caído NO es definitivo: se reintenta, y la pantalla lo dice.
+    """
+    from app.services.packing_service import CierreNoEmitido
+    from app.services.closing.base import SIESA_NO_DISPONIBLE
+    if isinstance(e, CierreNoEmitido):
+        return {'definitivo': e.estado != SIESA_NO_DISPONIBLE,
+                'estado_cierre': e.estado, 'retencion_id': e.retencion_id}
+    if isinstance(e, (ValueError, PermissionError, LookupError, KeyError)):
+        return {'definitivo': True}
+    return {'definitivo': False}
+
+
 @mobile_bp.route('/sync', methods=['POST'])
 @jwt_required()
 def sync_offline():
@@ -294,6 +313,9 @@ def sync_offline():
                     'exito': exito,
                 }
                 entrada['resultado' if exito else 'error'] = payload
+                if not exito:
+                    # El handler dijo que no (permiso, dueño): reenviar no lo arregla.
+                    entrada['definitivo'] = True
                 resultados.append(entrada)
                 continue
 
@@ -326,12 +348,15 @@ def sync_offline():
             current_app.logger.error(
                 f'[MOBILE] /sync error en tarea {item.get("tarea_id")} (accion={accion}): {e}', exc_info=True
             )
+            from app.extensions import db as _db_sync
+            _db_sync.session.rollback()
             resultados.append({
                 'tarea_id': item.get('tarea_id'),
                 '_qid': qid,
                 'accion': accion,
                 'exito': False,
-                'error': str(e)
+                'error': str(e),
+                **_clasificar_fallo_de_sync(e),
             })
 
     return jsonify({

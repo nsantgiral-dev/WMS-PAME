@@ -16,6 +16,18 @@ from app.utils.fecha import ahora_bogota as _ahora_bogota
 logger = logging.getLogger(__name__)
 
 
+class CierreNoEmitido(ValueError):
+    """El cierre no emitió por algo que NO es un error del empaque: la caja está
+    retenida por cartera, o Siesa no está disponible. Subclase de `ValueError`
+    para que ningún llamador viejo cambie de rama; la ruta y la cola offline
+    la leen para decirlo con sus palabras (`estado`)."""
+
+    def __init__(self, mensaje, estado, retencion_id=None):
+        super().__init__(mensaje)
+        self.estado = estado
+        self.retencion_id = retencion_id
+
+
 class PackingService:
 
     @staticmethod
@@ -348,6 +360,9 @@ class PackingService:
         closer = PackingCloserFactory.get(tarea.tipo_documento or 'PEDIDO')
         resultado = closer.ejecutar_cierre(tarea_id, bultos_data, usuario_id or 0)
         if not resultado.exitoso:
+            if resultado.estado:
+                raise CierreNoEmitido(resultado.error or resultado.mensaje,
+                                      resultado.estado, resultado.retencion_id)
             raise ValueError(resultado.error or resultado.mensaje)
         return resultado
 
@@ -377,6 +392,10 @@ class PackingService:
                 f'{len(bultos_resp)} pieza(s) registradas — la remisión y la factura se '
                 f'están emitiendo en Siesa; la caja sale al muelle cuando estén confirmadas'
             ),
+            # Lo que la pantalla dice, sin adivinar: CONFIRMADO solo si Siesa ya
+            # contestó; EN_COLA es «se encoló, todavía no se sabe». Antes el
+            # empacador leía «Siesa procesó la factura» en los dos.
+            'estado_siesa': 'CONFIRMADO' if tarea.siesa_triggered else 'EN_COLA',
             'siesa_triggered': tarea.siesa_triggered,
             'numero_pedido': tarea.numero_pedido_siesa,
             'cliente': tarea.cliente or '',

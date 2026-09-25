@@ -306,6 +306,21 @@ def confirmar_packing(id):
         return jsonify({'error': str(e)}), 500
 
 
+def cuerpo_cierre_no_emitido(e) -> dict:
+    """El cuerpo de un cierre que no emitió. Una forma para la ruta y la cola
+    offline (`/api/mobile/sync`): la pantalla lee `estado_cierre`."""
+    from app.services.closing.base import RETENIDO_CARTERA
+    return {'error': str(e), 'estado_cierre': e.estado,
+            'retenido_por_cartera': e.estado == RETENIDO_CARTERA,
+            'retencion_id': e.retencion_id}
+
+
+def status_cierre_no_emitido(e) -> int:
+    """409 retenido (decide otra persona) · 503 Siesa no disponible."""
+    from app.services.closing.base import SIESA_NO_DISPONIBLE
+    return 503 if e.estado == SIESA_NO_DISPONIBLE else 409
+
+
 @packing_bp.route('/<int:id>/cerrar', methods=['POST'])
 @jwt_required()
 def cerrar_packing(id):
@@ -335,9 +350,12 @@ def cerrar_packing(id):
         hay_bultos = Bulto.query.filter_by(tarea_id=id).count() > 0
         if not hay_bultos:
             return jsonify({'error': 'Debes declarar al menos una pieza'}), 400
+    from app.services.packing_service import CierreNoEmitido
     try:
         resultado = PackingService.cerrar_packing_resultado(tarea_id=id, bultos_data=bultos_data, usuario_id=uid)
         return jsonify(resultado), 200
+    except CierreNoEmitido as e:
+        return jsonify(cuerpo_cierre_no_emitido(e)), status_cierre_no_emitido(e)
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
     except Exception as e:

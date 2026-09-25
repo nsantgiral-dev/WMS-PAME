@@ -167,8 +167,8 @@ function empRenderListaTareas() {
         // solo se omite si la tarjeta ya tiene su propio borde de error (pedido anulado).
         const acentoLateral = `border-left:4px solid ${esTraslado ? '#c2410c' : '#1d4ed8'};`;
         return `
-        <div class="emp-task-card" onclick="${(bloqueado || pedidoAnulado) ? '' : `empIniciarHUD(${esc(t.id)})`}"
-          style="${(bloqueado || pedidoAnulado) ? 'cursor:default;' : 'cursor:pointer;'}${pedidoAnulado ? 'border:2px solid var(--red);' : acentoLateral}">
+        <div class="emp-task-card" onclick="${(bloqueado || pedidoAnulado || retenidoCartera) ? '' : `empIniciarHUD(${esc(t.id)})`}"
+          style="${(bloqueado || pedidoAnulado || retenidoCartera) ? 'cursor:default;' : 'cursor:pointer;'}${pedidoAnulado ? 'border:2px solid var(--red);' : acentoLateral}">
           <div class="emp-task-pedido" style="display:flex;align-items:center;">${refDisplay}${etiquetaHtml}</div>
           ${destinoHtml}
           <div class="emp-task-sub">${total} producto(s) · ${esc(t.items_verificados || 0)}/${total} verificados</div>
@@ -312,10 +312,13 @@ async function empReintentarSiesa(t) {
       cliente: data.cliente,
       municipio: data.municipio
     });
-    alerta(`${t.numero_pedido_siesa} despachado — Siesa procesó la factura`, 'exito');
+    const m = empMensajeCierre(data, 200);
+    alerta(`${t.numero_pedido_siesa}: ${m.texto}`, m.tipo);
     empCargarTareas();
   } catch (e) {
-    alerta(`Error Siesa: ${e.message || 'ver logs'}`, 'error');
+    const m = empMensajeCierre(e.body || { error: e.message }, e.status);
+    alerta(m.texto, m.tipo);
+    empCargarTareas();
   }
 }
 
@@ -748,7 +751,20 @@ async function bultosConfirmar() {
     const data = await r.json();
 
     if (!r.ok) {
-      errEl.textContent = data.error || 'Error al cerrar';
+      const m = empMensajeCierre(data, r.status);
+      if (data.estado_cierre === 'RETENIDO_CARTERA') {
+        // La caja quedó con sus piezas, esperando a cartera: no es un error
+        // que el empacador pueda corregir reintentando.
+        document.getElementById('modal-bultos').style.display = 'none';
+        _BULTOS_LINEAS = [];
+        document.getElementById('emp-hud')?.classList.remove('activo');
+        EMP_TAREA = null;
+        EMP_ITEMS = [];
+        alerta(m.texto, m.tipo);
+        empCargarTareas();
+        return;
+      }
+      errEl.textContent = m.texto;
       if (btnConf) { btnConf.disabled = false; btnConf.textContent = 'Cerrar Caja y Etiquetar →'; }
       return;
     }
@@ -799,7 +815,8 @@ function _empPostCierreExitoso(data, tareaId) {
   document.getElementById('emp-hud')?.classList.remove('activo');
   EMP_TAREA = null;
   EMP_ITEMS = [];
-  alerta(`${data.bultos.length} pieza(s) registradas — Siesa procesó la factura`, 'exito');
+  const _m = empMensajeCierre(data, 200);
+  alerta(_m.texto, _m.tipo);
   empCargarTareas();
   // Factura solo para empacadores NB1 con tareas PD — los packer_traslado
   // cierran traslados (numero_pedido=null) y no generan factura/remisión.
@@ -859,6 +876,74 @@ function onSync_cerrar_packing(resultado) {
   localStorage.removeItem('wms_emp_bloqueado');
   _empOcultarBloqueoOffline();
   _empPostCierreExitoso(resultado, info ? info.tarea_id : null);
+}
+
+/**
+ * El servidor decidió que ese cierre encolado no sale (retenido por cartera,
+ * sin permiso): la pantalla de espera se levanta y se dice por qué. Antes se
+ * quedaba en «Reintentando automáticamente…» para siempre.
+ * @param {Object} entrada - fila de `resultados` de `/api/mobile/sync`
+ */
+function onSyncRechazo_cerrar_packing(entrada) {
+  localStorage.removeItem('wms_emp_bloqueado');
+  _empOcultarBloqueoOffline();
+  const m = empMensajeCierre({ error: entrada.error, estado_cierre: entrada.estado_cierre },
+                             entrada.estado_cierre === 'RETENIDO_CARTERA' ? 409 : 400);
+  alerta(m.texto, m.tipo);
+  empCargarTareas();
+}
+
+/** El cierre encolado sigue sin salir, y se dice por qué (Siesa caído). */
+function onSyncPendiente_cerrar_packing(entrada) {
+  const overlay = document.getElementById('emp-bloqueo-offline');
+  if (!overlay) return;
+  let aviso = overlay.querySelector('#emp-bloqueo-motivo');
+  if (!aviso) {
+    aviso = document.createElement('div');
+    aviso.id = 'emp-bloqueo-motivo';
+    aviso.style.cssText = 'font-size:var(--fs-sm);color:var(--err-tx);font-weight:700;max-width:320px;';
+    overlay.appendChild(aviso);
+  }
+  aviso.textContent = empMensajeCierre({ error: entrada.error, estado_cierre: entrada.estado_cierre }, 503).texto;
+}
+
+/**
+ * Lo que el empacador lee al cerrar una caja. **Una función** para las tres
+ * vías (cierre directo, reintento, cola offline) — antes cada una decía lo
+ * suyo, y dos decían «Siesa procesó la factura» cuando solo se había encolado.
+ *
+ * · 2xx + `estado_siesa: CONFIRMADO` → Siesa ya confirmó la remisión.
+ * · 2xx + `EN_COLA` (o sin el campo)  → quedó EN COLA; no se afirma nada más.
+ * · `estado_cierre: RETENIDO_CARTERA` → «Retenido por cartera» con el motivo
+ *   del servidor. No es un error de Siesa ni del empaque.
+ * · `estado_cierre: SIESA_NO_DISPONIBLE` → «Siesa no está disponible: no se
+ *   puede facturar», nunca «procesado».
+ * · Cualquier otro error: el texto del servidor.
+ * @param {Object} data - cuerpo de la respuesta
+ * @param {number} status - código HTTP (200 si fue bien)
+ * @returns {{tipo: string, texto: string}}
+ */
+function empMensajeCierre(data, status) {
+  const d = data || {};
+  if (status >= 200 && status < 300) {
+    const n = Array.isArray(d.bultos) ? d.bultos.length : 0;
+    if (d.estado_siesa === 'CONFIRMADO') {
+      return { tipo: 'exito', texto: `${n} pieza(s) registradas — Siesa confirmó la remisión` };
+    }
+    return { tipo: 'exito', texto: `${n} pieza(s) registradas — la factura quedó en cola para Siesa; se confirma en unos segundos` };
+  }
+  if (d.estado_cierre === 'RETENIDO_CARTERA') {
+    const motivo = String(d.error || '').replace(/^Retenido por cartera:\s*/i, '');
+    return { tipo: 'advertencia',
+             texto: `Retenido por cartera: ${motivo || 'sin detalle'} La caja quedó con sus piezas; se cierra cuando cartera la libere.` };
+  }
+  if (d.estado_cierre === 'SIESA_NO_DISPONIBLE') {
+    const texto = String(d.error || '');
+    return { tipo: 'error',
+             texto: /^Siesa no está disponible/.test(texto) ? texto
+                    : `Siesa no está disponible: no se puede facturar. ${texto}`.trim() };
+  }
+  return { tipo: 'error', texto: d.error || `No se pudo cerrar la caja (error ${status || 'de conexión'})` };
 }
 
 // ─────────────────────────────────────────────────────────────

@@ -88,7 +88,7 @@ let _pickingTotal = 0;         // acumulador local de picking — sincronizado c
 let REC_TAB_ACTIVO = 'ocs';   // tab activo en pantalla recepcionista
 let TIMER_REC = null;          // polling recepcionista (30 seg)
 let SIESA_PEDIDOS = [];        // pedidos cargados desde Siesa (admin tab-pedidos)
-let PEDIDOS_TAB_ACTIVO = 0;    // sub-tab activo en tab-pedidos (0=Por despachar..3=Error Siesa)
+let PEDIDOS_TAB_ACTIVO = 0;    // sub-tab activo en tab-pedidos (0=Por despachar..3=Error Siesa, 4=Cartera)
 let PEDIDOS_GRUPOS_HTML = ['', '', '', ''];  // cache del HTML de cada grupo, para cambiar de tab sin refetch
 let PEDIDOS_GRUPOS_COUNT = [0, 0, 0, 0];     // cache del conteo de cada grupo
 let SIESA_OCS = [];            // OCs cargadas desde Siesa (pantalla recepcionista)
@@ -341,8 +341,12 @@ async function syncOffline() {
   try {
     const r = await post('/api/mobile/sync', { cola: COLA_OFFLINE });
     const resultados = r.resultados || [];
-    const qidsExitosos = new Set(resultados.filter(x => x.exito).map(x => x._qid));
-    COLA_OFFLINE = COLA_OFFLINE.filter(item => !qidsExitosos.has(item._qid));
+    // Sale de la cola lo que llegó Y lo que el servidor rechazó para siempre
+    // (`definitivo`): reenviarlo no lo arregla, y dejarlo trababa la pantalla
+    // (el empacador frente a «Reintentando…» sin fin). Lo que falló por algo
+    // pasajero (Siesa caído, red) se queda y se reintenta.
+    const qidsFuera = new Set(resultados.filter(x => x.exito || x.definitivo).map(x => x._qid));
+    COLA_OFFLINE = COLA_OFFLINE.filter(item => !qidsFuera.has(item._qid));
     localStorage.setItem('wms_cola_offline', JSON.stringify(COLA_OFFLINE));
     if (r.sincronizados > 0) alerta('✓ ' + r.sincronizados + ' tarea(s) sincronizadas', 'exito');
     // Avisar al módulo dueño de cada acción puntual (ej. packing.js espera a
@@ -350,6 +354,11 @@ async function syncOffline() {
     resultados.filter(x => x.exito && x.accion).forEach(x => {
       const cb = window['onSync_' + x.accion];
       if (typeof cb === 'function') cb(x.resultado);
+    });
+    resultados.filter(x => !x.exito).forEach(x => {
+      const cb = window[(x.definitivo ? 'onSyncRechazo_' : 'onSyncPendiente_') + (x.accion || '')];
+      if (typeof cb === 'function') cb(x);
+      else if (x.definitivo) alerta('No se pudo registrar lo guardado sin señal: ' + (x.error || 'rechazado'), 'error');
     });
   } catch (e) {}
 }
@@ -1405,7 +1414,7 @@ async function cargarPedidos() {
       get('/api/siesa/pedidos').catch(() => ({ pedidos: [] }))
     ]);
     SIESA_PEDIDOS = siesa.pedidos || [];
-    const _g = p => p.siesa_triggered ? 2 : (p.packing_estado === 'VERIFICADO' && !p.siesa_triggered) ? 3 : (p.picking_iniciado || p.packing_estado) ? 1 : 0;
+    const _g = pedidoGrupo;
     const _num = p => parseInt(String(p.numero_pedido).replace(/\D/g, ''), 10) || 0;
     SIESA_PEDIDOS.sort((a, b) => _g(a) - _g(b) || _num(b) - _num(a));
 
@@ -1424,7 +1433,7 @@ async function cargarPedidos() {
     }
 
     {
-      const grupos = [[], [], [], []];
+      const grupos = PEDIDOS_TAB_LABELS.map(() => []);
       SIESA_PEDIDOS.forEach((p, i) => {
         const _gp = _g(p);
         const sinProd = p.items.filter(it => !it.producto_id).length;
@@ -1520,7 +1529,25 @@ async function cargarPedidos() {
   }
 }
 
-const PEDIDOS_TAB_LABELS = ['POR DESPACHAR', 'EN PROCESO', 'DESPACHADO EN SIESA', 'ERROR SIESA'];
+const PEDIDOS_TAB_LABELS = ['POR DESPACHAR', 'EN PROCESO', 'DESPACHADO EN SIESA', 'ERROR SIESA', 'RETENIDO POR CARTERA'];
+/** Pestañas con insignia de atención (las que esperan que alguien actúe). */
+const PEDIDOS_TABS_ALERTA = [3, 4];
+
+/**
+ * A qué pestaña va un pedido. **Retenido por cartera no es «Error Siesa»**
+ * (2026-09-25): la caja quedó VERIFICADA sin factura porque cartera la frenó,
+ * y la pestaña de error la contaba con su insignia roja junto a los fallos
+ * reales. Tampoco lo es una caja que cartera ya liberó y espera cerrarse.
+ * @param {Object} p - pedido de `/api/siesa/pedidos`
+ * @returns {number} índice en `PEDIDOS_TAB_LABELS`
+ */
+function pedidoGrupo(p) {
+  if (p.siesa_triggered) return 2;
+  if (p.retencion_cartera || p.cartera_liberada) return 4;
+  if (p.packing_estado === 'VERIFICADO') return 3;
+  if (p.picking_iniciado || p.packing_estado) return 1;
+  return 0;
+}
 
 /** Render pedidos sub-tabs and the HTML for the currently active group. */
 function renderPedidosTabsYLista() {
@@ -1530,7 +1557,7 @@ function renderPedidosTabsYLista() {
 
   tabsEl.innerHTML = PEDIDOS_TAB_LABELS.map((label, i) => {
     const count = PEDIDOS_GRUPOS_COUNT[i] || 0;
-    const badge = i === 3
+    const badge = PEDIDOS_TABS_ALERTA.includes(i)
       ? (count ? `<span class="subtab-badge">${count}</span>` : '')
       : (count ? ` (${count})` : '');
     return `<div class="subtab${i === PEDIDOS_TAB_ACTIVO ? ' active' : ''}" onclick="pedidosCambiarTab(${i})">${label}${badge}</div>`;

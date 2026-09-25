@@ -11,7 +11,8 @@ from app.extensions import db
 from app.models.packing import TareaPacking, ItemPacking
 from app.models.siesa_job import SiesaJob, EstadoSiesaJob
 from app.services.connekta_gateway import connekta
-from .base import IPackingCloser, CierreResult
+from .base import (IPackingCloser, CierreResult, MotivoSiesaNoDisponible,
+                   RETENIDO_CARTERA, SIESA_NO_DISPONIBLE)
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +39,8 @@ class PedidoPackingCloser(IPackingCloser):
         from app.services import documento_fiscal as _doc
         _disponible, _motivo = _doc.siesa_disponible_para_facturar()
         if not _disponible:
-            return CierreResult(exitoso=False, error=_motivo, mensaje=_motivo)
+            return CierreResult(exitoso=False, error=_motivo, mensaje=_motivo,
+                                estado=SIESA_NO_DISPONIBLE)
 
         # El 142945 salió en un intento anterior y la remisión no se
         # identificó: re-cerrar re-encolaría el job, y el job no puede saber
@@ -53,7 +55,10 @@ class PedidoPackingCloser(IPackingCloser):
         if tarea_pre.tipo_docto_pedido_siesa and tarea_pre.consec_docto_pedido_siesa:
             error = self._precheck_siesa(tarea_pre)
             if error:
-                return CierreResult(exitoso=False, error=error, mensaje=error)
+                return CierreResult(
+                    exitoso=False, error=error, mensaje=error,
+                    estado=(SIESA_NO_DISPONIBLE
+                            if isinstance(error, MotivoSiesaNoDisponible) else None))
 
         # Compuerta de cartera (G2): el último punto reversible antes del
         # 244328, con el valor EMPACADO. Se evalúa antes del lock pesimista
@@ -94,7 +99,9 @@ class PedidoPackingCloser(IPackingCloser):
             logger.info('[PEDIDO_CLOSER] tarea=%s retenida por cartera (retención %s)',
                         tarea_id, getattr(puerta_cartera.retencion, 'id', None))
             return CierreResult(exitoso=False, error=puerta_cartera.mensaje,
-                                mensaje=puerta_cartera.mensaje)
+                                mensaje=puerta_cartera.mensaje,
+                                estado=RETENIDO_CARTERA,
+                                retencion_id=getattr(puerta_cartera.retencion, 'id', None))
 
         # Construir payload para 238925
         items_payload, error = self._construir_items_payload(tarea)
@@ -196,8 +203,11 @@ class PedidoPackingCloser(IPackingCloser):
                 'factura, y seguir sería arriesgar una FE duplicada.',
                 tipo, consec, e
             )
+            # Un texto para «Siesa no está disponible», el del frente fiscal
+            # (`MENSAJE_SIESA_NO_DISPONIBLE`); el tipo le dice a la ruta que es
+            # un 503 y a la cola offline que se reintenta.
             from app.services.documento_fiscal import MENSAJE_SIESA_NO_DISPONIBLE
-            return (
+            return MotivoSiesaNoDisponible(
                 f'{MENSAJE_SIESA_NO_DISPONIBLE} No se pudo verificar si el pedido '
                 f'{tarea_pre.numero_pedido_siesa} ya tiene factura ({e}); cerrar '
                 f'ahora podría emitir una factura duplicada.')
