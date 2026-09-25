@@ -439,6 +439,11 @@ def dias_frescura() -> int:
         return 7
 
 
+def _kardex_auto_encendido() -> bool:
+    from app.services.kardex_auto import encendido
+    return encendido()
+
+
 def salud_kardex() -> dict:
     """¿Puedo creerle al kardex HOY? — lo que la pantalla muestra, servido.
 
@@ -560,13 +565,17 @@ def salud_kardex() -> dict:
             'total_descargados': res.get('total_descargados'),
             'reanudar_desde': res.get('reanudar_desde'),
         },
-        # Ningún cron descarga el kardex (ver el trinquete en
-        # tests/test_kardex_salud.py). Si alguien lo agenda, esto tiene que
-        # cambiar con él.
-        'actualizacion_automatica': False,
+        # El único cron que descarga es `kardex_auto` (trinquete en
+        # tests/test_kardex_salud.py), y nace apagado. Esto lee SU interruptor:
+        # si alguien agenda otra descarga, el trinquete se pone rojo.
+        'actualizacion_automatica': _kardex_auto_encendido(),
         'nota_actualizacion': (
-            'Nada actualiza el kardex solo: se descarga cuando alguien pulsa '
-            '«Descargar». Por eso la fecha del último movimiento es el dato a mirar.'),
+            'Se descarga solo cada mañana (KARDEX_AUTO) dentro de la ventana '
+            'de Siesa, retomando donde quedó; reconstruye el stock diario solo '
+            'sobre una descarga COMPLETA.' if _kardex_auto_encendido() else
+            'Nada actualiza el kardex solo (KARDEX_AUTO apagado): se descarga '
+            'cuando alguien pulsa «Descargar». Por eso la fecha del último '
+            'movimiento es el dato a mirar.'),
         'descargaria_de': {
             'host': connekta.host_siesa,
             'parece_qa': bool(connekta.apunta_a_pruebas),

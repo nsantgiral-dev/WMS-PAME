@@ -65,6 +65,11 @@ REGISTRADOS = {
     # Verificación de la NC de devoluciones (m045devol, 2026-09-24). Nace
     # apagado por `DEVOLUCIONES_VERIFICAR_NC`; el interruptor vive en `correr`.
     'devolucion_nc_verificador': 'init_scheduler',
+    # Espejo de OCs de Siesa y kardex automático (m046compras, 2026-09-24).
+    # Los dos nacen apagados (`COMPRAS_OC_SYNC`, `KARDEX_AUTO`); el interruptor
+    # vive en `correr` / `ciclo`.
+    'compras_oc_sync': 'init_scheduler',
+    'kardex_auto': 'init_scheduler',
 }
 
 #: Fuera de `app/services/`. El barrido de vencimientos de flota vivía sin

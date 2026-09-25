@@ -390,6 +390,26 @@ def health_siesa():
     except Exception as _e_dev_nc:
         resultado['devoluciones_nc'] = {'error': str(_e_dev_nc)[:200]}
 
+    # COMPRAS: LAS FUENTES (m046compras). El espejo de OCs de Siesa (qué tan
+    # fresco es el «en camino») y el kardex automático (ventana, dónde quedó la
+    # última descarga). Los dos crons nacen apagados; la frescura sale de la
+    # base, no del proceso.
+    try:
+        from app.services import compras_oc_sync as _coc
+        resultado['compras_oc'] = _coc.estado()
+        resultado['compras_oc']['cron_en_este_proceso'] = '[COMPRAS_OC_SYNC]' in _activos
+    except Exception as _e_coc:
+        resultado['compras_oc'] = {'error': str(_e_coc)[:200]}
+    try:
+        from app.services import kardex_auto as _ka
+        resultado['kardex_auto'] = _ka.estado()
+        resultado['kardex_auto']['cron_en_este_proceso'] = '[KARDEX_AUTO]' in _activos
+        if resultado['kardex_auto'].get('problema_ventana'):
+            resultado['advertencias'].append(
+                'Kardex automático: ' + resultado['kardex_auto']['problema_ventana'])
+    except Exception as _e_ka:
+        resultado['kardex_auto'] = {'error': str(_e_ka)[:200]}
+
     # CONTADO CONTRAENTREGA vs CRÉDITO REAL (2026-09-24). Umbral, tabla de
     # días vigente y su fuente (copia del PDF, env o la consulta dinámica), y
     # en qué difiere la copia del maestro vivo si la consulta existe. Un

@@ -404,9 +404,18 @@ class TestLaSaludDelKardex:
         _abrir_registro(db, timedelta(hours=5))
         assert salud_kardex()['veredicto'] == 'DESCARGA_INTERRUMPIDA'
 
-    def test_declara_que_nada_lo_actualiza_solo(self, app, db):
+    def test_declara_que_nada_lo_actualiza_solo(self, app, db, monkeypatch):
         from app.services.kardex_service import salud_kardex
+        monkeypatch.delenv('KARDEX_AUTO', raising=False)
         assert salud_kardex()['actualizacion_automatica'] is False
+
+    def test_con_el_cron_encendido_lo_declara(self, app, db, monkeypatch):
+        """El interruptor que lee la salud es el del cron que descarga."""
+        from app.services.kardex_service import salud_kardex
+        monkeypatch.setenv('KARDEX_AUTO', 'true')
+        s = salud_kardex()
+        assert s['actualizacion_automatica'] is True
+        assert 'KARDEX_AUTO' in s['nota_actualizacion']
 
     def test_endpoint_para_gestion_y_no_para_operario(self, app, db, client,
                                                        jwt_token_admin, jwt_token):
@@ -417,10 +426,12 @@ class TestLaSaludDelKardex:
 
 
 class TestNadieDescargaElKardexSolo:
-    """`actualizacion_automatica: False` es una afirmación sobre el código.
+    """`actualizacion_automatica` es una afirmación sobre el código.
 
-    Si alguien agenda la descarga, la salud tiene que dejar de decirlo. Por AST
-    sobre `app/` y `flota/`: el único que llama `descargar_kardex` es la ruta.
+    Desde m046compras el único que llama `descargar_kardex` es
+    `kardex_auto.descargar_con_registro` —la usan el botón (la ruta) y el cron—,
+    y la salud lee el interruptor de ESE cron. Si alguien agenda otra descarga
+    por fuera, la salud mentiría: por AST sobre `app/` y `flota/`.
     """
 
     def _llamadores(self):
@@ -435,7 +446,7 @@ class TestNadieDescargaElKardexSolo:
         return hallados
 
     def test_solo_la_ruta_la_dispara(self):
-        assert set(self._llamadores()) == {'app/routes/kardex.py'}, (
+        assert set(self._llamadores()) == {'app/services/kardex_auto.py'}, (
             'algo nuevo descarga el kardex: actualizar `actualizacion_automatica` '
             'y `nota_actualizacion` en salud_kardex')
 

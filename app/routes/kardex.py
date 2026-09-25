@@ -58,20 +58,13 @@ def descargar_kardex():
     import threading
     def _run():
         with app.app_context():
-            from app.services import registro_sync_service as _reg2
-            registro_id = _reg2.abrir('kardex')
-            try:
-                from app.services.kardex_service import KardexService
-                resultado = KardexService.descargar_kardex(
-                    fecha_desde, fecha_hasta,
-                    pagina_inicial=pagina_inicial, max_minutos=max_minutos)
-                # `resultado['ok']` es el veredicto de NEGOCIO (COMPLETA vs
-                # PARCIAL) — distinto de que este `cerrar_ok` de aquí abajo
-                # solo dice "el hilo terminó sin excepción". El frontend ya
-                # lee `resultado.ok`/`resultado.error` para la distinción real.
-                _reg2.cerrar_ok(registro_id, resultado)
-            except Exception as e:
-                _reg2.cerrar_error(registro_id, str(e))
+            # El registro (abrir/cerrar en `registros_sync`) vive en UNA
+            # función, la misma que usa el cron `kardex_auto`: es lo que deja
+            # a `estado_descarga` distinguir una corrida viva de una muerta.
+            from app.services.kardex_auto import descargar_con_registro
+            descargar_con_registro(fecha_desde, fecha_hasta,
+                                   pagina_inicial=pagina_inicial,
+                                   max_minutos=max_minutos, origen='manual')
 
     t = threading.Thread(target=_run, daemon=True)
     t.start()

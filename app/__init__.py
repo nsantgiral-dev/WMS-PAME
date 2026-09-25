@@ -443,6 +443,18 @@ def create_app():
                 # **Nace apagado** (`DEVOLUCIONES_VERIFICAR_NC`): el interruptor
                 # vive en `correr`, no acá.
                 ('app.services.devolucion_nc_verificador',  'init_scheduler',          '[DEVOLUCIONES_NC]'),
+                # Espejo de las OCs de Siesa (m046compras): «en camino», lead
+                # time medido y precio de compra. Cada 30 min en la ventana
+                # 7–19:30 + historial y proveedores a las 7:20. Solo GET.
+                # **Nace apagado** (`COMPRAS_OC_SYNC`): el interruptor vive en
+                # `correr`, no acá. Lock propio (LOCK_COMPRAS_OC_SYNC).
+                ('app.services.compras_oc_sync',            'init_scheduler',          '[COMPRAS_OC_SYNC]'),
+                # Descarga + reconstrucción del kardex (m046compras). Solo en su
+                # ventana (`KARDEX_AUTO_VENTANA`, recortada a la de Siesa),
+                # retomando donde quedó; reconstruye solo sobre una descarga
+                # COMPLETA. **Nace apagado** (`KARDEX_AUTO`): el interruptor
+                # vive en `ciclo`. Lock propio (LOCK_KARDEX_AUTO).
+                ('app.services.kardex_auto',                'init_scheduler',          '[KARDEX_AUTO]'),
             ]
             for _mod_path, _fn_name, _tag in _scheduler_pesados:
                 _registrar_scheduler(app, _il, _app_logger, _mod_path, _fn_name, _tag)
