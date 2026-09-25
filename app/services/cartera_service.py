@@ -686,19 +686,51 @@ def _claves_del_nit(nit: str) -> set:
             .filter(PedidoHistoria.cliente_id == nit).distinct().all() if c}
 
 
-def consumo_wms(nit: str, excluir_pedido: str = None, filas: list = None) -> dict:
-    """Pedidos de crédito real del NIT que el WMS ya inició (tienen packing
-    vivo) y cuya factura todavía no está en la cartera leída. Sin esto, dos
-    pedidos seguidos del mismo cliente ven el mismo cupo libre."""
+#: Una FE emitida entra a la cartera de Siesa con retraso (medido: de
+#: instantáneo a minutos; ver «Bug 3» en CLAUDE.md). Hasta 48 h después de
+#: emitida, que no esté en la cartera abierta se lee «todavía no indexada» y
+#: consume cupo. Pasado eso, que no esté es que se PAGÓ (o se anuló): no
+#: consume (P1-1, 2026-09-25).
+VENTANA_FE_SIN_INDEXAR = timedelta(hours=48)
+
+
+def _momento_fe(t):
+    """Cuándo se emitió (aprox.) la FE de la tarea, y de dónde sale:
+    `fecha_despachado` → `siesa_triggered_at`. Sin ninguna, `(None, None)`: la
+    tarea **consume** (no saber cuándo se emitió no prueba que se pagó)."""
+    for campo in ('fecha_despachado', 'siesa_triggered_at'):
+        v = getattr(t, campo, None)
+        if v is not None:
+            return v, campo
+    return None, None
+
+
+def consumo_wms(nit: str, excluir_pedido: str = None, filas: list = None,
+                ahora: datetime = None) -> dict:
+    """Pedidos de crédito real del NIT que el WMS ya inició y que la cartera
+    leída todavía NO refleja. Sin esto, dos pedidos seguidos del mismo cliente
+    ven el mismo cupo libre.
+
+    Consume cupo (P1-1, 2026-09-25):
+    · la tarea **sin FE** todavía (se está empacando o despachando);
+    · la tarea **con FE reciente** (< `VENTANA_FE_SIN_INDEXAR`) que aún no
+      aparece en la cartera abierta.
+    No consume: la FE que ya está en la cartera (se cuenta en el saldo) y la FE
+    vieja que no está (se pagó o se anuló). Antes consumía toda FE ausente de
+    la cartera abierta: una FE **pagada** comía cupo para siempre.
+
+    Un pedido cuyo valor no se puede calcular NO suma 0: va a `desconocidos`,
+    y `evaluar` retiene con `VALOR_DESCONOCIDO` (Regla 0)."""
     from app.models.packing import EstadoPacking, TareaPacking
+    ahora = ahora or datetime.utcnow()
     claves = _claves_del_nit(nit)
     claves.discard(excluir_pedido)
     if not claves:
-        return {'total': Decimal(0), 'pedidos': []}
+        return {'total': Decimal(0), 'pedidos': [], 'desconocidos': [], 'fe_pagadas': 0}
     en_cartera = {(str(f.get('f353_id_tipo_docto_cruce') or '').strip(),
                    str(f.get('f353_consec_docto_cruce') or '').strip())
                   for f in (filas or [])}
-    total, pedidos = Decimal(0), []
+    total, pedidos, desconocidos, fe_pagadas = Decimal(0), [], [], 0
     for t in TareaPacking.query.filter(TareaPacking.pedido_clave.in_(list(claves)),
                                        TareaPacking.estado != EstadoPacking.CANCELADO).all():
         if (t.tipo_documento or '').upper() == 'TRASLADO':
@@ -711,20 +743,35 @@ def consumo_wms(nit: str, excluir_pedido: str = None, filas: list = None) -> dic
             codigo = next((l['cond_pago'] for l in lineas if l.get('cond_pago')), None)
         if _cp.cobro_contraentrega(codigo)['cobrar']:
             continue                      # contado (o supuesto): no consume cupo
-        if t.fe_consec and ((t.fe_tipo or '').strip(), str(t.fe_consec).strip()) in en_cartera:
-            continue                      # ya está en la cartera: no se cuenta dos veces
+        fe_momento, fe_fuente = None, None
+        if t.fe_consec:
+            if ((t.fe_tipo or '').strip(), str(t.fe_consec).strip()) in en_cartera:
+                continue                  # ya está en la cartera: no se cuenta dos veces
+            fe_momento, fe_fuente = _momento_fe(t)
+            if fe_momento is not None and ahora - fe_momento >= VENTANA_FE_SIN_INDEXAR:
+                fe_pagadas += 1           # vieja y fuera de la cartera abierta: pagada
+                continue
+        completo = True
         if t.valor_factura is not None:
             v, fuente_v = _dec(t.valor_factura), 'factura'
         else:
-            v, _c = valor_de_items(lineas if lineas is not None
-                                   else lineas_de_pedido(t.pedido_clave))
+            v, completo = valor_de_items(lineas if lineas is not None
+                                         else lineas_de_pedido(t.pedido_clave))
             fuente_v = 'estimado'
-        if v is None:
-            v, fuente_v = Decimal(0), 'desconocido'
+        fila = {'pedido': t.numero_pedido_siesa, 'tarea_id': t.id, 'estado': t.estado,
+                'fe': (f'{t.fe_tipo}-{t.fe_consec}' if t.fe_consec else None),
+                'fe_emitida_segun': fe_fuente if t.fe_consec else None}
+        if v is None or not completo:
+            # Sin valor, o con líneas sin valor: no se suma una parte como si
+            # fuera todo.
+            desconocidos.append({**fila, 'valor': None,
+                                 'valor_parcial': float(v) if v is not None else None,
+                                 'valor_fuente': 'desconocido'})
+            continue
         total += v
-        pedidos.append({'pedido': t.numero_pedido_siesa, 'tarea_id': t.id,
-                        'estado': t.estado, 'valor': float(v), 'valor_fuente': fuente_v})
-    return {'total': total, 'pedidos': pedidos}
+        pedidos.append({**fila, 'valor': float(v), 'valor_fuente': fuente_v})
+    return {'total': total, 'pedidos': pedidos, 'desconocidos': desconocidos,
+            'fe_pagadas': fe_pagadas}
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -846,6 +893,7 @@ def evaluar(nit, sucursal, valor, cond, contexto: dict = None) -> dict:
         'saldo_a_favor': float(a_favor), 'dias_max': dias_max,
         'saldo': float(saldo), 'consumo_wms': float(consumo['total']),
         'pedidos_wms': consumo['pedidos'],
+        'pedidos_wms_sin_valor': consumo['desconocidos'],
         'vencidas': [_fila_publica(f) for f in vencidas],
         'filas': [_fila_publica(f) for f in filas if f['clase'] != SALDADA],
     })
@@ -874,6 +922,13 @@ def evaluar(nit, sucursal, valor, cond, contexto: dict = None) -> dict:
     elif valor is None:
         motivos.append(_motivo(VALOR_DESCONOCIDO, 'No se pudo calcular el valor del pedido: '
                                                   'no se puede saber si cabe en el cupo.'))
+    elif consumo['desconocidos']:
+        # Un pedido en curso sin valor no suma 0: no se sabe cuánto cupo come.
+        motivos.append(_motivo(
+            VALOR_DESCONOCIDO,
+            f'{len(consumo["desconocidos"])} pedido(s) del cliente en curso en el WMS no '
+            'tienen valor calculable: no se puede saber cuánto cupo queda.',
+            pedidos=[d['pedido'] for d in consumo['desconocidos']]))
     else:
         disponible = cupo - saldo - consumo['total'] - valor
         exceso = max(Decimal(0), -disponible)
@@ -1775,8 +1830,41 @@ def listar(estado=None, nit=None, cambiados_desde=None, limite: int = 200) -> di
             'generado_en': datetime.utcnow().isoformat()}
 
 
+def puede_autorizar(usuario) -> bool:
+    """¿Esta persona puede decidir una retención desde el WMS? **Una política**
+    para la ruta (`_puede_autorizar_cartera`) y para la salud.
+
+    El permiso por persona (`puede_autorizar_cartera`) o el rol de cartera, si
+    existe (decisión del dueño 2026-09-25: «el líder de cartera es el que
+    autoriza»; otro frente crea el rol). Activo, y nunca conductor ni tienda.
+    """
+    from app.routes._auth_helpers import Roles
+    if usuario is None or not getattr(usuario, 'activo', False):
+        return False
+    if usuario.rol in (Roles.CONDUCTOR, Roles.TIENDA):
+        return False
+    if bool(getattr(usuario, 'puede_autorizar_cartera', False)):
+        return True
+    return usuario.rol in roles_que_autorizan()
+
+
+def roles_que_autorizan() -> tuple:
+    """Los roles que autorizan cartera por sí solos: los que `Roles` declare
+    como de cartera (`CARTERA`, `LIDER_CARTERA`). Hoy ninguno existe."""
+    from app.routes._auth_helpers import Roles
+    return tuple(v for v in (getattr(Roles, 'CARTERA', None),
+                             getattr(Roles, 'LIDER_CARTERA', None)) if v)
+
+
+def autorizadores() -> list:
+    """Usuarios que hoy pueden decidir una retención desde el WMS."""
+    from app.models.usuario import Usuario
+    return [u for u in Usuario.query.filter(Usuario.activo.is_(True)).all()
+            if puede_autorizar(u)]
+
+
 def salud() -> dict:
-    """Frescura de la cartera y retenidos por antigüedad."""
+    """Frescura de la cartera, retenidos por antigüedad y quién puede decidir."""
     ahora = datetime.utcnow()
     vivas = RetencionCartera.query.filter_by(estado=EstadoRetencion.RETENIDO).all()
     tramos = {'<1d': 0, '1-3d': 0, '>3d': 0}
@@ -1796,8 +1884,25 @@ def salud() -> dict:
         simulacion = bool(connekta.modo_simulacion)
     except Exception:  # noqa: BLE001
         ruta, simulacion = '', None
+    # P1-12: RETIENE sin nadie que pueda decidir deja los pedidos de crédito
+    # retenidos sin salida. Se cuenta y se avisa.
+    _auts = autorizadores()
+    _token = bool((os.getenv('CARTERA_GESTOR_TOKEN') or '').strip())
+    problemas_ = list(parametros()['problemas'])
+    if m == 'RETIENE' and not _auts and not _token:
+        problemas_.append(
+            'La compuerta RETIENE está encendida y NADIE puede decidir: ningún usuario '
+            'con permiso de autorizar cartera y sin CARTERA_GESTOR_TOKEN (el Gestor no '
+            'puede llamar). Todo pedido de crédito retenido queda sin salida.')
+    elif m == 'RETIENE' and not _auts:
+        problemas_.append(
+            'Ningún usuario del WMS puede autorizar cartera: solo el Gestor de Cartera '
+            'decide. Si el Gestor no responde, no hay respaldo.')
     return {
         'modo': m, 'simulacion': simulacion,
+        'autorizadores': {'n': len(_auts), 'usuarios': [
+            {'id': u.id, 'nombre': u.nombre, 'rol': u.rol} for u in _auts],
+            'roles_que_autorizan': list(roles_que_autorizan())},
         'politica': {'version': VERSION_POLITICA, 'parametros': parametros()},
         'retenidos': len(vivas), 'retenidos_por_antiguedad': tramos,
         'alertas': [{'id': r.id, 'pedido': r.numero_pedido, 'cliente': r.cliente,
@@ -1811,8 +1916,8 @@ def salud() -> dict:
         'habilitaciones': {'clientes': len(habs), 'ultima_recibida': _iso(ultima_hab)},
         'conversion_a_contado': {'cond_pago_ruta': ruta or None,
                                  'disponible': bool(ruta) and _cp.cobro_contraentrega(ruta)['cobrar']},
-        'gestor_token_configurado': bool((os.getenv('CARTERA_GESTOR_TOKEN') or '').strip()),
-        'problemas': parametros()['problemas'],
+        'gestor_token_configurado': _token,
+        'problemas': problemas_,
         'generado_en': ahora.isoformat(),
     }
 

@@ -228,12 +228,9 @@ def _puede_autorizar_cartera():
     except (TypeError, ValueError):
         return None
     from app.extensions import db
+    from app.services.cartera_service import puede_autorizar
     u = db.session.get(Usuario, uid)
-    if not u or not u.activo:
-        return None
-    if u.rol in (Roles.CONDUCTOR, Roles.TIENDA):
-        return None
-    return u if bool(getattr(u, 'puede_autorizar_cartera', False)) else None
+    return u if puede_autorizar(u) else None
 
 
 def _ve_cartera():
