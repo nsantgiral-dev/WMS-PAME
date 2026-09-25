@@ -3,7 +3,7 @@ from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from app.extensions import db
 from app.models.picking import TareaPicking, EstadoPicking
-from app.services.picking_service import PickingService
+from app.services.picking_service import PickingService, DeclaracionInvalida
 from app.routes._auth_helpers import Roles
 from app.models.usuario import Usuario
 
@@ -421,7 +421,8 @@ def reportar_problema(id):
     """
     Supervisor Guard — Operario reporta faltante o ubicación vacía.
 
-    Payload: { motivo, cantidad_encontrada (int, opcional — default 0) }
+    Payload: { motivo, cantidad_encontrada (int; obligatoria salvo
+    UBICACION_VACIA — ver `picking_service.cantidad_encontrada_declarada`) }
     Motivos: UBICACION_VACIA | FALTANTE | MERCANCIA_AVERIADA | PRODUCTO_INCORRECTO
     """
     try:
@@ -436,13 +437,16 @@ def reportar_problema(id):
         resultado = PickingService.reportar_problema(
             tarea_id=id,
             operario_id=uid,
-            motivo=data.get('motivo', 'UBICACION_VACIA'),
-            cantidad_encontrada=int(data.get('cantidad_encontrada', 0)),
+            motivo=data.get('motivo'),
+            cantidad_encontrada=data.get('cantidad_encontrada'),
             observaciones=data.get('observaciones') or None,
         )
         return jsonify(resultado), 200
     except PermissionError as e:
         return jsonify({'error': str(e)}), 403
+    except DeclaracionInvalida as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 400
     except ValueError as e:
         return jsonify({'error': str(e)}), 404
 

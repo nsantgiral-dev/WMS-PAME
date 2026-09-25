@@ -735,22 +735,22 @@ async function reportarProblema(tareaId) {
         <div style="font-size:var(--fs-lg);font-weight:700;margin-bottom:4px;color:var(--err-tx);">⚠ Reportar problema</div>
         <div style="font-size:var(--fs-xs);color:var(--tx3);margin-bottom:16px;">La tarea se bloquea. El jefe auditará y ajustará el inventario.</div>
 
-        <button onclick="confirmarProblema(${tareaId},'UBICACION_VACIA',0)"
+        <button onclick="confirmarProblema(${esc(tareaId)},'UBICACION_VACIA')"
           style="width:100%;padding:14px;margin-bottom:8px;font-size:var(--fs-sm);font-weight:600;background:#7f1d1d;color:var(--err-tx);border:none;border-radius:10px;cursor:pointer;text-align:left;">
           📦 Ubicación vacía — no había nada
         </button>
 
-        <button onclick="confirmarProblema(${tareaId},'FALTANTE',0)"
+        <button onclick="confirmarProblema(${esc(tareaId)},'FALTANTE')"
           style="width:100%;padding:14px;margin-bottom:8px;font-size:var(--fs-sm);font-weight:600;background:#7f1d1d;color:var(--err-tx);border:none;border-radius:10px;cursor:pointer;text-align:left;">
           📉 Agotado — hay ubicación pero no queda stock
         </button>
 
-        <button onclick="confirmarProblema(${tareaId},'MERCANCIA_AVERIADA',0)"
+        <button onclick="confirmarProblema(${esc(tareaId)},'MERCANCIA_AVERIADA')"
           style="width:100%;padding:14px;margin-bottom:8px;font-size:var(--fs-sm);font-weight:600;background:#7f1d1d;color:var(--err-tx);border:none;border-radius:10px;cursor:pointer;text-align:left;">
           🚫 Mercancía averiada
         </button>
 
-        <button onclick="confirmarProblema(${tareaId},'PRODUCTO_INCORRECTO',0)"
+        <button onclick="confirmarProblema(${esc(tareaId)},'PRODUCTO_INCORRECTO')"
           style="width:100%;padding:14px;margin-bottom:8px;font-size:var(--fs-sm);font-weight:600;background:#7f1d1d;color:var(--err-tx);border:none;border-radius:10px;cursor:pointer;text-align:left;">
           ❌ Producto incorrecto
         </button>
@@ -771,26 +771,62 @@ async function reportarProblema(tareaId) {
 }
 
 /**
+ * Cuántas unidades encontró el picker, **declaradas por él** — nunca un 0 por
+ * omisión (2026-09-25).
+ *
+ * Los cuatro botones mandaban `cantidad_encontrada: 0`. Un picker que ya había
+ * escaneado 3 de 5 y reportaba «Agotado» quedaba registrado como «encontró 0»:
+ * las 3 que tenía en la mano ni se descontaban del hueco ni se empacaban.
+ *
+ * · «Ubicación vacía» sin nada escaneado: el motivo declara 0 por sí mismo.
+ * · Con escaneos, «Ubicación vacía» se contradice: se le pide usar «Agotado».
+ * · Cualquier otro motivo: se PREGUNTA, con lo escaneado como valor inicial.
+ *   Cancelar no manda nada — la tarea sigue como estaba.
+ *
+ * Devuelve el número, o `null` si no hay que mandar nada.
+ * @param {string} motivo
+ * @param {{cantidad_escaneada?:number, cantidad_requerida?:number}|null} tarea
+ */
+async function _cantidadEncontradaDeclarada(motivo, tarea) {
+  const escaneadas = (tarea && tarea.cantidad_escaneada) || 0;
+  const requeridas = tarea && tarea.cantidad_requerida != null ? tarea.cantidad_requerida : undefined;
+  if (motivo === 'UBICACION_VACIA') {
+    if (escaneadas === 0) return 0;
+    alerta(`Ya escaneó ${escaneadas} unidad(es): la ubicación no estaba vacía. ` +
+           'Use «Agotado» e indique cuántas encontró.', 'error');
+    return null;
+  }
+  return _modalCantidad(
+    '¿Cuántas unidades encontró?',
+    `Cuente las que tiene en la mano${requeridas != null ? ` (la tarea pide ${esc(requeridas)})` : ''}. ` +
+    'Si no encontró ninguna, escriba 0.',
+    { min: 0, max: requeridas, valorInicial: escaneadas > 0 ? escaneadas : '',
+      textoConfirmar: 'Reportar' }
+  );
+}
+
+/**
  * Confirma el reporte de problema — cierra el picking con faltante y genera auditoría urgente.
  * @param {number} tareaId
  * @param {string} motivo - 'UBICACION_VACIA' | 'FALTANTE' | 'MERCANCIA_AVERIADA' | 'PRODUCTO_INCORRECTO'
- * @param {number} cantidadEncontrada - Lo que el operario encontró físicamente
  */
-async function confirmarProblema(tareaId, motivo, cantidadEncontrada) {
+async function confirmarProblema(tareaId, motivo) {
   const observaciones = document.getElementById('obs-problema')?.value?.trim() || '';
   const modal = document.getElementById('modal-problema');
   if (modal) modal.remove();
   const tipo = TAREA_ACTUAL?.tipo || 'PICKING';
+  const cantidadEncontrada = await _cantidadEncontradaDeclarada(motivo, TAREA_ACTUAL);
+  if (cantidadEncontrada === null || cantidadEncontrada === undefined) return;
   try {
     await post('/api/mobile/reportar-problema', {
       tarea_id: tareaId,
       tipo,
       motivo,
-      cantidad_encontrada: cantidadEncontrada || 0,
+      cantidad_encontrada: cantidadEncontrada,
       observaciones: observaciones || undefined,
     });
     const msg = cantidadEncontrada > 0
-      ? `Short-pick: ${cantidadEncontrada} unidades registradas. Auditoría creada.`
+      ? `Faltante parcial: ${cantidadEncontrada} unidades registradas. Auditoría creada.`
       : 'Problema reportado — auditoría urgente creada para el jefe';
     alerta(msg, 'advertencia');
     TAREA_ACTUAL = null;

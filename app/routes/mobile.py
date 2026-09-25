@@ -358,8 +358,10 @@ def reportar_problema():
 
     tarea_id = data.get('tarea_id')
     tipo = data.get('tipo', 'PICKING')
-    motivo = data.get('motivo', 'UBICACION_VACIA')
-    cantidad_encontrada = int(data.get('cantidad_encontrada', 0))
+    motivo = data.get('motivo')
+    # Crudo: lo valida `picking_service.cantidad_encontrada_declarada`. Un
+    # `int(data.get(..., 0))` acá convertía «no lo dijo» en «encontró 0».
+    cantidad_encontrada = data.get('cantidad_encontrada')
     observaciones = data.get('observaciones') or None
 
     if not tarea_id:
@@ -367,7 +369,7 @@ def reportar_problema():
 
     # ── PICKING ──────────────────────────────────────────────────
     if tipo == 'PICKING':
-        from app.services.picking_service import PickingService
+        from app.services.picking_service import PickingService, DeclaracionInvalida
         try:
             resultado = PickingService.reportar_problema(
                 tarea_id=tarea_id,
@@ -379,6 +381,9 @@ def reportar_problema():
             return jsonify(resultado), 200
         except PermissionError as e:
             return jsonify({'error': str(e)}), 403
+        except DeclaracionInvalida as e:
+            db.session.rollback()
+            return jsonify({'error': str(e)}), 400
         except ValueError as e:
             return jsonify({'error': str(e)}), 404
         except Exception as e:

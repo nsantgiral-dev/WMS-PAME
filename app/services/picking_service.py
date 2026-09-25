@@ -156,6 +156,68 @@ def campos_ubicacion_averias() -> dict:
     }
 
 
+#: Los motivos con que un picker bloquea su tarea («Reportar problema»).
+MOTIVOS_PROBLEMA_PICKING = ('UBICACION_VACIA', 'FALTANTE', 'MERCANCIA_AVERIADA',
+                            'PRODUCTO_INCORRECTO')
+#: El único motivo que DECLARA la cantidad por sí mismo: «no había nada» es 0.
+MOTIVOS_QUE_DECLARAN_CERO = ('UBICACION_VACIA',)
+
+
+class DeclaracionInvalida(ValueError):
+    """Lo que el picker declaró no se puede registrar tal cual (400, no 404).
+
+    Subclase de `ValueError` para que ningún llamador viejo cambie de rama."""
+
+
+def cantidad_encontrada_declarada(motivo, valor, solicitada) -> int:
+    """Cuántas unidades dice el picker que encontró. **Una política, una
+    función** (la usan `/api/mobile/reportar-problema` y
+    `/api/picking/<id>/reportar-problema`).
+
+    ## Por qué existe (2026-09-25)
+
+    La pantalla mandaba `cantidad_encontrada: 0` en los cuatro botones, y las
+    dos rutas hacían `int(data.get('cantidad_encontrada', 0))`. Un picker que
+    ya había escaneado 3 de 5 y reportaba «Agotado» quedaba registrado como
+    «encontró 0»: las 3 que tenía en la mano no se descontaban del hueco, las 5
+    quedaban bloqueadas y la tarea conservaba `cantidad_recogida = 3` de sus
+    escaneos. Tres números que no cuadran entre sí, y ninguno era el real.
+
+    Regla 0: **un faltante sin cantidad no se convierte en 0 — se pide.**
+    `UBICACION_VACIA` es la única excepción, porque el motivo mismo lo dice
+    («no había nada»); y justamente por eso, con una cantidad mayor que cero
+    se contradice y se rechaza.
+    """
+    if motivo not in MOTIVOS_PROBLEMA_PICKING:
+        raise DeclaracionInvalida(
+            f'Motivo desconocido: {motivo!r}. Válidos: {", ".join(MOTIVOS_PROBLEMA_PICKING)}')
+    if valor is None or (isinstance(valor, str) and not valor.strip()):
+        if motivo in MOTIVOS_QUE_DECLARAN_CERO:
+            return 0
+        raise DeclaracionInvalida(
+            'Falta cuántas unidades encontró. Un faltante sin cantidad no se '
+            'registra como cero: indique el número, aunque sea 0.')
+    if isinstance(valor, bool):
+        raise DeclaracionInvalida('La cantidad encontrada tiene que ser un número')
+    try:
+        n = int(valor)
+    except (TypeError, ValueError):
+        raise DeclaracionInvalida(f'La cantidad encontrada no es un número: {valor!r}')
+    if isinstance(valor, float) and n != valor:
+        raise DeclaracionInvalida('La cantidad encontrada tiene que ser un número entero')
+    if n < 0:
+        raise DeclaracionInvalida('La cantidad encontrada no puede ser negativa')
+    if solicitada is not None and n > int(solicitada):
+        raise DeclaracionInvalida(
+            f'Declaró {n} encontradas y la tarea pide {solicitada}: si sobra, '
+            f'no es un problema de picking')
+    if motivo in MOTIVOS_QUE_DECLARAN_CERO and n > 0:
+        raise DeclaracionInvalida(
+            '«Ubicación vacía» declara que no había nada. Si encontró unidades, '
+            'reporte «Agotado» con la cantidad que encontró.')
+    return n
+
+
 class PickingService:
 
     #: El bin de respaldo, mismo literal que `_UBICACION_AVERIADOS` de
@@ -1378,7 +1440,7 @@ class PickingService:
 
     @staticmethod
     def reportar_problema(tarea_id: int, operario_id: int, motivo: str,
-                           cantidad_encontrada: int = 0, observaciones: str = None) -> dict:
+                           cantidad_encontrada=None, observaciones: str = None) -> dict:
         """
         Lógica compartida entre /picking/<id>/reportar-problema y /mobile/reportar-problema.
         Bloquea la tarea y registra short-pick si aplica. La tarea BLOQUEADA queda
@@ -1400,6 +1462,9 @@ class PickingService:
                 f'(estado actual: {tarea.estado})'
             )
 
+        # Lo que el picker declaró, validado — nunca un 0 por omisión.
+        cantidad_encontrada = cantidad_encontrada_declarada(
+            motivo, cantidad_encontrada, tarea.cantidad_solicitada)
         cantidad_faltante = max(0, tarea.cantidad_solicitada - cantidad_encontrada)
 
         inv = (UbicacionProducto.query
@@ -1416,8 +1481,11 @@ class PickingService:
             inv.bloqueado = inv.bloqueado + cantidad_faltante
             inv.reservado = max(0, inv.reservado - cantidad_faltante)
 
+        # La cantidad recogida ES la declarada, también cuando es 0: antes solo
+        # se escribía si era > 0 y una tarea con 3 escaneos reportada «encontré
+        # 0» conservaba `cantidad_recogida = 3` sin haberlas descontado.
+        tarea.cantidad_recogida = cantidad_encontrada
         if cantidad_encontrada > 0:
-            tarea.cantidad_recogida = cantidad_encontrada
             if inv:
                 inv.cantidad = max(0, inv.cantidad - cantidad_encontrada)
                 inv.reservado = max(0, inv.reservado - cantidad_encontrada)
