@@ -726,6 +726,16 @@ def avisos_sin_canal(ayer_inicio, ayer_fin) -> list:
             lineas.append('⚠ Crons que no corren hace más de lo esperado: '
                           + ', '.join(lat['callados']))
 
+    def _stock_viejo():
+        from datetime import timedelta as _td
+        from app.services.inventario_siesa_service import _BODEGAS_PV, frescura_stock_siesa
+        f = frescura_stock_siesa(_BODEGAS_PV)
+        viejas = sorted(b for b, v in f['por_bodega'].items()
+                        if v['actualizada'] and datetime.utcnow() - v['actualizada'] > _td(hours=24))
+        if viejas:
+            lineas.append('⚠ Existencias de Siesa sin refrescar hace más de 24 h en: '
+                          + ', '.join(viejas) + ' (el Armador y los traslados las usan).')
+
     def _sello():
         from app.services import sello_ambiente
         e = sello_ambiente.estado()
@@ -737,6 +747,7 @@ def avisos_sin_canal(ayer_inicio, ayer_fin) -> list:
     _seguro('los traslados en tránsito', _traslados)
     _seguro('la carga física', _carga_fisica)
     _seguro('los crons', _crons)
+    _seguro('las existencias de Siesa', _stock_viejo)
     _seguro('el sello de ambiente', _sello)
     return lineas
 

@@ -99,6 +99,14 @@ class TestAvisosSinCanal:
         lineas = alertas_service.avisos_sin_canal(*self._ventana())
         assert any('NO escribió' in l for l in lineas), lineas
 
+    def test_existencias_viejas(self, db):
+        from app.models.stock_siesa import StockSiesa
+        db.session.add(StockSiesa(bodega='NC1', codigo_siesa='X', existencia=1,
+                                  updated_at=datetime.utcnow() - timedelta(days=2)))
+        db.session.commit()
+        lineas = alertas_service.avisos_sin_canal(*self._ventana())
+        assert any('NC1' in l and '24 h' in l for l in lineas), lineas
+
     def test_cartera_retenida_mas_de_3_dias(self, db):
         with patch('app.services.cartera_service.salud',
                    return_value={'alertas': [{'pedido': 'PD77', 'dias': 5}]}):

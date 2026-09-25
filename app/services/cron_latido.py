@@ -111,6 +111,15 @@ def con_latido(nombre: str, fn):
     return _envuelto
 
 
+def corrio_bien_desde(nombre: str, desde: datetime) -> bool:
+    """¿Alguna corrida de `nombre` —en cualquier servicio— terminó bien desde
+    `desde`? Para los crons que corren en web y worker y no pueden repetirse
+    (un correo semanal)."""
+    from app.models.cron_latido import CronLatido
+    return CronLatido.query.filter(CronLatido.nombre == nombre,
+                                   CronLatido.ultimo_ok_en >= desde).count() > 0
+
+
 #: Cada cuánto se espera que corra cada cron, para decir «callado». Un cron
 #: que no está acá se muestra sin veredicto de atraso (se ve su última hora).
 #: Holgura incluida; de noche los de ventana no corren (7:00–19:30 Bogotá).

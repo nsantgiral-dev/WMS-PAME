@@ -264,9 +264,23 @@ def init_scheduler(app):
     from apscheduler.triggers.cron import CronTrigger
 
     def _correr():
+        from datetime import datetime, timedelta
+        from app.services.cron_latido import corrio_bien_desde
+        from app.utils.lock import LOCK_FLOTA_REPORTE_SEMANAL, advisory_lock
         with app.app_context():
             try:
-                enviar_reporte_semanal()
+                # Si la web y el worker tienen HEAVY_SCHEDULERS, los dos disparan
+                # a las 06:15: el lock excluye la corrida simultánea y el
+                # latido la de después (un correo por semana, no dos).
+                with advisory_lock(LOCK_FLOTA_REPORTE_SEMANAL, 'flota_reporte_semanal') as tomado:
+                    if not tomado:
+                        logger.info('[FLOTA_REPORTE] otro servicio lo está enviando')
+                        return
+                    if corrio_bien_desde('flota_reporte_semanal',
+                                         datetime.utcnow() - timedelta(days=6)):
+                        logger.info('[FLOTA_REPORTE] ya salió esta semana desde otro servicio')
+                        return
+                    enviar_reporte_semanal()
             except Exception:
                 # Se registra y NO se traga en silencio: un cron que revienta
                 # callado es indistinguible de uno que no tenía nada que mandar.

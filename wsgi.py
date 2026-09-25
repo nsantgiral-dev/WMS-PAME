@@ -2,13 +2,5 @@ from app import create_app
 
 app = create_app()
 
-
-def post_fork(server, worker):
-    """
-    Gunicorn hook: se ejecuta en cada worker justo después del fork.
-    Con --preload, el master abrió conexiones de BD que no son seguras
-    de compartir entre procesos. SQLAlchemy las recicla aquí.
-    """
-    from app.extensions import db
-    with app.app_context():
-        db.engine.dispose()
+# El hook `post_fork` que vivía acá no corría nunca: Gunicorn solo lee hooks
+# de su archivo de configuración. Vive en `gunicorn.conf.py` (P3, 2026-09-25).

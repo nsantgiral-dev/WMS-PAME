@@ -145,10 +145,21 @@ def iniciar_refresh_periodico(app):
         global _descarga_multibodega_en_curso
         if _descarga_multibodega_en_curso:
             return
+        # Hilo propio (no APScheduler): la ventana de Siesa se mira acá
+        # (P2 2026-09-25). Antes el refresco corría las 24 horas.
+        from app.services.ventana_siesa import ventana_abierta
+        if not ventana_abierta():
+            return
         _descarga_multibodega_en_curso = True
         try:
+            from app.utils.lock import LOCK_REFRESCO_EXISTENCIAS, advisory_lock
             with app.app_context():
-                _descargar_inventario_siesa_raw(forzar=True)
+                # Web y worker con HEAVY_SCHEDULERS: uno descarga, el otro no.
+                with advisory_lock(LOCK_REFRESCO_EXISTENCIAS, 'refresco_existencias') as tomado:
+                    if not tomado:
+                        logger.info('[INV-SIESA] Refresh omitido: otro proceso lo está haciendo')
+                        return
+                    _descargar_inventario_siesa_raw(forzar=True)
                 logger.info('[INV-SIESA] Refresh completado')
         except Exception as exc:
             logger.error('[INV-SIESA] Refresh falló: %s', exc)
