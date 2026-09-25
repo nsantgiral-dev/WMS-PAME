@@ -72,9 +72,9 @@ TOLERANCIA_DEFECTO = Decimal('5000')
 FRESCURA_FOTO = timedelta(hours=24)
 #: Dentro de una misma petición o barrido no se relee el mismo NIT.
 REUSO_LECTURA = timedelta(minutes=2)
-#: Regla 14: fuera de la ventana de Siesa no se le pregunta (30 s de timeout
-#: por consulta) y se usa la foto. La ventana es UNA: `ventana_siesa`.
-from app.services.ventana_siesa import VENTANA as VENTANA_SIESA  # noqa: E402
+#: Regla 14: con `SIESA_VENTANA` configurada, fuera de ella no se le pregunta
+#: (30 s de timeout por consulta) y se usa la foto. La ventana es UNA:
+#: `ventana_siesa`.
 #: Un recibo de caja tarda en verse en la cartera (la indexación de una FE ya
 #: tardó minutos en QA). Dentro de esta ventana lo cobrado se sigue restando.
 MARGEN_RC = timedelta(hours=48)

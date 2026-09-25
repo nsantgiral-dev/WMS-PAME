@@ -60,6 +60,7 @@ def _h(app, usuario):
 # Reloj operativo
 # ─────────────────────────────────────────────────────────────────────────────
 
+@pytest.mark.usefixtures('ventana_qa')
 class TestRelojOperativo:
 
     def test_la_noche_no_cuenta(self):
@@ -68,7 +69,7 @@ class TestRelojOperativo:
         # las 06:00; la ventana de Siesa es UNA, 06:00–19:30, desde 2026-09-25).
         desde = datetime(2026, 9, 25, 1, 55)
         hasta = datetime(2026, 9, 25, 11, 30)
-        assert s.tiempo_operativo(desde, hasta, s.VENTANA_PEDIDOS) == timedelta(minutes=30)
+        assert s.tiempo_operativo(desde, hasta) == timedelta(minutes=30)
 
     def test_de_dia_es_el_reloj(self):
         s = _svc()
@@ -114,7 +115,7 @@ class TestPedidos:
         assert f['veredicto'] == 'ATRASADA', f
         assert f['nivel'] == 'advertencia'
 
-    def test_al_amanecer_no_esta_atrasada(self, db):
+    def test_al_amanecer_no_esta_atrasada(self, db, ventana_qa):
         """La última corrida fue 19:29 de anoche (la ventana cierra 19:30); a las
         06:10 lleva 11 min operativos: al día."""
         _registro_pedidos(db, datetime(2026, 9, 25, 0, 28), datetime(2026, 9, 25, 0, 29), True)

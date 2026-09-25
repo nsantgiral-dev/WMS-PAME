@@ -722,7 +722,7 @@ class TestReingresoNoVendibleHastaLaNCAprobada:
         db.session.commit()
         assert ver.verificar(gateway=self._gw_nc([self._fila_nc(61, 1)]))['sin_consecutivo'] == 1
 
-    def test_el_cron_nace_apagado_y_respeta_la_ventana(self, db, monkeypatch):
+    def test_el_cron_nace_apagado_y_respeta_la_ventana(self, db, monkeypatch, ventana_qa):
         from app.services import devolucion_nc_verificador as ver
         monkeypatch.delenv('DEVOLUCIONES_VERIFICAR_NC', raising=False)
         assert 'nace apagado' in ver.correr()['omitido']

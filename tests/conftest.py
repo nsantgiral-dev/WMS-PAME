@@ -48,6 +48,10 @@ os.environ['CONNEKTA_MODO_SIMULACION'] = 'true'  # informativo; el guard real es
 # borra para que la suite dé lo mismo en el build de QA, en el de producción y
 # en local: el test que quiera un ambiente lo declara con monkeypatch.
 os.environ.pop('RAILWAY_ENVIRONMENT_NAME', None)
+# La ventana de Siesa es una variable (tanda 2 · H): el build de QA la tiene
+# puesta y el de producción no. La suite corre sin ella (sin restricción); el
+# test que quiera una ventana la declara con monkeypatch.
+os.environ.pop('SIESA_VENTANA', None)
 
 
 from app import create_app
@@ -153,6 +157,16 @@ def _sin_hilos_dlq_reales(monkeypatch):
         'app.services.mobile_service._STOCK_VERIF_SEMAPHORE',
         _SemaforoSiempreOcupado(),
     )
+
+
+@pytest.fixture
+def ventana_qa(monkeypatch):
+    """`SIESA_VENTANA` configurada como en QA (06:00–19:30, lo medido allá).
+    Sin la variable no hay restricción de horario (tanda 2 · H): el test que
+    mide el comportamiento CON ventana la pide explícitamente."""
+    from app.services.ventana_siesa import VAR_VENTANA, VENTANA_SUGERIDA_QA
+    monkeypatch.setenv(VAR_VENTANA, VENTANA_SUGERIDA_QA)
+    return VENTANA_SUGERIDA_QA
 
 
 @pytest.fixture(autouse=True)

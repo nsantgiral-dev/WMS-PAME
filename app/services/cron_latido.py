@@ -122,7 +122,8 @@ def corrio_bien_desde(nombre: str, desde: datetime) -> bool:
 
 #: Cada cuánto se espera que corra cada cron, para decir «callado». Un cron
 #: que no está acá se muestra sin veredicto de atraso (se ve su última hora).
-#: Holgura incluida; de noche los de ventana no corren (7:00–19:30 Bogotá).
+#: Holgura incluida. Un cron envuelto en la ventana de Siesa igual deja latido
+#: cuando se omite (el envoltorio devuelve su motivo): no se «calla» de noche.
 ESPERADO = {
     'dlq_siesa_jobs': timedelta(minutes=10),
     'pedidos_siesa_sync': timedelta(minutes=10),

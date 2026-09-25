@@ -270,7 +270,7 @@ class TestSyncDeOcs:
         gw = SiesaFalsa()
         assert 'nace apagado' in correr(gateway=gw)['omitido'] and not gw.llamadas
 
-    def test_fuera_de_la_ventana_no_toca_siesa(self, app, db, monkeypatch):
+    def test_fuera_de_la_ventana_no_toca_siesa(self, app, db, monkeypatch, ventana_qa):
         from app.services.compras_oc_sync import correr
         monkeypatch.setenv('COMPRAS_OC_SYNC', 'true')
         gw = SiesaFalsa()
@@ -1103,13 +1103,13 @@ class TestMarcaDesdeSiesa:
         r = disparar_lectura_marca(app, lanzar=lambda fn: pytest.fail('no debía lanzar'))
         assert r['codigo'] == 409 and 'en curso' in r['error']
 
-    def test_fuera_de_la_ventana_no_lee(self, app, db, monkeypatch):
+    def test_fuera_de_la_ventana_no_lee(self, app, db, monkeypatch, ventana_qa):
         from app.services import ventana_siesa
         from app.services.maestro_compras_carga import disparar_lectura_marca
         monkeypatch.setenv('SIESA_CRITERIO_MARCA', 'P03')
         monkeypatch.setattr(ventana_siesa, 'ventana_abierta', lambda *a: False)
         r = disparar_lectura_marca(app, lanzar=lambda fn: pytest.fail('no debía lanzar'))
-        assert r['codigo'] == 409 and 'Regla 14' in r['error']
+        assert r['codigo'] == 409 and 'ventana de Siesa' in r['error']
 
     def test_el_armador_reconoce_la_marca_china_por_codigo(self, app, db, producto, monkeypatch):
         """El nombre va a `marca_siesa` y `MARCAS_CHINA` son códigos: sin
@@ -1210,7 +1210,7 @@ class TestKardexAutomatico:
         ciclo(reloj=_reloj(7, 2))
         assert kardex_falso['descargar'][0]['pagina'] == 1
 
-    def test_la_ventana_se_recorta_a_la_de_siesa(self, app, monkeypatch):
+    def test_la_ventana_se_recorta_a_la_de_siesa(self, app, monkeypatch, ventana_qa):
         from app.services.kardex_auto import ventana
         monkeypatch.setenv('KARDEX_AUTO_VENTANA', '05:00-07:30')
         v = ventana()
@@ -1298,11 +1298,11 @@ class TestEndpoints:
                                         {'codigo': 'NADA', 'cantidad': 1}]})
         assert r.status_code == 400 and ItemEnTransito.query.count() == 0
 
-    def test_sync_fuera_de_ventana_es_409(self, client, token_compras, monkeypatch):
+    def test_sync_fuera_de_ventana_es_409(self, client, token_compras, monkeypatch, ventana_qa):
         from app.services import ventana_siesa
         monkeypatch.setattr(ventana_siesa, 'ventana_abierta', lambda *a: False)
         r = client.post('/api/compras/fuentes/sync-oc', headers=token_compras, json={})
-        assert r.status_code == 409 and 'Regla 14' in r.get_json()['error']
+        assert r.status_code == 409 and 'ventana de Siesa' in r.get_json()['error']
 
     def test_marca_leer_y_estado(self, client, token_compras, monkeypatch):
         from app.services import ventana_siesa, maestro_compras_carga as m

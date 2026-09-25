@@ -25,6 +25,7 @@ import pytest
 RAIZ = pathlib.Path(__file__).resolve().parents[1]
 
 
+@pytest.mark.usefixtures('ventana_qa')
 class TestLaVentana:
 
     @pytest.mark.parametrize('hora,minuto,esperado', [
@@ -43,10 +44,37 @@ class TestLaVentana:
         assert ventana_abierta(datetime(2026, 9, 26, 1, 30, tzinfo=ZoneInfo('UTC'))) is False
 
     def test_la_salud_usa_la_misma(self):
-        from app.services import analitica_salud, ventana_siesa
-        assert analitica_salud.VENTANA_SIESA is ventana_siesa.VENTANA
+        """La salud no tiene una ventana propia: `tiempo_operativo` pregunta
+        a `ventana_siesa` (con ventana, la noche no cuenta)."""
+        from datetime import timedelta
+        from app.services import analitica_salud
+        # 00:30 → 12:30 UTC = 19:30 → 07:30 Bogotá: solo cuenta 06:00–07:30.
+        t = analitica_salud.tiempo_operativo(datetime(2026, 9, 26, 0, 30),
+                                             datetime(2026, 9, 26, 12, 30))
+        assert t == timedelta(hours=1, minutes=30)
 
 
+class TestSinVentanaNoHayReloj:
+    """Tanda 2 · H: sin `SIESA_VENTANA` (producción) la DLQ no frena por
+    hora: un POST que falla de noche sigue el backoff y la jerarquía."""
+
+    def test_la_dlq_postea_de_noche(self, app):
+        from app.services import siesa_job_service as s
+        from app.services.connekta_gateway import connekta
+        from app.utils.fecha import TZ_BOGOTA
+        with patch.object(connekta, 'modo_simulacion', False), \
+                patch.object(connekta, 'modo_ensayo', False):
+            assert s.dlq_puede_postear(datetime(2026, 9, 25, 23, 30, tzinfo=TZ_BOGOTA)) is True
+
+    def test_la_salud_cuenta_la_noche(self):
+        from datetime import timedelta
+        from app.services import analitica_salud
+        t = analitica_salud.tiempo_operativo(datetime(2026, 9, 26, 0, 30),
+                                             datetime(2026, 9, 26, 12, 30))
+        assert t == timedelta(hours=12)
+
+
+@pytest.mark.usefixtures('ventana_qa')
 class TestLaDLQNoPosteaDeNoche:
 
     def _jobs(self, db):

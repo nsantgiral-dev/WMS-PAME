@@ -679,7 +679,7 @@ def _job_despacho(db, tarea):
 
 class TestElDLQ:
 
-    def test_fuera_de_ventana_espera_sin_postear(self, db, almacen, siesa, monkeypatch):
+    def test_fuera_de_ventana_espera_sin_postear(self, db, almacen, siesa, monkeypatch, ventana_qa):
         from app.services import documento_fiscal
         from app.services.siesa_job_service import DependenciaPendiente, _ejecutar_job
         monkeypatch.setattr(documento_fiscal, '_ahora_bogota',
@@ -865,14 +865,59 @@ class TestElCierreSinSiesaSeNiegaLimpio:
         assert 'no responde' in r.mensaje and preguntas == []
         self._nada_cambio(db, t)
 
-    def test_fuera_de_ventana(self, db, almacen, producto, siesa_real, monkeypatch, preguntas):
+    def test_fuera_de_ventana(self, db, almacen, producto, siesa_real, monkeypatch, preguntas,
+                              ventana_qa):
         from app.services import documento_fiscal
         monkeypatch.setattr(documento_fiscal, '_ahora_bogota',
                             lambda: datetime(2026, 9, 25, 20, 30))
         t = _caja_para_cerrar(db, almacen, producto)
         r = self._cerrar(t)
         assert not r.exitoso and 'la caja queda esperando' in r.mensaje
-        assert 'factura de 06:00 a 19:30' in r.mensaje and preguntas == []  # ventana_siesa.VENTANA
+        assert 'factura de 06:00 a 19:30' in r.mensaje and preguntas == []  # SIESA_VENTANA de QA
+        self._nada_cambio(db, t)
+
+    def test_sin_ventana_de_noche_cierra(self, db, almacen, producto, siesa_real, monkeypatch):
+        """Tanda 2 · H: sin `SIESA_VENTANA` (producción) no hay horario que
+        frene la facturación: a las 23:30 el cierre pregunta y encola."""
+        from app.services import documento_fiscal
+        from app.services.connekta_gateway import ConnektaGateway
+        monkeypatch.setattr(documento_fiscal, '_ahora_bogota',
+                            lambda: datetime(2026, 9, 25, 23, 30))
+        monkeypatch.setattr(ConnektaGateway, 'get_estado_pedido', lambda self, t, c: 3)
+        monkeypatch.setattr(ConnektaGateway, 'get_factura_desde_pedido', lambda self, t, c: [])
+        t = _caja_para_cerrar(db, almacen, producto)
+        assert self._cerrar(t).exitoso
+
+    def test_sin_ventana_con_siesa_caido_se_niega_igual(self, db, almacen, producto, siesa_real,
+                                                        monkeypatch, preguntas):
+        """Lo que protege cuando Siesa no responde no es el reloj: es el
+        circuito. Sin ventana y de noche, con el circuito abierto, se niega."""
+        from app.services import documento_fiscal
+        from app.services.documento_fiscal import MENSAJE_SIESA_NO_DISPONIBLE
+        monkeypatch.setattr(documento_fiscal, '_ahora_bogota',
+                            lambda: datetime(2026, 9, 25, 23, 30))
+        monkeypatch.setattr(siesa_real, '_cb_state', 'OPEN')
+        t = _caja_para_cerrar(db, almacen, producto)
+        r = self._cerrar(t)
+        assert not r.exitoso and r.mensaje.startswith(MENSAJE_SIESA_NO_DISPONIBLE)
+        assert preguntas == []
+        self._nada_cambio(db, t)
+
+    def test_sin_ventana_con_el_precheck_caido_se_niega_igual(self, db, almacen, producto,
+                                                              siesa_real, monkeypatch):
+        from app.services import documento_fiscal
+        from app.services.connekta_gateway import ConnektaGateway
+        from app.services.documento_fiscal import MENSAJE_SIESA_NO_DISPONIBLE
+
+        def falla(self, t, c):
+            raise RuntimeError('timeout')
+        monkeypatch.setattr(documento_fiscal, '_ahora_bogota',
+                            lambda: datetime(2026, 9, 25, 23, 30))
+        monkeypatch.setattr(ConnektaGateway, 'get_estado_pedido', lambda self, t, c: 3)
+        monkeypatch.setattr(ConnektaGateway, 'get_factura_desde_pedido', falla)
+        t = _caja_para_cerrar(db, almacen, producto)
+        r = self._cerrar(t)
+        assert not r.exitoso and r.mensaje.startswith(MENSAJE_SIESA_NO_DISPONIBLE)
         self._nada_cambio(db, t)
 
     def test_siesa_no_contesta_el_precheck(self, db, almacen, producto, siesa_real,

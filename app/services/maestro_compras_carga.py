@@ -580,13 +580,13 @@ def disparar_lectura_marca(app, lanzar=None) -> dict:
     `LOCK_MARCA_SIESA`, y la respuesta vuelve ya. La Regla 14 no la dobla un
     botón (fuera de 7:00–19:30 → no). `lanzar` es para los tests."""
     import threading
-    from app.services.ventana_siesa import VENTANA, ventana_abierta
+    from app.services.ventana_siesa import texto_ventana, ventana_abierta
 
     if not criterio_marca():
         return {'ok': False, 'codigo': 400, **_sin_plan()}
     if not ventana_abierta():
         return {'ok': False, 'codigo': 409,
-                'error': f'Fuera de la ventana de Siesa ({VENTANA[0]}–{VENTANA[1]} Bogotá). Regla 14.'}
+                'error': f'Fuera de la ventana de Siesa ({texto_ventana()}).'}
     en_curso = _lectura_en_curso()
     if en_curso:
         return {'ok': False, 'codigo': 409,

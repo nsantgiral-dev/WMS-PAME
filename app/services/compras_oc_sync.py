@@ -21,7 +21,8 @@ tiene tipo de proveedor ni moneda y trae las dos compañías: mezclaba la 1 y la
 ## Reglas
 
 - **Nace apagado** (`COMPRAS_OC_SYNC=true` lo enciende). Apagado no lee ni escribe.
-- **Solo en la ventana de Siesa** (7:00–19:30 Bogotá, Regla 14).
+- **Solo en la ventana de Siesa**, si `SIESA_VENTANA` está configurada (Regla 14,
+  medida en QA; ver `ventana_siesa`).
 - **Lock del registro** (`LOCK_COMPRAS_OC_SYNC`).
 - **tamPag = 100** (Regla 10). Se pagina hasta una página corta.
 - **La paginación incompleta no cierra nada.** Una línea abierta que no
@@ -603,8 +604,8 @@ def sincronizar_proveedores(gateway=None, pausa_s=None, ahora=None) -> dict:
 
 
 def _en_ventana(reloj=None):
-    from app.services.ventana_siesa import VENTANA, ventana_abierta
-    return ventana_abierta(reloj() if reloj else None), VENTANA
+    from app.services.ventana_siesa import texto_ventana, ventana_abierta
+    return ventana_abierta(reloj() if reloj else None), texto_ventana()
 
 
 def correr(gateway=None, reloj=None) -> dict:
@@ -613,7 +614,7 @@ def correr(gateway=None, reloj=None) -> dict:
         return {'omitido': 'COMPRAS_OC_SYNC no está en true — nace apagado'}
     abierta, v = _en_ventana(reloj)
     if not abierta:
-        return {'omitido': f'fuera de la ventana de Siesa ({v[0]}–{v[1]} Bogotá)'}
+        return {'omitido': f'fuera de la ventana de Siesa ({v})'}
     return sincronizar_ocs(gateway=gateway)
 
 
@@ -623,7 +624,7 @@ def correr_diario(gateway=None, reloj=None) -> dict:
         return {'omitido': 'COMPRAS_OC_SYNC no está en true — nace apagado'}
     abierta, v = _en_ventana(reloj)
     if not abierta:
-        return {'omitido': f'fuera de la ventana de Siesa ({v[0]}–{v[1]} Bogotá)'}
+        return {'omitido': f'fuera de la ventana de Siesa ({v})'}
     return {'historial': sincronizar_historial(gateway=gateway),
             'proveedores': sincronizar_proveedores(gateway=gateway)}
 
@@ -688,7 +689,7 @@ def disparar_en_segundo_plano(app, que: str = 'abiertas'):
     abierta, v = _en_ventana()
     if not abierta:
         return {'ok': False,
-                'error': f'Fuera de la ventana de Siesa ({v[0]}–{v[1]} Bogotá). Regla 14.'}
+                'error': f'Fuera de la ventana de Siesa ({v}).'}
     fn = sincronizar_ocs if que == 'abiertas' else (
         lambda: {'historial': sincronizar_historial(),
                  'proveedores': sincronizar_proveedores()})

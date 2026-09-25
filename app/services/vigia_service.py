@@ -1599,12 +1599,13 @@ def init_scheduler(app):
     from app.services.ventana_siesa import solo_en_ventana_siesa  # P2
     scheduler.add_job(
         func=con_latido('vigia_alimentar_series', solo_en_ventana_siesa(alimentar_series_vivas)),
-        # 06:30: la ingesta de facturación le pregunta a Siesa; dentro de la
-        # ventana (P2 2026-09-25).
-        trigger=CronTrigger(day_of_week='mon', hour=6, minute=30, timezone='America/Bogota'),
+        # Hora de madrugada (tanda 2 · H, decisión del dueño 2026-09-25): no
+        # compite con la operación. Solo respeta la ventana si `SIESA_VENTANA`
+        # está configurada (sin ella, Siesa se consulta a cualquier hora).
+        trigger=CronTrigger(day_of_week='mon', hour=5, minute=30, timezone='America/Bogota'),
         kwargs={'app': app},
         id='vigia_alimentar_series',
-        name='Vigía — alimenta series vivas (lunes 06:30 Bogotá)',
+        name='Vigía — alimenta series vivas (lunes 05:30 Bogotá)',
         replace_existing=True, max_instances=1, misfire_grace_time=3600,
     )
 

@@ -877,7 +877,7 @@ class TestResolver:
         assert r1.estado == EstadoRetencion.LIBERADO_PAGO
         assert r2.estado == EstadoRetencion.CANCELADO
 
-    def test_barrido_fuera_de_ventana_no_hace_nada(self, db, fake):
+    def test_barrido_fuera_de_ventana_no_hace_nada(self, db, fake, ventana_qa):
         assert 'omitido' in cs.barrido(datetime(2026, 9, 24, 21, 0))
 
 

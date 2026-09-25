@@ -32,9 +32,9 @@ Tres fotos, una vez al día, **solo lectura** contra Siesa:
    segunda pasada; si también repite, `completa=False`.
 5. **El día es el de Bogotá** (`app/utils/fecha.py`). La foto de ventas usa el
    día del DOCUMENTO; la de stock y cartera, el día en que se tomó.
-6. **Solo dentro de 7:00–19:30 Bogotá** (Regla 14: Siesa no opera después de
-   ~8 p. m.). Si la ventana se cierra a mitad de camino, lo que falta no corre
-   y se declara.
+6. **Solo dentro de la ventana de Siesa, si `SIESA_VENTANA` está
+   configurada** (Regla 14, medida en QA). Si la ventana se cierra a mitad de
+   camino, lo que falta no corre y se declara.
 7. **Filtros con `lit`/`lit_fecha`** (Regla 15). `tamPag=100` (Regla 10).
 
 ## Lo que NO fotografía (declarado, no olvidado)
@@ -70,8 +70,8 @@ TAM_PAG = 100
 #: NC1 = 69. Doscientas es holgura, no expectativa: agotarla es truncado.
 MAX_PAGINAS = 200
 
-#: La ventana de Siesa es UNA (`app/services/ventana_siesa.py`).
-from app.services.ventana_siesa import VENTANA  # noqa: E402
+#: La ventana de Siesa es UNA (`app/services/ventana_siesa.py`), y solo
+#: frena si `SIESA_VENTANA` está configurada.
 
 #: Una fila de `stock_siesa` que no se refrescó en la última descarga de su
 #: bodega (su `updated_at` quedó más de esto por detrás del de la bodega).
@@ -760,8 +760,9 @@ def correr_fotos(gateway=None, ahora=None, reloj=None) -> dict:
         reloj = (lambda: ahora) if ahora is not None else ahora_bogota
     ahora = ahora or reloj()
     if not ventana_abierta(ahora):
-        return {'omitido': f'fuera de la ventana de Siesa ({VENTANA[0]}–{VENTANA[1]} '
-                           f'Bogotá): {ahora.time().isoformat(timespec="minutes")}'}
+        from app.services.ventana_siesa import texto_ventana
+        return {'omitido': f'fuera de la ventana de Siesa ({texto_ventana()}): '
+                           f'{ahora.time().isoformat(timespec="minutes")}'}
 
     from app.services.inventario_siesa_service import _BODEGAS_INVENTARIO
     run_id = _nuevo_run_id()

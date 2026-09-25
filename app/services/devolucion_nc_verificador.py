@@ -18,7 +18,8 @@ para avisar).
 
 - **Nace apagado** (`DEVOLUCIONES_VERIFICAR_NC=true` lo enciende), como todo
   cron que escribe. Apagado no lee ni escribe.
-- **Solo en la ventana de Siesa** (7:00–19:30 Bogotá, Regla 14).
+- **Solo en la ventana de Siesa**, si `SIESA_VENTANA` está configurada (Regla 14,
+  medida en QA; ver `ventana_siesa`).
 - **Lock del registro** (`LOCK_DEVOLUCIONES_NC`): dos workers no verifican a la
   vez.
 - **Solo marca lo que LEYÓ**: `ind_estado == 1` en la fila de ESE consecutivo,
@@ -124,9 +125,9 @@ def correr(gateway=None, reloj=None) -> dict:
     """El cron: interruptor + ventana + verificar."""
     if not encendido():
         return {'omitido': 'DEVOLUCIONES_VERIFICAR_NC no está en true — nace apagado'}
-    from app.services.ventana_siesa import VENTANA, ventana_abierta
+    from app.services.ventana_siesa import texto_ventana, ventana_abierta
     if not ventana_abierta(reloj() if reloj else None):
-        return {'omitido': f'fuera de la ventana de Siesa ({VENTANA[0]}–{VENTANA[1]} Bogotá)'}
+        return {'omitido': f'fuera de la ventana de Siesa ({texto_ventana()})'}
     return verificar(gateway=gateway)
 
 

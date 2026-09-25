@@ -184,10 +184,10 @@ def filtro_despachable(T=None):
 
 def ventana_facturacion():
     """La ventana de la Regla 14: **la de Siesa, que es una**
-    (`ventana_siesa.VENTANA`). No es una definición propia: facturar es
-    hablarle a Siesa como cualquier otro."""
-    from app.services.ventana_siesa import VENTANA
-    return VENTANA
+    (`ventana_siesa.ventana()`, `None` = sin restricción). No es una
+    definición propia: facturar es hablarle a Siesa como cualquier otro."""
+    from app.services.ventana_siesa import ventana
+    return ventana()
 
 
 def _ahora_bogota():
@@ -209,6 +209,8 @@ def siesa_disponible_para_facturar(ahora_bog: datetime = None):
         ahora_bog = _ahora_bogota()
     from app.services.ventana_siesa import ventana_abierta
     if not ventana_abierta(ahora_bog):
+        # Solo con `SIESA_VENTANA` configurada: sin ella no hay horario que
+        # frene la facturación (tanda 2 · H).
         ini, fin = ventana_facturacion()
         return False, (f'{MENSAJE_SIESA_NO_DISPONIBLE} (Siesa factura de '
                        f'{ini.strftime("%H:%M")} a {fin.strftime("%H:%M")}.)')

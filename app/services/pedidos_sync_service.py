@@ -428,16 +428,18 @@ def init_scheduler(app):
     from app.services.ventana_siesa import solo_en_ventana_siesa  # P2
     scheduler.add_job(
         func=con_latido('pedidos_siesa_sync', solo_en_ventana_siesa(lambda: iniciar_sync_background(app))),
-        # Dentro de la ventana de Siesa (06:00–19:30, `ventana_siesa`): el
-        # disparo cubre 6–19 h y el envoltorio corta a las 19:30.
-        trigger=CronTrigger(minute='*', hour='6-19', timezone='America/Bogota'),
+        # Cada minuto, todo el día (tanda 2 · H): en temporada la operación
+        # trabaja hasta la medianoche y un pedido de las 21:00 no puede esperar
+        # a mañana. Si `SIESA_VENTANA` está configurada, el envoltorio corta
+        # fuera de ella; si Siesa no responde, el circuit breaker.
+        trigger=CronTrigger(minute='*', timezone='America/Bogota'),
         id='pedidos_siesa_sync',
         replace_existing=True,
         max_instances=1,        # [44] Evita ejecuciones concurrentes del sync
         misfire_grace_time=60,
     )
     scheduler.start()
-    logger.info('[PEDIDOS_SYNC] Scheduler activo — sync cada 1 min entre 7am y 8pm')
+    logger.info('[PEDIDOS_SYNC] Scheduler activo — sync cada 1 min (ventana: SIESA_VENTANA)')
     # Devolver el scheduler NO es cosmético: `app/__init__.py` usa el retorno
     # para distinguir «arrancó» de «la llamada no reventó». Sin él, un
     # `return` temprano por ImportError se reporta como scheduler activo.

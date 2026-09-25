@@ -117,9 +117,9 @@ TEXTO_GLOBAL = {
 }
 
 #: Ventana en que cada fuente PUEDE refrescarse (Bogotá): la de Siesa, que es
-#: UNA (`ventana_siesa`). El sync de pedidos solo corre dentro de ella.
-from app.services.ventana_siesa import VENTANA as VENTANA_SIESA  # noqa: E402
-VENTANA_PEDIDOS = VENTANA_SIESA
+#: UNA (`ventana_siesa.ventana()`), y solo si `SIESA_VENTANA` está configurada.
+#: Sin ella (producción) el reloj corre las 24 h: una fuente que no se
+#: refresca de noche SÍ se atrasa (tanda 2 · H).
 
 #: El sync de pedidos corre cada minuto; 15 minutos operativos sin una
 #: corrida completa es que dejó de correr, no que está lento.
@@ -131,7 +131,7 @@ TOLERANCIA_STOCK = timedelta(hours=2)
 CORRIDA_ABIERTA_MUERTA = timedelta(minutes=30)
 #: Las fotos corren a las 18:00; pasada la ventana (19:30) la de hoy ya debe estar.
 HORA_FOTO_DEL_DIA = time(19, 30)
-#: La serie de adopción de Vigía corre los lunes 06:30 (dentro de la ventana).
+#: La serie de adopción de Vigía corre los lunes 05:30.
 HORA_VIGIA_LUNES = time(7, 0)
 
 #: Cola de Siesa: un job pendiente más de esto (tiempo operativo) está atascado.
@@ -169,10 +169,11 @@ def _a_bogota(momento_utc):
     return momento_utc.replace(tzinfo=_UTC).astimezone(TZ_BOGOTA)
 
 
-def tiempo_operativo(desde_utc, hasta_utc, ventana=VENTANA_SIESA) -> timedelta:
+def tiempo_operativo(desde_utc, hasta_utc, ventana=None) -> timedelta:
     """Tiempo entre dos instantes UTC naive **contando solo la ventana** de
     cada día (Bogotá). Fuera de la ventana el reloj no corre: la fuente no
-    podía refrescarse.
+    podía refrescarse. `ventana=None`: la de Siesa configurada; sin ella (o
+    si cruza la medianoche), tiempo de reloj.
 
     Más de 60 días de distancia se devuelven como tiempo de reloj — a esa
     altura el veredicto es el mismo y no vale la pena iterar.
@@ -181,7 +182,10 @@ def tiempo_operativo(desde_utc, hasta_utc, ventana=VENTANA_SIESA) -> timedelta:
         return None
     if hasta_utc <= desde_utc:
         return timedelta(0)
-    if hasta_utc - desde_utc > timedelta(days=60):
+    if ventana is None:
+        from app.services.ventana_siesa import ventana as _ventana_siesa
+        ventana = _ventana_siesa()
+    if ventana is None or ventana[0] > ventana[1] or hasta_utc - desde_utc > timedelta(days=60):
         return hasta_utc - desde_utc
     a, b = _a_bogota(desde_utc), _a_bogota(hasta_utc)
     total = timedelta(0)
@@ -310,7 +314,7 @@ def fuente_pedidos(ahora_utc, activos=()):
                        'Revisar reinicios del servicio web.',
                        ultima=_iso(fin_ok), completa=False, detalle=detalle, **kw)
 
-    edad = tiempo_operativo(fin_ok, ahora_utc, VENTANA_PEDIDOS)
+    edad = tiempo_operativo(fin_ok, ahora_utc)
     detalle['edad_operativa_min'] = int(edad.total_seconds() // 60)
     if edad > TOLERANCIA_PEDIDOS:
         return _fuente('pedidos', nombre, ATRASADA,

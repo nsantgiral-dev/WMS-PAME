@@ -376,6 +376,13 @@ def health_siesa():
     except Exception as _e_sello:
         resultado['sello_ambiente'] = {'error': str(_e_sello)[:200]}
 
+    # VENTANA DE SIESA (tanda 2 · H). Sin `SIESA_VENTANA` no hay restricción
+    # de horario; una ilegible tampoco restringe, pero se dice acá.
+    from app.services import ventana_siesa as _vent
+    resultado['ventana_siesa'] = _vent.estado()
+    if resultado['ventana_siesa']['problema']:
+        resultado['advertencias'].append(resultado['ventana_siesa']['problema'])
+
     # FOTOS DIARIAS DE SIESA (m036fotos). La frescura sale de la base —de las
     # corridas— y no del proceso: el cron corre en el worker y este endpoint
     # puede contestar desde el web. Un hueco es «no hay total de ese día», no

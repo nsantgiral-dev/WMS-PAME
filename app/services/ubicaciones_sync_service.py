@@ -278,12 +278,13 @@ def init_scheduler(app):
     from app.services.ventana_siesa import solo_en_ventana_siesa  # P2
     scheduler.add_job(
         func=con_latido('sync_ubicaciones_siesa', solo_en_ventana_siesa(ejecutar_sync)),
-        # 06:35: dentro de la ventana de Siesa (P2 2026-09-25); a las 03:00
-        # fallaba sin registro.
-        trigger=CronTrigger(hour=6, minute=35, timezone='America/Bogota'),
+        # Hora de madrugada (tanda 2 · H, decisión del dueño 2026-09-25): no
+        # compite con la operación. Solo respeta la ventana si `SIESA_VENTANA`
+        # está configurada (sin ella, Siesa se consulta a cualquier hora).
+        trigger=CronTrigger(hour=3, minute=0, timezone='America/Bogota'),
         kwargs={'app': app},
         id='sync_ubicaciones_siesa',
-        name='Sync ubicaciones Siesa → WMS (06:35 Bogotá)',
+        name='Sync ubicaciones Siesa → WMS (03:00 Bogotá)',
         replace_existing=True,
         max_instances=1,
         misfire_grace_time=300,

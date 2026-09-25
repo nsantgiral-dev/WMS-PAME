@@ -10,7 +10,7 @@ reconstrucción**: las llama, con las mismas guardas que la pantalla.
 
 - **Nace apagado** (`KARDEX_AUTO=true` lo enciende).
 - **Ventana**: `KARDEX_AUTO_VENTANA` (`HH:MM-HH:MM`, Bogotá; default
-  `07:00-07:55`), recortada a la ventana de Siesa (7:00–19:30, Regla 14). La
+  `07:00-07:55`), recortada a la ventana de Siesa si `SIESA_VENTANA` está configurada (Regla 14). La
   descarga son miles de peticiones contra el ERP que factura en los puntos de
   venta: la primera hora, antes de que abran las tiendas. **Cada corrida dura
   como mucho lo que queda de ventana** (y nunca más que `KARDEX_MAX_MINUTOS`).
@@ -67,7 +67,8 @@ def ventana() -> dict:
 
     Returns: {pedida: (ini, fin), efectiva: (ini, fin) | None, valida, problema}
     """
-    from app.services.ventana_siesa import VENTANA as VENTANA_SIESA
+    from app.services.ventana_siesa import ventana as _ventana_siesa
+    siesa = _ventana_siesa()     # None = sin restricción (tanda 2 · H)
     crudo = (os.getenv('KARDEX_AUTO_VENTANA') or '').strip()
     problema = None
     pedida = VENTANA_DEFAULT
@@ -81,12 +82,16 @@ def ventana() -> dict:
             problema = (f'KARDEX_AUTO_VENTANA={crudo!r} no se entiende ({e}): se '
                         f'usa la de siempre {VENTANA_DEFAULT[0]}–{VENTANA_DEFAULT[1]}')
             pedida = VENTANA_DEFAULT
-    ini = max(pedida[0], VENTANA_SIESA[0])
-    fin = min(pedida[1], VENTANA_SIESA[1])
+    if siesa is None or siesa[0] > siesa[1]:
+        # Sin ventana de Siesa (o una que cruza la medianoche) no se recorta.
+        ini, fin = pedida
+    else:
+        ini = max(pedida[0], siesa[0])
+        fin = min(pedida[1], siesa[1])
     efectiva = (ini, fin) if ini < fin else None
     if efectiva is None:
         problema = (problema or '') + (' La ventana pedida cae fuera de la de Siesa '
-                                       f'({VENTANA_SIESA[0]}–{VENTANA_SIESA[1]}): '
+                                       f'({siesa[0]}–{siesa[1]}): '
                                        'el cron no corre nunca.')
     elif efectiva != pedida:
         problema = (problema or '') + (f' Recortada a la ventana de Siesa: '

@@ -324,7 +324,7 @@ class TestLaCorridaDelDia:
 
     # La ventana de Siesa es UNA (06:00–19:30, `ventana_siesa`) desde el 2026-09-25.
     @pytest.mark.parametrize('hora,minuto', [(5, 59), (19, 31), (22, 0)])
-    def test_fuera_de_la_ventana_no_toca_siesa(self, db, hora, minuto):
+    def test_fuera_de_la_ventana_no_toca_siesa(self, db, hora, minuto, ventana_qa):
         from app.services import fotos_siesa_service as f
         s = self._siesa()
         r = f.correr_fotos(s, ahora=datetime(2026, 9, 24, hora, minuto, tzinfo=TZ_BOGOTA))
@@ -340,7 +340,7 @@ class TestLaCorridaDelDia:
         assert {c.dia_operativo for c in FotoCorrida.query.all()} == {date(2026, 9, 24)}
         assert FotoCarteraDiaria.query.one().dias_vencido == 4
 
-    def test_si_la_ventana_se_cierra_lo_que_falta_se_declara(self, db):
+    def test_si_la_ventana_se_cierra_lo_que_falta_se_declara(self, db, ventana_qa):
         from app.services import fotos_siesa_service as f
         horas = iter([datetime(2026, 9, 24, 19, 29, tzinfo=TZ_BOGOTA)] * 3
                      + [datetime(2026, 9, 24, 19, 40, tzinfo=TZ_BOGOTA)] * 100)

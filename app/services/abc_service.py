@@ -1023,12 +1023,13 @@ class ABCService:
         )
         scheduler.add_job(
             func=con_latido('abc_prewarm_pre_turno', solo_en_ventana_siesa(_prewarm_pre_turno)),
-            # 06:00, el primer minuto de la ventana de Siesa (P2 2026-09-25): a
-            # las 05:55 le preguntaba a Siesa fuera de ella.
-            trigger=CronTrigger(hour=6, minute=0, timezone='America/Bogota'),
+            # Hora de madrugada (tanda 2 · H, decisión del dueño 2026-09-25): no
+            # compite con la operación. Solo respeta la ventana si `SIESA_VENTANA`
+            # está configurada (sin ella, Siesa se consulta a cualquier hora).
+            trigger=CronTrigger(hour=5, minute=55, timezone='America/Bogota'),
             kwargs={'app': app},
             id='abc_prewarm_pre_turno',
-            name='Pre-calentar caché Siesa al abrir la ventana — 6:00am Bogotá',
+            name='Pre-calentar caché Siesa antes del turno — 5:55am Bogotá',
             replace_existing=True,
             max_instances=1,
             misfire_grace_time=300,

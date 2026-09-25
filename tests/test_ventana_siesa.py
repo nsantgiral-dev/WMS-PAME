@@ -2,13 +2,13 @@
 Una ventana de Siesa, una frescura de `stock_siesa` y la cola que no confunde
 esperar con atascarse (P2, 2026-09-25).
 
-1. **Ventana**. Había cuatro definiciones (7–20, 6–20, 7–19:30, 7–21) y crons
-   que le hablaban a Siesa a las 2:00, 2:30, 3:00, 5:55 o 24/7: empaques y
-   ubicaciones fallaban de madrugada sin registro, y el DLQ intentaba un
-   recibo de caja a las 20:30 que amanecía FALLIDO. Ahora `ventana_siesa`
-   (06:00–19:30 Bogotá) es la única; todo cron que habla con Siesa va envuelto
-   en `solo_en_ventana_siesa`; el DLQ fuera de ella solo procesa lo que no va a
-   Siesa (`TIPOS_SIN_SIESA`).
+1. **Ventana**. Había cuatro definiciones (7–20, 6–20, 7–19:30, 7–21). Ahora
+   `ventana_siesa` es la única, y desde la tanda 2 · H (decisión del dueño,
+   2026-09-25) **sale de `SIESA_VENTANA`**: «Siesa no opera de noche» se midió
+   en QA, no en producción. Sin la variable no hay restricción; ilegible,
+   tampoco, y se declara. Todo cron que habla con Siesa va envuelto en
+   `solo_en_ventana_siesa` (respeta la ventana si está configurada); la DLQ,
+   con ventana y fuera de ella, solo procesa lo que no va a Siesa.
 2. **Frescura**. Vigía tomaba el MAX global de `stock_siesa.updated_at`: una
    bodega refrescada hacía ver fresco todo. `frescura_stock_siesa`: una bodega
    es tan fresca como su último refresco; un conjunto, como su bodega menos
@@ -70,8 +70,36 @@ class TestLaVentana:
 
     @pytest.mark.parametrize('h,m,abierta', [(5, 59, False), (6, 0, True), (12, 0, True),
                                             (19, 30, True), (19, 31, False), (22, 0, False)])
-    def test_los_bordes(self, h, m, abierta):
+    def test_los_bordes(self, h, m, abierta, ventana_qa):
         assert vs.ventana_abierta(datetime(2026, 9, 25, h, m)) is abierta
+
+    @pytest.mark.parametrize('h,m', [(0, 0), (3, 0), (19, 31), (23, 59)])
+    def test_sin_variable_no_hay_restriccion(self, h, m):
+        assert vs.ventana() is None
+        assert vs.ventana_abierta(datetime(2026, 9, 25, h, m)) is True
+        assert vs.estado()['sin_restriccion'] is True and vs.estado()['problema'] is None
+
+    @pytest.mark.parametrize('malo', ['7-20', 'mañana', '06:00', '25:00-19:30', '06:00-06:00'])
+    def test_ilegible_no_restringe_y_se_declara(self, monkeypatch, malo):
+        monkeypatch.setenv(vs.VAR_VENTANA, malo)
+        assert vs.ventana() is None
+        assert vs.ventana_abierta(datetime(2026, 9, 25, 23, 0)) is True
+        e = vs.estado()
+        assert e['sin_restriccion'] is True and e['problema'] and malo in e['problema']
+
+    def test_la_salud_de_siesa_la_publica(self, app, client, monkeypatch):
+        from tests.test_cartera_retencion import _jwt, _usuario
+        from app.extensions import db
+        monkeypatch.setenv(vs.VAR_VENTANA, 'de 6 a 7')
+        d = client.get('/api/health/siesa', headers=_jwt(app, _usuario(db))).get_json()
+        assert d['ventana_siesa']['problema'] and d['ventana_siesa']['sin_restriccion']
+        assert any('SIESA_VENTANA' in a for a in d['advertencias'])
+
+    def test_una_ventana_que_cruza_la_medianoche(self, monkeypatch):
+        monkeypatch.setenv(vs.VAR_VENTANA, '18:00-01:00')
+        assert vs.ventana_abierta(datetime(2026, 9, 25, 23, 30)) is True
+        assert vs.ventana_abierta(datetime(2026, 9, 25, 0, 45)) is True
+        assert vs.ventana_abierta(datetime(2026, 9, 25, 12, 0)) is False
 
     def test_el_envoltorio_no_corre_fuera(self):
         vs._RELOJ_FIJO['abierta'] = False
@@ -106,17 +134,29 @@ class TestLaVentanaEsUnaParaTodos:
     """Integración 2026-09-25: fiscal traía 06:00–20:00 (vía cartera) y
     liquidación 07:00–20:00 en `app/utils/fecha`. Quedó la de inventario."""
 
-    def test_un_instante_consciente_de_zona_se_juzga_en_bogota(self):
+    def test_un_instante_consciente_de_zona_se_juzga_en_bogota(self, ventana_qa):
         from zoneinfo import ZoneInfo
         # 01:30 UTC = 20:30 Bogotá del día anterior; 15:00 UTC = 10:00.
         assert vs.ventana_abierta(datetime(2026, 9, 26, 1, 30, tzinfo=ZoneInfo('UTC'))) is False
         assert vs.ventana_abierta(datetime(2026, 9, 25, 15, 0, tzinfo=ZoneInfo('UTC'))) is True
 
-    def test_facturar_usa_la_misma(self):
+    def test_facturar_usa_la_misma(self, monkeypatch):
         from app.services import documento_fiscal
-        assert documento_fiscal.ventana_facturacion() is vs.VENTANA
+        assert documento_fiscal.ventana_facturacion() is None
+        monkeypatch.setenv(vs.VAR_VENTANA, vs.VENTANA_SUGERIDA_QA)
+        assert documento_fiscal.ventana_facturacion() == vs.ventana() == (time(6, 0), time(19, 30))
 
-    def test_facturar_a_las_1945_se_niega(self, monkeypatch):
+    def test_sin_ventana_se_factura_de_noche_y_el_circuito_sigue_mandando(self, monkeypatch):
+        from app.services import documento_fiscal
+        from app.services.connekta_gateway import connekta
+        monkeypatch.setattr(connekta, 'modo_simulacion', False)
+        monkeypatch.setattr(connekta, '_cb_state', 'CLOSED', raising=False)
+        assert documento_fiscal.siesa_disponible_para_facturar(datetime(2026, 9, 25, 23, 45))[0]
+        monkeypatch.setattr(connekta, '_cb_state', 'OPEN', raising=False)
+        ok, motivo = documento_fiscal.siesa_disponible_para_facturar(datetime(2026, 9, 25, 23, 45))
+        assert ok is False and motivo.startswith(documento_fiscal.MENSAJE_SIESA_NO_DISPONIBLE)
+
+    def test_facturar_a_las_1945_se_niega(self, monkeypatch, ventana_qa):
         from app.services import documento_fiscal
         from app.services.connekta_gateway import connekta
         monkeypatch.setattr(connekta, 'modo_simulacion', False)
@@ -126,7 +166,7 @@ class TestLaVentanaEsUnaParaTodos:
         ok, _ = documento_fiscal.siesa_disponible_para_facturar(datetime(2026, 9, 25, 19, 30))
         assert ok is True
 
-    def test_la_dlq_usa_la_misma_salvo_en_simulacion(self, monkeypatch):
+    def test_la_dlq_usa_la_misma_salvo_en_simulacion(self, monkeypatch, ventana_qa):
         from app.services import siesa_job_service as s
         from app.services.connekta_gateway import connekta
         monkeypatch.setattr(connekta, 'modo_simulacion', False)
@@ -215,12 +255,43 @@ def _ventanas_declaradas(base=None):
     return out
 
 
+def _lectores_de_la_variable(base=None):
+    """`archivo` que nombra el literal `'SIESA_VENTANA'` fuera de docstrings."""
+    base = base or RAIZ
+    out = set()
+    for carpeta in ('app', 'flota'):
+        for f in sorted((base / carpeta).rglob('*.py')):
+            arbol = ast.parse(f.read_text(encoding='utf-8'))
+            docs = {id(n.body[0].value) for n in ast.walk(arbol)
+                    if isinstance(n, (ast.Module, ast.FunctionDef, ast.ClassDef,
+                                      ast.AsyncFunctionDef))
+                    and n.body and isinstance(n.body[0], ast.Expr)
+                    and isinstance(n.body[0].value, ast.Constant)}
+            for n in ast.walk(arbol):
+                if (isinstance(n, ast.Constant) and n.value == 'SIESA_VENTANA'
+                        and id(n) not in docs):
+                    out.add(str(f.relative_to(base)))
+    return out
+
+
 class TestUnaSolaVentana:
 
     def test_nadie_mas_declara_una_ventana(self):
-        extra = _ventanas_declaradas() - {'app/services/ventana_siesa.py::VENTANA'} \
-            - set(VENTANAS_PROPIAS)
-        assert not extra, f'Otra ventana de Siesa: {sorted(extra)} — usá ventana_siesa.VENTANA'
+        extra = _ventanas_declaradas() - set(VENTANAS_PROPIAS)
+        assert not extra, f'Otra ventana de Siesa: {sorted(extra)} — usá ventana_siesa.ventana()'
+
+    def test_nadie_mas_lee_la_variable(self):
+        assert _lectores_de_la_variable() == {'app/services/ventana_siesa.py'}
+
+    def test_el_detector_ve_otro_lector(self, tmp_path):
+        (tmp_path / 'app').mkdir()
+        (tmp_path / 'flota').mkdir()
+        (tmp_path / 'app' / 'x.py').write_text(
+            '"""SIESA_VENTANA en el docstring no cuenta."""\n'
+            'import os\nv = os.getenv("SIESA_VENTANA")\n', encoding='utf-8')
+        (tmp_path / 'app' / 'y.py').write_text('# SIESA_VENTANA en un comentario\n',
+                                               encoding='utf-8')
+        assert _lectores_de_la_variable(tmp_path) == {'app/x.py'}
 
     def test_la_propia_existe(self):
         assert set(VENTANAS_PROPIAS) <= _ventanas_declaradas()
@@ -304,3 +375,47 @@ class TestLaColaNoCuentaLaEsperaDeCartera:
         c = cola_siesa(datetime.utcnow())
         assert c['en_espera_de_cartera'] == 1 and c['nivel'] == 'ok', c
         assert 'cartera' in c['texto']
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Tanda 2 · H: los crons de madrugada vuelven a su hora
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _disparo(ident):
+    """Los keywords de la `CronTrigger` del `add_job` con ese id (AST)."""
+    for carpeta in ('app',):
+        for f in sorted((RAIZ / carpeta).rglob('*.py')):
+            for n in ast.walk(ast.parse(f.read_text(encoding='utf-8'))):
+                if not (isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+                        and n.func.attr == 'add_job'):
+                    continue
+                if not any(k.arg == 'id' and isinstance(k.value, ast.Constant)
+                           and k.value.value == ident for k in n.keywords):
+                    continue
+                trig = next(k.value for k in n.keywords if k.arg == 'trigger')
+                return {k.arg: k.value.value for k in trig.keywords
+                        if isinstance(k.value, ast.Constant)}
+    raise AssertionError(f'no encontré el cron {ident}')
+
+
+class TestLosCronsDeMadrugadaVuelven:
+    """No compiten con la operación; si `SIESA_VENTANA` está configurada, el
+    envoltorio los respeta (siguen en `HABLAN_CON_SIESA`)."""
+
+    @pytest.mark.parametrize('ident,hora,minuto', [
+        ('sync_barcodes_siesa', 2, 0), ('sync_empaques_siesa', 2, 30),
+        ('sync_ubicaciones_siesa', 3, 0), ('abc_prewarm_pre_turno', 5, 55),
+        ('vigia_alimentar_series', 5, 30)])
+    def test_a_su_hora(self, ident, hora, minuto):
+        d = _disparo(ident)
+        assert (d.get('hour'), d.get('minute')) == (hora, minuto), d
+        assert ident in HABLAN_CON_SIESA
+
+    def test_vigia_sigue_siendo_los_lunes(self):
+        assert _disparo('vigia_alimentar_series')['day_of_week'] == 'mon'
+
+    def test_los_pedidos_no_tienen_horario_propio(self):
+        """En temporada se opera hasta la medianoche: el sync de pedidos no
+        corta por hora; lo corta la ventana si está configurada."""
+        d = _disparo('pedidos_siesa_sync')
+        assert 'hour' not in d and d['minute'] == '*'
