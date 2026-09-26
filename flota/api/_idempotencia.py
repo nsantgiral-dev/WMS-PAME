@@ -76,7 +76,7 @@ def _respuesta_previa(previa, usuario_id, operacion):
         # Devolverle el resultado ajeno sería filtrarle datos; ejecutar sería
         # ignorar una clave que ya significa otra cosa.
         return jsonify({
-            'error': 'Este registro ya se usó para otra cosa. Volvé a hacerlo '
+            'error': 'Este registro ya se usó para otra cosa. Vuelva a hacerlo '
                      'desde la pantalla: se genera uno nuevo.',
         }), 409
     cuerpo = json.loads(previa.respuesta) if previa.respuesta else {
