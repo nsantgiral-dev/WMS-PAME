@@ -590,7 +590,7 @@ async function get(url) {
     const r = await fetch(API + url, { headers: { Authorization: 'Bearer ' + TOKEN }, signal: ctrl.signal });
     return _checkResp(r);
   } catch (e) {
-    if (e.name === 'AbortError') throw new Error('Tiempo de espera agotado — intenta de nuevo');
+    if (e.name === 'AbortError') throw new Error('Tiempo de espera agotado — intente de nuevo');
     throw e;
   } finally { clearTimeout(timer); }
 }
@@ -661,7 +661,7 @@ async function post(url, body) {
     });
     return _checkResp(r);
   } catch (e) {
-    if (e.name === 'AbortError') throw new Error('Tiempo de espera agotado — intenta de nuevo');
+    if (e.name === 'AbortError') throw new Error('Tiempo de espera agotado — intente de nuevo');
     throw e;
   } finally { clearTimeout(timer); }
 }
@@ -684,7 +684,7 @@ async function put(url, body = {}) {
     });
     return _checkResp(r);
   } catch (e) {
-    if (e.name === 'AbortError') throw new Error('Tiempo de espera agotado — intenta de nuevo');
+    if (e.name === 'AbortError') throw new Error('Tiempo de espera agotado — intente de nuevo');
     throw e;
   } finally { clearTimeout(timer); }
 }
@@ -712,7 +712,7 @@ async function _fetchConTimeout(url, options = {}, timeoutMs = 25000) {
       signal: ctrl.signal,
     });
   } catch (e) {
-    if (e.name === 'AbortError') throw new Error('Tiempo de espera agotado — intenta de nuevo');
+    if (e.name === 'AbortError') throw new Error('Tiempo de espera agotado — intente de nuevo');
     throw e;
   } finally { clearTimeout(timer); }
 }
@@ -750,7 +750,7 @@ function subirArchivoConProgreso(url, formData, onProgress, timeoutMs = 90000) {
       if (xhr.status >= 200 && xhr.status < 300) resolve(body);
       else reject(new Error(body.error || `Error ${xhr.status}`));
     };
-    xhr.ontimeout = () => reject(new Error('Tiempo de espera agotado — intenta de nuevo'));
+    xhr.ontimeout = () => reject(new Error('Tiempo de espera agotado — intente de nuevo'));
     xhr.onerror = () => reject(new Error('Error de conexión'));
     xhr.send(formData);
   });
@@ -760,7 +760,7 @@ function subirArchivoConProgreso(url, formData, onProgress, timeoutMs = 90000) {
 async function login() {
   const email = document.getElementById('login-email').value.trim();
   const pass = document.getElementById('login-password').value.trim();
-  if (!email || !pass) { alerta('Ingresa usuario y contraseña', 'error'); return; }
+  if (!email || !pass) { alerta('Ingrese usuario y contraseña', 'error'); return; }
   const btn = document.getElementById('btn-login');
   btn.textContent = 'Entrando...';
   btn.disabled = true;
@@ -785,7 +785,7 @@ async function login() {
     // Verificar status ANTES de parsear JSON (un 502 devuelve HTML, no JSON)
     if (!r.ok) {
       if (r.status >= 500) {
-        alerta('Servidor no disponible — intenta en unos segundos', 'advertencia');
+        alerta('Servidor no disponible — intente en unos segundos', 'advertencia');
       } else {
         let msg = 'Credenciales incorrectas';
         try { const e = await r.json(); msg = e.error || msg; } catch (_) {}
@@ -802,7 +802,7 @@ async function login() {
     actualizarUI(OPERARIO);
     mostrarSegunRol(OPERARIO.rol);
   } catch (e) {
-    alerta('Sin conexión — verifica tu red', 'error');
+    alerta('Sin conexión — verifique su red', 'error');
   } finally {
     btn.textContent = 'Entrar';
     btn.disabled = false;
@@ -897,7 +897,7 @@ function salir(porExpiracion = false) {
   localStorage.removeItem('wms_token');
   localStorage.removeItem('wms_operario');
   pantalla('pantalla-login');
-  if (porExpiracion) alerta('Sesión expirada — vuelve a ingresar', 'advertencia');
+  if (porExpiracion) alerta('Sesión expirada — vuelva a ingresar', 'advertencia');
 }
 
 /**
@@ -1290,7 +1290,7 @@ async function auditoriaGuardar(id) {
   const ubicacion       = document.getElementById(`auditoria-ubicacion-${id}`)?.value.trim();
   const observaciones   = document.getElementById(`auditoria-obs-${id}`)?.value.trim();
 
-  if (!resultado) { alerta('Selecciona un resultado antes de guardar', 'error'); return; }
+  if (!resultado) { alerta('Seleccione un resultado antes de guardar', 'error'); return; }
 
   try {
     const r = await post(`/api/picking/${id}/auditar`, {
@@ -1335,7 +1335,7 @@ async function cargarPedidos() {
 
     if (siesa.simulado) {
       if (tabsEl) tabsEl.innerHTML = '';
-      el.innerHTML = `<div style="background:var(--warn-bg);border-radius:10px;padding:10px 12px;margin-bottom:12px;font-size:var(--fs-xs);color:var(--warn-tx);border:1px solid var(--warn-brd);">⚡ Connekta en simulación — conecta credenciales para ver pedidos reales</div>`;
+      el.innerHTML = `<div style="background:var(--warn-bg);border-radius:10px;padding:10px 12px;margin-bottom:12px;font-size:var(--fs-xs);color:var(--warn-tx);border:1px solid var(--warn-brd);">⚡ Connekta en simulación — conecte credenciales para ver pedidos reales</div>`;
       return;
     }
 
@@ -1594,10 +1594,10 @@ function _renderTareasBodegaHTML(tareas) {
             🔍 Auditoría
           </button>
           <div id="auditoria-panel-${esc(t.id)}" style="display:none;margin-top:10px;">
-            <div style="font-size:var(--fs-xs);color:var(--tx2);margin-bottom:8px;">¿Qué encontraste físicamente?</div>
+            <div style="font-size:var(--fs-xs);color:var(--tx2);margin-bottom:8px;">¿Qué encontró físicamente?</div>
             <select id="auditoria-resultado-${esc(t.id)}" onchange="auditoriaResultadoCambio(${esc(t.id)})"
               style="width:100%;padding:10px;background:var(--bg-s);border:1px solid var(--brd);border-radius:8px;color:var(--tx);font-size:var(--fs-sm);margin-bottom:8px;">
-              <option value="">— Selecciona resultado —</option>
+              <option value="">— Seleccione resultado —</option>
               <option value="ENCONTRADO">✅ Encontrado (se genera conteo cíclico)</option>
               <option value="NO_ENCONTRADO">❌ No encontrado — faltante confirmado</option>
               <option value="AVERIA">🚫 Mercancía averiada</option>
@@ -2052,7 +2052,7 @@ async function barcodesCobertura() {
   const c = d.cobertura || {};
   if (!c.hay_catalogo) {
     el.innerHTML = '<span style="color:var(--warn-tx);">No hay catálogo cargado — '
-      + 'sincronizalo antes de mirar cobertura.</span>';
+      + 'sincronícelo antes de mirar cobertura.</span>';
     return;
   }
   const muestra = (d.productos || [])
@@ -2100,7 +2100,7 @@ async function syncBarcodes() {
   res.textContent = '⏳ Iniciando sync... (corre en background, puede tardar varios minutos)';
   try {
     await post('/api/siesa/sync-barcodes', {});
-    res.textContent = '✓ Sync iniciado. Consulta el estado en unos minutos con "Probar" (sin código) para ver cuántos barcodes se cargaron.';
+    res.textContent = '✓ Sync iniciado. Consulte el estado en unos minutos con "Probar" (sin código) para ver cuántos barcodes se cargaron.';
     res.style.color = 'var(--ok-tx)';
     // Polling estado cada 10s hasta que termine
     const intervalo = setInterval(async () => {
@@ -2187,7 +2187,7 @@ async function verReconciliacion() {
             res.style.color = 'var(--err-tx)'; res.textContent = 'Error: ' + e.ultimo_error; return;
           }
           const r = e.ultimo_resultado;
-          if (!r) { res.style.color = 'var(--orange)'; res.textContent = 'Sin resultado — intenta de nuevo'; return; }
+          if (!r) { res.style.color = 'var(--orange)'; res.textContent = 'Sin resultado — intente de nuevo'; return; }
           if (r.abortado) {
             res.style.color = 'var(--orange)'; res.textContent = '⚠ ' + (r.motivo || 'Reconciliación abortada'); return;
           }
@@ -2406,7 +2406,7 @@ async function abrirCamara(lectorDivId = 'lector-qr', boxDivId = 'camara-box', o
       _QUAGGA_CB = null;
       if (_QUAGGA_BTN) { _QUAGGA_BTN.style.display = ''; _QUAGGA_BTN = null; }
       box.style.display = 'none';
-      alerta('No se pudo activar la cámara — usa el ingreso manual del código', 'error');
+      alerta('No se pudo activar la cámara — use el ingreso manual del código', 'error');
       return;
     }
   }
@@ -2446,13 +2446,13 @@ async function abrirCamara(lectorDivId = 'lector-qr', boxDivId = 'camara-box', o
         const nombre = err.name || (err.message && /NotAllowed|Permission denied/i.test(err.message) ? 'NotAllowedError' : '');
         let msg;
         if (nombre === 'NotAllowedError') {
-          msg = 'Cámara bloqueada — habilita el permiso de cámara para este sitio en el navegador y vuelve a intentar';
+          msg = 'Cámara bloqueada — habilite el permiso de cámara para este sitio en el navegador y vuelva a intentar';
         } else if (nombre === 'NotFoundError' || nombre === 'OverconstrainedError') {
           msg = 'No se encontró una cámara disponible en este dispositivo';
         } else if (nombre === 'NotReadableError') {
-          msg = 'La cámara está siendo usada por otra app — ciérrala e intenta de nuevo';
+          msg = 'La cámara está siendo usada por otra app — ciérrela e intente de nuevo';
         } else {
-          msg = 'No se pudo activar la cámara — usa el ingreso manual del código';
+          msg = 'No se pudo activar la cámara — use el ingreso manual del código';
         }
         alerta(msg, 'error');
         cerrarCamara(boxDivId);
@@ -2777,7 +2777,7 @@ function puedeImprimirEtiquetas(que) {
   if (hayMotorDeCodigoBarras()) return true;
   alerta(
     `No se pueden imprimir ${que}: no cargó el generador de códigos de barras. ` +
-    `Recargá la página (Ctrl+F5). Si sigue, avisá a sistemas — imprimir sin ` +
+    `Recargue la página (Ctrl+F5). Si sigue, avise a sistemas — imprimir sin ` +
     `código deja una etiqueta que el láser no lee.`, 'error');
   return false;
 }
@@ -2814,7 +2814,7 @@ async function imprimirDocumento(url, que) {
     const html = await res.text();
     const ventana = window.open('', '_blank');
     if (!ventana) {
-      alerta('El navegador bloqueó la ventana emergente — permití popups para este sitio',
+      alerta('El navegador bloqueó la ventana emergente — permita popups para este sitio',
              'advertencia');
       return false;
     }
@@ -3509,7 +3509,7 @@ function _pintarBannerModo(modo) {
     ? { txt: 'MODO SIMULACIÓN — datos ficticios, nada llega a Siesa', bg: '#7C2D12', fg: '#FDBA74' }
     : modo === 'ensayo'
     ? { txt: 'MODO ENSAYO — los números de pantalla NO son la realidad', bg: '#78350F', fg: '#FCD34D' }
-    : { txt: 'MODO NO VERIFICADO — no asumas que estos números son reales', bg: '#7F1D1D', fg: '#FCA5A5' };
+    : { txt: 'MODO NO VERIFICADO — no asuma que estos números son reales', bg: '#7F1D1D', fg: '#FCA5A5' };
 
   el.textContent = cfg.txt;
   el.style.background = cfg.bg;
@@ -3591,7 +3591,7 @@ async function siesaRecuperacionCargar() {
       <div class="tabla-titulo">Recuperación Siesa</div>
       <p style="font-size:var(--fs-xs);color:var(--tx2);margin:0 0 10px;">
         Herramientas para cuando algo no llegó a Siesa. Todas dejan registro con
-        tu nombre.
+        su nombre.
       </p>
       ${bloque('Sincronizadores', monitor, d => Object.entries(d.modulos || {})
           .map(([nombre, m]) => filaModulo(nombre, m)).join(''))}
@@ -3719,7 +3719,7 @@ async function siesaRecuperacionCargar() {
 async function siesaVerCompromisos() {
   const id = parseInt(document.getElementById('rec-packing-id')?.value, 10);
   const out = document.getElementById('rec-resultado');
-  if (!Number.isFinite(id)) { alerta('Poné el ID de la tarea', 'error'); return; }
+  if (!Number.isFinite(id)) { alerta('Indique el ID de la tarea', 'error'); return; }
   out.innerHTML = '<p style="color:var(--tx3);font-size:var(--fs-xs);">Preguntando a Siesa…</p>';
   try {
     const r = await get(`/api/despacho_parcial/${id}/compromisos`);
@@ -3748,7 +3748,7 @@ async function siesaFacturarRMManual() {
   const tipo = (document.getElementById('rec-rm-tipo')?.value || '').trim().toUpperCase();
   const consec = parseInt(document.getElementById('rec-rm-consec')?.value, 10);
   const out = document.getElementById('rec-resultado');
-  if (!Number.isFinite(id)) { alerta('Poné el ID de la tarea', 'error'); return; }
+  if (!Number.isFinite(id)) { alerta('Indique el ID de la tarea', 'error'); return; }
   if (!tipo || !Number.isFinite(consec)) {
     alerta('Faltan el tipo y el consecutivo de la remisión', 'error');
     return;
@@ -3801,10 +3801,10 @@ async function siesaRecuperarPackingTraslados() {
 async function siesaReintentarTraslado() {
   const id = parseInt(document.getElementById('rec-traslado-id')?.value, 10);
   const out = document.getElementById('rec-traslado-resultado');
-  if (!Number.isFinite(id)) { alerta('Poné el ID de la solicitud', 'error'); return; }
+  if (!Number.isFinite(id)) { alerta('Indique el ID de la solicitud', 'error'); return; }
   if (!await _modalConfirmar(
     `Se va a crear una REQUISICIÓN formal (174646) en Siesa para la solicitud ${id}.\n\n` +
-    `Esto NO es parte del flujo normal de traslados. Solo hacelo si el consultor de Siesa lo pidió.`,
+    `Esto NO es parte del flujo normal de traslados. Solo hágalo si el consultor de Siesa lo pidió.`,
     { titulo: '¿Continuar?', peligro: true }
   )) return;
   out.innerHTML = '<p style="color:var(--tx3);font-size:var(--fs-xs);">Enviando…</p>';
@@ -3870,7 +3870,7 @@ async function siesaDispararDLQ() {
 async function siesaReconciliarPacking() {
   const id = parseInt(document.getElementById('rec-packing-id')?.value, 10);
   const out = document.getElementById('rec-resultado');
-  if (!Number.isFinite(id)) { alerta('Poné el ID de la tarea', 'error'); return; }
+  if (!Number.isFinite(id)) { alerta('Indique el ID de la tarea', 'error'); return; }
   out.innerHTML = '<p style="color:var(--tx3);font-size:var(--fs-xs);">Preguntando a Siesa…</p>';
   try {
     const r = await post(`/api/packing/${id}/reconciliar`, {});
@@ -3885,7 +3885,7 @@ async function siesaReconciliarPacking() {
 async function siesaVerRemision() {
   const id = parseInt(document.getElementById('rec-packing-id')?.value, 10);
   const out = document.getElementById('rec-resultado');
-  if (!Number.isFinite(id)) { alerta('Poné el ID de la tarea', 'error'); return; }
+  if (!Number.isFinite(id)) { alerta('Indique el ID de la tarea', 'error'); return; }
   try {
     const r = await get(`/api/packing/${id}/remision`);
     out.innerHTML = `<pre style="font-size:var(--fs-xs);white-space:pre-wrap;color:var(--tx2);
@@ -4149,7 +4149,7 @@ async function cargarAuditoriaFlujo() {
         <b style="color:var(--warn-tx);">Universo parcial — no le creas al 0</b>
         <div style="margin-top:4px;">
           ${esc(truncadas.length)} consulta(s) chocaron con su tope de filas: los
-          hallazgos de abajo salen de una muestra, no de todo. Subí el tope
+          hallazgos de abajo salen de una muestra, no de todo. Suba el tope
           antes de dar esto por limpio.</div>
         ${truncadas.map(t => `<div style="padding-left:8px;">· <code>${t}</code></div>`).join('')}
       </div>` : '';
