@@ -128,13 +128,13 @@ async function tiendaCargarSolicitudes() {
         </div>` : ''}
         ${s.es_averia && s.estado === 'ENVIADA' && !s.averia_evidencia ? `
         <div style="margin-top:10px;border-top:1px solid var(--brd);padding-top:10px;">
-          <div style="font-size:var(--fs-xs);color:var(--tx2);margin-bottom:6px;">Falta tu visto bueno. Declarar y validar son dos actos distintos: acá va por escrito qué revisaste.</div>
+          <div style="font-size:var(--fs-xs);color:var(--tx2);margin-bottom:6px;">Falta su visto bueno. Declarar y validar son dos actos distintos: acá va por escrito qué revisó.</div>
           <button onclick="tiendaValidarAveria(${esc(s.id)})"
             style="width:100%;padding:10px;background:#92400e;color:var(--tx);border:none;border-radius:8px;font-size:var(--fs-sm);font-weight:700;cursor:pointer;">
             Validar y dejar evidencia
           </button>
         </div>` : ''}
-        ${s.averia_evidencia ? `<div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:6px;">Tu evidencia: ${esc(s.averia_evidencia)}</div>` : ''}
+        ${s.averia_evidencia ? `<div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:6px;">Su evidencia: ${esc(s.averia_evidencia)}</div>` : ''}
         ${s.averia_veredicto === false ? `<div style="font-size:var(--fs-xs);color:var(--ok-tx);margin-top:4px;">El CD dictaminó que NO estaba averiada${s.averia_veredicto_nota ? `: ${esc(s.averia_veredicto_nota)}` : ''}</div>` : ''}
         ${s.averia_veredicto === true ? `<div style="font-size:var(--fs-xs);color:var(--err-tx);margin-top:4px;">El CD confirmó la avería</div>` : ''}
       </div>`;
@@ -182,13 +182,13 @@ function tiendaAveriasRender() {
   const el = document.getElementById('tienda-panel-averias-lista');
   if (!el) return;
   if (_TAV_ESTADO === 'cargando') {
-    el.innerHTML = '<div style="text-align:center;padding:20px;color:var(--tx3);">Cargando tu inventario...</div>'; return;
+    el.innerHTML = '<div style="text-align:center;padding:20px;color:var(--tx3);">Cargando su inventario...</div>'; return;
   }
   if (_TAV_ESTADO === 'sin-bodega') {
-    el.innerHTML = '<div style="padding:20px;color:var(--err-tx);font-size:var(--fs-sm);">Tu usuario no tiene una bodega asignada, así que no se puede saber de qué punto sale la avería. Pedí que te la configuren.</div>'; return;
+    el.innerHTML = '<div style="padding:20px;color:var(--err-tx);font-size:var(--fs-sm);">Su usuario no tiene una bodega asignada, así que no se puede saber de qué punto sale la avería. Pida que se la configuren.</div>'; return;
   }
   if (_TAV_ESTADO === 'error') {
-    el.innerHTML = '<div style="text-align:center;padding:20px;color:var(--err-tx);">Error cargando tu inventario</div>'; return;
+    el.innerHTML = '<div style="text-align:center;padding:20px;color:var(--err-tx);">Error cargando su inventario</div>'; return;
   }
 
   const filtrados = _TAV_FILTRO
@@ -212,7 +212,7 @@ function tiendaAveriasRender() {
     return `
     <div style="background:var(--bg-s);border:1px solid var(--brd);border-radius:10px;padding:10px;margin-bottom:8px;">
       <div style="font-size:var(--fs-sm);font-weight:600;">${esc(i.nombre)}</div>
-      <div style="font-size:var(--fs-xs);color:var(--tx3);margin-bottom:6px;">${esc(i.codigo_siesa)} · tenés ${esc(i.disponible)}</div>
+      <div style="font-size:var(--fs-xs);color:var(--tx3);margin-bottom:6px;">${esc(i.codigo_siesa)} · tiene ${esc(i.disponible)}</div>
       <div style="display:flex;gap:6px;">
         <input id="tav-qty-${key}" type="number" min="1" max="${esc(i.disponible)}" value="1"
           style="width:70px;padding:8px;background:var(--bg-s);color:var(--tx);border:1px solid var(--brd);border-radius:6px;font-size:var(--fs-sm);">
@@ -231,7 +231,7 @@ function tiendaAveriasAgregar(codigoSiesa, productoId) {
   const cantidad = parseInt(document.getElementById(`tav-qty-${key}`)?.value || 0);
   const motivo = (document.getElementById(`tav-mot-${key}`)?.value || '').trim();
 
-  if (!cantidad || cantidad < 1) { alerta('Poné cuántas unidades', 'error'); return; }
+  if (!cantidad || cantidad < 1) { alerta('Indique cuántas unidades', 'error'); return; }
   // El motivo se exige acá y no al enviar: quien lo tiene fresco es el que
   // está mirando la caja rota, no el que aprieta "declarar" cinco productos
   // después. El backend lo exige igual —es su regla, no la de esta pantalla—
@@ -286,7 +286,7 @@ async function tiendaAveriasEnviar() {
     });
     if (!r2.ok) { alerta('Se creó pero no se pudo enviar — quedó en borrador', 'error'); return; }
 
-    alerta('Avería declarada — falta tu visto bueno en Pedidos', 'exito');
+    alerta('Avería declarada — falta su visto bueno en Pedidos', 'exito');
     _TAV_CARRITO = [];
     tiendaSubtab('solicitudes');
   } catch (e) { alerta('Error de conexión', 'error'); }
@@ -420,7 +420,7 @@ function tiendaRenderStock() {
       <div style="text-align:center;padding:40px 20px;">
         <div style="font-size:32px;margin-bottom:12px;">⚠️</div>
         <div style="font-size:var(--fs-md);font-weight:600;color:var(--err-tx);margin-bottom:8px;">No se pudo cargar el stock</div>
-        <div style="font-size:var(--fs-sm);color:var(--tx3);margin-bottom:20px;">Verifica la conexión con Siesa o intenta de nuevo</div>
+        <div style="font-size:var(--fs-sm);color:var(--tx3);margin-bottom:20px;">Verifique la conexión con Siesa o intente de nuevo</div>
         <button onclick="tiendaCargarStock()"
           style="padding:12px 24px;background:#1d4ed8;color:#fff;border:none;border-radius:10px;font-size:var(--fs-sm);font-weight:700;cursor:pointer;">
           Reintentar
@@ -584,7 +584,7 @@ async function tiendaEnviarSolicitud(event) {
     tiendaActualizarCarrito();
     tiendaSubtab('solicitudes');
   } catch (e) {
-    alerta((e.message || 'La solicitud se creó pero no se pudo enviar') + ' — revisa "Mis Pedidos" para reintentar', 'error');
+    alerta((e.message || 'La solicitud se creó pero no se pudo enviar') + ' — revise "Mis Pedidos" para reintentar', 'error');
   } finally {
     if (btn) btn.disabled = false;
   }
@@ -726,7 +726,7 @@ function _tiendaRenderPickingTraslado() {
 
       <!-- Escaneo / entrada manual -->
       <div style="background:var(--bg-s);border-radius:10px;padding:12px;margin-bottom:14px;">
-        <div style="font-size:var(--fs-xs);color:var(--tx3);text-align:center;margin-bottom:8px;">Escanea el código de barras o usá los botones +/−</div>
+        <div style="font-size:var(--fs-xs);color:var(--tx3);text-align:center;margin-bottom:8px;">Escanee el código de barras o use los botones +/−</div>
         ${OPERARIO && OPERARIO.puede_usar_camara ? `
         <button onclick="abrirCamara('lector-qr-tt','camara-box-tt', tiendaScanTraslado, this)"
           style="width:100%;padding:13px;font-size:var(--fs-md);background:#fff;color:#000;border:2px solid var(--brd);border-radius:10px;cursor:pointer;margin-bottom:8px;">
@@ -737,7 +737,7 @@ function _tiendaRenderPickingTraslado() {
           <button onclick="cerrarCamara('camara-box-tt')" style="width:100%;padding:9px;margin-top:6px;font-size:var(--fs-sm);background:var(--bg-s2);color:var(--tx);border:none;border-radius:8px;cursor:pointer;">Cerrar cámara</button>
         </div>` : ''}
         <div style="display:flex;gap:8px;">
-          <input id="tienda-scan-input" type="text" placeholder="Escanea o escribe el código..."
+          <input id="tienda-scan-input" type="text" placeholder="Escanee o escriba el código..."
             style="flex:1;padding:10px;background:var(--bg-s);border:1px solid var(--brd);border-radius:8px;color:var(--tx);font-size:var(--fs-sm);"
             onkeydown="if(event.key==='Enter'){ const v=this.value.trim(); if(v){ tiendaScanTraslado(v); this.value=''; } }"
             autocomplete="off" autocorrect="off" spellcheck="false">
@@ -753,7 +753,7 @@ function _tiendaRenderPickingTraslado() {
       <button id="btn-confirmar-traslado" onclick="tiendaConfirmarRecepcionTraslado()"
         ${algoContado || todoContado ? '' : 'disabled'}
         style="width:100%;padding:18px;font-size:var(--fs-lg);font-weight:700;background:${algoContado || todoContado ? btnColor : 'var(--bg-s2)'};color:var(--tx);border:none;border-radius:14px;cursor:${algoContado || todoContado ? 'pointer' : 'default'};margin-bottom:10px;">
-        ${algoContado || todoContado ? btnTexto : 'Contá al menos un ítem para continuar'}
+        ${algoContado || todoContado ? btnTexto : 'Cuente al menos un ítem para continuar'}
       </button>
 
       <button onclick="tiendaVolverListaRecibir()"
@@ -859,7 +859,7 @@ function tiendaContarItem(productoId, delta) {
   if (btn) {
     btn.disabled = !(algoContado || todoContado);
     btn.style.background = !algoContado && !todoContado ? '#222' : (todoContado ? '#15803d' : '#b45309');
-    btn.textContent = !algoContado && !todoContado ? 'Contá al menos un ítem para continuar' : (todoContado ? '✓ Confirmar recepción' : '⚠ Confirmar recepción parcial');
+    btn.textContent = !algoContado && !todoContado ? 'Cuente al menos un ítem para continuar' : (todoContado ? '✓ Confirmar recepción' : '⚠ Confirmar recepción parcial');
     btn.style.cursor = algoContado || todoContado ? 'pointer' : 'default';
   }
 }
@@ -964,7 +964,7 @@ async function tiendaOCCargar() {
 
     if (siesa.simulado) {
       el.innerHTML = `<div style="background:var(--warn-bg);border-radius:10px;padding:10px 12px;margin-bottom:12px;font-size:var(--fs-xs);color:var(--warn-tx);border:1px solid var(--warn-brd);">
-        Connekta en simulación — conecta credenciales para ver OCs reales de Siesa
+        Connekta en simulación — conecte credenciales para ver OCs reales de Siesa
       </div>`;
       return;
     }
@@ -1083,7 +1083,7 @@ function _tiendaOCRenderScan() {
       </div>
 
       <div style="background:var(--bg-s);border-radius:10px;padding:12px;margin-bottom:12px;">
-        <div style="font-size:var(--fs-xs);color:var(--tx3);text-align:center;margin-bottom:10px;">Escanea unidad, caja o paca — el sistema calcula las unidades</div>
+        <div style="font-size:var(--fs-xs);color:var(--tx3);text-align:center;margin-bottom:10px;">Escanee unidad, caja o paca — el sistema calcula las unidades</div>
         ${OPERARIO && OPERARIO.puede_usar_camara ? `
         <button onclick="abrirCamara('lector-qr-toc','camara-box-toc', tiendaOCProcesarScan, this)"
           style="width:100%;padding:13px;font-size:var(--fs-md);background:#fff;color:#000;border:2px solid var(--brd);border-radius:10px;cursor:pointer;margin-bottom:8px;">
@@ -1094,7 +1094,7 @@ function _tiendaOCRenderScan() {
           <button onclick="cerrarCamara('camara-box-toc')" style="width:100%;padding:9px;margin-top:6px;font-size:var(--fs-sm);background:var(--bg-s2);color:var(--tx);border:none;border-radius:8px;cursor:pointer;">Cerrar cámara</button>
         </div>` : ''}
         <div style="display:flex;gap:8px;margin-bottom:8px;">
-          <input id="toc-codigo-manual" type="text" placeholder="O escribe / pega el código aquí"
+          <input id="toc-codigo-manual" type="text" placeholder="O escriba / pegue el código aquí"
             style="flex:1;padding:10px;background:var(--bg-s);border:1px solid var(--brd);border-radius:8px;color:var(--tx);font-size:var(--fs-sm);"
             onkeydown="if(event.key==='Enter'){ const v=this.value.trim(); if(v){ tiendaOCProcesarScan(v); this.value=''; } }"
             autocomplete="off" autocorrect="off" spellcheck="false">
@@ -1113,7 +1113,7 @@ function _tiendaOCRenderScan() {
 
       <button id="btn-confirmar-toc" onclick="tiendaOCConfirmar()" ${btnActivo ? '' : 'disabled'}
         style="width:100%;padding:18px;font-size:20px;font-weight:700;background:${btnActivo ? btnColor : 'var(--bg-s2)'};color:var(--tx);border:none;border-radius:14px;cursor:${btnActivo ? 'pointer' : 'default'};margin-bottom:10px;">
-        ${btnActivo ? (todoCompleto ? '✓ ' : '⚠ ') + btnTexto : 'Escanea al menos un ítem para continuar'}
+        ${btnActivo ? (todoCompleto ? '✓ ' : '⚠ ') + btnTexto : 'Escanee al menos un ítem para continuar'}
       </button>
 
       <button onclick="tiendaOCModalObsequio()"
@@ -1299,7 +1299,7 @@ async function _tiendaOCRegistrarScan(productoId, cantidad, esEmpaque, esBonific
     btn.style.background = todoCompleto ? '#15803d' : '#b45309';
     btn.style.cursor = 'pointer';
     btn.textContent = todoCompleto ? '✓ Confirmar recepción' : '⚠ Confirmar recepción parcial';
-    if (todoCompleto) alerta('Todo escaneado — confirma la recepción', 'exito');
+    if (todoCompleto) alerta('Todo escaneado — confirme la recepción', 'exito');
   }
 }
 
