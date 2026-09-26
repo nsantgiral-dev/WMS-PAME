@@ -237,15 +237,15 @@ def _estado_del_vehiculo(vehiculo_id):
 
 @conductor_bp.route('/conductor/mi-turno', methods=['GET'])
 @jwt_required()
-@exige(Roles.LECTURA_FLOTA, 'ver tu turno')
+@exige(Roles.LECTURA_FLOTA, 'ver su turno')
 def mi_turno():
     """Qué vehículo le toca hoy, de dónde salió esa placa, y si está libre."""
     conductor = _conductor_del_token()
     if conductor is None:
         return jsonify({
-            'error': 'Tu usuario no está vinculado a un conductor',
-            'detalle': 'Pedile a administración que te vincule la ficha; sin eso '
-                       'la app no sabe qué vehículo es el tuyo.',
+            'error': 'Su usuario no está vinculado a un conductor',
+            'detalle': 'Pídale a administración que le vincule la ficha; sin eso '
+                       'la app no sabe qué vehículo es el suyo.',
         }), 404
 
     vigente = Custodia.query.filter(
@@ -355,7 +355,7 @@ def mi_turno():
 
 @conductor_bp.route('/conductor/mis-turnos', methods=['GET'])
 @jwt_required()
-@exige(Roles.LECTURA_FLOTA, 'ver tus reportes')
+@exige(Roles.LECTURA_FLOTA, 'ver sus reportes')
 def mis_turnos():
     """Sus turnos y en qué van.
 
@@ -368,7 +368,7 @@ def mis_turnos():
     """
     conductor = _conductor_del_token()
     if conductor is None:
-        return jsonify({'error': 'Tu usuario no está vinculado a un conductor'}), 404
+        return jsonify({'error': 'Su usuario no está vinculado a un conductor'}), 404
 
     filas = (
         db.session.query(Custodia, Vehiculo.placa)

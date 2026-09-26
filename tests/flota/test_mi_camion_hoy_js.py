@@ -574,7 +574,7 @@ class TestLaColaSinSenal:
                               ' return {cola: await _condDB.get("flota_cola"), envios: __ENVIOS.length,'
                               ' rech: await _condDB.get("flota_cola_rechazos")}; })()',
                     semilla=semilla,
-                    respuestas=[{'status': 403, 'json': {'error': 'No tenés turno abierto',
+                    respuestas=[{'status': 403, 'json': {'error': 'No tiene turno abierto',
                                                          'motivo': 'sin_derecho'}},
                                 {'status': 201, 'json': {'id': 4}}])
         assert s['cola'] == [] and s['envios'] == 2
