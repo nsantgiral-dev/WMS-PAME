@@ -108,7 +108,7 @@ function _vigiaRenderPanel(el, data, salud) {
 
   // Series por C.O. — jerarquía: facturas > despachos > facturación
   if (coKeys.length === 0) {
-    html += '<div style="color:var(--tx3);padding:20px;text-align:center;">Sin series cargadas. Carga un archivo TXT de ventas para comenzar.</div>';
+    html += '<div style="color:var(--tx3);padding:20px;text-align:center;">Sin series cargadas. Cargue un archivo TXT de ventas para comenzar.</div>';
   } else {
     html += '<div style="font-size:var(--fs-sm);font-weight:700;color:var(--tx);margin-bottom:8px;">Series por C.O.</div>';
     for (const co of coKeys) {
@@ -417,7 +417,7 @@ async function vigiaAbrirCerrar(alarmaId, severidad) {
   const info = document.getElementById('vigia-modal-info');
   if (info) {
     const minChars = severidad === 'ALARMA' ? 20 : 5;
-    info.textContent = `${severidad}: Causa minimo ${minChars} caracteres. Selecciona quien queda dueno del plan.`;
+    info.textContent = `${severidad}: Causa minimo ${minChars} caracteres. Seleccione quién queda dueño del plan.`;
   }
   const textarea = document.getElementById('vigia-modal-causa');
   if (textarea) { textarea.value = ''; }
@@ -453,7 +453,7 @@ async function vigiaConfirmarCierre() {
   const responsableId = (document.getElementById('vigia-modal-responsable') || {}).value || '';
 
   if (_VIGIA_ALARMA_CERRAR.severidad === 'ALARMA' && !responsableId) {
-    alerta('Selecciona un responsable para cerrar una ALARMA', 'error');
+    alerta('Seleccione un responsable para cerrar una ALARMA', 'error');
     return;
   }
 
@@ -478,7 +478,7 @@ async function vigiaConfirmarCierre() {
 async function vigiaCargarTxt() {
   const fileInput = document.getElementById('vigia-file');
   if (!fileInput || !fileInput.files[0]) {
-    alerta('Selecciona un archivo TXT', 'error');
+    alerta('Seleccione un archivo TXT', 'error');
     return;
   }
 
