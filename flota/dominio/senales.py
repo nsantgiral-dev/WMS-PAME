@@ -157,7 +157,7 @@ def km_sin_ruta(*, km: int, dias: Sequence[date], dias_con_ruta: set,
 #: El motivo de un tramo que no se juzga. Uno solo, para la bandeja y para la
 #: jornada: el encargado lo lee en las dos y tiene que reconocerlo.
 MOTIVO_TRAMO_EN_DUDA = ('uno de los kilometrajes del tramo está en duda: '
-                        'verificalo primero contra su foto')
+                        'verifíquelo primero contra su foto')
 
 
 def km_sin_explicar(*, km: int, marca, tolerancia: int) -> Veredicto:
