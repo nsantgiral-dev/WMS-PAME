@@ -752,7 +752,7 @@ function rutaCard(r) {
   const btnPlanilla = ['EN_TRANSITO','ENTREGADA'].includes(r.estado)
     ? `<button onclick="rutaVerPlanilla(${esc(r.id)})" style="flex:1;padding:10px;background:var(--lila-bg);color:var(--lila-tx);border:1px solid var(--info-brd);border-radius:8px;font-size:var(--fs-sm);font-weight:700;cursor:pointer;">💰 Planilla${r.estado_financiero === 'LIQUIDADA' ? ' ✓' : ''}</button>`
     : '';
-  const btnForzarCierre = r.estado === 'EN_TRANSITO'
+  const btnForzarCierre = r.estado === 'EN_TRANSITO' && puedeForzarCierreRuta()
     ? `<button onclick="conBotonOcupado(event, () => rutaForzarCierre(${esc(r.id)}))" style="flex:1;padding:10px;background:var(--warn-bg);color:var(--warn-tx);border:1px solid var(--warn-brd);border-radius:8px;font-size:var(--fs-xs);font-weight:700;cursor:pointer;">⚡ Forzar cierre</button>`
     : '';
 
@@ -1734,6 +1734,14 @@ async function cargarListaConductoresEnSelect(selectId) {
 function conCuentaPwa(c) {
   return c.tiene_cuenta_pwa === true
       || (c.tiene_cuenta_pwa === undefined && (c.usuario_id != null || !!c.usuario_email));
+}
+
+/** Quién puede forzar el cierre de una ruta: la misma lista que
+    `permisos_liquidacion.puede_forzar_cierre_ruta` (test_roles_plata la cruza).
+    El botón no se ofrece a quien el servidor le va a contestar 403. */
+const RUTA_ROLES_FUERZAN_CIERRE = ['admin'];
+function puedeForzarCierreRuta() {
+  return typeof OPERARIO !== 'undefined' && RUTA_ROLES_FUERZAN_CIERRE.includes(OPERARIO?.rol);
 }
 
 /** Solo admin crea cuentas (`POST /conductores/<id>/cuenta` es `_solo_admin`).
@@ -3784,7 +3792,10 @@ async function _cargarPlanilla(id) {
           La ruta ya se cerró. Primero pídale al conductor que abra la app con señal (la confirmación
           suele estar en su cola). Si sabe qué pasó, regístrela en Liquidación → la ruta → «Registrar desde
           la oficina». Si no se sabe, cierre lo que falta: quedan como rechazadas y recepción cuenta lo que volvió.
-        </div>
+        </div>`;
+      }
+      if (ruta.estado === 'ENTREGADA' && puedeForzarCierreRuta()) {
+        html += `
         <button onclick="conBotonOcupado(event, () => rutaForzarCierre(${esc(ruta.id)}))"
           style="width:100%;margin-top:8px;padding:12px;background:var(--warn-bg);color:var(--warn-tx);border:1px solid var(--warn-brd);border-radius:10px;font-size:var(--fs-sm);font-weight:700;cursor:pointer;">
           ⚡ Cerrar las paradas que faltan

@@ -3230,7 +3230,7 @@ function _formUsuario(u = {}) {
           <input type="checkbox" id="u-puede-autorizar-cartera" ${u.puede_autorizar_cartera?'checked':''} style="width:20px;height:20px;">
           <div>
             <div style="font-size:var(--fs-sm);font-weight:600;color:var(--warn-tx);">Autoriza cartera</div>
-            <div style="font-size:var(--fs-xs);color:var(--tx3);">Puede dejar salir a crédito un pedido retenido por mora o cupo, con motivo (respaldo del Gestor de Cartera). Vale para admin, supervisor, jefe de almacén y gerente; el líder de cartera ya lo tiene por su rol</div>
+            <div style="font-size:var(--fs-xs);color:var(--tx3);">Puede dejar salir a crédito un pedido retenido por mora o cupo, con motivo (respaldo del Gestor de Cartera). Vale solo para admin; el líder de cartera ya lo tiene por su rol</div>
           </div>
         </label>
         <label style="display:flex;align-items:center;gap:12px;cursor:pointer;">
