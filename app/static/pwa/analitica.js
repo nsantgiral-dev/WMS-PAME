@@ -188,7 +188,7 @@ async function anCargarPanel(o) {
   if (err) {
     const msg = esc(err.message || 'No se pudo cargar');
     if (conDatos) {
-      el.innerHTML = `<div style="padding:8px 12px;margin-bottom:8px;border-radius:6px;background:var(--warn-bg);color:var(--warn-tx);border:1px solid var(--warn-brd);font-size:var(--fs-xs);">No se pudo actualizar (${msg}). Lo que ves es la carga anterior.</div>` + est.html;
+      el.innerHTML = `<div style="padding:8px 12px;margin-bottom:8px;border-radius:6px;background:var(--warn-bg);color:var(--warn-tx);border:1px solid var(--warn-brd);font-size:var(--fs-xs);">No se pudo actualizar (${msg}). Lo que ve es la carga anterior.</div>` + est.html;
     } else {
       el.innerHTML = o.error ? o.error(err)
         : `<div style="text-align:center;padding:30px;color:var(--err-tx);">${msg}</div>`;
