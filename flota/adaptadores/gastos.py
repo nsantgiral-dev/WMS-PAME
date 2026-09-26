@@ -272,7 +272,7 @@ def _lectura_para(*, vehiculo_id: int, categoria: str, km: Optional[int],
         raise GastoInvalido(
             'este vehículo no tiene ninguna lectura de odómetro, así que el '
             'gasto no podría entrar a ningún costo por kilómetro (regla 3). '
-            'Registrá primero el kilometraje.'
+            'Registre primero el kilometraje.'
         )
     return ultima
 
