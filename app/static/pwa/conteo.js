@@ -87,7 +87,7 @@ function _invGuardarScroll(el) {
 
 /** Aviso sobre datos que se quedan porque el refresco falló. */
 function _invAvisoViejo(e) {
-  return `<div class="inv-aviso-refresco" style="font-size:var(--fs-xs);color:var(--tx3);padding:6px 0;">No se pudo actualizar (${esc((e && e.message) || 'sin conexión')}) — lo que ves es de la carga anterior.</div>`;
+  return `<div class="inv-aviso-refresco" style="font-size:var(--fs-xs);color:var(--tx3);padding:6px 0;">No se pudo actualizar (${esc((e && e.message) || 'sin conexión')}) — lo que ve es de la carga anterior.</div>`;
 }
 
 /**
@@ -199,9 +199,9 @@ function invRefrescoPeriodico() {
 // confirm() nativo. El texto vive SOLO acá; cada pantalla llama
 // `avisoCajasPosHtml()`. Trinquete:
 // tests/test_conteo_ventas_durante_conteo.py::TestAvisoCajasPosEnCadaInicioDeConteo
-const AVISO_CAJAS_POS = 'Antes de contar: confirma que todas las cajas POS de la tienda '
+const AVISO_CAJAS_POS = 'Antes de contar: confirme que todas las cajas POS de la tienda '
   + 'están en línea y al día — que la última venta de cada caja ya aparezca en Siesa '
-  + 'central. Si una caja estuvo caída, cuenta después de que sincronice.';
+  + 'central. Si una caja estuvo caída, cuente después de que sincronice.';
 
 /** Banner destacado con AVISO_CAJAS_POS. Texto estático: no lleva dato de nadie. */
 function avisoCajasPosHtml() {
@@ -428,7 +428,7 @@ function _quienContoTxt(x, sinDato = '—') {
  *  palabras que el HUD del operario. Texto plano: va por esc(). */
 function _ubicacionTxt(x) {
   if (!x) return '—';
-  if (x.ubicacion_fisica === false) return 'Buscalo en toda la bodega';
+  if (x.ubicacion_fisica === false) return 'Búsquelo en toda la bodega';
   return x.ubicacion_codigo || '—';
 }
 
@@ -740,7 +740,7 @@ async function conteoDescartarFallos() {
   if (!plan.jobs_fallidos) { alerta('No hay ajustes fallidos que descartar', 'info'); return; }
 
   const etiquetas = {
-    reset_a_descuadre: 'vuelven a «contado con diferencia» (podés aprobarlos de nuevo o cancelarlos)',
+    reset_a_descuadre: 'vuelven a «contado con diferencia» (puede aprobarlos de nuevo o cancelarlos)',
     sin_tocar_ya_ajustada: 'ya estaban AJUSTADAS — no se tocan',
     sin_tocar_otro_estado: 'están en otro estado — no se tocan',
     SE_CONSERVA_POSIBLE_ENVIO: '⚠ NO se descartan: el ajuste pudo haber llegado a Siesa (se resuelven en Siesa → Recuperación: «¿Está en Siesa?»)',
@@ -755,7 +755,7 @@ async function conteoDescartarFallos() {
     + 'Descartar NO los envía a Siesa: los marca como abandonados.';
   if (plan.huerfanas && plan.huerfanas.length) {
     texto += `\n\n⚠ Sesiones ${esc(plan.huerfanas.join(', '))}: su ajuste pudo haber llegado a Siesa. `
-      + 'No se descartan — quedan para «Reintentar», que las cierra sin volver a enviar. Verificá en Siesa si llegó.';
+      + 'No se descartan — quedan para «Reintentar», que las cierra sin volver a enviar. Verifique en Siesa si llegó.';
   }
   if (!await _modalConfirmar(texto, { titulo: 'Descartar ajustes fallidos', peligro: true, textoConfirmar: 'Descartar', textoCancelar: 'Volver' })) return;
 
@@ -776,10 +776,10 @@ async function conteoDescartarFallos() {
  * @param {number} id - Conteo session ID.
  */
 async function conteoOmitirSegundo(id) {
-  if (!await _modalConfirmar('¿No esperar el recuento pendiente?\n\nEl conteo que falta se cancela y esta diferencia queda «contada con diferencia», para que la apruebes o la canceles vos.', { titulo: 'Saltar el recuento', textoConfirmar: 'Sí, saltarlo', textoCancelar: 'Volver' })) return;
+  if (!await _modalConfirmar('¿No esperar el recuento pendiente?\n\nEl conteo que falta se cancela y esta diferencia queda «contada con diferencia», para que usted la apruebe o la cancele.', { titulo: 'Saltar el recuento', textoConfirmar: 'Sí, saltarlo', textoCancelar: 'Volver' })) return;
   try {
     await post('/api/conteo/' + id + '/omitir-segundo', {});
-    alerta('Listo — la diferencia queda para tu decisión', 'exito');
+    alerta('Listo — la diferencia queda para su decisión', 'exito');
     await cargarConteoStats();
     await cargarConteos(_CONTEO_PAGE);
   } catch (e) { alerta(e.message || 'Error de conexión', 'error'); }
@@ -854,7 +854,7 @@ async function conteoAsignarLote() {
   const operarioId = document.getElementById('conteo-asignar-operario')?.value;
   const limite = parseInt(document.getElementById('conteo-asignar-limite')?.value) || 10;
   const almId = _conteoAlmacenFiltro();
-  if (!operarioId) { alerta('Selecciona un operario', 'error'); return; }
+  if (!operarioId) { alerta('Seleccione un operario', 'error'); return; }
   try {
     const d = await post('/api/conteo/asignar-lote', { operario_id: parseInt(operarioId), almacen_id: almId ? parseInt(almId) : null, limite });
     conteoCerrarAsignar();
@@ -1070,8 +1070,8 @@ async function crearConteoManual() {
   const operarioId = document.getElementById('conteo-manual-operario')?.value;
   const errorEl = document.getElementById('conteo-manual-error');
   errorEl.textContent = '';
-  if (!codigo) { errorEl.textContent = 'Ingresa el código del producto'; return; }
-  if (!almacenId) { errorEl.textContent = 'Selecciona un almacén'; return; }
+  if (!codigo) { errorEl.textContent = 'Ingrese el código del producto'; return; }
+  if (!almacenId) { errorEl.textContent = 'Seleccione un almacén'; return; }
   try {
     const body = { almacen_id: parseInt(almacenId), producto_codigo: codigo };
     if (operarioId) body.operario_id = parseInt(operarioId);
@@ -1166,7 +1166,7 @@ function _abcPintarEtiquetas(d) {
  */
 async function generarAbc(clase) {
   const almacenId = document.getElementById('inv-abc-almacen')?.value;
-  if (!almacenId) { alerta('Selecciona un almacén primero', 'error'); return; }
+  if (!almacenId) { alerta('Seleccione un almacén primero', 'error'); return; }
   const res = document.getElementById('inv-abc-resultado');
   if (res) res.textContent = 'Generando...';
   try {
@@ -1189,7 +1189,7 @@ async function generarAbc(clase) {
  */
 async function generarTodasClases(adelantar = false) {
   const almacenId = document.getElementById('inv-abc-almacen')?.value;
-  if (!almacenId) { alerta('Selecciona un almacén primero', 'error'); return; }
+  if (!almacenId) { alerta('Seleccione un almacén primero', 'error'); return; }
   if (adelantar && !await _modalConfirmar('¿Adelantar conteos? Además de los vencidos, toma productos que todavía están al día (los más atrasados primero).\n\nNunca pasa del cupo diario del almacén.', { titulo: 'Adelantar conteos', textoConfirmar: 'Adelantar', textoCancelar: 'Volver' })) return;
   const res = document.getElementById('inv-abc-resultado');
   if (res) res.textContent = adelantar ? 'Adelantando...' : 'Generando lote del día...';
@@ -1226,7 +1226,7 @@ function _limpiarColaPreviewHtml(plan, etiqueta) {
     + `Por antigüedad:\n${lista(plan.por_antiguedad_dias, k => 'de ' + k + ' días')}\n`;
   const quedan = lista(plan.no_se_tocan, k => _ETIQUETAS_NO_SE_TOCAN[k] || k);
   if (quedan) t += `\nNO se tocan:\n${quedan}\n`;
-  return t + '\nNo se borra nada: quedan CANCELADAS, con tu nombre y el motivo.';
+  return t + '\nNo se borra nada: quedan CANCELADAS, con su nombre y el motivo.';
 }
 
 /**
@@ -1235,12 +1235,12 @@ function _limpiarColaPreviewHtml(plan, etiqueta) {
  */
 async function limpiarPendientesAbc() {
   const almacenId = document.getElementById('inv-abc-almacen')?.value;
-  if (!almacenId) { alerta('Selecciona un almacén primero', 'error'); return; }
-  const clase = await _modalTexto('Cancelar rezago', '¿De qué clase? Escribí A, B o C, o dejalo vacío para TODAS:', { obligatorio: false, textoConfirmar: 'Ver qué se cancela', textoCancelar: 'Volver' });
+  if (!almacenId) { alerta('Seleccione un almacén primero', 'error'); return; }
+  const clase = await _modalTexto('Cancelar rezago', '¿De qué clase? Escriba A, B o C, o déjelo vacío para TODAS:', { obligatorio: false, textoConfirmar: 'Ver qué se cancela', textoCancelar: 'Volver' });
   if (clase === null) return; // canceló
   const claseUpper = clase.trim().toUpperCase();
   if (claseUpper && !['A','B','C'].includes(claseUpper)) {
-    alerta('Clase inválida. Usa A, B, C o deja vacío.', 'error'); return;
+    alerta('Clase inválida. Use A, B, C o deje vacío.', 'error'); return;
   }
   const etiqueta = claseUpper ? `clase ${claseUpper}` : 'todas las clases';
   let plan;
@@ -1426,7 +1426,7 @@ async function subirCsvAbc(input) {
 /** Run the ABC watchdog to detect anomalous rotation and force conteos. */
 async function ejecutarWatchdog() {
   const almacenId = document.getElementById('inv-abc-almacen')?.value;
-  if (!almacenId) { alerta('Selecciona un almacén primero', 'error'); return; }
+  if (!almacenId) { alerta('Seleccione un almacén primero', 'error'); return; }
   const res = document.getElementById('inv-abc-resultado');
   if (res) res.textContent = '🤖 Escaneando anomalías...';
   try {
@@ -1557,8 +1557,8 @@ function conteoHudHtml(h) {
   const lugar = t.ubicacion_fisica
     ? `<div style="font-size:var(--fs-xs);color:var(--tx3);">UBICACIÓN</div>
        <div style="font-size:var(--fs-2xl);font-weight:900;letter-spacing:1px;color:var(--tx);">${esc(t.ubicacion)}</div>`
-    : `<div style="font-size:20px;font-weight:800;color:var(--warn-tx);">📍 Buscalo en toda la bodega</div>
-       <div style="font-size:var(--fs-xs);color:var(--tx2);margin-top:4px;">Este producto no tiene una ubicación física registrada: revisá todos los sitios donde pueda estar.</div>`;
+    : `<div style="font-size:20px;font-weight:800;color:var(--warn-tx);">📍 Búsquelo en toda la bodega</div>
+       <div style="font-size:var(--fs-xs);color:var(--tx2);margin-top:4px;">Este producto no tiene una ubicación física registrada: revise todos los sitios donde pueda estar.</div>`;
   const empaque = factor > 1
     ? `<div style="font-size:var(--fs-sm);color:var(--ok-tx);margin-top:8px;font-weight:700;">📦 ${esc(unidadEmp)} de ${esc(factor)} und — escanear el código de la ${esc(unidadEmp)} suma ${esc(factor)}</div>`
     : '';
@@ -1569,12 +1569,12 @@ function conteoHudHtml(h) {
       ${avisoCajasPosHtml()}
 
       ${h.aviso ? `<div id="chud-aviso" style="background:var(--bg-input);border:2px solid #FBBF24;border-radius:14px;padding:14px;margin-bottom:12px;text-align:center;">
-        <div style="font-size:var(--fs-xl);font-weight:900;color:var(--warn-tx);">🔁 Recontá este producto con cuidado</div>
+        <div style="font-size:var(--fs-xl);font-weight:900;color:var(--warn-tx);">🔁 Recuente este producto con cuidado</div>
         <div style="font-size:var(--fs-sm);color:var(--warn-tx);margin-top:6px;line-height:1.4;">${esc(h.aviso)}</div>
       </div>` : ''}
 
       <div style="background:var(--bg-s);border:1px solid var(--brd);border-radius:16px;padding:18px;margin-bottom:12px;">
-        <div style="font-size:var(--fs-xs);color:var(--tx3);letter-spacing:1px;">CONTÁ ESTE PRODUCTO</div>
+        <div style="font-size:var(--fs-xs);color:var(--tx3);letter-spacing:1px;">CUENTE ESTE PRODUCTO</div>
         <div style="font-size:26px;font-weight:900;color:var(--tx);line-height:1.2;margin-top:4px;">${esc(t.producto_nombre || '—')}</div>
         <div style="font-size:17px;color:var(--tx);margin-top:6px;">Código <b>${esc(t.producto_codigo || '—')}</b></div>
         ${t.producto_codigo_barras ? `<div style="font-size:var(--fs-sm);color:var(--tx2);margin-top:2px;">Código de barras ${esc(t.producto_codigo_barras)}</div>` : ''}
@@ -1584,14 +1584,14 @@ function conteoHudHtml(h) {
       <div style="background:var(--bg-s);border:1px solid var(--brd);border-radius:16px;padding:14px 18px;margin-bottom:12px;">${lugar}</div>
 
       <div style="background:var(--bg-input);border-radius:16px;padding:16px;margin-bottom:12px;text-align:center;">
-        <div style="font-size:var(--fs-sm);color:var(--tx3);">CONTEO CIEGO — no ves cuánto dice el sistema</div>
+        <div style="font-size:var(--fs-sm);color:var(--tx3);">CONTEO CIEGO — no ve cuánto dice el sistema</div>
         <div id="chud-total" style="font-size:72px;font-weight:900;color:var(--tx);line-height:1.1;">${esc(h.total)}</div>
         <div style="font-size:var(--fs-sm);color:var(--tx2);">unidades contadas</div>
         <div id="chud-ultimo" style="font-size:var(--fs-lg);font-weight:800;color:var(--ok-tx);min-height:24px;margin-top:4px;">${esc(h.ultimo)}</div>
       </div>
 
       <div style="background:var(--bg-s);border:1px solid var(--brd);border-radius:16px;padding:14px;margin-bottom:10px;">
-        <div style="font-size:var(--fs-sm);color:var(--tx2);margin-bottom:8px;">¿Una pila? Contala y escribí cuántas unidades son:</div>
+        <div style="font-size:var(--fs-sm);color:var(--tx2);margin-bottom:8px;">¿Una pila? Cuéntela y escriba cuántas unidades son:</div>
         <div style="display:flex;gap:8px;">
           <input id="chud-cant" type="number" inputmode="numeric" min="1" step="1" placeholder="0"
             style="flex:1;min-width:0;padding:14px;font-size:34px;font-weight:800;background:var(--bg-s);border:2px solid var(--brd);border-radius:12px;color:var(--tx);text-align:center;box-sizing:border-box;">
@@ -1715,7 +1715,7 @@ async function _conteoHudEnviarScan(h, codigoBackend, cantidad, etiquetaCliente)
     beepError();
     // Sin red: NO se suma nada acá. Si el escaneo sí llegó, repetirlo manda
     // el mismo total_previo y el servidor escribe lo mismo — no duplica.
-    alerta(e.status ? e.message : 'Sin conexión — ese escaneo no se contó. Escanealo de nuevo.', 'error');
+    alerta(e.status ? e.message : 'Sin conexión — ese escaneo no se contó. Escanéelo de nuevo.', 'error');
   }
 }
 
@@ -1728,7 +1728,7 @@ function _conteoHudElegirEmpaque(codigo, empaques) {
     caja.style.cssText = 'background:var(--bg-s);border-top:2px solid #b45309;border-radius:20px 20px 0 0;padding:24px;width:100%;max-height:70vh;overflow-y:auto;';
     const titulo = document.createElement('div');
     titulo.style.cssText = 'font-size:var(--fs-md);font-weight:700;color:var(--warn-tx);margin-bottom:12px;';
-    titulo.textContent = `${codigo} está en varios empaques — ¿cuál estás contando?`;
+    titulo.textContent = `${codigo} está en varios empaques — ¿cuál está contando?`;
     caja.appendChild(titulo);
     const cerrar = v => { overlay.remove(); resolve(v); };
     empaques.forEach(e => {
@@ -1760,7 +1760,7 @@ function conteoHudSumarTecleado() {
   const texto = inp ? String(inp.value).trim() : '';
   const n = /^\d+$/.test(texto) ? parseInt(texto, 10) : NaN;
   if (!Number.isInteger(n) || n < 1) {
-    alerta('Escribí cuántas unidades tiene la pila (1 o más)', 'error');
+    alerta('Escriba cuántas unidades tiene la pila (1 o más)', 'error');
     return;
   }
   // Un lector láser que dispara con el cursor en esta caja escribe el código
@@ -1768,7 +1768,7 @@ function conteoHudSumarTecleado() {
   // llega a 100.000 unidades.
   if (n >= 100000) {
     if (inp) inp.value = '';
-    alerta('Eso parece un código de barras, no una cantidad. Escanealo con la caja vacía.', 'error');
+    alerta('Eso parece un código de barras, no una cantidad. Escanéelo con la caja vacía.', 'error');
     return;
   }
   if (inp) { inp.value = ''; inp.blur(); }
@@ -1807,7 +1807,7 @@ async function _conteoHudFijarTotal(h, nuevo, etiqueta, esDeshacer) {
   } catch (e) {
     beepError();
     // Es un total, no un incremento: repetir no duplica.
-    alerta(e.status ? e.message : 'Sin conexión — no se guardó. Intentá de nuevo.', 'error');
+    alerta(e.status ? e.message : 'Sin conexión — no se guardó. Intente de nuevo.', 'error');
   }
 }
 
@@ -1821,9 +1821,9 @@ async function conteoHudConfirmar() {
   let ceroConfirmado = false;
   if (total === 0) {
     const ok = await _modalConfirmar(
-      '¿Confirmás que NO hay ninguna unidad de este producto en la bodega?\n\n'
-      + 'Si lo que pasa es que no lo encontraste, no es lo mismo: usá «No lo encontré».',
-      { titulo: 'Contaste 0', textoConfirmar: 'Sí, no hay ninguna', textoCancelar: 'Volver', peligro: true });
+      '¿Confirma que NO hay ninguna unidad de este producto en la bodega?\n\n'
+      + 'Si lo que pasa es que no lo encontró, no es lo mismo: use «No lo encontré».',
+      { titulo: 'Contó 0', textoConfirmar: 'Sí, no hay ninguna', textoCancelar: 'Volver', peligro: true });
     if (!ok) return;
     ceroConfirmado = true;
   }
@@ -1863,7 +1863,7 @@ function _conteoHudReiniciar(h, mensaje) {
   h.pasos = [];
   h.ultimo = '';
   h.ocupado = false;
-  h.aviso = mensaje || 'Revisá otra vez todos los sitios donde puede estar y contá desde cero.';
+  h.aviso = mensaje || 'Revise otra vez todos los sitios donde puede estar y cuente desde cero.';
   beepError();
   vibrar();
   conteoHudPintar();
@@ -1894,7 +1894,7 @@ function _conteoResultadoOperario(r) {
       <div style="font-size:80px;">🔁</div>
       <div style="font-size:var(--fs-2xl);font-weight:900;color:var(--warn-tx);text-align:center;padding:0 20px;">Recontar</div>
       <div style="font-size:var(--fs-md);color:var(--warn-tx);text-align:center;padding:0 30px;line-height:1.5;">
-        ${esc(r.mensaje || 'Hubo ventas mientras contabas. Vuelve a contar desde cero.')}
+        ${esc(r.mensaje || 'Hubo ventas mientras contaba. Vuelva a contar desde cero.')}
       </div>`;
     document.body.appendChild(overlay);
     setTimeout(() => { overlay.remove(); pedirTarea(); }, 4000);
@@ -1909,7 +1909,7 @@ function _conteoResultadoOperario(r) {
       <div style="font-size:80px;">🛒</div>
       <div style="font-size:26px;font-weight:900;color:var(--warn-tx);text-align:center;padding:0 20px;">Queda para el líder</div>
       <div style="font-size:var(--fs-md);color:var(--warn-tx);text-align:center;padding:0 30px;line-height:1.5;">
-        ${esc(r.mensaje || 'Este producto se está vendiendo mientras contás: queda para el líder.')}
+        ${esc(r.mensaje || 'Este producto se está vendiendo mientras cuenta: queda para el líder.')}
       </div>`;
     document.body.appendChild(overlay);
     setTimeout(() => { overlay.remove(); pedirTarea(); }, 4000);
@@ -1940,7 +1940,7 @@ function _conteoResultadoOperario(r) {
         ${esMatch ? 'Inventario correcto' : 'Diferencia detectada'}
       </div>
       <div style="font-size:var(--fs-md);color:${esMatch ? 'var(--ok-tx)' : 'var(--warn-tx)'};text-align:center;padding:0 30px;line-height:1.5;">
-        ${esMatch ? 'El conteo cuadra con el sistema.' : 'Otra persona lo va a contar para confirmar. Seguí con tu próxima tarea.'}
+        ${esMatch ? 'El conteo cuadra con el sistema.' : 'Otra persona lo va a contar para confirmar. Siga con su próxima tarea.'}
       </div>`;
     document.body.appendChild(overlay);
     setTimeout(() => { overlay.remove(); pedirTarea(); }, esMatch ? 2000 : 3000);
@@ -1957,12 +1957,12 @@ async function conteoHudNoEncontrado() {
   await h.cola;
   if (CONTEO_HUD !== h) return;
   if (h.total > 0) {
-    alerta(`Ya contaste ${h.total}. Si no hay más, usá «Ya revisé todo — contar ${h.total}».`, 'advertencia');
+    alerta(`Ya contó ${h.total}. Si no hay más, use «Ya revisé todo — contar ${h.total}».`, 'advertencia');
     return;
   }
   const donde = h.tarea.ubicacion_fisica ? `en ${esc(h.tarea.ubicacion)}` : 'en toda la bodega';
   const ok = await _modalConfirmar(
-    `¿Buscaste <b>${esc(h.tarea.producto_nombre || h.tarea.producto_codigo || '')}</b> ${donde} y no lo encontraste?\n\n`
+    `¿Buscó <b>${esc(h.tarea.producto_nombre || h.tarea.producto_codigo || '')}</b> ${donde} y no lo encontró?\n\n`
     + 'No se cuenta como cero: el conteo queda para que el líder decida si se vuelve a buscar.',
     { titulo: 'No lo encontré', textoConfirmar: 'Sí, no lo encontré', textoCancelar: 'Volver' });
   if (!ok) return;
@@ -1974,7 +1974,7 @@ async function conteoHudOtroProblema() {
   const h = CONTEO_HUD;
   if (!h) return;
   const txt = await _modalTexto('Otro problema',
-    'Contá qué pasa (no se puede llegar, está averiado, está mezclado con otro...). El conteo queda para el líder.',
+    'Cuente qué pasa (no se puede llegar, está averiado, está mezclado con otro...). El conteo queda para el líder.',
     { obligatorio: true, textoConfirmar: 'Reportar' });
   if (txt === null) return;
   await _conteoHudBloquear(h, 'OTRO', txt);
@@ -2002,15 +2002,15 @@ async function conteoHudSinCodigo() {
   const h = CONTEO_HUD;
   if (!h) return;
   const txt = await _modalTexto('Mercancía sin código',
-    'Describí lo que encontraste: qué parece, cuántas unidades y dónde está. Tu conteo sigue abierto — no lo sumes acá.',
+    'Describa lo que encontró: qué parece, cuántas unidades y dónde está. Su conteo sigue abierto — no lo sume acá.',
     { obligatorio: true, placeholder: 'Ej: 3 cajas de cuadernos sin etiqueta, estante del fondo', textoConfirmar: 'Enviar al líder' });
   if (txt === null) return;
   try {
     const r = await post('/api/mobile/conteo/sin-codigo', { tarea_id: h.tarea.id, descripcion: txt });
     if (r.error) { alerta(r.error, 'error'); return; }
-    alerta(r.mensaje || 'Anotado para el líder — seguí contando', 'exito');
+    alerta(r.mensaje || 'Anotado para el líder — siga contando', 'exito');
   } catch (e) {
-    alerta(e.message || 'No se pudo enviar — intentá de nuevo', 'error');
+    alerta(e.message || 'No se pudo enviar — intente de nuevo', 'error');
   }
 }
 
@@ -2060,7 +2060,7 @@ function _defMostrarResultado(r) {
       <button onclick="defCerrarModal()" style="width:100%;margin-top:20px;padding:16px;font-size:var(--fs-md);font-weight:700;background:var(--pm-fill);color:#fff;border:none;border-radius:12px;cursor:pointer;">
         ⚖ Ver el ajuste en «Ajustes esperando decisión»
       </button>
-      <div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:8px;">Ahí está con su valor y con lo que podés aprobar según tu tope.</div>` : `
+      <div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:8px;">Ahí está con su valor y con lo que puede aprobar según su tope.</div>` : `
       <button onclick="defCerrarModal()" style="width:100%;margin-top:12px;padding:14px;font-size:var(--fs-sm);background:var(--bg-input);color:var(--tx2);border:1px solid var(--brd);border-radius:12px;cursor:pointer;">
         Cerrar
       </button>`}
@@ -2094,7 +2094,7 @@ function defCerrarModal() {
 /** Devuelve un conteo bloqueado a la cola, desde cero. */
 async function conteoReabrirBloqueado(id) {
   const nota = await _modalTexto('Reabrir conteo',
-    'Vuelve a la cola desde cero, sin dueño. Si querés, dejá una pista para quien lo cuente (dónde buscar).',
+    'Vuelve a la cola desde cero, sin dueño. Si quiere, deje una pista para quien lo cuente (dónde buscar).',
     { obligatorio: false, textoConfirmar: 'Reabrir', textoCancelar: 'Volver' });
   if (nota === null) return;
   try {
@@ -2183,7 +2183,7 @@ async function conteoDevolverAlEstante(i) {
   const p = _RECOGIDO_SIN_DESPACHAR[i];
   if (!p) return;
   const nota = await _modalTexto(`Pedido ${esc(p.pedido)}: ¿volvió al estante?`,
-    'Confirmá solo si la mercancía de este pedido ya está de vuelta en su lugar. '
+    'Confirme solo si la mercancía de este pedido ya está de vuelta en su lugar. '
     + 'Desde ahora esos productos se pueden volver a contar. No cambia el inventario.',
     { obligatorio: false, textoConfirmar: 'Sí, volvió', textoCancelar: 'Volver' });
   if (nota === null) return;
@@ -2544,7 +2544,7 @@ function _lDefinitivos(de, p) {
       ? _lBoton('🎯 Contar ahora', `liderContarDefinitivo(${esc(f.id)})`)
       : _lSinPermiso('Lo cuenta un supervisor, jefe de almacén o admin')));
   return _lBloque('🎯 Conteos definitivos por contar', de.total,
-    de.total ? 'Rompen el empate y deciden el ajuste. Son a ciegas: no vas a ver cuánto contaron los otros dos.' : '',
+    de.total ? 'Rompen el empate y deciden el ajuste. Son a ciegas: no va a ver cuánto contaron los otros dos.' : '',
     filas.join(''), 'Ningún conteo definitivo pendiente ✓');
 }
 
@@ -2672,8 +2672,8 @@ function liderTableroHtml(d) {
   const chip = (txt, n) => `<span style="display:inline-block;padding:3px 8px;margin:2px 4px 2px 0;border-radius:10px;background:var(--bg-input);font-size:var(--fs-xs);color:var(--tx2);">${esc(txt)} <b>${_lNum(n)}</b></span>`;
   const cabecera = `<div style="background:var(--bg-s);border:1px solid var(--brd);border-radius:12px;padding:12px 14px;margin-bottom:12px;">
     <div style="font-size:var(--fs-xs);color:var(--tx3);">${esc(d.almacen || '')}${d.bodega_siesa ? ` (${esc(d.bodega_siesa)})` : ''} · ${esc(d.al_dia_operativo)}</div>
-    <div style="font-size:20px;font-weight:800;color:${r.decisiones_pendientes ? 'var(--yellow)' : 'var(--green)'};margin-top:4px;">${r.decisiones_pendientes ? `${_lNum(r.decisiones_pendientes)} ${r.decisiones_pendientes === 1 ? 'cosa espera' : 'cosas esperan'} por vos` : 'Nada pendiente ✓'}</div>
-    ${r.decisiones_pendientes ? `<div style="margin-top:6px;">${chip('Bloqueados', pb.bloqueados)}${chip('Sin código', pb.novedades)}${chip('Definitivos', pb.definitivos)}${chip('Ajustes', pb.ajustes)}${chip('Rechazos Siesa', pb.rechazados_siesa)}</div>` : '<div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:4px;">Nadie espera una decisión tuya en este almacén.</div>'}
+    <div style="font-size:20px;font-weight:800;color:${r.decisiones_pendientes ? 'var(--yellow)' : 'var(--green)'};margin-top:4px;">${r.decisiones_pendientes ? `${_lNum(r.decisiones_pendientes)} ${r.decisiones_pendientes === 1 ? 'cosa espera' : 'cosas esperan'} por usted` : 'Nada pendiente ✓'}</div>
+    ${r.decisiones_pendientes ? `<div style="margin-top:6px;">${chip('Bloqueados', pb.bloqueados)}${chip('Sin código', pb.novedades)}${chip('Definitivos', pb.definitivos)}${chip('Ajustes', pb.ajustes)}${chip('Rechazos Siesa', pb.rechazados_siesa)}</div>` : '<div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:4px;">Nadie espera una decisión suya en este almacén.</div>'}
   </div>`;
   return _lRezago(d.rezago, p) + cabecera
     + _lBloqueados(dec.bloqueados || {}, p)
@@ -2709,7 +2709,7 @@ async function liderCargar() {
   }
   const almId = _liderAlmacenId();
   if (!almId) {
-    invPintarFijo('lider', el, '<div style="text-align:center;padding:30px;color:var(--tx3);">Elegí un almacén</div>');
+    invPintarFijo('lider', el, '<div style="text-align:center;padding:30px;color:var(--tx3);">Elija un almacén</div>');
     return;
   }
   // Lo recogido que no salió: su propio endpoint, debajo del tablero.
@@ -2757,7 +2757,7 @@ async function liderAprobarAjuste(id) {
 async function liderRecontar(id) {
   const f = _liderFila('ajustes', id);
   if (!f || !_LIDER_DATOS) return;
-  if (!await _modalConfirmar(`Se abre un conteo nuevo de ${esc(f.producto_codigo || '')} ${esc(f.producto_nombre || '')}.\n\nCuando se cuente, éste queda viejo y lo cancelás desde acá.`, { titulo: 'Recontar', textoConfirmar: 'Abrir conteo nuevo', textoCancelar: 'Volver' })) return;
+  if (!await _modalConfirmar(`Se abre un conteo nuevo de ${esc(f.producto_codigo || '')} ${esc(f.producto_nombre || '')}.\n\nCuando se cuente, éste queda viejo y lo cancela desde acá.`, { titulo: 'Recontar', textoConfirmar: 'Abrir conteo nuevo', textoCancelar: 'Volver' })) return;
   try {
     await post('/api/conteo/manual', { almacen_id: _LIDER_DATOS.almacen_id, producto_codigo: f.producto_codigo });
     alerta('Conteo nuevo creado — sale en la cola de los operarios', 'exito');

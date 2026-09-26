@@ -710,7 +710,7 @@ class TestNingunAjusteAutomaticoFueraDeLaGuarda:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 9 · El HUD: «Recontá este producto con cuidado», a ciegas, desde cero
+# 9 · El HUD: «Recuente este producto con cuidado», a ciegas, desde cero
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _harness():
@@ -750,15 +750,15 @@ class TestElHudPideRecontar:
         r = _correr(tmp_path, {'resultado': 'RECONTAR_TU', 'sesion_id': 7,
                                'mensaje': 'Revisá <b>todo</b> otra vez.'})
         assert r['total'] == 0, 'el contador vuelve a cero'
-        assert 'Recontá este producto con cuidado' in r['final']
+        assert 'Recuente este producto con cuidado' in r['final']
         assert 'Revisá &lt;b&gt;todo&lt;/b&gt; otra vez.' in r['final'], 'esc() en el aviso'
         assert r['pedidas'] == 0, 'la misma tarea sigue en pantalla'
-        assert 'Recontá' not in r['html'], 'el aviso no estaba antes de confirmar'
+        assert 'Recuente' not in r['html'], 'el aviso no estaba antes de confirmar'
 
     def test_el_arnes_ve_la_diferencia_sin_aviso(self, tmp_path):
         """Contraprueba: un MATCH no deja el aviso ni reinicia en el HUD."""
         r = _correr(tmp_path, {'resultado': 'MATCH', 'mensaje': 'ok'})
-        assert 'Recontá este producto con cuidado' not in (r['final'] or '')
+        assert 'Recuente este producto con cuidado' not in (r['final'] or '')
         assert r['total'] is None, 'el HUD se cerró'
 
     def test_movimiento_continuo_queda_para_el_lider(self, tmp_path):

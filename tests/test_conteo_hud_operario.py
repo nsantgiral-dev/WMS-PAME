@@ -778,10 +778,10 @@ class TestElHudEjecutado:
 
     def test_sin_ubicacion_fisica_manda_el_producto(self, tmp_path):
         r = _correr_hud(tmp_path, {})
-        assert 'Buscalo en toda la bodega' in r['html']
+        assert 'Búsquelo en toda la bodega' in r['html']
         assert 'SIESA-GENERAL' not in r['html']
         assert 'Cuaderno &lt;b&gt;x&lt;/b&gt;' in r['html'] and '<b>x</b>' not in r['html']
         assert 'CJA de 12 und' in r['html'] and UNIDAD in r['html']
         r = _correr_hud(tmp_path, {'tarea': {'id': 7, 'tipo': 'CONTEO', 'producto_nombre': 'x',
                                              'ubicacion': 'A-01-02', 'ubicacion_fisica': True}})
-        assert 'A-01-02' in r['html'] and 'Buscalo en toda la bodega' not in r['html']
+        assert 'A-01-02' in r['html'] and 'Búsquelo en toda la bodega' not in r['html']

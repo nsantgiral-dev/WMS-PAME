@@ -13,7 +13,7 @@ Node con `util.js` REAL, y la política de palabras del servidor por AST.
 | La cola de definitivos en su pestaña; el tablero solo nombraba el CC3 de las auditorías | Bloque «Conteos definitivos por contar» del tablero (todos los CC3 del almacén), con «Contar ahora» que abre el HUD |
 | Estadísticas: `sin_veredicto: pendiente 3`, `Excluidos — sin_foto_siesa: 2`, `Clase A · DIARIO_ABC`, `SUPERA_TOPE` | Palabras de bodega que manda el servidor (`metricas.conteo.ETIQUETAS`) |
 | Tarjetas con «Op #4» | El nombre (`to_dict.operario_nombre`) |
-| «📍 SIESA-GENERAL» | «Buscalo en toda la bodega» (`Ubicacion.es_fisica`, servido como `ubicacion_fisica`) |
+| «📍 SIESA-GENERAL» | «Búsquelo en toda la bodega» (`Ubicacion.es_fisica`, servido como `ubicacion_fisica`) |
 """
 import ast
 import json
@@ -287,7 +287,7 @@ class TestNombresYLugares:
 
     def test_ubicacion_que_no_es_un_lugar(self, r):
         for vista in ('card', 'prog', 'tablero'):
-            assert 'Buscalo en toda la bodega' in r[vista], vista
+            assert 'Búsquelo en toda la bodega' in r[vista], vista
             assert 'SIESA-GENERAL' not in r[vista], vista
         assert 'A-01-03' in r['fisica'] and 'lo toma el próximo libre' in r['fisica']
 

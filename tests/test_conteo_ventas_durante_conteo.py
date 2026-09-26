@@ -976,9 +976,9 @@ class TestAvisoCajasPosEnCadaInicioDeConteo:
         programa = src[ini:fin] + '\nprocess.stdout.write(avisoCajasPosHtml());'
         salida = subprocess.run(['node', '-e', programa], capture_output=True,
                                 text=True, check=True).stdout
-        assert ('Antes de contar: confirma que todas las cajas POS de la tienda están en '
+        assert ('Antes de contar: confirme que todas las cajas POS de la tienda están en '
                 'línea y al día — que la última venta de cada caja ya aparezca en Siesa '
-                'central. Si una caja estuvo caída, cuenta después de que sincronice.') in salida
+                'central. Si una caja estuvo caída, cuente después de que sincronice.') in salida
         assert 'confirm(' not in salida
 
 
