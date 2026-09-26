@@ -291,7 +291,7 @@ function _tempRender(el, d) {
     SUBESTIMA el costo de reposición — y subestimar el costo empuja a comprar más.
     ▲ = costo de más de 180 días · ≈ = Cu con margen supuesto (no hay precio de venta).<br>
     ⚠ = una sola temporada: distribución <strong>Normal inflada</strong> (CV 30% ×1.5), incertidumbre ALTA.
-    Una observación no es una distribución — con la empírica el Q* colapsaría a "pide lo que vendiste".<br>
+    Una observación no es una distribución — con la empírica el Q* colapsaría a "pida lo que vendió".<br>
     Demanda DESCENSURADA por días con stock — lo que se agotó en enero no se lee como "no se vendía".<br>
     Ratio crítico por SKU: Cu = precio − costo · Co = costo × (capital ${((d.parametros || {}).tasa_capital * 100) || 30}% + liquidación ${((d.parametros || {}).tasa_liquidacion * 100) || 60}%).
   </div>`;
