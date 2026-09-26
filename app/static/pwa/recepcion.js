@@ -91,11 +91,11 @@ function renderListaRecepciones(siesa, dbRecs, confirmadas) {
   let htmlSiesa = '';
   if (siesa.simulado) {
     htmlSiesa = `<div style="background:var(--warn-bg);border-radius:10px;padding:10px 12px;font-size:var(--fs-xs);color:var(--warn-tx);border:1px solid var(--warn-brd);">
-      ⚡ Connekta en simulación — conecta credenciales para ver OCs reales de Siesa
+      ⚡ Connekta en simulación — conecte credenciales para ver OCs reales de Siesa
     </div>`;
   } else if (siesa.error_siesa) {
     htmlSiesa = `<div style="background:var(--bg-s);border-radius:10px;padding:10px 12px;font-size:var(--fs-xs);color:var(--warn-tx);border:1px solid var(--err-brd);">
-      ⚠ Siesa no respondió — no se pudo consultar OCs pendientes. Reintenta en un momento.
+      ⚠ Siesa no respondió — no se pudo consultar OCs pendientes. Reintente en un momento.
     </div>`;
   } else if (SIESA_OCS.length) {
     htmlSiesa = SIESA_OCS.map((oc, i) => {
@@ -290,7 +290,7 @@ function renderEscaneoRecepcion(rec) {
       </div>
 
       <div style="background:var(--bg-s);border-radius:10px;padding:12px;margin-bottom:12px;">
-        <div style="font-size:var(--fs-xs);color:var(--tx3);text-align:center;margin-bottom:10px;">Escanea unidad, caja o paca — el sistema calcula las unidades</div>
+        <div style="font-size:var(--fs-xs);color:var(--tx3);text-align:center;margin-bottom:10px;">Escanee unidad, caja o paca — el sistema calcula las unidades</div>
         ${OPERARIO && OPERARIO.puede_usar_camara ? `
         <button onclick="abrirCamara('lector-qr-rec','camara-box-rec', procesarScanRecepcion, this)"
           style="width:100%;padding:13px;font-size:var(--fs-md);background:#fff;color:#000;border:2px solid var(--brd);border-radius:10px;cursor:pointer;margin-bottom:8px;">
@@ -301,7 +301,7 @@ function renderEscaneoRecepcion(rec) {
           <button onclick="cerrarCamara('camara-box-rec')" style="width:100%;padding:9px;margin-top:6px;font-size:var(--fs-sm);background:var(--bg-s2);color:var(--tx);border:none;border-radius:8px;cursor:pointer;">Cerrar cámara</button>
         </div>` : ''}
         <div style="display:flex;gap:8px;margin-bottom:8px;">
-          <input id="rec-codigo-manual" type="text" placeholder="O escribe / pega el código aquí"
+          <input id="rec-codigo-manual" type="text" placeholder="O escriba / pegue el código aquí"
             style="flex:1;padding:10px;background:var(--bg-s);border:1px solid var(--brd);border-radius:8px;color:var(--tx);font-size:var(--fs-sm);"
             onkeydown="if(event.key==='Enter'){ const v=this.value.trim(); if(v){ procesarScanRecepcion(v); this.value=''; } }">
           <button onclick="const v=document.getElementById('rec-codigo-manual').value.trim();if(v){procesarScanRecepcion(v);document.getElementById('rec-codigo-manual').value='';}"
@@ -482,7 +482,7 @@ async function procesarScanRecepcion(codigo) {
       // No está en producto_empaques → intentar lookup clásico (codigo_barras en productos)
       const prod = await get('/api/siesa/producto/' + encodeURIComponent(codigo));
       if (prod.error || !prod.producto_id) {
-        alerta('Código no reconocido: ' + codigo + ' — usa búsqueda manual', 'error');
+        alerta('Código no reconocido: ' + codigo + ' — use búsqueda manual', 'error');
         return;
       }
       // `es_empaque === null` es «no sé», y NO es lo mismo que `false`.
@@ -499,7 +499,7 @@ async function procesarScanRecepcion(codigo) {
           '¿Unidad o caja?',
           `Este código no distingue: <strong>${esc(prod.nombre)}</strong> se compra ` +
           `por caja de <strong>${factor}</strong>, pero el código escaneado ` +
-          `sirve para las dos.<br><br>¿Qué tenés en la mano?`,
+          `sirve para las dos.<br><br>¿Qué tiene en la mano?`,
           `Caja de ${factor}`, '1 unidad'
         );
       }
@@ -630,7 +630,7 @@ async function _registrarEscaneoRecepcion(productoId, cantidad, esEmpaque, unida
     if (todoCompleto) {
       btn.style.background = '#15803d';
       btn.textContent = '✓ Confirmar recepción';
-      alerta('Todo escaneado — confirma la recepción', 'exito');
+      alerta('Todo escaneado — confirme la recepción', 'exito');
     } else {
       btn.style.background = '#b45309';
       btn.textContent = '⚠ Confirmar recepción parcial';
@@ -673,7 +673,7 @@ function _panelScanBonificacion() {
         <div style="font-size:var(--fs-md);font-weight:800;color:var(--lila-tx);">🎁 Escanear Obsequio / Bonificación</div>
         <button onclick="this.closest('div[style*=fixed]').remove()" style="background:none;border:none;color:var(--tx3);font-size:var(--fs-xl);cursor:pointer;">✕</button>
       </div>
-      <div style="font-size:var(--fs-xs);color:var(--tx3);margin-bottom:14px;">Escanea el producto que el proveedor envió de más — entrará a inventario a $0.</div>
+      <div style="font-size:var(--fs-xs);color:var(--tx3);margin-bottom:14px;">Escanee el producto que el proveedor envió de más — entrará a inventario a $0.</div>
       ${OPERARIO && OPERARIO.puede_usar_camara ? `
       <div id="camara-box-bono" style="display:none;margin-bottom:8px;">
         <div id="lector-qr-bono" style="border-radius:10px;overflow:hidden;"></div>
@@ -684,7 +684,7 @@ function _panelScanBonificacion() {
         📷 Escanear con cámara
       </button>` : ''}
       <div style="display:flex;gap:8px;margin-bottom:8px;">
-        <input id="bono-codigo-manual" type="text" placeholder="O escribe / pega el código"
+        <input id="bono-codigo-manual" type="text" placeholder="O escriba / pegue el código"
           style="flex:1;padding:10px;background:var(--bg-s);border:1px solid var(--lila-brd);border-radius:8px;color:var(--tx);font-size:var(--fs-sm);"
           onkeydown="if(event.key==='Enter'){ const v=this.value.trim(); if(v){ _escanearBono(v, this.closest('div[style*=fixed]')); this.value=''; } }">
         <button onclick="const v=document.getElementById('bono-codigo-manual').value.trim();if(v){_escanearBono(v,this.closest('div[style*=fixed]'));document.getElementById('bono-codigo-manual').value='';}"
@@ -711,10 +711,10 @@ async function _escanearBono(codigo, panelEl) {
     let productoId, cantidad, esEmpaque;
     if (scan.tipo === 'NO_ENCONTRADO') {
       const prod = await get('/api/siesa/producto/' + encodeURIComponent(codigo));
-      if (prod.error || !prod.producto_id) { alerta('Código no reconocido — usa búsqueda manual', 'error'); return; }
+      if (prod.error || !prod.producto_id) { alerta('Código no reconocido — use búsqueda manual', 'error'); return; }
       productoId = prod.producto_id; cantidad = 1; esEmpaque = false;
     } else if (scan.tipo === 'GS1_AMBIGUO') {
-      alerta('Código ambiguo — usa búsqueda manual', 'advertencia'); return;
+      alerta('Código ambiguo — use búsqueda manual', 'advertencia'); return;
     } else {
       productoId = scan.producto ? scan.producto.id : null;
       if (!productoId) { alerta('Producto no identificado', 'error'); return; }
@@ -800,7 +800,7 @@ function _modalAmbiguedadRecepcion(codigo, ambiguos) {
   modal.innerHTML = `
     <div style="background:var(--bg-s);border-radius:16px;padding:20px;width:100%;max-width:480px;margin:auto;">
       <div style="font-size:var(--fs-md);font-weight:700;margin-bottom:6px;">⚠️ Código ambiguo</div>
-      <div style="font-size:var(--fs-sm);color:var(--tx2);margin-bottom:16px;">${esc(codigo)} — ¿Qué estás escaneando?</div>
+      <div style="font-size:var(--fs-sm);color:var(--tx2);margin-bottom:16px;">${esc(codigo)} — ¿Qué está escaneando?</div>
       ${opciones}
       <button onclick="this.closest('.modal-rec').remove()"
         style="width:100%;padding:12px;background:var(--bg-s);color:var(--tx3);border:1px solid var(--brd);border-radius:8px;cursor:pointer;margin-top:4px;">
@@ -973,7 +973,7 @@ function _pedirRemision() {
     overlay.innerHTML = `
       <div style="background:var(--bg-s);border:1px solid var(--brd);border-radius:16px;padding:28px;max-width:360px;width:100%;">
         <div style="font-size:17px;font-weight:800;color:var(--tx);margin-bottom:6px;">📄 Remisión del proveedor</div>
-        <div style="font-size:var(--fs-sm);color:var(--tx2);margin-bottom:18px;">Ingresa el número de remisión o factura física que llegó con el camión. Siesa lo requiere para cerrar la entrada.</div>
+        <div style="font-size:var(--fs-sm);color:var(--tx2);margin-bottom:18px;">Ingrese el número de remisión o factura física que llegó con el camión. Siesa lo requiere para cerrar la entrada.</div>
         <input id="_rem-input" type="text" placeholder="Ej: 00123456"
           style="width:100%;box-sizing:border-box;padding:13px;background:var(--bg-s);border:1px solid #555;border-radius:10px;color:var(--tx);font-size:var(--fs-lg);font-weight:700;margin-bottom:16px;letter-spacing:1px;"
           onkeydown="if(event.key==='Enter') document.getElementById('_rem-ok').click()">
@@ -1071,7 +1071,7 @@ async function recepCargarTraslados(silencioso = false) {
           <div style="font-size:var(--fs-md);font-weight:800;">${_ave ? '⚠ ' : ''}${esc(s.codigo)}</div>
           <div style="font-size:var(--fs-xs);color:${_acento};font-weight:600;">Desde ${esc(s.bodega_origen_siesa || '—')}</div>
         </div>
-        ${_ave ? `<div style="font-size:var(--fs-xs);color:var(--warn-tx);font-weight:700;margin-bottom:6px;">MERCANCÍA AVERIADA — contá lo que llegó; si estaba rota lo decide el administrador después</div>` : ''}
+        ${_ave ? `<div style="font-size:var(--fs-xs);color:var(--warn-tx);font-weight:700;margin-bottom:6px;">MERCANCÍA AVERIADA — cuente lo que llegó; si estaba rota lo decide el administrador después</div>` : ''}
         ${_ave && s.averia_evidencia ? `<div style="font-size:var(--fs-xs);color:var(--tx2);margin-bottom:8px;border-left:2px solid var(--warn-brd);padding-left:8px;">Lo que revisó el punto: ${esc(s.averia_evidencia)}</div>` : ''}
         <div style="font-size:var(--fs-xs);color:${_acento};margin-bottom:8px;">📦 ${esc(s.total_items)} ítem${s.total_items !== 1 ? 's' : ''} · ${totalEsp} und esperadas</div>
         ${(s.items || []).slice(0, 3).map(i => `
@@ -1150,16 +1150,16 @@ function _recepRenderPickingTraslado() {
       <div style="background:var(--warn-bg);border:1px solid var(--warn-brd);border-radius:10px;padding:12px;margin-bottom:14px;">
         <div style="font-size:var(--fs-sm);color:var(--warn-tx);font-weight:700;margin-bottom:4px;">Traslado de averías</div>
         <div style="font-size:var(--fs-xs);color:var(--tx2);">
-          Contá cuántas unidades llegaron. <b>No decidas si estaban rotas</b> — eso lo
+          Cuente cuántas unidades llegaron. <b>No decida si estaban rotas</b> — eso lo
           dictamina el administrador antes de ubicarlas.
         </div>
         ${s.averia_evidencia ? `<div style="font-size:var(--fs-xs);color:var(--tx2);margin-top:8px;border-left:2px solid #92400e;padding-left:8px;">Lo que revisó el punto: ${esc(s.averia_evidencia)}</div>` : ''}
       </div>` : ''}
 
       <div style="background:var(--bg-s);border-radius:10px;padding:12px;margin-bottom:14px;">
-        <div style="font-size:var(--fs-xs);color:var(--tx3);text-align:center;margin-bottom:8px;">Escanea el código o usá los botones +/−</div>
+        <div style="font-size:var(--fs-xs);color:var(--tx3);text-align:center;margin-bottom:8px;">Escanee el código o use los botones +/−</div>
         <div style="display:flex;gap:8px;">
-          <input id="rec-tras-scan-input" type="text" placeholder="Escanea o escribe el código..."
+          <input id="rec-tras-scan-input" type="text" placeholder="Escanee o escriba el código..."
             style="flex:1;padding:10px;background:var(--bg-s);border:1px solid var(--brd);border-radius:8px;color:var(--tx);font-size:var(--fs-sm);"
             onkeydown="if(event.key==='Enter'){ const v=this.value.trim(); if(v){ recepScanTraslado(v); this.value=''; } }"
             autocomplete="off" autocorrect="off" spellcheck="false">
@@ -1175,7 +1175,7 @@ function _recepRenderPickingTraslado() {
       <button id="btn-confirmar-rec-traslado" onclick="recepConfirmarTraslado()"
         ${algoContado || todoContado ? '' : 'disabled'}
         style="width:100%;padding:18px;font-size:var(--fs-lg);font-weight:700;background:${algoContado || todoContado ? btnColor : 'var(--bg-s2)'};color:var(--tx);border:none;border-radius:14px;cursor:${algoContado || todoContado ? 'pointer' : 'default'};margin-bottom:10px;">
-        ${algoContado || todoContado ? btnTexto : 'Contá al menos un ítem para continuar'}
+        ${algoContado || todoContado ? btnTexto : 'Cuente al menos un ítem para continuar'}
       </button>
 
       <button onclick="recepVolverListaTraslados()"
@@ -1266,7 +1266,7 @@ function recepContarItem(productoId, delta) {
   if (btn) {
     btn.disabled = !(algoContado || todoContado);
     btn.style.background = !algoContado && !todoContado ? '#222' : (todoContado ? '#15803d' : '#b45309');
-    btn.textContent = !algoContado && !todoContado ? 'Contá al menos un ítem para continuar' : (todoContado ? '✓ Confirmar recepción' : '⚠ Confirmar recepción parcial');
+    btn.textContent = !algoContado && !todoContado ? 'Cuente al menos un ítem para continuar' : (todoContado ? '✓ Confirmar recepción' : '⚠ Confirmar recepción parcial');
     btn.style.cursor = algoContado || todoContado ? 'pointer' : 'default';
   }
 }
@@ -1393,7 +1393,7 @@ async function cargarDevoluciones(silencioso = false) {
         DEVOLUCIÓN DE MOSTRADOR
       </div>
       <div class="rec-card">
-        <div style="font-size:var(--fs-sm);color:var(--tx3);margin-bottom:10px;">Busca el pedido del cliente que devuelve mercancía</div>
+        <div style="font-size:var(--fs-sm);color:var(--tx3);margin-bottom:10px;">Busque el pedido del cliente que devuelve mercancía</div>
         <div style="display:flex;gap:8px;">
           <input id="input-pedido-dev" type="text" placeholder="Número de pedido (ej: PD1347)"
             style="flex:1;padding:12px;background:var(--bg-s);border:1px solid var(--brd);border-radius:8px;color:var(--tx);font-size:var(--fs-md);"
@@ -1465,7 +1465,7 @@ function recLlegadasHtml(rutas) {
         </div>
         ${c.en_camion_sin_recibir ? `
         <div style="display:flex;gap:8px;margin-top:10px;">
-          <input id="rec-lleg-bulto-${i}" type="text" placeholder="Escanea el bulto que volvió"
+          <input id="rec-lleg-bulto-${i}" type="text" placeholder="Escanee el bulto que volvió"
             style="flex:1;padding:10px;background:var(--bg-s);border:1px solid var(--brd);border-radius:8px;color:var(--tx);font-size:var(--fs-sm);"
             onkeydown="if(event.key==='Enter') recLlegadaEscanear(${i})" autocomplete="off" autocorrect="off" spellcheck="false">
           <button onclick="recLlegadaEscanear(${i})"
@@ -1604,7 +1604,7 @@ async function cargarPendientesDeRuta() {
             </span>
           </div>
           <div style="margin-top:8px;font-size:var(--fs-xs);color:var(--tx2);">
-            ${esc(d.lineas.length)} referencia${d.lineas.length !== 1 ? 's' : ''} · toca para verificar y confirmar
+            ${esc(d.lineas.length)} referencia${d.lineas.length !== 1 ? 's' : ''} · toque para verificar y confirmar
           </div>
         </div>`).join('');
   } catch (e) {
@@ -1702,7 +1702,7 @@ async function buscarPedidoDevolucion() {
   const inp = document.getElementById('input-pedido-dev');
   const estado = document.getElementById('estado-busqueda-dev');
   const numero = (inp ? inp.value : '').trim();
-  if (!numero) { alerta('Ingresa el número de pedido', 'advertencia'); return; }
+  if (!numero) { alerta('Ingrese el número de pedido', 'advertencia'); return; }
 
   if (estado) { estado.textContent = '⏳ Buscando...'; estado.style.color = 'var(--info-tx)'; }
   try {
@@ -1772,14 +1772,14 @@ function renderLineasDevolucion(datos) {
     ${avisos.map(a => `<div style="margin-bottom:6px;font-size:var(--fs-xs);color:var(--warn-tx);">⚠ ${esc(a)}</div>`).join('')}
     ${esPendienteDeRuta ? `
     <div style="margin-bottom:10px;padding:10px 12px;background:var(--bg-s2);border:1px solid var(--brd);border-radius:8px;font-size:var(--fs-xs);color:var(--acento-tx);">
-      🔵 Declarado por el conductor — contá lo que volvió de verdad. Si no volvió nada, dejá todo en 0: queda como FALTANTE (medido), no se cancela. Lo sano queda fuera de la venta hasta que la nota crédito se apruebe en Siesa.
+      🔵 Declarado por el conductor — cuente lo que volvió de verdad. Si no volvió nada, deje todo en 0: queda como FALTANTE (medido), no se cancela. Lo sano queda fuera de la venta hasta que la nota crédito se apruebe en Siesa.
     </div>
     ` : `
-    <div style="font-size:var(--fs-xs);color:var(--tx3);margin-bottom:10px;">Cuenta cuánto trajo el conductor de cada línea — deja en 0 lo que no se devolvió</div>
+    <div style="font-size:var(--fs-xs);color:var(--tx3);margin-bottom:10px;">Cuente cuánto trajo el conductor de cada línea — deje en 0 lo que no se devolvió</div>
     `}
 
     <div style="background:var(--bg-s);border-radius:10px;padding:12px;margin-bottom:12px;">
-      <div style="font-size:var(--fs-xs);color:var(--tx3);text-align:center;margin-bottom:10px;">Escanea cada unidad devuelta — suma 1 a la línea, hasta el tope facturado</div>
+      <div style="font-size:var(--fs-xs);color:var(--tx3);text-align:center;margin-bottom:10px;">Escanee cada unidad devuelta — suma 1 a la línea, hasta el tope facturado</div>
       ${OPERARIO && OPERARIO.puede_usar_camara ? `
       <button onclick="abrirCamara('lector-qr-dev','camara-box-dev', procesarScanDevolucion, this)"
         style="width:100%;padding:13px;font-size:var(--fs-md);background:#fff;color:#000;border:2px solid var(--brd);border-radius:10px;cursor:pointer;margin-bottom:8px;">
@@ -1790,7 +1790,7 @@ function renderLineasDevolucion(datos) {
         <button onclick="cerrarCamara('camara-box-dev')" style="width:100%;padding:9px;margin-top:6px;font-size:var(--fs-sm);background:var(--bg-s2);color:var(--tx);border:none;border-radius:8px;cursor:pointer;">Cerrar cámara</button>
       </div>` : ''}
       <div style="display:flex;gap:8px;">
-        <input id="dev-codigo-manual" type="text" placeholder="O escribe / pega el código aquí"
+        <input id="dev-codigo-manual" type="text" placeholder="O escriba / pegue el código aquí"
           style="flex:1;padding:10px;background:var(--bg-s);border:1px solid var(--brd);border-radius:8px;color:var(--tx);font-size:var(--fs-sm);"
           onkeydown="if(event.key==='Enter'){ const v=this.value.trim(); if(v){ procesarScanDevolucion(v); this.value=''; } }"
           autocomplete="off" autocorrect="off" spellcheck="false">
@@ -1864,7 +1864,7 @@ async function confirmarDevolucionCliente() {
   }
 
   const lineasNuevas = lineas.filter(l => l.cantidad_devuelta > 0);
-  if (!lineasNuevas.length) { alerta('Cuenta al menos una unidad devuelta', 'advertencia'); return; }
+  if (!lineasNuevas.length) { alerta('Cuente al menos una unidad devuelta', 'advertencia'); return; }
 
   const esTotal = (datos.lineas || []).every(l => {
     const encontrada = lineasNuevas.find(x => x.codigo_siesa === l.codigo_siesa);
@@ -2329,7 +2329,7 @@ async function compCargarAudit(prefix) {
 
   const q = input.value.trim();
   if (!q) {
-    alerta('Escribe algo para buscar', 'advertencia');
+    alerta('Escriba algo para buscar', 'advertencia');
     return;
   }
 
@@ -2421,7 +2421,7 @@ async function compCargarBloqueos() {
     }
 
     if (!items.length) {
-      lista.innerHTML = '<div style="text-align:center;padding:30px;color:var(--tx3);">Sin productos bloqueados — usa "Generar lista inicial" para poblar</div>';
+      lista.innerHTML = '<div style="text-align:center;padding:30px;color:var(--tx3);">Sin productos bloqueados — use "Generar lista inicial" para poblar</div>';
       return;
     }
 
