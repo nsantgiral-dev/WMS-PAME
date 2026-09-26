@@ -567,8 +567,8 @@ function _liqBloqueRetencion(rutaId, rec, factura) {
         <div style="font-size:var(--fs-xs);color:var(--tx3);">
           Al cliente NO le correspondía — debe pagar ${_liqFmt(esperado)}${neto > 0 && Math.abs(esperado - neto) > 1 ? ` (lo que se quedó; la factura completa es ${_liqFmt(neto)} e incluye lo devuelto)` : ''}.
           ${falta > 1
-            ? `Faltan ${_liqFmt(falta)}: abre el cobro y sube el monto cuando el cliente pague la diferencia — el servicio no acepta el RC antes.`
-            : 'El monto ya cubre lo que debía — puedes registrar el cobro.'}
+            ? `Faltan ${_liqFmt(falta)}: abra el cobro y suba el monto cuando el cliente pague la diferencia — el servicio no acepta el RC antes.`
+            : 'El monto ya cubre lo que debía — puede registrar el cobro.'}
         </div>
       </div>`;
   }
@@ -849,7 +849,7 @@ function _liqRenderDetalle() {
           <span style="color:var(--tx);font-weight:700;">${_liqFmt(totalFacturas)}</span>
         </div>
         <div style="font-size:var(--fs-xs);color:var(--tx3);margin-bottom:12px;">
-          Paso 1: Confirma el cuadre financiero en WMS.<br>
+          Paso 1: Confirme el cuadre financiero en WMS.<br>
           Paso 2: Después de liquidar, documenta NC/RC/DC por parada.
         </div>
         <button onclick="liqLiquidarWMS(${esc(ruta.id)})"
@@ -1143,7 +1143,7 @@ async function liqResolverRC(rutaId, recaudoId, entro) {
 
 async function liqAutorizarCredito(rutaId, recaudoId) {
   const razon = await _modalTexto('Autorizar como crédito',
-    '¿Por qué esta factura de contado queda como crédito? (obligatorio — queda en la bitácora con tu nombre)');
+    '¿Por qué esta factura de contado queda como crédito? (obligatorio — queda en la bitácora con su nombre)');
   if (!razon || !razon.trim()) {
     alerta('Autorizar un crédito necesita una razón — no se guardó nada', 'advertencia');
     return;
@@ -1242,7 +1242,7 @@ function liqQuitarRetencion(recaudoId, idx, baseGravable) {
 // ── Fase 1: Liquidar WMS (solo estado financiero) ─────────────────────────
 
 async function liqLiquidarWMS(rutaId) {
-  if (!await _modalConfirmar(`¿Liquidar Ruta #${rutaId} en WMS?\nDespués podrás documentar NC/RC/NI por parada.`, { titulo: 'Liquidar ruta' })) return;
+  if (!await _modalConfirmar(`¿Liquidar Ruta #${rutaId} en WMS?\nDespués podrá documentar NC/RC/NI por parada.`, { titulo: 'Liquidar ruta' })) return;
   try {
     try {
       await postConReintento(`/api/rutas/${rutaId}/liquidar`, {});
@@ -1319,7 +1319,7 @@ async function _liqRenderPanelCobro(rutaId, recaudoId) {
 
     if (!df.datos_disponibles) {
       panel.innerHTML = `<div style="padding:12px;color:var(--warn-tx);background:#78350f22;border-radius:8px;margin-top:8px;">
-        No se pudo obtener datos de la factura en Siesa. Reintenta cuando Siesa esté disponible.
+        No se pudo obtener datos de la factura en Siesa. Reintente cuando Siesa esté disponible.
       </div>`;
       return;
     }
@@ -1508,7 +1508,7 @@ function _liqActualizarBloqueoRetencion(recaudoId) {
       estadoHtml = `
         <div style="margin-bottom:12px;padding:10px 12px;background:#78350f22;border:1px solid #fbbf2444;border-radius:8px;">
           <div style="font-size:var(--fs-xs);font-weight:700;color:var(--warn-tx);margin-bottom:4px;">⚠ Descuento sin verificar: ${nombreMotivo}</div>
-          <div style="font-size:var(--fs-xs);color:var(--tx3);">Cierra este panel y decide en la tarjeta si al cliente le correspondía el descuento — el RC no se puede registrar antes.</div>
+          <div style="font-size:var(--fs-xs);color:var(--tx3);">Cierre este panel y decida en la tarjeta si al cliente le correspondía el descuento — el RC no se puede registrar antes.</div>
         </div>`;
     } else if (retencionConfirmada === false) {
       // Misma referencia que el servicio: lo que entró más lo que se
@@ -1523,7 +1523,7 @@ function _liqActualizarBloqueoRetencion(recaudoId) {
       estadoHtml = `
         <div style="margin-bottom:12px;padding:10px 12px;background:#450a0a33;border:1px solid #f8717144;border-radius:8px;">
           <div style="font-size:var(--fs-xs);font-weight:700;color:var(--err-tx);margin-bottom:4px;">✗ Descuento rechazado: ${nombreMotivo}</div>
-          <div style="font-size:var(--fs-xs);color:var(--tx3);">Al cliente NO le correspondía — debe pagar ${_liqFmt(esperado)}.${bloqueado ? ` Faltan ${_liqFmt(faltaPagar)}: sube el monto de arriba cuando el dinero llegue.` : ' El monto ya cubre lo que debía — puedes continuar.'}</div>
+          <div style="font-size:var(--fs-xs);color:var(--tx3);">Al cliente NO le correspondía — debe pagar ${_liqFmt(esperado)}.${bloqueado ? ` Faltan ${_liqFmt(faltaPagar)}: suba el monto de arriba cuando el dinero llegue.` : ' El monto ya cubre lo que debía — puede continuar.'}</div>
         </div>`;
     } else {
       estadoHtml = `<div style="margin-bottom:10px;font-size:var(--fs-xs);color:var(--ok-tx);">✓ Descuento confirmado — el cliente sí tenía derecho.</div>`;
@@ -1677,7 +1677,7 @@ async function liqRegistrarCobro(rutaId, recaudoId, _ajuste) {
       if (calc.ajuste_valor > 0) {
         const lado = calc.ajuste_es_sobrante ? 'SOBRANTE' : 'FALTANTE';
         const razon = await _modalTexto('Ajustar cobro',
-          `${msg} ¿Fue un ${lado} real de ${_liqFmt(calc.ajuste_valor)}? Escribe la razón para declararlo en Siesa:`,
+          `${msg} ¿Fue un ${lado} real de ${_liqFmt(calc.ajuste_valor)}? Escriba la razón para declararlo en Siesa:`,
           { obligatorio: false });
         if (razon) {
           await liqRegistrarCobro(rutaId, recaudoId, { ...calc, ajuste_razon: razon });
@@ -1719,7 +1719,7 @@ async function liqRegistrarCobro(rutaId, recaudoId, _ajuste) {
 function liqReconciliarRutaAbierta() {
   const id = _liqDetalleRuta && _liqDetalleRuta.ruta && _liqDetalleRuta.ruta.id;
   if (!id) {
-    if (typeof alerta === 'function') alerta('Abre una ruta primero', 'error');
+    if (typeof alerta === 'function') alerta('Abra una ruta primero', 'error');
     return;
   }
   return liqAbrirReconciliacion(id);
