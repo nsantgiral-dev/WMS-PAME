@@ -710,7 +710,7 @@ const url = "https://x/y"; // podés
             literales_js('const x = `sin cerrar ${y}')
 
     def test_html_sin_comentarios_ni_estilos(self):
-        src = '''<!-- Revisá el comentario --><style>.tenes{}</style>
+        src = '''<!-- <div>Revisá el comentario</div> --><style>.tenes{}</style>
 <input placeholder="Escanea o escribe"><div title="Sin cambios">Texto visible</div>
 <button onclick="alerta('Podés seguir')">Guardar</button>
 <script>const m = 'Del script';</script>'''
