@@ -449,10 +449,10 @@ def _pendiente(*, clase, placa, urgencia, texto, detalle, accion, desde=None,
 
 #: Qué se aconseja según el papel más grave del vehículo.
 _CONSEJO_PAPEL = {
-    'vencido': 'Cargá el nuevo. Con el papel vencido el vehículo no debería salir.',
-    'no_encontrado': 'No es lo mismo que vencido: no se sabe si existe. Buscalo y cargalo.',
+    'vencido': 'Cargue el nuevo. Con el papel vencido el vehículo no debería salir.',
+    'no_encontrado': 'No es lo mismo que vencido: no se sabe si existe. Búsquelo y cárguelo.',
     'sin_cargar': 'Mientras no se cargue, no se sabe si está al día.',
-    'por_vencer': 'Sacá la cita o compralo antes de que venza.',
+    'por_vencer': 'Saque la cita o cómprelo antes de que venza.',
 }
 
 

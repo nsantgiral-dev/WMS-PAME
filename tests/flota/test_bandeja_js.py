@@ -82,7 +82,7 @@ def _bandeja(**kw):
              'accion': {'tipo': 'verificar_km', 'lectura_id': 9},
              'desde': None, 'lectura_id': 9},
             {'clase': 'documento', 'placa': 'ROJ001', 'urgencia': 'rojo',
-             'texto': 'SOAT vencido hace 5 día(s)', 'detalle': 'Cargá el nuevo.',
+             'texto': 'SOAT vencido hace 5 día(s)', 'detalle': 'Cargue el nuevo.',
              'accion': {'tipo': 'expediente', 'pestana': 'documentos'},
              'desde': '2026-09-19'},
         ],
