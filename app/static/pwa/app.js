@@ -4146,7 +4146,7 @@ async function cargarAuditoriaFlujo() {
     const bloqueTruncadas = truncadas.length ? `
       <div style="border:1px solid #f59e0b;border-radius:8px;padding:8px 10px;
                   margin-bottom:10px;font-size:var(--fs-xs);color:var(--tx2);">
-        <b style="color:var(--warn-tx);">Universo parcial — no le creas al 0</b>
+        <b style="color:var(--warn-tx);">Universo parcial — no le crea al 0</b>
         <div style="margin-top:4px;">
           ${esc(truncadas.length)} consulta(s) chocaron con su tope de filas: los
           hallazgos de abajo salen de una muestra, no de todo. Suba el tope
