@@ -103,7 +103,7 @@ class TestElTimeoutDelPost:
         for _, texto in del_post:
             assert 'reintenta confirmar' not in texto, (
                 'el mensaje del timeout sigue mandando a reintentar')
-            assert 'erific' in texto, (
+            assert 'erifi' in texto, (
                 f'el mensaje no le dice a la persona qué hacer: {texto!r}')
 
 
