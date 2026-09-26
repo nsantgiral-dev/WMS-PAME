@@ -604,7 +604,7 @@ def _pendientes(m: _Mundo, medidor, dudosas, diag_prev,
                        else mo.texto),
                 detalle=('Sin ficha no hay capacidad de tanque, ni posiciones '
                          'de llanta, ni preventivo.' if estado == 'sin_ficha'
-                         else 'Completala en la pestaña Ficha del expediente.'),
+                         else 'Complétela en la pestaña Ficha del expediente.'),
                 accion={'tipo': 'expediente', 'pestana': 'ficha'}))
 
     # 8 · Preventivo vencido

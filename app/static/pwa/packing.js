@@ -287,7 +287,7 @@ async function empLimpiarSiesa(packingId) {
   if (!(await _modalConfirmar('¿Eliminar los bultos registrados y volver a declarar las piezas?'))) return;
   try {
     await post(`/api/packing/${packingId}/resetear-siesa`, {});
-    alerta('Listo — declara las piezas de nuevo al abrir la tarea', 'exito');
+    alerta('Listo — declare las piezas de nuevo al abrir la tarea', 'exito');
     empCargarTareas();
   } catch (e) { alerta(e.message || 'Error de conexión', 'error'); }
 }

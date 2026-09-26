@@ -209,7 +209,7 @@ function renderTarea(t) {
         <div style="font-size:var(--fs-xs);color:var(--warn-tx);font-weight:700;margin-bottom:4px;">📊 CONTEO PENDIENTE AQUÍ</div>
         <div style="font-size:var(--fs-sm);font-weight:700;color:var(--warn-tx);">${esc(t.conteo_intercalado.producto_codigo)}</div>
         <div style="font-size:var(--fs-xs);color:var(--warn-tx);">${esc(t.conteo_intercalado.producto_nombre)}</div>
-        <div style="font-size:var(--fs-xs);color:var(--warn-tx);margin-top:4px;">Clase ${esc(t.conteo_intercalado.clasificacion)} · Hazlo al terminar el picking</div>
+        <div style="font-size:var(--fs-xs);color:var(--warn-tx);margin-top:4px;">Clase ${esc(t.conteo_intercalado.clasificacion)} · Hágalo al terminar el picking</div>
       </div>` : ''}
     </div>`;
 

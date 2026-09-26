@@ -363,7 +363,7 @@ async function layoutCuerpoCrearMuebleSuelto() {
   const cuerpo = parseInt(document.getElementById('layout-cuerpo-numero').value);
 
   if (!pasillo || isNaN(fila) || isNaN(cuerpo)) {
-    alerta('Completa pasillo, fila y número', 'error');
+    alerta('Complete pasillo, fila y número', 'error');
     return;
   }
 
@@ -462,7 +462,7 @@ function layoutCuerpoIrAPaso2() {
   const cantidad_entrepanos = parseInt(document.getElementById('layout-cuerpo-entrepanos').value);
 
   if (!pasillo || isNaN(fila) || isNaN(cuerpo) || isNaN(cantidad_entrepanos) || cantidad_entrepanos < 1) {
-    alerta('Completa pasillo, fila, cuerpo y cantidad de entrepaños', 'error');
+    alerta('Complete pasillo, fila, cuerpo y cantidad de entrepaños', 'error');
     return;
   }
 

@@ -3209,7 +3209,7 @@ function _formUsuario(u = {}) {
           <input type="checkbox" id="u-puede-empacar" ${u.puede_empacar?'checked':''} style="width:20px;height:20px;accent-color:#c084fc;">
           <div>
             <div style="font-size:var(--fs-sm);font-weight:600;color:var(--lila-tx);">Empacador / Auditor</div>
-            <div style="font-size:var(--fs-xs);color:var(--tx3);">Verifica y cierra cajas en mesa de empaque</div>
+            <div style="font-size:var(--fs-xs);color:var(--tx3);">Verificación y cierre de cajas en mesa de empaque</div>
           </div>
         </label>
         <label style="display:flex;align-items:center;gap:12px;cursor:pointer;margin-bottom:10px;">

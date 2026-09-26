@@ -1821,7 +1821,7 @@ async function conteoHudConfirmar() {
   let ceroConfirmado = false;
   if (total === 0) {
     const ok = await _modalConfirmar(
-      '¿Confirma que NO hay ninguna unidad de este producto en la bodega?\n\n'
+      '¿Está seguro de que NO hay ninguna unidad de este producto en la bodega?\n\n'
       + 'Si lo que pasa es que no lo encontró, no es lo mismo: use «No lo encontré».',
       { titulo: 'Contó 0', textoConfirmar: 'Sí, no hay ninguna', textoCancelar: 'Volver', peligro: true });
     if (!ok) return;

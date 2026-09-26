@@ -204,7 +204,7 @@ function _kardexRender(el, estado) {
     <div style="font-size:var(--fs-sm);font-weight:700;color:var(--tx);margin-bottom:4px;">
       ¿Le creo al kardex?</div>
     <div style="font-size:var(--fs-xs);color:var(--tx3);margin-bottom:10px;line-height:1.6;">
-      La compuerta de completitud. Revisa que <b>ningún concepto quede sin
+      La compuerta de completitud. Comprueba que <b>ningún concepto quede sin
       clasificar</b> —uno solo deja un agujero que ningún modelo reporta— y
       muestra las unidades vendidas por mes y bodega para cruzarlas contra las
       facturas de Siesa. Ese cruce lo tiene que hacer una persona: el otro lado
@@ -283,7 +283,7 @@ function _kardexIniciarPoll() {
  */
 async function kardexProbarPaginacion() {
   const out = document.getElementById('kardex-perfil-out');
-  if (out) out.innerHTML = '<div style="font-size:var(--fs-xs);color:var(--tx3);padding:6px 0;">Diagnosticando… 4 peticiones, ~2 minutos. No cierres la pestaña.</div>';
+  if (out) out.innerHTML = '<div style="font-size:var(--fs-xs);color:var(--tx3);padding:6px 0;">Diagnosticando… 4 peticiones, ~2 minutos. No cierre la pestaña.</div>';
   try {
     const r = await post('/api/kardex/probar-paginacion', { pagina: 50, espera_s: 90 });
     if (!out) return;

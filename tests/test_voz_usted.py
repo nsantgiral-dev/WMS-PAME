@@ -508,45 +508,7 @@ def _muestra(filas, n=12):
 #: que baja actualiza su número. Número = hallazgos medidos en este worktree.
 _MOTIVO_PWA = 'barrido de voz de la PWA (otro agente, en paralelo)'
 _MOTIVO_FLOTA = 'barrido de voz de flota/ y flota*.js (otro agente, en paralelo)'
-PENDIENTE_OTRO_FRENTE = {
-    'app/static/pwa/analitica_portada.js': (3, _MOTIVO_PWA),
-    'app/static/pwa/analitica_recorrido.js': (2, _MOTIVO_PWA),
-    'app/static/pwa/analitica_salud.js': (1, _MOTIVO_PWA),
-    'app/static/pwa/app.js': (29, _MOTIVO_PWA),
-    'app/static/pwa/cartera.js': (2, _MOTIVO_PWA),
-    'app/static/pwa/compras_bandeja.js': (7, _MOTIVO_PWA),
-    'app/static/pwa/compras_fuentes.js': (6, _MOTIVO_PWA),
-    'app/static/pwa/compras_ia.js': (4, _MOTIVO_PWA),
-    'app/static/pwa/conteo.js': (60, _MOTIVO_PWA),
-    'app/static/pwa/etiquetas.js': (2, _MOTIVO_PWA),
-    'app/static/pwa/flota.js': (100, _MOTIVO_FLOTA),
-    'app/static/pwa/flota_bandeja.js': (3, _MOTIVO_FLOTA),
-    'app/static/pwa/flota_jornada.js': (1, _MOTIVO_FLOTA),
-    'app/static/pwa/index.html': (23, _MOTIVO_PWA),
-    'app/static/pwa/kardex.js': (3, _MOTIVO_PWA),
-    'app/static/pwa/layout.js': (13, _MOTIVO_PWA),
-    'app/static/pwa/liquidacion.js': (11, _MOTIVO_PWA),
-    'app/static/pwa/packing.js': (9, _MOTIVO_PWA),
-    'app/static/pwa/picking.js': (10, _MOTIVO_PWA),
-    'app/static/pwa/recepcion.js': (25, _MOTIVO_PWA),
-    'app/static/pwa/reposicion.js': (8, _MOTIVO_PWA),
-    'app/static/pwa/rutas.js': (47, _MOTIVO_PWA),
-    'app/static/pwa/tienda.js': (22, _MOTIVO_PWA),
-    'app/static/pwa/traslados.js': (6, _MOTIVO_PWA),
-    'app/static/pwa/vigia.js': (3, _MOTIVO_PWA),
-    'flota/adaptadores/bandeja.py': (5, _MOTIVO_FLOTA),
-    'flota/adaptadores/gastos.py': (1, _MOTIVO_FLOTA),
-    'flota/adaptadores/inspecciones.py': (1, _MOTIVO_FLOTA),
-    'flota/adaptadores/preventivo.py': (1, _MOTIVO_FLOTA),
-    'flota/api/_idempotencia.py': (1, _MOTIVO_FLOTA),
-    'flota/api/_permisos.py': (15, _MOTIVO_FLOTA),
-    'flota/api/conductor.py': (7, _MOTIVO_FLOTA),
-    'flota/dominio/custodia.py': (17, _MOTIVO_FLOTA),
-    'flota/dominio/inspeccion.py': (1, _MOTIVO_FLOTA),
-    'flota/dominio/salida.py': (1, _MOTIVO_FLOTA),
-    'flota/dominio/senales.py': (1, _MOTIVO_FLOTA),
-    'flota/dominio/valores.py': (1, _MOTIVO_FLOTA),
-}
+PENDIENTE_OTRO_FRENTE = {}
 
 #: Textos que el detector marca y que NO son la voz de la aplicación. Vacío:
 #: un falso positivo se arregla en el detector, no se exime acá.

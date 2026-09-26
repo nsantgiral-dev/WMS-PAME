@@ -179,7 +179,7 @@ function fjHtmlResumen(d) {
     <div style="display:flex;justify-content:space-between;align-items:flex-end;flex-wrap:wrap;gap:8px;">
       <div>
         <div style="font-size:var(--fs-xl);font-weight:800;color:var(--tx);">🕒 Jornada de los conductores</div>
-        <div style="font-size:var(--fs-sm);color:var(--tx2);">Del ${esc(d.desde)} al ${esc(d.hasta)} · lo que cada uno dejó registrado. Un tramo sin registro es «sin explicar»: preguntale antes de concluir.</div>
+        <div style="font-size:var(--fs-sm);color:var(--tx2);">Del ${esc(d.desde)} al ${esc(d.hasta)} · lo que cada uno dejó registrado. Un tramo sin registro es «sin explicar»: pregúntele antes de concluir.</div>
       </div>
       <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
         <input id="fj-desde" type="date" class="input-field" value="${esc(d.desde)}" style="max-width:160px;font-size:var(--fs-sm);">
