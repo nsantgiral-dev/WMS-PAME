@@ -106,7 +106,7 @@ class TestLaColaMuestraLoQueHaceFaltaParaDecidir:
         """**El caso de las 26.** Confirmar sin foto es la palabra de quien
         confirma: quien lo hace tiene derecho a saber qué está firmando."""
         html = _pantalla(tmp_path, _cola(_fila(tiene_foto=False)))
-        assert 'es tu palabra' in html
+        assert 'es su palabra' in html
         assert 'flotaVerFoto(' not in html
 
     def test_con_foto_ofrece_verla(self, tmp_path):
@@ -114,7 +114,7 @@ class TestLaColaMuestraLoQueHaceFaltaParaDecidir:
         lo único que se le pidió —la foto grande, el número al lado—."""
         html = _pantalla(tmp_path, _cola(_fila(tiene_foto=True, foto_id=42)))
         assert 'flotaVerFoto(42' in html
-        assert 'es tu palabra' not in html
+        assert 'es su palabra' not in html
 
     def test_las_dos_salidas_estan(self, tmp_path):
         html = _pantalla(tmp_path, _cola(_fila()))

@@ -796,7 +796,7 @@ class TestElDiaCerradoNoOfreceRecibir:
         html = _tarjeta(tmp_path, _turno(ruta_de_hoy_cerrada=True, origen='eleccion',
                                          vehiculo_id=None, placa=''))
         v = _visible(html)
-        assert 'Día cerrado' in v and 'Recibir el camión' not in v and 'Según tu ruta' not in v
+        assert 'Día cerrado' in v and 'Recibir el camión' not in v and 'Según su ruta' not in v
         assert 'flotaCondRecibirIgual()' in html, 'sin escape para el que sí sale otra vez'
 
     def test_el_escape_vuelve_a_la_eleccion(self, tmp_path):

@@ -80,7 +80,7 @@ function flotaDondeSeDaDeAlta() {
   const u = (typeof OPERARIO !== 'undefined' && OPERARIO) ? OPERARIO : null;
   return (u && u.rol === 'admin')
     ? 'en <b>Rutas → Alta de vehículos</b>'
-    : 'por <b>administración</b> (pedíselo al administrador del sistema)';
+    : 'por <b>administración</b> (pídaselo al administrador del sistema)';
 }
 
 let FLOTA_PLACA = null;
@@ -217,7 +217,7 @@ function flotaNotaLlantas() {
     : 'un supuesto — no se pudo deducir del tipo';
   return `<p style="color:var(--yellow);font-size:var(--fs-xs);margin:4px 0">
     ${n} posiciones de llanta: ${razon}, no de la ficha técnica.
-    Cargá la ficha para que el número sea un dato.</p>`;
+    Cargue la ficha para que el número sea un dato.</p>`;
 }
 
 /** Carga la pestaña de flota. **Delega en la bandeja** (`flota_bandeja.js`).
@@ -425,11 +425,11 @@ function flotaRenderRecibo() {
     <div id="flota-custodio-detalle" style="margin-top:8px"></div>
     ${(c && c.custodio_tipo === 'conductor' && flotaFuerzaCierre()) ? `
     <label style="display:block;margin-top:14px;color:var(--yellow)">Motivo del cierre forzado
-      (obligatorio: el turno lo tiene un conductor y lo cerrás vos, sin su firma)</label>
+      (obligatorio: el turno lo tiene un conductor y lo cierra usted, sin su firma)</label>
     <input id="flota-motivo-forzado" style="width:100%;padding:6px"
            placeholder="Ej: se fue sin cerrar y el camión tiene que salir">
-    <p style="font-size:var(--fs-xs);color:var(--tx2);margin-top:2px">Queda registrado con tu
-      nombre y cuenta en «cierres forzados». Avisale hoy a quien lo tenía.</p>
+    <p style="font-size:var(--fs-xs);color:var(--tx2);margin-top:2px">Queda registrado con su
+      nombre y cuenta en «cierres forzados». Avísele hoy a quien lo tenía.</p>
     ` : ''}
 
     <!-- La placa va TAMBIÉN en el botón: es lo último que se mira antes de
@@ -460,7 +460,7 @@ async function flotaCambiarTipoCustodio() {
       '</select>';
   } else {
     det.innerHTML = '<select id="flota-sede"></select>' +
-      '<p style="color:var(--yellow);font-size:var(--fs-xs)">Si la sede no aparece, dejá la ' +
+      '<p style="color:var(--yellow);font-size:var(--fs-xs)">Si la sede no aparece, deje la ' +
       'primera opción: el turno queda <b>con la sede sin resolver</b> y el diagnóstico lo ' +
       'cuenta. No se inventa una sede.</p>';
     await flotaLlenarSedes('flota-sede');
@@ -503,7 +503,7 @@ async function flotaCapturarTablero() {
   if (Math.max(r.ancho, r.alto) < 1600) {
     // No se rechaza: se declara. Bloquear acá deja el camión en el patio.
     aviso.innerHTML = `<span style="color:var(--warn-tx)">✓ Tomada, pero chica
-      (${esc(r.ancho)}×${esc(r.alto)}): puede que el número no se lea. Si podés, repetila
+      (${esc(r.ancho)}×${esc(r.alto)}): puede que el número no se lea. Si puede, repítala
       con más luz y más cerca.</span>`;
   } else {
     aviso.innerHTML = `<span style="color:var(--ok-tx)">✓ Foto del tablero tomada</span>`;
@@ -574,14 +574,14 @@ function flotaPintarFoto(cont, url, bytes, titulo, mime) {
       <object data="${url}" type="application/pdf"
               style="width:100%;height:60vh;border-radius:8px;border:1px solid var(--brd)">
         <p style="color:var(--tx2)">Este navegador no muestra PDF incrustado —
-          usa "abrir en grande".</p>
+          use "abrir en grande".</p>
       </object>`;
     return;
   }
   cont.innerHTML = cabecera + `
     <img src="${url}" style="max-width:100%;border-radius:8px;border:1px solid var(--brd)">
     <p style="font-size:var(--fs-xs);color:var(--tx3);margin-top:4px">
-      Si es el tablero: hacé zoom y verificá que se lean los seis dígitos.
+      Si es el tablero: haga zoom y verifique que se lean los seis dígitos.
       Si no se leen, los parámetros de <code>foto_dato</code> están cortos.</p>`;
 }
 
@@ -755,14 +755,14 @@ function flotaPlacaDelFormulario(idBoton, idError) {
   const boton = document.getElementById(idBoton);
   const placa = boton ? boton.dataset.placa : '';
   if (!placa) {
-    err.textContent = 'El formulario no sabe de qué vehículo es. Cerralo y abrilo ' +
+    err.textContent = 'El formulario no sabe de qué vehículo es. Ciérrelo y ábralo ' +
       'de nuevo — no se manda nada hasta que esté claro.';
     return null;
   }
   if (placa !== FLOTA_PLACA) {
     err.textContent = `Este formulario es del ${placa} y la pantalla se movió al ` +
       `${FLOTA_PLACA}. No se guarda nada: las fotos quedarían en el vehículo ` +
-      `equivocado. Abrí de nuevo el del ${placa}.`;
+      `equivocado. Abra de nuevo el del ${placa}.`;
     return null;
   }
   return placa;
@@ -991,14 +991,14 @@ async function flotaRenderVerificacion() {
   }
   cont.innerHTML = `<div class="tabla-card">
       <p style="color:var(--tx2);font-size:var(--fs-sm);margin:0 0 10px">
-        <b>Confirmar deja tu nombre y la fecha en la fila.</b> Si el número está
+        <b>Confirmar deja su nombre y la fecha en la fila.</b> Si el número está
         mal, no se edita: se corrige con un registro nuevo, y la corrección pide
         motivo escrito. La más vieja va primero.</p>
       <ul style="list-style:none;padding:0">
         ${pendientes.map(p => flotaFilaDudosa(p)).join('')}</ul>
     </div>
     <div class="tabla-card" id="flota-visor">
-      <p style="color:var(--tx3)">Tocá «Ver la foto» en una fila para mirarla acá.</p>
+      <p style="color:var(--tx3)">Toque «Ver la foto» en una fila para mirarla acá.</p>
     </div>`;
 }
 
@@ -1017,7 +1017,7 @@ function flotaFilaDudosa(p) {
     : `<span style="color:var(--yellow);font-size:var(--fs-xs)">${p.estado_foto
          ? 'la foto del tablero se registró pero no está guardada'
          : 'sin foto del tablero'} —
-         confirmarla es tu palabra, no la de una foto</span>`;
+         confirmarla es su palabra, no la de una foto</span>`;
   return `<li style="margin-bottom:14px;border-left:2px solid var(--bd);padding-left:10px">
     <div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap">
       <b style="font-size:20px">${Number(p.valor_km).toLocaleString('es-CO')} km</b>
@@ -1128,7 +1128,7 @@ async function flotaAbrirFicha(placa) {
   el.innerHTML = `<div class="tabla-card">
     <p style="color:var(--tx2);font-size:var(--fs-sm)">Se llena parado al lado del vehículo: el
     kilometraje está en el tablero, el aceite en la tapa del motor o en la última factura,
-    la medida de llanta en el flanco. <b>Lo que no sepas, dejalo vacío o en «Sin dato»</b> —
+    la medida de llanta en el flanco. <b>Lo que no sepa, déjelo vacío o en «Sin dato»</b> —
     el sistema lo declara y lo persigue. Inventarlo es peor que no tenerlo.</p>
     <p style="color:var(--yellow);font-size:var(--fs-sm)">El texto gris de cada campo es un
     <b>ejemplo de formato</b>, no la respuesta de este vehículo. Copiarlo sin mirar llena
@@ -1183,7 +1183,7 @@ async function flotaAbrirFicha(placa) {
            style="width:100%;padding:6px">
     <label>Refrigerante</label>
     <input id="fi-refrigerante_spec" value="${v('refrigerante_spec')}"
-           placeholder="ej. verde etilenglicol 50/50 · rojo orgánico — anotá el COLOR"
+           placeholder="ej. verde etilenglicol 50/50 · rojo orgánico — anote el COLOR"
            style="width:100%;padding:6px">
 
     <label>Medida de llanta</label>
@@ -1248,24 +1248,24 @@ async function flotaGuardarFicha() {
 
   // El mismo aviso que el CHECK de la base, dicho antes de perder el formulario.
   if (campos.distribucion !== 'sin_dato' && campos.distribucion_fuente === 'sin_dato') {
-    err.textContent = 'Si sabés la distribución, decí de dónde salió el dato. ' +
+    err.textContent = 'Si sabe la distribución, diga de dónde salió el dato. ' +
       'Un dato que dispara un cambio de correa sin procedencia es una suposición.';
     return;
   }
   if (campos.sistema_frenos !== 'sin_dato' && campos.frenos_fuente === 'sin_dato') {
-    err.textContent = 'Si sabés el sistema de frenos, decí de dónde salió el dato.';
+    err.textContent = 'Si sabe el sistema de frenos, diga de dónde salió el dato.';
     return;
   }
   const _capacidad = campos.capacidad_tanque_galones;
   const _capFuente = campos.capacidad_tanque_fuente;
   if (_capacidad !== undefined && _capFuente === 'sin_dato') {
-    err.textContent = 'Si sabés la capacidad del tanque, decí de dónde salió. ' +
+    err.textContent = 'Si sabe la capacidad del tanque, diga de dónde salió. ' +
       'Un número sin procedencia se lee como si alguien lo hubiera verificado.';
     return;
   }
   if (_capacidad === undefined && _capFuente !== 'sin_dato') {
-    err.textContent = 'Pusiste una procedencia sin capacidad. Si no sabés cuántos ' +
-      'galones caben, dejá la fuente en «sin_dato»: no saber es una respuesta.';
+    err.textContent = 'Puso una procedencia sin capacidad. Si no sabe cuántos ' +
+      'galones caben, deje la fuente en «sin_dato»: no saber es una respuesta.';
     return;
   }
 
@@ -1500,7 +1500,7 @@ async function flotaGuardarDocumento() {
     if (!cuerpo.numero || !cuerpo.entidad || (vence && !cuerpo.fecha_vencimiento)) {
       err.textContent = 'Con el documento a la vista: número, entidad' +
         (vence ? ' y vencimiento' : '') + '. ' +
-        'Si no lo tenés, marcá "No aparece" — es una afirmación distinta.';
+        'Si no lo tiene, marque "No aparece" — es una afirmación distinta.';
       return;
     }
     if (FLOTA_FOTO_DOC) {
@@ -1822,7 +1822,7 @@ async function flotaColaEnviarUna(op) {
   try { d = await r.json(); } catch (_) { d = {}; }
   if (r.ok) return { estado: 'hecho', datos: d };
   if (r.status === 401) {
-    return { estado: 'reintentar', mensaje: 'La sesión venció. Entrá de nuevo y se manda sola.' };
+    return { estado: 'reintentar', mensaje: 'La sesión venció. Entre de nuevo y se manda sola.' };
   }
   if (r.status >= 500 || r.status === 429 || r.status === 408) {
     return { estado: 'reintentar', mensaje: 'El servidor no respondió bien. Se vuelve a intentar sola.' };
@@ -1832,7 +1832,7 @@ async function flotaColaEnviarUna(op) {
   // persona. Se dice a quién pedírselo, en vez del rol crudo.
   if (r.status === 403 && d && d.motivo === 'sin_derecho') {
     return { estado: 'rechazado', datos: d, mensaje: (d.error ? d.error + '. ' : '') +
-      'No se pudo registrar: pedíselo al encargado de flota.' };
+      'No se pudo registrar: pídaselo al encargado de flota.' };
   }
   return { estado: 'rechazado', mensaje: flotaMensajeDeError(d), datos: d };
 }
@@ -1891,7 +1891,7 @@ async function flotaColaRegistrar(tipo, que, placa, cuerpo) {
     await flotaColaMutar(l => l.filter(x => x.clave !== op.clave)).catch(() => {});
     if (res.estado === 'hecho' || res.estado === 'rechazado') return res;
     return { estado: 'perdido', mensaje: res.mensaje +
-      '. El teléfono no pudo guardarlo: no cierres esta pantalla y probá de nuevo con señal.' };
+      '. El teléfono no pudo guardarlo: no cierre esta pantalla y pruebe de nuevo con señal.' };
   }
 
   FLOTA_COLA_EN_PANTALLA.add(op.clave);
@@ -2006,7 +2006,7 @@ function flotaMensajeDeError(d) {
   if (!d) return 'Error sin detalle';
   let txt = d.error || d.detalle || 'Error sin detalle';
   if (d.tu_rol || d.roles_permitidos) {
-    txt += ` — tu rol es «${d.tu_rol ? flotaPalabra('rol', d.tu_rol) : 'sin sesión'}»`;
+    txt += ` — su rol es «${d.tu_rol ? flotaPalabra('rol', d.tu_rol) : 'sin sesión'}»`;
     if (d.roles_permitidos && d.roles_permitidos.length) {
       txt += `; esto lo hace ${d.roles_permitidos.map(r => flotaPalabra('rol', r)).join(' o ')}`;
     }
@@ -2142,7 +2142,7 @@ function flotaCondAvisoCola(cola, rechazos) {
   (rechazos || []).forEach((r, i) => {
     html += `<div class="flota-hoy-rechazo">
       <span>⚠ No se pudo registrar el ${esc(FLOTA_COLA_QUE[r.que] || r.que)} del ${esc(r.placa)}:
-        ${esc(r.mensaje)} Hacelo de nuevo.</span>
+        ${esc(r.mensaje)} Hágalo de nuevo.</span>
       <button class="flota-hoy-link" onclick="flotaColaDescartarRechazo(${i})">Entendido</button>
     </div>`;
   });
@@ -2203,11 +2203,11 @@ function flotaCondTarjetaHTML(d, cola, rechazos) {
   if (paso === 'elegir' || (d && d.origen === 'eleccion')) {
     const elegido = d && (d.candidatos || []).find(c => c.vehiculo_id === FLOTA_COND_ELEGIDO);
     return `${aviso}<div class="flota-hoy">
-      <div class="flota-hoy-sub">¿Qué camión vas a recibir?</div>
+      <div class="flota-hoy-sub">¿Qué camión va a recibir?</div>
       ${d ? flotaCondListaCandidatos() : ''}
       <button class="btn-primary flota-hoy-accion" onclick="flotaCondAbrirRecibo()"
               ${elegido ? '' : 'disabled'}>
-        ${elegido ? `Recibir el ${esc(elegido.placa)}` : 'Elegí el camión primero'}</button>
+        ${elegido ? `Recibir el ${esc(elegido.placa)}` : 'Elija el camión primero'}</button>
       <div class="flota-hoy-pie">
         <button class="flota-hoy-link" onclick="flotaCondMasAbrir()">Mis turnos</button></div>
     </div>`;
@@ -2217,8 +2217,8 @@ function flotaCondTarjetaHTML(d, cola, rechazos) {
   // lado invita a tocar el equivocado. La ruta sigue siendo sugerencia, no
   // verdad (turno.py): queda un escape de un toque.
   const cabeza = d.origen === 'ruta'
-    ? '<span class="flota-hoy-sub">Según tu ruta de hoy. <b>Confirmá que es el camión que tenés enfrente.</b></span>'
-    : '<span class="flota-hoy-sub">Tu camión de hoy</span>';
+    ? '<span class="flota-hoy-sub">Según su ruta de hoy. <b>Confirme que es el camión que tiene enfrente.</b></span>'
+    : '<span class="flota-hoy-sub">Su camión de hoy</span>';
   return `${aviso}<div class="flota-hoy">
     <div class="flota-hoy-cabeza">
       <span class="flota-hoy-placa">🚚 ${esc(d.placa)}</span>${cabeza}
@@ -2294,7 +2294,7 @@ function flotaCondListaCandidatos() {
       return `<div class="flota-candidato flota-candidato-ocupado">
         <b>${esc(c.placa)}</b> · ${esc(c.tipo)}<br>
         <span style="color:var(--err-tx);font-size:var(--fs-sm)">Lo tiene ${esc(c.ocupado_por)}.
-        Si lo vas a recibir vos, tiene que entregarlo primero.</span>
+        Si lo va a recibir usted, esa persona tiene que entregarlo primero.</span>
       </div>`;
     }
     const sel = c.vehiculo_id === FLOTA_COND_ELEGIDO;
@@ -2417,12 +2417,12 @@ function flotaGuiaAngulo(a) {
   const LADO = 'Izquierda y derecha se cuentan siempre mirando el vehículo de frente, ' +
                'parado adelante. Así las fotos se pueden comparar entre turnos.';
   const G = {
-    tablero: 'Encendé el tablero. Que se lean los seis números del odómetro.',
-    frontal: 'Parate adelante, a tres pasos. Que entren el parachoques, las luces y la placa.',
-    trasera: 'Parate atrás, a tres pasos. Que entren el portón, las luces y la placa.',
+    tablero: 'Encienda el tablero. Que se lean los seis números del odómetro.',
+    frontal: 'Párese adelante, a tres pasos. Que entren el parachoques, las luces y la placa.',
+    trasera: 'Párese atrás, a tres pasos. Que entren el portón, las luces y la placa.',
     lateral_izq: 'Todo el costado, de punta a punta. ' + LADO,
     lateral_der: 'Todo el costado, de punta a punta. ' + LADO,
-    cajon_abierto: 'Abrí el cajón. Que se vean el piso, las paredes y el techo.',
+    cajon_abierto: 'Abra el cajón. Que se vean el piso, las paredes y el techo.',
     interior_cabina: 'Desde la puerta del conductor: asientos, tablero y piso.',
   };
   if (G[a]) return G[a];
@@ -2440,7 +2440,7 @@ function flotaGuiaAngulo(a) {
 /** Abre el recibo del conductor en el modal. */
 async function flotaCondAbrirRecibo() {
   if (!FLOTA_COND_ELEGIDO && !(FLOTA_COND && FLOTA_COND.placa)) {
-    alerta('Elegí primero el vehículo', 'advertencia'); return;
+    alerta('Elija primero el vehículo', 'advertencia'); return;
   }
   const c = ((FLOTA_COND && FLOTA_COND.candidatos) || []).find(x => x.vehiculo_id === FLOTA_COND_ELEGIDO);
   FLOTA_PLACA = c ? c.placa : FLOTA_COND.placa;
@@ -2494,7 +2494,7 @@ function flotaRecHTML() {
            style="display:none" onchange="flotaRecFoto()">
     <button type="button" class="btn-primary flota-camara" id="rec-camara"
             onclick="document.getElementById('rec-foto').click()">
-      ${tomada ? '✓ Foto tomada — tocá para repetirla' : '📷 Tomar la foto'}</button>
+      ${tomada ? '✓ Foto tomada — toque para repetirla' : '📷 Tomar la foto'}</button>
     <div id="rec-aviso" class="flota-paso-aviso"></div>
     <div class="flota-paso-pie">
       ${r.i > 0 ? '<button class="flota-hoy-link" onclick="flotaRecIr(' + (r.i - 1) + ')">← Atrás</button>' : '<span></span>'}
@@ -2547,7 +2547,7 @@ function flotaRecSiguiente() {
     const km = parseInt(r.km, 10);
     if (!Number.isFinite(km) || km < 0) {
       const av = document.getElementById('rec-aviso');
-      if (av) av.textContent = 'Escribí el kilometraje del tablero para seguir.';
+      if (av) av.textContent = 'Escriba el kilometraje del tablero para seguir.';
       return;
     }
   }
@@ -2581,7 +2581,7 @@ async function flotaRecFoto() {
       delete r.saltados[a];
     }
   } catch (e) {
-    if (av) av.textContent = 'No se pudo leer la foto. Tomala de nuevo.';
+    if (av) av.textContent = 'No se pudo leer la foto. Tómela de nuevo.';
     return;
   }
   if (a === 'tablero') {
@@ -2589,7 +2589,7 @@ async function flotaRecFoto() {
     if (!Number.isFinite(km) || km < 0) {
       flotaRecPintar();
       const av2 = document.getElementById('rec-aviso');
-      if (av2) av2.textContent = 'Foto guardada. Ahora escribí el kilometraje y tocá «Seguir».';
+      if (av2) av2.textContent = 'Foto guardada. Ahora escriba el kilometraje y toque «Seguir».';
       return;
     }
   }
@@ -2719,7 +2719,7 @@ async function flotaCondAbrirEntrega() {
     </div>`).join('');
 
   document.getElementById('flota-recibo').innerHTML = `<div class="flota-paso">
-    <p class="flota-paso-guia">Cierra tu turno. Cuatro fotos, no trece — las que detectan un golpe nuevo.</p>
+    <p class="flota-paso-guia">Cierre su turno. Cuatro fotos, no trece — las que detectan un golpe nuevo.</p>
     <label class="input-label">Kilometraje del tablero ahora</label>
     <input type="number" id="cf-km" inputmode="numeric" class="input-field flota-km-grande">
     <input type="file" id="flota-foto-tablero" accept="image/*" capture="environment"
@@ -2728,7 +2728,7 @@ async function flotaCondAbrirEntrega() {
             onclick="document.getElementById('flota-foto-tablero').click()">📷 Foto del tablero</button>
     <span id="flota-tablero-ok"></span>
     <p class="flota-paso-guia" style="margin-top:12px"><b>Las 4 fotos</b>${
-      Object.keys(FLOTA_REFERENCIA).length ? ' — «cómo estaba» te muestra la de cuando lo recibiste' : ''}</p>
+      Object.keys(FLOTA_REFERENCIA).length ? ' — «cómo estaba» le muestra la de cuando lo recibió' : ''}</p>
     ${flotaConvencionFotos()}
     <div>${angulos}</div>
     <div id="flota-visor" style="margin-top:12px"></div>
@@ -2742,7 +2742,7 @@ async function flotaCondAbrirEntrega() {
     <div id="cf-fuera-caja" style="display:none">
       <label class="input-label">¿Por qué queda fuera? (obligatorio)</label>
       <input id="cf-ubicacion-motivo" class="input-field">
-      <p class="flota-paso-guia">El camión <b>sigue bajo tu responsabilidad</b> — no pasa a la sede.
+      <p class="flota-paso-guia">El camión <b>sigue bajo su responsabilidad</b> — no pasa a la sede.
         Queda marcado en el tablero de control de flota.</p>
     </div>
     <div id="cf-sede-caja"><label class="input-label">¿Qué sede?</label>
@@ -2837,13 +2837,13 @@ async function flotaCondMisTurnos() {
   try {
     d = await get('/flota/conductor/mis-turnos');
   } catch (e) {
-    el.innerHTML = `<div style="color:var(--err-tx);padding:12px">No se pudieron traer tus turnos:
+    el.innerHTML = `<div style="color:var(--err-tx);padding:12px">No se pudieron traer sus turnos:
       ${esc(e.message)}</div>`;
     return;
   }
   const turnos = d.turnos || [];
   if (!turnos.length) {
-    el.innerHTML = '<div style="padding:12px;color:var(--tx2)">Todavía no registraste ningún turno.</div>';
+    el.innerHTML = '<div style="padding:12px;color:var(--tx2)">Todavía no ha registrado ningún turno.</div>';
     return;
   }
   // Los turnos de cero kilómetros se agrupan en una línea: diez filas idénticas
@@ -2854,7 +2854,7 @@ async function flotaCondMisTurnos() {
     const cuando = horaColombia(t.inicio);
     if (t.cerrado_a_la_fuerza) {
       filas.push(`<li style="color:var(--err-tx)"><b>${esc(t.placa)}</b> ${esc(cuando)} —
-        <b>te cerraron el turno</b>: ${esc(t.motivo_del_cierre_forzado || 'sin motivo')}</li>`);
+        <b>le cerraron el turno</b>: ${esc(t.motivo_del_cierre_forzado || 'sin motivo')}</li>`);
     } else if (t.abierto) {
       filas.push(`<li style="color:var(--ok-tx)"><b>${esc(t.placa)}</b> ${esc(cuando)} — abierto ahora</li>`);
     } else if ((t.km_fin - t.km_inicio) === 0) {
@@ -3080,7 +3080,7 @@ async function flotaRenderDanos(conAcciones) {
     <select id="hz-crit" style="width:100%;padding:6px">
       <!-- Ninguna gravedad nace elegida: «Mayor» preseleccionado ponía el plazo
            de 7 días con un toque que nadie dio (regla 1). -->
-      <option value="">— elegí qué tan grave es —</option>
+      <option value="">— elija qué tan grave es —</option>
       <option value="bloqueante">Bloqueante — el vehículo no debe salir. Se arregla HOY</option>
       <option value="mayor">Mayor — hay 7 días</option>
       <option value="menor">Menor — hay 30 días</option>
@@ -3106,7 +3106,7 @@ async function flotaReportarDano(conAcciones) {
   const km = parseInt(document.getElementById('hz-km').value, 10);
   if (!Number.isFinite(km) || km < 0) { err.textContent = 'El kilometraje es obligatorio.'; return; }
   if (!document.getElementById('hz-crit').value) {
-    err.textContent = 'Elegí qué tan grave es: ninguna viene marcada, a propósito.';
+    err.textContent = 'Elija qué tan grave es: ninguna viene marcada, a propósito.';
     return;
   }
   const placa = flotaPlacaDelFormulario('hz-guardar', 'hz-error');
@@ -3221,7 +3221,7 @@ async function flotaCondReportarDano() {
   // De `FLOTA_COND` y no de `FLOTA_PLACA`: la global solo se llena al abrir el
   // recibo o la entrega, y el botón vive en la hoja del turno abierto.
   FLOTA_PLACA = (FLOTA_COND && FLOTA_COND.placa) || FLOTA_PLACA;
-  if (!FLOTA_PLACA) { alerta('Primero recibí el camión.', 'advertencia'); return; }
+  if (!FLOTA_PLACA) { alerta('Primero reciba el camión.', 'advertencia'); return; }
   FLOTA_COND_HOJA = false;
   flotaCondRender();
   FLOTA_DANO = { foto: null, sinFoto: false, gravedad: null };
@@ -3240,7 +3240,7 @@ function flotaDanoHTML() {
            style="display:none" onchange="flotaDanoFoto()">
     <button type="button" class="btn-primary flota-camara"
             onclick="document.getElementById('hz-foto').click()">
-      ${conFoto ? '✓ Foto tomada — tocá para repetirla' : '📷 Foto del daño'}</button>
+      ${conFoto ? '✓ Foto tomada — toque para repetirla' : '📷 Foto del daño'}</button>
     ${conFoto || d.sinFoto ? '' : `<button type="button" class="flota-hoy-link"
       onclick="flotaDanoSinFoto()">No puedo tomarla</button>`}`;
   if (!conFoto && !d.sinFoto) {
@@ -3256,14 +3256,14 @@ function flotaDanoHTML() {
   }).join('');
   return `<div class="flota-paso">
     ${paso1}
-    ${d.sinFoto && !conFoto ? '<p class="flota-paso-guia">Sin foto: escribí abajo qué encontraste y dónde.</p>' : ''}
+    ${d.sinFoto && !conFoto ? '<p class="flota-paso-guia">Sin foto: escriba abajo qué encontró y dónde.</p>' : ''}
     <div class="flota-paso-titulo flota-paso-titulo-chico">¿Qué tan grave es?</div>
     <div class="flota-opciones">${opciones}</div>
-    <label class="input-label">Qué encontraste ${conFoto ? '(opcional)' : '(obligatorio sin foto)'}</label>
+    <label class="input-label">Qué encontró ${conFoto ? '(opcional)' : '(obligatorio sin foto)'}</label>
     <input id="hz-desc" class="input-field" placeholder="Ej: rayón en la puerta derecha">
     ${flotaCondKmHTML('hz', flotaCondKmConocido(FLOTA_PLACA))}
     <p class="flota-paso-guia">La fecha límite no se elige: sale de la gravedad. Lo cierra quien
-      lo repara, no vos.</p>
+      lo repara, no usted.</p>
     <button class="btn-primary" id="hz-guardar" data-placa="${esc(FLOTA_PLACA)}"
             onclick="flotaCondGuardarDano()">Reportar el daño</button>
     <div id="hz-error" class="flota-error"></div>
@@ -3302,7 +3302,7 @@ async function flotaDanoFoto() {
   try {
     FLOTA_DANO.foto = await flotaComprimir(f, 'evidencia_estado');
   } catch (e) {
-    alerta('No se pudo leer la foto. Tomala de nuevo.', 'error');
+    alerta('No se pudo leer la foto. Tómela de nuevo.', 'error');
     return;
   }
   flotaDanoPintar();
@@ -3334,12 +3334,12 @@ async function flotaCondGuardarDano() {
   const err = document.getElementById('hz-error');
   err.textContent = '';
   if (!FLOTA_DANO || !FLOTA_DANO.gravedad) {
-    err.textContent = 'Elegí qué tan grave es: ninguna viene marcada, a propósito.';
+    err.textContent = 'Elija qué tan grave es: ninguna viene marcada, a propósito.';
     return;
   }
   const texto = (document.getElementById('hz-desc').value || '').trim();
   if (!FLOTA_DANO.foto && !texto) {
-    err.textContent = 'Sin foto, escribí qué encontraste: si no, nadie sabe qué buscar en el camión.';
+    err.textContent = 'Sin foto, escriba qué encontró: si no, nadie sabe qué buscar en el camión.';
     return;
   }
   const km = flotaCondKmLeido('hz');
@@ -3387,7 +3387,7 @@ let FLOTA_TQ = null;   // { foto, fotoTablero, kmCambio, tanque, origen, estados
 /** Abre el tanqueo del conductor. */
 async function flotaCondTanquear() {
   const placa = (FLOTA_COND && FLOTA_COND.placa) || FLOTA_PLACA;
-  if (!placa) { alerta('Primero recibí el camión.', 'advertencia'); return; }
+  if (!placa) { alerta('Primero reciba el camión.', 'advertencia'); return; }
   FLOTA_PLACA = placa;
   FLOTA_COND_HOJA = false;
   flotaCondRender();
@@ -3429,14 +3429,14 @@ function flotaTanqueoHTML() {
            style="display:none" onchange="flotaTanqueoFoto()">
     <button type="button" class="btn-primary flota-camara"
             onclick="document.getElementById('tq-foto').click()">
-      ${t.foto ? '✓ Recibo fotografiado — tocá para repetir' : '📷 Foto del recibo'}</button>
+      ${t.foto ? '✓ Recibo fotografiado — toque para repetir' : '📷 Foto del recibo'}</button>
     <label class="input-label">Galones</label>
     <input type="number" step="0.001" id="tq-galones" inputmode="decimal" class="input-field flota-km-grande">
     <label class="input-label">Valor total (pesos)</label>
     <input type="number" id="tq-valor" inputmode="numeric" class="input-field flota-km-grande">
-    <div class="flota-paso-titulo flota-paso-titulo-chico">¿Llenaste el tanque?</div>
+    <div class="flota-paso-titulo flota-paso-titulo-chico">¿Llenó el tanque?</div>
     <div class="flota-opciones flota-opciones-dos">${(t.estados || []).map(c => boton('tanque', 'tanque', c)).join('')}</div>
-    <div class="flota-paso-titulo flota-paso-titulo-chico">¿Con qué pagaste?</div>
+    <div class="flota-paso-titulo flota-paso-titulo-chico">¿Con qué pagó?</div>
     <div class="flota-opciones">${(t.origenes || []).map(c => boton('origen', 'origen', c)).join('')}</div>
     <label class="input-label">Estación</label>
     <input id="tq-estacion" class="input-field" placeholder="Ej: Terpel Av. 26">
@@ -3445,10 +3445,10 @@ function flotaTanqueoHTML() {
              style="display:none" onchange="flotaTanqueoFotoTablero()">
       <button type="button" class="btn-primary flota-camara"
               onclick="document.getElementById('tq-foto-tablero').click()">
-        ${t.fotoTablero ? '✓ Tablero fotografiado — tocá para repetir' : '📷 Foto del tablero con el kilometraje'}</button>
+        ${t.fotoTablero ? '✓ Tablero fotografiado — toque para repetir' : '📷 Foto del tablero con el kilometraje'}</button>
       <p class="flota-paso-guia">Con la foto el kilometraje nuevo queda respaldado; sin ella queda en duda hasta que alguien lo revise.</p>`
       : flotaCondKmHTML('tq', flotaCondKmConocido(FLOTA_PLACA),
-        'Si ya rodaste desde entonces, tocá «Cambió» y escribí el del tablero.')}
+        'Si ya rodó desde entonces, toque «Cambió» y escriba el del tablero.')}
     <p class="flota-paso-guia">Fecha: hoy, ${esc(flotaFechaCorta(hoyBogota()))}.
       «Lo llené» solo si de verdad quedó lleno: el rendimiento se mide de lleno a lleno.</p>
     <button class="btn-primary" id="tq-guardar" data-placa="${esc(FLOTA_PLACA)}"
@@ -3482,7 +3482,7 @@ async function flotaTanqueoFoto() {
     // Foto-dato (regla 7): los números del recibo tienen que leerse.
     FLOTA_TQ.foto = await flotaComprimir(f, 'foto_dato');
   } catch (e) {
-    alerta('No se pudo leer la foto. Tomala de nuevo.', 'error');
+    alerta('No se pudo leer la foto. Tómela de nuevo.', 'error');
     return;
   }
   flotaTanqueoPintar();
@@ -3496,7 +3496,7 @@ async function flotaTanqueoFotoTablero() {
     // Foto-dato (regla 7): el número del tablero tiene que leerse.
     FLOTA_TQ.fotoTablero = await flotaComprimir(f, 'foto_dato');
   } catch (e) {
-    alerta('No se pudo leer la foto. Tomala de nuevo.', 'error');
+    alerta('No se pudo leer la foto. Tómela de nuevo.', 'error');
     return;
   }
   flotaTanqueoPintar();
@@ -3511,12 +3511,12 @@ async function flotaCondGuardarTanqueo() {
   const valor = (document.getElementById('tq-valor').value || '').trim();
   const estacion = (document.getElementById('tq-estacion').value || '').trim();
   if (!galones || !(Number(galones) > 0)) { err.textContent = 'Faltan los galones.'; return; }
-  if (!valor || !(Number(valor) > 0)) { err.textContent = 'Falta el valor que pagaste.'; return; }
+  if (!valor || !(Number(valor) > 0)) { err.textContent = 'Falta el valor que pagó.'; return; }
   if (!t.tanque) {
-    err.textContent = 'Contestá si llenaste el tanque. Ninguna viene marcada: de eso depende medir el rendimiento.';
+    err.textContent = 'Conteste si llenó el tanque. Ninguna viene marcada: de eso depende medir el rendimiento.';
     return;
   }
-  if (!t.origen) { err.textContent = 'Contestá con qué pagaste.'; return; }
+  if (!t.origen) { err.textContent = 'Conteste con qué pagó.'; return; }
   if (!estacion) { err.textContent = 'Falta la estación.'; return; }
   const km = flotaCondKmLeido('tq');
   if (km === null) { err.textContent = 'Falta el kilometraje del tablero.'; return; }
@@ -3592,7 +3592,7 @@ async function flotaCondInspeccion() {
   // Misma razón que en `flotaCondReportarDano`: el botón vive en la línea del
   // turno abierto, donde nadie pasó por el recibo que llena la global.
   FLOTA_PLACA = (FLOTA_COND && FLOTA_COND.placa) || FLOTA_PLACA;
-  if (!FLOTA_PLACA) { alerta('Primero recibí el camión.', 'advertencia'); return; }
+  if (!FLOTA_PLACA) { alerta('Primero reciba el camión.', 'advertencia'); return; }
   FLOTA_COND_HOJA = false;
   flotaCondRender();
   flotaAbrirModal('Inspección de hoy', FLOTA_PLACA);
@@ -3673,7 +3673,7 @@ function flotaCondInspeccionHTML() {
     </li>`).join('');
 
   const sinSenal = d && d.sin_senal ? `<div class="flota-hoy-pendiente"><span>Sin señal: es la
-    lista que se bajó el ${esc(flotaFechaCorta(d.dia))}. Lo que contestes se guarda en el teléfono.</span></div>` : '';
+    lista que se bajó el ${esc(flotaFechaCorta(d.dia))}. Lo que conteste se guarda en el teléfono.</span></div>` : '';
   return `${sinSenal}${previas}
   <div class="tabla-card">
     <div class="tabla-titulo">${esc(items.length)} ítems · ${d ? d.bloqueantes : 0} bloqueantes</div>
@@ -3718,7 +3718,7 @@ function flotaCondControlesItem(item) {
            placeholder="¿Cuál, dónde, qué tan grande? (opcional)">
     <div style="font-size:var(--fs-xs);color:var(--tx2);margin-top:4px">
       Queda un daño abierto con ${esc(item.dias_de_plazo)} día(s) de plazo. Lo cierra
-      quien lo repara, no vos.</div>` : '';
+      quien lo repara, no usted.</div>` : '';
   return `<div style="display:flex;gap:8px">
       <button class="btn-flota ${r === 'optimo' ? 'ok' : ''}" style="flex:1"
               onclick="flotaCondMarcarItem(${esc(item.item_id)}, 'optimo')">Bien</button>
@@ -3834,7 +3834,7 @@ function flotaCondInspeccionResultadoHTML(res) {
     <div class="flota-paso-titulo">Inspección: ${esc(flotaPalabra('veredicto', d.veredicto))}</div>
     <p class="flota-paso-guia ${habilita ? 'flota-texto-ok' : 'flota-texto-err'}">
       ${habilita ? 'El camión queda habilitado para salir.'
-                 : 'NO habilita despacho. Avisá a control de flota antes de salir.'}</p>
+                 : 'NO habilita despacho. Avise a control de flota antes de salir.'}</p>
     ${hallazgos.length ? `<p class="flota-paso-guia">Quedaron ${esc(hallazgos.length)} daño(s) abiertos,
       con su fecha límite. Los cierra quien los repara.</p>` : ''}
     <button class="btn-primary" onclick="flotaCerrarModal()">Listo</button></div>`;
@@ -4035,7 +4035,7 @@ async function flotaRenderGastos() {
       <input id="gs-est" style="width:100%;padding:6px" placeholder="Ej: Terpel Av. 26">
       <label>Cómo quedó el tanque</label>
       <select id="gs-tanque" style="width:100%;padding:6px">
-        <option value="" selected>— elegí una —</option>
+        <option value="" selected>— elija una —</option>
         ${opciones(d.estados_tanque, 'tanque')}
       </select>
       <p style="font-size:var(--fs-xs);color:var(--tx2);margin:4px 0 0">
@@ -4337,7 +4337,7 @@ function flotaFormTrabajo(id) {
     <input id="tr-${id}-desc" style="width:100%;padding:6px" placeholder="Ej: cambio de kit de embrague">
     <label>¿La factura dice que trae garantía?</label>
     <select id="tr-${id}-gar" style="width:100%;padding:6px">
-      <option value="" selected>— elegí una —</option>
+      <option value="" selected>— elija una —</option>
       <option value="si">Sí, y dice hasta cuándo</option>
       <option value="no">No trae garantía</option>
       <option value="sin_dato">No sé / no dice nada</option>
@@ -4480,13 +4480,13 @@ async function flotaRenderTaller() {
       <b>Mandar un camión al taller lo decide gestión.</b> Control de flota
       señala el daño y escala; la orden la abre quien decide sobre plata.</p>
     <p style="font-size:var(--fs-xs);color:var(--tx2);margin:6px 0 0">
-      Lo que sí podés hacer acá: registrar los trabajos y la factura de las
+      Lo que sí puede hacer acá: registrar los trabajos y la factura de las
       órdenes que ya existen, más abajo.</p>
   </div>` : `<div class="tabla-card">
     <div class="tabla-titulo">Abrir una orden de trabajo</div>
     <label>Por qué entra</label>
     <select id="ot-tipo" style="width:100%;padding:6px">${tipos}</select>
-    <label>Qué vas a mandar a revisar</label>
+    <label>Qué va a mandar a revisar</label>
     <select id="ot-sistema" style="width:100%;padding:6px"
             onchange="flotaTallerSistemaCambio()">${ops}</select>
     ${abiertos.length ? `
@@ -4621,7 +4621,7 @@ async function flotaRegistrarTrabajo(id) {
   if (gar === 'si') {
     if (!meses && !kms) {
       err.textContent = 'Una garantía sin plazo no se puede reclamar, y es peor ' +
-        'que ninguna: se ve verde y no cubre nada. Poné los meses, los ' +
+        'que ninguna: se ve verde y no cubre nada. Ponga los meses, los ' +
         'kilómetros, o los dos.';
       return;
     }
@@ -4902,7 +4902,7 @@ async function flotaRenderLlantas() {
     <div class="tabla-titulo">Montar una llanta</div>
     <label>Cuál</label>
     <select id="mt-llanta" style="width:100%;padding:6px">
-      <option value="" selected>— elegí una —</option>${disponibles}
+      <option value="" selected>— elija una —</option>${disponibles}
     </select>
     <p style="font-size:var(--fs-xs);color:var(--tx2);margin:4px 0 0">Solo aparecen las
       que hoy no están puestas en ningún vehículo. Si alguna salió por un corte
@@ -4962,7 +4962,7 @@ async function flotaMontarLlanta() {
   const llanta = document.getElementById('mt-llanta').value;
   const pos = document.getElementById('mt-pos').value;
   const km = document.getElementById('mt-km').value;
-  if (!llanta) { err.textContent = 'Elegí cuál llanta se está montando.'; return; }
+  if (!llanta) { err.textContent = 'Elija cuál llanta se está montando.'; return; }
   if (!pos) {
     err.textContent = 'Falta la posición. No hay una por defecto: una llanta ' +
       'registrada en la posición equivocada deja el kilometraje de esa rueda ' +
@@ -5016,7 +5016,7 @@ function flotaAbrirDesmontaje(montajeId, codigo, posicion) {
     <input type="number" id="dm-km" inputmode="numeric" style="width:100%;padding:6px;font-size:var(--fs-lg)">
     <label>Por qué sale</label>
     <select id="dm-motivo" style="width:100%;padding:6px">
-      <option value="" selected>— elegí uno —</option>${opciones}
+      <option value="" selected>— elija uno —</option>${opciones}
     </select>
     <p style="font-size:var(--fs-xs);color:var(--tx2);margin:4px 0 0">
       <b>Ninguna viene marcada, a propósito.</b> De este campo depende que se

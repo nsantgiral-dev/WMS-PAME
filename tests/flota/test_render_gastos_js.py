@@ -270,7 +270,7 @@ class TestElFormularioNoTraeNadaMarcado:
         medición existe.** Un `lleno` preseleccionado no produce un error:
         produce una ventana basura que infla o hunde el rendimiento."""
         html = _expediente(tmp_path, _payload())
-        assert '<option value="" selected>— elegí una —</option>' in html
+        assert '<option value="" selected>— elija una —</option>' in html
         assert '<option value="lleno" selected' not in html
 
     def test_las_tres_opciones_de_tanque_estan(self, tmp_path):

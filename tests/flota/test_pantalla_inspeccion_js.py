@@ -278,7 +278,7 @@ class TestMarcarUnaFallaNoCuestaNada:
         lo que hace visible la asimetría: el conductor reporta, no cierra."""
         html = _html(tmp_path, semilla_extra='FLOTA_INSP_RESP = {200: "no_apto"};')
         assert '30 día(s) de plazo' in html
-        assert 'no vos' in html
+        assert 'no usted' in html
 
     def test_cambiar_de_mal_a_bien_borra_la_nota(self, tmp_path):
         """Una nota de un ítem que terminó en `optimo` no se puede mandar: el

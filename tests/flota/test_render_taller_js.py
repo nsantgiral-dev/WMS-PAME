@@ -331,7 +331,7 @@ class TestElFormularioNoDejaTeclearElVencimiento:
         no produce un error — produce un dato inventado que nadie desmiente.
         «No sé» tiene que ser una respuesta que haya que elegir."""
         r = _correr(tmp_path, _payload(ordenes=[_orden()]))
-        assert '<option value="" selected>— elegí una —</option>' in r['html']
+        assert '<option value="" selected>— elija una —</option>' in r['html']
         assert 'no es «no trae»' in r['html']
 
 
