@@ -402,7 +402,7 @@ class TestContar:
         dev = DCS.crear_devolucion(m.tarea.id, 'FEW', '500', almacen.id, None, [
             {'producto_id': producto.id, 'codigo_siesa': producto.codigo_siesa,
              'cantidad_facturada': 10, 'cantidad_devuelta': 2, 'f470_rowid': '700'}])
-        with pytest.raises(ValueError, match='cancela'):
+        with pytest.raises(ValueError, match='cancele'):
             _contar(dev, _gw([_fila(producto)]), [{'producto_id': producto.id,
                                                     'cantidad_devuelta': 0}])
 

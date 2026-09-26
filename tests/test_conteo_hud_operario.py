@@ -112,7 +112,7 @@ class TestUnConteoNoSeCierraSinCantidadDeclarada:
         assert _sesion(db, conteo).estado == 'EN_PROCESO'
 
     def test_cero_sin_confirmar_se_rechaza(self, db, tienda, conteo):
-        with pytest.raises(ValueError, match='confirmá que NO hay ninguna'):
+        with pytest.raises(ValueError, match='confirme que NO hay ninguna'):
             _mob().confirmar_tarea(tienda['a'].id, conteo, 'CONTEO', total_contado=0)
         assert _sesion(db, conteo).estado == 'EN_PROCESO'
 
@@ -143,7 +143,7 @@ class TestUnConteoNoSeCierraSinCantidadDeclarada:
         """`registrar_conteo` es por donde pasa TODO cierre: la regla vive ahí."""
         with pytest.raises(ValueError, match='Falta la cantidad contada'):
             _svc().registrar_conteo(conteo, tienda['a'].id, None)
-        with pytest.raises(ValueError, match='confirmá'):
+        with pytest.raises(ValueError, match='confirme'):
             _svc().registrar_conteo(conteo, tienda['a'].id, 0)
 
     def test_por_http(self, app, client, db, tienda, conteo):

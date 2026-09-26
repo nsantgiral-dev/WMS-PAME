@@ -487,7 +487,7 @@ class TestElOperarioCuenta:
         assert st == 400 and 'Falta la cantidad' in r['error'], r
         # Cero sin confirmar: rechazado. Con `cero_confirmado` que no es `true`: también.
         st, r = b.confirmar(b.op_a, sid, 0)
-        assert st == 400 and 'Contaste 0' in r['error'], r
+        assert st == 400 and 'Contó 0' in r['error'], r
         st, r = b.post(b.op_a, '/api/mobile/confirmar',
                        {'tarea_id': sid, 'tipo': 'CONTEO', 'total_contado': 0,
                         'cero_confirmado': 'si'})
@@ -689,9 +689,9 @@ class TestFueraDeTolerancia:
         st, t = b.get(b.jefe, f'/api/conteo/lider/tablero?almacen_id={b.almacen.id}')
         assert t['permisos']['aprobar_ajuste'] is True
         fila = next(f for f in t['decisiones']['ajustes']['aprobables']['filas'] if f['id'] == raiz)
-        assert fila['valor'] == 2000 and 'supera tu tope' in (fila['no_puede_aprobar'] or ''), fila
+        assert fila['valor'] == 2000 and 'supera su tope' in (fila['no_puede_aprobar'] or ''), fila
         st, r = b.put(b.jefe, f'/api/conteo/{raiz}/ajustar')
-        assert st == 403 and 'supera tu tope' in r['error'], r
+        assert st == 403 and 'supera su tope' in r['error'], r
         assert b.jobs_ajuste(raiz) == []
         # Jefe con tope suficiente: aprueba.
         monkeypatch.setenv('CONTEO_TOPE_APROBACION_JEFE', '5000')

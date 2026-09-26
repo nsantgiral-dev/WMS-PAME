@@ -192,7 +192,7 @@ class TestEditarNoDejaHijosContandoParaNada:
                        json={'cantidad_fisica': 10, 'motivo_edicion': 'tipeo'},
                        headers=_auth(app, tienda['supervisor']))
         assert r.status_code == 409, r.get_json()
-        assert 'cancelá la cadena' in r.get_json()['error']
+        assert 'cancele la cadena' in r.get_json()['error']
         assert (_s(db, cc1).estado, _s(db, cc1).cantidad_fisica) == ('SEGUNDO_CONTEO', 7)
         assert _s(db, cc2).estado == 'PENDIENTE'
 
