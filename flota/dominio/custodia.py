@@ -126,9 +126,9 @@ def puede_recibir(custodia_vigente, quien_pide: QuienPide,
         return Veredicto(
             True, True,
             f'{nombre_custodio_actual or "El custodio anterior"} no cerró su '
-            f'turno. Lo cerrás vos a la fuerza: pide motivo escrito siempre, '
-            f'queda registrado con tu nombre y cuenta en «cierres forzados». '
-            f'Avisale hoy a quien lo tenía.',
+            f'turno. Lo cierra usted a la fuerza: se pide motivo escrito siempre, '
+            f'queda registrado con su nombre y cuenta en «cierres forzados». '
+            f'Avísele hoy a quien lo tenía.',
             fotos_no_eximen=True,
         )
 
@@ -138,7 +138,7 @@ def puede_recibir(custodia_vigente, quien_pide: QuienPide,
         return Veredicto(
             False, False,
             f'El {placa or "vehículo"} lo tiene {quien}{cuando}. '
-            f'Para recibirlo vos, {quien} tiene que entrar con SU usuario y '
+            f'Para recibirlo usted, {quien} tiene que entrar con SU usuario y '
             f'apretar «Entregar turno». Si no está disponible, un admin de zona '
             f'puede forzar el cierre y queda registrado quién lo autorizó.'
         )
@@ -181,12 +181,12 @@ def custodio_que_puede_nombrar(quien_pide: QuienPide, *,
     if custodio_tipo == CustodioTipo.CONDUCTOR:
         if conductor_del_que_pide_id is None:
             return Veredicto(False, False,
-                             'Tu usuario no está vinculado a un conductor: sin '
-                             'eso no se puede dejar un turno a tu nombre. '
-                             'Pedile a administración que te vincule la ficha.')
+                             'Su usuario no está vinculado a un conductor: sin '
+                             'eso no se puede dejar un turno a su nombre. '
+                             'Pídale a administración que le vincule la ficha.')
         if custodio_conductor_id != conductor_del_que_pide_id:
             return Veredicto(False, False,
-                             'Solo podés recibir el turno a tu nombre. Si lo va '
+                             'Solo puede recibir el turno a su nombre. Si lo va '
                              'a manejar otro conductor, que lo reciba él con su '
                              'usuario, o que el encargado de flota lo asigne '
                              'desde el escritorio.')
@@ -195,8 +195,8 @@ def custodio_que_puede_nombrar(quien_pide: QuienPide, *,
     if es_el_custodio_actual:
         return Veredicto(True, False, '')
     return Veredicto(False, False,
-                     'Solo podés dejar en la sede el vehículo de tu turno. '
-                     'Este no lo tenés vos.')
+                     'Solo puede dejar en la sede el vehículo de su turno. '
+                     'Este no lo tiene usted.')
 
 
 def custodias_activas(custodias: Sequence[Custodia]) -> List[Custodia]:
@@ -260,9 +260,9 @@ def validar_un_vehiculo_por_conductor(otras_custodias_abiertas: Sequence[tuple])
     detalle = '; '.join(f'{placa} desde {desde}' for placa, desde in otras_custodias_abiertas)
     plural = len(otras_custodias_abiertas) > 1
     raise CustodiaInvalida(
-        f'Ya tenés {"otros vehículos" if plural else "otro vehículo"} bajo '
-        f'custodia sin entregar: {detalle}. Entregalo primero (botón «Entregar '
-        f'turno») antes de recibir uno nuevo — no podés responder por dos '
+        f'Ya tiene {"otros vehículos" if plural else "otro vehículo"} bajo '
+        f'custodia sin entregar: {detalle}. Entréguelo primero (botón «Entregar '
+        f'turno») antes de recibir uno nuevo — no puede responder por dos '
         f'camiones a la vez.'
     )
 

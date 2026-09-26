@@ -175,7 +175,7 @@ class TestLaValidacionDeDominioSigueSiendoLaPuertaBuena:
             validar_un_vehiculo_por_conductor([('TGZ653', '13/08 a las 07:12')])
         msg = str(e.value)
         assert 'TGZ653' in msg
-        assert 'Entregalo primero' in msg
+        assert 'Entréguelo primero' in msg
 
     def test_sin_otras_abiertas_deja_pasar(self):
         from flota.dominio.custodia import validar_un_vehiculo_por_conductor
