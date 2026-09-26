@@ -127,7 +127,7 @@ class ConnektaFacturacionGateway:
             if not core.tipo_docto_remision:
                 raise ValueError(
                     'SIESA_TIPO_DOCTO_REMISION no está configurado. '
-                    'Si se usa trigger_despacho, agrega la variable en Railway.'
+                    'Si se usa trigger_despacho, agregue la variable en Railway.'
                 )
             if not core.motivo_ventas:
                 raise ValueError(
@@ -246,8 +246,8 @@ class ConnektaFacturacionGateway:
         # Un valor vacío causaría rechazo silencioso en Siesa sin mensaje de error claro.
         if not core.modo_simulacion and (not tipo_docto_pedido or not str(tipo_docto_pedido).strip()):
             raise ValueError(
-                'tipo_docto_pedido está vacío — configura SIESA_TIPO_DOCTO_FACTURA '
-                'o verifica que el pedido tenga tipo de documento asignado'
+                'tipo_docto_pedido está vacío — configure SIESA_TIPO_DOCTO_FACTURA '
+                'o verifique que el pedido tenga tipo de documento asignado'
             )
         # Pre-check idempotencia: si el pedido ya fue facturado (estado=4 Cumplido),
         # no reenviar POST — evita factura FE duplicada en retry de DLQ tras timeout.

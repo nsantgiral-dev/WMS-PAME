@@ -914,7 +914,7 @@ class ABCService:
                                     f'FALLIDOS (sin tareas generadas): {fallidos}\n'
                                     f'PARCIALES (watchdog sin reclasificar A): {parciales}\n'
                                     f'COMPLETADOS: {completados}\n\n'
-                                    'Usa /api/abc/generar para re-disparar almacenes fallidos.'
+                                    'Use /api/abc/generar para re-disparar almacenes fallidos.'
                                 ),
                                 cuerpo_html=None,
                                 tipo_alerta=f'abc_scheduler_fallo',
@@ -1239,7 +1239,7 @@ class ABCService:
         if esperadas is not None and int(esperadas) != plan['a_cancelar']:
             raise RezagoCambioDesdeLaVistaPrevia(
                 f'El rezago cambió desde la vista previa: se vieron {esperadas} y '
-                f'ahora son {plan["a_cancelar"]}. Volvé a abrir la vista previa.')
+                f'ahora son {plan["a_cancelar"]}. Vuelva a abrir la vista previa.')
 
         ahora = datetime.utcnow()
         # Mismo filtro bajo lock de fila: una tarea que un operario toma entre
@@ -1354,7 +1354,7 @@ class ABCService:
 
         if idx_h is None:
             raise ValueError('No se encontró la fila de encabezados. '
-                             'Verifica que el archivo sea el reporte ABC de Siesa.')
+                             'Verifique que el archivo sea el reporte ABC de Siesa.')
 
         headers = filas[idx_h]
         hn = [_norm(h) for h in headers]

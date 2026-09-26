@@ -163,7 +163,7 @@ class RecepcionService:
                 raise ValueError({
                     'tipo': 'PRODUCTO_NO_EN_OC',
                     'mensaje': 'Producto no está en esta OC. '
-                               'Si es bonificación u obsequio del proveedor, confirma para registrarlo.',
+                               'Si es bonificación u obsequio del proveedor, confirme para registrarlo.',
                     'producto_id': producto_id,
                     'requiere_confirmacion': True
                 })
@@ -329,7 +329,7 @@ class RecepcionService:
         if item.cantidad_recibida <= 0:
             raise ValueError(
                 'No se puede declarar avería sobre un producto que todavía no '
-                'se contó. Escanealo primero.')
+                'se contó. Escanéelo primero.')
 
         RecepcionService._aplicar_averia(item, cantidad_averiada, motivo)
         db.session.commit()
@@ -648,7 +648,7 @@ class RecepcionService:
         if not proveedor_id:
             raise ValueError(
                 f'No se pudo obtener el proveedor de la OC {recepcion.numero_oc_siesa} en Siesa. '
-                'Verifica que la OC exista en SIESA o asigna el código de proveedor manualmente.'
+                'Verifique que la OC exista en SIESA o asigne el código de proveedor manualmente.'
             )
 
         # Ingresar al inventario — row-locks adquiridos DESPUÉS del HTTP call
@@ -841,7 +841,7 @@ class RecepcionService:
             raise ValueError(
                 f'No se pudo obtener bodega/UOM para {len(items_sin_bodega)} ítem(s) de la OC '
                 f'{recepcion.numero_oc_siesa} en Siesa: {items_sin_bodega[:3]}. '
-                'Verifica que la OC exista en Siesa y tenga líneas activas.'
+                'Verifique que la OC exista en Siesa y tenga líneas activas.'
             )
 
         # [P8] Crear SiesaJob ANTES de llamar a Siesa — atómico con el inventario.

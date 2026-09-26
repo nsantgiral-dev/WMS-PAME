@@ -140,7 +140,7 @@ class PedidoPackingCloser(IPackingCloser):
         if not bultos_data:
             previos = Bulto.query.filter_by(tarea_id=tarea_id).all()
             if not previos:
-                return 'Debes declarar al menos una pieza'
+                return 'Debe declarar al menos una pieza'
             return len(previos)
         total = sum(int(b.get('cantidad', 1)) for b in bultos_data)
         return total if total >= 1 else 'Total de piezas debe ser al menos 1'

@@ -319,7 +319,7 @@ class ConnektaConsultasGateway:
             logger.error('[CONNEKTA] get_factura_desde_pedido falló — abortando para evitar FE duplicada: %s', e)
             raise Exception(
                 f'No se pudo verificar si ya existe FE para pedido {tipo_docto}-{consec_docto}: {e}. '
-                'Reintenta cuando Connekta esté disponible.'
+                'Reintente cuando Connekta esté disponible.'
             )
 
     def get_factura_desde_remision(self, tipo_docto_rm: str, consec_rm) -> list:
@@ -366,7 +366,7 @@ class ConnektaConsultasGateway:
             logger.error('[CONNEKTA] get_factura_desde_remision falló — abortando para evitar FE duplicada: %s', e)
             raise Exception(
                 f'No se pudo verificar si ya existe FE para RM {tipo_docto_rm}-{consec_rm}: {e}. '
-                'Reintenta cuando Connekta esté disponible.'
+                'Reintente cuando Connekta esté disponible.'
             )
 
     def get_punto_envio_factura(self, f350_rowid) -> dict:

@@ -924,7 +924,7 @@ class ConnektaGateway:
             return data
         except requests.exceptions.Timeout:
             self._cb_record_failure()
-            raise Exception('Connekta no respondió — reintenta')
+            raise Exception('Connekta no respondió — reintente')
         except requests.exceptions.RequestException as e:
             self._cb_record_failure()
             logger.error(f'[CONNEKTA] GET {nombre_api}: {e}')
@@ -1077,7 +1077,7 @@ class ConnektaGateway:
             raise ConnektaResultadoDesconocido(
                 f'Siesa no respondió en {_POST_READ_TIMEOUT}s. '
                 'NO se sabe si el documento quedó creado — probablemente sí. '
-                'Verificá en Siesa (Auditoría de documentos) antes de volver '
+                'Verifique en Siesa (Auditoría de documentos) antes de volver '
                 'a intentar: reintentar a ciegas crea un segundo documento.')
         except requests.exceptions.RequestException as e:
             self._cb_record_failure()

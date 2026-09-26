@@ -1274,7 +1274,7 @@ def compuerta_inicio(numero_pedido, tipo, consec, co=None, items=None, almacen_i
                        f'cartera_nit_{nit}') as tomado:
         if not tomado:
             raise DespachoEnCurso(f'Otro despacho a crédito del cliente {nit} se está '
-                                  'evaluando en este momento. Reintentá en unos segundos.')
+                                  'evaluando en este momento. Reintente en unos segundos.')
         yield _decidir_inicio(clave, pedido, nit, items, usuario_id)
 
 

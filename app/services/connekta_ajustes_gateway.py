@@ -47,7 +47,7 @@ class ConnektaAjustesGateway:
         if not _tipo_docto_ajuste:
             raise ConnektaPayloadInvalido(
                 'SIESA_TIPO_DOCTO_AJUSTE no está configurado en variables de entorno. '
-                'Agrega la variable en Railway con el código de tipo de documento de ajuste en Siesa.'
+                'Agregue la variable en Railway con el código de tipo de documento de ajuste en Siesa.'
             )
         if motivo_codigo not in ['AJ-ENT', 'AJ-SAL']:
             raise ConnektaPayloadInvalido(f'Motivo inválido: {motivo_codigo}')

@@ -304,7 +304,7 @@ Renombrar cada código usando alguno de los prefijos válidos:
 
 El WMS sincronizará automáticamente esta noche a las 03:00.
 
-Si tienes dudas escribe a sistemas o abre un ticket.
+Si tiene dudas, escriba a sistemas o abra un ticket.
 """
 
     # ── HTML ──

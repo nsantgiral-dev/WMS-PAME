@@ -374,7 +374,7 @@ class FacturaFEService:
 
   <div class="obs">
     <strong>Nota:</strong> Los precios e IVA se cargarán automáticamente una vez Siesa confirme
-    la factura electrónica. Usa el botón <em>Actualizar</em> en unos segundos.
+    la factura electrónica. Use el botón <em>Actualizar</em> en unos segundos.
   </div>
 
   <div class="footer">

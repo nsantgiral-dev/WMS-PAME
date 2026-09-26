@@ -101,8 +101,8 @@ def obtener_avisos_pendientes(operario_id: int) -> list:
         avisos.append({
             'sesion_codigo': raiz.codigo,
             'mensaje': (
-                'El ajuste de tu conteo no se pudo aplicar por inventario '
-                'comprometido en pedidos — tu supervisor debe revisarlo.'
+                'El ajuste de su conteo no se pudo aplicar por inventario '
+                'comprometido en pedidos — su supervisor debe revisarlo.'
             ),
             'tipo': 'advertencia',
         })

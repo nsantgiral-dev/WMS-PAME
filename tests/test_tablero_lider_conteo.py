@@ -527,7 +527,7 @@ class TestElTopeDelJefeEsPorAjuste:
         t = _tablero(tienda, rol='jefe_almacen')
         assert t['permisos']['aprobar_ajuste'] is True
         filas = {f['id']: f for f in t['decisiones']['ajustes']['aprobables']['filas']}
-        assert 'supera tu tope' in filas[mundo['aprobable']]['no_puede_aprobar']      # $4.000
+        assert 'supera su tope' in filas[mundo['aprobable']]['no_puede_aprobar']      # $4.000
         assert 'no tiene costo' in filas[mundo['aprobable_sin_costo']]['no_puede_aprobar']
 
         monkeypatch.setenv('CONTEO_TOPE_APROBACION_JEFE', '5000')

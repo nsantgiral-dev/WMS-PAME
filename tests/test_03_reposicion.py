@@ -245,7 +245,7 @@ class TestConfirmarReposicion:
         tarea_dict = self._setup_tarea(app, db, inv_picking, inv_reserva,
                                         lpn_activo, almacen, usuario)
 
-        with pytest.raises(ValueError, match='no te pertenece'):
+        with pytest.raises(ValueError, match='no le pertenece'):
             confirmar_reposicion(
                 tarea_id=tarea_dict['id'],
                 abastecedor_id=9999,  # otro usuario

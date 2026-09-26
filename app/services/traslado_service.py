@@ -339,7 +339,7 @@ class TrasladoService:
         if sin_unidad:
             raise ValueError(
                 f'Productos sin Unidad de Negocio configurada: {", ".join(sin_unidad)}. '
-                f'Asignala en Siesa → Unidades de negocio y volvé a aprobar.'
+                f'Asígnela en Siesa → Unidades de negocio y vuelva a aprobar.'
             )
 
         s.siesa_error = None
@@ -686,7 +686,7 @@ class TrasladoService:
         if s.siesa_salida_consec and s.estado in (EstadoTraslado.EN_TRANSITO, EstadoTraslado.ENTREGADA):
             raise ValueError(
                 f'Despacho ya registrado en Siesa (consec={s.siesa_salida_consec}). '
-                f'Si necesitas reintentar, usa el endpoint de reintento.'
+                f'Si necesita reintentar, use el endpoint de reintento.'
             )
         # Guard STS duplicado: el packing closer ya encoló un job DESPACHO_TRASLADO activo.
         # Si admin presiona "Despachar" mientras el job async aún no termina (solicitud sigue
@@ -884,8 +884,8 @@ class TrasladoService:
                     else:
                         s.siesa_error = (
                             'AVISO: 173076 enviado correctamente a Siesa pero el WMS no pudo '
-                            'leer el consecutivo. Usa WMS Admin → Traslados → Reintentar despacho '
-                            'para forzar el recovery, o cárgalo manualmente.'
+                            'leer el consecutivo. Use WMS Admin → Traslados → Reintentar despacho '
+                            'para forzar el recovery, o cárguelo manualmente.'
                         )
                         logger.error(
                             '[TRASLADO] %s: 173076 OK pero consecutivo null y recovery fallido — '
@@ -1608,11 +1608,11 @@ class TrasladoService:
         ]
         if excesos:
             detalle = '; '.join(
-                f'ítem {i}: contaste {rec} y se enviaron {env}'
+                f'ítem {i}: se contaron {rec} y se enviaron {env}'
                 for i, rec, env in excesos[:5])
             raise ValueError(
                 f'No se puede recibir más de lo que se envió. {detalle}. '
-                f'Revisá el conteo — si la mercancía de más existe de verdad, '
+                f'Revise el conteo — si la mercancía de más existe de verdad, '
                 f'entró por otra vía y hay que registrarla aparte, no sumarla '
                 f'a este traslado.')
 
@@ -2200,8 +2200,8 @@ class TrasladoService:
             codigo, str(res)[:500])
         return None, (
             'AVISO: 173079 enviado correctamente a Siesa pero el WMS no pudo '
-            'leer el consecutivo. Usa WMS Admin → Traslados → Reintentar recepción '
-            'para forzar el recovery, o cárgalo manualmente.'
+            'leer el consecutivo. Use WMS Admin → Traslados → Reintentar recepción '
+            'para forzar el recovery, o cárguelo manualmente.'
         )
 
     # ── Cache stock Siesa — proceso-nivel, TTL 5 min por bodega ─────────────────

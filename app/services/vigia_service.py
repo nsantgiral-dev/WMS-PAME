@@ -1187,7 +1187,7 @@ def _verificar_insumos(canon, insumos):
             'no_verificable': True,
             'observado': None,
             'fallos': [],
-            'aviso': ('El canon no tiene SHA-256 registrados. Regístralos con '
+            'aviso': ('El canon no tiene SHA-256 registrados. Regístrelos con '
                       'scripts/registrar_canon_insumos.py sobre los TXT originales; '
                       'sin ellos la prueba 2 no puede distinguir un fallo de tubería '
                       'de un cambio de insumos.'),
@@ -1201,7 +1201,7 @@ def _verificar_insumos(canon, insumos):
             'observado': None,
             'fallos': [],
             'aviso': ('Canon con insumos registrados, pero no se pasaron archivos '
-                      'para comparar. Usa --insumos <archivos.txt>.'),
+                      'para comparar. Use --insumos <archivos.txt>.'),
         }
 
     hallados, desconocidos = {}, []

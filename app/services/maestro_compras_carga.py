@@ -115,7 +115,7 @@ def leer_archivo(nombre: str, contenido: bytes) -> list:
         try:
             import openpyxl
         except ImportError:
-            raise ValueError('El servidor no tiene openpyxl para leer Excel: subí un CSV')
+            raise ValueError('El servidor no tiene openpyxl para leer Excel: suba un CSV')
         try:
             wb = openpyxl.load_workbook(io.BytesIO(contenido), read_only=True, data_only=True)
         except Exception as e:
@@ -131,7 +131,7 @@ def leer_archivo(nombre: str, contenido: bytes) -> list:
             salida.append({enc[i]: fila[i] for i in range(min(len(enc), len(fila))) if enc[i]})
         return salida
     if nombre and not nombre.endswith(('.csv', '.txt')):
-        raise ValueError('Formato no soportado: subí un .csv o un .xlsx')
+        raise ValueError('Formato no soportado: suba un .csv o un .xlsx')
     try:
         texto = contenido.decode('utf-8-sig')
     except UnicodeDecodeError:
@@ -623,11 +623,11 @@ def marca_desde_siesa(aplicar_=False, usuario_id=None) -> dict:
     vig = lectura_vigente()
     if vig is None:
         return {'sin_lectura': 'Todavía no hay una lectura completa de la marca de Siesa: '
-                               'tocá «Leer de Siesa» y volvé en unos minutos.',
+                               'toque «Leer de Siesa» y vuelva en unos minutos.',
                 'estado': estado_lectura_marca()}
     if vig['plan'] != plan:
         return {'sin_lectura': f'La última lectura completa es del plan {vig["plan"]} y '
-                               f'SIESA_CRITERIO_MARCA dice {plan}: volvé a leer.',
+                               f'SIESA_CRITERIO_MARCA dice {plan}: vuelva a leer.',
                 'estado': estado_lectura_marca()}
     lecturas = MarcaSiesaLectura.query.filter_by(plan=plan,
                                                  registro_id=vig['registro_id']).all()

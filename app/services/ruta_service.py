@@ -409,7 +409,7 @@ class RutaService:
         if not m:
             raise LookupError('Ruta maestra no encontrada')
         if RutaDespacho.query.filter_by(ruta_maestra_id=id).first():
-            raise ConflictError('No se puede eliminar: la ruta tiene viajes asociados. Desactívala en su lugar.')
+            raise ConflictError('No se puede eliminar: la ruta tiene viajes asociados. Desactívela en su lugar.')
         registrar_accion('ELIMINAR', m, usuario_id=usuario_id, motivo=motivo,
                          antes={**foto_fila(m), 'paradas': [foto_fila(p) for p in m.paradas]})
         for p in m.paradas:
@@ -645,7 +645,7 @@ class RutaService:
             if cobro['origen'] != _cp.MAESTRO:
                 informe.append({**base, 'clave': 'cobro_supuesto',
                                 'texto': 'Sin condición de pago conocida: el conductor la '
-                                         'cobra como contado. Confirmala con el asesor.'})
+                                         'cobra como contado. Confírmela con el asesor.'})
             # Cartera (G3): autorizado, convertido a contado o retenido. Sin red.
             from app.services.cartera_service import informe_de_tarea as _inf_cartera
             informe.extend(_inf_cartera(t, base))
@@ -671,7 +671,7 @@ class RutaService:
                 if saldada is True:
                     informe.append({**base, 'clave': 'fe_saldada',
                                     'texto': 'La cartera de Siesa dice que esta factura ya '
-                                             'está pagada: no la cobres otra vez.'})
+                                             'está pagada: no la cobre otra vez.'})
         return informe
 
     @staticmethod
@@ -757,7 +757,7 @@ class RutaService:
         if sin_confirmar > 0:
             raise ValueError(
                 f'Faltan {sin_confirmar} bulto{"s" if sin_confirmar != 1 else ""} por confirmar. '
-                f'Escanéalos en el muelle antes de cerrar la ruta.'
+                f'Escanéelos en el muelle antes de cerrar la ruta.'
             )
 
         # La ruta no sale con un bulto cuya caja no tiene remisión y factura
@@ -890,7 +890,7 @@ class RutaService:
     def mis_rutas(usuario_id: int) -> dict:
         conductor = Conductor.query.filter_by(usuario_id=usuario_id, activo=True).first()
         if not conductor:
-            raise LookupError('Tu cuenta no está vinculada a ningún conductor')
+            raise LookupError('Su cuenta no está vinculada a ningún conductor')
 
         rutas = (RutaDespacho.query
                  .options(
@@ -1709,7 +1709,7 @@ class RutaService:
                     raise ValueError(
                         'Esta factura se cobra al entregar (contado contraentrega): no '
                         'se puede registrar como crédito ni exento. Si el cliente no '
-                        'pagó, marcá Rechazado → «No pagó» (la mercancía vuelve).')
+                        'pagó, marque Rechazado → «No pagó» (la mercancía vuelve).')
                 if estado_entrega == EstadoEntrega.ENTREGADO:
                     _monto_e = float(data.get('monto_cobrado') or 0)
                     _desc_e = float(data.get('monto_descuento') or 0)
@@ -1721,8 +1721,8 @@ class RutaService:
                                          _monto_e + _desc_e < _valor_e - tope_diferencia_recaudo()):
                         raise ValueError(
                             'Esta factura se cobra al entregar y el monto no alcanza el '
-                            'valor de la factura. Si el cliente no pagó, marcá «No pagó»; '
-                            'si pagó una parte, marcá Parcial y ajustá lo entregado.')
+                            'valor de la factura. Si el cliente no pagó, marque «No pagó»; '
+                            'si pagó una parte, marque Parcial y ajuste lo entregado.')
             else:
                 from app.services.connekta_gateway import connekta as _cx_r
                 if _cp_r.regla_anterior_rechaza_credito(
@@ -1730,7 +1730,7 @@ class RutaService:
                         _cx_r.cond_pago_ventas, _cx_r.cond_pago_ruta):
                     raise ValueError(
                         'Este pedido se cobra en la entrega: no se puede registrar '
-                        'como crédito. Si el cliente no pagó, marcá Rechazado y elegí '
+                        'como crédito. Si el cliente no pagó, marque Rechazado y elija '
                         'el motivo — ahí queda registrado si la mercancía volvió o se '
                         'quedó con él.')
 
@@ -1750,7 +1750,7 @@ class RutaService:
             from app.services import motivos_rechazo as _mr
             if not _mr.valido(data.get('motivo_rechazo')):
                 raise ValueError(
-                    'Elegí el motivo del rechazo de la lista — el texto libre '
+                    'Elija el motivo del rechazo de la lista — el texto libre '
                     'no dice si la mercancía volvió al camión')
             if not (data.get('observaciones') or '').strip():
                 raise ValueError('El detalle del rechazo es obligatorio')
@@ -1850,22 +1850,22 @@ class RutaService:
         if _exige and _cobra and _sr.requiere_comprobante(forma_pago) and _monto_cobrado > 0:
             if not referencia_pago:
                 raise ValueError(
-                    'Escribí la referencia del comprobante (al menos los últimos '
+                    'Escriba la referencia del comprobante (al menos los últimos '
                     f'{_sr.MIN_REFERENCIA} dígitos): sin ella el pago no se puede '
                     'cruzar contra el banco')
             if not (foto_comprobante or (_previo and _previo.foto_comprobante)):
-                raise ValueError('Tomale una foto al comprobante del pago')
+                raise ValueError('Tómele una foto al comprobante del pago')
 
         if _exige and estado_entrega == EstadoEntrega.ENTREGADO_SIN_PAGO:
             if not (foto or (_previo and _previo.foto_entrega)):
                 raise ValueError(
-                    'Si el cliente se quedó con la mercancía sin pagar, tomá una foto '
+                    'Si el cliente se quedó con la mercancía sin pagar, tome una foto '
                     '(la mercancía en el local o la fachada)')
             _geo_previo = (_EntregaGeo.query.filter_by(recaudo_id=_previo.id).first()
                            if _previo else None)
             if not (_sr.geo_fue_intentado(data.get('geo')) or _geo_previo is not None):
                 raise ValueError(
-                    'Tocá «Estoy aquí» para registrar la ubicación antes de confirmar')
+                    'Toque «Estoy aquí» para registrar la ubicación antes de confirmar')
 
         # La hora del teléfono, aparte de la del servidor. Nunca la reemplaza.
         _ts_disp = _sr.leer_ts(data.get('ts_dispositivo'))
@@ -2336,7 +2336,7 @@ class RutaService:
             raise ValueError(
                 f'credito_no_autorizado: {len(_sin_aut)} parada'
                 f'{"s" if len(_sin_aut) != 1 else ""} de contado contraentrega '
-                f'sin plata y sin autorización ({_peds}). Cobralas o autorizalas como '
+                f'sin plata y sin autorización ({_peds}). Cóbrelas o autorícelas como '
                 f'crédito con una razón antes de liquidar.')
 
         from app.services import devolucion_ruta as _dr_lq
@@ -2349,7 +2349,7 @@ class RutaService:
                     f'devoluciones_sin_contar: {len(_sin_contar)} parada'
                     f'{"s" if len(_sin_contar) != 1 else ""} rechazada/parcial con la '
                     f'mercancía sin contar en bodega ({_peds}). Recepción la cuenta en '
-                    f'«Llegó el camión»; si hay que liquidar igual, forzá con un motivo.')
+                    f'«Llegó el camión»; si hay que liquidar igual, fuerce la liquidación con un motivo.')
             motivo_devoluciones = motivo_obligatorio(
                 motivo_devoluciones, 'liquidar con devoluciones sin contar')
             registrar_accion(

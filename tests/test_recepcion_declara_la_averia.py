@@ -341,7 +341,7 @@ def test_no_se_declara_averia_sobre_lo_que_no_se_conto(db, setup):
     RecepcionService.iniciar(rec.id, setup['usuario'].id)
     with pytest.raises(ValueError) as e:
         RecepcionService.declarar_averia(rec.id, setup['producto'].id, 5)
-    assert 'Escanealo primero' in str(e.value)
+    assert 'Escanéelo primero' in str(e.value)
 
 
 def test_la_averia_declarada_despues_no_puede_superar_lo_recibido(db, setup):

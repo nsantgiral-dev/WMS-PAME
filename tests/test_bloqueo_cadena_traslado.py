@@ -209,7 +209,7 @@ class TestElMensajeLlegaAntesQueElCHECK:
                 items_recibidos=[{'id': it.id, 'cantidad_recibida': 90}])
         msg = str(e.value)
         assert 'más de lo que se envió' in msg
-        assert 'contaste 90' in msg and 'se enviaron 5' in msg, (
+        assert 'se contaron 90' in msg and 'se enviaron 5' in msg, (
             f'el mensaje no dice qué ítem ni cuánto: {msg}')
 
     def test_recibir_de_MENOS_sigue_funcionando(self, db, almacen):

@@ -235,7 +235,7 @@ def sync_ubicaciones_desde_siesa(app=None, bodega_id: str = None, en_hilo: bool 
     global _sync_estado
 
     if _sync_estado['en_curso']:
-        return {'advertencia': 'Sync ya en curso — espera que termine'}
+        return {'advertencia': 'Sync ya en curso — espere a que termine'}
 
     _sync_estado['en_curso'] = True
     _sync_estado['ultimo_inicio'] = datetime.now(timezone.utc).isoformat()

@@ -1255,7 +1255,7 @@ def iniciar_carga_inventario(app, forzar: bool = False, bodega: str = None):
     estado = _estado_carga_bodega(bod)
 
     if estado['en_curso']:
-        return {'en_curso': True, 'mensaje': f'Carga de {bod} ya en proceso — espera que termine'}
+        return {'en_curso': True, 'mensaje': f'Carga de {bod} ya en proceso — espere a que termine'}
 
     if connekta.modo_simulacion:
         return {'simulado': True, 'mensaje': 'Modo simulación — conecta credenciales Siesa'}
@@ -1277,7 +1277,7 @@ def iniciar_carga_inventario(app, forzar: bool = False, bodega: str = None):
                     'mensaje': (
                         f'Carga de {bod} abortada: hay {picks_activos} picking(s) y {packs_activos} packing(s) activos '
                         f'en ese almacén. La carga sobreescribiría el stock reservado. '
-                        f'Usa ?forzar=true solo si estás seguro.'
+                        f'Use ?forzar=true solo si está seguro.'
                     ),
                     'picks_activos': picks_activos,
                     'packs_activos': packs_activos,
@@ -2044,7 +2044,7 @@ def iniciar_reconciliacion(app):
         return {'simulado': True}
 
     if _estado_reconciliacion['en_curso']:
-        return {'en_curso': True, 'mensaje': 'Reconciliación ya en proceso — espera que termine'}
+        return {'en_curso': True, 'mensaje': 'Reconciliación ya en proceso — espere a que termine'}
 
     _estado_reconciliacion['en_curso'] = True
     _estado_reconciliacion['ultimo_inicio'] = datetime.now(timezone.utc)
@@ -2166,7 +2166,7 @@ def iniciar_setup_inicial(app):
 
     if _estado_setup['en_curso']:
         return {'en_curso': True, 'fase': _estado_setup['fase'],
-                'mensaje': 'Setup ya en proceso — espera que termine'}
+                'mensaje': 'Setup ya en proceso — espere a que termine'}
 
     if connekta.modo_simulacion:
         return {'simulado': True, 'mensaje': 'Modo simulación — conecta credenciales Siesa'}

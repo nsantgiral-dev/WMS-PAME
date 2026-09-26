@@ -169,7 +169,7 @@ class FacturaService:
     </tbody>
   </table>
 
-  {'<div class="obs"><strong>⚠ Diferencias detectadas</strong> — revisa los ítems marcados en amarillo.</div>' if tiene_diferencias else ''}
+  {'<div class="obs"><strong>⚠ Diferencias detectadas</strong> — revise los ítems marcados en amarillo.</div>' if tiene_diferencias else ''}
 
   <div class="section-title">Bultos / Piezas físicas</div>
   <table>

@@ -273,12 +273,12 @@ class DevolucionClienteService:
                 raise ValueError(
                     f'El pedido {tarea.numero_pedido_siesa} tiene la devolución de ruta '
                     f'{activa.codigo} ({activa.estado}) sin contar: lo que trajo el cliente '
-                    f'se cuenta en esa — ábrela desde «Llegó el camión». Una devolución '
+                    f'se cuenta en esa — ábrala desde «Llegó el camión». Una devolución '
                     f'nueva reingresaría las mismas unidades dos veces.')
 
         lineas_validas = [l for l in lineas if float(l.get('cantidad_devuelta') or 0) > 0]
         if not lineas_validas and not es_de_ruta:
-            raise ValueError('Debes indicar al menos una línea con cantidad devuelta > 0')
+            raise ValueError('Debe indicar al menos una línea con cantidad devuelta > 0')
 
         ya = ya_devuelto_de_la_factura(tipo_docto_fe, consec_fe)
         for l in lineas_validas:
@@ -507,8 +507,8 @@ class DevolucionClienteService:
         if not any(float(l.cantidad_devuelta or 0) > 0 for l in devolucion.lineas):
             if not devolucion.es_de_ruta:
                 raise ValueError(
-                    'Ajustaste todas las líneas a 0 — si el cliente no devolvió nada, '
-                    'cancela esta devolución en vez de confirmarla vacía'
+                    'Ajustó todas las líneas a 0 — si el cliente no devolvió nada, '
+                    'cancele esta devolución en vez de confirmarla vacía'
                 )
             # ── FALTANTE TOTAL: el conductor dijo que volvía y no volvió nada ──
             # No es un error de captura ni algo que se cancele: es el dato. Se
@@ -531,7 +531,7 @@ class DevolucionClienteService:
                 raise ValueError(
                     f'{", ".join(sin_linea)}: no está en la factura '
                     f'{devolucion.tipo_docto_fe}-{devolucion.consec_fe}. No puede entrar a la '
-                    f'nota crédito — déjala en 0 (si volvió, es mercancía de otro documento).')
+                    f'nota crédito — déjela en 0 (si volvió, es mercancía de otro documento).')
 
         # [C6] Re-GET a Siesa ANTES de tomar row-locks de inventario — revalida
         # que lo contado no exceda lo facturado ahora mismo (el dato pudo cambiar

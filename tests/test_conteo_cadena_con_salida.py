@@ -244,7 +244,7 @@ class TestSoloSeCorrigeLaRaizYaContada:
         assert _s(db, cc2).estado == 'DESCUADRE'
         r = self._editar(app, client, tienda, cc2, 10)
         assert r.status_code == 409, r.get_json()
-        assert 'Corregí la raíz' in r.get_json()['error']
+        assert 'Corrija la raíz' in r.get_json()['error']
         assert _s(db, cc2).cantidad_fisica == 8
 
     def test_la_raiz_contada_si_y_la_pantalla_lo_sabe(self, app, client, db, siesa, tienda):

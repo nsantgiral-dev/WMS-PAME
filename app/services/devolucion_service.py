@@ -376,7 +376,7 @@ def confirmar_ubicacion(tarea_id: int, ubicacion_codigo: str, recepcionista_id: 
             raise ValueError(
                 f'El producto (id={tarea.producto_id}) no tiene código Siesa configurado. '
                 'El traslado a bodega de averías no puede enviarse a Siesa sin ese código. '
-                'Configura el campo codigo_siesa en el catálogo de productos antes de confirmar.'
+                'Configure el campo codigo_siesa en el catálogo de productos antes de confirmar.'
             )
         job_dlq = SiesaJob.encolar(
                 tipo='TRASLADO_AVERIAS',

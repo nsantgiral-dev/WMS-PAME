@@ -574,8 +574,8 @@ def eliminar_cuerpo(almacen_id: int, pasillo: str, fila: int, cuerpo: int, forza
             detalle = '; '.join(f'{codigo} {motivo}' for codigo, motivo in bloqueados.items())
             raise ValueError(
                 f'No se puede eliminar el cuerpo — {len(bloqueados)} de {len(ubicaciones)} '
-                f'hueco(s) lo bloquean: {detalle}. Usa "Reclasificar > Desactivar cuerpo" '
-                f'si necesitas retirarlo sin perder el historial.'
+                f'hueco(s) lo bloquean: {detalle}. Use "Reclasificar > Desactivar cuerpo" '
+                f'si necesita retirarlo sin perder el historial.'
             )
 
     codigos = [ub.codigo for ub in ubicaciones]
@@ -819,7 +819,7 @@ def editar_cuerpo(almacen_id: int, pasillo: str, fila: int, cuerpo: int,
     if len(zonas) > 1:
         raise ValueError(
             f'el cuerpo tiene huecos de más de una zona ({", ".join(sorted(z or "?" for z in zonas))}) '
-            f'— reclasificá el cuerpo completo antes de remodularlo')
+            f'— reclasifique el cuerpo completo antes de remodularlo')
     tipo_zona = ubicaciones[0].tipo_zona
     tipo_mueble = ubicaciones[0].tipo or 'estanteria'
 
@@ -847,8 +847,8 @@ def editar_cuerpo(almacen_id: int, pasillo: str, fila: int, cuerpo: int,
         detalle = '; '.join(bloqueados)
         raise ValueError(
             f'No se puede remodular — {len(bloqueados)} de {len(ubicaciones)} hueco(s) '
-            f'con historial real: {detalle}. Usa "Reclasificar > Desactivar cuerpo" '
-            f'si necesitas retirarlo sin perder el historial.'
+            f'con historial real: {detalle}. Use "Reclasificar > Desactivar cuerpo" '
+            f'si necesita retirarlo sin perder el historial.'
         )
 
     # Devolver stock físico de cada hueco a SIESA-GENERAL antes de borrar
@@ -971,7 +971,7 @@ def asignar_producto(ubicacion_id: int, producto_id: int, cantidad: int, usuario
         if otra_ub:
             raise ValueError(
                 f'{producto.codigo} ya tiene un slot de {ubicacion.tipo_zona} asignado en {otra_ub.codigo} '
-                f'— libéralo antes de asignar uno nuevo'
+                f'— libérelo antes de asignar uno nuevo'
             )
 
         capacidad_efectiva = capacidad_maxima if capacidad_maxima is not None else ubicacion.capacidad_maxima
@@ -1088,8 +1088,8 @@ def _motivo_stock_no_reubicable(ubicacion_id: int) -> str | None:
     if stock <= 0:
         return None
     return (f'tiene {stock} unidad(es) en una zona no vendible '
-            f'({ub.tipo_zona}) — vaciálo primero (Inventario → Ajuste) o '
-            f'reclasificá el cuerpo a inactivo. Remodularlo mandaría esa '
+            f'({ub.tipo_zona}) — vacíelo primero (Inventario → Ajuste) o '
+            f'reclasifique el cuerpo a inactivo. Remodularlo mandaría esa '
             f'mercancía al bucket vendible.')
 
 
@@ -1153,7 +1153,7 @@ def reclasificar_ubicacion(ubicacion_id: int, tipo_zona: str = None,
             partes.append(f'{tareas_reposicion} tarea(s) de Reposición')
         raise ValueError(
             f'{ubicacion.codigo} tiene {" y ".join(partes)} pendiente(s) — '
-            f'complétalas o cancélalas antes de reclasificar o desactivar esta ubicación'
+            f'complételas o cancélelas antes de reclasificar o desactivar esta ubicación'
         )
 
     if liberar_slot:

@@ -205,7 +205,7 @@ class TestNoLoEncontreNoEsUnCero:
         assert r['tareas_creadas'] == 0, 'abrió otra cadena al lado de la bloqueada'
 
     def test_otro_problema_exige_decir_cual(self, db, tienda, conteo):
-        with pytest.raises(ValueError, match='Contá qué pasó'):
+        with pytest.raises(ValueError, match='Cuente qué pasó'):
             _svc().bloquear_conteo(conteo, tienda['a'].id, 'OTRO', '  ')
         _svc().bloquear_conteo(conteo, tienda['a'].id, 'OTRO', 'estante roto')
         assert _sesion(db, conteo).motivo_edicion == '[OTRO] estante roto'

@@ -335,7 +335,7 @@ class PackingService:
                 'diferencia': i.diferencia()
             } for i in items_con_diferencia]
             raise ValueError({
-                'mensaje': 'Hay diferencias en el packing. Usa forzar=true para confirmar de todas formas.',
+                'mensaje': 'Hay diferencias en el packing. Use forzar=true para confirmar de todas formas.',
                 'diferencias': diferencias
             })
 
@@ -422,7 +422,7 @@ class PackingService:
             from app.models.bulto import Bulto as _BultoCheck
             bultos_previos = _BultoCheck.query.filter_by(tarea_id=tarea_id).all()
             if not bultos_previos:
-                raise ValueError('Debes declarar al menos una pieza')
+                raise ValueError('Debe declarar al menos una pieza')
             total = len(bultos_previos)
         else:
             total = sum(int(b.get('cantidad', 1)) for b in bultos_data)
@@ -548,7 +548,7 @@ class PackingService:
             if not i.producto.codigo_siesa:
                 raise ValueError(
                     f'Producto {i.producto.codigo} (id={i.producto_id}) no tiene codigo_siesa. '
-                    'Configura el campo en el catálogo de productos antes de cerrar packing.'
+                    'Configure el campo en el catálogo de productos antes de cerrar packing.'
                 )
             codigo = i.producto.codigo_siesa
             # Buscar el ID interno de Siesa para este producto en este pedido
@@ -586,13 +586,13 @@ class PackingService:
         if not tarea.tipo_docto_pedido_siesa:
             raise ValueError(
                 f'Tarea {tarea_id} no tiene tipo_docto_pedido_siesa — '
-                'el pedido no tiene datos Siesa válidos. Contacta al administrador.'
+                'el pedido no tiene datos Siesa válidos. Contacte al administrador.'
             )
         # [A14] Validar consec_docto_pedido_siesa — sin consecutivo, Siesa no puede localizar el pedido
         if not tarea.consec_docto_pedido_siesa:
             raise ValueError(
                 f'Tarea {tarea_id} no tiene consec_docto_pedido_siesa — '
-                'el pedido no tiene consecutivo Siesa válido. Contacta al administrador.'
+                'el pedido no tiene consecutivo Siesa válido. Contacte al administrador.'
             )
 
         # TRIGGER A SIESA — 238925 FacturaPedido → factura FE + remisión automática
@@ -705,7 +705,7 @@ class PackingService:
         if job_activo is not None and retenido is None:
             raise ValueError(
                 f'No se puede cancelar — hay un job Siesa {job_activo.estado} (id={job_activo.id}). '
-                'Espera a que termine o falle definitivamente antes de cancelar.'
+                'Espere a que termine o falle definitivamente antes de cancelar.'
             )
         if retenido is not None:
             from app.services import cartera_service as _cartera
@@ -776,7 +776,7 @@ class PackingService:
         if bultos_entregados:
             raise ValueError(
                 f'No se puede resetear: {bultos_entregados} bulto(s) ya entregados al cliente. '
-                'Usa el retry de Siesa en su lugar.'
+                'Use el reintento de Siesa en su lugar.'
             )
 
         _motivo = motivo or 'Reset tras fallo de Siesa: redeclarar piezas'

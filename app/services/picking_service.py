@@ -691,7 +691,7 @@ class PickingService:
             u = _U.query.get(usuario_id)
             es_supervision = u and u.rol in ('admin', 'supervisor', 'jefe_almacen')
             if not es_supervision:
-                raise ValueError('No puedes confirmar una tarea asignada a otro operario')
+                raise ValueError('No puede confirmar una tarea asignada a otro operario')
 
         if cantidad_recogida > tarea.cantidad_solicitada:
             raise ValueError('Cantidad recogida supera la solicitada')
@@ -991,7 +991,7 @@ class PickingService:
         except (TypeError, ValueError):
             almacen_id = None
         if not pedido or not almacen_id:
-            raise ValueError('Indicá el pedido y el almacén')
+            raise ValueError('Indique el pedido y el almacén')
         tareas = (TareaPicking.query
                   .filter(PickingService._filtro_devolvible_al_estante(),
                           TareaPicking.referencia_documento == pedido,
@@ -1455,7 +1455,7 @@ class PickingService:
         if not tarea:
             raise ValueError(f'Tarea picking {tarea_id} no encontrada')
         if tarea.operario_id != operario_id:
-            raise PermissionError('Esta tarea no te pertenece')
+            raise PermissionError('Esta tarea no le pertenece')
         if tarea.estado not in (EstadoPicking.EN_PROCESO, EstadoPicking.PENDIENTE):
             raise ValueError(
                 f'Solo se puede reportar problema en tareas EN_PROCESO o PENDIENTE '

@@ -43,7 +43,7 @@ class ConnektaTrasladosGateway:
         if not core.tipo_docto_req_traslado:
             raise ValueError(
                 'SIESA_TIPO_DOCTO_TRASLADO no está configurado. '
-                'Agrega la variable en Railway con el código de tipo de documento '
+                'Agregue la variable en Railway con el código de tipo de documento '
                 'de requisición para transferir en Siesa '
                 '(Inventarios → Tipos de documento → clase 75).'
             )

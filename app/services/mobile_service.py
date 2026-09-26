@@ -859,7 +859,7 @@ class MobileService:
         # CC2/CC3) o en una sesión ya cerrada (MATCH, DESCUADRE, AJUSTADO — ya
         # enviada a Siesa), sobrescribiendo cantidad_fisica en silencio.
         if sesion.operario_id and sesion.operario_id != operario_id:
-            raise ValueError('Esta sesión de conteo no está asignada a ti')
+            raise ValueError('Esta sesión de conteo no está asignada a usted')
         if sesion.estado not in (EstadoConteo.PENDIENTE, EstadoConteo.EN_PROCESO):
             raise ValueError(f'No se puede escanear ni contar en un conteo con estado {sesion.estado}')
         # CC3 (conteo definitivo) nace sin dueño a propósito — sin este
@@ -952,7 +952,7 @@ class MobileService:
                     raise ValueError(
                         f'Pedido {tarea.referencia_documento} fue anulado en Siesa '
                         f'(estado={_pk_anulado.pedido_estado_siesa_detectado or "?"}). '
-                        f'Detén el picking y contacta a tu supervisor.'
+                        f'Detenga el picking y contacte a su supervisor.'
                     )
 
             producto = tarea.producto
@@ -962,7 +962,7 @@ class MobileService:
             if codigo_limpio not in MobileService._codigos_validos(producto):
                 raise ValueError({
                     'tipo': 'PRODUCTO_INCORRECTO',
-                    'mensaje': f'Escaneaste {codigo_limpio} pero la tarea pide {producto.codigo}',
+                    'mensaje': f'Escaneó {codigo_limpio} pero la tarea pide {producto.codigo}',
                     'esperado': producto.codigo,
                     'escaneado': codigo_limpio
                 })
@@ -981,7 +981,7 @@ class MobileService:
                 raise ValueError({
                     'tipo': 'EXCESO',
                     'mensaje': (
-                        f'Ya tienes {tarea.cantidad_recogida} de {tarea.cantidad_solicitada}. '
+                        f'Ya tiene {tarea.cantidad_recogida} de {tarea.cantidad_solicitada}. '
                         f'{"Este empaque tiene " + str(factor) + " UND — " if es_empaque else ""}'
                         f'no caben {unidades_este_scan} más.'
                     ),
@@ -1029,7 +1029,7 @@ class MobileService:
             unidad_label = (_unidad_empaque or 'PKG').upper()
 
             if completado:
-                mensaje = '¡Completo! Presiona confirmar'
+                mensaje = '¡Completo! Presione confirmar'
             elif es_empaque:
                 mensaje = f'{cantidad} {unidad_label} = {unidades_este_scan} und  →  {nueva_cantidad}/{_cantidad_solicitada}'
             else:
@@ -1115,7 +1115,7 @@ class MobileService:
             if nueva > item.cantidad_esperada:
                 _unid_label = f'{factor} und' if (not _cant_en_pq and factor > 1) else '1 PQ'
                 raise ValueError(
-                    f'Exceso: ya tienes {actual} de {item.cantidad_esperada} '
+                    f'Exceso: ya tiene {actual} de {item.cantidad_esperada} '
                     f'{"PQ" if _cant_en_pq else "und"} — '
                     f'no caben {unidades} más'
                 )
@@ -1156,8 +1156,8 @@ class MobileService:
             # sumar a ciegas.
             if total_previo is None:
                 raise ValueError(
-                    'Esta pantalla de conteo está desactualizada: cerrá y volvé '
-                    'a abrir la app para seguir contando (lo que ya contaste '
+                    'Esta pantalla de conteo está desactualizada: ciérrela y vuelva '
+                    'a abrir la app para seguir contando (lo que ya contó '
                     'quedó guardado).')
             previo = MobileService._entero_no_negativo(total_previo, 'total_previo')
             cantidad_scan = MobileService._entero_no_negativo(cantidad, 'cantidad')
@@ -1167,7 +1167,7 @@ class MobileService:
 
             producto = sesion.producto
             if codigo_limpio not in MobileService._codigos_validos(producto):
-                raise ValueError(f'Producto incorrecto — escanea {producto.codigo}')
+                raise ValueError(f'Producto incorrecto — escanee {producto.codigo}')
 
             es_empaque, factor, unidades = MobileService._unidades_del_escaneo(
                 producto, codigo_limpio, cantidad_scan)

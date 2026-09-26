@@ -270,7 +270,7 @@ class TestLaEtiquetaDelConductor:
 
     def test_contado(self):
         assert cp.etiqueta_conductor(cp.cobro_contraentrega('C02'))['texto'] == \
-            'Contado contraentrega · C02 (1 día) — cobrá al entregar'
+            'Contado contraentrega · C02 (1 día) — cobre al entregar'
         assert '(8 días)' in cp.etiqueta_conductor(cp.cobro_contraentrega('C03'))['texto']
 
     def test_credito_real(self):

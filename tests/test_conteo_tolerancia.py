@@ -275,7 +275,7 @@ class TestFueraDeToleranciaRecuentoPropio:
         r = _contar(sid, tienda['a'], 7)
         assert r['resultado'] == 'RECONTAR_TU'
         assert set(r) == {'resultado', 'mensaje', 'sesion_id'}, 'a ciegas: nada más'
-        assert 'Recontá este producto con cuidado' in r['mensaje']
+        assert 'Recuente este producto con cuidado' in r['mensaje']
         assert not any(ch.isdigit() for ch in r['mensaje'])
         s = _sesion(db, sid)
         assert (s.estado, s.operario_id) == ('EN_PROCESO', tienda['a'].id)
@@ -434,7 +434,7 @@ class TestAprobacionPorValor:
             assert _un_job(sid)['cantidad'] == 1
             assert _sesion(db, sid).aprobador_id == jefe.id
         else:
-            with pytest.raises(PermissionError, match='supera tu tope'):
+            with pytest.raises(PermissionError, match='supera su tope'):
                 _svc().confirmar_ajuste(sid, jefe.id)
             db.session.rollback()
             assert _jobs(sid) == []
@@ -492,7 +492,7 @@ class TestMovimientoContinuo:
         assert _mover_y_contar(siesa, sid, tienda['a'], 2)['resultado'] == 'RECONTAR'
         r = _mover_y_contar(siesa, sid, tienda['a'], 3)
         assert r['resultado'] == 'BLOQUEADO', r
-        assert 'se está vendiendo mientras contás' in r['mensaje']
+        assert 'se está vendiendo mientras usted cuenta' in r['mensaje']
         s = _sesion(db, sid)
         assert (s.estado, s.motivo_bloqueo) == ('BLOQUEADO', 'MOVIMIENTO_CONTINUO')
         assert [d['motivo'] for d in s.lista_conteos_descartados()] == ['MOVIMIENTO_SIESA'] * 3

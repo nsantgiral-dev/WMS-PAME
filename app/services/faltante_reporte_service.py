@@ -81,7 +81,7 @@ def _enviar_email_faltante(tarea, recogidas, solicitadas, faltante, cod_auditori
           <td>{cod_auditoria}</td></tr>
     </table>
     <p style="color:#666;font-size:12px;margin-top:16px;">
-      Revisa Panel Admin &rarr; Auditor&iacute;as urgentes para gestionar el faltante.
+      Revise Panel Admin &rarr; Auditor&iacute;as urgentes para gestionar el faltante.
     </p>
     """
     texto = (

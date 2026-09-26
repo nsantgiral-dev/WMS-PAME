@@ -583,7 +583,7 @@ def iniciar_sync_background(app, forzar=False):
     ahora = datetime.now(timezone.utc)
 
     if _sync_estado['en_curso']:
-        return {'en_curso': True, 'mensaje': 'Sync ya en proceso — espera que termine'}
+        return {'en_curso': True, 'mensaje': 'Sync ya en proceso — espere a que termine'}
 
     if not forzar:
         ultimo = _sync_estado.get('ultimo_inicio')

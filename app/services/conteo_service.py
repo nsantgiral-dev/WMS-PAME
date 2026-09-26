@@ -38,7 +38,7 @@ class ConteoService:
             raise ValueError('Sesión no encontrada')
 
         if sesion.operario_id and sesion.operario_id != operario_id:
-            raise ValueError('Esta tarea no está asignada a ti')
+            raise ValueError('Esta tarea no está asignada a usted')
 
         if sesion.estado not in ['PENDIENTE', 'EN_PROCESO']:
             raise ValueError(f'Tarea en estado {sesion.estado} — no disponible')
@@ -309,8 +309,8 @@ class ConteoService:
             return {
                 'resultado': 'BLOQUEADO',
                 'motivo_bloqueo': MotivoBloqueoConteo.MOVIMIENTO_CONTINUO,
-                'mensaje': ('Este producto se está vendiendo mientras contás: queda '
-                            'para el líder. Seguí con la próxima tarea.'),
+                'mensaje': ('Este producto se está vendiendo mientras usted cuenta: queda '
+                            'para el líder. Siga con la próxima tarea.'),
                 'sesion_id': sesion.id,
             }
         logger.warning(
@@ -324,7 +324,7 @@ class ConteoService:
         return {
             'resultado': 'RECONTAR',
             'mensaje': ('Recontar: hubo ventas o movimientos de este producto '
-                        'mientras contabas. Este conteo no se usa — vuelve a '
+                        'mientras usted contaba. Este conteo no se usa — vuelva a '
                         'contar desde cero.'),
             'motivo': 'MOVIMIENTO_EN_SIESA',
             'sesion_id': sesion.id,
@@ -365,8 +365,8 @@ class ConteoService:
             f'({tolerancia.get("motivo")}) — recuento propio del operario #{operario_id}')
         return {
             'resultado': 'RECONTAR_TU',
-            'mensaje': ('Recontá este producto con cuidado: revisá otra vez todos '
-                        'los sitios donde puede estar y contá desde cero.'),
+            'mensaje': ('Recuente este producto con cuidado: revise otra vez todos '
+                        'los sitios donde puede estar y cuente desde cero.'),
             'sesion_id': sesion.id,
         }
 
@@ -506,7 +506,7 @@ class ConteoService:
             return ('Este ajuste no tiene costo en la foto de Siesa: no se sabe cuánto '
                     'vale, así que lo aprueba un supervisor o admin')
         if valor > tope:
-            return (f'Este ajuste vale {politica.pesos(valor)} y supera tu tope de '
+            return (f'Este ajuste vale {politica.pesos(valor)} y supera su tope de '
                     f'aprobación de {politica.pesos(tope)}: lo aprueba un supervisor o admin')
         return None
 
@@ -565,7 +565,7 @@ class ConteoService:
                 return ('El conteo definitivo (CC3) solo lo puede tomar un '
                         'supervisor, admin o jefe de almacén')
         if operario_id in ConteoService._operarios_previos_de_la_cadena(sesion):
-            return ('Doble ciego: ya contaste este producto en esta misma cadena '
+            return ('Doble ciego: usted ya contó este producto en esta misma cadena '
                     'de conteo. La verificación la tiene que hacer otra persona.')
         return None
 
@@ -656,8 +656,8 @@ class ConteoService:
         if cantidad_fisica is None:
             raise ValueError(
                 'Falta la cantidad contada: un conteo no se cierra sin que '
-                'alguien diga cuánto contó. Si no encontraste el producto, usá '
-                '«No lo encontré». Si la pantalla no te deja, cerrá y volvé a '
+                'alguien diga cuánto contó. Si no encontró el producto, use '
+                '«No lo encontré». Si la pantalla no lo deja, ciérrela y vuelva a '
                 'abrir la app (está desactualizada).')
         if isinstance(cantidad_fisica, bool):
             raise ValueError('La cantidad contada debe ser un número entero')
@@ -669,8 +669,8 @@ class ConteoService:
             raise ValueError('La cantidad contada no puede ser negativa')
         if cantidad_fisica == 0 and not cero_confirmado:
             raise ValueError(
-                'Contaste 0: confirmá que NO hay ninguna unidad en la bodega. '
-                'Si lo que pasa es que no lo encontraste, usá «No lo encontré».')
+                'Contó 0: confirme que NO hay ninguna unidad en la bodega. '
+                'Si lo que pasa es que no lo encontró, use «No lo encontré».')
         return cantidad_fisica
 
     @staticmethod
@@ -767,14 +767,14 @@ class ConteoService:
             raise ValueError(f'Motivo de bloqueo desconocido: {motivo or "(vacío)"}')
         observaciones = (observaciones or '').strip() or None
         if motivo == MotivoBloqueoConteo.OTRO and not observaciones:
-            raise ValueError('Contá qué pasó: el líder necesita saberlo para decidir')
+            raise ValueError('Cuente qué pasó: el líder necesita saberlo para decidir')
 
         sesion = (SesionConteo.query.filter_by(id=sesion_id)
                   .with_for_update().first())
         if not sesion:
             raise LookupError(f'Sesión de conteo {sesion_id} no encontrada')
         if sesion.operario_id != operario_id:
-            raise PermissionError('Esta sesión de conteo no te está asignada')
+            raise PermissionError('Esta sesión de conteo no le está asignada')
         # Solo conteos activos: impide revertir AJUSTADO → BLOQUEADO.
         if sesion.estado not in (EstadoConteo.PENDIENTE, EstadoConteo.EN_PROCESO):
             raise ValueError(
@@ -793,7 +793,7 @@ class ConteoService:
                        f'{motivo} {observaciones or ""}'.strip())
         return {
             'ok': True,
-            'mensaje': ('Reportado: no lo encontraste. El líder decide si se '
+            'mensaje': ('Reportado: no lo encontró. El líder decide si se '
                         'vuelve a buscar o se cancela — no se ajusta nada.'
                         if motivo == MotivoBloqueoConteo.NO_ENCONTRADO
                         else 'Problema de conteo reportado — el líder lo revisa'),
@@ -902,7 +902,7 @@ class ConteoService:
             if otra:
                 raise ValueError(
                     f'Ya hay otro conteo vivo de este producto ({otra.codigo}, '
-                    f'{otra.estado}). Reabrir este dejaría dos: cancelalo.')
+                    f'{otra.estado}). Reabrir este dejaría dos: cancélelo.')
 
         if operario_id is not None:
             from app.models.usuario import Usuario
@@ -1005,7 +1005,7 @@ class ConteoService:
         if any(n.estado == EstadoConteo.AJUSTANDO for n in nodos):
             raise CadenaNoCancelable(
                 'El ajuste de esta cadena está en vuelo a Siesa: no se cancela '
-                '(puede haber llegado). Esperá a que la cola lo resuelva.')
+                '(puede haber llegado). Espere a que la cola lo resuelva.')
 
         a_cancelar = [n for n in nodos
                       if n.estado in EstadoConteo.MIEMBRO_VIVO
@@ -1040,12 +1040,12 @@ class ConteoService:
         from app.models.conteo import NovedadConteo
         descripcion = (descripcion or '').strip()
         if len(descripcion) < 3:
-            raise ValueError('Describí lo que encontraste (qué es, cuántas, dónde)')
+            raise ValueError('Describa lo que encontró (qué es, cuántas, dónde)')
         sesion = db.session.get(SesionConteo, sesion_id)
         if not sesion:
             raise LookupError('Sesión de conteo no encontrada')
         if sesion.operario_id != operario_id:
-            raise PermissionError('Esta sesión de conteo no te está asignada')
+            raise PermissionError('Esta sesión de conteo no le está asignada')
         nov = NovedadConteo(tipo=NovedadConteo.TIPO_SIN_CODIGO, sesion_id=sesion.id,
                             almacen_id=sesion.almacen_id, reportado_por=operario_id,
                             descripcion=descripcion[:2000], estado=NovedadConteo.ABIERTA)
@@ -1071,7 +1071,7 @@ class ConteoService:
         ConteoService._exigir_supervision(usuario_id)
         nota = (nota or '').strip()
         if not nota:
-            raise ValueError('Contá qué se hizo con la mercancía')
+            raise ValueError('Cuente qué se hizo con la mercancía')
         nov = db.session.get(NovedadConteo, novedad_id)
         if not nov:
             raise LookupError('Novedad no encontrada')
@@ -1116,7 +1116,7 @@ class ConteoService:
         if sesion_pre.estado not in ['PENDIENTE', 'EN_PROCESO']:
             raise ValueError(f'No se puede registrar conteo en estado {sesion_pre.estado}')
         if sesion_pre.operario_id and sesion_pre.operario_id != operario_id:
-            raise ValueError('Esta tarea no está asignada a ti')
+            raise ValueError('Esta tarea no está asignada a usted')
         if sesion_pre.maneja_lote and not lote_id:
             raise ValueError('Este producto maneja lotes. El campo lote_id es obligatorio.')
         ConteoService.verificar_puede_contar(sesion_pre, operario_id)
@@ -1178,7 +1178,7 @@ class ConteoService:
         if sesion.estado not in ['PENDIENTE', 'EN_PROCESO']:
             raise ValueError(f'No se puede registrar conteo en estado {sesion.estado}')
         if sesion.operario_id and sesion.operario_id != operario_id:
-            raise ValueError('Esta tarea no está asignada a ti')
+            raise ValueError('Esta tarea no está asignada a usted')
         # Re-verificado bajo lock: sesion_pre y sesion son lecturas distintas —
         # el mismo criterio que ya aplican estado y ownership dos líneas arriba.
         ConteoService.verificar_puede_contar(sesion, operario_id)
@@ -2564,16 +2564,16 @@ class ConteoService:
         """
         if sesion.es_segundo_conteo:
             return (f'Es un {ConteoService.nivel_en_cadena(sesion)}: la cantidad que '
-                    f'decide es la de la raíz de la cadena. Corregí la raíz.')
+                    f'decide es la de la raíz de la cadena. Corrija la raíz.')
         vivos = ConteoService.descendientes_vivos(sesion)
         if vivos:
             return (f'Este conteo tiene un {ConteoService.nivel_en_cadena(vivos[0])} '
                     f'en curso ({vivos[0].codigo}). Corregir la cantidad lo dejaría '
-                    f'contando para nada: omitilo o cancelá la cadena primero.')
+                    f'contando para nada: omítalo o cancele la cadena primero.')
         if sesion.estado not in ConteoService.ESTADOS_CANTIDAD_CORREGIBLE:
             return (f'Un conteo en {sesion.estado} no tiene una cantidad que corregir: '
                     f'solo se corrige lo ya contado (MATCH o DESCUADRE). Para cerrarlo '
-                    f'sin contar, cancelalo.')
+                    f'sin contar, cancélelo.')
         return None
 
     @staticmethod
@@ -2638,7 +2638,7 @@ class ConteoService:
         """
         from app.models.usuario import Usuario
         if sesion.estado not in ConteoService.ESTADOS_REASIGNABLES:
-            como = ('usá «Reabrir», que lo devuelve con el dueño que elijas'
+            como = ('use «Reabrir», que lo devuelve con el dueño que usted elija'
                     if sesion.estado == EstadoConteo.BLOQUEADO
                     else 'su operario es quien lo contó, y cambiarlo reescribiría '
                          'quién contó (y con eso el doble ciego)')
@@ -3034,7 +3034,7 @@ class ConteoService:
         if not bodega_siesa:
             raise ValueError(
                 f'Almacén {tarea.almacen_id} sin bodega Siesa configurada — '
-                'configúrala en /api/almacenes antes de auditar.'
+                'configúrela en /api/almacenes antes de auditar.'
             )
 
         # La auditoría ES el conteo: la foto se toma ahora, con la misma
@@ -3048,7 +3048,7 @@ class ConteoService:
                 f'Siesa no respondió la existencia de {producto.codigo_siesa} '
                 f'en {bodega_siesa} (o la respondió sin el POS pendiente) — el '
                 f'ajuste de esta auditoría no se manda a ciegas contra el WMS. '
-                f'Reintenta la auditoría cuando Siesa responda.'
+                f'Reintente la auditoría cuando Siesa responda.'
             )
 
         diferencia = cantidad_fisica - foto['teorico']

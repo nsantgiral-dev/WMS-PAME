@@ -375,7 +375,7 @@ def confirmar_reposicion(tarea_id: int, abastecedor_id: int, lpn_codigo_escanead
     if not tarea:
         raise ValueError(f'Tarea reposición {tarea_id} no encontrada')
     if tarea.abastecedor_id != abastecedor_id:
-        raise ValueError('Esta tarea no te pertenece')
+        raise ValueError('Esta tarea no le pertenece')
     if tarea.estado != 'EN_PROCESO':
         raise ValueError(f'Tarea en estado {tarea.estado} — no se puede confirmar')
 

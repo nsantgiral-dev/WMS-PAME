@@ -143,7 +143,7 @@ def validar_parcial_del_conductor(estado_entrega: str, data: dict) -> None:
             raise ValueError(f'Cantidades inválidas en la referencia {it.get("codigo") or "?"}')
     if not devueltas:
         raise ValueError(
-            'Una entrega parcial dice qué volvió: bajá la cantidad entregada de al menos una '
+            'Una entrega parcial dice qué volvió: baje la cantidad entregada de al menos una '
             'referencia. Si no volvió nada, es Entregado.')
 
 
@@ -493,8 +493,8 @@ def vincular_a_factura(devolucion: DevolucionCliente, gateway=None, forzar: bool
         if sin_producto:
             problemas.append(
                 f'La factura {tipo}-{consec} trae {", ".join(sorted(set(sin_producto)))} que no '
-                f'existe(n) en el catálogo del WMS: no se puede recibir ni contar. Sincronizá el '
-                f'catálogo y volvé a abrir la devolución.')
+                f'existe(n) en el catálogo del WMS: no se puede recibir ni contar. Sincronice el '
+                f'catálogo y vuelva a abrir la devolución.')
         nuevas = []
         for f in filas:
             restante = max(0.0, f['cant'] - _ya_devuelto_de_linea(ya, f['rowid'], f['ref']))
@@ -546,7 +546,7 @@ def vincular_a_factura(devolucion: DevolucionCliente, gateway=None, forzar: bool
                 for ln in sin_rowid:
                     avisos.append(f'{ln.codigo_siesa or ln.producto_id}: el conductor lo '
                                   f'declaró y no está en la factura {tipo}-{consec} — '
-                                  f'contalo en 0')
+                                  f'cuéntelo en 0')
                     nuevas.append({'producto_id': ln.producto_id,
                                    'codigo_siesa': ln.codigo_siesa,
                                    'cantidad_facturada': float(ln.cantidad_facturada or 0),
@@ -572,7 +572,7 @@ def vincular_a_factura(devolucion: DevolucionCliente, gateway=None, forzar: bool
                     for ln in sin_rowid]
             declarado_por_producto[str(pid)] = sum(decs)
             avisos.append(f'{sin_rowid[0].codigo_siesa}: va en {len(restantes)} líneas de la '
-                          f'factura (doble unidad) — contá cuánto volvió de cada una')
+                          f'factura (doble unidad) — cuente cuánto volvió de cada una')
             for f in restantes:
                 nuevas.append({**_base(f), 'cantidad_devuelta': 0.0,
                                'cantidad_declarada': None, 'cantidad_averiada': 0.0,
@@ -590,7 +590,7 @@ def vincular_a_factura(devolucion: DevolucionCliente, gateway=None, forzar: bool
             problemas.append(
                 f'{ln.codigo_siesa}: esa línea de la factura ya está en la devolución '
                 f'{ocupada.codigo} ({ocupada.estado}) sin contar. Una línea de factura, una '
-                f'devolución activa: contá o cancelá la otra primero.')
+                f'devolución activa: cuente o cancele la otra primero.')
     if avisos:
         decl['avisos_vinculacion'] = avisos
     if devolucion.declaracion_conductor is not None or decl:
@@ -710,7 +710,7 @@ def escanear_bulto_de_vuelta(ruta_id: int, codigo_barras: str, usuario_id: int) 
     """
     codigo = (codigo_barras or '').strip()
     if not codigo:
-        raise ValueError('Escaneá o escribí el código del bulto')
+        raise ValueError('Escanee o escriba el código del bulto')
     b = Bulto.query.filter_by(codigo_barras=codigo).with_for_update().first()
     if b is None:
         raise LookupError(f'No existe el bulto {codigo}')

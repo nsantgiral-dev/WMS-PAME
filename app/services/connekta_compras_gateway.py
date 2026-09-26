@@ -55,7 +55,7 @@ class ConnektaComprasGateway:
         if not core.tipo_docto_entrada_oc:
             raise ConnektaPayloadInvalido(
                 'SIESA_TIPO_DOCTO_ENTRADA_OC no está configurado en variables de entorno. '
-                'Agrega la variable en Railway con el código de tipo de documento de entrada OC en Siesa.'
+                'Agregue la variable en Railway con el código de tipo de documento de entrada OC en Siesa.'
             )
         # Siesa espera fecha sin guiones: YYYYMMDD (8 chars). f421_fecha_entrega usa YYYY-MM-DD.
         fecha_hoy = core._fecha_hoy_bogota()

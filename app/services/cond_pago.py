@@ -694,14 +694,14 @@ def etiqueta_conductor(cobro: dict) -> dict:
     if origen == MAESTRO:
         plural = 'día' if dias == 1 else 'días'
         if dias == 0:
-            return {'texto': f'Contado contraentrega · {cod} — cobrá al entregar', 'tono': 'ok'}
-        return {'texto': f'Contado contraentrega · {cod} ({dias} {plural}) — cobrá al entregar',
+            return {'texto': f'Contado contraentrega · {cod} — cobre al entregar', 'tono': 'ok'}
+        return {'texto': f'Contado contraentrega · {cod} ({dias} {plural}) — cobre al entregar',
                 'tono': 'ok'}
     if origen == SUPUESTO_DESCONOCIDO:
-        return {'texto': f'Condición {cod} sin días conocidos: cobrá al entregar', 'tono': 'warn'}
+        return {'texto': f'Condición {cod} sin días conocidos: cobre al entregar', 'tono': 'warn'}
     if origen == SIN_MAESTRO:
-        return {'texto': 'Sin tabla de condiciones de pago: cobrá al entregar', 'tono': 'warn'}
-    return {'texto': 'Sin condición de pago: cobrá al entregar', 'tono': 'warn'}
+        return {'texto': 'Sin tabla de condiciones de pago: cobre al entregar', 'tono': 'warn'}
+    return {'texto': 'Sin condición de pago: cobre al entregar', 'tono': 'warn'}
 
 
 # ── La consulta dinámica del maestro (gancho) ─────────────────────────────

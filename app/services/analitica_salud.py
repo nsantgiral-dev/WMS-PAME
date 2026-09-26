@@ -111,8 +111,8 @@ TEXTO_VEREDICTO = {
 
 CONFIABLE, CON_RESERVAS, NO_CONFIABLE = 'CONFIABLE', 'CON_RESERVAS', 'NO_CONFIABLE'
 TEXTO_GLOBAL = {
-    CONFIABLE: 'Podés confiar en los números de hoy',
-    CON_RESERVAS: 'Los números sirven, con reservas: mirá qué fuente falla antes de decidir',
+    CONFIABLE: 'Puede confiar en los números de hoy',
+    CON_RESERVAS: 'Los números sirven, con reservas: mire qué fuente falla antes de decidir',
     NO_CONFIABLE: 'No decidas con estos números todavía',
 }
 
@@ -237,7 +237,7 @@ def _fuente(clave, nombre, veredicto, motivo, que_hacer, *, alimenta, critica=Fa
                      'este proceso. La frescura del dato es la evidencia.'
                      if proceso == 'worker' else
                      'Corre en la web (esencial). Si no figura en este proceso, '
-                     'buscalo en el otro servicio.'),
+                     'búsquelo en el otro servicio.'),
         }
     return {
         'clave': clave,

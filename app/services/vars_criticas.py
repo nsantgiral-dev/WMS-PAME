@@ -242,8 +242,8 @@ def problemas() -> List[dict]:
             'valor_efectivo': valor_efectivo(var),
             'detalle': (
                 f'{var.nombre} está DECLARADA CON VALOR VACÍO. El string vacío '
-                f'desactiva el default ({var.default!r}) sin avisar — borrala '
-                f'del todo o ponele un valor.'
+                f'desactiva el default ({var.default!r}) sin avisar — bórrela '
+                f'del todo o póngale un valor.'
                 if e == VACIA else
                 f'{var.nombre} no está configurada y no tiene default usable.'
             ),

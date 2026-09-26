@@ -91,7 +91,7 @@ def contar_auditorias_urgentes(almacen_id: int) -> int:
 
 MOTIVO_BLOQUEO_TEXTO = {
     'NO_ENCONTRADO': 'No lo encontró',
-    'MOVIMIENTO_CONTINUO': 'Se vendía mientras se contaba (reabrilo en un momento quieto)',
+    'MOVIMIENTO_CONTINUO': 'Se vendía mientras se contaba (reábralo en un momento quieto)',
     'OTRO': 'Otro problema',
     'SIN_MOTIVO_REGISTRADO': 'Sin motivo registrado',
     # Los que mandaba la pantalla vieja de «Reportar problema».
@@ -345,16 +345,16 @@ def _accion_auditoria(raiz: SesionConteo) -> dict:
     while nodos[-1].hijo_conteo is not None:
         nodos.append(nodos[-1].hijo_conteo)
     if any(n.estado == EstadoConteo.BLOQUEADO for n in nodos):
-        return {'tipo': 'VER_BLOQUEADOS', 'texto': 'Bloqueada — decidí en «Conteos bloqueados»',
+        return {'tipo': 'VER_BLOQUEADOS', 'texto': 'Bloqueada — decida en «Conteos bloqueados»',
                 'decide_el_lider': False}
     if raiz.estado == EstadoConteo.DESCUADRE:
-        return {'tipo': 'VER_AJUSTES', 'texto': 'Contada con diferencia — decidí en «Ajustes»',
+        return {'tipo': 'VER_AJUSTES', 'texto': 'Contada con diferencia — decida en «Ajustes»',
                 'decide_el_lider': False}
     if raiz.estado == EstadoConteo.TERCER_CONTEO:
         # Ya está en su bloque («Conteos definitivos por contar»): se cuenta
         # ahí, una vez, como las bloqueadas y las contadas con diferencia.
         return {'tipo': 'VER_DEFINITIVOS',
-                'texto': 'Los dos conteos no coinciden — contá el definitivo en «Conteos definitivos por contar»',
+                'texto': 'Los dos conteos no coinciden — cuente el definitivo en «Conteos definitivos por contar»',
                 'decide_el_lider': False}
     vivo = _nodo_vivo(raiz)
     if raiz.estado == EstadoConteo.SEGUNDO_CONTEO:

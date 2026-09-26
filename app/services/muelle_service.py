@@ -103,7 +103,7 @@ class MuelleService:
         if ya_asignados:
             otra_ruta = next(b.ruta_despacho_id for b in bultos if b.ruta_despacho_id and b.ruta_despacho_id != ruta_id)
             raise ConflictError(
-                f'Los bultos {ya_asignados} ya están asignados a la ruta #{otra_ruta}. Desasígnalos primero.'
+                f'Los bultos {ya_asignados} ya están asignados a la ruta #{otra_ruta}. Desasígnelos primero.'
             )
 
         ahora = datetime.utcnow()
@@ -158,7 +158,7 @@ class MuelleService:
             if bulto.ruta_despacho_id:
                 raise ValueError(f'Bulto planificado para ruta #{bulto.ruta_despacho_id}, no para #{ruta_id}')
             else:
-                raise ValueError('Bulto no ha sido asignado a ninguna ruta. Asígnalo manualmente primero.')
+                raise ValueError('Bulto no ha sido asignado a ninguna ruta. Asígnelo manualmente primero.')
 
         if bulto.estado == EstadoBulto.CARGADO:
             return {

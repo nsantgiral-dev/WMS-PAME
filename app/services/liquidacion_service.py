@@ -169,7 +169,7 @@ def _validar_diferencia_declarada(monto_declarado: float, total_neto: float,
             f'dice ${total_neto:,.2f}{contexto} — una diferencia de '
             f'${diferencia:,.2f}, por encima del residuo de redondeo tolerado '
             f'(${tope:,.2f}). No es una devolución ni hay retención que la '
-            f'explique — decide el monto explícitamente (monto_override) antes '
+            f'explique — decida el monto explícitamente (monto_override) antes '
             f'de continuar.'
         )
 
@@ -704,7 +704,7 @@ class LiquidacionService:
         if _hay_rc_en_cola(recaudo_id):
             raise ValueError(
                 f'Ya hay un Recibo de Caja en cola para el recaudo {recaudo_id} '
-                '— espera a que se procese antes de volver a intentar '
+                '— espere a que se procese antes de volver a intentar '
                 '(evita duplicar el RC)'
             )
 
@@ -958,7 +958,7 @@ class LiquidacionService:
                 raise ValueError(
                     'Retención rechazada y sin monto de descuento declarado ni '
                     'datos de Siesa para verificar cuánto debía pagar el '
-                    'cliente — reintenta cuando Siesa esté disponible'
+                    'cliente — reintente cuando Siesa esté disponible'
                 )
             from app.services.cxc_cruce import TOLERANCIA as _TOL
             if monto < esperado - _TOL:
@@ -996,8 +996,8 @@ class LiquidacionService:
                     'Este recaudo tiene retención Y un SOBRANTE al mismo '
                     'tiempo — esa combinación no está probada contra Siesa '
                     '(el faltante sí: se absorbe en el documento contable de '
-                    'la retención). Registra el cobro por el neto exacto, sin '
-                    'el sobrante, y abónalo aparte.'
+                    'la retención). Registre el cobro por el neto exacto, sin '
+                    'el sobrante, y abónelo aparte.'
                 )
             tope = tope_ajuste_sobrante() if ajuste_es_sobrante else tope_ajuste_faltante()
             if ajuste_abs > tope:
@@ -1541,7 +1541,7 @@ def mensaje_credito_no_autorizado(recaudo, tarea=None) -> str:
     pedido = getattr(tarea, 'numero_pedido_siesa', None) or f'tarea {recaudo.tarea_id}'
     return (f'{CREDITO_NO_AUTORIZADO}: el pedido {pedido} es de contado contraentrega '
             f'({cond}{dias}) y se registró {que} con ${monto:,.0f} cobrados. No se '
-            f'documenta como crédito: cobralo, o autorizalo como crédito con una razón '
+            f'documenta como crédito: cóbrelo, o autorícelo como crédito con una razón '
             f'(queda en la bitácora).')
 
 

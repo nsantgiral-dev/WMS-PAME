@@ -288,7 +288,7 @@ def _run_sync(app):
                         cuerpo_texto=(
                             f'El sync de empaques/barcodes de Siesa falló con error:\n{e}\n\n'
                             'Los empaques y factores de conversión pueden estar desactualizados. '
-                            'Usa POST /api/empaques/sync para disparar manualmente.'
+                            'Use POST /api/empaques/sync para disparar manualmente.'
                         ),
                         cuerpo_html=None,
                     )
