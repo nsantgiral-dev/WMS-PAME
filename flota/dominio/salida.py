@@ -361,7 +361,7 @@ def motivos_de_km(km_conocido: bool, km_dudoso: bool) -> List[Motivo]:
                        'Km sin dato')]
     if km_dudoso:
         return [Motivo('km_en_duda', AMBAR, GESTION, False,
-                       'El último kilometraje está en duda: verificalo contra la foto',
+                       'El último kilometraje está en duda: verifíquelo contra la foto',
                        'Km en duda')]
     return []
 
