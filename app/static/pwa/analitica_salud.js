@@ -218,7 +218,7 @@ function anSaludHtml(d, abierto) {
     <div style="margin-top:6px;">${frescura}</div>
   </div>
   <div class="kpi-grid">
-    ${_anSaludKpi('fuentes', `${_anSaludNum(r.fuentes_al_dia)} de ${_anSaludNum(r.fuentes_total)}`, 'Fuentes al día', 'toca para ver cada una', nivelFuentes)}
+    ${_anSaludKpi('fuentes', `${_anSaludNum(r.fuentes_al_dia)} de ${_anSaludNum(r.fuentes_total)}`, 'Fuentes al día', 'toque para ver cada una', nivelFuentes)}
     ${_anSaludKpi('auditoria', _anSaludNum(r.bloqueantes), 'Hallazgos que bloquean', `${_anSaludNum(r.avisos)} avisos`, nivelAud)}
     ${_anSaludKpi('cola', _anSaludNum(r.jobs_fallidos), 'Envíos a Siesa fallidos', `${_anSaludNum((d.cola_siesa || {}).pendientes)} en cola`, nivelCola)}
     ${_anSaludKpi('cobertura', _anSaludPct(r.cobertura_clave_pct, r.cobertura_clave_n), 'Tareas unidas a su pedido', 'picking y packing del rango', nivelCob)}
