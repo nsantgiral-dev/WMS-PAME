@@ -102,7 +102,7 @@ async function etqBuscarProducto() {
       if (coincidencias.length) {
         resultado.innerHTML = `
           <div style="font-size:var(--fs-xs);color:var(--tx3);margin-bottom:6px;">
-            ${_etqEsc(coincidencias.length)} coincidencia(s) por descripción — elige una:
+            ${_etqEsc(coincidencias.length)} coincidencia(s) por descripción — elija una:
           </div>
           <div style="background:var(--bg-s);border:1px solid var(--brd);border-radius:10px;max-width:480px;overflow:hidden;">
             ${_etqFilasHtml(coincidencias)}
@@ -168,7 +168,7 @@ async function etqBuscarProducto() {
     if (svg) svg.outerHTML =
       '<div style="padding:10px;border:1px dashed #dc2626;border-radius:6px;'
       + 'color:var(--err-tx);font-size:var(--fs-xs);text-align:center;">No cargó el generador '
-      + 'de códigos de barras — recargá la página (Ctrl+F5)</div>';
+      + 'de códigos de barras — recargue la página (Ctrl+F5)</div>';
   }
 }
 
