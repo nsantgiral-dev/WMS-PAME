@@ -66,7 +66,7 @@ function _renderAcuerdos(el, data, calendario) {
   // Lista de acuerdos vigentes
   html += '<div style="font-size:var(--fs-sm);font-weight:700;color:var(--tx);margin-bottom:8px;">Acuerdos vigentes</div>';
   if (acuerdos.length === 0) {
-    html += '<div style="color:var(--tx3);padding:20px;text-align:center;">Sin acuerdos registrados. Negocia con tus 10 proveedores grandes, trimestre a trimestre.</div>';
+    html += '<div style="color:var(--tx3);padding:20px;text-align:center;">Sin acuerdos registrados. Negocie con sus 10 proveedores grandes, trimestre a trimestre.</div>';
   } else {
     html += '<div style="display:flex;flex-direction:column;gap:4px;">';
     for (const a of acuerdos) {
@@ -783,7 +783,7 @@ async function preciosRenderComparador() {
       <button class="btn-flota" style="width:100%;margin-top:8px;"
               onclick="preciosRegistrar()">Registrar cotización</button>
       <p style="font-size:var(--fs-xs);color:var(--tx3);margin:6px 0 0;">
-        Queda con tu nombre y la fecha de hoy. Mueve el costo de este SKU de
+        Queda con su nombre y la fecha de hoy. Mueve el costo de este SKU de
         promedio del kardex a cotización vigente — y eso cambia cómo se ordena
         el contenedor.
       </p>
@@ -794,7 +794,7 @@ async function preciosRegistrar() {
   const p = _PRECIOS_PRODUCTO;
   const prov = parseInt(document.getElementById('precio-prov')?.value, 10);
   const valor = parseFloat(document.getElementById('precio-valor')?.value);
-  if (!p || !Number.isFinite(prov)) { alerta('Elegí el proveedor', 'error'); return; }
+  if (!p || !Number.isFinite(prov)) { alerta('Elija el proveedor', 'error'); return; }
   if (!Number.isFinite(valor) || valor <= 0) { alerta('El precio tiene que ser mayor a cero', 'error'); return; }
 
   const cant = parseInt(document.getElementById('precio-cant')?.value, 10);
@@ -964,7 +964,7 @@ async function repoVerEvidencia(referencia, idFila) {
       ${tramos.length ? ` en ${esc(tramos.length)} racha(s)` : ''}
       ${truncado ? `<div style="color:var(--yellow);margin-top:4px;">
         La consulta devuelve máximo 365 filas y llegó al tope: con varias bodegas
-        esto <b>no cubre el año entero</b>. Lo que ves es la parte más reciente,
+        esto <b>no cubre el año entero</b>. Lo que ve es la parte más reciente,
         no toda la ventana que usó el modelo.</div>` : ''}
     </div>
     ${tramos.length ? `<div style="margin-top:8px;display:flex;flex-wrap:wrap;gap:6px;">
