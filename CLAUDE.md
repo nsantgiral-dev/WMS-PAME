@@ -6620,8 +6620,8 @@ conjunto explícito— no quitaba nada porque la forma también se genera; se
 reemplazó por `podés`).
 
 **`PENDIENTE_OTRO_FRENTE`** — la PWA y `flota/` las pasan a usted otros dos
-agentes en paralelo; quedaron declarados con su número de hallazgos (hoy 413
-en 38 archivos). **Solo encoge, en los dos sentidos:** un archivo que sube se
+agentes en paralelo; quedaron declarados con su número de hallazgos (hoy 452
+en 37 archivos: 296 en 22 de la PWA, 156 en 15 de flota). **Solo encoge, en los dos sentidos:** un archivo que sube se
 pone rojo; uno que baja también, pidiendo actualizar su número o sacarlo. El
 integrador la vacía al juntar los tres frentes; el objetivo es `{}`.
 
