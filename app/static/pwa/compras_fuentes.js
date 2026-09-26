@@ -272,7 +272,7 @@ function fuentesHtmlPrevia(r) {
 function _fuentesFormulario() {
   const tipo = (document.getElementById('fuentes-tipo') || {}).value;
   const input = document.getElementById('fuentes-archivo');
-  if (!input || !input.files || !input.files[0]) { alerta('Elegí un archivo', 'error'); return null; }
+  if (!input || !input.files || !input.files[0]) { alerta('Elija un archivo', 'error'); return null; }
   const fd = new FormData();
   fd.append('tipo', tipo);
   fd.append('archivo', input.files[0]);
@@ -318,7 +318,7 @@ async function fuentesGuardarSku(event) {
   const origen = (document.getElementById('fuentes-sku-origen') || {}).value || '';
   const marca = ((document.getElementById('fuentes-sku-marca') || {}).value || '').trim();
   if (!codigo) { alerta('Falta el código', 'error'); return; }
-  if (!origen && !marca) { alerta('Elegí un origen o escribí una marca', 'error'); return; }
+  if (!origen && !marca) { alerta('Elija un origen o escriba una marca', 'error'); return; }
   await conBotonOcupado(event, async () => {
     try {
       const r = await put('/api/compras/fuentes/producto', { codigo, origen, marca });
@@ -335,12 +335,12 @@ function fuentesHtmlMarcaEstado(e) {
   const vig = e.vigente || null;
   const partes = [];
   if (!e.plan_configurado) partes.push(fuentesAviso('SIESA_CRITERIO_MARCA no está configurada: no se lee nada.', 'info'));
-  if (e.en_curso) partes.push(fuentesAviso('Hay una lectura en curso: volvé a mirar en unos minutos.', 'info'));
+  if (e.en_curso) partes.push(fuentesAviso('Hay una lectura en curso: vuelva a mirar en unos minutos.', 'info'));
   if (ult.ok === false) partes.push(fuentesAviso('La última lectura quedó incompleta y no se guardó: ' + (ult.error || ''), 'warn'));
   partes.push(`<div style="font-size:var(--fs-sm);color:var(--tx2);line-height:1.8;">
       Última lectura: ${esc(fuentesHora(ult.inicio))} ${ult.ok === true ? '· completa' : ult.ok === false ? '· incompleta' : ult.inicio ? '· sin terminar' : ''}
       ${res.items !== undefined ? `· ${esc(fuentesNum(res.items))} ítems · ${esc(fuentesNum(res.criterios_distintos))} marcas · ${esc(fuentesNum(res.paginas))} páginas` : ''}<br>
-      Vigente para la vista previa: ${vig ? `${esc(fuentesHora(vig.leida_utc))} · plan ${esc(vig.plan)}${e.vigente_es_del_plan ? '' : ' (no es el plan configurado: volvé a leer)'}` : 'ninguna'}
+      Vigente para la vista previa: ${vig ? `${esc(fuentesHora(vig.leida_utc))} · plan ${esc(vig.plan)}${e.vigente_es_del_plan ? '' : ' (no es el plan configurado: vuelva a leer)'}` : 'ninguna'}
     </div>`);
   return partes.join('');
 }
@@ -521,7 +521,7 @@ async function fuentesContCargarItems(event, i) {
   const oc = ((document.getElementById('fuentes-cont-oc-' + i) || {}).value || '').trim();
   const filas = texto.split(/\r?\n/).map(l => l.split(/[;,\t]/)).filter(p => p[0] && p[0].trim())
     .map(p => ({ codigo: p[0].trim(), cantidad: (p[1] || '').trim() }));
-  if (!filas.length) { alerta('Escribí al menos una línea codigo,cantidad', 'error'); return; }
+  if (!filas.length) { alerta('Escriba al menos una línea codigo,cantidad', 'error'); return; }
   await conBotonOcupado(event, async () => {
     try {
       const r = await post(`/api/compras/fuentes/contenedores/${c.id}/items`, { filas, oc_referencia: oc || null });
