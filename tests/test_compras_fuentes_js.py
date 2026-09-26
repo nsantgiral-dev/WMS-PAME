@@ -160,7 +160,7 @@ def test_el_estado_de_la_lectura_de_marca_escapa_y_no_dice_cero():
         'ultima': {'inicio': None, 'ok': False, 'error': MALO, 'resultado': {'items': None}},
         'vigente': {'plan': MALO, 'leida_utc': None}, 'vigente_es_del_plan': False})
     assert '<img' not in html and '&lt;img' in html
-    assert 'sin dato ítems' in html and 'volvé a leer' in html
+    assert 'sin dato ítems' in html and 'vuelva a leer' in html
 
 
 def test_la_vista_previa_de_marca_sin_lectura_lo_dice():

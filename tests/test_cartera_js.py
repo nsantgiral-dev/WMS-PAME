@@ -74,7 +74,7 @@ def test_sin_el_permiso_no_hay_botones_de_decidir():
 def test_quien_inicio_el_pedido_no_ve_el_boton_de_autorizarlo():
     d = _render({'cuerpo': {'retenciones': [_ret()], 'puede_autorizar': True,
                             'usuario_id': 5}})
-    assert 'carteraAutorizar' not in d['html'] and 'Lo iniciaste vos' in d['html']
+    assert 'carteraAutorizar' not in d['html'] and 'Usted lo inició' in d['html']
 
 
 def test_con_acuerdo_vigente_solo_se_ofrece_contado():
