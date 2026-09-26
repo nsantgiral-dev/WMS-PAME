@@ -164,3 +164,32 @@ class TestSaludCargaVieja:
             db.session.add(RegistroSync(tipo=tipo, inicio=hace, fin=hace, ok=True))
         db.session.commit()
         assert analitica_salud.carga_fisica()['nivel'] != analitica_salud.OK
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# P2 · stock_siesa: el merge BD+API re-sella «fresco» lo que Siesa no trajo
+# ═════════════════════════════════════════════════════════════════════════════
+
+class TestFrescuraNoSeReSellaSinDato:
+
+    @pytest.mark.xfail(strict=True, reason='P2: _guardar_stock_en_bd escribe el merge (BD ∪ API) con updated_at=now')
+    def test_sku_que_siesa_no_reporto_conserva_su_fecha(self, db, monkeypatch):
+        from app.models.stock_siesa import StockSiesa
+        from app.services import inventario_siesa_service as inv
+        vieja = datetime.utcnow() - timedelta(days=10)
+        db.session.add(StockSiesa(bodega='NB1', codigo_siesa='AGOTADO', existencia=40,
+                                  comprometido=0, salida_sin_conf=0, updated_at=vieja))
+        db.session.commit()
+        fila = {f'SKU{i}': {'existencia': 5.0, 'comprometido': 0.0, 'salida_sin_conf': 0.0,
+                            'descripcion': '', 'unidad': 'UND'} for i in range(80)}
+        monkeypatch.setattr(inv, '_descargar_todas_bodegas_custom', lambda: {'NB1': fila})
+        monkeypatch.setattr(inv, '_cache_inventario_multibodega',
+                            {'data': None, 'ts': None, 'degradado': False,
+                             'bodegas_frescas': frozenset()})
+        monkeypatch.setattr('time.sleep', lambda s: None)
+        inv._descargar_inventario_siesa_raw(forzar=True)
+        db.session.expire_all()
+        r = StockSiesa.query.filter_by(bodega='NB1', codigo_siesa='AGOTADO').first()
+        # Siesa NO trajo este SKU: su existencia 40 es la foto de hace 10 días.
+        assert r.updated_at < datetime.utcnow() - timedelta(days=5), (
+            'la fila que Siesa no reportó quedó sellada como recién leída')
