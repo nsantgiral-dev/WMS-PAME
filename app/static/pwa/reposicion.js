@@ -133,7 +133,7 @@ function _repRenderUbicacionCard(u) {
       <!-- Límites -->
       <div style="display:flex;gap:16px;font-size:var(--fs-xs);color:var(--tx3);">
         ${sinLimite
-          ? `<span style="color:var(--warn-tx);">⚠ Sin mínimo/máximo — toca "Configurar" para activar reposición</span>`
+          ? `<span style="color:var(--warn-tx);">⚠ Sin mínimo/máximo — toque "Configurar" para activar reposición</span>`
           : `<span>Mín <strong style="color:var(--tx);">${minimo}</strong></span>
              <span>Máx <strong style="color:var(--tx);">${maximo ?? '—'}</strong></span>
              ${u.secuencia_ruteo != null ? `<span>Seq <strong style="color:var(--tx);">${esc(u.secuencia_ruteo)}</strong></span>` : ''}
@@ -174,7 +174,7 @@ function repRenderUbicaciones() {
       <div style="text-align:center;padding:40px;color:var(--tx3);">
         <div style="font-size:32px;margin-bottom:12px;opacity:0.4;">📍</div>
         <div style="font-size:var(--fs-md);font-weight:600;">Sin ubicaciones PICKING registradas</div>
-        <div style="font-size:var(--fs-xs);margin-top:6px;">Haz sync desde Siesa para importar ubicaciones PIK-*</div>
+        <div style="font-size:var(--fs-xs);margin-top:6px;">Haga sync desde Siesa para importar ubicaciones PIK-*</div>
       </div>`;
     return;
   }
@@ -315,7 +315,7 @@ async function repGuardarLimites() {
   if (!isNaN(max)) payload.stock_maximo = max;
   if (!isNaN(seq)) payload.secuencia_ruteo = seq;
 
-  if (!Object.keys(payload).length) { alerta('Ingresa al menos un límite', 'error'); return; }
+  if (!Object.keys(payload).length) { alerta('Ingrese al menos un límite', 'error'); return; }
 
   try {
     const r = await _fetchConTimeout(`/api/reposicion/ubicacion/${_repModalUbId}/limites`, {
@@ -626,9 +626,9 @@ async function repTestEmail(btn) {
   if (btn) { btn.disabled = true; btn.textContent = 'Enviando...'; }
   try {
     await post('/api/reposicion/alertas/test-email', {});
-    alerta('Email enviado — revisa la bandeja de wms@papeleriamedellin.com.co', 'ok');
+    alerta('Email enviado — revise la bandeja de wms@papeleriamedellin.com.co', 'ok');
   } catch (e) {
-    alerta(e.message || 'Error SMTP — revisa las variables en Railway', 'error');
+    alerta(e.message || 'Error SMTP — revise las variables en Railway', 'error');
   } finally {
     if (btn) { btn.disabled = false; btn.textContent = 'Enviar email de prueba ahora'; }
   }
@@ -713,7 +713,7 @@ function abastMostrarHUD(tarea) {
   const _btnCamAbast = document.getElementById('abast-btn-camara');
   if (_btnCamAbast) _btnCamAbast.style.display = (OPERARIO && OPERARIO.puede_usar_camara) ? '' : 'none';
   document.getElementById('abast-hud-paso').textContent = 'Tarea de reposición';
-  document.getElementById('abast-hud-instruccion').textContent = 'Busca la paca en la zona de reserva';
+  document.getElementById('abast-hud-instruccion').textContent = 'Busque la paca en la zona de reserva';
   document.getElementById('abast-hud-sub').textContent =
     `${tarea.producto_nombre || tarea.producto_codigo || '—'} · ${tarea.cantidad_unidades || '—'} uds`;
   document.getElementById('abast-ubicacion-origen').textContent = tarea.ubicacion_reserva || '—';
@@ -748,7 +748,7 @@ async function abastConfirmarScan() {
   if (!ABAST_TAREA) return;
   const inp = document.getElementById('abast-input-lpn');
   const lpn_escaneado = (inp?.value || '').trim().toUpperCase();
-  if (!lpn_escaneado) { alerta('Escanea el código LPN primero', 'error'); return; }
+  if (!lpn_escaneado) { alerta('Escanee el código LPN primero', 'error'); return; }
   const btn = document.getElementById('abast-btn-confirmar');
   if (btn) { btn.disabled = true; btn.textContent = 'Confirmando...'; }
   try {
@@ -761,7 +761,7 @@ async function abastConfirmarScan() {
     if (e.status) {
       // Error explícito del servidor (ej. LPN incorrecto) — no es un corte de red.
       _abastFlash('#7f1d1d');
-      alerta(e.message || 'LPN incorrecto — verifica el código', 'error');
+      alerta(e.message || 'LPN incorrecto — verifique el código', 'error');
       if (inp) { inp.value = ''; inp.focus(); }
     } else {
       // Corte de red real (o timeout) — encolar para sincronizar cuando vuelva la señal.
