@@ -159,12 +159,21 @@ class PedidoPackingCloser(IPackingCloser):
         consec = tarea_pre.consec_docto_pedido_siesa
 
         pool = ThreadPoolExecutor(max_workers=2)
+        # Con el circuito sin cerrar (se deja pasar porque tocaba probar, H1)
+        # las dos consultas NO salen a la vez: la primera consume el único
+        # permiso del probe y la segunda, negada por el breaker, haría fallar
+        # el precheck justo cuando Siesa volvió. En serie: el estado es el
+        # probe; si respondió, el circuito ya está cerrado para la factura.
+        _en_serie = connekta._cb_state != 'CLOSED'
+        _t0 = _time.monotonic()
         try:
-            _t0 = _time.monotonic()
             fut_estado = pool.submit(connekta.get_estado_pedido, tipo, consec)
-            fut_factura = pool.submit(connekta.get_factura_desde_pedido, tipo, consec)
+            fut_factura = (None if _en_serie else
+                           pool.submit(connekta.get_factura_desde_pedido, tipo, consec))
 
             estado = fut_estado.result(timeout=_PRECHECK_TIMEOUT)
+            if fut_factura is None:
+                fut_factura = pool.submit(connekta.get_factura_desde_pedido, tipo, consec)
             from app.services import estado_pedido_siesa as _eps
             if _eps.impide_facturar(estado):
                 fut_factura.cancel()
@@ -207,9 +216,17 @@ class PedidoPackingCloser(IPackingCloser):
             # (`MENSAJE_SIESA_NO_DISPONIBLE`); el tipo le dice a la ruta que es
             # un 503 y a la cola offline que se reintenta.
             from app.services.documento_fiscal import MENSAJE_SIESA_NO_DISPONIBLE
+            # Lento no es caído, y se dice cuál de los dos fue (P3): con el
+            # presupuesto agotado Siesa puede estar respondiendo, solo que
+            # tarde; con una excepción, no respondió.
+            if isinstance(e, FutTimeout):
+                que = (f'Siesa no respondió en {_PRECHECK_TIMEOUT} s (está lento o '
+                       f'caído); vuelva a intentar en un momento')
+            else:
+                que = f'Siesa no respondió: {e}'
             return MotivoSiesaNoDisponible(
                 f'{MENSAJE_SIESA_NO_DISPONIBLE} No se pudo verificar si el pedido '
-                f'{tarea_pre.numero_pedido_siesa} ya tiene factura ({e}); cerrar '
+                f'{tarea_pre.numero_pedido_siesa} ya tiene factura ({que}); cerrar '
                 f'ahora podría emitir una factura duplicada.')
         finally:
             # shutdown(wait=False) evita bloquear hasta 30s si un future aún

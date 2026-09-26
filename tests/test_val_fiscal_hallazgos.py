@@ -28,12 +28,7 @@ def _cerrar(t):
 
 class TestElCierreDejaProbarAlCircuito:
 
-    @pytest.mark.xfail(strict=True, reason=(
-        'H1: documento_fiscal.siesa_disponible_para_facturar lee _cb_state == OPEN y '
-        'niega SIN consumir el permiso del breaker. OPEN→HALF_OPEN solo ocurre en '
-        'consumir_permiso (una llamada HTTP). En un worker de gunicorn cuya única '
-        'charla con Siesa son los cierres, el circuito no vuelve a probar nunca: '
-        'Siesa ya respondió y el cierre sigue diciendo «no está disponible».'))
+    # Cerrado 2026-09-26 (v2-fiscal): circuito_admite_intento; el precheck es el probe.
     def test_pasado_el_intervalo_de_probe_el_cierre_pregunta(
             self, db, almacen, producto, siesa_real, monkeypatch):
         from app.services.connekta_gateway import ConnektaGateway
@@ -67,11 +62,7 @@ class TestResetearConLaEmisionEnCola:
         assert job.estado == 'PENDIENTE'
         return t, job
 
-    @pytest.mark.xfail(strict=True, reason=(
-        'H2: resetear_siesa solo pregunta exigir_sin_documento; con el job '
-        'DESPACHO_F470 PENDIENTE (caja en cola, sin pre-flag todavía) borra los '
-        'bultos. Desde m048fiscal toda caja en cola es VERIFICADO && !siesa_triggered '
-        'y packing.js la pinta «⚠ Reintentar Siesa» con el botón «Limpiar bultos».'))
+    # Cerrado 2026-09-26 (v2-fiscal): exigir_sin_envio_vivo en resetear, cancelar y re-confirmar.
     def test_resetear_se_niega_con_el_job_vivo(self, db, almacen, producto, siesa,
                                                monkeypatch):
         from app.services.packing_service import PackingService
@@ -79,10 +70,7 @@ class TestResetearConLaEmisionEnCola:
         with pytest.raises(ValueError):
             PackingService.resetear_siesa(t.id, usuario_id=None)
 
-    @pytest.mark.xfail(strict=True, reason=(
-        'H2 (consecuencia): el job en cola sigue vivo y emite RM + FE; la caja queda '
-        'DESPACHADO con cero bultos — facturada, sin nada que cargar al camión, y el '
-        're-cierre dice «Siesa ya procesó este despacho».'))
+    # Cerrado 2026-09-26 (v2-fiscal): idem.
     def test_la_emision_despues_del_reset_no_deja_una_caja_sin_bultos(
             self, db, almacen, producto, siesa, monkeypatch):
         from app.models.bulto import Bulto

@@ -122,7 +122,11 @@ def _procesar_jobs_pendientes_interno(_app):
     with _app.app_context():
         # Circuit breaker: si Connekta está caído, no gastar reintentos
         from app.services.connekta_gateway import connekta
-        if connekta._cb_state == 'OPEN':
+        # Solo mientras no toque probar: vencido el intervalo, el primer job
+        # es el probe (`circuito_admite_intento`, H1). Con `_cb_state ==
+        # 'OPEN'` la DLQ de un proceso sin otra charla con Siesa no volvía a
+        # intentar nunca.
+        if not connekta.circuito_admite_intento():
             logger.info('[DLQ] Circuit breaker OPEN — pausando DLQ hasta que Siesa responda')
             return 0
 

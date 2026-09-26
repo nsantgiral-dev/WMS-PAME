@@ -755,6 +755,13 @@ class ConnektaGateway:
         """Registra un éxito. Si estamos en HALF_OPEN, cierra el circuit."""
         self._circuit.record_success()
 
+    def circuito_admite_intento(self) -> bool:
+        """¿Saldría una llamada ahora? Sin consumir el probe — ver
+        `ConnektaCircuitBreaker.admite_intento`. **Nadie decide «Siesa no
+        responde» leyendo `_cb_state == 'OPEN'`**: esa lectura no deja probar
+        al circuito (H1, 2026-09-26)."""
+        return self._circuit.admite_intento()
+
     def _cb_consumir_permiso(self) -> bool:
         """Pide permiso para UNA llamada HTTP. **Consume estado.** Se llama
         EXACTAMENTE UNA VEZ por intento — ver el docstring completo en

@@ -309,8 +309,11 @@ class PackingService:
         # Desde m048fiscal la caja cerrada queda VERIFICADA hasta que Siesa
         # emite: re-confirmarla cambiaría cantidades de una caja que ya tiene
         # (o puede tener) remisión.
-        from app.services.documento_fiscal import exigir_sin_documento
+        from app.services.documento_fiscal import exigir_sin_documento, exigir_sin_envio_vivo
         exigir_sin_documento(tarea, 'volver a confirmar el empaque')
+        # En cola, el payload del envío ya lleva las cantidades: cambiarlas
+        # acá dejaría la caja diciendo una cosa y la remisión otra.
+        exigir_sin_envio_vivo(tarea, 'volver a confirmar el empaque')
         if tarea.estado not in ['EN_PROCESO', 'PENDIENTE', 'VERIFICADO']:
             raise ValueError(f'No se puede confirmar en estado {tarea.estado}')
 
@@ -676,9 +679,8 @@ class PackingService:
         bitácora guarda quién, cuándo, el antes y cada bulto borrado.
         """
         from app.models.bulto import Bulto
-        from app.models.siesa_job import SiesaJob as _SJ
         from app.services.bitacora import registrar_accion, motivo_obligatorio, foto
-        from app.services.documento_fiscal import exigir_sin_documento
+        from app.services.documento_fiscal import exigir_sin_documento, exigir_sin_envio_vivo
         motivo = motivo_obligatorio(motivo, 'cancelar un empaque')
         tarea = TareaPacking.query.get(tarea_id)
         if not tarea:
@@ -696,17 +698,13 @@ class PackingService:
         # frenó la emisión ANTES del 244328, sin documento). Esa espera no
         # tiene fin propio; cancelar la caja es su salida: el job queda
         # DESCARTADO y la retención CANCELADA, las dos con bitácora.
-        job_activo = (_SJ.query.filter_by(referencia_tipo='TareaPacking', referencia_id=tarea_id)
-                      .filter(_SJ.estado.in_(['PENDIENTE', 'PROCESANDO', 'REINTENTANDO']))
-                      .with_for_update().first())
-        retenido = None
-        if job_activo is not None:
-            retenido = PackingService._retencion_que_frena(tarea, job_activo)
-        if job_activo is not None and retenido is None:
-            raise ValueError(
-                f'No se puede cancelar — hay un job Siesa {job_activo.estado} (id={job_activo.id}). '
-                'Espere a que termine o falle definitivamente antes de cancelar.'
-            )
+        # Una política con resetear y re-confirmar (`exigir_sin_envio_vivo`,
+        # H2): la única excepción es de cancelar y va como `permitir`.
+        job_activo = exigir_sin_envio_vivo(
+            tarea, 'cancelar el empaque',
+            permitir=lambda j: PackingService._retencion_que_frena(tarea, j) is not None)
+        retenido = (PackingService._retencion_que_frena(tarea, job_activo)
+                    if job_activo is not None else None)
         if retenido is not None:
             from app.services import cartera_service as _cartera
             from app.services.siesa_job_service import descartar_job_retenido
@@ -758,13 +756,17 @@ class PackingService:
         """
         from app.models.bulto import Bulto
         from app.services.bitacora import registrar_accion, foto
-        from app.services.documento_fiscal import exigir_sin_documento
+        from app.services.documento_fiscal import exigir_sin_documento, exigir_sin_envio_vivo
         tarea = TareaPacking.query.get(tarea_id)
         if not tarea:
             raise ValueError('Tarea no encontrada')
         # Resetear borra los bultos y vuelve a VERIFICADO para re-cerrar: con
         # una remisión ya creada, el re-cierre sería la segunda.
         exigir_sin_documento(tarea, 'resetear el envío a Siesa')
+        # Y con la caja en cola (sin documento todavía) el envío emitiría RM
+        # + FE sobre una caja sin bultos (H2, 2026-09-26). Tampoco con el
+        # envío retenido por cartera: la liberación lo despierta.
+        exigir_sin_envio_vivo(tarea, 'limpiar los bultos')
         if tarea.estado not in ['VERIFICADO', 'DESPACHADO']:
             raise ValueError('Solo se puede resetear una tarea VERIFICADA o con error Siesa')
 

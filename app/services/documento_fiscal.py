@@ -35,6 +35,7 @@ Trinquete: `tests/test_documento_fiscal.py` — por AST, toda función de `app/`
 que cancela o reabre un empaque, crea uno, o arma la cola del muelle, llama a
 la política.
 """
+from contextlib import contextmanager
 from datetime import datetime
 
 #: Decisión del dueño (2026-09-25): si Siesa está caído y no se puede
@@ -199,11 +200,20 @@ def _ahora_bogota():
 
 def siesa_disponible_para_facturar(ahora_bog: datetime = None):
     """`(True, None)` o `(False, motivo)`. **Sin red**: circuito abierto o
-    fuera de ventana. En simulación no hay Siesa que cuidar."""
+    fuera de ventana. En simulación no hay Siesa que cuidar.
+
+    Con el circuito abierto se niega **solo mientras no toque probar**
+    (`circuito_admite_intento`). Vencido el intervalo, deja pasar: la primera
+    llamada que haga el que pregunta (el precheck del cierre, la reconciliación
+    de la DLQ) es el probe que cierra o reabre el circuito. Leer
+    `_cb_state == 'OPEN'` y negarse sin llamar dejaba el cierre en «Siesa no
+    está disponible» para siempre en un worker cuya única charla con Siesa
+    eran los cierres (H1, 2026-09-26): cada proceso de gunicorn tiene su
+    propio breaker."""
     from app.services.connekta_gateway import connekta
     if connekta.modo_simulacion:
         return True, None
-    if connekta._cb_state == 'OPEN':
+    if not connekta.circuito_admite_intento():
         return False, f'{MENSAJE_SIESA_NO_DISPONIBLE} (Siesa no responde desde hace un rato.)'
     if ahora_bog is None:
         ahora_bog = _ahora_bogota()
@@ -215,3 +225,209 @@ def siesa_disponible_para_facturar(ahora_bog: datetime = None):
         return False, (f'{MENSAJE_SIESA_NO_DISPONIBLE} (Siesa factura de '
                        f'{ini.strftime("%H:%M")} a {fin.strftime("%H:%M")}.)')
     return True, None
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# ¿Hay un envío vivo? — la otra mitad de «¿tiene documento?» (H2, 2026-09-26)
+# ─────────────────────────────────────────────────────────────────────────
+#
+# Desde m048fiscal una caja cerrada queda VERIFICADA **sin** documento hasta
+# que el DESPACHO_F470 sale de la cola. `exigir_sin_documento` la ve limpia
+# (no hay pre-flag todavía) y `resetear_siesa` le borraba los bultos: después
+# el job emitía RM + FE y la caja quedaba DESPACHADO sin nada que cargar.
+# Cancelar ya lo miraba; resetear y re-confirmar no. **Una pregunta.**
+
+class EnvioEnCurso(ValueError):
+    """La caja tiene un envío a Siesa en la cola: deshacerla ahora la dejaría
+    sin bultos (o con otras cantidades) cuando el envío emita. `ValueError`
+    para que las rutas que traducen `ValueError` a 400/409 no cambien."""
+
+
+def envio_vivo(tarea, bloquear: bool = True):
+    """El `SiesaJob` vivo (PENDIENTE/PROCESANDO/REINTENTANDO) de la caja, o
+    `None`. Con `bloquear`, `FOR UPDATE`: el DLQ no lo toma mientras quien
+    pregunta decide."""
+    if tarea is None or getattr(tarea, 'id', None) is None:
+        return None
+    from app.models.siesa_job import EstadoSiesaJob, SiesaJob
+    q = SiesaJob.query.filter(SiesaJob.referencia_tipo == 'TareaPacking',
+                              SiesaJob.referencia_id == tarea.id,
+                              SiesaJob.estado.in_(sorted(EstadoSiesaJob.ACTIVOS)))
+    if bloquear:
+        q = q.with_for_update()
+    return q.order_by(SiesaJob.id).first()
+
+
+def exigir_sin_envio_vivo(tarea, accion: str, permitir=None):
+    """Levanta `EnvioEnCurso` si la caja tiene un envío vivo. `permitir(job)`
+    —si se pasa y devuelve verdadero— lo deja pasar y devuelve el job (el
+    único caso hoy: cancelar la caja que espera a cartera, que descarta ese
+    job). Devuelve el job permitido o `None`."""
+    job = envio_vivo(tarea)
+    if job is None:
+        return None
+    if permitir is not None and permitir(job):
+        return job
+    raise EnvioEnCurso(
+        f'No se puede {accion}: la caja {tarea.codigo} ({tarea.numero_pedido_siesa}) '
+        f'está en la cola de facturación de Siesa (envío {job.id}, {job.estado}). '
+        f'Espere a que termine: si falla, la caja queda para reintentar.')
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# ¿En qué va la emisión? — lo que la pantalla pinta (H2b, 2026-09-26)
+# ─────────────────────────────────────────────────────────────────────────
+#
+# Las pantallas deducían «⚠ Error Siesa» de `VERIFICADO && !siesa_triggered`,
+# que desde m048fiscal es también «en cola, esperando a Siesa». El servidor
+# dice cuál de los dos es; la pantalla no adivina.
+
+EMISION_EN_COLA = 'EN_COLA'                    # job vivo: esperar, sin botones
+EMISION_RETENIDO = 'RETENIDO'                  # job en pausa por cartera
+EMISION_FALLIDO = 'FALLIDO'                    # sin documento: reintentar / limpiar
+EMISION_SIN_VERIFICAR = 'SIN_VERIFICAR'        # 142945 enviado sin identificar la RM
+EMISION_REMISION_SIN_FACTURA = 'REMISION_SIN_FACTURA'   # RM sí, FE no: «Facturar remisión»
+EMISION_FACTURA_SIN_REMISION = 'FACTURA_SIN_REMISION'   # FE sí, RM sin identificar
+EMISION_DESPACHADO = 'DESPACHADO'              # RM + FE: puede salir
+
+#: Los estados en que una persona tiene que hacer algo en Siesa → Recuperación.
+EMISION_REQUIERE_ADMIN = (EMISION_FALLIDO, EMISION_SIN_VERIFICAR,
+                          EMISION_REMISION_SIN_FACTURA, EMISION_FACTURA_SIN_REMISION)
+
+
+def estado_emision(tarea, jobs=None, retenido: bool = None):
+    """El estado de la emisión fiscal de una caja, o `None` si nunca se
+    cerró. `jobs`: sus DESPACHO_F470 (si el que llama ya los cargó en lote);
+    `retenido`: si cartera la tiene retenida (ídem).
+
+    Una caja cuya RM se envió sin identificar pasa a SIN_VERIFICAR cuando la
+    gracia de la Regla 20 vence **aunque su job siga esperando**: mientras
+    no se pueda preguntar el job espera sin volverse FALLIDO (H4), y la
+    salida humana tiene que estar a la vista igual."""
+    if tarea is None:
+        return None
+    if _es_traslado(tarea):
+        return EMISION_DESPACHADO if tarea.siesa_triggered else None
+    if despachable(tarea):
+        return EMISION_DESPACHADO
+    if (tarea.siesa_triggered or fe_confirmada(tarea)) and not tarea.rm_consec:
+        return EMISION_FACTURA_SIN_REMISION
+    if jobs is None:
+        from app.models.siesa_job import SiesaJob
+        jobs = (SiesaJob.query.filter(SiesaJob.tipo == 'DESPACHO_F470',
+                                      SiesaJob.referencia_tipo == 'TareaPacking',
+                                      SiesaJob.referencia_id == tarea.id)
+                .order_by(SiesaJob.id.desc()).all())
+    from app.models.siesa_job import EstadoSiesaJob
+    vivo = next((j for j in jobs if j.estado in EstadoSiesaJob.ACTIVOS), None)
+    ultimo = jobs[0] if jobs else None
+    sin_identificar = rm_resultado_desconocido(tarea)
+    if vivo is not None:
+        if sin_identificar and _gracia_vencida(tarea):
+            return EMISION_SIN_VERIFICAR
+        if retenido is None and vivo.estado == EstadoSiesaJob.PENDIENTE \
+                and not tiene_documento_en_siesa(tarea) and tarea.pedido_clave:
+            from app.services import cartera_service as _cartera
+            retenido = _cartera.retencion_viva(tarea.pedido_clave) is not None
+        if retenido and vivo.estado == EstadoSiesaJob.PENDIENTE:
+            return EMISION_RETENIDO
+        return EMISION_EN_COLA
+    if sin_identificar:
+        return EMISION_SIN_VERIFICAR
+    if tarea.rm_consec:
+        return EMISION_REMISION_SIN_FACTURA
+    if ultimo is not None and ultimo.estado == EstadoSiesaJob.FALLIDO:
+        return EMISION_FALLIDO
+    return None
+
+
+def _gracia_vencida(tarea) -> bool:
+    from app.services.despacho_parcial_service import GRACIA_IDENTIFICAR_RM
+    enviada = getattr(tarea, 'rm_enviada_at', None)
+    return enviada is not None and datetime.utcnow() - enviada >= GRACIA_IDENTIFICAR_RM
+
+
+def estados_emision(tareas, retenidos=None) -> dict:
+    """`{tarea_id: estado}` en lote: una consulta de jobs para todas.
+    `retenidos`: `{numero_pedido: ...}` de `cartera_service.resumen_por_pedido`
+    si el que llama ya lo tiene."""
+    tareas = [t for t in tareas if t is not None and t.id is not None]
+    if not tareas:
+        return {}
+    from app.models.siesa_job import SiesaJob
+    por_tarea = {}
+    for j in (SiesaJob.query.filter(SiesaJob.tipo == 'DESPACHO_F470',
+                                    SiesaJob.referencia_tipo == 'TareaPacking',
+                                    SiesaJob.referencia_id.in_([t.id for t in tareas]))
+              .order_by(SiesaJob.id.desc()).all()):
+        por_tarea.setdefault(j.referencia_id, []).append(j)
+    out = {}
+    for t in tareas:
+        ret = None
+        if retenidos is not None:
+            ret = bool(retenidos.get(t.numero_pedido_siesa))
+        out[t.id] = estado_emision(t, jobs=por_tarea.get(t.id, []), retenido=ret)
+    return out
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Un carril a la vez por pedido (H3, 2026-09-26)
+# ─────────────────────────────────────────────────────────────────────────
+#
+# `/facturar-remision` y `/facturar-rm-manual` posteaban el 142943 sin mirar
+# si Siesa estaba disponible ni si el DESPACHO_F470 de la misma caja corría a
+# la vez. El anti-duplicado de FE es por pedido y Siesa tarda 30–60 s en
+# mostrar la factura recién hecha: dos carriles a la vez = FE duplicada.
+#
+# El candado es **por pedido**, no el de la DLQ: la DLQ lo tiene tomado casi
+# todo el minuto en temporada, y con él un administrador recibía «intente en
+# un minuto» cuatro veces de cinco. Por pedido, choca solo con quien emite
+# ESE pedido — que es exactamente lo que no puede pasar.
+
+class PermisoDeEmision:
+    """Lo que rinde `emision_exclusiva`: verdadero si se puede emitir."""
+
+    def __init__(self, ok: bool, motivo: str = None, status: int = 200,
+                 estado: str = None):
+        self.ok, self.motivo, self.status, self.estado = ok, motivo, status, estado
+
+    def __bool__(self):
+        return self.ok
+
+
+MENSAJE_EMISION_EN_CURSO = ('Otro envío a Siesa de este pedido está en curso. '
+                            'Intente de nuevo en un minuto.')
+
+
+def _clave_emision(tarea) -> int:
+    import zlib
+    from app.utils.lock import RANGO_EMISION_PEDIDO, clave_en_rango
+    ident = (getattr(tarea, 'pedido_clave', None) or getattr(tarea, 'numero_pedido_siesa', None)
+             or f'tarea-{tarea.id}')
+    return clave_en_rango(RANGO_EMISION_PEDIDO,
+                          zlib.crc32(str(ident).encode('utf-8')) % RANGO_EMISION_PEDIDO[1])
+
+
+
+@contextmanager
+def emision_exclusiva(tarea, etiqueta: str = 'emision'):
+    """**Todo carril que postea el 244328/142945/142943 entra por acá** (la
+    DLQ, `/despachar`, `/facturar-remision`, `/facturar-rm-manual` y la
+    declaración de RM inexistente, que quita el pre-flag). Rinde un
+    `PermisoDeEmision`:
+
+    · Siesa no disponible (circuito, ventana) → falso, 503;
+    · otro carril emitiendo el mismo pedido → falso, 409;
+    · si no, verdadero, con el candado del pedido tomado hasta salir del `with`.
+
+    Trinquete: `tests/test_fiscal_v2.py::TestTodoCarrilDeEmisionTomaElCandado`."""
+    ok, motivo = siesa_disponible_para_facturar()
+    if not ok:
+        yield PermisoDeEmision(False, motivo, 503, 'SIESA_NO_DISPONIBLE')
+        return
+    from app.utils.lock import advisory_lock
+    with advisory_lock(_clave_emision(tarea), f'emision_{etiqueta}') as tomado:
+        if not tomado:
+            yield PermisoDeEmision(False, MENSAJE_EMISION_EN_CURSO, 409, 'EMISION_EN_CURSO')
+            return
+        yield PermisoDeEmision(True)

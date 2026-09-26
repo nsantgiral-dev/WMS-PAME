@@ -120,6 +120,10 @@ RANGO_PEDIDO_CHICO = (1 << 32, 1 << 31)  # mobile_service, n = crc32(documento)
 # NIT evaluados a la par ven el mismo cupo libre y pasan los dos. Justo después
 # del rango anterior, también fuera de int32. n = crc32(nit) % tamaño.
 RANGO_CARTERA_NIT = ((1 << 32) + (1 << 31), 1 << 31)  # cartera_service, n = crc32(nit)
+# Un carril de emisión fiscal (244328/142945/142943) por pedido a la vez: la
+# DLQ y los carriles manuales (`documento_fiscal.emision_exclusiva`). Justo
+# después del anterior. n = crc32(pedido_clave) % tamaño.
+RANGO_EMISION_PEDIDO = (1 << 33, 1 << 31)  # documento_fiscal, n = crc32(pedido)
 
 
 def _claves_fijas() -> dict:

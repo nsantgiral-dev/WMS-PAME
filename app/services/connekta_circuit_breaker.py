@@ -37,6 +37,7 @@ class ConnektaCircuitBreaker:
         self.failures = []                    # timestamps de fallos recientes
         self.opened_at = None                 # cuándo se abrió el circuit
         self.last_probe = time.monotonic()    # monotonic timestamp del último probe
+        self.cerrado_at = None                # monotonic: cuándo volvió de HALF_OPEN a CLOSED
         self.failure_threshold = failure_threshold
         self.window_seconds = window_seconds
         self.probe_interval = probe_interval
@@ -87,6 +88,7 @@ class ConnektaCircuitBreaker:
                 self.state = 'CLOSED'
                 self.failures.clear()
                 self.opened_at = None
+                self.cerrado_at = time.monotonic()
                 logger.info('[CONNEKTA CB] CIRCUIT CLOSED — Siesa recuperado. DLQ reanudado.')
             elif self.state == 'CLOSED':
                 # Éxito en operación normal — limpiar fallos acumulados
@@ -120,6 +122,34 @@ class ConnektaCircuitBreaker:
                 return False
             # HALF_OPEN — ya se permitió una llamada, bloquear las demás
             return False
+
+    def admite_intento(self) -> bool:
+        """¿Una llamada HTTP saldría si se pidiera permiso ahora? **No consume
+        nada**: es la pregunta que `consumir_permiso` contesta mutando.
+
+        CLOSED → sí. OPEN con el intervalo de probe vencido → sí (la llamada
+        que se haga ES el probe: `consumir_permiso` pasa a HALF_OPEN). OPEN
+        sin vencer, o HALF_OPEN (otro ya está probando) → no.
+
+        Existe para quien decide **antes** de llamar (el cierre de caja, la
+        DLQ): leer `state == 'OPEN'` y negarse sin llamar dejaba el circuito
+        abierto para siempre en un proceso cuya única charla con Siesa era esa
+        decisión — el paso OPEN → HALF_OPEN solo ocurre dentro de una llamada
+        (2026-09-26, H1)."""
+        with self.lock:
+            if self.state == 'CLOSED':
+                return True
+            if self.state == 'OPEN':
+                return time.monotonic() - self.last_probe >= self.probe_interval
+            return False
+
+    def recien_recuperado(self, segundos: int = 600) -> bool:
+        """¿El circuito se cerró (HALF_OPEN → CLOSED) hace menos de
+        `segundos`? La DLQ espacia los envíos solo en esa ventana: es cuando
+        la cola acumulada durante la caída sale de golpe."""
+        with self.lock:
+            return (self.cerrado_at is not None
+                    and time.monotonic() - self.cerrado_at < segundos)
 
     def snapshot(self) -> dict:
         """Estado actual del circuit breaker para health check y dashboard."""

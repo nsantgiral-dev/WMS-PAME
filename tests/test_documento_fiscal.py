@@ -1118,7 +1118,7 @@ class TestCancelarLaCajaRetenidaEsSuSalida:
         from app.services.packing_service import PackingService
         t = _tarea(db, almacen)
         _job_despacho(db, t)
-        with pytest.raises(ValueError, match='job Siesa PENDIENTE'):
+        with pytest.raises(ValueError, match='cola de facturación'):
             PackingService.cancelar(t.id, motivo='x', usuario_id=1)
 
 
