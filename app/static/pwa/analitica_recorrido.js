@@ -139,7 +139,7 @@ function anRecHtml(d) {
     <div class="tabla-card">
       <div class="tabla-titulo">Embudo: del pedido aprobado a la caja liquidada</div>
       <div style="font-size:var(--fs-xs);color:var(--tx3);margin-bottom:8px;">
-        Tocá una etapa para ver sus pedidos. El ancho es la parte de los ${esc(anNum(n0))} pedidos que llegó.
+        Toque una etapa para ver sus pedidos. El ancho es la parte de los ${esc(anNum(n0))} pedidos que llegó.
       </div>
       ${filas}
     </div>
@@ -267,7 +267,7 @@ function anRecEtapaHtml(d) {
       <tbody>${filas}</tbody></table></div>`
       : '<div style="color:var(--tx3);font-size:var(--fs-sm);padding:8px 0;">Ningún pedido en esta vista.</div>'}
     <div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px;font-size:var(--fs-xs);color:var(--tx3);">
-      <span>${esc(anNum(desde))}–${esc(anNum(hasta))} de ${esc(anNum(total))} · tocá un pedido para ver su recorrido</span>
+      <span>${esc(anNum(desde))}–${esc(anNum(hasta))} de ${esc(anNum(total))} · toque un pedido para ver su recorrido</span>
       <span>
         ${d.pagina > 1 ? '<button onclick="anRecPagina(-1)" style="background:none;border:1px solid var(--brd);color:var(--tx2);border-radius:6px;padding:3px 8px;cursor:pointer;font-size:var(--fs-xs);">‹ Anterior</button>' : ''}
         ${hasta < total ? '<button onclick="anRecPagina(1)" style="background:none;border:1px solid var(--brd);color:var(--tx2);border-radius:6px;padding:3px 8px;cursor:pointer;font-size:var(--fs-xs);">Siguiente ›</button>' : ''}
