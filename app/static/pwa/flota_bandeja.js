@@ -281,7 +281,7 @@ function flotaBandejaHistorialPlegado() {
     <summary style="cursor:pointer" onclick="flotaBandejaHistorialTurnos()"><b>Historial de turnos</b>
       <span style="font-size:var(--fs-xs);color:var(--tx2)">— fuera de sede ahora y todos los cierres forzados</span></summary>
     <div id="flota-historial-turnos" style="font-size:var(--fs-sm)">
-      <p style="color:var(--tx2)">Tocá «Historial de turnos» para cargarlo.</p></div>
+      <p style="color:var(--tx2)">Toque «Historial de turnos» para cargarlo.</p></div>
   </details></div>`;
 }
 
@@ -422,7 +422,7 @@ function flotaBandejaSenalesHtml(b) {
     de esto es una sanción ni se le muestra a nadie más.</p></div>`;
   if (!senales.length) {
     html += `<div class="tabla-card"><p>Ninguna señal en los últimos ${esc(b.umbrales ? b.umbrales.ventana_senales_dias : '30')} días.</p>
-      <p style="color:var(--tx2);font-size:var(--fs-sm)">Mirá abajo lo que no se pudo revisar:
+      <p style="color:var(--tx2);font-size:var(--fs-sm)">Mire abajo lo que no se pudo revisar:
       sin eso, «ninguna señal» puede ser «nada que mirar».</p></div>`;
   } else {
     html += senales.map((s, k) => flotaBandejaTarjetaSenal(s, k)).join('');
@@ -594,7 +594,7 @@ function flotaBandejaVehiculosHtml(b) {
   return flotaBandejaCabecera(b) + `<div class="tabla-card">
     <div class="tabla-titulo">Vehículos activos (${esc((b.hoy || []).length)})</div>
     <p style="font-size:var(--fs-xs);color:var(--tx2);margin:0 0 10px">${alta}
-      Tocá una fila para abrir su expediente.</p>
+      Toque una fila para abrir su expediente.</p>
     <div style="overflow-x:auto"><table style="width:100%;font-size:var(--fs-sm)">${filas}</table></div>
   </div>`;
 }
