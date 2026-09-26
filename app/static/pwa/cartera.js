@@ -65,7 +65,7 @@ async function carteraCargarBloque() {
     ].filter(Boolean).join(' ');
     const soloContado = (r.acciones || []).includes('convertir_contado')
       && !(r.acciones || []).includes('autorizar');
-    const nota = (propio ? `<div style="font-size:var(--fs-xs);color:var(--tx3);">Lo iniciaste vos: lo autoriza otra persona.</div>` : '')
+    const nota = (propio ? `<div style="font-size:var(--fs-xs);color:var(--tx3);">Usted lo inició: lo autoriza otra persona.</div>` : '')
       + (soloContado ? `<div style="font-size:var(--fs-xs);color:var(--tx3);">El cliente tiene un acuerdo de pago vigente: este pedido solo puede salir de contado.</div>` : '');
     return `<div style="border-top:1px solid var(--brd);padding:8px 0;">
         <div style="display:flex;justify-content:space-between;gap:8px;">
