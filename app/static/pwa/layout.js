@@ -191,7 +191,7 @@ function layoutRenderUbicaciones() {
       <div style="text-align:center;padding:40px;color:var(--tx3);">
         <div style="font-size:32px;margin-bottom:12px;opacity:0.4;">🧭</div>
         <div style="font-size:var(--fs-md);font-weight:600;">Sin ubicaciones en ${_layoutZonaActual}</div>
-        <div style="font-size:var(--fs-xs);margin-top:6px;">Usa "+ Crear ubicación" para empezar a armar el layout de esta bodega</div>
+        <div style="font-size:var(--fs-xs);margin-top:6px;">Use "+ Crear ubicación" para empezar a armar el layout de esta bodega</div>
       </div>`;
     return;
   }
@@ -551,7 +551,7 @@ function layoutCerrarModalEditarCuerpo() {
 function layoutEditarCuerpoIrAPaso2() {
   const cantidad_entrepanos = parseInt(document.getElementById('layout-editar-cuerpo-entrepanos').value);
   if (isNaN(cantidad_entrepanos) || cantidad_entrepanos < 1) {
-    alerta('Indica la nueva cantidad de entrepaños', 'error');
+    alerta('Indique la nueva cantidad de entrepaños', 'error');
     return;
   }
   const cont = document.getElementById('layout-editar-cuerpo-huecos-container');
@@ -594,7 +594,7 @@ async function layoutGuardarEditarCuerpo() {
     const d = await r.json();
     if (!r.ok) { alerta(d.error || 'Error remodulando el cuerpo', 'error'); return; }
     const totalHuecos = huecos_por_nivel.reduce((a, b) => a + b, 0);
-    alerta(`Cuerpo remodulado — ${cantidad_entrepanos} entrepaño(s), ${totalHuecos} hueco(s). Vuelve a asignar los SKU.`, 'ok');
+    alerta(`Cuerpo remodulado — ${cantidad_entrepanos} entrepaño(s), ${totalHuecos} hueco(s). Vuelva a asignar los SKU.`, 'ok');
     layoutCerrarModalEditarCuerpo();
     layoutCargarUbicaciones();
   } catch (e) {
@@ -610,7 +610,7 @@ async function layoutEliminarCuerpo(pasillo, fila, cuerpo, forzar) {
   const codigoCuerpo = `${pasillo}${fila}-C${String(cuerpo).padStart(2, '0')}`;
   const msg = forzar
     ? `⚠ FORZAR eliminación de TODO el cuerpo ${codigoCuerpo} — esto borra también el historial real de picking/reposición de cada hueco, PARA SIEMPRE. ¿Continuar?`
-    : `¿Eliminar TODO el cuerpo ${codigoCuerpo} (todos sus entrepaños y huecos)? Esta acción no se puede deshacer. Se bloquea completo si algún hueco tiene stock o historial real — usa "Reclasificar > Desactivar cuerpo" en ese caso.`;
+    : `¿Eliminar TODO el cuerpo ${codigoCuerpo} (todos sus entrepaños y huecos)? Esta acción no se puede deshacer. Se bloquea completo si algún hueco tiene stock o historial real — use "Reclasificar > Desactivar cuerpo" en ese caso.`;
   if (!await _modalConfirmar(msg, { titulo: forzar ? 'Forzar eliminación' : 'Eliminar cuerpo', peligro: true })) return;
   try {
     const r = await fetch(API + `/api/almacenes/${ALMACEN_ID}/ubicaciones/cuerpo`, {
@@ -745,7 +745,7 @@ async function layoutGuardarEditarFila() {
   const activo = activoRaw !== '' ? activoRaw === '1' : null;
 
   if (tipo_zona === null && capacidad_maxima === null && activo === null) {
-    alerta('Cambia al menos un campo: zona, capacidad o estado', 'error');
+    alerta('Cambie al menos un campo: zona, capacidad o estado', 'error');
     return;
   }
 
@@ -901,7 +901,7 @@ async function layoutBuscarProducto() {
     if (!prod) {
       conf.style.display = 'none';
       _layoutProductoId = null;
-      alerta('Producto no encontrado — verifica el código o búscalo por nombre', 'error');
+      alerta('Producto no encontrado — verifique el código o búsquelo por nombre', 'error');
       return;
     }
     _layoutProductoId = prod.id;
@@ -917,9 +917,9 @@ async function layoutBuscarProducto() {
 /** Confirm and submit the SKU assignment with quantity and optional capacity. */
 async function layoutConfirmarAsignar() {
   if (!_layoutUbAsignarId) return;
-  if (!_layoutProductoId) { alerta('Busca y confirma el producto antes de continuar', 'error'); return; }
+  if (!_layoutProductoId) { alerta('Busque y confirme el producto antes de continuar', 'error'); return; }
   const cantidad = parseInt(document.getElementById('layout-asignar-cantidad').value);
-  if (isNaN(cantidad) || cantidad <= 0) { alerta('Ingresa una cantidad válida', 'error'); return; }
+  if (isNaN(cantidad) || cantidad <= 0) { alerta('Ingrese una cantidad válida', 'error'); return; }
 
   const capRaw = document.getElementById('layout-asignar-capacidad')?.value;
   const capacidad_maxima = capRaw ? parseInt(capRaw) : null;
@@ -978,7 +978,7 @@ async function layoutGuardarEditarUbicacion() {
   const activo = activoRaw !== '' ? activoRaw === '1' : null;
 
   if (tipo_zona === null && capacidad_maxima === null && activo === null) {
-    alerta('Cambia al menos un campo: zona, capacidad o estado', 'error');
+    alerta('Cambie al menos un campo: zona, capacidad o estado', 'error');
     return;
   }
 
@@ -1107,7 +1107,7 @@ async function layoutGuardarReclasificar() {
 async function layoutImportarExcel(btn) {
   const input = document.getElementById('layout-import-file');
   const file = input?.files?.[0];
-  if (!file) { alerta('Selecciona un archivo .xlsx', 'error'); return; }
+  if (!file) { alerta('Seleccione un archivo .xlsx', 'error'); return; }
 
   const resultado = document.getElementById('layout-import-resultado');
   if (btn) { btn.disabled = true; btn.textContent = 'Importando...'; }
@@ -1274,7 +1274,7 @@ function layoutAbrirModalAsignarEntrepano(idsCsv, zona) {
   const m = document.getElementById('modal-layout-asignar-entrepano');
   if (!m) return;
   const codigoCuerpo = _layoutCodigoCuerpo(huecos[0].codigo);
-  document.getElementById('layout-asignar-ent-titulo').textContent = `${codigoCuerpo} · ${huecos.length} hueco(s) — deja en blanco los que no vayas a asignar hoy`;
+  document.getElementById('layout-asignar-ent-titulo').textContent = `${codigoCuerpo} · ${huecos.length} hueco(s) — deje en blanco los que no vaya a asignar hoy`;
   _layoutRenderFilasAsignarEntrepano();
   const resEl = document.getElementById('layout-asignar-ent-resultado');
   if (resEl) resEl.innerHTML = '';
