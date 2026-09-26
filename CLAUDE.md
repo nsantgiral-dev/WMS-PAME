@@ -5250,8 +5250,8 @@ antiguedad_horas, resolucion, reevaluaciones`.
 **Respaldo en el WMS** (`/api/cartera/panel/*`, JWT): ver con gestión o quien
 puede decidir; decidir con **`cartera_service.puede_autorizar`**: el **líder de
 cartera por su rol**, o la casilla `puede_autorizar_cartera` (por persona, nace
-apagada) **solo en un rol de gestión** (lista blanca desde el 2026-09-25, ver
-«Roles de la plata»). Bloque «⛔ Retenidos por cartera» en el tablero
+apagada) **solo en el admin** (lista blanca; desde el 2026-09-26, ver
+«Roles de la plata»: supervisor, jefe y gerente con la casilla ya no deciden). Bloque «⛔ Retenidos por cartera» en el tablero
 (`cartera.js`) y en la pestaña ⛔ Cartera del líder, etiqueta
 en la cola de pedidos y en packing. `GET/POST /api/cartera/panel/credito-lote`
 (`puede_autorizar_credito`: admin y líder de cartera): autoriza en lote, con un motivo común y bitácora por parada,
@@ -6456,9 +6456,9 @@ por operación en `app/services/permisos_liquidacion.py`:
 | Parada tardía desde la oficina (ruta ya cerrada: `puede_registrar_parada_tardia`) | admin + liquidador |
 | Confirmar retención, corregir cobro (y, con la ruta en tránsito, registrar la parada por el conductor) | admin + líder de cartera |
 | Autorizar crédito no autorizado (una parada, o en lote: `/api/cartera/panel/credito-lote`) | admin + líder de cartera |
-| Autorizar una retención de cartera | líder de cartera por su rol; la casilla `puede_autorizar_cartera` solo en gestión (`Roles.CARTERA_POR_ROL`, `CARTERA_CON_CASILLA`: listas blancas); el iniciador nunca |
+| Autorizar una retención de cartera | líder de cartera por su rol; la casilla `puede_autorizar_cartera` **solo en el admin** (`Roles.CARTERA_POR_ROL`, `CARTERA_CON_CASILLA = (ADMIN,)` desde el 2026-09-26: listas blancas); el iniciador nunca |
 | Forzar el cierre de una ruta | admin |
-| Ver Liquidación, desglose, reconciliación, planilla, sus envíos a Siesa | admin + jefe + liquidador + líder de cartera |
+| Ver Liquidación, desglose, reconciliación, planilla, sus envíos a Siesa | admin + jefe + **gerente** (solo lectura, 2026-09-26) + liquidador + líder de cartera. El supervisor no |
 
 - `/api/reposicion/siesa-jobs`: supervisión ve todo; quien ve la liquidación
   ve **solo** sus envíos (`puede_ver_jobs`), y cada job trae `puede_reintentar`.
@@ -6504,15 +6504,14 @@ de parámetros).
   la ruta. Misma clase, declarada.
 - Otros endpoints que devuelven un producto entero a personal de almacén
   (layout, stock, conteo) no pasan por `_producto_para`.
-- La matriz no tiene a «supervisor» ni «gerente» en nada de la plata (como
-  antes): la ven solo si son admin.
+- La matriz no tiene a «supervisor» ni «gerente» en ninguna escritura de la
+  plata; el gerente solo **ve** Liquidación (2026-09-26).
 - El formulario de parada tardía es de otro frente; acá solo su permiso.
 
-**Decisiones para el dueño:**
-1. La casilla de cartera vale para admin, supervisor, jefe y gerente. ¿Solo
-   admin? (hoy nadie más la tiene en QA; producción no se miró).
-2. ¿Forzar el cierre de una ruta pasa también al liquidador? (hoy admin).
-3. ¿El supervisor o el gerente ven Liquidación? (hoy no).
+**Decididas el 2026-09-26** (ver «Voz usted y tres ajustes de roles»): la
+casilla de cartera vale **solo en el admin**; forzar el cierre de una ruta
+sigue **solo admin** (también en la pantalla); el **gerente ve** Liquidación en
+solo lectura y el supervisor no.
 
 ---
 
@@ -6585,3 +6584,64 @@ corre sin la variable (`conftest` la borra).
 2. El sync de pedidos pasó a correr todo el día: ¿alguna hora en que no deba
    preguntarle a Siesa producción?
 3. ¿La evidencia (foto) del formulario de la oficina es obligatoria siempre?
+
+---
+
+## Voz usted y tres ajustes de roles (2026-09-25/26)
+
+**Decisión del dueño: la aplicación le habla al usuario de USTED.** La clase:
+*un texto que ve una persona, escrito en voseo o en tuteo*. Estaba en los
+mensajes del servidor («Revisá en Siesa», «No puedes cerrar…», «Esta tarea no
+te pertenece», «cobrá al entregar»), en los correos, en la PWA y en `flota/`.
+
+**Ahora, en `app/` (Python): cero.** Se pasaron a usted los ~180 textos de
+rutas, servicios, excepciones que viajan a la pantalla, correos y alertas
+(«Revise», «tiene», «su punto de venta», «pídalo», «Cuente qué pasó», «ya
+contó»). Donde el sujeto no era el usuario se reescribió impersonal («se
+contaron 90 y se enviaron 5»). Los tests que citaban el texto exacto se
+actualizaron; los de la PWA que citan su propio texto se dejaron para el
+frente de la PWA.
+
+**Trinquete: `tests/test_voz_usted.py`.** Detector por vocabulario generado
+desde raíces verbales (imperativo `Revisá`, presente `tenés`, clítico
+`Pedile`, pretérito `contaste`, subjuntivo `que lo sumes`, «vaciálo»; tuteo:
+`tu/te/ti`, `puedes`, clíticos acentuados `búscalo`, e imperativo desnudo
+`Revisa`/`Escanea` **solo al empezar cláusula**). Texto visible: Python por AST
+(`app/` y `flota/`, sin docstrings, sin `logger.*`/`print`), JS de la PWA con
+un lexer propio (sin comentarios ni regex; `'a' + 'b'` es una frase) e
+`index.html` (texto, `title`/`placeholder`/`aria-label`/`alt`, JS en línea).
+Lo citado entre «» no cuenta (el botón «No lo encontré» habla el operario).
+Meta-tests de lo que ve y de lo sano que no marca (`está`, `acá`, `Bogotá`,
+`Pídale`, `Hágalo`, `los cierres forzados`, `vuelve a la cola`, `RECONTAR_TU`,
+`tu_rol`), pisos (≥ 250 `.py`, ≥ 30 `.js`, miles de textos) y un lexer que se
+queja si pierde el hilo (un archivo ilegible no puede leerse como «limpio»).
+**14 mutaciones, las 14 rojas** (una primera variante —quitar `tenés` del
+conjunto explícito— no quitaba nada porque la forma también se genera; se
+reemplazó por `podés`).
+
+**`PENDIENTE_OTRO_FRENTE`** — la PWA y `flota/` las pasan a usted otros dos
+agentes en paralelo; quedaron declarados con su número de hallazgos (hoy 413
+en 38 archivos). **Solo encoge, en los dos sentidos:** un archivo que sube se
+pone rojo; uno que baja también, pidiendo actualizar su número o sacarlo. El
+integrador la vacía al juntar los tres frentes; el objetivo es `{}`.
+
+**Lo que NO ve:** voseo en MAYÚSCULAS sostenidas (se saltan como siglas), un
+imperativo tú en medio de la frase («…y cierra la caja»), un verbo cuya raíz
+no está en la lista (se agrega cuando aparece), texto armado letra a letra, y
+lo que vive en la base (motivos escritos por personas).
+
+### Tres ajustes de roles (decisión del dueño)
+
+| | Antes | Ahora | Trinquete |
+|---|---|---|---|
+| Casilla `puede_autorizar_cartera` | Valía en todo `GESTION` (admin, supervisor, jefe, gerente) | **Solo admin** (`Roles.CARTERA_CON_CASILLA = (ADMIN,)`). El líder de cartera sigue por su rol. La salud no cuenta a gestión con la casilla | `test_roles_plata.py::TestAjustesDeRoles20260926` (HTTP 403 por rol, el panel sin botones de decidir, la salud) |
+| Forzar el cierre de una ruta | Servidor: solo admin (verificado). **La pantalla** ofrecía «⚡ Forzar cierre» y «Cerrar las paradas que faltan» a todo el que veía Rutas/la planilla → 403 | `rutas.js`: `RUTA_ROLES_FUERZAN_CIERRE = ['admin']` + `puedeForzarCierreRuta()` en los dos botones | la lista del JS = `puede_forzar_cierre_ruta`; la tarjeta pintada en Node por rol; todo botón de forzar bajo su guarda |
+| Liquidación | admin, jefe, liquidador, líder de cartera | **+ gerente, solo lectura** (`puede_ver_liquidacion`). No está en ninguna función de escritura: el detalle le manda todos los `permisos` en falso y la tarjeta no le pinta botones; ve los envíos de la liquidación sin poder reintentarlos. **El supervisor no** (pestaña oculta y 403) | la matriz a mano, lecturas por HTTP, la tarjeta por rol, el aterrizaje |
+
+`liquidacion.js` no necesitó cambio: sus botones ya salían de `permisos`. El
+texto de la casilla en el formulario de usuarios (`app.js`) ahora dice «Vale
+solo para admin». Los cambios del PWA van en un commit aparte (el frente de la
+PWA toca los mismos archivos).
+
+**7 + 1 mutaciones de roles, todas rojas** (una —la tarjeta sin guarda—
+sobrevivía a un conteo de texto y obligó al test en Node).
