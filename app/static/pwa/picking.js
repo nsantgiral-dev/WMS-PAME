@@ -23,7 +23,7 @@ async function pedirTarea() {
         <div style="text-align:center;padding:40px 20px 16px;">
           <div style="font-size:60px;">📦</div>
           <div style="font-size:var(--fs-xl);font-weight:700;margin-top:12px;">No hay tareas pendientes</div>
-          <div style="font-size:var(--fs-sm);color:var(--tx3);margin-top:6px;">Serás asignado automáticamente cuando haya traslados o conteos disponibles</div>
+          <div style="font-size:var(--fs-sm);color:var(--tx3);margin-top:6px;">Será asignado automáticamente cuando haya traslados o conteos disponibles</div>
           <div style="display:flex;gap:10px;justify-content:center;margin-top:14px;">
             <span style="font-size:var(--fs-xs);padding:3px 10px;border-radius:10px;background:var(--warn-bg);color:var(--orange);font-weight:700;">TRASLADO</span>
             <span style="font-size:var(--fs-xs);padding:3px 10px;border-radius:10px;background:#78350f;color:var(--warn-tx);font-weight:700;">CONTEO</span>
@@ -32,7 +32,7 @@ async function pedirTarea() {
         <div style="text-align:center;padding:40px 20px 16px;">
           <div style="font-size:60px;">✓</div>
           <div style="font-size:24px;font-weight:700;margin-top:12px;">Sin tareas pendientes</div>
-          <div style="font-size:var(--fs-sm);color:var(--tx3);margin-top:6px;">El sistema te asignará la próxima automáticamente</div>
+          <div style="font-size:var(--fs-sm);color:var(--tx3);margin-top:6px;">El sistema le asignará la próxima automáticamente</div>
           <div style="display:flex;gap:10px;justify-content:center;margin-top:14px;">
             <span style="font-size:var(--fs-xs);padding:3px 10px;border-radius:10px;background:#1e3a5f;color:var(--info-tx);font-weight:700;">PEDIDO</span>
             <span style="font-size:var(--fs-xs);padding:3px 10px;border-radius:10px;background:var(--warn-bg);color:var(--orange);font-weight:700;">TRASLADO</span>
@@ -155,7 +155,7 @@ function renderTarea(t) {
       <div style="background:${dispInsuficiente ? 'var(--warn-bg)' : 'var(--ok-bg)'};border:1px solid ${dispInsuficiente ? '#b45309' : '#166534'};border-radius:12px;padding:12px 14px;margin-bottom:12px;text-align:center;">
         <div style="font-size:var(--fs-xs);color:${dispInsuficiente ? 'var(--warn-tx)' : 'var(--ok-tx)'};font-weight:700;letter-spacing:.5px;">${dispInsuficiente ? '⚠ ' : ''}DISPONIBLE EN SIESA PARA ESTE PEDIDO</div>
         <div style="font-size:20px;font-weight:800;color:var(--tx);margin-top:2px;">${dispSiesa} de ${pedida}</div>
-        ${dispInsuficiente ? `<div style="font-size:var(--fs-xs);color:var(--warn-tx);margin-top:4px;">El pedido pedía ${pedida} y Siesa solo comprometió ${dispSiesa}. Recoge ${req} — las ${faltanSiesa} restantes pasan a Auditoría.</div>` : ''}
+        ${dispInsuficiente ? `<div style="font-size:var(--fs-xs);color:var(--warn-tx);margin-top:4px;">El pedido pedía ${pedida} y Siesa solo comprometió ${dispSiesa}. Recoja ${req} — las ${faltanSiesa} restantes pasan a Auditoría.</div>` : ''}
       </div>` : ''}
 
       ${esPicking && t.producto_id ? `
@@ -254,7 +254,7 @@ async function _cargarDescomposicionPicking(productoId, almacenId, cantidad) {
       texto = `${sueltas} UND sueltas`;
     }
     cardTexto.textContent = texto;
-    cardHint.textContent  = `Escanea ${unidad.toLowerCase()} por ${unidad.toLowerCase()} — cada scan = ${d.factor_empaque} und`;
+    cardHint.textContent  = `Escanee ${unidad.toLowerCase()} por ${unidad.toLowerCase()} — cada scan = ${d.factor_empaque} und`;
 
     // Lazy labeling: si hay pacas pero el producto no tiene LPNs activos,
     // mostrar el botón para que el picker genere la etiqueta en el momento.
@@ -425,7 +425,7 @@ async function _procesarScanPicking(codigo) {
       // arriesgaría duplicar si el POST original sí había llegado. Revertir
       // y dejar que el operario reintente el mismo código a propósito.
       beepError();
-      alerta('Sin conexión — reintenta escaneando de nuevo', 'error');
+      alerta('Sin conexión — reintente escaneando de nuevo', 'error');
     }
   }
 }
@@ -503,7 +503,7 @@ function _modalAmbiguedadPicking(codigo, empaques) {
   modal.innerHTML = `
     <div style="background:var(--bg-s);border-top:2px solid #1d4ed8;border-radius:20px 20px 0 0;padding:24px;width:100%;max-height:70vh;overflow-y:auto;">
       <div style="font-size:var(--fs-md);font-weight:700;color:var(--info-tx);margin-bottom:4px;">Código en múltiples empaques</div>
-      <div style="font-size:var(--fs-sm);color:var(--tx3);margin-bottom:16px;">${esc(codigo)} — ¿Cuál estás recogiendo?</div>
+      <div style="font-size:var(--fs-sm);color:var(--tx3);margin-bottom:16px;">${esc(codigo)} — ¿Cuál está recogiendo?</div>
       ${opciones}
       <button onclick="this.closest('.modal-ambig').remove()"
         style="width:100%;padding:12px;font-size:var(--fs-sm);background:var(--bg-s);color:var(--tx3);border:1px solid var(--brd);border-radius:10px;cursor:pointer;margin-top:4px;">
@@ -562,7 +562,7 @@ async function confirmar() {
     // pedía más — se le dice al operario qué pasa con lo que falta.
     const _ped = TAREA_ACTUAL.cantidad_pedida, _req = TAREA_ACTUAL.cantidad_requerida;
     const _avisoBackorder = (_ped != null && _req != null && _ped > _req)
-      ? `Recogiste ${_req} de ${_ped} pedidas — ${_ped - _req} pasan a Auditoría`
+      ? `Recogió ${_req} de ${_ped} pedidas — ${_ped - _req} pasan a Auditoría`
       : null;
     TAREA_ACTUAL = null;
     // Picking con packing asociado → mostrar botón etiqueta canasto
@@ -598,7 +598,7 @@ function _modalEtiquetaCanasto(canasto) {
       <div style="font-size:56px;margin-bottom:8px;">✅</div>
       <div style="font-size:var(--fs-xl);font-weight:900;color:var(--ok-tx);margin-bottom:8px;">Picking completado</div>
       <div style="font-size:var(--fs-sm);color:var(--tx2);margin-bottom:20px;line-height:1.6;">
-        ¿Cuántos canastos usaste para este pedido?
+        ¿Cuántos canastos usó para este pedido?
       </div>
       <div style="display:flex;align-items:center;justify-content:center;gap:16px;margin-bottom:24px;">
         <button id="_ecan-menos" style="width:48px;height:48px;background:var(--bg-input);color:var(--tx);border:2px solid var(--brd);border-radius:12px;font-size:24px;font-weight:900;cursor:pointer;">−</button>
@@ -670,7 +670,7 @@ function _modalFaltanteParcial(encontradas, requeridas) {
       <div style="background:var(--bg-s);border-radius:16px;padding:24px;width:100%;max-width:360px;border:2px solid #b45309;">
         <div style="font-size:20px;font-weight:800;color:var(--orange);margin-bottom:8px;">⚠ Faltante parcial</div>
         <div style="font-size:var(--fs-sm);color:var(--tx2);margin-bottom:20px;line-height:1.6;">
-          Encontraste <strong style="color:var(--orange);font-size:var(--fs-lg);font-weight:800;">${encontradas}</strong> de
+          Encontró <strong style="color:var(--orange);font-size:var(--fs-lg);font-weight:800;">${encontradas}</strong> de
           <strong style="color:var(--orange);font-size:var(--fs-lg);font-weight:800;">${requeridas}</strong> unidades.<br>
           <span style="font-size:var(--fs-xs);color:var(--tx3);">Se notificará al administrador para revisar el faltante.</span>
         </div>
@@ -702,8 +702,8 @@ async function _reportarFaltanteInfo(tareaId, cantRecogida, cantSolicitada) {
 async function confirmarManual(tareaId, cantMax) {
   const cant = await _modalCantidad(
     'Confirmación manual',
-    `¿Cuántas unidades encontraste físicamente? (máx. ${cantMax})<br>` +
-    `<span style="color:var(--tx3);font-size:var(--fs-xs);">Si no hay stock usa "Reportar problema" en vez de esto.</span>`,
+    `¿Cuántas unidades encontró físicamente? (máx. ${cantMax})<br>` +
+    `<span style="color:var(--tx3);font-size:var(--fs-xs);">Si no hay stock use "Reportar problema" en vez de esto.</span>`,
     { min: 1, max: cantMax, textoConfirmar: 'Confirmar recogida' }
   );
   if (cant === null) return;
@@ -757,7 +757,7 @@ async function reportarProblema(tareaId) {
 
         <div style="margin-top:4px;margin-bottom:8px;">
           <div style="font-size:var(--fs-xs);color:var(--tx3);margin-bottom:4px;">Observaciones (opcional)</div>
-          <textarea id="obs-problema" rows="2" placeholder="Describe lo que encontraste..."
+          <textarea id="obs-problema" rows="2" placeholder="Describa lo que encontró..."
             style="width:100%;padding:10px;background:var(--bg-s);border:1px solid var(--brd);border-radius:8px;color:var(--tx);font-size:var(--fs-sm);resize:none;box-sizing:border-box;"></textarea>
         </div>
 
