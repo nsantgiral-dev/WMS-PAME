@@ -289,7 +289,7 @@ def tipo_de_vehiculo(texto) -> str:
     for t in TIPOS_VEHICULO:
         if normalizar_tipo(t) == n:
             return t
-    raise ValueError(f'Tipo de vehículo desconocido: «{texto}». Elegí uno de: '
+    raise ValueError(f'Tipo de vehículo desconocido: «{texto}». Elija uno de: '
                      f'{", ".join(TIPOS_VEHICULO)}')
 
 
