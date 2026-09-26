@@ -282,7 +282,7 @@ async function cargarMuelleSinRuta() {
 
   el.innerHTML = `
     <div style="background:var(--bg-input);border-radius:10px;padding:12px;margin-bottom:16px;text-align:center;font-size:var(--fs-sm);color:var(--tx3);">
-      Selecciona una ruta arriba para empezar a planificar el cargue
+      Seleccione una ruta arriba para empezar a planificar el cargue
     </div>
     ${grupos.map(g => `
       <div style="background:var(--bg-s);border:1px solid var(--brd);border-radius:12px;padding:14px;margin-bottom:8px;">
@@ -380,7 +380,7 @@ async function cargarMuelleConRuta(rutaId) {
       <div style="text-align:center;padding:20px;background:var(--bg-s);border-radius:12px;border:1px dashed var(--brd);margin-bottom:16px;">
         <div style="font-size:var(--fs-2xl);margin-bottom:6px;">🚛</div>
         <div style="font-size:var(--fs-sm);font-weight:700;color:var(--tx);">Ruta vacía</div>
-        <div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:4px;">Asigna pedidos desde la lista de abajo</div>
+        <div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:4px;">Asigne pedidos desde la lista de abajo</div>
       </div>`;
   }
 
@@ -553,7 +553,7 @@ function rutaMoverGrupo(idx, dir, rutaId) {
  */
 async function muelleAsignar(bultoId, pedidoSiesa) {
   if (!RUTA_ACTIVA_ID) {
-    alerta('Selecciona una ruta primero', 'advertencia');
+    alerta('Seleccione una ruta primero', 'advertencia');
     return;
   }
   try {
@@ -604,7 +604,7 @@ async function muelleCargarCaja() {
 
   if (!RUTA_ACTIVA_ID) {
     feedback.style.color = 'var(--warn-tx)';
-    feedback.textContent = '⚠ Selecciona una ruta antes de escanear';
+    feedback.textContent = '⚠ Seleccione una ruta antes de escanear';
     return;
   }
 
@@ -822,7 +822,7 @@ async function _rutaPostConFlota(ruta, accion) {
     const motivo = await _modalTexto(
       '⚠️ Advertencias del vehículo',
       `<ul style="margin:0 0 10px;padding-left:18px;">${lista}</ul>` +
-      `Podés ${esc(accion)} igual. El motivo queda registrado.`,
+      `Puede ${esc(accion)} igual. El motivo queda registrado.`,
       { placeholder: 'Motivo', textoConfirmar: 'Continuar' });
     if (motivo === null || motivo === undefined || !String(motivo).trim()) return { r: null, d: null };
     r = await enviar({ motivo_advertencias: motivo.trim() });
@@ -846,7 +846,7 @@ async function rutaIniciar(id) {
       const infoSug = d.sugeridos_count > 0
         ? ` · ${d.sugeridos_count} bulto${d.sugeridos_count !== 1 ? 's' : ''} disponibles para asignar`
         : '';
-      alerta(`Cargue iniciado${infoSug}. Asigna los bultos manualmente en el muelle.`, 'exito');
+      alerta(`Cargue iniciado${infoSug}. Asigne los bultos manualmente en el muelle.`, 'exito');
       // Siempre redirigir al muelle con la ruta activa pre-seleccionada
       setTimeout(() => {
         tab('tab-muelle');
@@ -1102,7 +1102,7 @@ async function rutaVerManifiesto(id) {
     } else if (!dp.ok) {
       filas = `<div style="color:var(--warn-tx);background:#fffbeb;border:1px solid #fcd34d;border-radius:10px;text-align:center;padding:20px;font-size:var(--fs-sm);">
         ${dp.status === 403
-          ? 'No tienes permiso para ver el detalle de paradas de esta ruta.'
+          ? 'No tiene permiso para ver el detalle de paradas de esta ruta.'
           : 'No se pudo cargar el detalle de paradas.'}
         <div style="font-size:var(--fs-xs);color:var(--warn-tx);margin-top:6px;">La ruta puede tener paradas — esta pantalla no las pudo leer.</div>
       </div>`;
@@ -1195,10 +1195,10 @@ async function rutasProgramar() {
   const notas      = document.getElementById('rutas-form-notas')?.value.trim();
   errorEl.textContent = '';
 
-  if (!maestraId)   { errorEl.textContent = 'Selecciona una ruta maestra'; return; }
-  if (!conductorId) { errorEl.textContent = 'Selecciona un conductor'; return; }
-  if (!vehiculoId)  { errorEl.textContent = 'Selecciona un vehículo'; return; }
-  if (!fecha)       { errorEl.textContent = 'Selecciona la fecha de despacho'; return; }
+  if (!maestraId)   { errorEl.textContent = 'Seleccione una ruta maestra'; return; }
+  if (!conductorId) { errorEl.textContent = 'Seleccione un conductor'; return; }
+  if (!vehiculoId)  { errorEl.textContent = 'Seleccione un vehículo'; return; }
+  if (!fecha)       { errorEl.textContent = 'Seleccione la fecha de despacho'; return; }
 
   try {
     const r = await fetch(API + '/api/rutas/programar', {
@@ -1235,7 +1235,7 @@ async function cargarListaMaestrasEnSelect(selectId) {
   if (!sel) return;
   try {
     const d = await get('/api/rutas/maestras?activas=true');
-    sel.innerHTML = '<option value="">— Selecciona ruta maestra —</option>';
+    sel.innerHTML = '<option value="">— Seleccione ruta maestra —</option>';
     (d.maestras || []).forEach(m => {
       const opt = document.createElement('option');
       opt.value = m.id;
@@ -1300,7 +1300,7 @@ async function cargarListaMaestras() {
     // Más reciente primero: la que se acaba de crear queda de primera.
     const maestras = (d.maestras || []).slice().sort((a, b) => b.id - a.id);
     if (!maestras.length) {
-      el.innerHTML = '<div style="color:var(--tx3);text-align:center;padding:40px;">Sin rutas maestras. Crea la primera con el botón +</div>';
+      el.innerHTML = '<div style="color:var(--tx3);text-align:center;padding:40px;">Sin rutas maestras. Cree la primera con el botón +</div>';
       return;
     }
     el.innerHTML = maestras.map(m => `
@@ -1505,7 +1505,7 @@ function _maestraRenderParadas() {
   const el = document.getElementById('maestras-paradas-lista');
   if (!el) return;
   if (!_MAESTRAS_PARADAS.length) {
-    el.innerHTML = '<div style="color:var(--tx3);font-size:var(--fs-xs);text-align:center;padding:10px;">Agrega las paradas en orden de entrega (1ª = primera entrega)</div>';
+    el.innerHTML = '<div style="color:var(--tx3);font-size:var(--fs-xs);text-align:center;padding:10px;">Agregue las paradas en orden de entrega (1ª = primera entrega)</div>';
     return;
   }
   el.innerHTML = _MAESTRAS_PARADAS.map((m, i) => `
@@ -1526,7 +1526,7 @@ async function maestrasGuardar() {
   errorEl.textContent = '';
 
   if (!nombre) { errorEl.textContent = 'El nombre es requerido'; return; }
-  if (!_MAESTRAS_PARADAS.length) { errorEl.textContent = 'Agrega al menos una parada'; return; }
+  if (!_MAESTRAS_PARADAS.length) { errorEl.textContent = 'Agregue al menos una parada'; return; }
 
   try {
     const url    = editId ? (API + '/api/rutas/maestras/' + editId) : (API + '/api/rutas/maestras');
@@ -1603,7 +1603,7 @@ async function cargarListaVehiculosEnSelect(selectId) {
   if (!sel) return;
   try {
     const d = await get('/api/rutas/vehiculos?activos=true');
-    sel.innerHTML = '<option value="">— Selecciona vehículo —</option>';
+    sel.innerHTML = '<option value="">— Seleccione vehículo —</option>';
     (d.vehiculos || []).forEach(v => {
       const opt = document.createElement('option');
       opt.value = v.id;
@@ -1664,7 +1664,7 @@ async function vehiculosCrear() {
   errorEl.textContent = '';
 
   if (!placa) { errorEl.textContent = 'La placa es requerida'; return; }
-  if (!tipo)  { errorEl.textContent = 'Selecciona el tipo de vehículo'; return; }
+  if (!tipo)  { errorEl.textContent = 'Seleccione el tipo de vehículo'; return; }
 
   try {
     const r = await fetch(API + '/api/rutas/vehiculos', {
@@ -1712,7 +1712,7 @@ async function cargarListaConductoresEnSelect(selectId) {
   if (!sel) return;
   try {
     const d = await get('/api/rutas/conductores?activos=true');
-    sel.innerHTML = '<option value="">— Selecciona conductor —</option>';
+    sel.innerHTML = '<option value="">— Seleccione conductor —</option>';
     (d.conductores || []).forEach(c => {
       const opt = document.createElement('option');
       opt.value = c.id;
@@ -1925,7 +1925,7 @@ async function cargarRutasConductor() {
     if (cached !== null) {
       _COND_RUTAS = cached;
     } else if (!_COND_RUTA_ACTIVA) {
-      el.innerHTML = '<div style="color:var(--err-tx);text-align:center;padding:40px;">Sin conexión y sin datos en caché. Abre la app con señal primero.</div>';
+      el.innerHTML = '<div style="color:var(--err-tx);text-align:center;padding:40px;">Sin conexión y sin datos en caché. Abra la app con señal primero.</div>';
       return;
     }
   }
@@ -1944,7 +1944,7 @@ async function cargarRutasConductor() {
     el.innerHTML = `<div style="text-align:center;padding:80px 20px;">
       <div style="font-size:60px;">✅</div>
       <div style="font-size:20px;font-weight:700;color:var(--ok-tx);margin-top:16px;">Sin rutas en tránsito</div>
-      <div style="font-size:var(--fs-sm);color:var(--tx3);margin-top:8px;">El jefe de almacén te asignará una cuando salgas</div>
+      <div style="font-size:var(--fs-sm);color:var(--tx3);margin-top:8px;">El jefe de almacén le asignará una cuando salga</div>
       <button onclick="cargarRutasConductor()" style="margin-top:24px;padding:14px 28px;background:#1d4ed8;border:none;color:#fff;border-radius:12px;font-size:var(--fs-md);cursor:pointer;">🔄 Actualizar</button>
     </div>`;
     return;
@@ -2207,7 +2207,7 @@ function _condAvisoCobro(p) {
   const e = p && p.cobro_etiqueta;
   if (e && e.texto) return { texto: e.texto, tono: e.tono || 'info' };
   if (_condEsCreditoReal(p)) return { texto: 'Crédito — no se cobra', tono: 'info' };
-  return { texto: 'Sin condición de pago: cobrá al entregar', tono: 'warn' };
+  return { texto: 'Sin condición de pago: cobre al entregar', tono: 'warn' };
 }
 
 /** Renderiza el formulario de confirmacion de parada con estado, pago, foto y items. */
@@ -2316,7 +2316,7 @@ function _condRenderFormParada() {
 
     <div id="cond-items-parcial" style="margin-bottom:14px;display:${estadoUi === 'ENTREGADO' ? 'block' : 'none'};">
       <label style="font-size:var(--fs-xs);color:var(--tx2);font-weight:700;display:block;margin-bottom:8px;">REFERENCIAS</label>
-      <div style="font-size:var(--fs-xs);color:var(--tx2);margin-bottom:10px;">Precargadas con la cantidad del pedido. Ajusta solo si algo no se entregó — lo que baje queda como devolución.</div>
+      <div style="font-size:var(--fs-xs);color:var(--tx2);margin-bottom:10px;">Precargadas con la cantidad del pedido. Ajuste solo si algo no se entregó — lo que baje queda como devolución.</div>
       ${(p.items && p.items.length ? p.items : []).map((it, idx) => {
         const pedido = it.cantidad_pedida || 0;
         const prevEntregado = (() => {
@@ -2421,7 +2421,7 @@ function _condRenderFormParada() {
           <div id="cond-motivo-descuento-preview" style="margin-top:8px;font-size:var(--fs-sm);color:var(--tx3);"></div>
           ${(p.vendedor_nombre || p.vendedor_telefono) ? `
           <div style="margin-top:10px;padding:12px;background:#fffbeb;border:1px solid #d97706;border-radius:10px;">
-            <div style="font-size:var(--fs-xs);color:var(--warn-tx);font-weight:700;margin-bottom:6px;">⚠ Comunícate con el vendedor para validar este pago parcial</div>
+            <div style="font-size:var(--fs-xs);color:var(--warn-tx);font-weight:700;margin-bottom:6px;">⚠ Comuníquese con el vendedor para validar este pago parcial</div>
             <div style="font-size:var(--fs-sm);color:var(--tx);font-weight:700;">${esc(p.vendedor_nombre || '—')}</div>
             ${p.vendedor_telefono ? `<a href="tel:${esc(p.vendedor_telefono)}" style="display:inline-block;margin-top:4px;color:var(--ok-tx);font-size:var(--fs-sm);text-decoration:none;">📞 ${esc(p.vendedor_telefono)}</a>` : ''}
           </div>
@@ -2462,7 +2462,7 @@ function _condRenderFormParada() {
           📷 Foto del comprobante *
         </button>
         <div id="cond-comprobante-estado" style="margin-top:8px;font-size:var(--fs-xs);color:var(--tx2);">
-          ${r && r.tiene_foto_comprobante ? '✓ Foto del comprobante guardada — tomá otra para reemplazarla' : 'Sin foto todavía'}
+          ${r && r.tiene_foto_comprobante ? '✓ Foto del comprobante guardada — tome otra para reemplazarla' : 'Sin foto todavía'}
         </div>
       </div>
       `}
@@ -2478,7 +2478,7 @@ function _condRenderFormParada() {
       <label style="font-size:var(--fs-xs);color:var(--tx2);font-weight:700;display:block;margin-bottom:8px;">MOTIVO DEL RECHAZO *</label>
       <select id="cond-motivo" onchange="condMotivoCambio()"
         style="width:100%;padding:12px;background:#fff;border:1px solid #d1d5db;color:var(--tx);border-radius:10px;font-size:var(--fs-sm);box-sizing:border-box;">
-        <option value="">— Elegí el motivo —</option>
+        <option value="">— Elija el motivo —</option>
         ${(_COND_MOTIVOS || []).map(m => `
         <option value="${esc(m.codigo)}" ${motivoRechazoActual === m.codigo ? 'selected' : ''}>${esc(m.etiqueta)}</option>`).join('')}
       </select>
@@ -2486,10 +2486,10 @@ function _condRenderFormParada() {
         <div style="font-size:var(--fs-sm);color:var(--warn-tx);font-weight:700;">La mercancía se queda con el cliente. El inventario NO vuelve al camión.</div>
         <div style="font-size:var(--fs-xs);color:var(--tx);margin-top:6px;">Obligatorio: <b>una foto</b> (la mercancía en el local o la fachada) y tocar <b>📍 Estoy aquí</b>.</div>
         ${(p.vendedor_nombre || p.vendedor_telefono) ? `
-        <div style="margin-top:8px;font-size:var(--fs-xs);color:var(--tx2);">Antes de dejarla, llamá al asesor del pedido:</div>
+        <div style="margin-top:8px;font-size:var(--fs-xs);color:var(--tx2);">Antes de dejarla, llame al asesor del pedido:</div>
         <div style="font-size:var(--fs-sm);color:var(--tx);font-weight:700;">${esc(p.vendedor_nombre || '—')}</div>
         ${p.vendedor_telefono ? `<a href="tel:${esc(p.vendedor_telefono)}" style="display:inline-block;margin-top:4px;color:var(--ok-tx);font-size:var(--fs-md);font-weight:700;text-decoration:none;">📞 ${esc(p.vendedor_telefono)}</a>` : ''}
-        ` : `<div style="margin-top:8px;font-size:var(--fs-xs);color:var(--tx2);">Este pedido no trae el teléfono del asesor: avisá a la oficina.</div>`}
+        ` : `<div style="margin-top:8px;font-size:var(--fs-xs);color:var(--tx2);">Este pedido no trae el teléfono del asesor: avise a la oficina.</div>`}
       </div>
     </div>
 
@@ -2515,7 +2515,7 @@ function _condRenderFormParada() {
           ✕ Quitar foto
         </button>
       </div>
-      ${r && r.foto_entrega ? `<div style="margin-top:8px;font-size:var(--fs-xs);color:var(--ok-tx);">✓ Foto guardada — toma una nueva para reemplazarla</div>` : ''}
+      ${r && r.foto_entrega ? `<div style="margin-top:8px;font-size:var(--fs-xs);color:var(--ok-tx);">✓ Foto guardada — tome una nueva para reemplazarla</div>` : ''}
     </div>
 
     <div style="margin-bottom:20px;">
@@ -2527,7 +2527,7 @@ function _condRenderFormParada() {
         📍 Estoy aquí
       </button>
       <div id="cond-geo-estado" style="margin-top:8px;font-size:var(--fs-xs);color:var(--tx2);">
-        Tocalo parado en la puerta del cliente. Queda guardado para que la próxima ruta sepa dónde es.
+        Tóquelo parado en la puerta del cliente. Queda guardado para que la próxima ruta sepa dónde es.
       </div>
     </div>
 
@@ -2829,7 +2829,7 @@ function _condBloqueNavegacion(p) {
   const aviso = (txt) => `<div style="margin-top:10px;padding:10px;background:var(--bg-input);border:1px solid var(--brd);border-radius:10px;font-size:var(--fs-xs);color:var(--tx2);line-height:1.5;">${txt}</div>`;
 
   if (!g) {
-    return aviso('📍 <b style="color:var(--tx);">No sabemos dónde queda.</b><br>Tocá «Estoy aquí» al confirmar y la próxima ruta ya lo va a tener.');
+    return aviso('📍 <b style="color:var(--tx);">No sabemos dónde queda.</b><br>Toque «Estoy aquí» al confirmar y la próxima ruta ya lo va a tener.');
   }
   if (g.lat == null || g.lon == null) {
     const motivos = {
@@ -2838,7 +2838,7 @@ function _condBloqueNavegacion(p) {
       capturas_dispersas:     'las capturas no coinciden entre sí — puede haber dos clientes con el mismo nombre',
     };
     const razon = motivos[g.motivo_sin_maestro] || 'no se pudo determinar';
-    return aviso(`📍 <b style="color:var(--tx);">No sabemos dónde queda</b> — ${razon}.<br>Tocá «Estoy aquí» al confirmar.`);
+    return aviso(`📍 <b style="color:var(--tx);">No sabemos dónde queda</b> — ${razon}.<br>Toque «Estoy aquí» al confirmar.`);
   }
 
   const ll = `${esc(g.lat)},${esc(g.lon)}`;
@@ -2880,7 +2880,7 @@ function condCapturarUbicacion() {
 
   if (!navigator.geolocation) {
     el._geo = { fuente: 'sin_dato', motivo: 'no_soportado' };
-    decir('Este dispositivo no tiene GPS disponible. Podés confirmar igual.', '#f59e0b');
+    decir('Este dispositivo no tiene GPS disponible. Puede confirmar igual.', '#f59e0b');
     return;
   }
 
@@ -2914,10 +2914,10 @@ function condCapturarUbicacion() {
       const motivo = motivos[err && err.code] || 'no_declarado';
       el._geo = { fuente: 'sin_dato', motivo: motivo };
       const textos = {
-        permiso_denegado: 'Permiso de ubicación denegado. Podés confirmar igual.',
-        sin_senal:        'Sin señal de GPS acá. Podés confirmar igual.',
-        timeout:          'El GPS tardó demasiado. Podés confirmar igual.',
-        no_declarado:     'No se pudo tomar la ubicación. Podés confirmar igual.',
+        permiso_denegado: 'Permiso de ubicación denegado. Puede confirmar igual.',
+        sin_senal:        'Sin señal de GPS acá. Puede confirmar igual.',
+        timeout:          'El GPS tardó demasiado. Puede confirmar igual.',
+        no_declarado:     'No se pudo tomar la ubicación. Puede confirmar igual.',
       };
       decir(textos[motivo], '#f59e0b');
     },
@@ -2974,7 +2974,7 @@ async function condGuardarParada() {
 
   // Observaciones obligatorias para RECHAZADO
   if (estadoUi === 'RECHAZADO' && !obs) {
-    alerta('Escribe el motivo del rechazo (ej: cliente cerrado, dirección incorrecta)', 'error');
+    alerta('Escriba el motivo del rechazo (ej: cliente cerrado, dirección incorrecta)', 'error');
     document.getElementById('cond-obs')?.focus();
     return;
   }
@@ -3009,7 +3009,7 @@ async function condGuardarParada() {
         if (chk && chk.checked) bultosDevolucion.push(b.id);
       });
       if (!obs) {
-        alerta('Escribe una observación: qué se entregó y qué se devolvió', 'error');
+        alerta('Escriba una observación: qué se entregó y qué se devolvió', 'error');
         document.getElementById('cond-obs')?.focus();
         return;
       }
@@ -3022,7 +3022,7 @@ async function condGuardarParada() {
   const esCredito = cobraEnLaPuerta && el._modoPago === 'CREDITO';
   const formaPago = esCredito ? 'CREDITO' : (document.getElementById('cond-forma-pago')?.value || '');
   if (cobraEnLaPuerta && !esCredito && !formaPago) {
-    alerta('Selecciona la forma de pago antes de confirmar', 'error');
+    alerta('Seleccione la forma de pago antes de confirmar', 'error');
     document.getElementById('cond-forma-pago')?.focus();
     return;
   }
@@ -3041,13 +3041,13 @@ async function condGuardarParada() {
   const motivoRechazo = document.getElementById('cond-motivo')?.value || '';
   if (estadoUi === 'RECHAZADO' && _condMotivoExigeEvidencia(motivoRechazo)) {
     if (!fotoBase64 && !(rPrevio && rPrevio.tiene_foto_entrega)) {
-      alerta('Tomá una foto: la mercancía en el local o la fachada', 'error');
+      alerta('Tome una foto: la mercancía en el local o la fachada', 'error');
       return;
     }
     const g = el._geo || {};
     const intentado = (g.lat != null && g.lon != null) || (g.motivo && g.motivo !== 'no_se_pidio');
     if (!intentado && !rPrevio) {
-      alerta('Tocá «📍 Estoy aquí» antes de confirmar', 'error');
+      alerta('Toque «📍 Estoy aquí» antes de confirmar', 'error');
       document.getElementById('cond-geo-btn')?.focus();
       return;
     }
@@ -3070,18 +3070,18 @@ async function condGuardarParada() {
     } else {
       const montoParcial = parseInt(document.getElementById('cond-monto-parcial')?.value, 10) || 0;
       if (montoParcial <= 0) {
-        alerta('Ingresa el monto que pagó el cliente', 'error');
+        alerta('Ingrese el monto que pagó el cliente', 'error');
         document.getElementById('cond-monto-parcial')?.focus();
         return;
       }
       if (montoParcial >= valorBase) {
-        alerta('El monto es igual o mayor al valor a cobrar — usa "Pago Total"', 'error');
+        alerta('El monto es igual o mayor al valor a cobrar — use "Pago Total"', 'error');
         document.getElementById('cond-monto-parcial')?.focus();
         return;
       }
       const motivo = document.getElementById('cond-motivo-descuento')?.value || '';
       if (!motivo) {
-        alerta('Selecciona el motivo del descuento', 'error');
+        alerta('Seleccione el motivo del descuento', 'error');
         document.getElementById('cond-motivo-descuento')?.focus();
         return;
       }
@@ -3092,7 +3092,7 @@ async function condGuardarParada() {
   } else if (cobraEnLaPuerta) {
     montoFinal = parseFloat(document.getElementById('cond-monto')?.value || 0) || 0;
     if (estadoEntrega === 'PARCIAL' && montoFinal <= 0) {
-      alerta('Ingresa el monto cobrado por la parte entregada', 'error');
+      alerta('Ingrese el monto cobrado por la parte entregada', 'error');
       document.getElementById('cond-monto')?.focus();
       return;
     }
@@ -3102,7 +3102,7 @@ async function condGuardarParada() {
     const _faltaCobro = !_condEsCreditoReal(p) && estadoEntrega === 'ENTREGADO' && (
       montoFinal <= 0 || (p.valor_factura != null && montoFinal < Number(p.valor_factura) - _COND_TOLERANCIA_COBRO));
     if (_faltaCobro) {
-      alerta('Esta factura se cobra al entregar y el monto no alcanza. Si no pagó, marcá Rechazado → «No pagó»; si pagó una parte, ajustá lo entregado.', 'error');
+      alerta('Esta factura se cobra al entregar y el monto no alcanza. Si no pagó, marque Rechazado → «No pagó»; si pagó una parte, ajuste lo entregado.', 'error');
       document.getElementById('cond-monto')?.focus();
       return;
     }
@@ -3116,7 +3116,7 @@ async function condGuardarParada() {
     referenciaPago = (document.getElementById('cond-referencia')?.value || '').trim();
     const alnum = referenciaPago.replace(/[^0-9A-Za-z]/g, '');
     if (alnum.length < COND_MIN_REFERENCIA) {
-      alerta(`Escribí la referencia del comprobante (al menos los últimos ${COND_MIN_REFERENCIA} dígitos)`, 'error');
+      alerta(`Escriba la referencia del comprobante (al menos los últimos ${COND_MIN_REFERENCIA} dígitos)`, 'error');
       document.getElementById('cond-referencia')?.focus();
       return;
     }
@@ -3126,7 +3126,7 @@ async function condGuardarParada() {
       catch (_) { alerta('Error procesando la foto del comprobante', 'error'); return; }
     }
     if (!fotoComprobante && !(rPrevio && rPrevio.tiene_foto_comprobante)) {
-      alerta('Tomale una foto al comprobante del pago', 'error');
+      alerta('Tómele una foto al comprobante del pago', 'error');
       return;
     }
   }
@@ -3828,7 +3828,7 @@ async function rutaLiquidar(id) {
       alerta(d.error || 'Error al liquidar', 'error');
       return;
     }
-    alerta('Ruta liquidada en WMS — documenta NC/RC/DC desde el módulo Liquidación', 'exito');
+    alerta('Ruta liquidada en WMS — documente NC/RC/DC desde el módulo Liquidación', 'exito');
     // NO auto-fire Siesa — el operador decide per-parada en Liquidación
     await _cargarPlanilla(id);
     await cargarListaRutas();
@@ -3991,7 +3991,7 @@ async function muelleImprimirManifiesto() {
 
   const ventana = window.open('', '_blank');
   if (!ventana) {
-    alerta('El navegador bloqueó la ventana emergente — permití popups', 'advertencia');
+    alerta('El navegador bloqueó la ventana emergente — permita popups', 'advertencia');
     return;
   }
   ventana.document.write(html);
