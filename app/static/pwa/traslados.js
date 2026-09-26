@@ -243,7 +243,7 @@ function _renderTrasladoCard(s) {
   const bloqueRecuperacion = recuperacion.length ? `
     <div style="margin-top:10px;padding:8px;background:var(--err-bg);border:1px solid var(--err-brd);border-radius:8px;">
       <div style="font-size:var(--fs-sm);color:var(--err-tx);font-weight:700;margin-bottom:6px;">
-        ⚠ RECUPERACIÓN — crean documentos en Siesa. Verificá primero en Siesa que el documento no exista.
+        ⚠ RECUPERACIÓN — crean documentos en Siesa. Verifique primero en Siesa que el documento no exista.
       </div>
       <div style="display:flex;gap:6px;flex-wrap:wrap;">${recuperacion.join('')}</div>
     </div>` : '';
@@ -569,11 +569,11 @@ async function cargarTrasladosOperario() {
     }
     contenedor.innerHTML = `
       <div style="font-size:var(--fs-xs);font-weight:700;color:var(--lila-tx);margin-bottom:10px;text-transform:uppercase;letter-spacing:1px;">
-        Traslados asignados a ti (${esc(traslados.length)})
+        Traslados asignados a usted (${esc(traslados.length)})
       </div>
       ${traslados.map(t => _renderTrasladoOperario(t)).join('')}`;
   } catch (e) {
-    contenedor.innerHTML = '<div style="text-align:center;padding:20px;color:var(--err-tx);font-size:var(--fs-xs);">Error cargando tus traslados — desliza para reintentar</div>';
+    contenedor.innerHTML = '<div style="text-align:center;padding:20px;color:var(--err-tx);font-size:var(--fs-xs);">Error cargando sus traslados — deslice para reintentar</div>';
   }
 }
 
@@ -606,7 +606,7 @@ function _renderTrasladoOperario(t) {
  * @param {number} id - Traslado solicitud ID.
  */
 async function trasConfirmarRecogida(id) {
-  if (!await _modalConfirmar('¿Confirmar recogida completa? El traslado pasará a PREPARADO y podrás despacharlo.', { titulo: 'Confirmar recogida' })) return;
+  if (!await _modalConfirmar('¿Confirmar recogida completa? El traslado pasará a PREPARADO y podrá despacharlo.', { titulo: 'Confirmar recogida' })) return;
   try {
     await post(`/api/traslados/${id}/confirmar-picking`, {});
     alerta('Recogida confirmada — listo para despachar', 'exito');
@@ -846,7 +846,7 @@ async function trasDespachar(id) {
 async function trasRevertir(id) {
   const motivo = await _modalTexto('Revertir traslado', 'Motivo de la reversión (opcional): Ej. "Camión regresó — mercancía no entregada"', { obligatorio: false });
   if (motivo === null) return;
-  if (!await _modalConfirmar('¿Revertir este traslado? Las unidades volverán al inventario del almacén.\n⚠ Deberás anular manualmente el STS en Siesa.', { titulo: 'Revertir traslado', peligro: true })) return;
+  if (!await _modalConfirmar('¿Revertir este traslado? Las unidades volverán al inventario del almacén.\n⚠ Deberá anular manualmente el STS en Siesa.', { titulo: 'Revertir traslado', peligro: true })) return;
   try {
     const r = await fetch(API + `/api/traslados/${id}/revertir`, {
       method: 'POST',
