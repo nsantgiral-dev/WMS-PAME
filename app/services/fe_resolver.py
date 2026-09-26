@@ -175,3 +175,96 @@ def resolver_fe_o_none(tarea, gateway=None, anotar=True) -> tuple:
         logger.warning('[FE] no se pudo resolver para la tarea %s: %s',
                        getattr(tarea, 'id', '?'), e)
         return None, None
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# El consecutivo de la FE que el 142943 no devolvió (2026-09-26)
+# ─────────────────────────────────────────────────────────────────────────
+#
+# En el camino normal del cierre la tarea queda con `fe_confirmada_at` (la FE
+# existe) y SIN `fe_consec`: el 142943 no devuelve el consecutivo, y solo el
+# camino idempotente lo anota. Quien necesita el número (la cartera para no
+# contar dos veces, la nota crédito, la foto de Siesa) lo resolvía cada uno
+# por su cuenta o se quedaba sin él. Este barrido lo anota.
+
+#: Tareas por corrida. Rotan por `reconciliacion_intento_at` (la misma columna
+#: del barrido de reconciliación: los dos conjuntos no se cruzan — aquél mira
+#: `siesa_triggered = False`, éste FE ya confirmada).
+LOTE_ANOTAR_FE = 20
+
+#: Solo las FE de los últimos días: el histórico no se recorre en cada corrida.
+DIAS_ANOTAR_FE = 30
+
+
+def fe_de_pedido(tarea, gateway=None):
+    """`(tipo, consec)` de la FE del pedido de la tarea, preguntando **por el
+    pedido, en su CO**, o `None` si Siesa respondió y no hay exactamente una.
+
+    Se descarta la fila cuyo tipo de pedido (`f430_id_tipo_docto`) o remisión
+    (`f460_consec_docto`) contradiga los de la tarea, si la fila los trae. Con
+    cero o con varias FE candidatas no se anota nada: anotar la factura de otro
+    pedido es peor que no anotar ninguna.
+
+    Levanta si no se pudo preguntar (sin clave de pedido, red, rechazo)."""
+    connekta = gateway
+    if connekta is None:
+        from app.services.connekta_gateway import connekta
+    partes = str(getattr(tarea, 'pedido_clave', None) or '').split('-')
+    if len(partes) != 3 or not partes[2].isdigit():
+        raise FENoEncontrada(f'la tarea {getattr(tarea, "id", "?")} no tiene clave de pedido')
+    co, tipo, consec = partes[0], partes[1].upper(), int(partes[2])
+    candidatos = set()
+    for r in connekta.get_facturas_de_pedido(co, consec) or []:
+        tp = str(r.get('f430_id_tipo_docto') or '').strip().upper()
+        if tp and tp != tipo:
+            continue
+        rm = str(r.get('f460_consec_docto') or '').strip()
+        if rm and getattr(tarea, 'rm_consec', None) and rm != str(tarea.rm_consec):
+            continue
+        ft = str(r.get('f350_id_tipo_docto') or '').strip()
+        fc = str(r.get('f350_consec_docto') or '').strip()
+        if ft and fc:
+            candidatos.add((ft, fc))
+    return candidatos.pop() if len(candidatos) == 1 else None
+
+
+def anotar_fe_emitidas(gateway=None, lote: int = LOTE_ANOTAR_FE, ahora=None) -> dict:
+    """Anota el consecutivo de las FE emitidas sin él (`fe_confirmada_at` sin
+    `fe_consec`), de los últimos `DIAS_ANOTAR_FE` días, un lote por corrida.
+    Solo GET. Corre con el barrido de cartera (`cartera_service.init_scheduler`,
+    misma ventana y mismo latido)."""
+    from datetime import datetime, timedelta
+
+    from app.extensions import db
+    from app.models.packing import EstadoPacking, TareaPacking as T
+    from app.utils.lock import LOCK_ANOTAR_FE, advisory_lock
+    ahora = ahora or datetime.utcnow()
+    res = {'revisadas': 0, 'anotadas': 0, 'sin_factura_unica': 0, 'no_se': 0}
+    with advisory_lock(LOCK_ANOTAR_FE, 'anotar_fe') as tomado:
+        if not tomado:
+            return {'omitido': 'otro worker ya anota'}
+        tareas = (T.query
+                  .filter(T.fe_consec.is_(None), T.fe_confirmada_at.isnot(None),
+                          T.fe_confirmada_at >= ahora - timedelta(days=DIAS_ANOTAR_FE),
+                          T.pedido_clave.isnot(None),
+                          T.estado != EstadoPacking.CANCELADO,
+                          db.or_(T.tipo_documento.is_(None), T.tipo_documento != 'TRASLADO'))
+                  .order_by(T.reconciliacion_intento_at.isnot(None),
+                            T.reconciliacion_intento_at, T.fe_confirmada_at.desc())
+                  .limit(lote).all())
+        for t in tareas:
+            res['revisadas'] += 1
+            t.reconciliacion_intento_at = ahora
+            try:
+                fe = fe_de_pedido(t, gateway=gateway)
+            except Exception as e:  # noqa: BLE001 — «no pude preguntar»: la próxima
+                res['no_se'] += 1
+                logger.warning('[FE] no se pudo anotar la FE de la tarea %s: %s', t.id, e)
+                continue
+            if fe is None:
+                res['sin_factura_unica'] += 1
+                continue
+            _anotar(t, *fe)
+            res['anotadas'] += int(bool(t.fe_consec))
+        db.session.commit()
+    return res

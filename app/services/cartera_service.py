@@ -697,10 +697,16 @@ def valor_empacado(tarea, lineas: list = None) -> tuple:
     return total, completo
 
 
-def _claves_del_nit(nit: str) -> set:
+def _claves_del_nit(nit: str):
+    """Subconsulta de las claves de pedido del NIT (índice
+    `ix_pedidos_historia_cliente`, m050inv2). Subconsulta y no un `set` en
+    memoria: un cliente con años de historia no se trae entero en cada
+    evaluación."""
     from app.models.pedido_historia import PedidoHistoria
-    return {c for (c,) in db.session.query(PedidoHistoria.pedido_clave)
-            .filter(PedidoHistoria.cliente_id == nit).distinct().all() if c}
+    return (db.session.query(PedidoHistoria.pedido_clave)
+            .filter(PedidoHistoria.cliente_id == nit,
+                    PedidoHistoria.pedido_clave.isnot(None))
+            .distinct())
 
 
 #: Una FE emitida entra a la cartera de Siesa con retraso (medido: de
@@ -710,16 +716,42 @@ def _claves_del_nit(nit: str) -> set:
 #: consume (P1-1, 2026-09-25).
 VENTANA_FE_SIN_INDEXAR = timedelta(hours=48)
 
+#: De dónde sale la hora de emisión de la FE, en orden. `fe_confirmada_at` es
+#: la prueba de emisión (el 142943 respondió bien, o se encontró en Siesa); las
+#: otras dos son aproximaciones para las tareas anteriores a esa columna.
+_CAMPOS_MOMENTO_FE = ('fe_confirmada_at', 'fecha_despachado', 'siesa_triggered_at')
+
 
 def _momento_fe(t):
-    """Cuándo se emitió (aprox.) la FE de la tarea, y de dónde sale:
-    `fecha_despachado` → `siesa_triggered_at`. Sin ninguna, `(None, None)`: la
-    tarea **consume** (no saber cuándo se emitió no prueba que se pagó)."""
-    for campo in ('fecha_despachado', 'siesa_triggered_at'):
+    """Cuándo se emitió (aprox.) la FE de la tarea, y de dónde sale. Sin
+    ninguna, `(None, None)`: la tarea **consume** (no saber cuándo se emitió no
+    prueba que se pagó)."""
+    for campo in _CAMPOS_MOMENTO_FE:
         v = getattr(t, campo, None)
         if v is not None:
             return v, campo
     return None, None
+
+
+def _filtro_puede_consumir(T, ahora):
+    """Gemela SQL de lo que `consumo_wms` descarta sin mirar: una tarea con FE
+    emitida hace más de `VENTANA_FE_SIN_INDEXAR` **nunca** consume (está en el
+    saldo o se pagó). Acota la consulta a lo que puede consumir, en vez de
+    recorrer la historia entera del NIT en cada evaluación (2026-09-26)."""
+    from sqlalchemy import and_, func, or_
+    momento = func.coalesce(*[getattr(T, c) for c in _CAMPOS_MOMENTO_FE])
+    sin_fe = and_(T.fe_consec.is_(None), T.fe_confirmada_at.is_(None))
+    return or_(sin_fe, momento.is_(None), momento > ahora - VENTANA_FE_SIN_INDEXAR)
+
+
+def _fila_en_cartera(t, filas: list):
+    """¿La FE de la tarea ya está en la cartera abierta leída? Por la FE si se
+    conoce su consecutivo; si no, por el PEDIDO (`cxc_cruce`, la regla general
+    de los campos de cruce). `None` = no aparece."""
+    from app.services import cxc_cruce
+    return cxc_cruce.fila_de_la_factura(
+        filas or [], t.tipo_docto_pedido_siesa, t.consec_docto_pedido_siesa,
+        t.fe_tipo if t.fe_consec else None, t.fe_consec)
 
 
 def consumo_wms(nit: str, excluir_pedido: str = None, filas: list = None,
@@ -728,28 +760,34 @@ def consumo_wms(nit: str, excluir_pedido: str = None, filas: list = None,
     leída todavía NO refleja. Sin esto, dos pedidos seguidos del mismo cliente
     ven el mismo cupo libre.
 
-    Consume cupo (P1-1, 2026-09-25):
+    Consume cupo (P1-1, 2026-09-25; 2026-09-26):
     · la tarea **sin FE** todavía (se está empacando o despachando);
     · la tarea **con FE reciente** (< `VENTANA_FE_SIN_INDEXAR`) que aún no
       aparece en la cartera abierta.
     No consume: la FE que ya está en la cartera (se cuenta en el saldo) y la FE
-    vieja que no está (se pagó o se anuló). Antes consumía toda FE ausente de
-    la cartera abierta: una FE **pagada** comía cupo para siempre.
+    vieja que no está (se pagó o se anuló).
+
+    **La FE emitida es `documento_fiscal.fe_confirmada`**: consecutivo conocido
+    O `fe_confirmada_at`. En el camino normal del cierre el 142943 no devuelve
+    el consecutivo, y hasta el 2026-09-26 la tarea con `fe_confirmada_at` y sin
+    `fe_consec` se leía «sin factura»: consumía para siempre (factura pagada) y
+    se contaba dos veces (factura abierta, ya en el saldo). Sin el consecutivo,
+    la fila de cartera se busca por el pedido; el consecutivo lo anota después
+    `fe_resolver.anotar_fe_emitidas`.
 
     Un pedido cuyo valor no se puede calcular NO suma 0: va a `desconocidos`,
     y `evaluar` retiene con `VALOR_DESCONOCIDO` (Regla 0)."""
     from app.models.packing import EstadoPacking, TareaPacking
+    from app.services.documento_fiscal import fe_confirmada
     ahora = ahora or datetime.utcnow()
-    claves = _claves_del_nit(nit)
-    claves.discard(excluir_pedido)
-    if not claves:
-        return {'total': Decimal(0), 'pedidos': [], 'desconocidos': [], 'fe_pagadas': 0}
-    en_cartera = {(str(f.get('f353_id_tipo_docto_cruce') or '').strip(),
-                   str(f.get('f353_consec_docto_cruce') or '').strip())
-                  for f in (filas or [])}
-    total, pedidos, desconocidos, fe_pagadas = Decimal(0), [], [], 0
-    for t in TareaPacking.query.filter(TareaPacking.pedido_clave.in_(list(claves)),
-                                       TareaPacking.estado != EstadoPacking.CANCELADO).all():
+    q = TareaPacking.query.filter(
+        TareaPacking.pedido_clave.in_(_claves_del_nit(nit)),
+        TareaPacking.estado != EstadoPacking.CANCELADO,
+        _filtro_puede_consumir(TareaPacking, ahora))
+    if excluir_pedido:
+        q = q.filter(TareaPacking.pedido_clave != excluir_pedido)
+    total, pedidos, desconocidos = Decimal(0), [], []
+    for t in q.all():
         if (t.tipo_documento or '').upper() == 'TRASLADO':
             continue
         lineas = None
@@ -761,13 +799,13 @@ def consumo_wms(nit: str, excluir_pedido: str = None, filas: list = None,
         if _cp.cobro_contraentrega(codigo)['cobrar']:
             continue                      # contado (o supuesto): no consume cupo
         fe_momento, fe_fuente = None, None
-        if t.fe_consec:
-            if ((t.fe_tipo or '').strip(), str(t.fe_consec).strip()) in en_cartera:
+        emitida = fe_confirmada(t)
+        if emitida:
+            if _fila_en_cartera(t, filas) is not None:
                 continue                  # ya está en la cartera: no se cuenta dos veces
             fe_momento, fe_fuente = _momento_fe(t)
             if fe_momento is not None and ahora - fe_momento >= VENTANA_FE_SIN_INDEXAR:
-                fe_pagadas += 1           # vieja y fuera de la cartera abierta: pagada
-                continue
+                continue                  # vieja y fuera de la cartera abierta: pagada
         completo = True
         if t.valor_factura is not None:
             v, fuente_v = _dec(t.valor_factura), 'factura'
@@ -776,8 +814,9 @@ def consumo_wms(nit: str, excluir_pedido: str = None, filas: list = None,
                                          else lineas_de_pedido(t.pedido_clave))
             fuente_v = 'estimado'
         fila = {'pedido': t.numero_pedido_siesa, 'tarea_id': t.id, 'estado': t.estado,
-                'fe': (f'{t.fe_tipo}-{t.fe_consec}' if t.fe_consec else None),
-                'fe_emitida_segun': fe_fuente if t.fe_consec else None}
+                'fe': (f'{t.fe_tipo}-{t.fe_consec}' if t.fe_consec
+                       else ('emitida, sin consecutivo anotado' if emitida else None)),
+                'fe_emitida_segun': fe_fuente if emitida else None}
         if v is None or not completo:
             # Sin valor, o con líneas sin valor: no se suma una parte como si
             # fuera todo.
@@ -787,8 +826,7 @@ def consumo_wms(nit: str, excluir_pedido: str = None, filas: list = None,
             continue
         total += v
         pedidos.append({**fila, 'valor': float(v), 'valor_fuente': fuente_v})
-    return {'total': total, 'pedidos': pedidos, 'desconocidos': desconocidos,
-            'fe_pagadas': fe_pagadas}
+    return {'total': total, 'pedidos': pedidos, 'desconocidos': desconocidos}
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -1745,7 +1783,8 @@ def barrido(ahora_bog: datetime = None) -> dict:
 
 
 def init_scheduler(app):
-    """Cada 30 min; el barrido mismo respeta la ventana 7:00–19:30 Bogotá."""
+    """Cada 30 min, todo el día; con `SIESA_VENTANA` puesta, solo dentro de
+    ella (`solo_en_ventana_siesa`, sin hora propia — 2026-09-26)."""
     try:
         from apscheduler.schedulers.background import BackgroundScheduler
         from apscheduler.triggers.cron import CronTrigger
@@ -1761,16 +1800,24 @@ def init_scheduler(app):
             except Exception as e:  # noqa: BLE001
                 db.session.rollback()
                 logger.error('[CARTERA] barrido falló: %s', e, exc_info=True)
+            try:
+                # El consecutivo de las FE emitidas sin él (2026-09-26).
+                from app.services.fe_resolver import anotar_fe_emitidas
+                logger.info('[CARTERA] FE anotadas: %s', anotar_fe_emitidas())
+            except Exception as e:  # noqa: BLE001
+                db.session.rollback()
+                logger.error('[CARTERA] anotar FE falló: %s', e, exc_info=True)
 
     scheduler = BackgroundScheduler(timezone='America/Bogota')
     from app.services.cron_latido import con_latido  # P1-11
-    from app.services.ventana_siesa import solo_en_ventana_siesa  # P2
-    scheduler.add_job(func=con_latido('cartera_barrido', solo_en_ventana_siesa(_job)), trigger=CronTrigger(minute='0,30', hour='7-19',
+    from app.services.ventana_siesa import solo_en_ventana_siesa, texto_ventana  # P2
+    scheduler.add_job(func=con_latido('cartera_barrido', solo_en_ventana_siesa(_job)), trigger=CronTrigger(minute='0,30',
                                                      timezone='America/Bogota'),
                       id='cartera_barrido', replace_existing=True, max_instances=1,
                       misfire_grace_time=600)
     scheduler.start()
-    logger.info('[CARTERA] Scheduler de re-evaluación cada 30 min (7:00–19:30 Bogotá)')
+    logger.info('[CARTERA] Scheduler de re-evaluación cada 30 min (ventana: %s)',
+                texto_ventana())
     return scheduler
 
 

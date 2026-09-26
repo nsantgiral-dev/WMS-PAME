@@ -322,6 +322,39 @@ class ConnektaConsultasGateway:
                 'Reintente cuando Connekta esté disponible.'
             )
 
+    def get_facturas_de_pedido(self, co: str, consec_pedido) -> list:
+        """Las FE activas (no anuladas) de un pedido, **en el CO del pedido**
+        (no el CO por defecto). Para anotar el consecutivo de una FE que el
+        142943 emitió sin devolverlo (`fe_resolver.anotar_fe_emitidas`,
+        2026-09-26).
+
+        Filtro: `f350_id_co` + `f430_consec_docto` — los dos verificados en vivo
+        (2026-09-04, `get_factura_desde_pedido`). El tipo del pedido NO va en el
+        filtro: `f430_id_tipo_docto` no está en el spec (`45 API_v2_...docx`) y
+        un campo inexistente en el filtro es un 400; quien llama lo verifica en
+        la fila si viene.
+
+        Levanta ante cualquier fallo (red, rechazo): «no pude preguntar» no es
+        «no hay factura». `[]` solo en simulación o si Siesa respondió que no hay.
+        """
+        from app.services.connekta_gateway import _exigir_datos
+        from app.services.siesa_filtro import lit as _lit
+
+        core = self._core
+        if core.modo_simulacion:
+            return []
+        if not co or not str(consec_pedido or '').strip().isdigit():
+            raise ValueError(f'pedido sin CO o consecutivo: {co!r}-{consec_pedido!r}')
+        parametros = (f"f350_id_co = {_lit(str(co).strip())} "
+                      f"AND f430_consec_docto = {int(str(consec_pedido).strip())}")
+        res = core._get('API_v2_Ventas_Facturas_DesdePedido', {
+            'paginacion': 'numPag=1|tamPag=100',
+            'parametros': parametros,
+        })
+        rows = _exigir_datos(res.get('detalle', {}).get('Table', []),
+                             'get_facturas_de_pedido', parametros)
+        return [r for r in rows if str(r.get('f350_ind_estado', '9')) != '9']
+
     def get_factura_desde_remision(self, tipo_docto_rm: str, consec_rm) -> list:
         """
         Pre-check anti-duplicado para 142943 (FacturaDesdeRemision).

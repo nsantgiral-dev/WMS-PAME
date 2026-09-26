@@ -92,6 +92,9 @@ class PedidoHistoria(db.Model):
     __table_args__ = (
         db.UniqueConstraint('linea_rowid', name='uq_pedidos_historia_linea_rowid'),
         db.Index('ix_pedidos_historia_abiertas', 'salida_at'),
+        # La compuerta de cartera busca los pedidos de un NIT en cada
+        # evaluación (`cartera_service._claves_del_nit`). m050inv2.
+        db.Index('ix_pedidos_historia_cliente', 'cliente_id'),
         db.CheckConstraint(
             "motivo_salida IS NULL OR motivo_salida IN "
             "('CUMPLIDO','DESAPARECIDO','ANULADO','OTRO_ESTADO')",

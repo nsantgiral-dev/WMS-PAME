@@ -34,7 +34,6 @@ def _despachada_sin_fe_anotada(db, almacen, clave, *, hace_dias, valor):
 
 class TestCupoConFeSinAnotar:
 
-    @pytest.mark.xfail(strict=True, reason='P1: FE emitida y PAGADA sin fe_consec consume cupo para siempre')
     def test_fe_pagada_sin_consec_anotado_no_consume(self, db, fake, almacen):
         fake.cliente(cupo=1_000_000)
         _historia(db, '003-PD-501', lineas=(('SKU1', 10, 900_000),))
@@ -44,7 +43,6 @@ class TestCupoConFeSinAnotar:
         paso = _inicio('PD502', 'PD', '502', co='003', almacen_id=almacen.id)
         assert paso.pasa, paso.evaluacion.get('motivos')
 
-    @pytest.mark.xfail(strict=True, reason='P1: FE abierta se cuenta en saldo Y en consumo_wms (doble)')
     def test_fe_abierta_sin_consec_anotado_no_se_cuenta_dos_veces(self, db, fake, almacen):
         fake.cliente(cupo=2_000_000)
         fake.factura(saldo=900_000, vence_en=10, consec='951')   # al día

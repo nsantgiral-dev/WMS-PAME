@@ -1133,6 +1133,11 @@ class ConnektaGateway:
         `ConnektaConsultasGateway.get_factura_desde_pedido`."""
         return self._consultas.get_factura_desde_pedido(tipo_docto, consec_docto)
 
+    def get_facturas_de_pedido(self, co: str, consec_pedido) -> list:
+        """FE activas de un pedido en su CO. Delegado — ver
+        `ConnektaConsultasGateway.get_facturas_de_pedido`."""
+        return self._consultas.get_facturas_de_pedido(co, consec_pedido)
+
     def get_factura_desde_remision(self, tipo_docto_rm: str, consec_rm) -> list:
         """Guard anti-duplicado de FE por remisión. Delegado — ver
         `ConnektaConsultasGateway.get_factura_desde_remision`."""
