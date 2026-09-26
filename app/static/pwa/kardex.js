@@ -391,7 +391,7 @@ async function kardexReconstruir(forzar) {
     if (r.status === 409 && !esRechazoPorCalidad) {
       out.innerHTML = `<div style="border:1px solid var(--yellow);border-radius:8px;padding:10px;font-size:var(--fs-xs);color:var(--yellow);">
         ${esc(d.error || 'Hay una descarga en curso.')}
-        <div style="color:var(--tx3);margin-top:4px;">Reconstruir ahora usaría datos a medias. Esperá a que termine.</div></div>`;
+        <div style="color:var(--tx3);margin-top:4px;">Reconstruir ahora usaría datos a medias. Espere a que termine.</div></div>`;
       return;
     }
     if (!r.ok) {
