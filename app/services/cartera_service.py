@@ -1853,8 +1853,9 @@ def puede_autorizar(usuario) -> bool:
 
     Decisión del dueño (2026-09-25): **el líder de cartera autoriza por su
     rol**; la casilla por persona (`puede_autorizar_cartera`, nace apagada)
-    vale en un rol de gestión (`Roles.CARTERA_CON_CASILLA`: el admin con la
-    casilla, como antes). Las dos son listas blancas: un rol que se cree
+    vale **solo en el admin** (`Roles.CARTERA_CON_CASILLA`, 2026-09-26:
+    supervisor, jefe o gerente con la casilla no deciden). Las dos son listas
+    blancas: un rol que se cree
     mañana no decide aunque alguien le marque la casilla. Que el iniciador no
     autorice su propio pedido lo decide `autorizar`, no esta función.
     """

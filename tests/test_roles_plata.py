@@ -54,7 +54,8 @@ MATRIZ = {
     'puede_corregir_cobro':          {'admin', 'lider_cartera'},
     'puede_autorizar_credito':       {'admin', 'lider_cartera'},
     'puede_forzar_cierre_ruta':      {'admin'},
-    'puede_ver_liquidacion':         {'admin', 'jefe_almacen', 'liquidador', 'lider_cartera'},
+    # El gerente VE (solo lectura, decisión del 2026-09-26); el supervisor no.
+    'puede_ver_liquidacion':         {'admin', 'jefe_almacen', 'gerente', 'liquidador', 'lider_cartera'},
 }
 
 
@@ -104,8 +105,8 @@ class TestLaMatrizDelDueno:
         from app.services.permisos_liquidacion import puede_ver_jobs
         liq = ['RECIBO_CAJA', 'DOCUMENTO_CONTABLE_RET', 'NOTA_CREDITO_FACTURA']
         assert {r for r in ROLES if puede_ver_jobs(_u(r), liq)} == \
-            {'admin', 'supervisor', 'jefe_almacen', 'liquidador', 'lider_cartera'}
-        # Sin filtro (todos) o con uno ajeno: solo supervisión.
+            {'admin', 'supervisor', 'jefe_almacen', 'gerente', 'liquidador', 'lider_cartera'}
+        # Sin filtro (todos) o con uno ajeno: solo supervisión (el gerente no).
         for tipos in ([], ['RECIBO_CAJA', 'DESPACHO_F470']):
             assert {r for r in ROLES if puede_ver_jobs(_u(r), tipos)} == \
                 {'admin', 'supervisor', 'jefe_almacen'}, tipos
@@ -114,14 +115,16 @@ class TestLaMatrizDelDueno:
         from app.services.cartera_service import puede_autorizar
         assert {r for r in ROLES if puede_autorizar(_u(r))} == {'lider_cartera'}
 
-    def test_la_casilla_vale_solo_en_gestion(self):
-        """Lista blanca: la casilla por persona en un rol de gestión (el admin,
-        como antes); en cualquier otro rol —el que se cree mañana— no decide."""
+    def test_la_casilla_vale_solo_en_el_admin(self):
+        """Decisión del dueño (2026-09-26): la casilla por persona vale SOLO en
+        el admin. El líder de cartera decide por su rol; supervisor, jefe y
+        gerente con la casilla marcada NO deciden; un rol que se cree mañana,
+        tampoco."""
         from types import SimpleNamespace
         from app.services.cartera_service import puede_autorizar
         con = {r for r in ROLES if puede_autorizar(
             SimpleNamespace(rol=r, activo=True, puede_autorizar_cartera=True))}
-        assert con == {'admin', 'supervisor', 'jefe_almacen', 'gerente', 'lider_cartera'}
+        assert con == {'admin', 'lider_cartera'}
         assert not puede_autorizar(SimpleNamespace(rol='rol_de_manana', activo=True,
                                                    puede_autorizar_cartera=True))
 
@@ -184,14 +187,14 @@ ESCRITURAS = [
 ]
 
 LECTURAS = [
-    ('dashboard', '/api/rutas/liquidacion/dashboard', {'admin', 'jefe_almacen', 'liquidador', 'lider_cartera'}),
-    ('desglose', '/api/rutas/liquidacion/desglose', {'admin', 'jefe_almacen', 'liquidador', 'lider_cartera'}),
-    ('detalle', '/api/rutas/{ruta}/liquidacion-detalle', {'admin', 'jefe_almacen', 'liquidador', 'lider_cartera'}),
-    ('reconciliación', '/api/rutas/{ruta}/reconciliacion', {'admin', 'jefe_almacen', 'liquidador', 'lider_cartera'}),
-    ('planilla', '/api/rutas/{ruta}/planilla', {'admin', 'jefe_almacen', 'liquidador', 'lider_cartera'}),
+    ('dashboard', '/api/rutas/liquidacion/dashboard', {'admin', 'jefe_almacen', 'gerente', 'liquidador', 'lider_cartera'}),
+    ('desglose', '/api/rutas/liquidacion/desglose', {'admin', 'jefe_almacen', 'gerente', 'liquidador', 'lider_cartera'}),
+    ('detalle', '/api/rutas/{ruta}/liquidacion-detalle', {'admin', 'jefe_almacen', 'gerente', 'liquidador', 'lider_cartera'}),
+    ('reconciliación', '/api/rutas/{ruta}/reconciliacion', {'admin', 'jefe_almacen', 'gerente', 'liquidador', 'lider_cartera'}),
+    ('planilla', '/api/rutas/{ruta}/planilla', {'admin', 'jefe_almacen', 'gerente', 'liquidador', 'lider_cartera'}),
     ('envíos de la liquidación',
      '/api/reposicion/siesa-jobs?estado=FALLIDO&tipos=NOTA_CREDITO_FACTURA,RECIBO_CAJA,DOCUMENTO_CONTABLE_RET',
-     {'admin', 'supervisor', 'jefe_almacen', 'liquidador', 'lider_cartera'}),
+     {'admin', 'supervisor', 'jefe_almacen', 'gerente', 'liquidador', 'lider_cartera'}),
     ('todos los envíos', '/api/reposicion/siesa-jobs?estado=FALLIDO', {'admin', 'supervisor', 'jefe_almacen'}),
     ('retenidos por cartera', '/api/cartera/panel/retenciones?estado=RETENIDO',
      {'admin', 'supervisor', 'jefe_almacen', 'gerente', 'lider_cartera'}),
@@ -376,8 +379,78 @@ class TestLaTarjetaOfreceSoloLoSuyo:
         'liqCorregirMontoParada(': {'lider_cartera'},   # el admin corrige dentro del panel de cobro
     }
 
-    @pytest.mark.parametrize('rol', ['admin', 'liquidador', 'lider_cartera', 'jefe_almacen'])
+    @pytest.mark.parametrize('rol', ['admin', 'liquidador', 'lider_cartera', 'jefe_almacen',
+                                     'gerente'])
     def test_cada_boton_a_quien_lo_puede_usar(self, app, client, db, almacen, tmp_path, rol):
         html = self._pintar(app, client, db, almacen, tmp_path, rol)
         ve = {b for b in self.BOTONES if b in html}
         assert ve == {b for b, roles in self.BOTONES.items() if rol in roles}, (rol, ve)
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 5 · Tres ajustes del dueño (2026-09-26)
+# ═════════════════════════════════════════════════════════════════════════════
+
+class TestAjustesDeRoles20260926:
+    """(1) La casilla `puede_autorizar_cartera` vale solo en el admin.
+    (2) Forzar el cierre de una ruta es solo del admin — también en la
+    pantalla, que no ofrece el botón a quien el servidor le va a decir 403.
+    (3) El gerente VE Liquidación en solo lectura; el supervisor no."""
+
+    @pytest.mark.parametrize('rol', ['supervisor', 'jefe_almacen', 'gerente'])
+    def test_la_casilla_no_le_da_la_decision_a_gestion(self, app, client, db, almacen,
+                                                       fake, rol):  # noqa: F811
+        from tests.test_cartera_retencion import _usuario as _u_casilla
+        ret = _retener(db, fake, almacen)
+        u = _u_casilla(db, rol, flag=True)
+        r = client.post(f'/api/cartera/panel/retenciones/{ret.id}/autorizar',
+                        headers=_jwt(app, u),
+                        json={'motivo': 'visto con gerencia', 'tope_valor': 900_000})
+        assert r.status_code == 403, (rol, r.status_code, r.get_json())
+        # Y el panel no le pinta los botones de decidir.
+        d = client.get('/api/cartera/panel/retenciones?estado=RETENIDO',
+                       headers=_jwt(app, u)).get_json()
+        assert d['puede_autorizar'] is False, (rol, d.get('puede_autorizar'))
+
+    def test_el_admin_con_la_casilla_si_decide(self, app, client, db, almacen, fake):  # noqa: F811
+        from tests.test_cartera_retencion import _usuario as _u_casilla
+        ret = _retener(db, fake, almacen)
+        u = _u_casilla(db, 'admin', flag=True)
+        r = client.post(f'/api/cartera/panel/retenciones/{ret.id}/autorizar',
+                        headers=_jwt(app, u),
+                        json={'motivo': 'visto con gerencia', 'tope_valor': 900_000})
+        assert r.status_code == 200, r.get_json()
+
+    def test_la_salud_no_cuenta_a_gestion_con_la_casilla(self, db, fake):  # noqa: F811
+        from app.services import cartera_service as cs
+        from tests.test_cartera_retencion import _usuario as _u_casilla
+        for rol in ('supervisor', 'jefe_almacen', 'gerente'):
+            _u_casilla(db, rol, flag=True)
+        assert cs.salud()['autorizadores']['n'] == 0
+
+    def test_la_pantalla_de_rutas_ofrece_forzar_solo_a_quien_puede(self):
+        """`RUTA_ROLES_FUERZAN_CIERRE` (rutas.js) es la lista del botón; tiene
+        que ser exactamente la de `puede_forzar_cierre_ruta`."""
+        from app.services.permisos_liquidacion import puede_forzar_cierre_ruta
+        js = (PWA / 'rutas.js').read_text(encoding='utf-8')
+        m = re.search(r'const RUTA_ROLES_FUERZAN_CIERRE\s*=\s*\[([^\]]*)\]', js)
+        assert m, 'rutas.js perdió RUTA_ROLES_FUERZAN_CIERRE'
+        en_js = set(re.findall(r"'([a-z_]+)'", m.group(1)))
+        assert en_js == {r for r in ROLES if puede_forzar_cierre_ruta(_u(r))} == {'admin'}
+        # Los dos botones que llaman a forzar-cierre preguntan por la lista.
+        assert js.count('puedeForzarCierreRuta()') >= 2, 'un botón de forzar sin la guarda'
+
+    def test_el_gerente_ve_la_liquidacion_sin_ninguna_accion(self, app, client, db, almacen):
+        ids = _mundo(db, almacen)
+        h = _jwt(app, _usuario(db, rol='gerente'))
+        d = client.get(f"/api/rutas/{ids['ruta']}/liquidacion-detalle", headers=h)
+        assert d.status_code == 200
+        assert not any(d.get_json()['permisos'].values()), d.get_json()['permisos']
+        # Ve los envíos de la liquidación, sin poder reintentarlos.
+        jobs = client.get('/api/reposicion/siesa-jobs?estado=FALLIDO&tipos=RECIBO_CAJA',
+                          headers=h).get_json()['jobs']
+        assert jobs and all(j['puede_reintentar'] is False for j in jobs)
+
+    def test_el_gerente_aterriza_con_liquidacion_y_el_supervisor_sin_ella(self):
+        assert 'tab-liquidacion' in _aterrizar('gerente')['visibles']
+        assert 'tab-liquidacion' not in _aterrizar('supervisor')['visibles']

@@ -97,7 +97,7 @@ class TestQuienPuedeDecidir:
         assert not any('NADIE' in p for p in s['problemas'])
 
     def test_con_un_autorizador_no_hay_problema(self, db, fake):
-        u = _usuario(db, rol='supervisor', flag=True)
+        u = _usuario(db, rol='admin', flag=True)
         s = cs.salud()
         assert s['autorizadores']['n'] == 1 and s['autorizadores']['usuarios'][0]['id'] == u.id
         assert not any('autorizar' in p.lower() for p in s['problemas'])

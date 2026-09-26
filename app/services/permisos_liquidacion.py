@@ -12,7 +12,12 @@ cartera» (`Roles.LIQUIDADOR`, `Roles.LIDER_CARTERA`):
 | Confirmar la retención declarada, corregir un cobro | admin + líder de cartera |
 | Autorizar como crédito una parada de contado sin plata (una o en lote) | admin + líder de cartera |
 | Forzar el cierre de una ruta | admin |
-| Ver Liquidación, su desglose y la reconciliación | admin + jefe + liquidador + líder de cartera |
+| Ver Liquidación, su desglose y la reconciliación | admin + jefe + gerente + liquidador + líder de cartera |
+
+**El gerente ve, no opera** (decisión del dueño, 2026-09-26): entra a
+Liquidación en solo lectura. No está en ninguna función de escritura, así que
+el detalle le manda todos los `permisos` en falso y la pantalla no le pinta un
+botón de plata. El supervisor no la ve.
 
 **Cambio de comportamiento:** el jefe de almacén ya no registra cobros ni
 reintenta documentos de la liquidación (P1-8), y tampoco confirma
@@ -87,8 +92,9 @@ def puede_resolver_documento(usuario) -> bool:
 def puede_ver_liquidacion(usuario) -> bool:
     """Ver la pantalla de Liquidación y sus lecturas (dashboard, detalle,
     desglose, reconciliación, planilla, vista previa, los envíos de la
-    liquidación). Admin, jefe, liquidador y líder de cartera."""
-    return _rol_en(usuario, (Roles.ADMIN, Roles.JEFE_ALMACEN,
+    liquidación). Admin, jefe, gerente (solo lectura: ninguna función de
+    escritura lo deja pasar), liquidador y líder de cartera."""
+    return _rol_en(usuario, (Roles.ADMIN, Roles.JEFE_ALMACEN, Roles.GERENTE,
                              Roles.LIQUIDADOR, Roles.LIDER_CARTERA))
 
 

@@ -119,10 +119,12 @@ class Roles:
     #: líder de cartera es el que autoriza (decisión del dueño, 2026-09-25).
     CARTERA_POR_ROL = (LIDER_CARTERA,)
     #: **En qué roles vale la casilla `puede_autorizar_cartera`** (permiso por
-    #: persona, nace apagado). Lista blanca: gestión, que opera los despachos
-    #: que la compuerta retiene. Antes era «todos menos conductor y tienda»
-    #: (lista negra): un rol creado mañana con la casilla marcada decidía.
-    CARTERA_CON_CASILLA = GESTION
+    #: persona, nace apagado). **Solo admin** (decisión del dueño, 2026-09-26):
+    #: el líder de cartera autoriza por su rol, y supervisor, jefe o gerente
+    #: con la casilla marcada NO deciden — la casilla era la forma de repartir
+    #: una decisión de plata sin pasar por el rol que la tiene. Antes fue
+    #: `GESTION` (2026-09-25) y antes «todos menos conductor y tienda».
+    CARTERA_CON_CASILLA = (ADMIN,)
 
 
 def _puede_empacar(usuario) -> bool:
@@ -274,7 +276,7 @@ def _puede_autorizar_cartera():
 
     La política es `cartera_service.puede_autorizar`: el líder de cartera por
     su rol, o la casilla por persona (`puede_autorizar_cartera`, nace apagada)
-    en un rol de gestión. La vía principal sigue siendo el Gestor de Cartera.
+    en el admin. La vía principal sigue siendo el Gestor de Cartera.
     """
     try:
         uid = int(get_jwt_identity())

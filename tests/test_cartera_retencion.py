@@ -1014,7 +1014,7 @@ class TestPanelWMS:
 
     def test_con_el_permiso_autoriza(self, app, client, db, fake, almacen):
         r = _retener(db, fake, almacen)
-        u = _usuario(db, 'supervisor', flag=True)
+        u = _usuario(db, 'admin', flag=True)
         x = client.post(f'/api/cartera/panel/retenciones/{r.id}/autorizar',
                         headers=_jwt(app, u), json={'motivo': 'visto con gerencia',
                                                     'tope_valor': 900_000})

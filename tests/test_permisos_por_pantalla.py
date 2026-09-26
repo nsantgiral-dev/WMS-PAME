@@ -99,7 +99,8 @@ PANTALLAS = [
     ('reposicion.js', None,         ['admin']),
     # 💰 Liquidación: la ven quien la ve (`permisos_liquidacion.puede_ver_liquidacion`):
     # el liquidador y el líder de cartera aterrizan acá (app.js `_TABS_DE_ROL`).
-    ('liquidacion.js', None,        ['admin', 'jefe_almacen', 'liquidador', 'lider_cartera']),
+    # El gerente la ve en solo lectura (2026-09-26); el supervisor no.
+    ('liquidacion.js', None,        ['admin', 'jefe_almacen', 'gerente', 'liquidador', 'lider_cartera']),
     ('layout.js',     None,         ['admin']),
     ('traslados.js',  None,         ['admin']),
     ('kardex.js',     None,         ['admin']),
