@@ -250,7 +250,7 @@ function cmpPorQueHtml(l) {
   partes.push(`Cantidad a tener: <b>${esc(cmpN(p.nivel_objetivo))}</b>. Le faltan <b>${esc(cmpN(p.falta_para_objetivo))}</b>; se piden <b>${esc(cmpN(l.pedir_unidades))}</b>${p.redondeo_empaque ? ` (${esc(cmpN(p.redondeo_empaque))} de más para completar el empaque de ${esc(cmpN(l.empaque && l.empaque.unidades_por_empaque))} por ${esc(um)})` : ''}.`);
   if (p.faltan_datos_de_agotados) partes.push(`<span style="color:var(--warn-tx);">Le faltan datos de agotados: no se sabe qué días estuvo sin existencias, y la venta diaria puede estar por debajo de la real.</span>`);
   if (p.existencias_de_hace_dias) partes.push(`<span style="color:var(--warn-tx);">Las existencias de este producto son de hace ${esc(cmpDias(p.existencias_de_hace_dias))}.</span>`);
-  if (l.empaque && !l.empaque.moq_conocido) partes.push(`<span style="color:var(--tx3);">El pedido mínimo del proveedor no está en ninguna fuente: confirmalo al pedir.</span>`);
+  if (l.empaque && !l.empaque.moq_conocido) partes.push(`<span style="color:var(--tx3);">El pedido mínimo del proveedor no está en ninguna fuente: confírmelo al pedir.</span>`);
   return partes.map(x => `<div style="margin-bottom:4px;">${x}</div>`).join('');
 }
 
@@ -295,7 +295,7 @@ function cmpProveedorHtml(p, i, filtro) {
   const botones = p.conocido
     ? `<button onclick="cmpCopiarOc(${i})" style="min-height:44px;padding:8px 14px;border-radius:8px;border:1px solid var(--acento-brd);background:var(--acento-bg);color:var(--acento-tx);font-size:var(--fs-sm);font-weight:700;cursor:pointer;">Copiar OC</button>
        <button onclick="cmpExportarCsv(${i})" style="min-height:44px;padding:8px 14px;border-radius:8px;border:1px solid var(--brd);background:var(--bg-s);color:var(--tx);font-size:var(--fs-sm);font-weight:600;cursor:pointer;">Exportar CSV</button>`
-    : `<span style="font-size:var(--fs-xs);color:var(--tx3);">Sin órdenes de compra de estos productos: elegí a quién pedirles.</span>`;
+    : `<span style="font-size:var(--fs-xs);color:var(--tx3);">Sin órdenes de compra de estos productos: elija a quién pedirles.</span>`;
   return `<section style="border:1px solid var(--brd);background:var(--bg-s);border-radius:14px;padding:12px;margin-bottom:14px;">
     <div style="display:flex;justify-content:space-between;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px;">
       <div style="min-width:0;flex:1 1 220px;">
@@ -404,9 +404,9 @@ async function cmpCopiarOc(i) {
   const texto = cmpOcTexto(oc);
   try {
     await navigator.clipboard.writeText(texto);
-    alerta('Borrador de OC copiado: pegalo en Siesa o en el correo al proveedor', 'exito');
+    alerta('Borrador de OC copiado: péguelo en Siesa o en el correo al proveedor', 'exito');
   } catch (e) {
-    alerta('No se pudo copiar: usá «Exportar CSV»', 'error');
+    alerta('No se pudo copiar: use «Exportar CSV»', 'error');
   }
 }
 
@@ -526,7 +526,7 @@ function cmpContenedorHtml(d) {
        Úsela solo como referencia hasta sincronizar las órdenes de compra en 🧾 Fuentes.${irFuentes}`, 'mal');
   }
   if (d.modo === 'SHADOW') {
-    html += cmpCaja('Borrador de prueba', `Las fichas cubren el ${esc(cmpN(d.cobertura_fichas_pct))} % de los productos de China: revisalo antes de pedir.`, 'aviso');
+    html += cmpCaja('Borrador de prueba', `Las fichas cubren el ${esc(cmpN(d.cobertura_fichas_pct))} % de los productos de China: revíselo antes de pedir.`, 'aviso');
   }
   if (d.sin_ficha) {
     html += cmpCaja(`${cmpN(d.sin_ficha)} productos con faltante quedaron fuera por falta de ficha`,
@@ -609,7 +609,7 @@ function cmpTemporadaHtml(d) {
   if (d.estado !== 'OK') return cab + cmpCaja('Todavía no hay pedido de temporada', esc(d.titulo || ''), 'aviso');
   const filas = (d.filas || []).map(f => {
     const conc = f.contenedor
-      ? `<div style="font-size:var(--fs-xs);color:var(--warn-tx);">El contenedor propone ${esc(cmpN(f.contenedor.en_contenedor_unidades))}; manda la temporada (${esc(cmpN(f.contenedor.cifra))}): ${f.contenedor.ajuste_contenedor_unidades >= 0 ? 'sumale' : 'quitale'} ${esc(cmpN(Math.abs(f.contenedor.ajuste_contenedor_unidades)))} al contenedor.</div>` : '';
+      ? `<div style="font-size:var(--fs-xs);color:var(--warn-tx);">El contenedor propone ${esc(cmpN(f.contenedor.en_contenedor_unidades))}; manda la temporada (${esc(cmpN(f.contenedor.cifra))}): ${f.contenedor.ajuste_contenedor_unidades >= 0 ? 'súmele' : 'quítele'} ${esc(cmpN(Math.abs(f.contenedor.ajuste_contenedor_unidades)))} al contenedor.</div>` : '';
     const notas = [f.faltan_datos_de_agotados ? 'le faltan datos de agotados' : '', f.una_sola_temporada ? 'una sola temporada de historia: incertidumbre alta' : '']
       .filter(Boolean).map(esc).join(' · ');
     return `<tr style="border-top:1px solid var(--brd);">
