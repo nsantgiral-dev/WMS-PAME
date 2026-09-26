@@ -36,7 +36,7 @@ const AN_PORT_NIVEL = {
 };
 
 const AN_PORT_CONFIANZA = {
-  CONFIABLE: { nivel: 'verde', texto: 'Puedes decidir con estos números' },
+  CONFIABLE: { nivel: 'verde', texto: 'Puede decidir con estos números' },
   CON_RESERVAS: { nivel: 'amarillo', texto: 'Úsalos con cuidado: hay datos incompletos' },
   NO_CONFIABLE: { nivel: 'rojo', texto: 'Todavía no decidas con estos números' },
 };
@@ -324,7 +324,7 @@ function anPortAvisoKpi(p) {
   const admin = anEsAdmin()
     ? `<div style="margin-top:4px;">${esc(k.como_encender || '')}</div>
        <button onclick="anPortRecalcular()" style="margin-top:6px;padding:6px 12px;border-radius:6px;border:1px solid var(--acento-brd);background:var(--acento-bg);color:var(--acento-tx);font-size:var(--fs-sm);font-weight:600;cursor:pointer;">Calcular ahora los últimos ${esc(anNum(anPortDiasRecalculo(p)))} días</button>`
-    : '<div style="margin-top:4px;">Pídele al administrador que lo encienda.</div>';
+    : '<div style="margin-top:4px;">Pídale al administrador que lo encienda.</div>';
   return `<div style="padding:10px 12px;border-radius:10px;background:var(--info-bg);color:var(--info-tx);border:1px solid var(--info-brd);font-size:var(--fs-sm);">
     <b>${esc(nombres)}</b> salen del cálculo diario de indicadores, que ${esc(estado)}. Por eso salen en gris: no es que estén mal, es que no hay con qué medir.${admin}</div>`;
 }
