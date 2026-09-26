@@ -437,8 +437,28 @@ class TestAjustesDeRoles20260926:
         assert m, 'rutas.js perdió RUTA_ROLES_FUERZAN_CIERRE'
         en_js = set(re.findall(r"'([a-z_]+)'", m.group(1)))
         assert en_js == {r for r in ROLES if puede_forzar_cierre_ruta(_u(r))} == {'admin'}
-        # Los dos botones que llaman a forzar-cierre preguntan por la lista.
-        assert js.count('puedeForzarCierreRuta()') >= 2, 'un botón de forzar sin la guarda'
+        # Todo botón que llama a forzar-cierre nace bajo la guarda: la condición
+        # que lo pinta (a lo sumo 600 caracteres antes) la pregunta.
+        llamadas = [m.start() for m in re.finditer(r'rutaForzarCierre\(\$\{', js)]
+        assert len(llamadas) >= 2, llamadas          # tarjeta y planilla
+        for k in llamadas:
+            assert 'puedeForzarCierreRuta()' in js[max(0, k - 600):k], (
+                'un botón de forzar el cierre sin la guarda', js[max(0, k - 200):k + 40])
+
+    @pytest.mark.parametrize('rol,ve', [('admin', True), ('jefe_almacen', False),
+                                        ('gerente', False), ('supervisor', False)])
+    def test_la_tarjeta_de_ruta_ofrece_forzar_solo_al_admin(self, tmp_path, rol, ve):
+        """`rutaCard` pintada de verdad (Node, `util.js` + `rutas.js`) para
+        una ruta en tránsito: el botón de forzar solo le sale al admin."""
+        from tests.test_sin_codigos_en_pantalla import _node
+        ruta = {'id': 7, 'codigo': 'R-7', 'estado': 'EN_TRANSITO', 'total_bultos': 3,
+                'estado_financiero': 'PENDIENTE', 'nombre': 'Ruta', 'conductor': 'Ana',
+                'vehiculo': 'ABC123', 'paradas': [], 'fecha': '2026-09-26'}
+        html = _node(tmp_path, ['util.js', 'modal.js', 'rutas.js'], {}, """
+            OPERARIO = { rol: ROL };
+            return { html: rutaCard(RUTA) };
+        """, globales={'ROL': rol, 'RUTA': ruta})['html']
+        assert ('rutaForzarCierre(' in html) is ve, (rol, ve)
 
     def test_el_gerente_ve_la_liquidacion_sin_ninguna_accion(self, app, client, db, almacen):
         ids = _mundo(db, almacen)
