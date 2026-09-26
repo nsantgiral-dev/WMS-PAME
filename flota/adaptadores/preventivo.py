@@ -382,7 +382,7 @@ def fijar_intervalo(*, plan_id: int, intervalo_km: Optional[int],
         if dom_prev.validar_fuente(fuente) == 'sin_dato':
             raise PreventivoInvalido(
                 'un intervalo sin procedencia se lee después como si alguien '
-                'lo hubiera verificado. Decí de dónde salió: '
+                'lo hubiera verificado. Diga de dónde salió: '
                 + ', '.join(f for f in dom_prev.FUENTES if f != 'sin_dato'))
     else:
         # Sin intervalo no puede haber fuente: una procedencia colgada de un
