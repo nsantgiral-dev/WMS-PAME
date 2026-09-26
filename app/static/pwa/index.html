@@ -1667,7 +1667,7 @@
           </button>
         </div>
         <div id="muelle-scan-campo" style="display:flex;gap:8px;">
-          <input id="muelle-scan-input" type="text" placeholder="Escanea o escribe código..." autocomplete="off"
+          <input id="muelle-scan-input" type="text" placeholder="Escanee o escriba código..." autocomplete="off"
             style="flex:1;padding:12px;font-size:var(--fs-md);background:var(--bg-s);border:2px solid var(--brd);border-radius:8px;color:var(--tx);outline:none;"
             onkeydown="if(event.key==='Enter'){ muelleCargarCaja(); }"
             onblur="muelleScanBlur()"
@@ -1722,12 +1722,12 @@
         <!-- Form programar viaje (oculto por defecto) -->
         <div id="rutas-form" style="display:none;background:var(--bg-s);border:1px solid var(--pm-border);border-radius:14px;padding:18px;margin-bottom:14px;">
           <div style="font-size:var(--fs-sm);font-weight:700;margin-bottom:4px;">Programar viaje</div>
-          <div style="font-size:var(--fs-xs);color:var(--tx3);margin-bottom:14px;">Selecciona la ruta, la fecha, el conductor y el vehículo</div>
+          <div style="font-size:var(--fs-xs);color:var(--tx3);margin-bottom:14px;">Seleccione la ruta, la fecha, el conductor y el vehículo</div>
           <div style="margin-bottom:12px;">
             <div style="font-size:var(--fs-xs);color:var(--tx3);text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;">Ruta maestra *</div>
             <select id="rutas-form-maestra"
               style="width:100%;padding:12px;background:var(--bg-s);border:2px solid var(--brd);border-radius:8px;color:var(--tx);font-size:var(--fs-sm);">
-              <option value="">— Selecciona ruta —</option>
+              <option value="">— Seleccione ruta —</option>
             </select>
           </div>
           <div style="margin-bottom:12px;">
@@ -1785,7 +1785,7 @@
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
           <div>
             <div style="font-size:var(--fs-md);font-weight:700;">Conductores</div>
-            <div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:2px;">Para crear un conductor nuevo, hazlo desde el módulo Usuarios con rol = Conductor</div>
+            <div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:2px;">Para crear un conductor nuevo, hágalo desde el módulo Usuarios con rol = Conductor</div>
           </div>
         </div>
         <div id="lista-conductores"><div style="color:var(--tx3);text-align:center;padding:40px;">Cargando...</div></div>
@@ -2085,7 +2085,7 @@
       <div style="font-size:var(--fs-sm);font-weight:700;color:var(--tx);margin:18px 0 6px;">📦 Recogido sin despachar</div>
       <div style="font-size:var(--fs-xs);color:var(--tx3);margin-bottom:8px;line-height:1.5;">
         Pedidos que se recogieron y no salieron: el empaque se canceló sin remisión o nunca se empacó.
-        Mientras no confirmes que la mercancía volvió al estante, esos productos no se programan para contar.
+        Mientras no confirme que la mercancía volvió al estante, esos productos no se programan para contar.
       </div>
       <div id="inv-recogido-lista" style="min-height:40px;"></div>
     </div>
@@ -2143,7 +2143,7 @@
 
       <!-- Distribución ABC -->
       <div id="inv-abc-resumen" style="margin-bottom:16px;">
-        <div style="text-align:center;padding:20px;color:var(--tx3);">Selecciona un almacén</div>
+        <div style="text-align:center;padding:20px;color:var(--tx3);">Seleccione un almacén</div>
       </div>
 
       <!-- Carga CSV Siesa -->
@@ -2325,7 +2325,7 @@
       <div style="background:var(--bg-s);border:1px solid var(--brd);border-radius:10px;padding:14px;margin-bottom:14px;">
         <div style="font-size:var(--fs-xs);font-weight:700;color:var(--tx2);margin-bottom:6px;">Alerta email de ubicaciones huérfanas</div>
         <div style="font-size:var(--fs-xs);color:var(--tx3);margin-bottom:10px;">
-          Se envía automáticamente cada día a las 06:00. Usa el botón para probar que el correo llega correctamente.
+          Se envía automáticamente cada día a las 06:00. Use el botón para probar que el correo llega correctamente.
         </div>
         <button onclick="repTestEmail(this)"
           style="padding:9px 16px;background:var(--bg);border:1px solid var(--brd);border-radius:8px;color:var(--tx2);font-size:var(--fs-sm);cursor:pointer;">
@@ -2657,7 +2657,7 @@
            kardex: con conceptos sin clasificar salen igual de convincentes
            sobre una serie con agujeros. -->
       <div id="modelos-semaforo"></div>
-      <div id="modelos-container"><div style="color:var(--tx3);padding:20px;">Selecciona un modelo</div></div>
+      <div id="modelos-container"><div style="color:var(--tx3);padding:20px;">Seleccione un modelo</div></div>
     </div>
 
     <!-- ── Punto de pedido nacional, tabla técnica ─────────────── -->
@@ -2792,7 +2792,7 @@
         </select>
       </div>
       <div id="comp-lista-audit">
-        <div style="text-align:center;padding:30px;color:var(--tx3);">Escribe una OC, proveedor o remisión y presiona Buscar</div>
+        <div style="text-align:center;padding:30px;color:var(--tx3);">Escriba una OC, proveedor o remisión y presione Buscar</div>
       </div>
     </div>
     </div><!-- /comp-sec-avanzado -->
@@ -2968,11 +2968,11 @@
       <div style="background:var(--bg-s);border:1px solid #92400e;border-radius:10px;padding:10px 14px;margin-bottom:12px;">
         <div style="font-size:var(--fs-xs);color:var(--warn-tx);font-weight:600;text-transform:uppercase;letter-spacing:0.05em;">Declarar avería</div>
         <div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:4px;">
-          Lo que declares acá se manda al centro de distribución. Allá se cuenta
+          Lo que declare acá se manda al centro de distribución. Allá se cuenta
           lo que llegó y el administrador decide si de verdad estaba averiada.
         </div>
       </div>
-      <input id="tav-buscar" type="text" oninput="tiendaAveriasFiltrar()" placeholder="Buscar en tu inventario..."
+      <input id="tav-buscar" type="text" oninput="tiendaAveriasFiltrar()" placeholder="Buscar en su inventario..."
         style="width:100%;padding:10px;background:var(--bg-s);color:var(--tx);border:1px solid var(--brd);border-radius:8px;font-size:var(--fs-sm);margin-bottom:10px;">
       <div id="tienda-panel-averias-lista"></div>
     </div>
@@ -3022,7 +3022,7 @@
       <!-- Vista: lista de traslados pendientes -->
       <div id="tienda-recibir-lista-view" style="padding:14px;">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
-          <div style="font-size:var(--fs-sm);color:var(--tx3);">Traslados que llegaron — contá producto por producto antes de confirmar</div>
+          <div style="font-size:var(--fs-sm);color:var(--tx3);">Traslados que llegaron — cuente producto por producto antes de confirmar</div>
           <button onclick="tiendaCargarRecibir()" title="Actualizar"
             style="padding:8px 12px;background:var(--bg-s);border:1px solid var(--brd);border-radius:8px;color:var(--tx);font-size:var(--fs-lg);cursor:pointer;flex-shrink:0;line-height:1;">↻</button>
         </div>
@@ -3153,7 +3153,7 @@
         <button class="emp-hud-cerrar" onclick="empCerrarHUD()">✕ Pausar</button>
       </div>
       <div class="emp-hud-centro">
-        <div class="emp-hud-producto" id="emp-hud-producto">Escanea el primer producto</div>
+        <div class="emp-hud-producto" id="emp-hud-producto">Escanee el primer producto</div>
         <div class="emp-hud-contador" id="emp-hud-contador">0</div>
         <div class="emp-hud-de" id="emp-hud-de">de 0</div>
         <div id="emp-hud-und" style="font-size:var(--fs-sm);color:var(--tx3);margin-top:4px;text-align:center;"></div>
@@ -3224,7 +3224,7 @@
       <div style="font-size:var(--fs-lg);font-weight:800;margin-bottom:4px;color:var(--tx);">Confirmar Entrega</div>
       <div id="modal-entrega-sub" style="font-size:var(--fs-xs);color:var(--tx3);margin-bottom:16px;"></div>
       <div style="font-size:var(--fs-xs);color:var(--tx2);margin-bottom:12px;">
-        Todos los bultos están marcados como <span style="color:var(--green);font-weight:700;">Entregado</span>. Toca los que fueron rechazados.
+        Todos los bultos están marcados como <span style="color:var(--green);font-weight:700;">Entregado</span>. Toque los que fueron rechazados.
       </div>
       <div id="modal-entrega-lista" style="margin-bottom:20px;"></div>
       <div id="modal-entrega-resumen" style="font-size:var(--fs-sm);color:var(--tx2);margin-bottom:16px;min-height:20px;"></div>
@@ -3334,7 +3334,7 @@
       <div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:20px;position:relative;z-index:2;">
         <!-- Tarjeta de ubicación origen -->
         <div id="abast-card-origen" style="width:100%;max-width:340px;background:var(--bg-s);border:2px solid #166534;border-radius:16px;padding:20px;text-align:center;margin-bottom:16px;">
-          <div style="font-size:var(--fs-xs);font-weight:700;color:var(--ok-tx);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:6px;">Ve a la zona</div>
+          <div style="font-size:var(--fs-xs);font-weight:700;color:var(--ok-tx);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:6px;">Vaya a la zona</div>
           <div id="abast-ubicacion-origen" style="font-size:36px;font-weight:900;color:var(--ok-tx);letter-spacing:2px;font-family:monospace;"></div>
           <div id="abast-lpn-codigo" style="font-size:var(--fs-sm);color:var(--tx3);margin-top:8px;font-family:monospace;"></div>
         </div>
@@ -3344,7 +3344,7 @@
 
         <!-- Tarjeta de destino -->
         <div style="width:100%;max-width:340px;background:var(--bg-s);border:2px solid var(--info-brd);border-radius:16px;padding:16px;text-align:center;">
-          <div style="font-size:var(--fs-xs);font-weight:700;color:var(--info-tx);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:6px;">Lleva a</div>
+          <div style="font-size:var(--fs-xs);font-weight:700;color:var(--info-tx);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:6px;">Lleve a</div>
           <div id="abast-ubicacion-destino" style="font-size:30px;font-weight:900;color:var(--info-tx);letter-spacing:2px;font-family:monospace;"></div>
           <div id="abast-cantidad" style="font-size:var(--fs-sm);color:var(--tx3);margin-top:6px;"></div>
         </div>
@@ -3353,7 +3353,7 @@
       <!-- Bottom: escanear LPN -->
       <div style="padding:16px;position:relative;z-index:2;">
         <div id="abast-scan-box">
-          <div style="font-size:var(--fs-xs);color:var(--tx3);text-align:center;margin-bottom:8px;">Escanea el LPN para confirmar</div>
+          <div style="font-size:var(--fs-xs);color:var(--tx3);text-align:center;margin-bottom:8px;">Escanee el LPN para confirmar</div>
 
           <!-- Cámara QR -->
           <button id="abast-btn-camara" onclick="abrirCamara('lector-qr-abast','camara-box-abast',null,this)"
@@ -3635,7 +3635,7 @@
   <div id="modal-layout-editar-fila" style="display:none;position:fixed;inset:0;background:#000000cc;z-index:200;align-items:center;justify-content:center;padding:16px;">
     <div style="background:var(--bg-s);border:1px solid var(--brd);border-radius:16px;padding:20px;width:100%;max-width:380px;">
       <div id="layout-editar-fila-titulo" style="font-size:var(--fs-md);font-weight:700;margin-bottom:4px;">Editar fila</div>
-      <div style="font-size:var(--fs-xs);color:var(--tx3);margin-bottom:16px;">Cambia solo los campos que necesites — el resto queda igual en cada posición.</div>
+      <div style="font-size:var(--fs-xs);color:var(--tx3);margin-bottom:16px;">Cambie solo los campos que necesite — el resto queda igual en cada posición.</div>
 
       <label style="font-size:var(--fs-xs);color:var(--tx3);display:block;margin-bottom:4px;">Zona</label>
       <select id="layout-editar-fila-zona"
@@ -3888,7 +3888,7 @@
   <div id="modal-layout-editar-ubicacion" style="display:none;position:fixed;inset:0;background:#000000cc;z-index:200;align-items:center;justify-content:center;padding:16px;">
     <div style="background:var(--bg-s);border:1px solid var(--brd);border-radius:16px;padding:20px;width:100%;max-width:380px;">
       <div id="layout-editar-ub-titulo" style="font-size:var(--fs-md);font-weight:700;margin-bottom:4px;">Editar ubicación</div>
-      <div style="font-size:var(--fs-xs);color:var(--tx3);margin-bottom:16px;">Cambia solo los campos que necesites — el resto queda igual.</div>
+      <div style="font-size:var(--fs-xs);color:var(--tx3);margin-bottom:16px;">Cambie solo los campos que necesite — el resto queda igual.</div>
 
       <label style="font-size:var(--fs-xs);color:var(--tx3);display:block;margin-bottom:4px;">Zona</label>
       <select id="layout-editar-ub-zona"
