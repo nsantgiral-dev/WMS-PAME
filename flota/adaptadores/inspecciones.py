@@ -178,7 +178,7 @@ def _validar_respuestas(crudas, esperados) -> Dict[int, dict]:
                 f'el ítem {item_id} no es de los que tocaban hoy para este '
                 f'vehículo. O la pantalla se quedó abierta hasta pasada la '
                 f'medianoche —los semanales solo entran los lunes— o son de '
-                f'otra plantilla. Volvé a abrir la inspección: no se guarda '
+                f'otra plantilla. Vuelva a abrir la inspección: no se guarda '
                 f'nada contra una lista que ya no es la de hoy.')
         if item_id in por_item:
             raise InspeccionInvalida(
