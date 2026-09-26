@@ -321,7 +321,7 @@ def plantilla_de_tipo(tipo_vehiculo: str) -> str:
         )
     raise ValueError(
         f'tipo de vehículo desconocido: {tipo_vehiculo!r}. Los que tienen '
-        f'plantilla declarada son {sorted(PLANTILLA_POR_TIPO)}. Agregalo a '
+        f'plantilla declarada son {sorted(PLANTILLA_POR_TIPO)}. Agréguelo a '
         f'PLANTILLA_POR_TIPO con el catálogo que le corresponde, o a '
         f'MOTIVO_TIPO_SIN_PLANTILLA con el motivo por el que no lleva.'
     )
