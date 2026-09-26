@@ -70,7 +70,7 @@ class TestInspeccionarAntesDeRecibirElTurno:
         _items, r = _inspeccionar(client, mundo, 100_000)
         assert r.status_code == 403, r.get_json()
         assert r.get_json()['motivo'] == 'sin_derecho'
-        assert 'recibí el turno primero' in r.get_json()['error']
+        assert 'reciba el turno primero' in r.get_json()['error']
 
     def test_y_no_deja_nada_escrito(self, client, mundo, reloj, en_el_patio):
         """Ni inspección ni daño: un rechazo no deja la mitad de lo rechazado."""

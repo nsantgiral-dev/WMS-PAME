@@ -298,14 +298,14 @@ def sin_derecho_sobre_vehiculo(vehiculo, que: str):
         return None
     if conductor_de(u) is None:
         return _no_es_tuyo(
-            f'No podés {que}: tu usuario no está vinculado a un conductor. '
-            f'Pedile a administración que te vincule la ficha.')
+            f'No puede {que}: su usuario no está vinculado a un conductor. '
+            f'Pídale a administración que le vincule la ficha.')
     if vehiculo_en_custodia_de(u) == vehiculo.id:
         return None
     return _no_es_tuyo(
-        f'No podés {que} sobre el {vehiculo.placa}: no está en tu turno. '
-        f'Solo se registra sobre el vehículo que recibiste — si es el que tenés '
-        f'enfrente, recibí el turno primero.')
+        f'No puede {que} sobre el {vehiculo.placa}: no está en su turno. '
+        f'Solo se registra sobre el vehículo que recibió — si es el que tiene '
+        f'enfrente, reciba el turno primero.')
 
 
 def sin_derecho_sobre_custodia(custodia, que: str):
@@ -316,7 +316,7 @@ def sin_derecho_sobre_custodia(custodia, que: str):
     c = conductor_de(u)
     if c is not None and custodia.custodio_conductor_id == c.id:
         return None
-    return _no_es_tuyo(f'No podés {que}: ese turno no es tuyo.')
+    return _no_es_tuyo(f'No puede {que}: ese turno no es suyo.')
 
 
 def _foto_de_custodia_propia(foto, conductor, usuario):
@@ -396,8 +396,8 @@ def sin_derecho_sobre_foto(foto, que: str):
             if foto.entidad_tipo in FOTO_DEL_CONDUCTOR else _nunca)
     if c is not None and juez(foto, c, u):
         return None
-    return _no_es_tuyo(f'No podés {que}: esa foto no es de un turno ni de un '
-                       f'reporte tuyo.')
+    return _no_es_tuyo(f'No puede {que}: esa foto no es de un turno ni de un '
+                       f'reporte suyo.')
 
 
 def sin_permiso_de_corregir():
@@ -414,7 +414,7 @@ def sin_permiso_de_corregir():
         return None
     return jsonify({
         'error': 'Corregir un odómetro lo hace control de flota o gestión. Si '
-                 'registraste un número equivocado, avisale al encargado: él '
+                 'registró un número equivocado, avísele al encargado: él '
                  'lo corrige con la foto del tablero.',
         'tu_rol': u.rol if u else None,
         'roles_permitidos': sorted(MAESTROS_FLOTA),
