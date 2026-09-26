@@ -143,7 +143,7 @@ function empRenderListaTareas() {
             <div style="font-size:var(--fs-xs);font-weight:700;color:var(--red);margin-bottom:4px;">🚫 Pedido anulado en Siesa (estado ${esc(t.pedido_estado_siesa_detectado || '9')})</div>
             <div style="font-size:var(--fs-xs);color:var(--tx2);line-height:1.4;">
               El área comercial anuló este pedido en el ERP.<br>
-              <strong>Acción:</strong> ${_puedeCancelarPacking ? 'Cancelar este packing y esperar el nuevo pedido clonado.' : 'Avisa a tu supervisor para que cancele este packing.'}
+              <strong>Acción:</strong> ${_puedeCancelarPacking ? 'Cancelar este packing y esperar el nuevo pedido clonado.' : 'Avise a su supervisor para que cancele este packing.'}
             </div>
             ${_puedeCancelarPacking ? `
             <button onclick="event.stopPropagation();empCancelarPacking(${esc(t.id)})"
@@ -208,7 +208,7 @@ async function empIniciarHUD(packingId) {
 
     // Bloquear si el picking aún no está completo
     if (t.picking_listo === false && t.estado === 'PENDIENTE') {
-      alerta('El operario aún está pickeando — espera a que termine', 'advertencia');
+      alerta('El operario aún está pickeando — espere a que termine', 'advertencia');
       return;
     }
 
@@ -277,7 +277,7 @@ async function empCancelarPacking(packingId) {
   if (!(await _modalConfirmar('El pedido fue anulado en Siesa. La mercancía que ya fue pickeada debe devolverse a la ubicación o esperar el nuevo pedido.', { titulo: '¿Cancelar este packing?', peligro: true }))) return;
   try {
     await put(`/api/packing/${packingId}/cancelar`, { motivo: 'Pedido anulado en Siesa ERP — cancelado desde WMS' });
-    alerta('Packing cancelado — avisa al jefe de almacén para devolver la mercancía', 'info');
+    alerta('Packing cancelado — avise al jefe de almacén para devolver la mercancía', 'info');
     empCargarTareas();
   } catch (e) { alerta(e.message || 'Error de conexión', 'error'); }
 }
@@ -395,7 +395,7 @@ function empRenderHUDItem() {
   if (verificados === total && total > 0) {
     btn.style.display = 'block';
     btn.disabled = false;
-    document.getElementById('emp-hud-producto').textContent = '¡Todo verificado! Cierra la caja.';
+    document.getElementById('emp-hud-producto').textContent = '¡Todo verificado! Cierre la caja.';
   } else {
     btn.style.display = 'none';
   }
@@ -489,7 +489,7 @@ async function empProcesarEscaneo(codigo) {
       empFlash('verde', etiquetaEmpaque || null);
       empRenderHUDItem();
     } else {
-      empFlash('rojo', 'Sin conexión — vuelve a escanear');
+      empFlash('rojo', 'Sin conexión — vuelva a escanear');
     }
   }
 }
@@ -573,7 +573,7 @@ function _modalAmbiguedadPackingEmp(codigo, ambiguos) {
   modal.innerHTML = `
     <div style="background:var(--bg-s);border-top:2px solid #7c3aed;border-radius:20px 20px 0 0;padding:24px;width:100%;max-height:70vh;overflow-y:auto;">
       <div style="font-size:var(--fs-md);font-weight:700;color:var(--lila-tx);margin-bottom:4px;">Código en múltiples empaques</div>
-      <div style="font-size:var(--fs-sm);color:var(--tx3);margin-bottom:16px;">${esc(codigo)} — ¿Cuál estás empacando?</div>
+      <div style="font-size:var(--fs-sm);color:var(--tx3);margin-bottom:16px;">${esc(codigo)} — ¿Cuál está empacando?</div>
       ${opciones}
       <button onclick="this.closest('.modal-ambig-emp').remove()"
         style="width:100%;padding:12px;font-size:var(--fs-sm);background:var(--bg-s);color:var(--tx3);border:1px solid var(--brd);border-radius:10px;cursor:pointer;margin-top:4px;">
@@ -693,7 +693,7 @@ function bultosRenderLineas() {
   const el = document.getElementById('modal-bultos-lineas');
   if (!el) return;
   if (!_BULTOS_LINEAS.length) {
-    el.innerHTML = '<div style="color:var(--tx3);font-size:var(--fs-sm);text-align:center;padding:12px;">Agrega al menos una pieza ↑</div>';
+    el.innerHTML = '<div style="color:var(--tx3);font-size:var(--fs-sm);text-align:center;padding:12px;">Agregue al menos una pieza ↑</div>';
     return;
   }
   el.innerHTML = _BULTOS_LINEAS.map((l, i) => `
@@ -730,7 +730,7 @@ async function bultosConfirmar() {
   errEl.textContent = '';
   const total = _BULTOS_LINEAS.reduce((s, l) => s + l.cantidad, 0);
   if (!_BULTOS_LINEAS.length || total < 1) {
-    errEl.textContent = 'Debes agregar al menos una pieza';
+    errEl.textContent = 'Debe agregar al menos una pieza';
     return;
   }
 
@@ -851,7 +851,7 @@ function _empMostrarBloqueoOffline() {
     <div style="font-size:20px;font-weight:900;color:var(--warn-tx);">Cierre pendiente de conexión</div>
     <div style="font-size:var(--fs-md);color:var(--tx2);line-height:1.6;max-width:320px;">
       Pedido ${esc(info.numero_pedido || '—')} · ${esc(info.cliente || '')}<br><br>
-      No muevas esta pieza. Se cierra y la etiqueta se imprime sola apenas vuelva la señal.
+      No mueva esta pieza. Se cierra y la etiqueta se imprime sola apenas vuelva la señal.
     </div>
     <div style="font-size:var(--fs-sm);color:var(--tx3);">Reintentando automáticamente…</div>`;
   document.body.appendChild(overlay);
