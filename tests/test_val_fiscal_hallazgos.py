@@ -224,3 +224,39 @@ class TestLaSalidaHumanaDesatascaElContador:
         assert t.estado == 'DESPACHADO' and t.rm_consec == 88
         ids = {j.id for j in fallidos_vigentes(tipos=['DESPACHO_F470'])['jobs']}
         assert job.id not in ids, 'la emisión resuelta a mano sigue contando como trabada'
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# H7 · Reabrir el picking de una caja que ya salió: el faltante no tiene caja
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestReabrirConLaCajaDespachada:
+
+    @pytest.mark.xfail(strict=True, reason=(
+        'H7: reabrir_picking usa _empaque_que_la_explica (caja no cancelada O con '
+        'documento) y crea una tarea PENDIENTE por el faltante aunque la caja ya '
+        'esté DESPACHADO con RM+FE. El picker la recoge (el hueco se descuenta), '
+        'pero no hay caja posible (una por pedido; exigir_pedido_sin_documento) ni '
+        '«devuelto al estante» (la caja con documento «la explica»): unidades fuera '
+        'del hueco, sin caja y sin salida.'))
+    def test_no_nace_un_faltante_para_una_caja_que_ya_salio(self, db, almacen):
+        from app.models.picking import TareaPicking
+        from app.services.packing_service import PackingService
+        from app.services.picking_service import PickingService
+        from tests.test_inventario_no_se_resta_sin_destino import _escenario
+        t, p, ub, op, sup = _escenario(db, almacen, ref='PD7101')
+        caja = PackingService.crear_desde_picking(
+            tareas_picking_ids=[t.id], numero_pedido_siesa='PD7101',
+            almacen_id=almacen.id, tipo_docto_pedido_siesa='PD',
+            consec_docto_pedido_siesa='7101')
+        caja.estado, caja.siesa_triggered = 'DESPACHADO', True
+        caja.rm_tipo, caja.rm_consec = 'RM', 55
+        caja.fe_confirmada_at = datetime.utcnow()
+        db.session.commit()
+        try:
+            PickingService.reabrir_picking(t.id, sup.id, motivo='apareció el resto')
+        except ValueError:
+            return  # arreglado: se niega
+        vivas = TareaPicking.query.filter_by(referencia_documento='PD7101',
+                                             estado='PENDIENTE').count()
+        assert vivas == 0, 'nació un picking por el faltante de una caja que ya salió'
