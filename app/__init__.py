@@ -70,7 +70,7 @@ def create_app():
     if not secret_key:
         raise RuntimeError(
             'SECRET_KEY no está configurada en las variables de entorno. '
-            'Agrega SECRET_KEY en Railway (o en tu .env local) antes de arrancar la app.'
+            'Agregue SECRET_KEY en Railway (o en su .env local) antes de arrancar la app.'
         )
 
     # PASO 1 DE 2 — MEDIR, todavía no imponer.
@@ -310,7 +310,7 @@ def create_app():
     def cmd_create_admin(email, password, nombre):
         """Crea o actualiza el usuario admin. Uso: flask create-admin --password TuClave"""
         if not password:
-            click.echo('ERROR: debes pasar --password. Ejemplo: flask create-admin --password MiClave123')
+            click.echo('ERROR: debe pasar --password. Ejemplo: flask create-admin --password MiClave123')
             return
         from app.models.usuario import Usuario, normalizar_email
         email = normalizar_email(email)
@@ -343,7 +343,7 @@ def create_app():
         r = asegurar_almacenes(ejecutar=ejecutar)
         for f in r['faltantes']:
             click.echo(f"{f['bodega']} (CO {f['co']}): {f['estado']}")
-        click.echo(f"creados: {r['creados']}" if ejecutar else 'Simulacro: usá --ejecutar para crear.')
+        click.echo(f"creados: {r['creados']}" if ejecutar else 'Simulacro: use --ejecutar para crear.')
 
     # ── CLI: flask sync-productos ──────────────────────────────────────────
     @app.cli.command('sync-productos')

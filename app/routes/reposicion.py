@@ -569,7 +569,7 @@ def test_alerta_email():
     from datetime import datetime
 
     if not _config_resend():
-        return jsonify({'ok': False, 'error': 'Resend no configurado — agrega RESEND_API_KEY y ALERTA_EMAIL_DEST en Railway'}), 400
+        return jsonify({'ok': False, 'error': 'Resend no configurado — agregue RESEND_API_KEY y ALERTA_EMAIL_DEST en Railway'}), 400
 
     # Usar huérfanas reales si las hay
     huerfanas_reales = UbicacionHuerfana.query.limit(3).all()
@@ -606,7 +606,7 @@ def test_alerta_email():
 
     try:
         enviar_email(asunto, cuerpo_html, cuerpo_texto)
-        return jsonify({'ok': True, 'mensaje': 'Email de prueba enviado — revisa la bandeja'}), 200
+        return jsonify({'ok': True, 'mensaje': 'Email de prueba enviado — revise la bandeja'}), 200
     except Exception as e:
         logger.exception('[REPOSICION] test_alerta_email prueba')
         return jsonify({'ok': False, 'error': str(e)}), 500

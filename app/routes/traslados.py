@@ -151,8 +151,8 @@ def crear_solicitud():
         bodega_origen = bodega_del_usuario(usuario)
         if not bodega_origen:
             return jsonify({'error':
-                'Tu usuario no tiene una bodega asignada, así que no se puede '
-                'saber de qué punto sale esta avería. Pedí que te la '
+                'Su usuario no tiene una bodega asignada, así que no se puede '
+                'saber de qué punto sale esta avería. Pida que se la '
                 'configuren antes de declararla.'}), 400
         bodega_destino = BODEGA_AVERIAS_DESTINO
         nombre_pv = (usuario.nombre_punto_venta if usuario else None)
@@ -201,7 +201,7 @@ def enviar_solicitud(id):
     if usuario.rol not in _roles_gestion + ('tienda',):
         return jsonify({'error': 'Sin permiso para enviar solicitudes de traslado'}), 403
     if usuario.rol == 'tienda' and s.solicitante_id != usuario_id:
-        return jsonify({'error': 'Solo puedes enviar tus propias solicitudes'}), 403
+        return jsonify({'error': 'Solo puede enviar sus propias solicitudes'}), 403
     try:
         s = TrasladoService.enviar_solicitud(id)
         return jsonify(s.to_dict()), 200
@@ -411,7 +411,7 @@ def cancelar_solicitud(id):
 
     if usuario.rol == 'tienda':
         if s.solicitante_id != usuario_id:
-            return jsonify({'error': 'Solo puedes cancelar tus propias solicitudes'}), 403
+            return jsonify({'error': 'Solo puede cancelar sus propias solicitudes'}), 403
         permitidos = ('BORRADOR', 'ENVIADA')
     elif usuario.rol in ('admin', 'supervisor'):
         permitidos = ('BORRADOR', 'ENVIADA', 'EN_PICKING', 'PREPARADO')
@@ -447,7 +447,7 @@ def cancelar_solicitud(id):
     except Exception as e:
         db.session.rollback()
         logger.error(f'[TRASLADO] Error cancelando solicitud {id}: {e}', exc_info=True)
-        return jsonify({'error': 'Error cancelando traslado — reintenta'}), 500
+        return jsonify({'error': 'Error cancelando traslado — reintente'}), 500
     logger.info(f'[TRASLADO] {s.codigo} → CANCELADA por usuario {usuario_id}')
     return jsonify(s.to_dict()), 200
 
@@ -480,7 +480,7 @@ def confirmar_picking(id):
         return jsonify({'error': str(e)}), 400
     except Exception as e:
         logger.error(f'[TRASLADO] Error confirmar-picking {id}: {e}', exc_info=True)
-        return jsonify({'error': 'Error interno — reintenta'}), 500
+        return jsonify({'error': 'Error interno — reintente'}), 500
     return jsonify({
         'ok': True,
         'mensaje': 'Picking confirmado — listo para verificación de empaque',
@@ -513,7 +513,7 @@ def confirmar_packing(id):
         return jsonify({'error': str(e)}), 400
     except Exception as e:
         logger.error(f'[TRASLADO] Error confirmar-packing {id}: {e}', exc_info=True)
-        return jsonify({'error': 'Error interno — reintenta'}), 500
+        return jsonify({'error': 'Error interno — reintente'}), 500
     return jsonify({
         'ok': True,
         'mensaje': 'Empaque verificado — listo para despachar',
@@ -561,7 +561,7 @@ def reasignar_operario(id):
     except Exception as e:
         db.session.rollback()
         logger.error(f'[TRASLADO] Error reasignando operario en {id}: {e}', exc_info=True)
-        return jsonify({'error': 'Error reasignando operario — reintenta'}), 500
+        return jsonify({'error': 'Error reasignando operario — reintente'}), 500
     logger.info(f'[TRASLADO] {s.codigo} → operario reasignado a {nuevo_op.nombre} por {usuario_id}')
     return jsonify({'ok': True, 'solicitud': s.to_dict()}), 200
 
@@ -613,7 +613,7 @@ def revertir_traslado(id):
             'ok': True,
             'mensaje': (
                 f'Traslado {s.codigo} revertido. Unidades devueltas al inventario origen. '
-                f'Recuerda anular el STS en Siesa manualmente.'
+                f'Recuerde anular el STS en Siesa manualmente.'
             ),
             'solicitud': s.to_dict(),
         }), 200
@@ -621,7 +621,7 @@ def revertir_traslado(id):
         return jsonify({'error': str(e)}), 400
     except Exception as e:
         logger.error(f'[TRASLADO] Error revertir {id}: {e}', exc_info=True)
-        return jsonify({'error': 'Error interno — reintenta'}), 500
+        return jsonify({'error': 'Error interno — reintente'}), 500
 
 
 @traslados_bp.route('/<int:id>/recibir', methods=['POST'])
@@ -938,7 +938,7 @@ def reintentar_despacho(id):
                 s.siesa_error = (
                     'El STS (173076) se envió y Siesa no devolvió su '
                     'consecutivo, ni se pudo recuperar. EL DOCUMENTO PUEDE '
-                    'EXISTIR: verificalo en Siesa antes de reintentar — otro '
+                    'EXISTIR: verifíquelo en Siesa antes de reintentar — otro '
                     'envío descarga la mercancía dos veces.')
                 db.session.commit()
                 return jsonify({

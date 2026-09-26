@@ -47,7 +47,7 @@ def _validar_recepcion_tienda(recepcion_id, usuario):
         return None, 'Recepción no encontrada'
     almacen = Almacen.query.get(recepcion.almacen_id) if recepcion.almacen_id else None
     if almacen and almacen.bodega_siesa_id != usuario.bodega_siesa_id:
-        return None, 'Esta recepción no pertenece a tu punto de venta'
+        return None, 'Esta recepción no pertenece a su punto de venta'
     return recepcion, None
 
 

@@ -151,7 +151,7 @@ def registrar_conteo(id):
     _u_chk = Usuario.query.get(operario_id)
     if _u_chk and _u_chk.rol not in Roles.SUPERVISION:
         if _sesion_chk.operario_id != operario_id:
-            return jsonify({'error': 'No puedes registrar el conteo de otra persona'}), 403
+            return jsonify({'error': 'No puede registrar el conteo de otra persona'}), 403
 
     try:
         cantidad_fisica = int(data['cantidad_fisica'])
@@ -1065,7 +1065,7 @@ def preview_descartar_fallos():
         plan['advertencia'] = (
             f'{len(plan["huerfanas"])} sesión(es) en AJUSTANDO con el ajuste '
             f'posiblemente enviado: {plan["huerfanas"]}. Sus jobs NO se descartan '
-            f'(quedan FALLIDO para reintentar). Verificá en Siesa si el ajuste llegó.'
+            f'(quedan FALLIDO para reintentar). Verifique en Siesa si el ajuste llegó.'
         )
     return jsonify(plan), 200
 

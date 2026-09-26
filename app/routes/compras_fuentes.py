@@ -138,7 +138,7 @@ def editar_producto():
     if not codigo:
         return jsonify({'error': 'Falta el código del producto'}), 400
     if data.get('origen') in (None, '') and data.get('marca') in (None, ''):
-        return jsonify({'error': 'Nada que cambiar: mandá origen o marca'}), 400
+        return jsonify({'error': 'Nada que cambiar: envíe origen o marca'}), 400
     r = _editar(codigo, origen=data.get('origen') or None,
                 marca=data.get('marca') or None, usuario_id=_get_uid())
     if r.get('invalidas'):

@@ -249,7 +249,7 @@ def reclasificar_cuerpo(id):
     if not all(data.get(c) for c in campos):
         return jsonify({'error': f'Requeridos: {", ".join(campos)}'}), 400
     if data.get('tipo_zona') is None and data.get('activo') is None:
-        return jsonify({'error': 'Indica al menos un campo a cambiar: tipo_zona o activo'}), 400
+        return jsonify({'error': 'Indique al menos un campo a cambiar: tipo_zona o activo'}), 400
     try:
         resultado = layout_service.reclasificar_cuerpo(
             almacen_id=id,
@@ -318,7 +318,7 @@ def editar_fila(id):
     if not data.get('pasillo') or not data.get('fila'):
         return jsonify({'error': 'Requeridos: pasillo, fila'}), 400
     if data.get('tipo_zona') is None and data.get('capacidad_maxima') is None and data.get('activo') is None:
-        return jsonify({'error': 'Indica al menos un campo a cambiar: tipo_zona, capacidad_maxima o activo'}), 400
+        return jsonify({'error': 'Indique al menos un campo a cambiar: tipo_zona, capacidad_maxima o activo'}), 400
     try:
         resultado = layout_service.editar_fila(
             almacen_id=id,

@@ -414,7 +414,7 @@ def debug_items_raw():
     resultado = connekta.get_items_catalogo(pagina)
     tabla = resultado.get('detalle', {}).get('Table', [])
     if not tabla:
-        return jsonify({'error': 'Sin datos — verifica credenciales Connekta', 'raw': resultado}), 200
+        return jsonify({'error': 'Sin datos — verifique las credenciales de Connekta', 'raw': resultado}), 200
     campos = list(tabla[0].keys())
     campos_factor = [c for c in campos if 'factor' in c.lower() or 'unidad_emp' in c.lower() or 'empaque' in c.lower()]
     return jsonify({
@@ -1055,7 +1055,7 @@ def buscar_producto_siesa_vivo(codigo):
         item = connekta.buscar_item_por_referencia(codigo)
     except Exception as e:
         logger.warning('[ETIQUETAS] buscar_item_por_referencia(%s) falló: %s', codigo, e)
-        return jsonify({'error': 'Siesa no respondió a la consulta en vivo — reintenta en unos segundos'}), 502
+        return jsonify({'error': 'Siesa no respondió a la consulta en vivo — reintente en unos segundos'}), 502
     if not item:
         return jsonify({'error': f"'{codigo}' no existe en el maestro de ítems de Siesa"}), 404
     try:
@@ -1096,7 +1096,7 @@ def iniciar_despacho():
     items = [i for i in data['items'] if i.get('producto_id')]
 
     if not items:
-        return jsonify({'error': 'Ningún producto está registrado en el WMS — agrégalos primero'}), 400
+        return jsonify({'error': 'Ningún producto está registrado en el WMS — agréguelos primero'}), 400
 
     # Una caja cancelada de este pedido con remisión o factura en Siesa: un
     # despacho nuevo emitiría el segundo documento. Antes de crear el picking.
@@ -1119,7 +1119,7 @@ def iniciar_despacho():
         if completado:
             return jsonify({
                 'error': f'{numero_pedido} ya tiene picking completo — '
-                         f'usa "Confirmar en Siesa" para enviar la remisión.',
+                         f'use "Confirmar en Siesa" para enviar la remisión.',
                 'packing_id': existing_packing.id
             }), 409
         return jsonify({
@@ -1373,7 +1373,7 @@ def iniciar_recepcion():
                     f'El proveedor NIT {nit_proveedor} tiene Tipo de Proveedor {tipo} '
                     f'({tipo}), el cual no tiene cuenta de Pasivo Estimado configurada. '
                     f'Solo los tipos 0001 (Nacionales) y 0002 (Extranjero) pueden '
-                    f'generar entradas de inventario. Corrige en Siesa: Maestros → '
+                    f'generar entradas de inventario. Corríjalo en Siesa: Maestros → '
                     f'Terceros → [este NIT] → pestaña Compras → Tipo de Proveedor.'
                 )
             }), 422
@@ -1412,7 +1412,7 @@ def iniciar_recepcion():
             }), 200
         if existente.estado == 'CONFIRMADA':
             return jsonify({
-                'error': f'La OC {data["numero_oc"]} ya fue recepcionada y confirmada (recepción {existente.codigo}). Si necesitas una corrección, cancela la recepción desde Admin.'
+                'error': f'La OC {data["numero_oc"]} ya fue recepcionada y confirmada (recepción {existente.codigo}). Si necesita una corrección, cancele la recepción desde Admin.'
             }), 409
         if existente.estado == 'ABIERTA':
             existente = RecepcionService.iniciar(existente.id, recepcionista_id)

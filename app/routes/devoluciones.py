@@ -80,7 +80,7 @@ def crear_devolucion():
             observaciones=data.get('observaciones'),
         )
         return jsonify({
-            'mensaje': 'Devolución creada — confirma para ingresar el stock y generar la Nota Crédito',
+            'mensaje': 'Devolución creada — confirme para ingresar el stock y generar la Nota Crédito',
             'devolucion': devolucion.to_dict(),
         }), 201
     except ValueError as e:

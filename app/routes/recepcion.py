@@ -103,7 +103,7 @@ def iniciar_recepcion(id):
     try:
         recepcion = RecepcionService.iniciar(id, recepcionista_id)
         return jsonify({
-            'mensaje': 'Recepción iniciada — escanea los productos',
+            'mensaje': 'Recepción iniciada — escanee los productos',
             'recepcion': recepcion.to_dict()
         }), 200
     except ValueError as e:
@@ -141,7 +141,7 @@ def declarar_averia(id):
             return jsonify({'error': 'Recepción no encontrada'}), 404
         if not usuario_es_de_la_bodega(_u, bodega_de_la_recepcion(_rec)):
             return jsonify({
-                'error': 'Esa recepción no pertenece a tu punto de venta'
+                'error': 'Esa recepción no pertenece a su punto de venta'
             }), 403
 
     data = request.get_json() or {}

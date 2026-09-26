@@ -167,7 +167,7 @@ def iniciar_tarea(id):
         return jsonify({'error': 'Sin permiso para iniciar tareas de picking'}), 403
     tarea_check = TareaPicking.query.get_or_404(id)
     if u.rol not in Roles.SUPERVISION and tarea_check.operario_id is not None and tarea_check.operario_id != usuario_id:
-        return jsonify({'error': 'Esta tarea no te pertenece'}), 403
+        return jsonify({'error': 'Esta tarea no le pertenece'}), 403
 
     # Lock de prioridad: operario no puede tomar otra tarea si tiene una EN_PROCESO
     if u.rol not in Roles.SUPERVISION:
@@ -177,7 +177,7 @@ def iniciar_tarea(id):
         ).first()
         if activa and activa.id != id:
             return jsonify({
-                'error': 'Tienes una tarea en proceso. Confírmala antes de tomar otra.',
+                'error': 'Tiene una tarea en proceso. Confírmela antes de tomar otra.',
                 'tarea_activa_id': activa.id,
                 'tarea_activa_codigo': activa.referencia_documento,
             }), 409
@@ -202,7 +202,7 @@ def confirmar_tarea(id):
         return jsonify({'error': 'Sin permiso para confirmar picking'}), 403
     tarea_check = TareaPicking.query.get_or_404(id)
     if u.rol not in Roles.SUPERVISION and tarea_check.operario_id != usuario_id:
-        return jsonify({'error': 'Esta tarea no te pertenece'}), 403
+        return jsonify({'error': 'Esta tarea no le pertenece'}), 403
     data = request.get_json()
     if 'cantidad_recogida' not in data:
         return jsonify({'error': 'cantidad_recogida requerida'}), 400
@@ -361,7 +361,7 @@ def siguiente_tarea():
     if tarea_activa:
         return jsonify({
             'tarea': tarea_activa.to_dict(),
-            'mensaje': 'Tienes una tarea en proceso'
+            'mensaje': 'Tiene una tarea en proceso'
         }), 200
 
     # PickingService.siguiente_tarea_para(): prioridad -> mismo documento en

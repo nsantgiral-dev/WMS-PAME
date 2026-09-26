@@ -293,7 +293,7 @@ def confirmar_packing(id):
         )
         tarea = TareaPacking.query.get(id)
         return jsonify({
-            'mensaje': 'Ítems verificados — declara las piezas físicas para cerrar',
+            'mensaje': 'Ítems verificados — declare las piezas físicas para cerrar',
             'tarea': tarea.to_dict(),
         }), 200
     except ValueError as e:
@@ -341,7 +341,7 @@ def cerrar_packing(id):
     _tarea_chk = TareaPacking.query.get(id)
     if _tarea_chk and _tarea_chk.empacador_id and _tarea_chk.empacador_id != uid:
         if usuario.rol not in Roles.SUPERVISION:
-            return jsonify({'error': 'No puedes cerrar una tarea asignada a otro empacador'}), 403
+            return jsonify({'error': 'No puede cerrar una tarea asignada a otro empacador'}), 403
     data = request.get_json() or {}
     bultos_data = data.get('bultos', [])
     # Permitir bultos_data vacío solo si ya existen bultos (retry Siesa)
@@ -349,7 +349,7 @@ def cerrar_packing(id):
         from app.models.bulto import Bulto
         hay_bultos = Bulto.query.filter_by(tarea_id=id).count() > 0
         if not hay_bultos:
-            return jsonify({'error': 'Debes declarar al menos una pieza'}), 400
+            return jsonify({'error': 'Debe declarar al menos una pieza'}), 400
     from app.services.packing_service import CierreNoEmitido
     try:
         resultado = PackingService.cerrar_packing_resultado(tarea_id=id, bultos_data=bultos_data, usuario_id=uid)
@@ -418,7 +418,7 @@ def resetear_siesa(id):
         tarea = PackingService.resetear_siesa(
             id, usuario_id=admin.id,
             motivo=(request.get_json(silent=True) or {}).get('motivo'))
-        return jsonify({'ok': True, 'mensaje': 'Packing reseteado — declara las piezas de nuevo', 'tarea': tarea.to_dict()}), 200
+        return jsonify({'ok': True, 'mensaje': 'Packing reseteado — declare las piezas de nuevo', 'tarea': tarea.to_dict()}), 200
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
 

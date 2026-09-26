@@ -176,7 +176,7 @@ def actualizar_usuario(uid):
             return jsonify({'error': f'Rol inválido: {data["rol"]!r}. Roles válidos: {list(_ROLES_VALIDOS)}'}), 400
         # Nadie puede auto-escalarse — admin solo puede cambiar rol de otros
         if uid == admin.id and data['rol'] != 'admin':
-            return jsonify({'error': 'No puedes cambiar tu propio rol'}), 400
+            return jsonify({'error': 'No puede cambiar su propio rol'}), 400
         usuario.rol = data['rol']
     if 'almacen_id' in data:
         usuario.almacen_id = data['almacen_id']

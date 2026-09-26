@@ -176,7 +176,7 @@ def recalcular_kpi():
                             'el día en curso no se guarda')
         if (hasta - desde).days + 1 > kpi.TOPE_DIAS_RECALCULO:
             raise _Invalido(f'el rango pasa de {kpi.TOPE_DIAS_RECALCULO} días: '
-                            'pedilo en tandas (es idempotente)')
+                            'pídalo en tandas (es idempotente)')
     except _Invalido as e:
         return jsonify({'error': str(e)}), 400
     try:

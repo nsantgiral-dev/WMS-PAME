@@ -78,7 +78,7 @@ def tarea_actual():
 
     avisos = obtener_avisos_pendientes(operario_id)
     if not resultado:
-        return jsonify({'sin_tareas': True, 'mensaje': 'No tienes tareas pendientes', 'avisos_pendientes': avisos}), 200
+        return jsonify({'sin_tareas': True, 'mensaje': 'No tiene tareas pendientes', 'avisos_pendientes': avisos}), 200
     resultado['avisos_pendientes'] = avisos
     return jsonify(resultado), 200
 
@@ -172,7 +172,7 @@ def _sync_cerrar_packing(operario_id, item):
     tarea_chk = db.session.get(TareaPacking, item.get('tarea_id'))
     if tarea_chk and tarea_chk.empacador_id and tarea_chk.empacador_id != operario_id \
             and u.rol not in _R.SUPERVISION:
-        return False, 'No puedes cerrar una tarea asignada a otro empacador'
+        return False, 'No puede cerrar una tarea asignada a otro empacador'
     resultado = PackingService.cerrar_packing_resultado(
         tarea_id=item['tarea_id'],
         bultos_data=item.get('bultos', []),
@@ -437,7 +437,7 @@ def reportar_problema():
         except Exception as e:
             db.session.rollback()
             current_app.logger.error(f'[MOBILE] reportar_problema CONTEO error: {e}', exc_info=True)
-            return jsonify({'error': 'Error al bloquear sesión de conteo — reintenta'}), 500
+            return jsonify({'error': 'Error al bloquear sesión de conteo — reintente'}), 500
 
     # ── PACKING ──────────────────────────────────────────────────
     if tipo == 'PACKING':
@@ -454,7 +454,7 @@ def reportar_problema():
         # Ownership: solo el empacador asignado puede bloquear su tarea
         from app.routes._auth_helpers import Roles as _R
         if tarea.empacador_id and tarea.empacador_id != operario_id and u.rol not in _R.SUPERVISION:
-            return jsonify({'error': 'Esta tarea no está asignada a ti'}), 403
+            return jsonify({'error': 'Esta tarea no está asignada a usted'}), 403
         # Guard estado: solo bloquear packings activos (previene revertir VERIFICADO/DESPACHADO)
         if tarea.estado not in (EstadoPacking.PENDIENTE, EstadoPacking.EN_PROCESO):
             return jsonify({
@@ -468,7 +468,7 @@ def reportar_problema():
         except Exception as e:
             db.session.rollback()
             current_app.logger.error(f'[MOBILE] reportar_problema PACKING error: {e}', exc_info=True)
-            return jsonify({'error': 'Error al bloquear tarea de packing — reintenta'}), 500
+            return jsonify({'error': 'Error al bloquear tarea de packing — reintente'}), 500
         return jsonify({
             'ok': True,
             'mensaje': 'Problema de packing reportado',
@@ -522,7 +522,7 @@ def conteo_mercancia_sin_codigo():
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
     return jsonify({'ok': True, 'novedad_id': nov.id,
-                    'mensaje': 'Anotado para el líder — seguí contando'}), 200
+                    'mensaje': 'Anotado para el líder — siga contando'}), 200
 
 
 @mobile_bp.route('/faltante-info', methods=['POST'])

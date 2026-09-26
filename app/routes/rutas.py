@@ -435,7 +435,7 @@ def entregar_ruta(id):
         return jsonify({'error': str(e)}), 400
     except Exception as e:
         logger.error(f'[RUTAS] Error en entregar_ruta {id}: {e}', exc_info=True)
-        return jsonify({'error': 'Error registrando entrega de ruta — reintenta'}), 500
+        return jsonify({'error': 'Error registrando entrega de ruta — reintente'}), 500
     return jsonify(resultado), 200
 
 
