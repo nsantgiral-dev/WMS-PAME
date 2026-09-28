@@ -5734,8 +5734,9 @@ Además:
   por `_BODEGAS_PV` a propósito — cambiaría todas las series y no era el defecto.
 - **La deriva compara solo cuando hay OCs sincronizadas** (el espejo nace
   apagado, `COMPRAS_OC_SYNC`); hasta entonces lo declara.
-- **El lead time nacional sigue siendo un supuesto** (5 ± 2 días) hasta que
-  el espejo tenga OCs cumplidas con su fecha de entrada.
+- **El lead time nacional sigue siendo un supuesto** (~~5 ± 2~~ **10 ± 5**
+  desde el 2026-09-27, lo medido en producción) hasta que el espejo tenga OCs
+  cumplidas con su fecha de entrada.
 - **Rendimiento**: `intervalos_con_stock` trae las filas de `StockDiario` de la
   ventana (del orden de las que ya traía la numeración por día de la
   demanda). No se midió contra el volumen de producción.
@@ -5780,7 +5781,7 @@ backfill): tabla `oc_linea_siesa`; `proveedores.fuente/sincronizado_en`;
 |---|---|---|
 | ¿Cuánto falta por entrar de una línea de OC? | `pendiente_de_linea(fila)` | En unidad de **inventario**: `f421_cant_pedida − f421_cant_entrada` (**en la API, `f421_cant_*` ya es unidad de inventario y `f421_cant_*_base` la de la LÍNEA** — corregido 2026-09-25, ver «lo que encontró la verificación en vivo»); sin ellas, `(pedida_base − entrada_base) × factor`; sin factor, **`None`** (no se inventa: se cuenta como «sin unidad base») |
 | ¿Cuánto viene en camino? | `en_camino(skus, bodegas)` | **La única.** Líneas de OC **abiertas** + ítems de contenedor comprados y sin recibir (cuenta el estado del **contenedor** si lo tiene —`ESTADOS_EN_CAMINO`, con `EN_PRODUCCION`—, si no el del ítem; `RECIBIDO` nunca), **solo a `_BODEGAS_PV`** (lista blanca: AV1/TRA1 nunca; una bodega pedida no operada se ignora y se declara). Un contenedor que cita su OC (`oc_referencia` = `CO-TIPO-CONSEC`) y la OC sigue abierta **no se suma dos veces**; si cita una OC ya cerrada no se suma (ya entró o se anuló); sin cita, sobre un SKU con OC abierta, se suma y se marca `solapamiento_posible` (contar de más achica el déficit: es el lado corregible, Regla 0) |
-| ¿Cuánto tarda? | `lead_time(proveedor, origen)` | Cascada **proveedor (≥3 OCs medidas) → origen → default declarado** (`default_lead_time`: 5±2 nacional, configurable con `ROP_LT_NACIONAL_DIAS`/`ROP_SIGMA_LT_NACIONAL` → `CONFIGURADO`; 105±15 China), con `n`, `fuente` (MEDIDO ≥6 · PARCIAL ≥3 · CONFIGURADO · DEFAULT_CONSERVADOR), `confianza` y `nivel`. **PARCIAL no baja del default** (D9 del motor): con 3 a 5 observaciones, el mayor entre lo medido y el default, para la media y la σ (`lt_medido`/`sigma_lt_medida` publican lo medido). China → contenedores (`fecha_oc → fecha_recepcion_cedi`); nacional → OCs en COP de proveedores no chinos. Observación de una OC: fecha de la OC → **primera entrada**: la confirmación de la recepción del WMS si existe (fecha física), si no la primera marca de Siesa (`f420_fecha_ts_parcial`/`_cumplido`); una entrada anterior a la OC se descarta y se cuenta |
+| ¿Cuánto tarda? | `lead_time(proveedor, origen)` | Cascada **proveedor (≥3 OCs medidas) → origen → default declarado** (`default_lead_time`: 10±5 nacional desde el 2026-09-27 —era 5±2—, configurable con `ROP_LT_NACIONAL_DIAS`/`ROP_SIGMA_LT_NACIONAL` → `CONFIGURADO`; 105±15 China), con `n`, `fuente` (MEDIDO ≥6 · PARCIAL ≥3 · CONFIGURADO · DEFAULT_CONSERVADOR), `confianza` y `nivel`. **PARCIAL no baja del default** (D9 del motor): con 3 a 5 observaciones, el mayor entre lo medido y el default, para la media y la σ (`lt_medido`/`sigma_lt_medida` publican lo medido). China → contenedores (`fecha_oc → fecha_recepcion_cedi`); nacional → OCs en COP de proveedores no chinos. Observación de una OC: fecha de la OC → **primera entrada**: la confirmación de la recepción del WMS si existe (fecha física), si no la primera marca de Siesa (`f420_fecha_ts_parcial`/`_cumplido`); una entrada anterior a la OC se descarta y se cuenta |
 | ¿A cuánto dice cada OC? | `lineas_precio_oc(refs, desde, proveedor)` | **La única lectura del precio de una OC**: por unidad base (`precio / factor`), en la moneda de la OC, con la cantidad pedida base; sin obsequios ni anuladas |
 | ¿A cuánto lo compramos? | `precios_oc(refs)` | OC más reciente **en pesos vía `costo_service.a_cop`** (D4: USD = FOB × TRM × factor, declarado en `conversion`; otra moneda se excluye y se declara con `costo: None` + `motivo_exclusion`); a igual fecha la más alta |
 | ¿La OC respetó el acuerdo? | `compras_inteligencia_service.detectar_deriva` | **El único comparador.** El enchufe del motor `precios_de_compra_recibidos` lee `lineas_precio_oc`: OC vs acuerdo en la misma moneda, con cantidad e `impacto_estimado_cop`; `mismo_proveedor` distingue la OC del proveedor del acuerdo de la de otro. (`precio_oc_vs_acuerdo`, que hacía lo mismo sin cantidades ni moneda, se retiró) |
@@ -5842,7 +5843,7 @@ Fuente: `API_v2_Compras_Ordenes` (**contrato completo**, 89 campos, Regla 1).
 | `CONNEKTA_API_PROVEEDORES` | `API_v2_Proveedores` | Maestro de proveedores (reemplazó `CONNEKTA_API_TERCEROS`, 2026-09-25) |
 | `COMPRAS_TIPOS_PROVEEDOR` | — (sin default) | Tipos de proveedor que son mercancía (`0001,0002`…); sin ella, solo los de las OCs |
 | `COMPRAS_OC_VENCIDA_DIAS` | `90` | Desde cuántos días de entrega vencida una OC abierta se declara vieja |
-| `COMPRAS_OC_EXCLUIR_MAS_DE_DIAS` | — (sin default) | Corte: las más viejas que esto no se suman a «en camino» |
+| `COMPRAS_OC_EXCLUIR_MAS_DE_DIAS` | `180` (desde el 2026-09-27; `nunca` = sin corte) | Corte: las más viejas que esto no se suman a «en camino» |
 | `SIESA_CRITERIO_MARCA` | — (sin default) | Plan de clasificación que es «marca» (QA: `P03`) |
 | `COMPRAS_MARCA_MAX_PAGINAS` / `COMPRAS_MARCA_PAUSA_S` / `CONNEKTA_API_ITEMS_CRITERIOS` | `400` / `0.2` / `API_v2_ItemsCriterios` | Lectura de la marca |
 
@@ -6127,11 +6128,13 @@ vuelve si en la misma sesión entra un admin). `compras_bandeja.js` (`cmpTab`):
 | 🛒 Bandeja | Por SKU nacional bajo su punto de pedido (o por cruzarlo en 7 días): **cuánto pedir** (a empaque y MOQ), **a quién**, **a qué precio**, valor, urgencia, y **¿por qué?** con la aritmética en palabras. Agrupada por proveedor con subtotal, «Copiar OC» y «Exportar CSV» | `GET /api/compras/bandeja` |
 | 🚢 Contenedor | Sin origen o sin fichas lo dice **en grande** con cuántos SKU y el enlace a 🧾 Fuentes, y no pinta barras ni ETA. Con datos: por proveedor chino, nombre, unidades, cajas, m³, US$ por línea, alerta si llega con la temporada empezada con la fecha límite, «Exportar packing list» | `GET /api/compras/bandeja/contenedor?tipo=` |
 | 🎒 Temporada | tener − hay − viene = pedir (del backend), fecha límite por origen, conciliada con el contenedor (**manda la temporada**: el contenedor muestra el ajuste, no una segunda cifra). El instrumento del comité (lista paralela, escenarios, acta) plegado debajo | `GET /api/compras/bandeja/temporada` |
-| 📦 Lo pedido | OCs abiertas por proveedor, atrasadas primero con sus días; lo que llegó (recepciones confirmadas, 30 días); deriva de precios contra los acuerdos (3/6/12 meses). Una sección que falla se declara: sin 500 | `GET /api/compras/bandeja/lo-pedido` |
+| 📦 Lo pedido | OCs abiertas por proveedor, atrasadas primero con sus días; lo que llegó (entradas de Siesa del espejo y recepciones del muelle, 30 días, desde el 2026-09-27); deriva de precios contra los acuerdos (3/6/12 meses). Una sección que falla se declara: sin 500 | `GET /api/compras/bandeja/lo-pedido` |
 | 🧾 Fuentes | Sin cambios | `/api/compras/fuentes/*` |
 | ⚙️ Avanzado | Modelos (S-B/TSB), tablas técnicas del punto de pedido y del contenedor, acuerdos, bloqueos, **«Reposición interna PICKING»** (la Velocity: mide PICKING de NB1, no compras), recepciones con problema, cuarentena, rastro | los de siempre |
 
-Permisos: todo `_es_compras()` (admin, jefe de almacén, gerente, compras). La
+Permisos: todo `_es_compras()` (admin, jefe de almacén, gerente, compras);
+**registrar una decisión** («Ya se pidió / Posponer / No pedir», 2026-09-27) es
+`_es_compras_escritura()` — el gerente mira. La
 lectura de temporada (`/api/kardex/temporada/pedido`, `GET /juicios`) pasó a
 `_es_compras()`; **escribir la lista paralela sigue en admin/jefe**
 (`_es_admin_o_jefe`, no existe un rol «líder de compras»), y la pantalla la
@@ -6431,6 +6434,87 @@ y una advertencia si compras no tiene ventas al día.
 Script: `scripts/qa_demanda_fuentes_real.py` (solo GET, `_post` y
 `requests.post` bloqueados, `MODO_ENSAYO`, SQLite forzada): `--ambiente
 qa|produccion`, `--sql`, `--leer reciente|historico`, `--ensayo-bandeja N`.
+
+---
+
+## Compras: la venta de lo que viene, «ya pedido» honesto y lo que decidió el comprador (2026-09-27)
+
+Tandas B, E y F de la auditoría nocturna de compras
+(`scratchpad/hallazgos_noche_compras.md`: P1-1, P1-7, P1-3, P2-2, P2-3, P1-4).
+Migración **`m051comprasf`** (down `m050demanda`, aditiva: tabla
+`decision_compra`; upgrade → downgrade → upgrade verificado en un PostgreSQL 17
+desechable). Sin locks nuevos.
+
+| | Qué pasaba | Ahora | Trinquete |
+|---|---|---|---|
+| **B** demanda | El punto de pedido y el nivel objetivo pedían con el **promedio de 12 meses**: en septiembre con el pico de enero adentro (+66 % de capital), en enero con los nueve meses flojos (quiebre en el pico). La σ del año contaba el cambio de temporada como ruido. El filtro de 90 días «sin venta reciente» apagaba en octubre lo que se vende en diciembre | `kardex_service.demanda_para_horizonte` (la única): la venta de los próximos LT + ciclo (nacional) o LT + R (China) días = lo vendido en esa ventana **hace 52 semanas** (≥ 4 semanas, sobre días con existencias: `dias_expuestos`) × la **tendencia** (últimas 8 semanas contra las mismas del año pasado; con menos historia, las semanas completas que haya, desde 4), **acotada** 0,5–1,5 (`DEMANDA_TENDENCIA_PISO/TECHO`); con < 10 u en esas semanas, 1 y dicho. σ sobre **residuales** por bloques de 4 semanas. Cae al promedio de siempre —y lo dice— sin un año + 4 semanas de fuente, con < 24 u al año o sin venta el año pasado en estas fechas. El **estacional dormido** (el año pasado tampoco vendía en estas semanas y sí en las que vienen) no cae en «sin venta reciente». `rop_dual` resuelve el lead time antes (de él sale el horizonte); `d_avg_historica` se publica, no decide; `demanda_horizonte` en cada fila y el resumen en el resultado | `test_demanda_horizonte.py`: fuera de `kardex_service`, `d_avg`/`sigma_d` de la demanda de 12 meses solo se leen para publicarlos (`d_hist`) o filtrar (`if … <= 0`); inventario de 1, solo encoge |
+| **B** proyecto | Una licitación de 20.000 cuadernos desde NS2 entraba como un día de venta y se reponía todo el año | `bodegas_de_proyecto()` (`DEMANDA_BODEGAS_PROYECTO`, default **NS2, BC99**, declarado; `ninguna` = todo repetible): `serie_demanda` —la única que lee la venta, las tres fuentes— la aparta en `venta_proyecto` (neta de devoluciones) | un dueño para la variable (AST) |
+| **B** atípicos | Un día fuera de toda proporción subía d y σ un año | `tope_atipicos`: un día > max(p99 sobre días calendario, 10 × mediana de los días con venta) se cuenta hasta ese tope (con ≥ 8 días con venta), en la demanda de 12 meses y en la del horizonte; declarado (`atipicos`) | — |
+| **B** porqué | «Vende unas N al día» | «El año pasado, del 27 sep al 24 oct, vendió 840. Este año va 10 % arriba (últimas 8 semanas: 616 contra 560 el año pasado). Para las próximas 4 semanas se cuentan 33 al día.» + atípicos y venta de proyecto; la cabecera dice cuántos productos van con la misma época y cuántos con el promedio | Node con `util.js` real |
+| **E** OCs viejas | El 100 % de lo pendiente estaba vencido (producción, 27-sep); 50 OCs aprobadas hace > 180 días sin ninguna entrada (288.156 u) apagaban la compra; la bandeja decía «Ya pedido: N» | `COMPRAS_OC_EXCLUIR_MAS_DE_DIAS` nace en **180** (declarado; `nunca` = sin corte; ilegible = sin corte, dicho). La nota parte lo no contado en «sin ninguna entrada» y «saldo de una parcial». `en_camino` publica por SKU las OCs que cuentan (la más atrasada primero, con sus días) y las que no; `rop_dual`, `en_transito_vencido`, `bajo_rop_sin_vencidas` y `deficit_sin_vencidas`. La bandeja marca **«Revisar OC»** en la línea y lista aparte lo que **solo** una OC vencida cubre (con cuánto pedir si no llega) | `test_compras_ya_pedido.py`: toda función de compras que lee `en_transito` de una fila del ROP lee también `en_transito_vencido` |
+| **E** lead time | Default nacional 5 ± 2 («conservador», no lo era) | **10 ± 5**: 42 OCs abiertas con entrada parcial dieron una mediana de 10 días (p90 ≈ 26) en producción | — |
+| **E** llegadas | «Lo que llegó» leía solo el muelle del WMS (0 en producción) | + las entradas de Siesa del espejo (`ts_parcial` / `ts_cumplido` en la ventana; unidades = lo entrado acumulado de la OC, dicho); la OC recibida en el muelle aparece una vez | — |
+| **F** decisiones | La bandeja no guardaba nada: dos personas pedían dos veces, la línea volvía sin rastro, no quedaba quién ni contra qué número | `compras_decisiones` + `decision_compra`: por línea **«Ya se pidió»** (OC de Siesa n.º, cantidad), **«Posponer»** (hasta una fecha, ≤ 90 días) y **«No pedir»** (motivo de una lista + detalle), con autor, hora y la línea como se vio (`foto`, solo claves de la bandeja). «Ya se pidió» cuenta como en camino (fuente **`DECISION_WMS`** de `en_camino`) `COMPRAS_PEDIDO_EN_CAMINO_DIAS` (7) o hasta que el espejo muestra una OC de ese SKU del día de la decisión en adelante (o la OC escrita); vencido sin OC deja de contar y se dice. Posponer y no pedir sacan la línea hasta su fecha, salvo que se vuelva **URGENTE**. «Ya decidido estos días» con «Deshacer» (motivo, bitácora ANULAR); «No pedir» deja un DESCARTAR. Escriben admin, jefe de almacén y compras (`Roles.COMPRAS_ESCRITURA`, `_es_compras_escritura`); **el gerente mira** (`puede_decidir` en la respuesta: sin botones). Doble toque = la misma decisión | `test_compras_decisiones.py`: solo `compras_decisiones` crea o anula una decisión y solo `_decisiones_en_camino` suma lo pedido |
+
+`decision_compra` es **OPERATIVA** en el acta de corte (un «ya se pidió» del
+ensayo contaría como en camino) e **IRRECUPERABLE** en la verificación de
+respaldo. Los botones dicen «Ya se pidió / Posponer / No pedir» y no «Lo
+pedí»: «pedí» es también el imperativo voseado y el trinquete de voz lo marca.
+
+**Mutaciones: 45, las 45 rojas** (B 15, E 14, F 16; con `-B` y
+`PYTHONDONTWRITEBYTECODE`, cada reemplazo verificado a aplicar exactamente una
+vez y restaurado desde copia; script en el scratchpad, `mutar_b.py`).
+
+**Tests que cambiaron y por qué:** los mundos de la bandeja
+(`test_compras_bandeja*.py`, `test_armador_bodegas_servicio.py`) fijan el
+default nacional viejo 5 ± 2 con `lt_de_este_mundo` (sigue siendo
+DEFAULT_CONSERVADOR): su aritmética a mano es de ese lead time. La fecha
+límite nacional de temporada es inicio − (10 + 5). Los tests de unidad de OC
+(`test_compras_fuentes.py`) corren con `COMPRAS_OC_EXCLUIR_MAS_DE_DIAS=nunca`:
+miden la unidad, no el corte.
+
+### Lo que NO cubre, dicho
+
+- **La tendencia y el año pasado dependen de la fuente**: con la venta diaria
+  de Siesa hacen falta **392 días** leídos (364 + 4 semanas); la histórica de
+  400 días alcanza para 5 semanas de tendencia, no 8. Con la fuente de pedidos
+  (cota inferior) el año pasado casi nunca existe: promedio, dicho.
+- **La censura del año pasado** solo se corrige donde hay `StockDiario` (el
+  kardex); con Siesa la ventana del año pasado cuenta días calendario.
+- **La tendencia no se descensura** (un agotado en las últimas semanas la baja).
+- **El tope de atípicos** mide su umbral sobre la ventana de cada función (360
+  días en la de 12 meses, el último año en la del horizonte): pueden diferir
+  por unos días.
+- **Rendimiento**: `rop_dual` lee la venta dos veces (12 meses y ~420 días
+  para el horizonte). Sin medir contra el volumen de producción (P1-9, tanda G).
+- **Temporada (newsvendor)** sigue con su propia demanda de temporada (P1-8,
+  tanda H): el horizonte es del ROP y del contenedor.
+- **«Revisar OC»** usa la línea de 90 días de `COMPRAS_OC_VENCIDA_DIAS`: con
+  entrega = fecha de la OC (así en producción), una OC de 91 días se pregunta.
+- **Varios «ya se pidió» del mismo SKU**: cuenta el último (dos órdenes
+  distintas en una semana cuentan como una: se pediría de más, el lado que un
+  humano corrige).
+- **La OC que aparece en el espejo** se reconoce por SKU y fecha (o por el
+  consecutivo escrito): una OC de otro proveedor del mismo SKU el mismo día
+  también la «cubre».
+- **Lo que llegó según Siesa** es lo entrado acumulado de la OC, fechado con
+  la primera entrada o la que la completó: una segunda entrada parcial no se
+  ve con su fecha.
+- **El lead time de temporada** (nov–ene) aparte: no se hizo.
+- **No se verificó en producción** qué volumen vende NS2/BC99 (la consulta de
+  venta diaria no está registrada): la lista es la decisión por defecto.
+
+### Decisiones para el dueño
+
+1. **Bodegas de proyecto**: ¿NS2 y BC99? (`DEMANDA_BODEGAS_PROYECTO`).
+2. **Techo y piso de la tendencia** (1,5 / 0,5): el techo corto es a propósito
+   (pedir de menos se corrige mañana). ¿Más alto para la canasta escolar?
+3. **Corte de OCs viejas en 180 días**: ¿anular en Siesa las 50 muertas y las
+   33 con saldo parcial? Hasta entonces no cuentan y la bandeja lo dice.
+4. **«Ya se pidió» cuenta 7 días**: ¿cuánto tarda de verdad la OC en aparecer
+   en Siesa después de hacerla?
+5. **¿El jefe de almacén decide compras?** Hoy sí (ya escribía en compras); el
+   gerente no (su decisión del 27-sep).
 
 ---
 

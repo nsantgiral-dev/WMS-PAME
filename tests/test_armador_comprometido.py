@@ -107,8 +107,11 @@ COMPROMETIDO = 80.0
 
 
 def _rop_nacional_esperado(d_avg=D_AVG):
-    from app.services.armador_service import LT_NACIONAL_DIAS, SIGMA_LT_NACIONAL
-    return d_avg * LT_NACIONAL_DIAS + _z() * d_avg * SIGMA_LT_NACIONAL
+    # El default nacional lo decide `default_lead_time` (10 ± 5 desde el
+    # 2026-09-27); acá se lee de ella y no de la constante re-exportada.
+    from app.services.compras_fuentes import default_lead_time
+    lt = default_lead_time('NACIONAL')
+    return d_avg * lt['lt_dias'] + _z() * d_avg * lt['sigma_lt']
 
 
 def _s_objetivo_esperado(d_avg=D_AVG):
@@ -221,7 +224,12 @@ class TestNoDisparaSobreOperacionSana:
     """
 
     def test_sin_comprometido_la_posicion_es_la_de_siempre(
-            self, app, db, sin_kardex):
+            self, app, db, sin_kardex, monkeypatch):
+        # Con el lead time nacional de este mundo (5 ± 2; el default es 10 ± 5
+        # desde el 2026-09-27): así 100 queda sobre el punto de pedido.
+        from app.services import compras_fuentes
+        monkeypatch.setattr(compras_fuentes, 'LT_NACIONAL_DIAS', 5)
+        monkeypatch.setattr(compras_fuentes, 'SIGMA_LT_NACIONAL', 2)
         _producto(db, 'NAC-SANO', 'NACIONAL')
         _stock(db, 'NAC-SANO', EXISTENCIA)
         db.session.commit()
