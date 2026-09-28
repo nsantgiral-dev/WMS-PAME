@@ -169,7 +169,10 @@ class TestLaSalidaHumana:
 # Trinquete
 # ═════════════════════════════════════════════════════════════════════════════
 
-POLITICA = {'_exigir_preflag_con_desenlace', 'estado_del_preflag'}
+POLITICA = {'_exigir_preflag_con_desenlace', 'estado_del_preflag',
+            # integración v2: la plata pregunta por el job (su desenlace vive en
+            # otro sitio), con la misma decisión (`_decidir_por_desenlace`).
+            '_exigir_envio_con_desenlace', 'estado_del_envio'}
 
 #: (tipo, línea aproximada) → por qué lee `.siesa_triggered` en una condición.
 LECTURAS_DECLARADAS = {

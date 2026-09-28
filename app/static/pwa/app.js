@@ -3808,7 +3808,7 @@ async function siesaRecuperacionCargar() {
               onclick="siesaDeclararRmInexistente()">La remisión NO existe en Siesa</button>
       <p style="font-size:var(--fs-xs);color:var(--tx3);margin:6px 0 0;">
         Solo si buscó en Siesa y la remisión de ese pedido no está: el WMS vuelve a
-        preguntar y, si Siesa tampoco la trae, permite reenviar la remisión. Si la
+        preguntar y, si Siesa tampoco la trae, la remisión se puede reenviar. Si la
         remisión sí existía, el reenvío crea una segunda.
       </p>
     </div>

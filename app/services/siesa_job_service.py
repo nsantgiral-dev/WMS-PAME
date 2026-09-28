@@ -114,7 +114,18 @@ def envio_siesa_publico(obj) -> dict:
 def _exigir_preflag_con_desenlace(obj, job, que: str) -> bool:
     """`True` si ya se envió (el job se cierra idempotente); levanta «no sé»
     si la bandera quedó sin desenlace; `False` si está libre."""
-    estado = estado_del_preflag(obj)
+    return _decidir_por_desenlace(estado_del_preflag(obj), job, que)
+
+
+def _exigir_envio_con_desenlace(job, que: str) -> bool:
+    """Lo mismo, preguntado por el job: los tipos de la plata (NC y retención)
+    guardan su desenlace en otro sitio que los de inventario, y lo sabe
+    `_preflag_de` (integración v2, 2026-09-27: una sola decisión de «no sé»
+    para los seis tipos de `TIPOS_CON_PREFLAG`)."""
+    return _decidir_por_desenlace(estado_del_envio(job), job, que)
+
+
+def _decidir_por_desenlace(estado: str, job, que: str) -> bool:
     if estado == PREFLAG_ENVIADO:
         return True
     if estado == PREFLAG_SIN_DESENLACE:
@@ -1639,17 +1650,14 @@ def _ejecutar_job(job: SiesaJob) -> dict:
         from app.models.recaudo_entrega import RecaudoEntrega as _RE
         recaudo = _RE.query.get(payload.get('recaudo_id'))
 
-        if recaudo and recaudo.siesa_nc_triggered:
-            from app.services import politica_cobro as _pc_nc
-            if _pc_nc.nc_llego(recaudo):
-                logger.info(
-                    '[DLQ] NOTA_CREDITO_FACTURA job=%s: recaudo %s ya tiene su NC en '
-                    'Siesa — idempotente', job.id, recaudo.id)
-                return {'idempotente': True, 'recaudo_id': recaudo.id}
-            raise _ResultadoDesconocido(
-                f'NOTA_CREDITO_FACTURA job={job.id}: la nota crédito del recaudo '
-                f'{recaudo.id} ya se intentó y no hay constancia de que haya entrado. No '
-                f'se reenvía: verificar en Siesa y resolverlo («¿Está en Siesa?»).')
+        # Bandera con su NC confirmada: idempotente; bandera sola: «no sé»
+        # (la misma decisión que los otros cinco tipos con pre-flag).
+        if recaudo and _exigir_envio_con_desenlace(
+                job, f'la nota crédito del recaudo {recaudo.id}'):
+            logger.info(
+                '[DLQ] NOTA_CREDITO_FACTURA job=%s: recaudo %s ya tiene su NC en '
+                'Siesa — idempotente', job.id, recaudo.id)
+            return {'idempotente': True, 'recaudo_id': recaudo.id}
 
         tipo_docto_fe = payload['tipo_docto_fe']
         consec_fe = payload['consec_fe']
@@ -1792,16 +1800,12 @@ def _ejecutar_job(job: SiesaJob) -> dict:
         from app.models.devolucion_cliente import DevolucionCliente as _DC
         devolucion = db.session.get(_DC, payload.get('devolucion_id'))
 
-        if devolucion and devolucion.siesa_nc_triggered:
-            if devolucion.siesa_nc_response:
-                logger.info(
-                    '[DLQ] NOTA_CREDITO_DEVOLUCION_CLIENTE job=%s: devolución %s ya tiene '
-                    'su NC en Siesa — idempotente', job.id, devolucion.id)
-                return {'idempotente': True, 'devolucion_id': devolucion.id}
-            raise _ResultadoDesconocido(
-                f'NOTA_CREDITO_DEVOLUCION_CLIENTE job={job.id}: la nota crédito de la '
-                f'devolución {devolucion.id} ya se intentó y no hay constancia de que haya '
-                f'entrado. No se reenvía: verificar en Siesa y resolverlo («¿Está en Siesa?»).')
+        if devolucion and _exigir_envio_con_desenlace(
+                job, f'la nota crédito de la devolución {devolucion.id}'):
+            logger.info(
+                '[DLQ] NOTA_CREDITO_DEVOLUCION_CLIENTE job=%s: devolución %s ya tiene '
+                'su NC en Siesa — idempotente', job.id, devolucion.id)
+            return {'idempotente': True, 'devolucion_id': devolucion.id}
 
         tipo_docto_fe = payload['tipo_docto_fe']
         consec_fe = payload['consec_fe']
@@ -2285,20 +2289,16 @@ def _ejecutar_job(job: SiesaJob) -> dict:
         # y **los otros dos se declaraban idempotentes sin enviar nada** — tres
         # jobs completados, un documento en Siesa.
         _puc = payload.get('cuenta_puc')
-        if recaudo and _puc and _puc in recaudo.pucs_enviadas():
-            # La marca es de PRE-envío (como la del RC): solo con el desenlace
-            # confirmado es idempotente. Sin él, un intento anterior se cortó o
-            # no se pudo verificar: completar acá decía «hecho» sin saberlo y
-            # reenviar puede duplicar la NI. Se declara (validación 2026-09-26).
-            if _pc.dc_llego(recaudo, _puc):
-                logger.info(
-                    '[DLQ] DOCUMENTO_CONTABLE_RET job=%s: recaudo %s ya tiene la '
-                    'cuenta %s en Siesa — idempotente', job.id, recaudo.id, _puc)
-                return {'idempotente': True, 'recaudo_id': recaudo.id, 'cuenta_puc': _puc}
-            raise _ResultadoDesconocido(
-                f'DOCUMENTO_CONTABLE_RET job={job.id}: la retención {_puc} del recaudo '
-                f'{recaudo.id} ya se intentó y no hay constancia de que haya entrado. No '
-                f'se reenvía: verificar en Siesa y resolverlo («¿Está en Siesa?»).')
+        # La marca es de PRE-envío (como la del RC): solo con el desenlace
+        # confirmado es idempotente. Sin él, un intento anterior se cortó o
+        # no se pudo verificar: completar acá decía «hecho» sin saberlo y
+        # reenviar puede duplicar la NI. Se declara (validación 2026-09-26).
+        if recaudo and _puc and _exigir_envio_con_desenlace(
+                job, f'la retención {_puc} del recaudo {recaudo.id}'):
+            logger.info(
+                '[DLQ] DOCUMENTO_CONTABLE_RET job=%s: recaudo %s ya tiene la '
+                'cuenta %s en Siesa — idempotente', job.id, recaudo.id, _puc)
+            return {'idempotente': True, 'recaudo_id': recaudo.id, 'cuenta_puc': _puc}
 
         # La política de retención se revalida antes del POST (P0-5): un job
         # encolado antes de que alguien la rechazara —o reintentado a mano—
@@ -2847,18 +2847,23 @@ class _Preflag:
     sin constancia de que entró: «no sé»), cómo se baja y cómo se confirma.
     Uno por tipo; la retención es por cuenta PUC.
 
-    `sin_desenlace` es la misma pregunta para todos los tipos (integración
-    v2, 2026-09-27): los tres de inventario la contestan con
-    `estado_del_preflag` —bandera sin respuesta—; el RC, las NC y la
+    `estado()` es la misma pregunta para todos los tipos (integración v2,
+    2026-09-27) y contesta LIBRE · ENVIADO · SIN_DESENLACE: los tres de
+    inventario con `estado_del_preflag` —bandera sin respuesta—; las NC y la
     retención, con la señal positiva de su política de cobro. Una bandera
-    puesta con su respuesta guardada ya no es «sin verificar»: entró."""
+    puesta con su respuesta guardada ya no es «sin verificar»: entró. La
+    usan la guarda del job (`_exigir_envio_con_desenlace`), el panel y
+    reintentar (`preflag_sin_verificar`)."""
 
-    def __init__(self, obj, sin_desenlace, bajar, confirmar, foto):
-        self.obj, self._sin_desenlace, self._bajar, self._confirmar, self._foto = (
-            obj, sin_desenlace, bajar, confirmar, foto)
+    def __init__(self, obj, estado, bajar, confirmar, foto):
+        self.obj, self._estado, self._bajar, self._confirmar, self._foto = (
+            obj, estado, bajar, confirmar, foto)
+
+    def estado(self) -> str:
+        return self._estado()
 
     def sin_desenlace(self) -> bool:
-        return bool(self._sin_desenlace())
+        return self.estado() == PREFLAG_SIN_DESENLACE
 
     def bajar(self):
         self._bajar()
@@ -2888,8 +2893,15 @@ def _preflag_inventario(obj, attr, libre, job_id):
         if attr != 'siesa_sync':
             f['siesa_response'] = bool(getattr(obj, 'siesa_response', None))
         return f
-    return _Preflag(obj, lambda: estado_del_preflag(obj) == PREFLAG_SIN_DESENLACE,
+    return _Preflag(obj, lambda: estado_del_preflag(obj),
                     lambda: setattr(obj, attr, libre), _confirmar, _foto)
+
+
+def _estado_por_bandera(puesta: bool, llego: bool) -> str:
+    """Bandera y señal positiva → uno de los tres desenlaces."""
+    if not puesta:
+        return PREFLAG_LIBRE
+    return PREFLAG_ENVIADO if llego else PREFLAG_SIN_DESENLACE
 
 
 def _preflag_de(job):
@@ -2929,8 +2941,9 @@ def _preflag_de(job):
         def _confirmar_dev(_motivo=None):
             obj.siesa_nc_response = obj.siesa_nc_response or json.dumps(
                 {'resuelto_a_mano': True}, ensure_ascii=False)
-        # Puesto sin desenlace = la bandera sin la respuesta de Siesa.
-        return _Preflag(obj, lambda: bool(obj.siesa_nc_triggered and not obj.siesa_nc_response),
+        # Sin desenlace = la bandera sin la respuesta de Siesa.
+        return _Preflag(obj, lambda: _estado_por_bandera(bool(obj.siesa_nc_triggered),
+                                                         bool(obj.siesa_nc_response)),
                         _bajar_dev, _confirmar_dev,
                         lambda: {'siesa_nc_triggered': obj.siesa_nc_triggered,
                                  'siesa_nc_response': bool(obj.siesa_nc_response)})
@@ -2943,7 +2956,8 @@ def _preflag_de(job):
         def _bajar_nc():
             rec.siesa_nc_triggered = False
             rec.anotar_documento_siesa('NC', 'FALLIDO')
-        return _Preflag(rec, lambda: bool(rec.siesa_nc_triggered and not _pc.nc_llego(rec)),
+        return _Preflag(rec, lambda: _estado_por_bandera(bool(rec.siesa_nc_triggered),
+                                                         bool(_pc.nc_llego(rec))),
                         _bajar_nc, lambda _motivo=None: rec.anotar_documento_siesa('NC', 'ENVIADO'),
                         lambda: {'siesa_nc_triggered': rec.siesa_nc_triggered,
                                  'siesa_nc_resultado': rec.siesa_nc_resultado})
@@ -2954,10 +2968,18 @@ def _preflag_de(job):
     def _bajar_dc():
         rec.desmarcar_puc(puc)
         rec.anotar_documento_siesa('DC', 'FALLIDO', cuenta_puc=puc)
-    return _Preflag(rec, lambda: bool(puc in rec.pucs_enviadas() and not _pc.dc_llego(rec, puc)),
+    return _Preflag(rec, lambda: _estado_por_bandera(puc in rec.pucs_enviadas(),
+                                                     bool(_pc.dc_llego(rec, puc))),
                     _bajar_dc, lambda _motivo=None: rec.anotar_documento_siesa('DC', 'ENVIADO', cuenta_puc=puc),
                     lambda: {'cuenta_puc': puc, 'enviada': puc in rec.pucs_enviadas(),
                              'resultado': _pc.resultado_dc(rec, puc)})
+
+
+def estado_del_envio(job) -> str:
+    """LIBRE · ENVIADO · SIN_DESENLACE del envío de un job con pre-flag
+    (`_preflag_de`); LIBRE si el tipo no tiene o su objeto ya no existe."""
+    pf = _preflag_de(job)
+    return pf.estado() if pf is not None else PREFLAG_LIBRE
 
 
 def preflag_sin_verificar(job) -> bool:

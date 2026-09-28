@@ -109,7 +109,12 @@ class TestLasRetencionesSonNYLaBanderaEsUna:
         i = fuente.find("if job.tipo == 'DOCUMENTO_CONTABLE_RET'")
         j = fuente.find("raise ValueError(f'Tipo de job no reconocido", i)
         bloque = fuente[i:j]
-        assert 'pucs_enviadas()' in bloque
+        # Integración v2 (2026-09-27): la guarda pregunta por el job
+        # (`_exigir_envio_con_desenlace`), y la cuenta la mira `_preflag_de`:
+        # «¿esta PUC está entre las enviadas y llegó?», no el booleano.
+        assert '_exigir_envio_con_desenlace(' in bloque and "payload.get('cuenta_puc')" in bloque
+        k = fuente.find('def _preflag_de(')
+        assert 'puc in rec.pucs_enviadas()' in fuente[k:fuente.find('\ndef ', k + 1)]
         assert 'recaudo.siesa_dc_triggered' not in bloque, (
             'la guarda volvió al booleano: solo la primera retención se envía')
 

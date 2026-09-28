@@ -151,7 +151,13 @@ class TestLaNotaCreditoDeRutaSinVerificar:
 
 PLATA = ('RECIBO_CAJA', 'DOCUMENTO_CONTABLE_RET', 'NOTA_CREDITO_FACTURA',
          'NOTA_CREDITO_DEVOLUCION_CLIENTE')
-POSITIVAS = {'rc_llego_a_siesa', 'dc_llego', 'nc_llego', 'siesa_nc_response'}
+POSITIVAS = {'rc_llego_a_siesa', 'dc_llego', 'nc_llego', 'siesa_nc_response',
+             # Integración v2 (2026-09-27): las NC y la retención preguntan por el
+             # job (`_exigir_envio_con_desenlace` → `_preflag_de`), que contesta
+             # con nc_llego / dc_llego / siesa_nc_response. Solo es verdadero con
+             # ENVIADO; con la bandera sola levanta «no sé»
+             # (`test_la_pregunta_por_el_job_exige_la_senal`).
+             '_exigir_envio_con_desenlace'}
 
 
 def _idempotentes_sin_desenlace(fuente: str, tipos=PLATA, positivas=POSITIVAS):
@@ -178,14 +184,10 @@ def _idempotentes_sin_desenlace(fuente: str, tipos=PLATA, positivas=POSITIVAS):
         for hijo in ast.iter_child_nodes(nodo):
             if isinstance(hijo, ast.If):
                 g = guardado or bool(_nombres(hijo.test) & positivas)
-                for b in hijo.body:
-                    if _es_idempotente(b) and not g:
-                        malos.append((tipo, b.lineno))
-                    _recorrer(b, tipo, g)
-                for b in hijo.orelse:
-                    if _es_idempotente(b) and not guardado:
-                        malos.append((tipo, b.lineno))
-                    _recorrer(b, tipo, guardado)
+                # Cada rama como un bloque: un `if` anidado directamente en el
+                # cuerpo también se evalúa como guarda (integración v2).
+                _recorrer(ast.Module(body=hijo.body, type_ignores=[]), tipo, g)
+                _recorrer(ast.Module(body=hijo.orelse, type_ignores=[]), tipo, guardado)
             else:
                 if _es_idempotente(hijo) and not guardado:
                     malos.append((tipo, hijo.lineno))
@@ -197,8 +199,10 @@ def _idempotentes_sin_desenlace(fuente: str, tipos=PLATA, positivas=POSITIVAS):
                 and isinstance(n.test.comparators[0], ast.Constant)
                 and n.test.comparators[0].value in tipos):
             tipo = n.test.comparators[0].value
-            for b in n.body:
-                _recorrer(b, tipo, False)
+            # El bloque entero como un nodo: un `if` que pregunta en el primer
+            # nivel de la rama también es guarda (antes se recorrían solo los
+            # hijos de cada sentencia y ese `if` no contaba — integración v2).
+            _recorrer(ast.Module(body=n.body, type_ignores=[]), tipo, False)
     return malos
 
 
@@ -212,6 +216,21 @@ class TestLaMarcaSolaNoEsHecho:
         # de arriba no dice nada).
         todos = _idempotentes_sin_desenlace(fuente, positivas=set())
         assert {t for t, _ in todos} == set(PLATA), todos
+
+    def test_la_pregunta_por_el_job_exige_la_senal(self):
+        """`_exigir_envio_con_desenlace` cuenta como pregunta positiva en el
+        detector de arriba: acá se prueba que lo es — en `_preflag_de`, la NC
+        y la retención solo son ENVIADO con la señal de `politica_cobro` y la
+        NC de devolución con su respuesta guardada, nunca con la bandera sola."""
+        import inspect
+        from app.services import siesa_job_service as sjs
+        src = inspect.getsource(sjs._preflag_de)
+        assert '_estado_por_bandera(bool(rec.siesa_nc_triggered),' in src
+        assert '_pc.nc_llego(rec)' in src and '_pc.dc_llego(rec, puc)' in src
+        assert 'bool(obj.siesa_nc_response)' in src
+        assert sjs._estado_por_bandera(True, False) == sjs.PREFLAG_SIN_DESENLACE
+        assert sjs._estado_por_bandera(True, True) == sjs.PREFLAG_ENVIADO
+        assert sjs._estado_por_bandera(False, False) == sjs.PREFLAG_LIBRE
 
     def test_toda_la_plata_con_pre_flag_tiene_salida(self):
         from app.services import siesa_job_service as sjs

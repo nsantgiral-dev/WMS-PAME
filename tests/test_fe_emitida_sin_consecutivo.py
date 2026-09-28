@@ -186,6 +186,9 @@ DECLARADOS = {
         'arma el texto «fe» de la fila; la emisión la decide fe_confirmada',
     ('app/services/despacho_parcial_service.py', '_anotar_fe_encontrada'):
         'no pisa un consecutivo ya anotado',
+    ('app/services/documento_fiscal.py', 'cajas_anteriores_al_control_fiscal'):
+        'arma el texto «fe» de la fila (con número lo nombra); la emisión va al lado, '
+        'en «fe_confirmada» (llegó por fiscal v2, integración 2026-09-27)',
     ('app/services/documento_fiscal.py', 'que_documento'):
         'texto: con número lo nombra; el elif siguiente mira fe_confirmada_at',
     ('app/services/fotos_siesa_service.py', 'completar_valor_factura'):
