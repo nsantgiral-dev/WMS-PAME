@@ -684,8 +684,12 @@ CONSULTAS_FALLIDO_OPERATIVAS = {
         'reutiliza el job FALLIDO tras resetear-siesa',
     'app/services/recepcion_service.py::RecepcionService.confirmar_recepcion':
         'reutiliza el job FALLIDO de la entrada',
-    'app/services/reconciliacion_service.py::ReconciliacionService._cerrar_jobs_fallidos':
-        'cierra los FALLIDO que la reconciliación resolvió',
+    'app/services/siesa_job_service.py::cerrar_despachos_resueltos':
+        'cierra los FALLIDO de una caja que ya tiene su documento (la reconciliación y la '
+        'emisión, también a mano: H6, 2026-09-26; antes vivía en la reconciliación)',
+    'app/services/documento_fiscal.py::estado_emision':
+        'decide qué ofrece la pantalla para UNA caja (su último envío FALLIDO → «Reintentar»); '
+        'no cuenta trabados (H2b, 2026-09-26)',
     'app/services/siesa_job_service.py::_run_dlq_jobs': 'el procesador de la cola',
     'app/services/siesa_job_service.py::get_jobs_fallidos': 'lista para actuar sobre todos',
     'app/services/siesa_job_service.py::fallidos_vigentes': 'LA función que cuenta',
@@ -699,7 +703,7 @@ CONSULTAS_FALLIDO_OPERATIVAS = {
     'app/services/tablero_lider_conteo.py::_rechazados_siesa':
         'lista para reintentar/descartar desde el tablero del líder',
 }
-TOPE_CONSULTAS_FALLIDO = 23  # +1 tanda 2: preflag_sin_verificar
+TOPE_CONSULTAS_FALLIDO = 24  # +1 tanda 2: preflag_sin_verificar · +1 fiscal v2: estado_emision
 
 #: Módulos que MUESTRAN números: acá no puede haber ninguna consulta propia.
 MODULOS_QUE_SOLO_CUENTAN = ('app/services/analitica_', 'app/services/dashboard_service.py',
