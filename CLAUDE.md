@@ -7018,6 +7018,34 @@ del consejo de la bandeja sobrevivía y obligó a un test más).
 | **P1-8** panel | `GET /flota/avisos` decía `encendido` con las variables de la **web**; el cron corre en el **worker**; el botón no tomaba el candado | `con_latido` guarda en `cron_latido.ultimo_resumen` el dict que devuelve la corrida; el barrido devuelve su resumen **con su configuración** (solo presencias, nunca valores). El panel lee eso y `que_falta` dice, por servicio, qué variable falta (o que no se puede saber). El botón toma `LOCK_FLOTA_AVISOS` (409 si está tomado) y dice que corrió con las variables de la web |
 | **P1-10** fotos | `storage_ref` relativo + cambio de `FLOTA_FOTOS_DIR` = todo 410 | El sirviente busca también en `RAICES_CONOCIDAS` y `FLOTA_FOTOS_DIRS_ANTERIORES`, **solo si el contenido tiene el hash de su nombre**; no mueve nada. `/flota/health` → `almacen_fotos.alarma` (fotos `ok` sin archivo, servidas desde una raíz vieja, muestra parcial, disco del contenedor) |
 
+**La validación del mismo día (VAL-FL-1/2) lo rechazó por una puerta de
+datos:** el jefe de almacén —frenado en el despacho— marcaba el SOAT vencido
+«no encontrado» (pasaba a «no se sabe») o le ponía fechas nuevas sin escaneo,
+y el documento se pisaba en su sitio sin rastro. La clase: *una puerta de datos
+que deshace la decisión de la puerta de despacho*. Ahora
+(`salida.motivo_no_puede_reescribir_papel`, en `POST …/documentos`): un papel
+para circular que HOY está vencido no pasa a «no encontrado» (de nadie), y
+darlo por renovado exige **otro número y el escaneo**, o un rol de
+`ROLES_AUTORIZAN_SALIDA_PROHIBIDA`; todo cambio de un papel queda en la
+bitácora (EDITAR, antes y después). **El gerente ve la flota y no escribe**
+(decisión del dueño): `_permisos.SOLO_LECTURA_FLOTA`, aplicado en `exige` a
+todo método que no es de lectura en todo `/flota`, y fuera de `DECIDE_FLOTA`,
+`FUERZA_CIERRE` y sus espejos en `flota.js`; sigue en `MAESTROS_FLOTA` para
+LEER lo que esa tupla gatea. Un vencimiento creíble que ya pasó sigue VENCIDO
+aunque la expedición esté mal escrita (`salida.papel_cargado`; la RTM de BDT261,
+con las dos fechas posibles y descuadradas, sigue «a corregir»). Control de
+flota carga licencias (`GET/PUT /flota/conductores/…`, en Flota → Analítica →
+Diagnóstico). El barrido de avisos corre 06:00 y 12:00. Trinquetes:
+`tests/flota/test_val_flota_legal_20260927.py` (todo escritor de un papel llama
+a `registrar_accion`; el gerente contra TODA escritura de `/flota` del
+`url_map`); `test_matriz_roles_endpoints` descuenta `SOLO_LECTURA_FLOTA` leído
+de `_permisos`. 19 mutaciones, 18 rojas; la que sobrevive (el diagnóstico
+verificando cada foto dos veces) es equivalente: el hash ya se recuerda.
+**Lo que sigue sin cubrir:** las pantallas de flota le siguen ofreciendo al
+gerente los botones de escribir de `MAESTROS_FLOTA` (gastos, ficha,
+documentos) y el servidor le contesta 403 con el motivo; un escaneo que el
+almacén no pudo guardar (`pendiente_evidencia`) cuenta como escaneo.
+
 **Trinquetes (AST):** todo escritor de un FORZAR de flota llama a
 `puede_autorizar_salida_prohibida`; toda construcción de `Hechos` pasa
 `licencia=` (inventario: la bandeja); toda escritura de fechas de un papel (en
@@ -7041,7 +7069,8 @@ cada estado de `ESTADOS_PAPEL` distinto de vigente tiene que salir.
   el despacho forzado de una salida prohibida sale con el nivel de siempre
   (turno a revisar), no en rojo.
 - **El correo del daño corre en un hilo**: si el proceso muere antes de
-  mandarlo, lo repite el correo diario (la fila no queda).
+  mandarlo, la fila `encolado` se reintenta pasados 30 min en la próxima
+  llamada (y el correo diario lo repite).
 - **No se verificó en Railway** qué hay en el volumen ni las variables de cada
   servicio: el panel y el health lo dicen desde el servicio que contesta.
 
@@ -7050,5 +7079,5 @@ y `FLOTA_AVISO_CORREOS` (o `ALERTA_EMAIL_DEST`) en el **WMS-Worker** y en el
 **web**; mirar Flota → Diagnóstico → «Qué falta para que los avisos salgan» al
 día siguiente de las 06:00; corregir la RTM de BDT261 y la póliza de TGZ653
 (saldrán como «dato a corregir»); cargar las licencias de los conductores
-(Rutas → Conductores → Licencia); mirar `GET /flota/health` → `almacen_fotos`
+(Flota → Analítica → Diagnóstico → Licencias, o Rutas → Conductores); mirar `GET /flota/health` → `almacen_fotos`
 en la web de QA y de producción.

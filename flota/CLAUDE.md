@@ -189,8 +189,9 @@ SOAT, revisión técnico-mecánica o licencia **vencidos con fecha registrada** 
 en `salida.BLOQUEAN_SALIDA`: solo `ROLES_AUTORIZAN_SALIDA_PROHIBIDA` los deja salir,
 con un motivo de `MOTIVO_MINIMO_SALIDA_PROHIBIDA` caracteres que queda con su nombre.
 Lo que **no se sabe** (sin cargar, no encontrado, dato a corregir) sigue siendo
-«informa, no bloquea», y el muelle lo muestra en otro cuadro. Una fecha imposible
-no entra, y la ya cargada es «dato a corregir», nunca «vencida».
+«informa, no bloquea», en otro cuadro. Un papel vencido no se destraba reescribiéndolo:
+ni «no encontrado» ni fechas nuevas sin otro número y escaneo (salvo ese rol), y todo
+cambio queda en la bitácora. El gerente ve la flota y no escribe (`SOLO_LECTURA_FLOTA`).
 
 *Motivo: un vencimiento conocido es determinístico y su costo irreversible
 (inmovilización, ADRES, la póliza). En el mismo cuadro que lo desconocido, el «ok»
