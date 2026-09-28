@@ -561,36 +561,20 @@ def reasignar_operario(id):
     if not usuario or usuario.rol not in Roles.DESPACHO:
         return jsonify({'error': 'Solo administradores pueden reasignar operarios'}), 403
 
-    s = SolicitudTraslado.query.get_or_404(id)
-    if s.estado != 'EN_PICKING':
-        return jsonify({'error': 'Solo se puede reasignar en estado EN_PICKING'}), 400
-
     data = request.get_json() or {}
     nuevo_operario_id = data.get('operario_id')
     if not nuevo_operario_id:
         return jsonify({'error': 'operario_id es requerido'}), 400
-
-    nuevo_op = Usuario.query.get(nuevo_operario_id)
-    if not nuevo_op:
-        return jsonify({'error': 'Operario no encontrado'}), 404
-
-    from app.models.picking import TareaPicking
-    # Reasignar solo tareas PENDIENTES (las EN_PROCESO o COMPLETADO se dejan)
-    TareaPicking.query.filter_by(
-        referencia_documento=s.codigo,
-        tipo_documento='TRASLADO',
-        estado='PENDIENTE',
-    ).update({'operario_id': nuevo_operario_id}, synchronize_session=False)
-
-    s.operario_id = nuevo_operario_id
-    from app.extensions import db
+    from app.services import asignacion
     try:
-        db.session.commit()
-    except Exception as e:
-        db.session.rollback()
-        logger.error(f'[TRASLADO] Error reasignando operario en {id}: {e}', exc_info=True)
-        return jsonify({'error': 'Error reasignando operario — reintente'}), 500
-    logger.info(f'[TRASLADO] {s.codigo} → operario reasignado a {nuevo_op.nombre} por {usuario_id}')
+        s = TrasladoService.reasignar_operario(id, nuevo_operario_id, usuario_id)
+    except LookupError as e:
+        return jsonify({'error': str(e)}), 404
+    except asignacion.NoAsignable as e:
+        return jsonify({'error': str(e)}), 409
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    logger.info(f'[TRASLADO] {s.codigo} → operario reasignado a #{s.operario_id} por {usuario_id}')
     return jsonify({'ok': True, 'solicitud': s.to_dict()}), 200
 
 
@@ -1187,7 +1171,13 @@ def mis_traslados():
 @traslados_bp.route('/operarios-disponibles', methods=['GET'])
 @jwt_required()
 def operarios_disponibles():
-    """Admin: lista operarios activos para asignar a un traslado."""
+    """Quiénes pueden recoger ESTE traslado ahora: pican en su bodega de
+    origen y están en turno (`asignacion.candidatos`). Query: `solicitud_id`.
+
+    Antes: todo usuario activo con rol `operario`, de cualquier sede,
+    viniera o no. Aparte (`no_disponibles`) van los que podrían pero no
+    están, con el motivo — para que la pantalla lo diga.
+    """
     try:
         usuario_id = int(get_jwt_identity())
     except (TypeError, ValueError):
@@ -1195,12 +1185,21 @@ def operarios_disponibles():
     usuario = Usuario.query.get(usuario_id)
     if not usuario or usuario.rol not in Roles.DESPACHO:
         return jsonify({'error': 'Sin permiso'}), 403
-    operarios = Usuario.query.filter(
-        Usuario.activo == True,
-        Usuario.rol == 'operario',
-    ).order_by(Usuario.nombre).all()
+    from app.services import asignacion
+    sid = request.args.get('solicitud_id', type=int)
+    bodega = None
+    if sid:
+        s = SolicitudTraslado.query.get_or_404(sid)
+        bodega = s.bodega_origen_siesa
+    if not bodega:
+        return jsonify({'operarios': [], 'no_disponibles': [],
+                        'aviso': 'Sin traslado no se sabe de qué bodega sale: elija uno.'}), 200
+    c = asignacion.candidatos(asignacion.PICKING_TRASLADO, bodega=bodega)
     return jsonify({
-        'operarios': [{'id': u.id, 'nombre': u.nombre} for u in operarios]
+        'operarios': [{'id': u['id'], 'nombre': u['nombre']} for u in c['disponibles']],
+        'no_disponibles': [{'id': u['id'], 'nombre': u['nombre'],
+                            'motivo': u['presencia_texto']} for u in c['no_disponibles']],
+        'bodega': bodega,
     }), 200
 
 

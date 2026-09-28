@@ -189,6 +189,14 @@ def create_app():
             )
             return True   # fail-closed: preferir seguridad sobre disponibilidad
 
+    # Presencia (m051asignacion): toda petición autenticada es señal de que su
+    # dueño está trabajando. Es lo que contesta «¿quién vino hoy?» sin que el
+    # líder tenga que marcar a nadie (app/services/presencia.py).
+    @app.before_request
+    def _senal_de_presencia():
+        from app.services.presencia import registrar_senal_de_peticion
+        registrar_senal_de_peticion()
+
     @_jwt.revoked_token_loader
     def _revoked_token_response(jwt_header, jwt_payload):
         from flask import jsonify
@@ -423,6 +431,11 @@ def create_app():
                 # hasta que alguien toque «Re-evaluar» — y nadie se entera.
                 # Solo GET a Siesa; lock propio (LOCK_CARTERA_BARRIDO).
                 ('app.services.cartera_service',            'init_scheduler',          '[CARTERA_BARRIDO]'),
+                # Esencial: suelta lo asignado a quien no está (ausencia
+                # declarada o 2 h sin señal) cada 15 min. Si callara, un conteo
+                # o un traslado asignado a un incapacitado esperaría para siempre
+                # — el defecto que cierra m051asignacion. Cero Siesa.
+                ('app.services.asignacion',                 'init_scheduler',          '[ASIGNACION_BARRIDO]'),
             ]
             for _mod_path, _fn_name, _tag in _scheduler_esenciales:
                 _registrar_scheduler(app, _il, _app_logger, _mod_path, _fn_name, _tag)

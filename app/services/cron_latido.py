@@ -164,6 +164,7 @@ ESPERADO = {
     'dlq_siesa_jobs': timedelta(minutes=10),
     'pedidos_siesa_sync': timedelta(minutes=10),
     'reposicion_barrido_stock_picking': timedelta(hours=1, minutes=15),
+    'asignacion_barrido': timedelta(minutes=40),
     'cartera_barrido': timedelta(hours=14),
     'resumen_operativo_diario': timedelta(hours=26),
     'alertas_rutas_sin_liquidar': timedelta(hours=26),

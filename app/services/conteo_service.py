@@ -602,17 +602,22 @@ class ConteoService:
 
         Sin almacén conocido no se reparte nada (Regla 0): repartir sin saber
         la bodega es exactamente el defecto que esto cierra.
+
+        `operario_id=None` es el pool **para cualquiera** —lo que el líder
+        puede repartir (`asignacion.plan_reparto_conteos`)—: CC1 y CC2 sin
+        dueño, sin CC3. El doble ciego de cada CC2 lo decide el reparto,
+        persona por persona.
         """
         from sqlalchemy import false, or_
         from sqlalchemy.orm import aliased
         if not almacen_id:
             return [false()]
         Cc1 = aliased(SesionConteo)
-        cc1_ajenos = (db.session.query(Cc1.id)
-                      .filter(Cc1.es_segundo_conteo.is_(False),
-                              or_(Cc1.operario_id.is_(None),
-                                  Cc1.operario_id != operario_id))
-                      .scalar_subquery())
+        cc1_ajenos = db.session.query(Cc1.id).filter(Cc1.es_segundo_conteo.is_(False))
+        if operario_id is not None:
+            cc1_ajenos = cc1_ajenos.filter(or_(Cc1.operario_id.is_(None),
+                                               Cc1.operario_id != operario_id))
+        cc1_ajenos = cc1_ajenos.scalar_subquery()
         return [
             SesionConteo.estado == EstadoConteo.PENDIENTE,
             SesionConteo.operario_id.is_(None),
@@ -912,10 +917,14 @@ class ConteoService:
                     f'{otra.estado}). Reabrir este dejaría dos: cancélelo.')
 
         if operario_id is not None:
-            from app.models.usuario import Usuario
-            op = db.session.get(Usuario, operario_id)
-            if not op or not op.activo:
-                raise ValueError(f'Operario {operario_id} no encontrado o inactivo')
+            # Puesto + presencia (`asignacion`), y después el doble ciego: un
+            # conteo reabierto no se le devuelve a alguien que no vino.
+            from app.services import asignacion
+            try:
+                asignacion.exigir_asignable(operario_id, asignacion.tipo_de_sesion(sesion),
+                                            almacen_id=sesion.almacen_id)
+            except LookupError as e:
+                raise ValueError(str(e)) from e
             no_puede = ConteoService.motivo_no_puede_contar(sesion, operario_id)
             if no_puede:
                 raise ValueError(no_puede)
@@ -2728,9 +2737,12 @@ class ConteoService:
             raise ConteoNoReasignable(
                 f'Un conteo en {sesion.estado} no se reasigna: {como}.')
         if operario_id is not None:
-            op = db.session.get(Usuario, operario_id)
-            if not op:
-                raise LookupError(f'Operario {operario_id} no encontrado')
+            # Puesto + presencia: no se le pasa un conteo a quien no lo hace
+            # (el jefe en un rutinario) ni a quien no vino. `NoAsignable` es un
+            # ValueError: la ruta ya lo contesta como 400.
+            from app.services import asignacion
+            op = asignacion.exigir_asignable(operario_id, asignacion.tipo_de_sesion(sesion),
+                                             almacen_id=sesion.almacen_id)
             no_puede = ConteoService.motivo_no_puede_contar(sesion, op.id)
             if no_puede:
                 raise ValueError(no_puede)
@@ -2782,79 +2794,22 @@ class ConteoService:
             )
             return segundo
 
+        # A quién: la persona PRESENTE que hace conteo rutinario en este
+        # almacén, no contó la cadena y va con menos carga
+        # (`asignacion.elegir_para_segundo_conteo`). Antes era «el operario de
+        # id más bajo», viniera o no —con él incapacitado, todo CC2 le quedaba
+        # pegado y ningún barrido lo soltaba—, y si el CC1 lo había hecho un
+        # jefe o un admin, el CC2 iba a un jefe o a un admin. Sin nadie
+        # presente, el CC2 queda en la cola: el doble ciego lo protege ahí.
         from app.models.usuario import Usuario
-        from sqlalchemy import or_ as _or, and_ as _and
-
-        # Determinar si el CC1 picker es un "picker par" que puede verificar en tienda.
-        cc1_picker = Usuario.query.get(operario_excluido)
-        _es_par = (
-            cc1_picker is not None and (
-                cc1_picker.rol == 'picker_traslado'
-                or (cc1_picker.rol == 'operario' and bool(cc1_picker.puede_picar))
-            )
-        )
-
-        otro_operario = None
-
-        if _es_par and sesion_origen.almacen_id:
-            from app.models.almacen import Almacen as _Alm
-            _alm_sesion = _Alm.query.get(sesion_origen.almacen_id)
-            _bodega_siesa = _alm_sesion.bodega_siesa_id if _alm_sesion else None
-
-            # picker_traslado puede tener almacen_id=NULL y solo bodega_siesa_id='NS1'
-            _filtros_almacen = [Usuario.almacen_id == sesion_origen.almacen_id]
-            if _bodega_siesa:
-                _filtros_almacen.append(Usuario.bodega_siesa_id == _bodega_siesa)
-            _filtro_almacen = _or(*_filtros_almacen)
-
-            # Pickers en conflicto: ya tienen tarea activa sobre el mismo producto+ubicación
-            _ids_en_conflicto = (
-                db.session.query(SesionConteo.operario_id)
-                .filter(
-                    SesionConteo.producto_id == sesion_origen.producto_id,
-                    SesionConteo.ubicacion_id == sesion_origen.ubicacion_id,
-                    SesionConteo.estado.in_(['PENDIENTE', 'EN_PROCESO']),
-                    SesionConteo.operario_id.isnot(None),
-                )
-            )
-            otro_operario = (
-                Usuario.query
-                .filter(
-                    Usuario.id != operario_excluido,
-                    Usuario.activo == True,
-                    _filtro_almacen,
-                    _or(
-                        Usuario.rol == 'picker_traslado',
-                        _and(Usuario.rol == 'operario', Usuario.puede_picar == True),
-                    ),
-                    ~Usuario.id.in_(_ids_en_conflicto),
-                )
-                # Determinista: sin ORDER BY, `.first()` devuelve lo que el plan
-                # de la base encuentre primero y el CC2 caía a una persona
-                # distinta según el día (lo vio el e2e, intermitente).
-                .order_by(Usuario.id)
-                .first()
-            )
-            # Sin par disponible → queda sin asignar (PENDIENTE, panel admin lo escala)
-
-        else:
-            # Lógica existente para roles no-picker (jefe_almacen, admin, operario sin picar)
-            _base = Usuario.query.filter(
-                Usuario.id != operario_excluido,
-                Usuario.activo == True,
-            )
-            if sesion_origen.almacen_id:
-                otro_operario = _base.filter(
-                    Usuario.almacen_id == sesion_origen.almacen_id,
-                    Usuario.rol.in_(['operario', 'jefe_almacen', 'admin']),
-                ).order_by(Usuario.id).first()
-            if not otro_operario:
-                otro_operario = _base.filter(
-                    Usuario.rol.in_(['jefe_almacen', 'admin']),
-                ).order_by(Usuario.id).first()
+        from app.services import asignacion
+        elegido = asignacion.elegir_para_segundo_conteo(
+            segundo, excluir_ids=(operario_excluido,) if operario_excluido else ())
+        otro_operario = db.session.get(Usuario, elegido) if elegido else None
 
         if otro_operario:
-            segundo.operario_id = otro_operario.id
+            segundo.operario_id = asignacion.asignable_o_none(
+                otro_operario.id, asignacion.CONTEO, almacen_id=sesion_origen.almacen_id)
             # Si el par ya tiene un CC1 activo sin contar aún, lo liberamos al pool
             # para que el CC2 sea su tarea inmediata en el siguiente get_tarea_actual.
             cc1_en_curso = SesionConteo.query.filter(
@@ -3559,9 +3514,14 @@ class ConteoService:
 
         operario_forzado = None
         if operario_id is not None:
-            operario_forzado = db.session.get(Usuario, operario_id)
-            if not operario_forzado or not operario_forzado.activo:
-                raise ValueError(f'Operario {operario_id} no encontrado o inactivo')
+            # Un conteo forzado a alguien es un push: tiene que hacer conteos
+            # rutinarios en este almacén y estar en turno (`asignacion`).
+            from app.services import asignacion
+            try:
+                operario_forzado = asignacion.exigir_asignable(
+                    operario_id, asignacion.CONTEO, almacen_id=almacen_id)
+            except LookupError as e:
+                raise ValueError(str(e)) from e
 
         registros = (
             UbicacionProducto.query

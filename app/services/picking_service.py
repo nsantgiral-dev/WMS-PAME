@@ -610,6 +610,17 @@ class PickingService:
             _log.getLogger(__name__).warning(f'[PICKING] Ola predictiva falló silenciosamente: {_e}')
         # ──────────────────────────────────────────────────────────────────────
 
+        # Una tarea con dueño es un push: solo a quien pica ese documento y
+        # está en turno. Si no, nace en la cola (`asignable_o_none`) — una
+        # tarea pegada a alguien de vacaciones no la hace nadie (m051asignacion).
+        if operario_id is not None:
+            from app.services import asignacion
+            es_traslado = tipo_documento == 'TRASLADO'
+            operario_id = asignacion.asignable_o_none(
+                operario_id,
+                asignacion.PICKING_TRASLADO if es_traslado else asignacion.PICKING,
+                **({'bodega': bodega_origen_siesa} if es_traslado else {'almacen_id': almacen_id}))
+
         fefo = PickingService.calcular_fefo(producto_id, cantidad, almacen_id)
 
         if not fefo['completo']:

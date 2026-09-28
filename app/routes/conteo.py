@@ -675,66 +675,85 @@ def tablero_lider():
         return jsonify({'error': str(e)}), 404
 
 
+def _lider_de_reparto():
+    """El usuario del JWT si puede repartir conteos (supervisión), o la
+    respuesta de error."""
+    from app.models.usuario import Usuario
+    try:
+        uid = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return None, (jsonify({'error': 'Token inválido'}), 401)
+    u = db.session.get(Usuario, uid)
+    if not u or u.rol not in Roles.SUPERVISION:
+        return None, (jsonify({'error': 'Solo supervisión reparte conteos'}), 403)
+    return u, None
+
+
+def _parametros_de_reparto(fuente) -> dict:
+    """`almacen_id`, `cantidad` y `operario_ids` del cuerpo o de la URL."""
+    def entero(v, campo):
+        if v in (None, ''):
+            return None
+        try:
+            return int(v)
+        except (TypeError, ValueError):
+            raise ValueError(f'{campo} inválido: {v!r}')
+    ids = fuente.get('operario_ids')
+    if isinstance(ids, str):
+        ids = [x for x in ids.split(',') if x.strip()]
+    # Compatibilidad: el cuerpo viejo mandaba UN operario.
+    if not ids and fuente.get('operario_id') not in (None, ''):
+        ids = [fuente.get('operario_id')]
+    return {
+        'almacen_id': entero(fuente.get('almacen_id'), 'almacen_id'),
+        'cantidad': entero(fuente.get('cantidad', fuente.get('limite')), 'cantidad'),
+        'operario_ids': [entero(x, 'operario_id') for x in ids] if ids else None,
+    }
+
+
+@conteo_bp.route('/asignar-lote/vista-previa', methods=['GET'])
+@jwt_required()
+def asignar_lote_vista_previa():
+    """Cómo quedaría el reparto de los conteos sin dueño entre los presentes,
+    sin escribir nada. Query: `almacen_id` (obligatorio), `cantidad`,
+    `operario_ids` (coma). Es el mismo cálculo que ejecuta el POST."""
+    lider, error = _lider_de_reparto()
+    if error:
+        return error
+    try:
+        p = _parametros_de_reparto(request.args)
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    if not p['almacen_id']:
+        return jsonify({'error': 'almacen_id es requerido'}), 400
+    from app.services import asignacion
+    return jsonify(asignacion.plan_reparto_conteos(**p)), 200
+
+
 @conteo_bp.route('/asignar-lote', methods=['POST'])
 @jwt_required()
 def asignar_lote():
+    """Reparte los conteos sin dueño de un almacén **entre los presentes que
+    cuentan**, en proporción a su cupo del día y respetando el doble ciego.
+
+    Body: `{almacen_id, cantidad?, operario_ids?}`. Antes cargaba el lote
+    entero a UNA persona elegida de una lista donde aparecían el jefe de
+    almacén y quienes no habían venido. Si nadie está disponible, no asigna
+    nada y lo dice (`motivo_sin_reparto`): los conteos siguen en la cola.
     """
-    Admin asigna todas las tareas PENDIENTE sin operario a un operario específico.
-    Body: { operario_id, almacen_id, limite (opcional, default 20) }
-    """
-    from app.models.usuario import Usuario
+    lider, error = _lider_de_reparto()
+    if error:
+        return error
     try:
-        admin_id = int(get_jwt_identity())
-    except (TypeError, ValueError):
-        return jsonify({'error': 'Token inválido'}), 401
-    admin = Usuario.query.get(admin_id)
-    if not admin or admin.rol not in Roles.LEAD:
-        return jsonify({'error': 'Solo admin o supervisor puede asignar conteos'}), 403
-
-    data = request.get_json() or {}
-    operario_id = data.get('operario_id')
-    almacen_id = data.get('almacen_id')
-    limite = data.get('limite', 20)
-
-    if not operario_id:
-        return jsonify({'error': 'operario_id es requerido'}), 400
-
-    operario = Usuario.query.get(operario_id)
-    if not operario or not operario.activo:
-        return jsonify({'error': 'Operario no encontrado o inactivo'}), 404
-
-    # Sin almacén explícito, el del operario. Antes, sin almacén se asignaban
-    # conteos de cualquier bodega; y sin filtro de cadena se asignaban también
-    # CC3 (que son de supervisión) y CC2 cuyo CC1 había hecho el mismo operario.
-    almacen_id = almacen_id or ConteoService.almacen_de_usuario(operario)
-    if not almacen_id:
-        return jsonify({'error': 'Indicar almacen_id: el operario no tiene almacén asignado'}), 400
-
-    from app.services.conteo_politica import orden_de_reparto
-    q = (SesionConteo.query
-         .filter(*ConteoService.filtros_pool_sin_dueno(operario.id, almacen_id))
-         .order_by(*orden_de_reparto()))
-
-    tareas = q.limit(limite).all()
-
-    asignadas = 0
-    for t in tareas:
-        t.operario_id = operario_id
-        asignadas += 1
-
-    if asignadas > 0:
-        db.session.commit()
-        logger.info(
-            f'[CONTEO] {asignadas} tareas asignadas a operario #{operario_id} '
-            f'por admin #{admin_id} (almacen={almacen_id})'
-        )
-
-    return jsonify({
-        'asignadas': asignadas,
-        'operario_id': operario_id,
-        'operario_nombre': operario.nombre,
-        'almacen_id': almacen_id,
-    }), 200
+        p = _parametros_de_reparto(request.get_json() or {})
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    if not p['almacen_id']:
+        return jsonify({'error': 'almacen_id es requerido: el reparto es por almacén'}), 400
+    from app.services import asignacion
+    r = asignacion.repartir_conteos(p['almacen_id'], por_id=lider.id, cantidad=p['cantidad'],
+                                    operario_ids=p['operario_ids'])
+    return jsonify(r), 200
 
 
 @conteo_bp.route('/<int:id>/cancelar', methods=['PUT'])

@@ -177,6 +177,13 @@ class MobileService:
         cuando el candidato elegido queda obsoleto por una carrera, esta
         función se reintenta a sí misma (con tope) en vez de devolver `None`.
         """
+        # Pedir trabajo es estar trabajando: la señal de presencia
+        # (`presencia`, m051asignacion). La petición HTTP ya la dejó; esto la
+        # deja también cuando el dispensador se llama desde un servicio.
+        from app.services import presencia as _presencia
+        if _intento == 0:
+            _presencia.registrar_senal(operario_id)
+
         # Verificar si ya tiene tarea activa — eager-load relaciones para evitar lazy queries
         from sqlalchemy.orm import joinedload as _jl
         tarea_activa = (TareaPicking.query
@@ -252,14 +259,23 @@ class MobileService:
         _es_supervisor = bool(_u_pick and _u_pick.rol == 'supervisor')
         if _es_supervisor and _bodega_propia != 'NB1':
             return None
+        # ¿Hace conteos rutinarios? La misma regla que el reparto y los
+        # desplegables (`asignacion.motivo_no_elegible`): ni el supervisor ni
+        # el jefe de almacén ni el admin los reciben de la cola — el
+        # supervisor apoyando picking en NB1 recibía conteos INTERCALADOS
+        # (la guarda de abajo solo cubría la cola, no el intercalado).
+        from app.services import asignacion as _asig
+        _cuenta_rutinarios = (not _solo_traslado and _u_pick is not None
+                              and _asig.motivo_no_elegible(_u_pick, _asig.CONTEO) is None)
 
         # Subquery: IDs de ubicaciones permitidas para pickers (no RESERVA)
         _ids_validos = db.session.query(Ubicacion.id).filter(
             Ubicacion.tipo_zona.in_(['PICKING', 'GENERAL'])
         ).scalar_subquery()
+        _filtro_sin_dueno = TareaPicking.operario_id.is_(None)
         _filtros_base = [
             TareaPicking.estado == 'PENDIENTE',
-            TareaPicking.operario_id.is_(None),
+            _filtro_sin_dueno,
             db.or_(
                 TareaPicking.ubicacion_id.is_(None),
                 TareaPicking.ubicacion_id.in_(_ids_validos),
@@ -322,12 +338,16 @@ class MobileService:
             _lineas_del_doc >= PEDIDO_LINEAS_PARALELIZABLE,
             _max_unidades_del_doc >= PEDIDO_UNIDADES_PARALELIZABLE,
         )
+        # «Pegado» mientras quien lo empezó esté disponible: si se fue (ausente,
+        # o sin señal hace 2 h), el resto del pedido chico no espera a que
+        # vuelva — lo termina quien esté (`presencia`, m051asignacion).
         _otro_operario_ya_lo_tiene = (
             db.session.query(_TP_otra.id)
             .filter(
                 _TP_otra.referencia_documento == TareaPicking.referencia_documento,
                 _TP_otra.operario_id.isnot(None),
                 _TP_otra.operario_id != operario_id,
+                _presencia.condicion_sql_disponible(_TP_otra.operario_id),
             )
             .correlate(TareaPicking)
             .exists()
@@ -365,8 +385,21 @@ class MobileService:
         # Terminar lo que ya empezó antes de saltar a otro pedido/traslado — mismo
         # criterio que PickingService.siguiente_tarea_para(), reutilizado aquí en
         # vez de reimplementado, para no volver a divergir del original.
-        tarea = None
-        _documento_actual = PickingService._documento_en_curso(operario_id)
+        # Lo que un líder le asignó a ESTA persona (un traslado aprobado «para
+        # Pedro») va primero: es la excepción que el líder decidió. Antes
+        # quedaba al FINAL — detrás de toda la cola de conteos, en la lista de
+        # respaldo de `get_tareas_operario` —, y a nadie más se le ofrecía.
+        _filtros_propios = [f for f in _filtros_base if f is not _filtro_sin_dueno] + [
+            TareaPicking.operario_id == operario_id]
+        tarea = (
+            TareaPicking.query
+            .join(Ubicacion, TareaPicking.ubicacion_id == Ubicacion.id)
+            .filter(*_filtros_propios)
+            .order_by(*_orden_dispatch)
+            .with_for_update(of=TareaPicking, skip_locked=True)
+            .first()
+        )
+        _documento_actual = None if tarea else PickingService._documento_en_curso(operario_id)
         if _documento_actual:
             tarea = (
                 _base_tarea_query
@@ -405,7 +438,7 @@ class MobileService:
             # apoya picking/traslado (arriba) y reposición (justo arriba), pero
             # el conteo cíclico regular sigue siendo exclusivo de operarios —
             # ver la nota "juez y parte" en la guarda de NB1 más arriba.
-            if not _solo_traslado and not _es_supervisor:
+            if not _solo_traslado and _cuenta_rutinarios:
                 # Retomar el conteo propio en curso (pospuesto arriba porque un
                 # picking/traslado nuevo tiene prioridad). Ya no hay nada pendiente,
                 # así que se le devuelve tal cual quedó, con lo ya contado intacto.
@@ -460,6 +493,11 @@ class MobileService:
             # otra bodega) — es exclusivo de roles de tienda/traslado.
             if _es_supervisor:
                 return None
+            # Jefe, admin u operario que no pica: no reciben conteos de la
+            # cola, pero lo que tengan asignado (un empaque, un picking) sí.
+            if not _solo_traslado:
+                resultado = MobileService.get_tareas_operario(operario_id)
+                return resultado['tareas'][0] if resultado['tareas'] else None
 
             # Liberar conteos de OTRA bodega asignados erróneamente.
             # Los de la propia bodega son válidos — los gestiona _next_conteo_tienda.
@@ -553,7 +591,7 @@ class MobileService:
                         f'({conteos_hoy}/{capacidad}) — no se inyecta conteo'
                     )
 
-            if bajo_tope and not _solo_traslado:
+            if bajo_tope and _cuenta_rutinarios:
                 from sqlalchemy.orm import joinedload as _jl_cm
                 # El almacén es el de la ubicación que se está pickeando: el
                 # conteo intercalado es, por definición, de ese mismo hueco.
@@ -734,8 +772,11 @@ class MobileService:
             SesionConteo.query
             .options(_sl_tienda(SesionConteo.producto), _sl_tienda(SesionConteo.ubicacion))
             .filter(
+                # Un CC2 sin dueño también: si no había un par presente al
+                # nacer, espera acá y lo toma el primero que pueda (el doble
+                # ciego lo decide `filtros_pool_sin_dueno`). Antes se excluía
+                # «porque va al admin» — y el admin no hace conteos rutinarios.
                 *ConteoService.filtros_pool_sin_dueno(operario_id, almacen_id),
-                SesionConteo.es_segundo_conteo.is_(False),  # CC2 va al admin, no al dispatcher cíclico
             )
             .order_by(*orden_de_reparto())
             .with_for_update(skip_locked=True)

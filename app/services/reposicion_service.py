@@ -458,6 +458,18 @@ def confirmar_reposicion(tarea_id: int, abastecedor_id: int, lpn_codigo_escanead
     }
 
 
+def soltar_abastecedor(t) -> None:
+    """Devuelve una TareaReposicion a la cola, sin dueño. No hace commit.
+
+    La usan el barrido de zombis (EN_PROCESO > 2 h) y el de asignaciones
+    (`asignacion.devolver_trabajo_de`, cuando su dueño quedó ausente): una
+    forma de soltar, no dos. `lpn_id` no se toca — se fijó al crear la tarea.
+    """
+    t.estado = 'PENDIENTE'
+    t.abastecedor_id = None
+    t.fecha_inicio = None
+
+
 def liberar_tareas_zombi(timeout_horas: int = 2):
     """
     Libera TareaReposicion EN_PROCESO que llevan más de `timeout_horas` sin
@@ -485,9 +497,7 @@ def liberar_tareas_zombi(timeout_horas: int = 2):
             f'[REPOSICION TIMEOUT] Tarea {t.codigo} (id={t.id}) EN_PROCESO '
             f'desde {t.fecha_inicio} — liberando (abastecedor #{t.abastecedor_id})'
         )
-        t.estado = 'PENDIENTE'
-        t.abastecedor_id = None
-        t.fecha_inicio = None
+        soltar_abastecedor(t)
         liberadas += 1
 
     if liberadas:

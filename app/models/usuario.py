@@ -40,6 +40,11 @@ class Usuario(db.Model):
     puede_autorizar_cartera = db.Column(db.Boolean, default=False)
     # Límite de conteos cíclicos intercalados por día (0 = sin límite)
     capacidad_diaria_conteo = db.Column(db.Integer, default=15, nullable=False)
+    # Última señal de vida de la persona: cualquier petición autenticada la
+    # renueva (`presencia.registrar_senal`, desde el `before_request`). Es lo
+    # que contesta «¿está trabajando ahora?» — ver app/services/presencia.py
+    # (m051asignacion). NULL = nunca se la vio.
+    ultima_senal_at = db.Column(db.DateTime, nullable=True)
 
     # Punto de venta (solo para rol='tienda')
     bodega_siesa_id = db.Column(db.String(20), nullable=True)      # ej. 'NC1'

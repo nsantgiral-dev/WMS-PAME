@@ -192,19 +192,13 @@ def barra(almacen_id=None) -> dict:
     atrasados = _del_almacen(SesionConteo.query.filter(
         SesionConteo.estado == E.PENDIENTE,
         SesionConteo.fecha_creacion < datetime.utcnow() - timedelta(days=2))).count()
-    # Lo que «Asignar N pendientes» puede repartir: sin dueño y sin CC3, que
-    # es de supervisión (`ConteoService.filtros_pool_sin_dueno`) y nunca se
-    # asigna en lote. Contarlo prometía un número que el botón no entrega.
-    from sqlalchemy.orm import aliased
-    origen = aliased(SesionConteo)
-    cc3 = (db.session.query(SesionConteo.id)
-           .join(origen, SesionConteo.sesion_origen_id == origen.id)
-           .filter(SesionConteo.es_segundo_conteo.is_(True),
-                   origen.es_segundo_conteo.is_(True)))
-    sin_asignar = _del_almacen(SesionConteo.query.filter(
-        SesionConteo.estado == E.PENDIENTE,
-        SesionConteo.operario_id.is_(None),
-        SesionConteo.id.notin_(cc3))).count()
+    # Lo que «Repartir N pendientes» puede repartir: sin dueño y sin CC3, que
+    # es de supervisión. **La misma función** que usa la vista previa y el
+    # reparto (`asignacion.plan_reparto_conteos`): el número del botón y el del
+    # formulario no pueden diferir (2026-09-27 — el botón decía 6 y el
+    # formulario proponía 10, un número fijo escrito en la pantalla).
+    from app.services.asignacion import contar_pool_conteo
+    sin_asignar = contar_pool_conteo(almacen_id)
     fallos_dlq = SiesaJob.query.filter(
         SiesaJob.tipo == 'AJUSTE_CONTEO', SiesaJob.estado == 'FALLIDO').count()
 

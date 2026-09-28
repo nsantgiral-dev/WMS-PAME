@@ -16,6 +16,7 @@ def register_routes(app):
     from app.routes.packing import packing_bp
     from app.routes.recepcion import recepcion_bp
     from app.routes.conteo import conteo_bp
+    from app.routes.asignacion import asignacion_bp
     from app.routes.dashboard import dashboard_bp
     from app.routes.mobile import mobile_bp
     from app.routes.siesa import siesa_bp
@@ -39,6 +40,7 @@ def register_routes(app):
     from app.routes.compras_bandeja import compras_bandeja_bp
 
     app.register_blueprint(health_bp, url_prefix='/api/health')
+    app.register_blueprint(asignacion_bp, url_prefix='/api/asignacion')
     app.register_blueprint(auditoria_bp, url_prefix='/api/auditoria')
     app.register_blueprint(analitica_bp, url_prefix='/api/analitica')
     app.register_blueprint(analitica_recorrido_bp, url_prefix='/api/analitica')

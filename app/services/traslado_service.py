@@ -330,6 +330,39 @@ class TrasladoService:
         return s
 
     @staticmethod
+    def reasignar_operario(solicitud_id: int, operario_id: int, por_id: int) -> SolicitudTraslado:
+        """Cambia quién recoge un traslado EN_PICKING. Solo las tareas que
+        nadie empezó cambian de dueño. Hace commit.
+
+        Vivía en la ruta, sin mirar si la persona picaba en esa bodega ni si
+        estaba: se le podía pasar un traslado a un conductor, a alguien de
+        otra sede o a quien estaba de vacaciones — y sus tareas quedaban
+        pegadas a esa persona (m051asignacion).
+        """
+        from app.models.picking import TareaPicking
+        from app.services import asignacion
+        from app.services.bitacora import registrar_accion
+        s = db.session.get(SolicitudTraslado, solicitud_id)
+        if s is None:
+            raise LookupError(f'Traslado {solicitud_id} no encontrado')
+        if s.estado != 'EN_PICKING':
+            raise ValueError('Solo se puede reasignar en estado EN_PICKING')
+        nuevo = asignacion.exigir_asignable(operario_id, asignacion.PICKING_TRASLADO,
+                                            bodega=s.bodega_origen_siesa)
+        antes = s.operario_id
+        TareaPicking.query.filter_by(
+            referencia_documento=s.codigo,
+            tipo_documento='TRASLADO',
+            estado='PENDIENTE',
+        ).update({'operario_id': nuevo.id}, synchronize_session=False)
+        s.operario_id = nuevo.id
+        registrar_accion('REASIGNAR', s, usuario_id=por_id,
+                         motivo=f'Quién recoge el traslado → {nuevo.nombre}',
+                         antes={'operario_id': antes}, despues={'operario_id': nuevo.id})
+        db.session.commit()
+        return s
+
+    @staticmethod
     def aprobar_solicitud(solicitud_id: int, aprobador_id: int,
                           items_aprobados: list = None,
                           operario_id: int = None,
@@ -395,7 +428,17 @@ class TrasladoService:
                 item.cantidad_aprobada = item.cantidad_solicitada
 
         s.aprobador_id = aprobador_id
-        s.operario_id = operario_id
+        if operario_id:
+            # Elegir quién recoge es un push: tiene que picar en la bodega de
+            # origen y estar en turno. Si no, se le dice a quien aprueba — sin
+            # elegir a nadie el traslado va a la cola y lo toma quien esté.
+            from app.services import asignacion
+            try:
+                asignacion.exigir_asignable(operario_id, asignacion.PICKING_TRASLADO,
+                                            bodega=s.bodega_origen_siesa)
+            except LookupError as e:
+                raise ValueError(str(e)) from e
+        s.operario_id = operario_id or None
         s.fecha_aprobacion = datetime.utcnow()
         db.session.flush()
 

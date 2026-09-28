@@ -1,4 +1,5 @@
 from app.models.usuario import Usuario
+from app.models.ausencia import AusenciaUsuario
 from app.models.producto import Producto
 from app.models.almacen import Almacen
 from app.models.ubicacion import Ubicacion

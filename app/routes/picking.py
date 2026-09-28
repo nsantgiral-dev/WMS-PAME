@@ -141,6 +141,21 @@ def crear_tarea():
         if no_recibe:
             return jsonify({'error': f'No se crea el picking: {no_recibe}. Lo que falte es '
                                      f'un pedido nuevo o un backorder en Siesa.'}), 409
+    if data.get('operario_id'):
+        # El líder eligió a alguien: si no puede o no está, se le dice —
+        # no se crea en silencio sin dueño (eso es para los flujos del sistema).
+        from app.services import asignacion
+        es_traslado = data.get('tipo_documento') == 'TRASLADO'
+        try:
+            asignacion.exigir_asignable(
+                data['operario_id'],
+                asignacion.PICKING_TRASLADO if es_traslado else asignacion.PICKING,
+                **({'bodega': data.get('bodega_origen_siesa')} if es_traslado
+                   else {'almacen_id': data['almacen_id']}))
+        except LookupError as e:
+            return jsonify({'error': str(e)}), 404
+        except asignacion.NoAsignable as e:
+            return jsonify({'error': str(e)}), 409
     try:
         tareas = PickingService.crear_tareas(
             producto_id=data['producto_id'],
@@ -149,7 +164,8 @@ def crear_tarea():
             referencia_documento=data.get('referencia_documento'),
             tipo_documento=data.get('tipo_documento'),
             operario_id=data.get('operario_id'),
-            prioridad=data.get('prioridad', 1)
+            prioridad=data.get('prioridad', 1),
+            bodega_origen_siesa=data.get('bodega_origen_siesa'),
         )
         return jsonify({
             'mensaje': f'{len(tareas)} tarea(s) de picking creadas',

@@ -68,10 +68,16 @@ class MotivoDescarteConteo:
     #: (`PUT /api/conteo/<id>/editar` con `operario_id`,
     #: `ConteoService.reasignar_operario`): el nuevo arranca desde cero.
     REASIGNADO = 'REASIGNADO'
+    #: Su dueño quedó ausente (incapacidad, vacaciones… declaradas):
+    #: `asignacion.devolver_trabajo_de` (2026-09-27).
+    AUSENCIA = 'AUSENCIA'
+    #: Su dueño no dio señal en `presencia.VENTANA_SENAL_HORAS`: el barrido de
+    #: asignaciones la devolvió antes de que la empezara (2026-09-27).
+    SIN_SENAL = 'SIN_SENAL'
     #: Los que dejó `devolver_al_pool`: la sesión volvió a la cola. No son
     #: recuentos y ninguna estadística de recuento los cuenta.
     DE_LA_COLA = (INACTIVIDAD, CONTEO_FORZADO, OTRA_BODEGA, REABIERTO,
-                  CEDIDO_A_SEGUNDO_CONTEO, REASIGNADO)
+                  CEDIDO_A_SEGUNDO_CONTEO, REASIGNADO, AUSENCIA, SIN_SENAL)
     VALIDOS = (MOVIMIENTO_SIESA, FUERA_DE_TOLERANCIA) + DE_LA_COLA
 
 

@@ -53,6 +53,7 @@ NO_HABLAN = {
     'resumen_operativo_diario': 'Lee la base (métricas, auditoría) y manda correo.',
     'analitica_kpi_diario': 'Calcula el KPI desde tablas del WMS y fotos ya tomadas.',
     'reposicion_barrido_stock_picking': 'Compara huecos PICKING contra su mínimo: local.',
+    'asignacion_barrido': 'Suelta lo asignado a quien no está: presencia y tareas del WMS.',
     'monitor_traslados_transito': 'Lee traslados EN_TRANSITO de la base y loguea.',
     'flota_avisos_barrido': 'Vencimientos de papeles de flota; avisa por WhatsApp.',
     'flota_preventivo_siembra': 'Siembra el plan preventivo desde la ficha técnica: local.',
