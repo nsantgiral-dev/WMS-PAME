@@ -73,6 +73,9 @@ REGISTRADOS = {
     # La venta diaria que Siesa suma (m050demanda, 2026-09-27). Nace apagado
     # (`DEMANDA_SIESA`); el interruptor vive en `ciclo`.
     'demanda_fuentes': 'init_scheduler',
+    # Soltar lo asignado a quien no está, cada 15 min (m051asignacion,
+    # 2026-09-27). Esencial: su silencio deja trabajo pegado a un ausente.
+    'asignacion': 'init_scheduler',
 }
 
 #: Fuera de `app/services/`. El barrido de vencimientos de flota vivía sin
@@ -202,6 +205,24 @@ class TestNingunSchedulerQuedaFueraDelRegistro:
             f'definen un scheduler y nadie los registra: {sorted(sin_registrar)}. '
             f'Un cron que no se registra no falla — no existe, y su silencio se '
             f'lee igual que «no hubo nada que hacer».')
+
+    def test_la_lista_del_test_es_la_que_registra_create_app(self):
+        """Integración n1 (2026-09-27): `REGISTRADOS` es una lista a mano, y
+        nada la cruzaba contra `app/__init__.py`. Quitar un cron del registro
+        real dejaba este archivo en verde (medido quitando el barrido de la
+        asignación). Ahora las dos listas tienen que coincidir, por AST."""
+        registra = set()
+        arbol = ast.parse((_RAIZ / 'app' / '__init__.py').read_text(encoding='utf-8'))
+        for n in ast.walk(arbol):
+            if (isinstance(n, ast.Tuple) and len(n.elts) >= 2
+                    and all(isinstance(e, ast.Constant) and isinstance(e.value, str)
+                            for e in n.elts[:2])
+                    and n.elts[0].value.startswith('app.services.')):
+                registra.add(n.elts[0].value.rsplit('.', 1)[1])
+        assert len(registra) >= 20, f'solo {len(registra)}: ¿se rompió el lector?'
+        assert registra == set(REGISTRADOS), (
+            f'create_app no registra {sorted(set(REGISTRADOS) - registra)}; '
+            f'registra sin declarar {sorted(registra - set(REGISTRADOS))}')
 
     def test_el_registro_pasa_por_el_helper_y_no_a_mano(self):
         """Por AST. Un `try: X.init_scheduler(app)` suelto vuelve a crear un
