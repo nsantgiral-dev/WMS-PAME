@@ -530,6 +530,41 @@ def _buscar_producto(codigo):
 # GETs — exponen el gateway a la PWA
 # ──────────────────────────────────────────────
 
+def _agregar_fecha_y_vendedor(pedidos: dict) -> None:
+    """`fecha_pedido` y `vendedor_nombre` de cada pedido de la cola.
+
+    `pedidos_siesa` no los guarda; `pedidos_historia` sí (la escribe el mismo
+    sync, desde la misma fila de `API_v2_Ventas_Pedidos`). Una consulta para
+    toda la cola. El nombre sale del caché de `vendedores` y **nunca espera a
+    Siesa**: sin caché todavía, el pedido viaja con `vendedor_nombre=None` y
+    el `vendedor_id` crudo. Ningún dato se inventa (Regla 0).
+    """
+    from app.models.pedido_historia import PedidoHistoria
+    from app.services.cadena_pedido import clave_pedido
+    from app.services.vendedores import nombres_por_nit, normalizar_nit
+
+    claves = {clave_pedido(p.get('centro_op'), p.get('tipo_docto'), p.get('consec_docto'))
+              for p in pedidos.values()} - {None}
+    datos: dict = {}
+    if claves:
+        for h in (PedidoHistoria.query
+                  .with_entities(PedidoHistoria.pedido_clave, PedidoHistoria.fecha_pedido,
+                                 PedidoHistoria.vendedor_id)
+                  .filter(PedidoHistoria.pedido_clave.in_(list(claves)))):
+            d = datos.setdefault(h.pedido_clave, {'fecha': None, 'vend': None})
+            d['fecha'] = d['fecha'] or h.fecha_pedido
+            d['vend'] = d['vend'] or h.vendedor_id
+    nombres = nombres_por_nit() if any(d['vend'] for d in datos.values()) else {}
+
+    for p in pedidos.values():
+        clave = clave_pedido(p.get('centro_op'), p.get('tipo_docto'), p.get('consec_docto'))
+        d = datos.get(clave) or {}
+        fecha, vend = d.get('fecha'), d.get('vend')
+        p['fecha_pedido'] = fecha.isoformat() if fecha else None
+        p['vendedor_id'] = vend
+        p['vendedor_nombre'] = nombres.get(normalizar_nit(vend)) if vend else None
+
+
 @siesa_bp.route('/pedidos', methods=['GET'])
 @jwt_required()
 def pedidos_aprobados():
@@ -628,6 +663,8 @@ def pedidos_aprobados():
     for num, pedido in pedidos.items():
         pedido['retencion_cartera'] = retenidos.get(num)
         pedido['cartera_liberada'] = num in liberadas
+
+    _agregar_fecha_y_vendedor(pedidos)
 
     lista = sorted(pedidos.values(), key=lambda x: x['fecha_entrega'] or '', reverse=True)
     return jsonify({'pedidos': lista, 'total': len(lista)}), 200

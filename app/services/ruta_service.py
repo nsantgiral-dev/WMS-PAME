@@ -1042,6 +1042,7 @@ class RutaService:
         # no una por tarea). Si Siesa no responde, el mapa queda vacío y
         # cada tarea simplemente no muestra el bloque de asesor.
         from app.services.connekta_gateway import connekta as _connekta_vend
+        from app.services.vendedores import nombre_de_fila as _nombre_vendedor
         # Si el maestro de condiciones tiene consulta dinámica, este es un
         # momento con señal para refrescarlo (TTL, en memoria; sin consulta,
         # no hace nada).
@@ -1069,13 +1070,8 @@ class RutaService:
                 cod = str(v.get('codigo_vendedor', '')).strip()
                 if not cod:
                     continue
-                nombre = ' '.join(filter(None, [
-                    str(v.get('f200_nombres', '') or '').strip(),
-                    str(v.get('f200_apellido1', '') or '').strip(),
-                    str(v.get('f200_apellido2', '') or '').strip(),
-                ])).strip()
                 vendedores_map[cod] = {
-                    'nombre': nombre or str(v.get('f200_razon_social', '') or '').strip() or None,
+                    'nombre': _nombre_vendedor(v),
                     'telefono': str(v.get('f015_telefono', '') or '').strip() or None,
                 }
         except Exception as e:

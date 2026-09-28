@@ -1469,6 +1469,7 @@ async function cargarPedidos() {
                 <div style="font-size:var(--fs-md);font-weight:700;">${esc(p.numero_pedido)}</div>
                 <div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:2px;">${esc(p.cliente || 'Sin cliente')}</div>
                 <div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:2px;">${esc(p.items.length)} producto(s) · ${totalUds} uds</div>
+                ${pedidoFechaYVendedorHtml(p)}
                 ${sinProd ? `<div style="font-size:var(--fs-xs);color:var(--warn-tx);margin-top:2px;">⚠ ${sinProd} sin registrar en WMS</div>` : ''}
               </div>
               ${accionBtn}
@@ -1483,6 +1484,25 @@ async function cargarPedidos() {
   } catch (e) {
     el.innerHTML = '<div style="color:var(--err-tx);">Error cargando pedidos</div>';
   }
+}
+
+/**
+ * Línea «📅 fecha del pedido · 👤 vendedor» de la tarjeta de la cola.
+ * Sin nombre todavía (el caché de vendedores se llena en segundo plano) se
+ * muestra el NIT; «Generico» es el vendedor de prueba de Siesa y se omite.
+ * @param {Object} p - pedido de `/api/siesa/pedidos`
+ * @returns {string} HTML, o '' si no hay ninguno de los dos datos
+ */
+function pedidoFechaYVendedorHtml(p) {
+  const partes = [];
+  const f = /^(\d{4})-(\d{2})-(\d{2})/.exec(p.fecha_pedido || '');
+  if (f) partes.push(`📅 ${esc(`${f[3]}/${f[2]}/${f[1]}`)}`);
+  const vend = p.vendedor_nombre
+    || (p.vendedor_id && !/^gen[eé]rico$/i.test(p.vendedor_id) ? `NIT ${p.vendedor_id}` : '');
+  if (vend) partes.push(`👤 ${esc(vend)}`);
+  return partes.length
+    ? `<div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:2px;">${partes.join(' · ')}</div>`
+    : '';
 }
 
 const PEDIDOS_TAB_LABELS = ['POR DESPACHAR', 'EN PROCESO', 'DESPACHADO EN SIESA', 'ERROR SIESA', 'RETENIDO POR CARTERA'];
