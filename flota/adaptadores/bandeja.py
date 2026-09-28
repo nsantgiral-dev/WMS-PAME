@@ -453,6 +453,10 @@ _CONSEJO_PAPEL = {
     'no_encontrado': 'No es lo mismo que vencido: no se sabe si existe. Búsquelo y cárguelo.',
     'sin_cargar': 'Mientras no se cargue, no se sabe si está al día.',
     'por_vencer': 'Saque la cita o cómprelo antes de que venza.',
+    # 2026-09-27 (frente legal): fechas imposibles ya cargadas (la RTM que vence
+    # el día en que se expidió, el año 0025). Ni vencido ni al día.
+    'dato_a_corregir': 'Dato a corregir: las fechas cargadas no son posibles. '
+                       'Revise el papel y corríjalas en Documentos.',
 }
 
 
@@ -490,6 +494,7 @@ def _pendientes(m: _Mundo, medidor, dudosas, diag_prev,
             ('_vencido', _CONSEJO_PAPEL['vencido']),
             ('_no_encontrado', _CONSEJO_PAPEL['no_encontrado']),
             ('_sin_registro', _CONSEJO_PAPEL['sin_cargar']),
+            ('_dato_a_corregir', _CONSEJO_PAPEL['dato_a_corregir']),
             ('_por_vencer', _CONSEJO_PAPEL['por_vencer'])) if peor.endswith(sufijo))
         salida.append(_pendiente(
             clase='documento', placa=v.placa, urgencia=dom_sal.color_de(motivos),

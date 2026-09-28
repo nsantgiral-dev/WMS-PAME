@@ -45,12 +45,27 @@ def _con_permiso(permiso):
 
 def _respuesta_advertencias(e):
     """409 con lo que la flota sabe del vehículo. No es un error: la pantalla
-    muestra la lista y vuelve a mandar con `motivo_advertencias`."""
-    return jsonify({
-        'error': str(e),
+    muestra la lista y vuelve a mandar con `motivo_advertencias`.
+
+    Cada advertencia lleva `nivel`, `bloquea` y `gravedad` (de la política de
+    salida): la pantalla separa «prohibido salir» de «no se sabe» (2026-09-27).
+    Con algo prohibido, `salida_prohibida` y el porqué: solo un administrador,
+    con un motivo de al menos `motivo_minimo` caracteres."""
+    from app.services.ruta_service import SalidaProhibida
+    from flota.dominio.salida import (MOTIVO_MINIMO_SALIDA_PROHIBIDA,
+                                      ROLES_AUTORIZAN_SALIDA_PROHIBIDA)
+    prohibida = isinstance(e, SalidaProhibida)
+    cuerpo = {
+        'error': e.porque if prohibida else str(e),
         'advertencias_flota': e.advertencias,
         'requiere_motivo': True,
-    }), 409
+        'salida_prohibida': prohibida,
+    }
+    if prohibida:
+        cuerpo.update({'puede_autorizar': e.puede_autorizar,
+                       'motivo_minimo': MOTIVO_MINIMO_SALIDA_PROHIBIDA,
+                       'quien_autoriza': list(ROLES_AUTORIZAN_SALIDA_PROHIBIDA)})
+    return jsonify(cuerpo), 409
 
 
 # ── Conductores ──────────────────────────────────────────────────
@@ -63,7 +78,10 @@ def listar_conductores():
         return jsonify({'error': 'Sin permiso para listar conductores'}), 403
     solo_activos = request.args.get('activos', 'true').lower() == 'true'
     puede_ver = u.rol in Roles.ALMACEN
-    return jsonify({'conductores': RutaService.listar_conductores(solo_activos, puede_ver)}), 200
+    from flota.dominio.salida import CATEGORIAS_LICENCIA
+    return jsonify({'conductores': RutaService.listar_conductores(solo_activos, puede_ver),
+                    # El formulario de licencia ofrece estas (la política las valida).
+                    'categorias_licencia': list(CATEGORIAS_LICENCIA)}), 200
 
 
 @rutas_bp.route('/conductores', methods=['POST'])

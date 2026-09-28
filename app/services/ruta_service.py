@@ -43,6 +43,22 @@ class AdvertenciasDeFlota(ValueError):
                          + '; '.join(a['texto'] for a in self.advertencias))
 
 
+class SalidaProhibida(AdvertenciasDeFlota):
+    """El vehículo o el conductor tienen algo que la ley prohíbe y se sabe
+    (`flota.dominio.salida.BLOQUEAN_SALIDA`: SOAT, revisión técnico-mecánica o
+    licencia vencidos). **No se reconoce con cualquier texto**: solo un rol de
+    `ROLES_AUTORIZAN_SALIDA_PROHIBIDA`, con un motivo largo, y queda en la
+    bitácora con autor, hora y motivo (FORZAR con `salida_prohibida_autorizada`).
+    `porque` es lo que la pantalla muestra; `puede_autorizar` dice si quien
+    pidió puede hacerlo (con un motivo suficiente) o tiene que llamar a otro.
+    """
+
+    def __init__(self, advertencias, porque: str, puede_autorizar: bool):
+        super().__init__(advertencias)
+        self.porque = porque
+        self.puede_autorizar = bool(puede_autorizar)
+
+
 # `EstadoEntrega` vivía definida acá **y** en `models/recaudo_entrega.py`, con
 # los mismos valores y distinto nombre de tupla. Se importa la del modelo: un
 # estado agregado en un solo lado era cuestión de tiempo.
@@ -144,12 +160,20 @@ class RutaService:
         if solo_activos:
             q = q.filter_by(activo=True)
 
+        from app.utils.fecha import dia_operativo
+        from flota.adaptadores.salida import licencia_de
+        hoy = dia_operativo()
+
         def _safe(c):
             d = c.to_dict()
+            # El estado de la licencia lo decide la política de salida (una
+            # función); la pantalla lo pinta.
+            d['licencia_estado'] = licencia_de(c, hoy).estado
             if not puede_ver_datos_personales:
                 d.pop('cedula', None)
                 d.pop('telefono', None)
                 d.pop('usuario_email', None)
+                d.pop('licencia_numero', None)
             return d
 
         return [_safe(c) for c in q.all()]
@@ -220,6 +244,9 @@ class RutaService:
         if not c:
             raise LookupError('Conductor no encontrado')
         _activo_antes = c.activo
+        # Primero la licencia: si no se puede guardar, nada del resto cambia.
+        if any(k in data for k in ('licencia_numero', 'licencia_categoria', 'licencia_vence')):
+            RutaService._actualizar_licencia(c, data, usuario_id)
         if 'nombre'     in data: c.nombre     = (data['nombre'] or '').strip()
         if 'telefono'   in data: c.telefono   = (data['telefono'] or '').strip() or None
         if 'activo' in data:
@@ -235,6 +262,46 @@ class RutaService:
         db.session.commit()
         db.session.refresh(c)
         return c
+
+    @staticmethod
+    def _actualizar_licencia(c, data: dict, usuario_id: int = None) -> None:
+        """Licencia de conducción: número, categoría y vencimiento, **los tres o
+        ninguno**. Se validan con la misma política que la usa para decidir la
+        salida (`flota.dominio.salida.problemas_de_licencia`): un año 0025 o una
+        categoría inventada no entran. Vaciar los tres la deja «sin cargar».
+        Cambiarla queda en la bitácora (EDITAR): el vencimiento decide si el
+        camión sale."""
+        from datetime import date as _date
+        from app.utils.fecha import dia_operativo
+        from flota.dominio.salida import problemas_de_licencia
+
+        def _texto(k, actual):
+            return (str(data[k]).strip() if data[k] is not None else '') if k in data else (actual or '')
+
+        numero = _texto('licencia_numero', c.licencia_numero)
+        categoria = _texto('licencia_categoria', c.licencia_categoria).upper()
+        if 'licencia_vence' in data:
+            crudo = data['licencia_vence']
+            try:
+                vence = _date.fromisoformat(crudo) if crudo else None
+            except (TypeError, ValueError):
+                raise ValueError(f'El vencimiento de la licencia no es una fecha válida: {crudo!r}')
+        else:
+            vence = c.licencia_vence
+        problemas = problemas_de_licencia(numero, categoria, vence, dia_operativo())
+        if problemas:
+            raise ValueError(' '.join(problemas))
+        antes = {'licencia_numero': c.licencia_numero, 'licencia_categoria': c.licencia_categoria,
+                 'licencia_vence': c.licencia_vence.isoformat() if c.licencia_vence else None}
+        c.licencia_numero = numero or None
+        c.licencia_categoria = categoria or None
+        c.licencia_vence = vence
+        despues = {'licencia_numero': c.licencia_numero, 'licencia_categoria': c.licencia_categoria,
+                   'licencia_vence': vence.isoformat() if vence else None}
+        if antes != despues:
+            registrar_accion('EDITAR', c, usuario_id=usuario_id,
+                             motivo=(data.get('motivo') or 'Licencia de conducción actualizada'),
+                             antes=antes, despues=despues)
 
     @staticmethod
     def _registrar_cambio_de_activo(fila, activo_antes, usuario_id, motivo) -> None:
@@ -580,21 +647,41 @@ class RutaService:
         (misma transacción que la transición) y la ruta sigue.
         """
         from app.models.bitacora import BitacoraAccion
+        from app.models.usuario import Usuario
         from app.services import senales_ruta as _sr
+        from flota.dominio.salida import (puede_autorizar_salida_prohibida,
+                                          rol_autoriza_salida_prohibida)
         advertencias = _sr.advertencias_de_flota(ruta)
         if not advertencias:
             return []
         claves = {a['clave'] for a in advertencias}
-        reconocidas = set()
+        # Lo que la ley prohíbe y se sabe (SOAT/RTM/licencia vencidos). La
+        # política lo marca; acá solo se lee la marca.
+        prohibidas = {a['clave'] for a in advertencias if a.get('bloquea')}
+        reconocidas, autorizadas = set(), set()
         for fila in (BitacoraAccion.query
                      .filter_by(accion='FORZAR', entidad='RutaDespacho', entidad_id=ruta.id)
                      .all()):
-            reconocidas |= set((fila.despues or {}).get('advertencias_flota') or [])
-        if claves <= reconocidas:
+            despues = fila.despues or {}
+            reconocidas |= set(despues.get('advertencias_flota') or [])
+            # Solo un FORZAR que pasó por la autorización cuenta para lo
+            # prohibido: un «ok» viejo del jefe no saca un SOAT vencido.
+            autorizadas |= set(despues.get('salida_prohibida_autorizada') or [])
+        pendientes_prohibidas = prohibidas - autorizadas
+        if claves <= reconocidas and not pendientes_prohibidas:
             return advertencias
         texto = str(motivo).strip() if motivo is not None else ''
-        if not texto:
+        if pendientes_prohibidas:
+            u = db.session.get(Usuario, usuario_id) if usuario_id else None
+            rol = u.rol if u is not None else None
+            porque = puede_autorizar_salida_prohibida(rol, texto)
+            if porque is not None:
+                raise SalidaProhibida(advertencias, porque,
+                                      puede_autorizar=rol_autoriza_salida_prohibida(rol))
+        elif not texto:
             raise AdvertenciasDeFlota(advertencias)
+        autorizacion = ({'salida_prohibida_autorizada': sorted(prohibidas)}
+                        if pendientes_prohibidas else {})
         registrar_accion(
             'FORZAR', ruta, usuario_id=usuario_id, motivo=texto,
             entidad_codigo=f'RUTA-{ruta.id}',
@@ -602,7 +689,8 @@ class RutaService:
             despues={'forzado': FORZADO_ADVERTENCIAS_FLOTA,
                      'momento': momento,
                      'advertencias_flota': sorted(claves),
-                     'detalle': advertencias})
+                     'detalle': advertencias,
+                     **autorizacion})
         return advertencias
 
     #: Tope de consultas de cartera por despacho: el informe es un aviso y no

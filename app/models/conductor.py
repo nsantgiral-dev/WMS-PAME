@@ -14,6 +14,12 @@ class Conductor(db.Model):
     # Cuenta de login vinculada — permite al conductor acceder a la PWA
     usuario_id     = db.Column(db.Integer, db.ForeignKey('usuarios.id'), nullable=True)
     fecha_creacion = db.Column(db.DateTime, default=datetime.utcnow)
+    # Licencia de conducción (m051flotalegal). Nullable: sin cargar es «no se
+    # sabe» para la política de salida (`flota/dominio/salida.py`), no «vencida».
+    # Se valida con `salida.problemas_de_licencia` antes de escribir.
+    licencia_numero    = db.Column(db.String(30), nullable=True)
+    licencia_categoria = db.Column(db.String(3), nullable=True)
+    licencia_vence     = db.Column(db.Date, nullable=True)
 
     rutas   = db.relationship('RutaDespacho', backref='conductor', lazy=True)
     usuario = db.relationship('Usuario', backref='conductor_perfil', lazy=True)
@@ -35,4 +41,10 @@ class Conductor(db.Model):
             'tiene_cuenta_pwa': self.usuario_id is not None,
             'usuario_email':  self.usuario.email if self.usuario else None,
             'fecha_creacion': self.fecha_creacion.isoformat(),
+            # El número de la licencia es un dato personal: `listar_conductores`
+            # lo borra para quien no es de almacén. La categoría, el vencimiento
+            # y el estado son operativos (deciden si sale el camión).
+            'licencia_numero':    self.licencia_numero or '',
+            'licencia_categoria': self.licencia_categoria or '',
+            'licencia_vence':     self.licencia_vence.isoformat() if self.licencia_vence else None,
         }

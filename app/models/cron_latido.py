@@ -25,6 +25,10 @@ class CronLatido(db.Model):
     ultimo_error = db.Column(db.Text, nullable=True)
     corridas = db.Column(db.Integer, nullable=False, default=0, server_default='0')
     fallos_seguidos = db.Column(db.Integer, nullable=False, default=0, server_default='0')
+    #: Lo que la corrida dijo que hizo, si devolvió un dict (m051flotalegal).
+    #: «Corrió» no es «hizo su trabajo»: el barrido de avisos apagado corría
+    #: bien todos los días sin mandar nada.
+    ultimo_resumen = db.Column(db.Text, nullable=True)
 
     __table_args__ = (
         db.UniqueConstraint('nombre', 'servicio', name='uq_cron_latido_nombre_servicio'),
@@ -39,4 +43,14 @@ class CronLatido(db.Model):
             'ultimo_ok': self.ultimo_ok, 'ultimo_ok_en': _iso(self.ultimo_ok_en),
             'ultimo_error': self.ultimo_error, 'corridas': self.corridas,
             'fallos_seguidos': self.fallos_seguidos,
+            'ultimo_resumen': self.resumen(),
         }
+
+    def resumen(self):
+        import json
+        if not self.ultimo_resumen:
+            return None
+        try:
+            return json.loads(self.ultimo_resumen)
+        except ValueError:
+            return {'ilegible': True}

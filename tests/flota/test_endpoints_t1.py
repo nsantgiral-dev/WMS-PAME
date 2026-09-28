@@ -265,7 +265,8 @@ class TestDocumentos:
         from datetime import date, timedelta
         r = client.post(self._url(flota_mundo), json={
             'tipo': 'soat', 'numero': 'S-1', 'entidad': 'Aseguradora',
-            'fecha_expedicion': (dia_operativo() - timedelta(days=100)).isoformat(),
+            # Un SOAT dura un año (2026-09-27: la puerta rechaza otra vigencia).
+            'fecha_expedicion': (dia_operativo() - timedelta(days=345)).isoformat(),
             'fecha_vencimiento': (dia_operativo() + timedelta(days=20)).isoformat(),
         }, headers=_auth(jwt_token_admin))
         assert r.status_code == 201

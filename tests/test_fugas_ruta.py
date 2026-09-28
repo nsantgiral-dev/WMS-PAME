@@ -758,11 +758,23 @@ def flota_sana(db, monkeypatch):
     return v, estado
 
 
+def _licencia_al_dia(db, conductor):
+    """Desde el 2026-09-27 la licencia del conductor de la ruta entra a la
+    política de salida: sin cargar pide motivo. Un «vehículo en orden» tiene
+    también al conductor en orden."""
+    from app.utils.fecha import dia_operativo
+    conductor.licencia_numero = f'LIC-{conductor.id}'
+    conductor.licencia_categoria = 'C2'
+    conductor.licencia_vence = dia_operativo() + timedelta(days=400)
+    db.session.commit()
+
+
 class TestAdvertenciasDeFlota:
 
     def _ruta_en_cargue(self, db, almacen, v, estado):
         ruta, tarea, c = _ruta(db, almacen, estado='EN_CARGUE', vehiculo_id=v.id)
         estado['custodio'] = c.id if estado['custodio'] is None else estado['custodio']
+        _licencia_al_dia(db, c)
         return ruta, c
 
     def test_vehiculo_en_orden_sale_sin_preguntar(self, db, almacen, flota_sana):

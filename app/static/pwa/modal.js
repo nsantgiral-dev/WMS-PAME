@@ -113,19 +113,21 @@ function _modalConfirmar(mensajeHtml, opts = {}) {
  * observaciones, etc. Mismo patrón que `_modalCantidad`/`_modalConfirmar`.
  * @param {string} titulo
  * @param {string} mensajeHtml
- * @param {{obligatorio?:boolean, valorInicial?:string, placeholder?:string, textoConfirmar?:string, textoCancelar?:string}} [opts]
+ * @param {{obligatorio?:boolean, minimo?:number, valorInicial?:string, placeholder?:string, textoConfirmar?:string, textoCancelar?:string}} [opts]
+ *   `minimo`: largo mínimo del texto (p. ej. el motivo de una salida que la
+ *   ley prohíbe). El servidor lo exige igual: esto solo evita el viaje.
  * @returns {Promise<string|null>} el texto, o null si se canceló
  */
 function _modalTexto(titulo, mensajeHtml, opts = {}) {
   const {
-    obligatorio = true, valorInicial = '', placeholder = '',
+    obligatorio = true, minimo = 0, valorInicial = '', placeholder = '',
     textoConfirmar = 'Confirmar', textoCancelar = 'Cancelar',
   } = opts;
   return new Promise(resolve => {
     const overlay = document.createElement('div');
     overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.92);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px;';
     overlay.innerHTML = `
-      <div style="background:var(--bg-s);border-radius:16px;padding:24px;width:100%;max-width:400px;border:1px solid var(--brd);">
+      <div style="background:var(--bg-s);border-radius:16px;padding:24px;width:100%;max-width:400px;border:1px solid var(--brd);max-height:85vh;overflow-y:auto;">
         <div style="font-size:var(--fs-lg);font-weight:800;color:var(--tx);margin-bottom:10px;">${titulo}</div>
         <div style="font-size:var(--fs-sm);color:var(--tx2);margin-bottom:16px;line-height:1.5;">${mensajeHtml}</div>
         <textarea id="_mt-input" placeholder="${placeholder}" rows="3"
@@ -144,6 +146,11 @@ function _modalTexto(titulo, mensajeHtml, opts = {}) {
       const val = input.value.trim();
       if (obligatorio && !val) {
         errEl.textContent = 'Este campo es obligatorio';
+        input.focus();
+        return;
+      }
+      if (minimo && val.length < minimo) {
+        errEl.textContent = `Escriba al menos ${minimo} caracteres (lleva ${val.length}).`;
         input.focus();
         return;
       }

@@ -164,6 +164,17 @@ def guardar_documento(placa):
     else:
         numero = (datos['numero'] if 'numero' in datos else '').strip()
         entidad = (datos['entidad'] if 'entidad' in datos else '').strip()
+        # Fechas plausibles (2026-09-27). En producción entraron una RTM que
+        # vence el mismo día en que se expidió y una póliza con año 0025: la
+        # primera frenaba cada ruta como «vencida hace 320 días». La misma
+        # política que marca lo ya cargado como «dato a corregir».
+        from flota.dominio.salida import problemas_de_fechas
+        problemas = problemas_de_fechas(datos['tipo'], expedicion, vencimiento,
+                                        dia_operativo())
+        if problemas:
+            return jsonify({'error': 'Las fechas del papel no son posibles: '
+                                     + ' '.join(problemas),
+                            'problemas': problemas}), 400
 
     doc = DocumentoVehiculo.query.filter_by(
         vehiculo_id=vehiculo.id, tipo=datos['tipo']).first()
@@ -172,14 +183,22 @@ def guardar_documento(placa):
         doc = DocumentoVehiculo(vehiculo_id=vehiculo.id, tipo=datos['tipo'])
         db.session.add(doc)
 
-    doc.estado, doc.numero, doc.entidad = estado, numero, entidad
-    doc.fecha_expedicion, doc.fecha_vencimiento = expedicion, vencimiento
-
     # `archivo` es el nombre correcto desde que se aceptan PDF; `foto` se sigue
     # leyendo porque hay clientes desplegados que lo mandan. Uno solo de los
     # dos: si llegaran los dos, gana el nombre nuevo y no se adivina cuál quiso
     # mandar quien mandó ambos.
     adjunto = datos['archivo'] if datos.get('archivo') else datos.get('foto')
+
+    # Un papel RENOVADO (otro número, o ya no encontrado) sin archivo nuevo NO
+    # conserva el escaneo del anterior: la pantalla mostraba el SOAT viejo como
+    # respaldo del nuevo. Corregir una fecha del mismo papel (mismo número) sí
+    # lo conserva: es el mismo papel.
+    if (not creado and not adjunto and doc.foto_id is not None
+            and (numero != (doc.numero or '') or estado != doc.estado)):
+        doc.foto_id = None
+
+    doc.estado, doc.numero, doc.entidad = estado, numero, entidad
+    doc.fecha_expedicion, doc.fecha_vencimiento = expedicion, vencimiento
 
     try:
         db.session.flush()

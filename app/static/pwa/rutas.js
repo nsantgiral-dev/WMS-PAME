@@ -840,6 +840,54 @@ function _rutaAvisoCobro(d) {
   return partes.length ? ' · Facturas: ' + partes.join(', ') : '';
 }
 
+/**
+ * El cuadro del 409 de flota, en TRES grupos que el servidor ya decidió
+ * (`gravedad` de `flota/dominio/salida.py`), nunca uno solo (2026-09-27):
+ *
+ *   prohibido    la ley lo prohíbe y se sabe (SOAT, revisión o licencia
+ *                vencidos): solo un administrador lo autoriza, con un motivo
+ *                largo que queda con su nombre y la hora.
+ *   no_se_sabe   el dato falta (papel o licencia sin cargar, dato a corregir):
+ *                se reconoce con motivo, en su propio cuadro.
+ *   advertencia  se sabe y no es ilegal (taller, inspección, turno).
+ *
+ * Si lo prohibido y lo desconocido van en la misma lista, el «ok» que se
+ * aprende a escribir para lo segundo saca el camión ilegal. Pura: devuelve
+ * `{html, prohibido, puedeAutorizar, minimo}`; no decide nada.
+ */
+function rutaCuadroAdvertencias(d, accion) {
+  const lista = Array.isArray(d && d.advertencias_flota) ? d.advertencias_flota : [];
+  const de = (g) => lista.filter(a => (a.gravedad || 'advertencia') === g);
+  const bloque = (items, titulo, clase) => items.length
+    ? `<div class="${clase}" style="border-radius:10px;padding:10px 12px;margin:0 0 10px;">
+         <div style="font-weight:800;margin-bottom:4px;">${titulo}</div>
+         <ul style="margin:0;padding-left:18px;">${items.map(a => `<li>${esc(a.texto)}</li>`).join('')}</ul>
+       </div>`
+    : '';
+  const prohibidos = de('prohibido');
+  const html =
+    bloque(prohibidos, '⛔ Prohibido salir: la ley no lo permite', 'ruta-adv-prohibido') +
+    bloque(de('no_se_sabe'), 'No se sabe: falta el dato', 'ruta-adv-no-se-sabe') +
+    bloque(de('advertencia'), 'Advertencias', 'ruta-adv-advertencia');
+  const prohibido = !!(d && d.salida_prohibida) || prohibidos.length > 0;
+  const puedeAutorizar = prohibido && !!(d && d.puede_autorizar);
+  const minimo = (d && d.motivo_minimo) || 0;
+  let pie;
+  if (!prohibido) {
+    pie = `Puede ${esc(accion)} igual. El motivo queda registrado.`;
+  } else if (puedeAutorizar) {
+    pie = `Solo un administrador puede autorizar esta salida. Escriba por qué sale
+           igual (al menos ${esc(minimo)} caracteres): queda registrado con su nombre
+           y la hora, y se ve en la bandeja de flota.`;
+  } else {
+    pie = esc((d && d.error) || 'El vehículo no puede salir: la ley lo prohíbe.') +
+          ' Pídale a un administrador que lo autorice, o corrija el papel antes de salir.';
+  }
+  // Sin saltos de línea: `_modalConfirmar` pinta con `white-space:pre-line`.
+  const todo = (html + `<div>${pie}</div>`).replace(/\s*\n\s*/g, ' ');
+  return { html: todo, prohibido, puedeAutorizar, minimo };
+}
+
 async function _rutaPostConFlota(ruta, accion) {
   const enviar = (cuerpo) => fetch(API + ruta, {
     method: 'POST',
@@ -849,12 +897,19 @@ async function _rutaPostConFlota(ruta, accion) {
   let r = await enviar({});
   let d = await r.json().catch(() => ({}));
   if (r.status === 409 && Array.isArray(d.advertencias_flota)) {
-    const lista = d.advertencias_flota.map(a => `<li>${esc(a.texto)}</li>`).join('');
+    const cuadro = rutaCuadroAdvertencias(d, accion);
+    if (cuadro.prohibido && !cuadro.puedeAutorizar) {
+      await _modalConfirmar(cuadro.html,
+        { titulo: '⛔ El vehículo no puede salir', textoConfirmar: 'Entendido', textoCancelar: 'Cerrar' });
+      return { r: null, d: null };
+    }
     const motivo = await _modalTexto(
-      '⚠️ Advertencias del vehículo',
-      `<ul style="margin:0 0 10px;padding-left:18px;">${lista}</ul>` +
-      `Puede ${esc(accion)} igual. El motivo queda registrado.`,
-      { placeholder: 'Motivo', textoConfirmar: 'Continuar' });
+      cuadro.prohibido ? '⛔ Salida que la ley prohíbe' : '⚠️ Advertencias del vehículo',
+      cuadro.html,
+      cuadro.prohibido
+        ? { placeholder: 'Por qué sale igual', textoConfirmar: 'Autorizar la salida',
+            minimo: cuadro.minimo }
+        : { placeholder: 'Motivo', textoConfirmar: 'Continuar' });
     if (motivo === null || motivo === undefined || !String(motivo).trim()) return { r: null, d: null };
     r = await enviar({ motivo_advertencias: motivo.trim() });
     d = await r.json().catch(() => ({}));
@@ -1782,6 +1837,77 @@ function puedeCrearCuentaPwa() {
   return typeof OPERARIO !== 'undefined' && OPERARIO?.rol === 'admin';
 }
 
+/** La licencia de conducción de un conductor, en una línea. El estado lo
+ *  decide el servidor (`licencia_estado`, de la política de salida). */
+const LICENCIA_ESTADO_TEXTO = {
+  vigente: 'al día', por_vencer: 'por vencer', vencido: 'VENCIDA: no puede salir sin autorización',
+  sin_cargar: 'sin cargar: no se sabe si está al día', dato_a_corregir: 'dato a corregir',
+};
+function conductorLineaLicencia(c) {
+  const est = c.licencia_estado || 'sin_cargar';
+  const txt = LICENCIA_ESTADO_TEXTO[est] || 'estado desconocido';
+  const clase = est === 'vencido' ? 'var(--err-tx)' : (est === 'vigente' ? 'var(--tx3)' : 'var(--warn-tx)');
+  const detalle = c.licencia_vence
+    ? ` · ${esc(c.licencia_categoria || '')} · vence ${esc(c.licencia_vence.split('-').reverse().join('/'))}`
+    : '';
+  return `<div style="font-size:var(--fs-xs);color:${clase};margin-top:3px;">🪪 Licencia ${esc(txt)}${detalle}</div>`;
+}
+
+let _CONDUCTORES_LISTA = [];
+let _CATEGORIAS_LICENCIA = [];
+
+/** Formulario de la licencia (solo admin: `PUT /api/rutas/conductores/<id>`).
+ *  En el `onclick` viaja la posición, no el dato. */
+function conductorEditarLicencia(pos) {
+  const c = _CONDUCTORES_LISTA[pos];
+  if (!c) return;
+  const opciones = ['<option value="">— elija —</option>']
+    .concat(_CATEGORIAS_LICENCIA.map(k =>
+      `<option value="${esc(k)}"${k === c.licencia_categoria ? ' selected' : ''}>${esc(k)}</option>`))
+    .join('');
+  const overlay = document.createElement('div');
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.92);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px;';
+  const campo = 'width:100%;padding:12px;font-size:var(--fs-md);background:var(--bg-s);border:2px solid var(--brd);border-radius:10px;color:var(--tx);margin:4px 0 10px;box-sizing:border-box;';
+  overlay.innerHTML = `
+    <div style="background:var(--bg-s);border-radius:16px;padding:24px;width:100%;max-width:400px;border:1px solid var(--brd);">
+      <div style="font-size:var(--fs-lg);font-weight:800;color:var(--tx);margin-bottom:6px;">Licencia de ${esc(c.nombre)}</div>
+      <div style="font-size:var(--fs-sm);color:var(--tx2);margin-bottom:12px;">Con la licencia vencida el camión no sale sin autorización de un administrador. Deje los tres vacíos para borrarla.</div>
+      <label style="font-size:var(--fs-sm);color:var(--tx2);">Número</label>
+      <input id="_lic-num" style="${campo}" value="${esc(c.licencia_numero || '')}">
+      <label style="font-size:var(--fs-sm);color:var(--tx2);">Categoría</label>
+      <select id="_lic-cat" style="${campo}">${opciones}</select>
+      <label style="font-size:var(--fs-sm);color:var(--tx2);">Vence</label>
+      <input id="_lic-vence" type="date" style="${campo}" value="${esc(c.licencia_vence || '')}">
+      <div id="_lic-error" style="font-size:var(--fs-xs);color:var(--err-tx);min-height:16px;margin-bottom:10px;"></div>
+      <div style="display:flex;gap:10px;">
+        <button id="_lic-no" style="flex:1;padding:14px;background:var(--bg-input);color:var(--tx2);border:1px solid var(--brd);border-radius:10px;font-size:var(--fs-sm);font-weight:700;cursor:pointer;">Cancelar</button>
+        <button id="_lic-si" style="flex:1;padding:14px;background:var(--pm-fill);color:#fff;border:none;border-radius:10px;font-size:var(--fs-sm);font-weight:700;cursor:pointer;">Guardar</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  overlay.querySelector('#_lic-no').onclick = () => overlay.remove();
+  overlay.querySelector('#_lic-si').onclick = async () => {
+    const cuerpo = {
+      licencia_numero: overlay.querySelector('#_lic-num').value.trim(),
+      licencia_categoria: overlay.querySelector('#_lic-cat').value,
+      licencia_vence: overlay.querySelector('#_lic-vence').value || null,
+    };
+    try {
+      const r = await fetch(API + '/api/rutas/conductores/' + c.id, {
+        method: 'PUT',
+        headers: { Authorization: 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
+        body: JSON.stringify(cuerpo),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) { overlay.querySelector('#_lic-error').textContent = d.error || 'No se pudo guardar'; return; }
+      overlay.remove();
+      await cargarListaConductores();
+    } catch (e) {
+      overlay.querySelector('#_lic-error').textContent = 'Sin conexión: no se guardó.';
+    }
+  };
+}
+
 /** Carga y renderiza la lista completa de conductores (activos e inactivos). */
 async function cargarListaConductores() {
   const el = document.getElementById('lista-conductores');
@@ -1789,16 +1915,19 @@ async function cargarListaConductores() {
   try {
     const d = await get('/api/rutas/conductores?activos=false');
     const conductores = d.conductores || [];
+    _CONDUCTORES_LISTA = conductores;
+    _CATEGORIAS_LICENCIA = d.categorias_licencia || [];
     if (!conductores.length) {
       el.innerHTML = '<div style="color:var(--tx3);text-align:center;padding:40px;">Sin conductores registrados</div>';
       return;
     }
-    el.innerHTML = conductores.map(c => `
+    el.innerHTML = conductores.map((c, pos) => `
       <div style="background:var(--bg-s);border:1px solid var(--brd);border-radius:12px;padding:14px;margin-bottom:8px;">
         <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px;">
           <div>
             <div style="font-size:var(--fs-sm);font-weight:700;">${esc(c.nombre)}</div>
-            <div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:2px;">${identidadConductor(c, conductores)}${c.telefono ? ' · ' + c.telefono : ''}</div>
+            <div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:2px;">${identidadConductor(c, conductores)}${c.telefono ? ' · ' + esc(c.telefono) : ''}</div>
+            ${conductorLineaLicencia(c)}
             ${conCuentaPwa(c)
               ? `<div style="font-size:var(--fs-xs);color:var(--warn-tx);margin-top:3px;">👤 ${esc(c.usuario_email || 'tiene cuenta')}</div>`
               : `<div style="font-size:var(--fs-xs);color:var(--warn-tx);margin-top:3px;">Sin cuenta PWA — no puede entrar a la app</div>`}
@@ -1812,6 +1941,10 @@ async function cargarListaConductores() {
             style="flex:1;padding:8px;background:var(--bg-input);border:1px solid var(--brd);color:var(--tx2);border-radius:8px;font-size:var(--fs-xs);cursor:pointer;">
             ${c.activo ? 'Desactivar' : 'Activar'}
           </button>
+          ${puedeCrearCuentaPwa() ? `<button onclick="conductorEditarLicencia(${pos})"
+            style="flex:1;padding:8px;background:var(--bg-input);border:1px solid var(--brd);color:var(--tx2);border-radius:8px;font-size:var(--fs-xs);cursor:pointer;">
+            Licencia
+          </button>` : ''}
           ${(conCuentaPwa(c) || !puedeCrearCuentaPwa()) ? '' : `<button onclick="conBotonOcupado(event, () => conductorCrearCuenta(${esc(c.id)}, '${c.nombre.replace(/'/g, "\\'")}'))"
             style="flex:1;padding:8px;background:#1e3a5f;border:1px solid #2563eb;color:var(--info-tx);border-radius:8px;font-size:var(--fs-xs);cursor:pointer;">
             Crear cuenta PWA

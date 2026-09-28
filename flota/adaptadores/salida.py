@@ -11,14 +11,33 @@ Ningún `except` degrada a «está bien»: lo que no se pudo leer viaja como
 `None`/`'sin_dato'` y la política lo pinta ámbar con su motivo (regla 5).
 """
 from datetime import datetime
-from typing import Iterable, Optional, Sequence, Tuple
+from typing import Iterable, List, Optional, Sequence, Tuple
 
 from flota.dominio import salida as dom
 
 # ── Una función por hecho ───────────────────────────────────────────────────
 
+#: Cuál fila «gana» si un tipo tiene varias. Un papel con fechas imposibles
+#: va DESPUÉS del vencido a propósito: una fila basura no puede esconder un
+#: vencimiento conocido (Regla 0).
 _RANGO_PAPEL = {dom.VIGENTE: 0, dom.POR_VENCER: 1, dom.VENCIDO: 2,
-                dom.NO_ENCONTRADO: 3}
+                dom.DATO_A_CORREGIR: 3, dom.NO_ENCONTRADO: 4}
+
+
+def papel_de_fila(d, hoy) -> dom.Papel:
+    """El `Papel` de UNA fila de `flota_documento_vehiculo`. Las fechas
+    imposibles (`dom.fechas_imposibles`, la parte de la regla de entrada que
+    ninguna fecha real cumple) la
+    vuelven `DATO_A_CORREGIR`: la RTM de BDT261 que vence el mismo día en que se
+    expidió no está «vencida hace 320 días», está mal escrita."""
+    no_encontrado = d.estado == 'no_encontrado'
+    problemas = ([] if no_encontrado else
+                 dom.fechas_imposibles(d.fecha_expedicion, d.fecha_vencimiento, hoy))
+    estado = dom.estado_de_papel(vence=d.fecha_vencimiento,
+                                 no_encontrado=no_encontrado, hoy=hoy,
+                                 fechas_imposibles=bool(problemas))
+    return dom.Papel(d.tipo, estado, d.fecha_vencimiento,
+                     problemas[0] if problemas else None)
 
 
 def papeles_de_filas(docs: Iterable, hoy) -> Tuple[dom.Papel, ...]:
@@ -32,13 +51,11 @@ def papeles_de_filas(docs: Iterable, hoy) -> Tuple[dom.Papel, ...]:
 
     mejor = {}
     for d in docs:
-        estado = dom.estado_de_papel(vence=d.fecha_vencimiento,
-                                     no_encontrado=d.estado == 'no_encontrado',
-                                     hoy=hoy)
-        clave = (_RANGO_PAPEL[estado], -(d.fecha_vencimiento.toordinal()
-                                          if d.fecha_vencimiento else 0))
+        papel = papel_de_fila(d, hoy)
+        clave = (_RANGO_PAPEL[papel.estado], -(d.fecha_vencimiento.toordinal()
+                                                if d.fecha_vencimiento else 0))
         if d.tipo not in mejor or clave < mejor[d.tipo][0]:
-            mejor[d.tipo] = (clave, dom.Papel(d.tipo, estado, d.fecha_vencimiento))
+            mejor[d.tipo] = (clave, papel)
     return tuple(mejor[t][1] if t in mejor else dom.Papel(t, dom.SIN_CARGAR)
                  for t in TIPOS_DOCUMENTO)
 
@@ -111,6 +128,41 @@ def ficha_de(ficha) -> Tuple[str, Tuple[str, ...]]:
     return ('completa' if not falta else 'incompleta'), tuple(falta)
 
 
+def licencia_de(conductor, hoy) -> Optional[dom.Licencia]:
+    """La licencia de un conductor, o `None` si no hay conductor que evaluar."""
+    if conductor is None:
+        return None
+    return dom.estado_de_licencia(numero=conductor.licencia_numero,
+                                  categoria=conductor.licencia_categoria,
+                                  vence=conductor.licencia_vence, hoy=hoy)
+
+
+def papeles_de_la_flota(hoy) -> List[Tuple[str, dom.Papel]]:
+    """(placa, papel) de cada papel de cada vehículo **activo**, incluidos los
+    sin cargar. UNA lectura para el correo diario y el reporte semanal: los dos
+    preguntan lo mismo y, escrito dos veces, uno se quedaba sin los vencidos."""
+    from app.models.vehiculo import Vehiculo
+    from flota.adaptadores.modelos import DocumentoVehiculo
+
+    vehiculos = (Vehiculo.query.filter(Vehiculo.activo.is_(True))
+                 .order_by(Vehiculo.placa).all())
+    docs = {}
+    for d in DocumentoVehiculo.query.filter(
+            DocumentoVehiculo.vehiculo_id.in_([v.id for v in vehiculos] or [0])).all():
+        docs.setdefault(d.vehiculo_id, []).append(d)
+    return [(v.placa, p) for v in vehiculos
+            for p in papeles_de_filas(docs[v.id] if v.id in docs else (), hoy)]
+
+
+def licencias_de_los_conductores(hoy) -> List[Tuple[str, dom.Licencia]]:
+    """(nombre, licencia) de cada conductor **activo**."""
+    from app.models.conductor import Conductor
+
+    return [(c.nombre, licencia_de(c, hoy)) for c in
+            Conductor.query.filter(Conductor.activo.is_(True))
+            .order_by(Conductor.nombre).all()]
+
+
 def dia_de_ruta(r):
     """El día en que ocurrió una ruta: `fecha_programada` manda; sin ella, el
     día en que se cerró el cargue o, en último caso, el que se creó. `None` si
@@ -134,6 +186,7 @@ def hechos_de_vehiculo(vehiculo_id: int, *, ahora: Optional[datetime] = None,
     """Los hechos de UN vehículo. `sale_hoy=None` → se mira si tiene una ruta
     hoy (el mismo criterio que la bandeja)."""
     from app.extensions import db
+    from app.models.conductor import Conductor
     from app.models.ruta_despacho import RutaDespacho
     from app.models.vehiculo import Vehiculo
     from app.utils.fecha import dia_operativo_de
@@ -182,6 +235,10 @@ def hechos_de_vehiculo(vehiculo_id: int, *, ahora: Optional[datetime] = None,
         custodia=tipo, custodio_conductor_id=custodio,
         conductor_de_la_ruta=conductor_de_la_ruta,
         fuera_de_sede=fuera, ficha=estado_ficha, ficha_falta=falta,
+        # La licencia es de la persona: se evalúa cuando hay a quién (el
+        # conductor de la ruta al despachar). Sin él, `None` = no se evalúa.
+        licencia=licencia_de(db.session.get(Conductor, conductor_de_la_ruta)
+                             if conductor_de_la_ruta is not None else None, hoy),
     )
 
 
@@ -189,6 +246,7 @@ def evaluar_vehiculo(vehiculo_id: int, **kw) -> dom.Evaluacion:
     return dom.evaluar(hechos_de_vehiculo(vehiculo_id, **kw))
 
 
-__all__ = ['papeles_de_filas', 'danos_de_filas', 'inspeccion_de_fila',
+__all__ = ['papel_de_fila', 'licencia_de', 'papeles_de_la_flota',
+           'licencias_de_los_conductores', 'papeles_de_filas', 'danos_de_filas', 'inspeccion_de_fila',
            'preventivo_de_diagnostico', 'ot_abiertas_de', 'custodia_de',
            'ficha_de', 'dia_de_ruta', 'hechos_de_vehiculo', 'evaluar_vehiculo']

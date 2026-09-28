@@ -492,6 +492,15 @@ def senales_de_recaudo(recaudo, ruta=None, faltante=None) -> list:
 # 8 · Condición del vehículo al despachar — informa, no bloquea
 # ═════════════════════════════════════════════════════════════════════════════
 
+def _sin_poder_mirar(clave: str, texto: str) -> dict:
+    """Una advertencia que no sale de la política porque no se pudo mirar. Su
+    gravedad la decide la misma función que las demás."""
+    from flota.dominio.salida import motivo_sin_poder_mirar
+    m = motivo_sin_poder_mirar(clave, texto)
+    return {'clave': m.clave, 'texto': m.texto, 'nivel': m.nivel,
+            'bloquea': m.bloquea, 'gravedad': m.gravedad}
+
+
 def advertencias_de_flota(ruta, hoy=None) -> list:
     """Lo que la flota sabe de este vehículo que debería frenar un despacho.
 
@@ -514,21 +523,26 @@ def advertencias_de_flota(ruta, hoy=None) -> list:
     mirar» no es «está en orden» (Regla 0).
     """
     if ruta is None or not ruta.vehiculo_id:
-        return [{'clave': 'sin_vehiculo', 'texto': 'La ruta no tiene vehículo asignado'}]
+        return [_sin_poder_mirar('sin_vehiculo', 'La ruta no tiene vehículo asignado')]
     try:
         from flota.adaptadores.salida import evaluar_vehiculo
     except Exception as e:  # pragma: no cover — el módulo vive en el mismo repo
         logger.warning('[SENALES] flota no disponible: %s', e)
-        return [{'clave': 'flota_sin_dato', 'texto': 'No se pudo consultar el estado del vehículo'}]
+        return [_sin_poder_mirar('flota_sin_dato', 'No se pudo consultar el estado del vehículo')]
     try:
         ev = evaluar_vehiculo(ruta.vehiculo_id, conductor_de_la_ruta=ruta.conductor_id,
                               sale_hoy=True)
     except Exception as e:
         logger.warning('[SENALES] no se pudo leer el estado de flota del vehículo %s: %s',
                        ruta.vehiculo_id, e)
-        return [{'clave': 'flota_sin_dato',
-                 'texto': 'No se pudo consultar el estado completo del vehículo'}]
-    return [{'clave': m.clave, 'texto': m.texto} for m in ev.para_despachar()]
+        return [_sin_poder_mirar('flota_sin_dato',
+                                 'No se pudo consultar el estado completo del vehículo')]
+    # `bloquea` y `gravedad` los decide la política (2026-09-27): el muelle
+    # separa «prohibido salir» (SOAT/RTM/licencia vencidos: solo un admin, con
+    # motivo largo) de «no se sabe» (papel sin cargar) y de lo demás.
+    return [{'clave': m.clave, 'texto': m.texto, 'nivel': m.nivel,
+             'bloquea': m.bloquea, 'gravedad': m.gravedad}
+            for m in ev.para_despachar()]
 
 
 def despachos_forzados(desde=None, hasta=None) -> list:
@@ -574,6 +588,8 @@ def despachos_forzados(desde=None, hasta=None) -> list:
             'motivo': b.motivo,
             'momento': despues.get('momento'),
             'claves': list(despues.get('advertencias_flota') or []),
+            # Lo que la ley prohibía y un administrador autorizó (2026-09-27).
+            'salida_prohibida': list(despues.get('salida_prohibida_autorizada') or []),
             'advertencias': [a for a in detalle if isinstance(a, dict)],
         })
     return salida

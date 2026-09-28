@@ -40,12 +40,28 @@ texto acotado (JS).
 
     frena = True         el despacho pide motivo escrito (FORZAR en la bitácora)
 
-**Informa, no bloquea** (regla 1 de flota y «medir → corregir → imponer»):
-`frena` no impide nada; hace que la salida con el problema quede escrita.
+**Informa, no bloquea — salvo lo que la ley prohíbe y se SABE** (2026-09-27).
+`frena` no impide nada; hace que la salida con el problema quede escrita. Pero
+un SOAT, una revisión técnico-mecánica o una licencia de conducción **vencidos
+con fecha registrada** no son una duda: son determinísticos, y su costo
+(inmovilización, ADRES repitiendo contra la empresa, la póliza excluyendo el
+siniestro) es irreversible. Esos motivos están en `BLOQUEAN_SALIDA`: el despacho
+los rechaza y solo `ROLES_AUTORIZAN_SALIDA_PROHIBIDA` los deja pasar, con un
+motivo de al menos `MOTIVO_MINIMO_SALIDA_PROHIBIDA` caracteres.
+
+Lo que **no se sabe** (papel sin cargar, no encontrado, dato a corregir,
+licencia sin cargar) sigue siendo «informa, no bloquea», y la pantalla lo
+muestra en OTRO cuadro (`gravedad_para_despachar`): si lo prohibido y lo
+desconocido van en la misma lista, el «ok» que se aprende a escribir para lo
+segundo saca el camión ilegal.
+
+La decisión es del dueño y vive en TRES constantes de este archivo:
+`BLOQUEAN_SALIDA`, `ROLES_AUTORIZAN_SALIDA_PROHIBIDA` y
+`MOTIVO_MINIMO_SALIDA_PROHIBIDA`. Cambiarla es cambiarlas a ellas.
 """
 from dataclasses import dataclass
 from datetime import date, timedelta
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Dict, FrozenSet, List, Optional, Sequence, Tuple
 
 # ── El vocabulario ──────────────────────────────────────────────────────────
 
@@ -89,7 +105,172 @@ VENCIDO = 'vencido'
 POR_VENCER = 'por_vencer'
 NO_ENCONTRADO = 'no_encontrado'
 SIN_CARGAR = 'sin_cargar'
-ESTADOS_PAPEL = (VIGENTE, VENCIDO, POR_VENCER, NO_ENCONTRADO, SIN_CARGAR)
+#: El papel está cargado pero sus fechas son imposibles (vence el mismo día en
+#: que se expidió, año 0025): no se sabe cuándo vence de verdad. Ámbar, como
+#: todo lo que no se sabe — no es «vencido», y tampoco es «al día».
+DATO_A_CORREGIR = 'dato_a_corregir'
+ESTADOS_PAPEL = (VIGENTE, VENCIDO, POR_VENCER, NO_ENCONTRADO, SIN_CARGAR,
+                 DATO_A_CORREGIR)
+
+# ── Lo que la ley prohíbe: la decisión del dueño, en tres constantes ────────
+
+#: Los motivos que NO se reconocen con cualquier texto. Un vencimiento con
+#: fecha registrada de un papel sin el cual el vehículo o el conductor no pueden
+#: circular. Lo que no se sabe (sin cargar, no encontrado, dato a corregir) no
+#: está acá a propósito: frena con motivo simple.
+BLOQUEAN_SALIDA: FrozenSet[str] = frozenset({
+    'soat_vencido', 'rtm_vencido', 'licencia_vencida'})
+
+#: Quién puede autorizar que salga igual. El dueño puede agregar `gerente`.
+ROLES_AUTORIZAN_SALIDA_PROHIBIDA: Tuple[str, ...] = ('admin',)
+
+#: Largo mínimo del motivo de esa autorización. Veinte caracteres no prueban
+#: nada, pero «ok» deja de caber: obliga a escribir una frase.
+MOTIVO_MINIMO_SALIDA_PROHIBIDA = 20
+
+# Cómo se muestra cada motivo al despachar — tres cuadros, no uno.
+PROHIBIDO = 'prohibido'       # la ley lo prohíbe y se sabe
+NO_SE_SABE = 'no_se_sabe'     # falta el dato para saber
+ADVERTENCIA = 'advertencia'   # se sabe y no es ilegal: se reconoce con motivo
+GRAVEDADES = (PROHIBIDO, NO_SE_SABE, ADVERTENCIA)
+
+_SUFIJOS_NO_SE_SABE = ('_sin_registro', '_no_encontrado', '_dato_a_corregir',
+                       '_sin_dato', '_sin_cargar')
+
+
+def gravedad_para_despachar(clave: str) -> str:
+    """En qué cuadro va un motivo al despachar. UNA función: la usan el 409
+    del muelle y la regla de autorización del servicio."""
+    if clave in BLOQUEAN_SALIDA:
+        return PROHIBIDO
+    if clave.endswith(_SUFIJOS_NO_SE_SABE):
+        return NO_SE_SABE
+    return ADVERTENCIA
+
+
+def rol_autoriza_salida_prohibida(rol: Optional[str]) -> bool:
+    return rol in ROLES_AUTORIZAN_SALIDA_PROHIBIDA
+
+
+def puede_autorizar_salida_prohibida(rol: Optional[str], motivo: Optional[str]) -> Optional[str]:
+    """`None` si este rol, con este motivo, puede sacar un vehículo con algo de
+    `BLOQUEAN_SALIDA`; si no, el porqué en usted (lo que la pantalla muestra).
+
+    UNA función: el servicio la llama antes de escribir el FORZAR, y el
+    trinquete `tests/flota/test_salida_prohibida.py` exige por AST que todo
+    escritor de un FORZAR de flota pase por acá."""
+    if not rol_autoriza_salida_prohibida(rol):
+        quien = ', '.join(ROLES_AUTORIZAN_SALIDA_PROHIBIDA)
+        return (f'El vehículo no puede salir: la ley lo prohíbe. Solo un usuario '
+                f'con rol {quien} puede autorizar la salida, con un motivo escrito.')
+    texto = (motivo or '').strip()
+    if len(texto) < MOTIVO_MINIMO_SALIDA_PROHIBIDA:
+        return (f'Para autorizar una salida que la ley prohíbe escriba un motivo '
+                f'de al menos {MOTIVO_MINIMO_SALIDA_PROHIBIDA} caracteres '
+                f'(lleva {len(texto)}). Queda registrado con su nombre y la hora.')
+    return None
+
+
+# ── Fechas plausibles de un papel o una licencia ────────────────────────────
+
+#: Un año antes de este es un error de digitación (la póliza con año 0025).
+ANIO_MINIMO_PAPEL = 2000
+#: Nada que se registre hoy vence más allá de esto.
+ANIOS_MAXIMOS_ADELANTE = 15
+#: El SOAT dura un año desde el inicio de vigencia; la expedición puede ser
+#: unas semanas antes (se compra antes de que venza el anterior). Fuera de este
+#: rango, el dato está mal escrito.
+DIAS_VIGENCIA_SOAT = (330, 430)
+
+#: Una licencia sin cargar pide motivo al despachar (FORZAR simple, en el
+#: cuadro de «no se sabe»), igual que un SOAT sin cargar. No bloquea: no se
+#: sabe. Apagarlo es cambiar esta constante.
+LICENCIA_SIN_CARGAR_FRENA = True
+
+#: Categorías de la licencia de conducción en Colombia (Ley 769 de 2002).
+CATEGORIAS_LICENCIA = ('A1', 'A2', 'B1', 'B2', 'B3', 'C1', 'C2', 'C3')
+
+
+def _fecha_texto(d: date) -> str:
+    return f'{d.day:02d}/{d.month:02d}/{d.year:04d}'
+
+
+def _tope_adelante(hoy: date) -> date:
+    try:
+        return hoy.replace(year=hoy.year + ANIOS_MAXIMOS_ADELANTE)
+    except ValueError:          # 29 de febrero
+        return hoy.replace(year=hoy.year + ANIOS_MAXIMOS_ADELANTE, day=28)
+
+
+def fechas_imposibles(expedicion: Optional[date], vencimiento: Optional[date],
+                      hoy: date) -> List[str]:
+    """Lo que ninguna fecha real puede ser, en usted: un año antes de
+    `ANIO_MINIMO_PAPEL` o a más de `ANIOS_MAXIMOS_ADELANTE`, una expedición en
+    el futuro, un vencimiento igual o anterior a la expedición.
+
+    Es lo que vuelve `DATO_A_CORREGIR` una fila **ya cargada** (la RTM de
+    BDT261 que vence el mismo día en que se expidió; la póliza de TGZ653 con
+    año 0025). Solo lo imposible: una regla de verosimilitud (el SOAT de un
+    año) aplicada a lo viejo convertiría un SOAT vencido de verdad, con la
+    expedición mal escrita, en «no se sabe» — y lo sacaría del bloqueo."""
+    out = []
+    for nombre, f in (('expedición', expedicion), ('vencimiento', vencimiento)):
+        if f is None:
+            continue
+        if f.year < ANIO_MINIMO_PAPEL:
+            out.append(f'La fecha de {nombre} ({_fecha_texto(f)}) tiene el año '
+                       f'{f.year}: revise cómo quedó escrito el año.')
+        elif f > _tope_adelante(hoy):
+            out.append(f'La fecha de {nombre} ({_fecha_texto(f)}) está a más de '
+                       f'{ANIOS_MAXIMOS_ADELANTE} años: revise el año.')
+    if expedicion is not None and expedicion > hoy:
+        out.append(f'La fecha de expedición ({_fecha_texto(expedicion)}) es '
+                   f'posterior a hoy: un papel no se expide en el futuro.')
+    if (expedicion is not None and vencimiento is not None
+            and vencimiento <= expedicion):
+        out.append(f'El vencimiento ({_fecha_texto(vencimiento)}) es igual o '
+                   f'anterior a la expedición ({_fecha_texto(expedicion)}).')
+    return out
+
+
+def problemas_de_fechas(tipo: str, expedicion: Optional[date],
+                        vencimiento: Optional[date], hoy: date) -> List[str]:
+    """Por qué estas fechas no se pueden GUARDAR, en usted. Lista vacía =
+    plausibles. Lo imposible (`fechas_imposibles`) y, para el SOAT, una
+    vigencia que no es de un año (`DIAS_VIGENCIA_SOAT`).
+
+    Es la puerta de entrada (`POST /flota/vehiculo/<placa>/documentos`); lo ya
+    cargado se juzga solo con `fechas_imposibles`."""
+    out = fechas_imposibles(expedicion, vencimiento, hoy)
+    if (tipo == 'soat' and expedicion is not None and vencimiento is not None
+            and vencimiento > expedicion):
+        dias = (vencimiento - expedicion).days
+        lo, hi = DIAS_VIGENCIA_SOAT
+        if not lo <= dias <= hi:
+            out.append(f'Un SOAT dura un año, y entre la expedición y el '
+                       f'vencimiento hay {dias} días: revise las dos fechas.')
+    return out
+
+
+def problemas_de_licencia(numero: Optional[str], categoria: Optional[str],
+                          vence: Optional[date], hoy: date) -> List[str]:
+    """Por qué estos datos de licencia no se pueden guardar, en usted. Todo
+    vacío es válido: es «sin cargar», que la política trata como no se sabe."""
+    numero = (numero or '').strip()
+    categoria = (categoria or '').strip().upper()
+    if not numero and not categoria and vence is None:
+        return []
+    out = []
+    if not numero:
+        out.append('Falta el número de la licencia.')
+    if categoria not in CATEGORIAS_LICENCIA:
+        out.append('La categoría de la licencia debe ser una de: '
+                   + ', '.join(CATEGORIAS_LICENCIA) + '.')
+    if vence is None:
+        out.append('Falta la fecha de vencimiento de la licencia.')
+    else:
+        out += fechas_imposibles(None, vence, hoy)
+    return out
 
 #: Qué detector se queda ciego sin cada dato de la ficha. Lo que la bandeja
 #: dice cuando la ficha no está completa: no «falta un campo», sino qué se
@@ -108,8 +289,11 @@ def plural(n: int, singular: str, plural_: str) -> str:
 
 
 def fecha_larga(d: date) -> str:
-    """dd/mm/aaaa — como se escribe en Colombia."""
-    return d.strftime('%d/%m/%Y')
+    """dd/mm/aaaa — como se escribe en Colombia. A mano y no con `strftime`:
+    `%Y` de un año < 1000 sale sin ceros en unas plataformas y con ceros en
+    otras, y el año 0025 de la póliza de TGZ653 tiene que leerse igual en las
+    dos."""
+    return _fecha_texto(d)
 
 
 def km_legible(n: int) -> str:
@@ -141,11 +325,15 @@ def papel_por_vencer(vence: Optional[date], hoy: date) -> bool:
 
 
 def estado_de_papel(*, vence: Optional[date], no_encontrado: bool,
-                    hoy: date) -> str:
+                    hoy: date, fechas_imposibles: bool = False) -> str:
     """El estado de UN papel registrado. Uno que no está registrado es
-    `SIN_CARGAR` y lo decide quien sabe qué tipos faltan."""
+    `SIN_CARGAR` y lo decide quien sabe qué tipos faltan. Uno con fechas
+    imposibles (`problemas_de_fechas`) es `DATO_A_CORREGIR`: su vencimiento no
+    dice nada."""
     if no_encontrado:
         return NO_ENCONTRADO
+    if fechas_imposibles:
+        return DATO_A_CORREGIR
     if papel_vencido(vence, hoy):
         return VENCIDO
     if papel_por_vencer(vence, hoy):
@@ -160,6 +348,30 @@ class Papel:
     tipo: str
     estado: str                 # uno de ESTADOS_PAPEL
     vence: Optional[date] = None
+    #: Solo con `DATO_A_CORREGIR`: qué tienen de imposible las fechas.
+    problema: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class Licencia:
+    """La licencia de conducción del conductor de la ruta. Mismos estados que
+    un papel salvo `NO_ENCONTRADO` (nadie la busca: se carga o no)."""
+    estado: str                 # VIGENTE | POR_VENCER | VENCIDO | SIN_CARGAR | DATO_A_CORREGIR
+    vence: Optional[date] = None
+    problema: Optional[str] = None
+
+
+def estado_de_licencia(*, numero: Optional[str], categoria: Optional[str],
+                       vence: Optional[date], hoy: date) -> Licencia:
+    """Una licencia con número, categoría y vencimiento plausibles se juzga por
+    su fecha; sin cargar es `SIN_CARGAR`; cargada con datos imposibles, dato a
+    corregir."""
+    if not (numero or '').strip() and vence is None:
+        return Licencia(SIN_CARGAR)
+    problemas = problemas_de_licencia(numero, categoria, vence, hoy)
+    if problemas:
+        return Licencia(DATO_A_CORREGIR, vence, problemas[0])
+    return Licencia(estado_de_papel(vence=vence, no_encontrado=False, hoy=hoy), vence)
 
 
 @dataclass(frozen=True)
@@ -199,6 +411,14 @@ class Hechos:
     fuera_de_sede: bool
     ficha: str                  # completa | incompleta | sin_ficha
     ficha_falta: Tuple[str, ...]
+    #: La licencia del conductor de la ruta. **La única excepción a «todos los
+    #: campos obligatorios»**, y por la misma razón que `conductor_de_la_ruta`
+    #: puede ser `None`: la licencia es de una PERSONA, y la bandeja evalúa
+    #: vehículos sin conductor. `None` = no se evalúa (no hay a quién). El
+    #: despacho y el conductor la pasan siempre —`hechos_de_vehiculo` la lee
+    #: cuando recibe `conductor_de_la_ruta`, y
+    #: `tests/flota/test_salida_prohibida.py` lo exige por AST.
+    licencia: Optional[Licencia] = None
 
 
 @dataclass(frozen=True)
@@ -210,9 +430,19 @@ class Motivo:
     texto: str
     corto: str
 
+    @property
+    def bloquea(self) -> bool:
+        """La ley lo prohíbe y se sabe: solo sale con autorización (arriba)."""
+        return self.clave in BLOQUEAN_SALIDA
+
+    @property
+    def gravedad(self) -> str:
+        return gravedad_para_despachar(self.clave)
+
     def a_dict(self) -> dict:
         return {'clave': self.clave, 'nivel': self.nivel, 'ambito': self.ambito,
-                'frena': self.frena, 'texto': self.texto, 'corto': self.corto}
+                'frena': self.frena, 'texto': self.texto, 'corto': self.corto,
+                'bloquea': self.bloquea, 'gravedad': self.gravedad}
 
 
 # ── Un motivo por hecho ─────────────────────────────────────────────────────
@@ -250,7 +480,42 @@ def motivo_papel(p: Papel, hoy: date) -> Optional[Motivo]:
                       SALIDA if circula else GESTION, circula,
                       _mayus(f'{nombre} sin cargar: no se sabe si está al día'),
                       _mayus(f'{nombre} sin cargar'))
+    if p.estado == DATO_A_CORREGIR:
+        return Motivo(f'{p.tipo}_dato_a_corregir', AMBAR,
+                      SALIDA if circula else GESTION, circula,
+                      _mayus(f'{nombre}: dato a corregir. {p.problema or "Las fechas no son posibles."} '
+                             f'Mientras no se corrija, no se sabe si está al día.'),
+                      _mayus(f'{nombre}: dato a corregir'))
     raise ValueError(f'estado de papel desconocido: {p.estado!r}')
+
+
+def motivo_licencia(lic: Optional[Licencia], hoy: date) -> Optional[Motivo]:
+    """El motivo de la licencia del conductor de la ruta, o `None` si está
+    vigente o no hay a quién evaluar."""
+    if lic is None or lic.estado == VIGENTE:
+        return None
+    if lic.estado == VENCIDO:
+        dias = (hoy - lic.vence).days
+        return Motivo('licencia_vencida', ROJO, SALIDA, True,
+                      f'Licencia de conducción del conductor vencida desde '
+                      f'{fecha_larga(lic.vence)} (hace {plural(dias, "día", "días")})',
+                      'Licencia vencida')
+    if lic.estado == POR_VENCER:
+        dias = (lic.vence - hoy).days
+        cuando = 'hoy' if dias == 0 else f'en {plural(dias, "día", "días")}'
+        return Motivo('licencia_por_vencer', AMBAR, GESTION, False,
+                      f'Licencia de conducción vence el {fecha_larga(lic.vence)} ({cuando})',
+                      'Licencia por vencer')
+    if lic.estado == SIN_CARGAR:
+        return Motivo('licencia_sin_cargar', AMBAR, TURNO, LICENCIA_SIN_CARGAR_FRENA,
+                      'Licencia de conducción sin cargar: no se sabe si está al día',
+                      'Licencia sin cargar')
+    if lic.estado == DATO_A_CORREGIR:
+        return Motivo('licencia_dato_a_corregir', AMBAR, TURNO, LICENCIA_SIN_CARGAR_FRENA,
+                      f'Licencia de conducción: dato a corregir. {lic.problema or ""} '
+                      f'Mientras no se corrija, no se sabe si está al día.'.strip(),
+                      'Licencia: dato a corregir')
+    raise ValueError(f'estado de licencia desconocido: {lic.estado!r}')
 
 
 def motivos_de_danos(bloqueantes: int, vencidos: int, en_plazo: int) -> List[Motivo]:
@@ -352,6 +617,12 @@ def motivos_de_custodia(custodia: str, custodio_conductor_id: Optional[int],
                              'El vehículo sigue en custodia de la sede, no del '
                              'conductor de la ruta', 'Turno en la sede'))
     return salida
+
+
+def motivo_sin_poder_mirar(clave: str, texto: str) -> Motivo:
+    """Lo que el despacho advierte cuando no pudo preguntarle a la flota (sin
+    vehículo, adaptador caído). Ámbar y frena: no saber no es «está en orden»."""
+    return Motivo(clave, AMBAR, TURNO, True, texto, texto)
 
 
 def motivos_de_km(km_conocido: bool, km_dudoso: bool) -> List[Motivo]:
@@ -484,6 +755,9 @@ def evaluar(h: Hechos) -> Evaluacion:
         m = motivo_papel(p, h.hoy)
         if m is not None:
             motivos.append(m)
+    m = motivo_licencia(h.licencia, h.hoy)
+    if m is not None:
+        motivos.append(m)
     motivos += motivos_de_danos(h.danos_bloqueantes, h.danos_vencidos, h.danos_en_plazo)
     m = motivo_inspeccion(h.inspeccion, h.sale_hoy)
     if m is not None:
@@ -508,6 +782,13 @@ __all__ = [
     'ROJO', 'AMBAR', 'VERDE', 'NIVELES', 'SALIDA', 'TURNO', 'GESTION', 'AMBITOS',
     'DIAS_AVISO_PAPEL', 'PAPELES_PARA_CIRCULAR', 'NOMBRE_PAPEL', 'ESTADOS_PAPEL',
     'VIGENTE', 'VENCIDO', 'POR_VENCER', 'NO_ENCONTRADO', 'SIN_CARGAR',
+    'DATO_A_CORREGIR', 'BLOQUEAN_SALIDA', 'ROLES_AUTORIZAN_SALIDA_PROHIBIDA',
+    'MOTIVO_MINIMO_SALIDA_PROHIBIDA', 'PROHIBIDO', 'NO_SE_SABE', 'ADVERTENCIA',
+    'GRAVEDADES', 'gravedad_para_despachar', 'puede_autorizar_salida_prohibida',
+    'rol_autoriza_salida_prohibida',
+    'ANIO_MINIMO_PAPEL', 'ANIOS_MAXIMOS_ADELANTE', 'DIAS_VIGENCIA_SOAT',
+    'CATEGORIAS_LICENCIA', 'LICENCIA_SIN_CARGAR_FRENA', 'fechas_imposibles', 'problemas_de_fechas', 'problemas_de_licencia',
+    'Licencia', 'estado_de_licencia', 'motivo_licencia', 'motivo_sin_poder_mirar',
     'DETECTOR_CIEGO', 'NIVEL_TURNO_A_REVISAR', 'lineas', 'Papel', 'TareaVencida', 'Hechos', 'Motivo', 'Evaluacion',
     'evaluar', 'color_de', 'orden_de_nivel', 'estado_de_papel', 'papel_vencido',
     'papel_por_vencer', 'motivo_papel', 'motivos_de_danos', 'nivel_de_dano',
