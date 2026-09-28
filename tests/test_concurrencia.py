@@ -208,13 +208,16 @@ class TestConteoUniqueGuard:
         assert sesion1.id == sesion2.id
         assert sesion1.codigo == sesion2.codigo
 
-    def test_conteo_auditoria_permite_otra_ubicacion(self, app, db, almacen,
-                                                      producto, ub_picking,
-                                                      ub_general, inv_picking,
-                                                      usuario):
+    def test_conteo_auditoria_de_otra_ubicacion_reusa_la_del_sku(self, app, db, almacen,
+                                                                 producto, ub_picking,
+                                                                 ub_general, inv_picking,
+                                                                 usuario):
         """
-        Para un producto distinto o ubicacion distinta, se debe crear una
-        sesion nueva — el guard solo bloquea el par (producto, ubicacion).
+        Otra ubicación del MISMO producto en el mismo almacén no abre otra
+        auditoría: la unidad de un conteo contra Siesa es SKU × almacén (P0-1,
+        2026-09-27). Este test afirmaba lo contrario —«el guard solo bloquea el
+        par (producto, ubicación)»—, que era exactamente el defecto: dos cadenas
+        del mismo SKU comparando cada una su hueco contra el total de Siesa.
         """
         from app.models.inventario import UbicacionProducto
         from app.services.picking_service import PickingService
@@ -246,7 +249,7 @@ class TestConteoUniqueGuard:
         )
         db.session.commit()
 
-        # Auditoria en ub_general — ubicacion diferente, debe crear nueva
+        # Auditoria en ub_general — otra ubicación, mismo SKU: la misma cadena
         sesion2 = ConteoService.generar_auditoria_por_excepcion(
             tarea_picking_id=tareas1[0].id,
             ubicacion_id=ub_general.id,
@@ -254,4 +257,4 @@ class TestConteoUniqueGuard:
             almacen_id=almacen.id,
         )
 
-        assert sesion1.id != sesion2.id
+        assert sesion1.id == sesion2.id
