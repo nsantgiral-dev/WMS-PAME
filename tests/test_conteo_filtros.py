@@ -78,8 +78,8 @@ def _s(db, m, *, estado, alm='a1', prod='P-SIN', clase='C', origen=None,
     from app.models.ubicacion import Ubicacion
     _N[0] += 1
     a = m[alm]
-    # Un hueco por sesión (el índice de «una cadena viva por hueco»); el hijo
-    # va en el hueco de su raíz, como en la vida real.
+    # Un hueco por sesión (el índice viejo de «una cadena viva por hueco»); el
+    # hijo va en el hueco de su raíz, como en la vida real.
     if origen is not None:
         ub_id = origen.ubicacion_id
     else:
@@ -128,8 +128,11 @@ class TestLasPestanasMuestranLoQueDicen:
         # para siempre (así lo deja el servicio).
         r_aj = _s(db, m, estado='AJUSTADO')
         h_aj = _s(db, m, estado='DESCUADRE', origen=r_aj)
-        # Raíz esperando CC2 pendiente.
-        r_esp = _s(db, m, estado='SEGUNDO_CONTEO')
+        # Raíz esperando CC2 pendiente. De OTRO producto que el `suelto`: la
+        # unidad de un conteo es SKU × almacén y dos raíces vivas del mismo
+        # producto en el mismo almacén no pueden existir
+        # (`ix_sesion_conteo_sku_activa_unica`, m051conteo).
+        r_esp = _s(db, m, estado='SEGUNDO_CONTEO', prod='P-NORMA')
         h_esp = _s(db, m, estado='PENDIENTE', origen=r_esp)
         # Raíz en DESCUADRE esperando al supervisor, con su CC2 en DESCUADRE.
         r_des = _s(db, m, estado='DESCUADRE')

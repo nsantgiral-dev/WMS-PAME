@@ -733,6 +733,108 @@ class ConteoService:
                 'Si lo que pasa es que no lo encontró, use «No lo encontré».')
         return cantidad_fisica
 
+    # ── La unidad de un conteo: SKU × almacén (P0-1, 2026-09-27) ─────────────
+    #
+    # Siesa no tiene ubicaciones: la foto contra la que se compara un conteo
+    # (`consultar_foto_siesa`) es por ítem × bodega. Hasta hoy la tarea era por
+    # (producto, ubicación): un SKU en dos huecos daba dos cadenas, y cada una
+    # comparaba SU hueco contra el TOTAL de la bodega. Contando bien los dos
+    # huecos (10 + 90 = 100 = Siesa) salían dos ajustes automáticos, AJ-SAL 10
+    # y AJ-SAL 90 — Siesa en 0 con 100 unidades en el estante. Ahora una
+    # cadena cuenta el TOTAL del SKU en el almacén, y sabe dónde lo tiene el
+    # WMS para decírselo a quien cuenta (`lugares_del_sku`).
+
+    @staticmethod
+    def ubicacion_de_la_cadena(almacen_id: int, producto_id: int):
+        """La ubicación que se le pone a la raíz de una cadena nueva: el
+        `ubicacion_id`, o `None` si el almacén no tiene dónde.
+
+        No dice dónde contar —eso lo dice `lugares_del_sku`—: la columna es
+        obligatoria y la cadena es del almacén entero. `SIESA-GENERAL` si el
+        almacén la tiene (es el bin contra el que el sync cuadra la bodega,
+        `Ubicacion.es_fisica` es falso y la pantalla dice «búsquelo en todo el
+        almacén»). Si no, el hueco donde el WMS tiene más unidades de ese SKU
+        (desempate por id): es el mismo bin que el ajuste del WMS tocará.
+        """
+        from app.models.inventario import UbicacionProducto
+        from app.models.ubicacion import Ubicacion
+        general = (Ubicacion.query
+                   .filter(Ubicacion.almacen_id == almacen_id,
+                           Ubicacion.codigo == Ubicacion.CODIGO_GENERAL)
+                   .first())
+        if general is not None:
+            return general.id
+        fila = (UbicacionProducto.query
+                .join(Ubicacion, Ubicacion.id == UbicacionProducto.ubicacion_id)
+                .filter(Ubicacion.almacen_id == almacen_id,
+                        UbicacionProducto.producto_id == producto_id)
+                .order_by(UbicacionProducto.cantidad.desc(), UbicacionProducto.ubicacion_id)
+                .first())
+        return fila.ubicacion_id if fila else None
+
+    @staticmethod
+    def lugares_del_sku(producto_id: int, almacen_id: int) -> list:
+        """Dónde cree el WMS que está este SKU en el almacén: los huecos con
+        cantidad > 0, **sin la cantidad** (el conteo es ciego). Los físicos
+        primero por código; `SIESA-GENERAL` —que no es un lugar— al final como
+        `{'codigo': None, 'fisica': False}`: «y el resto del almacén».
+
+        Un hueco en 0 no se nombra: mandar a alguien a mirar un sitio donde el
+        sistema no cree que haya nada es cómo se cuenta un hueco vacío como
+        «revisé y hay 0» y se ajusta el total del SKU.
+        """
+        from app.models.inventario import UbicacionProducto
+        from app.models.ubicacion import Ubicacion
+        filas = (db.session.query(Ubicacion)
+                 .join(UbicacionProducto, UbicacionProducto.ubicacion_id == Ubicacion.id)
+                 .filter(Ubicacion.almacen_id == almacen_id,
+                         UbicacionProducto.producto_id == producto_id,
+                         UbicacionProducto.cantidad > 0)
+                 .distinct()
+                 .all())
+        fisicos = sorted({u.codigo for u in filas if u.es_fisica})
+        lugares = [{'codigo': c, 'fisica': True} for c in fisicos]
+        if any(not u.es_fisica for u in filas):
+            lugares.append({'codigo': None, 'fisica': False})
+        return lugares
+
+    @staticmethod
+    def existencia_wms_del_sku(producto_id: int, almacen_id: int) -> int:
+        """Lo que el WMS tiene de este SKU en el almacén, sumado sobre todos
+        sus huecos. Es lo comparable con la foto de Siesa (ítem × bodega); la
+        cantidad de UN hueco no lo es."""
+        from app.models.inventario import UbicacionProducto
+        from app.models.ubicacion import Ubicacion
+        total = (db.session.query(db.func.coalesce(db.func.sum(UbicacionProducto.cantidad), 0))
+                 .join(Ubicacion, Ubicacion.id == UbicacionProducto.ubicacion_id)
+                 .filter(Ubicacion.almacen_id == almacen_id,
+                         UbicacionProducto.producto_id == producto_id)
+                 .scalar())
+        return int(total or 0)
+
+    @staticmethod
+    def nueva_raiz(*, producto, almacen_id: int, tipo: str, codigo: str,
+                   ubicacion_id: int = None, **campos) -> SesionConteo:
+        """**La única forma de construir la raíz (CC1) de una cadena.** No la
+        agrega a la sesión de base de datos: cada puerta decide cómo (savepoint,
+        flush) y ANTES pregunta si ya hay una cadena viva del SKU en el almacén
+        (`SesionConteo.cadenas_vivas_del_almacen`) — lo exige el trinquete.
+
+        `ubicacion_id=None` → `ubicacion_de_la_cadena`. Solo la auditoría de
+        picking la fija (el hueco de la tarea: ahí descongela y ajusta el WMS).
+        """
+        if ubicacion_id is None:
+            ubicacion_id = ConteoService.ubicacion_de_la_cadena(almacen_id, producto.id)
+        if ubicacion_id is None:
+            raise ValueError(
+                'Este almacén no tiene ubicación general ni un hueco con este producto: '
+                'no hay dónde registrar el conteo. Configure el almacén primero.')
+        campos.setdefault('estado', EstadoConteo.PENDIENTE)
+        campos.setdefault('maneja_lote', False)
+        return SesionConteo(codigo=codigo, tipo=tipo, ubicacion_id=ubicacion_id,
+                            almacen_id=almacen_id, producto_id=producto.id,
+                            producto_codigo_siesa=producto.codigo_siesa, **campos)
+
     @staticmethod
     def vista_hud(sesion: SesionConteo) -> dict:
         """Lo que el HUD de conteo muestra del producto y del lugar — ciego:
@@ -745,11 +847,19 @@ class ConteoService:
         (`Ubicacion.es_fisica`). Sin layout, todo NB1 está en `SIESA-GENERAL`:
         ahí lo que se pinta en grande es el PRODUCTO y «buscalo en toda la
         bodega».
+
+        **Se cuenta el total del SKU en el almacén** (P0-1, 2026-09-27): la
+        foto de Siesa es por ítem × bodega. `lugares` son todos los sitios
+        donde el WMS lo tiene (`lugares_del_sku`, sin cantidades) y quien
+        cuenta los suma en un solo total. `ubicacion` queda para las pantallas
+        viejas en caché; el HUD de hoy pinta `lugares`.
         """
         p = sesion.producto
         ub = sesion.ubicacion
         factor = (p.factor_conversion or 1) if p else 1
         return {
+            'lugares': (ConteoService.lugares_del_sku(sesion.producto_id, sesion.almacen_id)
+                        if sesion.producto_id and sesion.almacen_id else []),
             'ubicacion': ub.codigo if ub else '',
             'ubicacion_fisica': bool(ub and ub.es_fisica),
             'producto_codigo': p.codigo if p else '',
@@ -954,10 +1064,8 @@ class ConteoService:
         if not sesion.es_segundo_conteo:
             otra = SesionConteo.query.filter(
                 SesionConteo.id != sesion.id,
-                SesionConteo.producto_id == sesion.producto_id,
-                SesionConteo.ubicacion_id == sesion.ubicacion_id,
-                SesionConteo.almacen_id == sesion.almacen_id,
-                SesionConteo.raiz_con_cadena_viva(incluye_descuadre=True),
+                SesionConteo.cadenas_vivas_del_almacen(
+                    sesion.almacen_id, sesion.producto_id, incluye_descuadre=True),
             ).first()
             if otra:
                 raise ValueError(
@@ -2488,7 +2596,7 @@ class ConteoService:
 
     @staticmethod
     def observacion_que_la_vuelve_vieja(sesion: SesionConteo):
-        """¿Otra cadena del mismo hueco dejó vieja la foto de esta? Descripción,
+        """¿Otra cadena del mismo SKU en el almacén dejó vieja la foto de esta? Descripción,
         o `None`.
 
         El ajuste es un delta fijado contra la foto de Siesa del conteo. Ese
@@ -2513,10 +2621,15 @@ class ConteoService:
             return None
         from sqlalchemy import and_, or_
         propias = ConteoService._ids_de_la_cadena(sesion)
+        # **Del mismo SKU en el mismo almacén, no del mismo hueco** (P0-1,
+        # 2026-09-27): la foto es por ítem × bodega, así que un ajuste de OTRO
+        # hueco del mismo SKU también es un ajuste que esta foto no vio.
+        # Mirar el hueco dejaba ajustar dos cadenas del mismo SKU contra el
+        # mismo total de Siesa.
         otra = (SesionConteo.query
                 .filter(
                     SesionConteo.producto_id == sesion.producto_id,
-                    SesionConteo.ubicacion_id == sesion.ubicacion_id,
+                    SesionConteo.almacen_id == sesion.almacen_id,
                     ~SesionConteo.id.in_(propias),
                     or_(
                         and_(SesionConteo.foto_siesa_at > sesion.foto_siesa_at,
@@ -2532,12 +2645,12 @@ class ConteoService:
         if otra is None:
             return None
         if otra.estado == EstadoConteo.AJUSTANDO:
-            return f'el conteo {otra.codigo} del mismo hueco tiene un ajuste en camino a Siesa'
+            return f'el conteo {otra.codigo} del mismo producto en este almacén tiene un ajuste en camino a Siesa'
         if otra.estado == EstadoConteo.AJUSTADO and (
                 otra.foto_siesa_at is None or otra.foto_siesa_at <= sesion.foto_siesa_at):
-            return (f'el conteo {otra.codigo} del mismo hueco ya se ajustó en Siesa '
+            return (f'el conteo {otra.codigo} del mismo producto en este almacén ya se ajustó en Siesa '
                     f'después de esta foto')
-        return f'el conteo {otra.codigo} del mismo hueco es posterior a éste'
+        return f'el conteo {otra.codigo} del mismo producto en este almacén es posterior a éste'
 
     @staticmethod
     def motivo_bloqueo_ajuste(sesion: SesionConteo, *, exige_foto_inicio: bool = True):
@@ -2575,7 +2688,7 @@ class ConteoService:
            defensa para cualquier otro camino que escriba una sesión.
         5. **Un traslado entrante vivo** para esta bodega y este SKU en el
            instante del conteo (`traslado_entrante_vivo`).
-        6. **Otra cadena del mismo hueco dejó vieja esta foto** (2026-09-23):
+        6. **Otra cadena del mismo SKU en el almacén dejó vieja esta foto** (2026-09-23):
            un conteo posterior, un ajuste en vuelo, o uno aceptado por Siesa
            después de esta foto (`observacion_que_la_vuelve_vieja`).
         7. **Mercancía en proceso** (2026-09-23): en el instante del conteo
@@ -3217,14 +3330,16 @@ class ConteoService:
 
         diferencia = cantidad_fisica - foto['teorico']
         codigo = f'AUD-{_ahora_bogota().strftime("%Y%m%d%H%M%S")}-{str(uuid.uuid4())[:6].upper()}'
-        sesion = SesionConteo(
-            codigo=codigo,
-            tipo='EXCEPCION_PICKING',
-            ubicacion_id=tarea.ubicacion_id,
+        # `ubicacion_id` fijo al hueco de la tarea: ahí descongela y ajusta el
+        # WMS el job. La cantidad, en cambio, es la del SKU en el ALMACÉN
+        # (quien llama pasa `existencia_wms_del_sku`): es lo comparable con la
+        # foto de Siesa, que es por ítem × bodega (P0-1, 2026-09-27).
+        sesion = ConteoService.nueva_raiz(
+            producto=producto,
             almacen_id=tarea.almacen_id,
-            producto_id=tarea.producto_id,
-            producto_codigo_siesa=producto.codigo_siesa,
-            maneja_lote=False,
+            tipo='EXCEPCION_PICKING',
+            codigo=codigo,
+            ubicacion_id=tarea.ubicacion_id,
             tarea_picking_id=tarea.id,
             cantidad_fisica=cantidad_fisica,
             fuente_existencia='SIESA',
@@ -3324,12 +3439,14 @@ class ConteoService:
         from app.models.producto import Producto
         producto = Producto.query.get(producto_id)
 
-        # Evitar duplicados: si ya existe un conteo activo para este (producto, ubicacion)
-        # no crear otro — la excepción ya fue reportada.
+        # Evitar duplicados: si ya existe un conteo vivo de este producto EN
+        # ESTE ALMACÉN no se crea otro — la excepción ya fue reportada. Por SKU
+        # × almacén y no por hueco (P0-1, 2026-09-27): un conteo compara contra
+        # la foto de Siesa del ítem en la bodega entera, así que una cadena en
+        # otro hueco del mismo SKU ya lo está midiendo.
         existente = SesionConteo.query.filter(
-            SesionConteo.producto_id == producto_id,
-            SesionConteo.ubicacion_id == ubicacion_id,
-            SesionConteo.raiz_con_cadena_viva(incluye_descuadre=True),
+            SesionConteo.cadenas_vivas_del_almacen(almacen_id, producto_id,
+                                                   incluye_descuadre=True),
         ).first()
         if existente:
             # Si lo que ya existe es un conteo del plan que nadie empezó, pasa a
@@ -3356,17 +3473,16 @@ class ConteoService:
 
         codigo = f'AUD-{_ahora_bogota().strftime("%Y%m%d%H%M%S")}-{str(uuid.uuid4())[:6].upper()}'
 
-        sesion = SesionConteo(
-            codigo=codigo,
-            tipo='EXCEPCION_PICKING',
-            ubicacion_id=ubicacion_id,
-            almacen_id=almacen_id,
-            producto_id=producto_id,
-            producto_codigo_siesa=producto.codigo_siesa if producto else None,
-            maneja_lote=False,
-            tarea_picking_id=tarea_picking_id,
-            estado='PENDIENTE',
-        )
+        if producto is None:
+            raise ValueError(f'Producto {producto_id} no encontrado')
+        # La cadena es del SKU en el almacén: su ubicación es la del almacén
+        # (`ubicacion_de_la_cadena`), no la del picking — quien cuenta suma
+        # todos los lugares. El hueco del faltante sigue en la tarea de picking.
+        sesion = ConteoService.nueva_raiz(
+            producto=producto, almacen_id=almacen_id, tipo='EXCEPCION_PICKING',
+            codigo=codigo, tarea_picking_id=tarea_picking_id,
+            ubicacion_id=(ConteoService.ubicacion_de_la_cadena(almacen_id, producto_id)
+                          or ubicacion_id))
         db.session.add(sesion)
         db.session.flush()
 
@@ -3508,16 +3624,16 @@ class ConteoService:
     @staticmethod
     def crear_conteo_manual(almacen_id: int, producto_codigo: str, operario_id: int = None) -> dict:
         """
-        Crea sesiones de conteo manual para todas las ubicaciones donde hay stock
-        del producto en el almacén — o una en `SIESA-GENERAL` si no tiene
-        ninguna (ver el comentario junto a `ubicacion_ids`).
+        Crea **una** sesión de conteo manual del producto en el almacén: la
+        unidad de un conteo contra Siesa es SKU × almacén (P0-1, 2026-09-27),
+        y quien cuenta suma todos los lugares donde el WMS lo tiene.
 
-        Si una ubicación ya tiene una sesión PENDIENTE (creada por el barrido
-        DIARIO_ABC u otro conteo manual, pero nadie la ha abierto todavía), la
-        reclama en vez de omitirla: le reasigna el operario forzado y la cuenta
-        como parte del resultado. Solo se omite (`omitidas_ya_activas`) una
-        ubicación cuyo conteo YA está siendo contado de verdad —
-        EN_PROCESO o SEGUNDO_CONTEO — porque ahí sí hay trabajo físico en
+        Si el SKU ya tiene una cadena viva en el almacén y es un PENDIENTE
+        (creado por el barrido DIARIO_ABC u otro conteo manual, pero nadie lo
+        ha abierto todavía), la reclama en vez de omitirla: le reasigna el
+        operario forzado y la cuenta como parte del resultado. Se omite
+        (`omitidas_ya_activas`) si la cadena YA está siendo contada de verdad
+        — EN_PROCESO o SEGUNDO_CONTEO — porque ahí sí hay trabajo físico en
         marcha que no se puede pisar a ciegas.
 
         operario_id (opcional): fuerza el CC1 a ese operario específico —
@@ -3570,6 +3686,12 @@ class ConteoService:
             except LookupError as e:
                 raise ValueError(str(e)) from e
 
+        # **Una cadena por SKU × almacén** (P0-1, 2026-09-27). Antes: una por
+        # cada fila de `UbicacionProducto`, incluidas las de cantidad 0 — con
+        # el SKU en dos huecos, dos cadenas comparando cada una su parte contra
+        # el total de Siesa; y sobre un hueco vacío, «revisé y hay 0» ajustaba
+        # el stock entero del SKU. Quien cuenta ve todos los lugares
+        # (`vista_hud`) y cuenta el total.
         registros = (
             UbicacionProducto.query
             .join(Ubicacion)
@@ -3595,48 +3717,38 @@ class ConteoService:
                 '[CONTEO MANUAL] %s sin ubicación en almacén %s — se cuenta en %s',
                 codigo, almacen_id, Ubicacion.CODIGO_GENERAL)
 
-        # Pre-cargar sesiones activas en una sola query — evita N+1 en el loop
-        activas_por_ubicacion = {
-            s.ubicacion_id: s
-            for s in SesionConteo.query.filter(
-                SesionConteo.producto_id == producto.id,
-                SesionConteo.ubicacion_id.in_(ubicacion_ids),
-                SesionConteo.raiz_con_cadena_viva(incluye_descuadre=False),
-            ).all()
-        }
+        existente = (SesionConteo.query
+                     .filter(SesionConteo.cadenas_vivas_del_almacen(
+                         almacen_id, producto.id, incluye_descuadre=False))
+                     .order_by(SesionConteo.id)
+                     .first())
 
         creadas = []
         reclamadas = []
         omitidas = 0
         from app.utils.fecha import fecha_hoy_bogota
         hoy = fecha_hoy_bogota()
-        for ubicacion_id in ubicacion_ids:
-            existente = activas_por_ubicacion.get(ubicacion_id)
-            if existente:
-                # Sin operario forzado no hay nada que reclamar — mismo
-                # comportamiento de siempre (evita duplicar sobre un PENDIENTE
-                # que ya espera a que alguien lo tome).
-                if existente.estado != EstadoConteo.PENDIENTE or not operario_forzado:
-                    omitidas += 1
-                    continue
+        if existente:
+            # Sin operario forzado no hay nada que reclamar — mismo
+            # comportamiento de siempre (evita duplicar sobre un PENDIENTE
+            # que ya espera a que alguien lo tome).
+            if existente.estado != EstadoConteo.PENDIENTE or not operario_forzado:
+                omitidas += 1
+            else:
                 existente.operario_id = operario_forzado.id
                 # Pasa a ser un conteo forzado: el dispensador prioriza tipo
                 # MANUAL (ver MobileService._orden_cola_preasignada). Sin esto
                 # conservaba su lugar viejo en la cola del operario.
                 existente.tipo = 'MANUAL'
                 reclamadas.append(existente.codigo)
-                continue
+        else:
             sesion_codigo = f'CC-MANUAL-{hoy}-{str(uuid.uuid4())[:6].upper()}'
-            sesion = SesionConteo(
-                codigo=sesion_codigo,
-                tipo='MANUAL',
-                clasificacion_abc=producto.clasificacion_abc or 'C',
-                ubicacion_id=ubicacion_id,
+            sesion = ConteoService.nueva_raiz(
+                producto=producto,
                 almacen_id=almacen_id,
-                producto_id=producto.id,
-                producto_codigo_siesa=producto.codigo_siesa,
-                maneja_lote=False,
-                estado='PENDIENTE',
+                tipo='MANUAL',
+                codigo=sesion_codigo,
+                clasificacion_abc=producto.clasificacion_abc or 'C',
                 operario_id=operario_forzado.id if operario_forzado else None,
             )
             db.session.add(sesion)

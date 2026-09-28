@@ -333,11 +333,31 @@ class SesionConteo(db.Model):
                  sqlite_where=db.text(
                      "estado IN ('PENDIENTE', 'EN_PROCESO', 'SEGUNDO_CONTEO') "
                      "AND es_segundo_conteo = 0")),
+        # **La unidad de un conteo contra Siesa es SKU × almacén** (m051conteo,
+        # 2026-09-27). Siesa no tiene ubicaciones: su existencia es por ítem ×
+        # bodega. El índice de arriba es por hueco y dejaba abrir dos cadenas
+        # del mismo SKU en dos huecos, cada una comparando SU hueco contra el
+        # TOTAL de la bodega — dos ajustes falsos. Mismo predicado que el de
+        # arriba (la carrera API ↔ scheduler ocurre en esos tres estados); los
+        # demás estados de una cadena viva los guarda
+        # `SesionConteo.cadena_viva_del_sku` en el código.
+        db.Index('ix_sesion_conteo_sku_activa_unica',
+                 'producto_id', 'almacen_id',
+                 unique=True,
+                 postgresql_where=db.text(
+                     "estado IN ('PENDIENTE', 'EN_PROCESO', 'SEGUNDO_CONTEO') "
+                     "AND es_segundo_conteo = false"),
+                 sqlite_where=db.text(
+                     "estado IN ('PENDIENTE', 'EN_PROCESO', 'SEGUNDO_CONTEO') "
+                     "AND es_segundo_conteo = 0")),
     )
 
     @classmethod
     def raiz_con_cadena_viva(cls, *, incluye_descuadre: bool):
-        """Condición SQL: «esta fila es la raíz de una cadena viva del hueco».
+        """Condición SQL de ESTADO: «esta fila es la raíz de una cadena viva».
+        No lleva llave: nadie la llama suelta — la llave (SKU × almacén) se la
+        pone `cadenas_vivas_del_almacen`, la única que la usa (trinquete en
+        `tests/test_conteo_unidad_sku_almacen.py`).
 
         **Una definición para toda puerta que abre una cadena** — el generador
         ABC, el watchdog, la auditoría por excepción y el conteo manual. Se
@@ -364,15 +384,46 @@ class SesionConteo(db.Model):
         (`ConteoService.reabrir_bloqueado` / `cancelar_bloqueado`), no abrir
         otra cadena al lado.
 
-        El índice único `ix_sesion_conteo_activa_unica` sigue con su predicado
-        original (PENDIENTE/EN_PROCESO/SEGUNDO_CONTEO): cambiarlo exige
-        migración, y la carrera que ese índice cierra —dos CC1 simultáneos
-        creados por la API y el scheduler— ocurre en esos tres estados.
+        Los índices únicos (`ix_sesion_conteo_activa_unica` por hueco y, desde
+        m051conteo, `ix_sesion_conteo_sku_activa_unica` por SKU × almacén)
+        llevan el predicado PENDIENTE/EN_PROCESO/SEGUNDO_CONTEO: la carrera que
+        cierran —dos CC1 simultáneos de la API y el scheduler— ocurre en esos
+        tres estados; el resto lo guarda esta condición.
         """
         estados = list(EstadoConteo.CADENA_EN_CURSO)
         if incluye_descuadre:
             estados.append(EstadoConteo.DESCUADRE)
         return db.and_(cls.es_segundo_conteo.is_(False), cls.estado.in_(estados))
+
+    @classmethod
+    def cadenas_vivas_del_almacen(cls, almacen_id, producto_ids=None, *,
+                                  incluye_descuadre: bool):
+        """Condición SQL: raíces de cadenas vivas de estos SKU **en este
+        almacén**. **La única pregunta «¿ya hay una cadena de este producto?»**
+        que hace el código (2026-09-27, P0-1).
+
+        La unidad de un conteo contra Siesa es **SKU × almacén**: la foto de
+        Siesa es por ítem × bodega (`f400`, sin ubicaciones), así que dos
+        cadenas del mismo SKU en dos huecos del mismo almacén comparan cada una
+        su parte contra el MISMO total — y ajustan las dos. Antes esta pregunta
+        se hacía por `(producto, ubicación)` en cada puerta; ahora ninguna
+        puerta la escribe: `raiz_con_cadena_viva` solo se llama desde acá
+        (`tests/test_conteo_unidad_sku_almacen.py` lo exige por AST).
+
+        `producto_ids`: un id, una lista, o `None` (todo el almacén: el
+        watchdog). Sin almacén no hay respuesta posible y la condición es falsa
+        para todo — quien abre sin almacén no llega hasta acá.
+        """
+        if not almacen_id:
+            return db.false()
+        condiciones = [cls.almacen_id == almacen_id,
+                       cls.raiz_con_cadena_viva(incluye_descuadre=incluye_descuadre)]
+        if producto_ids is not None:
+            if isinstance(producto_ids, int):
+                condiciones.append(cls.producto_id == producto_ids)
+            else:
+                condiciones.append(cls.producto_id.in_(list(producto_ids)))
+        return db.and_(*condiciones)
 
     def lista_conteos_descartados(self) -> list:
         """`conteos_descartados` leído. Un JSON ilegible no se oculta: se

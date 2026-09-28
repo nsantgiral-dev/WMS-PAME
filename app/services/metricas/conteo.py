@@ -528,28 +528,28 @@ def _carga_y_cobertura(cadenas, almacen_id, clase, hoy, ahora) -> dict:
     """Cuánto exige el plan ABC y cuánto se está contando. **Foto de hoy**: no
     depende de `desde`/`hasta` (el universo es el stock de hoy; no hay historia
     de `UbicacionProducto` para reconstruir el de otro día), y el filtro `tipo`
-    no aplica — cualquier conteo de un hueco lo deja al día, venga del plan, de
-    un conteo manual o de una auditoría.
+    no aplica — cualquier conteo del producto en el almacén lo deja al día,
+    venga del plan, de un conteo manual o de una auditoría.
 
-    El universo, los huecos y «el último conteo» salen de las MISMAS funciones
-    que usa el generador (`abc_service`). La cobertura es por hueco
-    (producto × ubicación), que es lo que el generador programa y lo que
-    `ultimo_conteo_por_hueco` fecha; la exigencia diaria es `ceil(productos /
+    El universo y «el último conteo» salen de las MISMAS funciones que usa el
+    generador (`abc_service`). La cobertura es por **SKU × almacén** (P0-1,
+    2026-09-27: la unidad de un conteo contra Siesa), que es lo que el
+    generador programa y lo que `ultimo_conteo_por_sku` fecha; la exigencia
+    diaria es `ceil(productos /
     intervalo)`: lo que haría falta contar por día para cumplir los intervalos
     de `conteo_politica`. El generador NO crea eso: crea hasta el cupo diario
     del almacén. Por eso `por_almacen` pone lado a lado el cupo configurado, la
     exigencia y el ritmo real.
 
     El ritmo cuenta las cadenas CERRADAS (con veredicto) en los últimos 28 días
-    operativos sobre huecos de ese universo. Una cerrada con error que todavía
-    no se ajustó (DESCUADRE) no deja el hueco «al día» para el generador — si
+    operativos sobre productos de ese universo. Una cerrada con error que todavía
+    no se ajustó (DESCUADRE) no deja el producto «al día» para el generador — si
     hay muchas, el ciclo real es más largo que la estimación.
     """
     from app.models.almacen import Almacen
     from app.models.producto_clasificacion_abc import ProductoClasificacionABC
     from app.services import conteo_politica as politica
-    from app.services.abc_service import (huecos_con_stock,
-                                          ultimo_conteo_por_hueco, umbral_al_dia,
+    from app.services.abc_service import (ultimo_conteo_por_sku, umbral_al_dia,
                                           universo_conteo_ciclico)
 
     q_alm = db.session.query(ProductoClasificacionABC.almacen_id).distinct()
@@ -559,8 +559,8 @@ def _carga_y_cobertura(cadenas, almacen_id, clase, hoy, ahora) -> dict:
     clases = [clase] if clase else list(politica.CLASES)
 
     ventana_desde = hoy - timedelta(days=VENTANA_RITMO_DIAS - 1)
-    cerradas_por_hueco = Counter(
-        (c.raiz.almacen_id, c.raiz.producto_id, c.raiz.ubicacion_id)
+    cerradas_por_sku = Counter(
+        (c.raiz.almacen_id, c.raiz.producto_id)
         for c in cadenas if c.cerrada and _en(c.dia, ventana_desde, hoy))
     sin_dia = sum(1 for c in cadenas if c.cerrada and c.dia is None)
 
@@ -571,13 +571,12 @@ def _carga_y_cobertura(cadenas, almacen_id, clase, hoy, ahora) -> dict:
             frecuencia = politica.intervalo_dias(cl)
             productos = universo_conteo_ciclico(alm_id, cl)
             ids = [p.id for p in productos]
-            pares = {(h.producto_id, h.ubicacion_id) for h in huecos_con_stock(alm_id, ids)}
-            ultimo = ultimo_conteo_por_hueco(ids, sorted({u for _, u in pares}))
+            ultimo = ultimo_conteo_por_sku(alm_id, ids)
             umbral = umbral_al_dia(cl, ahora)
-            al_dia = sum(1 for par in pares if ultimo.get(par) and ultimo[par] >= umbral)
-            nunca = sum(1 for par in pares if not ultimo.get(par))
-            sin_contar = len(pares) - al_dia
-            cerradas = sum(cerradas_por_hueco.get((alm_id, p, u), 0) for p, u in pares)
+            al_dia = sum(1 for p in ids if ultimo.get(p) and ultimo[p] >= umbral)
+            nunca = sum(1 for p in ids if not ultimo.get(p))
+            sin_contar = len(ids) - al_dia
+            cerradas = sum(cerradas_por_sku.get((alm_id, p), 0) for p in ids)
             por_dia = cerradas / VENTANA_RITMO_DIAS
             if por_dia > 0:
                 dias_ciclo, motivo_ciclo = round(sin_contar / por_dia, 1), None
@@ -594,8 +593,7 @@ def _carga_y_cobertura(cadenas, almacen_id, clase, hoy, ahora) -> dict:
                 'clase': cl,
                 'frecuencia_dias': frecuencia,
                 'universo_productos': len(productos),
-                'universo_huecos': len(pares),
-                'contados_en_frecuencia': _metrica(al_dia, len(pares)),
+                'contados_en_frecuencia': _metrica(al_dia, len(ids)),
                 'nunca_contados': nunca,
                 'sin_contar_en_ventana': sin_contar,
                 'exigencia_diaria': math.ceil(len(productos) / frecuencia) if productos else 0,

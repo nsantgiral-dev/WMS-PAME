@@ -1662,6 +1662,37 @@ function conteoHudPintar() {
   if (el) el.innerHTML = conteoHudHtml(h);
 }
 
+/** «A, B y C». Recibe HTML ya escapado. */
+function _conteoUnirConY(partes) {
+  if (partes.length <= 1) return partes.join('');
+  return partes.slice(0, -1).join(', ') + ' y ' + partes[partes.length - 1];
+}
+
+/** Dónde buscar. **Se cuenta el TOTAL del producto en el almacén** (P0-1,
+ *  2026-09-27): la foto de Siesa es por ítem × bodega, y un conteo de un solo
+ *  hueco fabricaba un faltante del tamaño de lo que había en el otro. El
+ *  servidor manda `lugares` —dónde lo tiene el WMS, SIN cantidades (conteo
+ *  ciego)— y la pantalla pide sumar todos en un solo total. Sin `lugares`
+ *  (servidor viejo) queda el comportamiento de antes. */
+function _conteoHudLugarHtml(t) {
+  const lugares = Array.isArray(t.lugares) ? t.lugares : null;
+  if (!lugares) {
+    return t.ubicacion_fisica
+      ? `<div style="font-size:var(--fs-xs);color:var(--tx3);">UBICACIÓN</div>
+       <div style="font-size:var(--fs-2xl);font-weight:900;letter-spacing:1px;color:var(--tx);">${esc(t.ubicacion)}</div>`
+      : `<div style="font-size:20px;font-weight:800;color:var(--warn-tx);">📍 Búsquelo en toda la bodega</div>
+       <div style="font-size:var(--fs-xs);color:var(--tx2);margin-top:4px;">Este producto no tiene una ubicación física registrada: revise todos los sitios donde pueda estar.</div>`;
+  }
+  const fisicos = lugares.filter(l => l && l.fisica && l.codigo).map(l => `<b>${esc(l.codigo)}</b>`);
+  const hayResto = lugares.some(l => l && !l.fisica);
+  const donde = fisicos.length
+    ? `El sistema lo tiene en ${_conteoUnirConY(hayResto ? fisicos.concat(['el resto del almacén']) : fisicos)}. Revise también cualquier otro sitio donde pueda estar.`
+    : 'El sistema no le tiene un lugar marcado: revise todos los sitios donde pueda estar.';
+  return `<div style="font-size:var(--fs-xs);color:var(--tx3);letter-spacing:1px;">CUENTE TODO EL ALMACÉN</div>
+       <div style="font-size:20px;font-weight:800;color:var(--warn-tx);margin-top:2px;">📍 Un solo total: sume lo de todos los lugares</div>
+       <div style="font-size:var(--fs-sm);color:var(--tx2);margin-top:6px;line-height:1.45;">${donde}</div>`;
+}
+
 /** El HTML del HUD. Todo dato va con esc(). */
 function conteoHudHtml(h) {
   const t = h.tarea;
@@ -1670,11 +1701,7 @@ function conteoHudHtml(h) {
   const unidadEmp = t.unidad_empaque || 'EMPAQUE';
   const puedeCamara = OPERARIO && OPERARIO.puede_usar_camara;
   const ultimoPaso = h.pasos.length ? h.pasos[h.pasos.length - 1].etiqueta : '';
-  const lugar = t.ubicacion_fisica
-    ? `<div style="font-size:var(--fs-xs);color:var(--tx3);">UBICACIÓN</div>
-       <div style="font-size:var(--fs-2xl);font-weight:900;letter-spacing:1px;color:var(--tx);">${esc(t.ubicacion)}</div>`
-    : `<div style="font-size:20px;font-weight:800;color:var(--warn-tx);">📍 Búsquelo en toda la bodega</div>
-       <div style="font-size:var(--fs-xs);color:var(--tx2);margin-top:4px;">Este producto no tiene una ubicación física registrada: revise todos los sitios donde pueda estar.</div>`;
+  const lugar = _conteoHudLugarHtml(t);
   const empaque = factor > 1
     ? `<div style="font-size:var(--fs-sm);color:var(--ok-tx);margin-top:8px;font-weight:700;">📦 ${esc(unidadEmp)} de ${esc(factor)} und — escanear el código de la ${esc(unidadEmp)} suma ${esc(factor)}</div>`
     : '';
@@ -2076,7 +2103,8 @@ async function conteoHudNoEncontrado() {
     alerta(`Ya contó ${h.total}. Si no hay más, use «Ya revisé todo — contar ${h.total}».`, 'advertencia');
     return;
   }
-  const donde = h.tarea.ubicacion_fisica ? `en ${esc(h.tarea.ubicacion)}` : 'en toda la bodega';
+  const donde = Array.isArray(h.tarea.lugares) ? 'en todo el almacén'
+    : (h.tarea.ubicacion_fisica ? `en ${esc(h.tarea.ubicacion)}` : 'en toda la bodega');
   const ok = await _modalConfirmar(
     `¿Buscó <b>${esc(h.tarea.producto_nombre || h.tarea.producto_codigo || '')}</b> ${donde} y no lo encontró?\n\n`
     + 'No se cuenta como cero: el conteo queda para que el líder decida si se vuelve a buscar.',
@@ -2429,12 +2457,12 @@ function _ceRender(d) {
 }
 
 function _ceCobertura(c, r) {
-  const filas = (c.filas || []).filter(f => f.universo_huecos > 0);
+  const filas = (c.filas || []).filter(f => f.universo_productos > 0);
   const cuerpoFilas = filas.length ? filas.map(f => `
     <div style="border-top:1px solid var(--brd);padding:8px 0;">
       <div style="font-size:var(--fs-xs);font-weight:700;color:var(--tx);">${esc(f.almacen || '')} · clase ${esc(f.clase)} <span style="color:var(--tx3);font-weight:400;">(objetivo: cada ${_ceNum(f.frecuencia_dias)} días)</span></div>
       <div style="font-size:var(--fs-xs);color:var(--tx2);line-height:1.6;">
-        Universo: ${_ceNum(f.universo_productos)} productos · ${_ceNum(f.universo_huecos)} huecos<br>
+        Universo: ${_ceNum(f.universo_productos)} productos<br>
         Contados dentro de su intervalo: ${_ceMetrica(f.contados_en_frecuencia)}<br>
         Sin contar: <b>${_ceNum(f.sin_contar_en_ventana)}</b> (nunca contados ${_ceNum(f.nunca_contados)})<br>
         Para cumplir el intervalo harían falta <b>${_ceNum(f.exigencia_diaria)}</b>/día · ritmo real ${_ceNum(f.ritmo.por_dia, 2)}/día (${_ceNum(f.ritmo.cadenas_cerradas)} en ${_ceNum(f.ritmo.dias_ventana)} días)<br>

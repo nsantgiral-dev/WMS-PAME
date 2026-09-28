@@ -77,32 +77,35 @@ def universo_conteo_ciclico(almacen_id: int, clasificacion: str) -> list:
     )
 
 
-def huecos_con_stock(almacen_id: int, producto_ids: list) -> list:
-    """Los `UbicacionProducto` con stock > 0 de esos productos en el almacén —
-    los huecos que el generador puede convertir en tarea, uno por
-    (producto, ubicación). Compartida con las estadísticas por la misma razón
-    que `universo_conteo_ciclico`."""
+def skus_con_lote(almacen_id: int, producto_ids: list) -> set:
+    """Los productos que tienen alguna fila con lote en el almacén: su conteo
+    lo pide (`maneja_lote`). Antes se miraba el hueco de la tarea; con la
+    cadena por SKU × almacén (P0-1), basta con que un lugar lo tenga."""
     if not producto_ids:
-        return []
-    return (
-        UbicacionProducto.query
-        .join(Ubicacion)
-        .filter(
-            UbicacionProducto.producto_id.in_(producto_ids),
-            UbicacionProducto.cantidad > 0,
-            Ubicacion.almacen_id == almacen_id
-        ).all()
-    )
+        return set()
+    return {pid for (pid,) in (
+        db.session.query(UbicacionProducto.producto_id)
+        .join(Ubicacion, Ubicacion.id == UbicacionProducto.ubicacion_id)
+        .filter(UbicacionProducto.producto_id.in_(producto_ids),
+                Ubicacion.almacen_id == almacen_id,
+                UbicacionProducto.lote.isnot(None),
+                UbicacionProducto.lote != '')
+        .distinct().all())}
 
 
-def ultimo_conteo_por_hueco(producto_ids: list, ubicacion_ids: list) -> dict:
-    """`{(producto_id, ubicacion_id): fecha_cierre del último conteo completado}`.
+def ultimo_conteo_por_sku(almacen_id: int, producto_ids: list) -> dict:
+    """`{producto_id: fecha_cierre del último conteo completado}` en el almacén.
 
     **Qué cuenta como «contado» para el plan, en un solo sitio.** La usan el
-    generador (que no vuelve a pedir un hueco contado dentro de su intervalo)
-    y la cobertura de las estadísticas de conteo. Dos definiciones de «último
-    conteo» harían que el reporte diga «al día» sobre un hueco que el
+    generador (que no vuelve a pedir un SKU contado dentro de su intervalo),
+    el watchdog y la cobertura de las estadísticas de conteo. Dos definiciones
+    de «último conteo» harían que el reporte diga «al día» sobre un SKU que el
     generador va a volver a pedir, o al revés.
+
+    **Por SKU × almacén, no por hueco** (P0-1, 2026-09-27): un conteo compara
+    contra la foto de Siesa del ítem en la bodega entera, así que contarlo en
+    cualquier lugar lo deja al día en todos. Antes la llave era
+    `(producto, ubicación)`, y un SKU en dos huecos se programaba dos veces.
 
     Completado = `MATCH` o `AJUSTADO`, en cualquier fila de la cadena (un CC2
     que cuadra cierra en MATCH con su propia fecha). GROUP BY en SQL: no carga
@@ -114,23 +117,33 @@ def ultimo_conteo_por_hueco(producto_ids: list, ubicacion_ids: list) -> dict:
     no cambia nada; para atribuir un conteo a un DÍA sí — por eso las
     estadísticas no usan esta fecha para eso.
     """
-    if not producto_ids or not ubicacion_ids:
+    if not producto_ids or not almacen_id:
         return {}
     filas = (
         db.session.query(
             SesionConteo.producto_id,
-            SesionConteo.ubicacion_id,
             func.max(SesionConteo.fecha_cierre).label('ultima')
         )
         .filter(
+            SesionConteo.almacen_id == almacen_id,
             SesionConteo.producto_id.in_(producto_ids),
-            SesionConteo.ubicacion_id.in_(ubicacion_ids),
             SesionConteo.estado.in_(['MATCH', 'AJUSTADO'])
         )
-        .group_by(SesionConteo.producto_id, SesionConteo.ubicacion_id)
+        .group_by(SesionConteo.producto_id)
         .all()
     )
-    return {(r.producto_id, r.ubicacion_id): r.ultima for r in filas}
+    return {r.producto_id: r.ultima for r in filas}
+
+
+def skus_con_cadena_viva(almacen_id: int, producto_ids: list = None, *,
+                         incluye_descuadre: bool = True) -> set:
+    """Los productos con una cadena viva en el almacén (la pregunta de
+    `SesionConteo.cadenas_vivas_del_almacen`, en lote)."""
+    return {pid for (pid,) in (
+        db.session.query(SesionConteo.producto_id)
+        .filter(SesionConteo.cadenas_vivas_del_almacen(
+            almacen_id, producto_ids, incluye_descuadre=incluye_descuadre))
+        .distinct().all())}
 
 
 def umbral_al_dia(clasificacion: str, ahora: datetime = None) -> datetime:
@@ -424,17 +437,13 @@ class ABCService:
             tope = politica.tope_de_generacion(almacen_id)
             informe['cupo'] = tope
 
-            # Pre-cargar todos los conteos activos del almacén en un set (producto_id, ubicacion_id)
-            # para evitar N+1 en el check de duplicados dentro del loop
-            conteos_activos = {
-                (sc.producto_id, sc.ubicacion_id)
-                for sc in SesionConteo.query.filter(
-                    SesionConteo.almacen_id == almacen_id,
-                    SesionConteo.raiz_con_cadena_viva(incluye_descuadre=True)
-                ).with_entities(SesionConteo.producto_id, SesionConteo.ubicacion_id).all()
-            }
+            # Los SKU con una cadena viva en el almacén — la unidad de un conteo
+            # contra Siesa es SKU × almacén (P0-1, 2026-09-27): antes se
+            # miraba (producto, ubicación) y un SKU en dos huecos recibía dos
+            # overrides que ajustaban los dos contra el mismo total.
+            conteos_activos = skus_con_cadena_viva(almacen_id, incluye_descuadre=True)
 
-            candidatos = []   # (clave, producto, reg, clase, picks, umbral)
+            candidatos = []   # (clave, producto, clase, picks, umbral)
             # Clases susceptibles de override — consulta por almacén
             for clase, umbral in WATCHDOG_UMBRAL.items():
                 productos_clase = (
@@ -478,62 +487,57 @@ class ABCService:
                 )
                 picks_por_producto = {pid: cnt for pid, cnt in picks_rows}
 
-                # Pre-cargar UbicacionProducto solo para productos que superan el umbral
                 ids_sobre_umbral = [
                     p.id for p in productos_clase
                     if picks_por_producto.get(p.id, 0) >= umbral
                 ]
                 if not ids_sobre_umbral:
                     continue
-                registros_por_prod: dict = {}
-                for reg in (
-                    UbicacionProducto.query
+                # Con stock en el almacén: sin stock no hay nada que contar.
+                # Nunca sobre filas en 0 (P0-1).
+                con_stock = {pid for (pid,) in (
+                    db.session.query(UbicacionProducto.producto_id)
                     .join(Ubicacion)
                     .filter(
                         UbicacionProducto.producto_id.in_(ids_sobre_umbral),
                         UbicacionProducto.cantidad > 0,
                         Ubicacion.almacen_id == almacen_id
-                    ).all()
-                ):
-                    registros_por_prod.setdefault(reg.producto_id, []).append(reg)
-                ultimo = ultimo_conteo_por_hueco(
-                    ids_sobre_umbral,
-                    sorted({r.ubicacion_id for regs in registros_por_prod.values() for r in regs}))
+                    ).distinct().all())}
+                ultimo = ultimo_conteo_por_sku(almacen_id, sorted(con_stock))
 
                 for producto in productos_clase:
                     picks = picks_por_producto.get(producto.id, 0)
-                    if picks < umbral:
+                    if picks < umbral or producto.id not in con_stock:
                         continue
-                    for reg in registros_por_prod.get(producto.id, []):
-                        if (producto.id, reg.ubicacion_id) in conteos_activos:
-                            informe['omitidos_ya_activos'] += 1
-                            continue
-                        ult = ultimo.get((producto.id, reg.ubicacion_id))
-                        if ult and ult >= sin_reabrir_desde:
-                            informe['omitidos_recien_contados'] += 1
-                            continue
-                        # Más anómalo primero: picks sobre su propio umbral.
-                        clave = (-(picks / umbral), producto.id, reg.ubicacion_id)
-                        candidatos.append((clave, producto, reg, clase, picks, umbral))
+                    if producto.id in conteos_activos:
+                        informe['omitidos_ya_activos'] += 1
+                        continue
+                    ult = ultimo.get(producto.id)
+                    if ult and ult >= sin_reabrir_desde:
+                        informe['omitidos_recien_contados'] += 1
+                        continue
+                    # Más anómalo primero: picks sobre su propio umbral.
+                    clave = (-(picks / umbral), producto.id)
+                    candidatos.append((clave, producto, clase, picks, umbral))
 
             elegibles, excluidos = politica.filtrar_elegibles(
-                almacen_id, [(c[1].id, c[2].ubicacion_id) for c in candidatos])
+                almacen_id, [(c[1].id, None) for c in candidatos])
             informe['excluidos_elegibilidad'] = excluidos
-            elegibles = set(elegibles)
-            candidatos = sorted((c for c in candidatos if (c[1].id, c[2].ubicacion_id) in elegibles),
+            elegibles = {e[0] for e in elegibles}
+            candidatos = sorted((c for c in candidatos if c[1].id in elegibles),
                                 key=lambda c: c[0])
             informe['omitidos_por_cupo'] = max(0, len(candidatos) - tope['tope'])
+            con_lote = skus_con_lote(almacen_id, [c[1].id for c in candidatos[:tope['tope']]])
 
-            for _, producto, reg, clase, picks, umbral in candidatos[:tope['tope']]:
+            for _, producto, clase, picks, umbral in candidatos[:tope['tope']]:
                 # Verificación en DB justo antes del insert — reduce ventana de race condition
                 # entre dos workers que hayan pasado simultáneamente el check en memoria.
                 ya_existe = SesionConteo.query.filter(
-                    SesionConteo.producto_id == producto.id,
-                    SesionConteo.ubicacion_id == reg.ubicacion_id,
-                    SesionConteo.raiz_con_cadena_viva(incluye_descuadre=True)
+                    SesionConteo.cadenas_vivas_del_almacen(
+                        almacen_id, producto.id, incluye_descuadre=True)
                 ).first()
                 if ya_existe:
-                    conteos_activos.add((producto.id, reg.ubicacion_id))
+                    conteos_activos.add(producto.id)
                     continue
 
                 codigo = (
@@ -541,16 +545,14 @@ class ABCService:
                     f'{_ahora_bogota().strftime("%Y%m%d")}-'
                     f'{str(uuid.uuid4())[:6].upper()}'
                 )
-                sesion = SesionConteo(
-                    codigo=codigo,
-                    tipo='WATCHDOG_ABC',
-                    clasificacion_abc='A',   # override temporal
-                    ubicacion_id=reg.ubicacion_id,
+                from app.services.conteo_service import ConteoService
+                sesion = ConteoService.nueva_raiz(
+                    producto=producto,
                     almacen_id=almacen_id,
-                    producto_id=producto.id,
-                    producto_codigo_siesa=producto.codigo_siesa,
-                    maneja_lote=bool(getattr(reg, 'lote', None)),
-                    estado='PENDIENTE'
+                    tipo='WATCHDOG_ABC',
+                    codigo=codigo,
+                    clasificacion_abc='A',   # override temporal
+                    maneja_lote=producto.id in con_lote,
                 )
                 from sqlalchemy.exc import IntegrityError as _IE_wd
                 _sp = db.session.begin_nested()
@@ -558,7 +560,7 @@ class ABCService:
                     db.session.add(sesion)
                     db.session.flush()
                     _sp.commit()
-                    conteos_activos.add((producto.id, reg.ubicacion_id))  # evita duplicar en misma corrida
+                    conteos_activos.add(producto.id)  # evita duplicar en misma corrida
                     overrides.append({
                         'producto_id': producto.id,
                         'producto_codigo': producto.codigo_siesa or producto.codigo,
@@ -569,7 +571,7 @@ class ABCService:
                     })
                 except _IE_wd:
                     _sp.rollback()
-                    logger.warning(f'[ABC WATCHDOG] Sesión duplicada ignorada — prod {producto.id} ubic {reg.ubicacion_id}')
+                    logger.warning(f'[ABC WATCHDOG] Sesión duplicada ignorada — prod {producto.id} almacén {almacen_id}')
 
             db.session.commit()
         except Exception as e:
@@ -608,9 +610,10 @@ class ABCService:
         `ceil(productos_de_la_clase / frecuencia)`, sumado cada noche sin mirar
         si alguien había contado el anterior.
 
-        Qué: los huecos (producto × ubicación con stock) del universo ABC del
-        almacén que están vencidos —nunca contados, o contados hace más que el
-        intervalo de su clase— y que no tienen una cadena viva. `clasificacion`
+        Qué: los productos del universo ABC del almacén (con stock en algún
+        lugar) que están vencidos —nunca contados, o contados hace más que el
+        intervalo de su clase— y que no tienen una cadena viva. **Uno por SKU ×
+        almacén** (P0-1, 2026-09-27): la foto de Siesa es por ítem × bodega. `clasificacion`
         (A, B o C) restringe a una clase; `None` las considera todas juntas, que
         es lo que hace el cron: el cupo es del almacén, no de la clase.
 
@@ -633,67 +636,60 @@ class ABCService:
         politica.bloquear_cupo(almacen_id)
         tope = politica.tope_de_generacion(almacen_id)
 
-        candidatos = []          # (clave, clase, producto, reg)
+        candidatos = []          # (clave, clase, producto)
         total_universo = 0
         omitidos_por_pendiente = 0
         omitidos_por_intervalo = 0
         for clase in clases:
-            # Solo productos con stock > 0 en este almacén — sin stock no hay nada que contar
+            # Solo productos con stock > 0 en este almacén — sin stock no hay
+            # nada que contar. **Un candidato por SKU × almacén** (P0-1,
+            # 2026-09-27): antes uno por hueco con stock, y un SKU en dos
+            # huecos daba dos cadenas comparando cada una su parte contra el
+            # total de Siesa.
             todos_productos = universo_conteo_ciclico(almacen_id, clase)
             total_universo += len(todos_productos)
             if not todos_productos:
                 continue
             producto_por_id = {p.id: p for p in todos_productos}
             producto_ids = list(producto_por_id)
-            todos_registros = huecos_con_stock(almacen_id, producto_ids)
-            ubic_ids_all = sorted({r.ubicacion_id for r in todos_registros})
-            if not ubic_ids_all:
-                continue
-            activos_set = {
-                (s.ubicacion_id, s.producto_id)
-                for s in SesionConteo.query.filter(
-                    SesionConteo.producto_id.in_(producto_ids),
-                    SesionConteo.ubicacion_id.in_(ubic_ids_all),
-                    SesionConteo.raiz_con_cadena_viva(incluye_descuadre=True)
-                ).with_entities(SesionConteo.ubicacion_id, SesionConteo.producto_id).all()
-            }
+            activos = skus_con_cadena_viva(almacen_id, producto_ids, incluye_descuadre=True)
             # GROUP BY en SQL evita cargar todas las filas históricas en memoria
-            ultimo_por_par = ultimo_conteo_por_hueco(producto_ids, ubic_ids_all)
+            ultimo_por_sku = ultimo_conteo_por_sku(almacen_id, producto_ids)
             umbral = umbral_al_dia(clase, ahora)
 
-            for reg in todos_registros:
-                if (reg.ubicacion_id, reg.producto_id) in activos_set:
+            for pid in producto_ids:
+                if pid in activos:
                     omitidos_por_pendiente += 1
                     continue
-                ultimo_fecha = ultimo_por_par.get((reg.producto_id, reg.ubicacion_id))
+                ultimo_fecha = ultimo_por_sku.get(pid)
                 if ultimo_fecha and ultimo_fecha >= umbral and not adelantar:
                     omitidos_por_intervalo += 1
                     continue
                 atraso = politica.atraso_relativo(ultimo_fecha, clase, ahora)
-                clave = politica.clave_de_seleccion(
-                    atraso, clase, (reg.producto_id, reg.ubicacion_id))
-                candidatos.append((clave, clase, producto_por_id[reg.producto_id], reg))
+                clave = politica.clave_de_seleccion(atraso, clase, (pid,))
+                candidatos.append((clave, clase, producto_por_id[pid]))
 
         elegibles, excluidos = politica.filtrar_elegibles(
-            almacen_id, [(p.id, r.ubicacion_id) for _, _, p, r in candidatos])
-        elegibles = set(elegibles)
-        candidatos = sorted((c for c in candidatos if (c[2].id, c[3].ubicacion_id) in elegibles),
+            almacen_id, [(p.id, None) for _, _, p in candidatos])
+        elegibles = {e[0] for e in elegibles}
+        candidatos = sorted((c for c in candidatos if c[2].id in elegibles),
                             key=lambda c: c[0])
         seleccion = candidatos[:tope['tope']]
+        con_lote = skus_con_lote(almacen_id, [p.id for _, _, p in seleccion])
 
         # Crear tareas — savepoint por ítem para tolerar race conditions entre
         # scheduler y API sin perder todos los inserts por un único conflicto.
         # La re-verificación dentro del savepoint cierra la ventana entre el
-        # activos_set (leído antes) y el INSERT efectivo.
+        # conjunto de activos (leído antes) y el INSERT efectivo.
         from sqlalchemy.exc import IntegrityError as _IE
+        from app.services.conteo_service import ConteoService
         creadas_por_clase = {c: 0 for c in clases}
-        for _, clase, producto, reg in seleccion:
+        for _, clase, producto in seleccion:
             sp = db.session.begin_nested()
             try:
                 ya_existe = SesionConteo.query.filter(
-                    SesionConteo.ubicacion_id == reg.ubicacion_id,
-                    SesionConteo.producto_id == producto.id,
-                    SesionConteo.raiz_con_cadena_viva(incluye_descuadre=True)
+                    SesionConteo.cadenas_vivas_del_almacen(
+                        almacen_id, producto.id, incluye_descuadre=True)
                 ).first()
                 if ya_existe:
                     sp.rollback()
@@ -704,16 +700,13 @@ class ABCService:
                     f'{_ahora_bogota().strftime("%Y%m%d")}-'
                     f'{str(uuid.uuid4())[:6].upper()}'
                 )
-                sesion = SesionConteo(
-                    codigo=codigo,
-                    tipo='DIARIO_ABC',
-                    clasificacion_abc=clase,
-                    ubicacion_id=reg.ubicacion_id,
+                sesion = ConteoService.nueva_raiz(
+                    producto=producto,
                     almacen_id=almacen_id,
-                    producto_id=producto.id,
-                    producto_codigo_siesa=producto.codigo_siesa,
-                    maneja_lote=bool(getattr(reg, 'lote', None)),
-                    estado='PENDIENTE'
+                    tipo='DIARIO_ABC',
+                    codigo=codigo,
+                    clasificacion_abc=clase,
+                    maneja_lote=producto.id in con_lote,
                 )
                 db.session.add(sesion)
                 db.session.flush()
@@ -721,7 +714,7 @@ class ABCService:
                 creadas_por_clase[clase] += 1
             except _IE:
                 sp.rollback()
-                logger.warning(f'[ABC] Sesión duplicada ignorada — prod {producto.id} ubic {reg.ubicacion_id}')
+                logger.warning(f'[ABC] Sesión duplicada ignorada — prod {producto.id} almacén {almacen_id}')
 
         try:
             db.session.commit()
@@ -738,7 +731,7 @@ class ABCService:
         elif tope['mensaje']:
             mensaje = tope['mensaje']
         else:
-            mensaje = 'no se generó: no hay huecos vencidos sin una cadena viva'
+            mensaje = 'no se generó: no hay productos vencidos sin una cadena viva'
         if omitidos_por_cupo:
             mensaje += f' · {omitidos_por_cupo} vencido(s) esperan cupo'
         advertencias = politica.advertencias_de_configuracion()

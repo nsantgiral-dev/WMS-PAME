@@ -515,7 +515,8 @@ def clave_de_seleccion(atraso: float, clase, desempate) -> tuple:
 
 def filtrar_elegibles(almacen_id: int, candidatos: list) -> tuple:
     """**Punto de extensión: qué huecos NO se deben programar hoy aunque estén
-    vencidos.** Recibe `[(producto_id, ubicacion_id), ...]` y devuelve
+    vencidos.** Recibe `[(producto_id, _), ...]` (el segundo elemento no se
+    mira: la unidad del plan es SKU × almacén desde el 2026-09-27) y devuelve
     `(elegibles, excluidos)`, donde `excluidos` es `{motivo: cantidad}`.
 
     Hoy no excluye nada. Acá —y en ningún otro sitio— se conecta la exclusión

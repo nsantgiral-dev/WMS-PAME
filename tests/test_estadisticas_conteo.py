@@ -320,11 +320,11 @@ class TestMundoDorado:
     def test_carga_y_cobertura(self, db, dorado, tienda):
         filas = {f['clase']: f for f in _reporte()['carga_cobertura']['filas']}
         assert set(filas) == {'A', 'B', 'C'}
-        assert filas['A']['universo_huecos'] == 0 and filas['A']['exigencia_diaria'] == 0
+        assert filas['A']['universo_productos'] == 0 and filas['A']['exigencia_diaria'] == 0
         fila = filas['C']
         assert fila['frecuencia_dias'] == 600   # intervalo C vigente (conteo_politica)
         # Nueve huecos clase C (el POSITEM del fixture `tienda` no tiene ABC).
-        assert (fila['universo_productos'], fila['universo_huecos']) == (9, 9)
+        assert fila['universo_productos'] == 9
         # Al día = MATCH o AJUSTADO (la regla del generador): OK_CC1, OK_CC2,
         # OK_CC3 y el ajuste auto que el DLQ llevó a AJUSTADO. El AJUSTANDO y
         # los DESCUADRE todavía no cuentan como contados para el plan.
@@ -501,7 +501,7 @@ class TestCoberturaSinRitmo:
         db.session.commit()
         (fila,) = _m().calcular_estadisticas_conteo()['carga_cobertura']['filas'][:1]
         assert fila['clase'] == 'A'
-        assert (fila['universo_huecos'], fila['nunca_contados'], fila['sin_contar_en_ventana']) == (1, 1, 1)
+        assert (fila['universo_productos'], fila['nunca_contados'], fila['sin_contar_en_ventana']) == (1, 1, 1)
         assert fila['exigencia_diaria'] == 1
         assert fila['dias_para_cerrar_ciclo'] is None
         assert 'sin ritmo medible' in fila['sin_estimacion_por']
@@ -511,16 +511,14 @@ class TestCoberturaSinRitmo:
         arbol = ast.parse(METRICAS.read_text(encoding='utf-8'))
         llamadas = {n.func.id for n in ast.walk(arbol)
                     if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)}
-        for f in ('universo_conteo_ciclico', 'huecos_con_stock',
-                  'ultimo_conteo_por_hueco', 'umbral_al_dia'):
+        for f in ('universo_conteo_ciclico', 'ultimo_conteo_por_sku', 'umbral_al_dia'):
             assert f in llamadas, f
         gen = ast.parse((RAIZ / 'app' / 'services' / 'abc_service.py').read_text(encoding='utf-8'))
         fn = next(n for n in ast.walk(gen) if isinstance(n, ast.FunctionDef)
                   and n.name == 'generar_tareas_conteo_diario')
         del_gen = {n.func.id for n in ast.walk(fn)
                    if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)}
-        for f in ('universo_conteo_ciclico', 'huecos_con_stock',
-                  'ultimo_conteo_por_hueco', 'umbral_al_dia'):
+        for f in ('universo_conteo_ciclico', 'ultimo_conteo_por_sku', 'umbral_al_dia'):
             assert f in del_gen, f'el generador dejó de usar {f}: dos definiciones'
 
 
@@ -806,7 +804,7 @@ const d = {
     por_almacen: [{ almacen: X, bodega_siesa: X, cupo_diario: 60, ritmo_real_por_dia: 1, dias_ventana: 28,
       exigencia_diaria_plan: 20, pendientes_vivas: 5, dias_de_cupo_pendientes: 0.1, mensaje_generador: X }],
     filas: [{
-    almacen: X, clase: X, frecuencia_dias: 15, universo_productos: 1, universo_huecos: 1,
+    almacen: X, clase: X, frecuencia_dias: 15, universo_productos: 1,
     contados_en_frecuencia: m, nunca_contados: 1, sin_contar_en_ventana: 1, exigencia_diaria: 1,
     ritmo: { por_dia: 0, cadenas_cerradas: 0, dias_ventana: 28 }, dias_para_cerrar_ciclo: null, sin_estimacion_por: X }] },
   rezago: { pendiente: { [X]: 1 }, en_curso: {}, total_pendiente: 1, total_en_curso: 0, excluidos: {} },

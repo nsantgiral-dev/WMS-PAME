@@ -1494,9 +1494,14 @@ class PickingService:
         # manual (ver rama de arriba).
         if resultado in ('ENCONTRADO_COMPLETO', 'ENCONTRADO_PARCIAL'):
             from app.services.conteo_service import ConteoService
+            # La cantidad del SKU en TODO el almacén, no la del hueco: el ajuste
+            # se mide contra la foto de Siesa, que es por ítem × bodega. Con el
+            # SKU en dos huecos, la del hueco fabricaba un faltante del tamaño
+            # del otro (P0-1, 2026-09-27).
             ConteoService.ajustar_desde_auditoria_picking(
                 tarea,
-                cantidad_fisica=(reg.cantidad if reg else 0),
+                cantidad_fisica=ConteoService.existencia_wms_del_sku(
+                    tarea.producto_id, tarea.almacen_id),
                 aprobador_id=admin_id,
             )
 

@@ -7867,3 +7867,54 @@ el barrido de `create_app`).
 ejercitar); el gerente ve el equipo pero no los candidatos ni el reparto (403,
 a propósito); `test_pestanas_por_rol` no mide los GET de un clic dentro de la
 pestaña.
+
+---
+
+## Conteo: la unidad contra Siesa es SKU × almacén (2026-09-27, C1)
+
+**Qué pasaba (P0-1).** La foto de Siesa con la que se compara un conteo es por
+ítem × bodega (`InvFecha` no trae ubicaciones), y la tarea era por
+(producto, **ubicación**). Un SKU en dos huecos daba dos cadenas y cada una
+comparaba su hueco contra el TOTAL: contando bien 10 + 90 = 100 = Siesa salían
+**AJ-SAL 10 y AJ-SAL 90** automáticos. Las guardas anti-doble-ajuste
+(`raiz_con_cadena_viva`, «observación vieja», reabrir, el índice) miraban el
+hueco. El conteo manual creaba tareas también sobre filas en 0 («revisé y hay
+0» ajustaba todo el SKU), y la auditoría de picking ajustaba con la cantidad
+WMS **del hueco**. En producción, 14 SKUs de NB1 con filas en > 1 hueco.
+
+**Ahora.** Una cadena por **SKU × almacén** en toda puerta: generador y
+watchdog (`abc_service`: un candidato por SKU con stock, `ultimo_conteo_por_sku`,
+`skus_con_cadena_viva`), conteo manual (una, nunca sobre filas en 0),
+auditoría por faltante. La raíz la construye **solo**
+`ConteoService.nueva_raiz` (ubicación = `SIESA-GENERAL`, o el hueco con más
+unidades); la pregunta «¿ya hay una cadena?» es **solo**
+`SesionConteo.cadenas_vivas_del_almacen`. `observacion_que_la_vuelve_vieja` y
+`reabrir_bloqueado` miran (producto, almacén). La auditoría de picking manda
+`existencia_wms_del_sku` (el total). El HUD (`vista_hud.lugares`,
+`_conteoHudLugarHtml`) nombra **todos** los lugares donde el WMS lo tiene —sin
+cantidades, sin los vacíos— y pide un solo total. La cobertura de las
+estadísticas es por SKU (se fue `universo_huecos`). Migración **`m051conteo`**:
+índice parcial único `ix_sesion_conteo_sku_activa_unica (producto_id,
+almacen_id)`; antes cancela las PENDIENTE sobrantes de un mismo SKU (medido en
+producción: cero) y se detiene si hay dos EN CURSO.
+
+**Verificado contra producción (solo lectura, 2026-09-27):** los 14 SKUs de NB1
+con > 1 fila vueltos a un SQLite local con el código real: el generador creó
+una cadena por SKU y el conteo manual no abrió ninguna segunda. Con la foto de
+Siesa producción (GET): ARTESA2318 10 + 1 → teórico NB1 **11**, BELLESB1382 781
+→ 781, PAPELSP9218 110 → 110 — el total cuadra, el hueco no. **Hallazgo:** 8 de
+los 13 SKUs con código (PAPELSP6948 673, PAPELSP6741 3.290 en CROSS-DOCK…)
+**no tienen fila en InvFecha NB1**: el WMS los tiene y Siesa NB1 no; su conteo
+no ajusta (foto ausente, Regla 0). PAPELSP9964: WMS 100, teórico 0.
+
+**Trinquete:** `tests/test_conteo_unidad_sku_almacen.py` (la reproducción de la
+auditoría en verde; AST: `raiz_con_cadena_viva` solo desde su llave, raíces
+solo desde `nueva_raiz`, toda puerta que abre pregunta antes —inventario:
+`ajustar_desde_auditoria_picking`—, ningún filtro por `SesionConteo.ubicacion_id`
+fuera de 3 declarados; meta-tests y piso; la migración contra un SQLite propio).
+
+**Lo que NO cubre:** el job `AJUSTE_CONTEO` aplica el delta en el WMS al hueco
+de la sesión (`SIESA-GENERAL` o el mayor) con piso 0; el resto lo rehace la
+carga de las 7:00 (P3 de la auditoría, sin tocar). El intercalado de
+`mobile_service` sigue ofreciendo conteos por hueco (C5, con v3). Las sesiones
+viejas con ubicación física siguen válidas: el HUD nombra todos los lugares.
