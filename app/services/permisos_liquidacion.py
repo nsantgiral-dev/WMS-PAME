@@ -32,7 +32,7 @@ que la grande. `tests/test_permiso_compuesto.py` descubre por AST toda ruta que
 llega a un encolador de plata y exige que llame a la función del permiso
 declarado para ese encolador. `tests/test_roles_plata.py` fija la matriz.
 
-Todas reciben el `Usuario` (o `None`) y devuelven `bool`. Ninguna consulta la
+Todas reciben el `Usuario` (o `None`) y devuelven `bool`; ninguna consulta la
 base.
 """
 from app.routes._auth_helpers import Roles
@@ -130,3 +130,23 @@ def puede_ver_jobs(usuario, tipos) -> bool:
     tipos = [t for t in (tipos or []) if t]
     return (bool(tipos) and set(tipos) <= set(TIPOS_JOB_DE_LIQUIDACION)
             and puede_ver_liquidacion(usuario))
+
+
+def quien_opera_la_plata() -> dict:
+    """Cuántas personas ACTIVAS tienen cada rol de la plata, y el aviso si
+    alguno está vacío (validación de la plata, 2026-09-26): sin liquidador ni
+    líder de cartera, toda la plata cae en el admin — que es justo lo que los
+    roles vinieron a evitar. Lee la base (la única función de este módulo que
+    lo hace)."""
+    from app.models.usuario import Usuario
+    cuenta = {}
+    for rol in (Roles.LIQUIDADOR, Roles.LIDER_CARTERA):
+        cuenta[rol] = Usuario.query.filter_by(rol=rol, activo=True).count()
+    avisos = []
+    if not cuenta[Roles.LIQUIDADOR]:
+        avisos.append('No hay ningún liquidador activo: liquidar, registrar cobros y enviar '
+                      'a Siesa quedan solo en el administrador.')
+    if not cuenta[Roles.LIDER_CARTERA]:
+        avisos.append('No hay ningún líder de cartera activo: confirmar retenciones, corregir '
+                      'cobros y autorizar créditos quedan solo en el administrador.')
+    return {'por_rol': cuenta, 'avisos': avisos}

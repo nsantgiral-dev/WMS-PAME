@@ -492,6 +492,10 @@ def clasificar_filas(filas: list, gracia_por_sucursal: dict = None,
                 tolerancia: no es mora ni cuenta.
     · DEVUELTA  la mercancía volvió (RECHAZADO), o parcial con la NC ya
                 creada y pendiente de aprobar: no cuenta.
+
+    Un **faltante de retorno** (la devolución terminó sin NC) es DEUDA con
+    `faltante_de_retorno` en RECHAZADO y en PARCIAL por igual — decisión
+    pendiente del dueño sobre quién lo paga (2026-09-26).
     """
     from app.models.recaudo_entrega import EstadoEntrega
     tol, _ = tolerancia()
@@ -532,8 +536,21 @@ def clasificar_filas(filas: list, gracia_por_sucursal: dict = None,
         cuenta, clase = saldo, DEUDA
         if tarea is not None:
             r = _recaudo_de(tarea)
+            # Un faltante de retorno (la devolución terminó sin NC: contada en
+            # cero o cancelada) NO es mercancía devuelta: Siesa deja la
+            # factura abierta. Mientras el dueño no decida quién paga ese
+            # faltante, se clasifica igual en RECHAZADO y en PARCIAL: DEUDA,
+            # declarada (validación de la plata, 2026-09-26; decisión pendiente).
+            from app.services.devolucion_ruta import nc_no_llegara as _nc_no_llegara
+            _faltante = (r is not None
+                         and r.estado_entrega in (EstadoEntrega.RECHAZADO, EstadoEntrega.PARCIAL)
+                         and not r.siesa_nc_triggered and _nc_no_llegara(r))
+            if _faltante:
+                e['faltante_de_retorno'] = True
             if r is None:
                 clase = EN_RUTA
+            elif _faltante:
+                clase = DEUDA
             elif r.estado_entrega == EstadoEntrega.RECHAZADO:
                 clase, cuenta = DEVUELTA, Decimal(0)
             elif r.estado_entrega == EstadoEntrega.ENTREGADO_SIN_PAGO:

@@ -769,6 +769,12 @@ def avisos_sin_canal(ayer_inicio, ayer_fin) -> list:
         lineas.extend(rezago_liquidacion.lineas_de_aviso_sin_cerrar())
 
     _seguro('las rutas sin cerrar', _rutas_sin_cerrar)
+
+    def _roles_de_la_plata():
+        from app.services.permisos_liquidacion import quien_opera_la_plata
+        lineas.extend(f'⚠ {a}' for a in quien_opera_la_plata()['avisos'])
+
+    _seguro('los roles de la plata', _roles_de_la_plata)
     return lineas
 
 

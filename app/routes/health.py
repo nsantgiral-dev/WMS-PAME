@@ -441,6 +441,15 @@ def health_siesa():
     except Exception as _e_ka:
         resultado['kardex_auto'] = {'error': str(_e_ka)[:200]}
 
+    # Quién opera la plata (validación 2026-09-26): 0 liquidadores o 0 líderes
+    # de cartera activos = toda la plata cae en el administrador.
+    try:
+        from app.services.permisos_liquidacion import quien_opera_la_plata
+        resultado['roles_de_la_plata'] = quien_opera_la_plata()
+        resultado['advertencias'].extend(resultado['roles_de_la_plata']['avisos'])
+    except Exception as _e_rp:
+        resultado['roles_de_la_plata'] = {'error': str(_e_rp)[:200]}
+
     # CONTADO CONTRAENTREGA vs CRÉDITO REAL (2026-09-24). Umbral, tabla de
     # días vigente y su fuente (copia del PDF, env o la consulta dinámica), y
     # en qué difiere la copia del maestro vivo si la consulta existe. Un

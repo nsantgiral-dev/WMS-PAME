@@ -1024,7 +1024,11 @@ def avisos(ahora: datetime = None) -> dict:
         if esp is not None and esp['vencida']:
             retencion_esperando.append({**_resumen_devolucion(d), 'horas': esp['horas'],
                                         'recaudo_id': rec.id,
-                                        'retencion': rec.motivo_descuento})
+                                        'retencion': rec.motivo_descuento,
+                                        'ruta_id': rec.ruta_id,
+                                        'pedido': getattr(rec.tarea, 'numero_pedido_siesa', None),
+                                        'conductor': getattr(getattr(rec.ruta, 'conductor', None),
+                                                             'nombre', None)})
     rc_esperando = []
     limite = ahora - timedelta(hours=HORAS_RC_ESPERANDO_NC)
     for job in SiesaJob.query.filter(SiesaJob.tipo == 'RECIBO_CAJA',
@@ -1073,10 +1077,13 @@ def lineas_de_aviso(a: dict = None) -> list:
         out.append(f'⚠ {len(a["rc_esperando_nc_48h"])} recibo(s) de caja esperando su nota '
                    f'crédito hace más de {HORAS_RC_ESPERANDO_NC} h')
     if a.get('retencion_parcial_sin_contar_24h'):
+        det = '; '.join(f"ruta {x.get('ruta_id')} · {x.get('pedido') or '—'} · "
+                        f"{x.get('conductor') or 'sin conductor'}"
+                        for x in a['retencion_parcial_sin_contar_24h'][:10])
         out.append(f'⚠ {len(a["retencion_parcial_sin_contar_24h"])} retención(es) de entregas '
                    f'parciales esperando que bodega cuente la devolución hace más de '
-                   f'{HORAS_RETENCION_ESPERANDO_CONTEO} h: el documento de la retención no '
-                   f'sale hasta que se cuente')
+                   f'{HORAS_RETENCION_ESPERANDO_CONTEO} h ({det}): el documento de la '
+                   f'retención no sale hasta que se cuente')
     return out
 
 

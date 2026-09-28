@@ -128,6 +128,11 @@ class TestAvisosSinCanal:
         assert any('No se pudo revisar la cartera' in l for l in lineas)
 
     def test_nada_que_avisar_es_lista_vacia(self, db):
+        # Con quién opere la plata (sin liquidador ni líder de cartera activos
+        # el resumen lo avisa: 2026-09-26).
+        from tests.test_cartera_retencion import _usuario
+        _usuario(db, 'liquidador')
+        _usuario(db, 'lider_cartera')
         assert alertas_service.avisos_sin_canal(*self._ventana()) == []
 
     def test_el_resumen_no_arma_consultas_de_invariantes_propias(self):

@@ -2246,11 +2246,19 @@ def _ejecutar_job(job: SiesaJob) -> dict:
                     f'reintentar esta retención.')
             # Espera corta: el RC de este mismo recaudo suele resolverse en
             # el mismo ciclo del DLQ (segundos) — no es la recepción física
-            # de horas/días que sí justifica el default de 30 min.
+            # de horas/días que sí justifica el default de 30 min. Salvo que
+            # el RC esté a su vez esperando la NC de una devolución (lo
+            # desbloquea bodega, horas o días): entonces la misma espera del
+            # RC, y no un reintento cada 2 minutos por días (validación
+            # 2026-09-26).
+            _rc_espera_nc = bool((_rc_vivo.get_payload() or {}).get('depende_de_nc')
+                                 and not recaudo.siesa_nc_triggered)
             raise DependenciaPendiente(
                 f'DOCUMENTO_CONTABLE_RET job={job.id}: DC espera el RC del '
-                f'recaudo {recaudo.id}. Sigue pendiente.',
-                espera_minutos=2,
+                f'recaudo {recaudo.id}'
+                + (', que espera la nota crédito de la devolución' if _rc_espera_nc else '')
+                + '. Sigue pendiente.',
+                espera_minutos=30 if _rc_espera_nc else 2,
             )
 
         # Argumentos ANTES del pre-flag (un dato ausente no deja la cuenta

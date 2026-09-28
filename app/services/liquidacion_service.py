@@ -1245,12 +1245,16 @@ class LiquidacionService:
         if vivo is not None:
             raise ValueError(f'Hay un envío de este recibo en curso (job {vivo.id}): '
                              'espere a que termine')
-        antes = foto(recaudo, ['siesa_rc_triggered', 'siesa_rc_resultado', 'siesa_rc_consec'])
+        antes = foto(recaudo, ['siesa_rc_triggered', 'siesa_rc_resultado', 'siesa_rc_consec',
+                               'rc_cobro_otro_mes'])
         if entro:
             recaudo.anotar_documento_siesa('RC', 'ENVIADO', consec=(consecutivo or None))
         else:
             recaudo.siesa_rc_triggered = False
             recaudo.anotar_documento_siesa('RC', 'FALLIDO')
+            # No hay recibo: la marca de «fechado en otro mes» era de ese
+            # intento; el próximo envío la decide de nuevo (2026-09-26).
+            recaudo.rc_cobro_otro_mes = None
         tarea = recaudo.tarea
         registrar_accion(
             'FORZAR', recaudo, usuario_id=usuario_id, motivo=texto,
