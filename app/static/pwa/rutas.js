@@ -4118,7 +4118,7 @@ async function _cargarPlanilla(id) {
  * @param {number} id - ID de la ruta a liquidar
  */
 async function rutaLiquidar(id) {
-  if (!(await _modalConfirmar('Esto confirma el cuadre financiero en el WMS. Después, en Liquidación, se documentan en Siesa la nota crédito, el recibo de caja y las retenciones de cada parada.',
+  if (!(await _modalConfirmar('La ruta queda liquidada y todo lo que está listo sale en cola para Siesa. Antes hace falta el acta de caja del conductor (Liquidación → Caja por recibir).',
       { titulo: `¿Liquidar la ruta #${esc(id)}?`, textoConfirmar: 'Liquidar' }))) return;
   try {
     const liquidar = (cuerpo) => fetch(API + '/api/rutas/' + id + '/liquidar', {
@@ -4139,11 +4139,12 @@ async function rutaLiquidar(id) {
       d = await r.json();
     }
     if (!r.ok) {
-      alerta(d.error || 'Error al liquidar', 'error');
+      // Sin acta de caja (m051liqcaja): el mensaje del servidor sin su código.
+      alerta(String(d.error || 'Error al liquidar').replace(/^caja_sin_acta:\s*/, ''), 'error');
       return;
     }
-    alerta('Ruta liquidada en WMS — documente NC/RC/DC desde el módulo Liquidación', 'exito');
-    // NO auto-fire Siesa — el operador decide per-parada en Liquidación
+    alerta('Ruta liquidada: lo que está listo quedó en cola para Siesa', 'exito');
+    // La liquidación ya encoló lo que estaba listo (m051liqcaja).
     await _cargarPlanilla(id);
     await cargarListaRutas();
   } catch (e) { alerta('Error de conexión', 'error'); }

@@ -4057,7 +4057,7 @@ excepciones, que es donde está la plata:
 | **Devolución parcial inflada** | `lineas_devolucion_cliente.cantidad_declarada` = lo que dijo el **conductor**; recepción sigue escribiendo lo contado en `cantidad_devuelta` y **no pisa** lo declarado (si falta, se congela lo vigente antes de ajustar). La corrección de recepción va a la bitácora (EDITAR). (`/liquidar-completo`, que guardaba lo del conductor antes de la corrección del líder, se borró el 2026-09-25.) Faltante de retorno = declarado − contado, en Liquidación (señal por parada y total por ruta) y en 💸 Fugas (`devoluciones_ruta.extra.faltante_de_retorno` por conductor) | `senales_ruta.faltante_de_retorno`, `liquidacion_service._declarado_por_el_conductor` |
 | **Hora de la parada** | Nombres acordados con el integrador: `recaudos_entrega.ts_dispositivo` (hora del teléfono al confirmar, UTC), `ts_desfase_s` (teléfono − servidor **medido al enviar**, con `ts_envio`; positivo = adelantado), `via_cola`; `entregas_geo.ts_dispositivo` y `pos_ts_dispositivo` (`pos.timestamp`). **No reemplazan** `fecha_confirmacion`/`capturado_en`. La cola offline las manda (`_condSelloDeEnvio`); un ítem viejo usa la hora a la que se encoló. `clasificar_hora`: `reloj_desfasado` / `antes_de_salir` son señal; `diferida` (sin señal) es informativa | `senales_ruta.leer_ts/desfase_s/clasificar_hora` |
 | **Rechazo lejos del cliente** | `recaudos_entrega.distancia_cliente_m`, medida contra el maestro **antes** de que la captura vote (si no, se mide contra su propia sombra). Señal solo si el motivo afirma presencia (`CLIENTE_CERRADO`, `FUERA_DE_HORARIO`) y supera el umbral. Sin punto del cliente → sin señal | `senales_ruta.senal_rechazo_lejos` |
-| **Efectivo en la calle** | Por conductor: efectivo cobrado en rutas EN_TRANSITO/ENTREGADA no liquidadas, con antigüedad (día Bogotá de la confirmación más vieja). Cabecera de Liquidación | `senales_ruta.efectivo_en_poder_por_conductor` |
+| **Efectivo en la calle** | Por conductor: efectivo cobrado en rutas EN_TRANSITO/ENTREGADA **sin acta de caja** (desde el 2026-09-27; antes «no liquidadas»: el clic de liquidar daba la plata por entregada), con antigüedad (día Bogotá de la confirmación más vieja). Cabecera de Liquidación | `senales_ruta.efectivo_en_poder_por_conductor` → `caja_conductor` |
 | **Despacho sin mirar la flota** | Al **iniciar el cargue** y al **despachar**: SOAT/RTM vencidos, no registrados o no encontrados, sin inspección apta hoy, OT de taller abierta, custodia de otro conductor / en sede / de nadie, sin vehículo. **Informa, no bloquea**: 409 con la lista; con `motivo_advertencias` sale y queda FORZAR en la bitácora (con las claves). Lo ya reconocido en la misma ruta no se pregunta dos veces. Lee `flota/` solo por sus funciones públicas (`custodia_activa`, `inspecciones.del_dia`, `taller.ordenes_de`, `MedidorSQL.documentos_por_vehiculo`) + el modelo `DocumentoVehiculo` para «no registrado» | `senales_ruta.advertencias_de_flota`, `RutaService._reconocer_advertencias_flota` |
 | **`entregar_ruta` marcaba ENTREGADO lo ausente** | Solo se toca un bulto con `entregado` **booleano literal**. Lo demás conserva su estado (el de la parada) y lo que nadie declaró va en `sin_declarar`. El cierre del conductor (`bultos: []`, también offline) no cambia | `RutaService.entregar_ruta` |
 
@@ -8215,3 +8215,52 @@ control de flota); el trigger de ancla no mira saltos anteriores; un
 downgrade de `m051flotakm` pierde la serie; el temporizador lee la cola
 entera en cada vuelta; «Camión recibido ✓» también sale en el no-op; el
 resumen de un rechazo cerrado no se guarda.
+
+---
+
+## Liquidación: una liquidación = arqueo + documentos; los pagos bancarios, vistos en el banco (2026-09-27)
+
+**La clase:** *se da por entregada (o por recibida) plata que nadie contó ni
+vio.* «Liquidar» era un clic sin arqueo: un faltante del conductor quedaba sin
+dueño, se tapaba corrigiendo el cobro del cliente (deuda de alguien que ya
+pagó) o se ajustaba al peso. El envío a Siesa era un segundo paso que se
+olvidaba (QA: 5 cobros, $235.402, sin recibo encolado nunca). Una
+transferencia se daba por pagada con un pantallazo que ninguna pantalla
+mostraba. Migración **`m051liqcaja`** (aditiva; `down_revision='m050inv2'`).
+Lock nuevo: `LOCK_ACTA_CAJA = 2075`.
+
+| | Ahora | Dónde |
+|---|---|---|
+| **Acta de entrega de caja** | Por conductor: el efectivo que declaró cobrado en sus rutas ENTREGADAS sin acta (`esperado_de_entrega`), lo que contó quien recibe, los gastos que pagó con el recaudo (`flota_gasto.origen_costo='efectivo_conductor'`, con su foto: se **aceptan o rechazan**, nunca se descuentan solos) y `diferencia = contado + gastos aceptados − esperado`. Diferencia ≠ 0 exige motivo (también un CHECK) y queda **a cargo del conductor** (`diferencias_por_conductor`, el número de gerencia). El WMS no descuenta de nómina ni corrige el cobro del cliente. El conductor confirma u objeta en su teléfono; quien liquida declara «no confirmó» con motivo; anular (con motivo) libera rutas y gastos | `services/caja_conductor.py`, `models/entrega_caja.py` |
+| **Una sola decisión de «efectivo»** | `efectivo_de_recaudo` y `medio_de_recaudo` (EFECTIVO · BANCARIO · TARJETA · CHEQUE · OTRO) las leen el acta, el efectivo en poder, la reconciliación y la cabecera | trinquete AST |
+| **Liquidar exige el acta** | `RutaService.liquidar_ruta` pregunta `exigir_acta_para_liquidar` antes de marcar (`caja_sin_acta:` si falta o si entró efectivo después del acta); una ruta sin efectivo ni gastos no la pide. Solo el admin liquida sin acta, con motivo (FORZAR `liquidacion_sin_acta_de_caja`) | `ruta_service.py` |
+| **Liquidar encola** | La misma acción llama a `liquidar_ruta_siesa`; si falla, la ruta queda liquidada y sigue en la lista «Liquidada · falta en Siesa» (`documentos_faltantes_de_ruta`). «Enviar todo» y «Registrar cobro» exigen la ruta liquidada | `ruta_service.py`, `routes/rutas.py` |
+| **Transferencias vistas en el banco** | `verificacion_banco.estado` (POR_VERIFICAR · VERIFICADA · NO_ENCONTRADA, solo transferencia/consignación); `verificar` con autor, hora, bitácora y nota obligatoria al «no apareció» (admin, liquidador, líder de cartera). `exigir_para_rc`: por verificar → `DependenciaPendiente`; no encontrada → `ErrorDeterminista`. Switch `TRANSFERENCIA_EXIGE_VERIFICACION` (default encendido; solo un `false` explícito lo apaga). Liquidación → **Transferencias** con el comprobante pedido por parada (`GET /api/rutas/recaudos/<id>/comprobante`); la planilla ya no baja fotos | `services/verificacion_banco.py` |
+| **Cuarta columna de la reconciliación** | El efectivo del acta (su diferencia repartida entre sus rutas, declarado) + lo bancario verificado; sin acta, `capturado: False` | `reconciliacion_ruta._recaudo_verificado` |
+| **Resumen diario** | Faltantes de caja, actas sin respuesta > 24 h, transferencias sin ver > 24 h o no encontradas, cobros de rutas liquidadas hace > 2 h sin recibo encolado | `caja_conductor.lineas_de_aviso`, `verificacion_banco.lineas_de_aviso`, `politica_cobro.lineas_de_aviso_rc` |
+| **La cabecera (L5)** | Un universo (la lista: rango + atrasadas) y los medios parten el total (`cuadra`); «Total cobrado»; cheque con su renglón; diferencias de caja por conductor; trabajo arriba, análisis abajo | `services/liquidacion_tablero.py` |
+| **CHEQUE** | Solo si `SIESA_MEDIO_PAGO_CHEQUE` está configurado (`medios_pago.cheque_habilitado`) | `listar_paradas`, `_condFormasPago` |
+| **El Gestor sabe lo que está en caja** | `GET /api/cartera/en-caja?nit=` (token del Gestor): lo cobrado en ruta sin recibo aplicado; lo que no apareció en el banco va aparte | `cartera_service.en_caja_por_nit` |
+
+Trinquetes: `tests/test_caja_conductor.py` (nadie más compara una forma de pago
+contra `'EFECTIVO'`; solo la política escribe el acta y la verificación;
+liquidar pregunta por el acta antes de marcar y encola después; meta-tests y
+pisos), `tests/test_verificacion_banco.py`, `tests/test_caja_pantallas_js.py`
+(Node, `util.js` real). **25 mutaciones, las 25 rojas.**
+
+**Lo que NO cubre, dicho:**
+- **El RC bancario todavía no espera**: la línea
+  `verificacion_banco.exigir_para_rc(recaudo)` va en la rama `RECIBO_CAJA` de
+  `siesa_job_service._ejecutar_job`, que es del frente L1.
+  `test_verificacion_banco.py::TestElEjecutorDelReciboEsperaAlBanco` es
+  `xfail(strict)`: se pone rojo cuando la línea exista, para quitar la marca.
+- **CHEQUE encendido** necesita además `'CHEQUE': os.getenv('SIESA_MEDIO_PAGO_CHEQUE')`
+  en `connekta_gateway._forma_pago_map` y que `confirmar_parada` rechace
+  CHEQUE sin el medio (archivos de otro frente).
+- Tarjeta y cheque no los verifica nadie (se cuentan aparte en la cuarta
+  columna). El resumen del teléfono al cerrar agrupa por su cuenta (vista
+  previa sin señal); la cifra que vale es la del acta.
+- La lista «Liquidada · falta en Siesa» mira las rutas del rango; una liquidada
+  de otro día con algo pendiente la avisa el resumen diario, no la lista.
+- Un conductor sin cuenta no tiene gastos ligados (el gasto se liga por el
+  usuario que lo registró) ni confirma en el teléfono: queda «no confirmó».
