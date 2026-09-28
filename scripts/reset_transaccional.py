@@ -50,6 +50,12 @@ VERDE, ROJO, AMAR, GRIS, FIN = '\033[92m', '\033[91m', '\033[93m', '\033[90m', '
 
 # Se vacían. Orden importa: hijos antes que padres por las FKs.
 OPERATIVAS = [
+    # Ausencias del personal (m051asignacion, 2026-09-27): las del ensayo no
+    # valen para producción — una incapacidad de prueba dejaría a alguien sin
+    # recibir trabajo el día del arranque. Solo apunta a `usuarios` (protegida):
+    # el orden no importa. Quién la registró y quién la anuló queda en la fila;
+    # lo que devolvió a la cola, en `bitacora_acciones` (protegida).
+    'ausencias_usuario',
     # Retención de cartera (m044cartera, 2026-09-24). Sin FK hacia nada: el
     # orden no importa. Las retenciones y sus resoluciones del ensayo son del
     # ensayo (quién autorizó queda además en `bitacora_acciones`, protegida);

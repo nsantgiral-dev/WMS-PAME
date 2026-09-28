@@ -2795,7 +2795,7 @@ class ConteoService:
             return segundo
 
         # A quién: la persona PRESENTE que hace conteo rutinario en este
-        # almacén, no contó la cadena y va con menos carga
+        # almacén y no contó la cadena, la primera por id
         # (`asignacion.elegir_para_segundo_conteo`). Antes era «el operario de
         # id más bajo», viniera o no —con él incapacitado, todo CC2 le quedaba
         # pegado y ningún barrido lo soltaba—, y si el CC1 lo había hecho un

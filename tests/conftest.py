@@ -316,6 +316,9 @@ def usuario(db, almacen):
         rol='operario',
         almacen_id=almacen.id,
         activo=True,
+        # En turno (`app/services/presencia.py`): el operario de prueba está
+        # trabajando. Los tests de ausencia arman su propia gente.
+        ultima_senal_at=__import__('datetime').datetime.utcnow(),
     )
     db.session.add(u)
     db.session.commit()

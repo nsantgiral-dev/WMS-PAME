@@ -36,6 +36,8 @@ import ast
 import json
 import pathlib
 
+from datetime import datetime
+
 import pytest
 from werkzeug.security import generate_password_hash
 
@@ -165,8 +167,10 @@ def tienda(db, almacen):
     db.session.add(reg)
 
     def _actor(email, rol):
+        # En turno (`presencia`): los dos contadores están trabajando hoy.
         u = Usuario(nombre=email, email=email, password_hash=generate_password_hash('x'),
-                    rol=rol, puede_picar=True, almacen_id=almacen.id, activo=True)
+                    rol=rol, puede_picar=True, almacen_id=almacen.id, activo=True,
+                    ultima_senal_at=datetime.utcnow())
         db.session.add(u)
         db.session.flush()
         return u

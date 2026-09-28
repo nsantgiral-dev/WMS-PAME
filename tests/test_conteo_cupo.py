@@ -385,6 +385,8 @@ class TestEventosPrimeroEnElPool:
         from app.models.conteo import SesionConteo
         self._cola(nb1, monkeypatch)
         op = nb1.operario('lote@test.com')
+        op.ultima_senal_at = datetime.utcnow()      # en turno: el reparto es entre presentes
+        nb1.db.session.commit()
         r = client.post('/api/conteo/asignar-lote',
                         json={'operario_id': op.id, 'almacen_id': nb1.almacen.id, 'limite': 2},
                         headers={'Authorization': f'Bearer {jwt_token_admin}'})

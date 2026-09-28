@@ -107,6 +107,10 @@ class Bodega:
     # ── personas ──────────────────────────────────────────────────────────
     def persona(self, email, rol, **kw):
         from app.models.usuario import Usuario
+        # Todos en turno (`presencia`): es un día de trabajo en la bodega. El
+        # reparto, el CC2 y las reasignaciones solo van a quien está.
+        from datetime import datetime
+        kw.setdefault('ultima_senal_at', datetime.utcnow())
         u = Usuario(nombre=email.split('@')[0], email=email,
                     password_hash=generate_password_hash('x'), rol=rol,
                     almacen_id=self.almacen.id, activo=True, **kw)

@@ -24,7 +24,12 @@ def actores_traslado(db):
                        ('operario', 'op_tr@test.com')):
         u = Usuario.query.filter_by(email=email).first()
         if not u:
-            u = Usuario(email=email, nombre=rol, rol=rol, activo=True)
+            # El que recoge es de NB1 (de donde sale el traslado) y está en turno:
+            # solo a esa persona se le puede asignar (`asignacion`).
+            u = Usuario(email=email, nombre=rol, rol=rol, activo=True,
+                        **({'bodega_siesa_id': 'NB1',
+                            'ultima_senal_at': __import__('datetime').datetime.utcnow()}
+                           if rol == 'operario' else {}))
             u.set_password('t')
             db.session.add(u)
             db.session.flush()

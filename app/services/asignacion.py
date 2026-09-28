@@ -181,7 +181,7 @@ def exigir_asignable(usuario_id, tipo: str, **ctx):
     from app.models.usuario import Usuario
     u = db.session.get(Usuario, int(usuario_id)) if usuario_id else None
     if u is None:
-        raise LookupError(f'Operario {usuario_id} no encontrado')
+        raise LookupError(f'Operario {usuario_id} no encontrado o inactivo')
     m = motivo_no_asignable(u, tipo, **ctx)
     if m:
         raise NoAsignable(m)
@@ -266,9 +266,13 @@ def candidatos(tipo: str, *, almacen_id=None, bodega=None, ahora=None) -> dict:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _pool_conteo(almacen_id):
+    """El pool repartible, en el orden de reparto (el de toda puerta)."""
     from app.models.conteo import SesionConteo
+    from app.services.conteo_politica import orden_de_reparto
     from app.services.conteo_service import ConteoService
-    return SesionConteo.query.filter(*ConteoService.filtros_pool_sin_dueno(None, almacen_id))
+    return (SesionConteo.query
+            .filter(*ConteoService.filtros_pool_sin_dueno(None, almacen_id))
+            .order_by(*orden_de_reparto()))
 
 
 def contar_pool_conteo(almacen_id=None) -> int:
@@ -294,7 +298,6 @@ def plan_reparto_conteos(almacen_id, *, cantidad=None, operario_ids=None, ahora=
     - Doble ciego: un CC2 nunca va a quien contó su CC1.
     - En orden de reparto (`orden_de_reparto`): las auditorías primero.
     """
-    from app.services.conteo_politica import orden_de_reparto
     from app.services.conteo_service import ConteoService
 
     pendientes = contar_pool_conteo(almacen_id) if almacen_id else 0
@@ -332,7 +335,7 @@ def plan_reparto_conteos(almacen_id, *, cantidad=None, operario_ids=None, ahora=
     saltadas_doble_ciego = 0
     if tope > 0 and personas:
         # Margen para los CC2 que nadie de los elegidos puede hacer.
-        tareas = _pool_conteo(almacen_id).order_by(*orden_de_reparto()).limit(tope * 2 + 20).all()
+        tareas = _pool_conteo(almacen_id).limit(tope * 2 + 20).all()
         for t in tareas:
             if len(asignaciones) >= tope:
                 break
@@ -432,8 +435,8 @@ def repartir_conteos(almacen_id, *, por_id: int, cantidad=None, operario_ids=Non
 
 def elegir_para_segundo_conteo(cc2, *, excluir_ids=()):
     """A quién se le da un CC2 recién nacido: la persona **presente** que hace
-    conteo rutinario en ese almacén, no contó nada de la cadena, no tiene ya un
-    conteo vivo sobre ese mismo hueco, y va con menos carga. `None` si no hay
+    conteo rutinario en ese almacén, no contó nada de la cadena y no tiene ya un
+    conteo vivo sobre ese mismo hueco (la primera por id). `None` si no hay
     nadie: el CC2 queda en la cola (cualquiera presente lo toma, y el doble
     ciego lo protege ahí también).
 
@@ -453,11 +456,9 @@ def elegir_para_segundo_conteo(cc2, *, excluir_ids=()):
              if c['id'] not in previos and c['id'] not in en_conflicto]
     if not aptos:
         return None
-
-    def carga(c):
-        cu = c['cupo']
-        return (cu['usados_hoy'] + cu['en_cola'], c['id'])
-    return min(aptos, key=carga)['id']
+    # Determinista, como antes: el primero por id entre los que pueden. Lo que
+    # cambió es QUIÉNES pueden (presentes y de puesto), no el desempate.
+    return min(c['id'] for c in aptos)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

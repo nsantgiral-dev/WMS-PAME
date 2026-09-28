@@ -21,7 +21,7 @@ _RAIZ = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # Conteo congelado al 2026-07-27. Solo puede BAJAR.
 # Migración completa a db.session.get(Modelo, id): tarde tranquila después del
 # comité del 7-ago-2026. Anotada como deuda con fecha, no como intención.
-MAX_QUERY_GET_APP = 224
+MAX_QUERY_GET_APP = 210
 
 
 def _contar(directorio):
