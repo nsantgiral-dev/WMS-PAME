@@ -13,7 +13,7 @@ lea de una vez:
 | Precio y su fuente | `costo_service.resolver_costos` |
 | Valor y subtotales | `costo_service.valorizar` / `sumar_valores` |
 | Bloqueados | `bloqueo_recompra_service.BloqueoRecompraService.verificar_oc` |
-| ¿Está al día el kardex? | `kardex_service.salud_kardex` |
+| ¿De qué fuente sale la demanda y qué aguanta? | `demanda_fuentes.fuente_de_demanda` (+ `kardex_service.salud_kardex` si es el kardex) |
 | Existencias por sede | `analitica_salud.fuente_stock` |
 | OCs sincronizadas, OCs abiertas, llegadas | `compras_fuentes.frescura_oc` / `ocs_abiertas` / `llegadas_recientes` |
 | Contenedor | `ArmadorService.armar_contenedor` + `composicion_por_proveedor` |
@@ -98,28 +98,19 @@ def confianza() -> dict:
     from app.services.analitica_salud import fuente_stock
     from app.services.armador_service import (ArmadorService, ciclo_pedido_nacional,
                                               insumo_origen)
-    from app.services.kardex_service import salud_kardex
+    from app.services.demanda_fuentes import fuente_de_demanda
 
     renglones = []
 
-    # 1 · Kardex: de él sale la demanda de TODO.
+    # 1 · Las ventas: de ellas sale la demanda de TODO. La fuente la elige
+    #     `demanda_fuentes` (venta diaria de Siesa → kardex → facturas desde
+    #     pedido); acá solo se traduce su veredicto.
     try:
-        k = salud_kardex()
-        prob = (k.get('problemas') or [{}])[0]
-        mov = k.get('movimientos') or {}
-        renglones.append({
-            'clave': 'kardex',
-            'nivel': 'ok' if k.get('confiable') else 'mal',
-            'titulo': ('Ventas (kardex) al día' if k.get('confiable')
-                       else 'Ventas (kardex) no están al día: no decidir con estos números'),
-            'detalle': (f"Último movimiento: {mov.get('ultima_fecha') or 'ninguno'}"
-                        if k.get('confiable') else prob.get('titulo')),
-            'que_hacer': None if k.get('confiable') else prob.get('que_hacer'),
-        })
+        renglones.append(_renglon_demanda(fuente_de_demanda()))
     except Exception as e:                                    # noqa: BLE001
-        logger.exception('[BANDEJA] salud del kardex')
-        renglones.append({'clave': 'kardex', 'nivel': 'mal',
-                          'titulo': 'No se pudo verificar el kardex: no decidir con estos números',
+        logger.exception('[BANDEJA] fuente de la demanda')
+        renglones.append({'clave': 'demanda', 'nivel': 'mal',
+                          'titulo': 'No se pudo saber de dónde salen las ventas: no decidir con estos números',
                           'detalle': str(e)[:200], 'que_hacer': None})
 
     # 2 · Existencias por sede.
@@ -214,7 +205,7 @@ def confianza() -> dict:
         'renglones': renglones,
         'decidir': not any(r['nivel'] == 'mal' for r in renglones if r['clave'] != 'origen'),
         'contenedor_calculable': not any(
-            r['nivel'] == 'mal' for r in renglones if r['clave'] in ('kardex', 'origen')),
+            r['nivel'] == 'mal' for r in renglones if r['clave'] in ('demanda', 'origen')),
     }
 
 
@@ -222,16 +213,51 @@ def confianza() -> dict:
 # 🛒 Bandeja — la reposición nacional con cantidad, proveedor y precio
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _falta_kardex(salud):
-    """Qué falta para que la bandeja pueda proponer, y cómo encenderlo."""
-    falta = [{'titulo': p.get('titulo'), 'que_hacer': p.get('que_hacer')}
-             for p in (salud.get('problemas') or [])]
-    falta.append({'titulo': 'Nada descarga el kardex solo mientras KARDEX_AUTO esté apagado.',
-                  'que_hacer': 'En Siesa: dar permiso a la consulta del kardex (hoy 401 en QA). '
-                               'En Railway: KARDEX_AUTO=true en el worker con HEAVY_SCHEDULERS=true. '
-                               'Después: Inventario › Datos › Descargar y Reconstruir stock diario.',
-                  'que_hacer_otros': 'Pídale a administración que habilite la descarga automática '
-                                     'del kardex (el permiso en Siesa y el encendido en el servidor).'})
+def _renglon_demanda(fuente):
+    """El renglón de la franja para la demanda, desde el veredicto de su dueño.
+    Con el kardex, además, lo que diga `salud_kardex` (una descarga a medias no
+    se pinta verde)."""
+    from app.services import demanda_fuentes as dfu
+    apta = (fuente.get('apta_para') or {}).get('bandeja')
+    nivel = 'ok' if apta and not fuente.get('parcial') else ('aviso' if apta else 'mal')
+    detalle = fuente.get('texto')
+    que_hacer = fuente.get('que_hacer')
+    if fuente.get('fuente') == dfu.FUENTE_KARDEX:
+        from app.services.kardex_service import salud_kardex
+        k = salud_kardex()
+        if not k.get('confiable'):
+            prob = (k.get('problemas') or [{}])[0]
+            nivel = 'mal'
+            detalle = f"{detalle} {prob.get('titulo') or ''}".strip()
+            que_hacer = prob.get('que_hacer') or que_hacer
+    titulo = {
+        'ok': 'Ventas al día',
+        'aviso': 'Ventas parciales: la bandeja propone de menos (cota inferior)',
+        'mal': 'Ventas no están al día: no decidir con estos números',
+    }[nivel]
+    return {'clave': 'demanda', 'nivel': nivel, 'titulo': titulo,
+            'detalle': detalle or (fuente.get('no_apta_por') or {}).get('bandeja'),
+            'fuente': fuente.get('fuente'), 'fuente_nombre': fuente.get('nombre'),
+            'cobertura': fuente.get('cobertura'),
+            'que_hacer': que_hacer if nivel != 'ok' else None,
+            'que_hacer_otros': ('Pídale a administración que cargue las ventas de Siesa '
+                                '(la consulta de venta diaria).') if nivel != 'ok' else None}
+
+
+def _falta_demanda(fuente):
+    """Qué falta para que la bandeja pueda proponer, fuente por fuente."""
+    def _estado(c):
+        if not c.get('dias_en_ventana'):
+            return 'sin datos'
+        hasta = f", hasta el {c['hasta']}" if c.get('hasta') else ''
+        return f"{c['dias_en_ventana']} días observados{hasta}"
+
+    falta = [{'titulo': f"{c['nombre'].capitalize()}: {_estado(c)}",
+              'que_hacer': c.get('error')}
+             for c in (fuente.get('candidatas') or [])]
+    falta.append({'titulo': fuente.get('texto'),
+                  'que_hacer': fuente.get('que_hacer'),
+                  'que_hacer_otros': 'Pídale a administración que cargue las ventas de Siesa.'})
     return falta
 
 
@@ -286,21 +312,27 @@ def bandeja(nivel_servicio: float = NIVEL_SERVICIO) -> dict:
     from app.services.bloqueo_recompra_service import BloqueoRecompraService
     from app.services.bodegas import co_de_bodega
     from app.services.costo_service import resolver_costos, sumar_valores, valorizar
-    from app.services.kardex_service import salud_kardex
+    from app.services.demanda_fuentes import FUENTE_NINGUNA, fuente_de_demanda
 
-    salud = salud_kardex()
+    fuente = fuente_de_demanda()
+    renglon = _renglon_demanda(fuente)
     base = {'nivel_servicio': nivel_servicio, 'proveedores': [], 'excluidos': {},
-            'kardex_confiable': bool(salud.get('confiable')),
+            # De dónde salen las ventas y cuánto valen (la franja lo dice igual).
+            'demanda': {'fuente': fuente.get('fuente'), 'nombre': fuente.get('nombre'),
+                        'parcial': bool(fuente.get('parcial')),
+                        'cobertura': fuente.get('cobertura'),
+                        'texto': fuente.get('texto'), 'nivel': renglon['nivel']},
+            'ventas_al_dia': renglon['nivel'] == 'ok',
             'generado_utc': datetime.utcnow().isoformat()}
-    if not (salud.get('movimientos') or {}).get('total'):
-        return dict(base, estado='SIN_KARDEX', falta=_falta_kardex(salud),
+    if fuente.get('fuente') == FUENTE_NINGUNA:
+        return dict(base, estado='SIN_VENTAS', falta=_falta_demanda(fuente),
                     resumen={'lineas': 0})
 
     rop = ArmadorService.rop_dual(nivel_servicio=nivel_servicio)
     nac = rop.get('nacional') or {}
     filas = nac.get('items') or []
     if not filas:
-        return dict(base, estado='SIN_DEMANDA', falta=_falta_kardex(salud),
+        return dict(base, estado='SIN_DEMANDA', falta=_falta_demanda(fuente),
                     resumen={'lineas': 0})
 
     con_urgencia = [(f, _urgencia(f)) for f in filas]
@@ -431,7 +463,7 @@ def explicar_sku(referencia: str) -> dict:
     f = nac.get(ref)
     if f is None:
         return {'referencia': ref, 'motivo': 'SIN_DEMANDA',
-                'texto': 'No tiene ventas en el kardex de los últimos 12 meses.'}
+                'texto': 'No tiene ventas en los últimos 12 meses de la fuente de ventas.'}
     if f.get('sin_venta_reciente'):
         return {'referencia': ref, 'motivo': 'SIN_VENTA_RECIENTE', 'texto': f.get('motivo_d_cero')}
     urg = _urgencia(f)

@@ -731,13 +731,50 @@ def inicio_cobertura_kardex():
     return db.session.query(func.min(KardexMovimiento.fecha)).scalar()
 
 
-def ventana_observada(ventana_meses=12, hasta=None):
-    """La ventana de demanda recortada a la cobertura del kardex.
+def fuente_elegida(hoy=None, ventana_meses=12):
+    """La fuente de demanda que decide la cascada (`demanda_fuentes`)."""
+    from app.services.demanda_fuentes import fuente_de_demanda
+    return fuente_de_demanda(hoy, ventana_meses)
 
-    Returns: (desde, hasta, cobertura) — `desde` es `None` si el kardex está
-    vacío o empieza después de `hasta`.
+
+def cobertura_demanda(fuente=None):
+    """(primer día, último día) que observa la fuente de demanda elegida, o
+    `(None, None)` si no hay ninguna. El kardex conserva su regla: desde su
+    primer movimiento hasta hoy (la descarga declara si está completa)."""
+    from app.services import demanda_fuentes as dfu
+    fuente = fuente or fuente_elegida()
+    f = fuente.get('fuente')
+    if f == dfu.FUENTE_NINGUNA:
+        return None, None
+    if f == dfu.FUENTE_KARDEX:
+        return inicio_cobertura_kardex(), _dia_operativo()
+    cob = fuente.get('cobertura') or {}
+    if not cob.get('desde'):
+        return None, None
+    return date.fromisoformat(cob['desde']), date.fromisoformat(cob['hasta'])
+
+
+def ventana_observada(ventana_meses=12, hasta=None, fuente=None):
+    """La ventana de demanda recortada a lo que la FUENTE observó.
+
+    Desde 2026-09-27 la fuente no es solo el kardex: la elige
+    `demanda_fuentes.fuente_de_demanda` (Siesa suma la venta diaria → kardex →
+    facturas desde pedido). Con el kardex, la regla de siempre (de su primer
+    movimiento a hoy); con las otras, su tramo contiguo de días observados —
+    `hasta` también se recorta: un día sin leer no es un día sin venta.
+
+    Returns: (desde, hasta, cobertura) — `desde` es `None` si no hay fuente o
+    si su cobertura no toca la ventana.
     """
+    from app.services import demanda_fuentes as dfu
     desde, hasta = ventana_demanda(ventana_meses, hasta)
+    fuente = fuente or fuente_elegida(hasta, ventana_meses)
+    if fuente.get('fuente') == dfu.FUENTE_NINGUNA:
+        return None, hasta, None
+    rec = dfu.ventana_de_la_fuente(fuente, desde, hasta)
+    if rec is not None:
+        cob = date.fromisoformat(fuente['cobertura']['desde'])
+        return rec[0], rec[1], cob
     cob = inicio_cobertura_kardex()
     if cob is None or cob > hasta:
         return None, hasta, cob
@@ -751,7 +788,7 @@ def _clave(ref, bod, nivel):
     return f'{ref}|{(bod or "").strip()}'
 
 
-def serie_demanda(desde, hasta, nivel='red'):
+def serie_demanda(desde, hasta, nivel='red', fuente=None):
     """EL NUMERADOR. Demanda neta por día y por clave, ambos extremos inclusive.
 
     Venta = concepto 501 en salida; devolución = 502 en entrada
@@ -770,35 +807,91 @@ def serie_demanda(desde, hasta, nivel='red'):
 
     Returns: {clave: {'por_dia': {fecha: neto > 0}, 'bruta', 'devuelta',
               'devolucion_sin_venta'}}. Clave: referencia (red) o 'ref|bodega'.
+
+    **La fuente** (2026-09-27) la decide `demanda_fuentes.fuente_de_demanda`:
+    la venta diaria que Siesa ya sumó (`demanda_dia_siesa`), el kardex, o las
+    facturas desde pedido (`foto_ventas_lineas`, sin la caja de las tiendas:
+    cota inferior). Cambia de dónde salen las ventas y devoluciones por día;
+    el neteo (D6) es el mismo para las tres.
     """
     from sqlalchemy import func
+    from app.services import demanda_fuentes as dfu
 
     if desde is None or hasta is None or desde > hasta:
         return {}
 
-    k_bod = KardexMovimiento.bodega
-
-    def _por_dia(conceptos, naturaleza):
-        return (
-            db.session.query(KardexMovimiento.referencia, k_bod,
-                             KardexMovimiento.fecha,
-                             func.sum(KardexMovimiento.cantidad))
-            .filter(KardexMovimiento.fecha >= desde)
-            .filter(KardexMovimiento.fecha <= hasta)
-            .filter(KardexMovimiento.concepto.in_(conceptos))
-            .filter(KardexMovimiento.naturaleza == naturaleza)
-            .group_by(KardexMovimiento.referencia, k_bod, KardexMovimiento.fecha)
-            .all()
-        )
-
+    fuente = fuente or fuente_elegida()
+    cual = fuente.get('fuente')
     ventas = defaultdict(lambda: defaultdict(float))
     devol = defaultdict(lambda: defaultdict(float))
-    for ref, bod, fecha, cant in _por_dia(CONCEPTOS_VENTA, NATURALEZA_SALIDA):
-        if (ref or '').strip():
-            ventas[_clave(ref, bod, nivel)][fecha] += float(cant or 0)
-    for ref, bod, fecha, cant in _por_dia(CONCEPTOS_DEVOLUCION, NATURALEZA_ENTRADA):
-        if (ref or '').strip():
-            devol[_clave(ref, bod, nivel)][fecha] += float(cant or 0)
+
+    def _kardex():
+        k_bod = KardexMovimiento.bodega
+
+        def _por_dia(conceptos, naturaleza):
+            return (
+                db.session.query(KardexMovimiento.referencia, k_bod,
+                                 KardexMovimiento.fecha,
+                                 func.sum(KardexMovimiento.cantidad))
+                .filter(KardexMovimiento.fecha >= desde)
+                .filter(KardexMovimiento.fecha <= hasta)
+                .filter(KardexMovimiento.concepto.in_(conceptos))
+                .filter(KardexMovimiento.naturaleza == naturaleza)
+                .group_by(KardexMovimiento.referencia, k_bod, KardexMovimiento.fecha)
+                .all()
+            )
+
+        for ref, bod, fecha, cant in _por_dia(CONCEPTOS_VENTA, NATURALEZA_SALIDA):
+            if (ref or '').strip():
+                ventas[_clave(ref, bod, nivel)][fecha] += float(cant or 0)
+        for ref, bod, fecha, cant in _por_dia(CONCEPTOS_DEVOLUCION, NATURALEZA_ENTRADA):
+            if (ref or '').strip():
+                devol[_clave(ref, bod, nivel)][fecha] += float(cant or 0)
+
+    def _siesa():
+        """Siesa ya separó venta (501 en salida) y devolución (502 en entrada)."""
+        from app.models.demanda_siesa import DemandaDiaSiesa as D
+        for ref, bod, fecha, vend, dev in (
+                db.session.query(D.referencia, D.bodega, D.fecha, D.vendido, D.devuelto)
+                .filter(D.fecha >= desde, D.fecha <= hasta).all()):
+            if not (ref or '').strip():
+                continue
+            if vend:
+                ventas[_clave(ref, bod, nivel)][fecha] += float(vend)
+            if dev:
+                devol[_clave(ref, bod, nivel)][fecha] += float(dev)
+
+    def _pedidos():
+        """Las líneas de factura de la última corrida COMPLETA de cada CO y día.
+        Anuladas fuera. La API no trae las notas crédito: sin devoluciones."""
+        from app.models.fotos_siesa import FotoCorrida, FotoVentaLinea, TipoFoto
+        from app.services.fotos_siesa_service import ESTADO_DOCTO_ANULADO
+        vigente = {}
+        for c in (FotoCorrida.query
+                  .filter(FotoCorrida.tipo == TipoFoto.VENTAS,
+                          FotoCorrida.completa.is_(True),
+                          FotoCorrida.dia_operativo >= desde,
+                          FotoCorrida.dia_operativo <= hasta)
+                  .order_by(FotoCorrida.terminada_at, FotoCorrida.id).all()):
+            vigente[(str(c.alcance), c.dia_operativo)] = c.run_id
+        if not vigente:
+            return
+        for f in (FotoVentaLinea.query
+                  .filter(FotoVentaLinea.run_id.in_(set(vigente.values())),
+                          FotoVentaLinea.concepto.in_(CONCEPTOS_VENTA)).all()):
+            if vigente.get((str(f.co), f.dia_operativo)) != f.run_id:
+                continue
+            if f.estado_docto == ESTADO_DOCTO_ANULADO or not (f.referencia or '').strip():
+                continue
+            ventas[_clave(f.referencia, f.bodega, nivel)][f.dia_operativo] += \
+                float(f.cantidad or 0)
+
+    if cual == dfu.FUENTE_SIESA:
+        _siesa()
+    elif cual == dfu.FUENTE_PEDIDOS:
+        _pedidos()
+    else:
+        _kardex()
 
     salida = {}
     for clave in set(ventas) | set(devol):
@@ -1763,13 +1856,14 @@ class KardexService:
                           factor_censura, censurado, ventas_recientes,
                           dias_stock_recientes, sin_venta_reciente, desde, hasta}}
         """
-        desde, hasta, _cob = ventana_observada(ventana_meses)
+        fuente = fuente_elegida(None, ventana_meses)
+        desde, hasta, _cob = ventana_observada(ventana_meses, fuente=fuente)
         if desde is None:
             return {}
         nivel = 'red' if nivel == 'red' else 'bodega'
         dias_ventana = (hasta - desde).days + 1
 
-        serie = serie_demanda(desde, hasta, nivel)
+        serie = serie_demanda(desde, hasta, nivel, fuente=fuente)
         tramos = intervalos_con_stock(desde, hasta, nivel)
 
         n_rec = dias_sin_venta()
@@ -1833,6 +1927,10 @@ class KardexService:
                     ventas_rec, stock_rec, media, dias_tramo_rec),
                 'desde': desde.isoformat(),
                 'hasta': hasta.isoformat(),
+                # De qué fuente salió (la decide `demanda_fuentes`). Con
+                # VENTAS_DESDE_PEDIDO la demanda es una cota inferior.
+                'fuente_demanda': fuente.get('fuente'),
+                'demanda_parcial': bool(fuente.get('parcial')),
             }
 
         n_cens = sum(1 for v in salida.values() if v['censurado'])
@@ -1867,14 +1965,15 @@ class KardexService:
 
         Returns: {referencia: [(lunes, valor | None), ...]} ordenado.
         """
-        desde, hasta, _cob = ventana_observada(ventana_meses)
+        fuente = fuente_elegida(None, ventana_meses)
+        desde, hasta, _cob = ventana_observada(ventana_meses, fuente=fuente)
         if desde is None:
             return {}
 
         def _lunes(f):
             return f - timedelta(days=f.weekday())
 
-        serie = serie_demanda(desde, hasta, 'red')
+        serie = serie_demanda(desde, hasta, 'red', fuente=fuente)
         tramos = intervalos_con_stock(desde, hasta, 'red')
 
         salida = {}
@@ -1977,7 +2076,8 @@ class KardexService:
         if estacionales_extra:
             estacionales_set.update(x.strip() for x in estacionales_extra if x)
 
-        desde, hasta, _cob = ventana_observada(ventana_meses)
+        fuente = fuente_elegida(None, ventana_meses)
+        desde, hasta, _cob = ventana_observada(ventana_meses, fuente=fuente)
         if desde is None:
             return {
                 'total_clasificados': 0, 'estacionales_excluidos': len(estacionales_set),
@@ -1987,7 +2087,7 @@ class KardexService:
                 'clasificacion': [],
             }
         dias_ventana = (hasta - desde).days + 1
-        serie = serie_demanda(desde, hasta, 'red')
+        serie = serie_demanda(desde, hasta, 'red', fuente=fuente)
         tramos = intervalos_con_stock(desde, hasta, 'red')
 
         # Calcular ADI y CV² por SKU

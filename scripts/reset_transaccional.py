@@ -119,6 +119,12 @@ OPERATIVAS = [
     # vista previa de producción mostraría la clasificación de QA. Sin FK; se
     # vuelve a leer con un botón.
     'marca_siesa_lectura',
+    # La venta diaria que Siesa suma (m050demanda): si el ensayo leyó Siesa QA,
+    # compras propondría con ventas de QA. Se vuelve a leer con un botón
+    # (🧾 Fuentes → Ventas). La cobertura va con ella: sin sus filas, un día
+    # «cubierto» afirmaría ceros que no se leyeron.
+    'demanda_dia_siesa',
+    'demanda_dia_cubierto',
     'ubicaciones_huerfanas',
     'fugas_recompra',
     # ── Flota (agregado 2026-08-03) ────────────────────────────────────────

@@ -49,7 +49,7 @@ from app.extensions import db
 #: lee `ultimo_ok('compras_oc')` para decir de cuándo es el «en camino».
 TIPOS = ('catalogo', 'barcodes', 'stock', 'stock_ns1', 'stock_nc1', 'setup_inicial',
          'reconciliacion', 'kardex', 'pedidos', 'compras_oc', 'compras_oc_historial',
-         'compras_marca')
+         'compras_marca', 'demanda_siesa', 'demanda_pedidos')
 
 
 class RegistroSync(db.Model):

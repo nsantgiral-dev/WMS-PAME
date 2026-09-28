@@ -158,19 +158,25 @@ class TemporadaService:
         from datetime import timedelta
 
         from app.services.kardex_service import (
-            dias_en, inicio_cobertura_kardex, intervalos_con_stock, serie_demanda)
+            cobertura_demanda, dias_en, fuente_elegida, intervalos_con_stock,
+            serie_demanda)
 
         hasta = _dia_operativo()
         try:
             desde = hasta.replace(year=hasta.year - anios)
         except ValueError:          # 29 de febrero
             desde = date(hasta.year - anios, 2, 28)
-        cobertura = inicio_cobertura_kardex()
+        # La fuente de demanda la decide `demanda_fuentes` (venta diaria de
+        # Siesa → kardex → facturas desde pedido).
+        fuente = fuente_elegida()
+        cobertura, ultimo_observado = cobertura_demanda(fuente)
         if cobertura is None or cobertura > hasta:
             return {}
-        # Un día anterior a la cobertura del kardex no es un día sin venta: no
-        # se observó. Ni se cuenta en la demanda ni en el denominador.
+        # Un día anterior a la cobertura no es un día sin venta: no se observó.
+        # Ni se cuenta en la demanda ni en el denominador. Ídem uno posterior
+        # al último día que la fuente leyó.
         desde = max(desde, cobertura)
+        hasta = min(hasta, ultimo_observado or hasta)
 
         # EL NUMERADOR Y EL DENOMINADOR DE SIEMPRE (ver kardex_service): la
         # demanda neta por día y los días con stock contados sobre el escalón,
@@ -179,7 +185,7 @@ class TemporadaService:
         # tenía filas en días con movimiento, «días con stock en la temporada»
         # era «días con venta»: un SKU que vendió cada tres días con el estante
         # lleno salía con demanda ×3.
-        serie = serie_demanda(desde, hasta, 'red')
+        serie = serie_demanda(desde, hasta, 'red', fuente=fuente)
         tramos = intervalos_con_stock(desde, hasta, 'red')
 
         dem_temp = defaultdict(lambda: defaultdict(float))

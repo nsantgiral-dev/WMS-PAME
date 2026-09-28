@@ -230,10 +230,23 @@ function cmpPildora(urg) {
   return `<span title="${esc(u.ayuda)}" style="font-size:var(--fs-xs);font-weight:700;padding:2px 8px;border-radius:999px;background:${esc(u.fondo)};color:${esc(u.tinta)};border:1px solid ${esc(u.borde)};white-space:nowrap;">${esc(u.texto)}</span>`;
 }
 
+/** De dónde salen las ventas (lo decide el servidor: `demanda_fuentes`).
+ *  Parciales = cota inferior; no al día = no decidir. Nada se calcula acá. */
+function cmpDemandaHtml(dem) {
+  const d = dem || {};
+  const cob = d.cobertura || {};
+  const origen = `Ventas: ${esc(d.nombre || 'sin fuente')}${cob.dias ? ` · ${esc(cmpN(cob.dias))} días observados, hasta el ${esc(cmpFecha(cob.hasta))}` : ''}`;
+  if (d.nivel === 'ok') return `<div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:4px;">${origen}</div>`;
+  const aviso = d.nivel === 'aviso'
+    ? `<div style="font-size:var(--fs-sm);color:var(--warn-tx);font-weight:700;margin-top:6px;">⚠ Ventas parciales: falta la venta de caja de las tiendas, así que las cantidades de abajo salen CORTAS. Úselas como mínimo.</div>`
+    : `<div style="font-size:var(--fs-sm);color:var(--err-tx);font-weight:700;margin-top:6px;">✗ Las ventas no están al día: las cantidades de abajo pueden estar mal. Ver la franja de arriba.</div>`;
+  return `${aviso}<div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:2px;">${origen}</div>`;
+}
+
 function cmpSinKardexHtml(d) {
   const lista = (d.falta || []).map(f => `<li style="margin-bottom:6px;"><b>${esc(f.titulo || '')}</b>${f.que_hacer ? `<div style="color:var(--tx2);">${esc(f.que_hacer)}</div>` : ''}</li>`).join('');
-  const titulo = d.estado === 'SIN_KARDEX'
-    ? 'La bandeja no puede proponer: no hay ventas cargadas (kardex)'
+  const titulo = d.estado === 'SIN_VENTAS'
+    ? 'La bandeja no puede proponer: no hay ventas cargadas de ninguna fuente'
     : 'La bandeja no puede proponer: ningún producto nacional tiene ventas en los últimos 12 meses';
   return cmpCaja(titulo, `Sin ventas no hay con qué saber cuánto se vende al día, y la bandeja no inventa cantidades.
     <ul style="margin:8px 0 0 18px;padding:0;">${lista}</ul>`, 'mal');
@@ -349,7 +362,7 @@ function cmpBandejaHtml(d, filtro) {
     <div style="font-size:var(--fs-lg);font-weight:800;color:var(--tx);">${r.lineas ? `${esc(cmpN(r.lineas))} producto${r.lineas === 1 ? '' : 's'} para pedir a ${esc(cmpN(r.proveedores))} proveedor${r.proveedores === 1 ? '' : 'es'}` : 'Nada para pedir a proveedores nacionales hoy'}</div>
     ${r.lineas ? `<div style="font-size:var(--fs-sm);color:var(--tx2);">Valor: ${esc(valor)}</div>` : ''}
     <div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:4px;">Meta: tener existencias el ${esc(cmpPct(d.nivel_servicio))} de los días · se compra cada ${esc(cmpDias(ciclo.dias))}${ciclo.fuente === 'CONFIGURADO' ? '' : ' (supuesto)'} · entrega nacional ${esc(cmpDias((d.entrega_nacional || {}).dias))} (${esc((d.entrega_nacional || {}).fuente || 'sin fuente')}) · destino ${esc((d.destino || {}).bodega || '')} (CO ${esc((d.destino || {}).co || 'sin dato')})</div>
-    ${d.kardex_confiable ? '' : `<div style="font-size:var(--fs-sm);color:var(--err-tx);font-weight:700;margin-top:6px;">✗ Las ventas (kardex) no están al día: las cantidades de abajo pueden estar mal. Ver la franja de arriba.</div>`}
+    ${cmpDemandaHtml(d.demanda)}
   </div>
   <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px;">
     ${chip('', 'Todo', r.lineas)}${chip('URGENTE', 'Urgentes', r.urgentes)}${chip('ESTA_SEMANA', 'Esta semana', r.esta_semana)}${chip('PROXIMAS', 'Próximas', r.proximas)}

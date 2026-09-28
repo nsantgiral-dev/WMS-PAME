@@ -67,24 +67,34 @@ class BloqueoRecompraService:
         """
         from app.models.producto import Producto
         from app.models.inventario import UbicacionProducto
+        from app.services import demanda_fuentes as dfu
         from app.services.kardex_service import (
-            KardexService, KardexMovimiento, dias_frescura, ventana_demanda,
-            ventana_observada)
+            KardexService, fuente_elegida, ventana_demanda, ventana_observada)
         from sqlalchemy import func
 
+        # «¿Se vende?» lo contesta la fuente de demanda que elige la cascada
+        # (`demanda_fuentes`), no el kardex a mano: con la venta diaria de
+        # Siesa también se puede bloquear. Con las facturas desde pedido NO
+        # (no ve la caja de las tiendas: lo que se vende por POS saldría
+        # «muerto»), y sin un año observado y al día tampoco.
+        fuente = fuente_elegida()
         desde_12m, hasta = ventana_demanda(12)
-        desde_obs, _h, cobertura = ventana_observada(12)
-        ultimo = db.session.query(func.max(KardexMovimiento.fecha)).scalar()
+        desde_obs, _h, cobertura = ventana_observada(12, fuente=fuente)
+        pref = 'KARDEX' if fuente.get('fuente') == dfu.FUENTE_KARDEX else 'DEMANDA'
+        ultimo = (fuente.get('cobertura') or {}).get('hasta')
         motivo_no = None
-        if desde_obs is None:
-            motivo_no = 'KARDEX_VACIO'
+        if fuente.get('fuente') == dfu.FUENTE_NINGUNA or desde_obs is None:
+            motivo_no = 'SIN_FUENTE_DE_DEMANDA'
+        elif not fuente.get('incluye_caja'):
+            motivo_no = 'DEMANDA_PARCIAL'
         elif desde_obs > desde_12m:
-            motivo_no = 'KARDEX_NO_CUBRE_12_MESES'
-        elif ultimo is None or (hasta - ultimo).days > dias_frescura():
-            motivo_no = 'KARDEX_DESACTUALIZADO'
+            motivo_no = f'{pref}_NO_CUBRE_12_MESES'
+        elif not fuente.get('al_dia'):
+            motivo_no = f'{pref}_DESACTUALIZADO'
         if motivo_no:
-            logger.warning('[BLOQUEO] No se bloquea nada: %s (cobertura desde %s, '
-                           'último movimiento %s)', motivo_no, cobertura, ultimo)
+            logger.warning('[BLOQUEO] No se bloquea nada: %s (fuente %s, cobertura desde %s, '
+                           'último día %s)', motivo_no, fuente.get('fuente'), cobertura,
+                           ultimo)
             return {
                 'bloqueados_nuevos': 0,
                 'ya_bloqueados': db.session.query(ProductoBloqueado.producto_id)
@@ -92,11 +102,12 @@ class BloqueoRecompraService:
                 'total_capital_inmovilizado': 0,
                 'no_se_bloqueo_por': motivo_no,
                 'nota': (
-                    'No se bloqueó ningún SKU: sin un kardex que cubra los 12 meses y '
-                    'esté al día no se puede afirmar que algo NO se vende. Descargar '
-                    'el kardex y volver a correr.'),
-                'kardex': {'cobertura_desde': cobertura.isoformat() if cobertura else None,
-                           'ultimo_movimiento': ultimo.isoformat() if ultimo else None},
+                    'No se bloqueó ningún SKU: sin ventas de toda la red (con la caja de '
+                    'las tiendas) que cubran los 12 meses y estén al día no se puede '
+                    'afirmar que algo NO se vende. ' + (fuente.get('texto') or '')),
+                'demanda': {'fuente': fuente.get('fuente'),
+                            'cobertura_desde': cobertura.isoformat() if cobertura else None,
+                            'ultimo_dia': ultimo},
             }
 
         # Productos con stock > 0 en cualquier ubicación

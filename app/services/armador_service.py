@@ -296,7 +296,7 @@ def es_de_china(origen=None, marca=None, marca_codigo=None) -> bool:
     return any(m.upper() in marca for m in MARCAS_CHINA if m)
 
 
-def aptitud_de_la_propuesta(insumo_en_camino: dict) -> dict:
+def aptitud_de_la_propuesta(insumo_en_camino: dict, insumo_demanda: dict = None) -> dict:
     """¿Se puede pedir con esta propuesta de contenedor? (P0-10, 2026-09-25)
 
     **Una política** para el Armador y para las dos pantallas. La posición
@@ -308,9 +308,20 @@ def aptitud_de_la_propuesta(insumo_en_camino: dict) -> dict:
     No apta si: ninguna fuente de «en camino» tiene dato; una fuente falló; o
     el espejo de OCs de Siesa nunca terminó un barrido completo (las OCs de
     importación abiertas no se ven).
+
+    Y desde 2026-09-27, **la demanda**: la fuente que eligió
+    `demanda_fuentes.fuente_de_demanda` tiene que servir para un contenedor
+    (con la caja de las tiendas, medio año observado, al día). Con las facturas
+    desde pedido el faltante sale corto y el contenedor también — un sub-pedido
+    se corrige, pero no se arma a ciegas sobre la mitad de la venta.
     """
     ins = insumo_en_camino or {}
     motivos = []
+    if insumo_demanda is not None and not (insumo_demanda.get('apta_para') or {}).get(
+            'contenedor'):
+        motivos.append('La demanda no sirve para un contenedor: ' + (
+            (insumo_demanda.get('no_apta_por') or {}).get('contenedor')
+            or insumo_demanda.get('texto') or 'no hay ventas cargadas.'))
     if not ins.get('hay_dato'):
         motivos.append(ins.get('nota') or
                        'No se sabe qué viene en camino: el término en tránsito vale 0.')
@@ -444,6 +455,10 @@ class ArmadorService:
         # lo que siempre faltaba.
         demanda_por_sku = KardexService.demanda_descensurada(
             ventana_meses=12, nivel='red')
+        # De qué fuente salió la demanda y qué decisiones aguanta: la declara
+        # `demanda_fuentes` y viaja con el resultado (como `insumo_en_camino`).
+        from app.services.demanda_fuentes import fuente_de_demanda
+        insumo_demanda = fuente_de_demanda()
 
         # Stock actual — existencia VENDIBLE, lo que ya tiene dueño y lo que
         # viene. `posicion_inventario` es la ÚNICA respuesta a «¿cuánto hay y
@@ -696,6 +711,7 @@ class ArmadorService:
             # solapamientos. Sin fuente con dato vale 0 y eso se dice: «viene
             # 0» y «no sé qué viene» empujan la compra al mismo lado.
             'insumo_en_camino': info_en_camino,
+            'insumo_demanda': insumo_demanda,
             'lead_time': {'nacional': lt_nac, 'china': lt_chi},
             # Procedencia del cálculo — sin esto el número no es auditable
             'estimador_sigma_d': ESTIMADOR_SIGMA_D,
@@ -1026,13 +1042,14 @@ class ArmadorService:
         # P0-10: sin saber qué viene, la propuesta no es apta. Se devuelve igual
         # (para verla), marcada, y las pantallas lo dicen.
         _insumo_camino = rop.get('insumo_en_camino') or {}
-        _aptitud = aptitud_de_la_propuesta(_insumo_camino)
+        _aptitud = aptitud_de_la_propuesta(_insumo_camino, rop.get('insumo_demanda'))
 
         return {
             'modo': modo,
             'apta': _aptitud['apta'],
             'no_apta_por': _aptitud['no_apta_por'],
             'insumo_en_camino': _insumo_camino,
+            'insumo_demanda': rop.get('insumo_demanda'),
             'cobertura_fichas_pct': round(cobertura_fichas, 1),
             'gatillo': gatillo,
             'tipo_contenedor': tipo_contenedor,

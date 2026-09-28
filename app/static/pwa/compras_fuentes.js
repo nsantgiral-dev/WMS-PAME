@@ -83,7 +83,14 @@ async function fuentesCargar() {
     conts = { contenedores: [], error: e.message || 'No se pudieron leer los contenedores' };
   }
   FUENTES_CONTENEDORES = conts.contenedores || [];
+  let dem;
+  try {
+    dem = await get('/api/compras/fuentes/demanda');
+  } catch (e) {
+    dem = { error: e.message || 'No se pudo leer de dónde salen las ventas' };
+  }
   el.innerHTML = [
+    fuentesHtmlDemanda(dem),
     fuentesHtmlOc(d.compras_oc || {}),
     fuentesHtmlEnCamino(d.en_camino || {}),
     fuentesHtmlLeadTime(d.lead_time || {}),
@@ -91,6 +98,63 @@ async function fuentesCargar() {
     fuentesHtmlCarga(),
     fuentesHtmlContenedores(conts),
   ].join('');
+}
+
+/** De dónde salen las ventas: la cascada la decide el servidor
+ *  (`demanda_fuentes.fuente_de_demanda`); acá solo se pinta. */
+function fuentesHtmlDemanda(dem) {
+  if (dem.error) return fuentesTarjeta('📈 Ventas (de dónde sale la demanda)', fuentesAviso(dem.error, 'err'));
+  const f = dem.fuente || {};
+  const cob = f.cobertura || {};
+  const cands = (f.candidatas || []).map(c => `<tr>
+      <td>${esc(c.nombre || '')}</td>
+      <td style="text-align:right;">${esc(fuentesNum(c.dias_en_ventana))}</td>
+      <td>${esc(c.hasta || 'sin datos')}</td>
+      <td>${c.usable ? (c.fuente === f.fuente ? '<strong>se usa</strong>' : 'disponible') : 'no alcanza'}</td>
+    </tr>`).join('');
+  const u = dem.ultima_lectura_siesa || {};
+  const ur = (u.resultado || {});
+  const tono = !f.hay_dato ? 'err' : (f.parcial || !f.al_dia ? 'warn' : 'ok');
+  const cuerpo = `
+    ${fuentesAviso(f.texto || 'Sin fuente de ventas', tono)}
+    ${f.que_hacer ? `<div style="font-size:var(--fs-sm);color:var(--tx2);margin:4px 0 8px;">${esc(f.que_hacer)}</div>` : ''}
+    <div style="overflow-x:auto;"><table style="width:100%;font-size:var(--fs-sm);border-collapse:collapse;">
+      <thead><tr style="color:var(--tx3);"><th style="text-align:left;">Fuente (en orden de preferencia)</th><th style="text-align:right;">Días</th><th style="text-align:left;">Hasta</th><th style="text-align:left;">Estado</th></tr></thead>
+      <tbody>${cands}</tbody></table></div>
+    <div style="font-size:var(--fs-sm);color:var(--tx2);line-height:1.8;margin-top:6px;">
+      Última lectura de Siesa: ${esc(fuentesHora(u.inicio))} · ${esc(u.estado === 'ok' ? 'completa' : u.estado === 'fallo' ? 'incompleta' : (u.estado || 'nunca'))}
+      ${ur.dias_guardados ? ` · días guardados ${esc(ur.dias_guardados.desde)} a ${esc(ur.dias_guardados.hasta)}` : ''}
+      ${ur.motivo ? `<div style="color:var(--warn-tx);">${esc(ur.motivo)}</div>` : ''}
+      Consultas: ${esc((dem.consultas || {}).reciente || '')} · ${esc((dem.consultas || {}).historico || '')}
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;">
+      <button class="btn" onclick="fuentesDemandaLeer(event, 'reciente')">Leer la venta reciente de Siesa</button>
+      <button class="btn" onclick="fuentesDemandaLeer(event, 'historico')">Leer el histórico</button>
+      <button class="btn" onclick="fuentesDemandaPedidos(event)">Fotografiar facturas desde pedido (90 días)</button>
+    </div>`;
+  return fuentesTarjeta('📈 Ventas (de dónde sale la demanda)', cuerpo);
+}
+
+async function fuentesDemandaLeer(event, que) {
+  await conBotonOcupado(event, async () => {
+    try {
+      const r = await post('/api/compras/fuentes/demanda/leer', { reciente: que === 'reciente' });
+      alerta(r.mensaje || 'Lectura iniciada', 'success');
+    } catch (e) {
+      alerta(e.message || 'No se pudo iniciar la lectura', 'error');
+    }
+  }, 'Iniciando…');
+}
+
+async function fuentesDemandaPedidos(event) {
+  await conBotonOcupado(event, async () => {
+    try {
+      const r = await post('/api/compras/fuentes/demanda/rellenar-pedidos', { dias: 90 });
+      alerta(r.mensaje || 'Iniciado', 'success');
+    } catch (e) {
+      alerta(e.message || 'No se pudo iniciar', 'error');
+    }
+  }, 'Iniciando…');
 }
 
 function fuentesHtmlOc(c) {

@@ -229,11 +229,15 @@ class TestLaBandeja:
 class TestSinKardexNoInventa:
 
     def test_dice_que_falta_y_como_encenderlo(self, app, db):
+        # Sin ninguna fuente de ventas (2026-09-27: la cascada de
+        # `demanda_fuentes`), la bandeja no propone y dice fuente por fuente
+        # qué hay y cómo se enciende la de Siesa.
         from app.services import compras_bandeja
         r = compras_bandeja.bandeja()
-        assert r['estado'] == 'SIN_KARDEX' and r['proveedores'] == []
+        assert r['estado'] == 'SIN_VENTAS' and r['proveedores'] == []
         textos = ' '.join(f"{f['titulo']} {f['que_hacer']}" for f in r['falta'])
-        assert 'KARDEX_AUTO' in textos and 'vacío' in textos
+        assert 'papeleriamedellin_WMS_Ventas_Dia' in textos and 'sin datos' in textos
+        assert r['demanda']['fuente'] == 'NINGUNA'
 
 
 class TestElCicloEsUnSupuestoDeclarado:
@@ -367,7 +371,7 @@ class TestConfianza:
     def test_sin_kardex_dice_no_decidir(self, app, db):
         from app.services import compras_bandeja
         r = compras_bandeja.confianza()
-        k = next(x for x in r['renglones'] if x['clave'] == 'kardex')
+        k = next(x for x in r['renglones'] if x['clave'] == 'demanda')
         assert k['nivel'] == 'mal' and 'no decidir' in k['titulo']
         assert r['decidir'] is False
         o = next(x for x in r['renglones'] if x['clave'] == 'origen')

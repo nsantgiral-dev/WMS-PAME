@@ -10,6 +10,9 @@ POST /api/compras/fuentes/marca-siesa/leer           leer la marca de Siesa (seg
 GET  /api/compras/fuentes/marca-siesa/estado         cómo va / cuándo fue la última lectura
 GET  /api/compras/fuentes/marca-siesa/vista-previa   qué cambiaría (de la lectura guardada)
 POST /api/compras/fuentes/marca-siesa/aplicar        ídem, escribiendo
+GET  /api/compras/fuentes/demanda                    de qué fuente sale la demanda (la cascada)
+POST /api/compras/fuentes/demanda/leer               leer la venta diaria de Siesa (segundo plano)
+POST /api/compras/fuentes/demanda/rellenar-pedidos   fotografiar facturas desde pedido N días (ídem)
 GET  /api/compras/fuentes/contenedores/<id>/items    ítems de un contenedor
 POST /api/compras/fuentes/contenedores/<id>/items    cargar ítems (código, cantidad)
 PUT  /api/compras/fuentes/contenedores/<id>/estado   mover el contenedor (y sus ítems)
@@ -155,6 +158,60 @@ def marca_siesa_leer():
         return _sin_permiso()
     from app.services.maestro_compras_carga import disparar_lectura_marca
     r = disparar_lectura_marca(current_app._get_current_object())
+    codigo = r.pop('codigo', 202 if r.get('ok') else 409)
+    return jsonify(r), codigo
+
+
+@compras_fuentes_bp.route('/demanda', methods=['GET'])
+@jwt_required()
+def demanda_estado():
+    """La cascada de la demanda: qué fuente se usa, qué cubre, qué aguanta, y
+    cómo terminaron las últimas lecturas. Cero Siesa."""
+    if not _es_compras():
+        return _sin_permiso()
+    from app.services import demanda_fuentes as dfu
+    from app.services import registro_sync_service as rs
+    return jsonify({
+        'fuente': dfu.fuente_de_demanda(),
+        'ultima_lectura_siesa': rs.ultimo('demanda_siesa'),
+        'ultima_lectura_siesa_ok': rs.ultimo_ok('demanda_siesa'),
+        'ultimo_relleno_pedidos': rs.ultimo('demanda_pedidos'),
+        'consultas': {'historico': dfu.consulta_ventas_dia(False),
+                      'reciente': dfu.consulta_ventas_dia(True)},
+    }), 200
+
+
+@compras_fuentes_bp.route('/demanda/leer', methods=['POST'])
+@jwt_required()
+def demanda_leer():
+    """`{"reciente": true}` lee los últimos días (la de todos los días);
+    sin él, el histórico. En un hilo: puede tardar más que un request."""
+    if not _es_compras():
+        return _sin_permiso()
+    from app.services.demanda_fuentes import disparar_descarga
+    datos = request.get_json(silent=True) or {}
+    r = disparar_descarga(current_app._get_current_object(),
+                          reciente=bool(datos.get('reciente')))
+    codigo = r.pop('codigo', 202 if r.get('ok') else 409)
+    return jsonify(r), codigo
+
+
+@compras_fuentes_bp.route('/demanda/rellenar-pedidos', methods=['POST'])
+@jwt_required()
+def demanda_rellenar_pedidos():
+    """Fotografía las facturas desde pedido de los últimos `dias` (1–400).
+    Es la demanda parcial de respaldo (sin la caja de las tiendas)."""
+    if not _es_compras():
+        return _sin_permiso()
+    from app.services.demanda_fuentes import disparar_relleno_pedidos
+    datos = request.get_json(silent=True) or {}
+    try:
+        dias = int(datos.get('dias', 90))
+    except (TypeError, ValueError):
+        return jsonify({'error': 'dias debe ser un número entre 1 y 400'}), 400
+    if not 1 <= dias <= 400:
+        return jsonify({'error': 'dias debe ser un número entre 1 y 400'}), 400
+    r = disparar_relleno_pedidos(current_app._get_current_object(), dias)
     codigo = r.pop('codigo', 202 if r.get('ok') else 409)
     return jsonify(r), codigo
 

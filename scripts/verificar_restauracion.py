@@ -76,6 +76,9 @@ REGENERABLES = ('pedidos_siesa', 'stock_siesa', 'siesa_jobs',
                 'oc_linea_siesa',
                 # Lectura de la marca de Siesa (m047): se vuelve a leer.
                 'marca_siesa_lectura',
+                # Venta diaria de Siesa y su cobertura (m050demanda): se
+                # vuelven a leer de Siesa (400 días hacia atrás).
+                'demanda_dia_siesa', 'demanda_dia_cubierto',
                 # Latido de los crons (m048inv): lo reescribe la próxima corrida.
                 'cron_latido')
 
