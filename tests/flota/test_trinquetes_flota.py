@@ -586,8 +586,11 @@ class TestTrinqueteMotorDeProduccion:
         """
         assert 'postgres:' in _leer(os.path.join(_RAIZ, 'pytest.ini')), \
             'pytest.ini no registra el marcador `postgres` con su razón'
-        assert 'not postgres' in _leer(os.path.join(_RAIZ, 'railway.toml')), \
-            'railway.toml no deselecciona `postgres` de forma explícita'
+        # La suite ya no corre en el build de Railway sino en GitHub Actions
+        # («Wait for CI»): la deselección declarada vive en el workflow.
+        assert 'not postgres' in _leer(
+            os.path.join(_RAIZ, '.github', 'workflows', 'tests.yml')), \
+            'el workflow de CI no deselecciona `postgres` de forma explícita'
 
     def test_los_tests_de_postgres_fallan_en_vez_de_saltarse(self):
         """Un skip deja el reporte en verde y la propiedad sin verificar.
