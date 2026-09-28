@@ -170,7 +170,8 @@ texto.
 | API_v2_Inventarios_RequisicionesParaTransferir | `get_consec_rit_by_referencia()` | Recovery: encontrar la RIT ya creada tras un timeout (`f440_referencia`) |
 | `238920` (dinámico) | `get_clasificacion_items()` | Clasificación ABC por ítem — reemplaza el CSV manual de rotación |
 | `papeleriamedellin_WMS_Stock_Bodega_v2` | `inventario_siesa_service._descargar_una_pasada_custom()` | **Existencias multi-bodega** — la que llena `stock_siesa` |
-| `papeleriamedellin_papeleriamedellin_API_custom_KardexWMS` | `kardex_service` (`KARDEX_CONSULTA_NOMBRE`) | Movimientos de kardex para demanda y costeo |
+| `papeleriamedellin_papeleriamedellin_API_custom_KardexWMS` | `kardex_service` (`KARDEX_CONSULTA_NOMBRE`) | Movimientos de kardex para demanda y costeo. **401 en QA y en producción** (2026-09-27): desde ese día es respaldo, ver «Compras: de dónde sale la demanda» |
+| `papeleriamedellin_WMS_Ventas_Dia` / `…_Reciente` (**a registrar**) | `demanda_fuentes.descargar_ventas_dia` | La venta diaria que Siesa suma (día × bodega × SKU): la fuente de la demanda de compras. SQL en `demanda_fuentes.SQL_VENTAS_DIA` |
 | `papeleriamedellin_compromisos_wms` | `get_compromisos_t405()` | Compromisos por pedido (variante dinámica, lee t405) |
 | `papeleriamedellin_WMS_Remision_DesdePedido` | `get_remision_desde_pedido()` | Remisión asociada a un pedido. **Tres estados** (encontrada / `None` = barrido completo sin ella / `RemisionNoDisponible` = no se sabe), `tamPag=100` paginado (2026-09-25); **corta al encontrar** y sin CO/tipo en la consulta dos filas del mismo consecutivo son «no sé» (2026-09-26). Columnas reales (QA): `LineaRegistro, consec_pd, tipo_rm, consec_rm` — **sin CO ni tipo del pedido** |
 | `papeleriamedellin_WMS_PuntoEnvio_FE` | `get_punto_envio_factura()` | Punto de envío para la FE (fallback de `SIESA_PUNTO_ENVIO_DEFAULT`) |
@@ -3319,6 +3320,10 @@ prefijo); con el mismo token `papeleriamedellin_WMS_Stock_Bodega_v2` responde
 el permiso de la consulta en Siesa. El cuadre kardex ↔ `InvFecha` por SKU queda
 pendiente de que responda: `scripts/qa_kardex_real.py --cuadre`.
 
+**Y en producción, igual (medido el 2026-09-27):** 401 por los dos endpoints y
+los dos nombres. Desde ese día compras no depende de ella: ver «Compras: de
+dónde sale la demanda».
+
 Del mismo endpoint dinámico, medido sobre la consulta de control:
 
 - El sobre declara `total_páginas` y `total_registros` (con tilde y eñe).
@@ -6157,7 +6162,7 @@ pidiendo hoy se agota antes de que llegue (posición < venta diaria × lead time
 (`BloqueoRecompraService.verificar_oc`, la que ya existía «antes de generar la
 OC»), SKU sin ninguna fila de existencias (Regla 0), sin venta reciente, y los
 de China (van por el contenedor) — todo declarado en «Lo que la bandeja no
-propone». Sin kardex: `SIN_KARDEX` con qué falta y cómo encenderlo.
+propone». Sin ventas de ninguna fuente: `SIN_VENTAS` con qué falta, fuente por fuente (desde el 2026-09-27 la demanda sale de la cascada de «Compras: de dónde sale la demanda»; antes era `SIN_KARDEX`).
 
 **El borrador de OC** (copiar o CSV con `;`) lleva NIT, proveedor, CO y bodega
 destino (el CDI, `co_de_bodega`), referencia, descripción, unidad de compra,
@@ -6246,6 +6251,178 @@ y los de compras, verdes por separado (108).
    para China?
 5. **Meta de servicio 95 %** para toda la bandeja (sigue abierta la de la
    canasta constitucional).
+
+---
+
+## Compras: de dónde sale la demanda (2026-09-27)
+
+**Qué pasaba.** La bandeja no proponía ninguna compra: su única fuente de
+demanda era la consulta del kardex movimiento a movimiento
+(`…_KardexWMS`), que da **401 en QA y en producción** (medido el 2026-09-27,
+20:32 Bogotá: los dos nombres × los dos endpoints; la de control
+`…_WMS_Stock_Bodega_v2` en 200 con el mismo token), son ~17.000 páginas y su
+paginación no es estable. La base de producción tiene 4.672 movimientos de
+enero de 2024 (una descarga vieja que nunca terminó). La clase: *la demanda
+dependía de una sola fuente que no responde, y el motor completo se apagaba
+detrás de ella.*
+
+**Ahora — «Siesa calcula, el WMS decide».** `app/services/demanda_fuentes.py`
+es la única política que contesta «¿de qué fuente sale la demanda y qué
+aguanta?» (`fuente_de_demanda`). Elige **una** fuente por corrida (mezclar
+haría que dos SKU iguales se midan distinto), en este orden:
+
+| Fuente | Qué es | Caja de tiendas | Se usa si |
+|---|---|---|---|
+| `SIESA_VENTAS_DIA` | Consulta dinámica NUEVA: Siesa suma la T470 por día × bodega × SKU (`SQL_VENTAS_DIA`) | sí (lo acumulado) | ≥ 28 días seguidos cubiertos |
+| `KARDEX` | `kardex_movimientos`, con su regla de siempre | sí | su último movimiento cae en la ventana (el de producción de 2024 no) |
+| `VENTAS_DESDE_PEDIDO` | `foto_ventas_lineas` (facturas desde pedido, por CO y día) | **no** | ≥ 28 días en que TODO CO operado tiene foto completa |
+| `NINGUNA` | — | — | la bandeja dice `SIN_VENTAS` y qué falta, fuente por fuente |
+
+`apta_para` dice qué decisión aguanta: **bandeja** (al día: `DEMANDA_DIAS_FRESCURA`,
+4 días; el kardex, su `KARDEX_DIAS_FRESCURA`), **contenedor** (con caja, ≥ 180
+días, al día — se agregó a `armador_service.aptitud_de_la_propuesta`),
+**temporada** y **bloqueo de recompra** (con caja, ≥ 360 días). Con las facturas
+desde pedido la bandeja **propone, como cota inferior**, y lo dice en grande
+(renglón `demanda` de la franja en `aviso`, «las cantidades salen CORTAS»); el
+contenedor sale NO APTO y el bloqueo no bloquea (`DEMANDA_PARCIAL`).
+
+**Un día no observado no es un día sin venta.** La cobertura de cada fuente es
+su tramo **contiguo** de días observados que termina en el más reciente; un
+hueco adentro corta (se declara `dias_antes_del_hueco`). La consulta de Siesa
+devuelve solo filas con venta: un día **cubierto** sin fila es un cero
+verdadero, uno no cubierto es un hueco. Por eso la cobertura es su propia tabla
+(`demanda_dia_cubierto`) y no se infiere de las fechas.
+
+**El motor no cambió.** `kardex_service.serie_demanda` (el numerador, D6
+incluido) lee la fuente elegida; `ventana_observada` recorta a su cobertura
+(con Siesa, también el final: hoy no está leído); `cobertura_demanda` para la
+temporada. ROP, contenedor, S-B, TSB, temporada, tasa servida y bloqueo leen de
+ahí sin saber de qué fuente sale. Cada fila de `demanda_descensurada` publica
+`fuente_demanda` y `demanda_parcial`; `rop_dual` publica `insumo_demanda`.
+
+### El SQL — para registrar en Generic Transfer (consultas dinámicas)
+
+`venv/bin/python scripts/qa_demanda_fuentes_real.py --sql` lo imprime con la
+ventana puesta. Dos registros con el mismo SQL y distinta ventana:
+`papeleriamedellin_WMS_Ventas_Dia` (400 días: el histórico, una vez) y
+`papeleriamedellin_WMS_Ventas_Dia_Reciente` (14 días: el de todos los días).
+Variables: `CONNEKTA_CONSULTA_VENTAS_DIA` / `…_RECIENTE` (default esos nombres).
+
+Por qué tiene esta forma — **lo medido en producción el 2026-09-27**:
+
+- `parametros` a una dinámica → **400 «el query a ejecutar no maneja
+  parametros»**. La ventana va dentro del SQL (`DATEADD(DAY, -N, GETDATE())`).
+  El mensaje sugiere que una consulta *puede* declarar parámetros: preguntarle
+  al consultor; con eso basta un registro.
+- Lo que hoy tiene `…_descubrir_tablas` en producción responde **500: «The
+  ORDER BY clause is invalid in views, … subqueries … unless TOP, OFFSET or FOR
+  XML»**: Connekta **envuelve** el SQL en una subconsulta para paginar. Por eso
+  `ORDER BY … OFFSET 0 ROWS`, sin `WITH`, y como el orden de adentro no está
+  garantizado afuera, el SQL **numera** (`orden` = ROW_NUMBER por la clave) y
+  **declara el total** (`total_filas`): el WMS exige 1…N, cada uno una vez. Es
+  probablemente la causa del orden inestable del kardex y de InvFecha.
+- Orden **descendente** por fecha: una lectura cortada deja los últimos días
+  completos (`dias_completos`: si llegaron 1…k y la k+1 es de un día anterior,
+  todo lo posterior está entero, incluidos los días sin fila).
+- En el texto del SQL la fecha va con UNA comilla; la doble (Regla 15) es para
+  `parametros`.
+- **Las columnas de enlace (`f470_rowid_docto`, `f470_rowid_item_ext`,
+  `f470_rowid_bodega`) no están verificadas**: el paso 0 lo confirma.
+
+### La lectura — `descargar_ventas_dia`
+
+Solo GET, endpoint dinámico, `tamPag` 100, en un hilo (`LOCK_DEMANDA_SIESA`
+2050; botón en 🧾 Fuentes → Ventas, `POST /api/compras/fuentes/demanda/leer`).
+Una fila con dos números o dos contenidos, `total_filas` que cambia, una fila
+ilegible → INCOMPLETA y **no guarda nada**; una fila que falta se pide otra vez
+en su página (3 veces); si sigue faltando, se guarda hasta el día anterior al
+hueco. Cero filas no es «no hubo ventas». Upsert por (día, bodega, SKU); lo que
+Siesa deja de reportar en un día releído completo queda en **cero** (nada se
+borra). Hoy nunca se guarda. `registros_sync` tipo `demanda_siesa`;
+`GET /api/compras/fuentes/demanda` da la cascada y las últimas lecturas.
+`DEMANDA_MAX_PAGINAS` (12.000), `DEMANDA_MAX_MINUTOS` (50), `DEMANDA_PAUSA_S`.
+
+Respaldo parcial mientras la consulta no exista: `rellenar_ventas_pedido(dias)`
+(`POST …/demanda/rellenar-pedidos`, `LOCK_DEMANDA_PEDIDOS` 2051): la foto de
+ventas de siempre, por CO y día, N días atrás.
+
+Migración **`m050demanda`** (down `m049tardia`): `demanda_dia_siesa`,
+`demanda_dia_cubierto`. Las dos OPERATIVAS en el acta de corte y REGENERABLES
+en el respaldo (se vuelven a leer).
+
+### Medido en producción el 2026-09-27 (domingo 20:32–21:10, solo GET)
+
+| | |
+|---|---|
+| `…_KardexWMS` (dos nombres × dos endpoints) | 401 los cuatro |
+| Consultas estándar plausibles de movimientos/POS (`API_v2_Inventarios_Movimientos`, `…_Kardex`, `API_v2_Ventas_POS`, …) | 401 las siete (no registradas o sin permiso: no se afirma cuál) |
+| `API_v2_Ventas_Facturas_DesdePedido`, viernes 25/09 | CO 003 (NB1): 472 líneas, 41 FE, 10.813 u · CO 004 (PC1): 140 líneas · los otros 7 CO: **cero** (su venta es de caja) |
+| Ídem, semana 14–20/09 día por día | CO 003: 2.002 líneas, 25 páginas, 768 refs · CO 004: 1.173 líneas, 16 páginas. Un mes entero en UNA consulta **no responde en 30 s**: se lee por día |
+| InvFecha `PAPELSP9218` NB1 | existencia 110, comprometido 110 |
+| POS no acumulado (`f400_cant_pos_1 ≠ 0`) | hay en NS1, NC1, PC1, FC1, FN1 y NB1 (el domingo a las 8 p. m.) |
+| Siesa de producción de noche | **responde** (la Regla 14 era de QA) |
+| **Ensayo de la bandeja con datos reales** (`--ensayo-bandeja 35`, SQLite desechable) | 315 corridas de facturas desde pedido (35 días × 9 CO, 626 s; 2 con timeout de lectura el 28/08) + existencias (39.216 filas, 194 s) → cascada `VENTAS_DESDE_PEDIDO`, **29 días** (el hueco del 28/08 cortó la cobertura, como debe) → bandeja **OK: 51 líneas, 12 urgentes, 28 esta semana, 11 próximas**, 1.984 SKU con demanda, franja en `aviso` (cota inferior). Primera vez que la bandeja propone con datos de producción |
+
+**Por qué diario y no semanal** (el pedido del dueño era SKU × bodega × semana):
+el motor mide la venta diaria (media, σ, intermitencia de S-B, «sin venta
+reciente», el neteo D6); con semanas habría que reescribirlo o mandar las
+estadísticas suficientes (Σ, Σ² diario, días con venta) y perder el neteo
+exacto. Diario × bodega entra al motor sin tocarlo, el nivel red se suma
+exacto, y el volumen se mide mañana con `SQL_VALIDACION['volumen_mes']`. Si es
+inaceptable, el plan B es la misma consulta sin bodega (red) o semanal con las
+sumas suficientes — la cascada y la lectura no cambian.
+
+### Lo que NO cubre, dicho
+
+- **La venta de caja sin acumular** (`f400_cant_pos_1`) no está en la T470
+  hasta que la tienda acumula; la consulta la ve al día siguiente. La lectura
+  reciente de todos los días la recoge.
+- **Si la caja entra a la T470 como concepto 501** está por verificar (paso 1
+  de la validación: el tipo de documento y el concepto de un día de tienda). Si
+  entra con otro concepto, el SQL lo tiene que incluir.
+- **Las devoluciones de caja** (NC POS) igual: 502 en entrada es el supuesto.
+- **La censura** (días sin existencias) sigue saliendo de `StockDiario`, que
+  solo arma el kardex: con la fuente de Siesa el denominador son días
+  calendario y queda `censurado` (la demanda de lo que se agotó sale baja: el
+  lado conservador, declarado). Siesa no guarda historia de saldos (t400 es
+  de hoy); `foto_stock_diaria` hacia adelante es la vía, **no conectada**.
+- **Deltas de existencias como demanda**: no se implementó. Sin los
+  movimientos no se distingue venta de traslado, ajuste o avería, y la foto
+  diaria no existe en producción (la base está en `m033ciclo`).
+- **La fuente de pedidos** no trae notas crédito (sin devoluciones) y solo
+  existe donde corra `FOTOS_SIESA` o el relleno.
+- Nivel `bodega` con la fuente de Siesa sí; con pedidos, solo NB1/PC1.
+
+### Qué dejar quieto para el arranque
+
+- **La descarga del kardex y la reconstrucción de `stock_diario` quedan de
+  respaldo**: no se borran (con el kardex al día sigue siendo la segunda
+  fuente, y la única con censura), pero **`KARDEX_AUTO` apagado** y nadie tiene
+  que pedirle permiso a Siesa por `…_KardexWMS` para que compras funcione.
+- **TSB, S-B y el tamiz MASE** siguen en ⚙️ Avanzado: son refinamiento; la
+  decisión del día 1 es el punto de pedido nacional (demanda media + σ + lead
+  time + posición).
+- **El contenedor de China** no se arma hasta tener 180 días de la fuente con
+  caja (con la consulta histórica de 400 días, desde el primer día).
+
+Trinquete: `tests/test_demanda_fuentes.py` (lectura con la forma real del
+endpoint dinámico, cascada, equivalencia Siesa ↔ kardex con D6, bandeja sin
+kardex, contenedor y bloqueo con la parcial, rutas, pantalla en Node con
+`util.js` real) y la clase «una fuente de demanda» por AST: solo
+`_guardar_lectura`, `cobertura_siesa` y `serie_demanda` tocan la venta de
+Siesa; solo `demanda_fuentes` juzga la cobertura de una fuente; los módulos de
+compras no miran el kardex a mano (inventario de 1: `_renglon_demanda` refina
+el renglón cuando la fuente ES el kardex). Meta-tests y pisos.
+**22 mutaciones, las 22 rojas** (con `-B` y `PYTHONDONTWRITEBYTECODE`, cada
+reemplazo verificado a aplicar una vez; una sobrevivía y destapó una rama
+muerta en `dias_completos`, que se quitó). Cron `[DEMANDA_SIESA]` (05:40,
+**nace apagado**: `DEMANDA_SIESA=true`; mientras la cobertura no llegue al año
+lee la histórica, después la reciente); `/api/health/siesa` → `demanda_compras`
+y una advertencia si compras no tiene ventas al día.
+
+Script: `scripts/qa_demanda_fuentes_real.py` (solo GET, `_post` y
+`requests.post` bloqueados, `MODO_ENSAYO`, SQLite forzada): `--ambiente
+qa|produccion`, `--sql`, `--leer reciente|historico`, `--ensayo-bandeja N`.
 
 ---
 
