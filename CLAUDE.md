@@ -2027,10 +2027,10 @@ no se afloja el criterio.
 | AJUSTE_CONTEO | 142951 | `sesion.siesa_triggered` (ídem) | — |
 | TRASLADO_AVERIAS | 142951 | `movimiento.siesa_sync` (pre-flag `ENVIANDO` desde la tanda 2; `tarea_dev.siesa_triggered` en el camino viejo) | — |
 | DESPACHO_TRASLADO | 174930/173076 | `solicitud.siesa_salida_consec` | — |
-| NOTA_CREDITO_FACTURA | 251126 (unificado con el job de abajo desde `07cb5df`, ver "NCE — qué conector usar") | `recaudo.siesa_nc_triggered` (pre-flag) | 1ro |
-| NOTA_CREDITO_DEVOLUCION_CLIENTE | 251126 | `devolucion.siesa_nc_triggered` (pre-flag) | — (bridge marca `recaudo.siesa_nc_triggered` si viene de ruta) |
+| NOTA_CREDITO_FACTURA | 251126 (unificado con el job de abajo desde `07cb5df`, ver "NCE — qué conector usar") | `recaudo.siesa_nc_triggered` (pre-flag) **+ desenlace confirmado** (`politica_cobro.nc_llego`; la bandera sola es «no sé», 2026-09-26) | 1ro |
+| NOTA_CREDITO_DEVOLUCION_CLIENTE | 251126 | `devolucion.siesa_nc_triggered` (pre-flag) **+ la respuesta de Siesa guardada** (`siesa_nc_response`, 2026-09-26) | — (bridge marca `recaudo.siesa_nc_triggered` si viene de ruta) |
 | RECIBO_CAJA | 142888 | `recaudo.siesa_rc_triggered` (pre-flag) **+ desenlace confirmado** (`politica_cobro.rc_llego_a_siesa`): la bandera sola ya no es «idempotente» | 2do (espera NC; si la NC ya salió y el puente falló, lo reconstruye) |
-| DOCUMENTO_CONTABLE_RET | 142882 | `recaudo.siesa_dc_triggered` (pre-flag) | 3ro (espera RC) |
+| DOCUMENTO_CONTABLE_RET | 142882 | la cuenta PUC en `siesa_dc_pucs` (pre-flag) **+ desenlace confirmado** (`politica_cobro.dc_llego`, 2026-09-26) | 3ro (espera RC; 30 min si el RC espera una NC) |
 | MOTIVO_DIAN_NC | 251546 | `devolucion.siesa_motivo_dian` | tras NOTA_CREDITO_DEVOLUCION_CLIENTE |
 | ALERTA_EMAIL | Resend API | N/A | — |
 
@@ -6454,8 +6454,8 @@ por operación en `app/services/permisos_liquidacion.py`:
 | Operación | Quién |
 |---|---|
 | Liquidar, «Enviar a Siesa», registrar cobro, reintentar RC/DC/NC, resolver un RC sin verificar | admin + liquidador |
-| Parada tardía desde la oficina (ruta ya cerrada: `puede_registrar_parada_tardia`) | admin + liquidador |
-| Confirmar retención, corregir cobro (y, con la ruta en tránsito, registrar la parada por el conductor) | admin + líder de cartera |
+| Parada tardía desde la oficina (ruta ya cerrada, **solo paradas sin gestionar**: `puede_registrar_parada_tardia`) | admin + liquidador |
+| Confirmar retención, corregir cobro (incluye cambiar una parada ya registrada, y con la ruta en tránsito registrar la parada por el conductor) | admin + líder de cartera |
 | Autorizar crédito no autorizado (una parada, o en lote: `/api/cartera/panel/credito-lote`) | admin + líder de cartera |
 | Autorizar una retención de cartera | líder de cartera por su rol; la casilla `puede_autorizar_cartera` **solo en el admin** (`Roles.CARTERA_POR_ROL`, `CARTERA_CON_CASILLA = (ADMIN,)` desde el 2026-09-26: listas blancas); el iniciador nunca |
 | Forzar el cierre de una ruta | admin |
@@ -6788,3 +6788,57 @@ operario, empacador, picker/packer de traslado) y el cupo solo para
 por AST contra los roles a los que `conteo_service` asigna un conteo
 (`tests/test_productividad_roles.py`, 3 mutaciones rojas). La pestaña Operarios
 lista a quien lista el servidor.
+
+---
+
+## La plata, validada (2026-09-26): quien liquida no corrige; ningún documento sin salida
+
+Un validador encontró 13 defectos en la plata y el e2e del día seis más. Todos
+cerrados por su clase; los xfail de `tests/test_val_dinero_20260926.py` y los
+seis de plata de `tests/test_val_e2e_dia_20260926.py` quedaron sin marca.
+Migración **`m050plata`** (down `m049tardia`, aditiva, nullable, sin backfill).
+
+| | Qué pasaba | Ahora | Trinquete |
+|---|---|---|---|
+| **P0-1** parada | La puerta de la parada tardía aceptaba CUALQUIER parada de una ruta cerrada: el liquidador reescribía un ENTREGADO en efectivo del conductor | `parada_tardia.puerta_de_confirmacion` (la ruta y el servicio): **registrar** una sin gestionar (cerrada: quien liquida; en camino: quien corrige cobros) con `motivo_tardia`; **corregir** una registrada es corregir el cobro (admin + líder, `motivo_correccion`, FORZAR `parada_confirmada_corregida_por_la_oficina`). El formulario abierto sobre una parada que entretanto confirmó el conductor: **409**, no pisa. Toda escritura de la oficina exige el formulario vigente y queda `registrada_por_oficina` | `test_puerta_de_la_parada.py`: matriz rol × situación; **inventario AST de toda función que escribe `estado_entrega`/`forma_pago`/`monto_cobrado` con su guarda** (solo encoge); meta-tests |
+| **P0-2** monto del RC | En una PARCIAL, `monto_override` de quien liquida iba tal cual al RC | `politica_cobro.exigir_override_permitido` (dentro de `monto_rc`): una PARCIAL sale por lo declarado. Cambiarlo es `exigir_correccion_de_monto` (admin + líder, razón, tope = la factura; sin factura anotada una PARCIAL no sube). Con la retención rechazada, corregir el monto achica el descuento en lo mismo. La pantalla no ofrece el campo en PARCIAL | `test_monto_del_rc.py` (AST: todo el que recibe `monto_override` se lo pasa a `monto_rc`) |
+| **P1-3** cierre forzado | Sus recaudos RECHAZADO sin marca: la confirmación real del conductor rebotaba (400) y se perdía | Nacen `registrada_por_oficina`: lo del teléfono se guarda aparte (`version_conductor`, diferencia). Elegido «aparte» y no «reemplaza», coherente con la parada tardía. La corrección entra después de cerrar la llegada **si no contradice lo físico** (nada volvió): FALTANTE_TOTAL → CANCELADA (única salida), bultos FALTANTE → ENTREGADO | `test_puerta_de_la_parada.py::TestElCierreForzadoTieneSalida` |
+| **e2e b** versión del conductor | «No la confirmó» y «mandó otra versión» a la vez; sin salida | Una sola señal. `parada_tardia.resolver_version` / `POST …/recaudos/<id>/version-conductor` `{decision: MANTENER\|ADOPTAR, motivo}`: adoptar antes de que salga a Siesa lo hace quien liquida; después es corregir el cobro (y lo que viajó no se reescribe) | `TestLaVersionDelConductorTieneSalida` |
+| **P1-4** DC que no salió | `documentos_pendientes` solo conocía NC y RC | `politica_cobro.dc_pendiente` (`LISTO` / `ESPERA_DEVOLUCION`); «DC» en los pendientes; señal `retencion_sin_documento` y línea del resumen diario (con el RC ya salido) | `test_liquidacion_escala.py` |
+| **P1-5** DC/NC sin verificar | La marca sola cerraba el job «idempotente»; «Reintentar» no lo frenaba | Idempotente solo con el desenlace (`dc_llego`, `nc_llego`, `siesa_nc_response`); si no, `_ResultadoDesconocido`. `TIPOS_CON_PREFLAG` suma DC y las dos NC (`_Preflag` por tipo): «Reintentar» se niega; «¿Está en Siesa?» en Recuperación y en Liquidación (`POST …/resolver-documento`, quien liquida) | `test_documentos_sin_verificar.py` (AST: todo idempotente de los ejecutores de plata bajo una pregunta por el desenlace; piso) |
+| **P1-6** escala | «Enviar a Siesa» solo en Rutas; el detalle leía las facturas en serie | Liquidación: «Documentos de la ruta en Siesa» (qué sale, qué no y por qué) + «Enviar todo a Siesa». `leer_facturas_en_paralelo` (tope 6, una lectura por factura): **25 paradas con Siesa a 0,2 s: 5,1 s → 1,0 s** | `TestLasFacturasEnParalelo` |
+| **P2-7** | Una ruta se liquidaba en tránsito | `liquidar_ruta` exige ENTREGADA; la guarda de liquidada vale en toda edición (la puerta) | `test_val_dinero_20260926.py` |
+| **P2-8** fecha del cobro | El RC tomaba `fecha_confirmacion`, que cada re-confirmación reescribe | `recaudos_entrega.fecha_cobro`: hora del teléfono corregida por el desfase (o la del servidor) en la primera confirmación; la oficina la declara (formulario, por defecto hoy). El RC lee `politica_cobro.momento_del_cobro` | `test_fecha_del_cobro.py` (AST: solo `confirmar_parada` la escribe) |
+| **P2-9** | «DC ✓» con la marca de pre-envío; la planilla ofrecía botones de plata a todos | `llego` (señal positiva) y «DC sin verificar»; la planilla trae `permisos` del servidor | mutaciones sobre los dos |
+| **P2-10** | Una ruta que nunca cierra no aparecía | `rezago_liquidacion.rutas_sin_cerrar` (> 24 h): Liquidación («Pedir el cierre», quien liquida; el teléfono lo muestra) y resumen diario | `test_rutas_sin_cerrar_y_rezago.py` |
+| **P2-11** | La oficina en tránsito registraba sin rastro | La puerta: motivo, marca, FORZAR `parada_registrada_por_la_oficina_con_la_ruta_en_camino`, formulario vigente | `test_parada_de_oficina.py` |
+| **P2-12** | Sin liquidador ni líder, todo caía en el admin sin aviso | `permisos_liquidacion.quien_opera_la_plata`: `/api/health/siesa` y resumen diario | `test_plata_p2_p3.py` |
+| **P2-13** | FALTANTE_TOTAL: RECHAZADO → DEVUELTA, PARCIAL → DEUDA | Faltante de retorno = DEUDA con `faltante_de_retorno` en los dos | ídem |
+| **e2e a** | Reconciliación: la factura completa como «debían cobrarse» | `politica_cobro.esperado_en_caja`: factura − retención que procede − lo devuelto valorizado (sin valorizar: lo declarado) | `test_reconciliacion_esperado.py` |
+| **e2e c** | Fugas: FALTANTE_TOTAL «sin NC todavía» y sus unidades como devueltas | «No habrá nota crédito»; faltante ≠ devuelto | e2e |
+| **e2e d/e** | Envíos con la hora corrida 5 h y códigos; «Crédito» siempre $0; TARJETA en transferencia | Hora de Bogotá y palabras; crédito = factura − cobrado por la política; renglón Tarjeta | e2e |
+| **e2e f** | Una ruta entregada a las 21:00 amanecía «atrasada» | `HORA_ENTREGA_DIA_SIGUIENTE = 19`: desde esa hora es del día operativo siguiente para el rezago (el mes sigue siendo el real) | `test_rutas_sin_cerrar_y_rezago.py` |
+| **P3** | | resumen de la retención PARCIAL con ruta, pedido y conductor; «no entró» limpia `rc_cobro_otro_mes`; el DC que espera un RC que espera una NC espera 30 min | `test_plata_p2_p3.py` |
+
+**40 mutaciones**, 38 rojas a la primera; las dos que sobrevivían eran guardas
+redundantes con la del servicio (la puerta de la ruta —roja por el guard de
+rol— y el permiso de `resolver_version` —el test pasó a exigir su mensaje).
+
+### Lo que NO cubre, dicho
+
+- **Adoptar** reusa el cuerpo guardado desde este cambio: una versión anterior
+  sin `cuerpo` se corrige a mano. Con el cobro ya encolado, lo que viajó no se
+  reescribe (nota crédito).
+- **La corrección después de contar** no desdice lo que volvió; una CONFIRMADA
+  sigue siendo la verdad física.
+- **El tope de corrección sin factura anotada** en un ENTREGADO lo pone el
+  registro del cobro (contra el neto de Siesa), no la corrección.
+- **`esperado_en_caja`** en una PARCIAL necesita la devolución amarrada con
+  `valor_unitario`; sin eso, lo declarado (no mide el faltante del conductor).
+- **Pedir el cierre** solo avisa en el teléfono (no hay notificación push).
+
+### Decisiones para el dueño
+
+1. ¿Quién paga un faltante de retorno (conductor, baja, cliente)? Hoy: deuda en cartera, declarada.
+2. ¿`HORA_ENTREGA_DIA_SIGUIENTE = 19` o la hora de cierre de temporada?
+3. Una ruta en camino > 24 h: ¿el cierre lo sigue forzando solo el admin?
