@@ -442,9 +442,13 @@ class TestTodaEscrituraDelCobroTieneSuGuarda:
                 if isinstance(n, ast.FunctionDef) and n.name == 'confirmar_parada']
         nombres = {getattr(c.func, 'id', None) or getattr(c.func, 'attr', None)
                    for c in ast.walk(fn) if isinstance(c, ast.Call)}
-        assert not nombres & {'puede_registrar_parada_tardia', 'puede_corregir_cobro',
-                              '_con_permiso'}, nombres
-        assert 'confirmar_parada' in nombres and 'es_oficina_de_paradas' in nombres
+        assert not nombres & {'puede_registrar_parada_tardia', 'puede_corregir_cobro'}, nombres
+        assert 'confirmar_parada' in nombres
+        # La ruta solo decide si se atraviesa la puerta (el guard de rol);
+        # qué se puede hacer adentro, el servicio.
+        guard = {getattr(a, 'id', None) for c in ast.walk(fn) if isinstance(c, ast.Call)
+                 and getattr(c.func, 'id', None) == '_con_permiso' for a in c.args}
+        assert guard == {'puede_escribir_parada_desde_oficina'}, guard
 
 
 class TestElDetectorMuerde:

@@ -84,6 +84,13 @@ def puede_corregir_cobro(usuario) -> bool:
     return _rol_en(usuario, (Roles.ADMIN, Roles.LIDER_CARTERA))
 
 
+def puede_escribir_parada_desde_oficina(usuario) -> bool:
+    """Atravesar la puerta de la confirmación de paradas desde la oficina
+    (registrar una sin gestionar o corregir una registrada). Qué puede hacer
+    adentro lo decide `parada_tardia.puerta_de_confirmacion` (2026-09-26)."""
+    return puede_registrar_parada_tardia(usuario) or puede_corregir_cobro(usuario)
+
+
 def puede_resolver_version_conductor(usuario) -> bool:
     """Resolver «el conductor mandó otra versión» (mantener lo de la oficina o
     adoptar la del teléfono). Quien liquida y quien corrige cobros; si la

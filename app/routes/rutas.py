@@ -13,7 +13,8 @@ from app.services.ruta_service import RutaService, ConflictError, AdvertenciasDe
 from app.services.permisos_liquidacion import (
     puede_autorizar_credito, puede_confirmar_retencion, puede_corregir_cobro,
     puede_forzar_cierre_ruta, puede_liquidar, puede_registrar_parada_tardia,
-    puede_resolver_documento, puede_resolver_version_conductor, puede_ver_liquidacion)
+    puede_escribir_parada_desde_oficina, puede_resolver_documento,
+    puede_resolver_version_conductor, puede_ver_liquidacion)
 from app.utils.fecha import dia_operativo as _dia_operativo, dia_operativo_de as _dia_operativo_de
 
 logger = logging.getLogger(__name__)
@@ -529,7 +530,7 @@ def confirmar_parada(id, tarea_id):
         return jsonify({'error': 'Token inválido'}), 401
     conductor_ruta = Conductor.query.filter_by(usuario_id=uid, activo=True).first()
     es_conductor = bool(conductor_ruta and conductor_ruta.id == ruta.conductor_id)
-    if not (es_conductor or _pt.es_oficina_de_paradas(_usuario())):
+    if not (es_conductor or _con_permiso(puede_escribir_parada_desde_oficina)):
         return jsonify({'error': 'Sin acceso a esta ruta'}), 403
     data = request.get_json() or {}
     if es_conductor:

@@ -57,6 +57,8 @@ MATRIZ = {
     # Mantener/adoptar la versión del conductor (2026-09-26, CTO): adoptar
     # después de Siesa lo acota `parada_tardia.resolver_version`.
     'puede_resolver_version_conductor': {'admin', 'liquidador', 'lider_cartera'},
+    # La puerta de la confirmación desde la oficina; adentro decide la política.
+    'puede_escribir_parada_desde_oficina': {'admin', 'liquidador', 'lider_cartera'},
     # El gerente VE (solo lectura, decisión del 2026-09-26); el supervisor no.
     'puede_ver_liquidacion':         {'admin', 'jefe_almacen', 'gerente', 'liquidador', 'lider_cartera'},
 }

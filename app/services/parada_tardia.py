@@ -110,7 +110,7 @@ def es_oficina_de_paradas(usuario) -> bool:
     corregir)? Solo decide si atraviesa la puerta; qué puede hacer adentro lo
     decide `puerta_de_confirmacion`."""
     from app.services import permisos_liquidacion as _pl
-    return _pl.puede_registrar_parada_tardia(usuario) or _pl.puede_corregir_cobro(usuario)
+    return _pl.puede_escribir_parada_desde_oficina(usuario)
 
 
 def puerta_de_confirmacion(ruta, previa, usuario, *, es_conductor: bool, data: dict,
