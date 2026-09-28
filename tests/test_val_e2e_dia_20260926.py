@@ -67,7 +67,6 @@ class TestUnaCajaEnColaNoSeLimpia:
     procesó este despacho». Cliente facturado, mercancía en la mesa, sin salida.
     """
 
-    @pytest.mark.xfail(strict=True, reason='resetear_siesa no mira el DESPACHO_F470 vivo (packing_service.py:767)')
     def test_resetear_se_niega_con_el_despacho_en_cola(self, app, client, db, almacen):
         from app.models.bulto import Bulto
         t = _caja_en_cola(db, almacen)
@@ -76,7 +75,6 @@ class TestUnaCajaEnColaNoSeLimpia:
         assert r.status_code in (400, 409), r.get_json()
         assert Bulto.query.filter_by(tarea_id=t.id).count() == 1
 
-    @pytest.mark.xfail(strict=True, reason='la lista del empacador pinta la cola como fallo (packing.js:130)')
     def test_la_lista_no_llama_fallo_a_lo_que_esta_en_cola(self, app, client, db, almacen, tmp_path):
         t = _caja_en_cola(db, almacen)
         emp = _usuario(db, rol='empacador')
