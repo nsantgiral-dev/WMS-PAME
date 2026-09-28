@@ -189,8 +189,8 @@ def create_app():
             )
             return True   # fail-closed: preferir seguridad sobre disponibilidad
 
-    # Presencia (m051asignacion): toda petición autenticada es señal de que su
-    # dueño está trabajando. Es lo que contesta «¿quién vino hoy?» sin que el
+    # Presencia (m051asignacion): toda petición autenticada que escribe es
+    # señal de que su dueño está trabajando (los GET no: un GET no escribe). Es lo que contesta «¿quién vino hoy?» sin que el
     # líder tenga que marcar a nadie (app/services/presencia.py).
     @app.before_request
     def _senal_de_presencia():

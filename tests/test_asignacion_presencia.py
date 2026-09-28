@@ -214,12 +214,15 @@ class TestLaPresencia:
         assert en_sql == en_py
         assert len(en_py) == 4, 'reciente × {ninguna, vencida, futura, anulada}, activo'
 
-    def test_toda_peticion_autenticada_es_senal(self, app, db, client, almacen):
+    def test_toda_peticion_autenticada_que_escribe_es_senal(self, app, db, client, almacen):
+        """Un POST con JWT deja señal; sin JWT no; y un GET tampoco — un GET
+        no escribe (la regla de `test_lista_paradas_no_escribe`)."""
         u = _persona(db, almacen, 'Llega', senal=False)
-        client.get('/api/conteo/mis-tareas')                       # sin JWT: nada
+        client.post('/api/mobile/confirmar', json={})              # sin JWT: nada
+        client.get('/api/conteo/mis-tareas', headers=_tok(app, u))  # GET: nada
         db.session.expire_all()
         assert db.session.get(type(u), u.id).ultima_senal_at is None
-        client.get('/api/conteo/mis-tareas', headers=_tok(app, u))
+        client.post('/api/mobile/confirmar', json={}, headers=_tok(app, u))
         db.session.expire_all()
         assert db.session.get(type(u), u.id).ultima_senal_at is not None
 

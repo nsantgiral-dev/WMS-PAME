@@ -22,9 +22,10 @@ Una persona está **disponible** si y solo si las tres cosas son ciertas:
 1. está activa en el maestro de usuarios;
 2. no tiene una ausencia declarada que cubra hoy (incapacidad, vacaciones,
    permiso… con fecha de regreso — `AusenciaUsuario`);
-3. dio señal de vida en las últimas `VENTANA_SENAL_HORAS` horas: cualquier
-   petición autenticada la renueva (`registrar_senal_de_peticion`, desde el
-   `before_request`), y pedir trabajo también (`registrar_senal`).
+3. dio señal de vida en las últimas `VENTANA_SENAL_HORAS` horas: toda
+   petición autenticada que escribe la renueva (`registrar_senal_de_peticion`,
+   desde el `before_request`), y pedir trabajo también (`registrar_senal`, en el
+   dispensador). Los GET no: un GET no escribe.
 
 La señal es automática a propósito: la ausencia que nadie declara —el que
 simplemente no llegó— es la más común, y una política que dependa de que el
@@ -103,10 +104,19 @@ def registrar_senal(usuario_id, ahora=None) -> None:
 
 
 def registrar_senal_de_peticion() -> None:
-    """Para el `before_request`: si la petición trae un JWT válido, su dueño
-    dio señal. Sin JWT, o con uno vencido o inválido, no hace nada: la ruta
-    decidirá qué contestar."""
+    """Para el `before_request`: si la petición **escribe** (POST, PUT, PATCH,
+    DELETE) y trae un JWT válido, su dueño dio señal. Sin JWT, o con uno
+    vencido o inválido, no hace nada: la ruta decidirá qué contestar.
+
+    Los GET no dejan señal: **un GET no escribe** (`test_lista_paradas_no_escribe`,
+    la regla del repo), y la señal es una escritura. No hace falta: quien
+    trabaja escanea y confirma (POST), y pedir trabajo —el sondeo de la PWA,
+    que sí es GET— la deja desde el servicio (`MobileService.get_tarea_actual`),
+    que ya escribe porque asigna.
+    """
     from flask import request
+    if request.method in ('GET', 'HEAD', 'OPTIONS'):
+        return
     if not request.path.startswith('/api/'):
         return
     cabecera = request.headers.get('Authorization', '')
@@ -181,7 +191,7 @@ def estado(usuario, *, ahora=None, ausencia=_NO_CARGADA) -> dict:
                 'ausencia': ausencia.to_dict()}
     if visto is None or visto < umbral_senal(t):
         if visto is None:
-            texto = 'no ha dado señal (no ha entrado a la aplicación)'
+            texto = 'no ha dado señal (no ha pedido tarea ni registrado nada en la aplicación)'
         else:
             from app.utils.fecha import TZ_BOGOTA
             from datetime import timezone

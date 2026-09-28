@@ -1877,7 +1877,7 @@ async function cargarOperarios() {
     const cabeza = `
       <div class="tabla-card" style="margin-bottom:8px;">
         <div style="font-size:var(--fs-sm);font-weight:700;color:var(--tx);">En turno: ${esc(eq.en_turno)} de ${esc(personas.length)}</div>
-        <div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:2px;">En turno = entró a la aplicación en las últimas ${esc(eq.ventana_senal_horas)} h y no tiene ausencia. El trabajo asignado a quien no está vuelve solo a la cola.</div>
+        <div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:2px;">En turno = pidió tarea, escaneó o confirmó algo en las últimas ${esc(eq.ventana_senal_horas)} h y no tiene ausencia. El trabajo asignado a quien no está vuelve solo a la cola.</div>
         ${decidir ? `<div style="margin-top:8px;padding:8px;border:1px solid var(--brd);border-radius:6px;font-size:var(--fs-xs);color:var(--warn-tx);"><b>Por decidir</b> — tareas a medio hacer de alguien que no está (hay mercancía a medio mover, no se sueltan solas):${decidir}</div>` : ''}
       </div>`;
 
