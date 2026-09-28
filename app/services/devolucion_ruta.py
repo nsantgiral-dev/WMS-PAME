@@ -148,7 +148,7 @@ def validar_parcial_del_conductor(estado_entrega: str, data: dict) -> None:
 
 
 def verificar_reconfirmacion(recaudo_previo, nuevo_estado: str, data: dict,
-                             bultos_tarea) -> None:
+                             bultos_tarea, correccion: bool = False) -> None:
     """Re-confirmar una parada cuya devolución YA se recibió en bodega no puede
     cambiar lo que volvió.
 
@@ -156,6 +156,14 @@ def verificar_reconfirmacion(recaudo_previo, nuevo_estado: str, data: dict,
     parada lo contradijera después, la nota crédito, el inventario y la
     liquidación hablarían de mercancías distintas. Observaciones y foto sí se
     editan (igual que el congelamiento del monto con el RC ya enviado).
+
+    **`correccion`** (la oficina corrige con `puede_corregir_cobro` y motivo,
+    validación de la plata 2026-09-26): la salida que no había después de
+    cerrar la llegada. Un cierre forzado deja la parada «rechazada», recepción
+    no encuentra nada y la devolución termina en faltante contra el conductor
+    — aunque él la entregó y cobró. La corrección entra **si no contradice lo
+    físico**: decir «se entregó» solo cuando nada volvió (ningún bulto
+    RETORNADO y nada contado de vuelta). Lo que sí volvió no se desdice.
     """
     if recaudo_previo is None:
         return
@@ -178,6 +186,15 @@ def verificar_reconfirmacion(recaudo_previo, nuevo_estado: str, data: dict,
                 nuevos_dev[str(it.get('codigo') or '')] = float(d)
         if nuevos and nuevos_dev != _devueltos_por_codigo(recaudo_previo.items_entregados):
             cambia = True
+    if cambia and correccion:
+        volvio_algo = (any(b.estado == EstadoBulto.RETORNADO for b in recibidos)
+                       or (dev is not None and dev.estado == E.CONFIRMADA))
+        if nuevo_estado in ESTADOS_QUE_DEVUELVEN or not volvio_algo:
+            return
+        raise ValueError(
+            f'No se puede decir que esta parada no devolvió nada: '
+            f'{"la devolución " + dev.codigo + " se contó con mercancía" if dev is not None and dev.estado == E.CONFIRMADA else "bodega recibió bultos de vuelta"}. '
+            f'Lo físico manda: corríjala como parcial o rechazada.')
     if cambia:
         que = (f'la devolución {dev.codigo} ya se contó en bodega ({dev.estado})' if contada
                else f'{len(recibidos)} bulto(s) ya se recibieron en bodega')
@@ -235,7 +252,12 @@ def sincronizar_con_parada(recaudo: RecaudoEntrega, usuario_id=None) -> dict:
                                   'es_total': vigente.es_total})
         return {'accion': 'actualizada', 'devolucion': vigente}
 
-    if vigente is not None and vigente.estado in E.ACTIVAS:
+    # Una contada en CERO (FALTANTE_TOTAL) de una parada que la oficina
+    # corrigió a «se entregó» no es un faltante: la mercancía quedó con el
+    # cliente. Se cancela con motivo (la única salida de FALTANTE_TOTAL; a esta
+    # altura solo llega una corrección: `verificar_reconfirmacion` frena lo demás).
+    if vigente is not None and (vigente.estado in E.ACTIVAS
+                                or vigente.estado == E.FALTANTE_TOTAL):
         from app.services.devolucion_cliente_service import cambiar_estado
         antes = foto(vigente, ['estado', 'observaciones'])
         cambiar_estado(vigente, E.CANCELADA)

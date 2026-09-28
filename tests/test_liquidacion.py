@@ -1167,8 +1167,27 @@ class TestDescuentoRechazadoEnUnParcial:
         db.session.commit()
         return recaudo
 
+    def _cliente_pago_el_resto(self, db, recaudo, monto):
+        """Validación de la plata (2026-09-26): quien liquida ya no sube el
+        monto de una PARCIAL con `monto_override`; lo corrige la política de
+        corrección (admin + líder de cartera, razón, tope = la factura)."""
+        from app.services.liquidacion_service import LiquidacionService
+        recaudo.tarea.valor_factura = 2000000
+        db.session.commit()
+        LiquidacionService.corregir_monto_declarado(
+            recaudo.id, nuevo_monto=monto, razon='El cliente pagó el resto', admin_id=1)
+
+    def test_el_override_de_una_parcial_no_cambia_el_monto(self, app, db, recaudo_liq):
+        recaudo = self._recaudo_parcial_rechazado(db, recaudo_liq)
+        from app.services.liquidacion_service import LiquidacionService
+        with patch('app.services.connekta_gateway.connekta', self._mock_siesa()):
+            with pytest.raises(ValueError, match='Corregir monto'):
+                LiquidacionService.registrar_cobro_recaudo(
+                    recaudo.id, admin_id=1, retenciones=[], monto_override=1500000)
+
     def test_no_exige_la_factura_completa_que_incluye_lo_devuelto(self, app, db, recaudo_liq):
         recaudo = self._recaudo_parcial_rechazado(db, recaudo_liq)
+        self._cliente_pago_el_resto(db, recaudo, 1500000)
         from app.services.liquidacion_service import LiquidacionService
         with patch('app.services.connekta_gateway.connekta', self._mock_siesa()), \
              patch('app.services.siesa_job_service.disparar_dlq_inmediato', MagicMock()):
@@ -1181,6 +1200,7 @@ class TestDescuentoRechazadoEnUnParcial:
         """Bajar el listón no es quitarlo: mientras falte plata de la parte
         que sí se quedó, el RC no sale."""
         recaudo = self._recaudo_parcial_rechazado(db, recaudo_liq)
+        self._cliente_pago_el_resto(db, recaudo, 1450000)
         from app.services.liquidacion_service import LiquidacionService
         with patch('app.services.connekta_gateway.connekta', self._mock_siesa()):
             with pytest.raises(ValueError, match='debe pagar el valor completo'):

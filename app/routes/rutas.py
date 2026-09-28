@@ -515,7 +515,13 @@ def anotar_paradas(id):
 @rutas_bp.route('/<int:id>/paradas/<int:tarea_id>/confirmar', methods=['POST'])
 @jwt_required()
 def confirmar_parada(id, tarea_id):
+    """El conductor confirma su parada; la oficina registra una sin gestionar
+    (`motivo_tardia`) o corrige una ya registrada (`motivo_correccion`). Quién
+    entra y cómo lo decide `parada_tardia.puerta_de_confirmacion` —acá y en el
+    servicio—: 403 sin permiso, 409 si la parada cambió mientras la oficina
+    llenaba el formulario (no se pisa nada), 400 lo demás."""
     from app.models.packing import TareaPacking
+    from app.services import parada_tardia as _pt
     ruta = RutaDespacho.query.get_or_404(id)
     TareaPacking.query.get_or_404(tarea_id)
     uid = _uid()
@@ -523,30 +529,16 @@ def confirmar_parada(id, tarea_id):
         return jsonify({'error': 'Token inválido'}), 401
     conductor_ruta = Conductor.query.filter_by(usuario_id=uid, activo=True).first()
     es_conductor = bool(conductor_ruta and conductor_ruta.id == ruta.conductor_id)
-    # La oficina en tránsito corrige lo del conductor (quien corrige cobros);
-    # con la ruta cerrada solo registra la parada tardía quien liquida (admin +
-    # liquidador): corregir cobros no abre la puerta de una ruta ya cerrada.
-    es_oficina = bool(ruta.estado != 'ENTREGADA'
-                      and _con_permiso(puede_corregir_cobro))
-    registra_tardia = bool(ruta.estado == 'ENTREGADA'
-                           and _con_permiso(puede_registrar_parada_tardia))
-    if not (es_oficina or es_conductor or registra_tardia):
+    if not (es_conductor or _pt.es_oficina_de_paradas(_usuario())):
         return jsonify({'error': 'Sin acceso a esta ruta'}), 403
     data = request.get_json() or {}
-    motivo_tardia = None
-    por_oficina = False
-    if ruta.estado == 'ENTREGADA':
-        # Parada tardía (P1-4): la ruta se cerró con esta parada sin gestionar.
-        # Quien liquida la registra con motivo (formulario de Liquidación); la
-        # confirmación que llega por la cola del conductor (sin señal) entra
-        # sola, solo si es la PRIMERA de esa parada, con el motivo dicho por el
-        # sistema. Las dos van a la bitácora (FORZAR).
+    if es_conductor:
         from app.models.recaudo_entrega import RecaudoEntrega as _RE_t
         previa = _RE_t.query.filter_by(ruta_id=id, tarea_id=tarea_id).first()
-        if es_conductor and previa is not None and previa.registrada_por_oficina:
-            # Tanda 2 · B: la oficina ya la registró. Lo del teléfono se guarda
-            # aparte y no pisa nada; si difiere, queda para revisar. 200: la
-            # cola del conductor lo da por entregado.
+        if previa is not None and previa.registrada_por_oficina:
+            # La oficina ya la registró (o la cerró un cierre forzado). Lo del
+            # teléfono se guarda aparte y no pisa nada; si difiere, queda para
+            # revisar. 200: la cola del conductor lo da por entregado.
             try:
                 res = RutaService.guardar_version_conductor(id, tarea_id, data)
             except ValueError as e:
@@ -555,20 +547,14 @@ def confirmar_parada(id, tarea_id):
                             'registrada_por_oficina': True,
                             'version_conductor': {'difiere': res['difiere'],
                                                   'campos': res['campos']}}), 200
-        if es_conductor and data.get('via_cola') is True and previa is None:
-            motivo_tardia = ('La confirmación llegó por la cola sin señal del conductor '
-                             'después de cerrada la ruta')
-        elif registra_tardia:
-            motivo_tardia = data.get('motivo_tardia')
-            por_oficina = True
-        else:
-            return jsonify({'error': 'La ruta ya se cerró: esta parada la registra quien '
-                                     'liquida, con un motivo.'}), 400
-    elif ruta.estado != 'EN_TRANSITO':
-        return jsonify({'error': f'La ruta debe estar EN_TRANSITO, está {ruta.estado}'}), 400
     try:
         recaudo_id, es_edicion = RutaService.confirmar_parada(
-            id, tarea_id, uid, data, motivo_tardia=motivo_tardia, por_oficina=por_oficina)
+            id, tarea_id, uid, data,
+            motivo_tardia=None if es_conductor else data.get('motivo_tardia'),
+            motivo_correccion=None if es_conductor else data.get('motivo_correccion'),
+            por_oficina=not es_conductor)
+    except _pt.PuertaCerrada as e:
+        return jsonify({'error': str(e)}), e.status
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
     from app.models.recaudo_entrega import RecaudoEntrega

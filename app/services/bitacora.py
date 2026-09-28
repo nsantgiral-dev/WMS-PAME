@@ -84,6 +84,9 @@ FORZADO_PREFLAG_RESUELTO_A_MANO = 'envio_sin_verificar_resuelto_a_mano'
 # Fiscal v2 (2026-09-26).
 FORZADO_RM_INEXISTENTE_SIN_BARRIDO = 'remision_declarada_inexistente_sin_barrido_completo'
 FORZADO_BULTO_CARGADO_SACADO = 'bulto_cargado_sacado_de_la_ruta'
+# Validación de la plata (2026-09-26).
+FORZADO_PARADA_CORREGIDA = 'parada_confirmada_corregida_por_la_oficina'
+FORZADO_PARADA_OFICINA_EN_CAMINO = 'parada_registrada_por_la_oficina_con_la_ruta_en_camino'
 
 #: tipo → (verbo en pasado para la bitácora legible, qué se saltó).
 TIPOS_FORZADO = {
@@ -109,6 +112,10 @@ TIPOS_FORZADO = {
                                          'la consulta de remisiones no se pudo leer entera'),
     FORZADO_BULTO_CARGADO_SACADO: ('sacó de la ruta un bulto ya cargado de',
                                    'el bulto no tenía remisión y factura para salir'),
+    FORZADO_PARADA_CORREGIDA: ('corrigió lo registrado en la parada de',
+                               'la oficina cambió una parada que ya estaba confirmada'),
+    FORZADO_PARADA_OFICINA_EN_CAMINO: ('registró por el conductor la parada de',
+                                       'la oficina registró la parada con la ruta en camino'),
 }
 
 #: Un FORZAR que no dice qué forzó (fila vieja de forma desconocida).

@@ -35,8 +35,6 @@ class TestElLiquidadorNoReescribeLoDelConductor:
     del conductor (p. ej. EFECTIVO → «no pagó y se quedó») antes de encolar
     el RC. La matriz del dueño reservó «corregir cobro» a admin + líder."""
 
-    @pytest.mark.xfail(strict=True, reason='val-dinero P1: la puerta de la parada tardía '
-                                           'reescribe paradas ya confirmadas')
     def test_el_liquidador_no_convierte_un_cobro_en_efectivo_en_sin_pago(
             self, app, client, db, mundo):
         from app.models.recaudo_entrega import RecaudoEntrega
@@ -57,7 +55,18 @@ class TestElLiquidadorNoReescribeLoDelConductor:
             'estado_entrega': 'RECHAZADO', 'motivo_rechazo': 'NO_PAGO_SE_QUEDO',
             'observaciones': 'no pagó', 'foto_entrega': FOTO})
         rec = RecaudoEntrega.query.filter_by(ruta_id=f.ruta_id).one()
-        assert r.status_code in (400, 403) and rec.estado_entrega == 'ENTREGADO'
+        # 409 y no 400/403 (arreglo 2026-09-26): con `motivo_tardia` la oficina
+        # dice «registro una parada sin gestionar»; que ya esté confirmada es
+        # que el conductor se le adelantó mientras llenaba el formulario. Lo que
+        # importa es que no pisó nada.
+        assert r.status_code in (400, 403, 409) and rec.estado_entrega == 'ENTREGADO'
+        # Y si lo pide como corrección, no tiene el permiso.
+        r = client.post(_url(f), headers=_jwt(app, liq), json={
+            'motivo_correccion': 'lo dijo el cliente', 'version_formulario': 4,
+            'estado_entrega': 'RECHAZADO', 'motivo_rechazo': 'NO_PAGO_SE_QUEDO',
+            'observaciones': 'no pagó', 'foto_entrega': FOTO})
+        assert r.status_code == 403 and RecaudoEntrega.query.filter_by(
+            ruta_id=f.ruta_id).one().estado_entrega == 'ENTREGADO'
 
 
 class TestUnCierreForzadoNoTiraLaConfirmacionReal:
@@ -70,8 +79,6 @@ class TestUnCierreForzadoNoTiraLaConfirmacionReal:
     fuera del WMS y la devolución EN_CAMION termina en FALTANTE contra el
     conductor por mercancía que sí entregó."""
 
-    @pytest.mark.xfail(strict=True, reason='val-dinero P1: la cola del conductor rebota '
-                                           'tras un cierre forzado y la versión se pierde')
     def test_la_cola_del_conductor_tras_forzar_cierre_se_guarda(self, app, client, db, mundo):
         from app.services.ruta_service import RutaService
         from app.models.recaudo_entrega import RecaudoEntrega
@@ -145,8 +152,6 @@ class TestUnaRutaLiquidadaEnTransitoNoSeEdita:
     rama ENTREGADA. Liquidada en tránsito, el conductor sigue reescribiendo
     forma de pago y monto hasta que alguien encola el RC."""
 
-    @pytest.mark.xfail(strict=True, reason='val-dinero P2: la guarda de LIQUIDADA solo mira '
-                                           'rutas ENTREGADAS')
     def test_el_conductor_no_edita_una_parada_de_una_ruta_liquidada(self, app, client, db, mundo):
         from app.services.ruta_service import RutaService
         f, uc, ad = mundo
@@ -170,8 +175,6 @@ class TestElMontoDeUnaParcialNoLoCambiaQuienLiquida:
     declaró y entregó en efectivo: el faltante queda como saldo del cliente en
     cartera. Es «corregir el cobro», que la matriz reservó a admin + líder."""
 
-    @pytest.mark.xfail(strict=True, reason='val-dinero P1: override de una PARCIAL sin tope '
-                                           'contra lo declarado')
     def test_el_rc_de_una_parcial_no_sale_por_menos_de_lo_declarado(self, db, recaudo):
         from unittest.mock import MagicMock, patch
         from tests.test_politica_cobro import LINEA

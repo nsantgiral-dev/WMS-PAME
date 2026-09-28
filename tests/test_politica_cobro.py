@@ -171,7 +171,11 @@ class TestMontoRC:
         from app.services import politica_cobro as pc
         r = recaudo(estado='PARCIAL', monto=500000)
         assert pc.monto_rc(r, total_neto_siesa=1000000, retencion=12000) == 500000
-        assert pc.monto_rc(r, retencion=12000, monto_override=480000) == 480000
+        # Quien liquida no cambia el monto de una PARCIAL (validación de la
+        # plata, 2026-09-26): el mismo número pasa, otro se niega.
+        assert pc.monto_rc(r, retencion=12000, monto_override=500000.2) == 500000
+        with pytest.raises(pc.MontoNoPermitido, match='Corregir monto'):
+            pc.monto_rc(r, retencion=12000, monto_override=480000)
         assert pc.rc_resta_retencion(r) is False
 
     def test_entregado_es_el_neto_de_siesa_menos_la_retencion(self, db, recaudo):

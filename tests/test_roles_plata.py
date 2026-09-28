@@ -171,8 +171,15 @@ ESCRITURAS = [
      {'admin', 'liquidador'}),
     ('reintentar RC', 'POST', '/api/reposicion/siesa-jobs/{job}/reintentar', {}, 'ENTREGADA',
      {'admin', 'liquidador'}),
+    # Registrar una parada sin gestionar (`motivo_tardia`). El mundo trae la
+    # parada ya confirmada: quien puede registrar recibe 409 (no pisa), el
+    # resto 403 (validación de la plata, 2026-09-26).
     ('parada tardía', 'POST', '/api/rutas/{ruta}/paradas/{tarea}/confirmar',
-     {'estado_entrega': 'ENTREGADO'}, 'ENTREGADA', {'admin', 'liquidador'}),
+     {'estado_entrega': 'ENTREGADO', 'motivo_tardia': 'x'}, 'ENTREGADA', {'admin', 'liquidador'}),
+    # Cambiar una parada ya confirmada es corregir el cobro.
+    ('corregir una parada confirmada', 'POST', '/api/rutas/{ruta}/paradas/{tarea}/confirmar',
+     {'estado_entrega': 'ENTREGADO', 'motivo_correccion': 'x'}, 'ENTREGADA',
+     {'admin', 'lider_cartera'}),
     ('confirmar retención', 'POST', '/api/rutas/{ruta}/recaudos/{rec}/confirmar-retencion', {},
      'ENTREGADA', {'admin', 'lider_cartera'}),
     ('corregir cobro', 'POST', '/api/rutas/{ruta}/recaudos/{rec}/corregir-monto', {}, 'ENTREGADA',

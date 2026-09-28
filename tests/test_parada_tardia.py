@@ -139,8 +139,16 @@ class TestLaParadaTardia:
         self._entregada(db, f, uc)
         url = f'/api/rutas/{f.ruta_id}/paradas/{f.packing_id}/confirmar'
         assert client.post(url, headers=_h(app, ad), json=dict(_ENTREGA)).status_code == 400
+        # Validación de la plata (2026-09-26): la oficina escribe solo con el
+        # formulario vigente.
+        viejo = client.post(url, headers=_h(app, ad),
+                            json={**_ENTREGA, 'motivo_tardia': 'el conductor la confirmó por teléfono'})
+        assert viejo.status_code == 400 and 'desactualizado' in viejo.get_json()['error']
         r = client.post(url, headers=_h(app, ad),
-                        json={**_ENTREGA, 'motivo_tardia': 'el conductor la confirmó por teléfono'})
+                        json={'estado_entrega': 'RECHAZADO', 'motivo_rechazo': 'NO_PAGO',
+                              'observaciones': 'no pagó',
+                              'motivo_tardia': 'el conductor la confirmó por teléfono',
+                              'version_formulario': 4})
         assert r.status_code == 200, r.get_json()
 
 

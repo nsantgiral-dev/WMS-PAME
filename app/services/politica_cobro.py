@@ -98,6 +98,105 @@ def exigir_retencion_aplicable(recaudo, tipo_ret: str) -> None:
 # 2 · El monto del recibo de caja
 # ═════════════════════════════════════════════════════════════════════════════
 
+class MontoNoPermitido(ValueError):
+    """El monto del recibo (o su corrección) se sale de lo que la política
+    permite. `ValueError` para los llamadores de siempre."""
+
+
+#: Tolerancia de «es el mismo monto» (redondeo de centavos del teléfono).
+TOLERANCIA_MONTO = 0.5
+
+
+def exigir_override_permitido(recaudo, monto_override) -> None:
+    """**Quien liquida no cambia el monto que declaró el conductor**
+    (validación de la plata, 2026-09-26). En una PARCIAL el recibo sale por lo
+    declarado: `monto_override` distinto de `monto_cobrado` era «corregir el
+    cobro» por la puerta de registrar el cobro — sin `puede_corregir_cobro`, sin
+    motivo y sin tope (el liquidador mandaba el RC por menos y el faltante
+    quedaba de saldo del cliente en cartera). Si el número está mal, se corrige
+    con la política de corrección (`exigir_correccion_de_monto`: admin + líder
+    de cartera, razón, tope) y después se registra.
+
+    En un ENTREGADO el override es el neto de Siesa, y su distancia a lo
+    declarado la acota `_validar_diferencia_declarada` (o el ajuste al peso,
+    con razón y tope). Sin nada declarado (≤ 0) no hay contra qué acotarlo:
+    Regla 0, no sale. Levanta `MontoNoPermitido`."""
+    from app.models.recaudo_entrega import EstadoEntrega
+    if monto_override is None:
+        return
+    declarado = float(recaudo.monto_cobrado or 0)
+    propuesto = float(monto_override)
+    if recaudo.estado_entrega == EstadoEntrega.PARCIAL:
+        if abs(propuesto - declarado) > TOLERANCIA_MONTO:
+            raise MontoNoPermitido(
+                f'El recibo de una entrega parcial sale por lo que declaró el conductor '
+                f'(${declarado:,.0f}), no por ${propuesto:,.0f}. Si ese monto está mal, '
+                f'corríjalo primero con «Corregir monto» (administrador o líder de '
+                f'cartera, con una razón) y registre el cobro después.')
+        return
+    if declarado <= 0:
+        raise MontoNoPermitido(
+            'El conductor no declaró monto cobrado en esta parada: no hay contra qué '
+            'respaldar un recibo de caja. Corrija el monto primero (administrador o líder '
+            'de cartera, con una razón).')
+
+
+def tope_de_correccion(recaudo, tarea=None):
+    """El monto máximo al que se puede corregir lo cobrado en una parada: la
+    factura (anotada en la tarea) más el residuo de redondeo — lo más que el
+    cliente puede deber (con la retención rechazada, la factura entera). `None`
+    si la factura no está anotada."""
+    from app.services.liquidacion_service import tope_diferencia_recaudo
+    t = tarea if tarea is not None else getattr(recaudo, 'tarea', None)
+    valor = getattr(t, 'valor_factura', None) if t is not None else None
+    if valor is None:
+        return None
+    return round(float(valor) + tope_diferencia_recaudo(), 2)
+
+
+def exigir_correccion_de_monto(recaudo, nuevo_monto, razon) -> float:
+    """**La política de corrección del monto cobrado.** Toda corrección pasa
+    por acá (`LiquidacionService.corregir_monto_declarado`; la ruta exige
+    `puede_corregir_cobro`). Devuelve el monto redondeado o levanta
+    `MontoNoPermitido`.
+
+    - Razón obligatoria (una corrección hacia abajo es «menos de lo declarado»:
+      nunca sin motivo).
+    - Tope: no más que lo que el cliente debía (`tope_de_correccion`). Sin la
+      factura anotada: una PARCIAL no sube de lo declarado; un ENTREGADO queda
+      acotado al registrar el cobro contra el neto de Siesa.
+    - Mayor que cero; distinto de lo declarado.
+    """
+    nuevo = round(float(nuevo_monto or 0), 2)
+    if nuevo <= 0:
+        raise MontoNoPermitido('El monto corregido debe ser mayor a 0')
+    if not (razon or '').strip():
+        raise MontoNoPermitido(
+            'La corrección necesita una razón. No es un ajuste contable —no toca Siesa—, '
+            'pero sigue siendo dinero: sin razón, en tres meses nadie sabe por qué cambió '
+            'el número.')
+    declarado = float(recaudo.monto_cobrado or 0)
+    if abs(nuevo - declarado) < 0.01:
+        raise MontoNoPermitido(
+            f'El monto corregido (${nuevo:,.2f}) es igual al ya declarado — no hay nada '
+            f'que corregir')
+    from app.models.recaudo_entrega import EstadoEntrega
+    tope = tope_de_correccion(recaudo)
+    # Sin la factura anotada: en una PARCIAL el recibo sale por lo declarado,
+    # así que no se sube (Regla 0). En un ENTREGADO el recibo sale por el neto
+    # de Siesa y `_validar_diferencia_declarada` lo acota al registrar.
+    techo = tope if tope is not None else (
+        declarado if recaudo.estado_entrega == EstadoEntrega.PARCIAL else None)
+    if techo is not None and nuevo > techo + 0.01:
+        raise MontoNoPermitido(
+            f'El monto corregido (${nuevo:,.2f}) supera lo que el cliente debía por esta '
+            f'parada (${techo:,.2f}'
+            + (', el valor de la factura' if tope is not None
+               else '; sin la factura anotada una entrega parcial no sube de lo declarado')
+            + '). Una diferencia mayor no se corrige acá.')
+    return nuevo
+
+
 def monto_rc(recaudo, *, total_neto_siesa: float = None, retencion: float = 0.0,
              monto_override: float = None) -> float:
     """El monto del recibo de caja. **Una función para las dos puertas**
@@ -116,9 +215,9 @@ def monto_rc(recaudo, *, total_neto_siesa: float = None, retencion: float = 0.0,
     `exigir_retencion_aplicable`). Redondeado a centavos.
     """
     from app.models.recaudo_entrega import EstadoEntrega
+    exigir_override_permitido(recaudo, monto_override)
     if recaudo.estado_entrega == EstadoEntrega.PARCIAL:
-        base = monto_override if monto_override is not None else (recaudo.monto_cobrado or 0)
-        return round(float(base), 2)
+        return round(float(recaudo.monto_cobrado or 0), 2)
     if monto_override is not None:
         bruto = float(monto_override)
     elif total_neto_siesa is not None and float(total_neto_siesa) > 0:

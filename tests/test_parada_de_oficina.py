@@ -174,14 +174,41 @@ class TestLaOficinaRegistra:
         assert r.status_code == 403, r.get_json()
         assert _detalle(client, app, f, jefe).get_json()['permisos']['parada_tardia'] is False
 
-    def test_con_la_ruta_en_camino_la_oficina_no_registra(self, db, mundo):
-        from app.services.ruta_service import RutaService
+    def test_con_la_ruta_en_camino_la_registra_quien_corrige_cobros_con_rastro(
+            self, app, client, db, mundo):
+        """Validación de la plata (2026-09-26): con la ruta en camino la oficina
+        registraba la parada por el conductor sin motivo, sin marca y sin
+        bitácora. Ahora: `puede_corregir_cobro`, motivo, formulario vigente,
+        FORZAR `parada_registrada_por_la_oficina_con_la_ruta_en_camino` y la
+        parada marcada (lo que mande el teléfono después va aparte)."""
+        from app.models.bitacora import BitacoraAccion
+        from app.models.recaudo_entrega import RecaudoEntrega
+        from app.services.bitacora import FORZADO_PARADA_OFICINA_EN_CAMINO
         f, uc, ad = mundo
-        with pytest.raises(ValueError, match='solo con la ruta ya cerrada'):
-            RutaService.confirmar_parada(f.ruta_id, f.packing_id, ad.id,
-                                         {'estado_entrega': 'RECHAZADO', 'motivo_rechazo': 'NO_PAGO',
-                                          'observaciones': 'x'},
-                                         motivo_tardia='x', por_oficina=True)
+        cuerpo = {'estado_entrega': 'RECHAZADO', 'motivo_rechazo': 'NO_PAGO',
+                  'observaciones': 'no pagó', 'version_formulario': 4}
+        liq = _usuario(db, rol='liquidador')
+        assert client.post(_url(f), headers=_jwt(app, liq),
+                           json={**cuerpo, 'motivo_tardia': 'x'}).status_code == 403
+        sin_motivo = client.post(_url(f), headers=_jwt(app, ad), json=cuerpo)
+        assert sin_motivo.status_code == 400 and 'motivo' in sin_motivo.get_json()['error']
+        viejo = client.post(_url(f), headers=_jwt(app, ad),
+                            json={**cuerpo, 'motivo_tardia': 'x', 'version_formulario': 3})
+        assert viejo.status_code == 400 and 'desactualizado' in viejo.get_json()['error']
+        r = client.post(_url(f), headers=_jwt(app, ad),
+                        json={**cuerpo, 'motivo_tardia': 'El conductor llamó sin señal'})
+        assert r.status_code == 200, r.get_json()
+        rec = RecaudoEntrega.query.filter_by(ruta_id=f.ruta_id).one()
+        assert rec.registrada_por_oficina is True
+        [b] = BitacoraAccion.query.filter_by(accion='FORZAR').all()
+        assert b.despues['forzado'] == FORZADO_PARADA_OFICINA_EN_CAMINO
+        assert b.motivo == 'El conductor llamó sin señal'
+        # El teléfono, después, no la pisa: va aparte.
+        r = client.post(_url(f), headers=_jwt(app, uc),
+                        json={'estado_entrega': 'ENTREGADO', 'forma_pago': 'EFECTIVO',
+                              'monto_cobrado': 1000, 'version_formulario': 4})
+        assert r.status_code == 200 and r.get_json()['version_conductor']['difiere'] is True
+        assert RecaudoEntrega.query.filter_by(ruta_id=f.ruta_id).one().estado_entrega == 'RECHAZADO'
 
 
 # ═════════════════════════════════════════════════════════════════════════════

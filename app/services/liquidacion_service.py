@@ -949,6 +949,12 @@ class LiquidacionService:
             descuento_declarado = float(recaudo.monto_descuento or 0)
             if descuento_declarado > 0:
                 esperado = float(recaudo.monto_cobrado or 0) + descuento_declarado
+            elif estado == EstadoEntrega.PARCIAL:
+                # Sin descuento pendiente (el cliente pagó la diferencia y
+                # quien corrige cobros lo corrigió: `corregir_monto_declarado`
+                # achica el descuento rechazado en lo mismo). En una PARCIAL la
+                # factura incluye lo devuelto: no es la referencia.
+                esperado = float(recaudo.monto_cobrado or 0)
             elif datos_siesa_ok and total_neto > 0:
                 # Sin monto declarado (el motivo pudo entrar por la liquidación
                 # masiva, que no guarda cuánto se descontó) queda el neto de la
@@ -1294,28 +1300,28 @@ class LiquidacionService:
                 'crédito; si el envío falla, se puede corregir de nuevo.'
             )
 
-        nuevo_monto = round(float(nuevo_monto or 0), 2)
-        if nuevo_monto <= 0:
-            raise ValueError('El monto corregido debe ser mayor a 0')
-        razon = (razon or '').strip()
-        if not razon:
-            raise ValueError(
-                'La corrección necesita una razón. No es un ajuste contable '
-                '—no toca Siesa—, pero sigue siendo dinero: sin razón, en '
-                'tres meses nadie sabe por qué cambió el número.'
-            )
-
+        # La política de corrección (validación de la plata, 2026-09-26):
+        # razón obligatoria y tope (no más de lo que el cliente debía). La
+        # ruta exige `puede_corregir_cobro` (admin + líder de cartera).
+        nuevo_monto = _pc.exigir_correccion_de_monto(recaudo, nuevo_monto, razon)
+        razon = razon.strip()
         monto_anterior = float(recaudo.monto_cobrado or 0)
-        if abs(nuevo_monto - monto_anterior) < 0.01:
-            raise ValueError(
-                f'El monto corregido (${nuevo_monto:,.2f}) es igual al ya '
-                'declarado — no hay nada que corregir')
 
         ahora = _ahora_bogota()
         nota = (
             f'[CORRECCIÓN MONTO {ahora.strftime("%Y-%m-%d %H:%M")} · '
             f'admin {admin_id}] ${monto_anterior:,.2f} → ${nuevo_monto:,.2f}: {razon}'
         )
+        # Con la retención rechazada, lo que el cliente debía es lo cobrado más
+        # lo que descontó en la puerta. Si pagó la diferencia, el descuento que
+        # no procedía se achica en lo mismo: el «valor a cobrar» no cambia.
+        if (_pc.decision_retencion(recaudo) == _pc.RECHAZADA
+                and float(recaudo.monto_descuento or 0) > 0):
+            _desc_antes = float(recaudo.monto_descuento or 0)
+            recaudo.monto_descuento = round(
+                max(0.0, monto_anterior + _desc_antes - nuevo_monto), 2)
+            nota += (f' · descuento rechazado ${_desc_antes:,.2f} → '
+                     f'${float(recaudo.monto_descuento):,.2f}')
         recaudo.observaciones = (
             f'{recaudo.observaciones}\n{nota}' if recaudo.observaciones else nota
         )

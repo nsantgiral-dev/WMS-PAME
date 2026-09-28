@@ -56,7 +56,9 @@ class EstadoDevolucionCliente:
         EN_CAMION: (ABIERTA, CONFIRMADA, FALTANTE_TOTAL, CANCELADA),
         ABIERTA: (CONFIRMADA, FALTANTE_TOTAL, CANCELADA),
         CONFIRMADA: (),
-        FALTANTE_TOTAL: (),
+        # Solo la corrección de la oficina (la parada se entregó: no faltó
+        # nada), con motivo — `devolucion_ruta.sincronizar_con_parada`.
+        FALTANTE_TOTAL: (CANCELADA,),
         CANCELADA: (),
     }
 

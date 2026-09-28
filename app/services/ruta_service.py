@@ -19,7 +19,8 @@ from app.utils.fecha import dia_operativo as _dia_operativo
 from app.services.documento_fiscal import filtro_despachable as _filtro_despachable
 from app.services.bitacora import (registrar_accion, motivo_obligatorio, foto as foto_fila,
                                    FORZADO_ADVERTENCIAS_FLOTA, FORZADO_CIERRE_RUTA,
-                                   FORZADO_LIQUIDACION_SIN_CONTAR, FORZADO_PARADA_TARDIA)
+                                   FORZADO_LIQUIDACION_SIN_CONTAR, FORZADO_PARADA_TARDIA,
+                                   FORZADO_PARADA_CORREGIDA, FORZADO_PARADA_OFICINA_EN_CAMINO)
 
 logger = logging.getLogger(__name__)
 
@@ -1612,39 +1613,43 @@ class RutaService:
 
     @staticmethod
     def confirmar_parada(ruta_id: int, tarea_id: int, usuario_id: int, data: dict,
-                         motivo_tardia: str = None, por_oficina: bool = False) -> tuple:
+                         motivo_tardia: str = None, por_oficina: bool = False,
+                         motivo_correccion: str = None) -> tuple:
         """Registra entrega y recaudo de una parada. Retorna (recaudo_id, es_edicion).
 
-        **Con la ruta ya ENTREGADA** (P1-4): la cola sin señal del conductor
-        podía mandar el cierre aunque una confirmación hubiera fallado, y
-        después esa parada no tenía salida —confirmar exigía EN_TRANSITO,
-        forzar también, y liquidar exige todas gestionadas—. Una parada tardía
-        entra con `motivo_tardia` (obligatorio) y queda FORZAR en la bitácora.
-        Nunca sobre una ruta LIQUIDADA.
+        **Quién entra y cómo lo decide `parada_tardia.puerta_de_confirmacion`**
+        (validación de la plata, 2026-09-26): el conductor con la ruta en camino;
+        con la ruta cerrada, solo la primera confirmación de una parada sin
+        gestionar que llega por su cola; la oficina (`por_oficina`) **registra**
+        una parada sin gestionar (motivo, formulario vigente) o **corrige** una ya
+        registrada (`motivo_correccion`, `puede_corregir_cobro`). Nunca sobre una
+        ruta LIQUIDADA. Toda escritura de la oficina queda FORZAR en la bitácora
+        y la parada `registrada_por_oficina`: lo que el teléfono mande después se
+        guarda aparte, no la pisa.
 
-        `por_oficina` (tanda 2 · B): la registra la oficina con el formulario de
-        Liquidación. Mismas validaciones que el conductor; la parada queda
-        `registrada_por_oficina`. La oficina no tiene GPS: si no manda `geo`,
-        se registra «sin dato» (`NO_DECLARADO`) — la evidencia es la foto.
+        La oficina no tiene GPS: si no manda `geo`, se registra «sin dato»
+        (`NO_DECLARADO`) — la evidencia es la foto.
         """
+        from app.models.usuario import Usuario as _Usr
+        from app.services import parada_tardia as _pt_p
         _ruta = db.session.get(RutaDespacho, ruta_id)
         if _ruta is None:
             raise LookupError('Ruta no encontrada')
-        _tardia = None
-        if _ruta.estado == EstadoRutaDespacho.ENTREGADA:
-            if (_ruta.estado_financiero or '') == EstadoFinancieroRuta.LIQUIDADA:
-                raise ValueError('La ruta ya está liquidada: la parada no se puede '
-                                 'confirmar ni corregir desde acá')
-            _tardia = motivo_obligatorio(
-                motivo_tardia, 'confirmar una parada después del cierre de la ruta')
-            if por_oficina and not isinstance(data.get('geo'), dict):
-                from app.services import geo_cliente as _geo_of
-                data = {**data, 'geo': {'motivo': _geo_of.NO_DECLARADO}}
-        elif por_oficina:
-            raise ValueError('La oficina registra una parada solo con la ruta ya cerrada: '
-                             'mientras la ruta está en camino, la confirma el conductor.')
-        elif _ruta.estado != EstadoRutaDespacho.EN_TRANSITO:
-            raise ValueError(f'La ruta debe estar EN_TRANSITO, está {_ruta.estado}')
+        _previa_p = RecaudoEntrega.query.filter_by(ruta_id=ruta_id, tarea_id=tarea_id).first()
+        if not por_oficina and _previa_p is not None and _previa_p.registrada_por_oficina:
+            # Lo que registró la oficina no lo pisa una confirmación del
+            # teléfono — va aparte (`guardar_version_conductor`).
+            raise ValueError('Esta parada la registró la oficina: lo que mande el conductor '
+                             'se guarda aparte, no la cambia.')
+        _puerta = _pt_p.puerta_de_confirmacion(
+            _ruta, _previa_p, db.session.get(_Usr, usuario_id) if usuario_id else None,
+            es_conductor=not por_oficina, data=data,
+            motivo_tardia=motivo_tardia, motivo_correccion=motivo_correccion)
+        _modo = _puerta['modo']
+        _corrige = _modo == _pt_p.OFICINA_CORRIGE
+        if por_oficina and not isinstance(data.get('geo'), dict):
+            from app.services import geo_cliente as _geo_of
+            data = {**data, 'geo': {'motivo': _geo_of.NO_DECLARADO}}
         bultos_tarea = (Bulto.query
                         .filter_by(tarea_id=tarea_id, ruta_despacho_id=ruta_id)
                         .with_for_update()
@@ -1833,12 +1838,7 @@ class RutaService:
         # en la liquidación (`senales_ruta.senales_de_recaudo`).
         from app.services import senales_ruta as _sr
         from app.models.geo_entrega import EntregaGeo as _EntregaGeo
-        _previo = RecaudoEntrega.query.filter_by(ruta_id=ruta_id, tarea_id=tarea_id).first()
-        if _previo is not None and _previo.registrada_por_oficina and not por_oficina:
-            # Tanda 2 · B: lo que registró la oficina no lo pisa una confirmación
-            # del teléfono — va aparte (`guardar_version_conductor`).
-            raise ValueError('Esta parada la registró la oficina: lo que mande el conductor '
-                             'se guarda aparte, no la cambia.')
+        _previo = _previa_p
         _exige = _sr.formulario_con_evidencia(data)
 
         referencia_pago = _sr.limpiar_referencia(data.get('referencia_pago'))
@@ -1905,9 +1905,18 @@ class RutaService:
         # Lo que recepción ya recibió o contó no lo cambia una reconfirmación
         # desde la calle (m045devol). Observaciones y foto sí.
         from app.services import devolucion_ruta as _dr
-        _dr.verificar_reconfirmacion(_previo, estado_entrega, data, bultos_tarea)
+        _dr.verificar_reconfirmacion(_previo, estado_entrega, data, bultos_tarea,
+                                     correccion=_corrige)
 
         for b in bultos_tarea:
+            if (_corrige and b.estado == EstadoBulto.FALTANTE
+                    and estado_entrega not in _dr.ESTADOS_QUE_DEVUELVEN):
+                # La oficina corrige un «no volvió» a «se entregó»: el bulto que
+                # recepción no encontró no faltó, quedó con el cliente
+                # (`verificar_reconfirmacion` ya exigió que nada haya vuelto).
+                b.estado = EstadoBulto.ENTREGADO
+                b.fecha_entrega = b.fecha_entrega or ahora
+                continue
             if b.estado in (EstadoBulto.RETORNADO, EstadoBulto.FALTANTE):
                 # Ya pasó por recepción: su estado es el dato físico.
                 continue
@@ -2124,17 +2133,32 @@ class RutaService:
                     antes={k: antes_parada[k] for k in _reg},
                     despues={k: despues_parada[k] for k in _reg})
 
-        if _tardia:
+        if _modo != _pt_p.CONDUCTOR:
+            # Toda escritura de la oficina (y la cola tardía del conductor) va a
+            # la bitácora con su motivo, y lo de la oficina queda marcado: lo
+            # que mande el teléfono después se guarda aparte.
             if por_oficina:
                 recaudo.registrada_por_oficina = True
-            registrar_accion(
-                'FORZAR', recaudo, usuario_id=usuario_id, motivo=_tardia,
+            _campos_forzar = ('estado_entrega', 'forma_pago', 'monto_cobrado',
+                              'monto_descuento', 'motivo_rechazo')
+            _args_forzar = dict(
+                usuario_id=usuario_id, motivo=_puerta['motivo'],
                 entidad_codigo=(bultos_tarea[0].tarea.numero_pedido_siesa
                                 if bultos_tarea[0].tarea else None),
-                despues={'forzado': FORZADO_PARADA_TARDIA,
-                         'ruta_id': ruta_id, 'estado_ruta': _ruta.estado,
-                         'estado_entrega': recaudo.estado_entrega,
-                         'registrada_por_oficina': bool(por_oficina)})
+                antes=({k: antes_parada.get(k) for k in _campos_forzar}
+                       if antes_parada else None))
+            _desp_forzar = {'ruta_id': ruta_id, 'estado_ruta': _ruta.estado,
+                            **{k: getattr(recaudo, k) for k in _campos_forzar},
+                            'registrada_por_oficina': bool(por_oficina)}
+            if _corrige:
+                registrar_accion('FORZAR', recaudo, **_args_forzar, despues={
+                    'forzado': FORZADO_PARADA_CORREGIDA, **_desp_forzar})
+            elif _ruta.estado == EstadoRutaDespacho.ENTREGADA:
+                registrar_accion('FORZAR', recaudo, **_args_forzar, despues={
+                    'forzado': FORZADO_PARADA_TARDIA, **_desp_forzar})
+            else:
+                registrar_accion('FORZAR', recaudo, **_args_forzar, despues={
+                    'forzado': FORZADO_PARADA_OFICINA_EN_CAMINO, **_desp_forzar})
 
         db.session.commit()
 
@@ -2428,6 +2452,15 @@ class RutaService:
                 observaciones='Cierre forzado por administrador — parada no gestionada',
                 confirmado_por=admin_id,
                 fecha_creacion=ahora,
+                # Lo decidió la oficina, no el conductor (validación de la
+                # plata, 2026-09-26): la confirmación real que llegue después
+                # por su cola se guarda aparte y queda señalada
+                # (`version_conductor`/`diferencia_conductor`), como en la
+                # parada tardía. Antes rebotaba con 400 y se perdía: la plata
+                # cobrada quedaba fuera del WMS y la devolución terminaba en
+                # faltante contra el conductor. Corregirla es «corregir el
+                # cobro» (admin + líder de cartera, con motivo).
+                registrada_por_oficina=True,
             )
             db.session.add(_rec_forzado)
             db.session.flush()

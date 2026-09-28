@@ -65,6 +65,149 @@ def formulario_oficina() -> dict:
             'formas_que_no_cobran': list(_cp.FORMAS_QUE_NO_COBRAN)}
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# La puerta de la confirmación: quién escribe una parada, y cómo
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# Validación de la plata (2026-09-26, P0). La puerta de la parada tardía
+# aceptaba CUALQUIER parada de una ruta cerrada, no solo las sin gestionar:
+# quien liquida (admin + liquidador) reescribía lo que el conductor había
+# confirmado —un ENTREGADO en efectivo pasaba a «no pagó y se quedó»— sin el
+# permiso de corregir cobros, que la matriz del dueño dio a admin + líder de
+# cartera. La clase: *una puerta de oficina que reescribe lo confirmado sin el
+# permiso de corregir cobros*. Ahora hay dos operaciones de oficina, y son
+# distintas:
+#
+# | Operación | Sobre qué | Quién | Queda |
+# |---|---|---|---|
+# | Registrar | una parada SIN gestionar (ruta cerrada, o en camino) | cerrada: `puede_registrar_parada_tardia`; en camino: `puede_corregir_cobro` | motivo, FORZAR, `registrada_por_oficina` |
+# | Corregir | una parada YA registrada (por quien sea) | `puede_corregir_cobro` | motivo, FORZAR `parada_confirmada_corregida_por_la_oficina`, `registrada_por_oficina` |
+#
+# Si la oficina abrió el formulario sobre una parada sin gestionar y mientras
+# tanto entró la cola del conductor, su POST **no pisa**: 409.
+
+#: Los modos que devuelve `puerta_de_confirmacion`.
+CONDUCTOR = 'CONDUCTOR'
+CONDUCTOR_COLA_TARDIA = 'CONDUCTOR_COLA_TARDIA'
+OFICINA_REGISTRA = 'OFICINA_REGISTRA'
+OFICINA_CORRIGE = 'OFICINA_CORRIGE'
+
+MOTIVO_COLA_TARDIA = ('La confirmación llegó por la cola sin señal del conductor después '
+                      'de cerrada la ruta')
+
+
+class PuertaCerrada(ValueError):
+    """La confirmación no entra por esta puerta. `status`: 403 (sin permiso),
+    409 (la parada cambió mientras la oficina llenaba el formulario) o 400."""
+
+    def __init__(self, mensaje: str, status: int = 400):
+        super().__init__(mensaje)
+        self.status = status
+
+
+def es_oficina_de_paradas(usuario) -> bool:
+    """¿Puede esta persona escribir paradas desde la oficina (registrar o
+    corregir)? Solo decide si atraviesa la puerta; qué puede hacer adentro lo
+    decide `puerta_de_confirmacion`."""
+    from app.services import permisos_liquidacion as _pl
+    return _pl.puede_registrar_parada_tardia(usuario) or _pl.puede_corregir_cobro(usuario)
+
+
+def puerta_de_confirmacion(ruta, previa, usuario, *, es_conductor: bool, data: dict,
+                           motivo_tardia=None, motivo_correccion=None) -> dict:
+    """**La única que decide** si una confirmación de parada entra y cómo:
+    `{modo, motivo}`. La llaman la ruta HTTP y el servicio (`confirmar_parada`):
+    un guard en la ruta protege la ruta; en el servicio, la operación.
+
+    - `es_conductor`: el conductor de la ruta desde su teléfono. Con la ruta en
+      camino confirma y corrige lo suyo; con la ruta cerrada, solo la primera
+      confirmación de una parada sin gestionar que llega por la cola sin señal.
+      Una parada que registró la oficina no la pisa: eso lo resuelve quien llama
+      antes (`version_del_conductor`).
+    - Oficina, **registrar** (`motivo_tardia`, o sin motivo explícito sobre una
+      parada sin gestionar): solo si la parada sigue sin gestionar; si alguien
+      la registró mientras tanto → 409.
+    - Oficina, **corregir** (`motivo_correccion`, o sin motivo explícito sobre
+      una parada ya registrada): `puede_corregir_cobro`, motivo obligatorio.
+
+    Toda escritura de la oficina exige el formulario vigente
+    (`version_formulario`): un formulario viejo no sabe pedir lo que el servidor
+    valida hoy. Levanta `PuertaCerrada`.
+    """
+    from app.models.ruta_despacho import EstadoFinancieroRuta, EstadoRutaDespacho
+    from app.services import permisos_liquidacion as _pl
+    from app.services.bitacora import MotivoRequerido, motivo_obligatorio
+    data = data or {}
+    cerrada = ruta.estado == EstadoRutaDespacho.ENTREGADA
+    if (ruta.estado_financiero or '') == EstadoFinancieroRuta.LIQUIDADA:
+        raise PuertaCerrada('La ruta ya está liquidada: la parada no se puede confirmar ni '
+                            'corregir desde acá')
+    if ruta.estado not in (EstadoRutaDespacho.EN_TRANSITO, EstadoRutaDespacho.ENTREGADA):
+        raise PuertaCerrada(f'La ruta debe estar EN_TRANSITO, está {ruta.estado}')
+
+    if es_conductor:
+        if not cerrada:
+            return {'modo': CONDUCTOR, 'motivo': None}
+        if previa is None:
+            motivo = (motivo_tardia if (motivo_tardia or '').strip()
+                      else (MOTIVO_COLA_TARDIA if data.get('via_cola') is True else None))
+            if motivo:
+                return {'modo': CONDUCTOR_COLA_TARDIA, 'motivo': motivo.strip()}
+        raise PuertaCerrada('La ruta ya se cerró: esta parada la registra (o la corrige) la '
+                            'oficina, con un motivo.')
+
+    quiere_corregir = (motivo_correccion is not None
+                       or (previa is not None and motivo_tardia is None))
+    if quiere_corregir:
+        if not _pl.puede_corregir_cobro(usuario):
+            raise PuertaCerrada(
+                'Esta parada ya está registrada: cambiarla es corregir el cobro, y eso lo '
+                'hacen el administrador o el líder de cartera, con un motivo.', status=403)
+        if previa is None:
+            raise PuertaCerrada('Esta parada no tiene nada registrado todavía: regístrela, no '
+                                'hay qué corregir.', status=409)
+        try:
+            motivo = motivo_obligatorio(motivo_correccion,
+                                        'corregir una parada ya registrada')
+        except MotivoRequerido as e:
+            raise PuertaCerrada(str(e)) from e
+        _exigir_formulario_vigente(data)
+        return {'modo': OFICINA_CORRIGE, 'motivo': motivo}
+
+    permiso = _pl.puede_registrar_parada_tardia if cerrada else _pl.puede_corregir_cobro
+    if not permiso(usuario):
+        raise PuertaCerrada(
+            ('Con la ruta cerrada, la parada sin gestionar la registra quien liquida '
+             '(administrador o liquidador).') if cerrada else
+            ('Con la ruta en camino, la parada la confirma el conductor; por él solo la '
+             'registran el administrador o el líder de cartera.'), status=403)
+    if previa is not None:
+        raise PuertaCerrada(
+            'Esta parada ya se registró mientras usted llenaba el formulario (el conductor la '
+            'confirmó, o la registró otra persona). No se pisó nada: revise lo registrado. Si '
+            'hay que cambiarlo, es corregir el cobro (administrador o líder de cartera), con '
+            'un motivo.', status=409)
+    try:
+        motivo = motivo_obligatorio(
+            motivo_tardia, 'registrar una parada después del cierre de la ruta' if cerrada
+            else 'registrar la parada por el conductor con la ruta en camino')
+    except MotivoRequerido as e:
+        raise PuertaCerrada(str(e)) from e
+    _exigir_formulario_vigente(data)
+    return {'modo': OFICINA_REGISTRA, 'motivo': motivo}
+
+
+def _exigir_formulario_vigente(data: dict) -> None:
+    try:
+        v = int((data or {}).get('version_formulario') or 0)
+    except (TypeError, ValueError):
+        v = 0
+    if v < version_formulario_actual():
+        raise PuertaCerrada(
+            'El formulario de la oficina está desactualizado: recargue la pantalla y vuelva '
+            'a registrarlo (el servidor exige datos que ese formulario no pide).')
+
+
 def sin_gestionar(ruta, ahora: datetime = None) -> list:
     """Las paradas de `ruta` sin `RecaudoEntrega`, con lo que la oficina
     necesita para registrarlas: `{tarea_id, pedido, cliente, municipio, valor,
