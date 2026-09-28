@@ -9,6 +9,11 @@ class EstadoRecepcion:
     CANCELADA  = 'CANCELADA'
 
 
+def _envio_siesa(obj):
+    from app.services.siesa_job_service import envio_siesa_publico
+    return envio_siesa_publico(obj)
+
+
 class RecepcionMercancia(db.Model):
     __tablename__ = 'recepciones'
 
@@ -98,6 +103,7 @@ class RecepcionMercancia(db.Model):
             'tiene_cross_dock': self.tiene_cross_dock,
             'siesa_triggered': self.siesa_triggered,
             'siesa_triggered_at': self.siesa_triggered_at.isoformat() if self.siesa_triggered_at else None,
+            'siesa_envio': _envio_siesa(self),
             'observaciones': self.observaciones,
             'total_items': self.total_items(),
             'items_escaneados': self.items_escaneados(),

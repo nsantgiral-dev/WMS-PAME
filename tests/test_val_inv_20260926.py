@@ -96,7 +96,6 @@ class TestReabrirConCajaDespachada:
 
 class TestCrashEntrePreflagYPost:
 
-    @pytest.mark.xfail(strict=True, reason='P1: bandera sola = «ya enviado»; el averías por movimiento sí dice «no sé»')
     def test_entrada_oc_con_bandera_y_sin_respuesta_no_se_da_por_hecha(self, db, almacen):
         from app.models.recepcion import RecepcionMercancia
         from app.models.siesa_job import SiesaJob

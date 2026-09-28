@@ -61,6 +61,70 @@ MARCA_SIN_VERIFICAR = 'SIN_VERIFICAR'
 #: Pre-flag del traslado a averías sobre su ancla (`MovimientoInventario.siesa_sync`).
 SIESA_SYNC_ENVIANDO = 'ENVIANDO'
 
+#: Los tres desenlaces de un envío con pre-flag (`estado_del_preflag`).
+PREFLAG_LIBRE = 'LIBRE'                  # la bandera no está puesta: se puede enviar
+PREFLAG_ENVIADO = 'ENVIADO'              # puesta y con respuesta: ya entró
+PREFLAG_SIN_DESENLACE = 'SIN_DESENLACE'  # puesta sin respuesta: «no sé»
+
+
+def estado_del_preflag(obj) -> str:
+    """¿Qué se sabe del envío a Siesa de `obj`? **Una política para todos los
+    tipos con pre-flag** (2026-09-26): ENTRADA_OC (`RecepcionMercancia`),
+    TRASLADO_AVERIAS (`TareaDevolucion` o su `MovimientoInventario` ancla) y
+    AJUSTE_CONTEO (`SesionConteo`).
+
+    La bandera se pone ANTES del POST (Regla 6), así que puesta sola no dice
+    «enviado»: dice «se intentó». Solo es ENVIADO con la respuesta guardada
+    (`siesa_response`, o `siesa_sync = 'ENVIADO'` en el movimiento). Puesta
+    sin respuesta —un crash entre el pre-flag y el POST, un job PROCESANDO
+    reseteado— es SIN_DESENLACE: FALLIDO sin reintento y «¿Está en Siesa?».
+    Hasta hoy la guarda de los tres tipos booleanos lo daba por hecho y
+    cerraba el job COMPLETADO sin que el POST hubiera salido."""
+    if obj is None:
+        return PREFLAG_LIBRE
+    if hasattr(obj, 'siesa_sync') and not hasattr(obj, 'siesa_triggered'):
+        if obj.siesa_sync == 'ENVIADO':
+            return PREFLAG_ENVIADO
+        if obj.siesa_sync == SIESA_SYNC_ENVIANDO:
+            return PREFLAG_SIN_DESENLACE
+        return PREFLAG_LIBRE
+    if not getattr(obj, 'siesa_triggered', False):
+        return PREFLAG_LIBRE
+    return PREFLAG_ENVIADO if getattr(obj, 'siesa_response', None) else PREFLAG_SIN_DESENLACE
+
+
+#: Quién resuelve un envío sin verificar y dónde (lo dicen las pantallas).
+QUIEN_RESUELVE_SIN_VERIFICAR = ('el administrador, en Siesa → Recuperación '
+                                '(«¿Está en Siesa?»)')
+
+
+def envio_siesa_publico(obj) -> dict:
+    """Lo que una pantalla muestra del envío a Siesa de `obj`, sacado de la
+    política (P2-8, 2026-09-26): «✓ Sincronizada» solo con desenlace; con la
+    bandera sin desenlace, «Sin verificar en Siesa» y quién lo resuelve."""
+    estado = estado_del_preflag(obj)
+    if estado == PREFLAG_ENVIADO:
+        return {'estado': estado, 'texto': 'Sincronizada con Siesa', 'quien_resuelve': None}
+    if estado == PREFLAG_SIN_DESENLACE:
+        return {'estado': estado, 'texto': 'Sin verificar en Siesa: pudo haber entrado',
+                'quien_resuelve': QUIEN_RESUELVE_SIN_VERIFICAR}
+    return {'estado': estado, 'texto': 'Pendiente en Siesa', 'quien_resuelve': None}
+
+
+def _exigir_preflag_con_desenlace(obj, job, que: str) -> bool:
+    """`True` si ya se envió (el job se cierra idempotente); levanta «no sé»
+    si la bandera quedó sin desenlace; `False` si está libre."""
+    estado = estado_del_preflag(obj)
+    if estado == PREFLAG_ENVIADO:
+        return True
+    if estado == PREFLAG_SIN_DESENLACE:
+        raise _ResultadoDesconocido(
+            f'{MARCA_SIN_VERIFICAR}: {job.tipo} job={job.id}: {que} ya se intentó '
+            f'enviar y no hay constancia de que haya entrado (el proceso pudo morir '
+            f'entre la marca y el envío). No se reenvía ni se da por hecho: búsquelo '
+            f'en Siesa y resuélvalo en Siesa → Recuperación («¿Está en Siesa?»).')
+    return False
+
 
 class DependenciaPendiente(Exception):
     """El job no puede correr todavía porque otro paso no ha ocurrido.
@@ -995,6 +1059,11 @@ def _ejecutar_con_preflag(obj, post_fn):
     if resultado.get('modo_ensayo'):
         obj.siesa_triggered = False
         db.session.commit()
+    elif not getattr(obj, 'siesa_response', None):
+        # El desenlace: con la respuesta guardada la bandera dice «entró»
+        # (`estado_del_preflag`). Sin esto, bandera sola = «no sé».
+        obj.siesa_response = json.dumps(resultado, default=str)[:20000]
+        db.session.commit()
 
     return resultado
 
@@ -1083,10 +1152,10 @@ def _ejecutar_job(job: SiesaJob) -> dict:
         from app.models.recepcion import RecepcionMercancia
         import json as _json
         rec = RecepcionMercancia.query.get(payload.get('recepcion_id'))
-        if rec and rec.siesa_triggered:
+        if _exigir_preflag_con_desenlace(rec, job, f'la entrada de la recepción {getattr(rec, "id", "?")}'):
             logger.info(
-                f'[DLQ] ENTRADA_OC job={job.id}: recepción {rec.id} ya tiene '
-                f'siesa_triggered=True — omitiendo llamada a Siesa (idempotencia)'
+                f'[DLQ] ENTRADA_OC job={job.id}: recepción {rec.id} ya entró a Siesa '
+                f'— omitiendo llamada (idempotencia)'
             )
             return {'idempotente': True, 'recepcion_id': rec.id}
 
@@ -1163,19 +1232,13 @@ def _ejecutar_job(job: SiesaJob) -> dict:
                     'no se llama a Siesa para no mover stock sin respaldo.',
                     job.id, _mov_id)
                 return {'idempotente': True, 'sin_movimiento': True}
-            if _mov.siesa_sync == 'ENVIADO':
+            # El pre-flag de un intento anterior sin desenlace (crash o «no
+            # sé») levanta: reenviar puede duplicar el traslado.
+            if _exigir_preflag_con_desenlace(_mov, job, f'el traslado del movimiento {_mov.id}'):
                 logger.info(
                     '[DLQ] TRASLADO_AVERIAS job=%s: movimiento %s ya marcado '
                     'ENVIADO — omitido.', job.id, _mov.id)
                 return {'idempotente': True, 'movimiento_id': _mov.id}
-
-            if _mov.siesa_sync == SIESA_SYNC_ENVIANDO:
-                # El pre-flag de un intento anterior quedó puesto sin desenlace
-                # (crash o «no sé»): reenviar puede duplicar el traslado.
-                raise _ResultadoDesconocido(
-                    f'{MARCA_SIN_VERIFICAR}: TRASLADO_AVERIAS job={job.id}: el traslado '
-                    f'del movimiento {_mov.id} ya se intentó y no hay constancia de que '
-                    f'haya entrado. No se reenvía: resuélvalo en Siesa → Recuperación.')
 
             _item_codigo = payload.get('item_codigo')
             if not _item_codigo:
@@ -1237,10 +1300,10 @@ def _ejecutar_job(job: SiesaJob) -> dict:
             )
             return {'idempotente': True, 'sin_tarea': True}
 
-        if tarea_dev.siesa_triggered:
+        if _exigir_preflag_con_desenlace(tarea_dev, job, f'el traslado a averías de la tarea {tarea_dev.id}'):
             logger.info(
-                f'[DLQ] TRASLADO_AVERIAS job={job.id}: tarea {tarea_dev.id} ya tiene '
-                f'siesa_triggered=True — omitiendo llamada (idempotencia P4)'
+                f'[DLQ] TRASLADO_AVERIAS job={job.id}: tarea {tarea_dev.id} ya entró a '
+                f'Siesa — omitiendo llamada (idempotencia P4)'
             )
             return {'idempotente': True, 'tarea_id': tarea_dev.id}
 
@@ -1287,14 +1350,18 @@ def _ejecutar_job(job: SiesaJob) -> dict:
             try:
                 sesion_cteo.siesa_triggered = True
                 sesion_cteo.siesa_triggered_at = sesion_cteo.fecha_cierre or datetime.utcnow()
+                # Con su desenlace: AJUSTADO es la constancia (estado_del_preflag).
+                sesion_cteo.siesa_response = sesion_cteo.siesa_response or json.dumps(
+                    {'estado_corregido': True, 'job_id': job.id})
                 db.session.commit()
             except Exception as _e_fix:
                 db.session.rollback()
                 logger.error(f'[DLQ] No se pudo corregir siesa_triggered para sesion {sesion_id}: {_e_fix}')
             return {'idempotente': True, 'sesion_id': sesion_id, 'estado_corregido': True}
 
-        # P4: idempotencia — si siesa_triggered, no reenviar
-        if sesion_cteo.siesa_triggered:
+        # P4: idempotencia — si ya entró, no reenviar; bandera sin desenlace
+        # (crash entre la marca y el POST) = «no sé», levanta.
+        if _exigir_preflag_con_desenlace(sesion_cteo, job, f'el ajuste de la sesión {sesion_id}'):
             # Si la sesión quedó atascada en AJUSTANDO (crash entre mini-commit y full-commit),
             # recuperar el estado final sin volver a llamar a Siesa.
             if sesion_cteo.estado == EstadoConteo.AJUSTANDO:
@@ -2776,33 +2843,53 @@ TIPOS_CON_PREFLAG = ('ENTRADA_OC', 'TRASLADO_AVERIAS', 'AJUSTE_CONTEO',
 
 
 class _Preflag:
-    """El pre-flag de un job: dónde está, si está puesto, cómo se baja y cómo
-    se confirma. Uno por tipo; la retención es por cuenta PUC."""
+    """El pre-flag de un job: dónde está, si quedó **sin desenlace** (puesto y
+    sin constancia de que entró: «no sé»), cómo se baja y cómo se confirma.
+    Uno por tipo; la retención es por cuenta PUC.
 
-    def __init__(self, obj, puesto, bajar, confirmar, foto):
-        self.obj, self._puesto, self._bajar, self._confirmar, self._foto = (
-            obj, puesto, bajar, confirmar, foto)
+    `sin_desenlace` es la misma pregunta para todos los tipos (integración
+    v2, 2026-09-27): los tres de inventario la contestan con
+    `estado_del_preflag` —bandera sin respuesta—; el RC, las NC y la
+    retención, con la señal positiva de su política de cobro. Una bandera
+    puesta con su respuesta guardada ya no es «sin verificar»: entró."""
 
-    def puesto(self) -> bool:
-        return bool(self._puesto())
+    def __init__(self, obj, sin_desenlace, bajar, confirmar, foto):
+        self.obj, self._sin_desenlace, self._bajar, self._confirmar, self._foto = (
+            obj, sin_desenlace, bajar, confirmar, foto)
+
+    def sin_desenlace(self) -> bool:
+        return bool(self._sin_desenlace())
 
     def bajar(self):
         self._bajar()
 
-    def confirmar(self):
-        self._confirmar()
+    def confirmar(self, motivo: str = None):
+        """Deja escrito el desenlace «sí entró», dicho por una persona."""
+        self._confirmar(motivo)
 
     def foto(self) -> dict:
         return self._foto()
 
 
-def _preflag_atributo(obj, attr, puesto, libre, al_confirmar=None):
-    def _confirmar():
-        if al_confirmar:
-            al_confirmar()
-    return _Preflag(obj, lambda: getattr(obj, attr, None) == puesto,
-                    lambda: setattr(obj, attr, libre), _confirmar,
-                    lambda: {attr: getattr(obj, attr, None)})
+def _preflag_inventario(obj, attr, libre, job_id):
+    """ENTRADA_OC, AJUSTE_CONTEO y TRASLADO_AVERIAS (tarea o movimiento ancla):
+    el «no sé» lo decide `estado_del_preflag` —la política de inventario—, no
+    la bandera sola. Confirmar escribe el desenlace (`siesa_response`, o el
+    movimiento a ENVIADO) para que la guarda del job lo cierre sin POST."""
+    def _confirmar(motivo):
+        if attr == 'siesa_sync':
+            obj.siesa_sync = 'ENVIADO'
+        else:
+            obj.siesa_response = json.dumps({'resuelto_a_mano': True, 'job_id': job_id,
+                                             'motivo': motivo}, ensure_ascii=False)
+
+    def _foto():
+        f = {attr: getattr(obj, attr, None)}
+        if attr != 'siesa_sync':
+            f['siesa_response'] = bool(getattr(obj, 'siesa_response', None))
+        return f
+    return _Preflag(obj, lambda: estado_del_preflag(obj) == PREFLAG_SIN_DESENLACE,
+                    lambda: setattr(obj, attr, libre), _confirmar, _foto)
 
 
 def _preflag_de(job):
@@ -2814,22 +2901,21 @@ def _preflag_de(job):
     if job.tipo == 'ENTRADA_OC':
         from app.models.recepcion import RecepcionMercancia
         obj = db.session.get(RecepcionMercancia, p.get('recepcion_id')) if p.get('recepcion_id') else None
-        return _preflag_atributo(obj, 'siesa_triggered', True, False) if obj is not None else None
+        return _preflag_inventario(obj, 'siesa_triggered', False, job.id) if obj is not None else None
     if job.tipo == 'TRASLADO_AVERIAS':
         if p.get('movimiento_id'):
             from app.models.inventario import MovimientoInventario
             obj = db.session.get(MovimientoInventario, p['movimiento_id'])
             if obj is None:
                 return None
-            return _preflag_atributo(obj, 'siesa_sync', SIESA_SYNC_ENVIANDO, 'PENDIENTE',
-                                     al_confirmar=lambda: setattr(obj, 'siesa_sync', 'ENVIADO'))
+            return _preflag_inventario(obj, 'siesa_sync', 'PENDIENTE', job.id)
         from app.models.devolucion import TareaDevolucion
         obj = db.session.get(TareaDevolucion, p.get('tarea_id')) if p.get('tarea_id') else None
-        return _preflag_atributo(obj, 'siesa_triggered', True, False) if obj is not None else None
+        return _preflag_inventario(obj, 'siesa_triggered', False, job.id) if obj is not None else None
     if job.tipo == 'AJUSTE_CONTEO':
         from app.models.conteo import SesionConteo
         obj = db.session.get(SesionConteo, p.get('sesion_id')) if p.get('sesion_id') else None
-        return _preflag_atributo(obj, 'siesa_triggered', True, False) if obj is not None else None
+        return _preflag_inventario(obj, 'siesa_triggered', False, job.id) if obj is not None else None
     if job.tipo == 'NOTA_CREDITO_DEVOLUCION_CLIENTE':
         from app.models.devolucion_cliente import DevolucionCliente
         obj = db.session.get(DevolucionCliente, p.get('devolucion_id')) if p.get('devolucion_id') else None
@@ -2840,7 +2926,7 @@ def _preflag_de(job):
             obj.siesa_nc_triggered = False
             obj.siesa_nc_triggered_at = None
 
-        def _confirmar_dev():
+        def _confirmar_dev(_motivo=None):
             obj.siesa_nc_response = obj.siesa_nc_response or json.dumps(
                 {'resuelto_a_mano': True}, ensure_ascii=False)
         # Puesto sin desenlace = la bandera sin la respuesta de Siesa.
@@ -2858,7 +2944,7 @@ def _preflag_de(job):
             rec.siesa_nc_triggered = False
             rec.anotar_documento_siesa('NC', 'FALLIDO')
         return _Preflag(rec, lambda: bool(rec.siesa_nc_triggered and not _pc.nc_llego(rec)),
-                        _bajar_nc, lambda: rec.anotar_documento_siesa('NC', 'ENVIADO'),
+                        _bajar_nc, lambda _motivo=None: rec.anotar_documento_siesa('NC', 'ENVIADO'),
                         lambda: {'siesa_nc_triggered': rec.siesa_nc_triggered,
                                  'siesa_nc_resultado': rec.siesa_nc_resultado})
     puc = p.get('cuenta_puc')
@@ -2869,7 +2955,7 @@ def _preflag_de(job):
         rec.desmarcar_puc(puc)
         rec.anotar_documento_siesa('DC', 'FALLIDO', cuenta_puc=puc)
     return _Preflag(rec, lambda: bool(puc in rec.pucs_enviadas() and not _pc.dc_llego(rec, puc)),
-                    _bajar_dc, lambda: rec.anotar_documento_siesa('DC', 'ENVIADO', cuenta_puc=puc),
+                    _bajar_dc, lambda _motivo=None: rec.anotar_documento_siesa('DC', 'ENVIADO', cuenta_puc=puc),
                     lambda: {'cuenta_puc': puc, 'enviada': puc in rec.pucs_enviadas(),
                              'resultado': _pc.resultado_dc(rec, puc)})
 
@@ -2880,7 +2966,7 @@ def preflag_sin_verificar(job) -> bool:
     if job is None or job.estado != EstadoSiesaJob.FALLIDO:
         return False
     pf = _preflag_de(job)
-    return pf is not None and pf.puesto()
+    return pf is not None and pf.sin_desenlace()
 
 
 def exigir_no_sin_verificar(job) -> None:
@@ -2917,7 +3003,7 @@ def resolver_preflag_sin_verificar(job_id: int, *, usuario_id: int, entro: bool,
     pf = _preflag_de(job)
     antes = pf.foto()
     if entro:
-        pf.confirmar()
+        pf.confirmar(motivo=texto)
     else:
         pf.bajar()
     registrar_accion(

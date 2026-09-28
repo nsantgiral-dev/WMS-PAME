@@ -17,6 +17,7 @@ from sqlalchemy.orm import selectinload, joinedload
 from app.extensions import db
 from app.routes._auth_helpers import _es_compras, Roles
 from app.utils.fecha import dia_operativo as _dia_operativo
+from app.services.siesa_job_service import envio_siesa_publico
 
 compras_bp = Blueprint('compras', __name__)
 
@@ -317,6 +318,7 @@ def cuarentena():
             'dias_sin_gestion': dias_sin_gestion,
             'observaciones': d.observaciones,
             'siesa_triggered': d.siesa_triggered,
+            'siesa_envio': envio_siesa_publico(d),
             'fecha_creacion': d.fecha_creacion.isoformat() if d.fecha_creacion else None,
             'fecha_completado': d.fecha_completado.isoformat() if d.fecha_completado else None,
         })
@@ -450,6 +452,7 @@ def audit_trail():
             'items': items_detalle,
             'total_items': len(items_detalle),
             'siesa_triggered': rec.siesa_triggered,
+            'siesa_envio': envio_siesa_publico(rec),
         })
 
     return jsonify({

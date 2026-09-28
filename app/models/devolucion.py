@@ -24,6 +24,11 @@ class EstadoDevolucion:
     DESCARTADO  = 'DESCARTADO'
 
 
+def _envio_siesa(obj):
+    from app.services.siesa_job_service import envio_siesa_publico
+    return envio_siesa_publico(obj)
+
+
 class TareaDevolucion(db.Model):
     __tablename__ = 'tareas_devolucion'
 
@@ -58,6 +63,11 @@ class TareaDevolucion(db.Model):
     # Idempotencia con Siesa — P4: evita traslado NB1→AV1 duplicado en reintento DLQ
     siesa_triggered    = db.Column(db.Boolean, default=False, nullable=False, server_default='false')
     siesa_triggered_at = db.Column(db.DateTime, nullable=True)
+    #: La respuesta del POST que salió bien (m050inv2). Con `siesa_triggered`
+    #: puesto y esto vacío, el envío NO tiene desenlace: «no sé», no «enviado»
+    #: (`siesa_job_service.estado_del_preflag`). Las otras dos tablas con
+    #: pre-flag (recepciones, sesiones_conteo) ya la tenían.
+    siesa_response = db.Column(db.Text, nullable=True)
 
     # Tiempos
     fecha_creacion = db.Column(db.DateTime, default=datetime.utcnow)
@@ -80,7 +90,8 @@ class TareaDevolucion(db.Model):
             'ubicacion_id': self.ubicacion_id,
             'ubicacion_codigo': self.ubicacion.codigo if self.ubicacion else None,
             'es_averiado': self.es_averiado,
-            'siesa_triggered': self.siesa_triggered,   # averiado: indica si Siesa fue notificado
+            'siesa_triggered': self.siesa_triggered,   # averiado: se intentó notificar a Siesa
+            'siesa_envio': _envio_siesa(self),
             'siesa_triggered_at': self.siesa_triggered_at.isoformat() if self.siesa_triggered_at else None,
             'recepcionista_id': self.recepcionista_id,
             'estado': self.estado,

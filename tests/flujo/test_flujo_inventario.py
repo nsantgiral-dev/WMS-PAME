@@ -169,6 +169,9 @@ class TestElDetectorNoEstaCiego:
             codigo='CNT-INV01', tipo='MANUAL', ubicacion_id=kardex.ubicacion.id,
             almacen_id=kardex.almacen_id, producto_id=kardex.producto.id,
             estado=EstadoConteo.AJUSTANDO, siesa_triggered=True,
+            # Con su desenlace (2026-09-26): bandera sola ya es «no sé» y la
+            # rama de recuperación solo corre si el ajuste entró a Siesa.
+            siesa_response='{"codigo": 0}',
             operario_id=usuario.id)
         db.session.add(sesion)
         db.session.flush()

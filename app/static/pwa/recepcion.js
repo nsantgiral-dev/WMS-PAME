@@ -22,6 +22,26 @@ let REC_OC_GRUPOS_COUNT = [0, 0, 0];
  * Carga y renderiza la lista de recepciones activas (OCs de Siesa + DB).
  * @param {boolean} [silencioso=false] - true omite el spinner de carga inicial
  */
+
+/**
+ * El estado del envío a Siesa de una recepción o una avería, como lo publica
+ * el servidor (`siesa_envio`, de `estado_del_preflag`): «✓» solo con
+ * desenlace; la bandera sin respuesta es «Sin verificar» con quién lo
+ * resuelve (2026-09-26). Sin el campo, no se afirma nada.
+ * @param {Object} o
+ * @returns {string}
+ */
+function recSiesaBadge(o) {
+  const e = (o && o.siesa_envio) || {};
+  if (e.estado === 'ENVIADO') {
+    return `<span style="color:var(--ok-tx);font-size:var(--fs-xs);font-weight:700;">✓ ${esc(e.texto)}</span>`;
+  }
+  if (e.estado === 'SIN_DESENLACE') {
+    return `<span style="color:var(--err-tx);font-size:var(--fs-xs);font-weight:700;" title="Lo resuelve ${esc(e.quien_resuelve)}">⚠ ${esc(e.texto)} — lo resuelve ${esc(e.quien_resuelve)}</span>`;
+  }
+  return `<span style="color:var(--warn-tx);font-size:var(--fs-xs);font-weight:700;">⏳ ${esc(e.texto || 'Sin dato del envío a Siesa')}</span>`;
+}
+
 async function cargarRecepciones(silencioso = false) {
   if (RECEPCION_ACTUAL) return;
   const el = document.getElementById('contenido-recepcion');
@@ -171,9 +191,7 @@ function renderListaRecepciones(siesa, dbRecs, confirmadas) {
   if (confRecs.length) {
     htmlConfirmadas = confRecs.map(r => {
       const fecha = r.fecha_confirmacion ? new Date(r.fecha_confirmacion).toLocaleDateString('es-CO') : '—';
-      const siesaBadge = r.siesa_triggered
-        ? `<span style="color:var(--ok-tx);font-size:var(--fs-xs);font-weight:700;">✓ Sincronizada con Siesa</span>`
-        : `<span style="color:var(--warn-tx);font-size:var(--fs-xs);font-weight:700;">⏳ Pendiente en Siesa</span>`;
+      const siesaBadge = recSiesaBadge(r);
       const itemsHtml = (r.items || []).map(it => `
         <div style="display:flex;justify-content:space-between;padding:3px 0;border-bottom:1px solid var(--brd);font-size:var(--fs-xs);">
           <span style="color:var(--tx);">${esc(it.producto_codigo || '')}</span>
@@ -951,7 +969,10 @@ async function confirmarRecepcionActiva() {
       return;
     }
     let msg = 'Recepción confirmada';
-    if (r.siesa_triggered) msg += ' — Siesa actualizó inventario';
+    const envio = r.siesa_envio || {};
+    if (envio.estado === 'ENVIADO') msg += ' — Siesa actualizó inventario';
+    else if (envio.estado === 'SIN_DESENLACE') msg += ` — ${envio.texto}. Lo resuelve ${envio.quien_resuelve}`;
+    else msg += ' — la entrada a Siesa queda en cola';
     if (r.tiene_cross_dock) msg += ' · revisar Cross-Dock';
     alerta(msg, 'exito');
     RECEPCION_ACTUAL = null;
@@ -2285,7 +2306,7 @@ async function compCargarCuarentena(prefix) {
       for (const d of devs) {
         const estadoColor = d.estado === 'PENDIENTE' ? '#f59e0b' : d.estado === 'EN_PROCESO' ? '#3b82f6' : d.estado === 'COMPLETADO' ? '#22c55e' : '#555';
         const diasColor = d.dias_sin_gestion > 7 ? '#ef4444' : d.dias_sin_gestion > 3 ? '#f59e0b' : 'var(--tx3)';
-        const siesa = d.siesa_triggered ? '<span style="color:var(--ok-tx);font-size:var(--fs-xs);">✓ Siesa</span>' : '<span style="color:var(--err-tx);font-size:var(--fs-xs);">✗ Siesa</span>';
+        const siesa = recSiesaBadge(d);
         html += `<div style="background:var(--bg-s);border:1px solid var(--brd);border-radius:10px;padding:10px 12px;">
           <div style="display:flex;justify-content:space-between;align-items:center;">
             <div>
@@ -2354,7 +2375,7 @@ async function compCargarAudit(prefix) {
     for (const rec of resultados) {
       const fecha = rec.fecha_confirmacion ? new Date(rec.fecha_confirmacion).toLocaleDateString('es-CO') : rec.fecha_creacion ? new Date(rec.fecha_creacion).toLocaleDateString('es-CO') : '—';
       const estadoColor = rec.estado === 'CONFIRMADA' ? '#22c55e' : rec.estado === 'EN_PROCESO' ? '#3b82f6' : rec.estado === 'CANCELADA' ? '#ef4444' : '#f59e0b';
-      const siesa = rec.siesa_triggered ? '<span style="color:var(--ok-tx);font-size:var(--fs-xs);">✓ Siesa</span>' : '<span style="color:var(--err-tx);font-size:var(--fs-xs);">✗ Siesa</span>';
+      const siesa = recSiesaBadge(rec);
 
       let itemsHtml = '';
       for (const it of (rec.items || [])) {
