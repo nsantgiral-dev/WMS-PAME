@@ -3787,7 +3787,11 @@ async function _cargarPlanilla(id) {
         </div>`;
     });
 
-    if (d.sin_gestionar === 0 && d.estado_financiero !== 'LIQUIDADA') {
+    // Los botones de plata solo a quien el servidor deja (`d.permisos`, las
+    // mismas funciones del 403), y liquidar solo una ruta cerrada.
+    const puedeLiquidarPlanilla = !!(d.permisos && d.permisos.liquidar);
+    if (d.sin_gestionar === 0 && d.estado_financiero !== 'LIQUIDADA'
+        && ruta.estado === 'ENTREGADA' && puedeLiquidarPlanilla) {
       html += `
         <div style="position:sticky;bottom:0;padding-top:12px;background:var(--bg,#0a0a0a);">
           <button onclick="conBotonOcupado(event, () => rutaLiquidar(${esc(ruta.id)}))"
@@ -3800,7 +3804,7 @@ async function _cargarPlanilla(id) {
       // política de cobro): una devolución contada en cero no va a tener NC,
       // y con la regla copiada acá el botón quedaba visible para siempre.
       const hayPendientesSiesa = (d.paradas || []).some(p => (p.pendiente_siesa || []).length > 0);
-      if (hayPendientesSiesa) {
+      if (hayPendientesSiesa && puedeLiquidarPlanilla) {
         html += `
           <div style="position:sticky;bottom:0;padding-top:12px;background:var(--bg,#0a0a0a);">
             <button onclick="conBotonOcupado(event, () => rutaLiquidarSiesa(${esc(ruta.id)}))"
@@ -3809,6 +3813,11 @@ async function _cargarPlanilla(id) {
             </button>
           </div>`;
       }
+    } else if (d.sin_gestionar === 0 && d.estado_financiero !== 'LIQUIDADA' && ruta.estado !== 'ENTREGADA') {
+      html += `
+        <div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:8px;text-align:center;">
+          La ruta se liquida cuando el conductor la cierra.
+        </div>`;
     } else if (d.sin_gestionar > 0) {
       html += `
         <div style="background:var(--warn-bg);border:1px solid var(--warn-brd);border-radius:10px;padding:12px;margin-top:8px;text-align:center;color:var(--warn-tx);font-size:var(--fs-sm);">

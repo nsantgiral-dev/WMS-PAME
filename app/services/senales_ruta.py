@@ -467,6 +467,12 @@ def senales_de_recaudo(recaudo, ruta=None, faltante=None) -> list:
     _dif = _pt.texto_diferencia(recaudo)
     if _dif:
         senales.append({'clave': 'diferencia_con_el_conductor', 'texto': _dif})
+    # La retención confirmada cuyo documento no salió (validación 2026-09-26).
+    from app.services import politica_cobro as _pc_s
+    if _pc_s.dc_pendiente(recaudo) == _pc_s.DC_LISTO and _pc_s.rc_ya_salio_o_en_cola(recaudo):
+        senales.append({'clave': 'retencion_sin_documento',
+                        'texto': ('La retención confirmada no tiene su documento en Siesa: '
+                                  'use «Enviar todo a Siesa» de la ruta')})
     # Tanda 2 · D: la retención de una PARCIAL espera el conteo de la devolución.
     if recaudo.estado_entrega == EstadoEntrega.PARCIAL and recaudo.motivo_descuento:
         from app.services.devolucion_ruta import retencion_esperando_conteo

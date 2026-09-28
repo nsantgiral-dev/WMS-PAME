@@ -877,6 +877,9 @@ class TestRuta:
         f = self._ruta_en_transito(db, almacen, actores)
         cf_entrega = __import__('tests.flujo.conductor_de_flujo', fromlist=['x'])
         cf_entrega.hacer_entrega(db, f)
+        # Se liquida una ruta cerrada (validación de la plata, 2026-09-26).
+        db.session.get(RutaDespacho, f.ruta_id).estado = 'ENTREGADA'
+        db.session.commit()
         r = client.post(f'/api/rutas/{f.ruta_id}/liquidar', headers=h)
         assert r.status_code == 200, r.get_json()
         ruta = db.session.get(RutaDespacho, f.ruta_id)

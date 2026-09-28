@@ -871,6 +871,11 @@ function _liqRenderDetalle() {
     html += '</div>';
   });
 
+  // ── «Enviar todo a Siesa» de la ruta (validación 2026-09-26): la misma
+  // política y las mismas guardas que «Enviar a Siesa» de Rutas, para quien
+  // liquida, con lo que sale y lo que no antes y después.
+  if (esLiquidada && _liqPermiso('liquidar')) html += _liqBloqueEnviarTodo(ruta, recaudos);
+
   // ── FASE 1: Botón de liquidación WMS (solo si NO liquidada) ────
   // Con paradas sin gestionar el servidor no liquida: el botón lo dice en vez
   // de rebotar (tanda 2 · B).
@@ -900,6 +905,66 @@ function _liqRenderDetalle() {
   }
 
   body.innerHTML = html;
+}
+
+// ── «Enviar todo a Siesa» ───────────────────────────────────────────────────
+
+const LIQ_DOC_PALABRA = { NC: 'nota crédito', RC: 'recibo de caja', DC: 'retención' };
+
+/** Lo que sale y lo que no, de lo que el servidor ya dijo por parada. */
+function _liqQueSale(recaudos) {
+  const sale = [], noSale = [];
+  (recaudos || []).forEach(rec => {
+    const docs = (rec.documentos_pendientes || []).map(d => LIQ_DOC_PALABRA[d] || d);
+    if (docs.length) sale.push(`${rec.numero_pedido || '—'}: ${docs.join(', ')}`);
+    if (rec.credito_no_autorizado) noSale.push(`${rec.numero_pedido || '—'}: contado sin plata y sin autorizar como crédito`);
+    else if (rec.decision_retencion === 'PENDIENTE') noSale.push(`${rec.numero_pedido || '—'}: la retención espera que alguien la confirme o la rechace`);
+    if (rec.rc_sin_verificar) noSale.push(`${rec.numero_pedido || '—'}: el recibo quedó sin verificar (resuélvalo arriba)`);
+    if ((rec.documentos_sin_verificar || []).length) noSale.push(`${rec.numero_pedido || '—'}: un documento quedó sin verificar (resuélvalo arriba)`);
+    if ((rec.senales || []).some(x => x.clave === 'retencion_espera_conteo')) noSale.push(`${rec.numero_pedido || '—'}: la retención espera que bodega cuente la devolución`);
+  });
+  return { sale, noSale };
+}
+
+function _liqBloqueEnviarTodo(ruta, recaudos) {
+  const { sale, noSale } = _liqQueSale(recaudos);
+  if (!sale.length && !noSale.length) return '';
+  return `
+    <div style="background:var(--bg-s);border:1px solid var(--brd);border-radius:12px;padding:12px;margin-top:16px;">
+      <div style="font-size:var(--fs-sm);font-weight:800;color:var(--tx);">Documentos de la ruta en Siesa</div>
+      ${sale.length ? `<div style="font-size:var(--fs-xs);color:var(--tx2);margin-top:6px;">Sale ahora:</div>
+        ${sale.map(t => `<div style="font-size:var(--fs-xs);color:var(--tx);">· ${esc(t)}</div>`).join('')}` : ''}
+      ${noSale.length ? `<div style="font-size:var(--fs-xs);color:var(--tx2);margin-top:6px;">No sale todavía:</div>
+        ${noSale.map(t => `<div style="font-size:var(--fs-xs);color:var(--warn-tx);">· ${esc(t)}</div>`).join('')}` : ''}
+      ${sale.length ? `
+      <button onclick="conBotonOcupado(event, () => liqEnviarTodoSiesa(${esc(ruta.id)}))"
+        style="width:100%;margin-top:10px;padding:14px;background:#1e3a5f;color:var(--info-tx);border:none;border-radius:10px;font-size:var(--fs-sm);font-weight:800;cursor:pointer;">
+        Enviar todo a Siesa
+      </button>` : ''}
+    </div>`;
+}
+
+/** Encola lo que falta de la ruta y dice qué salió y qué no, y por qué. */
+async function liqEnviarTodoSiesa(rutaId) {
+  let r;
+  try {
+    r = await post(`/api/rutas/${Number(rutaId)}/liquidar-siesa`, {});
+  } catch (e) {
+    alerta(e.message || 'No se pudo enviar a Siesa', 'error');
+    return;
+  }
+  const pedidoDe = {};
+  ((_liqDetalleRuta && _liqDetalleRuta.recaudos) || []).forEach(x => { pedidoDe[x.id] = x.numero_pedido; });
+  const partes = [];
+  if (r.rc_encolados) partes.push(`${r.rc_encolados} recibo(s) de caja`);
+  if (r.dc_encolados) partes.push(`${r.dc_encolados} retención(es)`);
+  if (r.nc_encolados) partes.push(`${r.nc_encolados} devolución(es) hacia su nota crédito`);
+  alerta(partes.length ? `En cola para Siesa: ${partes.join(', ')}` : 'No había nada nuevo que enviar',
+         partes.length ? 'exito' : 'advertencia');
+  (r.errores || []).slice(0, 5).forEach(err => {
+    alerta(`${pedidoDe[err.recaudo_id] || 'Parada'}: ${err.error}`, 'error');
+  });
+  await liqAbrirRuta(rutaId);
 }
 
 // ── Paradas sin gestionar: el formulario de la oficina (tanda 2 · B) ────────

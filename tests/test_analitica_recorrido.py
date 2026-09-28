@@ -150,7 +150,11 @@ def _entregar(db, flujo, conductor_u, **datos):
 
 
 def _liquidar(db, flujo, admin):
+    from app.models.ruta_despacho import RutaDespacho
     from app.services.ruta_service import RutaService
+    # Se liquida una ruta cerrada (validación de la plata, 2026-09-26).
+    db.session.get(RutaDespacho, flujo.ruta_id).estado = 'ENTREGADA'
+    db.session.commit()
     with patch('app.services.connekta_gateway.connekta', _mock_connekta()):
         RutaService.liquidar_ruta(flujo.ruta_id, usuario_id=admin.id)
     db.session.commit()

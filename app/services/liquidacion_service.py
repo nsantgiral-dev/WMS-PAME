@@ -204,6 +204,14 @@ class LiquidacionService:
         from app.services import senales_ruta as _sr
         _faltantes = _sr.faltantes_de_retorno_de_recaudos([r.id for r in recaudos])
         _sin_verificar = documentos_sin_verificar([r.id for r in recaudos])
+        # Las facturas de la ruta, leídas UNA vez cada una y en paralelo (con
+        # tope, como la lista de paradas): en serie, 25 paradas con Siesa a
+        # 1 s eran 25 s de pantalla en blanco (validación 2026-09-26).
+        from app.services.fe_resolver import resolver_fe_o_none
+        _fe_de = {r.id: (resolver_fe_o_none(r.tarea) if r.tarea else (None, None))
+                  for r in recaudos}
+        _lineas_fe = leer_facturas_en_paralelo(
+            {fe for fe in _fe_de.values() if fe[0] and fe[1]})
 
         for recaudo in recaudos:
             tarea = recaudo.tarea
@@ -239,11 +247,12 @@ class LiquidacionService:
             rd['credito_no_autorizado'] = rd['trato_cobro'] == _cp_det.TRATO_NO_AUTORIZADO
 
             factura_siesa = None
-            from app.services.fe_resolver import resolver_fe_o_none
-            _tipo_fe, _consec_fe = resolver_fe_o_none(tarea) if tarea else (None, None)
+            _tipo_fe, _consec_fe = _fe_de.get(recaudo.id, (None, None))
             if _tipo_fe and _consec_fe:
                 try:
-                    lineas_raw = connekta.get_rowids_factura(_tipo_fe, _consec_fe)
+                    lineas_raw = _lineas_fe[(_tipo_fe, _consec_fe)]
+                    if isinstance(lineas_raw, Exception):
+                        raise lineas_raw
                     if lineas_raw:
                         lineas = []
                         base_gravable = 0
@@ -1911,6 +1920,29 @@ def _resolver_cuenta_cxc(tarea, tipo_docto_fe, consec_fe) -> tuple:
             tarea.id, e
         )
     return co_factura, cuenta_cxc, un_cxc
+
+
+#: Cuántas facturas se leen de Siesa en paralelo en el detalle de la ruta.
+PARALELO_FACTURAS = 6
+
+
+def leer_facturas_en_paralelo(facturas) -> dict:
+    """`{(tipo, consec): líneas | Exception}` — cada factura leída una vez, con
+    tope de `PARALELO_FACTURAS` a la vez. Un fallo queda como la excepción (el
+    llamador lo declara por parada), nunca como lista vacía."""
+    from concurrent.futures import ThreadPoolExecutor
+    from app.services.connekta_gateway import connekta
+    facturas = sorted(facturas)
+    if not facturas:
+        return {}
+
+    def _leer(fe):
+        try:
+            return connekta.get_rowids_factura(fe[0], fe[1])
+        except Exception as e:                   # noqa: BLE001 — se declara por parada
+            return e
+    with ThreadPoolExecutor(max_workers=max(1, min(PARALELO_FACTURAS, len(facturas)))) as pool:
+        return dict(zip(facturas, pool.map(_leer, facturas)))
 
 
 #: Los documentos de la liquidación (fuera del RC, que tiene su propia salida)

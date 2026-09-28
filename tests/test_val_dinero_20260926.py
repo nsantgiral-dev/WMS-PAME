@@ -103,8 +103,6 @@ class TestLaRetencionQueNoSalioTieneSalida:
     de la tanda 2 · D se apaga al contar la devolución. La factura queda con
     el saldo de la retención en cartera, sin señal."""
 
-    @pytest.mark.xfail(strict=True, reason='val-dinero P1: el DC pendiente no cuenta como '
-                                           'documento pendiente')
     def test_una_retencion_confirmada_sin_dc_es_un_pendiente(self):
         from app.services import politica_cobro as pc
         rec = SimpleNamespace(
@@ -155,7 +153,14 @@ class TestUnaRutaLiquidadaEnTransitoNoSeEdita:
         f, uc, ad = mundo
         v = _valor(db, f)
         assert _conductor_confirma(client, app, f, uc, v).status_code == 200
-        RutaService.liquidar_ruta(f.ruta_id, usuario_id=ad.id)
+        # Arreglo (2026-09-26): liquidar exige la ruta cerrada…
+        with pytest.raises(ValueError, match='ENTREGADA'):
+            RutaService.liquidar_ruta(f.ruta_id, usuario_id=ad.id)
+        # …y la guarda de «liquidada» vale en toda edición (una ruta vieja
+        # liquidada en tránsito antes del arreglo).
+        from app.models.ruta_despacho import RutaDespacho
+        db.session.get(RutaDespacho, f.ruta_id).estado_financiero = 'LIQUIDADA'
+        db.session.commit()
         r = _conductor_confirma(client, app, f, uc, v, forma_pago='TRANSFERENCIA',
                                 referencia_pago='12345678', foto_comprobante=FOTO)
         assert r.status_code == 400

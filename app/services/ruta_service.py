@@ -2337,8 +2337,13 @@ class RutaService:
         ruta = RutaDespacho.query.get(id)
         if not ruta:
             raise LookupError('Ruta no encontrada')
-        if ruta.estado not in (EstadoRutaDespacho.EN_TRANSITO, EstadoRutaDespacho.ENTREGADA):
-            raise ValueError(f'No se puede liquidar una ruta en estado {ruta.estado}')
+        # Solo una ruta cerrada (validación de la plata, 2026-09-26): liquidada en
+        # tránsito, el conductor seguía reescribiendo forma de pago y monto hasta
+        # que alguien encolara el recibo.
+        if ruta.estado != EstadoRutaDespacho.ENTREGADA:
+            raise ValueError(
+                f'La ruta está {ruta.estado}: se liquida cuando el conductor la cierra '
+                f'(ENTREGADA). Si no la cierra, pida el cierre desde Liquidación.')
 
         tareas = ruta.tareas_unicas()
         gestionadas = RecaudoEntrega.query.filter_by(ruta_id=id).count()

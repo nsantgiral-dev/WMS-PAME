@@ -444,11 +444,78 @@ def nc_llego(recaudo) -> bool:
 # 6 · ¿Qué documento de esta parada falta mandar?
 # ═════════════════════════════════════════════════════════════════════════════
 
+#: Desenlaces de `dc_pendiente`.
+DC_LISTO = 'LISTO'
+DC_ESPERA_DEVOLUCION = 'ESPERA_DEVOLUCION'
+
+
+def _pucs_marcadas(recaudo) -> set:
+    try:
+        return set(json.loads(getattr(recaudo, 'siesa_dc_pucs', None) or '[]'))
+    except (ValueError, TypeError):
+        return {'__ILEGIBLE__'}
+
+
+def dc_pendiente(recaudo, tarea=None):
+    """¿Falta el documento de la retención de esta parada? **La única** que lo
+    contesta (validación de la plata, 2026-09-26): antes nadie lo sabía — la
+    retención CONFIRMADA cuyo DC no se encoló (Siesa no respondió al leer la
+    factura, o una PARCIAL sin la devolución amarrada) no tenía botón ni aviso.
+
+    `None` = no falta (sin retención confirmada, ya enviada o en cola, o la
+    parada no va a caja: crédito). `DC_LISTO` = «Enviar a Siesa» la produce
+    hoy. `DC_ESPERA_DEVOLUCION` = una PARCIAL cuya devolución no está amarrada
+    ni contada: sin base todavía (tanda 2 · D, se queda así)."""
+    from app.models.recaudo_entrega import EstadoEntrega
+    if recaudo is None or decision_retencion(recaudo) != CONFIRMADA:
+        return None
+    if recaudo.estado_entrega not in (EstadoEntrega.ENTREGADO, EstadoEntrega.PARCIAL):
+        return None
+    from app.services.liquidacion_service import RETENCION_PUC, _hay_rc_en_cola, _pucs_en_cola
+    puc = RETENCION_PUC.get(recaudo.motivo_descuento)
+    if not puc:
+        return None
+    rid = getattr(recaudo, 'id', None)
+    if puc in _pucs_marcadas(recaudo) or '__ILEGIBLE__' in _pucs_marcadas(recaudo):
+        return None
+    if rid is not None and puc in _pucs_en_cola(rid):
+        return None
+    # La retención va detrás del recibo: solo en las paradas que van a caja.
+    rc_vivo = bool(recaudo.siesa_rc_triggered) or (rid is not None and _hay_rc_en_cola(rid))
+    if not rc_vivo:
+        from app.services import cond_pago as _cp
+        if _cp.trato_de_cobro(recaudo, tarea if tarea is not None else recaudo.tarea) \
+                != _cp.TRATO_CONTADO:
+            return None
+    if recaudo.estado_entrega == EstadoEntrega.PARCIAL and rid is not None \
+            and retencion_espera_devolucion(recaudo):
+        return DC_ESPERA_DEVOLUCION
+    return DC_LISTO
+
+
+def rc_ya_salio_o_en_cola(recaudo) -> bool:
+    """El recibo de la parada ya se envió o está en la cola."""
+    from app.services.liquidacion_service import _hay_rc_en_cola
+    rid = getattr(recaudo, 'id', None)
+    return bool(recaudo.siesa_rc_triggered) or (rid is not None and _hay_rc_en_cola(rid))
+
+
+def retencion_espera_devolucion(recaudo) -> bool:
+    """¿La base de la retención de esta PARCIAL depende de una devolución que
+    todavía no está amarrada a la factura ni contada? La misma condición con
+    que `base_retencion_entregada` devuelve `None` antes de mirar líneas."""
+    from app.models.devolucion_cliente import EstadoDevolucionCliente as E
+    from app.services.devolucion_ruta import devolucion_vigente
+    dev = devolucion_vigente(recaudo.id)
+    return dev is None or (dev.vinculada_factura_at is None and dev.estado not in E.CONTADAS)
+
+
 def documentos_pendientes(recaudo, tarea=None) -> list:
     """Los documentos que «Enviar a Siesa» produciría hoy para esta parada:
-    `['NC']`, `['RC']`, ambos o `[]`. La pantalla no lo recalcula: una
-    devolución contada en cero (FALTANTE_TOTAL) no va a tener NC, y el botón
-    quedaba visible para siempre invitando a mandar algo que no existe."""
+    `['NC']`, `['RC']`, `['DC']` o varios, o `[]`. La pantalla no lo
+    recalcula: una devolución contada en cero (FALTANTE_TOTAL) no va a tener
+    NC, y el botón quedaba visible para siempre invitando a mandar algo que no
+    existe. La retención que falta (`dc_pendiente`) entra desde el 2026-09-26."""
     from app.models.recaudo_entrega import EstadoEntrega
     from app.services import cond_pago as _cp
     from app.services import devolucion_ruta as _dr
@@ -466,7 +533,49 @@ def documentos_pendientes(recaudo, tarea=None) -> list:
         from app.services.liquidacion_service import _hay_rc_en_cola
         if not _hay_rc_en_cola(recaudo.id):
             faltan.append('RC')
+    if dc_pendiente(recaudo, tarea) == DC_LISTO:
+        faltan.append('DC')
     return faltan
+
+
+def retenciones_sin_documento(ahora=None) -> list:
+    """Paradas con la retención CONFIRMADA y sin su documento, en rutas desde
+    el corte, con `{ruta_id, pedido, cliente, conductor, retencion, estado,
+    espera_devolucion}`. Para el resumen diario (`lineas_de_aviso_dc`)."""
+    from app.models.recaudo_entrega import RecaudoEntrega
+    from app.services import corte
+    q = RecaudoEntrega.query.filter(RecaudoEntrega.retencion_confirmada.is_(True))
+    ini = corte.inicio_auditoria()
+    if ini is not None:
+        q = q.filter(RecaudoEntrega.fecha_confirmacion >= ini)
+    out = []
+    for r in q.all():
+        # Antes del recibo, la retención que espera es lo normal: el aviso es
+        # para la que se quedó atrás de un RC que ya salió.
+        if not rc_ya_salio_o_en_cola(r):
+            continue
+        d = dc_pendiente(r)
+        if d is None:
+            continue
+        ruta = r.ruta
+        out.append({'ruta_id': r.ruta_id, 'recaudo_id': r.id,
+                    'pedido': getattr(r.tarea, 'numero_pedido_siesa', None),
+                    'cliente': getattr(r.tarea, 'cliente', None),
+                    'conductor': getattr(getattr(ruta, 'conductor', None), 'nombre', None),
+                    'retencion': r.motivo_descuento, 'estado': d,
+                    'espera_devolucion': d == DC_ESPERA_DEVOLUCION})
+    return out
+
+
+def lineas_de_aviso_dc() -> list:
+    """El resumen diario: retenciones confirmadas cuyo documento no salió."""
+    listas = [x for x in retenciones_sin_documento() if not x['espera_devolucion']]
+    if not listas:
+        return []
+    det = '; '.join(f"ruta {x['ruta_id']} · {x['pedido'] or '—'} · {x['conductor'] or 'sin conductor'}"
+                    for x in listas[:10])
+    return [f'⚠ {len(listas)} retención(es) confirmada(s) sin su documento en Siesa ({det}): '
+            f'desde Liquidación, «Enviar todo a Siesa» de la ruta.']
 
 
 # ═════════════════════════════════════════════════════════════════════════════

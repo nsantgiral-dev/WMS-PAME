@@ -755,6 +755,14 @@ def avisos_sin_canal(ayer_inicio, ayer_fin) -> list:
     _seguro('las existencias de Siesa', _stock_viejo)
     _seguro('el sello de ambiente', _sello)
     _seguro('las paradas sin gestionar', _paradas_sin_gestionar)
+
+    def _retenciones_sin_documento():
+        # Validación de la plata (2026-09-26): la retención confirmada cuyo
+        # documento no salió no tenía aviso.
+        from app.services import politica_cobro
+        lineas.extend(politica_cobro.lineas_de_aviso_dc())
+
+    _seguro('las retenciones sin documento', _retenciones_sin_documento)
     return lineas
 
 

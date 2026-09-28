@@ -575,6 +575,11 @@ def planilla_ruta(id):
         resultado = RutaService.planilla_ruta(id)
     except LookupError as e:
         return jsonify({'error': str(e)}), 404
+    # Los botones de plata de la planilla (Liquidar, Enviar a Siesa) con las
+    # mismas funciones que cortan con 403 (validación 2026-09-26).
+    u = _usuario()
+    resultado['permisos'] = {'liquidar': puede_liquidar(u),
+                             'forzar_cierre': puede_forzar_cierre_ruta(u)}
     return jsonify(resultado), 200
 
 
