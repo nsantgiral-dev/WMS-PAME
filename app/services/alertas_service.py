@@ -727,6 +727,11 @@ def avisos_sin_canal(ayer_inicio, ayer_fin) -> list:
             if c['no_escribio'] or (c['ok'] is False and c['de_hoy']):
                 lineas.append(f"⚠ Carga física de {c['bodega']} NO escribió inventario: "
                               f"{str(c['error'])[:160]}. Se reintenta desde Siesa → Cargar inventario.")
+            elif c.get('vieja'):
+                cuando = ('nunca se ha escrito' if c['horas_desde_escrita'] is None
+                          else f"se escribió por última vez hace {c['horas_desde_escrita']:.0f} h")
+                lineas.append(f"⚠ La carga física de {c['bodega']} {cuando}. "
+                              'Se reintenta desde Siesa → Cargar inventario.')
 
     def _crons():
         from app.services import cron_latido

@@ -133,6 +133,10 @@ class TestAvisosSinCanal:
         from tests.test_cartera_retencion import _usuario
         _usuario(db, 'liquidador')
         _usuario(db, 'lider_cartera')
+        # Una carga escrita hoy en cada bodega calibrada (2026-09-26): una
+        # carga que nunca corrió ya no es «nada que avisar».
+        from tests.test_carga_fisica_vigente import sembrar_cargas_escritas
+        sembrar_cargas_escritas(db)
         assert alertas_service.avisos_sin_canal(*self._ventana()) == []
 
     def test_el_resumen_no_arma_consultas_de_invariantes_propias(self):

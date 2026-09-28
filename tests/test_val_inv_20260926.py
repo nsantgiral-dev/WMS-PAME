@@ -124,7 +124,6 @@ class TestCrashEntrePreflagYPost:
 
 class TestCargaFisicaCompleto:
 
-    @pytest.mark.xfail(strict=True, reason='P1: 2 de 3 pasadas perdidas y la descarga se declara apta para escribir')
     def test_una_sola_pasada_no_es_dato_completo(self, db, monkeypatch):
         from app.services import inventario_siesa_service as inv
         pasadas = iter([
@@ -152,7 +151,6 @@ class TestCargaFisicaCompleto:
 
 class TestSaludCargaVieja:
 
-    @pytest.mark.xfail(strict=True, reason='P2: la carga omitida por operaciones activas no deja rastro; Salud OK')
     def test_carga_de_hace_cinco_dias_no_es_ok(self, db):
         from app.models.registro_sync import RegistroSync
         from app.services import analitica_salud
@@ -169,7 +167,6 @@ class TestSaludCargaVieja:
 
 class TestFrescuraNoSeReSellaSinDato:
 
-    @pytest.mark.xfail(strict=True, reason='P2: _guardar_stock_en_bd escribe el merge (BD ∪ API) con updated_at=now')
     def test_sku_que_siesa_no_reporto_conserva_su_fecha(self, db, monkeypatch):
         from app.models.stock_siesa import StockSiesa
         from app.services import inventario_siesa_service as inv

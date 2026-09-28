@@ -1008,13 +1008,24 @@ def carga_fisica():
     except Exception as e:                                    # noqa: BLE001
         return {'error': str(e)[:200], 'nivel': ADVERTENCIA, 'bodegas': [],
                 'texto': 'No se pudo leer el registro de la carga física.'}
+    que_hacer = ('Reintentar desde Siesa → Cargar inventario (admin, por bodega), con Siesa '
+                 'respondiendo y sin operaciones activas en ese almacén.')
     no = [f for f in filas if f['no_escribio'] or (f['ok'] is False and f['de_hoy'])]
     if no:
         return {'nivel': ADVERTENCIA, 'bodegas': filas,
                 'texto': 'Carga física de hoy NO escrita en ' + ', '.join(f['bodega'] for f in no)
                          + ': ' + str(no[0]['error'])[:160],
-                'que_hacer': 'Reintentar desde Siesa → Cargar inventario (admin), dentro de la '
-                             'ventana de Siesa y con Siesa respondiendo.'}
+                'que_hacer': que_hacer}
+    # Una carga omitida sin fila, o que no corre hace días, no es «OK»
+    # (2026-09-26): se mira la antigüedad de la última carga ESCRITA.
+    viejas = [f for f in filas if f.get('vieja')]
+    if viejas:
+        partes = [f"{f['bodega']} (" + ('nunca' if f['horas_desde_escrita'] is None
+                                        else f"hace {f['horas_desde_escrita']:.0f} h") + ')'
+                  for f in viejas]
+        return {'nivel': ADVERTENCIA, 'bodegas': filas,
+                'texto': 'La última carga física escrita no es de hoy en: ' + ', '.join(partes),
+                'que_hacer': que_hacer}
     return {'nivel': OK, 'bodegas': filas, 'texto': None, 'que_hacer': None}
 
 

@@ -113,19 +113,22 @@ class TestLaPolitica:
 
     def test_sello_de_ayer_no_sirve(self, cache_limpio):
         cache_limpio.update(data={'NB1': {'X': {}}}, ts=datetime.utcnow() - timedelta(days=1, hours=1),
-                            degradado=False, bodegas_frescas=frozenset({'NB1'}))
+                            degradado=False, bodegas_frescas=frozenset({'NB1'}),
+                            pasadas_completas=iss.PASADAS_ACORDADAS)
         assert 'no es de hoy' in iss.fuente_para_escribir('NB1')
 
     def test_bodega_que_la_descarga_no_trajo_no_sirve(self, cache_limpio):
         """El merge rellena esa bodega con `stock_siesa`: no es dato de hoy."""
         cache_limpio.update(data={'NB1': {'X': {}}, 'NS1': {'Y': {}}}, ts=datetime.utcnow(),
-                            degradado=False, bodegas_frescas=frozenset({'NB1'}))
+                            degradado=False, bodegas_frescas=frozenset({'NB1'}),
+                            pasadas_completas=iss.PASADAS_ACORDADAS)
         assert iss.fuente_para_escribir('NB1') == ''
         assert 'NS1' in iss.fuente_para_escribir('NS1')
 
     def test_fresco_y_completo_sirve(self, cache_limpio):
         cache_limpio.update(data={'NB1': {'X': {}}}, ts=datetime.utcnow(),
-                            degradado=False, bodegas_frescas=frozenset({'NB1'}))
+                            degradado=False, bodegas_frescas=frozenset({'NB1'}),
+                            pasadas_completas=iss.PASADAS_ACORDADAS)
         assert iss.fuente_para_escribir('NB1') == ''
 
 
@@ -220,6 +223,8 @@ class TestConFuenteDegradadaNoSeEscribeNada:
             producto.codigo_siesa: {'existencia': 7.0, 'comprometido': 0.0, 'salida_sin_conf': 0.0},
         }}
         cache_limpio.update(data=None, ts=None, degradado=False, bodegas_frescas=frozenset())
+        # Las tres pasadas completas (2026-09-26): un dict suelto se lee incompleto.
+        fresco = iss.ResultadoDescarga(fresco, pasadas_completas=iss.PASADAS_ACORDADAS)
         with patch.object(iss, '_descargar_todas_bodegas_custom', return_value=fresco), \
                 patch.object(iss.connekta, 'bodega', almacen.bodega_siesa_id), \
                 patch.object(iss, '_guardar_stock_en_bd'):
@@ -314,6 +319,10 @@ class TestSeVeYSeReintentaEnLaVentana:
 
     def test_sin_fallas_no_dice_nada(self, db):
         from app.services.analitica_salud import carga_fisica
+        # Una carga escrita hoy en cada bodega calibrada (2026-09-26): una
+        # carga que nunca corrió ya no es «nada que avisar».
+        from tests.test_carga_fisica_vigente import sembrar_cargas_escritas
+        sembrar_cargas_escritas(db)
         assert carga_fisica()['nivel'] == 'ok'
 
     def test_el_reintento_fuera_de_ventana_es_409(self, client, db, jwt_token_admin):
