@@ -179,11 +179,9 @@ con ángulo o clase fuera del vocabulario se rechaza con 400 **antes** de escrib
 reintentaría para siempre. Ningún código del vocabulario llega crudo a una
 pantalla (`FLOTA_PALABRAS`/`flotaOpciones`; veredicto en femenino: «no apta»).
 
-*Motivo: QA e2e por rol, 2026-09-24. Cada noche normal producía una señal y un
-pendiente falsos — la forma más rápida de que el encargado deje de mirar la
-bandeja. Trinquetes: `tests/flota/test_fin_del_dia_normal.py`,
-`test_foto_invalida_es_400.py`, `tests/test_sin_codigos_en_pantalla.py`.*
-
+*Motivo: QA e2e por rol, 2026-09-24. Cada noche normal producía una señal y un pendiente
+falsos — la forma más rápida de que el encargado deje de mirar la bandeja. Trinquetes:
+`test_fin_del_dia_normal.py`, `test_foto_invalida_es_400.py`, `test_sin_codigos_en_pantalla.py`.*
 
 ## 19. Lo que la ley prohíbe y se sabe no sale con cualquier texto (2026-09-27)
 
