@@ -1614,7 +1614,8 @@ class RutaService:
     @staticmethod
     def confirmar_parada(ruta_id: int, tarea_id: int, usuario_id: int, data: dict,
                          motivo_tardia: str = None, por_oficina: bool = False,
-                         motivo_correccion: str = None) -> tuple:
+                         motivo_correccion: str = None,
+                         adopta_version: bool = False) -> tuple:
         """Registra entrega y recaudo de una parada. Retorna (recaudo_id, es_edicion).
 
         **Quién entra y cómo lo decide `parada_tardia.puerta_de_confirmacion`**
@@ -1644,7 +1645,8 @@ class RutaService:
         _puerta = _pt_p.puerta_de_confirmacion(
             _ruta, _previa_p, db.session.get(_Usr, usuario_id) if usuario_id else None,
             es_conductor=not por_oficina, data=data,
-            motivo_tardia=motivo_tardia, motivo_correccion=motivo_correccion)
+            motivo_tardia=motivo_tardia, motivo_correccion=motivo_correccion,
+            adopta_version=adopta_version)
         _modo = _puerta['modo']
         _corrige = _modo == _pt_p.OFICINA_CORRIGE
         if por_oficina and not isinstance(data.get('geo'), dict):

@@ -54,6 +54,9 @@ MATRIZ = {
     'puede_corregir_cobro':          {'admin', 'lider_cartera'},
     'puede_autorizar_credito':       {'admin', 'lider_cartera'},
     'puede_forzar_cierre_ruta':      {'admin'},
+    # Mantener/adoptar la versión del conductor (2026-09-26, CTO): adoptar
+    # después de Siesa lo acota `parada_tardia.resolver_version`.
+    'puede_resolver_version_conductor': {'admin', 'liquidador', 'lider_cartera'},
     # El gerente VE (solo lectura, decisión del 2026-09-26); el supervisor no.
     'puede_ver_liquidacion':         {'admin', 'jefe_almacen', 'gerente', 'liquidador', 'lider_cartera'},
 }
@@ -191,6 +194,9 @@ ESCRITURAS = [
     ('crédito en lote', 'POST', '/api/cartera/panel/credito-lote', {}, 'ENTREGADA',
      {'admin', 'lider_cartera'}),
     ('forzar cierre', 'POST', '/api/rutas/{ruta}/forzar-cierre', {}, 'ENTREGADA', {'admin'}),
+    ('resolver la versión del conductor', 'POST',
+     '/api/rutas/{ruta}/recaudos/{rec}/version-conductor', {}, 'ENTREGADA',
+     {'admin', 'liquidador', 'lider_cartera'}),
 ]
 
 LECTURAS = [
@@ -243,8 +249,10 @@ class TestPorHttp:
             p = client.get(url, headers=_jwt(app, _usuario(db, rol=rol))).get_json()['permisos']
             si = {k for k, v in p.items() if v}
             assert si == {
-                'liquidador': {'liquidar', 'resolver_documento', 'parada_tardia'},
-                'lider_cartera': {'confirmar_retencion', 'autorizar_credito', 'corregir_cobro'},
+                'liquidador': {'liquidar', 'resolver_documento', 'parada_tardia',
+                               'resolver_version'},
+                'lider_cartera': {'confirmar_retencion', 'autorizar_credito', 'corregir_cobro',
+                                  'resolver_version'},
             }[rol], (rol, p)
 
     def test_cada_envio_dice_si_quien_mira_lo_reintenta(self, app, client, db, almacen):

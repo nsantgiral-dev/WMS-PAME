@@ -114,7 +114,8 @@ def es_oficina_de_paradas(usuario) -> bool:
 
 
 def puerta_de_confirmacion(ruta, previa, usuario, *, es_conductor: bool, data: dict,
-                           motivo_tardia=None, motivo_correccion=None) -> dict:
+                           motivo_tardia=None, motivo_correccion=None,
+                           adopta_version: bool = False) -> dict:
     """**La única que decide** si una confirmación de parada entra y cómo:
     `{modo, motivo}`. La llaman la ruta HTTP y el servicio (`confirmar_parada`):
     un guard en la ruta protege la ruta; en el servicio, la operación.
@@ -159,7 +160,13 @@ def puerta_de_confirmacion(ruta, previa, usuario, *, es_conductor: bool, data: d
     quiere_corregir = (motivo_correccion is not None
                        or (previa is not None and motivo_tardia is None))
     if quiere_corregir:
-        if not _pl.puede_corregir_cobro(usuario):
+        # Adoptar la versión del conductor antes de que nada salga a Siesa lo
+        # hace también quien liquida (decisión del CTO, 2026-09-26).
+        from app.services import politica_cobro as _pc_p
+        adopta_sin_envio = bool(adopta_version and previa is not None
+                                and _pl.puede_liquidar(usuario)
+                                and _pc_p.puede_editar_cobro(previa))
+        if not (_pl.puede_corregir_cobro(usuario) or adopta_sin_envio):
             raise PuertaCerrada(
                 'Esta parada ya está registrada: cambiarla es corregir el cobro, y eso lo '
                 'hacen el administrador o el líder de cartera, con un motivo.', status=403)
@@ -336,6 +343,10 @@ def version_del_conductor(recaudo, data: dict) -> dict:
         'observaciones': (data.get('observaciones') or '')[:500] or None,
         'referencia_pago': (data.get('referencia_pago') or None),
         'tiene_foto': bool(data.get('foto_entrega') or data.get('foto_comprobante')),
+        # Lo necesario para ADOPTARLA después (`resolver_version`): el cuerpo
+        # tal como lo mandó el teléfono. Las fotos no viajan a las pantallas
+        # (`RecaudoEntrega.to_dict` las quita).
+        'cuerpo': {k: data.get(k) for k in CAMPOS_DEL_CUERPO if data.get(k) is not None},
         'ts_dispositivo': data.get('ts_dispositivo'),
         'via_cola': data.get('via_cola') if isinstance(data.get('via_cola'), bool) else None,
         'campos_que_difieren': campos,
@@ -347,6 +358,17 @@ def version_del_conductor(recaudo, data: dict) -> dict:
                        'registrada por la oficina (%s) — queda para revisar',
                        recaudo.ruta_id, recaudo.tarea_id, ', '.join(campos))
     return {'difiere': bool(campos), 'campos': campos}
+
+
+#: Lo que se guarda del cuerpo del teléfono para poder adoptarlo después.
+CAMPOS_DEL_CUERPO = ('estado_entrega', 'forma_pago', 'motivo_rechazo', 'monto_cobrado',
+                     'monto_descuento', 'motivo_descuento', 'observaciones',
+                     'referencia_pago', 'items_entregados', 'bultos_rechazados',
+                     'foto_entrega', 'foto_comprobante', 'geo', 'version_formulario',
+                     'ts_dispositivo', 'ts_envio', 'via_cola', 'modo_pantalla')
+#: Las decisiones de la oficina sobre la versión del conductor.
+ADOPTAR = 'ADOPTAR'
+MANTENER = 'MANTENER'
 
 
 #: Palabras de los campos que pueden diferir (para las pantallas y la señal).
@@ -368,3 +390,76 @@ def texto_diferencia(recaudo) -> str | None:
     lista = ', '.join(CAMPOS_EN_PALABRAS.get(c, c) for c in campos) or 'algún dato'
     return (f'El conductor mandó después otra versión de esta parada ({lista}): lo '
             f'registrado por la oficina no cambió. Revíselo con él.')
+
+
+def resolver_version(recaudo_id: int, usuario, decision: str, motivo) -> dict:
+    """La salida de «el conductor mandó otra versión» (validación e2e,
+    2026-09-26; decisión del CTO). **La única** que resuelve la diferencia.
+
+    - `MANTENER`: queda lo de la oficina; la diferencia se da por revisada.
+      Quien liquida o quien corrige cobros, con motivo (bitácora EDITAR).
+    - `ADOPTAR`: la versión del conductor pasa a ser la parada. Si nada de la
+      parada salió a Siesa (`politica_cobro.puede_editar_cobro`: ni RC ni
+      retención encolados), la adopta quien liquida; si ya salió, es corregir
+      el cobro (admin + líder de cartera) — y lo que ya viajó al ERP no se
+      reescribe (la guarda del congelamiento de `confirmar_parada` sigue). Por
+      `RutaService.confirmar_parada` como corrección: mismas validaciones,
+      FORZAR `parada_confirmada_corregida_por_la_oficina`.
+
+    Levanta `PuertaCerrada` (403/409/400)."""
+    from app.extensions import db
+    from app.models.recaudo_entrega import RecaudoEntrega
+    from app.services import permisos_liquidacion as _pl
+    from app.services import politica_cobro as _pc
+    from app.services.bitacora import MotivoRequerido, motivo_obligatorio, registrar_accion
+    rec = db.session.get(RecaudoEntrega, recaudo_id)
+    if rec is None:
+        raise LookupError('Parada no encontrada')
+    if not rec.version_conductor or not rec.diferencia_conductor:
+        raise PuertaCerrada('No hay una versión del conductor que difiera: nada que resolver.',
+                            status=409)
+    try:
+        texto = motivo_obligatorio(motivo, 'resolver la versión del conductor')
+    except MotivoRequerido as e:
+        raise PuertaCerrada(str(e)) from e
+    decision = (decision or '').upper()
+    if decision not in (ADOPTAR, MANTENER):
+        raise PuertaCerrada('La decisión es ADOPTAR o MANTENER')
+    editable = _pc.puede_editar_cobro(rec)
+    if decision == MANTENER or editable:
+        permitido = _pl.puede_liquidar(usuario) or _pl.puede_corregir_cobro(usuario)
+    else:
+        permitido = _pl.puede_corregir_cobro(usuario)
+    if not permitido:
+        raise PuertaCerrada(
+            'Esta parada ya salió a Siesa: adoptar la versión del conductor es corregir el '
+            'cobro, y eso lo hacen el administrador o el líder de cartera.' if not editable
+            else 'La versión del conductor la resuelve quien liquida la ruta.', status=403)
+    uid = getattr(usuario, 'id', None)
+    revision = {'decision': decision, 'por': uid, 'en': datetime.utcnow().isoformat(),
+                'motivo': texto}
+    if decision == MANTENER:
+        antes = {'diferencia_conductor': rec.diferencia_conductor}
+        rec.version_conductor = {**rec.version_conductor, 'revision': revision}
+        rec.diferencia_conductor = False
+        registrar_accion('EDITAR', rec, usuario_id=uid, motivo=texto, antes=antes,
+                         despues={'diferencia_conductor': False, 'version_conductor': 'MANTENIDA'})
+        db.session.commit()
+        return {'recaudo': rec.to_dict(), 'decision': decision}
+    from app.services.ruta_service import RutaService
+    cuerpo = dict((rec.version_conductor or {}).get('cuerpo') or {})
+    if not cuerpo.get('estado_entrega'):
+        raise PuertaCerrada('La versión del conductor se guardó sin el detalle para adoptarla: '
+                            'corríjala a mano con lo que él dice.', status=409)
+    cuerpo['version_formulario'] = version_formulario_actual()
+    cuerpo.pop('via_cola', None)
+    version = dict(rec.version_conductor)
+    ruta_id, tarea_id = rec.ruta_id, rec.tarea_id
+    RutaService.confirmar_parada(ruta_id, tarea_id, uid, cuerpo, por_oficina=True,
+                                 motivo_correccion=f'Adoptó la versión del conductor: {texto}',
+                                 adopta_version=True)
+    rec = db.session.get(RecaudoEntrega, recaudo_id)
+    rec.version_conductor = {**version, 'revision': revision}
+    rec.diferencia_conductor = False
+    db.session.commit()
+    return {'recaudo': rec.to_dict(), 'decision': decision}

@@ -10,6 +10,7 @@ cartera» (`Roles.LIQUIDADOR`, `Roles.LIDER_CARTERA`):
 | Liquidar, registrar cobros, reintentar RC/DC/NC, resolver un RC sin verificar | admin + liquidador |
 | Registrar desde la oficina una parada tardía (ruta ya cerrada) | admin + liquidador |
 | Confirmar la retención declarada, corregir un cobro | admin + líder de cartera |
+| Resolver la versión del conductor (mantener / adoptar antes de que salga a Siesa) | admin + liquidador + líder de cartera |
 | Autorizar como crédito una parada de contado sin plata (una o en lote) | admin + líder de cartera |
 | Forzar el cierre de una ruta | admin |
 | Ver Liquidación, su desglose y la reconciliación | admin + jefe + gerente + liquidador + líder de cartera |
@@ -81,6 +82,14 @@ def puede_corregir_cobro(usuario) -> bool:
     """Corregir el monto que declaró el conductor (y, con la ruta en tránsito,
     registrar la parada por él desde la oficina). Admin y líder de cartera."""
     return _rol_en(usuario, (Roles.ADMIN, Roles.LIDER_CARTERA))
+
+
+def puede_resolver_version_conductor(usuario) -> bool:
+    """Resolver «el conductor mandó otra versión» (mantener lo de la oficina o
+    adoptar la del teléfono). Quien liquida y quien corrige cobros; si la
+    parada ya salió a Siesa, adoptar es corregir el cobro y lo decide
+    `parada_tardia.resolver_version` (decisión del CTO, 2026-09-26)."""
+    return puede_liquidar(usuario) or puede_corregir_cobro(usuario)
 
 
 def puede_resolver_documento(usuario) -> bool:

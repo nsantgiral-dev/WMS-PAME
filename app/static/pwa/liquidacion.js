@@ -268,13 +268,46 @@ function _liqTextoSenalesRuta(r) {
   return `⚠ ${n} señal${n !== 1 ? 'es' : ''} para revisar`;
 }
 
-/** Las señales de una parada en el detalle: una línea por señal. */
+/** Las señales de una parada en el detalle: una línea por señal. Con una
+ *  versión del conductor que difiere, la salida: mantener lo de la oficina o
+ *  adoptar la del teléfono (con motivo; el servidor decide quién puede). */
 function _liqBloqueSenales(rec) {
   const lista = rec.senales || [];
   if (!lista.length) return '';
+  const rutaId = _liqDetalleRuta && _liqDetalleRuta.ruta ? _liqDetalleRuta.ruta.id : 0;
+  const acciones = rec.diferencia_conductor === true && _liqPermiso('resolver_version') ? `
+    <div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap;">
+      <button onclick="liqResolverVersion(${esc(rutaId)}, ${esc(rec.id)}, 0)"
+        style="flex:1;min-width:140px;padding:8px;background:var(--bg);color:var(--tx2);border:1px solid var(--brd);border-radius:8px;font-size:var(--fs-xs);font-weight:700;cursor:pointer;">Mantener lo de la oficina</button>
+      <button onclick="liqResolverVersion(${esc(rutaId)}, ${esc(rec.id)}, 1)"
+        style="flex:1;min-width:140px;padding:8px;background:var(--ok-bg);color:var(--ok-tx);border:1px solid var(--ok-brd);border-radius:8px;font-size:var(--fs-xs);font-weight:700;cursor:pointer;">Adoptar la versión del conductor</button>
+    </div>` : '';
   return `<div style="margin-bottom:8px;padding:8px 10px;background:var(--warn-bg);border:1px solid var(--warn-brd);border-radius:8px;">
     ${lista.map(x => `<div style="font-size:var(--fs-xs);color:var(--warn-tx);">⚠ ${esc(x.texto)}</div>`).join('')}
+    ${acciones}
   </div>`;
+}
+
+/** Mantener (0) o adoptar (1) la versión del conductor, con motivo. */
+async function liqResolverVersion(rutaId, recaudoId, adoptar) {
+  const decision = adoptar === 1 ? 'ADOPTAR' : 'MANTENER';
+  const motivo = await _modalTexto(
+    adoptar === 1 ? 'Adoptar la versión del conductor' : 'Mantener lo registrado por la oficina',
+    adoptar === 1
+      ? 'La parada pasa a decir lo que mandó el conductor. ¿Por qué? (obligatorio — queda en la bitácora con su nombre)'
+      : 'La parada queda como la registró la oficina. ¿Por qué? (obligatorio — queda en la bitácora con su nombre)');
+  if (!motivo || !motivo.trim()) {
+    alerta('Hace falta el motivo: no se cambió nada', 'advertencia');
+    return;
+  }
+  try {
+    await post(`/api/rutas/${Number(rutaId)}/recaudos/${Number(recaudoId)}/version-conductor`,
+               { decision, motivo: motivo.trim() });
+    alerta(adoptar === 1 ? 'Se adoptó la versión del conductor' : 'Se mantuvo lo de la oficina', 'exito');
+  } catch (e) {
+    alerta(e.message || 'No se pudo resolver la versión del conductor', 'error');
+  }
+  await liqAbrirRuta(rutaId);
 }
 
 // ── Lista de rutas pendientes ───────────────────────────────────────────────
@@ -652,7 +685,8 @@ function _liqRenderDetalle() {
           </div>
         </div>
         ${_liqBloqueSenales(rec)}
-        ${_liqBloqueCreditoNoAutorizado(ruta.id, rec)}`;
+        ${_liqBloqueCreditoNoAutorizado(ruta.id, rec)}
+        ${esLiquidada ? '' : _liqBotonCorregirParada(rec, idx)}`;
 
     // Siesa flags + badges fallidos si ya liquidada
     if (esLiquidada) {
@@ -915,9 +949,38 @@ function _liqFormasTardia(p) {
     ? _condFormasPago({ cobro_contraentrega: p.cobro_contraentrega }) : [];
 }
 
-/** Abre (o cierra) el formulario de una parada sin gestionar. */
+/** La parada del formulario: una sin gestionar (`i` número) o, en modo
+ *  corrección, un recaudo ya registrado (`i` = 'c' + posición). */
+function _liqParadaDelForm(i) {
+  const det = _liqDetalleRuta || {};
+  if (typeof i === 'string' && i.charAt(0) === 'c') {
+    const rec = (det.recaudos || [])[Number(i.slice(1))];
+    if (!rec) return null;
+    return { tarea_id: rec.tarea_id, corrige: true,
+             cobro_contraentrega: !!(rec.cobro && rec.cobro.cobrar),
+             items: (rec.items_entregados || []).map(it => ({
+               codigo: it.codigo, nombre: it.nombre, unidad: it.unidad,
+               cantidad_pedida: it.cantidad_pedida })) };
+  }
+  return (det.paradas_sin_gestionar || [])[i] || null;
+}
+
+/** «Corregir la parada…» en la tarjeta de un recaudo (quien corrige cobros). */
+function _liqBotonCorregirParada(rec, idx) {
+  if (!_liqPermiso('corregir_cobro') || !rec.cobro_editable) return '';
+  const rutaId = _liqDetalleRuta && _liqDetalleRuta.ruta ? _liqDetalleRuta.ruta.id : 0;
+  return `
+    <button onclick="liqAbrirParadaTardia(${esc(rutaId)}, 'c${esc(idx)}')"
+      style="width:100%;margin-top:6px;padding:8px;background:var(--bg);color:var(--tx2);border:1px solid var(--brd);border-radius:8px;font-size:var(--fs-xs);font-weight:700;cursor:pointer;">
+      Corregir la parada…
+    </button>
+    <div id="liq-tardia-c${esc(idx)}" style="display:none;"></div>`;
+}
+
+/** Abre (o cierra) el formulario de una parada sin gestionar (o, con
+ *  `i = 'c<n>'`, el de corregir una ya registrada). */
 function liqAbrirParadaTardia(rutaId, i) {
-  const p = ((_liqDetalleRuta || {}).paradas_sin_gestionar || [])[i];
+  const p = _liqParadaDelForm(i);
   const el = document.getElementById(`liq-tardia-${i}`);
   if (!p || !el) return;
   if (el.style.display === 'block') { el.style.display = 'none'; return; }
@@ -927,7 +990,7 @@ function liqAbrirParadaTardia(rutaId, i) {
   el.innerHTML = `
     <div style="margin-top:8px;padding:10px;background:var(--bg-s);border:1px solid var(--brd);border-radius:8px;">
       <label style="${etiqueta}" for="liq-tardia-res-${i}">¿Qué pasó en la parada?</label>
-      <select id="liq-tardia-res-${i}" onchange="liqTardiaResultado(${i})" style="${campo}">
+      <select id="liq-tardia-res-${i}" onchange="liqTardiaResultado(${p.corrige ? `'${esc(i)}'` : esc(i)})" style="${campo}">
         <option value="">Elija…</option>
         <option value="ENTREGADO">Se entregó y pagó</option>
         <option value="PARCIAL">Devolvió una parte</option>
@@ -962,9 +1025,9 @@ function liqAbrirParadaTardia(rutaId, i) {
         placeholder="Por qué la registra la oficina y cómo lo supo"></textarea>
       <label style="${etiqueta}" for="liq-tardia-foto-${i}">Evidencia: foto de la factura firmada o pantallazo</label>
       <input id="liq-tardia-foto-${i}" type="file" accept="image/*" style="${campo}">
-      <button onclick="liqGuardarParadaTardia(${esc(rutaId)}, ${i})"
+      <button onclick="liqGuardarParadaTardia(${esc(rutaId)}, ${p.corrige ? `'${esc(i)}'` : esc(i)})"
         style="width:100%;margin-top:10px;padding:12px;background:var(--ok-bg);color:var(--ok-tx);border:1px solid var(--ok-brd);border-radius:8px;font-size:var(--fs-sm);font-weight:700;cursor:pointer;">
-        Registrar la parada
+        ${p.corrige ? 'Corregir la parada' : 'Registrar la parada'}
       </button>
     </div>`;
   el.style.display = 'block';
@@ -987,8 +1050,10 @@ function _liqDatosTardia(p, i) {
   const motivo = val(`liq-tardia-motivo-${i}`);
   if (!res) { alerta('Elija qué pasó en la parada', 'error'); return null; }
   if (!motivo) { alerta('El motivo es obligatorio: queda en la bitácora con su nombre', 'error'); return null; }
-  const d = { motivo_tardia: motivo, version_formulario: form.version_formulario,
-              observaciones: `Registrada por la oficina: ${motivo}` };
+  const d = { version_formulario: form.version_formulario,
+              observaciones: p.corrige ? `Corregida por la oficina: ${motivo}`
+                                       : `Registrada por la oficina: ${motivo}` };
+  if (p.corrige) d.motivo_correccion = motivo; else d.motivo_tardia = motivo;
   if (res === 'NO_PAGO' || res === 'NO_PAGO_SE_QUEDO') {
     d.estado_entrega = 'RECHAZADO';
     d.motivo_rechazo = res;
@@ -1012,7 +1077,7 @@ function _liqDatosTardia(p, i) {
 
 /** Registra la parada desde la oficina. El servidor valida lo mismo que al conductor. */
 async function liqGuardarParadaTardia(rutaId, i) {
-  const p = ((_liqDetalleRuta || {}).paradas_sin_gestionar || [])[i];
+  const p = _liqParadaDelForm(i);
   if (!p) return;
   const d = _liqDatosTardia(p, i);
   if (!d) return;
@@ -1031,12 +1096,16 @@ async function liqGuardarParadaTardia(rutaId, i) {
   }
   try {
     await post(`/api/rutas/${Number(rutaId)}/paradas/${Number(p.tarea_id)}/confirmar`, d);
-    alerta('Parada registrada por la oficina — quedó en la bitácora', 'exito');
-    _liqDetalleRuta = await get(`/api/rutas/${Number(rutaId)}/liquidacion-detalle`);
-    _liqRenderDetalle();
+    alerta(d.motivo_correccion ? 'Parada corregida — quedó en la bitácora'
+                               : 'Parada registrada por la oficina — quedó en la bitácora', 'exito');
   } catch (e) {
     alerta(e.message || 'No se pudo registrar la parada', 'error');
+    // Un 409 dice que alguien (el conductor, por su cola) la registró mientras
+    // se llenaba el formulario: se recarga para ver lo que hay, sin pisarlo.
+    if (e.status !== 409) return;
   }
+  _liqDetalleRuta = await get(`/api/rutas/${Number(rutaId)}/liquidacion-detalle`);
+  _liqRenderDetalle();
 }
 
 /**
@@ -1090,7 +1159,7 @@ function _liqPermiso(operacion) {
 }
 
 function _liqSinPermisoCobro(rutaId, rec) {
-  const corregir = rec && _liqPermiso('corregir_cobro') && rec.estado_entrega !== 'PARCIAL'
+  const corregir = rec && _liqPermiso('corregir_cobro')
     ? `<div style="margin-top:6px;"><a href="#" onclick="event.preventDefault();liqCorregirMontoParada(${esc(rutaId)}, ${esc(rec.id)})"
          style="font-size:var(--fs-xs);color:var(--tx3);text-decoration:underline;cursor:pointer;">¿El monto que declaró el conductor estaba mal? Corregirlo</a></div>`
     : '';
@@ -1333,14 +1402,20 @@ async function _liqRenderPanelCobro(rutaId, recaudoId) {
           <div style="font-size:var(--fs-xs);color:var(--warn-tx);font-weight:700;margin-bottom:4px;">${esParcial ? 'Entrega parcial — el RC va por lo entregado' : '⚠ Montos difieren'}</div>
           <div style="font-size:var(--fs-xs);color:var(--tx3);">Conductor: ${_liqFmt(mCobrado)} · Siesa: ${_liqFmt(mSiesa)}</div>
           ${esParcial ? `<div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:4px;">La diferencia (${_liqFmt(Math.max(0, mSiesa - mCobrado))}) es la devolución — la cierra la NC contra la factura, no este RC.</div>` : ''}
+          ${esParcial ? `
+          <input type="hidden" id="liq-monto-${recaudoId}" value="${mCobrado}">
+          <div style="font-size:var(--fs-xs);color:var(--tx2);margin-top:6px;">
+            El recibo sale por lo que declaró el conductor (${_liqFmt(mCobrado)}). Si ese monto está mal,
+            lo corrige el administrador o el líder de cartera, con una razón.
+          </div>` : `
           <div style="margin-top:6px;display:flex;gap:6px;">
             <button onclick="document.getElementById('liq-monto-${recaudoId}').value=${mSiesa}" style="padding:4px 10px;background:var(--pm-fill);color:#fff;border:none;border-radius:4px;font-size:var(--fs-xs);cursor:pointer;">Usar Siesa</button>
             <button onclick="document.getElementById('liq-monto-${recaudoId}').value=${mCobrado}" style="padding:4px 10px;background:var(--bg-s);color:var(--tx2);border:1px solid var(--brd);border-radius:4px;font-size:var(--fs-xs);cursor:pointer;">Usar conductor</button>
           </div>
           <input type="number" id="liq-monto-${recaudoId}" value="${mDefault}" step="0.01"
             onchange="liqPreviewCobro(${recaudoId})"
-            style="width:100%;margin-top:6px;padding:6px;background:var(--bg-s);border:1px solid var(--brd);border-radius:4px;color:var(--tx);font-size:var(--fs-xs);">
-          ${!esParcial && _liqPermiso('corregir_cobro') ? `
+            style="width:100%;margin-top:6px;padding:6px;background:var(--bg-s);border:1px solid var(--brd);border-radius:4px;color:var(--tx);font-size:var(--fs-xs);">`}
+          ${_liqPermiso('corregir_cobro') ? `
           <div style="margin-top:8px;">
             <a href="#" onclick="event.preventDefault();liqCorregirMonto(${rutaId},${recaudoId},${mCobrado})"
               style="font-size:var(--fs-xs);color:var(--tx3);text-decoration:underline;cursor:pointer;">

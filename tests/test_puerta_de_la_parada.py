@@ -248,6 +248,89 @@ class TestElCierreForzadoTieneSalida:
         assert d.estado == E.CANCELADA
 
 
+class TestLaVersionDelConductorTieneSalida:
+    """Validación e2e (2026-09-26): «el conductor mandó otra versión» quedaba
+    para siempre («Revíselo con él») y la señal se contradecía con «no la
+    confirmó». Ahora: una sola señal, y la salida `parada_tardia.resolver_version`
+    (MANTENER / ADOPTAR con motivo; adoptar antes de que salga a Siesa lo hace
+    quien liquida, después es corregir el cobro)."""
+
+    def _registrada_y_otra_version(self, app, client, db, f, uc, ad):
+        _cerrar(db, f, uc)
+        r = client.post(_url(f), headers=_jwt(app, ad), json={
+            'estado_entrega': 'RECHAZADO', 'motivo_rechazo': 'NO_PAGO', 'observaciones': 'x',
+            'motivo_tardia': 'lo dijo el cliente', 'version_formulario': 4})
+        assert r.status_code == 200, r.get_json()
+        r = client.post(_url(f), headers=_jwt(app, uc),
+                        json={**_efectivo(_valor(db, f)), 'via_cola': True})
+        assert r.get_json()['version_conductor']['difiere'] is True
+
+    def _url_v(self, f, rid):
+        return f'/api/rutas/{f.ruta_id}/recaudos/{rid}/version-conductor'
+
+    def test_una_sola_senal(self, app, client, db, mundo):
+        from app.models.recaudo_entrega import RecaudoEntrega
+        from app.services.senales_ruta import senales_de_recaudo
+        f, uc, ad = mundo
+        self._registrada_y_otra_version(app, client, db, f, uc, ad)
+        rec = RecaudoEntrega.query.filter_by(ruta_id=f.ruta_id).one()
+        claves = [s['clave'] for s in senales_de_recaudo(rec)]
+        assert 'diferencia_con_el_conductor' in claves and 'registrada_por_oficina' not in claves
+
+    def test_mantener_con_motivo(self, app, client, db, mundo):
+        from app.models.recaudo_entrega import RecaudoEntrega
+        f, uc, ad = mundo
+        self._registrada_y_otra_version(app, client, db, f, uc, ad)
+        rec = RecaudoEntrega.query.filter_by(ruta_id=f.ruta_id).one()
+        liq = _usuario(db, 'liquidador')
+        sin = client.post(self._url_v(f, rec.id), headers=_jwt(app, liq),
+                          json={'decision': 'MANTENER', 'motivo': ' '})
+        assert sin.status_code == 400
+        r = client.post(self._url_v(f, rec.id), headers=_jwt(app, liq),
+                        json={'decision': 'MANTENER', 'motivo': 'El cliente confirmó que no pagó'})
+        assert r.status_code == 200, r.get_json()
+        rec = RecaudoEntrega.query.filter_by(ruta_id=f.ruta_id).one()
+        assert rec.diferencia_conductor is False and rec.estado_entrega == 'RECHAZADO'
+        assert rec.version_conductor['revision']['decision'] == 'MANTENER'
+
+    def test_adoptar_antes_de_siesa_lo_hace_quien_liquida(self, app, client, db, mundo):
+        from app.models.bitacora import BitacoraAccion
+        from app.models.recaudo_entrega import RecaudoEntrega
+        from app.services.bitacora import FORZADO_PARADA_CORREGIDA
+        f, uc, ad = mundo
+        self._registrada_y_otra_version(app, client, db, f, uc, ad)
+        rec = RecaudoEntrega.query.filter_by(ruta_id=f.ruta_id).one()
+        liq = _usuario(db, 'liquidador')
+        r = client.post(self._url_v(f, rec.id), headers=_jwt(app, liq),
+                        json={'decision': 'ADOPTAR', 'motivo': 'El conductor tenía razón'})
+        assert r.status_code == 200, r.get_json()
+        rec = RecaudoEntrega.query.filter_by(ruta_id=f.ruta_id).one()
+        assert rec.estado_entrega == 'ENTREGADO' and rec.forma_pago == 'EFECTIVO'
+        assert rec.diferencia_conductor is False
+        assert any(b.despues.get('forzado') == FORZADO_PARADA_CORREGIDA and b.usuario_id == liq.id
+                   for b in BitacoraAccion.query.filter_by(accion='FORZAR').all())
+        assert 'foto_entrega' not in (rec.to_dict()['version_conductor'].get('cuerpo') or {})
+
+    def test_adoptar_despues_de_siesa_es_corregir_el_cobro(self, app, client, db, mundo):
+        from app.models.recaudo_entrega import RecaudoEntrega
+        from app.models.siesa_job import SiesaJob
+        f, uc, ad = mundo
+        self._registrada_y_otra_version(app, client, db, f, uc, ad)
+        rec = RecaudoEntrega.query.filter_by(ruta_id=f.ruta_id).one()
+        SiesaJob.encolar(tipo='DOCUMENTO_CONTABLE_RET', payload={'recaudo_id': rec.id},
+                         referencia_tipo='RecaudoEntrega', referencia_id=rec.id)
+        db.session.commit()
+        liq = _usuario(db, 'liquidador')
+        r = client.post(self._url_v(f, rec.id), headers=_jwt(app, liq),
+                        json={'decision': 'ADOPTAR', 'motivo': 'x'})
+        assert r.status_code == 403 and 'corregir el cobro' in r.get_json()['error']
+        # El líder entra, y lo que ya está en cola no se reescribe.
+        lider = _usuario(db, 'lider_cartera')
+        r = client.post(self._url_v(f, rec.id), headers=_jwt(app, lider),
+                        json={'decision': 'ADOPTAR', 'motivo': 'x'})
+        assert r.status_code == 400 and 'ya no se puede cambiar' in r.get_json()['error']
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 # 3 · El trinquete — toda escritura del cobro de una parada tiene su guarda
 # ═════════════════════════════════════════════════════════════════════════════

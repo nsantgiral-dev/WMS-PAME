@@ -13,7 +13,7 @@ from app.services.ruta_service import RutaService, ConflictError, AdvertenciasDe
 from app.services.permisos_liquidacion import (
     puede_autorizar_credito, puede_confirmar_retencion, puede_corregir_cobro,
     puede_forzar_cierre_ruta, puede_liquidar, puede_registrar_parada_tardia,
-    puede_resolver_documento, puede_ver_liquidacion)
+    puede_resolver_documento, puede_resolver_version_conductor, puede_ver_liquidacion)
 from app.utils.fecha import dia_operativo as _dia_operativo, dia_operativo_de as _dia_operativo_de
 
 logger = logging.getLogger(__name__)
@@ -781,6 +781,34 @@ def resolver_rc_recaudo(ruta_id, recaudo_id):
     return jsonify({'recaudo': resultado}), 200
 
 
+@rutas_bp.route('/<int:ruta_id>/recaudos/<int:recaudo_id>/version-conductor', methods=['POST'])
+@jwt_required()
+def resolver_version_conductor(ruta_id, recaudo_id):
+    """`{decision: 'MANTENER'|'ADOPTAR', motivo}` sobre una parada donde el
+    conductor mandó otra versión que la registrada por la oficina. La política
+    (quién, cuándo) vive en `parada_tardia.resolver_version`."""
+    u = _con_permiso(puede_resolver_version_conductor)
+    if not u:
+        return jsonify({'error': 'Solo quien liquida o quien corrige cobros resuelve la '
+                                 'versión del conductor'}), 403
+    from app.extensions import db
+    from app.models.recaudo_entrega import RecaudoEntrega
+    from app.services import parada_tardia as _pt
+    rec = db.session.get(RecaudoEntrega, recaudo_id)
+    if not rec or rec.ruta_id != ruta_id:
+        return jsonify({'error': 'Recaudo no pertenece a esta ruta'}), 404
+    data = request.get_json(silent=True) or {}
+    try:
+        res = _pt.resolver_version(recaudo_id, u, data.get('decision'), data.get('motivo'))
+    except _pt.PuertaCerrada as e:
+        return jsonify({'error': str(e)}), e.status
+    except LookupError as e:
+        return jsonify({'error': str(e)}), 404
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    return jsonify(res), 200
+
+
 @rutas_bp.route('/<int:ruta_id>/recaudos/<int:recaudo_id>/autorizar-credito', methods=['POST'])
 @jwt_required()
 def autorizar_credito_recaudo(ruta_id, recaudo_id):
@@ -1534,5 +1562,6 @@ def liquidacion_detalle(id):
         'resolver_documento': puede_resolver_documento(u),
         'parada_tardia': puede_registrar_parada_tardia(u),
         'forzar_cierre': puede_forzar_cierre_ruta(u),
+        'resolver_version': puede_resolver_version_conductor(u),
     }
     return jsonify(resultado), 200

@@ -457,10 +457,13 @@ def senales_de_recaudo(recaudo, ruta=None, faltante=None) -> list:
     # sanción; si el conductor la confirmó igual después, ya no hay nada que
     # mirar. Si mandó otra cosa, eso es lo que hay que mirar.
     from app.services import parada_tardia as _pt
-    if recaudo.registrada_por_oficina and recaudo.diferencia_conductor is not False:
+    # Una sola de las dos: sin versión del teléfono (`None`), «no la confirmó»;
+    # con una versión que difiere, la diferencia (las dos juntas se
+    # contradecían: validación e2e 2026-09-26); con una que coincide, nada.
+    if recaudo.registrada_por_oficina and recaudo.diferencia_conductor is None:
         senales.append({'clave': 'registrada_por_oficina',
-                        'texto': ('La registró la oficina después del cierre de la ruta: '
-                                  'el conductor no la confirmó')})
+                        'texto': ('La registró la oficina: el conductor no la confirmó '
+                                  'desde su teléfono')})
     _dif = _pt.texto_diferencia(recaudo)
     if _dif:
         senales.append({'clave': 'diferencia_con_el_conductor', 'texto': _dif})

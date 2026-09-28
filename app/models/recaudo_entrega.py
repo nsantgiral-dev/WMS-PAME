@@ -423,7 +423,9 @@ class RecaudoEntrega(db.Model):
             'editado_en':            self.editado_en.isoformat() if self.editado_en else None,
             'fecha_confirmacion':    self.fecha_confirmacion.isoformat(),
             'registrada_por_oficina': bool(self.registrada_por_oficina),
-            'version_conductor':     self.version_conductor,
+            # Sin las fotos del cuerpo guardado para adoptarla: no viajan a
+            # las pantallas (`parada_tardia.version_del_conductor`).
+            'version_conductor':     _version_sin_fotos(self.version_conductor),
             'version_conductor_en':  (self.version_conductor_en.isoformat()
                                       if self.version_conductor_en else None),
             'diferencia_conductor':  self.diferencia_conductor,
@@ -434,6 +436,14 @@ class RecaudoEntrega(db.Model):
             d['foto_entrega'] = self.foto_entrega or ''
             d['foto_comprobante'] = self.foto_comprobante or ''
         return d
+
+
+def _version_sin_fotos(version):
+    if not isinstance(version, dict) or not isinstance(version.get('cuerpo'), dict):
+        return version
+    cuerpo = {k: v for k, v in version['cuerpo'].items()
+              if k not in ('foto_entrega', 'foto_comprobante')}
+    return {**version, 'cuerpo': cuerpo}
 
 
 def consecutivo_en_respuesta(respuesta):

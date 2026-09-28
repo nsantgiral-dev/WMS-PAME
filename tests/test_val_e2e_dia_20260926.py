@@ -235,7 +235,6 @@ class TestLaSenalDeLaOficinaNoSeContradice:
     EFECTIVO sin que nadie resolviera la diferencia; no hay acción para adoptar
     ni descartar la versión del teléfono — «Revíselo con él» queda para siempre.)"""
 
-    @pytest.mark.xfail(strict=True, reason='senales_ruta.py:460 usa «is not False»')
     def test_si_el_conductor_mando_otra_version_no_dice_que_no_la_confirmo(self, db, almacen):
         from app.services.senales_ruta import senales_de_recaudo
         t = _tarea(db, almacen, f'003-PD-{uuid.uuid4().int % 10**6}', cond='C02', valor=39_270)
