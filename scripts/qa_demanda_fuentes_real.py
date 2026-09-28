@@ -23,10 +23,12 @@ Qué prueba, en orden:
      consulta de ventas nueva tiene que llevar su ventana de fechas dentro del
      SQL (como ya hace `papeleriamedellin_WMS_Remision_DesdePedido`).
   3. **`papeleriamedellin_pame_descubrir_tablas`**: lo que devuelve HOY (el SQL
-     vive en Siesa; se edita en Generic Transfer, no se manda desde acá). Si el
-     dueño le pegó el SQL de validación de `demanda_fuentes.SQL_VALIDACION_UN_DIA`,
-     el script reconoce las columnas y compara contra InvFecha. **Solo para
-     descubrir y validar: nunca como fuente de negocio.**
+     vive en Siesa; se edita en Generic Transfer, no se manda desde acá).
+     Reconoce por sus columnas cuál de los SQL de validación tiene puesto
+     (`demanda_fuentes.SQL_VALIDACION`: esquema, conceptos de un día, volumen
+     por mes, un SKU en un mes) y lo interpreta. **Solo para descubrir y
+     validar: nunca como fuente de negocio.** Medido en producción el
+     2026-09-27: hoy tiene un SQL con ORDER BY sin OFFSET → 500.
   4. **Consultas estándar candidatas** a movimientos/POS (nombres plausibles;
      un 401 aquí puede ser «no existe» o «sin permiso»: no se afirma cuál).
   5. **`API_v2_Ventas_Facturas_DesdePedido`** (la de las fotos): por CO para un
@@ -58,10 +60,15 @@ Uso:
         HEAVY_SCHEDULERS=false WORKER_SKIP_ESSENTIAL=true \\
         venv/bin/python scripts/qa_demanda_fuentes_real.py --ambiente produccion
 
+    Resultado del 2026-09-27 (producción, 20:32 Bogotá, domingo): ver CLAUDE.md
+    «Compras: de dónde sale la demanda (2026-09-27)».
+
     Opciones: --dia AAAA-MM-DD (default: el último día hábil), --mes AAAA-MM
     (default: la semana anterior al día, día por día), --sku PAPELSP9218, --bodega NB1,
     --sin-mes (no recorre el mes), --solo kardex,dinamicas,descubrir,estandar,ventas,invfecha
     --sql (imprime el SQL propuesto y sale, sin tocar Siesa)
+    --leer reciente|historico [--max-paginas N] (sección 7: la lectura de verdad,
+      el mismo código del botón, sobre SQLite desechable)
 """
 import argparse
 import os
@@ -283,31 +290,85 @@ def probar_parametros_dinamica(gw, bodega, conclusiones):
 # ══════════════════════════════════════════════════════════════════════════════
 
 def probar_descubrir(gw, sku, bodega, conclusiones):
+    """Lee lo que tenga HOY `…_descubrir_tablas` y lo reconoce por sus columnas:
+    los cuatro SQL de `demanda_fuentes.SQL_VALIDACION` (esquema, conceptos de un
+    día, volumen por mes, un SKU en un mes) o el de la consulta de ventas."""
     _t(f'3 · {DESCUBRIR} — lo que tiene HOY (el SQL se edita en Siesa)')
-    status, cuerpo, seg = _pedir(gw, DESCUBRIR, gw.url_get_dinamico, tam=100)
-    print(f'  [{status}] ({seg:.1f}s) {_resumen(status, cuerpo)}')
-    filas = _filas(cuerpo)
-    if status != 200 or not filas:
-        conclusiones.append(f'DESCUBRIR: [{status}] sin filas — no se pudo validar el SQL de t470.')
+    from app.services.demanda_fuentes import COLUMNAS_VENTAS_DIA, leer_fila_venta_dia
+    filas, pag, total = [], 1, None
+    while pag <= 30:
+        status, cuerpo, seg = _pedir(gw, DESCUBRIR, gw.url_get_dinamico, pagina=pag, tam=100)
+        if pag == 1:
+            print(f'  [{status}] ({seg:.1f}s) {_resumen(status, cuerpo)}')
+        if status != 200:
+            break
+        lote = _filas(cuerpo)
+        filas.extend(lote)
+        total = _totales(cuerpo)[0]
+        if len(lote) < 100 or (total and len(filas) >= total):
+            break
+        pag += 1
+    if not filas:
+        conclusiones.append('DESCUBRIR: sin filas — no se pudo validar nada. Pegar uno de '
+                            'los SQL de `demanda_fuentes.SQL_VALIDACION` (python '
+                            'scripts/qa_demanda_fuentes_real.py --sql).')
         return
-    cols = sorted(filas[0].keys())
-    print('  Columnas:', ', '.join(cols))
-    for f in filas[:3]:
-        print('   ', {k: f[k] for k in list(f)[:12]})
-    from app.services.demanda_fuentes import COLUMNAS_VENTAS_DIARIAS, leer_fila_venta_diaria
-    if set(COLUMNAS_VENTAS_DIARIAS) <= set(cols):
-        leidas = [x for x in map(leer_fila_venta_diaria, filas) if x]
+    cols = set(filas[0].keys())
+    print(f'  {len(filas)} filas en {pag} página(s) · columnas: {", ".join(sorted(cols))}')
+    if {'tabla', 'columna'} <= cols:
+        por_tabla = {}
+        for f in filas:
+            por_tabla.setdefault(str(f.get('tabla')).strip(), []).append(str(f.get('columna')).strip())
+        for t, cs in sorted(por_tabla.items()):
+            print(f'    {t}: {", ".join(sorted(cs))}')
+        necesarias = {'f470_rowid_docto', 'f470_rowid_item_ext', 'f470_rowid_bodega',
+                      'f470_id_concepto', 'f470_ind_naturaleza', 'f470_cant_base',
+                      'f350_rowid', 'f350_fecha', 'f350_ind_estado', 'f350_id_cia',
+                      'f121_rowid', 'f121_rowid_item', 'f120_rowid', 'f120_referencia',
+                      'f150_rowid', 'f150_id'}
+        vistas = {c for cs in por_tabla.values() for c in cs}
+        faltan = sorted(necesarias - vistas)
+        conclusiones.append('ESQUEMA: ' + ('todas las columnas del SQL existen: se puede registrar.'
+                                           if not faltan else f'FALTAN {faltan}: corregir el SQL '
+                                           'antes de registrarlo.'))
+    elif {'tipo_docto', 'concepto', 'naturaleza'} <= cols:
+        for f in sorted(filas, key=lambda x: (str(x.get('bodega')), str(x.get('tipo_docto')))):
+            print(f"    {str(f.get('bodega')).strip():5} {str(f.get('tipo_docto')).strip():5} "
+                  f"concepto {f.get('concepto')} nat {f.get('naturaleza')} estado {f.get('estado')}: "
+                  f"{f.get('lineas')} líneas, {f.get('unidades')} und")
+        tiendas = {str(f.get('bodega')).strip() for f in filas
+                   if str(f.get('concepto')) == '501' and str(f.get('bodega')).strip() != 'NB1'}
+        conclusiones.append('CONCEPTOS DEL DÍA: la venta 501 aparece en las bodegas '
+                            f'{sorted(tiendas) or "ninguna fuera de NB1"} — si están las tiendas, '
+                            'la caja (POS acumulado) SÍ entra a la T470 como 501.')
+    elif {'anio', 'mes', 'filas'} <= cols:
+        tot = 0
+        for f in sorted(filas, key=lambda x: (int(x.get('anio') or 0), int(x.get('mes') or 0))):
+            n = int(f.get('filas') or 0)
+            tot += n
+            print(f"    {f.get('anio')}-{int(f.get('mes') or 0):02d}: {n} filas "
+                  f"({(n + 99) // 100} páginas) · {f.get('referencias')} refs · "
+                  f"{f.get('bodegas')} bodegas · vendido {f.get('vendido')}")
+        conclusiones.append(f'VOLUMEN: {tot} filas ≈ {(tot + 99) // 100} páginas para el '
+                            'histórico; el reciente (14 días) ≈ medio mes de filas.')
+    elif set(COLUMNAS_VENTAS_DIA) <= cols:
+        leidas = [x for x in map(leer_fila_venta_dia, filas) if x]
         del_sku = [x for x in leidas if x['referencia'] == sku and x['bodega'] == bodega]
-        print(f'  Reconocido: es el SQL de ventas diarias. {len(leidas)}/{len(filas)} filas legibles; '
-              f'{len(del_sku)} de {sku} en {bodega}: '
-              f"{sum(x['vendido'] for x in del_sku):g} vendido, {sum(x['devuelto'] for x in del_sku):g} devuelto")
-        bods = Counter(x['bodega'] for x in leidas)
-        print(f'  Por bodega (filas): {dict(bods)}')
-        conclusiones.append(f'DESCUBRIR: contiene el SQL de ventas diarias; {len(leidas)} filas legibles '
-                            f'en la primera página, bodegas {sorted(bods)}.')
+        ordenes = sorted(x['orden'] for x in leidas)
+        print(f'  Reconocido: la consulta de ventas. {len(leidas)}/{len(filas)} legibles; '
+              f'orden {ordenes[:1]}…{ordenes[-1:]} de total_filas '
+              f'{leidas[0]["total_filas"] if leidas else None}')
+        for x in sorted(del_sku, key=lambda y: y['fecha']):
+            print(f"    {x['fecha']} {x['bodega']}: vendido {x['vendido']} devuelto {x['devuelto']}")
+        completa = bool(leidas) and ordenes == list(range(1, leidas[0]['total_filas'] + 1))
+        conclusiones.append(f'VENTAS (SQL de prueba): {len(leidas)} filas legibles, numeración '
+                            f"{'completa 1…N' if completa else 'con huecos o repetidas'}; "
+                            f'{sku} en {bodega}: {sum(x["vendido"] for x in del_sku)} vendido. '
+                            'Cuadrar contra la sección 5 (facturas desde pedido) del mismo mes.')
     else:
-        conclusiones.append('DESCUBRIR: responde, pero con otro SQL (no el de ventas diarias). '
-                            'Pegar `demanda_fuentes.SQL_VALIDACION_UN_DIA` en Generic Transfer para validar.')
+        for f in filas[:3]:
+            print('   ', {k: f[k] for k in list(f)[:12]})
+        conclusiones.append('DESCUBRIR: responde con otro SQL (no uno de validación).')
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -436,6 +497,86 @@ def probar_invfecha(gw, pares, conclusiones):
 
 # ══════════════════════════════════════════════════════════════════════════════
 
+# ══════════════════════════════════════════════════════════════════════════════
+# 7 · La lectura de verdad (cuando la consulta nueva esté registrada)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def probar_lectura_ventas(reciente, max_paginas, conclusiones):
+    """Corre `demanda_fuentes.descargar_ventas_dia` —el mismo código del botón—
+    contra una base SQLite DESECHABLE y dice qué fuente elegiría la cascada.
+    Solo GET; `_post` bloqueado."""
+    _t(f"7 · La lectura de la venta diaria ({'reciente' if reciente else 'histórico'}), "
+       f'tope {max_paginas} páginas, base SQLite desechable')
+    from app import create_app
+    from app.extensions import db
+    app = create_app()
+    if not str(app.config.get('SQLALCHEMY_DATABASE_URI', '')).startswith('sqlite'):
+        raise SystemExit('La app no quedó sobre SQLite: no se sigue.')
+    with app.app_context():
+        db.create_all()
+        from app.services import demanda_fuentes as dfu
+        r = dfu.descargar_ventas_dia(reciente=reciente, max_paginas=max_paginas)
+        for k, v in r.items():
+            print(f'  {k}: {v}')
+        f = dfu.fuente_de_demanda()
+        print(f"  Cascada: {f['fuente']} · {f.get('texto')}")
+        print(f"  Apta para: {f['apta_para']}")
+        conclusiones.append(f"LECTURA: {'completa' if r['completa'] else 'INCOMPLETA'} · "
+                            f"{r['filas_leidas']}/{r['filas_declaradas']} filas en {r['paginas']} "
+                            f"páginas, {r['minutos']} min · días guardados {r['dias_guardados']} · "
+                            f"motivo {r['motivo']}")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 8 · Ensayo de la bandeja con datos reales (facturas desde pedido + existencias)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def ensayo_bandeja(dias, conclusiones):
+    """La máquina entera, sin la consulta nueva: fotografía las facturas desde
+    pedido de `dias` días (GET, por CO y día), descarga las existencias de las
+    bodegas (GET, la consulta de siempre) y corre la bandeja real sobre una
+    base SQLite DESECHABLE. Es la demanda PARCIAL (sin la caja de las tiendas):
+    lo que proponga es una cota inferior, y la bandeja lo dice."""
+    _t(f'8 · Ensayo de la bandeja: {dias} días de facturas desde pedido + existencias')
+    from app import create_app
+    from app.extensions import db
+    app = create_app()
+    if not str(app.config.get('SQLALCHEMY_DATABASE_URI', '')).startswith('sqlite'):
+        raise SystemExit('La app no quedó sobre SQLite: no se sigue.')
+    with app.app_context():
+        db.create_all()
+        from app.services import compras_bandeja, demanda_fuentes as dfu
+        from app.services.inventario_siesa_service import _descargar_inventario_siesa_raw
+        t0 = time.time()
+        rr = dfu.rellenar_ventas_pedido(dias)
+        print(f"  Facturas desde pedido: {rr['corridas_completas']} corridas completas, "
+              f"{rr['n_incompletas']} incompletas ({time.time() - t0:.0f}s)")
+        for x in rr['incompletas'][:5]:
+            print('    ·', x)
+        t1 = time.time()
+        inv = _descargar_inventario_siesa_raw(forzar=True) or {}
+        print(f"  Existencias: {sum(len(v) for v in inv.values())} filas de "
+              f"{len(inv)} bodegas ({time.time() - t1:.0f}s)")
+        f = dfu.fuente_de_demanda()
+        print(f"  Cascada: {f['fuente']} · {f.get('texto')}")
+        b = compras_bandeja.bandeja()
+        res = b.get('resumen') or {}
+        print(f"  Bandeja: {b.get('estado')} · {res.get('lineas')} líneas · urgentes "
+              f"{res.get('urgentes')} · esta semana {res.get('esta_semana')} · próximas "
+              f"{res.get('proximas')} · demanda {b.get('demanda', {}).get('nivel')}")
+        lineas = [l for p in b.get('proveedores') or [] for l in p['lineas']]
+        lineas.sort(key=lambda l: (compras_bandeja.ORDEN_URGENCIA[l['urgencia']],
+                                   -(l['porque'].get('vende_dia') or 0)))
+        for l in lineas[:15]:
+            p = l['porque']
+            print(f"    {l['urgencia']:11} {l['referencia']:14} pedir {l['pedir_unidades']:>6} · "
+                  f"vende {p.get('vende_dia'):.2f}/día · posición {p.get('posicion')} · "
+                  f"punto de pedido {p.get('punto_de_pedido')}")
+        conclusiones.append(f"ENSAYO BANDEJA: fuente {f['fuente']} ({f['cobertura'].get('dias')} días) → "
+                            f"{b.get('estado')}, {res.get('lineas')} líneas "
+                            f"({res.get('urgentes')} urgentes). Parcial: cota inferior.")
+
+
 def _ultimo_habil(hoy):
     d = hoy - timedelta(days=1)
     while d.weekday() >= 5:
@@ -461,15 +602,25 @@ def main():
     ap.add_argument('--sin-mes', action='store_true')
     ap.add_argument('--solo', default='')
     ap.add_argument('--sql', action='store_true', help='imprime el SQL propuesto y sale')
+    ap.add_argument('--leer', choices=('reciente', 'historico'),
+                    help='corre la lectura real (sección 7) sobre SQLite desechable')
+    ap.add_argument('--max-paginas', type=int, default=300)
+    ap.add_argument('--ensayo-bandeja', type=int, metavar='DIAS',
+                    help='sección 8: facturas desde pedido de DIAS días + existencias + bandeja')
     args = ap.parse_args()
 
     if args.sql:
         os.environ.setdefault('DATABASE_URL', 'sqlite://')
         from app.services import demanda_fuentes as dfu
-        print('-- Consulta dinámica NUEVA (fuente de negocio):', dfu.CONSULTA_VENTAS_DIARIAS_DEFAULT)
-        print(dfu.SQL_VENTAS_DIARIAS)
-        print('\n-- Validación en descubrir_tablas (un día, un SKU):')
-        print(dfu.SQL_VALIDACION_UN_DIA)
+        print(f'-- 1) Consulta dinámica NUEVA: {dfu.CONSULTA_VENTAS_DIA_DEFAULT} '
+              f'(histórico, {dfu.DIAS_HISTORICO} días)')
+        print(dfu.sql_ventas_dia(dfu.DIAS_HISTORICO))
+        print(f'\n-- 2) Consulta dinámica NUEVA: {dfu.CONSULTA_VENTAS_DIA_RECIENTE_DEFAULT} '
+              f'(la de todos los días, {dfu.DIAS_RECIENTE} días)')
+        print(dfu.sql_ventas_dia(dfu.DIAS_RECIENTE))
+        for k, sql in dfu.SQL_VALIDACION.items():
+            print(f'\n-- Validación en papeleriamedellin_pame_descubrir_tablas: {k}')
+            print(sql)
         return 0
     if not args.ambiente:
         ap.error('--ambiente qa|produccion es obligatorio')
@@ -518,6 +669,11 @@ def main():
     if corre('invfecha'):
         pares = [(args.sku, args.bodega)] + [p for p in top if p != (args.sku, args.bodega)]
         probar_invfecha(gw, pares, conclusiones)
+
+    if args.leer:
+        probar_lectura_ventas(args.leer == 'reciente', args.max_paginas, conclusiones)
+    if args.ensayo_bandeja:
+        ensayo_bandeja(max(28, min(args.ensayo_bandeja, 120)), conclusiones)
 
     _t('CONCLUSIONES')
     for c in conclusiones:

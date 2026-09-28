@@ -449,6 +449,10 @@ def descargar_ventas_dia(reciente: bool = False, gateway=None, max_paginas=None,
                     _absorber(rows)
     except Exception as e:                                    # noqa: BLE001
         motivo = f'página {pag}: {str(e)[:300]}'
+        if '401' in str(e):
+            motivo = (f'{consulta}: 401 — la consulta no está registrada en Siesa o el '
+                      'usuario de la integración no tiene permiso (Administración → '
+                      'Permisos servicios → Consultas dinámicas).')
 
     ultimo_cerrado = dia_operativo() - timedelta(days=1)
     faltantes = (total - len(por_orden)) if total else None
