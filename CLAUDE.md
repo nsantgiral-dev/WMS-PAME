@@ -7664,3 +7664,120 @@ inventario de quien toca la venta de Siesa (`test_demanda_fuentes.py`) sube de
 - Que la venta de caja entre a la T470 como 501 sigue por verificar (paso 1).
 - `setattr` no lo ve el trinquete de lectores del valor (así escribe
   `_guardar_lectura`, el escritor).
+
+---
+
+## Asignación de trabajo: presencia y pull (2026-09-27)
+
+**Lo que vio el dueño** (Inventario Cíclico → Conteos): el botón decía
+«Asignar 6 pendientes», el formulario proponía «Cantidad 10» y UN operario, y
+el desplegable ofrecía a «María Jefe Almacén». Debajo había una clase, no tres
+bugs: **nada en el sistema sabía quién había venido.** «Activo» en el maestro
+es «tiene cuenta», no «vino hoy».
+
+| Dónde | Qué pasaba |
+|---|---|
+| Botón vs. formulario | El 6 lo contaba el servidor; el 10 era `value="10"` en el HTML; el POST caía a `limite=20`. Tres números, tres fuentes |
+| Desplegable | `/api/auth/usuarios` filtrado en el JS a `operario` + `jefe_almacen`, viniera o no. El jefe no hace conteos rutinarios |
+| El lote | Entero a UNA persona |
+| CC2 (`_crear_conteo_verificacion`) | Al operario de id más bajo, viniera o no. Un CC2 PENDIENTE pegado a un incapacitado no lo soltaba nadie (el barrido de zombis solo mira EN_PROCESO). Si el CC1 lo hizo un jefe o admin, el CC2 iba a un jefe o admin |
+| Intercalado | El supervisor apoyando picking en NB1 **recibía conteos intercalados** (la guarda de «el supervisor no cuenta rutinarios» solo cubría la cola) |
+| Traslado «para Pedro» | Sus tareas quedaban pegadas a Pedro, y el dispensador se las ofrecía **al final**, detrás de todos los conteos de la cola; con Pedro de vacaciones no las hacía nadie. La lista de «quién recoge» era todo `operario` activo de cualquier sede |
+| Pedido chico | «Pegado» a quien lo empezó aunque se hubiera ido a casa |
+| Tienda | No tomaba un CC2 de la cola («va al admin») — y el admin no cuenta |
+
+### El modelo
+
+**Pull por defecto**: el trabajo vive en la cola sin dueño; quien está pide la
+siguiente (cola unificada, sin cambios de prioridad). **Push solo como
+excepción, a alguien que lo hace y está, y con vencimiento**: si deja de estar,
+lo que no empezó vuelve solo a la cola.
+
+- **`app/services/presencia.py`** — *¿quién está?* Disponible = activo ∧ sin
+  ausencia declarada vigente ∧ señal en las últimas 2 h. La señal
+  (`usuarios.ultima_senal_at`) la deja **toda petición autenticada que
+  escribe** (`before_request`) y pedir trabajo (`get_tarea_actual`,
+  `get_tarea_abastecedor`). **Los GET no**: un GET no escribe
+  (`test_lista_paradas_no_escribe` lo vio en la primera versión). Ausencias
+  (`ausencias_usuario`): incapacidad, vacaciones, permiso, calamidad, otro, con
+  **fecha de regreso** (vence sola; sin fecha, sigue hasta que se quite). Se
+  anulan, no se borran. `estado()` (Python) y `condicion_sql_disponible()`
+  (SQL) son la misma regla dos veces; un test exige que coincidan en la matriz.
+- **`app/services/asignacion.py`** — *¿a quién se le puede dar?* Elegibilidad
+  por puesto (`motivo_no_elegible`: CONTEO = operario que pica o picker de
+  tienda de ese almacén; CONTEO_DEFINITIVO = supervisión; PICKING_TRASLADO =
+  pica en la bodega de origen; REPOSICION = `puede_abastecer`) + presencia =
+  `motivo_no_asignable`, con dos usos: `exigir_asignable` (acción de un líder:
+  el motivo vuelve a la pantalla) y `asignable_o_none` (flujo del sistema: la
+  tarea nace en la cola). `candidatos()` es el desplegable: solo quienes pueden
+  y están, y aparte —con su motivo— quienes podrían pero no están.
+- **Reparto** (`plan_reparto_conteos` / `repartir_conteos`, `GET
+  /api/conteo/asignar-lote/vista-previa`, `POST /api/conteo/asignar-lote`):
+  entre los presentes que cuentan, hasta el cupo restante de cada uno
+  (`capacidad_diaria_conteo` − empezados hoy − en su cola), igualando la
+  fracción de cupo usada; doble ciego (un CC2 nunca a quien contó su CC1);
+  nunca CC3; en `orden_de_reparto`. **El botón, la vista previa y el POST son
+  el mismo cálculo** (`contar_pool_conteo` alimenta la barra). Nadie presente →
+  0 asignados y `motivo_sin_reparto` dice quiénes y por qué. Cada asignación va
+  a la bitácora (`REASIGNAR`). Ahora lo puede hacer toda `SUPERVISION` (antes
+  `LEAD`): el jefe ya reabría y reasignaba conteos.
+- **Soltar**: `devolver_trabajo_de` al declarar la ausencia (conteos pendientes
+  y en curso —lo contado queda en `conteos_descartados`, motivo `AUSENCIA`—,
+  picking pendiente, reposición en curso) y `barrer()` cada 15 min (esencial,
+  lock 2030): ausente/inactivo → todo lo soltable; sin señal → solo lo no
+  empezado (lo empezado lo cuidan los zombis de 2 h, que miden la tarea).
+  **Nunca** un picking o empaque EN_PROCESO: hay mercancía a medio mover; se
+  listan en «Por decidir» de la pestaña Operarios. Bitácora `DESASIGNAR`.
+- **Puertas que pasan por la política**: `asignar-lote`, `reabrir_bloqueado`,
+  `reasignar_operario` (`/editar`), `crear_conteo_manual` (forzado), el CC2
+  (presente, elegible, primero por id — el desempate no cambió), aprobar y
+  reasignar traslado (`TrasladoService.reasignar_operario`, salió de la ruta),
+  `operarios-disponibles?solicitud_id=`, `crear_tareas` con dueño,
+  `_crear_picking_tienda`, `POST /api/picking/` con dueño.
+- **Dispensador**: lo que un líder le asignó al que pide va **primero**; los
+  conteos rutinarios (cola e intercalado) solo a quien los hace; el pedido chico
+  queda pegado a su dueño **mientras esté disponible** (la consulta optimista y
+  la re-verificación bajo lock, la misma condición SQL); la tienda toma CC2 de
+  la cola.
+- **Pantallas**: Conteos → «Repartir N sin dueño» abre la vista previa del
+  servidor (quién recibe cuánto, quién no está y por qué, cuántos quedan; se
+  puede desmarcar a alguien o poner cantidad). Los selectores de destinatario
+  (conteo manual, auditoría, traslados) usan `candidatos`. Operarios: en turno /
+  sin señal / ausente con fecha de regreso, qué tiene cada uno, cupo de conteo
+  de hoy, marcar/quitar ausencia, y lo que quedó a medio hacer.
+
+### Trinquete
+
+`tests/test_asignacion_presencia.py` — toda escritura de
+`operario_id`/`abastecedor_id` distinta de `None` (asignación directa,
+`.update({...})`, constructor de SesionConteo/TareaPicking/TareaReposicion/
+SolicitudTraslado, `setattr`) vive en una función que llama a la política, o
+en `AUTOASIGNACIONES` (el que pide es el asignado; 10 sitios, cada uno con su
+porqué, **solo encoge**). Por AST; meta-tests de las cuatro escrituras, de lo
+sano (docstring, comentario, `= None`, `filter_by`, `==`, otro modelo) y de la
+política llamada en una función hija; piso (≥ 19 sitios, ≥ 9 con política).
+**En su primera corrida encontró `_crear_picking_tienda`**, que copiaba el dueño
+de la solicitud sin preguntar. 47 tests, incluidas las pantallas en Node con
+`util.js` + `modal.js` + `app.js` + `conteo.js` reales. **13 mutaciones, las 13
+rojas** (la del CC2 salió verde la primera vez: el test dejaba el CC1 EN_PROCESO
+y lo que apartaba a Ana era el conflicto de hueco, no el doble ciego; se
+corrigió el test).
+
+Migración `m051asignacion` (down `m049tardia`): `usuarios.ultima_senal_at` +
+`ausencias_usuario` (OPERATIVA en el acta de corte: las ausencias del ensayo no
+valen para producción).
+
+### Lo que NO cubre
+
+- **Recepción, devoluciones, empaque**: el dueño se pone al empezar (el que
+  pide es el asignado) — ya son pull; no hay push que vencer.
+- **El conductor de una ruta** lo asigna el líder al armarla; la presencia del
+  conductor no entra acá (su turno lo lleva flota).
+- **Un líder que solo mira (GET)** figura «sin señal»: si otro líder le quiere
+  pasar un CC3 con `reabrir`, se rechaza hasta que él haga algo. Declarado.
+- **El cupo en el pull**: la cola de NB1 le sigue dando conteos a quien pide
+  aunque haya llenado su cupo (solo el intercalado lo respeta). El reparto sí
+  lo respeta. Si el dueño quiere el cupo como tope duro, es una línea en el
+  dispensador — no se cambió sin su decisión.
+- La **salida anticipada** se declara como `PERMISO` desde hoy hasta mañana; no
+  hay botón «terminó turno».

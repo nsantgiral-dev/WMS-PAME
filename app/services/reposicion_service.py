@@ -306,6 +306,11 @@ def get_tarea_abastecedor(abastecedor_id: int):
     """
     Devuelve la tarea activa del abastecedor, o asigna la siguiente PENDIENTE.
     """
+    # Pedir trabajo es estar trabajando (`presencia`, m051asignacion): la
+    # pantalla del abastecedor puro pregunta por GET, que no deja señal solo.
+    from app.services.presencia import registrar_senal
+    registrar_senal(abastecedor_id)
+
     # ¿Ya tiene tarea en proceso?
     activa = TareaReposicion.query.filter_by(
         abastecedor_id=abastecedor_id,
