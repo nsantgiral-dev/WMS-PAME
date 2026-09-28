@@ -93,7 +93,7 @@ class TestCompletoEsLasTresPasadas:
 
     def test_la_rota_no_pisa_lo_que_trajo_una_completa(self, db, monkeypatch, cache_limpio):
         base = {'NB1': {'X': _fila(5)}}
-        self._pasadas(monkeypatch, [base, ('rota', {'NB1': {'X': _fila(1)}}), base])
+        self._pasadas(monkeypatch, [base, base, ('rota', {'NB1': {'X': _fila(1)}})])
         assert iss._descargar_todas_bodegas_custom()['NB1']['X']['existencia'] == 5
 
     def test_un_dict_sin_la_medida_se_lee_incompleto(self, db, cache_limpio):
