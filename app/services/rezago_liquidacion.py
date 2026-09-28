@@ -67,12 +67,37 @@ def fecha_de_referencia(ruta):
     return getattr(ruta, 'fecha_programada', None)
 
 
-def dias_de_rezago(ruta, hoy=None):
-    """Días desde la entrega. `None` si la ruta no tiene fecha con qué medir."""
+#: Desde qué hora (Bogotá) una ruta entregada cuenta, para el rezago, como del
+#: día operativo SIGUIENTE (decisión del CTO, 2026-09-26): en temporada se opera
+#: hasta la medianoche, y una ruta entregada a las 21:00 salía «atrasada» en la
+#: alerta de las 06:30 del día siguiente sin que nadie hubiera podido
+#: liquidarla. Atrasada es no liquidarla al cierre de ESE día operativo.
+HORA_ENTREGA_DIA_SIGUIENTE = 19
+
+
+def dia_de_liquidacion(ruta):
+    """El día operativo en que la ruta se debió liquidar: el de la entrega, o
+    el siguiente si se entregó desde `HORA_ENTREGA_DIA_SIGUIENTE` (Bogotá).
+    `None` sin fecha."""
+    from datetime import timedelta
     ref = fecha_de_referencia(ruta)
+    entregada = getattr(ruta, 'fecha_entregada', None)
+    if ref is not None and isinstance(entregada, datetime):
+        from zoneinfo import ZoneInfo
+        from app.utils.fecha import TZ_BOGOTA
+        hora = entregada.replace(tzinfo=ZoneInfo('UTC')).astimezone(TZ_BOGOTA).hour
+        if hora >= HORA_ENTREGA_DIA_SIGUIENTE:
+            return ref + timedelta(days=1)
+    return ref
+
+
+def dias_de_rezago(ruta, hoy=None):
+    """Días desde el día en que se debió liquidar (`dia_de_liquidacion`).
+    `None` si la ruta no tiene fecha con qué medir."""
+    ref = dia_de_liquidacion(ruta)
     if ref is None:
         return None
-    return ((hoy or ahora_bogota().date()) - ref).days
+    return max(0, ((hoy or ahora_bogota().date()) - ref).days)
 
 
 def urgencia(ruta, hoy=None):
@@ -86,9 +111,11 @@ def urgencia(ruta, hoy=None):
     ref = fecha_de_referencia(ruta)
     if ref is None:
         return ATRASADA
+    # El mes es el de la entrega real (el recaudo cae en otro período); el
+    # atraso se mide desde el día en que se debió liquidar.
     if (ref.year, ref.month) != (hoy.year, hoy.month):
         return CRUZA_MES
-    return ATRASADA if (hoy - ref).days >= 1 else OK
+    return ATRASADA if (hoy - dia_de_liquidacion(ruta)).days >= 1 else OK
 
 
 def _todas_entregadas_sin_liquidar():
@@ -166,6 +193,45 @@ def recibos_de_otro_mes(hoy=None):
     return [{'recaudo_id': r.id, 'ruta_id': r.ruta_id,
              'pedido': getattr(r.tarea, 'numero_pedido_siesa', None),
              'cobrado_el': r.rc_cobro_otro_mes.isoformat()} for r in filas]
+
+
+#: Desde cuántas horas en camino una ruta que no se cierra es una señal.
+HORAS_SIN_CERRAR = 24
+
+
+def rutas_sin_cerrar(ahora=None) -> list:
+    """Rutas EN_TRANSITO hace más de `HORAS_SIN_CERRAR` desde su salida
+    (`fecha_cierre` del cargue), desde el corte: la plata de esas paradas no
+    llega a Liquidación mientras el conductor no cierre (validación de la
+    plata, 2026-09-26). `[{ruta_id, conductor, horas, cierre_pedido_en}]`. Una
+    ruta sin fecha de salida cuenta (Regla 0)."""
+    from app.models.ruta_despacho import RutaDespacho
+    from app.services import corte
+    ahora = ahora or datetime.utcnow()
+    out = []
+    rutas = RutaDespacho.query.filter(RutaDespacho.estado == 'EN_TRANSITO').all()
+    vigentes = corte.separar(rutas, lambda r: getattr(r, 'fecha_cierre', None))[0]
+    for r in vigentes:
+        salida = r.fecha_cierre or getattr(r, 'fecha_creacion', None)
+        horas = round((ahora - salida).total_seconds() / 3600, 1) if salida else None
+        if horas is not None and horas < HORAS_SIN_CERRAR:
+            continue
+        out.append({'ruta_id': r.id,
+                    'conductor': getattr(getattr(r, 'conductor', None), 'nombre', None),
+                    'horas': horas,
+                    'cierre_pedido_en': (r.cierre_pedido_en.isoformat()
+                                         if getattr(r, 'cierre_pedido_en', None) else None)})
+    return sorted(out, key=lambda x: -(x['horas'] if x['horas'] is not None else 1e9))
+
+
+def lineas_de_aviso_sin_cerrar(ahora=None) -> list:
+    rutas = rutas_sin_cerrar(ahora)
+    if not rutas:
+        return []
+    det = ', '.join(f"{x['ruta_id']} ({x['conductor'] or 'sin conductor'})" for x in rutas[:10])
+    return [f'⚠ {len(rutas)} ruta(s) en camino hace más de {HORAS_SIN_CERRAR} h sin cerrar '
+            f'(ruta {det}): su plata no llega a Liquidación. Pida el cierre desde Liquidación '
+            f'(o el administrador lo fuerza).']
 
 
 def rutas_sin_liquidar_al_cierre(dia):

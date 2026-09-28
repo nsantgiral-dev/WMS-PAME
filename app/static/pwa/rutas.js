@@ -2093,7 +2093,12 @@ function _condRenderParadas(d) {
   const total = paradas.length;
   const todasGestionadas = gestionadas === total && total > 0;
 
-  let html = `
+  // La oficina pidió cerrar la ruta (lleva más de un día en camino).
+  const pedido = d.cierre_pedido_en ? `
+    <div style="margin-bottom:12px;padding:12px;background:var(--warn-bg);border:1px solid var(--warn-brd);border-radius:12px;font-size:var(--fs-sm);color:var(--warn-tx);font-weight:700;">
+      La oficina le pide cerrar esta ruta: confirme las paradas que falten y toque «Cerrar Ruta» con señal.
+    </div>` : '';
+  let html = pedido + `
     <div style="margin-bottom:16px;display:flex;justify-content:space-between;align-items:center;">
       <button onclick="cargarRutasConductor()" style="background:none;border:none;color:var(--tx3);font-size:var(--fs-sm);cursor:pointer;padding:0;">← Volver</button>
       <span style="font-size:var(--fs-sm);color:var(--tx3);">${gestionadas}/${total} gestionadas</span>

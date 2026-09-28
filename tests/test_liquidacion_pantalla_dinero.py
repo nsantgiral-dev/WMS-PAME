@@ -39,7 +39,9 @@ def _ruta_entregada(db, almacen, dias_atras=0, liquidada=False):
     ruta = RutaDespacho(conductor_id=c.id, tipo_ruta='Urbana', estado='ENTREGADA',
                         fecha_programada=fecha,
                         estado_financiero='LIQUIDADA' if liquidada else 'PENDIENTE',
-                        fecha_entregada=datetime.utcnow() - timedelta(days=dias_atras))
+                        # A mediodía de Bogotá: una entrega de noche es del día
+                        # operativo siguiente para el rezago (2026-09-26).
+                        fecha_entregada=datetime(fecha.year, fecha.month, fecha.day, 17))
     db.session.add(ruta)
     db.session.flush()
     t = TareaPacking(codigo=f'PK-{uuid.uuid4().hex[:6]}', estado='DESPACHADO',

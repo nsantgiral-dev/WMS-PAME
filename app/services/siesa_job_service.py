@@ -2081,7 +2081,9 @@ def _ejecutar_job(job: SiesaJob) -> dict:
             # Del recaudo y no del payload: el comprobante se puede haber
             # anotado después de encolar el job (edición de la parada).
             referencia_pago=(getattr(recaudo, 'referencia_pago', None) or ''),
-            fecha_recaudo=fecha_bogota_de(getattr(recaudo, 'fecha_confirmacion', None)),
+            # El momento real del cobro (m050plata), no la hora de la última
+            # re-confirmación (validación de la plata, 2026-09-26).
+            fecha_recaudo=fecha_bogota_de(_pc.momento_del_cobro(recaudo)),
         )
 
         # Pre-flight: ¿la factura que vamos a pagar ya quedó sin saldo?

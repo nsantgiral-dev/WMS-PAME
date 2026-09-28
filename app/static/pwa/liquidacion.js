@@ -322,6 +322,8 @@ function liqCargarPendientes() {
   const rutas = atrasadas.concat((_liqDashboard.rutas || []).filter(r =>
     r.estado_financiero !== 'LIQUIDADA' && r.estado === 'ENTREGADA'
   ));
+  const sinCerrar = _liqBloqueSinCerrar();
+  if (!rutas.length && sinCerrar) { el.innerHTML = sinCerrar; return; }
   if (!rutas.length) {
     el.innerHTML = `
       <div style="text-align:center;padding:40px;color:var(--tx3);">
@@ -331,7 +333,41 @@ function liqCargarPendientes() {
       </div>`;
     return;
   }
-  el.innerHTML = rutas.map(r => _liqRutaCard(r, false)).join('');
+  el.innerHTML = sinCerrar + rutas.map(r => _liqRutaCard(r, false)).join('');
+}
+
+/** Rutas en camino hace más de un día sin cerrar: su plata no llega. Quien
+ *  liquida pide el cierre (el teléfono lo muestra); el administrador lo
+ *  fuerza desde Rutas. */
+function _liqBloqueSinCerrar() {
+  const lista = (_liqDashboard && _liqDashboard.rutas_sin_cerrar) || [];
+  if (!lista.length) return '';
+  const puede = !!(_liqDashboard.permisos && _liqDashboard.permisos.liquidar);
+  return `
+    <div style="margin-bottom:12px;padding:12px;background:var(--warn-bg);border:1px solid var(--warn-brd);border-radius:10px;">
+      <div style="font-size:var(--fs-sm);font-weight:800;color:var(--warn-tx);">Rutas en camino sin cerrar (${esc(lista.length)})</div>
+      <div style="font-size:var(--fs-xs);color:var(--tx2);margin:4px 0 8px;">Su plata no llega a Liquidación mientras el conductor no la cierre.</div>
+      ${lista.map((r, i) => `
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:6px 0;border-top:1px solid var(--warn-brd);flex-wrap:wrap;">
+          <span style="font-size:var(--fs-sm);color:var(--tx);">Ruta #${esc(r.ruta_id)} · ${esc(r.conductor || 'sin conductor')} · ${esc(_liqHace(r.horas))}</span>
+          ${r.cierre_pedido_en ? '<span style="font-size:var(--fs-xs);color:var(--tx3);">Cierre ya pedido</span>'
+            : (puede ? `<button onclick="liqPedirCierre(${i})" style="padding:6px 12px;background:var(--bg);color:var(--warn-tx);border:1px solid var(--warn-brd);border-radius:8px;font-size:var(--fs-xs);font-weight:700;cursor:pointer;">Pedir el cierre</button>` : '')}
+        </div>`).join('')}
+      <div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:6px;">Si el conductor no puede cerrarla, el administrador la cierra desde Rutas.</div>
+    </div>`;
+}
+
+async function liqPedirCierre(i) {
+  const r = ((_liqDashboard && _liqDashboard.rutas_sin_cerrar) || [])[i];
+  if (!r) return;
+  try {
+    await post(`/api/rutas/${Number(r.ruta_id)}/pedir-cierre`, {});
+    alerta('Se le pidió al conductor cerrar la ruta', 'exito');
+    r.cierre_pedido_en = new Date().toISOString();
+    liqCargarPendientes();
+  } catch (e) {
+    alerta(e.message || 'No se pudo pedir el cierre', 'error');
+  }
 }
 
 /** Filter and render routes that have already been financially settled. */
@@ -1078,6 +1114,8 @@ function liqAbrirParadaTardia(rutaId, i) {
         <input id="liq-tardia-monto-${i}" type="number" min="0" step="1" inputmode="numeric" style="${campo}">
         <label style="${etiqueta}" for="liq-tardia-ref-${i}">Referencia del comprobante (si fue transferencia, tarjeta o cheque)</label>
         <input id="liq-tardia-ref-${i}" type="text" maxlength="30" style="${campo}">
+        <label style="${etiqueta}" for="liq-tardia-fecha-${i}">¿Qué día se cobró? (va en el recibo de caja)</label>
+        <input id="liq-tardia-fecha-${i}" type="date" value="${esc(typeof hoyBogota === 'function' ? hoyBogota() : '')}" style="${campo}">
       </div>
       <div id="liq-tardia-items-${i}" style="display:none;">
         <div style="${etiqueta}">Cuánto se entregó de cada referencia</div>
@@ -1136,6 +1174,8 @@ function _liqDatosTardia(p, i) {
   d.monto_cobrado = Number(val(`liq-tardia-monto-${i}`)) || 0;
   const ref = val(`liq-tardia-ref-${i}`);
   if (ref) d.referencia_pago = ref;
+  const fechaCobro = val(`liq-tardia-fecha-${i}`);
+  if (fechaCobro) d.fecha_cobro = fechaCobro;
   if (res === 'PARCIAL') {
     d.items_entregados = (p.items || []).map((it, k) => ({
       codigo: it.codigo, nombre: it.nombre, unidad: it.unidad,

@@ -763,6 +763,12 @@ def avisos_sin_canal(ayer_inicio, ayer_fin) -> list:
         lineas.extend(politica_cobro.lineas_de_aviso_dc())
 
     _seguro('las retenciones sin documento', _retenciones_sin_documento)
+
+    def _rutas_sin_cerrar():
+        from app.services import rezago_liquidacion
+        lineas.extend(rezago_liquidacion.lineas_de_aviso_sin_cerrar())
+
+    _seguro('las rutas sin cerrar', _rutas_sin_cerrar)
     return lineas
 
 

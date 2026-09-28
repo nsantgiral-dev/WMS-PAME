@@ -194,6 +194,8 @@ ESCRITURAS = [
     ('crédito en lote', 'POST', '/api/cartera/panel/credito-lote', {}, 'ENTREGADA',
      {'admin', 'lider_cartera'}),
     ('forzar cierre', 'POST', '/api/rutas/{ruta}/forzar-cierre', {}, 'ENTREGADA', {'admin'}),
+    ('pedir el cierre de una ruta en camino', 'POST', '/api/rutas/{ruta}/pedir-cierre', {},
+     'EN_TRANSITO', {'admin', 'liquidador'}),
     ('resolver la versión del conductor', 'POST',
      '/api/rutas/{ruta}/recaudos/{rec}/version-conductor', {}, 'ENTREGADA',
      {'admin', 'liquidador', 'lider_cartera'}),

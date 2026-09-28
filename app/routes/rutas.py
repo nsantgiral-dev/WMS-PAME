@@ -617,6 +617,24 @@ def forzar_cierre_ruta(id):
     return jsonify(resultado), 200
 
 
+@rutas_bp.route('/<int:id>/pedir-cierre', methods=['POST'])
+@jwt_required()
+def pedir_cierre_ruta(id):
+    """Quien liquida le pide al conductor cerrar una ruta que lleva más de un
+    día en camino: el teléfono lo muestra. No cambia la ruta (forzar el
+    cierre es del administrador)."""
+    u = _con_permiso(puede_liquidar)
+    if not u:
+        return jsonify({'error': 'Solo quien liquida pide el cierre de una ruta'}), 403
+    try:
+        ruta = RutaService.pedir_cierre(id, u.id)
+    except LookupError as e:
+        return jsonify({'error': str(e)}), 404
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    return jsonify({'ok': True, 'ruta': ruta}), 200
+
+
 @rutas_bp.route('/<int:id>/liquidar-siesa', methods=['POST'])
 @jwt_required()
 def liquidar_ruta_siesa(id):
@@ -1575,6 +1593,10 @@ def liquidacion_dashboard():
         # Entregadas sin liquidar de días anteriores al rango (no suman arriba).
         'rutas_atrasadas': sorted(rutas_atrasadas_out,
                                   key=lambda x: -(x.get('dias_rezago') or 0)),
+        # En camino hace más de un día: su plata no llega (validación 2026-09-26).
+        'rutas_sin_cerrar': _rl.rutas_sin_cerrar(),
+        'permisos': {'liquidar': puede_liquidar(_usuario()),
+                     'forzar_cierre': puede_forzar_cierre_ruta(_usuario())},
         'senales_conductor': senales_conductor,
     }), 200
 

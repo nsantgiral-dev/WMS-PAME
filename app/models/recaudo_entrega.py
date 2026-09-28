@@ -262,6 +262,12 @@ class RecaudoEntrega(db.Model):
     #: envío porque el mes ya había cambiado (`politica_cobro.fechas_del_recibo`).
     rc_cobro_otro_mes = db.Column(db.Date, nullable=True)
 
+    #: Cuándo se cobró de verdad (UTC, m050plata): la hora del teléfono
+    #: corregida por el desfase medido, o la del servidor en la primera
+    #: confirmación; la oficina la declara. Una re-confirmación no la pisa.
+    #: La lee `politica_cobro.momento_del_cobro`.
+    fecha_cobro = db.Column(db.DateTime, nullable=True)
+
     # ── Desenlace de los documentos Siesa ─────────────────────────────────
     #: El vocabulario. **Uno solo** para los tres documentos.
     #:
@@ -442,6 +448,7 @@ class RecaudoEntrega(db.Model):
             'version_conductor_en':  (self.version_conductor_en.isoformat()
                                       if self.version_conductor_en else None),
             'diferencia_conductor':  self.diferencia_conductor,
+            'fecha_cobro':           self.fecha_cobro.isoformat() if self.fecha_cobro else None,
             'rc_cobro_otro_mes':     (self.rc_cobro_otro_mes.isoformat()
                                       if self.rc_cobro_otro_mes else None),
         }

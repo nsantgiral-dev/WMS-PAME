@@ -582,6 +582,46 @@ def lineas_de_aviso_dc() -> list:
 # 7 · Las fechas del recibo de caja (142888) — regla del dueño, 2026-09-25
 # ═════════════════════════════════════════════════════════════════════════════
 
+def momento_del_cobro(recaudo):
+    """**El momento del cobro** (UTC naive) de una parada, para el recibo de
+    caja: `fecha_cobro` (m050plata); una parada anterior, la primera
+    confirmación. `None` sin ninguna (el recibo va con el día del envío,
+    declarado por `fechas_del_recibo`)."""
+    if recaudo is None:
+        return None
+    return getattr(recaudo, 'fecha_cobro', None) or getattr(recaudo, 'fecha_confirmacion', None)
+
+
+def fecha_cobro_de_la_confirmacion(ts_dispositivo, desfase_s, ahora):
+    """La hora real del cobro que dice el teléfono: `ts_dispositivo` corregido
+    por el desfase medido al enviar (teléfono − servidor). Sin hora del
+    teléfono, `ahora` (el servidor). Nunca en el futuro."""
+    if ts_dispositivo is None:
+        return ahora
+    from datetime import timedelta
+    real = ts_dispositivo - timedelta(seconds=int(desfase_s or 0))
+    return min(real, ahora)
+
+
+def fecha_cobro_declarada(valor, ahora):
+    """La fecha del cobro que declara la oficina (`AAAA-MM-DD`, Bogotá), como
+    el mediodía de ese día en UTC. `None` si no vino. Levanta `ValueError` si
+    es ilegible o futura."""
+    if valor in (None, ''):
+        return None
+    from datetime import date, datetime as _dt, time
+    from app.utils.fecha import TZ_BOGOTA, dia_operativo_de
+    try:
+        d = date.fromisoformat(str(valor)[:10])
+    except ValueError as e:
+        raise ValueError(f'La fecha del cobro es ilegible: {valor!r} (se espera AAAA-MM-DD)') from e
+    if d > dia_operativo_de(ahora):
+        raise ValueError('La fecha del cobro no puede ser futura')
+    from zoneinfo import ZoneInfo
+    local = _dt.combine(d, time(12, 0), tzinfo=TZ_BOGOTA)
+    return local.astimezone(ZoneInfo('UTC')).replace(tzinfo=None)
+
+
 def _yyyymmdd(valor) -> str | None:
     v = str(valor or '').strip()
     if len(v) != 8 or not v.isdigit():

@@ -1198,6 +1198,10 @@ class RutaService:
             'paradas':                 paradas,
             'total_paradas':           len(paradas),
             'facturas_gestionadas':    gestionadas,
+            # La oficina pidió cerrar la ruta (validación 2026-09-26): el
+            # teléfono lo muestra encima de las paradas.
+            'cierre_pedido_en':        (ruta.cierre_pedido_en.isoformat()
+                                        if getattr(ruta, 'cierre_pedido_en', None) else None),
             # Alias de transición para PWA en caché — retirar post go-live
             'paradas_gestionadas':     gestionadas,
             'retenciones_disponibles': retenciones_disponibles,
@@ -2000,7 +2004,7 @@ class RutaService:
                           # La hora del teléfono de la confirmación ANTERIOR:
                           # re-confirmar la pisa, y sin esto se perdía (QA e2e
                           # 2026-09-24). Queda en el EDITAR.
-                          'ts_dispositivo', 'ts_desfase_s', 'via_cola')
+                          'ts_dispositivo', 'ts_desfase_s', 'via_cola', 'fecha_cobro')
         antes_parada = foto_fila(recaudo, list(_CAMPOS_PARADA)) if recaudo else None
         # Lo que una re-confirmación pisa aunque no cambie nada. Si el reenvío
         # resulta idéntico (la cola sin señal manda dos veces lo mismo), se
@@ -2066,6 +2070,16 @@ class RutaService:
         recaudo.ts_dispositivo        = _ts_disp
         recaudo.ts_desfase_s          = _desfase
         recaudo.via_cola              = _via_cola
+        # El momento real del cobro (m050plata): se fija en la primera
+        # confirmación y no lo reescribe una re-confirmación (antes el RC salía
+        # con la hora de la última edición). La oficina lo declara.
+        _fc_declarada = (_pc_cp.fecha_cobro_declarada(data.get('fecha_cobro'), ahora)
+                         if por_oficina else None)
+        if _fc_declarada is not None:
+            recaudo.fecha_cobro = _fc_declarada
+        elif recaudo.fecha_cobro is None:
+            recaudo.fecha_cobro = (_pc_cp.fecha_cobro_de_la_confirmacion(_ts_disp, _desfase, ahora)
+                                   if not por_oficina else ahora)
 
         # Detalle de referencias para entrega PARCIAL
         items_raw = data.get('items_entregados') or []
@@ -2406,6 +2420,25 @@ class RutaService:
             'ruta':            ruta.to_dict(),
             'devoluciones_pendientes_creadas': resumen_devoluciones['creadas'],
         }
+
+    @staticmethod
+    def pedir_cierre(id: int, usuario_id: int) -> dict:
+        """La oficina le pide al conductor cerrar la ruta (EN_TRANSITO). Queda
+        la marca (el teléfono la muestra) y la bitácora (EDITAR)."""
+        ruta = db.session.get(RutaDespacho, id)
+        if ruta is None:
+            raise LookupError('Ruta no encontrada')
+        if ruta.estado != EstadoRutaDespacho.EN_TRANSITO:
+            raise ValueError(f'La ruta está {ruta.estado}: solo se pide el cierre de una ruta '
+                             f'en camino')
+        antes = foto_fila(ruta, ['cierre_pedido_en', 'cierre_pedido_por_id'])
+        ruta.cierre_pedido_en = datetime.utcnow()
+        ruta.cierre_pedido_por_id = usuario_id
+        registrar_accion('EDITAR', ruta, usuario_id=usuario_id, entidad_codigo=f'RUTA-{ruta.id}',
+                         motivo='La oficina pidió cerrar la ruta', antes=antes,
+                         despues=foto_fila(ruta, ['cierre_pedido_en', 'cierre_pedido_por_id']))
+        db.session.commit()
+        return ruta.to_dict()
 
     @staticmethod
     def forzar_cierre_ruta(id: int, admin_id: int, motivo: str = None) -> dict:
