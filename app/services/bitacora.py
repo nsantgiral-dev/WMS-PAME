@@ -87,6 +87,8 @@ FORZADO_BULTO_CARGADO_SACADO = 'bulto_cargado_sacado_de_la_ruta'
 # Validación de la plata (2026-09-26).
 FORZADO_PARADA_CORREGIDA = 'parada_confirmada_corregida_por_la_oficina'
 FORZADO_PARADA_OFICINA_EN_CAMINO = 'parada_registrada_por_la_oficina_con_la_ruta_en_camino'
+# Liquidación con acta de caja (2026-09-27).
+FORZADO_LIQUIDACION_SIN_ACTA = 'liquidacion_sin_acta_de_caja'
 
 #: tipo → (verbo en pasado para la bitácora legible, qué se saltó).
 TIPOS_FORZADO = {
@@ -116,6 +118,8 @@ TIPOS_FORZADO = {
                                'la oficina cambió una parada que ya estaba confirmada'),
     FORZADO_PARADA_OFICINA_EN_CAMINO: ('registró por el conductor la parada de',
                                        'la oficina registró la parada con la ruta en camino'),
+    FORZADO_LIQUIDACION_SIN_ACTA: ('liquidó sin acta de caja',
+                                   'la ruta se liquidó sin que nadie contara la plata del conductor'),
 }
 
 #: Un FORZAR que no dice qué forzó (fila vieja de forma desconocida).

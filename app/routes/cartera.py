@@ -214,6 +214,18 @@ def gestor_habilitaciones():
     return _idempotente('habilitaciones', None, _hacer)
 
 
+@cartera_bp.route('/en-caja', methods=['GET'])
+@exige_token_servicio(_TOKEN, _QUE)
+def gestor_en_caja():
+    """Lo cobrado en ruta a un NIT que Siesa todavía no refleja (P2-6,
+    2026-09-27): el Gestor no le cobra otra vez a quien ya pagó."""
+    from app.services import cartera_service as cs
+    try:
+        return jsonify(cs.en_caja_por_nit(request.args.get('nit'))), 200
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+
+
 @cartera_bp.route('/salud', methods=['GET'])
 @exige_token_servicio(_TOKEN, _QUE)
 def gestor_salud():

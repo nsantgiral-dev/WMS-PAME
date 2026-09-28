@@ -155,8 +155,11 @@ def _liquidar(db, flujo, admin):
     # Se liquida una ruta cerrada (validación de la plata, 2026-09-26).
     db.session.get(RutaDespacho, flujo.ruta_id).estado = 'ENTREGADA'
     db.session.commit()
+    # Una liquidación = arqueo + documentos (m051liqcaja): primero el acta.
+    from tests.test_caja_conductor import recibir_caja_de
+    recibir_caja_de(db, flujo.ruta_id, admin.id)
     with patch('app.services.connekta_gateway.connekta', _mock_connekta()):
-        RutaService.liquidar_ruta(flujo.ruta_id, usuario_id=admin.id)
+        RutaService.liquidar_ruta(flujo.ruta_id, usuario_id=admin.id, encolar_documentos=False)
     db.session.commit()
 
 

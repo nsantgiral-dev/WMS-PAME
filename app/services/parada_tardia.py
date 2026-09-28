@@ -60,9 +60,11 @@ def formulario_oficina() -> dict:
     from app.services.ruta_service import FormaPago
     from app.services import cond_pago as _cp
     from app.services import senales_ruta as _sr
+    from app.services.medios_pago import cheque_habilitado
     return {'version_formulario': version_formulario_actual(),
             'formas_con_comprobante': [f for f in FormaPago.VALIDOS if _sr.requiere_comprobante(f)],
-            'formas_que_no_cobran': list(_cp.FORMAS_QUE_NO_COBRAN)}
+            'formas_que_no_cobran': list(_cp.FORMAS_QUE_NO_COBRAN),
+            'cheque_habilitado': cheque_habilitado()}
 
 
 # ─────────────────────────────────────────────────────────────────────────────

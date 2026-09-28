@@ -56,7 +56,7 @@ let _liqRetencionesDisponibles = [
  */
 function liqSubtab(sec) {
   _liqSubActual = sec;
-  ['pendientes','liquidadas','jobs'].forEach(s => {
+  ['pendientes','transferencias','liquidadas','jobs'].forEach(s => {
     const cont = document.getElementById(`liq-sec-${s}`);
     const btn  = document.getElementById(`liq-sub-${s}`);
     if (!cont || !btn) return;
@@ -67,6 +67,7 @@ function liqSubtab(sec) {
     btn.style.fontWeight = activo ? '700' : '400';
   });
   if (sec === 'pendientes') liqCargarPendientes();
+  else if (sec === 'transferencias') liqCargarTransferencias();
   else if (sec === 'liquidadas') liqCargarLiquidadas();
   else if (sec === 'jobs') liqCargarJobs();
 }
@@ -181,10 +182,13 @@ async function liqCargarDashboard() {
   const hasta = document.getElementById('liq-fecha-hasta')?.value || hoy;
   try {
     _liqDashboard = await get(`/api/rutas/liquidacion/dashboard?fecha_desde=${desde}&fecha_hasta=${hasta}`);
+    liqCargarCaja();
     _liqRenderKpis(_liqDashboard.resumen || {});
+    _liqRenderDiferenciasCaja((_liqDashboard.resumen || {}).diferencias_caja || []);
     _liqRenderSenalesConductor(_liqDashboard.senales_conductor || null);
     liqCargarDesglose();
     if (_liqSubActual === 'pendientes') liqCargarPendientes();
+    else if (_liqSubActual === 'transferencias') liqCargarTransferencias();
     else if (_liqSubActual === 'liquidadas') liqCargarLiquidadas();
     else if (_liqSubActual === 'jobs') liqCargarJobs();
   } catch (e) {
@@ -203,16 +207,29 @@ function _liqRenderKpis(r) {
   if (!el) return;
   const kpi = (label, val, color) => `
     <div style="background:var(--bg-s);border:1px solid var(--brd);border-radius:10px;padding:12px;text-align:center;">
-      <div style="font-size:var(--fs-xs);color:var(--tx3);margin-bottom:4px;">${label}</div>
-      <div style="font-size:var(--fs-md);font-weight:800;color:${color || 'var(--tx)'};">${val}</div>
+      <div style="font-size:var(--fs-xs);color:var(--tx3);margin-bottom:4px;">${esc(label)}</div>
+      <div style="font-size:var(--fs-md);font-weight:800;color:${color || 'var(--tx)'};">${esc(val)}</div>
     </div>`;
+  // Un universo (el servidor lo dice en palabras) y los medios suman el total.
+  const uni = document.getElementById('liq-universo');
+  if (uni) {
+    const cuadra = r.cuadra === false ? ' · ⚠ los medios no suman el total cobrado' : '';
+    uni.innerHTML = r.universo
+      ? `Sobre ${esc(r.universo)}. Cobrado = efectivo + transferencias + tarjeta + cheque${r.total_otros ? ' + otros' : ''}${esc(cuadra)}.`
+      : '';
+  }
   el.innerHTML =
-    kpi('Por liquidar', r.pendientes || 0, '#f59e0b') +
-    kpi('Liquidadas', r.liquidadas || 0, '#22c55e') +
-    kpi('Efectivo', _liqFmt(r.total_efectivo), '#4ade80') +
-    kpi('Transferencia', _liqFmt(r.total_transferencia), '#60a5fa') +
-    kpi('Tarjeta', _liqFmt(r.total_tarjeta), '#60a5fa') +
-    kpi('Crédito', (r.credito_sin_valor ? 'al menos ' : '') + _liqFmt(r.total_credito), '#a78bfa');
+    kpi('Por liquidar', r.pendientes || 0, 'var(--warn-tx)') +
+    kpi('Liquidadas', r.liquidadas || 0, 'var(--ok-tx)') +
+    (r.liquidadas_falta_siesa ? kpi('Liquidadas · falta Siesa', r.liquidadas_falta_siesa, 'var(--err-tx)') : '') +
+    kpi('Total cobrado', _liqFmt(r.total_cobrado ?? r.total_recaudado), 'var(--tx)') +
+    kpi('Efectivo', _liqFmt(r.total_efectivo), 'var(--ok-tx)') +
+    kpi('Transferencias', _liqFmt(r.total_bancario ?? r.total_transferencia), 'var(--info-tx)') +
+    kpi('Tarjeta', _liqFmt(r.total_tarjeta), 'var(--info-tx)') +
+    (r.total_cheque ? kpi('Cheque', _liqFmt(r.total_cheque), 'var(--info-tx)') : '') +
+    (r.total_otros ? kpi('Otros medios', _liqFmt(r.total_otros), 'var(--tx2)') : '') +
+    kpi('A crédito', (r.credito_sin_valor ? 'al menos ' : '') + _liqFmt(r.total_credito), 'var(--lila-tx)') +
+    (r.faltante_caja ? kpi('Faltante de caja', _liqFmt(r.faltante_caja), 'var(--err-tx)') : '');
 }
 
 // ── Señales por conductor ───────────────────────────────────────────────────
@@ -252,7 +269,7 @@ function _liqRenderSenalesConductor(sc) {
   el.innerHTML = `
     <div style="display:flex;flex-wrap:wrap;gap:12px;">
       ${efectivo.length ? `<div style="flex:1 1 280px;min-width:0;background:var(--bg-s);border:1px solid var(--brd);border-radius:10px;padding:12px;">
-        <div style="font-size:var(--fs-xs);font-weight:700;color:var(--tx2);margin-bottom:4px;">💵 EFECTIVO EN PODER DEL CONDUCTOR (sin liquidar)</div>
+        <div style="font-size:var(--fs-xs);font-weight:700;color:var(--tx2);margin-bottom:4px;">💵 EFECTIVO EN LA CALLE AHORA (sin acta de caja, cualquier fecha)</div>
         ${efectivo.map(filaEfectivo).join('')}
       </div>` : ''}
       ${sinPago.length ? `<div style="flex:1 1 280px;min-width:0;background:var(--bg-s);border:1px solid var(--brd);border-radius:10px;padding:12px;">
@@ -322,8 +339,11 @@ function liqCargarPendientes() {
   // Las atrasadas (entregadas sin liquidar de días anteriores al rango) van
   // primero: el servidor las manda aparte porque no suman a los totales de hoy.
   const atrasadas = _liqDashboard.rutas_atrasadas || [];
+  // Una ruta liquidada con documentos que faltan en Siesa sigue acá: «Liquidada ·
+  // falta en Siesa» (m051liqcaja). Antes salía de la lista con los cobros sin recibo.
   const rutas = atrasadas.concat((_liqDashboard.rutas || []).filter(r =>
-    r.estado_financiero !== 'LIQUIDADA' && r.estado === 'ENTREGADA'
+    (r.estado_financiero !== 'LIQUIDADA' && r.estado === 'ENTREGADA')
+    || (r.estado_financiero === 'LIQUIDADA' && (r.falta_en_siesa || []).length)
   ));
   const sinCerrar = _liqBloqueSinCerrar();
   if (!rutas.length && sinCerrar) { el.innerHTML = sinCerrar; return; }
@@ -336,7 +356,7 @@ function liqCargarPendientes() {
       </div>`;
     return;
   }
-  el.innerHTML = sinCerrar + rutas.map(r => _liqRutaCard(r, false)).join('');
+  el.innerHTML = sinCerrar + rutas.map(r => _liqRutaCard(r, r.estado_financiero === 'LIQUIDADA')).join('');
 }
 
 /** Rutas en camino hace más de un día sin cerrar: su plata no llega. Quien
@@ -377,7 +397,8 @@ async function liqPedirCierre(i) {
 function liqCargarLiquidadas() {
   const el = document.getElementById('liq-lista-liquidadas');
   if (!el || !_liqDashboard) return;
-  const rutas = (_liqDashboard.rutas || []).filter(r => r.estado_financiero === 'LIQUIDADA');
+  const rutas = (_liqDashboard.rutas || []).filter(r => r.estado_financiero === 'LIQUIDADA'
+    && !(r.falta_en_siesa || []).length);
   if (!rutas.length) {
     el.innerHTML = '<div style="text-align:center;padding:40px;color:var(--tx3);">Sin rutas liquidadas para este rango de fechas</div>';
     return;
@@ -392,9 +413,14 @@ function liqCargarLiquidadas() {
  * @returns {string} HTML string for the ruta card.
  */
 function _liqRutaCard(r, esLiquidada) {
-  const color = esLiquidada ? '#14532d' : '#78350f';
+  const falta = r.falta_en_siesa || [];
+  const color = esLiquidada && !falta.length ? 'var(--ok-brd)' : 'var(--warn-brd)';
   const ncInfo = `NCE ${r.siesa_nc_enviados || 0}`;
-  const rcInfo = `RC ${r.siesa_rc_enviados || 0}`;
+  // El recibo en tres estados, con señal positiva (no la bandera de pre-envío).
+  const rec = r.recibos || {};
+  const rcInfo = r.recibos
+    ? `RC ${rec.confirmados || 0} en Siesa${rec.enviados ? ` · ${rec.enviados} enviado(s) sin confirmar` : ''}${rec.en_cola ? ` · ${rec.en_cola} en cola` : ''}`
+    : `RC ${r.siesa_rc_enviados || 0}`;
   const dcInfo = `DC ${r.siesa_dc_enviados || 0}`;
   const jobsFallidos = r.jobs_fallidos || 0;
 
@@ -423,6 +449,8 @@ function _liqRutaCard(r, esLiquidada) {
       </div>
       ${_liqTextoSenalesRuta(r) ? `<div style="margin-top:6px;font-size:var(--fs-xs);font-weight:700;color:var(--warn-tx);">${esc(_liqTextoSenalesRuta(r))}</div>` : ''}
       ${!esLiquidada && r.paradas_sin_gestionar ? `<div style="margin-top:6px;font-size:var(--fs-xs);font-weight:700;color:var(--err-tx);">${esc(r.paradas_sin_gestionar)} parada${r.paradas_sin_gestionar !== 1 ? 's' : ''} sin gestionar: no se liquida hasta resolverlas</div>` : ''}
+      ${_liqChipCaja(r)}
+      ${esLiquidada && falta.length ? `<div style="margin-top:6px;font-size:var(--fs-xs);font-weight:700;color:var(--err-tx);">Liquidada · falta en Siesa: ${esc(_liqFaltaTexto(falta))}</div>` : ''}
       ${esLiquidada ? `
         <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap;">
           <span style="font-size:var(--fs-xs);padding:3px 8px;border-radius:20px;background:#1e3a5f22;color:var(--info-tx);">${ncInfo}</span>
@@ -549,6 +577,7 @@ async function liqAbrirRuta(id) {
   const body  = document.getElementById('liq-modal-body');
   if (!modal || !body) return;
   modal.style.display = 'block';
+  _liqTituloModal('Liquidar Ruta', true);
   body.innerHTML = '<div style="text-align:center;padding:40px;color:var(--tx3);">Cargando datos de Siesa...</div>';
   _liqRetenciones = {};
 
@@ -556,6 +585,10 @@ async function liqAbrirRuta(id) {
     _liqDetalleRuta = await get(`/api/rutas/${id}/liquidacion-detalle`);
     if (_liqDetalleRuta.retenciones_disponibles) {
       _liqRetencionesDisponibles = _liqDetalleRuta.retenciones_disponibles;
+    }
+    // CHEQUE en el formulario de la oficina solo si el medio existe en Siesa.
+    if (typeof _COND_CHEQUE_HABILITADO !== 'undefined') {
+      _COND_CHEQUE_HABILITADO = _liqDetalleRuta.cheque_habilitado === true;
     }
     _liqRenderDetalle();
   } catch (e) {
@@ -719,7 +752,7 @@ function _liqRenderDetalle() {
     </div>
     ${_liqBloqueSinGestionar(ruta)}`;
 
-  let totalFacturas = 0;
+  let totalCobrado = 0;
   let totalRetenciones = 0;
 
   recaudos.forEach((rec, idx) => {
@@ -734,7 +767,7 @@ function _liqRenderDetalle() {
     const factura = rec.factura_siesa;
     const baseGravable = factura ? factura.base_gravable : 0;
 
-    totalFacturas += monto;
+    totalCobrado += monto;
 
     // Inicializar retenciones para este recaudo si no existen
     if (!_liqRetenciones[rec.id]) _liqRetenciones[rec.id] = [];
@@ -753,8 +786,13 @@ function _liqRenderDetalle() {
             <span style="font-size:var(--fs-xs);font-weight:700;color:${colorEstado};">${esc(_liqPalabra(LIQ_ESTADO_ENTREGA, estado))}</span>
             <div style="font-size:var(--fs-xs);color:var(--tx2);">${_liqFmt(monto)} · ${esc(fp)}</div>
             ${rec.referencia_pago ? `<div style="font-size:var(--fs-xs);color:var(--tx3);">Ref. ${esc(rec.referencia_pago)}</div>` : ''}
+            ${_liqChipBanco(rec)}
           </div>
         </div>
+        ${rec.tiene_foto_comprobante ? `<div style="margin-bottom:8px;">
+          <button onclick="liqVerComprobante(${esc(rec.id)}, 'liq-comp-${esc(rec.id)}')"
+            style="padding:6px 12px;background:var(--bg);color:var(--info-tx);border:1px solid var(--info-brd);border-radius:8px;font-size:var(--fs-xs);font-weight:700;cursor:pointer;">Ver comprobante</button>
+          <div id="liq-comp-${esc(rec.id)}"></div></div>` : ''}
         ${_liqBloqueSenales(rec)}
         ${_liqBloqueCreditoNoAutorizado(ruta.id, rec)}
         ${esLiquidada ? '' : _liqBotonCorregirParada(rec, idx)}`;
@@ -959,21 +997,9 @@ function _liqRenderDetalle() {
         🔒 Liquidar — faltan ${esc(faltanParadas)} parada${faltanParadas !== 1 ? 's' : ''} por gestionar
       </button>`;
   } else if (!esLiquidada && _liqPermiso('liquidar')) {
-    html += `
-      <div style="background:var(--bg-s);border:2px solid var(--pm);border-radius:12px;padding:16px;margin-top:16px;">
-        <div style="display:flex;justify-content:space-between;font-size:var(--fs-sm);margin-bottom:6px;">
-          <span style="color:var(--tx3);">Total facturas:</span>
-          <span style="color:var(--tx);font-weight:700;">${_liqFmt(totalFacturas)}</span>
-        </div>
-        <div style="font-size:var(--fs-xs);color:var(--tx3);margin-bottom:12px;">
-          Paso 1: Confirme el cuadre financiero en WMS.<br>
-          Paso 2: Después de liquidar, documente NC/RC/DC por parada.
-        </div>
-        <button onclick="liqLiquidarWMS(${esc(ruta.id)})"
-          style="width:100%;padding:16px;background:#14532d;color:#bbf7d0;border:none;border-radius:10px;font-size:var(--fs-md);font-weight:800;cursor:pointer;">
-          💰 LIQUIDAR EN WMS
-        </button>
-      </div>`;
+    html += _liqBloqueLiquidar(ruta, totalCobrado);
+  } else if (!esLiquidada) {
+    html += `<div style="margin-top:16px;font-size:var(--fs-xs);color:var(--tx3);text-align:center;">Total cobrado: ${esc(_liqFmt(totalCobrado))} · la liquida quien liquida la ruta.</div>`;
   }
 
   body.innerHTML = html;
@@ -1543,24 +1569,38 @@ function liqQuitarRetencion(recaudoId, idx, baseGravable) {
 // ── Fase 1: Liquidar WMS (solo estado financiero) ─────────────────────────
 
 async function liqLiquidarWMS(rutaId) {
-  if (!await _modalConfirmar(`¿Liquidar Ruta #${rutaId} en WMS?\nDespués podrá documentar NC/RC/NI por parada.`, { titulo: 'Liquidar ruta' })) return;
-  try {
+  if (!await _modalConfirmar(`¿Liquidar la ruta #${esc(rutaId)}?<br>Queda liquidada y todo lo que está listo sale en cola para Siesa.`, { titulo: 'Liquidar ruta', textoConfirmar: 'Liquidar' })) return;
+  const cuerpo = {};
+  let r;
+  for (let intento = 0; intento < 3; intento++) {
     try {
-      await postConReintento(`/api/rutas/${rutaId}/liquidar`, {});
+      r = await postConReintento(`/api/rutas/${rutaId}/liquidar`, cuerpo);
+      break;
     } catch (e) {
-      // Mercancía de vuelta sin contar (m045devol): la ruta no se liquida
-      // salvo forzado con motivo, que queda en la bitácora.
-      const motivo = await liqMotivoDevolucionesSinContar(e);
-      if (motivo == null) throw e;
-      await postConReintento(`/api/rutas/${rutaId}/liquidar`, { motivo_devoluciones: motivo });
+      const txt = String((e && e.message) || '');
+      // Mercancía de vuelta sin contar (m045devol): se fuerza con motivo.
+      if (txt.startsWith('devoluciones_sin_contar') && !cuerpo.motivo_devoluciones) {
+        const motivo = await liqMotivoDevolucionesSinContar(e);
+        if (motivo == null) return;
+        cuerpo.motivo_devoluciones = motivo;
+        continue;
+      }
+      // Sin acta de caja: recibirla (o, solo el administrador, liquidar sin ella).
+      if (txt.startsWith('caja_sin_acta') && !cuerpo.motivo_sin_acta) {
+        const motivo = await liqSinActa(txt);
+        if (motivo == null) return;
+        cuerpo.motivo_sin_acta = motivo;
+        continue;
+      }
+      alerta(txt || 'Error al liquidar', 'error');
+      return;
     }
-    alerta('Ruta liquidada en WMS — ahora documente NC/RC/NI por parada', 'exito');
-    // Recargar detalle para mostrar Fase 2
-    _liqDetalleRuta = await get(`/api/rutas/${rutaId}/liquidacion-detalle`);
-    _liqRenderDetalle();
-  } catch (e) {
-    alerta(e.message || 'Error al liquidar', 'error');
   }
+  if (!r) return;
+  alerta(_liqTextoLiquidada(r), (r.falta_en_siesa || []).length ? 'advertencia' : 'exito');
+  _liqDetalleRuta = await get(`/api/rutas/${rutaId}/liquidacion-detalle`);
+  _liqRenderDetalle();
+  liqCargarDashboard();
 }
 
 /**
@@ -2116,7 +2156,7 @@ function _liqRenderReconciliacion(d, previo) {
         ${col('Debían cobrarse', c.debian_cobrarse || {})}
         ${col('Cobros registrados', c.cobros_registrados || {})}
         ${col('RC en Siesa', c.rc_en_siesa || {})}
-        ${col('Recaudo verificado', c.recaudo_verificado || {}, true)}
+        ${col('Plata verificada', c.recaudo_verificado || {}, !(c.recaudo_verificado || {}).capturado)}
       </div>
       <table style="width:100%;border-collapse:collapse;font-size:var(--fs-sm);">
         <thead><tr style="color:var(--tx2);font-size:var(--fs-xs);text-transform:uppercase;">
@@ -2131,10 +2171,524 @@ function _liqRenderReconciliacion(d, previo) {
         ${d.tasa_ciclos_rotos == null ? '' : ` · ${(d.tasa_ciclos_rotos * 100).toFixed(2)}% (vara: ${(d.vara * 100).toFixed(2)}%)`}
         — ${veredicto}
       </div>
-      <div style="margin-top:8px;font-size:var(--fs-xs);color:var(--tx3);">
-        La cuarta columna no la produce ningún sistema: es el conteo del cierre
-        —efectivo, comprobantes de transferencia y cheques—. Mientras no se
-        capture, el tramo «el recibo entró y la plata no se verificó» no se mide.
-      </div>
+      ${_liqNotaVerificado(c.recaudo_verificado || {})}
     </div>`;
+}
+
+/** La cuarta columna en palabras: de dónde sale y qué no cubre (del servidor). */
+function _liqNotaVerificado(v) {
+  const extra = [];
+  if (v.acta && v.acta.diferencia) {
+    extra.push(`El acta de caja #${esc(v.acta.acta_id)} contó ${esc(_liqFmt(Math.abs(v.acta.diferencia)))} ${v.acta.diferencia < 0 ? 'de menos' : 'de más'}${v.acta.prorrateado ? ' (repartido entre las rutas del acta)' : ''}.`);
+  }
+  if (v.bancario_por_verificar) extra.push(`${esc(v.bancario_por_verificar)} transferencia(s) sin ver en el banco.`);
+  if (v.bancario_no_encontrado) extra.push(`${esc(v.bancario_no_encontrado)} transferencia(s) que no aparecieron en el banco.`);
+  if (v.no_verificables) extra.push(`${esc(v.no_verificables)} pago(s) con tarjeta o cheque que nadie verifica todavía.`);
+  return `<div style="margin-top:8px;font-size:var(--fs-xs);color:var(--tx3);line-height:1.5;">
+    ${esc(v.nota || '')}${extra.length ? '<br>' + extra.join('<br>') : ''}
+  </div>`;
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// LA CAJA DEL CONDUCTOR Y LOS PAGOS BANCARIOS (m051liqcaja, 2026-09-27)
+//
+// Una liquidación = arqueo + documentos. Primero quien liquida recibe la caja
+// del conductor (cuenta el efectivo, acepta o rechaza los gastos que pagó con
+// esa plata) y queda un acta con la diferencia a cargo del conductor; después
+// liquida la ruta, y la liquidación deja en cola todo lo que va a Siesa. Las
+// transferencias las ve en el banco quien concilia. La política vive en el
+// servidor (`caja_conductor`, `verificacion_banco`): esta pantalla pinta lo
+// que el servidor manda, y en los `onclick` viajan solo posiciones e ids.
+// ══════════════════════════════════════════════════════════════════════════════
+
+let _liqCaja = null;          // respuesta de /caja/por-recibir
+let _liqActa = null;          // { datos: esperado del conductor, gastos: [{aceptado, motivo}] }
+let _liqTransferencias = null;
+
+/** Nombres de las formas de pago bancarias, para la cola del banco. */
+const LIQ_BANCO = {
+  TRANSFERENCIA: 'Transferencia', CONSIGNACION: 'Consignación',
+  TRANSFERENCIA_BANCOLOMBIA_AH: 'Bancolombia ahorros', TRANSFERENCIA_BANCOLOMBIA_CTE: 'Bancolombia corriente',
+  TRANSFERENCIA_BBVA: 'BBVA', TRANSFERENCIA_BOGOTA: 'Banco de Bogotá',
+  TRANSFERENCIA_AGRARIO_AH: 'Agrario ahorros', TRANSFERENCIA_AGRARIO_CTE: 'Agrario corriente',
+  TRANSFERENCIA_DAVIVIENDA: 'Davivienda', TRANSFERENCIA_IHO_CTE: 'IHO corriente',
+};
+const LIQ_ESTADO_BANCO = { POR_VERIFICAR: 'Por verificar en el banco',
+                           VERIFICADA: 'Vista en el banco', NO_ENCONTRADA: 'No apareció en el banco' };
+const LIQ_ESTADO_ACTA = { PENDIENTE_CONDUCTOR: 'Esperando al conductor', CONFIRMADA: 'Confirmada por el conductor',
+                          OBJETADA: 'El conductor no está de acuerdo', SIN_CONFIRMAR: 'El conductor no confirmó',
+                          ANULADA: 'Anulada' };
+const LIQ_CATEGORIA_GASTO = { combustible: 'Combustible', peaje: 'Peaje', parqueadero: 'Parqueadero',
+                              lavado: 'Lavado', otro: 'Otro' };
+
+/** El título del modal y si se ofrece «Reconciliar» (solo con una ruta abierta). */
+function _liqTituloModal(titulo, conReconciliar) {
+  const t = document.getElementById('liq-modal-titulo');
+  if (t) t.textContent = titulo;
+  const b = document.getElementById('liq-btn-reconciliar');
+  if (b) b.style.display = conReconciliar ? '' : 'none';
+}
+
+/** Un número tecleado con puntos de miles («2.000.000») o sin ellos. */
+function _liqNum(texto) {
+  const limpio = String(texto == null ? '' : texto).replace(/[^0-9]/g, '');
+  return limpio === '' ? null : Number(limpio);
+}
+
+/** La caja de la ruta en la tarjeta de la lista. */
+function _liqChipCaja(r) {
+  const c = r.caja || {};
+  if (c.estado === 'RECIBIDA') {
+    const dif = Number(c.diferencia || 0);
+    return `<div style="margin-top:6px;font-size:var(--fs-xs);font-weight:700;color:${dif < 0 ? 'var(--err-tx)' : 'var(--ok-tx)'};">
+      Caja recibida${dif ? ` · ${dif < 0 ? 'faltaron' : 'sobraron'} ${esc(_liqFmt(Math.abs(dif)))}` : ' · cuadró'} (${esc(_liqPalabra(LIQ_ESTADO_ACTA, c.acta_estado))})</div>`;
+  }
+  if (c.estado === 'FALTA') {
+    return `<div style="margin-top:6px;font-size:var(--fs-xs);font-weight:700;color:var(--warn-tx);">
+      Falta recibir la caja (${esc(_liqFmt(c.efectivo))} en efectivo)</div>`;
+  }
+  return '';
+}
+
+/** «RC (2), NC (1)» de lo que falta en Siesa. */
+function _liqFaltaTexto(falta) {
+  const cuenta = {};
+  (falta || []).forEach(f => (f.documentos || []).forEach(d => { cuenta[d] = (cuenta[d] || 0) + 1; }));
+  return Object.entries(cuenta).map(([d, n]) => `${LIQ_DOC_PALABRA[d] || d} (${n})`).join(', ');
+}
+
+/** El estado del pago bancario de una parada, en el detalle. */
+function _liqChipBanco(rec) {
+  if (!rec.estado_banco) return '';
+  const color = rec.estado_banco === 'VERIFICADA' ? 'var(--ok-tx)'
+    : rec.estado_banco === 'NO_ENCONTRADA' ? 'var(--err-tx)' : 'var(--warn-tx)';
+  return `<div style="font-size:var(--fs-xs);font-weight:700;color:${color};">${esc(_liqPalabra(LIQ_ESTADO_BANCO, rec.estado_banco))}</div>`;
+}
+
+/** El bloque de liquidar del detalle: la caja primero, después un botón. */
+function _liqBloqueLiquidar(ruta, totalCobrado) {
+  const caja = (_liqDetalleRuta && _liqDetalleRuta.caja) || {};
+  const falta = caja.estado === 'FALTA';
+  const avisoCaja = falta ? `
+    <div style="margin-bottom:12px;padding:10px;background:var(--warn-bg);border:1px solid var(--warn-brd);border-radius:8px;">
+      <div style="font-size:var(--fs-sm);font-weight:800;color:var(--warn-tx);">Falta recibir la caja del conductor</div>
+      <div style="font-size:var(--fs-xs);color:var(--tx2);margin:4px 0 8px;">Cuente el efectivo (${esc(_liqFmt(caja.efectivo))} declarado en esta ruta) y registre el acta: la ruta se liquida después.</div>
+      ${_liqPermiso('recibir_caja') ? `<button onclick="liqAbrirCajaConductor(${esc(ruta.conductor_id)})"
+        style="width:100%;padding:12px;background:var(--pm-fill);color:#fff;border:none;border-radius:8px;font-size:var(--fs-sm);font-weight:800;cursor:pointer;">Recibir la caja de ${esc(ruta.conductor_nombre || 'el conductor')}</button>` : ''}
+    </div>` : (caja.estado === 'RECIBIDA' ? `
+    <div style="margin-bottom:12px;font-size:var(--fs-xs);color:var(--ok-tx);font-weight:700;">Caja recibida en el acta #${esc(caja.acta_id)}${caja.diferencia ? ` · diferencia ${esc(_liqFmt(caja.diferencia))}` : ''}</div>` : '');
+  const bloqueado = falta && !_liqPermiso('liquidar_sin_acta');
+  return `
+    <div style="background:var(--bg-s);border:2px solid var(--pm);border-radius:12px;padding:16px;margin-top:16px;">
+      ${avisoCaja}
+      <div style="display:flex;justify-content:space-between;font-size:var(--fs-sm);margin-bottom:6px;">
+        <span style="color:var(--tx3);">Total cobrado:</span>
+        <span style="color:var(--tx);font-weight:700;">${esc(_liqFmt(totalCobrado))}</span>
+      </div>
+      <div style="font-size:var(--fs-xs);color:var(--tx3);margin-bottom:12px;">
+        Al liquidar, todo lo que está listo sale en cola para Siesa (recibos de caja, retenciones). Lo que espera a bodega o al banco se ve abajo.
+      </div>
+      <button ${bloqueado ? 'disabled' : `onclick="liqLiquidarWMS(${esc(ruta.id)})"`}
+        style="width:100%;padding:16px;background:${bloqueado ? 'var(--bg)' : 'var(--pm-fill)'};color:${bloqueado ? 'var(--tx3)' : '#fff'};border:${bloqueado ? '1px solid var(--brd)' : 'none'};border-radius:10px;font-size:var(--fs-md);font-weight:800;cursor:${bloqueado ? 'not-allowed' : 'pointer'};">
+        ${bloqueado ? '🔒 Liquidar — primero la caja' : '💰 Liquidar ruta'}
+      </button>
+    </div>`;
+}
+
+/** Sin acta de caja: quien liquida la recibe; solo el administrador liquida sin
+ *  ella, con motivo (queda en la bitácora). `null` = no se liquida. */
+async function liqSinActa(txt) {
+  const msg = esc(txt.replace(/^caja_sin_acta:\s*/, ''));
+  if (!_liqPermiso('liquidar_sin_acta')) {
+    alerta(txt.replace(/^caja_sin_acta:\s*/, ''), 'error');
+    return null;
+  }
+  const motivo = await _modalTexto('Liquidar sin acta de caja',
+    msg + '<br><br>Solo el administrador puede liquidar sin que nadie cuente la plata. Escriba el motivo (queda en la bitácora):',
+    { obligatorio: true, textoConfirmar: 'Liquidar sin acta' });
+  return motivo && motivo.trim() ? motivo.trim() : null;
+}
+
+/** Qué quedó después de liquidar. */
+function _liqTextoLiquidada(r) {
+  const s = r.siesa || {};
+  const partes = [];
+  if (s.rc_encolados) partes.push(`${s.rc_encolados} recibo(s) de caja`);
+  if (s.dc_encolados) partes.push(`${s.dc_encolados} retención(es)`);
+  if (s.nc_encolados) partes.push(`${s.nc_encolados} devolución(es) hacia su nota crédito`);
+  let t = 'Ruta liquidada.' + (partes.length ? ` En cola para Siesa: ${partes.join(', ')}.` : '');
+  if (r.siesa_error) t += ` El envío a Siesa no se pudo encolar (${r.siesa_error}): la ruta sigue en la lista hasta que salga.`;
+  else if ((r.falta_en_siesa || []).length) t += ` Falta en Siesa: ${_liqFaltaTexto(r.falta_en_siesa)}.`;
+  return t;
+}
+
+// ── Caja por recibir ────────────────────────────────────────────────────────
+
+async function liqCargarCaja() {
+  const el = document.getElementById('liq-caja');
+  if (!el) return;
+  try {
+    _liqCaja = await get('/api/rutas/caja/por-recibir');
+  } catch (e) {
+    el.innerHTML = `<div style="margin-bottom:12px;font-size:var(--fs-xs);color:var(--err-tx);">No se pudo leer la caja por recibir: ${esc(e.message)}</div>`;
+    return;
+  }
+  el.innerHTML = _liqBloqueCaja(_liqCaja);
+}
+
+function _liqBloqueCaja(d) {
+  const conds = (d && d.conductores) || [];
+  const actas = (d && d.actas_por_responder) || [];
+  if (!conds.length && !actas.length) return '';
+  const puede = !!(d.permisos && d.permisos.recibir_caja);
+  const filaConductor = (c, i) => {
+    const b = (c.otros_medios || {}).BANCARIO || {};
+    const det = [`${c.rutas.length} ruta${c.rutas.length !== 1 ? 's' : ''}`];
+    if (c.gastos && c.gastos.length) det.push(`gastos por decidir ${_liqFmt(c.gastos_total)}`);
+    if (b.n) det.push(`${b.n} transferencia${b.n !== 1 ? 's' : ''} (${_liqFmt(b.valor)}) se verifican en el banco`);
+    return `
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:8px 0;border-top:1px solid var(--brd);flex-wrap:wrap;">
+        <div style="min-width:0;">
+          <div style="font-size:var(--fs-sm);font-weight:700;color:var(--tx);overflow-wrap:anywhere;">${esc(c.conductor || 'Conductor')} · ${esc(_liqFmt(c.efectivo))} en efectivo</div>
+          <div style="font-size:var(--fs-xs);color:var(--tx3);">${esc(det.join(' · '))}</div>
+        </div>
+        ${puede ? `<button onclick="liqAbrirCaja(${i})"
+          style="padding:10px 14px;background:var(--pm-fill);color:#fff;border:none;border-radius:8px;font-size:var(--fs-sm);font-weight:800;cursor:pointer;">Recibir caja</button>` : ''}
+      </div>`;
+  };
+  const filaActa = (a, i) => `
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:8px 0;border-top:1px solid var(--brd);flex-wrap:wrap;">
+      <div style="min-width:0;font-size:var(--fs-xs);color:var(--tx2);">
+        <b style="color:var(--tx);">Acta #${esc(a.id)} · ${esc(a.conductor || 'Conductor')}</b>
+        · ${a.diferencia ? `diferencia ${esc(_liqFmt(a.diferencia))}` : 'cuadró'} · ${esc(_liqHace(a.horas))} sin respuesta del conductor
+      </div>
+      ${puede ? `<div style="display:flex;gap:6px;flex-wrap:wrap;">
+        <button onclick="liqActaSinConfirmar(${i})" style="padding:6px 10px;background:var(--bg);color:var(--warn-tx);border:1px solid var(--warn-brd);border-radius:8px;font-size:var(--fs-xs);font-weight:700;cursor:pointer;">No confirmó…</button>
+        <button onclick="liqAnularActa(${i})" style="padding:6px 10px;background:var(--bg);color:var(--tx2);border:1px solid var(--brd);border-radius:8px;font-size:var(--fs-xs);font-weight:700;cursor:pointer;">Anular…</button>
+      </div>` : ''}
+    </div>`;
+  return `
+    <div style="margin-bottom:12px;padding:12px;background:var(--bg-s);border:1px solid var(--brd);border-radius:10px;">
+      ${conds.length ? `<div style="font-size:var(--fs-sm);font-weight:800;color:var(--tx);">Caja por recibir (${esc(conds.length)})</div>
+      <div style="font-size:var(--fs-xs);color:var(--tx3);margin-bottom:4px;">Cuente la plata antes de liquidar: la ruta no se liquida sin el acta.</div>
+      ${conds.map(filaConductor).join('')}` : ''}
+      ${actas.length ? `<div style="font-size:var(--fs-sm);font-weight:800;color:var(--tx);margin-top:${conds.length ? 12 : 0}px;">Actas sin respuesta del conductor (${esc(actas.length)})</div>
+      ${actas.map(filaActa).join('')}` : ''}
+    </div>`;
+}
+
+function liqAbrirCaja(i) {
+  const c = ((_liqCaja && _liqCaja.conductores) || [])[i];
+  if (!c) return;
+  return liqAbrirCajaConductor(c.conductor_id);
+}
+
+async function liqAbrirCajaConductor(conductorId) {
+  const modal = document.getElementById('liq-modal-ruta');
+  const body = document.getElementById('liq-modal-body');
+  if (!modal || !body) return;
+  modal.style.display = 'block';
+  _liqTituloModal('Recibir la caja', false);
+  body.innerHTML = '<div style="text-align:center;padding:40px;color:var(--tx3);">Cargando lo que tiene que entregar...</div>';
+  try {
+    const d = await get(`/api/rutas/caja/conductor/${Number(conductorId)}`);
+    _liqActa = { datos: d, gastos: (d.gastos || []).map(() => ({ aceptado: null, motivo: '' })) };
+    _liqRenderActa();
+  } catch (e) {
+    body.innerHTML = `<div style="text-align:center;padding:40px;color:var(--err-tx);">No se pudo leer la caja: ${esc(e.message)}</div>`;
+  }
+}
+
+function _liqRenderActa() {
+  const body = document.getElementById('liq-modal-body');
+  if (!body || !_liqActa) return;
+  const d = _liqActa.datos;
+  const puede = !(d.permisos && d.permisos.recibir_caja === false);
+  const b = (d.otros_medios || {}).BANCARIO || {};
+  const t = (d.otros_medios || {}).TARJETA || {};
+  const ch = (d.otros_medios || {}).CHEQUE || {};
+  const rutas = (d.rutas || []).map(r => `Ruta #${esc(r.ruta_id)} · ${esc(r.nombre || '')} · ${esc(_liqFmt(r.efectivo))} (${esc(r.paradas_efectivo)} parada${r.paradas_efectivo !== 1 ? 's' : ''})`).join('<br>');
+  const gastos = (d.gastos || []).map((g, j) => {
+    const dec = _liqActa.gastos[j] || {};
+    const fotos = (g.fotos || []).map((_, k) => `<button onclick="liqActaVerFoto(${j}, ${k})"
+      style="padding:4px 8px;background:var(--bg);color:var(--info-tx);border:1px solid var(--info-brd);border-radius:6px;font-size:var(--fs-xs);cursor:pointer;">Ver recibo${g.fotos.length > 1 ? ` ${k + 1}` : ''}</button>`).join(' ');
+    const sel = (v) => dec.aceptado === v;
+    return `
+      <div style="padding:8px 0;border-top:1px solid var(--brd);">
+        <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;">
+          <span style="font-size:var(--fs-sm);color:var(--tx);min-width:0;overflow-wrap:anywhere;">${esc(_liqPalabra(LIQ_CATEGORIA_GASTO, g.categoria))} · ${esc(g.proveedor || '')} · ${esc(g.placa || '')} · ${esc(g.fecha || '')}</span>
+          <b style="font-size:var(--fs-sm);white-space:nowrap;">${esc(_liqFmt(g.valor))}</b>
+        </div>
+        <div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap;align-items:center;">
+          ${fotos || '<span style="font-size:var(--fs-xs);color:var(--warn-tx);">Sin foto del recibo</span>'}
+          ${puede ? `<button onclick="liqActaGasto(${j}, 1)" style="padding:6px 10px;border-radius:6px;font-size:var(--fs-xs);font-weight:700;cursor:pointer;background:${sel(true) ? 'var(--ok-bg)' : 'var(--bg)'};color:var(--ok-tx);border:1px solid var(--ok-brd);">${sel(true) ? '✓ ' : ''}Aceptar</button>
+          <button onclick="liqActaGasto(${j}, 0)" style="padding:6px 10px;border-radius:6px;font-size:var(--fs-xs);font-weight:700;cursor:pointer;background:${sel(false) ? 'var(--err-bg)' : 'var(--bg)'};color:var(--err-tx);border:1px solid var(--err-brd);">${sel(false) ? '✓ ' : ''}Rechazar</button>` : ''}
+        </div>
+        ${sel(false) ? `<input id="liq-acta-gmot-${j}" value="${esc(dec.motivo || '')}" oninput="liqActaMotivoGasto(${j})" placeholder="¿Por qué se rechaza? (queda en el acta)"
+          style="width:100%;box-sizing:border-box;margin-top:6px;padding:8px;background:var(--bg);border:1px solid var(--brd);border-radius:6px;color:var(--tx);font-size:var(--fs-sm);">` : ''}
+        <div id="liq-acta-gfoto-${j}"></div>
+      </div>`;
+  }).join('');
+  body.innerHTML = `
+    <div style="margin-bottom:12px;">
+      <div style="font-size:var(--fs-md);font-weight:800;color:var(--tx);">${esc(d.conductor || 'Conductor')}</div>
+      <div style="font-size:var(--fs-xs);color:var(--tx3);line-height:1.5;">${rutas || 'Sin rutas entregadas por recibir'}</div>
+    </div>
+    <div style="padding:12px;background:var(--bg-s);border:1px solid var(--brd);border-radius:10px;margin-bottom:12px;">
+      <div style="display:flex;justify-content:space-between;font-size:var(--fs-sm);"><span>Efectivo que declaró cobrado</span><b>${esc(_liqFmt(d.efectivo))}</b></div>
+      ${b.n ? `<div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:4px;">Transferencias: ${esc(b.n)} por ${esc(_liqFmt(b.valor))} — no se cuentan acá, se verifican en el banco${b.por_verificar ? ` (${esc(b.por_verificar)} sin ver)` : ''}.</div>` : ''}
+      ${t.n ? `<div style="font-size:var(--fs-xs);color:var(--tx3);">Tarjeta: ${esc(t.n)} por ${esc(_liqFmt(t.valor))} — el voucher lo liquida la adquirente.</div>` : ''}
+      ${ch.n ? `<div style="font-size:var(--fs-xs);color:var(--tx3);">Cheques: ${esc(ch.n)} por ${esc(_liqFmt(ch.valor))} — se reciben aparte.</div>` : ''}
+      ${(d.cobro_menor_que_factura || []).length ? `<div style="font-size:var(--fs-xs);color:var(--warn-tx);margin-top:4px;">${esc(d.cobro_menor_que_factura.length)} parada(s) cobraron menos de lo esperado: eso lo mide la reconciliación, no esta caja.</div>` : ''}
+    </div>
+    ${gastos ? `<div style="margin-bottom:12px;">
+      <div style="font-size:var(--fs-sm);font-weight:800;color:var(--tx);">Gastos que pagó con el efectivo del recaudo</div>
+      <div style="font-size:var(--fs-xs);color:var(--tx3);">No se descuentan solos: acepte o rechace cada uno.</div>
+      ${gastos}</div>` : ''}
+    <label for="liq-acta-contado" style="font-size:var(--fs-sm);font-weight:800;color:var(--tx);">Efectivo contado</label>
+    <input id="liq-acta-contado" type="text" inputmode="numeric" pattern="[0-9]*" autocomplete="off" ${puede ? '' : 'disabled'}
+      oninput="liqActaRecalcular()" placeholder="$0"
+      style="width:100%;box-sizing:border-box;margin:6px 0 10px;padding:14px;font-size:var(--fs-xl);font-weight:800;text-align:right;background:var(--bg);border:2px solid var(--brd);border-radius:10px;color:var(--tx);">
+    <div id="liq-acta-resumen"></div>
+    <div id="liq-acta-motivo-box" style="display:none;margin-top:8px;">
+      <label for="liq-acta-motivo" style="font-size:var(--fs-xs);color:var(--tx2);">¿Qué dijo el conductor? (obligatorio con diferencia: queda a su cargo en el acta)</label>
+      <textarea id="liq-acta-motivo" rows="2" style="width:100%;box-sizing:border-box;margin-top:4px;padding:8px;background:var(--bg);border:1px solid var(--brd);border-radius:8px;color:var(--tx);font-size:var(--fs-sm);font-family:inherit;"></textarea>
+    </div>
+    ${puede ? `<button onclick="conBotonOcupado(event, () => liqActaRegistrar())"
+      style="width:100%;margin-top:14px;padding:16px;background:var(--pm-fill);color:#fff;border:none;border-radius:10px;font-size:var(--fs-md);font-weight:800;cursor:pointer;">Registrar el acta</button>` : ''}`;
+  liqActaRecalcular();
+}
+
+/** Lo que el acta va a decir, mientras se teclea: los totales cuadran a la vista. */
+function liqActaRecalcular() {
+  if (!_liqActa) return;
+  const d = _liqActa.datos;
+  const input = document.getElementById('liq-acta-contado');
+  const contado = input ? _liqNum(input.value) : null;
+  const aceptados = (d.gastos || []).reduce((s, g, j) => s + ((_liqActa.gastos[j] || {}).aceptado === true ? Number(g.valor || 0) : 0), 0);
+  const esperado = Number(d.efectivo || 0);
+  const res = document.getElementById('liq-acta-resumen');
+  const caja = document.getElementById('liq-acta-motivo-box');
+  if (contado === null) {
+    if (res) res.innerHTML = `<div style="font-size:var(--fs-xs);color:var(--tx3);">Escriba lo que contó: ${esc(_liqFmt(esperado))} esperado.</div>`;
+    if (caja) caja.style.display = 'none';
+    return;
+  }
+  const dif = contado + aceptados - esperado;
+  const color = dif === 0 ? 'var(--ok-tx)' : 'var(--err-tx)';
+  const palabra = dif === 0 ? 'Cuadra' : (dif < 0 ? 'Faltan' : 'Sobran');
+  if (res) res.innerHTML = `
+    <div style="padding:10px;border-radius:8px;background:var(--bg-s);border:1px solid var(--brd);font-size:var(--fs-sm);line-height:1.6;">
+      <div style="display:flex;justify-content:space-between;"><span>Contado</span><b>${esc(_liqFmt(contado))}</b></div>
+      <div style="display:flex;justify-content:space-between;"><span>+ Gastos aceptados</span><b>${esc(_liqFmt(aceptados))}</b></div>
+      <div style="display:flex;justify-content:space-between;"><span>− Efectivo esperado</span><b>${esc(_liqFmt(esperado))}</b></div>
+      <div style="display:flex;justify-content:space-between;border-top:1px solid var(--brd);margin-top:4px;padding-top:4px;color:${color};font-weight:800;">
+        <span>${esc(palabra)}</span><span>${esc(_liqFmt(Math.abs(dif)))}</span></div>
+    </div>`;
+  if (caja) caja.style.display = dif === 0 ? 'none' : 'block';
+}
+
+function liqActaGasto(j, acepta) {
+  if (!_liqActa || !_liqActa.gastos[j]) return;
+  const valor = (document.getElementById('liq-acta-contado') || {}).value;
+  _liqActa.gastos[j].aceptado = acepta === 1;
+  _liqRenderActa();
+  const input = document.getElementById('liq-acta-contado');
+  if (input && valor != null) { input.value = valor; liqActaRecalcular(); }
+}
+
+function liqActaMotivoGasto(j) {
+  const el = document.getElementById(`liq-acta-gmot-${j}`);
+  if (_liqActa && _liqActa.gastos[j] && el) _liqActa.gastos[j].motivo = el.value;
+}
+
+async function liqActaVerFoto(j, k) {
+  const g = ((_liqActa && _liqActa.datos.gastos) || [])[j];
+  const el = document.getElementById(`liq-acta-gfoto-${j}`);
+  if (!g || !el) return;
+  el.innerHTML = '<div style="font-size:var(--fs-xs);color:var(--tx3);">Cargando la foto...</div>';
+  try {
+    const f = await get(`/api/rutas/caja/gastos/foto/${Number(g.fotos[k])}`);
+    el.innerHTML = f.foto
+      ? `<img src="${esc(f.foto)}" alt="Recibo del gasto" style="max-width:100%;margin-top:6px;border-radius:8px;border:1px solid var(--brd);">`
+      : `<div style="font-size:var(--fs-xs);color:var(--warn-tx);">${esc(f.motivo || 'La foto no está disponible')}</div>`;
+  } catch (e) {
+    el.innerHTML = `<div style="font-size:var(--fs-xs);color:var(--err-tx);">No se pudo traer la foto: ${esc(e.message)}</div>`;
+  }
+}
+
+async function liqActaRegistrar() {
+  if (!_liqActa) return;
+  const d = _liqActa.datos;
+  const contado = _liqNum((document.getElementById('liq-acta-contado') || {}).value);
+  if (contado === null) { alerta('Escriba el efectivo que contó', 'advertencia'); return; }
+  const sinDecidir = _liqActa.gastos.filter(g => g.aceptado === null).length;
+  if (sinDecidir) { alerta(`Falta decidir ${sinDecidir} gasto(s): acéptelos o rechácelos`, 'advertencia'); return; }
+  if (_liqActa.gastos.some(g => g.aceptado === false && !String(g.motivo || '').trim())) {
+    alerta('Un gasto rechazado necesita su motivo', 'advertencia'); return;
+  }
+  const motivo = String((document.getElementById('liq-acta-motivo') || {}).value || '').trim();
+  const cuerpo = {
+    contado_efectivo: contado, esperado_visto: d.efectivo, motivo_diferencia: motivo || null,
+    gastos: (d.gastos || []).map((g, j) => ({ gasto_id: g.gasto_id, aceptado: _liqActa.gastos[j].aceptado,
+                                             motivo: _liqActa.gastos[j].motivo || null })),
+  };
+  let r;
+  try {
+    r = await post(`/api/rutas/caja/conductor/${Number(d.conductor_id)}/acta`, cuerpo);
+  } catch (e) {
+    const txt = String((e && e.message) || '');
+    if (txt.startsWith('diferencia_sin_motivo')) {
+      const box = document.getElementById('liq-acta-motivo-box');
+      if (box) box.style.display = 'block';
+      alerta('Con diferencia hace falta el motivo: escriba qué dijo el conductor', 'advertencia');
+    } else {
+      alerta(txt || 'No se pudo registrar el acta', 'error');
+    }
+    return;
+  }
+  const a = r.acta || {};
+  const rutas = (a.detalle && a.detalle.rutas) || d.rutas || [];
+  const body = document.getElementById('liq-modal-body');
+  if (body) body.innerHTML = `
+    <div style="padding:14px;border-radius:10px;background:${a.diferencia ? 'var(--warn-bg)' : 'var(--ok-bg)'};border:1px solid ${a.diferencia ? 'var(--warn-brd)' : 'var(--ok-brd)'};">
+      <div style="font-size:var(--fs-md);font-weight:800;color:var(--tx);">Acta #${esc(a.id)} registrada</div>
+      <div style="font-size:var(--fs-sm);color:var(--tx2);margin-top:4px;">${a.diferencia
+        ? `${a.diferencia < 0 ? 'Faltaron' : 'Sobraron'} ${esc(_liqFmt(Math.abs(a.diferencia)))}: queda a cargo de ${esc(a.conductor || 'el conductor')}.`
+        : 'La caja cuadró.'} El conductor la confirma en su teléfono.</div>
+    </div>
+    <div style="font-size:var(--fs-sm);font-weight:800;color:var(--tx);margin:14px 0 6px;">Ahora liquide sus rutas</div>
+    ${rutas.map(x => `<button onclick="liqAbrirRuta(${esc(x.ruta_id)})"
+      style="width:100%;margin-bottom:6px;padding:12px;background:var(--bg-s);color:var(--tx);border:1px solid var(--brd);border-radius:8px;font-size:var(--fs-sm);font-weight:700;cursor:pointer;text-align:left;">Ruta #${esc(x.ruta_id)} · ${esc(_liqFmt(x.efectivo))} →</button>`).join('')}`;
+  _liqActa = null;
+  liqCargarDashboard();
+}
+
+async function liqActaSinConfirmar(i) {
+  const a = ((_liqCaja && _liqCaja.actas_por_responder) || [])[i];
+  if (!a) return;
+  const motivo = await _modalTexto('El conductor no confirmó el acta',
+    `Acta #${esc(a.id)} de ${esc(a.conductor || 'el conductor')}. ¿Por qué no la confirmó? (queda en la bitácora)`,
+    { obligatorio: true, textoConfirmar: 'Registrar' });
+  if (!motivo || !motivo.trim()) return;
+  try {
+    await post(`/api/rutas/caja/actas/${Number(a.id)}/sin-confirmar`, { motivo: motivo.trim() });
+    alerta('Quedó registrado que el conductor no confirmó', 'exito');
+  } catch (e) { alerta(e.message || 'No se pudo registrar', 'error'); }
+  liqCargarCaja();
+}
+
+async function liqAnularActa(i) {
+  const a = ((_liqCaja && _liqCaja.actas_por_responder) || [])[i];
+  if (!a) return;
+  const motivo = await _modalTexto('Anular el acta',
+    `El acta #${esc(a.id)} queda sin efecto y la caja de ${esc(a.conductor || 'el conductor')} vuelve a estar por recibir. ¿Por qué? (queda en la bitácora)`,
+    { obligatorio: true, textoConfirmar: 'Anular' });
+  if (!motivo || !motivo.trim()) return;
+  try {
+    await post(`/api/rutas/caja/actas/${Number(a.id)}/anular`, { motivo: motivo.trim() });
+    alerta('Acta anulada', 'exito');
+  } catch (e) { alerta(e.message || 'No se pudo anular', 'error'); }
+  liqCargarDashboard();
+}
+
+// ── Diferencias de caja por conductor (gerencia) ────────────────────────────
+
+function _liqRenderDiferenciasCaja(lista) {
+  const el = document.getElementById('liq-diferencias-caja');
+  if (!el) return;
+  if (!lista || !lista.length) { el.innerHTML = ''; return; }
+  el.innerHTML = `
+    <div class="tabla-card">
+      <div class="tabla-titulo">Diferencias de caja por conductor (rango)</div>
+      ${lista.map(g => `<div class="tabla-fila">
+        <span class="tabla-nombre">${esc(g.conductor || 'Conductor')} · ${esc(g.actas)} acta${g.actas !== 1 ? 's' : ''}${g.objetadas ? ` · ${esc(g.objetadas)} objetada(s)` : ''}${g.sin_confirmar ? ` · ${esc(g.sin_confirmar)} sin confirmar` : ''}</span>
+        <span style="color:${g.faltante ? 'var(--err-tx)' : 'var(--tx2)'};font-weight:700;">${g.faltante ? `faltó ${esc(_liqFmt(g.faltante))}` : 'sin faltante'}${g.sobrante ? ` · sobró ${esc(_liqFmt(g.sobrante))}` : ''}</span>
+      </div>`).join('')}
+      <p style="font-size:var(--fs-xs);color:var(--tx3);margin:8px 0 0;">El faltante queda a cargo del conductor en su acta. El sistema lo registra; no decide la sanción.</p>
+    </div>`;
+}
+
+// ── Transferencias por verificar ────────────────────────────────────────────
+
+async function liqCargarTransferencias() {
+  const el = document.getElementById('liq-lista-transferencias');
+  if (!el) return;
+  el.innerHTML = '<div style="text-align:center;padding:30px;color:var(--tx3);">Cargando...</div>';
+  try {
+    _liqTransferencias = await get('/api/rutas/transferencias/por-verificar');
+  } catch (e) {
+    el.innerHTML = `<div style="text-align:center;padding:30px;color:var(--err-tx);">No se pudo leer: ${esc(e.message)}</div>`;
+    return;
+  }
+  const lista = _liqTransferencias.transferencias || [];
+  if (!lista.length) {
+    el.innerHTML = '<div style="text-align:center;padding:40px;color:var(--tx3);">No hay transferencias por verificar.</div>';
+    return;
+  }
+  const puede = !!(_liqTransferencias.permisos && _liqTransferencias.permisos.verificar);
+  const aviso = _liqTransferencias.exige_verificacion === false
+    ? '<div style="margin-bottom:10px;font-size:var(--fs-xs);color:var(--warn-tx);">La verificación está apagada: los recibos de caja salen sin esperarla.</div>' : '';
+  el.innerHTML = aviso + lista.map((t, i) => _liqTransferenciaCard(t, i, puede)).join('');
+}
+
+function _liqTransferenciaCard(t, i, puede) {
+  const color = t.estado === 'NO_ENCONTRADA' ? 'var(--err-tx)' : 'var(--warn-tx)';
+  return `
+    <div class="tabla-card" style="margin-bottom:10px;">
+      <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;">
+        <div style="min-width:0;">
+          <div style="font-size:var(--fs-sm);font-weight:700;color:var(--tx);overflow-wrap:anywhere;">${esc(t.cliente || 'Cliente')} · ${esc(t.pedido || '—')}</div>
+          <div style="font-size:var(--fs-xs);color:var(--tx3);">${esc(_liqPalabra(LIQ_BANCO, t.forma_pago))} · ref. ${esc(t.referencia || 'sin referencia')} · ${esc(t.factura || 'sin factura')}</div>
+          <div style="font-size:var(--fs-xs);color:var(--tx3);">${esc(t.conductor || 'sin conductor')} · ruta #${esc(t.ruta_id)} · ${esc(_liqHoraBogota(t.fecha_cobro))} (${esc(_liqHace(t.horas))})</div>
+        </div>
+        <div style="text-align:right;">
+          <div style="font-size:var(--fs-md);font-weight:800;color:var(--tx);">${esc(_liqFmt(t.monto))}</div>
+          <div style="font-size:var(--fs-xs);font-weight:700;color:${color};">${esc(_liqPalabra(LIQ_ESTADO_BANCO, t.estado))}</div>
+        </div>
+      </div>
+      ${t.verificado_banco_nota ? `<div style="font-size:var(--fs-xs);color:var(--tx2);margin-top:4px;">Nota: ${esc(t.verificado_banco_nota)}</div>` : ''}
+      <div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap;">
+        ${t.tiene_foto ? `<button onclick="liqVerComprobante(${esc(t.recaudo_id)}, 'liq-tcomp-${i}')"
+          style="padding:8px 12px;background:var(--bg);color:var(--info-tx);border:1px solid var(--info-brd);border-radius:8px;font-size:var(--fs-xs);font-weight:700;cursor:pointer;">Ver comprobante</button>`
+          : '<span style="font-size:var(--fs-xs);color:var(--warn-tx);">El conductor no tomó foto del comprobante</span>'}
+        ${puede && !t.rc_salio ? `
+        <button onclick="liqVerificarTransferencia(${i}, 1)" style="padding:8px 12px;background:var(--ok-bg);color:var(--ok-tx);border:1px solid var(--ok-brd);border-radius:8px;font-size:var(--fs-xs);font-weight:700;cursor:pointer;">Sí está en el banco</button>
+        <button onclick="liqVerificarTransferencia(${i}, 0)" style="padding:8px 12px;background:var(--bg);color:var(--err-tx);border:1px solid var(--err-brd);border-radius:8px;font-size:var(--fs-xs);font-weight:700;cursor:pointer;">No aparece…</button>` : ''}
+      </div>
+      <div id="liq-tcomp-${i}"></div>
+    </div>`;
+}
+
+async function liqVerificarTransferencia(i, encontrada) {
+  const t = ((_liqTransferencias && _liqTransferencias.transferencias) || [])[i];
+  if (!t) return;
+  let nota = null;
+  if (encontrada !== 1) {
+    nota = await _modalTexto('La transferencia no aparece en el banco',
+      `${esc(t.cliente || 'Cliente')} · ${esc(_liqFmt(t.monto))} · ref. ${esc(t.referencia || 'sin referencia')}.<br>El recibo de caja no va a salir y la factura queda en cartera. ¿Qué se buscó en el extracto?`,
+      { obligatorio: true, textoConfirmar: 'No aparece' });
+    if (!nota || !nota.trim()) return;
+  }
+  try {
+    await post(`/api/rutas/recaudos/${Number(t.recaudo_id)}/verificar-banco`,
+               { encontrada: encontrada === 1, nota: nota ? nota.trim() : null });
+    alerta(encontrada === 1 ? 'Transferencia vista en el banco: el recibo de caja sale' : 'Quedó registrado que no apareció', 'exito');
+  } catch (e) { alerta(e.message || 'No se pudo registrar', 'error'); }
+  liqCargarTransferencias();
+}
+
+/** La foto del comprobante de una parada, pedida una por una (no viaja en la planilla). */
+async function liqVerComprobante(recaudoId, contenedorId) {
+  const el = document.getElementById(contenedorId);
+  if (!el) return;
+  el.innerHTML = '<div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:6px;">Cargando el comprobante...</div>';
+  try {
+    const f = await get(`/api/rutas/recaudos/${Number(recaudoId)}/comprobante`);
+    el.innerHTML = f.foto
+      ? `<img src="${esc(f.foto)}" alt="Comprobante del pago" style="max-width:100%;margin-top:6px;border-radius:8px;border:1px solid var(--brd);">`
+      : '<div style="font-size:var(--fs-xs);color:var(--warn-tx);margin-top:6px;">El conductor no tomó foto del comprobante.</div>';
+  } catch (e) {
+    el.innerHTML = `<div style="font-size:var(--fs-xs);color:var(--err-tx);margin-top:6px;">No se pudo traer el comprobante: ${esc(e.message)}</div>`;
+  }
 }

@@ -49,6 +49,10 @@ class RutaDespacho(db.Model):
     #: el cuadre de bultos de la ruta no puede ser exacto.
     llegada_cerrada_at     = db.Column(db.DateTime, nullable=True)
     llegada_cerrada_por_id = db.Column(db.Integer, db.ForeignKey('usuarios.id'), nullable=True)
+    #: El acta de entrega de caja que recibió la plata de esta ruta (m051liqcaja).
+    #: `NULL` = el conductor todavía no la entregó — su efectivo sigue «en
+    #: poder». Solo la escriben `caja_conductor.registrar_acta` y `anular_acta`.
+    entrega_caja_id = db.Column(db.Integer, db.ForeignKey('entregas_caja.id'), nullable=True)
 
     bultos = db.relationship('Bulto', backref='ruta', lazy=True)
 
@@ -123,6 +127,7 @@ class RutaDespacho(db.Model):
             'numero_guia':        self.numero_guia or '',
             'fecha_cierre':       self.fecha_cierre.isoformat() if self.fecha_cierre else None,
             'fecha_entregada':    self.fecha_entregada.isoformat() if self.fecha_entregada else None,
+            'entrega_caja_id':    getattr(self, 'entrega_caja_id', None),
         }
         if include_bultos:
             grupos = {}

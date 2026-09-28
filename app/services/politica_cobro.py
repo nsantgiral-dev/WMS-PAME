@@ -746,6 +746,52 @@ def lineas_de_aviso_dc() -> list:
             f'desde Liquidación, «Enviar todo a Siesa» de la ruta.']
 
 
+#: Una ruta liquidada con un cobro sin recibo encolado pasado esto ya no es
+#: «saliendo»: alguien lo olvidó (QA: 5 cobros, $235.402, nunca encolados).
+HORAS_COBRO_SIN_RC = 2
+
+
+def cobros_sin_recibo_encolado(ahora=None, horas: int = HORAS_COBRO_SIN_RC) -> list:
+    """Paradas cobradas de rutas LIQUIDADAS hace más de `horas` cuyo recibo de
+    caja todavía falta encolar (`documentos_pendientes` dice «RC»). Desde el
+    corte. Lo que espera la verificación del banco no está acá: su RC ya está
+    en la cola."""
+    from datetime import datetime as _dt, timedelta as _td
+    from app.models.recaudo_entrega import RecaudoEntrega
+    from app.models.ruta_despacho import EstadoFinancieroRuta, RutaDespacho
+    from app.services import corte
+    ahora = ahora or _dt.utcnow()
+    q = (RecaudoEntrega.query.join(RutaDespacho, RutaDespacho.id == RecaudoEntrega.ruta_id)
+         .filter(RutaDespacho.estado_financiero == EstadoFinancieroRuta.LIQUIDADA,
+                 RutaDespacho.liquidada_en.isnot(None),
+                 RutaDespacho.liquidada_en <= ahora - _td(hours=horas),
+                 RecaudoEntrega.monto_cobrado > 0,
+                 (RecaudoEntrega.siesa_rc_triggered.is_(None))
+                 | (RecaudoEntrega.siesa_rc_triggered.is_(False))))
+    ini = corte.inicio_auditoria()
+    if ini is not None:
+        q = q.filter(RutaDespacho.liquidada_en >= ini)
+    out = []
+    for r in q.all():
+        if 'RC' not in documentos_pendientes(r, r.tarea):
+            continue
+        out.append({'ruta_id': r.ruta_id, 'recaudo_id': r.id,
+                    'pedido': getattr(r.tarea, 'numero_pedido_siesa', None),
+                    'monto': float(r.monto_cobrado or 0)})
+    return out
+
+
+def lineas_de_aviso_rc() -> list:
+    """El resumen diario: cobros de rutas liquidadas sin su recibo encolado."""
+    lista = cobros_sin_recibo_encolado()
+    if not lista:
+        return []
+    total = sum(x['monto'] for x in lista)
+    det = '; '.join(f"ruta {x['ruta_id']} · {x['pedido'] or '—'}" for x in lista[:10])
+    return [f'🚨 {len(lista)} cobro(s) de rutas liquidadas sin recibo de caja encolado '
+            f'(${total:,.0f}): {det}. Liquidación → la ruta → «Enviar todo a Siesa».']
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 # 7 · Las fechas del recibo de caja (142888) — regla del dueño, 2026-09-25
 # ═════════════════════════════════════════════════════════════════════════════

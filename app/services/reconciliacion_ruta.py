@@ -22,16 +22,16 @@ transferencia y cheque, y si el control cubre una parte, el modo de fallo se
 muda al medio de pago que nadie verifica. Efectivo contado **más** comprobantes
 de transferencia **más** cheques físicos.
 
-## Hoy esa columna no tiene fuente, y eso se declara
+## La fuente de esa columna (m051liqcaja, 2026-09-27)
 
-No hay campo donde se registre el conteo del cierre. Este módulo **no lo
-inventa**: lo reporta como `capturado: False`. Un cero fabricado ahí sería una
-alarma de faltante total; un número derivado de las otras columnas sería la
-propia cifra que se quiere contrastar, verificándose contra sí misma.
-
-Mientras no exista, la reconciliación cubre tres de cuatro tramos **y lo dice**.
-Es la misma regla del denominador visible: «0 hallazgos» y «no se midió» no
-pueden verse igual.
+El efectivo lo cuenta quien recibe la caja del conductor (el acta de
+`caja_conductor`); las transferencias las ve en el banco quien concilia
+(`verificacion_banco`). Sin acta, la columna de una ruta con efectivo sigue
+`capturado: False` — **no se inventa**: un cero ahí sería una alarma de
+faltante total. Una diferencia de caja entra a la columna (el acta contó
+menos); si el acta cubre varias rutas, se reparte y se declara
+(`prorrateado`). Tarjeta y cheque no los verifica nadie todavía: se cuentan en
+`no_verificables`, no se dan por vistos.
 
 ## La vara
 
@@ -247,15 +247,13 @@ def reconciliar(ruta_id: int) -> dict:
                     'tramo': 'cobro_incompleto',
                 })
 
-    #: Sin fuente. **No se deriva de las otras**: una columna calculada desde
-    #: lo que quiere contrastar no contrasta nada.
-    cols['recaudo_verificado'] = {
-        'n': None, 'valor': None, 'capturado': False,
-        'nota': 'No hay captura del conteo de cierre. Efectivo contado + '
-                'comprobantes de transferencia + cheques físicos. Mientras no '
-                'exista, el tramo recibo→verificado no se puede medir.',
-    }
+    # La cuarta columna (m051liqcaja): la plata que una persona vio. El
+    # efectivo, en el acta de entrega de caja (`caja_conductor`); lo
+    # bancario, en el banco (`verificacion_banco`). Tarjeta y cheque no los
+    # verifica nadie todavía: se cuentan aparte, no se dan por vistos.
+    cols['recaudo_verificado'] = _recaudo_verificado(ruta, recaudos, tareas)
 
+    fugas = []
     fugas = []
     for tramo_id, desde, hasta, causa in TRAMOS:
         a, b = cols[desde], cols[hasta]
@@ -299,4 +297,49 @@ def reconciliar(ruta_id: int) -> dict:
             'tramos_medibles': sum(1 for f in fugas if f['medible']),
             'tramos_totales': len(TRAMOS),
         },
+    }
+
+
+def _recaudo_verificado(ruta, recaudos, tareas) -> dict:
+    """La plata que una persona vio, para las paradas que debían cobrarse."""
+    from app.services import caja_conductor as _cc
+    from app.services import verificacion_banco as _vb
+    acta = _cc.verificado_de_ruta(ruta)
+    hay_efectivo = any(_cc.efectivo_de_recaudo(r) > 0 for r in recaudos)
+    if hay_efectivo and acta is None:
+        return {
+            'n': None, 'valor': None, 'capturado': False,
+            'nota': 'Falta el acta de entrega de caja de esta ruta: nadie contó el efectivo '
+                    'todavía. Mientras no exista, el tramo recibo→verificado no se mide.',
+        }
+    n, valor = 0, 0.0
+    por_verificar, no_encontradas, no_verificables = 0, 0, 0
+    for r in recaudos:
+        if not _debia_cobrarse(r, tareas.get(r.tarea_id)):
+            continue
+        efectivo = _cc.efectivo_de_recaudo(r)
+        if efectivo > 0:
+            n += 1
+            valor += efectivo
+            continue
+        estado = _vb.estado(r)
+        if estado == _vb.VERIFICADA:
+            n += 1
+            valor += _monto(r.monto_cobrado)
+        elif estado == _vb.POR_VERIFICAR:
+            por_verificar += 1
+        elif estado == _vb.NO_ENCONTRADA:
+            no_encontradas += 1
+        elif _monto(r.monto_cobrado) > 0:
+            no_verificables += 1
+    if acta is not None:
+        valor += acta['diferencia']
+    return {
+        'n': n, 'valor': round(valor, 2), 'capturado': True,
+        'acta': acta,
+        'bancario_por_verificar': por_verificar,
+        'bancario_no_encontrado': no_encontradas,
+        'no_verificables': no_verificables,
+        'nota': ('Efectivo contado en el acta de caja y transferencias vistas en el banco. '
+                 'Tarjeta y cheque no los verifica nadie todavía.'),
     }

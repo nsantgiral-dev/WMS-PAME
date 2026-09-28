@@ -2012,6 +2012,9 @@ const COND_VERSION_FORMULARIO = 4;
 //: Formas que declaran «no entró plata». Del servidor (`cond_pago.FORMAS_QUE_NO_COBRAN`),
 //: dentro del payload que se cachea; el literal es solo el respaldo de una caché vieja.
 let _COND_FORMAS_NO_COBRAN = ['CREDITO', 'EXENTO'];
+// ¿Se ofrece CHEQUE? Solo si el servidor dice que el medio existe en Siesa
+// (`medios_pago.cheque_habilitado`, 2026-09-27). Sin el dato (caché vieja), no.
+let _COND_CHEQUE_HABILITADO = false;
 //: Cuánto puede faltar por redondeo (`liquidacion_service.tope_diferencia_recaudo`).
 let _COND_TOLERANCIA_COBRO = 100;
 //: Mínimo de caracteres de la referencia (mismo que `senales_ruta.MIN_REFERENCIA`).
@@ -2131,16 +2134,17 @@ async function cargarRutasConductor() {
   }
 
   if (!_COND_RUTAS.length) {
-    el.innerHTML = `<div style="text-align:center;padding:80px 20px;">
+    el.innerHTML = `<div id="cond-mi-caja"></div><div style="text-align:center;padding:80px 20px;">
       <div style="font-size:60px;">✅</div>
       <div style="font-size:20px;font-weight:700;color:var(--ok-tx);margin-top:16px;">Sin rutas en tránsito</div>
       <div style="font-size:var(--fs-sm);color:var(--tx3);margin-top:8px;">El jefe de almacén le asignará una cuando salga</div>
       <button onclick="cargarRutasConductor()" style="margin-top:24px;padding:14px 28px;background:#1d4ed8;border:none;color:#fff;border-radius:12px;font-size:var(--fs-md);cursor:pointer;">🔄 Actualizar</button>
     </div>`;
+    condCargarMiCaja();
     return;
   }
 
-  el.innerHTML = _COND_RUTAS.map((r) => {
+  el.innerHTML = '<div id="cond-mi-caja"></div>' + _COND_RUTAS.map((r) => {
     const totalBultos = r.total_bultos || 0;
     return `
       <div style="background:#fff;border:2px solid #bfdbfe;border-radius:16px;padding:20px;margin-bottom:12px;box-shadow:0 1px 3px rgba(0,0,0,.06);">
@@ -2153,6 +2157,101 @@ async function cargarRutasConductor() {
         </button>
       </div>`;
   }).join('');
+  condCargarMiCaja();
+}
+
+// ── Mi caja: lo que el conductor entrega y el acta que confirma (m051liqcaja) ──
+//
+// La caja la cuenta quien liquida y queda un acta; el conductor la confirma
+// acá o dice que no está de acuerdo. Sin señal no se muestra nada (la entrega
+// de caja es en la oficina, con señal).
+
+let _COND_MI_CAJA = null;
+
+async function condCargarMiCaja() {
+  const el = document.getElementById('cond-mi-caja');
+  if (!el) return;
+  try {
+    _COND_MI_CAJA = await get('/api/rutas/caja/mi-resumen');
+  } catch (e) {
+    el.innerHTML = '';
+    return;
+  }
+  el.innerHTML = _condBloqueMiCaja(_COND_MI_CAJA);
+}
+
+function _condBloqueMiCaja(d) {
+  if (!d) return '';
+  const actas = d.actas || [];
+  const fmt = v => '$' + Number(v || 0).toLocaleString('es-CO');
+  const b = d.bancario || {};
+  const entrega = (d.efectivo > 0 || (d.gastos || []).length || b.n) ? `
+    <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:14px;padding:14px;margin-bottom:12px;">
+      <div style="font-size:var(--fs-sm);color:var(--tx2);">Usted entrega en la oficina</div>
+      <div style="font-size:24px;font-weight:800;color:var(--ok-tx);">${esc(fmt(d.efectivo))} en efectivo</div>
+      <div style="font-size:var(--fs-xs);color:var(--tx3);">${esc(d.paradas_efectivo || 0)} parada(s) cobradas en efectivo</div>
+      ${(d.gastos || []).length ? `<div style="font-size:var(--fs-xs);color:var(--tx2);margin-top:4px;">Gastos que pagó con esa plata: ${esc(fmt(d.gastos_total))} — lleve el recibo; los revisa quien recibe la caja.</div>` : ''}
+      ${b.n ? `<div style="font-size:var(--fs-xs);color:var(--tx2);margin-top:4px;">Transferencias: ${esc(b.n)} por ${esc(fmt(b.valor))} — se verifican en el banco.</div>` : ''}
+    </div>` : '';
+  const filaActa = (a, i) => `
+    <div style="background:#fffbeb;border:1px solid #fcd34d;border-radius:14px;padding:14px;margin-bottom:12px;">
+      <div style="font-size:var(--fs-md);font-weight:800;color:var(--tx);">Acta de entrega de caja #${esc(a.id)}</div>
+      <div style="font-size:var(--fs-sm);color:var(--tx2);margin-top:4px;line-height:1.5;">
+        Declaró ${esc(fmt(a.esperado_efectivo))} en efectivo · se contaron ${esc(fmt(a.contado_efectivo))}${a.gastos_aceptados ? ` · gastos aceptados ${esc(fmt(a.gastos_aceptados))}` : ''}
+        <br><b style="color:${a.diferencia < 0 ? 'var(--err-tx)' : 'var(--ok-tx)'};">${a.diferencia ? `${a.diferencia < 0 ? 'Faltan' : 'Sobran'} ${esc(fmt(Math.abs(a.diferencia)))}` : 'La caja cuadró'}</b>
+        ${a.motivo_diferencia ? `<br>Motivo anotado: ${esc(a.motivo_diferencia)}` : ''}
+      </div>
+      <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;">
+        <button onclick="condResponderActa(${i}, 1)" style="flex:1;min-width:140px;padding:14px;background:#15803d;color:#fff;border:none;border-radius:10px;font-size:var(--fs-md);font-weight:800;cursor:pointer;">Estoy de acuerdo</button>
+        <button onclick="condResponderActa(${i}, 0)" style="flex:1;min-width:140px;padding:14px;background:#fff;color:var(--err-tx);border:1px solid #dc2626;border-radius:10px;font-size:var(--fs-md);font-weight:800;cursor:pointer;">No estoy de acuerdo</button>
+      </div>
+    </div>`;
+  return actas.map(filaActa).join('') + entrega;
+}
+
+async function condResponderActa(i, deAcuerdo) {
+  const a = ((_COND_MI_CAJA && _COND_MI_CAJA.actas) || [])[i];
+  if (!a) return;
+  let comentario = null;
+  if (deAcuerdo !== 1) {
+    comentario = await _modalTexto('No está de acuerdo con el acta',
+      'Escriba qué entregó y qué pasó: queda en el acta y lo revisa la oficina.',
+      { obligatorio: true, textoConfirmar: 'Enviar' });
+    if (!comentario || !comentario.trim()) return;
+  }
+  try {
+    await post(`/api/rutas/caja/actas/${Number(a.id)}/responder`,
+               { de_acuerdo: deAcuerdo === 1, comentario: comentario ? comentario.trim() : null });
+    alerta(deAcuerdo === 1 ? 'Acta confirmada' : 'Quedó su respuesta en el acta', 'exito');
+  } catch (e) {
+    alerta(e.message || 'No se pudo enviar la respuesta: inténtelo con señal', 'error');
+  }
+  condCargarMiCaja();
+}
+
+/** Lo que entrega al cerrar, de las paradas que tiene en el teléfono (sin
+ *  señal también). Es una vista previa: la cifra que vale la cuenta la
+ *  oficina en el acta. */
+function _condResumenEntrega(paradas) {
+  let efectivo = 0, nEf = 0, banco = 0, nBanco = 0, otros = 0;
+  (paradas || []).forEach(p => {
+    const r = p.recaudo;
+    if (!r || ['RECHAZADO', 'ENTREGADO_SIN_PAGO'].includes(r.estado_entrega)) return;
+    const monto = Number(r.monto_cobrado || 0);
+    if (monto <= 0) return;
+    const fp = String(r.forma_pago || '').toUpperCase();
+    if (fp === 'EFECTIVO') { efectivo += monto; nEf += 1; }
+    else if (fp.startsWith('TRANSFERENCIA') || fp === 'CONSIGNACION') { banco += monto; nBanco += 1; }
+    else otros += monto;
+  });
+  const fmt = v => '$' + Number(v || 0).toLocaleString('es-CO');
+  return `
+    <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:14px;padding:14px;margin-top:12px;">
+      <div style="font-size:var(--fs-sm);color:var(--tx2);">Al cerrar, usted entrega en la oficina</div>
+      <div style="font-size:22px;font-weight:800;color:var(--ok-tx);">${esc(fmt(efectivo))} en efectivo</div>
+      <div style="font-size:var(--fs-xs);color:var(--tx3);">${esc(nEf)} parada(s) en efectivo${nBanco ? ` · ${esc(nBanco)} transferencia(s) por ${esc(fmt(banco))} (se verifican en el banco)` : ''}${otros ? ` · otros medios ${esc(fmt(otros))}` : ''}</div>
+      <div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:4px;">Si pagó gastos con esa plata, lleve el recibo: se revisan al recibir la caja.</div>
+    </div>`;
 }
 
 // ── Lista de paradas de la ruta ───────────────────────────────────
@@ -2215,6 +2314,7 @@ async function condAbrirParadas(rutaId) {
   if (Array.isArray(data.formas_con_comprobante)) _COND_FORMAS_COMPROBANTE = data.formas_con_comprobante;
   if (Array.isArray(data.formas_que_no_cobran)) _COND_FORMAS_NO_COBRAN = data.formas_que_no_cobran;
   if (typeof data.tolerancia_cobro === 'number') _COND_TOLERANCIA_COBRO = data.tolerancia_cobro;
+  _COND_CHEQUE_HABILITADO = data.cheque_habilitado === true;
   _condRenderParadas(data);
 }
 
@@ -2286,6 +2386,7 @@ function _condRenderParadas(d) {
   });
 
   if (todasGestionadas) {
+    html += _condResumenEntrega(paradas);
     html += `
       <div style="position:sticky;bottom:16px;margin-top:12px;">
         <button onclick="conBotonOcupado(event, () => condCerrarRuta())"
@@ -2388,9 +2489,10 @@ function _condEsCreditoReal(p) {
  * conductor no otorga crédito — si no pagó, es Rechazado → «No pagó».
  */
 function _condFormasPago(p) {
-  if (_condEsCreditoReal(p)) return _FORMAS_PAGO_COBRO;
+  const conCheque = _FORMAS_PAGO_COBRO.filter(f => f.v !== 'CHEQUE' || _COND_CHEQUE_HABILITADO);
+  if (_condEsCreditoReal(p)) return conCheque;
   const fuera = _COND_FORMAS_NO_COBRAN || ['CREDITO', 'EXENTO'];
-  return _FORMAS_PAGO_COBRO.filter(f => !fuera.includes(f.v));
+  return conCheque.filter(f => !fuera.includes(f.v));
 }
 
 /**

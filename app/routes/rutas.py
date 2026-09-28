@@ -14,7 +14,8 @@ from app.services.permisos_liquidacion import (
     puede_autorizar_credito, puede_confirmar_retencion, puede_corregir_cobro,
     puede_forzar_cierre_ruta, puede_liquidar, puede_registrar_parada_tardia,
     puede_escribir_parada_desde_oficina, puede_resolver_documento,
-    puede_resolver_version_conductor, puede_ver_liquidacion)
+    puede_resolver_version_conductor, puede_ver_liquidacion, puede_recibir_caja,
+    puede_liquidar_sin_acta, puede_verificar_transferencia)
 from app.utils.fecha import dia_operativo as _dia_operativo, dia_operativo_de as _dia_operativo_de
 
 logger = logging.getLogger(__name__)
@@ -607,10 +608,13 @@ def planilla_ruta(id):
 def liquidar_ruta(id):
     if not _con_permiso(puede_liquidar):
         return jsonify({'error': 'Solo admin o el liquidador liquidan rutas'}), 403
+    data = request.get_json(silent=True) or {}
     try:
         resultado = RutaService.liquidar_ruta(
             id, usuario_id=_uid(),
-            motivo_devoluciones=(request.get_json(silent=True) or {}).get('motivo_devoluciones'))
+            motivo_devoluciones=data.get('motivo_devoluciones'),
+            motivo_sin_acta=data.get('motivo_sin_acta'),
+            puede_liquidar_sin_acta=puede_liquidar_sin_acta(_usuario()))
     except LookupError as e:
         return jsonify({'error': str(e)}), 404
     except ValueError as e:
@@ -654,6 +658,22 @@ def pedir_cierre_ruta(id):
     return jsonify({'ok': True, 'ruta': ruta}), 200
 
 
+def _exigir_liquidada(ruta_id):
+    """Los documentos de plata de una ruta se encolan **después** de
+    liquidarla (acta de caja incluida): «Enviar todo» y «Registrar cobro» son
+    para lo que quedó pendiente. Antes se podían encolar sobre una ruta en
+    tránsito, sin arqueo (P3 de la auditoría del 2026-09-27). `None` si pasa."""
+    from app.models.ruta_despacho import EstadoFinancieroRuta
+    from app.extensions import db as _db
+    ruta = _db.session.get(RutaDespacho, ruta_id)
+    if ruta is None:
+        return jsonify({'error': 'Ruta no encontrada'}), 404
+    if ruta.estado_financiero != EstadoFinancieroRuta.LIQUIDADA:
+        return jsonify({'error': 'Primero liquide la ruta (con el acta de caja): la '
+                                 'liquidación encola todo lo que está listo para Siesa.'}), 409
+    return None
+
+
 @rutas_bp.route('/<int:id>/liquidar-siesa', methods=['POST'])
 @jwt_required()
 def liquidar_ruta_siesa(id):
@@ -663,6 +683,9 @@ def liquidar_ruta_siesa(id):
     uid = _uid()
     if not uid:
         return jsonify({'error': 'Token inválido'}), 401
+    falta = _exigir_liquidada(id)
+    if falta is not None:
+        return falta
     try:
         from app.services.liquidacion_service import LiquidacionService
         resultado = LiquidacionService.liquidar_ruta_siesa(id, admin_id=uid)
@@ -775,6 +798,9 @@ def registrar_cobro_recaudo(ruta_id, recaudo_id):
     recaudo = RecaudoEntrega.query.get(recaudo_id)
     if not recaudo or recaudo.ruta_id != ruta_id:
         return jsonify({'error': 'Recaudo no pertenece a esta ruta'}), 404
+    falta = _exigir_liquidada(ruta_id)
+    if falta is not None:
+        return falta
     data = request.get_json() or {}
     try:
         from app.services.liquidacion_service import LiquidacionService
@@ -1418,6 +1444,7 @@ def liquidacion_dashboard():
     from app.models.siesa_job import SiesaJob
     from app.services.connekta_gateway import connekta
     from app.services.motivos_rechazo import SIN_RETORNO as _MR_SIN_RETORNO
+    from app.services import liquidacion_tablero as _lt
     from collections import Counter
 
     # Soporta rango de fechas (fecha_desde/fecha_hasta) o fecha única (backwards compatible)
@@ -1465,15 +1492,6 @@ def liquidacion_dashboard():
              ))
              .all())
 
-    total_efectivo = 0
-    total_transferencia = 0
-    total_tarjeta = 0
-    total_credito = 0
-    credito_sin_valor = 0
-    from app.services import cond_pago as _cp_kpi
-    total_recaudado = 0
-    pendientes = 0
-    liquidadas = 0
     rutas_out = []
     rutas_atrasadas_out = []
 
@@ -1525,47 +1543,7 @@ def liquidacion_dashboard():
                 tipos=('NOTA_CREDITO_FACTURA', 'RECIBO_CAJA', 'DOCUMENTO_CONTABLE_RET'),
                 referencia_tipo='RecaudoEntrega', referencia_ids=recaudo_ids)['jobs'])
 
-        # Montos por forma de pago
-        ruta_recaudado = 0
-        for r in recaudos:
-            monto = float(r.monto_cobrado or 0)
-            ruta_recaudado += monto
-            if es_atrasada:
-                continue  # fuera del rango: no suma a los totales de hoy
-            fp = (r.forma_pago or '').upper()
-            if fp == 'EFECTIVO':
-                total_efectivo += monto
-            # `TRANSFERENCIA` a secas (retrocompatible) + los medios
-            # específicos por banco (TRANSFERENCIA_BANCOLOMBIA_AH, etc.,
-            # alineados con `MedioPago` de gestor-cartera-pame) + TARJETA —
-            # todo lo que no es efectivo ni crédito cae en este bucket. Un
-            # `==` fijo contra el string viejo dejaba de contar cualquier
-            # medio nuevo sin que nada avisara — el monto seguía sumando a
-            # `ruta_recaudado`/`total_recaudado`, solo desaparecía del
-            # desglose por medio.
-            elif fp.startswith('TRANSFERENCIA') or fp == 'CONSIGNACION':
-                total_transferencia += monto
-            elif fp == 'TARJETA':
-                total_tarjeta += monto
-            # Crédito: lo que se fue a crédito (la factura), no lo cobrado —
-            # que en una parada a crédito es 0 por definición y dejaba el KPI
-            # en $0 siempre (validación e2e 2026-09-26). Por la política de
-            # cobro (`trato_de_cobro`), no por la forma de pago.
-            if r.estado_entrega in ('ENTREGADO', 'PARCIAL') and \
-                    _cp_kpi.trato_de_cobro(r, r.tarea) == _cp_kpi.TRATO_CREDITO:
-                _vf = getattr(r.tarea, 'valor_factura', None) if r.tarea else None
-                if _vf is None:
-                    credito_sin_valor += 1
-                else:
-                    total_credito += float(_vf) - monto
-
-        if not es_atrasada:
-            total_recaudado += ruta_recaudado
-            ef = ruta.estado_financiero or 'PENDIENTE'
-            if ef == 'LIQUIDADA':
-                liquidadas += 1
-            else:
-                pendientes += 1
+        ruta_recaudado = sum(float(r.monto_cobrado or 0) for r in recaudos)
 
         rd = ruta.to_dict()
         rd['total_recaudado'] = ruta_recaudado
@@ -1585,6 +1563,13 @@ def liquidacion_dashboard():
         rd['siesa_rc_enviados'] = siesa_rc
         rd['siesa_dc_enviados'] = siesa_dc
         rd['jobs_fallidos'] = jobs_fallidos
+        # Una liquidación = arqueo + documentos (m051liqcaja): la caja de la
+        # ruta, el recibo en tres estados (encolado / enviado / confirmado) y,
+        # si ya se liquidó, lo que todavía falta en Siesa.
+        rd['caja'] = _lt.caja_de_ruta(ruta)
+        rd['recibos'] = _lt.recibos_de_ruta(recaudos)
+        rd['falta_en_siesa'] = (RutaService.documentos_faltantes_de_ruta(ruta)
+                                if (ruta.estado_financiero or 'PENDIENTE') == 'LIQUIDADA' else [])
         # Señales de fuga de la ruta (`senales_ruta.senales_de_recaudo`): cuántas
         # paradas tienen algo que mirar, y cuáles claves. Datos para quien
         # liquida, nunca un veredicto sobre el conductor.
@@ -1612,19 +1597,15 @@ def liquidacion_dashboard():
         'sin_pago_por_conductor': tasa_sin_pago_por_conductor(fecha_desde, fecha_hasta),
     }
 
+    # La cabecera: un universo (la lista), y los medios suman el total.
+    resumen = _lt.resumen(rutas, atrasadas)
+    resumen['liquidadas_falta_siesa'] = sum(1 for x in rutas_out if x['falta_en_siesa'])
+    from app.services import caja_conductor as _cc_dash
+    resumen['diferencias_caja'] = _cc_dash.diferencias_por_conductor(fecha_desde, fecha_hasta)
+    resumen['faltante_caja'] = round(sum(d['faltante'] for d in resumen['diferencias_caja']), 2)
+
     return jsonify({
-        'resumen': {
-            'total_rutas': len(rutas),
-            'pendientes': pendientes,
-            'liquidadas': liquidadas,
-            'total_recaudado': total_recaudado,
-            'total_efectivo': total_efectivo,
-            'total_transferencia': total_transferencia,
-            'total_tarjeta': total_tarjeta,
-            'total_credito': total_credito,
-            # Paradas a crédito sin la factura anotada: el total es un piso.
-            'credito_sin_valor': credito_sin_valor,
-        },
+        'resumen': resumen,
         'rutas': rutas_out,
         # Entregadas sin liquidar de días anteriores al rango (no suman arriba).
         'rutas_atrasadas': sorted(rutas_atrasadas_out,
@@ -1632,7 +1613,9 @@ def liquidacion_dashboard():
         # En camino hace más de un día: su plata no llega (validación 2026-09-26).
         'rutas_sin_cerrar': _rl.rutas_sin_cerrar(),
         'permisos': {'liquidar': puede_liquidar(_usuario()),
-                     'forzar_cierre': puede_forzar_cierre_ruta(_usuario())},
+                     'forzar_cierre': puede_forzar_cierre_ruta(_usuario()),
+                     'recibir_caja': puede_recibir_caja(_usuario()),
+                     'verificar_transferencia': puede_verificar_transferencia(_usuario())},
         'senales_conductor': senales_conductor,
     }), 200
 
@@ -1660,5 +1643,220 @@ def liquidacion_detalle(id):
         'parada_tardia': puede_registrar_parada_tardia(u),
         'forzar_cierre': puede_forzar_cierre_ruta(u),
         'resolver_version': puede_resolver_version_conductor(u),
+        'recibir_caja': puede_recibir_caja(u),
+        'liquidar_sin_acta': puede_liquidar_sin_acta(u),
+        'verificar_transferencia': puede_verificar_transferencia(u),
     }
+    # La caja de la ruta y el cheque (m051liqcaja, 2026-09-27).
+    from app.extensions import db as _db_det
+    from app.services import liquidacion_tablero as _lt_det
+    from app.services.medios_pago import cheque_habilitado
+    _ruta_det = _db_det.session.get(RutaDespacho, id)
+    if _ruta_det is not None:
+        resultado['caja'] = _lt_det.caja_de_ruta(_ruta_det)
+        resultado['falta_en_siesa'] = RutaService.documentos_faltantes_de_ruta(_ruta_det)
+    resultado['cheque_habilitado'] = cheque_habilitado()
+    # El pago bancario de cada parada, visto (o no) en el banco.
+    from app.models.recaudo_entrega import RecaudoEntrega as _RE_det
+    from app.services import verificacion_banco as _vb_det
+    for rec in resultado.get('recaudos') or []:
+        fila = _db_det.session.get(_RE_det, rec.get('id')) if rec.get('id') else None
+        rec['estado_banco'] = _vb_det.estado(fila) if fila is not None else None
     return jsonify(resultado), 200
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# La caja del conductor y los pagos bancarios (m051liqcaja, 2026-09-27)
+# ═════════════════════════════════════════════════════════════════════════════
+#
+# La política vive en `services/caja_conductor.py` y `services/verificacion_banco.py`;
+# acá solo el permiso (`permisos_liquidacion`) y la traducción a HTTP.
+
+def _error_http(e):
+    if isinstance(e, LookupError):
+        return jsonify({'error': str(e)}), 404
+    if isinstance(e, PermissionError):
+        return jsonify({'error': str(e)}), 403
+    return jsonify({'error': str(e)}), 400
+
+
+@rutas_bp.route('/caja/por-recibir', methods=['GET'])
+@jwt_required()
+def caja_por_recibir():
+    """Lo primero que ve quien liquida: los conductores con caja por entregar
+    y las actas que el conductor todavía no contestó."""
+    u = _con_permiso(puede_ver_liquidacion)
+    if not u:
+        return jsonify({'error': 'Sin permiso para ver la liquidación'}), 403
+    from app.services import caja_conductor as cc
+    return jsonify({'conductores': cc.conductores_por_recibir(),
+                    'actas_por_responder': cc.actas_por_responder(),
+                    'permisos': {'recibir_caja': puede_recibir_caja(u)}}), 200
+
+
+@rutas_bp.route('/caja/conductor/<int:conductor_id>', methods=['GET'])
+@jwt_required()
+def caja_esperado(conductor_id):
+    u = _con_permiso(puede_ver_liquidacion)
+    if not u:
+        return jsonify({'error': 'Sin permiso para ver la liquidación'}), 403
+    from app.services import caja_conductor as cc
+    try:
+        return jsonify({**cc.esperado_de_entrega(conductor_id),
+                        'permisos': {'recibir_caja': puede_recibir_caja(u)}}), 200
+    except LookupError as e:
+        return _error_http(e)
+
+
+@rutas_bp.route('/caja/conductor/<int:conductor_id>/acta', methods=['POST'])
+@jwt_required()
+def caja_registrar_acta(conductor_id):
+    """Quien recibe la caja registra lo que contó (una acta por entrega)."""
+    u = _con_permiso(puede_recibir_caja)
+    if not u:
+        return jsonify({'error': 'Solo admin o el liquidador reciben la caja del conductor'}), 403
+    data = request.get_json(silent=True) or {}
+    from app.services import caja_conductor as cc
+    try:
+        acta = cc.registrar_acta(conductor_id, data.get('contado_efectivo'), u.id,
+                                 gastos=data.get('gastos') or [],
+                                 motivo_diferencia=data.get('motivo_diferencia'),
+                                 esperado_visto=data.get('esperado_visto'))
+    except (LookupError, ValueError) as e:
+        return _error_http(e)
+    return jsonify({'ok': True, 'acta': acta.to_dict()}), 200
+
+
+@rutas_bp.route('/caja/actas', methods=['GET'])
+@jwt_required()
+def caja_actas():
+    """Las actas del rango (por día del acta) y las diferencias por conductor:
+    el número de gerencia."""
+    if not _con_permiso(puede_ver_liquidacion):
+        return jsonify({'error': 'Sin permiso para ver la liquidación'}), 403
+    from datetime import date as _date
+    from app.models.entrega_caja import EntregaCaja
+    from app.services import caja_conductor as cc
+    try:
+        desde = _date.fromisoformat(request.args['desde']) if request.args.get('desde') else None
+        hasta = _date.fromisoformat(request.args['hasta']) if request.args.get('hasta') else None
+    except ValueError:
+        return jsonify({'error': 'Formato de fecha inválido — usar YYYY-MM-DD'}), 400
+    q = EntregaCaja.query
+    if desde:
+        q = q.filter(EntregaCaja.dia >= desde)
+    if hasta:
+        q = q.filter(EntregaCaja.dia <= hasta)
+    return jsonify({'actas': [a.to_dict() for a in q.order_by(EntregaCaja.id.desc()).limit(300)],
+                    'diferencias_por_conductor': cc.diferencias_por_conductor(desde, hasta)}), 200
+
+
+@rutas_bp.route('/caja/actas/<int:acta_id>/sin-confirmar', methods=['POST'])
+@jwt_required()
+def caja_sin_confirmar(acta_id):
+    u = _con_permiso(puede_recibir_caja)
+    if not u:
+        return jsonify({'error': 'Solo admin o el liquidador'}), 403
+    from app.services import caja_conductor as cc
+    try:
+        acta = cc.marcar_sin_confirmar(acta_id, u.id, (request.get_json(silent=True) or {}).get('motivo'))
+    except (LookupError, ValueError) as e:
+        return _error_http(e)
+    return jsonify({'ok': True, 'acta': acta.to_dict()}), 200
+
+
+@rutas_bp.route('/caja/actas/<int:acta_id>/anular', methods=['POST'])
+@jwt_required()
+def caja_anular(acta_id):
+    u = _con_permiso(puede_recibir_caja)
+    if not u:
+        return jsonify({'error': 'Solo admin o el liquidador'}), 403
+    from app.services import caja_conductor as cc
+    try:
+        acta = cc.anular_acta(acta_id, u.id, (request.get_json(silent=True) or {}).get('motivo'))
+    except (LookupError, ValueError) as e:
+        return _error_http(e)
+    return jsonify({'ok': True, 'acta': acta.to_dict()}), 200
+
+
+@rutas_bp.route('/caja/gastos/foto/<int:foto_id>', methods=['GET'])
+@jwt_required()
+def caja_foto_gasto(foto_id):
+    """La foto del recibo de un gasto pagado con el recaudo (solo de esos)."""
+    if not _con_permiso(puede_ver_liquidacion):
+        return jsonify({'error': 'Sin permiso para ver la liquidación'}), 403
+    from app.services import caja_conductor as cc
+    try:
+        return jsonify(cc.foto_de_gasto(foto_id)), 200
+    except LookupError as e:
+        return _error_http(e)
+
+
+@rutas_bp.route('/caja/mi-resumen', methods=['GET'])
+@jwt_required()
+def caja_mi_resumen():
+    """El conductor, en su teléfono: cuánto entrega y las actas que esperan
+    su respuesta."""
+    u = _usuario()
+    if u is None or u.rol != Roles.CONDUCTOR:
+        return jsonify({'error': 'Solo el conductor ve su caja'}), 403
+    from app.services import caja_conductor as cc
+    return jsonify(cc.resumen_para_conductor(u.id)), 200
+
+
+@rutas_bp.route('/caja/actas/<int:acta_id>/responder', methods=['POST'])
+@jwt_required()
+def caja_responder(acta_id):
+    """El conductor confirma el acta o dice que no está de acuerdo."""
+    u = _usuario()
+    if u is None or u.rol != Roles.CONDUCTOR:
+        return jsonify({'error': 'Solo el conductor responde su acta'}), 403
+    data = request.get_json(silent=True) or {}
+    from app.services import caja_conductor as cc
+    try:
+        acta = cc.responder_conductor(acta_id, u.id, bool(data.get('de_acuerdo')),
+                                      data.get('comentario'))
+    except (LookupError, ValueError, PermissionError) as e:
+        return _error_http(e)
+    return jsonify({'ok': True, 'acta': acta.to_dict()}), 200
+
+
+@rutas_bp.route('/transferencias/por-verificar', methods=['GET'])
+@jwt_required()
+def transferencias_por_verificar():
+    u = _con_permiso(puede_ver_liquidacion)
+    if not u:
+        return jsonify({'error': 'Sin permiso para ver la liquidación'}), 403
+    from app.services import verificacion_banco as vb
+    return jsonify({'transferencias': vb.por_verificar(),
+                    'exige_verificacion': vb.exige_verificacion(),
+                    'permisos': {'verificar': puede_verificar_transferencia(u)}}), 200
+
+
+@rutas_bp.route('/recaudos/<int:recaudo_id>/comprobante', methods=['GET'])
+@jwt_required()
+def recaudo_comprobante(recaudo_id):
+    """La foto del comprobante de una parada, una por una (no viaja en la planilla)."""
+    if not _con_permiso(puede_ver_liquidacion):
+        return jsonify({'error': 'Sin permiso para ver la liquidación'}), 403
+    from app.services import verificacion_banco as vb
+    try:
+        return jsonify(vb.comprobante(recaudo_id)), 200
+    except LookupError as e:
+        return _error_http(e)
+
+
+@rutas_bp.route('/recaudos/<int:recaudo_id>/verificar-banco', methods=['POST'])
+@jwt_required()
+def recaudo_verificar_banco(recaudo_id):
+    u = _con_permiso(puede_verificar_transferencia)
+    if not u:
+        return jsonify({'error': 'Verifican transferencias el admin, el liquidador y el '
+                                 'líder de cartera'}), 403
+    data = request.get_json(silent=True) or {}
+    from app.services import verificacion_banco as vb
+    try:
+        r = vb.verificar(recaudo_id, u.id, bool(data.get('encontrada')), data.get('nota'))
+    except (LookupError, ValueError) as e:
+        return _error_http(e)
+    return jsonify({'ok': True, 'recaudo': r}), 200

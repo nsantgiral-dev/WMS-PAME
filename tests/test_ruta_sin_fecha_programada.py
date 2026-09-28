@@ -218,4 +218,8 @@ class TestLaColaPorLiquidarNoSeCortaPorDia:
         del_rango = [r['id'] for r in d['rutas']]
         assert pendiente in atrasadas and pendiente not in del_rango
         assert liquidada not in atrasadas and liquidada not in del_rango
-        assert d['resumen']['total_rutas'] == 0
+        # Un universo (P2-1 de la auditoría de liquidación, 2026-09-27): la
+        # cabecera cuenta lo que la lista muestra. La atrasada está en la lista,
+        # así que cuenta como «por liquidar»; antes la lista la mostraba y la
+        # cabecera no — dos universos en la misma pantalla.
+        assert d['resumen']['total_rutas'] == 1 and d['resumen']['pendientes'] == 1

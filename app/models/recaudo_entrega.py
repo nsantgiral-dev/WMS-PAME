@@ -190,6 +190,10 @@ class RecaudoEntrega(db.Model):
         db.CheckConstraint(
             "estado_entrega IN ('ENTREGADO','PARCIAL','RECHAZADO','ENTREGADO_SIN_PAGO')",
             name='ck_recaudo_estado_entrega'),
+        db.CheckConstraint(
+            "verificado_banco_resultado IS NULL OR "
+            "verificado_banco_resultado IN ('VERIFICADA','NO_ENCONTRADA')",
+            name='ck_recaudo_verificado_banco'),
         # El invariante que da sentido al estado nuevo: si la mercancía se
         # quedó con el cliente, el estado tiene que decirlo. Sin esto, la
         # combinación vieja —RECHAZADO + NO_PAGO_SE_QUEDO— podría volver a
@@ -261,6 +265,17 @@ class RecaudoEntrega(db.Model):
     #: El día real del cobro cuando el recibo de caja se fechó en el mes del
     #: envío porque el mes ya había cambiado (`politica_cobro.fechas_del_recibo`).
     rc_cobro_otro_mes = db.Column(db.Date, nullable=True)
+
+    # ── Verificación contra el banco (m051liqcaja) ────────────────────────
+    #: Un pago por transferencia/consignación se daba por recibido con la
+    #: palabra del conductor y un pantallazo que ninguna pantalla mostraba. Lo
+    #: escribe `verificacion_banco.verificar` y nadie más. `NULL` = nadie lo
+    #: miró todavía (o no aplica: `verificacion_banco.estado` lo contesta).
+    #: `VERIFICADA` | `NO_ENCONTRADA`.
+    verificado_banco_resultado = db.Column(db.String(20), nullable=True)
+    verificado_banco_por = db.Column(db.Integer, db.ForeignKey('usuarios.id'), nullable=True)
+    verificado_banco_en = db.Column(db.DateTime, nullable=True)
+    verificado_banco_nota = db.Column(db.Text, nullable=True)
 
     #: Cuándo se cobró de verdad (UTC, m050plata): la hora del teléfono
     #: corregida por el desfase medido, o la del servidor en la primera
@@ -451,6 +466,10 @@ class RecaudoEntrega(db.Model):
             'fecha_cobro':           self.fecha_cobro.isoformat() if self.fecha_cobro else None,
             'rc_cobro_otro_mes':     (self.rc_cobro_otro_mes.isoformat()
                                       if self.rc_cobro_otro_mes else None),
+            'verificado_banco_resultado': self.verificado_banco_resultado,
+            'verificado_banco_en':   (self.verificado_banco_en.isoformat()
+                                      if self.verificado_banco_en else None),
+            'verificado_banco_nota': self.verificado_banco_nota,
         }
         if include_foto:
             d['foto_entrega'] = self.foto_entrega or ''

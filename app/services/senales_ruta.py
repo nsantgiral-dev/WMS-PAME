@@ -271,58 +271,12 @@ def senal_rechazo_lejos(recaudo) -> Optional[dict]:
 # ═════════════════════════════════════════════════════════════════════════════
 
 def efectivo_en_poder_por_conductor(hoy=None) -> list:
-    """Lo que cada conductor cobró en EFECTIVO en rutas que nadie liquidó.
-
-    Universo: rutas `EN_TRANSITO` o `ENTREGADA` con `estado_financiero` ≠
-    `LIQUIDADA` — el camión todavía en la calle también lleva plata. Antigüedad:
-    días (Bogotá) desde la confirmación de efectivo más vieja sin liquidar.
-
-    Ordenado por antigüedad y después por monto: la plata que lleva más días
-    fuera es la que más cuesta recuperar.
-    """
-    from app.extensions import db
-    from app.models.conductor import Conductor
-    from app.models.recaudo_entrega import RecaudoEntrega
-    from app.models.ruta_despacho import EstadoFinancieroRuta, RutaDespacho
-    from app.utils.fecha import ahora_bogota, dia_operativo_de
-
-    hoy = hoy or ahora_bogota().date()
-    filas = (db.session.query(RecaudoEntrega, RutaDespacho)
-             .join(RutaDespacho, RutaDespacho.id == RecaudoEntrega.ruta_id)
-             .filter(RutaDespacho.estado.in_(('EN_TRANSITO', 'ENTREGADA')),
-                     RutaDespacho.estado_financiero != EstadoFinancieroRuta.LIQUIDADA,
-                     RecaudoEntrega.forma_pago == 'EFECTIVO')
-             .all())
-    por = {}
-    for rec, ruta in filas:
-        monto = float(rec.monto_cobrado or 0)
-        if monto <= 0:
-            continue
-        g = por.setdefault(ruta.conductor_id, {
-            'conductor_id': ruta.conductor_id, 'efectivo': 0.0, 'paradas': 0,
-            'rutas': set(), 'desde': None})
-        g['efectivo'] += monto
-        g['paradas'] += 1
-        g['rutas'].add(ruta.id)
-        dia = dia_operativo_de(rec.fecha_confirmacion) if rec.fecha_confirmacion else None
-        if dia is not None and (g['desde'] is None or dia < g['desde']):
-            g['desde'] = dia
-    nombres = dict(db.session.query(Conductor.id, Conductor.nombre)
-                   .filter(Conductor.id.in_(list(por) or [-1])).all())
-    salida = []
-    for cid, g in por.items():
-        salida.append({
-            'conductor_id': cid,
-            'conductor': nombres.get(cid),
-            'efectivo': round(g['efectivo'], 2),
-            'paradas': g['paradas'],
-            'rutas': sorted(g['rutas']),
-            'desde': g['desde'].isoformat() if g['desde'] else None,
-            # Sin fecha de confirmación no hay antigüedad: `None`, no 0.
-            'dias': (hoy - g['desde']).days if g['desde'] else None,
-        })
-    return sorted(salida, key=lambda f: (-(f['dias'] if f['dias'] is not None else 10**6),
-                                         -f['efectivo']))
+    """Lo que cada conductor cobró en efectivo y **todavía no entregó en un
+    acta de caja**. La política vive en `caja_conductor` (m051liqcaja): hasta
+    el 2026-09-27 este universo era «rutas sin liquidar», y la plata se daba
+    por entregada con el clic de liquidar, sin que nadie la contara."""
+    from app.services.caja_conductor import efectivo_en_poder_por_conductor as _f
+    return _f(hoy)
 
 
 # ═════════════════════════════════════════════════════════════════════════════

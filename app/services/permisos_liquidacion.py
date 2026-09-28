@@ -13,6 +13,9 @@ cartera» (`Roles.LIQUIDADOR`, `Roles.LIDER_CARTERA`):
 | Resolver la versión del conductor (mantener / adoptar antes de que salga a Siesa) | admin + liquidador + líder de cartera |
 | Autorizar como crédito una parada de contado sin plata (una o en lote) | admin + líder de cartera |
 | Forzar el cierre de una ruta | admin |
+| Recibir la caja del conductor (acta), anularla, declarar que no confirmó | admin + liquidador |
+| Liquidar sin acta de caja (FORZAR con motivo) | admin |
+| Verificar una transferencia contra el banco | admin + liquidador + líder de cartera |
 | Ver Liquidación, su desglose y la reconciliación | admin + jefe + gerente + liquidador + líder de cartera |
 
 **El gerente ve, no opera** (decisión del dueño, 2026-09-26): entra a
@@ -103,6 +106,26 @@ def puede_resolver_documento(usuario) -> bool:
     """Decidir a mano el desenlace de un recibo de caja que el WMS no pudo
     verificar (entró / no entró). Es plata: el mismo permiso que liquidar."""
     return puede_liquidar(usuario)
+
+
+def puede_recibir_caja(usuario) -> bool:
+    """Registrar, anular y declarar «el conductor no confirmó» un acta de
+    entrega de caja (m051liqcaja). Es contar la plata del conductor: el mismo
+    permiso que liquidar. Admin y liquidador."""
+    return puede_liquidar(usuario)
+
+
+def puede_liquidar_sin_acta(usuario) -> bool:
+    """Liquidar una ruta sin el acta de entrega de caja, con motivo (FORZAR).
+    Solo el administrador: quien recibe la plata no puede eximirse de contarla."""
+    return _rol_en(usuario, (Roles.ADMIN,))
+
+
+def puede_verificar_transferencia(usuario) -> bool:
+    """Declarar que una transferencia/consignación apareció (o no) en el banco
+    (m051liqcaja). Admin, liquidador y líder de cartera: quien concilia el
+    extracto. Decisión por defecto del dueño; se cambia acá."""
+    return _rol_en(usuario, (Roles.ADMIN, Roles.LIQUIDADOR, Roles.LIDER_CARTERA))
 
 
 def puede_ver_liquidacion(usuario) -> bool:

@@ -61,6 +61,10 @@ MATRIZ = {
     'puede_escribir_parada_desde_oficina': {'admin', 'liquidador', 'lider_cartera'},
     # El gerente VE (solo lectura, decisión del 2026-09-26); el supervisor no.
     'puede_ver_liquidacion':         {'admin', 'jefe_almacen', 'gerente', 'liquidador', 'lider_cartera'},
+    # La caja del conductor y el banco (m051liqcaja, 2026-09-27).
+    'puede_recibir_caja':            {'admin', 'liquidador'},
+    'puede_liquidar_sin_acta':       {'admin'},
+    'puede_verificar_transferencia': {'admin', 'liquidador', 'lider_cartera'},
 }
 
 
@@ -254,9 +258,9 @@ class TestPorHttp:
             si = {k for k, v in p.items() if v}
             assert si == {
                 'liquidador': {'liquidar', 'resolver_documento', 'parada_tardia',
-                               'resolver_version'},
+                               'resolver_version', 'recibir_caja', 'verificar_transferencia'},
                 'lider_cartera': {'confirmar_retencion', 'autorizar_credito', 'corregir_cobro',
-                                  'resolver_version'},
+                                  'resolver_version', 'verificar_transferencia'},
             }[rol], (rol, p)
 
     def test_cada_envio_dice_si_quien_mira_lo_reintenta(self, app, client, db, almacen):
@@ -362,11 +366,16 @@ class TestLaTarjetaOfreceSoloLoSuyo:
     """Los botones salen de `permisos` del detalle (`_liqPermiso`), que el
     servidor calcula con las mismas funciones que cortan con 403."""
 
-    def _pintar(self, app, client, db, almacen, tmp_path, rol):
+    def _pintar(self, app, client, db, almacen, tmp_path, rol, con_acta=True):
         import copy
+        from tests.test_caja_conductor import recibir_caja_de
         from tests.test_liquidacion_pantalla_dinero import _ruta_entregada
         from tests.test_sin_codigos_en_pantalla import _node
         ruta = _ruta_entregada(db, almacen)
+        if con_acta:
+            # Una liquidación = arqueo + documentos (m051liqcaja): con la caja
+            # recibida, el botón de liquidar es de quien liquida.
+            recibir_caja_de(db, ruta.id)
         det = client.get(f'/api/rutas/{ruta.id}/liquidacion-detalle',
                          headers=_jwt(app, _usuario(db, rol=rol))).get_json()
         base = det['recaudos'][0]
@@ -404,6 +413,19 @@ class TestLaTarjetaOfreceSoloLoSuyo:
         html = self._pintar(app, client, db, almacen, tmp_path, rol)
         ve = {b for b in self.BOTONES if b in html}
         assert ve == {b for b, roles in self.BOTONES.items() if rol in roles}, (rol, ve)
+
+    #: Sin la caja recibida: quien liquida la recibe primero; solo el admin
+    #: liquida sin acta (con motivo).
+    BOTONES_SIN_ACTA = {
+        'liqAbrirCajaConductor(': {'admin', 'liquidador'},
+        'liqLiquidarWMS(': {'admin'},
+    }
+
+    @pytest.mark.parametrize('rol', ['admin', 'liquidador', 'lider_cartera', 'gerente'])
+    def test_sin_acta_primero_la_caja(self, app, client, db, almacen, tmp_path, rol):
+        html = self._pintar(app, client, db, almacen, tmp_path, rol, con_acta=False)
+        ve = {b for b in self.BOTONES_SIN_ACTA if b in html}
+        assert ve == {b for b, roles in self.BOTONES_SIN_ACTA.items() if rol in roles}, (rol, ve)
 
 
 # ═════════════════════════════════════════════════════════════════════════════

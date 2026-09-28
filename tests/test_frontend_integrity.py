@@ -782,6 +782,9 @@ DEUDA_SIN_UI = {
         'ningún institucional se exime de la mora y ningún acuerdo retiene el crédito.',
     '/api/cartera/salud':
         'Frescura de la cartera y retenidos por antigüedad para el Gestor de Cartera.',
+    '/api/cartera/en-caja':
+        'El Gestor pregunta qué cobró ya el conductor a un NIT (m051liqcaja): así no le '
+        'cobra otra vez a un cliente que pagó en la puerta y cuyo recibo no llegó a Siesa.',
     # 2026-09-24 · m045devol. El panel «BULTOS RECHAZADOS — RE-INGRESAR» de
     # recepción era solo informativo, y el recepcionista ni lo podía cargar
     # (este endpoint es de admin: estaba en BASELINE_HEREDADO de permisos). Lo

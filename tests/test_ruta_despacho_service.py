@@ -317,8 +317,11 @@ class TestLiquidarRutaCreaDevolucionesPendientes:
         # y la ruta no se liquidaría (contado contraentrega, 2026-09-24).
         recaudo.monto_cobrado = 100000
         db.session.commit()
+        # Una liquidación = arqueo + documentos (m051liqcaja): primero el acta.
+        from tests.test_caja_conductor import recibir_caja_de
+        recibir_caja_de(db, ruta.id)
 
-        resultado = RutaService.liquidar_ruta(ruta.id)
+        resultado = RutaService.liquidar_ruta(ruta.id, encolar_documentos=False)
 
         assert resultado['devoluciones_pendientes_creadas'] == 0
         assert DevolucionCliente.query.filter_by(recaudo_entrega_id=recaudo.id).first() is None

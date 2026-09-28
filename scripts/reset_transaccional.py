@@ -91,6 +91,10 @@ OPERATIVAS = [
     # una sola, el corte obligaría a elegir entre borrar el ensayo y conservar
     # el activo, y cualquiera de las dos elecciones está mal.
     'entregas_geo',
+    # El acta de caja del conductor (m051liqcaja): el ensayo. `entregas_caja_gastos`
+    # apunta al acta y a `flota_gasto`, así que va ANTES de las dos;
+    # `entregas_caja` va DESPUÉS de `rutas_despacho` (la ruta apunta al acta).
+    'entregas_caja_gastos',
     'recaudos_entrega',
     'tareas_packing',
     # `sesiones_conteo` apunta a `tareas_picking` (la tarea que genera un
@@ -112,6 +116,7 @@ OPERATIVAS = [
     'items_solicitud_traslado',
     'solicitudes_traslado',
     'rutas_despacho',
+    'entregas_caja',
     'movimientos_inventario',
     'siesa_jobs',
     'pedidos_siesa',

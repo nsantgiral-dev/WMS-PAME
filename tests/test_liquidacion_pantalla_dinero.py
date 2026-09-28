@@ -65,8 +65,10 @@ class TestLasRutasAtrasadasAparecen:
         assert [r['id'] for r in d['rutas']] == [hoy.id]
         [a] = d['rutas_atrasadas']
         assert a['id'] == vieja.id and a['atrasada'] is True and a['dias_rezago'] == 3
-        # No suman a los totales del rango.
-        assert d['resumen']['total_recaudado'] == 10000
+        # Un universo (P2-1, 2026-09-27): la cabecera suma lo que la lista
+        # muestra, atrasadas incluidas, y lo dice.
+        assert d['resumen']['total_cobrado'] == 20000 and d['resumen']['pendientes'] == 2
+        assert 'atrasada' in d['resumen']['universo']
 
     def test_la_pantalla_la_pinta_en_pendientes(self, app, client, db, almacen, tmp_path):
         _ruta_entregada(db, almacen, dias_atras=3)

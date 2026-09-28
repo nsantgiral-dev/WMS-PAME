@@ -799,6 +799,25 @@ def avisos_sin_canal(ayer_inicio, ayer_fin) -> list:
         lineas.extend(f'⚠ {a}' for a in quien_opera_la_plata()['avisos'])
 
     _seguro('los roles de la plata', _roles_de_la_plata)
+
+    def _caja_del_conductor():
+        # m051liqcaja: faltantes de caja y actas sin respuesta del conductor.
+        from app.services import caja_conductor
+        lineas.extend(caja_conductor.lineas_de_aviso())
+
+    _seguro('la caja de los conductores', _caja_del_conductor)
+
+    def _transferencias():
+        from app.services import verificacion_banco
+        lineas.extend(verificacion_banco.lineas_de_aviso())
+
+    _seguro('las transferencias por verificar', _transferencias)
+
+    def _cobros_sin_recibo():
+        from app.services import politica_cobro
+        lineas.extend(politica_cobro.lineas_de_aviso_rc())
+
+    _seguro('los cobros sin recibo', _cobros_sin_recibo)
     return lineas
 
 

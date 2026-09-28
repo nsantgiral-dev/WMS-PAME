@@ -191,6 +191,9 @@ BORRADOS_REGISTRADOS = {
         'Editar paradas las reescribe enteras: las viejas quedan en el antes.',
     ('app/services/ruta_service.py', 'RutaService.eliminar_maestra'):
         'Solo se borra una maestra sin viajes: queda la foto con sus paradas.',
+    ('app/services/caja_conductor.py', 'anular_acta'):
+        'Anular un acta de caja suelta sus gastos (el gasto vuelve a quedar por '
+        'legalizar); lo decidido queda en el detalle del acta y en el ANULAR.',
 }
 
 #: Funciones que borran **sin** bitácora. Cada una con su porqué.
@@ -876,6 +879,11 @@ class TestRuta:
         # Se liquida una ruta cerrada (validación de la plata, 2026-09-26).
         db.session.get(RutaDespacho, f.ruta_id).estado = 'ENTREGADA'
         db.session.commit()
+        # Una liquidación = arqueo + documentos (m051liqcaja): primero el acta.
+        from tests.test_caja_conductor import recibir_caja_de
+        recibir_caja_de(db, f.ruta_id, usuario_admin.id)
+        monkeypatch.setattr(ls.LiquidacionService, 'liquidar_ruta_siesa',
+                            staticmethod(lambda _id, admin_id=None: {'errores': []}))
         r = client.post(f'/api/rutas/{f.ruta_id}/liquidar', headers=h)
         assert r.status_code == 200, r.get_json()
         ruta = db.session.get(RutaDespacho, f.ruta_id)

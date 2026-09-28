@@ -178,6 +178,10 @@ class TestAnotarElConsecutivo:
 DECLARADOS = {
     ('app/services/analitica_recorrido.py', 'linea_de_tiempo'):
         'pinta el número del documento en la línea de tiempo; no decide emisión',
+    ('app/services/cartera_service.py', 'en_caja_por_nit'):
+        'rotula la factura de lo cobrado en ruta para el Gestor; no decide emisión',
+    ('app/services/verificacion_banco.py', '_fila'):
+        'rotula la factura de la transferencia por verificar; no decide emisión',
     ('app/services/auditoria/venta.py', 'ningun_despacho_sin_remision_y_factura'):
         'arma el texto «fe» del hallazgo; la decisión es motivo_no_despachable',
     ('app/services/cartera_service.py', '_fila_en_cartera'):

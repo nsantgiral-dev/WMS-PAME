@@ -17,10 +17,12 @@ from app.models.ruta_maestra import RutaMaestra, RutaMaestraParada
 from app.models.ruta_despacho import RutaDespacho, EstadoRutaDespacho, EstadoFinancieroRuta
 from app.utils.fecha import dia_operativo as _dia_operativo
 from app.services.documento_fiscal import filtro_despachable as _filtro_despachable
+from app.services import medios_pago as _medios_pago
 from app.services.bitacora import (registrar_accion, motivo_obligatorio, foto as foto_fila,
                                    FORZADO_ADVERTENCIAS_FLOTA, FORZADO_CIERRE_RUTA,
                                    FORZADO_LIQUIDACION_SIN_CONTAR, FORZADO_PARADA_TARDIA,
-                                   FORZADO_PARADA_CORREGIDA, FORZADO_PARADA_OFICINA_EN_CAMINO)
+                                   FORZADO_PARADA_CORREGIDA, FORZADO_PARADA_OFICINA_EN_CAMINO,
+                                   FORZADO_LIQUIDACION_SIN_ACTA)
 
 logger = logging.getLogger(__name__)
 
@@ -1324,6 +1326,8 @@ class RutaService:
             # contado contraentrega sin crédito en el select (3).
             # Y una PARCIAL que dice qué volvió (4, m045devol).
             'version_formulario':      _pt_p.version_formulario_actual(),
+            # CHEQUE solo si el medio existe en Siesa (`medios_pago`, 2026-09-27).
+            'cheque_habilitado':       _medios_pago.cheque_habilitado(),
         }
 
     # La unidad que el sync roto inventó en TODO el catálogo. No es una lista
@@ -2381,7 +2385,10 @@ class RutaService:
                      'numero': b.numero, 'total': b.total, 'rechazado': b.id in ids_rechazados}
                     for b in bultos_t
                 ],
-                'recaudo':            r.to_dict(include_foto=True) if r else None,
+                # Sin fotos (P2-7): la planilla las bajaba todas en base64 y no
+                # las pintaba. La del comprobante se pide por parada
+                # (`GET /api/rutas/recaudos/<id>/comprobante`).
+                'recaudo':            r.to_dict() if r else None,
                 # Qué documento de esta parada falta mandar a Siesa, según la
                 # política (`politica_cobro.documentos_pendientes`): el botón
                 # «Enviar a Siesa» no lo recalcula en el teléfono. Una
@@ -2437,8 +2444,23 @@ class RutaService:
 
     @staticmethod
     def liquidar_ruta(id: int, usuario_id: int = None,
-                      motivo_devoluciones: str = None) -> dict:
-        """La ruta pasa a LIQUIDADA.
+                      motivo_devoluciones: str = None, motivo_sin_acta: str = None,
+                      puede_liquidar_sin_acta: bool = False,
+                      encolar_documentos: bool = True) -> dict:
+        """La ruta pasa a LIQUIDADA **y sus documentos de Siesa quedan encolados**.
+
+        **Una liquidación = arqueo + documentos** (m051liqcaja, 2026-09-27):
+
+        - Exige el acta de entrega de caja de la ruta
+          (`caja_conductor.exigir_acta_para_liquidar`): la plata que el
+          conductor cobró en efectivo, contada por quien la recibió. Solo el
+          administrador liquida sin ella, con `motivo_sin_acta` (FORZAR).
+        - En la misma acción encola todo lo que está listo para Siesa
+          (`LiquidacionService.liquidar_ruta_siesa`, la misma de «Enviar todo»).
+          Antes eran dos pasos y el segundo se olvidaba: la ruta salía de la
+          lista de pendientes con los cobros sin recibo (5 en QA, $235.402).
+          Si el encolado falla, la ruta queda liquidada igual y sigue en la
+          lista «Liquidada · falta en Siesa» (`documentos_faltantes_de_ruta`).
 
         **No con mercancía sin contar** (m045devol): si una parada
         RECHAZADA/PARCIAL tiene su devolución sin contar (o no la tiene), la
@@ -2502,6 +2524,24 @@ class RutaService:
                 despues={'forzado': FORZADO_LIQUIDACION_SIN_CONTAR,
                          'liquidada_con_devoluciones_sin_contar': _sin_contar})
 
+        # La caja: nadie liquida plata que nadie contó.
+        from app.services import caja_conductor as _cc_lq
+        try:
+            _acta = _cc_lq.exigir_acta_para_liquidar(ruta)
+        except _cc_lq.CajaSinActa as _e_caja:
+            if not (motivo_sin_acta or '').strip():
+                raise
+            if not puede_liquidar_sin_acta:
+                raise ValueError('Solo el administrador liquida una ruta sin el acta de caja.')
+            motivo_sin_acta = motivo_obligatorio(motivo_sin_acta, 'liquidar sin acta de caja')
+            _acta = None
+            registrar_accion(
+                'FORZAR', ruta, usuario_id=usuario_id, motivo=motivo_sin_acta,
+                entidad_codigo=f'RUTA-{ruta.id}',
+                despues={'forzado': FORZADO_LIQUIDACION_SIN_ACTA,
+                         'efectivo_sin_contar': _cc_lq.efectivo_de_ruta(ruta),
+                         'mensaje': str(_e_caja)})
+
         RutaService._marcar_liquidada(
             ruta, usuario_id,
             motivo=(f'Con devoluciones sin contar: {motivo_devoluciones}'
@@ -2513,12 +2553,41 @@ class RutaService:
         resumen_devoluciones = LiquidacionService.crear_devoluciones_pendientes_ruta(id)
 
         db.session.commit()
+
+        siesa, siesa_error = None, None
+        if encolar_documentos:
+            try:
+                siesa = LiquidacionService.liquidar_ruta_siesa(id, admin_id=usuario_id)
+            except Exception as e:  # noqa: BLE001 — la liquidación ya quedó; lo que falta se ve
+                db.session.rollback()
+                logger.error('[LIQUIDAR] ruta %s liquidada; el encolado a Siesa falló: %s', id, e)
+                siesa_error = str(e)[:300]
+        ruta = db.session.get(RutaDespacho, id)
         return {
             'ok':              True,
             'total_recaudado': ruta.total_recaudado(),
             'ruta':            ruta.to_dict(),
             'devoluciones_pendientes_creadas': resumen_devoluciones['creadas'],
+            'acta_caja_id':    _acta.id if _acta is not None else None,
+            'siesa':           siesa,
+            'siesa_error':     siesa_error,
+            'falta_en_siesa':  RutaService.documentos_faltantes_de_ruta(ruta),
         }
+
+    @staticmethod
+    def documentos_faltantes_de_ruta(ruta) -> list:
+        """Lo que todavía falta encolar a Siesa en la ruta, por parada:
+        `[{recaudo_id, pedido, documentos}]` (`politica_cobro.documentos_pendientes`,
+        la única). Vacío = la liquidación está completa en Siesa (encolada)."""
+        from app.services import politica_cobro as _pc
+        out = []
+        for r in RecaudoEntrega.query.filter_by(ruta_id=ruta.id).all():
+            docs = _pc.documentos_pendientes(r, r.tarea)
+            if docs:
+                out.append({'recaudo_id': r.id, 'tarea_id': r.tarea_id,
+                            'pedido': getattr(r.tarea, 'numero_pedido_siesa', None),
+                            'documentos': docs})
+        return out
 
     @staticmethod
     def pedir_cierre(id: int, usuario_id: int) -> dict:

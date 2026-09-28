@@ -99,6 +99,8 @@ _RUTAS_DE_SERVICIO = {
     ('cartera.py', 'gestor_reevaluar'),
     ('cartera.py', 'gestor_habilitaciones'),
     ('cartera.py', 'gestor_salud'),
+    # Lo cobrado en ruta que Siesa todavía no refleja (2026-09-27).
+    ('cartera.py', 'gestor_en_caja'),
 }
 _DECORADOR_DE_SERVICIO = 'exige_token_servicio'
 

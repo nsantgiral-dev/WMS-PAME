@@ -594,6 +594,65 @@ def clasificar_filas(filas: list, gracia_por_sucursal: dict = None,
 
 
 # ═════════════════════════════════════════════════════════════════════════════
+# Lo que el conductor ya cobró y Siesa todavía no sabe (P2-6, 2026-09-27)
+# ═════════════════════════════════════════════════════════════════════════════
+
+def en_caja_por_nit(nit: str) -> dict:
+    """Lo que el WMS sabe cobrado en ruta a este cliente y todavía no llegó a
+    Siesa como recibo aplicado: para que el Gestor de Cartera **no le cobre
+    otra vez** a quien ya pagó. Sin red.
+
+    Una fila por parada de contado (trato CONTADO) con cobro, con su FE y el
+    estado del recibo: `EN_CAJA_CONDUCTOR` (sin recibo en cola), `RC_EN_COLA`,
+    `RC_ENVIADO` (salió sin confirmar), `RC_APLICADO_RECIENTE` (confirmado hace
+    menos de `MARGEN_RC`: la cartera puede no reflejarlo todavía). Una
+    transferencia que **no apareció en el banco** no está en caja: va aparte
+    (`no_encontradas_en_banco`), porque esa sí es deuda del cliente.
+    """
+    from app.models.packing import TareaPacking
+    from app.models.recaudo_entrega import EstadoEntrega, RecaudoEntrega
+    from app.services import verificacion_banco as _vb
+    from app.services.politica_cobro import rc_llegaron
+    from app.services.liquidacion_service import _hay_rc_en_cola
+    nit = nit_normalizado(nit)
+    if not nit:
+        raise ValueError('Falta el NIT del cliente')
+    ahora = datetime.utcnow()
+    q = (RecaudoEntrega.query.join(TareaPacking, TareaPacking.id == RecaudoEntrega.tarea_id)
+         .filter(TareaPacking.pedido_clave.in_(_claves_del_nit(nit)),
+                 RecaudoEntrega.estado_entrega.in_((EstadoEntrega.ENTREGADO, EstadoEntrega.PARCIAL)),
+                 RecaudoEntrega.monto_cobrado > 0))
+    recaudos = [r for r in q.all() if _cp.trato_de_cobro(r, r.tarea) == _cp.TRATO_CONTADO]
+    llegaron = rc_llegaron(recaudos)
+    filas, no_banco = [], []
+    for r in recaudos:
+        t = r.tarea
+        fila = {'factura': f'{t.fe_tipo}-{t.fe_consec}' if t.fe_consec else None,
+                'pedido': t.numero_pedido_siesa, 'pedido_clave': t.pedido_clave,
+                'monto_cobrado': float(r.monto_cobrado or 0),
+                'forma_pago': r.forma_pago,
+                'fecha_cobro': (r.fecha_cobro or r.fecha_confirmacion).isoformat()
+                               if (r.fecha_cobro or r.fecha_confirmacion) else None}
+        if _vb.estado(r) == _vb.NO_ENCONTRADA:
+            no_banco.append(fila)
+            continue
+        if r.id in llegaron:
+            if r.siesa_rc_at is None or ahora - r.siesa_rc_at >= MARGEN_RC:
+                continue
+            fila['estado'] = 'RC_APLICADO_RECIENTE'
+        elif r.siesa_rc_triggered:
+            fila['estado'] = 'RC_ENVIADO'
+        elif _hay_rc_en_cola(r.id):
+            fila['estado'] = 'RC_EN_COLA'
+        else:
+            fila['estado'] = 'EN_CAJA_CONDUCTOR'
+        filas.append(fila)
+    return {'nit': nit, 'en_caja': filas,
+            'total_en_caja': round(sum(f['monto_cobrado'] for f in filas), 2),
+            'no_encontradas_en_banco': no_banco, 'generado_en': ahora.isoformat()}
+
+
+# ═════════════════════════════════════════════════════════════════════════════
 # Lo que el WMS ya inició y Siesa todavía no factura
 # ═════════════════════════════════════════════════════════════════════════════
 

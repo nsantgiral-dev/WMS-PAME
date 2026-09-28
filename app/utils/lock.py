@@ -113,6 +113,7 @@ LOCK_ASIGNACION_BARRIDO = 2030          # asignacion.barrer (suelta lo asignado 
 LOCK_CODIGO_LPN = 3001                  # LPN.generar_codigo
 LOCK_CODIGO_TAREA_REPOSICION = 3002     # TareaReposicion.generar_codigo
 LOCK_RECEPCION_POR_OC = 3003            # recepcion_service.crear_recepcion
+LOCK_ACTA_CAJA = 2075                   # caja_conductor.registrar_acta (dos actas del mismo conductor a la vez, m051liqcaja)
 
 # Rangos: (base, tamaño). La clave es `clave_en_rango(RANGO_X, n)`, 0 ≤ n < tamaño.
 RANGO_CUPO_CONTEO = (4000, 1000)        # conteo_politica.bloquear_cupo, n = almacen_id
