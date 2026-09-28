@@ -486,10 +486,12 @@ class TestLasPuertas:
 
     def test_el_cc2_nace_para_un_presente_y_nunca_para_el_del_cc1(self, db, nb1):
         from app.services.conteo_service import ConteoService
-        cc1 = _conteo(db, nb1['almacen'], operario=nb1['ana'], estado='EN_PROCESO')
+        # Como en la vida real: el CC1 ya está contado (SEGUNDO_CONTEO), así que
+        # no es el «conflicto de hueco» lo que aparta a Ana, sino el doble ciego.
+        cc1 = _conteo(db, nb1['almacen'], operario=nb1['ana'], estado='SEGUNDO_CONTEO')
         nb1['luis'].ultima_senal_at = None                    # Luis no vino
         db.session.commit()
-        cc2 = ConteoService._crear_conteo_verificacion(cc1, nb1['ana'].id)
+        cc2 = ConteoService._crear_conteo_verificacion(cc1, None)
         db.session.commit()
         assert cc2.operario_id == nb1['caro'].id, 'Luis (id menor) no vino; Ana hizo el CC1'
 
