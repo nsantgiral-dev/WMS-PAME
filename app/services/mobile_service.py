@@ -728,6 +728,9 @@ class MobileService:
                         TareaPicking.referencia_documento == tarea.referencia_documento,
                         TareaPicking.operario_id.isnot(None),
                         TareaPicking.operario_id != operario_id,
+                        # La misma regla que la consulta optimista de arriba:
+                        # pegado a quien lo empezó mientras esté disponible.
+                        _presencia.condicion_sql_disponible(TareaPicking.operario_id),
                     )
                     .first()
                 )

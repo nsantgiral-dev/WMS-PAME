@@ -1993,6 +1993,14 @@ class TrasladoService:
             db.session.flush()
             logger.info('[TRASLADO] Ubicacion virtual creada: %s', codigo_ub)
 
+        # Quien recoge, si se eligió uno: solo si pica en esta bodega y está en
+        # turno; si no, las tareas nacen en la cola (`asignable_o_none`). Lo
+        # encontró el trinquete de asignación (m051asignacion): era la única
+        # puerta que copiaba el dueño de la solicitud sin preguntar.
+        from app.services import asignacion
+        dueno = asignacion.asignable_o_none(solicitud.operario_id, asignacion.PICKING_TRASLADO,
+                                            bodega=bodega)
+
         # Crear TareasPicking directas (sin FEFO — tienda no tiene bins WMS)
         for item in solicitud.items:
             cantidad = item.cantidad_aprobada or item.cantidad_solicitada
@@ -2010,7 +2018,7 @@ class TrasladoService:
                 referencia_documento=solicitud.codigo,
                 tipo_documento='TRASLADO',
                 bodega_origen_siesa=bodega,
-                operario_id=solicitud.operario_id,
+                operario_id=dueno,
             )
             db.session.add(tarea)
             logger.info('[TRASLADO] %s TareaPicking tienda creada: %s × %s uds',
