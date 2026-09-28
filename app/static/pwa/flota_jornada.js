@@ -393,7 +393,8 @@ function fjHtmlIndicadores(j) {
     fjKpi(jj.ultimo_evento || 'sin dato', 'Último registro suyo'),
     fjKpi(jj.horas !== null && jj.horas !== undefined ? `${fjNum(jj.horas)} h`
       : (jj.tramo_observado_h !== null && jj.tramo_observado_h !== undefined
-        ? `${fjNum(jj.tramo_observado_h)} h vistas` : 'no se sabe'), 'Jornada'),
+        ? `${fjNum(jj.tramo_observado_h)} h vistas` : 'no se sabe'),
+      jj.turnos > 1 ? `Jornada en ${jj.turnos} turnos (sin contar ${fjDuracion(jj.entre_turnos_min)} sin camión)` : 'Jornada'),
     fjKpi(jj.no_explicado_min === null || jj.no_explicado_min === undefined
       ? 'no se sabe' : fjDuracion(jj.no_explicado_min), 'Sin explicar'),
     fjKpi(String(p.propias || 0), 'Entregas confirmadas por él'),
