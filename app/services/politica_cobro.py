@@ -227,6 +227,57 @@ def monto_rc(recaudo, *, total_neto_siesa: float = None, retencion: float = 0.0,
     return round(bruto - float(retencion or 0), 2)
 
 
+def esperado_en_caja(recaudo, tarea=None):
+    """**Cuánta plata tenía que traer el conductor** de una parada que se cobra:
+    `(valor, fuente)`. La usa la reconciliación (validación e2e 2026-09-26: la
+    columna «debían cobrarse» sumaba la factura completa y una PARCIAL con su
+    nota crédito, o una retención confirmada, salían como plata no cobrada).
+
+    - La factura (`valor_factura`), menos la retención que procede (confirmada
+      o sin decidir: `monto_descuento`; rechazada: nada), menos, en una
+      PARCIAL, lo que volvió valorizado a precio de factura (lo DECLARADO por
+      el conductor × `valor_unitario` de su línea amarrada).
+    - Sin factura, o una PARCIAL cuyo devuelto no se puede valorizar: lo que el
+      conductor tenía para cobrar (`monto_cobrado + monto_descuento`), con
+      fuente `DECLARADO` — no se inventa un faltante (Regla 0).
+    """
+    from app.models.recaudo_entrega import EstadoEntrega
+    t = tarea if tarea is not None else getattr(recaudo, 'tarea', None)
+    valor = getattr(t, 'valor_factura', None) if t is not None else None
+    descuento = float(recaudo.monto_descuento or 0)
+    retencion = 0.0 if decision_retencion(recaudo) == RECHAZADA else descuento
+    declarado = round(float(recaudo.monto_cobrado or 0) + descuento, 2)
+    if valor is None:
+        return declarado, 'DECLARADO'
+    if recaudo.estado_entrega != EstadoEntrega.PARCIAL:
+        return round(float(valor) - retencion, 2), 'FACTURA'
+    devuelto = _devuelto_valorizado(recaudo)
+    if devuelto is None:
+        return declarado, 'DECLARADO'
+    return round(float(valor) - devuelto - retencion, 2), 'FACTURA_MENOS_DEVUELTO'
+
+
+def _devuelto_valorizado(recaudo):
+    """Lo que el conductor declaró de vuelta en una PARCIAL, a precio de
+    factura; `None` si alguna línea no se puede valorizar."""
+    rid = getattr(recaudo, 'id', None)
+    if rid is None:
+        return None
+    from app.services.devolucion_ruta import devolucion_vigente
+    dev = devolucion_vigente(rid)
+    if dev is None or ((dev.declaracion_conductor or {}).get('declarado_por_producto')):
+        return None
+    total = 0.0
+    for ln in dev.lineas:
+        q = ln.cantidad_declarada if ln.cantidad_declarada is not None else None
+        if q is None or float(q) <= 0:
+            continue
+        if ln.valor_unitario is None:
+            return None
+        total += float(q) * float(ln.valor_unitario)
+    return round(total, 2)
+
+
 def rc_resta_retencion(recaudo) -> bool:
     """¿El RC de esta parada sale neto de la retención? Lo que dice `monto_rc`,
     para la pantalla (la vista previa no puede calcular por su cuenta)."""

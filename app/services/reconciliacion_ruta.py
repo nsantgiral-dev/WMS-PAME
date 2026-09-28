@@ -160,7 +160,11 @@ def reconciliar(ruta_id: int) -> dict:
         if not _debia_cobrarse(r, tarea):
             continue
 
-        esperado = _monto(getattr(tarea, 'valor_factura', None))
+        # Lo que tenía que traer en caja: una política (`esperado_en_caja`),
+        # no la factura entera (una PARCIAL con su NC o una retención
+        # confirmada no son plata no cobrada; validación e2e 2026-09-26).
+        from app.services import politica_cobro as _pc_rec
+        esperado, _fuente_esperado = _pc_rec.esperado_en_caja(r, tarea)
         cobrado = _monto(r.monto_cobrado)
         en_siesa = _rc_llego_a_siesa(r)
         del_recibo = _monto_del_recibo(r.id)
@@ -227,7 +231,8 @@ def reconciliar(ruta_id: int) -> dict:
         #     una parcial exige valorizar `items_entregados`, que es otra
         #     medición y no se finge acá.
         if (r.estado_entrega == EstadoEntrega.ENTREGADO and cobrado > 0):
-            faltante = esperado - cobrado - _monto(r.monto_descuento)
+            # `esperado` ya descuenta la retención que procede.
+            faltante = esperado - cobrado
             if faltante > TOLERANCIA_VALOR:
                 detalle.append({
                     'recaudo_id': r.id, 'tarea_id': r.tarea_id,

@@ -864,9 +864,7 @@ FORMA_FUERA_DE_LA_POLITICA = {
     ('app/routes/rutas.py', 'liquidacion_desglose'):
         'reporte: lista y cuenta las paradas marcadas CRÉDITO (cada una trae '
         'además `credito_no_autorizado` de la política)',
-    ('app/routes/rutas.py', 'liquidacion_dashboard'):
-        'reporte: suma el monto declarado CRÉDITO en su propio renglón del tablero',
-}
+}  # liquidacion_dashboard salió el 2026-09-26: el KPI «Crédito» usa la política.
 
 
 class TestNingunaFormaDePagoDecideCobroFueraDeLaPolitica:
@@ -891,7 +889,9 @@ class TestNingunaFormaDePagoDecideCobroFueraDeLaPolitica:
     def test_piso(self):
         """Si el escáner se rompe devuelve cero y se lee como «todo bien»."""
         total = sum(len(comparaciones_de_forma(a)) for _r, a in _archivos())
-        assert total >= 2
+        # Uno (el desglose) desde que el tablero pasó a la política (2026-09-26);
+        # lo que el escáner ve lo prueban los meta-tests de abajo.
+        assert total >= 1
 
     @pytest.mark.parametrize('codigo', [
         "def f(r):\n    return r.forma_pago == 'CREDITO'",

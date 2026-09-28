@@ -198,7 +198,6 @@ class TestLaReconciliacionNoInventaFugas:
     descuento — el detalle por caso ya exime la parcial (líneas 221-228), la
     columna no."""
 
-    @pytest.mark.xfail(strict=True, reason='debian_cobrarse usa la factura completa (reconciliacion_ruta.py:162)')
     def test_una_parcial_cobrada_completa_no_es_fuga(self, db, almacen):
         from app.services.reconciliacion_ruta import reconciliar
         t = _tarea(db, almacen, f'003-PD-{uuid.uuid4().int % 10**6}', cond='C02', valor=113_050)
@@ -207,7 +206,6 @@ class TestLaReconciliacionNoInventaFugas:
         fuga = next(f for f in d['fugas'] if f['tramo'] == 'entrega_sin_cobro')
         assert fuga['valor'] <= 1, d
 
-    @pytest.mark.xfail(strict=True, reason='la retención confirmada cuenta como plata no cobrada')
     def test_una_retencion_confirmada_no_es_fuga(self, db, almacen):
         from app.services.reconciliacion_ruta import reconciliar
         t = _tarea(db, almacen, f'003-PD-{uuid.uuid4().int % 10**6}', cond='C02', valor=100_000)
@@ -259,7 +257,6 @@ class TestFugasNoPrometeUnaNotaCreditoQueNoViene:
     «NC: **Sin nota crédito todavía** · Faltó al volver (und): 8» y sumó sus 8
     unidades a «15 unidades devueltas» (volvieron 7)."""
 
-    @pytest.mark.xfail(strict=True, reason='analitica_fugas: nota_credito «todavía» sobre FALTANTE_TOTAL')
     def test_el_caso_del_faltante_total_no_dice_todavia(self, app, client, db, almacen):
         from app.utils.fecha import dia_operativo
         from tests.test_e2e_total_20260925 import _faltante_total
@@ -271,6 +268,9 @@ class TestFugasNoPrometeUnaNotaCreditoQueNoViene:
         assert r.status_code == 200, r.get_json()
         caso = next(c for c in r.get_json()['casos'] if c['referencia'] == 'PD1005')
         assert 'todavía' not in (caso['detalle'].get('nota_credito') or ''), caso
+        assert 'No habrá' in caso['detalle']['nota_credito'], caso
+        # Faltante ≠ devuelto: lo que no volvió no se cuenta como devuelto.
+        assert not caso.get('unidades'), caso
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -284,7 +284,6 @@ class TestLosEnviosDeLiquidacionEnHoraDeBogota:
     zona y `_liqJobCard` (`liquidacion.js:402`) hace `new Date(...)` sin
     `timeZone`: en un teléfono de Bogotá lo lee como hora local."""
 
-    @pytest.mark.xfail(strict=True, reason='liquidacion.js:402 new Date(naive UTC) sin timeZone; tipo crudo')
     def test_la_tarjeta_dice_la_hora_de_bogota_y_en_palabras(self, tmp_path):
         job = {'id': 9, 'tipo': 'RECIBO_CAJA', 'estado': 'COMPLETADO', 'intentos': 0, 'max_intentos': 5,
                'fecha_creacion': '2026-09-30T23:20:01.381611', 'referencia_tipo': 'RecaudoEntrega',
@@ -328,7 +327,6 @@ class TestElKpiDeCreditoMideAlgo:
     «Crédito $0» con cuatro entregas a crédito por $821.100. `routes/rutas.py:1456`
     suma `monto_cobrado` de las paradas CREDITO, que es 0 por definición."""
 
-    @pytest.mark.xfail(strict=True, reason='total_credito suma monto_cobrado (0) de las paradas a crédito')
     def test_una_entrega_a_credito_suma(self, app, client, db, almacen):
         from app.utils.fecha import dia_operativo
         t = _tarea(db, almacen, f'003-PD-{uuid.uuid4().int % 10**6}', cond='C04', valor=357_000)

@@ -209,7 +209,8 @@ function _liqRenderKpis(r) {
     kpi('Liquidadas', r.liquidadas || 0, '#22c55e') +
     kpi('Efectivo', _liqFmt(r.total_efectivo), '#4ade80') +
     kpi('Transferencia', _liqFmt(r.total_transferencia), '#60a5fa') +
-    kpi('Crédito', _liqFmt(r.total_credito), '#a78bfa');
+    kpi('Tarjeta', _liqFmt(r.total_tarjeta), '#60a5fa') +
+    kpi('Crédito', (r.credito_sin_valor ? 'al menos ' : '') + _liqFmt(r.total_credito), '#a78bfa');
 }
 
 // ── Señales por conductor ───────────────────────────────────────────────────
@@ -465,21 +466,38 @@ async function liqCargarJobs() {
  * @param {boolean} mostrarReintentar - Whether to show the retry button.
  * @returns {string} HTML string for the job card.
  */
+/** Los envíos en palabras (validación e2e 2026-09-26: se pintaban los códigos). */
+const LIQ_TIPO_ENVIO = { RECIBO_CAJA: 'Recibo de caja', DOCUMENTO_CONTABLE_RET: 'Retención',
+                         NOTA_CREDITO_FACTURA: 'Nota crédito de ruta' };
+const LIQ_ESTADO_ENVIO = { PENDIENTE: 'En cola', PROCESANDO: 'Enviando', COMPLETADO: 'Enviado',
+                           FALLIDO: 'Falló', DESCARTADO: 'Descartado' };
+
+/** La hora de Bogotá de un instante que el servidor manda en UTC sin zona. */
+function _liqHoraBogota(iso) {
+  if (!iso) return '—';
+  const s = String(iso);
+  const conZona = /[zZ]|[+-]\d\d:?\d\d$/.test(s) ? s : s + 'Z';
+  const d = new Date(conZona);
+  if (isNaN(d.getTime())) return '—';
+  return d.toLocaleString('es-CO', { timeZone: 'America/Bogota', day: '2-digit', month: '2-digit',
+                                     hour: '2-digit', minute: '2-digit' });
+}
+
 function _liqJobCard(j, mostrarReintentar) {
   const estadoColor = { PENDIENTE: '#f59e0b', COMPLETADO: '#22c55e', FALLIDO: '#ef4444' };
   const color = estadoColor[j.estado] || '#888';
-  const fecha = j.fecha_creacion ? new Date(j.fecha_creacion).toLocaleString('es-CO', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' }) : '—';
+  const fecha = _liqHoraBogota(j.fecha_creacion);
 
   return `
     <div class="tabla-card" style="margin-bottom:10px;${j.estado === 'FALLIDO' ? 'border-left:3px solid #ef4444;' : ''}">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px;">
         <div>
-          <div style="font-size:var(--fs-xs);font-weight:700;color:var(--tx);">${esc(j.tipo || '—')}</div>
+          <div style="font-size:var(--fs-xs);font-weight:700;color:var(--tx);">${esc(LIQ_TIPO_ENVIO[j.tipo] || 'Envío a Siesa')}</div>
           <div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:2px;">${fecha}</div>
         </div>
         <div style="display:flex;align-items:center;gap:6px;">
           <span style="font-size:var(--fs-xs);color:var(--tx3);">${esc(j.intentos || 0)}/${j.max_intentos || 3}</span>
-          <span style="font-size:var(--fs-xs);font-weight:700;color:${color};background:${color}22;padding:3px 8px;border-radius:20px;">${esc(j.estado)}</span>
+          <span style="font-size:var(--fs-xs);font-weight:700;color:${color};background:${color}22;padding:3px 8px;border-radius:20px;">${esc(LIQ_ESTADO_ENVIO[j.estado] || j.estado)}</span>
         </div>
       </div>
       ${j.error_ultimo ? `
@@ -487,7 +505,7 @@ function _liqJobCard(j, mostrarReintentar) {
           ${esc(j.error_ultimo.slice(0, 200))}
         </div>` : ''}
       ${j.referencia_tipo ? `
-        <div style="font-size:var(--fs-xs);color:var(--tx3);">Ref: ${esc(j.referencia_tipo)} #${esc(j.referencia_id || '—')}</div>` : ''}
+        <div style="font-size:var(--fs-xs);color:var(--tx3);">${j.referencia_tipo === 'RecaudoEntrega' ? 'Parada' : 'Documento'} #${esc(j.referencia_id || '—')}</div>` : ''}
       ${mostrarReintentar && j.puede_reintentar !== false ? `
         <div style="display:flex;justify-content:flex-end;margin-top:8px;">
           <button onclick="liqReintentarJob(${esc(j.id)})"

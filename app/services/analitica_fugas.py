@@ -361,13 +361,19 @@ def _valor_devuelto_parcial(recaudo, tarea):
 def _desenlace_nc(r) -> str:
     if r.siesa_nc_resultado:
         return r.siesa_nc_resultado
-    return 'EN_COLA' if r.siesa_nc_triggered else 'SIN_NC'
+    if r.siesa_nc_triggered:
+        return 'EN_COLA'
+    # Una devolución contada en cero (FALTANTE_TOTAL) o cancelada no va a
+    # tener nota crédito: no es «todavía» (validación e2e 2026-09-26).
+    from app.services.devolucion_ruta import nc_no_llegara
+    return 'NO_HABRA' if nc_no_llegara(r) else 'SIN_NC'
 
 
 _TEXTO_NC = {'ENVIADO': 'Nota crédito enviada', 'YA_SALDADA': 'Factura ya saldada',
              'SIN_VERIFICAR': 'Nota crédito sin verificar', 'FALLIDO': 'Nota crédito fallida',
              'SIN_LINEAS': 'Nota crédito sin líneas', 'EN_COLA': 'Nota crédito en cola',
-             'SIN_NC': 'Sin nota crédito todavía'}
+             'SIN_NC': 'Sin nota crédito todavía',
+             'NO_HABRA': 'No habrá nota crédito: no volvió nada, o la devolución se canceló'}
 
 
 def _rechazos_ruta(desde, hasta, ctx) -> Resultado:
@@ -404,6 +410,9 @@ def _rechazos_ruta(desde, hasta, ctx) -> Resultado:
         nc = _desenlace_nc(r)
         desenlaces[nc] += 1
         falt = faltantes.get(r.id)
+        if falt and unidades is not None:
+            # Lo que faltó al volver no se devolvió: faltante ≠ devuelto.
+            unidades = max(0, unidades - int(round(falt['faltante_unidades'] or 0)))
         if falt:
             g = faltante_por_conductor[r.ruta.conductor_id if r.ruta else None]
             g['devoluciones'] += 1

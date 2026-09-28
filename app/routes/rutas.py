@@ -1448,7 +1448,10 @@ def liquidacion_dashboard():
 
     total_efectivo = 0
     total_transferencia = 0
+    total_tarjeta = 0
     total_credito = 0
+    credito_sin_valor = 0
+    from app.services import cond_pago as _cp_kpi
     total_recaudado = 0
     pendientes = 0
     liquidadas = 0
@@ -1521,10 +1524,21 @@ def liquidacion_dashboard():
             # medio nuevo sin que nada avisara — el monto seguía sumando a
             # `ruta_recaudado`/`total_recaudado`, solo desaparecía del
             # desglose por medio.
-            elif fp.startswith('TRANSFERENCIA') or fp in ('CONSIGNACION', 'TARJETA'):
+            elif fp.startswith('TRANSFERENCIA') or fp == 'CONSIGNACION':
                 total_transferencia += monto
-            elif fp == 'CREDITO':
-                total_credito += monto
+            elif fp == 'TARJETA':
+                total_tarjeta += monto
+            # Crédito: lo que se fue a crédito (la factura), no lo cobrado —
+            # que en una parada a crédito es 0 por definición y dejaba el KPI
+            # en $0 siempre (validación e2e 2026-09-26). Por la política de
+            # cobro (`trato_de_cobro`), no por la forma de pago.
+            if r.estado_entrega in ('ENTREGADO', 'PARCIAL') and \
+                    _cp_kpi.trato_de_cobro(r, r.tarea) == _cp_kpi.TRATO_CREDITO:
+                _vf = getattr(r.tarea, 'valor_factura', None) if r.tarea else None
+                if _vf is None:
+                    credito_sin_valor += 1
+                else:
+                    total_credito += float(_vf) - monto
 
         if not es_atrasada:
             total_recaudado += ruta_recaudado
@@ -1587,7 +1601,10 @@ def liquidacion_dashboard():
             'total_recaudado': total_recaudado,
             'total_efectivo': total_efectivo,
             'total_transferencia': total_transferencia,
+            'total_tarjeta': total_tarjeta,
             'total_credito': total_credito,
+            # Paradas a crédito sin la factura anotada: el total es un piso.
+            'credito_sin_valor': credito_sin_valor,
         },
         'rutas': rutas_out,
         # Entregadas sin liquidar de días anteriores al rango (no suman arriba).
