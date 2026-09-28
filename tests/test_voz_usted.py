@@ -35,7 +35,9 @@ de la frase es tercera persona («el sistema revisa…»). Lo citado entre «»
 **Lo que NO ve, dicho:** texto armado letra a letra; voseo en MAYÚSCULAS
 sostenidas (se saltan como siglas); un imperativo tú en medio de una frase
 («…y cierra la caja»); un verbo que no está en las raíces (se agregan cuando
-aparece); los textos que viven en la base (motivos escritos por personas,
+aparece); el imperativo tú de las formas declaradas en `_TERCERA_PERSONA`
+(«Crea…», «Carga…»: en esta aplicación casi siempre son sustantivo o
+descripción); los textos que viven en la base (motivos escritos por personas,
 plantillas guardadas).
 
 **Inventario que solo encoge:** `PENDIENTE_OTRO_FRENTE` — los archivos que
@@ -83,7 +85,7 @@ _REFLEXIVOS = {'fij', 'asegur', 'acord', 'comunic', 'qued', 'olvid', 'ubic', 'id
 #: Palabras que el español usa para otra cosa y que la generación produce.
 _COLISIONES = {'pasas', 'notas', 'tomate', 'ponle', 'tomás', 'ajustes', 'reportes', 'pases',
                'dispares', 'importes', 'contraste', 'desgaste', 'cierres', 'leías',
-               'iniciales', 'pages'}
+               'iniciales', 'pages', 'metas'}
 
 
 def _formas_voseo():
@@ -101,6 +103,7 @@ def _formas_voseo():
             f.add(raiz + 'es')                            # que lo sumes
         else:
             f.add(raiz + 'ías')                           # tenías
+            f.add(raiz + 'as')                            # no lo decidas · que lo recibas
         if raiz in _REFLEXIVOS:
             f.add(raiz + vt + 'te')                       # fijate · asegurate
     f |= {'tenés', 'podés', 'querés', 'sabés', 'sos', 'debés', 'hacés', 'ponés', 'decís',
@@ -178,6 +181,42 @@ _SIGUE = {'espera': re.compile(r"\s+(?:a\s+que|que)\b"),
                                          'cancela', 'guarda', 'define', 'decide')}}
 _SIGUE_CUALQUIERA = re.compile(r'')
 
+#: El imperativo tú regular de CADA raíz (-ar → «actualiza», -er/-ir →
+#: «decide»), no solo los de la lista de arriba. Hasta el 2026-09-27 la lista
+#: se escribía a mano y un verbo que no estaba no existía: «Actualiza la página
+#: en unos segundos» (`traslado_service`) y «Ajusta el monto…»
+#: (`liquidacion_service`) pasaban limpios. Fuera: los que no se forman así
+#: (diptongan o cambian la raíz: «pone» no es imperativo, «vuelve» sí pero no
+#: sale de «volv»).
+_IMPERATIVO_IRREGULAR = {'pon', 'ten', 'hac', 'volv', 'devolv', 'resolv', 'mov', 'atend',
+                         'entend', 'encend', 'eleg', 'correg', 'segu', 'ped'}
+
+#: Formas generadas que en esta aplicación son sustantivo o tercera persona al
+#: empezar una frase, con el texto real que lo muestra. **Solo encoge**:
+#: `test_la_tercera_persona_declarada_sigue_viva` exige que cada una siga
+#: apareciendo; la que ya no aparezca sale, y vuelve a detectarse. Lo que NO
+#: ve, dicho: estas formas usadas como imperativo («Crea una ubicación…»).
+_TERCERA_PERSONA = {
+    'queda': 'Queda FALLIDO sin verificar', 'nota': 'Nota crédito enviada',
+    'carga': 'Carga manual de TXT', 'corre': 'Corre en el worker',
+    'marca': 'Marca leída de Siesa', 'crea': 'Crea los que faltan (ayuda de un comando)',
+    'manda': '— manda Siesa', 'descarga': 'Descarga iniciada',
+    'termina': '… termina antes de …', 'suma': 'Suma del valor neto',
+    'copia': 'Copia que puede quedar vieja', 'reversa': 'Reversa traslado …',
+    'autoriza': 'Líder de cartera (autoriza crédito)', 'entra': 'Entra al inventario',
+    'mira': 'kardex mira hacia atrás', 'baja': 'Baja rotación',
+    'registra': 'Registra desde el deploy', 'deja': 'Deja el vehículo fuera de sede',
+    'libera': '— libera el slot', 'consulta': 'Consulta dinámica del maestro',
+    'necesita': 'Necesita catálogo propio', 'liquida': 'Liquidador (liquida rutas)',
+    'pregunta': 'Reconciliar pregunta a Siesa', 'lee': 'Lee la clasificación del ítem',
+    'toma': 'Además de los vencidos, toma productos', 'responde': '— responde …',
+    'reporta': '— reporta éxito/error fila por fila',
+}
+_IMPERATIVO_GENERADO = frozenset(
+    ({r + 'a' for r in _AR}
+     | {r + 'e' for r in _ER + _IR if r not in _IMPERATIVO_IRREGULAR})
+    - TUTEO_IMPERATIVO - set(_TERCERA_PERSONA) - VOSEO - TUTEO - _COLISIONES)
+
 _L = 'A-Za-zÁÉÍÓÚáéíóúñÑüÜ'
 #: Una palabra que no es parte de un identificador (`tu_rol`, `.prueba-x`,
 #: `/api/…`, `#id`, `$x`).
@@ -210,6 +249,10 @@ def hallazgos(texto):
         elif (lw in TUTEO_IMPERATIVO and not un_token
               and _INICIO.search(t[:m.start()])
               and _SIGUE.get(lw, _SIGUE_CUALQUIERA).match(t, m.end())):
+            out.append((w, 'tuteo'))
+        elif (lw in _IMPERATIVO_GENERADO and not un_token
+              and _INICIO.search(t[:m.start()])
+              and _SIGUE_PALABRA.match(t, m.end())):
             out.append((w, 'tuteo'))
     return out
 
@@ -592,6 +635,15 @@ class TestElDetectorVeLoQueTieneQueVer:
         ('<div>Selecciona una ruta</div>', 'Selecciona'),
         ('Contado contraentrega — cobrá al entregar', 'cobrá'),
         ('Recontá este producto con cuidado', 'Recontá'),
+        # Los cuatro que pasaron limpios hasta el 2026-09-27: subjuntivo tú de
+        # un verbo -ir («decidas») e imperativo tú fuera de la lista a mano.
+        ('Todavía no decidas con estos números', 'decidas'),
+        ('No decidas con estos números todavía', 'decidas'),
+        ('No esperar el recuento: la diferencia queda para que la decidas', 'decidas'),
+        ('(job 16). Actualiza la página en unos segundos.', 'Actualiza'),
+        ('Pendiente $5.000. Ajusta el monto cuando el cliente pague', 'Ajusta'),
+        ('Después de liquidar, documenta NC/RC/DC por parada.', 'documenta'),
+        ('que no lo recibas así', 'recibas'),
     ])
     def test_ve(self, texto, palabra):
         assert palabra in [w for w, _ in hallazgos(texto)], (texto, hallazgos(texto))
@@ -617,6 +669,33 @@ class TestElDetectorVeLoQueTieneQueVer:
     ])
     def test_no_marca_lo_sano(self, texto):
         assert hallazgos(texto) == [], (texto, hallazgos(texto))
+
+    @pytest.mark.parametrize('raiz', sorted(set(_AR) | set(_ER) | set(_IR)))
+    def test_cada_raiz_tiene_su_imperativo_tu(self, raiz):
+        """Ningún verbo de las raíces queda fuera del imperativo tú: o se
+        detecta, o está declarado como irregular o como tercera persona."""
+        forma = raiz + ('a' if raiz in _AR else 'e')
+        if (raiz in _IMPERATIVO_IRREGULAR or forma in _TERCERA_PERSONA
+                or forma in _COLISIONES):
+            return
+        cola = ' a que termine' if forma == 'espera' else ' la página'   # ver _SIGUE
+        texto = f'Listo. {forma.capitalize()}{cola}'
+        assert hallazgos(texto), texto
+
+    def test_la_tercera_persona_declarada_sigue_viva(self):
+        textos, _ = _corpus()
+        vistas = set()
+        for lista in textos.values():
+            for _, t in lista:
+                tt = _CITA.sub('«cita»', t)
+                for m in _PALABRA.finditer(tt):
+                    lw = m.group(0).lower()
+                    if (lw in _TERCERA_PERSONA and _INICIO.search(tt[:m.start()])
+                            and _SIGUE_PALABRA.match(tt, m.end())):
+                        vistas.add(lw)
+        muertas = set(_TERCERA_PERSONA) - vistas
+        assert not muertas, f'Ya no aparecen al empezar una frase: sáquelas de _TERCERA_PERSONA: {sorted(muertas)}'
+        assert all(v.strip() for v in _TERCERA_PERSONA.values())
 
     def test_el_vocabulario_no_tiene_las_colisiones(self):
         assert not (VOSEO & _COLISIONES)

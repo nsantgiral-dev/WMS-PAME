@@ -705,7 +705,7 @@ class TrasladoService:
                 raise ValueError(
                     'El packing ya fue cerrado y el despacho se está procesando '
                     f'automáticamente (job {_job_activo.id}). '
-                    'Actualiza la página en unos segundos.'
+                    'Actualice la página en unos segundos.'
                 )
         # Guard recovery: emergency commit guardó consec pero commit principal falló
         # (estado sigue PREPARADO). Saltar Siesa y solo completar estado+inventario+LPNs.
@@ -1025,7 +1025,7 @@ class TrasladoService:
                 f'Almacen {s.bodega_origen_siesa} no tiene ninguna ubicacion '
                 f'vendible activa donde devolver la mercancia (la zona de '
                 f'averias no sirve como destino de una reversa). '
-                f'Crea al menos una ubicacion vendible antes de revertir.'
+                f'Cree al menos una ubicación vendible antes de revertir.'
             )
 
         # ── Devolver inventario por ítem ──────────────────────────────────

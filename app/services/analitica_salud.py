@@ -113,7 +113,7 @@ CONFIABLE, CON_RESERVAS, NO_CONFIABLE = 'CONFIABLE', 'CON_RESERVAS', 'NO_CONFIAB
 TEXTO_GLOBAL = {
     CONFIABLE: 'Puede confiar en los números de hoy',
     CON_RESERVAS: 'Los números sirven, con reservas: mire qué fuente falla antes de decidir',
-    NO_CONFIABLE: 'No decidas con estos números todavía',
+    NO_CONFIABLE: 'No decida con estos números todavía',
 }
 
 #: Ventana en que cada fuente PUEDE refrescarse (Bogotá): la de Siesa, que es

@@ -336,7 +336,7 @@ function temporadaExportar() {
   const hoy = hoyBogota();
   const sello = `${_bog} (hora de Colombia, UTC−5)`;
   const w = window.open('', '_blank');
-  if (!w) { alerta('Permite ventanas emergentes para exportar', 'error'); return; }
+  if (!w) { alerta('Permita las ventanas emergentes para exportar', 'error'); return; }
   w.document.write(`<html><head><title>Acta pedido temporada ${hoy}</title>
     <style>
       body{font-family:system-ui,sans-serif;font-size:11px;color:#111;margin:24px;}

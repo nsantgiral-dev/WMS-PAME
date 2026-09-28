@@ -307,7 +307,6 @@ class TestLaVozUstedSinHuecos:
     Inventario (`conteo.js:600`, `title`) y el 400 de despachar un traslado
     (`traslado_service.py:708`: «Actualiza la página en unos segundos»)."""
 
-    @pytest.mark.xfail(strict=True, reason='el vocabulario del detector no tiene «decidir»/«actualizar»')
     @pytest.mark.parametrize('texto', [
         'Todavía no decidas con estos números',
         'la diferencia queda para que la decidas',

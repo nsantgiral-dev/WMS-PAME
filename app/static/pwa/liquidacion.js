@@ -850,7 +850,7 @@ function _liqRenderDetalle() {
         </div>
         <div style="font-size:var(--fs-xs);color:var(--tx3);margin-bottom:12px;">
           Paso 1: Confirme el cuadre financiero en WMS.<br>
-          Paso 2: Después de liquidar, documenta NC/RC/DC por parada.
+          Paso 2: Después de liquidar, documente NC/RC/DC por parada.
         </div>
         <button onclick="liqLiquidarWMS(${esc(ruta.id)})"
           style="width:100%;padding:16px;background:#14532d;color:#bbf7d0;border:none;border-radius:10px;font-size:var(--fs-md);font-weight:800;cursor:pointer;">
@@ -1253,7 +1253,7 @@ async function liqLiquidarWMS(rutaId) {
       if (motivo == null) throw e;
       await postConReintento(`/api/rutas/${rutaId}/liquidar`, { motivo_devoluciones: motivo });
     }
-    alerta('Ruta liquidada en WMS — ahora documenta NC/RC/NI por parada', 'exito');
+    alerta('Ruta liquidada en WMS — ahora documente NC/RC/NI por parada', 'exito');
     // Recargar detalle para mostrar Fase 2
     _liqDetalleRuta = await get(`/api/rutas/${rutaId}/liquidacion-detalle`);
     _liqRenderDetalle();

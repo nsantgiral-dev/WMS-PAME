@@ -38,7 +38,7 @@ const AN_PORT_NIVEL = {
 const AN_PORT_CONFIANZA = {
   CONFIABLE: { nivel: 'verde', texto: 'Puede decidir con estos números' },
   CON_RESERVAS: { nivel: 'amarillo', texto: 'Úselos con cuidado: hay datos incompletos' },
-  NO_CONFIABLE: { nivel: 'rojo', texto: 'Todavía no decidas con estos números' },
+  NO_CONFIABLE: { nivel: 'rojo', texto: 'Todavía no decida con estos números' },
 };
 
 /** Entrada desde el shell: `f` = `{almacen_id, desde, hasta}`. */

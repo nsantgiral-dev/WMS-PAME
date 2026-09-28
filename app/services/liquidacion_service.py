@@ -965,7 +965,7 @@ class LiquidacionService:
                 raise ValueError(
                     f'Retención rechazada — el cliente debe pagar el valor '
                     f'completo (${esperado:,.2f}). Monto actual: '
-                    f'${monto:,.2f}. Ajusta el monto cuando el cliente pague '
+                    f'${monto:,.2f}. Ajuste el monto cuando el cliente pague '
                     'la diferencia.'
                 )
 

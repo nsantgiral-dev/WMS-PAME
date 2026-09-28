@@ -597,7 +597,7 @@ function _renderCardAccion(s) {
         : ''}
       ${mostrarOmitir
         ? `<button onclick="conteoOmitirSegundo(${esc(s.id)})"
-             title="No esperar el recuento: la diferencia queda para que la decidas"
+             title="No esperar el recuento: la diferencia queda para que usted la decida"
              style="padding:8px 10px;background:none;border:1px solid #415A70;color:var(--tx3);border-radius:8px;font-size:var(--fs-xs);cursor:pointer;white-space:nowrap;">${esTercerConteo ? 'Saltar conteo definitivo' : 'Saltar 2º conteo'}</button>`
         : ''}
       <button onclick="${esperaDecision ? 'conteoIrADecidir()' : 'void(0)'}"
