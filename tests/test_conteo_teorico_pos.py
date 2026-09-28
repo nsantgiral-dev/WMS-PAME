@@ -59,6 +59,12 @@ class SiesaFalsa:
     def __init__(self):
         self.fila = None
         self.lecturas = 0
+        #: Siesa no responde (red, 5xx): `get_inventario_fecha` levanta. Sin
+        #: esto, `fila = None` es «Siesa contestó que no hay fila», que desde
+        #: el 2026-09-28 es existencia 0 si el ítem está en el maestro.
+        self.caida = False
+        #: El maestro de ítems (`API_v2_Items`) tiene la referencia.
+        self.en_maestro = True
 
     #: Costo unitario de la fila por defecto. Desde 2026-09-23 un ajuste sin
     #: costo no sale solo (`CONTEO_TOPE_AUTOAJUSTE`, Regla 0), así que la Siesa
@@ -83,10 +89,18 @@ class SiesaFalsa:
         for campo in quitar:
             fila.pop(campo)
         self.fila = fila
+        self.caida = False            # poner una fila es que Siesa volvió a contestar
 
     def respuesta(self, *_a, **_k):
         self.lecturas += 1
+        if self.caida:
+            raise ConnectionError('Siesa no responde')
         return {'detalle': {'Table': [dict(self.fila)] if self.fila else []}}
+
+    def item(self, referencia):
+        if not self.en_maestro:
+            return None
+        return {'codigo_siesa': referencia, 'nombre': 'Item con POS', 'tipo_inventario': None}
 
 
 @pytest.fixture
@@ -102,11 +116,14 @@ def siesa(monkeypatch):
     completa (`test_bloqueo_cadena_traslado` parcheaba la instancia; ya no)."""
     from app.services.connekta_gateway import ConnektaGateway, connekta
     falsa = SiesaFalsa()
-    if 'get_inventario_fecha' in vars(connekta):
-        monkeypatch.delattr(connekta, 'get_inventario_fecha')
+    for metodo in ('get_inventario_fecha', 'buscar_item_por_referencia'):
+        if metodo in vars(connekta):
+            monkeypatch.delattr(connekta, metodo)
     monkeypatch.setattr(connekta, 'modo_simulacion', False)
     monkeypatch.setattr(ConnektaGateway, 'get_inventario_fecha',
                         lambda self, codigo, bodega=None: falsa.respuesta(codigo, bodega))
+    monkeypatch.setattr(ConnektaGateway, 'buscar_item_por_referencia',
+                        lambda self, referencia: falsa.item(referencia))
     return falsa
 
 
@@ -270,6 +287,13 @@ class TestLaBaseEsElTeorico:
         _cc1_id, r1 = _cc1(tienda, 10)
         assert r1['resultado'] == 'MATCH'
 
+    def test_comprometida_no_entra_al_teorico_sin_fila(self, db, siesa, tienda):
+        """La fila en cero trae la comprometida en cero, no ausente."""
+        from app.services.conteo_service import ConteoService
+        siesa.fila = None
+        foto = ConteoService.consultar_foto_siesa(SKU, 'NS1')
+        assert foto['comprometida'] == 0 and foto['costo_prom_uni'] is None
+
     def test_comprometida_no_entra_al_teorico(self, db, siesa, tienda):
         """Un pedido comprometido sigue en el estante: el contador lo ve."""
         from app.services.conteo_service import ConteoService
@@ -277,6 +301,110 @@ class TestLaBaseEsElTeorico:
         foto = ConteoService.consultar_foto_siesa(SKU, 'NS1')
         assert foto['teorico'] == 8
         assert foto['comprometida'] == 5
+
+
+class TestSinFilaEnSiesaEsCero:
+    """El caso de producción del 2026-09-28: PAPELSP8985 en NB1 **no tiene fila**
+    de existencia en Siesa (en cero, sin movimiento) y en el estante hay 21.
+    Siesa contestaba «No se encontraron registros», el conteo lo leía como
+    «Siesa no sabe», comparaba contra el stock del WMS y bloqueaba el ajuste:
+    ese sobrante no podía salir nunca, recontara quien recontara.
+
+    Ahora: tabla vacía contestada por Siesa + referencia en el maestro =
+    existencia 0. Todo lo demás que no trae fila sigue siendo «no sé».
+    """
+
+    def _foto(self):
+        from app.services.conteo_service import ConteoService
+        return ConteoService.consultar_foto_siesa(SKU, 'NS1')
+
+    def test_sin_fila_y_en_el_maestro_es_existencia_cero(self, db, siesa, tienda):
+        siesa.fila = None
+        foto = self._foto()
+        assert foto is not None
+        assert (foto['existencia'], foto['cant_pos'], foto['salida_sin_conf'],
+                foto['teorico']) == (0, 0, 0, 0)
+
+    def test_el_sobrante_llega_al_ajuste_contra_siesa(self, db, siesa, tienda):
+        """21 contados dos veces contra un Siesa en cero: AJ-ENT 21, no +11
+        contra los 10 del WMS. Sin costo en la foto no sale solo: lo aprueba
+        un supervisor."""
+        from app.models.conteo import SesionConteo
+        from app.services.conteo_service import ConteoService
+        siesa.fila = None
+        cc1_id, r1 = _cc1(tienda, 21)
+        assert r1['resultado'] == 'SEGUNDO_CONTEO', r1
+        r2 = _cc2(tienda, r1, 21)
+        assert r2['resultado'] == 'DESCUADRE', r2
+        assert r2['ajuste_bloqueado'] is None, r2
+        assert r2['auto_encolado'] is False, 'sin costo no sale solo'
+        raiz = db.session.get(SesionConteo, cc1_id)
+        assert raiz.fuente_existencia == 'SIESA'
+        assert (raiz.existencia_siesa, raiz.teorico_siesa, raiz.diferencia) == (0, 0, 21)
+        assert _jobs(cc1_id) == []
+        ConteoService.confirmar_ajuste(cc1_id, tienda['supervisor'].id)
+        p = _un_job(cc1_id)
+        assert (p['motivo_codigo'], p['cantidad']) == ('AJ-ENT', 21)
+
+    def test_el_estante_vacio_contra_siesa_en_cero_es_match(self, db, siesa, tienda):
+        siesa.fila = None
+        _cc1_id, r1 = _cc1(tienda, 0)
+        assert r1['resultado'] == 'MATCH', r1
+
+    def test_referencia_que_el_maestro_no_tiene_no_es_cero(self, db, siesa, tienda):
+        """Una referencia mal escrita también da «sin filas»: leerla como cero
+        mandaría un AJ-ENT por todo el conteo."""
+        siesa.fila = None
+        siesa.en_maestro = False
+        assert self._foto() is None
+
+    def test_el_maestro_con_otra_referencia_no_es_cero(self, db, siesa, tienda, monkeypatch):
+        """`buscar_item_por_referencia` cae a `f120_id` con un código numérico:
+        si devuelve OTRO ítem, no confirma nada."""
+        from app.services.connekta_gateway import ConnektaGateway
+        siesa.fila = None
+        monkeypatch.setattr(ConnektaGateway, 'buscar_item_por_referencia',
+                            lambda self, ref: {'codigo_siesa': 'OTRO-ITEM'})
+        assert self._foto() is None
+
+    def test_el_maestro_que_no_responde_no_es_cero(self, db, siesa, tienda, monkeypatch):
+        from app.services.connekta_gateway import ConnektaGateway
+
+        def revienta(self, ref):
+            raise ConnectionError('timeout')
+        siesa.fila = None
+        monkeypatch.setattr(ConnektaGateway, 'buscar_item_por_referencia', revienta)
+        assert self._foto() is None
+
+    def test_siesa_caido_no_es_cero(self, db, siesa, tienda):
+        siesa.caida = True
+        assert self._foto() is None
+
+    @pytest.mark.parametrize('respuesta', [
+        None,
+        {},
+        {'detalle': {}},
+        {'detalle': None},
+        {'detalle': {'Table': None}},
+        {'codigo': 1, 'detalle': {'Table': []}},
+    ])
+    def test_un_sobre_que_no_es_respuesta_de_siesa_no_es_cero(self, db, siesa, tienda,
+                                                              monkeypatch, respuesta):
+        from app.services.connekta_gateway import ConnektaGateway
+        monkeypatch.setattr(ConnektaGateway, 'get_inventario_fecha',
+                            lambda self, codigo, bodega=None: respuesta)
+        assert self._foto() is None
+
+    def test_la_respuesta_de_no_encontrados_de_get_es_cero(self, db, siesa, tienda, monkeypatch):
+        """La forma exacta en que `_get` devuelve el 400 «No se encontraron
+        registros» (ver connekta_gateway)."""
+        from app.services.connekta_gateway import ConnektaGateway
+        monkeypatch.setattr(
+            ConnektaGateway, 'get_inventario_fecha',
+            lambda self, codigo, bodega=None: {
+                'codigo': 0, 'mensaje': 'Transacción Exitosa (sin resultados)',
+                'detalle': {'Table': []}})
+        assert self._foto()['existencia'] == 0
 
 
 class TestPOSMayorQueLaExistencia:

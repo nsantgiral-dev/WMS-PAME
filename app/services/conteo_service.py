@@ -1466,9 +1466,13 @@ class ConteoService:
     @staticmethod
     def _fila_invfecha(producto_codigo_siesa: str, bodega: str = None):
         """La fila cruda de `API_v2_Inventarios_InvFecha` para ítem × bodega, o
-        `None` si Siesa no la dio. **La única lectura HTTP del conteo**: la
+        `None` si no se sabe. **La única lectura HTTP del conteo**: la
         existencia suelta y la foto completa salen de acá, para que el sobre de
         rechazo y la tabla vacía se traten igual en las dos.
+
+        Tabla vacía contestada por Siesa + referencia en el maestro = una fila
+        en cero (`_fila_en_cero_si_el_item_existe`). Todo lo demás que no trae
+        fila —error, rechazo, sobre ilegible, referencia desconocida— es `None`.
         """
         if connekta.modo_simulacion:
             return None  # en simulación no hay Siesa real
@@ -1494,15 +1498,87 @@ class ConteoService:
                     producto_codigo_siesa, bodega, alerta)
                 return None
             if not tabla:
-                logger.warning(
-                    f'[CONTEO] Siesa devolvió Table vacío para {producto_codigo_siesa} '
-                    f'bodega={bodega} — no se puede obtener existencia fiscal.'
-                )
-                return None
+                if not ConteoService._respuesta_explicita_sin_filas(response):
+                    logger.warning(
+                        '[CONTEO] Siesa no devolvió una tabla legible para %s '
+                        'bodega=%s — no se puede obtener existencia fiscal.',
+                        producto_codigo_siesa, bodega)
+                    return None
+                return ConteoService._fila_en_cero_si_el_item_existe(
+                    producto_codigo_siesa, bodega)
             return tabla[0]
         except Exception as e:
             logger.warning(f'[CONTEO] Error consultando Siesa para {producto_codigo_siesa}: {e}')
             return None
+
+    #: Marca de la fila que arma `_fila_en_cero_si_el_item_existe`: Siesa no
+    #: tiene fila de existencia del ítem en la bodega. Viaja solo para el log.
+    SIN_FILA_EN_SIESA = '_sin_fila_en_siesa'
+
+    @staticmethod
+    def _respuesta_explicita_sin_filas(response) -> bool:
+        """¿Siesa CONTESTÓ que no hay filas, o la respuesta no se entiende?
+
+        `connekta._get` convierte el «No se encontraron registros» (HTTP 400,
+        `codigo=1`) en `{'codigo': 0, 'detalle': {'Table': []}}`; un error de
+        red, de permisos o un 5xx levanta. Una tabla vacía **con su clave** y
+        sin código de error es una respuesta de Siesa. Un sobre sin `detalle`
+        o sin `Table` no lo es: se trata como «no sé».
+        """
+        if not isinstance(response, dict):
+            return False
+        codigo = response.get('codigo')
+        if codigo not in (None, 0, '0'):
+            return False
+        detalle = response.get('detalle')
+        return isinstance(detalle, dict) and isinstance(detalle.get('Table'), list)
+
+    @staticmethod
+    def _fila_en_cero_si_el_item_existe(producto_codigo_siesa: str, bodega: str = None):
+        """Siesa contestó que el ítem no tiene fila de existencia en la bodega.
+
+        Eso **es** existencia 0 —sin POS pendiente ni salidas sin confirmar,
+        que viven en esa misma fila—, siempre que la referencia exista en el
+        maestro de Siesa: una referencia mal escrita u obsoleta también da
+        «sin filas», y leerla como cero mandaría un AJ-ENT por todo el conteo
+        (el defecto del sobre de rechazo, por otra puerta). Por eso se
+        confirma contra `API_v2_Items` con la referencia **exacta**; si el
+        maestro no la tiene o no responde, sigue siendo «no sé» (Regla 0).
+
+        Hasta el 2026-09-28 toda tabla vacía era «no sé»: un ítem en 0 en
+        Siesa con mercancía física (PAPELSP8985 en NB1, 21 und) no podía
+        ajustarse nunca, recontara quien recontara.
+
+        La fila no trae costo: el ajuste queda sin valorizar y, por la
+        política de siempre, no sale solo — lo aprueba un supervisor o admin.
+        """
+        ref = (producto_codigo_siesa or '').strip()
+        try:
+            item = connekta.buscar_item_por_referencia(ref)
+        except Exception as e:
+            logger.warning(
+                '[CONTEO] %s bodega=%s sin fila en Siesa, y el maestro de ítems '
+                'no respondió (%s): no se asume cero.', ref, bodega, e)
+            return None
+        codigo_maestro = ((item or {}).get('codigo_siesa') or '').strip().upper()
+        if not ref or codigo_maestro != ref.upper():
+            logger.warning(
+                '[CONTEO] %s bodega=%s sin fila en Siesa y la referencia no está '
+                'en el maestro de ítems (%r): no se asume cero.',
+                ref, bodega, codigo_maestro or None)
+            return None
+        logger.info(
+            '[CONTEO] %s sin fila de existencia en bodega=%s y presente en el '
+            'maestro de Siesa: existencia 0.', ref, bodega)
+        return {
+            'f120_referencia': ref,
+            'f150_id': bodega,
+            'f400_cant_existencia_1': 0.0,
+            'f400_cant_pos_1': 0.0,
+            'f400_cant_salida_sin_conf_1': 0.0,
+            'f400_cant_comprometida_1': 0.0,
+            ConteoService.SIN_FILA_EN_SIESA: True,
+        }
 
     @staticmethod
     def consultar_existencia_siesa(producto_codigo_siesa: str, bodega: str = None):

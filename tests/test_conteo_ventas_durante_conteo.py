@@ -256,7 +256,7 @@ class TestSinFotoDeInicio:
 
     def test_g_siesa_no_responde_al_abrir_la_apertura_no_falla(self, db, siesa, tienda):
         from app.models.conteo import EstadoConteo
-        siesa.fila = None                                     # Siesa sin respuesta
+        siesa.caida = True                                    # Siesa sin respuesta
         cc1 = _nuevo_cc1(tienda)
         vista = _abrir(cc1, tienda['a'])
         assert vista['id'] == cc1
@@ -279,7 +279,7 @@ class TestSinFotoDeInicio:
         """CC1 limpio. Al abrir CC2 Siesa no responde; al cerrarlo sí. CC2
         coincide con CC1, pero el ajuste no sale: ni solo ni aprobado."""
         cc1, r1 = _cc1_limpio(tienda, siesa, 7, existencia=10, pos=2)
-        siesa.fila = None
+        siesa.caida = True
         _abrir(r1['segundo_conteo_id'], tienda['b'])
         siesa.poner(existencia=10, pos=2)
         r2 = _contar(r1['segundo_conteo_id'], tienda['b'], 7)
@@ -296,7 +296,7 @@ class TestSinFotoDeInicio:
         """CC1 sin foto de inicio decide el segundo conteo, pero no AVALA un
         ajuste automático. CC2 limpio coincide: queda para el supervisor, que
         sí puede aprobarlo — un conteo limpio más una firma, como el CC3."""
-        siesa.fila = None
+        siesa.caida = True
         cc1 = _nuevo_cc1(tienda)
         _abrir(cc1, tienda['a'])
         # Siesa sigue sin responder al primer cierre: se compara contra el
@@ -323,7 +323,7 @@ class TestSinFotoDeInicio:
         _abrir(r1['segundo_conteo_id'], tienda['b'])
         r2 = _contar(r1['segundo_conteo_id'], tienda['b'], 5)
         cc3, sup = r2['tercer_conteo_id'], tienda['supervisor']
-        siesa.fila = None
+        siesa.caida = True
         _abrir(cc3, sup)
         siesa.poner(existencia=10, pos=2)
         r3 = _contar(cc3, sup, 7)

@@ -2681,6 +2681,45 @@ así divergieron 15/90/180 (generador), «semanal/mensual/trimestral» (resumen)
 
 ---
 
+## Conteo: «Siesa no tiene fila» es existencia cero (2026-09-28)
+
+**Caso de producción:** PAPELSP8985 en NB1, CC1 = CC2 = 21, sin ajuste. En
+Siesa el ítem **no tiene fila de existencia** en la bodega (en 0, sin
+movimiento: no aparece entre las 3.495 filas de NB1, `debug-traza-ref`).
+`API_v2_Inventarios_InvFecha` contestaba «No se encontraron registros»,
+`_fila_invfecha` lo leía como «Siesa no sabe», el conteo comparaba contra el
+stock del WMS (20, restos de QA) y `motivo_bloqueo_ajuste` negaba el ajuste.
+**Ese sobrante no podía salir nunca**, recontara quien recontara. Lo mismo
+con PAPELSP11926.
+
+**La clase:** *una respuesta explícita de Siesa leída como dato ausente.*
+`connekta._get` ya distinguía los dos casos —el 400 «no encontrados» vuelve
+como `{'codigo': 0, 'detalle': {'Table': []}}`, un error de red o permisos
+levanta—; el conteo los juntaba.
+
+| Respuesta | Ahora |
+|---|---|
+| Tabla vacía con su clave, sin código de error, **y la referencia exacta en `API_v2_Items`** | Fila en cero (existencia, POS, salida sin confirmar y comprometida en 0; sin costo). Foto completa, `fuente_existencia='SIESA'` |
+| Tabla vacía y la referencia no está en el maestro, o el maestro devuelve otro ítem (fallback numérico por `f120_id`), o el maestro no responde | `None`, como antes: una referencia mal escrita también da «sin filas», y leerla como cero sería un AJ-ENT por todo el conteo (el defecto del sobre de rechazo, por otra puerta) |
+| Error, sobre de rechazo (`alerta`), `codigo ≠ 0`, sobre sin `detalle`/`Table` | `None`, como antes |
+
+Vive en `_fila_invfecha` (la única lectura del conteo a Siesa), así que lo
+heredan la foto de apertura, la de cierre y la auditoría de picking. La fila
+no trae costo: el ajuste queda sin valorizar y **no sale solo** (lo aprueba un
+supervisor o admin, política de siempre).
+
+Tests: `tests/test_conteo_teorico_pos.py::TestSinFilaEnSiesaEsCero` (el caso
+de 21 hasta el AJ-ENT, los «no sé» que siguen siéndolo). El doble de Siesa
+ganó `caida` (levanta) y `en_maestro`: `fila = None` ya no significa «Siesa
+no responde». 5 mutaciones, las 5 rojas.
+
+**Lo que NO cubre:** la tarjeta de Inventario Cíclico sigue rotulando
+«SIESA» el número de la comparación aunque haya venido del WMS (`conteo.js`
+no mira `fuente_existencia`). Un conteo cerrado **antes** de este cambio no
+se corrige solo: se recuenta.
+
+---
+
 ## Conteo: «no lo encontré» no es un cero (2026-09-23)
 
 El HUD del operario cerraba en **cero** todo conteo sin escaneos
