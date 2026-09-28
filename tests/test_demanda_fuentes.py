@@ -106,8 +106,11 @@ def _filas_60_dias(refs=('A', 'B', 'C', 'D', 'E'), dias=60, hoy=None):
 
 
 def _leer(gw, **kw):
+    """La consulta reciente (orden descendente, desde la página 1). Los
+    períodos del histórico, que se retoman, se prueban en
+    `test_demanda_historico.py`."""
     from app.services import demanda_fuentes as dfu
-    return dfu.descargar_ventas_dia(gateway=gw, pausa_s=0, **kw)
+    return dfu.descargar_ventas_dia(reciente=True, gateway=gw, pausa_s=0, **kw)
 
 
 def _cubiertos():
@@ -215,7 +218,7 @@ class TestLaLecturaDeLaVentaDiaria:
         assert all('tamPag=100' in p['paginacion'] for _n, p in pedidos)
         assert all('parametros' not in p for _n, p in pedidos), \
             'medido en producción: una dinámica con parámetros da 400'
-        assert pedidos[0][0] == 'papeleriamedellin_WMS_Ventas_Dia'
+        assert pedidos[0][0] == 'papeleriamedellin_WMS_Ventas_Dia_Reciente'
 
 
 class TestDiasCompletos:
@@ -517,23 +520,13 @@ class TestElCron:
     def test_nace_apagado(self, app, db, monkeypatch):
         from app.services import demanda_fuentes as dfu
         monkeypatch.delenv('DEMANDA_SIESA', raising=False)
-        monkeypatch.setattr(dfu, 'descargar_ventas_dia',
-                            lambda **k: pytest.fail('apagado no lee nada'))
+        for f in ('descargar_ventas_dia', 'descargar_ventana', 'descargar_historico'):
+            monkeypatch.setattr(dfu, f, lambda *a, **k: pytest.fail('apagado no lee nada'))
         assert dfu.ciclo() == {'omitido': 'DEMANDA_SIESA apagado'}
 
-    def test_sin_un_anio_lee_el_historico_y_con_el_anio_el_reciente(self, app, db, monkeypatch):
-        from app.services import demanda_fuentes as dfu
-        monkeypatch.setenv('DEMANDA_SIESA', 'true')
-        pedidas = []
-        monkeypatch.setattr(dfu, 'descargar_ventas_dia',
-                            lambda reciente=False, **k: pedidas.append(reciente) or {})
-        _siesa(db, 'A', 100)
-        db.session.commit()
-        dfu.ciclo()
-        _siesa(db, 'A', 300, desde=101)
-        db.session.commit()
-        dfu.ciclo()
-        assert pedidas == [False, True]
+    # «Sin un año lee el histórico y con el año el reciente» se retiró el
+    # 2026-09-27: el cron lee SIEMPRE la reciente primero y el histórico con el
+    # tiempo que queda (`test_demanda_historico.py::TestElCiclo`).
 
     def test_la_salud_lo_declara(self, app, db, client, almacen):
         r = client.get('/api/health/siesa', headers=_cab(app, db, almacen, 'admin'))
@@ -603,6 +596,11 @@ TOCAN_LA_VENTA_DE_SIESA = {
         'Qué días leyó una lectura completa: la cobertura de la fuente.',
     ('app/services/kardex_service.py', 'serie_demanda'):
         'EL numerador: la única que convierte las filas en demanda por día.',
+    # Decisión (2026-09-27, tanda C de compras): el valor y el costo de lo
+    # vendido son otra pregunta que la demanda en unidades; una sola función
+    # los lee, para la venta perdida en pesos y el capital.
+    ('app/services/demanda_fuentes.py', 'valor_realizado'):
+        'El único lector del valor y el costo: precio y costo realizados por SKU.',
 }
 #: Quién decide qué fuente vale: solo la cascada.
 DECIDEN_LA_FUENTE = {'cobertura_siesa', 'cobertura_kardex', 'cobertura_pedidos'}
@@ -688,7 +686,7 @@ class TestUnaFuenteDeDemanda:
                            '`ventana_observada`).')
 
     def test_el_inventario_solo_encoge(self):
-        assert len(TOCAN_LA_VENTA_DE_SIESA) <= 3
+        assert len(TOCAN_LA_VENTA_DE_SIESA) <= 4   # 3 → 4 el 2026-09-27: valor_realizado
         assert len(KARDEX_A_MANO_DECLARADO) <= 1
         assert all(len(v) > 30 for v in {**TOCAN_LA_VENTA_DE_SIESA,
                                          **KARDEX_A_MANO_DECLARADO}.values())

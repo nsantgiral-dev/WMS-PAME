@@ -125,6 +125,9 @@ OPERATIVAS = [
     # «cubierto» afirmaría ceros que no se leyeron.
     'demanda_dia_siesa',
     'demanda_dia_cubierto',
+    # Dónde quedó la lectura de cada período (m052comprasc): sin las filas que
+    # marca, el marcador apuntaría a una lectura que ya no está.
+    'demanda_ventana_lectura',
     'ubicaciones_huerfanas',
     'fugas_recompra',
     # ── Flota (agregado 2026-08-03) ────────────────────────────────────────

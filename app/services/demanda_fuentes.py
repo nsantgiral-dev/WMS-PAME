@@ -66,13 +66,24 @@ DIAS_MINIMOS_CONTENEDOR = 180
 #: La temporada y el bloqueo de recompra hablan del año: piden el año.
 DIAS_MINIMOS_ANIO = 360
 
-CONSULTA_VENTAS_DIA_DEFAULT = 'papeleriamedellin_WMS_Ventas_Dia'
 CONSULTA_VENTAS_DIA_RECIENTE_DEFAULT = 'papeleriamedellin_WMS_Ventas_Dia_Reciente'
+#: Prefijo de las consultas del histórico, una por período: el nombre completo
+#: es `<prefijo>_<etiqueta>` (`papeleriamedellin_WMS_Ventas_2026T3`; por mes,
+#: `…_202609`). Ver `ventanas_historicas`.
+PREFIJO_CONSULTA_PERIODO_DEFAULT = 'papeleriamedellin_WMS_Ventas'
+#: El histórico relativo de 400 días (una sola consulta) se retiró el
+#: 2026-09-27 sin llegar a registrarse: siempre volvía a la página 1 y nunca
+#: completaba el año (P1-2). Se conserva el nombre para leer registros viejos.
+CONSULTA_VENTAS_DIA_DEFAULT = 'papeleriamedellin_WMS_Ventas_Dia'
 TAM_PAG = 100            # Regla 10
 
 #: Columnas que devuelve la consulta (alias fijos: el lector depende de ellos).
+#: Las seis últimas (valor y costo, 2026-09-27) son opcionales al leer: una
+#: consulta registrada antes las omite y el valor queda desconocido, no cero.
 COLUMNAS_VENTAS_DIA = ('orden', 'total_filas', 'ventana_desde', 'ventana_hasta',
                        'fecha', 'bodega', 'referencia', 'vendido', 'devuelto')
+COLUMNAS_VALOR = ('valor_vendido', 'valor_devuelto', 'costo_vendido', 'costo_devuelto',
+                  'lineas_sin_valor', 'lineas_sin_costo')
 
 # ══════════════════════════════════════════════════════════════════════════════
 # EL SQL — para registrar en Generic Transfer (Consultas dinámicas)
@@ -81,47 +92,81 @@ COLUMNAS_VENTAS_DIA = ('orden', 'total_filas', 'ventana_desde', 'ventana_hasta',
 # Lo que se midió en producción el 2026-09-27 y por qué el SQL tiene esta forma:
 #
 # · «Estructura invalida, el query a ejecutar no maneja parametros» (400) al
-#   mandar `parametros` a una dinámica: la ventana de fechas va DENTRO del SQL
-#   (como ya hace `papeleriamedellin_WMS_Remision_DesdePedido`), y por eso hay
-#   dos registros: el histórico (400 días) y el reciente (14 días, el de todos
-#   los días). Si el consultor sabe declarar parámetros en la consulta, una
-#   sola basta — la lectura no cambia.
+#   mandar `parametros` a una dinámica: la ventana de fechas va DENTRO del SQL.
+#   Por eso hay UNA consulta por ventana: la reciente (relativa, 14 días, la de
+#   todos los días) y una por PERÍODO del histórico, con fechas FIJAS
+#   (`ventanas_historicas`). Si el consultor sabe declarar parámetros en la
+#   consulta, una sola basta — la lectura no cambia.
 # · «The ORDER BY clause is invalid in views, inline functions, derived tables,
 #   subqueries, and common table expressions, unless TOP, OFFSET or FOR XML is
-#   also specified» (500, lo que hoy tiene `…_descubrir_tablas` en producción):
-#   Connekta ENVUELVE el SQL en una subconsulta para paginar. Un ORDER BY
-#   solo va con `OFFSET 0 ROWS`. Y como el orden de la subconsulta no está
-#   garantizado afuera, el SQL numera sus filas (`orden`, ROW_NUMBER por la
-#   clave del agregado) y declara cuántas son (`total_filas`): el WMS verifica
-#   que llegaron 1…N, cada una una vez. La paginación inestable se VE; no se
-#   supone arreglada.
-# · Orden DESCENDENTE por fecha: lo más reciente primero. Una lectura que se
-#   corta a la mitad igual deja los últimos meses completos, que es lo que el
-#   punto de pedido necesita primero.
+#   also specified» (500): Connekta ENVUELVE el SQL en una subconsulta para
+#   paginar. Un ORDER BY solo va con `OFFSET 0 ROWS`. Y como el orden de la
+#   subconsulta no está garantizado afuera, el SQL numera sus filas (`orden`,
+#   ROW_NUMBER por la clave del agregado) y declara cuántas son
+#   (`total_filas`): el WMS verifica que llegaron 1…N, cada una una vez.
+# · Orden DESCENDENTE por fecha: lo más reciente primero. Una lectura cortada
+#   deja completos los días más nuevos, y la cobertura crece hacia atrás desde
+#   la reciente sin huecos (`_tramo_final` exige el tramo contiguo).
+# · Los períodos tienen desde y hasta FIJOS (el hasta del período en curso es
+#   el día anterior a copiar el SQL; lo que sigue lo cubre la reciente). Con
+#   fechas fijas la numeración no cambia de un día a otro, y **la lectura se
+#   retoma donde quedó** (`DemandaVentanaLectura`) en vez de volver a la página
+#   1 (P1-2). Antes de retomar se relee la última fila guardada: si cambió (un
+#   documento anulado o fechado atrás), el período se relee entero.
+# · Medido en producción el 2026-09-27 con `API_v2_Ventas_Facturas_DesdePedido`
+#   (lo único de ventas que se puede leer hoy): una página tarda 1–4 s con la
+#   caché caliente, **casi igual para 1, 7, 30 o 90 días y para la página 1 o
+#   la 90**; la PRIMERA consulta en frío tardó 108 s (7 días). Por eso cada
+#   página tiene tres intentos y un tope de 150 s, y el costo de un período lo
+#   pone su cantidad de páginas, no su largo: trimestres (5 consultas para 400
+#   días) y no meses (14).
 # · En el SQL las fechas llevan UNA comilla (es el texto de la consulta). La
 #   doble comilla simple (Regla 15) es solo para `parametros`.
 # · Sin `WITH` (una CTE no puede ir dentro de la subconsulta de Connekta).
 #
 # Tablas y columnas: t470 movimientos, t350 encabezado, t121/t120 ítem, t150
 # bodega. **Los nombres de las columnas de enlace (`f470_rowid_docto`,
-# `f470_rowid_item_ext`, `f470_rowid_bodega`) no están verificados**: el paso 0
-# de la validación (`SQL_VALIDACION['esquema']`) los confirma antes de
-# registrar nada.
-SQL_VENTAS_DIA = """SELECT
-    ROW_NUMBER() OVER (ORDER BY v.fecha DESC, v.bodega, v.referencia) AS orden,
+# `f470_rowid_item_ext`, `f470_rowid_bodega`) y las de valor y costo
+# (`f470_vlr_neto`, `f470_vlr_imp`, `f470_vlr_bruto`, `f470_vlr_dscto_linea`,
+# `f470_vlr_dscto_global`, `f470_costo_prom_tot`) no están verificados contra
+# la T470**: las de valor son los alias con que `API_v2_Ventas_Facturas_
+# DesdePedido` las devuelve (vistos en producción). El paso 0 de la validación
+# (`SQL_VALIDACION['esquema']`) los confirma antes de registrar nada.
+#
+# Valor = SIN impuesto, la misma regla de `vigia_service.valor_linea_sin_impuesto`
+# (neto − impuesto; si falta, bruto − descuentos): no se inventa una tasa de IVA.
+# Costo = `f470_costo_prom_tot`, el costo promedio de la línea. Una línea sin
+# valor (o sin costo) no suma cero en silencio: se cuenta en `lineas_sin_valor`
+# (`lineas_sin_costo`) y el WMS lo declara.
+
+SQL_VALOR_SIN_IMPUESTO = ('COALESCE(m.f470_vlr_neto - m.f470_vlr_imp, m.f470_vlr_bruto '
+                          '- COALESCE(m.f470_vlr_dscto_linea, 0) '
+                          '- COALESCE(m.f470_vlr_dscto_global, 0))')
+SQL_COSTO = 'm.f470_costo_prom_tot'
+_ES_VENTA = 'm.f470_id_concepto = 501 AND m.f470_ind_naturaleza = 2'
+_ES_DEVOLUCION = 'm.f470_id_concepto = 502 AND m.f470_ind_naturaleza = 1'
+
+_SQL_PLANTILLA = """SELECT
+    ROW_NUMBER() OVER (ORDER BY v.fecha {dir}, v.bodega, v.referencia) AS orden,
     COUNT(*) OVER ()                                               AS total_filas,
     v.ventana_desde, v.ventana_hasta,
-    v.fecha, v.bodega, v.referencia, v.vendido, v.devuelto, v.lineas
+    v.fecha, v.bodega, v.referencia, v.vendido, v.devuelto, v.lineas,
+    v.valor_vendido, v.valor_devuelto, v.costo_vendido, v.costo_devuelto,
+    v.lineas_sin_valor, v.lineas_sin_costo
 FROM (
     SELECT
         CAST(d.f350_fecha AS date)                                 AS fecha,
         RTRIM(b.f150_id)                                           AS bodega,
         RTRIM(i.f120_referencia)                                   AS referencia,
-        SUM(CASE WHEN m.f470_id_concepto = 501 AND m.f470_ind_naturaleza = 2
-                 THEN m.f470_cant_base ELSE 0 END)                 AS vendido,
-        SUM(CASE WHEN m.f470_id_concepto = 502 AND m.f470_ind_naturaleza = 1
-                 THEN m.f470_cant_base ELSE 0 END)                 AS devuelto,
+        SUM(CASE WHEN {venta} THEN m.f470_cant_base ELSE 0 END)    AS vendido,
+        SUM(CASE WHEN {devol} THEN m.f470_cant_base ELSE 0 END)    AS devuelto,
         COUNT(*)                                                   AS lineas,
+        SUM(CASE WHEN {venta} THEN {valor} ELSE 0 END)             AS valor_vendido,
+        SUM(CASE WHEN {devol} THEN {valor} ELSE 0 END)             AS valor_devuelto,
+        SUM(CASE WHEN {venta} THEN {costo} ELSE 0 END)             AS costo_vendido,
+        SUM(CASE WHEN {devol} THEN {costo} ELSE 0 END)             AS costo_devuelto,
+        SUM(CASE WHEN {valor} IS NULL THEN 1 ELSE 0 END)           AS lineas_sin_valor,
+        SUM(CASE WHEN {costo} IS NULL THEN 1 ELSE 0 END)           AS lineas_sin_costo,
         MIN(w.desde)                                               AS ventana_desde,
         MIN(w.hasta)                                               AS ventana_hasta
     FROM t470_cm_movto_invent m
@@ -129,26 +174,56 @@ FROM (
     INNER JOIN t121_mc_items_extensiones e  ON e.f121_rowid = m.f470_rowid_item_ext
     INNER JOIN t120_mc_items i              ON i.f120_rowid = e.f121_rowid_item
     INNER JOIN t150_mc_bodegas b            ON b.f150_rowid = m.f470_rowid_bodega
-    CROSS JOIN (SELECT CAST(DATEADD(DAY, -{dias}, GETDATE()) AS date) AS desde,
-                       CAST(GETDATE() AS date)                       AS hasta) w
+    CROSS JOIN ({ventana}) w
     WHERE d.f350_id_cia = 1
       AND d.f350_ind_estado = 1
       AND m.f470_id_concepto IN (501, 502)
       AND d.f350_fecha >= w.desde
+      AND d.f350_fecha < DATEADD(DAY, 1, w.hasta)
     GROUP BY CAST(d.f350_fecha AS date), RTRIM(b.f150_id), RTRIM(i.f120_referencia)
 ) v
 WHERE v.vendido <> 0 OR v.devuelto <> 0
-ORDER BY v.fecha DESC, v.bodega, v.referencia
+ORDER BY v.fecha {dir}, v.bodega, v.referencia
 OFFSET 0 ROWS"""
+
+#: La ventana relativa (la reciente): de hoy − N días a HOY (hoy entra; el
+#: lector no guarda el día en curso, que todavía no está cerrado).
+_VENTANA_RELATIVA = ("SELECT CAST(DATEADD(DAY, -{dias}, GETDATE()) AS date) AS desde, "
+                     "CAST(GETDATE() AS date) AS hasta")
+#: La ventana de un período, con las dos fechas FIJAS: la numeración no se
+#: mueve de un día a otro y la lectura se puede retomar.
+_VENTANA_FIJA = "SELECT CAST('{desde}' AS date) AS desde, CAST('{hasta}' AS date) AS hasta"
+
+
+def _sql(ventana_sql: str, direccion: str) -> str:
+    return (_SQL_PLANTILLA.replace('{venta}', _ES_VENTA).replace('{devol}', _ES_DEVOLUCION)
+            .replace('{valor}', SQL_VALOR_SIN_IMPUESTO).replace('{costo}', SQL_COSTO)
+            .replace('{ventana}', ventana_sql).replace('{dir}', direccion))
+
+
+#: La reciente, con `{dias}` por reemplazar (`sql_ventas_dia`).
+SQL_VENTAS_DIA = _sql(_VENTANA_RELATIVA, 'DESC')
 
 DIAS_HISTORICO = 400
 DIAS_RECIENTE = 14
+
+
+def sql_ventas_dia(dias: int) -> str:
+    """El SQL de la consulta reciente, con su ventana (`DIAS_RECIENTE`)."""
+    return SQL_VENTAS_DIA.replace('{dias}', str(int(dias)))
+
+
+def sql_ventas_periodo(desde: date, hasta: date) -> str:
+    """El SQL de la consulta de un período del histórico, con sus fechas fijas."""
+    return _sql(_VENTANA_FIJA.replace('{desde}', desde.strftime('%Y%m%d'))
+                .replace('{hasta}', hasta.strftime('%Y%m%d')), 'DESC')
+
 
 #: Lo que se pega en `papeleriamedellin_pame_descubrir_tablas` para VALIDAR (una
 #: a la vez; el script `qa_demanda_fuentes_real.py` reconoce cuál está puesta
 #: por sus columnas). **Solo para descubrir: nunca una fuente de negocio.**
 SQL_VALIDACION = {
-    # 0 · ¿Existen las columnas de enlace con esos nombres?
+    # 0 · ¿Existen las columnas de enlace, de valor y de costo con esos nombres?
     'esquema': """SELECT t.name AS tabla, c.name AS columna, ty.name AS tipo
 FROM sys.tables t
 INNER JOIN sys.columns c ON c.object_id = t.object_id
@@ -156,7 +231,8 @@ INNER JOIN sys.types ty ON ty.user_type_id = c.user_type_id
 WHERE t.name IN ('t470_cm_movto_invent', 't350_co_docto_contable',
                  't121_mc_items_extensiones', 't120_mc_items', 't150_mc_bodegas')
   AND (c.name LIKE 'f470_rowid%' OR c.name LIKE 'f470_id_c%' OR c.name LIKE 'f470_ind_nat%'
-       OR c.name LIKE 'f470_cant_base%' OR c.name IN ('f350_rowid', 'f350_fecha',
+       OR c.name LIKE 'f470_cant_base%' OR c.name LIKE 'f470_vlr%' OR c.name LIKE 'f470_costo%'
+       OR c.name IN ('f350_rowid', 'f350_fecha',
        'f350_ind_estado', 'f350_id_cia', 'f350_id_tipo_docto', 'f121_rowid',
        'f121_rowid_item', 'f120_rowid', 'f120_referencia', 'f150_rowid', 'f150_id'))""",
     # 1 · Un día: ¿con qué tipo de documento y concepto entra la venta de caja?
@@ -169,7 +245,8 @@ INNER JOIN t150_mc_bodegas b        ON b.f150_rowid = m.f470_rowid_bodega
 WHERE d.f350_id_cia = 1 AND d.f350_fecha >= '20260925' AND d.f350_fecha < '20260926'
 GROUP BY RTRIM(b.f150_id), d.f350_id_tipo_docto, m.f470_id_concepto,
          m.f470_ind_naturaleza, d.f350_ind_estado""",
-    # 2 · Volumen: cuántas filas devolvería la consulta de ventas, por mes.
+    # 2 · Volumen: cuántas filas devolvería la consulta de ventas, por mes (de
+    #     eso sale cuántas páginas lee cada período).
     'volumen_mes': """SELECT YEAR(v.fecha) AS anio, MONTH(v.fecha) AS mes, COUNT(*) AS filas,
        COUNT(DISTINCT v.referencia) AS referencias, COUNT(DISTINCT v.bodega) AS bodegas,
        SUM(v.vendido) AS vendido
@@ -185,28 +262,103 @@ FROM (
     INNER JOIN t150_mc_bodegas b            ON b.f150_rowid = m.f470_rowid_bodega
     WHERE d.f350_id_cia = 1 AND d.f350_ind_estado = 1
       AND m.f470_id_concepto IN (501, 502)
-      AND d.f350_fecha >= '20250901'
+      AND d.f350_fecha >= '20250801'
     GROUP BY CAST(d.f350_fecha AS date), RTRIM(b.f150_id), RTRIM(i.f120_referencia)
 ) v
 GROUP BY YEAR(v.fecha), MONTH(v.fecha)""",
-    # 3 · Un SKU en un mes, por día y bodega: para cuadrar contra las facturas
-    #     desde pedido del mismo mes y contra InvFecha.
-    'sku_mes': SQL_VENTAS_DIA.replace('{dias}', '40').replace(
-        'AND d.f350_fecha >= w.desde',
-        "AND d.f350_fecha >= w.desde AND i.f120_referencia = 'PAPELSP9218'"),
+    # 3 · Un SKU en un mes, por día y bodega, con valor y costo: para cuadrar
+    #     contra las facturas desde pedido del mismo mes y contra InvFecha.
+    'sku_mes': sql_ventas_dia(40).replace(
+        'AND d.f350_fecha < DATEADD(DAY, 1, w.hasta)',
+        "AND d.f350_fecha < DATEADD(DAY, 1, w.hasta) AND i.f120_referencia = 'PAPELSP9218'"),
 }
 
 
-def sql_ventas_dia(dias: int) -> str:
-    """El SQL para registrar, con su ventana: `DIAS_HISTORICO` o `DIAS_RECIENTE`."""
-    return SQL_VENTAS_DIA.replace('{dias}', str(int(dias)))
-
-
 def consulta_ventas_dia(reciente: bool = False) -> str:
+    """El nombre de la consulta reciente; sin `reciente`, cómo se llaman las
+    del histórico (una por período)."""
     if reciente:
         return (os.getenv('CONNEKTA_CONSULTA_VENTAS_DIA_RECIENTE')
                 or CONSULTA_VENTAS_DIA_RECIENTE_DEFAULT)
-    return os.getenv('CONNEKTA_CONSULTA_VENTAS_DIA') or CONSULTA_VENTAS_DIA_DEFAULT
+    vs = ventanas_historicas()
+    return (f'{prefijo_consulta_periodo()}_<período>, una por {periodo_historico().lower()} '
+            f'({vs[0]["consulta"]} … {vs[-1]["consulta"]})' if vs else prefijo_consulta_periodo())
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Las ventanas del histórico — una consulta por período, con fechas fijas
+# ══════════════════════════════════════════════════════════════════════════════
+
+PERIODO_MES = 'MES'
+PERIODO_TRIMESTRE = 'TRIMESTRE'
+
+
+def periodo_historico() -> str:
+    """`DEMANDA_PERIODO_HISTORICO`: TRIMESTRE (por defecto: 5 consultas para
+    400 días) o MES (14; solo si una página de un trimestre resulta demasiado
+    lenta). Tiene que coincidir con lo registrado en Siesa; un valor ilegible
+    es TRIMESTRE, declarado en el log."""
+    v = (os.getenv('DEMANDA_PERIODO_HISTORICO') or PERIODO_TRIMESTRE).strip().upper()
+    if v not in (PERIODO_MES, PERIODO_TRIMESTRE):
+        logger.warning('[DEMANDA] DEMANDA_PERIODO_HISTORICO=%r ilegible: se usa TRIMESTRE', v)
+        return PERIODO_TRIMESTRE
+    return v
+
+
+def prefijo_consulta_periodo() -> str:
+    return (os.getenv('CONNEKTA_CONSULTA_VENTAS_PERIODO_PREFIJO')
+            or PREFIJO_CONSULTA_PERIODO_DEFAULT)
+
+
+def _periodos(desde: date, hasta: date, periodo: str):
+    """(inicio, fin, etiqueta) de los períodos calendario que tocan [desde, hasta]."""
+    meses = 3 if periodo == PERIODO_TRIMESTRE else 1
+    m0 = ((desde.month - 1) // meses) * meses + 1
+    inicio = date(desde.year, m0, 1)
+    while inicio <= hasta:
+        y, m = inicio.year, inicio.month + meses
+        if m > 12:
+            y, m = y + 1, m - 12
+        sig = date(y, m, 1)
+        fin = sig - timedelta(days=1)
+        etiqueta = (f'{inicio.year}T{(inicio.month - 1) // 3 + 1}'
+                    if periodo == PERIODO_TRIMESTRE else f'{inicio:%Y%m}')
+        yield inicio, fin, etiqueta
+        inicio = sig
+
+
+def ventanas_historicas(hoy: date = None) -> list:
+    """Los períodos del histórico que tocan los últimos `DIAS_HISTORICO` días,
+    del más reciente al más viejo. Cada uno es una consulta registrada con
+    fechas FIJAS: `<prefijo>_<etiqueta>` y su SQL (`sql_ventas_periodo`).
+
+    El `hasta` del período en curso es AYER el día que se copia el SQL: lo que
+    viene después lo cubre la reciente, que se lee todos los días. Los
+    períodos no cambian (salvo un documento anulado o fechado atrás): se leen
+    una vez."""
+    from app.utils.fecha import dia_operativo
+    hoy = hoy or dia_operativo()
+    ayer = hoy - timedelta(days=1)
+    per = periodo_historico()
+    pref = prefijo_consulta_periodo()
+    out = []
+    for inicio, fin, etiqueta in _periodos(hoy - timedelta(days=DIAS_HISTORICO), ayer, per):
+        out.append({'consulta': f'{pref}_{etiqueta}', 'tipo': 'PERIODO',
+                    'desde': inicio, 'fin': fin, 'hasta': min(fin, ayer),
+                    'etiqueta': etiqueta})
+    return list(reversed(out))
+
+
+def ventana_reciente() -> dict:
+    return {'consulta': consulta_ventas_dia(True), 'tipo': 'RECIENTE',
+            'dias': DIAS_RECIENTE}
+
+
+def sql_de_ventana(v: dict) -> str:
+    """El SQL listo para pegar de una ventana (la reciente o un período)."""
+    if v['tipo'] == 'RECIENTE':
+        return sql_ventas_dia(v.get('dias', DIAS_RECIENTE))
+    return sql_ventas_periodo(v['desde'], v['hasta'])
 
 
 def _entero_env(nombre, defecto, minimo, maximo):
@@ -257,11 +409,21 @@ def _entero(v):
         return None
 
 
+def _decimal_o_none(v):
+    """Como `_decimal`, pero una columna AUSENTE o NULL es `None`: no se sabe,
+    no es cero."""
+    if v in (None, ''):
+        return None
+    return _decimal(v)
+
+
 def leer_fila_venta_dia(row):
     """Una fila cruda → sus campos, o `None` si no se puede leer entera.
 
     Una fila ilegible NO se salta en silencio: quien lee la cuenta, y una
-    lectura con filas ilegibles no está completa."""
+    lectura con filas ilegibles no está completa. Las columnas de valor y costo
+    (`COLUMNAS_VALOR`) son opcionales: sin ellas (una consulta registrada antes
+    del 2026-09-27) el valor queda `None`, desconocido."""
     if not isinstance(row, dict):
         return None
     orden, total = _entero(row.get('orden')), _entero(row.get('total_filas'))
@@ -272,10 +434,14 @@ def leer_fila_venta_dia(row):
     desde, hasta = _fecha(row.get('ventana_desde')), _fecha(row.get('ventana_hasta'))
     if None in (orden, total, fecha, vend, dev, desde, hasta) or not ref or not bod:
         return None
-    return {'orden': orden, 'total_filas': total, 'fecha': fecha, 'bodega': bod,
+    fila = {'orden': orden, 'total_filas': total, 'fecha': fecha, 'bodega': bod,
             'referencia': ref, 'vendido': vend, 'devuelto': dev,
             'lineas': _entero(row.get('lineas')),
             'ventana_desde': desde, 'ventana_hasta': hasta}
+    for c in COLUMNAS_VALOR:
+        fila[c] = (_entero(row.get(c)) if c.startswith('lineas_')
+                   else _decimal_o_none(row.get(c)))
+    return fila
 
 
 #: Compatibilidad con el borrador del script de medición.
@@ -290,14 +456,14 @@ SQL_VALIDACION_UN_DIA = SQL_VALIDACION['conceptos_dia']
 # ══════════════════════════════════════════════════════════════════════════════
 
 def dias_completos(por_orden: dict, total: int, ultimo_cerrado: date):
-    """Del conjunto de filas leídas (por `orden`), el tramo de días que se puede
-    afirmar COMPLETO. Puro.
+    """Del conjunto de filas leídas (por `orden`) de una consulta ordenada por
+    fecha DESCENDENTE (la reciente), el tramo de días que se puede afirmar
+    COMPLETO. Puro.
 
-    El SQL ordena por fecha DESCENDENTE. Si llegaron las filas 1…k sin hueco
-    (y la k+1 no), todo día POSTERIOR al de la k está entero —incluidos los
-    días sin fila entre dos filas leídas, que son ceros verdaderos—; el de la k
-    no (la k+1 podría ser de ese mismo día). Con k = total, todo día de la
-    ventana está entero.
+    Si llegaron las filas 1…k sin hueco (y la k+1 no), todo día POSTERIOR al de
+    la k está entero —incluidos los días sin fila entre dos filas leídas, que
+    son ceros verdaderos—; el de la k no (la k+1 podría ser de ese mismo día).
+    Con k = total, todo día de la ventana está entero.
 
     Returns: (desde, hasta) o `None` — `hasta` recortado al último día CERRADO
     (hoy no: la caja de hoy todavía no está acumulada).
@@ -323,47 +489,74 @@ def dias_completos(por_orden: dict, total: int, ultimo_cerrado: date):
     return desde, hasta
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# La descarga — solo GET, en segundo plano
-# ══════════════════════════════════════════════════════════════════════════════
+def avance(por_orden: dict, total: int, inicio_orden: int, v_desde: date, hasta_previo: date):
+    """Hasta dónde avanzó la lectura de una ventana ordenada por fecha
+    DESCENDENTE que se RETOMA (un período del histórico). Puro.
 
-def descargar_ventas_dia(reciente: bool = False, gateway=None, max_paginas=None,
-                         max_minutos=None, pausa_s=None, reloj=None) -> dict:
-    """Lee la consulta de venta diaria y guarda **los días que quedaron
-    completos**. Nunca levanta: el resultado dice qué pasó.
+    Las filas `1…inicio_orden−1` ya se guardaron (cubren desde `hasta_previo +
+    1` hasta el final). Si ahora llegaron `inicio_orden…k` sin hueco, todo día
+    POSTERIOR al de la k (y hasta `hasta_previo`) está entero; el de la k no
+    —la k+1 puede ser del mismo día—. Con k = total, entero hasta el principio
+    de la ventana (`v_desde`).
 
-    - Toda página se pide por el endpoint dinámico, `tamPag` 100.
-    - Una fila que llega dos veces con otro contenido, un `total_filas` que
-      cambia a mitad, una ventana que cambia, una fila ilegible: la lectura
-      queda INCOMPLETA y se dice por qué.
-    - Una fila que falta (paginación inestable) se busca otra vez en su página
-      (hasta 3 veces). Si sigue faltando, se guarda solo hasta el día anterior
-      al hueco.
-    - Cero filas no es «no hubo ventas»: es INCOMPLETA (una consulta mal
-      registrada también contesta vacío).
+    Returns: `(tramo | None, orden_hasta, cubierto_desde)` — `tramo` son los
+    días nuevos enteros; `orden_hasta`, la última fila de un día entero (donde
+    retoma la próxima lectura); `cubierto_desde`, el primer día entero.
     """
-    from app.services import registro_sync_service as rs
-    from app.services.connekta_gateway import _exigir_datos, connekta
+    k = inicio_orden - 1
+    while (k + 1) in por_orden:
+        k += 1
+    if k >= total:
+        tramo = (v_desde, hasta_previo) if v_desde <= hasta_previo else None
+        return tramo, total, v_desde
+    if k < inicio_orden:
+        return None, inicio_orden - 1, hasta_previo + timedelta(days=1)
+    frontera = por_orden[k]['fecha']
+    orden_hasta = inicio_orden - 1
+    for o in range(inicio_orden, k + 1):
+        if por_orden[o]['fecha'] > frontera:
+            orden_hasta = o
+    desde = frontera + timedelta(days=1)
+    tramo = (desde, hasta_previo) if desde <= hasta_previo else None
+    return tramo, orden_hasta, min(desde, hasta_previo + timedelta(days=1))
+
+
+class _SinRegistrar(Exception):
+    """401: la consulta no está registrada en Siesa (o sin permiso)."""
+
+
+def _leer_paginas(gw, consulta, pagina_inicio, orden_minimo, deadline, reloj, max_paginas,
+                  pausa, al_leer=None, precargada=None):
+    """Lee desde `pagina_inicio` hasta completar el total (o el tiempo, o un
+    problema). Devuelve un dict con `por_orden` (solo `orden ≥ orden_minimo`),
+    `total`, `total_declarado`, `problemas`, `ilegibles`, `paginas`, `motivo`.
+
+    - Una fila que llega dos veces con otro contenido, un `total_filas` que
+      cambia a mitad, una ventana que cambia, una fila ilegible: problema.
+    - Una fila que falta (paginación inestable) se busca otra vez en su
+      página (hasta 3 veces).
+    """
+    from app.services.connekta_gateway import _exigir_datos
     from app.services.kardex_service import totales_declarados
-    from app.utils.fecha import dia_operativo
 
-    gw = gateway or connekta
-    consulta = consulta_ventas_dia(reciente)
-    max_paginas = max_paginas or _entero_env('DEMANDA_MAX_PAGINAS', 12000, 1, 30000)
-    max_minutos = max_minutos or _entero_env('DEMANDA_MAX_MINUTOS', 50, 1, 240)
-    pausa = (pausa_s if pausa_s is not None
-             else float(os.getenv('DEMANDA_PAUSA_S', '0.3') or 0.3))
-    reloj = reloj or time.monotonic
-    inicio = reloj()
-    tipo_reg = 'demanda_siesa'
-    reg_id = rs.abrir(tipo_reg)
-
-    por_orden, por_clave, problemas = {}, {}, []
-    total, total_declarado, ilegibles, paginas = None, None, 0, 0
+    st = {'por_orden': {}, 'por_clave': {}, 'problemas': [], 'total': None,
+          'total_declarado': None, 'ilegibles': 0, 'paginas': 0, 'motivo': None,
+          'ventana': None, 'crudas': None}
 
     def _pedir(pag):
-        res = gw._get(consulta, {'paginacion': f'numPag={pag}|tamPag={TAM_PAG}'},
-                      url=gw.url_get_dinamico, timeout=90)
+        # Tres intentos por página: la primera consulta en frío tardó 108 s en
+        # producción (2026-09-27) y la siguiente, 2,5 s. Un 401 no se reintenta.
+        for intento in range(3):
+            try:
+                res = gw._get(consulta, {'paginacion': f'numPag={pag}|tamPag={TAM_PAG}'},
+                              url=gw.url_get_dinamico, timeout=150)
+                break
+            except Exception as e:                            # noqa: BLE001
+                if '401' in str(e):
+                    raise _SinRegistrar(str(e)) from e
+                if intento == 2:
+                    raise
+                time.sleep((10 if '429' in str(e) else 2) * (intento + 1))
         if res is None:
             raise RuntimeError('circuito de Siesa abierto')
         det = res.get('detalle') if isinstance(res, dict) else None
@@ -373,125 +566,384 @@ def descargar_ventas_dia(reciente: bool = False, gateway=None, max_paginas=None,
         if rows is None:
             raise RuntimeError('respuesta sin filas (ni Datos ni Table)')
         _exigir_datos(rows, consulta)
+        st['crudas'] = (pag, rows, totales_declarados(res)[0])
         return rows, totales_declarados(res)[0]
 
     def _absorber(rows):
-        nonlocal total, ilegibles
         for r in rows:
             f = leer_fila_venta_dia(r)
             if f is None:
-                ilegibles += 1
+                st['ilegibles'] += 1
                 continue
-            if total is None:
-                total = f['total_filas']
-            elif f['total_filas'] != total:
-                problemas.append(f'total_filas cambió de {total} a {f["total_filas"]} '
-                                 'a mitad de la lectura (Siesa recalculó: datos nuevos)')
-            previa = por_orden.get(f['orden'])
+            if st['total'] is None:
+                st['total'] = f['total_filas']
+            elif f['total_filas'] != st['total']:
+                st['problemas'].append(
+                    f'total_filas cambió de {st["total"]} a {f["total_filas"]} a mitad de la '
+                    'lectura (Siesa recalculó: datos nuevos)')
+            if al_leer is not None:
+                al_leer(f)
+            if st['ventana'] is None:
+                st['ventana'] = (f['ventana_desde'], f['ventana_hasta'])
+            elif f['ventana_desde'] != st['ventana'][0]:
+                st['problemas'].append('la ventana de la consulta cambió a mitad (pasó la '
+                                       'medianoche en Siesa)')
+            if f['orden'] < orden_minimo:
+                continue
+            previa = st['por_orden'].get(f['orden'])
             if previa is not None and (previa['fecha'], previa['bodega'],
                                        previa['referencia']) != (f['fecha'], f['bodega'],
                                                                   f['referencia']):
-                problemas.append(f'la fila {f["orden"]} llegó dos veces con otro '
-                                 'contenido: el orden no es estable')
+                st['problemas'].append(f'la fila {f["orden"]} llegó dos veces con otro '
+                                       'contenido: el orden no es estable')
                 continue
             clave = (f['fecha'], f['bodega'], f['referencia'])
-            otro = por_clave.get(clave)
+            otro = st['por_clave'].get(clave)
             if otro is not None and otro != f['orden']:
-                problemas.append(f'la misma fila ({clave[0]}, {clave[1]}, {clave[2]}) llegó '
-                                 f'con los números {otro} y {f["orden"]}: el orden no es '
-                                 'estable')
+                st['problemas'].append(
+                    f'la misma fila ({clave[0]}, {clave[1]}, {clave[2]}) llegó con los números '
+                    f'{otro} y {f["orden"]}: el orden no es estable')
                 continue
-            if (por_orden and f['ventana_desde'] !=
-                    next(iter(por_orden.values()))['ventana_desde']):
-                problemas.append('la ventana de la consulta cambió a mitad (pasó la '
-                                 'medianoche en Siesa)')
-            por_orden.setdefault(f['orden'], f)
-            por_clave.setdefault(clave, f['orden'])
+            st['por_orden'].setdefault(f['orden'], f)
+            st['por_clave'].setdefault(clave, f['orden'])
 
-    motivo = None
-    pag = 0
+    pag = pagina_inicio - 1
+    seguir = True
     try:
-        for pag in range(1, max_paginas + 1):
-            if (reloj() - inicio) / 60.0 > max_minutos:
-                motivo = f'se acabó el tiempo ({max_minutos} min) en la página {pag}'
+        if precargada is not None and precargada[0] == pagina_inicio:
+            # La página ya se leyó (la del ancla): no se pide dos veces.
+            pag, rows, declarado = precargada
+            if declarado is not None:
+                st['total_declarado'] = declarado
+            _absorber(rows)
+            if (st['problemas']
+                    or (st['total'] is not None
+                        and orden_minimo - 1 + len(st['por_orden']) >= st['total'])
+                    or len(rows) < TAM_PAG):
+                seguir = False
+        while seguir:
+            pag += 1
+            if pag - pagina_inicio >= max_paginas:
+                st['motivo'] = f'se agotaron {max_paginas} páginas sin llegar al final'
+                break
+            if reloj() > deadline:
+                st['motivo'] = f'se acabó el tiempo en la página {pag}'
                 break
             rows, declarado = _pedir(pag)
-            paginas = pag
+            st['paginas'] += 1
             if declarado is not None:
-                total_declarado = declarado
+                st['total_declarado'] = declarado
             _absorber(rows)
-            if problemas:
+            if st['problemas']:
                 break
-            if total is not None and len(por_orden) >= total:
+            if st['total'] is not None and orden_minimo - 1 + len(st['por_orden']) >= st['total']:
                 break
             if len(rows) < TAM_PAG:
                 break
             if pausa:
                 time.sleep(pausa)
-        else:
-            motivo = f'se agotaron {max_paginas} páginas sin llegar al final'
-        # Lo que falta: se busca en su página (la paginación inestable se ve acá).
-        if not problemas and total:
+        total = st['total']
+        if not st['problemas'] and total:
             for _intento in range(3):
-                faltan = [o for o in range(1, total + 1) if o not in por_orden]
+                faltan = [o for o in range(orden_minimo, total + 1) if o not in st['por_orden']]
                 if not faltan:
                     break
                 for p in sorted({(o - 1) // TAM_PAG + 1 for o in faltan[:300]}):
-                    if (reloj() - inicio) / 60.0 > max_minutos:
+                    if reloj() > deadline:
                         break
                     rows, _d = _pedir(p)
-                    paginas += 1
+                    st['paginas'] += 1
                     _absorber(rows)
+    except _SinRegistrar:
+        raise
     except Exception as e:                                    # noqa: BLE001
-        motivo = f'página {pag}: {str(e)[:300]}'
-        if '401' in str(e):
-            motivo = (f'{consulta}: 401 — la consulta no está registrada en Siesa o el '
-                      'usuario de la integración no tiene permiso (Administración → '
-                      'Permisos servicios → Consultas dinámicas).')
+        st['motivo'] = f'página {pag}: {str(e)[:300]}'
+    if (st['total_declarado'] is not None and st['total'] is not None
+            and st['total_declarado'] != st['total']):
+        st['problemas'].append(f'Siesa declaró {st["total_declarado"]} registros y la '
+                               f'consulta dice {st["total"]}')
+    if st['ilegibles']:
+        st['problemas'].append(
+            f'{st["ilegibles"]} fila(s) ilegibles (¿el SQL registrado tiene las columnas '
+            f'{", ".join(COLUMNAS_VENTAS_DIA)}?)')
+    return st
 
+
+def _texto_sin_registrar(consulta):
+    return (f'{consulta}: 401 — la consulta no está registrada en Siesa o el usuario de '
+            'la integración no tiene permiso (Administración → Permisos servicios → '
+            'Consultas dinámicas).')
+
+
+def descargar_ventana(ventana: dict, gateway=None, max_paginas=None, max_minutos=None,
+                      pausa_s=None, reloj=None, deadline=None) -> dict:
+    """Lee UNA ventana (la reciente o un período) y guarda **los días que
+    quedaron completos**. Nunca levanta: el resultado dice qué pasó.
+
+    La reciente se lee siempre desde la página 1 (lo más reciente primero; se
+    relee entera cada día para ver las anulaciones). Un período se **retoma**
+    donde quedó la lectura anterior (`DemandaVentanaLectura`): antes de seguir
+    se relee la última fila guardada y se exige que sea la misma (el período no
+    se movió); si no, se relee desde el principio y se dice. Así el histórico
+    avanza de una corrida a la siguiente en vez de volver siempre a la página 1
+    (P1-2).
+    """
+    from app.services import registro_sync_service as rs
+    from app.services.connekta_gateway import connekta
+    from app.utils.fecha import dia_operativo
+
+    gw = gateway or connekta
+    consulta = ventana['consulta']
+    periodo = ventana.get('tipo') == 'PERIODO'
+    max_paginas = max_paginas or _entero_env('DEMANDA_MAX_PAGINAS', 12000, 1, 30000)
+    max_minutos = max_minutos or _entero_env('DEMANDA_MAX_MINUTOS', 50, 1, 240)
+    pausa = (pausa_s if pausa_s is not None
+             else float(os.getenv('DEMANDA_PAUSA_S', '0.3') or 0.3))
+    reloj = reloj or time.monotonic
+    inicio = reloj()
+    deadline = deadline if deadline is not None else inicio + max_minutos * 60.0
+    reg_id = rs.abrir('demanda_siesa')
     ultimo_cerrado = dia_operativo() - timedelta(days=1)
-    faltantes = (total - len(por_orden)) if total else None
-    if total_declarado is not None and total is not None and total_declarado != total:
-        problemas.append(f'Siesa declaró {total_declarado} registros y la consulta '
-                         f'dice {total}')
-    if ilegibles:
-        problemas.append(f'{ilegibles} fila(s) ilegibles (¿el SQL registrado tiene las '
-                         f'columnas {", ".join(COLUMNAS_VENTAS_DIA)}?)')
+
+    cursor = _cursor(consulta) if periodo else None
+    inicio_orden, hasta_previo, reinicio, total_conocido, v_conocida = 1, None, None, None, None
+    pagina_ancla = None
+    if periodo and cursor is not None and cursor.orden_hasta and not cursor.sin_registrar:
+        verif, total_conocido, v_conocida, pagina_ancla = _verificar_ancla(
+            gw, consulta, cursor, deadline, reloj)
+        if verif is True:
+            inicio_orden = cursor.orden_hasta + 1
+            hasta_previo = cursor.cubierto_desde - timedelta(days=1)
+        elif verif is None:
+            resultado = _resultado(consulta, False, 0, None, 0, None, 0, None, 0,
+                                   'no se pudo releer la última fila guardada; se reintenta '
+                                   'en la próxima corrida', reloj() - inicio, ventana)
+            rs.cerrar_error(reg_id, resultado['motivo'], resultado)
+            return resultado
+        else:
+            reinicio = verif
+            cursor = _guardar_cursor(ventana, cursor, reiniciar=True, reg_id=reg_id,
+                                     motivo=verif)
+    pagina_inicio = (inicio_orden - 1) // TAM_PAG + 1
+
+    try:
+        st = _leer_paginas(gw, consulta, pagina_inicio, inicio_orden, deadline, reloj,
+                           max_paginas, pausa, precargada=pagina_ancla)
+    except _SinRegistrar:
+        if periodo:
+            _guardar_cursor(ventana, cursor, sin_registrar=True,
+                            motivo=_texto_sin_registrar(consulta), reg_id=reg_id)
+        resultado = _resultado(consulta, False, 0, None, 0, None, 0, None, 0,
+                               _texto_sin_registrar(consulta), reloj() - inicio, ventana,
+                               sin_registrar=True)
+        rs.cerrar_error(reg_id, resultado['motivo'], resultado)
+        return resultado
+
+    por_orden, total, problemas = st['por_orden'], st['total'], st['problemas']
+    motivo = st['motivo']
+    if total is None and total_conocido is not None and not problemas:
+        # Retomada en una página sin filas (todo ya estaba leído): el total es
+        # el que se leyó al verificar la ancla.
+        total, motivo = total_conocido, None
     if total is None and not motivo:
         motivo = ('la consulta no devolvió filas: no se sabe si no hubo ventas o si '
                   'está mal registrada')
-    completa = (not problemas and not motivo and total is not None
-                and faltantes == 0)
-    tramo = dias_completos(por_orden, total or 0, ultimo_cerrado) if not problemas else None
+    leidas_hasta = inicio_orden - 1 + len(por_orden)
+    faltantes = (total - leidas_hasta) if total is not None else None
+    completa = (not problemas and not motivo and total is not None and faltantes == 0)
+
+    tramo, orden_hasta, cubierto_desde = None, None, None
+    if not problemas and total is not None:
+        v_desde, v_hasta = st['ventana'] or v_conocida or (None, None)
+        if periodo and v_desde is not None:
+            tope = min(v_hasta, ultimo_cerrado)
+            tramo, orden_hasta, cubierto_desde = avance(
+                por_orden, total, inicio_orden, v_desde,
+                hasta_previo if hasta_previo is not None else tope)
+        elif not periodo:
+            tramo = dias_completos(por_orden, total, ultimo_cerrado)
 
     guardadas = 0
     if tramo:
         guardadas = _guardar_lectura(por_orden.values(), tramo, reg_id, consulta)
+    if periodo and cubierto_desde is not None:
+        ancla = por_orden.get(orden_hasta) if orden_hasta and orden_hasta >= inicio_orden else None
+        _guardar_cursor(ventana, cursor, total=total, orden_hasta=orden_hasta,
+                        cubierto_desde=cubierto_desde, ancla=ancla, v_desde=v_desde,
+                        reg_id=reg_id, paginas=st['paginas'], motivo=motivo)
+    elif periodo and problemas:
+        _guardar_cursor(ventana, cursor, reiniciar=True, reg_id=reg_id,
+                        motivo='; '.join(problemas[:3]))
 
-    resultado = {
-        'consulta': consulta, 'completa': completa, 'paginas': paginas,
-        'filas_declaradas': total, 'filas_leidas': len(por_orden),
-        'faltantes': faltantes, 'ilegibles': ilegibles,
-        'dias_guardados': ({'desde': tramo[0].isoformat(), 'hasta': tramo[1].isoformat()}
-                           if tramo else None),
-        'filas_guardadas': guardadas,
-        'motivo': motivo or ('; '.join(problemas[:5]) if problemas else None),
-        'minutos': round((reloj() - inicio) / 60.0, 1),
-    }
+    texto = motivo or ('; '.join(problemas[:5]) if problemas else None)
+    if reinicio:
+        texto = f'{reinicio} {texto or ""}'.strip()
+    resultado = _resultado(consulta, completa, st['paginas'], total, leidas_hasta, faltantes,
+                           st['ilegibles'], tramo, guardadas, texto, reloj() - inicio, ventana,
+                           retomada_desde=inicio_orden if inicio_orden > 1 else None)
     if completa:
         rs.cerrar_ok(reg_id, resultado)
     else:
-        rs.cerrar_error(reg_id, resultado['motivo'] or f'faltan {faltantes} filas',
-                        resultado)
+        rs.cerrar_error(reg_id, resultado['motivo'] or f'faltan {faltantes} filas', resultado)
     logger.info('[DEMANDA] %s: %s', consulta, resultado)
     return resultado
+
+
+def _resultado(consulta, completa, paginas, total, leidas, faltantes, ilegibles, tramo,
+               guardadas, motivo, segundos, ventana, sin_registrar=False, retomada_desde=None):
+    return {
+        'consulta': consulta, 'tipo': ventana.get('tipo'), 'completa': completa,
+        'paginas': paginas, 'filas_declaradas': total, 'filas_leidas': leidas,
+        'faltantes': faltantes, 'ilegibles': ilegibles,
+        'dias_guardados': ({'desde': tramo[0].isoformat(), 'hasta': tramo[1].isoformat()}
+                           if tramo else None),
+        'filas_guardadas': guardadas, 'motivo': motivo,
+        'sin_registrar': sin_registrar, 'retomada_desde_fila': retomada_desde,
+        'minutos': round(segundos / 60.0, 1),
+    }
+
+
+def _cursor(consulta):
+    from app.models.demanda_siesa import DemandaVentanaLectura
+    return DemandaVentanaLectura.query.filter_by(consulta=consulta).first()
+
+
+def _verificar_ancla(gw, consulta, cursor, deadline, reloj):
+    """¿La fila donde quedó la lectura anterior sigue siendo la misma?
+    `(True, total, ventana, página_leída)` sí; `(motivo, …)` si no —se relee
+    el período desde el principio—; `(None, …)` si no se pudo preguntar. La
+    página leída vuelve para no pedirla dos veces."""
+    if cursor.ancla_fecha is None or cursor.cubierto_desde is None:
+        return 'no había ancla guardada: se lee el período desde el principio.', None, None, None
+    pag = (cursor.orden_hasta - 1) // TAM_PAG + 1
+    vista = {}
+
+    def _anotar(f):
+        vista[f['orden']] = f
+    try:
+        st = _leer_paginas(gw, consulta, pag, cursor.orden_hasta + TAM_PAG * 10 ** 6,
+                           deadline, reloj, 1, 0, al_leer=_anotar)
+    except _SinRegistrar:
+        return ('la consulta dejó de responder (401): se relee desde el principio.', None, None,
+                None)
+    f = vista.get(cursor.orden_hasta)
+    if not vista:
+        return None, None, None, None
+    if (f is not None and (f['fecha'], f['bodega'], f['referencia'])
+            == (cursor.ancla_fecha, cursor.ancla_bodega, cursor.ancla_referencia)
+            and (cursor.total_filas is None or st['total'] == cursor.total_filas)):
+        return True, st['total'], st['ventana'], st['crudas']
+    return ('el período cambió desde la lectura anterior (un documento anulado o '
+            'fechado atrás): se relee desde el principio.'), None, None, None
+
+
+def _guardar_cursor(ventana, cursor, total=None, orden_hasta=None, cubierto_desde=None,
+                    ancla=None, v_desde=None, reg_id=None, paginas=0, motivo=None,
+                    sin_registrar=False, reiniciar=False):
+    """Dónde quedó la lectura de un período. Solo avanza (hacia atrás en el
+    tiempo): si esta lectura no llegó más lejos, se conserva lo de antes
+    (salvo `reiniciar`)."""
+    from app.models.demanda_siesa import DemandaVentanaLectura
+    if cursor is None:
+        cursor = DemandaVentanaLectura(consulta=ventana['consulta'])
+        db.session.add(cursor)
+    cursor.desde, cursor.fin = ventana['desde'], ventana['fin']
+    cursor.sin_registrar = bool(sin_registrar)
+    cursor.motivo = (motivo or None) and str(motivo)[:500]
+    cursor.registro_id = reg_id
+    cursor.leida_en = datetime.utcnow()
+    cursor.paginas = (cursor.paginas or 0) + (paginas or 0)
+    if reiniciar:
+        cursor.orden_hasta = cursor.cubierto_desde = cursor.total_filas = None
+        cursor.ancla_fecha = cursor.ancla_bodega = cursor.ancla_referencia = None
+        cursor.completa = False
+    elif total is not None:
+        cursor.total_filas = total
+        if orden_hasta is not None and orden_hasta >= (cursor.orden_hasta or 0):
+            cursor.orden_hasta = orden_hasta
+            if ancla is not None:
+                cursor.ancla_fecha, cursor.ancla_bodega, cursor.ancla_referencia = (
+                    ancla['fecha'], ancla['bodega'], ancla['referencia'])
+        if cubierto_desde is not None and (cursor.cubierto_desde is None
+                                           or cubierto_desde < cursor.cubierto_desde):
+            cursor.cubierto_desde = cubierto_desde
+        cursor.completa = bool(cursor.cubierto_desde and v_desde
+                               and cursor.cubierto_desde <= v_desde)
+    db.session.commit()
+    return cursor
+
+
+def descargar_ventas_dia(reciente: bool = False, gateway=None, max_paginas=None,
+                         max_minutos=None, pausa_s=None, reloj=None) -> dict:
+    """`reciente=True`: la consulta de los últimos días. Si no, el histórico:
+    los períodos que todavía tienen días sin cubrir, del más reciente al más
+    viejo, retomando cada uno donde quedó, hasta el tiempo (`DEMANDA_MAX_MINUTOS`)."""
+    if reciente:
+        return descargar_ventana(ventana_reciente(), gateway=gateway, max_paginas=max_paginas,
+                                 max_minutos=max_minutos, pausa_s=pausa_s, reloj=reloj)
+    return descargar_historico(gateway=gateway, max_paginas=max_paginas,
+                               max_minutos=max_minutos, pausa_s=pausa_s, reloj=reloj)
+
+
+def ventanas_pendientes(hoy: date = None) -> list:
+    """Los períodos con algún día SIN cubrir dentro del histórico (hoy −
+    `DIAS_HISTORICO` … ayer), del más reciente al más viejo, con su estado.
+
+    Un período ya leído entero (`completa`) no vuelve a la lista aunque tenga
+    días sin cubrir DESPUÉS de su `hasta` registrado: esos días los cubre la
+    reciente, y si no los cubrió, ninguna consulta los alcanza — la cobertura
+    lo muestra como un hueco (`cobertura_siesa`, `dias_antes_del_hueco`)."""
+    from app.utils.fecha import dia_operativo
+    hoy = hoy or dia_operativo()
+    piso = hoy - timedelta(days=DIAS_HISTORICO)
+    ayer = hoy - timedelta(days=1)
+    cubiertos = cobertura_siesa(con_dias=True)['dias_cubiertos']
+    out = []
+    for v in ventanas_historicas(hoy):
+        d, h = max(v['desde'], piso), min(v['hasta'], ayer)
+        faltan = sum(1 for i in range((h - d).days + 1)
+                     if d + timedelta(days=i) not in cubiertos) if d <= h else 0
+        if not faltan:
+            continue
+        c = _cursor(v['consulta'])
+        if c is not None and c.completa:
+            continue
+        out.append(dict(v, dias_sin_cubrir=faltan,
+                        sin_registrar=bool(c and c.sin_registrar),
+                        retoma_en_fila=(c.orden_hasta + 1) if c and c.orden_hasta else None))
+    return out
+
+
+def descargar_historico(gateway=None, max_paginas=None, max_minutos=None, pausa_s=None,
+                        reloj=None, hoy: date = None, deadline=None) -> dict:
+    """Los períodos pendientes, del más reciente al más viejo, hasta el
+    tiempo. Un período sin registrar (401) se declara y se pasa al siguiente."""
+    reloj = reloj or time.monotonic
+    max_minutos = max_minutos or _entero_env('DEMANDA_MAX_MINUTOS', 50, 1, 240)
+    deadline = deadline if deadline is not None else reloj() + max_minutos * 60.0
+    leidas, sin_registrar = [], []
+    for v in ventanas_pendientes(hoy):
+        if reloj() > deadline:
+            break
+        r = descargar_ventana(v, gateway=gateway, max_paginas=max_paginas, pausa_s=pausa_s,
+                              reloj=reloj, deadline=deadline)
+        leidas.append(r)
+        if r.get('sin_registrar'):
+            sin_registrar.append(v['consulta'])
+    pendientes = ventanas_pendientes(hoy)
+    return {'ventanas_leidas': leidas, 'sin_registrar': sin_registrar,
+            'pendientes': [{'consulta': p['consulta'], 'dias_sin_cubrir': p['dias_sin_cubrir'],
+                            'retoma_en_fila': p['retoma_en_fila']} for p in pendientes],
+            'completo': not pendientes}
 
 
 def _guardar_lectura(filas, tramo, registro_id, consulta) -> int:
     """Upsert de las filas del tramo completo + los días como cubiertos.
 
     Una fila que ya estaba y esta lectura (completa para ese día) no trae —una
-    factura anulada— queda en cero: no se borra (Regla de la bitácora)."""
+    factura anulada— queda en cero: no se borra (Regla de la bitácora). El
+    valor y el costo se guardan como vinieron: `None` si la consulta
+    registrada no los trae (no se sabe), nunca un cero inventado."""
     from app.models.demanda_siesa import DemandaDiaCubierto, DemandaDiaSiesa
 
     desde, hasta = tramo
@@ -507,10 +959,14 @@ def _guardar_lectura(filas, tramo, registro_id, consulta) -> int:
             e = DemandaDiaSiesa(fecha=clave[0], bodega=clave[1], referencia=clave[2])
             db.session.add(e)
         e.vendido, e.devuelto, e.lineas = f['vendido'], f['devuelto'], f['lineas']
+        for c in COLUMNAS_VALOR:
+            setattr(e, c, f.get(c))
         e.registro_id, e.actualizada_en = registro_id, ahora
     for clave, e in existentes.items():
         if clave not in nuevas and (e.vendido or e.devuelto):
             e.vendido, e.devuelto, e.lineas = 0, 0, 0
+            for c in COLUMNAS_VALOR:
+                setattr(e, c, 0)
             e.registro_id, e.actualizada_en = registro_id, ahora
     cubiertos = {c.fecha: c for c in DemandaDiaCubierto.query.filter(
         DemandaDiaCubierto.fecha >= desde, DemandaDiaCubierto.fecha <= hasta).all()}
@@ -566,15 +1022,19 @@ def encendido() -> bool:
 
 
 def ciclo() -> dict:
-    """Lo que hace el cron: mientras la cobertura de Siesa no llegue al año,
-    la consulta histórica (lo más reciente primero: cada corrida deja
-    completos los días que alcanzó); después, la reciente. Sin `DEMANDA_SIESA`
-    no lee nada."""
+    """Lo que hace el cron: primero la reciente (los últimos días, lo que el
+    punto de pedido necesita primero); con el tiempo que queda
+    (`DEMANDA_MAX_MINUTOS`), el histórico — los períodos con días sin cubrir,
+    cada uno retomado donde quedó. Cuando el histórico está completo, solo la
+    reciente. Sin `DEMANDA_SIESA` no lee nada."""
     if not encendido():
         return {'omitido': 'DEMANDA_SIESA apagado'}
-    cob = cobertura_siesa()
-    reciente = (cob.get('dias') or 0) >= DIAS_MINIMOS_ANIO
-    return descargar_ventas_dia(reciente=reciente)
+    reloj = time.monotonic
+    deadline = reloj() + _entero_env('DEMANDA_MAX_MINUTOS', 50, 1, 240) * 60.0
+    reciente = descargar_ventana(ventana_reciente(), reloj=reloj, deadline=deadline)
+    historico = (descargar_historico(reloj=reloj, deadline=deadline)
+                 if reloj() < deadline else {'omitido': 'sin tiempo después de la reciente'})
+    return {'reciente': reciente, 'historico': historico}
 
 
 def init_scheduler(app):
@@ -677,12 +1137,18 @@ def _tramo_final(dias_observados, hasta_max=None) -> dict:
             'dias_antes_del_hueco': i + 1}
 
 
-def cobertura_siesa() -> dict:
+def cobertura_siesa(con_dias: bool = False) -> dict:
+    """El tramo contiguo que las lecturas completas de Siesa cubrieron. Con
+    `con_dias`, además el conjunto de TODOS los días cubiertos (`dias`): lo usan
+    los períodos pendientes y el valor realizado — esta es la única que lee la
+    cobertura."""
     from sqlalchemy import func
     from app.models.demanda_siesa import DemandaDiaCubierto
     fechas = [r[0] for r in db.session.query(DemandaDiaCubierto.fecha).all()]
     t = _tramo_final(fechas)
     t['leido_en'] = db.session.query(func.max(DemandaDiaCubierto.leido_en)).scalar()
+    if con_dias:
+        t['dias_cubiertos'] = set(fechas)
     return t
 
 
@@ -857,12 +1323,27 @@ def _texto_sin_fuente():
 
 def _que_hacer(candidatas):
     siesa = next(c for c in candidatas if c['fuente'] == FUENTE_SIESA)
+    try:
+        pend = ventanas_pendientes()
+    except Exception as e:                                    # noqa: BLE001
+        db.session.rollback()
+        logger.warning('[DEMANDA] no se pudieron leer los períodos pendientes: %s', e)
+        pend = []
+    sin_reg = [p['consulta'] for p in pend if p['sin_registrar']]
     if not siesa['usable']:
         return ('Registrar en Siesa la consulta de venta diaria '
-                f'({CONSULTA_VENTAS_DIA_DEFAULT}, con el SQL de «Compras: de dónde sale '
-                'la demanda») y leerla en 🧾 Fuentes → Demanda. Mientras tanto, '
-                'fotografiar las facturas desde pedido de los últimos 90 días da una '
-                'demanda parcial.')
+                f'({consulta_ventas_dia(True)}) y las del histórico, una por '
+                f'{periodo_historico().lower()} ({prefijo_consulta_periodo()}_…; el SQL de '
+                'cada una lo imprime `scripts/qa_demanda_fuentes_real.py --sql`), y leerlas '
+                'en 🧾 Fuentes → Demanda. Mientras tanto, fotografiar las facturas desde '
+                'pedido de los últimos 90 días da una demanda parcial.'
+                + (f' Sin registrar todavía: {", ".join(sin_reg)}.' if sin_reg else ''))
+    if pend:
+        return (f'Faltan {len(pend)} período(s) del histórico por leer'
+                + (f' ({len(sin_reg)} sin registrar en Siesa: {", ".join(sin_reg)})'
+                   if sin_reg else '')
+                + ': se leen solos cada madrugada, retomando donde quedaron, o con '
+                  '«Leer el histórico» en 🧾 Fuentes → Demanda.')
     return 'Leer la venta reciente de Siesa en 🧾 Fuentes → Demanda.'
 
 
@@ -879,3 +1360,64 @@ def ventana_de_la_fuente(fuente: dict, desde, hasta):
         d, h = max(desde, c_desde), min(hasta, c_hasta)
         return (d, h) if d <= h else (None, h)
     return None
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Valor y costo de lo vendido — para la venta perdida en pesos y el capital
+# ══════════════════════════════════════════════════════════════════════════════
+
+def valor_realizado(refs=None, desde: date = None, hasta: date = None, bodegas=None) -> dict:
+    """Precio y costo REALIZADOS por SKU sobre los días que una lectura
+    completa cubrió: `{ref: {'unidades', 'valor', 'costo', 'precio_unitario',
+    'costo_unitario', 'dias', 'valor_incompleto', 'costo_incompleto'}}`.
+
+    Neto de devoluciones (unidades, valor y costo). Si en el tramo hay una
+    fila sin valor (consulta registrada sin esas columnas, o líneas sin valor
+    en Siesa: `lineas_sin_valor`), el precio de ese SKU es `None` y se declara
+    (`valor_incompleto`): un precio calculado sobre parte de las líneas no es el
+    precio. Lo mismo el costo. Sin unidades netas > 0, sin precio. Solo lee;
+    nadie más lee el valor (`tests/test_demanda_fuentes.py`)."""
+    from app.models.demanda_siesa import DemandaDiaSiesa
+    cub = cobertura_siesa(con_dias=True)
+    if not cub.get('desde'):
+        return {}
+    d = max(desde or cub['desde'], cub['desde'])
+    h = min(hasta or cub['hasta'], cub['hasta'])
+    if d > h:
+        return {}
+    dias_cubiertos = cub['dias_cubiertos']
+    q = DemandaDiaSiesa.query.filter(DemandaDiaSiesa.fecha >= d, DemandaDiaSiesa.fecha <= h)
+    if refs is not None:
+        q = q.filter(DemandaDiaSiesa.referencia.in_(list(refs)))
+    if bodegas is not None:
+        q = q.filter(DemandaDiaSiesa.bodega.in_(list(bodegas)))
+    out = {}
+    for f in q.all():
+        if f.fecha not in dias_cubiertos:
+            continue
+        a = out.setdefault(f.referencia, {'unidades': Decimal(0), 'valor': Decimal(0),
+                                          'costo': Decimal(0), 'dias': set(),
+                                          'valor_incompleto': False,
+                                          'costo_incompleto': False})
+        a['unidades'] += Decimal(f.vendido or 0) - Decimal(f.devuelto or 0)
+        a['dias'].add(f.fecha)
+        if f.valor_vendido is None or f.valor_devuelto is None or (f.lineas_sin_valor or 0):
+            a['valor_incompleto'] = True
+        else:
+            a['valor'] += Decimal(f.valor_vendido) - Decimal(f.valor_devuelto)
+        if f.costo_vendido is None or f.costo_devuelto is None or (f.lineas_sin_costo or 0):
+            a['costo_incompleto'] = True
+        else:
+            a['costo'] += Decimal(f.costo_vendido) - Decimal(f.costo_devuelto)
+    for a in out.values():
+        u = a['unidades']
+        a['precio_unitario'] = (None if a['valor_incompleto'] or u <= 0
+                                else (a['valor'] / u).quantize(Decimal('0.01')))
+        a['costo_unitario'] = (None if a['costo_incompleto'] or u <= 0
+                               else (a['costo'] / u).quantize(Decimal('0.01')))
+        if a['valor_incompleto']:
+            a['valor'] = None
+        if a['costo_incompleto']:
+            a['costo'] = None
+        a['dias'] = len(a['dias'])
+    return out

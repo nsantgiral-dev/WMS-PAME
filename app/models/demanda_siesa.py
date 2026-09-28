@@ -22,6 +22,7 @@ Quién la lee y quién la escribe — nadie más (`tests/test_demanda_fuentes.py
   · escribe  → `demanda_fuentes._guardar_lectura`
   · cobertura → `demanda_fuentes.cobertura_siesa`
   · numerador → `kardex_service.serie_demanda`
+  · valor y costo → `demanda_fuentes.valor_realizado`
 """
 from datetime import datetime
 
@@ -38,6 +39,16 @@ class DemandaDiaSiesa(db.Model):
     vendido = db.Column(db.Numeric(16, 4), nullable=False, default=0)
     devuelto = db.Column(db.Numeric(16, 4), nullable=False, default=0)
     lineas = db.Column(db.Integer)
+    #: Valor SIN impuesto y costo promedio de lo vendido y lo devuelto ese día
+    #: (m052comprasc). NULL = la consulta registrada no los trae: no se sabe,
+    #: no es cero. `lineas_sin_*` cuenta las líneas que Siesa trajo sin valor
+    #: (o sin costo): con alguna, el precio del día no es el precio.
+    valor_vendido = db.Column(db.Numeric(18, 4))
+    valor_devuelto = db.Column(db.Numeric(18, 4))
+    costo_vendido = db.Column(db.Numeric(18, 4))
+    costo_devuelto = db.Column(db.Numeric(18, 4))
+    lineas_sin_valor = db.Column(db.Integer)
+    lineas_sin_costo = db.Column(db.Integer)
     registro_id = db.Column(db.Integer)              # registros_sync de la lectura
     actualizada_en = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
 
@@ -59,4 +70,44 @@ class DemandaDiaCubierto(db.Model):
 
     __table_args__ = (
         db.Index('uq_demanda_dia_cubierto_fecha', 'fecha', unique=True),
+    )
+
+
+class DemandaVentanaLectura(db.Model):
+    """Dónde quedó la lectura de cada PERÍODO del histórico (m052comprasc).
+
+    Un período es una consulta con fechas fijas (`demanda_fuentes.
+    ventanas_historicas`), ordenada por fecha descendente: su numeración no
+    cambia de un día a otro, así que la lectura se retoma en `orden_hasta + 1`
+    en vez de volver a la página 1. Antes de retomar se relee la fila
+    `orden_hasta` y se exige que sea el ancla guardada (y el mismo total); si
+    no, el período se movió (un documento anulado o fechado atrás) y se relee
+    entero.
+
+    OPERATIVA (se vacía en el corte) y REGENERABLE: es solo un marcador."""
+    __tablename__ = 'demanda_ventana_lectura'
+
+    id = db.Column(db.Integer, primary_key=True)
+    consulta = db.Column(db.String(120), nullable=False)
+    desde = db.Column(db.Date)
+    fin = db.Column(db.Date)
+    total_filas = db.Column(db.Integer)
+    #: La última fila de un día entero ya guardado: la lectura sigue en la +1.
+    orden_hasta = db.Column(db.Integer)
+    #: El primer día del tramo ya cubierto (lo cubierto va de acá al `hasta`
+    #: del período; la lectura avanza hacia atrás).
+    cubierto_desde = db.Column(db.Date)
+    ancla_fecha = db.Column(db.Date)
+    ancla_bodega = db.Column(db.String(10))
+    ancla_referencia = db.Column(db.String(50))
+    completa = db.Column(db.Boolean, nullable=False, default=False)
+    #: 401: la consulta no está registrada en Siesa (o sin permiso).
+    sin_registrar = db.Column(db.Boolean, nullable=False, default=False)
+    motivo = db.Column(db.String(500))
+    paginas = db.Column(db.Integer, default=0)
+    registro_id = db.Column(db.Integer)
+    leida_en = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+
+    __table_args__ = (
+        db.Index('uq_demanda_ventana_lectura_consulta', 'consulta', unique=True),
     )

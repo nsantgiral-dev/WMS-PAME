@@ -612,12 +612,18 @@ def main():
     if args.sql:
         os.environ.setdefault('DATABASE_URL', 'sqlite://')
         from app.services import demanda_fuentes as dfu
-        print(f'-- 1) Consulta dinámica NUEVA: {dfu.CONSULTA_VENTAS_DIA_DEFAULT} '
-              f'(histórico, {dfu.DIAS_HISTORICO} días)')
-        print(dfu.sql_ventas_dia(dfu.DIAS_HISTORICO))
-        print(f'\n-- 2) Consulta dinámica NUEVA: {dfu.CONSULTA_VENTAS_DIA_RECIENTE_DEFAULT} '
+        # Una consulta dinámica por ventana (2026-09-27): la reciente (relativa)
+        # y una por período del histórico, con fechas FIJAS. El nombre es el
+        # que el WMS va a pedir: registrarla con ese nombre exacto.
+        n = 1
+        print(f'-- {n}) Consulta dinámica NUEVA: {dfu.consulta_ventas_dia(True)} '
               f'(la de todos los días, {dfu.DIAS_RECIENTE} días)')
         print(dfu.sql_ventas_dia(dfu.DIAS_RECIENTE))
+        for v in dfu.ventanas_historicas():
+            n += 1
+            print(f'\n-- {n}) Consulta dinámica NUEVA: {v["consulta"]} '
+                  f'(histórico, {v["desde"]} a {v["hasta"]})')
+            print(dfu.sql_de_ventana(v))
         for k, sql in dfu.SQL_VALIDACION.items():
             print(f'\n-- Validación en papeleriamedellin_pame_descubrir_tablas: {k}')
             print(sql)

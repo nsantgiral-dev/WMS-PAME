@@ -42,4 +42,4 @@ from app.models.cartera import (RetencionCartera, CarteraCliente,
                                  CarteraHabilitacion, CarteraIdempotencia)
 from app.models.sello_ambiente import SelloAmbiente
 from app.models.cron_latido import CronLatido
-from app.models.demanda_siesa import DemandaDiaSiesa, DemandaDiaCubierto
+from app.models.demanda_siesa import DemandaDiaSiesa, DemandaDiaCubierto, DemandaVentanaLectura
