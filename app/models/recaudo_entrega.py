@@ -331,6 +331,15 @@ class RecaudoEntrega(db.Model):
         if consec is not None:
             setattr(self, f'siesa_{doc.lower()}_consec', str(consec))
 
+    def _dc_resultado(self, cuenta_puc):
+        import json
+        try:
+            detalle = json.loads(self.siesa_dc_detalle or '{}')
+        except (ValueError, TypeError):
+            return None
+        fila = detalle.get(cuenta_puc) if isinstance(detalle, dict) else None
+        return fila.get('resultado') if isinstance(fila, dict) else None
+
     # ── Retenciones ya enviadas, por cuenta PUC ──────────────────────────
     def pucs_enviadas(self) -> set:
         import json
@@ -415,9 +424,13 @@ class RecaudoEntrega(db.Model):
             # dato que sale de este modelo sea el mismo para cualquier
             # pantalla que lo consuma, no una copia que puede quedar vieja.
             'retenciones_detalle':   [
-                {**rd, 'siesa_triggered': rd.get('puc') in self.pucs_enviadas()}
+                {**rd, 'siesa_triggered': rd.get('puc') in self.pucs_enviadas(),
+                 # «DC ✓» con señal positiva (el desenlace anotado), no con la
+                 # marca de pre-envío (validación 2026-09-26).
+                 'llego': self._dc_resultado(rd.get('puc')) in self._RESULTADOS_FINALES}
                 for rd in (self.retenciones_detalle or [])
             ],
+            'dc_llego':              self.siesa_dc_resultado in self._RESULTADOS_FINALES,
             'confirmado_por':        self.confirmado_por,
             'editado_por':           self.editado_por,
             'editado_en':            self.editado_en.isoformat() if self.editado_en else None,

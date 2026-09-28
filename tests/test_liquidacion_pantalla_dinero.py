@@ -32,7 +32,10 @@ def _ruta_entregada(db, almacen, dias_atras=0, liquidada=False):
     c = Conductor(nombre='C', cedula=f'C{uuid.uuid4().hex[:8]}', activo=True)
     db.session.add(c)
     db.session.flush()
-    fecha = (datetime.utcnow() - timedelta(days=dias_atras)).date()
+    from app.utils.fecha import dia_operativo
+    # El día de Bogotá (el del dashboard): con `utcnow().date()` el test
+    # fallaba de 7 p. m. a medianoche.
+    fecha = dia_operativo() - timedelta(days=dias_atras)
     ruta = RutaDespacho(conductor_id=c.id, tipo_ruta='Urbana', estado='ENTREGADA',
                         fecha_programada=fecha,
                         estado_financiero='LIQUIDADA' if liquidada else 'PENDIENTE',

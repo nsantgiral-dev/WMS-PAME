@@ -123,8 +123,6 @@ class TestUnaRetencionSinVerificarNoSeCierraReintentando:
     AJUSTE_CONTEO) y el ejecutor lo cierra COMPLETADO «idempotente» por la
     bandera, sin que nadie haya mirado Siesa. La pantalla pinta «DC ✓»."""
 
-    @pytest.mark.xfail(strict=True, reason='val-dinero P1: reintentar cierra un DC sin '
-                                           'verificar como hecho')
     def test_reintentar_un_dc_sin_verificar_se_niega(self, app, client, db, mundo):
         from app.models.recaudo_entrega import RecaudoEntrega
         from app.models.siesa_job import SiesaJob

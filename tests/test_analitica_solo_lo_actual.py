@@ -700,10 +700,14 @@ CONSULTAS_FALLIDO_OPERATIVAS = {
     # la negativa de reintentar lo necesitan. Opera, no cuenta.
     'app/services/siesa_job_service.py::preflag_sin_verificar':
         'decide si un FALLIDO quedó sin verificar (pre-flag puesto): opera, no cuenta',
+    # Validación de la plata (2026-09-26): la salida humana de una retención o
+    # NC sin verificar en Liquidación. Opera, no cuenta.
+    'app/services/liquidacion_service.py::documentos_sin_verificar':
+        'lista las retenciones/NC FALLIDO sin verificar para resolverlas: opera, no cuenta',
     'app/services/tablero_lider_conteo.py::_rechazados_siesa':
         'lista para reintentar/descartar desde el tablero del líder',
 }
-TOPE_CONSULTAS_FALLIDO = 24  # +1 tanda 2: preflag_sin_verificar · +1 fiscal v2: estado_emision
+TOPE_CONSULTAS_FALLIDO = 25  # +1 tanda 2: preflag_sin_verificar · +1 fiscal v2: estado_emision · +1 plata: documentos_sin_verificar
 
 #: Módulos que MUESTRAN números: acá no puede haber ninguna consulta propia.
 MODULOS_QUE_SOLO_CUENTAN = ('app/services/analitica_', 'app/services/dashboard_service.py',

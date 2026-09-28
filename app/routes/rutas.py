@@ -781,6 +781,40 @@ def resolver_rc_recaudo(ruta_id, recaudo_id):
     return jsonify({'recaudo': resultado}), 200
 
 
+@rutas_bp.route('/<int:ruta_id>/recaudos/<int:recaudo_id>/resolver-documento', methods=['POST'])
+@jwt_required()
+def resolver_documento_recaudo(ruta_id, recaudo_id):
+    """`{job_id, entro: bool, motivo}`: una persona dice si una retención o una
+    nota crédito de la parada que quedó sin verificar está en Siesa. La misma
+    salida que «¿Está en Siesa?» de Recuperación (`resolver_preflag_sin_verificar`,
+    FORZAR), para quien liquida. No hace POST."""
+    u = _con_permiso(puede_resolver_documento)
+    if not u:
+        return jsonify({'error': 'Solo quien puede liquidar resuelve un documento sin verificar'}), 403
+    from app.extensions import db
+    from app.models.siesa_job import SiesaJob
+    from app.services.bitacora import MotivoRequerido
+    from app.services.liquidacion_service import TIPOS_DOC_SIN_VERIFICAR
+    from app.services.siesa_job_service import resolver_preflag_sin_verificar
+    data = request.get_json(silent=True) or {}
+    job = db.session.get(SiesaJob, data.get('job_id')) if data.get('job_id') else None
+    if (job is None or job.referencia_tipo != 'RecaudoEntrega' or job.referencia_id != recaudo_id
+            or job.tipo not in TIPOS_DOC_SIN_VERIFICAR):
+        return jsonify({'error': 'Ese envío no es un documento de esta parada'}), 404
+    if not isinstance(data.get('entro'), bool):
+        return jsonify({'error': 'Diga si el documento está en Siesa (entro: true o false)'}), 400
+    try:
+        resolver_preflag_sin_verificar(job.id, usuario_id=u.id, entro=data['entro'],
+                                       motivo=data.get('motivo'), origen=request.path)
+    except MotivoRequerido as e:
+        return jsonify({'error': str(e)}), 400
+    except ValueError as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 409
+    db.session.commit()
+    return jsonify({'ok': True, 'job': job.to_dict()}), 200
+
+
 @rutas_bp.route('/<int:ruta_id>/recaudos/<int:recaudo_id>/version-conductor', methods=['POST'])
 @jwt_required()
 def resolver_version_conductor(ruta_id, recaudo_id):

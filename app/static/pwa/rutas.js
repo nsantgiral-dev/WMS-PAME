@@ -3757,7 +3757,7 @@ async function _cargarPlanilla(id) {
             ${r && d.estado_financiero === 'LIQUIDADA' ? `<span style="margin-left:8px;">
               ${r.siesa_nc_triggered ? '<span title="Nota crédito enviada" style="color:var(--info-tx);">NC</span>' : ''}
               ${p.rc_llego ? '<span title="Recibo de caja en Siesa" style="color:var(--ok-tx);margin-left:4px;">RC</span>' : (r.siesa_rc_triggered ? '<span title="Recibo de caja sin verificar en Siesa" style="color:var(--warn-tx);margin-left:4px;">RC ?</span>' : '')}
-              ${r.siesa_dc_triggered ? '<span title="Documento contable enviado" style="color:var(--lila-tx);margin-left:4px;">DC</span>' : ''}
+              ${r.dc_llego ? '<span title="Retención en Siesa" style="color:var(--lila-tx);margin-left:4px;">DC</span>' : (r.siesa_dc_triggered ? '<span title="Retención sin verificar en Siesa" style="color:var(--warn-tx);margin-left:4px;">DC ?</span>' : '')}
             </span>` : ''}
           </div>
           ${r && r.estado_entrega === 'RECHAZADO' ? `

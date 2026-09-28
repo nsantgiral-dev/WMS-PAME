@@ -473,7 +473,12 @@ class TestNotaCreditoDevolucionCliente:
         return devolucion
 
     def test_idempotente_si_ya_triggered(self, app, db, almacen):
+        """Idempotente con el desenlace confirmado (la respuesta de Siesa
+        guardada). La bandera sola ya no alcanza (validación 2026-09-26):
+        `test_bandera_sin_respuesta_no_es_hecho`."""
         devolucion = self._make_devolucion(db, almacen, siesa_nc_triggered=True)
+        devolucion.siesa_nc_response = '{"codigo": 0}'
+        db.session.commit()
         from app.models.siesa_job import SiesaJob
         job = SiesaJob.encolar('NOTA_CREDITO_DEVOLUCION_CLIENTE', {
             'devolucion_id': devolucion.id,
@@ -490,6 +495,20 @@ class TestNotaCreditoDevolucionCliente:
         assert resultado.get('idempotente') is True
         mc.get_rowids_factura.assert_not_called()
         mc.trigger_nota_factura.assert_not_called()
+
+    def test_bandera_sin_respuesta_no_es_hecho(self, app, db, almacen):
+        devolucion = self._make_devolucion(db, almacen, siesa_nc_triggered=True)
+        from app.models.siesa_job import SiesaJob
+        from app.services import siesa_job_service as sjs
+        job = SiesaJob.encolar('NOTA_CREDITO_DEVOLUCION_CLIENTE', {
+            'devolucion_id': devolucion.id, 'tipo_docto_fe': 'FEW', 'consec_fe': '5555',
+            'items_devueltos': [{'codigo': 'PROD-001', 'cantidad_devuelta': 4}]})
+        db.session.commit()
+        with patch('app.services.connekta_gateway.connekta') as mc:
+            mc.modo_simulacion = False
+            with pytest.raises(sjs._ResultadoDesconocido):
+                sjs._ejecutar_job(job)
+        mc.get_rowids_factura.assert_not_called()
 
     def test_dispara_142946_y_marca_triggered(self, app, db, almacen, producto):
         devolucion = self._make_devolucion(db, almacen, siesa_nc_triggered=False)

@@ -697,11 +697,14 @@ function _liqRenderDetalle() {
       // PRE-envío y queda puesta cuando el envío no se pudo verificar.
       if (rec.rc_llego) html += '<span style="font-size:var(--fs-xs);padding:2px 8px;border-radius:20px;background:#14532d33;color:var(--ok-tx);">RC ✓</span>';
       else if (rec.rc_sin_verificar) html += '<span style="font-size:var(--fs-xs);padding:2px 8px;border-radius:20px;background:var(--warn-bg);color:var(--warn-tx);">RC sin verificar</span>';
+      // «DC ✓» solo con el desenlace confirmado (`llego`), como «RC ✓»: la
+      // marca de pre-envío queda puesta cuando el envío no se pudo verificar.
       retDet.forEach(rd => {
-        if (rd.siesa_triggered) html += `<span style="font-size:var(--fs-xs);padding:2px 8px;border-radius:20px;background:#3b076633;color:var(--lila-tx);">DC ${rd.tipo.replace('RETEFUENTE_','RF').replace('RETEIVA','RIVA').replace('ICA_','ICA')} ✓</span>`;
+        if (rd.llego) html += `<span style="font-size:var(--fs-xs);padding:2px 8px;border-radius:20px;background:#3b076633;color:var(--lila-tx);">DC ${esc(String(rd.tipo || '').replace('RETEFUENTE_','RF').replace('RETEIVA','RIVA').replace('ICA_','ICA'))} ✓</span>`;
+        else if (rd.siesa_triggered) html += `<span style="font-size:var(--fs-xs);padding:2px 8px;border-radius:20px;background:var(--warn-bg);color:var(--warn-tx);">DC ${esc(String(rd.tipo || ''))} sin verificar</span>`;
       });
-      // Fallback: si siesa_dc_triggered pero no hay retenciones_detalle (flujo viejo)
-      if (rec.siesa_dc_triggered && !retDet.length) html += '<span style="font-size:var(--fs-xs);padding:2px 8px;border-radius:20px;background:#3b076633;color:var(--lila-tx);">DC ✓</span>';
+      // Flujo viejo sin retenciones_detalle: el desenlace del último DC.
+      if (!retDet.length && rec.dc_llego) html += '<span style="font-size:var(--fs-xs);padding:2px 8px;border-radius:20px;background:#3b076633;color:var(--lila-tx);">DC ✓</span>';
       html += `</div>`;
     }
 
@@ -776,6 +779,9 @@ function _liqRenderDetalle() {
       // Un recibo que el WMS no pudo verificar no se reenvía solo (un segundo
       // recibo se reversa a mano): una persona busca en Siesa y dice qué vio.
       if (rec.rc_sin_verificar) html += _liqBloqueRcSinVerificar(ruta.id, rec);
+      (rec.documentos_sin_verificar || []).forEach((d, k) => {
+        html += _liqBloqueDocSinVerificar(ruta.id, rec, d, k);
+      });
       // Botones de acción por tipo de parada
       if ((estado === 'RECHAZADO' || estado === 'PARCIAL') && !rec.siesa_nc_triggered) {
         // Ya no se dispara la NC directo desde acá — Liquidar en WMS ya armó
@@ -1189,6 +1195,45 @@ function _liqBloqueRcSinVerificar(rutaId, rec) {
       </div>` : `
       <div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:6px;">Lo resuelve quien liquida la ruta.</div>`}
     </div>`;
+}
+
+/** Una retención o nota crédito sin verificar: la misma salida que el RC. */
+function _liqBloqueDocSinVerificar(rutaId, rec, d, k) {
+  const puede = _liqPermiso('resolver_documento');
+  return `
+    <div style="margin:8px 0;padding:10px;background:var(--warn-bg);border:1px solid var(--warn-brd);border-radius:8px;">
+      <div style="font-size:var(--fs-xs);color:var(--warn-tx);font-weight:700;">${esc(d.nombre)} sin verificar</div>
+      <div style="font-size:var(--fs-xs);color:var(--tx2);margin-top:4px;">
+        El envío a Siesa falló sin respuesta clara: puede haber entrado. No se reenvía solo
+        (un duplicado se reversa a mano). Búsquelo en Siesa y registre lo que encontró.
+      </div>
+      ${puede ? `
+      <div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap;">
+        <button onclick="liqResolverDocumento(${esc(rutaId)}, ${esc(rec.id)}, ${esc(k)}, 1)"
+          style="flex:1;padding:8px;background:var(--ok-bg);color:var(--ok-tx);border:1px solid var(--ok-brd);border-radius:8px;font-size:var(--fs-xs);font-weight:700;cursor:pointer;">Sí está en Siesa</button>
+        <button onclick="liqResolverDocumento(${esc(rutaId)}, ${esc(rec.id)}, ${esc(k)}, 0)"
+          style="flex:1;padding:8px;background:var(--bg);color:var(--tx2);border:1px solid var(--brd);border-radius:8px;font-size:var(--fs-xs);font-weight:700;cursor:pointer;">No está en Siesa</button>
+      </div>` : `
+      <div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:6px;">Lo resuelve quien liquida la ruta.</div>`}
+    </div>`;
+}
+
+/** Lo que una persona encontró en Siesa sobre una retención o NC sin verificar. */
+async function liqResolverDocumento(rutaId, recaudoId, k, entro) {
+  const rec = ((_liqDetalleRuta && _liqDetalleRuta.recaudos) || []).find(r => r.id === recaudoId);
+  const d = rec && (rec.documentos_sin_verificar || [])[k];
+  if (!d) return;
+  const motivo = await _modalTexto(entro === 1 ? `${d.nombre}: sí está en Siesa` : `${d.nombre}: no está en Siesa`,
+    '¿Dónde lo buscó y qué vio? (obligatorio — queda en la bitácora con su nombre)');
+  if (!motivo || !motivo.trim()) { alerta('Hace falta el motivo: no se cambió nada', 'advertencia'); return; }
+  try {
+    await post(`/api/rutas/${Number(rutaId)}/recaudos/${Number(recaudoId)}/resolver-documento`,
+               { job_id: d.job_id, entro: entro === 1, motivo: motivo.trim() });
+    alerta(entro === 1 ? 'Registrado: se cierra sin reenviar' : 'Registrado: vuelve a la cola para enviarse', 'exito');
+  } catch (e) {
+    alerta(e.message || 'No se pudo registrar', 'error');
+  }
+  await liqAbrirRuta(rutaId);
 }
 
 /** Registra lo que una persona encontró en Siesa sobre un recibo sin verificar. */

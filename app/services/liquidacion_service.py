@@ -203,6 +203,7 @@ class LiquidacionService:
         _rc_llegaron = _pc_lote.rc_llegaron(recaudos)
         from app.services import senales_ruta as _sr
         _faltantes = _sr.faltantes_de_retorno_de_recaudos([r.id for r in recaudos])
+        _sin_verificar = documentos_sin_verificar([r.id for r in recaudos])
 
         for recaudo in recaudos:
             tarea = recaudo.tarea
@@ -311,6 +312,9 @@ class LiquidacionService:
             rd['rc_sin_verificar'] = bool(recaudo.siesa_rc_triggered and not rd['rc_llego']
                                           and not rd['rc_en_cola'])
             rd['cobro_editable'] = _pc_det.puede_editar_cobro(recaudo)
+            # Retenciones y notas crédito que quedaron sin verificar: una
+            # persona dice si están en Siesa (`resolver-documento`).
+            rd['documentos_sin_verificar'] = _sin_verificar.get(recaudo.id, [])
             rd['decision_retencion'] = _pc_det.decision_retencion(recaudo)
 
             resultado_recaudos.append(rd)
@@ -1907,6 +1911,33 @@ def _resolver_cuenta_cxc(tarea, tipo_docto_fe, consec_fe) -> tuple:
             tarea.id, e
         )
     return co_factura, cuenta_cxc, un_cxc
+
+
+#: Los documentos de la liquidación (fuera del RC, que tiene su propia salida)
+#: que pueden quedar sin verificar.
+TIPOS_DOC_SIN_VERIFICAR = ('DOCUMENTO_CONTABLE_RET', 'NOTA_CREDITO_FACTURA')
+
+_NOMBRE_DOC = {'DOCUMENTO_CONTABLE_RET': 'Retención', 'NOTA_CREDITO_FACTURA': 'Nota crédito'}
+
+
+def documentos_sin_verificar(recaudo_ids) -> dict:
+    """`{recaudo_id: [{job_id, tipo, nombre, cuenta_puc}]}` de los envíos
+    FALLIDO de retención / NC con el pre-flag puesto y sin desenlace
+    (`siesa_job_service.preflag_sin_verificar`, la única que lo decide)."""
+    from app.services.siesa_job_service import preflag_sin_verificar
+    ids = [i for i in (recaudo_ids or []) if i]
+    if not ids:
+        return {}
+    out = {}
+    for j in SiesaJob.query.filter(SiesaJob.tipo.in_(TIPOS_DOC_SIN_VERIFICAR),
+                                   SiesaJob.referencia_tipo == 'RecaudoEntrega',
+                                   SiesaJob.referencia_id.in_(ids),
+                                   SiesaJob.estado == 'FALLIDO').all():
+        if preflag_sin_verificar(j):
+            out.setdefault(j.referencia_id, []).append({
+                'job_id': j.id, 'tipo': j.tipo, 'nombre': _NOMBRE_DOC.get(j.tipo, j.tipo),
+                'cuenta_puc': (j.get_payload() or {}).get('cuenta_puc')})
+    return out
 
 
 def _hay_rc_en_cola(recaudo_id: int) -> bool:

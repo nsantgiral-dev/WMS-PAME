@@ -1552,11 +1552,16 @@ def _ejecutar_job(job: SiesaJob) -> dict:
         recaudo = _RE.query.get(payload.get('recaudo_id'))
 
         if recaudo and recaudo.siesa_nc_triggered:
-            logger.info(
-                '[DLQ] NOTA_CREDITO_FACTURA job=%s: recaudo %s ya tiene '
-                'siesa_nc_triggered=True — idempotente', job.id, recaudo.id
-            )
-            return {'idempotente': True, 'recaudo_id': recaudo.id}
+            from app.services import politica_cobro as _pc_nc
+            if _pc_nc.nc_llego(recaudo):
+                logger.info(
+                    '[DLQ] NOTA_CREDITO_FACTURA job=%s: recaudo %s ya tiene su NC en '
+                    'Siesa — idempotente', job.id, recaudo.id)
+                return {'idempotente': True, 'recaudo_id': recaudo.id}
+            raise _ResultadoDesconocido(
+                f'NOTA_CREDITO_FACTURA job={job.id}: la nota crédito del recaudo '
+                f'{recaudo.id} ya se intentó y no hay constancia de que haya entrado. No '
+                f'se reenvía: verificar en Siesa y resolverlo («¿Está en Siesa?»).')
 
         tipo_docto_fe = payload['tipo_docto_fe']
         consec_fe = payload['consec_fe']
@@ -1700,11 +1705,15 @@ def _ejecutar_job(job: SiesaJob) -> dict:
         devolucion = db.session.get(_DC, payload.get('devolucion_id'))
 
         if devolucion and devolucion.siesa_nc_triggered:
-            logger.info(
-                '[DLQ] NOTA_CREDITO_DEVOLUCION_CLIENTE job=%s: devolución %s ya tiene '
-                'siesa_nc_triggered=True — idempotente', job.id, devolucion.id
-            )
-            return {'idempotente': True, 'devolucion_id': devolucion.id}
+            if devolucion.siesa_nc_response:
+                logger.info(
+                    '[DLQ] NOTA_CREDITO_DEVOLUCION_CLIENTE job=%s: devolución %s ya tiene '
+                    'su NC en Siesa — idempotente', job.id, devolucion.id)
+                return {'idempotente': True, 'devolucion_id': devolucion.id}
+            raise _ResultadoDesconocido(
+                f'NOTA_CREDITO_DEVOLUCION_CLIENTE job={job.id}: la nota crédito de la '
+                f'devolución {devolucion.id} ya se intentó y no hay constancia de que haya '
+                f'entrado. No se reenvía: verificar en Siesa y resolverlo («¿Está en Siesa?»).')
 
         tipo_docto_fe = payload['tipo_docto_fe']
         consec_fe = payload['consec_fe']
@@ -2187,11 +2196,19 @@ def _ejecutar_job(job: SiesaJob) -> dict:
         # jobs completados, un documento en Siesa.
         _puc = payload.get('cuenta_puc')
         if recaudo and _puc and _puc in recaudo.pucs_enviadas():
-            logger.info(
-                '[DLQ] DOCUMENTO_CONTABLE_RET job=%s: recaudo %s ya envió la '
-                'cuenta %s — idempotente', job.id, recaudo.id, _puc
-            )
-            return {'idempotente': True, 'recaudo_id': recaudo.id, 'cuenta_puc': _puc}
+            # La marca es de PRE-envío (como la del RC): solo con el desenlace
+            # confirmado es idempotente. Sin él, un intento anterior se cortó o
+            # no se pudo verificar: completar acá decía «hecho» sin saberlo y
+            # reenviar puede duplicar la NI. Se declara (validación 2026-09-26).
+            if _pc.dc_llego(recaudo, _puc):
+                logger.info(
+                    '[DLQ] DOCUMENTO_CONTABLE_RET job=%s: recaudo %s ya tiene la '
+                    'cuenta %s en Siesa — idempotente', job.id, recaudo.id, _puc)
+                return {'idempotente': True, 'recaudo_id': recaudo.id, 'cuenta_puc': _puc}
+            raise _ResultadoDesconocido(
+                f'DOCUMENTO_CONTABLE_RET job={job.id}: la retención {_puc} del recaudo '
+                f'{recaudo.id} ya se intentó y no hay constancia de que haya entrado. No '
+                f'se reenvía: verificar en Siesa y resolverlo («¿Está en Siesa?»).')
 
         # La política de retención se revalida antes del POST (P0-5): un job
         # encolado antes de que alguien la rechazara —o reintentado a mano—
@@ -2718,30 +2735,112 @@ def reintentar_job(job_id: int, usuario_id: int = None, motivo: str = None) -> d
 # salida es una persona que busca en Siesa y dice qué vio (como el recibo de
 # caja: `LiquidacionService.resolver_recibo_sin_verificar`).
 
-TIPOS_CON_PREFLAG = ('ENTRADA_OC', 'TRASLADO_AVERIAS', 'AJUSTE_CONTEO')
+TIPOS_CON_PREFLAG = ('ENTRADA_OC', 'TRASLADO_AVERIAS', 'AJUSTE_CONTEO',
+                     # Validación de la plata (2026-09-26): la retención y las
+                     # dos NC tienen la misma regla que el RC — bandera sola
+                     # no es hecho (el RC la resuelve en Liquidación con
+                     # `resolver_recibo_sin_verificar`).
+                     'DOCUMENTO_CONTABLE_RET', 'NOTA_CREDITO_FACTURA',
+                     'NOTA_CREDITO_DEVOLUCION_CLIENTE')
+
+
+class _Preflag:
+    """El pre-flag de un job: dónde está, si está puesto, cómo se baja y cómo
+    se confirma. Uno por tipo; la retención es por cuenta PUC."""
+
+    def __init__(self, obj, puesto, bajar, confirmar, foto):
+        self.obj, self._puesto, self._bajar, self._confirmar, self._foto = (
+            obj, puesto, bajar, confirmar, foto)
+
+    def puesto(self) -> bool:
+        return bool(self._puesto())
+
+    def bajar(self):
+        self._bajar()
+
+    def confirmar(self):
+        self._confirmar()
+
+    def foto(self) -> dict:
+        return self._foto()
+
+
+def _preflag_atributo(obj, attr, puesto, libre, al_confirmar=None):
+    def _confirmar():
+        if al_confirmar:
+            al_confirmar()
+    return _Preflag(obj, lambda: getattr(obj, attr, None) == puesto,
+                    lambda: setattr(obj, attr, libre), _confirmar,
+                    lambda: {attr: getattr(obj, attr, None)})
 
 
 def _preflag_de(job):
-    """`(objeto, atributo, valor_puesto, valor_libre)` del pre-flag de un job,
-    o `None` si el job no tiene (o su objeto ya no existe)."""
+    """El `_Preflag` de un job, o `None` si el job no tiene (o su objeto ya no
+    existe)."""
     if job is None or job.tipo not in TIPOS_CON_PREFLAG:
         return None
     p = job.get_payload() or {}
     if job.tipo == 'ENTRADA_OC':
         from app.models.recepcion import RecepcionMercancia
         obj = db.session.get(RecepcionMercancia, p.get('recepcion_id')) if p.get('recepcion_id') else None
-        return (obj, 'siesa_triggered', True, False) if obj is not None else None
+        return _preflag_atributo(obj, 'siesa_triggered', True, False) if obj is not None else None
     if job.tipo == 'TRASLADO_AVERIAS':
         if p.get('movimiento_id'):
             from app.models.inventario import MovimientoInventario
             obj = db.session.get(MovimientoInventario, p['movimiento_id'])
-            return (obj, 'siesa_sync', SIESA_SYNC_ENVIANDO, 'PENDIENTE') if obj is not None else None
+            if obj is None:
+                return None
+            return _preflag_atributo(obj, 'siesa_sync', SIESA_SYNC_ENVIANDO, 'PENDIENTE',
+                                     al_confirmar=lambda: setattr(obj, 'siesa_sync', 'ENVIADO'))
         from app.models.devolucion import TareaDevolucion
         obj = db.session.get(TareaDevolucion, p.get('tarea_id')) if p.get('tarea_id') else None
-        return (obj, 'siesa_triggered', True, False) if obj is not None else None
-    from app.models.conteo import SesionConteo
-    obj = db.session.get(SesionConteo, p.get('sesion_id')) if p.get('sesion_id') else None
-    return (obj, 'siesa_triggered', True, False) if obj is not None else None
+        return _preflag_atributo(obj, 'siesa_triggered', True, False) if obj is not None else None
+    if job.tipo == 'AJUSTE_CONTEO':
+        from app.models.conteo import SesionConteo
+        obj = db.session.get(SesionConteo, p.get('sesion_id')) if p.get('sesion_id') else None
+        return _preflag_atributo(obj, 'siesa_triggered', True, False) if obj is not None else None
+    if job.tipo == 'NOTA_CREDITO_DEVOLUCION_CLIENTE':
+        from app.models.devolucion_cliente import DevolucionCliente
+        obj = db.session.get(DevolucionCliente, p.get('devolucion_id')) if p.get('devolucion_id') else None
+        if obj is None:
+            return None
+
+        def _bajar_dev():
+            obj.siesa_nc_triggered = False
+            obj.siesa_nc_triggered_at = None
+
+        def _confirmar_dev():
+            obj.siesa_nc_response = obj.siesa_nc_response or json.dumps(
+                {'resuelto_a_mano': True}, ensure_ascii=False)
+        # Puesto sin desenlace = la bandera sin la respuesta de Siesa.
+        return _Preflag(obj, lambda: bool(obj.siesa_nc_triggered and not obj.siesa_nc_response),
+                        _bajar_dev, _confirmar_dev,
+                        lambda: {'siesa_nc_triggered': obj.siesa_nc_triggered,
+                                 'siesa_nc_response': bool(obj.siesa_nc_response)})
+    from app.models.recaudo_entrega import RecaudoEntrega
+    from app.services import politica_cobro as _pc
+    rec = db.session.get(RecaudoEntrega, p.get('recaudo_id')) if p.get('recaudo_id') else None
+    if rec is None:
+        return None
+    if job.tipo == 'NOTA_CREDITO_FACTURA':
+        def _bajar_nc():
+            rec.siesa_nc_triggered = False
+            rec.anotar_documento_siesa('NC', 'FALLIDO')
+        return _Preflag(rec, lambda: bool(rec.siesa_nc_triggered and not _pc.nc_llego(rec)),
+                        _bajar_nc, lambda: rec.anotar_documento_siesa('NC', 'ENVIADO'),
+                        lambda: {'siesa_nc_triggered': rec.siesa_nc_triggered,
+                                 'siesa_nc_resultado': rec.siesa_nc_resultado})
+    puc = p.get('cuenta_puc')
+    if not puc:
+        return None
+
+    def _bajar_dc():
+        rec.desmarcar_puc(puc)
+        rec.anotar_documento_siesa('DC', 'FALLIDO', cuenta_puc=puc)
+    return _Preflag(rec, lambda: bool(puc in rec.pucs_enviadas() and not _pc.dc_llego(rec, puc)),
+                    _bajar_dc, lambda: rec.anotar_documento_siesa('DC', 'ENVIADO', cuenta_puc=puc),
+                    lambda: {'cuenta_puc': puc, 'enviada': puc in rec.pucs_enviadas(),
+                             'resultado': _pc.resultado_dc(rec, puc)})
 
 
 def preflag_sin_verificar(job) -> bool:
@@ -2750,10 +2849,7 @@ def preflag_sin_verificar(job) -> bool:
     if job is None or job.estado != EstadoSiesaJob.FALLIDO:
         return False
     pf = _preflag_de(job)
-    if pf is None:
-        return False
-    obj, attr, puesto, _libre = pf
-    return getattr(obj, attr, None) == puesto
+    return pf is not None and pf.puesto()
 
 
 def exigir_no_sin_verificar(job) -> None:
@@ -2787,19 +2883,18 @@ def resolver_preflag_sin_verificar(job_id: int, *, usuario_id: int, entro: bool,
     if not preflag_sin_verificar(job):
         raise ValueError(f'El envío {job_id} no está pendiente de verificar: no hay nada '
                          f'que resolver.')
-    obj, attr, _puesto, libre = _preflag_de(job)
-    antes = {attr: getattr(obj, attr)}
+    pf = _preflag_de(job)
+    antes = pf.foto()
     if entro:
-        if attr == 'siesa_sync':
-            obj.siesa_sync = 'ENVIADO'
+        pf.confirmar()
     else:
-        setattr(obj, attr, libre)
+        pf.bajar()
     registrar_accion(
-        'FORZAR', obj, usuario_id=usuario_id, motivo=texto, origen=origen,
+        'FORZAR', pf.obj, usuario_id=usuario_id, motivo=texto, origen=origen,
         entidad_codigo=f'{job.tipo}#{job.id}',
         antes=antes,
         despues={'forzado': FORZADO_PREFLAG_RESUELTO_A_MANO, 'job_id': job.id,
-                 'tipo': job.tipo, 'entro': bool(entro), attr: getattr(obj, attr)})
+                 'tipo': job.tipo, 'entro': bool(entro), **pf.foto()})
     reencolar_job_fallido(job, usuario_id=usuario_id, origen=origen,
                           motivo=f'Resuelto a mano: {"está" if entro else "no está"} en '
                                  f'Siesa — {texto}')

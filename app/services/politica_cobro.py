@@ -423,6 +423,23 @@ def rc_llego_a_siesa(recaudo) -> bool:
     return recaudo is not None and recaudo.id in rc_llegaron([recaudo])
 
 
+def resultado_dc(recaudo, cuenta_puc):
+    """El desenlace anotado de la retención de `cuenta_puc` (o `None`). Lo
+    guarda el modelo (`RecaudoEntrega._dc_resultado`)."""
+    return recaudo._dc_resultado(cuenta_puc)
+
+
+def dc_llego(recaudo, cuenta_puc) -> bool:
+    """¿La retención de esa cuenta **se sabe** que entró? Señal positiva, como
+    `rc_llego_a_siesa`: la marca de pre-envío sola no lo dice."""
+    return resultado_dc(recaudo, cuenta_puc) in LLEGO
+
+
+def nc_llego(recaudo) -> bool:
+    """¿La nota crédito de la parada se sabe que entró?"""
+    return getattr(recaudo, 'siesa_nc_resultado', None) in LLEGO
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 # 6 · ¿Qué documento de esta parada falta mandar?
 # ═════════════════════════════════════════════════════════════════════════════
