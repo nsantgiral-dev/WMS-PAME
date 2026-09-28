@@ -53,8 +53,14 @@ logger = logging.getLogger(__name__)
 # Conservadores a propósito. Un solo juego: `default_lead_time` los lee (y las
 # variables de entorno de nacional); `armador_service` los re-exporta por
 # compatibilidad y ningún otro módulo los lee para decidir (trinquete).
-LT_NACIONAL_DIAS = 5
-SIGMA_LT_NACIONAL = 2
+#: Nacional: 10 ± 5 días (2026-09-27, tanda E de compras). Era 5 ± 2, que no
+#: era conservador: medido en producción el 27-sep-2026 (solo lectura), las 42
+#: OCs abiertas con una entrada parcial tardaron una MEDIANA de 10 días de la
+#: OC a la primera entrada (p90 ≈ 26); las 11 cumplidas en 90 días, 4 (p90 17).
+#: Un lead time corto subestima el punto de pedido. Se usa hasta que el espejo
+#: mida al proveedor (≥ 3 OCs) o al origen (≥ 3 OCs nacionales).
+LT_NACIONAL_DIAS = 10
+SIGMA_LT_NACIONAL = 5
 LT_CHINA_DIAS = 105
 SIGMA_LT_CHINA = 15  # conservador — piso de lo medido hasta 6 contenedores (D9)
 
@@ -92,9 +98,15 @@ DESCARTE_OC_AL_RECIBIR = 'oc_registrada_al_recibir'
 #: China. En QA el 90 % de lo pendiente es de OCs de más de un año.
 DIAS_OC_VENCIDA = 90
 ENV_OC_VENCIDA = 'COMPRAS_OC_VENCIDA_DIAS'
-#: Corte opcional, **sin default** (decisión del dueño): con él, las líneas con
-#: la entrega vencida hace más de estos días NO se suman a «en camino».
+#: Corte: las líneas con la entrega vencida hace más de estos días NO se suman
+#: a «en camino». Default 180 (2026-09-27, decisión por defecto del dueño,
+#: declarada): en producción el 100 % de lo pendiente estaba vencido y 50 OCs
+#: aprobadas hace más de 180 días sin una sola entrada sumaban 288.156 u que
+#: apagaban la compra de los SKU que citan. `nunca` = no cortar (lo de antes).
+#: En producción la fecha de entrega es la de la OC (1.276 de 1.276 líneas).
+DIAS_OC_EXCLUIR_DEFAULT = 180
 ENV_OC_EXCLUIR = 'COMPRAS_OC_EXCLUIR_MAS_DE_DIAS'
+_SIN_CORTE = ('nunca', 'no', 'ninguno', 'sin corte')
 
 #: `f420_ind_estado` de una OC anulada (spec API_v2_Compras_Ordenes).
 ESTADO_OC_ANULADA = 9
@@ -227,16 +239,27 @@ def en_camino(skus=None, bodegas=None) -> dict:
     por_cont = cont['por_sku'] if cont else {}
     sin_unidad = oc['sin_unidad'] if oc else {}
     ocs_de = oc['ocs_de'] if oc else {}
+    lineas_de = oc['lineas_de'] if oc else {}
+    excluido = oc['excluido'] if oc else {}
+    excluidas_de = oc['excluidas_de'] if oc else {}
 
     por_sku, detalle = {}, {}
-    for ref in set(por_oc) | set(por_cont) | set(sin_unidad):
+    for ref in set(por_oc) | set(por_cont) | set(sin_unidad) | set(excluido):
+        cuenta = ref in por_oc or ref in por_cont or ref in sin_unidad
         total = por_oc.get(ref, Decimal(0)) + por_cont.get(ref, Decimal(0))
-        por_sku[ref] = float(total)
+        if cuenta:
+            por_sku[ref] = float(total)
         detalle[ref] = {
             'oc': float(por_oc.get(ref, 0)),
             'oc_vencida': float(vencido.get(ref, 0)),
             'contenedores': float(por_cont.get(ref, 0)),
             'ocs': sorted(ocs_de.get(ref, ())),
+            # Las OCs que cuentan, la más atrasada primero (P1-3): de qué OC es
+            # lo «ya pedido» y hace cuántos días debió llegar.
+            'lineas_oc': (lineas_de.get(ref) or [])[:5],
+            # Lo que NO se cuenta por el corte de antigüedad, y de qué OCs.
+            'no_contado_por_viejo': float(excluido.get(ref, 0)),
+            'lineas_no_contadas': (excluidas_de.get(ref) or [])[:5],
             'lineas_sin_unidad_base': sin_unidad.get(ref, 0),
             'solapamiento_posible': bool(por_oc.get(ref) and por_cont.get(ref)),
         }
@@ -304,13 +327,26 @@ def _dias_env(nombre, defecto):
 
 def politica_ocs_viejas() -> dict:
     """Cuándo una OC abierta es «vieja» y si se corta. Una función: la usan
-    `en_camino` y la pantalla."""
+    `en_camino` y la pantalla.
+
+    El corte nace en `DIAS_OC_EXCLUIR_DEFAULT` (180, declarado); `nunca` lo
+    apaga. Un valor ILEGIBLE no corta (contar de más achica el déficit: el
+    lado que un humano corrige, Regla 0) y se declara."""
     dias, p1 = _dias_env(ENV_OC_VENCIDA, DIAS_OC_VENCIDA)
-    corte, p2 = _dias_env(ENV_OC_EXCLUIR, None)
+    crudo = (os.getenv(ENV_OC_EXCLUIR) or '').strip()
+    p2 = None
+    if not crudo:
+        corte, corte_fuente = DIAS_OC_EXCLUIR_DEFAULT, 'DEFAULT_DECLARADO'
+    elif crudo.lower() in _SIN_CORTE:
+        corte, corte_fuente = None, 'CONFIGURADO'
+    else:
+        corte, p2 = _dias_env(ENV_OC_EXCLUIR, None)
+        corte_fuente = 'CONFIGURADO' if p2 is None else 'ILEGIBLE'
     return {'dias_vencida': dias,
             'dias_vencida_fuente': 'CONFIGURADO' if os.getenv(ENV_OC_VENCIDA, '').strip()
             and not p1 else 'DEFAULT_DECLARADO',
             'excluir_mas_de_dias': corte,
+            'excluir_fuente': corte_fuente,
             'problemas': [p for p in (p1, p2) if p]}
 
 
@@ -336,17 +372,32 @@ def _pendiente_de_ocs_abiertas(filtro_skus, operadas, pedidas) -> dict:
     v_lineas, v_skus, v_mas_vieja = 0, set(), None
     x_lineas, x_unidades, x_skus = 0, Decimal(0), set()
     sin_fecha = 0
+    # Por SKU, las OCs que cuentan (con su atraso) y las que no, para que la
+    # bandeja diga en palabras de qué OC es lo «ya pedido» (P1-3).
+    lineas_de = defaultdict(list)
+    excluido = defaultdict(Decimal)
+    excluidas_de = defaultdict(list)
+    x_por_oc = {}
 
     filas = (db.session.query(OcLineaSiesa.referencia, OcLineaSiesa.bodega,
                               OcLineaSiesa.pendiente_base, OcLineaSiesa.co,
                               OcLineaSiesa.tipo_docto, OcLineaSiesa.consec_docto,
-                              OcLineaSiesa.fecha_entrega, OcLineaSiesa.fecha_oc)
+                              OcLineaSiesa.fecha_entrega, OcLineaSiesa.fecha_oc,
+                              OcLineaSiesa.cant_entrada, OcLineaSiesa.estado_oc)
              .filter(OcLineaSiesa.abierta.is_(True))
              .all())
     abiertas_citables = set()
-    for ref, bodega, pendiente, co, tipo, consec, f_entrega, f_oc in filas:
+    # ¿Entró algo de la OC? Una OC sin ninguna entrada en 180 días está
+    # muerta; una parcial tiene un saldo que nunca se cancela. Se dicen aparte.
+    entro_algo = defaultdict(bool)
+    for _r, _b, _p, co, tipo, consec, _fe, _fo, entrada, estado in filas:
+        clave = f'{co or ""}-{tipo or ""}-{consec or ""}'
+        if (entrada is not None and entrada > 0) or estado == 2:
+            entro_algo[clave] = True
+    for ref, bodega, pendiente, co, tipo, consec, f_entrega, f_oc, _ent, _est in filas:
         ref = (ref or '').strip()
-        abiertas_citables.add(f'{co or ""}-{tipo or ""}-{consec or ""}')
+        oc_ref = f'{co or ""}-{tipo or ""}-{consec or ""}'
+        abiertas_citables.add(oc_ref)
         if not ref or (filtro_skus is not None and ref not in filtro_skus):
             continue
         bodega = (bodega or '').strip()
@@ -369,14 +420,25 @@ def _pendiente_de_ocs_abiertas(filtro_skus, operadas, pedidas) -> dict:
         atraso = (hoy - ref_fecha).days if ref_fecha else None
         if atraso is None:
             sin_fecha += 1
+        linea = {'oc': oc_ref, 'unidades': float(pendiente),
+                 'entrega': ref_fecha.isoformat() if ref_fecha else None,
+                 'dias_vencida': atraso if atraso is not None and atraso > 0 else 0,
+                 'sin_ninguna_entrada': not entro_algo[oc_ref]}
         if (atraso is not None and pol['excluir_mas_de_dias'] is not None
                 and atraso > pol['excluir_mas_de_dias']):
             x_lineas += 1
             x_unidades += pendiente
             x_skus.add(ref)
+            excluido[ref] += pendiente
+            excluidas_de[ref].append(linea)
+            o = x_por_oc.setdefault(oc_ref, {'unidades': Decimal(0),
+                                             'sin_ninguna_entrada': not entro_algo[oc_ref]})
+            o['unidades'] += pendiente
             continue
         por_sku[ref] += pendiente
-        ocs_de[ref].add(f'{co or ""}-{tipo or ""}-{consec or ""}')
+        ocs_de[ref].add(oc_ref)
+        linea['vieja'] = bool(atraso is not None and atraso > pol['dias_vencida'])
+        lineas_de[ref].append(linea)
         if atraso is not None and atraso > pol['dias_vencida']:
             vencido[ref] += pendiente
             v_lineas += 1
@@ -398,18 +460,49 @@ def _pendiente_de_ocs_abiertas(filtro_skus, operadas, pedidas) -> dict:
                  'Se suma igual; si ya no van a llegar, hay que anularlas en Siesa o '
                  f'configurar {ENV_OC_EXCLUIR}.') if v_lineas else None,
     }
-    corte = {'dias': pol['excluir_mas_de_dias'], 'lineas_excluidas': x_lineas,
+    muertas = {k: v for k, v in x_por_oc.items() if v['sin_ninguna_entrada']}
+    saldos = {k: v for k, v in x_por_oc.items() if not v['sin_ninguna_entrada']}
+    u_muertas = float(sum(v['unidades'] for v in muertas.values()))
+    u_saldos = float(sum(v['unidades'] for v in saldos.values()))
+    corte = {'dias': pol['excluir_mas_de_dias'], 'fuente': pol['excluir_fuente'],
+             'lineas_excluidas': x_lineas, 'ocs_excluidas': len(x_por_oc),
              'unidades_excluidas': round(float(x_unidades), 2), 'skus': len(x_skus),
-             'nota': (f'{x_lineas} línea(s) ({float(x_unidades):,.0f} u) con la entrega '
-                      f'vencida hace más de {pol["excluir_mas_de_dias"]} días NO se suman '
-                      f'({ENV_OC_EXCLUIR}).') if x_lineas else None}
+             'ocs_sin_ninguna_entrada': len(muertas),
+             'unidades_sin_ninguna_entrada': round(u_muertas, 2),
+             'ocs_con_saldo_parcial': len(saldos),
+             # Para administración: la variable que mueve el corte.
+             'configurable_con': f'{ENV_OC_EXCLUIR} (días; `nunca` = sin corte)',
+             'unidades_saldo_parcial': round(u_saldos, 2),
+             'nota': (_nota_corte(pol, x_por_oc, x_unidades, muertas, u_muertas,
+                                  saldos, u_saldos) if x_lineas else None)}
+    for lst in list(lineas_de.values()) + list(excluidas_de.values()):
+        lst.sort(key=lambda x: -(x['dias_vencida'] or 0))
     return {'por_sku': por_sku, 'vencido': vencido, 'ocs_de': ocs_de,
+            'lineas_de': lineas_de, 'excluido': excluido, 'excluidas_de': excluidas_de,
             'sin_unidad': sin_unidad,
             'abiertas_citables': abiertas_citables, 'lineas': len(filas),
             'fuera_lista_blanca': fuera_lista_blanca,
             'fuera_de_filtro': fuera_de_filtro, 'sin_bodega': sin_bodega,
             'ocs_vencidas': ocs_vencidas, 'corte_antiguedad': corte,
             'problemas': pol['problemas']}
+
+
+def _miles(x):
+    return f'{float(x):,.0f}'.replace(',', '.')
+
+
+def _nota_corte(pol, x_por_oc, x_unidades, muertas, u_muertas, saldos, u_saldos):
+    """El corte de OCs viejas, en palabras del comprador."""
+    partes = []
+    if muertas:
+        partes.append(f'{len(muertas)} sin ninguna entrada ({_miles(u_muertas)} u)')
+    if saldos:
+        partes.append(f'{len(saldos)} con el saldo de una entrega parcial ({_miles(u_saldos)} u)')
+    return (f'No se cuentan como «ya pedido» {_miles(x_unidades)} u de {len(x_por_oc)} '
+            f'orden(es) de compra con la entrega vencida hace más de '
+            f'{pol["excluir_mas_de_dias"]} días: {" y ".join(partes)}. Si alguna todavía va '
+            f'a llegar, confírmelo con el proveedor; si no, anúlela en Siesa para que '
+            f'deje de aparecer.')
 
 
 def _contenedores_en_camino(filtro_skus, pedidas, abiertas_citables) -> dict:
@@ -675,7 +768,7 @@ def lead_time(proveedor: str = None, origen: str = None,
       1. el proveedor (`Proveedor.codigo` = `f200_id_prov`), si tiene ≥3 OCs medidas;
       2. el origen: CHINA → contenedores; NACIONAL → OCs en COP de proveedores
          no chinos;
-      3. el default declarado (`default_lead_time`: 5±2 nacional, configurable
+      3. el default declarado (`default_lead_time`: 10±5 nacional, configurable
          con `ROP_LT_NACIONAL_DIAS` / `ROP_SIGMA_LT_NACIONAL`; 105±15 China).
     En los niveles medidos rige D9 (ver `_medido`): con < 6 observaciones, el
     mayor entre lo medido y el default.
@@ -732,7 +825,10 @@ def lead_time(proveedor: str = None, origen: str = None,
     else:
         nota = (f'Solo {len(pool)} {que} con fechas completas (mínimo {N_MIN_PARCIAL}) '
                 f'— usando el default declarado {lt_def:g}±{sigma_def:g} días, un '
-                f'SUPUESTO que nadie midió'
+                f'SUPUESTO'
+                + ('' if es_china else
+                   ' (en producción, el 27-sep-2026, 42 órdenes con entrada parcial '
+                   'tardaron una mediana de 10 días)')
                 + ('' if es_china else
                    f' (configurable con {ENV_LT_NACIONAL} / {ENV_SIGMA_LT_NACIONAL})')
                 + '.')
@@ -1110,26 +1206,91 @@ def ocs_abiertas(hoy=None) -> dict:
     }
 
 
+def _clave_oc(co, tipo, consec):
+    try:
+        consec = int(str(consec).strip())
+    except (TypeError, ValueError):
+        consec = (str(consec or '')).strip()
+    return f'{(co or "").strip()}-{(tipo or "").strip()}-{consec}'
+
+
 def llegadas_recientes(dias: int = 30) -> dict:
-    """Recepciones CONFIRMADAS en el WMS en los últimos `dias` (día Bogotá):
-    qué llegó, de quién, contra qué OC y si fue parcial. Es la otra mitad de
-    «lo pedido»: lo que ya entró."""
+    """Lo que llegó en los últimos `dias` (día Bogotá). Dos fuentes, y dice cuál
+    (P2-3, 2026-09-27):
+
+      1. **Siesa** (`ENTRADA_SIESA`): las OCs del espejo con una marca de
+         entrada en la ventana — `f420_fecha_ts_cumplido` (se completó) o
+         `f420_fecha_ts_parcial` (primera entrada). En producción las entradas
+         se hacen en Siesa: sin esta fuente la sección salía vacía mientras la
+         mercancía sí entraba. La cantidad es lo ENTRADO ACUMULADO de la OC
+         (`f421_cant_entrada`, unidad de inventario), no solo lo de la ventana:
+         Siesa no guarda la historia de entradas en esta consulta, y se dice.
+      2. **El muelle del WMS** (`MUELLE_WMS`): recepciones CONFIRMADAS, con la
+         fecha física. Una OC recibida por el muelle aparece una vez: gana el
+         muelle (su fecha es la del recibo, la de Siesa la del documento).
+    """
     from datetime import timedelta
+    from sqlalchemy import or_
+    from app.models.compras_fuentes import OcLineaSiesa
     from app.models.recepcion import EstadoRecepcion, RecepcionMercancia
-    from app.utils.fecha import dia_operativo_de
-    desde = datetime.utcnow() - timedelta(days=int(dias))
+    from app.utils.fecha import dia_operativo, dia_operativo_de
+    dias = int(dias)
+    desde_dia = dia_operativo() - timedelta(days=dias)
+    desde = datetime.utcnow() - timedelta(days=dias)
+
     filas = (RecepcionMercancia.query
              .filter(RecepcionMercancia.estado == EstadoRecepcion.CONFIRMADA,
                      RecepcionMercancia.fecha_confirmacion >= desde)
              .order_by(RecepcionMercancia.fecha_confirmacion.desc()).limit(200).all())
+    recepciones = [{
+        'codigo': r.codigo, 'oc': r.numero_oc_siesa,
+        'proveedor_codigo': r.proveedor_codigo, 'proveedor_nombre': r.proveedor_nombre,
+        'dia': dia_operativo_de(r.fecha_confirmacion).isoformat(),
+        'parcial': bool(r.es_parcial),
+        'lineas': len(r.items),
+        'unidades': sum(int(i.cantidad_recibida or 0) for i in r.items),
+        'fuente': 'MUELLE_WMS',
+    } for r in filas]
+    del_muelle = {_clave_oc(r.co_oc_siesa, r.tipo_docto_oc_siesa, r.consec_docto_oc_siesa)
+                  for r in filas if r.consec_docto_oc_siesa}
+
+    # Siesa escribe sus marcas en hora local (Bogotá): el día es la fecha.
+    desde_ts = datetime.combine(desde_dia, datetime.min.time())
+    lineas = (OcLineaSiesa.query
+              .filter(or_(OcLineaSiesa.fecha_cumplido >= desde_ts,
+                          OcLineaSiesa.fecha_parcial >= desde_ts))
+              .all())
+    por_oc = {}
+    for l in lineas:
+        if l.estado_oc == ESTADO_OC_ANULADA:
+            continue
+        clave = l.oc_referencia
+        if clave in del_muelle:
+            continue
+        cumplida = bool(l.fecha_cumplido and l.fecha_cumplido >= desde_ts)
+        marca = l.fecha_cumplido if cumplida else l.fecha_parcial
+        o = por_oc.setdefault(clave, {
+            'oc': clave, 'proveedor_codigo': l.proveedor_codigo,
+            'proveedor_nombre': l.proveedor_nombre, 'dia': marca.date().isoformat(),
+            'completa': cumplida, 'parcial': not cumplida,
+            'lineas': 0, 'unidades': 0.0, 'lineas_sin_unidad': 0,
+            'fuente': 'ENTRADA_SIESA'})
+        entrada = _dec(l.cant_entrada)
+        if entrada is None:
+            o['lineas_sin_unidad'] += 1
+        elif entrada > 0:
+            o['lineas'] += 1
+            o['unidades'] += float(entrada)
+    entradas = sorted(por_oc.values(), key=lambda x: x['dia'], reverse=True)[:200]
     return {
-        'dias': int(dias),
-        'recepciones': [{
-            'codigo': r.codigo, 'oc': r.numero_oc_siesa,
-            'proveedor_codigo': r.proveedor_codigo, 'proveedor_nombre': r.proveedor_nombre,
-            'dia': dia_operativo_de(r.fecha_confirmacion).isoformat(),
-            'parcial': bool(r.es_parcial),
-            'lineas': len(r.items),
-            'unidades': sum(int(i.cantidad_recibida or 0) for i in r.items),
-        } for r in filas],
+        'dias': dias,
+        'recepciones': recepciones,
+        'entradas_siesa': entradas,
+        'fuentes': {
+            'ENTRADA_SIESA': {'ocs': len(entradas), 'frescura': frescura_oc()},
+            'MUELLE_WMS': {'recepciones': len(recepciones)},
+        },
+        'nota_siesa': ('Según las órdenes de compra sincronizadas con Siesa: la fecha es la '
+                       'de la primera entrada o la de la que completó la orden, y las '
+                       'unidades son todo lo entrado a esa orden hasta hoy.'),
     }

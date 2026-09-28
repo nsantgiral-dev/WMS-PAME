@@ -478,7 +478,8 @@ class TestLeadTime:
         from app.services.compras_fuentes import lead_time
         monkeypatch.delenv('ROP_LT_NACIONAL_DIAS', raising=False)
         lt = lead_time(origen='NACIONAL')
-        assert lt['lt_dias'] == 5 and lt['fuente'] == 'DEFAULT_CONSERVADOR'
+        # 10 ± 5 desde el 2026-09-27 (lo medido en producción; era 5 ± 2).
+        assert lt['lt_dias'] == 10 and lt['fuente'] == 'DEFAULT_CONSERVADOR'
         assert lt['nota'] and 'ROP_LT_NACIONAL_DIAS' in lt['nota']
 
     def test_configurado_mueve_el_rop(self, app, db, monkeypatch):

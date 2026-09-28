@@ -426,11 +426,13 @@ class TestEnCamino:
         assert r['por_sku'] == {'PROD-001': 80.0}
         assert r['declaracion']['lineas_fuera_de_lista_blanca'] == 2
 
-    def test_las_lineas_reales_de_siesa_qa(self, app, db):
+    def test_las_lineas_reales_de_siesa_qa(self, app, db, monkeypatch):
         """Las abiertas de PAPELSP6948 y PAPELSP6741 tal como las devolvió
         Siesa QA el 2026-09-25: 432 y 5.509 unidades, verificado en vivo. Con
-        la lectura vieja (las `_base`) daban 36 y 2.849."""
+        la lectura vieja (las `_base`) daban 36 y 2.849. Sin corte de
+        antigüedad (`nunca`): este test mide la unidad, no el corte."""
         from app.services.compras_fuentes import en_camino
+        monkeypatch.setenv('COMPRAS_OC_EXCLUIR_MAS_DE_DIAS', 'nunca')
         _sync(SiesaFalsa({
             ABIERTAS_1: [fila_real(t) for t in LINEAS_REALES if t[-1] == 1],
             ABIERTAS_2: [fila_real(t) for t in LINEAS_REALES if t[-1] == 2]}))
@@ -439,10 +441,10 @@ class TestEnCamino:
 
     def test_las_ocs_viejas_se_suman_y_se_declaran_con_su_peso(self, app, db, monkeypatch):
         """PAPELSP6741 tiene una OC de NS1 con entrega 2024-08-20: vieja. Se suma
-        (decisión del dueño) y se declara con su peso."""
+        (con `nunca`: sin corte de antigüedad) y se declara con su peso."""
         from app.services import compras_fuentes
         monkeypatch.delenv('COMPRAS_OC_VENCIDA_DIAS', raising=False)
-        monkeypatch.delenv('COMPRAS_OC_EXCLUIR_MAS_DE_DIAS', raising=False)
+        monkeypatch.setenv('COMPRAS_OC_EXCLUIR_MAS_DE_DIAS', 'nunca')
         monkeypatch.setattr('app.utils.fecha.dia_operativo', lambda: date(2026, 9, 25))
         _sync(SiesaFalsa({
             ABIERTAS_1: [fila_real(t) for t in LINEAS_REALES if t[-1] == 1],
@@ -461,7 +463,7 @@ class TestEnCamino:
     def test_con_umbral_propio_solo_la_de_2024_es_vieja(self, app, db, monkeypatch):
         from app.services import compras_fuentes
         monkeypatch.setenv('COMPRAS_OC_VENCIDA_DIAS', '365')
-        monkeypatch.delenv('COMPRAS_OC_EXCLUIR_MAS_DE_DIAS', raising=False)
+        monkeypatch.setenv('COMPRAS_OC_EXCLUIR_MAS_DE_DIAS', 'nunca')
         monkeypatch.setattr('app.utils.fecha.dia_operativo', lambda: date(2026, 9, 25))
         _sync(SiesaFalsa({ABIERTAS_1: [fila_real(t) for t in LINEAS_REALES if t[-1] == 1]}))
         r = compras_fuentes.en_camino(['PAPELSP6741'])
@@ -478,7 +480,9 @@ class TestEnCamino:
         c = r['declaracion']['corte_antiguedad']
         assert r['por_sku']['PAPELSP6741'] == 5490.0
         assert c['dias'] == 365 and c['lineas_excluidas'] == 1 and c['unidades_excluidas'] == 10.0
-        assert 'NO se suman' in c['nota']
+        assert c['fuente'] == 'CONFIGURADO' and c['ocs_excluidas'] == 1
+        assert 'No se cuentan como «ya pedido» 10 u de 1 orden(es)' in c['nota']
+        assert '1 sin ninguna entrada (10 u)' in c['nota'] and 'anúlela en Siesa' in c['nota']
 
     def test_una_variable_ilegible_no_corta_y_se_declara(self, app, db, monkeypatch):
         from app.services import compras_fuentes

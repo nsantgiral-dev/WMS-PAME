@@ -130,11 +130,23 @@ def _lineas(r):
     return {l['referencia']: l for p in r['proveedores'] for l in p['lineas']}
 
 
+def lt_de_este_mundo(monkeypatch):
+    """Estos mundos se armaron con el default nacional de antes (5 ± 2); desde
+    el 2026-09-27 el default es 10 ± 5 (lo medido en producción). Se fija el
+    default del mundo —sigue siendo DEFAULT_CONSERVADOR, no CONFIGURADO— para
+    que la aritmética a mano de estos tests siga valiendo; el default nuevo
+    tiene su propio test en `test_compras_ya_pedido.py`."""
+    from app.services import compras_fuentes
+    monkeypatch.delenv('ROP_LT_NACIONAL_DIAS', raising=False)
+    monkeypatch.delenv('ROP_SIGMA_LT_NACIONAL', raising=False)
+    monkeypatch.setattr(compras_fuentes, 'LT_NACIONAL_DIAS', 5)
+    monkeypatch.setattr(compras_fuentes, 'SIGMA_LT_NACIONAL', 2)
+
+
 @pytest.fixture
 def mundo(app, db, monkeypatch):
     monkeypatch.delenv('ROP_CICLO_NACIONAL_DIAS', raising=False)
-    monkeypatch.delenv('ROP_LT_NACIONAL_DIAS', raising=False)
-    monkeypatch.delenv('ROP_SIGMA_LT_NACIONAL', raising=False)
+    lt_de_este_mundo(monkeypatch)
     _mundo(db)
     from app.services import compras_bandeja
     return compras_bandeja.bandeja()
@@ -244,6 +256,7 @@ class TestElCicloEsUnSupuestoDeclarado:
 
     def test_configurado_cambia_la_cantidad(self, app, db, monkeypatch):
         monkeypatch.setenv('ROP_CICLO_NACIONAL_DIAS', '14')
+        lt_de_este_mundo(monkeypatch)
         _mundo(db)
         from app.services import compras_bandeja
         r = compras_bandeja.bandeja()
@@ -321,8 +334,9 @@ class TestTemporadaFechaLimite:
         r = fechas_limite_pedido(date(2026, 9, 25))
         assert r['por_origen']['CHINA']['fecha_limite'] == (
             date(2026, 12, 1) - timedelta(days=105 + 15)).isoformat()
+        # Nacional: el default 10 ± 5 (2026-09-27, lo medido en producción).
         assert r['por_origen']['NACIONAL']['fecha_limite'] == (
-            date(2026, 12, 1) - timedelta(days=5 + 2)).isoformat()
+            date(2026, 12, 1) - timedelta(days=10 + 5)).isoformat()
         assert r['por_origen']['CHINA']['vencida'] is True
 
     def test_conciliacion_una_cifra(self):

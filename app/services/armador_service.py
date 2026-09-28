@@ -279,6 +279,11 @@ def posicion_inventario(refs=None):
         salida[r]['en_camino'] = qv
     for d in salida.values():
         d['posicion'] = d['disponible'] + d['en_camino']
+    # De qué OCs es lo que viene y qué no se contó por viejo (P1-3): tal cual
+    # lo declara `en_camino`, sin recalcular. Solo para los SKU con posición.
+    for r, det in camino['detalle'].items():
+        if r in salida:
+            salida[r]['en_camino_detalle'] = det
     return salida, camino['declaracion']
 
 
@@ -486,6 +491,7 @@ class ArmadorService:
         # déficit que ARMA EL CONTENEDOR. Ver el comentario de esa función y
         # CLAUDE.md «Las tres listas de bodegas».
         posiciones, info_en_camino = posicion_inventario()
+        detalle_camino = {r: d.get('en_camino_detalle') or {} for r, d in posiciones.items()}
         stock = {r: d['existencia'] for r, d in posiciones.items()}
         comprometido = {r: d['comprometido'] for r, d in posiciones.items()}
         salida_sin_conf = {r: d['salida_sin_conf'] for r, d in posiciones.items()}
@@ -614,6 +620,13 @@ class ArmadorService:
 
             cobertura = posicion / d_avg if d_avg > 0 else 999
 
+            # «Ya pedido» honesto (P1-3): cuánto de lo que viene es de OCs con
+            # la entrega vencida hace más de COMPRAS_OC_VENCIDA_DIAS (se cuenta,
+            # pero ¿va a llegar?) y cuánto NO se contó por el corte de 180 días.
+            _det = detalle_camino.get(ref) or {}
+            qty_vencido = float(_det.get('oc_vencida') or 0.0)
+            posicion_sin_vencidas = posicion - qty_vencido
+
             fila = {
                 'referencia': ref,
                 'd_avg_diaria': round(d_avg, 4),
@@ -668,6 +681,12 @@ class ArmadorService:
                     if _frescura is not None else None),
                 'cobertura_dias': round(cobertura, 1),
                 'en_transito': round(qty_transito),
+                'en_transito_vencido': round(qty_vencido),
+                'en_transito_no_contado_por_viejo': round(
+                    float(_det.get('no_contado_por_viejo') or 0.0)),
+                # Las OCs que cuentan (la más atrasada primero) y las que no.
+                'ocs_en_camino': _det.get('lineas_oc') or [],
+                'ocs_no_contadas': _det.get('lineas_no_contadas') or [],
                 'lt_dias': lt,
                 'sigma_lt': sigma_lt,
                 # Procedencia del lead time: de qué nivel salió y con cuántas
@@ -718,6 +737,10 @@ class ArmadorService:
                     'ciclo_dias': _ciclo_nac['dias'],
                     'nivel_objetivo': round(s_nac),
                     'deficit': round(max(0, s_nac - posicion)),
+                    # ¿Y si las OCs vencidas no llegan? Lo que la bandeja
+                    # muestra como «Revisar OC» en vez de callarlo.
+                    'bajo_rop_sin_vencidas': posicion_sin_vencidas < rop,
+                    'deficit_sin_vencidas': round(max(0, s_nac - posicion_sin_vencidas)),
                     # Cuántos días faltan para cruzar el punto de pedido a la
                     # tasa de hoy (negativo = ya lo cruzó). Sin demanda, None.
                     'dias_hasta_punto_de_pedido': (

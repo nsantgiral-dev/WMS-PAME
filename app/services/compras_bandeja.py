@@ -302,6 +302,12 @@ def _porque(fila, pedido, nivel_servicio):
         'salida_sin_confirmar': fila.get('salida_sin_conf'),
         'disponible': fila.get('disponible'),
         'ya_pedido': fila.get('en_transito'),
+        # De qué OCs es lo ya pedido (la más atrasada primero), cuánto de eso
+        # es de OCs vencidas hace meses y cuánto no se contó por viejo (P1-3).
+        'ya_pedido_ocs': fila.get('ocs_en_camino') or [],
+        'ya_pedido_vencido': fila.get('en_transito_vencido'),
+        'no_contado_por_viejo': fila.get('en_transito_no_contado_por_viejo'),
+        'ocs_no_contadas': fila.get('ocs_no_contadas') or [],
         'posicion': fila.get('posicion'),
         'vende_dia': fila.get('d_avg_diaria'),
         # De dónde sale la venta diaria de lo que viene
@@ -321,6 +327,26 @@ def _porque(fila, pedido, nivel_servicio):
         'faltan_datos_de_agotados': bool(fila.get('censurado')),
         'dias_con_existencias': fila.get('dias_con_stock'),
         'existencias_de_hace_dias': fila.get('stock_dias_de_antiguedad'),
+    }
+
+
+def _ya_pedido(insumo):
+    """La declaración de «en camino» que el comprador tiene que leer: qué no
+    se cuenta por viejo y cuánto de lo que se cuenta está vencido."""
+    corte = insumo.get('corte_antiguedad') or {}
+    venc = insumo.get('ocs_vencidas') or {}
+    return {
+        'corte_dias': corte.get('dias'), 'corte_fuente': corte.get('fuente'),
+        'no_contado_unidades': corte.get('unidades_excluidas'),
+        'no_contado_ocs': corte.get('ocs_excluidas'),
+        'ocs_sin_ninguna_entrada': corte.get('ocs_sin_ninguna_entrada'),
+        'unidades_sin_ninguna_entrada': corte.get('unidades_sin_ninguna_entrada'),
+        'ocs_con_saldo_parcial': corte.get('ocs_con_saldo_parcial'),
+        'unidades_saldo_parcial': corte.get('unidades_saldo_parcial'),
+        'nota_corte': corte.get('nota'),
+        'vencidas_dias': venc.get('dias'),
+        'vencidas_unidades': venc.get('unidades'),
+        'vencidas_pct': venc.get('pct_unidades'),
     }
 
 
@@ -361,6 +387,11 @@ def bandeja(nivel_servicio: float = NIVEL_SERVICIO) -> dict:
     parados = [f for f, u in con_urgencia if u is not None and f.get('sin_venta_reciente')]
     sin_stock = [f for f, _u in candidatas if f.get('frescura_stock') is None]
     candidatas = [(f, u) for f, u in candidatas if f.get('frescura_stock') is not None]
+    # «Revisar OC» (P1-3): hoy no está bajo su punto de pedido SOLO porque lo
+    # cubre una OC vencida hace meses. No se calla: se muestra aparte.
+    revisar = [f for f, u in con_urgencia
+               if u is None and f.get('bajo_rop_sin_vencidas')
+               and not f.get('sin_venta_reciente') and f.get('frescura_stock') is not None]
 
     refs = [f['referencia'] for f, _u in candidatas]
     bloqueos = BloqueoRecompraService.verificar_oc(refs).get('bloqueados') or []
@@ -368,9 +399,11 @@ def bandeja(nivel_servicio: float = NIVEL_SERVICIO) -> dict:
     candidatas = [(f, u) for f, u in candidatas if f['referencia'] not in bloqueados]
     refs = [f['referencia'] for f, _u in candidatas]
 
-    empaques = compras_fuentes.empaque_de_compra(refs)
-    costos = resolver_costos(refs) if refs else {}
-    habitual = compras_fuentes.proveedor_habitual(refs) if refs else {}
+    refs_revisar = [f['referencia'] for f in revisar]
+    refs_todas = [*refs, *refs_revisar]
+    empaques = compras_fuentes.empaque_de_compra(refs_todas)
+    costos = resolver_costos(refs_todas) if refs_todas else {}
+    habitual = compras_fuentes.proveedor_habitual(refs_todas) if refs_todas else {}
     info_prov = compras_fuentes.proveedores_info(sorted(set(habitual.values())))
     bodega = compras_fuentes._bodega_cdi()
     destino = {'bodega': bodega, 'co': co_de_bodega(bodega)}
@@ -409,7 +442,27 @@ def bandeja(nivel_servicio: float = NIVEL_SERVICIO) -> dict:
             'dias_hasta_punto_de_pedido': f.get('dias_hasta_punto_de_pedido'),
             'fecha_entrega_sugerida': f.get('llegaria_el'),
             'proveedor_codigo': habitual.get(ref),
+            # Lo ya pedido incluye OCs vencidas hace meses: ¿van a llegar?
+            'revisar_oc': bool(f.get('en_transito_vencido')),
             'porque': _porque(f, pedido, nivel_servicio),
+        })
+
+    revisar_oc = []
+    for f in revisar:
+        ref = f['referencia']
+        emp = empaques.get(ref) or {}
+        si_no_llega = pedido_en_empaques(f.get('deficit_sin_vencidas') or 0,
+                                         emp.get('unidades_por_empaque'), emp.get('moq_empaques'))
+        ocs = f.get('ocs_en_camino') or []
+        revisar_oc.append({
+            'referencia': ref, 'nombre': (costos.get(ref) or {}).get('nombre') or None,
+            'proveedor_codigo': habitual.get(ref),
+            'vencido': f.get('en_transito_vencido'),
+            'oc_mas_vieja': ocs[0] if ocs else None,
+            'si_no_llega_pedir': si_no_llega['unidades'],
+            'si_no_llega_empaques': si_no_llega['empaques'],
+            'unidad': emp.get('unidad') or 'UND',
+            'alcanza_dias': f.get('cobertura_dias'),
         })
 
     grupos = {}
@@ -447,7 +500,12 @@ def bandeja(nivel_servicio: float = NIVEL_SERVICIO) -> dict:
         entrega_nacional={'dias': nac.get('lt_dias'),
                           'fuente': TEXTO_FUENTE_LT.get(nac.get('lt_fuente'), nac.get('lt_fuente'))},
         proveedores=proveedores,
+        revisar_oc=revisar_oc,
+        # «Ya pedido» honesto: el corte de OCs viejas y el peso de las
+        # vencidas que sí se cuentan, tal como los declara `en_camino`.
+        ya_pedido=_ya_pedido(rop.get('insumo_en_camino') or {}),
         resumen={
+            'revisar_oc': len(revisar_oc),
             'lineas': len(lineas),
             'urgentes': len([l for l in lineas if l['urgencia'] == URGENTE]),
             'esta_semana': len([l for l in lineas if l['urgencia'] == ESTA_SEMANA]),
@@ -493,6 +551,11 @@ def explicar_sku(referencia: str) -> dict:
     if urg is not None:
         return {'referencia': ref, 'motivo': 'EN_BANDEJA', 'urgencia': urg,
                 'texto': 'Está en la bandeja.'}
+    if f.get('bajo_rop_sin_vencidas'):
+        return {'referencia': ref, 'motivo': 'REVISAR_OC',
+                'texto': ('Hoy no está bajo su punto de pedido solo porque lo cubre una '
+                          'orden de compra vencida hace meses: revísela en «Revisar '
+                          'órdenes viejas» de la Bandeja.')}
     return {'referencia': ref, 'motivo': 'SOBRE_PUNTO_DE_PEDIDO',
             'dias_hasta_punto_de_pedido': f.get('dias_hasta_punto_de_pedido'),
             'alcanza_dias': f.get('cobertura_dias'),

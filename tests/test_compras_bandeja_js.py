@@ -25,7 +25,7 @@ from datetime import date, timedelta
 
 import pytest
 
-from tests.test_compras_bandeja import _diaria, _mundo, _oc, _producto, _stock
+from tests.test_compras_bandeja import _diaria, _mundo, _oc, _producto, _stock, lt_de_este_mundo
 from tests.test_analitica_recorrido import mundo  # noqa: F401 (fixture)
 
 RAIZ = pathlib.Path(__file__).resolve().parents[1]
@@ -105,6 +105,7 @@ def _limpio(html, permitido=()):
 
 def _bandeja(db, monkeypatch, malo=False):
     monkeypatch.delenv('ROP_CICLO_NACIONAL_DIAS', raising=False)
+    lt_de_este_mundo(monkeypatch)
     _mundo(db)
     if malo:
         from app.models.producto import Producto

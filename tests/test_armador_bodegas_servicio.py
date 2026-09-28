@@ -118,8 +118,11 @@ EN_TRANSITO = 25.0   # TRA1 — el limbo entre el STS y el ETS
 
 
 def _rop_nacional_esperado(d_avg=D_AVG):
-    from app.services.armador_service import LT_NACIONAL_DIAS, SIGMA_LT_NACIONAL
-    return d_avg * LT_NACIONAL_DIAS + _z() * d_avg * SIGMA_LT_NACIONAL
+    # El default nacional lo decide `default_lead_time` (10 ± 5 desde el
+    # 2026-09-27); acá se lee de ella y no de la constante re-exportada.
+    from app.services.compras_fuentes import default_lead_time
+    lt = default_lead_time('NACIONAL')
+    return d_avg * lt['lt_dias'] + _z() * d_avg * lt['sigma_lt']
 
 
 def _s_objetivo_esperado(d_avg=D_AVG):
@@ -239,8 +242,13 @@ class TestNoCambiaNadaSobreOperacionSana:
     prueba que el arreglo no se comió stock legítimo."""
 
     def test_un_sku_solo_en_bodegas_operadas_no_se_mueve(
-            self, app, db, sin_kardex):
-        """Mismos números que antes del arreglo, calculados a mano."""
+            self, app, db, sin_kardex, monkeypatch):
+        """Mismos números que antes del arreglo, calculados a mano. Con el
+        lead time nacional de este mundo (5 ± 2; el default es 10 ± 5 desde el
+        2026-09-27): así 70 queda sobre el punto de pedido."""
+        from app.services import compras_fuentes
+        monkeypatch.setattr(compras_fuentes, 'LT_NACIONAL_DIAS', 5)
+        monkeypatch.setattr(compras_fuentes, 'SIGMA_LT_NACIONAL', 2)
         _producto(db, 'NAC-SANO', 'NACIONAL')
         _producto(db, 'CHI-SANO', 'CHINA')
         _stock(db, 'NAC-SANO', VENDIBLE, comprometido=20.0,

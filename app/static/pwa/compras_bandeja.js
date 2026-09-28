@@ -280,12 +280,30 @@ function cmpSinKardexHtml(d) {
     <ul style="margin:8px 0 0 18px;padding:0;">${lista}</ul>`, 'mal');
 }
 
+/** De qué órdenes es lo «ya pedido» y cuáles no se cuentan por viejas (P1-3).
+ *  Los días y las unidades llegan hechos del servidor. */
+function cmpYaPedidoOcsHtml(p) {
+  const ocs = p.ya_pedido_ocs || [];
+  const partes = [];
+  if (ocs.length) {
+    partes.push(' De ' + ocs.slice(0, 3).map(o => `la OC ${esc(o.oc)} (${esc(cmpN(o.unidades))} u${o.dias_vencida ? `, debió llegar hace ${esc(cmpDias(o.dias_vencida))}` : ''})`).join(', ') + (ocs.length > 3 ? ' y otras' : '') + '.');
+  }
+  if (p.ya_pedido_vencido) {
+    partes.push(` <span style="color:var(--warn-tx);font-weight:700;">De eso, ${esc(cmpN(p.ya_pedido_vencido))} u son de órdenes vencidas hace meses: ¿van a llegar? Confírmelo con el proveedor; si no, anúlelas en Siesa.</span>`);
+  }
+  if (p.no_contado_por_viejo) {
+    const vieja = (p.ocs_no_contadas || [])[0];
+    partes.push(` <span style="color:var(--tx3);">No se cuentan ${esc(cmpN(p.no_contado_por_viejo))} u de órdenes con más tiempo sin llegar${vieja ? ` (la OC ${esc(vieja.oc)}, de hace ${esc(cmpDias(vieja.dias_vencida))})` : ''}.</span>`);
+  }
+  return partes.join('');
+}
+
 function cmpPorQueHtml(l) {
   const p = l.porque || {};
   const um = (l.empaque && l.empaque.unidad) || 'UND';
   const partes = [];
   partes.push(`Hay <b>${esc(cmpN(p.existencia))}</b> en las sedes − <b>${esc(cmpN(p.comprometido))}</b> vendidos sin despachar − <b>${esc(cmpN(p.salida_sin_confirmar))}</b> vendidos en tienda sin confirmar = <b>${esc(cmpN(p.disponible))}</b> disponibles de verdad.`);
-  partes.push(`Ya pedido (órdenes abiertas y contenedores): <b>${esc(cmpN(p.ya_pedido))}</b>, así que cuenta con <b>${esc(cmpN(p.posicion))}</b>.`);
+  partes.push(`Ya pedido (órdenes abiertas y contenedores): <b>${esc(cmpN(p.ya_pedido))}</b>, así que cuenta con <b>${esc(cmpN(p.posicion))}</b>.${cmpYaPedidoOcsHtml(p)}`);
   const dem = p.demanda || {};
   const anual = dem.metodo === 'MISMO_PERIODO_ANO_ANTERIOR' && p.promedio_anual_dia !== null && p.promedio_anual_dia !== undefined
     ? ` <span style="color:var(--tx3);">(el promedio del año, que ya no decide, es ${esc(cmpNd(p.promedio_anual_dia))})</span>` : '';
@@ -315,7 +333,7 @@ function cmpLineaHtml(l, i, j) {
         <div style="font-size:var(--fs-sm);font-weight:700;color:var(--tx);overflow-wrap:anywhere;">${esc(l.nombre || 'Producto sin nombre en el WMS')}</div>
         <div style="font-size:var(--fs-xs);color:var(--tx3);">${esc(l.referencia)}</div>
       </div>
-      ${cmpPildora(l.urgencia)}
+      <div style="display:flex;gap:4px;flex-wrap:wrap;">${cmpPildora(l.urgencia)}${l.revisar_oc ? `<span title="parte de lo ya pedido es de órdenes vencidas hace meses" style="font-size:var(--fs-xs);font-weight:700;padding:2px 8px;border-radius:999px;background:var(--warn-bg);color:var(--warn-tx);border:1px solid var(--warn-brd);white-space:nowrap;">Revisar OC</span>` : ''}</div>
     </div>
     <div style="display:flex;flex-wrap:wrap;gap:4px 16px;align-items:baseline;margin-top:6px;">
       <span style="font-size:var(--fs-lg);font-weight:800;color:var(--tx);">Pedir ${esc(cmpN(l.pedir_unidades))}</span>
@@ -351,6 +369,30 @@ function cmpProveedorHtml(p, i, filtro) {
     </div>
     <div style="display:flex;flex-direction:column;gap:8px;">${lineas.map(([l, j]) => cmpLineaHtml(l, i, j)).join('')}</div>
   </section>`;
+}
+
+/** «Revisar órdenes viejas»: productos que hoy NO están bajo su punto de
+ *  pedido solo porque los cubre una orden vencida hace meses (P1-3). */
+function cmpRevisarOcHtml(d) {
+  const r = d.revisar_oc || [];
+  if (!r.length) return '';
+  const filas = r.map(x => {
+    const oc = x.oc_mas_vieja || {};
+    return `<div style="border-top:1px solid var(--brd);padding:8px 0;font-size:var(--fs-sm);">
+      <div style="color:var(--tx);font-weight:700;overflow-wrap:anywhere;">${esc(x.nombre || 'Producto sin nombre en el WMS')} <span style="color:var(--tx3);font-weight:500;">${esc(x.referencia)}</span></div>
+      <div style="color:var(--tx2);">Lo cubre la OC ${esc(oc.oc || 'sin dato')}${oc.dias_vencida ? `, que debió llegar hace ${esc(cmpDias(oc.dias_vencida))}` : ''} (${esc(cmpN(x.vencido))} u vencidas). Si no llega, pedir <b>${esc(cmpN(x.si_no_llega_pedir))}</b>${x.si_no_llega_empaques && x.unidad !== 'UND' ? ` (${esc(cmpN(x.si_no_llega_empaques))} ${esc(x.unidad)})` : ''}.</div>
+    </div>`;
+  }).join('');
+  return `<section style="border:1px solid var(--warn-brd);background:var(--warn-bg);border-radius:14px;padding:12px;margin-bottom:14px;">
+    <div style="font-size:var(--fs-md);font-weight:800;color:var(--warn-tx);">Revisar órdenes viejas (${esc(cmpN(r.length))})</div>
+    <div style="font-size:var(--fs-sm);color:var(--tx);margin:4px 0 6px;">Estos productos no aparecen arriba porque los cubre una orden de compra vencida hace meses. Confirme con el proveedor si va a llegar; si no, anúlela en Siesa y pídalos.</div>
+    ${filas}</section>`;
+}
+
+/** Lo que no se cuenta como «ya pedido» (el corte de órdenes viejas), una vez. */
+function cmpYaPedidoHtml(yp) {
+  if (!yp || !yp.nota_corte) return '';
+  return `<div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:2px;">${esc(yp.nota_corte)}</div>`;
 }
 
 function cmpExcluidosHtml(d) {
@@ -395,6 +437,7 @@ function cmpBandejaHtml(d, filtro) {
     ${r.lineas ? `<div style="font-size:var(--fs-sm);color:var(--tx2);">Valor: ${esc(valor)}</div>` : ''}
     <div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:4px;">Meta: tener existencias el ${esc(cmpPct(d.nivel_servicio))} de los días · se compra cada ${esc(cmpDias(ciclo.dias))}${ciclo.fuente === 'CONFIGURADO' ? '' : ' (supuesto)'} · entrega nacional ${esc(cmpDias((d.entrega_nacional || {}).dias))} (${esc((d.entrega_nacional || {}).fuente || 'sin fuente')}) · destino ${esc((d.destino || {}).bodega || '')} (CO ${esc((d.destino || {}).co || 'sin dato')})</div>
     ${cmpDemandaHtml(d.demanda)}
+    ${cmpYaPedidoHtml(d.ya_pedido)}
   </div>
   <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px;">
     ${chip('', 'Todo', r.lineas)}${chip('URGENTE', 'Urgentes', r.urgentes)}${chip('ESTA_SEMANA', 'Esta semana', r.esta_semana)}${chip('PROXIMAS', 'Próximas', r.proximas)}
@@ -402,7 +445,7 @@ function cmpBandejaHtml(d, filtro) {
   <div id="cmp-aviso-ir"></div>`;
   const cuerpo = provs.map((p, i) => cmpProveedorHtml(p, i, filtro)).join('')
     || `<div style="padding:16px;color:var(--tx3);font-size:var(--fs-sm);">Ningún producto en este filtro.</div>`;
-  return cab + cuerpo + cmpExcluidosHtml(d);
+  return cab + cuerpo + cmpRevisarOcHtml(d) + cmpExcluidosHtml(d);
 }
 
 // ── Borrador de OC (copiar / CSV) ───────────────────────────────────────────
@@ -731,8 +774,11 @@ function cmpLoPedidoHtml(d) {
   const ll = d.llegadas;
   if (ll) {
     html += `<div style="font-size:var(--fs-md);font-weight:800;color:var(--tx);margin:14px 0 6px;">Llegó en los últimos ${esc(cmpN(ll.dias))} días</div>`;
-    html += (ll.recepciones || []).map(r => `<div style="font-size:var(--fs-sm);color:var(--tx2);border-top:1px solid var(--brd);padding:6px 0;">${esc(cmpFecha(r.dia))} · <b style="color:var(--tx);">${esc(r.proveedor_nombre || 'Proveedor sin nombre')}</b> · OC ${esc(r.oc || 'sin dato')} · ${esc(cmpN(r.lineas))} líneas, ${esc(cmpN(r.unidades))} u${r.parcial ? ' · <span style="color:var(--warn-tx);">parcial</span>' : ''}</div>`).join('')
-      || `<div style="font-size:var(--fs-sm);color:var(--tx3);">No se confirmó ninguna recepción en ese tiempo.</div>`;
+    const siesa = (ll.entradas_siesa || []).map(r => `<div style="font-size:var(--fs-sm);color:var(--tx2);border-top:1px solid var(--brd);padding:6px 0;">${esc(cmpFecha(r.dia))} · <b style="color:var(--tx);">${esc(r.proveedor_nombre || 'Proveedor sin nombre')}</b> · OC ${esc(r.oc || 'sin dato')} · ${esc(cmpN(r.lineas))} líneas, ${esc(cmpN(r.unidades))} u entradas${r.completa ? ' · completa' : ' · <span style="color:var(--warn-tx);">parcial</span>'}</div>`).join('');
+    const muelle = (ll.recepciones || []).map(r => `<div style="font-size:var(--fs-sm);color:var(--tx2);border-top:1px solid var(--brd);padding:6px 0;">${esc(cmpFecha(r.dia))} · <b style="color:var(--tx);">${esc(r.proveedor_nombre || 'Proveedor sin nombre')}</b> · OC ${esc(r.oc || 'sin dato')} · ${esc(cmpN(r.lineas))} líneas, ${esc(cmpN(r.unidades))} u${r.parcial ? ' · <span style="color:var(--warn-tx);">parcial</span>' : ''} · recibido en el muelle</div>`).join('');
+    html += (siesa + muelle)
+      || `<div style="font-size:var(--fs-sm);color:var(--tx3);">No entró nada en ese tiempo, ni en Siesa ni en el muelle.</div>`;
+    if (siesa && ll.nota_siesa) html += `<div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:4px;">${esc(ll.nota_siesa)}</div>`;
   }
   html += `<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin:18px 0 6px;">
     <div style="font-size:var(--fs-md);font-weight:800;color:var(--tx);">¿Las órdenes respetan los acuerdos de precio?</div>
