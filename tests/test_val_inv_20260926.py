@@ -60,7 +60,6 @@ class TestCupoConFeSinAnotar:
 
 class TestReabrirConCajaDespachada:
 
-    @pytest.mark.xfail(strict=True, reason='P1: el faltante se recoge y se resta sin caja que lo lleve')
     def test_no_nace_una_tarea_que_ninguna_caja_puede_llevar(self, db, almacen):
         from app.models.picking import TareaPicking
         from app.services.packing_service import PackingService

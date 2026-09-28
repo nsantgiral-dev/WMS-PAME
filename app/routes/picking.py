@@ -134,6 +134,13 @@ def crear_tarea():
     if data.get('tipo_documento') not in (None, *TipoDocumento.TODOS):
         return jsonify({'error': f'tipo_documento inválido: {data.get("tipo_documento")!r} '
                                  f'(válidos: {", ".join(TipoDocumento.TODOS)})'}), 400
+    # Un picking de un pedido cuya caja ya no recibe líneas restaría del
+    # hueco unidades que ninguna caja puede llevar (2026-09-26).
+    if (data.get('tipo_documento') or '').upper() != 'TRASLADO':
+        no_recibe = PickingService.motivo_caja_no_recibe(data.get('referencia_documento'))
+        if no_recibe:
+            return jsonify({'error': f'No se crea el picking: {no_recibe}. Lo que falte es '
+                                     f'un pedido nuevo o un backorder en Siesa.'}), 409
     try:
         tareas = PickingService.crear_tareas(
             producto_id=data['producto_id'],
@@ -266,6 +273,10 @@ def reabrir_tarea(id):
     try:
         tarea = PickingService.reabrir_picking(tarea_id=id, usuario_id=uid,
                                                motivo=data.get('motivo'))
+        aviso = getattr(tarea, 'aviso_reapertura', None)
+        if aviso:
+            return jsonify({'mensaje': aviso, 'faltante_sin_caja': tarea.faltante_sin_caja,
+                            'tarea': tarea.to_dict()}), 200
         return jsonify({'mensaje': 'Tarea reabierta — vuelve al pool de picking', 'tarea': tarea.to_dict()}), 200
     except ValueError as e:
         return jsonify({'error': str(e)}), 400

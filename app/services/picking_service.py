@@ -898,6 +898,45 @@ class PickingService:
             or_(TareaPacking.estado != EstadoPacking.CANCELADO,
                 filtro_tiene_documento(TareaPacking))))
 
+    #: Estados en que la caja de un pedido todavía recibe líneas: el
+    #: empacador escanea contra ella. VERIFICADA ya está cerrada (esperando
+    #: Siesa o retenida por cartera) y DESPACHADA ya salió.
+    ESTADOS_CAJA_ABIERTA = ('PENDIENTE', 'EN_PROCESO', 'BLOQUEADO')
+
+    @staticmethod
+    def motivo_caja_no_recibe(referencia):
+        """¿Puede la caja del pedido `referencia` recibir más líneas? `None` =
+        sí (o el pedido no tiene caja todavía: la creará el flujo normal).
+        Si no, **por qué**, en palabras. **Una política** para toda puerta que
+        crea o devuelve al pool un picking de pedido (2026-09-26).
+
+        No recibe: la caja viva está cerrada (VERIFICADA) o despachada, o
+        tiene (o puede tener) documento en Siesa; o no hay caja viva y una
+        cancelada tiene documento (otra caja emitiría un segundo documento).
+        Un picking de ese pedido restaría del hueco unidades que ninguna caja
+        puede llevar."""
+        from app.models.packing import EstadoPacking, TareaPacking
+        from app.services.documento_fiscal import que_documento, tiene_documento_en_siesa
+        if not referencia:
+            return None
+        cajas = (TareaPacking.query
+                 .filter(TareaPacking.numero_pedido_siesa == referencia)
+                 .order_by(TareaPacking.id.desc()).all())
+        viva = next((c for c in cajas if c.estado != EstadoPacking.CANCELADO), None)
+        if viva is not None:
+            if viva.estado not in PickingService.ESTADOS_CAJA_ABIERTA:
+                return (f'la caja {viva.codigo} del pedido {referencia} está '
+                        f'{"despachada" if viva.estado == EstadoPacking.DESPACHADO else "cerrada"}')
+            if tiene_documento_en_siesa(viva):
+                return (f'la caja {viva.codigo} del pedido {referencia} ya tiene '
+                        f'{que_documento(viva)} en Siesa')
+            return None
+        con_doc = next((c for c in cajas if tiene_documento_en_siesa(c)), None)
+        if con_doc is not None:
+            return (f'el pedido {referencia} ya tiene {que_documento(con_doc)} en '
+                    f'Siesa por la caja {con_doc.codigo} (cancelada)')
+        return None
+
     @staticmethod
     def _filtro_devolvible_al_estante():
         """Condición SQL: «tarea de un pedido cuya mercancía se recogió y no
@@ -1034,7 +1073,15 @@ class PickingService:
           con su `MovimientoInventario` (REINGRESO_REAPERTURA) y la tarea
           vuelve a PENDIENTE por la cantidad completa, como antes.
 
-        Devuelve la tarea que queda PENDIENTE (la original o la nueva).
+        · **La caja del pedido ya no recibe líneas** (`motivo_caja_no_recibe`:
+          cerrada, despachada o con documento en Siesa — 2026-09-26): nada
+          vuelve al pool. Lo recogido queda en esa caja (la original
+          COMPLETADO por eso; sin nada recogido, CANCELADO) y el faltante NO
+          se recoge: es un pedido nuevo o un backorder, y la respuesta lo
+          dice (`aviso_reapertura`, `faltante_sin_caja`).
+
+        Devuelve la tarea que queda PENDIENTE (la original o la nueva), o la
+        cerrada en el tercer caso.
         """
         motivo = motivo_obligatorio(motivo, 'reabrir una tarea de picking')
         tarea = TareaPicking.query.filter_by(id=tarea_id).with_for_update().first()
@@ -1056,6 +1103,37 @@ class PickingService:
         antes = foto(tarea, ['estado', 'operario_id', 'cantidad_solicitada',
                              'cantidad_recogida', 'empaques_escaneados',
                              'motivo_bloqueo', 'observaciones_bloqueo'])
+
+        no_recibe = PickingService.motivo_caja_no_recibe(tarea.referencia_documento)
+        if no_recibe and (tarea.tipo_documento or '').upper() != 'TRASLADO':
+            # La caja del pedido ya no recibe líneas (2026-09-26): nada vuelve
+            # al pool. Lo recogido está en esa caja (la original se cierra por
+            # eso); el faltante NO se recoge — restaría del hueco unidades que
+            # ninguna caja puede llevar. Es un pedido nuevo o un backorder en
+            # Siesa, y se declara.
+            tarea.motivo_bloqueo = None
+            PickingService._soltar_operario(tarea)
+            aviso = (f'No se creó tarea por el faltante ({cantidad_faltante}): {no_recibe}. '
+                     f'El faltante es un pedido nuevo o un backorder en Siesa.')
+            if recogido > 0:
+                tarea.cantidad_solicitada = recogido
+                tarea.estado = EstadoPicking.COMPLETADO
+                if not tarea.fecha_completado:
+                    tarea.fecha_completado = datetime.utcnow()
+                accion = 'REABRIR'
+            else:
+                tarea.estado = EstadoPicking.CANCELADO
+                accion = 'CANCELAR'
+            registrar_accion(accion, tarea, usuario_id=usuario_id, motivo=motivo,
+                             antes=antes,
+                             despues={**foto(tarea, list(antes)),
+                                      'faltante_sin_caja': cantidad_faltante,
+                                      'caja_no_recibe': no_recibe},
+                             entidad_codigo=tarea.codigo)
+            db.session.commit()
+            tarea.aviso_reapertura = aviso
+            tarea.faltante_sin_caja = cantidad_faltante
+            return tarea
 
         en_caja = recogido > 0 and tarea.referencia_documento and db.session.query(
             PickingService._empaque_que_la_explica(tarea.referencia_documento)).scalar()

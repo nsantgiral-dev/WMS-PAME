@@ -1249,10 +1249,11 @@ function movimientos(lista) {
 
 /** @param {number} id - Picking task ID to reopen back into the pool. */
 async function reabrirTareaPicking(id) {
-  if (!await _modalConfirmar('¿Reabrir esta tarea al pool de picking? El operario que llegue a esa ubicación la tomará de nuevo.', { titulo: 'Reabrir tarea' })) return;
+  const motivo = await _modalTexto('Reabrir tarea', 'Motivo de la reapertura (obligatorio):');
+  if (!motivo) return;
   try {
-    await put(`/api/picking/${id}/reabrir`);
-    alerta('Tarea reabierta al pool ✓', 'exito');
+    const r = await put(`/api/picking/${id}/reabrir`, { motivo });
+    alerta((r && r.mensaje) || 'Tarea reabierta al pool ✓', r && r.faltante_sin_caja ? 'advertencia' : 'exito');
     await cargarTareasBodega();
   } catch (e) { alerta(e.message || 'Error al reabrir', 'error'); }
 }
