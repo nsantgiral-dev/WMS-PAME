@@ -1,7 +1,7 @@
 """Índice de pedidos_historia por cliente y faltante de recepción de traslados
 
 Revision ID: m050inv2
-Revises: m049tardia
+Revises: m050plata (integración v2; el frente la escribió sobre m049tardia)
 Create Date: 2026-09-26
 
 Aditiva. La compuerta de cartera busca los pedidos de un NIT en cada
@@ -19,7 +19,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision = 'm050inv2'
-down_revision = 'm049tardia'
+down_revision = 'm050plata'
 branch_labels = None
 depends_on = None
 
