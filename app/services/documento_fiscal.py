@@ -399,13 +399,19 @@ MENSAJE_EMISION_EN_CURSO = ('Otro envío a Siesa de este pedido está en curso. 
                             'Intente de nuevo en un minuto.')
 
 
-def _clave_emision(tarea) -> int:
+def _n_emision(tarea) -> int:
+    """El número del pedido dentro de `RANGO_EMISION_PEDIDO`: crc32 de su
+    clave (CO-tipo-consecutivo), o del número si la clave falta."""
     import zlib
-    from app.utils.lock import RANGO_EMISION_PEDIDO, clave_en_rango
+    from app.utils.lock import RANGO_EMISION_PEDIDO
     ident = (getattr(tarea, 'pedido_clave', None) or getattr(tarea, 'numero_pedido_siesa', None)
              or f'tarea-{tarea.id}')
-    return clave_en_rango(RANGO_EMISION_PEDIDO,
-                          zlib.crc32(str(ident).encode('utf-8')) % RANGO_EMISION_PEDIDO[1])
+    return zlib.crc32(str(ident).encode('utf-8')) % RANGO_EMISION_PEDIDO[1]
+
+
+def _clave_emision(tarea) -> int:
+    from app.utils.lock import RANGO_EMISION_PEDIDO, clave_en_rango
+    return clave_en_rango(RANGO_EMISION_PEDIDO, _n_emision(tarea))
 
 
 
@@ -425,8 +431,9 @@ def emision_exclusiva(tarea, etiqueta: str = 'emision'):
     if not ok:
         yield PermisoDeEmision(False, motivo, 503, 'SIESA_NO_DISPONIBLE')
         return
-    from app.utils.lock import advisory_lock
-    with advisory_lock(_clave_emision(tarea), f'emision_{etiqueta}') as tomado:
+    from app.utils.lock import RANGO_EMISION_PEDIDO, advisory_lock, clave_en_rango
+    clave = clave_en_rango(RANGO_EMISION_PEDIDO, _n_emision(tarea))
+    with advisory_lock(clave, f'emision_{etiqueta}') as tomado:
         if not tomado:
             yield PermisoDeEmision(False, MENSAJE_EMISION_EN_CURSO, 409, 'EMISION_EN_CURSO')
             return
