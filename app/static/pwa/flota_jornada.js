@@ -203,7 +203,14 @@ function fjFraseResumen(f) {
     let comp = ' (sin compañeros para comparar)';
     if (cc.pares_mediana && cc.base === 'con_base') comp = ` (su ruta suele ${cc.pares_mediana})`;
     else if (cc.pares_mediana) comp = ` (sus compañeros: ${cc.pares_mediana}, pocos casos)`;
-    partes.push(`Cerró cargue ${cc.mediana}${comp}`);
+    // Una mediana no es un evento: con uno o dos cierres se dicen las horas
+    // reales; con más, «suele» y el rango (e2e 2026-09-26: 11:00 y 22:15 se
+    // pintaban «Cerró cargue 16:38», una hora en que no pasó nada).
+    const horas = [...new Set(cc.horas || [])];
+    if (horas.length && (cc.n || 0) <= 2) partes.push(`Cerró cargue ${horas.join(' y ')}${comp}`);
+    else if (cc.primera && cc.ultima && cc.primera !== cc.ultima) {
+      partes.push(`Suele cerrar cargue hacia ${cc.mediana} (${cc.n} cargues, de ${cc.primera} a ${cc.ultima})${comp}`);
+    } else partes.push(`Cerró cargue ${cc.mediana}${comp}`);
   }
   const p = f.paradas || {};
   if (f.jornadas) {

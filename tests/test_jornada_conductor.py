@@ -410,6 +410,74 @@ class TestLineaDeTiempo:
 # 2 · Huecos y tiempo no explicado
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _noche_de_andres(m):
+    """Se opera hasta la medianoche (e2e 2026-09-26, reloj fijo en DIA): Andrés
+    hace la ruta de la mañana, entrega el camión a las 17:30, lo vuelve a
+    recibir a las 22:00 para la de la noche y lo entrega a las 23:50. La
+    oficina liquida la ruta de la noche a las 00:30 del día siguiente."""
+    andres = m.conductor('Andres')
+    m.recibe(andres, 'JOR001', _t(DIA, '10:30'), 20_000)
+    m.ruta(andres, m.norte, cierre=_t(DIA, '11:00'),
+           paradas=[(_t(DIA, '11:30'), {}), (_t(DIA, '12:00'), {})],
+           entregada=_t(DIA, '17:00'), liquidada=_t(DIA, '17:15'))
+    m.entrega(andres, 'JOR001', _t(DIA, '17:30'), 20_050)
+    m.recibe(andres, 'JOR001', _t(DIA, '22:00'), 20_050)
+    m.ruta(andres, m.sur, cierre=_t(DIA, '22:15'),
+           paradas=[(_t(DIA, '22:40'), {}), (_t(DIA, '23:10'), {})],
+           entregada=_t(DIA, '23:40'), liquidada=_t(DIA + timedelta(days=1), '00:30'))
+    m.entrega(andres, 'JOR001', _t(DIA, '23:50'), 20_090)
+    return andres
+
+
+class TestDosTurnosEnUnDia:
+    """La jornada lee la noche como turno, no como conducta."""
+
+    def test_entre_entregar_y_volver_a_recibir_no_es_jornada(self, db, mundo):
+        andres = _noche_de_andres(mundo)
+        j = _jornada(andres)
+        assert j['estado'] == 'reconstruida'
+        jj = j['jornada']
+        assert jj['turnos'] == 2 and jj['entre_turnos_min'] == 270
+        # 10:30–17:30 y 22:00–23:50, no 10:30–23:50 (13,3 h)
+        assert jj['horas'] == round((7 * 60 + 110) / 60, 2)
+        assert not [h for h in j['huecos'] if h['desde'] == '17:30' and h['hasta'] == '22:00']
+        assert all(not (h['desde'] <= '17:30' and h['hasta'] >= '22:00') for h in j['huecos'])
+
+    def test_un_registro_suyo_entre_turnos_hace_jornada_el_tramo(self, db, mundo):
+        """Si trabajó sin el camión (un tanqueo de otro vehículo, una parada),
+        ese tramo no se descuenta: el descuento es solo para el tramo vacío."""
+        andres = _noche_de_andres(mundo)
+        mundo.tanqueo(andres, 'JOR002', _t(DIA, '19:00'), 500)
+        assert _jornada(andres)['jornada']['turnos'] == 1
+
+    def test_un_dia_sin_registros_suyos_es_sin_actividad(self, db, mundo):
+        andres = _noche_de_andres(mundo)
+        j = _jornada(andres, DIA + timedelta(days=1))
+        assert [e['tipo'] for e in j['eventos']] == ['liquidacion']
+        assert j['estado'] == 'sin_actividad', j['motivo_estado']
+        r = _svc().resumen(DIA, DIA + timedelta(days=1))
+        fa = next(f for f in r['conductores'] if f['conductor']['id'] == andres.id)
+        assert fa['jornadas'] == 1 and fa['sin_actividad'] == 1 and fa['no_reconstruibles'] == 0
+        assert fa['cobertura_media'] == _jornada(andres)['cobertura']['valor']
+
+    def test_el_cierre_de_cargue_no_es_una_mediana_pintada_como_hora(self, db, mundo, tmp_path):
+        from tests.test_sin_codigos_en_pantalla import _node
+        andres = _noche_de_andres(mundo)
+        r = json.loads(json.dumps(_svc().resumen(DIA, DIA)))
+        fa = next(f for f in r['conductores'] if f['conductor']['id'] == andres.id)
+        assert fa['cierre_cargue']['horas'] == ['11:00', '22:15']
+        frase = _node(tmp_path, ['util.js', 'flota_jornada.js'], {},
+                      f'return {{t: fjFraseResumen({json.dumps(fa)})}};')['t']
+        assert 'Cerró cargue 11:00 y 22:15' in frase, frase
+        assert '16:38' not in frase, frase
+        # Con más cierres: «suele», con el rango, nunca como si fuera un evento
+        fa['cierre_cargue'].update(n=5, mediana='09:00', primera='07:00', ultima='22:15',
+                                   horas=['07:00', '08:00', '09:00', '10:00', '22:15'])
+        frase = _node(tmp_path, ['util.js', 'flota_jornada.js'], {},
+                      f'return {{t: fjFraseResumen({json.dumps(fa)})}};')['t']
+        assert 'Suele cerrar cargue hacia 09:00 (5 cargues, de 07:00 a 22:15)' in frase, frase
+
+
 class TestHuecos:
 
     def test_sin_base_compara_contra_el_umbral_fijo_y_lo_dice(self, db, mundo):

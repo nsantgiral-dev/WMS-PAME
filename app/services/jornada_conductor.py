@@ -1031,10 +1031,19 @@ CON_TRAMO = ('reconstruida', 'parcial')
 
 def estado_de(eventos, cob, U):
     """`(estado, motivo)` de un día. Una sola definición: la usan el detalle,
-    el resumen y la pantalla (que solo lee `estado`)."""
+    el resumen y la pantalla (que solo lee `estado`).
+
+    Un día sin NINGÚN registro suyo es `sin_actividad`, aunque otras personas
+    hayan tocado sus rutas (la oficina liquidó pasada la medianoche, confirmó
+    una parada por él): no es un día que no se pueda reconstruir, es un día en
+    que él no hizo nada que quedara registrado (e2e 2026-09-26: el 1/10 salía
+    «no reconstruible» con cobertura 0 y sin un solo evento suyo)."""
     propios = [e for e in eventos if e.propio]
     if not eventos:
         return 'sin_actividad', 'Ningún registro suyo ni de sus rutas ese día.'
+    if not propios:
+        return 'sin_actividad', ('Ningún registro suyo ese día; solo de otras personas '
+                                 'sobre sus rutas.')
     if len(propios) < 2 or cob['valor'] < U['cobertura_minima']:
         return 'no_reconstruible', (
             'Con la evidencia de ese día no se puede reconstruir la jornada: '
@@ -1045,6 +1054,28 @@ def estado_de(eventos, cob, U):
             + '; '.join(f for f in cob['faltan']
                         if 'preoperacional' in f or 'entregó el vehículo' in f) + '.')
     return 'reconstruida', None
+
+
+def sin_custodia(eventos):
+    """Tramos en que el conductor no tenía vehículo: de una entrega de turno a
+    la siguiente recepción, sin ningún registro suyo en medio.
+
+    Desde que se opera hasta la medianoche un conductor puede tener **dos
+    turnos en un día**. Lo que pasa entre entregar y volver a recibir no es su
+    jornada ni tiempo «sin explicar»: no tenía el camión. Hasta el 2026-09-27
+    se contaba entero (e2e: entregó 17:30, recibió 22:00 → jornada de 13,3 h
+    con 6 h 45 min sin explicar). Se descuenta de la jornada y de los huecos;
+    un registro suyo en medio lo anula (si trabajó, el tramo es jornada)."""
+    out, desde = [], None
+    for e in eventos:
+        if e.tipo == 'entrega_turno':
+            desde = e.ts
+        elif desde is not None and e.tipo == 'recibo_turno':
+            out.append((desde, e.ts))
+            desde = None
+        elif e.propio:
+            desde = None
+    return out
 
 
 def _categoria(a: Evento, b: Evento):
@@ -1080,7 +1111,8 @@ def _huecos(m: Mundo, conductor_id, dia, eventos):
         return []
     ini, fin = propios[0].ts, propios[-1].ts
     marcas = [e for e in eventos if ini <= e.ts <= fin and e.tipo != 'liquidacion']
-    cubiertos = [(e.ts, e.ts_fin) for e in eventos if e.ts_fin]
+    # Lo que cubre el cargue y lo que va entre dos turnos no es hueco.
+    cubiertos = [(e.ts, e.ts_fin) for e in eventos if e.ts_fin] + sin_custodia(eventos)
     out = []
     for a, b in zip(marcas, marcas[1:]):
         bruto = _minutos(a.ts, b.ts)
@@ -1568,10 +1600,17 @@ def _jornada_de(m: Mundo, c, dia, eventos) -> dict:
 
     paradas = [e for e in eventos if e.tipo == 'parada']
     if estado in CON_TRAMO:
-        span = _minutos(propios[0].ts, propios[-1].ts)
+        ini, fin = propios[0].ts, propios[-1].ts
+        entre_turnos = [(max(a, ini), min(b, fin)) for a, b in sin_custodia(eventos)
+                        if b > ini and a < fin]
+        fuera = sum(_minutos(a, b) for a, b in entre_turnos)
+        span = _minutos(ini, fin) - fuera
         no_expl = sum(x['no_explicado_min'] for x in huecos)
         jornada = {'primer_evento': _hora_local(propios[0].ts),
                    'ultimo_evento': _hora_local(propios[-1].ts),
+                   # Dos turnos en el día: lo que va entre ellos no es jornada.
+                   'turnos': len(entre_turnos) + 1,
+                   'entre_turnos_min': round(fuera),
                    # Sin apertura o sin cierre, del primer al último registro
                    # no es la jornada: es el tramo que se alcanza a ver.
                    'horas': round(span / 60, 2) if estado == 'reconstruida' else None,
@@ -1582,6 +1621,7 @@ def _jornada_de(m: Mundo, c, dia, eventos) -> dict:
     else:
         jornada = {'primer_evento': _hora_local(propios[0].ts) if propios else None,
                    'ultimo_evento': _hora_local(propios[-1].ts) if propios else None,
+                   'turnos': None, 'entre_turnos_min': None,
                    'horas': None, 'tramo_observado_h': None, 'no_explicado_min': None,
                    'pct_no_explicado': None, 'por_que_no': motivo}
     rutas = []
@@ -1749,19 +1789,28 @@ def _fila_resumen(m: Mundo, c, desde, hasta, dias) -> dict:
     razones = [r['duracion_h'] / r['duracion_pares']['mediana'] for r in con_base
                if r['duracion_pares']['mediana']]
     rechazos = {mot: _tasa_motivo(m, c.id, desde, hasta, mot) for mot in MOTIVOS_VIGILADOS}
+    # Un día sin registros suyos no es una jornada (ver `estado_de`).
+    con_actividad = [d for d in dias if d['estado'] != 'sin_actividad']
     return {
         'conductor': {'id': c.id, 'nombre': c.nombre, 'activo': bool(c.activo),
                       'tiene_cuenta': c.usuario_id is not None},
-        'jornadas': len(dias), 'reconstruidas': len(rec),
+        'jornadas': len(con_actividad), 'reconstruidas': len(rec),
+        'sin_actividad': len(dias) - len(con_actividad),
         'parciales': sum(1 for d in dias if d['estado'] == 'parcial'),
         'no_reconstruibles': sum(1 for d in dias if d['estado'] == 'no_reconstruible'),
-        'cobertura_media': (round(sum(d['cobertura']['valor'] for d in dias) / len(dias), 2)
-                            if dias else None),
+        'cobertura_media': (round(sum(d['cobertura']['valor'] for d in con_actividad)
+                                  / len(con_actividad), 2) if con_actividad else None),
         'horas_jornada': {'mediana': _redondo(mediana(horas), 2), 'n': len(horas)},
         'no_explicado': {'minutos': round(no_expl) if con_tramo else None,
                          'pct': round(no_expl / span_min, 3) if span_min else None,
                          'n_jornadas': len(con_tramo)},
+        # La mediana de dos cierres (11:00 y 22:15 → 16:38) es una hora en que
+        # no pasó nada: con pocos cierres se dan las horas reales, y con más,
+        # la mediana va con su rango (la pantalla dice «suele»).
         'cierre_cargue': {'mediana': _hhmm(mediana(suyas)), 'n': len(suyas),
+                          'horas': [_hhmm(v) for v in sorted(suyas)],
+                          'primera': _hhmm(min(suyas)) if suyas else None,
+                          'ultima': _hhmm(max(suyas)) if suyas else None,
                           'pares_mediana': _hhmm(mediana(pares)), 'n_pares': len(pares),
                           'base': 'con_base' if len(pares) >= m.U['n_minimo_pares'] else 'sin_base'},
         'rutas': {'n': len(rutas), 'con_base': len(con_base),
