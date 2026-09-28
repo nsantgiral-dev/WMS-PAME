@@ -77,11 +77,13 @@ def sync_estado():
     return jsonify(estado_sync()), 200
 
 
-#: Fase 1 de calibración de tiendas (2026-08-27): NS1 y NC1 son las únicas bodegas
-#: de punto de venta con tráfico histórico real de traslados (84 y 19 solicitudes)
-#: fuera de NB1. Las demás (FC1, PC1, PT1, FF1, FN1, FP1) no tienen Almacen/Ubicacion
-#: provisionado todavía — habilitarlas es la Fase 2, no un cambio de esta lista sola.
-_BODEGAS_CALIBRACION_HABILITADAS = ('NS1', 'NC1')
+def _bodegas_de_carga() -> list:
+    """Las bodegas que se pueden cargar: las de la carga física de las 7:00
+    (`inventario_siesa_service._BODEGAS_CALIBRACION_FISICA`, la lista única —
+    antes esta ruta llevaba su copia y NB1 dicha explícitamente daba 400)."""
+    from app.services.connekta_gateway import connekta as _ck
+    from app.services.inventario_siesa_service import _BODEGAS_CALIBRACION_FISICA
+    return [b or _ck.bodega for b in _BODEGAS_CALIBRACION_FISICA]
 
 
 @siesa_bp.route('/cargar-inventario', methods=['POST'])
@@ -90,7 +92,7 @@ def cargar_inventario():
     """Inicia la carga inicial de stock desde Siesa en background. Solo admin.
 
     ?bodega=NS1 — carga esa bodega en vez de la default (NB1, connekta.bodega).
-    Limitado a `_BODEGAS_CALIBRACION_HABILITADAS` — las demás no tienen
+    Limitado a `_bodegas_de_carga()` (la lista de la carga física) — las demás no tienen
     almacén WMS provisionado y fallarían con un error confuso más abajo.
     """
     if not _solo_admin():
@@ -105,13 +107,31 @@ def cargar_inventario():
     from app.services.inventario_siesa_service import iniciar_carga_inventario
     forzar = _req.args.get('forzar', 'false').lower() == 'true'
     bodega = _req.args.get('bodega') or None
-    if bodega and bodega not in _BODEGAS_CALIBRACION_HABILITADAS:
+    if bodega and bodega not in _bodegas_de_carga():
         return jsonify({
-            'error': f'Bodega {bodega} no habilitada para carga todavía. '
-                     f'Disponibles: {", ".join(_BODEGAS_CALIBRACION_HABILITADAS)} (además de NB1 por defecto).'
+            'error': f'La bodega {bodega} no está habilitada para la carga física. '
+                     f'Disponibles: {", ".join(_bodegas_de_carga())}.'
         }), 400
     resultado = iniciar_carga_inventario(current_app._get_current_object(), forzar=forzar, bodega=bodega)
+    if resultado.get('abortado'):
+        return jsonify({**resultado, 'error': resultado.get('mensaje')}), 409
     return jsonify(resultado), 202
+
+
+@siesa_bp.route('/carga-fisica', methods=['GET'])
+@jwt_required()
+def carga_fisica_estado():
+    """La última carga física de cada bodega (lo que dicen 🩺 Salud y el
+    correo) y si hoy se puede cargar: el panel «Cargar inventario» del PWA
+    (P2-7, 2026-09-26). Solo admin."""
+    if not _solo_admin():
+        return jsonify({'error': 'Solo admin'}), 403
+    from app.services.inventario_siesa_service import (estado_carga_fisica,
+                                                       motivo_carga_bloqueada)
+    filas = []
+    for f in estado_carga_fisica():
+        filas.append({**f, 'bloqueada': motivo_carga_bloqueada(f['bodega'])})
+    return jsonify({'bodegas': filas}), 200
 
 
 @siesa_bp.route('/carga-inventario-estado', methods=['GET'])

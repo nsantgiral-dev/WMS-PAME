@@ -288,3 +288,57 @@ class TestPonerEnCeroDejaKardex:
             ('x', 'a'): {'ceros': 1, 'bloque': 0, 'movimiento': False},
             ('x', 'b'): {'ceros': 0, 'bloque': 1, 'movimiento': False},
             ('x', 'c'): {'ceros': 1, 'bloque': 0, 'movimiento': True}}
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# P2-7: el reintento que dicen Salud y el correo existe, por bodega, con la
+# misma guarda; el setup inicial pasa por ella.
+# ═════════════════════════════════════════════════════════════════════════════
+
+class TestCargarInventarioPorBodega:
+
+    def test_el_panel_existe_y_llama_la_ruta_por_bodega(self):
+        js = (RAIZ / 'app/static/pwa/app.js').read_text(encoding='utf-8')
+        assert 'Cargar inventario (por bodega)' in js
+        cuerpo = js[js.index('async function siesaCargarInventario'):]
+        cuerpo = cuerpo[:cuerpo.index('\n}\n')]
+        assert "/api/siesa/cargar-inventario?bodega=" in cuerpo
+        assert 'siesaCargaFisicaPintar();' in js
+
+    def test_nb1_dicha_explicitamente_se_acepta(self, app, client, db, almacen, monkeypatch):
+        from tests.test_cartera_retencion import _jwt, _usuario
+        monkeypatch.setattr(iss, 'iniciar_carga_inventario',
+                            lambda app, forzar=False, bodega=None: {'iniciado': True, 'bodega': bodega})
+        r = client.post(f'/api/siesa/cargar-inventario?bodega={iss.connekta.bodega}',
+                        headers=_jwt(app, _usuario(db, rol='admin')))
+        assert r.status_code == 202, r.get_json()
+
+    def test_operaciones_activas_es_409_con_su_motivo(self, app, client, db, almacen, monkeypatch):
+        from tests.test_cartera_retencion import _jwt, _usuario
+        monkeypatch.setattr(iss, '_get_almacen', lambda bod=None: almacen)
+        monkeypatch.setattr(iss, '_operaciones_activas_en_almacen', lambda _id: (1, 0))
+        monkeypatch.setattr(iss.connekta, 'modo_simulacion', False)
+        r = client.post('/api/siesa/cargar-inventario?bodega=NS1',
+                        headers=_jwt(app, _usuario(db, rol='admin')))
+        assert r.status_code == 409 and '1 picking' in r.get_json()['error']
+
+    def test_el_estado_por_bodega(self, app, client, db):
+        from tests.test_cartera_retencion import _jwt, _usuario
+        r = client.get('/api/siesa/carga-fisica', headers=_jwt(app, _usuario(db, rol='admin')))
+        assert r.status_code == 200
+        assert {b['bodega'] for b in r.get_json()['bodegas']} >= {'NS1', 'NC1'}
+
+    def test_el_setup_inicial_pasa_por_la_misma_guarda(self, app, db, monkeypatch):
+        from app.services import registro_sync_service as reg
+        monkeypatch.setattr('app.services.siesa_sync_service._run_sync', lambda app: None)
+        monkeypatch.setattr(iss, 'motivo_carga_bloqueada', lambda bod: '2 picking(s) activos')
+        corrio = []
+        monkeypatch.setattr(iss, '_run_carga_inicial', lambda *a, **k: corrio.append(1))
+        iss._estado_setup['en_curso'] = True
+        iss._run_setup_inicial(app)
+        assert not corrio and iss._estado_setup['fase'] == 'error'
+        assert '2 picking' in reg.ultimo(iss._tipo_registro_stock(iss.connekta.bodega))['error']
+
+    def test_una_lista_de_bodegas(self):
+        src = (RAIZ / 'app/routes/siesa.py').read_text(encoding='utf-8')
+        assert '_BODEGAS_CALIBRACION_HABILITADAS' not in src

@@ -1333,6 +1333,22 @@ def _operaciones_activas_en_almacen(almacen_id: int) -> tuple:
     return picks_activos, packs_activos
 
 
+def motivo_carga_bloqueada(bod: str):
+    """`None` si la carga física de `bod` puede correr ahora; si no, por qué.
+    **Una guarda** para la carga de las 7:00, el botón por bodega y el paso de
+    stock del setup inicial (P2-7, 2026-09-26: el setup no la miraba). La
+    frescura del dato de Siesa es la otra mitad y vive en
+    `fuente_para_escribir`, que `_run_carga_inicial` exige siempre."""
+    almacen = _get_almacen(bod)
+    if not almacen:
+        return f'no hay almacén activo en el WMS para la bodega {bod}'
+    picks, packs = _operaciones_activas_en_almacen(almacen.id)
+    if picks or packs:
+        return (f'hay {picks} picking(s) y {packs} packing(s) activos en el almacén de '
+                f'{bod}: la carga sobreescribiría el stock reservado')
+    return None
+
+
 def iniciar_carga_inventario(app, forzar: bool = False, bodega: str = None):
     """Arranca la carga inicial en background. Retorna estado inmediatamente.
 
@@ -1356,21 +1372,10 @@ def iniciar_carga_inventario(app, forzar: bool = False, bodega: str = None):
     # carga a NS1, y viceversa.
     if not forzar:
         with app.app_context():
-            almacen = _get_almacen(bod)
-            if not almacen:
-                return {'abortado': True, 'mensaje': f'No hay almacén activo en WMS para la bodega {bod}'}
-            picks_activos, packs_activos = _operaciones_activas_en_almacen(almacen.id)
-            if picks_activos or packs_activos:
-                return {
-                    'abortado': True,
-                    'mensaje': (
-                        f'Carga de {bod} abortada: hay {picks_activos} picking(s) y {packs_activos} packing(s) activos '
-                        f'en ese almacén. La carga sobreescribiría el stock reservado. '
-                        f'Use ?forzar=true solo si está seguro.'
-                    ),
-                    'picks_activos': picks_activos,
-                    'packs_activos': packs_activos,
-                }
+            motivo = motivo_carga_bloqueada(bod)
+            if motivo:
+                return {'abortado': True,
+                        'mensaje': f'Carga de {bod} no iniciada: {motivo}.'}
 
     estado['en_curso'] = True
     estado['ultimo_inicio'] = datetime.now(timezone.utc)
@@ -1437,11 +1442,8 @@ def estado_carga_inventario(bodega: str = None):
 
 #: Bodegas con Almacen/Ubicacion provisionado y calibración física habilitada
 #: (2026-08-27). `None` = connekta.bodega (NB1, comportamiento de siempre).
-#: Hermana de `_BODEGAS_CALIBRACION_HABILITADAS` en routes/siesa.py (esa
-#: lista es el whitelist del endpoint manual, sin NB1 porque el endpoint ya
-#: lo cubre como default; esta es la del cron, con los tres). Repetir la
-#: lista en dos archivos es el patrón que CLAUDE.md tolera —a diferencia del
-#: mapa CO/bodega— siempre que quien la toque sepa que tiene una hermana.
+#: **La única lista** (2026-09-26): el endpoint manual por bodega la lee
+#: (`routes/siesa._bodegas_de_carga`); antes tenía su copia sin NB1.
 _BODEGAS_CALIBRACION_FISICA = (None, 'NS1', 'NC1')
 
 
@@ -1558,20 +1560,11 @@ def _ejecutar_carga_fisica_diaria(app):
                     _registrar_carga_no_escrita(
                         bod_real, f'carga omitida: fuera de la ventana de Siesa ({texto_ventana()}).')
                     continue
-                almacen = _get_almacen(bod)
-                if not almacen:
-                    logger.warning('[INV-SIESA] Carga física diaria: sin almacén para %s — omitido', bod_real)
-                    _registrar_carga_no_escrita(bod_real, 'no hay almacén activo para esa bodega.')
-                    continue
-                picks, packs = _operaciones_activas_en_almacen(almacen.id)
-                if picks or packs:
-                    logger.warning(
-                        '[INV-SIESA] Carga física diaria de %s omitida: %d picking(s)/%d packing(s) activos',
-                        bod_real, picks, packs,
-                    )
-                    _registrar_carga_no_escrita(
-                        bod_real, f'carga omitida: {picks} picking(s) y {packs} packing(s) '
-                                  f'activos en el almacén a la hora de la carga.')
+                motivo = motivo_carga_bloqueada(bod_real)
+                if motivo:
+                    logger.warning('[INV-SIESA] Carga física diaria de %s omitida: %s',
+                                   bod_real, motivo)
+                    _registrar_carga_no_escrita(bod_real, f'carga omitida: {motivo}.')
                     continue
             _run_carga_inicial(app, bodega=bod)
         except Exception as exc:
@@ -2294,6 +2287,13 @@ def _run_setup_inicial(app):
         _run_sync(app)
 
         _estado_setup['fase'] = 'stock'
+        # La misma guarda que la carga por bodega y la de las 7:00 (P2-7).
+        with app.app_context():
+            _motivo = motivo_carga_bloqueada(connekta.bodega)
+        if _motivo:
+            with app.app_context():
+                _registrar_carga_no_escrita(connekta.bodega, f'carga omitida: {_motivo}.')
+            raise ValueError(f'catálogo sincronizado; la carga de stock no corrió: {_motivo}')
         # Marcar _estado_carga (bodega default) como en curso para que
         # iniciar_carga_inventario() concurrente no lance un segundo hilo
         # mientras el setup ejecuta la carga.

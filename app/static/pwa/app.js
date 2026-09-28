@@ -1960,6 +1960,11 @@ async function cargarConnekta() {
       <div id="setup-resultado" style="margin-top:8px;font-size:var(--fs-xs);color:var(--tx3);text-align:center;"></div>
 
       <div style="border-top:1px solid var(--brd);margin-top:16px;padding-top:16px;">
+        <div style="font-size:var(--fs-sm);font-weight:700;margin-bottom:8px;">Cargar inventario (por bodega)</div>
+        <div id="siesa-carga-fisica" style="font-size:var(--fs-xs);color:var(--tx3);">Consultando…</div>
+      </div>
+
+      <div style="border-top:1px solid var(--brd);margin-top:16px;padding-top:16px;">
         <div style="font-size:var(--fs-sm);font-weight:700;margin-bottom:8px;">Inventario bilateral</div>
         <button onclick="verReconciliacion()"
           style="width:100%;padding:12px;background:var(--bg-s);color:var(--info-tx);border:1px solid var(--info-brd);border-radius:10px;font-size:var(--fs-sm);font-weight:700;cursor:pointer;">
@@ -2015,7 +2020,47 @@ async function cargarConnekta() {
         Los pedidos y OCs vienen de Siesa real. Al confirmar despacho o recepción, el payload se certifica en los logs del servidor pero <strong>no mueve inventario en Siesa</strong>.<br>
         Para activar producción: borrar la variable <code>MODO_ENSAYO</code> en Railway.
       </div>` : ''}`;
+    siesaCargaFisicaPintar();
   } catch (e) { el.innerHTML = '<div style="color:var(--err-tx);">Error</div>'; }
+}
+
+/** Bodegas del panel «Cargar inventario»: el `onclick` lleva la posición. */
+let SIESA_CARGA_BODEGAS = [];
+
+/**
+ * «Cargar inventario» por bodega (P2-7, 2026-09-26): el reintento que dicen
+ * 🩺 Salud y el correo. Muestra la última carga escrita y por qué hoy no se
+ * puede (operaciones activas); la frescura del dato la exige el servidor.
+ */
+async function siesaCargaFisicaPintar() {
+  const el = document.getElementById('siesa-carga-fisica');
+  if (!el) return;
+  try {
+    const d = await get('/api/siesa/carga-fisica');
+    SIESA_CARGA_BODEGAS = d.bodegas || [];
+    el.innerHTML = SIESA_CARGA_BODEGAS.map((b, i) => {
+      const cuando = b.horas_desde_escrita == null ? 'nunca escrita'
+        : `escrita hace ${Math.round(b.horas_desde_escrita)} h`;
+      const aviso = b.no_escribio && b.error ? `<br><span style="color:var(--err-tx);">${esc(String(b.error).slice(0, 160))}</span>` : '';
+      const bloq = b.bloqueada ? `<br><span style="color:var(--warn-tx);">Hoy no se puede: ${esc(b.bloqueada)}</span>` : '';
+      return `<div class="tabla-fila" style="align-items:flex-start;flex-wrap:wrap;">
+        <span class="tabla-nombre" style="font-size:var(--fs-xs);"><b>${esc(b.bodega)}</b> · ${esc(cuando)}${aviso}${bloq}</span>
+        <button class="btn-flota" style="flex:0 0 auto;" ${b.bloqueada ? 'disabled' : ''} onclick="siesaCargarInventario(${i})">Cargar inventario</button>
+      </div>`;
+    }).join('') || 'Sin bodegas habilitadas.';
+  } catch (e) { el.textContent = 'No se pudo consultar: ' + (e.message || e); }
+}
+
+/** @param {number} pos - Posición en SIESA_CARGA_BODEGAS. */
+async function siesaCargarInventario(pos) {
+  const b = SIESA_CARGA_BODEGAS[pos];
+  if (!b) return;
+  if (!await _modalConfirmar(`¿Cargar el inventario de ${esc(b.bodega)} desde Siesa? Solo escribe si el dato de Siesa es de hoy y completo.`, { titulo: 'Cargar inventario' })) return;
+  try {
+    const r = await post('/api/siesa/cargar-inventario?bodega=' + encodeURIComponent(b.bodega), {});
+    alerta(r.mensaje || 'Carga iniciada', 'exito');
+    setTimeout(siesaCargaFisicaPintar, 60000);
+  } catch (e) { alerta(e.message || 'No se pudo iniciar la carga', 'error'); }
 }
 
 /** Trigger catalog sync + initial stock load from Siesa, polling for progress. */

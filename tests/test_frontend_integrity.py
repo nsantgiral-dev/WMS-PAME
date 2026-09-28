@@ -961,8 +961,6 @@ DEUDA_SIN_UI = {
         'Simulación de una ola de reposición antes de lanzarla.',
     '/api/rutas/<int:id>/sugeridos':
         'Bultos sugeridos para una ruta. El muelle asigna a mano.',
-    '/api/siesa/cargar-inventario':
-        'Carga inicial de inventario desde Siesa. Se corre UNA VEZ en el go-live, con la bodega quieta y bajo acta. Un botón permanente invita a correrla dos veces.',
     '/api/siesa/sync-productos':
         'Sincronización del catálogo. Corre por cron; el disparo manual es para cuando entra un producto nuevo y no se quiere esperar.',
     '/api/siesa/terceros-contacto':
