@@ -43,6 +43,11 @@ class ConnektaConsultasGateway:
     #: acotar una factura real.
     _MAX_PAGINAS_FACTURA = 50
 
+    #: Tope de páginas de `get_vendedor_contacto` — 10 × 100 = 1.000 filas,
+    #: contra 56 vendedores reales (2026-09-28). Es un freno para una consulta
+    #: que se desfiltre, no un límite de negocio.
+    _MAX_PAGINAS_VENDEDORES = 10
+
     #: Tope de páginas de `get_cxc_general` — 50 × 100 = 5.000 filas de cartera
     #: de un mismo tercero. Alcanzarlo se declara (log de ERROR) y devuelve `[]`,
     #: nunca la cartera parcial.
@@ -1229,18 +1234,36 @@ class ConnektaConsultasGateway:
         Retorna lista de dicts con: codigo_vendedor, f200_nit,
           f200_razon_social, f200_nombres, f200_apellido1, f200_apellido2,
           f015_telefono, f015_email
+
+        **Se leen todas las páginas** (2026-09-28). La consulta traía
+        `SELECT top(100)` sin `ORDER BY` y sin filtrar compañía: cada código
+        salía una vez por compañía (1 y 2, a veces con personas distintas) y
+        el tope cortaba al azar — el vendedor 061 no llegaba nunca. Se
+        corrigió en Siesa QA (`WHERE v.f210_id_cia = 1 ORDER BY v.f210_id`,
+        56 filas). Sin el tope, más de 100 filas caerían en la página 2
+        (Regla 10), y leer solo la 1 repetiría el corte en silencio.
+        Una página que falla descarta la lectura entera: una lista a medias
+        pisaría en el caché nombres que sí se conocían.
         """
         core = self._core
         try:
-            res = core._get(
-                'papeleriamedellin_WMS_Vendedor_Contacto',
-                params_extra={'paginacion': 'numPag=1|tamPag=100'},
-                url=core.url_get_dinamico,
-            )
-            rows = (
-                res.get('detalle', {}).get('Table') or
-                res.get('detalle', {}).get('Datos') or []
-            )
+            rows = []
+            for pag in range(1, self._MAX_PAGINAS_VENDEDORES + 1):
+                res = core._get(
+                    'papeleriamedellin_WMS_Vendedor_Contacto',
+                    params_extra={'paginacion': f'numPag={pag}|tamPag=100'},
+                    url=core.url_get_dinamico,
+                )
+                pagina = (
+                    res.get('detalle', {}).get('Table') or
+                    res.get('detalle', {}).get('Datos') or []
+                )
+                rows.extend(pagina)
+                if len(pagina) < 100:
+                    break
+            else:
+                logger.warning('[CONNEKTA] get_vendedor_contacto: %d páginas llenas, '
+                               'la lista puede estar incompleta', self._MAX_PAGINAS_VENDEDORES)
             if codigo:
                 rows = [r for r in rows
                         if str(r.get('codigo_vendedor', '')).strip() == str(codigo).strip()]

@@ -94,6 +94,39 @@ def nombres_por_nit() -> dict:
     return actual
 
 
+class EstadoVendedor:
+    """Qué se sabe del vendedor de un pedido. **Un solo vocabulario**; la
+    pantalla solo lo traduce a palabras."""
+    CONOCIDO = 'CONOCIDO'          # hay nombre
+    SIN_VENDEDOR = 'SIN_VENDEDOR'  # el pedido no trae, o trae el «Genérico»
+    CARGANDO = 'CARGANDO'          # la lista todavía no llegó a este proceso
+    DESCONOCIDO = 'DESCONOCIDO'    # la lista llegó y ese NIT no está
+
+
+def _es_generico(vendedor_id) -> bool:
+    return str(vendedor_id or '').strip().lower() in ('generico', 'genérico')
+
+
+def resolver(vendedor_id, nombres: dict) -> tuple:
+    """`(estado, nombre)` del vendedor de un pedido. `nombres` es lo que
+    devolvió `nombres_por_nit()`: vacío significa que la lista no ha llegado
+    (la consulta real trae decenas; un maestro vacío no es un caso)."""
+    if not str(vendedor_id or '').strip() or _es_generico(vendedor_id):
+        return EstadoVendedor.SIN_VENDEDOR, None
+    if not nombres:
+        return EstadoVendedor.CARGANDO, None
+    nombre = nombres.get(normalizar_nit(vendedor_id))
+    if nombre:
+        return EstadoVendedor.CONOCIDO, nombre
+    return EstadoVendedor.DESCONOCIDO, None
+
+
+def precalentar():
+    """Arranca la lectura de la lista sin esperar a que alguien abra Pedidos.
+    La llama cada worker de Gunicorn al nacer (`gunicorn.conf.py`)."""
+    nombres_por_nit()
+
+
 def _reiniciar_cache():
     """Solo tests."""
     global _por_nit, _cargado_at, _fallo_at, _refrescando

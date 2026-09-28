@@ -536,12 +536,13 @@ def _agregar_fecha_y_vendedor(pedidos: dict) -> None:
     `pedidos_siesa` no los guarda; `pedidos_historia` sí (la escribe el mismo
     sync, desde la misma fila de `API_v2_Ventas_Pedidos`). Una consulta para
     toda la cola. El nombre sale del caché de `vendedores` y **nunca espera a
-    Siesa**: sin caché todavía, el pedido viaja con `vendedor_nombre=None` y
-    el `vendedor_id` crudo. Ningún dato se inventa (Regla 0).
+    Siesa**; `vendedor_estado` dice qué se sabe (`vendedores.EstadoVendedor`)
+    para que la pantalla no confunda «todavía no» con «no hay». Ningún dato
+    se inventa (Regla 0).
     """
     from app.models.pedido_historia import PedidoHistoria
     from app.services.cadena_pedido import clave_pedido
-    from app.services.vendedores import nombres_por_nit, normalizar_nit
+    from app.services.vendedores import nombres_por_nit, resolver
 
     claves = {clave_pedido(p.get('centro_op'), p.get('tipo_docto'), p.get('consec_docto'))
               for p in pedidos.values()} - {None}
@@ -562,7 +563,7 @@ def _agregar_fecha_y_vendedor(pedidos: dict) -> None:
         fecha, vend = d.get('fecha'), d.get('vend')
         p['fecha_pedido'] = fecha.isoformat() if fecha else None
         p['vendedor_id'] = vend
-        p['vendedor_nombre'] = nombres.get(normalizar_nit(vend)) if vend else None
+        p['vendedor_estado'], p['vendedor_nombre'] = resolver(vend, nombres)
 
 
 @siesa_bp.route('/pedidos', methods=['GET'])

@@ -86,6 +86,7 @@ class TestLaColaTraeFechaYVendedor:
         assert p['fecha_pedido'] == '2026-09-20'
         assert p['vendedor_id'] == '53051164'
         assert p['vendedor_nombre'] == 'ANA PEREZ'
+        assert p['vendedor_estado'] == V.EstadoVendedor.CONOCIDO
 
     def test_la_razon_social_cuando_no_hay_nombres(self, app, client, db):
         _pedido(db, 902, vendedor_id='900-1')
@@ -102,13 +103,21 @@ class TestLaColaTraeFechaYVendedor:
         p = _cola(app, client, db)['PD903']
         assert p['fecha_pedido'] is None
         assert p['vendedor_id'] is None and p['vendedor_nombre'] is None
+        assert p['vendedor_estado'] == V.EstadoVendedor.SIN_VENDEDOR
 
-    def test_nit_sin_vendedor_conocido_viaja_sin_nombre(self, app, client, db):
+    def test_nit_sin_vendedor_conocido_es_desconocido(self, app, client, db):
         _pedido(db, 904, vendedor_id='111')
         with _refresco_sincrono(FILAS_VENDEDORES):
             V._refrescar()
         p = _cola(app, client, db)['PD904']
         assert p['vendedor_id'] == '111' and p['vendedor_nombre'] is None
+        assert p['vendedor_estado'] == V.EstadoVendedor.DESCONOCIDO
+
+    def test_el_generico_es_sin_vendedor(self, app, client, db):
+        _pedido(db, 905, vendedor_id='Generico')
+        with _refresco_sincrono(FILAS_VENDEDORES):
+            V._refrescar()
+        assert _cola(app, client, db)['PD905']['vendedor_estado'] == V.EstadoVendedor.SIN_VENDEDOR
 
 
 class TestLaColaNoEsperaASiesa:
@@ -126,8 +135,10 @@ class TestLaColaNoEsperaASiesa:
         from app.services.connekta_gateway import ConnektaGateway
         with patch.object(ConnektaGateway, 'get_vendedor_contacto', _lento):
             p = _cola(app, client, db)['PD910']
-            # La respuesta llegó mientras Siesa seguía «respondiendo».
+            # La respuesta llegó mientras Siesa seguía «respondiendo», y lo
+            # dice: «todavía no», no «no hay».
             assert p['vendedor_nombre'] is None
+            assert p['vendedor_estado'] == V.EstadoVendedor.CARGANDO
             assert llamado.wait(5), 'el refresco en segundo plano no arrancó'
             puede_terminar.set()
             for _ in range(50):
@@ -149,6 +160,72 @@ class TestLaColaNoEsperaASiesa:
         with patch.object(V.threading, 'Thread') as hilo:
             V.nombres_por_nit()
         hilo.assert_not_called()
+
+
+class TestResolver:
+
+    NOMBRES = {'53051164': 'ANA PEREZ'}
+
+    @pytest.mark.parametrize('vid', [None, '', '  ', 'Generico', 'GENÉRICO'])
+    def test_sin_vendedor(self, vid):
+        assert V.resolver(vid, self.NOMBRES) == (V.EstadoVendedor.SIN_VENDEDOR, None)
+
+    def test_sin_lista_es_cargando_no_desconocido(self):
+        assert V.resolver('53051164', {}) == (V.EstadoVendedor.CARGANDO, None)
+
+    def test_conocido_y_desconocido(self):
+        assert V.resolver(' 53051164 ', self.NOMBRES) == (V.EstadoVendedor.CONOCIDO, 'ANA PEREZ')
+        assert V.resolver('999', self.NOMBRES) == (V.EstadoVendedor.DESCONOCIDO, None)
+
+
+class TestLaListaDeVendedoresSeLeeCompleta:
+    """El 2026-09-28 la consulta traía `top(100)` y el vendedor 061 no
+    llegaba. Sin el tope, una segunda página no puede perderse."""
+
+    @staticmethod
+    def _paginas(*tamanos):
+        llamadas = []
+
+        def _get(self, nombre, params=None, params_extra=None, url=None, **kw):
+            pag = int(params_extra['paginacion'].split('|')[0].split('=')[1])
+            llamadas.append(pag)
+            n = tamanos[pag - 1] if pag <= len(tamanos) else 0
+            return {'detalle': {'Datos': [{'codigo_vendedor': f'{pag}-{i}'} for i in range(n)]}}
+        return _get, llamadas
+
+    def test_lee_hasta_la_pagina_corta(self, app):
+        from app.services.connekta_gateway import ConnektaGateway, connekta
+        _get, llamadas = self._paginas(100, 100, 7)
+        with app.app_context(), patch.object(ConnektaGateway, '_get', _get):
+            filas = connekta.get_vendedor_contacto()
+        assert len(filas) == 207 and llamadas == [1, 2, 3]
+
+    def test_una_pagina_corta_no_pide_mas(self, app):
+        from app.services.connekta_gateway import ConnektaGateway, connekta
+        _get, llamadas = self._paginas(56)
+        with app.app_context(), patch.object(ConnektaGateway, '_get', _get):
+            assert len(connekta.get_vendedor_contacto()) == 56
+        assert llamadas == [1]
+
+    def test_el_tope_frena_una_consulta_desfiltrada(self, app):
+        from app.services.connekta_consultas_gateway import ConnektaConsultasGateway
+        from app.services.connekta_gateway import ConnektaGateway, connekta
+        tope = ConnektaConsultasGateway._MAX_PAGINAS_VENDEDORES
+        _get, llamadas = self._paginas(*([100] * (tope + 5)))
+        with app.app_context(), patch.object(ConnektaGateway, '_get', _get):
+            connekta.get_vendedor_contacto()
+        assert llamadas == list(range(1, tope + 1))
+
+    def test_una_pagina_que_falla_descarta_la_lectura(self, app):
+        from app.services.connekta_gateway import ConnektaGateway, connekta
+
+        def _get(self, nombre, params=None, params_extra=None, url=None, **kw):
+            if 'numPag=2' in params_extra['paginacion']:
+                raise TimeoutError('Siesa no responde')
+            return {'detalle': {'Datos': [{'codigo_vendedor': str(i)} for i in range(100)]}}
+        with app.app_context(), patch.object(ConnektaGateway, '_get', _get):
+            # Vacío = «no sé»: el caché conserva lo que ya tenía.
+            assert connekta.get_vendedor_contacto() == []
 
 
 class TestUnaSolaReglaDelNombre:

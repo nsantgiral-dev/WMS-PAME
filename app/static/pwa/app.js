@@ -1487,9 +1487,25 @@ async function cargarPedidos() {
 }
 
 /**
+ * Texto del vendedor según `vendedor_estado`, que decide el servidor
+ * (`vendedores.EstadoVendedor`). La línea nunca queda vacía: «no hay» y
+ * «todavía no» se dicen distinto. Un servidor viejo sin el campo cae al
+ * nombre si lo trae.
+ * @param {Object} p - pedido de `/api/siesa/pedidos`
+ * @returns {string} texto plano (se escapa al pintarlo)
+ */
+function pedidoVendedorTexto(p) {
+  switch (p.vendedor_estado) {
+    case 'CONOCIDO':     return p.vendedor_nombre || '';
+    case 'SIN_VENDEDOR': return 'Sin vendedor';
+    case 'CARGANDO':     return 'cargando…';
+    case 'DESCONOCIDO':  return `Desconocido (NIT ${p.vendedor_id || '—'})`;
+    default:             return p.vendedor_nombre || '';
+  }
+}
+
+/**
  * Línea «📅 fecha del pedido · 👤 vendedor» de la tarjeta de la cola.
- * Sin nombre todavía (el caché de vendedores se llena en segundo plano) se
- * muestra el NIT; «Generico» es el vendedor de prueba de Siesa y se omite.
  * @param {Object} p - pedido de `/api/siesa/pedidos`
  * @returns {string} HTML, o '' si no hay ninguno de los dos datos
  */
@@ -1497,8 +1513,7 @@ function pedidoFechaYVendedorHtml(p) {
   const partes = [];
   const f = /^(\d{4})-(\d{2})-(\d{2})/.exec(p.fecha_pedido || '');
   if (f) partes.push(`📅 ${esc(`${f[3]}/${f[2]}/${f[1]}`)}`);
-  const vend = p.vendedor_nombre
-    || (p.vendedor_id && !/^gen[eé]rico$/i.test(p.vendedor_id) ? `NIT ${p.vendedor_id}` : '');
+  const vend = pedidoVendedorTexto(p);
   if (vend) partes.push(`👤 ${esc(vend)}`);
   return partes.length
     ? `<div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:2px;">${partes.join(' · ')}</div>`
