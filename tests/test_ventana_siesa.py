@@ -36,7 +36,7 @@ HABLAN_CON_SIESA = {
     'sync_empaques_siesa', 'sync_ubicaciones_siesa', 'reconciliacion_despachos',
     'stock_prewarm', 'abc_prewarm_pre_turno', 'vigia_alimentar_series',
     'fotos_siesa_diarias', 'cartera_barrido', 'devoluciones_verificar_nc',
-    'compras_oc_abiertas', 'compras_oc_diario', 'kardex_auto',
+    'compras_oc_abiertas', 'compras_oc_diario', 'kardex_auto', 'demanda_siesa',
 }
 #: El DLQ decide adentro: fuera de ventana procesa solo `TIPOS_SIN_SIESA`.
 DECIDEN_ADENTRO = {

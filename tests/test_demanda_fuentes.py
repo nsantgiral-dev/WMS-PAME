@@ -504,6 +504,36 @@ class TestRutas:
         assert r.status_code == 400
 
 
+class TestElCron:
+
+    def test_nace_apagado(self, app, db, monkeypatch):
+        from app.services import demanda_fuentes as dfu
+        monkeypatch.delenv('DEMANDA_SIESA', raising=False)
+        monkeypatch.setattr(dfu, 'descargar_ventas_dia',
+                            lambda **k: pytest.fail('apagado no lee nada'))
+        assert dfu.ciclo() == {'omitido': 'DEMANDA_SIESA apagado'}
+
+    def test_sin_un_anio_lee_el_historico_y_con_el_anio_el_reciente(self, app, db, monkeypatch):
+        from app.services import demanda_fuentes as dfu
+        monkeypatch.setenv('DEMANDA_SIESA', 'true')
+        pedidas = []
+        monkeypatch.setattr(dfu, 'descargar_ventas_dia',
+                            lambda reciente=False, **k: pedidas.append(reciente) or {})
+        _siesa(db, 'A', 100)
+        db.session.commit()
+        dfu.ciclo()
+        _siesa(db, 'A', 300, desde=101)
+        db.session.commit()
+        dfu.ciclo()
+        assert pedidas == [False, True]
+
+    def test_la_salud_lo_declara(self, app, db, client, almacen):
+        r = client.get('/api/health/siesa', headers=_cab(app, db, almacen, 'admin'))
+        d = r.get_json()
+        assert d['demanda_compras']['fuente'] == 'NINGUNA'
+        assert any('Compras sin ventas al día' in a for a in d['advertencias'])
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 # La pantalla — Node con util.js real
 # ═════════════════════════════════════════════════════════════════════════════

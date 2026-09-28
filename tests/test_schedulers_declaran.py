@@ -70,6 +70,9 @@ REGISTRADOS = {
     # vive en `correr` / `ciclo`.
     'compras_oc_sync': 'init_scheduler',
     'kardex_auto': 'init_scheduler',
+    # La venta diaria que Siesa suma (m050demanda, 2026-09-27). Nace apagado
+    # (`DEMANDA_SIESA`); el interruptor vive en `ciclo`.
+    'demanda_fuentes': 'init_scheduler',
 }
 
 #: Fuera de `app/services/`. El barrido de vencimientos de flota vivía sin

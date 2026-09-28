@@ -566,6 +566,56 @@ def disparar_descarga(app, reciente=False, lanzar=None) -> dict:
                         'El resultado queda en el estado de la demanda.')}
 
 
+def encendido() -> bool:
+    return os.getenv('DEMANDA_SIESA', '').strip().lower() == 'true'
+
+
+def ciclo() -> dict:
+    """Lo que hace el cron: mientras la cobertura de Siesa no llegue al año,
+    la consulta histórica (lo más reciente primero: cada corrida deja
+    completos los días que alcanzó); después, la reciente. Sin `DEMANDA_SIESA`
+    no lee nada."""
+    if not encendido():
+        return {'omitido': 'DEMANDA_SIESA apagado'}
+    cob = cobertura_siesa()
+    reciente = (cob.get('dias') or 0) >= DIAS_MINIMOS_ANIO
+    return descargar_ventas_dia(reciente=reciente)
+
+
+def init_scheduler(app):
+    """05:40 Bogotá, todos los días. Nace apagado (`DEMANDA_SIESA`)."""
+    try:
+        from apscheduler.schedulers.background import BackgroundScheduler
+        from apscheduler.triggers.cron import CronTrigger
+    except ImportError:
+        logger.error('[DEMANDA_SIESA] APScheduler no instalado')
+        return None
+
+    def _job():
+        with app.app_context():
+            from app.utils.lock import LOCK_DEMANDA_SIESA, advisory_lock
+            with advisory_lock(LOCK_DEMANDA_SIESA, 'demanda_siesa') as tomado:
+                if not tomado:
+                    logger.info('[DEMANDA_SIESA] otro worker ya está leyendo')
+                    return
+                try:
+                    logger.info('[DEMANDA_SIESA] %s', ciclo())
+                except Exception as e:                    # noqa: BLE001
+                    db.session.rollback()
+                    logger.error('[DEMANDA_SIESA] falló: %s', e, exc_info=True)
+
+    scheduler = BackgroundScheduler(timezone='America/Bogota')
+    from app.services.cron_latido import con_latido
+    from app.services.ventana_siesa import solo_en_ventana_siesa
+    scheduler.add_job(func=con_latido('demanda_siesa', solo_en_ventana_siesa(_job)),
+                      trigger=CronTrigger(hour=5, minute=40, timezone='America/Bogota'),
+                      id='demanda_siesa', replace_existing=True,
+                      max_instances=1, misfire_grace_time=1800)
+    scheduler.start()
+    logger.info('[DEMANDA_SIESA] Scheduler (encendido=%s)', encendido())
+    return scheduler
+
+
 def rellenar_ventas_pedido(dias: int = 90, gateway=None, hasta=None) -> dict:
     """Fotografía las facturas desde pedido de los últimos `dias` días, por CO y
     día (la foto de siempre, `fotos_siesa_service.fotografiar_ventas`). Es el

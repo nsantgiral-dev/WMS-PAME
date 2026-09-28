@@ -496,6 +496,12 @@ def create_app():
                 # COMPLETA. **Nace apagado** (`KARDEX_AUTO`): el interruptor
                 # vive en `ciclo`. Lock propio (LOCK_KARDEX_AUTO).
                 ('app.services.kardex_auto',                'init_scheduler',          '[KARDEX_AUTO]'),
+                # La venta diaria que Siesa suma (m050demanda): la fuente de la
+                # demanda de compras. 05:40 Bogotá: la consulta reciente (14
+                # días) o, mientras no haya un año cubierto, la histórica. Solo
+                # GET. **Nace apagado** (`DEMANDA_SIESA`): el interruptor vive
+                # en `ciclo`. Lock propio (LOCK_DEMANDA_SIESA).
+                ('app.services.demanda_fuentes',            'init_scheduler',          '[DEMANDA_SIESA]'),
             ]
             for _mod_path, _fn_name, _tag in _scheduler_pesados:
                 _registrar_scheduler(app, _il, _app_logger, _mod_path, _fn_name, _tag)

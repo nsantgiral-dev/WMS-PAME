@@ -440,6 +440,23 @@ def health_siesa():
                 'Kardex automático: ' + resultado['kardex_auto']['problema_ventana'])
     except Exception as _e_ka:
         resultado['kardex_auto'] = {'error': str(_e_ka)[:200]}
+    # De qué fuente sale la demanda de compras (2026-09-27): la cascada
+    # declara fuente, cobertura y qué decisiones aguanta. Cero Siesa.
+    try:
+        from app.services import demanda_fuentes as _dfu
+        _f = _dfu.fuente_de_demanda()
+        resultado['demanda_compras'] = {
+            'fuente': _f.get('fuente'), 'parcial': _f.get('parcial'),
+            'cobertura': _f.get('cobertura'), 'al_dia': _f.get('al_dia'),
+            'apta_para': _f.get('apta_para'), 'texto': _f.get('texto'),
+            'encendido': _dfu.encendido(),
+            'cron_en_este_proceso': '[DEMANDA_SIESA]' in _activos,
+        }
+        if not (_f.get('apta_para') or {}).get('bandeja'):
+            resultado['advertencias'].append('Compras sin ventas al día: ' + (
+                _f.get('texto') or ''))
+    except Exception as _e_dem:
+        resultado['demanda_compras'] = {'error': str(_e_dem)[:200]}
 
     # Quién opera la plata (validación 2026-09-26): 0 liquidadores o 0 líderes
     # de cartera activos = toda la plata cae en el administrador.
