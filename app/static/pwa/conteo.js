@@ -817,33 +817,53 @@ async function conteoExportar() {
   }
 }
 
-let _CONTEO_OPERARIOS = [];
+// ── A quién: solo quienes cuentan y están (m051asignacion) ──────────────────
+// La lista ya no sale de «todos los usuarios activos con rol operario o jefe»:
+// la arma el servidor (`/api/asignacion/candidatos`) con la misma política que
+// decide el reparto — quien hace conteos rutinarios (el jefe no) y está en
+// turno. Los que podrían pero no están se muestran deshabilitados, con el
+// porqué, para que nadie busque a alguien que no vino.
 
-/** Carga (una vez) la lista de operarios activos — usada por el panel de
- * asignación en lote y por el selector de "forzar operario" del conteo manual. */
-async function _cargarOperariosConteo() {
-  if (_CONTEO_OPERARIOS.length > 0) return _CONTEO_OPERARIOS;
+/**
+ * Candidatos para un conteo rutinario. Sin caché: la presencia cambia.
+ * @param {string|number|null} almacenId - vacío = de todos los almacenes
+ * @returns {Promise<{disponibles: Array, no_disponibles: Array}>}
+ */
+async function _cargarOperariosConteo(almacenId) {
+  const qs = new URLSearchParams({ tipo: 'CONTEO' });
+  if (almacenId) qs.set('almacen_id', String(almacenId));
   try {
-    const todos = await get('/api/auth/usuarios');
-    _CONTEO_OPERARIOS = (todos.usuarios || todos || []).filter(u =>
-      u.activo && ['operario', 'jefe_almacen'].includes(u.rol)
-    );
-  } catch (e) { /* silencioso */ }
-  return _CONTEO_OPERARIOS;
+    const c = await get('/api/asignacion/candidatos?' + qs);
+    return { disponibles: c.disponibles || [], no_disponibles: c.no_disponibles || [] };
+  } catch (e) {
+    return { disponibles: [], no_disponibles: [] };
+  }
 }
 
-/** Show the batch-assign panel and load available operarios. */
+/** Opciones de un selector de destinatario: la cola, los presentes, y los que
+ * no están —deshabilitados, con su motivo—. */
+function _opcionesOperariosConteo(c) {
+  const disp = (c.disponibles || []).map(u =>
+    `<option value="${esc(u.id)}">${esc(u.nombre)}</option>`).join('');
+  const no = (c.no_disponibles || []).map(u =>
+    `<option value="no-${esc(u.id)}" disabled>${esc(u.nombre)} — ${esc(u.presencia_texto)}</option>`).join('');
+  return '<option value="">Nadie en particular (lo toma el primero que esté)</option>' + disp + no;
+}
+
+/** Quién quedó fuera del reparto (desmarcado a mano). Vacío = todos los presentes. */
+let _CONTEO_REPARTO_FUERA = new Set();
+/** El último plan pintado: el botón «Repartir» ejecuta exactamente este cálculo. */
+let _CONTEO_REPARTO = null;
+
+/** Abre el panel de reparto y pinta la vista previa. */
 async function conteoMostrarAsignar() {
   const panel = document.getElementById('conteo-asignar-panel');
   if (!panel) return;
-  const operarios = await _cargarOperariosConteo();
-  const sel = document.getElementById('conteo-asignar-operario');
-  if (sel) {
-    sel.innerHTML = operarios.map(u =>
-      `<option value="${esc(u.id)}">${esc(u.nombre || u.usuario)} (${esc(u.rol)})</option>`
-    ).join('');
-  }
+  _CONTEO_REPARTO_FUERA = new Set();
+  const cant = document.getElementById('conteo-asignar-cantidad');
+  if (cant) cant.value = '';
   panel.style.display = 'block';
+  await conteoRecalcularReparto();
 }
 
 /** Hide the batch-assign panel. */
@@ -852,16 +872,105 @@ function conteoCerrarAsignar() {
   if (panel) panel.style.display = 'none';
 }
 
-/** Assign a batch of unassigned conteo tasks to the selected operario. */
-async function conteoAsignarLote() {
-  const operarioId = document.getElementById('conteo-asignar-operario')?.value;
-  const limite = parseInt(document.getElementById('conteo-asignar-limite')?.value) || 10;
+/** Marca o desmarca a una persona presente y recalcula. @param {number} id */
+async function conteoRepartoAlternar(id) {
+  const n = Number(id);
+  if (_CONTEO_REPARTO_FUERA.has(n)) _CONTEO_REPARTO_FUERA.delete(n);
+  else _CONTEO_REPARTO_FUERA.add(n);
+  await conteoRecalcularReparto();
+}
+
+/** Los parámetros del reparto tal como los ve el líder (almacén, cantidad, personas). */
+function _repartoParametros() {
   const almId = _conteoAlmacenFiltro();
-  if (!operarioId) { alerta('Seleccione un operario', 'error'); return; }
+  const cant = String(document.getElementById('conteo-asignar-cantidad')?.value || '').trim();
+  const presentes = (_CONTEO_REPARTO && _CONTEO_REPARTO.presentes) || [];
+  const elegidos = _CONTEO_REPARTO_FUERA.size
+    ? presentes.map(p => p.id).filter(id => !_CONTEO_REPARTO_FUERA.has(Number(id)))
+    : null;
+  return { almId, cant, elegidos };
+}
+
+/** Pide la vista previa al servidor —el mismo cálculo que el POST— y la pinta. */
+async function conteoRecalcularReparto() {
+  const cuerpo = document.getElementById('conteo-asignar-cuerpo');
+  if (!cuerpo) return;
+  const { almId, cant, elegidos } = _repartoParametros();
+  if (!almId) {
+    cuerpo.innerHTML = '<div style="color:var(--warn-tx);">Elija un almacén en el filtro de arriba: el reparto es por almacén.</div>';
+    return;
+  }
+  const qs = new URLSearchParams({ almacen_id: almId });
+  if (cant) qs.set('cantidad', cant);
+  if (elegidos) qs.set('operario_ids', elegidos.join(','));
+  let plan;
   try {
-    const d = await post('/api/conteo/asignar-lote', { operario_id: parseInt(operarioId), almacen_id: almId ? parseInt(almId) : null, limite });
+    plan = await get('/api/conteo/asignar-lote/vista-previa?' + qs);
+  } catch (e) {
+    cuerpo.innerHTML = `<div style="color:var(--err-tx);">${esc(e.message || 'Error de conexión')}</div>`;
+    return;
+  }
+  _CONTEO_REPARTO = plan;
+  cuerpo.innerHTML = _repartoHTML(plan, cant);
+}
+
+/** HTML de la vista previa del reparto. */
+function _repartoHTML(plan, cant) {
+  const recibe = {};
+  (plan.por_persona || []).forEach(p => { recibe[p.id] = p; });
+  const filas = (plan.presentes || []).map(p => {
+    const fuera = _CONTEO_REPARTO_FUERA.has(Number(p.id));
+    const d = recibe[p.id];
+    const cupo = d ? (d.cupo > 0 ? `cupo hoy ${esc(d.usados_hoy + d.en_cola)}/${esc(d.cupo)}` : 'sin límite de cupo') : '';
+    return `<label style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--brd);cursor:pointer;">
+      <input type="checkbox" ${fuera ? '' : 'checked'} onclick="conteoRepartoAlternar(${esc(p.id)})">
+      <span style="flex:1;color:var(--tx);">${esc(p.nombre)}</span>
+      <span style="font-size:var(--fs-xs);color:var(--tx3);">${esc(cupo)}</span>
+      <b style="min-width:70px;text-align:right;color:${d && d.recibe ? 'var(--ok-tx)' : 'var(--tx3)'};">${fuera ? 'no participa' : `recibe ${esc(d ? d.recibe : 0)}`}</b>
+    </label>`;
+  }).join('');
+  const ausentes = (plan.no_disponibles || []).map(u =>
+    `<div>· ${esc(u.nombre)}: ${esc(u.presencia_texto)}</div>`).join('');
+  const aviso = plan.motivo_sin_reparto
+    ? `<div style="margin:8px 0;padding:8px;border:1px solid var(--warn-brd, var(--brd));border-radius:6px;color:var(--warn-tx);">${esc(plan.motivo_sin_reparto)}</div>` : '';
+  const dobleCiego = plan.saltadas_doble_ciego
+    ? `<div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:4px;">${esc(plan.saltadas_doble_ciego)} segundo(s) conteo(s) no se le pueden dar a nadie de los elegidos: los contó esa misma persona (doble ciego).</div>` : '';
+  return `
+    <div style="font-size:var(--fs-sm);color:var(--tx);margin-bottom:6px;">
+      <b>${esc(plan.pendientes)}</b> sin dueño · se reparten <b>${esc(plan.a_repartir)}</b> · quedan <b>${esc(plan.quedan_en_pool)}</b> en la cola
+    </div>
+    ${aviso}
+    ${filas || '<div style="color:var(--tx3);">Nadie que haga conteos está en turno.</div>'}
+    ${dobleCiego}
+    ${ausentes ? `<div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:8px;">No reciben porque no están:${ausentes}</div>` : ''}
+    <div style="display:flex;gap:8px;align-items:flex-end;margin-top:10px;">
+      <div style="flex:1;">
+        <label style="font-size:var(--fs-xs);color:var(--tx3);display:block;margin-bottom:3px;">¿Cuántos? (vacío = todos los que quepan)</label>
+        <input id="conteo-asignar-cantidad" type="number" inputmode="numeric" min="1" value="${esc(cant || '')}" onchange="conteoRecalcularReparto()"
+          style="width:100%;padding:8px;background:var(--bg-input);border:1px solid var(--brd);border-radius:6px;color:var(--tx);font-size:var(--fs-sm);box-sizing:border-box;">
+      </div>
+      <button onclick="conteoAsignarLote()" ${plan.a_repartir ? '' : 'disabled'}
+        style="padding:8px 14px;background:${plan.a_repartir ? 'var(--pm-fill)' : 'var(--bg-input)'};border:none;color:${plan.a_repartir ? '#fff' : 'var(--tx3)'};border-radius:6px;font-size:var(--fs-xs);font-weight:700;cursor:${plan.a_repartir ? 'pointer' : 'not-allowed'};white-space:nowrap;">Repartir ${esc(plan.a_repartir)}</button>
+    </div>`;
+}
+
+/** Ejecuta el reparto que se ve en la vista previa. */
+async function conteoAsignarLote() {
+  const { almId, cant, elegidos } = _repartoParametros();
+  if (!almId) { alerta('Elija un almacén: el reparto es por almacén', 'error'); return; }
+  const body = { almacen_id: parseInt(almId, 10) };
+  if (cant) body.cantidad = parseInt(cant, 10);
+  if (elegidos) body.operario_ids = elegidos.map(Number);
+  try {
+    const d = await post('/api/conteo/asignar-lote', body);
+    if (!d.asignadas) {
+      alerta(d.motivo_sin_reparto || 'No se repartió ningún conteo', 'advertencia');
+    } else {
+      const quien = (d.por_persona || []).filter(p => p.recibe)
+        .map(p => `${p.nombre} ${p.recibe}`).join(', ');
+      alerta(`${d.asignadas} conteo(s) repartidos: ${quien}. Quedan ${d.quedan_en_pool} en la cola.`, 'exito');
+    }
     conteoCerrarAsignar();
-    alerta(`${d.asignadas} tareas asignadas a ${d.operario_nombre}`, 'exito');
     await cargarConteoStats();
     await cargarConteos(_CONTEO_PAGE);
   } catch (e) { alerta(e.message || 'Error de conexión', 'error'); }
@@ -985,13 +1094,17 @@ async function conteosMostrarFormManual() {
   document.getElementById('conteo-form-manual').style.display = 'block';
   const aviso = document.getElementById('conteo-manual-aviso-pos');
   if (aviso) aviso.innerHTML = avisoCajasPosHtml();
-  const operarios = await _cargarOperariosConteo();
-  const selOp = document.getElementById('conteo-manual-operario');
-  if (selOp) {
-    selOp.innerHTML = '<option value="">Auto-asignar (el que lo tome primero)</option>' +
-      operarios.map(u => `<option value="${esc(u.id)}">${esc(u.nombre || u.usuario)} (${esc(u.rol)})</option>`).join('');
-  }
+  await conteoManualCargarOperarios();
   document.getElementById('conteo-manual-codigo').focus();
+}
+
+/** Quién puede recibir el conteo forzado: los que cuentan en ESE almacén y
+ * están. Se recarga al cambiar de almacén. */
+async function conteoManualCargarOperarios() {
+  const selOp = document.getElementById('conteo-manual-operario');
+  if (!selOp) return;
+  const c = await _cargarOperariosConteo(document.getElementById('conteo-manual-almacen')?.value);
+  selOp.innerHTML = _opcionesOperariosConteo(c);
 }
 /** Hide the manual conteo form and clear its inputs. */
 function conteosOcultarFormManual() {

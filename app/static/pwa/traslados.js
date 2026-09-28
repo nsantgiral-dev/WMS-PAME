@@ -697,19 +697,40 @@ async function trasDespacharDirecto(id) {
 }
 
 /**
+ * Opciones del selector «quién recoge»: solo quienes pican en la bodega de
+ * origen y están en turno (el servidor decide, `asignacion.candidatos`); los que
+ * podrían pero no están van deshabilitados con su motivo.
+ * @param {{operarios?: Array, no_disponibles?: Array}} d
+ * @param {boolean} conCola - agrega «Nadie en particular» (el traslado queda en la cola)
+ */
+function _trasOpcionesOperarios(d, conCola) {
+  const disp = (d.operarios || []).map(o => `<option value="${esc(o.id)}">${esc(o.nombre)}</option>`).join('');
+  const no = (d.no_disponibles || []).map(o =>
+    `<option value="no-${esc(o.id)}" disabled>${esc(o.nombre)} — ${esc(o.motivo)}</option>`).join('');
+  const cola = conCola ? '<option value="">Nadie en particular (lo toma el primero de la bodega que esté)</option>' : '';
+  return cola + disp + no;
+}
+
+/**
  * Show a modal to reassign a different operario to a traslado.
  * @param {number} id - Traslado solicitud ID.
  */
 async function trasReasignarOperario(id) {
   let operariosData;
   try {
-    operariosData = await get('/api/traslados/operarios-disponibles');
+    operariosData = await get(`/api/traslados/operarios-disponibles?solicitud_id=${encodeURIComponent(id)}`);
   } catch (e) { alerta('Error cargando operarios', 'error'); return; }
 
   const operarios = operariosData.operarios || [];
-  if (!operarios.length) { alerta('No hay operarios disponibles', 'advertencia'); return; }
+  if (!operarios.length) {
+    alerta('Nadie de la bodega de origen que pique está en turno ahora'
+      + ((operariosData.no_disponibles || []).length
+        ? ': ' + operariosData.no_disponibles.map(o => `${o.nombre} (${o.motivo})`).join('; ') : ''),
+      'advertencia');
+    return;
+  }
 
-  const opciones = operarios.map(o => `<option value="${esc(o.id)}">${esc(o.nombre)}</option>`).join('');
+  const opciones = _trasOpcionesOperarios(operariosData, false);
   const modal = document.createElement('div');
   modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:900;display:flex;align-items:center;justify-content:center;padding:20px;';
   modal.innerHTML = `
@@ -745,7 +766,7 @@ async function trasAprobar(id) {
   try {
     [solicitud, operariosData] = await Promise.all([
       fetch(API + `/api/traslados/${id}`, { headers: { Authorization: 'Bearer ' + TOKEN } }).then(r => r.json()),
-      fetch(API + `/api/traslados/operarios-disponibles`, { headers: { Authorization: 'Bearer ' + TOKEN } }).then(r => r.json()),
+      fetch(API + `/api/traslados/operarios-disponibles?solicitud_id=${encodeURIComponent(id)}`, { headers: { Authorization: 'Bearer ' + TOKEN } }).then(r => r.json()),
     ]);
   } catch (e) { alerta('Error de conexión', 'error'); return; }
 
@@ -766,9 +787,7 @@ async function trasAprobar(id) {
     </div>
   `).join('');
 
-  const opcioneOperarios = operarios.length
-    ? `<option value="">Sin asignar (admin recoge)</option>` + operarios.map(o => `<option value="${esc(o.id)}">${esc(o.nombre)}</option>`).join('')
-    : `<option value="">No hay operarios disponibles</option>`;
+  const opcioneOperarios = _trasOpcionesOperarios(operariosData, true);
 
   const modal = document.createElement('div');
   modal.innerHTML = `
@@ -810,7 +829,7 @@ async function trasAprobar(id) {
       });
       const d = await r.json();
       if (r.ok) {
-        alerta(operario_id ? 'Aprobado — operario notificado' : 'Aprobado — sin operario asignado', 'exito');
+        alerta(operario_id ? 'Aprobado — operario notificado' : 'Aprobado — en la cola: lo recoge el primero de la bodega que esté', 'exito');
         cargarTrasladosAdmin();
       } else { alerta(d.error || 'Error', 'error'); }
     } catch (e) { alerta('Error de conexión', 'error'); }
@@ -1323,7 +1342,7 @@ async function reqEditarAprobar(id) {
   try {
     [solicitud, operariosData] = await Promise.all([
       fetch(API + `/api/traslados/${id}`, { headers: { Authorization: 'Bearer ' + TOKEN } }).then(r => r.json()),
-      fetch(API + `/api/traslados/operarios-disponibles`, { headers: { Authorization: 'Bearer ' + TOKEN } }).then(r => r.json()),
+      fetch(API + `/api/traslados/operarios-disponibles?solicitud_id=${encodeURIComponent(id)}`, { headers: { Authorization: 'Bearer ' + TOKEN } }).then(r => r.json()),
     ]);
   } catch (e) { alerta('Error de conexión', 'error'); return; }
 
@@ -1344,9 +1363,7 @@ async function reqEditarAprobar(id) {
     </div>
   `).join('');
 
-  const opcionesOperarios = operarios.length
-    ? `<option value="">Sin asignar (admin recoge)</option>` + operarios.map(o => `<option value="${esc(o.id)}">${esc(o.nombre)}</option>`).join('')
-    : `<option value="">No hay operarios disponibles</option>`;
+  const opcionesOperarios = _trasOpcionesOperarios(operariosData, true);
 
   const modal = document.createElement('div');
   modal.innerHTML = `
@@ -1388,7 +1405,7 @@ async function reqEditarAprobar(id) {
       });
       const d = await r.json();
       if (r.ok) {
-        alerta(operario_id ? 'Aprobado — operario notificado' : 'Aprobado — sin operario asignado', 'exito');
+        alerta(operario_id ? 'Aprobado — operario notificado' : 'Aprobado — en la cola: lo recoge el primero de la bodega que esté', 'exito');
         cargarRequisiciones();
       } else { alerta(d.error || 'Error', 'error'); }
     } catch (e) { alerta('Error de conexión', 'error'); }

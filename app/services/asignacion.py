@@ -378,6 +378,9 @@ def plan_reparto_conteos(almacen_id, *, cantidad=None, operario_ids=None, ahora=
         'a_repartir': a_repartir,
         'quedan_en_pool': pendientes - a_repartir,
         'por_persona': [{k: v for k, v in p.items() if not k.startswith('_')} for p in personas],
+        # Todos los presentes que cuentan, elegidos o no: la pantalla los
+        # muestra para poder volver a marcar al que se desmarcó.
+        'presentes': [{'id': c['id'], 'nombre': c['nombre']} for c in cands['disponibles']],
         'no_disponibles': cands['no_disponibles'],
         'rechazados': rechazados,
         'saltadas_doble_ciego': saltadas_doble_ciego,
@@ -629,7 +632,8 @@ def equipo(almacen_id=None) -> dict:
         personas.append({'id': u.id, 'nombre': u.nombre, 'rol': u.rol,
                          'presencia': p['codigo'], 'presencia_texto': p['texto'],
                          'disponible': p['disponible'], 'visto_at': p['visto_at'],
-                         'ausencia': p['ausencia'], 'hace': hace, 'carga': carga})
+                         'ausencia': p['ausencia'], 'hace': hace, 'carga': carga,
+                         'cupo_conteo': cupo_conteo(u) if CONTEO in hace else None})
         if not p['disponible'] and (carga['picking_en_curso'] or carga['empaque_en_curso']):
             decidir.append({'id': u.id, 'nombre': u.nombre, 'presencia_texto': p['texto'],
                             'picking_en_curso': carga['picking_en_curso'],

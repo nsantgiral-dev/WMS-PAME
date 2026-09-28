@@ -1307,9 +1307,8 @@ async function auditoriaResultadoCambio(id) {
   const sel = document.getElementById(`auditoria-operario-${id}`);
   if (resultado === 'ENCONTRADO' && sel && sel.options.length <= 1
       && typeof _cargarOperariosConteo === 'function') {
-    const operarios = await _cargarOperariosConteo();
-    sel.innerHTML = '<option value="">Auto-asignar (el que lo tome primero)</option>' +
-      operarios.map(u => `<option value="${esc(u.id)}">${esc(u.nombre || u.usuario)} (${esc(u.rol)})</option>`).join('');
+    // Solo quienes cuentan y están (conteo.js → /api/asignacion/candidatos).
+    sel.innerHTML = _opcionesOperariosConteo(await _cargarOperariosConteo(ALMACEN_ID));
   }
 }
 
@@ -1711,7 +1710,7 @@ function _renderTareasBodegaHTML(tareas) {
               <div style="font-size:var(--fs-xs);color:var(--tx3);margin:4px 0 6px;">El conteo es lo que ajusta Siesa — esta auditoría no mueve inventario.</div>
               <select id="auditoria-operario-${esc(t.id)}"
                 style="width:100%;padding:8px;background:var(--bg-s);border:1px solid var(--brd);border-radius:8px;color:var(--tx);font-size:var(--fs-xs);">
-                <option value="">Auto-asignar (el que lo tome primero)</option>
+                <option value="">Nadie en particular (lo toma el primero que esté)</option>
               </select>
             </div>
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;">
@@ -1802,62 +1801,144 @@ function _tareaActualHTML(t) {
   `;
 }
 
-/** Fetch and render operator list with 7-day productivity metrics. */
+// ── Operarios: quién está hoy, qué tiene y sus ausencias (m051asignacion) ────
+// La presencia la decide el servidor (`app/services/presencia.py`): en turno =
+// activo, sin ausencia declarada y con señal en las últimas horas. Esta pantalla
+// solo la muestra y deja declarar/anular una ausencia; al declararla, lo que la
+// persona tenía asignado vuelve solo a la cola.
+
+const _PRESENCIA_CHIP = {
+  EN_TURNO:  ['🟢', 'En turno', 'var(--ok-tx)'],
+  SIN_SENAL: ['⚪', 'Sin señal', 'var(--tx3)'],
+  AUSENTE:   ['🔴', 'Ausente', 'var(--err-tx)'],
+  INACTIVO:  ['⚫', 'Inactivo', 'var(--tx3)'],
+};
+
+/** Qué trabajo hace cada quien (tipos de `asignacion`). */
+const _HACE_TXT = { CONTEO: 'cuenta', CONTEO_DEFINITIVO: 'conteo definitivo', PICKING: 'pica', REPOSICION: 'abastece' };
+
+/** Línea de presencia de una persona del equipo. */
+function _presenciaHTML(p) {
+  const [punto, etiqueta, color] = _PRESENCIA_CHIP[p.presencia] || ['⚪', p.presencia, 'var(--tx3)'];
+  const detalle = p.presencia === 'EN_TURNO' ? '' : ` — ${esc(p.presencia_texto)}`;
+  return `<div style="font-size:var(--fs-xs);font-weight:700;color:${color};margin:2px 0;">${punto} ${esc(etiqueta)}${detalle}</div>`;
+}
+
+/** «Tiene: …» — lo que la persona tiene a su nombre ahora. */
+function _cargaHTML(c) {
+  if (!c) return '';
+  const partes = [
+    [c.conteos_en_cola, 'conteo(s) en su cola'], [c.conteos_en_curso, 'conteo(s) en curso'],
+    [c.picking_asignado, 'picking asignado'], [c.picking_en_curso, 'picking en curso'],
+    [c.reposicion_en_curso, 'reposición en curso'], [c.empaque_en_curso, 'empaque en curso'],
+  ].filter(([n]) => n > 0).map(([n, t]) => `${esc(n)} ${t}`);
+  return partes.length
+    ? `<div style="font-size:var(--fs-xs);color:var(--tx2);margin-bottom:2px;">Tiene: ${partes.join(' · ')}</div>` : '';
+}
+
+/** Botones y formulario de ausencia de una persona. */
+function _ausenciaHTML(p) {
+  if (p.ausencia) {
+    return `<button onclick="operarioAnularAusencia(${esc(p.ausencia.id)})"
+      style="margin-top:6px;padding:6px 10px;background:var(--bg-input);border:1px solid var(--brd);color:var(--tx2);border-radius:6px;font-size:var(--fs-xs);cursor:pointer;">Ya volvió — quitar la ausencia</button>`;
+  }
+  return `<button onclick="operarioFormAusencia(${esc(p.id)})"
+      style="margin-top:6px;padding:6px 10px;background:var(--bg-input);border:1px solid var(--brd);color:var(--tx2);border-radius:6px;font-size:var(--fs-xs);cursor:pointer;">Marcar ausencia</button>
+    <div id="aus-form-${esc(p.id)}" style="display:none;margin-top:8px;padding:10px;border:1px solid var(--brd);border-radius:8px;background:var(--bg-s);">
+      <div style="font-size:var(--fs-xs);color:var(--tx3);margin-bottom:6px;">Lo que tenga asignado vuelve a la cola, y no recibe trabajo hasta la fecha de regreso.</div>
+      <select id="aus-motivo-${esc(p.id)}" style="width:100%;padding:8px;margin-bottom:6px;background:var(--bg-input);border:1px solid var(--brd);border-radius:6px;color:var(--tx);font-size:var(--fs-sm);">
+        <option value="INCAPACIDAD">Incapacidad</option><option value="VACACIONES">Vacaciones</option>
+        <option value="PERMISO">Permiso</option><option value="CALAMIDAD">Calamidad</option><option value="OTRO">Otro</option>
+      </select>
+      <label style="font-size:var(--fs-xs);color:var(--tx3);display:block;margin-bottom:3px;">Regresa el (vacío = sin fecha todavía)</label>
+      <input id="aus-regreso-${esc(p.id)}" type="date" style="width:100%;padding:8px;margin-bottom:6px;background:var(--bg-input);border:1px solid var(--brd);border-radius:6px;color:var(--tx);font-size:var(--fs-sm);box-sizing:border-box;">
+      <input id="aus-nota-${esc(p.id)}" type="text" placeholder="Nota (opcional)" style="width:100%;padding:8px;margin-bottom:6px;background:var(--bg-input);border:1px solid var(--brd);border-radius:6px;color:var(--tx);font-size:var(--fs-sm);box-sizing:border-box;">
+      <button onclick="operarioGuardarAusencia(${esc(p.id)})" style="width:100%;padding:8px;background:var(--pm-fill);border:none;color:#fff;border-radius:6px;font-size:var(--fs-xs);font-weight:700;cursor:pointer;">Guardar ausencia</button>
+    </div>`;
+}
+
+/** Fetch and render the team: presence, what each one has, and 7-day productivity. */
 async function cargarOperarios() {
   const el = document.getElementById('lista-operarios');
   if (!el) return;
   try {
-    const [prod, usuariosData] = await Promise.all([
+    const qs = ALMACEN_ID ? '?almacen_id=' + encodeURIComponent(ALMACEN_ID) : '';
+    const [prod, eq] = await Promise.all([
       get('/api/dashboard/productividad?almacen_id=' + ALMACEN_ID + '&dias=7'),
-      get('/api/auth/usuarios')
+      get('/api/asignacion/equipo' + qs),
     ]);
     const metricas = {};
     (prod.operarios || []).forEach(op => { metricas[op.operario_id || op.id] = op; });
+    const personas = eq.personas || [];
+    if (!personas.length) { el.innerHTML = '<div style="color:var(--tx3);text-align:center;padding:40px;">Sin personal de bodega en este almacén</div>'; return; }
 
-    // Solo quien el servidor lista en la productividad (Roles.OPERAN_TAREAS):
-    // el liquidador o la tienda no son operarios con 0 tareas.
-    const todos = (usuariosData.usuarios || []).filter(u => u.activo && metricas[u.id]);
-    if (!todos.length) { el.innerHTML = '<div style="color:var(--tx3);text-align:center;padding:40px;">Sin operarios en esta bodega</div>'; return; }
+    const decidir = (eq.requieren_decision || []).map(d =>
+      `<div>· ${esc(d.nombre)} (${esc(d.presencia_texto)}): ${d.picking_en_curso ? `${esc(d.picking_en_curso)} picking a medio recoger` : ''}${d.picking_en_curso && d.empaque_en_curso ? ' y ' : ''}${d.empaque_en_curso ? `${esc(d.empaque_en_curso)} empaque a medio cerrar` : ''}</div>`).join('');
+    const cabeza = `
+      <div class="tabla-card" style="margin-bottom:8px;">
+        <div style="font-size:var(--fs-sm);font-weight:700;color:var(--tx);">En turno: ${esc(eq.en_turno)} de ${esc(personas.length)}</div>
+        <div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:2px;">En turno = entró a la aplicación en las últimas ${esc(eq.ventana_senal_horas)} h y no tiene ausencia. El trabajo asignado a quien no está vuelve solo a la cola.</div>
+        ${decidir ? `<div style="margin-top:8px;padding:8px;border:1px solid var(--brd);border-radius:6px;font-size:var(--fs-xs);color:var(--warn-tx);"><b>Por decidir</b> — tareas a medio hacer de alguien que no está (hay mercancía a medio mover, no se sueltan solas):${decidir}</div>` : ''}
+      </div>`;
 
-    // Ordenar: más tareas primero
-    todos.sort((a, b) => (metricas[b.id]?.total_tareas || 0) - (metricas[a.id]?.total_tareas || 0));
-
-    el.innerHTML = todos.map((u, i) => {
-      const op = metricas[u.id] || { total_tareas: 0, pickings_completados: 0, packings_completados: 0, conteos_completados: 0, reposiciones_completadas: 0, tarea_actual: null };
-      const badges = [u.puede_picar && '<span style="background:#1e40af;color:var(--tx);border-radius:4px;padding:1px 5px;font-size:var(--fs-xs);">Picker</span>',
-                      u.puede_empacar && '<span style="background:#6b21a8;color:var(--tx);border-radius:4px;padding:1px 5px;font-size:var(--fs-xs);">Empacador</span>',
-                      u.puede_abastecer && '<span style="background:#7c2d12;color:#fdba74;border-radius:4px;padding:1px 5px;font-size:var(--fs-xs);">Abastecedor</span>',
-                      u.puede_organizar_layout && '<span style="background:#1e3a5f;color:var(--info-tx);border-radius:4px;padding:1px 5px;font-size:var(--fs-xs);">Layout</span>'].filter(Boolean).join(' ');
-      const color = op.total_tareas > 0 ? (i === 0 ? '#4ade80' : '#fff') : '#555';
+    el.innerHTML = cabeza + personas.map(p => {
+      const op = metricas[p.id] || { total_tareas: 0, pickings_completados: 0, packings_completados: 0, conteos_completados: 0, reposiciones_completadas: 0, tarea_actual: null };
       return `
       <div class="tabla-card">
-        <div style="display:flex;justify-content:space-between;align-items:center;">
-          <div>
-            <div style="font-size:var(--fs-sm);font-weight:600;">${esc(u.nombre)}</div>
-            <div style="font-size:var(--fs-xs);color:var(--tx3);margin-bottom:2px;">${esc(u.rol)} ${badges}</div>
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">
+          <div style="flex:1;min-width:0;">
+            <div style="font-size:var(--fs-sm);font-weight:600;">${esc(p.nombre)}</div>
+            <div style="font-size:var(--fs-xs);color:var(--tx3);margin-bottom:2px;">${esc(p.rol)}${(p.hace || []).length ? ' · ' + (p.hace || []).map(t => esc(_HACE_TXT[t] || t)).join(' · ') : ''}</div>
+            ${_presenciaHTML(p)}
+            ${_cargaHTML(p.carga)}
             ${_tareaActualHTML(op.tarea_actual)}
             <div style="font-size:var(--fs-xs);color:var(--tx3);">Pick:${esc(op.pickings_completados)} Pack:${esc(op.packings_completados)} Repo:${esc(op.reposiciones_completadas || 0)} Conteos:${esc(op.conteos_completados)}</div>
-            ${u.puede_picar && op.capacidad_diaria_conteo != null && u.capacidad_diaria_conteo != null ? (() => {
-              const cap = u.capacidad_diaria_conteo;
-              const hoy = op.conteos_hoy || 0;
-              const pct = cap > 0 ? Math.min(100, Math.round(hoy / cap * 100)) : 0;
-              const col = pct >= 100 ? '#ef4444' : pct >= 70 ? '#f59e0b' : '#4ade80';
-              return `<div style="margin-top:4px;">
-                <div style="display:flex;justify-content:space-between;font-size:var(--fs-xs);color:var(--tx3);margin-bottom:2px;">
-                  <span>Conteos hoy</span><span style="color:${col};font-weight:600;">${hoy}/${cap > 0 ? cap : '∞'}</span>
-                </div>
-                ${cap > 0 ? `<div style="background:var(--bg-s2);border-radius:3px;height:3px;overflow:hidden;"><div style="background:${col};width:${pct}%;height:100%;border-radius:3px;transition:width .3s;"></div></div>` : ''}
-              </div>`;
-            })() : ''}
+            ${p.cupo_conteo ? `<div style="font-size:var(--fs-xs);color:var(--tx3);">Conteos hoy: ${esc(p.cupo_conteo.usados_hoy)} hechos + ${esc(p.cupo_conteo.en_cola)} en su cola / ${p.cupo_conteo.cupo > 0 ? esc(p.cupo_conteo.cupo) : 'sin límite'}</div>` : ''}
+            ${_ausenciaHTML(p)}
           </div>
           <div style="text-align:right;">
-            <div style="font-size:var(--fs-2xl);font-weight:800;color:${color}">${esc(op.total_tareas)}</div>
+            <div style="font-size:var(--fs-2xl);font-weight:800;color:${op.total_tareas > 0 ? 'var(--tx)' : 'var(--tx3)'}">${esc(op.total_tareas)}</div>
             <div style="font-size:var(--fs-xs);color:var(--tx3);">tareas 7d</div>
           </div>
         </div>
       </div>`;
     }).join('');
-  } catch (e) { el.innerHTML = '<div style="color:var(--err-tx);">Error</div>'; }
+  } catch (e) { el.innerHTML = `<div style="color:var(--err-tx);">${esc(e.message || 'Error cargando el equipo')}</div>`; }
+}
+
+/** Abre/cierra el formulario de ausencia de una persona. @param {number} id */
+function operarioFormAusencia(id) {
+  const f = document.getElementById(`aus-form-${id}`);
+  if (f) f.style.display = f.style.display === 'none' ? 'block' : 'none';
+}
+
+/** Declara la ausencia; lo que tenía asignado vuelve a la cola. @param {number} id */
+async function operarioGuardarAusencia(id) {
+  const motivo = document.getElementById(`aus-motivo-${id}`)?.value;
+  const regreso = document.getElementById(`aus-regreso-${id}`)?.value || null;
+  const nota = (document.getElementById(`aus-nota-${id}`)?.value || '').trim() || null;
+  try {
+    const r = await post('/api/asignacion/ausencias', { usuario_id: id, motivo, regreso, nota });
+    const d = r.devuelto || {};
+    const vuelven = [[d.conteos, 'conteo(s)'], [d.picking, 'picking'], [d.reposicion, 'reposición']]
+      .filter(([n]) => n > 0).map(([n, t]) => `${n} ${t}`).join(', ');
+    const pendiente = (d.requieren_decision || []).length;
+    alerta('Ausencia registrada.' + (vuelven ? ` Volvieron a la cola: ${vuelven}.` : '')
+      + (pendiente ? ` Quedan ${pendiente} tarea(s) a medio hacer que usted tiene que decidir.` : ''),
+      pendiente ? 'advertencia' : 'exito');
+    await cargarOperarios();
+  } catch (e) { alerta(e.message || 'Error de conexión', 'error'); }
+}
+
+/** La persona volvió antes (o la ausencia fue un error). @param {number} ausenciaId */
+async function operarioAnularAusencia(ausenciaId) {
+  if (!await _modalConfirmar('La persona vuelve a recibir trabajo en cuanto entre a la aplicación.',
+      { titulo: 'Quitar la ausencia', textoConfirmar: 'Sí, ya volvió', textoCancelar: 'Volver' })) return;
+  try {
+    await post(`/api/asignacion/ausencias/${ausenciaId}/anular`, { motivo: 'Volvió' });
+    alerta('Ausencia quitada', 'exito');
+    await cargarOperarios();
+  } catch (e) { alerta(e.message || 'Error de conexión', 'error'); }
 }
 
 let _filtroAlmacenStockListo = false;

@@ -1963,7 +1963,7 @@
             <span id="cs-atrasados-wrap" style="font-size:var(--fs-xs);color:var(--tx3);display:none;">Atrasados: <span id="cs-atrasados" style="color:var(--red);font-weight:700;">0</span></span>
           </div>
           <button id="cs-btn-asignar" onclick="conteoMostrarAsignar()" style="display:none;padding:4px 10px;background:var(--pm-dim);border:1px solid var(--pm-border);color:var(--acento-tx);border-radius:6px;font-size:var(--fs-xs);font-weight:700;cursor:pointer;white-space:nowrap;">
-            Asignar <span id="cs-sin-asignar">0</span> pendientes
+            Repartir <span id="cs-sin-asignar">0</span> sin dueño
           </button>
           <span id="cs-fallos-wrap" style="display:none;align-items:center;gap:4px;">
             <span onclick="conteoReintentarFallos()" style="padding:4px 10px;background:var(--rbg);border:1px solid var(--rbrd);color:var(--red);border-radius:6px;font-size:var(--fs-xs);font-weight:700;cursor:pointer;white-space:nowrap;">
@@ -1975,21 +1975,14 @@
         </div>
       </div>
 
-      <!-- Modal asignar lote -->
+      <!-- Repartir conteos sin dueño entre los presentes (m051asignacion) -->
       <div id="conteo-asignar-panel" style="display:none;background:var(--bg-s);border:1px solid var(--brd);border-radius:10px;padding:12px;margin-bottom:10px;">
-        <div style="font-size:var(--fs-xs);font-weight:700;color:var(--acento-tx);margin-bottom:8px;">Asignar tareas pendientes a operario</div>
-        <div style="display:flex;gap:8px;align-items:flex-end;">
-          <div style="flex:2;">
-            <label style="font-size:var(--fs-xs);color:var(--tx3);display:block;margin-bottom:3px;">Operario</label>
-            <select id="conteo-asignar-operario" style="width:100%;padding:8px;background:var(--bg-input);border:1px solid var(--brd);border-radius:6px;color:var(--tx);font-size:var(--fs-sm);"></select>
-          </div>
-          <div style="flex:1;">
-            <label style="font-size:var(--fs-xs);color:var(--tx3);display:block;margin-bottom:3px;">Cantidad</label>
-            <input id="conteo-asignar-limite" type="number" inputmode="numeric" value="10" min="1" max="50" style="width:100%;padding:8px;background:var(--bg-input);border:1px solid var(--brd);border-radius:6px;color:var(--tx);font-size:var(--fs-sm);box-sizing:border-box;">
-          </div>
-          <button onclick="conteoAsignarLote()" style="padding:8px 14px;background:var(--pm-fill);border:none;color:#fff;border-radius:6px;font-size:var(--fs-xs);font-weight:700;cursor:pointer;white-space:nowrap;">Asignar</button>
-          <button onclick="conteoCerrarAsignar()" style="padding:8px 10px;background:var(--bg-input);border:1px solid var(--brd);color:var(--tx2);border-radius:6px;font-size:var(--fs-xs);cursor:pointer;">X</button>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+          <div style="font-size:var(--fs-xs);font-weight:700;color:var(--acento-tx);">Repartir conteos sin dueño entre los que están</div>
+          <button onclick="conteoCerrarAsignar()" style="padding:4px 10px;background:var(--bg-input);border:1px solid var(--brd);color:var(--tx2);border-radius:6px;font-size:var(--fs-xs);cursor:pointer;">Cerrar</button>
         </div>
+        <div style="font-size:var(--fs-xs);color:var(--tx3);margin-bottom:8px;line-height:1.5;">Cada persona en turno recibe según lo que le queda de su cupo de hoy. Quien no ha venido o está ausente no recibe nada. Lo que no se reparta sigue en la cola: el primero que pida trabajo lo toma.</div>
+        <div id="conteo-asignar-cuerpo" style="font-size:var(--fs-sm);color:var(--tx2);">Calculando…</div>
       </div>
 
       <!-- 3 vistas operacionales -->
@@ -2039,7 +2032,7 @@
         <div style="font-size:var(--fs-sm);font-weight:700;color:var(--acento-tx);margin-bottom:10px;">Crear conteo manual</div>
         <!-- Lo llena conteosMostrarFormManual con el aviso de cajas POS (conteo.js) -->
         <div id="conteo-manual-aviso-pos"></div>
-        <select id="conteo-manual-almacen"
+        <select id="conteo-manual-almacen" onchange="conteoManualCargarOperarios()"
           style="width:100%;padding:10px;background:var(--bg-input);border:1px solid var(--brd);border-radius:8px;color:var(--tx);font-size:var(--fs-sm);margin-bottom:8px;">
           <option value="">Cargando almacenes...</option>
         </select>
@@ -2053,7 +2046,7 @@
         </div>
         <select id="conteo-manual-operario" title="Forzar a quién le cae el primer conteo (CC1) — opcional"
           style="width:100%;padding:10px;background:var(--bg-input);border:1px solid var(--brd);border-radius:8px;color:var(--tx);font-size:var(--fs-sm);margin-bottom:8px;">
-          <option value="">Auto-asignar (el que lo tome primero)</option>
+          <option value="">Nadie en particular (lo toma el primero que esté)</option>
         </select>
         <div id="conteo-manual-error" style="color:var(--err-tx);font-size:var(--fs-xs);min-height:16px;margin-bottom:8px;"></div>
         <div style="display:flex;gap:8px;">
