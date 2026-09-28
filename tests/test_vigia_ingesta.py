@@ -24,11 +24,14 @@ from unittest.mock import patch
 
 import pytest
 
-from app.services.vigia_service import SerieVigia, VigiaService
+from app.services.vigia_service import SerieVigia, VigiaService, hoy_bogota
 
 
 def _lunes_pasado():
-    hoy = date.today()
+    # El «hoy» del servicio (Bogotá), no el del contenedor: el domingo después
+    # de las 7 p.m. en UTC ya es lunes y el «lunes pasado» caía en la semana en
+    # curso de Bogotá — 8 rojos cinco horas por semana, justo en el deploy.
+    hoy = hoy_bogota()
     lunes_actual = hoy - timedelta(days=hoy.weekday())
     return lunes_actual - timedelta(days=7)
 
@@ -125,7 +128,7 @@ class TestLoQueNoSeEscribe:
 
     def test_la_semana_en_curso_no_se_escribe(self, app, db, base_historica):
         """Una semana a medias parece un desplome."""
-        hoy = date.today()
+        hoy = hoy_bogota()
         lunes_actual = hoy - timedelta(days=hoy.weekday())
         r = VigiaService.alimentar_series_facturacion(semana=lunes_actual)
         assert 'error' in r

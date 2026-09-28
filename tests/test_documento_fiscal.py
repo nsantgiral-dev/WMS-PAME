@@ -29,6 +29,8 @@ import uuid
 from datetime import datetime, timedelta
 from unittest.mock import MagicMock, patch
 
+import time
+
 import pytest
 import requests
 
@@ -864,6 +866,10 @@ class TestElCierreSinSiesaSeNiegaLimpio:
     def test_circuito_abierto(self, db, almacen, producto, siesa_real, monkeypatch, preguntas):
         from app.services.documento_fiscal import MENSAJE_SIESA_NO_DISPONIBLE
         monkeypatch.setattr(siesa_real, '_cb_state', 'OPEN')
+        # Recién abierto: el intervalo del probe no ha vencido. Sin esto, con
+        # el proceso de pytest vivo más de 60 s el circuito deja pasar el
+        # probe (H1) y el test depende de cuándo corre en la suite.
+        monkeypatch.setattr(siesa_real, '_cb_last_probe', time.monotonic())
         t = _caja_para_cerrar(db, almacen, producto)
         r = self._cerrar(t)
         assert not r.exitoso and r.mensaje.startswith(MENSAJE_SIESA_NO_DISPONIBLE)
@@ -902,6 +908,10 @@ class TestElCierreSinSiesaSeNiegaLimpio:
         monkeypatch.setattr(documento_fiscal, '_ahora_bogota',
                             lambda: datetime(2026, 9, 25, 23, 30))
         monkeypatch.setattr(siesa_real, '_cb_state', 'OPEN')
+        # Recién abierto: el intervalo del probe no ha vencido. Sin esto, con
+        # el proceso de pytest vivo más de 60 s el circuito deja pasar el
+        # probe (H1) y el test depende de cuándo corre en la suite.
+        monkeypatch.setattr(siesa_real, '_cb_last_probe', time.monotonic())
         t = _caja_para_cerrar(db, almacen, producto)
         r = self._cerrar(t)
         assert not r.exitoso and r.mensaje.startswith(MENSAJE_SIESA_NO_DISPONIBLE)

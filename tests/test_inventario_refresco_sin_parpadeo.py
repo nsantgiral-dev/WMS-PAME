@@ -130,6 +130,12 @@ function extraer(firma) {
   return app.slice(i, j + 1);
 }
 vm.runInContext(extraer('async function cargarAdmin(') + '\n' + extraer('function tab(id)'), ctx);
+// Los roles de supervisión, LITERALES de app.js (pestañas por rol, 2026-09-27):
+// la cola del conteo definitivo solo se pide con uno de ellos. El tick que se
+// mide aquí es el del admin.
+const _rs = app.match(/const _ROLES_SUPERVISION = \[[^\]]*\];/);
+if (!_rs) throw new Error('no está en app.js: const _ROLES_SUPERVISION');
+vm.runInContext(_rs[0].replace('const ', 'var ') + '\nvar OPERARIO = { rol: "admin" };', ctx);
 vm.runInContext('_INV_ALMACENES = [{ id: 1, nombre: "NB1" }, { id: 2, nombre: "NC1" }];', ctx);
 const js = (c) => vm.runInContext(c, ctx);
 $('lider-almacen').options = [{}, {}]; $('lider-almacen').value = '1';

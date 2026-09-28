@@ -153,6 +153,10 @@ class TestLaVentanaEsUnaParaTodos:
         monkeypatch.setattr(connekta, '_cb_state', 'CLOSED', raising=False)
         assert documento_fiscal.siesa_disponible_para_facturar(datetime(2026, 9, 25, 23, 45))[0]
         monkeypatch.setattr(connekta, '_cb_state', 'OPEN', raising=False)
+        # Recién abierto (intervalo del probe sin vencer): si no, depende de
+        # cuánto lleva vivo el proceso de pytest (H1, circuito_admite_intento).
+        import time
+        monkeypatch.setattr(connekta, '_cb_last_probe', time.monotonic(), raising=False)
         ok, motivo = documento_fiscal.siesa_disponible_para_facturar(datetime(2026, 9, 25, 23, 45))
         assert ok is False and motivo.startswith(documento_fiscal.MENSAJE_SIESA_NO_DISPONIBLE)
 
