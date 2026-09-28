@@ -117,6 +117,45 @@ def dlq_puede_postear(momento=None) -> bool:
     return ventana_abierta(momento)
 
 
+#: Orden de la cola (2026-09-26). Hasta hoy `q.limit(20)` sin ORDER BY: en
+#: temporada, con cientos de jobs, cuáles salían era cosa de la base. Primero
+#: la emisión fiscal (el muelle espera la factura para cargar el camión);
+#: después la cadena de la plata en su orden de dependencia (NC → RC → DC,
+#: Regla 7), que así sale en un ciclo y no en tres. Lo que no está en la
+#: lista va después, en orden de llegada.
+PRIORIDAD_DLQ = ('DESPACHO_F470', 'NOTA_CREDITO_FACTURA', 'NOTA_CREDITO_DEVOLUCION_CLIENTE',
+                 'MOTIVO_DIAN_NC', 'RECIBO_CAJA', 'DOCUMENTO_CONTABLE_RET')
+
+#: Un job de un tipo que NO es el primero de la lista y que lleva esperando su
+#: turno más que esto pasa adelante: con un flujo continuo de despachos, un
+#: recibo de caja no puede quedar al final de la cola todo el día. No aplica
+#: dentro del primer tipo: ahí adelantar lo más viejo es empezar cajas nuevas
+#: en vez de terminar las empezadas (medido: 86 cajas/h en vez de 150).
+ESPERA_MAXIMA_SIN_TURNO = 30   # minutos
+
+
+def orden_de_la_cola(ahora):
+    """El ORDER BY de la cola. **La única** que ordena la DLQ:
+
+    1. un job de otro tipo que lleva > `ESPERA_MAXIMA_SIN_TURNO` esperando;
+    2. la prioridad del tipo (`PRIORIDAD_DLQ`);
+    3. dentro del tipo, **lo empezado antes que lo nuevo** (un job que ya
+       corrió y espera —la RM que todavía no aparece, un reintento— tiene
+       `proximo_intento`): terminar una caja le da una factura al muelle;
+       empezar otra, no;
+    4. FIFO (creación, id).
+    """
+    from sqlalchemy import and_, case
+    listo_desde = db.func.coalesce(SiesaJob.proximo_intento, SiesaJob.fecha_creacion)
+    envejecido = case((and_(SiesaJob.tipo != PRIORIDAD_DLQ[0],
+                            listo_desde <= ahora - timedelta(minutes=ESPERA_MAXIMA_SIN_TURNO)), 0),
+                      else_=1)
+    prioridad = case({t: i for i, t in enumerate(PRIORIDAD_DLQ)}, value=SiesaJob.tipo,
+                     else_=len(PRIORIDAD_DLQ))
+    empezado = case((SiesaJob.proximo_intento.isnot(None), 0), else_=1)
+    return (envejecido, prioridad, empezado, SiesaJob.fecha_creacion, SiesaJob.id)
+
+
 def _procesar_jobs_pendientes_interno(_app):
     """Lógica interna de procesamiento — separada para permitir captura de errores DB externos."""
     with _app.app_context():
@@ -226,7 +265,7 @@ def _run_dlq_jobs():
     from app.services.ventana_siesa import TIPOS_SIN_SIESA
     if not dlq_puede_postear():
         q = q.filter(SiesaJob.tipo.in_(TIPOS_SIN_SIESA))
-    q = q.limit(20)
+    q = q.order_by(*orden_de_la_cola(ahora)).limit(20)
     # skip_locked solo disponible en PostgreSQL — en SQLite lo ignoramos
     try:
         jobs = q.with_for_update(skip_locked=True).all()
@@ -238,10 +277,15 @@ def _run_dlq_jobs():
         return 0
 
     procesados = 0
-    # FM_SIESA_UNREACHABLE: si hay muchos jobs pendientes (recuperación tras outage),
-    # añadir pausa entre ejecuciones para no inundar Siesa con ráfaga de llamadas.
+    # FM_SIESA_UNREACHABLE: tras una caída, la cola acumulada sale de golpe;
+    # una pausa entre jobs no inunda a Siesa. **Solo en los 10 min después de
+    # que el circuito se cerró** (2026-09-26): antes bastaban 10 pendientes,
+    # que en temporada es siempre — 1 s por job sin razón (medido en
+    # `tests/test_dlq_temporada.py`: 168 cajas/h con la pausa, 176 sin ella).
+    from app.services.connekta_gateway import connekta as _cx
     _total_pendientes = SiesaJob.query.filter(SiesaJob.estado == EstadoSiesaJob.PENDIENTE).count()
-    _inter_job_delay = 1.0 if _total_pendientes > 10 else 0.0
+    _inter_job_delay = (1.0 if _total_pendientes > 10 and _cx._circuit.recien_recuperado()
+                        else 0.0)
     if _inter_job_delay:
         logger.info(
             f'[DLQ] {_total_pendientes} jobs pendientes — aplicando delay {_inter_job_delay}s '
