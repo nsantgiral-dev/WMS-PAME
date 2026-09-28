@@ -185,6 +185,34 @@ class TestLoYaCargado:
         assert (m.clave, m.bloquea, m.frena) == ('rtm_dato_a_corregir', False, True)
         assert m.texto.startswith('Revisión técnico-mecánica: dato a corregir.')
 
+    def test_la_bandeja_la_muestra_como_dato_a_corregir(self, app, client, db,
+                                                        usuario_admin):
+        """La RTM de BDT261 en Pendientes: «dato a corregir», con su consejo, y
+        no «vencida hace 320 días»."""
+        from app.models.vehiculo import Vehiculo
+        from flota.adaptadores.modelos import DocumentoVehiculo
+        v = Vehiculo(placa='BDT261', tipo='Camión', activo=True)
+        db.session.add(v)
+        db.session.flush()
+        from app.utils.fecha import dia_operativo
+        hoy = dia_operativo()
+        f = date(2025, 11, 11)
+        db.session.add(DocumentoVehiculo(vehiculo_id=v.id, tipo='rtm', numero='R', entidad='CDA',
+                                         fecha_expedicion=f, fecha_vencimiento=f))
+        for t, venc in (('soat', hoy + timedelta(days=200)), ('poliza_rc', hoy + timedelta(days=200)),
+                        ('tarjeta_propiedad', None)):
+            db.session.add(DocumentoVehiculo(vehiculo_id=v.id, tipo=t, numero='N', entidad='E',
+                                             fecha_expedicion=hoy - timedelta(days=165),
+                                             fecha_vencimiento=venc))
+        db.session.commit()
+        r = client.get('/flota/bandeja', headers=_token(app, usuario_admin))
+        assert r.status_code == 200, r.get_json()
+        [p] = [p for p in r.get_json()['pendientes']
+               if p['placa'] == 'BDT261' and p['clase'] == 'documento']
+        assert 'Revisión técnico-mecánica: dato a corregir' in p['texto']
+        assert 'vencida' not in p['texto']
+        assert p['detalle'].startswith('Dato a corregir')
+
     def test_una_fila_basura_no_esconde_un_vencimiento_conocido(self):
         from flota.adaptadores.salida import papeles_de_filas
         filas = [self._fila('soat', date(2025, 1, 1), D - timedelta(days=5)),
