@@ -7208,6 +7208,10 @@ por AST contra los roles a los que `conteo_service` asigna un conteo
 (`tests/test_productividad_roles.py`, 3 mutaciones rojas). La pestaña Operarios
 lista a quien lista el servidor.
 
+> **Superado en la integración n1 (2026-09-27):** `Roles.CUENTAN` se retiró;
+> el cupo lo lleva quien `asignacion.motivo_no_elegible(u, CONTEO)` deja contar
+> (supervisión solo hace el CC3). Ver «Integración n1».
+
 ---
 
 ## La plata, validada (2026-09-26): quien liquida no corrige; ningún documento sin salida
@@ -7763,7 +7767,7 @@ rojas** (la del CC2 salió verde la primera vez: el test dejaba el CC1 EN_PROCES
 y lo que apartaba a Ana era el conflicto de hueco, no el doble ciego; se
 corrigió el test).
 
-Migración `m051asignacion` (down `m049tardia`): `usuarios.ultima_senal_at` +
+Migración `m051asignacion` (down `m050demanda` desde la integración n1): `usuarios.ultima_senal_at` +
 `ausencias_usuario` (OPERATIVA en el acta de corte: las ausencias del ensayo no
 valen para producción).
 
@@ -7781,3 +7785,35 @@ valen para producción).
   dispensador — no se cambió sin su decisión.
 - La **salida anticipada** se declara como `PERMISO` desde hoy hasta mañana; no
   hay botón «terminó turno».
+
+---
+
+## Integración n1 (2026-09-27) — asignación por presencia + demanda de compras
+
+Los siete commits de la asignación (`b37ed180..18736d00`) sobre qa + el rediseño
+de la demanda de compras. Lo que solo se vio al juntarlos:
+
+| Costura | Qué pasaba al juntar | Ahora |
+|---|---|---|
+| Advisory lock | Compras tomó 2050/2051 (`LOCK_DEMANDA_SIESA`, `LOCK_DEMANDA_PEDIDOS`); la asignación también 2051 para su barrido: dos jobs distintos excluyéndose en silencio | `LOCK_ASIGNACION_BARRIDO = 2030` (fuera de 2060–2094, reservado). `test_advisory_locks` rechaza el choque |
+| Migraciones | `m051asignacion` colgaba de `m049tardia` (dos cabezas con `m050demanda`) | `down_revision = 'm050demanda'`; una cabeza. upgrade → downgrade → upgrade contra un PostgreSQL 17 local desechable; los `@postgres` de cartera, locks y flota en verde contra él |
+| `POST /api/picking/crear` | Los dos lados agregaron una guarda en el mismo sitio | Las dos: primero «la caja ya no recibe líneas» (409), después «a quién se le asigna» (404/409) |
+| Quién cuenta | `Roles.CUENTAN` (tercera ronda: admin, supervisor, jefe, operario, picker de tienda llevan cupo) contra la política de la asignación (supervisión solo hace el CC3); el guard AST de `CUENTAN` buscaba roles escritos a mano en `conteo_service`, que la asignación sacó (piso en 0) | `CUENTAN` se retiró. El cupo de la productividad lo pregunta `asignacion.motivo_no_elegible(u, CONTEO)`; el guard cruza rol por rol y exige que `conteo_service` no vuelva a escribir roles |
+| Pestaña Operarios | Tercera ronda: la lista es `Roles.OPERAN_TAREAS`. Asignación: la pinta `/api/asignacion/equipo`, con una lista de oficios propia (sin admin, con recepcionista) y solo para supervisión — el gerente, que ve la pestaña, recibía 403 (lo midió `test_pestanas_por_rol`) | `equipo` = `OPERAN_TAREAS` + quien la política deja recibir trabajo; lo **lee** toda gestión; marcar ausencias sigue siendo de supervisión y la pantalla no le ofrece los botones al gerente |
+| Registro de crons | El barrido de la asignación no estaba en `REGISTRADOS`, y esa lista a mano nunca se cruzaba contra `create_app` | Agregado, y un test nuevo exige que las dos listas coincidan (por AST) |
+| Deuda legacy | La tercera ronda sumó un `Query.get` y la asignación bajó el tope a 210 | Ese sitio (`muelle_service`) pasa a `db.session.get` |
+
+El trinquete de la asignación («toda escritura de `operario_id`/`abastecedor_id`
+pasa por la política o está en `AUTOASIGNACIONES`») corre sobre lo integrado y
+ve los mismos 19 sitios: la tercera ronda no escribe dueños (`picking.siguiente_tarea`
+ahora es POST y sigue siendo una autoasignación declarada).
+
+**5 mutaciones de la integración, las 5 rojas** (con `-B`, cada reemplazo
+verificado a aplicar una vez: equipo solo para supervisión, botones de
+ausencia sin guarda, cupo por rol, un rol a mano en `conteo_service`, y quitar
+el barrido de `create_app`).
+
+**Lo que NO cubre:** la migración se probó sobre una base vacía (sin datos que
+ejercitar); el gerente ve el equipo pero no los candidatos ni el reparto (403,
+a propósito); `test_pestanas_por_rol` no mide los GET de un clic dentro de la
+pestaña.
