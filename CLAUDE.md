@@ -6628,8 +6628,9 @@ integrador la vacía al juntar los tres frentes; el objetivo es `{}`.
 
 **Lo que NO ve:** voseo en MAYÚSCULAS sostenidas (se saltan como siglas), un
 imperativo tú en medio de la frase («…y cierra la caja»), un verbo cuya raíz
-no está en la lista (se agrega cuando aparece), texto armado letra a letra, y
-lo que vive en la base (motivos escritos por personas).
+no está en la lista (se agrega cuando aparece), el imperativo tú de las formas
+declaradas en `_TERCERA_PERSONA` («Crea…», «Carga…»; ver abajo), texto armado
+letra a letra, y lo que vive en la base (motivos escritos por personas).
 
 ### Tres ajustes de roles (decisión del dueño)
 
@@ -6733,3 +6734,57 @@ motivo, FORZAR `bulto_cargado_sacado_de_la_ruta`).
 3. ¿El jefe de almacén puede bajar del camión un bulto sin documento (hoy sí,
    con motivo), o solo el admin?
 
+## Validación e2e del 2026-09-26 — pestañas, jornada de noche, voz y productividad (2026-09-27)
+
+Cuatro defectos del día real por rol (`tests/test_val_e2e_dia_20260926.py`,
+sus xfail de pestañas y voz ya sin marca).
+
+**Pestañas que el shell muestra y el servidor niega.** El gerente entraba con
+todas las pestañas de admin (Muelle «Sin permiso» cada 8 s, Bodega en error,
+Siesa con 7 lecturas en 403); jefe y supervisor, Siesa con 5-6; y la cola del
+conteo definitivo (`actualizarBadgeDefinitivos`, cada 30 s en toda pestaña) le
+daba 403 a gerente, liquidador, líder de cartera y control de flota. Ahora:
+`_TABS_OCULTAS_POR_ROL` en `app.js` (un lugar, reemplaza la lista solo del
+supervisor): supervisor sin Siesa, jefe sin Siesa, gerente sin Bodega, Muelle
+ni Siesa. Reposición sigue visible al gerente (se le abrió el 2026-09-07): la
+alerta de jobs fallidos y la cola del definitivo se piden solo con
+`_ROLES_SUPERVISION` (= `Roles.SUPERVISION`, cruzado por test). El muelle deja
+de sondear ante un 403. **Trinquete medido, no declarado:**
+`tests/test_pestanas_por_rol.py` corre en Node `mostrarSegunRol` + `cargarAdmin`
+reales (SHELL de `sw.js` entero) para los 7 roles del shell, registra cada GET
+de cada pestaña visible y lo pide con el token del rol: cero 403. Mutación en
+copia (quitar la fila del gerente o del jefe) → rojo. **No mide** los GET de un
+clic dentro de la pestaña (p. ej. la sub-pestaña «Jobs» de Reposición, que al
+gerente le sigue dando 403). `test_permisos_por_pantalla` sigue declarando a
+mano: este lo complementa midiendo.
+
+**La jornada leía la noche como conducta.** Entregar el camión 17:30 y
+recibirlo 22:00 daba jornada de 13,3 h con 6 h 45 min «sin explicar». Ahora
+`jornada_conductor.sin_custodia()` —de una entrega de turno a la siguiente
+recepción, sin nada suyo en medio— se descuenta de la jornada y de los huecos;
+el día dice `turnos` y `entre_turnos_min`. Un día **sin ningún registro suyo**
+(la oficina liquidó a las 00:30) es `sin_actividad`, no `no_reconstruible`, y
+no cuenta en `jornadas` del resumen. «Cerró cargue 16:38» era la mediana de
+11:00 y 22:15: con uno o dos cierres se dan las horas reales; con más, «Suele
+cerrar cargue hacia HH:MM (n cargues, de A a B)». Trinquete:
+`test_jornada_conductor.py::TestDosTurnosEnUnDia` (5 mutaciones rojas).
+
+**Voz: cuatro textos en tú que el detector no veía.** «no decidas» (subjuntivo
+tú de un verbo -ir: solo se generaba el de -ar) y «Actualiza la página» (el
+imperativo tú desnudo era una lista a mano). Ahora se generan de las raíces;
+las formas que acá son sustantivo o tercera persona al empezar una frase
+(«Carga…», «Queda…», «Nota…») están en `_TERCERA_PERSONA` con su ejemplo, y
+`test_la_tercera_persona_declarada_sigue_viva` exige que cada una siga
+apareciendo (solo encoge). Destapó tres más: «Ajusta el monto»
+(`liquidacion_service`), «Permite ventanas emergentes» (`temporada.js`),
+«documenta NC/RC/DC» (`liquidacion.js`); y a mano, «Crea al menos una
+ubicación» (`traslado_service`), que `_TERCERA_PERSONA` no deja ver.
+3 mutaciones rojas.
+
+**Productividad del tablero.** Listaba a todo usuario activo del almacén con
+cupo de conteo 15. Ahora `Roles.OPERAN_TAREAS` (admin, supervisor, jefe,
+operario, empacador, picker/packer de traslado) y el cupo solo para
+`Roles.CUENTAN` (admin, supervisor, jefe, operario, picker de traslado), cruzada
+por AST contra los roles a los que `conteo_service` asigna un conteo
+(`tests/test_productividad_roles.py`, 3 mutaciones rojas). La pestaña Operarios
+lista a quien lista el servidor.
