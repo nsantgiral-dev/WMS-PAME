@@ -170,7 +170,7 @@ texto.
 | `papeleriamedellin_WMS_Stock_Bodega_v2` | `inventario_siesa_service._descargar_una_pasada_custom()` | **Existencias multi-bodega** — la que llena `stock_siesa` |
 | `papeleriamedellin_papeleriamedellin_API_custom_KardexWMS` | `kardex_service` (`KARDEX_CONSULTA_NOMBRE`) | Movimientos de kardex para demanda y costeo |
 | `papeleriamedellin_compromisos_wms` | `get_compromisos_t405()` | Compromisos por pedido (variante dinámica, lee t405) |
-| `papeleriamedellin_WMS_Remision_DesdePedido` | `get_remision_desde_pedido()` | Remisión asociada a un pedido. **Tres estados** (encontrada / `None` = barrido completo sin ella / `RemisionNoDisponible` = no se sabe), `tamPag=100` paginado (2026-09-25) |
+| `papeleriamedellin_WMS_Remision_DesdePedido` | `get_remision_desde_pedido()` | Remisión asociada a un pedido. **Tres estados** (encontrada / `None` = barrido completo sin ella / `RemisionNoDisponible` = no se sabe), `tamPag=100` paginado (2026-09-25); **corta al encontrar** y sin CO/tipo en la consulta dos filas del mismo consecutivo son «no sé» (2026-09-26). Columnas reales (QA): `LineaRegistro, consec_pd, tipo_rm, consec_rm` — **sin CO ni tipo del pedido** |
 | `papeleriamedellin_WMS_PuntoEnvio_FE` | `get_punto_envio_factura()` | Punto de envío para la FE (fallback de `SIESA_PUNTO_ENVIO_DEFAULT`) |
 | `papeleriamedellin_API_custom_TercerosContacto` | `get_terceros_contacto()` | Contacto del tercero |
 | `papeleriamedellin_monitos_facturas_wms` | `get_factura_desde_pedido()`, `get_monitor_facturas_raw()` | Factura del día por pedido — **es la guarda anti-duplicado de FE**, no solo un monitor |
@@ -1345,7 +1345,8 @@ con el reloj real, todo cierre con Siesa mockeada fallaba de noche y en el CI.
 - Las tareas DESPACHADO sin documento de antes de este cambio siguen así
   (VTA-31 las cuenta como artefacto); la salida es facturar-rm-manual o, si
   el pedido no salió, anular en Siesa y cancelar.
-- El botón «la RM no existe» no tiene pantalla todavía (el endpoint sí).
+- ~~El botón «la RM no existe» no tiene pantalla todavía~~ — la tiene desde
+  «Fiscal v2» (abajo).
 
 ---
 
@@ -6645,3 +6646,90 @@ PWA toca los mismos archivos).
 
 **7 + 1 mutaciones de roles, todas rojas** (una —la tarjeta sin guarda—
 sobrevivía a un conteo de texto y obligó al test en Node).
+
+---
+
+## Fiscal v2 — lo que encontró la validación crítica (2026-09-26)
+
+La validación reprodujo siete defectos del frente fiscal
+(`tests/test_val_fiscal_hallazgos.py`). Seis cerrados por su clase; **H5**
+(el barrido de cartera con horario propio) y **H7** (reabrir picking con la
+caja despachada) quedan en xfail para sus frentes. Sin migración. Candado nuevo:
+`RANGO_EMISION_PEDIDO`. Trinquetes: `tests/test_fiscal_v2.py`,
+`tests/test_fiscal_v2_pantallas_js.py`, `tests/test_dlq_temporada.py`.
+**30 mutaciones, las 30 rojas** (con `-B`; dos sobrevivían al primer intento
+y obligaron a arreglar el test del probe y a quitar una clave redundante).
+
+| | Clase | Qué pasaba | Ahora | Trinquete |
+|---|---|---|---|---|
+| **H1** | Decidir «Siesa no responde» sin dejar probar al circuito | El cierre y la DLQ se negaban leyendo `_cb_state == 'OPEN'`; OPEN → HALF_OPEN solo ocurre dentro de una llamada, y cada worker tiene su breaker: «Siesa no disponible» pegado aunque Siesa volviera | `circuito_admite_intento()` (no consume): vencido el intervalo deja pasar y **el precheck es el probe** (en serie cuando el circuito no está cerrado: en paralelo la segunda consulta gastaba el permiso) | AST: nadie compara `_cb_state` con `'OPEN'` fuera del gateway |
+| **H2** | Deshacer una caja sin preguntar si su envío está en la cola | `resetear_siesa` borraba los bultos de una caja en cola (sin pre-flag todavía): el job emitía RM + FE y la caja quedaba DESPACHADO sin bultos | `exigir_sin_envio_vivo` (una política) en resetear, cancelar (con su excepción de la retenida por cartera) y re-confirmar | AST: todo sitio que cancela, reabre o borra bultos la llama |
+| **H2b** | La pantalla deduce el estado | «⚠ Error Siesa / Reintentar / Limpiar bultos» en toda caja en cola | `documento_fiscal.estado_emision` (EN_COLA · RETENIDO · FALLIDO · SIN_VERIFICAR · REMISION_SIN_FACTURA · FACTURA_SIN_REMISION · DESPACHADO) en `/api/packing` y `/api/siesa/pedidos` (+ `despachable`, `rm`). Packing: en cola no ofrece nada y tocarla no re-cierra; con documento, «lo resuelve el administrador»; **reintentar no reimprime etiquetas**. Pedidos: «✓ Despachado» solo si puede salir; en cola = EN PROCESO; «Resolver en Siesa ›» | Node con `util.js` real |
+| **H3** | Un carril que emite sin el candado | `/facturar-remision` y `/facturar-rm-manual` posteaban el 142943 sin mirar disponibilidad ni si el job del pedido corría → FE duplicada | `emision_exclusiva(tarea)`: 503 sin Siesa, 409 con otro carril emitiendo **el mismo pedido** (candado por pedido, no el de la DLQ: la DLQ lo tiene casi todo el minuto en temporada). La usan la DLQ, `/despachar`, `/facturar-remision`, `/facturar-rm-manual` y `rm_inexistente`. «Facturar remisión» en pantalla solo con RM y envío fallido | AST: toda llamada que emite va dentro de `with emision_exclusiva`; los POST solo desde `DespachoParialService` |
+| **H4** | Una lectura de Siesa que se rinde por volumen | La consulta de RM leía las 30 páginas aunque la fila saliera en la primera; con > 3.000 RM en 30 días, «no sé» siempre → FALLIDO a los 15 min | Corta al encontrar; «no existe» solo con barrido completo; CO + tipo si la consulta los trae (**hoy no**) y dos filas del mismo consecutivo = «no sé»; recién enviado el 142945, una página. «No se pudo consultar» **sigue esperando** (10 min pasada la gracia), nunca FALLIDO por el reloj, y la caja se ve SIN_VERIFICAR. `RemisionBarridoIncompleto`: la salida humana acepta con el pedido escrito tal cual (FORZAR) — no la traba el mismo tope. Botón «La remisión NO existe en Siesa» | tests con la forma real (`LineaRegistro, consec_pd, tipo_rm, consec_rm`) |
+| **H6** | Resuelto a mano, sigue «trabado» | Tras facturar-rm-manual el DESPACHO_F470 FALLIDO seguía en `fallidos_vigentes` | `cerrar_despachos_resueltos` (una función: la usan la reconciliación y `_persistir_resultado`): COMPLETADO con `resuelto_a_mano` | — |
+| **DLQ** | La cola sin orden | `q.limit(20)` sin ORDER BY; pausa de 1 s por job con > 10 pendientes (siempre en temporada) | `orden_de_la_cola`: DESPACHO_F470 → NC → motivo DIAN → RC → DC → resto, FIFO dentro; un job de otro tipo que espera > 30 min pasa adelante. La pausa, solo 10 min tras cerrarse el circuito. **429 en POST** (`ConnektaRateLimit`): espera el `Retry-After` sin gastar intento | mundo simulado |
+
+**Throughput medido** (`tests/test_dlq_temporada.py`: reloj virtual, GET 1 s,
+POST 3 s, RM visible a los 12 s, un ciclo por minuto con tope de 50 s):
+**176 cajas por hora con RM + FE**, cola llena. Cada caja: dos pasadas (emitir;
+identificar la RM y facturar), 10 GET y 3 POST ≈ 19 s de Siesa. Con la pausa
+de antes, 168; con el envejecimiento aplicado a la emisión, 86. **Propuesta, no
+hecha:** si la temporada supera ~170 cajas/h, lo siguiente es paralelizar la
+emisión por pedido (el candado por pedido ya lo permite) con 2–3 hilos; no se
+hizo porque multiplica la carga sobre Siesa, que es lo que cae en temporada.
+Quitar la consulta del estado del pedido de la reconciliación (1 GET) sale
+~5 %.
+
+### Las cajas de antes del control fiscal (P2) — la consulta ANTES del deploy
+
+Una caja con `siesa_triggered` y factura legítima pero sin `rm_consec` no es
+despachable desde m048fiscal: desaparece del muelle y, si sus bultos ya
+estaban CARGADO en una ruta EN_CARGUE, `cerrar_ruta` se niega. **Correr en
+producción antes de promover (la corre el dueño, solo lectura):**
+
+```sql
+SELECT count(*) AS cajas,
+       count(*) FILTER (WHERE EXISTS (
+           SELECT 1 FROM bultos b JOIN rutas_despacho r ON r.id = b.ruta_despacho_id
+           WHERE b.tarea_id = t.id AND b.estado = 'CARGADO' AND r.estado = 'EN_CARGUE')) AS con_bultos_cargados_en_cargue
+FROM tareas_packing t
+WHERE t.siesa_triggered AND t.rm_consec IS NULL
+  AND coalesce(t.tipo_documento, '') <> 'TRASLADO' AND t.estado <> 'CANCELADO';
+```
+
+Salida, sin reabrir el agujero: Siesa → Recuperación → **«Cajas anteriores al
+control fiscal»** (admin, `GET /api/despacho_parcial/anteriores-control-fiscal`)
+→ «Verificar en Siesa» (`GET …/<id>/verificar-en-siesa`, solo lectura: factura
+y remisión) deja la RM escrita en «Facturar esa RM», que con la FE ya en Siesa
+**solo la registra**. Un bulto CARGADO que no puede salir se baja del camión
+desde la ruta en cargue (`DELETE /api/muelle/desasignar/<id>` con `forzar` y
+motivo, FORZAR `bulto_cargado_sacado_de_la_ruta`).
+
+**P3:** el cierre en MODO_ENSAYO dice «no se envía nada a Siesa»
+(`estado_siesa: ENSAYO`); reconciliar que encuentra la FE sin RM contesta
+`ok: false` con la salida; el precheck distingue lento (8 s) de caído.
+
+### Lo que NO cubre, dicho
+
+- **La consulta de remisiones no trae CO ni tipo del pedido** (medido en QA):
+  la Regla 18 se cumple solo si el consultor agrega `co_pd`/`tipo_pd` al SQL
+  de la consulta 7479. Hasta entonces, un PD del mismo consecutivo en otro CO
+  que aparezca en la misma página se declara «no sé», pero uno en otra página
+  no se ve (se corta al encontrar).
+- **El pedido fuera de las 30 páginas** (un pedido viejo remisionado hoy, con
+  > 3.000 RM en 30 días) no se encuentra: espera, y lo resuelve una persona.
+- La pantalla del muelle solo ofrece «Bajar del camión» en la vista de la ruta
+  activa; el conductor no.
+- El throughput es de un mundo simulado con latencias de QA; en producción
+  Siesa tarda 30–60 s por POST en momentos (ver el timeout del `_post`).
+- H5 y H7 siguen en xfail (otros frentes).
+
+### Decisiones para el dueño
+
+1. Pedir al consultor `co_pd` y `tipo_pd` (y un `ORDER BY` estable) en la
+   consulta `papeleriamedellin_WMS_Remision_DesdePedido`.
+2. ¿Paralelizar la emisión si la temporada pasa de ~170 cajas/h?
+3. ¿El jefe de almacén puede bajar del camión un bulto sin documento (hoy sí,
+   con motivo), o solo el admin?
+
