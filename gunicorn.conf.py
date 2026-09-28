@@ -15,3 +15,10 @@ def post_fork(server, worker):
     from app.extensions import db
     with app.app_context():
         db.engine.dispose()
+    # Cada worker tiene su propio caché de vendedores: se pide la lista al
+    # nacer, en segundo plano, para que la cola casi nunca diga «cargando».
+    try:
+        from app.services.vendedores import precalentar
+        precalentar()
+    except Exception:  # noqa: BLE001 — decorativo, nunca tumba el worker
+        pass
