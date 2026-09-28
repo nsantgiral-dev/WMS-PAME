@@ -670,7 +670,7 @@ def tablero_lider():
     except ValueError:
         return jsonify({'error': f'almacen_id inválido: {crudo!r}'}), 400
     try:
-        return jsonify(tablero(almacen_id, rol=u.rol)), 200
+        return jsonify(tablero(almacen_id, rol=u.rol, usuario_id=u.id)), 200
     except LookupError as e:
         return jsonify({'error': str(e)}), 404
 
@@ -941,43 +941,31 @@ def reintentar_fallos_dlq():
 @conteo_bp.route('/<int:id>/omitir-segundo', methods=['POST'])
 @jwt_required()
 def omitir_segundo_conteo(id):
-    """
-    Admin omite el CC2 (o CC3) pendiente y mueve el padre directo a DESCUADRE.
-    Útil cuando no hay segundo operario disponible o en entornos de prueba.
-    El ajuste queda pendiente de aprobación manual del admin.
-    """
+    """No esperar el recuento pendiente (CC2 o CC3). La política vive en
+    `ConteoService.omitir_verificacion`: motivo obligatorio y en la bitácora;
+    con el 2º pendiente la diferencia queda para que la apruebe OTRA persona;
+    con el definitivo pendiente la cadena se cancela (el 1º y el 2º se
+    contradicen: no hay base para ajustar). Body: `{motivo}`."""
     from app.models.usuario import Usuario
+    from app.services.conteo_service import CadenaNoCancelable
     try:
         uid = int(get_jwt_identity())
     except (TypeError, ValueError):
         return jsonify({'error': 'Token inválido'}), 401
-    u = Usuario.query.get(uid)
+    u = db.session.get(Usuario, uid)
     if not u or u.rol not in Roles.LEAD:
         return jsonify({'error': 'Sin permiso'}), 403
-
-    sesion = SesionConteo.query.get(id)
-    if not sesion:
-        return jsonify({'error': 'Sesión no encontrada'}), 404
-    if sesion.estado not in ('SEGUNDO_CONTEO', 'TERCER_CONTEO'):
-        return jsonify({'error': f'Solo se puede omitir en estado SEGUNDO_CONTEO o TERCER_CONTEO, actual: {sesion.estado}'}), 400
-
-    # Cancelar TODO conteo vivo de la cadena, cada uno por su estado. Antes el
-    # CC3 solo se cancelaba si su padre CC2 seguía vivo, pero con la raíz en
-    # TERCER_CONTEO el CC2 ya está en DESCUADRE: el CC3 quedaba vivo y huérfano
-    # en la cola de Conteo Definitivo, y contarlo no llegaba a ningún lado
-    # (la propagación exige la raíz en TERCER_CONTEO).
-    # BLOQUEADO también: un CC2/CC3 bloqueado que sobrevive a la omisión
-    # queda para siempre en la cola de bloqueados de una cadena resuelta. La
-    # lista de «vivo» es la de la cancelación (`descendientes_vivos`).
-    ahora = datetime.utcnow()
-    for descendiente in ConteoService.descendientes_vivos(sesion):
-        descendiente.estado = EstadoConteo.CANCELADO
-        descendiente.fecha_cierre = ahora
-
-    sesion.estado = 'DESCUADRE'
-    db.session.commit()
-    logger.info(f'[CONTEO] Sesión {sesion.id} omitió CC2/CC3 — movida a DESCUADRE por usuario #{uid}')
-    return jsonify({'ok': True, 'sesion_id': id, 'estado': 'DESCUADRE'}), 200
+    try:
+        r = ConteoService.omitir_verificacion(id, uid, (request.get_json() or {}).get('motivo'))
+    except PermissionError as e:
+        return jsonify({'error': str(e)}), 403
+    except LookupError as e:
+        return jsonify({'error': str(e)}), 404
+    except CadenaNoCancelable as e:
+        return jsonify({'error': str(e)}), 409
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    return jsonify(r), 200
 
 
 #: Qué se le hace a la sesión de cada job descartado. El nombre es lo que
@@ -1245,9 +1233,6 @@ def exportar_conteos():
     truncado = len(sesiones) > LIMITE
     sesiones = sesiones[:LIMITE]
 
-    def _num(v):
-        return v if v is not None else ''
-
     output = io.StringIO()
     writer = csv.writer(output)
     writer.writerow([
@@ -1259,6 +1244,12 @@ def exportar_conteos():
     ])
 
     for s in sesiones:
+        # Con el conteo definitivo por hacerse, sin cifras: el CSV es otra
+        # vista, y la regla es de toda vista (`ConteoService.cifras_ocultas`).
+        oculto = bool(ConteoService.cifras_ocultas(s))
+
+        def _num(v, _o=oculto):
+            return '' if (_o or v is None) else v
         writer.writerow([
             s.codigo,
             s.tipo,
@@ -1273,10 +1264,10 @@ def exportar_conteos():
             _num(s.teorico_siesa),
             _num(s.cant_pos_siesa),
             s.fuente_existencia or '',
-            _num(s.costo_prom_uni_siesa),
+            s.costo_prom_uni_siesa if s.costo_prom_uni_siesa is not None else '',
             _num(s.cantidad_fisica),
             _num(s.diferencia),
-            s.motivo_codigo or '',
+            '' if oculto else (s.motivo_codigo or ''),
             'Si' if s.es_segundo_conteo else 'No',
             s.aprobador.nombre if s.aprobador else '',
             s.fecha_creacion.strftime('%Y-%m-%d %H:%M') if s.fecha_creacion else '',

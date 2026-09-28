@@ -241,7 +241,10 @@ class TestLaAuditoriaRespetaLaAprobacionPorValor:
         # test mediría esa regla, no la de la firma.
         tarea, _ = _tarea_bloqueada(db, almacen, producto, cantidad_solicitada=10,
                                     cantidad_recogida=0, cantidad_wms=50, bloqueado=10)
-        with patch.object(ConteoService, 'consultar_foto_siesa', return_value=_foto(50.0)):
+        # Con costo chico: la firma de quien audita vale hasta el tope de
+        # autoaprobación (2026-09-27); acá se mide la regla del jefe.
+        with patch.object(ConteoService, 'consultar_foto_siesa',
+                          return_value={**_foto(50.0), 'costo_prom_uni': 1000.0}):
             PickingService.auditar_tarea(tarea.id, admin_id=firmante_id,
                                          resultado='ENCONTRADO_PARCIAL', cantidad_hallada=2)
         return SesionConteo.query.filter_by(tarea_picking_id=tarea.id).one()

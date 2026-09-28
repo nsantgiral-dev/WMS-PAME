@@ -1,4 +1,4 @@
-"""Conteo: la unidad contra Siesa es SKU × almacén
+"""Conteo: la unidad contra Siesa es SKU × almacén; quién omitió la verificación
 
 Revision ID: m051conteo
 Revises: m050inv2
@@ -17,6 +17,10 @@ se está contando o, si ninguna, la más vieja. Medido en producción el
 2026-09-27: cero grupos duplicados. Si quedaran dos que YA se están contando,
 la migración se detiene y los nombra: cancelar un conteo en curso lo decide
 una persona, no un deploy.
+
+`sesiones_conteo.verificacion_omitida_*` (nullable, sin backfill): quién
+saltó el 2º conteo de una cadena, por qué y cuándo
+(`ConteoService.omitir_verificacion`). Quien omitió no aprueba ese ajuste.
 """
 import sqlalchemy as sa
 from alembic import op
@@ -61,6 +65,13 @@ def upgrade():
             'm051conteo: hay productos con dos conteos EN CURSO en el mismo almacén '
             f'(producto, almacén, cuántos): {list(quedan)[:20]}. Cancele uno de cada '
             'par desde Inventario Cíclico y vuelva a desplegar.')
+    with op.batch_alter_table('sesiones_conteo') as b:
+        b.add_column(sa.Column('verificacion_omitida_por_id', sa.Integer(),
+                               sa.ForeignKey('usuarios.id',
+                                             name='fk_sesion_conteo_omitida_por'),
+                               nullable=True))
+        b.add_column(sa.Column('verificacion_omitida_motivo', sa.Text(), nullable=True))
+        b.add_column(sa.Column('verificacion_omitida_en', sa.DateTime(), nullable=True))
     op.create_index(
         'ix_sesion_conteo_sku_activa_unica',
         'sesiones_conteo',
@@ -73,3 +84,8 @@ def upgrade():
 
 def downgrade():
     op.drop_index('ix_sesion_conteo_sku_activa_unica', table_name='sesiones_conteo')
+    with op.batch_alter_table('sesiones_conteo') as b:
+        b.drop_constraint('fk_sesion_conteo_omitida_por', type_='foreignkey')
+        b.drop_column('verificacion_omitida_en')
+        b.drop_column('verificacion_omitida_motivo')
+        b.drop_column('verificacion_omitida_por_id')

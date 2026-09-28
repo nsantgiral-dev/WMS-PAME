@@ -258,11 +258,14 @@ class TestUnHijoNoSeAjusta:
 class TestOmitirConElCC3Vivo:
 
     def test_omitir_en_tercer_conteo_cancela_el_cc3(self, app, db, client, siesa, tienda):
+        """Desde el 2026-09-27 (P1-2) omitir con el CC3 pendiente cancela la
+        cadena ENTERA: el 1º y el 2º se contradicen y no hay con qué ajustar.
+        Antes dejaba la raíz en DESCUADRE con el CC1 refutado, aprobable."""
         cc1, _, cc3 = _cadena_con_cc3(tienda, siesa)
-        r = client.post(f'/api/conteo/{cc1}/omitir-segundo',
+        r = client.post(f'/api/conteo/{cc1}/omitir-segundo', json={'motivo': 'prueba'},
                         headers=_token(app, tienda['supervisor']))
         assert r.status_code == 200, r.get_json()
-        assert _sesion(db, cc1).estado == 'DESCUADRE'
+        assert _sesion(db, cc1).estado == 'CANCELADO'
         assert _sesion(db, cc3).estado == 'CANCELADO', (
             'el CC3 quedó vivo y huérfano en la cola de Conteo Definitivo')
 

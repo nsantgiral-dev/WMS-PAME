@@ -711,7 +711,8 @@ class TestUnSoloSitioLeeLaPolitica:
         assert mapas >= 4, mapas   # intervalos, rango, umbral y unidades de tolerancia
         assert nombres >= 9, nombres
         # Cupo, intervalos, watchdog + tolerancias y topes en pesos (2026-09-23).
-        assert len(_nombres_de_variables()) == 9
+        # 10 desde el 2026-09-27: CONTEO_TOPE_AUTOAPROBACION (quien contó firma hasta ahí).
+    assert len(_nombres_de_variables()) == 10
 
     @pytest.mark.parametrize('codigo', [
         "x = os.environ.get('CONTEO_CUPO_DIARIO', '60')",

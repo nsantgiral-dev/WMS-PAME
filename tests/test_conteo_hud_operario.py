@@ -321,7 +321,8 @@ class TestElBloqueadoTieneSalida:
         admin.set_password('x')
         db.session.add(admin)
         db.session.commit()
-        r = client.post(f'/api/conteo/{conteo}/omitir-segundo', headers=_auth(app, admin))
+        r = client.post(f'/api/conteo/{conteo}/omitir-segundo', json={'motivo': 'prueba'},
+                        headers=_auth(app, admin))
         assert r.status_code == 200, r.get_json()
         assert _sesion(db, cc2).estado == 'CANCELADO'
         assert _svc().listar_bloqueados() == []

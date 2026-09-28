@@ -522,7 +522,8 @@ function _renderCardAccion(s) {
   const coinciden = !cc2Pendiente && _conteosCoinciden(s, hijo);
   const bordColor = s.estado === 'DESCUADRE' ? '#7F1D1D' : s.estado === 'TERCER_CONTEO' ? '#7F4010' : '#164F5A';
   const badgeColor = s.estado === 'DESCUADRE' ? '#7F1D1D' : s.estado === 'TERCER_CONTEO' ? '#92400E' : 'var(--pm-fill)';
-  const dif = s.diferencia != null ? (s.diferencia > 0 ? `+${s.diferencia}` : `${s.diferencia}`) : '?';
+  const dif = s.cifras_ocultas ? 'oculta'
+    : (s.diferencia != null ? (s.diferencia > 0 ? `+${s.diferencia}` : `${s.diferencia}`) : '?');
   const difCol = (s.diferencia || 0) > 0 ? '#22C55E' : '#F87171';
   const mostrarOmitir = ['SEGUNDO_CONTEO','TERCER_CONTEO'].includes(s.estado) && hijoPendiente;
   // Cuando un 2º conteo (o el definitivo) resolvió la cadena, la raíz lleva
@@ -567,6 +568,7 @@ function _renderCardAccion(s) {
       <span style="background:${badgeColor};color:#fff;font-size:var(--fs-xs);font-weight:700;padding:2px 8px;border-radius:8px;white-space:nowrap;flex-shrink:0;margin-left:8px;">${esc(_estadoConteoTxt(s.estado))}</span>
     </div>
 
+    ${s.cifras_ocultas ? `<div style="font-size:var(--fs-xs);color:var(--warn-tx);border-left:3px solid #FBBF24;padding:4px 8px;margin-bottom:10px;">🔒 ${esc(s.cifras_ocultas)}</div>` : ''}
     <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;background:var(--bg-s);border-radius:8px;padding:10px;margin-bottom:10px;text-align:center;">
       <div>
         <div style="font-size:var(--fs-xs);color:var(--tx3);font-weight:700;text-transform:uppercase;margin-bottom:3px;">Siesa</div>
@@ -583,7 +585,7 @@ function _renderCardAccion(s) {
     </div>
 
     <div style="display:flex;justify-content:space-between;align-items:center;font-size:var(--fs-xs);color:var(--tx3);margin-bottom:10px;">
-      <span>Diferencia <span style="color:${difCol};font-weight:700;">${esc(dif)} uds</span>${s.motivo_codigo ? ` · <span style="color:${s.motivo_codigo==='AJ-ENT'?'var(--ok-tx)':'var(--err-tx)'};">${esc(_motivoAjusteTxt(s.motivo_codigo))}</span>` : ''}</span>
+      <span>Diferencia <span style="color:${difCol};font-weight:700;">${esc(dif)}${s.cifras_ocultas ? '' : ' uds'}</span>${s.motivo_codigo ? ` · <span style="color:${s.motivo_codigo==='AJ-ENT'?'var(--ok-tx)':'var(--err-tx)'};">${esc(_motivoAjusteTxt(s.motivo_codigo))}</span>` : ''}</span>
       ${s.estado === 'DESCUADRE' && coinciden
         ? `<span style="color:var(--ok-tx);font-size:var(--fs-xs);">✓ 1º y 2º conteo coinciden</span>`
         : s.estado === 'DESCUADRE' && !coinciden && hijo && !cc2Pendiente
@@ -599,9 +601,9 @@ function _renderCardAccion(s) {
              style="padding:8px 10px;background:var(--bg-input);color:var(--tx2);border:1px solid var(--brd);border-radius:8px;font-size:var(--fs-xs);cursor:pointer;">✏</button>`
         : ''}
       ${mostrarOmitir
-        ? `<button onclick="conteoOmitirSegundo(${esc(s.id)})"
-             title="No esperar el recuento: la diferencia queda para que usted la decida"
-             style="padding:8px 10px;background:none;border:1px solid #415A70;color:var(--tx3);border-radius:8px;font-size:var(--fs-xs);cursor:pointer;white-space:nowrap;">${esTercerConteo ? 'Saltar conteo definitivo' : 'Saltar 2º conteo'}</button>`
+        ? `<button onclick="conteoOmitirSegundo(${esc(s.id)}, ${esTercerConteo ? 1 : 0})"
+             title="${esTercerConteo ? 'Sin conteo definitivo no hay con qué ajustar: la cadena se cancela' : 'No esperar el 2º conteo: la diferencia la aprueba otra persona'}"
+             style="padding:8px 10px;background:none;border:1px solid #415A70;color:var(--tx3);border-radius:8px;font-size:var(--fs-xs);cursor:pointer;white-space:nowrap;">${esTercerConteo ? 'Cancelar sin conteo definitivo' : 'Saltar 2º conteo'}</button>`
         : ''}
       <button onclick="${esperaDecision ? 'conteoIrADecidir()' : 'void(0)'}"
         ${!esperaDecision ? 'disabled' : ''}
@@ -778,11 +780,21 @@ async function conteoDescartarFallos() {
  * Skip the pending CC2/CC3 and move the session to DESCUADRE for admin review.
  * @param {number} id - Conteo session ID.
  */
-async function conteoOmitirSegundo(id) {
-  if (!await _modalConfirmar('¿No esperar el recuento pendiente?\n\nEl conteo que falta se cancela y esta diferencia queda «contada con diferencia», para que usted la apruebe o la cancele.', { titulo: 'Saltar el recuento', textoConfirmar: 'Sí, saltarlo', textoCancelar: 'Volver' })) return;
+async function conteoOmitirSegundo(id, esDefinitivo = 0) {
+  // El motivo es obligatorio y queda en la bitácora (P1-2, 2026-09-27). Sin el
+  // conteo definitivo el 1º y el 2º se contradicen: no hay con qué ajustar y la
+  // cadena se cancela. Sin el 2º, la diferencia la aprueba OTRA persona.
+  const motivo = esDefinitivo
+    ? await _modalTexto('Cancelar sin conteo definitivo',
+        'El 1º y el 2º conteo no coincidieron. Sin el conteo definitivo no hay con qué ajustar: <b>la cadena se cancela</b> y no se ajusta nada. ¿Por qué no se hace el conteo definitivo?',
+        { textoConfirmar: 'Cancelar la cadena', textoCancelar: 'Volver' })
+    : await _modalTexto('Saltar el 2º conteo',
+        'El 2º conteo se cancela y la diferencia del 1º queda para decidir, <b>sin verificar</b>. El ajuste lo aprueba otra persona, no usted. ¿Por qué no se espera el 2º conteo?',
+        { textoConfirmar: 'Saltarlo', textoCancelar: 'Volver' });
+  if (!motivo) return;
   try {
-    await post('/api/conteo/' + id + '/omitir-segundo', {});
-    alerta('Listo — la diferencia queda para su decisión', 'exito');
+    const r = await post('/api/conteo/' + id + '/omitir-segundo', { motivo });
+    alerta((r && r.mensaje) || 'Listo', 'exito');
     await cargarConteoStats();
     await cargarConteos(_CONTEO_PAGE);
   } catch (e) { alerta(e.message || 'Error de conexión', 'error'); }

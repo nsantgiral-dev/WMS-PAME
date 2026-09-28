@@ -535,8 +535,14 @@ class TestElTopeDelJefeEsPorAjuste:
                  _tablero(tienda, rol='jefe_almacen')['decisiones']['ajustes']['aprobables']['filas']}
         assert filas[mundo['aprobable']]['no_puede_aprobar'] is None
 
-        sup = _tablero(tienda)['decisiones']['ajustes']['aprobables']['filas']
-        assert [f['no_puede_aprobar'] for f in sup] == [None, None]
+        # El supervisor firma el que tiene costo; el que definió un conteo
+        # definitivo sin costo (no se sabe cuánto vale) lo firma el admin
+        # (2026-09-27, `_motivo_ajuste_propio`).
+        sup = {f['id']: f for f in _tablero(tienda)['decisiones']['ajustes']['aprobables']['filas']}
+        assert sup[mundo['aprobable']]['no_puede_aprobar'] is None
+        assert 'lo aprueba el admin' in sup[mundo['aprobable_sin_costo']]['no_puede_aprobar']
+        adm = _tablero(tienda, rol='admin')['decisiones']['ajustes']['aprobables']['filas']
+        assert [f['no_puede_aprobar'] for f in adm] == [None, None]
 
 
 # ─────────────────────────────────────────────────────────────────────────────

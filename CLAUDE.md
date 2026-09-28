@@ -7918,3 +7918,34 @@ de la sesión (`SIESA-GENERAL` o el mayor) con piso 0; el resto lo rehace la
 carga de las 7:00 (P3 de la auditoría, sin tocar). El intercalado de
 `mobile_service` sigue ofreciendo conteos por hueco (C5, con v3). Las sesiones
 viejas con ubicación física siguen válidas: el HUD nombra todos los lugares.
+
+## Conteo: quien cuenta no firma solo, y nadie ve las cifras antes del definitivo (2026-09-27, C2)
+
+**Qué pasaba (P1-1, P1-2).** El supervisor contaba el CC3 y aprobaba su propio
+ajuste de cualquier monto; con un supervisor en producción, una persona decidía
+la cifra y la firmaba. Igual en la auditoría de picking. El «ciego» del CC3 era
+de una pantalla: `GET /api/conteo/` (supervisión) mostraba teórico, CC1 y CC2
+de la cadena viva. «Saltar conteo definitivo» dejaba aprobable el CC1 que el
+doble ciego ya había refutado, sin motivo ni rastro.
+
+**Ahora** (decisiones por defecto; el dueño puede cambiarlas):
+
+| | Regla | Dónde |
+|---|---|---|
+| Firma | Quien **contó** la cadena (o la auditó) firma hasta `CONTEO_TOPE_AUTOAPROBACION` (defecto **$100.000**); por encima, otra persona. Un ajuste que **definió un CC3** y supera el tope lo firma el **admin** (no el que lo contó). Sin costo = por encima (Regla 0). Quien **omitió** la verificación no firma ese ajuste de ningún monto | `ConteoService._motivo_ajuste_propio` dentro de `motivo_no_puede_aprobar` (aprobar, auditoría de picking, tablero —que ahora juzga con el id de quien mira—); `autores_del_ajuste` |
+| Cifras | Con un CC3 vivo en la cadena, **ninguna vista** muestra teórico, CC1, CC2, diferencia ni descartes (la raíz, el CC2 y el CC3 mismo); la tarjeta dice por qué. Vuelven al contarse o cancelarse | `ConteoService.cifras_ocultas`, aplicada en `SesionConteo.to_dict` (lista, respuestas de rutas) y en el CSV |
+| Omitir | Motivo obligatorio, bitácora (CANCELAR por eslabón, EDITAR la raíz). Con el **2º** pendiente: la raíz a DESCUADRE con `verificacion_omitida_*` (m051conteo). Con el **definitivo** pendiente: **se cancela la cadena entera** (no hay base para ajustar) | `ConteoService.omitir_verificacion`; la ruta solo traduce |
+
+**Trinquete:** `tests/test_conteo_control_cc3.py` — AST: toda función de las
+vistas de conteo (`models/conteo.py`, `routes/conteo.py`, `conteo_listado.py`,
+`tablero_lider_conteo.py`) que lee una cifra pregunta a `cifras_ocultas` o está
+declarada (5, solo encoge: `_to_dict_completo` —que solo sale por `to_dict`—,
+el accesor de descartes, la respuesta de aprobar y el tablero de DESCUADRE, que
+no pueden tener CC3 vivo); meta-tests y piso. `test_bitacora_acciones`: omitir
+salió del inventario de estados sin bitácora (tope 6 → 5).
+
+**Lo que NO cubre:** las estadísticas (`metricas/conteo`) solo miran cadenas
+cerradas y no se revisaron campo por campo; un supervisor que contó el CC1 o el
+CC2 y no puede hacer el CC3 también ve las cifras ocultas (se oculta a todos,
+más simple que por persona). Otro supervisor (no autor) tampoco firma un CC3
+por encima del tope: lo firma el admin.

@@ -713,7 +713,10 @@ class TestFueraDeTolerancia:
         assert st in (200, 202), r
         assert len(b.jobs_ajuste(raiz)) == 1
 
-    def test_el_supervisor_aprueba_cualquier_monto(self, bodega, monkeypatch):
+    def test_quien_conto_el_definitivo_no_firma_lo_grande(self, bodega, monkeypatch):
+        """Hasta el 2026-09-27 el supervisor contaba el CC3 y aprobaba su propio
+        ajuste de cualquier monto (P1-1): una persona decidía la cifra y la
+        firmaba. Ahora, por encima de CONTEO_TOPE_AUTOAPROBACION, firma el admin."""
         from app.models.conteo import EstadoConteo
         b = bodega
         monkeypatch.setenv('CONTEO_TOPE_APROBACION_JEFE', '0')
@@ -724,6 +727,8 @@ class TestFueraDeTolerancia:
         st, r = b.put(b.jefe, f'/api/conteo/{raiz}/ajustar')
         assert st == 403, r
         st, r = b.put(b.supervisor, f'/api/conteo/{raiz}/ajustar')
+        assert st == 403 and 'Usted contó' in r['error'], r
+        st, r = b.put(b.admin, f'/api/conteo/{raiz}/ajustar')
         assert st == 202, r
         assert b.sesion(raiz).estado == EstadoConteo.AJUSTANDO
         p = json.loads(b.jobs_ajuste(raiz)[0].payload)

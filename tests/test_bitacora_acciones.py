@@ -206,10 +206,6 @@ TOPE_BORRADOS_SIN_BITACORA = 1
 
 #: Funciones que ponen un estado de baja **sin** registrar_accion.
 ESTADOS_SIN_BITACORA = {
-    ('app/routes/conteo.py', 'omitir_segundo_conteo'):
-        'Conteo, fuera de la Fase 0A por instrucción. Rastro que SÍ tiene: '
-        'fecha_cierre en cada eslabón y la raíz en DESCUADRE. Rastro que NO: '
-        'quién omitió (solo el log) — declarado en CLAUDE.md.',
     ('app/routes/conteo.py', 'descartar_fallos_dlq'):
         'Conteo, fuera de la Fase 0A por instrucción. El job descartado guarda '
         'por_usuario y fecha en `resultado`; sin motivo.',
@@ -226,7 +222,7 @@ ESTADOS_SIN_BITACORA = {
         'Flota tiene rastro propio: cerrada_por_usuario_id, cerrada_ts y '
         'motivo_cierre obligatorio, respaldado por un CHECK.',
 }
-TOPE_ESTADOS_SIN_BITACORA = 6
+TOPE_ESTADOS_SIN_BITACORA = 5
 
 #: Quién puede borrar el error de un job. Una sola función.
 LIMPIAN_ERROR_DE_JOB = {('app/services/siesa_job_service.py', 'reencolar_job_fallido')}

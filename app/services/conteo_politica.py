@@ -176,11 +176,12 @@ _ENV_TOL_PCT = 'CONTEO_TOLERANCIA_PCT'
 _ENV_TOL_TOPE_VALOR = 'CONTEO_TOLERANCIA_TOPE_VALOR'
 _ENV_TOPE_AUTOAJUSTE = 'CONTEO_TOPE_AUTOAJUSTE'
 _ENV_TOPE_JEFE = 'CONTEO_TOPE_APROBACION_JEFE'
+_ENV_TOPE_AUTOAPROBACION = 'CONTEO_TOPE_AUTOAPROBACION'
 
 #: Los nombres de las variables, para el trinquete de «un solo sitio».
 VARIABLES_DE_ENTORNO = (_ENV_CUPO, _ENV_CUPO_BODEGA, _ENV_INTERVALOS, _ENV_WATCHDOG_DIAS,
                         _ENV_TOL_UNIDADES, _ENV_TOL_PCT, _ENV_TOL_TOPE_VALOR,
-                        _ENV_TOPE_AUTOAJUSTE, _ENV_TOPE_JEFE)
+                        _ENV_TOPE_AUTOAJUSTE, _ENV_TOPE_JEFE, _ENV_TOPE_AUTOAPROBACION)
 
 #: Unidades de diferencia que se aceptan sin segundo conteo, por clase. Ver el
 #: encabezado: A 0 (estricta), B y C una unidad suelta.
@@ -203,6 +204,13 @@ TOPE_AUTOAJUSTE_DEFECTO = 100000
 #: que había (la aprobación era solo de supervisor y admin) hasta que el
 #: negocio decida otra cosa.
 TOPE_APROBACION_JEFE_DEFECTO = 0
+
+#: Pesos. Hasta cuánto firma quien CONTÓ la cadena su propio ajuste (el
+#: supervisor que hizo el conteo definitivo, quien auditó el picking). Por
+#: encima lo firma otra persona: el admin (decisión por defecto del
+#: 2026-09-27; el dueño puede cambiarla). Mismo número que el tope del
+#: ajuste automático: lo que puede salir solo, puede firmarlo quien contó.
+TOPE_AUTOAPROBACION_DEFECTO = 100000
 
 #: La clase cuya regla se aplica a lo que no es un conteo del plan con clase
 #: A/B/C: la más estricta.
@@ -353,6 +361,8 @@ def _leer() -> dict:
             'tolerancia_tope_valor': _pesos(_ENV_TOL_TOPE_VALOR, TOLERANCIA_TOPE_VALOR_DEFECTO),
             'tope_autoajuste': _pesos(_ENV_TOPE_AUTOAJUSTE, TOPE_AUTOAJUSTE_DEFECTO),
             'tope_aprobacion_jefe': _pesos(_ENV_TOPE_JEFE, TOPE_APROBACION_JEFE_DEFECTO),
+            'tope_autoaprobacion': _pesos(_ENV_TOPE_AUTOAPROBACION,
+                                          TOPE_AUTOAPROBACION_DEFECTO),
             'advertencias': advertencias}
 
 
@@ -698,6 +708,11 @@ def tope_aprobacion_jefe() -> Decimal:
     return Decimal(str(_leer()['tope_aprobacion_jefe']))
 
 
+def tope_autoaprobacion() -> Decimal:
+    """Pesos hasta los que quien contó la cadena firma su propio ajuste."""
+    return Decimal(str(_leer()['tope_autoaprobacion']))
+
+
 def descripcion_de_tolerancias(cfg: dict = None) -> dict:
     """Los valores VIGENTES de tolerancias y topes, para la pantalla y las
     estadísticas."""
@@ -708,6 +723,7 @@ def descripcion_de_tolerancias(cfg: dict = None) -> dict:
         'tope_valor_tolerancia': cfg['tolerancia_tope_valor'],
         'tope_autoajuste': cfg['tope_autoajuste'],
         'tope_aprobacion_jefe': cfg['tope_aprobacion_jefe'],
+        'tope_autoaprobacion': cfg['tope_autoaprobacion'],
         'regla_sin_clase': CLASE_REGLA_ESTRICTA,
         'recuentos_propios_por_cadena': RECUENTOS_PROPIOS_POR_CADENA,
         'max_recuentos_por_movimiento': MAX_RECUENTOS_POR_MOVIMIENTO,

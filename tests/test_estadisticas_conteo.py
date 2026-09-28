@@ -193,7 +193,8 @@ def dorado(app, db, client, siesa, tienda, monkeypatch):
     _poner(siesa, 10)
     ids['omitida'] = cc1 = _nuevo_cc1(tienda, next(huecos))
     _abrir_y_contar_cc1(cc1, a, 9)
-    resp = client.post(f'/api/conteo/{cc1}/omitir-segundo', headers=_tok(app, sup))
+    resp = client.post(f'/api/conteo/{cc1}/omitir-segundo', json={'motivo': 'prueba'},
+                       headers=_tok(app, sup))
     assert resp.status_code == 200, resp.get_json()
 
     # 8 · Cancelada antes de contarse.

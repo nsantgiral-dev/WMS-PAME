@@ -336,14 +336,24 @@ class TestLaMigracion:
     DROP INDEX ahí se auto-comitea y la deja sin índice para todos)."""
 
     @pytest.fixture
-    def base(self, app):
+    def base(self):
+        """La tabla como estaba antes de m051conteo (las columnas que la
+        migración usa, sin las que agrega ni su índice)."""
         import sqlalchemy as sa
-        from app.extensions import db as _db
         motor = sa.create_engine('sqlite://')
-        with app.app_context():
-            _db.metadata.create_all(motor, tables=[_db.metadata.tables['sesiones_conteo']])
-        with motor.begin() as conn:
-            conn.execute(sa.text('DROP INDEX ix_sesion_conteo_sku_activa_unica'))
+        md = sa.MetaData()
+        sa.Table('sesiones_conteo', md,
+                 sa.Column('id', sa.Integer, primary_key=True),
+                 sa.Column('codigo', sa.String(50), nullable=False),
+                 sa.Column('tipo', sa.String(20), nullable=False),
+                 sa.Column('ubicacion_id', sa.Integer, nullable=False),
+                 sa.Column('almacen_id', sa.Integer, nullable=False),
+                 sa.Column('producto_id', sa.Integer, nullable=False),
+                 sa.Column('estado', sa.String(20), nullable=False),
+                 sa.Column('es_segundo_conteo', sa.Boolean),
+                 sa.Column('fecha_cierre', sa.DateTime),
+                 sa.Column('motivo_edicion', sa.Text))
+        md.create_all(motor)
         yield motor
         motor.dispose()
 
@@ -371,7 +381,10 @@ class TestLaMigracion:
             motivo = conn.execute(sa.text(
                 "SELECT motivo_edicion FROM sesiones_conteo WHERE codigo='SOBRA'")).scalar()
             indices = {r[1] for r in conn.execute(sa.text("PRAGMA index_list('sesiones_conteo')"))}
+            columnas = {r[1] for r in conn.execute(sa.text("PRAGMA table_info('sesiones_conteo')"))}
         assert filas == {'EN-CURSO': 'EN_PROCESO', 'SOBRA': 'CANCELADO'}
+        assert {'verificacion_omitida_por_id', 'verificacion_omitida_motivo',
+                'verificacion_omitida_en'} <= columnas
         assert 'm051conteo' in motivo
         assert 'ix_sesion_conteo_sku_activa_unica' in indices
 

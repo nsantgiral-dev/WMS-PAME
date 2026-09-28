@@ -142,11 +142,12 @@ ESTADO_TEXTO = {
 # Permisos — qué botones puede usar quien mira
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _quien(rol):
-    """Un usuario de ese rol, para preguntarle a la política de aprobación
-    (que solo mira `rol` y `activo`) sin buscar a nadie en la base."""
+def _quien(rol, usuario_id=None):
+    """Quien mira, para preguntarle a la política de aprobación sin buscarlo en
+    la base: su rol y, si se sabe, su id — la política mira además si él contó
+    o saltó la cadena (`ConteoService._motivo_ajuste_propio`, 2026-09-27)."""
     from types import SimpleNamespace
-    return SimpleNamespace(rol=rol, activo=True)
+    return SimpleNamespace(rol=rol, activo=True, id=usuario_id)
 
 
 def permisos_de(rol: str) -> dict:
@@ -264,7 +265,7 @@ def filtro_descuadres_por_decidir(almacen_id: int) -> tuple:
             SesionConteo.estado == EstadoConteo.DESCUADRE)
 
 
-def _ajustes(almacen_id, rol: str = None) -> dict:
+def _ajustes(almacen_id, rol: str = None, usuario_id: int = None) -> dict:
     """Raíces en DESCUADRE: las que se pueden aprobar, con su plata, y las que
     no, con el porqué resumido y la acción. Solo raíces: el ajuste sale de la
     raíz (`_exigir_raiz_para_ajustar`); el CC2/CC3 que resolvió queda en
@@ -314,7 +315,7 @@ def _ajustes(almacen_id, rol: str = None) -> dict:
                         if s.foto_siesa_at else None),
             # Por qué QUIEN MIRA no aprueba ESTE ajuste (el tope del jefe es
             # por monto): la pantalla muestra el motivo en vez del botón.
-            no_puede_aprobar=(ConteoService.motivo_no_puede_aprobar(_quien(rol), s)
+            no_puede_aprobar=(ConteoService.motivo_no_puede_aprobar(_quien(rol, usuario_id), s)
                               if rol else None),
         )
         aprobables.append(fila)
@@ -501,7 +502,8 @@ def _rezago(almacen_id, tope) -> dict:
 # Entrada
 # ─────────────────────────────────────────────────────────────────────────────
 
-def tablero(almacen_id: int, *, rol: str = None, ahora: datetime = None) -> dict:
+def tablero(almacen_id: int, *, rol: str = None, usuario_id: int = None,
+            ahora: datetime = None) -> dict:
     """El tablero completo de un almacén. `ahora` (UTC naive) se inyecta en
     los tests; el día es siempre el operativo de Bogotá (Regla 5)."""
     from app.models.almacen import Almacen
@@ -517,7 +519,7 @@ def tablero(almacen_id: int, *, rol: str = None, ahora: datetime = None) -> dict
         'bloqueados': _bloqueados(almacen_id),
         'novedades': _novedades(almacen_id),
         'definitivos': _definitivos(almacen_id),
-        'ajustes': _ajustes(almacen_id, rol),
+        'ajustes': _ajustes(almacen_id, rol, usuario_id),
         'auditorias': _auditorias(almacen_id, hoy),
         'rechazados_siesa': _rechazados_siesa(almacen_id),
     }

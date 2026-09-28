@@ -282,6 +282,16 @@ class SesionConteo(db.Model):
     #: `ConteoService.registrar_conteo`. El invariante CNT-04 la lee para no
     #: confundir esta decisión de producto con el salto indebido del doble ciego.
     ajuste_por_tolerancia = db.Column(db.Boolean, nullable=True)
+    #: **Quién saltó la verificación de esta cadena, y por qué** (m051conteo,
+    #: 2026-09-27). Solo en la raíz, solo la escribe
+    #: `ConteoService.omitir_verificacion` (con SEGUNDO_CONTEO: el CC1 queda
+    #: sin verificar y la raíz pasa a DESCUADRE). Quien omitió no aprueba ese
+    #: ajuste (`motivo_no_puede_aprobar`): decidió que el CC1 vale sin que
+    #: nadie lo verifique, y la firma la pone otra persona.
+    verificacion_omitida_por_id = db.Column(db.Integer, db.ForeignKey('usuarios.id'),
+                                            nullable=True)
+    verificacion_omitida_motivo = db.Column(db.Text, nullable=True)
+    verificacion_omitida_en = db.Column(db.DateTime, nullable=True)
 
     # Relaciones
     ubicacion = db.relationship('Ubicacion', backref='sesiones_conteo', lazy=True)
@@ -455,8 +465,35 @@ class SesionConteo(db.Model):
             'estado': self.estado,
         }
 
+    #: Lo que `to_dict` no muestra mientras el CC3 de la cadena está por
+    #: hacerse (`ConteoService.cifras_ocultas`): todo número que diga cuánto
+    #: hay o cuánto contó otro. El costo unitario no dice cuánto hay: queda.
+    CIFRAS_DEL_CONTEO = ('existencia_siesa', 'cant_pos_siesa', 'salida_sin_conf_siesa',
+                         'teorico_siesa', 'existencia_inicio_siesa', 'cant_pos_inicio_siesa',
+                         'salida_sin_conf_inicio_siesa', 'cantidad_fisica', 'diferencia',
+                         'motivo_codigo', 'tolerancia_primer_conteo', 'valor_ajuste',
+                         'bloqueo_ajuste', 'no_sale_solo')
+
     def to_dict(self):
-        """Vista completa para supervisores."""
+        """Vista completa para supervisores — sin las cifras de una cadena
+        cuyo conteo definitivo está por hacerse (`cifras_ocultas`)."""
+        d = self._to_dict_completo()
+        oculto = _cifras_ocultas(self)
+        d['cifras_ocultas'] = oculto
+        if oculto:
+            for campo in self.CIFRAS_DEL_CONTEO:
+                d[campo] = None
+            d['conteos_descartados'] = []
+            hijo = d.get('segundo_conteo')
+            if hijo:
+                for campo in ('cantidad_fisica', 'diferencia', 'teorico_siesa'):
+                    hijo[campo] = None
+                if hijo.get('tercer_conteo'):
+                    hijo['tercer_conteo']['cantidad_fisica'] = None
+        return d
+
+    def _to_dict_completo(self):
+        """Todas las cifras. Solo la llama `to_dict`, que decide qué se ve."""
         return {
             'id': self.id,
             'codigo': self.codigo,
@@ -530,6 +567,8 @@ class SesionConteo(db.Model):
             'tolerancia_primer_conteo': self.tolerancia_primer_conteo,
             'ajuste_por_tolerancia': bool(self.ajuste_por_tolerancia),
             'motivo_bloqueo': self.motivo_bloqueo,
+            'verificacion_omitida_por_id': self.verificacion_omitida_por_id,
+            'verificacion_omitida_motivo': self.verificacion_omitida_motivo,
             # Datos del segundo conteo (hijo) embebidos para evitar N+1.
             # Si CC1≠CC2, hijo_conteo.hijo_conteo es el CC3.
             'segundo_conteo': {
@@ -562,6 +601,11 @@ class SesionConteo(db.Model):
                 } if self.hijo_conteo.hijo_conteo else None,
             } if self.hijo_conteo else None,
         }
+
+
+def _cifras_ocultas(sesion):
+    from app.services.conteo_service import ConteoService
+    return ConteoService.cifras_ocultas(sesion)
 
 
 def _motivo_bloqueo_ajuste(sesion):

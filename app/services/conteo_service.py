@@ -505,8 +505,11 @@ class ConteoService:
         from app.routes._auth_helpers import Roles
         from app.services import conteo_politica as politica
         no_aprueba = ConteoService.motivo_no_aprueba_ningun_ajuste(usuario)
-        if no_aprueba or usuario.rol in Roles.LEAD:
+        if no_aprueba:
             return no_aprueba
+        propio = ConteoService._motivo_ajuste_propio(usuario, sesion)
+        if propio or usuario.rol in Roles.LEAD:
+            return propio
         tope = politica.tope_aprobacion_jefe()
         valor = ConteoService.valor_del_ajuste(sesion)
         if valor is None:
@@ -515,6 +518,88 @@ class ConteoService:
         if valor > tope:
             return (f'Este ajuste vale {politica.pesos(valor)} y supera su tope de '
                     f'aprobación de {politica.pesos(tope)}: lo aprueba un supervisor o admin')
+        return None
+
+    @staticmethod
+    def autores_del_ajuste(sesion: SesionConteo) -> dict:
+        """Quién hizo el ajuste de esta cadena: `{usuario_id: 'CONTO'|'OMITIO'}`.
+
+        CONTÓ: el operario de todo eslabón con una cantidad registrada (CC1,
+        CC2, CC3, o quien auditó el picking). OMITIÓ: quien saltó la
+        verificación (`verificacion_omitida_por_id`). Una política, una función:
+        la usa `motivo_no_puede_aprobar` y, por ella, la aprobación, la
+        auditoría de picking y el tablero del líder.
+        """
+        raiz = ConteoService._raiz_de(sesion)
+        autores = {}
+        for n in ConteoService.nodos_de_la_cadena(raiz):
+            if n.operario_id and n.cantidad_fisica is not None:
+                autores.setdefault(n.operario_id, 'CONTO')
+        if raiz.verificacion_omitida_por_id:
+            autores[raiz.verificacion_omitida_por_id] = 'OMITIO'
+        return autores
+
+    @staticmethod
+    def definido_por_cc3(sesion: SesionConteo) -> bool:
+        """¿El ajuste de esta cadena lo definió un conteo definitivo contado?"""
+        raiz = ConteoService._raiz_de(sesion)
+        cc2 = raiz.hijo_conteo
+        cc3 = cc2.hijo_conteo if cc2 is not None else None
+        return cc3 is not None and cc3.cantidad_fisica is not None
+
+    @staticmethod
+    def _motivo_ajuste_propio(usuario, sesion: SesionConteo):
+        """**Nadie firma su propio ajuste por encima de un tope** (P1-1,
+        2026-09-27). Con un solo supervisor, quien contaba el CC3 decidía la
+        cifra Y la firmaba, de cualquier monto: un faltante que se quería tapar
+        se tapaba con un CC3. Tres reglas, una función:
+
+        1. Quien **omitió** la verificación no aprueba ese ajuste, de ningún
+           monto: decidió que el CC1 vale sin verificar; firma otra persona.
+        2. Quien **contó** la cadena (o la auditó) firma hasta
+           `CONTEO_TOPE_AUTOAPROBACION` (defecto $100.000); por encima, otra
+           persona. Sin costo no se sabe cuánto vale: no la firma (Regla 0).
+        3. Un ajuste que **definió un CC3** y supera ese tope lo firma el
+           **admin** (y no el admin que lo contó: la regla 2 corre primero).
+        """
+        from app.routes._auth_helpers import Roles
+        from app.services import conteo_politica as politica
+        raiz = ConteoService._raiz_de(sesion)
+        tope = politica.tope_autoaprobacion()
+        valor = ConteoService.valor_del_ajuste(raiz)
+        dentro = valor is not None and valor <= tope
+        cuanto = (f'vale {politica.pesos(valor)}' if valor is not None
+                  else 'no tiene costo en la foto de Siesa (no se sabe cuánto vale)')
+        autor = ConteoService.autores_del_ajuste(raiz).get(getattr(usuario, 'id', None))
+        if autor == 'OMITIO':
+            return ('Usted saltó la verificación de este conteo: el ajuste lo aprueba '
+                    'otra persona.')
+        if autor == 'CONTO' and not dentro:
+            return (f'Usted contó este producto y el ajuste {cuanto}: por encima de '
+                    f'{politica.pesos(tope)} lo aprueba otra persona (el admin).')
+        if ConteoService.definido_por_cc3(raiz) and not dentro and usuario.rol != Roles.ADMIN:
+            return (f'Este ajuste lo definió el conteo definitivo y {cuanto}: por encima '
+                    f'de {politica.pesos(tope)} lo aprueba el admin.')
+        return None
+
+    @staticmethod
+    def cifras_ocultas(sesion: SesionConteo):
+        """¿Hay que ocultar las cifras de esta cadena? Texto, o `None`.
+
+        **Mientras el conteo definitivo (CC3) esté por hacerse, nadie ve el
+        teórico de Siesa ni lo que contaron el 1º y el 2º** (P1-1, 2026-09-27).
+        El CC3 lo cuenta supervisión, y supervisión es justo quien ve la lista
+        de Conteos: el «ciego» del CC3 era solo de su pestaña. Toda vista que
+        pinta cifras de un conteo pregunta acá (`SesionConteo.to_dict`, el
+        CSV); trinquete en `tests/test_conteo_control_cc3.py`. Al contarse el
+        CC3 (o cancelarse la cadena), las cifras vuelven.
+        """
+        raiz = ConteoService._raiz_de(sesion)
+        cc2 = raiz.hijo_conteo
+        cc3 = cc2.hijo_conteo if cc2 is not None else None
+        if cc3 is not None and cc3.estado in EstadoConteo.MIEMBRO_VIVO:
+            return ('El conteo definitivo de este producto está por hacerse: las cifras '
+                    '(Siesa y los dos primeros conteos) se ven cuando se cuente.')
         return None
 
     @staticmethod
@@ -1202,6 +1287,84 @@ class ConteoService:
         logger.info(f'[CONTEO] {sesion.codigo} y su cadena cancelados por #{usuario_id} '
                     f'({len(a_cancelar)} sesión(es)): {motivo}')
         return sesion
+
+    @staticmethod
+    def omitir_verificacion(sesion_id: int, usuario_id: int, motivo: str) -> dict:
+        """El líder no espera el recuento pendiente de una cadena (P1-2, 2026-09-27).
+
+        Antes («omitir segundo conteo», en la ruta): con la raíz en SEGUNDO **o
+        TERCER_CONTEO** cancelaba lo pendiente y dejaba la raíz en DESCUADRE con
+        la observación del CC1, sin motivo y sin rastro — y el mismo líder
+        aprobaba el ajuste. En TERCER_CONTEO eso aprobaba un CC1 que el doble
+        ciego YA había refutado (CC1 ≠ CC2), saltándose el CC3 que decidió el
+        dueño. Ahora, con motivo obligatorio y en la bitácora:
+
+        - **SEGUNDO_CONTEO**: lo pendiente se cancela, la raíz pasa a DESCUADRE
+          (el CC1 queda sin verificar) y queda quién y por qué
+          (`verificacion_omitida_*`, `motivo_edicion`). Quien omitió no aprueba
+          ese ajuste (`_motivo_ajuste_propio`).
+        - **TERCER_CONTEO**: no hay base para ajustar —los dos conteos se
+          contradicen—, así que se **cancela la cadena entera**
+          (`cancelar_cadena`). Nada queda aprobable.
+
+        Levanta `PermissionError` (no es LEAD), `LookupError`, `ValueError`
+        (sin motivo o en otro estado) o `CadenaNoCancelable`.
+        """
+        from app.routes._auth_helpers import Roles
+        from app.models.usuario import Usuario
+        from app.services.bitacora import motivo_obligatorio, registrar_accion
+        u = db.session.get(Usuario, usuario_id)
+        if u is None or u.rol not in Roles.LEAD:
+            raise PermissionError('Solo un supervisor o admin puede saltar un recuento')
+        motivo = motivo_obligatorio(motivo, 'saltar un recuento')
+        sesion = (SesionConteo.query.filter_by(id=sesion_id)
+                  .with_for_update().first())
+        if not sesion:
+            raise LookupError('Sesión de conteo no encontrada')
+        if sesion.estado not in (EstadoConteo.SEGUNDO_CONTEO, EstadoConteo.TERCER_CONTEO):
+            raise ValueError(f'Solo se salta un recuento con el conteo en 2º o 3er conteo '
+                             f'(está {sesion.estado})')
+
+        if sesion.estado == EstadoConteo.TERCER_CONTEO:
+            antes = {'estado': sesion.estado}
+            ConteoService.cancelar_cadena(
+                sesion.id, usuario_id,
+                f'Sin conteo definitivo: el 1º y el 2º no coincidieron. {motivo}')
+            registrar_accion('CANCELAR', sesion, usuario_id=usuario_id, motivo=motivo,
+                             antes=antes, despues={'estado': sesion.estado,
+                                                   'sin_conteo_definitivo': True})
+            db.session.commit()
+            return {'ok': True, 'sesion_id': sesion.id, 'estado': sesion.estado,
+                    'mensaje': 'El 1º y el 2º conteo no coincidieron: sin conteo definitivo no '
+                               'hay con qué ajustar. La cadena quedó cancelada.'}
+
+        ahora = datetime.utcnow()
+        for descendiente in ConteoService.descendientes_vivos(sesion):
+            registrar_accion('CANCELAR', descendiente, usuario_id=usuario_id, motivo=motivo,
+                             antes={'estado': descendiente.estado},
+                             despues={'estado': EstadoConteo.CANCELADO,
+                                      'verificacion_omitida': True})
+            descendiente.estado = EstadoConteo.CANCELADO
+            descendiente.fecha_cierre = ahora
+            descendiente.motivo_edicion = f'Recuento no esperado: {motivo}'
+            descendiente.editado_por = usuario_id
+            descendiente.editado_en = ahora
+        registrar_accion('EDITAR', sesion, usuario_id=usuario_id, motivo=motivo,
+                         antes={'estado': sesion.estado},
+                         despues={'estado': EstadoConteo.DESCUADRE,
+                                  'verificacion_omitida_por_id': usuario_id})
+        sesion.estado = EstadoConteo.DESCUADRE
+        sesion.verificacion_omitida_por_id = usuario_id
+        sesion.verificacion_omitida_motivo = motivo
+        sesion.verificacion_omitida_en = ahora
+        sesion.motivo_edicion = ((sesion.motivo_edicion + ' · ') if sesion.motivo_edicion else '') \
+            + f'Sin 2º conteo: {motivo}'
+        sesion.editado_por = usuario_id
+        sesion.editado_en = ahora
+        db.session.commit()
+        logger.info(f'[CONTEO] {sesion.codigo}: 2º conteo no esperado por #{usuario_id}: {motivo}')
+        return {'ok': True, 'sesion_id': sesion.id, 'estado': sesion.estado,
+                'mensaje': 'La diferencia queda para decidir. El ajuste lo aprueba otra persona.'}
 
     # ── Novedades: «mercancía sin código» ────────────────────────────────────
 
@@ -3342,6 +3505,9 @@ class ConteoService:
             ubicacion_id=tarea.ubicacion_id,
             tarea_picking_id=tarea.id,
             cantidad_fisica=cantidad_fisica,
+            # Quien audita es quien contó: `autores_del_ajuste` lo lee de acá
+            # (su propio ajuste lo firma solo hasta el tope).
+            operario_id=aprobador_id,
             fuente_existencia='SIESA',
             diferencia=diferencia,
             aprobador_id=aprobador_id,
