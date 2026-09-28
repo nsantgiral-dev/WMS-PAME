@@ -6922,3 +6922,23 @@ La regla no se afloja: **el `.env` no se usa para correr la app ni scripts que
 escriben** —puede volver a cambiar sin que nadie lo anuncie— y los candados
 (`--confirmar-destino`, `RAILWAY_SERVICE_ID`, el sello) siguen siendo
 necesarios.
+
+---
+
+## Integración v2 (2026-09-27) — fiscal + pantallas + plata + inventario
+
+Los cuatro frentes de la validación crítica, juntos. Lo que solo se ve al
+juntarlos:
+
+| Costura | Qué pasaba al juntar | Ahora |
+|---|---|---|
+| Pre-flag | Plata volvió objeto el pre-flag (`_Preflag`) y sumó NC y retención a `TIPOS_CON_PREFLAG`; inventario cambió qué es «sin verificar» (bandera **sin respuesta**, `estado_del_preflag`). Las ramas de NC/DC de `_ejecutar_job` decidían cada una a su manera | `_Preflag.estado()` (LIBRE · ENVIADO · SIN_DESENLACE) para los seis tipos; `_decidir_por_desenlace` es la única que convierte eso en idempotente / «no sé» / libre, por objeto (`_exigir_preflag_con_desenlace`) o por job (`_exigir_envio_con_desenlace`). 4 mutaciones rojas |
+| Lecturas con el circuito sin cerrar | Plata lee las facturas de la ruta de a seis; fiscal (H1) ya sabía que dos lecturas simultáneas gastan el único probe | `ConnektaGateway.lecturas_en_serie()`: la primera sola, el resto en paralelo. La usan el precheck del cierre y `leer_facturas_en_paralelo` |
+| Migraciones | `m050plata` y `m050inv2` sobre `m049tardia` | `m050inv2` detrás de `m050plata`; una cabeza. upgrade → downgrade a `m049tardia` → upgrade verificado en un PostgreSQL local desechable (vacío: los backfill no se ejercitaron con datos) |
+| xfail | El e2e del día llegó por tres frentes | Una copia; H2/H2b (fiscal), H5/H7 (inventario) cerrados, sus xfail fuera. No queda ninguno en `test_val_*` |
+| Detector de la plata | `_idempotentes_sin_desenlace` recorría los hijos de cada sentencia: un `if` del primer nivel de la rama no contaba como guarda | Recorre cada rama como bloque |
+
+**Tests que dependían del reloj**, rojos en la suite completa y verdes solos:
+los de circuito «abierto» (desde H1 deja pasar el probe vencido el minuto:
+ahora fijan `_cb_last_probe`) y `test_vigia_ingesta` (`date.today()` en UTC; el
+domingo de noche ya es lunes: usa `hoy_bogota()`, preexistente).
