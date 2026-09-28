@@ -29,6 +29,10 @@ from urllib.parse import urlparse
 #: Sufijos de host que son bases de Railway: el proxy público y la red interna.
 HOSTS_RAILWAY = ('rlwy.net', 'railway.internal')
 
+#: La pone Railway en cada servicio; un humano no la copia a su `.env`
+#: (P1-5 c, 2026-09-26). Con `RAILWAY_ENVIRONMENT_NAME` sola no alcanza.
+VAR_SERVICIO = 'RAILWAY_SERVICE_ID'
+
 
 def _host_de(url: str) -> str:
     try:
@@ -57,11 +61,21 @@ def motivo_candado(env=None) -> str | None:
 
     `env`: un mapeo tipo `os.environ` (los tests pasan un dict)."""
     env = os.environ if env is None else env
-    if (env.get('RAILWAY_ENVIRONMENT_NAME') or '').strip():
-        return None
     url = env.get('DATABASE_URL') or ''
     if not base_es_de_railway(url):
         return None
+    nombre = (env.get('RAILWAY_ENVIRONMENT_NAME') or '').strip()
+    servicio = (env.get(VAR_SERVICIO) or '').strip()
+    if nombre and servicio:
+        return None
+    if nombre:
+        # P1-5 c (2026-09-26): el nombre del ambiente es fácil de copiar a mano
+        # a un `.env`; el id del servicio lo pone Railway y nadie lo copia.
+        return (f'CANDADO ANTI-PRODUCCIÓN LOCAL: este proceso dice ser de Railway '
+                f'(RAILWAY_ENVIRONMENT_NAME={nombre}) pero no tiene {VAR_SERVICIO}, '
+                f'que Railway pone en todo servicio: parece puesta a mano. Su base es '
+                f'de Railway ({_host_de(url) or "host ilegible"}). No arranca ningún '
+                f'scheduler ni hilo automático.')
     return (f'CANDADO ANTI-PRODUCCIÓN LOCAL: este proceso corre fuera de Railway '
             f'(sin RAILWAY_ENVIRONMENT_NAME) y su base es de Railway '
             f'({_host_de(url) or "host ilegible"}). No arranca ningún scheduler ni '

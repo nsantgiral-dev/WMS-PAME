@@ -71,7 +71,7 @@ class TestLaDecision:
 
     def test_sello_ilegible_no_postea(self, db, monkeypatch):
         monkeypatch.setenv('RAILWAY_ENVIRONMENT_NAME', 'QA')
-        with patch.object(sello_ambiente, '_leer', side_effect=RuntimeError('base caída')):
+        with patch.object(sello_ambiente, '_leer_en', side_effect=RuntimeError('base caída')):
             ok, motivo = sello_ambiente.puede_postear(usar_cache=False)
         assert ok is False and 'No se pudo leer' in motivo
 
@@ -240,3 +240,100 @@ class TestNingunPostASiesaSinLaPared:
 
     def test_piso(self):
         assert len(_posts_http()) >= 3
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# P1-5 (2026-09-26): producción se sella al arrancar, solo se auto-sella una
+# base sin historia, y la decisión no toca la sesión de quien postea.
+# ═════════════════════════════════════════════════════════════════════════════
+
+class TestLaPoliticaUnaFuncion:
+
+    @pytest.mark.parametrize('proceso,sello,historia,esperado', [
+        (None, None, True, (True, False)),
+        ('QA', None, False, (True, True)),
+        ('QA', None, True, (False, False)),
+        ('QA', 'QA', True, (True, False)),
+        ('QA', 'production', False, (False, False)),
+    ])
+    def test_veredicto(self, proceso, sello, historia, esperado):
+        postea, sellar, motivo = sello_ambiente.veredicto(proceso, sello, historia)
+        assert (postea, sellar) == esperado
+        assert bool(motivo) == (not postea)
+
+
+class TestSoloSeAutoSellaUnaBaseSinHistoria:
+
+    def test_con_historia_no_postea_ni_sella_y_lo_dice(self, db, monkeypatch):
+        from app.models.sello_ambiente import SelloAmbiente
+        from app.models.siesa_job import SiesaJob
+        monkeypatch.setenv('RAILWAY_ENVIRONMENT_NAME', 'QA')
+        SiesaJob.encolar('ALERTA_EMAIL', {'asunto': 'viejo'})
+        db.session.commit()
+        ok, motivo = sello_ambiente.puede_postear(usar_cache=False)
+        assert ok is False and 'historia' in motivo and 'Re-sellar' in motivo
+        assert SelloAmbiente.query.count() == 0
+        e = sello_ambiente.estado()
+        assert e['bloquea'] is True and e['hay_historia'] is True and e['puede_resellar']
+
+    def test_resellar_la_destraba(self, db, monkeypatch):
+        from app.models.siesa_job import SiesaJob
+        monkeypatch.setenv('RAILWAY_ENVIRONMENT_NAME', 'QA')
+        SiesaJob.encolar('ALERTA_EMAIL', {'asunto': 'viejo'})
+        db.session.commit()
+        from tests.test_cartera_retencion import _usuario
+        u = _usuario(db, rol='admin')
+        sello_ambiente.resellar('QA', 'copia adoptada a propósito', u.id)
+        assert sello_ambiente.puede_postear(usar_cache=False) == (True, '')
+
+
+class TestProduccionSeSellaAlArrancar:
+
+    def test_produccion_sin_sello_se_sella(self, app, db, monkeypatch):
+        from app.models.sello_ambiente import SelloAmbiente
+        monkeypatch.setenv('RAILWAY_ENVIRONMENT_NAME', 'production')
+        assert sello_ambiente.sellar_en_arranque(app) == 'sellada'
+        db.session.expire_all()
+        s = SelloAmbiente.query.one()
+        assert s.ambiente == 'production' and s.sellado_por == 'arranque'
+        assert sello_ambiente.sellar_en_arranque(app).startswith('ya sellada')
+
+    def test_otro_ambiente_no_se_sella_al_arrancar(self, app, db, monkeypatch):
+        from app.models.sello_ambiente import SelloAmbiente
+        monkeypatch.setenv('RAILWAY_ENVIRONMENT_NAME', 'QA')
+        assert sello_ambiente.sellar_en_arranque(app) == 'no es producción'
+        assert SelloAmbiente.query.count() == 0
+
+    def test_create_app_lo_llama(self):
+        src = (RAIZ / 'app/__init__.py').read_text(encoding='utf-8')
+        fn = next(n for n in ast.walk(ast.parse(src)) if isinstance(n, ast.FunctionDef)
+                  and n.name == 'create_app')
+        nombres = {getattr(n, 'id', None) for n in ast.walk(fn)} | {
+            getattr(n, 'name', None) for n in ast.walk(fn)}
+        assert 'sellar_en_arranque' in nombres
+
+
+class TestLaDecisionNoTocaLaSesionDelLlamador:
+
+    def test_un_error_al_leer_no_descarta_lo_pendiente(self, db, monkeypatch, almacen):
+        from app.models.ubicacion import Ubicacion
+        monkeypatch.setenv('RAILWAY_ENVIRONMENT_NAME', 'QA')
+        pendiente = Ubicacion(codigo='UB-SELLO', almacen_id=almacen.id, activo=True)
+        db.session.add(pendiente)
+        with patch.object(sello_ambiente, '_leer_en', side_effect=RuntimeError('caída')):
+            ok, _ = sello_ambiente.puede_postear(usar_cache=False)
+        assert ok is False
+        assert pendiente in db.session, 'la decisión hizo rollback de la sesión del llamador'
+
+
+class TestElBotonDeReSellar:
+
+    def test_el_monitor_publica_el_sello_y_el_panel_ofrece_re_sellar(self, app, client, db):
+        from tests.test_cartera_retencion import _jwt, _usuario
+        r = client.get('/api/siesa/monitor', headers=_jwt(app, _usuario(db, rol='admin')))
+        assert r.status_code == 200 and 'sello_ambiente' in r.get_json()
+        js = (RAIZ / 'app/static/pwa/app.js').read_text(encoding='utf-8')
+        cuerpo = js[js.index('async function siesaResellarBase'):]
+        cuerpo = cuerpo[:cuerpo.index('\n}\n')]
+        assert "/api/health/sello-ambiente" in cuerpo and cuerpo.count('_modalTexto') == 2
+        assert 'onclick="siesaResellarBase()"' in js

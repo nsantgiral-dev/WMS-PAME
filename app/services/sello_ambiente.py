@@ -80,39 +80,103 @@ def _leer():
     return SelloAmbiente.query.order_by(SelloAmbiente.id.desc()).first()
 
 
+#: El ambiente que se sella explícitamente al arrancar (P1-5 a, 2026-09-26).
+AMBIENTE_PRODUCCION = 'production'
+
+
+def es_produccion(nombre) -> bool:
+    return _mismo(nombre, AMBIENTE_PRODUCCION)
+
+
+def veredicto(proceso, sello_ambiente, hay_historia: bool) -> tuple:
+    """`(postea, sellar, motivo)`. **La política, una función** (P1-5,
+    2026-09-26): la leen `puede_postear` (que decide y sella) y `estado` (que
+    solo muestra).
+
+    - Sin ambiente en el proceso: postea, no sella (local/tests, declarado).
+    - Base sin sello y **sin historia** de `siesa_jobs`: la primera vez que
+      alguien va a postear, se sella con su ambiente.
+    - Base sin sello **con historia**: NO postea. Una base que ya habló con
+      Siesa sin sello puede ser una copia de otro ambiente; adoptarla exige
+      sellarla a propósito (admin, Siesa → Recuperación → Re-sellar).
+    - Sello del mismo ambiente: postea. De otro: no postea.
+    """
+    if proceso is None:
+        return True, False, ''
+    if sello_ambiente is None:
+        if hay_historia:
+            return False, False, (
+                f'La base no tiene sello de ambiente y ya tiene historia de envíos a '
+                f'Siesa: puede ser una copia de otro ambiente. No se postea hasta '
+                f'sellarla a propósito (admin: Siesa → Recuperación → Re-sellar, '
+                f'escribiendo «{proceso}»).')
+        return True, True, ''
+    if _mismo(sello_ambiente, proceso):
+        return True, False, ''
+    return False, False, (f'La base está sellada «{sello_ambiente}» y este proceso es '
+                          f'«{proceso}»: no se postea a Siesa (¿una copia de otro '
+                          f'ambiente restaurada acá?).')
+
+
+def _leer_en(conn):
+    """`(ambiente del sello | None, hay_historia)` por una conexión PROPIA: la
+    decisión no toca la sesión del llamador (antes `_decidir` hacía commit y
+    rollback de `db.session`, y un rollback se llevaba los cambios pendientes
+    de quien iba a postear — P3, 2026-09-26)."""
+    from sqlalchemy import select
+    from app.models.sello_ambiente import SelloAmbiente
+    from app.models.siesa_job import SiesaJob
+    t, jobs = SelloAmbiente.__table__, SiesaJob.__table__
+    fila = conn.execute(select(t.c.ambiente).order_by(t.c.id.desc()).limit(1)).first()
+    historia = conn.execute(select(jobs.c.id).limit(1)).first() is not None
+    return (fila.ambiente if fila else None), historia
+
+
+def _sellar_en(conn, ambiente, por, motivo):
+    from app.models.sello_ambiente import SelloAmbiente
+    conn.execute(SelloAmbiente.__table__.insert().values(
+        ambiente=ambiente, sellado_en=datetime.utcnow(), sellado_por=por, motivo=motivo))
+
+
 def estado() -> dict:
-    """Lo que ve `/api/health/siesa`. **Solo lee**: no sella."""
+    """Lo que ven `/api/health/siesa` y el panel de recuperación. **Solo
+    lee**: no sella."""
     proceso = ambiente_del_proceso()
     try:
+        from app.extensions import db
         sello = _leer()
         sello_d = sello.to_dict() if sello else None
+        from app.models.siesa_job import SiesaJob
+        historia = db.session.query(SiesaJob.id).first() is not None
         error = None
     except Exception as e:     # tabla ausente, base caída
-        sello_d, error = None, str(e)[:200]
+        sello_d, historia, error = None, False, str(e)[:200]
+    base = {'proceso': proceso, 'sello': sello_d, 'hay_historia': historia,
+            'puede_resellar': proceso is not None}
     if proceso is None:
-        return {'proceso': None, 'sello': sello_d, 'coincide': None, 'bloquea': False,
+        return {**base, 'coincide': None, 'bloquea': False,
                 'texto': (f'Este proceso no tiene {VAR_AMBIENTE}: no se verifica a qué '
                           'ambiente pertenece la base (local o tests).')}
     if error:
-        return {'proceso': proceso, 'sello': None, 'coincide': None, 'bloquea': True,
+        return {**base, 'coincide': None, 'bloquea': True,
                 'texto': f'No se pudo leer el sello de la base ({error}): no se postea.'}
+    postea, sellar, motivo = veredicto(proceso, sello_d['ambiente'] if sello_d else None,
+                                       historia)
     if sello_d is None:
-        return {'proceso': proceso, 'sello': None, 'coincide': None, 'bloquea': False,
-                'texto': ('La base todavía no tiene sello: el primer envío a Siesa '
-                          f'la sellará «{proceso}».')}
-    coincide = _mismo(sello_d['ambiente'], proceso)
-    return {'proceso': proceso, 'sello': sello_d, 'coincide': coincide,
-            'bloquea': not coincide,
+        return {**base, 'coincide': None, 'bloquea': not postea,
+                'texto': motivo or ('La base todavía no tiene sello y no tiene historia: '
+                                    f'el primer envío a Siesa la sellará «{proceso}».')}
+    return {**base, 'coincide': postea, 'bloquea': not postea,
             'texto': (f'Base sellada «{sello_d["ambiente"]}», proceso «{proceso}».'
-                      + ('' if coincide else
+                      + ('' if postea else
                          ' NO COINCIDEN: ni la DLQ ni ningún POST salen a Siesa. '
                          'Si esta base es una copia que se adoptó a propósito, '
-                         're-séllela desde el health (admin).'))}
+                         're-séllela (admin: Siesa → Recuperación).'))}
 
 
 def puede_postear(usar_cache: bool = True) -> tuple:
-    """`(True, '')` o `(False, motivo)`. Sella la base si no tiene sello y el
-    proceso declara su ambiente (el primer uso)."""
+    """`(True, '')` o `(False, motivo)`. Sella la base si no tiene sello, no
+    tiene historia y el proceso declara su ambiente (el primer uso)."""
     ahora = time.monotonic()
     if usar_cache and _cache['respuesta'] is not None and ahora - _cache['ts'] < _TTL_S:
         return _cache['respuesta']
@@ -127,27 +191,46 @@ def _decidir() -> tuple:
         return True, ''
     try:
         from app.extensions import db
-        from app.models.sello_ambiente import SelloAmbiente
-        sello = _leer()
-        if sello is None:
-            db.session.add(SelloAmbiente(ambiente=proceso, sellado_en=datetime.utcnow(),
-                                         sellado_por='sistema',
-                                         motivo='primer envío a Siesa sobre esta base'))
-            db.session.commit()
-            logger.warning('[SELLO] Base sellada «%s» (primer uso).', proceso)
-            return True, ''
-        if _mismo(sello.ambiente, proceso):
-            return True, ''
-        return False, (f'La base está sellada «{sello.ambiente}» y este proceso es '
-                       f'«{proceso}»: no se postea a Siesa (¿una copia de otro '
-                       f'ambiente restaurada acá?).')
+        with db.engine.begin() as conn:
+            sello, historia = _leer_en(conn)
+            postea, sellar, motivo = veredicto(proceso, sello, historia)
+            if sellar:
+                _sellar_en(conn, proceso, 'sistema',
+                           'primer envío a Siesa sobre una base sin historia')
+                logger.warning('[SELLO] Base sellada «%s» (primer uso, sin historia).', proceso)
+        return postea, motivo
     except Exception as e:
-        try:
-            from app.extensions import db
-            db.session.rollback()
-        except Exception:
-            pass
         return False, f'No se pudo leer el sello de la base ({str(e)[:200]}): no se postea.'
+
+
+def sellar_en_arranque(app=None) -> str:
+    """P1-5 a (2026-09-26): **producción se sella explícitamente al arrancar**,
+    no esperando al primer envío de la DLQ. Así toda copia que se tome de
+    producción —desde su primer arranque con esta versión— lleva el sello
+    `production`, y un QA que la restaure no postea sus jobs.
+
+    Solo el proceso de producción, solo si la base no tiene sello, y nunca con
+    el candado local puesto. Nunca levanta (el arranque no depende de esto):
+    devuelve qué hizo. Conexión propia."""
+    proceso = ambiente_del_proceso()
+    if not es_produccion(proceso):
+        return 'no es producción'
+    if app is not None and app.config.get('CANDADO_PRODUCCION_LOCAL'):
+        return 'candado local'
+    try:
+        from app.extensions import db
+        with db.engine.begin() as conn:
+            sello, _historia = _leer_en(conn)
+            if sello is not None:
+                return f'ya sellada «{sello}»'
+            _sellar_en(conn, proceso, 'arranque',
+                       'producción se sella al arrancar (P1-5, 2026-09-26)')
+        logger.warning('[SELLO] Base de producción sellada al arrancar.')
+        _olvidar_cache()
+        return 'sellada'
+    except Exception as e:     # tabla aún sin migrar, base caída: el primer envío lo intenta
+        logger.warning('[SELLO] No se pudo sellar al arrancar: %s', e)
+        return f'error: {str(e)[:120]}'
 
 
 def exigir_para_postear():

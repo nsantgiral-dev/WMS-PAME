@@ -34,7 +34,17 @@ class TestLaPolitica:
 
     def test_dentro_de_railway_no_bloquea(self):
         assert motivo_candado({'DATABASE_URL': _URL_PROD,
-                               'RAILWAY_ENVIRONMENT_NAME': 'production'}) is None
+                               'RAILWAY_ENVIRONMENT_NAME': 'production',
+                               'RAILWAY_SERVICE_ID': 'srv-123'}) is None
+
+    def test_el_nombre_sin_el_id_del_servicio_bloquea(self):
+        """P1-5 c: el nombre se copia a mano a un `.env`; el id del servicio no."""
+        m = motivo_candado({'DATABASE_URL': _URL_PROD, 'RAILWAY_ENVIRONMENT_NAME': 'production'})
+        assert m and 'RAILWAY_SERVICE_ID' in m and 'a mano' in m
+
+    def test_el_id_sin_base_de_railway_no_importa(self):
+        assert motivo_candado({'DATABASE_URL': 'sqlite:///:memory:',
+                               'RAILWAY_ENVIRONMENT_NAME': 'QA'}) is None
 
     def test_variable_vacia_no_cuenta_como_railway(self):
         assert motivo_candado({'DATABASE_URL': _URL_PROD,
@@ -54,12 +64,21 @@ def registro(monkeypatch):
     """Sustituye el arranque real de cada scheduler por una anotación: el test
     nunca levanta un cron (ni contra la URL falsa de Railway)."""
     import app as app_pkg
-    llamados = []
+    class _Lista(list):
+        pass
+    llamados = _Lista()
     monkeypatch.setattr(app_pkg, '_registrar_scheduler',
                         lambda app, _il, _lg, mod, fn, tag, **kw: llamados.append(tag))
     monkeypatch.setenv('SYNC_SCHEDULER', 'true')
     monkeypatch.setenv('HEAVY_SCHEDULERS', 'true')
     monkeypatch.delenv('WORKER_SKIP_ESSENTIAL', raising=False)
+    # El sello al arrancar (P1-5 a) abriría una conexión a la URL falsa de
+    # Railway: el test nunca sale a la red.
+    from app.services import sello_ambiente
+    sellos = []
+    monkeypatch.setattr(sello_ambiente, 'sellar_en_arranque',
+                        lambda app=None: sellos.append(1) or 'test')
+    llamados.sellos = sellos
     return llamados
 
 
@@ -78,9 +97,20 @@ class TestCreateApp:
         import app as app_pkg
         monkeypatch.setenv('DATABASE_URL', _URL_PROD)
         monkeypatch.setenv('RAILWAY_ENVIRONMENT_NAME', 'production')
+        monkeypatch.setenv('RAILWAY_SERVICE_ID', 'srv-123')
         a = app_pkg.create_app()
         assert len(registro) >= 10
         assert a.config['CANDADO_PRODUCCION_LOCAL'] is None
+        assert registro.sellos == [1], 'producción no se selló al arrancar'
+
+    def test_con_el_nombre_puesto_a_mano_no_arranca(self, registro, monkeypatch):
+        import app as app_pkg
+        monkeypatch.setenv('DATABASE_URL', _URL_PROD)
+        monkeypatch.setenv('RAILWAY_ENVIRONMENT_NAME', 'production')
+        monkeypatch.delenv('RAILWAY_SERVICE_ID', raising=False)
+        a = app_pkg.create_app()
+        assert registro == [] and a.config['CANDADO_PRODUCCION_LOCAL']
+        assert registro.sellos == [], 'con el candado no se sella'
 
     def test_local_con_base_local_arranca(self, registro, monkeypatch):
         import app as app_pkg

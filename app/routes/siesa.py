@@ -255,7 +255,16 @@ def monitor_sincronizacion():
         # se mira cuando algo ya está roto.
         pendientes = fallidos = 0
 
+    # El sello de la base (P1-5 d, 2026-09-26): el panel de recuperación lo
+    # muestra y ofrece re-sellar cuando bloquea.
+    try:
+        from app.services import sello_ambiente as _sello
+        sello = _sello.estado()
+    except Exception as _e_sello:  # noqa: BLE001 — el monitor no se cae por esto
+        sello = {'error': str(_e_sello)[:200], 'bloquea': None}
+
     return jsonify({
+        'sello_ambiente': sello,
         'modulos': {
             'productos':      {'estado': _semaforo_de_estado(productos),      'detalle': productos},
             'pedidos':        {'estado': _semaforo_de_estado(pedidos),        'detalle': pedidos},

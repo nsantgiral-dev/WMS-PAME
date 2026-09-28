@@ -384,6 +384,12 @@ def create_app():
     from app.utils.candado_local import motivo_candado as _motivo_candado
     _candado = _motivo_candado()
     app.config['CANDADO_PRODUCCION_LOCAL'] = _candado
+    # Producción se sella al arrancar, no al primer envío de la DLQ (P1-5 a,
+    # 2026-09-26): así toda copia que se tome de ella lleva su sello.
+    if not _candado:
+        from app.services.sello_ambiente import sellar_en_arranque as _sellar_arranque
+        with app.app_context():
+            app.config['SELLO_ARRANQUE'] = _sellar_arranque(app)
     if _candado:
         _lg = logging.getLogger(__name__)
         _lg.critical('=' * 78)

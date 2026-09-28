@@ -3593,6 +3593,26 @@ document.addEventListener('DOMContentLoaded', verificarModoSistema);
 // curl. Van acá, en la pestaña donde alguien mira cuando algo se rompe.
 // ═══════════════════════════════════════════════════════════════════════════
 
+/**
+ * Re-sellar la base para el ambiente de este proceso (P1-5 d, 2026-09-26).
+ * Los guardas son los del servidor (`sello_ambiente.resellar`): admin, motivo
+ * y el nombre del ambiente escrito. Antes: decidir qué pasa con los envíos
+ * PENDIENTE que trajo la copia — al re-sellar, la cola los ejecuta.
+ */
+async function siesaResellarBase() {
+  const motivo = await _modalTexto('Re-sellar la base',
+    'Por qué esta base es de este ambiente (obligatorio). Al re-sellarla, los envíos pendientes que trajo salen a Siesa:');
+  if (!motivo) return;
+  const ambiente = await _modalTexto('Confirmar el ambiente',
+    'Escriba el nombre del ambiente de este servidor, tal como aparece arriba:');
+  if (!ambiente) return;
+  try {
+    await post('/api/health/sello-ambiente', { motivo, ambiente });
+    alerta('Base re-sellada', 'exito');
+    siesaRecuperacionCargar();
+  } catch (e) { alerta(e.message || 'No se pudo re-sellar', 'error'); }
+}
+
 /** Estado de la cola y de los sincronizadores. Lo primero que se mira. */
 async function siesaRecuperacionCargar() {
   const el = document.getElementById('siesa-recuperacion');
@@ -3642,6 +3662,16 @@ async function siesaRecuperacionCargar() {
         Herramientas para cuando algo no llegó a Siesa. Todas dejan registro con
         su nombre.
       </p>
+      ${bloque('Ambiente de la base', monitor, d => {
+        const sa = d.sello_ambiente || {};
+        const quien = sa.sello ? `sellada «${esc(sa.sello.ambiente)}»` : 'sin sello';
+        return `
+        <div class="tabla-fila" style="align-items:flex-start;flex-wrap:wrap;">
+          <span class="tabla-nombre" style="font-size:var(--fs-xs);">Base ${quien} · proceso «${esc(sa.proceso || 'sin ambiente')}»<br>
+            <span style="color:${sa.bloquea ? 'var(--red)' : 'var(--tx3)'};font-size:var(--fs-xs);">${esc(sa.texto || sa.error || '')}</span></span>
+          ${sa.bloquea && sa.puede_resellar ? `<button class="btn-flota" style="flex:0 0 auto;" onclick="siesaResellarBase()">Re-sellar esta base</button>` : ''}
+        </div>`;
+      })}
       ${bloque('Sincronizadores', monitor, d => Object.entries(d.modulos || {})
           .map(([nombre, m]) => filaModulo(nombre, m)).join(''))}
       ${bloque('Cola DLQ', monitor, d => `
