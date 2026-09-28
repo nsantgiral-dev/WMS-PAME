@@ -40,6 +40,21 @@ from flask_jwt_extended import get_jwt_identity
 from app.models.usuario import Usuario
 from app.routes._auth_helpers import Roles
 
+#: **El gerente ve flota y no escribe** (decisión del dueño, 2026-09-27). Está
+#: en `Roles.GESTION` —y por eso en las tuplas de acá— para LEER todo; `exige`
+#: le niega cualquier método que no sea de lectura, en TODO endpoint de
+#: `/flota`, y las tuplas que solo sirven para escribir (`DECIDE_FLOTA`,
+#: `FUERZA_CIERRE`) no lo nombran. Una política en un sitio: un endpoint nuevo
+#: la hereda. Trinquete medido sobre el `url_map`:
+#: `tests/flota/test_val_flota_legal_20260927.py::TestElGerenteNoEscribeEnFlota`.
+SOLO_LECTURA_FLOTA = (Roles.GERENTE,)
+METODOS_DE_LECTURA = ('GET', 'HEAD', 'OPTIONS')
+
+
+def _escriben(roles) -> tuple:
+    return tuple(r for r in roles if r not in SOLO_LECTURA_FLOTA)
+
+
 #: **Registro** del vehículo: escribir lo que pasó. NO incluye conductor.
 #:
 #: Nació el 2026-08-03 gateando dos endpoints —ficha y documentos— y su nombre
@@ -91,7 +106,7 @@ MAESTROS_FLOTA = tuple(Roles.GESTION) + (Roles.CONTROL_FLOTA,)
 #: costo futuro es real y es el precio de la regla: para mandar un camión al
 #: taller, control de flota escala a gestión — que es literalmente lo que su
 #: ficha dice que hace («no ordena: señala plazos vencidos y escala»).
-DECIDE_FLOTA = tuple(Roles.GESTION)
+DECIDE_FLOTA = _escriben(Roles.GESTION)
 
 
 def _usuario():
@@ -116,12 +131,20 @@ def exige(roles, que=''):
     def decorador(f):
         @wraps(f)
         def envoltura(*args, **kwargs):
+            from flask import request
             u = _usuario()
             if u is None or u.rol not in roles:
                 return jsonify({
                     'error': f'Sin permiso para {que or f.__name__}',
                     'tu_rol': u.rol if u else None,
                     'roles_permitidos': sorted(roles),
+                }), 403
+            if u.rol in SOLO_LECTURA_FLOTA and request.method not in METODOS_DE_LECTURA:
+                return jsonify({
+                    'error': f'Su rol ve la flota pero no la modifica: no puede '
+                             f'{que or f.__name__}.',
+                    'tu_rol': u.rol,
+                    'roles_permitidos': sorted(_escriben(roles)),
                 }), 403
             return f(*args, **kwargs)
         return envoltura
@@ -186,7 +209,7 @@ def exige_secreto(variable: str, que: str = ''):
 #:
 #: La pantalla lo lee de `FLOTA_ROLES_FUERZAN_CIERRE` (`flota.js`), y
 #: `tests/flota/test_derecho_del_conductor.py` compara las dos listas.
-FUERZA_CIERRE = tuple(Roles.GESTION) + (Roles.CONTROL_FLOTA,)
+FUERZA_CIERRE = _escriben(Roles.GESTION) + (Roles.CONTROL_FLOTA,)
 
 
 def quien_pide_de(usuario):
@@ -422,6 +445,7 @@ def sin_permiso_de_corregir():
 
 
 __all__ = ['exige', 'exige_secreto', 'MAESTROS_FLOTA', 'DECIDE_FLOTA',
+           'SOLO_LECTURA_FLOTA', 'METODOS_DE_LECTURA',
            'FUERZA_CIERRE', 'quien_pide_de', 'conductor_de',
            'vehiculo_en_custodia_de', 'sin_derecho_sobre_vehiculo',
            'sin_derecho_sobre_custodia', 'sin_derecho_sobre_foto',

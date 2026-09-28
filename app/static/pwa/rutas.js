@@ -1856,13 +1856,15 @@ function conductorLineaLicencia(c) {
 let _CONDUCTORES_LISTA = [];
 let _CATEGORIAS_LICENCIA = [];
 
-/** Formulario de la licencia (solo admin: `PUT /api/rutas/conductores/<id>`).
- *  En el `onclick` viaja la posición, no el dato. */
-function conductorEditarLicencia(pos) {
-  const c = _CONDUCTORES_LISTA[pos];
+/** Formulario de la licencia de conducción de UN conductor. Lo usan Rutas →
+ *  Conductores (admin) y Flota → Diagnóstico → Licencias (control de flota y
+ *  gestión): los dos guardan por `PUT /flota/conductores/<id>/licencia`, que
+ *  valida con la política de salida y deja bitácora. `c` trae el conductor con
+ *  sus campos `licencia_*`; `alGuardar` recarga la lista de quien lo abrió. */
+function licenciaFormulario(c, categorias, alGuardar) {
   if (!c) return;
   const opciones = ['<option value="">— elija —</option>']
-    .concat(_CATEGORIAS_LICENCIA.map(k =>
+    .concat((categorias || []).map(k =>
       `<option value="${esc(k)}"${k === c.licencia_categoria ? ' selected' : ''}>${esc(k)}</option>`))
     .join('');
   const overlay = document.createElement('div');
@@ -1893,7 +1895,7 @@ function conductorEditarLicencia(pos) {
       licencia_vence: overlay.querySelector('#_lic-vence').value || null,
     };
     try {
-      const r = await fetch(API + '/api/rutas/conductores/' + c.id, {
+      const r = await fetch(API + '/flota/conductores/' + c.id + '/licencia', {
         method: 'PUT',
         headers: { Authorization: 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
         body: JSON.stringify(cuerpo),
@@ -1901,11 +1903,16 @@ function conductorEditarLicencia(pos) {
       const d = await r.json().catch(() => ({}));
       if (!r.ok) { overlay.querySelector('#_lic-error').textContent = d.error || 'No se pudo guardar'; return; }
       overlay.remove();
-      await cargarListaConductores();
+      if (typeof alGuardar === 'function') await alGuardar();
     } catch (e) {
       overlay.querySelector('#_lic-error').textContent = 'Sin conexión: no se guardó.';
     }
   };
+}
+
+/** Desde Rutas → Conductores (admin). En el `onclick` viaja la posición. */
+function conductorEditarLicencia(pos) {
+  licenciaFormulario(_CONDUCTORES_LISTA[pos], _CATEGORIAS_LICENCIA, cargarListaConductores);
 }
 
 /** Carga y renderiza la lista completa de conductores (activos e inactivos). */

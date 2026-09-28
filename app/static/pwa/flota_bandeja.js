@@ -748,8 +748,10 @@ async function flotaBandejaDiagnostico() {
   const cont = document.getElementById('flota-diagnostico');
   if (!cont) return;
   cont.innerHTML = '<p style="color:var(--tx2)">Cargando…</p>';
-  cont.innerHTML = (await flotaBloqueAvisos())
-    || '<p style="color:var(--tx2)">Sin avisos de vencimiento registrados.</p>';
+  const avisos = await flotaBloqueAvisos();
+  const licencias = await flotaBloqueLicencias();
+  cont.innerHTML = ((avisos || '<p style="color:var(--tx2)">Sin avisos de vencimiento registrados.</p>')
+    + (licencias || ''));
 }
 
 /** Un contador del health para leer: `null` es «sin dato», no cero. */

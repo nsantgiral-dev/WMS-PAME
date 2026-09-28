@@ -25,19 +25,12 @@ _RANGO_PAPEL = {dom.VIGENTE: 0, dom.POR_VENCER: 1, dom.VENCIDO: 2,
 
 
 def papel_de_fila(d, hoy) -> dom.Papel:
-    """El `Papel` de UNA fila de `flota_documento_vehiculo`. Las fechas
-    imposibles (`dom.fechas_imposibles`, la parte de la regla de entrada que
-    ninguna fecha real cumple) la
-    vuelven `DATO_A_CORREGIR`: la RTM de BDT261 que vence el mismo día en que se
-    expidió no está «vencida hace 320 días», está mal escrita."""
-    no_encontrado = d.estado == 'no_encontrado'
-    problemas = ([] if no_encontrado else
-                 dom.fechas_imposibles(d.fecha_expedicion, d.fecha_vencimiento, hoy))
-    estado = dom.estado_de_papel(vence=d.fecha_vencimiento,
-                                 no_encontrado=no_encontrado, hoy=hoy,
-                                 fechas_imposibles=bool(problemas))
-    return dom.Papel(d.tipo, estado, d.fecha_vencimiento,
-                     problemas[0] if problemas else None)
+    """El `Papel` de UNA fila de `flota_documento_vehiculo`, con la política
+    de lo ya cargado (`dom.papel_cargado`): fechas imposibles → «dato a
+    corregir», salvo un vencimiento creíble que ya pasó."""
+    return dom.papel_cargado(d.tipo, no_encontrado=d.estado == 'no_encontrado',
+                             expedicion=d.fecha_expedicion,
+                             vencimiento=d.fecha_vencimiento, hoy=hoy)
 
 
 def papeles_de_filas(docs: Iterable, hoy) -> Tuple[dom.Papel, ...]:

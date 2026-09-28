@@ -101,6 +101,22 @@ def _registrar(clave, plantilla, telefono, parametros, canal_usado, fila=None):
     return fila
 
 
+#: Un aviso `encolado` más viejo que esto quedó huérfano (el hilo o el worker
+#: murió entre la fila y el envío): se reintenta como un fallido.
+MINUTOS_ENCOLADO_HUERFANO = 30
+
+
+def _reintentable(fila) -> bool:
+    """UNA definición de «a este destinatario todavía no le salió»: sin fila,
+    `fallido`, o `encolado` huérfano (validación 2026-09-27: un worker muerto a
+    mitad de Resend dejaba la fila `encolado` para siempre)."""
+    from datetime import timedelta
+    if fila is None or fila.estado == 'fallido':
+        return True
+    return (fila.estado == 'encolado' and fila.creado_ts is not None
+            and fila.creado_ts < datetime.utcnow() - timedelta(minutes=MINUTOS_ENCOLADO_HUERFANO))
+
+
 def _pendientes(base: str, telefonos) -> list:
     """(índice, teléfono, fila a reintentar) de los destinatarios a los que
     todavía no les salió este aviso: sin fila, o con la fila `fallido`. UNA
@@ -108,7 +124,7 @@ def _pendientes(base: str, telefonos) -> list:
     out = []
     for i, t in enumerate(telefonos):
         fila = Aviso.query.filter_by(clave=f'{base}:{i}').first()
-        if fila is None or fila.estado == 'fallido':
+        if _reintentable(fila):
             out.append((i, t, fila))
     return out
 
@@ -540,7 +556,8 @@ def texto_del_correo(c: dict, hoy) -> tuple:
                     + ''.join(f'<li>{escape(x)}</li>' for x in c['no_se_pudo']) + '</ul>')
     pie = ('Con un SOAT, una revisión técnico-mecánica o una licencia vencidos el '
            'vehículo no sale sin la autorización de un administrador. Lo que dice '
-           '«sin cargar» no se sabe: cárguelo en Flota → Documentos o en Rutas → Conductores.')
+           '«sin cargar» no se sabe: cárguelo en Flota → Documentos (papeles) o en '
+           'Flota → Analítica → Diagnóstico → Licencias (licencias).')
     lineas.append(pie)
     html.append(f'<p style="color:#555">{escape(pie)}</p>')
     return asunto, '\n'.join(lineas), ''.join(html)
@@ -564,7 +581,7 @@ def correo_diario(hoy=None, ahora=None) -> dict:
         return r
     clave = f'correo_flota_diario:{hoy.isoformat()}'
     previa = _fila_correo(clave)
-    if previa is not None and previa.estado != 'fallido':
+    if not _reintentable(previa):
         r['motivo'] = 'ya salió hoy'
         return r
     asunto, texto, html = texto_del_correo(c, hoy)
@@ -602,7 +619,7 @@ def avisar_dano_bloqueante(hallazgo_id: int, canal_usado=None) -> dict:
 
     clave = f'{base}:{CANAL_CORREO}'
     previa = _fila_correo(clave)
-    if previa is None or previa.estado == 'fallido':
+    if _reintentable(previa):
         from html import escape
         asunto = f'Flota · {placa}: daño bloqueante — no debería salir'
         texto = (f'{placa} — daño bloqueante reportado: {descripcion}\n\n'
@@ -662,36 +679,48 @@ def _despachar_danos_bloqueantes(session):
     _lanzar(_correr)
 
 
+def _anotar_dano(target):
+    from sqlalchemy.orm import object_session
+    sesion = object_session(target)
+    if sesion is not None and target.id is not None:
+        sesion.info.setdefault('flota_danos_bloqueantes', set()).add(target.id)
+
+
+def _dano_insertado(_mapper, _conn, target):
+    if target.criticidad == 'bloqueante':
+        _anotar_dano(target)
+
+
+def _dano_actualizado(_mapper, _conn, target):
+    from sqlalchemy import inspect as sa_inspect
+    hist = sa_inspect(target).attrs.criticidad.history
+    if hist.has_changes() and target.criticidad == 'bloqueante':
+        _anotar_dano(target)
+
+
+def _transaccion_deshecha(session, previous_transaction=None):
+    # Deshacer un SAVEPOINT no deshace la transacción de afuera: sus ids se
+    # conservan (validación 2026-09-27). Uno de adentro que sí se deshizo no
+    # avisa igual: `avisar_dano_bloqueante` relee el daño y no lo encuentra.
+    if previous_transaction is not None and previous_transaction.nested is True:
+        return
+    session.info.pop('flota_danos_bloqueantes', None)
+
+
 def escuchar_danos_bloqueantes():
     """Registra, una vez, los eventos que avisan un daño bloqueante AL NACER
     (o al volverse bloqueante), venga de la puerta que venga — reporte suelto,
     inspección, recibo del turno. Un guard en el modelo protege la operación;
-    uno en la ruta protegería esa ruta."""
-    from sqlalchemy import event, inspect as sa_inspect
-    from sqlalchemy.orm import Session, object_session
+    uno en la ruta protegería esa ruta. Las funciones son del módulo (no
+    closures): `event.contains` las reconoce y no se acumulan por cada app."""
+    from sqlalchemy import event
+    from sqlalchemy.orm import Session
     from flota.adaptadores.modelos import Hallazgo
 
-    def _anotar(target):
-        sesion = object_session(target)
-        if sesion is not None and target.id is not None:
-            sesion.info.setdefault('flota_danos_bloqueantes', set()).add(target.id)
-
-    def _al_insertar(_mapper, _conn, target):
-        if target.criticidad == 'bloqueante':
-            _anotar(target)
-
-    def _al_actualizar(_mapper, _conn, target):
-        hist = sa_inspect(target).attrs.criticidad.history
-        if hist.has_changes() and target.criticidad == 'bloqueante':
-            _anotar(target)
-
-    def _al_deshacer(session, _previous_transaction=None):
-        session.info.pop('flota_danos_bloqueantes', None)
-
-    for objetivo, nombre, fn in ((Hallazgo, 'after_insert', _al_insertar),
-                                 (Hallazgo, 'after_update', _al_actualizar),
+    for objetivo, nombre, fn in ((Hallazgo, 'after_insert', _dano_insertado),
+                                 (Hallazgo, 'after_update', _dano_actualizado),
                                  (Session, 'after_commit', _despachar_danos_bloqueantes),
-                                 (Session, 'after_soft_rollback', _al_deshacer)):
+                                 (Session, 'after_soft_rollback', _transaccion_deshecha)):
         if not event.contains(objetivo, nombre, fn):
             event.listen(objetivo, nombre, fn)
 
@@ -847,8 +876,9 @@ def init_scheduler(app):
             # forma más rápida de que alguien silencie el canal.
             with advisory_lock(LOCK_FLOTA_AVISOS, 'flota_avisos_barrido') as tomado:
                 if not tomado:
-                    return {'motivo': 'otro proceso lo está corriendo',
-                            'config': configuracion_de_este_servicio()}
+                    # Sin resumen: no pisa el del proceso que sí lo corre
+                    # (misma fila de latido con dos procesos del worker).
+                    return None
                 # Si revienta, el latido lo registra como fallo (antes se
                 # atrapaba y el latido decía «bien»).
                 r = barrido_diario()
@@ -874,7 +904,9 @@ def init_scheduler(app):
     scheduler = BackgroundScheduler(timezone='America/Bogota')
     from app.services.cron_latido import con_latido  # P1-11
     scheduler.add_job(
-        con_latido('flota_avisos_barrido', _job), CronTrigger(hour=6, minute=0),
+        # 06:00 y 12:00: un correo que falló a las 6 se reintenta al mediodía
+        # (la clave por día y `_reintentable` impiden el doble envío).
+        con_latido('flota_avisos_barrido', _job), CronTrigger(hour='6,12', minute=0),
         id='flota_avisos_barrido', replace_existing=True,
         max_instances=1, misfire_grace_time=3600,
     )

@@ -31,6 +31,7 @@ def registrar_flota(app):
     from flota.api.hallazgos import hallazgos_bp
     from flota.api.health import flota_bp
     from flota.api.inspecciones import inspecciones_bp
+    from flota.api.licencias import licencias_bp
     from flota.api.llantas import llantas_bp
     from flota.api.preventivo import preventivo_bp
     from flota.api.taller import taller_bp
@@ -48,6 +49,7 @@ def registrar_flota(app):
     app.register_blueprint(llantas_bp, url_prefix='/flota')
     app.register_blueprint(preventivo_bp, url_prefix='/flota')
     app.register_blueprint(bandeja_bp, url_prefix='/flota')
+    app.register_blueprint(licencias_bp, url_prefix='/flota')
 
 
 __all__ = ['registrar_flota']

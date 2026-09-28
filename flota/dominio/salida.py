@@ -252,6 +252,79 @@ def problemas_de_fechas(tipo: str, expedicion: Optional[date],
     return out
 
 
+def _vencimiento_creible(expedicion: Optional[date], vencimiento: Optional[date],
+                         hoy: date) -> bool:
+    """¿Se le puede creer al vencimiento aunque la fila tenga fechas imposibles?
+
+    Sí, si el vencimiento por sí solo es posible y lo imposible es la
+    EXPEDICIÓN (año 0025, en el futuro). No, si las dos son posibles y no
+    cuadran entre sí (vence el día en que se expidió): no se sabe cuál de las
+    dos está mal escrita."""
+    if vencimiento is None or fechas_imposibles(None, vencimiento, hoy):
+        return False
+    if expedicion is None:
+        return True
+    return bool(fechas_imposibles(expedicion, None, hoy))
+
+
+def papel_cargado(tipo: str, *, no_encontrado: bool, expedicion: Optional[date],
+                  vencimiento: Optional[date], hoy: date) -> 'Papel':
+    """El `Papel` de una fila ya cargada. UNA función para la bandeja, el
+    despacho, el correo y la puerta que reescribe el papel.
+
+    Fechas imposibles → `DATO_A_CORREGIR`, **salvo** que el vencimiento sea
+    creíble por sí solo y ya haya pasado (validación 2026-09-27): un SOAT
+    vencido de verdad con la expedición mal escrita sigue VENCIDO. Lo contrario
+    le daba una salida a lo que la ley prohíbe por un error de digitación."""
+    if no_encontrado:
+        return Papel(tipo, NO_ENCONTRADO)
+    problemas = fechas_imposibles(expedicion, vencimiento, hoy)
+    if problemas and _vencimiento_creible(expedicion, vencimiento, hoy) \
+            and papel_vencido(vencimiento, hoy):
+        return Papel(tipo, VENCIDO, vencimiento)
+    estado = estado_de_papel(vence=vencimiento, no_encontrado=False, hoy=hoy,
+                             fechas_imposibles=bool(problemas))
+    return Papel(tipo, estado, vencimiento, problemas[0] if problemas else None)
+
+
+def motivo_no_puede_reescribir_papel(*, tipo: str, antes: 'Papel', numero_antes: str,
+                                     estado_nuevo: str, vence_nuevo: Optional[date],
+                                     numero_nuevo: str, trae_archivo: bool,
+                                     rol: Optional[str], hoy: date) -> Optional[str]:
+    """`None` si este cambio del papel puede guardarse; si no, el porqué en
+    usted (validación 2026-09-27, VAL-FL-1/2).
+
+    El despacho frena un SOAT o una RTM vencidos, y el mismo rol que el
+    despacho frena podía quitar el freno reescribiendo el papel: marcarlo «no
+    encontrado» (lo bajaba a «no se sabe») o ponerle fechas nuevas sin
+    escaneo. Ahora, para un papel para circular que HOY está vencido:
+
+    · «no encontrado» no se acepta, de nadie: el vencimiento se sabe, y «no
+      encontrado» lo escondería;
+    · dejarlo al día exige el escaneo nuevo Y otro número (es otro papel), o
+      un rol de `ROLES_AUTORIZAN_SALIDA_PROHIBIDA`;
+    · un cambio que lo deja vencido (corregir la entidad) no se frena.
+    """
+    if tipo not in PAPELES_PARA_CIRCULAR or antes.estado != VENCIDO:
+        return None
+    nombre = NOMBRE_PAPEL[tipo][0]
+    if estado_nuevo == NO_ENCONTRADO:
+        return (f'{_mayus(nombre)} está vencido desde {fecha_larga(antes.vence)}: no '
+                f'se puede marcar «no encontrado», porque se sabe que está vencido. '
+                f'Cargue el nuevo con su escaneo.')
+    if papel_vencido(vence_nuevo, hoy):
+        return None
+    if rol_autoriza_salida_prohibida(rol):
+        return None
+    otro_numero = bool((numero_nuevo or '').strip()) and \
+        (numero_nuevo or '').strip() != (numero_antes or '').strip()
+    if trae_archivo and otro_numero:
+        return None
+    return (f'{_mayus(nombre)} está vencido desde {fecha_larga(antes.vence)}. Para '
+            f'darlo por renovado cargue el papel nuevo: su número (distinto del '
+            f'anterior) y el escaneo. Sin eso, solo un administrador puede cambiarlo.')
+
+
 def problemas_de_licencia(numero: Optional[str], categoria: Optional[str],
                           vence: Optional[date], hoy: date) -> List[str]:
     """Por qué estos datos de licencia no se pueden guardar, en usted. Todo
@@ -789,6 +862,7 @@ __all__ = [
     'ANIO_MINIMO_PAPEL', 'ANIOS_MAXIMOS_ADELANTE', 'DIAS_VIGENCIA_SOAT',
     'CATEGORIAS_LICENCIA', 'LICENCIA_SIN_CARGAR_FRENA', 'fechas_imposibles', 'problemas_de_fechas', 'problemas_de_licencia',
     'Licencia', 'estado_de_licencia', 'motivo_licencia', 'motivo_sin_poder_mirar',
+    'papel_cargado', 'motivo_no_puede_reescribir_papel',
     'DETECTOR_CIEGO', 'NIVEL_TURNO_A_REVISAR', 'lineas', 'Papel', 'TareaVencida', 'Hechos', 'Motivo', 'Evaluacion',
     'evaluar', 'color_de', 'orden_de_nivel', 'estado_de_papel', 'papel_vencido',
     'papel_por_vencer', 'motivo_papel', 'motivos_de_danos', 'nivel_de_dano',

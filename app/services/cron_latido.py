@@ -100,8 +100,9 @@ def resumen_de(r):
     «Corrió» no es «hizo su trabajo»: el barrido de avisos de flota corría bien
     todos los días con `FLOTA_AVISOS` apagado. Con el resumen guardado, el panel
     de la web sabe qué hizo —y con qué variables— el cron del worker.
-    Cualquier otra cosa → `None` (se borra el resumen anterior: no es de esta
-    corrida). Un resumen demasiado largo se recorta y lo dice."""
+    Cualquier otra cosa → `None`, y `con_latido` no escribe nada (conserva el
+    resumen de la última corrida que sí lo dio). Un resumen demasiado largo se
+    recorta y lo dice."""
     if not isinstance(r, dict):
         return None
     import json
@@ -133,8 +134,14 @@ def con_latido(nombre: str, fn):
                       ultimo_error=f'{type(e).__name__}: {str(e)[:480]}')
             raise
         ahora = datetime.utcnow()
-        _escribir(app, nombre, ultimo_fin=ahora, ultimo_ok=True, ultimo_ok_en=ahora,
-                  ultimo_error=None, ultimo_resumen=resumen_de(r))
+        campos = dict(ultimo_fin=ahora, ultimo_ok=True, ultimo_ok_en=ahora,
+                      ultimo_error=None)
+        # Solo una corrida que dice qué hizo (un dict) escribe su resumen: una
+        # que no lo dice —el proceso que perdió el candado— no borra el del
+        # que sí trabajó.
+        if isinstance(r, dict):
+            campos['ultimo_resumen'] = resumen_de(r)
+        _escribir(app, nombre, **campos)
         return r
     _envuelto._latido = nombre
     return _envuelto

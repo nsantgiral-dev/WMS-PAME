@@ -264,6 +264,17 @@ class RutaService:
         return c
 
     @staticmethod
+    def actualizar_licencia(conductor_id: int, data: dict, usuario_id: int = None) -> Conductor:
+        """Solo la licencia (la puerta de flota: control de flota y gestión la
+        cargan sin tocar el resto del conductor). Commit propio."""
+        c = db.session.get(Conductor, conductor_id)
+        if not c:
+            raise LookupError('Conductor no encontrado')
+        RutaService._actualizar_licencia(c, data, usuario_id)
+        db.session.commit()
+        return c
+
+    @staticmethod
     def _actualizar_licencia(c, data: dict, usuario_id: int = None) -> None:
         """Licencia de conducción: número, categoría y vencimiento, **los tres o
         ninguno**. Se validan con la misma política que la usa para decidir la

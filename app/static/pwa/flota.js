@@ -44,7 +44,8 @@
  * errores**, que es la razón por la que a este rol se le esconden las otras
  * pestañas (`especialista-control-flota.md:18`).
  */
-const FLOTA_ROLES_DECIDEN = ['admin', 'gerente', 'jefe_almacen', 'supervisor'];
+// Sin 'gerente': ve la flota y no escribe (decisión del dueño, 2026-09-27).
+const FLOTA_ROLES_DECIDEN = ['admin', 'jefe_almacen', 'supervisor'];
 
 /** ¿Este usuario decide el desenlace, o solo lo registra? */
 function flotaDecide() {
@@ -59,7 +60,7 @@ function flotaDecide() {
  * forma que `FLOTA_ROLES_DECIDEN`. Hasta ese día el campo del motivo le
  * aparecía a control de flota y el backend le contestaba 409.
  */
-const FLOTA_ROLES_FUERZAN_CIERRE = ['admin', 'control_flota', 'gerente', 'jefe_almacen', 'supervisor'];
+const FLOTA_ROLES_FUERZAN_CIERRE = ['admin', 'control_flota', 'jefe_almacen', 'supervisor'];
 
 function flotaFuerzaCierre() {
   const u = (typeof OPERARIO !== 'undefined' && OPERARIO) ? OPERARIO : null;
@@ -2953,6 +2954,44 @@ function flotaAvisosHtml(d) {
     <ul style="line-height:1.7">${filas}</ul>
     <button class="btn-flota" onclick="flotaBarrerAvisos()">Revisar y avisar ahora</button>
   </div>`;
+}
+
+/** Licencias de conducción de los conductores activos: quién no la tiene
+ * cargada y quién la tiene vencida. La carga el que gestiona la flota
+ * (`GET/PUT /flota/conductores/...`); el formulario es el de rutas.js. */
+let FLOTA_LICENCIAS = { conductores: [], categorias_licencia: [] };
+
+async function flotaBloqueLicencias() {
+  try {
+    FLOTA_LICENCIAS = await get('/flota/conductores/licencias');
+  } catch (e) {
+    return '';
+  }
+  return flotaLicenciasHtml(FLOTA_LICENCIAS);
+}
+
+const FLOTA_LICENCIA_ESTADO = {
+  vigente: 'al día', por_vencer: 'por vencer', vencido: 'VENCIDA: no sale sin autorización',
+  sin_cargar: 'sin cargar: no se sabe si está al día', dato_a_corregir: 'dato a corregir',
+};
+
+function flotaLicenciasHtml(d) {
+  const lista = (d && d.conductores) || [];
+  const filas = lista.map((c, pos) => {
+    const est = FLOTA_LICENCIA_ESTADO[c.licencia_estado] || 'estado desconocido';
+    const vence = c.licencia_vence ? ` · vence ${esc(c.licencia_vence.split('-').reverse().join('/'))}` : '';
+    return `<li>${esc(c.nombre)} — ${esc(est)}${c.licencia_categoria ? ' · ' + esc(c.licencia_categoria) : ''}${vence}
+      <button class="btn-flota" onclick="flotaLicenciaEditar(${pos})">${c.licencia_numero ? 'Cambiar' : 'Cargar'}</button></li>`;
+  }).join('') || '<li style="color:var(--tx2)">No hay conductores activos.</li>';
+  return `<div class="tabla-card">
+    <div class="tabla-titulo">Licencias de conducción</div>
+    <ul style="line-height:1.9">${filas}</ul>
+  </div>`;
+}
+
+function flotaLicenciaEditar(pos) {
+  licenciaFormulario(FLOTA_LICENCIAS.conductores[pos], FLOTA_LICENCIAS.categorias_licencia,
+                     () => (typeof flotaBandejaDiagnostico === 'function') && flotaBandejaDiagnostico());
 }
 
 /** Día y hora de Bogotá de un instante UTC que el servidor manda sin zona. */

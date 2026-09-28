@@ -146,9 +146,28 @@ def _digest_del_nombre(storage_ref: str):
     return base if len(base) == 64 and all(c in '0123456789abcdef' for c in base) else None
 
 
+#: (ruta, mtime_ns, tamaño) → ¿el contenido tiene el hash de su nombre?
+#: Hashear 1,6 MB por foto en cada lista y en cada `/flota/health` leía cientos
+#: de MB con el «todo 410» de QA (validación 2026-09-27). Un archivo que cambia
+#: de fecha o de tamaño se vuelve a mirar. Con tope, para no crecer sin fin.
+_HASH_VERIFICADO = {}
+_TOPE_CACHE = 5000
+
+
+def _contenido_es_el_del_nombre(ruta: Path, digest: str, st) -> bool:
+    clave = (str(ruta), st.st_mtime_ns, st.st_size)
+    if clave not in _HASH_VERIFICADO:
+        if len(_HASH_VERIFICADO) >= _TOPE_CACHE:
+            _HASH_VERIFICADO.clear()
+        _HASH_VERIFICADO[clave] = _sha_de_archivo(ruta) == digest
+    return _HASH_VERIFICADO[clave]
+
+
 def en_raiz_anterior(storage_ref: str, bytes_esperados=None):
     """La ruta de la foto en una raíz anterior, o `None`. Solo si el contenido
-    tiene el hash de su nombre y el tamaño esperado: nunca otra foto."""
+    tiene el hash de su nombre y el tamaño esperado: nunca otra foto. El tamaño
+    se compara antes de hashear, y el hash de un archivo que no cambió se
+    recuerda."""
     digest = _digest_del_nombre(storage_ref)
     if not storage_ref or digest is None:
         return None
@@ -157,11 +176,12 @@ def en_raiz_anterior(storage_ref: str, bytes_esperados=None):
         try:
             if not ruta.is_file():
                 continue
-            if bytes_esperados not in (None, 0) and ruta.stat().st_size != bytes_esperados:
-                continue
+            st = ruta.stat()
         except OSError:
             continue
-        if _sha_de_archivo(ruta) == digest:
+        if bytes_esperados not in (None, 0) and st.st_size != bytes_esperados:
+            continue
+        if _contenido_es_el_del_nombre(ruta, digest, st):
             return ruta
     return None
 
@@ -307,10 +327,11 @@ def diagnostico_almacen(muestra: int = 200) -> dict:
     total = Foto.query.filter(Foto.estado == 'ok').count()
     filas = (Foto.query.filter(Foto.estado == 'ok')
              .order_by(Foto.id.desc()).limit(muestra).all())
-    faltan = [f.id for f in filas if estado_verificable(f) == SIN_ARCHIVO]
-    en_anterior = [f.id for f in filas
-                   if not (raiz / str(f.storage_ref or '')).is_file()
-                   and estado_verificable(f) == 'ok']
+    # Una verificación por foto (antes, dos: una para cada lista).
+    estados = {f.id: estado_verificable(f) for f in filas}
+    faltan = [f.id for f in filas if estados[f.id] == SIN_ARCHIVO]
+    en_anterior = [f.id for f in filas if estados[f.id] == 'ok'
+                   and not (raiz / str(f.storage_ref or '')).is_file()]
     out.update(fotos_ok_total=total, fotos_ok_revisadas=len(filas),
                fotos_ok_sin_archivo=len(faltan), ejemplos_sin_archivo=faltan[:10],
                fotos_ok_en_raiz_anterior=len(en_anterior),

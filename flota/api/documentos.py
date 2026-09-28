@@ -90,6 +90,14 @@ def _serializar(d):
     }
 
 
+def _foto_de_la_fila(d) -> dict:
+    """Los campos del papel que la bitácora guarda antes y después."""
+    return {'estado': d.estado, 'numero': d.numero, 'entidad': d.entidad,
+            'fecha_expedicion': d.fecha_expedicion.isoformat() if d.fecha_expedicion else None,
+            'fecha_vencimiento': d.fecha_vencimiento.isoformat() if d.fecha_vencimiento else None,
+            'foto_id': d.foto_id}
+
+
 @documentos_bp.route('/vehiculo/<placa>/documentos', methods=['GET'])
 @jwt_required()
 @exige(Roles.VISTA_FLOTA, 'ver el expediente de documentos')
@@ -176,18 +184,37 @@ def guardar_documento(placa):
                                      + ' '.join(problemas),
                             'problemas': problemas}), 400
 
-    doc = DocumentoVehiculo.query.filter_by(
-        vehiculo_id=vehiculo.id, tipo=datos['tipo']).first()
-    creado = doc is None
-    if creado:
-        doc = DocumentoVehiculo(vehiculo_id=vehiculo.id, tipo=datos['tipo'])
-        db.session.add(doc)
-
     # `archivo` es el nombre correcto desde que se aceptan PDF; `foto` se sigue
     # leyendo porque hay clientes desplegados que lo mandan. Uno solo de los
     # dos: si llegaran los dos, gana el nombre nuevo y no se adivina cuál quiso
     # mandar quien mandó ambos.
     adjunto = datos['archivo'] if datos.get('archivo') else datos.get('foto')
+
+    doc = DocumentoVehiculo.query.filter_by(
+        vehiculo_id=vehiculo.id, tipo=datos['tipo']).first()
+    creado = doc is None
+    antes = None if creado else _foto_de_la_fila(doc)
+
+    # Quien frena el despacho no lo destraba reescribiendo el papel
+    # (validación 2026-09-27): un SOAT o una RTM que HOY están vencidos no pasan
+    # a «no encontrado», y darlos por renovados exige otro número y el escaneo,
+    # o un rol que autoriza la salida. La política vive en el dominio.
+    if not creado:
+        from flota.adaptadores.salida import papel_de_fila
+        from flota.api._permisos import _usuario as _quien
+        from flota.dominio.salida import motivo_no_puede_reescribir_papel
+        u = _quien()
+        porque = motivo_no_puede_reescribir_papel(
+            tipo=doc.tipo, antes=papel_de_fila(doc, dia_operativo()),
+            numero_antes=doc.numero, estado_nuevo=estado, vence_nuevo=vencimiento,
+            numero_nuevo=numero, trae_archivo=bool(adjunto),
+            rol=u.rol if u is not None else None, hoy=dia_operativo())
+        if porque is not None:
+            return jsonify({'error': porque}), 409
+
+    if creado:
+        doc = DocumentoVehiculo(vehiculo_id=vehiculo.id, tipo=datos['tipo'])
+        db.session.add(doc)
 
     # Un papel RENOVADO (otro número, o ya no encontrado) sin archivo nuevo NO
     # conserva el escaneo del anterior: la pantalla mostraba el SOAT viejo como
@@ -217,6 +244,14 @@ def guardar_documento(placa):
             db.session.add(foto)
             db.session.flush()
             doc.foto_id = foto.id
+        # Todo cambio de un papel queda escrito (validación 2026-09-27): el
+        # documento se pisa en su sitio, y sin esto nadie podía reconstruir
+        # qué vencimiento tenía antes ni quién lo cambió.
+        from app.services.bitacora import registrar_accion
+        registrar_accion('EDITAR', doc, usuario_id=int(get_jwt_identity()),
+                         motivo=(datos.get('motivo') or None),
+                         entidad_codigo=f'{vehiculo.placa}-{doc.tipo}',
+                         antes=antes, despues=_foto_de_la_fila(doc))
         db.session.commit()
     except (FotoInvalida, ErrorAlmacen) as e:
         # 400 y no 500: el archivo que llegó no sirve, y eso es información
