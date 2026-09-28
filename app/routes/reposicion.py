@@ -143,7 +143,7 @@ def pendientes():
 
     Ampliado de ALMACEN a GESTION (2026-09-07): respalda la pestaña "Tareas"
     de la pantalla Reposición, que el PWA ya muestra a supervisor/gerente
-    (no está en `_TABS_OCULTAS_SUPERVISOR`) — con el guard viejo el 403
+    (no está en `_TABS_OCULTAS_POR_ROL`) — con el guard viejo el 403
     dejaba la pestaña en "Error cargando ubicaciones"/tareas para esos
     roles. Solo lectura; cancelar/sync/verificar-stock siguen en ALMACEN.
     """

@@ -328,6 +328,9 @@ function conteoIrADecidir() { invSubtab('lider'); }
 async function actualizarBadgeDefinitivos() {
   const badge = document.getElementById('inv-tab-lider-badge');
   if (!badge) return;
+  // La cola del conteo definitivo es de supervisión (`Roles.SUPERVISION`):
+  // pedirla con otro rol era un 403 cada 30 s en cualquier pestaña.
+  if (!_ROLES_SUPERVISION.includes(OPERARIO?.rol)) return;
   try {
     const d = await get('/api/conteo/definitivos');
     const n = d.total || 0;

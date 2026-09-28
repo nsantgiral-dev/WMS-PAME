@@ -11,7 +11,7 @@ abre el manifiesto —el encabezado carga— y el detalle le da 403, que ese
 Medido el 2026-09-21 contra producción, ruta 31 (EN_CARGUE): `admin` y
 `jefe_almacen` ven `/planilla` 200 con **3 paradas**; `supervisor` recibe 403 y
 la pantalla le dice que no hay ninguna. La pestaña Rutas no está oculta para
-supervisor (`_TABS_OCULTAS_SUPERVISOR`) y el botón «📋 Ver» se le ofrece con
+supervisor (`_TABS_OCULTAS_POR_ROL`) y el botón «📋 Ver» se le ofrece con
 solo tener bultos, así que es un camino que alguien recorre.
 
 ## La clase, que es lo que importa

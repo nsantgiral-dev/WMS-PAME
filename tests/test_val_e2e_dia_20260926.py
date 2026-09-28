@@ -163,15 +163,18 @@ class TestUnaPestanaVisibleNoCargaEnRojo:
     Jefe de almacén y supervisor: la pestaña Siesa con 5-6 lecturas en 403. O se
     esconde la pestaña, o el rol puede leerla: las dos cosas a la vez no."""
 
-    @pytest.mark.xfail(strict=True, reason='app.js muestra pestañas cuyo endpoint niega al rol')
     @pytest.mark.parametrize('rol', ['gerente', 'jefe_almacen', 'supervisor'])
     def test_toda_pestana_visible_carga(self, app, client, db, rol):
-        from tests.test_roles_plata import _aterrizar
-        visibles = set(_aterrizar(rol)['visibles'])
+        # Cerrado 2026-09-27: se mide lo que la pestaña PIDE de verdad con ese
+        # rol (arnés de `test_pestanas_por_rol`). Reposición sigue visible para
+        # el gerente y ya no pide la alerta de jobs fallidos con su rol.
+        from tests.test_pestanas_por_rol import pestanas
+        d = pestanas(rol)
+        visibles = set(d['visibles'])
         u = _usuario(db, rol=rol)
         negadas = []
         for tab, url in _CARGA_DE_PESTANA.items():
-            if tab in visibles:
+            if tab in visibles and url in d['gets'].get(tab, []):
                 s = client.get(url, headers=_jwt(app, u)).status_code
                 if s == 403:
                     negadas.append((tab, url))

@@ -143,16 +143,36 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 });
 
-// Pestañas del panel admin que un `supervisor` no puede usar en el backend
-// (siempre 403), así que tampoco se muestran. Ver el bloque `esSupervisor`
-// dentro de `mostrarSegunRol()`.
-// 'tab-compras' agregado 2026-09-07: compras.py exige Roles.COMPRAS_ROLES
-// (admin/jefe_almacen/gerente/compras) en cada endpoint — supervisor nunca
-// estuvo en ese grupo y la pestaña quedaba viva mostrando error.
-// 'tab-dashboard' agregado 2026-09-14: el supervisor ahora aterriza en
-// Pedidos (ver bloque esSupervisor) — el Dashboard es visión gerencial
-// general, no la pantalla de trabajo diaria de quien también apoya picking.
-const _TABS_OCULTAS_SUPERVISOR = ['tab-usuarios', 'tab-muelle', 'tab-liquidacion', 'tab-compras', 'tab-dashboard'];
+/**
+ * Pestañas del shell de admin que cada rol de gestión NO ve, porque el
+ * servidor le niega lo que la pestaña carga al entrar. **Un solo lugar** para
+ * los roles que ven el shell completo (los de `_TABS_DE_ROL` ven solo lo suyo).
+ *
+ * No se escribe a ojo: `tests/test_pestanas_por_rol.py` corre este archivo en
+ * Node, entra a cada pestaña que queda visible para cada rol y pide cada GET
+ * con el token de ese rol — cero 403. Una pestaña que el rol ve y el servidor
+ * le niega enseña a ignorar errores (e2e 2026-09-26: el gerente veía Muelle
+ * «Sin permiso» cada 8 s, Bodega en error, Siesa con 7 lecturas en 403).
+ *
+ * - `supervisor`: Usuarios, Muelle, Liquidación y Compras le dan 403; el
+ *   Dashboard es visión gerencial (aterriza en Pedidos, 2026-09-14); Siesa
+ *   lee el monitor, los jobs y las cargas, que son de admin.
+ * - `jefe_almacen`: Siesa (monitor, jobs y estado de las cargas son de admin).
+ * - `gerente`: Bodega, Muelle y Siesa (operación de piso y configuración de
+ *   la integración). Reposición sí la ve (se le abrió el 2026-09-07); lo
+ *   único de ella que no puede leer es la alerta de jobs fallidos, y esa
+ *   carga ya no se pide con su rol (`_ROLES_SUPERVISION`).
+ */
+const _TABS_OCULTAS_POR_ROL = {
+  supervisor:   ['tab-usuarios', 'tab-muelle', 'tab-liquidacion', 'tab-compras', 'tab-dashboard', 'tab-connekta'],
+  jefe_almacen: ['tab-connekta'],
+  gerente:      ['tab-bodega', 'tab-connekta', 'tab-muelle'],
+};
+
+/** `Roles.SUPERVISION` del servidor (cruzado por `test_pestanas_por_rol`):
+ * la cola del conteo definitivo y la alerta de jobs fallidos. Una carga que
+ * no le corresponde al rol no se pide — no se pide y se calla. */
+const _ROLES_SUPERVISION = ['admin', 'supervisor', 'jefe_almacen'];
 
 // 📈 Analítica: la ven los mismos roles que `_es_gestion` deja pasar en sus
 // endpoints (`Roles.GESTION`). Una pestaña que el servidor le niega con 403 a
@@ -237,6 +257,9 @@ function mostrarSegunRol(rol) {
     if (!_ROLES_ANALITICA.includes(rol)) {
       document.querySelectorAll('.nav-tab[onclick*="tab-analitica"]').forEach(el => { el.style.display = 'none'; });
     }
+    (_TABS_OCULTAS_POR_ROL[rol] || []).forEach(id => {
+      document.querySelectorAll(`.nav-tab[onclick*="'${id}'"]`).forEach(el => { el.style.display = 'none'; });
+    });
     const btnModoOp = document.getElementById('nav-modo-operario-supervisor');
     if (btnModoOp) btnModoOp.style.display = 'none';
     if (tabsDeRol) {
@@ -255,18 +278,7 @@ function mostrarSegunRol(rol) {
     pantalla('pantalla-admin');
     if (OPERARIO) actualizarUI(OPERARIO);
     if (esSupervisor) {
-      // Cosmético: el backend ya bloquea estas acciones con 403 para
-      // supervisor (Usuarios exige admin puro en auth.py; Muelle exige
-      // admin/jefe_almacen en requisiciones.py; Liquidación exige admin
-      // puro en rutas.py). Esto solo evita que la pestaña quede ahí sin
-      // servir para nada — si algún día cambia el guard del backend y
-      // nadie actualiza esta lista, la pestaña queda mal escondida o mal
-      // mostrada sin que nada avise.
-      _TABS_OCULTAS_SUPERVISOR.forEach(id => {
-        document.querySelectorAll(`.nav-tab[onclick*="${id}"]`).forEach(el => {
-          el.style.display = 'none';
-        });
-      });
+      // Sus pestañas ocultas ya se aplicaron arriba (`_TABS_OCULTAS_POR_ROL`).
       // Modo Operario (2026-09-14) — exclusivo de NB1: el backend
       // (get_tarea_actual) corta en seco a cualquier supervisor de otra
       // bodega, así que el ítem del menú ni se muestra ahí — evita un
@@ -274,7 +286,7 @@ function mostrarSegunRol(rol) {
       if (btnModoOp && OPERARIO?.almacen_bodega_siesa_id === 'NB1') {
         btnModoOp.style.display = 'block';
       }
-      // Dashboard queda oculto para este rol (arriba, _TABS_OCULTAS_SUPERVISOR)
+      // Dashboard queda oculto para este rol (arriba, _TABS_OCULTAS_POR_ROL)
       // — aterriza en Pedidos, su pantalla de trabajo real. tab() ya llama
       // cargarAdmin() una vez; el timer de abajo sigue haciendo falta para
       // el refresco periódico que el otro branch arma después del if.

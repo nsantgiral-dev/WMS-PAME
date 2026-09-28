@@ -257,6 +257,8 @@ async function cargarMuelle() {
       Error cargando muelle<br>
       <span style="font-size:var(--fs-xs);color:var(--tx3);">${esc(e.message || 'Error desconocido')}</span>
     </div>`;
+    // Un 403 no se arregla solo: re-pedirlo cada 8 s repite el error en rojo.
+    if (e && e.status === 403) { clearTimeout(MUELLE_TIMER); return; }
   }
 
   clearTimeout(MUELLE_TIMER);

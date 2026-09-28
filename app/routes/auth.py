@@ -142,7 +142,7 @@ def listar_usuarios():
     """Lista todos los usuarios activos — lectura, roles de gestión.
 
     Ampliado de solo-admin (2026-09-07): el tab "Operarios" del PWA ya está
-    visible para supervisor/jefe_almacen (`_TABS_OCULTAS_SUPERVISOR` solo
+    visible para supervisor/jefe_almacen (`_TABS_OCULTAS_POR_ROL` solo
     oculta `tab-usuarios`, no éste), y `cargarOperarios()` depende de este
     mismo endpoint para armar la lista — sin el ensanche, el 403 tumbaba el
     `Promise.all` entero y la pantalla mostraba "Error". Mismo endpoint

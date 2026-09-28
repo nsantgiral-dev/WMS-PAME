@@ -34,8 +34,9 @@ function repSubtab(sec) {
 
 /** Check for failed Siesa jobs alert and load the active reposicion section. */
 async function cargarReposicion() {
-  // Revisar alerta de jobs fallidos en paralelo
-  try {
+  // Revisar alerta de jobs fallidos en paralelo. Es de supervisión: el
+  // gerente ve la pestaña y no esta alerta (antes: un 403 que el catch callaba).
+  if (_ROLES_SUPERVISION.includes(OPERARIO?.rol)) try {
     const d = await get('/api/reposicion/siesa-jobs/fallidos');
     const alerta = document.getElementById('rep-alerta-jobs');
     const txt    = document.getElementById('rep-alerta-jobs-txt');
