@@ -63,9 +63,11 @@ print([str(r) for r in create_app().url_map.iter_rules() if 'flota' in str(r)])"
 
 | Variable | Qué hace |
 |----------|----------|
-| `FLOTA_AVISOS` | Enciende el barrido de vencimientos. **Nace apagado** — un cron que escribe no se enciende solo |
-| `FLOTA_AVISOS_REALES` | Segunda decisión explícita: sin ella el barrido registra pero no manda |
-| `FLOTA_AVISO_TELEFONOS` | Destinatarios |
+| `FLOTA_AVISOS` | Enciende los avisos (barrido diario 06:00: correo + WhatsApp; aviso inmediato de daño bloqueante). **Nace apagado**. Va en **el worker** (el cron corre en `_scheduler_pesados`) **y en la web** (el aviso del daño sale donde se registra). El panel de avisos dice cuál le falta a cada uno — ver «Flota: lo legal y los avisos» |
+| `FLOTA_AVISOS_REALES` | Segunda decisión explícita para el **WhatsApp**: sin ella registra pero no manda. El correo no la necesita |
+| `FLOTA_AVISO_TELEFONOS` | Destinatarios del WhatsApp (JSON por rol; el barrido usa `mantenimiento`) |
+| `FLOTA_AVISO_CORREOS` | Destinatarios del **correo** de flota (coma-separados). Sin ella, `ALERTA_EMAIL_DEST`. Necesita `RESEND_API_KEY` en el mismo servicio |
+| `FLOTA_FOTOS_DIRS_ANTERIORES` | Raíces viejas de `FLOTA_FOTOS_DIR` (coma), además de `/data` y `/data/flota-fotos`: el sirviente busca ahí antes del 410 (con hash) |
 | `FLOTA_PREVENTIVO` | Enciende el cron de **siembra del plan preventivo** desde la ficha técnica (05:30 Bogotá). **Nace apagado**, default ausente = `false`. El primer ciclo escribe hasta ~36 filas de plan y **manda cero avisos**: ninguna tarea tiene ejecución registrada todavía, y una tarea sin línea base no está al día ni vencida. Nace apagado igual, porque la regla 10 no se dobla con un argumento y porque el ciclo peligroso no es el primero sino el que sigue a una carga masiva del historial del taller |
 | `FLOTA_FOTOS_DIR` | Almacén de fotos de custodia. **Ruta absoluta** en un volumen montado (relativa = error de configuración). El health (`almacen_fotos`) dice desde el proceso que sirve qué carpeta mira, si es un volumen y cuántas fotos `ok` no tienen archivo — ver «Pantallas de la operación diaria» |
 | `GUPSHUP_API_KEY` · `GUPSHUP_SOURCE` · `GUPSHUP_APP_NAME` · `GUPSHUP_TEMPLATE_IDS` | Canal WhatsApp. **`GUPSHUP_SOURCE` es la línea de mensajería cuya habilitación a producción depende de un tercero** — la misma que BK-OPS-01 §4.3 lista bajo Gestor de Cartera. Un número, dos consumidores |
@@ -6992,3 +6994,61 @@ juntarlos:
 los de circuito «abierto» (desde H1 deja pasar el probe vencido el minuto:
 ahora fijan `_cb_last_probe`) y `test_vigia_ingesta` (`date.today()` en UTC; el
 domingo de noche ya es lunes: usa `hoy_bogota()`, preexistente).
+
+---
+
+## Flota: lo legal y los avisos (2026-09-27)
+
+Tandas T1 y T5 de la auditoría de flota de la noche del 2026-09-27. Migración
+**`m051flotalegal`** (down `m050inv2`, aditiva, nullable, sin backfill):
+`conductores.licencia_numero/_categoria/_vence` y `cron_latido.ultimo_resumen`.
+Sin locks nuevos. Trinquetes: `tests/flota/test_salida_prohibida.py`,
+`tests/flota/test_avisos_dicen_la_verdad.py`,
+`tests/test_muelle_salida_prohibida_js.py`. **30 mutaciones, las 30 rojas** (la
+del consejo de la bandeja sobrevivía y obligó a un test más).
+
+| | Qué pasaba | Ahora |
+|---|---|---|
+| **P0-1** salida | El despacho sacaba un camión con el SOAT o la RTM vencidos con cualquier texto, en el mismo cuadro que un papel sin cargar | `flota/dominio/salida.py`: `BLOQUEAN_SALIDA` (SOAT, RTM, licencia vencidos), `ROLES_AUTORIZAN_SALIDA_PROHIBIDA = ('admin',)`, `MOTIVO_MINIMO_SALIDA_PROHIBIDA = 20` — **la decisión del dueño son esas tres constantes**. `RutaService._reconocer_advertencias_flota` levanta `SalidaProhibida` (409 con `salida_prohibida`, `puede_autorizar`, `motivo_minimo`); el admin con motivo largo deja FORZAR con `salida_prohibida_autorizada`, que `despachos_forzados` publica y la bandeja muestra. **Un FORZAR viejo no cuenta** para lo prohibido. El 409 lleva `gravedad` (prohibido · no se sabe · advertencia) y el muelle pinta tres cuadros (`rutaCuadroAdvertencias`); a quien no autoriza solo le dice «Pídale a un administrador», sin campo de motivo |
+| **P1-7** licencia | No existía | Número, categoría (A1…C3) y vencimiento por conductor (Rutas → Conductores → «Licencia», admin; `PUT /api/rutas/conductores/<id>`, bitácora EDITAR). Entra a la política al despachar (`Hechos.licencia`, la única con default: la bandeja evalúa vehículos). Vencida bloquea; sin cargar es «no se sabe» y pide motivo simple (`LICENCIA_SIN_CARGAR_FRENA`) |
+| **P2** fechas | Una RTM que vence el día en que se expidió y una póliza con año 0025 entraron | `problemas_de_fechas` rechaza al cargar (años < 2000 o > hoy+15, expedición futura, vencimiento ≤ expedición, SOAT que no dura ~1 año: 330–430 días). Lo **ya cargado** se juzga solo con `fechas_imposibles` y queda `DATO_A_CORREGIR` (ámbar, «no se sabe», nunca «vencido hace 320 días»); una fila basura no esconde un vencimiento conocido. Un papel renovado (otro número) sin archivo nuevo ya no hereda el escaneo viejo |
+| **P0-2** canal | Un papel vencido no le llegaba a nadie: solo WhatsApp sin aprobar, y el reporte semanal filtraba `>= hoy` | Correo diario (Resend) en el barrido de las 06:00: papeles de vehículos **activos** vencidos, por vencer, no encontrados, sin cargar y a corregir; daños bloqueantes abiertos; licencias; preventivo vencido — con los textos de la política. Uno por día (`correo_flota_diario:<día>` en `flota_aviso`, `telefono='correo'`, `proveedor_msg_id` = el id de Resend). El reporte semanal suma `documentos_vencidos` y `documentos_sin_cargar` y filtra activos (`salida.papeles_de_la_flota`, una lectura para los dos) |
+| **P1-9** daño | Un daño bloqueante no avisaba | Evento del modelo `Hallazgo` (al insertar o al volverse bloqueante) → después del **commit** (no si se deshace) → correo + WhatsApp `flota_hallazgo_bloqueante`, en un hilo. Idempotente por hallazgo. `escuchar_danos_bloqueantes`, registrado en `registrar_flota` |
+| **T5** reintento | Un aviso fallido no se reintentaba nunca (la clave ya existía) | `_pendientes`: sin fila o `fallido` → se reintenta sobre la misma fila |
+| **P1-8** panel | `GET /flota/avisos` decía `encendido` con las variables de la **web**; el cron corre en el **worker**; el botón no tomaba el candado | `con_latido` guarda en `cron_latido.ultimo_resumen` el dict que devuelve la corrida; el barrido devuelve su resumen **con su configuración** (solo presencias, nunca valores). El panel lee eso y `que_falta` dice, por servicio, qué variable falta (o que no se puede saber). El botón toma `LOCK_FLOTA_AVISOS` (409 si está tomado) y dice que corrió con las variables de la web |
+| **P1-10** fotos | `storage_ref` relativo + cambio de `FLOTA_FOTOS_DIR` = todo 410 | El sirviente busca también en `RAICES_CONOCIDAS` y `FLOTA_FOTOS_DIRS_ANTERIORES`, **solo si el contenido tiene el hash de su nombre**; no mueve nada. `/flota/health` → `almacen_fotos.alarma` (fotos `ok` sin archivo, servidas desde una raíz vieja, muestra parcial, disco del contenedor) |
+
+**Trinquetes (AST):** todo escritor de un FORZAR de flota llama a
+`puede_autorizar_salida_prohibida`; toda construcción de `Hechos` pasa
+`licencia=` (inventario: la bandeja); toda escritura de fechas de un papel (en
+una función que nombra `DocumentoVehiculo`) llama a `problemas_de_fechas` y
+toda de licencia a `problemas_de_licencia`; ningún módulo de `flota/api/` lee
+`FLOTA_AVISO*` del entorno. El correo tiene por inventario el vocabulario:
+cada estado de `ESTADOS_PAPEL` distinto de vigente tiene que salir.
+
+**Lo que NO cubre, dicho:**
+- **El aviso inmediato sale del servicio que registra el daño (la web)**: con
+  `FLOTA_AVISOS` solo en el worker, no sale y lo repite el correo del otro día.
+- **El aviso del conductor en su teléfono** no evalúa su licencia (no se tocó
+  `flota/api/conductor.py` ni el bloque `flotaCond*`, de otra tanda).
+- **La categoría de la licencia no se cruza con el tipo de vehículo** (C1/C2
+  para camión): solo se guarda.
+- **Preventivo por tiempo** («o cada N meses») no se hizo: vive en
+  `flota/dominio/preventivo.py`, de otra tanda. El correo solo lista el
+  preventivo vencido por km.
+- **Una RTM exenta de vehículo nuevo** sigue sin estado «no aplica hasta».
+- **Adaptadores de la bandeja**: solo se agregó el consejo de «dato a corregir»;
+  el despacho forzado de una salida prohibida sale con el nivel de siempre
+  (turno a revisar), no en rojo.
+- **El correo del daño corre en un hilo**: si el proceso muere antes de
+  mandarlo, lo repite el correo diario (la fila no queda).
+- **No se verificó en Railway** qué hay en el volumen ni las variables de cada
+  servicio: el panel y el health lo dicen desde el servicio que contesta.
+
+**Qué tiene que hacer el dueño:** poner `FLOTA_AVISOS=true`, `RESEND_API_KEY`
+y `FLOTA_AVISO_CORREOS` (o `ALERTA_EMAIL_DEST`) en el **WMS-Worker** y en el
+**web**; mirar Flota → Diagnóstico → «Qué falta para que los avisos salgan» al
+día siguiente de las 06:00; corregir la RTM de BDT261 y la póliza de TGZ653
+(saldrán como «dato a corregir»); cargar las licencias de los conductores
+(Rutas → Conductores → Licencia); mirar `GET /flota/health` → `almacen_fotos`
+en la web de QA y de producción.

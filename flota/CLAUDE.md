@@ -183,3 +183,28 @@ pantalla (`FLOTA_PALABRAS`/`flotaOpciones`; veredicto en femenino: «no apta»).
 pendiente falsos — la forma más rápida de que el encargado deje de mirar la
 bandeja. Trinquetes: `tests/flota/test_fin_del_dia_normal.py`,
 `test_foto_invalida_es_400.py`, `tests/test_sin_codigos_en_pantalla.py`.*
+
+
+## 19. Lo que la ley prohíbe y se sabe no sale con cualquier texto (2026-09-27)
+
+SOAT, revisión técnico-mecánica o licencia **vencidos con fecha registrada** están
+en `salida.BLOQUEAN_SALIDA`: solo `ROLES_AUTORIZAN_SALIDA_PROHIBIDA` los deja salir,
+con un motivo de `MOTIVO_MINIMO_SALIDA_PROHIBIDA` caracteres que queda con su nombre.
+Lo que **no se sabe** (sin cargar, no encontrado, dato a corregir) sigue siendo
+«informa, no bloquea», y el muelle lo muestra en otro cuadro. Una fecha imposible
+no entra, y la ya cargada es «dato a corregir», nunca «vencida».
+
+*Motivo: un vencimiento conocido es determinístico y su costo irreversible
+(inmovilización, ADRES, la póliza). En el mismo cuadro que lo desconocido, el «ok»
+que se aprende para lo segundo saca el camión ilegal.*
+
+## 20. Un aviso dice por dónde salió, y el panel dice qué le falta a quién
+
+El correo diario lleva vencidos Y por vencer; un daño bloqueante avisa al nacer; lo
+que falló se reintenta. El panel de avisos lee lo que el cron publicó en su latido
+—con la configuración del servicio que lo corrió—, nunca las variables del proceso
+que contesta. Si no lo puede saber, lo dice.
+
+*Motivo: el 2026-09-27 un papel vencido no le llegaba a nadie, el reporte semanal
+escondía los vencidos, y el panel decía «encendido» con las variables de la web
+mientras el cron corría en el worker.*
