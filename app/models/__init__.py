@@ -43,3 +43,4 @@ from app.models.cartera import (RetencionCartera, CarteraCliente,
 from app.models.sello_ambiente import SelloAmbiente
 from app.models.cron_latido import CronLatido
 from app.models.demanda_siesa import DemandaDiaSiesa, DemandaDiaCubierto, DemandaVentanaLectura
+from app.models.decision_compra import DecisionCompra

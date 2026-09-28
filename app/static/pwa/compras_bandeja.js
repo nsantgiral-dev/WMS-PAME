@@ -18,6 +18,16 @@
 const CMP = {
   tab: 'bandeja', bandeja: null, confianza: null, contenedor: null, temporada: null,
   lopedido: null, filtro: null, irA: null, pos: {}, tipos: [], tipo: '40STD',
+  // Decisiones del comprador: `flat` son las filas decidibles por posición
+  // (en un `onclick` viaja solo el número), `abierto` la acción del
+  // formulario abierto de cada una y `decididas` la lista de «Ya decidido».
+  flat: [], abierto: {}, decididas: [],
+};
+
+const CMP_ACCION = {
+  PEDIDO: 'Ya se pidió',
+  POSPUESTO: 'Posponer',
+  DESCARTADO: 'No pedir',
 };
 
 const CMP_TABS = ['bandeja', 'contenedor', 'temporada', 'lopedido', 'fuentes', 'avanzado'];
@@ -317,7 +327,27 @@ function cmpPorQueHtml(l) {
   return partes.map(x => `<div style="margin-bottom:4px;">${x}</div>`).join('');
 }
 
-function cmpLineaHtml(l, i, j) {
+/** Lo que alguien ya decidió sobre la línea, en una frase. */
+function cmpDecisionTexto(dec) {
+  if (!dec) return '';
+  const quien = dec.usuario_nombre || 'alguien';
+  const cuando = cmpHace(dec.hace_min);
+  if (dec.accion === 'PEDIDO') return `Pedido por ${quien} ${cuando}: ${cmpN(dec.cantidad)} u${dec.oc_siesa ? ` · OC ${dec.oc_siesa}` : ' · sin número de OC todavía'}`;
+  if (dec.accion === 'POSPUESTO') return `Pospuesto por ${quien} hasta el ${cmpFecha(dec.vigente_hasta)}${dec.motivo ? ` (${dec.motivo})` : ''}`;
+  return `No se pide, decidió ${quien} ${cuando}: ${dec.motivo || 'sin motivo'}`;
+}
+
+/** Los tres botones (solo si el servidor dice que quien mira puede decidir)
+ *  y el hueco del formulario. `k` es la posición en CMP.flat. */
+function cmpBotonesDecision(k) {
+  if (!CMP.bandeja || !CMP.bandeja.puede_decidir) return '';
+  const b = (fn, texto, borde) => `<button onclick="${fn}(${k})" style="min-height:44px;padding:6px 12px;border-radius:8px;border:1px solid ${borde};background:var(--bg-s);color:var(--tx);font-size:var(--fs-sm);font-weight:600;cursor:pointer;">${esc(texto)}</button>`;
+  return `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;">
+    ${b('cmpYaSePidio', CMP_ACCION.PEDIDO, 'var(--ok-brd)')}${b('cmpPosponer', CMP_ACCION.POSPUESTO, 'var(--brd)')}${b('cmpNoPedir', CMP_ACCION.DESCARTADO, 'var(--brd)')}
+  </div><div id="cmp-dec-${k}"></div>`;
+}
+
+function cmpLineaHtml(l, i, j, k) {
   const em = l.empaque || {};
   const pr = l.precio || {};
   const cantidad = em.unidades_por_empaque > 1
@@ -341,10 +371,12 @@ function cmpLineaHtml(l, i, j) {
       <span style="font-size:var(--fs-sm);color:var(--tx2);">Alcanza ${esc(cmpDias(l.alcanza_dias))} · llega en ${esc(cmpDias(l.entrega_dias))} (${esc(cmpFecha(l.fecha_entrega_sugerida))})</span>
     </div>
     <div style="font-size:var(--fs-sm);color:var(--tx);margin-top:4px;">${precio}</div>
+    ${l.decision ? `<div style="font-size:var(--fs-sm);margin-top:6px;padding:6px 8px;border-radius:8px;background:var(--info-bg);color:var(--info-tx);border:1px solid var(--info-brd);">${esc(cmpDecisionTexto(l.decision))}${l.decision_escalo ? ' — <b>ahora es urgente: vuelva a mirarlo.</b>' : ''}</div>` : ''}
     <details id="cmp-pq-${i}-${j}" style="margin-top:6px;">
       <summary style="cursor:pointer;font-size:var(--fs-sm);color:var(--acento-tx);font-weight:600;min-height:44px;display:flex;align-items:center;">¿Por qué esta cantidad?</summary>
       <div style="font-size:var(--fs-sm);color:var(--tx2);line-height:var(--lh-texto);padding:6px 0 2px;">${cmpPorQueHtml(l)}</div>
     </details>
+    ${k === undefined ? '' : cmpBotonesDecision(k)}
   </div>`;
 }
 
@@ -367,7 +399,7 @@ function cmpProveedorHtml(p, i, filtro) {
       </div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;">${botones}</div>
     </div>
-    <div style="display:flex;flex-direction:column;gap:8px;">${lineas.map(([l, j]) => cmpLineaHtml(l, i, j)).join('')}</div>
+    <div style="display:flex;flex-direction:column;gap:8px;">${lineas.map(([l, j]) => cmpLineaHtml(l, i, j, CMP.kDe[`${i}-${j}`])).join('')}</div>
   </section>`;
 }
 
@@ -376,17 +408,158 @@ function cmpProveedorHtml(p, i, filtro) {
 function cmpRevisarOcHtml(d) {
   const r = d.revisar_oc || [];
   if (!r.length) return '';
-  const filas = r.map(x => {
+  const filas = r.map((x, n) => {
     const oc = x.oc_mas_vieja || {};
     return `<div style="border-top:1px solid var(--brd);padding:8px 0;font-size:var(--fs-sm);">
       <div style="color:var(--tx);font-weight:700;overflow-wrap:anywhere;">${esc(x.nombre || 'Producto sin nombre en el WMS')} <span style="color:var(--tx3);font-weight:500;">${esc(x.referencia)}</span></div>
       <div style="color:var(--tx2);">Lo cubre la OC ${esc(oc.oc || 'sin dato')}${oc.dias_vencida ? `, que debió llegar hace ${esc(cmpDias(oc.dias_vencida))}` : ''} (${esc(cmpN(x.vencido))} u vencidas). Si no llega, pedir <b>${esc(cmpN(x.si_no_llega_pedir))}</b>${x.si_no_llega_empaques && x.unidad !== 'UND' ? ` (${esc(cmpN(x.si_no_llega_empaques))} ${esc(x.unidad)})` : ''}.</div>
+      ${x.decision ? `<div style="color:var(--info-tx);">${esc(cmpDecisionTexto(x.decision))}</div>` : ''}
+      ${cmpBotonesDecision(CMP.kDe[`r-${n}`])}
     </div>`;
   }).join('');
   return `<section style="border:1px solid var(--warn-brd);background:var(--warn-bg);border-radius:14px;padding:12px;margin-bottom:14px;">
     <div style="font-size:var(--fs-md);font-weight:800;color:var(--warn-tx);">Revisar órdenes viejas (${esc(cmpN(r.length))})</div>
     <div style="font-size:var(--fs-sm);color:var(--tx);margin:4px 0 6px;">Estos productos no aparecen arriba porque los cubre una orden de compra vencida hace meses. Confirme con el proveedor si va a llegar; si no, anúlela en Siesa y pídalos.</div>
     ${filas}</section>`;
+}
+
+/** «Ya decidido»: quién hizo qué, cuándo y contra qué número (P1-4). */
+function cmpDecididasHtml(d) {
+  const dec = d.decisiones || {};
+  const lista = dec.recientes || [];
+  CMP.decididas = lista;
+  const ocultas = (dec.ocultas_por_decision || []).length;
+  if (!lista.length) return '';
+  const filas = lista.map((x, n) => {
+    const vio = x.foto && x.foto.pedir_unidades !== undefined && x.foto.pedir_unidades !== null
+      ? ` · la bandeja proponía ${esc(cmpN(x.foto.pedir_unidades))}` : '';
+    const puede = CMP.bandeja && CMP.bandeja.puede_decidir && x.vigente && !x.anulada;
+    return `<div style="border-top:1px solid var(--brd);padding:8px 0;font-size:var(--fs-sm);${x.anulada ? 'opacity:.65;' : ''}">
+      <div style="color:var(--tx);font-weight:700;overflow-wrap:anywhere;">${esc(x.nombre || 'Producto sin nombre en el WMS')} <span style="color:var(--tx3);font-weight:500;">${esc(x.referencia)}</span></div>
+      <div style="color:var(--tx2);">${esc(cmpDecisionTexto(x))}${vio}${x.anulada ? ` · <b>deshecha</b>${x.anulada_motivo ? `: ${esc(x.anulada_motivo)}` : ''}` : (x.vigente ? '' : ' · ya no vale')}</div>
+      ${puede ? `<button onclick="cmpDeshacerDecision(${n})" style="min-height:44px;margin-top:4px;padding:6px 12px;border-radius:8px;border:1px solid var(--brd);background:transparent;color:var(--tx2);font-size:var(--fs-sm);cursor:pointer;">Deshacer</button>` : ''}
+    </div>`;
+  }).join('');
+  return `<details style="border:1px solid var(--brd);border-radius:12px;padding:10px 14px;background:var(--bg-s);margin-bottom:14px;">
+    <summary style="cursor:pointer;font-weight:700;color:var(--tx);font-size:var(--fs-sm);">Ya decidido estos días (${esc(cmpN(lista.length))})${ocultas ? ` · ${esc(cmpN(ocultas))} fuera de la bandeja por una decisión vigente` : ''}</summary>
+    <div style="margin-top:6px;">${filas}</div></details>`;
+}
+
+function _cmpCampo(etiqueta, control) {
+  return `<label style="display:flex;flex-direction:column;gap:2px;font-size:var(--fs-sm);color:var(--tx2);flex:1 1 160px;">${esc(etiqueta)}${control}</label>`;
+}
+
+const _CMP_INPUT = 'min-height:44px;padding:6px 10px;border-radius:8px;border:1px solid var(--brd);background:var(--bg);color:var(--tx);font-size:var(--fs-sm);';
+
+/** Abre el formulario de una acción bajo la fila `k` (una sola a la vez). */
+function _cmpAbrirDecision(k, accion) {
+  const f = CMP.flat[Number(k)];
+  const el = document.getElementById(`cmp-dec-${Number(k)}`);
+  if (!f || !el) return;
+  CMP.abierto[Number(k)] = accion;
+  const dec = CMP.bandeja.decisiones || {};
+  let campos = '';
+  if (accion === 'PEDIDO') {
+    const sugerida = f.tipo === 'linea' ? f.l.pedir_unidades : f.l.si_no_llega_pedir;
+    campos = _cmpCampo('Número de la OC en Siesa (si ya la tiene)', `<input id="cmp-dec-oc-${k}" inputmode="text" maxlength="40" style="${_CMP_INPUT}">`)
+      + _cmpCampo('Unidades que pidió', `<input id="cmp-dec-cant-${k}" type="number" min="1" step="1" value="${esc(sugerida ?? '')}" style="${_CMP_INPUT}">`);
+  } else if (accion === 'POSPUESTO') {
+    campos = _cmpCampo('Hasta qué día', `<input id="cmp-dec-hasta-${k}" type="date" value="${esc(dec.posponer_hasta_sugerido || '')}" style="${_CMP_INPUT}">`)
+      + _cmpCampo('Por qué (opcional)', `<input id="cmp-dec-mot-${k}" maxlength="250" style="${_CMP_INPUT}">`);
+  } else {
+    const ops = (dec.motivos_no_pido || []).map(m => `<option value="${esc(m.codigo)}">${esc(m.texto)}</option>`).join('');
+    campos = _cmpCampo('Por qué no se pide', `<select id="cmp-dec-cod-${k}" style="${_CMP_INPUT}"><option value="">Elija un motivo</option>${ops}</select>`)
+      + _cmpCampo('Detalle (obligatorio con «otro motivo»)', `<input id="cmp-dec-mot-${k}" maxlength="250" style="${_CMP_INPUT}">`);
+  }
+  el.innerHTML = `<div style="border:1px solid var(--brd);border-radius:10px;padding:10px;margin-top:6px;background:var(--bg-s);">
+    <div style="font-size:var(--fs-sm);font-weight:700;color:var(--tx);margin-bottom:6px;">${esc(CMP_ACCION[accion])}</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;">${campos}</div>
+    <div id="cmp-dec-err-${k}" style="font-size:var(--fs-sm);color:var(--err-tx);margin-top:4px;"></div>
+    <div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap;">
+      <button onclick="cmpGuardarDecision(${Number(k)})" style="min-height:44px;padding:6px 14px;border-radius:8px;border:1px solid var(--acento-brd);background:var(--acento-bg);color:var(--acento-tx);font-size:var(--fs-sm);font-weight:700;cursor:pointer;">Guardar</button>
+      <button onclick="cmpCerrarDecision(${Number(k)})" style="min-height:44px;padding:6px 14px;border-radius:8px;border:1px solid var(--brd);background:transparent;color:var(--tx2);font-size:var(--fs-sm);cursor:pointer;">Cancelar</button>
+    </div></div>`;
+}
+
+/** @param {number} k - Posición en CMP.flat. */
+function cmpYaSePidio(k) { _cmpAbrirDecision(k, 'PEDIDO'); }
+/** @param {number} k - Posición en CMP.flat. */
+function cmpPosponer(k) { _cmpAbrirDecision(k, 'POSPUESTO'); }
+/** @param {number} k - Posición en CMP.flat. */
+function cmpNoPedir(k) { _cmpAbrirDecision(k, 'DESCARTADO'); }
+
+/** @param {number} k - Posición en CMP.flat. */
+function cmpCerrarDecision(k) {
+  delete CMP.abierto[Number(k)];
+  const el = document.getElementById(`cmp-dec-${Number(k)}`);
+  if (el) el.innerHTML = '';
+}
+
+function _cmpValor(id) {
+  const el = document.getElementById(id);
+  return el && el.value !== undefined ? String(el.value).trim() : '';
+}
+
+/** El cuerpo del POST: lo que se escribió y la línea tal como se vio. La
+ *  cantidad propuesta y la urgencia salen de la línea, no se recalculan. */
+function cmpDecisionCuerpo(k) {
+  const f = CMP.flat[Number(k)];
+  const accion = CMP.abierto[Number(k)];
+  if (!f || !accion) return null;
+  const l = f.l;
+  const cuerpo = {
+    referencia: l.referencia, accion, proveedor_codigo: f.proveedor || null,
+    urgencia: l.urgencia || (f.tipo === 'revisar' ? 'REVISAR_OC' : null),
+    cantidad_propuesta: f.tipo === 'linea' ? l.pedir_unidades : l.si_no_llega_pedir,
+    foto: { urgencia: l.urgencia || null, pedir_unidades: l.pedir_unidades ?? null,
+      pedir_empaques: l.pedir_empaques ?? null, valor_cop: l.valor_cop ?? null,
+      alcanza_dias: l.alcanza_dias ?? null, entrega_dias: l.entrega_dias ?? null,
+      proveedor_codigo: f.proveedor || null, porque: l.porque || null, precio: l.precio || null,
+      vencido: l.vencido ?? null, si_no_llega_pedir: l.si_no_llega_pedir ?? null },
+  };
+  if (accion === 'PEDIDO') {
+    cuerpo.oc_siesa = _cmpValor(`cmp-dec-oc-${k}`) || null;
+    cuerpo.cantidad = _cmpValor(`cmp-dec-cant-${k}`);
+  } else if (accion === 'POSPUESTO') {
+    cuerpo.hasta = _cmpValor(`cmp-dec-hasta-${k}`);
+    cuerpo.motivo = _cmpValor(`cmp-dec-mot-${k}`) || null;
+  } else {
+    cuerpo.motivo_codigo = _cmpValor(`cmp-dec-cod-${k}`) || null;
+    cuerpo.motivo = _cmpValor(`cmp-dec-mot-${k}`) || null;
+  }
+  return cuerpo;
+}
+
+/** @param {number} k - Posición en CMP.flat. */
+async function cmpGuardarDecision(k) {
+  const cuerpo = cmpDecisionCuerpo(k);
+  if (!cuerpo) return;
+  const err = document.getElementById(`cmp-dec-err-${Number(k)}`);
+  try {
+    await post('/api/compras/bandeja/decision', cuerpo);
+    alerta('Guardado: ' + CMP_ACCION[cuerpo.accion], 'exito');
+    cmpCerrarDecision(k);
+    await cmpCargarBandeja();
+  } catch (e) {
+    if (err) err.innerHTML = esc((e && e.message) || e);
+  }
+}
+
+/** @param {number} n - Posición en la lista «Ya decidido». */
+async function cmpDeshacerDecision(n) {
+  const x = CMP.decididas[Number(n)];
+  if (!x) return;
+  const motivo = await _modalTexto('Deshacer la decisión',
+    `${esc(cmpDecisionTexto(x))}<br>Escriba por qué se deshace: queda en la bitácora.`,
+    { obligatorio: true, textoConfirmar: 'Deshacer' });
+  if (!motivo) return;
+  try {
+    await post(`/api/compras/bandeja/decision/${Number(x.id)}/anular`, { motivo });
+    alerta('Decisión deshecha', 'exito');
+    await cmpCargarBandeja();
+  } catch (e) {
+    alerta((e && e.message) || String(e), 'error');
+  }
 }
 
 /** Lo que no se cuenta como «ya pedido» (el corte de órdenes viejas), una vez. */
@@ -419,11 +592,23 @@ function cmpExcluidosHtml(d) {
 
 function cmpBandejaHtml(d, filtro) {
   if (!d) return '';
+  CMP.bandeja = d;
   if (d.estado !== 'OK') return cmpSinKardexHtml(d);
   const r = d.resumen || {};
   const provs = d.proveedores || [];
   CMP.pos = {};
-  provs.forEach((p, i) => (p.lineas || []).forEach((l, j) => { CMP.pos[l.referencia] = [i, j]; }));
+  CMP.flat = [];
+  CMP.kDe = {};
+  CMP.abierto = {};
+  provs.forEach((p, i) => (p.lineas || []).forEach((l, j) => {
+    CMP.pos[l.referencia] = [i, j];
+    CMP.kDe[`${i}-${j}`] = CMP.flat.length;
+    CMP.flat.push({ tipo: 'linea', l, proveedor: p.codigo });
+  }));
+  (d.revisar_oc || []).forEach((x, n) => {
+    CMP.kDe[`r-${n}`] = CMP.flat.length;
+    CMP.flat.push({ tipo: 'revisar', l: x, proveedor: x.proveedor_codigo });
+  });
   const valor = r.valor_total_cop === null
     ? 'sin precio en ninguna línea'
     : `${fmtPesos(r.valor_total_cop)}${r.valor_es_cota_inferior ? ` al menos (${cmpN(r.lineas_sin_precio)} sin precio)` : ''}`;
@@ -445,7 +630,7 @@ function cmpBandejaHtml(d, filtro) {
   <div id="cmp-aviso-ir"></div>`;
   const cuerpo = provs.map((p, i) => cmpProveedorHtml(p, i, filtro)).join('')
     || `<div style="padding:16px;color:var(--tx3);font-size:var(--fs-sm);">Ningún producto en este filtro.</div>`;
-  return cab + cuerpo + cmpRevisarOcHtml(d) + cmpExcluidosHtml(d);
+  return cab + cuerpo + cmpRevisarOcHtml(d) + cmpDecididasHtml(d) + cmpExcluidosHtml(d);
 }
 
 // ── Borrador de OC (copiar / CSV) ───────────────────────────────────────────

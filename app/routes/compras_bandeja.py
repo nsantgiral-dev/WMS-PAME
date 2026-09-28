@@ -1,5 +1,5 @@
 """
-Compras — la pantalla del comprador (2026-09-25). Solo LECTURA.
+Compras — la pantalla del comprador (2026-09-25).
 
 GET /api/compras/bandeja               — 🛒 qué pedir, a quién, a qué precio
 GET /api/compras/bandeja/confianza     — franja: ¿puedo decidir con esto?
@@ -7,17 +7,20 @@ GET /api/compras/bandeja/sku           — ¿por qué esta referencia está (o n
 GET /api/compras/bandeja/contenedor    — 🚢 propuesta o por qué no se puede
 GET /api/compras/bandeja/temporada     — 🎒 tener − hay − viene = pedir
 GET /api/compras/bandeja/lo-pedido     — 📦 OCs abiertas, llegadas, deriva
+POST /api/compras/bandeja/decision     — «lo pedí» / «lo pospongo» / «no lo pido»
+POST /api/compras/bandeja/decision/<id>/anular — deshacer (motivo)
 
-Todo `_es_compras()` (admin, jefe de almacén, gerente, compras): es la
-pantalla de quien firma la compra. El servicio (`compras_bandeja`) solo
-compone lo que ya calcula el motor.
+Leer: `_es_compras()` (admin, jefe de almacén, gerente, compras). Escribir una
+decisión: `_es_compras_escritura()` — el gerente mira, no escribe (decisión
+del dueño, 27-sep). El servicio (`compras_bandeja`) solo compone lo que ya
+calcula el motor; las decisiones las guarda `compras_decisiones`.
 """
 import logging
 
 from flask import Blueprint, jsonify, request
 from flask_jwt_extended import jwt_required
 
-from app.routes._auth_helpers import _es_compras
+from app.routes._auth_helpers import _es_compras, _es_compras_escritura
 
 logger = logging.getLogger(__name__)
 compras_bandeja_bp = Blueprint('compras_bandeja', __name__)
@@ -41,10 +44,15 @@ def _responder(nombre, fn):
 @compras_bandeja_bp.route('', methods=['GET'])
 @jwt_required()
 def bandeja():
-    if not _es_compras():
+    u = _es_compras()
+    if not u:
         return jsonify({'error': _SIN_PERMISO}), 403
     from app.services import compras_bandeja as cb
-    return _responder('la bandeja', cb.bandeja)
+    from app.services import compras_decisiones as cd
+    # Quién puede registrar lo que hizo lo dice el servidor: la pantalla no
+    # ofrece botones que terminarían en 403.
+    return _responder('la bandeja', lambda: dict(cb.bandeja(),
+                                                 puede_decidir=cd.puede_decidir(u)))
 
 
 @compras_bandeja_bp.route('/confianza', methods=['GET'])
@@ -94,3 +102,42 @@ def lo_pedido():
         return jsonify({'error': _SIN_PERMISO}), 403
     from app.services import compras_bandeja as cb
     return _responder('lo pedido', cb.lo_pedido)
+
+
+_SIN_PERMISO_ESCRITURA = ('Registrar lo que se hizo con una compra es de admin, jefe de '
+                          'almacén o compras')
+
+
+@compras_bandeja_bp.route('/decision', methods=['POST'])
+@jwt_required()
+def registrar_decision():
+    u = _es_compras_escritura()
+    if not u:
+        return jsonify({'error': _SIN_PERMISO_ESCRITURA}), 403
+    from app.services import compras_decisiones as cd
+    try:
+        d = cd.registrar(u, request.get_json(silent=True) or {})
+    except cd.DecisionInvalida as e:
+        return jsonify({'error': str(e)}), e.estado
+    except PermissionError as e:
+        return jsonify({'error': str(e)}), 403
+    return jsonify({'decision': d}), 200 if d.get('repetida') else 201
+
+
+@compras_bandeja_bp.route('/decision/<int:decision_id>/anular', methods=['POST'])
+@jwt_required()
+def anular_decision(decision_id):
+    u = _es_compras_escritura()
+    if not u:
+        return jsonify({'error': _SIN_PERMISO_ESCRITURA}), 403
+    from app.services import compras_decisiones as cd
+    from app.services.bitacora import MotivoRequerido
+    try:
+        d = cd.anular(u, decision_id, (request.get_json(silent=True) or {}).get('motivo'))
+    except cd.DecisionInvalida as e:
+        return jsonify({'error': str(e)}), e.estado
+    except MotivoRequerido as e:
+        return jsonify({'error': str(e)}), 400
+    except PermissionError as e:
+        return jsonify({'error': str(e)}), 403
+    return jsonify({'decision': d}), 200

@@ -62,6 +62,9 @@ IRRECUPERABLES = (
     # ambiente del primer proceso que la use — una copia de producción
     # levantada en QA quedaría adoptada por QA y su DLQ postearía.
     'sello_ambiente',
+    # Lo que decidió el comprador (m051comprasf): quién pidió qué y contra qué
+    # número. No vuelve de Siesa, y un «lo pedí» cuenta como en camino.
+    'decision_compra',
 )
 
 #: Se pueden volver a cargar desde Siesa. Que la copia tenga menos no es un

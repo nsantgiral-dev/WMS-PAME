@@ -54,6 +54,10 @@ class Roles:
     PACKING_ROLES  = (ADMIN, SUPERVISOR, EMPACADOR, PACKER_TRASLADO)
     RECEPCION_ROLES = (ADMIN, JEFE_ALMACEN, RECEPCIONISTA)
     COMPRAS_ROLES  = (ADMIN, JEFE_ALMACEN, GERENTE, COMPRAS)
+    #: Quién ESCRIBE en compras (decisiones de la bandeja, 2026-09-27): el
+    #: gerente mira todo pero no escribe (decisión del dueño, 27-sep). El jefe
+    #: de almacén entra porque hoy ya escribe en compras (`_es_compras`).
+    COMPRAS_ESCRITURA = (ADMIN, JEFE_ALMACEN, COMPRAS)
     LEAD           = (ADMIN, SUPERVISOR)
     TRASLADO_OPS   = (PICKER_TRASLADO, PACKER_TRASLADO)
     # Quién puede LEER los maestros que la pantalla de flota necesita para
@@ -276,6 +280,17 @@ def _es_compras():
         return None
     u = Usuario.query.get(uid)
     return u if u and u.activo and u.rol in Roles.COMPRAS_ROLES else None
+
+
+def _es_compras_escritura():
+    """Retorna el usuario si puede ESCRIBIR en compras (no el gerente)."""
+    try:
+        uid = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return None
+    from app.extensions import db
+    u = db.session.get(Usuario, uid)
+    return u if u and u.activo and u.rol in Roles.COMPRAS_ESCRITURA else None
 
 
 def _get_uid():

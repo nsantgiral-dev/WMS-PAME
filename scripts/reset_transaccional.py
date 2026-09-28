@@ -128,6 +128,9 @@ OPERATIVAS = [
     # Dónde quedó la lectura de cada período (m052comprasc): sin las filas que
     # marca, el marcador apuntaría a una lectura que ya no está.
     'demanda_ventana_lectura',
+    # Lo que el comprador decidió en la bandeja (m051comprasf). Se vacía: un
+    # «lo pedí» del ensayo contaría como «en camino» en producción. Sin FK.
+    'decision_compra',
     'ubicaciones_huerfanas',
     'fugas_recompra',
     # ── Flota (agregado 2026-08-03) ────────────────────────────────────────

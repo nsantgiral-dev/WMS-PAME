@@ -39,6 +39,9 @@ logger = logging.getLogger(__name__)
 #: canasta constitucional?).
 NIVEL_SERVICIO = 0.95
 
+#: Cuántos días de decisiones muestra la bandeja («Ya decidido»).
+DIAS_DECISIONES = 14
+
 #: Ventana de PRESENTACIÓN de «Próximas»: los SKU que todavía no cruzan su
 #: punto de pedido pero lo cruzan dentro de esta cantidad de días, a su tasa de
 #: hoy. No cambia ninguna cantidad: solo decide si una fila se muestra.
@@ -353,7 +356,7 @@ def _ya_pedido(insumo):
 def bandeja(nivel_servicio: float = NIVEL_SERVICIO) -> dict:
     """La bandeja: por SKU nacional bajo su punto de pedido (o por cruzarlo),
     cuánto pedir, a quién, a qué precio y por qué, agrupado por proveedor."""
-    from app.services import compras_fuentes
+    from app.services import compras_decisiones, compras_fuentes
     from app.services.armador_service import ArmadorService, pedido_en_empaques
     from app.services.bloqueo_recompra_service import BloqueoRecompraService
     from app.services.bodegas import co_de_bodega
@@ -401,6 +404,11 @@ def bandeja(nivel_servicio: float = NIVEL_SERVICIO) -> dict:
 
     refs_revisar = [f['referencia'] for f in revisar]
     refs_todas = [*refs, *refs_revisar]
+    # Lo que el comprador ya decidió (tanda F): «lo pospongo» y «no lo pido»
+    # sacan la línea hasta su fecha, salvo que se haya vuelto URGENTE; «lo
+    # pedí» ya cuenta en «en camino» y la línea lo dice.
+    decididas = compras_decisiones.vigentes(refs_todas)
+    ocultas = []
     empaques = compras_fuentes.empaque_de_compra(refs_todas)
     costos = resolver_costos(refs_todas) if refs_todas else {}
     habitual = compras_fuentes.proveedor_habitual(refs_todas) if refs_todas else {}
@@ -411,6 +419,12 @@ def bandeja(nivel_servicio: float = NIVEL_SERVICIO) -> dict:
     lineas = []
     for f, urg in candidatas:
         ref = f['referencia']
+        dec = decididas.get(ref)
+        escalo = bool(dec and dec['accion'] != compras_decisiones.PEDIDO
+                      and urg == URGENTE and dec.get('urgencia_vista') != URGENTE)
+        if dec and dec['accion'] != compras_decisiones.PEDIDO and not escalo:
+            ocultas.append(ref)
+            continue
         emp = empaques.get(ref) or {}
         pedido = pedido_en_empaques(f.get('deficit') or 0, emp.get('unidades_por_empaque'),
                                     emp.get('moq_empaques'))
@@ -444,12 +458,20 @@ def bandeja(nivel_servicio: float = NIVEL_SERVICIO) -> dict:
             'proveedor_codigo': habitual.get(ref),
             # Lo ya pedido incluye OCs vencidas hace meses: ¿van a llegar?
             'revisar_oc': bool(f.get('en_transito_vencido')),
+            # Lo que alguien ya decidió sobre esta referencia (y si volvió
+            # porque se volvió urgente después de posponerla o descartarla).
+            'decision': dec,
+            'decision_escalo': escalo,
             'porque': _porque(f, pedido, nivel_servicio),
         })
 
     revisar_oc = []
     for f in revisar:
         ref = f['referencia']
+        dec = decididas.get(ref)
+        if dec and dec['accion'] != compras_decisiones.PEDIDO:
+            ocultas.append(ref)
+            continue
         emp = empaques.get(ref) or {}
         si_no_llega = pedido_en_empaques(f.get('deficit_sin_vencidas') or 0,
                                          emp.get('unidades_por_empaque'), emp.get('moq_empaques'))
@@ -463,6 +485,7 @@ def bandeja(nivel_servicio: float = NIVEL_SERVICIO) -> dict:
             'si_no_llega_empaques': si_no_llega['empaques'],
             'unidad': emp.get('unidad') or 'UND',
             'alcanza_dias': f.get('cobertura_dias'),
+            'decision': dec,
         })
 
     grupos = {}
@@ -501,11 +524,20 @@ def bandeja(nivel_servicio: float = NIVEL_SERVICIO) -> dict:
                           'fuente': TEXTO_FUENTE_LT.get(nac.get('lt_fuente'), nac.get('lt_fuente'))},
         proveedores=proveedores,
         revisar_oc=revisar_oc,
+        # Lo decidido estos días (quién, qué, contra qué número) y lo que la
+        # bandeja no muestra por una decisión vigente.
+        decisiones={'recientes': compras_decisiones.recientes(DIAS_DECISIONES),
+                    'ocultas_por_decision': ocultas,
+                    'posponer_hasta_sugerido': compras_decisiones.posponer_hasta_sugerido(),
+                    'motivos_no_pido': [{'codigo': k, 'texto': v} for k, v in
+                                        compras_decisiones.MOTIVOS_NO_PIDO.items()],
+                    'pedido_en_camino': compras_decisiones.dias_pedido_en_camino()},
         # «Ya pedido» honesto: el corte de OCs viejas y el peso de las
         # vencidas que sí se cuentan, tal como los declara `en_camino`.
         ya_pedido=_ya_pedido(rop.get('insumo_en_camino') or {}),
         resumen={
             'revisar_oc': len(revisar_oc),
+            'ocultas_por_decision': len(ocultas),
             'lineas': len(lineas),
             'urgentes': len([l for l in lineas if l['urgencia'] == URGENTE]),
             'esta_semana': len([l for l in lineas if l['urgencia'] == ESTA_SEMANA]),
@@ -547,9 +579,20 @@ def explicar_sku(referencia: str) -> dict:
                 'texto': 'No tiene ventas en los últimos 12 meses de la fuente de ventas.'}
     if f.get('sin_venta_reciente'):
         return {'referencia': ref, 'motivo': 'SIN_VENTA_RECIENTE', 'texto': f.get('motivo_d_cero')}
+    from app.services import compras_decisiones
+    dec = compras_decisiones.vigentes([ref]).get(ref)
     urg = _urgencia(f)
+    if urg is not None and dec and dec['accion'] != compras_decisiones.PEDIDO and not (
+            urg == URGENTE and dec.get('urgencia_vista') != URGENTE):
+        return {'referencia': ref, 'motivo': 'DECIDIDO', 'decision': dec,
+                'texto': ('Alguien decidió posponerlo o no pedirlo: está en «Ya decidido» '
+                          'de la Bandeja.')}
+    if urg is not None and not f.get('deficit'):
+        return {'referencia': ref, 'motivo': 'YA_CUBIERTO', 'decision': dec,
+                'texto': ('Lo que hay y lo que ya viene alcanza hasta la próxima compra: '
+                          'hoy no hace falta pedir.')}
     if urg is not None:
-        return {'referencia': ref, 'motivo': 'EN_BANDEJA', 'urgencia': urg,
+        return {'referencia': ref, 'motivo': 'EN_BANDEJA', 'urgencia': urg, 'decision': dec,
                 'texto': 'Está en la bandeja.'}
     if f.get('bajo_rop_sin_vencidas'):
         return {'referencia': ref, 'motivo': 'REVISAR_OC',

@@ -84,7 +84,7 @@ ESTADOS_EN_CAMINO = ('EN_PRODUCCION', 'NAVEGANDO', 'EN_PUERTO',
 
 #: Las fuentes de «lo que ya viene». No es un registro de funciones: la de
 #: contenedores depende de la de OCs para no contar dos veces lo mismo.
-FUENTES_EN_CAMINO = ('OC_SIESA', 'IMPORTACION')
+FUENTES_EN_CAMINO = ('OC_SIESA', 'IMPORTACION', 'DECISION_WMS')
 
 #: Una observación de lead time con menos días que esto no mide al proveedor:
 #: la OC se registró al recibir (entrada el mismo día de la OC). Ver
@@ -193,6 +193,15 @@ def en_camino(skus=None, bodegas=None) -> dict:
          stock. Si el ítem cita su OC y esa OC sigue abierta, ya está en (1);
          si cita una OC cerrada, ya entró o se anuló: no se suma.
 
+      3. `DECISION_WMS` (2026-09-27) — «lo pedí» registrado en la bandeja
+         (`compras_decisiones`) mientras la OC no aparezca en el espejo:
+         cuenta `COMPRAS_PEDIDO_EN_CAMINO_DIAS` (7) desde el día de la
+         decisión. Deja de contarse cuando aparece en el espejo una OC de ese
+         SKU del día de la decisión en adelante (o la OC que el comprador
+         escribió) — desde ahí la cuenta la fuente 1 —, o cuando vence (y se
+         dice). Va a la bodega del CDI. Sin esto, dos personas pedían dos
+         veces lo mismo.
+
     Una fuente que revienta **no suma cero en silencio**: va a
     `fuentes_con_error` y `completo` queda False. «Viene 0» y «no sé qué
     viene» empujan la compra al mismo lado, y solo el segundo es cierto.
@@ -233,6 +242,12 @@ def en_camino(skus=None, bodegas=None) -> dict:
         logger.error('[COMPRAS] en camino: la fuente IMPORTACION falló: %s', e)
         errores.append({'fuente': 'IMPORTACION', 'error': str(e)})
         cont = None
+    try:
+        dec = _decisiones_en_camino(filtro_skus, pedidas)
+    except Exception as e:     # noqa: BLE001
+        logger.error('[COMPRAS] en camino: la fuente DECISION_WMS falló: %s', e)
+        errores.append({'fuente': 'DECISION_WMS', 'error': str(e)})
+        dec = None
 
     por_oc = oc['por_sku'] if oc else {}
     vencido = oc['vencido'] if oc else {}
@@ -243,16 +258,23 @@ def en_camino(skus=None, bodegas=None) -> dict:
     excluido = oc['excluido'] if oc else {}
     excluidas_de = oc['excluidas_de'] if oc else {}
 
+    por_dec = dec['por_sku'] if dec else {}
+    dec_de = dec['detalle'] if dec else {}
+
     por_sku, detalle = {}, {}
-    for ref in set(por_oc) | set(por_cont) | set(sin_unidad) | set(excluido):
-        cuenta = ref in por_oc or ref in por_cont or ref in sin_unidad
-        total = por_oc.get(ref, Decimal(0)) + por_cont.get(ref, Decimal(0))
+    for ref in set(por_oc) | set(por_cont) | set(sin_unidad) | set(excluido) | set(por_dec):
+        cuenta = ref in por_oc or ref in por_cont or ref in sin_unidad or ref in por_dec
+        total = (por_oc.get(ref, Decimal(0)) + por_cont.get(ref, Decimal(0))
+                 + por_dec.get(ref, Decimal(0)))
         if cuenta:
             por_sku[ref] = float(total)
         detalle[ref] = {
             'oc': float(por_oc.get(ref, 0)),
             'oc_vencida': float(vencido.get(ref, 0)),
             'contenedores': float(por_cont.get(ref, 0)),
+            # «Lo pedí» de la bandeja que todavía no aparece como OC.
+            'pedido_sin_oc': float(por_dec.get(ref, 0)),
+            'decision_pedido': dec_de.get(ref),
             'ocs': sorted(ocs_de.get(ref, ())),
             # Las OCs que cuentan, la más atrasada primero (P1-3): de qué OC es
             # lo «ya pedido» y hace cuántos días debió llegar.
@@ -274,6 +296,12 @@ def en_camino(skus=None, bodegas=None) -> dict:
     if cont is not None:
         fuentes['IMPORTACION'] = {'refs': len(por_cont),
                                   'unidades': round(float(sum(por_cont.values())), 2)}
+    if dec is not None:
+        fuentes['DECISION_WMS'] = {'refs': len(por_dec),
+                                   'unidades': round(float(sum(por_dec.values())), 2),
+                                   'cubiertos_por_oc': dec['cubiertos'],
+                                   'vencidos_sin_oc': dec['vencidos'],
+                                   'dias': dec['dias'], 'nota': dec['nota']}
     hay_dato = oc_sabe or bool(por_cont)
 
     return {
@@ -503,6 +531,57 @@ def _nota_corte(pol, x_por_oc, x_unidades, muertas, u_muertas, saldos, u_saldos)
             f'{pol["excluir_mas_de_dias"]} días: {" y ".join(partes)}. Si alguna todavía va '
             f'a llegar, confírmelo con el proveedor; si no, anúlela en Siesa para que '
             f'deje de aparecer.')
+
+
+def _decisiones_en_camino(filtro_skus, pedidas) -> dict:
+    """Fuente `DECISION_WMS` de `en_camino`: lo que el comprador marcó «lo
+    pedí» y el espejo todavía no muestra como OC.
+
+    Se deja de contar cuando aparece en el espejo (abierta o ya cumplida) una
+    línea de ese SKU con la OC del día de la decisión en adelante, o la OC que
+    el comprador escribió: desde ahí la cuenta la fuente `OC_SIESA` (contar
+    las dos sería pedir de menos: el lado corregible, pero no hace falta). Un
+    «lo pedí» vencido sin OC no se cuenta y se declara: la OC nunca apareció."""
+    from app.models.compras_fuentes import OcLineaSiesa
+    from app.services import compras_decisiones as cd
+
+    cdi = _bodega_cdi()
+    por_sku, detalle = defaultdict(Decimal), {}
+    cubiertos = vencidos = 0
+    pedidos = cd.pedidos_sin_oc(filtro_skus)
+    if pedidos and cdi in pedidas:
+        refs = {p['referencia'] for p in pedidos}
+        lineas = (db.session.query(OcLineaSiesa.referencia, OcLineaSiesa.fecha_oc,
+                                   OcLineaSiesa.consec_docto)
+                  .filter(OcLineaSiesa.referencia.in_(refs)).all())
+        ocs_de = defaultdict(list)
+        for r, f, consec in lineas:
+            ocs_de[(r or '').strip()].append((f, consec))
+        for p in pedidos:
+            ref = p['referencia']
+            consec = cd.consec_de(p['oc_siesa'])
+            aparecio = any((f is not None and f >= p['dia']) or (consec and c == consec)
+                           for f, c in ocs_de.get(ref, ()))
+            info = {'decision_id': p['id'], 'unidades': float(p['unidades'] or 0),
+                    'dia': p['dia'].isoformat(), 'oc_siesa': p['oc_siesa'],
+                    'usuario_nombre': p['usuario_nombre'],
+                    'vigente_hasta': p['vigente_hasta'].isoformat()}
+            if aparecio:
+                cubiertos += 1
+                detalle[ref] = dict(info, estado='OC_EN_SIESA')
+                continue
+            if p['vencida']:
+                vencidos += 1
+                detalle[ref] = dict(info, estado='VENCIDO_SIN_OC')
+                continue
+            por_sku[ref] += Decimal(p['unidades'] or 0)
+            detalle[ref] = dict(info, estado='CUENTA')
+    dias = cd.dias_pedido_en_camino()
+    return {'por_sku': por_sku, 'detalle': detalle, 'cubiertos': cubiertos,
+            'vencidos': vencidos, 'dias': dias['dias'],
+            'nota': (f'{vencidos} «lo pedí» de la bandeja pasaron {dias["dias"]} días sin que '
+                     'la orden apareciera en Siesa: ya no se cuentan como en camino. '
+                     'Revise si la orden se hizo.') if vencidos else None}
 
 
 def _contenedores_en_camino(filtro_skus, pedidas, abiertas_citables) -> dict:
