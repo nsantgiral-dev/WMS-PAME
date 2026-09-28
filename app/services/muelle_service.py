@@ -140,7 +140,7 @@ class MuelleService:
             _motivo = motivo_no_despachable(bulto.tarea) if bulto.tarea else 'El bulto no tiene caja.'
             if not _motivo:
                 raise ValueError('No se puede quitar un bulto que ya fue cargado y puede salir.')
-            ruta = RutaDespacho.query.get(bulto.ruta_despacho_id) if bulto.ruta_despacho_id else None
+            ruta = db.session.get(RutaDespacho, bulto.ruta_despacho_id) if bulto.ruta_despacho_id else None
             if ruta is None or ruta.estado != EstadoRutaDespacho.EN_CARGUE:
                 raise ValueError('Solo se baja un bulto cargado de una ruta que sigue en cargue.')
             if not forzar:

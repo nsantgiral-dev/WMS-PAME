@@ -388,6 +388,7 @@ class DashboardService:
         haciendo cada uno ahora mismo (tarea_actual — snapshot EN_PROCESO)."""
         from app.models.tarea_reposicion import TareaReposicion
         from app.routes._auth_helpers import Roles
+        from app.services import asignacion
 
         fecha_inicio = datetime.utcnow() - timedelta(days=dias)
 
@@ -604,11 +605,14 @@ class DashboardService:
                 'conteos_completados': conteos,
                 'conteos_hoy': conteos_hoy,
                 'reposiciones_completadas': reposiciones,
-                # Cupo solo para quien cuenta; al resto no se le asigna conteo.
+                # Cupo solo para quien hace conteos rutinarios, según la misma
+                # política que se los asigna (`asignacion`); al resto no se le
+                # asigna ninguno, y el definitivo (CC3) no gasta cupo.
                 'capacidad_diaria_conteo': (
-                    None if operario.rol not in Roles.CUENTAN
+                    None if asignacion.motivo_no_elegible(operario, asignacion.CONTEO)
                     else operario.capacidad_diaria_conteo
-                    if operario.capacidad_diaria_conteo is not None else 15),
+                    if operario.capacidad_diaria_conteo is not None
+                    else asignacion.CUPO_REFERENCIA),
                 'total_tareas': pickings + packings + conteos + reposiciones,
                 'tarea_actual': _tarea_actual(operario.id),
             })

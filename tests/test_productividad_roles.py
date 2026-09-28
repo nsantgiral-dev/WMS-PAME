@@ -6,11 +6,17 @@ tienda, compras, el gerente y control de flota salían como operarios con
 «0 tareas» y un cupo de conteo de 15 que nadie les iba a asignar.
 
 **La clase:** una lista de personas armada por «todo el que existe» en vez de
-por «el rol que hace esto». **Ahora:** lista blanca en `Roles` —
-`OPERAN_TAREAS` para la productividad y `CUENTAN` para el cupo de conteo—, y
-`CUENTAN` se cruza por AST contra los roles que `conteo_service` escribe a mano
-al asignar un conteo: si ese servicio asigna a un rol que no está en la tupla,
-el tablero lo escondería.
+por «el rol que hace esto». **Ahora:** lista blanca `Roles.OPERAN_TAREAS` para
+la productividad, y el cupo de conteo lo lleva quien la política de
+asignación (`asignacion.motivo_no_elegible(u, CONTEO)`) deja contar.
+
+**Integración n1 (2026-09-27):** aquí vivía una tupla `Roles.CUENTAN` cruzada
+por AST contra los roles que `conteo_service` comparaba a mano. La asignación
+por presencia sacó esas comparaciones de `conteo_service` (ahora pregunta a la
+política) y decidió que supervisión no hace conteos rutinarios, solo el
+definitivo: la tupla y la política decían dos cosas. Quedó una función; el
+guard ahora exige que el tablero conteste lo mismo que la política, rol por
+rol, y que `conteo_service` no vuelva a escribir roles a mano.
 """
 import ast
 from pathlib import Path
@@ -52,18 +58,26 @@ class TestSoloQuienOperaElPiso:
         ids = {rol: _crear(db, almacen, rol, k).id for k, rol in enumerate(Roles.OPERAN_TAREAS)}
         filas = {o['operario_id']: o for o in
                  DashboardService.productividad_operarios(almacen.id, dias=7)['operarios']}
+        from app.models.usuario import Usuario
+        from app.services import asignacion
+        cuentan = 0
         for rol, uid in ids.items():
             cupo = filas[uid]['capacidad_diaria_conteo']
-            if rol in Roles.CUENTAN:
+            if asignacion.motivo_no_elegible(db.session.get(Usuario, uid), asignacion.CONTEO) is None:
+                cuentan += 1
                 assert cupo == 15, (rol, cupo)
             else:
                 assert cupo is None, (rol, cupo)
+        assert cuentan >= 2, 'piso: la política deja contar al operario y al picker de traslado'
+        # Decisión del dueño que la asignación aplica: supervisión solo hace el CC3.
+        for rol in (Roles.SUPERVISOR, Roles.JEFE_ALMACEN, Roles.ADMIN, Roles.EMPACADOR):
+            assert filas[ids[rol]]['capacidad_diaria_conteo'] is None, rol
 
     def test_las_tuplas_no_tienen_roles_de_plata_ni_de_oficina(self):
         for rol in _FUERA:
             assert rol not in Roles.OPERAN_TAREAS, rol
-            assert rol not in Roles.CUENTAN, rol
-        assert set(Roles.CUENTAN) <= set(Roles.OPERAN_TAREAS)
+        assert not hasattr(Roles, 'CUENTAN'), ('quién cuenta lo contesta la política de '
+                                               'asignación; una tupla aparte vuelve a divergir')
 
 
 def roles_asignados_por_conteo(src):
@@ -87,15 +101,16 @@ def roles_asignados_por_conteo(src):
     return out
 
 
-class TestCuentanCoincideConQuienRecibeConteos:
+class TestQuienCuentaLoDiceUnaSolaFuncion:
 
-    def test_conteo_service_no_asigna_a_un_rol_fuera_de_cuentan(self):
+    def test_conteo_service_no_escribe_roles_a_mano(self):
+        # A quién se le asigna un conteo lo decide `asignacion`; una
+        # comparación `Usuario.rol == '...'` en conteo_service es una segunda
+        # política que el tablero no ve.
         src = (RAIZ / 'app' / 'services' / 'conteo_service.py').read_text(encoding='utf-8')
         asignados = roles_asignados_por_conteo(src)
-        assert len(asignados) >= 3, asignados          # piso: el escáner lee algo
-        fuera = asignados - set(Roles.CUENTAN)
-        assert not fuera, (f'conteo_service asigna conteos a {sorted(fuera)} y no están en '
-                           'Roles.CUENTAN: el tablero les escondería el cupo')
+        assert not asignados, (f'conteo_service vuelve a elegir por rol a mano: {sorted(asignados)}; '
+                               'que pregunte a app/services/asignacion.py')
 
     @pytest.mark.parametrize('src,esperado', [
         ("q.filter(Usuario.rol == 'operario')", {'operario'}),

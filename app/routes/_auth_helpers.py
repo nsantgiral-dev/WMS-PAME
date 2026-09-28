@@ -119,12 +119,10 @@ class Roles:
     #: de conteo de 15 que nadie les iba a asignar.
     OPERAN_TAREAS = (ADMIN, SUPERVISOR, JEFE_ALMACEN, OPERARIO, EMPACADOR,
                      PICKER_TRASLADO, PACKER_TRASLADO)
-    #: **Quién cuenta**: los roles a los que `conteo_service` puede asignar un
-    #: conteo (el par del CC2, el respaldo) más el supervisor, que hace el
-    #: conteo definitivo (CC3). Solo ellos llevan cupo diario de conteo.
-    #: `tests/test_productividad_roles.py` cruza esta tupla contra los roles
-    #: que `conteo_service` escribe a mano.
-    CUENTAN = (ADMIN, SUPERVISOR, JEFE_ALMACEN, OPERARIO, PICKER_TRASLADO)
+    #: Quién cuenta —y lleva cupo diario de conteo— NO es una tupla de acá:
+    #: lo contesta `asignacion.motivo_no_elegible(u, CONTEO)`, la misma
+    #: función que decide a quién se le asigna un conteo (integración n1,
+    #: 2026-09-27: `CUENTAN` y la política decían dos cosas distintas).
 
     #: **Quién ve el catálogo de productos** (`/api/productos/`): el personal
     #: de almacén y la tienda, que busca un producto para recibir una OC

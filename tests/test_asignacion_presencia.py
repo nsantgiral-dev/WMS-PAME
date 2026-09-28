@@ -264,6 +264,22 @@ class TestQuienPuede:
         r = client.get('/api/asignacion/candidatos?tipo=CONTEO', headers=_tok(app, nb1['ana']))
         assert r.status_code == 403
 
+    def test_el_gerente_lee_el_equipo_y_no_gestiona_ausencias(self, app, db, client, nb1):
+        """Integración n1: la pestaña Operarios la ve el gerente (pinta el equipo
+        desde la asignación); leerlo sí, marcar ausencias o repartir no."""
+        ger = _persona(db, nb1['almacen'], 'Gerardo', rol='gerente')
+        r = client.get(f'/api/asignacion/equipo?almacen_id={nb1["almacen"].id}',
+                       headers=_tok(app, ger))
+        assert r.status_code == 200
+        r = client.post('/api/asignacion/ausencias', headers=_tok(app, ger),
+                        json={'usuario_id': nb1['luis'].id, 'motivo': 'PERMISO'})
+        assert r.status_code == 403
+        r = client.get('/api/asignacion/candidatos?tipo=CONTEO', headers=_tok(app, ger))
+        assert r.status_code == 403
+        r = client.get(f'/api/asignacion/equipo?almacen_id={nb1["almacen"].id}',
+                       headers=_tok(app, nb1['ana']))
+        assert r.status_code == 403
+
 
 # ═════════════════════════════════════════════════════════════════════════════
 # 3 · Repartir N pendientes
@@ -828,6 +844,7 @@ vm.runInContext(`
   alerta = (m, t) => __alertas.push([m, t]);
   cargarConteos = async () => {};
   ALMACEN_ID = 7;
+  OPERARIO = { id: 3, rol: 'supervisor' };
 `, Object.assign(ctx, { __urls: urls, __posts: posts, __alertas: alertas, __plan: PLAN, __equipo: EQUIPO }));
 const R = (s) => vm.runInContext(s, ctx);
 const out = {};
@@ -860,6 +877,10 @@ const out = {};
   cuerpo[cuerpo.length - 1].querySelector('#_mconf-si').onclick();
   await anular;
   out.postAnular = posts.filter(p => p[0].includes('/anular')).pop();
+  // El gerente LEE el equipo (integración n1) y no gestiona ausencias.
+  R("OPERARIO = { id: 4, rol: 'gerente' }");
+  await R('cargarOperarios()');
+  out.equipoGerente = els['lista-operarios'].innerHTML;
   console.log(JSON.stringify(out));
 })().catch(e => { console.error(e && e.stack || e); process.exit(1); });
 """
@@ -908,6 +929,11 @@ class TestLasPantallas:
         assert 'Tiene: 3 conteo(s) en su cola' in eq
         assert 'Por decidir' in eq and 'picking a medio recoger' in eq
         assert 'Ya volvió' in eq and 'Marcar ausencia' in eq
+
+    def test_el_gerente_ve_el_equipo_sin_botones_de_ausencia(self, js):
+        eq = js['equipoGerente']
+        assert 'Pedro' in eq and 'Ana' in eq
+        assert 'Marcar ausencia' not in eq and 'quitar la ausencia' not in eq
 
     def test_declarar_y_quitar_la_ausencia(self, js):
         url, body = js['postAusencia']

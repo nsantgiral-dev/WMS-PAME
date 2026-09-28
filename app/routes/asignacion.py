@@ -15,14 +15,14 @@ logger = logging.getLogger(__name__)
 asignacion_bp = Blueprint('asignacion', __name__)
 
 
-def _lider():
+def _lider(roles=Roles.SUPERVISION):
     from app.models.usuario import Usuario
     try:
         uid = int(get_jwt_identity())
     except (TypeError, ValueError):
         return None, (jsonify({'error': 'Token inválido'}), 401)
     u = db.session.get(Usuario, uid)
-    if not u or u.rol not in Roles.SUPERVISION:
+    if not u or u.rol not in roles:
         return None, (jsonify({'error': 'Solo supervisión gestiona la presencia del equipo'}), 403)
     return u, None
 
@@ -37,8 +37,12 @@ def _almacen_id():
 @asignacion_bp.route('/equipo', methods=['GET'])
 @jwt_required()
 def equipo():
-    """Quién está, qué tiene cada uno y qué quedó por decidir. Query: `almacen_id`."""
-    lider, error = _lider()
+    """Quién está, qué tiene cada uno y qué quedó por decidir. Query: `almacen_id`.
+
+    Lo LEE toda gestión (el gerente ve la pestaña Operarios, que antes pintaba
+    la productividad: integración n1); marcar ausencias y repartir sigue
+    siendo de supervisión."""
+    lider, error = _lider(Roles.GESTION)
     if error:
         return error
     try:

@@ -1838,6 +1838,8 @@ function _cargaHTML(c) {
 
 /** Botones y formulario de ausencia de una persona. */
 function _ausenciaHTML(p) {
+  // Marcar o quitar una ausencia es de supervisión: el gerente ve el equipo, no lo gestiona.
+  if (!_ROLES_SUPERVISION.includes(OPERARIO?.rol)) return '';
   if (p.ausencia) {
     return `<button onclick="operarioAnularAusencia(${esc(p.ausencia.id)})"
       style="margin-top:6px;padding:6px 10px;background:var(--bg-input);border:1px solid var(--brd);color:var(--tx2);border-radius:6px;font-size:var(--fs-xs);cursor:pointer;">Ya volvió — quitar la ausencia</button>`;

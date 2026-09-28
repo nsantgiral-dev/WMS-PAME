@@ -55,6 +55,9 @@ PICKING = 'PICKING'                      # picking de pedido
 PICKING_TRASLADO = 'PICKING_TRASLADO'    # picking de traslado, por bodega origen
 REPOSICION = 'REPOSICION'                # RESERVA → PICKING
 TIPOS = (CONTEO, CONTEO_DEFINITIVO, PICKING, PICKING_TRASLADO, REPOSICION)
+#: Lo que la pantalla del equipo dice que hace cada quien (el traslado va por
+#: bodega de origen y no se evalúa sin una).
+TIPOS_DEL_EQUIPO = (CONTEO, CONTEO_DEFINITIVO, PICKING, REPOSICION)
 
 #: Por qué se soltó una asignación (va a la bitácora y a `conteos_descartados`).
 MOTIVO_AUSENCIA = 'AUSENCIA'
@@ -605,9 +608,14 @@ def equipo(almacen_id=None) -> dict:
     from app.models.picking import EstadoPicking, TareaPicking
     from app.models.tarea_reposicion import TareaReposicion
     from app.routes._auth_helpers import Roles
-    oficios = (Roles.OPERARIO, Roles.PICKER_TRASLADO, Roles.PACKER_TRASLADO, Roles.EMPACADOR,
-               Roles.SUPERVISOR, Roles.JEFE_ALMACEN, Roles.RECEPCIONISTA)
-    usuarios = [u for u in _usuarios_activos() if u.rol in oficios
+    # Quien opera el piso (la misma lista blanca de la productividad del
+    # tablero, `Roles.OPERAN_TAREAS`) y, además, quien sin ser de esos roles
+    # puede recibir trabajo según esta política (p. ej. un recepcionista con
+    # permiso de abastecer): si se le puede asignar, el líder tiene que verle
+    # la presencia. Una lista armada a mano aparte divergía de las otras dos.
+    usuarios = [u for u in _usuarios_activos()
+                if (u.rol in Roles.OPERAN_TAREAS
+                    or any(motivo_no_elegible(u, t) is None for t in TIPOS_DEL_EQUIPO))
                 and (not almacen_id or _almacen_de(u) == almacen_id)]
     pres = presencia.estados(usuarios)
     personas, decidir = [], []
@@ -627,8 +635,7 @@ def equipo(almacen_id=None) -> dict:
             'empaque_en_curso': TareaPacking.query.filter_by(
                 empacador_id=u.id, estado='EN_PROCESO').count(),
         }
-        hace = [t for t in (CONTEO, CONTEO_DEFINITIVO, PICKING, REPOSICION)
-                if motivo_no_elegible(u, t) is None]
+        hace = [t for t in TIPOS_DEL_EQUIPO if motivo_no_elegible(u, t) is None]
         personas.append({'id': u.id, 'nombre': u.nombre, 'rol': u.rol,
                          'presencia': p['codigo'], 'presencia_texto': p['texto'],
                          'disponible': p['disponible'], 'visto_at': p['visto_at'],
