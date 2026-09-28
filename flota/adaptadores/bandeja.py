@@ -628,12 +628,65 @@ def _pendientes(m: _Mundo, medidor, dudosas, diag_prev,
             accion={'tipo': 'expediente', 'pestana': 'preventivo'},
             plan_id=d['plan_id']))
 
+    # 9 · Lo que el conductor registró y NO entró (2026-09-27). El teléfono lo
+    # conserva y lo muestra; acá lo ve quien puede ayudarle. Un descartado se
+    # ve una semana: el conductor dijo «no importa», pero que no entró es un
+    # hecho que control de flota tiene que poder ver.
+    salida.extend(_pendientes_de_rechazos(m))
+
     orden_clase = {c: i for i, c in enumerate((
-        'dano', 'documento', 'preventivo', 'despacho_forzado', 'cierre_forzado',
-        'turno_sin_fotos', 'km_dudoso', 'ficha'))}
+        'dano', 'documento', 'preventivo', 'registro_rechazado',
+        'despacho_forzado', 'cierre_forzado', 'turno_sin_fotos', 'km_dudoso',
+        'ficha'))}
     salida.sort(key=lambda p: (dom_sal.orden_de_nivel(p['urgencia']),
                                orden_clase[p['clase']], p['placa']))
     return salida
+
+
+#: Qué era cada operación de la cola, en palabras.
+_OPERACION_EN_PALABRAS = {'traspaso': 'recibo o entrega del camión',
+                          'hallazgo': 'reporte de daño', 'inspeccion': 'inspección',
+                          'tanqueo': 'tanqueo'}
+
+
+def _pendientes_de_rechazos(m: _Mundo) -> List[dict]:
+    """Un pendiente por registro del conductor que el servidor rechazó.
+
+    Con el filtro de almacén, solo los de vehículos de ese almacén; sin filtro,
+    también los de una placa que no está en la flota (se dice tal cual: un
+    rechazo por placa desconocida también es un registro perdido).
+    """
+    from flota.adaptadores import rechazos_cola
+    from flota.dominio import salida as dom_sal
+
+    if not _tabla_existe('flota_rechazo_cola'):
+        return []
+    filas = []
+    for r in rechazos_cola.abiertos():
+        if m.filtro is not None and r.vehiculo_id not in m.ids:
+            continue
+        que = _palabra(_OPERACION_EN_PALABRAS, r.operacion)
+        quien = m.nombre_usuario(r.usuario_id)
+        partes = [f'lo hizo {_cuando(r.ts_dispositivo, m.hoy)}'
+                  if r.ts_dispositivo else 'sin la hora del teléfono']
+        partes.append(dom_sal.plural(r.intentos, 'intento', 'intentos'))
+        if r.pidio_ayuda_ts is not None:
+            partes.append(f'PIDIÓ AYUDA {_cuando(r.pidio_ayuda_ts, m.hoy)}')
+        if r.estado == 'descartado':
+            partes.append('lo descartó en su teléfono')
+        filas.append(_pendiente(
+            clase='registro_rechazado', placa=r.placa or 'sin placa',
+            urgencia=dom_sal.NIVEL_TURNO_A_REVISAR,
+            texto=f'{que} de {quien} que no entró: {r.mensaje}',
+            detalle=' · '.join(partes) + '. El teléfono lo conserva con sus '
+                    'fotos: puede reintentarlo cuando se resuelva la causa.',
+            accion={'tipo': 'rechazo', 'rechazo_id': r.id},
+            desde=r.primer_ts, rechazo_id=r.id,
+            pidio_ayuda=r.pidio_ayuda_ts is not None,
+            descartado=r.estado == 'descartado'))
+    # Los que pidieron ayuda, primero.
+    filas.sort(key=lambda p: (not p['pidio_ayuda'], p['desde']))
+    return filas
 
 
 # ── Señales ──────────────────────────────────────────────────────────────────

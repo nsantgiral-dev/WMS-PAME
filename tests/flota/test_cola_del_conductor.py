@@ -124,16 +124,37 @@ class TestUnReenvioNoDuplicaElTurno:
         assert _custodias(mundo['vehiculo_id']) == 1, (
             'el reenvío tardío cerró el turno y abrió otro con los mismos km')
 
-    def test_sin_clave_se_comporta_como_antes(self, client, mundo, monkeypatch):
-        """La otra dirección: el panel de escritorio no manda clave y sigue igual.
-        Sin la ventana, dos recibos del mismo custodio son el no-op de siempre
-        (cierra y abre) — la clave es lo que lo distingue, no un cambio de regla."""
+    def test_un_segundo_recibo_del_mismo_custodio_es_un_no_op_declarado(
+            self, client, mundo, monkeypatch):
+        """Hasta el 2026-09-27 dos recibos del mismo custodio —sin clave, o con
+        dos claves distintas porque el conductor repitió el recibo creyendo que
+        se había perdido— cerraban su propio turno y abrían otro. Ahora el
+        segundo no cambia nada, y la respuesta lo dice (200, `ya_era_suyo`).
+        Sin la ventana de 90 s, para que lo único que decida sea la regla."""
         from flota.adaptadores import traspaso
         monkeypatch.setattr(traspaso, 'VENTANA_IDEMPOTENCIA_S', 0)
-        client.post('/flota/custodia/traspaso', json=_recibo(mundo),
+        r1 = client.post('/flota/custodia/traspaso', json=_recibo(mundo, 'k-uno'),
+                         headers=_auth(mundo['t_cond']))
+        assert r1.status_code == 201
+        r2 = client.post('/flota/custodia/traspaso', json=_recibo(mundo, 'k-dos'),
+                         headers=_auth(mundo['t_cond']))
+        assert r2.status_code == 200, r2.get_json()
+        assert r2.get_json()['ya_era_suyo'] is True
+        assert r2.get_json()['custodia_id'] == r1.get_json()['custodia_id']
+        assert _custodias(mundo['vehiculo_id']) == 1
+
+    def test_la_entrega_fuera_de_sede_si_cierra_y_abre(self, client, mundo):
+        """La otra mitad: el mismo custodio re-declarándose CON ubicación y
+        fotos de cierre es una entrega, no un recibo repetido."""
+        client.post('/flota/custodia/traspaso', json=_recibo(mundo, 'k-r'),
                     headers=_auth(mundo['t_cond']))
-        client.post('/flota/custodia/traspaso', json=_recibo(mundo),
-                    headers=_auth(mundo['t_cond']))
+        r = client.post('/flota/custodia/traspaso', json={
+            'placa': mundo['placa'], 'km': 1100, 'custodio_tipo': 'conductor',
+            'custodio_conductor_id': mundo['conductor_id'],
+            'ubicacion': 'fuera_de_sede', 'ubicacion_motivo': 'se varó',
+            'fotos_fin': [_foto('foto_dato', 'tablero')],
+            'clave_idempotencia': 'k-fuera'}, headers=_auth(mundo['t_cond']))
+        assert r.status_code == 201, r.get_json()
         assert _custodias(mundo['vehiculo_id']) == 2
 
     def test_la_clave_guarda_la_hora_del_telefono_sin_creerle(self, client, mundo):
@@ -151,17 +172,19 @@ class TestUnReenvioNoDuplicaElTurno:
 class TestUnRechazoNoGastaLaClave:
 
     def test_si_falla_el_reintento_corregido_entra(self, client, mundo):
+        """Un daño con un kilometraje que retrocede: 409. La clave no se gasta
+        y el reintento corregido entra. (Hasta el 2026-09-27 se probaba con un
+        segundo recibo del mismo custodio; ése ahora es un no-op declarado.)"""
         from flota.adaptadores.modelos import OperacionIdempotente
         client.post('/flota/custodia/traspaso', json=_recibo(mundo, 'k-base', km=1000),
                     headers=_auth(mundo['t_cond']))
-        # El odómetro no retrocede: el dominio lo rechaza con 409.
-        r = client.post('/flota/custodia/traspaso',
-                        json=_recibo(mundo, 'k-corrige', km=500),
+        dano = {'placa': mundo['placa'], 'criticidad': 'menor',
+                'descripcion': 'rayón', 'clave_idempotencia': 'k-corrige'}
+        r = client.post('/flota/hallazgos', json=dict(dano, km=500),
                         headers=_auth(mundo['t_cond']))
         assert r.status_code == 409, r.get_json()
         assert OperacionIdempotente.query.filter_by(clave='k-corrige').count() == 0
-        r = client.post('/flota/custodia/traspaso',
-                        json=_recibo(mundo, 'k-corrige', km=1200),
+        r = client.post('/flota/hallazgos', json=dict(dano, km=1200),
                         headers=_auth(mundo['t_cond']))
         assert r.status_code == 201, r.get_json()
 

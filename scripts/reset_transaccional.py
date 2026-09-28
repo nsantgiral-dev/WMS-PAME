@@ -169,6 +169,10 @@ OPERATIVAS = [
     # Si sobreviviera al corte, un reenvío tardío de un celular de prueba
     # recibiría «ya se hizo» sobre un hecho que el corte borró.
     'flota_idempotencia',
+    # `flota_rechazo_cola` (m051flotakm, 2026-09-27): lo que la cola del
+    # conductor mandó y el servidor rechazó. Registro del ensayo; sus FK son a
+    # `usuarios` y `vehiculos`, que se protegen: el orden no importa.
+    'flota_rechazo_cola',
     'flota_respuesta_item',
     'flota_inspeccion',
     # ── Taller (agregado 2026-09-02, fase 2) ───────────────────────────────

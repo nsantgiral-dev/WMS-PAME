@@ -18,13 +18,13 @@ el turno de otro cambiando un id en el JSON.
 """
 from datetime import date
 
-from flask import Blueprint, jsonify
+from flask import Blueprint, jsonify, request
 from flask_jwt_extended import get_jwt_identity, jwt_required
 
 from app.extensions import db
 from app.utils.fecha import dia_operativo
 from app.routes._auth_helpers import Roles
-from flota.api._permisos import exige
+from flota.api._permisos import MAESTROS_FLOTA, exige, sin_derecho_sobre_rechazo
 from app.models.conductor import Conductor
 from app.models.ruta_despacho import RutaDespacho
 from app.models.vehiculo import Vehiculo
@@ -302,6 +302,11 @@ def mi_turno():
         km = dom_odo.odometro_actual(_lecturas_dominio(turno.vehiculo_id))
 
     return jsonify({
+        # El día al que se refiere todo lo «de hoy» de esta respuesta. El
+        # teléfono la guarda para trabajar sin señal, y una respuesta de ayer
+        # leída hoy decía «Día cerrado» a las 5:30 (2026-09-27): con el día
+        # escrito, la pantalla sabe cuándo lo de «hoy» ya no es de hoy.
+        'dia': dia_operativo().isoformat(),
         'conductor': {'id': conductor.id, 'nombre': conductor.nombre},
         # Qué le pasa AL CAMIÓN, no solo qué camión es.
         #
@@ -395,6 +400,68 @@ def mis_turnos():
         }
         for c, placa in filas
     ]}), 200
+
+
+@conductor_bp.route('/conductor/rechazos/<clave>', methods=['POST'])
+@jwt_required()
+@exige(Roles.LECTURA_FLOTA, 'avisar un registro que no entró')
+def avisar_rechazo(clave):
+    """El conductor pide ayuda o descarta un registro que el servidor rechazó.
+
+    Cuerpo: `accion` (`ayuda` · `descartar`) y, por si el servidor no conocía
+    el rechazo, `operacion`, `placa`, `mensaje` y `ts_dispositivo`. El rechazo
+    en sí ya lo anotó el servidor cuando pasó (`@idempotente`): esto le agrega
+    lo que el conductor decidió. Solo sobre SUS registros
+    (`sin_derecho_sobre_rechazo`).
+    """
+    from flota.adaptadores import rechazos_cola
+    from flota.api._idempotencia import LARGO_MAXIMO, ts_dispositivo_del_pedido
+
+    datos = request.get_json(silent=True) or {}
+    clave = (clave or '').strip()
+    if not clave or len(clave) > LARGO_MAXIMO:
+        return jsonify({'error': 'Clave de registro inválida.'}), 400
+    if 'accion' not in datos:
+        return jsonify({'error': 'Falta la acción: ayuda o descartar.'}), 400
+    denegado = sin_derecho_sobre_rechazo(clave, 'avisar sobre ese registro')
+    if denegado is not None:
+        return denegado
+    try:
+        fila = rechazos_cola.marcar(
+            usuario_id=int(get_jwt_identity()), clave=clave,
+            accion=str(datos['accion']),
+            operacion=datos['operacion'] if 'operacion' in datos else None,
+            datos=datos,
+            mensaje=datos['mensaje'] if 'mensaje' in datos else None,
+            ts_dispositivo=ts_dispositivo_del_pedido())
+    except rechazos_cola.RechazoInvalido as e:
+        return jsonify({'error': str(e)}), 400
+    return jsonify({
+        'id': fila.id, 'estado': fila.estado,
+        'mensaje': ('Control de flota ya lo ve en su bandeja.'
+                    if fila.pidio_ayuda_ts is not None else
+                    'Quedó descartado en su teléfono. Control de flota lo ve una semana.'),
+    }), 200
+
+
+@conductor_bp.route('/rechazos/<int:rechazo_id>/cerrar', methods=['POST'])
+@jwt_required()
+@exige(MAESTROS_FLOTA, 'cerrar un registro del conductor que no entró')
+def cerrar_rechazo(rechazo_id):
+    """Control de flota da por atendido un registro que no entró. Motivo
+    obligatorio: sin él, el pendiente desaparecería sin rastro."""
+    from flota.adaptadores import rechazos_cola
+
+    datos = request.get_json(silent=True) or {}
+    try:
+        fila = rechazos_cola.cerrar(
+            rechazo_id=rechazo_id, usuario_id=int(get_jwt_identity()),
+            motivo=datos['motivo'] if 'motivo' in datos else '')
+    except LookupError as e:
+        return jsonify({'error': str(e)}), 404
+    except rechazos_cola.RechazoInvalido as e:
+        return jsonify({'error': str(e)}), 400
+    return jsonify({'id': fila.id, 'estado': fila.estado}), 200
 
 
 __all__ = ['conductor_bp']

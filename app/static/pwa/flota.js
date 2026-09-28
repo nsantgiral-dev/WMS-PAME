@@ -158,6 +158,26 @@ function flotaConvencionFotos() {
   </div>`;
 }
 
+/** Sin señal: pinta la lista de sedes guardada, si hay. La de otro día sirve
+ * igual —las sedes casi no cambian— pero se dice de cuándo es. */
+async function flotaSedesGuardadas(sel) {
+  let guardada = null;
+  if (flotaColaHayAlmacen()) {
+    try { guardada = await _condDB.get('flota_sedes'); } catch (_) { guardada = null; }
+  }
+  if (!guardada || !Array.isArray(guardada.lista) || !guardada.lista.length) return false;
+  flotaPintarSedes(sel, guardada.lista,
+    `— elija la sede (lista guardada el ${flotaFechaCorta(guardada.dia)}) —`);
+  return true;
+}
+
+/** Las opciones del desplegable de sedes; `nota`, la primera opción (vacía). */
+function flotaPintarSedes(sel, lista, nota) {
+  sel.innerHTML = (nota ? `<option value="">${esc(nota)}</option>`
+                        : '<option value="">— la sede no está en el maestro —</option>')
+    + lista.map(a => `<option value="${esc(a.id)}">${esc(a.codigo)} · ${esc(a.nombre)}</option>`).join('');
+}
+
 /** Llena un `<select>` con las sedes. Una sola función para los dos sitios.
  *
  * **El endpoint devuelve una LISTA, no `{almacenes: [...]}`**:
@@ -176,35 +196,45 @@ function flotaConvencionFotos() {
  *
  * Los códigos son los centros de costo reales — NB1, NC1, NS1, FC1, PC1 — y van
  * primero: es lo que la gente busca con la vista.
+ *
+ * La URL va CON barra final. Sin ella Flask responde 308 hacia
+ * `/api/almacenes/`, y detrás del proxy de Railway ese `Location` salía como
+ * `http://` —la app no tenía ProxyFix—. Desde una página HTTPS eso es
+ * contenido mixto: el navegador lo bloquea y el desplegable quedaba en «no se
+ * pudo cargar la lista», que es lo que impidió entregar el turno el
+ * 2026-08-05. ProxyFix ya está puesto; la barra elimina el redirect de raíz.
+ *
+ * Sin señal (2026-09-27) usa la lista guardada la última vez, y dice de qué
+ * día es: sin ella, toda entrega hecha en el patio quedaba «sede por
+ * resolver».
  */
 async function flotaLlenarSedes(idSelect) {
   const sel = document.getElementById(idSelect);
   if (!sel) return;
   const vacia = '<option value="">— la sede no está en el maestro —</option>';
   try {
-    // CON barra final. Sin ella Flask responde 308 hacia `/api/almacenes/`, y
-    // detrás del proxy de Railway ese `Location` sale como `http://` —la app no
-    // tenía ProxyFix, así que Flask no veía el `X-Forwarded-Proto`—. Desde una
-    // página HTTPS eso es contenido mixto: el navegador lo bloquea, el `catch`
-    // se dispara y el desplegable queda en «no se pudo cargar la lista», que es
-    // lo que impidió entregar el turno el 2026-08-05.
-    //
-    // ProxyFix ya está puesto y arregla la clase entera; esta barra elimina el
-    // redirect de raíz para que ni siquiera dependa de eso.
+    // CON barra final (ver arriba: el 308 y el contenido mixto del 2026-08-05).
     const d = await get('/api/almacenes/');
     const lista = Array.isArray(d) ? d : (d.almacenes || []);
     if (!lista.length) {
       sel.innerHTML = vacia;
       return;
     }
-    sel.innerHTML = vacia + lista.map(a =>
-      `<option value="${esc(a.id)}">${esc(a.codigo)} · ${esc(a.nombre)}</option>`).join('');
+    flotaPintarSedes(sel, lista, null);
+    // Se guarda en el teléfono: la entrega del turno se hace en el patio, y
+    // sin la lista la custodia quedaba SIEMPRE «sede por resolver».
+    if (flotaColaHayAlmacen()) {
+      try { await _condDB.set('flota_sedes', { dia: hoyBogota(), lista }); } catch (_) { /* opcional */ }
+    }
   } catch (e) {
+    if (!(e && e.status) && await flotaSedesGuardadas(sel)) return;
     // Ruidoso: la custodia va a quedar `pendiente_sede` y quien entrega tiene
     // que saber por qué, no descubrirlo en el health la semana que viene.
-    sel.innerHTML = `<option value="">— no se pudo cargar la lista —</option>`;
-    alerta('No se pudieron cargar las sedes: ' + e.message +
-           '. El turno va a quedar con la sede sin resolver.', 'error');
+    sel.innerHTML = '<option value="">— no se pudo cargar la lista: la sede queda por resolver —</option>';
+    alerta(e && e.status
+      ? 'No se pudo traer la lista de sedes. El turno se entrega igual, con la sede por resolver.'
+      : 'Sin señal no se pudo traer la lista de sedes. El turno se entrega igual, con la sede por resolver.',
+      'advertencia');
   }
 }
 
@@ -303,6 +333,9 @@ function flotaBajarModalDebajoDelBanner() {
  * hablando. Ese es el punto entero.
  */
 function flotaAbrirModal(titulo, placa) {
+  // Cada formulario empieza sin «rechazado anterior» que reemplazar: el que
+  // vuelve a mandar ESTE formulario reemplaza solo lo que ESTE mandó.
+  FLOTA_FORM_CLAVE_RECHAZADA = null;
   flotaAsegurarModal();
   flotaBajarModalDebajoDelBanner();
   document.getElementById('flota-modal-placa').textContent = placa || '';
@@ -1712,6 +1745,19 @@ function flotaKm(km) {
 // **El orden importa y se respeta**: la cola se manda de la más vieja a la más
 // nueva y se detiene en la primera que no sale — una entrega no puede llegar
 // antes que el recibo del mismo turno.
+//
+// **Nada se borra por un rechazo (2026-09-27).** Hasta ese día un 409/403
+// borraba la operación con sus fotos y dejaba solo el mensaje: un día entero
+// de registros se perdía detrás de un recibo rechazado. Ahora el rechazado
+// queda en el teléfono, marcado, con tres salidas —Reintentar, Descartar (con
+// confirmación en pantalla), Avisar a control de flota—; el servidor lo anota
+// (`flota_rechazo_cola`) y control de flota lo ve en su bandeja. Lo único que
+// espera detrás de un rechazo es lo de la misma placa después de un RECIBO
+// rechazado: sin turno, el servidor lo rechazaría en cascada.
+//
+// **Sale sola**: con el temporizador de la pantalla, al volver la app al
+// frente, con el evento `online` y con espera creciente tras cada intento
+// fallido; y cada envío tiene un tiempo máximo según lo que pesa.
 // ══════════════════════════════════════════════════════════════════════
 
 /** Las puertas que la cola reenvía. Enteras y literales, una constante cada
@@ -1737,17 +1783,42 @@ function flotaColaUrl(tipo) {
   }
 }
 const FLOTA_COLA_LLAVE = 'flota_cola';
+/** Los rechazos viejos, de antes del 2026-09-27: solo el mensaje, sin la
+ * operación. Se siguen mostrando (con «Entendido») hasta que se lean. */
 const FLOTA_COLA_LLAVE_RECHAZOS = 'flota_cola_rechazos';
+/** Lo que el conductor decidió sobre un rechazo (pedir ayuda, descartar) y
+ * todavía no llegó al servidor por falta de señal. */
+const FLOTA_COLA_LLAVE_AVISOS = 'flota_cola_avisos';
+/** Cuántas operaciones había en la cola la última vez que se escribió. Vive en
+ * `localStorage` y no en la misma base porque es la que contesta «¿leer `null`
+ * es "no hay nada" o "no se pudo leer"?» (`_condDB.get` da `null` en los dos
+ * casos, y un `null` tomado por vacío hacía que la siguiente escritura PISARA
+ * la cola con una lista de un solo registro). */
+const FLOTA_COLA_MARCA = 'flota_cola_n';
 /** Qué es cada operación, en palabras, para el aviso de pendientes. */
 const FLOTA_COLA_QUE = { recibo: 'recibo', entrega: 'entrega', inspeccion: 'inspección',
                          dano: 'daño', tanqueo: 'tanqueo' };
+/** Esperas entre reintentos cuando no hay señal o el servidor falló: 15 s,
+ * 30 s, 1, 2 y 5 minutos, y de ahí cada 5. Sin esto la cola solo salía con el
+ * evento `online` —que con señal intermitente casi no llega— o a mano. */
+const FLOTA_COLA_ESPERAS_MS = [15000, 30000, 60000, 120000, 300000];
 
 let FLOTA_COLA_ITEMS = [];         // espejo en memoria, para pintar sin esperar
-let FLOTA_COLA_RECHAZADAS = [];    // lo que el servidor rechazó sin nadie mirando
+let FLOTA_COLA_RECHAZADAS = [];    // los rechazos viejos, solo el mensaje
 let FLOTA_COLA_CANDADO = Promise.resolve();
 let FLOTA_COLA_SINCRONIZANDO = null;
 let FLOTA_COLA_EN_PANTALLA = new Set();   // claves que un formulario abierto espera
 let FLOTA_COLA_ESCUCHA = false;
+let FLOTA_COLA_FALLOS = 0;         // pasadas seguidas que no pudieron salir
+let FLOTA_COLA_ESPERA_HASTA = 0;   // antes de esto, el reintento automático espera
+let FLOTA_COLA_TEMPORIZADOR = null;
+let FLOTA_COLA_LECTURAS_DUDOSAS = 0;
+let FLOTA_COLA_PERDIDOS = 0;       // lo que el teléfono borró sin que nadie lo pidiera
+let FLOTA_COLA_VISTA = [];         // las claves pintadas en la tarjeta, por posición
+/** El registro que un formulario abierto mandó y el servidor rechazó. Si el
+ * conductor lo corrige y lo vuelve a mandar desde el MISMO formulario, el
+ * nuevo reemplaza al rechazado; si cierra, el rechazado queda en la tarjeta. */
+let FLOTA_FORM_CLAVE_RECHAZADA = null;
 
 /** `_condDB` vive en rutas.js. Sin él (un arnés, un navegador sin IndexedDB) la
  * operación se manda directo y, si no sale, se dice — nunca se finge guardada. */
@@ -1762,12 +1833,57 @@ function flotaClaveNueva() {
   return 'k-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 12);
 }
 
+/** Quién tiene la sesión en ESTE teléfono. `null` si no se sabe. */
+function flotaColaUsuario() {
+  return (typeof OPERARIO !== 'undefined' && OPERARIO && OPERARIO.id !== undefined
+          && OPERARIO.id !== null) ? OPERARIO.id : null;
+}
+
+/** ¿La operación es de quien tiene la sesión? En un teléfono compartido la
+ * cola de A NO se manda con el token de B: el servidor la rechazaría (o peor,
+ * la firmaría B). Espera a que A vuelva a entrar. Una operación sin dueño
+ * anotado es de antes del 2026-09-27: se trata como del que está. */
+function flotaColaEsMia(op) {
+  const u = flotaColaUsuario();
+  return op.usuario_id === undefined || op.usuario_id === null || u === null
+    || op.usuario_id === u;
+}
+
+function flotaColaMarcaLeer() {
+  try {
+    const n = parseInt(localStorage.getItem(FLOTA_COLA_MARCA) || '0', 10);
+    return Number.isFinite(n) ? n : 0;
+  } catch (_) { return 0; }
+}
+
+function flotaColaMarcaEscribir(n) {
+  try { localStorage.setItem(FLOTA_COLA_MARCA, String(n)); } catch (_) { /* opcional */ }
+}
+
+/** La cola guardada. Levanta si no se pudo leer: una cola que no se pudo leer
+ * NO es una cola vacía, y quien la mute tiene que saberlo antes de pisarla. */
 async function flotaColaLeer() {
   if (!flotaColaHayAlmacen()) return FLOTA_COLA_ITEMS.slice();
+  let v;
   try {
-    const v = await _condDB.get(FLOTA_COLA_LLAVE);
-    return Array.isArray(v) ? v : [];
-  } catch (_) { return FLOTA_COLA_ITEMS.slice(); }
+    v = await _condDB.get(FLOTA_COLA_LLAVE);
+  } catch (_) {
+    throw new Error('No se pudo leer lo guardado en el teléfono.');
+  }
+  if (Array.isArray(v)) { FLOTA_COLA_LECTURAS_DUDOSAS = 0; return v; }
+  const habia = Math.max(FLOTA_COLA_ITEMS.length, flotaColaMarcaLeer());
+  if (!habia) return [];
+  // Había registros y la lectura dio `null`. La primera vez se asume que la
+  // lectura falló (se reintenta después). Si sigue igual, el teléfono los
+  // borró —el navegador libera espacio sin preguntar—: se dice, no se calla.
+  FLOTA_COLA_LECTURAS_DUDOSAS += 1;
+  if (FLOTA_COLA_LECTURAS_DUDOSAS < 3) {
+    throw new Error('No se pudo leer lo guardado en el teléfono.');
+  }
+  FLOTA_COLA_PERDIDOS = habia;
+  FLOTA_COLA_LECTURAS_DUDOSAS = 0;
+  flotaColaMarcaEscribir(0);
+  return [];
 }
 
 /** Lee-modifica-escribe la cola bajo un candado: el formulario que encola y la
@@ -1775,7 +1891,10 @@ async function flotaColaLeer() {
 function flotaColaMutar(fn) {
   const paso = FLOTA_COLA_CANDADO.then(async () => {
     const lista = fn(await flotaColaLeer());
-    if (flotaColaHayAlmacen()) await _condDB.set(FLOTA_COLA_LLAVE, lista);
+    if (flotaColaHayAlmacen()) {
+      await _condDB.set(FLOTA_COLA_LLAVE, lista);
+      flotaColaMarcaEscribir(lista.length);
+    }
     FLOTA_COLA_ITEMS = lista;
     return lista;
   });
@@ -1783,15 +1902,7 @@ function flotaColaMutar(fn) {
   return paso;
 }
 
-async function flotaColaAnotarRechazo(op, mensaje) {
-  FLOTA_COLA_RECHAZADAS = FLOTA_COLA_RECHAZADAS.concat([{
-    que: op.que, placa: op.placa, creado: op.creado, mensaje: mensaje }]);
-  if (flotaColaHayAlmacen()) {
-    try { await _condDB.set(FLOTA_COLA_LLAVE_RECHAZOS, FLOTA_COLA_RECHAZADAS); } catch (_) { /* queda en memoria */ }
-  }
-}
-
-/** El conductor leyó el rechazo. Se quita por posición, no por texto. */
+/** El conductor leyó un rechazo VIEJO (solo mensaje). Se quita por posición. */
 async function flotaColaDescartarRechazo(i) {
   FLOTA_COLA_RECHAZADAS = FLOTA_COLA_RECHAZADAS.filter((_, j) => j !== i);
   if (flotaColaHayAlmacen()) {
@@ -1800,24 +1911,56 @@ async function flotaColaDescartarRechazo(i) {
   flotaCondRender();
 }
 
+/** El texto de un rechazo, UNA frase: lo que dijo el servidor, sin punto
+ * doble y sin «hágalo de nuevo» pegado atrás (lo que se hace lo dicen los
+ * botones). Hasta el 2026-09-27 salía «…reciba el turno primero.. No se pudo
+ * registrar: pídaselo al encargado de flota. Hágalo de nuevo.». */
+function flotaTextoRechazo(status, d) {
+  const base = (d && (d.error || d.detalle))
+    ? flotaMensajeDeError(d)
+    : `El servidor no lo aceptó (código ${status}) y no dijo por qué`;
+  let txt = String(base).trim().replace(/[\s.]+$/, '');
+  if (status === 403 && d && d.motivo === 'sin_derecho') {
+    txt += '. Si no sabe cómo seguir, avise a control de flota';
+  }
+  return txt + '.';
+}
+
+/** Cuánto se espera una respuesta, según lo que pesa lo que se manda: 20 s
+ * más un segundo por cada 20 KB, hasta 3 minutos. Un recibo de 1,6 MB con
+ * señal débil necesita más de 25 s; uno de texto, no. Sin tope, un envío que
+ * se quedó colgado detenía la cola entera hasta cerrar la app. */
+function flotaColaTiempoMaximoMs(cuerpoTexto) {
+  const bytes = (cuerpoTexto || '').length;
+  return Math.min(180000, 20000 + Math.round(bytes / 20));
+}
+
 /** Manda UNA operación. Devuelve `{estado, datos, mensaje}`:
  *
  *   · `hecho`      — el servidor la tiene (201, o 200 «ya la tenía»).
  *   · `rechazado`  — el servidor dijo que no (400/403/404/409): reenviarla
- *                     igual no la arregla, hay que hacerla de nuevo.
- *   · `sin_red`    — no hubo respuesta. Puede haber llegado: por eso la clave.
+ *                     igual no la arregla. Queda en el teléfono, marcada.
+ *   · `sin_red`    — no hubo respuesta (o no llegó a tiempo). Puede haber
+ *                     llegado: por eso la clave.
  *   · `reintentar` — el servidor falló (5xx, 429) o la sesión venció (401).
  */
 async function flotaColaEnviarUna(op) {
+  const cuerpo = JSON.stringify(op.cuerpo);
+  const ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+  const reloj = ctrl ? setTimeout(() => ctrl.abort(), flotaColaTiempoMaximoMs(cuerpo)) : null;
   let r;
   try {
     r = await fetch(API + flotaColaUrl(op.tipo), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + TOKEN },
-      body: JSON.stringify(op.cuerpo),
+      body: cuerpo,
+      signal: ctrl ? ctrl.signal : undefined,
     });
   } catch (e) {
-    return { estado: 'sin_red', mensaje: 'Sin señal' };
+    return { estado: 'sin_red', mensaje: (e && e.name === 'AbortError')
+      ? 'No hubo respuesta a tiempo (señal débil)' : 'Sin señal' };
+  } finally {
+    if (reloj) clearTimeout(reloj);
   }
   let d = {};
   try { d = await r.json(); } catch (_) { d = {}; }
@@ -1828,63 +1971,131 @@ async function flotaColaEnviarUna(op) {
   if (r.status >= 500 || r.status === 429 || r.status === 408) {
     return { estado: 'reintentar', mensaje: 'El servidor no respondió bien. Se vuelve a intentar sola.' };
   }
-  // Sin turno abierto sobre ese camión el servidor contesta 403 `sin_derecho`
-  // (frente de permisos, 2026-09-24). Reenviarlo no lo arregla: lo arregla una
-  // persona. Se dice a quién pedírselo, en vez del rol crudo.
-  if (r.status === 403 && d && d.motivo === 'sin_derecho') {
-    return { estado: 'rechazado', datos: d, mensaje: (d.error ? d.error + '. ' : '') +
-      'No se pudo registrar: pídaselo al encargado de flota.' };
-  }
-  return { estado: 'rechazado', mensaje: flotaMensajeDeError(d), datos: d };
+  return { estado: 'rechazado', datos: d, status: r.status,
+           mensaje: flotaTextoRechazo(r.status, d) };
 }
 
-/** Manda la cola en orden, de la más vieja a la más nueva. Se detiene en la
- * primera que no sale: lo que viene detrás puede depender de ella. */
+/** Manda la cola en orden, de la más vieja a la más nueva.
+ *
+ * · Se detiene en la primera que no SALE (sin señal, servidor caído): lo que
+ *   viene detrás puede depender de ella, y una entrega no puede llegar antes
+ *   que el recibo del mismo turno.
+ * · Un RECHAZO no detiene nada ni borra nada: la operación queda en el
+ *   teléfono con sus fotos, marcada «no se pudo registrar», hasta que el
+ *   conductor la reintente o la descarte.
+ * · La única dependencia declarada: lo que viene detrás de un RECIBO rechazado
+ *   en esa misma placa espera (sin turno, el servidor lo rechazaría en
+ *   cascada). Un recibo nuevo de esa placa levanta la espera: es el nuevo
+ *   intento.
+ * · Lo de otra persona (teléfono compartido) no se manda con esta sesión.
+ */
 function flotaColaSincronizar() {
   if (FLOTA_COLA_SINCRONIZANDO) return FLOTA_COLA_SINCRONIZANDO;
   FLOTA_COLA_SINCRONIZANDO = (async () => {
     const resultados = {};
+    let seDetuvo = false;
     try {
       const lista = await flotaColaLeer();
+      const esperan = new Set();          // placas con un recibo rechazado delante
       for (const op of lista) {
+        if (!flotaColaEsMia(op)) continue;
+        if (op.rechazo) {
+          if (op.que === 'recibo') esperan.add(op.placa);
+          continue;
+        }
+        if (op.que === 'recibo') esperan.delete(op.placa);
+        else if (esperan.has(op.placa)) {
+          resultados[op.clave] = { estado: 'retenido',
+            mensaje: `En espera: el recibo del ${op.placa} no se pudo registrar.` };
+          continue;
+        }
         const res = await flotaColaEnviarUna(op);
         resultados[op.clave] = res;
-        if (res.estado === 'hecho' || res.estado === 'rechazado') {
+        if (res.estado === 'hecho') {
           await flotaColaMutar(l => l.filter(x => x.clave !== op.clave));
-          // Un rechazo que nadie está mirando no se pierde: queda en la
-          // tarjeta hasta que el conductor lo lea. El que tiene el formulario
-          // abierto lo ve ahí mismo, con sus fotos todavía en pantalla.
-          if (res.estado === 'rechazado' && !FLOTA_COLA_EN_PANTALLA.has(op.clave)) {
-            await flotaColaAnotarRechazo(op, res.mensaje);
-          }
+        } else if (res.estado === 'rechazado') {
+          const rechazo = { mensaje: res.mensaje, status: res.status || null,
+                            motivo: res.datos && res.datos.motivo ? res.datos.motivo : null,
+                            en: new Date().toISOString(), ayuda: false };
+          await flotaColaMutar(l => l.map(x => (x.clave === op.clave
+            ? Object.assign({}, x, { rechazo }) : x)));
+          if (op.que === 'recibo') esperan.add(op.placa);
         } else {
           await flotaColaMutar(l => l.map(x => (x.clave === op.clave
             ? Object.assign({}, x, { intentos: (x.intentos || 0) + 1, ultimo_error: res.mensaje })
             : x)));
+          seDetuvo = true;
           break;
         }
       }
     } finally {
       FLOTA_COLA_SINCRONIZANDO = null;
     }
+    flotaColaProgramar(seDetuvo);
     return resultados;
   })();
   return FLOTA_COLA_SINCRONIZANDO;
 }
 
+/** Tras una pasada: si algo no salió, el siguiente intento se programa solo
+ * con espera creciente; si salió todo, la espera vuelve a cero. */
+function flotaColaProgramar(seDetuvo) {
+  if (FLOTA_COLA_TEMPORIZADOR) { clearTimeout(FLOTA_COLA_TEMPORIZADOR); FLOTA_COLA_TEMPORIZADOR = null; }
+  if (!seDetuvo) { FLOTA_COLA_FALLOS = 0; FLOTA_COLA_ESPERA_HASTA = 0; return; }
+  FLOTA_COLA_FALLOS += 1;
+  const espera = FLOTA_COLA_ESPERAS_MS[Math.min(FLOTA_COLA_FALLOS - 1, FLOTA_COLA_ESPERAS_MS.length - 1)];
+  FLOTA_COLA_ESPERA_HASTA = Date.now() + espera;
+  FLOTA_COLA_TEMPORIZADOR = setTimeout(() => { flotaColaTick(); }, espera);
+  // En Node (los arneses) un temporizador pendiente no deja terminar el
+  // proceso; en el navegador `setTimeout` devuelve un número y esto no aplica.
+  if (FLOTA_COLA_TEMPORIZADOR && typeof FLOTA_COLA_TEMPORIZADOR.unref === 'function') {
+    FLOTA_COLA_TEMPORIZADOR.unref();
+  }
+}
+
+/** Lo que las operaciones de ESTA sesión esperan mandar (sin las rechazadas). */
+function flotaColaPorMandar(lista) {
+  return (lista || []).filter(o => flotaColaEsMia(o) && !o.rechazo);
+}
+
+/** El reintento automático: el temporizador de la pantalla del conductor
+ * (`app.js`, cada 30 s), el regreso de la app al frente y la espera programada
+ * lo llaman. Respeta la espera salvo que se le pida `ahora`. */
+async function flotaColaTick(ahora) {
+  if (FLOTA_COLA_SINCRONIZANDO) return;
+  if (!ahora && Date.now() < FLOTA_COLA_ESPERA_HASTA) return;
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) return;
+  let lista;
+  try { lista = await flotaColaLeer(); } catch (_) { return; }
+  FLOTA_COLA_ITEMS = lista;
+  await flotaColaEnviarAvisos();
+  if (!flotaColaPorMandar(lista).length) return;
+  await flotaColaSincronizar();
+  await flotaCondCargar({ sinSincronizar: true });
+}
+
 /** Guarda la operación en el teléfono y la intenta mandar.
  *
- * Devuelve `{estado, datos, mensaje}` con `estado` ∈ `hecho` · `rechazado` ·
- * `en_cola` (guardada, sale cuando haya señal) · `perdido` (no se pudo guardar
- * ni mandar: el formulario tiene que quedar abierto). */
+ * Devuelve `{estado, datos, mensaje}` con `estado` ∈ `hecho` · `rechazado`
+ * (queda en el teléfono, marcada) · `en_cola` (guardada, sale cuando haya
+ * señal) · `perdido` (no se pudo guardar ni mandar: el formulario tiene que
+ * quedar abierto). */
 async function flotaColaRegistrar(tipo, que, placa, cuerpo) {
   const creado = new Date().toISOString();
   const op = { clave: flotaClaveNueva(), tipo, que, placa, creado, intentos: 0,
-               ultimo_error: null };
+               ultimo_error: null, usuario_id: flotaColaUsuario() };
   op.cuerpo = Object.assign({}, cuerpo, { clave_idempotencia: op.clave, ts_dispositivo: creado });
 
+  // Lo corrigió y lo vuelve a mandar desde el mismo formulario: el nuevo
+  // reemplaza al rechazado (si no, quedarían los dos).
+  const reemplaza = FLOTA_FORM_CLAVE_RECHAZADA;
+  FLOTA_FORM_CLAVE_RECHAZADA = null;
+
   let guardada = false;
-  try { await flotaColaMutar(l => l.concat([op])); guardada = true; } catch (_) { guardada = false; }
+  try {
+    await flotaColaMutar(l => l.filter(x => x.clave !== reemplaza).concat([op]));
+    guardada = true;
+  } catch (_) { guardada = false; }
 
   if (!guardada || !flotaColaHayAlmacen()) {
     // Sin almacén: se manda directo. Si no sale, se dice que NO quedó guardada.
@@ -1903,7 +2114,8 @@ async function flotaColaRegistrar(tipo, que, placa, cuerpo) {
       const r = await flotaColaSincronizar();
       if (r[op.clave]) {
         const res = r[op.clave];
-        if (res.estado === 'hecho' || res.estado === 'rechazado') return res;
+        if (res.estado === 'hecho') return res;
+        if (res.estado === 'rechazado') { FLOTA_FORM_CLAVE_RECHAZADA = op.clave; return res; }
         return { estado: 'en_cola', mensaje: res.mensaje };
       }
       if (!FLOTA_COLA_ITEMS.some(x => x.clave === op.clave)) break;
@@ -1914,15 +2126,162 @@ async function flotaColaRegistrar(tipo, que, placa, cuerpo) {
   }
 }
 
-/** El botón «Sincronizar» del aviso, y el evento `online`. */
+/** El botón «Sincronizar» del aviso, y el evento `online`: ya, sin esperar. */
 async function flotaColaSincronizarAhora() {
+  FLOTA_COLA_ESPERA_HASTA = 0;
+  await flotaColaEnviarAvisos();
   await flotaColaSincronizar();
-  await flotaCondCargar();
+  await flotaCondCargar({ sinSincronizar: true });
 }
 
-/** Lo que quedó en el teléfono sin llegar, para esta placa. */
+/** Lo que quedó en el teléfono sin llegar, para esta placa: de ESTA sesión y
+ * sin lo rechazado (un recibo rechazado no abrió ningún turno). */
 function flotaColaDe(placa) {
-  return FLOTA_COLA_ITEMS.filter(o => !placa || o.placa === placa);
+  return FLOTA_COLA_ITEMS.filter(o => flotaColaEsMia(o) && !o.rechazo
+                                      && (!placa || o.placa === placa));
+}
+
+/** La operación que la tarjeta pintó en la posición `j`. */
+function flotaColaOpVista(j) {
+  const clave = FLOTA_COLA_VISTA[j];
+  return clave ? FLOTA_COLA_ITEMS.find(o => o.clave === clave) || null : null;
+}
+
+/** «Reintentar» sobre un registro rechazado: vuelve a la fila y sale ya. La
+ * clave es la misma: si el servidor ya lo tenía, lo reconoce. */
+async function flotaColaReintentar(j) {
+  const op = flotaColaOpVista(j);
+  if (!op) return;
+  try {
+    await flotaColaMutar(l => l.map(x => (x.clave === op.clave
+      ? Object.assign({}, x, { rechazo: null, intentos: 0, ultimo_error: null }) : x)));
+  } catch (_) {
+    alerta('No se pudo leer lo guardado en el teléfono. Pruebe de nuevo en un momento.', 'error');
+    return;
+  }
+  await flotaColaSincronizarAhora();
+}
+
+/** «Descartar»: se borra del teléfono CON sus fotos. Se pregunta en la
+ * pantalla (nunca con el diálogo del sistema) y se le avisa al servidor, que
+ * se lo muestra a control de flota una semana. */
+async function flotaColaDescartar(j) {
+  const op = flotaColaOpVista(j);
+  if (!op) return;
+  const que = FLOTA_COLA_QUE[op.que] || op.que;
+  const ok = await _modalConfirmar(
+    `Se borra del teléfono el ${esc(que)} del ${esc(op.placa)} que hizo ${esc(flotaHoraDe(op.creado))}, ` +
+    `con sus fotos. No se puede deshacer.\n\nControl de flota va a ver que no entró.`,
+    { titulo: '¿Descartar este registro?', textoConfirmar: 'Descartar', peligro: true });
+  if (!ok) return;
+  try {
+    await flotaColaMutar(l => l.filter(x => x.clave !== op.clave));
+  } catch (_) {
+    alerta('No se pudo leer lo guardado en el teléfono. Pruebe de nuevo en un momento.', 'error');
+    return;
+  }
+  await flotaColaAvisar(op, 'descartar');
+  flotaCondRender();
+}
+
+/** «Avisar a control de flota»: queda en la bandeja de control de flota, con
+ * lo que dijo el servidor. Sin señal se guarda y sale con la próxima. */
+async function flotaColaPedirAyuda(j) {
+  const op = flotaColaOpVista(j);
+  if (!op) return;
+  try {
+    await flotaColaMutar(l => l.map(x => (x.clave === op.clave
+      ? Object.assign({}, x, { rechazo: Object.assign({}, x.rechazo, { ayuda: true }) }) : x)));
+  } catch (_) { /* el aviso sale igual */ }
+  const llego = await flotaColaAvisar(op, 'ayuda');
+  alerta(llego ? 'Control de flota ya lo ve en su bandeja.'
+               : 'Sin señal: el aviso sale solo cuando haya.', llego ? 'exito' : 'advertencia');
+  flotaCondRender();
+}
+
+/** Guarda el aviso y lo intenta mandar. `true` si llegó. */
+async function flotaColaAvisar(op, accion) {
+  const aviso = { clave: op.clave, accion, usuario_id: op.usuario_id,
+                  cuerpo: { accion, operacion: op.tipo, placa: op.placa,
+                            mensaje: op.rechazo ? op.rechazo.mensaje : null,
+                            ts_dispositivo: op.creado } };
+  if (flotaColaHayAlmacen()) {
+    try {
+      const avisos = (await _condDB.get(FLOTA_COLA_LLAVE_AVISOS)) || [];
+      await _condDB.set(FLOTA_COLA_LLAVE_AVISOS,
+        avisos.filter(a => !(a.clave === aviso.clave && a.accion === accion)).concat([aviso]));
+    } catch (_) { /* se intenta directo */ }
+  }
+  const enviados = await flotaColaEnviarAvisos([aviso]);
+  return enviados.includes(aviso.clave + ':' + accion);
+}
+
+/** Manda los avisos guardados (o los que se le pasen). Devuelve los que
+ * llegaron, como `clave:accion`. Un aviso que el servidor rechaza con 4xx se
+ * quita: reintentarlo no lo arregla. */
+async function flotaColaEnviarAvisos(soloEstos) {
+  let avisos = soloEstos || [];
+  if (!soloEstos && flotaColaHayAlmacen()) {
+    try { avisos = (await _condDB.get(FLOTA_COLA_LLAVE_AVISOS)) || []; } catch (_) { avisos = []; }
+  }
+  const listos = [];
+  for (const a of avisos) {
+    if (!flotaColaEsMia(a)) continue;
+    try {
+      // La puerta del aviso, escrita entera: `/flota/conductor/rechazos/<clave>`.
+      const r = await fetch(API + `/flota/conductor/rechazos/${encodeURIComponent(a.clave)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + TOKEN },
+        body: JSON.stringify(a.cuerpo),
+      });
+      if (r.ok || (r.status >= 400 && r.status < 500 && r.status !== 401 && r.status !== 429)) {
+        listos.push(a.clave + ':' + a.accion);
+      }
+    } catch (_) { break; }        // sin señal: los demás tampoco van a salir
+  }
+  if (listos.length && flotaColaHayAlmacen()) {
+    try {
+      const todos = (await _condDB.get(FLOTA_COLA_LLAVE_AVISOS)) || [];
+      await _condDB.set(FLOTA_COLA_LLAVE_AVISOS,
+        todos.filter(a => !listos.includes(a.clave + ':' + a.accion)));
+    } catch (_) { /* quedan para la próxima */ }
+  }
+  return listos;
+}
+
+/** Cuántas operaciones de ESTA sesión esperan salir. La usa `salir()` para
+ * avisar antes de cerrar la sesión en un teléfono compartido. */
+async function flotaColaPendientesDelUsuario() {
+  let lista = FLOTA_COLA_ITEMS;
+  try { lista = await flotaColaLeer(); } catch (_) { /* la de memoria */ }
+  return (lista || []).filter(o => flotaColaEsMia(o)).length;
+}
+
+/** Antes de cerrar la sesión: si quedan registros de flota sin mandar, se
+ * dice que quedan guardados y se pregunta. `true` = puede salir. */
+async function flotaColaAntesDeSalir() {
+  const n = await flotaColaPendientesDelUsuario();
+  if (!n) return true;
+  return _modalConfirmar(
+    `Tiene ${esc(n)} ${n === 1 ? 'registro de flota que no ha' : 'registros de flota que no han'} ` +
+    `llegado al servidor. Quedan guardados en este teléfono y se mandan cuando usted vuelva a entrar ` +
+    `en él. Si otra persona entra en este teléfono, no se mandan con la sesión de ella.`,
+    { titulo: '¿Salir con registros pendientes?', textoConfirmar: 'Salir igual',
+      textoCancelar: 'Quedarme' });
+}
+
+/** «hoy 05:32», «ayer 18:40», «el 20/09 07:12» — la hora de un registro. */
+function flotaHoraDe(iso) {
+  const d = new Date(iso);
+  if (!iso || isNaN(d.getTime())) return 'en un momento que no se sabe';
+  const dia = hoyBogota(d);
+  const hora = d.toLocaleTimeString('es-CO', { timeZone: 'America/Bogota',
+                                               hour: '2-digit', minute: '2-digit', hour12: false });
+  const hoy = hoyBogota();
+  if (dia === hoy) return `hoy a las ${hora}`;
+  const ayer = hoyBogota(new Date(Date.now() - 86400000));
+  if (dia === ayer) return `ayer a las ${hora}`;
+  return `el ${flotaFechaCorta(dia)} a las ${hora}`;
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -1937,6 +2296,10 @@ function flotaColaDe(placa) {
 //   sin turno                 → «Recibir el camión»
 //   turno sin inspección hoy  → «Inspeccionar»
 //   inspeccionado             → franja: 🚚 placa · semáforo · Más
+//   ruta de hoy cerrada y el
+//   turno sigue abierto       → «Entregar el camión» (2026-09-27: «Entregar»
+//                               vivía dentro de «Más» y nada lo recordaba;
+//                               era la causa de los cierres forzados)
 //
 // El semáforo **informa, no bloquea**: una línea cuando hay algo (papel
 // vencido, daño abierto, inspección que no habilita). Si no hay nada no se
@@ -1945,14 +2308,21 @@ function flotaColaDe(placa) {
 
 /** Carga el turno del conductor y pinta la tarjeta.
  *
- * Sin señal usa la última respuesta guardada en el teléfono y lo dice. Un
- * conductor sin ficha vinculada (404) no opera flota pero sí sus rutas: la
- * tarjeta queda vacía, no rota. */
-async function flotaCondCargar() {
+ * Sin señal usa la última respuesta guardada en el teléfono y lo dice — con
+ * el DÍA: una respuesta de ayer no dice nada de «hoy» (ver
+ * `flotaCondDeHoy`). Un conductor sin ficha vinculada (404) no opera flota
+ * pero sí sus rutas: la tarjeta lo dice en una línea y no estorba.
+ *
+ * `sinSincronizar`: la llama la propia sincronización al terminar, para
+ * repintar con lo que el servidor sabe AHORA. Hasta el 2026-09-27 repintaba
+ * con el `mi-turno` traído ANTES de sincronizar, y la tarjeta volvía a pedir
+ * «Recibir el camión» sobre un recibo que ya había entrado: el conductor
+ * repetía las doce fotos. */
+async function flotaCondCargar(opts) {
   const el = document.getElementById('cond-flota');
   if (!el) return;
   flotaColaEscucharRed();
-  FLOTA_COLA_ITEMS = await flotaColaLeer();
+  try { FLOTA_COLA_ITEMS = await flotaColaLeer(); } catch (_) { /* quedan los de memoria */ }
   if (flotaColaHayAlmacen()) {
     try {
       const r = await _condDB.get(FLOTA_COLA_LLAVE_RECHAZOS);
@@ -1966,6 +2336,12 @@ async function flotaCondCargar() {
       try { await _condDB.set('flota_mi_turno', FLOTA_COND); } catch (_) { /* caché opcional */ }
     }
   } catch (e) {
+    if (e && e.status === 404) {
+      el.innerHTML = `<div class="flota-hoy-sub">Su usuario no está vinculado a una ficha de
+        conductor: la parte del camión no se puede usar hasta que administración la vincule.
+        Sus rutas funcionan igual.</div>`;
+      return;
+    }
     const sinRed = !(e && e.status);
     let guardado = null;
     if (sinRed && flotaColaHayAlmacen()) {
@@ -1976,20 +2352,36 @@ async function flotaCondCargar() {
   }
   FLOTA_COND_ELEGIDO = FLOTA_COND.vehiculo_id;
   const bar = document.getElementById('cond-vehiculo');
-  if (bar) bar.textContent = FLOTA_COND.placa ? `🚚 ${FLOTA_COND.placa}` : 'Sin vehículo asignado';
+  const placa = flotaCondPlacaDelTurno();
+  if (bar) bar.textContent = placa ? `🚚 ${placa}` : 'Sin vehículo asignado';
   flotaCondRender();
-  // Con señal y algo pendiente, se manda sin que nadie toque nada.
-  if (FLOTA_COLA_ITEMS.length && (typeof navigator === 'undefined' || navigator.onLine !== false)
+  // Con señal y algo pendiente, se manda sin que nadie toque nada — y al
+  // terminar se vuelve a CARGAR (no solo a pintar): lo que acaba de entrar
+  // cambia lo que el servidor contesta.
+  if (!(opts && opts.sinSincronizar) && flotaColaPorMandar(FLOTA_COLA_ITEMS).length
+      && (typeof navigator === 'undefined' || navigator.onLine !== false)
       && !FLOTA_COLA_SINCRONIZANDO) {
-    flotaColaSincronizar().then(() => flotaCondRender()).catch(() => {});
+    flotaColaSincronizar().then(() => flotaCondCargar({ sinSincronizar: true })).catch(() => {});
   }
 }
 
-/** Cuando vuelve la señal, la cola sale sola. Se registra una sola vez. */
+/** Cuando vuelve la señal, o la app vuelve al frente, la cola sale sola. Se
+ * registra una sola vez. Y se le pide al navegador que no borre lo guardado
+ * para liberar espacio (`storage.persist`): la cola vive ahí, con sus fotos. */
 function flotaColaEscucharRed() {
   if (FLOTA_COLA_ESCUCHA || typeof window === 'undefined' || !window.addEventListener) return;
   FLOTA_COLA_ESCUCHA = true;
   window.addEventListener('online', () => { flotaColaSincronizarAhora(); });
+  if (typeof document !== 'undefined' && document.addEventListener) {
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') flotaColaTick(true);
+    });
+  }
+  try {
+    if (typeof navigator !== 'undefined' && navigator.storage && navigator.storage.persist) {
+      navigator.storage.persist().catch(() => {});
+    }
+  } catch (_) { /* opcional: sin esto el navegador PUEDE borrar, y se detecta */ }
 }
 
 /** El texto de un error de la API, con lo que el servidor se esmeró en decir.
@@ -2073,7 +2465,7 @@ function flotaCondAvisos(e) {
   const lineas = s.motivos.map(m => [m.nivel, m.texto, m.corto]);
   // El peor daño, con su nombre: un contador dice cuántos, no cuál mirar.
   if (e.hallazgo_peor) {
-    lineas.push(['info', `Daño más grave (${e.hallazgo_peor.criticidad}): ${e.hallazgo_peor.descripcion}`, null]);
+    lineas.push(['info', `Daño más grave (${flotaPalabra('gravedad', e.hallazgo_peor.criticidad)}): ${e.hallazgo_peor.descripcion}`, null]);
   }
   return lineas;
 }
@@ -2103,6 +2495,39 @@ function flotaCondSemaforo(e) {
   return `<span class="flota-sem flota-sem-${esc(nivel)}">● ${esc(txt)}</span>`;
 }
 
+/** ¿La respuesta de `mi-turno` que se tiene es de HOY?
+ *
+ * El teléfono la guarda para trabajar sin señal. A las 5:30 sin señal, la de
+ * anoche decía «✅ Día cerrado» —la ruta de AYER ya se había cerrado—, y la
+ * inspección de ayer contaba como hecha hoy (2026-09-27). `false` también si
+ * no dice de qué día es (una guardada por una versión anterior): no saber de
+ * qué día es no es ser de hoy. */
+function flotaCondDeHoy(d) {
+  return !!(d && d.dia && d.dia === hoyBogota());
+}
+
+/** La placa del turno que el conductor tiene AHORA, contando la cola.
+ *
+ * Si recibió otro camión que el sugerido sin señal, el servidor todavía
+ * contesta el sugerido: daño y tanqueo salían con esa placa y daban 403 (no
+ * es la de su turno). La cola manda: el último recibo de esta sesión es el
+ * turno; una entrega posterior lo cierra. */
+function flotaCondPlacaDelTurno() {
+  return flotaCondPlacaDe(FLOTA_COND, flotaColaDe(null));
+}
+
+/** La misma pregunta sobre una respuesta y una cola dadas (la tarjeta la
+ * ejecuta en los tests con las suyas). `viva`: lo de esta sesión, sin lo
+ * rechazado. */
+function flotaCondPlacaDe(d, viva) {
+  let placa = d ? d.placa : null;
+  (viva || []).forEach(o => {
+    if (o.que === 'recibo') placa = o.placa;
+    else if (o.que === 'entrega' && o.placa === placa) placa = d ? d.placa : null;
+  });
+  return placa || null;
+}
+
 /** En qué paso del día está el conductor, contando lo que espera en la cola.
  *
  * La cola manda sobre la respuesta del servidor: si el recibo se tomó sin
@@ -2110,24 +2535,40 @@ function flotaCondSemaforo(e) {
  * camión. Se recorre en orden —un recibo y después una entrega es turno
  * cerrado—.
  *
- * `elegir` · `recibir` · `inspeccionar` · `en_ruta` · `dia_cerrado`.
+ * Lo «de hoy» del servidor (la inspección, la ruta cerrada) solo cuenta si la
+ * respuesta es de hoy (`flotaCondDeHoy`) y del MISMO camión del turno.
+ *
+ * `elegir` · `recibir` · `inspeccionar` · `en_ruta` · `entregar` · `dia_cerrado`.
  */
 function flotaCondPaso(d, cola) {
   if (!d) return 'elegir';
+  const deHoy = flotaCondDeHoy(d);
   let abierto = !!d.tiene_turno_abierto;
+  let placa = d.placa;
   const insp = (d.estado_vehiculo && d.estado_vehiculo.inspeccion_de_hoy) || {};
-  let inspeccionado = !!insp.hecha;
+  let inspeccionado = deHoy && !!insp.hecha;
   const hoy = hoyBogota();
   (cola || []).forEach(o => {
-    if (o.que === 'recibo') abierto = true;
+    if (o.que === 'recibo') {
+      abierto = true;
+      // Otro camión que el que el servidor conoce: su inspección de hoy no es
+      // la de este.
+      if (o.placa !== placa) { placa = o.placa; inspeccionado = false; }
+    }
     if (o.que === 'entrega') { abierto = false; }
-    if (o.que === 'inspeccion' && hoyBogota(new Date(o.creado)) === hoy) inspeccionado = true;
+    if (o.que === 'inspeccion' && o.placa === placa
+        && hoyBogota(new Date(o.creado)) === hoy) inspeccionado = true;
   });
+  const rutaCerrada = deHoy && !!d.ruta_de_hoy_cerrada;
   // Sin turno y con la ruta de hoy ya cerrada, el día terminó: no se vuelve a
   // ofrecer «Recibir el camión» (e2e 2026-09-25). `recibir_igual` es el
   // escape de un toque, para el que sí sale otra vez.
-  if (!abierto && d.ruta_de_hoy_cerrada && !d.recibir_igual) return 'dia_cerrado';
+  if (!abierto && rutaCerrada && !d.recibir_igual) return 'dia_cerrado';
   if (!abierto) return d.placa ? 'recibir' : 'elegir';
+  // El turno sigue abierto y la ruta de hoy ya se cerró: el siguiente paso
+  // es ENTREGAR el camión. Un turno que nadie entrega termina en un cierre
+  // forzado, que es trabajo para otro y un turno sin fotos de cierre.
+  if (rutaCerrada) return 'entregar';
   return inspeccionado ? 'en_ruta' : 'inspeccionar';
 }
 
@@ -2137,39 +2578,122 @@ function flotaCondRecibirIgual() {
   flotaCondRender();
 }
 
-/** El aviso de lo que espera señal, y los rechazos que nadie vio. */
+/** Las tres salidas de un registro que no entró. En los `onclick` solo viaja
+ * una posición (`FLOTA_COLA_VISTA`): el mensaje del servidor puede traer
+ * cualquier cosa. */
+function flotaColaBotonesRechazo(j, op) {
+  return `<div class="flota-hoy-pie">
+      <button class="flota-hoy-link" onclick="flotaColaReintentar(${j})">Reintentar</button>
+      <button class="flota-hoy-link" onclick="flotaColaDescartar(${j})">Descartar</button>
+      ${op.rechazo && op.rechazo.ayuda
+        ? '<span class="flota-hoy-sub">Control de flota ya fue avisado</span>'
+        : `<button class="flota-hoy-link" onclick="flotaColaPedirAyuda(${j})">Avisar a control de flota</button>`}
+    </div>`;
+}
+
+/** El aviso de lo que espera señal, lo que no entró y lo que es de otra
+ * persona. Cada registro trabado dice cuántas veces se intentó y por qué no
+ * salió: «pendiente» a secas escondía el que llevaba doce intentos. */
 function flotaCondAvisoCola(cola, rechazos) {
   let html = '';
+  FLOTA_COLA_VISTA = [];
+  // Los rechazos viejos (de antes del 2026-09-27): solo el mensaje.
   (rechazos || []).forEach((r, i) => {
     html += `<div class="flota-hoy-rechazo">
       <span>⚠ No se pudo registrar el ${esc(FLOTA_COLA_QUE[r.que] || r.que)} del ${esc(r.placa)}:
-        ${esc(r.mensaje)} Hágalo de nuevo.</span>
+        ${esc(String(r.mensaje || '').trim().replace(/[\s.]+$/, ''))}.</span>
       <button class="flota-hoy-link" onclick="flotaColaDescartarRechazo(${i})">Entendido</button>
     </div>`;
   });
-  if (cola && cola.length) {
-    const que = cola.map(o => FLOTA_COLA_QUE[o.que] || o.que).join(', ');
+  if (FLOTA_COLA_PERDIDOS) {
+    html += `<div class="flota-hoy-rechazo"><span>⚠ El teléfono borró
+      ${esc(FLOTA_COLA_PERDIDOS)} ${FLOTA_COLA_PERDIDOS === 1 ? 'registro que tenía guardado'
+      : 'registros que tenía guardados'} sin que nadie lo pidiera (liberó espacio).
+      Avise a control de flota qué había hecho.</span></div>`;
+  }
+  const mias = (cola || []).filter(o => flotaColaEsMia(o));
+  const ajenas = (cola || []).length - mias.length;
+  const esperan = new Set();
+  const pendientes = [];
+  mias.forEach(o => {
+    const que = FLOTA_COLA_QUE[o.que] || o.que;
+    if (o.rechazo) {
+      if (o.que === 'recibo') esperan.add(o.placa);
+      const j = FLOTA_COLA_VISTA.push(o.clave) - 1;
+      html += `<div class="flota-hoy-rechazo">
+        <span>⚠ No se pudo registrar el ${esc(que)} del ${esc(o.placa)} que hizo
+          ${esc(flotaHoraDe(o.creado))}: ${esc(o.rechazo.mensaje)}
+          Sigue guardado en el teléfono, con sus fotos.</span>
+        ${flotaColaBotonesRechazo(j, o)}
+      </div>`;
+      return;
+    }
+    if (o.que === 'recibo') esperan.delete(o.placa);
+    pendientes.push({ o, que, espera: o.que !== 'recibo' && esperan.has(o.placa) });
+  });
+  if (pendientes.length) {
+    const filas = pendientes.slice(0, 5).map(({ o, que, espera }) => {
+      let det = `${esc(que)} del ${esc(o.placa)} · ${esc(flotaHoraDe(o.creado))}`;
+      if (espera) det += ' · en espera del recibo, que no se pudo registrar';
+      else if (o.intentos) {
+        det += ` · ${esc(o.intentos)} ${o.intentos === 1 ? 'intento' : 'intentos'}`;
+        if (o.ultimo_error) det += ` · ${esc(o.ultimo_error)}`;
+      }
+      return `<li>${det}</li>`;
+    }).join('');
+    const mas = pendientes.length > 5 ? `<li>y ${esc(pendientes.length - 5)} más</li>` : '';
     html += `<div class="flota-hoy-pendiente">
-      <span>⏳ ${esc(cola.length)} ${cola.length !== 1 ? 'registros pendientes' : 'registro pendiente'} de sincronizar: ${esc(que)}</span>
+      <span>⏳ ${esc(pendientes.length)} ${pendientes.length !== 1 ? 'registros pendientes' : 'registro pendiente'} de sincronizar:</span>
+      <ul class="flota-hoy-lista">${filas}${mas}</ul>
       <button class="flota-hoy-link" onclick="flotaColaSincronizarAhora()">Sincronizar</button>
     </div>`;
   }
+  if (ajenas) {
+    html += `<div class="flota-hoy-pendiente"><span>📱 ${esc(ajenas)} ${ajenas === 1
+      ? 'registro de otra persona queda' : 'registros de otra persona quedan'} en este
+      teléfono: se mandan cuando esa persona vuelva a entrar.</span></div>`;
+  }
   return html;
+}
+
+/** La línea que dice que no hay señal, y de CUÁNDO es lo que se muestra. */
+function flotaCondSinSenal(d) {
+  if (!d || !d.guardado_a_las) return '';
+  if (!d.dia) return '<span class="flota-hoy-sub">sin señal — datos guardados en el teléfono, de un día que no se sabe</span>';
+  if (flotaCondDeHoy(d)) return '<span class="flota-hoy-sub">sin señal — datos guardados en el teléfono hoy</span>';
+  return `<span class="flota-hoy-sub">sin señal — lo último que se supo es del ${esc(flotaFechaCorta(d.dia))}: lo de hoy todavía no se sabe</span>`;
 }
 
 /** La tarjeta entera como texto — separada del pintado para poder EJECUTARLA en
  * un test y mirar lo que quedó (`test_mi_camion_hoy_js.py`). */
 function flotaCondTarjetaHTML(d, cola, rechazos) {
-  const paso = flotaCondPaso(d, cola);
+  const viva = (cola || []).filter(o => flotaColaEsMia(o) && !o.rechazo);
+  const paso = flotaCondPaso(d, viva);
   const aviso = flotaCondAvisoCola(cola, rechazos);
-  const sinSenal = d && d.guardado_a_las
-    ? '<span class="flota-hoy-sub">sin señal — datos guardados en el teléfono</span>' : '';
+  const sinSenal = flotaCondSinSenal(d);
+  const placa = flotaCondPlacaDe(d, viva);
+  // El semáforo es del camión que el servidor evaluó: si el turno es de otro
+  // (recibido sin señal), no se le pinta el del sugerido.
+  const semaforo = d && placa === d.placa ? flotaCondSemaforo(d.estado_vehiculo) : '';
 
   if (paso === 'en_ruta') {
     return `${aviso}<div class="flota-hoy flota-hoy-franja">
-      <span class="flota-hoy-placa">🚚 ${esc(d.placa)}</span>
-      ${flotaCondSemaforo(d.estado_vehiculo) || '<span class="flota-sem"></span>'}
+      <span class="flota-hoy-placa">🚚 ${esc(placa)}</span>
+      ${semaforo || '<span class="flota-sem"></span>'}
       <button class="flota-hoy-mas" onclick="flotaCondMasAbrir()">Más</button>
+    </div>${sinSenal}`;
+  }
+
+  if (paso === 'entregar') {
+    return `${aviso}<div class="flota-hoy">
+      <div class="flota-hoy-cabeza">
+        <span class="flota-hoy-placa">🚚 ${esc(placa)}</span>
+        <span class="flota-hoy-sub">Su ruta de hoy ya se cerró. Cuando deje el camión, entréguelo aquí.</span>
+        <button class="flota-hoy-mas" onclick="flotaCondMasAbrir()">Más</button>
+      </div>
+      ${semaforo}
+      <button class="btn-primary flota-hoy-accion" onclick="flotaCondAbrirEntrega()">
+        Entregar el camión</button>
     </div>${sinSenal}`;
   }
 
@@ -2189,14 +2713,14 @@ function flotaCondTarjetaHTML(d, cola, rechazos) {
   if (paso === 'inspeccionar') {
     return `${aviso}<div class="flota-hoy">
       <div class="flota-hoy-cabeza">
-        <span class="flota-hoy-placa">🚚 ${esc(d.placa)}</span>
+        <span class="flota-hoy-placa">🚚 ${esc(placa)}</span>
         <span class="flota-hoy-sub">Turno abierto${sinSenal ? ' · sin señal' : ''}</span>
         <button class="flota-hoy-mas" onclick="flotaCondMasAbrir()">Más</button>
       </div>
-      ${flotaCondSemaforo(d.estado_vehiculo)}
+      ${semaforo}
       <button class="btn-primary flota-hoy-accion" onclick="flotaCondInspeccion()">
         Inspeccionar el camión</button>
-    </div>`;
+    </div>${sinSenal}`;
   }
 
   // Sin turno. Tres orígenes, tres mensajes distintos: no es lo mismo «este es
@@ -2211,7 +2735,7 @@ function flotaCondTarjetaHTML(d, cola, rechazos) {
         ${elegido ? `Recibir el ${esc(elegido.placa)}` : 'Elija el camión primero'}</button>
       <div class="flota-hoy-pie">
         <button class="flota-hoy-link" onclick="flotaCondMasAbrir()">Mis turnos</button></div>
-    </div>`;
+    </div>${sinSenal}`;
   }
 
   // Con origen 'ruta' ya se sabe cuál vehículo le toca — mostrar los otros al
@@ -2239,8 +2763,8 @@ function flotaCondTarjetaHTML(d, cola, rechazos) {
 /** La hoja «Más»: lo que no es el siguiente paso del día. */
 function flotaCondHojaHTML(d, cola) {
   const paso = flotaCondPaso(d, cola);
-  const conTurno = paso === 'inspeccionar' || paso === 'en_ruta';
-  const insp = (d && d.estado_vehiculo && d.estado_vehiculo.inspeccion_de_hoy) || {};
+  const conTurno = paso === 'inspeccionar' || paso === 'en_ruta' || paso === 'entregar';
+  const insp = (d && flotaCondDeHoy(d) && d.estado_vehiculo && d.estado_vehiculo.inspeccion_de_hoy) || {};
   // Otra inspección el mismo día es real (dos turnos) y se ofrece solo cuando
   // la de hoy no habilitó: una segunda sobre un «apto» no aporta nada.
   const reinspeccionar = paso === 'en_ruta' && insp.hecha && insp.habilita_despacho === false;
@@ -2261,26 +2785,27 @@ function flotaCondHojaHTML(d, cola) {
       <button class="flota-hoja-boton" onclick="flotaCondMisTurnos()">
         <span class="flota-hoja-icono">📋</span>Mis turnos</button>
     </div>`;
+  const placa = flotaCondPlacaDe(d, cola);
   return `<div class="flota-hoja-fondo" onclick="flotaCondMasCerrar()"></div>
   <div class="flota-hoja" role="dialog" aria-label="Más opciones del camión">
     <div class="flota-hoja-cabeza">
-      <span class="flota-hoy-placa">${d && d.placa ? '🚚 ' + esc(d.placa) : 'Mi camión'}</span>
+      <span class="flota-hoy-placa">${placa ? '🚚 ' + esc(placa) : 'Mi camión'}</span>
       <button class="flota-hoy-mas" onclick="flotaCondMasCerrar()">Cerrar</button>
     </div>
-    ${d ? flotaCondEstado(d.estado_vehiculo) : ''}
+    ${d && placa === d.placa ? flotaCondEstado(d.estado_vehiculo) : ''}
     ${botones}
     <div id="cond-flota-form"></div>
-    ${d ? flotaCondRendimiento(d.rendimiento) : ''}
+    ${d && placa === d.placa ? flotaCondRendimiento(d.rendimiento) : ''}
   </div>`;
 }
 
-/** Pinta la tarjeta (y la hoja, si está abierta). */
+/** Pinta la tarjeta (y la hoja, si está abierta). Pasa la cola ENTERA (de esta
+ * sesión y de otras, con lo rechazado): cada parte decide qué le toca. */
 function flotaCondRender() {
   const el = document.getElementById('cond-flota');
   if (!el) return;
-  const cola = flotaColaDe(FLOTA_COND && FLOTA_COND.placa);
-  el.innerHTML = flotaCondTarjetaHTML(FLOTA_COND, cola, FLOTA_COLA_RECHAZADAS) +
-    (FLOTA_COND_HOJA ? flotaCondHojaHTML(FLOTA_COND, cola) : '');
+  el.innerHTML = flotaCondTarjetaHTML(FLOTA_COND, FLOTA_COLA_ITEMS, FLOTA_COLA_RECHAZADAS) +
+    (FLOTA_COND_HOJA ? flotaCondHojaHTML(FLOTA_COND, flotaColaDe(null)) : '');
 }
 
 function flotaCondMasAbrir() { FLOTA_COND_HOJA = true; flotaCondRender(); }
@@ -2647,9 +3172,15 @@ function flotaCondTrasRegistrar(res, idError, textoExito, tipoExito) {
   } else if (res.estado === 'en_cola') {
     alerta('Guardado en el teléfono — pendiente de sincronizar. Se manda solo cuando haya señal.',
            'advertencia');
+  } else if (res.estado === 'rechazado') {
+    // El formulario queda abierto con sus fotos para corregir y volver a
+    // mandar (el nuevo reemplaza al rechazado). Y si lo cierra, NO se pierde:
+    // queda en la tarjeta como «no se pudo registrar», con sus fotos.
+    if (err) err.textContent = `No se pudo registrar: ${res.mensaje} Quedó guardado en el ` +
+      'teléfono: corríjalo aquí y vuelva a mandarlo, o cierre y decida después en la tarjeta.';
+    return false;
   } else {
-    // Rechazado o perdido: el formulario queda abierto, con las fotos, para
-    // corregir y volver a mandar.
+    // Perdido: el teléfono no pudo guardarlo. El formulario queda abierto.
     if (err) err.textContent = res.mensaje || 'No se pudo registrar.';
     return false;
   }
@@ -2684,7 +3215,7 @@ const FLOTA_ANGULOS_ENTREGA = ['frontal', 'trasera', 'lateral_izq', 'lateral_der
  * El kilometraje SÍ se pide acá: es el del final del día, no el del recibo.
  */
 async function flotaCondAbrirEntrega() {
-  FLOTA_PLACA = FLOTA_COND.placa;
+  FLOTA_PLACA = flotaCondPlacaDelTurno() || (FLOTA_COND && FLOTA_COND.placa);
   FLOTA_FOTOS = {};
   FLOTA_FOTO_TABLERO = null;
   FLOTA_COND_HOJA = false;
@@ -3283,9 +3814,9 @@ let FLOTA_DANO = null;   // { foto: {dataUrl, ancho, alto} | null, sinFoto, grav
 
 /** Abre el reporte de daño del conductor. */
 async function flotaCondReportarDano() {
-  // De `FLOTA_COND` y no de `FLOTA_PLACA`: la global solo se llena al abrir el
-  // recibo o la entrega, y el botón vive en la hoja del turno abierto.
-  FLOTA_PLACA = (FLOTA_COND && FLOTA_COND.placa) || FLOTA_PLACA;
+  // La placa del TURNO (`flotaCondPlacaDelTurno`: la cola manda si recibió
+  // otro camión sin señal), no la sugerida ni la del último formulario.
+  FLOTA_PLACA = flotaCondPlacaDelTurno() || FLOTA_PLACA;
   if (!FLOTA_PLACA) { alerta('Primero reciba el camión.', 'advertencia'); return; }
   FLOTA_COND_HOJA = false;
   flotaCondRender();
@@ -3451,7 +3982,7 @@ let FLOTA_TQ = null;   // { foto, fotoTablero, kmCambio, tanque, origen, estados
 
 /** Abre el tanqueo del conductor. */
 async function flotaCondTanquear() {
-  const placa = (FLOTA_COND && FLOTA_COND.placa) || FLOTA_PLACA;
+  const placa = flotaCondPlacaDelTurno() || FLOTA_PLACA;
   if (!placa) { alerta('Primero reciba el camión.', 'advertencia'); return; }
   FLOTA_PLACA = placa;
   FLOTA_COND_HOJA = false;
@@ -3654,9 +4185,8 @@ let FLOTA_INSP_INICIO = 0;      // el reloj de la regla 11
 
 /** Abre la inspección de hoy del vehículo del turno. */
 async function flotaCondInspeccion() {
-  // Misma razón que en `flotaCondReportarDano`: el botón vive en la línea del
-  // turno abierto, donde nadie pasó por el recibo que llena la global.
-  FLOTA_PLACA = (FLOTA_COND && FLOTA_COND.placa) || FLOTA_PLACA;
+  // Misma razón que en `flotaCondReportarDano`: la placa del turno.
+  FLOTA_PLACA = flotaCondPlacaDelTurno() || FLOTA_PLACA;
   if (!FLOTA_PLACA) { alerta('Primero reciba el camión.', 'advertencia'); return; }
   FLOTA_COND_HOJA = false;
   flotaCondRender();
@@ -3869,7 +4399,12 @@ async function flotaCondGuardarInspeccion() {
   } finally {
     listo();
   }
-  if (res.estado === 'rechazado' || res.estado === 'perdido') {
+  if (res.estado === 'rechazado') {
+    err.textContent = `No se pudo registrar: ${res.mensaje} Quedó guardada en el teléfono: ` +
+      'corríjala aquí y vuelva a mandarla, o cierre y decida después en la tarjeta.';
+    return;
+  }
+  if (res.estado === 'perdido') {
     err.textContent = res.mensaje || 'No se pudo registrar.';
     return;
   }
@@ -3902,6 +4437,7 @@ function flotaCondInspeccionResultadoHTML(res) {
                  : 'NO habilita despacho. Avise a control de flota antes de salir.'}</p>
     ${hallazgos.length ? `<p class="flota-paso-guia">Quedaron ${esc(hallazgos.length)} daño(s) abiertos,
       con su fecha límite. Los cierra quien los repara.</p>` : ''}
+    ${d.aviso ? `<p class="flota-paso-guia">${esc(d.aviso)}</p>` : ''}
     <button class="btn-primary" onclick="flotaCerrarModal()">Listo</button></div>`;
 }
 

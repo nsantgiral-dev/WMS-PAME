@@ -86,7 +86,7 @@ const ctx = {
   },
   window: { location: { origin: 'http://t' }, addEventListener() {} },
   navigator: { onLine: true, vibrate() {} },
-  setTimeout, clearTimeout, setInterval: () => 0, clearInterval() {},
+  setTimeout, clearTimeout, setInterval: () => 0, clearInterval() {}, AbortController,
   localStorage: { getItem: () => null, setItem() {}, removeItem() {} },
   alerta: (m, t) => ALERTAS.push([m, t]), TOKEN: 'x', API: '',
   confirm: () => true, horaColombia: (x) => String(x),
@@ -139,7 +139,12 @@ def _correr(tmp_path, expr, semilla='', respuestas=None, get=None, sin_almacen=F
 
 def _turno(**extra):
     """La forma EXACTA de `GET /flota/conductor/mi-turno` (ver el contrato abajo)."""
+    from app.utils.fecha import dia_operativo
+
     d = {
+        # El día de la respuesta (2026-09-27): el teléfono solo cree lo «de
+        # hoy» de una respuesta de hoy (`flotaCondDeHoy`).
+        'dia': dia_operativo().isoformat(),
         'conductor': {'id': 7, 'nombre': 'Yesid'},
         'estado_vehiculo': {
             'hallazgos_abiertos': 0, 'hallazgos_vencidos': 0, 'hallazgo_peor': None,
@@ -549,37 +554,43 @@ class TestLaColaSinSenal:
         assert [o['clave'] for o in s['cola']] == ['k1', 'k2']
 
     def test_un_rechazo_en_segundo_plano_no_se_pierde(self, tmp_path):
+        """Hasta el 2026-09-27 el rechazo BORRABA la operación con sus fotos y
+        dejaba solo el mensaje. Ahora queda en el teléfono, entera, marcada."""
         semilla = ('ALMACEN_INICIAL = [{clave: "k1", tipo: "hallazgo", que: "dano", placa: "THP696",'
-                   ' creado: "x", cuerpo: {km: 1}}];')
+                   ' creado: "x", cuerpo: {km: 1, fotos: [{data_url: "data:image/jpeg;base64,AAAA"}]}}];')
         s = _correr(tmp_path, '(async () => { await _condDB.set("flota_cola", ALMACEN_INICIAL);'
                               ' await flotaColaSincronizar();'
                               ' return {cola: await _condDB.get("flota_cola"),'
                               ' rech: await _condDB.get("flota_cola_rechazos")}; })()',
                     semilla=semilla,
                     respuestas=[{'status': 409, 'json': {'error': 'el odómetro retrocede'}}])
-        assert s['cola'] == []
-        assert s['rech'][0]['mensaje'] == 'el odómetro retrocede'
+        (op,) = s['cola']
+        assert op['rechazo']['mensaje'] == 'el odómetro retrocede.'
+        assert op['cuerpo']['fotos'][0]['data_url'].startswith('data:image'), (
+            'el rechazo se llevó las fotos')
+        assert not s['rech'], 'se anotó aparte, sin la operación'
 
     def test_sin_derecho_no_se_reintenta_y_dice_a_quien_pedirselo(self, tmp_path):
         """Sin turno abierto sobre ese camión el servidor contesta 403
-        `sin_derecho`. Reintentarlo para siempre no lo arregla: sale de la cola
-        y queda a la vista, con a quién pedírselo. Y la cola sigue con lo de
-        atrás: un rechazo no es falta de señal."""
+        `sin_derecho`. Reintentarlo solo no lo arregla: queda marcado, a la
+        vista, con la salida «avisar a control de flota». Y la cola sigue con
+        lo de atrás: un rechazo que no es de un recibo no arrastra nada."""
         semilla = ('ALMACEN_INICIAL = [{clave: "k1", tipo: "inspeccion", que: "inspeccion",'
                    ' placa: "THP696", creado: "x", cuerpo: {km: 1}},'
                    ' {clave: "k2", tipo: "hallazgo", que: "dano", placa: "THP696",'
                    ' creado: "x", cuerpo: {km: 1}}];')
         s = _correr(tmp_path, '(async () => { await _condDB.set("flota_cola", ALMACEN_INICIAL);'
                               ' await flotaColaSincronizar();'
-                              ' return {cola: await _condDB.get("flota_cola"), envios: __ENVIOS.length,'
-                              ' rech: await _condDB.get("flota_cola_rechazos")}; })()',
+                              ' return {cola: await _condDB.get("flota_cola"), envios: __ENVIOS.length}; })()',
                     semilla=semilla,
                     respuestas=[{'status': 403, 'json': {'error': 'No tiene turno abierto',
                                                          'motivo': 'sin_derecho'}},
                                 {'status': 201, 'json': {'id': 4}}])
-        assert s['cola'] == [] and s['envios'] == 2
-        assert 'encargado de flota' in s['rech'][0]['mensaje']
-        assert 'sin_derecho' not in s['rech'][0]['mensaje']
+        assert s['envios'] == 2
+        (op,) = s['cola']
+        assert op['clave'] == 'k1' and op['rechazo']['motivo'] == 'sin_derecho'
+        assert 'control de flota' in op['rechazo']['mensaje']
+        assert 'sin_derecho' not in op['rechazo']['mensaje']
 
     def test_un_500_se_queda_para_reintentar(self, tmp_path):
         s = _correr(tmp_path, _registrar(), respuestas=[{'status': 503, 'json': {}}])
@@ -587,13 +598,26 @@ class TestLaColaSinSenal:
         assert s['cola'][0]['ultimo_error']
 
     def test_un_rechazo_con_el_formulario_abierto_se_dice_ahi(self, tmp_path):
+        """El formulario lo dice ahí mismo, y el registro NO se pierde si lo
+        cierra: queda en la cola, marcado (antes salía de la cola y, al cerrar
+        el formulario, las fotos se perdían)."""
         s = _correr(tmp_path, _registrar('const rech = await _condDB.get("flota_cola_rechazos");'
                                          ' r.rech = rech;'),
                     respuestas=[{'status': 409, 'json': {'error': 'ya lo tiene Ana'}}])
         assert s['r']['estado'] == 'rechazado'
-        assert s['r']['mensaje'] == 'ya lo tiene Ana'
-        assert not s['r']['rech'], 'se anotó dos veces: en el formulario y en la tarjeta'
-        assert s['cola'] == []
+        assert s['r']['mensaje'] == 'ya lo tiene Ana.'
+        assert not s['r']['rech'], 'se anotó en la lista vieja, sin la operación'
+        (op,) = s['cola']
+        assert op['rechazo']['mensaje'] == 'ya lo tiene Ana.'
+        assert op['cuerpo']['fotos_inicio'], 'el rechazo se llevó las fotos'
+
+    def test_mandarlo_corregido_desde_el_mismo_formulario_reemplaza_al_rechazado(
+            self, tmp_path):
+        s = _correr(tmp_path, _registrar(
+            'await flotaColaRegistrar("traspaso", "recibo", "THP696", {placa: "THP696", km: 2});'),
+            respuestas=[{'status': 409, 'json': {'error': 'x'}},
+                        {'status': 201, 'json': {'custodia_id': 9}}])
+        assert s['cola'] == [], 'quedaron el rechazado y el corregido'
 
     def test_sin_almacen_y_sin_senal_no_finge_que_guardo(self, tmp_path):
         s = _correr(tmp_path, '(async () => (await flotaColaRegistrar("hallazgo", "dano", "THP696",'

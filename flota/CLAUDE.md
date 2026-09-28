@@ -145,10 +145,10 @@ de cualquier vehículo. Un guard cuya precondición la manda quien pide no es un
 ## 16. Todo lo que el conductor registra viaja por la cola, con su clave de reenvío
 
 Recibo, entrega, inspección, daño y tanqueo se guardan en el teléfono (con sus fotos)
-ANTES de salir, y llevan una `clave_idempotencia` creada al encolar. El servidor la
-recuerda (`@idempotente`, `flota_idempotencia`): un reenvío devuelve lo ya hecho.
-Toda puerta nueva que la cola reenvíe va con la marca, o el trinquete
-`test_cola_del_conductor::TestInventarioDeLaCola` se pone rojo.
+ANTES de salir, con una `clave_idempotencia` creada al encolar (`@idempotente`): un
+reenvío devuelve lo ya hecho (`test_cola_del_conductor::TestInventarioDeLaCola`). **Un
+rechazo no borra nada** (2026-09-27): queda marcado en el teléfono y el servidor lo
+anota (`flota_rechazo_cola`) para la bandeja.
 
 *Motivo: el patio y la estación no tienen señal. Sin cola se perdían trece fotos; sin
 clave, el reenvío de un recibo horas después —fuera de la ventana de 90 s— cerraba la

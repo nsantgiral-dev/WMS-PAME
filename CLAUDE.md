@@ -4278,10 +4278,11 @@ Suite completa en el worktree (2026-09-24, `-m "not postgres"`, TZ=UTC):
 Toda operación se guarda en `_condDB` (`wms_cond`, la base de las entregas)
 **con sus fotos** antes de intentarse, con `clave_idempotencia` y
 `ts_dispositivo`. Sale en orden y se detiene en la primera que no sale; un
-`hecho` o `rechazado` la quita; un rechazo sin nadie mirando queda en la
-tarjeta hasta «Entendido». Un 403 `sin_derecho` (sin turno abierto sobre ese
-camión, regla del frente de permisos) es un rechazo, no un reintento: sale de
-la cola con «pedíselo al encargado de flota». Aviso «N registros pendientes de sincronizar» con
+`hecho` la quita. ~~Un `rechazado` también la quitaba y quedaba solo el
+mensaje hasta «Entendido»~~ — **superado el 2026-09-27**: un rechazo ya no
+borra nada (ver «Flota: la cola del conductor no pierde nada»). Un 403
+`sin_derecho` (sin turno abierto sobre ese camión) es un rechazo, no un
+reintento. Aviso «N registros pendientes de sincronizar» con
 «Sincronizar», y el evento `online` la vacía solo. La tarjeta cuenta lo
 pendiente: un recibo encolado ya es turno abierto.
 
@@ -4321,7 +4322,9 @@ xfailed); después se agregó un test (403 `sin_derecho`), verde por separado.
   layout. El test mide un proxy (controles por estado, sin `btn-flota`).
 - **La hora del hecho sigue siendo la del servidor**: un recibo de las 5 a.m.
   que sincroniza a las 11 queda de las 11. La hora del teléfono queda en
-  `flota_idempotencia.ts_dispositivo` para verlo, no para decidir.
+  `flota_idempotencia.ts_dispositivo` para verlo. *(2026-09-27: decide el DÍA
+  de la inspección que llega por la cola, y la jornada ya no le pone confianza
+  alta a esa hora.)*
 - **El km heredado del tanqueo puede estar viejo** si el conductor no toca
   «Cambió» (el rendimiento se mide entre tanqueos llenos). La pantalla lo dice;
   nada lo impide.
@@ -4329,7 +4332,8 @@ xfailed); después se agregó un test (403 `sin_derecho`), verde por separado.
   gesto: declarado en `_ANCHOS_ACEPTADOS` hasta que el frente de permisos
   estreche la tupla.
 - La inspección sin señal usa la última lista bajada (se dice de qué día); el
-  veredicto lo da el servidor al llegar.
+  veredicto lo da el servidor al llegar. *(2026-09-27: la juzga con el día en
+  que se hizo, y lo que no tocaba ese día se descarta y se declara.)*
 
 ## 🕒 La jornada del conductor — Fase 0 (2026-09-24)
 
@@ -8020,3 +8024,49 @@ Siesa todavía cuenta; cifras ocultas a toda supervisión (VAL-6); la auditoría
 de picking manda el total del WMS como conteo (VAL-8). `m051conteo` quedó
 encadenada detrás de `m051flotalegal`; al integrar v3, re-encadenar con
 `m051asignacion`.
+
+---
+
+## Flota: la cola del conductor no pierde nada (T2, 2026-09-27)
+
+Auditoría nocturna de flota, hallazgos P1-2 (parte teléfono), P1-3, P1-4,
+P1-5, P1-6 y los P2 del plan T2. **La clase:** *«un registro que el conductor
+hizo sin señal se pierde, o se deforma al llegar tarde»*. Migración
+**`m051flotakm`** (aditiva; tabla `flota_rechazo_cola`).
+
+| | Qué pasaba | Ahora |
+|---|---|---|
+| **Rechazo** | Un 409/403 borraba la operación **con sus fotos**; en cascada, detrás de un recibo rechazado se perdía el día entero | Queda en el teléfono, marcada, con **Reintentar · Descartar** (confirmación en pantalla, `_modalConfirmar`) **· Avisar a control de flota**. Un rechazo no arrastra nada, salvo lo de la misma placa detrás de un RECIBO rechazado (la dependencia declarada; un recibo nuevo la levanta). El servidor lo anota en su propia transacción (`rechazos_cola.anotar`, desde `@idempotente`), pasa a `resuelto` cuando la misma clave entra, y la **bandeja** lo muestra («Registros del conductor que no entraron», con «Ya lo resolví» + motivo para control de flota). Descartar queda en la bitácora |
+| **Recibo repetido** | Tras sincronizar, la tarjeta se repintaba con el `mi-turno` de ANTES y volvía a pedir «Recibir»; el recibo repetido cerraba el turno propio y abría otro | `flotaCondCargar({sinSincronizar})` recarga después de sincronizar; y el recibo del conductor que ya tiene el camión es un **no-op declarado** (200, `ya_era_suyo`). Gestión desde el escritorio conserva lo de siempre |
+| **Sale sola** | Solo con `online`, al abrir o a mano; sin tiempo máximo | Temporizador del conductor (`app.js` → `flotaColaTick`), `visibilitychange`, espera creciente (15 s → 5 min), `AbortController` con tiempo según el peso (20 s + 1 s/20 KB, tope 3 min), `navigator.storage.persist()` |
+| **Inspección tardía** | La del lunes que llegaba el martes se juzgaba con la lista del martes → 409 y se perdía | `dominio.cola.dia_de_la_operacion`: el día del teléfono si el reloj es creíble (≤ 10 min adelantado, ≤ 7 días atrás), si no el del servidor, declarado. `Inspeccion.dia` es ese día. Por la cola, un ítem que no tocaba se descarta y se declara (`items_descartados`, `aviso`) |
+| **Caché de otro día** | A las 5:30 sin señal, la de anoche decía «Día cerrado»; la inspección de ayer contaba hoy | `mi-turno` trae `dia`; `flotaCondDeHoy` ignora lo «de hoy» de otra fecha (o sin fecha) y la tarjeta dice de cuándo es |
+| **Placa del turno** | Otro camión que el sugerido: daño y tanqueo salían con la placa sugerida → 403 | `flotaCondPlacaDelTurno`: la manda el último recibo de la cola |
+| **Entregar** | «Entregar» vivía en «Más»; nada lo recordaba | Turno abierto + ruta de hoy cerrada → el paso es «Entregar el camión» |
+| **Teléfono compartido** | La cola de A salía con el token de B | Cada operación lleva `usuario_id`; lo ajeno no sale y se dice; `salir()` pregunta si quedan pendientes |
+| **`_condDB.get` → `null`** | Se leía como «vacía» y la siguiente escritura pisaba la cola | Marca en `localStorage`: `null` con registros conocidos es «no se pudo leer» (no se escribe); tres veces seguidas → el teléfono los borró, y se dice |
+| **Ítem trabado** | «Pendiente» a secas | Cada pendiente con su hora, intentos y último error |
+| **Sedes** | Sin señal, «Failed to fetch» y la entrega siempre «sede por resolver» | Lista guardada (`flota_sedes`) con su fecha |
+| **Mensaje doble** | «…primero.. No se pudo registrar: pídaselo… Hágalo de nuevo.» | `flotaTextoRechazo`: una frase |
+| **Jornada** | «alta — solo se registra en línea» sobre un recibo que llegó horas después | `_hora_de_un_gesto_de_flota`: por la cola y tarde (> `cola_tardanza_max_s`, 300) → **baja**, con la hora del teléfono a la vista; sin hora del teléfono → media |
+
+**Trinquetes:** `tests/flota/test_la_cola_no_pierde_nada_js.py::TestNadaSaleDeLaColaSinDecidirlo`
+(inventario de las funciones que sacan una operación de la cola —solo
+`flotaColaSincronizar`, `flotaColaRegistrar`, `flotaColaDescartar`—, escáner
+de JS sin comentarios ni cadenas, meta-tests y piso) y
+`test_la_cola_no_pierde_nada.py::TestNingunGestoDeFlotaSeAfirmaEnLinea` (AST:
+ningún evento de flota de la jornada con `*_EN_LINEA` directo). La puerta
+nueva del conductor (`POST /flota/conductor/rechazos/<clave>`) está en
+`VERIFICAN` con su caso HTTP (`sin_derecho_sobre_rechazo`).
+
+**Lo que NO cubre:**
+- El recibo repetido **no guarda** sus fotos ni su km (el turno ya tiene los
+  suyos; el km real llega con la entrega).
+- `respondida_ts` de una inspección tardía sigue siendo la hora de llegada;
+  lo que cambió es el día con que se juzga y en el que cuenta.
+- La hora del teléfono no se corrige (la cola de flota no mide el desfase);
+  solo baja la confianza.
+- Un descartado se ve en la bandeja una semana; después solo en la tabla.
+- La carrera entre la cola de flota y la de rutas (P2) no se tocó (`rutas.js`
+  es de otro frente).
+

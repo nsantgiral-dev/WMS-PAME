@@ -423,6 +423,24 @@ def sin_derecho_sobre_foto(foto, que: str):
                        f'reporte suyo.')
 
 
+def sin_derecho_sobre_rechazo(clave: str, que: str):
+    """Un registro que no entró es de quien lo mandó (2026-09-27).
+
+    La clave la genera el teléfono; la pantalla la manda de vuelta para pedir
+    ayuda o descartar. Una clave de OTRA persona no se toca: avisar sobre el
+    registro ajeno —o descartarlo— sería hablar por ella. Gestión y control de
+    flota no pasan por acá: ellos cierran por su propia puerta, con motivo.
+    """
+    from flota.adaptadores import rechazos_cola
+
+    u = _usuario()
+    if u is None:
+        return _no_es_tuyo(f'No puede {que}: sin sesión.')
+    if rechazos_cola.de_otro(u.id, clave):
+        return _no_es_tuyo(f'No puede {que}: ese registro no es suyo.')
+    return None
+
+
 def sin_permiso_de_corregir():
     """Corregir un odómetro es MAESTROS_FLOTA, aunque la puerta sea LECTURA.
 
@@ -449,4 +467,5 @@ __all__ = ['exige', 'exige_secreto', 'MAESTROS_FLOTA', 'DECIDE_FLOTA',
            'FUERZA_CIERRE', 'quien_pide_de', 'conductor_de',
            'vehiculo_en_custodia_de', 'sin_derecho_sobre_vehiculo',
            'sin_derecho_sobre_custodia', 'sin_derecho_sobre_foto',
-           'sin_permiso_de_corregir', 'FOTO_DEL_CONDUCTOR']
+           'sin_derecho_sobre_rechazo', 'sin_permiso_de_corregir',
+           'FOTO_DEL_CONDUCTOR']

@@ -72,6 +72,9 @@ VERIFICAN = {
     ('gastos.py', 'registrar_tanqueo'): 'sin_derecho_sobre_vehiculo',
     ('custodia.py', 'ver_foto'): 'sin_derecho_sobre_foto',
     ('custodia.py', 'fotos_de_custodia'): 'sin_derecho_sobre_custodia',
+    # 2026-09-27: el conductor pide ayuda o descarta un registro suyo que la
+    # cola mandó y el servidor rechazó. El de otra persona no se toca.
+    ('conductor.py', 'avisar_rechazo'): 'sin_derecho_sobre_rechazo',
 }
 
 #: Puertas cuya regla vive en el servicio. Valor: (archivo del adaptador,
@@ -443,6 +446,12 @@ def _traspaso(client, mundo, quien, placa, **cuerpo):
                        headers=_auth(mundo['t'][quien]))
 
 
+def _aviso_de_rechazo(client, mundo, quien, clave):
+    return client.post(f'/flota/conductor/rechazos/{clave}', json={
+        'accion': 'ayuda', 'operacion': 'tanqueo', 'placa': 'DRB100',
+        'mensaje': 'no entró'}, headers=_auth(mundo['t'][quien]))
+
+
 #: Por cada puerta que verifica: (lo de B pedido por A, lo propio pedido por A
 #: — o por C, que no tiene camión, en el traspaso). La tabla es la prueba de
 #: que la lista `VERIFICAN` no es una afirmación.
@@ -469,6 +478,11 @@ CASOS = {
                            headers=_auth(m['t']['a'])),
         lambda c, m: c.get(f"/flota/custodia/{m['custodia']['a']}/fotos",
                            headers=_auth(m['t']['a']))),
+    ('conductor.py', 'avisar_rechazo'): (
+        # B avisa su registro rechazado; A intenta tocar esa misma clave.
+        lambda c, m: (_aviso_de_rechazo(c, m, 'b', 'k-de-b'),
+                      _aviso_de_rechazo(c, m, 'a', 'k-de-b'))[1],
+        lambda c, m: _aviso_de_rechazo(c, m, 'a', 'k-de-a')),
     ('custodia.py', 'custodia_traspaso'): (
         # C dejando el camión de la sede a nombre de B.
         lambda c, m: _traspaso(c, m, 'c', 'DRS100', custodio_tipo='conductor',

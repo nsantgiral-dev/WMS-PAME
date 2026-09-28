@@ -147,12 +147,18 @@ def items_del_dia_de(vehiculo, dia) -> List[ItemInspeccion]:
     return dom.items_del_dia(plantilla_de(vehiculo).items, dia)
 
 
-def _validar_respuestas(crudas, esperados) -> Dict[int, dict]:
+def _validar_respuestas(crudas, esperados, descartados: Optional[list] = None
+                        ) -> Dict[int, dict]:
     """`{item_id: {'respuesta':…, 'nota':…}}`, o levanta diciendo qué está mal.
 
     Se juzga TODO antes de escribir nada. Un ítem ajeno o una respuesta
     inventada no puede descubrirse a mitad del INSERT: la inspección quedaría
     con la mitad de las filas y un veredicto que no las describe.
+
+    Con `descartados` (una lista), un ítem que no tocaba ese día **no rechaza la
+    inspección**: se deja fuera y se anota ahí. Es solo para lo que llega por la
+    cola: la lista que el teléfono bajó puede ser la de otro día, y rehacerla
+    sin señal usa la misma lista. Se descarta y se dice; nunca se rellena.
     """
     if not isinstance(crudas, list):
         raise InspeccionInvalida(
@@ -173,6 +179,10 @@ def _validar_respuestas(crudas, esperados) -> Dict[int, dict]:
         except (TypeError, ValueError):
             raise InspeccionInvalida(f'item_id inválido: {cruda["item_id"]!r}')
 
+        if item_id not in ids_esperados and descartados is not None:
+            descartados.append({'item_id': item_id,
+                                'respuesta': str(cruda['respuesta'])})
+            continue
         if item_id not in ids_esperados:
             raise InspeccionInvalida(
                 f'el ítem {item_id} no es de los que tocaban hoy para este '
@@ -224,6 +234,8 @@ def registrar(
     segundos_llenado: int,
     observacion: Optional[str] = None,
     ts: Optional[datetime] = None,
+    dia=None,
+    tolerar_items_ajenos: bool = False,
 ) -> Inspeccion:
     """Registra la inspección respondida y devuelve la fila con su veredicto.
 
@@ -243,6 +255,17 @@ def registrar(
 
     Todo o nada: una inspección con la mitad de sus respuestas escritas tendría
     un veredicto que no describe sus filas, que es peor que no tener ninguna.
+
+    ## Lo que llega por la cola (2026-09-27)
+
+    `dia` es el día con que se juzga —el de la operación, que la API decide con
+    `dominio.cola.dia_de_la_operacion`—; sin él, el del servidor. La
+    inspección queda en ESE día (`Inspeccion.dia`): la del lunes que llegó el
+    martes no cuenta como «inspección de hoy» del martes. `respondida_ts` sigue
+    siendo cuándo llegó (timestamp técnico, en UTC).
+
+    Con `tolerar_items_ajenos` (solo la cola), un ítem que no tocaba ese día se
+    descarta y se declara en `fila.items_descartados` en vez de rechazar todo.
     """
     ahora = ts if ts is not None else datetime.utcnow()
 
@@ -258,7 +281,8 @@ def registrar(
             f'segundos_llenado negativo ({segundos}): eso no es un llenado '
             f'rápido, es un reloj al revés.')
 
-    dia = _dia_bogota(ahora)
+    if dia is None:
+        dia = _dia_bogota(ahora)
     plantilla = plantilla_de(tipo_vehiculo_obj)
     esperados = dom.items_del_dia(plantilla.items, dia)
     if not esperados:
@@ -267,7 +291,8 @@ def registrar(
             f'el {dia}. Una inspección de cero ítems no es "todo bien": es que '
             f'no se miró nada.')
 
-    por_item = _validar_respuestas(respuestas, esperados)
+    descartados = [] if tolerar_items_ajenos else None
+    por_item = _validar_respuestas(respuestas, esperados, descartados)
 
     # La lista COMPLETA del día, no solo lo que vino: el ítem que nadie tocó
     # entra como `sin_dato` y por eso cuenta para el veredicto (regla 1).
@@ -343,6 +368,9 @@ def registrar(
             ))
 
         db.session.commit()
+        # No es columna: la respuesta de la API lo declara (y queda guardado en
+        # `flota_idempotencia.respuesta`, que es donde se audita).
+        fila.items_descartados = descartados or []
         return fila
     except Exception:
         # No se atrapa para seguir: se atrapa para dejar la base como estaba.

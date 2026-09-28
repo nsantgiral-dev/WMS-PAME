@@ -243,7 +243,13 @@ function mostrarSegunRol(rol) {
     _condIniciarOffline();
     flotaCondCargar();
     cargarRutasConductor();
-    TIMER_OPERARIO = setInterval(cargarRutasConductor, 30000);
+    // El mismo temporizador reintenta la cola del camión (flota.js): con señal
+    // intermitente el evento `online` casi no llega, y la cola solo salía con
+    // él o a mano (2026-09-27).
+    TIMER_OPERARIO = setInterval(() => {
+      cargarRutasConductor();
+      if (typeof flotaColaTick === 'function') flotaColaTick();
+    }, 30000);
   } else if (esAdmin) {
     // Reset SIEMPRE antes de aplicar el ocultamiento de este rol: login()
     // llama mostrarSegunRol() sin recargar la página, así que el DOM puede
@@ -904,6 +910,18 @@ function supervisorVolverAdmin() {
  * @param {boolean} [porExpiracion=false] - True if logout was caused by token expiration.
  */
 function salir(porExpiracion = false) {
+  // En un teléfono compartido, lo que la cola del camión no alcanzó a mandar
+  // se queda guardado a nombre de quien lo hizo y NO sale con la sesión del
+  // siguiente. Se avisa antes de cerrar (flota.js). Una sesión vencida no
+  // pregunta: ya no hay a quién.
+  if (!porExpiracion && typeof flotaColaAntesDeSalir === 'function') {
+    flotaColaAntesDeSalir().then(ok => { if (ok) _salirYa(false); }).catch(() => _salirYa(false));
+    return;
+  }
+  _salirYa(porExpiracion);
+}
+
+function _salirYa(porExpiracion) {
   pararTimers();
   TOKEN = null; OPERARIO = null; TAREA_ACTUAL = null;
   localStorage.removeItem('wms_token');

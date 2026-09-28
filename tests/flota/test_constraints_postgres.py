@@ -219,7 +219,7 @@ class TestElEsquemaSeCreaEnPostgres:
         # `flota_llanta`+`flota_montaje_llanta` (6).
         # 102 → 103 el 2026-09-24: `flota_idempotencia` (la operación de la
         # clave de reenvío de la cola del conductor, m039flcond).
-        assert n == 103, f"Se esperaban 103 CHECK de flota en PostgreSQL, hay {n}"
+        assert n == 106, f"Se esperaban 106 CHECK de flota en PostgreSQL, hay {n}"
 
 
 # ══════════════════════════════════════════════════════════════════════════

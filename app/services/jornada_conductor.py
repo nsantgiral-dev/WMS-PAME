@@ -27,7 +27,8 @@ explica.** Cero pasos nuevos al conductor.
 
 | Evento | Hora | Confianza |
 |---|---|---|
-| Turno, preoperacional, tanqueo | servidor | alta — el gesto solo existe en línea (fetch directo), así que la hora del servidor es la del hecho |
+| Turno, preoperacional, tanqueo **registrados en línea** | servidor | alta — llegó al servidor al hacerse, así que su hora es la del hecho |
+| Turno, preoperacional, tanqueo **que llegaron por la cola del teléfono** (2026-09-27) | servidor = la hora de SINCRONIZAR | **baja** si la hora que el teléfono anotó al encolar (`flota_idempotencia.ts_dispositivo`) es anterior en más de `cola_tardanza_max_s`; **media** si llegó por la cola sin hora del teléfono. La hora del teléfono se muestra (`hora_telefono`), no se usa: sin desfase medido no se corrige |
 | Parada, con hora del teléfono | teléfono (corregida por el desfase medido al sincronizar) | alta si el reloj estaba bien, media si no se midió o estaba corrido |
 | Parada, sin hora del teléfono | servidor (`fecha_creacion` = primera confirmación) | **baja**: con la cola sin señal es la hora de SINCRONIZAR, no la de la entrega |
 
@@ -110,6 +111,10 @@ UMBRALES_POR_DEFECTO = {
     'rafaga_min_paradas': 3,
     # Por debajo de esta cobertura la jornada es «no reconstruible».
     'cobertura_minima': 0.5,
+    # Un recibo, preoperacional o tanqueo que llegó por la cola más tarde que
+    # esto después de hacerse: su hora (la del servidor) es la de sincronizar,
+    # y baja a confianza baja.
+    'cola_tardanza_max_s': 300,
 }
 
 
@@ -269,8 +274,37 @@ class Evento:
         }
 
 
-_EN_LINEA = ('alta', 'hora del servidor: este gesto solo se registra en línea, '
-                     'así que es la hora del hecho')
+_EN_LINEA = ('alta', 'hora del servidor: se registró en línea, así que es la '
+                     'hora del hecho')
+
+
+def _hora_de_un_gesto_de_flota(m, operacion: str, entidad_id) -> tuple:
+    """(confianza, motivo, hora_telefono) de un recibo, preoperacional o tanqueo.
+
+    **Antes de la cola, todo gesto de flota era en línea** y su hora del
+    servidor era la del hecho. Desde la cola sin señal (2026-09-24) eso dejó de
+    ser cierto: un recibo de las 5:30 que sincroniza a las 11:00 queda a las
+    11:00. La marca está en `flota_idempotencia`: si el registro llegó con clave
+    de la cola, se compara la hora que el teléfono anotó al encolar contra la
+    de llegada.
+
+    La hora del teléfono se MUESTRA, no se usa: sin desfase medido (la cola de
+    flota no manda la hora de envío) no hay cómo corregirla.
+    """
+    fila = m.cola_flota.get((operacion, entidad_id)) if entidad_id is not None else None
+    if fila is None:
+        return (*_EN_LINEA, None)
+    creado, ts_tel = fila
+    if ts_tel is None:
+        return ('media', 'llegó por la cola del teléfono sin la hora en que se '
+                         'hizo: la del servidor puede ser la de sincronizar', None)
+    tarde = (creado - ts_tel).total_seconds()
+    if tarde > m.U['cola_tardanza_max_s']:
+        return ('baja', f'llegó por la cola del teléfono {round(tarde / 60)} min '
+                        f'después de hacerse: la hora es la de sincronizar',
+                _hora_local(ts_tel))
+    return ('alta', 'llegó por la cola del teléfono casi al hacerse',
+            _hora_local(ts_tel))
 
 
 def _iso(ts):
@@ -385,6 +419,10 @@ def _a_utc_naive(v):
     if v.tzinfo is not None:
         v = v.astimezone(timezone.utc).replace(tzinfo=None)
     return v
+
+
+def _tabla_existe_en_base(nombre: str) -> bool:
+    return sa.inspect(db.engine).has_table(nombre)
 
 
 def _leer_columnas(tabla, clave, ids, cols) -> Dict[int, dict]:
@@ -503,6 +541,7 @@ class Mundo:
 
         # ── flota: si el paquete no carga, se declara y la jornada sigue ──
         self.custodias, self.inspecciones, self.tanqueos, self.sedes = [], [], [], {}
+        self.cola_flota, self.gasto_de_lectura = {}, {}
         try:
             from flota.adaptadores.modelos import Custodia, Inspeccion, LecturaOdometro
         except Exception as e:  # el WMS arranca sin flota (app/routes/__init__.py)
@@ -523,6 +562,7 @@ class Mundo:
             self.tanqueos = LecturaOdometro.query.filter(
                 LecturaOdometro.origen == 'tanqueo',
                 LecturaOdometro.ts >= lo, LecturaOdometro.ts < hi).all()
+            self._cargar_cola_flota(lo, hi)
 
         self._por_vehiculo = {}
         for k in self.custodias:
@@ -537,6 +577,28 @@ class Mundo:
         self._lecturas_borde = None
         self._agregados = {}
         self._referencias = {}
+
+    def _cargar_cola_flota(self, lo, hi):
+        """`{(operacion, entidad_id): (llegó, hora del teléfono)}` de lo que
+        entró por la cola del conductor en el rango, y el gasto de cada lectura
+        de tanqueo (la clave del tanqueo es el gasto, el evento es la lectura).
+        """
+        from flota.adaptadores.modelos import Gasto, OperacionIdempotente as OI
+
+        self.cola_flota = {}
+        self.gasto_de_lectura = {}
+        if not _tabla_existe_en_base('flota_idempotencia'):
+            return
+        for op, eid, creado, tel in db.session.query(
+                OI.operacion, OI.entidad_id, OI.creado_ts, OI.ts_dispositivo).filter(
+                OI.creado_ts >= lo, OI.creado_ts < hi + timedelta(days=1),
+                OI.entidad_id.isnot(None)):
+            self.cola_flota[(op, eid)] = (_a_utc_naive(creado), _a_utc_naive(tel))
+        ids = [l.id for l in self.tanqueos]
+        for i in range(0, len(ids), 500):
+            for gid, lid in db.session.query(Gasto.id, Gasto.lectura_id).filter(
+                    Gasto.lectura_id.in_(ids[i:i + 500])):
+                self.gasto_de_lectura[lid] = gid
 
     # ── utilidades ──────────────────────────────────────────────────────────
 
@@ -815,14 +877,16 @@ def _eventos_de_turno(m: Mundo, c, lo, hi) -> List[Evento]:
         continua = (prev is not None and prev.custodio_conductor_id == c.id
                     and prev.fin_ts == k.inicio_ts)
         if lo <= k.inicio_ts < hi and not continua:
+            conf, motivo, hora_tel = _hora_de_un_gesto_de_flota(m, 'traspaso', k.id)
             out.append(Evento(
-                'recibo_turno', k.inicio_ts, 'servidor', *_EN_LINEA,
+                'recibo_turno', k.inicio_ts, 'servidor', conf, motivo,
                 propio=(uid is not None and k.registrado_por_usuario_id == uid),
                 fuente='flota_custodia.inicio_ts',
                 detalle={'placa': placa, 'km': k.km_inicio,
                          'entregado_por': m.custodio_txt(prev),
                          'registrado_por_otra_persona': k.registrado_por_usuario_id != uid,
-                         'linea_base': bool(k.linea_base)},
+                         'linea_base': bool(k.linea_base),
+                         'hora_telefono': hora_tel},
                 ts_servidor=k.inicio_ts))
         if k.fin_ts is not None and lo <= k.fin_ts < hi:
             sigue = (nxt is not None and nxt.inicio_ts == k.fin_ts
@@ -830,8 +894,11 @@ def _eventos_de_turno(m: Mundo, c, lo, hi) -> List[Evento]:
             if sigue and nxt.ubicacion != 'fuera_de_sede':
                 continue            # se re-declaró a sí mismo: no hubo entrega
             quien_registra = nxt.registrado_por_usuario_id if nxt is not None else None
+            # La entrega la escribe el traspaso que abre el turno SIGUIENTE.
+            conf, motivo, hora_tel = _hora_de_un_gesto_de_flota(
+                m, 'traspaso', nxt.id if nxt is not None else None)
             out.append(Evento(
-                'entrega_turno', k.fin_ts, 'servidor', *_EN_LINEA,
+                'entrega_turno', k.fin_ts, 'servidor', conf, motivo,
                 propio=(uid is not None and quien_registra == uid and not k.cierre_forzado),
                 fuente='flota_custodia.fin_ts',
                 detalle={'placa': placa, 'km': k.km_fin,
@@ -840,7 +907,8 @@ def _eventos_de_turno(m: Mundo, c, lo, hi) -> List[Evento]:
                          'motivo_ubicacion': (nxt.ubicacion_motivo if nxt is not None else None),
                          'recibe': m.custodio_txt(nxt) if not sigue else None,
                          'cierre_forzado': bool(k.cierre_forzado),
-                         'motivo_cierre_forzado': k.cierre_forzado_motivo},
+                         'motivo_cierre_forzado': k.cierre_forzado_motivo,
+                         'hora_telefono': hora_tel},
                 ts_servidor=k.fin_ts))
     return out
 
@@ -856,8 +924,9 @@ def _eventos_de_inspeccion(m: Mundo, c, lo, hi) -> List[Evento]:
         propio = uid is not None and i.inspeccionada_por_usuario_id == uid
         if not propio and i.custodia_id not in suyas:
             continue
+        conf, motivo, hora_tel = _hora_de_un_gesto_de_flota(m, 'inspeccion', i.id)
         out.append(Evento(
-            'preoperacional', i.respondida_ts, 'servidor', *_EN_LINEA, propio=propio,
+            'preoperacional', i.respondida_ts, 'servidor', conf, motivo, propio=propio,
             fuente='flota_inspeccion.respondida_ts',
             detalle={'placa': m.placas.get(i.vehiculo_id, i.vehiculo_id),
                      'veredicto': i.veredicto,
@@ -865,7 +934,8 @@ def _eventos_de_inspeccion(m: Mundo, c, lo, hi) -> List[Evento]:
                      'segundos_llenado': i.segundos_llenado,
                      'items': i.items_esperados, 'sin_dato': i.items_sin_dato,
                      'plantilla_id': i.plantilla_id, 'inspeccion_id': i.id,
-                     'hecha_por_otra_persona': not propio},
+                     'hecha_por_otra_persona': not propio,
+                     'hora_telefono': hora_tel},
             ts_servidor=i.respondida_ts))
     return out
 
@@ -951,12 +1021,18 @@ def _eventos_de_tanqueo(m: Mundo, c, lo, hi) -> List[Evento]:
     uid = c.usuario_id
     if uid is None:
         return []
-    return [Evento('tanqueo', l.ts, 'servidor', *_EN_LINEA, propio=True,
-                   fuente='flota_lectura_odometro.ts (origen tanqueo)',
-                   detalle={'placa': m.placas.get(l.vehiculo_id, l.vehiculo_id),
-                            'km': l.valor_km},
-                   ts_servidor=l.ts)
-            for l in m.tanqueos if l.autor_usuario_id == uid and lo <= l.ts < hi]
+    out = []
+    for l in m.tanqueos:
+        if l.autor_usuario_id != uid or not (lo <= l.ts < hi):
+            continue
+        conf, motivo, hora_tel = _hora_de_un_gesto_de_flota(
+            m, 'tanqueo', m.gasto_de_lectura.get(l.id))
+        out.append(Evento('tanqueo', l.ts, 'servidor', conf, motivo, propio=True,
+                          fuente='flota_lectura_odometro.ts (origen tanqueo)',
+                          detalle={'placa': m.placas.get(l.vehiculo_id, l.vehiculo_id),
+                                   'km': l.valor_km, 'hora_telefono': hora_tel},
+                          ts_servidor=l.ts))
+    return out
 
 
 #: El punto de extensión. Fase 1: `_eventos_de_jornada_evento` (tabla

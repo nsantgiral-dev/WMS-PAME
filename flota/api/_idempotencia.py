@@ -26,6 +26,18 @@ decide si el usuario puede, después si ya lo hizo. El decorador:
 
 Si la operación falla (4xx/5xx) se hace `rollback`: la clave no queda gastada y
 el conductor puede reintentar con los datos corregidos.
+
+## El rechazo se anota (2026-09-27)
+
+Un rechazo (400/403/404/409) de algo que llegó por la cola se anota en
+`flota_rechazo_cola` **después** del rollback, en su propia transacción
+(`rechazos_cola.anotar`): lo que el registro alcanzó a escribir se deshace, la
+anotación queda. Es lo que le cuenta a control de flota —en su bandeja— que un
+tanqueo pagado o una inspección hecha no entraron. Cuando la misma clave entra
+después, el rechazo pasa a `resuelto` en el mismo commit que anota la
+respuesta (el adaptador ya comiteó el hecho: si el proceso muere entre los
+dos, el rechazo queda abierto sobre algo que sí entró — el lado que se puede
+corregir mirando, no el que pierde un registro).
 """
 import json
 from datetime import datetime, timezone
@@ -68,6 +80,25 @@ def _ts_dispositivo(datos):
     if ts.tzinfo is not None:
         ts = ts.astimezone(timezone.utc).replace(tzinfo=None)
     return ts
+
+
+def ts_dispositivo_del_pedido():
+    """La hora del teléfono del pedido en curso, o `None`. Ver `_ts_dispositivo`."""
+    return _ts_dispositivo(request.get_json(silent=True) or {})
+
+
+def llego_por_la_cola() -> bool:
+    """¿Este pedido lo mandó la cola del teléfono? Lo dice su clave de reenvío.
+
+    El panel de escritorio no manda clave: lo que se tolera por venir de la
+    cola (un día que ya pasó, una lista cacheada) no se le tolera a él.
+    """
+    return _clave_del_pedido(request.get_json(silent=True) or {}) is not None
+
+
+#: Los rechazos que se anotan. 401 no llega acá (`@jwt_required` va antes) y
+#: 408/429 son de reintentar, no rechazos.
+_STATUS_RECHAZO = (400, 403, 404, 409, 410, 422)
 
 
 def _respuesta_previa(previa, usuario_id, operacion):
@@ -128,6 +159,14 @@ def idempotente(operacion, campo_id):
                 # tampoco — el reintento con datos corregidos tiene que poder
                 # entrar.
                 db.session.rollback()
+                if int(status) in _STATUS_RECHAZO:
+                    from flota.adaptadores import rechazos_cola
+                    rechazos_cola.anotar(
+                        usuario_id=usuario_id, clave=clave, operacion=operacion,
+                        datos=datos, status=int(status),
+                        cuerpo_respuesta=(resp.get_json(silent=True)
+                                          if hasattr(resp, 'get_json') else None),
+                        ts_dispositivo=_ts_dispositivo(datos))
                 return resultado
 
             cuerpo = resp.get_json(silent=True) if hasattr(resp, 'get_json') else None
@@ -135,6 +174,8 @@ def idempotente(operacion, campo_id):
                 fila.entidad_id = (cuerpo[campo_id] if isinstance(cuerpo, dict)
                                    and campo_id in cuerpo else None)
                 fila.respuesta = json.dumps(cuerpo) if cuerpo is not None else None
+            from flota.adaptadores import rechazos_cola
+            rechazos_cola.resolver(usuario_id, clave)
             db.session.commit()
             return resultado
 
@@ -146,4 +187,4 @@ def idempotente(operacion, campo_id):
     return decorador
 
 
-__all__ = ['idempotente']
+__all__ = ['idempotente', 'ts_dispositivo_del_pedido', 'llego_por_la_cola']

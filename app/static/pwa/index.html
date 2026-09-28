@@ -821,8 +821,11 @@
     .flota-sem-ambar    { color: var(--warn-tx); }
     .flota-hoy-pendiente, .flota-hoy-rechazo {
       display: flex; align-items: center; justify-content: space-between; gap: 8px;
+      flex-wrap: wrap;
       border-radius: 10px; padding: 4px 10px; margin-bottom: 8px; font-size: var(--fs-sm);
     }
+    /* Lo que espera señal, uno por renglón, con sus intentos y su último error. */
+    .flota-hoy-lista { width: 100%; margin: 2px 0 0; padding-left: 18px; line-height: 1.5; }
     .flota-hoy-pendiente { background: var(--warn-bg); color: var(--warn-tx); border: 1px solid var(--warn-brd); }
     .flota-hoy-rechazo   { background: var(--err-bg); color: var(--err-tx); border: 1px solid var(--err-brd); }
     .flota-avisos {

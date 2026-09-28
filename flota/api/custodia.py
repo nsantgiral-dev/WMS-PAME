@@ -455,14 +455,22 @@ def custodia_traspaso():
         # sintaxis del cliente ni una falla del servidor — es un "no se puede".
         return jsonify({'error': str(e)}), 409
 
-    return jsonify({
+    cuerpo = {
         'custodia_id': nueva.id,
         'placa': vehiculo.placa,
         'inicio_ts': iso_utc(nueva.inicio_ts),
         'km_inicio': nueva.km_inicio,
         'linea_base': nueva.linea_base,
         'custodio_estado': nueva.custodio_estado,
-    }), 201
+    }
+    if nueva.recibo_repetido:
+        # El no-op declarado de `traspasar`: el turno ya era de este custodio.
+        # 200 y no 201: no se creó nada, y el teléfono lo dice con palabras.
+        cuerpo['ya_era_suyo'] = True
+        cuerpo['mensaje'] = (f'El {vehiculo.placa} ya estaba a su nombre: no se '
+                             f'abrió otro turno.')
+        return jsonify(cuerpo), 200
+    return jsonify(cuerpo), 201
 
 
 @custodia_bp.route('/odometro', methods=['POST'])

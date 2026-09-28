@@ -51,7 +51,8 @@ from app.routes._auth_helpers import Roles
 from app.utils.fecha import dia_operativo
 from flota.adaptadores import inspecciones as adaptador
 from flota.adaptadores.modelos import Inspeccion
-from flota.api._idempotencia import idempotente
+from flota.api._idempotencia import (idempotente, llego_por_la_cola,
+                                     ts_dispositivo_del_pedido)
 from flota.api._permisos import exige, sin_derecho_sobre_vehiculo
 from flota.api._tiempo import iso_utc
 from flota.dominio import inspeccion as dom
@@ -62,6 +63,14 @@ inspecciones_bp = Blueprint('flota_inspecciones', __name__)
 
 def _usuario_id():
     return int(get_jwt_identity())
+
+
+def _ahora():
+    """El instante del servidor con que se decide el día de la inspección.
+    Una función y no `utcnow()` suelto: los tests la fijan en un martes."""
+    from datetime import datetime
+
+    return datetime.utcnow()
 
 
 def _vehiculo_por_placa(placa: str) -> Vehiculo:
@@ -238,6 +247,17 @@ def registrar():
     if denegado is not None:
         return denegado
 
+    # Lo que llega por la cola se juzga con el día en que se HIZO (el que el
+    # teléfono anotó al encolar), no con el de hoy: la inspección del lunes que
+    # sincronizó el martes daba 409 por los ítems semanales y se perdía. Al
+    # reloj del teléfono no se le cree a ciegas (`dominio.cola`). El escritorio
+    # no manda clave y sigue con el día del servidor, sin tolerancias.
+    por_cola = llego_por_la_cola()
+    from app.utils.fecha import dia_operativo_de
+    from flota.dominio.cola import dia_de_la_operacion
+    dia_op = dia_de_la_operacion(
+        ts_dispositivo_del_pedido() if por_cola else None, _ahora(),
+        dia_operativo_de)
     try:
         fila = adaptador.registrar(
             vehiculo_id=vehiculo.id,
@@ -247,6 +267,8 @@ def registrar():
             respuestas=datos['respuestas'],
             segundos_llenado=datos['segundos_llenado'],
             observacion=datos['observacion'] if 'observacion' in datos else None,
+            dia=dia_op.dia,
+            tolerar_items_ajenos=por_cola,
         )
     except ErrorFlota as e:
         # 409: el JSON puede estar perfecto y el mundo no admitirlo — un
@@ -254,7 +276,20 @@ def registrar():
         # tocaba. Es un dato malo, no un fallo del sistema.
         return jsonify({'error': str(e)}), 409
 
-    return jsonify(_json_inspeccion(fila)), 201
+    cuerpo = _json_inspeccion(fila)
+    cuerpo['dia_fuente'] = dia_op.fuente
+    cuerpo['dia_motivo'] = dia_op.motivo
+    descartados = fila.items_descartados
+    cuerpo['items_descartados'] = descartados
+    if descartados:
+        n = len(descartados)
+        cuerpo['aviso'] = (
+            (f'{n} respuestas eran de ítems que no tocaban' if n != 1
+             else '1 respuesta era de un ítem que no tocaba')
+            + f' el {fila.dia.strftime("%d/%m/%Y")}: '
+            + ('no se guardaron' if n != 1 else 'no se guardó')
+            + '. La lista del teléfono era la de otro día.')
+    return jsonify(cuerpo), 201
 
 
 __all__ = ['inspecciones_bp']

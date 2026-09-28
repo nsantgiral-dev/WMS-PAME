@@ -230,6 +230,9 @@ function flotaBandejaFilaHoy(f) {
 const FLOTA_GRUPOS_PENDIENTES = [
   ['Daños por decidir', ['dano']],
   ['Papeles', ['documento']],
+  // Lo que un conductor registró y el servidor no aceptó (2026-09-27): el
+  // teléfono lo conserva con sus fotos; acá lo ve quien le puede ayudar.
+  ['Registros del conductor que no entraron', ['registro_rechazado']],
   // Los despachos que salieron reconociendo advertencias de flota (el FORZAR
   // del muelle): control de flota no ve 📈, así que acá es donde se entera.
   ['Salidas con advertencias', ['despacho_forzado']],
@@ -304,6 +307,8 @@ function flotaBandejaFilaPendiente(p, j, puedeDecidir) {
          <button class="btn-flota" onclick="flotaBandejaDecidir(${Number(j)}, 2)">No era nada</button>
          <button class="btn-flota" onclick="flotaPendienteAccion(${Number(j)})">Ver daños</button>`
       : `<button class="btn-flota" onclick="flotaPendienteAccion(${Number(j)})">Ver daños</button>`;
+  } else if (p.accion && p.accion.tipo === 'rechazo') {
+    botones = `<button class="btn-flota" onclick="flotaBandejaCerrarRechazo(${Number(j)})">Ya lo resolví</button>`;
   } else if (p.accion && p.accion.tipo !== 'verificar_km') {
     botones = `<button class="btn-flota" onclick="flotaPendienteAccion(${Number(j)})">${esc(flotaTextoAccion(p.accion))}</button>`;
   }
@@ -357,6 +362,40 @@ async function flotaPendienteAccion(j) {
 function flotaBandejaVerificar() {
   flotaExpOcultar();
   flotaAbrirVerificacion();
+}
+
+/** La puerta para dar por atendido un registro del conductor que no entró. */
+const FLOTA_RECHAZO_CERRAR_URL = (id) => `/flota/rechazos/${id}/cerrar`;
+
+/** «Ya lo resolví»: control de flota lo da por atendido, con lo que hizo.
+ *
+ * Sin motivo no se cierra: el pendiente desaparecería sin rastro de por qué.
+ * Lo que el conductor tiene en su teléfono no se toca desde acá — si él lo
+ * reintenta y entra, el servidor lo marca resuelto solo. */
+async function flotaBandejaCerrarRechazo(j) {
+  const p = FLOTA_BANDEJA && FLOTA_BANDEJA.pendientes[j];
+  if (!p || !p.accion || p.accion.tipo !== 'rechazo') return;
+  const motivo = await _modalTexto('Registro que no entró',
+    '¿Qué se hizo? (obligatorio — por ejemplo: «se registró desde la oficina» o «se habló con el conductor»)',
+    { textoConfirmar: 'Dar por resuelto' });
+  if (motivo === null) return;
+  if (!motivo.trim()) {
+    alerta('Sin escribir qué se hizo, el pendiente desaparecería sin rastro.', 'advertencia');
+    return;
+  }
+  try {
+    const r = await fetch(API + FLOTA_RECHAZO_CERRAR_URL(Number(p.accion.rechazo_id)), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + TOKEN },
+      body: JSON.stringify({ motivo: motivo.trim() }),
+    });
+    const d = await r.json();
+    if (!r.ok) { alerta(flotaMensajeDeError(d), 'error'); return; }
+    alerta('Listo ✓ · ' + p.placa, 'exito');
+    await flotaBandejaCargar(true);
+  } catch (e) {
+    alerta('Sin conexión: ' + e.message, 'error');
+  }
 }
 
 /** Las tres salidas de un daño desde la cola de toda la flota.

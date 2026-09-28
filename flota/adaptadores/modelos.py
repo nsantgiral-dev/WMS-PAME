@@ -559,6 +559,11 @@ def _marcar_confianza(mapper, connection, target):
 class Custodia(db.Model):
     """Un tramo de responsabilidad sobre un vehículo. `fin_ts IS NULL` = activa.
 
+    `recibo_repetido` NO es columna: `traspaso.traspasar` lo pone en `True`
+    sobre el turno que devuelve cuando el recibo era del mismo custodio (el
+    no-op declarado del 2026-09-27), y la API lo dice. Vale `False` en todo lo
+    demás, sin `getattr` con default (regla 5).
+
     Responsabilidad → conductor, porque lo que hace válida un acta es la cédula
     y la cédula vive en `conductores`. Autenticación → usuario, siempre NOT NULL.
     Si el jefe de sede registra la entrega porque el conductor no tiene cuenta,
@@ -570,6 +575,8 @@ class Custodia(db.Model):
     `almacenes` contenga TODAS las sedes que pueden tener custodia está sin
     verificar contra datos reales.
     """
+
+    recibo_repetido = False
 
     __tablename__ = 'flota_custodia'
 
@@ -2784,4 +2791,80 @@ class OperacionIdempotente(db.Model):
         db.CheckConstraint(
             'operacion IN (%s)' % ', '.join(f"'{o}'" for o in OPERACION_IDEMPOTENTE),
             name='ck_flota_idempotencia_operacion'),
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Lo que la cola del conductor mandó y el servidor rechazó (2026-09-27)
+# ═══════════════════════════════════════════════════════════════════════════
+
+#: Los estados de un rechazo. `abierto`: nadie lo resolvió. `resuelto`: el
+#: mismo registro (la misma clave) entró después. `descartado`: el conductor lo
+#: descartó en su teléfono. `cerrado`: control de flota lo dio por atendido.
+ESTADO_RECHAZO_COLA = ('abierto', 'resuelto', 'descartado', 'cerrado')
+
+
+class RechazoCola(db.Model):
+    """Un registro del conductor que llegó por la cola y el servidor no aceptó.
+
+    ## Por qué existe
+
+    Hasta el 2026-09-27 un rechazo (409, 403, 400) **borraba la operación del
+    teléfono con sus fotos** y dejaba solo un mensaje. El servidor no guardaba
+    nada: una inspección hecha y rechazada, un tanqueo pagado y rechazado,
+    desaparecían sin que control de flota se enterara. Ahora el teléfono
+    conserva la operación completa (ver la cola en `flota.js`) y el servidor
+    anota el rechazo acá, **en su propia transacción**: la del registro se
+    deshace entera (`@idempotente`), la de la anotación no.
+
+    Una fila por (usuario, clave): los reintentos que vuelven a fallar suben
+    `intentos` en vez de apilar filas. Si la misma clave entra después, la
+    fila pasa a `resuelto` en la MISMA transacción que el registro.
+
+    ## Qué afirma y qué no
+
+    Afirma que el servidor rechazó ese registro, cuándo, cuántas veces y con qué
+    texto. No afirma que el conductor se haya equivocado: el rechazo más común
+    es un turno que el servidor todavía no conocía.
+    """
+
+    __tablename__ = 'flota_rechazo_cola'
+
+    id         = db.Column(db.Integer, primary_key=True)
+    clave      = db.Column(db.String(64), nullable=False)
+    operacion  = db.Column(db.String(20), nullable=False)
+    usuario_id = db.Column(db.Integer, db.ForeignKey('usuarios.id'), nullable=False)
+    #: La placa que venía en el cuerpo, tal cual (para mostrarla). El vehículo
+    #: se resuelve aparte y puede no existir: un rechazo por placa desconocida
+    #: también se anota.
+    placa       = db.Column(db.String(20), nullable=True)
+    vehiculo_id = db.Column(db.Integer, db.ForeignKey('vehiculos.id'), nullable=True)
+    status_http = db.Column(db.Integer, nullable=False)
+    mensaje     = db.Column(db.Text, nullable=False)
+    intentos    = db.Column(db.Integer, nullable=False, default=1)
+    primer_ts   = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    ultimo_ts   = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    ts_dispositivo = db.Column(db.DateTime, nullable=True)
+    estado      = db.Column(db.String(12), nullable=False, default='abierto')
+    #: El conductor tocó «Avisar a control de flota».
+    pidio_ayuda_ts = db.Column(db.DateTime, nullable=True)
+    cerrado_ts  = db.Column(db.DateTime, nullable=True)
+    cerrado_por_usuario_id = db.Column(db.Integer, db.ForeignKey('usuarios.id'),
+                                       nullable=True)
+    cierre_motivo = db.Column(db.Text, nullable=True)
+
+    __table_args__ = (
+        db.UniqueConstraint('usuario_id', 'clave', name='uq_flota_rechazo_cola_clave'),
+        db.CheckConstraint(
+            'operacion IN (%s)' % ', '.join(f"'{o}'" for o in OPERACION_IDEMPOTENTE),
+            name='ck_flota_rechazo_cola_operacion'),
+        db.CheckConstraint(
+            'estado IN (%s)' % ', '.join(f"'{e}'" for e in ESTADO_RECHAZO_COLA),
+            name='ck_flota_rechazo_cola_estado'),
+        # Cerrar por control de flota es una decisión: sin autor ni motivo es
+        # indistinguible de que el pendiente se haya borrado solo.
+        db.CheckConstraint(
+            "estado <> 'cerrado' OR (cerrado_por_usuario_id IS NOT NULL AND "
+            "cierre_motivo IS NOT NULL AND length(trim(cierre_motivo)) > 0)",
+            name='ck_flota_rechazo_cola_cierre_con_autor'),
     )

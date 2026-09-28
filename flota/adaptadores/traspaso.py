@@ -192,6 +192,31 @@ def traspasar(
         and vigente.custodio_conductor_id == custodio_conductor_id
     )
 
+    # ── El recibo repetido: ya era suyo → no-op DECLARADO (2026-09-27) ────
+    #
+    # La cola sin señal lo producía todos los días: el recibo de las 5 a.m.
+    # entraba al sincronizar, la tarjeta se repintaba con el estado de ANTES y
+    # volvía a pedir «Recibir el camión»; el conductor, creyendo que se había
+    # perdido, repetía las doce fotos, y el servidor cerraba su propio turno y
+    # abría otro (de cero kilómetros si el número era el mismo). Un recibo —sin
+    # ubicación y sin fotos de cierre— del CONDUCTOR que ya tiene el camión no
+    # cambia nada del mundo: se devuelve el turno que ya estaba, marcado para
+    # que la respuesta lo diga. No escribe lectura ni fotos: el turno ya tiene
+    # las suyas, y el km de un recibo repetido no es un gesto nuevo (el de
+    # verdad llega con la entrega).
+    #
+    # Solo el conductor mismo: gestión re-declarando un turno desde el
+    # escritorio conserva el comportamiento de siempre (cierra y abre, con su
+    # km). Y la entrega «fuera de sede» también es el mismo custodio
+    # re-declarándose, pero trae `ubicacion` y fotos de cierre: esa SÍ cierra
+    # y abre.
+    if (mismo_custodio and es_el_custodio_actual
+            and quien_pide == QuienPide.CONDUCTOR
+            and custodio_tipo == CustodioTipo.CONDUCTOR
+            and ubicacion is None and not fotos_fin):
+        vigente.recibo_repetido = True      # no es columna: lo lee la API
+        return vigente
+
     # Un conductor no puede tener dos vehículos bajo custodia a la vez. Se
     # juzga ANTES de escribir, igual que el resto — ver
     # dom.validar_un_vehiculo_por_conductor. No aplica si es el mismo
