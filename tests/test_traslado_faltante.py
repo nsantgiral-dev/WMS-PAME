@@ -310,3 +310,43 @@ class TestNingunaRutaMuestraLaExcepcion:
                 '    except Exception as e:  # jsonify(str(e))\n'
                 '        return _falla(e, "x")\n')
         assert exponen(malo) == 2 and exponen(sano) == 0
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# (c) MODO_ENSAYO: el STS de un traslado no se da por hecho
+# ═════════════════════════════════════════════════════════════════════════════
+
+class TestEnsayoNoDejaElTrasladoColgado:
+
+    def _job(self, db, producto, monkeypatch, respuesta):
+        from app.models.siesa_job import SiesaJob
+        from app.services import siesa_traslado_adapter as sta
+        st, it, u = _traslado(db, producto, estado='EN_PACKING')
+        st.siesa_salida_consec = None
+        db.session.commit()
+        monkeypatch.setattr(sta.siesa_traslado, 'registrar_salida_transito', lambda **k: respuesta)
+        job = SiesaJob.encolar('DESPACHO_TRASLADO',
+                               {'solicitud_id': st.id, 'items': [{'codigo_siesa': 'X', 'cantidad': 10}]},
+                               referencia_tipo='SolicitudTraslado', referencia_id=st.id)
+        db.session.commit()
+        return st, job
+
+    def test_en_ensayo_el_job_no_queda_hecho_y_el_traslado_lo_dice(self, db, producto, monkeypatch):
+        from app.services import siesa_job_service as sjs
+        st, job = self._job(db, producto, monkeypatch, {'modo_ensayo': True, 'codigo': 0})
+        with pytest.raises(sjs.TrasladoNoEnviadoEnEnsayo) as e:
+            sjs._ejecutar_job(job)
+        assert isinstance(e.value, sjs.ErrorDeterminista)
+        db.session.refresh(st)
+        assert st.estado == 'EN_PACKING' and 'ENSAYO' in st.siesa_error
+        assert st.to_dict()['siesa_necesita_atencion'] is True
+
+    def test_la_respuesta_real_sigue_avanzando(self, db, producto, monkeypatch):
+        from app.services import siesa_job_service as sjs
+        st, job = self._job(db, producto, monkeypatch,
+                            {'codigo': 0, 'detalle': {'Table': [{'f350_consec_docto': 77}]}})
+        from app.services.traslado_service import TrasladoService
+        monkeypatch.setattr(TrasladoService, '_extraer_consec', staticmethod(lambda r: 77))
+        sjs._ejecutar_job(job)
+        db.session.refresh(st)
+        assert st.estado == 'EN_TRANSITO' and st.siesa_salida_consec == 77

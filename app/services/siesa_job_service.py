@@ -595,6 +595,16 @@ class ErrorDeterminista(Exception):
     en `_run_dlq_jobs`): lo que lo desbloquea es que una persona mire."""
 
 
+class TrasladoNoEnviadoEnEnsayo(ErrorDeterminista):
+    """MODO_ENSAYO bloqueó el STS de un traslado (2026-09-26, solo QA).
+
+    Antes el job quedaba COMPLETADO y la solicitud seguía EN_PACKING sin
+    documento ni botón: «hecho» sin nada hecho, y un traslado que no avanzaba
+    nunca. Ahora el job queda FALLIDO con este motivo y la solicitud lo
+    declara (`siesa_error`): con el ensayo apagado, «Reintentar» el job envía
+    el STS."""
+
+
 class NotaCreditoSinLineas(ErrorDeterminista):
     """La NC de una devolución contada no encontró NINGUNA de sus líneas en la
     factura.
@@ -1507,7 +1517,18 @@ def _ejecutar_job(job: SiesaJob) -> dict:
                 bodega_destino=solicitud.bodega_destino_siesa,
             )
 
-        if not res.get('simulado') and not res.get('modo_ensayo'):
+        if res.get('modo_ensayo'):
+            from app.extensions import db as _db
+            solicitud.siesa_error = (
+                'ENSAYO (MODO_ENSAYO): el documento de salida (STS) NO se envió a '
+                f'Siesa; el traslado sigue en {solicitud.estado}. Con el ensayo '
+                'apagado, reintente el envío desde Siesa → Recuperación.')
+            _db.session.commit()
+            raise TrasladoNoEnviadoEnEnsayo(
+                f'DESPACHO_TRASLADO job={job.id}: MODO_ENSAYO bloqueó el STS de '
+                f'{solicitud.codigo}; no se envió nada. El traslado sigue en '
+                f'{solicitud.estado}. Reintente con el ensayo apagado.')
+        if not res.get('simulado'):
             consec = TrasladoService._extraer_consec(res)
             if consec:
                 solicitud.siesa_salida_consec = consec
