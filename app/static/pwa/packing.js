@@ -961,6 +961,9 @@ function empMensajeCierre(data, status) {
   const d = data || {};
   if (status >= 200 && status < 300) {
     const n = Array.isArray(d.bultos) ? d.bultos.length : 0;
+    if (d.estado_siesa === 'ENSAYO') {
+      return { tipo: 'info', texto: `${n} pieza(s) registradas — modo ensayo: no se envía nada a Siesa` };
+    }
     if (d.estado_siesa === 'CONFIRMADO') {
       return { tipo: 'exito', texto: `${n} pieza(s) registradas — Siesa confirmó la remisión` };
     }

@@ -590,3 +590,56 @@ class TestCajasAnterioresAlControlFiscal:
         h = {'Authorization': f'Bearer {jwt_token}'}
         assert client.get('/api/despacho_parcial/anteriores-control-fiscal',
                           headers=h).status_code == 403
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# P3
+# ═════════════════════════════════════════════════════════════════════════════
+
+class TestP3:
+
+    def test_un_429_en_post_es_rate_limit(self):
+        import requests  # noqa: F401
+        from unittest.mock import MagicMock
+        from app.services.connekta_gateway import ConnektaRateLimit, ConnektaRechazado
+        gw = _gw()
+        r = MagicMock()
+        r.status_code, r.ok, r.headers = 429, False, {'Retry-After': '120'}
+        with patch('app.services.connekta_gateway.requests.post', return_value=r):
+            with pytest.raises(ConnektaRateLimit) as e:
+                gw._post('142945', 'X', {})
+        assert isinstance(e.value, ConnektaRechazado) and e.value.retry_after_s == 120
+
+    def test_el_dlq_no_gasta_intento_con_429(self, db, almacen, siesa, monkeypatch):
+        from app.models.siesa_job import EstadoSiesaJob
+        from app.services import siesa_job_service as sjs
+        from app.services.connekta_gateway import ConnektaRateLimit
+        from tests.test_documento_fiscal import _job_despacho
+        monkeypatch.setattr(sjs, '_crear_alerta_admin', lambda job: None)
+        siesa.error_142945 = ConnektaRateLimit('429', retry_after_s=90)
+        t = _tarea(db, almacen)
+        job = _job_despacho(db, t)
+        sjs._run_dlq_jobs()
+        db.session.refresh(job)
+        db.session.refresh(t)
+        assert job.estado == EstadoSiesaJob.PENDIENTE and job.intentos == 0
+        assert job.proximo_intento > datetime.utcnow() + timedelta(seconds=60)
+        assert t.rm_enviada_at is None, 'un 429 es «no entró»: el pre-flag se revierte'
+
+    def test_en_ensayo_el_cierre_no_dice_que_emite(self, db, almacen, producto, monkeypatch):
+        from app.services.connekta_gateway import connekta
+        from app.services.packing_service import PackingService
+        monkeypatch.setattr(connekta, 'modo_ensayo', True)
+        monkeypatch.setattr(connekta, 'modo_simulacion', True)
+        t = _caja_para_cerrar(db, almacen, producto)
+        r = PackingService.cerrar_packing_resultado(t.id, [{'tipo': 'Caja', 'cantidad': 1}], 1)
+        assert r['estado_siesa'] == 'ENSAYO' and 'no se envía nada' in r['mensaje']
+
+    def test_reconciliar_sin_remision_no_es_despachado(self, client, db, almacen, siesa,
+                                                        usuario_admin, jwt_token_admin):
+        t = _tarea(db, almacen)
+        siesa.facturas = [{'f350_id_tipo_docto': 'FE', 'f350_consec_docto': '71'}]
+        siesa.remision = None
+        r = client.post(f'/api/packing/{t.id}/reconciliar',
+                        headers={'Authorization': f'Bearer {jwt_token_admin}'}).get_json()
+        assert r['ok'] is False and 'remisión no está identificada' in r['mensaje']

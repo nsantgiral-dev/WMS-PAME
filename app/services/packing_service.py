@@ -385,6 +385,21 @@ class PackingService:
         bultos_resp = (Bulto.query
                        .options(selectinload(Bulto.tarea))
                        .filter_by(tarea_id=tarea_id).all())
+        from app.services.connekta_gateway import connekta as _cx
+        if not tarea.siesa_triggered and getattr(_cx, 'modo_ensayo', False):
+            # Modo ensayo: los POST se bloquean y la cola no crea nada. Decir
+            # «se están emitiendo» era afirmar lo que no iba a pasar (P3).
+            return {
+                'ok': True,
+                'mensaje': (f'{len(bultos_resp)} pieza(s) registradas — modo ensayo: no se '
+                            f'envía nada a Siesa (los envíos están bloqueados)'),
+                'estado_siesa': 'ENSAYO',
+                'siesa_triggered': False,
+                'numero_pedido': tarea.numero_pedido_siesa,
+                'cliente': tarea.cliente or '',
+                'municipio': tarea.municipio or '',
+                'bultos': [b.to_dict() for b in bultos_resp],
+            }
         return {
             'ok': True,
             'mensaje': (

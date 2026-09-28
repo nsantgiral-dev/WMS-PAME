@@ -392,6 +392,19 @@ def _run_dlq_jobs():
                 _anotar_en_recaudo(job, 'FALLIDO')
                 _crear_alerta_admin(job)
                 continue
+            from app.services.connekta_gateway import ConnektaRateLimit
+            if isinstance(e, ConnektaRateLimit):
+                # 429: no entró y se reintenta (Regla 3), pero esperar el
+                # Retry-After no es un fallo. En temporada una ráfaga de 429
+                # agotaba los cinco intentos de cajas sanas (P3, 2026-09-26).
+                job.estado = EstadoSiesaJob.PENDIENTE
+                job.proximo_intento = datetime.utcnow() + timedelta(
+                    seconds=getattr(e, 'retry_after_s', 300))
+                job.error_ultimo = str(e)[:2000]
+                db.session.commit()
+                logger.info('[DLQ] Job %s (%s) con 429 — espera %ss sin gastar intento',
+                            job.id, job.tipo, getattr(e, 'retry_after_s', 300))
+                continue
             if isinstance(e, ConnektaCircuitOpenError):
                 # Circuit breaker abierto — NO gastar reintento.
                 # El job se queda en PROCESANDO/PENDIENTE y se reintenta

@@ -402,8 +402,18 @@ def reconciliar_manual(id):
     if not _solo_admin():
         return jsonify({'error': 'Solo admin puede reconciliar tareas Siesa'}), 403
     tarea = TareaPacking.query.get_or_404(id)
+    from app.services.documento_fiscal import despachable, motivo_no_despachable
+    # Encontrar la factura sin la remisión no es «✓ despachado»: la caja no
+    # puede salir hasta registrar la RM (P3, 2026-09-26).
+    _sin_rm = ('La factura existe en Siesa pero la remisión no está identificada: la caja '
+               'NO puede salir. Búsquela en Siesa y regístrela con «Facturar esa RM».')
     if tarea.siesa_triggered:
-        return jsonify({'ok': True, 'mensaje': 'Ya estaba reconciliada (siesa_triggered=True)', 'tarea': tarea.to_dict()}), 200
+        return jsonify({'ok': despachable(tarea),
+                        'mensaje': ('Ya estaba reconciliada: tiene remisión y factura.'
+                                    if despachable(tarea) else
+                                    (_sin_rm if not tarea.rm_consec
+                                     else motivo_no_despachable(tarea))),
+                        'tarea': tarea.to_dict()}), 200
     from app.services.reconciliacion_service import ReconciliacionService
     resultado = ReconciliacionService.reconciliar_despacho(
         tarea,
@@ -412,6 +422,8 @@ def reconciliar_manual(id):
     )
     tarea = TareaPacking.query.get(id)
     if resultado.get('reconciliado'):
+        if not despachable(tarea):
+            return jsonify({'ok': False, 'mensaje': _sin_rm, 'tarea': tarea.to_dict()}), 200
         return jsonify({'ok': True, 'mensaje': 'Reconciliada — tarea marcada DESPACHADO', 'tarea': tarea.to_dict()}), 200
     return jsonify({'ok': False, 'mensaje': 'Siesa aún no tiene la factura o no se pudo consultar', 'tarea': tarea.to_dict()}), 200
 

@@ -125,7 +125,8 @@ class ConnektaNoEnviado(Exception):
 
         ConnektaNoEnviado                 ← «no entró»: revertir el pre-flag
         ├── ConnektaRechazado             ← Siesa/Connekta dijo que no: 4xx,
-        │                                   429, `codigo != 0`
+        │   │                               429, `codigo != 0`
+        │   └── ConnektaRateLimit         ← 429: el DLQ espera sin gastar intento
         ├── ConnektaPayloadInvalido       ← no se pudo armar: nunca salió
         └── ConnektaCircuitOpenError      ← circuito abierto: nunca salió
         (ConnectTimeout levanta la base)  ← la conexión no se abrió
@@ -148,6 +149,17 @@ class ConnektaNoEnviado(Exception):
 
 class ConnektaRechazado(ConnektaNoEnviado):
     """Siesa (o Connekta) contestó y dijo que **no**: 4xx, 429 o `codigo != 0`."""
+
+
+class ConnektaRateLimit(ConnektaRechazado):
+    """429 en un POST: Connekta no lo procesó (Regla 3: el 429 **sí** se
+    reintenta). Es un «no entró», pero esperar el `Retry-After` no es un
+    fallo: el DLQ lo reprograma **sin gastar intento** (2026-09-26, P3). En
+    temporada, una ráfaga de 429 agotaba los cinco intentos de cajas sanas."""
+
+    def __init__(self, mensaje: str, retry_after_s: int = 300):
+        super().__init__(mensaje)
+        self.retry_after_s = retry_after_s
 
 
 class ConnektaPayloadInvalido(ConnektaNoEnviado, ValueError):
@@ -1022,7 +1034,12 @@ class ConnektaGateway:
                     f'[CONNEKTA] POST {id_conector}: rate-limit (429) — '
                     f'Retry-After={retry_after}s — DLQ reintentará con backoff'
                 )
-                raise ConnektaRechazado(f'Connekta rate-limit (429) — reintento en {retry_after}s')
+                try:
+                    _espera = max(30, min(int(float(retry_after)), 1800))
+                except (TypeError, ValueError):
+                    _espera = 300
+                raise ConnektaRateLimit(f'Connekta rate-limit (429) — reintento en {retry_after}s',
+                                        retry_after_s=_espera)
             if not r.ok:
                 try:
                     detalle = r.json()

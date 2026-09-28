@@ -4030,8 +4030,9 @@ async function siesaReconciliarPacking() {
   out.innerHTML = '<p style="color:var(--tx3);font-size:var(--fs-xs);">Preguntando a Siesa…</p>';
   try {
     const r = await post(`/api/packing/${id}/reconciliar`, {});
-    out.innerHTML = `<p style="color:var(--green);font-size:var(--fs-xs);">
-      ${esc(r.mensaje || 'Reconciliada')}</p>`;
+    // `ok: false` es «Siesa no la tiene» o «factura sin remisión»: no es verde.
+    out.innerHTML = `<p style="color:${r.ok ? 'var(--green)' : 'var(--yellow)'};font-size:var(--fs-xs);">
+      ${esc(r.mensaje || (r.ok ? 'Reconciliada' : 'Sin reconciliar'))}</p>`;
   } catch (e) {
     out.innerHTML = `<p style="color:var(--red);font-size:var(--fs-xs);">${esc(e.message)}</p>`;
   }
