@@ -195,6 +195,19 @@ class TestPosponerYNoPedir:
         assert client.post(URL, json=cuerpo, headers=_cab(app, db, almacen, 'compras')).status_code == 400
 
 
+class TestLaUltimaDecisionManda:
+
+    def test_pedir_despues_de_posponer_la_devuelve_con_lo_pedido(self, app, db, client, almacen,
+                                                                 mundo):
+        cab = _cab(app, db, almacen, 'compras')
+        _decidir(client, cab, referencia='URG', accion='POSPUESTO',
+                 hasta=(_hoy() + timedelta(days=5)).isoformat(), urgencia='URGENTE')
+        assert 'URG' not in _lineas(_bandeja())
+        _decidir(client, cab, referencia='URG', accion='PEDIDO', cantidad=20)
+        l = _lineas(_bandeja())['URG']
+        assert l['decision']['accion'] == 'PEDIDO'
+
+
 class TestDeshacerYDobleToque:
 
     def test_deshacer_exige_motivo_y_la_linea_vuelve(self, app, db, client, almacen, mundo):
