@@ -6668,7 +6668,7 @@ sobrevivía a un conteo de texto y obligó al test en Node).
 La validación reprodujo siete defectos del frente fiscal
 (`tests/test_val_fiscal_hallazgos.py`). Seis cerrados por su clase; **H5**
 (el barrido de cartera con horario propio) y **H7** (reabrir picking con la
-caja despachada) quedan en xfail para sus frentes. Sin migración. Candado nuevo:
+caja despachada) los cerró v2-inv (integrados el 2026-09-27, sin xfail). Sin migración. Candado nuevo:
 `RANGO_EMISION_PEDIDO`. Trinquetes: `tests/test_fiscal_v2.py`,
 `tests/test_fiscal_v2_pantallas_js.py`, `tests/test_dlq_temporada.py`.
 **30 mutaciones, las 30 rojas** (con `-B`; dos sobrevivían al primer intento
@@ -6737,7 +6737,8 @@ motivo, FORZAR `bulto_cargado_sacado_de_la_ruta`).
   activa; el conductor no.
 - El throughput es de un mundo simulado con latencias de QA; en producción
   Siesa tarda 30–60 s por POST en momentos (ver el timeout del `_post`).
-- H5 y H7 siguen en xfail (otros frentes).
+- H5 y H7 los cerró v2-inv (crons sin ventana propia; `motivo_caja_no_recibe`);
+  en la integración v2 (2026-09-27) sus xfail pasaban y se quitaron.
 
 ### Decisiones para el dueño
 

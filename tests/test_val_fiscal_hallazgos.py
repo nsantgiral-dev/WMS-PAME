@@ -144,12 +144,7 @@ class TestLaRemisionEnTemporada:
 
 class TestElBarridoDeCarteraNoTieneHorarioPropio:
 
-    @pytest.mark.xfail(strict=True, reason=(
-        'H5: cartera_service.init_scheduler registra CronTrigger(hour="7-19"): sin '
-        'SIESA_VENTANA (producción, «se factura hasta medianoche») una caja retenida '
-        'cuyo cliente pagó a las 20:00 no se re-evalúa hasta las 7:00. Es una copia '
-        'de ventana que test_ventana_siesa no ve (solo mira `*VENTANA* = (time, time)` '
-        'y quién lee la variable).'))
+    # Cerrado 2026-09-27 (v2-inv, d861b040): los crons no traen su propia ventana.
     def test_sin_ventana_el_barrido_corre_de_noche(self, app, monkeypatch):
         import apscheduler.schedulers.background as bg
         capturados = []
@@ -203,13 +198,7 @@ class TestLaSalidaHumanaDesatascaElContador:
 
 class TestReabrirConLaCajaDespachada:
 
-    @pytest.mark.xfail(strict=True, reason=(
-        'H7: reabrir_picking usa _empaque_que_la_explica (caja no cancelada O con '
-        'documento) y crea una tarea PENDIENTE por el faltante aunque la caja ya '
-        'esté DESPACHADO con RM+FE. El picker la recoge (el hueco se descuenta), '
-        'pero no hay caja posible (una por pedido; exigir_pedido_sin_documento) ni '
-        '«devuelto al estante» (la caja con documento «la explica»): unidades fuera '
-        'del hueco, sin caja y sin salida.'))
+    # Cerrado 2026-09-27 (v2-inv, 3ec9e512): PickingService.motivo_caja_no_recibe.
     def test_no_nace_un_faltante_para_una_caja_que_ya_salio(self, db, almacen):
         from app.models.picking import TareaPicking
         from app.services.packing_service import PackingService
