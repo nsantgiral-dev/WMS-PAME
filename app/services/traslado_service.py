@@ -94,6 +94,76 @@ def _resolver_empaque(prod):
     return '', 1
 
 
+# ── Faltante de recepción (2026-09-26) ─────────────────────────────────────
+#
+# La tienda contó menos de lo que salió (STS 10, contó 9, ETS 9): la unidad que
+# falta quedó en la bodega puente y **nada la nombraba** — ni `siesa_error`, ni
+# una alerta, ni un invariante. Ahora es un faltante declarado con salida: una
+# persona decide qué se hizo con él. **No mueve nada en Siesa**: registra lo que
+# se hizo allá (devolverlo al origen, ajustarlo) o quién lo investiga.
+
+RESOLUCIONES_FALTANTE = ('DEVUELTO_AL_ORIGEN', 'AJUSTADO', 'EN_INVESTIGACION')
+#: Las que cierran el faltante. EN_INVESTIGACION lo deja abierto con responsable.
+RESOLUCIONES_QUE_CIERRAN = ('DEVUELTO_AL_ORIGEN', 'AJUSTADO')
+QUIEN_RESUELVE_FALTANTE = 'supervisión (admin, supervisor o jefe de almacén)'
+_TEXTO_RESOLUCION = {
+    'DEVUELTO_AL_ORIGEN': 'devuelto al origen',
+    'AJUSTADO': 'ajustado',
+    'EN_INVESTIGACION': 'en investigación',
+}
+
+
+def faltante_de_recepcion(solicitud) -> dict:
+    """Lo que salió y no se recibió, por ítem. **Una política**: la usan la
+    respuesta de la recepción, la tarjeta, el invariante TRA-13 y el resumen
+    diario. Solo compara ítems con las dos cantidades escritas (enviada por el
+    despacho, recibida por la recepción): «no se contó» no es «faltó»."""
+    items = []
+    for it in (solicitud.items or []):
+        env, rec = it.cantidad_enviada, it.cantidad_recibida
+        if env is None or rec is None or rec >= env:
+            continue
+        items.append({'item_id': it.id,
+                      'producto': it.producto_codigo_siesa or it.producto_id,
+                      'enviada': env, 'recibida': rec, 'falta': env - rec})
+    unidades = sum(i['falta'] for i in items)
+    res = solicitud.faltante_resolucion
+    return {
+        'unidades': unidades, 'items': items,
+        'resolucion': res,
+        'resolucion_texto': _TEXTO_RESOLUCION.get(res) if res else None,
+        'resuelto': bool(unidades) and res in RESOLUCIONES_QUE_CIERRAN,
+        'abierto': bool(unidades) and res not in RESOLUCIONES_QUE_CIERRAN,
+        'resuelto_at': (solicitud.faltante_resuelto_at.isoformat()
+                        if solicitud.faltante_resuelto_at else None),
+        'resuelto_por_id': solicitud.faltante_resuelto_por_id,
+        'nota': solicitud.faltante_nota,
+        'bodega_puente': solicitud.bodega_transito_siesa,
+        'quien_resuelve': QUIEN_RESUELVE_FALTANTE,
+    }
+
+
+def mensaje_de_recepcion(solicitud) -> tuple:
+    """`(texto, tipo)` de lo que pasó al confirmar la recepción, dicho por el
+    servidor: no se afirma que Siesa registró la entrada sin su consecutivo."""
+    partes, tipo = ['Recepción registrada en el WMS.'], 'exito'
+    if solicitud.modo_transferencia == 'EN_TRANSITO':
+        if solicitud.siesa_entrada_consec:
+            partes.append(f'Siesa registró la entrada (consecutivo '
+                          f'{solicitud.siesa_entrada_consec}).')
+        else:
+            partes.append('Siesa NO confirmó la entrada: la mercancía sigue en la '
+                          'bodega puente hasta que supervisión la registre.')
+            tipo = 'advertencia'
+    f = faltante_de_recepcion(solicitud)
+    if f['unidades']:
+        partes.append(f'Faltaron {f["unidades"]} unidad(es): quedan declaradas como '
+                      f'faltante del traslado en {f["bodega_puente"] or "la bodega puente"} '
+                      f'y las resuelve {QUIEN_RESUELVE_FALTANTE}.')
+        tipo = 'advertencia'
+    return ' '.join(partes), tipo
+
+
 class TrasladoService:
 
     @staticmethod
@@ -1637,10 +1707,13 @@ class TrasladoService:
             for item in s.items:
                 _p = _prods.get(item.producto_id)
                 _uom_emp, _factor_emp = _resolver_empaque(_p)
-                _cant = (item.cantidad_recibida
-                         or item.cantidad_enviada
-                         or item.cantidad_aprobada
-                         or item.cantidad_solicitada)
+                # Lo CONTADO, y nada más: con `or` un cero contado caía a la
+                # enviada y el ETS entraba lo que no llegó (2026-09-26). Un
+                # ítem en cero no va en la entrada: sigue en la bodega puente
+                # y es parte del faltante declarado.
+                _cant = item.cantidad_recibida
+                if not _cant or _cant <= 0:
+                    continue
                 items_payload.append({
                     'codigo_siesa': item.producto_codigo_siesa,
                     'codigo': _p.codigo if _p else '',
@@ -1651,6 +1724,9 @@ class TrasladoService:
                     'unidad_empaque': _uom_emp,
                 })
             try:
+                if not items_payload:
+                    raise ValueError('no llegó ninguna unidad: no hay entrada que registrar; '
+                                     'todo lo enviado es faltante del traslado')
                 res = siesa_traslado.registrar_entrada(
                     bodega_transito=s.bodega_transito_siesa or siesa_traslado.bodega_transito,
                     bodega_destino=s.bodega_destino_siesa,
@@ -1708,10 +1784,48 @@ class TrasladoService:
 
         s.estado = EstadoTraslado.ENTREGADA
         s.fecha_entrega = datetime.utcnow()
+        faltante = faltante_de_recepcion(s)
+        if faltante['unidades']:
+            logger.warning('[TRASLADO] %s: faltaron %s unidad(es) en la recepción (%s) — '
+                           'faltante declarado, lo resuelve %s', s.codigo, faltante['unidades'],
+                           faltante['items'][:5], QUIEN_RESUELVE_FALTANTE)
         db.session.commit()
         # Invalidar cache stock de la bodega destino: ya recibió mercancía
         TrasladoService.invalidar_cache_stock(s.bodega_destino_siesa)
         logger.info(f'[TRASLADO] {s.codigo} → ENTREGADA (confirmado por usuario {usuario_id})')
+        return s
+
+    @staticmethod
+    def resolver_faltante(solicitud_id: int, usuario_id: int, resolucion: str,
+                          motivo: str) -> SolicitudTraslado:
+        """Supervisión declara qué se hizo con el faltante de la recepción
+        (`faltante_de_recepcion`). **No postea a Siesa**: registra lo que se
+        hizo allá. Motivo obligatorio, con bitácora."""
+        from app.services.bitacora import motivo_obligatorio
+        motivo = motivo_obligatorio(motivo, 'resolver el faltante de un traslado')
+        resolucion = (resolucion or '').strip().upper()
+        if resolucion not in RESOLUCIONES_FALTANTE:
+            raise ValueError('Indique qué se hizo con el faltante: devuelto al origen, '
+                             'ajustado o en investigación.')
+        s = SolicitudTraslado.query.filter_by(id=solicitud_id).with_for_update().first()
+        if not s:
+            raise LookupError('Traslado no encontrado')
+        f = faltante_de_recepcion(s)
+        if not f['unidades']:
+            raise ValueError(f'El traslado {s.codigo} no tiene faltante de recepción.')
+        if f['resuelto']:
+            raise ValueError(f'El faltante del traslado {s.codigo} ya quedó '
+                             f'{f["resolucion_texto"]}.')
+        antes = foto_fila(s, ['faltante_resolucion', 'faltante_nota'])
+        s.faltante_resolucion = resolucion
+        s.faltante_resuelto_at = datetime.utcnow()
+        s.faltante_resuelto_por_id = usuario_id
+        s.faltante_nota = motivo
+        registrar_accion('EDITAR', s, usuario_id=usuario_id, motivo=motivo, antes=antes,
+                         despues={'faltante_resolucion': resolucion,
+                                  'faltante_unidades': f['unidades']},
+                         entidad_codigo=s.codigo)
+        db.session.commit()
         return s
 
     @staticmethod

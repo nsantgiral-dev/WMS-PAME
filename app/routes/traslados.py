@@ -1,4 +1,5 @@
 import logging
+from app.extensions import db
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from sqlalchemy.orm import joinedload, subqueryload
@@ -12,6 +13,36 @@ from app.services.bodegas import co_de_bodega
 
 traslados_bp = Blueprint('traslados', __name__)
 logger = logging.getLogger(__name__)
+
+
+def _falla(e, que: str):
+    """La respuesta a una excepción de una ruta de traslados (2026-09-26).
+    **Una función**: el error del usuario va con su texto y un 4xx; el de
+    Siesa, dicho como de Siesa; el inesperado, sin trazas ni texto interno,
+    con una referencia que queda en el log. Antes, `str(e)` con 500: el
+    operario leía `'NoneType' object has no attribute …`."""
+    import uuid as _uuid
+    from app.services.connekta_gateway import (ConnektaCircuitOpenError, ConnektaRechazado,
+                                               ConnektaResultadoDesconocido)
+    if isinstance(e, ConnektaCircuitOpenError):
+        return jsonify({'error': f'Siesa no está disponible: no se pudo {que}. '
+                                 f'Intente de nuevo en unos minutos.'}), 503
+    if isinstance(e, ConnektaRechazado):
+        return jsonify({'error': f'Siesa rechazó la operación al {que}: {str(e)[:300]}'}), 502
+    if isinstance(e, ConnektaResultadoDesconocido):
+        return jsonify({'error': f'No se sabe si Siesa registró la operación al {que}. '
+                                 f'Verifíquelo en Siesa antes de reintentar.'}), 502
+    if isinstance(e, PermissionError):
+        return jsonify({'error': str(e)}), 403
+    if isinstance(e, LookupError):
+        return jsonify({'error': str(e) or 'No encontrado'}), 404
+    if isinstance(e, ValueError):
+        return jsonify({'error': str(e)}), 400
+    ref = _uuid.uuid4().hex[:8]
+    logger.exception('[TRASLADO] error interno al %s (ref %s): %s', que, ref, e)
+    return jsonify({'error': f'No se pudo {que} por un error interno. Intente de nuevo; '
+                             f'si se repite, avise a sistemas con la referencia {ref}.',
+                    'referencia': ref}), 500
 
 # Roles con acceso total a solicitudes: gestión de bodega y admin. `tienda`
 # también entra, pero solo ve las suyas — ver `_query_solicitudes_visibles`.
@@ -182,8 +213,7 @@ def crear_solicitud():
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
     except Exception as e:
-        logger.exception(str(e))
-        return jsonify({'error': str(e)}), 500
+        return _falla(e, 'crear la solicitud de traslado')
 
 
 @traslados_bp.route('/<int:id>/enviar', methods=['POST'])
@@ -264,8 +294,7 @@ def aprobar_solicitud(id):
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
     except Exception as e:
-        logger.exception(str(e))
-        return jsonify({'error': str(e)}), 500
+        return _falla(e, 'aprobar el traslado')
 
 
 @traslados_bp.route('/averias-pendientes', methods=['GET'])
@@ -369,8 +398,7 @@ def dictaminar_averia(id):
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
     except Exception as e:
-        logger.exception(str(e))
-        return jsonify({'error': str(e)}), 500
+        return _falla(e, 'registrar el dictamen de la avería')
 
 
 @traslados_bp.route('/<int:id>/rechazar', methods=['POST'])
@@ -437,7 +465,7 @@ def cancelar_solicitud(id):
             from app.extensions import db as _db
             _db.session.rollback()
             logger.error(f'[TRASLADO] Error liberando reservas en {id}: {_e}', exc_info=True)
-            return jsonify({'error': f'Error liberando reservas de picking: {_e}'}), 500
+            return _falla(_e, 'liberar las reservas de picking del traslado')
     s.estado = EstadoTraslado.CANCELADA
     s.motivo_rechazo = motivo
     registrar_accion('CANCELAR', s, usuario_id=usuario_id, motivo=motivo,
@@ -582,8 +610,7 @@ def despachar(id):
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
     except Exception as e:
-        logger.exception(str(e))
-        return jsonify({'error': str(e)}), 500
+        return _falla(e, 'despachar el traslado')
 
 
 @traslados_bp.route('/<int:id>/revertir', methods=['POST'])
@@ -671,12 +698,36 @@ def confirmar_recepcion(id):
             usuario_id=usuario_id,
             items_recibidos=data.get('items_recibidos')
         )
-        return jsonify(s.to_dict()), 200
+        from app.services.traslado_service import mensaje_de_recepcion
+        texto, tipo = mensaje_de_recepcion(s)
+        return jsonify({**s.to_dict(), 'mensaje_recepcion': texto, 'tipo_mensaje': tipo}), 200
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
     except Exception as e:
-        logger.exception(str(e))
-        return jsonify({'error': str(e)}), 500
+        return _falla(e, 'confirmar la recepción')
+
+
+@traslados_bp.route('/<int:id>/resolver-faltante', methods=['POST'])
+@jwt_required()
+def resolver_faltante(id):
+    """Supervisión declara qué se hizo con el faltante de la recepción:
+    `{resolucion: DEVUELTO_AL_ORIGEN|AJUSTADO|EN_INVESTIGACION, motivo}`. No
+    postea a Siesa: registra lo que se hizo allá (2026-09-26)."""
+    try:
+        usuario_id = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
+    usuario = db.session.get(Usuario, usuario_id)
+    if not usuario or usuario.rol not in Roles.SUPERVISION:
+        return jsonify({'error': 'El faltante de un traslado lo resuelve supervisión '
+                                 '(admin, supervisor o jefe de almacén).'}), 403
+    data = request.get_json(silent=True) or {}
+    try:
+        s = TrasladoService.resolver_faltante(id, usuario_id, data.get('resolucion'),
+                                              data.get('motivo'))
+        return jsonify(s.to_dict()), 200
+    except Exception as e:  # noqa: BLE001 — _falla separa usuario / interno
+        return _falla(e, 'resolver el faltante del traslado')
 
 
 @traslados_bp.route('/<int:id>/lpns', methods=['GET'])
@@ -812,7 +863,7 @@ def reintentar_siesa(id):
     except Exception as e:
         s.siesa_error = f'174646: {str(e)}'
         db.session.commit()
-        return jsonify({'error': str(e)}), 400
+        return _falla(e, 'crear la requisición en Siesa')
 
 
 @traslados_bp.route('/<int:id>/reintentar-despacho', methods=['POST'])
@@ -954,7 +1005,7 @@ def reintentar_despacho(id):
     except Exception as e:
         s.siesa_error = f'Despacho Siesa: {str(e)}'
         db.session.commit()
-        return jsonify({'error': str(e)}), 400
+        return _falla(e, 'registrar el despacho en Siesa')
 
 
 @traslados_bp.route('/<int:id>/reintentar-recepcion', methods=['POST'])
@@ -1044,7 +1095,7 @@ def reintentar_recepcion_siesa(id):
     except Exception as e:
         s.siesa_error = f'173079 retry: {str(e)}'
         db.session.commit()
-        return jsonify({'error': str(e)}), 400
+        return _falla(e, 'registrar la entrada en Siesa')
 
 
 @traslados_bp.route('/pendientes-recepcion', methods=['GET'])
@@ -1309,8 +1360,7 @@ def stock_disponible():
             }
         return jsonify(resultado), 200
     except Exception as e:
-        logger.exception(str(e))
-        return jsonify({'error': str(e)}), 500
+        return _falla(e, 'consultar el stock disponible')
 
 
 @traslados_bp.route('/invalidar-cache-stock', methods=['POST'])
@@ -1346,8 +1396,7 @@ def bodegas_siesa():
         resultado = TrasladoService.get_bodegas_disponibles()
         return jsonify(resultado), 200
     except Exception as e:
-        logger.exception(str(e))
-        return jsonify({'error': str(e)}), 500
+        return _falla(e, 'consultar las bodegas de Siesa')
 
 
 @traslados_bp.route('/debug-packing', methods=['GET'])

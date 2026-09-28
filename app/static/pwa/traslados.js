@@ -289,6 +289,27 @@ function _renderTrasladoCard(s) {
     }
   }
 
+  // ── Faltante de recepción (2026-09-26): la tienda contó menos de lo que
+  // salió y la diferencia quedó en la bodega puente. Supervisión decide.
+  let bloqueFaltante = '';
+  const fr = s.faltante_recepcion;
+  if (fr && fr.unidades) {
+    const puedeResolver = typeof OPERARIO !== 'undefined' && TRAS_ROLES_RESUELVEN_FALTANTE.includes(OPERARIO?.rol);
+    bloqueFaltante = fr.resuelto ? `
+    <div style="margin-top:10px;font-size:var(--fs-sm);color:var(--tx2);">
+      Faltaron ${esc(fr.unidades)} unidad(es) en la recepción: ${esc(fr.resolucion_texto)}${fr.nota ? ` — ${esc(fr.nota)}` : ''}
+    </div>` : `
+    <div style="margin-top:10px;border:1px solid var(--warn-brd);background:var(--warn-bg);border-radius:8px;padding:10px;">
+      <div style="font-size:var(--fs-md);color:var(--warn-tx);font-weight:700;margin-bottom:4px;">⚠ Faltaron ${esc(fr.unidades)} unidad(es) en la recepción</div>
+      <div style="font-size:var(--fs-sm);color:var(--tx2);margin-bottom:8px;">Quedaron en ${esc(fr.bodega_puente || 'la bodega puente')}. ${fr.resolucion ? `En investigación: ${esc(fr.nota || '')}. ` : ''}Lo resuelve ${esc(fr.quien_resuelve)}: registre en Siesa lo que se haga y declárelo aquí.</div>
+      ${puedeResolver ? `<div style="display:flex;gap:6px;flex-wrap:wrap;">
+        <button onclick="trasResolverFaltante(${esc(s.id)}, 0)" style="padding:8px 10px;background:var(--bg-input);color:var(--tx);border:1px solid var(--brd);border-radius:8px;font-size:var(--fs-md);font-weight:700;cursor:pointer;">Se devolvió al origen</button>
+        <button onclick="trasResolverFaltante(${esc(s.id)}, 1)" style="padding:8px 10px;background:var(--bg-input);color:var(--tx);border:1px solid var(--brd);border-radius:8px;font-size:var(--fs-md);font-weight:700;cursor:pointer;">Se ajustó</button>
+        ${fr.resolucion ? '' : `<button onclick="trasResolverFaltante(${esc(s.id)}, 2)" style="padding:8px 10px;background:var(--bg-input);color:var(--tx);border:1px solid var(--brd);border-radius:8px;font-size:var(--fs-md);font-weight:700;cursor:pointer;">Queda en investigación</button>`}
+      </div>` : ''}
+    </div>`;
+  }
+
   const operarioTag = s.operario_nombre
     ? `<div style="font-size:var(--fs-md);color:var(--lila-tx);margin-bottom:6px;">👷 ${esc(s.operario_nombre)}${s.estado==='PREPARADO' ? ' · Listo para despachar' : s.estado==='EN_PICKING' ? ' · Recogiendo' : ''}</div>`
     : (s.estado === 'EN_PICKING' ? `<div style="font-size:var(--fs-md);color:var(--warn-tx);margin-bottom:6px;">⚠ Sin operario asignado</div>` : '');
@@ -310,6 +331,7 @@ function _renderTrasladoCard(s) {
     ${bloqueRecuperacion}
     ${bloqueRevertir}
     ${bloqueDictamen}
+    ${bloqueFaltante}
   </div>`;
 }
 
@@ -896,6 +918,33 @@ async function trasDictaminarAveria(id, confirmada) {
       cargarTrasladosAdmin();
     } else { alerta(d.error || 'No se pudo dictaminar', 'error'); }
   } catch (e) { alerta('Error de conexión', 'error'); }
+}
+
+/** Quién resuelve un faltante: `Roles.SUPERVISION` (cruzado por test). */
+const TRAS_ROLES_RESUELVEN_FALTANTE = ['admin', 'supervisor', 'jefe_almacen'];
+
+const TRAS_RESOLUCIONES_FALTANTE = [
+  ['DEVUELTO_AL_ORIGEN', 'Se devolvió al origen'],
+  ['AJUSTADO', 'Se ajustó'],
+  ['EN_INVESTIGACION', 'Queda en investigación'],
+];
+
+/**
+ * Supervisión declara qué se hizo con el faltante de una recepción. No
+ * postea a Siesa: registra lo que se hizo allá.
+ * @param {number} id - Traslado.
+ * @param {number} pos - Posición en TRAS_RESOLUCIONES_FALTANTE.
+ */
+async function trasResolverFaltante(id, pos) {
+  const op = TRAS_RESOLUCIONES_FALTANTE[pos];
+  if (!op) return;
+  const motivo = await _modalTexto(op[1], 'Qué se hizo en Siesa o quién lo investiga (obligatorio):');
+  if (!motivo) return;
+  try {
+    await post(`/api/traslados/${id}/resolver-faltante`, { resolucion: op[0], motivo });
+    alerta('Faltante del traslado registrado', 'exito');
+    cargarTrasladosAdmin();
+  } catch (e) { alerta(e.message || 'No se pudo registrar', 'error'); }
 }
 
 async function trasReintentarRecepcionSiesa(id) {

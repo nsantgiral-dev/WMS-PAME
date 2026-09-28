@@ -710,6 +710,17 @@ def avisos_sin_canal(ayer_inicio, ayer_fin) -> list:
             lineas.append(f'🚨 {len(crit)} traslado(s) en tránsito hace más de 24 h (mercancía '
                           'en la bodega puente): ' + ', '.join(t['codigo'] for t in crit[:10]))
 
+    def _faltantes_traslado():
+        from app.services.auditoria.traslados import lo_que_no_llego_tiene_quien_lo_resuelva
+        hs = lo_que_no_llego_tiene_quien_lo_resuelva()
+        if hs:
+            unidades = sum(h.datos.get('unidades') or 0 for h in hs)
+            lineas.append(f'🚨 {len(hs)} traslado(s) recibido(s) con faltante sin resolver '
+                          f'({unidades} unidad(es) en la bodega puente): '
+                          + ', '.join(h.referencia for h in hs[:10])
+                          + '. Supervisión decide: devolver al origen, ajustar o investigar '
+                            '(Traslados → la tarjeta del traslado).')
+
     def _carga_fisica():
         from app.services.inventario_siesa_service import estado_carga_fisica
         for c in estado_carga_fisica():
@@ -745,6 +756,7 @@ def avisos_sin_canal(ayer_inicio, ayer_fin) -> list:
     _seguro('la auditoría', _auditoria)
     _seguro('la cartera retenida', _cartera)
     _seguro('los traslados en tránsito', _traslados)
+    _seguro('los faltantes de traslado', _faltantes_traslado)
     _seguro('la carga física', _carga_fisica)
     _seguro('los crons', _crons)
     def _paradas_sin_gestionar():

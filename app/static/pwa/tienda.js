@@ -904,13 +904,16 @@ async function tiendaConfirmarRecepcionTraslado() {
     // Es la misma vía y el mismo endpoint que usa Recepción, que sí manda los
     // conteos (`recepcion.js`). Un endpoint con dos llamadores, uno honesto y
     // otro no, indistinguibles desde el servidor.
-    await postConReintento(`/api/traslados/${s.id}/recibir`, {
+    const r = await postConReintento(`/api/traslados/${s.id}/recibir`, {
       items_recibidos: items.map(i => ({
         id: i.id,
         cantidad_recibida: _TIENDA_CONTEOS[i.producto_id] || 0,
       })),
     });
-    alerta('Recepción confirmada — Siesa registró la entrada en tránsito', 'exito');
+    // Lo que pasó lo dice el servidor: no se afirma que Siesa registró la
+    // entrada sin su consecutivo, y un faltante se nombra (2026-09-26).
+    alerta((r && r.mensaje_recepcion) || 'Recepción registrada en el WMS.',
+           (r && r.tipo_mensaje) || 'advertencia');
     _TIENDA_TRASLADO_ACTIVO = null;
     _TIENDA_CONTEOS = {};
     setTimeout(tiendaCargarRecibir, 1200);

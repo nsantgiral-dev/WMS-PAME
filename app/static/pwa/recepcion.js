@@ -1291,14 +1291,15 @@ async function recepConfirmarTraslado() {
     // Idempotente en el backend (TrasladoService.confirmar_recepcion rechaza
     // un segundo intento sobre un traslado ya ENTREGADA con 400, no duplica
     // el 173079) — seguro reintentar automáticamente ante fallo de red.
-    await postConReintento(`/api/traslados/${s.id}/recibir`, {
+    const r = await postConReintento(`/api/traslados/${s.id}/recibir`, {
       items_recibidos: items.map(i => ({
         id: i.id,
         cantidad_recibida: _REC_CONTEOS[i.producto_id] || 0
       }))
     });
     beepDone();
-    alerta('✓ Recepción confirmada — ETS generado en Siesa', 'exito');
+    alerta((r && r.mensaje_recepcion) || 'Recepción registrada en el WMS.',
+           (r && r.tipo_mensaje) || 'advertencia');
     _recepLimpiarConteoTraslado(s.id);
     _REC_TRASLADO_ACTIVO = null;
     _REC_CONTEOS = {};

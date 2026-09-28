@@ -109,7 +109,6 @@ class TestLaDiferenciaDeUnTrasladoNoSeEvapora:
     traslado. Una tienda que recibió de menos no reclama lo que no sabe.
     """
 
-    @pytest.mark.xfail(strict=True, reason='nadie registra enviada − recibida de un traslado ENTREGADO')
     def test_la_auditoria_ve_lo_que_no_llego(self, db, almacen, producto):
         from app.models.traslado import ItemSolicitudTraslado, SolicitudTraslado
         from app.services import auditoria

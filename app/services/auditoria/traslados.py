@@ -176,6 +176,42 @@ def nada_se_queda_en_la_bodega_puente(ctx=None):
 
 
 @invariante(
+    codigo='TRA-13',
+    flujo='traslados',
+    frontera='recepción (cantidades)',
+    consecuencia='La tienda contó menos de lo que salió: la diferencia quedó en '
+                 'la bodega puente, sin que nadie decida si se devuelve al '
+                 'origen, se ajusta o se investiga. Una tienda que recibió de '
+                 'menos no reclama lo que no sabe.',
+    severidad=BLOQUEA,
+    detector_ciego='tests/test_traslado_faltante.py::TestTra13VeLoQueNoLlego::test_ve_la_unidad_que_no_llego',
+)
+def lo_que_no_llego_tiene_quien_lo_resuelva(ctx=None):
+    """ENTREGADA con `enviada > recibida` en algún ítem y el faltante sin
+    resolver (`traslado_service.faltante_de_recepcion`). Los dos valores los
+    escriben actores distintos (el despacho y la recepción): el camino sano no
+    los iguala por construcción. EN_INVESTIGACION sigue contando: tiene
+    responsable, no desenlace."""
+    from app.services.traslado_service import faltante_de_recepcion
+    out = []
+    for s in _solicitudes(('ENTREGADA',)):
+        f = faltante_de_recepcion(s)
+        if not f['abierto']:
+            continue
+        out.append(Hallazgo(
+            referencia=s.codigo or f'traslado#{s.id}',
+            fecha=s.fecha_entrega or s.fecha_creacion,
+            detalle=(f'faltaron {f["unidades"]} unidad(es) en la recepción '
+                     f'({s.bodega_origen_siesa} → {s.bodega_destino_siesa}); '
+                     + (f'en investigación: {f["nota"]}' if f['resolucion'] else
+                        f'sin resolver — lo resuelve {f["quien_resuelve"]}')),
+            datos={'unidades': f['unidades'], 'items': f['items'][:10],
+                   'bodega_puente': f['bodega_puente'], 'resolucion': f['resolucion']},
+        ))
+    return out
+
+
+@invariante(
     codigo='TRA-12',
     flujo='traslados',
     frontera='despacho → Siesa',

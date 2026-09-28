@@ -73,6 +73,11 @@ class ClaseTraslado:
     TODAS = (NORMAL, AVERIAS)
 
 
+def _faltante_de(solicitud):
+    from app.services.traslado_service import faltante_de_recepcion
+    return faltante_de_recepcion(solicitud)
+
+
 class SolicitudTraslado(db.Model):
     __tablename__ = 'solicitudes_traslado'
 
@@ -156,6 +161,17 @@ class SolicitudTraslado(db.Model):
                                      nullable=True)
     averia_veredicto_at = db.Column(db.DateTime, nullable=True)
     averia_veredicto_nota = db.Column(db.String(200), nullable=True)
+
+    # ── Faltante de recepción (m050inv2, 2026-09-26) ─────────────────────
+    #: La tienda contó menos de lo que salió: la diferencia quedó en la bodega
+    #: puente (el ETS entra lo contado). Una persona decide qué se hizo con
+    #: ella — ver `traslado_service.faltante_de_recepcion`. `NULL` = nadie
+    #: decidió todavía. DEVUELTO_AL_ORIGEN · AJUSTADO cierran;
+    #: EN_INVESTIGACION la deja abierta con un responsable.
+    faltante_resolucion = db.Column(db.String(20), nullable=True)
+    faltante_resuelto_at = db.Column(db.DateTime, nullable=True)
+    faltante_resuelto_por_id = db.Column(db.Integer, nullable=True)
+    faltante_nota = db.Column(db.Text, nullable=True)
 
     # Timestamps
     fecha_creacion = db.Column(db.DateTime, default=datetime.utcnow)
@@ -269,6 +285,7 @@ class SolicitudTraslado(db.Model):
             'siesa_entrada_consec': self.siesa_entrada_consec,
             'siesa_error': self.siesa_error if siesa_necesita_atencion else None,
             'siesa_necesita_atencion': siesa_necesita_atencion,
+            'faltante_recepcion': _faltante_de(self),
             'fecha_creacion': self.fecha_creacion.isoformat() if self.fecha_creacion else None,
             'fecha_envio': self.fecha_envio.isoformat() if self.fecha_envio else None,
             'fecha_aprobacion': self.fecha_aprobacion.isoformat() if self.fecha_aprobacion else None,
