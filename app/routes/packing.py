@@ -119,12 +119,19 @@ def listar_tareas():
     from app.services.cartera_service import resumen_por_pedido as _retenidos_cartera
     retenidos = _retenidos_cartera([n for n in numeros if n])
 
+    # En qué va la emisión fiscal de cada caja: la pantalla no la deduce de
+    # `VERIFICADO && !siesa_triggered` (que desde m048fiscal es también «en
+    # cola»). Una consulta de jobs para toda la página.
+    from app.services.documento_fiscal import estados_emision
+    emision = estados_emision(tareas.items, retenidos=retenidos)
+
     items = []
     for t in tareas.items:
         d = t.to_dict()
         d['picking_listo'] = picking_listo_map.get(t.numero_pedido_siesa, True)
         d['picking_bloqueado'] = picking_bloqueado_map.get(t.numero_pedido_siesa, False)
         d['retencion_cartera'] = retenidos.get(t.numero_pedido_siesa)
+        d['estado_emision'] = emision.get(t.id)
         items.append(d)
 
     return jsonify({
@@ -152,6 +159,8 @@ def obtener_tarea(id):
     _listo_map, _bloqueado_map = _picking_listo_batch([tarea.numero_pedido_siesa])
     d['picking_listo'] = _listo_map.get(tarea.numero_pedido_siesa, True)
     d['picking_bloqueado'] = _bloqueado_map.get(tarea.numero_pedido_siesa, False)
+    from app.services.documento_fiscal import estado_emision
+    d['estado_emision'] = estado_emision(tarea)
     return jsonify(d), 200
 
 

@@ -562,6 +562,11 @@ def pedidos_aprobados():
         ).all():
             pickings_por_pedido.setdefault(p.referencia_documento, []).append(p)
 
+    # La emisión fiscal de cada caja, dicha por el servidor (H2b, 2026-09-26):
+    # «✓ Despachado» solo si puede salir (RM + FE), «en cola» no es «error».
+    from app.services.documento_fiscal import despachable as _despachable, estados_emision
+    _emision = estados_emision(list(packings_map.values())) if nums else {}
+
     for num, pedido in pedidos.items():
         packing = packings_map.get(num)
 
@@ -580,6 +585,10 @@ def pedidos_aprobados():
                 'packing_estado':     packing.estado,
                 'siesa_triggered':    packing.siesa_triggered,
                 'siesa_triggered_at': packing.siesa_triggered_at.isoformat() if packing.siesa_triggered_at else None,
+                'estado_emision':     _emision.get(packing.id),
+                'despachable':        _despachable(packing),
+                'rm':                 (f'{packing.rm_tipo or "RM"}-{packing.rm_consec}'
+                                       if packing.rm_consec else None),
             })
 
     # Retenido por cartera: la cola lo dice en vez de mostrar «Aprobar» o

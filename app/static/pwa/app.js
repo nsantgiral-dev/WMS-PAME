@@ -1366,6 +1366,15 @@ async function cargarPedidos() {
             style="flex-shrink:0;background:var(--ok-bg);color:var(--ok-tx);border:1px solid var(--ok-brd);padding:8px 12px;border-radius:8px;font-size:var(--fs-xs);font-weight:700;cursor:pointer;text-align:center;">
             Cartera lo liberó<br>▶ Cerrar caja
           </button>`;
+        } else if (p.siesa_triggered && p.despachable === false) {
+          // La factura existe y la remisión no está identificada (la
+          // reconciliación la encontró, o la caja es de antes del control
+          // fiscal): NO puede salir, y no es «✓ Despachado».
+          accionBtn = `<div style="flex-shrink:0;display:flex;flex-direction:column;gap:4px;align-items:stretch;max-width:190px;">
+              <div style="background:var(--warn-bg);color:var(--warn-tx);border:1px solid var(--warn-brd);padding:6px 10px;border-radius:6px;font-size:var(--fs-xs);font-weight:700;text-align:center;">⚠ Factura sin remisión identificada</div>
+              ${p.packing_id ? `<button onclick="siesaIrARecuperacion(${esc(p.packing_id)})"
+                style="background:var(--bg-input);color:var(--tx);border:1px solid var(--brd);padding:6px 10px;border-radius:6px;font-size:var(--fs-xs);font-weight:700;cursor:pointer;">Registrar la remisión ›</button>` : ''}
+            </div>`;
         } else if (p.siesa_triggered) {
           // Estado final: Siesa tiene la factura
           // Los DOS papeles: la remisión descarga inventario y viaja con el
@@ -1389,7 +1398,28 @@ async function cargarPedidos() {
             style="flex-shrink:0;background:var(--lila-bg);color:var(--lila-tx);border:1px solid var(--lila-brd);padding:8px 12px;border-radius:8px;font-size:var(--fs-xs);font-weight:700;cursor:pointer;text-align:center;">
             Packing<br>🔄 Abrir
           </button>`;
-        } else if (p.packing_estado === 'VERIFICADO' && !p.siesa_triggered) {
+        } else if (p.packing_estado === 'VERIFICADO' && !p.siesa_triggered
+                   && (p.estado_emision === 'EN_COLA' || p.estado_emision === 'RETENIDO')) {
+          // Cerrada y esperando a Siesa: no es un error y no se factura a
+          // mano (el envío de la cola y un carril manual a la vez eran una
+          // factura duplicada).
+          accionBtn = `<div style="flex-shrink:0;background:var(--lila-bg);color:var(--info-tx);border:1px solid var(--info-brd);padding:8px 12px;border-radius:8px;font-size:var(--fs-xs);font-weight:700;text-align:center;">⏳ En cola<br>de facturación</div>`;
+        } else if (p.packing_estado === 'VERIFICADO' && !p.siesa_triggered
+                   && (p.estado_emision === 'SIN_VERIFICAR'
+                       || (p.estado_emision === 'FALLIDO' && !p.rm))) {
+          // La remisión se envió sin confirmar, o el envío falló sin remisión:
+          // la salida está en Siesa → Recuperación (registrar la RM, declarar
+          // que no existe, o reintentar).
+          const _txt = p.estado_emision === 'SIN_VERIFICAR' ? '⚠ Remisión sin confirmar' : '⚠ Error Siesa';
+          accionBtn = p.packing_id
+            ? `<div style="flex-shrink:0;display:flex;flex-direction:column;gap:4px;align-items:stretch;">
+                <div style="background:var(--err-bg);color:var(--err-tx);border:1px solid var(--err-brd);padding:6px 10px;border-radius:6px;font-size:var(--fs-xs);font-weight:700;text-align:center;">${_txt}</div>
+                <button onclick="siesaIrARecuperacion(${esc(p.packing_id)})"
+                  style="background:var(--bg-input);color:var(--tx);border:1px solid var(--brd);padding:6px 10px;border-radius:6px;font-size:var(--fs-xs);font-weight:700;cursor:pointer;">Resolver en Siesa ›</button>
+              </div>`
+            : `<div style="flex-shrink:0;background:var(--err-bg);color:var(--err-tx);border:1px solid var(--err-brd);padding:8px 12px;border-radius:8px;font-size:var(--fs-xs);font-weight:700;text-align:center;">${_txt}</div>`;
+        } else if (p.packing_estado === 'VERIFICADO' && !p.siesa_triggered
+                   && (p.rm || p.estado_emision === undefined)) {
           // RM creada en Siesa pero FE falló — carril de recuperación
           accionBtn = p.packing_id
             ? `<div style="flex-shrink:0;display:flex;flex-direction:column;gap:4px;align-items:stretch;">
@@ -1455,9 +1485,14 @@ const PEDIDOS_TABS_ALERTA = [3, 4];
  * @returns {number} índice en `PEDIDOS_TAB_LABELS`
  */
 function pedidoGrupo(p) {
-  if (p.siesa_triggered) return 2;
-  if (p.retencion_cartera || p.cartera_liberada) return 4;
-  if (p.packing_estado === 'VERIFICADO') return 3;
+  if (p.siesa_triggered && p.despachable !== false) return 2;
+  if (p.retencion_cartera || p.cartera_liberada || p.estado_emision === 'RETENIDO') return 4;
+  // En cola de facturación es «en proceso», no «error» (lo dice el servidor).
+  if (p.estado_emision === 'EN_COLA') return 1;
+  if (p.siesa_triggered) return 3;
+  // Con emisión que alguien tiene que resolver; un servidor viejo sin el
+  // campo (undefined) conserva lo de antes. `null` = cerrada nunca: en proceso.
+  if (p.packing_estado === 'VERIFICADO' && (p.estado_emision === undefined || p.estado_emision)) return 3;
   if (p.picking_iniciado || p.packing_estado) return 1;
   return 0;
 }
@@ -3636,7 +3671,7 @@ async function siesaRecuperacionCargar() {
       <p style="font-size:var(--fs-xs);color:var(--tx2);margin:0 0 10px;">
         Cuando el WMS cree que no se despachó y Siesa ya lo procesó, o al revés.
       </p>
-      <input id="rec-packing-id" type="number" inputmode="numeric"
+      <input id="rec-packing-id" type="number" inputmode="numeric" value="${Number.isFinite(REC_PACKING_ID) ? REC_PACKING_ID : ''}"
              placeholder="ID de la tarea de packing"
              style="width:100%;padding:8px;border-radius:8px;border:1px solid var(--brd);background:var(--bg);color:var(--tx);">
       <!-- ORDEN POR RIESGO, no por frecuencia. Lo que solo LEE va arriba; lo
@@ -3677,8 +3712,26 @@ async function siesaRecuperacionCargar() {
       </div>
       <p style="font-size:var(--fs-xs);color:var(--tx3);margin:6px 0 0;">
         Para cuando la remisión SÍ existe en Siesa y el WMS no guardó su número:
-        se busca en Siesa y se escribe acá. Crea la factura (142943) sobre esa RM.
+        se busca en Siesa y se escribe acá. Crea la factura (142943) sobre esa RM;
+        si la factura ya existe en Siesa, solo registra la remisión.
       </p>
+      <button class="btn-flota" style="width:100%;margin-top:10px;border-color:var(--red);color:var(--red);"
+              onclick="siesaDeclararRmInexistente()">La remisión NO existe en Siesa</button>
+      <p style="font-size:var(--fs-xs);color:var(--tx3);margin:6px 0 0;">
+        Solo si buscó en Siesa y la remisión de ese pedido no está: el WMS vuelve a
+        preguntar y, si Siesa tampoco la trae, permite reenviar la remisión. Si la
+        remisión sí existía, el reenvío crea una segunda.
+      </p>
+    </div>
+
+    <div class="tabla-card" style="margin-top:12px;">
+      <div class="tabla-titulo">Cajas anteriores al control fiscal</div>
+      <p style="font-size:var(--fs-xs);color:var(--tx2);margin:0 0 10px;">
+        Cajas marcadas como procesadas en Siesa sin la remisión identificada (antes
+        del 2026-09-25). No pueden salir al muelle hasta registrar su remisión.
+      </p>
+      <button class="btn-flota" style="width:100%;" onclick="siesaCajasAnteriores()">Ver cajas</button>
+      <div id="rec-anteriores" style="margin-top:10px;"></div>
     </div>
 
     <div class="tabla-card" style="margin-top:12px;">
@@ -3739,6 +3792,109 @@ async function siesaVerCompromisos() {
         </div>`).join('')}</div>`;
   } catch (e) {
     out.innerHTML = `<p style="color:var(--red);font-size:var(--fs-xs);">${esc(e.message)}</p>`;
+  }
+}
+
+/** La tarea que «Resolver en Siesa ›» dejó escrita en el panel de recuperación. */
+let REC_PACKING_ID = NaN;
+/** Las cajas anteriores al control fiscal de la última consulta (el onclick lleva la posición). */
+let REC_ANTERIORES = [];
+
+/** Abre Siesa → Recuperación con la tarea ya escrita. @param {number} packingId */
+function siesaIrARecuperacion(packingId) {
+  REC_PACKING_ID = Number(packingId);
+  tab('tab-connekta');
+  const inp = document.getElementById('rec-packing-id');
+  if (inp) { inp.value = REC_PACKING_ID; inp.scrollIntoView?.({ block: 'center' }); }
+}
+
+/** La remisión de una tarea NO existe: el servidor vuelve a preguntar a Siesa
+ *  antes de quitar el pre-flag. Si la consulta no se pudo leer entera, pide el
+ *  número del pedido escrito tal cual (queda FORZAR en la bitácora). */
+async function siesaDeclararRmInexistente() {
+  const id = parseInt(document.getElementById('rec-packing-id')?.value, 10);
+  const out = document.getElementById('rec-resultado');
+  if (!Number.isFinite(id)) { alerta('Indique el ID de la tarea', 'error'); return; }
+  const motivo = await _modalTexto('La remisión no existe en Siesa',
+    '¿Qué buscó en Siesa y qué encontró? (obligatorio — queda en la bitácora con su nombre)',
+    { obligatorio: true });
+  if (!motivo || !motivo.trim()) return;
+  const cuerpo = { rm_inexistente: true, motivo: motivo.trim() };
+  try {
+    let r;
+    try {
+      r = await post(`/api/despacho_parcial/${id}/facturar-rm-manual`, cuerpo);
+    } catch (e) {
+      const pedir = e.body && e.body.requiere_confirmacion;
+      if (!pedir) throw e;
+      const conf = await _modalTexto('Siesa no se pudo leer entera',
+        `${esc(e.message)}<br><br>Escriba <b>${esc(pedir)}</b> para confirmar que la remisión no existe.`,
+        { obligatorio: true, textoConfirmar: 'Confirmar que no existe' });
+      if (!conf || !conf.trim()) return;
+      r = await post(`/api/despacho_parcial/${id}/facturar-rm-manual`,
+                     { ...cuerpo, sin_barrido_completo: true, confirmacion: conf.trim() });
+    }
+    out.innerHTML = `<p style="color:var(--green);font-size:var(--fs-xs);">${esc(r.mensaje || 'Registrado')}</p>`;
+  } catch (e) {
+    out.innerHTML = `<p style="color:var(--red);font-size:var(--fs-xs);">${esc(e.message)}</p>`;
+  }
+}
+
+/** Lista las cajas anteriores al control fiscal (solo lectura). */
+async function siesaCajasAnteriores() {
+  const el = document.getElementById('rec-anteriores');
+  if (!el) return;
+  el.innerHTML = '<p style="color:var(--tx3);font-size:var(--fs-xs);">Consultando…</p>';
+  try {
+    const r = await get('/api/despacho_parcial/anteriores-control-fiscal');
+    REC_ANTERIORES = r.cajas || [];
+    if (!REC_ANTERIORES.length) {
+      el.innerHTML = '<p style="color:var(--green);font-size:var(--fs-xs);">No hay cajas anteriores al control fiscal.</p>';
+      return;
+    }
+    el.innerHTML = `<p style="font-size:var(--fs-xs);color:var(--tx2);margin:0 0 6px;">
+        ${esc(r.total)} caja(s)${r.total > r.mostradas ? ` (se muestran ${esc(r.mostradas)})` : ''}.</p>`
+      + REC_ANTERIORES.map((c, i) => {
+        const cargados = (c.bultos || {}).CARGADO || 0;
+        return `<div class="tabla-fila" style="flex-wrap:wrap;gap:6px;">
+          <span class="tabla-nombre">${esc(c.pedido || c.codigo)} · ${esc(c.cliente || 'sin cliente')}
+            ${c.fe ? ` · ${esc(c.fe)}` : ''}${cargados ? ` · ${esc(cargados)} bulto(s) cargado(s) en ruta ${esc((c.rutas_con_bultos_cargados || []).join(', '))}` : ''}</span>
+          <button class="btn-flota" style="flex:0 0 auto;" onclick="siesaVerificarAnterior(${i})">Verificar en Siesa</button>
+          <div id="rec-anterior-${i}" style="width:100%;font-size:var(--fs-xs);"></div>
+        </div>`;
+      }).join('');
+  } catch (e) {
+    el.innerHTML = `<p style="color:var(--red);font-size:var(--fs-xs);">${esc(e.message)}</p>`;
+  }
+}
+
+/** Pregunta a Siesa (solo GET) qué tiene de una caja anterior y deja la
+ *  remisión escrita en «Facturar esa RM» para registrarla. @param {number} i */
+async function siesaVerificarAnterior(i) {
+  const c = REC_ANTERIORES[i];
+  const out = document.getElementById(`rec-anterior-${i}`);
+  if (!c || !out) return;
+  out.innerHTML = '<span style="color:var(--tx3);">Preguntando a Siesa…</span>';
+  try {
+    const r = await get(`/api/despacho_parcial/${c.id}/verificar-en-siesa`);
+    const rm = r.remision;
+    const partes = [
+      r.factura ? `Factura en Siesa: ${esc(r.factura)}` : 'Siesa no trae factura de este pedido',
+      rm ? `Remisión en Siesa: ${esc(rm.tipo)}-${esc(rm.consec)}` : 'La consulta de remisiones no la trae',
+      ...(r.no_se || []).map(x => `No se pudo consultar: ${esc(x)}`),
+    ];
+    out.innerHTML = partes.map(x => `<div>${x}</div>`).join('');
+    const inp = document.getElementById('rec-packing-id');
+    if (inp) inp.value = c.id;
+    if (rm) {
+      const t = document.getElementById('rec-rm-tipo');
+      const n = document.getElementById('rec-rm-consec');
+      if (t) t.value = rm.tipo;
+      if (n) n.value = rm.consec;
+      out.innerHTML += '<div style="color:var(--tx2);">Revise la remisión en Siesa y use «Facturar esa RM» (arriba): con la factura ya en Siesa, solo la registra.</div>';
+    }
+  } catch (e) {
+    out.innerHTML = `<span style="color:var(--red);">${esc(e.message)}</span>`;
   }
 }
 

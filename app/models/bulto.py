@@ -71,4 +71,12 @@ class Bulto(db.Model):
             'numero_pedido':     t.numero_pedido_siesa if t else '',
             'cliente':           t.cliente or '' if t else '',
             'municipio':         t.municipio or '' if t else '',
+            # ¿Puede salir? La política fiscal (RM + FE confirmadas), para que
+            # la pantalla ofrezca sacar de la ruta un bulto cargado que no.
+            'despachable':       _despachable(t),
         }
+
+
+def _despachable(tarea) -> bool:
+    from app.services.documento_fiscal import despachable
+    return bool(tarea is not None and despachable(tarea))

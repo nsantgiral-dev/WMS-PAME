@@ -24,6 +24,27 @@ let EMP_FILTRO_TIPO = 'PEDIDO';
 // EMPACADOR — Lista de tareas
 // ─────────────────────────────────────────────────────────────
 
+/**
+ * La emisión fiscal de una caja en tres palabras de pantalla, desde lo que
+ * dice el servidor (`estado_emision`):
+ *  · 'EN_COLA'  — cerrada, esperando a Siesa: sin botones;
+ *  · 'FALLIDO'  — el envío falló sin documento: «Reintentar» y «Limpiar»;
+ *  · 'ADMIN'    — Siesa tiene (o puede tener) un documento: lo resuelve el
+ *                 administrador en Siesa → Recuperación;
+ *  · null       — sin cerrar todavía.
+ * Un servidor viejo sin el campo: VERIFICADO con bultos se lee FALLIDO (lo de antes).
+ * @param {Object} t
+ */
+function empEstadoEmision(t) {
+  const e = t && t.estado_emision;
+  if (e === 'EN_COLA' || e === 'RETENIDO') return 'EN_COLA';
+  if (e === 'FALLIDO') return 'FALLIDO';
+  if (e === 'SIN_VERIFICAR' || e === 'REMISION_SIN_FACTURA' || e === 'FACTURA_SIN_REMISION') return 'ADMIN';
+  if (e === 'DESPACHADO') return null;
+  if (e === undefined && t && t.estado === 'VERIFICADO' && !t.siesa_triggered) return 'FALLIDO';
+  return null;
+}
+
 /** Carga del servidor y renderiza la lista de tareas de packing asignadas al empacador. */
 async function empCargarTareas() {
   if (_empBloqueoOfflineInfo()) { _empMostrarBloqueoOffline(); return; }
@@ -126,8 +147,13 @@ function empRenderListaTareas() {
         const _puedeCancelarPacking = OPERARIO && ['admin', 'supervisor'].includes(OPERARIO.rol);
         // Retenido por cartera en el cierre: no es un fallo de Siesa. Lo libera
         // cartera; después se cierra desde la cola de pedidos.
-        const retenidoCartera = !!t.retencion_cartera && !t.siesa_triggered;
-        const siesaFallo = t.estado === 'VERIFICADO' && !t.siesa_triggered && !pedidoAnulado && !retenidoCartera;
+        const retenidoCartera = (!!t.retencion_cartera && !t.siesa_triggered) || t.estado_emision === 'RETENIDO';
+        // En qué va la emisión lo dice el servidor (`estado_emision`): una caja
+        // cerrada queda VERIFICADA mientras espera a Siesa, y eso no es un error.
+        const emision = empEstadoEmision(t);
+        const enCola = emision === 'EN_COLA' && !pedidoAnulado && !retenidoCartera;
+        const deAdmin = emision === 'ADMIN' && !pedidoAnulado && !retenidoCartera;
+        const siesaFallo = emision === 'FALLIDO' && !pedidoAnulado && !retenidoCartera;
         const enProceso = t.estado === 'EN_PROCESO';
         const bloqueado = (!pickingListo && t.estado === 'PENDIENTE') || pedidoAnulado;
         // Una tarea BLOQUEADA (backorder Siesa, faltante, avería...) no se
@@ -135,9 +161,9 @@ function empRenderListaTareas() {
         // "Esperando picking" ahí manda al empacador a esperar algo que
         // nunca va a pasar solo.
         const enAuditoria = bloqueado && !pedidoAnulado && t.picking_bloqueado === true;
-        const color = pedidoAnulado ? 'var(--red)' : enAuditoria ? '#c084fc' : bloqueado ? '#6b7280' : siesaFallo ? '#fca5a5' : enProceso ? '#93c5fd' : '#facc15';
-        const bg    = pedidoAnulado ? 'var(--rbg)' : enAuditoria ? '#2e1065' : bloqueado ? '#1a1a1a'  : siesaFallo ? '#7f1d1d'  : enProceso ? '#1e3a5f' : '#713f12';
-        const label = retenidoCartera ? '⛔ Retenido por cartera' : pedidoAnulado ? '🚫 PEDIDO ANULADO EN SIESA' : enAuditoria ? '🔍 En auditoría' : bloqueado ? 'Esperando picking' : siesaFallo ? '⚠ Reintentar Siesa' : enProceso ? 'En proceso' : 'Pendiente';
+        const color = pedidoAnulado ? 'var(--red)' : enAuditoria ? '#c084fc' : bloqueado ? '#6b7280' : (siesaFallo || deAdmin) ? '#fca5a5' : enCola ? '#93c5fd' : enProceso ? '#93c5fd' : '#facc15';
+        const bg    = pedidoAnulado ? 'var(--rbg)' : enAuditoria ? '#2e1065' : bloqueado ? '#1a1a1a'  : (siesaFallo || deAdmin) ? '#7f1d1d'  : enCola ? '#1e3a5f' : enProceso ? '#1e3a5f' : '#713f12';
+        const label = retenidoCartera ? '⛔ Retenido por cartera' : pedidoAnulado ? '🚫 PEDIDO ANULADO EN SIESA' : enAuditoria ? '🔍 En auditoría' : bloqueado ? 'Esperando picking' : enCola ? '⏳ En cola de facturación' : deAdmin ? '⚠ Siesa: lo resuelve el administrador' : siesaFallo ? '⚠ Reintentar Siesa' : enProceso ? 'En proceso' : 'Pendiente';
         const anulado_banner = pedidoAnulado ? `
           <div style="margin-top:10px;background:var(--rbg);border:1px solid var(--rbrd);border-radius:8px;padding:10px 12px;">
             <div style="font-size:var(--fs-xs);font-weight:700;color:var(--red);margin-bottom:4px;">🚫 Pedido anulado en Siesa (estado ${esc(t.pedido_estado_siesa_detectado || '9')})</div>
@@ -167,8 +193,8 @@ function empRenderListaTareas() {
         // solo se omite si la tarjeta ya tiene su propio borde de error (pedido anulado).
         const acentoLateral = `border-left:4px solid ${esTraslado ? '#c2410c' : '#1d4ed8'};`;
         return `
-        <div class="emp-task-card" onclick="${(bloqueado || pedidoAnulado || retenidoCartera) ? '' : `empIniciarHUD(${esc(t.id)})`}"
-          style="${(bloqueado || pedidoAnulado || retenidoCartera) ? 'cursor:default;' : 'cursor:pointer;'}${pedidoAnulado ? 'border:2px solid var(--red);' : acentoLateral}">
+        <div class="emp-task-card" onclick="${(bloqueado || pedidoAnulado || retenidoCartera || enCola || deAdmin) ? '' : `empIniciarHUD(${esc(t.id)})`}"
+          style="${(bloqueado || pedidoAnulado || retenidoCartera || enCola || deAdmin) ? 'cursor:default;' : 'cursor:pointer;'}${pedidoAnulado ? 'border:2px solid var(--red);' : acentoLateral}">
           <div class="emp-task-pedido" style="display:flex;align-items:center;">${refDisplay}${etiquetaHtml}</div>
           ${destinoHtml}
           <div class="emp-task-sub">${total} producto(s) · ${esc(t.items_verificados || 0)}/${total} verificados</div>
@@ -176,7 +202,9 @@ function empRenderListaTareas() {
             <div style="height:100%;background:#4ade80;width:${pct}%;border-radius:8px;transition:width 0.3s;"></div>
           </div>` : ''}
           <span class="emp-task-badge" style="${retenidoCartera ? 'background:var(--warn-bg);color:var(--warn-tx);' : `background:${bg};color:${color};`}">${label}</span>
-          ${retenidoCartera ? `<div style="margin-top:6px;font-size:var(--fs-xs);color:var(--warn-tx);">${esc(t.retencion_cartera.resumen || '')}</div>` : ''}
+          ${retenidoCartera && t.retencion_cartera ? `<div style="margin-top:6px;font-size:var(--fs-xs);color:var(--warn-tx);">${esc(t.retencion_cartera.resumen || '')}</div>` : ''}
+          ${enCola ? `<div style="margin-top:6px;font-size:var(--fs-xs);color:var(--tx2);">Las piezas quedaron registradas. La factura sale sola cuando Siesa responda: no hace falta hacer nada.</div>` : ''}
+          ${deAdmin ? `<div style="margin-top:6px;font-size:var(--fs-xs);color:var(--tx2);">Siesa tiene (o puede tener) un documento de esta caja. No la cierre de nuevo: avise al administrador.</div>` : ''}
           ${anulado_banner}
           ${limpiarBtn}
         </div>`;
@@ -220,8 +248,17 @@ async function empIniciarHUD(packingId) {
     const _btnCam = document.getElementById('emp-btn-camara');
     if (_btnCam) _btnCam.style.display = (OPERARIO && OPERARIO.puede_usar_camara) ? '' : 'none';
 
-    // Retry Siesa: bultos ya creados pero Siesa falló — reintentar directamente
+    // Caja ya cerrada: según en qué va su emisión (lo dice el servidor).
     if (t.estado === 'VERIFICADO' && !t.siesa_triggered && t.bultos?.length) {
+      const emision = empEstadoEmision(t);
+      if (emision === 'EN_COLA') {
+        alerta(`${t.numero_pedido_siesa}: la caja está en la cola de facturación de Siesa. No hace falta hacer nada.`, 'info');
+        return;
+      }
+      if (emision === 'ADMIN') {
+        alerta(`${t.numero_pedido_siesa}: Siesa tiene (o puede tener) un documento de esta caja. Avise al administrador.`, 'advertencia');
+        return;
+      }
       await empReintentarSiesa(t);
       return;
     }
@@ -307,11 +344,8 @@ async function empReintentarSiesa(t) {
   try {
     // bultos_data vacío — el backend detecta bultos existentes y solo reintenta Siesa
     const data = await post(`/api/packing/${t.id}/cerrar`, { bultos: t.bultos.map(b => ({ tipo: b.tipo, cantidad: 1 })) });
-    empImprimirEtiquetas(data.bultos, {
-      numero_pedido: data.numero_pedido,
-      cliente: data.cliente,
-      municipio: data.municipio
-    });
+    // Las etiquetas se imprimieron al cerrar la caja: reintentar el envío
+    // a Siesa no las vuelve a imprimir (cada toque sacaba un juego nuevo).
     const m = empMensajeCierre(data, 200);
     alerta(`${t.numero_pedido_siesa}: ${m.texto}`, m.tipo);
     empCargarTareas();

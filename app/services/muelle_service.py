@@ -118,16 +118,51 @@ class MuelleService:
         return {'ok': True, 'mensaje': f'{len(bultos)} bultos asignados a la ruta {ruta_id}'}
 
     @staticmethod
-    def desasignar_de_ruta(bulto_id: int, usuario_id: int = None, motivo: str = None) -> dict:
+    def desasignar_de_ruta(bulto_id: int, usuario_id: int = None, motivo: str = None,
+                           forzar: bool = False) -> dict:
         """Quita el bulto de la ruta. La asignación que se deshace —a qué ruta,
-        quién y cuándo la hizo— queda en la bitácora (DESASIGNAR)."""
-        from app.services.bitacora import registrar_accion, foto
+        quién y cuándo la hizo— queda en la bitácora (DESASIGNAR).
+
+        Un bulto ya CARGADO no se quita, **salvo** que no pueda salir
+        (`documento_fiscal.despachable`: sin RM + FE) y la ruta siga EN_CARGUE:
+        con `forzar` y motivo obligatorio se baja del camión (vuelve a
+        PENDIENTE, sin ruta) y queda FORZAR en la bitácora. Sin esto, una caja
+        cargada que perdió su despachabilidad —las de antes del control fiscal
+        (m048fiscal), una factura que no se confirmó— dejaba la ruta sin salida:
+        `cerrar_ruta` se niega y desasignar rechazaba lo cargado (2026-09-26)."""
+        from app.services.bitacora import (FORZADO_BULTO_CARGADO_SACADO, foto,
+                                           motivo_obligatorio, registrar_accion)
         bulto = Bulto.query.get(bulto_id)
         if not bulto:
             raise LookupError('Bulto no encontrado')
-        if bulto.estado == EstadoBulto.CARGADO:
-            raise ValueError('No se puede desasignar un bulto que ya fue cargado físicamente')
         _campos = ['ruta_despacho_id', 'asignado_ruta_por_id', 'asignado_ruta_at']
+        if bulto.estado == EstadoBulto.CARGADO:
+            _motivo = motivo_no_despachable(bulto.tarea) if bulto.tarea else 'El bulto no tiene caja.'
+            if not _motivo:
+                raise ValueError('No se puede quitar un bulto que ya fue cargado y puede salir.')
+            ruta = RutaDespacho.query.get(bulto.ruta_despacho_id) if bulto.ruta_despacho_id else None
+            if ruta is None or ruta.estado != EstadoRutaDespacho.EN_CARGUE:
+                raise ValueError('Solo se baja un bulto cargado de una ruta que sigue en cargue.')
+            if not forzar:
+                raise ValueError(f'El bulto ya está cargado. {_motivo} Para bajarlo del camión, '
+                                 f'confírmelo con un motivo.')
+            texto = motivo_obligatorio(motivo, 'bajar del camión un bulto que no puede salir')
+            _campos_c = _campos + ['estado', 'fecha_cargado', 'cargado_por_id']
+            antes = foto(bulto, _campos_c)
+            bulto.estado = EstadoBulto.PENDIENTE
+            bulto.fecha_cargado = None
+            bulto.cargado_por_id = None
+            bulto.ruta_despacho_id = None
+            bulto.asignado_ruta_por_id = None
+            bulto.asignado_ruta_at = None
+            registrar_accion('FORZAR', bulto, usuario_id=usuario_id, motivo=texto,
+                             antes=antes,
+                             despues={**foto(bulto, _campos_c),
+                                      'forzado': FORZADO_BULTO_CARGADO_SACADO,
+                                      'ruta_id': ruta.id, 'por_que_no_sale': _motivo},
+                             almacen_id=(bulto.tarea.almacen_id if bulto.tarea else None))
+            db.session.commit()
+            return {'ok': True, 'mensaje': 'Bulto bajado del camión: volvió al muelle, sin ruta.'}
         antes = foto(bulto, _campos)
         bulto.ruta_despacho_id = None
         bulto.asignado_ruta_por_id = None

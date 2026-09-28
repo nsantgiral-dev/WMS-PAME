@@ -438,3 +438,58 @@ def emision_exclusiva(tarea, etiqueta: str = 'emision'):
             yield PermisoDeEmision(False, MENSAJE_EMISION_EN_CURSO, 409, 'EMISION_EN_CURSO')
             return
         yield PermisoDeEmision(True)
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Las cajas de antes del control fiscal (P2, día del deploy de m048fiscal)
+# ─────────────────────────────────────────────────────────────────────────
+#
+# Una caja con `siesa_triggered` y factura legítima pero **sin `rm_consec`**
+# (lo escribían la rama `244328-AUTO` y la reconciliación por estado antes del
+# 2026-09-25) no es `despachable`: desaparece del muelle, y si sus bultos ya
+# estaban CARGADO en una ruta EN_CARGUE, `cerrar_ruta` se niega. La salida no
+# reabre el agujero: se verifica en Siesa (GET) y se registra la RM con
+# «Facturar RM manual» (que, con la FE ya en Siesa, no postea nada).
+
+def filtro_anteriores_al_control_fiscal(T=None):
+    """`siesa_triggered AND rm_consec IS NULL AND tipo <> 'TRASLADO'` (y no
+    cancelada). La consulta de conteo para antes del deploy está en CLAUDE.md
+    («Fiscal v2»)."""
+    from sqlalchemy import and_, or_
+    if T is None:
+        from app.models.packing import TareaPacking as T
+    return and_(T.siesa_triggered.is_(True), T.rm_consec.is_(None),
+                or_(T.tipo_documento.is_(None), T.tipo_documento != 'TRASLADO'),
+                T.estado != 'CANCELADO')
+
+
+def cajas_anteriores_al_control_fiscal(limite: int = 200) -> dict:
+    """Las cajas de `filtro_anteriores_al_control_fiscal`, con sus bultos por
+    estado y las rutas donde están cargados. Más nuevas primero."""
+    from app.models.bulto import Bulto
+    from app.models.packing import TareaPacking
+    q = TareaPacking.query.filter(filtro_anteriores_al_control_fiscal())
+    total = q.count()
+    tareas = q.order_by(TareaPacking.id.desc()).limit(limite).all()
+    bultos = {}
+    if tareas:
+        for b in Bulto.query.filter(Bulto.tarea_id.in_([t.id for t in tareas])).all():
+            bultos.setdefault(b.tarea_id, []).append(b)
+    filas = []
+    for t in tareas:
+        bs = bultos.get(t.id, [])
+        por_estado = {}
+        for b in bs:
+            por_estado[b.estado] = por_estado.get(b.estado, 0) + 1
+        filas.append({
+            'id': t.id, 'codigo': t.codigo, 'pedido': t.numero_pedido_siesa,
+            'pedido_clave': t.pedido_clave, 'cliente': t.cliente, 'estado': t.estado,
+            'fe': (f'{t.fe_tipo or "FE"}-{t.fe_consec}' if t.fe_consec else None),
+            'fe_confirmada': fe_confirmada(t),
+            'bultos': por_estado,
+            'rutas_con_bultos_cargados': sorted({b.ruta_despacho_id for b in bs
+                                                 if b.estado == 'CARGADO' and b.ruta_despacho_id}),
+            'siesa_triggered_at': (t.siesa_triggered_at.isoformat()
+                                   if t.siesa_triggered_at else None),
+        })
+    return {'total': total, 'cajas': filas, 'mostradas': len(filas)}

@@ -481,7 +481,8 @@ function _htmlGrupoRuta(grupo, gi, totalGrupos, rutaId) {
                 <div style="font-size:var(--fs-xs);color:var(--tx3);">${esc(b.tipo)} · pieza ${esc(b.numero)}/${esc(b.total)}</div>
               </div>
               <div style="display:flex;align-items:center;gap:8px;">
-                ${!conf ? `<button onclick="conBotonOcupado(event, () => muelleDesasignar(${esc(b.id)}))" title="Quitar de la ruta" style="background:none;border:none;color:var(--tx3);font-size:var(--fs-lg);cursor:pointer;line-height:1;padding:4px;">×</button>` : ''}
+                ${!conf ? `<button onclick="conBotonOcupado(event, () => muelleDesasignar(${esc(b.id)}))" title="Quitar de la ruta" style="background:none;border:none;color:var(--tx3);font-size:var(--fs-lg);cursor:pointer;line-height:1;padding:4px;">×</button>`
+                  : (b.despachable === false ? `<button onclick="conBotonOcupado(event, () => muelleBajarCargado(${esc(b.id)}))" title="No puede salir: bajarlo del camión" style="background:var(--err-bg);border:1px solid var(--err-brd);color:var(--err-tx);font-size:var(--fs-xs);font-weight:700;cursor:pointer;border-radius:6px;padding:6px 8px;">Bajar del camión</button>` : '')}
                 <span style="background:${conf ? '#14532d' : 'var(--warn-bg)'};color:${conf ? '#4ade80' : '#f59e0b'};font-size:var(--fs-xs);padding:3px 10px;border-radius:20px;font-weight:700;white-space:nowrap;">
                   ${conf ? '✓ Cargado' : '⏳ Pendiente'}
                 </span>
@@ -568,6 +569,34 @@ async function muelleAsignar(bultoId, pedidoSiesa) {
       await cargarRutaSelector(); // actualizar contador de bultos en dropdown
     } else {
       alerta(r.error || 'Error al asignar', 'error');
+    }
+  } catch (e) { alerta('Error de conexión', 'error'); }
+}
+
+/**
+ * Baja del camión un bulto ya cargado que no puede salir (sin remisión y
+ * factura confirmadas): vuelve al muelle sin ruta. Pide el motivo; queda
+ * FORZAR en la bitácora.
+ * @param {number} bultoId
+ */
+async function muelleBajarCargado(bultoId) {
+  const motivo = await _modalTexto('Bajar del camión',
+    'Este bulto no tiene remisión y factura confirmadas: no puede salir. ¿Por qué se baja? (obligatorio — queda en la bitácora con su nombre)',
+    { obligatorio: true, textoConfirmar: 'Bajar' });
+  if (!motivo || !motivo.trim()) return;
+  try {
+    const r = await fetch(API + '/api/muelle/desasignar/' + bultoId, {
+      method: 'DELETE',
+      headers: { Authorization: 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ forzar: true, motivo: motivo.trim() }),
+    });
+    const d = await r.json();
+    if (r.ok) {
+      alerta(d.mensaje || 'Bulto bajado del camión', 'exito');
+      await cargarMuelleConRuta(RUTA_ACTIVA_ID);
+      await cargarRutaSelector();
+    } else {
+      alerta(d.error || 'No se pudo bajar el bulto', 'error');
     }
   } catch (e) { alerta('Error de conexión', 'error'); }
 }

@@ -425,3 +425,168 @@ class TestRecienEnviadaNoSeBarreEntera:
         with pytest.raises(EsperandoRemision):
             DespachoParialService.despachar_parcial(t, {'SKU1': 10})
         assert vistas == [1]
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# H2b · El servidor dice en qué va la emisión
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _job(db, t, estado='PENDIENTE', error=None):
+    from app.models.siesa_job import SiesaJob
+    j = SiesaJob.encolar(tipo='DESPACHO_F470', referencia_tipo='TareaPacking',
+                         referencia_id=t.id, payload={'tarea_id': t.id})
+    j.estado = estado
+    j.error_ultimo = error
+    db.session.commit()
+    return j
+
+
+class TestEstadoDeLaEmision:
+
+    def test_los_estados(self, db, almacen):
+        from app.services.documento_fiscal import estado_emision, estados_emision
+        viejo = datetime.utcnow() - timedelta(hours=1)
+        casos = {
+            'EN_COLA': _tarea(db, almacen),
+            'FALLIDO': _tarea(db, almacen),
+            'SIN_VERIFICAR': _tarea(db, almacen, rm_enviada_at=viejo),
+            'REMISION_SIN_FACTURA': _tarea(db, almacen, rm_tipo='RM', rm_consec=9,
+                                           rm_enviada_at=viejo),
+            'FACTURA_SIN_REMISION': _tarea(db, almacen, siesa_triggered=True, fe_tipo='FE', fe_consec='77'),
+            'DESPACHADO': _tarea(db, almacen, siesa_triggered=True, rm_tipo='RM', rm_consec=8,
+                                 fe_confirmada_at=viejo, estado='DESPACHADO'),
+            None: _tarea(db, almacen),
+        }
+        _job(db, casos['EN_COLA'])
+        _job(db, casos['FALLIDO'], 'FALLIDO')
+        _job(db, casos['SIN_VERIFICAR'])        # esperando, con la gracia vencida
+        _job(db, casos['REMISION_SIN_FACTURA'], 'FALLIDO')
+        lote = estados_emision(list(casos.values()))
+        for esperado, t in casos.items():
+            assert estado_emision(t) == esperado, (esperado, estado_emision(t))
+            assert lote[t.id] == esperado
+
+    def test_la_lista_de_packing_lo_trae(self, client, db, almacen, usuario_admin,
+                                         jwt_token_admin):
+        t = _tarea(db, almacen)
+        _job(db, t)
+        r = client.get('/api/packing/?activas=true',
+                       headers={'Authorization': f'Bearer {jwt_token_admin}'})
+        fila = next(x for x in r.get_json()['tareas'] if x['id'] == t.id)
+        assert fila['estado_emision'] == 'EN_COLA'
+        d = client.get(f'/api/packing/{t.id}',
+                       headers={'Authorization': f'Bearer {jwt_token_admin}'}).get_json()
+        assert d['estado_emision'] == 'EN_COLA'
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# P2 · Las cajas de antes del control fiscal tienen salida
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _bulto_cargado(db, t, ruta):
+    from app.models.bulto import Bulto
+    b = Bulto(tarea_id=t.id, tipo='Caja', numero=1, total=1, estado='CARGADO',
+              codigo_barras=f'B-{t.id}-X', ruta_despacho_id=ruta.id,
+              fecha_cargado=datetime.utcnow())
+    db.session.add(b)
+    db.session.commit()
+    return b
+
+
+class TestBajarDelCamionLoQueNoPuedeSalir:
+
+    def _mundo(self, db, almacen, estado_ruta='EN_CARGUE', **kw):
+        from tests.test_documento_fiscal import _ruta
+        t = _tarea(db, almacen, siesa_triggered=True, estado='DESPACHADO',
+                   fe_tipo='FE', fe_consec='55', **kw)
+        ruta = _ruta(db, estado_ruta)
+        return t, ruta, _bulto_cargado(db, t, ruta)
+
+    def test_sin_forzar_se_niega_y_lo_dice(self, db, almacen):
+        from app.services.muelle_service import MuelleService
+        _t, _r, b = self._mundo(db, almacen)
+        with pytest.raises(ValueError, match='confírmelo con un motivo'):
+            MuelleService.desasignar_de_ruta(b.id, usuario_id=1)
+
+    def test_forzado_con_motivo_vuelve_al_muelle_y_queda_forzar(self, db, almacen,
+                                                                  usuario_admin):
+        from app.models.bitacora import BitacoraAccion
+        from app.models.bulto import Bulto
+        from app.services.bitacora import FORZADO_BULTO_CARGADO_SACADO
+        from app.services.muelle_service import MuelleService
+        _t, _r, b = self._mundo(db, almacen)
+        MuelleService.desasignar_de_ruta(b.id, usuario_id=usuario_admin.id,
+                                         motivo='caja sin remisión', forzar=True)
+        b = db.session.get(Bulto, b.id)
+        assert b.estado == 'PENDIENTE' and b.ruta_despacho_id is None and b.fecha_cargado is None
+        fila = BitacoraAccion.query.filter_by(accion='FORZAR', entidad='Bulto').one()
+        assert fila.despues['forzado'] == FORZADO_BULTO_CARGADO_SACADO
+
+    def test_sin_motivo_no(self, db, almacen):
+        from app.services.bitacora import MotivoRequerido
+        from app.services.muelle_service import MuelleService
+        _t, _r, b = self._mundo(db, almacen)
+        with pytest.raises(MotivoRequerido):
+            MuelleService.desasignar_de_ruta(b.id, usuario_id=1, motivo='  ', forzar=True)
+
+    def test_lo_que_puede_salir_no_se_baja(self, db, almacen):
+        from app.services.muelle_service import MuelleService
+        _t, _r, b = self._mundo(db, almacen, rm_tipo='RM', rm_consec=4,
+                                fe_confirmada_at=datetime.utcnow())
+        with pytest.raises(ValueError, match='puede salir'):
+            MuelleService.desasignar_de_ruta(b.id, usuario_id=1, motivo='x', forzar=True)
+
+    def test_de_una_ruta_que_ya_salio_no(self, db, almacen):
+        from app.services.muelle_service import MuelleService
+        _t, _r, b = self._mundo(db, almacen, estado_ruta='EN_TRANSITO')
+        with pytest.raises(ValueError, match='sigue en cargue'):
+            MuelleService.desasignar_de_ruta(b.id, usuario_id=1, motivo='x', forzar=True)
+
+    def test_por_http(self, client, db, almacen, usuario_admin, jwt_token_admin):
+        _t, _r, b = self._mundo(db, almacen)
+        h = {'Authorization': f'Bearer {jwt_token_admin}'}
+        assert client.delete(f'/api/muelle/desasignar/{b.id}', headers=h,
+                             json={'forzar': True}).status_code == 400
+        r = client.delete(f'/api/muelle/desasignar/{b.id}', headers=h,
+                          json={'forzar': True, 'motivo': 'sin remisión'})
+        assert r.status_code == 200, r.get_json()
+
+
+class TestCajasAnterioresAlControlFiscal:
+
+    def test_la_lista_y_la_verificacion(self, client, db, almacen, siesa, usuario_admin,
+                                        jwt_token_admin):
+        from tests.test_documento_fiscal import _ruta
+        vieja = _tarea(db, almacen, siesa_triggered=True, estado='DESPACHADO')
+        _bulto_cargado(db, vieja, _ruta(db))
+        _tarea(db, almacen, siesa_triggered=True, rm_tipo='RM', rm_consec=3,
+               fe_confirmada_at=datetime.utcnow(), estado='DESPACHADO')   # sana
+        _tarea(db, almacen, siesa_triggered=True, tipo_documento='TRASLADO')  # traslado
+        h = {'Authorization': f'Bearer {jwt_token_admin}'}
+        r = client.get('/api/despacho_parcial/anteriores-control-fiscal', headers=h).get_json()
+        assert [c['id'] for c in r['cajas']] == [vieja.id]
+        assert r['cajas'][0]['bultos'] == {'CARGADO': 1}
+        siesa.facturas = [{'f350_id_tipo_docto': 'FE', 'f350_consec_docto': '901'}]
+        siesa.remision = {'tipo': 'RM', 'consec': 61}
+        v = client.get(f'/api/despacho_parcial/{vieja.id}/verificar-en-siesa', headers=h).get_json()
+        assert v['factura'] == 'FE-901' and v['remision'] == {'tipo': 'RM', 'consec': 61}
+        assert siesa.posts_142943 == 0 and siesa.posts_142945 == 0
+
+    def test_completar_con_la_fe_en_siesa_no_postea(self, client, db, almacen, siesa,
+                                                     usuario_admin, jwt_token_admin):
+        from app.services.documento_fiscal import despachable
+        vieja = _tarea(db, almacen, siesa_triggered=True, estado='DESPACHADO')
+        siesa.facturas = [{'f350_id_tipo_docto': 'FE', 'f350_consec_docto': '901'}]
+        r = client.post(f'/api/despacho_parcial/{vieja.id}/facturar-rm-manual',
+                        headers={'Authorization': f'Bearer {jwt_token_admin}'},
+                        json={'tipo_rm': 'RM', 'consec_rm': 61, 'confirmacion': 'RM-61',
+                              'motivo': 'caja anterior al control fiscal'})
+        assert r.status_code == 200, r.get_json()
+        db.session.refresh(vieja)
+        assert despachable(vieja) and vieja.rm_consec == 61
+        assert siesa.posts_142943 == 0
+
+    def test_solo_admin(self, client, db, almacen, jwt_token):
+        h = {'Authorization': f'Bearer {jwt_token}'}
+        assert client.get('/api/despacho_parcial/anteriores-control-fiscal',
+                          headers=h).status_code == 403

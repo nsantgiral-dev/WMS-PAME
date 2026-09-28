@@ -5,6 +5,7 @@ Toda la lógica de negocio vive en MuelleService.
 from flask import Blueprint, jsonify, request
 from flask_jwt_extended import jwt_required
 from app.routes._auth_helpers import _es_admin_o_jefe
+from app.services.bitacora import MotivoRequerido
 from app.services.muelle_service import MuelleService, ConflictError
 
 muelle_bp = Blueprint('muelle', __name__)
@@ -51,9 +52,13 @@ def desasignar_de_ruta(id):
     if not usuario:
         return jsonify({'error': 'No autorizado'}), 403
     try:
+        _body = request.get_json(silent=True) or {}
         resultado = MuelleService.desasignar_de_ruta(
             id, usuario_id=usuario.id,
-            motivo=(request.get_json(silent=True) or {}).get('motivo') or request.args.get('motivo'))
+            motivo=_body.get('motivo') or request.args.get('motivo'),
+            forzar=_body.get('forzar') is True)
+    except MotivoRequerido as e:
+        return jsonify({'error': str(e)}), 400
     except LookupError as e:
         return jsonify({'error': str(e)}), 404
     except ValueError as e:

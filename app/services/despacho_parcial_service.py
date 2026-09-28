@@ -715,6 +715,31 @@ class DespachoParialService:
         return {'rm_encontrada': None, 'pre_flag_quitado': True,
                 'sin_barrido_completo': forzado}
 
+    @staticmethod
+    def verificar_en_siesa(tarea) -> dict:
+        """Solo GET: ¿qué tiene Siesa de este pedido? La factura (por pedido)
+        y la remisión (CO + tipo + consecutivo). **No escribe nada.** Es el
+        primer paso de la salida de una caja de antes del control fiscal: con
+        la RM a la vista, «Facturar RM manual» la registra sin postear (la FE
+        ya existe)."""
+        from app.services.connekta_gateway import RemisionNoDisponible, connekta
+        out = {'factura': None, 'remision': None, 'no_se': []}
+        try:
+            facturas = connekta.get_factura_desde_pedido(tarea.tipo_docto_pedido_siesa,
+                                                         tarea.consec_docto_pedido_siesa)
+            f0 = next((f for f in facturas or [] if isinstance(f, dict)
+                       and str(f.get('f350_consec_docto') or '').strip()), None)
+            out['factura'] = (f"{f0.get('f350_id_tipo_docto') or 'FE'}-{f0.get('f350_consec_docto')}"
+                              if f0 else None)
+        except Exception as e:  # noqa: BLE001 — se declara: «no sé» ≠ «no hay»
+            out['no_se'].append(f'factura: {e}')
+        try:
+            rm = DespachoParialService._buscar_rm(tarea)
+            out['remision'] = rm
+        except RemisionNoDisponible as e:
+            out['no_se'].append(f'remisión: {e}')
+        return out
+
     # ------------------------------------------------------------------
     # Helpers privados
     # ------------------------------------------------------------------

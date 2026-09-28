@@ -10,7 +10,7 @@ from flask import Blueprint, jsonify, request
 from flask_jwt_extended import jwt_required
 
 from app.models.packing import TareaPacking, EstadoPacking
-from app.routes._auth_helpers import _es_gestion
+from app.routes._auth_helpers import _es_gestion, _solo_admin
 
 despacho_parcial_bp = Blueprint('despacho_parcial', __name__)
 logger = logging.getLogger(__name__)
@@ -238,3 +238,26 @@ def facturar_rm_manual(packing_id: int):
         except Exception as e:
             logger.exception('[FACTURAR_RM_MANUAL] Error packing_id=%s: %s', packing_id, e)
             return jsonify({'error': f'Error Siesa: {str(e)}'}), 502
+
+
+@despacho_parcial_bp.route('/anteriores-control-fiscal', methods=['GET'])
+@jwt_required()
+def anteriores_control_fiscal():
+    """Cajas de antes del control fiscal (m048fiscal): `siesa_triggered` sin
+    remisión identificada. No pueden salir hasta registrar su RM. Solo admin."""
+    if not _solo_admin():
+        return jsonify({'error': 'Solo admin'}), 403
+    from app.services.documento_fiscal import cajas_anteriores_al_control_fiscal
+    return jsonify(cajas_anteriores_al_control_fiscal()), 200
+
+
+@despacho_parcial_bp.route('/<int:packing_id>/verificar-en-siesa', methods=['GET'])
+@jwt_required()
+def verificar_en_siesa(packing_id: int):
+    """Solo lectura: la factura y la remisión que Siesa tiene del pedido."""
+    if not _solo_admin():
+        return jsonify({'error': 'Solo admin'}), 403
+    tarea = TareaPacking.query.get_or_404(packing_id)
+    from app.services.despacho_parcial_service import DespachoParialService
+    return jsonify({'packing_id': packing_id, 'pedido': tarea.numero_pedido_siesa,
+                    **DespachoParialService.verificar_en_siesa(tarea)}), 200
