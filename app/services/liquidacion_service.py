@@ -1945,8 +1945,17 @@ def leer_facturas_en_paralelo(facturas) -> dict:
             return connekta.get_rowids_factura(fe[0], fe[1])
         except Exception as e:                   # noqa: BLE001 — se declara por parada
             return e
-    with ThreadPoolExecutor(max_workers=max(1, min(PARALELO_FACTURAS, len(facturas)))) as pool:
-        return dict(zip(facturas, pool.map(_leer, facturas)))
+    out = {}
+    if connekta.lecturas_en_serie():
+        # Con el circuito sin cerrar, la primera sale sola: es el probe. En
+        # paralelo, las otras cinco las negaba el breaker y la planilla decía
+        # «no se pudo leer» de facturas que Siesa ya contestaba.
+        out[facturas[0]] = _leer(facturas[0])
+        facturas = facturas[1:]
+    if facturas:
+        with ThreadPoolExecutor(max_workers=max(1, min(PARALELO_FACTURAS, len(facturas)))) as pool:
+            out.update(zip(facturas, pool.map(_leer, facturas)))
+    return out
 
 
 #: Los documentos de la liquidación (fuera del RC, que tiene su propia salida)

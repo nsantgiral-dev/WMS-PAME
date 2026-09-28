@@ -785,6 +785,16 @@ class ConnektaGateway:
         al circuito (H1, 2026-09-26)."""
         return self._circuit.admite_intento()
 
+    def lecturas_en_serie(self) -> bool:
+        """¿Las lecturas que un llamador pensaba lanzar en paralelo tienen que
+        salir de a una? Sí mientras el circuito no esté cerrado: la primera que
+        sale es el probe (OPEN → HALF_OPEN) y cualquier otra que salga a la vez
+        la niega el breaker —«Siesa no disponible» justo cuando Siesa volvió—.
+        Leída la primera, si respondió, el circuito ya está cerrado para el
+        resto. **Una política** para el precheck del cierre (H1) y la lectura
+        de facturas de Liquidación (integración v2, 2026-09-27)."""
+        return self._cb_state != 'CLOSED'
+
     def _cb_consumir_permiso(self) -> bool:
         """Pide permiso para UNA llamada HTTP. **Consume estado.** Se llama
         EXACTAMENTE UNA VEZ por intento — ver el docstring completo en

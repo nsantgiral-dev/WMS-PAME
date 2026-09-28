@@ -164,7 +164,7 @@ class PedidoPackingCloser(IPackingCloser):
         # permiso del probe y la segunda, negada por el breaker, haría fallar
         # el precheck justo cuando Siesa volvió. En serie: el estado es el
         # probe; si respondió, el circuito ya está cerrado para la factura.
-        _en_serie = connekta._cb_state != 'CLOSED'
+        _en_serie = connekta.lecturas_en_serie()
         _t0 = _time.monotonic()
         try:
             fut_estado = pool.submit(connekta.get_estado_pedido, tipo, consec)

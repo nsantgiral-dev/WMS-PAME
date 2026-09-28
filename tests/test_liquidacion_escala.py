@@ -78,6 +78,9 @@ class TestLasFacturasEnParalelo:
         candado = threading.Lock()
 
         class Lento:
+            def lecturas_en_serie(self):
+                return False
+
             def get_rowids_factura(self, tipo, consec):
                 with candado:
                     vivas[0] += 1
@@ -100,6 +103,28 @@ class TestLasFacturasEnParalelo:
         assert isinstance(res[('FEW', '13')], RuntimeError)       # el fallo se declara
         assert res[('FEW', '0')] == [{'f470_rowid': '0'}]
         assert dt < 25 * 0.05                                       # no en serie
+
+    def test_con_el_circuito_sin_cerrar_la_primera_es_el_probe(self, monkeypatch):
+        """Integración v2 (2026-09-27): con el circuito abierto y el probe
+        vencido, seis lecturas a la vez gastaban el único permiso en la primera
+        y el breaker negaba las otras — «no se pudo leer» justo cuando Siesa
+        volvió. La primera sale sola (`lecturas_en_serie`, la misma política
+        del precheck del cierre); si responde, el resto va en paralelo."""
+        from app.services import liquidacion_service as ls
+        from app.services.connekta_gateway import ConnektaGateway, connekta
+
+        def _get(self, tipo, consec):
+            if not self._cb_consumir_permiso():
+                raise RuntimeError('circuito abierto')
+            time.sleep(0.05)
+            self._cb_record_success()
+            return [{'f470_rowid': consec}]
+        monkeypatch.setattr(ConnektaGateway, 'get_rowids_factura', _get)
+        monkeypatch.setattr(connekta, '_cb_state', 'OPEN')
+        monkeypatch.setattr(connekta, '_cb_last_probe', time.monotonic() - 3600)
+        res = ls.leer_facturas_en_paralelo({('FEW', str(i)) for i in range(8)})
+        assert all(isinstance(v, list) for v in res.values()), res
+        assert connekta._cb_state == 'CLOSED'
 
 
 class TestLaPlanilla:
