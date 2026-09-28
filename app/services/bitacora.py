@@ -81,6 +81,9 @@ FORZADO_RC_RESUELTO_A_MANO = 'recibo_de_caja_resuelto_a_mano'
 FORZADO_FE_SOBRE_RM_DIGITADA = 'factura_sobre_remision_digitada'
 # Tanda 2 (2026-09-25).
 FORZADO_PREFLAG_RESUELTO_A_MANO = 'envio_sin_verificar_resuelto_a_mano'
+# Fiscal v2 (2026-09-26).
+FORZADO_RM_INEXISTENTE_SIN_BARRIDO = 'remision_declarada_inexistente_sin_barrido_completo'
+FORZADO_BULTO_CARGADO_SACADO = 'bulto_cargado_sacado_de_la_ruta'
 
 #: tipo → (verbo en pasado para la bitácora legible, qué se saltó).
 TIPOS_FORZADO = {
@@ -102,6 +105,10 @@ TIPOS_FORZADO = {
                                    'la factura salió sobre una remisión que el WMS no tenía'),
     FORZADO_PREFLAG_RESUELTO_A_MANO: ('resolvió a mano el envío a Siesa de',
                                       'el desenlace de un envío sin verificar lo decidió una persona'),
+    FORZADO_RM_INEXISTENTE_SIN_BARRIDO: ('declaró sin remisión, sin que Siesa lo confirmara,',
+                                         'la consulta de remisiones no se pudo leer entera'),
+    FORZADO_BULTO_CARGADO_SACADO: ('sacó de la ruta un bulto ya cargado de',
+                                   'el bulto no tenía remisión y factura para salir'),
 }
 
 #: Un FORZAR que no dice qué forzó (fila vieja de forma desconocida).

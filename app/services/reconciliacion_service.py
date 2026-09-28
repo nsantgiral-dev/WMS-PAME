@@ -89,7 +89,8 @@ class ReconciliacionService:
             rm = {'tipo': tarea.rm_tipo or 'RM', 'consec': tarea.rm_consec}
         else:
             try:
-                rm = connekta.get_remision_desde_pedido(tipo_docto, consec_docto)
+                from app.services.despacho_parcial_service import DespachoParialService
+                rm = DespachoParialService._buscar_rm(tarea)
             except RemisionNoDisponible as e:
                 logger.warning('[RECONCILIACION] FE de %s encontrada; la RM no se pudo '
                                'consultar: %s', tarea.numero_pedido_siesa, e)
@@ -143,19 +144,11 @@ class ReconciliacionService:
         No se tocan los jobs vivos (PENDIENTE/REINTENTANDO/PROCESANDO): la DLQ
         los resuelve sola por la guarda `siesa_triggered` que se acaba de
         poner. Sin commit: va en la transacción de la reconciliación."""
-        from app.models.siesa_job import EstadoSiesaJob, SiesaJob
-        jobs = SiesaJob.query.filter(
-            SiesaJob.tipo == 'DESPACHO_F470',
-            SiesaJob.referencia_tipo == 'TareaPacking',
-            SiesaJob.referencia_id == tarea.id,
-            SiesaJob.estado == EstadoSiesaJob.FALLIDO,
-        ).all()
-        for job in jobs:
-            job.marcar_completado({'reconciliado': True,
-                                   'por': 'ReconciliacionService.reconciliar_despacho',
-                                   'evidencia': evidencia,
-                                   'error_que_tenia': (job.error_ultimo or '')[:500]})
-        return len(jobs)
+        from app.services.siesa_job_service import cerrar_despachos_resueltos
+        return cerrar_despachos_resueltos(
+            tarea, {'reconciliado': True,
+                    'por': 'ReconciliacionService.reconciliar_despacho',
+                    'evidencia': evidencia})
 
     @staticmethod
     def sweep_despachos_pendientes(app=None):

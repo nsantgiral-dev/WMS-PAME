@@ -95,6 +95,17 @@ class RemisionNoDisponible(RecuperacionNoDisponible):
     """
 
 
+class RemisionBarridoIncompleto(RemisionNoDisponible):
+    """Siesa **sí** contestó, pero la consulta de remisiones no se pudo leer
+    entera: el tope de páginas con la última llena (temporada: > 3.000 RM en
+    30 días) o una fila repetida entre páginas (orden inestable).
+
+    Sigue siendo «no sé» (no autoriza un 142945) pero no es «Siesa caído»:
+    una persona que miró en Siesa puede declarar la RM inexistente con
+    confirmación explícita (`declarar_rm_inexistente(sin_barrido_completo=
+    True)`, FORZAR). Con Siesa caído, ni eso (2026-09-26, H4)."""
+
+
 class ConnektaNoEnviado(Exception):
     """**Prueba positiva de que el documento NO entró a Siesa.**
 
@@ -1182,10 +1193,12 @@ class ConnektaGateway:
         `ConnektaConsultasGateway.get_compromisos_pedido`."""
         return self._consultas.get_compromisos_pedido(tipo_docto, consec_docto, f430_rowid=f430_rowid)
 
-    def get_remision_desde_pedido(self, tipo_docto_pedido: str, consec_docto_pedido) -> dict | None:
+    def get_remision_desde_pedido(self, tipo_docto_pedido: str, consec_docto_pedido,
+                                  co: str = None, max_paginas: int = None) -> dict | None:
         """Fallback: la RM más reciente creada para un pedido. Delegado — ver
         `ConnektaConsultasGateway.get_remision_desde_pedido`."""
-        return self._consultas.get_remision_desde_pedido(tipo_docto_pedido, consec_docto_pedido)
+        return self._consultas.get_remision_desde_pedido(tipo_docto_pedido, consec_docto_pedido,
+                                                         co=co, max_paginas=max_paginas)
 
     def get_pedido_cabecera(self, tipo_docto: str, consec_docto) -> dict | None:
         """Cabecera del pedido para trigger_factura_desde_remision. Delegado

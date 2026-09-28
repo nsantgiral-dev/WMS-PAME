@@ -66,20 +66,15 @@ def despachar_parcial(packing_id: int):
 
     from app.services.despacho_parcial_service import DespachoParialService
     from app.services.cartera_service import RetenidoPorCartera
-    from app.services.documento_fiscal import siesa_disponible_para_facturar
-    _disponible, _motivo = siesa_disponible_para_facturar()
-    if not _disponible:
-        return jsonify({'error': _motivo}), 503
     # Segunda puerta al cierre (244328→142945→142943), sin la idempotencia de
     # la vía viva (declarada BORRAR en DEUDA_SIN_UI). Mientras exista, no corre
-    # a la vez que la cola de Siesa ni que otro clic: el mismo lock que la
-    # DLQ (P1-8). Un doble clic o el job DESPACHO_F470 de la misma tarea
-    # procesándose en paralelo eran una segunda remisión.
-    from app.utils.lock import LOCK_DLQ, advisory_lock
-    with advisory_lock(LOCK_DLQ, 'despacho_parcial_manual') as tomado:
-        if not tomado:
-            return jsonify({'error': 'Hay un envío a Siesa en curso. Intente de nuevo en un '
-                                     'minuto.'}), 409
+    # a la vez que el DESPACHO_F470 del mismo pedido ni que otro clic: el
+    # candado de emisión del pedido, el mismo de la DLQ y de los otros
+    # carriles (`emision_exclusiva`, H3). Pregunta antes si Siesa está.
+    from app.services.documento_fiscal import emision_exclusiva
+    with emision_exclusiva(tarea, 'despacho_parcial_manual') as permiso:
+        if not permiso:
+            return jsonify({'error': permiso.motivo, 'estado': permiso.estado}), permiso.status
         try:
             resultado = DespachoParialService.despachar_parcial(tarea, cantidades)
             logger.info(
@@ -116,18 +111,26 @@ def facturar_remision(packing_id: int):
         return jsonify({'error': 'No se puede facturar una tarea cancelada'}), 409
 
     from app.services.despacho_parcial_service import DespachoParialService
-    try:
-        resultado = DespachoParialService.facturar_remision_existente(tarea)
-        logger.info(
-            '[FACTURAR_RM] usuario=%s facturó remisión packing_id=%s → %s',
-            u.email, packing_id, resultado.get('rm')
-        )
-        return jsonify({'ok': True, **resultado}), 200
-    except ValueError as e:
-        return jsonify({'error': str(e)}), 409
-    except Exception as e:
-        logger.exception('[FACTURAR_RM] Error Siesa packing_id=%s: %s', packing_id, e)
-        return jsonify({'error': f'Error Siesa: {str(e)}'}), 502
+    from app.services.documento_fiscal import emision_exclusiva
+    # Postea el 142943: con Siesa caído no se intenta, y nunca a la vez que
+    # el DESPACHO_F470 del mismo pedido (H3: el anti-duplicado por pedido no
+    # ve una FE que Siesa tarda 30–60 s en mostrar).
+    with emision_exclusiva(tarea, 'facturar_remision') as permiso:
+        if not permiso:
+            return jsonify({'error': permiso.motivo, 'estado': permiso.estado}), permiso.status
+        try:
+            resultado = DespachoParialService.facturar_remision_existente(
+                tarea, a_mano_por=u.id)
+            logger.info(
+                '[FACTURAR_RM] usuario=%s facturó remisión packing_id=%s → %s',
+                u.email, packing_id, resultado.get('rm')
+            )
+            return jsonify({'ok': True, **resultado}), 200
+        except ValueError as e:
+            return jsonify({'error': str(e)}), 409
+        except Exception as e:
+            logger.exception('[FACTURAR_RM] Error Siesa packing_id=%s: %s', packing_id, e)
+            return jsonify({'error': f'Error Siesa: {str(e)}'}), 502
 
 
 @despacho_parcial_bp.route('/<int:packing_id>/facturar-rm-manual', methods=['POST'])
@@ -158,14 +161,24 @@ def facturar_rm_manual(packing_id: int):
         from app.extensions import db
         from app.services.bitacora import MotivoRequerido
         from app.services.despacho_parcial_service import DespachoParialService
-        try:
-            r = DespachoParialService.declarar_rm_inexistente(
-                tarea, usuario_id=u.id, motivo=body.get('motivo'))
-        except MotivoRequerido as e:
-            return jsonify({'error': str(e)}), 400
-        except ValueError as e:
-            db.session.rollback()
-            return jsonify({'error': str(e)}), 409
+        from app.services.documento_fiscal import emision_exclusiva
+        # Quita el pre-flag: con el DESPACHO_F470 del pedido identificando la
+        # RM a la vez, el job podría reenviar el 142945. Mismo candado.
+        with emision_exclusiva(tarea, 'rm_inexistente') as permiso:
+            if not permiso:
+                return jsonify({'error': permiso.motivo, 'estado': permiso.estado}), permiso.status
+            try:
+                r = DespachoParialService.declarar_rm_inexistente(
+                    tarea, usuario_id=u.id, motivo=body.get('motivo'),
+                    sin_barrido_completo=body.get('sin_barrido_completo') is True,
+                    confirmacion=body.get('confirmacion'))
+            except MotivoRequerido as e:
+                return jsonify({'error': str(e)}), 400
+            except ValueError as e:
+                db.session.rollback()
+                return jsonify({'error': str(e),
+                                **({'requiere_confirmacion': e.requiere_confirmacion}
+                                   if getattr(e, 'requiere_confirmacion', None) else {})}), 409
         if r.get('rm_encontrada'):
             return jsonify({'ok': True, **r, 'mensaje': (
                 f"Siesa sí tiene la remisión {r['rm_encontrada']}: quedó registrada. "
@@ -202,21 +215,26 @@ def facturar_rm_manual(packing_id: int):
         motivo = motivo_obligatorio(body.get('motivo'), 'facturar sobre una remisión digitada')
     except MotivoRequerido as e:
         return jsonify({'error': str(e)}), 400
-    registrar_accion('FORZAR', tarea, usuario_id=u.id, motivo=motivo,
-                     entidad_codigo=tarea.numero_pedido_siesa,
-                     despues={'forzado': FORZADO_FE_SOBRE_RM_DIGITADA,
-                              'remision': documento})
 
     from app.services.despacho_parcial_service import DespachoParialService
-    try:
-        resultado = DespachoParialService.facturar_rm_con_consec(tarea, tipo_rm, consec_rm)
-        logger.info(
-            '[FACTURAR_RM_MANUAL] usuario=%s packing_id=%s %s-%s → ok',
-            u.email, packing_id, tipo_rm, consec_rm
-        )
-        return jsonify({'ok': True, **resultado}), 200
-    except ValueError as e:
-        return jsonify({'error': str(e)}), 409
-    except Exception as e:
-        logger.exception('[FACTURAR_RM_MANUAL] Error packing_id=%s: %s', packing_id, e)
-        return jsonify({'error': f'Error Siesa: {str(e)}'}), 502
+    from app.services.documento_fiscal import emision_exclusiva
+    with emision_exclusiva(tarea, 'facturar_rm_manual') as permiso:
+        if not permiso:
+            return jsonify({'error': permiso.motivo, 'estado': permiso.estado}), permiso.status
+        registrar_accion('FORZAR', tarea, usuario_id=u.id, motivo=motivo,
+                         entidad_codigo=tarea.numero_pedido_siesa,
+                         despues={'forzado': FORZADO_FE_SOBRE_RM_DIGITADA,
+                                  'remision': documento})
+        try:
+            resultado = DespachoParialService.facturar_rm_con_consec(
+                tarea, tipo_rm, consec_rm, a_mano_por=u.id)
+            logger.info(
+                '[FACTURAR_RM_MANUAL] usuario=%s packing_id=%s %s-%s → ok',
+                u.email, packing_id, tipo_rm, consec_rm
+            )
+            return jsonify({'ok': True, **resultado}), 200
+        except ValueError as e:
+            return jsonify({'error': str(e)}), 409
+        except Exception as e:
+            logger.exception('[FACTURAR_RM_MANUAL] Error packing_id=%s: %s', packing_id, e)
+            return jsonify({'error': f'Error Siesa: {str(e)}'}), 502

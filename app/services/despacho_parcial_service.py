@@ -40,6 +40,10 @@ _RE_RM = re.compile(r'([A-Z]{1,6})-(\d+)', re.IGNORECASE)
 #: un POST; consultarla en la línea siguiente la encuentra vacía casi siempre.
 GRACIA_IDENTIFICAR_RM = timedelta(minutes=15)
 ESPERA_IDENTIFICAR_RM_MIN = 2
+#: Pasada la gracia y sin poder preguntar (red, tope de páginas): se sigue
+#: esperando —«no sé» no se vuelve FALLIDO por el reloj— pero más espaciado,
+#: para no gastar la DLQ en una consulta que no se puede leer.
+ESPERA_RM_SIN_CONSULTA_MIN = 10
 
 from app.services.connekta_gateway import ConnektaResultadoDesconocido  # noqa: E402
 from app.services.siesa_job_service import DependenciaPendiente  # noqa: E402
@@ -56,13 +60,22 @@ class RemisionNoIdentificada(ConnektaResultadoDesconocido):
     """
 
 
+class ConfirmacionRequerida(ValueError):
+    """Falta la confirmación explícita de quien fuerza (el documento escrito
+    tal cual). La ruta la devuelve con `requiere_confirmacion`."""
+
+    def __init__(self, mensaje: str, requiere_confirmacion: str):
+        super().__init__(mensaje)
+        self.requiere_confirmacion = requiere_confirmacion
+
+
 class EsperandoRemision(DependenciaPendiente):
     """La RM recién enviada todavía no aparece en la consulta (Regla 20).
     Esperar no gasta reintento; pasada `GRACIA_IDENTIFICAR_RM` se declara
     `RemisionNoIdentificada`."""
 
-    def __init__(self, mensaje: str):
-        super().__init__(mensaje, espera_minutos=ESPERA_IDENTIFICAR_RM_MIN)
+    def __init__(self, mensaje: str, espera_minutos: int = None):
+        super().__init__(mensaje, espera_minutos=espera_minutos or ESPERA_IDENTIFICAR_RM_MIN)
 
 
 class DespachoParialService:
@@ -394,7 +407,7 @@ class DespachoParialService:
         )
 
     @staticmethod
-    def facturar_remision_existente(tarea) -> dict:
+    def facturar_remision_existente(tarea, a_mano_por: int = None) -> dict:
         """
         Carril de recuperación: detecta la RM que 142945 ya creó y dispara 142943.
         Prioriza el consecutivo guardado en BD sobre la query a Siesa.
@@ -465,7 +478,8 @@ class DespachoParialService:
             logger.info('[FACTURAR_RM] tarea=%s FE ya existe — marcando done', tarea.id)
             return DespachoParialService._persistir_resultado(
                 tarea, f'{tipo_rm}-{consec_rm}',
-                {'idempotente': True, 'facturas': facturas_existentes}
+                {'idempotente': True, 'facturas': facturas_existentes},
+                a_mano_por=a_mano_por,
             )
 
         # 3. Cabecera para 142943
@@ -483,11 +497,12 @@ class DespachoParialService:
         # 4. POST 142943
         resp_fe = connekta.trigger_factura_desde_remision(tipo_rm, consec_rm, cabecera)
         return DespachoParialService._persistir_resultado(
-            tarea, f'{tipo_rm}-{consec_rm}', resp_fe
+            tarea, f'{tipo_rm}-{consec_rm}', resp_fe, a_mano_por=a_mano_por
         )
 
     @staticmethod
-    def facturar_rm_con_consec(tarea, tipo_rm: str, consec_rm: int) -> dict:
+    def facturar_rm_con_consec(tarea, tipo_rm: str, consec_rm: int,
+                               a_mano_por: int = None) -> dict:
         """
         Carril de emergencia: convierte una RM conocida (tipo+consec) a FE (142943).
         Usar cuando el consecutivo no está en BD y no hay API de remisiones disponible.
@@ -511,7 +526,8 @@ class DespachoParialService:
             DespachoParialService._guardar_rm(tarea, tipo_rm, consec_rm, 'manual')
             return DespachoParialService._persistir_resultado(
                 tarea, f'{tipo_rm}-{consec_rm}',
-                {'idempotente': True, 'facturas': facturas}
+                {'idempotente': True, 'facturas': facturas},
+                a_mano_por=a_mano_por or True,
             )
 
         cabecera = connekta.get_pedido_cabecera(tipo_docto, consec_docto)
@@ -525,7 +541,7 @@ class DespachoParialService:
 
         resp_fe = connekta.trigger_factura_desde_remision(tipo_rm, consec_rm, cabecera)
         return DespachoParialService._persistir_resultado(
-            tarea, f'{tipo_rm}-{consec_rm}', resp_fe
+            tarea, f'{tipo_rm}-{consec_rm}', resp_fe, a_mano_por=a_mano_por or True
         )
 
     # ------------------------------------------------------------------
@@ -545,19 +561,45 @@ class DespachoParialService:
                     origen, tipo_rm, consec_rm, tarea.id, tarea.numero_pedido_siesa)
 
     @staticmethod
+    def _co_del_pedido(tarea):
+        """El CO del pedido desde su clave (`'003-PD-1502'`), o `None`."""
+        clave = getattr(tarea, 'pedido_clave', None) or ''
+        partes = clave.split('-')
+        return partes[0] if len(partes) == 3 and partes[0] else None
+
+    @staticmethod
+    def _buscar_rm(tarea, max_paginas: int = None):
+        """La consulta de remisiones con CO + tipo + consecutivo (Regla 18)."""
+        from app.services.connekta_gateway import connekta
+        kw = {'co': DespachoParialService._co_del_pedido(tarea)}
+        if max_paginas:
+            kw['max_paginas'] = max_paginas
+        return connekta.get_remision_desde_pedido(tarea.tipo_docto_pedido_siesa,
+                                                  tarea.consec_docto_pedido_siesa, **kw)
+
+    @staticmethod
     def _identificar_rm_enviada(tarea, resp_rm=None):
         """El 142945 salió (ahora o en un intento anterior) y no trajo el
         consecutivo. Busca la RM en Siesa:
 
         · encontrada → se guarda y se sigue a la factura;
-        · no está / no se pudo preguntar, dentro de `GRACIA_IDENTIFICAR_RM`
-          desde el envío → `EsperandoRemision` (Regla 20: todavía no aparece);
-        · pasada la gracia → `RemisionNoIdentificada` (FALLIDO sin reintento).
+        · **recién enviada** (`resp_rm`: la respuesta de este mismo intento)
+          → solo la primera página (Regla 20: casi nunca está todavía; leer
+          30 páginas para no encontrarla costaba ~20 s de la DLQ por caja);
+          sin ella, `EsperandoRemision`;
+        · no está (barrido completo), dentro de `GRACIA_IDENTIFICAR_RM` →
+          `EsperandoRemision`; pasada la gracia → `RemisionNoIdentificada`
+          (FALLIDO sin reintento: Siesa, leída entera, no la trae);
+        · **no se pudo preguntar** (red, tope de páginas) → `EsperandoRemision`
+          siempre, también pasada la gracia (H4, 2026-09-26): «no sé» no se
+          vuelve FALLIDO por el reloj. Pasada la gracia espera más y la caja
+          se ve SIN_VERIFICAR (`documento_fiscal.estado_emision`), con la
+          salida humana a la vista.
         """
-        from app.services.connekta_gateway import RemisionNoDisponible, connekta
+        from app.services.connekta_gateway import RemisionNoDisponible
         try:
-            rm = connekta.get_remision_desde_pedido(tarea.tipo_docto_pedido_siesa,
-                                                    tarea.consec_docto_pedido_siesa)
+            rm = DespachoParialService._buscar_rm(
+                tarea, max_paginas=(1 if resp_rm is not None else None))
             no_se = None
         except RemisionNoDisponible as e:
             rm, no_se = None, str(e)
@@ -565,29 +607,45 @@ class DespachoParialService:
             DespachoParialService._guardar_rm(tarea, rm['tipo'], rm['consec'], 'consulta')
             return
         enviada = tarea.rm_enviada_at or datetime.utcnow()
-        que = (f'no se pudo consultar ({no_se})' if no_se
-               else 'la consulta de remisiones no la trae')
-        if datetime.utcnow() - enviada < GRACIA_IDENTIFICAR_RM:
+        dentro = datetime.utcnow() - enviada < GRACIA_IDENTIFICAR_RM
+        if resp_rm is not None:
             raise EsperandoRemision(
-                f'El 142945 del pedido {tarea.numero_pedido_siesa} salió y {que} '
-                f'todavía (Regla 20). Se vuelve a buscar en '
+                f'El 142945 del pedido {tarea.numero_pedido_siesa} salió; la remisión '
+                f'todavía no aparece (Regla 20). Se busca de nuevo en '
+                f'{ESPERA_IDENTIFICAR_RM_MIN} min; no se reenvía.')
+        if no_se:
+            if dentro:
+                raise EsperandoRemision(
+                    f'El 142945 del pedido {tarea.numero_pedido_siesa} salió y no se pudo '
+                    f'consultar la remisión ({no_se}). Se vuelve a buscar en '
+                    f'{ESPERA_IDENTIFICAR_RM_MIN} min; no se reenvía.')
+            raise EsperandoRemision(
+                f'La remisión del pedido {tarea.numero_pedido_siesa} se envió a Siesa '
+                f'({enviada.isoformat(timespec="minutes")} UTC) y sigue sin poder '
+                f'consultarse ({no_se}). No se reenvía y no se da por perdida: se '
+                f'vuelve a buscar en {ESPERA_RM_SIN_CONSULTA_MIN} min. Si la ve en '
+                f'Siesa, regístrela con «Facturar RM manual» (Siesa → Recuperación).',
+                espera_minutos=ESPERA_RM_SIN_CONSULTA_MIN)
+        if dentro:
+            raise EsperandoRemision(
+                f'El 142945 del pedido {tarea.numero_pedido_siesa} salió y la consulta '
+                f'de remisiones no la trae todavía (Regla 20). Se vuelve a buscar en '
                 f'{ESPERA_IDENTIFICAR_RM_MIN} min; no se reenvía.')
         raise RemisionNoIdentificada(
             f'La remisión del pedido {tarea.numero_pedido_siesa} se envió a Siesa '
-            f'({enviada.isoformat(timespec="minutes")} UTC) y {que}. PUEDE existir: '
-            f'no se reenvía. Búsquela en Siesa y regístrela con «Facturar RM '
-            f'manual»; si no existe, declárelo ahí mismo con motivo.'
-            + (f' Respuesta del 142945: {str(resp_rm)[:200]}' if resp_rm else ''))
+            f'({enviada.isoformat(timespec="minutes")} UTC) y la consulta de remisiones, '
+            f'leída entera, no la trae. PUEDE existir: no se reenvía. Búsquela en Siesa y '
+            f'regístrela con «Facturar RM manual»; si no existe, declárelo ahí mismo con '
+            f'motivo.')
 
     @staticmethod
     def _identificar_rm_sin_compromisos(tarea):
         """El pedido ya no tiene nada por remisionar. Si la RM que lo consumió
         aparece, se factura; si no, **no hay DESPACHADO**: resultado
         desconocido, declarado."""
-        from app.services.connekta_gateway import RemisionNoDisponible, connekta
+        from app.services.connekta_gateway import RemisionNoDisponible
         try:
-            rm = connekta.get_remision_desde_pedido(tarea.tipo_docto_pedido_siesa,
-                                                    tarea.consec_docto_pedido_siesa)
+            rm = DespachoParialService._buscar_rm(tarea)
             que = 'la consulta de remisiones no la trae'
         except RemisionNoDisponible as e:
             rm, que = None, f'no se pudo consultar ({e})'
@@ -602,22 +660,42 @@ class DespachoParialService:
             f'(si el pedido se anuló, cancele la caja).')
 
     @staticmethod
-    def declarar_rm_inexistente(tarea, usuario_id: int, motivo: str) -> dict:
+    def declarar_rm_inexistente(tarea, usuario_id: int, motivo: str,
+                                sin_barrido_completo: bool = False,
+                                confirmacion: str = None) -> dict:
         """La salida humana de `RemisionNoIdentificada` cuando la RM **no
         existe**: quita el pre-flag para que el despacho se pueda reintentar.
 
         Se vuelve a preguntar a Siesa antes: si la consulta la encuentra, se
-        guarda (y no se quita nada); si no se puede preguntar, no se declara
-        nada. Motivo obligatorio y bitácora (EDITAR)."""
-        from app.services.bitacora import foto, motivo_obligatorio, registrar_accion
-        from app.services.connekta_gateway import RemisionNoDisponible, connekta
+        guarda (y no se quita nada); si Siesa no responde, no se declara nada.
+        Motivo obligatorio y bitácora (EDITAR).
+
+        **Si Siesa respondió pero la consulta no se pudo leer entera**
+        (`RemisionBarridoIncompleto`: el tope de páginas en temporada) la
+        salida no puede quedar trabada por el mismo tope que la trabó (H4):
+        se acepta con `sin_barrido_completo` y el número del pedido escrito
+        tal cual en `confirmacion` —la persona afirma que miró en Siesa—, y
+        queda FORZAR en la bitácora."""
+        from app.services.bitacora import (FORZADO_RM_INEXISTENTE_SIN_BARRIDO, foto,
+                                           motivo_obligatorio, registrar_accion)
+        from app.services.connekta_gateway import (RemisionBarridoIncompleto,
+                                                   RemisionNoDisponible)
         from app.services.documento_fiscal import rm_resultado_desconocido
         motivo = motivo_obligatorio(motivo, 'declarar que la remisión no existe')
         if not rm_resultado_desconocido(tarea):
             raise ValueError('Esta caja no tiene una remisión enviada sin identificar.')
+        forzado = False
         try:
-            rm = connekta.get_remision_desde_pedido(tarea.tipo_docto_pedido_siesa,
-                                                    tarea.consec_docto_pedido_siesa)
+            rm = DespachoParialService._buscar_rm(tarea)
+        except RemisionBarridoIncompleto as e:
+            pedido = str(tarea.numero_pedido_siesa or tarea.codigo)
+            if not sin_barrido_completo or str(confirmacion or '').strip().upper() != pedido.upper():
+                raise ConfirmacionRequerida(
+                    f'Siesa respondió pero la consulta de remisiones no se pudo leer entera '
+                    f'({e}). Si usted buscó en Siesa y la remisión del pedido {pedido} NO '
+                    f'existe, confírmelo escribiendo {pedido}. Si existe y se reenvía, '
+                    f'queda una segunda remisión.', requiere_confirmacion=pedido)
+            rm, forzado = None, True
         except RemisionNoDisponible as e:
             raise ValueError(f'No se pudo verificar en Siesa ({e}). No se declara nada: '
                              f'inténtelo cuando Siesa responda.')
@@ -627,20 +705,30 @@ class DespachoParialService:
             return {'rm_encontrada': f"{rm['tipo']}-{rm['consec']}"}
         antes = foto(tarea, ['rm_enviada_at', 'rm_tipo', 'rm_consec'])
         tarea.rm_enviada_at = None
-        registrar_accion('EDITAR', tarea, usuario_id=usuario_id, motivo=motivo,
-                         antes=antes, despues={'rm_enviada_at': None,
-                                               'declarado': 'RM_INEXISTENTE'},
+        despues = {'rm_enviada_at': None, 'declarado': 'RM_INEXISTENTE'}
+        if forzado:
+            despues['forzado'] = FORZADO_RM_INEXISTENTE_SIN_BARRIDO
+        registrar_accion('FORZAR' if forzado else 'EDITAR', tarea, usuario_id=usuario_id,
+                         motivo=motivo, antes=antes, despues=despues,
                          entidad_codigo=tarea.codigo, almacen_id=tarea.almacen_id)
         db.session.commit()
-        return {'rm_encontrada': None, 'pre_flag_quitado': True}
+        return {'rm_encontrada': None, 'pre_flag_quitado': True,
+                'sin_barrido_completo': forzado}
 
     # ------------------------------------------------------------------
     # Helpers privados
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _persistir_resultado(tarea, rm_str: str, fe_response: dict) -> dict:
-        """Persiste el estado final de la tarea tras despacho exitoso."""
+    def _persistir_resultado(tarea, rm_str: str, fe_response: dict,
+                             a_mano_por=None) -> dict:
+        """Persiste el estado final de la tarea tras despacho exitoso.
+
+        `a_mano_por`: el usuario (o `True`) del carril manual que emitió. Con
+        la caja despachada, **ningún DESPACHO_F470 FALLIDO de ella sigue
+        contando como trabado** (H6): se cierra con `resuelto_a_mano` — antes
+        solo la reconciliación lo hacía, y el barrido ignora las cajas con
+        `siesa_triggered`."""
         from app.models.packing import EstadoPacking
         resultado = {'rm': rm_str, 'fe_response': fe_response}
         _es_ensayo = bool(fe_response.get('modo_ensayo'))
@@ -658,6 +746,13 @@ class DespachoParialService:
             tarea.fecha_despachado   = tarea.fecha_despachado or datetime.utcnow()
             tarea.fe_confirmada_at   = tarea.fe_confirmada_at or datetime.utcnow()
             DespachoParialService._anotar_fe_encontrada(tarea, fe_response)
+            from app.services.siesa_job_service import cerrar_despachos_resueltos
+            cerrar_despachos_resueltos(
+                tarea, {'por': 'DespachoParialService._persistir_resultado', 'rm': rm_str,
+                        'resuelto_a_mano': bool(a_mano_por),
+                        **({'usuario_id': a_mano_por} if isinstance(a_mano_por, int)
+                           and not isinstance(a_mano_por, bool) else {})},
+                incluir_pendientes=bool(a_mano_por))
         tarea.siesa_response     = json.dumps(resultado)
         # Snapshot de cobro con la condición que la FE llevó DE VERDAD (manda
         # sobre la del pedido). Solo si hubo POST real: en ensayo no existe FE.

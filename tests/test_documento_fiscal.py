@@ -107,7 +107,7 @@ def siesa(siesa_real, monkeypatch):
             raise f.error_142945
         return f.respuesta_142945
 
-    def remision(self, tipo, consec):
+    def remision(self, tipo, consec, **k):
         if isinstance(f.remision, Exception):
             raise f.remision
         return f.remision
@@ -567,12 +567,17 @@ class TestLaRemisionNoSeReenvia:
         assert siesa.posts_142945 == 0 and siesa.posts_244328 == 0
 
     def test_no_poder_preguntar_tampoco_reenvia(self, db, almacen, siesa):
+        # H4 (2026-09-26): «no sé» no se vuelve FALLIDO por el reloj — sigue
+        # esperando, más espaciado, y tampoco reenvía.
         from app.services.connekta_gateway import RemisionNoDisponible
-        from app.services.despacho_parcial_service import RemisionNoIdentificada
+        from app.services.despacho_parcial_service import (ESPERA_RM_SIN_CONSULTA_MIN,
+                                                           EsperandoRemision)
         t = _tarea(db, almacen, rm_enviada_at=datetime.utcnow() - timedelta(hours=1))
         siesa.remision = RemisionNoDisponible('red')
-        with pytest.raises(RemisionNoIdentificada):
+        with pytest.raises(EsperandoRemision) as e:
             _despachar(t)
+        assert e.value.espera_minutos == ESPERA_RM_SIN_CONSULTA_MIN
+        assert 'Facturar RM manual' in str(e.value)
         assert siesa.posts_142945 == 0
 
 

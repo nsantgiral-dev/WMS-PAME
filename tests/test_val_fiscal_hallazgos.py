@@ -100,12 +100,7 @@ def _lock_ocupado(clave, nombre):
 
 class TestLosCarrilesManualesTomanElCandado:
 
-    @pytest.mark.xfail(strict=True, reason=(
-        'H3: /facturar-remision (y /facturar-rm-manual) postean el 142943 sin tomar '
-        'LOCK_DLQ ni mirar siesa_disponible_para_facturar. Con el job DESPACHO_F470 '
-        'de la misma caja corriendo (re-cierre del empacador, «Reintentar»), el '
-        'anti-duplicado por pedido no ve la FE que Siesa procesa en 30–60 s → FE '
-        'duplicada. /despachar sí toma el candado (P1-8); estos dos no.'))
+    # Cerrado 2026-09-26 (v2-fiscal): emision_exclusiva (candado por pedido + disponibilidad) en todo carril.
     def test_facturar_remision_con_la_dlq_ocupada_no_postea(
             self, app, client, db, almacen, siesa, usuario_admin, jwt_token_admin,
             monkeypatch):
@@ -124,13 +119,7 @@ class TestLosCarrilesManualesTomanElCandado:
 
 class TestLaRemisionEnTemporada:
 
-    @pytest.mark.xfail(strict=True, reason=(
-        'H4: get_remision_desde_pedido lee TODAS las páginas (tope 30 × 100) aunque '
-        'la fila del pedido salga en la primera, y con la última llena levanta '
-        'RemisionNoDisponible. La consulta trae el MAX(consec_rm) de CADA pedido '
-        'remisionado en 30 días (sin parámetros): con > 3.000 en temporada, toda '
-        'caja cuyo 142945 no trae consecutivo (todas) termina RemisionNoIdentificada '
-        '→ FALLIDO → facturar-rm-manual a mano, caja por caja.'))
+    # Cerrado 2026-09-26 (v2-fiscal): corte al encontrar; tope = RemisionBarridoIncompleto.
     def test_la_encuentra_en_la_primera_pagina_con_mas_de_tres_mil(self, app, monkeypatch):
         from app.services.connekta_gateway import connekta
         monkeypatch.setattr(connekta, 'modo_simulacion', False)
@@ -190,13 +179,7 @@ class TestElBarridoDeCarteraNoTieneHorarioPropio:
 
 class TestLaSalidaHumanaDesatascaElContador:
 
-    @pytest.mark.xfail(strict=True, reason=(
-        'H6: tras facturar-rm-manual (o facturar-remision) la caja queda DESPACHADO '
-        'con RM + FE, pero el DESPACHO_F470 FALLIDO (RemisionNoIdentificada) no se '
-        'cierra: solo ReconciliacionService._cerrar_jobs_fallidos lo hace, y el '
-        'barrido ignora siesa_triggered=True. fallidos_vigentes lo sigue contando '
-        '(Salud CRÍTICO, Fugas «Documentos trabados») hasta que alguien le da '
-        '«Reintentar» a un documento que ya existe.'))
+    # Cerrado 2026-09-26 (v2-fiscal): cerrar_despachos_resueltos en _persistir_resultado.
     def test_facturar_rm_manual_saca_el_job_de_los_trabados(self, db, almacen, siesa):
         from app.models.siesa_job import EstadoSiesaJob, SiesaJob
         from app.services.despacho_parcial_service import DespachoParialService

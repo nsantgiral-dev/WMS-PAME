@@ -934,6 +934,55 @@ def _ejecutar_con_preflag(obj, post_fn):
     return resultado
 
 
+def _emitir_despacho(job: SiesaJob, tarea, payload: dict) -> dict:
+    """El cuerpo del DESPACHO_F470, con el candado de emisión del pedido ya
+    tomado (`emision_exclusiva`)."""
+    # Reconciliación automática: Siesa puede tener la factura aunque WMS no lo sepa
+    # (respuesta HTTP perdida por restart/timeout). Si ya existe → corregir WMS sin reenviar.
+    # **Tres respuestas**: «no se pudo preguntar» no es «no hay factura» —
+    # sin saberlo no se manda nada.
+    if not tarea.siesa_triggered:
+        from app.services.reconciliacion_service import ReconciliacionService
+        rec = ReconciliacionService.reconciliar_despacho(
+            tarea,
+            tipo_docto=payload.get('tipo_docto_pedido', ''),
+            consec_docto=payload.get('consec_docto_pedido', ''),
+        )
+        if rec.get('reconciliado'):
+            return rec
+        if rec.get('no_se'):
+            raise DependenciaPendiente(
+                f'No se pudo verificar en Siesa si el pedido '
+                f'{payload.get("numero_pedido_siesa")} ya tiene factura '
+                f'({rec.get("motivo")}). No se envía nada hasta saberlo.',
+                espera_minutos=10)
+        if rec.get('anulado'):
+            raise ErrorDeterminista(
+                f'El pedido {payload.get("numero_pedido_siesa")} está ANULADO en '
+                f'Siesa: no se remisiona ni se factura. Cancele la caja.')
+
+    # 142945→142943: RemisionPedido → FacturaRemision.
+    # La RM descarga inventario cuenta 14 directamente — sin dependencia de automatización Siesa.
+    # DespachoParialService maneja idempotencia (rm_tipo/rm_consec en BD), cabecera del pedido
+    # y el encadenamiento completo incluyendo _persistir_resultado (siesa_triggered, DESPACHADO).
+    from app.services.despacho_parcial_service import DespachoParialService
+    items = payload.get('items', [])
+    if items and all(float(i.get('cantidad_empacada') or 0) <= 0 for i in items):
+        raise ValueError(
+            f'DESPACHO_F470 job={job.id}: pedido {payload.get("numero_pedido_siesa")} — '
+            'todos los ítems tienen cantidad_empacada=0. Sin stock para remisionar. '
+            'Cancelar el packing o ajustar cantidades antes de reintentar.'
+        )
+    cantidades = {
+        i['producto_codigo']: float(i.get('cantidad_empacada') or 0)
+        for i in items
+        if float(i.get('cantidad_empacada') or 0) > 0
+    }
+    resultado = DespachoParialService.despachar_parcial(tarea, cantidades)
+    logger.info('[DLQ] DESPACHO_F470 job=%s tarea=%s → DESPACHADO (142945→142943)', job.id, tarea.id)
+    return resultado
+
+
 def _ejecutar_job(job: SiesaJob) -> dict:
     """Despacha el job al handler correcto según su tipo."""
     from app.services.connekta_gateway import connekta
@@ -943,7 +992,6 @@ def _ejecutar_job(job: SiesaJob) -> dict:
         # Idempotencia: si un intento anterior llegó a Siesa (siesa_triggered=True),
         # no volver a llamar — evita crear remisión duplicada.
         from app.models.packing import TareaPacking
-        import json as _json
         tarea = TareaPacking.query.get(payload.get('tarea_id'))
         if tarea and tarea.siesa_triggered:
             logger.info(
@@ -951,61 +999,18 @@ def _ejecutar_job(job: SiesaJob) -> dict:
                 f'siesa_triggered=True — omitiendo llamada a Siesa (idempotencia)'
             )
             return {'idempotente': True, 'tarea_id': tarea.id}
-
-        # Fuera de la ventana de Siesa (Regla 14) o con el circuito abierto no
-        # se intenta: un POST que no va a tener respuesta es un documento que
-        # PUEDE existir. Esperar no gasta reintento.
-        from app.services.documento_fiscal import siesa_disponible_para_facturar
-        _disponible, _motivo = siesa_disponible_para_facturar()
-        if not _disponible:
-            raise DependenciaPendiente(_motivo, espera_minutos=15)
-
-        # Reconciliación automática: Siesa puede tener la factura aunque WMS no lo sepa
-        # (respuesta HTTP perdida por restart/timeout). Si ya existe → corregir WMS sin reenviar.
-        # **Tres respuestas**: «no se pudo preguntar» no es «no hay factura» —
-        # sin saberlo no se manda nada.
-        if tarea and not tarea.siesa_triggered:
-            from app.services.reconciliacion_service import ReconciliacionService
-            rec = ReconciliacionService.reconciliar_despacho(
-                tarea,
-                tipo_docto=payload.get('tipo_docto_pedido', ''),
-                consec_docto=payload.get('consec_docto_pedido', ''),
-            )
-            if rec.get('reconciliado'):
-                return rec
-            if rec.get('no_se'):
-                raise DependenciaPendiente(
-                    f'No se pudo verificar en Siesa si el pedido '
-                    f'{payload.get("numero_pedido_siesa")} ya tiene factura '
-                    f'({rec.get("motivo")}). No se envía nada hasta saberlo.',
-                    espera_minutos=10)
-            if rec.get('anulado'):
-                raise ErrorDeterminista(
-                    f'El pedido {payload.get("numero_pedido_siesa")} está ANULADO en '
-                    f'Siesa: no se remisiona ni se factura. Cancele la caja.')
-
-        # 142945→142943: RemisionPedido → FacturaRemision.
-        # La RM descarga inventario cuenta 14 directamente — sin dependencia de automatización Siesa.
-        # DespachoParialService maneja idempotencia (rm_tipo/rm_consec en BD), cabecera del pedido
-        # y el encadenamiento completo incluyendo _persistir_resultado (siesa_triggered, DESPACHADO).
         if not tarea:
             raise ValueError(f'DESPACHO_F470 job={job.id}: tarea_id={payload.get("tarea_id")} no encontrada')
-        from app.services.despacho_parcial_service import DespachoParialService
-        items = payload.get('items', [])
-        if items and all(float(i.get('cantidad_empacada') or 0) <= 0 for i in items):
-            raise ValueError(
-                f'DESPACHO_F470 job={job.id}: pedido {payload.get("numero_pedido_siesa")} — '
-                'todos los ítems tienen cantidad_empacada=0. Sin stock para remisionar. '
-                'Cancelar el packing o ajustar cantidades antes de reintentar.'
-            )
-        cantidades = {
-            i['producto_codigo']: float(i.get('cantidad_empacada') or 0)
-            for i in items
-            if float(i.get('cantidad_empacada') or 0) > 0
-        }
-        resultado = DespachoParialService.despachar_parcial(tarea, cantidades)
-        logger.info('[DLQ] DESPACHO_F470 job=%s tarea=%s → DESPACHADO (142945→142943)', job.id, tarea.id)
-        return resultado
+
+        # Fuera de la ventana de Siesa (Regla 14), con el circuito abierto u
+        # otro carril emitiendo este mismo pedido (facturar-remision, RM
+        # manual: H3) no se intenta. Esperar no gasta reintento.
+        from app.services.documento_fiscal import emision_exclusiva
+        with emision_exclusiva(tarea, 'dlq') as permiso:
+            if not permiso:
+                raise DependenciaPendiente(
+                    permiso.motivo, espera_minutos=(2 if permiso.status == 409 else 15))
+            return _emitir_despacho(job, tarea, payload)
 
     if job.tipo == 'ENTRADA_OC':
         # Idempotencia: si un intento anterior llegó a Siesa (siesa_triggered=True),
@@ -2486,6 +2491,34 @@ def fallidos_vigentes(desde=None, hasta=None, *, tipos=None,
         'edad_de': ('último intento (fecha_procesando) o, si nunca se procesó, la '
                     'creación: siesa_jobs no guarda cuándo falló'),
     }
+
+
+def cerrar_despachos_resueltos(tarea, resultado: dict, incluir_pendientes: bool = False) -> int:
+    """Los DESPACHO_F470 de una caja que **ya tiene su documento** dejan de
+    contar como trabados: FALLIDO (y, si lo resolvió una persona,
+    PENDIENTE/REINTENTANDO) → COMPLETADO con `resultado` y el error que
+    tenían. **La única que lo hace** (la reconciliación y la emisión —DLQ o
+    carril manual— la llaman). No toca PROCESANDO: ése es el que está
+    emitiendo. Sin commit.
+
+    Hasta el 2026-09-26 solo la reconciliación cerraba el FALLIDO: tras un
+    «Facturar RM manual» exitoso el job seguía en `fallidos_vigentes`
+    (Salud CRÍTICO, «Documentos trabados») hasta que alguien le daba
+    «Reintentar» a un documento que ya existía (H6)."""
+    estados = [EstadoSiesaJob.FALLIDO]
+    if incluir_pendientes:
+        estados += [EstadoSiesaJob.PENDIENTE, EstadoSiesaJob.REINTENTANDO]
+    jobs = SiesaJob.query.filter(
+        SiesaJob.tipo == 'DESPACHO_F470',
+        SiesaJob.referencia_tipo == 'TareaPacking',
+        SiesaJob.referencia_id == tarea.id,
+        SiesaJob.estado.in_(estados),
+    ).all()
+    for job in jobs:
+        job.marcar_completado({**resultado, 'estado_que_tenia': job.estado,
+                               'error_que_tenia': (job.error_ultimo or '')[:500]})
+        job.proximo_intento = None
+    return len(jobs)
 
 
 def _remision_sin_factura(job):

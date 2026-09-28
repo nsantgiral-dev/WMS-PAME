@@ -895,29 +895,52 @@ class ConnektaConsultasGateway:
             ) from e
 
     #: Tope de páginas de la consulta de remisiones (100 filas cada una,
-    #: Regla 10). Con la ventana de 30 días del SQL de Siesa alcanza de sobra;
-    #: llegar al tope con la última página llena es «no se sabe».
+    #: Regla 10). **No alcanza de sobra**: la ventana de 30 días del SQL trae
+    #: una fila por pedido remisionado, y en temporada son más de 3.000. Con
+    #: el corte al encontrar, el tope solo se toca cuando la RM NO está (o
+    #: está más allá): llegar a él con la última página llena es «no se sabe»
+    #: (`RemisionBarridoIncompleto`), nunca «no existe».
     REMISION_MAX_PAGINAS = 30
 
-    def get_remision_desde_pedido(self, tipo_docto_pedido: str, consec_docto_pedido) -> dict | None:
+    #: Columnas con las que la consulta podría traer el CO y el tipo del
+    #: pedido (Regla 18: CO + tipo + consecutivo). **Hoy no trae ninguna**
+    #: (verificado en QA el 2026-09-26: `LineaRegistro`, `consec_pd`,
+    #: `tipo_rm`, `consec_rm`): el SQL de la consulta 7479 las tiene que
+    #: agregar. Mientras no estén, se filtra por consecutivo y dos filas del
+    #: mismo consecutivo en la página son «no sé» (pueden ser de dos CO).
+    _REMISION_CLAVES_CO = ('co_pd', 'id_co_pd', 'f430_id_co')
+    _REMISION_CLAVES_TIPO = ('tipo_pd', 'id_tipo_docto_pd', 'f430_id_tipo_docto')
+
+    def get_remision_desde_pedido(self, tipo_docto_pedido: str, consec_docto_pedido,
+                                  co: str = None, max_paginas: int = None) -> dict | None:
         """
         Consulta dinámica papeleriamedellin_WMS_Remision_DesdePedido: la RM más
         reciente creada para el pedido (el SQL de Siesa trae el MAX(consec_rm)
-        por pedido de los últimos 30 días; se filtra en memoria por
-        `consec_pd` porque las dinámicas de este ambiente no aceptan
-        parámetros).
+        por pedido de los últimos 30 días; se filtra en memoria porque las
+        dinámicas de este ambiente no aceptan parámetros).
 
         **Tres estados** (ver `RemisionNoDisponible`):
-          · `{'tipo': 'RM', 'consec': 1234}` — encontrada;
-          · `None` — Siesa respondió **todas** las páginas y no está;
-          · `RemisionNoDisponible` — red, circuito abierto, rechazo `alerta`,
-            una fila repetida entre páginas (orden inestable: una fila pudo
-            quedar sin leer) o el tope de páginas con la última llena.
+          · `{'tipo': 'RM', 'consec': 1234}` — encontrada: **se corta ahí**,
+            sin leer el resto de páginas (H4, 2026-09-26: leía las 30 aunque la
+            fila saliera en la primera, y en temporada —más de 3.000 RM en 30
+            días— la última página llena la volvía «no sé» siempre);
+          · `None` — Siesa respondió **todas** las páginas y no está (solo con
+            el barrido completo se afirma que no existe);
+          · `RemisionNoDisponible` — red, circuito abierto, rechazo `alerta`;
+            `RemisionBarridoIncompleto` (hija) — Siesa contestó pero no se leyó
+            entera: tope de páginas, fila repetida entre páginas, o dos filas
+            del mismo consecutivo que no se pueden distinguir sin CO/tipo.
 
-        Hasta el 2026-09-25 devolvía `None` ante cualquier excepción y pedía
-        `tamPag=200` (Regla 10: ≥ 500 da registros fantasma; 100 es el techo).
+        **Regla 18** (CO + tipo + consecutivo): si la fila trae el CO o el tipo
+        del pedido (`_REMISION_CLAVES_*`) tienen que coincidir con `co` y
+        `tipo_docto_pedido`. Hoy la consulta no los trae: ver arriba.
+
+        `max_paginas`: mirar solo las primeras N (recién enviado el 142945, la
+        RM de un pedido reciente sale arriba). Sin encontrarla, eso es
+        `RemisionBarridoIncompleto`, nunca `None`.
         """
-        from app.services.connekta_gateway import RemisionNoDisponible, _exigir_datos
+        from app.services.connekta_gateway import (RemisionBarridoIncompleto,
+                                                   RemisionNoDisponible, _exigir_datos)
         core = self._core
         if core.modo_simulacion:
             return None
@@ -929,8 +952,28 @@ class ConnektaConsultasGateway:
             raise RemisionNoDisponible(
                 f'Consecutivo de pedido ilegible ({consec_docto_pedido!r}): no se '
                 f'puede buscar su remisión.')
-        vistas, matches = set(), []
-        for pagina in range(1, self.REMISION_MAX_PAGINAS + 1):
+        tipo_pd = str(tipo_docto_pedido or '').strip().upper()
+        co_pd = str(co or '').strip()
+
+        def _coincide(r) -> bool:
+            try:
+                if int(r.get('consec_pd')) != consec_int:
+                    return False
+            except (TypeError, ValueError):
+                return False
+            for k in self._REMISION_CLAVES_TIPO:
+                if r.get(k) not in (None, '') and tipo_pd \
+                        and str(r.get(k)).strip().upper() != tipo_pd:
+                    return False
+            for k in self._REMISION_CLAVES_CO:
+                if r.get(k) not in (None, '') and co_pd \
+                        and str(r.get(k)).strip().lstrip('0') != co_pd.lstrip('0'):
+                    return False
+            return True
+
+        tope = min(self.REMISION_MAX_PAGINAS, max_paginas or self.REMISION_MAX_PAGINAS)
+        vistas = set()
+        for pagina in range(1, tope + 1):
             try:
                 res = core._get(
                     'papeleriamedellin_WMS_Remision_DesdePedido',
@@ -948,33 +991,39 @@ class ConnektaConsultasGateway:
                     f'No se pudo consultar la remisión del pedido {tipo_docto_pedido}-'
                     f'{consec_docto_pedido} (página {pagina}): {e}. No se sabe si la '
                     f'remisión existe.') from e
+            matches = []
             for r in rows:
                 clave = (r.get('consec_pd'), r.get('tipo_rm'), r.get('consec_rm'))
                 if clave in vistas:
-                    raise RemisionNoDisponible(
+                    raise RemisionBarridoIncompleto(
                         f'La consulta de remisiones repitió una fila entre páginas '
                         f'(página {pagina}): el orden no es estable y una fila pudo '
                         f'quedar sin leer. No se sabe si el pedido {consec_int} tiene '
                         f'remisión.')
                 vistas.add(clave)
+                if _coincide(r):
+                    matches.append(r)
+            distintas = {(str(r.get('tipo_rm') or '').strip(), str(r.get('consec_rm')))
+                         for r in matches}
+            if len(distintas) > 1:
+                raise RemisionBarridoIncompleto(
+                    f'La consulta de remisiones trae {len(distintas)} remisiones para el '
+                    f'consecutivo {consec_int} y no trae el CO ni el tipo del pedido: no se '
+                    f'sabe cuál es de {tipo_docto_pedido}-{consec_int} (Regla 18).')
+            if matches:
+                fila = matches[0]
                 try:
-                    if int(r.get('consec_pd')) == consec_int:
-                        matches.append(r)
-                except (TypeError, ValueError):
-                    continue
+                    return {'tipo': str(fila.get('tipo_rm', 'RM')).strip(),
+                            'consec': int(fila['consec_rm'])}
+                except (TypeError, ValueError, KeyError):
+                    raise RemisionBarridoIncompleto(
+                        f'La fila de la remisión del pedido {consec_int} no trae un '
+                        f'consecutivo legible ({fila.get("consec_rm")!r}).')
             if len(rows) < 100:
-                break
-        else:
-            raise RemisionNoDisponible(
-                f'La consulta de remisiones llegó al tope de {self.REMISION_MAX_PAGINAS} '
-                f'páginas con la última llena: no se leyó entera.')
-        if not matches:
-            return None
-        fila = max(matches, key=lambda r: int(r.get('consec_rm') or 0))
-        return {
-            'tipo':   str(fila.get('tipo_rm', 'RM')).strip(),
-            'consec': int(fila['consec_rm']),
-        }
+                return None
+        raise RemisionBarridoIncompleto(
+            f'La consulta de remisiones llegó al tope de {tope} '
+            f'páginas con la última llena: no se leyó entera.')
 
     def get_pedido_cabecera(self, tipo_docto: str, consec_docto) -> dict | None:
         """
