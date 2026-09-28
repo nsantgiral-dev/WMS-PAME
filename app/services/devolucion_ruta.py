@@ -61,7 +61,70 @@ ESTADOS_QUE_DEVUELVEN = (EstadoEntrega.RECHAZADO, EstadoEntrega.PARCIAL)
 HORAS_SIN_CONTAR_AVISO = 24
 HORAS_SIN_CONTAR_URGENTE = 48
 DIAS_NC_SIN_APROBAR = 3
-HORAS_RC_ESPERANDO_NC = 48
+#: Default del tope de espera de un recibo de caja por su nota crédito
+#: (`horas_rc_esperando_nc`, P1-4 de la auditoría de liquidación, 2026-09-27).
+#: Era 48 h fijo; el dueño pidió 24 configurable.
+HORAS_RC_ESPERANDO_NC = 24
+
+
+def horas_rc_esperando_nc() -> float:
+    """Desde cuántas horas un recibo de caja que espera la nota crédito de su
+    devolución es un aviso con responsable (`RC_ESPERA_NC_HORAS`, default 24).
+    Mientras la NC no sale la plata ya entregada no entra a la caja de Siesa, y
+    la caja del día nunca cuadra con la plata del día. **No quita la espera**
+    (NC → RC, Regla 7: quitarla exige probarlo antes en Siesa QA): la hace
+    visible. Ilegible → el default, y queda en el log."""
+    import os
+    crudo = os.environ.get('RC_ESPERA_NC_HORAS', '').strip()
+    if not crudo:
+        return float(HORAS_RC_ESPERANDO_NC)
+    try:
+        v = float(crudo)
+        if v > 0:
+            return v
+    except (TypeError, ValueError):
+        pass
+    logger.warning('[DEVOL] RC_ESPERA_NC_HORAS=%r ilegible — se usan %s h', crudo,
+                   HORAS_RC_ESPERANDO_NC)
+    return float(HORAS_RC_ESPERANDO_NC)
+
+
+#: Quién destraba un recibo que espera su nota crédito, en palabras.
+RESPONSABLE_RC_ESPERANDO_NC = ('bodega (Recepción → «Llegó el camión»): contar la devolución, '
+                               'que es lo que dispara la nota crédito')
+
+
+def rc_esperando_nc(job, ahora: datetime = None):
+    """Un RECIBO_CAJA PENDIENTE que espera la nota crédito de su devolución:
+    `{horas, tope, vencido, ruta_id, pedido, cliente, conductor, devolucion,
+    estado_devolucion, responsable, monto}` o `None` si no espera una NC.
+    **La única** que lo contesta: la usan el aviso del resumen diario y el
+    mensaje del envío en espera."""
+    import json as _json
+    ahora = ahora or datetime.utcnow()
+    try:
+        payload = _json.loads(job.payload or '{}')
+    except (TypeError, ValueError):
+        payload = {}
+    if not payload.get('depende_de_nc'):
+        return None
+    rec = db.session.get(RecaudoEntrega, payload.get('recaudo_id') or job.referencia_id)
+    if rec is None or rec.siesa_nc_triggered or nc_no_llegara(rec):
+        return None
+    desde = job.fecha_creacion or ahora
+    horas = round((ahora - desde).total_seconds() / 3600, 1)
+    tope = horas_rc_esperando_nc()
+    dev = devolucion_vigente(rec.id)
+    tarea = rec.tarea
+    return {'job_id': job.id, 'recaudo_id': rec.id, 'horas': horas, 'tope': tope,
+            'vencido': horas >= tope, 'ruta_id': rec.ruta_id,
+            'pedido': getattr(tarea, 'numero_pedido_siesa', None),
+            'cliente': getattr(tarea, 'cliente', None),
+            'conductor': getattr(getattr(rec.ruta, 'conductor', None), 'nombre', None),
+            'devolucion': dev.codigo if dev else None,
+            'estado_devolucion': dev.estado if dev else None,
+            'monto': payload.get('monto'),
+            'responsable': RESPONSABLE_RC_ESPERANDO_NC}
 
 MOTIVO_AVERIADA = 'MERCANCIA_AVERIADA'
 
@@ -1030,28 +1093,22 @@ def avisos(ahora: datetime = None) -> dict:
                                         'conductor': getattr(getattr(rec.ruta, 'conductor', None),
                                                              'nombre', None)})
     rc_esperando = []
-    limite = ahora - timedelta(hours=HORAS_RC_ESPERANDO_NC)
+    limite = ahora - timedelta(hours=horas_rc_esperando_nc())
     for job in SiesaJob.query.filter(SiesaJob.tipo == 'RECIBO_CAJA',
                                      SiesaJob.estado == EstadoSiesaJob.PENDIENTE,
                                      SiesaJob.fecha_creacion <= limite).all():
-        try:
-            import json as _json
-            payload = _json.loads(job.payload or '{}')
-        except (TypeError, ValueError):
-            payload = {}
-        if not payload.get('depende_de_nc'):
-            continue
-        rec = db.session.get(RecaudoEntrega, payload.get('recaudo_id') or job.referencia_id)
-        if rec is None or rec.siesa_nc_triggered:
-            continue
-        rc_esperando.append({'job_id': job.id, 'recaudo_id': rec.id,
-                             'horas': round((ahora - job.fecha_creacion).total_seconds() / 3600, 1)})
+        esp = rc_esperando_nc(job, ahora)
+        if esp is not None and esp['vencido']:
+            rc_esperando.append(esp)
     return {
         'sin_contar_24h': sin_contar,
         'sin_contar_48h': urgentes,
         'nc_sin_aprobar_3d': nc_viejas,
         'nc_anuladas': nc_anuladas,
+        # La clave conserva su nombre (la leen pantallas y el correo); el tope
+        # ya no es 48 h fijo: `rc_espera_nc_horas`.
         'rc_esperando_nc_48h': rc_esperando,
+        'rc_espera_nc_horas': horas_rc_esperando_nc(),
         'retencion_parcial_sin_contar_24h': retencion_esperando,
         'total': (len(sin_contar) + len(urgentes) + len(nc_viejas) + len(nc_anuladas)
                   + len(rc_esperando) + len(retencion_esperando)),
@@ -1074,8 +1131,14 @@ def lineas_de_aviso(a: dict = None) -> list:
     if a['nc_anuladas']:
         out.append(f'🚨 {len(a["nc_anuladas"])} nota(s) crédito de devolución ANULADA(S) en Siesa')
     if a['rc_esperando_nc_48h']:
+        det = '; '.join(
+            f"ruta {x.get('ruta_id')} · {x.get('pedido') or '—'} · {x.get('cliente') or '—'} · "
+            f"{x.get('devolucion') or 'sin devolución'} · {x.get('horas')} h"
+            for x in a['rc_esperando_nc_48h'][:10])
         out.append(f'⚠ {len(a["rc_esperando_nc_48h"])} recibo(s) de caja esperando su nota '
-                   f'crédito hace más de {HORAS_RC_ESPERANDO_NC} h')
+                   f'crédito hace más de {a.get("rc_espera_nc_horas", HORAS_RC_ESPERANDO_NC):g} h '
+                   f'({det}): la plata ya entregada no entra a la caja de Siesa. Responde: '
+                   f'{RESPONSABLE_RC_ESPERANDO_NC}.')
     if a.get('retencion_parcial_sin_contar_24h'):
         det = '; '.join(f"ruta {x.get('ruta_id')} · {x.get('pedido') or '—'} · "
                         f"{x.get('conductor') or 'sin conductor'}"

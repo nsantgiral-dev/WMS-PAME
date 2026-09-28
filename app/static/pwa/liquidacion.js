@@ -30,20 +30,22 @@ function _liqPalabra(mapa, codigo) {
 // liquidacion_service.py (retenciones_disponibles en la respuesta del
 // backend). Mantener sincronizado a mano solo como default antes de que
 // llegue esa respuesta; ver ese archivo para la fecha de verificación.
+// `aplica_en_puerta` (P2-4): las autorretenciones y la bancaria no las
+// descuenta un cliente.
 let _liqRetencionesDisponibles = [
-  {tipo:'RETEFUENTE_2.5', nombre:'Retención por Compras 2.5%', puc:'13551501', tasa:0.025},
-  {tipo:'RETEFUENTE_1.5', nombre:'Retención Bancos 1.5%', puc:'13551502', tasa:0.015},
-  {tipo:'RETEIVA', nombre:'ReteIVA Ventas 15%', puc:'13551701', tasa:0.15},
-  {tipo:'ICA_4X1000', nombre:'ICA Retenido a Favor 4x1000', puc:'13551801', tasa:0.004},
-  {tipo:'ICA_3X1000', nombre:'ICA Retenido a Favor 3x1000', puc:'13551802', tasa:0.003},
-  {tipo:'ICA_6X1000', nombre:'ICA Retenido a Favor 6x1000', puc:'13551803', tasa:0.006},
-  {tipo:'ICA_10X1000', nombre:'ICA Retenido a Favor 10x1000', puc:'13551804', tasa:0.010},
-  {tipo:'ICA_11X1000', nombre:'ICA Retenido a Favor 11x1000', puc:'13551805', tasa:0.011},
-  {tipo:'AUTORRETENCION_ICA_NEIVA_3X1000', nombre:'Autorretención ICA Neiva 3x1000', puc:'13559501', tasa:0.003},
-  {tipo:'AUTORRETENCION_ICA_NEIVA_3.5X1000', nombre:'Autorretención ICA Neiva 3.5x1000', puc:'13559502', tasa:0.0035},
-  {tipo:'AUTORRETENCION_ICA_NEIVA_4.5X1000', nombre:'Autorretención ICA Neiva 4.5x1000', puc:'13559503', tasa:0.0045},
-  {tipo:'AUTORRETENCION_ICA_NEIVA_8X1000', nombre:'Autorretención ICA Neiva 8x1000', puc:'13559504', tasa:0.008},
-  {tipo:'AUTORRETENCION_ICA_PITALITO_4X1000', nombre:'Autorretención ICA Pitalito 4x1000', puc:'13559505', tasa:0.004},
+  {tipo:'RETEFUENTE_2.5', nombre:'Retención por Compras 2.5%', puc:'13551501', tasa:0.025, aplica_en_puerta:true},
+  {tipo:'RETEFUENTE_1.5', nombre:'Retención Bancos 1.5%', puc:'13551502', tasa:0.015, aplica_en_puerta:false},
+  {tipo:'RETEIVA', nombre:'ReteIVA Ventas 15%', puc:'13551701', tasa:0.15, aplica_en_puerta:true},
+  {tipo:'ICA_4X1000', nombre:'ICA Retenido a Favor 4x1000', puc:'13551801', tasa:0.004, aplica_en_puerta:true},
+  {tipo:'ICA_3X1000', nombre:'ICA Retenido a Favor 3x1000', puc:'13551802', tasa:0.003, aplica_en_puerta:true},
+  {tipo:'ICA_6X1000', nombre:'ICA Retenido a Favor 6x1000', puc:'13551803', tasa:0.006, aplica_en_puerta:true},
+  {tipo:'ICA_10X1000', nombre:'ICA Retenido a Favor 10x1000', puc:'13551804', tasa:0.010, aplica_en_puerta:true},
+  {tipo:'ICA_11X1000', nombre:'ICA Retenido a Favor 11x1000', puc:'13551805', tasa:0.011, aplica_en_puerta:true},
+  {tipo:'AUTORRETENCION_ICA_NEIVA_3X1000', nombre:'Autorretención ICA Neiva 3x1000', puc:'13559501', tasa:0.003, aplica_en_puerta:false},
+  {tipo:'AUTORRETENCION_ICA_NEIVA_3.5X1000', nombre:'Autorretención ICA Neiva 3.5x1000', puc:'13559502', tasa:0.0035, aplica_en_puerta:false},
+  {tipo:'AUTORRETENCION_ICA_NEIVA_4.5X1000', nombre:'Autorretención ICA Neiva 4.5x1000', puc:'13559503', tasa:0.0045, aplica_en_puerta:false},
+  {tipo:'AUTORRETENCION_ICA_NEIVA_8X1000', nombre:'Autorretención ICA Neiva 8x1000', puc:'13559504', tasa:0.008, aplica_en_puerta:false},
+  {tipo:'AUTORRETENCION_ICA_PITALITO_4X1000', nombre:'Autorretención ICA Pitalito 4x1000', puc:'13559505', tasa:0.004, aplica_en_puerta:false},
 ];
 
 // ── Navegación interna ──────────────────────────────────────────────────────
@@ -680,13 +682,19 @@ function _liqBloqueRetencion(rutaId, rec, factura) {
       <div style="font-size:var(--fs-xs);color:var(--tx3);margin-bottom:10px;">
         Es lo que el cliente dijo en la puerta — nadie lo ha verificado. ¿Le correspondía ese descuento?
       </div>
+      ${rec.aviso_base_minima ? `
+      <div style="font-size:var(--fs-xs);color:var(--warn-tx);margin-bottom:10px;">${esc(rec.aviso_base_minima)}</div>` : ''}
+      ${rec.retencion_no_en_puerta ? `
+      <div style="font-size:var(--fs-xs);color:var(--err-tx);margin-bottom:10px;">
+        No se puede confirmar: ${esc(rec.retencion_no_en_puerta)}. Si es así, recházelo: el cliente debe pagar lo que se quedó.
+      </div>` : ''}
       ${!_liqPermiso('confirmar_retencion') ? `
       <div style="font-size:var(--fs-xs);color:var(--tx3);">La retención la confirma el líder de cartera.</div>` : `
       <div style="display:flex;gap:8px;">
-        <button onclick="liqConfirmarRetencion(${rutaId}, ${esc(rec.id)}, true)"
+        ${rec.retencion_no_en_puerta ? '' : `<button onclick="liqConfirmarRetencion(${rutaId}, ${esc(rec.id)}, true)"
           style="flex:1;padding:10px;background:#14532d;color:#bbf7d0;border:none;border-radius:6px;font-size:var(--fs-xs);font-weight:700;cursor:pointer;">
           ✓ Sí le correspondía
-        </button>
+        </button>`}
         <button onclick="liqConfirmarRetencion(${rutaId}, ${esc(rec.id)}, false)"
           style="flex:1;padding:10px;background:var(--err-bg);color:var(--err-tx);border:none;border-radius:6px;font-size:var(--fs-xs);font-weight:700;cursor:pointer;">
           ✗ No le correspondía
@@ -1262,12 +1270,21 @@ function _liqBloqueCreditoNoAutorizado(rutaId, rec) {
   if (!rec.credito_no_autorizado) return '';
   const c = rec.cobro || {};
   const cond = c.codigo ? `${c.codigo}${c.dias != null ? ` (${c.dias} días)` : ''}` : 'sin condición conocida';
+  // P1-5: una entrega parcial pagada de menos (las cifras las da el servidor,
+  // `politica_cobro.faltante_de_la_parcial`).
+  const corta = rec.parcial_pagada_de_menos;
+  const texto = corta
+    ? `Entrega parcial de contado contraentrega (${esc(cond)}): el cliente se quedó con ${_liqFmt(corta.esperado)}
+        (factura menos lo devuelto y la retención) y se cobraron ${_liqFmt(corta.cobrado)}. Faltan
+        ${_liqFmt(corta.diferencia)} que nadie autorizó como crédito. Autorícelos (el resto queda en cartera
+        con su nombre) o, si el conductor sí los cobró, corrija el monto. El recibo de caja no sale hasta entonces.`
+    : `Factura de contado contraentrega (${esc(cond)}) registrada ${esc(rec.forma_pago || 'sin forma de pago')}
+        con ${_liqFmt(rec.monto_cobrado || 0)} cobrados. La ruta no se liquida hasta que se cobre o se autorice.`;
   return `
     <div style="margin-bottom:8px;padding:10px;background:var(--err-bg);border:1px solid var(--err-brd);border-radius:8px;">
-      <div style="font-size:var(--fs-xs);color:var(--err-tx);font-weight:700;margin-bottom:4px;">CRÉDITO NO AUTORIZADO</div>
+      <div style="font-size:var(--fs-xs);color:var(--err-tx);font-weight:700;margin-bottom:4px;">${corta ? 'PAGÓ DE MENOS SIN AUTORIZACIÓN' : 'CRÉDITO NO AUTORIZADO'}</div>
       <div style="font-size:var(--fs-xs);color:var(--tx);">
-        Factura de contado contraentrega (${esc(cond)}) registrada ${esc(rec.forma_pago || 'sin forma de pago')}
-        con ${_liqFmt(rec.monto_cobrado || 0)} cobrados. La ruta no se liquida hasta que se cobre o se autorice.
+        ${texto}
       </div>
       ${_liqPermiso('autorizar_credito') ? `
       <button onclick="liqAutorizarCredito(${esc(rutaId)}, ${esc(rec.id)})"
@@ -1679,7 +1696,8 @@ async function _liqRenderPanelCobro(rutaId, recaudoId) {
           <label style="display:flex;align-items:center;gap:8px;padding:4px 0;font-size:var(--fs-xs);color:${deshabilitarla ? 'var(--tx3)' : 'var(--tx2)'};cursor:${deshabilitarla ? 'not-allowed' : 'pointer'};">
             <input type="checkbox" class="liq-ret-check-${recaudoId}" value="${esc(ret.tipo)}" ${marcarla ? 'checked' : ''} ${deshabilitarla ? 'disabled' : ''} onchange="liqPreviewCobro(${recaudoId})">
             ${esc(ret.nombre)} — ${_liqFmt(ret.monto_estimado)} <span style="color:var(--tx3);">(base ${_liqFmt(ret.base)})</span>
-          </label>`;
+          </label>
+          ${ret.aviso_base_minima ? `<div style="font-size:var(--fs-xs);color:var(--warn-tx);margin:0 0 4px 24px;">${esc(ret.aviso_base_minima)}</div>` : ''}`;
       });
     }
 
@@ -1790,8 +1808,10 @@ function _liqActualizarBloqueoRetencion(recaudoId) {
   let estadoHtml = '';
 
   if (motivoSugerido) {
-    const nombreMotivo = (preview.retenciones_disponibles || [])
-      .find(r => r.tipo === motivoSugerido)?.nombre || motivoSugerido;
+    // El catálogo entero para nombrar lo declarado: la vista previa trae solo
+    // las que un cliente puede descontar (P2-4).
+    const nombreMotivo = esc((preview.retenciones_disponibles || []).concat(_liqRetencionesDisponibles || [])
+      .find(r => r.tipo === motivoSugerido)?.nombre || motivoSugerido);
 
     if (retencionConfirmada === null || retencionConfirmada === undefined) {
       bloqueado = true;

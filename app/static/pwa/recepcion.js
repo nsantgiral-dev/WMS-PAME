@@ -1583,7 +1583,7 @@ function recAvisosHtml(t) {
   if (n(a.sin_contar_24h)) filas.push(['var(--warn-tx)', `${n(a.sin_contar_24h)} devolución(es) sin contar hace más de 24 h`]);
   if (n(a.nc_anuladas)) filas.push(['var(--err-tx)', `${n(a.nc_anuladas)} nota(s) crédito ANULADA(S) en Siesa`]);
   if (n(a.nc_sin_aprobar_3d)) filas.push(['var(--warn-tx)', `${n(a.nc_sin_aprobar_3d)} nota(s) crédito sin aprobar hace más de 3 días`]);
-  if (n(a.rc_esperando_nc_48h)) filas.push(['var(--warn-tx)', `${n(a.rc_esperando_nc_48h)} recibo(s) de caja esperando su nota crédito hace más de 48 h`]);
+  if (n(a.rc_esperando_nc_48h)) filas.push(['var(--warn-tx)', `${n(a.rc_esperando_nc_48h)} recibo(s) de caja esperando su nota crédito hace más de ${esc(a.rc_espera_nc_horas || 24)} h: la plata ya entregada no entra a la caja de Siesa hasta que se cuente la devolución`]);
   const m = (t && t.medicion) || {};
   const h = m.horas_rechazo_a_conteo || {};
   const f = m.faltante_de_retorno || {};

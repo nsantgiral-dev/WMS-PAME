@@ -347,7 +347,11 @@ class TestEscenario02PickingParcialMuelleReal:
 
 # ── Un pedido por cada uno de los 13 motivos de descuento (retención) ──────
 
-MOTIVOS_DESCUENTO = list(CATALOGO_RETENCIONES.keys())
+#: Los que un cliente puede descontar en la puerta (P2-4, 2026-09-27). Las
+#: autorretenciones y la bancaria están en el catálogo pero no se documentan
+#: contra la factura del cliente (`TestLoQueUnClienteNoDescuenta`).
+MOTIVOS_DESCUENTO = [k for k, v in CATALOGO_RETENCIONES.items() if v['aplica_en_puerta']]
+MOTIVOS_NO_EN_PUERTA = [k for k, v in CATALOGO_RETENCIONES.items() if not v['aplica_en_puerta']]
 
 
 class TestUnPedidoPorMotivoDeDescuento:
@@ -418,6 +422,41 @@ class TestUnPedidoPorMotivoDeDescuento:
                 'recibo_de_caja_monto_neto_de_retencion': rc_payload['monto'],
             },
         )
+
+
+class TestLoQueUnClienteNoDescuenta:
+    """P2-4: una autorretención (obligación de la empresa) o la retención
+    bancaria (la aplica el banco) no reducen lo que paga el cliente. Si una
+    llega declarada, la oficina no puede confirmarla y no sale ninguna NI
+    contra la factura."""
+
+    def test_los_seis(self):
+        assert len(MOTIVOS_DESCUENTO) == 7 and len(MOTIVOS_NO_EN_PUERTA) == 6
+        assert 'RETEFUENTE_1.5' in MOTIVOS_NO_EN_PUERTA
+        assert all(m.startswith('AUTORRETENCION') for m in MOTIVOS_NO_EN_PUERTA
+                   if m != 'RETEFUENTE_1.5')
+
+    @pytest.mark.parametrize('motivo', MOTIVOS_NO_EN_PUERTA)
+    def test_no_se_confirma_ni_se_emite(self, db, almacen, conductor_full, admin_full, motivo):
+        from app.services.liquidacion_service import LiquidacionService
+        from app.services.ruta_service import RutaService
+
+        flujo, producto = _armar_parada(db, almacen, conductor_full, cantidad_pedida=10)
+        mock, bruto, iva, neto = _mock_connekta(producto, cantidad_facturada=10)
+        retencion = monto_de_retencion(motivo, bruto, iva)
+        with patch('app.services.connekta_gateway.connekta', mock):
+            recaudo_id, _ = RutaService.confirmar_parada(
+                flujo.ruta_id, flujo.packing_id, conductor_full['usuario_id'], {
+                    'estado_entrega': 'ENTREGADO', 'forma_pago': 'EFECTIVO',
+                    'monto_cobrado': round(neto - retencion, 2),
+                    'motivo_descuento': motivo, 'monto_descuento': retencion})
+            with pytest.raises(ValueError, match='No se puede confirmar'):
+                LiquidacionService.confirmar_retencion(recaudo_id, admin_full, True)
+            # Rechazada: el cliente debía todo; no hay NI (y el recibo por
+            # menos de la factura lo frena el ejecutor, con quién lo corrige).
+            LiquidacionService.confirmar_retencion(recaudo_id, admin_full, False)
+            LiquidacionService.liquidar_ruta_siesa(flujo.ruta_id, admin_id=admin_full)
+        assert _jobs('DOCUMENTO_CONTABLE_RET', 'RecaudoEntrega', recaudo_id) == []
 
 
 # ── Pago parcial — el cliente recibe menos y paga solo lo entregado ───────

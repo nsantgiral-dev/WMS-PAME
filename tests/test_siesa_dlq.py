@@ -325,7 +325,7 @@ class TestSecuencialidad:
             mc.modo_simulacion = False
             from app.services.siesa_job_service import _ejecutar_job
             from app.services.siesa_job_service import DependenciaPendiente
-            with pytest.raises(DependenciaPendiente, match='espera la NC'):
+            with pytest.raises(DependenciaPendiente, match='espera la nota crédito'):
                 _ejecutar_job(job)
         mc.trigger_recibo_caja.assert_not_called()
 

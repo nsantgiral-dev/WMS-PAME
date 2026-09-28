@@ -77,6 +77,30 @@ def exigir_cobro_decidido(recaudo) -> None:
             f'registrar el cobro')
 
 
+def aplica_en_puerta(tipo_ret: str) -> bool:
+    """¿Es una retención que el CLIENTE puede descontar en la puerta? Lo dice
+    el catálogo (`CATALOGO_RETENCIONES[...]['aplica_en_puerta']`, P2-4): las
+    autorretenciones y la bancaria no. Un tipo fuera del catálogo, tampoco."""
+    from app.services.liquidacion_service import CATALOGO_RETENCIONES
+    return bool((CATALOGO_RETENCIONES.get(tipo_ret) or {}).get('aplica_en_puerta'))
+
+
+def por_que_no_aplica_en_puerta(tipo_ret: str) -> str:
+    from app.services.liquidacion_service import CATALOGO_RETENCIONES
+    e = CATALOGO_RETENCIONES.get(tipo_ret)
+    if e is None:
+        return f'{tipo_ret!r} no está en el catálogo de retenciones'
+    return f'la {e["nombre"]} {e.get("no_en_puerta") or "no la descuenta el cliente"}'
+
+
+def catalogo_de_la_puerta() -> list:
+    """Las retenciones que el conductor puede anotar en la puerta (la
+    pantalla de pago parcial). Las demás no se le ofrecen."""
+    from app.services.liquidacion_service import CATALOGO_RETENCIONES
+    return [{'tipo': k, 'nombre': v['nombre'], 'puc': v['puc'], 'tasa': v['tasa']}
+            for k, v in CATALOGO_RETENCIONES.items() if v.get('aplica_en_puerta')]
+
+
 def exigir_retencion_aplicable(recaudo, tipo_ret: str) -> None:
     """**La puerta de todo documento de retención (DC).** La llama el único
     encolador (`liquidacion_service._encolar_retencion`) y la revalida el
@@ -85,13 +109,71 @@ def exigir_retencion_aplicable(recaudo, tipo_ret: str) -> None:
     · PENDIENTE → nada sale hasta que alguien decida.
     · RECHAZADA → la retención rechazada no se emite nunca (otra que el que
       liquida elija a mano, sí: esa la decide él).
+    · No la descuenta un cliente (autorretención, bancaria: P2-4) → no se
+      emite nunca contra su factura: cruzaría su cartera por plata que sí
+      debía.
     · SIN_DECLARAR / CONFIRMADA → procede.
     """
     exigir_cobro_decidido(recaudo)
+    if not aplica_en_puerta(tipo_ret):
+        raise RetencionNoAplicable(
+            f'No se emite: {por_que_no_aplica_en_puerta(tipo_ret)}. No se documenta '
+            f'contra la factura del cliente')
     if decision_retencion(recaudo) == RECHAZADA and tipo_ret == recaudo.motivo_descuento:
         raise RetencionNoAplicable(
             f'La retención {tipo_ret} fue rechazada — no se puede emitir el '
             f'documento contable')
+
+
+def bases_minimas() -> tuple:
+    """`({tipo: pesos}, [problemas])` de `RETENCION_BASE_MINIMA_PESOS` (JSON,
+    **sin default**: la base mínima depende de la UVT del año y de la
+    actividad del cliente, y no se inventa). Una entrada ilegible, de un tipo
+    fuera del catálogo o no positiva se ignora y se declara (P2-4)."""
+    import os
+    from app.services.liquidacion_service import CATALOGO_RETENCIONES
+    crudo = os.environ.get('RETENCION_BASE_MINIMA_PESOS', '').strip()
+    if not crudo:
+        return {}, []
+    try:
+        datos = json.loads(crudo)
+    except (TypeError, ValueError):
+        return {}, [f'RETENCION_BASE_MINIMA_PESOS ilegible ({crudo[:60]!r}): no se usa']
+    if not isinstance(datos, dict):
+        return {}, ['RETENCION_BASE_MINIMA_PESOS no es un objeto {tipo: pesos}: no se usa']
+    bases, problemas = {}, []
+    for tipo, valor in datos.items():
+        if tipo not in CATALOGO_RETENCIONES:
+            problemas.append(f'{tipo!r} no está en el catálogo de retenciones')
+            continue
+        try:
+            v = float(valor)
+        except (TypeError, ValueError):
+            problemas.append(f'{tipo}: {valor!r} no es un número')
+            continue
+        if v <= 0:
+            problemas.append(f'{tipo}: la base mínima tiene que ser positiva')
+            continue
+        bases[tipo] = v
+    for p in problemas:
+        logger.warning('[RETENCION] base mínima: %s', p)
+    return bases, problemas
+
+
+def aviso_base_minima(tipo_ret: str, base) -> str | None:
+    """Un **aviso**, nunca un bloqueo: la base de esta factura está por
+    debajo de la base mínima configurada para esa retención — probablemente
+    al cliente no le correspondía descontarla. `None` sin base mínima
+    configurada para el tipo, o sin base conocida (Regla 0: no se afirma)."""
+    if base is None:
+        return None
+    minima = bases_minimas()[0].get(tipo_ret)
+    if minima is None or float(base) >= minima:
+        return None
+    from app.services.liquidacion_service import CATALOGO_RETENCIONES
+    nombre = (CATALOGO_RETENCIONES.get(tipo_ret) or {}).get('nombre', tipo_ret)
+    return (f'La base de esta factura (${float(base):,.0f}) está por debajo de la base mínima '
+            f'configurada para la {nombre} (${minima:,.0f}): probablemente no le correspondía.')
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -245,7 +327,11 @@ def esperado_en_caja(recaudo, tarea=None):
     t = tarea if tarea is not None else getattr(recaudo, 'tarea', None)
     valor = getattr(t, 'valor_factura', None) if t is not None else None
     descuento = float(recaudo.monto_descuento or 0)
-    retencion = 0.0 if decision_retencion(recaudo) == RECHAZADA else descuento
+    # Una retención rechazada, o que un cliente no puede descontar (P2-4),
+    # no se resta: el cliente debía pagarla.
+    motivo = getattr(recaudo, 'motivo_descuento', None)
+    retencion = (0.0 if decision_retencion(recaudo) == RECHAZADA
+                 or (motivo and not aplica_en_puerta(motivo)) else descuento)
     declarado = round(float(recaudo.monto_cobrado or 0) + descuento, 2)
     if valor is None:
         return declarado, 'DECLARADO'
@@ -276,6 +362,37 @@ def _devuelto_valorizado(recaudo):
             return None
         total += float(q) * float(ln.valor_unitario)
     return round(total, 2)
+
+
+def faltante_de_la_parcial(recaudo, tarea=None):
+    """Lo que una PARCIAL **dejó sin pagar** de lo que el cliente se quedó:
+    `{'esperado', 'cobrado', 'diferencia', 'tope'}` o `None` (P1-5, auditoría
+    de liquidación 2026-09-27).
+
+    Antes una PARCIAL con cualquier monto > 0 era CONTADO: el cliente se
+    quedaba con $180 k, pagaba $120 k, el RC salía por $120 k y los $60 k
+    quedaban en cartera **como crédito que nadie autorizó**, sin que nada lo
+    dijera. La vara es la misma de la reconciliación (`esperado_en_caja`:
+    factura − lo devuelto a precio de factura − la retención que procede), una
+    política.
+
+    `None` si no se puede valorizar (sin factura anotada, o lo devuelto sin
+    precio: Regla 0, no se inventa un faltante) o si la diferencia cabe en el
+    residuo de redondeo (`tope_diferencia_recaudo`)."""
+    from app.models.recaudo_entrega import EstadoEntrega
+    if getattr(recaudo, 'estado_entrega', None) != EstadoEntrega.PARCIAL:
+        return None
+    esperado, fuente = esperado_en_caja(recaudo, tarea)
+    if fuente != 'FACTURA_MENOS_DEVUELTO':
+        return None
+    from app.services.liquidacion_service import tope_diferencia_recaudo
+    cobrado = round(float(recaudo.monto_cobrado or 0), 2)
+    diferencia = round(float(esperado) - cobrado, 2)
+    tope = tope_diferencia_recaudo()
+    if diferencia <= tope:
+        return None
+    return {'esperado': round(float(esperado), 2), 'cobrado': cobrado,
+            'diferencia': diferencia, 'tope': tope}
 
 
 def rc_resta_retencion(recaudo) -> bool:

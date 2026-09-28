@@ -655,11 +655,19 @@ def trato_de_cobro(recaudo, tarea=None) -> str:
       (`anterior_a_la_regla`) se juzga con la regla de entonces
       (`_trato_regla_anterior`). Sin esto, cada crédito viejo aparecía como
       no autorizado y trababa la liquidación de rutas ya cerradas.
+    · **PARCIAL de contado pagada de menos** (P1-5, 2026-09-27): si lo que el
+      cliente se quedó se puede valorizar y lo cobrado no alcanza
+      (`politica_cobro.faltante_de_la_parcial`), la diferencia es crédito que
+      nadie autorizó → CREDITO_NO_AUTORIZADO, hasta que la oficina la
+      autorice (y entonces CONTADO: el recibo sale por lo cobrado y el resto
+      queda en cartera con su nombre) o corrija lo cobrado.
     """
     from app.models.recaudo_entrega import EstadoEntrega
     fp = _norm(getattr(recaudo, 'forma_pago', None))
     monto = float(getattr(recaudo, 'monto_cobrado', None) or 0)
     if not forma_no_cobra(fp) and monto > 0:
+        if parcial_pagada_de_menos(recaudo, tarea) is not None:
+            return TRATO_NO_AUTORIZADO
         return TRATO_CONTADO
     if credito_autorizado(recaudo):
         return TRATO_CREDITO
@@ -673,6 +681,22 @@ def trato_de_cobro(recaudo, tarea=None) -> str:
     if getattr(recaudo, 'estado_entrega', None) == EstadoEntrega.ENTREGADO:
         return TRATO_NO_AUTORIZADO
     return TRATO_CONTADO
+
+
+def parcial_pagada_de_menos(recaudo, tarea=None):
+    """La diferencia sin autorizar de una PARCIAL de contado contraentrega
+    (`politica_cobro.faltante_de_la_parcial`), o `None`. No aplica al crédito
+    real (el resto es su crédito), a lo ya autorizado, ni a una parada
+    anterior a la regla de contado."""
+    from app.models.recaudo_entrega import EstadoEntrega
+    if getattr(recaudo, 'estado_entrega', None) != EstadoEntrega.PARCIAL:
+        return None
+    if credito_autorizado(recaudo) or anterior_a_la_regla(recaudo):
+        return None
+    if not cobro_de_recaudo(recaudo, tarea)['cobrar']:
+        return None
+    from app.services.politica_cobro import faltante_de_la_parcial
+    return faltante_de_la_parcial(recaudo, tarea)
 
 
 def credito_no_autorizado(recaudo, tarea=None) -> bool:

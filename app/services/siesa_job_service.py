@@ -2149,10 +2149,21 @@ def _ejecutar_job(job: SiesaJob) -> dict:
                     'nota crédito (faltante total o cancelada) — el RC sale por lo cobrado',
                     job.id, recaudo.id)
             else:
+                # Sin tope que la destrabe (NC → RC, Regla 7): la espera se
+                # hace VISIBLE (P1-4). Pasadas `RC_ESPERA_NC_HORAS` el mensaje
+                # dice cuánto lleva, qué devolución y quién la destraba, y el
+                # resumen diario lo lista (`devolucion_ruta.avisos`).
+                _esp = _dr_rc.rc_esperando_nc(job)
+                _que_rc = _env.que_es(recaudo.tarea)
+                if _esp is not None and _esp['vencido']:
+                    raise DependenciaPendiente(
+                        f'{_que_rc}: el recibo de caja lleva {_esp["horas"]:g} h esperando la '
+                        f'nota crédito de la devolución {_esp["devolucion"] or "(sin devolución)"} '
+                        f'(el tope es {_esp["tope"]:g} h): la plata ya entregada no entra a la caja '
+                        f'de Siesa. La destraba {_esp["responsable"]}.')
                 raise DependenciaPendiente(
-                    f'RECIBO_CAJA job={job.id}: RC espera la NC del recaudo '
-                    f'{recaudo.id}, que la desbloquea la recepción física de la '
-                    f'devolución. Sigue pendiente.'
+                    f'{_que_rc}: el recibo de caja espera la nota crédito de la devolución, '
+                    f'que se dispara cuando bodega la cuenta. Sigue pendiente.'
                 )
 
         # Lo que el POST necesita de la cartera, resuelto AHORA de la fila del

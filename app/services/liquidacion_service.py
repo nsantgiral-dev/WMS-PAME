@@ -40,20 +40,45 @@ logger = logging.getLogger(__name__)
 # 13551800 (ICA 2024) y 13559500 (AUTORRETENCION 2023) quedan fuera: son
 # cuentas legacy sin tasa x1000 en el nombre, no hay dato confiable para
 # mapearlas — Regla 0, ante dato ausente no se inventa.
+#
+# `aplica_en_puerta` (auditoría de liquidación, P2-4, 2026-09-27): ¿es una
+# retención que el CLIENTE le practica a la empresa y puede descontar en la
+# puerta? Las autorretenciones (1355950X) son obligación propia de la empresa
+# sobre su venta: no reducen lo que paga el cliente, y una NI por ellas
+# cruzaría su factura por plata que sí debía. La «Retención Bancos 1.5%» la
+# aplica el banco, no el cliente. Las dos quedan en el catálogo (sus cuentas
+# existen) pero el conductor no las ve y ninguna sale contra una factura
+# (`politica_cobro.exigir_retencion_aplicable`).
+_NO_ES_DEL_CLIENTE = ('es una autorretención: obligación de la empresa sobre su propia venta, '
+                      'no un descuento que el cliente pueda aplicar')
 CATALOGO_RETENCIONES = {
-    'RETEFUENTE_2.5': {'puc': '13551501', 'tasa': 0.025,  'nombre': 'Retención por Compras 2.5%'},
-    'RETEFUENTE_1.5': {'puc': '13551502', 'tasa': 0.015,  'nombre': 'Retención Bancos 1.5%'},
-    'RETEIVA':        {'puc': '13551701', 'tasa': 0.15,   'nombre': 'ReteIVA Ventas 15%'},
-    'ICA_4X1000':     {'puc': '13551801', 'tasa': 0.004,  'nombre': 'ICA Retenido a Favor 4x1000'},
-    'ICA_3X1000':     {'puc': '13551802', 'tasa': 0.003,  'nombre': 'ICA Retenido a Favor 3x1000'},
-    'ICA_6X1000':     {'puc': '13551803', 'tasa': 0.006,  'nombre': 'ICA Retenido a Favor 6x1000'},
-    'ICA_10X1000':    {'puc': '13551804', 'tasa': 0.010,  'nombre': 'ICA Retenido a Favor 10x1000'},
-    'ICA_11X1000':    {'puc': '13551805', 'tasa': 0.011,  'nombre': 'ICA Retenido a Favor 11x1000'},
-    'AUTORRETENCION_ICA_NEIVA_3X1000':    {'puc': '13559501', 'tasa': 0.003,  'nombre': 'Autorretención ICA Neiva 3x1000'},
-    'AUTORRETENCION_ICA_NEIVA_3.5X1000':  {'puc': '13559502', 'tasa': 0.0035, 'nombre': 'Autorretención ICA Neiva 3.5x1000'},
-    'AUTORRETENCION_ICA_NEIVA_4.5X1000':  {'puc': '13559503', 'tasa': 0.0045, 'nombre': 'Autorretención ICA Neiva 4.5x1000'},
-    'AUTORRETENCION_ICA_NEIVA_8X1000':    {'puc': '13559504', 'tasa': 0.008,  'nombre': 'Autorretención ICA Neiva 8x1000'},
-    'AUTORRETENCION_ICA_PITALITO_4X1000': {'puc': '13559505', 'tasa': 0.004,  'nombre': 'Autorretención ICA Pitalito 4x1000'},
+    'RETEFUENTE_2.5': {'puc': '13551501', 'tasa': 0.025,  'nombre': 'Retención por Compras 2.5%',
+                       'aplica_en_puerta': True},
+    'RETEFUENTE_1.5': {'puc': '13551502', 'tasa': 0.015,  'nombre': 'Retención Bancos 1.5%',
+                       'aplica_en_puerta': False,
+                       'no_en_puerta': 'la retención bancaria la aplica el banco, no el cliente'},
+    'RETEIVA':        {'puc': '13551701', 'tasa': 0.15,   'nombre': 'ReteIVA Ventas 15%',
+                       'aplica_en_puerta': True},
+    'ICA_4X1000':     {'puc': '13551801', 'tasa': 0.004,  'nombre': 'ICA Retenido a Favor 4x1000',
+                       'aplica_en_puerta': True},
+    'ICA_3X1000':     {'puc': '13551802', 'tasa': 0.003,  'nombre': 'ICA Retenido a Favor 3x1000',
+                       'aplica_en_puerta': True},
+    'ICA_6X1000':     {'puc': '13551803', 'tasa': 0.006,  'nombre': 'ICA Retenido a Favor 6x1000',
+                       'aplica_en_puerta': True},
+    'ICA_10X1000':    {'puc': '13551804', 'tasa': 0.010,  'nombre': 'ICA Retenido a Favor 10x1000',
+                       'aplica_en_puerta': True},
+    'ICA_11X1000':    {'puc': '13551805', 'tasa': 0.011,  'nombre': 'ICA Retenido a Favor 11x1000',
+                       'aplica_en_puerta': True},
+    'AUTORRETENCION_ICA_NEIVA_3X1000':    {'puc': '13559501', 'tasa': 0.003,  'nombre': 'Autorretención ICA Neiva 3x1000',
+                                           'aplica_en_puerta': False, 'no_en_puerta': _NO_ES_DEL_CLIENTE},
+    'AUTORRETENCION_ICA_NEIVA_3.5X1000':  {'puc': '13559502', 'tasa': 0.0035, 'nombre': 'Autorretención ICA Neiva 3.5x1000',
+                                           'aplica_en_puerta': False, 'no_en_puerta': _NO_ES_DEL_CLIENTE},
+    'AUTORRETENCION_ICA_NEIVA_4.5X1000':  {'puc': '13559503', 'tasa': 0.0045, 'nombre': 'Autorretención ICA Neiva 4.5x1000',
+                                           'aplica_en_puerta': False, 'no_en_puerta': _NO_ES_DEL_CLIENTE},
+    'AUTORRETENCION_ICA_NEIVA_8X1000':    {'puc': '13559504', 'tasa': 0.008,  'nombre': 'Autorretención ICA Neiva 8x1000',
+                                           'aplica_en_puerta': False, 'no_en_puerta': _NO_ES_DEL_CLIENTE},
+    'AUTORRETENCION_ICA_PITALITO_4X1000': {'puc': '13559505', 'tasa': 0.004,  'nombre': 'Autorretención ICA Pitalito 4x1000',
+                                           'aplica_en_puerta': False, 'no_en_puerta': _NO_ES_DEL_CLIENTE},
 }
 
 # Vistas derivadas — solo lectura, generadas del catálogo único de arriba.
@@ -192,8 +217,11 @@ class LiquidacionService:
         from app.models.devolucion_cliente import DevolucionCliente
         from app.services import parada_tardia as _pt_det
 
+        # El catálogo entero (para nombrar lo que el conductor declaró), con la
+        # marca de lo que un cliente puede descontar (P2-4).
         retenciones_disponibles = [
-            {'tipo': k, 'nombre': v['nombre'], 'puc': v['puc'], 'tasa': v['tasa']}
+            {'tipo': k, 'nombre': v['nombre'], 'puc': v['puc'], 'tasa': v['tasa'],
+             'aplica_en_puerta': bool(v.get('aplica_en_puerta'))}
             for k, v in CATALOGO_RETENCIONES.items()
         ]
 
@@ -333,6 +361,21 @@ class LiquidacionService:
             # persona dice si están en Siesa (`resolver-documento`).
             rd['documentos_sin_verificar'] = _sin_verificar.get(recaudo.id, [])
             rd['decision_retencion'] = _pc_det.decision_retencion(recaudo)
+            # P1-5: lo que una PARCIAL dejó sin pagar y nadie autorizó (la
+            # pantalla muestra las cifras; la política es `trato_de_cobro`).
+            rd['parcial_pagada_de_menos'] = _cp_det.parcial_pagada_de_menos(recaudo, tarea)
+            # P2-4: la retención declarada que un cliente no puede descontar
+            # (no se ofrece «Sí le correspondía»), y el aviso de base mínima.
+            _motivo = recaudo.motivo_descuento
+            rd['retencion_no_en_puerta'] = (
+                _pc_det.por_que_no_aplica_en_puerta(_motivo)
+                if _motivo and not _pc_det.aplica_en_puerta(_motivo) else None)
+            _base_aviso = None
+            if _motivo and factura_siesa is not None:
+                _base_aviso = base_de_retencion(_motivo, factura_siesa['base_gravable'],
+                                                factura_siesa['total_iva'])
+            rd['aviso_base_minima'] = (_pc_det.aviso_base_minima(_motivo, _base_aviso)
+                                       if _motivo else None)
 
             resultado_recaudos.append(rd)
 
@@ -437,6 +480,10 @@ class LiquidacionService:
             base_gravable_ret, total_iva_ret = base_gravable, total_iva
         retenciones_disponibles = []
         for tipo_ret, datos_ret in CATALOGO_RETENCIONES.items():
+            # Solo las que un cliente puede descontar (P2-4): una autorretención
+            # o la bancaria no se documentan contra su factura.
+            if not datos_ret.get('aplica_en_puerta'):
+                continue
             tasa = datos_ret['tasa']
             base_calculo = base_de_retencion(tipo_ret, base_gravable_ret, total_iva_ret)
             monto_estimado = (monto_de_retencion(tipo_ret, base_gravable_ret, total_iva_ret)
@@ -448,6 +495,9 @@ class LiquidacionService:
                 'tasa': tasa,
                 'base': base_calculo,
                 'monto_estimado': monto_estimado,
+                # Aviso, no bloqueo: base por debajo de la mínima configurada.
+                'aviso_base_minima': (_pc_pv.aviso_base_minima(tipo_ret, base_calculo)
+                                      if base_retencion_disponible else None),
             })
 
         # ── Siesa horario check — la ventana es UNA (Regla 14) ──────
@@ -572,6 +622,12 @@ class LiquidacionService:
             raise ValueError(
                 f'La decisión sobre la retención ya no aplica: '
                 f'{_pc.motivo_cobro_congelado(recaudo)}')
+        if confirmar and not _pc.aplica_en_puerta(recaudo.motivo_descuento):
+            # P2-4: confirmarla dejaría el recibo neto de una retención que
+            # nunca se va a emitir (`exigir_retencion_aplicable` la niega).
+            raise ValueError(
+                f'No se puede confirmar: {_pc.por_que_no_aplica_en_puerta(recaudo.motivo_descuento)}. '
+                f'Recházela: el cliente debe pagar lo que se quedó.')
 
         recaudo.retencion_confirmada = bool(confirmar)
         recaudo.retencion_confirmada_por = admin_id
@@ -1506,6 +1562,16 @@ def mensaje_credito_no_autorizado(recaudo, tarea=None) -> str:
     """El texto que ve quien liquida. Dice qué pasó y qué puede hacer."""
     from app.services import cond_pago as _cp
     tarea = tarea if tarea is not None else recaudo.tarea
+    corta = _cp.parcial_pagada_de_menos(recaudo, tarea)
+    if corta is not None:
+        pedido = getattr(tarea, 'numero_pedido_siesa', None) or f'tarea {recaudo.tarea_id}'
+        return (f'{CREDITO_NO_AUTORIZADO}: en la entrega parcial del pedido {pedido} el '
+                f'cliente se quedó con ${corta["esperado"]:,.0f} (factura menos lo devuelto y '
+                f'la retención) y se cobraron ${corta["cobrado"]:,.0f}: faltan '
+                f'${corta["diferencia"]:,.0f} que nadie autorizó como crédito. Autorícelos '
+                f'(líder de cartera o administrador; el resto queda en cartera con su nombre) '
+                f'o, si el conductor sí los cobró, corrija el monto. El recibo de caja no sale '
+                f'hasta entonces.')
     cobro = _cp.cobro_de_recaudo(recaudo, tarea)
     cond = cobro.get('codigo') or 'sin condición'
     dias = f' ({cobro["dias"]} días)' if cobro.get('dias') is not None else ''

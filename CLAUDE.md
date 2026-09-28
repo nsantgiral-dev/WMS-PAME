@@ -256,6 +256,8 @@ Motivos son códigos **obligatorios** en Siesa (Inventarios > Maestros > Concept
 | `SIESA_FLUJO_EFECTIVO` | `1103` | Flujo de efectivo (Tesorería > Flujos) |
 | `SIESA_CXC_AUXILIAR` | `13050501` | **Ya no es respaldo del RC ni de la retención** (2026-09-27): llevan el `f253_id` de su fila de cartera y sin él no salen (Regla 11) |
 | `LIQUIDACION_ESPERA_SIESA_HORAS` | `24` | Cuánto espera un RC o una retención a que la cartera muestre su factura (o a que Siesa conteste) antes de declararse «falta un dato» |
+| `RC_ESPERA_NC_HORAS` | `24` | Desde cuántas horas un recibo de caja que espera la nota crédito de su devolución es un aviso con responsable (resumen diario y mensaje del envío). **No** suelta el recibo (NC → RC, Regla 7) |
+| `RETENCION_BASE_MINIMA_PESOS` | — (sin default) | JSON `{tipo: pesos}`: base mínima por retención. Solo **avisa** en Liquidación («probablemente no le correspondía»); nunca bloquea. Lo ilegible se ignora y se declara en el log |
 | `CONNEKTA_CONSULTA_RC_RECIENTES` | — (sin default) | Consulta dinámica opcional de `t350` para recibos de caja (columnas como la de NC + `f200_id`): segunda prueba de que un RC sin respuesta clara entró |
 | `SIESA_MEDIO_PAGO_EFECTIVO` | `EFE` | Medio de pago efectivo |
 | `SIESA_MEDIO_PAGO_TRANSFERENCIA` | `TBA` | Medio de pago transferencia bancaria |
@@ -7388,6 +7390,37 @@ encolado corren la misma resolución (`tests/_envio_liq.py`, no una copia).
 - Un job de antes de este cambio que quedó FALLIDO sin verificar no tiene
   `saldo_antes_rc` en todos los casos: «No está» usa entonces «la factura no
   tiene ningún crédito aplicado».
+
+---
+
+## Parciales y retenciones (L4 de liquidación, 2026-09-27)
+
+| | Qué pasaba | Ahora |
+|---|---|---|
+| **P1-5** | `trato_de_cobro` daba CONTADO a toda PARCIAL con monto > 0: el cliente se quedaba con $180 k, pagaba $120 k, el RC salía por $120 k y $60 k quedaban en cartera como crédito que nadie autorizó, sin señal | Con lo que el cliente se quedó **valorizable** (`politica_cobro.esperado_en_caja`: factura − lo devuelto a precio de factura − la retención que procede — la misma vara de la reconciliación), una diferencia mayor que el residuo (`tope_diferencia_recaudo`) es **CREDITO_NO_AUTORIZADO** (`faltante_de_la_parcial`, `cond_pago.parcial_pagada_de_menos`). El recibo no sale y la ruta no liquida hasta que el líder de cartera o el admin **autorice** la diferencia (entonces CONTADO: el RC sale por lo cobrado y el resto queda en cartera con su nombre) o **corrija el monto**. Liquidación lo pinta con las cifras («PAGÓ DE MENOS SIN AUTORIZACIÓN»). Sin factura anotada o sin precio de lo devuelto: nada (Regla 0). No aplica al crédito real ni a lo anterior a la regla de contado |
+| **P1-4** | El RC de una PARCIAL esperaba la NC sin límite visible (en QA, 4 RC PENDIENTE 38 días); el aviso era a 48 h fijas y sin detalle | **No se quitó `depende_de_nc`** (quitarlo exige probar en Siesa QA un RC antes de la NC — decisión 5 del dueño). La espera se hace visible: `devolucion_ruta.rc_esperando_nc` (una función) con `RC_ESPERA_NC_HORAS` (24 h): el envío en espera dice cuántas horas lleva, qué devolución y **quién la destraba** (bodega, en «Llegó el camión»); el resumen diario lista ruta, pedido, cliente, devolución y horas. Recepción dice el tope configurado (decía «48 h» escrito a mano) |
+| **P2-4** | El conductor podía anotar 5 autorretenciones y la «Retención Bancos 1.5 %»; la oficina podía confirmarlas y salía una NI cruzando la factura del cliente | `aplica_en_puerta` en `CATALOGO_RETENCIONES` (con su porqué): el conductor recibe solo `catalogo_de_la_puerta()`, la vista previa de la oficina tampoco las ofrece, `confirmar_retencion` no las confirma y `exigir_retencion_aplicable` no las emite; `esperado_en_caja` no las resta. Base mínima por retención como **aviso** (`RETENCION_BASE_MINIMA_PESOS`, sin default) en la vista previa y en la decisión de la retención |
+
+**Trinquetes** (`tests/test_parcial_y_retenciones.py`, AST, meta-tests, pisos):
+la rama «pagó algo» de `trato_de_cobro` pregunta por la parcial antes de
+devolver CONTADO; todo recorrido de `CATALOGO_RETENCIONES` en `app/` distingue
+`aplica_en_puerta` (inventario: las vistas derivadas PUC/tasa); las dos
+variables nuevas las lee una función cada una. El e2e de motivos
+(`tests/flujo/test_e2e_ciclo_completo_liquidacion.py`) corre los 7 que un
+cliente descuenta y prueba que los 6 que no, no se confirman ni se emiten.
+
+**Lo que NO cubre, dicho:**
+- **`confirmar_parada` no bloquea** una PARCIAL pagada de menos (una parada
+  trabada en la calle no la destraba nadie): la frena la liquidación. En modo
+  libre (sin el valor de Siesa en el teléfono) el conductor ve solo un aviso
+  en palabras; en modo dinámico ya veía el valor de lo que se quedó.
+- **Una autorretención ya declarada** por un teléfono viejo entra igual (no se
+  rechaza la parada): la oficina la rechaza y el cliente debe lo que se quedó.
+- **La base mínima** no se configura sola: depende de la UVT del año y de la
+  actividad del cliente. Sin la variable no hay aviso. La foto del
+  certificado de retención **no se hizo**.
+- **La reconciliación** (`reconciliacion_ruta`, del otro frente) no mide
+  todavía el cobro incompleto de una PARCIAL: lo ve la liquidación.
 
 ---
 

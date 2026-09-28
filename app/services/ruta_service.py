@@ -1285,14 +1285,13 @@ class RutaService:
         # Mismo catálogo que usa Liquidación de escritorio (CATALOGO_RETENCIONES
         # en liquidacion_service.py) — una sola fuente, el conductor y el admin
         # ven siempre las mismas cuentas/tasas.
-        from app.services.liquidacion_service import CATALOGO_RETENCIONES
         from app.services.liquidacion_service import tope_diferencia_recaudo as _tope_cobro
         from app.services import senales_ruta as _sr_p
         from app.services import parada_tardia as _pt_p
-        retenciones_disponibles = [
-            {'tipo': k, 'nombre': v['nombre'], 'puc': v['puc'], 'tasa': v['tasa']}
-            for k, v in CATALOGO_RETENCIONES.items()
-        ]
+        # Solo las que un cliente puede descontar en la puerta (P2-4,
+        # 2026-09-27): sin autorretenciones ni la bancaria.
+        from app.services.politica_cobro import catalogo_de_la_puerta
+        retenciones_disponibles = catalogo_de_la_puerta()
 
         return {
             'paradas':                 paradas,

@@ -2628,6 +2628,11 @@ function _condRenderFormParada() {
         <label style="font-size:var(--fs-xs);color:var(--tx2);font-weight:700;display:block;margin-bottom:8px;">MONTO COBRADO ($)</label>
         <input type="number" id="cond-monto" value="${montoActual}" min="0" step="100"
           style="width:100%;padding:14px;background:#fff;border:2px solid #d1d5db;color:var(--tx);border-radius:10px;font-size:var(--fs-lg);font-weight:700;box-sizing:border-box;">
+        ${seCobraEnPuerta === false ? '' : `
+        <div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:6px;">
+          Cobre todo lo que el cliente se queda. Si en una entrega parcial paga menos, la oficina tiene que
+          autorizar la diferencia como crédito y el recibo no sale hasta entonces.
+        </div>`}
       </div>
       `}
 
