@@ -242,7 +242,7 @@ class TestThroughputEnTemporada:
         # llega a ~58 s). Con el orden sin «lo empezado primero»: 86.
         print(f'\n[THROUGHPUT] {despachadas} cajas despachadas en 60 min simulados '
               f'({estado["gets"]} GET, {estado["posts"]} POST)')
-        assert despachadas >= 160, despachadas
+        assert despachadas >= 172, despachadas   # medido 176; con la pausa de antes, 168
         assert estado['posts'] <= 3 * despachadas + 2 * (self.N - despachadas)
 
     def test_la_pausa_entre_jobs_solo_tras_una_caida(self, db, almacen, mundo, monkeypatch):
