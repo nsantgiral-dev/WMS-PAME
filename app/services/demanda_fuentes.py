@@ -363,7 +363,7 @@ def descargar_ventas_dia(reciente: bool = False, gateway=None, max_paginas=None,
     tipo_reg = 'demanda_siesa'
     reg_id = rs.abrir(tipo_reg)
 
-    por_orden, problemas = {}, []
+    por_orden, por_clave, problemas = {}, {}, []
     total, total_declarado, ilegibles, paginas = None, None, 0, 0
 
     def _pedir(pag):
@@ -399,11 +399,19 @@ def descargar_ventas_dia(reciente: bool = False, gateway=None, max_paginas=None,
                 problemas.append(f'la fila {f["orden"]} llegó dos veces con otro '
                                  'contenido: el orden no es estable')
                 continue
+            clave = (f['fecha'], f['bodega'], f['referencia'])
+            otro = por_clave.get(clave)
+            if otro is not None and otro != f['orden']:
+                problemas.append(f'la misma fila ({clave[0]}, {clave[1]}, {clave[2]}) llegó '
+                                 f'con los números {otro} y {f["orden"]}: el orden no es '
+                                 'estable')
+                continue
             if (por_orden and f['ventana_desde'] !=
                     next(iter(por_orden.values()))['ventana_desde']):
                 problemas.append('la ventana de la consulta cambió a mitad (pasó la '
                                  'medianoche en Siesa)')
             por_orden.setdefault(f['orden'], f)
+            por_clave.setdefault(clave, f['orden'])
 
     motivo = None
     pag = 0
@@ -518,13 +526,15 @@ def _guardar_lectura(filas, tramo, registro_id, consulta) -> int:
     return len(nuevas)
 
 
-def _hilo(app, lock, etiqueta, fn, lanzar=None):
+def _en_hilo(app, etiqueta, tomar_lock, fn, lanzar=None):
+    """Corre `fn` en un hilo con contexto de app, bajo el lock que da
+    `tomar_lock()` (un `advisory_lock(LOCK_…)` escrito en cada llamador: el
+    registro de `app/utils/lock.py` exige ver el nombre en la llamada)."""
     import threading
 
     def _run():
-        from app.utils.lock import advisory_lock
         with app.app_context():
-            with advisory_lock(lock, etiqueta) as tomado:
+            with tomar_lock() as tomado:
                 if not tomado:
                     logger.info('[DEMANDA] %s: otro proceso ya está leyendo', etiqueta)
                     return
@@ -540,12 +550,13 @@ def _hilo(app, lock, etiqueta, fn, lanzar=None):
 def disparar_descarga(app, reciente=False, lanzar=None) -> dict:
     """El botón «Leer de Siesa»: corre en un hilo con `LOCK_DEMANDA_SIESA`."""
     from app.services.ventana_siesa import texto_ventana, ventana_abierta
-    from app.utils.lock import LOCK_DEMANDA_SIESA
+    from app.utils.lock import LOCK_DEMANDA_SIESA, advisory_lock
     if not ventana_abierta():
         return {'ok': False, 'codigo': 409,
                 'error': f'Fuera de la ventana de Siesa ({texto_ventana()}).'}
-    _hilo(app, LOCK_DEMANDA_SIESA, 'demanda_siesa',
-          lambda: descargar_ventas_dia(reciente=reciente), lanzar)
+    _en_hilo(app, 'demanda_siesa',
+             lambda: advisory_lock(LOCK_DEMANDA_SIESA, 'demanda_siesa'),
+             lambda: descargar_ventas_dia(reciente=reciente), lanzar)
     return {'ok': True, 'codigo': 202,
             'mensaje': ('Lectura de la venta diaria de Siesa iniciada en segundo plano. '
                         'El resultado queda en el estado de la demanda.')}
@@ -583,12 +594,13 @@ def rellenar_ventas_pedido(dias: int = 90, gateway=None, hasta=None) -> dict:
 
 def disparar_relleno_pedidos(app, dias=90, lanzar=None) -> dict:
     from app.services.ventana_siesa import texto_ventana, ventana_abierta
-    from app.utils.lock import LOCK_DEMANDA_PEDIDOS
+    from app.utils.lock import LOCK_DEMANDA_PEDIDOS, advisory_lock
     if not ventana_abierta():
         return {'ok': False, 'codigo': 409,
                 'error': f'Fuera de la ventana de Siesa ({texto_ventana()}).'}
-    _hilo(app, LOCK_DEMANDA_PEDIDOS, 'demanda_pedidos',
-          lambda: rellenar_ventas_pedido(dias), lanzar)
+    _en_hilo(app, 'demanda_pedidos',
+             lambda: advisory_lock(LOCK_DEMANDA_PEDIDOS, 'demanda_pedidos'),
+             lambda: rellenar_ventas_pedido(dias), lanzar)
     return {'ok': True, 'codigo': 202,
             'mensaje': f'Fotografiando las facturas desde pedido de {int(dias)} días en '
                        'segundo plano.'}
