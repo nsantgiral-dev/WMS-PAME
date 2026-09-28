@@ -7288,3 +7288,64 @@ día siguiente de las 06:00; corregir la RTM de BDT261 y la póliza de TGZ653
 (saldrán como «dato a corregir»); cargar las licencias de los conductores
 (Flota → Analítica → Diagnóstico → Licencias, o Rutas → Conductores); mirar `GET /flota/health` → `almacen_fotos`
 en la web de QA y de producción.
+
+---
+
+## Existencias verdaderas: `stock_siesa` baja a cero (2026-09-27)
+
+**La clase:** *un hueco de lectura se rellena con el valor viejo y se re-sella.*
+La consulta de existencias (`papeleriamedellin_WMS_Stock_Bodega_v2`) solo trae
+filas con existencia > 0. El WMS la leía con `tamPag=1000` (Regla 10), cuya
+paginación no era determinista, y lo tapaba mezclando lo leído con lo guardado.
+Un SKU que se agota desaparece de la respuesta: la mezcla lo rellenaba con su
+último positivo para siempre. La misma mezcla la leían la carga física de las
+7:00 (el picker iba a un hueco vacío), la reconciliación, los traslados, el
+Armador y la temporada.
+
+**Ahora** (`inventario_siesa_service`):
+
+| | |
+|---|---|
+| Lectura | Una, de a 100 (`TAM_PAGINA_EXISTENCIAS`), `_descargar_una_pasada_custom` → `ResultadoDescarga` con `completa`, `motivo`, `total_declarado`, `filas`, `paginas`, `bodegas_sin_filas` |
+| Completa = | `total_registros` = N declarado igual en todas las páginas y en una relectura final de la página 1; N filas; `LineaRegistro` 1…N, cada una una vez; ninguna (bodega, referencia) dos veces; ninguna página perdida (3 intentos); sin agotar `INV_SIESA_MAX_PAGINAS` (1.000). Las filas de bodegas que el WMS no guarda (BC99, FD1…) cuentan para la prueba |
+| Con lectura completa | `_guardar_stock_en_bd` (el único escritor): lo reportado se escribe; toda fila de `_BODEGAS_INVENTARIO` que no vino queda en **cero** con `updated_at` y `ausente_desde` (el primer momento en que dejó de venir; m051comprasa). **Nada se borra.** Una bodega sin filas queda en cero (declarada en `bodegas_sin_filas`) |
+| Incompleta | No se escribe nada; caché `degradado` con su `motivo`; la marca de tiempo no avanza; se responde con `stock_siesa` sin las filas en cero. También si la lectura es completa y sospechosamente chica (`_verificar_respuesta_no_parcial`, defensa en profundidad) |
+| Registro | `registros_sync` tipo `existencias_siesa`: `ok=True` solo con la lectura completa; el resultado trae `a_cero`, `unidades_a_cero` y el detalle por bodega |
+| Quién lo usa | La carga física (`fuente_para_escribir` exige `completa`), la reconciliación (se niega sobre una lectura degradada), 🩺 Salud (`INCOMPLETA` si la última lectura terminada no lo fue; no pide descargar una bodega que la última lectura completa dijo vacía) |
+
+**Medido en producción el 2026-09-27** (solo GET, la lectura del código sobre
+una copia SQLite de `stock_siesa` de producción): 393 páginas en 660 s (pausa
+0,3 s), **39.229 filas, `LineaRegistro` 1…39.229 = `total_registros`,
+completa**. Antes: 57.187 filas con existencia, 13,19 M u. Después: 39.216 con
+existencia (las 13 que faltan son de BC99), **17.971 filas a cero, 3.814.265 u**
+(NB1 3.383 · FC1 3.855 · NS1 3.148 · NC1 2.970 · PC1 2.771 · FN1 1.259 · PT1 460
+· FF1 117 · NS2 7 · FP1 1). Muestra contra `InvFecha`: 8 fantasmas (NB1
+`PAPELSP1003` 1.508 → 0, NB1 `PAPELSP2980`, PC1 `JUGUESJ261`, FC1 `ARTESA843`,
+PC1 `PAPELSP4032-`, NS1 `PAPELSP10060`, FF1 `PAPELSP1858`, FN1 `PAPELSP4241-`)
+**8/8 en 0 en Siesa**; 2 vivos (NB1 `CAZ5020` 87, NC1 `P041-900-420` 10) iguales.
+FF1 y FP1: Siesa no trae ninguna fila; InvFecha confirma 0 en la de FF1.
+**La primera lectura completa después del deploy limpia las 17.971.**
+
+Trinquete: `tests/test_existencias_verdaderas.py` — con la forma real del
+endpoint (`LineaRegistro`, `total_registros`): cada forma de lectura rota; lo
+que no vino queda en cero con fecha; incompleta no toca nada; los lectores
+(Armador, ancla del kardex, frescura, reconciliación, Salud, carga física) ven
+la verdad. Tres AST: `_guardar_stock_en_bd` solo recibe una lectura de Siesa
+(no un diccionario armado ni mutado); un solo escritor de `stock_siesa` y
+pregunta `lectura_completa`; `_leer_stock_de_bd` solo donde no se persiste o en
+la rama degradada. Meta-tests (la mezcla, la mutación del dict, lo sano, la
+función anidada, la copia a otro modelo) y pisos. **18 mutaciones, las 18
+rojas.** Los tests de «las tres pasadas» se reescribieron con su porqué.
+
+**Lo que NO cubre, dicho:**
+- **Un inventario que cambia de forma balanceada entre dos páginas** (una fila
+  sale y otra entra en la misma pausa, antes y después del cursor) no se ve: el
+  total no cambia, no hay repetidos y la numeración cierra. La fila saltada
+  quedaría en cero hasta la próxima lectura (45 min). Se leyó de noche en
+  producción; de día no está medido.
+- **La lectura tarda ~11 min** (393 páginas contra ~40 de antes): el refresco de
+  45 min y la carga de las 7:00 la esperan.
+- **El histórico de `stock_siesa` antes del deploy** no distingue cuándo se agotó
+  cada fila: `ausente_desde` empieza el día de la primera lectura completa.
+- **Días en cero para venta perdida** (P1-6): `ausente_desde` y la foto diaria lo
+  permiten; no está conectado.

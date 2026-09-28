@@ -65,8 +65,8 @@ class SiesaExistencias:
     `total_final` (el total de la relectura final de la página 1)."""
 
     def __init__(self, filas, tam=100, falla=(), total_en=None, repite_linea=None,
-                 sin_linea=False, sin_total=False, total_final=None):
-        self.filas = [dict(f, LineaRegistro=i + 1) for i, f in enumerate(filas)]
+                 sin_linea=False, sin_total=False, total_final=None, primera_linea=1):
+        self.filas = [dict(f, LineaRegistro=i + primera_linea) for i, f in enumerate(filas)]
         self.tam = tam
         self.falla = set(falla)
         self.total_en = total_en or {}
@@ -195,6 +195,12 @@ class TestLaLecturaSeProbaCompleta:
     def test_linea_repetida(self):
         r = leer(SiesaExistencias(universo(250), repite_linea=2))
         assert not iss.lectura_completa(r) and 'dos veces' in r.motivo
+
+    def test_la_numeracion_no_es_1_a_n(self):
+        """N filas distintas, sin repetidos, pero numeradas 2…N+1: no es la
+        numeración que prueba que llegaron todas."""
+        r = leer(SiesaExistencias(universo(), primera_linea=2))
+        assert not iss.lectura_completa(r) and 'no es 1' in r.motivo
 
     def test_misma_bodega_y_referencia_dos_veces(self):
         filas = universo()
