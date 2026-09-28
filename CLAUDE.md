@@ -6734,6 +6734,8 @@ motivo, FORZAR `bulto_cargado_sacado_de_la_ruta`).
 3. ¿El jefe de almacén puede bajar del camión un bulto sin documento (hoy sí,
    con motivo), o solo el admin?
 
+---
+
 ## Validación e2e del 2026-09-26 — pestañas, jornada de noche, voz y productividad (2026-09-27)
 
 Cuatro defectos del día real por rol (`tests/test_val_e2e_dia_20260926.py`,
