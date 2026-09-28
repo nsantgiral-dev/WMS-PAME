@@ -323,7 +323,7 @@ class TestLaVersionDelConductorTieneSalida:
         liq = _usuario(db, 'liquidador')
         r = client.post(self._url_v(f, rec.id), headers=_jwt(app, liq),
                         json={'decision': 'ADOPTAR', 'motivo': 'x'})
-        assert r.status_code == 403 and 'corregir el cobro' in r.get_json()['error']
+        assert r.status_code == 403 and 'ya salió a Siesa' in r.get_json()['error']
         # El líder entra, y lo que ya está en cola no se reescribe.
         lider = _usuario(db, 'lider_cartera')
         r = client.post(self._url_v(f, rec.id), headers=_jwt(app, lider),
