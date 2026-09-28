@@ -1543,8 +1543,16 @@ modelos al margen supuesto sin que nadie lo note.
 ### El script no verificaba contra qué base borraba
 
 Tomaba `DATABASE_URL` y ejecutaba. Y **el `DATABASE_URL` de una sesión de
-desarrollo apunta a la base de producción en Railway** — comprobado el
+desarrollo apuntaba a la base de producción en Railway** — comprobado el
 2026-08-14: `metro.proxy.rlwy.net/railway`, 51.808 filas.
+
+> **Corregido el 2026-09-27:** hoy el `.env` local apunta a
+> `altaria.proxy.rlwy.net:20841`, que es **QA**; producción es
+> `metro.proxy.rlwy.net:29311` (verificados solo los hosts). Lo de arriba era
+> cierto el 2026-08-14 y dejó de serlo. **La regla no cambia:** el `.env` puede
+> volver a cambiar sin aviso, así que nunca se usa para correr la app ni un
+> script que escribe, y el candado de `--confirmar-destino` sigue siendo
+> necesario — un host que hoy es QA no prueba el de mañana.
 
 Con eso, un `--ejecutar` recuperado del historial de la terminal vacía
 producción. No hace falta equivocarse: basta con repetir un comando.
@@ -6201,17 +6209,20 @@ la portada no juzga contra la meta un período del KPI diario sin medir
   producción corra esta versión no trae sello, y el primer proceso de QA que
   la use la sella `QA`. Producción tiene que desplegar esto (y correr un ciclo
   de DLQ) antes del próximo respaldo para QA. Un proceso sin
-  `RAILWAY_ENVIRONMENT_NAME` postea sobre cualquier base.
+  `RAILWAY_ENVIRONMENT_NAME` postea sobre cualquier base. *(Superado el
+  2026-09-26: producción se sella al arrancar y una base sin sello con
+  historia no se auto-sella — ver «Validación de inventario del 2026-09-26».)*
 - **El latido dice que corrió, no que hizo su trabajo**: un cron que atrapa
   sus propios errores figura «bien». Los hilos que no son APScheduler (carga
   de las 7:00, refresco de existencias) no dejan latido: su rastro es
   `registros_sync`.
-- **La carga física** que se salta una bodega por operaciones activas solo lo
-  loguea. `tamPag=1000` de la consulta de existencias (`_descargar_una_pasada_custom`)
+- ~~**La carga física** que se salta una bodega por operaciones activas solo lo
+  loguea~~ (2026-09-26: queda en `registros_sync` y se avisa). `tamPag=1000` de la consulta de existencias (`_descargar_una_pasada_custom`)
   sigue violando la Regla 10 (no se tocó: cambiarlo cambia el costo de la
   descarga y no era el defecto).
-- **Consumo de cupo**: la hora de emisión de la FE es `fecha_despachado` (o
-  `siesa_triggered_at`); no hay una columna propia.
+- **Consumo de cupo**: la hora de emisión de la FE es `fe_confirmada_at` (desde
+  el 2026-09-26; antes `fecha_despachado`/`siesa_triggered_at`, que quedan de
+  respaldo).
 - **Ventana**: un POST inline (un usuario a las 20:00) no se frena; Siesa caído
   o de noche = se para todo (decisión del dueño, sin contingencia). La
   generación de conteo ABC sigue a las 2:00 (no habla con Siesa, declarada).
@@ -6225,8 +6236,9 @@ la portada no juzga contra la meta un período del KPI diario sin medir
 
 1. ~~**Ventana 06:00–19:30.** ¿Confirma?~~ **Decidido (2026-09-25):** la
    ventana no es una regla de producción; sale de `SIESA_VENTANA` (tanda 2 · H).
-2. **Re-sellar**: el endpoint existe sin botón a propósito. ¿Quién decide qué
-   se hace con los `siesa_jobs` PENDIENTE de una copia antes de re-sellarla?
+2. **Re-sellar**: desde el 2026-09-26 hay botón (admin, Siesa → Recuperación).
+   Sigue abierto: ¿quién decide qué se hace con los `siesa_jobs` PENDIENTE de
+   una copia antes de re-sellarla?
 3. **Almacenes de NS2/FP1/FF1**: ¿se crean (`flask asegurar-almacenes
    --ejecutar`) o se dejan hasta su primer uso?
 4. **Consumo de cupo**: ventana de 48 h para una FE no indexada (medido: de
@@ -6543,16 +6555,17 @@ corre sin la variable (`conftest` la borra).
 - **ENTRADA_OC resuelta «sí está en Siesa»** se cierra por la guarda
   idempotente y **no encola el traslado a averías** de esa recepción: queda a
   mano.
-- **Un crash entre el pre-flag y el POST** (job PROCESANDO reseteado) sigue
-  leyéndose como «ya enviado» en los tres tipos: la guarda por bandera sola no
-  se cambió (solo el «no sé» del POST).
+- ~~**Un crash entre el pre-flag y el POST** (job PROCESANDO reseteado) sigue
+  leyéndose como «ya enviado» en los tres tipos~~ — cerrado el 2026-09-26
+  (`estado_del_preflag`, ver «Validación de inventario del 2026-09-26»).
 - **El formulario de la oficina**: la foto es opcional salvo donde el servicio
   la exige; una parada registrada sin evidencia queda solo con la señal
   «registrada por la oficina».
 - **Con `SIESA_VENTANA` puesta en QA**, los crons de madrugada se **omiten**
   (quedan fuera de la ventana): en QA no corren.
-- **El candado** no reconoce una base de producción fuera de Railway, ni frena
-  un proceso local que se ponga `RAILWAY_ENVIRONMENT_NAME` a mano.
+- **El candado** no reconoce una base de producción fuera de Railway. (Un
+  proceso local con `RAILWAY_ENVIRONMENT_NAME` a mano ya no pasa desde el
+  2026-09-26: exige también `RAILWAY_SERVICE_ID`.)
 
 ### La prueba de la fecha del RC en Siesa QA (fin de mes; la hace el dueño o el consultor)
 
@@ -6844,3 +6857,67 @@ rol— y el permiso de `resolver_version` —el test pasó a exigir su mensaje).
 1. ¿Quién paga un faltante de retorno (conductor, baja, cliente)? Hoy: deuda en cartera, declarada.
 2. ¿`HORA_ENTREGA_DIA_SIGUIENTE = 19` o la hora de cierre de temporada?
 3. Una ruta en camino > 24 h: ¿el cierre lo sigue forzando solo el admin?
+
+---
+
+## Validación de inventario del 2026-09-26 — cartera, picking, carga física, pre-flag, sello, traslados
+
+Lo que reprodujeron los validadores (`tests/test_val_inv_20260926.py`, el H7 de
+fiscal, el traslado de `tests/test_val_e2e_dia_20260926.py`), cerrado por
+clase. Migración **`m050inv2`** (aditiva; en la integración v2 quedó encadenada detrás de `m050plata`): índice
+`ix_pedidos_historia_cliente`; `solicitudes_traslado.faltante_*`;
+`tareas_devolucion.siesa_response` (backfill acotado a las tareas cuyo
+`TRASLADO_AVERIAS` terminó COMPLETADO). Lock nuevo: **2070**
+(`LOCK_ANOTAR_FE`).
+
+| | Qué pasaba | Ahora | Trinquete |
+|---|---|---|---|
+| **P1-1** cupo | El 142943 no devuelve el consecutivo: la tarea quedaba con `fe_confirmada_at` y sin `fe_consec`, y `consumo_wms` la leía «sin factura» (cupo consumido para siempre, doble conteo con el saldo) | La FE emitida es `documento_fiscal.fe_confirmada`; la hora de emisión, `fe_confirmada_at`; regla de 48 h; sin número, la fila de cartera se busca por el pedido (`cxc_cruce`). Consulta acotada a lo que puede consumir (subconsulta + índice). `fe_resolver.anotar_fe_emitidas` (GET por pedido en su CO, solo con UNA FE candidata; lock 2070) corre con el barrido de cartera | `test_fe_emitida_sin_consecutivo.py`: ninguna condición decide sobre `fe_consec` sin `fe_confirmada_at` (9 declaradas) |
+| **P1-2** picking | `reabrir_picking` con la caja DESPACHADA o VERIFICADA creaba una tarea por el faltante que ninguna caja podía llevar | `PickingService.motivo_caja_no_recibe` (una política). Si la caja no recibe: lo recogido queda en ella (original COMPLETADO; sin nada, CANCELADO), **el faltante no se recoge** y se declara (`aviso_reapertura`, bitácora): es un pedido nuevo o un backorder. `POST /api/picking/crear` → 409. La PWA pide el motivo de la reapertura (el servicio lo exigía: la pantalla daba 400 siempre) | `test_picking_caja_que_no_recibe.py`: todo creador de `TareaPicking` o vuelta a PENDIENTE pregunta la política (6 declarados) |
+| **P1-3** carga física | «Completo» era una pasada: con dos de tres perdidas se escribía y el bulk zero ponía en 0 —sin kardex, huecos de picking incluidos— lo que esa pasada no trajo | `PASADAS_ACORDADAS = 3` y `ResultadoDescarga.pasadas_completas`; `fuente_para_escribir` exige las tres (lo que se pone en 0 faltó en todas). Una pasada rota no achica la unión (lo leído entra sin pisar lo de una completa). El cero escribe un `MovimientoInventario` por fila | `test_carga_fisica_vigente.py`: toda función que pone `cantidad = 0` escribe su movimiento; ningún `update({'cantidad': 0})` en bloque |
+| **P1-4** pre-flag | Crash entre la marca y el POST: ENTRADA_OC, AJUSTE_CONTEO y averías por tarea quedaban COMPLETADOS por la guarda de la bandera | `siesa_job_service.estado_del_preflag` (LIBRE · ENVIADO · SIN_DESENLACE) para todo tipo con pre-flag: ENVIADO exige la respuesta guardada (`_ejecutar_con_preflag` la escribe; «sí está en Siesa» también). Sin desenlace: FALLIDO sin reintento y «¿Está en Siesa?» | `test_preflag_sin_desenlace.py`: toda rama de `_ejecutar_job` con pre-flag pregunta la política; ninguna decide leyendo `.siesa_triggered` (1 declarada) |
+| **P1-5** sello | Producción se sellaba al primer envío de la DLQ; cualquier base sin sello se auto-sellaba; el candado se burlaba con el nombre del ambiente | `sellar_en_arranque` (producción, en `create_app`); `sello_ambiente.veredicto` (una política): sin sello **con historia** de `siesa_jobs` no postea y pide sellado explícito; conexión propia (ya no hace rollback de la sesión del llamador); candado exige `RAILWAY_SERVICE_ID`; botón «Re-sellar esta base» en Siesa → Recuperación | `test_sello_ambiente.py`, `test_candado_produccion_local.py` |
+| **P2-6** carga no corrida | El resumen de las 6:45 sale antes de la carga de las 7:00; una carga omitida no dejaba fila y Salud decía OK con la última de hace días | Toda carga que no escribe (omitida por operaciones, fuera de ventana, sin almacén, lock ocupado) deja su fila; correo en la misma corrida; Salud y el resumen miran la antigüedad de la última **escrita** (nunca o > 26 h = advertencia) | `test_carga_fisica_vigente.py` |
+| **P2-7** reintento | «Siesa → Cargar inventario» no existía; el botón del setup solo cargaba NB1 sin guarda | Panel «Cargar inventario (por bodega)» en la pestaña Siesa (`GET /api/siesa/carga-fisica`); `motivo_carga_bloqueada` (una guarda) para el botón, las 7:00 y el setup; la ruta acepta la lista única de bodegas y responde 409 con el motivo | ídem |
+| **P2-8** pantalla | «✓ Sincronizada con Siesa» con la bandera puesta y el POST «no sé» | `siesa_envio` (de la política) en recepción y averías; `recSiesaBadge`: «Sin verificar en Siesa» y quién lo resuelve | `test_preflag_sin_desenlace.py` |
+| **P2-9** `stock_siesa` | Se persistía la mezcla BD ∪ API con `updated_at = ahora`; el guard anti-parcial miraba la mezcla | Solo lo que Siesa reportó en esta lectura; el guard mira lo leído | `test_carga_fisica_vigente.py`, val-inv |
+| **a** traslado | STS 10, la tienda cuenta 9, ETS 9: una unidad en TRA1 sin que nada la nombre; un ítem contado en 0 entraba al ETS con la enviada | `traslado_service.faltante_de_recepcion` (una política) + `resolver_faltante` (DEVUELTO_AL_ORIGEN · AJUSTADO cierran; EN_INVESTIGACION abierto; supervisión, motivo, bitácora; **no postea**); **TRA-13** (BLOQUEA, detector ciego); línea en el resumen diario; la recepción devuelve `mensaje_recepcion` y tienda/recepción ya no afirman la entrada | `test_traslado_faltante.py` |
+| **b** rutas | Las rutas de traslados devolvían `str(e)` con 500 | `routes/traslados._falla`: 4xx lo del usuario, 502/503 lo de Siesa, 500 sin trazas y con referencia | AST sobre `app/routes`: inventario por archivo que solo encoge (61 en 19; traslados en 0) |
+| **c** ensayo | En MODO_ENSAYO el DESPACHO_TRASLADO quedaba COMPLETADO y la solicitud EN_PACKING para siempre | `TrasladoNoEnviadoEnEnsayo` (determinista): FALLIDO sin reintento, `siesa_error` lo declara | `test_traslado_faltante.py` |
+| **P3** | Crons con `hour='7-19'` propio; latido de un servicio renombrado «callado» para siempre; el tope de 10 anulados comido por traslados; la carga de las 7:00 no miraba `SIESA_VENTANA`; `_run_carga_inicial` con el lock ocupado no cerraba su registro | Sin rangos propios (la ventana es `ventana_siesa`); latido juzgado por cron (servicios sin latido en 7 días, `caducados`); `candidatos_a_verificar` sin traslados y rotando por id | `test_ventana_siesa.py` (ningún `CronTrigger` con rango de horas), `test_p3_crons_y_rotacion.py` |
+
+**Cambios de comportamiento:** el catálogo, las OCs, la verificación de NC y
+el kardex automático corren cada 30 min todo el día sin `SIESA_VENTANA` (antes
+7–19/20 h); una base sin sello con historia deja de postear hasta re-sellarla;
+un `.env` local con `RAILWAY_ENVIRONMENT_NAME` y sin `RAILWAY_SERVICE_ID` contra
+una base de Railway ya no arranca crons; la carga física exige las tres pasadas
+completas; un job con pre-flag sin respuesta va a «¿Está en Siesa?» en vez de
+COMPLETADO.
+
+### Lo que NO cubre, dicho
+
+- **La FE del pedido** se busca filtrando `f350_id_co` + `f430_consec_docto`
+  (verificados en vivo); el tipo del pedido no está en el spec y se verifica en
+  la fila solo si viene. Con dos FE candidatas no se anota ninguna.
+- **Tres pasadas completas** no prueban que Siesa no tenga un SKU que salió en
+  ninguna (paginación no determinista): es la medida acordada, no una garantía.
+- **El faltante de traslado** no se mueve solo en Siesa: el WMS registra lo que
+  una persona hizo allá (ETS inverso, ajuste) o quién investiga.
+- **El sello al arrancar** necesita la tabla migrada: el primer arranque de un
+  deploy con `m048inv` nuevo lo intenta y, si falla, lo hace el arranque
+  siguiente (o el re-sellado a mano).
+- **`recepcion.js`** usa `siesa_envio`; otras pantallas que leen
+  `siesa_triggered` de packing (otro significado: documento del despacho) no
+  se tocaron.
+
+### A qué base apunta el `.env` local — contestado (2026-09-27)
+
+Verificado el 2026-09-27 (solo los hosts, sin credenciales): el `.env` local
+apunta a `altaria.proxy.rlwy.net:20841`, el Postgres público de **QA**;
+producción es `metro.proxy.rlwy.net:29311`. Lo que este archivo midió el
+2026-08-14 («el `DATABASE_URL` de una sesión de desarrollo apunta a `metro`»)
+**dejó de ser cierto**, y `docs/flujo_qa_produccion.md` (regla 1) tiene razón.
+La regla no se afloja: **el `.env` no se usa para correr la app ni scripts que
+escriben** —puede volver a cambiar sin que nadie lo anuncie— y los candados
+(`--confirmar-destino`, `RAILWAY_SERVICE_ID`, el sello) siguen siendo
+necesarios.

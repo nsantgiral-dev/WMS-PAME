@@ -172,7 +172,12 @@ es la alarma: **no forzar**. Investigar qué entró directo a `main` y unirlo a
    2026-09-21 el traslado de prueba `ST-20260921-0471` se creó en la base de
    **producción** porque el `.env` apuntaba a `metro`. Antes de correr algo
    que escribe, mirar el host de `DATABASE_URL`: `altaria` es QA, `metro` es
-   producción.
+   producción. **Verificado el 2026-09-27** (solo hosts, sin credenciales): el
+   `.env` local apunta a `altaria.proxy.rlwy.net:20841` (QA); producción es
+   `metro.proxy.rlwy.net:29311`. Aun así el `.env` no se usa para correr la
+   app ni scripts que escriben: puede cambiar sin aviso, y los candados
+   (`--confirmar-destino`, `RAILWAY_SERVICE_ID`, el sello de ambiente) siguen
+   siendo necesarios.
 
 2. **Recargar QA con una copia de producción exige redesplegar QA en
    seguida.** La copia trae la revisión de migraciones de producción (hoy
