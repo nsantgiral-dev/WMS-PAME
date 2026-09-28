@@ -1389,18 +1389,76 @@ class ConnektaConsultasGateway:
                 'Sin rowids no se puede crear nota crédito.'
             )
 
-    def get_vencimiento_factura(self, tipo_docto_fe: str, consec_fe) -> str:
+    #: Tope de filas de la lectura exacta de un documento. La PK documental es
+    #: CO + tipo + consecutivo + cuota (Regla 18): una FE del WMS tiene UNA
+    #: fila (cuota 0). Si la página llega llena, el filtro no filtró.
+    _TOPE_FILAS_DOCUMENTO = 20
+
+    def get_cxc_de_factura(self, co: str, tipo_docto: str, consec_docto) -> list:
+        """GET API_v2_CxC_General — las filas de cartera de **un documento**:
+        `f353_id_co_cruce` + `f353_id_tipo_docto_cruce` + `f353_consec_docto_cruce`
+        (Regla 18), abiertas o cerradas.
+
+        **El CO es parte de la llave, no un adorno** (P2-5 de la auditoría de
+        liquidación, 2026-09-27). En producción la numeración de las FE se
+        solapa entre centros de operación: FE-17062 existe en el CO 003
+        (2026-09-07) y en el CO 004 (2026-09-25), de dos clientes distintos.
+        Medido en producción el 2026-09-27 (solo GET): sin CO el filtro trae
+        las dos; con CO, exactamente la del CO pedido (0,26 s).
+
+        A diferencia de `get_cxc_general` (todo el historial de un NIT, hasta
+        50 páginas), esto es una sola página y **no traga errores**: una
+        lectura que falla levanta. Quien pregunta distingue «Siesa no
+        respondió» (esperar) de «la factura no está en la cartera» (`[]`).
+        En simulación, `[]`.
+        """
+        from app.services.connekta_gateway import _exigir_datos
+        from app.services.siesa_filtro import lit as _lit
+
+        core = self._core
+        if core.modo_simulacion:
+            return []
+        co = str(co or '').strip()
+        tipo = str(tipo_docto or '').strip()
+        consec = str(consec_docto or '').strip()
+        if not (co and tipo and consec.isdigit()):
+            raise ValueError(
+                f'get_cxc_de_factura: documento incompleto (CO={co!r}, tipo={tipo!r}, '
+                f'consecutivo={consec!r}) — sin los tres no se lee la cartera')
+        filtro = (f"f353_id_co_cruce = {_lit(co)} "
+                  f"AND f353_id_tipo_docto_cruce = {_lit(tipo)} "
+                  f"AND f353_consec_docto_cruce = {int(consec)}")
+        res = core._get('API_v2_CxC_General', {
+            'paginacion': f'numPag=1|tamPag={self._TOPE_FILAS_DOCUMENTO}',
+            'parametros': filtro,
+        })
+        if res is None:
+            raise RuntimeError(
+                f'get_cxc_de_factura {co}-{tipo}-{consec}: Siesa no respondió '
+                f'(circuito abierto o sin respuesta)')
+        filas = _exigir_datos((res or {}).get('detalle', {}).get('Table', []) or [],
+                              f'get_cxc_de_factura {co}-{tipo}-{consec}', filtro)
+        if len(filas) >= self._TOPE_FILAS_DOCUMENTO:
+            raise RuntimeError(
+                f'get_cxc_de_factura {co}-{tipo}-{consec}: {len(filas)} filas para un '
+                f'solo documento — el filtro no filtró; no se elige una a ciegas')
+        return filas
+
+    def get_vencimiento_factura(self, tipo_docto_fe: str, consec_fe, co: str = None) -> str:
         """
         GET API_v2_CxC_General — saldo y fecha de vencimiento reales de la
         factura (f353_fecha_vcto), para F353_FECHA_VCTO en el cruce de
         251126. Fallback (fecha de hoy + 30 días) si no se encuentra —
         no es un campo bloqueante para el cruce (verificado en vivo
         2026-07-31), así que no vale la pena fallar duro por esto.
+
+        Lee con la lectura exacta del documento (`get_cxc_de_factura`, con
+        CO: la numeración de las FE se solapa entre CO). Sin `co`, el de la
+        emisión (`CONNEKTA_CENTRO_OP`). El fallback ya no es callado: queda
+        en el log con el motivo (P2-5, 2026-09-27).
         """
         from datetime import datetime, timedelta
         from zoneinfo import ZoneInfo
-
-        from app.services.siesa_filtro import lit as _lit
 
         core = self._core
         _tz_bogota = ZoneInfo('America/Bogota')
@@ -1408,18 +1466,13 @@ class ConnektaConsultasGateway:
         if core.modo_simulacion:
             return fallback
         try:
-            consec_int = int(consec_fe) if str(consec_fe).isdigit() else consec_fe
-            res = core._get('API_v2_CxC_General', {
-                'paginacion': 'numPag=1|tamPag=5',
-                'parametros': (
-                    f"f353_id_co_cruce = {_lit(core.centro_op)} "
-                    f"AND f353_id_tipo_docto_cruce = {_lit(tipo_docto_fe)} "
-                    f"AND f353_consec_docto_cruce = {consec_int}"
-                ),
-            })
-            rows = res.get('detalle', {}).get('Table', [])
-            fecha = rows[0].get('f353_fecha_vcto') if rows else None
+            rows = self.get_cxc_de_factura(co or core.centro_op, tipo_docto_fe, consec_fe)
+            fecha = rows[0].get('f353_fecha_vcto') if len(rows) == 1 else None
             if not fecha:
+                logger.warning(
+                    '[CONNEKTA] get_vencimiento_factura(%s-%s, CO %s): %d fila(s) de '
+                    'cartera — se usa hoy + 30 días', tipo_docto_fe, consec_fe,
+                    co or core.centro_op, len(rows))
                 return fallback
             return fecha[:10].replace('-', '')
         except Exception as e:

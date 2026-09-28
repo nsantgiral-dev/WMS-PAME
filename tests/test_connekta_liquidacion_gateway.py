@@ -231,14 +231,14 @@ class TestTriggerReciboCaja:
 
             monkeypatch.setattr(connekta, 'tipo_docto_recibo_caja', '')
             with pytest.raises(ValueError, match='SIESA_TIPO_DOCTO_RECIBO_CAJA'):
-                connekta.trigger_recibo_caja('900123', '001', 1000.0, 'EFECTIVO', 'FEW', '1')
+                connekta.trigger_recibo_caja('900123', '001', 1000.0, 'EFECTIVO', 'FEW', '1', cuenta_cxc='13050501', unidad_negocio='99')
 
     def test_forma_pago_desconocida_lanza_valueerror(self, app):
         with app.app_context():
             from app.services.connekta_gateway import connekta
 
             with pytest.raises(ValueError, match='forma_pago'):
-                connekta.trigger_recibo_caja('900123', '001', 1000.0, 'CHEQUE', 'FEW', '1')
+                connekta.trigger_recibo_caja('900123', '001', 1000.0, 'CHEQUE', 'FEW', '1', cuenta_cxc='13050501', unidad_negocio='99')
 
     def test_ajuste_mayor_o_igual_al_monto_lanza_valueerror(self, app):
         with app.app_context():
@@ -246,7 +246,7 @@ class TestTriggerReciboCaja:
 
             with pytest.raises(ValueError, match='ajuste al peso'):
                 connekta.trigger_recibo_caja('900123', '001', 1000.0, 'EFECTIVO', 'FEW', '1',
-                                              ajuste_valor=1000.0)
+                                              ajuste_valor=1000.0, cuenta_cxc='13050501', unidad_negocio='99')
 
     def test_sin_ajuste_cr_es_el_monto_completo(self, app, monkeypatch):
         with app.app_context():
@@ -259,7 +259,7 @@ class TestTriggerReciboCaja:
                 return {'codigo': 0}
 
             monkeypatch.setattr(ConnektaGateway, '_post', _fake_post)
-            connekta.trigger_recibo_caja('900123', '001', 1000.0, 'EFECTIVO', 'FEW', '1')
+            connekta.trigger_recibo_caja('900123', '001', 1000.0, 'EFECTIVO', 'FEW', '1', cuenta_cxc='13050501', unidad_negocio='99')
 
             cxc = capturado['payload']['CxC'][0]
             caja = capturado['payload']['Caja'][0]
@@ -279,7 +279,7 @@ class TestTriggerReciboCaja:
 
             monkeypatch.setattr(ConnektaGateway, '_post', _fake_post)
             connekta.trigger_recibo_caja('900123', '001', 1000.0, 'EFECTIVO', 'FEW', '1',
-                                          ajuste_valor=100.0, ajuste_es_sobrante=False)
+                                          ajuste_valor=100.0, ajuste_es_sobrante=False, cuenta_cxc='13050501', unidad_negocio='99')
 
             cxc = capturado['payload']['CxC'][0]
             assert float(cxc['F354_VALOR_CR']) == 900.0
@@ -297,7 +297,7 @@ class TestTriggerReciboCaja:
 
             monkeypatch.setattr(ConnektaGateway, '_post', _fake_post)
             connekta.trigger_recibo_caja('900123', '001', 1000.0, 'EFECTIVO', 'FEW', '1',
-                                          ajuste_valor=50.0, ajuste_es_sobrante=True)
+                                          ajuste_valor=50.0, ajuste_es_sobrante=True, cuenta_cxc='13050501', unidad_negocio='99')
 
             header = capturado['payload']['RCyotrosingresos'][0]
             cxc = capturado['payload']['CxC'][0]
@@ -315,7 +315,7 @@ class TestTriggerDocumentoContable:
             monkeypatch.setattr(connekta, 'tipo_docto_docto_contable', '')
             with pytest.raises(ValueError, match='SIESA_TIPO_DOCTO_DOCTO_CONTABLE'):
                 connekta.trigger_documento_contable(
-                    '900123', '001', '13551501', 500.0, 5000.0, 'FEW', '1')
+                    '900123', '001', '13551501', 500.0, 5000.0, 'FEW', '1', cuenta_cxc='13050501', unidad_negocio='99')
 
     def test_verifica_partida_doble(self, app, monkeypatch):
         with app.app_context():
@@ -326,7 +326,7 @@ class TestTriggerDocumentoContable:
                                  lambda payload: llamado.setdefault('payload', payload))
             monkeypatch.setattr(ConnektaGateway, '_post', lambda *a, **k: {'codigo': 0})
             connekta.trigger_documento_contable(
-                '900123', '001', '13551501', 500.0, 5000.0, 'FEW', '1')
+                '900123', '001', '13551501', 500.0, 5000.0, 'FEW', '1', cuenta_cxc='13050501', unidad_negocio='99')
             assert 'payload' in llamado, 'debe verificar partida doble antes de enviar'
 
     def test_ajuste_agrega_segunda_linea_de_movimiento_contable(self, app, monkeypatch):
@@ -342,7 +342,7 @@ class TestTriggerDocumentoContable:
             monkeypatch.setattr(ConnektaGateway, '_post', _fake_post)
             connekta.trigger_documento_contable(
                 '900123', '001', '13551501', 500.0, 5000.0, 'FEW', '1',
-                ajuste_valor=30.0, ajuste_razon='faltante en ruta')
+                ajuste_valor=30.0, ajuste_razon='faltante en ruta', cuenta_cxc='13050501', unidad_negocio='99')
 
             movs = capturado['payload']['Movimientocontable']
             cxc = capturado['payload']['MovimientoCxC'][0]

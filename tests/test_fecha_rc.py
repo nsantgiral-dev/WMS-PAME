@@ -82,7 +82,7 @@ def _payload(monkeypatch, forma, fecha_recaudo, hoy='20261002', notas='Liq ruta 
     gw.modo_ensayo = True
     gw.tipo_docto_recibo_caja = 'RC'
     p = gw.trigger_recibo_caja('900', '001', 1000, forma, 'FEW', '1', notas=notas,
-                               referencia_pago='12345', fecha_recaudo=fecha_recaudo)['payload']
+                               referencia_pago='12345', fecha_recaudo=fecha_recaudo, cuenta_cxc='13050501', unidad_negocio='99')['payload']
     header = next(v[0] for v in p.values() if isinstance(v, list) and v
                   and isinstance(v[0], dict) and 'F357_FECHA_RECAUDO' in v[0])
     caja = next(v[0] for v in p.values() if isinstance(v, list) and v
@@ -165,9 +165,8 @@ def _ejecutar(job, hoy, efecto):
     with patch('app.services.connekta_gateway.connekta') as mc, \
             patch('app.utils.fecha.fecha_hoy_bogota', return_value=hoy):
         mc.trigger_recibo_caja.side_effect = efecto
-        mc.get_cxc_general.return_value = [
-            {'f353_id_tipo_docto_cruce': 'PD', 'f353_consec_docto_cruce': '100',
-             'f353_total_db': 1000, 'f353_total_cr': 0}]
+        from tests._envio_liq import cartera_en, fila_cartera
+        cartera_en(mc, [fila_cartera(tipo='PD', consec='100', total_db=1000)])
         try:
             _ejecutar_job(job)
         finally:

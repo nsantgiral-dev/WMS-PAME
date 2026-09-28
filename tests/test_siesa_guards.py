@@ -33,7 +33,7 @@ class TestTransferenciaGuards:
             gw.trigger_recibo_caja(
                 tercero_nit='900123456', sucursal='001', monto=1000,
                 forma_pago='EFECTIVO', tipo_docto_fe='FE', consec_fe='100',
-            )
+            cuenta_cxc='13050501', unidad_negocio='99')
 
     def test_sin_tipo_docto_docto_contable_raise(self, app):
         """Si SIESA_TIPO_DOCTO_DOCTO_CONTABLE no está configurado, falla."""
@@ -47,7 +47,7 @@ class TestTransferenciaGuards:
                 tercero_nit='900123456', sucursal='001',
                 cuenta_puc='13551501', monto=25000, base_gravable=1000000,
                 tipo_docto_fe='FE', consec_fe='100',
-            )
+            cuenta_cxc='13050501', unidad_negocio='99')
 
 
 # ═══════════════════════════════════════════════════════════════════

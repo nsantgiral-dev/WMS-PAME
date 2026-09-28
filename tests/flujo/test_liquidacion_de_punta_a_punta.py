@@ -111,6 +111,18 @@ def siesa_responde(monkeypatch):
          'f353_consec_docto_cruce': _PEDIDO_DEL_ARNES[1],
          'f353_fecha_vcto': '2026-08-15'},
     ])
+    # La lectura exacta del documento (CO + tipo + consecutivo) que usa el
+    # ejecutor antes del POST (2026-09-27): de esta fila salen el tercero, la
+    # sucursal, la cuenta y la UN. Forma real, medida en producción.
+    def _cxc_de_factura(co, tipo, consec):
+        fila = {'f353_id_co_cruce': '003', 'f353_id_tipo_docto_cruce': 'PD',
+                'f353_consec_docto_cruce': _PEDIDO_DEL_ARNES[1], 'f353_nro_cuota_cruce': 0,
+                'f200_id': '1000134388', 'f201_id_sucursal': '001', 'f253_id': '13050501',
+                'f353_id_un_cruce': '99', 'f353_total_db': 50000.0, 'f353_total_cr': 0.0,
+                'f353_fecha_vcto': '2026-08-15'}
+        return [fila] if (co, tipo, str(consec)) == (
+            '003', 'PD', str(_PEDIDO_DEL_ARNES[1])) else []
+    monkeypatch.setattr(connekta, 'get_cxc_de_factura', _cxc_de_factura)
     return connekta
 
 
@@ -163,7 +175,7 @@ class TestElReciboDeCajaSaleCompleto:
         connekta.trigger_recibo_caja(
             tercero_nit='1000134388', sucursal='001', monto=50000,
             forma_pago='EFECTIVO', tipo_docto_fe='FEW', consec_fe=1466,
-            co_factura='003', cuenta_cxc='13050501', notas='arnés')
+            co_factura='003', cuenta_cxc='13050501', notas='arnés', unidad_negocio='99')
         p = _payload_de(capturados, '142888')
         assert p is not None, 'el RC no llegó a `_post` — no se envió nada'
         return p

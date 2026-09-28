@@ -117,15 +117,24 @@ def recaudo_liq(db, almacen):
     return _make
 
 
-def _procesar(recaudo, db):
-    """`_procesar_recaudo` con el tercero mockeado (única llamada a Siesa aparte
-    de `get_rowids_factura`, que cada test decide cómo se comporta)."""
-    with patch('app.services.liquidacion_service._obtener_tercero',
-               return_value=('900123456', '001')):
-        from app.services.liquidacion_service import _procesar_recaudo
-        resultado = _procesar_recaudo(recaudo, 'test doble unidad')
-        db.session.commit()
-        return resultado
+def _procesar(recaudo, db, amarrar=True):
+    """`_procesar_recaudo` y, con `get_rowids_factura` como cada test lo
+    decida, **el amarre de la devolución a la factura**. Desde el 2026-09-27
+    liquidar no lee Siesa (P1-1): la devolución se amarra donde ya se amarraba
+    con red —recepción al preparar el conteo—, con la misma función
+    (`devolucion_ruta.vincular_a_factura`). Estos tests miden ese amarre."""
+    from app.services.devolucion_ruta import devolucion_vigente, vincular_a_factura
+    from app.services.liquidacion_service import _procesar_recaudo
+    resultado = _procesar_recaudo(recaudo, 'test doble unidad')
+    db.session.commit()
+    dev = devolucion_vigente(recaudo.id)
+    if amarrar and dev is not None:
+        try:
+            vincular_a_factura(dev)
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+    return resultado
 
 
 def _lineas_de(recaudo_id):
@@ -338,6 +347,10 @@ class TestUnidadUnicaNoCambia:
 # DEFECTO 2 — el DC que no se encola y el contador que dice 1
 # ═══════════════════════════════════════════════════════════════════
 class TestDCQueNoSeEncola:
+    """El contador del DC dice la verdad sobre la cola. Desde el 2026-09-27
+    encolar no lee Siesa (P1-1): una factura ilegible o vacía ya no impide
+    encolar — la retención queda EN LA COLA (un documento real, que se va a
+    enviar) y es el ejecutor el que espera, sin inventar el monto."""
 
     @staticmethod
     def _dc_jobs(recaudo_id):
@@ -346,41 +359,52 @@ class TestDCQueNoSeEncola:
             referencia_id=recaudo_id, referencia_tipo='RecaudoEntrega',
             tipo='DOCUMENTO_CONTABLE_RET').all()
 
-    def test_factura_ilegible_no_encola_y_no_cuenta(
+    @staticmethod
+    def _resolver(recaudo_id):
+        from tests._envio_liq import resolver_cola
+        return resolver_cola(recaudo_id, tipos=('DOCUMENTO_CONTABLE_RET',))
+
+    def test_factura_ilegible_encola_y_el_ejecutor_espera_sin_inventar(
             self, app, db, recaudo_liq, producto):
-        """`get_rowids_factura` levanta (barrido incompleto). No hay base
-        gravable → no se encola nada. El contador NO puede decir 1: sería un
-        documento de retención informado que nunca se envió."""
+        """`get_rowids_factura` levanta (barrido incompleto): la retención queda
+        en la cola sin monto y el ejecutor espera — no la calcula sobre nada."""
+        from app.services.siesa_job_service import DependenciaPendiente
         recaudo = recaudo_liq(estado='ENTREGADO', pago='EFECTIVO', monto=1000000,
                               motivo_desc='RETEIVA', monto_desc=0)
-
+        resultado = _procesar(recaudo, db)
+        [dc] = self._dc_jobs(recaudo.id)
+        assert dc.get_payload()['monto'] is None
+        assert resultado['dc'] == 1 and not resultado.get('errores')
         with patch('app.services.connekta_gateway.connekta.get_rowids_factura',
                    side_effect=RuntimeError('barrido incompleto: página 2 de 5')):
-            resultado = _procesar(recaudo, db)
+            with pytest.raises(DependenciaPendiente, match='no respondió'):
+                self._resolver(recaudo.id)
 
-        assert self._dc_jobs(recaudo.id) == [], 'se encoló un DC sin base gravable'
-        assert resultado['dc'] == 0, (
-            f"el tablero informa {resultado['dc']} DC y no se encoló ninguno")
-        assert resultado.get('errores'), 'el fallo no se declaró en ningún lado'
-        assert 'retención' in resultado['errores'][0].lower()
-
-    def test_factura_sin_lineas_no_encola_y_no_cuenta(
-            self, app, db, recaudo_liq, producto):
-        """Mismo defecto por la otra puerta: la factura responde vacía."""
+    def test_factura_sin_lineas_espera_y_al_tope_se_declara(
+            self, app, db, recaudo_liq, producto, monkeypatch):
+        """La factura responde vacía: espera; pasado el tope, se declara con
+        qué falta (FALLIDO sin reintento, no un cero)."""
+        from app.services.siesa_job_service import DatoQueFalta, DependenciaPendiente
         recaudo = recaudo_liq(estado='ENTREGADO', pago='EFECTIVO', monto=1000000,
                               motivo_desc='RETEIVA', monto_desc=0)
-
+        _procesar(recaudo, db)
+        from tests._envio_liq import fila_cartera
         with patch('app.services.connekta_gateway.connekta.get_rowids_factura',
-                   return_value=[]):
-            resultado = _procesar(recaudo, db)
-
-        assert self._dc_jobs(recaudo.id) == []
-        assert resultado['dc'] == 0
-        assert resultado.get('errores')
+                   return_value=[]), \
+                patch('app.services.connekta_gateway.connekta.get_cxc_de_factura',
+                      side_effect=lambda co, t, c: [fila_cartera(tipo=t, consec=c, co=co)]), \
+                patch('app.services.envio_liquidacion._en_simulacion', return_value=False):
+            with pytest.raises(DependenciaPendiente):
+                self._resolver(recaudo.id)
+            monkeypatch.setenv('LIQUIDACION_ESPERA_SIESA_HORAS', '0.0001')
+            import time
+            time.sleep(0.5)
+            with pytest.raises(DatoQueFalta, match='líneas de la factura'):
+                self._resolver(recaudo.id)
 
     def test_motivo_sin_puc_no_encola_y_no_cuenta(self, app, db, recaudo_liq):
-        """Un motivo fuera del catálogo tampoco produce documento — y tampoco
-        puede contar uno."""
+        """Un motivo fuera del catálogo no produce documento — y tampoco
+        puede contar uno. Esto sí se sabe sin Siesa."""
         recaudo = recaudo_liq(estado='ENTREGADO', pago='EFECTIVO', monto=1000000,
                               motivo_desc='INVENTADO_X', monto_desc=5000)
 
@@ -390,53 +414,42 @@ class TestDCQueNoSeEncola:
         assert resultado['dc'] == 0
         assert resultado.get('errores')
 
-    def test_parcial_contado_tambien(self, app, db, recaudo_liq, producto):
-        """La otra rama con DC (`PARCIAL` contado, `:1112`). El mismo contador
-        incondicional vivía en las dos."""
+    def test_parcial_contado_espera_a_que_la_devolucion_se_amarre(
+            self, app, db, recaudo_liq, producto):
+        """La otra rama con DC (`PARCIAL` contado). Sin la devolución amarrada
+        no hay base («lo que el cliente se quedó»): el ejecutor espera a que
+        bodega la cuente — no calcula sobre la factura entera."""
+        from app.services.siesa_job_service import DependenciaPendiente
         items = [{'codigo': producto.codigo, 'cantidad_devuelta': 2}]
         recaudo = recaudo_liq(estado='PARCIAL', pago='EFECTIVO', monto=800000,
                               motivo_desc='RETEIVA', monto_desc=0,
                               items_ent=items)
-
-        def _factura_o_error(tipo_docto, consec, *a, **kw):
-            # La devolución pendiente sí lee la factura; el cálculo de la
-            # retención se hace con la MISMA llamada. Se rompe solo la segunda
-            # para aislar el defecto del DC.
-            if _factura_o_error.llamadas:
-                raise RuntimeError('barrido incompleto')
-            _factura_o_error.llamadas += 1
-            return _factura_unidad_unica(producto.codigo_siesa)
-        _factura_o_error.llamadas = 0
-
+        resultado = _procesar(recaudo, db, amarrar=False)
+        assert resultado['nc'] == 1 and resultado['rc'] == 1 and resultado['dc'] == 1
         with patch('app.services.connekta_gateway.connekta.get_rowids_factura',
-                   side_effect=_factura_o_error):
-            resultado = _procesar(recaudo, db)
+                   return_value=_factura_unidad_unica(producto.codigo_siesa)):
+            with pytest.raises(DependenciaPendiente, match='amarrada'):
+                self._resolver(recaudo.id)
 
-        assert resultado['nc'] == 1 and resultado['rc'] == 1
-        assert self._dc_jobs(recaudo.id) == []
-        assert resultado['dc'] == 0
-        assert resultado.get('errores')
-
-    def test_la_ruta_declara_el_dc_fallido_en_errores(
-            self, app, db, recaudo_liq, producto):
-        """A nivel ruta: `dc_encolados` refleja la cola real y el fallo llega a
-        `errores`, que es lo que la pantalla pinta en rojo (`rutas.js:2893`).
-        Es el patrón del caller gemelo (`rutas.py:1259-1276`)."""
+    def test_la_ruta_no_le_pregunta_a_siesa(self, app, db, recaudo_liq, producto):
+        """A nivel ruta: con Siesa caído, «Enviar todo a Siesa» encola igual en
+        milisegundos (P1-1); nada se emite a ciegas porque el ejecutor espera."""
         from app.services.liquidacion_service import LiquidacionService
 
         recaudo = recaudo_liq(estado='ENTREGADO', pago='EFECTIVO', monto=1000000,
                               motivo_desc='RETEIVA', monto_desc=0)
 
-        with patch('app.services.liquidacion_service._obtener_tercero',
-                   return_value=('900123456', '001')):
-            with patch('app.services.connekta_gateway.connekta.get_rowids_factura',
-                       side_effect=RuntimeError('barrido incompleto')):
-                resumen = LiquidacionService.liquidar_ruta_siesa(recaudo.ruta_id)
+        with patch('app.services.connekta_gateway.connekta.get_rowids_factura',
+                   side_effect=AssertionError('liquidar no lee la factura')), \
+                patch('app.services.connekta_gateway.connekta.get_pedido_cabecera',
+                      side_effect=AssertionError('liquidar no lee la cabecera')), \
+                patch('app.services.connekta_gateway.connekta.get_cxc_general',
+                      side_effect=AssertionError('liquidar no lee la cartera')):
+            resumen = LiquidacionService.liquidar_ruta_siesa(recaudo.ruta_id)
 
-        assert resumen['dc_encolados'] == 0, (
-            f"la pantalla pintaría «{resumen['dc_encolados']} DC» sin documento")
-        assert resumen['rc_encolados'] == 1, 'el RC sí se encoló y sí se cuenta'
-        assert len(resumen['errores']) == 1
+        assert resumen['dc_encolados'] == 1
+        assert resumen['rc_encolados'] == 1
+        assert resumen['errores'] == []
 
 
 class TestDCQueSiEncola:
@@ -471,6 +484,9 @@ class TestDCQueSiEncola:
                                   'f470_vlr_neto': 1000000, 'f120_referencia': 'REF001',
                                   'f470_rowid': 'R1'}]):
             resultado = _procesar(recaudo, db)
+            # El monto lo calcula el ejecutor (P1-1, 2026-09-27).
+            from tests._envio_liq import resolver_cola
+            resolver_cola(recaudo.id)
 
         jobs = SiesaJob.query.filter_by(
             referencia_id=recaudo.id, tipo='DOCUMENTO_CONTABLE_RET').all()
@@ -499,6 +515,9 @@ class TestDCQueSiEncola:
                                   'f470_vlr_neto': 1000000, 'f120_referencia': 'REF001',
                                   'f470_rowid': 'R1'}]):
             resultado = _procesar(recaudo, db)
+            # El monto lo calcula el ejecutor (P1-1, 2026-09-27).
+            from tests._envio_liq import resolver_cola
+            resolver_cola(recaudo.id)
 
         job = SiesaJob.query.filter_by(
             referencia_id=recaudo.id, tipo='DOCUMENTO_CONTABLE_RET').first()

@@ -213,7 +213,8 @@ class TestLaReferenciaViajaAlRecibo:
             return {'codigo': 0}
         monkeypatch.setattr(ConnektaGateway, '_post', _fake_post)
         connekta.trigger_recibo_caja('900123', '001', 1000.0, 'TRANSFERENCIA_BBVA',
-                                     'FEW', '1', **kw)
+                                     'FEW', '1', cuenta_cxc='13050501', unidad_negocio='99',
+                                     **kw)
         return capt['payload']['Caja'][0]
 
     def test_con_referencia_va_la_referencia(self, app, monkeypatch):

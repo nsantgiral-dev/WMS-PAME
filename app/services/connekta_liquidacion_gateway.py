@@ -63,6 +63,26 @@ def referencia_otros_rc(referencia_pago, notas) -> str:
     return notas[:LARGO_REFERENCIA_OTROS] if notas else 'APP'
 
 
+def exigir_datos_del_cruce(conector: str, tercero_nit, cuenta_cxc, unidad_negocio) -> None:
+    """**Ningún documento de la liquidación sale con un dato de cartera de
+    respaldo** (auditoría de liquidación, P1-2, 2026-09-27). El tercero, la
+    cuenta (`f253_id`, Regla 11) y la unidad de negocio (`f353_id_un_cruce`)
+    salen de la fila de cartera real (`envio_liquidacion.resolver_cruce`).
+    Antes, vacíos, el gateway los rellenaba con la cuenta y la UN globales —
+    `001` en producción, cuando la cartera real es `99`— y Siesa rechazaba
+    determinísticamente cinco veces. Ahora no sale: `ConnektaPayloadInvalido`
+    (no entró, se puede revertir el pre-flag)."""
+    faltan = [nombre for nombre, valor in (
+        ('el tercero', tercero_nit),
+        ('la cuenta de cartera (f253_id)', cuenta_cxc),
+        ('la unidad de negocio de la cartera (f353_id_un_cruce)', unidad_negocio))
+        if not str(valor or '').strip()]
+    if faltan:
+        raise ConnektaPayloadInvalido(
+            f'{conector}: falta {", ".join(faltan)} de la fila de cartera de la factura. '
+            f'No se envía con un valor de respaldo.')
+
+
 class ConnektaLiquidacionGateway:
 
     def __init__(self, core):
@@ -538,8 +558,8 @@ class ConnektaLiquidacionGateway:
                     tienen código Siesa configurado todavía — levanta `ValueError`
                     en vez de reportarlos como EFECTIVO (ver comentario más abajo).
         co_factura: CO de la factura cruzada (puede diferir del CO del RC).
-        cuenta_cxc: f253_id real de la factura (ej '13050501'). Si vacío, usa core.cxc_auxiliar
-                    como fallback — pero el cruce puede no aplicar si la factura usa otra cuenta.
+        cuenta_cxc: f253_id real de la fila de cartera (ej '13050501'). Obligatoria desde el
+                    2026-09-27: vacía no sale (`exigir_datos_del_cruce`, Regla 11).
         unidad_negocio: `f353_id_un_cruce` REAL de la fila de cartera que cruza (no un valor
                     global). PD1411/FE-1416 (2026-08-18): `SIESA_UNIDAD_NEGOCIO=001` fijo se
                     mandaba en toda factura sin mirar la de verdad — esa factura traía UN=99 en
@@ -550,7 +570,8 @@ class ConnektaLiquidacionGateway:
                     nunca podía matchear con la UN equivocada. `gestor-cartera-pame` (otro
                     proyecto del mismo negocio, mismo Siesa) ya resuelve esto leyendo
                     `f353_id_un_cruce` de la fila de cartera real en vez de un env var — mismo
-                    fix acá. Si vacío, cae a `core.unidad_negocio` (comportamiento previo).
+                    fix acá. Obligatoria desde el 2026-09-27: vacía no sale
+                    (`exigir_datos_del_cruce`); ya no cae a la UN global.
 
         fecha_recaudo: `YYYYMMDD` (Bogotá) del día en que el conductor COBRÓ.
                     Las tres fechas las decide `politica_cobro.fechas_del_recibo`
@@ -601,6 +622,7 @@ class ConnektaLiquidacionGateway:
                 'SIESA_TIPO_DOCTO_RECIBO_CAJA no configurado — requerido para 142888'
             )
 
+        exigir_datos_del_cruce('142888', tercero_nit, cuenta_cxc, unidad_negocio)
         fecha_hoy = core._fecha_hoy_bogota()
         # Las fechas del recibo: una política (`politica_cobro.fechas_del_recibo`).
         from app.services.politica_cobro import fechas_del_recibo
@@ -638,7 +660,8 @@ class ConnektaLiquidacionGateway:
         medio_pago = core._forma_pago_map[_fp]
         # Caja según CO (Siesa: Tesorería → Cajas)
         id_caja = core._co_caja_map.get(co, '999')
-        un = unidad_negocio or core.unidad_negocio or '99'
+        # La UN de la fila de cartera, nunca la global (`exigir_datos_del_cruce`).
+        un = str(unidad_negocio).strip()
 
         # --- Ajuste al peso: cuánto entró de verdad vs. cuánto cruza ---
         # `monto` sigue siendo el saldo de la factura (F354_VALOR_CR cuando no
@@ -782,7 +805,7 @@ class ConnektaLiquidacionGateway:
             'F350_ID_CO': co,
             'F350_ID_TIPO_DOCTO': core.tipo_docto_recibo_caja,
             'F350_CONSEC_DOCTO': 0,
-            'F353_ID_AUXILIAR_DOCTO_CRUCE': cuenta_cxc or core.cxc_auxiliar,
+            'F353_ID_AUXILIAR_DOCTO_CRUCE': str(cuenta_cxc).strip(),
             'F353_ID_CO_DOCTO_CRUCE': co_fact,
             'F353_ID_UN_DOCTO_CRUCE': un,
             'F353_ID_SUCURSAL_DOCTO_CRUCE': sucursal or '001',
@@ -835,15 +858,15 @@ class ConnektaLiquidacionGateway:
         Cruza contra la factura en MovimientoCxC.
         cuenta_puc: cuenta auxiliar PUC débito (ej. '13551501' para retefuente compras 2.5%)
         co_factura: CO de la factura cruzada (puede diferir del CO del RC).
-        cuenta_cxc: f253_id real de la factura para cruce crédito. Fallback: core.cxc_auxiliar.
+        cuenta_cxc: f253_id real de la fila de cartera. Obligatoria (`exigir_datos_del_cruce`).
         unidad_negocio: `f353_id_un_cruce` REAL de la fila de cartera que cruza — mismo
                     parámetro y mismo motivo que `trigger_recibo_caja` (PD1411/FE-1416,
                     2026-08-18): antes de esto, este conector nunca lo recibía y usaba
                     siempre `core.unidad_negocio` (el env var global) — job 470 (recaudo
                     19, PD1421, ruta 22, 2026-08-20) es la primera liquidación con
                     retención que corrió de verdad contra Siesa, y quedó FALLIDO 5/5
-                    intentos con rechazo estructural genérico. Si vacío, cae a
-                    `core.unidad_negocio` (comportamiento previo, no rompe llamadores viejos).
+                    intentos con rechazo estructural genérico. Obligatoria desde el
+                    2026-09-27 (`exigir_datos_del_cruce`); ya no cae a la UN global.
 
         ajuste_valor: SOLO faltante (el conductor entregó menos que el saldo
                     de la factura) — nunca sobrante, que es plata que sí entró
@@ -867,13 +890,16 @@ class ConnektaLiquidacionGateway:
                 'SIESA_TIPO_DOCTO_DOCTO_CONTABLE no configurado — requerido para 142882'
             )
 
+        exigir_datos_del_cruce('142882', tercero_nit, cuenta_cxc, unidad_negocio)
         fecha_hoy = core._fecha_hoy_bogota()
         cia = int(core.id_cia_siesa)
         consec_int = int(consec_fe) if str(consec_fe).isdigit() else consec_fe
         co = core.centro_op
         co_fact = co_factura or co
-        auxiliar_cxc = cuenta_cxc or core.cxc_auxiliar
-        un = unidad_negocio or core.unidad_negocio or '99'
+        # La cuenta y la UN de la fila de cartera, nunca las globales
+        # (`exigir_datos_del_cruce`).
+        auxiliar_cxc = str(cuenta_cxc).strip()
+        un = str(unidad_negocio).strip()
         ajuste_abs = abs(float(ajuste_valor or 0))
 
         # Autorretención (1355950X, "AUTORRETENCION_ICA_*" — la empresa se

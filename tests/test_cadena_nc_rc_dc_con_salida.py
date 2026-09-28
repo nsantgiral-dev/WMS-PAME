@@ -78,7 +78,9 @@ class TestElRCReconstruyeElPuente:
         r = recaudo()
         _devolucion_con_nc_salida(db, r)
         job = _job(db, 'RECIBO_CAJA', r, depende_de_nc=True)
+        from tests._envio_liq import cartera_cualquiera
         with patch('app.services.connekta_gateway.connekta') as mc:
+            cartera_cualquiera(mc)
             mc.trigger_recibo_caja.return_value = {'codigo': 0}
             _ejecutar_job(job)
         db.session.refresh(r)
@@ -165,15 +167,51 @@ class TestResolverUnReciboSinVerificar:
         from app.models.bitacora import BitacoraAccion
         from app.services import politica_cobro as pc
         from app.services.liquidacion_service import LiquidacionService
+        from tests._envio_liq import cartera_cualquiera, rc_sin_verificar
         r = recaudo(estado='ENTREGADO', rc=True)
         r.siesa_rc_resultado = 'SIN_VERIFICAR'
         db.session.commit()
-        LiquidacionService.resolver_recibo_sin_verificar(
-            r.id, usuario_id=None, entro=False, motivo='buscado en auditoría, no está')
+        rc_sin_verificar(r, saldo_antes=10000.0)
+        # «No está» exige una lectura automática con el saldo intacto (P1-3).
+        with patch('app.services.connekta_gateway.connekta') as mc:
+            cartera_cualquiera(mc, total_db=10000.0)
+            LiquidacionService.resolver_recibo_sin_verificar(
+                r.id, usuario_id=None, entro=False, motivo='buscado en auditoría, no está')
         db.session.refresh(r)
         assert r.siesa_rc_triggered is False and pc.puede_editar_cobro(r)
         [b] = BitacoraAccion.query.filter_by(accion='FORZAR').all()
         assert b.despues['entro'] is False
+        assert b.despues['lectura_de_siesa']['intacto'] is True
+
+    def test_no_esta_sin_saldo_intacto_no_se_acepta(self, db, recaudo):
+        """P1-3: «No está» baja la bandera y deja registrar el cobro otra vez;
+        si la persona se equivoca, sale un SEGUNDO recibo. Solo con una lectura
+        automática que confirme el saldo intacto, hecha cuando la cartera ya
+        indexó."""
+        from app.services.liquidacion_service import LiquidacionService
+        from tests._envio_liq import cartera_cualquiera, rc_sin_verificar
+        r = recaudo(estado='ENTREGADO', rc=True)
+        rc_sin_verificar(r, saldo_antes=10000.0, monto=10000.0)
+        with patch('app.services.connekta_gateway.connekta') as mc:
+            cartera_cualquiera(mc, total_db=10000.0, total_cr=10000.0)   # el saldo bajó
+            with pytest.raises(ValueError, match='SÍ entró'):
+                LiquidacionService.resolver_recibo_sin_verificar(r.id, None, False, 'no lo vi')
+        r2 = recaudo(estado='ENTREGADO', rc=True)
+        rc_sin_verificar(r2, saldo_antes=10000.0, minutos=5)              # muy temprano
+        with patch('app.services.connekta_gateway.connekta') as mc:
+            cartera_cualquiera(mc, total_db=10000.0)
+            with pytest.raises(ValueError, match='saldo intacto'):
+                LiquidacionService.resolver_recibo_sin_verificar(r2.id, None, False, 'no lo vi')
+        r3 = recaudo(estado='ENTREGADO', rc=True)
+        rc_sin_verificar(r3, saldo_antes=10000.0)
+        with patch('app.services.connekta_gateway.connekta') as mc:
+            cartera_cualquiera(mc)
+            mc.get_cxc_de_factura.side_effect = Exception('Siesa caído')  # no se pudo leer
+            with pytest.raises(ValueError, match='saldo intacto'):
+                LiquidacionService.resolver_recibo_sin_verificar(r3.id, None, False, 'no lo vi')
+        for x in (r, r2, r3):
+            db.session.refresh(x)
+            assert x.siesa_rc_triggered is True
 
     def test_si_entro_queda_llegado_con_su_consecutivo(self, db, recaudo):
         from app.services import politica_cobro as pc

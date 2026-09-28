@@ -320,6 +320,14 @@ class LiquidacionService:
             rd['rc_llego'] = recaudo.id in _rc_llegaron
             rd['rc_sin_verificar'] = bool(recaudo.siesa_rc_triggered and not rd['rc_llego']
                                           and not rd['rc_en_cola'])
+            # El envío no tuvo respuesta clara y el WMS sigue leyendo la
+            # cartera (+15 min, +2 h) antes de pedirle a una persona (P1-3).
+            rd['rc_verificando'] = bool(recaudo.siesa_rc_triggered and not rd['rc_llego']
+                                        and rd['rc_en_cola'])
+            # Qué buscar en Siesa: documento, CO, fecha, tercero, valor, factura.
+            rd['rc_que_buscar'] = (
+                LiquidacionService.que_buscar_recibo_sin_verificar(recaudo.id)
+                if (rd['rc_sin_verificar'] or rd['rc_verificando']) else None)
             rd['cobro_editable'] = _pc_det.puede_editar_cobro(recaudo)
             # Retenciones y notas crédito que quedaron sin verificar: una
             # persona dice si están en Siesa (`resolver-documento`).
@@ -391,32 +399,21 @@ class LiquidacionService:
                         total_neto += float(ln.get('f470_vlr_neto', 0))
                     datos_disponibles = True
 
-                # Pedido cabecera: CO de la factura
-                cabecera = connekta.get_pedido_cabecera(tipo_docto, consec_docto)
-                if cabecera:
-                    co_factura = cabecera.get('f430_id_co', '')
-                    nit = cabecera.get('f200_id_pedido_fact', '')
-                    # CxC account from API if available
-                    try:
-                        if nit:
-                            cxc_data = connekta.get_cxc_general(nit)
-                            # f253_id puede variar entre facturas del mismo
-                            # cliente — matchear por la exacta, nunca tomar la
-                            # primera fila. La búsqueda vive en
-                            # `services/cxc_cruce.py`: era la TERCERA copia de
-                            # la misma consulta en el repo, y una de las tres
-                            # buscaba por la clave equivocada.
-                            from app.services import cxc_cruce as _cx3
-                            fila_cxc = _cx3.fila_de_la_factura(
-                                cxc_data, tipo_docto, consec_docto,
-                                _tipo_fe, _consec_fe)
-                            if fila_cxc:
-                                cuenta_cxc = fila_cxc.get('f253_id', '')
-                    except Exception as e_cxc:
-                        logger.warning(
-                            '[LIQUIDACION] get_cxc_general falló para recaudo %d (NIT %s): %s',
-                            recaudo_id, nit, e_cxc
-                        )
+                # La fila de cartera del documento EXACTO (CO + tipo +
+                # consecutivo), la misma que va a usar el ejecutor para cruzar
+                # (`envio_liquidacion.leer_cruce`). Antes: la cabecera del
+                # pedido + la cartera entera del NIT y un match sin CO — la
+                # numeración de las FE se solapa entre CO (P2-5).
+                from app.services import envio_liquidacion as _env_pv
+                try:
+                    _cr = _env_pv.leer_cruce(tarea, _tipo_fe, _consec_fe,
+                                             _env_pv.co_de_la_factura(tarea, connekta),
+                                             connekta)
+                    co_factura, cuenta_cxc = _cr.co or '', _cr.cuenta or ''
+                except Exception as e_cxc:
+                    logger.warning(
+                        '[LIQUIDACION] preview: la cartera de %s-%s no está disponible '
+                        '(recaudo %d): %s', _tipo_fe, _consec_fe, recaudo_id, e_cxc)
             except Exception as e:
                 logger.warning(
                     '[LIQUIDACION] preview_acciones_recaudo: Siesa data fetch falló '
@@ -768,103 +765,35 @@ class LiquidacionService:
                 'no se puede vincular a factura Siesa'
             )
 
-        # ── Get real Siesa data ─────────────────────────────────────
+        # ── La factura en Siesa: el neto y la base de la retención ─────────
+        #
+        # Solo la factura: una parada, con quien liquida mirando. El tercero,
+        # la cuenta, la UN y el CO ya no se leen acá (la cabecera del pedido y
+        # la cartera del NIT): los resuelve el ejecutor de la DLQ de la fila de
+        # cartera exacta, justo antes del POST (`envio_liquidacion`). Antes, si
+        # la cartera no respondía, esto encolaba con la cuenta vacía «y un
+        # warning» y el gateway la rellenaba con la global (P1-2).
         from app.services.connekta_gateway import connekta
-        co_factura = ''
-        cuenta_cxc = ''
-        un_cxc = ''
         base_gravable = 0
         total_iva = 0
         total_neto = 0
         datos_siesa_ok = False
-
         lineas_raw = []
         try:
-            # Factura lines
             lineas_raw = connekta.get_rowids_factura(tipo_docto_fe, consec_fe) or []
-            if lineas_raw:
-                for ln in lineas_raw:
-                    base_gravable += float(ln.get('f470_vlr_bruto', 0))
-                    total_iva += float(ln.get('f470_vlr_imp', 0))
-                    total_neto += float(ln.get('f470_vlr_neto', 0))
-                datos_siesa_ok = True
-
-            # Pedido cabecera: CO + NIT. El PEDIDO, no la FE — mismo defecto
-            # que el comentario de arriba, reaparecido acá: `get_pedido_cabecera`
-            # busca por *_pedido_siesa, y mandarle el tipo/consec de la FE
-            # ('FEW'-1416, por ejemplo) no encuentra ningún pedido con ese
-            # tipo de documento. Siesa responde vacío, `co_factura` se queda
-            # en '' y el RC nunca se puede encolar — "co_factura vacío" no es
-            # un dato que falte en Siesa, es la pregunta mal hecha.
-            cabecera = connekta.get_pedido_cabecera(
-                tarea.tipo_docto_pedido_siesa, tarea.consec_docto_pedido_siesa)
-            if cabecera:
-                co_factura = cabecera.get('f430_id_co', '')
-                nit = cabecera.get('f200_id_pedido_fact', '')
-                sucursal = cabecera.get('f461_id_sucursal_pedido_rem', '001')
-                # CxC account
-                try:
-                    if nit:
-                        cxc_data = connekta.get_cxc_general(nit)
-                        # f253_id puede variar entre facturas del mismo
-                        # cliente — matchear por la factura exacta.
-                        # OJO con la asimetría: `get_rowids_factura` necesita
-                        # la FACTURA (filtra por f350_*), pero el cruce de CxC
-                        # casi siempre referencia el PEDIDO — `f353_*_docto_cruce`
-                        # trae 'PD'/consec del pedido, verificado en vivo el
-                        # 2026-08-11. PD1411/FE-1416 (2026-08-18) probó que no
-                        # es universal: esa cartera venía indexada por la FE.
-                        # `fila_de_la_factura` prueba pedido primero y cae a
-                        # FE si no matchea, en vez de quedar en el fallback
-                        # `SIESA_CXC_AUXILIAR` (regla 11 al revés).
-                        # La búsqueda vive en `services/cxc_cruce.py`. Estaba
-                        # escrita acá y otra vez en `siesa_job_service`, con
-                        # claves DISTINTAS y las dos citando esta misma
-                        # verificación en vivo — y la de allá decidía si un
-                        # recibo de caja se reenviaba.
-                        # `f353_id_un_cruce` — Unidad de Negocio REAL de esa
-                        # fila, no `SIESA_UNIDAD_NEGOCIO` (global). PD1411/
-                        # FE-1416 (2026-08-18): la UN real era 99, el env var
-                        # mandaba 001 en todo — Siesa rechazó el RC dos veces
-                        # por el mismo motivo («UN diferente a la del
-                        # documento» y «documento de cruce no existe», la
-                        # clave compuesta no podía matchear con la UN mala).
-                        # `gestor-cartera-pame` ya lo resuelve así.
-                        from app.services import cxc_cruce as _cx
-                        fila_cxc = _cx.fila_de_la_factura(
-                            cxc_data, tarea.tipo_docto_pedido_siesa,
-                            tarea.consec_docto_pedido_siesa,
-                            tipo_docto_fe, consec_fe)
-                        if fila_cxc:
-                            cuenta_cxc = fila_cxc.get('f253_id', '')
-                            un_cxc = fila_cxc.get('f353_id_un_cruce', '')
-                except Exception as e_cxc:
-                    logger.warning(
-                        '[LIQUIDACION] get_cxc_general falló para recaudo %d: %s',
-                        recaudo_id, e_cxc
-                    )
-            else:
-                nit = ''
-                sucursal = '001'
         except Exception as e:
             logger.error(
-                '[LIQUIDACION] registrar_cobro_recaudo: Siesa data fetch falló '
-                'para recaudo %d: %s', recaudo_id, e
-            )
-            raise ValueError(f'Datos de Siesa no disponibles: {e}')
-
-        # co_factura and cuenta_cxc are critical for RC cruce
-        if not co_factura:
+                '[LIQUIDACION] registrar_cobro_recaudo: Siesa no devolvió la factura '
+                '%s-%s para el recaudo %d: %s', tipo_docto_fe, consec_fe, recaudo_id, e)
             raise ValueError(
-                'Datos de Siesa no disponibles: co_factura vacío — '
-                'no se puede crear cruce RC'
-            )
-        # cuenta_cxc can fall back to env var in connekta, but warn
-        if not cuenta_cxc:
-            logger.warning(
-                '[LIQUIDACION] cuenta_cxc vacía para recaudo %d — '
-                'RC usará fallback SIESA_CXC_AUXILIAR', recaudo_id
-            )
+                f'Siesa no respondió al leer la factura {tipo_docto_fe}-{consec_fe}: {e}. '
+                f'Intente de nuevo en unos minutos.')
+        if lineas_raw:
+            for ln in lineas_raw:
+                base_gravable += float(ln.get('f470_vlr_bruto', 0))
+                total_iva += float(ln.get('f470_vlr_imp', 0))
+                total_neto += float(ln.get('f470_vlr_neto', 0))
+            datos_siesa_ok = True
 
         # ── Calculate retentions (sin encolar todavía) ────────────────
         # Se calcula la retención real ANTES de tocar la cola: el guard de
@@ -1088,9 +1017,7 @@ class LiquidacionService:
             # misma política y la misma forma de payload que el botón masivo.
             dc_job = _encolar_retencion(
                 recaudo, tipo_ret=tipo_ret, monto=monto_ret, base_gravable=base_ret,
-                tipo_docto_fe=tipo_docto_fe, consec_fe=consec_fe,
-                tercero_nit=nit, sucursal=sucursal, co_factura=co_factura,
-                cuenta_cxc=cuenta_cxc, unidad_negocio=un_cxc, notas=dc_notas,
+                tipo_docto_fe=tipo_docto_fe, consec_fe=consec_fe, notas=dc_notas,
                 admin_id=admin_id, accion_origen='liquidacion_per_recaudo',
             )
             if dc_job is None:
@@ -1129,13 +1056,10 @@ class LiquidacionService:
 
         _encolar_recibo_caja(
             recaudo, tipo_docto_fe, consec_fe,
-            nit, sucursal, monto_neto_rc, forma_pago,
+            '', '', monto_neto_rc, forma_pago,
             notas=rc_notas,
             admin_id=admin_id,
             depende_de_nc=depende_de_nc,
-            co_factura=co_factura,
-            cuenta_cxc=cuenta_cxc,
-            unidad_negocio=un_cxc,
         )
 
         # Add accion_origen to RC job payload
@@ -1247,6 +1171,13 @@ class LiquidacionService:
                              'espere a que termine')
         antes = foto(recaudo, ['siesa_rc_triggered', 'siesa_rc_resultado', 'siesa_rc_consec',
                                'rc_cobro_otro_mes'])
+        evidencia = None
+        if not entro:
+            # «No está» baja la bandera y deja volver a registrar el cobro: si
+            # la persona se equivocó, sale un SEGUNDO recibo (P1-3). Solo con
+            # una lectura automática que confirme el saldo intacto de la
+            # factura, hecha después de que la cartera indexó.
+            evidencia = _evidencia_de_que_no_entro(recaudo)
         if entro:
             recaudo.anotar_documento_siesa('RC', 'ENVIADO', consec=(consecutivo or None))
         else:
@@ -1261,12 +1192,25 @@ class LiquidacionService:
             entidad_codigo=getattr(tarea, 'numero_pedido_siesa', None),
             antes=antes,
             despues={'forzado': FORZADO_RC_RESUELTO_A_MANO, 'entro': bool(entro),
+                     'lectura_de_siesa': evidencia,
                      **foto(recaudo, ['siesa_rc_triggered', 'siesa_rc_resultado',
                                       'siesa_rc_consec'])})
         db.session.commit()
         logger.info('[LIQUIDACION] RC del recaudo %d resuelto a mano por %s: %s',
                     recaudo_id, usuario_id, 'entró' if entro else 'no entró')
         return recaudo.to_dict()
+
+    @staticmethod
+    def que_buscar_recibo_sin_verificar(recaudo_id: int) -> dict | None:
+        """Lo que la tarjeta de un recibo sin verificar muestra: qué buscar en
+        Siesa (documento, CO, fecha, tercero, valor, factura) y las lecturas
+        automáticas que ya se hicieron. `None` si no hay envío que mostrar."""
+        from app.services import envio_liquidacion as _env
+        recaudo = db.session.get(RecaudoEntrega, recaudo_id)
+        job = _ultimo_rc(recaudo_id)
+        if recaudo is None or job is None:
+            return None
+        return _env.que_buscar_en_siesa(job, recaudo)
 
     @staticmethod
     def corregir_monto_declarado(recaudo_id: int, nuevo_monto: float, razon: str,
@@ -1507,7 +1451,13 @@ def _vincular_sin_romper(devolucion) -> str | None:
 def _devolucion_de_ruta(recaudo, resultado: dict) -> bool:
     """La devolución del recaudo: la ENCUENTRA (nació al confirmar la parada)
     o, si es una parada vieja, la crea con la función única. Lo que impida
-    contarla va a `resultado['errores']`.
+    contarla —y ya se sabe— va a `resultado['errores']`.
+
+    **Sin red** (P1-1, 2026-09-27): no la amarra a la factura acá. Amarrarla
+    lee la factura en Siesa, y esto corre por parada dentro del request de
+    «Enviar todo a Siesa». Se amarra donde ya se amarraba con red (recepción al
+    preparar el conteo y al contar, el cierre de la llegada, la liquidación de
+    la ruta); acá se informa el problema que ya quedó escrito.
 
     Devuelve True si hay una nota crédito EN CAMINO para este recaudo —la
     devolución está sin contar, o contada con la NC todavía sin salir—, que es
@@ -1517,7 +1467,7 @@ def _devolucion_de_ruta(recaudo, resultado: dict) -> bool:
     dev, _creada = _dr.asegurar_devolucion(recaudo)
     if dev is None:
         return False
-    problema = _vincular_sin_romper(dev)
+    problema = getattr(dev, 'problema_factura', None)
     if problema:
         resultado.setdefault('errores', []).append(
             f'devolución {dev.codigo}: {problema}')
@@ -1599,26 +1549,18 @@ def _procesar_recaudo(recaudo: RecaudoEntrega, notas_base: str,
     if not tarea:
         raise ValueError(f'Recaudo {recaudo.id} sin tarea asociada')
 
-    # Datos de la factura
-    # La FE, no el pedido: `get_rowids_factura` filtra por `f350_*`
-    # —el documento consultado— y acá se pasaba `*_pedido_siesa` con la
-    # variable llamada `_fe`. Job 440 (2026-08-11): 400 de Siesa
-    # buscando una factura de tipo 'PD'. Ver `fe_resolver`.
-    from app.services.fe_resolver import FENoEncontrada, resolver_fe
-    try:
-        tipo_docto_fe, consec_fe = resolver_fe(tarea)
-    except FENoEncontrada as _e_fe:
-        tipo_docto_fe = consec_fe = ''
-    if not tipo_docto_fe or not consec_fe:
-        raise ValueError(
-            f'Tarea {tarea.id} ({tarea.codigo}) sin tipo_docto/consec_docto — '
-            'no se puede vincular a factura Siesa'
-        )
-
-    # Obtener NIT del cliente desde la tarea
-    # El NIT viene del pedido original — buscar en PedidoSiesa
-    tercero_nit, sucursal = _obtener_tercero(tarea)
-    co_factura, cuenta_cxc, un_cxc = _resolver_cuenta_cxc(tarea, tipo_docto_fe, consec_fe)
+    # **Encolar no le pregunta nada a Siesa** (auditoría de liquidación, P1-1,
+    # 2026-09-27). Acá se leían por parada la factura, la cabecera del pedido
+    # (dos veces) y la cartera del cliente: 2–3 s por parada medidos en
+    # producción, y el PWA corta a los 25 s. Y si Siesa titubeaba, el job salía
+    # con el tercero vacío y la UN de respaldo (P1-2). El job lleva la parada y
+    # lo que el WMS ya sabe de la factura (`fe_tipo`/`fe_consec`, anotada al
+    # listar paradas o al emitirla); el ejecutor de la DLQ resuelve tercero,
+    # cuenta, UN, CO y monto justo antes del POST (`envio_liquidacion`) y, si
+    # no puede, espera y lo dice.
+    # Los dos o ninguno (`ck_packing_fe_completa`): sin la FE anotada, la
+    # busca el ejecutor (`envio_liquidacion._factura`).
+    tipo_docto_fe, consec_fe = tarea.fe_tipo or '', tarea.fe_consec or ''
 
     estado = recaudo.estado_entrega
     forma_pago = (recaudo.forma_pago or '').upper()
@@ -1747,13 +1689,10 @@ def _procesar_recaudo(recaudo: RecaudoEntrega, notas_base: str,
                 from app.services import devolucion_ruta as _dr_rc
                 _encolar_recibo_caja(
                     recaudo, tipo_docto_fe, consec_fe,
-                    tercero_nit, sucursal, monto_rc_parcial, forma_pago,
+                    '', '', monto_rc_parcial, forma_pago,
                     notas=f'{notas_base} | PARCIAL contado — cobro',
                     admin_id=admin_id,
                     depende_de_nc=not _dr_rc.nc_no_llegara(recaudo),
-                    co_factura=co_factura,
-                    cuenta_cxc=cuenta_cxc,
-                    unidad_negocio=un_cxc,
                 )
                 resultado['rc'] = 1
 
@@ -1764,12 +1703,8 @@ def _procesar_recaudo(recaudo: RecaudoEntrega, notas_base: str,
                 and _pc.decision_retencion(recaudo) == _pc.CONFIRMADA):
             _contar_dc(resultado, _encolar_documento_contable(
                 recaudo, tipo_docto_fe, consec_fe,
-                tercero_nit, sucursal,
                 notas=f'{notas_base} | Retención {recaudo.motivo_descuento}',
                 admin_id=admin_id,
-                co_factura=co_factura,
-                cuenta_cxc=cuenta_cxc,
-                unidad_negocio=un_cxc,
             ))
 
         return resultado
@@ -1780,73 +1715,26 @@ def _procesar_recaudo(recaudo: RecaudoEntrega, notas_base: str,
             return resultado
         _retencion_procede = _pc.decision_retencion(recaudo) == _pc.CONFIRMADA
         if not recaudo.siesa_rc_triggered and monto > 0:
-            # Mismo criterio que `registrar_cobro_recaudo` (`monto_rc`):
-            # preferir el neto real de Siesa sobre lo declarado, validando
-            # antes que no difieran más que el residuo de redondeo
-            # (`_validar_diferencia_declarada`).
-            #
-            # Un fallo de red al consultar la factura NO bloquea el cobro
-            # —cae al monto declarado, igual que `registrar_cobro_recaudo`
-            # cuando `datos_siesa_ok` es False—; lo que sí bloquea es una
-            # diferencia real ya verificada contra Siesa.
-            #
-            # La retención SIEMPRE se recalcula contra Siesa sobre lo que el
-            # cliente se quedó (`base_retencion_entregada`) — nunca desde
-            # `recaudo.monto_descuento` (ver `_encolar_documento_contable`) —
-            # y solo si está CONFIRMADA: una rechazada no se descuenta del RC.
-            total_neto_rc = None
-            retencion_preview = 0.0
-            try:
-                from app.services.connekta_gateway import connekta as _connekta_rc
-                lineas_rc = _connekta_rc.get_rowids_factura(tipo_docto_fe, consec_fe)
-                if lineas_rc:
-                    _neto = round(
-                        sum(float(ln.get('f470_vlr_neto', 0)) for ln in lineas_rc), 2)
-                    if _neto > 0:
-                        total_neto_rc = _neto
-                        if _retencion_procede:
-                            _base_rc = _pc.base_retencion_entregada(recaudo, lineas_rc)
-                            if _base_rc is not None:
-                                retencion_preview = monto_de_retencion(
-                                    recaudo.motivo_descuento, *_base_rc)
-            except Exception as e:
-                logger.warning(
-                    '[LIQUIDACION] _procesar_recaudo: no se pudo verificar neto '
-                    'Siesa para recaudo %d — usando monto declarado: %s',
-                    recaudo.id, e,
-                )
-
-            monto_rc = _pc.monto_rc(
-                recaudo, total_neto_siesa=total_neto_rc, retencion=retencion_preview)
-            if total_neto_rc is not None:
-                _validar_diferencia_declarada(
-                    monto, monto_rc,
-                    contexto=(
-                        ' (neto, después de descontar la retención)'
-                        if retencion_preview else ''
-                    ),
-                )
-
+            # El monto lo calcula el ejecutor justo antes del POST, con la misma
+            # política que «Registrar cobro» (`politica_cobro.monto_rc`: el neto
+            # real de Siesa menos la retención que procede, acotado contra lo
+            # que declaró el conductor) — `envio_liquidacion.monto_del_recibo`.
+            # Acá no se lee la factura (P1-1). Si no cuadra, el envío lo dice
+            # con el pedido y quién lo corrige; nunca sale por lo declarado a
+            # ciegas cuando Siesa no respondió (antes caía al monto declarado).
             _encolar_recibo_caja(
                 recaudo, tipo_docto_fe, consec_fe,
-                tercero_nit, sucursal, monto_rc, forma_pago,
+                '', '', None, forma_pago,
                 notas=f'{notas_base} | ENTREGADO contado',
                 admin_id=admin_id,
-                co_factura=co_factura,
-                cuenta_cxc=cuenta_cxc,
-                unidad_negocio=un_cxc,
             )
             resultado['rc'] = 1
 
         if not recaudo.siesa_dc_triggered and _retencion_procede:
             _contar_dc(resultado, _encolar_documento_contable(
                 recaudo, tipo_docto_fe, consec_fe,
-                tercero_nit, sucursal,
                 notas=f'{notas_base} | Retención {recaudo.motivo_descuento}',
                 admin_id=admin_id,
-                co_factura=co_factura,
-                cuenta_cxc=cuenta_cxc,
-                unidad_negocio=un_cxc,
             ))
 
         if recaudo.siesa_rc_triggered and not _retencion_procede:
@@ -1862,68 +1750,11 @@ def _procesar_recaudo(recaudo: RecaudoEntrega, notas_base: str,
     return resultado
 
 
-def _obtener_tercero(tarea) -> tuple:
-    """Obtiene NIT y sucursal del cliente desde Connekta (get_pedido_cabecera)."""
-    from app.services.connekta_gateway import connekta
-    cabecera = connekta.get_pedido_cabecera(
-        tarea.tipo_docto_pedido_siesa,
-        tarea.consec_docto_pedido_siesa,
-    )
-    if cabecera:
-        nit = cabecera.get('f200_id_pedido_fact') or ''
-        sucursal = cabecera.get('f461_id_sucursal_pedido_rem') or '001'
-        return nit, sucursal
-
-    logger.warning(
-        '[LIQUIDACION] get_pedido_cabecera vacío para %s-%s — '
-        'tercero no disponible para conectores financieros',
-        tarea.tipo_docto_pedido_siesa, tarea.consec_docto_pedido_siesa
-    )
-    return '', '001'
-
-
-def _resolver_cuenta_cxc(tarea, tipo_docto_fe, consec_fe) -> tuple:
-    """(co_factura, cuenta_cxc, un_cxc) reales desde Siesa — o ('', '', '') si
-    no se pudo resolver.
-
-    Extraída de `registrar_cobro_recaudo` (2026-09-04). `_procesar_recaudo`
-    (el botón masivo "Liquidar Ruta", el mismo que usa el administrador en
-    producción) nunca llamaba esto — mandaba el Recibo de Caja con cuenta y
-    Unidad de Negocio vacías, cayendo al fallback fijo del conector
-    (`SIESA_CXC_AUXILIAR` + UN por defecto), casi nunca la cuenta real del
-    cliente. Confirmado en vivo contra Siesa QA real (PD1125, PD1450,
-    2026-09-04): rechazo con "el auxiliar de caja maneja una U.N. diferente
-    a la del documento" + "El documento de cruce no existe" — el mismo par
-    de mensajes que ya había costado el caso real PD1411/FE-1416
-    (2026-08-18), corregido entonces solo en `registrar_cobro_recaudo`, sin
-    llegar nunca al botón masivo. Ver Regla 0 del CLAUDE.md — una pregunta,
-    dos sitios, diverge.
-    """
-    from app.services.connekta_gateway import connekta
-    co_factura = cuenta_cxc = un_cxc = ''
-    try:
-        cabecera = connekta.get_pedido_cabecera(
-            tarea.tipo_docto_pedido_siesa, tarea.consec_docto_pedido_siesa)
-        if not cabecera:
-            return co_factura, cuenta_cxc, un_cxc
-        co_factura = cabecera.get('f430_id_co', '') or ''
-        nit = cabecera.get('f200_id_pedido_fact', '') or ''
-        if not nit:
-            return co_factura, cuenta_cxc, un_cxc
-        cxc_data = connekta.get_cxc_general(nit)
-        from app.services import cxc_cruce as _cx
-        fila_cxc = _cx.fila_de_la_factura(
-            cxc_data, tarea.tipo_docto_pedido_siesa, tarea.consec_docto_pedido_siesa,
-            tipo_docto_fe, consec_fe)
-        if fila_cxc:
-            cuenta_cxc = fila_cxc.get('f253_id', '') or ''
-            un_cxc = fila_cxc.get('f353_id_un_cruce', '') or ''
-    except Exception as e:
-        logger.warning(
-            '[LIQUIDACION] _resolver_cuenta_cxc falló para tarea %s: %s',
-            tarea.id, e
-        )
-    return co_factura, cuenta_cxc, un_cxc
+# `_obtener_tercero` y `_resolver_cuenta_cxc` se borraron (2026-09-27): leían
+# la cabecera del pedido y la cartera del NIT al ENCOLAR, dentro del request, y
+# ante cualquier fallo devolvían `('', '001')` y `''` — el tercero vacío y la UN
+# que el gateway rellenaba con la global. Lo resuelve el ejecutor, de la fila de
+# cartera exacta: `envio_liquidacion.resolver_cruce`.
 
 
 #: Cuántas facturas se leen de Siesa en paralelo en el detalle de la ruta.
@@ -1985,6 +1816,44 @@ def documentos_sin_verificar(recaudo_ids) -> dict:
     return out
 
 
+def _ultimo_rc(recaudo_id: int):
+    """El último envío de recibo de caja de la parada (el que se intentó)."""
+    return (SiesaJob.query.filter_by(tipo='RECIBO_CAJA', referencia_tipo='RecaudoEntrega',
+                                     referencia_id=recaudo_id)
+            .order_by(SiesaJob.id.desc()).first())
+
+
+def _evidencia_de_que_no_entro(recaudo) -> dict:
+    """La lectura automática que autoriza «el recibo no está en Siesa», o
+    `ValueError` con lo que dice la cartera. **La lectura se hace ahora** con la
+    misma función que la verificación diferida
+    (`envio_liquidacion.lectura_de_verificacion`) y la queda anotada en el job:
+    solo pasa si el saldo de la factura está intacto y la cartera ya tuvo
+    tiempo de indexar (`MINUTOS_PARA_EVIDENCIA_NO_ENTRO` después del intento)."""
+    import json as _json
+    from app.services import envio_liquidacion as _env
+    job = _ultimo_rc(recaudo.id)
+    if job is None:
+        raise ValueError('No hay envío de recibo de caja de esta parada con qué comparar.')
+    lect = _env.lectura_de_verificacion(job, recaudo)
+    p = job.get_payload() or {}
+    ver = dict(p.get('verificacion') or {})
+    ver['lecturas'] = list(ver.get('lecturas') or []) + [dict(lect, por='no_esta')]
+    p['verificacion'] = ver
+    job.payload = _json.dumps(p, ensure_ascii=False)
+    if lect['entro']:
+        raise ValueError(
+            f'La cartera de Siesa dice que el recibo SÍ entró: {lect.get("motivo")}. '
+            f'Márquelo como «Sí está en Siesa».')
+    if not lect['intacto']:
+        raise ValueError(
+            f'No se puede dar el recibo por «no está» sin una lectura de Siesa que confirme '
+            f'el saldo intacto de la factura, y la de ahora no lo confirma: '
+            f'{lect.get("motivo")}. Espere y vuelva a intentar, o búsquelo en Siesa y, si '
+            f'está, márquelo como «Sí está».')
+    return lect
+
+
 def _hay_rc_en_cola(recaudo_id: int) -> bool:
     """¿Ya hay un RECIBO_CAJA en cola (o completado) para este recaudo? — no
     solo ENVIADO (`siesa_rc_triggered`, que se enciende recién cuando el DLQ
@@ -2001,11 +1870,16 @@ def _hay_rc_en_cola(recaudo_id: int) -> bool:
 
 def _encolar_recibo_caja(recaudo: RecaudoEntrega, tipo_docto_fe: str,
                           consec_fe, tercero_nit: str, sucursal: str,
-                          monto: float, forma_pago: str, notas: str,
-                          admin_id: int = None, depende_de_nc: bool = False,
-                          co_factura: str = '', cuenta_cxc: str = '',
-                          unidad_negocio: str = ''):
-    """Encola job RECIBO_CAJA en la DLQ.
+                          monto, forma_pago: str, notas: str,
+                          admin_id: int = None, depende_de_nc: bool = False):
+    """Encola job RECIBO_CAJA en la DLQ. **No le pregunta nada a Siesa.**
+
+    `monto` es el de `politica_cobro.monto_rc` o `None`: con `None` lo calcula
+    el ejecutor justo antes del POST con la misma política
+    (`envio_liquidacion.monto_del_recibo`). El tercero, la sucursal, la
+    cuenta, la unidad de negocio y el CO **los resuelve siempre el ejecutor**
+    de la fila de cartera del documento (`envio_liquidacion.resolver_cruce`):
+    lo que venga acá es solo lo que el WMS ya sabía, nunca un respaldo.
 
     Guarda contra la cola, no solo contra `siesa_rc_triggered` — protege
     también al barrido masivo (`_procesar_recaudo` / `liquidar_ruta_siesa`)
@@ -2023,15 +1897,12 @@ def _encolar_recibo_caja(recaudo: RecaudoEntrega, tipo_docto_fe: str,
         tipo='RECIBO_CAJA',
         payload={
             'recaudo_id': recaudo.id,
-            'tipo_docto_fe': tipo_docto_fe,
-            'consec_fe': str(consec_fe),
-            'tercero_nit': tercero_nit,
-            'sucursal': sucursal,
+            'tipo_docto_fe': tipo_docto_fe or '',
+            'consec_fe': str(consec_fe or ''),
+            'tercero_nit': tercero_nit or '',
+            'sucursal': sucursal or '',
             'monto': monto,
             'forma_pago': forma_pago,
-            'co_factura': co_factura,
-            'cuenta_cxc': cuenta_cxc,
-            'unidad_negocio': unidad_negocio,
             'notas': notas,
             'depende_de_nc': depende_de_nc,
             # Lo que el RC da por cierto de la parada. El ejecutor lo compara
@@ -2044,8 +1915,9 @@ def _encolar_recibo_caja(recaudo: RecaudoEntrega, tipo_docto_fe: str,
         creado_por_id=admin_id,
     )
     logger.info(
-        '[LIQUIDACION] Encolado RECIBO_CAJA para recaudo %d (FE %s-%s, $%.2f)',
-        recaudo.id, tipo_docto_fe, consec_fe, monto
+        '[LIQUIDACION] Encolado RECIBO_CAJA para recaudo %d (FE %s-%s, %s)',
+        recaudo.id, tipo_docto_fe or '?', consec_fe or '?',
+        f'${monto:.2f}' if monto is not None else 'monto lo resuelve el ejecutor'
     )
     return job
 
@@ -2089,51 +1961,29 @@ ResultadoDC = namedtuple('ResultadoDC', 'estado motivo')
 
 
 def _encolar_documento_contable(recaudo: RecaudoEntrega, tipo_docto_fe: str,
-                                  consec_fe, tercero_nit: str, sucursal: str,
-                                  notas: str, admin_id: int = None,
-                                  co_factura: str = '', cuenta_cxc: str = '',
-                                  unidad_negocio: str = '') -> ResultadoDC:
+                                  consec_fe, notas: str, admin_id: int = None) -> ResultadoDC:
     """Encola job DOCUMENTO_CONTABLE_RET en la DLQ. **Dice si encoló o no.**
+    **No le pregunta nada a Siesa** (P1-1, 2026-09-27).
 
     Devolvía `None` en los cinco caminos —encolado, duplicado y tres abortos— y
-    el llamador hacía `resultado['dc'] = 1` igual. Con `get_rowids_factura`
-    levantando (hoy puede: barrido incompleto), la retención no se encolaba,
-    `SiesaJob.encolar` no se llamaba, y `dc_encolados` subía y pintaba «1 DC» en
-    la pantalla. Un documento contable que el tablero da por hecho y que nadie
-    va a buscar a Siesa es el mismo daño que las tres banderas.
+    el llamador hacía `resultado['dc'] = 1` igual: un documento contable que el
+    tablero daba por hecho. Ahora el desenlace es un dato (`ResultadoDC`).
 
     **No levanta.** El aborto se devuelve como dato porque este documento es el
     último paso del recaudo: el RC (y la devolución, si la hubo) ya se encolaron
-    de verdad, y una excepción acá se llevaría puestos esos conteos ciertos —el
-    tablero pasaría de informar de más a informar de menos. Se declara en
-    `errores` y el operador ve el rojo con el motivo.
+    de verdad. Se declara en `errores` y el operador ve el rojo con el motivo.
 
-    El monto SIEMPRE se recalcula contra Siesa (`base_de_retencion()`/
-    `monto_de_retencion()`, base gravable/IVA reales — misma fórmula, una
-    sola fuente) — nunca sale de `recaudo.monto_descuento` directo.
-
-    Antes: si `monto_descuento` ya venía declarado (lo que el conductor
-    escribió en la puerta, calculado offline con datos que pudieron quedar
-    desactualizados, o un valor histórico), se usaba tal cual sin volver a
-    preguntarle a Siesa — la única rama que sí llamaba a Siesa era cuando el
-    campo venía vacío. El estimado que ve el conductor en pantalla (ver
-    `condActualizarPreviewDescuento` en rutas.js) es una vista previa a
-    propósito: puede quedar desactualizado si algo de la factura cambia
-    entre que se cargó la ruta y que se liquida. Con retención ReteIVA
-    calculada mal (`monto_cobrado * tasa` en vez de `IVA * tasa`) esto ya
-    costó ~6x de sobreestimación una vez — no hay razón para confiar un
-    segundo estimado sin verificarlo, cuando ya se sabe que puede estar mal.
-
-    `recaudo.monto_descuento` no desaparece: si difiere del valor real de
-    Siesa más allá del residuo de redondeo, queda trazado en el log — no
-    bloquea la liquidación masiva de la ruta por una diferencia menor.
-
-    Si Siesa no responde, no se inventa el monto (Regla 0): el DC no se
-    encola en este ciclo — la próxima liquidación lo reintenta.
+    El monto y la base **los calcula el ejecutor** justo antes del POST, contra
+    Siesa y sobre lo que el cliente se quedó
+    (`envio_liquidacion.monto_de_la_retencion` → `base_retencion_entregada` /
+    `monto_de_retencion`) — nunca desde `recaudo.monto_descuento` (un estimado
+    del teléfono: un ReteIVA mal calculado ya costó ~6×). Antes se leía la
+    factura acá, dentro del request, y un Siesa lento o caído dejaba la
+    retención sin encolar; ahora espera en la cola y se declara allá.
     """
     motivo = recaudo.motivo_descuento or ''
     # La política decide antes que nada: una retención pendiente o rechazada
-    # no llega ni a consultar la factura (P0-5, 2026-09-25).
+    # no llega ni a encolarse (P0-5, 2026-09-25).
     from app.services import politica_cobro as _pc
     try:
         _pc.exigir_retencion_aplicable(recaudo, motivo)
@@ -2160,87 +2010,16 @@ def _encolar_documento_contable(recaudo: RecaudoEntrega, tipo_docto_fe: str,
         # existente —el tablero no miente— y no es un error que declarar.
         return ResultadoDC(DC_YA_EN_COLA, None)
 
-    from app.services.connekta_gateway import connekta
-    try:
-        lineas_raw = connekta.get_rowids_factura(tipo_docto_fe, consec_fe)
-    except Exception as e:
-        logger.warning(
-            '[LIQUIDACION] recaudo %d: no se pudo leer la factura en Siesa '
-            'para calcular la retención %s — DC no encolado: %s',
-            recaudo.id, motivo, e
-        )
-        return ResultadoDC(DC_NO_ENCOLADO, (
-            f'Recaudo {recaudo.id}: no se pudo leer la factura '
-            f'{tipo_docto_fe}-{consec_fe} en Siesa para calcular la retención '
-            f'{motivo} ({e}). El documento contable NO se encoló — calcularlo '
-            f'sin la base real de Siesa daría un monto inventado.'))
-    if not lineas_raw:
-        logger.warning(
-            '[LIQUIDACION] recaudo %d: factura sin líneas en Siesa — '
-            'DC no encolado (retención %s)', recaudo.id, motivo
-        )
-        return ResultadoDC(DC_NO_ENCOLADO, (
-            f'Recaudo {recaudo.id}: la factura {tipo_docto_fe}-{consec_fe} '
-            f'volvió sin líneas de Siesa — sin base gravable, el documento '
-            f'contable de la retención {motivo} NO se encoló.'))
-
-    # La base es lo que el cliente SE QUEDÓ, no la factura entera: en una
-    # PARCIAL lo devuelto no se retiene (`politica_cobro.base_retencion_entregada`).
-    _base = _pc.base_retencion_entregada(recaudo, lineas_raw)
-    if _base is None:
-        return ResultadoDC(DC_NO_ENCOLADO, (
-            f'Recaudo {recaudo.id}: la entrega fue parcial y la devolución todavía '
-            f'no está amarrada a la factura {tipo_docto_fe}-{consec_fe} — sin saber '
-            f'qué se quedó el cliente no hay base para la retención {motivo}. El '
-            f'documento contable NO se encoló; sale en la próxima liquidación.'))
-    base_gravable, total_iva = _base
-    monto_descuento = monto_de_retencion(motivo, base_gravable, total_iva)
-    base_gravable_payload = base_de_retencion(motivo, base_gravable, total_iva)
-    if monto_descuento <= 0:
-        # El monto sale del recálculo contra Siesa de arriba —no de lo que
-        # declaró el conductor—, y esa decisión la tomó main con su razón
-        # escrita: un ReteIVA mal calculado ya costó ~6× una vez. Lo declarado
-        # queda como traza. El `lineas_raw` que nuestra rama releía acá ya está
-        # leído arriba, así que el re-fetch sobra.
-        logger.warning(
-            '[LIQUIDACION] monto_descuento=0 para recaudo %d — DC no encolado',
-            recaudo.id
-        )
-        # `ResultadoDC` y NO un `return` pelado: el llamador lo envuelve en
-        # `_contar_dc`, que lee `.estado`. Un `None` acá levanta AttributeError
-        # y se lleva puestos los conteos ciertos de RC y NC — el tablero pasaría
-        # de informar de más a no informar nada.
-        return ResultadoDC(DC_NO_ENCOLADO, (
-            f'Recaudo {recaudo.id}: la retención {motivo} calculada sobre la '
-            f'factura {tipo_docto_fe}-{consec_fe} dio cero — el documento '
-            f'contable NO se encoló.'))
-
-    declarado = float(recaudo.monto_descuento or 0)
-    if declarado > 0:
-        from app.services.cxc_cruce import TOLERANCIA as _TOL
-        if abs(declarado - monto_descuento) > _TOL:
-            logger.info(
-                '[LIQUIDACION] recaudo %d: estimado declarado ($%.2f) difiere '
-                'del valor real de Siesa ($%.2f) para %s — se envía el de '
-                'Siesa, la diferencia queda solo trazada acá',
-                recaudo.id, declarado, monto_descuento, motivo
-            )
-
     _encolar_retencion(
-        recaudo, tipo_ret=motivo, monto=monto_descuento,
-        base_gravable=base_gravable_payload,
+        recaudo, tipo_ret=motivo, monto=None, base_gravable=None,
         tipo_docto_fe=tipo_docto_fe, consec_fe=consec_fe,
-        tercero_nit=tercero_nit, sucursal=sucursal,
-        co_factura=co_factura, cuenta_cxc=cuenta_cxc,
-        unidad_negocio=unidad_negocio, notas=notas, admin_id=admin_id,
+        notas=notas, admin_id=admin_id,
     )
     return ResultadoDC(DC_ENCOLADO, None)
 
 
-def _encolar_retencion(recaudo: RecaudoEntrega, *, tipo_ret: str, monto: float,
-                       base_gravable: float, tipo_docto_fe: str, consec_fe,
-                       tercero_nit: str, sucursal: str, co_factura: str = '',
-                       cuenta_cxc: str = '', unidad_negocio: str = '',
+def _encolar_retencion(recaudo: RecaudoEntrega, *, tipo_ret: str, monto,
+                       base_gravable, tipo_docto_fe: str, consec_fe,
                        notas: str = '', admin_id: int = None,
                        accion_origen: str = None):
     """**El único sitio que encola un DOCUMENTO_CONTABLE_RET.**
@@ -2251,6 +2030,11 @@ def _encolar_retencion(recaudo: RecaudoEntrega, *, tipo_ret: str, monto: float,
     masivo encolaba la NI con solo mirar `motivo_descuento`, sin leer si quien
     liquida había confirmado o rechazado esa retención. Una NI emitida por
     plata que el cliente no tenía derecho a descontar.
+
+    `monto`/`base_gravable` en `None`: los calcula el ejecutor
+    (`envio_liquidacion.monto_de_la_retencion`). El tercero, la cuenta, la UN
+    y el CO los resuelve **siempre** el ejecutor de la fila de cartera
+    (`envio_liquidacion.resolver_cruce`): no viajan desde acá.
 
     La cuenta PUC ya en cola no se duplica (`_pucs_en_cola`). Devuelve el job,
     o `None` si ya había uno para esa cuenta. Levanta `RetencionNoAplicable`.
@@ -2265,19 +2049,12 @@ def _encolar_retencion(recaudo: RecaudoEntrega, *, tipo_ret: str, monto: float,
         return None
     payload = {
         'recaudo_id': recaudo.id,
-        'tipo_docto_fe': tipo_docto_fe,
-        'consec_fe': str(consec_fe),
-        'tercero_nit': tercero_nit,
-        'sucursal': sucursal,
+        'tipo_docto_fe': tipo_docto_fe or '',
+        'consec_fe': str(consec_fe or ''),
         'tipo_retencion': tipo_ret,
         'cuenta_puc': cuenta_puc,
         'monto': monto,
         'base_gravable': base_gravable,
-        'co_factura': co_factura,
-        'cuenta_cxc': cuenta_cxc,
-        # `f353_id_un_cruce` real de la fila de cartera: sin él el DC caía al
-        # fallback global y Siesa lo rechazaba (job 470, 2026-08-20).
-        'unidad_negocio': unidad_negocio,
         'notas': notas,
     }
     if accion_origen:
@@ -2290,8 +2067,9 @@ def _encolar_retencion(recaudo: RecaudoEntrega, *, tipo_ret: str, monto: float,
         creado_por_id=admin_id,
     )
     logger.info(
-        '[LIQUIDACION] Encolado DOCUMENTO_CONTABLE_RET para recaudo %d (%s, PUC %s, $%.2f)',
-        recaudo.id, tipo_ret, cuenta_puc, monto
+        '[LIQUIDACION] Encolado DOCUMENTO_CONTABLE_RET para recaudo %d (%s, PUC %s, %s)',
+        recaudo.id, tipo_ret, cuenta_puc,
+        f'${monto:.2f}' if monto is not None else 'monto lo resuelve el ejecutor'
     )
     return job
 

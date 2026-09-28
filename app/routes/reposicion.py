@@ -488,10 +488,17 @@ def listar_jobs():
     if lista_tipos:
         q = q.filter(SiesaJob.tipo.in_(lista_tipos))
     jobs = q.limit(100).all()
+    from app.services.envio_liquidacion import TIPOS_DE_LA_LIQUIDACION, describir_envio
     salida = []
     for j in jobs:
         d = j.to_dict()
         d['puede_reintentar'] = puede_reintentar_job(u, j.tipo)
+        if j.tipo in TIPOS_DE_LA_LIQUIDACION:
+            # La tarjeta de Liquidación: de qué pedido es, qué pasó en palabras
+            # y si «Reintentar» sirve (no ante un dato que falta ni ante un
+            # envío sin verificar: la política, no la pantalla).
+            d['envio'] = describir_envio(j)
+            d['puede_reintentar'] = d['puede_reintentar'] and d['envio']['reintentable']
         salida.append(d)
     return jsonify({'jobs': salida, 'total': len(jobs)}), 200
 

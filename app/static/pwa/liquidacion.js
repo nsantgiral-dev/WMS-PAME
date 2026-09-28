@@ -487,25 +487,34 @@ function _liqJobCard(j, mostrarReintentar) {
   const estadoColor = { PENDIENTE: '#f59e0b', COMPLETADO: '#22c55e', FALLIDO: '#ef4444' };
   const color = estadoColor[j.estado] || '#888';
   const fecha = _liqHoraBogota(j.fecha_creacion);
-
+  // Lo que el servidor dice del envío (`envio_liquidacion.describir_envio`):
+  // de qué pedido y cliente es, qué pasó en palabras, y si reintentar sirve.
+  // La tarjeta no deduce nada: ante un dato que falta o un envío sin
+  // verificar, «Reintentar» no sale (daría lo mismo, o duplicaría).
+  const e = j.envio || {};
+  const de = [e.pedido ? `Pedido ${e.pedido}` : '', e.cliente || '', e.factura ? `Factura ${e.factura}` : '']
+    .filter(Boolean).join(' · ');
+  const mensaje = e.mensaje || j.error_ultimo || '';
+  const titulo = e.que_falta ? 'Falta un dato — no se reintenta solo'
+    : (e.sin_verificar ? 'Sin verificar — puede haber entrado a Siesa' : '');
   return `
     <div class="tabla-card" style="margin-bottom:10px;${j.estado === 'FALLIDO' ? 'border-left:3px solid #ef4444;' : ''}">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px;">
         <div>
-          <div style="font-size:var(--fs-xs);font-weight:700;color:var(--tx);">${esc(LIQ_TIPO_ENVIO[j.tipo] || 'Envío a Siesa')}</div>
+          <div style="font-size:var(--fs-xs);font-weight:700;color:var(--tx);">${esc(LIQ_TIPO_ENVIO[j.tipo] || 'Envío a Siesa')}${e.valor != null ? ` · ${esc(fmtPesos(e.valor))}` : ''}</div>
+          ${de ? `<div style="font-size:var(--fs-xs);color:var(--tx2);margin-top:2px;">${esc(de)}</div>` : ''}
           <div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:2px;">${fecha}</div>
         </div>
         <div style="display:flex;align-items:center;gap:6px;">
-          <span style="font-size:var(--fs-xs);color:var(--tx3);">${esc(j.intentos || 0)}/${j.max_intentos || 3}</span>
+          <span style="font-size:var(--fs-xs);color:var(--tx3);">${esc(j.intentos || 0)}/${esc(j.max_intentos || 5)}</span>
           <span style="font-size:var(--fs-xs);font-weight:700;color:${color};background:${color}22;padding:3px 8px;border-radius:20px;">${esc(LIQ_ESTADO_ENVIO[j.estado] || j.estado)}</span>
         </div>
       </div>
-      ${j.error_ultimo ? `
-        <div style="font-size:var(--fs-xs);color:var(--err-tx);background:#7f1d1d22;padding:6px 8px;border-radius:6px;margin-bottom:8px;font-family:monospace;word-break:break-all;">
-          ${esc(j.error_ultimo.slice(0, 200))}
+      ${titulo ? `<div style="font-size:var(--fs-xs);font-weight:700;color:var(--warn-tx);margin-bottom:4px;">${esc(titulo)}</div>` : ''}
+      ${mensaje ? `
+        <div style="font-size:var(--fs-xs);color:var(--tx2);background:var(--bg);padding:6px 8px;border-radius:6px;margin-bottom:8px;word-break:break-word;">
+          ${esc(mensaje.slice(0, 600))}
         </div>` : ''}
-      ${j.referencia_tipo ? `
-        <div style="font-size:var(--fs-xs);color:var(--tx3);">${j.referencia_tipo === 'RecaudoEntrega' ? 'Parada' : 'Documento'} #${esc(j.referencia_id || '—')}</div>` : ''}
       ${mostrarReintentar && j.puede_reintentar !== false ? `
         <div style="display:flex;justify-content:flex-end;margin-top:8px;">
           <button onclick="liqReintentarJob(${esc(j.id)})"
@@ -833,6 +842,7 @@ function _liqRenderDetalle() {
       // Un recibo que el WMS no pudo verificar no se reenvía solo (un segundo
       // recibo se reversa a mano): una persona busca en Siesa y dice qué vio.
       if (rec.rc_sin_verificar) html += _liqBloqueRcSinVerificar(ruta.id, rec);
+      else if (rec.rc_verificando) html += _liqBloqueRcVerificando(rec);
       (rec.documentos_sin_verificar || []).forEach((d, k) => {
         html += _liqBloqueDocSinVerificar(ruta.id, rec, d, k);
       });
@@ -1298,6 +1308,27 @@ function _liqSinPermisoCobro(rutaId, rec) {
           </div>`;
 }
 
+/** Lo que una persona tiene que buscar en Siesa (lo dice el servidor:
+ *  `envio_liquidacion.que_buscar_en_siesa`), y las lecturas automáticas que ya
+ *  se hicieron. */
+function _liqQueBuscarRC(q) {
+  if (!q) return '';
+  const filas = [
+    ['Documento', q.documento], ['Centro de operación', q.co], ['Fecha', q.fecha],
+    ['Tercero (NIT)', q.tercero_nit], ['Valor', q.valor != null ? fmtPesos(q.valor) : null],
+    ['Factura que cruza', q.factura ? `${q.factura}${q.co_factura ? ` (CO ${q.co_factura})` : ''}` : null],
+    ['Pedido', q.pedido], ['Cliente', q.cliente],
+  ].filter(f => f[1]);
+  const lect = (q.verificacion || []).filter(l => l && l.motivo);
+  return `
+      <div style="font-size:var(--fs-xs);color:var(--tx2);margin-top:6px;">
+        ${filas.map(f => `<div><span style="color:var(--tx3);">${esc(f[0])}:</span> ${esc(f[1])}</div>`).join('')}
+      </div>
+      ${lect.length ? `<div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:6px;">
+        Lecturas de Siesa: ${lect.map(l => `${esc(_liqHoraBogota(l.leido_en))} — ${esc(l.motivo)}`).join(' · ')}
+      </div>` : ''}`;
+}
+
 /** El recibo de caja que no se pudo verificar: qué pasó y cómo se resuelve. */
 function _liqBloqueRcSinVerificar(rutaId, rec) {
   const puede = _liqPermiso('resolver_documento');
@@ -1305,10 +1336,12 @@ function _liqBloqueRcSinVerificar(rutaId, rec) {
     <div style="margin:8px 0;padding:10px;background:var(--warn-bg);border:1px solid var(--warn-brd);border-radius:8px;">
       <div style="font-size:var(--fs-xs);color:var(--warn-tx);font-weight:700;">Recibo de caja sin verificar</div>
       <div style="font-size:var(--fs-xs);color:var(--tx2);margin-top:4px;">
-        El envío a Siesa falló sin respuesta clara y el WMS no pudo confirmar si el recibo quedó creado.
-        No se reenvía solo: un recibo duplicado se reversa a mano. Búsquelo en Siesa (Auditoría de documentos)
-        y registre lo que encontró.
+        El envío a Siesa falló sin respuesta clara y el WMS, que leyó la cartera a los 15 minutos y a las
+        2 horas, no pudo confirmar si el recibo quedó creado. No se reenvía solo: un recibo duplicado se
+        reversa a mano. Búsquelo en Siesa (Auditoría de documentos) con estos datos y registre lo que
+        encontró. «No está» solo se acepta si el WMS vuelve a leer el saldo de la factura y lo encuentra intacto.
       </div>
+      ${_liqQueBuscarRC(rec.rc_que_buscar)}
       ${puede ? `
       <div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap;">
         <button onclick="liqResolverRC(${esc(rutaId)}, ${esc(rec.id)}, 1)"
@@ -1317,6 +1350,20 @@ function _liqBloqueRcSinVerificar(rutaId, rec) {
           style="flex:1;padding:8px;background:var(--bg);color:var(--tx2);border:1px solid var(--brd);border-radius:8px;font-size:var(--fs-xs);font-weight:700;cursor:pointer;">No está en Siesa</button>
       </div>` : `
       <div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:6px;">Lo resuelve quien liquida la ruta.</div>`}
+    </div>`;
+}
+
+/** El recibo cuyo envío no tuvo respuesta clara, mientras el WMS todavía lee
+ *  la cartera (+15 min, +2 h): nadie tiene que hacer nada todavía. */
+function _liqBloqueRcVerificando(rec) {
+  return `
+    <div style="margin:8px 0;padding:10px;background:var(--bg-s);border:1px solid var(--brd);border-radius:8px;">
+      <div style="font-size:var(--fs-xs);color:var(--tx);font-weight:700;">Verificando el recibo de caja en Siesa</div>
+      <div style="font-size:var(--fs-xs);color:var(--tx2);margin-top:4px;">
+        El envío no tuvo respuesta clara. El WMS vuelve a leer la cartera a los 15 minutos y a las 2 horas
+        para saber si el recibo entró; no se reenvía. Si no lo puede confirmar, se lo pedirá aquí.
+      </div>
+      ${_liqQueBuscarRC(rec.rc_que_buscar)}
     </div>`;
 }
 

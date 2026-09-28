@@ -747,11 +747,14 @@ def _filtro_puede_consumir(T, ahora):
 def _fila_en_cartera(t, filas: list):
     """¿La FE de la tarea ya está en la cartera abierta leída? Por la FE si se
     conoce su consecutivo; si no, por el PEDIDO (`cxc_cruce`, la regla general
-    de los campos de cruce). `None` = no aparece."""
+    de los campos de cruce), **con el CO de la factura** (2026-09-27: la
+    numeración de las FE se solapa entre CO, y un cliente que compra en dos CO
+    tenía la fila del otro). `None` = no aparece."""
     from app.services import cxc_cruce
     return cxc_cruce.fila_de_la_factura(
         filas or [], t.tipo_docto_pedido_siesa, t.consec_docto_pedido_siesa,
-        t.fe_tipo if t.fe_consec else None, t.fe_consec)
+        t.fe_tipo if t.fe_consec else None, t.fe_consec,
+        co=cxc_cruce.co_de_la_factura(t))
 
 
 def consumo_wms(nit: str, excluir_pedido: str = None, filas: list = None,

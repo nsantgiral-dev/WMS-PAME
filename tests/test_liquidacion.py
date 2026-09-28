@@ -59,13 +59,16 @@ def recaudo_liq(db, almacen):
 
 
 def _run_procesar(recaudo, db):
-    """Ejecuta _procesar_recaudo con _obtener_tercero mockeado."""
-    with patch('app.services.liquidacion_service._obtener_tercero',
-               return_value=('900123456', '001')):
-        from app.services.liquidacion_service import _procesar_recaudo
-        resultado = _procesar_recaudo(recaudo, 'test liquidacion')
-        db.session.commit()
-        return resultado
+    """Ejecuta _procesar_recaudo y, con los mismos dobles de Siesa activos,
+    lo que el ejecutor de la DLQ resuelve antes del POST (`resolver_envio`):
+    desde el 2026-09-27 encolar no lee Siesa (P1-1) y el monto de «Enviar
+    todo», el tercero, la cuenta y la UN se resuelven en el ejecutor."""
+    from app.services.liquidacion_service import _procesar_recaudo
+    from tests._envio_liq import resolver_cola
+    resultado = _procesar_recaudo(recaudo, 'test liquidacion')
+    db.session.commit()
+    resolver_cola(recaudo.id)
+    return resultado
 
 
 def _mock_rowids_una_linea(codigo_siesa='PROD-001', cant_base=5, vlr_neto=100000):
@@ -343,6 +346,14 @@ class TestRechazado:
         devolucion = DevolucionCliente.query.filter_by(recaudo_entrega_id=recaudo.id).first()
         assert devolucion is not None
         assert devolucion.es_total is True
+        # Sin red al liquidar (P1-1, 2026-09-27): la devolución no se amarra a
+        # la factura dentro del request de «Enviar todo a Siesa»; se amarra
+        # donde ya se amarraba con red — recepción al preparar el conteo.
+        assert len(devolucion.lineas) == 0
+        from app.services.devolucion_ruta import vincular_a_factura
+        with _mock_rowids_una_linea(codigo_siesa=producto.codigo_siesa):
+            vincular_a_factura(devolucion)
+            db.session.commit()
         assert len(devolucion.lineas) == 1
         assert float(devolucion.lineas[0].cantidad_devuelta) == 5  # = cant_base mockeada (línea completa)
 
@@ -401,25 +412,27 @@ class TestRetencionesPUC:
 
 class TestRegistrarCobroRecaudo:
 
-    def _mock_siesa(self):
-        """Mock Siesa API calls for registrar_cobro tests."""
+    def _mock_siesa(self, filas_cartera=None):
+        """Mock Siesa API calls for registrar_cobro tests.
+
+        Desde el 2026-09-27 registrar el cobro solo lee la factura; la fila de
+        cartera la lee el ejecutor con la lectura exacta del documento
+        (`get_cxc_de_factura(co, tipo, consec)`). La fila por defecto está
+        indexada por el PEDIDO del fixture ('PD'/999), con la forma real."""
+        from tests._envio_liq import fila_cartera
         mock_connekta = MagicMock()
+        mock_connekta.centro_op = '003'
+        mock_connekta.modo_simulacion = False
         mock_connekta.get_rowids_factura.return_value = [
             {'f470_vlr_bruto': 1680672, 'f470_vlr_imp': 319328, 'f470_vlr_neto': 2000000,
              'f120_referencia': 'REF001', 'f470_rowid': 'R1'}
         ]
-        mock_connekta.get_pedido_cabecera.return_value = {
-            'f430_id_co': '003', 'f200_id_pedido_fact': '900123456',
-            'f461_id_sucursal_pedido_rem': '001',
-        }
-        # Forma real verificada en vivo (2026-08-11): lista de filas, una por
-        # factura del cliente — NUNCA un dict único. tipo/consec deben matchear
-        # tarea.tipo_docto_pedido_siesa/consec_docto_pedido_siesa del fixture
-        # recaudo_liq ('PD'/999) para que registrar_cobro_recaudo la encuentre.
-        mock_connekta.get_cxc_general = MagicMock(return_value=[
-            {'f353_id_tipo_docto_cruce': 'PD', 'f353_consec_docto_cruce': 999,
-             'f253_id': '13050502', 'f353_total_db': 2000000, 'f353_total_cr': 0},
-        ])
+        filas = filas_cartera if filas_cartera is not None else [
+            fila_cartera(tipo='PD', consec=999, cuenta='13050502', total_db=2000000)]
+        mock_connekta.get_cxc_de_factura.side_effect = lambda co, tipo, consec: [
+            f for f in filas if str(f['f353_id_co_cruce']) == str(co)
+            and f['f353_id_tipo_docto_cruce'] == tipo
+            and str(f['f353_consec_docto_cruce']) == str(consec)]
         return mock_connekta
 
     def test_contado_sin_retenciones_rc_bruto(self, app, db, recaudo_liq):
@@ -433,12 +446,13 @@ class TestRegistrarCobroRecaudo:
         assert resultado['monto_neto_rc'] == 2000000  # sin retenciones = bruto
         assert len(resultado['dc_jobs']) == 0
 
-    def test_get_pedido_cabecera_recibe_el_pedido_no_la_fe(self, app, db, recaudo_liq):
-        """`co_factura` salía vacío en producción (PD1411, 2026-08-18):
-        `get_pedido_cabecera` se llamaba con el tipo/consec de la FE en vez
-        del pedido, y Siesa no encuentra un pedido de tipo 'FEW'. Un mock por
-        `return_value` fijo nunca lo habría atrapado — hace falta afirmar CON
-        QUÉ se llamó, no solo qué devolvió."""
+    def test_registrar_cobro_no_lee_la_cabecera_ni_la_cartera(self, app, db, recaudo_liq):
+        """Registrar el cobro ya no lee la cabecera del pedido ni la cartera
+        del NIT (P1-2, 2026-09-27): con Siesa titubeando, eso dejaba el tercero
+        vacío y la UN de respaldo. Lo resuelve el ejecutor, de la fila de
+        cartera del documento exacto — primero el PEDIDO ('PD'/999, del
+        fixture, NO la FE resuelta: PD1411) y con su CO."""
+        from tests._envio_liq import resolver_cola
         recaudo = recaudo_liq(estado='ENTREGADO', pago='EFECTIVO', monto=2000000)
         mock_connekta = self._mock_siesa()
         from app.services.liquidacion_service import LiquidacionService
@@ -446,10 +460,12 @@ class TestRegistrarCobroRecaudo:
              patch('app.services.siesa_job_service.disparar_dlq_inmediato', MagicMock()):
             resultado = LiquidacionService.registrar_cobro_recaudo(
                 recaudo.id, admin_id=1, retenciones=[])
-        assert resultado['ok'] is True
-        # 'PD'/999 — tipo_docto_pedido_siesa/consec_docto_pedido_siesa del
-        # fixture. NO el tipo/consecutivo de la FE resuelta.
-        mock_connekta.get_pedido_cabecera.assert_called_with('PD', '999')
+            assert resultado['ok'] is True
+            mock_connekta.get_pedido_cabecera.assert_not_called()
+            mock_connekta.get_cxc_general.assert_not_called()
+            mock_connekta.get_cxc_de_factura.assert_not_called()
+            resolver_cola(recaudo.id, mock_connekta)
+        assert mock_connekta.get_cxc_de_factura.call_args_list[0].args == ('003', 'PD', '999')
 
     def test_contado_con_retenciones_rc_neto(self, app, db, recaudo_liq):
         # RC = neto (bruto - retenciones)
@@ -537,90 +553,65 @@ class TestRegistrarCobroRecaudo:
                 recaudo.id, admin_id=1, retenciones=[])
         assert resultado['monto_neto_rc'] == 1500000
 
-    def test_matchea_f253_id_correcto_entre_varias_filas(self, app, db, recaudo_liq):
-        """
-        get_cxc_general puede devolver varias filas del mismo cliente con
-        f253_id DISTINTO por factura (verificado en vivo 2026-08-11, NIT
-        1000124053: 9 filas con 13050501, 2 con 13050502) — hay que tomar
-        la fila de LA factura que se está cobrando, no la primera del
-        cliente ni una de otra factura.
-        """
-        recaudo = recaudo_liq(estado='ENTREGADO', pago='EFECTIVO', monto=2000000)
-        mock_connekta = self._mock_siesa()
-        # Decoy (otra factura del mismo cliente, distinto f253_id) + la real
-        mock_connekta.get_cxc_general.return_value = [
-            {'f353_id_tipo_docto_cruce': 'FE', 'f353_consec_docto_cruce': 1,
-             'f253_id': '99999999', 'f353_total_db': 100, 'f353_total_cr': 0},
-            {'f353_id_tipo_docto_cruce': 'PD', 'f353_consec_docto_cruce': 999,
-             'f253_id': '13050502', 'f353_total_db': 2000000, 'f353_total_cr': 0},
-        ]
-        from app.services.liquidacion_service import LiquidacionService
+    def test_matchea_la_fila_del_co_de_la_factura_no_la_de_otro_co(self, app, db, recaudo_liq):
+        """La numeración se solapa entre CO (medido en producción el
+        2026-09-27: FE-17062 existe en el CO 003 y en el 004, de clientes
+        distintos). La lectura exacta pide el CO; si la consulta igual trae
+        una fila de otro CO, `cxc_cruce.fila_unica` la descarta."""
+        from tests._envio_liq import fila_cartera, resolver_cola
         from app.models.siesa_job import SiesaJob
+        recaudo = recaudo_liq(estado='ENTREGADO', pago='EFECTIVO', monto=2000000)
+        otra = fila_cartera(tipo='PD', consec=999, co='004', cuenta='99999999', un='01',
+                            nit='800000000')
+        real = fila_cartera(tipo='PD', consec=999, co='003', cuenta='13050502')
+        mock_connekta = self._mock_siesa()
+        mock_connekta.get_cxc_de_factura.side_effect = lambda co, tipo, consec: [otra, real]
+        from app.services.liquidacion_service import LiquidacionService
         with patch('app.services.connekta_gateway.connekta', mock_connekta), \
              patch('app.services.siesa_job_service.disparar_dlq_inmediato', MagicMock()):
             LiquidacionService.registrar_cobro_recaudo(recaudo.id, admin_id=1, retenciones=[])
-
-        job = SiesaJob.query.filter_by(tipo='RECIBO_CAJA', referencia_id=recaudo.id).first()
-        assert job is not None
-        assert job.get_payload()['cuenta_cxc'] == '13050502', (
-            'Tomó el f253_id de la factura equivocada (o el fallback)'
-        )
+            resolver_cola(recaudo.id, mock_connekta)
+        p = SiesaJob.query.filter_by(tipo='RECIBO_CAJA', referencia_id=recaudo.id).first().get_payload()
+        assert (p['cuenta_cxc'], p['tercero_nit'], p['co_factura']) == ('13050502', '900123456', '003'), (
+            'Tomó la fila de otro CO')
 
     def test_toma_la_un_real_de_la_fila_no_el_env_global(self, app, db, recaudo_liq):
         """PD1411/FE-1416 (2026-08-18): la fila de cartera real traía
         f353_id_un_cruce=99, pero el RC salía con SIESA_UNIDAD_NEGOCIO fijo
         (001) — Siesa rechazó ("UN diferente a la del auxiliar de caja" +
-        "documento de cruce no existe", mismo motivo). El job encolado debe
-        llevar la UN de la fila, no depender del fallback en connekta."""
+        "documento de cruce no existe", mismo motivo). Lo resuelto por el
+        ejecutor lleva la UN de la fila."""
+        from tests._envio_liq import resolver_cola
         recaudo = recaudo_liq(estado='ENTREGADO', pago='EFECTIVO', monto=2000000)
         mock_connekta = self._mock_siesa()
-        mock_connekta.get_cxc_general.return_value = [
-            {'f353_id_tipo_docto_cruce': 'PD', 'f353_consec_docto_cruce': 999,
-             'f253_id': '13050502', 'f353_id_un_cruce': '99',
-             'f353_total_db': 2000000, 'f353_total_cr': 0},
-        ]
         from app.services.liquidacion_service import LiquidacionService
         from app.models.siesa_job import SiesaJob
         with patch('app.services.connekta_gateway.connekta', mock_connekta), \
              patch('app.services.siesa_job_service.disparar_dlq_inmediato', MagicMock()):
             LiquidacionService.registrar_cobro_recaudo(recaudo.id, admin_id=1, retenciones=[])
-
+            resolver_cola(recaudo.id, mock_connekta)
         job = SiesaJob.query.filter_by(tipo='RECIBO_CAJA', referencia_id=recaudo.id).first()
         assert job.get_payload()['unidad_negocio'] == '99'
 
     def test_el_dc_de_retencion_tambien_lleva_la_un_real(self, app, db, recaudo_liq):
-        """Job 470 (recaudo 19, PD1421, ruta 22, 2026-08-20): el fix de la UN
-        real del 2026-08-18 (test de arriba) solo se aplicó al RC — el DC de
-        retención se encola aparte, directo con `SiesaJob.encolar`, y su
-        payload nunca llevó `unidad_negocio`. Primera liquidación con
-        retención real: FALLIDO 5/5, rechazo estructural de Siesa."""
+        """Job 470 (recaudo 19, PD1421, ruta 22, 2026-08-20): la UN real se
+        arregló primero solo en el RC. Hoy el RC y la retención se resuelven
+        con la MISMA función del ejecutor (`envio_liquidacion.resolver_envio`)."""
+        from tests._envio_liq import resolver_cola
         # Neto real (factura $2.000.000 menos retención $42.016,80).
         recaudo = recaudo_liq(estado='ENTREGADO', pago='EFECTIVO',
                               monto=round(2000000 - round(1680672 * 0.025, 2), 2),
                               motivo_desc='RETEFUENTE_2.5')
-        # Admin ya confirmó que el descuento sí correspondía (ver
-        # `confirmar_retencion`) — si no, `registrar_cobro_recaudo` bloquea
-        # antes de llegar a encolar nada.
         recaudo.retencion_confirmada = True
         db.session.commit()
         mock_connekta = self._mock_siesa()
-        mock_connekta.get_cxc_general.return_value = [
-            {'f353_id_tipo_docto_cruce': 'PD', 'f353_consec_docto_cruce': 999,
-             'f253_id': '13050502', 'f353_id_un_cruce': '99',
-             'f353_total_db': 2000000, 'f353_total_cr': 0},
-        ]
-        mock_connekta.get_rowids_factura.return_value = [
-            {'f470_vlr_bruto': 1680672, 'f470_vlr_imp': 319328,
-             'f470_vlr_neto': 2000000, 'f120_referencia': 'REF001',
-             'f470_rowid': 'R1'},
-        ]
         from app.services.liquidacion_service import LiquidacionService
         from app.models.siesa_job import SiesaJob
         with patch('app.services.connekta_gateway.connekta', mock_connekta), \
              patch('app.services.siesa_job_service.disparar_dlq_inmediato', MagicMock()):
             LiquidacionService.registrar_cobro_recaudo(
                 recaudo.id, admin_id=1, retenciones=[{'tipo': 'RETEFUENTE_2.5'}])
-
+            resolver_cola(recaudo.id, mock_connekta)
         dc_job = SiesaJob.query.filter_by(
             tipo='DOCUMENTO_CONTABLE_RET', referencia_id=recaudo.id).first()
         assert dc_job is not None
@@ -825,31 +816,39 @@ class TestDiferenciaGrandeSinExplicarBloqueaElRC:
     def test_el_camino_masivo_tambien_queda_bloqueado(self, app, db, recaudo_liq):
         """El botón masivo 'Enviar a Siesa' (`_procesar_recaudo`,
         `liquidar_ruta_siesa`) es un segundo camino independiente para crear
-        el mismo RC — antes de este fix mandaba `monto_cobrado` directo, sin
-        consultar Siesa. Mismo caso PD1426, por el camino masivo esta vez."""
+        el mismo RC. Mismo caso PD1426, por el camino masivo. Desde el
+        2026-09-27 encolar no lee Siesa (P1-1): el que no deja salir el recibo
+        es el ejecutor, que lo declara con el pedido y quién lo corrige."""
+        from app.services.siesa_job_service import DatoQueFalta
+        from tests._envio_liq import resolver_cola
         recaudo = recaudo_liq(estado='ENTREGADO', pago='EFECTIVO', monto=50000)
         with patch('app.services.connekta_gateway.connekta.get_rowids_factura',
                    return_value=[{'f470_vlr_bruto': 49244, 'f470_vlr_imp': 9356,
                                   'f470_vlr_neto': 58600, 'f120_referencia': 'REF001',
-                                  'f470_rowid': 'R1'}]), \
-             patch('app.services.liquidacion_service._obtener_tercero',
-                   return_value=('900123456', '001')):
-            from app.services.liquidacion_service import _procesar_recaudo
-            with pytest.raises(ValueError, match='diferencia'):
-                _procesar_recaudo(recaudo, 'test liquidacion masiva')
-
-    def test_el_camino_masivo_no_bloquea_si_siesa_no_responde(self, app, db, recaudo_liq):
-        """Fallo de red consultando la factura no puede bloquear el cobro —
-        cae al monto declarado, igual que `registrar_cobro_recaudo` cuando
-        `datos_siesa_ok` es False."""
-        recaudo = recaudo_liq(estado='ENTREGADO', pago='EFECTIVO', monto=50000)
-        with patch('app.services.connekta_gateway.connekta.get_rowids_factura',
-                   side_effect=Exception('timeout simulado')), \
-             patch('app.services.liquidacion_service._obtener_tercero',
-                   return_value=('900123456', '001')):
+                                  'f470_rowid': 'R1'}]):
             from app.services.liquidacion_service import _procesar_recaudo
             resultado = _procesar_recaudo(recaudo, 'test liquidacion masiva')
-        assert resultado['rc'] == 1
+            db.session.commit()
+            assert resultado['rc'] == 1
+            with pytest.raises(DatoQueFalta, match=r'diferencia.*Corregir monto'):
+                resolver_cola(recaudo.id)
+
+    def test_el_camino_masivo_espera_si_siesa_no_responde(self, app, db, recaudo_liq):
+        """Antes: un fallo de red al leer la factura caía al monto declarado y
+        el recibo salía por lo que tecleó el conductor. Decisión del dueño
+        «Siesa caído = se para todo»: el recibo ESPERA (no gasta intento) y
+        no sale a ciegas."""
+        from app.services.siesa_job_service import DependenciaPendiente
+        from tests._envio_liq import resolver_cola
+        recaudo = recaudo_liq(estado='ENTREGADO', pago='EFECTIVO', monto=50000)
+        with patch('app.services.connekta_gateway.connekta.get_rowids_factura',
+                   side_effect=Exception('timeout simulado')):
+            from app.services.liquidacion_service import _procesar_recaudo
+            resultado = _procesar_recaudo(recaudo, 'test liquidacion masiva')
+            db.session.commit()
+            assert resultado['rc'] == 1
+            with pytest.raises(DependenciaPendiente, match='no respondió'):
+                resolver_cola(recaudo.id)
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -1469,7 +1468,7 @@ class TestConnektaAjusteAlPesoRC:
             gw.trigger_recibo_caja(
                 tercero_nit='900123456', sucursal='001', monto=58600,
                 forma_pago='EFECTIVO', tipo_docto_fe='FE', consec_fe=1,
-            )
+            cuenta_cxc='13050501', unidad_negocio='99')
         payload = mock_post.call_args[0][2]
         header = payload['RCyotrosingresos'][0]
         cxc = payload['CxC'][0]
@@ -1485,7 +1484,7 @@ class TestConnektaAjusteAlPesoRC:
                 tercero_nit='900123456', sucursal='001', monto=58600,
                 forma_pago='EFECTIVO', tipo_docto_fe='FE', consec_fe=1,
                 ajuste_valor=1, ajuste_es_sobrante=False,
-            )
+            cuenta_cxc='13050501', unidad_negocio='99')
         payload = mock_post.call_args[0][2]
         header = payload['RCyotrosingresos'][0]
         caja = payload['Caja'][0]
@@ -1506,7 +1505,7 @@ class TestConnektaAjusteAlPesoRC:
                 tercero_nit='900123456', sucursal='001', monto=58600,
                 forma_pago='EFECTIVO', tipo_docto_fe='FE', consec_fe=1,
                 ajuste_valor=1400, ajuste_es_sobrante=True,
-            )
+            cuenta_cxc='13050501', unidad_negocio='99')
         payload = mock_post.call_args[0][2]
         header = payload['RCyotrosingresos'][0]
         cxc = payload['CxC'][0]
@@ -1523,7 +1522,7 @@ class TestConnektaAjusteAlPesoRC:
                 tercero_nit='900123456', sucursal='001', monto=100,
                 forma_pago='EFECTIVO', tipo_docto_fe='FE', consec_fe=1,
                 ajuste_valor=100, ajuste_es_sobrante=False,
-            )
+            cuenta_cxc='13050501', unidad_negocio='99')
 
 
 class TestConnektaAjusteAlPesoDC:
@@ -1539,7 +1538,7 @@ class TestConnektaAjusteAlPesoDC:
             gw.trigger_documento_contable(
                 tercero_nit='900123456', sucursal='001', cuenta_puc='13551501',
                 monto=1231, base_gravable=49244, tipo_docto_fe='FE', consec_fe=1,
-            )
+            cuenta_cxc='13050501', unidad_negocio='99')
         payload = mock_post.call_args[0][2]
         assert len(payload['Movimientocontable']) == 1
         assert payload['MovimientoCxC'][0]['F351_VALOR_CR'] == gw._fmt_valor(1231)
@@ -1551,7 +1550,7 @@ class TestConnektaAjusteAlPesoDC:
                 tercero_nit='900123456', sucursal='001', cuenta_puc='13551501',
                 monto=1231, base_gravable=49244, tipo_docto_fe='FE', consec_fe=1,
                 ajuste_valor=3000, ajuste_razon='Faltante confirmado',
-            )
+            cuenta_cxc='13050501', unidad_negocio='99')
         payload = mock_post.call_args[0][2]
         movs = payload['Movimientocontable']
         assert len(movs) == 2
@@ -1578,7 +1577,7 @@ class TestConnektaAjusteAlPesoDC:
                     tercero_nit='900123456', sucursal='001', cuenta_puc='13551501',
                     monto=1231, base_gravable=49244, tipo_docto_fe='FE', consec_fe=1,
                     ajuste_valor=3000, ajuste_razon='Forzar descuadre',
-                )
+                cuenta_cxc='13050501', unidad_negocio='99')
 
 
 # ═══════════════════════════════════════════════════════════════════

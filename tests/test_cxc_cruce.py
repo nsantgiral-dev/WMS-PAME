@@ -100,6 +100,7 @@ class TestLosDosSitiosUsanLaMismaFuncion:
     @pytest.mark.parametrize('archivo', [
         'app/services/liquidacion_service.py',
         'app/services/siesa_job_service.py',
+        'app/services/envio_liquidacion.py',
     ])
     def test_ninguno_rearma_la_busqueda_a_mano(self, archivo):
         fuente = self._fuente(archivo)

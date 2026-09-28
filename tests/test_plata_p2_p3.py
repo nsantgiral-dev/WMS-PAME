@@ -68,8 +68,13 @@ class TestResolverRcNoEntroLimpiaLaMarca:
         r.siesa_rc_triggered = True
         r.rc_cobro_otro_mes = datetime(2026, 8, 31).date()
         db.session.commit()
-        LiquidacionService.resolver_recibo_sin_verificar(r.id, usuario_id=1, entro=False,
-                                                         motivo='no está')
+        from unittest.mock import patch
+        from tests._envio_liq import cartera_cualquiera, rc_sin_verificar
+        rc_sin_verificar(r, saldo_antes=10_000.0)
+        with patch('app.services.connekta_gateway.connekta') as mc:
+            cartera_cualquiera(mc, total_db=10_000.0)   # saldo intacto (P1-3)
+            LiquidacionService.resolver_recibo_sin_verificar(r.id, usuario_id=1, entro=False,
+                                                             motivo='no está')
         db.session.refresh(r)
         assert r.rc_cobro_otro_mes is None and r.siesa_rc_triggered is False
 

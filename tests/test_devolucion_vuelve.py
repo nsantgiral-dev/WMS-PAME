@@ -512,11 +512,9 @@ class TestUnaDevolucionActivaPorLineaDeFactura:
 
 def _liquidar_siesa(ruta_id, gw):
     from app.services.liquidacion_service import LiquidacionService
-    with patch('app.services.connekta_gateway.connekta', gw), \
-            patch('app.services.liquidacion_service._obtener_tercero',
-                  return_value=('900123456', '001')), \
-            patch('app.services.liquidacion_service._resolver_cuenta_cxc',
-                  return_value=('003', '13050501', '99')):
+    # Liquidar no lee Siesa desde el 2026-09-27 (P1-1): el tercero, la cuenta
+    # y la UN los resuelve el ejecutor.
+    with patch('app.services.connekta_gateway.connekta', gw):
         return LiquidacionService.liquidar_ruta_siesa(ruta_id)
 
 
@@ -529,13 +527,21 @@ class TestLaLiquidacionEncuentraLaDevolucion:
         rec, dev = _dev(m)
         assert r['nc_encolados'] == 1 and not r['errores']
         assert DevolucionCliente.query.filter_by(recaudo_entrega_id=rec.id).count() == 1
-        assert dev.vinculada_factura_at is not None
+        # Sin red al liquidar (P1-1, 2026-09-27): el amarre a la factura lo
+        # hace recepción al preparar el conteo, no «Enviar todo a Siesa».
+        assert dev.vinculada_factura_at is None
 
     def test_la_referencia_sin_producto_llega_a_los_errores(self, db, almacen, producto):
+        """El problema que dejó escrito el amarre (recepción, con red) llega a
+        los errores de la liquidación sin volver a leer la factura."""
+        from app.services import devolucion_ruta as dr
         m = _mundo(db, almacen, producto)
         _rechazar(m)
-        r = _liquidar_siesa(m.ruta.id, _gw([_fila(producto),
-                                             _fila(producto, rowid='9', ref='SIN-WMS')]))
+        _, dev = _dev(m)
+        dr.vincular_a_factura(dev, gateway=_gw([_fila(producto),
+                                                _fila(producto, rowid='9', ref='SIN-WMS')]))
+        db.session.commit()
+        r = _liquidar_siesa(m.ruta.id, _gw([]))
         assert any('SIN-WMS' in e['error'] for e in r['errores'])
 
     def test_no_liquida_con_mercancia_sin_contar_salvo_motivo(self, db, almacen, producto):
@@ -574,8 +580,15 @@ class TestElReciboDeCajaNoEsperaUnaNotaQueNoVaALlegar:
 
     def _ejecutar(self, job):
         from app.services.siesa_job_service import _ejecutar_job
+        from tests._envio_liq import fila_cartera
         with patch('app.services.connekta_gateway.connekta') as mc:
             mc.modo_simulacion = False
+            mc.centro_op = '003'
+            mc.get_detalle_factura.return_value = [{'f350_id_tipo_docto': 'FE',
+                                                    'f350_consec_docto': '77'}]
+            # La fila de cartera que el ejecutor resuelve antes del POST.
+            mc.get_cxc_de_factura.side_effect = lambda co, t, c: [
+                fila_cartera(tipo=t, consec=c, co=co)]
             mc.trigger_recibo_caja.return_value = {'codigo': 0}
             try:
                 _ejecutar_job(job)

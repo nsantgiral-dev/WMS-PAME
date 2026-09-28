@@ -215,7 +215,7 @@ recibe por parámetro.
 | `CONNEKTA_BODEGA` | `NB1` | Bodega por defecto |
 | `CONNEKTA_CENTRO_OP` | `003` | Centro de operación por defecto |
 | `SIESA_CO_TRASLADO` | fallback a CENTRO_OP | CO para traslados inter-bodega |
-| `SIESA_UNIDAD_NEGOCIO` | `''` | **OBLIGATORIO** — Siesa NO hereda de bodega en traslados |
+| `SIESA_UNIDAD_NEGOCIO` | `''` | **OBLIGATORIO** — Siesa NO hereda de bodega en traslados. **No es la UN de la cartera**: el RC y la retención llevan la de su fila (`f353_id_un_cruce`) y sin ella no salen (2026-09-27, «Enviar a Siesa sin preguntarle a Siesa») |
 | `SIESA_NIT_EMPRESA` | `''` | NIT empresa para f350_id_tercero |
 
 ### Tipos de Documento (por clase Siesa)
@@ -254,7 +254,9 @@ Motivos son códigos **obligatorios** en Siesa (Inventarios > Maestros > Concept
 |----------|---------|-------------|
 | `SIESA_COBRADOR` | `9876` | Cobrador dedicado para WMS (Maestros > Vendedores) |
 | `SIESA_FLUJO_EFECTIVO` | `1103` | Flujo de efectivo (Tesorería > Flujos) |
-| `SIESA_CXC_AUXILIAR` | `13050501` | Cuenta CxC fallback. **Preferir f253_id real de API 20** |
+| `SIESA_CXC_AUXILIAR` | `13050501` | **Ya no es respaldo del RC ni de la retención** (2026-09-27): llevan el `f253_id` de su fila de cartera y sin él no salen (Regla 11) |
+| `LIQUIDACION_ESPERA_SIESA_HORAS` | `24` | Cuánto espera un RC o una retención a que la cartera muestre su factura (o a que Siesa conteste) antes de declararse «falta un dato» |
+| `CONNEKTA_CONSULTA_RC_RECIENTES` | — (sin default) | Consulta dinámica opcional de `t350` para recibos de caja (columnas como la de NC + `f200_id`): segunda prueba de que un RC sin respuesta clara entró |
 | `SIESA_MEDIO_PAGO_EFECTIVO` | `EFE` | Medio de pago efectivo |
 | `SIESA_MEDIO_PAGO_TRANSFERENCIA` | `TBA` | Medio de pago transferencia bancaria |
 | `SIESA_MEDIO_PAGO_TARJETA` | `TDC` | Medio de pago tarjeta |
@@ -7335,6 +7337,57 @@ La regla no se afloja: **el `.env` no se usa para correr la app ni scripts que
 escriben** —puede volver a cambiar sin que nadie lo anuncie— y los candados
 (`--confirmar-destino`, `RAILWAY_SERVICE_ID`, el sello) siguen siendo
 necesarios.
+
+---
+
+## Enviar a Siesa sin preguntarle a Siesa — el ejecutor resuelve (L1 de liquidación, 2026-09-27)
+
+Auditoría de la noche (P1-1, P1-2, P1-3, P2-5). **La clase:** *un documento
+financiero sale con un dato de cartera que nadie leyó de SU fila* — y su
+gemela, *encolar le pregunta a Siesa dentro del request*.
+
+| | Qué pasaba | Ahora |
+|---|---|---|
+| **P1-1** | «Enviar todo a Siesa» leía por parada la factura, la cabecera (dos veces) y la cartera del NIT: 2–3 s medidos en producción; el PWA corta a los 25 s y el segundo clic corría otra pasada | Encolar **no lee Siesa** (`_procesar_recaudo`, `_encolar_*`; `_obtener_tercero` y `_resolver_cuenta_cxc` se borraron). La devolución se amarra a la factura donde ya se amarraba con red (recepción); la liquidación informa el problema ya escrito |
+| **P1-2** | Cabecera fallida → `tercero_nit=''`; cartera fallida → UN vacía que el gateway rellenaba con `SIESA_UNIDAD_NEGOCIO` (`001`; la cartera real es `99`); «Reintentar» reenviaba igual | El ejecutor resuelve **justo antes del POST** tercero, sucursal, cuenta, UN y CO de la fila exacta del documento, y el monto si se encoló sin él (`envio_liquidacion.resolver_envio`, la misma política `monto_rc`). Sin fila o sin Siesa: **espera** (`DependenciaPendiente`, 10 min, sin gastar intento); pasado `LIQUIDACION_ESPERA_SIESA_HORAS`, `DatoQueFalta` (FALLIDO sin reintento, con el pedido y quién pone el dato). El gateway no sale sin los tres (`exigir_datos_del_cruce`) |
+| **P1-3** | «¿Entró?» se preguntaba en el mismo `except` del POST (la cartera indexa en minutos); la tarjeta no decía qué buscar; «No está» bajaba la bandera sin evidencia | Verificación diferida **en la cola**: lecturas a los +15 min y +2 h del intento (`PLAN_VERIFICACION_MIN`, `intento_rc_en` en el payload), por saldo y —si se registra— por `CONNEKTA_CONSULTA_RC_RECIENTES`. Nunca reenvía. Al rendirse, `SIN_VERIFICAR` con documento, CO, fecha, tercero, valor y factura (`que_buscar_en_siesa`). **«No está» exige una lectura automática en ese momento con el saldo intacto** ≥ 15 min después del intento |
+| **P2-5** | `cxc_cruce._match` no comparaba el CO; en producción la numeración de FE se solapa | Lectura exacta `get_cxc_de_factura(co, tipo, consec)` (una página, no traga errores) + `cxc_cruce.fila_unica` (dos filas = ambigua, no se elige); `fila_de_la_factura`/`esta_saldada` aceptan `co` y lo usan cartera, preview, informe de cobro y vencimiento de la NC. El CO sale de `pedido_clave` o, sin él, de `CONNEKTA_CENTRO_OP` (`co_de_la_factura`) |
+| Tarjeta | «Parada #id», JSON crudo, «Reintentar» siempre, «/3» | Pedido, cliente, factura, valor y el mensaje en palabras (`describir_envio`); sin «Reintentar» ante un dato que falta o un envío sin verificar (el servidor lo decide: `puede_reintentar`) |
+
+**Verificado en producción (2026-09-27, solo GET):** FE-17062, 17065 y 17070
+existen en el CO 003 (7–8 sep) y en el CO 004 (25 sep), de clientes
+distintos. Sin CO la consulta trae las dos; `get_cxc_de_factura` con CO trae
+exactamente la del CO pedido (0,27–0,43 s), y `leer_cruce` la resuelve por la
+**FACTURA** (la del PEDIDO sale vacía: la cartera de las FE del WMS se indexa
+por la FE, 50 de 50 medidas). Todas con `f253_id=13050501`, UN `99`,
+sucursal `001`.
+
+**Trinquetes** (`tests/test_envio_liquidacion.py`, AST con inventario que solo
+encoge, meta-tests y pisos): nada alcanzable desde `liquidar_ruta_siesa` lee
+Siesa (y en ejecución, con el gateway real fuera de simulación y `_get`
+reventando); todo `trigger_recibo_caja`/`trigger_documento_contable` de `app/`
+lleva `resolver_envio` antes **en su mismo bloque** (inventario: los dos
+delegados del gateway); los dos conectores piden `exigir_datos_del_cruce` y no
+leen `unidad_negocio`/`cxc_auxiliar`. `test_politica_cobro` exige que el monto
+del ejecutor salga de `monto_rc`. Los tests que miraban el payload recién
+encolado corren la misma resolución (`tests/_envio_liq.py`, no una copia).
+
+**Lo que NO cubre, dicho:**
+- **Siesa caído deja de caer al monto declarado**: el RC espera. Es la
+  decisión «Siesa caído = se para todo»; un RC de las 19:00 con Siesa caído
+  sale cuando Siesa vuelva, o se declara a las 24 h.
+- **El orden PEDIDO → FACTURA** de la lectura se conservó (la política de
+  `cxc_cruce`): cuesta una lectura vacía de más por documento (0,3 s en la
+  cola). La afirmación de «El recibo de caja duplicado» de que los campos de
+  cruce traen el PEDIDO **no es la regla de las FE del WMS** (van por la FE).
+- **`CONNEKTA_CONSULTA_RC_RECIENTES` no existe en Siesa todavía** (la tiene
+  que registrar el consultor, con `f200_id`): hasta entonces la verificación
+  diferida es solo por saldo.
+- La retención espera al RC por la bandera (`siesa_rc_triggered`), no por su
+  desenlace: con el RC verificándose, la retención puede salir antes.
+- Un job de antes de este cambio que quedó FALLIDO sin verificar no tiene
+  `saldo_antes_rc` en todos los casos: «No está» usa entonces «la factura no
+  tiene ningún crédito aplicado».
 
 ---
 

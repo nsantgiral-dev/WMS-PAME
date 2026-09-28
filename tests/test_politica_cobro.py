@@ -95,15 +95,19 @@ class TestDecisionDeRetencion:
 
 
 def _procesar(r):
+    """«Liquidar ruta» y, con los mismos dobles de Siesa, lo que el ejecutor
+    resuelve antes del POST (`envio_liquidacion.resolver_envio`): desde el
+    2026-09-27 el monto del botón masivo lo calcula el ejecutor (P1-1)."""
+    from app.extensions import db as _db
     from app.services.liquidacion_service import _procesar_recaudo
+    from tests._envio_liq import resolver_cola
     with patch('app.services.connekta_gateway.connekta.get_rowids_factura',
                return_value=[dict(LINEA)]), \
-            patch('app.services.liquidacion_service._obtener_tercero',
-                  return_value=('900', '001')), \
-            patch('app.services.liquidacion_service._resolver_cuenta_cxc',
-                  return_value=('003', '13050501', '99')), \
             patch('app.services.fe_resolver.resolver_fe', return_value=('FEW', '1')):
-        return _procesar_recaudo(r, 'notas', admin_id=1)
+        res = _procesar_recaudo(r, 'notas', admin_id=1)
+        _db.session.commit()
+        resolver_cola(r.id)
+        return res
 
 
 def _jobs(tipo, rid):
@@ -128,8 +132,11 @@ class TestElBotonMasivoLeeLaPolitica:
         """El cliente descontó la retención y la oficina dijo que no tenía
         derecho: ni NI, y el RC no sale por menos de la factura (la diferencia
         la bloquea el guard, que es la regla de «Registrar cobro»)."""
+        from app.services.siesa_job_service import DatoQueFalta
         r = recaudo(motivo='RETEFUENTE_2.5', confirmada=False, monto=1000000 - self.RET)
-        with pytest.raises(ValueError, match='diferencia'):
+        # El guard ya no corre al encolar (P1-1): el ejecutor no deja salir el
+        # recibo por menos de la factura y lo declara con quién lo corrige.
+        with pytest.raises(DatoQueFalta, match='diferencia'):
             _procesar(r)
         assert _jobs('DOCUMENTO_CONTABLE_RET', r.id) == []
 
@@ -492,9 +499,44 @@ def montos_de_rc(fuentes):
                     continue
                 arg = c.args[_POS_MONTO] if len(c.args) > _POS_MONTO else next(
                     (k.value for k in c.keywords if k.arg == 'monto'), None)
-                ok = isinstance(arg, ast.Name) and asignados.get(arg.id) == {'monto_rc'}
+                # `None` literal: el monto lo calcula el ejecutor justo antes del
+                # POST (P1-1, 2026-09-27) — con `monto_rc` también, y eso lo
+                # exige `montos_del_ejecutor` abajo.
+                ok = ((isinstance(arg, ast.Name) and asignados.get(arg.id) == {'monto_rc'})
+                      or (isinstance(arg, ast.Constant) and arg.value is None))
                 out[f'{archivo}::{nombre}:{c.lineno}'] = ok
     return out
+
+
+#: Las funciones que calculan el monto de un recibo encolado sin monto.
+EJECUTOR_DEL_MONTO = ('app/services/envio_liquidacion.py', 'monto_del_recibo')
+
+
+def montos_del_ejecutor(src):
+    """`(total, malos)`: los `return` de `monto_del_recibo`; malo el que no
+    devuelve una llamada a `monto_rc` ni un nombre asignado desde ella."""
+    arbol = ast.parse(src)
+    fn = next(f for n, f in _funciones_con_nombre(arbol) if n == EJECUTOR_DEL_MONTO[1])
+    asignados = {}
+    for n in ast.walk(fn):
+        if isinstance(n, ast.Assign) and isinstance(n.value, ast.Call):
+            for t in n.targets:
+                if isinstance(t, ast.Name):
+                    asignados.setdefault(t.id, set()).add(_nombre(n.value))
+        elif isinstance(n, (ast.Assign, ast.AugAssign)):
+            for t in (n.targets if isinstance(n, ast.Assign) else [n.target]):
+                if isinstance(t, ast.Name):
+                    asignados.setdefault(t.id, set()).add('<expresión>')
+    total, malos = 0, []
+    for n in ast.walk(fn):
+        if isinstance(n, ast.Return) and n.value is not None:
+            total += 1
+            v = n.value
+            ok = ((isinstance(v, ast.Call) and _nombre(v) == 'monto_rc')
+                  or (isinstance(v, ast.Name) and asignados.get(v.id) == {'monto_rc'}))
+            if not ok:
+                malos.append(n.lineno)
+    return total, malos
 
 
 class TestElReciboSalePorMontoRC:
@@ -513,12 +555,33 @@ class TestElReciboSalePorMontoRC:
                "def restado():\n    _encolar_recibo_caja(r, t, c, n, s, monto - ret, f)\n"
                "def mixto():\n    m = monto_rc(r)\n    m = m - ret\n"
                "    _encolar_recibo_caja(r, t, c, n, s, m, f)\n")
+        src += ("def al_ejecutor():\n    _encolar_recibo_caja(r, t, c, n, s, None, f)\n"
+                "def cero():\n    _encolar_recibo_caja(r, t, c, n, s, 0, f)\n")
         s = montos_de_rc({'x.py': src})
         assert {k.split(':')[2]: v for k, v in s.items()} == {
-            'bien': True, 'crudo': False, 'restado': False, 'mixto': False}
+            'bien': True, 'crudo': False, 'restado': False, 'mixto': False,
+            'al_ejecutor': True, 'cero': False}
 
     def test_piso(self):
         assert len(montos_de_rc(_fuentes())) >= 3
+
+    def test_el_ejecutor_tambien_saca_el_monto_de_monto_rc(self):
+        """El botón masivo encola sin monto y el ejecutor lo calcula
+        (`envio_liquidacion.monto_del_recibo`): con la misma política."""
+        total, malos = montos_del_ejecutor((RAIZ / EJECUTOR_DEL_MONTO[0]).read_text(encoding='utf-8'))
+        assert total >= 2, 'el detector no encontró los return del ejecutor'
+        assert not malos, f'monto_del_recibo devuelve un monto que no es de monto_rc (líneas {malos})'
+
+    def test_meta_del_ejecutor(self):
+        src = ("def monto_del_recibo(r):\n    if x:\n        return pc.monto_rc(r)\n"
+               "    m = pc.monto_rc(r)\n    return m\n")
+        assert montos_del_ejecutor(src) == (2, [])
+        src_mal = ("def monto_del_recibo(r):\n    if x:\n        return pc.monto_rc(r)\n"
+                   "    return float(r.monto_cobrado)\n")
+        assert montos_del_ejecutor(src_mal)[1] == [4]
+        src_mix = ("def monto_del_recibo(r):\n    m = pc.monto_rc(r)\n    m = m - 1\n"
+                   "    return m\n")
+        assert montos_del_ejecutor(src_mix)[1] == [4]
 
 
 # ── 4.3 · Toda escritura del cobro pregunta si se puede ─────────────────────

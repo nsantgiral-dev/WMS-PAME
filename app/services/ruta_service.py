@@ -757,13 +757,18 @@ class RutaService:
                     and consultas < RutaService._TOPE_CARTERA_DESPACHO):
                 consultas += 1
                 try:
-                    from app.services import cxc_cruce as _cx
-                    from app.services.liquidacion_service import _obtener_tercero
-                    nit, _suc = _obtener_tercero(t)
-                    saldada = (_cx.esta_saldada(
-                        connekta.get_cxc_general(nit), t.tipo_docto_pedido_siesa,
-                        t.consec_docto_pedido_siesa, t.fe_tipo, t.fe_consec)
-                        if nit else None)
+                    # La fila de cartera del documento exacto, con su CO
+                    # (`envio_liquidacion.leer_cruce`): antes la cabecera del
+                    # pedido + toda la cartera del NIT y un match sin CO — la
+                    # numeración de las FE se solapa entre CO (2026-09-27).
+                    from app.services import envio_liquidacion as _env
+                    from app.services.cxc_cruce import TOLERANCIA as _TOL_INF
+                    try:
+                        _cr = _env.leer_cruce(t, t.fe_tipo, t.fe_consec,
+                                              _env.co_de_la_factura(t, connekta), connekta)
+                        saldada = None if _cr.saldo is None else _cr.saldo <= _TOL_INF
+                    except (_env.CarteraSinFila, _env.CruceInvalido):
+                        saldada = None
                 except Exception as e:  # noqa: BLE001 — un aviso no insiste
                     logger.warning('[RUTAS] informe de cobro: cartera no disponible (%s); '
                                    'no se sigue preguntando', e)

@@ -176,17 +176,17 @@ class TestFormaPagoMapping:
                 self.gw.trigger_recibo_caja(
                     tercero_nit='900123456', sucursal='001', monto=1000,
                     forma_pago='CHEQUE', tipo_docto_fe='FE', consec_fe='1',
-                )
+                cuenta_cxc='13050501', unidad_negocio='99')
             with pytest.raises(ValueError, match='EXENTO'):
                 self.gw.trigger_recibo_caja(
                     tercero_nit='900123456', sucursal='001', monto=1000,
                     forma_pago='EXENTO', tipo_docto_fe='FE', consec_fe='1',
-                )
+                cuenta_cxc='13050501', unidad_negocio='99')
             with pytest.raises(ValueError, match='BITCOIN'):
                 self.gw.trigger_recibo_caja(
                     tercero_nit='900123456', sucursal='001', monto=1000,
                     forma_pago='BITCOIN', tipo_docto_fe='FE', consec_fe='1',
-                )
+                cuenta_cxc='13050501', unidad_negocio='99')
 
     def test_medios_default_correctos(self):
         assert self.gw.medio_pago_efectivo == 'EFE'

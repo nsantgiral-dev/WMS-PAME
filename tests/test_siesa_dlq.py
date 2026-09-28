@@ -3,6 +3,8 @@ Tier 3 — Tests DLQ: pre-flag, secuencialidad NC→RC→DC, idempotencia.
 Garantiza que los patrones anti-duplicado y de ordenamiento funcionan.
 """
 import pytest
+
+from tests._envio_liq import cartera_en, fila_cartera
 from unittest.mock import patch, MagicMock
 from datetime import datetime
 
@@ -77,6 +79,8 @@ class TestPreFlagRC:
             return {'codigo': 0}
 
         with patch('app.services.connekta_gateway.connekta') as mc:
+
+            cartera_en(mc, [fila_cartera(tipo='PD', consec='100', total_db=1500000)])
             mc.trigger_recibo_caja = mock_trigger
             mc.modo_simulacion = False
             mc.modo_ensayo = False
@@ -107,6 +111,7 @@ class TestPreFlagRC:
 
         montos_recibidos = []
         with patch('app.services.connekta_gateway.connekta') as mc:
+            cartera_en(mc, [fila_cartera(tipo='PD', consec='100', total_db=1500000)])
             mc.trigger_recibo_caja.side_effect = (
                 lambda **kw: montos_recibidos.append(kw['monto']) or {'codigo': 0})
             mc.modo_simulacion = False
@@ -127,14 +132,12 @@ class TestPreFlagRC:
 
         from app.services.connekta_gateway import ConnektaRechazado
         with patch('app.services.connekta_gateway.connekta') as mc:
+            cartera_en(mc, [fila_cartera(tipo='PD', consec='100', total_db=1500000)])
             mc.trigger_recibo_caja.side_effect = ConnektaRechazado(
                 'Siesa rechazó el documento (codigo=1): el documento de cruce no existe')
             mc.modo_simulacion = False
             mc.modo_ensayo = False
-            mc.get_cxc_general.return_value = [
-                {'f353_id_tipo_docto_cruce': 'PD', 'f353_consec_docto_cruce': '100',
-                 'f353_total_db': 1500000, 'f353_total_cr': 0},
-            ]
+            cartera_en(mc, [fila_cartera(tipo='PD', consec='100', total_db=1500000, total_cr=0)])
             from app.services.siesa_job_service import _ejecutar_job
             with pytest.raises(ConnektaRechazado):
                 _ejecutar_job(job)
@@ -148,20 +151,21 @@ class TestPreFlagRC:
         RC de contado con retención sale NETO y el DC va después: tras un
         recibo que SÍ entró la factura conserva el saldo de la retención, y
         con Siesa procesando (Regla 20) puede no haber bajado todavía. Saldo
-        igual al de antes no prueba nada: la bandera queda puesta y se
-        declara (FALLIDO sin reintento)."""
+        igual al de antes no prueba nada: la bandera queda puesta y el envío
+        espera a que el WMS vuelva a leer la cartera (+15 min, +2 h, P1-3);
+        nunca se reenvía."""
         recaudo = recaudo_factory()
         job = self._make_rc_job(db, recaudo)
         db.session.commit()
 
-        from app.services.connekta_gateway import ConnektaResultadoDesconocido
-        con_saldo = [{'f353_id_tipo_docto_cruce': 'PD', 'f353_consec_docto_cruce': '100',
-                      'f353_total_db': 1500000, 'f353_total_cr': 0}]
+        from app.services.siesa_job_service import DependenciaPendiente as ConnektaResultadoDesconocido
+        con_saldo = [fila_cartera(tipo='PD', consec='100', total_db=1500000, total_cr=0)]
         with patch('app.services.connekta_gateway.connekta') as mc:
+            cartera_en(mc, [fila_cartera(tipo='PD', consec='100', total_db=1500000)])
             mc.trigger_recibo_caja.side_effect = Exception('HTTP 502 Bad Gateway')
             mc.modo_simulacion = False
             mc.modo_ensayo = False
-            mc.get_cxc_general.return_value = con_saldo
+            cartera_en(mc, con_saldo)
             from app.services.siesa_job_service import _ejecutar_job
             with pytest.raises(ConnektaResultadoDesconocido):
                 _ejecutar_job(job)
@@ -181,19 +185,24 @@ class TestPreFlagRC:
         documento financiero duplicado hay que reversarlo a mano. El lado
         conservador es conservar la bandera y declararlo: el job ya no termina
         COMPLETADO con `verificacion_imposible` (VTA-60 y la reconciliación lo
-        contaban como «llegó»): levanta `ConnektaResultadoDesconocido`, que la
-        cola manda a FALLIDO sin reintento.
+        contaban como «llegó»). Desde el 2026-09-27 (P1-3) el envío espera
+        sin gastar intento y el WMS vuelve a leer la cartera a los +15 min y a
+        las +2 h; si ninguna lectura lo prueba, FALLIDO sin reintento
+        (`test_rc_verificado_por_documento.py`).
         """
         recaudo = recaudo_factory()
         job = self._make_rc_job(db, recaudo)
         db.session.commit()
 
-        from app.services.connekta_gateway import ConnektaResultadoDesconocido
+        from app.services.siesa_job_service import DependenciaPendiente as ConnektaResultadoDesconocido
         with patch('app.services.connekta_gateway.connekta') as mc:
+            cartera_en(mc, [fila_cartera(tipo='PD', consec='100', total_db=1500000)])
             mc.trigger_recibo_caja.side_effect = Exception('Connekta timeout')
             mc.modo_simulacion = False
             mc.modo_ensayo = False
-            mc.get_cxc_general.side_effect = Exception('Siesa tampoco responde')
+            # La lectura de antes del POST responde; la de después, no.
+            cartera_en(mc, [fila_cartera(tipo='PD', consec='100', total_db=1500000)],
+                       Exception('Siesa tampoco responde'))
             from app.services.siesa_job_service import _ejecutar_job
             with pytest.raises(ConnektaResultadoDesconocido):
                 _ejecutar_job(job)
@@ -210,6 +219,8 @@ class TestPreFlagRC:
         db.session.commit()
 
         with patch('app.services.connekta_gateway.connekta') as mc:
+
+            cartera_en(mc, [fila_cartera(tipo='PD', consec='100', total_db=1500000)])
             mc.modo_simulacion = False
             from app.services.siesa_job_service import _ejecutar_job
             resultado = _ejecutar_job(job)
@@ -220,14 +231,15 @@ class TestPreFlagRC:
     def test_bandera_puesta_sin_desenlace_no_es_idempotente(self, app, db, recaudo_factory):
         """La bandera es de PRE-envío: puesta sin desenlace confirmado (un
         intento anterior se cortó, o no se pudo verificar) no es «ya llegó».
-        Completar decía «llegó» sin saberlo; reenviar puede duplicar. Se
-        declara y no se reenvía."""
+        Completar decía «llegó» sin saberlo; reenviar puede duplicar. No se
+        reenvía: el WMS lee la cartera y espera la próxima lectura (P1-3)."""
         recaudo = recaudo_factory(rc=True)
         job = self._make_rc_job(db, recaudo)
         db.session.commit()
 
-        from app.services.connekta_gateway import ConnektaResultadoDesconocido
+        from app.services.siesa_job_service import DependenciaPendiente as ConnektaResultadoDesconocido
         with patch('app.services.connekta_gateway.connekta') as mc:
+            cartera_en(mc, [fila_cartera(tipo='PD', consec='100', total_db=1500000)])
             mc.modo_simulacion = False
             from app.services.siesa_job_service import _ejecutar_job
             with pytest.raises(ConnektaResultadoDesconocido):
@@ -250,12 +262,11 @@ class TestPreFlagRC:
         db.session.commit()
 
         with patch('app.services.connekta_gateway.connekta') as mc:
+
+            cartera_en(mc, [fila_cartera(tipo='PD', consec='100', total_db=1500000)])
             mc.modo_simulacion = False
             mc.modo_ensayo = False
-            mc.get_cxc_general.return_value = [
-                {'f353_id_tipo_docto_cruce': 'PD', 'f353_consec_docto_cruce': '100',
-                 'f353_total_db': 1500000, 'f353_total_cr': 1500000},
-            ]
+            cartera_en(mc, [fila_cartera(tipo='PD', consec='100', total_db=1500000, total_cr=1500000)])
             from app.services.siesa_job_service import _ejecutar_job
             resultado = _ejecutar_job(job)
 
@@ -273,18 +284,15 @@ class TestPreFlagRC:
         db.session.commit()
 
         with patch('app.services.connekta_gateway.connekta') as mc:
+
+            cartera_en(mc, [fila_cartera(tipo='PD', consec='100', total_db=1500000)])
             mc.modo_simulacion = False
             mc.modo_ensayo = False
             mc.trigger_recibo_caja.side_effect = Exception('Connekta timeout')
             # Primera llamada (pre-flight, antes del POST): aún con saldo, no
             # bloquea el intento. Segunda llamada (dentro del except, tras el
             # timeout): ya saldada — confirma que el POST sí entró a Siesa.
-            mc.get_cxc_general.side_effect = [
-                [{'f353_id_tipo_docto_cruce': 'PD', 'f353_consec_docto_cruce': '100',
-                  'f353_total_db': 1500000, 'f353_total_cr': 0}],
-                [{'f353_id_tipo_docto_cruce': 'PD', 'f353_consec_docto_cruce': '100',
-                  'f353_total_db': 1500000, 'f353_total_cr': 1500000}],
-            ]
+            cartera_en(mc, [fila_cartera(tipo='PD', consec='100', total_db=1500000, total_cr=0)], [fila_cartera(tipo='PD', consec='100', total_db=1500000, total_cr=1500000)])
             from app.services.siesa_job_service import _ejecutar_job
             resultado = _ejecutar_job(job)
 
@@ -312,6 +320,8 @@ class TestSecuencialidad:
         db.session.commit()
 
         with patch('app.services.connekta_gateway.connekta') as mc:
+
+            cartera_en(mc, [fila_cartera(tipo='PD', consec='100', total_db=1500000)])
             mc.modo_simulacion = False
             from app.services.siesa_job_service import _ejecutar_job
             from app.services.siesa_job_service import DependenciaPendiente
@@ -337,6 +347,8 @@ class TestSecuencialidad:
         db.session.commit()
 
         with patch('app.services.connekta_gateway.connekta') as mc:
+
+            cartera_en(mc, [fila_cartera(tipo='PD', consec='100', total_db=1500000)])
             mc.modo_simulacion = False
             from app.services.siesa_job_service import _ejecutar_job
             from app.services.siesa_job_service import DependenciaPendiente
@@ -364,6 +376,8 @@ class TestSecuencialidad:
         db.session.commit()
 
         with patch('app.services.connekta_gateway.connekta') as mc:
+
+            cartera_en(mc, [fila_cartera(tipo='PD', consec='100', total_db=1500000)])
             mc.modo_simulacion = False
             from app.services.siesa_job_service import _ejecutar_job
             from app.services.siesa_job_service import DependenciaPendiente
@@ -392,6 +406,8 @@ class TestSecuencialidad:
         db.session.commit()
 
         with patch('app.services.connekta_gateway.connekta') as mc:
+
+            cartera_en(mc, [fila_cartera(tipo='PD', consec='100', total_db=1500000)])
             mc.modo_simulacion = False
             from app.services.siesa_job_service import ErrorDeterminista, _ejecutar_job
             with pytest.raises(ErrorDeterminista, match='no está en la cola'):
@@ -414,6 +430,8 @@ class TestSecuencialidad:
         db.session.commit()
 
         with patch('app.services.connekta_gateway.connekta') as mc:
+
+            cartera_en(mc, [fila_cartera(tipo='PD', consec='100', total_db=1500000)])
             mc.modo_simulacion = False
             from app.services.siesa_job_service import _ejecutar_job
             from app.services.siesa_job_service import DependenciaPendiente
@@ -434,6 +452,8 @@ class TestSecuencialidad:
         db.session.commit()
 
         with patch('app.services.connekta_gateway.connekta') as mc:
+
+            cartera_en(mc, [fila_cartera(tipo='PD', consec='100', total_db=1500000)])
             mc.trigger_documento_contable.return_value = {'codigo': 0}
             mc.modo_simulacion = False
             mc.modo_ensayo = False
@@ -488,6 +508,8 @@ class TestNotaCreditoDevolucionCliente:
         db.session.commit()
 
         with patch('app.services.connekta_gateway.connekta') as mc:
+
+            cartera_en(mc, [fila_cartera(tipo='PD', consec='100', total_db=1500000)])
             mc.modo_simulacion = False
             from app.services.siesa_job_service import _ejecutar_job
             resultado = _ejecutar_job(job)
@@ -505,6 +527,7 @@ class TestNotaCreditoDevolucionCliente:
             'items_devueltos': [{'codigo': 'PROD-001', 'cantidad_devuelta': 4}]})
         db.session.commit()
         with patch('app.services.connekta_gateway.connekta') as mc:
+            cartera_en(mc, [fila_cartera(tipo='PD', consec='100', total_db=1500000)])
             mc.modo_simulacion = False
             with pytest.raises(sjs._ResultadoDesconocido):
                 sjs._ejecutar_job(job)
@@ -522,6 +545,8 @@ class TestNotaCreditoDevolucionCliente:
         db.session.commit()
 
         with patch('app.services.connekta_gateway.connekta') as mc:
+
+            cartera_en(mc, [fila_cartera(tipo='PD', consec='100', total_db=1500000)])
             mc.modo_simulacion = False
             mc.causal_devolucion_default = '01'
             mc.motivo_ventas = '01'
@@ -600,6 +625,8 @@ class TestNotaCreditoDevolucionCliente:
         db.session.commit()
 
         with patch('app.services.connekta_gateway.connekta') as mc:
+
+            cartera_en(mc, [fila_cartera(tipo='PD', consec='100', total_db=1500000)])
             mc.modo_simulacion = False
             mc.causal_devolucion_default = '01'
             mc.motivo_ventas = '01'
@@ -637,6 +664,8 @@ class TestNotaCreditoDevolucionCliente:
         db.session.commit()
 
         with patch('app.services.connekta_gateway.connekta') as mc:
+
+            cartera_en(mc, [fila_cartera(tipo='PD', consec='100', total_db=1500000)])
             mc.modo_simulacion = False
             mc.causal_devolucion_default = '01'
             mc.motivo_ventas = '01'

@@ -19,6 +19,8 @@ from unittest.mock import patch
 
 import pytest
 
+from tests._envio_liq import cartera_en, fila_cartera
+
 
 @pytest.fixture
 def recaudo(db, almacen):
@@ -102,9 +104,8 @@ class TestElDLQLoEscribe:
     def test_rc_enviado(self, app, db, recaudo):
         from app.services.siesa_job_service import _ejecutar_job
         job = _job(db, 'RECIBO_CAJA', recaudo)
-        with patch('app.services.connekta_gateway.connekta') as mc, \
-                patch('app.services.siesa_job_service._saldo_factura_en_siesa',
-                      return_value=5000.0):
+        with patch('app.services.connekta_gateway.connekta') as mc:
+            cartera_en(mc, [fila_cartera(tipo='FE', consec='5020', total_db=5000.0)])
             mc.trigger_recibo_caja.return_value = {'codigo': 0, 'consecutivo': 2744}
             _ejecutar_job(job)
         db.session.refresh(recaudo)
@@ -113,9 +114,8 @@ class TestElDLQLoEscribe:
     def test_rc_en_ensayo_no_anota(self, app, db, recaudo):
         from app.services.siesa_job_service import _ejecutar_job
         job = _job(db, 'RECIBO_CAJA', recaudo)
-        with patch('app.services.connekta_gateway.connekta') as mc, \
-                patch('app.services.siesa_job_service._saldo_factura_en_siesa',
-                      return_value=5000.0):
+        with patch('app.services.connekta_gateway.connekta') as mc:
+            cartera_en(mc, [fila_cartera(tipo='FE', consec='5020', total_db=5000.0)])
             mc.trigger_recibo_caja.return_value = {'modo_ensayo': True}
             _ejecutar_job(job)
         db.session.refresh(recaudo)
@@ -124,25 +124,35 @@ class TestElDLQLoEscribe:
     def test_rc_ya_saldada(self, app, db, recaudo):
         from app.services.siesa_job_service import _ejecutar_job
         job = _job(db, 'RECIBO_CAJA', recaudo)
-        with patch('app.services.connekta_gateway.connekta'), \
-                patch('app.services.siesa_job_service._saldo_factura_en_siesa',
-                      return_value=0.0):
+        with patch('app.services.connekta_gateway.connekta') as mc:
+            cartera_en(mc, [fila_cartera(tipo='FE', consec='5020', total_db=0.0)])
             _ejecutar_job(job)
         db.session.refresh(recaudo)
         assert recaudo.siesa_rc_resultado == 'YA_SALDADA'
 
     def test_rc_que_no_se_puede_verificar(self, app, db, recaudo):
-        """El POST falla sin que Siesa diga que no y el saldo no se puede leer
-        después: el job va a FALLIDO sin reintento (ya no COMPLETADO con
-        `verificacion_imposible`, que VTA-60 y la reconciliación contaban
-        como «llegó») y el recaudo queda SIN_VERIFICAR."""
+        """El POST falla sin que Siesa diga que no y la cartera no se puede
+        leer después: el envío espera y vuelve a leer (+15 min, +2 h, P1-3); en
+        la última lectura sin prueba va a FALLIDO sin reintento (ya no
+        COMPLETADO con `verificacion_imposible`, que VTA-60 y la
+        reconciliación contaban como «llegó») y el recaudo queda
+        SIN_VERIFICAR."""
+        from datetime import datetime, timedelta
         from app.services.siesa_job_service import _run_dlq_jobs
         job = _job(db, 'RECIBO_CAJA', recaudo)
         with patch('app.services.connekta_gateway.connekta') as mc, \
-                patch('app.services.siesa_job_service._crear_alerta_admin'), \
-                patch('app.services.siesa_job_service._saldo_factura_en_siesa',
-                      side_effect=[5000.0, None]):
+                patch('app.services.siesa_job_service._crear_alerta_admin'):
+            cartera_en(mc, [fila_cartera(tipo='FE', consec='5020', total_db=5000.0)],
+                       Exception('caída'))
             mc.trigger_recibo_caja.side_effect = Exception('timeout')
+            _run_dlq_jobs()
+            db.session.refresh(job)
+            assert job.estado == 'PENDIENTE' and job.intentos == 0
+            p = json.loads(job.payload)
+            p['intento_rc_en'] = (datetime.utcnow() - timedelta(minutes=121)).isoformat()
+            job.payload = json.dumps(p)
+            job.proximo_intento = None
+            db.session.commit()
             _run_dlq_jobs()
         db.session.refresh(recaudo)
         db.session.refresh(job)
@@ -155,6 +165,7 @@ class TestElDLQLoEscribe:
         db.session.commit()
         job = _job(db, 'DOCUMENTO_CONTABLE_RET', recaudo, cuenta_puc='13551501')
         with patch('app.services.connekta_gateway.connekta') as mc:
+            cartera_en(mc, [fila_cartera(tipo='FE', consec='5020', total_db=5000.0)])
             mc.trigger_documento_contable.return_value = {'codigo': 0}
             _ejecutar_job(job)
         db.session.refresh(recaudo)
@@ -173,6 +184,7 @@ class TestElDLQLoEscribe:
             # Un rechazo EXPLÍCITO (4xx / `codigo != 0`): es el único que se
             # reintenta hasta agotar. Un error sin respuesta clara ya no.
             from app.services.connekta_gateway import ConnektaRechazado
+            cartera_en(mc, [fila_cartera(tipo='FE', consec='5020', total_db=5000.0)])
             mc.trigger_documento_contable.side_effect = ConnektaRechazado('Siesa rechazó')
             _run_dlq_jobs()
         db.session.refresh(recaudo)
@@ -189,8 +201,7 @@ class TestElDLQLoEscribe:
             raise RuntimeError('columna rota')
         monkeypatch.setattr(RecaudoEntrega, 'anotar_documento_siesa', _revienta)
         job = _job(db, 'RECIBO_CAJA', recaudo)
-        with patch('app.services.connekta_gateway.connekta') as mc, \
-                patch('app.services.siesa_job_service._saldo_factura_en_siesa',
-                      return_value=5000.0):
+        with patch('app.services.connekta_gateway.connekta') as mc:
+            cartera_en(mc, [fila_cartera(tipo='FE', consec='5020', total_db=5000.0)])
             mc.trigger_recibo_caja.return_value = {'codigo': 0}
             assert _ejecutar_job(job) == {'codigo': 0}

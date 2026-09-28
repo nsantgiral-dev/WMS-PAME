@@ -106,9 +106,8 @@ def _recaudo(ruta, t):
 
 def _procesar(recaudo, db):
     from app.services.liquidacion_service import _procesar_recaudo
-    with patch('app.services.liquidacion_service._obtener_tercero',
-               return_value=('900123456', '001')):
-        r = _procesar_recaudo(recaudo, 'test contado')
+    # Liquidar no lee Siesa desde el 2026-09-27 (P1-1): sin dobles de tercero.
+    r = _procesar_recaudo(recaudo, 'test contado')
     db.session.commit()
     return r
 
@@ -650,9 +649,7 @@ class TestLaLiquidacion:
                                       forma_pago='CREDITO', monto_cobrado=0,
                                       fecha_confirmacion=datetime.utcnow()))
         db.session.commit()
-        with patch('app.services.liquidacion_service._obtener_tercero',
-                   return_value=('900', '001')):
-            res = LiquidacionService.liquidar_ruta_siesa(ruta.id)
+        res = LiquidacionService.liquidar_ruta_siesa(ruta.id)
         assert res['credito_no_autorizado'] == 1 and res['credito_omitidos'] == 1
         assert [e['codigo'] for e in res['errores']] == ['credito_no_autorizado']
 

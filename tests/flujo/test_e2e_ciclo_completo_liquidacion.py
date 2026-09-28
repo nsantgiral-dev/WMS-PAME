@@ -50,6 +50,8 @@ import os
 from datetime import datetime, timezone
 
 import pytest
+
+from tests._envio_liq import liquidar_y_resolver as _liquidar_y_resolver
 from unittest.mock import patch
 
 from app.services.liquidacion_service import CATALOGO_RETENCIONES, monto_de_retencion
@@ -263,7 +265,7 @@ class TestEscenario01PedidoCompletoPagoCompleto:
                     'estado_entrega': 'ENTREGADO', 'forma_pago': 'EFECTIVO',
                     'monto_cobrado': neto,
                 })
-            resumen = LiquidacionService.liquidar_ruta_siesa(
+            resumen = _liquidar_y_resolver(
                 flujo.ruta_id, admin_id=admin_full)
 
         assert not resumen['errores']
@@ -317,7 +319,7 @@ class TestEscenario02PickingParcialMuelleReal:
                     'estado_entrega': 'ENTREGADO', 'forma_pago': 'EFECTIVO',
                     'monto_cobrado': neto,
                 })
-            resumen = LiquidacionService.liquidar_ruta_siesa(
+            resumen = _liquidar_y_resolver(
                 flujo.ruta_id, admin_id=admin_full)
 
         assert not resumen['errores']
@@ -380,7 +382,7 @@ class TestUnPedidoPorMotivoDeDescuento:
             # antes de que salga cualquier documento (política única,
             # 2026-09-25): sin esto el botón masivo emitía la NI igual.
             LiquidacionService.confirmar_retencion(recaudo_id, admin_full, True)
-            resumen = LiquidacionService.liquidar_ruta_siesa(
+            resumen = _liquidar_y_resolver(
                 flujo.ruta_id, admin_id=admin_full)
 
         assert not resumen['errores'], f'{motivo}: {resumen["errores"]}'
@@ -453,7 +455,7 @@ class TestPagoParcial:
                         'cantidad_entregada': entregado,
                     }],
                 })
-            resumen = LiquidacionService.liquidar_ruta_siesa(
+            resumen = _liquidar_y_resolver(
                 flujo.ruta_id, admin_id=admin_full)
 
             assert not resumen['errores']
@@ -526,7 +528,7 @@ class TestUnPedidoPorTipoDePago:
                     'estado_entrega': 'ENTREGADO', 'forma_pago': forma_pago,
                     'monto_cobrado': monto_cobrado,
                 })
-            resumen = LiquidacionService.liquidar_ruta_siesa(
+            resumen = _liquidar_y_resolver(
                 flujo.ruta_id, admin_id=admin_full)
 
         assert not resumen['errores'], f'{forma_pago}: {resumen["errores"]}'
@@ -595,7 +597,7 @@ class TestUnPedidoRechazado:
             bultos = Bulto.query.filter_by(tarea_id=flujo.packing_id).all()
             assert all(b.estado == EstadoBulto.RECHAZADO for b in bultos)
 
-            resumen = LiquidacionService.liquidar_ruta_siesa(
+            resumen = _liquidar_y_resolver(
                 flujo.ruta_id, admin_id=admin_full)
             assert not resumen['errores']
             assert resumen['nc_encolados'] == 1

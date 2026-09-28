@@ -95,6 +95,8 @@ class TestContract142888:
             consec_fe='5020',
             co_factura='001',
             cuenta_cxc='13050501',
+            # La UN de la fila de cartera: obligatoria desde el 2026-09-27.
+            unidad_negocio='99',
             notas='test RC',
         )
         defaults.update(kwargs)
@@ -213,12 +215,17 @@ class TestContract142888:
         cxc = payload['CxC'][0]
         assert cxc['F353_ID_AUXILIAR_DOCTO_CRUCE'] == '13050502'
 
-    def test_cxc_auxiliar_fallback(self):
-        """Sin cuenta_cxc, usa self.cxc_auxiliar como fallback."""
+    def test_sin_cuenta_de_cartera_no_sale(self):
+        """Sin `cuenta_cxc` NO sale (P1-2, 2026-09-27): antes caía a
+        `SIESA_CXC_AUXILIAR` (Regla 11 al revés). La cuenta es la `f253_id` de
+        la fila de cartera, que resuelve el ejecutor."""
+        from app.services.connekta_gateway import ConnektaPayloadInvalido
         gw = _make_gateway()
-        payload = self._capture_payload(gw, cuenta_cxc='')
-        cxc = payload['CxC'][0]
-        assert cxc['F353_ID_AUXILIAR_DOCTO_CRUCE'] == '13050501'
+        with patch.object(gw, '_post') as post, pytest.raises(ConnektaPayloadInvalido, match='f253_id'):
+            gw.trigger_recibo_caja(tercero_nit='900123456', sucursal='001', monto=1000.0,
+                                   forma_pago='EFECTIVO', tipo_docto_fe='FE', consec_fe='5020',
+                                   cuenta_cxc='', unidad_negocio='99')
+        post.assert_not_called()
 
     def test_un_real_de_la_factura_no_el_env_global(self):
         """PD1411/FE-1416 (2026-08-18): `SIESA_UNIDAD_NEGOCIO` fijo (001) se
@@ -228,17 +235,33 @@ class TestContract142888:
         cruce no matcheaba). `unidad_negocio` explícito debe ganarle al
         env var en las DOS secciones que lo usan (header y CxC)."""
         gw = _make_gateway()
-        payload = self._capture_payload(gw, unidad_negocio='99')
-        assert payload['RCyotrosingresos'][0]['F357_ID_UN'] == '99'
-        assert payload['CxC'][0]['F353_ID_UN_DOCTO_CRUCE'] == '99'
+        payload = self._capture_payload(gw, unidad_negocio='14')
+        assert payload['RCyotrosingresos'][0]['F357_ID_UN'] == '14'
+        assert payload['CxC'][0]['F353_ID_UN_DOCTO_CRUCE'] == '14'
 
-    def test_un_fallback_al_env_si_no_se_conoce_la_real(self):
-        """Sin `unidad_negocio` (fila de cartera no encontrada), sigue
-        cayendo al comportamiento previo — no rompe llamadores viejos."""
+    def test_sin_un_de_cartera_no_sale(self):
+        """Sin `unidad_negocio` NO sale (P1-2, 2026-09-27). Antes caía a
+        `SIESA_UNIDAD_NEGOCIO` — `001` en producción, cuando la cartera real es
+        `99` en el 100 % de las filas medidas: rechazo determinista cinco veces.
+        `ConnektaPayloadInvalido` es «no entró»: se puede revertir el pre-flag."""
+        from app.services.connekta_gateway import ConnektaNoEnviado, ConnektaPayloadInvalido
         gw = _make_gateway()
-        payload = self._capture_payload(gw)
-        assert payload['RCyotrosingresos'][0]['F357_ID_UN'] == (gw.unidad_negocio or '99')
-        assert payload['CxC'][0]['F353_ID_UN_DOCTO_CRUCE'] == (gw.unidad_negocio or '99')
+        with patch.object(gw, '_post') as post, pytest.raises(ConnektaPayloadInvalido, match='f353_id_un_cruce'):
+            gw.trigger_recibo_caja(tercero_nit='900123456', sucursal='001', monto=1000.0,
+                                   forma_pago='EFECTIVO', tipo_docto_fe='FE', consec_fe='5020',
+                                   cuenta_cxc='13050501', unidad_negocio='')
+        post.assert_not_called()
+        assert issubclass(ConnektaPayloadInvalido, ConnektaNoEnviado)
+
+    def test_sin_tercero_no_sale(self):
+        """El `tercero_nit=''` que dejaba una cabecera fallida (P1-2)."""
+        from app.services.connekta_gateway import ConnektaPayloadInvalido
+        gw = _make_gateway()
+        with patch.object(gw, '_post') as post, pytest.raises(ConnektaPayloadInvalido, match='tercero'):
+            gw.trigger_recibo_caja(tercero_nit='', sucursal='001', monto=1000.0,
+                                   forma_pago='EFECTIVO', tipo_docto_fe='FE', consec_fe='5020',
+                                   cuenta_cxc='13050501', unidad_negocio='99')
+        post.assert_not_called()
 
     def test_todos_decimal_21_chars(self):
         gw = _make_gateway()
@@ -270,6 +293,8 @@ class TestContract142882:
             consec_fe='5020',
             co_factura='001',
             cuenta_cxc='13050501',
+            # La UN de la fila de cartera: obligatoria desde el 2026-09-27.
+            unidad_negocio='99',
             notas='test DC retención',
         )
         defaults.update(kwargs)
@@ -300,7 +325,7 @@ class TestContract142882:
                 tercero_nit='900123456', sucursal='001', cuenta_puc='13551501',
                 monto=25000.0, base_gravable=1000000.0, tipo_docto_fe='FE',
                 consec_fe='5020',
-            )
+            cuenta_cxc='13050501', unidad_negocio='99')
         nombre_conector = mock_post.call_args[0][1]
         assert nombre_conector == 'API_v1_DocumentoContable'
 
@@ -437,17 +462,22 @@ class TestContract142882:
         cartera que cruza. `unidad_negocio` explícito debe ganarle al env var
         en las dos secciones que lo usan (Movimientocontable y MovimientoCxC)."""
         gw = _make_gateway()
-        payload = self._capture_payload(gw, unidad_negocio='99')
-        assert payload['Movimientocontable'][0]['F351_ID_UN'] == '99'
-        assert payload['MovimientoCxC'][0]['F351_ID_UN'] == '99'
+        payload = self._capture_payload(gw, unidad_negocio='14')
+        assert payload['Movimientocontable'][0]['F351_ID_UN'] == '14'
+        assert payload['MovimientoCxC'][0]['F351_ID_UN'] == '14'
 
-    def test_un_fallback_al_env_si_no_se_conoce_la_real(self):
-        """Sin `unidad_negocio` (fila de cartera no encontrada), sigue
-        cayendo al comportamiento previo — no rompe llamadores viejos."""
+    def test_sin_un_de_cartera_no_sale(self):
+        """La retención tampoco sale con la UN global (job 470 y las dos de QA
+        FALLIDO 38 días con «la U.N. del auxiliar no es el mismo del
+        movimiento», 2026-09-27)."""
+        from app.services.connekta_gateway import ConnektaPayloadInvalido
         gw = _make_gateway()
-        payload = self._capture_payload(gw)
-        assert payload['Movimientocontable'][0]['F351_ID_UN'] == (gw.unidad_negocio or '99')
-        assert payload['MovimientoCxC'][0]['F351_ID_UN'] == (gw.unidad_negocio or '99')
+        with patch.object(gw, '_post') as post, pytest.raises(ConnektaPayloadInvalido):
+            gw.trigger_documento_contable(
+                tercero_nit='900123456', sucursal='001', cuenta_puc='13551501', monto=25000.0,
+                base_gravable=1000000.0, tipo_docto_fe='FE', consec_fe='5020',
+                cuenta_cxc='13050501', unidad_negocio='')
+        post.assert_not_called()
 
 
 # ═══════════════════════════════════════════════════════════════════

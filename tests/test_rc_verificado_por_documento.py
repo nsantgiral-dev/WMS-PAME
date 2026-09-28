@@ -35,6 +35,8 @@ import pathlib
 from datetime import datetime
 from unittest.mock import MagicMock, patch
 
+from tests._envio_liq import cartera_en
+
 import pytest
 
 RAIZ = pathlib.Path(__file__).resolve().parents[1]
@@ -111,7 +113,7 @@ class TestElGatewayClasifica:
         gw.tipo_docto_recibo_caja = 'RC'
         with patch('app.services.connekta_gateway.requests.post') as post:
             with pytest.raises(ConnektaPayloadInvalido):
-                gw.trigger_recibo_caja('900', '001', 1000, 'TRUEQUE', 'FEW', '1')
+                gw.trigger_recibo_caja('900', '001', 1000, 'TRUEQUE', 'FEW', '1', cuenta_cxc='13050501', unidad_negocio='99')
         post.assert_not_called()
 
 
@@ -157,8 +159,8 @@ def _job(db, r, monto=978991.6):
 
 
 def _fila(db_, cr):
-    return [{'f353_id_tipo_docto_cruce': 'PD', 'f353_consec_docto_cruce': '100',
-             'f353_total_db': 1000000, 'f353_total_cr': cr}]
+    from tests._envio_liq import fila_cartera
+    return [fila_cartera(tipo='PD', consec='100', total_db=1000000, total_cr=cr)]
 
 
 class TestElReciboSeVerificaPorElDocumento:
@@ -173,7 +175,7 @@ class TestElReciboSeVerificaPorElDocumento:
         job = _job(db, recaudo)
         with patch('app.services.connekta_gateway.connekta') as mc:
             mc.trigger_recibo_caja.side_effect = Exception('connection reset by peer')
-            mc.get_cxc_general.side_effect = [_fila(db, 0), _fila(db, 978991.6)]
+            cartera_en(mc, _fila(db, 0), _fila(db, 978991.6))
             res = _ejecutar_job(job)
         assert res == {'timeout_pero_exitoso': True, 'verificado_por': 'saldo'}
         db.session.refresh(recaudo)
@@ -185,31 +187,83 @@ class TestElReciboSeVerificaPorElDocumento:
         job = _job(db, recaudo)
         with patch('app.services.connekta_gateway.connekta') as mc:
             mc.trigger_recibo_caja.return_value = {'codigo': 0}
-            mc.get_cxc_general.return_value = _fila(db, 0)
+            cartera_en(mc, _fila(db, 0))
             _ejecutar_job(job)
         assert json.loads(job.payload)['saldo_antes_rc'] == 1000000
 
-    def test_saldo_igual_es_no_se_sabe(self, app, db, recaudo):
+    def test_saldo_igual_es_no_se_sabe_y_se_vuelve_a_leer_despues(self, app, db, recaudo):
+        """P1-3 (2026-09-27): la única lectura ocurría en el mismo `except` del
+        POST, segundos después — la cartera tarda minutos en indexar. Ahora
+        «no sé» deja el envío esperando (sin gastar intento) y lo vuelve a
+        leer a los +15 min y a las +2 h. Nunca reenvía."""
+        from datetime import timedelta
         from app.services.connekta_gateway import ConnektaResultadoDesconocido
-        from app.services.siesa_job_service import _ejecutar_job
+        from app.services.siesa_job_service import DependenciaPendiente, _ejecutar_job
         job = _job(db, recaudo)
         with patch('app.services.connekta_gateway.connekta') as mc:
             mc.trigger_recibo_caja.side_effect = Exception('HTTP 504')
-            mc.get_cxc_general.return_value = _fila(db, 0)
-            with pytest.raises(ConnektaResultadoDesconocido, match='Liquidación'):
+            cartera_en(mc, _fila(db, 0))
+            with pytest.raises(DependenciaPendiente, match='15 min') as e:
                 _ejecutar_job(job)
+            assert e.value.espera_minutos == 15
+            db.session.refresh(recaudo)
+            assert recaudo.siesa_rc_triggered is True
+            p = json.loads(job.payload)
+            assert len(p['verificacion']['lecturas']) == 1
+            # +16 min: segunda lectura, el saldo sigue igual → espera la de las 2 h.
+            p['intento_rc_en'] = (datetime.utcnow() - timedelta(minutes=16)).isoformat()
+            job.payload = json.dumps(p)
+            db.session.commit()
+            with pytest.raises(DependenciaPendiente, match='Próxima lectura'):
+                _ejecutar_job(job)
+            # +2 h: última lectura → «no sé» con lo que hay que buscar en Siesa.
+            p = json.loads(job.payload)
+            p['intento_rc_en'] = (datetime.utcnow() - timedelta(minutes=121)).isoformat()
+            job.payload = json.dumps(p)
+            db.session.commit()
+            with pytest.raises(ConnektaResultadoDesconocido, match='Liquidación') as fin:
+                _ejecutar_job(job)
+        texto = str(fin.value)
+        assert '900123456' in texto and 'FEW-1416' in texto and '978,992' in texto
+        assert mc.trigger_recibo_caja.call_count == 1, 'la verificación nunca reenvía'
+        assert len(json.loads(job.payload)['verificacion']['lecturas']) == 3
         db.session.refresh(recaudo)
         assert recaudo.siesa_rc_triggered is True
 
-    def test_sin_saldo_de_antes_no_hay_prueba(self, app, db, recaudo):
-        from app.services.connekta_gateway import ConnektaResultadoDesconocido
-        from app.services.siesa_job_service import _ejecutar_job
+    def test_la_lectura_diferida_que_ve_el_recibo_lo_da_por_llegado(self, app, db, recaudo):
+        from datetime import timedelta
+        from app.services.siesa_job_service import DependenciaPendiente, _ejecutar_job
         job = _job(db, recaudo)
         with patch('app.services.connekta_gateway.connekta') as mc:
-            mc.trigger_recibo_caja.side_effect = Exception('timeout')
-            mc.get_cxc_general.side_effect = [Exception('caída'), _fila(db, 978991.6)]
-            with pytest.raises(ConnektaResultadoDesconocido):
+            mc.trigger_recibo_caja.side_effect = Exception('HTTP 504')
+            # Antes del POST, al fallar, y a los +15 min (ya indexó).
+            cartera_en(mc, _fila(db, 0), _fila(db, 0), _fila(db, 978991.6))
+            with pytest.raises(DependenciaPendiente):
                 _ejecutar_job(job)
+            p = json.loads(job.payload)
+            p['intento_rc_en'] = (datetime.utcnow() - timedelta(minutes=16)).isoformat()
+            job.payload = json.dumps(p)
+            db.session.commit()
+            res = _ejecutar_job(job)
+        assert res['diferido'] is True
+        db.session.refresh(recaudo)
+        assert recaudo.siesa_rc_resultado == 'ENVIADO'
+        assert mc.trigger_recibo_caja.call_count == 1
+
+    def test_sin_poder_leer_la_cartera_no_se_postea(self, app, db, recaudo):
+        """Antes: si la cartera no respondía, el saldo de antes quedaba en
+        `None` y el recibo salía igual, con el tercero y la UN del payload
+        (P1-2). Ahora sin la fila no sale nada: espera, sin gastar intento
+        («Siesa caído = se para todo»)."""
+        from app.services.siesa_job_service import DependenciaPendiente, _ejecutar_job
+        job = _job(db, recaudo)
+        with patch('app.services.connekta_gateway.connekta') as mc:
+            cartera_en(mc, Exception('caída'))
+            with pytest.raises(DependenciaPendiente, match='no respondió'):
+                _ejecutar_job(job)
+        mc.trigger_recibo_caja.assert_not_called()
+        db.session.refresh(recaudo)
+        assert recaudo.siesa_rc_triggered is False
 
     def test_un_rechazo_explicito_baja_la_bandera_y_reintenta(self, app, db, recaudo):
         from app.models.siesa_job import SiesaJob
@@ -219,15 +273,16 @@ class TestElReciboSeVerificaPorElDocumento:
         with patch('app.services.connekta_gateway.connekta') as mc, \
                 patch('app.services.siesa_job_service._crear_alerta_admin'):
             mc.trigger_recibo_caja.side_effect = ConnektaRechazado('codigo=1')
-            mc.get_cxc_general.return_value = _fila(db, 0)
+            cartera_en(mc, _fila(db, 0))
             _run_dlq_jobs()
         db.session.refresh(recaudo)
         job = db.session.get(SiesaJob, job.id)
         assert recaudo.siesa_rc_triggered is False
         assert job.estado == 'PENDIENTE' and job.intentos == 1
 
-    def test_el_no_se_sabe_va_a_fallido_sin_reintento_y_no_cuenta_como_llegado(
+    def test_el_no_se_sabe_espera_sin_gastar_intento_y_termina_fallido_sin_reintento(
             self, app, db, recaudo):
+        from datetime import timedelta
         from app.models.siesa_job import SiesaJob
         from app.services import politica_cobro as pc
         from app.services.siesa_job_service import _run_dlq_jobs
@@ -235,13 +290,26 @@ class TestElReciboSeVerificaPorElDocumento:
         with patch('app.services.connekta_gateway.connekta') as mc, \
                 patch('app.services.siesa_job_service._crear_alerta_admin'):
             mc.trigger_recibo_caja.side_effect = Exception('HTTP 502')
-            mc.get_cxc_general.return_value = _fila(db, 0)
+            cartera_en(mc, _fila(db, 0))
+            _run_dlq_jobs()
+            job = db.session.get(SiesaJob, job.id)
+            assert job.estado == 'PENDIENTE' and job.intentos == 0
+            assert job.proximo_intento is not None
+            db.session.refresh(recaudo)
+            assert recaudo.siesa_rc_resultado is None, 'mientras verifica no es SIN_VERIFICAR'
+            # Pasaron las dos horas.
+            p = json.loads(job.payload)
+            p['intento_rc_en'] = (datetime.utcnow() - timedelta(minutes=121)).isoformat()
+            job.payload = json.dumps(p)
+            job.proximo_intento = None
+            db.session.commit()
             _run_dlq_jobs()
         job = db.session.get(SiesaJob, job.id)
         db.session.refresh(recaudo)
         assert job.estado == 'FALLIDO' and job.intentos == 0
         assert recaudo.siesa_rc_resultado == 'SIN_VERIFICAR'
         assert pc.rc_llego_a_siesa(recaudo) is False
+        assert mc.trigger_recibo_caja.call_count == 1
 
 
 class TestElRCLlevaElDiaDelCobro:
@@ -253,7 +321,7 @@ class TestElRCLlevaElDiaDelCobro:
         job = _job(db, recaudo)
         with patch('app.services.connekta_gateway.connekta') as mc:
             mc.trigger_recibo_caja.return_value = {'codigo': 0}
-            mc.get_cxc_general.return_value = _fila(db, 0)
+            cartera_en(mc, _fila(db, 0))
             _ejecutar_job(job)
         assert mc.trigger_recibo_caja.call_args.kwargs['fecha_recaudo'] == '20260924'
 
@@ -266,7 +334,7 @@ class TestElRCLlevaElDiaDelCobro:
         gw.modo_ensayo = True
         gw.tipo_docto_recibo_caja = 'RC'
         out = gw.trigger_recibo_caja('900', '001', 1000, 'TRANSFERENCIA', 'FEW', '1',
-                                     referencia_pago='1234', fecha_recaudo='20260920')
+                                     referencia_pago='1234', fecha_recaudo='20260920', cuenta_cxc='13050501', unidad_negocio='99')
         p = out['payload']
         caja = p['Caja'][0] if isinstance(p.get('Caja'), list) else p.get('Caja')
         header = next(v[0] for k, v in p.items() if isinstance(v, list) and v
@@ -282,7 +350,7 @@ class TestElRCLlevaElDiaDelCobro:
         gw.modo_ensayo = True
         gw.tipo_docto_recibo_caja = 'RC'
         p = gw.trigger_recibo_caja('900', '001', 1000, 'EFECTIVO', 'FEW', '1',
-                                   fecha_recaudo='2026-09-20')['payload']
+                                   fecha_recaudo='2026-09-20', cuenta_cxc='13050501', unidad_negocio='99')['payload']
         header = next(v[0] for k, v in p.items() if isinstance(v, list) and v
                       and isinstance(v[0], dict) and 'F357_FECHA_RECAUDO' in v[0])
         assert header['F357_FECHA_RECAUDO'] == header['F350_FECHA']

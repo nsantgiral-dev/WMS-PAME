@@ -26,6 +26,8 @@ el doble está para controlar los valores que Liquidación necesita, no por
 seguridad).
 """
 import pytest
+
+from tests._envio_liq import liquidar_y_resolver as _liquidar_y_resolver
 from unittest.mock import MagicMock, patch
 
 from tests.flujo.conductor_de_flujo import (
@@ -83,6 +85,9 @@ def _mock_connekta(producto, cantidad_facturada, bruto_unit=10_000, iva_pct=0.19
     neto = round(bruto + iva, 2)
     mock = MagicMock()
     mock.modo_simulacion = True
+    # La cartera en simulación: vacía, como el gateway real (el ejecutor
+    # usa entonces su doble `SIM…`).
+    mock.get_cxc_de_factura.return_value = []
     mock.get_detalle_factura.return_value = []
     mock.get_pedido_cabecera.return_value = {
         'f430_id_co': '003', 'f200_id_pedido_fact': 'NIT-CLIENTE-VICTOR',
@@ -130,7 +135,7 @@ class TestEntregaTotalPagoTotal:
                     'estado_entrega': 'ENTREGADO', 'forma_pago': 'EFECTIVO',
                     'monto_cobrado': neto,
                 })
-            resumen = LiquidacionService.liquidar_ruta_siesa(flujo.ruta_id)
+            resumen = _liquidar_y_resolver(flujo.ruta_id)
 
         assert resumen['rc_encolados'] == 1
         assert resumen['nc_encolados'] == 0
@@ -162,7 +167,7 @@ class TestEntregaTotalPagoTotal:
                     'forma_pago': 'TRANSFERENCIA_BANCOLOMBIA_CTE',
                     'monto_cobrado': neto,
                 })
-            resumen = LiquidacionService.liquidar_ruta_siesa(flujo.ruta_id)
+            resumen = _liquidar_y_resolver(flujo.ruta_id)
 
         assert resumen['rc_encolados'] == 1
         assert not resumen['errores']
@@ -207,7 +212,7 @@ class TestTodasLasFormasDePagoHastaLiquidacion:
                     'estado_entrega': 'ENTREGADO', 'forma_pago': forma_pago,
                     'monto_cobrado': neto,
                 })
-            resumen = LiquidacionService.liquidar_ruta_siesa(flujo.ruta_id)
+            resumen = _liquidar_y_resolver(flujo.ruta_id)
 
         assert not resumen['errores'], f'{forma_pago}: {resumen["errores"]}'
         assert resumen['rc_encolados'] == 1, f'{forma_pago} no encoló RC'
@@ -237,7 +242,7 @@ class TestTodasLasFormasDePagoHastaLiquidacion:
                     'estado_entrega': 'ENTREGADO', 'forma_pago': 'CREDITO',
                     'monto_cobrado': 0,
                 })
-            resumen = LiquidacionService.liquidar_ruta_siesa(flujo.ruta_id)
+            resumen = _liquidar_y_resolver(flujo.ruta_id)
 
         assert not resumen['errores']
         assert resumen['credito_omitidos'] == 1
@@ -271,7 +276,7 @@ class TestEntregaTotalPagoParcial:
             # Sin decisión de la oficina no sale ni RC ni DC (política única,
             # 2026-09-25) — el pendiente se prueba en `test_politica_cobro.py`.
             LiquidacionService.confirmar_retencion(recaudo_id, None, True)
-            resumen = LiquidacionService.liquidar_ruta_siesa(flujo.ruta_id)
+            resumen = _liquidar_y_resolver(flujo.ruta_id)
 
         assert resumen['rc_encolados'] == 1
         assert resumen['dc_encolados'] == 1
@@ -320,7 +325,7 @@ class TestPedidoParcialDevolucion:
                         'cantidad_entregada': entregado,
                     }],
                 })
-            resumen = LiquidacionService.liquidar_ruta_siesa(flujo.ruta_id)
+            resumen = _liquidar_y_resolver(flujo.ruta_id)
 
             assert resumen['nc_encolados'] == 1
             assert resumen['rc_encolados'] == 1
@@ -398,7 +403,7 @@ class TestBultosConDevolucionEnParcial:
             # La liquidación sigue calculando sobre lo declarado por
             # referencia (4 unidades), no sobre "toda la caja" — el bulto
             # marcado no infla la devolución contable.
-            resumen = LiquidacionService.liquidar_ruta_siesa(flujo.ruta_id)
+            resumen = _liquidar_y_resolver(flujo.ruta_id)
             assert not resumen['errores']
             from app.models.devolucion_cliente import DevolucionCliente
             devolucion = DevolucionCliente.query.filter_by(
@@ -434,7 +439,7 @@ class TestPedidoRechazado:
             bultos = Bulto.query.filter_by(tarea_id=flujo.packing_id).all()
             assert all(b.estado == EstadoBulto.RECHAZADO for b in bultos)
 
-            resumen = LiquidacionService.liquidar_ruta_siesa(flujo.ruta_id)
+            resumen = _liquidar_y_resolver(flujo.ruta_id)
             assert resumen['nc_encolados'] == 1
             assert resumen['rc_encolados'] == 0
             assert not resumen['errores']
@@ -471,7 +476,7 @@ class TestPedidoRechazado:
                     'motivo_rechazo': 'NO_PAGO_SE_QUEDO',
                     'observaciones': 'Dice que paga la otra semana, se quedo con todo',
                 })
-            resumen = LiquidacionService.liquidar_ruta_siesa(flujo.ruta_id)
+            resumen = _liquidar_y_resolver(flujo.ruta_id)
 
         recaudo = RecaudoEntrega.query.get(recaudo_id)
         assert recaudo.estado_entrega == EstadoEntrega.ENTREGADO_SIN_PAGO

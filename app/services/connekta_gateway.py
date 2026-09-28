@@ -1583,10 +1583,15 @@ class ConnektaGateway:
         `ConnektaLiquidacionGateway.trigger_nota_factura`."""
         return self._liquidacion.trigger_nota_factura(tipo_docto_fe, consec_fe, lineas, notas=notas)
 
-    def get_vencimiento_factura(self, tipo_docto_fe: str, consec_fe) -> str:
+    def get_vencimiento_factura(self, tipo_docto_fe: str, consec_fe, co: str = None) -> str:
         """Saldo y fecha de vencimiento reales de la factura, para el cruce
         de 251126. Delegado — ver `ConnektaConsultasGateway.get_vencimiento_factura`."""
-        return self._consultas.get_vencimiento_factura(tipo_docto_fe, consec_fe)
+        return self._consultas.get_vencimiento_factura(tipo_docto_fe, consec_fe, co=co)
+
+    def get_cxc_de_factura(self, co: str, tipo_docto: str, consec_docto) -> list:
+        """Las filas de cartera de UN documento (CO + tipo + consecutivo).
+        Delegado — ver `ConnektaConsultasGateway.get_cxc_de_factura`."""
+        return self._consultas.get_cxc_de_factura(co, tipo_docto, consec_docto)
 
     #: Tope de páginas de `get_cxc_general` — 50 × 100 = 5.000 filas de cartera
     #: de un mismo tercero. Alcanzarlo se declara (log de ERROR) y devuelve `[]`,
