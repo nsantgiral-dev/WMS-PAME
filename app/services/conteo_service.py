@@ -898,6 +898,48 @@ class ConteoService:
         return int(total or 0)
 
     @staticmethod
+    def empacado_por_salir(producto_id: int, almacen_id: int) -> bool:
+        """¿Hay unidades de este SKU empacadas en el almacén, esperando salir?
+        (P1-3, 2026-09-27). Sin cifras: es para decirle a quien cuenta «no las
+        cuente». Empacado = en una caja que se está armando o ya armada
+        (EN_PROCESO/VERIFICADO), un despacho con bultos todavía en el muelle o
+        cargados en un camión que no salió, o un traslado empacado sin salir.
+
+        No decide ningún ajuste: lo que se remisionó ya salió en Siesa (no
+        contarlo es lo correcto), y lo que no, lo frena la guarda de mercancía
+        en proceso (`motivo_bloqueo_ajuste`, caso 7).
+        """
+        from sqlalchemy import and_, exists, or_
+        from app.models.bulto import Bulto, EstadoBulto
+        from app.models.packing import EstadoPacking, ItemPacking, TareaPacking
+        from app.models.ruta_despacho import EstadoRutaDespacho, RutaDespacho
+        from app.models.traslado import EstadoTraslado, SolicitudTraslado
+        ruta_salio = exists().where(and_(
+            RutaDespacho.id == Bulto.ruta_despacho_id,
+            RutaDespacho.estado.in_((EstadoRutaDespacho.EN_TRANSITO,
+                                     EstadoRutaDespacho.ENTREGADA))))
+        bulto_por_salir = exists().where(and_(
+            Bulto.tarea_id == TareaPacking.id,
+            or_(Bulto.estado == EstadoBulto.PENDIENTE,
+                and_(Bulto.estado == EstadoBulto.CARGADO, ~ruta_salio))))
+        traslado_por_salir = exists().where(and_(
+            SolicitudTraslado.id == TareaPacking.solicitud_id,
+            SolicitudTraslado.estado.in_((EstadoTraslado.EN_PACKING,
+                                          EstadoTraslado.PREPARADO))))
+        return db.session.query(
+            db.session.query(TareaPacking.id)
+            .join(ItemPacking, ItemPacking.tarea_id == TareaPacking.id)
+            .filter(TareaPacking.almacen_id == almacen_id,
+                    ItemPacking.producto_id == producto_id,
+                    ItemPacking.cantidad_real > 0,
+                    or_(TareaPacking.estado.in_((EstadoPacking.EN_PROCESO,
+                                                 EstadoPacking.VERIFICADO)),
+                        and_(TareaPacking.estado == EstadoPacking.DESPACHADO,
+                             bulto_por_salir),
+                        traslado_por_salir))
+            .exists()).scalar()
+
+    @staticmethod
     def nueva_raiz(*, producto, almacen_id: int, tipo: str, codigo: str,
                    ubicacion_id: int = None, **campos) -> SesionConteo:
         """**La única forma de construir la raíz (CC1) de una cadena.** No la
@@ -939,10 +981,19 @@ class ConteoService:
         cuenta los suma en un solo total. `ubicacion` queda para las pantallas
         viejas en caché; el HUD de hoy pinta `lugares`.
         """
+        from app.services import conteo_politica as politica
         p = sesion.producto
         ub = sesion.ubicacion
         factor = (p.factor_conversion or 1) if p else 1
+        # **Qué contar y qué no** (P1-3, 2026-09-27): el perímetro según el tipo
+        # de almacén, y si hay unidades de este producto empacadas esperando
+        # salir (sin cifras). El aviso de cajas POS lo pinta la pantalla solo
+        # si el almacén no es el CD (`perimetro.tipo`).
         return {
+            'perimetro': politica.perimetro_de_conteo(sesion.almacen),
+            'empacado_por_salir': bool(
+                sesion.producto_id and sesion.almacen_id
+                and ConteoService.empacado_por_salir(sesion.producto_id, sesion.almacen_id)),
             'lugares': (ConteoService.lugares_del_sku(sesion.producto_id, sesion.almacen_id)
                         if sesion.producto_id and sesion.almacen_id else []),
             'ubicacion': ub.codigo if ub else '',

@@ -7949,3 +7949,33 @@ cerradas y no se revisaron campo por campo; un supervisor que contó el CC1 o el
 CC2 y no puede hacer el CC3 también ve las cifras ocultas (se oculta a todos,
 más simple que por persona). Otro supervisor (no autor) tampoco firma un CC3
 por encima del tope: lo firma el admin.
+
+## Conteo: la pantalla del que cuenta dice qué contar y qué NO (2026-09-27, C3)
+
+**Qué pasaba (P1-3, P2-1).** «Búsquelo en toda la bodega» no decía qué no
+contar: en NB1 entraban los bultos y canastos del muelle y los traslados
+empacados, cuya remisión o STS ya descontó Siesa; CC1 y CC2 los contaban igual
+→ AJ-ENT automático que inflaba Siesa. En tienda no nombraba la exhibición. El
+aviso «CAJAS POS AL DÍA» salía también en NB1 con una instrucción que nadie
+podía cumplir.
+
+**Ahora.** `conteo_politica.perimetro_de_conteo(almacen)` —y
+`tipo_de_almacen`, la única que decide CD (la bodega de `CONNEKTA_BODEGA`) /
+TIENDA / DESCONOCIDO— da `donde`, `resto`, `cuente` y `no_cuente`; el HUD lo
+pinta («CUENTE EN TODA LA BODEGA · ✅ estantería, estibas y cross-dock · ⛔ NO
+cuente lo empacado ni lo del muelle o el camión»; en tienda, exhibición y
+bodega). `ConteoService.empacado_por_salir` (sin cifras): caja armándose o
+armada, despacho con bultos en el muelle o cargados en un camión que no salió,
+traslado empacado sin salir → «📦 este producto tiene unidades empacadas
+esperando despacho: no las cuente». El aviso POS sale **solo si el almacén no
+es el CD** (sin dato, sale: Regla 0) y dice «cuente antes de abrir o después de
+cerrar caja». `vista_hud` lo lleva a los dos HUD (operario y definitivo).
+
+**Trinquete:** `tests/test_conteo_hud_perimetro.py` (política por tipo, las
+formas de «empacado», Node con `util.js` real por tipo de almacén; AST: los dos
+HUD salen de `vista_hud`, `vista_hud` trae perímetro y empacado, el HUD le pasa
+el tipo al aviso POS).
+
+**Lo que NO cubre:** el formulario de conteo manual (pantalla del líder) sigue
+mostrando el aviso POS en todo almacén; NS2 (parqueo de licitaciones) se lee
+como tienda; «empacado» no dice cuántas unidades (a propósito: conteo ciego).

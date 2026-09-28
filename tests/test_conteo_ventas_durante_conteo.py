@@ -32,6 +32,7 @@ D–F: movimientos DURANTE un conteo (CC1, CC2, CC3).
 G:   sin foto de inicio. H: traslado entrante. I: sesiones anteriores a m029.
 """
 import ast
+import json
 import pathlib
 from datetime import datetime, timedelta
 
@@ -973,13 +974,18 @@ class TestAvisoCajasPosEnCadaInicioDeConteo:
         src = (_PWA / 'conteo.js').read_text(encoding='utf-8')
         ini = src.index('const AVISO_CAJAS_POS')
         fin = src.index('\n}\n', src.index('function avisoCajasPosHtml')) + 3
-        programa = src[ini:fin] + '\nprocess.stdout.write(avisoCajasPosHtml());'
-        salida = subprocess.run(['node', '-e', programa], capture_output=True,
-                                text=True, check=True).stdout
-        assert ('Antes de contar: confirme que todas las cajas POS de la tienda están en '
-                'línea y al día — que la última venta de cada caja ya aparezca en Siesa '
-                'central. Si una caja estuvo caída, cuente después de que sincronice.') in salida
-        assert 'confirm(' not in salida
+        programa = src[ini:fin] + (
+            "\nprocess.stdout.write(JSON.stringify([avisoCajasPosHtml(), "
+            "avisoCajasPosHtml(true), avisoCajasPosHtml(false)]));")
+        sin_dato, tienda, cd = json.loads(subprocess.run(
+            ['node', '-e', programa], capture_output=True, text=True, check=True).stdout)
+        # Redacción del 2026-09-27 (P2-1): una instrucción que se puede cumplir.
+        texto = ('Cuente antes de abrir o después de cerrar caja: con las cajas POS de la '
+                 'tienda vendiendo, lo que se vende mientras cuenta descuadra el conteo. Si '
+                 'una caja estuvo sin conexión, cuente después de que sincronice.')
+        assert texto in tienda and texto in sin_dato, 'sin saber el almacén, se avisa (Regla 0)'
+        assert cd == '', 'el CD no tiene cajas POS: el aviso no sale'
+        assert 'confirm(' not in tienda
 
 
 class TestElDetectorDelAvisoMuerde:

@@ -728,3 +728,51 @@ def descripcion_de_tolerancias(cfg: dict = None) -> dict:
         'recuentos_propios_por_cadena': RECUENTOS_PROPIOS_POR_CADENA,
         'max_recuentos_por_movimiento': MAX_RECUENTOS_POR_MOVIMIENTO,
     }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# El perímetro del conteo: qué se cuenta y qué no, según el almacén (C3)
+# ─────────────────────────────────────────────────────────────────────────────
+
+CD = 'CD'
+TIENDA = 'TIENDA'
+DESCONOCIDO = 'DESCONOCIDO'
+
+#: Lo que el HUD le dice a quien cuenta, por tipo de almacén (P1-3, 2026-09-27).
+#: «Búsquelo en toda la bodega» no decía qué NO contar: en el CD eso incluía
+#: bultos y canastos en el muelle esperando ruta, cuya remisión (o STS) ya
+#: descontó Siesa — contados por CC1 y CC2 igual, salía un AJ-ENT automático
+#: que inflaba Siesa. En tienda, «toda la bodega» invitaba a no mirar la
+#: exhibición. Sin almacén conocido, se dice lo de los dos (Regla 0).
+PERIMETRO_DE_CONTEO = {
+    CD: {'donde': 'toda la bodega', 'resto': 'el resto de la bodega',
+         'cuente': 'Cuente estantería, estibas y cross-dock.',
+         'no_cuente': 'NO cuente lo empacado (bultos, canastos) ni lo que está en el '
+                      'muelle o en un camión: eso ya va de salida.'},
+    TIENDA: {'donde': 'toda la tienda', 'resto': 'el resto de la tienda',
+             'cuente': 'Cuente la exhibición y la bodega de la tienda.',
+             'no_cuente': 'NO cuente lo empacado para un traslado que está por salir.'},
+    DESCONOCIDO: {'donde': 'todo el almacén', 'resto': 'el resto del almacén',
+                  'cuente': 'Cuente todos los sitios donde pueda estar.',
+                  'no_cuente': 'NO cuente lo empacado ni lo que está por salir.'},
+}
+
+
+def tipo_de_almacen(almacen) -> str:
+    """`CD` | `TIENDA` | `DESCONOCIDO`. **Una definición.** El CD es la bodega
+    de `CONNEKTA_BODEGA` (la del gateway, NB1 por defecto): la que despacha
+    rutas y traslados. Todo otro almacén con bodega es tienda (NS2, parqueo de
+    licitaciones, también: no tiene muelle). Sin almacén o sin bodega, no se
+    sabe."""
+    bodega = (getattr(almacen, 'bodega_siesa_id', None) or '').strip().upper()
+    if not bodega:
+        return DESCONOCIDO
+    from app.services.connekta_gateway import connekta
+    return CD if bodega == (connekta.bodega or '').strip().upper() else TIENDA
+
+
+def perimetro_de_conteo(almacen) -> dict:
+    """Qué se cuenta y qué no en este almacén: `{tipo, donde, resto, cuente,
+    no_cuente}`. Lo pinta el HUD (`ConteoService.vista_hud`)."""
+    tipo = tipo_de_almacen(almacen)
+    return {'tipo': tipo, **PERIMETRO_DE_CONTEO[tipo]}

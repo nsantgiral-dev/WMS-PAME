@@ -194,17 +194,22 @@ function invRefrescoPeriodico() {
 // pide a quien cuenta que lo confirme. Pendiente: confirmar con el consultor
 // si Siesa POS puede vender offline.
 //
-// Sale en TODAS las bodegas —en Siesa QA hasta NB1 tiene POS pendiente— y en
-// todo sitio donde un conteo empieza. Es un aviso, no un bloqueo: nada de
-// confirm() nativo. El texto vive SOLO acá; cada pantalla llama
-// `avisoCajasPosHtml()`. Trinquete:
+// Sale en todo sitio donde un conteo empieza, **solo en tienda** (P2-1,
+// 2026-09-27): el CD no tiene cajas, y pedirle a un picker de NB1 que verifique
+// cajas POS era una instrucción que nadie podía cumplir. El servidor dice el
+// tipo de almacén (`perimetro.tipo`); sin ese dato se muestra (Regla 0). Es un
+// aviso, no un bloqueo: nada de confirm() nativo. El texto vive SOLO acá; cada
+// pantalla llama `avisoCajasPosHtml()`. Trinquete:
 // tests/test_conteo_ventas_durante_conteo.py::TestAvisoCajasPosEnCadaInicioDeConteo
-const AVISO_CAJAS_POS = 'Antes de contar: confirme que todas las cajas POS de la tienda '
-  + 'están en línea y al día — que la última venta de cada caja ya aparezca en Siesa '
-  + 'central. Si una caja estuvo caída, cuente después de que sincronice.';
+const AVISO_CAJAS_POS = 'Cuente antes de abrir o después de cerrar caja: '
+  + 'con las cajas POS de la tienda vendiendo, lo que se vende mientras cuenta '
+  + 'descuadra el conteo. Si una caja estuvo sin conexión, cuente después de que sincronice.';
 
-/** Banner destacado con AVISO_CAJAS_POS. Texto estático: no lleva dato de nadie. */
-function avisoCajasPosHtml() {
+/** Banner destacado con AVISO_CAJAS_POS. Texto estático: no lleva dato de nadie.
+ *  @param {boolean} [esTienda=true] - `false` solo cuando el servidor dijo que
+ *    el almacén es el CD: ahí no hay cajas POS y el aviso no sale. */
+function avisoCajasPosHtml(esTienda = true) {
+  if (esTienda === false) return '';
   return `<div class="aviso-cajas-pos" role="note" style="background:var(--warn-bg);border:1px solid var(--warn-brd);border-radius:12px;padding:12px 14px;margin-bottom:12px;text-align:left;">
       <div style="font-size:var(--fs-sm);color:var(--warn-tx);font-weight:800;margin-bottom:4px;">⚠️ CAJAS POS AL DÍA</div>
       <div style="font-size:var(--fs-sm);color:var(--tx);line-height:1.45;">${AVISO_CAJAS_POS}</div>
@@ -1684,8 +1689,10 @@ function _conteoUnirConY(partes) {
  *  2026-09-27): la foto de Siesa es por ítem × bodega, y un conteo de un solo
  *  hueco fabricaba un faltante del tamaño de lo que había en el otro. El
  *  servidor manda `lugares` —dónde lo tiene el WMS, SIN cantidades (conteo
- *  ciego)— y la pantalla pide sumar todos en un solo total. Sin `lugares`
- *  (servidor viejo) queda el comportamiento de antes. */
+ *  ciego)— y la pantalla pide sumar todos en un solo total. Y el perímetro
+ *  (P1-3): qué se cuenta y qué NO según el almacén (`perimetro`), y si hay
+ *  unidades empacadas esperando salir (`empacado_por_salir`, sin cifras). Sin
+ *  `lugares` (servidor viejo) queda el comportamiento de antes. */
 function _conteoHudLugarHtml(t) {
   const lugares = Array.isArray(t.lugares) ? t.lugares : null;
   if (!lugares) {
@@ -1695,14 +1702,22 @@ function _conteoHudLugarHtml(t) {
       : `<div style="font-size:20px;font-weight:800;color:var(--warn-tx);">📍 Búsquelo en toda la bodega</div>
        <div style="font-size:var(--fs-xs);color:var(--tx2);margin-top:4px;">Este producto no tiene una ubicación física registrada: revise todos los sitios donde pueda estar.</div>`;
   }
+  const per = t.perimetro || {};
   const fisicos = lugares.filter(l => l && l.fisica && l.codigo).map(l => `<b>${esc(l.codigo)}</b>`);
   const hayResto = lugares.some(l => l && !l.fisica);
+  const resto = esc(per.resto || 'el resto del almacén');
   const donde = fisicos.length
-    ? `El sistema lo tiene en ${_conteoUnirConY(hayResto ? fisicos.concat(['el resto del almacén']) : fisicos)}. Revise también cualquier otro sitio donde pueda estar.`
+    ? `El sistema lo tiene en ${_conteoUnirConY(hayResto ? fisicos.concat([resto]) : fisicos)}. Revise también cualquier otro sitio donde pueda estar.`
     : 'El sistema no le tiene un lugar marcado: revise todos los sitios donde pueda estar.';
-  return `<div style="font-size:var(--fs-xs);color:var(--tx3);letter-spacing:1px;">CUENTE TODO EL ALMACÉN</div>
+  const empacado = t.empacado_por_salir
+    ? `<div style="font-size:var(--fs-sm);color:var(--err-tx);font-weight:800;margin-top:8px;line-height:1.4;">📦 Este producto tiene unidades empacadas esperando despacho: no las cuente.</div>`
+    : '';
+  return `<div style="font-size:var(--fs-xs);color:var(--tx3);letter-spacing:1px;">CUENTE EN ${esc((per.donde || 'todo el almacén').toUpperCase())}</div>
        <div style="font-size:20px;font-weight:800;color:var(--warn-tx);margin-top:2px;">📍 Un solo total: sume lo de todos los lugares</div>
-       <div style="font-size:var(--fs-sm);color:var(--tx2);margin-top:6px;line-height:1.45;">${donde}</div>`;
+       <div style="font-size:var(--fs-sm);color:var(--tx2);margin-top:6px;line-height:1.45;">${donde}</div>
+       ${per.cuente ? `<div style="font-size:var(--fs-sm);color:var(--tx);margin-top:6px;line-height:1.45;">✅ ${esc(per.cuente)}</div>` : ''}
+       ${per.no_cuente ? `<div style="font-size:var(--fs-sm);color:var(--tx);margin-top:4px;line-height:1.45;">⛔ ${esc(per.no_cuente)}</div>` : ''}
+       ${empacado}`;
 }
 
 /** El HTML del HUD. Todo dato va con esc(). */
@@ -1721,7 +1736,7 @@ function conteoHudHtml(h) {
     <div style="padding:${def ? '0' : '16px'};">
       <div style="background:${def ? '#78350f' : '#b45309'};color:#fff;border-radius:12px;padding:10px 16px;font-size:20px;font-weight:700;text-align:center;margin-bottom:14px;">${def ? '🎯 CONTEO DEFINITIVO' : 'CONTEO'}</div>
 
-      ${avisoCajasPosHtml()}
+      ${avisoCajasPosHtml(t.perimetro ? t.perimetro.tipo !== 'CD' : undefined)}
 
       ${h.aviso ? `<div id="chud-aviso" style="background:var(--bg-input);border:2px solid #FBBF24;border-radius:14px;padding:14px;margin-bottom:12px;text-align:center;">
         <div style="font-size:var(--fs-xl);font-weight:900;color:var(--warn-tx);">🔁 Recuente este producto con cuidado</div>
@@ -2115,7 +2130,8 @@ async function conteoHudNoEncontrado() {
     alerta(`Ya contó ${h.total}. Si no hay más, use «Ya revisé todo — contar ${h.total}».`, 'advertencia');
     return;
   }
-  const donde = Array.isArray(h.tarea.lugares) ? 'en todo el almacén'
+  const donde = Array.isArray(h.tarea.lugares)
+    ? `en ${esc((h.tarea.perimetro && h.tarea.perimetro.donde) || 'todo el almacén')}`
     : (h.tarea.ubicacion_fisica ? `en ${esc(h.tarea.ubicacion)}` : 'en toda la bodega');
   const ok = await _modalConfirmar(
     `¿Buscó <b>${esc(h.tarea.producto_nombre || h.tarea.producto_codigo || '')}</b> ${donde} y no lo encontró?\n\n`
