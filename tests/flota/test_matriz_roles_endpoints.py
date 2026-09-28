@@ -109,8 +109,19 @@ def _celdas(app):
         if esperados is None:
             esperados = _GUARD_PROPIO.get(str(r.rule))
         for m in sorted(r.methods - {'HEAD', 'OPTIONS'}):
-            salida.append((str(r.rule), m, esperados))
+            salida.append((str(r.rule), m, _admitidos(esperados, m)))
     return sorted(salida)
+
+
+def _admitidos(roles, metodo):
+    """Los roles de la tupla que de verdad pasan por ESTE método: el gerente ve
+    la flota y no escribe (`_permisos.SOLO_LECTURA_FLOTA`, que `exige` aplica
+    a todo método que no es de lectura; decisión del dueño 2026-09-27). La
+    política se lee de `_permisos`, no se copia acá."""
+    from flota.api._permisos import METODOS_DE_LECTURA, SOLO_LECTURA_FLOTA
+    if roles is None or metodo in METODOS_DE_LECTURA:
+        return roles
+    return tuple(r for r in roles if r not in SOLO_LECTURA_FLOTA)
 
 
 #: El guion que enumera. Corre en OTRO intérprete y devuelve JSON.
@@ -133,7 +144,8 @@ for r in _app.url_map.iter_rules():
         continue
     roles = _roles_declarados(_app.view_functions[r.endpoint])
     for m in sorted(r.methods - {"HEAD", "OPTIONS"}):
-        salida.append((str(r.rule), m, list(roles) if roles else None))
+        adm = _admitidos(roles, m)
+        salida.append((str(r.rule), m, list(adm) if adm else None))
 print('@@' + json.dumps(salida))
 '''
 
@@ -176,7 +188,7 @@ def _construir_matriz():
 
     raiz = os.path.dirname(os.path.dirname(os.path.dirname(
         os.path.abspath(__file__))))
-    guion = inspect.getsource(_roles_declarados) + _GUION
+    guion = inspect.getsource(_roles_declarados) + inspect.getsource(_admitidos) + _GUION
     r = subprocess.run([sys.executable, '-c', guion], cwd=raiz,
                        capture_output=True, text=True, timeout=180)
     if r.returncode != 0:

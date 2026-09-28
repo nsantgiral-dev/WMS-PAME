@@ -382,12 +382,17 @@ class TestDiagnostico:
 
     def test_los_avisos_se_piden_solo_si_alguien_los_abre(self, tmp_path):
         r = correr(tmp_path, {
-            'rutas': {'/flota/avisos': {'avisos': [], 'encendido': False}},
+            'rutas': {'/flota/avisos': {'avisos': [], 'que_falta': []},
+                      '/flota/conductores/licencias': {'conductores': [],
+                                                       'categorias_licencia': []}},
             'pasos': [{'fn': 'flotaBandejaDiagnostico'}],
             'leer': ['flota-diagnostico'],
         })
         assert 'Los avisos están' in r['html']['flota-diagnostico']
-        assert r['pedidas'] == ['/flota/avisos']
+        # Desde el 2026-09-27 el diagnóstico trae también las licencias de
+        # conducción (las carga control de flota ahí).
+        assert r['pedidas'] == ['/flota/avisos', '/flota/conductores/licencias']
+        assert 'Licencias de conducción' in r['html']['flota-diagnostico']
 
 
 class TestLaFichaDeUnVehiculoNuevoSeAbreDesdeLaBandeja:

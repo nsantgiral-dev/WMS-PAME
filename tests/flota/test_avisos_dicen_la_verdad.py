@@ -386,9 +386,12 @@ class TestElLatidoGuardaElResumen:
         fn(app=app)
         fila = CronLatido.query.filter_by(nombre='prueba_resumen').one()
         assert fila.resumen() == {'motivo': 'apagado', 'config': {'FLOTA_AVISOS': False}}
+        # Una corrida que no dice qué hizo (el proceso que perdió el candado)
+        # no borra el resumen del que sí trabajó (validación 2026-09-27, P3).
         con_latido('prueba_resumen', lambda app=None: None)(app=app)
         db.session.expire_all()
-        assert CronLatido.query.filter_by(nombre='prueba_resumen').one().resumen() is None
+        assert CronLatido.query.filter_by(nombre='prueba_resumen').one().resumen() == {
+            'motivo': 'apagado', 'config': {'FLOTA_AVISOS': False}}
 
     def test_el_barrido_diario_publica_su_configuracion(self, mundo, monkeypatch, correos):
         from flota.adaptadores.avisos import barrido_diario
