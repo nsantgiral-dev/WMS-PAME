@@ -373,6 +373,22 @@ def insumo_origen(productos_origen=None, productos_marca=None,
     }
 
 
+def _resumen_horizonte(horizonte_por_sku) -> dict:
+    """La declaración de la demanda del horizonte para el resultado de
+    `rop_dual`: de qué método salió cada SKU, sin recalcular nada."""
+    from app.services.kardex_service import (bodegas_de_proyecto, limites_tendencia,
+                                              METODO_MISMO_PERIODO)
+    metodos, motivos = defaultdict(int), defaultdict(int)
+    for h in horizonte_por_sku.values():
+        metodos[h.get('metodo')] += 1
+        if h.get('motivo'):
+            motivos[h['motivo']] += 1
+    return {'por_metodo': dict(metodos), 'promedio_por_motivo': dict(motivos),
+            'con_mismo_periodo': metodos.get(METODO_MISMO_PERIODO, 0),
+            'bodegas_proyecto': bodegas_de_proyecto(),
+            'tendencia': limites_tendencia()}
+
+
 class ArmadorService:
 
     @staticmethod
@@ -510,27 +526,47 @@ class ArmadorService:
                  'topados_por_cobertura': 0, 'censurados': 0,
                  'sin_venta_reciente': 0}
 
+        # ── LA DEMANDA DEL HORIZONTE (2026-09-27) ──────────────────────────
+        #
+        # El promedio de 12 meses pedía en septiembre con el pico de enero
+        # adentro (+66 % de capital en temporada baja) y en enero con los
+        # nueve meses flojos (quiebre en el pico). Cada SKU pide ahora la venta
+        # de SUS próximos días —lead time + ciclo (nacional) o + R (China)—:
+        # la misma ventana del año pasado × la tendencia de este año
+        # (`kardex_service.demanda_para_horizonte`, la única). Sin un año con
+        # qué comparar cae al promedio de siempre, y lo declara. Por eso el
+        # lead time se resuelve ANTES: de él sale el horizonte.
+        from app.services.kardex_service import demanda_para_horizonte
+        previos = []
+        horizontes = {}
         for ref, dem in demanda_por_sku.items():
             ref = (ref or '').strip()
-            if not ref:
+            if not ref or dem['d_avg'] <= 0:
                 continue
-
-            d_hist = dem['d_avg']        # u/día sobre días CON stock
-            if d_hist <= 0:
-                continue
-            # DESCONTINUADO (D14): sin venta en el tramo reciente con el estante
-            # lleno —y con su propia tasa se esperaban ventas— NO se repone. Se
-            # publica con d = 0 y dicho, en vez de reponer con la tasa de hace
-            # seis meses.
-            parado = bool(dem.get('sin_venta_reciente'))
-            d_avg = 0.0 if parado else d_hist
-            sigma_d = 0.0 if parado else dem['sigma_d']    # u/día
-            if parado:
-                delta['sin_venta_reciente'] += 1
-
             origen = (productos_origen.get(ref) or '').upper()
             marca = (productos_marca.get(ref) or '').upper()
             es_china = es_de_china(origen, marca, productos_marca_cod.get(ref))
+            _lt_info = _lt_de(ref, es_china)
+            r_hz = R_CHINA_DIAS if es_china else _ciclo_nac['dias']
+            horizontes[ref] = _lt_info['lt_dias'] + r_hz
+            previos.append((ref, dem, es_china, _lt_info))
+        horizonte_por_sku = demanda_para_horizonte(horizontes, base=demanda_por_sku)
+
+        for ref, dem, es_china, _lt_info in previos:
+            d_hist = dem['d_avg']        # u/día sobre días CON stock (12 meses)
+            hz = horizonte_por_sku[ref]
+            # DESCONTINUADO (D14): sin venta en el tramo reciente con el estante
+            # lleno —y con su propia tasa se esperaban ventas— NO se repone. Se
+            # publica con d = 0 y dicho, en vez de reponer con la tasa de hace
+            # seis meses. SALVO el estacional dormido: el año pasado tampoco
+            # vendía en estas semanas y sí en las que vienen
+            # (`vuelve_en_temporada`) — el filtro de 90 días apagaba en octubre
+            # justo lo que se vende en diciembre.
+            parado = bool(dem.get('sin_venta_reciente')) and not hz.get('vuelve_en_temporada')
+            d_avg = 0.0 if parado else float(hz['d_dia'])
+            sigma_d = 0.0 if parado else float(hz['sigma_dia'])    # u/día
+            if parado:
+                delta['sin_venta_reciente'] += 1
 
             stock_actual = float(stock.get(ref, 0) or 0)
             qty_comprometido = float(comprometido.get(ref, 0) or 0)
@@ -560,7 +596,6 @@ class ArmadorService:
             # camino tiene posición 0 (se declara en `frescura_stock: None`).
             posicion = float((posiciones.get(ref) or {}).get('posicion', 0.0))
 
-            _lt_info = _lt_de(ref, es_china)
             lt = _lt_info['lt_dias']
             sigma_lt = _lt_info['sigma_lt']
             r = R_CHINA_DIAS if es_china else R_NACIONAL_DIAS
@@ -582,7 +617,23 @@ class ArmadorService:
             fila = {
                 'referencia': ref,
                 'd_avg_diaria': round(d_avg, 4),
+                # El promedio de 12 meses (lo que pedía antes): se publica
+                # para comparar, no decide.
                 'd_avg_historica': round(d_hist, 4),
+                # De dónde sale `d_avg_diaria`, en palabras del comprador
+                # (`demanda_para_horizonte`): el mismo período del año pasado
+                # × la tendencia, o el promedio y por qué.
+                'demanda_horizonte': {
+                    'metodo': hz.get('metodo'), 'motivo': hz.get('motivo'),
+                    'horizonte_dias': hz.get('horizonte_dias'),
+                    'ventana_dias': hz.get('ventana_dias'),
+                    'ano_anterior': hz.get('ano_anterior'),
+                    'tendencia': hz.get('tendencia'),
+                    'atipicos': hz.get('atipicos'),
+                    'venta_proyecto': hz.get('venta_proyecto') or 0.0,
+                    'vuelve_en_temporada': bool(hz.get('vuelve_en_temporada')),
+                    'texto': hz.get('texto'),
+                },
                 'sin_venta_reciente': parado,
                 'motivo_d_cero': (
                     f"Sin venta en los últimos {dem.get('dias_sin_venta_mirados')} días "
@@ -712,6 +763,11 @@ class ArmadorService:
             # 0» y «no sé qué viene» empujan la compra al mismo lado.
             'insumo_en_camino': info_en_camino,
             'insumo_demanda': insumo_demanda,
+            # Cómo se midió la venta del horizonte (2026-09-27): cuántos SKU
+            # con el mismo período del año pasado y cuántos con el promedio
+            # (y por qué), qué bodegas son de proyecto y los topes de la
+            # tendencia. Todo declarado: supuestos por defecto del dueño.
+            'demanda_horizonte': _resumen_horizonte(horizonte_por_sku),
             'lead_time': {'nacional': lt_nac, 'china': lt_chi},
             # Procedencia del cálculo — sin esto el número no es auditable
             'estimador_sigma_d': ESTIMADOR_SIGMA_D,

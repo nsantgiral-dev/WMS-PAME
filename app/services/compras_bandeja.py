@@ -278,6 +278,22 @@ def para_quien_mira(respuesta, es_admin: bool):
     return salida
 
 
+def _demanda_de_la_fila(fila):
+    """La venta del horizonte tal como la dejó el motor: método, texto y lo
+    que no se contó (atípicos, venta de proyecto). Sin recalcular."""
+    h = fila.get('demanda_horizonte') or {}
+    t = h.get('tendencia') or {}
+    return {'metodo': h.get('metodo'), 'motivo': h.get('motivo'),
+            'texto': h.get('texto'),
+            'ventana_dias': h.get('ventana_dias'),
+            'ano_anterior': h.get('ano_anterior'),
+            'tendencia_pct': t.get('pct'),
+            'tendencia_acotada': bool(t.get('acotada')),
+            'atipicos': h.get('atipicos'),
+            'venta_proyecto': h.get('venta_proyecto') or 0,
+            'vuelve_en_temporada': bool(h.get('vuelve_en_temporada'))}
+
+
 def _porque(fila, pedido, nivel_servicio):
     """La aritmética en palabras: los números del motor, sin recalcular."""
     return {
@@ -288,6 +304,10 @@ def _porque(fila, pedido, nivel_servicio):
         'ya_pedido': fila.get('en_transito'),
         'posicion': fila.get('posicion'),
         'vende_dia': fila.get('d_avg_diaria'),
+        # De dónde sale la venta diaria de lo que viene
+        # (`kardex_service.demanda_para_horizonte`), ya en palabras.
+        'demanda': _demanda_de_la_fila(fila),
+        'promedio_anual_dia': fila.get('d_avg_historica'),
         'punto_de_pedido': fila.get('rop'),
         'reserva_seguridad': fila.get('safety_stock'),
         'nivel_objetivo': fila.get('nivel_objetivo'),
@@ -419,6 +439,9 @@ def bandeja(nivel_servicio: float = NIVEL_SERVICIO) -> dict:
     return dict(
         base,
         estado='OK',
+        # Cómo se midió la venta de lo que viene (misma época del año pasado o
+        # promedio, bodegas de proyecto, topes de la tendencia): del motor.
+        demanda=dict(base['demanda'], horizonte=rop.get('demanda_horizonte')),
         destino=destino,
         ciclo=nac.get('ciclo'),
         entrega_nacional={'dias': nac.get('lt_dias'),

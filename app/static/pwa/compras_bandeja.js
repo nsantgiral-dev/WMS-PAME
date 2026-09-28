@@ -44,6 +44,15 @@ function cmpN(x) {
   return Math.round(n).toLocaleString('es-CO');
 }
 
+/** Venta diaria: un decimal por debajo de 10 («0,3», «9,9»), entero arriba. */
+function cmpNd(x) {
+  if (x === null || x === undefined || x === '') return 'sin dato';
+  const n = Number(x);
+  if (!Number.isFinite(n)) return String(x);
+  if (Math.abs(n) >= 10) return Math.round(n).toLocaleString('es-CO');
+  return n.toLocaleString('es-CO', { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+}
+
 /** «3 días», «1 día», «menos de 1 día». Días enteros hacia abajo: «alcanza
  *  2 días» cuando alcanza 2,9 es el lado prudente de leerlo. */
 function cmpDias(x) {
@@ -232,10 +241,29 @@ function cmpPildora(urg) {
 
 /** De dónde salen las ventas (lo decide el servidor: `demanda_fuentes`).
  *  Parciales = cota inferior; no al día = no decidir. Nada se calcula acá. */
+/** Cómo se midió la venta de lo que viene (lo decide el servidor:
+ *  `demanda_para_horizonte`): cuántos con la misma época del año pasado,
+ *  cuántos con el promedio, y qué venta no cuenta. */
+function cmpHorizonteTexto(h) {
+  if (!h) return '';
+  const pm = h.por_metodo || {};
+  const mismo = pm.MISMO_PERIODO_ANO_ANTERIOR || 0;
+  const prom = pm.PROMEDIO || 0;
+  const sinAno = (h.promedio_por_motivo || {}).SIN_ANO_ANTERIOR || 0;
+  const bp = ((h.bodegas_proyecto || {}).bodegas || []);
+  const t = h.tendencia || {};
+  const partes = [];
+  if (mismo) partes.push(`${cmpN(mismo)} producto${mismo === 1 ? '' : 's'} con lo que vendieron en la misma época del año pasado, ajustado por cómo va este año (entre ${cmpPct(t.piso)} y ${cmpPct(t.techo)} del año pasado)`);
+  if (prom) partes.push(`${cmpN(prom)} con el promedio del año${sinAno ? ' (todavía no hay un año de ventas para comparar: en temporada puede quedarse corto)' : ''}`);
+  if (bp.length) partes.push(`la venta de ${bp.join(', ')} (licitaciones y contratación) no cuenta: no se repite`);
+  return partes.length ? `Venta de lo que viene: ${partes.join(' · ')}.` : '';
+}
+
 function cmpDemandaHtml(dem) {
   const d = dem || {};
   const cob = d.cobertura || {};
-  const origen = `Ventas: ${esc(d.nombre || 'sin fuente')}${cob.dias ? ` · ${esc(cmpN(cob.dias))} días observados, hasta el ${esc(cmpFecha(cob.hasta))}` : ''}`;
+  const hz = cmpHorizonteTexto(d.horizonte);
+  const origen = `Ventas: ${esc(d.nombre || 'sin fuente')}${cob.dias ? ` · ${esc(cmpN(cob.dias))} días observados, hasta el ${esc(cmpFecha(cob.hasta))}` : ''}${hz ? `<br>${esc(hz)}` : ''}`;
   if (d.nivel === 'ok') return `<div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:4px;">${origen}</div>`;
   const aviso = d.nivel === 'aviso'
     ? `<div style="font-size:var(--fs-sm);color:var(--warn-tx);font-weight:700;margin-top:6px;">⚠ Ventas parciales: falta la venta de caja de las tiendas, así que las cantidades de abajo salen CORTAS. Úselas como mínimo.</div>`
@@ -258,7 +286,11 @@ function cmpPorQueHtml(l) {
   const partes = [];
   partes.push(`Hay <b>${esc(cmpN(p.existencia))}</b> en las sedes − <b>${esc(cmpN(p.comprometido))}</b> vendidos sin despachar − <b>${esc(cmpN(p.salida_sin_confirmar))}</b> vendidos en tienda sin confirmar = <b>${esc(cmpN(p.disponible))}</b> disponibles de verdad.`);
   partes.push(`Ya pedido (órdenes abiertas y contenedores): <b>${esc(cmpN(p.ya_pedido))}</b>, así que cuenta con <b>${esc(cmpN(p.posicion))}</b>.`);
-  partes.push(`Vende unas <b>${esc(cmpN(p.vende_dia))}</b> al día. La entrega tarda <b>${esc(cmpDias(p.entrega_dias))}</b> (${esc(p.entrega_fuente || 'sin fuente')}) y se vuelve a comprar cada <b>${esc(cmpDias(p.ciclo_dias))}</b>.`);
+  const dem = p.demanda || {};
+  const anual = dem.metodo === 'MISMO_PERIODO_ANO_ANTERIOR' && p.promedio_anual_dia !== null && p.promedio_anual_dia !== undefined
+    ? ` <span style="color:var(--tx3);">(el promedio del año, que ya no decide, es ${esc(cmpNd(p.promedio_anual_dia))})</span>` : '';
+  partes.push(`Para lo que viene se cuentan <b>${esc(cmpNd(p.vende_dia))}</b> al día${anual}. ${esc(dem.texto || '')}`);
+  partes.push(`La entrega tarda <b>${esc(cmpDias(p.entrega_dias))}</b> (${esc(p.entrega_fuente || 'sin fuente')}) y se vuelve a comprar cada <b>${esc(cmpDias(p.ciclo_dias))}</b>.`);
   partes.push(`Punto de pedido: <b>${esc(cmpN(p.punto_de_pedido))}</b> (incluye <b>${esc(cmpN(p.reserva_seguridad))}</b> de reserva de seguridad para tener existencias el ${esc(cmpPct(p.meta_servicio))} de los días).`);
   partes.push(`Cantidad a tener: <b>${esc(cmpN(p.nivel_objetivo))}</b>. Le faltan <b>${esc(cmpN(p.falta_para_objetivo))}</b>; se piden <b>${esc(cmpN(l.pedir_unidades))}</b>${p.redondeo_empaque ? ` (${esc(cmpN(p.redondeo_empaque))} de más para completar el empaque de ${esc(cmpN(l.empaque && l.empaque.unidades_por_empaque))} por ${esc(um)})` : ''}.`);
   if (p.faltan_datos_de_agotados) partes.push(`<span style="color:var(--warn-tx);">Le faltan datos de agotados: no se sabe qué días estuvo sin existencias, y la venta diaria puede estar por debajo de la real.</span>`);
