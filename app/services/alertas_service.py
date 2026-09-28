@@ -82,7 +82,7 @@ def _config_resend(dest_override: str | None = None) -> dict | None:
 
 
 def enviar_email(asunto: str, cuerpo_html: str, cuerpo_texto: str,
-                 dest: str | None = None) -> bool:
+                 dest: str | None = None, devolver_id: bool = False):
     """
     Envía un email via Resend API (HTTPS — no SMTP).
     Retorna True si se envió, False si faltó config o hubo error.
@@ -106,12 +106,17 @@ def enviar_email(asunto: str, cuerpo_html: str, cuerpo_texto: str,
     declara; quien no pase nada, sigue igual.
 
     Coma-separado, igual formato que la variable de entorno.
+
+    `devolver_id=True` (2026-09-27, avisos de flota): devuelve el id que Resend
+    asignó (o `None` sin configuración) en vez de `True`/`False`. El registro de
+    avisos de flota lo guarda como `proveedor_msg_id`: «Resend lo aceptó» con su
+    número, no un booleano.
     """
     cfg = _config_resend(dest)
     if not cfg:
         logger.warning('[ALERTAS] Resend no configurado — email omitido. '
-                       'Agrega RESEND_API_KEY y ALERTA_EMAIL_DEST en Railway.')
-        return False
+                       'Agregue RESEND_API_KEY y ALERTA_EMAIL_DEST en Railway.')
+        return None if devolver_id else False
 
     import requests as _requests
 
@@ -137,6 +142,8 @@ def enviar_email(asunto: str, cuerpo_html: str, cuerpo_texto: str,
         if resp.status_code in (200, 201):
             data = resp.json()
             logger.info(f'[ALERTAS] Email enviado — id={data.get("id")}: {asunto}')
+            if devolver_id:
+                return str(data.get('id') or 'resend-sin-id')
             return True
         raise RuntimeError(f'Resend {resp.status_code}: {resp.text}')
     except RuntimeError:

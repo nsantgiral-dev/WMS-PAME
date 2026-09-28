@@ -103,6 +103,18 @@ def parametros_documento_vence(placa: str, tipo: str, vencimiento: date) -> List
     return [placa.strip().upper(), nombre_documento(tipo), fecha_en_palabras(vencimiento)]
 
 
+def parametros_hallazgo_bloqueante(placa: str, descripcion: str) -> List[str]:
+    """`['TGZ653', 'freno de mano no sostiene']` — la plantilla
+    `flota_hallazgo_bloqueante`. La descripción la escribió una persona: se
+    recorta (un WhatsApp no es el expediente) y nunca va vacía."""
+    if not (placa or '').strip():
+        raise AvisoInvalido('un aviso sin placa no le sirve a nadie')
+    texto = ' '.join((descripcion or '').split())
+    if not texto:
+        raise AvisoInvalido('un daño bloqueante sin descripción no se puede avisar')
+    return [placa.strip().upper(), texto[:200]]
+
+
 def validar_parametros(plantilla: str, parametros: Sequence[str]) -> None:
     """Cantidad y forma. Un hueco en el mensaje no produce error en Gupshup.
 
@@ -217,6 +229,6 @@ def clave_aviso(plantilla: str, entidad: str, entidad_id: int, hito: str) -> str
 __all__ = [
     'PLANTILLAS', 'DIAS_AVISO_DOCUMENTO', 'NOMBRE_DOCUMENTO', 'AvisoInvalido',
     'dias_en_palabras', 'fecha_en_palabras', 'nombre_documento',
-    'parametros_documento_vence', 'validar_parametros',
+    'parametros_documento_vence', 'parametros_hallazgo_bloqueante', 'validar_parametros',
     'toca_avisar_vencimiento', 'clave_aviso',
 ]

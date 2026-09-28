@@ -125,29 +125,37 @@ def _hallazgos_vencidos(ahora: _datetime) -> list:
     return sorted(salida, key=lambda x: -x['dias'])
 
 
-def _documentos_por_vencer(hoy: _date) -> list:
-    """Los que vencen dentro de 30 días, el más cercano primero.
+def _papeles(hoy: _date) -> dict:
+    """Los papeles de los vehículos ACTIVOS, por estado, con la política de
+    salida (una lectura: `salida.papeles_de_la_flota`, la misma del correo
+    diario).
 
-    Corte en **día operativo de Bogotá**: con `date.today()` en Railway, un
-    documento que vence hoy aparecería vencido una noche antes (regla 5).
+    Hasta el 2026-09-27 esto filtraba `fecha_vencimiento >= hoy`: **los
+    vencidos no salían nunca** —justo los que dejan el camión ilegal—, ni los
+    vehículos sin papeles, y contaba vehículos inactivos.
+
+    Corte en **día operativo de Bogotá** (regla 5).
     """
-    from datetime import timedelta
+    from flota.adaptadores.salida import papeles_de_la_flota
+    from flota.dominio import salida as dom
 
-    from app.models.vehiculo import Vehiculo
-    from flota.adaptadores.modelos import DocumentoVehiculo
-
-    limite = hoy + timedelta(days=30)
-    filas = (db.session.query(DocumentoVehiculo, Vehiculo.placa)
-             .join(Vehiculo, Vehiculo.id == DocumentoVehiculo.vehiculo_id)
-             .filter(DocumentoVehiculo.fecha_vencimiento.isnot(None),
-                     DocumentoVehiculo.fecha_vencimiento >= hoy,
-                     DocumentoVehiculo.fecha_vencimiento <= limite).all())
-    return sorted(
-        [{'placa': placa, 'tipo': d.tipo,
-          'vence': d.fecha_vencimiento.isoformat(),
-          'faltan': (d.fecha_vencimiento - hoy).days}
-         for d, placa in filas],
-        key=lambda x: x['faltan'])
+    out = {'por_vencer': [], 'vencidos': [], 'sin_cargar': []}
+    for placa, p in papeles_de_la_flota(hoy):
+        if p.estado == dom.POR_VENCER:
+            out['por_vencer'].append({'placa': placa, 'tipo': p.tipo,
+                                      'vence': p.vence.isoformat(),
+                                      'faltan': (p.vence - hoy).days})
+        elif p.estado == dom.VENCIDO:
+            out['vencidos'].append({'placa': placa, 'tipo': p.tipo,
+                                    'vence': p.vence.isoformat(),
+                                    'dias_vencido': (hoy - p.vence).days})
+        elif p.estado in (dom.SIN_CARGAR, dom.NO_ENCONTRADO, dom.DATO_A_CORREGIR):
+            out['sin_cargar'].append({'placa': placa, 'tipo': p.tipo,
+                                      'estado': p.estado,
+                                      'texto': dom.motivo_papel(p, hoy).texto})
+    out['por_vencer'].sort(key=lambda x: x['faltan'])
+    out['vencidos'].sort(key=lambda x: -x['dias_vencido'])
+    return out
 
 
 def armar_reporte(dia: Optional[_date] = None, ahora: Optional[_datetime] = None) -> dict:
@@ -166,7 +174,7 @@ def armar_reporte(dia: Optional[_date] = None, ahora: Optional[_datetime] = None
 
     insp = inspecciones_completas_de(ventana.desde, ventana.hasta)
     vencidos = _hallazgos_vencidos(ahora)
-    documentos = _documentos_por_vencer(dia)
+    papeles = _papeles(dia)
     return {
         'desde': ventana.desde.isoformat(),
         'hasta': ventana.hasta.isoformat(),
@@ -174,7 +182,9 @@ def armar_reporte(dia: Optional[_date] = None, ahora: Optional[_datetime] = None
         'dia_operativo': dia.isoformat(),
         'inspecciones': insp,
         'hallazgos_vencidos': vencidos,
-        'documentos_por_vencer_30d': documentos,
+        'documentos_por_vencer_30d': papeles['por_vencer'],
+        'documentos_vencidos': papeles['vencidos'],
+        'documentos_sin_cargar': papeles['sin_cargar'],
     }
 
 
@@ -203,6 +213,14 @@ def _texto(r: dict) -> str:
     lineas += [f'     · {d["placa"]} — {d["tipo"]}, vence {d["vence"]} '
                f'(faltan {d["faltan"]} días)'
                for d in r['documentos_por_vencer_30d']]
+    lineas += ['', f'   Vencidos (el vehículo no sale sin autorización de un '
+                   f'administrador): {len(r["documentos_vencidos"])}']
+    lineas += [f'     · {d["placa"]} — {d["tipo"]}, venció {d["vence"]} '
+               f'(hace {d["dias_vencido"]} días)'
+               for d in r['documentos_vencidos']]
+    lineas += ['', f'   Sin cargar o a corregir (no se sabe si están al día): '
+                   f'{len(r["documentos_sin_cargar"])}']
+    lineas += [f'     · {d["placa"]} — {d["texto"]}' for d in r['documentos_sin_cargar']]
     lineas += ['', f'Calculado el {r["dia_operativo"]} (día operativo de Bogotá) '
                    f'sobre {r["etiqueta"]}.']
     return '\n'.join(lineas)

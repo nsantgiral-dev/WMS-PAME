@@ -110,6 +110,62 @@ def _raiz() -> Path:
     return raiz
 
 
+#: Raíces por las que pasó `FLOTA_FOTOS_DIR` (2026-09-27). `storage_ref` es
+#: RELATIVO a la raíz: si la variable cambia, toda foto vieja queda `ok` en la
+#: base y da 410. En QA pasó de `/data` (`scripts/generar_env_qa.py`) a
+#: `/data/flota-fotos`. El sirviente busca también acá antes de dar 410 —sin
+#: mover nada— y solo sirve un archivo cuyo contenido tiene el hash de su
+#: nombre (direccionado por contenido: no puede ser otra foto).
+RAICES_CONOCIDAS = ('/data', '/data/flota-fotos')
+
+#: Otras raíces viejas, coma-separadas, para una mudanza que no está arriba.
+VAR_RAICES_ANTERIORES = 'FLOTA_FOTOS_DIRS_ANTERIORES'
+
+
+def raices_anteriores() -> list:
+    """Las raíces donde puede haber quedado una foto vieja, sin la actual y
+    solo absolutas (una relativa no dice dónde está en ESTE proceso)."""
+    try:
+        actual = str(_raiz())
+    except AlmacenNoConfigurado:
+        actual = None
+    extra = [x.strip() for x in (os.getenv(VAR_RAICES_ANTERIORES) or '').split(',') if x.strip()]
+    vistas, out = set(), []
+    for r in list(RAICES_CONOCIDAS) + extra:
+        r = r.rstrip('/') or '/'
+        if r == (actual or '').rstrip('/') or r in vistas or not Path(r).is_absolute():
+            continue
+        vistas.add(r)
+        out.append(r)
+    return out
+
+
+def _digest_del_nombre(storage_ref: str):
+    nombre = Path(str(storage_ref or '')).name
+    base = nombre.split('.', 1)[0]
+    return base if len(base) == 64 and all(c in '0123456789abcdef' for c in base) else None
+
+
+def en_raiz_anterior(storage_ref: str, bytes_esperados=None):
+    """La ruta de la foto en una raíz anterior, o `None`. Solo si el contenido
+    tiene el hash de su nombre y el tamaño esperado: nunca otra foto."""
+    digest = _digest_del_nombre(storage_ref)
+    if not storage_ref or digest is None:
+        return None
+    for raiz in raices_anteriores():
+        ruta = Path(raiz) / str(storage_ref)
+        try:
+            if not ruta.is_file():
+                continue
+            if bytes_esperados not in (None, 0) and ruta.stat().st_size != bytes_esperados:
+                continue
+        except OSError:
+            continue
+        if _sha_de_archivo(ruta) == digest:
+            return ruta
+    return None
+
+
 class AlmacenLocal:
     """Archivos en disco. Volumen de Railway en producción."""
 
@@ -155,15 +211,25 @@ class AlmacenLocal:
         """¿El archivo está bajo la raíz de este proceso (y con su tamaño)?
         Levanta `AlmacenNoConfigurado` si este proceso no tiene almacén."""
         destino = _raiz() / str(storage_ref or '')
-        if not storage_ref or not destino.is_file():
+        if not storage_ref:
             return False
+        if not destino.is_file():
+            return en_raiz_anterior(storage_ref, bytes_esperados) is not None
         return bytes_esperados in (None, 0) or destino.stat().st_size == bytes_esperados
 
     def leer(self, storage_ref: str) -> bytes:
-        """Devuelve el archivo. Levanta si no está — no un placeholder."""
+        """Devuelve el archivo. Levanta si no está — no un placeholder.
+
+        Si no está bajo la raíz actual, lo busca en las raíces anteriores
+        (`en_raiz_anterior`: con su hash) antes de declararlo ausente."""
         destino = _raiz() / storage_ref
         if not destino.is_file():
-            raise ArchivoAusente(f'la foto {storage_ref} no está en el almacén')
+            viejo = en_raiz_anterior(storage_ref)
+            if viejo is None:
+                raise ArchivoAusente(f'la foto {storage_ref} no está en el almacén')
+            logger.warning('[FLOTA] foto %s servida desde la raíz anterior %s',
+                           storage_ref, viejo)
+            return viejo.read_bytes()
         return destino.read_bytes()
 
     def dimensiones(self, storage_ref: str) -> Dict[str, int]:
@@ -213,7 +279,12 @@ def diagnostico_almacen(muestra: int = 200) -> dict:
     Lo que no se puede escribir lo dice; lo que revienta, levanta."""
     out = {'raiz': os.getenv('FLOTA_FOTOS_DIR'), 'configurada': False, 'absoluta': None,
            'existe': None, 'escribible': None, 'mismo_disco_que_el_contenedor': None,
-           'fotos_ok_revisadas': None, 'fotos_ok_sin_archivo': None, 'ejemplos_sin_archivo': []}
+           'fotos_ok_total': None,
+           'fotos_ok_revisadas': None, 'fotos_ok_sin_archivo': None, 'ejemplos_sin_archivo': [],
+           'fotos_ok_en_raiz_anterior': None, 'raices_anteriores': [],
+           # Una ALARMA, no un número (2026-09-27): una foto `ok` sin archivo es
+           # evidencia legal que la base afirma y nadie puede mostrar.
+           'alarma': None}
     try:
         raiz = _raiz()
     except AlmacenNoConfigurado as e:
@@ -233,11 +304,35 @@ def diagnostico_almacen(muestra: int = 200) -> dict:
     # Sin try: si la muestra revienta, el health devuelve error — un health
     # que responde ceros porque algo falló adentro es evidencia falsa.
     from flota.adaptadores.modelos import Foto
+    total = Foto.query.filter(Foto.estado == 'ok').count()
     filas = (Foto.query.filter(Foto.estado == 'ok')
              .order_by(Foto.id.desc()).limit(muestra).all())
     faltan = [f.id for f in filas if estado_verificable(f) == SIN_ARCHIVO]
-    out.update(fotos_ok_revisadas=len(filas), fotos_ok_sin_archivo=len(faltan),
-               ejemplos_sin_archivo=faltan[:10])
+    en_anterior = [f.id for f in filas
+                   if not (raiz / str(f.storage_ref or '')).is_file()
+                   and estado_verificable(f) == 'ok']
+    out.update(fotos_ok_total=total, fotos_ok_revisadas=len(filas),
+               fotos_ok_sin_archivo=len(faltan), ejemplos_sin_archivo=faltan[:10],
+               fotos_ok_en_raiz_anterior=len(en_anterior),
+               raices_anteriores=raices_anteriores())
+    avisos = []
+    if faltan:
+        avisos.append(
+            f'{len(faltan)} foto(s) figuran guardadas y el archivo no está ni en '
+            f'{raiz} ni en las raíces anteriores: esa evidencia hoy no se puede '
+            f'mostrar. Revise el volumen del servicio web y si FLOTA_FOTOS_DIR cambió.')
+    if en_anterior:
+        avisos.append(
+            f'{len(en_anterior)} foto(s) se están sirviendo desde una raíz anterior '
+            f'(FLOTA_FOTOS_DIR cambió). No se movió nada: funcionan, pero dependen '
+            f'de que esa carpeta siga existiendo.')
+    if total > len(filas):
+        avisos.append(f'Se revisaron las {len(filas)} más recientes de {total}: '
+                      f'las demás no se miraron.')
+    if out['mismo_disco_que_el_contenedor']:
+        avisos.append(f'{raiz} está en el disco del contenedor, no en un volumen: '
+                      f'lo que se guarde se pierde en el próximo despliegue.')
+    out['alarma'] = ' '.join(avisos) or None
     return out
 
 
@@ -433,4 +528,5 @@ def colgar_fotos(fotos, entidad_tipo, entidad_id, autor_id, ahora):
 
 __all__ = ['AlmacenLocal', 'ErrorAlmacen', 'AlmacenNoConfigurado', 'ArchivoAusente',
            'desde_data_url', 'guardar_foto', 'colgar_fotos', 'validar_fotos',
-           'estado_verificable', 'diagnostico_almacen', 'SIN_ARCHIVO', 'ALMACEN_SIN_CONFIGURAR']
+           'estado_verificable', 'diagnostico_almacen', 'SIN_ARCHIVO', 'ALMACEN_SIN_CONFIGURAR',
+           'RAICES_CONOCIDAS', 'raices_anteriores', 'en_raiz_anterior']

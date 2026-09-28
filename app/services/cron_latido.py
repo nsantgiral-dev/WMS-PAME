@@ -91,6 +91,35 @@ def _escribir(app, nombre, **campos):
         logger.warning('[LATIDO] no se pudo escribir %s: %s', nombre, e)
 
 
+#: Tope del resumen guardado: es para leerlo en una pantalla, no un log.
+TOPE_RESUMEN = 4000
+
+
+def resumen_de(r):
+    """Lo que la corrida devolvió, si es un dict, como JSON acotado (2026-09-27).
+    «Corrió» no es «hizo su trabajo»: el barrido de avisos de flota corría bien
+    todos los días con `FLOTA_AVISOS` apagado. Con el resumen guardado, el panel
+    de la web sabe qué hizo —y con qué variables— el cron del worker.
+    Cualquier otra cosa → `None` (se borra el resumen anterior: no es de esta
+    corrida). Un resumen demasiado largo se recorta y lo dice."""
+    if not isinstance(r, dict):
+        return None
+    import json
+    try:
+        texto = json.dumps(r, ensure_ascii=False, default=str)
+    except (TypeError, ValueError):
+        return json.dumps({'ilegible': True})
+    if len(texto) > TOPE_RESUMEN:
+        # Lo que más se necesita leer (la configuración del servicio) se
+        # conserva si cabe sola.
+        corto = {'recortado': True, 'claves': sorted(map(str, r))[:50]}
+        if isinstance(r.get('config'), dict):
+            corto['config'] = r['config']
+        texto = json.dumps(corto, ensure_ascii=False, default=str)
+        return texto if len(texto) <= TOPE_RESUMEN else json.dumps({'recortado': True})
+    return texto
+
+
 def con_latido(nombre: str, fn):
     """Envuelve `fn` para que cada corrida deje su latido."""
     @functools.wraps(fn)
@@ -105,7 +134,7 @@ def con_latido(nombre: str, fn):
             raise
         ahora = datetime.utcnow()
         _escribir(app, nombre, ultimo_fin=ahora, ultimo_ok=True, ultimo_ok_en=ahora,
-                  ultimo_error=None)
+                  ultimo_error=None, ultimo_resumen=resumen_de(r))
         return r
     _envuelto._latido = nombre
     return _envuelto

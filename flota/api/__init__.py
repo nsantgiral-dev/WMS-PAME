@@ -17,6 +17,10 @@ def registrar_flota(app):
     # existe para ninguno de los dos, y esa es la forma más silenciosa de que
     # una tabla no llegue a producción.
     from flota.adaptadores import modelos  # noqa: F401
+    # El daño bloqueante avisa al nacer (después del commit), venga de la
+    # puerta que venga: el evento vive en el modelo, no en una ruta.
+    from flota.adaptadores.avisos import escuchar_danos_bloqueantes
+    escuchar_danos_bloqueantes()
     from flota.api.avisos import avisos_bp
     from flota.api.bandeja import bandeja_bp
     from flota.api.conductor import conductor_bp

@@ -13,7 +13,6 @@ configurado, no acepta nada: un webhook abierto es un endpoint por el que
 cualquiera marca avisos como entregados.
 """
 import logging
-import os
 
 from flask import Blueprint, jsonify, request
 from flask_jwt_extended import jwt_required
@@ -36,13 +35,23 @@ def listar_avisos():
     muestra avisos de prueba con el mismo aspecto que los reales es cómo se
     termina creyendo que 1.485 personas recibieron algo que nunca salió.
     """
-    from flota.adaptadores.avisos import avisos_sin_confirmar
+    from flota.adaptadores.avisos import (CANAL_CORREO, avisos_sin_confirmar,
+                                          configuracion_de_este_servicio,
+                                          estado_del_barrido, que_falta)
     from flota.adaptadores.modelos import Aviso
 
     filas = Aviso.query.order_by(Aviso.id.desc()).limit(100).all()
+    # Lo que corrió el barrido diario, leído de la BASE (2026-09-27). El cron
+    # corre en el worker y este endpoint en la web: leer `os.getenv` acá
+    # contestaba con las variables de la web, que no son las del cron.
+    barridos = estado_del_barrido()
+    esta_web = configuracion_de_este_servicio()
+    con_inicio = [b for b in barridos if b.get('ultimo_inicio')]
+    ultimo = max(con_inicio, key=lambda b: b['ultimo_inicio']) if con_inicio else None
     return jsonify({
         'avisos': [{
             'id': a.id, 'plantilla': a.plantilla, 'telefono': a.telefono,
+            'canal': 'correo' if a.telefono == CANAL_CORREO else 'whatsapp',
             'parametros': a.parametros, 'estado': a.estado,
             'simulado': a.simulado, 'detalle': a.detalle,
             'creado_ts': a.creado_ts.isoformat() if a.creado_ts else None,
@@ -51,8 +60,10 @@ def listar_avisos():
         # El número que hace honesto al resto: si crece, el canal acepta
         # mensajes que no llegan.
         'sin_confirmar_6h': avisos_sin_confirmar(6),
-        'encendido': (os.getenv('FLOTA_AVISOS') or '').lower() == 'true',
-        'canal_real': (os.getenv('FLOTA_AVISOS_REALES') or '').lower() == 'true',
+        # Lo que corrió el cron (con su configuración en `ultimo_resumen`) y lo
+        # que le falta a cada servicio, dicho con el nombre del servicio.
+        'barrido': ultimo,
+        'que_falta': que_falta(barridos, esta_web),
     }), 200
 
 
@@ -67,9 +78,20 @@ def barrer():
     Devuelve el resumen completo: un barrido que no dice qué hizo es
     indistinguible de uno que no corrió.
     """
-    from flota.adaptadores.avisos import barrer_documentos_por_vencer
+    from app.utils.lock import LOCK_FLOTA_AVISOS, advisory_lock
+    from flota.adaptadores.avisos import barrido_diario
 
-    return jsonify(barrer_documentos_por_vencer()), 200
+    # El mismo candado del cron: el botón y el cron de las 06:00 no mandan dos
+    # veces el mismo WhatsApp (2026-09-27; antes el botón no lo tomaba).
+    with advisory_lock(LOCK_FLOTA_AVISOS, 'flota_avisos_barrido_manual') as tomado:
+        if not tomado:
+            return jsonify({'error': 'El barrido de avisos ya está corriendo. '
+                                     'Espere un momento y vuelva a mirar.'}), 409
+        r = barrido_diario()
+    # Corre con las variables de ESTE servicio (la web), no las del cron.
+    r['nota'] = ('Se corrió en este servicio, con sus variables. El barrido '
+                 'diario de las 06:00 corre en el servicio de los crons.')
+    return jsonify(r), 200
 
 
 @avisos_bp.route('/avisos/entrega', methods=['POST'])

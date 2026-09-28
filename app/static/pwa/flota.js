@@ -2890,56 +2890,83 @@ async function flotaBloqueAvisos() {
   } catch (e) {
     return '';
   }
+  return flotaAvisosHtml(d);
+}
+
+/** El bloque de avisos, puro (lo prueba Node). Dice qué salió, a quién y si
+ * llegó; y —antes que nada— **qué le falta a cada servicio** para que salga
+ * algo. Lo del cron sale de lo que el cron publicó en la base (`barrido`,
+ * `que_falta`), no de las variables de la web (2026-09-27). */
+function flotaAvisosHtml(d) {
+  d = d || {};
   const avisos = d.avisos || [];
 
   const estado = (a) => {
-    if (a.estado === 'fallido') return `<span style="color:var(--red)">no salió</span>`;
+    if (a.estado === 'fallido') return `<span style="color:var(--err-tx)">no salió</span>`;
     if (a.estado === 'entregado_al_proveedor') {
-      // El estado que hace honesto al resto: el proveedor dijo "lo recibí".
-      return `<span style="color:var(--yellow)">aceptado, sin confirmar entrega</span>`;
+      // El correo no tiene evento de entrega: su confirmación es que Resend lo aceptó.
+      if (a.canal === 'correo') return `<span style="color:var(--ok-tx)">aceptado por el correo</span>`;
+      return `<span style="color:var(--warn-tx)">aceptado, sin confirmar entrega</span>`;
     }
-    if (a.estado === 'entregado') return `<span style="color:var(--green)">entregado</span>`;
-    if (a.estado === 'leido') return `<span style="color:var(--green)">leído</span>`;
-    return a.estado;
+    if (a.estado === 'entregado') return `<span style="color:var(--ok-tx)">entregado</span>`;
+    if (a.estado === 'leido') return `<span style="color:var(--ok-tx)">leído</span>`;
+    if (a.estado === 'encolado') return 'enviándose';
+    return esc(a.estado);
+  };
+  const detalleDe = (a) => {
+    let p = null;
+    try { p = JSON.parse(a.parametros); } catch (e) { p = null; }
+    if (Array.isArray(p)) return p.map(x => esc(x)).join(' · ');
+    if (p && typeof p === 'object' && p.asunto) return esc(p.asunto);
+    return '';
   };
 
-  let filas = avisos.slice(0, 12).map(a => {
-    let params = a.parametros;
-    try { params = JSON.parse(a.parametros).join(' · '); } catch (e) {}
-    return `<li${a.simulado ? ' style="opacity:.6"' : ''}>
-      ${a.simulado ? '<b style="color:var(--yellow)">[SIMULADO]</b> ' : ''}
-      ${esc(a.telefono)} — ${params} · ${estado(a)}
-      ${a.detalle ? `<br><small style="color:var(--red)">${esc(a.detalle)}</small>` : ''}</li>`;
-  }).join('');
+  let filas = avisos.slice(0, 12).map(a => `<li${a.simulado ? ' style="opacity:.6"' : ''}>
+      ${a.simulado ? '<b style="color:var(--warn-tx)">[SIMULADO]</b> ' : ''}
+      ${a.canal === 'correo' ? '✉️ correo' : esc(a.telefono)} — ${detalleDe(a)} · ${estado(a)}
+      ${a.detalle ? `<br><small style="color:var(--err-tx)">${esc(a.detalle)}</small>` : ''}</li>`).join('');
   if (!filas) filas = '<li style="color:var(--tx2)">Ninguno todavía.</li>';
 
   const alarma = d.sin_confirmar_6h > 0
-    ? `<p style="color:var(--red)"><b>${esc(d.sin_confirmar_6h)} aviso(s) salieron hace más de
+    ? `<p style="color:var(--err-tx)"><b>${esc(d.sin_confirmar_6h)} aviso(s) por WhatsApp salieron hace más de
        6 horas y nunca confirmaron entrega.</b> El proveedor los aceptó y no hay
-       evidencia de que hayan llegado — que es el modo de fallo que este registro
-       existe para hacer visible.</p>`
+       evidencia de que hayan llegado.</p>`
     : '';
 
-  const apagado = !d.encendido
-    ? `<p style="color:var(--tx2)">Los avisos están <b>apagados</b>
-       (<code>FLOTA_AVISOS</code>). Nace apagado a propósito: un cron que escribe
-       no se enciende solo.</p>`
-    : (!d.canal_real
-        ? `<p style="color:var(--yellow)">Encendido en modo <b>simulado</b>: se
-           registra todo y no sale ningún WhatsApp. Para mandar de verdad,
-           <code>FLOTA_AVISOS_REALES=true</code>.</p>`
-        : '');
+  const b = d.barrido;
+  const corrio = b && b.ultimo_inicio
+    ? `<p style="color:var(--tx2)">Último barrido diario: ${esc(flotaFechaHoraBogota(b.ultimo_inicio))}
+       en el servicio «${esc(b.servicio || 'sin nombre')}».</p>`
+    : '';
+  const falta = Array.isArray(d.que_falta) ? d.que_falta : [];
+  const bloqueFalta = falta.length
+    ? `<div class="flota-hoy-pendiente" style="border-radius:10px;padding:10px 12px;margin:8px 0;">
+         <b>Qué falta para que los avisos salgan</b>
+         <ul style="margin:6px 0 0;padding-left:18px;">${falta.map(f =>
+           `<li${f.grave ? '' : ' style="opacity:.85"'}>${f.servicio ? `<b>${esc(f.servicio)}</b>: ` : ''}${esc(f.texto)}</li>`).join('')}</ul>
+       </div>`
+    : `<p style="color:var(--tx2)">Los avisos están configurados: correo diario y, si está aprobado, WhatsApp.</p>`;
 
   return `<div class="tabla-card">
-    <div class="tabla-titulo">Avisos de vencimiento</div>
-    ${apagado}${alarma}
+    <div class="tabla-titulo">Avisos de flota (papeles, daños bloqueantes, licencias)</div>
+    ${corrio}${bloqueFalta}${alarma}
     <ul style="line-height:1.7">${filas}</ul>
-    <button class="btn-flota" onclick="flotaBarrerAvisos()">Revisar vencimientos ahora</button>
+    <button class="btn-flota" onclick="flotaBarrerAvisos()">Revisar y avisar ahora</button>
   </div>`;
 }
 
-/** Dispara el barrido a mano. Existe para poder ejercerlo ANTES de encender el
- * cron — un barrido que solo corre de noche es uno que nadie vio correr. */
+/** Día y hora de Bogotá de un instante UTC que el servidor manda sin zona. */
+function flotaFechaHoraBogota(iso) {
+  if (!iso) return 'sin dato';
+  const t = /[zZ]|[+-]\d\d:?\d\d$/.test(iso) ? iso : iso + 'Z';
+  const f = new Date(t);
+  if (isNaN(f.getTime())) return 'sin dato';
+  return f.toLocaleString('es-CO', { timeZone: 'America/Bogota', day: '2-digit',
+    month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+
+/** Dispara el barrido a mano (con el mismo candado del cron). Corre con las
+ * variables de ESTE servicio y lo dice. */
 async function flotaBarrerAvisos() {
   try {
     const r = await fetch(API + '/flota/avisos/barrer', {
@@ -2948,17 +2975,16 @@ async function flotaBarrerAvisos() {
     });
     const d = await r.json();
     if (!r.ok) { alerta(flotaMensajeDeError(d), 'error'); return; }
-    if (d.motivo) { alerta(d.motivo, 'advertencia'); return; }
-    alerta(`Revisados ${d.revisados} · en ventana ${d.en_ventana} · ` +
-           `enviados ${d.enviados} · ya avisados ${d.ya_avisados}` +
-           (d.sin_destinatario ? ` · SIN DESTINATARIO ${d.sin_destinatario}` : ''),
-           d.sin_destinatario ? 'advertencia' : 'exito');
-    // Antes llamaba a `flotaTablero()`, que no existe desde que el tablero se
-    // llama `cargarFlota`: el barrido salía bien y la pantalla tiraba un
-    // ReferenceError. Se relee el diagnóstico, que es donde vive este bloque.
+    if (d.motivo) { alerta(`${d.motivo}. ${d.nota || ''}`, 'advertencia'); return; }
+    const c = d.correo || {};
+    alerta(`Papeles revisados ${d.revisados} · WhatsApp enviados ${d.enviados}` +
+           (d.sin_destinatario ? ` · SIN DESTINATARIO ${d.sin_destinatario}` : '') +
+           ` · correo: ${c.enviado ? 'salió' : (c.motivo || 'no salió')}`,
+           (d.sin_destinatario || (c.motivo && !c.enviado && c.motivo !== 'nada que avisar'
+             && c.motivo !== 'ya salió hoy')) ? 'advertencia' : 'exito');
     if (typeof flotaBandejaDiagnostico === 'function') flotaBandejaDiagnostico();
   } catch (e) {
-    alerta('Sin conexión: ' + e.message, 'error');
+    alerta('Sin conexión: no se pudo revisar.', 'error');
   }
 }
 

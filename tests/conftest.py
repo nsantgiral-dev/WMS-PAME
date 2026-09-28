@@ -159,6 +159,16 @@ def _sin_hilos_dlq_reales(monkeypatch):
     )
 
 
+@pytest.fixture(autouse=True)
+def _sin_hilo_del_aviso_de_dano(monkeypatch):
+    """El aviso inmediato de un daño bloqueante corre en un hilo después del
+    commit (`flota/adaptadores/avisos._lanzar`). Un hilo real contra el SQLite
+    en memoria de la sesión pisaría el test siguiente (la misma forma que
+    `_sin_hilos_dlq_reales`). Los tests que lo ejercen lo cambian por una
+    llamada directa."""
+    monkeypatch.setattr('flota.adaptadores.avisos._lanzar', lambda fn: None)
+
+
 @pytest.fixture
 def ventana_qa(monkeypatch):
     """`SIESA_VENTANA` configurada como en QA (06:00–19:30, lo medido allá).

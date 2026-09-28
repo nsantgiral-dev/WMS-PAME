@@ -145,6 +145,8 @@ class TestElAsuntoQueSaleHaciaResend:
             'desde': '2026-09-14', 'hasta': '2026-09-20',
             'inspecciones': {'completas': 0, 'incompletas': 0},
             'hallazgos_vencidos': [], 'documentos_por_vencer_30d': [],
+            # 2026-09-27: el reporte trae también los vencidos y los sin cargar.
+            'documentos_vencidos': [], 'documentos_sin_cargar': [],
             'dia_operativo': '2026-09-21', 'etiqueta': 'x'})
         rs.enviar_reporte_semanal()
         assert resend_capturado[0]['subject'].startswith('[QA] Flota')
