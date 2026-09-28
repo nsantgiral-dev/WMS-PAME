@@ -31,6 +31,41 @@ _MIN_INTERVALO_SEG = 90  # mínimo 90s entre syncs manuales
 _MAX_BORRADOS_DETALLE = 200  # claves borradas que se anotan en registros_sync
 
 
+
+#: Verificaciones de «¿este pedido sigue vivo en Siesa?» por ciclo (cada una
+#: puede tardar 30 s).
+MAX_VERIFICAR_ANULADOS = 10
+#: Dónde quedó la rotación: la próxima corrida sigue desde el id siguiente.
+_ROTACION_ANULADOS = {'ultimo_id': 0}
+
+
+def candidatos_a_verificar(packings_vivos, comprometidos: set, maximo: int = None) -> tuple:
+    """`(lista, esperan_turno)` de los empaques de PEDIDO que dejaron de verse
+    comprometidos y hay que preguntarle a Siesa (P3, 2026-09-26).
+
+    Antes el tope de 10 se llenaba con los empaques de TRASLADO (su número no
+    es un pedido: nunca está en los comprometidos) y con los que no se pueden
+    consultar (sin tipo o consecutivo numérico); ninguno se verificaba y los
+    pedidos de verdad no llegaban nunca al turno. Ahora solo entran los
+    pedidos consultables, y el tope rota por id: diez que nunca se resuelven
+    no tapan al once para siempre."""
+    maximo = maximo or MAX_VERIFICAR_ANULADOS
+    elegibles = sorted(
+        (pk for pk in packings_vivos
+         if (getattr(pk, 'tipo_documento', None) or '').upper() != 'TRASLADO'
+         and pk.numero_pedido_siesa
+         and pk.numero_pedido_siesa not in comprometidos
+         and not getattr(pk, 'pedido_anulado_siesa', False)
+         and pk.tipo_docto_pedido_siesa
+         and str(pk.consec_docto_pedido_siesa or '').strip().isdigit()),
+        key=lambda pk: pk.id)
+    ultimo = _ROTACION_ANULADOS['ultimo_id']
+    orden = [pk for pk in elegibles if pk.id > ultimo] + [pk for pk in elegibles if pk.id <= ultimo]
+    turno = orden[:maximo]
+    if turno:
+        _ROTACION_ANULADOS['ultimo_id'] = turno[-1].id
+    return turno, max(0, len(elegibles) - len(turno))
+
 def _run_sync(app):
     global _sync_estado
 
@@ -217,19 +252,12 @@ def _run_sync(app):
 
                 # Limitar a 10 verificaciones por ciclo — evita que el job tarde
                 # 20+ minutos con 50 packings no comprometidos (N × 30s timeout)
-                _MAX_VERIFICAR = 10
-                _pendientes_verificar = [
-                    pk for pk in packings_vivos
-                    if pk.numero_pedido_siesa not in numeros_comprometidos_siesa
-                    and not getattr(pk, 'pedido_anulado_siesa', False)  # ya confirmados no consumen budget
-                ][:_MAX_VERIFICAR]
-                if len(_pendientes_verificar) < sum(
-                    1 for pk in packings_vivos
-                    if pk.numero_pedido_siesa not in numeros_comprometidos_siesa
-                ):
+                _pendientes_verificar, _sin_turno = candidatos_a_verificar(
+                    packings_vivos, numeros_comprometidos_siesa)
+                if _sin_turno:
                     logger.warning(
-                        f'[PEDIDOS_SYNC] Verificación de anulados limitada a {_MAX_VERIFICAR} '
-                        f'por ciclo para proteger el scheduler. Habrá más en el próximo ciclo.'
+                        f'[PEDIDOS_SYNC] Verificación de anulados limitada a {MAX_VERIFICAR_ANULADOS} '
+                        f'por ciclo ({_sin_turno} esperan turno; rotan por id).'
                     )
 
                 anulados_detectados = []

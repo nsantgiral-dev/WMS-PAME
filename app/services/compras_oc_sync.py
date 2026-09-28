@@ -666,7 +666,7 @@ def init_scheduler(app):
     from app.services.cron_latido import con_latido  # P1-11
     from app.services.ventana_siesa import solo_en_ventana_siesa  # P2
     scheduler.add_job(func=con_latido('compras_oc_abiertas', solo_en_ventana_siesa(_job)),
-                      trigger=CronTrigger(hour='7-19', minute='10,40',
+                      trigger=CronTrigger(minute='10,40',
                                           timezone='America/Bogota'),
                       id='compras_oc_abiertas', replace_existing=True,
                       max_instances=1, misfire_grace_time=900)
@@ -676,7 +676,8 @@ def init_scheduler(app):
                       id='compras_oc_diario', replace_existing=True,
                       max_instances=1, misfire_grace_time=1800)
     scheduler.start()
-    logger.info('[COMPRAS_OC] Scheduler 7–19:30 Bogotá (encendido=%s)', encendido())
+    logger.info('[COMPRAS_OC] Scheduler cada 30 min; la hora la pone SIESA_VENTANA '
+                '(encendido=%s)', encendido())
     return scheduler
 
 

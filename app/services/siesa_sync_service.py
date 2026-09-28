@@ -636,7 +636,7 @@ def init_scheduler(app):
     from app.services.ventana_siesa import solo_en_ventana_siesa  # P2
     scheduler.add_job(
         func=con_latido('sync_productos_siesa', solo_en_ventana_siesa(ejecutar_sync)),
-        trigger=CronTrigger(hour='7-20', minute='*/30', timezone='America/Bogota'),
+        trigger=CronTrigger(minute='*/30', timezone='America/Bogota'),
         kwargs={'app': app},
         id='sync_productos_siesa',
         name='Sync catálogo Siesa → WMS cada 30 min',

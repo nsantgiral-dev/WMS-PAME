@@ -179,10 +179,11 @@ def init_scheduler(app):
     from app.services.cron_latido import con_latido  # P1-11
     from app.services.ventana_siesa import solo_en_ventana_siesa  # P2
     scheduler.add_job(func=con_latido('devoluciones_verificar_nc', solo_en_ventana_siesa(_job)),
-                      trigger=CronTrigger(hour='7-19', minute='5,35',
+                      trigger=CronTrigger(minute='5,35',
                                           timezone='America/Bogota'),
                       id='devoluciones_verificar_nc', replace_existing=True,
                       max_instances=1, misfire_grace_time=900)
     scheduler.start()
-    logger.info('[DEV_NC] Scheduler cada 30 min 7–19 h Bogotá (encendido=%s)', encendido())
+    logger.info('[DEV_NC] Scheduler cada 30 min; la hora la pone SIESA_VENTANA '
+                '(encendido=%s)', encendido())
     return scheduler

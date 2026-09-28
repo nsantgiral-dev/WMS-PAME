@@ -419,3 +419,62 @@ class TestLosCronsDeMadrugadaVuelven:
         corta por hora; lo corta la ventana si está configurada."""
         d = _disparo('pedidos_siesa_sync')
         assert 'hour' not in d and d['minute'] == '*'
+
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Ningún cron trae su propio rango de horas (P3, 2026-09-26)
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# `CronTrigger(hour='7-19')` es una ventana escrita a mano: con `SIESA_VENTANA`
+# sin configurar (producción, 24 h) el cron igual dejaba de correr a las 7 p. m.
+# La hora de una corrida diaria (`hour=2`) es un horario, no una ventana.
+
+#: (archivo, id del job) con un rango de horas propio, y por qué. Solo encoge.
+RANGOS_DE_HORA_DECLARADOS = {}
+
+
+def _rangos_de_hora(base=None):
+    base = base or RAIZ
+    out = set()
+    for carpeta in ('app', 'flota'):
+        for f in sorted((base / carpeta).rglob('*.py')):
+            for n in ast.walk(ast.parse(f.read_text(encoding='utf-8'))):
+                if not (isinstance(n, ast.Call) and getattr(n.func, 'id', None) == 'CronTrigger'):
+                    continue
+                for k in n.keywords:
+                    if (k.arg == 'hour' and isinstance(k.value, ast.Constant)
+                            and isinstance(k.value.value, str)
+                            and any(c in k.value.value for c in '-,/')):
+                        out.add((str(f.relative_to(base)), n.lineno))
+    return out
+
+
+class TestNingunCronTraeSuVentana:
+
+    def test_ninguno(self):
+        archivos = {a for a, _ in _rangos_de_hora()}
+        assert archivos <= set(RANGOS_DE_HORA_DECLARADOS), (
+            f'{sorted(_rangos_de_hora())}: un cron con su propio rango de horas. La '
+            f'ventana es ventana_siesa (solo_en_ventana_siesa); sin SIESA_VENTANA, 24 h.')
+
+    def test_solo_encoge(self):
+        archivos = {a for a, _ in _rangos_de_hora()}
+        assert set(RANGOS_DE_HORA_DECLARADOS) <= archivos
+
+    def test_los_cuatro_de_la_validacion_corren_todo_el_dia(self):
+        for ident in ('compras_oc_abiertas', 'devoluciones_verificar_nc', 'kardex_auto',
+                      'sync_productos_siesa', 'cartera_barrido'):
+            assert 'hour' not in _disparo(ident), ident
+            assert ident in HABLAN_CON_SIESA
+
+    def test_el_detector_ve_el_rango_y_no_el_horario(self, tmp_path):
+        (tmp_path / 'app').mkdir()
+        (tmp_path / 'flota').mkdir()
+        (tmp_path / 'app' / 'x.py').write_text(
+            'a = CronTrigger(hour="7-19", minute="0")\n'
+            'b = CronTrigger(hour=2, minute=0)\n'
+            'c = CronTrigger(hour="7", minute="20")\n'
+            '"""CronTrigger(hour="6-20")"""\n'
+            'd = CronTrigger(hour="6,18")\n', encoding='utf-8')
+        assert _rangos_de_hora(tmp_path) == {('app/x.py', 1), ('app/x.py', 5)}

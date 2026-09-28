@@ -257,7 +257,7 @@ def init_scheduler(app):
     from app.services.cron_latido import con_latido  # P1-11
     from app.services.ventana_siesa import solo_en_ventana_siesa  # P2
     scheduler.add_job(func=con_latido('kardex_auto', solo_en_ventana_siesa(_job)),
-                      trigger=CronTrigger(hour='7-19', minute='2,32',
+                      trigger=CronTrigger(minute='2,32',
                                           timezone='America/Bogota'),
                       id='kardex_auto', replace_existing=True,
                       max_instances=1, misfire_grace_time=600)

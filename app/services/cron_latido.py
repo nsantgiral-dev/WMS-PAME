@@ -140,6 +140,11 @@ CRONS_DE_ALERTA = ('alertas_huerfanas_email', 'alertas_stock_critico',
                    'alertas_rutas_sin_liquidar', 'resumen_operativo_diario')
 
 
+#: Un servicio sin ningún latido en este tiempo se da por retirado o
+#: renombrado: sus filas no deciden (se declaran `caducados`).
+CADUCIDAD_SERVICIO = timedelta(days=7)
+
+
 def estado(ahora: datetime = None) -> dict:
     """Lo que corrió de verdad: por cron, la fila más reciente entre servicios.
     Lee la base, no el proceso."""
@@ -149,19 +154,42 @@ def estado(ahora: datetime = None) -> dict:
         filas = CronLatido.query.all()
     except Exception as e:     # noqa: BLE001
         return {'error': f'No se pudo leer el latido: {str(e)[:200]}', 'crons': []}
+    def _ref(f):
+        return f.ultimo_fin or f.ultimo_inicio
+
+    # El veredicto es por CRON, con su corrida más reciente en cualquier
+    # servicio (P3, 2026-09-26): antes cada fila (cron × servicio) se juzgaba
+    # sola, y un servicio renombrado o retirado dejaba sus filas «calladas» o
+    # «fallando» para siempre. Las filas de un servicio sin ningún latido en
+    # `CADUCIDAD_SERVICIO` se marcan caducadas y se declaran aparte.
+    ultima_de_servicio = {}
+    for f in filas:
+        r = _ref(f)
+        if r and (f.servicio not in ultima_de_servicio or r > ultima_de_servicio[f.servicio]):
+            ultima_de_servicio[f.servicio] = r
+    mas_reciente = {}
+    for f in filas:
+        r = _ref(f)
+        previa = mas_reciente.get(f.nombre)
+        if previa is None or (r and (_ref(previa) is None or r > _ref(previa))):
+            mas_reciente[f.nombre] = f
     crons = []
     for f in sorted(filas, key=lambda x: (x.nombre, x.servicio)):
         d = f.to_dict()
-        ref = f.ultimo_fin or f.ultimo_inicio
+        ref = _ref(f)
         d['hace_min'] = round((ahora - ref).total_seconds() / 60) if ref else None
+        ult_srv = ultima_de_servicio.get(f.servicio)
+        d['caducado'] = bool(ult_srv is None or ahora - ult_srv > CADUCIDAD_SERVICIO)
+        vigente = mas_reciente.get(f.nombre) is f
         esperado = ESPERADO.get(f.nombre)
-        d['callado'] = bool(esperado and ref and ahora - ref > esperado)
-        d['fallando'] = f.ultimo_ok is False
+        d['callado'] = bool(vigente and esperado and ref and ahora - ref > esperado)
+        d['fallando'] = bool(vigente and f.ultimo_ok is False)
         crons.append(d)
     return {
         'crons': crons,
-        'fallando': [c['nombre'] for c in crons if c['fallando']],
-        'callados': [c['nombre'] for c in crons if c['callado']],
+        'fallando': sorted({c['nombre'] for c in crons if c['fallando']}),
+        'callados': sorted({c['nombre'] for c in crons if c['callado']}),
+        'caducados': sorted({f"{c['nombre']}@{c['servicio']}" for c in crons if c['caducado']}),
         # ¿Salen alertas por correo de ALGÚN servicio? Algún cron de alertas
         # corrió en las últimas 26 h.
         'alertas_por_correo': any(
