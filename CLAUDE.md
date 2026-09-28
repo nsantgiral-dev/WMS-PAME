@@ -171,7 +171,7 @@ texto.
 | `238920` (dinámico) | `get_clasificacion_items()` | Clasificación ABC por ítem — reemplaza el CSV manual de rotación |
 | `papeleriamedellin_WMS_Stock_Bodega_v2` | `inventario_siesa_service._descargar_una_pasada_custom()` | **Existencias multi-bodega** — la que llena `stock_siesa`. Solo trae existencia > 0; `tamPag=100` con prueba de completitud (`LineaRegistro` 1…N contra `total_registros`). Ver «Existencias verdaderas» |
 | `papeleriamedellin_papeleriamedellin_API_custom_KardexWMS` | `kardex_service` (`KARDEX_CONSULTA_NOMBRE`) | Movimientos de kardex para demanda y costeo. **401 en QA y en producción** (2026-09-27): desde ese día es respaldo, ver «Compras: de dónde sale la demanda» |
-| `papeleriamedellin_WMS_Ventas_Dia` / `…_Reciente` (**a registrar**) | `demanda_fuentes.descargar_ventas_dia` | La venta diaria que Siesa suma (día × bodega × SKU): la fuente de la demanda de compras. SQL en `demanda_fuentes.SQL_VENTAS_DIA` |
+| `papeleriamedellin_WMS_Ventas_Dia_Reciente` + `papeleriamedellin_WMS_Ventas_<AAAA>T<n>` (una por trimestre del histórico) (**a registrar**) | `demanda_fuentes.descargar_ventana` | La venta diaria que Siesa suma (día × bodega × SKU), con valor sin impuesto y costo: la fuente de la demanda de compras. SQL: `scripts/qa_demanda_fuentes_real.py --sql`. Ver «La venta de Siesa: el histórico que completa el año» |
 | `papeleriamedellin_compromisos_wms` | `get_compromisos_t405()` | Compromisos por pedido (variante dinámica, lee t405) |
 | `papeleriamedellin_WMS_Remision_DesdePedido` | `get_remision_desde_pedido()` | Remisión asociada a un pedido. **Tres estados** (encontrada / `None` = barrido completo sin ella / `RemisionNoDisponible` = no se sabe), `tamPag=100` paginado (2026-09-25); **corta al encontrar** y sin CO/tipo en la consulta dos filas del mismo consecutivo son «no sé» (2026-09-26). Columnas reales (QA): `LineaRegistro, consec_pd, tipo_rm, consec_rm` — **sin CO ni tipo del pedido** |
 | `papeleriamedellin_WMS_PuntoEnvio_FE` | `get_punto_envio_factura()` | Punto de envío para la FE (fallback de `SIESA_PUNTO_ENVIO_DEFAULT`) |
@@ -6305,10 +6305,12 @@ ahí sin saber de qué fuente sale. Cada fila de `demanda_descensurada` publica
 ### El SQL — para registrar en Generic Transfer (consultas dinámicas)
 
 `venv/bin/python scripts/qa_demanda_fuentes_real.py --sql` lo imprime con la
-ventana puesta. Dos registros con el mismo SQL y distinta ventana:
+ventana puesta. ~~Dos registros con el mismo SQL y distinta ventana:
 `papeleriamedellin_WMS_Ventas_Dia` (400 días: el histórico, una vez) y
-`papeleriamedellin_WMS_Ventas_Dia_Reciente` (14 días: el de todos los días).
-Variables: `CONNEKTA_CONSULTA_VENTAS_DIA` / `…_RECIENTE` (default esos nombres).
+`papeleriamedellin_WMS_Ventas_Dia_Reciente` (14 días: el de todos los días).~~
+**Corregido el 2026-09-27** (antes de registrarse): la reciente sigue igual y el
+histórico es una consulta por trimestre con fechas fijas, que se retoma donde
+quedó — ver «La venta de Siesa: el histórico que completa el año».
 
 Por qué tiene esta forma — **lo medido en producción el 2026-09-27**:
 
@@ -6418,8 +6420,9 @@ el renglón cuando la fuente ES el kardex). Meta-tests y pisos.
 **22 mutaciones, las 22 rojas** (con `-B` y `PYTHONDONTWRITEBYTECODE`, cada
 reemplazo verificado a aplicar una vez; una sobrevivía y destapó una rama
 muerta en `dias_completos`, que se quitó). Cron `[DEMANDA_SIESA]` (05:40,
-**nace apagado**: `DEMANDA_SIESA=true`; mientras la cobertura no llegue al año
-lee la histórica, después la reciente); `/api/health/siesa` → `demanda_compras`
+**nace apagado**: `DEMANDA_SIESA=true`; ~~mientras la cobertura no llegue al año
+lee la histórica, después la reciente~~ desde el 2026-09-27 lee la reciente y,
+con el tiempo que queda, los períodos pendientes); `/api/health/siesa` → `demanda_compras`
 y una advertencia si compras no tiene ventas al día.
 
 Script: `scripts/qa_demanda_fuentes_real.py` (solo GET, `_post` y
@@ -7349,3 +7352,89 @@ rojas.** Los tests de «las tres pasadas» se reescribieron con su porqué.
   cada fila: `ausente_desde` empieza el día de la primera lectura completa.
 - **Días en cero para venta perdida** (P1-6): `ausente_desde` y la foto diaria lo
   permiten; no está conectado.
+
+---
+
+## La venta de Siesa: el histórico que completa el año, con valor y costo (2026-09-27)
+
+**La clase:** *una lectura larga que siempre vuelve a empezar nunca termina.*
+El histórico era UNA consulta relativa (400 días), leída desde la página 1 con
+tope de 50 min: si el año no cabía, cada corrida traía otra vez los mismos días
+y la cobertura nunca llegaba a 180 (contenedor) ni a 360 (temporada). Y el SQL
+no traía valor ni costo: la venta perdida no tenía pesos ni el capital precio.
+Nada de esto estaba registrado todavía en Siesa: se corrigió antes.
+
+**Qué se registra en Siesa** (consultas dinámicas; el SQL exacto de cada una lo
+imprime `venv/bin/python scripts/qa_demanda_fuentes_real.py --sql`):
+
+| Consulta | Ventana | Se lee |
+|---|---|---|
+| `papeleriamedellin_WMS_Ventas_Dia_Reciente` | relativa: hoy − 14 … hoy | cada madrugada, entera desde la página 1 (ve las anulaciones de los últimos 14 días) |
+| `papeleriamedellin_WMS_Ventas_2026T3`, `…_2026T2`, `…_2026T1`, `…_2025T4`, `…_2025T3` | **fechas fijas** por trimestre; el en curso termina el día anterior a copiar el SQL | una vez, retomando donde quedó, del más reciente al más viejo |
+
+**Seis registros, una vez.** Después del histórico solo corre la reciente: los
+días nuevos quedan cubiertos por ella. `DEMANDA_PERIODO_HISTORICO=MES` pasa a
+una por mes (14): solo si una página de un trimestre resulta demasiado lenta.
+
+**Cómo se lee** (`demanda_fuentes`):
+
+- Todo ordenado por fecha **descendente**: la cobertura crece hacia atrás desde
+  la reciente, sin huecos (`_tramo_final` exige el tramo contiguo). La bandeja
+  propone con ≥ 28 días: la reciente + la primera corrida del trimestre en curso.
+- Un período tiene fechas fijas: su numeración (`orden` 1…N) no cambia de un
+  día a otro, y la lectura **se retoma** en `orden_hasta + 1`
+  (`demanda_ventana_lectura`, m052comprasc) en vez de volver a la página 1.
+  Antes de seguir se relee la página del ancla (la última fila guardada) y se
+  exige la misma fila y el mismo total; si no, el período se movió (un documento
+  anulado o fechado atrás) y se relee entero, dicho en el registro. La página
+  del ancla no se pide dos veces. `avance` (pura) dice qué días quedaron enteros.
+- El cron (`ciclo`, 05:40, `DEMANDA_SIESA`) lee la reciente y, con el tiempo que
+  queda (`DEMANDA_MAX_MINUTOS`), los períodos con días sin cubrir. Uno sin
+  registrar (401) queda `sin_registrar`, se declara en «qué hacer» de la cascada
+  y se pasa al siguiente. Un período leído entero no vuelve a la lista.
+- Cada página: tres intentos y tope de 150 s.
+
+**Valor y costo.** El SQL suma, por día × bodega × SKU, el valor **sin impuesto**
+(la misma regla de `vigia_service.valor_linea_sin_impuesto`: neto − impuesto,
+o bruto − descuentos; un test cruza las columnas) y `f470_costo_prom_tot`, de lo
+vendido y lo devuelto, y cuenta las líneas sin valor o sin costo.
+`demanda_dia_siesa` los guarda; **NULL = la consulta no los trae**, nunca un
+cero. `valor_realizado(refs)` es el único lector: precio y costo realizados por
+SKU, netos de devoluciones, sobre el tramo cubierto; con una línea sin valor, el
+precio es `None` y se declara. **No está conectado** a la venta perdida ni al
+capital de la bandeja (tanda de gerencia): es el insumo.
+
+**Medido en producción el 2026-09-27** (solo GET) con
+`API_v2_Ventas_Facturas_DesdePedido`, lo único de ventas que se puede leer hoy
+(CO 003): con la caché caliente una página tarda **1–4 s, casi igual** para 1, 7,
+30 o 90 días y para la página 1, 20, 50 o 90; **la primera consulta en frío tardó
+108 s** (7 días). La de existencias (una vista): 1,0 s la página 1 y 1,7 s la
+390. No se pudo medir el SQL de la T470 (no está registrado): el paso 2 de la
+validación (`volumen_mes`) da las filas por mes, y la primera lectura deja los
+minutos y las páginas en `registros_sync` (`demanda_siesa`). A ~5.500 filas por
+día (estimado de la auditoría) y 2 s por página, el año son ~22.000 páginas ≈
+12 h: ~15 madrugadas de 50 min, o 3 noches con `DEMANDA_MAX_MINUTOS=240`.
+
+Trinquete: `tests/test_demanda_historico.py` — Siesa falsa con varias consultas
+y la forma real; retomar entre corridas (y no volver a la página 1), ancla que
+cambió, 401, página lenta, `avance`, valor desconocido ≠ cero, ciclo, la
+reciente corta; el SQL (fechas fijas, forma que Connekta acepta, columnas, la
+regla de Vigía, el paso 0 valida toda columna que usa). AST: nadie más lee el
+valor; nadie más pagina la venta. **19 mutaciones, las 19 rojas** (una
+sobrevivía y destapó un filtro muerto en `valor_realizado`, que se quitó). El
+inventario de quien toca la venta de Siesa (`test_demanda_fuentes.py`) sube de
+3 a 4 por `valor_realizado`, decidido y escrito.
+
+**Lo que NO cubre, dicho:**
+- **El SQL no está probado contra la T470**: los nombres de las columnas de
+  enlace y de valor/costo salen de los alias de la API de facturas; el paso 0
+  (`SQL_VALIDACION['esquema']`, que ahora lista `f470_vlr%` y `f470_costo%`)
+  los confirma antes de registrar.
+- **Un cambio balanceado dentro de un período** (un documento que entra y otro
+  que sale antes del ancla) no mueve ni el ancla ni el total: los días ya
+  guardados quedan con el valor viejo. La reciente relee los últimos 14 días.
+- Los días posteriores al `hasta` registrado del trimestre en curso los cubre la
+  reciente; si la reciente no corrió, quedan como hueco (la cobertura lo dice).
+- Que la venta de caja entre a la T470 como 501 sigue por verificar (paso 1).
+- `setattr` no lo ve el trinquete de lectores del valor (así escribe
+  `_guardar_lectura`, el escritor).
