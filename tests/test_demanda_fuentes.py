@@ -226,7 +226,7 @@ class TestDiasCompletos:
         return {i + 1: {'fecha': f, 'ventana_desde': hoy - timedelta(days=90),
                         'ventana_hasta': hoy} for i, f in enumerate(fechas)}
 
-    def test_si_la_siguiente_es_del_mismo_dia_ese_dia_no_esta_entero(self):
+    def test_el_dia_de_la_ultima_fila_del_prefijo_no_esta_entero(self):
         from app.services.demanda_fuentes import dias_completos
         hoy = _hoy()
         d = [hoy - timedelta(days=1)] * 2 + [hoy - timedelta(days=5)] * 3
@@ -235,13 +235,21 @@ class TestDiasCompletos:
         t = dias_completos(po, 6, hoy - timedelta(days=1))
         assert t == (hoy - timedelta(days=4), hoy - timedelta(days=1))
 
-    def test_si_la_siguiente_es_de_un_dia_anterior_los_del_medio_son_ceros(self):
+    def test_los_dias_sin_fila_entre_dos_leidas_son_ceros_cubiertos(self):
         from app.services.demanda_fuentes import dias_completos
         hoy = _hoy()
-        d = [hoy - timedelta(days=1), hoy - timedelta(days=2), hoy - timedelta(days=9)]
+        d = [hoy - timedelta(days=1), hoy - timedelta(days=2), hoy - timedelta(days=9),
+             hoy - timedelta(days=12)]
         po = self._por_orden(d)
         t = dias_completos(po, 10, hoy - timedelta(days=1))
-        assert t == (hoy - timedelta(days=8), hoy - timedelta(days=1))
+        assert t == (hoy - timedelta(days=11), hoy - timedelta(days=1))
+
+    def test_completa_cubre_toda_la_ventana_cerrada(self):
+        from app.services.demanda_fuentes import dias_completos
+        hoy = _hoy()
+        po = self._por_orden([hoy, hoy - timedelta(days=3)])
+        assert dias_completos(po, 2, hoy - timedelta(days=1)) == (
+            hoy - timedelta(days=90), hoy - timedelta(days=1))
 
     def test_sin_la_primera_fila_nada(self):
         from app.services.demanda_fuentes import dias_completos

@@ -293,11 +293,11 @@ def dias_completos(por_orden: dict, total: int, ultimo_cerrado: date):
     """Del conjunto de filas leídas (por `orden`), el tramo de días que se puede
     afirmar COMPLETO. Puro.
 
-    El SQL ordena por fecha DESCENDENTE. Si llegaron las filas 1…k sin hueco, y
-    la fila k+1 (también leída) es de un día anterior al de la k, entonces todo
-    día posterior al de la k+1 está entero — incluidos los días SIN fila entre
-    los dos, que son ceros verdaderos. Con k = total, todo día de la ventana
-    está entero.
+    El SQL ordena por fecha DESCENDENTE. Si llegaron las filas 1…k sin hueco
+    (y la k+1 no), todo día POSTERIOR al de la k está entero —incluidos los
+    días sin fila entre dos filas leídas, que son ceros verdaderos—; el de la k
+    no (la k+1 podría ser de ese mismo día). Con k = total, todo día de la
+    ventana está entero.
 
     Returns: (desde, hasta) o `None` — `hasta` recortado al último día CERRADO
     (hoy no: la caja de hoy todavía no está acumulada).
@@ -315,14 +315,9 @@ def dias_completos(por_orden: dict, total: int, ultimo_cerrado: date):
     if k >= total:
         desde = v_desde
     else:
-        siguiente = por_orden.get(k + 1)
-        if siguiente is None:
-            # La k+1 no llegó: el día de la k puede tener filas pendientes.
-            desde = por_orden[k]['fecha'] + timedelta(days=1)
-        else:
-            desde = siguiente['fecha'] + timedelta(days=1)
-            if siguiente['fecha'] == por_orden[k]['fecha']:
-                desde = por_orden[k]['fecha'] + timedelta(days=1)
+        # La k+1 no llegó (si hubiera llegado, el prefijo seguiría): puede ser
+        # del mismo día que la k, así que ese día no se da por entero.
+        desde = por_orden[k]['fecha'] + timedelta(days=1)
     if desde > hasta:
         return None
     return desde, hasta
