@@ -137,7 +137,10 @@ def _respuesta_siesa_sin(bodega, producto, db):
 
 
 def _correr_carga(app, db, almacen, datos):
-    with patch.object(iss, '_descargar_una_pasada_custom', return_value=datos), \
+    # Una lectura con su prueba de completitud (2026-09-27): un dict suelto se
+    # lee incompleto y la carga no escribe.
+    lectura = iss.ResultadoDescarga(datos, completa=True)
+    with patch.object(iss, '_descargar_una_pasada_custom', return_value=lectura), \
          patch.object(iss, 'connekta') as ck:
         ck.bodega = almacen.bodega_siesa_id
         iss._run_carga_inicial(app, almacen.bodega_siesa_id)

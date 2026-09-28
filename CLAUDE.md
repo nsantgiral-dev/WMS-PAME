@@ -169,7 +169,7 @@ texto.
 | API_v2_Inventarios_Transferencia_Salida_Transito | `get_sts_info_by_alterno()` | Recovery: encontrar el STS ya creado tras un timeout (`f450_docto_alterno`) |
 | API_v2_Inventarios_RequisicionesParaTransferir | `get_consec_rit_by_referencia()` | Recovery: encontrar la RIT ya creada tras un timeout (`f440_referencia`) |
 | `238920` (dinámico) | `get_clasificacion_items()` | Clasificación ABC por ítem — reemplaza el CSV manual de rotación |
-| `papeleriamedellin_WMS_Stock_Bodega_v2` | `inventario_siesa_service._descargar_una_pasada_custom()` | **Existencias multi-bodega** — la que llena `stock_siesa` |
+| `papeleriamedellin_WMS_Stock_Bodega_v2` | `inventario_siesa_service._descargar_una_pasada_custom()` | **Existencias multi-bodega** — la que llena `stock_siesa`. Solo trae existencia > 0; `tamPag=100` con prueba de completitud (`LineaRegistro` 1…N contra `total_registros`). Ver «Existencias verdaderas» |
 | `papeleriamedellin_papeleriamedellin_API_custom_KardexWMS` | `kardex_service` (`KARDEX_CONSULTA_NOMBRE`) | Movimientos de kardex para demanda y costeo. **401 en QA y en producción** (2026-09-27): desde ese día es respaldo, ver «Compras: de dónde sale la demanda» |
 | `papeleriamedellin_WMS_Ventas_Dia` / `…_Reciente` (**a registrar**) | `demanda_fuentes.descargar_ventas_dia` | La venta diaria que Siesa suma (día × bodega × SKU): la fuente de la demanda de compras. SQL en `demanda_fuentes.SQL_VENTAS_DIA` |
 | `papeleriamedellin_compromisos_wms` | `get_compromisos_t405()` | Compromisos por pedido (variante dinámica, lee t405) |
@@ -430,9 +430,11 @@ blanca, una bodega nueva es invisible hasta que se declare operada.
 > Antes de agregar una bodega a `_BODEGAS_INVENTARIO`, preguntá quién suma
 > `stock_siesa`. Hoy: `armador_service.rop_dual` (filtra por `_BODEGAS_PV`),
 > `kardex_service` (ancla de saldo, por bodega), `vigia_service` (frescura),
-> `inventario_siesa_service._leer_stock_de_bd` (fallback por bodega). La tabla
+> `inventario_siesa_service._leer_stock_de_bd` (fallback por bodega). ~~La tabla
 > es **acumulativa — upsert sin borrado**: una fila persistida una vez se sigue
-> devolviendo aunque la API deje de reportarla.
+> devolviendo aunque la API deje de reportarla.~~ **Corregido el 2026-09-27**:
+> sigue sin borrado, pero una lectura completa pone en cero (con
+> `ausente_desde`) lo que Siesa ya no reporta. Ver «Existencias verdaderas».
 
 ~~**Hueco conocido:** `ItemEnTransito` no tiene ningún escritor en `app/`, así
 que el `en_transito` de `posicion` es siempre 0.~~ **Cerrado el 2026-09-24**
@@ -3657,9 +3659,9 @@ viene. Referencias de InvFecha y bodegas vienen con espacios a la derecha.
 - **Ventas POS de tienda**: no hay consulta. La foto es de facturas **desde
   pedido**; la venta de caja en tienda no aparece.
 - **NC y RC como documentos**: solo se ven en `total_cr` de la cartera.
-- **`stock_siesa` es acumulativa**: una fila que Siesa dejó de reportar
-  conserva su último valor. La foto la copia con `rezagada=True` y su
-  `stock_actualizado_at`; no la convierte en cero.
+- ~~**`stock_siesa` es acumulativa**: una fila que Siesa dejó de reportar
+  conserva su último valor.~~ Desde el 2026-09-27 una lectura completa la pone
+  en cero («Existencias verdaderas»); la foto salta las filas en cero.
 - **La historia del pedido empieza el día que se despliegue**. Lo anterior no
   existe en ningún lado.
 
@@ -6474,9 +6476,8 @@ la portada no juzga contra la meta un período del KPI diario sin medir
   de las 7:00, refresco de existencias) no dejan latido: su rastro es
   `registros_sync`.
 - ~~**La carga física** que se salta una bodega por operaciones activas solo lo
-  loguea~~ (2026-09-26: queda en `registros_sync` y se avisa). `tamPag=1000` de la consulta de existencias (`_descargar_una_pasada_custom`)
-  sigue violando la Regla 10 (no se tocó: cambiarlo cambia el costo de la
-  descarga y no era el defecto).
+  loguea~~ (2026-09-26: queda en `registros_sync` y se avisa). ~~`tamPag=1000` de la consulta de existencias sigue violando la Regla 10~~
+  (corregido el 2026-09-27: `tamPag=100`, «Existencias verdaderas»).
 - **Consumo de cupo**: la hora de emisión de la FE es `fe_confirmada_at` (desde
   el 2026-09-26; antes `fecha_despachado`/`siesa_triggered_at`, que quedan de
   respaldo).
@@ -7132,7 +7133,7 @@ clase. Migración **`m050inv2`** (aditiva; en la integración v2 quedó encadena
 |---|---|---|---|
 | **P1-1** cupo | El 142943 no devuelve el consecutivo: la tarea quedaba con `fe_confirmada_at` y sin `fe_consec`, y `consumo_wms` la leía «sin factura» (cupo consumido para siempre, doble conteo con el saldo) | La FE emitida es `documento_fiscal.fe_confirmada`; la hora de emisión, `fe_confirmada_at`; regla de 48 h; sin número, la fila de cartera se busca por el pedido (`cxc_cruce`). Consulta acotada a lo que puede consumir (subconsulta + índice). `fe_resolver.anotar_fe_emitidas` (GET por pedido en su CO, solo con UNA FE candidata; lock 2070) corre con el barrido de cartera | `test_fe_emitida_sin_consecutivo.py`: ninguna condición decide sobre `fe_consec` sin `fe_confirmada_at` (9 declaradas) |
 | **P1-2** picking | `reabrir_picking` con la caja DESPACHADA o VERIFICADA creaba una tarea por el faltante que ninguna caja podía llevar | `PickingService.motivo_caja_no_recibe` (una política). Si la caja no recibe: lo recogido queda en ella (original COMPLETADO; sin nada, CANCELADO), **el faltante no se recoge** y se declara (`aviso_reapertura`, bitácora): es un pedido nuevo o un backorder. `POST /api/picking/crear` → 409. La PWA pide el motivo de la reapertura (el servicio lo exigía: la pantalla daba 400 siempre) | `test_picking_caja_que_no_recibe.py`: todo creador de `TareaPicking` o vuelta a PENDIENTE pregunta la política (6 declarados) |
-| **P1-3** carga física | «Completo» era una pasada: con dos de tres perdidas se escribía y el bulk zero ponía en 0 —sin kardex, huecos de picking incluidos— lo que esa pasada no trajo | `PASADAS_ACORDADAS = 3` y `ResultadoDescarga.pasadas_completas`; `fuente_para_escribir` exige las tres (lo que se pone en 0 faltó en todas). Una pasada rota no achica la unión (lo leído entra sin pisar lo de una completa). El cero escribe un `MovimientoInventario` por fila | `test_carga_fisica_vigente.py`: toda función que pone `cantidad = 0` escribe su movimiento; ningún `update({'cantidad': 0})` en bloque |
+| **P1-3** carga física | «Completo» era una pasada: con dos de tres perdidas se escribía y el bulk zero ponía en 0 —sin kardex, huecos de picking incluidos— lo que esa pasada no trajo | ~~`PASADAS_ACORDADAS = 3` y `ResultadoDescarga.pasadas_completas`~~ (superado el 2026-09-27: una lectura de a 100 con prueba de completitud, «Existencias verdaderas»); `fuente_para_escribir` exige las tres (lo que se pone en 0 faltó en todas). Una pasada rota no achica la unión (lo leído entra sin pisar lo de una completa). El cero escribe un `MovimientoInventario` por fila | `test_carga_fisica_vigente.py`: toda función que pone `cantidad = 0` escribe su movimiento; ningún `update({'cantidad': 0})` en bloque |
 | **P1-4** pre-flag | Crash entre la marca y el POST: ENTRADA_OC, AJUSTE_CONTEO y averías por tarea quedaban COMPLETADOS por la guarda de la bandera | `siesa_job_service.estado_del_preflag` (LIBRE · ENVIADO · SIN_DESENLACE) para todo tipo con pre-flag: ENVIADO exige la respuesta guardada (`_ejecutar_con_preflag` la escribe; «sí está en Siesa» también). Sin desenlace: FALLIDO sin reintento y «¿Está en Siesa?». **Integración v2:** es la misma pregunta que `_Preflag.sin_desenlace()` le hace a los seis tipos de `TIPOS_CON_PREFLAG` (los tres de inventario por esta política; RC/NC/retención por su señal positiva de `politica_cobro`) — una función decide el «no sé» para el panel, reintentar y Liquidación | `test_preflag_sin_desenlace.py`: toda rama de `_ejecutar_job` con pre-flag pregunta la política; ninguna decide leyendo `.siesa_triggered` (1 declarada) |
 | **P1-5** sello | Producción se sellaba al primer envío de la DLQ; cualquier base sin sello se auto-sellaba; el candado se burlaba con el nombre del ambiente | `sellar_en_arranque` (producción, en `create_app`); `sello_ambiente.veredicto` (una política): sin sello **con historia** de `siesa_jobs` no postea y pide sellado explícito; conexión propia (ya no hace rollback de la sesión del llamador); candado exige `RAILWAY_SERVICE_ID`; botón «Re-sellar esta base» en Siesa → Recuperación | `test_sello_ambiente.py`, `test_candado_produccion_local.py` |
 | **P2-6** carga no corrida | El resumen de las 6:45 sale antes de la carga de las 7:00; una carga omitida no dejaba fila y Salud decía OK con la última de hace días | Toda carga que no escribe (omitida por operaciones, fuera de ventana, sin almacén, lock ocupado) deja su fila; correo en la misma corrida; Salud y el resumen miran la antigüedad de la última **escrita** (nunca o > 26 h = advertencia) | `test_carga_fisica_vigente.py` |
@@ -7149,7 +7150,7 @@ el kardex automático corren cada 30 min todo el día sin `SIESA_VENTANA` (antes
 7–19/20 h); una base sin sello con historia deja de postear hasta re-sellarla;
 un `.env` local con `RAILWAY_ENVIRONMENT_NAME` y sin `RAILWAY_SERVICE_ID` contra
 una base de Railway ya no arranca crons; la carga física exige las tres pasadas
-completas; un job con pre-flag sin respuesta va a «¿Está en Siesa?» en vez de
+completas (desde el 2026-09-27, la lectura completa verificada); un job con pre-flag sin respuesta va a «¿Está en Siesa?» en vez de
 COMPLETADO.
 
 ### Lo que NO cubre, dicho
@@ -7157,8 +7158,9 @@ COMPLETADO.
 - **La FE del pedido** se busca filtrando `f350_id_co` + `f430_consec_docto`
   (verificados en vivo); el tipo del pedido no está en el spec y se verifica en
   la fila solo si viene. Con dos FE candidatas no se anota ninguna.
-- **Tres pasadas completas** no prueban que Siesa no tenga un SKU que salió en
-  ninguna (paginación no determinista): es la medida acordada, no una garantía.
+- ~~**Tres pasadas completas** no prueban que Siesa no tenga un SKU que salió en
+  ninguna~~ — reemplazadas el 2026-09-27 por una lectura de a 100 con prueba de
+  completitud («Existencias verdaderas»).
 - **El faltante de traslado** no se mueve solo en Siesa: el WMS registra lo que
   una persona hizo allá (ETS inverso, ajuste) o quién investiga.
 - **El sello al arrancar** necesita la tabla migrada: el primer arranque de un

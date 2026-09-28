@@ -64,9 +64,10 @@ class TestGuardarStockEnBdNoResellaDatoDegradado:
         )
 
     def test_no_degradado_si_escribe_y_actualiza(self, db):
-        inv_service._guardar_stock_en_bd({'NB1': {'A1': {
+        # Una lectura completa (2026-09-27): un dict suelto ya no escribe.
+        inv_service._guardar_stock_en_bd(inv_service.ResultadoDescarga({'NB1': {'A1': {
             'existencia': 10, 'comprometido': 0, 'salida_sin_conf': 0,
-        }}}, degradado=False)
+        }}}, completa=True), degradado=False)
 
         fila = StockSiesa.query.filter_by(bodega='NB1', codigo_siesa='A1').first()
         assert fila is not None

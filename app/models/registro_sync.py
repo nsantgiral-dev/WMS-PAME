@@ -47,9 +47,14 @@ from app.extensions import db
 #: Siesa. `ok=True` SOLO con paginación completa — es la corrida que puede
 #: afirmar que una OC que no apareció se cerró. `compras_fuentes.frescura_oc`
 #: lee `ultimo_ok('compras_oc')` para decir de cuándo es el «en camino».
+#:
+#: `existencias_siesa` (2026-09-27): cada lectura de la consulta de existencias
+#: (`stock_siesa`). `ok=True` solo con la lectura COMPLETA y verificada —la
+#: única que puede poner en cero lo que Siesa ya no reporta—; el resultado
+#: dice cuántas filas quedaron en cero y cuántas unidades eran.
 TIPOS = ('catalogo', 'barcodes', 'stock', 'stock_ns1', 'stock_nc1', 'setup_inicial',
          'reconciliacion', 'kardex', 'pedidos', 'compras_oc', 'compras_oc_historial',
-         'compras_marca', 'demanda_siesa', 'demanda_pedidos')
+         'compras_marca', 'demanda_siesa', 'demanda_pedidos', 'existencias_siesa')
 
 
 class RegistroSync(db.Model):

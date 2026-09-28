@@ -137,10 +137,10 @@ class TestCargaFisicaCompleto:
                             {'data': None, 'ts': None, 'degradado': False,
                              'bodegas_frescas': frozenset()})
         inv._descargar_inventario_siesa_raw(forzar=True)
-        # El propio módulo dice que UNA pasada es un subconjunto (paginación no
-        # determinística, `_descargar_todas_bodegas_custom`): con dos de tres
-        # perdidas no hay con qué afirmar «completo», y el bulk zero de la
-        # carga pondría en 0 —sin kardex— lo que esta pasada no trajo.
+        # Un dict sin prueba de completitud no autoriza a escribir: el bulk
+        # zero de la carga pondría en 0 lo que la lectura no trajo. Desde el
+        # 2026-09-27 la prueba es UNA lectura de a 100 con `LineaRegistro`
+        # 1…N contra el total declarado (`test_existencias_verdaderas.py`).
         assert inv.fuente_para_escribir('NB1') != ''
 
 
@@ -165,24 +165,44 @@ class TestSaludCargaVieja:
 # ═════════════════════════════════════════════════════════════════════════════
 
 class TestFrescuraNoSeReSellaSinDato:
+    """P2-9 (2026-09-26) y P0-1 de compras (2026-09-27): un SKU que Siesa no
+    reportó no se re-sella con su valor viejo. Sin prueba de completitud no
+    se toca; con la lectura completa queda en CERO con fecha — «Siesa no lo
+    tiene» es un dato de hoy, su último positivo no."""
 
-    def test_sku_que_siesa_no_reporto_conserva_su_fecha(self, db, monkeypatch):
+    def _sembrar(self, db):
         from app.models.stock_siesa import StockSiesa
-        from app.services import inventario_siesa_service as inv
         vieja = datetime.utcnow() - timedelta(days=10)
         db.session.add(StockSiesa(bodega='NB1', codigo_siesa='AGOTADO', existencia=40,
                                   comprometido=0, salida_sin_conf=0, updated_at=vieja))
         db.session.commit()
         fila = {f'SKU{i}': {'existencia': 5.0, 'comprometido': 0.0, 'salida_sin_conf': 0.0,
                             'descripcion': '', 'unidad': 'UND'} for i in range(80)}
-        monkeypatch.setattr(inv, '_descargar_todas_bodegas_custom', lambda: {'NB1': fila})
+        return {'NB1': fila}
+
+    def _correr(self, monkeypatch, lectura):
+        from app.services import inventario_siesa_service as inv
+        monkeypatch.setattr(inv, '_descargar_una_pasada_custom', lambda: lectura)
         monkeypatch.setattr(inv, '_cache_inventario_multibodega',
                             {'data': None, 'ts': None, 'degradado': False,
-                             'bodegas_frescas': frozenset()})
+                             'bodegas_frescas': frozenset(), 'completa': False, 'motivo': ''})
+        monkeypatch.setattr(inv, '_cache_inventario_siesa', {})
         monkeypatch.setattr('time.sleep', lambda s: None)
         inv._descargar_inventario_siesa_raw(forzar=True)
+
+    def test_sin_prueba_de_completitud_conserva_su_fecha(self, db, monkeypatch):
+        from app.models.stock_siesa import StockSiesa
+        self._correr(monkeypatch, self._sembrar(db))
         db.session.expire_all()
         r = StockSiesa.query.filter_by(bodega='NB1', codigo_siesa='AGOTADO').first()
-        # Siesa NO trajo este SKU: su existencia 40 es la foto de hace 10 días.
-        assert r.updated_at < datetime.utcnow() - timedelta(days=5), (
+        assert r.existencia == 40 and r.updated_at < datetime.utcnow() - timedelta(days=5), (
             'la fila que Siesa no reportó quedó sellada como recién leída')
+
+    def test_con_lectura_completa_queda_en_cero_con_fecha(self, db, monkeypatch):
+        from app.models.stock_siesa import StockSiesa
+        from app.services import inventario_siesa_service as inv
+        self._correr(monkeypatch, inv.ResultadoDescarga(self._sembrar(db), completa=True))
+        db.session.expire_all()
+        r = StockSiesa.query.filter_by(bodega='NB1', codigo_siesa='AGOTADO').first()
+        assert r.existencia == 0 and r.ausente_desde is not None, (
+            'el agotado conservó su último positivo')

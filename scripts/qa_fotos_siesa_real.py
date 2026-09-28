@@ -113,8 +113,9 @@ def main():
         if args.con_stock:
             from app.services import inventario_siesa_service as inv
             datos = inv._descargar_una_pasada_custom()
-            if datos is None:
-                print('  STOCK: la descarga de stock_siesa falló — no hay foto que tomar')
+            if not inv.lectura_completa(datos):
+                print('  STOCK: la lectura de existencias no quedó completa '
+                      f'({datos.motivo}) — no hay foto que tomar')
             else:
                 inv._guardar_stock_en_bd(datos)
                 s = fotos.fotografiar_stock(args.con_stock, fotos.dia_operativo(),

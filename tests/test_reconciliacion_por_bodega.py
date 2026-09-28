@@ -105,6 +105,9 @@ def _reconciliar(app, monkeypatch, siesa_por_bodega: dict) -> dict:
     principal = multi.get(inv.connekta.bodega, {})
     monkeypatch.setattr(inv, '_descargar_inventario_siesa_raw',
                         lambda forzar=False: multi)
+    # La reconciliación se niega sobre una lectura degradada (2026-09-27): acá
+    # la descarga está sustituida, así que se declara completa a mano.
+    monkeypatch.setitem(inv._cache_inventario_multibodega, 'degradado', False)
     monkeypatch.setattr(inv, '_descargar_inventario_siesa',
                         lambda forzar=False: principal)
     # El guard anti-respuesta-parcial exige ≥50 SKU — es correcto en producción
@@ -407,30 +410,22 @@ class TestElUniversoDescargadoIncluyeLasBodegasDeServicio:
 
         Acá se siembran filas de las tres clases de bodega y se mira qué sale.
         """
+        from tests.test_existencias_verdaderas import SiesaExistencias, fila
         filas = [
-            {'f150_id': 'NB1', 'f120_referencia': 'SKU1',
-             'f400_cant_existencia_1': 10},
-            {'f150_id': 'AV1', 'f120_referencia': 'SKU1',
-             'f400_cant_existencia_1': 2},
-            {'f150_id': 'TRA1', 'f120_referencia': 'SKU2',
-             'f400_cant_existencia_1': 3},
+            fila('NB1', 'SKU1', 10),
+            fila('AV1', 'SKU1', 2),
+            fila('TRA1', 'SKU2', 3),
             # `FD1` es una de las bodegas «DUPLICADA» que `CLAUDE.md` manda
             # ignorar: el filtro también tiene que seguir TIRÁNDOLA. Un
             # detector que solo prueba que deja pasar, prueba la mitad.
-            {'f150_id': 'FD1', 'f120_referencia': 'SKU3',
-             'f400_cant_existencia_1': 9},
+            fila('FD1', 'SKU3', 9),
         ]
-        paginas = {1: filas}
-        monkeypatch.setattr(
-            inv.connekta, '_get',
-            lambda api, params, url=None: {
-                'detalle': {'Datos': paginas.get(
-                    int(params['paginacion'].split('numPag=')[1].split('|')[0]),
-                    [])}})
+        # La forma real del endpoint dinámico (LineaRegistro, total declarado).
+        monkeypatch.setattr(inv.connekta, '_get', SiesaExistencias(filas))
 
         res = inv._descargar_una_pasada_custom()
 
-        assert set(res) == {'NB1', 'AV1', 'TRA1'}, (
+        assert {b for b, v in res.items() if v} == {'NB1', 'AV1', 'TRA1'}, (
             'el filtro de la descarga volvió a tirar las bodegas de servicio '
             '(o dejó entrar una bodega que el WMS no debe tocar)')
         assert res['AV1']['SKU1']['existencia'] == 2.0

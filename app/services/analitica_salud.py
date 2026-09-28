@@ -382,11 +382,31 @@ def fuente_stock(ahora_utc, almacen_id=None, activos=()):
                         'edad_operativa_min': (int(edad.total_seconds() // 60)
                                                if edad is not None else None),
                         'atrasada': edad is None or edad > TOLERANCIA_STOCK})
-    faltan = [x['bodega'] for x in bodegas if not x['filas']]
+    # La última lectura terminó incompleta (2026-09-27): `stock_siesa`
+    # conserva la anterior, y eso se declara aunque las bodegas estén en hora.
+    try:
+        from app.services.inventario_siesa_service import estado_lectura_existencias
+        _lec = estado_lectura_existencias()
+    except Exception:                                         # noqa: BLE001
+        _lec = {'incompleta': False}
+    _ok = _lec.get('ultima_completa') or {}
+    # Una bodega sin filas en la última lectura COMPLETA está en cero: se sabe.
+    _vacias = set(((_ok.get('resultado') or {}).get('bodegas_sin_filas')) or ())
+    faltan = [x['bodega'] for x in bodegas if not x['filas'] and x['bodega'] not in _vacias]
     atrasadas = [x['bodega'] for x in bodegas if x['filas'] and x['atrasada']]
     mas_vieja = min((por_bodega[b][0] for b in presentes if por_bodega[b][0]), default=None)
     detalle = {'bodegas': bodegas, 'tolerancia_operativa_min':
-               int(TOLERANCIA_STOCK.total_seconds() // 60)}
+               int(TOLERANCIA_STOCK.total_seconds() // 60),
+               'ultima_lectura_completa': _ok.get('fin'),
+               'bodegas_en_cero_segun_siesa': sorted(_vacias)}
+    if _lec.get('incompleta'):
+        return _fuente('stock_siesa', nombre, INCOMPLETA,
+                       'La última lectura de existencias de Siesa no quedó completa: '
+                       + str(_lec.get('motivo') or 'sin motivo') + ' Las existencias '
+                       'guardadas son las de la última lectura completa.',
+                       'Se reintenta sola en el próximo refresco ([INV_SIESA_REFRESH], '
+                       'cada 45 min); si se repite, revisar la consulta de existencias.',
+                       ultima=_iso(mas_vieja), completa=False, detalle=detalle, **kw)
     if faltan:
         return _fuente('stock_siesa', nombre, INCOMPLETA,
                        f'Sin existencias guardadas para {len(faltan)} bodega(s): '

@@ -5,11 +5,11 @@ P2-9, P3).
 
 **Las clases:**
 
-1. *«Completo» sin medir la completitud.* La consulta de existencias pagina de
-   forma no determinista y se lee en tres pasadas; con dos perdidas,
-   `fuente_para_escribir` la daba por buena y el bulk zero ponía en 0 lo que
-   esa única pasada no trajo. Ahora exige las `PASADAS_ACORDADAS` completas;
-   una pasada rota no achica la unión (lo que leyó entra), pero no cuenta.
+1. *«Completo» sin medir la completitud.* La consulta de existencias se leía
+   en tres pasadas de `tamPag=1000` y con dos perdidas `fuente_para_escribir`
+   la daba por buena. Desde el 2026-09-27 es UNA lectura de a 100 con su
+   prueba (`LineaRegistro` 1…N contra el total declarado): sin ella no se
+   escribe (el detalle vive en `test_existencias_verdaderas.py`).
 2. *Inventario puesto en cero sin kardex.* El bulk zero era un UPDATE en
    bloque. Ahora cada cero deja su `MovimientoInventario`. Trinquete AST: toda
    función que pone `cantidad = 0` escribe su movimiento; nadie hace un
@@ -18,8 +18,8 @@ P2-9, P3).
    activas o fuera de ventana solo se logueaba, y 🩺 Salud leía «OK» con la
    última carga de hace cinco días. Ahora queda en `registros_sync`, se avisa
    en la misma corrida y Salud mira la antigüedad de la última ESCRITA.
-4. *Sello fresco sin dato fresco* (`stock_siesa`): solo se re-sella lo que
-   Siesa reportó en esta lectura.
+4. *Sello fresco sin dato fresco* (`stock_siesa`): una lectura que no es
+   completa no escribe nada (2026-09-27; ver `test_existencias_verdaderas.py`).
 """
 import ast
 import pathlib
@@ -52,52 +52,38 @@ def _fila(existencia=5.0):
 def cache_limpio():
     orig = dict(iss._cache_inventario_multibodega)
     iss._cache_inventario_multibodega.update(data=None, ts=None, degradado=False,
-                                             bodegas_frescas=frozenset(), pasadas=0,
-                                             pasadas_completas=0)
+                                             bodegas_frescas=frozenset(),
+                                             completa=False, motivo='')
     yield iss._cache_inventario_multibodega
     iss._cache_inventario_multibodega.clear()
     iss._cache_inventario_multibodega.update(orig)
 
 
-class TestCompletoEsLasTresPasadas:
+def completa(datos):
+    """Una lectura de Siesa que pasó la prueba de completitud."""
+    return iss.ResultadoDescarga(datos, completa=True)
 
-    def _pasadas(self, monkeypatch, secuencia):
-        it = iter(secuencia)
 
-        def _una():
-            paso = next(it)
-            if isinstance(paso, tuple):          # ('rota', filas leídas antes del fallo)
-                iss._PASADA_ROTA['filas'] = paso[1]
-                return None
-            return paso
-        monkeypatch.setattr(iss, '_descargar_una_pasada_custom', _una)
+class TestSoloLaLecturaCompletaSirveParaEscribir:
+    """El reemplazo de «las tres pasadas» (2026-09-27): la licencia es la
+    prueba de completitud de UNA lectura, no la cantidad de pasadas."""
 
-    def test_dos_rotas_no_sirven_para_escribir(self, db, monkeypatch, cache_limpio):
+    def test_incompleta_no_sirve(self, db, monkeypatch, cache_limpio):
         base = {'NB1': {f'S{i}': _fila() for i in range(80)}}
-        self._pasadas(monkeypatch, [base, None, ('rota', {})])
+        monkeypatch.setattr(iss, '_descargar_una_pasada_custom', lambda: iss.ResultadoDescarga(
+            base, completa=False, motivo='la página 2 no se pudo leer (tres intentos)'))
         iss._descargar_inventario_siesa_raw(forzar=True)
-        assert cache_limpio['pasadas_completas'] == 1
-        assert 'solo 1 de 3 pasadas' in iss.fuente_para_escribir('NB1')
+        assert 'página 2' in iss.fuente_para_escribir('NB1')
 
-    def test_tres_completas_si_sirven(self, db, monkeypatch, cache_limpio):
+    def test_completa_si_sirve(self, db, monkeypatch, cache_limpio):
         base = {'NB1': {f'S{i}': _fila() for i in range(80)}}
-        self._pasadas(monkeypatch, [base, base, base])
+        monkeypatch.setattr(iss, '_descargar_una_pasada_custom', lambda: completa(base))
+        monkeypatch.setattr('time.sleep', lambda s: None)
         iss._descargar_inventario_siesa_raw(forzar=True)
         assert iss.fuente_para_escribir('NB1') == ''
 
-    def test_una_pasada_rota_no_achica_la_union(self, db, monkeypatch, cache_limpio):
-        base = {'NB1': {f'S{i}': _fila() for i in range(80)}}
-        self._pasadas(monkeypatch, [base, ('rota', {'NB1': {'SOLO-EN-LA-ROTA': _fila(9)}}), base])
-        res = iss._descargar_todas_bodegas_custom()
-        assert 'SOLO-EN-LA-ROTA' in res['NB1'] and res.pasadas_completas == 2
-
-    def test_la_rota_no_pisa_lo_que_trajo_una_completa(self, db, monkeypatch, cache_limpio):
-        base = {'NB1': {'X': _fila(5)}}
-        self._pasadas(monkeypatch, [base, base, ('rota', {'NB1': {'X': _fila(1)}})])
-        assert iss._descargar_todas_bodegas_custom()['NB1']['X']['existencia'] == 5
-
     def test_un_dict_sin_la_medida_se_lee_incompleto(self, db, cache_limpio):
-        with patch.object(iss, '_descargar_todas_bodegas_custom',
+        with patch.object(iss, '_descargar_una_pasada_custom',
                           return_value={'NB1': {f'S{i}': _fila() for i in range(80)}}):
             iss._descargar_inventario_siesa_raw(forzar=True)
         assert iss.fuente_para_escribir('NB1') != ''
@@ -121,7 +107,7 @@ def _mundo(db, almacen, producto):
 
 
 def _cargar(app, almacen, datos):
-    with patch.object(iss, '_descargar_una_pasada_custom', return_value=datos), \
+    with patch.object(iss, '_descargar_una_pasada_custom', return_value=completa(datos)), \
             patch.object(iss, 'connekta') as ck:
         ck.bodega = almacen.bodega_siesa_id
         iss._run_carga_inicial(app, almacen.bodega_siesa_id)
@@ -137,22 +123,23 @@ class TestNadaSePoneEnCeroSinRastro:
         assert UbicacionProducto.query.filter_by(ubicacion_id=pik.id).one().cantidad == 0
         m = MovimientoInventario.query.filter_by(ubicacion_id=pik.id, producto_id=producto.id).one()
         assert m.saldo_antes == 12 and m.saldo_despues == 0
-        assert 'ninguna de las 3 pasadas' in m.motivo
+        assert 'lectura completa verificada' in m.motivo
 
-    def test_con_una_pasada_perdida_no_se_escribe_ni_se_cerea(self, app, db, almacen, producto,
-                                                              cache_limpio, monkeypatch):
+    def test_con_una_lectura_incompleta_no_se_escribe_ni_se_cerea(self, app, db, almacen, producto,
+                                                                  cache_limpio, monkeypatch):
         from app.models.inventario import UbicacionProducto
         from app.services import registro_sync_service as reg
         pik, datos = _mundo(db, almacen, producto)
-        it = iter([datos, None, datos])
-        with patch.object(iss, '_descargar_una_pasada_custom', side_effect=lambda: next(it)), \
+        rota = iss.ResultadoDescarga(datos, completa=False,
+                                     motivo='la página 2 no se pudo leer (tres intentos)')
+        with patch.object(iss, '_descargar_una_pasada_custom', return_value=rota), \
                 patch.object(iss, 'connekta') as ck:
             ck.bodega = almacen.bodega_siesa_id
             iss._run_carga_inicial(app, almacen.bodega_siesa_id)
         db.session.expire_all()
         assert UbicacionProducto.query.filter_by(ubicacion_id=pik.id).one().cantidad == 12
         u = reg.ultimo(iss._tipo_registro_stock(almacen.bodega_siesa_id))
-        assert u['ok'] is False and 'pasadas' in u['error']
+        assert u['ok'] is False and 'quedó incompleta' in u['error']
 
 
 class TestUnaCargaQueNoCorrioSeVe:
@@ -205,16 +192,16 @@ class TestUnaCargaQueNoCorrioSeVe:
 class TestStockSiesaSoloSellaLoLeido:
 
     def test_un_barrido_parcial_no_se_tapa_con_la_bd(self, db, cache_limpio):
-        """El guard anti-parcial mira lo que Siesa trajo, no la mezcla con la BD."""
+        """El guard anti-parcial mira lo que Siesa trajo, no la mezcla con la BD.
+        Una lectura completa de 10 SKU contra 100 guardados no cerea ni sella."""
         from app.models.stock_siesa import StockSiesa
         vieja = datetime.utcnow() - timedelta(days=4)
         for i in range(100):
             db.session.add(StockSiesa(bodega='NB1', codigo_siesa=f'B{i}', existencia=3,
                                       comprometido=0, salida_sin_conf=0, updated_at=vieja))
         db.session.commit()
-        pocas = iss.ResultadoDescarga({'NB1': {f'B{i}': _fila(9) for i in range(10)}},
-                                      pasadas_completas=3)
-        with patch.object(iss, '_descargar_todas_bodegas_custom', return_value=pocas), \
+        pocas = completa({'NB1': {f'B{i}': _fila(9) for i in range(10)}})
+        with patch.object(iss, '_descargar_una_pasada_custom', return_value=pocas), \
                 patch('time.sleep'):
             iss._descargar_inventario_siesa_raw(forzar=True)
         db.session.expire_all()

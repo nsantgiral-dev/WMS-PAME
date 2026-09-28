@@ -38,7 +38,7 @@ RAIZ = pathlib.Path(__file__).resolve().parents[1]
 
 #: Nombres que delatan que una función lee stock de Siesa.
 FUENTES_SIESA = {
-    '_descargar_inventario_siesa_raw', '_descargar_todas_bodegas_custom',
+    '_descargar_inventario_siesa_raw',
     '_descargar_una_pasada_custom', 'get_stock_bodega', 'get_inventario_fecha',
     'StockSiesa', '_leer_stock_de_bd', 'obtener_stock_bodega',
     '_descargar_inventario_multibodega_para_reconciliar',
@@ -114,55 +114,42 @@ class TestLaPolitica:
     def test_sello_de_ayer_no_sirve(self, cache_limpio):
         cache_limpio.update(data={'NB1': {'X': {}}}, ts=datetime.utcnow() - timedelta(days=1, hours=1),
                             degradado=False, bodegas_frescas=frozenset({'NB1'}),
-                            pasadas_completas=iss.PASADAS_ACORDADAS)
+                            completa=True)
         assert 'no es de hoy' in iss.fuente_para_escribir('NB1')
 
     def test_bodega_que_la_descarga_no_trajo_no_sirve(self, cache_limpio):
         """El merge rellena esa bodega con `stock_siesa`: no es dato de hoy."""
         cache_limpio.update(data={'NB1': {'X': {}}, 'NS1': {'Y': {}}}, ts=datetime.utcnow(),
                             degradado=False, bodegas_frescas=frozenset({'NB1'}),
-                            pasadas_completas=iss.PASADAS_ACORDADAS)
+                            completa=True)
         assert iss.fuente_para_escribir('NB1') == ''
         assert 'NS1' in iss.fuente_para_escribir('NS1')
 
     def test_fresco_y_completo_sirve(self, cache_limpio):
         cache_limpio.update(data={'NB1': {'X': {}}}, ts=datetime.utcnow(),
                             degradado=False, bodegas_frescas=frozenset({'NB1'}),
-                            pasadas_completas=iss.PASADAS_ACORDADAS)
+                            completa=True)
         assert iss.fuente_para_escribir('NB1') == ''
 
 
 class TestUnaPaginaPerdidaInvalidaLaPasada:
 
     def test_tres_429_en_una_pagina_no_se_saltan(self):
-        pagina_llena = {'detalle': {'Datos': [
-            {'f150_id': 'NB1', 'f120_referencia': f'R{i}', 'f400_cant_existencia_1': 1}
-            for i in range(1000)]}}
-
-        ultima = {'detalle': {'Datos': [
-            {'f150_id': 'NB1', 'f120_referencia': 'FIN', 'f400_cant_existencia_1': 1}]}}
-
-        def _get(api, params, url=None):
-            # Página 1 llena, página 2 perdida por 429, página 3 la última:
-            # saltarse la 2 devolvería una pasada que PARECE completa.
-            if params['paginacion'].startswith('numPag=1|'):
-                return pagina_llena
-            if params['paginacion'].startswith('numPag=2|'):
-                raise RuntimeError('Connekta rate-limit (429)')
-            return ultima
-
-        with patch.object(iss.connekta, '_get', side_effect=_get), \
-                patch('time.sleep'):
-            assert iss._descargar_una_pasada_custom() is None, (
-                'la pasada volvió «completa» con la página 2 sin leer')
+        """Página 2 perdida por 429: saltarla devolvería una lectura que PARECE
+        completa. Con la forma real (LineaRegistro, total declarado)."""
+        from tests.test_existencias_verdaderas import SiesaExistencias, universo
+        with patch.object(iss.connekta, '_get', side_effect=SiesaExistencias(
+                universo(250), falla={2})), patch('time.sleep'):
+            r = iss._descargar_una_pasada_custom()
+        assert not iss.lectura_completa(r), 'la lectura volvió «completa» con la página 2 sin leer'
 
     def test_una_pasada_sana_sigue_devolviendo_datos(self):
         """La otra dirección."""
-        def _get(api, params, url=None):
-            return {'detalle': {'Datos': [
-                {'f150_id': 'NB1', 'f120_referencia': 'R1', 'f400_cant_existencia_1': 3}]}}
-        with patch.object(iss.connekta, '_get', side_effect=_get):
-            assert iss._descargar_una_pasada_custom()['NB1']['R1']['existencia'] == 3.0
+        from tests.test_existencias_verdaderas import SiesaExistencias, fila
+        with patch.object(iss.connekta, '_get', side_effect=SiesaExistencias(
+                [fila('NB1', 'R1', 3)])), patch('time.sleep'):
+            r = iss._descargar_una_pasada_custom()
+        assert iss.lectura_completa(r) and r['NB1']['R1']['existencia'] == 3.0
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -202,7 +189,8 @@ class TestConFuenteDegradadaNoSeEscribeNada:
         _sembrar(db, almacen, producto)
         antes = _foto_inventario()
         cache_limpio.update(data=None, ts=None, degradado=False, bodegas_frescas=frozenset())
-        with patch.object(iss, '_descargar_todas_bodegas_custom', return_value=None), \
+        rota = iss.ResultadoDescarga({}, completa=False, motivo='la página 1 no se pudo leer')
+        with patch.object(iss, '_descargar_una_pasada_custom', return_value=rota), \
                 patch.object(iss.connekta, 'bodega', almacen.bodega_siesa_id), \
                 patch.object(iss, '_guardar_stock_en_bd'):
             iss._run_carga_inicial(app, almacen.bodega_siesa_id)
@@ -223,9 +211,9 @@ class TestConFuenteDegradadaNoSeEscribeNada:
             producto.codigo_siesa: {'existencia': 7.0, 'comprometido': 0.0, 'salida_sin_conf': 0.0},
         }}
         cache_limpio.update(data=None, ts=None, degradado=False, bodegas_frescas=frozenset())
-        # Las tres pasadas completas (2026-09-26): un dict suelto se lee incompleto.
-        fresco = iss.ResultadoDescarga(fresco, pasadas_completas=iss.PASADAS_ACORDADAS)
-        with patch.object(iss, '_descargar_todas_bodegas_custom', return_value=fresco), \
+        # La lectura completa y verificada (2026-09-27): un dict suelto se lee incompleto.
+        fresco = iss.ResultadoDescarga(fresco, completa=True)
+        with patch.object(iss, '_descargar_una_pasada_custom', return_value=fresco), \
                 patch.object(iss.connekta, 'bodega', almacen.bodega_siesa_id), \
                 patch.object(iss, '_guardar_stock_en_bd'):
             iss._run_carga_inicial(app, almacen.bodega_siesa_id)

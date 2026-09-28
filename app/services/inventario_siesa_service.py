@@ -122,12 +122,13 @@ def _get_o_crear_ubicacion_general(almacen_id: int) -> Ubicacion:
 _cache_inventario_siesa: dict = {}  # {bodega: {'data': ..., 'ts': ...}}
 #: `ts` es la hora de la última descarga **que trajo datos de Siesa**, no la de
 #: la última vez que se armó el diccionario. `degradado` dice si lo que hay
-#: salió solo de la BD porque la API no respondió.
-#: `bodegas_frescas` son las bodegas que la ÚLTIMA descarga trajo de Siesa; el
-#: resto del diccionario salió de `stock_siesa` (la foto anterior).
+#: salió de la BD porque la lectura de Siesa no quedó completa (`motivo` dice
+#: por qué); `completa` es lo contrario, y es lo único que autoriza a leer una
+#: ausencia como cero. `bodegas_frescas` son las bodegas con filas en la última
+#: lectura completa.
 _cache_inventario_multibodega = {'data': None, 'ts': None, 'degradado': False,
                                  'bodegas_frescas': frozenset(),
-                                 'pasadas': 0, 'pasadas_completas': 0}
+                                 'completa': False, 'motivo': ''}
 _descarga_multibodega_en_curso = False
 _CACHE_TTL_SEGUNDOS = 3600  # 1 hora — evita re-descargar en reconciliaciones frecuentes
 _REFRESH_INTERVALO = 2700   # 45 min — refresh periódico del cache multi-bodega
@@ -300,151 +301,251 @@ def bins_administrados_por_el_sync(almacen_id: int, excluir_ubicacion_id=None):
     return q
 
 
-def _descargar_una_pasada_custom():
-    """Una pasada completa de la consulta custom. Retorna dict {bodega: {codigo: {...}}}."""
-    import time as _time
-    api_custom = 'papeleriamedellin_WMS_Stock_Bodega_v2'
-    inventario = {}
-    _errores_consecutivos = 0
+#: La consulta de existencias multi-bodega. Solo trae filas con existencia > 0
+#: (medido en producción el 2026-09-27: 0 de 39.229 con existencia ≤ 0), así
+#: que **una fila que no viene es un cero** — pero solo si la lectura fue
+#: completa. Ver `_descargar_una_pasada_custom`.
+CONSULTA_EXISTENCIAS = 'papeleriamedellin_WMS_Stock_Bodega_v2'
 
-    for pag in range(1, 200):
-        resp = None
-        for intento in range(3):
-            try:
-                resp = connekta._get(api_custom, {
-                    'paginacion': f'numPag={pag}|tamPag=1000',
-                }, url=connekta.url_get_dinamico)
-                _errores_consecutivos = 0
-                break
-            except Exception as _e:
-                if '429' in str(_e) or 'rate' in str(_e).lower():
-                    wait = 10 * (intento + 1)
-                    logger.warning('[INV-SIESA] CUSTOM pág %d: 429 — espera %ds', pag, wait)
-                    _time.sleep(wait)
-                else:
-                    _errores_consecutivos += 1
-                    _time.sleep(2)
-
-        if resp is None:
-            # Una página que no se pudo leer (3 intentos, incluidos los 429)
-            # invalida la pasada entera. Antes, tras tres 429 la página se
-            # SALTABA en silencio y la pasada volvía «completa» sin sus filas:
-            # un SKU ausente se lee como existencia cero, no como desconocido.
-            # Lo leído hasta acá es dato real: queda para la unión (no para
-            # declarar «completo»), ver `_descargar_todas_bodegas_custom`.
-            logger.warning('[INV-SIESA] CUSTOM pág %d no se pudo leer — pasada '
-                           'descartada (incompleta)', pag)
-            _PASADA_ROTA['filas'] = inventario
-            return None
-
-        rows = (
-            resp.get('detalle', {}).get('Datos')
-            or resp.get('detalle', {}).get('Table')
-            or []
-        )
-        if not rows or (len(rows) == 1 and 'alerta' in (rows[0] or {})):
-            break
-
-        for row in rows:
-            bodega = (row.get('f150_id') or '').strip()
-            codigo = (row.get('f120_referencia') or '').strip()
-            if not bodega or not codigo or bodega not in _BODEGAS_INVENTARIO:
-                continue
-            if bodega not in inventario:
-                inventario[bodega] = {}
-            if codigo not in inventario[bodega]:
-                inventario[bodega][codigo] = {
-                    'existencia': float(row.get('f400_cant_existencia_1') or 0),
-                    'comprometido': float(row.get('f400_cant_comprometida_1') or 0),
-                    'salida_sin_conf': float(row.get('f400_cant_salida_sin_conf_1') or 0),
-                    'descripcion': '', 'unidad': 'UND',
-                }
-
-        if len(rows) < 1000:
-            break
-    else:
-        # Se agotó el tope de páginas sin llegar a la última: incompleta.
-        logger.warning('[INV-SIESA] CUSTOM: tope de 199 páginas alcanzado — '
-                       'pasada descartada (incompleta)')
-        _PASADA_ROTA['filas'] = inventario
-        return None
-
-    return inventario if inventario else None
+#: Regla 10: tamPag máximo 100. Con 1.000 la paginación no era determinista
+#: (cada pasada traía otro subconjunto) y el WMS lo tapaba leyendo tres pasadas
+#: y mezclando con lo guardado. Con 100 la lectura de producción fue estable y
+#: completa: 393 páginas, `LineaRegistro` 1…39.229, ninguna repetida.
+TAM_PAGINA_EXISTENCIAS = 100
 
 
-#: Pasadas acordadas de la consulta de existencias. Su paginación no es
-#: determinista: cada pasada completa trae un subconjunto distinto y la unión
-#: se acerca al 100 %. **«Completo» = las tres completas** (2026-09-26): con
-#: una o dos perdidas no hay con qué afirmar que un SKU ausente no existe.
-PASADAS_ACORDADAS = 3
+def _max_paginas_existencias() -> int:
+    """Tope de páginas por lectura (`INV_SIESA_MAX_PAGINAS`, 1.000 = 100.000
+    filas; producción tiene ~39.000). Agotarlo es lectura incompleta."""
+    try:
+        return max(1, int(os.getenv('INV_SIESA_MAX_PAGINAS', '1000')))
+    except ValueError:
+        return 1000
 
-#: Lo que alcanzó a leer la última pasada rota (la llena
-#: `_descargar_una_pasada_custom` antes de devolver `None`).
-_PASADA_ROTA = {'filas': None}
+
+def _pausa_existencias() -> float:
+    """Pausa entre páginas (`INV_SIESA_PAUSA_S`, 0 por defecto)."""
+    try:
+        return max(0.0, float(os.getenv('INV_SIESA_PAUSA_S', '0')))
+    except ValueError:
+        return 0.0
 
 
 class ResultadoDescarga(dict):
-    """`{bodega: {codigo: {...}}}` con cuántas pasadas se intentaron y
-    cuántas terminaron completas. Un `dict` sin estos atributos (un doble de
-    prueba, un llamador viejo) se lee **incompleto** (Regla 0)."""
+    """`{bodega: {codigo: {...}}}` más el veredicto de la lectura.
 
-    def __init__(self, datos=None, pasadas=PASADAS_ACORDADAS, pasadas_completas=0):
+    `completa` es la ÚNICA licencia para leer una ausencia como cero. Un
+    `dict` sin estos atributos (un doble de prueba, un llamador viejo) se lee
+    **incompleto** (Regla 0): no se sabe cómo se leyó."""
+
+    def __init__(self, datos=None, completa=False, motivo='', total_declarado=None,
+                 filas=0, paginas=0, bodegas_sin_filas=()):
         super().__init__(datos or {})
-        self.pasadas = pasadas
-        self.pasadas_completas = pasadas_completas
+        self.completa = bool(completa)
+        self.motivo = motivo or ''
+        self.total_declarado = total_declarado
+        self.filas = filas
+        self.paginas = paginas
+        self.bodegas_sin_filas = tuple(bodegas_sin_filas)
 
 
-def _descargar_todas_bodegas_custom():
+def lectura_completa(lectura) -> bool:
+    """¿Esta lectura puede afirmar que lo que no trajo no existe? Una política."""
+    return bool(getattr(lectura, 'completa', False))
+
+
+def _leer_pagina_existencias(pag: int):
+    """Una página, hasta tres intentos. `None` si no se pudo leer."""
+    import time as _time
+    for intento in range(3):
+        try:
+            resp = connekta._get(CONSULTA_EXISTENCIAS, {
+                'paginacion': f'numPag={pag}|tamPag={TAM_PAGINA_EXISTENCIAS}',
+            }, url=connekta.url_get_dinamico)
+        except Exception as _e:                              # noqa: BLE001
+            if '429' in str(_e) or 'rate' in str(_e).lower():
+                wait = 10 * (intento + 1)
+                logger.warning('[INV-SIESA] existencias pág %d: 429 — espera %ds', pag, wait)
+                _time.sleep(wait)
+            else:
+                logger.warning('[INV-SIESA] existencias pág %d intento %d: %s',
+                               pag, intento + 1, _e)
+                _time.sleep(2)
+            continue
+        if resp is None:            # circuito abierto: no salió a la red
+            _time.sleep(2)
+            continue
+        return resp
+    return None
+
+
+def _descargar_una_pasada_custom() -> 'ResultadoDescarga':
+    """UNA lectura de las existencias de Siesa, **con su prueba de completitud**.
+
+    La clase que esto cierra (P0-1, auditoría de compras 2026-09-27): *un hueco
+    de lectura se rellenaba con el valor viejo y se re-sellaba.* La consulta
+    solo trae filas con existencia > 0; el WMS la leía con `tamPag=1000` (Regla
+    10), paginación no determinista, y para no perder filas mezclaba lo leído
+    con lo guardado en `stock_siesa`. Un SKU que se agotaba desaparecía de la
+    respuesta y quedaba para siempre con su último positivo: en producción,
+    17.971 filas (31 %) y 3,8 M de unidades que Siesa ya no tenía.
+
+    Ahora se lee una vez, de a 100, y la lectura es **completa** solo si:
+
+    · Siesa declaró `total_registros` = N en el sobre, y el mismo N en todas
+      las páginas (si cambia, el inventario se movió mientras se leía);
+    · llegaron exactamente N filas, con `LineaRegistro` 1…N, cada una una vez;
+    · ninguna (bodega, referencia) vino dos veces;
+    · ninguna página falló (tres intentos) y no se agotó el tope.
+
+    Esas cuatro juntas prueban que se recibieron N filas **distintas**: una
+    fila perdida obliga a otra repetida o a un número que no cuadra. Lo único
+    que no pueden ver es un inventario que cambió de forma balanceada entre
+    dos páginas (una fila que sale y otra que entra en la misma pausa): ver
+    «Lo que NO cubre» en CLAUDE.md.
+
+    Las filas se cuentan todas para la prueba (también las de bodegas que el
+    WMS no toca: BC99, FD1…); se guardan solo las de `_BODEGAS_INVENTARIO`.
+    Nunca devuelve `None`: una lectura rota es `completa=False` con su motivo.
     """
-    Las `PASADAS_ACORDADAS` pasadas, acumuladas: la paginación no es
-    determinista y cada pasada trae un subconjunto distinto.
+    import time as _time
+    from app.services.kardex_service import totales_declarados
 
-    **Descartar una pasada rota no achica la unión**: lo que alcanzó a leer
-    entra a la unión (es dato real de Siesa, sirve para refrescar
-    `stock_siesa`), pero la pasada no cuenta como completa. Lo que decide si
-    se puede ESCRIBIR inventario —y poner en cero lo que no vino— es
-    `pasadas_completas` (`fuente_para_escribir`).
-    """
-    acumulado, completas = {}, 0
-    for pasada in range(1, PASADAS_ACORDADAS + 1):
-        _PASADA_ROTA['filas'] = None
-        resultado = _descargar_una_pasada_custom()
-        if resultado is None:
-            logger.warning('[INV-SIESA] CUSTOM pasada %d falló (incompleta)', pasada)
-            resultado, completa = (_PASADA_ROTA['filas'] or {}), False
+    inventario = {}
+    lineas = set()
+    claves = set()
+    total = None
+    filas = 0
+    pag = 0
+    motivo = ''
+    tope = _max_paginas_existencias()
+    pausa = _pausa_existencias()
+
+    while True:
+        pag += 1
+        if pag > tope:
+            motivo = (f'se agotó el tope de {tope} páginas (INV_SIESA_MAX_PAGINAS) '
+                      f'con {filas} de {total} filas')
+            break
+        resp = _leer_pagina_existencias(pag)
+        if resp is None:
+            motivo = f'la página {pag} no se pudo leer (tres intentos)'
+            break
+        det = resp.get('detalle') if isinstance(resp, dict) else None
+        rows = ((det.get('Datos') or det.get('Table') or [])
+                if isinstance(det, dict) else [])
+        if len(rows) == 1 and 'alerta' in (rows[0] or {}):
+            motivo = f'Siesa rechazó la página {pag}: {rows[0].get("alerta")}'
+            break
+        declarado, _paginas = totales_declarados(resp)
+        if rows:
+            if declarado is None:
+                motivo = (f'la página {pag} no declara total_registros: sin él no se '
+                          f'puede afirmar que lo que no vino no existe')
+                break
+            if total is None:
+                total = declarado
+            elif declarado != total:
+                motivo = (f'el total declarado cambió durante la lectura ({total} → '
+                          f'{declarado} en la página {pag}): el inventario se movió')
+                break
+        if not rows:
+            if total is None:
+                # Cero filas declaradas. «Siesa no tiene existencias en ninguna
+                # bodega» no es algo que se afirme por una página vacía.
+                motivo = f'la página {pag} volvió vacía sin total declarado'
+            elif filas < total:
+                motivo = f'la página {pag} volvió vacía con {filas} de {total} filas'
+            break
+        roto = False
+        for row in rows:
+            filas += 1
+            linea = row.get('LineaRegistro')
+            try:
+                linea = int(linea)
+            except (TypeError, ValueError):
+                motivo = f'una fila de la página {pag} no trae LineaRegistro legible'
+                roto = True
+                break
+            if linea in lineas:
+                motivo = f'LineaRegistro {linea} vino dos veces (página {pag})'
+                roto = True
+                break
+            lineas.add(linea)
+            bodega = (row.get('f150_id') or '').strip()
+            codigo = (row.get('f120_referencia') or '').strip()
+            if (bodega, codigo) in claves:
+                motivo = f'{bodega}·{codigo} vino dos veces (página {pag})'
+                roto = True
+                break
+            claves.add((bodega, codigo))
+            if not bodega or not codigo or bodega not in _BODEGAS_INVENTARIO:
+                continue
+            inventario.setdefault(bodega, {})[codigo] = {
+                'existencia': float(row.get('f400_cant_existencia_1') or 0),
+                'comprometido': float(row.get('f400_cant_comprometida_1') or 0),
+                'salida_sin_conf': float(row.get('f400_cant_salida_sin_conf_1') or 0),
+                'descripcion': '', 'unidad': 'UND',
+            }
+        if roto:
+            break
+        if filas >= total or len(rows) < TAM_PAGINA_EXISTENCIAS:
+            break
+        if pausa:
+            _time.sleep(pausa)
+
+    if not motivo:
+        if filas != total:
+            motivo = f'llegaron {filas} filas y Siesa declaró {total}'
+        elif lineas != set(range(1, total + 1)):
+            faltan = sorted(set(range(1, total + 1)) - lineas)[:5]
+            motivo = f'LineaRegistro no es 1…{total}: faltan {faltan}…'
         else:
-            completas += 1
-            completa = True
-        nuevos = 0
-        for bod, productos in resultado.items():
-            destino = acumulado.setdefault(bod, {})
-            for codigo, datos in productos.items():
-                if codigo not in destino:
-                    nuevos += 1
-                    destino[codigo] = datos
-                elif completa:
-                    destino[codigo] = datos
-        total = sum(len(v) for v in acumulado.values())
-        logger.info('[INV-SIESA] CUSTOM pasada %d (%s): +%d nuevos → %d total acumulado',
-                    pasada, 'completa' if completa else 'rota', nuevos, total)
-    _PASADA_ROTA['filas'] = None
+            # Última comprobación: el total al terminar sigue siendo el del
+            # principio. Barata (una página) y ve un cambio de la última página.
+            final = _leer_pagina_existencias(1)
+            final_total = totales_declarados(final)[0] if final else None
+            if final_total != total:
+                motivo = (f'al terminar, Siesa declara {final_total} filas y al empezar '
+                          f'{total}: el inventario se movió durante la lectura')
 
-    total = sum(len(v) for v in acumulado.values())
-    logger.info('[INV-SIESA] CUSTOM %d/%d pasadas completas: %d productos en %s',
-                completas, PASADAS_ACORDADAS, total, sorted(acumulado.keys()))
-    if not acumulado:
-        return None
-    return ResultadoDescarga(acumulado, PASADAS_ACORDADAS, completas)
+    completa = not motivo
+    sin_filas = tuple(b for b in _BODEGAS_INVENTARIO if b not in inventario) if completa else ()
+    if completa:
+        # Una bodega sin filas en una lectura completa es una bodega en cero.
+        for b in sin_filas:
+            inventario[b] = {}
+        logger.info('[INV-SIESA] existencias: lectura COMPLETA — %d filas, %d páginas, '
+                    'bodegas sin filas: %s', filas, pag, list(sin_filas))
+    else:
+        logger.warning('[INV-SIESA] existencias: lectura INCOMPLETA — %s (%d filas leídas)',
+                       motivo, filas)
+    return ResultadoDescarga(inventario, completa=completa, motivo=motivo,
+                             total_declarado=total, filas=filas, paginas=pag,
+                             bodegas_sin_filas=sin_filas)
 
 
 def _descargar_inventario_siesa_raw(forzar=False):
-    """
-    Descarga inventario de todas las bodegas PV.
-    Primero intenta consulta custom (una sola llamada, ~36s, 100% cobertura).
-    Si falla, lee de BD como fallback.
-    Merge API + BD para cobertura máxima.
+    """Las existencias de Siesa de todas las bodegas del universo
+    (`_BODEGAS_INVENTARIO`), `{bodega: {codigo: {existencia, comprometido,
+    salida_sin_conf, ...}}}`.
 
-    Retorna dict {bodega: {codigo: {existencia, comprometido, salida_sin_conf, ...}}}
+    **Con una lectura completa** (`_descargar_una_pasada_custom`) devuelve lo
+    que Siesa reportó y nada más —una bodega sin filas viene vacía— y lo
+    persiste: lo reportado se escribe y lo que Siesa ya no reporta queda en
+    cero, con fecha (`_guardar_stock_en_bd`).
+
+    **Con una lectura incompleta no se persiste nada**: se responde con lo que
+    hay en `stock_siesa` (sin las filas que ya se sabe que están en cero), el
+    caché queda `degradado` con su motivo y la marca de tiempo NO avanza — el
+    sello de frescura solo avanza con dato de Siesa (defecto L).
+
+    Ya no mezcla lo leído con lo guardado (P0-1, 2026-09-27). La mezcla era un
+    parche para la paginación inestable de `tamPag=1000`, y convertía cada
+    agotado en un positivo eterno: la consulta solo trae existencia > 0, así
+    que el SKU que se agota desaparece de la respuesta y la mezcla lo rellenaba
+    con su último valor. La misma mezcla alimentaba la carga física de las 7:00
+    (`_descargar_inventario_siesa` lee de acá): el picker iba a un hueco vacío.
     """
     global _cache_inventario_multibodega
     ahora = datetime.utcnow()
@@ -454,47 +555,50 @@ def _descargar_inventario_siesa_raw(forzar=False):
             and (ahora - _cache_inventario_multibodega['ts']).total_seconds() < _CACHE_TTL_SEGUNDOS):
         return _cache_inventario_multibodega['data']
 
+    from app.services import registro_sync_service as _reg
+    _reg_id = _reg.abrir('existencias_siesa')
 
+    lectura = _descargar_una_pasada_custom()
+    motivo = '' if lectura_completa(lectura) else (
+        getattr(lectura, 'motivo', '')
+        or 'la lectura no trae su prueba de completitud (no se sabe cómo se hizo)')
+    if not motivo:
+        # Defensa en profundidad: una lectura completa y MUY chica (la consulta
+        # cambió, la bodega principal desapareció) no pone en cero miles de
+        # filas. Se juzga sobre lo que Siesa trajo, no sobre una mezcla.
+        try:
+            _verificar_respuesta_no_parcial(
+                lectura.get(connekta.bodega, {}), connekta.bodega)
+        except ValueError as _e_parcial:
+            motivo = str(_e_parcial)
 
-    api_data = _descargar_todas_bodegas_custom()
-
-    _degradado = api_data is None
+    _degradado = bool(motivo)
     if _degradado:
-        # La API no respondió: lo que sigue sale de `stock_siesa`, que puede
-        # tener horas o días. Se devuelve igual —quedarse sin inventario
-        # rompería más de lo que arregla— pero **no se sella como fresco**.
         logger.error(
-            '[INV-SIESA] Custom query falló — se responde con el stock '
-            'persistido en BD, que NO se acaba de verificar contra Siesa.')
-        api_data = {}
-
-    inventario_global = {}
-    for bod in _BODEGAS_INVENTARIO:
-        inv_bd, _ = _leer_stock_de_bd(bod)
-        inv_api = api_data.get(bod, {})
-        if inv_bd and inv_api:
-            merged = dict(inv_bd)
-            merged.update(inv_api)
-            inventario_global[bod] = merged
-            if len(merged) > len(inv_api):
-                logger.info('[INV-SIESA] %s: merge BD(%d) + API(%d) = %d',
-                            bod, len(inv_bd), len(inv_api), len(merged))
-        elif inv_api:
-            inventario_global[bod] = inv_api
-        elif inv_bd:
-            inventario_global[bod] = inv_bd
+            '[INV-SIESA] Lectura de existencias NO completa (%s): no se persiste nada; '
+            'se responde con stock_siesa, que NO se acaba de verificar contra Siesa.',
+            motivo)
+        inventario_global = {}
+        for bod in _BODEGAS_INVENTARIO:
+            inv_bd, _ = _leer_stock_de_bd(bod)
+            if inv_bd:
+                inventario_global[bod] = inv_bd
+    else:
+        inventario_global = {b: dict(v) for b, v in lectura.items()}
 
     total = sum(len(v) for v in inventario_global.values())
-    logger.info('[INV-SIESA] Descarga completa: %d productos en %s', total, sorted(inventario_global.keys()))
+    logger.info('[INV-SIESA] Existencias: %d productos en %s (%s)', total,
+                sorted(b for b, v in inventario_global.items() if v),
+                'degradado' if _degradado else 'lectura completa')
 
     _cache_inventario_multibodega['data'] = inventario_global
-    _cache_inventario_multibodega['pasadas'] = getattr(api_data, 'pasadas', PASADAS_ACORDADAS)
-    _cache_inventario_multibodega['pasadas_completas'] = getattr(api_data, 'pasadas_completas', 0)
+    _cache_inventario_multibodega['completa'] = not _degradado
+    _cache_inventario_multibodega['motivo'] = motivo
     _cache_inventario_multibodega['degradado'] = _degradado
-    _cache_inventario_multibodega['bodegas_frescas'] = frozenset(
-        b for b, filas in api_data.items() if filas)
     if not _degradado:
         _cache_inventario_multibodega['ts'] = datetime.utcnow()
+        _cache_inventario_multibodega['bodegas_frescas'] = frozenset(
+            b for b, filas in lectura.items() if filas)
     else:
         # NO se refresca la marca de tiempo.
         #
@@ -506,94 +610,121 @@ def _descargar_inventario_siesa_raw(forzar=False):
         # Dejando la marca vieja, el TTL vence y el siguiente llamador
         # reintenta. El circuit breaker acota el costo de reintentar contra un
         # Siesa caído.
+        _cache_inventario_multibodega['bodegas_frescas'] = frozenset()
         logger.warning(
             '[INV-SIESA] Cache marcado DEGRADADO — la marca de tiempo sigue '
             'siendo la de la última descarga real (%s)',
             _cache_inventario_multibodega['ts'])
 
-    # La persistencia va DESPUÉS del guard anti-parcial, no antes.
-    #
-    # `stock_siesa` alimenta `armador_service.rop_dual` → `deficit` → el
-    # contenedor, que es irreversible 120 días. Es **acumulativa** (upsert sin
-    # borrado) y `_guardar_stock_en_bd` commitea **por bodega, dentro del
-    # bucle**: un barrido que moría a mitad dejaba unas bodegas frescas y otras
-    # viejas, ya commiteadas, y nada las distinguía — la tabla no guarda marca
-    # de corrida, solo `updated_at`.
-    #
-    # El guard existía y protegía el **reporte** de la reconciliación (`:497`,
-    # `:546`), no la **tabla**. O sea que la respuesta parcial abortaba el
-    # veredicto y ya había escrito el inventario incompleto sobre el que se
-    # compra.
-    #
-    # No se levanta: esta función tiene cinco llamadores que esperan el dict, y
-    # dos ya corren su propio guard. Lo que cambia es que el dato parcial no
-    # llega a la tabla. La bodega que no se refrescó conserva su última foto y
-    # su `updated_at` viejo — que `rop_dual` ahora publica como `frescura_stock`,
-    # porque el histórico ya escrito **no es distinguible** y purgarlo exigiría
-    # un barrido completo confiable que hoy no tenemos.
-    try:
-        # Sobre lo que Siesa trajo, no sobre la mezcla con la BD: la mezcla
-        # siempre alcanza el tamaño de ayer y el guard no veía nada (2026-09-26).
-        _verificar_respuesta_no_parcial(
-            api_data.get(connekta.bodega, {}), connekta.bodega)
-    except ValueError as _e_parcial:
-        logger.error(
-            '[INV-SIESA] Barrido parcial — NO se persiste en stock_siesa: %s. '
-            'Cada bodega conserva su última foto; la antigüedad viaja en '
-            '`frescura_stock` de la fila del Armador.', _e_parcial)
+    detalle = {'filas': getattr(lectura, 'filas', None),
+               'total_declarado': getattr(lectura, 'total_declarado', None),
+               'paginas': getattr(lectura, 'paginas', None)}
+    if _degradado:
+        _reg.cerrar_error(_reg_id, f'Lectura incompleta: {motivo}. No se escribió '
+                                   f'stock_siesa.', resultado=detalle)
     else:
-        # Solo lo que Siesa reportó en ESTA lectura (P2-9, 2026-09-26): la
-        # mezcla BD ∪ API re-sellaba `updated_at = ahora` sobre filas que
-        # Siesa no trajo — un agotado de hace diez días quedaba «recién leído».
-        _guardar_stock_en_bd(api_data, degradado=_degradado)
+        resumen = _guardar_stock_en_bd(lectura)
+        detalle.update(resumen)
+        detalle['bodegas_sin_filas'] = list(getattr(lectura, 'bodegas_sin_filas', ()))
+        if resumen.get('error'):
+            _reg.cerrar_error(_reg_id, f'La lectura fue completa pero no se pudo guardar: '
+                                       f'{resumen["error"]}', resultado=detalle)
+        else:
+            _reg.cerrar_ok(_reg_id, detalle)
 
     return inventario_global
 
 
-def _guardar_stock_en_bd(inventario_global: dict, degradado: bool = False):
-    """Persiste en `stock_siesa` (upsert) **solo lo que Siesa reportó en esta
-    lectura**: `updated_at` dice cuándo Siesa dio ESE número. Una fila que no
-    vino conserva su valor y su fecha (P2-9, 2026-09-26; el llamador le pasa
-    lo leído, no la mezcla con la BD).
+def _guardar_stock_en_bd(lectura, degradado: bool = False) -> dict:
+    """Persiste en `stock_siesa` una lectura **completa** de Siesa. **Nada se
+    borra**: una fila en cero es «se sabe que no hay»; su ausencia sería «no se
+    sabe» (Regla 0).
 
-    Si `degradado` es True, `inventario_global` no trajo nada nuevo de
-    Siesa — es la misma BD leída de vuelta (ver `_descargar_inventario_siesa_raw`).
-    Re-escribirlo pondría `updated_at = utcnow()` sobre un dato que sigue
-    siendo tan viejo como antes de esta corrida: un sello fresco sobre un
-    dato viejo, el mismo error que la Regla 0 ya obligó a evitar en el `ts`
-    del cache en memoria. Acá era el mismo bug, un nivel más abajo."""
-    if degradado:
-        logger.info('[INV-SIESA] BD: guardado omitido (cache degradado — nada nuevo que persistir)')
-        return
+    · Lo que Siesa reportó se escribe con `updated_at = ahora` y sin
+      `ausente_desde`.
+    · Toda fila de una bodega del universo que Siesa NO reportó queda en cero
+      (existencia, comprometido, salida sin confirmar) con `updated_at = ahora`
+      —la lectura completa lo confirma hoy— y `ausente_desde` = el primer
+      momento en que dejó de venir (se conserva si ya estaba).
+
+    Una lectura incompleta, o `degradado=True`, **no escribe nada**: re-sellar
+    lo que Siesa no confirmó en esta corrida sería un sello fresco sobre un
+    dato viejo (defecto L, un nivel más abajo).
+
+    Devuelve `{'escritas', 'a_cero', 'unidades_a_cero', 'por_bodega'}` (o
+    `{'escrito': False, 'motivo'}`)."""
+    if degradado or not lectura_completa(lectura):
+        logger.info('[INV-SIESA] BD: guardado omitido — la lectura no es completa')
+        return {'escrito': False, 'motivo': 'lectura incompleta o degradada'}
+    import time as _ti
     from app.models.stock_siesa import StockSiesa
+    ahora = datetime.utcnow()
+    resumen = {'escrito': True, 'escritas': 0, 'a_cero': 0, 'unidades_a_cero': 0.0,
+               'por_bodega': {}}
     try:
-        for bod, productos in inventario_global.items():
-            for codigo, datos in productos.items():
-                reg = StockSiesa.query.filter_by(bodega=bod, codigo_siesa=codigo).first()
-                if reg:
-                    reg.existencia = datos['existencia']
-                    reg.comprometido = datos['comprometido']
-                    reg.salida_sin_conf = datos['salida_sin_conf']
-                    reg.descripcion = datos.get('descripcion', '')
-                    reg.unidad_medida = datos.get('unidad', 'UND')
-                    reg.updated_at = datetime.utcnow()
-                else:
-                    db.session.add(StockSiesa(
-                        bodega=bod,
-                        codigo_siesa=codigo,
-                        existencia=datos['existencia'],
-                        comprometido=datos['comprometido'],
-                        salida_sin_conf=datos['salida_sin_conf'],
-                        descripcion=datos.get('descripcion', ''),
-                        unidad_medida=datos.get('unidad', 'UND'),
-                    ))
+        for bod in _BODEGAS_INVENTARIO:
+            reportadas = lectura.get(bod) or {}
+            existentes = {r.codigo_siesa: r
+                          for r in StockSiesa.query.filter_by(bodega=bod).all()}
+            for codigo, datos in reportadas.items():
+                reg = existentes.pop(codigo, None)
+                if reg is None:
+                    reg = StockSiesa(bodega=bod, codigo_siesa=codigo)
+                    db.session.add(reg)
+                reg.existencia = datos['existencia']
+                reg.comprometido = datos['comprometido']
+                reg.salida_sin_conf = datos['salida_sin_conf']
+                reg.descripcion = datos.get('descripcion', '')
+                reg.unidad_medida = datos.get('unidad', 'UND')
+                reg.ausente_desde = None
+                reg.updated_at = ahora
+            a_cero, unidades = 0, 0.0
+            for reg in existentes.values():
+                if reg.ausente_desde is None:
+                    a_cero += 1
+                    unidades += float(reg.existencia or 0)
+                    reg.ausente_desde = ahora
+                reg.existencia = 0
+                reg.comprometido = 0
+                reg.salida_sin_conf = 0
+                reg.updated_at = ahora
             db.session.commit()
-            logger.info('[INV-SIESA] BD: %s guardado (%d productos)', bod, len(productos))
-            import time as _ti
-            _ti.sleep(1)  # throttle: respiro entre bodegas (cada una escribe miles de rows)
+            resumen['escritas'] += len(reportadas)
+            resumen['a_cero'] += a_cero
+            resumen['unidades_a_cero'] += unidades
+            resumen['por_bodega'][bod] = {'reportadas': len(reportadas),
+                                          'a_cero_ahora': a_cero,
+                                          'unidades_a_cero': unidades}
+            if a_cero:
+                logger.warning('[INV-SIESA] BD: %s — %d fila(s) que Siesa ya no reporta '
+                               'quedan en 0 (%.0f u)', bod, a_cero, unidades)
+            logger.info('[INV-SIESA] BD: %s guardado (%d reportados)', bod, len(reportadas))
+            if len(reportadas) + len(existentes) > 500:
+                _ti.sleep(1)  # respiro entre bodegas grandes (miles de filas)
     except Exception as exc:
         db.session.rollback()
         logger.error('[INV-SIESA] Error guardando en BD: %s', exc)
+        resumen['error'] = str(exc)[:300]
+    return resumen
+
+
+def estado_lectura_existencias() -> dict:
+    """¿La última lectura de existencias de Siesa quedó completa? Lo lee de
+    `registros_sync` (tipo `existencias_siesa`), así que lo contesta cualquier
+    proceso, no solo el que leyó.
+
+    `{'ultima': dict|None, 'ultima_completa': dict|None, 'incompleta': bool,
+    'motivo': str|None}`. `incompleta` = la última lectura TERMINADA falló o
+    quedó incompleta: `stock_siesa` conserva la anterior."""
+    from app.services import registro_sync_service as _reg
+    ult = _reg.ultimo('existencias_siesa')
+    ok = _reg.ultimo_ok('existencias_siesa')
+    if ult and ult.get('_error_lectura'):
+        return {'ultima': None, 'ultima_completa': None, 'incompleta': False,
+                'motivo': None, 'ilegible': ult['_error_lectura']}
+    incompleta = bool(ult and ult.get('ok') is False)
+    return {'ultima': ult, 'ultima_completa': ok, 'incompleta': incompleta,
+            'motivo': (ult or {}).get('error') if incompleta else None}
 
 
 def frescura_stock_siesa(bodegas=None) -> dict:
@@ -639,7 +770,11 @@ def _leer_stock_de_bd(bodega_id: str):
     Retorna (inventario, actualizado_en) — actualizado_en es el `updated_at`
     más viejo entre las filas de la bodega, no el más nuevo: el snapshot
     completo no es más fresco que su parte más antigua (Regla 0, fallar
-    hacia el lado conservador)."""
+    hacia el lado conservador).
+
+    Las filas que una lectura completa puso en cero (`ausente_desde`) no se
+    devuelven: el inventario leído de la BD tiene la misma forma que el de una
+    lectura completa, donde lo que no hay no viene. Sí cuentan para la fecha."""
     from app.models.stock_siesa import StockSiesa
     try:
         rows = StockSiesa.query.filter_by(bodega=bodega_id).all()
@@ -648,6 +783,10 @@ def _leer_stock_de_bd(bodega_id: str):
         inv = {}
         actualizado_en = None
         for r in rows:
+            if r.updated_at and (actualizado_en is None or r.updated_at < actualizado_en):
+                actualizado_en = r.updated_at
+            if r.ausente_desde is not None:
+                continue
             inv[r.codigo_siesa] = {
                 'existencia': r.existencia or 0,
                 'comprometido': r.comprometido or 0,
@@ -655,8 +794,6 @@ def _leer_stock_de_bd(bodega_id: str):
                 'descripcion': r.descripcion or '',
                 'unidad': r.unidad_medida or 'UND',
             }
-            if r.updated_at and (actualizado_en is None or r.updated_at < actualizado_en):
-                actualizado_en = r.updated_at
         logger.info('[INV-SIESA] BD: %s leído (%d productos)', bodega_id, len(inv))
         return inv, actualizado_en
     except Exception as exc:
@@ -725,29 +862,31 @@ def fuente_para_escribir(bodega: str) -> str:
 
     Sirve solo si: (1) la última descarga no fue degradada; (2) su sello es de
     HOY en Bogotá; (3) esa descarga trajo filas de esta bodega (no salió de
-    `stock_siesa`); (4) **las `PASADAS_ACORDADAS` pasadas llegaron completas**
-    (2026-09-26: antes bastaba una; con dos perdidas el bulk zero ponía en
-    cero lo que esa única pasada no trajo). Con las tres completas, lo que el
-    bulk zero pone en cero faltó en TODAS.
+    `stock_siesa`); (4) **la lectura fue completa y verificada**
+    (`lectura_completa`: `LineaRegistro` 1…N contra el total que Siesa
+    declara, sin repetidos; 2026-09-27 — antes, tres pasadas de `tamPag=1000`
+    unidas a lo guardado). Solo así lo que el bulk zero pone en cero es algo
+    que Siesa no tiene, y no algo que la lectura no alcanzó a traer.
     """
     from app.utils.fecha import dia_operativo, dia_operativo_de
     c = _cache_inventario_multibodega
     if c.get('data') is None:
         return 'no hay descarga de Siesa en memoria'
     if c.get('degradado'):
-        return ('la última descarga de Siesa falló: lo que hay en memoria es la '
-                'foto guardada en stock_siesa, no el dato de hoy')
+        return ('la última lectura de existencias de Siesa falló o quedó incompleta'
+                + (f' ({c.get("motivo")})' if c.get('motivo') else '')
+                + ': lo que hay en memoria es la foto guardada en stock_siesa, '
+                  'no el dato de hoy')
     ts = c.get('ts')
     if ts is None or dia_operativo_de(ts) != dia_operativo():
         return f'el dato de Siesa no es de hoy (sello: {ts.isoformat() if ts else "ninguno"})'
     if bodega not in (c.get('bodegas_frescas') or ()):
         return (f'la descarga de hoy no trajo filas de {bodega}: lo que hay para '
                 f'esa bodega es la foto guardada en stock_siesa')
-    completas = c.get('pasadas_completas') or 0
-    if completas < PASADAS_ACORDADAS:
-        return (f'solo {completas} de {PASADAS_ACORDADAS} pasadas de la consulta de '
-                f'existencias llegaron completas: con la paginación no determinista de '
-                f'Siesa no se puede afirmar que un SKU ausente no existe')
+    if not c.get('completa'):
+        return ('la lectura de existencias de Siesa no quedó completa'
+                + (f' ({c.get("motivo")})' if c.get('motivo') else '')
+                + ': no se puede afirmar que un SKU ausente no existe')
     return ''
 
 
@@ -862,6 +1001,13 @@ def _descargar_inventario_multibodega_para_reconciliar():
     acá explícitamente sobre la bodega principal.
     """
     multi = _descargar_inventario_siesa_raw(forzar=True)
+    if _cache_inventario_multibodega.get('degradado'):
+        # Comparar el WMS contra la foto guardada no es reconciliar contra
+        # Siesa: el veredicto «sin diferencias» sería de otro día (2026-09-27).
+        raise ValueError(
+            'La lectura de existencias de Siesa no quedó completa ('
+            f'{_cache_inventario_multibodega.get("motivo") or "sin motivo"}): '
+            'no se reconcilia contra la foto guardada. Reintente.')
     _verificar_respuesta_no_parcial(multi.get(connekta.bodega, {}),
                                     connekta.bodega)
     return multi
@@ -1214,8 +1360,8 @@ def _run_carga_inicial(app, bodega: str = None):
             #
             # Cada cero deja su movimiento (2026-09-26): antes era un UPDATE en
             # bloque sin kardex, y un hueco de picking puesto en 0 no dejaba
-            # rastro. Solo llega acá con las tres pasadas completas
-            # (`fuente_para_escribir`): lo que se pone en cero faltó en todas.
+            # rastro. Solo llega acá con la lectura completa y verificada
+            # (`fuente_para_escribir`): lo que se pone en cero Siesa no lo tiene.
             cereados = 0
             if _ubs_a_zero:
                 _excl_prods = _prod_ids_ya_hoy | _prod_ids_activos | _prod_ids_actualizados
@@ -1228,7 +1374,6 @@ def _run_carga_inicial(app, bodega: str = None):
                     _q_zero = _q_zero.filter(
                         ~UbicacionProducto.producto_id.in_(_excl_prods)
                     )
-                _pasadas = _cache_inventario_multibodega.get('pasadas_completas')
                 for _r in _q_zero.all():
                     _saldo = _r.cantidad
                     _r.cantidad = 0
@@ -1237,8 +1382,8 @@ def _run_carga_inicial(app, bodega: str = None):
                         almacen_id=almacen.id, tipo='CARGA_INICIAL_SIESA',
                         cantidad=0, saldo_antes=_saldo, saldo_despues=0,
                         motivo=(f'Carga desde Siesa {fecha_hoy} · bodega {bod}: Siesa no '
-                                f'reportó el SKU en ninguna de las {_pasadas} pasadas '
-                                f'completas — queda en 0'),
+                                f'reportó el SKU en la lectura completa verificada '
+                                f'(LineaRegistro 1…N) — queda en 0'),
                         numero_documento='CARGA-SIESA',
                         idempotency_key=f'SIESA-CERO-{bod}-{_r.id}-{fecha_hoy}'))
                     cereados += 1
@@ -1302,7 +1447,7 @@ def _run_carga_inicial(app, bodega: str = None):
             'errores': errores,
             'total_siesa': len(inventario_siesa),
             'puestos_en_cero': cereados,
-            'pasadas_completas': _cache_inventario_multibodega.get('pasadas_completas'),
+            'lectura_completa': bool(_cache_inventario_multibodega.get('completa')),
         }
         logger.info(f'[INV-SIESA] Carga inicial de {bod} completada: {resultado}')
         estado['ultimo_resultado'] = resultado
