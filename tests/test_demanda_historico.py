@@ -141,6 +141,14 @@ class TestElSql:
         rec = dfu.sql_ventas_dia(14)
         assert 'DATEADD(DAY, -14, GETDATE())' in rec
 
+    def test_la_reciente_es_corta(self):
+        """La reciente se relee ENTERA todos los días (para ver anulaciones):
+        si fuera larga, volvería a ser el histórico que nunca termina."""
+        from app.services import demanda_fuentes as dfu
+        assert dfu.DIAS_RECIENTE <= 31
+        assert dfu.ventana_reciente()['dias'] == dfu.DIAS_RECIENTE
+        assert f'-{dfu.DIAS_RECIENTE}, GETDATE()' in dfu.sql_de_ventana(dfu.ventana_reciente())
+
     def test_forma_que_connekta_acepta(self):
         from app.services import demanda_fuentes as dfu
         for sql in (dfu.sql_ventas_dia(14), dfu.sql_ventas_periodo(date(2026, 7, 1),
@@ -444,7 +452,7 @@ class TestValorYCosto:
         v = dfu.valor_realizado({'X'})['X']
         assert v['precio_unitario'] is None and v['costo_unitario'] == Decimal('500.00')
 
-    def test_neto_de_devoluciones_y_solo_dias_cubiertos(self, app, db):
+    def test_neto_de_devoluciones_y_solo_el_tramo_cubierto(self, app, db):
         from app.services import demanda_fuentes as dfu
         from app.models.demanda_siesa import DemandaDiaCubierto, DemandaDiaSiesa
         d = _hoy() - timedelta(days=3)

@@ -1367,8 +1367,8 @@ def ventana_de_la_fuente(fuente: dict, desde, hasta):
 # ══════════════════════════════════════════════════════════════════════════════
 
 def valor_realizado(refs=None, desde: date = None, hasta: date = None, bodegas=None) -> dict:
-    """Precio y costo REALIZADOS por SKU sobre los días que una lectura
-    completa cubrió: `{ref: {'unidades', 'valor', 'costo', 'precio_unitario',
+    """Precio y costo REALIZADOS por SKU sobre el tramo contiguo que las
+    lecturas completas cubrieron (el mismo de la demanda): `{ref: {'unidades', 'valor', 'costo', 'precio_unitario',
     'costo_unitario', 'dias', 'valor_incompleto', 'costo_incompleto'}}`.
 
     Neto de devoluciones (unidades, valor y costo). Si en el tramo hay una
@@ -1378,14 +1378,15 @@ def valor_realizado(refs=None, desde: date = None, hasta: date = None, bodegas=N
     precio. Lo mismo el costo. Sin unidades netas > 0, sin precio. Solo lee;
     nadie más lee el valor (`tests/test_demanda_fuentes.py`)."""
     from app.models.demanda_siesa import DemandaDiaSiesa
-    cub = cobertura_siesa(con_dias=True)
+    # El tramo contiguo de la cobertura: todo día adentro está cubierto (la
+    # misma ventana que usa la demanda).
+    cub = cobertura_siesa()
     if not cub.get('desde'):
         return {}
     d = max(desde or cub['desde'], cub['desde'])
     h = min(hasta or cub['hasta'], cub['hasta'])
     if d > h:
         return {}
-    dias_cubiertos = cub['dias_cubiertos']
     q = DemandaDiaSiesa.query.filter(DemandaDiaSiesa.fecha >= d, DemandaDiaSiesa.fecha <= h)
     if refs is not None:
         q = q.filter(DemandaDiaSiesa.referencia.in_(list(refs)))
@@ -1393,8 +1394,6 @@ def valor_realizado(refs=None, desde: date = None, hasta: date = None, bodegas=N
         q = q.filter(DemandaDiaSiesa.bodega.in_(list(bodegas)))
     out = {}
     for f in q.all():
-        if f.fecha not in dias_cubiertos:
-            continue
         a = out.setdefault(f.referencia, {'unidades': Decimal(0), 'valor': Decimal(0),
                                           'costo': Decimal(0), 'dias': set(),
                                           'valor_incompleto': False,
