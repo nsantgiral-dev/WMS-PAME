@@ -239,7 +239,8 @@ class TestThroughputEnTemporada:
         # Cada caja: dos pasadas por la DLQ (emitir la RM; identificarla y
         # facturar), 10 GET y 3 POST ≈ 19 s de Siesa. Medido: 176 en la hora
         # (el tope de 50 s se mira ANTES de empezar un job, así que un ciclo
-        # llega a ~58 s). Con el orden sin «lo empezado primero»: 86.
+        # llega a ~58 s). Con el envejecimiento aplicado también a las cajas sin
+        # empezar (adelantan a las que esperan su RM): 86.
         print(f'\n[THROUGHPUT] {despachadas} cajas despachadas en 60 min simulados '
               f'({estado["gets"]} GET, {estado["posts"]} POST)')
         assert despachadas >= 172, despachadas   # medido 176; con la pausa de antes, 168

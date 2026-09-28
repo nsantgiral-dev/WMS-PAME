@@ -283,7 +283,9 @@ class TestNadieLeeElCircuitoSinDejarloProbar:
         from app.services.connekta_gateway import ConnektaGateway
 
         def estado(self, t, c):
+            import time as _t
             assert self._cb_consumir_permiso(), 'el probe tenía que salir'
+            _t.sleep(0.3)      # el probe tarda: en paralelo la factura sale antes de que cierre
             self._cb_record_success()
             return 3
 

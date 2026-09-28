@@ -139,11 +139,10 @@ def orden_de_la_cola(ahora):
 
     1. un job de otro tipo que lleva > `ESPERA_MAXIMA_SIN_TURNO` esperando;
     2. la prioridad del tipo (`PRIORIDAD_DLQ`);
-    3. dentro del tipo, **lo empezado antes que lo nuevo** (un job que ya
-       corrió y espera —la RM que todavía no aparece, un reintento— tiene
-       `proximo_intento`): terminar una caja le da una factura al muelle;
-       empezar otra, no;
-    4. FIFO (creación, id).
+    3. FIFO (creación, id). Dentro de la emisión esto ya termina lo empezado
+       antes de empezar otra caja: la que espera su RM es más vieja que las
+       que no arrancaron. Lo que lo rompía era el envejecimiento aplicado a
+       las cajas sin empezar (medido: 86 cajas/h en vez de 176).
     """
     from sqlalchemy import and_, case
     listo_desde = db.func.coalesce(SiesaJob.proximo_intento, SiesaJob.fecha_creacion)
@@ -152,8 +151,7 @@ def orden_de_la_cola(ahora):
                       else_=1)
     prioridad = case({t: i for i, t in enumerate(PRIORIDAD_DLQ)}, value=SiesaJob.tipo,
                      else_=len(PRIORIDAD_DLQ))
-    empezado = case((SiesaJob.proximo_intento.isnot(None), 0), else_=1)
-    return (envejecido, prioridad, empezado, SiesaJob.fecha_creacion, SiesaJob.id)
+    return (envejecido, prioridad, SiesaJob.fecha_creacion, SiesaJob.id)
 
 
 def _procesar_jobs_pendientes_interno(_app):
