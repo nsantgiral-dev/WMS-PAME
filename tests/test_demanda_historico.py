@@ -355,6 +355,22 @@ class TestElHistorico:
         q = dfu._que_hacer([{'fuente': dfu.FUENTE_SIESA, 'usable': True}])
         assert v1['consulta'] in q
 
+    def test_un_periodo_leido_entero_no_vuelve_aunque_falten_dias_despues(self, app, db):
+        """El período en curso se registró con `hasta` = el día que se copió el
+        SQL. Leído entero, no vuelve a la lista por los días que siguen (los
+        cubre la reciente; si no, la cobertura muestra el hueco)."""
+        from app.services import demanda_fuentes as dfu
+        hoy = _hoy()
+        v0 = dfu.ventanas_historicas(hoy)[0]
+        registrado_hasta = v0['hasta'] - timedelta(days=5)
+        gw = SiesaVentas({v0['consulta']: (_filas(v0['desde'], registrado_hasta, refs=('A',),
+                                                  bodegas=('NB1',)),
+                                           v0['desde'], registrado_hasta)})
+        r = dfu.descargar_ventana(v0, gateway=gw, pausa_s=0, reloj=gw.reloj)
+        assert r['completa']
+        assert v0['consulta'] not in [p['consulta'] for p in dfu.ventanas_pendientes(hoy)]
+        assert dfu.cobertura_siesa()['hasta'] == registrado_hasta
+
     def test_completo_no_lee_nada(self, app, db):
         from app.services import demanda_fuentes as dfu
         from app.models.demanda_siesa import DemandaDiaCubierto
