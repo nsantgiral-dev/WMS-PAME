@@ -107,6 +107,21 @@ class Roles:
         PICKER_TRASLADO, PACKER_TRASLADO,
     )
 
+    #: **Quién ejecuta tareas del piso** —picking, packing, conteo,
+    #: reposición— y por eso aparece en la productividad del tablero. Lista
+    #: BLANCA (2026-09-27): antes la productividad listaba a todo usuario
+    #: activo del almacén, y el liquidador, el líder de cartera, la tienda,
+    #: compras, el gerente y control de flota salían con «0 tareas» y un cupo
+    #: de conteo de 15 que nadie les iba a asignar.
+    OPERAN_TAREAS = (ADMIN, SUPERVISOR, JEFE_ALMACEN, OPERARIO, EMPACADOR,
+                     PICKER_TRASLADO, PACKER_TRASLADO)
+    #: **Quién cuenta**: los roles a los que `conteo_service` puede asignar un
+    #: conteo (el par del CC2, el respaldo) más el supervisor, que hace el
+    #: conteo definitivo (CC3). Solo ellos llevan cupo diario de conteo.
+    #: `tests/test_productividad_roles.py` cruza esta tupla contra los roles
+    #: que `conteo_service` escribe a mano.
+    CUENTAN = (ADMIN, SUPERVISOR, JEFE_ALMACEN, OPERARIO, PICKER_TRASLADO)
+
     #: **Quién ve el catálogo de productos** (`/api/productos/`): el personal
     #: de almacén y la tienda, que busca un producto para recibir una OC
     #: (decisión del 2026-09-25: la tienda lo ve, **sin costos**).

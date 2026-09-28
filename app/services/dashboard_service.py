@@ -387,12 +387,16 @@ class DashboardService:
         """Productividad por operario en los últimos N días, más qué está
         haciendo cada uno ahora mismo (tarea_actual — snapshot EN_PROCESO)."""
         from app.models.tarea_reposicion import TareaReposicion
+        from app.routes._auth_helpers import Roles
 
         fecha_inicio = datetime.utcnow() - timedelta(days=dias)
 
+        # Solo quien ejecuta tareas del piso (lista blanca, `Roles`): el
+        # liquidador o la tienda no son «operarios con 0 tareas».
         operarios = Usuario.query.filter(
             Usuario.almacen_id == almacen_id,
-            Usuario.activo == True
+            Usuario.activo == True,
+            Usuario.rol.in_(Roles.OPERAN_TAREAS),
         ).all()
 
         operario_ids = [o.id for o in operarios]
@@ -600,7 +604,11 @@ class DashboardService:
                 'conteos_completados': conteos,
                 'conteos_hoy': conteos_hoy,
                 'reposiciones_completadas': reposiciones,
-                'capacidad_diaria_conteo': operario.capacidad_diaria_conteo if operario.capacidad_diaria_conteo is not None else 15,
+                # Cupo solo para quien cuenta; al resto no se le asigna conteo.
+                'capacidad_diaria_conteo': (
+                    None if operario.rol not in Roles.CUENTAN
+                    else operario.capacidad_diaria_conteo
+                    if operario.capacidad_diaria_conteo is not None else 15),
                 'total_tareas': pickings + packings + conteos + reposiciones,
                 'tarea_actual': _tarea_actual(operario.id),
             })

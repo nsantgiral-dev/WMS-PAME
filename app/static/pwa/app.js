@@ -1748,9 +1748,10 @@ async function cargarOperarios() {
     const metricas = {};
     (prod.operarios || []).forEach(op => { metricas[op.operario_id || op.id] = op; });
 
-    // Todos los usuarios activos (operarios/jefe), con métricas si las tienen
-    const todos = (usuariosData.usuarios || []).filter(u => u.activo);
-    if (!todos.length) { el.innerHTML = '<div style="color:var(--tx3);text-align:center;padding:40px;">Sin usuarios</div>'; return; }
+    // Solo quien el servidor lista en la productividad (Roles.OPERAN_TAREAS):
+    // el liquidador o la tienda no son operarios con 0 tareas.
+    const todos = (usuariosData.usuarios || []).filter(u => u.activo && metricas[u.id]);
+    if (!todos.length) { el.innerHTML = '<div style="color:var(--tx3);text-align:center;padding:40px;">Sin operarios en esta bodega</div>'; return; }
 
     // Ordenar: más tareas primero
     todos.sort((a, b) => (metricas[b.id]?.total_tareas || 0) - (metricas[a.id]?.total_tareas || 0));
@@ -1770,7 +1771,7 @@ async function cargarOperarios() {
             <div style="font-size:var(--fs-xs);color:var(--tx3);margin-bottom:2px;">${esc(u.rol)} ${badges}</div>
             ${_tareaActualHTML(op.tarea_actual)}
             <div style="font-size:var(--fs-xs);color:var(--tx3);">Pick:${esc(op.pickings_completados)} Pack:${esc(op.packings_completados)} Repo:${esc(op.reposiciones_completadas || 0)} Conteos:${esc(op.conteos_completados)}</div>
-            ${u.puede_picar && u.capacidad_diaria_conteo != null ? (() => {
+            ${u.puede_picar && op.capacidad_diaria_conteo != null && u.capacidad_diaria_conteo != null ? (() => {
               const cap = u.capacidad_diaria_conteo;
               const hoy = op.conteos_hoy || 0;
               const pct = cap > 0 ? Math.min(100, Math.round(hoy / cap * 100)) : 0;
