@@ -541,6 +541,13 @@ class ConnektaGateway:
         # Verificar en Siesa: Inventarios → Maestros → Conceptos y Motivos → Concepto 603.
         self.motivo_ajuste_entrada = os.getenv('SIESA_MOTIVO_AJUSTE_ENTRADA', '01')
         self.motivo_ajuste_salida  = os.getenv('SIESA_MOTIVO_AJUSTE_SALIDA',  '02')
+        # Motivo del concepto 601 (Entrada a inventario) para la ENTRADA CON
+        # COSTO (clase 61): la de un ítem sin costo promedio en la bodega. En
+        # Siesa QA el 0601-01 es «Entrada de Inventario» (ni solo cantidad ni
+        # solo valor), verificado en pantalla el 2026-09-29. Sin default: sin
+        # la variable esa entrada no sale (`ConnektaPayloadInvalido`) — un
+        # motivo adivinado mueve la contrapartida contable.
+        self.motivo_entrada_inventario = os.getenv('SIESA_MOTIVO_ENTRADA_INVENTARIO', '').strip()
         # Conceptos de movimiento en Siesa (Inventarios → Maestros → Conceptos y Motivos).
         # Los valores por defecto son los estándar de Siesa Enterprise; pueden variar por compañía.
         # Verificar en Siesa si los conceptos fueron renumerados antes de cambiar estos valores.
