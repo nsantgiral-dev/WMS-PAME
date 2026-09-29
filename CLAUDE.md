@@ -6447,14 +6447,14 @@ desechable). Sin locks nuevos.
 
 | | Qué pasaba | Ahora | Trinquete |
 |---|---|---|---|
-| **B** demanda | El punto de pedido y el nivel objetivo pedían con el **promedio de 12 meses**: en septiembre con el pico de enero adentro (+66 % de capital), en enero con los nueve meses flojos (quiebre en el pico). La σ del año contaba el cambio de temporada como ruido. El filtro de 90 días «sin venta reciente» apagaba en octubre lo que se vende en diciembre | `kardex_service.demanda_para_horizonte` (la única): la venta de los próximos LT + ciclo (nacional) o LT + R (China) días = lo vendido en esa ventana **hace 52 semanas** (≥ 4 semanas, sobre días con existencias: `dias_expuestos`) × la **tendencia** (últimas 8 semanas contra las mismas del año pasado; con menos historia, las semanas completas que haya, desde 4), **acotada** 0,5–1,5 (`DEMANDA_TENDENCIA_PISO/TECHO`); con < 10 u en esas semanas, 1 y dicho. σ sobre **residuales** por bloques de 4 semanas. Cae al promedio de siempre —y lo dice— sin un año + 4 semanas de fuente, con < 24 u al año o sin venta el año pasado en estas fechas. El **estacional dormido** (el año pasado tampoco vendía en estas semanas y sí en las que vienen) no cae en «sin venta reciente». `rop_dual` resuelve el lead time antes (de él sale el horizonte); `d_avg_historica` se publica, no decide; `demanda_horizonte` en cada fila y el resumen en el resultado | `test_demanda_horizonte.py`: fuera de `kardex_service`, `d_avg`/`sigma_d` de la demanda de 12 meses solo se leen para publicarlos (`d_hist`) o filtrar (`if … <= 0`); inventario de 1, solo encoge |
+| **B** demanda | El punto de pedido y el nivel objetivo pedían con el **promedio de 12 meses**: en septiembre con el pico de enero adentro (+66 % de capital), en enero con los nueve meses flojos (quiebre en el pico). La σ del año contaba el cambio de temporada como ruido. El filtro de 90 días «sin venta reciente» apagaba en octubre lo que se vende en diciembre | `kardex_service.demanda_para_horizonte` (la única): la venta de los próximos LT + ciclo (nacional) o LT + R (China) días = lo vendido en esa ventana **hace 52 semanas** (≥ 4 semanas, sobre días con existencias: `dias_expuestos`) × la **tendencia** (últimas 8 semanas contra las mismas del año pasado; con menos historia, las semanas completas que haya, desde 4), **acotada** 0,5–1,5 (`DEMANDA_TENDENCIA_PISO/TECHO`); con < 30 u en esas semanas (eran 10 hasta el 2026-09-29), 1 y dicho. σ sobre **residuales** por bloques de 4 semanas. Cae al promedio de siempre —y lo dice— sin un año + 4 semanas de fuente, con < 24 u al año o sin venta el año pasado en estas fechas. El **estacional dormido** (el año pasado tampoco vendía en estas semanas y sí en las que vienen) no cae en «sin venta reciente». `rop_dual` resuelve el lead time antes (de él sale el horizonte); `d_avg_historica` se publica, no decide; `demanda_horizonte` en cada fila y el resumen en el resultado | `test_demanda_horizonte.py`: fuera de `kardex_service`, `d_avg`/`sigma_d` de la demanda de 12 meses solo se leen para publicarlos (`d_hist`) o filtrar (`if … <= 0`); inventario de 1, solo encoge |
 | **B** proyecto | Una licitación de 20.000 cuadernos desde NS2 entraba como un día de venta y se reponía todo el año | `bodegas_de_proyecto()` (`DEMANDA_BODEGAS_PROYECTO`, default **NS2, BC99**, declarado; `ninguna` = todo repetible): `serie_demanda` —la única que lee la venta, las tres fuentes— la aparta en `venta_proyecto` (neta de devoluciones) | un dueño para la variable (AST) |
 | **B** atípicos | Un día fuera de toda proporción subía d y σ un año | `tope_atipicos`: un día > max(p99 sobre días calendario, 10 × mediana de los días con venta) se cuenta hasta ese tope (con ≥ 8 días con venta), en la demanda de 12 meses y en la del horizonte; declarado (`atipicos`) | — |
 | **B** porqué | «Vende unas N al día» | «El año pasado, del 27 sep al 24 oct, vendió 840. Este año va 10 % arriba (últimas 8 semanas: 616 contra 560 el año pasado). Para las próximas 4 semanas se cuentan 33 al día.» + atípicos y venta de proyecto; la cabecera dice cuántos productos van con la misma época y cuántos con el promedio | Node con `util.js` real |
 | **E** OCs viejas | El 100 % de lo pendiente estaba vencido (producción, 27-sep); 50 OCs aprobadas hace > 180 días sin ninguna entrada (288.156 u) apagaban la compra; la bandeja decía «Ya pedido: N» | `COMPRAS_OC_EXCLUIR_MAS_DE_DIAS` nace en **180** (declarado; `nunca` = sin corte; ilegible = sin corte, dicho). La nota parte lo no contado en «sin ninguna entrada» y «saldo de una parcial». `en_camino` publica por SKU las OCs que cuentan (la más atrasada primero, con sus días) y las que no; `rop_dual`, `en_transito_vencido`, `bajo_rop_sin_vencidas` y `deficit_sin_vencidas`. La bandeja marca **«Revisar OC»** en la línea y lista aparte lo que **solo** una OC vencida cubre (con cuánto pedir si no llega) | `test_compras_ya_pedido.py`: toda función de compras que lee `en_transito` de una fila del ROP lee también `en_transito_vencido` |
 | **E** lead time | Default nacional 5 ± 2 («conservador», no lo era) | **10 ± 5**: 42 OCs abiertas con entrada parcial dieron una mediana de 10 días (p90 ≈ 26) en producción | — |
 | **E** llegadas | «Lo que llegó» leía solo el muelle del WMS (0 en producción) | + las entradas de Siesa del espejo (`ts_parcial` / `ts_cumplido` en la ventana; unidades = lo entrado acumulado de la OC, dicho); la OC recibida en el muelle aparece una vez | — |
-| **F** decisiones | La bandeja no guardaba nada: dos personas pedían dos veces, la línea volvía sin rastro, no quedaba quién ni contra qué número | `compras_decisiones` + `decision_compra`: por línea **«Ya se pidió»** (OC de Siesa n.º, cantidad), **«Posponer»** (hasta una fecha, ≤ 90 días) y **«No pedir»** (motivo de una lista + detalle), con autor, hora y la línea como se vio (`foto`, solo claves de la bandeja). «Ya se pidió» cuenta como en camino (fuente **`DECISION_WMS`** de `en_camino`) `COMPRAS_PEDIDO_EN_CAMINO_DIAS` (7) o hasta que el espejo muestra una OC de ese SKU del día de la decisión en adelante (o la OC escrita); vencido sin OC deja de contar y se dice. Posponer y no pedir sacan la línea hasta su fecha, salvo que se vuelva **URGENTE**. «Ya decidido estos días» con «Deshacer» (motivo, bitácora ANULAR); «No pedir» deja un DESCARTAR. Escriben admin, jefe de almacén y compras (`Roles.COMPRAS_ESCRITURA`, `_es_compras_escritura`); **el gerente mira** (`puede_decidir` en la respuesta: sin botones). Doble toque = la misma decisión | `test_compras_decisiones.py`: solo `compras_decisiones` crea o anula una decisión y solo `_decisiones_en_camino` suma lo pedido |
+| **F** decisiones | La bandeja no guardaba nada: dos personas pedían dos veces, la línea volvía sin rastro, no quedaba quién ni contra qué número | `compras_decisiones` + `decision_compra`: por línea **«Ya se pidió»** (OC de Siesa n.º, cantidad), **«Posponer»** (hasta una fecha, ≤ 90 días) y **«No pedir»** (motivo de una lista + detalle), con autor, hora y la línea como se vio (`foto`, solo claves de la bandeja). «Ya se pidió» cuenta como en camino (fuente **`DECISION_WMS`** de `en_camino`) hasta el lead time + 2σ del proveedor (desde el 2026-09-29; eran 7 días fijos) o hasta que el espejo muestra una OC de ese SKU del día de la decisión en adelante (o la OC escrita); vencido sin OC deja de contar y se dice. Posponer y no pedir sacan la línea hasta su fecha, salvo que se vuelva **URGENTE**. «Ya decidido estos días» con «Deshacer» (motivo, bitácora ANULAR); «No pedir» deja un DESCARTAR. Escriben admin, jefe de almacén y compras (`Roles.COMPRAS_ESCRITURA`, `_es_compras_escritura`); **el gerente mira** (`puede_decidir` en la respuesta: sin botones). Doble toque = la misma decisión | `test_compras_decisiones.py`: solo `compras_decisiones` crea o anula una decisión y solo `_decisiones_en_camino` suma lo pedido |
 
 `decision_compra` es **OPERATIVA** en el acta de corte (un «ya se pidió» del
 ensayo contaría como en camino) e **IRRECUPERABLE** en la verificación de
@@ -6479,14 +6479,14 @@ miden la unidad, no el corte.
   de Siesa hacen falta **392 días** leídos (364 + 4 semanas); la histórica de
   400 días alcanza para 5 semanas de tendencia, no 8. Con la fuente de pedidos
   (cota inferior) el año pasado casi nunca existe: promedio, dicho.
-- **La censura del año pasado** solo se corrige donde hay `StockDiario` (el
-  kardex); con Siesa la ventana del año pasado cuenta días calendario.
-- **La tendencia no se descensura** (un agotado en las últimas semanas la baja).
+- ~~**La censura del año pasado** solo se corrige donde hay `StockDiario`~~ y
+  ~~**la tendencia no se descensura**~~ — cerrados el 2026-09-29 con la censura
+  inferida (ver «La validación de B/E/F y la tanda G», abajo).
 - **El tope de atípicos** mide su umbral sobre la ventana de cada función (360
   días en la de 12 meses, el último año en la del horizonte): pueden diferir
   por unos días.
-- **Rendimiento**: `rop_dual` lee la venta dos veces (12 meses y ~420 días
-  para el horizonte). Sin medir contra el volumen de producción (P1-9, tanda G).
+- ~~**Rendimiento**: `rop_dual` lee la venta dos veces~~ — tanda G (abajo):
+  una lectura y caché; el frío sigue sin cumplir 15 s en el Mac de pruebas.
 - **Temporada (newsvendor)** sigue con su propia demanda de temporada (P1-8,
   tanda H): el horizonte es del ROP y del contenedor.
 - **«Revisar OC»** usa la línea de 90 días de `COMPRAS_OC_VENCIDA_DIAS`: con
@@ -6511,10 +6511,69 @@ miden la unidad, no el corte.
    (pedir de menos se corrige mañana). ¿Más alto para la canasta escolar?
 3. **Corte de OCs viejas en 180 días**: ¿anular en Siesa las 50 muertas y las
    33 con saldo parcial? Hasta entonces no cuentan y la bandeja lo dice.
-4. **«Ya se pidió» cuenta 7 días**: ¿cuánto tarda de verdad la OC en aparecer
-   en Siesa después de hacerla?
+4. ~~**«Ya se pidió» cuenta 7 días**~~: desde el 2026-09-29 cuenta el lead
+   time + 2σ del proveedor. Sigue abierto: ¿cuánto tarda de verdad la OC en
+   aparecer en Siesa después de hacerla?
 5. **¿El jefe de almacén decide compras?** Hoy sí (ya escribía en compras); el
    gerente no (su decisión del 27-sep).
+
+### La validación de B/E/F y la tanda G (2026-09-29)
+
+La validación del 2026-09-27 rechazó las tandas por P1
+(`tests/test_val_compras_bef_20260927.py`: sus xfail pasan sin marca).
+
+| | La clase | Qué pasaba | Ahora |
+|---|---|---|---|
+| **P1-A/B** agotados | *La venta del año pasado leída como demanda sin preguntar si hubo existencias.* En producción `StockDiario` tiene 0 filas: el «mismo período» heredaba el agotado (hasta demanda 0 en el pico) y la tendencia leía el agotado de hoy como caída | `kardex_service.censura_inferida` (sin `StockDiario`): **RACHA_CERO** (7–91 días en cero con venta antes y después, improbable: (1 − p)^k < 1 %, p de las 8 semanas vecinas), **AGOTADO_HOY** (la racha final solo si la red está hoy en cero, o desde `ausente_desde`) y **CAIDA** (semana < 25 % de sus vecinas que venden ≥ 1/día). Con censura en la ventana: tasa = **max(la de los días con existencias, su venta normal fuera de temporada)** (`_base_no_estacional`: mediana de bloques de 28 días), motivo `CORREGIDA_POR_AGOTADO` / `SIN_DIAS_CON_EXISTENCIAS` y en el porqué «parece haberse agotado ~21 de 28 días…». La tendencia, sobre días observados; con < **30 u** de base, 1 y dicho. σ del pico ≥ σ de la temporada. Nunca bajo la venta normal sin decirlo |
+| **P1-E** sin año | Sin un año, el promedio de 12 meses (un producto de 120 días daba 3,3/día vendiendo 10) | `METODO_RECIENTE` (`ULTIMAS_SEMANAS`): las últimas 13 semanas —o los días que existe— sobre días observados, declarado (`SIN_ANO_ANTERIOR` / `PRODUCTO_NUEVO`); con < 8 días con venta en 13 semanas completas («vende de a ratos»), su venta del año |
+| **P1-C** «ya se pidió» | Contaba 7 días fijos | Hasta que la OC aparece en el espejo o **LT + 2σ del proveedor** (`compras_decisiones.dias_pedido_en_camino`, calculado al leer; se retiró `COMPRAS_PEDIDO_EN_CAMINO_DIAS`). Vencido, deja de contar y la línea vuelve marcada: «Ya se pidió el … (OC n.º …) … No ha llegado ni aparece en Siesa: confírmelo con el proveedor» (`pedido_sin_llegar`) |
+| **P1-D** lo decidido | «Ya decidido» mostraba 14 días: una pospuesta de 30 no se podía ver ni deshacer | `recientes()` = lo de los últimos días **más toda decisión vigente** (`_ultimas`, 120 días). `reaparece()`: una pospuesta que se vuelve URGENTE o cuyo faltante crece > 50 % vuelve marcada (`decision_reaparece.texto`) |
+| **P1-F / G** rendimiento | La venta se leía dos veces por corrida y se recalculaba en cada clic | `lectura_demanda`: UNA lectura (suma de red en SQL, por tramos de 45 días) para la demanda de 12 meses y la del horizonte. Caché por proceso en dos capas: el **ROP** por (nivel, día, `sello_de_datos_rop`: existencias, OCs, contenedores, decisiones, catálogo, variables, registros) y la **lectura de la venta** hasta que llega venta nueva (`sello_de_la_venta`; techo 6 h). `COMPRAS_CACHE_ROP=false` las apaga; en tests, apagadas salvo `COMPRAS_CACHE_ROP_EN_TESTS`. `verificar_oc` en una consulta (era N+1: 12 s) |
+| **P2** | Pedir y después «No pedir» seguía contando; un SKU solo de licitación se bloqueaba en recompra | Manda la última decisión; `venta_proyecto > 0` cuenta como «se vende» para el bloqueo (`solo_venta_de_proyecto_no_bloqueados`) |
+
+**Medido** (5.500 filas/día × 430 días = 2,37 M filas, 6.000 SKU, en el Mac de
+8 GB con carga 18–20 y memoria en swap; **no es la máquina de producción**):
+
+| | SQLite | PostgreSQL 17 |
+|---|---|---|
+| Bandeja fría (lee la venta) | 62 s · 204 MB | 32 s · 254 MB (el 2026-09-28, carga 11–17); hoy la consulta única pasó de 25 s |
+| Segunda vez (caché del ROP) | 0,6 s | — |
+| Tras una OC nueva (recalcula el ROP, la venta sale de la caché) | 7,8 s | — |
+| Tras venta nueva (todo de nuevo) | 94 s | — |
+
+**< 400 MB: se cumple. < 15 s en frío: NO se cumple en esta máquina**; sí en
+toda consulta que no es la primera después de la lectura diaria de la venta.
+El `GROUP BY` sobre 2,3 M filas eligió el índice (referencia, fecha) y con la
+memoria en swap tardó 248 s; forzando el scan secuencial, 30 s. De ahí los
+tramos de 45 días: ninguna sentencia cerca del corte de 25 s de producción.
+
+**Lo que NO cubre, dicho:**
+- **La caché es por proceso**: cada worker de gunicorn paga la lectura en frío
+  una vez por día (y por venta nueva). Con gunicorn cortando a los 60 s, una
+  bandeja fría más lenta que eso en producción moriría. **No se midió en
+  producción.** Las salidas —calentar la caché en el worker web después de la
+  lectura diaria, o guardarla en la base— no se hicieron.
+- La censura inferida **no ve** un agotado que dura más de 13 semanas (se lee
+  como fuera de temporada) ni uno en un vendedor muy lento (un hueco de 10
+  días en 1 u cada 5 días es azar); la racha final solo cuenta si hoy la red
+  está en cero.
+- La venta normal (`base_normal`) es la mediana de bloques de 28 días del
+  último año con ≥ 14 días observados: un producto de temporada pura no tiene
+  base.
+- La vigencia de «ya se pidió» usa el lead time del proveedor escrito (o el
+  del origen): con el default nacional 10 ± 5 son 20 días.
+- El tope de 120 días de `_ultimas`: una decisión más vieja ya no oculta nada.
+
+**Mutaciones de este trabajo: 30, las 30 rojas** (tres sobrevivían al primer
+intento y obligaron a tres tests: la venta normal como piso con agotado, el
+producto nuevo sin 13 semanas y «no pedir» sin rastro de pedido; la del tramo que repite el borde cuelga la lectura y cuenta roja por tiempo, 240 s).
+
+**Decisiones para el dueño (nuevas):**
+6. **¿Calentar la bandeja** después de la lectura diaria de la venta (un cron
+   en el web), o guardar el ROP en la base? Hasta entonces la primera consulta
+   del día es lenta.
+7. **Umbral de «reaparece»** (faltante +50 %) y de la censura (1 %, 7–91 días,
+   25 %): provisionales.
 
 ---
 

@@ -12,7 +12,7 @@ cuya vigencia no pasó. La política vive en `app/services/compras_decisiones.py
 
 | Acción | Qué es | Vigencia | Efecto |
 |---|---|---|---|
-| PEDIDO | «Lo pedí» (OC de Siesa n.º, cantidad) | `COMPRAS_PEDIDO_EN_CAMINO_DIAS` (7) | Cuenta como «en camino» (`compras_fuentes.en_camino`, fuente `DECISION_WMS`) hasta que aparece la OC en el espejo |
+| PEDIDO | «Ya se pidió» (OC de Siesa n.º, cantidad) | lead time + 2σ del proveedor (se calcula al leer; la columna es informativa) | Cuenta como «en camino» (`compras_fuentes.en_camino`, fuente `DECISION_WMS`) hasta que aparece la OC en el espejo |
 | POSPUESTO | «Lo pospongo hasta <fecha>» | hasta esa fecha (≤ 90 días) | La línea sale de la bandeja, salvo que se vuelva urgente |
 | DESCARTADO | «No lo pido» (motivo) | un ciclo de compra | Ídem |
 """
