@@ -620,6 +620,13 @@ def main():
               f'(la de todos los días, {dfu.DIAS_RECIENTE} días)')
         print(dfu.sql_ventas_dia(dfu.DIAS_RECIENTE))
         for v in dfu.ventanas_historicas():
+            if v['en_curso']:
+                # Registrarlo a medias deja un hueco (validación P1-C2): se
+                # registra después de cerrar, con el SQL de ese día.
+                print(f'\n-- (NO se registra todavía) {v["consulta"]}: el período está en '
+                      f'curso; se registra después de cerrar (desde el '
+                      f'{v["fin"] + timedelta(days=1)}), con el SQL impreso ese día.')
+                continue
             n += 1
             print(f'\n-- {n}) Consulta dinámica NUEVA: {v["consulta"]} '
                   f'(histórico, {v["desde"]} a {v["hasta"]})')

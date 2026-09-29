@@ -451,10 +451,13 @@ def health_siesa():
             'apta_para': _f.get('apta_para'), 'texto': _f.get('texto'),
             'encendido': _dfu.encendido(),
             'cron_en_este_proceso': '[DEMANDA_SIESA]' in _activos,
+            'periodos_que_piden_accion': _dfu.periodos_que_piden_accion(),
         }
         if not (_f.get('apta_para') or {}).get('bandeja'):
             resultado['advertencias'].append('Compras sin ventas al día: ' + (
                 _f.get('texto') or ''))
+        for _p in resultado['demanda_compras']['periodos_que_piden_accion']:
+            resultado['advertencias'].append('Ventas de compras: ' + _p['que_hacer'])
     except Exception as _e_dem:
         resultado['demanda_compras'] = {'error': str(_e_dem)[:200]}
 

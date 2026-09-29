@@ -233,18 +233,29 @@ WHERE t.name IN ('t470_cm_movto_invent', 't350_co_docto_contable',
   AND (c.name LIKE 'f470_rowid%' OR c.name LIKE 'f470_id_c%' OR c.name LIKE 'f470_ind_nat%'
        OR c.name LIKE 'f470_cant_base%' OR c.name LIKE 'f470_vlr%' OR c.name LIKE 'f470_costo%'
        OR c.name IN ('f350_rowid', 'f350_fecha',
-       'f350_ind_estado', 'f350_id_cia', 'f350_id_tipo_docto', 'f121_rowid',
+       'f350_ind_estado', 'f350_id_cia', 'f350_id_tipo_docto', 'f350_id_clase_docto',
+       'f121_rowid',
        'f121_rowid_item', 'f120_rowid', 'f120_referencia', 'f150_rowid', 'f150_id'))""",
-    # 1 · Un día: ¿con qué tipo de documento y concepto entra la venta de caja?
+    # 1 · Un día: ¿con qué tipo de documento y concepto entra la venta (la de
+    #     caja y la de ruta)? **Y si la de ruta se cuenta dos veces**: en ruta
+    #     el inventario lo descarga la remisión (RM, 142945) y después sale la
+    #     factura desde esa remisión (FE, 142943), que también tiene filas en
+    #     la T470. Cómo decidir: mirar NB1 (CO 003). Si aparecen RM **y** FE
+    #     con concepto 501 naturaleza 2 y unidades parecidas, la venta de ruta
+    #     se contaría dos veces: el SQL de ventas tiene que dejar solo uno de
+    #     los dos tipos (el que mueve inventario: RM). Si la FE no aparece con
+    #     501/2, no hay doble conteo y el SQL queda como está.
     'conceptos_dia': """SELECT RTRIM(b.f150_id) AS bodega, d.f350_id_tipo_docto AS tipo_docto,
+       d.f350_id_clase_docto AS clase_docto,
        m.f470_id_concepto AS concepto, m.f470_ind_naturaleza AS naturaleza,
-       d.f350_ind_estado AS estado, COUNT(*) AS lineas, SUM(m.f470_cant_base) AS unidades
+       d.f350_ind_estado AS estado, COUNT(DISTINCT d.f350_rowid) AS documentos,
+       COUNT(*) AS lineas, SUM(m.f470_cant_base) AS unidades
 FROM t470_cm_movto_invent m
 INNER JOIN t350_co_docto_contable d ON d.f350_rowid = m.f470_rowid_docto
 INNER JOIN t150_mc_bodegas b        ON b.f150_rowid = m.f470_rowid_bodega
 WHERE d.f350_id_cia = 1 AND d.f350_fecha >= '20260925' AND d.f350_fecha < '20260926'
-GROUP BY RTRIM(b.f150_id), d.f350_id_tipo_docto, m.f470_id_concepto,
-         m.f470_ind_naturaleza, d.f350_ind_estado""",
+GROUP BY RTRIM(b.f150_id), d.f350_id_tipo_docto, d.f350_id_clase_docto,
+         m.f470_id_concepto, m.f470_ind_naturaleza, d.f350_ind_estado""",
     # 2 · Volumen: cuántas filas devolvería la consulta de ventas, por mes (de
     #     eso sale cuántas páginas lee cada período).
     'volumen_mes': """SELECT YEAR(v.fecha) AS anio, MONTH(v.fecha) AS mes, COUNT(*) AS filas,
@@ -280,9 +291,10 @@ def consulta_ventas_dia(reciente: bool = False) -> str:
     if reciente:
         return (os.getenv('CONNEKTA_CONSULTA_VENTAS_DIA_RECIENTE')
                 or CONSULTA_VENTAS_DIA_RECIENTE_DEFAULT)
-    vs = ventanas_historicas()
+    vs = [v for v in ventanas_historicas() if not v['en_curso']]
     return (f'{prefijo_consulta_periodo()}_<período>, una por {periodo_historico().lower()} '
-            f'({vs[0]["consulta"]} … {vs[-1]["consulta"]})' if vs else prefijo_consulta_periodo())
+            f'cerrado ({vs[0]["consulta"]} … {vs[-1]["consulta"]})' if vs
+            else prefijo_consulta_periodo())
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -332,10 +344,11 @@ def ventanas_historicas(hoy: date = None) -> list:
     del más reciente al más viejo. Cada uno es una consulta registrada con
     fechas FIJAS: `<prefijo>_<etiqueta>` y su SQL (`sql_ventas_periodo`).
 
-    El `hasta` del período en curso es AYER el día que se copia el SQL: lo que
-    viene después lo cubre la reciente, que se lee todos los días. Los
-    períodos no cambian (salvo un documento anulado o fechado atrás): se leen
-    una vez."""
+    **Solo se registran períodos CERRADOS** (`en_curso=False`): el en curso
+    se registra después de cerrarse —registrarlo a medias deja un hueco entre
+    su `hasta` y lo que alcanza la reciente (validación P1-C2, 2026-09-27)—;
+    mientras tanto sus días recientes los cubre la reciente. Los períodos no
+    cambian (salvo un documento anulado o fechado atrás): se leen una vez."""
     from app.utils.fecha import dia_operativo
     hoy = hoy or dia_operativo()
     ayer = hoy - timedelta(days=1)
@@ -345,7 +358,7 @@ def ventanas_historicas(hoy: date = None) -> list:
     for inicio, fin, etiqueta in _periodos(hoy - timedelta(days=DIAS_HISTORICO), ayer, per):
         out.append({'consulta': f'{pref}_{etiqueta}', 'tipo': 'PERIODO',
                     'desde': inicio, 'fin': fin, 'hasta': min(fin, ayer),
-                    'etiqueta': etiqueta})
+                    'etiqueta': etiqueta, 'en_curso': fin >= hoy})
     return list(reversed(out))
 
 
@@ -676,7 +689,7 @@ def _texto_sin_registrar(consulta):
 
 
 def descargar_ventana(ventana: dict, gateway=None, max_paginas=None, max_minutos=None,
-                      pausa_s=None, reloj=None, deadline=None) -> dict:
+                      pausa_s=None, reloj=None, deadline=None, hoy: date = None) -> dict:
     """Lee UNA ventana (la reciente o un período) y guarda **los días que
     quedaron completos**. Nunca levanta: el resultado dice qué pasó.
 
@@ -703,7 +716,7 @@ def descargar_ventana(ventana: dict, gateway=None, max_paginas=None, max_minutos
     inicio = reloj()
     deadline = deadline if deadline is not None else inicio + max_minutos * 60.0
     reg_id = rs.abrir('demanda_siesa')
-    ultimo_cerrado = dia_operativo() - timedelta(days=1)
+    ultimo_cerrado = (hoy or dia_operativo()) - timedelta(days=1)
 
     cursor = _cursor(consulta) if periodo else None
     inicio_orden, hasta_previo, reinicio, total_conocido, v_conocida = 1, None, None, None, None
@@ -770,7 +783,7 @@ def descargar_ventana(ventana: dict, gateway=None, max_paginas=None, max_minutos
         ancla = por_orden.get(orden_hasta) if orden_hasta and orden_hasta >= inicio_orden else None
         _guardar_cursor(ventana, cursor, total=total, orden_hasta=orden_hasta,
                         cubierto_desde=cubierto_desde, ancla=ancla, v_desde=v_desde,
-                        reg_id=reg_id, paginas=st['paginas'], motivo=motivo)
+                        v_hasta=v_hasta, reg_id=reg_id, paginas=st['paginas'], motivo=motivo)
     elif periodo and problemas:
         _guardar_cursor(ventana, cursor, reiniciar=True, reg_id=reg_id,
                         motivo='; '.join(problemas[:3]))
@@ -829,6 +842,11 @@ def _verificar_ancla(gw, consulta, cursor, deadline, reloj):
     f = vista.get(cursor.orden_hasta)
     if not vista:
         return None, None, None, None
+    if (cursor.hasta_leido is not None and st['ventana'] is not None
+            and st['ventana'][1] != cursor.hasta_leido):
+        return (f'la consulta se registró de nuevo con otras fechas (hasta el '
+                f'{st["ventana"][1]}; antes el {cursor.hasta_leido}): se relee desde el '
+                'principio.'), None, None, None
     if (f is not None and (f['fecha'], f['bodega'], f['referencia'])
             == (cursor.ancla_fecha, cursor.ancla_bodega, cursor.ancla_referencia)
             and (cursor.total_filas is None or st['total'] == cursor.total_filas)):
@@ -838,8 +856,8 @@ def _verificar_ancla(gw, consulta, cursor, deadline, reloj):
 
 
 def _guardar_cursor(ventana, cursor, total=None, orden_hasta=None, cubierto_desde=None,
-                    ancla=None, v_desde=None, reg_id=None, paginas=0, motivo=None,
-                    sin_registrar=False, reiniciar=False):
+                    ancla=None, v_desde=None, v_hasta=None, reg_id=None, paginas=0,
+                    motivo=None, sin_registrar=False, reiniciar=False):
     """Dónde quedó la lectura de un período. Solo avanza (hacia atrás en el
     tiempo): si esta lectura no llegó más lejos, se conserva lo de antes
     (salvo `reiniciar`)."""
@@ -859,6 +877,8 @@ def _guardar_cursor(ventana, cursor, total=None, orden_hasta=None, cubierto_desd
         cursor.completa = False
     elif total is not None:
         cursor.total_filas = total
+        if v_hasta is not None:
+            cursor.hasta_leido = v_hasta
         if orden_hasta is not None and orden_hasta >= (cursor.orden_hasta or 0):
             cursor.orden_hasta = orden_hasta
             if ancla is not None:
@@ -887,30 +907,57 @@ def descargar_ventas_dia(reciente: bool = False, gateway=None, max_paginas=None,
 
 def ventanas_pendientes(hoy: date = None) -> list:
     """Los períodos con algún día SIN cubrir dentro del histórico (hoy −
-    `DIAS_HISTORICO` … ayer), del más reciente al más viejo, con su estado.
+    `DIAS_HISTORICO` … hasta donde llega la reciente), del más reciente al más
+    viejo, con su `estado` y su `que_hacer`:
 
-    Un período ya leído entero (`completa`) no vuelve a la lista aunque tenga
-    días sin cubrir DESPUÉS de su `hasta` registrado: esos días los cubre la
-    reciente, y si no los cubrió, ninguna consulta los alcanza — la cobertura
-    lo muestra como un hueco (`cobertura_siesa`, `dias_antes_del_hueco`)."""
+    · `SE_REGISTRA_AL_CERRAR` — el período en curso: todavía no se registra
+      (sus días viejos los cubrirá su consulta cuando cierre; los recientes, la
+      reciente). No se lee.
+    · `SIN_REGISTRAR` — la consulta dio 401.
+    · `HUECO_DESPUES_DEL_HASTA` — el período se leyó entero, pero su consulta
+      está registrada con un `hasta` anterior al fin y quedan días que ninguna
+      consulta cubre (la reciente ya no los alcanza): hay que volver a copiar
+      su SQL. No se calla (validación P1-C2, 2026-09-27): antes se saltaba por
+      `completa` y el hueco cortaba la cobertura para siempre.
+    · `PENDIENTE` — falta leerlo (o terminar de leerlo).
+    """
     from app.utils.fecha import dia_operativo
     hoy = hoy or dia_operativo()
     piso = hoy - timedelta(days=DIAS_HISTORICO)
-    ayer = hoy - timedelta(days=1)
+    # Lo que la reciente alcanza (hoy − DIAS_RECIENTE … ayer) no cuenta como
+    # hueco de un período: la reciente lo cubre cuando corre.
+    tope = hoy - timedelta(days=DIAS_RECIENTE + 1)
     cubiertos = cobertura_siesa(con_dias=True)['dias_cubiertos']
     out = []
     for v in ventanas_historicas(hoy):
-        d, h = max(v['desde'], piso), min(v['hasta'], ayer)
-        faltan = sum(1 for i in range((h - d).days + 1)
-                     if d + timedelta(days=i) not in cubiertos) if d <= h else 0
-        if not faltan:
+        d, h = max(v['desde'], piso), min(v['fin'], tope)
+        sin_cubrir = [d + timedelta(days=i) for i in range((h - d).days + 1)
+                      if d + timedelta(days=i) not in cubiertos] if d <= h else []
+        if not sin_cubrir:
             continue
         c = _cursor(v['consulta'])
-        if c is not None and c.completa:
-            continue
-        out.append(dict(v, dias_sin_cubrir=faltan,
-                        sin_registrar=bool(c and c.sin_registrar),
-                        retoma_en_fila=(c.orden_hasta + 1) if c and c.orden_hasta else None))
+        base = dict(v, dias_sin_cubrir=len(sin_cubrir), primer_dia_sin_cubrir=sin_cubrir[0],
+                    ultimo_dia_sin_cubrir=sin_cubrir[-1],
+                    sin_registrar=bool(c and c.sin_registrar),
+                    retoma_en_fila=(c.orden_hasta + 1) if c and c.orden_hasta else None)
+        if v['en_curso']:
+            base.update(estado='SE_REGISTRA_AL_CERRAR', que_hacer=(
+                f'{v["consulta"]} se registra en Siesa después de cerrar el período '
+                f'(desde el {v["fin"] + timedelta(days=1)}), con el SQL de ese día.'))
+        elif c is not None and c.sin_registrar:
+            base.update(estado='SIN_REGISTRAR', que_hacer=(
+                f'Registrar en Siesa la consulta {v["consulta"]} (su SQL lo imprime '
+                '`scripts/qa_demanda_fuentes_real.py --sql`).'))
+        elif c is not None and c.completa:
+            base.update(estado='HUECO_DESPUES_DEL_HASTA', que_hacer=(
+                f'{v["consulta"]} está registrada hasta el {c.hasta_leido} y del '
+                f'{sin_cubrir[0]} al {sin_cubrir[-1]} no lo cubre ninguna consulta: '
+                f'vuelva a copiar en Siesa su SQL (hasta el {v["fin"]}) y se relee sola.'))
+        else:
+            base.update(estado='PENDIENTE', que_hacer=(
+                f'Falta leer {v["consulta"]}: se lee sola cada madrugada, retomando '
+                'donde quedó, o con «Leer el histórico».'))
+        out.append(base)
     return out
 
 
@@ -923,18 +970,22 @@ def descargar_historico(gateway=None, max_paginas=None, max_minutos=None, pausa_
     deadline = deadline if deadline is not None else reloj() + max_minutos * 60.0
     leidas, sin_registrar = [], []
     for v in ventanas_pendientes(hoy):
+        if v['estado'] == 'SE_REGISTRA_AL_CERRAR':
+            continue
         if reloj() > deadline:
             break
         r = descargar_ventana(v, gateway=gateway, max_paginas=max_paginas, pausa_s=pausa_s,
-                              reloj=reloj, deadline=deadline)
+                              reloj=reloj, deadline=deadline, hoy=hoy)
         leidas.append(r)
         if r.get('sin_registrar'):
             sin_registrar.append(v['consulta'])
     pendientes = ventanas_pendientes(hoy)
     return {'ventanas_leidas': leidas, 'sin_registrar': sin_registrar,
-            'pendientes': [{'consulta': p['consulta'], 'dias_sin_cubrir': p['dias_sin_cubrir'],
+            'pendientes': [{'consulta': p['consulta'], 'estado': p['estado'],
+                            'dias_sin_cubrir': p['dias_sin_cubrir'],
                             'retoma_en_fila': p['retoma_en_fila']} for p in pendientes],
-            'completo': not pendientes}
+            'completo': not [p for p in pendientes
+                             if p['estado'] != 'SE_REGISTRA_AL_CERRAR']}
 
 
 def _guardar_lectura(filas, tramo, registro_id, consulta) -> int:
@@ -1304,8 +1355,9 @@ def fuente_de_demanda(hoy: date = None, ventana_meses: int = 12) -> dict:
         'cobertura': {'desde': elegida['desde'], 'hasta': elegida['hasta'], 'dias': dias},
         'al_dia': al_dia, 'dias_de_atraso': elegida['dias_de_atraso'],
         'apta_para': apta, 'no_apta_por': no_apta, 'texto': texto,
-        'que_hacer': _que_hacer(candidatas) if (parcial or not al_dia or f != FUENTE_SIESA)
-        else None,
+        'que_hacer': (_que_hacer(candidatas)
+                      if (parcial or not al_dia or f != FUENTE_SIESA
+                          or _periodos_que_piden_accion_seguro()) else None),
         'candidatas': candidatas,
     }
 
@@ -1329,22 +1381,42 @@ def _que_hacer(candidatas):
         db.session.rollback()
         logger.warning('[DEMANDA] no se pudieron leer los períodos pendientes: %s', e)
         pend = []
-    sin_reg = [p['consulta'] for p in pend if p['sin_registrar']]
+    accion = [p for p in pend if p['estado'] in ('SIN_REGISTRAR', 'HUECO_DESPUES_DEL_HASTA')]
     if not siesa['usable']:
         return ('Registrar en Siesa la consulta de venta diaria '
                 f'({consulta_ventas_dia(True)}) y las del histórico, una por '
-                f'{periodo_historico().lower()} ({prefijo_consulta_periodo()}_…; el SQL de '
-                'cada una lo imprime `scripts/qa_demanda_fuentes_real.py --sql`), y leerlas '
-                'en 🧾 Fuentes → Demanda. Mientras tanto, fotografiar las facturas desde '
-                'pedido de los últimos 90 días da una demanda parcial.'
-                + (f' Sin registrar todavía: {", ".join(sin_reg)}.' if sin_reg else ''))
-    if pend:
-        return (f'Faltan {len(pend)} período(s) del histórico por leer'
-                + (f' ({len(sin_reg)} sin registrar en Siesa: {", ".join(sin_reg)})'
-                   if sin_reg else '')
-                + ': se leen solos cada madrugada, retomando donde quedaron, o con '
-                  '«Leer el histórico» en 🧾 Fuentes → Demanda.')
+                f'{periodo_historico().lower()} cerrado ({prefijo_consulta_periodo()}_…; el '
+                'SQL de cada una lo imprime `scripts/qa_demanda_fuentes_real.py --sql` el '
+                'día que se registran), y leerlas en 🧾 Fuentes → Demanda. Mientras tanto, '
+                'fotografiar las facturas desde pedido de los últimos 90 días da una '
+                'demanda parcial.'
+                + (' ' + ' '.join(p['que_hacer'] for p in accion) if accion else ''))
+    if accion:
+        return ' '.join(p['que_hacer'] for p in accion)
+    lectura = [p for p in pend if p['estado'] == 'PENDIENTE']
+    if lectura:
+        return (f'Faltan {len(lectura)} período(s) del histórico por leer: se leen solos '
+                'cada madrugada, retomando donde quedaron, o con «Leer el histórico» en '
+                '🧾 Fuentes → Demanda.')
     return 'Leer la venta reciente de Siesa en 🧾 Fuentes → Demanda.'
+
+
+def _periodos_que_piden_accion_seguro() -> list:
+    try:
+        return periodos_que_piden_accion()
+    except Exception as e:                                    # noqa: BLE001
+        db.session.rollback()
+        logger.warning('[DEMANDA] no se pudieron leer los períodos: %s', e)
+        return []
+
+
+def periodos_que_piden_accion() -> list:
+    """Los períodos sin registrar o con hueco después de su `hasta`: lo que
+    🩺 Salud y `/api/health/siesa` declaran con su «qué hacer»."""
+    return [{'consulta': p['consulta'], 'estado': p['estado'], 'que_hacer': p['que_hacer'],
+             'dias_sin_cubrir': p['dias_sin_cubrir']}
+            for p in ventanas_pendientes()
+            if p['estado'] in ('SIN_REGISTRAR', 'HUECO_DESPUES_DEL_HASTA')]
 
 
 def ventana_de_la_fuente(fuente: dict, desde, hasta):

@@ -97,6 +97,10 @@ class DemandaVentanaLectura(db.Model):
     #: El primer día del tramo ya cubierto (lo cubierto va de acá al `hasta`
     #: del período; la lectura avanza hacia atrás).
     cubierto_desde = db.Column(db.Date)
+    #: El `hasta` con que está REGISTRADA la consulta en Siesa (el que trajo la
+    #: lectura). Si es anterior al fin del período, quedan días que ninguna
+    #: consulta cubre: `ventanas_pendientes` lo declara.
+    hasta_leido = db.Column(db.Date)
     ancla_fecha = db.Column(db.Date)
     ancla_bodega = db.Column(db.String(10))
     ancla_referencia = db.Column(db.String(50))

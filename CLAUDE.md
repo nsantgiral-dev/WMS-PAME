@@ -7312,9 +7312,10 @@ Armador y la temporada.
 | Lectura | Una, de a 100 (`TAM_PAGINA_EXISTENCIAS`), `_descargar_una_pasada_custom` → `ResultadoDescarga` con `completa`, `motivo`, `total_declarado`, `filas`, `paginas`, `bodegas_sin_filas` |
 | Completa = | `total_registros` = N declarado igual en todas las páginas y en una relectura final de la página 1; N filas; `LineaRegistro` 1…N, cada una una vez; ninguna (bodega, referencia) dos veces; ninguna página perdida (3 intentos); sin agotar `INV_SIESA_MAX_PAGINAS` (1.000). Las filas de bodegas que el WMS no guarda (BC99, FD1…) cuentan para la prueba |
 | Con lectura completa | `_guardar_stock_en_bd` (el único escritor): lo reportado se escribe; toda fila de `_BODEGAS_INVENTARIO` que no vino queda en **cero** con `updated_at` y `ausente_desde` (el primer momento en que dejó de venir; m051comprasa). **Nada se borra.** Una bodega sin filas queda en cero (declarada en `bodegas_sin_filas`) |
-| Incompleta | No se escribe nada; caché `degradado` con su `motivo`; la marca de tiempo no avanza; se responde con `stock_siesa` sin las filas en cero. También si la lectura es completa y sospechosamente chica (`_verificar_respuesta_no_parcial`, defensa en profundidad) |
+| Incompleta | No se escribe nada y **la última completa sigue valiendo, con su fecha** (el intento anota su motivo en `ultimo_intento`). Sin ninguna completa: caché `degradado`, la marca no avanza, se responde con `stock_siesa` sin las filas en cero. También es incompleta una completa sospechosamente chica: `_verificar_respuesta_no_parcial` la compara con **la última lectura completa de Siesa de esa bodega** (`filas_ultima_completa`), nunca con el WMS; sin una previa, solo el mínimo de 50 |
 | Registro | `registros_sync` tipo `existencias_siesa`: `ok=True` solo con la lectura completa; el resultado trae `a_cero`, `unidades_a_cero` y el detalle por bodega |
-| Quién lo usa | La carga física (`fuente_para_escribir` exige `completa`), la reconciliación (se niega sobre una lectura degradada), 🩺 Salud (`INCOMPLETA` si la última lectura terminada no lo fue; no pide descargar una bodega que la última lectura completa dijo vacía) |
+| Cuándo se lee | **Solo** `_ejecutar_lectura_programada` (con `LOCK_REFRESCO_EXISTENCIAS` y la ventana de Siesa), a las horas de `INV_SIESA_LECTURAS` (Bogotá, por defecto `04:30,23:30`; en temporada `04:30,00:30`). Se quitó el refresco de 45 min. Al arrancar no se lee: `_asegurar_ultima_completa` carga la última completa de la base (solo una completa escribe `stock_siesa`) |
+| Quién lo usa | La carga física de las 7:00 (la de las 04:30; `fuente_para_escribir` exige una completa **de hoy**, no fuerza lecturas), la reconciliación (la completa de hoy o no reconcilia) y los botones de carga y reconciliación (no esperan 11 min: usan la completa y lo dicen — «con la lectura completa de Siesa de 28/09 04:31» —, o 409 con el motivo). 🩺 Salud: tolerancia = el hueco más largo entre lecturas + 2 h (21 h); un intento incompleto se dice sin bajar el veredicto mientras la completa esté en hora; no pide descargar una bodega que la última completa dijo vacía |
 
 **Medido en producción el 2026-09-27** (solo GET, la lectura del código sobre
 una copia SQLite de `stock_siesa` de producción): 393 páginas en 660 s (pausa
@@ -7329,9 +7330,42 @@ PC1 `PAPELSP4032-`, NS1 `PAPELSP10060`, FF1 `PAPELSP1858`, FN1 `PAPELSP4241-`)
 FF1 y FP1: Siesa no trae ninguna fila; InvFecha confirma 0 en la de FF1.
 **La primera lectura completa después del deploy limpia las 17.971.**
 
+**Lo que la validación encontró (P0-A1, rechazo del 2026-09-27) y está
+cerrado:** la «defensa en profundidad» comparaba NB1 contra
+`ubicaciones_productos` con stock de TODOS los almacenes —31.740 en producción,
+NB1 7.975 · NC1 11.178 · NS1 12.587, infladas por los mismos fantasmas— y
+rechazaba siempre la lectura real (4.588 filas de NB1): `stock_siesa` quedaba
+congelado y la carga física y la reconciliación dejaban de correr. Lo midió la
+copia SQLite de `stock_siesa` sin `ubicaciones_productos`: baseline 0, pasaba.
+La regla del guard (¿qué escribe el valor que comparo y puede el camino roto
+escribirlo igual?) lo contestaba: lo escribía la carga física con la mezcla.
+Ahora la base es la última lectura completa de Siesa; test con el volumen de
+producción (31.740 ubicaciones) que escribe la lectura y deja NB1 en 4.588.
+
+**Carga sobre Siesa:** 2 lecturas × (393 páginas + la relectura final) ≈ **790
+consultas de página al día**, contra ~3.100 antes del arreglo (tres pasadas de
+`tamPag=1000` cada 45 min) y ~10.200 con el refresco de 45 min de a 100.
+Carga física, reconciliación, botones y pre-calentamiento: cero. Las decisiones
+que necesitan el dato de ahora preguntan por SKU y bodega a `InvFecha` (el
+conteo: `conteo_service`); los traslados y la bandeja muestran la fecha de la
+lectura que usan.
+
+**Aviso para el dueño antes de desplegar:** la primera lectura completa pone en
+cero ~17.971 filas de existencias, y la carga física siguiente, **~9.500
+ubicaciones del WMS** (NB1 ≈3.387 · NS1 ≈3.149 · NC1 ≈2.971), cada una con su
+movimiento: es la limpieza, no un robo. Y la bandeja de compras va a proponer de
+golpe los SKU cuyo disponible estaba inflado (~9.170).
+
+**De paso:** `ultimo_sync_completo` de la carga se anotaba sin zona y
+`ultimo_inicio` (el botón) con zona: la carga siguiente a un botón levantaba
+`TypeError` y no corría. Test.
+
 Trinquete: `tests/test_existencias_verdaderas.py` — con la forma real del
 endpoint (`LineaRegistro`, `total_registros`): cada forma de lectura rota; lo
-que no vino queda en cero con fecha; incompleta no toca nada; los lectores
+que no vino queda en cero con fecha; incompleta no toca nada ni invalida la
+completa anterior; el volumen de producción; la política de lecturas (nadie
+fuera de la programada lee Siesa; un proceso nuevo usa la completa de la base;
+los botones dicen qué lectura usan); los lectores
 (Armador, ancla del kardex, frescura, reconciliación, Salud, carga física) ven
 la verdad. Tres AST: `_guardar_stock_en_bd` solo recibe una lectura de Siesa
 (no un diccionario armado ni mutado); un solo escritor de `stock_siesa` y
@@ -7344,10 +7378,12 @@ rojas.** Los tests de «las tres pasadas» se reescribieron con su porqué.
 - **Un inventario que cambia de forma balanceada entre dos páginas** (una fila
   sale y otra entra en la misma pausa, antes y después del cursor) no se ve: el
   total no cambia, no hay repetidos y la numeración cierra. La fila saltada
-  quedaría en cero hasta la próxima lectura (45 min). Se leyó de noche en
-  producción; de día no está medido.
-- **La lectura tarda ~11 min** (393 páginas contra ~40 de antes): el refresco de
-  45 min y la carga de las 7:00 la esperan.
+  quedaría en cero hasta la próxima lectura. Por eso las lecturas son de
+  madrugada y al cierre; de día (10,8 % de las filas con existencia ≤ 1) casi
+  ninguna quedaría completa.
+- **Entre dos lecturas `stock_siesa` tiene hasta ~19 h**: lo que no puede
+  esperar pregunta a `InvFecha`. Pedirle al consultor que la vista traiga
+  también las filas en cero haría pasar la lectura de día.
 - **El histórico de `stock_siesa` antes del deploy** no distingue cuándo se agotó
   cada fila: `ausente_desde` empieza el día de la primera lectura completa.
 - **Días en cero para venta perdida** (P1-6): `ausente_desde` y la foto diaria lo
@@ -7370,9 +7406,18 @@ imprime `venv/bin/python scripts/qa_demanda_fuentes_real.py --sql`):
 | Consulta | Ventana | Se lee |
 |---|---|---|
 | `papeleriamedellin_WMS_Ventas_Dia_Reciente` | relativa: hoy − 14 … hoy | cada madrugada, entera desde la página 1 (ve las anulaciones de los últimos 14 días) |
-| `papeleriamedellin_WMS_Ventas_2026T3`, `…_2026T2`, `…_2026T1`, `…_2025T4`, `…_2025T3` | **fechas fijas** por trimestre; el en curso termina el día anterior a copiar el SQL | una vez, retomando donde quedó, del más reciente al más viejo |
+| `papeleriamedellin_WMS_Ventas_2026T3`, `…_2026T2`, `…_2026T1`, `…_2025T4`, `…_2025T3` | **fechas fijas** por trimestre **cerrado** | una vez, retomando donde quedó, del más reciente al más viejo |
 
-**Seis registros, una vez.** Después del histórico solo corre la reciente: los
+**Seis registros, una vez, el 1-oct o después** (con el SQL impreso ese día:
+así el 2026T3 sale entero), y `DEMANDA_SIESA=true` el mismo día. **El período
+en curso no se registra** (el script lo dice: «se registra después de
+cerrar»): registrado a medias, entre su `hasta` y lo que alcanza la reciente
+queda un hueco que ninguna consulta cubre (validación P1-C2). Si igual pasa,
+`ventanas_pendientes` lo declara `HUECO_DESPUES_DEL_HASTA` con «vuelva a copiar
+el SQL de X (hasta el …)» —en la cascada, en 🧾 Fuentes y en `/api/health/siesa`
+(`periodos_que_piden_accion` + una advertencia)— y al registrarlo de nuevo se
+relee solo (el `hasta` cambió). Estados: `PENDIENTE`, `SIN_REGISTRAR`,
+`HUECO_DESPUES_DEL_HASTA`, `SE_REGISTRA_AL_CERRAR` (no se lee). Después del histórico solo corre la reciente: los
 días nuevos quedan cubiertos por ella. `DEMANDA_PERIODO_HISTORICO=MES` pasa a
 una por mes (14): solo si una página de un trimestre resulta demasiado lenta.
 
@@ -7391,7 +7436,8 @@ una por mes (14): solo si una página de un trimestre resulta demasiado lenta.
 - El cron (`ciclo`, 05:40, `DEMANDA_SIESA`) lee la reciente y, con el tiempo que
   queda (`DEMANDA_MAX_MINUTOS`), los períodos con días sin cubrir. Uno sin
   registrar (401) queda `sin_registrar`, se declara en «qué hacer» de la cascada
-  y se pasa al siguiente. Un período leído entero no vuelve a la lista.
+  y se pasa al siguiente. Un período leído entero no vuelve a la lista, salvo
+  que le quede un hueco después de su `hasta` (arriba).
 - Cada página: tres intentos y tope de 150 s.
 
 **Valor y costo.** El SQL suma, por día × bodega × SKU, el valor **sin impuesto**
@@ -7413,7 +7459,19 @@ capital de la bandeja (tanda de gerencia): es el insumo.
 validación (`volumen_mes`) da las filas por mes, y la primera lectura deja los
 minutos y las páginas en `registros_sync` (`demanda_siesa`). A ~5.500 filas por
 día (estimado de la auditoría) y 2 s por página, el año son ~22.000 páginas ≈
-12 h: ~15 madrugadas de 50 min, o 3 noches con `DEMANDA_MAX_MINUTOS=240`.
+12 h. El cron de las 05:40 lee primero la reciente entera (~26 min) y el
+histórico con lo que queda de 50 min: **~30 madrugadas** (no 15, corregido por
+la validación). Más rápido: «Leer el histórico» a mano una noche, o subir
+`DEMANDA_MAX_MINUTOS` sabiendo que la lectura entra en horario de operación.
+
+**Posible doble conteo de la venta de ruta (P2, por verificar):** en ruta la
+remisión (RM, 142945) descarga el inventario y la factura desde la remisión
+(FE, 142943) también tiene filas en la T470. Si las dos llevan concepto 501
+naturaleza 2, la venta de ruta se contaría dos veces. El paso 1
+(`SQL_VALIDACION['conceptos_dia']`) lo muestra por tipo y clase de documento,
+con documentos, líneas y unidades: si en NB1 aparecen RM **y** FE con 501/2 y
+unidades parecidas, el SQL de ventas tiene que dejar solo el que mueve
+inventario (RM); si la FE no aparece con 501/2, queda como está.
 
 Trinquete: `tests/test_demanda_historico.py` — Siesa falsa con varias consultas
 y la forma real; retomar entre corridas (y no volver a la página 1), ancla que

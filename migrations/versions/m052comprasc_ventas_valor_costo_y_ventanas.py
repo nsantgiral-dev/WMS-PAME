@@ -33,6 +33,7 @@ def upgrade():
         sa.Column('total_filas', sa.Integer(), nullable=True),
         sa.Column('orden_hasta', sa.Integer(), nullable=True),
         sa.Column('cubierto_desde', sa.Date(), nullable=True),
+        sa.Column('hasta_leido', sa.Date(), nullable=True),
         sa.Column('ancla_fecha', sa.Date(), nullable=True),
         sa.Column('ancla_bodega', sa.String(10), nullable=True),
         sa.Column('ancla_referencia', sa.String(50), nullable=True),

@@ -351,7 +351,7 @@ class TestElHistorico:
     def test_lee_los_pendientes_del_mas_reciente_y_declara_los_sin_registrar(self, app, db):
         from app.services import demanda_fuentes as dfu
         hoy = _hoy()
-        vs = dfu.ventanas_historicas(hoy)
+        vs = [v for v in dfu.ventanas_historicas(hoy) if not v['en_curso']]
         v0, v1 = vs[0], vs[1]
         gw = SiesaVentas({v0['consulta']: (_filas(v0['desde'], v0['hasta'], refs=('A',),
                                                   bodegas=('NB1',)),
@@ -363,10 +363,9 @@ class TestElHistorico:
         q = dfu._que_hacer([{'fuente': dfu.FUENTE_SIESA, 'usable': True}])
         assert v1['consulta'] in q
 
-    def test_un_periodo_leido_entero_no_vuelve_aunque_falten_dias_despues(self, app, db):
-        """El período en curso se registró con `hasta` = el día que se copió el
-        SQL. Leído entero, no vuelve a la lista por los días que siguen (los
-        cubre la reciente; si no, la cobertura muestra el hueco)."""
+    def test_los_dias_que_alcanza_la_reciente_no_son_hueco(self, app, db):
+        """Un período leído entero con su `hasta` a pocos días de hoy: lo que
+        sigue lo cubre la reciente (14 días), así que no vuelve a la lista."""
         from app.services import demanda_fuentes as dfu
         hoy = _hoy()
         v0 = dfu.ventanas_historicas(hoy)[0]
@@ -378,6 +377,46 @@ class TestElHistorico:
         assert r['completa']
         assert v0['consulta'] not in [p['consulta'] for p in dfu.ventanas_pendientes(hoy)]
         assert dfu.cobertura_siesa()['hasta'] == registrado_hasta
+
+    def test_el_hueco_despues_del_hasta_se_declara_con_que_hacer(self, app, db):
+        """Validación P1-C2: un período cerrado registrado a medias. Del día
+        siguiente a su `hasta` hasta donde llega la reciente no lo cubre nada:
+        vuelve a la lista como HUECO, con «qué hacer». Se relee solo cuando la
+        consulta se registra de nuevo con el período entero."""
+        from app.models.demanda_siesa import DemandaDiaCubierto
+        from app.services import demanda_fuentes as dfu
+        hoy = date(2026, 10, 20)
+        t3 = dfu.ventanas_historicas(hoy)[1]
+        assert not t3['en_curso']
+        a_medias = date(2026, 9, 20)
+        gw = SiesaVentas({t3['consulta']: (_filas(t3['desde'], a_medias, refs=('A',),
+                                                  bodegas=('NB1',)), t3['desde'], a_medias)})
+        assert dfu.descargar_ventana(t3, gateway=gw, pausa_s=0, reloj=gw.reloj)['completa']
+        for d in _dias(date(2026, 10, 1), hoy - timedelta(days=1)):
+            db.session.add(DemandaDiaCubierto(fecha=d))
+        db.session.commit()
+        p = next(x for x in dfu.ventanas_pendientes(hoy) if x['consulta'] == t3['consulta'])
+        assert p['estado'] == 'HUECO_DESPUES_DEL_HASTA'
+        assert p['primer_dia_sin_cubrir'] == date(2026, 9, 21)
+        assert 'vuelva a copiar' in p['que_hacer'] and '2026-09-30' in p['que_hacer']
+        r = dfu.descargar_historico(gateway=gw, pausa_s=0, reloj=gw.reloj, hoy=hoy)
+        assert not r['completo']
+        gw.registrar(t3['consulta'], _filas(t3['desde'], t3['fin'], refs=('A',),
+                                            bodegas=('NB1',)), t3['desde'], t3['fin'])
+        dfu.descargar_historico(gateway=gw, pausa_s=0, reloj=gw.reloj, hoy=hoy)
+        assert t3['consulta'] not in [x['consulta'] for x in dfu.ventanas_pendientes(hoy)]
+        assert date(2026, 9, 25) in dfu.cobertura_siesa(con_dias=True)['dias_cubiertos']
+
+    def test_el_periodo_en_curso_no_se_registra_ni_se_lee(self, app, db):
+        from app.services import demanda_fuentes as dfu
+        hoy = _hoy()
+        vs = dfu.ventanas_historicas(hoy)
+        assert vs[0]['en_curso'] and not any(v['en_curso'] for v in vs[1:])
+        gw = SiesaVentas({})
+        dfu.descargar_historico(gateway=gw, pausa_s=0, reloj=gw.reloj, hoy=hoy)
+        assert vs[0]['consulta'] not in [n for n, _p in gw.pedidas]
+        p = next(x for x in dfu.ventanas_pendientes(hoy) if x['consulta'] == vs[0]['consulta'])
+        assert p['estado'] == 'SE_REGISTRA_AL_CERRAR'
 
     def test_completo_no_lee_nada(self, app, db):
         from app.services import demanda_fuentes as dfu
