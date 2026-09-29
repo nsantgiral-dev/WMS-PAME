@@ -1,7 +1,7 @@
 """Presencia del personal y ausencias declaradas
 
 Revision ID: m051asignacion
-Revises: m050demanda
+Revises: m052comprasg (re-encadenada en la integración final del 2026-09-29; se escribió sobre m050demanda)
 Create Date: 2026-09-27
 
 Aditiva, nullable, sin backfill.
@@ -19,7 +19,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision = 'm051asignacion'
-down_revision = 'm050demanda'
+down_revision = 'm052comprasg'
 branch_labels = None
 depends_on = None
 

@@ -1,7 +1,7 @@
 """Conteo: la unidad contra Siesa es SKU × almacén; quién omitió la verificación
 
 Revision ID: m051conteo
-Revises: m051flotalegal (re-encadenada sobre qa el 2026-09-29; se escribió sobre m050inv2)
+Revises: m051asignacion (re-encadenada en la integración final del 2026-09-29; se escribió sobre m051flotalegal)
 Create Date: 2026-09-27
 
 Índice parcial único `ix_sesion_conteo_sku_activa_unica` sobre
@@ -29,7 +29,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision = 'm051conteo'
-down_revision = 'm051flotalegal'
+down_revision = 'm051asignacion'
 branch_labels = None
 depends_on = None
 

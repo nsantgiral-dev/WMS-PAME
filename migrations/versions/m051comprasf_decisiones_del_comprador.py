@@ -1,7 +1,7 @@
 """Lo que el comprador decidió sobre una línea de la bandeja
 
 Revision ID: m051comprasf
-Revises: m050demanda
+Revises: m052comprasc (re-encadenada en la integración final del 2026-09-29; se escribió sobre m050demanda)
 Create Date: 2026-09-27
 
 Aditiva, sin backfill. Ver `app/models/decision_compra.py` y CLAUDE.md
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision = 'm051comprasf'
-down_revision = 'm050demanda'
+down_revision = 'm052comprasc'
 branch_labels = None
 depends_on = None
 
