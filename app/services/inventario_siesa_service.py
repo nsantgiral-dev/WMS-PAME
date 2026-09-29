@@ -1062,7 +1062,11 @@ def plan_de_ceros(almacen_id: int, ub_general_id, inventario: dict,
     pisa** —puede ser una entrada atascada o un conteo sin ajustar en Siesa—;
     va a `a_reconciliar` y la reconciliación lo muestra como `SOLO_WMS`.
 
-    Returns: `{'a_cero': [UbicacionProducto], 'a_reconciliar': [UbicacionProducto]}`.
+    Returns: `{'a_cero': [UbicacionProducto], 'a_reconciliar': [UbicacionProducto],
+    'unidades_a_cero', 'unidades_a_reconciliar'}`. Las unidades se suman acá,
+    donde se aplica `filtro_ubicacion_vendible`, y no en quien lee el plan: la
+    suma sin la política al lado es la que `test_agregar_stock_declara_la_zona`
+    marca (integración compras, 2026-09-29).
     """
     from app.services.picking_service import filtro_ubicacion_vendible
     codigos = {c for c, d in (inventario or {}).items() if (d or {}).get('existencia', 0) > 0}
@@ -1084,7 +1088,9 @@ def plan_de_ceros(almacen_id: int, ub_general_id, inventario: dict,
                 a_cero.append(r)
         elif r.cantidad > 0:
             a_reconciliar.append(r)
-    return {'a_cero': a_cero, 'a_reconciliar': a_reconciliar}
+    return {'a_cero': a_cero, 'a_reconciliar': a_reconciliar,
+            'unidades_a_cero': float(sum(r.cantidad for r in a_cero)),
+            'unidades_a_reconciliar': float(sum(r.cantidad for r in a_reconciliar))}
 
 
 def carga_fisica_automatica() -> bool:
@@ -1115,9 +1121,9 @@ def ensayo_carga_fisica(bod: str) -> dict:
         'bodega': bod, 'lectura_de_siesa': lectura,
         'escribiria': not motivo, 'motivo': motivo or None,
         'a_cero': len(plan['a_cero']),
-        'unidades_a_cero': float(sum(r.cantidad for r in plan['a_cero'])),
+        'unidades_a_cero': plan['unidades_a_cero'],
         'a_reconciliar': len(plan['a_reconciliar']),
-        'unidades_a_reconciliar': float(sum(r.cantidad for r in plan['a_reconciliar'])),
+        'unidades_a_reconciliar': plan['unidades_a_reconciliar'],
     }
 
 

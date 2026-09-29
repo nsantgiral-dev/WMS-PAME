@@ -266,7 +266,8 @@ class TestElCeroEsSoloDelEspejo:
         # Lo que Siesa reporta con existencia no va a ninguna de las dos.
         plan = iss.plan_de_ceros(almacen.id, gen.id,
                                  {'FANT': {'existencia': 1}, 'HUECO': {'existencia': 2}})
-        assert plan == {'a_cero': [], 'a_reconciliar': []}
+        assert plan == {'a_cero': [], 'a_reconciliar': [],
+                        'unidades_a_cero': 0.0, 'unidades_a_reconciliar': 0.0}
         # Las exclusiones (operación activa, ajuste reciente) se respetan.
         assert iss.plan_de_ceros(almacen.id, gen.id, {}, {fantasma.id})['a_cero'] == []
         assert iss.plan_de_ceros(almacen.id, gen.id, {}, (), {gen.id})['a_cero'] == []
