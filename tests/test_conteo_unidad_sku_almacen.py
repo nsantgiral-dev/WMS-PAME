@@ -776,3 +776,50 @@ class TestElAjusteDelWms:
         s, general, cd = self._mundo(db, dos_huecos)
         _svc().aplicar_ajuste_al_wms(s, 'AJ-ENT', 5)
         assert (general.cantidad, cd.cantidad) == (15, 90)
+
+
+class TestElAjusteDelWmsSinGeneral:
+    """El orden de la salida cuando la sesión no está en SIESA-GENERAL (una
+    auditoría de picking lleva el hueco de la tarea; un almacén sin GENERAL
+    usa el hueco mayor)."""
+
+    def _sesion_en(self, db, dos_huecos, ubicacion_id):
+        from app.models.conteo import SesionConteo
+        s = SesionConteo(codigo='AUD-ORDEN', tipo='EXCEPCION_PICKING', estado='DESCUADRE',
+                         ubicacion_id=ubicacion_id, almacen_id=dos_huecos['almacen'].id,
+                         producto_id=dos_huecos['producto'].id, es_segundo_conteo=False)
+        db.session.add(s)
+        db.session.commit()
+        return s
+
+    def test_lo_que_no_es_un_lugar_va_antes_que_el_hueco_de_la_sesion(self, db, dos_huecos):
+        from app.models.inventario import UbicacionProducto
+        general = _ubicacion(db, dos_huecos['almacen'].id, 'SIESA-GENERAL')
+        _stock(db, general, dos_huecos['producto'].id, 10)
+        db.session.commit()
+        s = self._sesion_en(db, dos_huecos, dos_huecos['cd'].id)
+        _svc().aplicar_ajuste_al_wms(s, 'AJ-SAL', 5)
+        fila = {f.ubicacion_id: f.cantidad for f in
+                UbicacionProducto.query.filter_by(producto_id=dos_huecos['producto'].id)}
+        assert (fila[general.id], fila[dos_huecos['cd'].id]) == (5, 90)
+
+    def test_lo_libre_de_otro_hueco_antes_que_lo_reservado_del_propio(self, db, dos_huecos):
+        from app.models.inventario import UbicacionProducto
+        cd = UbicacionProducto.query.filter_by(ubicacion_id=dos_huecos['cd'].id).one()
+        cd.reservado = 90                     # CROSS-DOCK 90, todo reservado
+        db.session.commit()
+        s = self._sesion_en(db, dos_huecos, dos_huecos['cd'].id)
+        _svc().aplicar_ajuste_al_wms(s, 'AJ-SAL', 5)
+        assert (cd.cantidad, dos_huecos['registro'].cantidad) == (90, 5)
+
+    def test_el_manual_sin_ubicacion_nace_en_siesa_general(self, db, tienda):
+        """La regla de ebf140c6 (QA 2026-09-29): sin ubicación en el almacén el
+        conteo no se rechaza, nace en SIESA-GENERAL (la crea si falta)."""
+        from app.models.conteo import SesionConteo
+        from app.models.inventario import UbicacionProducto
+        from app.models.ubicacion import Ubicacion
+        UbicacionProducto.query.filter_by(producto_id=tienda['producto'].id).delete()
+        db.session.commit()
+        r = _svc().crear_conteo_manual(tienda['almacen'].id, SKU)
+        s = SesionConteo.query.filter_by(codigo=r['codigos'][0]).one()
+        assert s.ubicacion.codigo == Ubicacion.CODIGO_GENERAL
