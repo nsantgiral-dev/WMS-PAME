@@ -8,11 +8,9 @@ decisión por defecto del dueño, la opción aparece solo si
 Maestros → Medios de pago). **Una función** lo contesta: la pantalla del
 conductor (`listar_paradas`), el formulario de la oficina y la liquidación.
 
-Lo que falta para encenderlo, y queda declarado: el mapa del gateway
-(`connekta_gateway._forma_pago_map`) necesita la línea
-`'CHEQUE': os.getenv('SIESA_MEDIO_PAGO_CHEQUE')`, y la validación de
-`confirmar_parada` rechazar CHEQUE cuando esto es falso. Los dos archivos son
-de otro frente (2026-09-27).
+Encendido de punta a punta (integración de liquidación, 2026-09-27): el mapa
+del gateway lleva `'CHEQUE': os.getenv('SIESA_MEDIO_PAGO_CHEQUE')` (vacío = el
+RC no sale), y `confirmar_parada` rechaza CHEQUE cuando esto es falso.
 """
 import os
 

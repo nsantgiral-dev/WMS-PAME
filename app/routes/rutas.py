@@ -1570,6 +1570,13 @@ def liquidacion_dashboard():
         rd['recibos'] = _lt.recibos_de_ruta(recaudos)
         rd['falta_en_siesa'] = (RutaService.documentos_faltantes_de_ruta(ruta)
                                 if (ruta.estado_financiero or 'PENDIENTE') == 'LIQUIDADA' else [])
+        # Lo que le falta para liquidarse, en la misma lista que la puerta
+        # exige (acta de caja, parcial sin autorizar, devoluciones, paradas):
+        # quien liquida lo ve por ruta, con su acción, antes de pulsar.
+        rd['falta_para_liquidar'] = (
+            RutaService.lo_que_falta_para_liquidar(ruta)
+            if (ruta.estado_financiero or 'PENDIENTE') != 'LIQUIDADA'
+            and ruta.estado == 'ENTREGADA' else [])
         # Señales de fuga de la ruta (`senales_ruta.senales_de_recaudo`): cuántas
         # paradas tienen algo que mirar, y cuáles claves. Datos para quien
         # liquida, nunca un veredicto sobre el conductor.
@@ -1655,6 +1662,9 @@ def liquidacion_detalle(id):
     if _ruta_det is not None:
         resultado['caja'] = _lt_det.caja_de_ruta(_ruta_det)
         resultado['falta_en_siesa'] = RutaService.documentos_faltantes_de_ruta(_ruta_det)
+        resultado['falta_para_liquidar'] = (
+            RutaService.lo_que_falta_para_liquidar(_ruta_det)
+            if (_ruta_det.estado_financiero or 'PENDIENTE') != 'LIQUIDADA' else [])
     resultado['cheque_habilitado'] = cheque_habilitado()
     # El pago bancario de cada parada, visto (o no) en el banco.
     from app.models.recaudo_entrega import RecaudoEntrega as _RE_det

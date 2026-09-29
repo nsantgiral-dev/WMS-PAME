@@ -448,8 +448,9 @@ function _liqRutaCard(r, esLiquidada) {
         </div>
       </div>
       ${_liqTextoSenalesRuta(r) ? `<div style="margin-top:6px;font-size:var(--fs-xs);font-weight:700;color:var(--warn-tx);">${esc(_liqTextoSenalesRuta(r))}</div>` : ''}
-      ${!esLiquidada && r.paradas_sin_gestionar ? `<div style="margin-top:6px;font-size:var(--fs-xs);font-weight:700;color:var(--err-tx);">${esc(r.paradas_sin_gestionar)} parada${r.paradas_sin_gestionar !== 1 ? 's' : ''} sin gestionar: no se liquida hasta resolverlas</div>` : ''}
-      ${_liqChipCaja(r)}
+      ${!esLiquidada && r.paradas_sin_gestionar && !r.falta_para_liquidar ? `<div style="margin-top:6px;font-size:var(--fs-xs);font-weight:700;color:var(--err-tx);">${esc(r.paradas_sin_gestionar)} parada${r.paradas_sin_gestionar !== 1 ? 's' : ''} sin gestionar: no se liquida hasta resolverlas</div>` : ''}
+      ${esLiquidada || !(r.falta_para_liquidar || []).some(f => f.codigo === 'caja_sin_acta') ? _liqChipCaja(r) : ''}
+      ${esLiquidada ? '' : _liqFaltaParaLiquidar(r, true, !!(_liqDashboard && _liqDashboard.permisos && _liqDashboard.permisos.recibir_caja))}
       ${esLiquidada && falta.length ? `<div style="margin-top:6px;font-size:var(--fs-xs);font-weight:700;color:var(--err-tx);">Liquidada · falta en Siesa: ${esc(_liqFaltaTexto(falta))}</div>` : ''}
       ${esLiquidada ? `
         <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap;">
@@ -990,6 +991,13 @@ function _liqRenderDetalle() {
   // Con paradas sin gestionar el servidor no liquida: el botón lo dice en vez
   // de rebotar (tanda 2 · B).
   const faltanParadas = ((_liqDetalleRuta.paradas_sin_gestionar) || []).length;
+  // Todo lo que frena la liquidación, junto y con su acción (la misma lista
+  // que el servidor exige). La caja tiene su propio bloque abajo.
+  if (!esLiquidada) {
+    html += _liqFaltaParaLiquidar({ id: ruta.id, conductor_id: ruta.conductor_id,
+      falta_para_liquidar: (_liqDetalleRuta.falta_para_liquidar || []).filter(f => f.codigo !== 'caja_sin_acta') },
+      false, _liqPermiso('recibir_caja'));
+  }
   if (!esLiquidada && faltanParadas && _liqPermiso('liquidar')) {
     html += `
       <button disabled
@@ -1592,7 +1600,7 @@ async function liqLiquidarWMS(rutaId) {
         cuerpo.motivo_sin_acta = motivo;
         continue;
       }
-      alerta(txt || 'Error al liquidar', 'error');
+      alerta(_liqSinCodigo(txt) || 'Error al liquidar', 'error');
       return;
     }
   }
@@ -1601,6 +1609,13 @@ async function liqLiquidarWMS(rutaId) {
   _liqDetalleRuta = await get(`/api/rutas/${rutaId}/liquidacion-detalle`);
   _liqRenderDetalle();
   liqCargarDashboard();
+}
+
+/** El mensaje del servidor sin su código estable al frente
+ *  (`caja_sin_acta: …`, `credito_no_autorizado: …`): el código es para la
+ *  pantalla, no para quien lee. */
+function _liqSinCodigo(txt) {
+  return String(txt || '').replace(/^[a-z_]+:\s*/, '');
 }
 
 /**
@@ -2250,6 +2265,46 @@ function _liqChipCaja(r) {
   return '';
 }
 
+/**
+ * Lo que le falta a la ruta para liquidarse, con su acción: la misma lista que
+ * el servidor exige al liquidar (`RutaService.lo_que_falta_para_liquidar`),
+ * para que quien liquida la vea por ruta antes de pulsar y no de a una, al
+ * rebotar. `enTarjeta`: en la lista (la tarjeta abre la ruta) o en el detalle.
+ * @param {Object} ruta - con `id`, `conductor_id` y `falta_para_liquidar`
+ * @param {boolean} enTarjeta
+ * @param {boolean} puedeRecibirCaja
+ * @returns {string} HTML
+ */
+function _liqFaltaParaLiquidar(ruta, enTarjeta, puedeRecibirCaja) {
+  const faltas = (ruta && ruta.falta_para_liquidar) || [];
+  if (!faltas.length) return '';
+  const boton = (onclick, texto) => `<button onclick="event.stopPropagation();${onclick}"
+      style="margin-top:6px;padding:6px 12px;background:var(--bg);color:var(--warn-tx);border:1px solid var(--warn-brd);border-radius:8px;font-size:var(--fs-xs);font-weight:700;cursor:pointer;">${esc(texto)}</button>`;
+  const renglon = (f) => {
+    let accion = '';
+    if (f.accion === 'recibir_caja') {
+      accion = puedeRecibirCaja ? boton(`liqAbrirCajaConductor(${Number(f.conductor_id || ruta.conductor_id)})`, 'Recibir la caja')
+        : '<div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:4px;">La recibe quien liquida, en «Caja por recibir».</div>';
+    } else if (f.accion === 'abrir_ruta') {
+      accion = enTarjeta ? boton(`liqAbrirRuta(${Number(ruta.id)})`, 'Abrir la ruta para resolverlo')
+        : '<div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:4px;">Se resuelve en cada parada, más abajo.</div>';
+    } else if (f.accion === 'recepcion') {
+      accion = '<div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:4px;">Lo cuenta bodega en Recepción → «Llegó el camión». Si hay que liquidar igual, «Liquidar» le pide el motivo.</div>';
+    }
+    const paradas = (f.paradas || []).filter(p => p.diferencia != null);
+    return `<div style="padding:6px 0;border-top:1px solid var(--warn-brd);">
+        <div style="font-size:var(--fs-xs);color:var(--tx);">${esc(f.texto)}</div>
+        ${paradas.map(p => `<div style="font-size:var(--fs-xs);color:var(--err-tx);font-weight:700;">· ${esc(p.pedido)}: faltan ${esc(_liqFmt(p.diferencia))} sin autorizar</div>`).join('')}
+        ${accion}
+      </div>`;
+  };
+  return `
+    <div style="margin-top:8px;padding:10px;background:var(--warn-bg);border:1px solid var(--warn-brd);border-radius:8px;">
+      <div style="font-size:var(--fs-xs);font-weight:800;color:var(--warn-tx);">Para liquidar falta${faltas.length !== 1 ? 'n' : ''} ${esc(faltas.length)} cosa${faltas.length !== 1 ? 's' : ''}</div>
+      ${faltas.map(renglon).join('')}
+    </div>`;
+}
+
 /** «RC (2), NC (1)» de lo que falta en Siesa. */
 function _liqFaltaTexto(falta) {
   const cuenta = {};
@@ -2439,7 +2494,7 @@ function _liqRenderActa() {
       ${b.n ? `<div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:4px;">Transferencias: ${esc(b.n)} por ${esc(_liqFmt(b.valor))} — no se cuentan acá, se verifican en el banco${b.por_verificar ? ` (${esc(b.por_verificar)} sin ver)` : ''}.</div>` : ''}
       ${t.n ? `<div style="font-size:var(--fs-xs);color:var(--tx3);">Tarjeta: ${esc(t.n)} por ${esc(_liqFmt(t.valor))} — el voucher lo liquida la adquirente.</div>` : ''}
       ${ch.n ? `<div style="font-size:var(--fs-xs);color:var(--tx3);">Cheques: ${esc(ch.n)} por ${esc(_liqFmt(ch.valor))} — se reciben aparte.</div>` : ''}
-      ${(d.cobro_menor_que_factura || []).length ? `<div style="font-size:var(--fs-xs);color:var(--warn-tx);margin-top:4px;">${esc(d.cobro_menor_que_factura.length)} parada(s) cobraron menos de lo esperado: eso lo mide la reconciliación, no esta caja.</div>` : ''}
+      ${(d.cobro_menor_que_factura || []).length ? `<div style="font-size:var(--fs-xs);color:var(--warn-tx);margin-top:4px;">${esc(d.cobro_menor_que_factura.length)} parada(s) cobraron menos de lo esperado: es plata del cliente, no del conductor, y no entra en esta caja${d.cobro_menor_que_factura.some(m => m.credito_no_autorizado) ? ` (${esc(d.cobro_menor_que_factura.filter(m => m.credito_no_autorizado).length)} frena(n) la liquidación hasta que se autorice o se corrija)` : ''}.</div>` : ''}
     </div>
     ${gastos ? `<div style="margin-bottom:12px;">
       <div style="font-size:var(--fs-sm);font-weight:800;color:var(--tx);">Gastos que pagó con el efectivo del recaudo</div>

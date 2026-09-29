@@ -650,12 +650,14 @@ class ConnektaLiquidacionGateway:
         # equivocado — un RC que no sale se reintenta y se ve en el DLQ; uno
         # que sale mal casi nunca se nota hasta el cuadre de caja.
         _fp = (forma_pago or '').upper()
-        if _fp not in core._forma_pago_map:
+        # Una clave con valor vacío (CHEQUE sin `SIESA_MEDIO_PAGO_CHEQUE`) es
+        # un medio que no existe en Siesa: igual que una clave ausente.
+        if not (core._forma_pago_map.get(_fp) or '').strip():
             raise ConnektaPayloadInvalido(
                 f'forma_pago={_fp!r} sin medio de pago Siesa configurado '
                 f'(Maestros → Medios de pago) — el RC no se envía como '
                 f'EFECTIVO por defecto. Medios válidos: '
-                f'{", ".join(sorted(core._forma_pago_map))}'
+                f'{", ".join(sorted(k for k, v in core._forma_pago_map.items() if (v or "").strip()))}'
             )
         medio_pago = core._forma_pago_map[_fp]
         # Caja según CO (Siesa: Tesorería → Cajas)

@@ -184,11 +184,13 @@ def esperado_de_entrega(conductor_id: int) -> dict:
     `efectivo` = suma de `efectivo_de_recaudo` en sus rutas entregadas sin acta.
     Los demás medios se listan (no se cuentan acá). `cobro_menor_que_factura`
     es informativo: paradas donde lo cobrado quedó por debajo de lo que la
-    política esperaba (`politica_cobro.esperado_en_caja`); eso lo mide la
-    reconciliación, no el acta — un cliente que pagó menos no es un faltante
-    del conductor.
+    política esperaba (`politica_cobro.cobrado_de_menos`, la misma de la
+    parcial sin autorizar); eso lo miden la reconciliación y la liquidación
+    (crédito no autorizado), no el acta — un cliente que pagó menos no es un
+    faltante del conductor, y no se cuenta dos veces.
     """
     from app.models.recaudo_entrega import EstadoEntrega, RecaudoEntrega
+    from app.services import cond_pago as _cp
     from app.services import politica_cobro as _pc
     from app.services import verificacion_banco as vb
 
@@ -227,10 +229,17 @@ def esperado_de_entrega(conductor_id: int) -> dict:
                 elif e == vb.NO_ENCONTRADA:
                     o['no_encontradas'] += 1
         if rec.estado_entrega in (EstadoEntrega.ENTREGADO, EstadoEntrega.PARCIAL) and medio:
-            esperado, fuente = _pc.esperado_en_caja(rec, t)
-            if fuente != 'DECLARADO' and esperado - (_d(rec.monto_cobrado) + _d(rec.monto_descuento)) > 1:
+            # «El cliente pagó de menos» tiene UNA política (`cobrado_de_menos`,
+            # la misma de la parcial sin autorizar). Aquí solo se informa: esa
+            # diferencia es del cliente, no del conductor, y no entra en
+            # `diferencia` del acta. Si ya frena la liquidación como crédito no
+            # autorizado, se dice — para que nadie la cobre dos veces.
+            corta = _pc.cobrado_de_menos(rec, t)
+            if corta is not None:
                 menor.append({'recaudo_id': rec.id, 'pedido': getattr(t, 'numero_pedido_siesa', None),
-                              'esperado': esperado, 'cobrado': _d(rec.monto_cobrado)})
+                              'esperado': corta['esperado'], 'cobrado': corta['cobrado'],
+                              'diferencia': corta['diferencia'],
+                              'credito_no_autorizado': _cp.credito_no_autorizado(rec, t)})
     gastos = [_gasto_dict(g) for g in gastos_por_legalizar(c)]
     efectivo = round(sum(v['efectivo'] for v in por_ruta.values()), 2)
     for v in por_ruta.values():

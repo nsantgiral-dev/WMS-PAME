@@ -425,6 +425,11 @@ class ConnektaGateway:
             # ver el comentario del mismo medio en gestor-cartera-pame.
             'TRANSFERENCIA_IHO_CTE': os.getenv('SIESA_MEDIO_PAGO_TCI', 'TCI'),
             'TARJETA': self.medio_pago_tarjeta,
+            # Sin default (m051liqcaja, 2026-09-27): sin el medio configurado en
+            # Siesa el valor es None y el RC no sale (`trigger_recibo_caja`
+            # exige un medio no vacío); la puerta ni lo ofrece
+            # (`medios_pago.cheque_habilitado`, `confirmar_parada`).
+            'CHEQUE': os.getenv('SIESA_MEDIO_PAGO_CHEQUE'),
             # Sinónimos retrocompatibles — mismo valor que antes de este cambio.
             'TRANSFERENCIA': self.medio_pago_transferencia,
             'CONSIGNACION': self.medio_pago_transferencia,

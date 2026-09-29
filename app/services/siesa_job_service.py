@@ -2166,6 +2166,14 @@ def _ejecutar_job(job: SiesaJob) -> dict:
                     f'que se dispara cuando bodega la cuenta. Sigue pendiente.'
                 )
 
+        # Un pago bancario sale a Siesa cuando alguien lo vio en el banco
+        # (m051liqcaja, integración de liquidación 2026-09-27): por verificar
+        # espera sin gastar intento; no encontrado no sale (`ErrorDeterminista`).
+        # Antes de leer la cartera: esperar al banco no le cuesta una lectura
+        # a Siesa por ciclo.
+        from app.services import verificacion_banco as _vb
+        _vb.exigir_para_rc(recaudo)
+
         # Lo que el POST necesita de la cartera, resuelto AHORA de la fila del
         # documento exacto (P1-2): tercero, sucursal, cuenta, UN, CO. Encolar
         # ya no le pregunta nada a Siesa (P1-1). Sin fila, espera o se declara

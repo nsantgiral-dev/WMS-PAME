@@ -1442,9 +1442,13 @@ class LiquidacionService:
         devolución (m045devol: normalmente ya nació al confirmar la parada; acá
         se ENCUENTRA). Solo crea —con la misma función única,
         `devolucion_ruta.asegurar_devolucion`— la de una parada confirmada
-        antes de este cambio o por un camino que no pasó por la parada. Y la
-        intenta amarrar a su factura (con red; si Siesa no responde, se hace al
-        contar).
+        antes de este cambio o por un camino que no pasó por la parada.
+
+        **No le pregunta a Siesa** (integración de liquidación, 2026-09-27):
+        la corre `liquidar_ruta` dentro del request, y amarrar la devolución a
+        su factura leía la FE por parada (medido: 15 rutas, 5 lecturas). El
+        amarre vive donde ya vivía con red —«Llegó el camión» y el conteo de
+        recepción—; acá solo se informa el problema que ya esté escrito.
 
         Nunca lanza: lo que impide una devolución (referencia sin producto,
         factura no localizada) queda escrito en ella (`problema_factura`) y en
@@ -1465,7 +1469,7 @@ class LiquidacionService:
                 if dev is None:
                     continue
                 resumen['creadas' if creada else 'encontradas'] += 1
-                problema = _vincular_sin_romper(dev)
+                problema = dev.problema_factura
                 if problema:
                     resumen['errores'].append({'recaudo_id': recaudo.id,
                                                'devolucion': dev.codigo,
@@ -1484,24 +1488,6 @@ class LiquidacionService:
             ruta_id, resumen['creadas'], resumen['encontradas'], len(resumen['errores'])
         )
         return resumen
-
-
-def _vincular_sin_romper(devolucion) -> str | None:
-    """Amarra la devolución a su factura si está activa y no lo estaba.
-    Devuelve el problema que impide contarla (o None). Un fallo de red no es un
-    problema de la devolución: se reintenta al contar."""
-    from app.services import devolucion_ruta as _dr
-    from app.services.connekta_gateway import connekta
-    if devolucion.estado not in ('EN_CAMION', 'ABIERTA'):
-        return None
-    try:
-        with db.session.begin_nested():
-            _dr.vincular_a_factura(devolucion, gateway=connekta)
-    except Exception as e:
-        logger.warning('[LIQUIDACION] no se pudo vincular %s a su factura (se reintenta al '
-                       'contar): %s', devolucion.codigo, e)
-        return None
-    return devolucion.problema_factura
 
 
 def _devolucion_de_ruta(recaudo, resultado: dict) -> bool:

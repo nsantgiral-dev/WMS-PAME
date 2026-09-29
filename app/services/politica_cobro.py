@@ -382,8 +382,26 @@ def faltante_de_la_parcial(recaudo, tarea=None):
     from app.models.recaudo_entrega import EstadoEntrega
     if getattr(recaudo, 'estado_entrega', None) != EstadoEntrega.PARCIAL:
         return None
+    return cobrado_de_menos(recaudo, tarea)
+
+
+def cobrado_de_menos(recaudo, tarea=None):
+    """**Cuánto cobró de menos una parada contra lo que el cliente debía
+    pagar en la puerta**: `{'esperado', 'cobrado', 'diferencia', 'tope'}` o
+    `None`. La vara es `esperado_en_caja` (factura − lo devuelto − la
+    retención que procede); `None` si no se puede valorizar (fuente
+    `DECLARADO`, Regla 0) o si la diferencia cabe en el residuo de redondeo.
+
+    **Una política para «el cliente pagó de menos»** (integración de
+    liquidación, 2026-09-27): la usan la parcial sin autorizar
+    (`faltante_de_la_parcial`) y el aviso informativo del acta de caja
+    (`caja_conductor.esperado_de_entrega`). El acta tenía su propia cuenta
+    (restaba la retención dos veces, y a una rechazada la daba por
+    descontada). Esta diferencia es del **cliente**; la del acta
+    (`contado − declarado`) es del **conductor**: son dos plata distintas y
+    ninguna se suma a la otra."""
     esperado, fuente = esperado_en_caja(recaudo, tarea)
-    if fuente != 'FACTURA_MENOS_DEVUELTO':
+    if fuente == 'DECLARADO':
         return None
     from app.services.liquidacion_service import tope_diferencia_recaudo
     cobrado = round(float(recaudo.monto_cobrado or 0), 2)

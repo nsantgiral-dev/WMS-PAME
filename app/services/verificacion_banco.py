@@ -85,8 +85,8 @@ def estado(recaudo):
 def _clases_de_la_dlq():
     """Las excepciones con que la DLQ distingue esperar de fallar. Se importan
     tarde: este módulo no puede depender de la DLQ al cargar."""
-    from app.services.siesa_job_service import DependenciaPendiente, ErrorDeterminista
-    return DependenciaPendiente, ErrorDeterminista
+    from app.services.siesa_job_service import DatoQueFalta, DependenciaPendiente
+    return DependenciaPendiente, DatoQueFalta
 
 
 def exigir_para_rc(recaudo) -> None:
@@ -94,21 +94,23 @@ def exigir_para_rc(recaudo) -> None:
     RC antes del POST:
 
     - por verificar → `DependenciaPendiente` (esperar no gasta reintento);
-    - no encontrada en el banco → `ErrorDeterminista`: el recibo no sale, la
-      factura queda con su saldo y cartera la gestiona. Reintentar no la
-      arregla — lo que la arregla es que la plata aparezca;
+    - no encontrada en el banco → `DatoQueFalta` (un `ErrorDeterminista`): el
+      recibo no sale, la factura queda con su saldo y cartera la gestiona.
+      Reintentar no la arregla — lo que la arregla es que la plata aparezca,
+      y entonces `verificar(..., encontrada=True)` despierta el recibo;
     - verificada, no bancaria o con la exigencia apagada → nada.
     """
     e = estado(recaudo)
     if e is None or e == VERIFICADA:
         return
-    DependenciaPendiente, ErrorDeterminista = _clases_de_la_dlq()
+    DependenciaPendiente, DatoQueFalta = _clases_de_la_dlq()
     pedido = getattr(getattr(recaudo, 'tarea', None), 'numero_pedido_siesa', None) or f'parada {recaudo.id}'
     if e == NO_ENCONTRADA:
-        raise ErrorDeterminista(
+        raise DatoQueFalta(
             f'La transferencia de {pedido} no apareció en el banco '
             f'({recaudo.verificado_banco_nota or "sin nota"}): el recibo de caja no se '
-            f'envía y la factura queda con su saldo en cartera.')
+            f'envía y la factura queda con su saldo en cartera. Si la plata aparece, '
+            f'márquela vista en Liquidación → Transferencias y el recibo sale solo.')
     if exige_verificacion():
         raise DependenciaPendiente(
             f'El recibo de caja de {pedido} no sale hasta que alguien vea la transferencia '
@@ -152,19 +154,31 @@ def verificar(recaudo_id: int, usuario_id: int, encontrada: bool, nota: str = No
                      entidad_codigo=f'RECAUDO-{r.id}', antes=antes,
                      despues=foto_fila(r, campos))
     if encontrada:
-        _despertar_recibo(r.id)
+        _despertar_recibo(r.id, usuario_id)
     db.session.commit()
     return r.to_dict()
 
 
-def _despertar_recibo(recaudo_id: int) -> None:
+def _despertar_recibo(recaudo_id: int, usuario_id: int = None) -> None:
     """El RC que esperaba la verificación sale en el próximo ciclo, no dentro de
-    una hora."""
+    una hora. Y el que quedó FALLIDO porque la transferencia «no apareció»
+    (`exigir_para_rc`) vuelve a la cola: lo único que lo frenaba era eso, y la
+    bandera de pre-envío sigue abajo (nunca salió un POST)."""
+    from app.models.recaudo_entrega import RecaudoEntrega
     from app.models.siesa_job import EstadoSiesaJob, SiesaJob
+    from app.extensions import db
+    r = db.session.get(RecaudoEntrega, recaudo_id)
+    ahora = datetime.utcnow()
     for j in SiesaJob.query.filter_by(tipo='RECIBO_CAJA', referencia_tipo='RecaudoEntrega',
-                                      referencia_id=recaudo_id,
-                                      estado=EstadoSiesaJob.PENDIENTE).all():
-        j.proximo_intento = datetime.utcnow()
+                                      referencia_id=recaudo_id).all():
+        if j.estado == EstadoSiesaJob.PENDIENTE:
+            j.proximo_intento = ahora
+        elif (j.estado == EstadoSiesaJob.FALLIDO and r is not None and not r.siesa_rc_triggered
+              and 'no apareció en el banco' in (j.error_ultimo or '')):
+            from app.services.siesa_job_service import reencolar_job_fallido
+            reencolar_job_fallido(j, usuario_id=usuario_id,
+                                  motivo='La transferencia apareció en el banco',
+                                  origen='verificacion_banco')
 
 
 def _fila(r, ahora) -> dict:

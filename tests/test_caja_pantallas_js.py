@@ -235,6 +235,53 @@ class TestElChequeSoloSiExisteEnSiesa:
         for k in ('contado', 'credito'):
             assert ('CHEQUE' in out[k].split(',')) is habilitado, out
 
+    def test_el_gateway_sin_el_medio_no_arma_el_recibo(self, app, monkeypatch):
+        """El mapa lleva CHEQUE (integración de liquidación, 2026-09-27); sin
+        `SIESA_MEDIO_PAGO_CHEQUE` su valor es vacío y el RC no se arma."""
+        from app.services.connekta_gateway import ConnektaGateway, connekta
+        assert 'CHEQUE' in connekta._forma_pago_map
+        monkeypatch.setitem(connekta._forma_pago_map, 'CHEQUE', None)
+        with pytest.raises(ValueError, match='sin medio de pago Siesa'):
+            connekta.trigger_recibo_caja('900123', '001', 1000.0, 'CHEQUE', 'FE', '1',
+                                         cuenta_cxc='13050501', unidad_negocio='99')
+        capturado = {}
+        monkeypatch.setattr(ConnektaGateway, '_post',
+                            lambda self, c, n, payload: capturado.setdefault('p', payload) or {'codigo': 0})
+        monkeypatch.setitem(connekta._forma_pago_map, 'CHEQUE', 'CHQ')
+        monkeypatch.setattr(connekta, 'tipo_docto_recibo_caja', connekta.tipo_docto_recibo_caja or 'RC')
+        connekta.trigger_recibo_caja('900123', '001', 1000.0, 'CHEQUE', 'FE', '1',
+                                     cuenta_cxc='13050501', unidad_negocio='99')
+        assert capturado['p']['Caja'][0]['F358_ID_MEDIOS_PAGO'] == 'CHQ'
+
+    def test_el_gateway_lo_lee_de_la_variable(self, monkeypatch):
+        from app.services.connekta_gateway import ConnektaGateway
+        monkeypatch.setenv('SIESA_MEDIO_PAGO_CHEQUE', 'CHQ')
+        assert ConnektaGateway()._forma_pago_map['CHEQUE'] == 'CHQ'
+        monkeypatch.delenv('SIESA_MEDIO_PAGO_CHEQUE')
+        assert not ConnektaGateway()._forma_pago_map['CHEQUE']
+
+    @pytest.mark.parametrize('habilitado', [False, True])
+    def test_confirmar_parada_no_acepta_cheque_sin_medio(self, app, db, almacen, monkeypatch,
+                                                          habilitado):
+        from app.services.ruta_service import RutaService
+        if habilitado:
+            monkeypatch.setenv('SIESA_MEDIO_PAGO_CHEQUE', 'CHQ')
+        else:
+            monkeypatch.delenv('SIESA_MEDIO_PAGO_CHEQUE', raising=False)
+        c, u = _conductor(db)
+        ruta, [r] = _ruta(db, almacen, c, [('ENTREGADO', 'EFECTIVO', 1000, 1000)],
+                          estado='EN_TRANSITO')
+        tarea_id = r.tarea_id
+        db.session.delete(r)
+        db.session.commit()
+        datos = {'estado_entrega': 'ENTREGADO', 'forma_pago': 'CHEQUE', 'monto_cobrado': 1000,
+                 'referencia_pago': '445566', 'foto_comprobante': 'data:image/jpeg;base64,/9j/4AAQ'}
+        if habilitado:
+            RutaService.confirmar_parada(ruta.id, tarea_id, u.id, datos)
+        else:
+            with pytest.raises(ValueError, match='cheque no está habilitado'):
+                RutaService.confirmar_parada(ruta.id, tarea_id, u.id, datos)
+
     def test_la_lista_de_paradas_lo_dice(self, app, client, db, almacen, monkeypatch):
         monkeypatch.setenv('SIESA_MEDIO_PAGO_CHEQUE', 'CHQ')
         c, u = _conductor(db)

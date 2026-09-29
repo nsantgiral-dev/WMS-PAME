@@ -8249,14 +8249,8 @@ pisos), `tests/test_verificacion_banco.py`, `tests/test_caja_pantallas_js.py`
 (Node, `util.js` real). **25 mutaciones, las 25 rojas.**
 
 **Lo que NO cubre, dicho:**
-- **El RC bancario todavía no espera**: la línea
-  `verificacion_banco.exigir_para_rc(recaudo)` va en la rama `RECIBO_CAJA` de
-  `siesa_job_service._ejecutar_job`, que es del frente L1.
-  `test_verificacion_banco.py::TestElEjecutorDelReciboEsperaAlBanco` es
-  `xfail(strict)`: se pone rojo cuando la línea exista, para quitar la marca.
-- **CHEQUE encendido** necesita además `'CHEQUE': os.getenv('SIESA_MEDIO_PAGO_CHEQUE')`
-  en `connekta_gateway._forma_pago_map` y que `confirmar_parada` rechace
-  CHEQUE sin el medio (archivos de otro frente).
+- ~~El RC bancario todavía no espera~~ y ~~CHEQUE encendido~~: cerrados en la
+  integración (ver «Integración liquidación» abajo).
 - Tarjeta y cheque no los verifica nadie (se cuentan aparte en la cuarta
   columna). El resumen del teléfono al cerrar agrupa por su cuenta (vista
   previa sin señal); la cifra que vale es la del acta.
@@ -8264,3 +8258,39 @@ pisos), `tests/test_verificacion_banco.py`, `tests/test_caja_pantallas_js.py`
   de otro día con algo pendiente la avisa el resumen diario, no la lista.
 - Un conductor sin cuenta no tiene gastos ligados (el gasto se liga por el
   usuario que lo registró) ni confirma en el teléfono: queda «no confirmó».
+
+---
+
+## Integración liquidación (2026-09-27) — L1 + L4 + L2/L3/L5 juntos
+
+Los dos frentes se hicieron en paralelo sobre el mismo padre. Lo que solo se
+veía al juntarlos, y el pegamento que cada uno dejó escrito:
+
+| | Qué pasaba | Ahora |
+|---|---|---|
+| **El RC bancario no esperaba al banco** | `exigir_para_rc` existía (L3) y nadie la llamaba (el ejecutor era de L1) | En la rama `RECIBO_CAJA` de `_ejecutar_job`, **antes** de `resolver_envio` (esperar al banco no le cuesta a Siesa una lectura por ciclo). Por verificar → `DependenciaPendiente`; no encontrada → `DatoQueFalta` (la tarjeta no ofrece «Reintentar»). Si la plata aparece, `verificar(..., True)` devuelve el recibo FALLIDO a la cola por `reencolar_job_fallido` (bitácora REINTENTAR) |
+| **Liquidar le preguntaba a Siesa** | L1 sacó a Siesa de «Enviar todo», pero `liquidar_ruta` (L2) corre además `crear_devoluciones_pendientes_ruta`, que amarraba cada devolución a su FE: **medido, 15 rutas → 5 lecturas** en el request | El amarre se hace donde ya se hacía con red («Llegó el camión», conteo de recepción); `_vincular_sin_romper` se borró. Trinquete de ejecución: 15 rutas por HTTP con `_get`/`_post`/`requests` reventando y anotando → 0 lecturas |
+| **Lo que falta para liquidar se sabía de a uno** | El acta (L2) y la parcial sin autorizar (L4) frenaban por separado, al pulsar | `RutaService.lo_que_falta_para_liquidar(ruta)`: **una lista** (ruta sin cerrar · paradas sin gestionar · crédito no autorizado · devoluciones sin contar · caja sin acta), cada entrada de la política que ya decide ese punto, con `accion` y `forzable`. `liquidar_ruta` levanta de ahí; el tablero y el detalle la traen (`falta_para_liquidar`) y la tarjeta la pinta con su botón («Recibir la caja», «Abrir la ruta…») |
+| **«Plata que falta», dos cuentas** | El acta informaba «cobró menos que la factura» con su propia cuenta (`esperado − (cobrado + descuento)`: restaba la retención dos veces y daba por descontada una rechazada) | `politica_cobro.cobrado_de_menos` es la vara del cliente (la misma de `faltante_de_la_parcial`); el acta la **informa** y dice si ya frena la liquidación. El faltante del acta es del conductor (`contado − declarado`): una diferencia nunca entra en las dos |
+| **CHEQUE** | Solo lo filtraban las pantallas | `'CHEQUE': os.getenv('SIESA_MEDIO_PAGO_CHEQUE')` en el mapa del gateway (vacío = el RC no se arma: se exige medio no vacío) y `confirmar_parada` lo rechaza sin el medio |
+| **Códigos crudos** | `rutaLiquidar` solo quitaba `caja_sin_acta:` | Quita cualquier código al frente y remite a Liquidación; dice si el encolado a Siesa falló |
+
+Trinquetes: `tests/test_integracion_liquidacion.py` (15 rutas sin Siesa; la
+lista y la puerta dicen lo mismo; `liquidar_ruta` no llama a las políticas por
+su cuenta —inventario de una: el acta, que necesita el objeto—; `caja_conductor`
+no mide con `esperado_en_caja`; meta-tests y pisos),
+`tests/test_verificacion_banco.py::TestElEjecutorDelReciboEsperaAlBanco` (sin
+`xfail`: por AST y en ejecución), `tests/test_caja_pantallas_js.py` (cheque en
+gateway y puerta). Migración `m051liqcaja` probada upgrade/downgrade/upgrade en
+PostgreSQL local desechable.
+
+**Lo que NO cubre, dicho:**
+- Una devolución que llegó con Siesa caído y se liquida **forzada** antes de
+  contarse queda sin amarrar hasta el conteo: su DC espera (ya esperaba) y la
+  parcial pagada de menos no se puede valorizar (Regla 0: no se inventa, sale
+  CONTADO por lo cobrado).
+- La retención (DC) no espera al banco: espera al RC por su bandera, que no
+  se pone mientras el RC espera la verificación.
+- El tablero calcula la lista por ruta pendiente (un par de consultas por
+  ruta); no se midió con cientos de rutas atrasadas.
+

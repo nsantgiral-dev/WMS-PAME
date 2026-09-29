@@ -1007,6 +1007,9 @@ def _correr_js(tmp_path, cuerpo):
         util,
         _extraer(js, 'const _FORMAS_PAGO_COBRO = [', '];\n'),
         "let _COND_FORMAS_NO_COBRAN = ['CREDITO', 'EXENTO'];",
+        # El default real del PWA (CHEQUE solo si Siesa tiene el medio,
+        # m051liqcaja): leído de rutas.js, no copiado.
+        _extraer(js, 'let _COND_CHEQUE_HABILITADO', ';\n'),
         _extraer(js, 'function _condEsCreditoReal('),
         _extraer(js, 'function _condFormasPago('),
         _extraer(js, 'function _condAvisoCobro('),

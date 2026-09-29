@@ -95,6 +95,15 @@ def _mismo_valor(a, b) -> bool:
     return False
 
 
+#: Los códigos de `RutaService.lo_que_falta_para_liquidar`, en el orden en que
+#: la liquidación los exige. Estables: la pantalla los reconoce.
+FALTA_RUTA_SIN_CERRAR = 'ruta_sin_cerrar'
+FALTA_PARADAS_SIN_GESTIONAR = 'paradas_sin_gestionar'
+FALTA_CREDITO_NO_AUTORIZADO = 'credito_no_autorizado'
+FALTA_DEVOLUCIONES_SIN_CONTAR = 'devoluciones_sin_contar'
+FALTA_CAJA_SIN_ACTA = 'caja_sin_acta'
+
+
 class FormaPago:
     EFECTIVO      = 'EFECTIVO'
     TRANSFERENCIA = 'TRANSFERENCIA'
@@ -1777,6 +1786,15 @@ class RutaService:
         forma_pago = (data.get('forma_pago') or '').upper() or None
         if forma_pago and forma_pago not in FormaPago.VALIDOS:
             raise ValueError(f'forma_pago inválido. Válidos: {", ".join(FormaPago.VALIDOS)}')
+        # CHEQUE solo con su medio en Siesa (`medios_pago`, m051liqcaja): sin él
+        # el recibo de caja no puede salir nunca. Un teléfono con la lista vieja
+        # en caché todavía lo ofrece.
+        from app.services.medios_pago import cheque_habilitado as _cheque_ok
+        if (forma_pago == FormaPago.CHEQUE and not _cheque_ok()
+                and estado_entrega in (EstadoEntrega.ENTREGADO, EstadoEntrega.PARCIAL)):
+            raise ValueError(
+                'El pago con cheque no está habilitado: no hay medio de pago de cheque en '
+                'Siesa. Registre el pago con otra forma, o pida a la oficina que lo habilite.')
 
         # ── La restricción del diseño: lo que se cobra en la puerta no se
         # convierte en crédito ──
@@ -2472,50 +2490,21 @@ class RutaService:
         ruta = RutaDespacho.query.get(id)
         if not ruta:
             raise LookupError('Ruta no encontrada')
-        # Solo una ruta cerrada (validación de la plata, 2026-09-26): liquidada en
-        # tránsito, el conductor seguía reescribiendo forma de pago y monto hasta
-        # que alguien encolara el recibo.
-        if ruta.estado != EstadoRutaDespacho.ENTREGADA:
-            raise ValueError(
-                f'La ruta está {ruta.estado}: se liquida cuando el conductor la cierra '
-                f'(ENTREGADA). Si no la cierra, pida el cierre desde Liquidación.')
 
-        tareas = ruta.tareas_unicas()
-        gestionadas = RecaudoEntrega.query.filter_by(ruta_id=id).count()
-        sin_gestionar = len(tareas) - gestionadas
-        if sin_gestionar > 0:
-            raise ValueError(
-                f'Faltan {sin_gestionar} parada{"s" if sin_gestionar != 1 else ""} por gestionar '
-                f'antes de liquidar. Pídale al conductor que abra la app con señal (la '
-                f'confirmación suele estar en su cola); si no llega, regístrela desde '
-                f'Liquidación con un motivo.'
-            )
+        # Lo que frena la liquidación: **una lista** (`lo_que_falta_para_liquidar`),
+        # la misma que la pantalla de Liquidación muestra por ruta. Lo que no
+        # se fuerza, frena; lo forzable (devoluciones sin contar, caja sin acta)
+        # pide su motivo abajo.
+        faltas = {f['codigo']: f for f in RutaService.lo_que_falta_para_liquidar(ruta)}
+        for codigo in (FALTA_RUTA_SIN_CERRAR, FALTA_PARADAS_SIN_GESTIONAR,
+                       FALTA_CREDITO_NO_AUTORIZADO):
+            if codigo in faltas:
+                raise ValueError(faltas[codigo]['error'])
 
-        # Contado que salió sin plata y sin autorización: la ruta no se da por
-        # liquidada. Cobrarlo, o «autorizar como crédito» con razón.
-        from app.services import cond_pago as _cp_lq
-        _sin_aut = [r for r in RecaudoEntrega.query.filter_by(ruta_id=id).all()
-                    if _cp_lq.credito_no_autorizado(r)]
-        if _sin_aut:
-            _peds = ', '.join((r.tarea.numero_pedido_siesa if r.tarea else f'tarea {r.tarea_id}')
-                              or f'tarea {r.tarea_id}' for r in _sin_aut[:10])
-            raise ValueError(
-                f'credito_no_autorizado: {len(_sin_aut)} parada'
-                f'{"s" if len(_sin_aut) != 1 else ""} de contado contraentrega '
-                f'sin plata y sin autorización ({_peds}). Cóbrelas o autorícelas como '
-                f'crédito con una razón antes de liquidar.')
-
-        from app.services import devolucion_ruta as _dr_lq
-        _sin_contar = _dr_lq.pendientes_de_conteo(id)
+        _sin_contar = (faltas.get(FALTA_DEVOLUCIONES_SIN_CONTAR) or {}).get('paradas') or []
         if _sin_contar:
             if not (motivo_devoluciones or '').strip():
-                _peds = ', '.join(str(p['pedido'] or f'tarea {p["tarea_id"]}')
-                                  for p in _sin_contar[:10])
-                raise ValueError(
-                    f'devoluciones_sin_contar: {len(_sin_contar)} parada'
-                    f'{"s" if len(_sin_contar) != 1 else ""} rechazada/parcial con la '
-                    f'mercancía sin contar en bodega ({_peds}). Recepción la cuenta en '
-                    f'«Llegó el camión»; si hay que liquidar igual, fuerce la liquidación con un motivo.')
+                raise ValueError(faltas[FALTA_DEVOLUCIONES_SIN_CONTAR]['error'])
             motivo_devoluciones = motivo_obligatorio(
                 motivo_devoluciones, 'liquidar con devoluciones sin contar')
             registrar_accion(
@@ -2573,6 +2562,102 @@ class RutaService:
             'siesa_error':     siesa_error,
             'falta_en_siesa':  RutaService.documentos_faltantes_de_ruta(ruta),
         }
+
+    @staticmethod
+    def lo_que_falta_para_liquidar(ruta) -> list:
+        """**Lo que le falta a la ruta para liquidarse**, en el orden en que
+        `liquidar_ruta` lo exige: `[{codigo, error, texto, accion, forzable,
+        ...}]`. Vacía = se puede liquidar. **Una lista, dos lectores**: la
+        puerta (`liquidar_ruta`, que levanta `error`) y la pantalla de
+        Liquidación, que la pinta por ruta con su acción (integración de
+        liquidación, 2026-09-27: el acta de caja y la parcial sin autorizar
+        frenaban cada una por su lado, y quien liquida se enteraba de a una,
+        al pulsar «Liquidar»).
+
+        Cada entrada sale de la política que ya decide ese punto — no hay una
+        segunda regla: `cond_pago.credito_no_autorizado` (incluida la PARCIAL
+        pagada de menos), `devolucion_ruta.pendientes_de_conteo` y
+        `caja_conductor.exigir_acta_para_liquidar`. `error` es el texto con su
+        código estable al frente (la pantalla lo reconoce); `texto`, el mismo
+        sin el código. `forzable`: `None` (no se fuerza), `'motivo'` (quien
+        liquida, con motivo) o `'admin'` (solo el administrador, con motivo).
+        """
+        from app.services import caja_conductor as _cc
+        from app.services import cond_pago as _cp
+        from app.services import devolucion_ruta as _dr
+        from app.services.liquidacion_service import mensaje_credito_no_autorizado
+
+        def _falta(codigo, error, accion, forzable=None, **extra):
+            texto = error.split(':', 1)[1].strip() if error.startswith(codigo + ':') else error
+            return {'codigo': codigo, 'error': error, 'texto': texto, 'accion': accion,
+                    'forzable': forzable, **extra}
+
+        faltas = []
+        # Solo una ruta cerrada (validación de la plata, 2026-09-26): liquidada
+        # en tránsito, el conductor seguía reescribiendo forma de pago y monto
+        # hasta que alguien encolara el recibo.
+        if ruta.estado != EstadoRutaDespacho.ENTREGADA:
+            _estado = {'EN_TRANSITO': 'en camino', 'PROGRAMADA': 'programada',
+                       'CARGANDO': 'cargándose', 'CANCELADA': 'cancelada'}.get(
+                ruta.estado, str(ruta.estado or 'sin estado').replace('_', ' ').lower())
+            faltas.append(_falta(
+                FALTA_RUTA_SIN_CERRAR,
+                f'La ruta está {_estado}: se liquida cuando el conductor la cierra. Si no '
+                f'la cierra, pida el cierre desde Liquidación.',
+                'pedir_cierre'))
+            return faltas
+
+        recaudos = RecaudoEntrega.query.filter_by(ruta_id=ruta.id).all()
+        sin_gestionar = len(ruta.tareas_unicas()) - len(recaudos)
+        if sin_gestionar > 0:
+            faltas.append(_falta(
+                FALTA_PARADAS_SIN_GESTIONAR,
+                f'Faltan {sin_gestionar} parada{"s" if sin_gestionar != 1 else ""} por gestionar '
+                f'antes de liquidar. Pídale al conductor que abra la app con señal (la '
+                f'confirmación suele estar en su cola); si no llega, regístrela desde '
+                f'Liquidación con un motivo.',
+                'abrir_ruta', cuantas=sin_gestionar))
+
+        # Contado que salió sin plata y sin autorización, o PARCIAL pagada de
+        # menos (L4): la ruta no se da por liquidada. Cobrarlo, o autorizarlo
+        # como crédito con razón.
+        sin_aut = [r for r in recaudos if _cp.credito_no_autorizado(r)]
+        if sin_aut:
+            paradas = []
+            for r in sin_aut:
+                corta = _cp.parcial_pagada_de_menos(r, r.tarea)
+                paradas.append({'recaudo_id': r.id,
+                                'pedido': (r.tarea.numero_pedido_siesa if r.tarea else None)
+                                or f'tarea {r.tarea_id}',
+                                'diferencia': corta['diferencia'] if corta else None})
+            if len(sin_aut) == 1:
+                error = mensaje_credito_no_autorizado(sin_aut[0])
+            else:
+                _peds = ', '.join(p['pedido'] for p in paradas[:10])
+                error = (f'{FALTA_CREDITO_NO_AUTORIZADO}: {len(sin_aut)} paradas de contado '
+                         f'contraentrega sin plata, o pagadas de menos en una entrega parcial, y '
+                         f'sin autorización ({_peds}). Cóbrelas o autorícelas como crédito con '
+                         f'una razón antes de liquidar.')
+            faltas.append(_falta(FALTA_CREDITO_NO_AUTORIZADO, error, 'abrir_ruta',
+                                 paradas=paradas))
+
+        sin_contar = _dr.pendientes_de_conteo(ruta.id)
+        if sin_contar:
+            _peds = ', '.join(str(p['pedido'] or f'tarea {p["tarea_id"]}') for p in sin_contar[:10])
+            faltas.append(_falta(
+                FALTA_DEVOLUCIONES_SIN_CONTAR,
+                f'{FALTA_DEVOLUCIONES_SIN_CONTAR}: {len(sin_contar)} parada'
+                f'{"s" if len(sin_contar) != 1 else ""} rechazada/parcial con la '
+                f'mercancía sin contar en bodega ({_peds}). Recepción la cuenta en '
+                f'«Llegó el camión»; si hay que liquidar igual, fuerce la liquidación con un motivo.',
+                'recepcion', forzable='motivo', paradas=sin_contar))
+
+        try:
+            _cc.exigir_acta_para_liquidar(ruta)
+        except _cc.CajaSinActa as e:
+            faltas.append(_falta(FALTA_CAJA_SIN_ACTA, str(e), 'recibir_caja',
+                                 forzable='admin', conductor_id=ruta.conductor_id))
+        return faltas
 
     @staticmethod
     def documentos_faltantes_de_ruta(ruta) -> list:

@@ -545,9 +545,13 @@ class TestUnPedidoPorTipoDePago:
 
     @pytest.mark.parametrize('forma_pago', TIPOS_DE_PAGO_RESTANTES)
     def test_tipo_de_pago_hasta_liquidacion(
-            self, db, almacen, conductor_full, admin_full, forma_pago):
+            self, db, almacen, conductor_full, admin_full, forma_pago, monkeypatch):
         from app.services.liquidacion_service import LiquidacionService
         from app.services.ruta_service import RutaService
+        if forma_pago == 'CHEQUE':
+            # CHEQUE solo con su medio en Siesa (`medios_pago`): sin él la
+            # puerta lo rechaza (integración de liquidación, 2026-09-27).
+            monkeypatch.setenv('SIESA_MEDIO_PAGO_CHEQUE', 'CHQ')
 
         flujo, producto = _armar_parada(db, almacen, conductor_full, cantidad_pedida=10)
         mock, bruto, iva, neto = _mock_connekta(producto, cantidad_facturada=10)

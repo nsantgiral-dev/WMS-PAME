@@ -246,15 +246,105 @@ def _rama_rc_llama_la_compuerta() -> bool:
     return False
 
 
-class TestElEjecutorDelReciboEsperaAlBanco:
+def _rama_rc_compuerta_antes_de_la_cartera() -> bool:
+    """La compuerta va antes de `resolver_envio` (la lectura de la cartera) en
+    la rama del RC: esperar al banco no le cuesta a Siesa una lectura por
+    ciclo."""
+    arbol = ast.parse((RAIZ / 'app' / 'services' / 'siesa_job_service.py')
+                      .read_text(encoding='utf-8'))
+    for n in ast.walk(arbol):
+        if isinstance(n, ast.If) and isinstance(n.test, ast.Compare) \
+                and any(isinstance(c, ast.Constant) and c.value == 'RECIBO_CAJA'
+                        for c in n.test.comparators):
+            lineas = {}
+            for m in ast.walk(n):
+                if isinstance(m, ast.Call):
+                    f = m.func
+                    nombre = f.attr if isinstance(f, ast.Attribute) else getattr(f, 'id', '')
+                    lineas.setdefault(nombre, m.lineno)
+            if 'exigir_para_rc' in lineas and 'resolver_envio' in lineas:
+                return lineas['exigir_para_rc'] < lineas['resolver_envio']
+    return False
 
-    @pytest.mark.xfail(strict=True, reason=(
-        'La línea `verificacion_banco.exigir_para_rc(recaudo)` va en la rama '
-        'RECIBO_CAJA de siesa_job_service._ejecutar_job, antes del POST: ese '
-        'archivo es del frente L1 y lo cablea el integrador. Cuando exista, '
-        'este test pasa y strict=True lo pone rojo para que se quite la marca.'))
+
+class TestElEjecutorDelReciboEsperaAlBanco:
+    """Integración de liquidación (2026-09-27): el RC de un pago bancario no
+    sale hasta que alguien lo vio en el banco. La compuerta vive en la rama
+    RECIBO_CAJA del ejecutor, antes de leer la cartera."""
+
     def test_la_rama_del_rc_pregunta_al_banco(self):
         assert _rama_rc_llama_la_compuerta()
+        assert _rama_rc_compuerta_antes_de_la_cartera()
+
+    def _job_rc(self, db, r):
+        from app.models.siesa_job import SiesaJob
+        j = SiesaJob.encolar('RECIBO_CAJA', {'recaudo_id': r.id, 'tipo_docto_fe': 'FE',
+                                             'consec_fe': '1416',
+                                             'forma_pago': r.forma_pago, 'monto': 50000},
+                             referencia_tipo='RecaudoEntrega', referencia_id=r.id)
+        db.session.commit()
+        return j
+
+    def test_por_verificar_espera_sin_leer_siesa_ni_gastar_intento(self, app, db, almacen):
+        from unittest.mock import MagicMock, patch
+        from app.models.siesa_job import SiesaJob
+        from app.services.siesa_job_service import _run_dlq_jobs
+        _, r = _bancaria(db, almacen)
+        job = self._job_rc(db, r)
+        mc = MagicMock()
+        with patch('app.services.connekta_gateway.connekta', mc):
+            _run_dlq_jobs()
+        job = db.session.get(SiesaJob, job.id)
+        assert job.estado == 'PENDIENTE' and job.intentos == 0 and job.proximo_intento
+        assert 'Transferencias' in (job.error_ultimo or '')
+        mc.trigger_recibo_caja.assert_not_called()
+        mc.get_cxc_de_factura.assert_not_called()
+        db.session.refresh(r)
+        assert r.siesa_rc_triggered is False
+
+    def test_verificada_despierta_el_recibo_y_sale(self, app, db, almacen):
+        from unittest.mock import MagicMock, patch
+        from app.models.siesa_job import SiesaJob
+        from app.services import verificacion_banco as vb
+        from app.services.siesa_job_service import _ejecutar_job
+        from tests._envio_liq import cartera_en, fila_cartera
+        _, r = _bancaria(db, almacen)
+        job = self._job_rc(db, r)
+        job.proximo_intento = datetime.utcnow() + timedelta(minutes=30)
+        db.session.commit()
+        vb.verificar(r.id, _usuario(db, 'liquidador').id, True)
+        job = db.session.get(SiesaJob, job.id)
+        assert job.proximo_intento <= datetime.utcnow()
+        mc = MagicMock()
+        mc.trigger_recibo_caja.return_value = {'codigo': 0}
+        with patch('app.services.connekta_gateway.connekta', mc):
+            cartera_en(mc, [fila_cartera(tipo='FE', consec='1416', total_db=50000)])
+            _ejecutar_job(job)
+        mc.trigger_recibo_caja.assert_called_once()
+
+    def test_no_encontrada_falla_sin_reintento_y_vuelve_si_aparece(self, app, db, almacen):
+        from unittest.mock import MagicMock, patch
+        from app.models.siesa_job import SiesaJob
+        from app.services import verificacion_banco as vb
+        from app.services.envio_liquidacion import describir_envio
+        from app.services.siesa_job_service import _run_dlq_jobs
+        _, r = _bancaria(db, almacen)
+        job = self._job_rc(db, r)
+        vb.verificar(r.id, _usuario(db, 'lider_cartera').id, False, 'No está en el extracto')
+        mc = MagicMock()
+        with patch('app.services.connekta_gateway.connekta', mc):
+            _run_dlq_jobs()
+        job = db.session.get(SiesaJob, job.id)
+        assert job.estado == 'FALLIDO' and 'no apareció en el banco' in job.error_ultimo
+        d = describir_envio(job)
+        assert d['reintentable'] is False and d['que_falta'], 'reintentar da lo mismo: falta ver la plata'
+        mc.trigger_recibo_caja.assert_not_called()
+        # La plata apareció: el recibo vuelve a la cola, con el fallo en la bitácora.
+        vb.verificar(r.id, _usuario(db, 'liquidador').id, True)
+        job = db.session.get(SiesaJob, job.id)
+        assert job.estado == 'PENDIENTE' and job.intentos == 0
+        from app.models.bitacora import BitacoraAccion
+        assert BitacoraAccion.query.filter_by(accion='REINTENTAR', entidad_id=job.id).count() == 1
 
     def test_el_detector_ve_la_llamada(self, tmp_path):
         """Meta-test: el detector encuentra la llamada dentro de la rama, y no

@@ -4139,11 +4139,16 @@ async function rutaLiquidar(id) {
       d = await r.json();
     }
     if (!r.ok) {
-      // Sin acta de caja (m051liqcaja): el mensaje del servidor sin su código.
-      alerta(String(d.error || 'Error al liquidar').replace(/^caja_sin_acta:\s*/, ''), 'error');
+      // Sin acta de caja, parcial sin autorizar…: el mensaje del servidor sin
+      // su código (`caja_sin_acta:`, `credito_no_autorizado:`), que es para la
+      // pantalla. Lo que falta, junto y con su acción, está en Liquidación.
+      alerta(String(d.error || 'Error al liquidar').replace(/^[a-z_]+:\s*/, '') +
+        ' Lo que le falta a la ruta, con cada acción, está en Liquidación.', 'error');
       return;
     }
-    alerta('Ruta liquidada: lo que está listo quedó en cola para Siesa', 'exito');
+    alerta(d.siesa_error
+      ? 'Ruta liquidada, pero los documentos no se pudieron poner en cola para Siesa: la ruta sigue en Liquidación hasta que salgan.'
+      : 'Ruta liquidada: lo que está listo quedó en cola para Siesa', d.siesa_error ? 'advertencia' : 'exito');
     // La liquidación ya encoló lo que estaba listo (m051liqcaja).
     await _cargarPlanilla(id);
     await cargarListaRutas();

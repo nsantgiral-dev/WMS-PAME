@@ -706,8 +706,14 @@ CONSULTAS_FALLIDO_OPERATIVAS = {
         'lista las retenciones/NC FALLIDO sin verificar para resolverlas: opera, no cuenta',
     'app/services/tablero_lider_conteo.py::_rechazados_siesa':
         'lista para reintentar/descartar desde el tablero del líder',
+    # Integración de liquidación (2026-09-27): el recibo de caja que quedó
+    # FALLIDO porque la transferencia «no apareció en el banco» vuelve a la
+    # cola cuando alguien la ve (con `reencolar_job_fallido`). Opera sobre UN
+    # job de UNA parada, no cuenta.
+    'app/services/verificacion_banco.py::_despertar_recibo':
+        'reencola el RC de la parada que el banco frenaba, al verificarla: opera, no cuenta',
 }
-TOPE_CONSULTAS_FALLIDO = 25  # +1 tanda 2: preflag_sin_verificar · +1 fiscal v2: estado_emision · +1 plata: documentos_sin_verificar
+TOPE_CONSULTAS_FALLIDO = 26  # +1 tanda 2: preflag_sin_verificar · +1 fiscal v2: estado_emision · +1 plata: documentos_sin_verificar · +1 integración liquidación: _despertar_recibo
 
 #: Módulos que MUESTRAN números: acá no puede haber ninguna consulta propia.
 MODULOS_QUE_SOLO_CUENTAN = ('app/services/analitica_', 'app/services/dashboard_service.py',

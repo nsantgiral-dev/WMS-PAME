@@ -199,9 +199,13 @@ class TestTodasLasFormasDePagoHastaLiquidacion:
 
     @pytest.mark.parametrize('forma_pago', FORMAS_PAGO_COBRO_PUERTA)
     def test_confirma_y_encola_rc_por_el_medio_declarado(
-            self, db, almacen, victor, forma_pago):
+            self, db, almacen, victor, forma_pago, monkeypatch):
         from app.services.liquidacion_service import LiquidacionService
         from app.services.ruta_service import RutaService
+        if forma_pago == 'CHEQUE':
+            # El `<select>` solo lo ofrece con su medio en Siesa (`medios_pago`),
+            # y la puerta lo exige (integración de liquidación, 2026-09-27).
+            monkeypatch.setenv('SIESA_MEDIO_PAGO_CHEQUE', 'CHQ')
 
         flujo, producto = _armar_parada(db, almacen, victor, cantidad_pedida=10)
         mock, bruto, iva, neto = _mock_connekta(producto, cantidad_facturada=10)
