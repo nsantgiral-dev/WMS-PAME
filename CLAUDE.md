@@ -6350,7 +6350,10 @@ Respaldo parcial mientras la consulta no exista: `rellenar_ventas_pedido(dias)`
 (`POST …/demanda/rellenar-pedidos`, `LOCK_DEMANDA_PEDIDOS` 2051): la foto de
 ventas de siempre, por CO y día, N días atrás.
 
-Migración **`m050demanda`** (down `m049tardia`): `demanda_dia_siesa`,
+Migración **`m050demanda`** (down `m051flotalegal` desde la integración del
+2026-09-29; cadena `m050inv2 → m051flotalegal → m050demanda → m051comprasa →
+m052comprasc`, una cabeza, upgrade → downgrade a `m050inv2` → upgrade verificado
+en un PostgreSQL local desechable): `demanda_dia_siesa`,
 `demanda_dia_cubierto`. Las dos OPERATIVAS en el acta de corte y REGENERABLES
 en el respaldo (se vuelven a leer).
 

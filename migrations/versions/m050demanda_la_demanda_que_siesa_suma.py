@@ -1,7 +1,7 @@
 """La venta diaria que Siesa ya sumó, y los días que una lectura cubrió
 
 Revision ID: m050demanda
-Revises: m049tardia
+Revises: m051flotalegal
 Create Date: 2026-09-27
 
 Aditiva, sin backfill. Ver `app/models/demanda_siesa.py` y CLAUDE.md
@@ -11,7 +11,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision = 'm050demanda'
-down_revision = 'm050inv2'
+down_revision = 'm051flotalegal'
 branch_labels = None
 depends_on = None
 
