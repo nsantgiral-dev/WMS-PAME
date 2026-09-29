@@ -2762,9 +2762,22 @@ DLQ no lo recalcula y el re-encolado lo copia (o lo resuelve si el job viejo
 no lo traía). Salidas y bodegas con promedio > 0: sin costo, como siempre. La
 auditoría de picking sin costo deja el ajuste en DESCUADRE para el líder.
 Tests: `test_conteo_teorico_pos.py::TestLaEntradaSinCostoNoEntraEnCero`,
-`test_connekta_ajustes_gateway.py::TestElCostoDeLaEntrada`; 5 mutaciones, las
-5 rojas. **Sin probar en vivo todavía**: que Siesa tome el costo mandado en
-una entrada por ajuste (motivo 01).
+`test_connekta_ajustes_gateway.py::TestElCostoDeLaEntrada`; 8 mutaciones, las
+8 rojas.
+
+**Con costo NO es un ajuste: es una ENTRADA (clase 61).** Primera prueba en QA
+(PAPELSP7878, job 543): la clase 63 rechazó cantidad + costo en la misma línea
+— «Movto Inventario: El ajuste debe ser solo en costo o en solo cantidad».
+Verificado sin depender del consultor (sus dos respuestas se contradecían:
+clase 60 vs 61, tipos de documento adivinados): el spec del 142951 dice
+**clase 61=Entrada, concepto 601=Entrada**; en Siesa el tipo **ADI** está
+autorizado para «Ajustes de inventario» **y** «Entradas» (Tipos de documentos
+→ Autorización por origen), y el concepto **0601 motivo 01 «Entrada de
+Inventario»** existe, activo, ni solo cantidad ni solo valor (capturas del
+2026-09-29). Así que la entrada con costo sale como ADI clase 61 / concepto
+601 / motivo `SIESA_MOTIVO_ENTRADA_INVENTARIO` (sin default; sin ella esa
+entrada no sale, `vars_criticas`). Todo lo demás sigue siendo clase 63.
+Pendiente: que el contador confirme la contrapartida del 0601-01.
 
 ---
 

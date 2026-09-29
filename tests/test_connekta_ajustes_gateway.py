@@ -76,10 +76,11 @@ class TestElCostoDeLaEntrada:
     con el promedio de la bodega — y sin fila ese promedio es 0 (ADI-00000040
     de QA, 2026-09-29). Solo una ENTRADA lo lleva."""
 
-    def _payload(self, app, monkeypatch, **kw):
+    def _payload(self, app, monkeypatch, motivo_entrada='01', **kw):
         with app.app_context():
             from app.services.connekta_gateway import connekta, ConnektaGateway
             monkeypatch.setattr(connekta, 'tipo_docto_ajuste', 'ADI')
+            monkeypatch.setattr(connekta, 'motivo_entrada_inventario', motivo_entrada)
             capturado = {}
 
             def _fake_post(self, conector, nombre, payload):
@@ -89,19 +90,40 @@ class TestElCostoDeLaEntrada:
             connekta.enviar_ajuste_inventario(
                 item_codigo='PAPELSP7877', cantidad=10, referencia='CC-X',
                 bodega='NB1', centro_op='003', **kw)
-            return capturado['payload']['Movimientos'][0]
+            return capturado['payload']
 
-    def test_la_entrada_lleva_el_costo(self, app, monkeypatch):
-        mov = self._payload(app, monkeypatch, motivo_codigo='AJ-ENT', costo_unitario=1044)
+    def test_la_entrada_con_costo_es_una_entrada_clase_61(self, app, monkeypatch):
+        """La clase 63 rechaza cantidad + costo («El ajuste debe ser solo en
+        costo o en solo cantidad», QA 2026-09-29): con costo va como ENTRADA,
+        clase 61 / concepto 601 / motivo 0601-01, en el mismo tipo ADI."""
+        p = self._payload(app, monkeypatch, motivo_codigo='AJ-ENT', costo_unitario=1044)
+        doc, mov = p['Documentos'][0], p['Movimientos'][0]
         assert mov['f470_costo_prom_uni'] == 1044.0
+        assert mov['f470_cant_base'] == 10.0
+        assert doc['f350_id_clase_docto'] == 61
+        assert doc['f450_id_concepto'] == 601
+        assert mov['f470_id_concepto'] == 601
+        assert mov['f470_id_motivo'] == '01'
+        assert doc['f350_id_tipo_docto'] == 'ADI'
 
-    def test_sin_costo_va_vacio_y_siesa_usa_su_promedio(self, app, monkeypatch):
-        mov = self._payload(app, monkeypatch, motivo_codigo='AJ-ENT')
+    def test_la_entrada_con_costo_sin_motivo_configurado_no_sale(self, app, monkeypatch):
+        with pytest.raises(ValueError, match='SIESA_MOTIVO_ENTRADA_INVENTARIO'):
+            self._payload(app, monkeypatch, motivo_entrada='',
+                          motivo_codigo='AJ-ENT', costo_unitario=1044)
+
+    def test_sin_costo_sigue_siendo_un_ajuste_clase_63(self, app, monkeypatch):
+        from app.services.connekta_gateway import connekta
+        p = self._payload(app, monkeypatch, motivo_codigo='AJ-ENT')
+        doc, mov = p['Documentos'][0], p['Movimientos'][0]
         assert mov['f470_costo_prom_uni'] is None
+        assert doc['f350_id_clase_docto'] == 63
+        assert mov['f470_id_concepto'] == connekta.concepto_ajustes
+        assert mov['f470_id_motivo'] == connekta.motivo_ajuste_entrada
 
     def test_la_salida_nunca_lleva_costo(self, app, monkeypatch):
-        mov = self._payload(app, monkeypatch, motivo_codigo='AJ-SAL', costo_unitario=1044)
-        assert mov['f470_costo_prom_uni'] is None
+        p = self._payload(app, monkeypatch, motivo_codigo='AJ-SAL', costo_unitario=1044)
+        assert p['Movimientos'][0]['f470_costo_prom_uni'] is None
+        assert p['Documentos'][0]['f350_id_clase_docto'] == 63
 
     @pytest.mark.parametrize('malo', [0, -5])
     def test_un_costo_no_positivo_no_sale(self, app, monkeypatch, malo):
