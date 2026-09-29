@@ -1064,6 +1064,58 @@ class PickingService:
         return {'pedido': pedido, 'almacen_id': almacen_id, 'tareas': len(tareas),
                 'devuelto_estante_at': ahora.isoformat()}
 
+    #: Lo que se le dice al líder antes y después de devolver a la cola un
+    #: picking a medio recoger: el sistema no descontó nada todavía (se
+    #: descuenta al confirmar), pero lo que está en el carro es físico.
+    AVISO_DEVOLVER_EN_CURSO = ('Lo que alcanzó a recoger ({recogido}) queda en cero: quien retome la '
+                               'línea la recoge desde el principio. Lo que esté en el carro de la '
+                               'persona que no está hay que devolverlo al hueco.')
+
+    @staticmethod
+    def devolver_en_curso_a_la_cola(tarea_id: int, usuario_id: int, motivo: str):
+        """Un picking EN_PROCESO de alguien que **ya no está** (ausente,
+        sin señal o inactivo) vuelve a la cola, sin dueño y desde cero.
+        Hace commit.
+
+        Es la salida de «Por decidir» (validación n1): el barrido nunca lo
+        suelta solo porque hay mercancía en un carro, y `reabrir_picking` solo
+        acepta BLOQUEADO. **No mueve inventario**: el descuento del hueco se
+        hace al confirmar, y esta tarea no se confirmó; la reserva sigue, porque
+        la línea se va a recoger igual. Lo que se pierde es lo escaneado
+        (`cantidad_recogida` a 0), y eso se dice (`AVISO_DEVOLVER_EN_CURSO`) y
+        queda en la bitácora con el antes.
+
+        Si su dueño está disponible, no: se le estaría quitando a alguien que
+        la está recogiendo.
+        """
+        from app.models.usuario import Usuario
+        from app.services import presencia
+        motivo = motivo_obligatorio(motivo, 'devolver a la cola un picking a medio recoger')
+        tarea = (TareaPicking.query.filter_by(id=tarea_id)
+                 .with_for_update().populate_existing().first())
+        if not tarea:
+            raise ValueError('Tarea no encontrada')
+        if tarea.estado != EstadoPicking.EN_PROCESO:
+            raise ValueError(f'Solo se devuelve a la cola un picking en curso (estado actual: {tarea.estado})')
+        dueno = db.session.get(Usuario, tarea.operario_id) if tarea.operario_id else None
+        if dueno is not None and presencia.esta_disponible(dueno):
+            raise ValueError(f'{dueno.nombre} está en turno recogiendo esta línea: no se le quita. '
+                             'Si no la va a terminar, que la reporte o la suelte él.')
+        antes = foto(tarea, ['estado', 'operario_id', 'cantidad_recogida', 'empaques_escaneados'])
+        recogido = tarea.cantidad_recogida or 0
+        PickingService._soltar_operario(tarea)
+        tarea.estado = EstadoPicking.PENDIENTE
+        tarea.cantidad_recogida = 0
+        tarea.empaques_escaneados = 0
+        tarea.fecha_inicio = None
+        aviso = PickingService.AVISO_DEVOLVER_EN_CURSO.format(recogido=recogido)
+        registrar_accion('DESASIGNAR', tarea, usuario_id=usuario_id, motivo=f'{motivo} — {aviso}',
+                         antes=antes, despues=foto(tarea, list(antes)))
+        db.session.commit()
+        tarea.aviso_reapertura = aviso
+        tarea.faltante_sin_caja = False
+        return tarea
+
     @staticmethod
     def reabrir_picking(tarea_id: int, usuario_id: int = None, motivo: str = None):
         """

@@ -7794,7 +7794,7 @@ La validación crítica la rechazó por dos P1 con una raíz: **la frontera
 
 | | Qué pasaba | Ahora |
 |---|---|---|
-| **P1-A** | Incapacidad con «Regresa el» vacío (el default, y lo normal). La persona vuelve, el dispensador le da un conteo, y el barrido —que la ve AUSENTE— se lo quita de las manos cada 15 min, todo el día | `presencia.cerrar_ausencia_si_volvio`: al dar señal (pedir trabajo o escribir), una ausencia **sin fecha de regreso que empezó antes de hoy** se cierra sola («Regresó antes», bitácora `ANULAR`). La que empezó hoy (salida anticipada, recién declarada) o trae regreso futuro (vacaciones) **no**: esa persona termina lo que tiene y no recibe trabajo nuevo, y su pantalla dice por qué (`presencia.motivo_sin_trabajo_nuevo`, una política para las tres puertas de pull: cola unificada, abastecedor, siguiente-tarea). Y el barrido suelta un conteo EN_PROCESO solo si nadie lo tocó desde 30 min antes de registrada la ausencia (`asignacion.en_curso_abandonado`): lo que empezó después, o estaba terminando, no se le quita |
+| **P1-A** | Incapacidad con «Regresa el» vacío (el default, y lo normal). La persona vuelve, el dispensador le da un conteo, y el barrido —que la ve AUSENTE— se lo quita de las manos cada 15 min, todo el día | `presencia.cerrar_ausencia_si_volvio`: con un acto de trabajo (ver la re-validación abajo), una ausencia **sin fecha de regreso que empezó antes de hoy** se cierra sola (regreso = hoy, bitácora `EDITAR` «Regresó antes»). La que empezó hoy (salida anticipada, recién declarada) o trae regreso futuro (vacaciones) **no**: esa persona termina lo que tiene y no recibe trabajo nuevo, y su pantalla dice por qué (`presencia.motivo_sin_trabajo_nuevo`, una política para las tres puertas de pull: cola unificada, abastecedor, siguiente-tarea). Y el barrido suelta un conteo EN_PROCESO solo si nadie lo tocó desde 30 min antes de registrada la ausencia (`asignacion.en_curso_abandonado`): lo que empezó después, o estaba terminando, no se le quita |
 | **P1-B** | La guarda de escritura era `if sesion.operario_id and …`: una sesión devuelta a la cola aceptaba lo que tecleara quien la tenía, y el siguiente veía en su HUD lo contado por otro. El conteo dejaba de ser ciego | `ConteoService.exigir_puede_escribir`, una función para escaneo, total tecleado y registrar: la sesión tiene que estar a nombre de quien escribe. A quien se la soltaron se le dice por qué, leído de `conteos_descartados` («volvió a la cola porque usted figura ausente…») |
 | P2 | `repartir_conteos` y el lock de `registrar_conteo` releían con `with_for_update()` sin `populate_existing()`: devolvía la copia del identity map y la «re-verificación bajo lock» no verificaba (el reparto podía pisar al dueño que la tomó entre el plan y el lock) | `populate_existing()` en los dos, y en `_sesion_conteo_para_contar` |
 | P2 | El barrido leía y pisaba sin lock | `FOR UPDATE SKIP LOCKED` + `populate_existing`: lo que el dueño está tocando se salta y se mira en la próxima vuelta |
@@ -7808,6 +7808,27 @@ los escenarios nuevos de `test_asignacion_presencia.py` (volvió sin fecha → s
 cierra sola y el barrido no le quita; ausente de hoy → termina lo suyo y la
 pantalla dice por qué; vacaciones con regreso no se cierran; el mensaje al que
 se la soltaron; reposición a «Por decidir»; confirmación y `desde` en Node).
+
+**Re-validación (2026-09-29, tres ajustes):**
+
+- **Solo un acto de trabajo cierra la ausencia**: un POST/PUT a
+  `presencia.RUTAS_DE_TRABAJO` (mobile, picking, reposición, conteo, empaque,
+  recepción) o el botón «Ya volví» (`POST /api/mobile/regrese`,
+  `presencia.registrar_regreso`) que la pantalla muestra cuando la ausencia es
+  de las que se cierran solas. **Nunca un GET**: el sondeo de la PWA
+  (`/tarea-actual`) deja señal pero no cierra — un incapacitado que abre la
+  aplicación en la casa no cierra su incapacidad.
+- **Al cerrarla, el regreso queda en hoy** (bitácora `EDITAR` «Regresó antes»):
+  el registro de cuánto duró se conserva; ya no se anula.
+- **«Devolver a la cola» funciona**: `PUT /api/picking/<id>/reabrir` sobre un
+  picking EN_PROCESO va a `PickingService.devolver_en_curso_a_la_cola`
+  (supervisión; solo si su dueño no está disponible — a quien está recogiendo
+  no se le quita). No mueve inventario (el hueco se descuenta al confirmar y la
+  reserva sigue); lo escaneado queda en cero, la respuesta lo dice («lo que esté
+  en el carro hay que devolverlo al hueco») y la bitácora (`DESASIGNAR`) guarda
+  el antes. Antes el botón siempre daba 400: `/reabrir` solo aceptaba BLOQUEADO.
+  Trinquete: `tests/test_revalidacion_asignacion_n1.py` (nació `xfail` en
+  val-asig-n1 0a8ee53c) ejerce el endpoint de verdad.
 
 **Lo que NO cubre:** quien vuelve **antes** de una fecha de regreso declarada
 necesita que el líder quite la ausencia (su pantalla se lo dice); una ausencia

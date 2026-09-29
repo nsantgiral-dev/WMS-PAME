@@ -499,11 +499,12 @@ class TestQuienNoEstaSuelta:
         db.session.add(a)
         db.session.commit()
         _conteo(db, nb1['almacen'])
+        presencia.registrar_regreso(luis.id)                 # «Ya volví»
         t = MobileService.get_tarea_actual(luis.id)
         assert t and t['tipo'] == 'CONTEO', t
         db.session.expire_all()
-        assert db.session.get(AusenciaUsuario, a.id).anulada_en is not None
-        fila = BitacoraAccion.query.filter_by(entidad='AusenciaUsuario', accion='ANULAR').one()
+        assert db.session.get(AusenciaUsuario, a.id).regreso == presencia._dia()
+        fila = BitacoraAccion.query.filter_by(entidad='AusenciaUsuario', accion='EDITAR').one()
         assert 'Regresó antes' in fila.motivo
         asignacion.barrer()
         assert _sesion(db, t['id']).operario_id == luis.id
@@ -537,7 +538,7 @@ class TestQuienNoEstaSuelta:
                                        regreso=presencia._dia() + timedelta(days=3)))
         luis.ultima_senal_at = None
         db.session.commit()
-        presencia.registrar_senal(luis.id)
+        presencia.registrar_senal(luis.id, acto_de_trabajo=True)
         assert presencia.estado(luis)['codigo'] == 'AUSENTE'
         assert 'vacaciones' in presencia.motivo_sin_trabajo_nuevo(luis)
 

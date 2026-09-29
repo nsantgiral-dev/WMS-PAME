@@ -672,6 +672,15 @@ function abastIniciar() {
   }, 8000);
 }
 
+/** «Ya volví» desde la pantalla del abastecedor (ver `pickingYaVolvi`). */
+async function abastYaVolvi() {
+  try {
+    const r = await post('/api/mobile/regrese', {});
+    alerta(r.mensaje || 'Bienvenido de vuelta', 'exito');
+    await abastCargarTarea();
+  } catch (e) { alerta(e.message || 'Error de conexión', 'error'); }
+}
+
 async function abastCargarTarea() {
   const cont = document.getElementById('abast-contenido');
   try {
@@ -684,6 +693,7 @@ async function abastCargarTarea() {
           <div style="font-size:48px;margin-bottom:16px;">🚫</div>
           <div style="font-size:var(--fs-lg);font-weight:700;color:var(--tx);">No le llegan tareas nuevas</div>
           <div style="font-size:var(--fs-sm);color:var(--tx2);margin-top:8px;line-height:1.5;">${esc(d.mensaje)}</div>
+          ${d.puede_regresar ? `<button onclick="abastYaVolvi()" style="margin-top:16px;padding:12px 24px;background:var(--pm-fill);color:#fff;border:none;border-radius:10px;font-size:var(--fs-sm);font-weight:700;cursor:pointer;">Ya volví</button>` : ''}
         </div>`;
       return;
     }

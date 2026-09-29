@@ -80,7 +80,16 @@ def _dia(ahora=None):
 # La señal
 # ─────────────────────────────────────────────────────────────────────────────
 
-def registrar_senal(usuario_id, ahora=None) -> None:
+#: Las puertas cuyo POST/PUT es un **acto de trabajo** (escanear, confirmar,
+#: pedir la siguiente tarea, contar, empacar, recibir): solo esos cierran una
+#: ausencia sin fecha. Un GET —el sondeo de la PWA al abrirla— nunca: un
+#: incapacitado que abre la aplicación en la casa no cierra su incapacidad
+#: (re-validación n1).
+RUTAS_DE_TRABAJO = ('/api/mobile/', '/api/picking/', '/api/reposicion/', '/api/conteo/',
+                    '/api/packing/', '/api/recepcion/')
+
+
+def registrar_senal(usuario_id, ahora=None, *, acto_de_trabajo: bool = False) -> None:
     """Esta persona está haciendo algo ahora. **Hace commit.**
 
     Escribe solo si la señal guardada tiene más de un minuto: con la PWA
@@ -88,16 +97,19 @@ def registrar_senal(usuario_id, ahora=None) -> None:
     escritura por segundo por operario para no cambiar nada que importe.
     Nunca levanta: perder una señal cuesta, a lo sumo, que alguien figure
     «sin señal» un rato; tumbar la petición que la trae cuesta el trabajo.
+
+    Con `acto_de_trabajo` (un POST de trabajo, «Ya volví»), además cierra la
+    ausencia que se cierra sola (`cerrar_ausencia_si_volvio`). El sondeo no.
     """
     if not usuario_id:
         return
     t = _ahora(ahora)
     try:
-        r = db.session.execute(
+        db.session.execute(
             db.text('UPDATE usuarios SET ultima_senal_at = :t '
                     'WHERE id = :uid AND (ultima_senal_at IS NULL OR ultima_senal_at < :antes)'),
             {'t': t, 'uid': int(usuario_id), 'antes': t - timedelta(minutes=1)})
-        if r.rowcount:
+        if acto_de_trabajo:
             cerrar_ausencia_si_volvio(int(usuario_id), ahora=t)
         db.session.commit()
     except Exception as e:  # pragma: no cover — defensivo
@@ -105,11 +117,24 @@ def registrar_senal(usuario_id, ahora=None) -> None:
         logger.warning('[PRESENCIA] no se pudo registrar la señal de #%s: %s', usuario_id, e)
 
 
+def ausencia_que_se_cierra_sola(usuario_id: int, *, ahora=None):
+    """La ausencia vigente de la persona si es de las que se cierran solas
+    cuando vuelve a trabajar: **sin fecha de regreso** y que **empezó antes de
+    hoy**. `None` si no tiene, o si es de las que no (ver
+    `cerrar_ausencia_si_volvio`)."""
+    t = _ahora(ahora)
+    hoy = _dia(t)
+    a = ausencias_vigentes([usuario_id], hoy).get(usuario_id)
+    if a is None or a.regreso is not None or a.desde >= hoy:
+        return None
+    return a
+
+
 def cerrar_ausencia_si_volvio(usuario_id: int, *, ahora=None):
-    """La persona está trabajando (dio señal) y tiene una ausencia vigente
-    que **no dice hasta cuándo** y **empezó antes de hoy**: volvió. La ausencia
-    se cierra sola —queda anulada, con «regresó antes» en la bitácora— y la
-    persona recibe trabajo como cualquiera. No hace commit.
+    """La persona hizo un **acto de trabajo** y tiene una ausencia vigente que
+    no dice hasta cuándo y empezó antes de hoy: volvió. La ausencia queda con
+    **regreso = hoy** —el registro de cuánto duró se conserva, no se anula— y
+    «Regresó antes» en la bitácora (`EDITAR`). No hace commit.
 
     Existe porque «Regresa el» vacío es lo normal en una incapacidad (nadie
     sabe cuándo termina), y sin esto el que volvió trabajaba con la ausencia
@@ -122,25 +147,49 @@ def cerrar_ausencia_si_volvio(usuario_id: int, *, ahora=None):
     - una que empezó **hoy**: puede ser la salida anticipada de quien está
       terminando lo que tiene. Mientras tanto no recibe trabajo nuevo
       (`motivo_sin_trabajo_nuevo`) y lo que tiene en curso no se le quita
-      (`asignacion.en_curso_abandonado`).
+      (`asignacion.en_curso_abandonado`);
+    - nada con un GET: abrir la aplicación no es volver a trabajar
+      (`RUTAS_DE_TRABAJO`).
 
     Devuelve la ausencia cerrada, o `None`.
     """
     from app.services.bitacora import registrar_accion
     t = _ahora(ahora)
-    hoy = _dia(t)
-    a = ausencias_vigentes([usuario_id], hoy).get(usuario_id)
-    if a is None or a.regreso is not None or a.desde >= hoy:
+    a = ausencia_que_se_cierra_sola(usuario_id, ahora=t)
+    if a is None:
         return None
     antes = a.to_dict()
-    a.anulada_en = t
-    a.anulada_por_id = None
-    a.motivo_anulacion = 'Regresó antes: volvió a trabajar (la ausencia no tenía fecha de regreso)'
-    registrar_accion('ANULAR', a, usuario_id=None, motivo=a.motivo_anulacion,
-                     antes=antes, despues=a.to_dict(), origen='señal de trabajo')
-    logger.info('[PRESENCIA] #%s volvió: se cierra su ausencia %s sin fecha de regreso',
-                usuario_id, a.id)
+    a.regreso = _dia(t)
+    registrar_accion('EDITAR', a, usuario_id=usuario_id,
+                     motivo='Regresó antes: volvió a trabajar (la ausencia no tenía fecha de '
+                            'regreso); el regreso queda en hoy',
+                     antes=antes, despues=a.to_dict(), origen='acto de trabajo')
+    logger.info('[PRESENCIA] #%s volvió: su ausencia %s queda con regreso hoy', usuario_id, a.id)
     return a
+
+
+def registrar_regreso(usuario_id: int) -> dict:
+    """«Ya volví» desde la pantalla de la persona. Hace commit.
+
+    Cierra la ausencia si es de las que se cierran solas; si no, `ValueError`
+    con qué hacer (la quita el líder). Es un acto de trabajo explícito: la
+    salida para quien abre la aplicación, ve «figura ausente» y no tiene
+    ninguna tarea que escanear para demostrar que volvió.
+    """
+    from app.models.usuario import Usuario
+    u = db.session.get(Usuario, usuario_id)
+    if u is None:
+        raise LookupError('Usuario no encontrado')
+    a = ausencia_que_se_cierra_sola(usuario_id)
+    if a is None:
+        if estado(u)['codigo'] == AUSENTE:
+            raise ValueError('Su ausencia tiene fecha de regreso o empezó hoy: no se puede quitar '
+                             'desde aquí. Pídale a su jefe que se la quite en Operarios.')
+        # Ya no figura ausente (la petición misma, un POST de trabajo, pudo
+        # haberla cerrado en el before_request): puede recibir tareas.
+        return {'regreso': True, 'mensaje': 'Ya le pueden llegar tareas.'}
+    registrar_senal(usuario_id, acto_de_trabajo=True)
+    return {'regreso': True, 'mensaje': 'Bienvenido de vuelta: ya le pueden llegar tareas.'}
 
 
 def motivo_sin_trabajo_nuevo(usuario, *, ahora=None):
@@ -156,9 +205,12 @@ def motivo_sin_trabajo_nuevo(usuario, *, ahora=None):
     e = estado(usuario, ahora=ahora)
     if e['codigo'] != AUSENTE:
         return None
-    return (f'Usted figura ausente ({texto_ausencia_de(e["ausencia"])}), así que no recibe '
-            'tareas nuevas. Si ya volvió a trabajar, pídale a su jefe que le quite la '
-            'ausencia en Operarios.')
+    base = (f'Usted figura ausente ({texto_ausencia_de(e["ausencia"])}), así que no recibe '
+            'tareas nuevas. ')
+    if ausencia_que_se_cierra_sola(usuario.id, ahora=ahora) is not None:
+        return base + 'Si ya volvió a trabajar, toque «Ya volví».'
+    return base + ('Si ya volvió a trabajar, pídale a su jefe que le quite la ausencia en '
+                   'Operarios.')
 
 
 def texto_ausencia_de(d: dict) -> str:
@@ -196,7 +248,7 @@ def registrar_senal_de_peticion() -> None:
         uid = int(uid)
     except Exception:
         return
-    registrar_senal(uid)
+    registrar_senal(uid, acto_de_trabajo=request.path.startswith(RUTAS_DE_TRABAJO))
 
 
 # ─────────────────────────────────────────────────────────────────────────────

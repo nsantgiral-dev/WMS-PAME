@@ -83,11 +83,28 @@ def tarea_actual():
         from app.services.presencia import motivo_sin_trabajo_nuevo
         ausente = motivo_sin_trabajo_nuevo(u)
         if ausente:
+            from app.services.presencia import ausencia_que_se_cierra_sola
             return jsonify({'sin_tareas': True, 'ausente': True, 'mensaje': ausente,
+                            'puede_regresar': ausencia_que_se_cierra_sola(operario_id) is not None,
                             'avisos_pendientes': avisos}), 200
         return jsonify({'sin_tareas': True, 'mensaje': 'No tiene tareas pendientes', 'avisos_pendientes': avisos}), 200
     resultado['avisos_pendientes'] = avisos
     return jsonify(resultado), 200
+
+
+@mobile_bp.route('/regrese', methods=['POST'])
+@jwt_required()
+def regrese():
+    """«Ya volví»: la persona que figura ausente (sin fecha de regreso) vuelve
+    a trabajar. Abrir la aplicación no cierra la ausencia; esto sí
+    (`presencia.registrar_regreso`)."""
+    from app.services.presencia import registrar_regreso
+    try:
+        return jsonify(registrar_regreso(_operario_id())), 200
+    except LookupError as e:
+        return jsonify({'error': str(e)}), 404
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 409
 
 
 @mobile_bp.route('/escanear', methods=['POST'])

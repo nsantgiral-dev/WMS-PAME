@@ -58,7 +58,9 @@ def tarea_actual():
         from app.services.presencia import motivo_sin_trabajo_nuevo
         ausente = motivo_sin_trabajo_nuevo(u)
         if ausente:
-            return jsonify({'sin_tareas': True, 'ausente': True, 'mensaje': ausente}), 200
+            from app.services.presencia import ausencia_que_se_cierra_sola
+            return jsonify({'sin_tareas': True, 'ausente': True, 'mensaje': ausente,
+                            'puede_regresar': ausencia_que_se_cierra_sola(abastecedor_id) is not None}), 200
         return jsonify({'sin_tareas': True, 'mensaje': 'No hay reposiciones pendientes'}), 200
     return jsonify(tarea), 200
 

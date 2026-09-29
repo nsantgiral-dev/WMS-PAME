@@ -25,6 +25,7 @@ async function pedirTarea() {
           <div style="font-size:48px;">🚫</div>
           <div style="font-size:var(--fs-lg);font-weight:700;margin-top:12px;">No le llegan tareas nuevas</div>
           <div style="font-size:var(--fs-sm);color:var(--tx2);margin-top:8px;line-height:1.5;">${esc(d.mensaje)}</div>
+          ${d.puede_regresar ? `<button onclick="pickingYaVolvi()" style="margin-top:16px;padding:12px 24px;background:var(--pm-fill);color:#fff;border:none;border-radius:10px;font-size:var(--fs-sm);font-weight:700;cursor:pointer;">Ya volví</button>` : ''}
         </div>`;
       return;
     }
@@ -76,6 +77,16 @@ async function pedirTarea() {
   }
 }
 
+
+/** «Ya volví»: cierra la ausencia sin fecha de quien volvió a trabajar (abrir
+ * la aplicación no la cierra: tiene que ser un acto suyo) y pide tarea. */
+async function pickingYaVolvi() {
+  try {
+    const r = await post('/api/mobile/regrese', {});
+    alerta(r.mensaje || 'Bienvenido de vuelta', 'exito');
+    await pedirTarea();
+  } catch (e) { alerta(e.message || 'Error de conexión', 'error'); }
+}
 
 /**
  * Renderiza la tarea activa en el HUD del operario.

@@ -273,9 +273,10 @@ def cancelar_tarea(id):
 @jwt_required()
 def reabrir_tarea(id):
     """
-    Admin reabre una tarea BLOQUEADA → PENDIENTE.
-    Libera el inventario congelado y la devuelve al pool sin operario.
-    Solo admin o supervisor.
+    Supervisión reabre una tarea BLOQUEADA → PENDIENTE (libera el inventario
+    congelado y la devuelve al pool sin operario), o devuelve a la cola un
+    picking EN_PROCESO de alguien que ya no está
+    (`PickingService.devolver_en_curso_a_la_cola`).
     """
     from app.models.usuario import Usuario
     try:
@@ -287,8 +288,15 @@ def reabrir_tarea(id):
         return jsonify({'error': 'Solo admin, supervisor o jefe puede reabrir tareas'}), 403
     data = request.get_json(silent=True) or {}
     try:
-        tarea = PickingService.reabrir_picking(tarea_id=id, usuario_id=uid,
-                                               motivo=data.get('motivo'))
+        # Un picking EN_PROCESO de alguien que ya no está («Por decidir» en
+        # Operarios) vuelve a la cola por su propia puerta: `reabrir_picking`
+        # es para BLOQUEADO, y lo recogido está en un carro, no en una caja.
+        actual = db.session.get(TareaPicking, id)
+        if actual is not None and actual.estado == EstadoPicking.EN_PROCESO:
+            tarea = PickingService.devolver_en_curso_a_la_cola(id, uid, data.get('motivo'))
+        else:
+            tarea = PickingService.reabrir_picking(tarea_id=id, usuario_id=uid,
+                                                   motivo=data.get('motivo'))
         aviso = getattr(tarea, 'aviso_reapertura', None)
         if aviso:
             return jsonify({'mensaje': aviso, 'faltante_sin_caja': tarea.faltante_sin_caja,
