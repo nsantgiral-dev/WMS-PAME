@@ -159,6 +159,13 @@ indexedDB = { open() {
             setTimeout(() => { tx.error = { name: 'QuotaExceededError' };
                                if (tx.onabort) tx.onabort({ target: tx }); }, 0);
           }, 0); return r; },
+          // `add` (la cola de rutas): igual que `put` — el pedido se acepta y
+          // la transacción aborta al confirmar.
+          add(v) { const r = { result: 1 }; setTimeout(() => {
+            if (r.onsuccess) r.onsuccess();
+            setTimeout(() => { tx.error = { name: 'QuotaExceededError' };
+                               if (tx.onabort) tx.onabort({ target: tx }); }, 0);
+          }, 0); return r; },
         }; } };
       return tx;
     } };

@@ -18,7 +18,29 @@ import pytest
 
 from tests.flota.test_cola_del_conductor import _auth, _recibo, mundo  # noqa: F401
 from tests.flota.test_val_flota_cola_20260929 import (  # noqa: F401
-    _correr_disco_lleno, relevo)
+    _IDB_LLENO as _IDB_LLENO_SRC, _cond_db_real, _correr_disco_lleno, relevo)
+
+
+def _correr_con_idb(tmp_path, idb, expr):
+    """Como `_correr_disco_lleno`, con otro doble de IndexedDB."""
+    import json
+    import shutil
+    import subprocess
+
+    from tests.flota.test_mi_camion_hoy_js import HARNESS, PWA
+
+    if not shutil.which('node'):
+        pytest.skip('node no disponible en este entorno')
+    h = tmp_path / 'h.mjs'
+    h.write_text(HARNESS, encoding='utf-8')
+    g = tmp_path / 'g.json'
+    g.write_text(json.dumps({'semilla': idb + '_condDB = ' + _cond_db_real() + ';',
+                             'expr': expr, 'respuestas': [], 'get': {},
+                             'sin_almacen': True}), encoding='utf-8')
+    p = subprocess.run(['node', str(h), str(PWA), str(g)],
+                       capture_output=True, text=True, timeout=60)
+    assert p.returncode == 0, p.stderr
+    return json.loads(p.stdout)['salida']
 
 
 def _lectura(vehiculo_id, km, ts, autor, origen='cierre_dia', anula=None, motivo=None):
@@ -137,6 +159,31 @@ class TestVerificarNoDejaLaSerieDecreciente:
             verificacion.verificar(lectura_id=salto.id, usuario_id=1)
 
 
+class TestLaInspeccionPorLaColaTampocoSeTraba:
+
+    def test_con_km_menor_entra_contradice(self, client, mundo):
+        """Recibo, daño y entrega no son las únicas puertas: la inspección que
+        llega por la cola con un km menor tampoco se pierde."""
+        from tests.flota.test_endpoints_inspeccion import _cuerpo, _items
+
+        from app.extensions import db
+        from flota.adaptadores import catalogo
+        catalogo.sembrar(db)
+        r = client.post('/flota/custodia/traspaso', json=_recibo(mundo, 'k-ins-rec', km=1000),
+                        headers=_auth(mundo['t_cond']))
+        assert r.status_code == 201, r.get_json()
+        _lectura(mundo['vehiculo_id'], 1500, datetime.utcnow(), 1)
+        items = _items(client, mundo)['items']
+        cuerpo = _cuerpo(items, km=1200, clave_idempotencia='k-ins-menor',
+                         ts_dispositivo=datetime.utcnow().isoformat() + 'Z')
+        cuerpo['placa'] = mundo['placa']
+        r = client.post('/flota/inspeccion', json=cuerpo, headers=_auth(mundo['t_cond']))
+        assert r.status_code == 201, r.get_json()
+        ultima = _lecturas(mundo['vehiculo_id'])[-1]
+        assert (ultima.valor_km, ultima.serie) == (1200, 'contradice')
+        assert _actual(mundo['vehiculo_id']) == 1500
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # VAL-COLA-2
 # ═══════════════════════════════════════════════════════════════════════════
@@ -166,6 +213,18 @@ class TestElTurnoDeEntonces:
             'km': 1050, 'clave_idempotencia': 'k-ana-vieja',
             'ts_dispositivo': vieja}, headers=_auth(relevo['t_a']))
         assert r.status_code == 403
+
+    def test_la_hora_creible_tiene_sus_dos_bordes(self):
+        """La MISMA ventana que decide el día: ni adelantada más de 10 min ni
+        de más de 7 días atrás. Fuera de ella, manda el presente."""
+        from flota.dominio.cola import instante_creible
+
+        ahora = datetime(2026, 9, 29, 12)
+        assert instante_creible(None, ahora) is None
+        assert instante_creible(ahora - timedelta(days=6), ahora) == ahora - timedelta(days=6)
+        assert instante_creible(ahora - timedelta(days=8), ahora) is None
+        assert instante_creible(ahora + timedelta(minutes=5), ahora) is not None
+        assert instante_creible(ahora + timedelta(minutes=30), ahora) is None
 
     def test_sin_la_cola_tampoco(self, client, relevo):
         r = client.post('/flota/hallazgos', json={
@@ -265,6 +324,32 @@ class TestLasPantallas:
             "Promise.race([_condDB.enqueue({a: 1}).then(() => 'guardado', "
             "() => 'rechazado'), new Promise(r => setTimeout(() => r('colgado'), 500))])"
         )) == 'rechazado'
+
+    def test_un_guardado_que_nunca_termina_no_cuelga_la_cola(self, tmp_path):
+        """Ni `complete` ni `abort`: la cola corta por tiempo (los relojes de
+        diez segundos o más corren cien veces más rápido en el arnés)."""
+        colgado = (_IDB_LLENO_SRC.replace(
+            "if (r.onsuccess) r.onsuccess();\n            setTimeout(() => { tx.error = { name: 'QuotaExceededError' };\n"
+            "                               if (tx.onabort) tx.onabort({ target: tx }); }, 0);",
+            "if (r.onsuccess) r.onsuccess();"))
+        assert colgado != _IDB_LLENO_SRC
+        r = _correr_con_idb(tmp_path, colgado, (
+            "(() => { const st = setTimeout; globalThis.setTimeout = (f, ms, ...a) =>"
+            " st(f, ms >= 10000 ? ms / 100 : ms, ...a);"
+            " return Promise.race([flotaColaRegistrar('tanqueo', 'tanqueo', 'THP696', {km: 1})"
+            ".then(x => x.estado), new Promise(r => st(() => r('colgado'), 3000))]); })()"))
+        assert r == 'perdido'
+
+    def test_lo_resuelto_por_flota_sale_con_su_mensaje(self, tmp_path):
+        from tests.flota.test_mi_camion_hoy_js import _correr
+
+        s = _correr(tmp_path,
+                    "flotaColaEnviarUna({tipo: 'tanqueo', cuerpo: {km: 1}})",
+                    respuestas=[{'status': 200, 'json': {
+                        'ya_resuelto_por_flota': True,
+                        'mensaje': 'Control de flota ya lo resolvió: a mano.'}}])
+        assert s['estado'] == 'hecho'
+        assert s['mensaje'] == 'Control de flota ya lo resolvió: a mano.'
 
     def test_sin_espacio_el_conductor_lee_que_hacer(self, tmp_path):
         r = _correr_disco_lleno(tmp_path, (
