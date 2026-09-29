@@ -4081,11 +4081,12 @@ class ConteoService:
         operario_forzado = None
         if operario_id is not None:
             # Un conteo forzado a alguien es un push: tiene que hacer conteos
-            # rutinarios en este almacén y estar en turno (`asignacion`).
+            # rutinarios en este almacén y no estar ausente ni inactivo. «Sin
+            # señal» no bloquea: lo decide el líder (`exige_senal=False`).
             from app.services import asignacion
             try:
                 operario_forzado = asignacion.exigir_asignable(
-                    operario_id, asignacion.CONTEO, almacen_id=almacen_id)
+                    operario_id, asignacion.CONTEO, almacen_id=almacen_id, exige_senal=False)
             except LookupError as e:
                 raise ValueError(str(e)) from e
 

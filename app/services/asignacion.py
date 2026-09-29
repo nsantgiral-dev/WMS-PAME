@@ -167,25 +167,30 @@ def motivo_no_elegible(usuario, tipo: str, *, almacen_id=None, bodega=None):
 # La política: puesto + presencia
 # ─────────────────────────────────────────────────────────────────────────────
 
-def motivo_no_asignable(usuario, tipo: str, *, ahora=None, **ctx):
-    """¿Por qué no se le puede asignar `tipo` a `usuario` ahora? Texto o `None`."""
+def motivo_no_asignable(usuario, tipo: str, *, ahora=None, exige_senal: bool = True, **ctx):
+    """¿Por qué no se le puede asignar `tipo` a `usuario` ahora? Texto o `None`.
+
+    `exige_senal=False` (el conteo manual que un líder le da a alguien en
+    particular, decisión del dueño 2026-09-29): «sin señal» no bloquea —el
+    líder sabe quién vino aunque todavía no haya abierto la aplicación—; una
+    ausencia declarada y un usuario inactivo siguen bloqueando."""
     m = motivo_no_elegible(usuario, tipo, **ctx)
     if m:
         return m
     p = presencia.estado(usuario, ahora=ahora)
-    if not p['disponible']:
+    if not p['disponible'] and not (not exige_senal and p['codigo'] == presencia.SIN_SENAL):
         return f'{usuario.nombre} {p["texto"]}: no se le asigna trabajo'
     return None
 
 
-def exigir_asignable(usuario_id, tipo: str, **ctx):
+def exigir_asignable(usuario_id, tipo: str, *, exige_senal: bool = True, **ctx):
     """La persona, si se le puede asignar `tipo` ahora; si no, `NoAsignable`.
     Para las acciones de un líder: el motivo vuelve a la pantalla."""
     from app.models.usuario import Usuario
     u = db.session.get(Usuario, int(usuario_id)) if usuario_id else None
     if u is None:
         raise LookupError(f'Operario {usuario_id} no encontrado o inactivo')
-    m = motivo_no_asignable(u, tipo, **ctx)
+    m = motivo_no_asignable(u, tipo, exige_senal=exige_senal, **ctx)
     if m:
         raise NoAsignable(m)
     return u
@@ -541,7 +546,7 @@ def devolver_trabajo_de(usuario_id: int, *, motivo: str, en_curso_desde=None,
              MOTIVO_INACTIVO: 'Su dueño está inactivo'}.get(motivo, motivo)
     origen = origen or ('barrido de asignaciones' if por_id is None else None)
     out = {'conteos': 0, 'picking': 0, 'reposicion': 0, 'conservados_en_curso': 0,
-           'requieren_decision': []}
+           'conservados_manuales': 0, 'requieren_decision': []}
 
     def _bloqueadas(q):
         return q.with_for_update(skip_locked=True).populate_existing().all()
@@ -550,6 +555,12 @@ def devolver_trabajo_de(usuario_id: int, *, motivo: str, en_curso_desde=None,
         [EstadoConteo.EN_PROCESO] if en_curso_desde is not None else [])
     for s in _bloqueadas(SesionConteo.query.filter(SesionConteo.operario_id == usuario_id,
                                                    SesionConteo.estado.in_(estados_conteo))):
+        if motivo == MOTIVO_SIN_SENAL and s.tipo == 'MANUAL':
+            # Un conteo manual lo dio un líder a esta persona a sabiendas de que
+            # no tenía señal (`exige_senal=False`): «sin señal» no se lo quita.
+            # La ausencia declarada y el usuario inactivo sí.
+            out['conservados_manuales'] += 1
+            continue
         if s.estado == EstadoConteo.EN_PROCESO and not en_curso_abandonado(
                 s.ultima_actividad_at or s.fecha_inicio, en_curso_desde):
             out['conservados_en_curso'] += 1

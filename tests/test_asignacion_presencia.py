@@ -631,6 +631,72 @@ class TestLasPuertas:
                        json={'operario_id': nb1['luis'].id, 'motivo_edicion': 'x'})
         assert r.status_code == 400 and 'vacaciones' in r.get_json()['error'], r.get_json()
 
+    def _producto_con_stock(self, db, almacen):
+        from app.models.producto import Producto
+        from app.models.ubicacion import Ubicacion
+        from app.models.inventario import UbicacionProducto
+        _N[0] += 1
+        p = Producto(codigo=f'MAN{_N[0]}', nombre=f'Man {_N[0]}', codigo_siesa=f'MAN{_N[0]}')
+        ub = Ubicacion(codigo=f'MAN-U{_N[0]}', almacen_id=almacen.id, tipo_zona='GENERAL',
+                       stock_minimo=0, stock_maximo=999, secuencia_ruteo=_N[0], activo=True)
+        db.session.add_all([p, ub])
+        db.session.flush()
+        db.session.add(UbicacionProducto(ubicacion_id=ub.id, producto_id=p.id, cantidad=5))
+        db.session.commit()
+        return p
+
+    def test_el_conteo_manual_se_le_da_a_quien_no_ha_dado_senal(self, db, nb1):
+        """Decisión del dueño (2026-09-29): el líder sabe quién vino aunque
+        todavía no haya abierto la aplicación. «Sin señal» no bloquea el
+        conteo manual; y el barrido no se lo quita."""
+        from app.services import asignacion
+        from app.services.conteo_service import ConteoService
+        nuevo = _persona(db, nb1['almacen'], 'Recien', senal=False)
+        p = self._producto_con_stock(db, nb1['almacen'])
+        r = ConteoService.crear_conteo_manual(nb1['almacen'].id, p.codigo, operario_id=nuevo.id)
+        from app.models.conteo import SesionConteo
+        assert r['operario_id'] == nuevo.id
+        sid = SesionConteo.query.filter_by(codigo=r['codigos'][0]).one().id
+        assert _sesion(db, sid).operario_id == nuevo.id
+        asignacion.barrer()
+        assert _sesion(db, sid).operario_id == nuevo.id, (
+            'el barrido le quitó el conteo manual que el líder le dio')
+
+    def test_el_barrido_si_suelta_lo_rutinario_de_quien_no_da_senal(self, db, nb1):
+        from app.services import asignacion
+        nuevo = _persona(db, nb1['almacen'], 'SinSenal', senal=False)
+        rutina = _conteo(db, nb1['almacen'], operario=nuevo)
+        manual = _conteo(db, nb1['almacen'], operario=nuevo, tipo='MANUAL')
+        asignacion.barrer()
+        assert _sesion(db, rutina.id).operario_id is None
+        assert _sesion(db, manual.id).operario_id == nuevo.id
+
+    def test_el_conteo_manual_a_un_ausente_se_sigue_rechazando(self, db, nb1):
+        from app.services import presencia
+        from app.services.conteo_service import ConteoService
+        presencia.declarar_ausencia(nb1['luis'].id, 'INCAPACIDAD', por_id=nb1['sup'].id)
+        p = self._producto_con_stock(db, nb1['almacen'])
+        with pytest.raises(Exception, match='incapacidad'):
+            ConteoService.crear_conteo_manual(nb1['almacen'].id, p.codigo,
+                                              operario_id=nb1['luis'].id)
+
+    def test_el_manual_de_un_ausente_si_se_suelta(self, db, nb1):
+        from app.services import asignacion, presencia
+        manual = _conteo(db, nb1['almacen'], operario=nb1['luis'], tipo='MANUAL')
+        presencia.declarar_ausencia(nb1['luis'].id, 'INCAPACIDAD', por_id=nb1['sup'].id)
+        db.session.commit()
+        asignacion.barrer()
+        assert _sesion(db, manual.id).operario_id is None
+
+    def test_reasignar_sigue_exigiendo_senal(self, db, nb1):
+        """Solo el conteo manual se relajó: reasignar por /editar sigue
+        pidiendo que la persona esté."""
+        from app.services.conteo_service import ConteoService
+        nuevo = _persona(db, nb1['almacen'], 'OtroSin', senal=False)
+        s = _conteo(db, nb1['almacen'])
+        with pytest.raises(ValueError, match='no se le asigna trabajo'):
+            ConteoService.reasignar_operario(s, nuevo.id)
+
     def test_forzar_un_conteo_a_la_jefa_se_rechaza(self, db, nb1):
         from app.services.conteo_service import ConteoService
         s = _conteo(db, nb1['almacen'])
@@ -930,7 +996,9 @@ vm.runInContext(`
     if (u.startsWith('/api/asignacion/equipo')) return __equipo;
     if (u.startsWith('/api/dashboard/productividad')) return { operarios: [] };
     if (u.startsWith('/api/asignacion/candidatos')) return { disponibles: [{ id: 1, nombre: 'Ana' }],
-      no_disponibles: [{ id: 9, nombre: 'Pedro', presencia_texto: 'ausente' }] };
+      no_disponibles: [{ id: 9, nombre: 'Pedro', presencia: 'AUSENTE', presencia_texto: 'ausente' },
+                       { id: 11, nombre: 'Carlos', presencia: 'SIN_SENAL',
+                         presencia_texto: 'no ha dado señal en las últimas 2 h' }] };
     return {}; };
   post = async (u, b) => { __posts.push([u, b]);
     if (u === '/api/conteo/asignar-lote') return { asignadas: 40, quedan_en_pool: 32,
@@ -1025,6 +1093,10 @@ class TestLasPantallas:
         assert 'tipo=CONTEO' in js['urlCand'] and 'almacen_id=7' in js['urlCand']
         assert '<option value="1">Ana</option>' in js['selector']
         assert 'value="no-9" disabled' in js['selector']
+
+    def test_el_selector_deja_elegir_a_quien_no_ha_dado_senal(self, js):
+        assert '<option value="11">Carlos (todavía no ha abierto la aplicación)</option>'             in js['selector']
+        assert 'no-11' not in js['selector']
 
     def test_operarios_muestra_presencia_carga_y_lo_por_decidir(self, js):
         eq = js['equipo']
