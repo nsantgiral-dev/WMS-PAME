@@ -3397,7 +3397,8 @@ class ConteoService:
     def crear_conteo_manual(almacen_id: int, producto_codigo: str, operario_id: int = None) -> dict:
         """
         Crea sesiones de conteo manual para todas las ubicaciones donde hay stock
-        del producto en el almacén.
+        del producto en el almacén — o una en `SIESA-GENERAL` si no tiene
+        ninguna (ver el comentario junto a `ubicacion_ids`).
 
         Si una ubicación ya tiene una sesión PENDIENTE (creada por el barrido
         DIARIO_ABC u otro conteo manual, pero nadie la ha abierto todavía), la
@@ -3460,11 +3461,24 @@ class ConteoService:
                 Ubicacion.almacen_id == almacen_id
             ).all()
         )
-        if not registros:
-            raise ValueError('El producto no tiene stock registrado en este almacén')
+        # Sin ubicación en el almacén se cuenta en `SIESA-GENERAL`, no se
+        # rechaza. El WMS arma el stock de la bodega con el sync de Siesa: si
+        # Siesa no tiene fila del ítem, el WMS tampoco le da ubicación — y la
+        # mercancía que está en el estante sin que ninguno de los dos la
+        # conozca era justo lo único que el conteo no podía corregir (QA,
+        # 2026-09-29: de 4.841 SKUs con ubicación en NB1, cero sin fila en
+        # Siesa). Es el mismo bucket donde el sync pondrá lo que ajuste el
+        # conteo, y el operario ve «búscalo en toda la bodega» (`es_fisica`).
+        if registros:
+            ubicacion_ids = list(dict.fromkeys(r.ubicacion_id for r in registros))
+        else:
+            from app.services.inventario_siesa_service import _get_o_crear_ubicacion_general
+            ubicacion_ids = [_get_o_crear_ubicacion_general(almacen_id).id]
+            logger.info(
+                '[CONTEO MANUAL] %s sin ubicación en almacén %s — se cuenta en %s',
+                codigo, almacen_id, Ubicacion.CODIGO_GENERAL)
 
         # Pre-cargar sesiones activas en una sola query — evita N+1 en el loop
-        ubicacion_ids = [r.ubicacion_id for r in registros]
         activas_por_ubicacion = {
             s.ubicacion_id: s
             for s in SesionConteo.query.filter(
@@ -3479,8 +3493,8 @@ class ConteoService:
         omitidas = 0
         from app.utils.fecha import fecha_hoy_bogota
         hoy = fecha_hoy_bogota()
-        for reg in registros:
-            existente = activas_por_ubicacion.get(reg.ubicacion_id)
+        for ubicacion_id in ubicacion_ids:
+            existente = activas_por_ubicacion.get(ubicacion_id)
             if existente:
                 # Sin operario forzado no hay nada que reclamar — mismo
                 # comportamiento de siempre (evita duplicar sobre un PENDIENTE
@@ -3500,7 +3514,7 @@ class ConteoService:
                 codigo=sesion_codigo,
                 tipo='MANUAL',
                 clasificacion_abc=producto.clasificacion_abc or 'C',
-                ubicacion_id=reg.ubicacion_id,
+                ubicacion_id=ubicacion_id,
                 almacen_id=almacen_id,
                 producto_id=producto.id,
                 producto_codigo_siesa=producto.codigo_siesa,
