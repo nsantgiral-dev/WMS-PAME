@@ -8007,7 +8007,8 @@ fuera de 3 declarados; meta-tests y piso; la migración contra un SQLite propio)
 **Lo que NO cubre:** ~~el job `AJUSTE_CONTEO` aplica el delta al hueco de la
 sesión con piso 0 y «el resto lo rehace la carga de las 7:00»~~ — falso,
 corregido el 2026-09-29 (ver «La unidad SKU × almacén, completa»). El intercalado de
-`mobile_service` sigue ofreciendo conteos por hueco (C5, con v3). Las sesiones
+`mobile_service` ~~sigue ofreciendo conteos por hueco~~ ofrece la cadena del SKU
+que se pickea en ese almacén desde la integración final (2026-09-29). Las sesiones
 viejas con ubicación física siguen válidas: el HUD nombra todos los lugares.
 
 ## Conteo: quien cuenta no firma solo, y nadie ve las cifras antes del definitivo (2026-09-27, C2)
@@ -8108,9 +8109,8 @@ ya difería del teórico al contar, esa diferencia queda (solo el MATCH lleva el
 WMS a lo contado). P2 abiertos: `ultimo_conteo_por_sku` no mira
 `fuente_existencia`; «no cuente lo empacado» mezcla lo remisionado con lo que
 Siesa todavía cuenta; cifras ocultas a toda supervisión (VAL-6); la auditoría
-de picking manda el total del WMS como conteo (VAL-8). `m051conteo` quedó
-encadenada detrás de `m051flotalegal`; al integrar v3, re-encadenar con
-`m051asignacion`.
+de picking manda el total del WMS como conteo (VAL-8). `m051conteo` baja de
+`m051asignacion` desde la integración final (2026-09-29).
 
 ---
 
@@ -8312,3 +8312,55 @@ reconciliación (`verificado_de_ruta`) lee solo el acta original, no las
 complementarias; el efectivo tardío de una ruta ya contada no aparece en
 «efectivo en poder» (sí en «Caja por recibir»).
 
+---
+
+## Integración final: compras B/E/F/G + asignación + conteo C1-C3 + flota cola + liquidación L1-L5 (2026-09-29)
+
+**Migraciones, una cabeza:** `m052comprasc → m051comprasf → m052comprasg →
+m051asignacion → m051conteo → m051flotakm → m051liqcaja`. Probada
+upgrade/downgrade/upgrade en un PostgreSQL local desechable, más los tests
+`-m postgres` contra otra base vacía.
+
+**La costura que había que resolver, no solo juntar.** La asignación por
+presencia mudó el «conflicto de hueco» del CC2 a
+`asignacion.elegir_para_segundo_conteo`, y C1 hizo que la unidad del conteo
+fuera SKU × almacén. Juntos, el reparto medía por hueco una cadena que ya no
+vive en un hueco. **Ahora:** el conflicto del CC2 se mide por (producto,
+almacén), y el intercalado de `mobile_service` ofrece la cadena del SKU que se
+pickea en ese almacén (antes solo si, por azar, vivía en el hueco del picking;
+sigue sin intercalar si el picking está en una ubicación no física).
+**Trinquete:** `tests/test_conteo_unidad_sku_almacen.py` — `POR_HUECO` baja de
+3 a 1, `POR_HUECO_DE_UN_OBJETO` queda vacío y `asignacion.py` entra a su
+dominio; los pisos devuelven EN MEMORIA la forma vieja al código real y exigen
+verla. Test de conducta:
+`test_conteo_hud_operario.py::…::test_se_intercala_la_cadena_del_sku_que_se_pickea_aunque_viva_en_otro_lugar`.
+Dos mutaciones (el filtro del intercalado y el del CC2 vueltos al hueco), rojas.
+
+**Las otras costuras, cada una con su guard en rojo antes del arreglo:**
+- El cron de `compras_rop` (m052comprasg) entra a la lista cruzada de
+  `test_schedulers_declaran`.
+- El trinquete de decisiones de compra mira `.anulada_en` por nombre:
+  `presencia.anular_ausencia` (`AusenciaUsuario`) y `caja_conductor.anular_acta`
+  (`EntregaCaja`) van a `ANULAN_OTRO_MODELO`, con la condición de que su
+  archivo no nombre `DecisionCompra`.
+- `POST /api/mobile/regrese` (asignación) lo atravesaban conductor, tienda,
+  flota, cartera y liquidador: ahora exige `_opera_almacen` (la lista blanca).
+- «Devolver a la cola» un picking a medio recoger es otra puerta al pool:
+  pregunta `motivo_caja_no_recibe` como Reabrir y, con la caja cerrada o
+  despachada, se niega (`test_picking_caja_que_no_recibe`).
+- `existencia_wms_del_sku` (C1) suma todas las zonas: declarada en
+  `test_agregar_stock_declara_la_zona` como **aplazamiento** — si una avería ya
+  pasó a AV1 en Siesa y el WMS la sigue teniendo en la zona de averías, este
+  total la cuenta y Siesa no. La decisión es del frente de conteo.
+- `INV-01`: el job `AJUSTE_CONTEO` ya escribe el libro (C1/VAL-2), así que su
+  detector ciego ya no puede apoyarse en él; escribe la violación como el
+  escritor sin libro, y un test nuevo fija que el job no la vuelve a producir.
+
+**Locks:** `LOCK_ASIGNACION_BARRIDO=2030`, `LOCK_ACTA_CAJA=2075`,
+`LOCK_COMPRAS_ROP=2085`; `test_advisory_locks` sin choques.
+
+**Lo que NO cubre:** el conflicto del CC2 por SKU × almacén casi nunca se
+activa (el índice de una cadena viva por SKU × almacén deja como único
+candidato en conflicto al del CC1, que ya excluye el doble ciego); se deja por
+coherencia, no por un caso medido. El intercalado no mira si el SKU tiene
+otros huecos lejos del picking: el HUD los nombra todos y pide un total.
