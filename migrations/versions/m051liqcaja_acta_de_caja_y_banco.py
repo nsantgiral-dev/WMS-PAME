@@ -1,7 +1,7 @@
 """Acta de entrega de caja del conductor y verificación bancaria de los pagos
 
 Revision ID: m051liqcaja
-Revises: m050inv2
+Revises: m051flotakm (re-encadenada en la integración final del 2026-09-29; se escribió sobre m050inv2)
 Create Date: 2026-09-27
 
 Aditiva, sin backfill.
@@ -19,7 +19,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision = 'm051liqcaja'
-down_revision = 'm050inv2'
+down_revision = 'm051flotakm'
 branch_labels = None
 depends_on = None
 
