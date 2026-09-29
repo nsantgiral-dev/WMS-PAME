@@ -5,7 +5,7 @@ from flask import Blueprint, request, jsonify, current_app
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from app.extensions import db
 from app.models.conteo import SesionConteo, EstadoConteo
-from app.services.conteo_service import ConteoService
+from app.services.conteo_service import ConteoService, CostoRequerido
 from app.services.abc_service import ABCService, RezagoCambioDesdeLaVistaPrevia
 from app.routes._auth_helpers import Roles, _es_personal_almacen
 
@@ -197,18 +197,25 @@ def confirmar_ajuste(id):
     no_aprueba = ConteoService.motivo_no_aprueba_ningun_ajuste(usuario)
     if no_aprueba:
         return jsonify({'error': no_aprueba}), 403
+    data = request.get_json(silent=True) or {}
     try:
-        sesion = ConteoService.confirmar_ajuste(id, supervisor_id)
+        sesion = ConteoService.confirmar_ajuste(
+            id, supervisor_id, costo_unitario=data.get('costo_unitario'))
         # [A22] 202 cuando el ajuste está encolado en DLQ (AJUSTANDO) — el supervisor
         # sabe que no completó todavía y no cierra la pantalla prematuramente.
         # 200 solo cuando siesa_triggered=True (Siesa ya confirmó el ajuste).
         http_status = 200 if sesion.siesa_triggered else 202
+        costo = ConteoService._costo_aprobado(sesion.id)
+        con_costo = (f' — entra a ${costo["costo_unitario"]:,.0f} c/u ({costo["costo_fuente"]})'
+                     if costo else '')
         return jsonify({
             'mensaje': (
-                f'Ajuste {sesion.motivo_codigo} confirmado — Siesa ya procesó'
+                f'Ajuste {sesion.motivo_codigo} confirmado — Siesa ya procesó{con_costo}'
                 if sesion.siesa_triggered
-                else f'Ajuste {sesion.motivo_codigo} encolado — pendiente de sincronización con Siesa'
+                else f'Ajuste {sesion.motivo_codigo} encolado — pendiente de sincronización con Siesa{con_costo}'
             ),
+            'costo_unitario': costo.get('costo_unitario'),
+            'costo_fuente': costo.get('costo_fuente'),
             'diferencia': sesion.diferencia,
             'motivo_codigo': sesion.motivo_codigo,
             'siesa_triggered': sesion.siesa_triggered,
@@ -217,6 +224,11 @@ def confirmar_ajuste(id):
     except PermissionError as e:
         db.session.rollback()
         return jsonify({'error': str(e)}), 403
+    except CostoRequerido as e:
+        # Entrada sin costo en ninguna fuente: la pantalla pide el costo y
+        # vuelve a mandar la aprobación con `costo_unitario`.
+        db.session.rollback()
+        return jsonify({'error': str(e), 'requiere_costo': True}), 409
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
     except Exception as e:

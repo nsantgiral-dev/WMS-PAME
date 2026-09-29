@@ -431,7 +431,7 @@ def hoy_operativo():
     return dia_operativo()
 
 
-def foto_siesa(existencia, cant_pos=0.0, salida_sin_conf=None):
+def foto_siesa(existencia, cant_pos=0.0, salida_sin_conf=None, costo_prom_uni=None):
     """Una foto de Siesa como la devuelve `ConteoService.consultar_foto_siesa`.
 
     Para stubear la lectura del conteo en tests que no hablan de POS: sin
@@ -451,6 +451,9 @@ def foto_siesa(existencia, cant_pos=0.0, salida_sin_conf=None):
         'comprometida': None,
         'teorico': ConteoService.teorico(float(existencia), float(cant_pos)),
         'leido_at': datetime.utcnow(),
+        # Sin costo por defecto (lo de siempre). Una ENTRADA sin costo en la
+        # bodega pide costo explícito (`ConteoService._costo_de_la_entrada`).
+        'costo_prom_uni': costo_prom_uni,
     }
 
 

@@ -22,6 +22,13 @@ class ConteoNoReasignable(ValueError):
     """El conteo ya se contó o cerró: no cambia de dueño (la ruta: 409)."""
 
 
+class CostoRequerido(ValueError):
+    """Una entrada de ajuste sin costo en la bodega y sin costo en ninguna
+    fuente (`costo_service.costo_entrada_ajuste` → None): no sale sin que
+    quien la aprueba escriba el costo unitario (la ruta: 409 con
+    `requiere_costo`). Nunca entra a Siesa en $0 sin que alguien lo decida."""
+
+
 class ConteoService:
 
     @staticmethod
@@ -2932,13 +2939,81 @@ class ConteoService:
             )
 
     @staticmethod
+    def _costo_aprobado(sesion_id: int) -> dict:
+        """El costo de entrada que llevó el último AJUSTE_CONTEO de la sesión
+        (`{}` si ninguno lo llevaba)."""
+        import json
+        from app.models.siesa_job import SiesaJob
+        jobs = (SiesaJob.query
+                .filter_by(referencia_tipo='SesionConteo', referencia_id=sesion_id,
+                           tipo='AJUSTE_CONTEO')
+                .order_by(SiesaJob.id.desc()).all())
+        for job in jobs:
+            try:
+                payload = json.loads(job.payload or '{}')
+            except (TypeError, ValueError):
+                continue
+            if payload.get('costo_unitario') is not None:
+                return {'costo_unitario': payload['costo_unitario'],
+                        'costo_fuente': payload.get('costo_fuente')}
+        return {}
+
+    @staticmethod
+    def necesita_costo_explicito(sesion: SesionConteo) -> bool:
+        """¿Una entrada de ajuste de esta sesión entraría a Siesa en $0?
+
+        Sí cuando el promedio de la bodega que leyó el conteo es desconocido
+        o ≤ 0: sin fila en Siesa (la fila en cero no trae costo) o con una
+        fila de costo 0. Con promedio > 0 no hace falta: Siesa lo usa solo.
+        """
+        costo = sesion.costo_prom_uni_siesa
+        return costo is None or float(costo) <= 0
+
+    @staticmethod
+    def _costo_de_la_entrada(sesion: SesionConteo, motivo_codigo: str,
+                             bodega_siesa: str, costo_unitario_manual=None):
+        """El costo unitario explícito de una ENTRADA de ajuste, o `None`
+        si no lleva (salida, o bodega con promedio: Siesa usa el suyo).
+
+        Niveles (decisión del dueño, 2026-09-29): el de Siesa en otras
+        bodegas, la política de costo del WMS, y solo si ninguno sabe, el que
+        escribe quien aprueba. Sin ninguno → `CostoRequerido`: el ajuste no
+        sale en $0 (ADI-00000040 de QA entró 10 und sin asiento).
+        """
+        import math
+        if motivo_codigo != 'AJ-ENT' or not ConteoService.necesita_costo_explicito(sesion):
+            return None
+        from app.services.costo_service import costo_entrada_ajuste
+        resuelto = costo_entrada_ajuste(sesion.producto_codigo_siesa, bodega_siesa)
+        if resuelto:
+            return resuelto
+        if costo_unitario_manual is not None:
+            try:
+                manual = float(costo_unitario_manual)
+            except (TypeError, ValueError):
+                manual = None
+            if manual is None or not math.isfinite(manual) or manual <= 0:
+                raise CostoRequerido(
+                    f'El costo unitario de {sesion.producto_codigo_siesa} tiene que '
+                    f'ser un número mayor que cero.')
+            return {'costo': round(manual, 4), 'fuente': 'MANUAL',
+                    'detalle': 'escrito por quien aprobó el ajuste'}
+        raise CostoRequerido(
+            f'{sesion.producto_codigo_siesa} no tiene costo en {bodega_siesa} ni en '
+            f'ninguna otra bodega de Siesa, ni en la política de costo del WMS. '
+            f'Escriba el costo unitario con que entra: sin él entraría a Siesa en $0.')
+
+    @staticmethod
     def _encolar_ajuste_fisico(sesion: SesionConteo, aprobador_id: int = None, *,
-                               exige_foto_inicio: bool = True) -> None:
+                               exige_foto_inicio: bool = True,
+                               costo_unitario_manual=None) -> None:
         """
         SRP: única responsabilidad — calcular el delta con la foto de Siesa que
         la sesión guardó AL CONTAR (`cantidad_fisica − teorico_siesa`) y encolar
-        el job AJUSTE_CONTEO en DLQ. **No consulta Siesa**: una lectura acá
-        mezclaría el instante de la aprobación con el del conteo.
+        el job AJUSTE_CONTEO en DLQ. **El delta no consulta Siesa**: una lectura
+        acá mezclaría el instante de la aprobación con el del conteo. La única
+        lectura es la del COSTO de una entrada sin promedio en la bodega
+        (`_costo_de_la_entrada`), que no toca la cantidad.
         No hace commit — el caller lo hace.
         Pre-condición: sesion.estado == DESCUADRE y sesion.cantidad_fisica is not None.
         """
@@ -3040,6 +3115,8 @@ class ConteoService:
         )
         motivo_codigo = 'AJ-ENT' if diferencia > 0 else 'AJ-SAL'
         cantidad_ajuste = abs(diferencia)
+        costo = ConteoService._costo_de_la_entrada(
+            sesion, motivo_codigo, bodega_siesa, costo_unitario_manual)
 
         sesion.diferencia = diferencia
         sesion.motivo_codigo = motivo_codigo
@@ -3060,11 +3137,20 @@ class ConteoService:
                 'producto_id': sesion.producto_id,
                 'bodega': bodega_siesa,
                 'centro_op': centro_op_siesa,
+                # Solo una entrada sin costo en la bodega lo lleva: vacío,
+                # Siesa usa su promedio (`_costo_de_la_entrada`).
+                'costo_unitario': costo['costo'] if costo else None,
+                'costo_fuente': costo['fuente'] if costo else None,
             },
             referencia_tipo='SesionConteo',
             referencia_id=sesion.id,
             creado_por_id=aprobador_id,
         )
+        if costo:
+            logger.info(
+                '[CONTEO] Entrada %s de %s en %s sin costo en la bodega: va a $%s '
+                'c/u — %s (%s)', sesion.codigo, sesion.producto_codigo_siesa,
+                bodega_siesa, costo['costo'], costo['fuente'], costo.get('detalle'))
         logger.info(
             f'[CONTEO] Ajuste {motivo_codigo} encolado en DLQ '
             f'(aprobador={aprobador_id or "AUTO"}) — '
@@ -3202,8 +3288,18 @@ class ConteoService:
                 f'{no_puede} Sesión {sesion.codigo} queda en DESCUADRE.'
             )
             return sesion
-        ConteoService._encolar_ajuste_fisico(sesion, aprobador_id=aprobador_id,
-                                             exige_foto_inicio=False)
+        try:
+            ConteoService._encolar_ajuste_fisico(sesion, aprobador_id=aprobador_id,
+                                                 exige_foto_inicio=False)
+        except CostoRequerido as e:
+            # Igual que sin firma: la auditoría se cierra y la entrada queda en
+            # DESCUADRE; el líder la aprueba en Por decidir escribiendo el costo.
+            logger.warning(
+                f'[CONTEO] Auditoría de picking tarea={tarea.id} — '
+                f'{producto.codigo_siesa}: ajuste de {diferencia} NO encolado. '
+                f'{e} Sesión {sesion.codigo} queda en DESCUADRE.'
+            )
+            return sesion
         logger.warning(
             f'[CONTEO] Auditoría de picking tarea={tarea.id} — '
             f'{producto.codigo_siesa} ajuste {sesion.motivo_codigo} '
@@ -3279,7 +3375,7 @@ class ConteoService:
         return sesion
 
     @staticmethod
-    def confirmar_ajuste(sesion_id: int, supervisor_id: int):
+    def confirmar_ajuste(sesion_id: int, supervisor_id: int, costo_unitario=None):
         """
         Después del segundo conteo confirma el descuadre y dispara ajuste a Siesa.
         Consulta existencia fiscal en Siesa en este momento (no durante el conteo).
@@ -3365,6 +3461,19 @@ class ConteoService:
                 'bodega': _alm.bodega_siesa_id if _alm else None,
                 'centro_op': _alm.centro_op_siesa if _alm else None,
             }
+            # El costo que se decidió al aprobar viaja con el ajuste: el
+            # re-encolado no lo vuelve a resolver (otro instante, quizá otra
+            # fuente). Sale del último job de esta sesión que lo llevaba.
+            costo_previo = ConteoService._costo_aprobado(sesion.id)
+            if not costo_previo:
+                # Un job de antes de que existiera el costo explícito: se
+                # resuelve ahora, con la misma política (nunca en $0).
+                resuelto = ConteoService._costo_de_la_entrada(
+                    sesion, motivo_reenc, payload_reenc['bodega'], costo_unitario)
+                if resuelto:
+                    costo_previo = {'costo_unitario': resuelto['costo'],
+                                    'costo_fuente': resuelto['fuente']}
+            payload_reenc.update(costo_previo)
             from app.models.siesa_job import SiesaJob as _SJ2
             _SJ2.encolar('AJUSTE_CONTEO', payload_reenc,
                          referencia_tipo='SesionConteo', referencia_id=sesion.id,
@@ -3378,7 +3487,8 @@ class ConteoService:
         if sesion.cantidad_fisica is None:
             raise ValueError('Faltan datos del conteo para generar ajuste')
 
-        ConteoService._encolar_ajuste_fisico(sesion, aprobador_id=supervisor_id)
+        ConteoService._encolar_ajuste_fisico(sesion, aprobador_id=supervisor_id,
+                                             costo_unitario_manual=costo_unitario)
 
         try:
             db.session.commit()

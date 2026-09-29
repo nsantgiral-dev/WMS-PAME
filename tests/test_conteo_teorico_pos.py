@@ -65,6 +65,10 @@ class SiesaFalsa:
         self.caida = False
         #: El maestro de ítems (`API_v2_Items`) tiene la referencia.
         self.en_maestro = True
+        #: El ítem en las OTRAS bodegas (`get_existencias_por_referencia`):
+        #: tuplas (bodega, existencia, costo promedio). Vacío = Siesa no tiene
+        #: costo del ítem en ninguna bodega.
+        self.otras_bodegas = []
 
     #: Costo unitario de la fila por defecto. Desde 2026-09-23 un ajuste sin
     #: costo no sale solo (`CONTEO_TOPE_AUTOAJUSTE`, Regla 0), así que la Siesa
@@ -97,6 +101,14 @@ class SiesaFalsa:
             raise ConnectionError('Siesa no responde')
         return {'detalle': {'Table': [dict(self.fila)] if self.fila else []}}
 
+    def existencias(self, *_a, **_k):
+        if self.caida:
+            raise ConnectionError('Siesa no responde')
+        return {'detalle': {'Table': [
+            {'f120_referencia': SKU, 'f150_id': f'{b:<5}',
+             'f400_cant_existencia_1': float(e), 'f400_costo_prom_uni': float(c)}
+            for b, e, c in self.otras_bodegas]}}
+
     def item(self, referencia):
         if not self.en_maestro:
             return None
@@ -116,7 +128,8 @@ def siesa(monkeypatch):
     completa (`test_bloqueo_cadena_traslado` parcheaba la instancia; ya no)."""
     from app.services.connekta_gateway import ConnektaGateway, connekta
     falsa = SiesaFalsa()
-    for metodo in ('get_inventario_fecha', 'buscar_item_por_referencia'):
+    for metodo in ('get_inventario_fecha', 'buscar_item_por_referencia',
+                   'get_existencias_por_referencia'):
         if metodo in vars(connekta):
             monkeypatch.delattr(connekta, metodo)
     monkeypatch.setattr(connekta, 'modo_simulacion', False)
@@ -124,6 +137,8 @@ def siesa(monkeypatch):
                         lambda self, codigo, bodega=None: falsa.respuesta(codigo, bodega))
     monkeypatch.setattr(ConnektaGateway, 'buscar_item_por_referencia',
                         lambda self, referencia: falsa.item(referencia))
+    monkeypatch.setattr(ConnektaGateway, 'get_existencias_por_referencia',
+                        lambda self, referencia: falsa.existencias(referencia))
     return falsa
 
 
@@ -342,9 +357,11 @@ class TestSinFilaEnSiesaEsCero:
         assert raiz.fuente_existencia == 'SIESA'
         assert (raiz.existencia_siesa, raiz.teorico_siesa, raiz.diferencia) == (0, 0, 21)
         assert _jobs(cc1_id) == []
+        siesa.otras_bodegas = [('FC1', 0, 1044)]
         ConteoService.confirmar_ajuste(cc1_id, tienda['supervisor'].id)
         p = _un_job(cc1_id)
         assert (p['motivo_codigo'], p['cantidad']) == ('AJ-ENT', 21)
+        assert p['costo_unitario'] == 1044, 'sin fila, la entrada lleva costo'
 
     def test_el_estante_vacio_contra_siesa_en_cero_es_match(self, db, siesa, tienda):
         siesa.fila = None
@@ -405,6 +422,153 @@ class TestSinFilaEnSiesaEsCero:
                 'codigo': 0, 'mensaje': 'Transacción Exitosa (sin resultados)',
                 'detalle': {'Table': []}})
         assert self._foto()['existencia'] == 0
+
+
+class TestLaEntradaSinCostoNoEntraEnCero:
+    """ADI-00000040 (QA, 2026-09-29): PAPELSP7877 sin fila en NB1, conteo 10,
+    ajuste aprobado → entró 10 und a costo $0, sin asiento contable. Una
+    entrada en una bodega sin costo promedio lleva costo explícito, en este
+    orden (decisión del dueño): Siesa en otras bodegas → política de costo
+    del WMS → lo escribe quien aprueba. Nunca $0 sin que alguien lo decida."""
+
+    def _descuadre(self, tienda, siesa, fisico=10):
+        siesa.fila = None
+        cc1_id, r1 = _cc1(tienda, fisico)
+        r2 = _cc2(tienda, r1, fisico)
+        assert r2['resultado'] == 'DESCUADRE', r2
+        return cc1_id
+
+    def test_nivel_1_promedio_ponderado_por_existencia(self, db, siesa, tienda):
+        from app.services.conteo_service import ConteoService
+        cc1_id = self._descuadre(tienda, siesa)
+        siesa.otras_bodegas = [('FC1', 10, 1000), ('NC1', 30, 1200), ('PC1', 0, 5000)]
+        ConteoService.confirmar_ajuste(cc1_id, tienda['supervisor'].id)
+        p = _un_job(cc1_id)
+        assert p['costo_unitario'] == 1150, '(10×1000 + 30×1200) / 40; PC1 sin unidades no pesa'
+        assert p['costo_fuente'] == 'SIESA_OTRAS_BODEGAS'
+
+    def test_nivel_1_sin_unidades_toma_el_costo_conocido_mas_alto(self, db, siesa, tienda):
+        from app.services.conteo_service import ConteoService
+        cc1_id = self._descuadre(tienda, siesa)
+        siesa.otras_bodegas = [('FC1', 0, 1044), ('NS2', 0, 900), ('PT1', 0, 0)]
+        ConteoService.confirmar_ajuste(cc1_id, tienda['supervisor'].id)
+        assert _un_job(cc1_id)['costo_unitario'] == 1044
+
+    def test_la_propia_bodega_no_cuenta(self, db, siesa, tienda):
+        """La fila de la bodega del ajuste es justo la que no tiene costo
+        útil: no es «otra bodega»."""
+        from app.services.conteo_service import ConteoService, CostoRequerido
+        cc1_id = self._descuadre(tienda, siesa)
+        siesa.otras_bodegas = [('NS1', 5, 777)]
+        with pytest.raises(CostoRequerido):
+            ConteoService.confirmar_ajuste(cc1_id, tienda['supervisor'].id)
+
+    def test_nivel_2_politica_de_costo_del_wms(self, db, siesa, tienda):
+        from app.services.conteo_service import ConteoService
+        cc1_id = self._descuadre(tienda, siesa)
+        tienda['producto'].precio_compra = 500
+        db.session.commit()
+        ConteoService.confirmar_ajuste(cc1_id, tienda['supervisor'].id)
+        p = _un_job(cc1_id)
+        assert (p['costo_unitario'], p['costo_fuente']) == (500, 'MAESTRO')
+
+    def test_nivel_1_gana_al_nivel_2(self, db, siesa, tienda):
+        from app.services.conteo_service import ConteoService
+        cc1_id = self._descuadre(tienda, siesa)
+        tienda['producto'].precio_compra = 500
+        db.session.commit()
+        siesa.otras_bodegas = [('FC1', 3, 1044)]
+        ConteoService.confirmar_ajuste(cc1_id, tienda['supervisor'].id)
+        assert _un_job(cc1_id)['costo_fuente'] == 'SIESA_OTRAS_BODEGAS'
+
+    def test_siesa_caido_en_el_costo_cae_al_nivel_2(self, db, siesa, tienda, monkeypatch):
+        from app.services.connekta_gateway import ConnektaGateway
+        from app.services.conteo_service import ConteoService
+        cc1_id = self._descuadre(tienda, siesa)
+        tienda['producto'].precio_compra = 500
+        db.session.commit()
+
+        def revienta(self, referencia):
+            raise ConnectionError('timeout')
+        monkeypatch.setattr(ConnektaGateway, 'get_existencias_por_referencia', revienta)
+        ConteoService.confirmar_ajuste(cc1_id, tienda['supervisor'].id)
+        assert _un_job(cc1_id)['costo_fuente'] == 'MAESTRO'
+
+    def test_nivel_3_sin_costo_no_sale_y_queda_en_descuadre(self, db, siesa, tienda):
+        from app.models.conteo import SesionConteo
+        from app.services.conteo_service import ConteoService, CostoRequerido
+        cc1_id = self._descuadre(tienda, siesa)
+        with pytest.raises(CostoRequerido, match='Escriba el costo unitario'):
+            ConteoService.confirmar_ajuste(cc1_id, tienda['supervisor'].id)
+        db.session.rollback()
+        assert db.session.get(SesionConteo, cc1_id).estado == 'DESCUADRE'
+        assert _jobs(cc1_id) == []
+
+    def test_nivel_3_con_el_costo_escrito_sale(self, db, siesa, tienda):
+        from app.services.conteo_service import ConteoService
+        cc1_id = self._descuadre(tienda, siesa)
+        ConteoService.confirmar_ajuste(cc1_id, tienda['supervisor'].id, costo_unitario=800)
+        p = _un_job(cc1_id)
+        assert (p['costo_unitario'], p['costo_fuente']) == (800, 'MANUAL')
+
+    @pytest.mark.parametrize('malo', [0, -1, 'abc'])
+    def test_nivel_3_un_costo_escrito_invalido_no_sale(self, db, siesa, tienda, malo):
+        from app.services.conteo_service import ConteoService, CostoRequerido
+        cc1_id = self._descuadre(tienda, siesa)
+        with pytest.raises(CostoRequerido, match='mayor que cero'):
+            ConteoService.confirmar_ajuste(cc1_id, tienda['supervisor'].id, costo_unitario=malo)
+
+    def test_el_costo_escrito_no_pisa_una_fuente_conocida(self, db, siesa, tienda):
+        from app.services.conteo_service import ConteoService
+        cc1_id = self._descuadre(tienda, siesa)
+        siesa.otras_bodegas = [('FC1', 2, 1044)]
+        ConteoService.confirmar_ajuste(cc1_id, tienda['supervisor'].id, costo_unitario=1)
+        assert _un_job(cc1_id)['costo_unitario'] == 1044
+
+    def test_con_promedio_en_la_bodega_no_lleva_costo(self, db, siesa, tienda):
+        """La fila con costo > 0: Siesa usa su promedio, como siempre."""
+        from app.services.conteo_service import ConteoService
+        siesa.poner(existencia=0, costo=1000.0)
+        cc1_id, r1 = _cc1(tienda, 10)
+        _cc2(tienda, r1, 10)
+        if _jobs(cc1_id) == []:
+            ConteoService.confirmar_ajuste(cc1_id, tienda['supervisor'].id)
+        p = _un_job(cc1_id)
+        assert p['motivo_codigo'] == 'AJ-ENT'
+        assert p['costo_unitario'] is None
+
+    def test_una_fila_con_costo_cero_tambien_lleva_costo(self, db, siesa, tienda):
+        """PAPELSP11926 en PC1 (QA): fila con promedio 0 — entraría en $0 igual."""
+        from app.services.conteo_service import ConteoService
+        siesa.poner(existencia=0, costo=0.0)
+        cc1_id, r1 = _cc1(tienda, 10)
+        _cc2(tienda, r1, 10)
+        siesa.otras_bodegas = [('FC1', 196, 16207)]
+        ConteoService.confirmar_ajuste(cc1_id, tienda['supervisor'].id)
+        assert _un_job(cc1_id)['costo_unitario'] == 16207
+
+    def test_la_salida_no_lleva_costo(self, db, siesa, tienda):
+        from app.services.conteo_service import ConteoService
+        siesa.poner(existencia=20, costo=None)
+        cc1_id, r1 = _cc1(tienda, 10)
+        _cc2(tienda, r1, 10)
+        ConteoService.confirmar_ajuste(cc1_id, tienda['supervisor'].id)
+        p = _un_job(cc1_id)
+        assert p['motivo_codigo'] == 'AJ-SAL'
+        assert p['costo_unitario'] is None
+
+    def test_la_ruta_pide_el_costo_y_lo_acepta(self, db, siesa, tienda, client):
+        from flask_jwt_extended import create_access_token
+        cc1_id = self._descuadre(tienda, siesa)
+        tok = create_access_token(identity=str(tienda['supervisor'].id))
+        h = {'Authorization': f'Bearer {tok}'}
+        r = client.put(f'/api/conteo/{cc1_id}/ajustar', json={}, headers=h)
+        assert r.status_code == 409, r.get_json()
+        assert r.get_json()['requiere_costo'] is True
+        r = client.put(f'/api/conteo/{cc1_id}/ajustar', json={'costo_unitario': 800}, headers=h)
+        assert r.status_code in (200, 202), r.get_json()
+        assert r.get_json()['costo_unitario'] == 800
+        assert '800' in r.get_json()['mensaje']
 
 
 class TestPOSMayorQueLaExistencia:

@@ -514,6 +514,89 @@ def resolver_costos(refs, margen_supuesto=MARGEN_SOBRE_PRECIO_DEFAULT):
     return salida
 
 
+def _costo_siesa_otras_bodegas(referencia, bodega):
+    """Nivel 1 de `costo_entrada_ajuste`: el costo con que Siesa ya lleva el
+    ítem en libros, en las OTRAS bodegas de la compañía.
+
+    Ponderado por existencia entre las bodegas con unidades y costo > 0. Si
+    ninguna tiene unidades, el costo conocido más alto (Regla 0 de este
+    módulo: ante duda, el más alto) — el promedio de una bodega en cero es su
+    último costo, no uno inventado. `None` si Siesa no contesta o no hay
+    ningún costo > 0: ahí manda el nivel siguiente.
+    """
+    import math
+    from app.services.connekta_gateway import connekta, _alerta_de
+    if connekta.modo_simulacion:
+        return None
+    try:
+        respuesta = connekta.get_existencias_por_referencia(referencia)
+    except Exception as e:
+        logger.warning('[COSTO] Existencias de %s en Siesa no disponibles (%s): '
+                       'el costo de la entrada sale del nivel siguiente.', referencia, e)
+        return None
+    detalle = (respuesta or {}).get('detalle')
+    tabla = detalle.get('Table') if isinstance(detalle, dict) else None
+    if not isinstance(tabla, list) or _alerta_de(tabla):
+        return None
+    propia = (bodega or '').strip().upper()
+    con_unidades, sin_unidades = [], []
+    for fila in tabla:
+        bod = str(fila.get('f150_id') or '').strip().upper()
+        if not bod or bod == propia:
+            continue
+        try:
+            costo = float(fila.get('f400_costo_prom_uni'))
+            cant = float(fila.get('f400_cant_existencia_1') or 0)
+        except (TypeError, ValueError):
+            continue
+        if not math.isfinite(costo) or costo <= 0:
+            continue
+        (con_unidades if cant > 0 else sin_unidades).append((bod, costo, cant))
+    if con_unidades:
+        total = sum(c for _, _, c in con_unidades)
+        costo = sum(p * c for _, p, c in con_unidades) / total
+        bodegas = ', '.join(f'{b} ({c:g} und a ${p:,.0f})' for b, p, c in con_unidades)
+        return {'costo': round(costo, 4), 'fuente': 'SIESA_OTRAS_BODEGAS',
+                'detalle': f'promedio de Siesa ponderado por existencia: {bodegas}'}
+    if sin_unidades:
+        bod, costo, _ = max(sin_unidades, key=lambda t: t[1])
+        return {'costo': round(costo, 4), 'fuente': 'SIESA_OTRAS_BODEGAS',
+                'detalle': f'último costo promedio de Siesa en {bod} (sin existencia hoy)'}
+    return None
+
+
+def costo_entrada_ajuste(referencia, bodega):
+    """Costo unitario de una ENTRADA de ajuste en una bodega donde Siesa no
+    tiene costo promedio del ítem (sin fila, o fila con costo 0).
+
+    Sin costo explícito Siesa valoriza la entrada con el promedio de la
+    bodega, que ahí es 0: la mercancía entra al inventario sin asiento y se
+    vende a costo $0 (ADI-00000040 en QA, 2026-09-29). Decisión del dueño, en
+    este orden:
+
+      1. SIESA_OTRAS_BODEGAS — el promedio de Siesa del ítem en las otras
+         bodegas (`_costo_siesa_otras_bodegas`);
+      2. la jerarquía de `resolver_costos` (acuerdo, cotización, OC, kardex,
+         maestro), si alguna tiene costo > 0;
+      3. `None` — nadie sabe: el ajuste no sale sin que quien lo aprueba
+         escriba el costo (`conteo_service.CostoRequerido`).
+
+    Returns: {costo, fuente, detalle} | None
+    """
+    ref = (referencia or '').strip()
+    if not ref:
+        return None
+    nivel_1 = _costo_siesa_otras_bodegas(ref, bodega)
+    if nivel_1:
+        return nivel_1
+    info = resolver_costos([ref]).get(ref) or {}
+    costo = float(info.get('costo') or 0)
+    if costo > 0 and info.get('fuente') != 'SIN_COSTO':
+        return {'costo': round(costo, 4), 'fuente': info['fuente'],
+                'detalle': f'política de costo del WMS ({info["fuente"]})'}
+    return None
+
+
 def resumen_por_fuente(costos):
     """Cobertura POR FUENTE, no binaria.
 

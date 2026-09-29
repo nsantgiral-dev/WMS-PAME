@@ -722,6 +722,23 @@ class ConnektaConsultasGateway:
             'parametros': f"f120_referencia = {_lit(item_codigo)} AND f150_id = {_lit(_bodega)}"
         }, timeout=8)
 
+    def get_existencias_por_referencia(self, item_codigo: str):
+        """API_v2_Inventarios_InvFecha del ítem en **todas** sus bodegas: una
+        fila por bodega (y lote/ubicación), con `f400_costo_prom_uni`.
+
+        Para el costo de una entrada de ajuste en una bodega sin promedio
+        (`costo_service.costo_entrada_ajuste`). Un solo ítem cabe en una
+        página (`tamPag=100`, Regla 10): la paginación inestable de InvFecha
+        no aplica. Levanta si Siesa no responde; `None` en simulación.
+        """
+        from app.services.siesa_filtro import lit as _lit
+
+        core = self._core
+        return core._get(core.api_inventario, {
+            'paginacion': 'numPag=1|tamPag=100',
+            'parametros': f"f120_referencia = {_lit(item_codigo)}",
+        }, timeout=8)
+
     # `get_item_por_barras()` se borró el 2026-08-19: no tenía **ningún**
     # llamador. El escaneo resuelve el EAN contra el catálogo local
     # (`productos`), que alimenta el sync — no contra Siesa en vivo. El camino
