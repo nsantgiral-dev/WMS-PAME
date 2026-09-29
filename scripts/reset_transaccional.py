@@ -131,6 +131,9 @@ OPERATIVAS = [
     # Lo que el comprador decidió en la bandeja (m051comprasf). Se vacía: un
     # «lo pedí» del ensayo contaría como «en camino» en producción. Sin FK.
     'decision_compra',
+    # La demanda de compras calculada (m052comprasg): la del ensayo se
+    # recalcula sola con la venta de producción. Sin FK.
+    'compras_rop_calculo',
     'ubicaciones_huerfanas',
     'fugas_recompra',
     # ── Flota (agregado 2026-08-03) ────────────────────────────────────────

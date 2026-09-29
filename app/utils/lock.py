@@ -106,6 +106,7 @@ LOCK_DEMANDA_PEDIDOS = 2051             # demanda_fuentes (relleno de la foto de
 LOCK_FLOTA_REPORTE_SEMANAL = 2040      # flota/adaptadores/reporte_semanal (web y worker con HEAVY_SCHEDULERS: un correo, no dos)
 LOCK_REFRESCO_EXISTENCIAS = 2041       # inventario_siesa_service refresco de stock cada 45 min (idem)
 LOCK_ANOTAR_FE = 2070                   # fe_resolver.anotar_fe_emitidas (consecutivo de la FE que el 142943 no devolvió)
+LOCK_COMPRAS_ROP = 2085                 # compras_rop (la demanda de compras, calculada en segundo plano, m052comprasg)
 
 # De transacción (`lock_de_transaccion`): serializan un «leer y después insertar».
 LOCK_CODIGO_LPN = 3001                  # LPN.generar_codigo

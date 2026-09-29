@@ -1365,9 +1365,10 @@ def censura_inferida(arr, primera, agotado_hoy=None, agotado_desde=None):
       · AGOTADO_HOY — la racha final (hasta ayer) cuando la red está HOY en
         cero (`_stock_en_cero`), con el mismo criterio y ≤ 13 semanas; y desde
         `ausente_desde` si el frente de existencias lo escribió.
-      · CAIDA — una semana con venta pero por debajo del 25 % de las dos
-        semanas antes y las dos después (que venden ≥ 1/día): se acabó a
-        mitad de semana o quedó un resto.
+      · CAIDA — una semana con venta pero por debajo del 25 % de las semanas
+        de ANTES y de las de DESPUÉS, por separado (que venden ≥ 1/día): se
+        acabó a mitad de semana o quedó un resto. El borde de una temporada
+        (pico a un lado, lo normal al otro) no cae contra las dos.
 
     Args:
         arr: venta neta por día (índice 0 = el primer día leído).
@@ -1415,10 +1416,14 @@ def censura_inferida(arr, primera, agotado_hoy=None, agotado_desde=None):
         t = tasas.get(s)
         if t is None or t <= 0:
             continue
-        vecinas = [tasas[x] for x in (s - 14, s - 7, s + 7, s + 14) if x in tasas]
-        if len(vecinas) < 2:
+        # Las dos orillas por separado: el borde de una temporada fuerte (la
+        # semana después del pico, con el pico a un lado y lo normal al otro)
+        # no es un agotado. Un agotado cae contra LAS DOS.
+        antes = [tasas[x] for x in (s - 14, s - 7) if x in tasas]
+        despues = [tasas[x] for x in (s + 7, s + 14) if x in tasas]
+        if not antes or not despues:
             continue
-        ref = sum(vecinas) / len(vecinas)
+        ref = min(sum(antes) / len(antes), sum(despues) / len(despues))
         if ref >= CAIDA_TASA_MIN and t < CAIDA_FRACCION * ref:
             for x in range(s, e):
                 cens[x] = 1

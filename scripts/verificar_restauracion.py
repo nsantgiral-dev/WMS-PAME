@@ -84,6 +84,9 @@ REGENERABLES = ('pedidos_siesa', 'stock_siesa', 'siesa_jobs',
                 'demanda_dia_siesa', 'demanda_dia_cubierto',
                 # Dónde quedó cada período del histórico (m052comprasc).
                 'demanda_ventana_lectura',
+                # La demanda de compras calculada (m052comprasg): la
+                # recalcula el worker.
+                'compras_rop_calculo',
                 # Latido de los crons (m048inv): lo reescribe la próxima corrida.
                 'cron_latido')
 

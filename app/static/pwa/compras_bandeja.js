@@ -281,6 +281,16 @@ function cmpDemandaHtml(dem) {
   return `${aviso}<div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:2px;">${origen}</div>`;
 }
 
+/** De cuándo es la demanda (tanda G): la calcula el servidor en segundo plano;
+ *  si quedó vieja se dice con su fecha. El texto lo arma el servidor. */
+function cmpCalculoHtml(c) {
+  if (!c || !c.texto) return '';
+  if (c.estado === 'SIN_CALCULO') return cmpCaja('Calculando la demanda', esc(c.texto), 'aviso');
+  const color = c.estado === 'AL_DIA' ? 'var(--tx3)' : 'var(--warn-tx)';
+  const peso = c.estado === 'AL_DIA' ? '400' : '700';
+  return `<div style="font-size:var(--fs-xs);color:${color};font-weight:${peso};margin-top:2px;">${esc(c.texto)}</div>`;
+}
+
 function cmpSinKardexHtml(d) {
   const lista = (d.falta || []).map(f => `<li style="margin-bottom:6px;"><b>${esc(f.titulo || '')}</b>${f.que_hacer ? `<div style="color:var(--tx2);">${esc(f.que_hacer)}</div>` : ''}</li>`).join('');
   const titulo = d.estado === 'SIN_VENTAS'
@@ -601,6 +611,7 @@ function cmpExcluidosHtml(d) {
 function cmpBandejaHtml(d, filtro) {
   if (!d) return '';
   CMP.bandeja = d;
+  if (d.estado === 'RECALCULANDO') return cmpCalculoHtml(d.calculo);
   if (d.estado !== 'OK') return cmpSinKardexHtml(d);
   const r = d.resumen || {};
   const provs = d.proveedores || [];
@@ -629,7 +640,7 @@ function cmpBandejaHtml(d, filtro) {
     <div style="font-size:var(--fs-lg);font-weight:800;color:var(--tx);">${r.lineas ? `${esc(cmpN(r.lineas))} producto${r.lineas === 1 ? '' : 's'} para pedir a ${esc(cmpN(r.proveedores))} proveedor${r.proveedores === 1 ? '' : 'es'}` : 'Nada para pedir a proveedores nacionales hoy'}</div>
     ${r.lineas ? `<div style="font-size:var(--fs-sm);color:var(--tx2);">Valor: ${esc(valor)}</div>` : ''}
     <div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:4px;">Meta: tener existencias el ${esc(cmpPct(d.nivel_servicio))} de los días · se compra cada ${esc(cmpDias(ciclo.dias))}${ciclo.fuente === 'CONFIGURADO' ? '' : ' (supuesto)'} · entrega nacional ${esc(cmpDias((d.entrega_nacional || {}).dias))} (${esc((d.entrega_nacional || {}).fuente || 'sin fuente')}) · destino ${esc((d.destino || {}).bodega || '')} (CO ${esc((d.destino || {}).co || 'sin dato')})</div>
-    ${cmpDemandaHtml(d.demanda)}
+    ${cmpDemandaHtml(d.demanda)}${cmpCalculoHtml(d.calculo)}
     ${cmpYaPedidoHtml(d.ya_pedido)}
   </div>
   <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px;">

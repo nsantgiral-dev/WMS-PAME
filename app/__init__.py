@@ -502,6 +502,10 @@ def create_app():
                 # GET. **Nace apagado** (`DEMANDA_SIESA`): el interruptor vive
                 # en `ciclo`. Lock propio (LOCK_DEMANDA_SIESA).
                 ('app.services.demanda_fuentes',            'init_scheduler',          '[DEMANDA_SIESA]'),
+                # La demanda de compras (tanda G, m052comprasg): cada 10 min,
+                # si lo guardado quedó viejo, la recalcula en el worker. No
+                # habla con Siesa. Lock propio (LOCK_COMPRAS_ROP).
+                ('app.services.compras_rop',                'init_scheduler',          '[COMPRAS_ROP]'),
             ]
             for _mod_path, _fn_name, _tag in _scheduler_pesados:
                 _registrar_scheduler(app, _il, _app_logger, _mod_path, _fn_name, _tag)

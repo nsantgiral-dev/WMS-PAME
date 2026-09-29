@@ -378,81 +378,10 @@ def insumo_origen(productos_origen=None, productos_marca=None,
     }
 
 
-# ── Caché del ROP (tanda G, 2026-09-29) ──────────────────────────────────────
-#
-# `rop_dual` lee un año de venta diaria, las existencias, las OCs y los lead
-# times: con el volumen de producción son decenas de segundos, y la bandeja,
-# el porqué de un SKU, el contenedor y la temporada lo piden entero. Se guarda
-# el resultado por proceso, con una clave que cambia apenas cambia algo que el
-# ROP lee (`sello_de_datos_rop`: lecturas de Siesa, existencias, OCs,
-# contenedores, decisiones del comprador, catálogo, variables), o el día. Un
-# techo de horas por si algo escapa del sello. `COMPRAS_CACHE_ROP=false` lo
-# apaga; en los tests nace apagado (cada test arma su mundo).
-CACHE_ROP_HORAS = 6
-_CACHE_ROP = {}
-_ENV_ROP = ('ROP_', 'COMPRAS_', 'DEMANDA_', 'KARDEX_DIAS_FRESCURA', 'TRM_COP_USD',
-            'FACTOR_NACIONALIZACION', 'CONNEKTA_BODEGA')
-
-
-def _cache_rop_activo() -> bool:
-    from app.services.kardex_service import cache_compras_activa
-    return cache_compras_activa()
-
-
-def sello_de_datos_rop() -> tuple:
-    """Lo que cambia cuando cambia algo que el ROP lee. Cada parte la da su
-    dueño (la venta: `fuente_de_demanda`; lo que viene: `sello_en_camino`);
-    acá solo las existencias y el catálogo, que el ROP ya suma. Consultas de
-    agregado: milisegundos."""
-    from sqlalchemy import func
-    from app.models.producto import Producto
-    from app.models.registro_sync import RegistroSync
-    from app.models.stock_siesa import StockSiesa
-    from app.services.compras_fuentes import default_lead_time, sello_en_camino
-    from app.services.demanda_fuentes import fuente_de_demanda
-    q = db.session.query
-    fuente = fuente_de_demanda()
-    partes = [
-        q(func.max(RegistroSync.id)).scalar(),
-        (fuente.get('fuente'), repr(fuente.get('cobertura')), fuente.get('al_dia'),
-         fuente.get('parcial')),
-        q(func.count(StockSiesa.id), func.sum(StockSiesa.existencia),
-          func.sum(StockSiesa.comprometido), func.sum(StockSiesa.salida_sin_conf)).one(),
-        sello_en_camino(),
-        q(func.max(Producto.id), func.count(Producto.origen), func.count(Producto.marca_codigo),
-          func.count(Producto.marca_siesa)).one(),
-        tuple(sorted((k, v) for k, v in os.environ.items() if k.startswith(_ENV_ROP))),
-        tuple(sorted(default_lead_time('NACIONAL').items())),
-        R_CHINA_DIAS,
-    ]
-    return tuple(tuple(x) if hasattr(x, '_fields') else x for x in partes)
-
-
-def _cache_rop_clave(nivel_servicio):
-    if not _cache_rop_activo():
-        return None
-    try:
-        return (float(nivel_servicio), _dia_operativo(), sello_de_datos_rop())
-    except Exception as e:                                    # noqa: BLE001
-        logger.warning('[ARMADOR] sin caché del ROP (no se pudo sellar): %s', e)
-        return None
-
-
-def _cache_rop_leer(clave):
-    if clave is None:
-        return None
-    x = _CACHE_ROP.get(clave)
-    if x is None or (datetime.utcnow() - x[0]).total_seconds() > CACHE_ROP_HORAS * 3600:
-        return None
-    # Copia de primer nivel: quien lo lea no toca el guardado.
-    return dict(x[1], cache={'calculado_utc': x[0].isoformat(), 'de_cache': True})
-
-
-def _cache_rop_guardar(clave, resultado):
-    if clave is None:
-        return
-    _CACHE_ROP.clear()               # uno por proceso: el del día y los datos de hoy
-    _CACHE_ROP[clave] = (datetime.utcnow(), resultado)
+#: Lo que el ROP lee de la demanda de 12 meses de cada SKU (se guarda con la
+#: demanda del horizonte: `calcular_demanda_rop`).
+_CAMPOS_DEMANDA_ROP = ('d_avg', 'sin_venta_reciente', 'dias_con_stock', 'factor_censura',
+                       'censurado', 'dias_sin_venta_mirados', 'dias_stock_recientes')
 
 
 def _resumen_horizonte(horizonte_por_sku) -> dict:
@@ -517,15 +446,18 @@ class ArmadorService:
 
         Returns: {nacional: [...], china: [...], sigma_lt_china}
         """
-        # Un resultado por día y por datos (tanda G, 2026-09-29): la bandeja,
-        # el porqué de un SKU, el contenedor y la temporada llaman esto
-        # entero; se recalcula solo cuando cambia algo que el ROP lee
-        # (`sello_de_datos_rop`) o cambia el día.
-        _clave_cache = _cache_rop_clave(nivel_servicio)
-        _hit = _cache_rop_leer(_clave_cache)
-        if _hit is not None:
-            return _hit
+        from app.services import compras_rop
+        return compras_rop.rop(nivel_servicio)
 
+    @staticmethod
+    def calcular_demanda_rop(nivel_servicio: float = 0.95) -> dict:
+        """La parte CARA del ROP (tanda G, 2026-09-29): la venta de un año, la
+        demanda del horizonte por SKU, su lead time y su régimen. **No la
+        llama ningún request**: la calcula el worker y se guarda por día
+        (`compras_rop`). Todo lo que devuelve es JSON.
+
+        Lo que cambia durante el día —existencias, OCs, contenedores y lo que
+        decidió el comprador— NO está acá: lo suma `componer_rop` al leer."""
         from app.services.kardex_service import KardexService
         from app.models.producto import Producto
 
@@ -571,23 +503,6 @@ class ArmadorService:
         demanda_por_sku = KardexService.demanda_descensurada(
             ventana_meses=12, nivel='red', fuente=insumo_demanda, lectura=lectura)
 
-        # Stock actual — existencia VENDIBLE, lo que ya tiene dueño y lo que
-        # viene. `posicion_inventario` es la ÚNICA respuesta a «¿cuánto hay y
-        # cuánto viene?» para comprar, y la usa también el pedido de temporada.
-        #
-        # Suma solo las bodegas OPERADAS (`_BODEGAS_PV`, lista blanca): `AV1`
-        # (averías) y `TRA1` (tránsito) se persisten en `stock_siesa` igual que
-        # un punto de venta, y sumarlas inflaba la posición y achicaba el
-        # déficit que ARMA EL CONTENEDOR. Ver el comentario de esa función y
-        # CLAUDE.md «Las tres listas de bodegas».
-        posiciones, info_en_camino = posicion_inventario()
-        detalle_camino = {r: d.get('en_camino_detalle') or {} for r, d in posiciones.items()}
-        stock = {r: d['existencia'] for r, d in posiciones.items()}
-        comprometido = {r: d['comprometido'] for r, d in posiciones.items()}
-        salida_sin_conf = {r: d['salida_sin_conf'] for r, d in posiciones.items()}
-        frescura = {r: d['frescura'] for r, d in posiciones.items()}
-        transito = {r: d['en_camino'] for r, d in posiciones.items()}
-
         # Origen Y marca. **Eran dos defectos apilados.**
         #
         # `productos_origen` mapeaba `codigo_siesa → origen`, y el cruce por
@@ -612,15 +527,6 @@ class ArmadorService:
         productos_origen = {f[0]: f[1] for f in filas_origen}
         productos_marca = {f[0]: (f[2] or f[3]) for f in filas_origen}
         productos_marca_cod = {f[0]: f[3] for f in filas_origen}
-
-        resultados_nac = []
-        resultados_chi = []
-
-        # Delta agregado — el "backtest" posible del ROP: no se puede certificar
-        # una fórmula contra la historia, pero sí cuantificar el salto.
-        delta = {'skus': 0, 'ss_antes': 0.0, 'ss_despues': 0.0,
-                 'topados_por_cobertura': 0, 'censurados': 0,
-                 'sin_venta_reciente': 0}
 
         # ── LA DEMANDA DEL HORIZONTE (2026-09-27) ──────────────────────────
         #
@@ -649,6 +555,7 @@ class ArmadorService:
         horizonte_por_sku = demanda_para_horizonte(horizontes, base=demanda_por_sku,
                                                    fuente=insumo_demanda, serie=lectura)
 
+        skus = []
         for ref, dem, es_china, _lt_info in previos:
             d_hist = dem['d_avg']        # u/día sobre días CON stock (12 meses)
             hz = horizonte_por_sku[ref]
@@ -660,8 +567,103 @@ class ArmadorService:
             # (`vuelve_en_temporada`) — el filtro de 90 días apagaba en octubre
             # justo lo que se vende en diciembre.
             parado = bool(dem.get('sin_venta_reciente')) and not hz.get('vuelve_en_temporada')
-            d_avg = 0.0 if parado else float(hz['d_dia'])
-            sigma_d = 0.0 if parado else float(hz['sigma_dia'])    # u/día
+            skus.append({
+                'ref': ref, 'es_china': bool(es_china), 'lt': _lt_info,
+                'd_hist': d_hist, 'parado': parado,
+                'd': 0.0 if parado else float(hz['d_dia']),
+                'sigma': 0.0 if parado else float(hz['sigma_dia']),     # u/día
+                'dem': {k: dem.get(k) for k in _CAMPOS_DEMANDA_ROP},
+                'demanda_horizonte': {
+                    'metodo': hz.get('metodo'), 'motivo': hz.get('motivo'),
+                    'horizonte_dias': hz.get('horizonte_dias'),
+                    'ventana_dias': hz.get('ventana_dias'),
+                    'ano_anterior': hz.get('ano_anterior'),
+                    'tendencia': hz.get('tendencia'),
+                    'atipicos': hz.get('atipicos'),
+                    'venta_proyecto': hz.get('venta_proyecto') or 0.0,
+                    'vuelve_en_temporada': bool(hz.get('vuelve_en_temporada')),
+                    'texto': hz.get('texto'),
+                },
+            })
+
+        # ── El régimen China: ¿hay con qué distinguirlo? ────────────────
+        # `Producto.origen` **no tiene ningún escritor** en el repo: no lo pone
+        # el sync de Siesa, no está en la lista blanca de `actualizar_producto`,
+        # no hay ruta ni script. Con la columna vacía, `es_china` es siempre
+        # False y **todo SKU recibe régimen nacional** —LT nacional, R=0— y
+        # `resultados_chi` sale vacío.
+        #
+        # Eso no era un error visible: era una pantalla que mostraba el ROP
+        # dual como si existiera. Ahora se declara, porque un modelo que corre
+        # sobre un insumo ausente y no lo dice es la forma más cara de este
+        # repo: el número sale con cara de bueno y alguien compra con él.
+        _insumo = insumo_origen(productos_origen, productos_marca, productos_marca_cod)
+        if not _insumo['regimen_china_operativo']:
+            logger.warning(
+                '[ARMADOR] ROP dual sin insumo de origen: %d SKU calculados '
+                'todos como nacionales. `Producto.origen` no tiene escritor.',
+                len(productos_origen))
+
+        return {
+            'nivel_servicio': nivel_servicio,
+            'z': z,
+            'dia': _hoy_rop.isoformat(),
+            'ciclo_nac': _ciclo_nac,
+            'lt_nac': lt_nac,
+            'lt_chi': lt_chi,
+            'insumo_demanda': insumo_demanda,
+            'demanda_horizonte': _resumen_horizonte(horizonte_por_sku),
+            'insumo_origen': _insumo,
+            'skus': skus,
+        }
+
+    @staticmethod
+    def componer_rop(demanda: dict) -> dict:
+        """La parte BARATA del ROP, al leer: la demanda guardada
+        (`calcular_demanda_rop`) contra la posición de AHORA —existencias,
+        OCs abiertas, contenedores y los «ya se pidió» del comprador
+        (`posicion_inventario`)—. Una OC nueva o una decisión se ven en la
+        siguiente carga, sin recalcular la demanda."""
+        z = demanda['z']
+        nivel_servicio = demanda['nivel_servicio']
+        _ciclo_nac = demanda['ciclo_nac']
+        lt_nac, lt_chi = demanda['lt_nac'], demanda['lt_chi']
+        lt_china, sigma_lt_china = lt_chi['lt_dias'], lt_chi['sigma_lt']
+        lt_nacional, sigma_lt_nacional = lt_nac['lt_dias'], lt_nac['sigma_lt']
+        insumo_demanda = demanda['insumo_demanda']
+        _insumo = demanda['insumo_origen']
+        _hoy_rop = _dia_operativo()
+
+        # Stock actual — existencia VENDIBLE, lo que ya tiene dueño y lo que
+        # viene. `posicion_inventario` es la ÚNICA respuesta a «¿cuánto hay y
+        # cuánto viene?» para comprar, y la usa también el pedido de temporada.
+        #
+        # Suma solo las bodegas OPERADAS (`_BODEGAS_PV`, lista blanca): `AV1`
+        # (averías) y `TRA1` (tránsito) se persisten en `stock_siesa` igual que
+        # un punto de venta, y sumarlas inflaba la posición y achicaba el
+        # déficit que ARMA EL CONTENEDOR. Ver el comentario de esa función y
+        # CLAUDE.md «Las tres listas de bodegas».
+        posiciones, info_en_camino = posicion_inventario()
+        detalle_camino = {r: d.get('en_camino_detalle') or {} for r, d in posiciones.items()}
+        stock = {r: d['existencia'] for r, d in posiciones.items()}
+        comprometido = {r: d['comprometido'] for r, d in posiciones.items()}
+        salida_sin_conf = {r: d['salida_sin_conf'] for r, d in posiciones.items()}
+        frescura = {r: d['frescura'] for r, d in posiciones.items()}
+        transito = {r: d['en_camino'] for r, d in posiciones.items()}
+
+        resultados_nac = []
+        resultados_chi = []
+
+        # Delta agregado — el "backtest" posible del ROP: no se puede certificar
+        # una fórmula contra la historia, pero sí cuantificar el salto.
+        delta = {'skus': 0, 'ss_antes': 0.0, 'ss_despues': 0.0,
+                 'topados_por_cobertura': 0, 'censurados': 0,
+                 'sin_venta_reciente': 0}
+
+        for x in demanda['skus']:
+            ref, es_china, _lt_info = x['ref'], x['es_china'], x['lt']
+            d_hist, parado, d_avg, sigma_d = x['d_hist'], x['parado'], x['d'], x['sigma']
+            dem = x['dem']
             if parado:
                 delta['sin_venta_reciente'] += 1
 
@@ -727,17 +729,7 @@ class ArmadorService:
                 # De dónde sale `d_avg_diaria`, en palabras del comprador
                 # (`demanda_para_horizonte`): el mismo período del año pasado
                 # × la tendencia, o el promedio y por qué.
-                'demanda_horizonte': {
-                    'metodo': hz.get('metodo'), 'motivo': hz.get('motivo'),
-                    'horizonte_dias': hz.get('horizonte_dias'),
-                    'ventana_dias': hz.get('ventana_dias'),
-                    'ano_anterior': hz.get('ano_anterior'),
-                    'tendencia': hz.get('tendencia'),
-                    'atipicos': hz.get('atipicos'),
-                    'venta_proyecto': hz.get('venta_proyecto') or 0.0,
-                    'vuelve_en_temporada': bool(hz.get('vuelve_en_temporada')),
-                    'texto': hz.get('texto'),
-                },
+                'demanda_horizonte': x['demanda_horizonte'],
                 'sin_venta_reciente': parado,
                 'motivo_d_cero': (
                     f"Sin venta en los últimos {dem.get('dias_sin_venta_mirados')} días "
@@ -852,24 +844,6 @@ class ArmadorService:
 
         mult = (delta['ss_despues'] / delta['ss_antes']) if delta['ss_antes'] > 0 else 0
 
-        # ── El régimen China: ¿hay con qué distinguirlo? ────────────────
-        # `Producto.origen` **no tiene ningún escritor** en el repo: no lo pone
-        # el sync de Siesa, no está en la lista blanca de `actualizar_producto`,
-        # no hay ruta ni script. Con la columna vacía, `es_china` es siempre
-        # False y **todo SKU recibe régimen nacional** —LT nacional, R=0— y
-        # `resultados_chi` sale vacío.
-        #
-        # Eso no era un error visible: era una pantalla que mostraba el ROP
-        # dual como si existiera. Ahora se declara, porque un modelo que corre
-        # sobre un insumo ausente y no lo dice es la forma más cara de este
-        # repo: el número sale con cara de bueno y alguien compra con él.
-        _insumo = insumo_origen(productos_origen, productos_marca, productos_marca_cod)
-        if not _insumo['regimen_china_operativo']:
-            logger.warning(
-                '[ARMADOR] ROP dual sin insumo de origen: %d SKU calculados '
-                'todos como nacionales. `Producto.origen` no tiene escritor.',
-                len(productos_origen))
-
         resultado = {
             'nivel_servicio': nivel_servicio,
             'z_score': round(z, 3),
@@ -884,7 +858,7 @@ class ArmadorService:
             # con el mismo período del año pasado y cuántos con el promedio
             # (y por qué), qué bodegas son de proyecto y los topes de la
             # tendencia. Todo declarado: supuestos por defecto del dueño.
-            'demanda_horizonte': _resumen_horizonte(horizonte_por_sku),
+            'demanda_horizonte': demanda['demanda_horizonte'],
             'lead_time': {'nacional': lt_nac, 'china': lt_chi},
             # Procedencia del cálculo — sin esto el número no es auditable
             'estimador_sigma_d': ESTIMADOR_SIGMA_D,
@@ -930,7 +904,6 @@ class ArmadorService:
                 'items': resultados_chi,
             },
         }
-        _cache_rop_guardar(_clave_cache, resultado)
         return resultado
 
     @staticmethod

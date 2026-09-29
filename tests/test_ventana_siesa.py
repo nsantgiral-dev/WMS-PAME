@@ -57,6 +57,7 @@ NO_HABLAN = {
     'flota_avisos_barrido': 'Vencimientos de papeles de flota; avisa por WhatsApp.',
     'flota_preventivo_siembra': 'Siembra el plan preventivo desde la ficha técnica: local.',
     'flota_reporte_semanal': 'Reporte semanal de flota por correo: local.',
+    'compras_rop': 'Calcula la demanda de compras desde la venta ya guardada en el WMS: no consulta Siesa.',
 }
 
 #: Ventanas propias que no son «la de Siesa». Solo encoge.

@@ -44,3 +44,4 @@ from app.models.sello_ambiente import SelloAmbiente
 from app.models.cron_latido import CronLatido
 from app.models.demanda_siesa import DemandaDiaSiesa, DemandaDiaCubierto, DemandaVentanaLectura
 from app.models.decision_compra import DecisionCompra
+from app.models.compras_rop import CalculoRop

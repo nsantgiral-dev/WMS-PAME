@@ -339,29 +339,6 @@ def en_camino(skus=None, bodegas=None) -> dict:
     }
 
 
-def sello_en_camino() -> tuple:
-    """Cambia cuando cambia algo de lo que `en_camino` y `lead_time` leen: el
-    espejo de OCs, los contenedores, las recepciones, los proveedores y las
-    decisiones del comprador. Para la caché del ROP (tanda G)."""
-    from sqlalchemy import func
-    from app.models.acuerdo_marco import Proveedor
-    from app.models.compras_fuentes import OcLineaSiesa
-    from app.models.importacion import Contenedor, ItemEnTransito
-    from app.models.recepcion import RecepcionMercancia
-    from app.services.compras_decisiones import sello as sello_decisiones
-    q = db.session.query
-    return (
-        tuple(q(func.max(OcLineaSiesa.id), func.max(OcLineaSiesa.vista_en),
-                func.max(OcLineaSiesa.cerrada_en), func.sum(OcLineaSiesa.pendiente_base)).one()),
-        tuple(q(func.max(ItemEnTransito.id), func.count(ItemEnTransito.id)).one()),
-        tuple(tuple(x) for x in q(Contenedor.id, Contenedor.estado,
-                                  Contenedor.fecha_recepcion_cedi).all()),
-        q(func.max(RecepcionMercancia.fecha_confirmacion)).scalar(),
-        q(func.max(Proveedor.id)).scalar(),
-        sello_decisiones(),
-    )
-
-
 def _dias_env(nombre, defecto):
     """(días, problema). Ausente → `defecto`; ilegible o negativo → `defecto`
     y el problema escrito (no se adivina)."""

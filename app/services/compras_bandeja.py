@@ -385,6 +385,11 @@ def bandeja(nivel_servicio: float = NIVEL_SERVICIO) -> dict:
                     resumen={'lineas': 0})
 
     rop = ArmadorService.rop_dual(nivel_servicio=nivel_servicio)
+    # De cuándo es la demanda que se muestra (tanda G): la calcula el worker;
+    # si quedó vieja se muestra con su fecha y «recalculando».
+    base['calculo'] = rop.get('calculo')
+    if (rop.get('calculo') or {}).get('estado') == 'SIN_CALCULO':
+        return dict(base, estado='RECALCULANDO', resumen={'lineas': 0})
     nac = rop.get('nacional') or {}
     filas = nac.get('items') or []
     if not filas:

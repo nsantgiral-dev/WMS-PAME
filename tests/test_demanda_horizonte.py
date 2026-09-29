@@ -243,6 +243,15 @@ class TestLaCensuraInferida:
         assert h['d_dia'] == pytest.approx(10.0)
         assert 'parece haberse agotado ~7 de 28 días' in h['texto']
 
+    def test_el_borde_de_una_temporada_fuerte_no_es_una_caida(self, db, calc):
+        """80/día las 4 semanas del pico y 8/día el resto (10×): la semana
+        después del pico cae contra el pico, pero no contra las que siguen. No
+        es un agotado, y contarla como tal subiría la demanda (validación del
+        2026-09-29)."""
+        _vende(db, 'BORDE', _serie(lambda d: 80 if d in EN_VENTANA_LY else 8))
+        h = calc()['BORDE']
+        assert not any(e['tipo'] == 'CAIDA' for e in h['censura']['eventos']), h['censura']
+
     def test_un_hueco_en_un_vendedor_lento_no_es_agotado(self, db, calc):
         """1 u cada 5 días: 10 días sin venta pasan por azar ((0,8)^10 ≈ 11 %)."""
         _vende(db, 'LENTO', _serie(lambda d: 0 if 340 <= d <= 349 else (1 if d % 5 == 0 else 0)))
@@ -426,7 +435,7 @@ _CAMPOS_PROMEDIO = {'d_avg', 'sigma_d'}
 #: encoge. La forma permitida: publicarlo (asignarlo a `d_hist`) o filtrar
 #: (una comparación). Pedir con él es el defecto.
 LECTURAS_DECLARADAS = {
-    ('app/services/armador_service.py', 'ArmadorService.rop_dual'):
+    ('app/services/armador_service.py', 'ArmadorService.calcular_demanda_rop'):
         'Filtra los SKU sin venta (d_avg <= 0) y publica el promedio en '
         'd_avg_historica para comparar; el ROP pide con demanda_para_horizonte.',
 }

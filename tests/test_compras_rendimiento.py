@@ -11,10 +11,12 @@ mitad del volumen de producción: 24 s y 600 MB solo la demanda (validación del
 
 Ahora: `kardex_service.lectura_demanda` (una lectura, a nivel red sumada en
 SQL por referencia y día) la comparten la demanda de 12 meses y la del
-horizonte; `rop_dual` guarda su resultado por proceso con la clave
-`(nivel, día, sello_de_datos_rop())`.
+horizonte. Esa demanda la calcula el worker y se guarda (`compras_rop`,
+m052comprasg); la bandeja la lee y le suma la posición de ahora. Ningún
+request calcula lo caro.
 """
 import ast
+import json
 import pathlib
 from datetime import timedelta
 
@@ -40,12 +42,10 @@ def mundo(app, db, monkeypatch):
                                   comprometido=0, salida_sin_conf=0))
     db.session.commit()
     app.config['COMPRAS_CACHE_ROP_EN_TESTS'] = True
-    from app.services import armador_service, kardex_service
-    armador_service._CACHE_ROP.clear()
+    from app.services import kardex_service
     kardex_service._CACHE_LECTURA.clear()
     yield
     app.config['COMPRAS_CACHE_ROP_EN_TESTS'] = False
-    armador_service._CACHE_ROP.clear()
     kardex_service._CACHE_LECTURA.clear()
 
 
@@ -127,115 +127,196 @@ class TestUnaLectura:
             assert compartida[ref]['sigma_d'] == pytest.approx(propia[ref]['sigma_d'])
 
 
-class TestElROPSeGuardaPorDia:
+class TestLaDemandaSeGuarda:
+    """Tanda G (2026-09-29, m052comprasg): la demanda —lo caro— la calcula el
+    worker y se guarda; lo que cambia durante el día (existencias, OCs, lo que
+    decidió el comprador) se suma al leer; ningún request calcula lo caro."""
 
-    def test_la_segunda_vez_sale_de_la_cache(self, app, db, mundo, monkeypatch):
+    @pytest.fixture
+    def guardada(self, app, mundo, monkeypatch):
+        from app.services import armador_service, compras_rop
+        app.config['COMPRAS_ROP_PERSISTIDO_EN_TESTS'] = True
+        compras_rop._PARSEADO.clear()
+        compras_rop.PEDIDOS_EN_TESTS.clear()
+        real = armador_service.ArmadorService.calcular_demanda_rop
+        n = {'calculos': 0}
+
+        def contar(*a, **k):
+            n['calculos'] += 1
+            return real(*a, **k)
+        monkeypatch.setattr(armador_service.ArmadorService, 'calcular_demanda_rop',
+                            staticmethod(contar))
+        yield n
+        app.config['COMPRAS_ROP_PERSISTIDO_EN_TESTS'] = False
+        compras_rop._PARSEADO.clear()
+        compras_rop.PEDIDOS_EN_TESTS.clear()
+
+    @staticmethod
+    def _fila(r, ref):
+        return {f['referencia']: f for f in r['nacional']['items']}[ref]
+
+    def test_el_worker_calcula_una_vez_y_despues_lee(self, app, db, guardada):
+        from app.services import compras_rop
         from app.services.armador_service import ArmadorService
-        n = _contar_lecturas(monkeypatch)
+        compras_rop.recalcular_si_hace_falta()                  # el worker
         a = ArmadorService.rop_dual()
         b = ArmadorService.rop_dual()
-        assert n['lecturas'] == 1 and b['cache']['de_cache'] is True
+        assert guardada['calculos'] == 1
+        assert b['calculo']['estado'] == 'AL_DIA' and b['calculo']['de_hoy'] is True
         assert b['nacional']['items'] == a['nacional']['items']
+        assert 'Demanda calculada el' in b['calculo']['texto']
 
-    @pytest.mark.parametrize('cambio', ['existencias', 'decision', 'oc', 'registro', 'venta',
-                                        'contenedor', 'variable', 'catalogo', 'registro_ajeno'])
-    def test_un_dato_nuevo_la_invalida(self, app, db, mundo, monkeypatch, cambio):
+    def test_existencias_oc_y_decisiones_se_ven_sin_recalcular(self, app, db, guardada):
         from datetime import datetime
+        from app.models.compras_fuentes import OcLineaSiesa
+        from app.models.decision_compra import DecisionCompra
+        from app.models.stock_siesa import StockSiesa
+        from app.services import compras_rop
         from app.services.armador_service import ArmadorService
-        n = _contar_calculos(monkeypatch)
-        lect = _contar_lecturas(monkeypatch)
-        ArmadorService.rop_dual()
-        if cambio == 'existencias':
-            from app.models.stock_siesa import StockSiesa
-            StockSiesa.query.filter_by(codigo_siesa='A').update({'existencia': 49})
-        elif cambio == 'decision':
-            from app.models.decision_compra import DecisionCompra
-            db.session.add(DecisionCompra(referencia='A', accion='PEDIDO', cantidad_decidida=5,
-                                          dia=dia_operativo(), vigente_hasta=dia_operativo(),
-                                          creada_en=datetime.utcnow()))
-        elif cambio == 'oc':
-            from app.models.compras_fuentes import OcLineaSiesa
-            db.session.add(OcLineaSiesa(rowid_linea=1, referencia='A', bodega='NB1',
-                                        pendiente_base=5, abierta=True))
-        elif cambio == 'registro':
-            from app.models.registro_sync import RegistroSync
-            db.session.add(RegistroSync(tipo='demanda_siesa'))
-        elif cambio == 'registro_ajeno':
-            from app.models.registro_sync import RegistroSync
-            db.session.add(RegistroSync(tipo='compras_oc'))
-        elif cambio == 'venta':
-            from app.models.demanda_siesa import DemandaDiaCubierto
-            db.session.query(DemandaDiaCubierto).filter(
-                DemandaDiaCubierto.fecha == dia_operativo() - timedelta(days=430)).delete()
-        elif cambio == 'contenedor':
-            from app.models.importacion import Contenedor
-            db.session.add(Contenedor(numero='C1', estado='NAVEGANDO'))
-        elif cambio == 'variable':
-            monkeypatch.setenv('ROP_CICLO_NACIONAL_DIAS', '14')
-        elif cambio == 'catalogo':
-            from app.models.producto import Producto
-            db.session.add(Producto(codigo='N', nombre='N', codigo_siesa='N', origen='CHINA',
-                                    activo=True))
+        compras_rop.recalcular_si_hace_falta()
+        antes = self._fila(ArmadorService.rop_dual(), 'A')
+        StockSiesa.query.filter_by(codigo_siesa='A').update({'existencia': 20})
+        db.session.add(OcLineaSiesa(rowid_linea=1, referencia='A', bodega='NB1',
+                                    pendiente_base=7, abierta=True))
+        db.session.add(DecisionCompra(referencia='B', accion='PEDIDO', cantidad_decidida=11,
+                                      dia=dia_operativo(), vigente_hasta=dia_operativo(),
+                                      creada_en=datetime.utcnow()))
         db.session.commit()
         r = ArmadorService.rop_dual()
-        assert n['calculos'] == 2, f'{cambio}: el ROP guardado siguió vivo'
-        assert 'cache' not in r
-        # La venta se vuelve a leer SOLO si llegó venta nueva: el sync de OCs,
-        # las existencias o una decisión no la releen.
-        assert lect['lecturas'] == (2 if cambio in ('registro', 'venta') else 1), cambio
+        assert guardada['calculos'] == 1, 'una OC, una existencia o una decisión no recalculan la demanda'
+        a = self._fila(r, 'A')
+        assert a['stock_actual'] == 20 and antes['stock_actual'] == 50
+        assert a['posicion'] == antes['posicion'] - 30 + 7
+        assert self._fila(r, 'B')['en_transito'] == 11
+        assert r['calculo']['estado'] == 'AL_DIA'
 
-    def test_apagada_por_variable(self, app, db, mundo, monkeypatch):
-        from app.services.armador_service import ArmadorService
-        monkeypatch.setenv('COMPRAS_CACHE_ROP', 'false')
-        n = _contar_lecturas(monkeypatch)
-        ArmadorService.rop_dual()
-        ArmadorService.rop_dual()
-        assert n['lecturas'] == 2
-
-    def test_otro_dia_otra_cuenta(self, app, db, mundo, monkeypatch):
-        from app.services import armador_service
-        n = _contar_calculos(monkeypatch)
-        armador_service.ArmadorService.rop_dual()
-        manana = dia_operativo() + timedelta(days=1)
-        monkeypatch.setattr(armador_service, '_dia_operativo', lambda: manana)
-        armador_service.ArmadorService.rop_dual()
-        assert n['calculos'] == 2
-
-
-class TestLaLecturaSeGuardaHastaQueLlegueVenta:
-    """La lectura de la venta (lo caro: ~13 s en Postgres a volumen de
-    producción) se guarda hasta que llegue venta nueva. Un sync de OCs o de
-    existencias recalcula el ROP pero no vuelve a leer 420 días de venta."""
-
-    def test_sobrevive_a_oc_y_existencias(self, app, db, mundo):
-        from app.services import kardex_service
-        from app.models.stock_siesa import StockSiesa
-        from app.models.compras_fuentes import OcLineaSiesa
-        a = kardex_service.lectura_demanda()
-        StockSiesa.query.filter_by(codigo_siesa='A').update({'existencia': 1})
-        db.session.add(OcLineaSiesa(rowid_linea=7, referencia='A', bodega='NB1',
-                                    pendiente_base=5, abierta=True))
-        db.session.commit()
-        assert kardex_service.lectura_demanda() is a
-
-    def test_la_venta_nueva_la_invalida(self, app, db, mundo):
-        from app.services import kardex_service
+    def test_venta_nueva_la_deja_vieja(self, app, db, guardada):
         from app.models.registro_sync import RegistroSync
-        a = kardex_service.lectura_demanda()
+        from app.services import compras_rop
+        from app.services.armador_service import ArmadorService
+        compras_rop.recalcular_si_hace_falta()
         db.session.add(RegistroSync(tipo='demanda_siesa'))
         db.session.commit()
-        assert kardex_service.lectura_demanda() is not a
+        assert ArmadorService.rop_dual()['calculo']['estado'] == 'DESACTUALIZADO'
+        assert compras_rop.recalcular_si_hace_falta()['hecho'] is True
+        assert ArmadorService.rop_dual()['calculo']['estado'] == 'AL_DIA'
+        assert guardada['calculos'] == 2
 
-    def test_otra_fuente_otra_lectura(self, app, db, mundo, monkeypatch):
-        from app.services import kardex_service
-        a = kardex_service.lectura_demanda()
-        monkeypatch.setenv('DEMANDA_BODEGAS_PROYECTO', 'NS2,NB1')
-        assert kardex_service.lectura_demanda() is not a
+    @pytest.mark.parametrize('tipo', ['pedidos', 'compras_oc', 'carga_fisica'])
+    def test_otros_registros_no_la_dejan_vieja(self, app, db, guardada, tipo):
+        """El sync de pedidos abre un registro por minuto: si cualquier
+        registro dejara vieja la demanda, en producción se recalcularía cada
+        minuto (validación del 2026-09-29)."""
+        from app.models.registro_sync import RegistroSync
+        from app.services import compras_rop
+        from app.services.armador_service import ArmadorService
+        compras_rop.recalcular_si_hace_falta()
+        db.session.add(RegistroSync(tipo=tipo))
+        db.session.commit()
+        assert ArmadorService.rop_dual()['calculo']['estado'] == 'AL_DIA'
+        assert guardada['calculos'] == 1
 
-    def test_apagada_en_tests_por_defecto(self, app, db, mundo):
-        from app.services import kardex_service
-        app.config['COMPRAS_CACHE_ROP_EN_TESTS'] = False
-        assert kardex_service.lectura_demanda() is not kardex_service.lectura_demanda()
+    def test_otro_dia_la_deja_vieja(self, app, db, guardada, monkeypatch):
+        from app.services import compras_rop
+        from app.services.armador_service import ArmadorService
+        compras_rop.recalcular_si_hace_falta()
+        manana = dia_operativo() + timedelta(days=1)
+        monkeypatch.setattr(compras_rop, 'dia_operativo', lambda: manana)
+        r = ArmadorService.rop_dual()
+        assert r['calculo']['estado'] == 'DESACTUALIZADO' and r['calculo']['de_hoy'] is False
+        assert compras_rop.recalcular_si_hace_falta()['hecho'] is True
+        assert guardada['calculos'] == 2
+
+    def test_un_request_no_calcula_y_muestra_lo_viejo_con_su_fecha(self, app, db, guardada):
+        from app.models.registro_sync import RegistroSync
+        from app.services import compras_rop
+        from app.services.armador_service import ArmadorService
+        compras_rop.recalcular_si_hace_falta()                  # el worker
+        db.session.add(RegistroSync(tipo='demanda_siesa'))
+        db.session.commit()
+        with app.test_request_context('/api/compras/bandeja'):
+            r = ArmadorService.rop_dual()
+        assert guardada['calculos'] == 1, 'un request calculó la demanda en caliente'
+        assert r['calculo']['estado'] == 'DESACTUALIZADO' and r['calculo']['recalculando'] is True
+        assert 'se está recalculando' in r['calculo']['texto']
+        assert r['nacional']['items'], 'se muestra lo último guardado'
+        assert compras_rop.PEDIDOS_EN_TESTS == [0.95], 'y se encola el recálculo'
+
+    def test_sin_calculo_la_bandeja_lo_dice_sin_lineas(self, app, db, guardada):
+        from app.services import compras_bandeja, compras_rop
+        with app.test_request_context('/api/compras/bandeja'):
+            b = compras_bandeja.bandeja()
+        assert guardada['calculos'] == 0
+        assert b['estado'] == 'RECALCULANDO' and b['resumen']['lineas'] == 0
+        assert b['calculo']['estado'] == 'SIN_CALCULO'
+        assert compras_rop.PEDIDOS_EN_TESTS == [0.95]
+
+    def test_el_contenedor_sin_calculo_no_es_apto(self, app, db, guardada):
+        from app.services.armador_service import ArmadorService
+        with app.test_request_context('/api/compras/bandeja/contenedor'):
+            r = ArmadorService.armar_contenedor()
+        assert guardada['calculos'] == 0
+        assert r.get('apta') is False
+
+    def test_recalcular_si_hace_falta(self, app, db, guardada):
+        from app.models.registro_sync import RegistroSync
+        from app.services import compras_rop
+        assert compras_rop.recalcular_si_hace_falta()['hecho'] is True
+        assert compras_rop.recalcular_si_hace_falta() == {'hecho': False, 'motivo': 'AL_DIA'}
+        db.session.add(RegistroSync(tipo='demanda_siesa'))
+        db.session.commit()
+        assert compras_rop.recalcular_si_hace_falta()['hecho'] is True
+        assert guardada['calculos'] == 2
+
+    def test_un_recalculo_que_falla_queda_escrito_y_no_borra_lo_guardado(
+            self, app, db, guardada, monkeypatch):
+        from app.models.registro_sync import RegistroSync
+        from app.services import armador_service, compras_rop
+        compras_rop.recalcular_si_hace_falta()
+        db.session.add(RegistroSync(tipo='demanda_siesa'))
+        db.session.commit()
+
+        def revienta(*a, **k):
+            raise RuntimeError('la base se cayó')
+        monkeypatch.setattr(armador_service.ArmadorService, 'calcular_demanda_rop',
+                            staticmethod(revienta))
+        r = compras_rop.recalcular_si_hace_falta()
+        assert r['hecho'] is False and r['motivo'] == 'ERROR'
+        with app.test_request_context('/api/compras/bandeja'):
+            rop = armador_service.ArmadorService.rop_dual()
+        assert rop['nacional']['items'], 'lo guardado antes sigue sirviendo'
+        assert 'El último recálculo falló' in rop['calculo']['texto']
+        assert 'la base se cayó' in rop['calculo']['texto']
+
+    def test_lo_guardado_es_json_y_se_lee_igual(self, app, db, mundo):
+        """En los tests (modo SIEMPRE) cada llamada calcula, guarda y lee de
+        vuelta el JSON: lo que el worker guarda es lo que la bandeja usa."""
+        import json
+        from app.services.armador_service import ArmadorService
+        from app.services.compras_rop import guardado
+        r = ArmadorService.rop_dual()
+        fila = guardado(0.95)
+        assert fila is not None and json.loads(fila.demanda)['skus']
+        assert r['calculo']['estado'] == 'AL_DIA'
+
+
+class TestLaPantallaDiceDeCuandoEs:
+
+    def _node(self, tmp_path, expr):
+        from tests.test_compras_bandeja_js import _node
+        return _node(tmp_path, pintar={'h': expr})['h']
+
+    def test_recalculando_sin_lineas(self, tmp_path):
+        d = {'estado': 'RECALCULANDO', 'calculo': {
+            'estado': 'SIN_CALCULO', 'texto': 'La demanda de compras todavía no se calculó: se '
+                                             'está calculando, vuelva a cargar en unos minutos.'}}
+        html = self._node(tmp_path, f'cmpBandejaHtml({json.dumps(d)}, null)')
+        assert 'Calculando la demanda' in html and 'vuelva a cargar' in html
+
+    def test_el_texto_va_escapado(self, tmp_path):
+        c = {'estado': 'DESACTUALIZADO', 'texto': '<img src=x onerror=1>'}
+        html = self._node(tmp_path, f'cmpCalculoHtml({json.dumps(c)})')
+        assert '<img' not in html and '&lt;img' in html
 
 
 class TestUnaLecturaPorAST:
@@ -245,9 +326,9 @@ class TestUnaLecturaPorAST:
     def _rop(self):
         src = (RAIZ / 'app/services/armador_service.py').read_text(encoding='utf-8')
         for n in ast.walk(ast.parse(src)):
-            if isinstance(n, ast.FunctionDef) and n.name == 'rop_dual':
+            if isinstance(n, ast.FunctionDef) and n.name == 'calcular_demanda_rop':
                 return n
-        raise AssertionError('no encontré rop_dual')
+        raise AssertionError('no encontré calcular_demanda_rop')
 
     def _llamadas(self, fn):
         out = []
@@ -274,3 +355,49 @@ class TestUnaLecturaPorAST:
         assert 'serie_demanda' in nombres
         kw = dict(self._llamadas(fn))
         assert 'lectura' not in kw['demanda_descensurada']
+
+
+class TestNingunRequestCalculaLaDemanda:
+    """La clase: *un request que calcula en caliente lo que tarda más que el
+    corte del servidor*. Solo `compras_rop` llama a lo caro, y ninguna ruta
+    llama a la puerta del worker."""
+
+    CARO = {'calcular_demanda_rop'}
+    PUERTAS_DEL_WORKER = {'calcular_y_guardar', 'recalcular_si_hace_falta'}
+
+    @staticmethod
+    def _llamadas(src):
+        out = set()
+        for n in ast.walk(ast.parse(src)):
+            if isinstance(n, ast.Call):
+                f = n.func
+                out.add(f.attr if isinstance(f, ast.Attribute) else getattr(f, 'id', None))
+        return out
+
+    def _archivos(self):
+        for base in ('app', 'flota'):
+            yield from (RAIZ / base).rglob('*.py')
+
+    def test_solo_compras_rop_llama_lo_caro(self):
+        malos, vistos = [], 0
+        for f in self._archivos():
+            vistos += 1
+            if f.name == 'compras_rop.py':
+                continue
+            if self._llamadas(f.read_text(encoding='utf-8')) & self.CARO:
+                malos.append(str(f.relative_to(RAIZ)))
+        assert vistos >= 200
+        assert not malos, f'llaman a calcular_demanda_rop fuera de compras_rop: {malos}'
+
+    def test_ninguna_ruta_llama_la_puerta_del_worker(self):
+        malos = []
+        for f in list((RAIZ / 'app' / 'routes').rglob('*.py')) + list((RAIZ / 'flota' / 'api').rglob('*.py')):
+            if self._llamadas(f.read_text(encoding='utf-8')) & (self.CARO | self.PUERTAS_DEL_WORKER):
+                malos.append(str(f.relative_to(RAIZ)))
+        assert not malos, f'una ruta calcula la demanda en caliente: {malos}'
+
+    def test_el_detector_ve_las_dos_formas(self):
+        src = 'def f():\n    ArmadorService.calcular_demanda_rop(0.95)\n    recalcular_si_hace_falta()\n'
+        assert {'calcular_demanda_rop', 'recalcular_si_hace_falta'} <= self._llamadas(src)
+        sano = 'def f():\n    """calcular_demanda_rop()"""\n    # recalcular_si_hace_falta()\n    return 1\n'
+        assert not self._llamadas(sano) & (self.CARO | self.PUERTAS_DEL_WORKER)

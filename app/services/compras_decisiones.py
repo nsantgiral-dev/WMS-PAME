@@ -398,14 +398,6 @@ def pedidos_sin_oc(filtro_skus=None, hoy=None) -> list:
     return salida
 
 
-def sello() -> tuple:
-    """Cambia con cada decisión registrada o deshecha (caché del ROP)."""
-    from sqlalchemy import func
-    from app.models.decision_compra import DecisionCompra
-    return tuple(db.session.query(func.max(DecisionCompra.id),
-                                  func.count(DecisionCompra.anulada_en)).one())
-
-
 def consec_de(oc_texto):
     """El consecutivo de una OC escrita a mano («123», «OC-123», «003-OC-123»),
     o None si no se puede leer."""
