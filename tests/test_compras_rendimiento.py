@@ -101,6 +101,23 @@ class TestUnaLectura:
             assert sum(red[ref]['por_dia'].values()) == pytest.approx(suma_b)
         assert red['B']['venta_proyecto'] == 999
 
+    def test_por_tramos_da_lo_mismo_que_de_una_vez(self, app, db, mundo, monkeypatch):
+        """La lectura de red va por tramos de fechas (cada sentencia bajo el
+        corte de 25 s de producción): ningún día se pierde ni se cuenta dos
+        veces en el borde de un tramo."""
+        from app.services import kardex_service
+        from app.services.demanda_fuentes import fuente_de_demanda
+        f = fuente_de_demanda()
+        h, d = dia_operativo() - timedelta(days=1), dia_operativo() - timedelta(days=430)
+        monkeypatch.setattr(kardex_service, 'DIAS_POR_TRAMO_DE_LECTURA', 10_000)
+        entera = kardex_service.serie_demanda(d, h, 'red', fuente=f)
+        monkeypatch.setattr(kardex_service, 'DIAS_POR_TRAMO_DE_LECTURA', 7)
+        partida = kardex_service.serie_demanda(d, h, 'red', fuente=f)
+        for ref in ('A', 'B'):
+            assert partida[ref]['por_dia'] == entera[ref]['por_dia']
+            assert partida[ref]['venta_proyecto'] == entera[ref]['venta_proyecto']
+        assert len(entera['A']['por_dia']) == 430
+
     def test_la_lectura_compartida_da_lo_mismo_que_la_propia(self, app, db, mundo):
         from app.services.kardex_service import KardexService, lectura_demanda
         propia = KardexService.demanda_descensurada(12, 'red')

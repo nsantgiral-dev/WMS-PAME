@@ -788,6 +788,11 @@ def _clave(ref, bod, nivel):
     return f'{ref}|{(bod or "").strip()}'
 
 
+#: Días por consulta al leer la venta de Siesa a nivel red (tanda G): cada
+#: sentencia queda muy por debajo del corte de 25 s de producción.
+DIAS_POR_TRAMO_DE_LECTURA = 45
+
+
 def serie_demanda(desde, hasta, nivel='red', fuente=None, excluir_proyecto=True):
     """EL NUMERADOR. Demanda neta por día y por clave, ambos extremos inclusive.
 
@@ -895,21 +900,28 @@ def serie_demanda(desde, hasta, nivel='red', fuente=None, excluir_proyecto=True)
         from sqlalchemy import select
         fechas = {}
         # Core, no ORM: con ~1 M de filas la carga del ORM costaba más que la
-        # consulta.
-        stmt = (select(D.referencia, D.fecha, v_rep, d_rep, neto_proy)
-                .where(D.fecha >= desde, D.fecha <= hasta)
-                .group_by(D.referencia, D.fecha))
-        for ref, fecha, vend, dev, proy in db.session.connection().execute(stmt):
-            ref = (ref or '').strip()
-            if not ref:
-                continue
-            fecha = fechas.setdefault(fecha, fecha)      # una fecha, un objeto
-            if vend:
-                ventas[ref][fecha] += float(vend)
-            if dev:
-                devol[ref][fecha] += float(dev)
-            if proy:
-                proyecto[ref] += float(proy)
+        # consulta. Por tramos de fechas (el grupo es referencia × día, así que
+        # un tramo nunca parte un grupo): una sola consulta de 420 días a
+        # volumen de producción pasó de 25 s en una máquina cargada, y
+        # producción corta toda sentencia a los 25 s (DB_STATEMENT_TIMEOUT_MS).
+        ini = desde
+        while ini <= hasta:
+            fin_t = min(hasta, ini + timedelta(days=DIAS_POR_TRAMO_DE_LECTURA - 1))
+            stmt = (select(D.referencia, D.fecha, v_rep, d_rep, neto_proy)
+                    .where(D.fecha >= ini, D.fecha <= fin_t)
+                    .group_by(D.referencia, D.fecha))
+            for ref, fecha, vend, dev, proy in db.session.connection().execute(stmt):
+                ref = (ref or '').strip()
+                if not ref:
+                    continue
+                fecha = fechas.setdefault(fecha, fecha)      # una fecha, un objeto
+                if vend:
+                    ventas[ref][fecha] += float(vend)
+                if dev:
+                    devol[ref][fecha] += float(dev)
+                if proy:
+                    proyecto[ref] += float(proy)
+            ini = fin_t + timedelta(days=1)
 
     def _pedidos():
         """Las líneas de factura de la última corrida COMPLETA de cada CO y día.
