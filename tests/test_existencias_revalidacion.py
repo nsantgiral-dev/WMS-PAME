@@ -179,10 +179,16 @@ class TestElEnsayoNoEscribe:
         monkeypatch.setenv('CARGA_FISICA_AUTOMATICA', ' TRUE ')
         assert iss.carga_fisica_automatica() is True
 
-    def test_apagada_la_carga_de_las_7_no_corre(self, app, monkeypatch):
-        monkeypatch.setenv('CARGA_FISICA_AUTOMATICA', 'false')
+    def test_apagada_la_carga_de_las_7_no_corre(self, app, db, monkeypatch):
         corrio = []
         monkeypatch.setattr(iss, '_run_carga_inicial', lambda *a, **k: corrio.append(a))
+        monkeypatch.setattr(iss, 'motivo_carga_bloqueada', lambda bod: '')
+        monkeypatch.setattr(iss, '_avisar_cargas_no_escritas', lambda filas: None)
+        monkeypatch.setenv('CARGA_FISICA_AUTOMATICA', 'true')
+        iss._ejecutar_carga_fisica_diaria(app)
+        assert corrio, 'encendida, la carga corre (si no, el test de apagada no prueba nada)'
+        corrio.clear()
+        monkeypatch.setenv('CARGA_FISICA_AUTOMATICA', 'false')
         iss._ejecutar_carga_fisica_diaria(app)
         assert corrio == []
 
