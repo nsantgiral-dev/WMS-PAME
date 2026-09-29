@@ -2921,9 +2921,17 @@ async function liderAprobarAjuste(id) {
     + 'Se envía a Siesa como ajuste de inventario y cambia la existencia allá. No se deshace desde el WMS.';
   if (!await _modalConfirmar(texto, { titulo: 'Aprobar ajuste', textoConfirmar: 'Aprobar y enviar', textoCancelar: 'Volver' })) return;
   try {
+    // Entrada en una bodega sin costo: el sistema sugiere y quien aprueba
+    // decide (acepta el sugerido o escribe otro con su motivo).
+    let cuerpo = {};
+    const sug = await get(`/api/conteo/${id}/costo-sugerido`);
+    if (sug && sug.requiere_costo) {
+      cuerpo = await liderElegirCosto(f, sug);
+      if (cuerpo === null) return;
+    }
     let d;
     try {
-      d = await put(`/api/conteo/${id}/ajustar`, {});
+      d = await put(`/api/conteo/${id}/ajustar`, cuerpo);
     } catch (e) {
       // Entrada sin costo en ninguna fuente: el servidor no la manda en $0.
       // Se pide el costo unitario y se vuelve a aprobar con él.
@@ -2937,6 +2945,46 @@ async function liderAprobarAjuste(id) {
     alerta(d.mensaje || 'Ajuste aprobado', 'exito');
   } catch (e) { alerta(e.message || 'No se pudo aprobar', 'error'); }
   await liderCargar();
+}
+
+/**
+ * El costo de una entrada sin costo en la bodega: muestra el sugerido y deja
+ * cambiarlo. Cambiarlo pide un motivo, y alejarse mucho del sugerido pide una
+ * confirmación extra (un 9.000 por 900). Sin sugerido, escribirlo es
+ * obligatorio. Devuelve el cuerpo para `PUT /ajustar`, o null si se cancela.
+ */
+async function liderElegirCosto(f, sug) {
+  const unidades = Number(sug.unidades) || 0;
+  const s = sug.sugerido;
+  const base = s ? Math.round(Number(s.costo)) : null;
+  const encabezado = `Entran ${_lNum(unidades)} und de ${esc(f.producto_codigo || '')} ${esc(f.producto_nombre || '')}.<br>`
+    + 'La bodega no tiene costo para este producto: sin un costo, entraría a Siesa en $0.<br><br>';
+  const mensaje = s
+    ? `${encabezado}Costo sugerido: <b>$${_lNum(base)} c/u</b> — ${esc(s.detalle || s.fuente || '')}<br>`
+      + `Total: $${_lNum(base * unidades)}<br><br>Déjelo así o escriba el costo unitario real (pesos, sin IVA):`
+    : `${encabezado}No hay costo sugerido en Siesa ni en el WMS. Escriba el costo unitario (pesos, sin IVA):`;
+  const costo = await _modalCantidad('Costo de la entrada', mensaje, {
+    min: 1, valorInicial: base === null ? '' : base,
+    textoConfirmar: 'Continuar', textoCancelar: 'Volver',
+  });
+  if (costo === null) return null;
+  if (s && costo === base) return { costo_unitario: Number(s.costo) };
+  if (s) {
+    const aviso = Number(sug.aviso_diferencia) || 0.5;
+    if (Math.abs(costo - base) / base > aviso) {
+      const seguro = await _modalConfirmar(
+        `El costo que escribió ($${_lNum(costo)}) está muy lejos del sugerido ($${_lNum(base)}).\n`
+        + `Total: $${_lNum(costo * unidades)} en vez de $${_lNum(base * unidades)}.\n\n¿Es correcto?`,
+        { titulo: 'Revise el costo', textoConfirmar: 'Sí, es correcto', textoCancelar: 'Volver', peligro: true });
+      if (!seguro) return null;
+    }
+    const motivo = await _modalTexto('¿Por qué otro costo?',
+      `Sugerido $${_lNum(base)} → usted pone $${_lNum(costo)}. Queda registrado quién lo cambió y por qué.`,
+      { obligatorio: true, placeholder: 'Ej.: factura de compra 1234', textoConfirmar: 'Aprobar con este costo', textoCancelar: 'Volver' });
+    if (motivo === null) return null;
+    return { costo_unitario: costo, motivo_costo: motivo };
+  }
+  return { costo_unitario: costo };
 }
 
 /** Abre un conteo nuevo del producto (conteo manual). El viejo queda «viejo» cuando el nuevo se cuente, y se cancela. */

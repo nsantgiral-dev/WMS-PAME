@@ -544,12 +544,65 @@ class TestLaEntradaSinCostoNoEntraEnCero:
         with pytest.raises(CostoRequerido, match='mayor que cero'):
             ConteoService.confirmar_ajuste(cc1_id, tienda['admin'].id, costo_unitario=malo)
 
-    def test_el_costo_escrito_no_pisa_una_fuente_conocida(self, db, siesa, tienda):
+    def test_quien_aprueba_puede_cambiar_el_sugerido_con_motivo(self, db, siesa, tienda):
+        """Decisión del dueño (2026-09-29): el sistema sugiere, quien aprueba
+        decide. El valor escrito manda, con su motivo, y queda el rastro."""
+        from app.models.bitacora import BitacoraAccion
         from app.services.conteo_service import ConteoService
         cc1_id = self._descuadre(tienda, siesa)
         siesa.otras_bodegas = [('FC1', 2, 1044)]
-        ConteoService.confirmar_ajuste(cc1_id, tienda['admin'].id, costo_unitario=1)
-        assert _un_job(cc1_id)['costo_unitario'] == 1044
+        ConteoService.confirmar_ajuste(cc1_id, tienda['admin'].id,
+                                       costo_unitario=1200, motivo_costo='factura 555')
+        p = _un_job(cc1_id)
+        assert (p['costo_unitario'], p['costo_fuente']) == (1200, 'MANUAL')
+        assert (p['costo_sugerido'], p['costo_sugerido_fuente']) == (1044, 'SIESA_OTRAS_BODEGAS')
+        assert p['costo_motivo'] == 'factura 555'
+        fila = BitacoraAccion.query.filter_by(entidad='SesionConteo', entidad_id=cc1_id,
+                                              accion='EDITAR').one()
+        assert fila.motivo == 'factura 555'
+        assert fila.usuario_id == tienda['admin'].id
+
+    def test_cambiar_el_sugerido_sin_motivo_no_sale(self, db, siesa, tienda):
+        from app.services.conteo_service import ConteoService
+        cc1_id = self._descuadre(tienda, siesa)
+        siesa.otras_bodegas = [('FC1', 2, 1044)]
+        with pytest.raises(ValueError, match='escriba por qué'):
+            ConteoService.confirmar_ajuste(cc1_id, tienda['admin'].id, costo_unitario=1200)
+        db.session.rollback()
+        assert _jobs(cc1_id) == []
+
+    def test_aceptar_el_sugerido_redondeado_no_es_cambiarlo(self, db, siesa, tienda):
+        """La pantalla muestra el sugerido en pesos enteros: devolverlo así es
+        aceptarlo, sin motivo y con la fuente del sugerido."""
+        from app.services.conteo_service import ConteoService
+        cc1_id = self._descuadre(tienda, siesa)
+        siesa.otras_bodegas = [('FC1', 1, 1000), ('NC1', 3, 1001)]   # 1000,75
+        ConteoService.confirmar_ajuste(cc1_id, tienda['admin'].id, costo_unitario=1001)
+        p = _un_job(cc1_id)
+        assert p['costo_fuente'] == 'SIESA_OTRAS_BODEGAS'
+        assert p['costo_unitario'] == 1000.75
+
+    def test_la_ruta_de_costo_sugerido(self, db, siesa, tienda, client):
+        from flask_jwt_extended import create_access_token
+        cc1_id = self._descuadre(tienda, siesa)
+        siesa.otras_bodegas = [('NS2', 0, 900)]
+        h = {'Authorization': f'Bearer {create_access_token(identity=str(tienda["admin"].id))}'}
+        r = client.get(f'/api/conteo/{cc1_id}/costo-sugerido', headers=h)
+        assert r.status_code == 200, r.get_json()
+        d = r.get_json()
+        assert d['requiere_costo'] is True and d['unidades'] == 10
+        assert d['sugerido']['costo'] == 900
+        h_op = {'Authorization': f'Bearer {create_access_token(identity=str(tienda["a"].id))}'}
+        assert client.get(f'/api/conteo/{cc1_id}/costo-sugerido', headers=h_op).status_code == 403
+
+    def test_la_ruta_de_costo_sugerido_con_promedio_no_pide_costo(self, db, siesa, tienda, client):
+        from flask_jwt_extended import create_access_token
+        siesa.poner(existencia=0, costo=1000.0)
+        cc1_id, r1 = _cc1(tienda, 10)
+        _cc2(tienda, r1, 10)
+        h = {'Authorization': f'Bearer {create_access_token(identity=str(tienda["admin"].id))}'}
+        d = client.get(f'/api/conteo/{cc1_id}/costo-sugerido', headers=h).get_json()
+        assert d['requiere_costo'] is False and d['sugerido'] is None
 
     def test_con_promedio_en_la_bodega_no_lleva_costo(self, db, siesa, tienda):
         """La fila con costo > 0: Siesa usa su promedio, como siempre."""

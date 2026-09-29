@@ -2779,6 +2779,22 @@ Inventario»** existe, activo, ni solo cantidad ni solo valor (capturas del
 entrada no sale, `vars_criticas`). Todo lo demás sigue siendo clase 63.
 Pendiente: que el contador confirme la contrapartida del 0601-01.
 
+**Validado en QA el 2026-09-29 16:33:** ADI-00000041, origen «Entradas»,
+PAPELSP7878 12 und a $900 = $10.800; asiento débito 14350101 (inventario
+importación gravado 19 %) / crédito **61352801 (costo mercancía grav. 19 %)**
+— la contrapartida del 0601-01 es costo de ventas, no una cuenta de ingreso:
+decisión del contador.
+
+**Quien aprueba decide el costo (decisión del dueño, 2026-09-29).** El sistema
+sugiere y la persona acepta o cambia: `GET /api/conteo/<id>/costo-sugerido`
+(`ConteoService.costo_sugerido_entrada`) y la pantalla (`liderElegirCosto`)
+muestra el sugerido editable. Aceptarlo (a menos de $1: la pantalla redondea a
+pesos) conserva su fuente; cambiarlo exige `motivo_costo`, sale como fuente
+`MANUAL` con `costo_sugerido`/`costo_sugerido_fuente`/`costo_motivo` en el
+payload y un EDITAR en la bitácora (quién, sobre qué sugerido, por qué).
+Alejarse más de `AVISO_DIFERENCIA_COSTO` (50 %) del sugerido pide una
+confirmación extra en pantalla; no bloquea.
+
 ---
 
 ## Conteo: «no lo encontré» no es un cero (2026-09-23)
