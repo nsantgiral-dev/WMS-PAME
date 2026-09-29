@@ -446,7 +446,7 @@ def repartir_conteos(almacen_id, *, por_id: int, cantidad=None, operario_ids=Non
 def elegir_para_segundo_conteo(cc2, *, excluir_ids=()):
     """A quién se le da un CC2 recién nacido: la persona **presente** que hace
     conteo rutinario en ese almacén, no contó nada de la cadena y no tiene ya un
-    conteo vivo sobre ese mismo hueco (la primera por id). `None` si no hay
+    conteo vivo del mismo SKU en ese almacén (la primera por id). `None` si no hay
     nadie: el CC2 queda en la cola (cualquiera presente lo toma, y el doble
     ciego lo protege ahí también).
 
@@ -457,9 +457,11 @@ def elegir_para_segundo_conteo(cc2, *, excluir_ids=()):
     from app.models.conteo import EstadoConteo, SesionConteo
     from app.services.conteo_service import ConteoService
     previos = ConteoService._operarios_previos_de_la_cadena(cc2) | set(excluir_ids)
+    # La unidad es SKU × almacén (C1, 2026-09-27): el conflicto se mide ahí, no
+    # por hueco — la cadena ya no vive en un hueco, cuenta el total del SKU.
     en_conflicto = {r[0] for r in db.session.query(SesionConteo.operario_id).filter(
         SesionConteo.producto_id == cc2.producto_id,
-        SesionConteo.ubicacion_id == cc2.ubicacion_id,
+        SesionConteo.almacen_id == cc2.almacen_id,
         SesionConteo.estado.in_([EstadoConteo.PENDIENTE, EstadoConteo.EN_PROCESO]),
         SesionConteo.operario_id.isnot(None)).all()}
     aptos = [c for c in candidatos(CONTEO, almacen_id=cc2.almacen_id)['disponibles']

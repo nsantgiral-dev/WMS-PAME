@@ -609,13 +609,18 @@ class MobileService:
 
             if bajo_tope and _cuenta_rutinarios:
                 from sqlalchemy.orm import joinedload as _jl_cm
-                # El almacén es el de la ubicación que se está pickeando: el
-                # conteo intercalado es, por definición, de ese mismo hueco.
+                # El almacén es el de la ubicación que se está pickeando. El
+                # conteo intercalado es el del SKU que se está pickeando en ese
+                # almacén: la unidad del conteo es SKU × almacén (C1,
+                # 2026-09-27) y la cadena ya no vive en un hueco — su ubicación
+                # es SIESA-GENERAL o el hueco mayor, y el HUD nombra todos los
+                # lugares del SKU. Filtrar por el hueco ofrecía una cadena solo
+                # cuando por azar vivía en el hueco del picking.
                 _ubic_interc = _ubic_tarea
                 conteo_mismo_lugar = (SesionConteo.query
                     .options(_jl_cm(SesionConteo.producto))
                     .filter(
-                        SesionConteo.ubicacion_id == tarea.ubicacion_id,
+                        SesionConteo.producto_id == tarea.producto_id,
                         *ConteoService.filtros_pool_sin_dueno(
                             operario_id,
                             _ubic_interc.almacen_id if _ubic_interc else None),
@@ -637,7 +642,7 @@ class MobileService:
                     }
                     logger.info(
                         f'[INTERLEAVING] Conteo {conteo_mismo_lugar.codigo} '
-                        f'inyectado junto al picking {tarea.codigo} — ubicación {tarea.ubicacion_id} '
+                        f'inyectado junto al picking {tarea.codigo} — mismo SKU (producto {tarea.producto_id}) '
                         f'({conteos_hoy + 1 if capacidad > 0 else "∞"}/{capacidad or "∞"})'
                     )
 

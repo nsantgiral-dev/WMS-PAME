@@ -500,17 +500,15 @@ ABREN_SIN_GUARDA = {
 #: Quién filtra sesiones por hueco. Ninguno es una guarda de «¿ya hay una
 #: cadena de este producto?». Solo encoge.
 POR_HUECO = {
-    ('app/services/mobile_service.py', 'MobileService.get_tarea_actual'):
-        'El intercalado ofrece al picker un conteo del hueco donde está pickeando: '
-        'es reparto por cercanía, no una guarda contra Siesa (C5 lo revisa con la '
-        'asignación por presencia).',
-    ('app/services/conteo_service.py', 'ConteoService._crear_conteo_verificacion'):
-        'Excluye del CC2 a quien ya tiene una tarea del mismo producto y hueco: es '
-        'reparto de personas, no una guarda. La asignación por presencia (v3) lo '
-        'reemplaza entero.',
     ('app/services/dashboard_service.py', 'DashboardService.productividad_operarios'):
         'Un JOIN para pintar el código de la ubicación, no un filtro.',
 }
+# Salieron en la integración final (2026-09-29), al juntar C1 con la asignación
+# por presencia: `MobileService.get_tarea_actual` (el intercalado ofrece la
+# cadena del SKU que se pickea en ese almacén, no la del hueco) y
+# `ConteoService._crear_conteo_verificacion` (el reparto del CC2 se mudó a
+# `asignacion.elegir_para_segundo_conteo`, que mide el conflicto por SKU ×
+# almacén).
 
 
 class TestLaUnidadEnElCodigo:
@@ -551,6 +549,22 @@ class TestLaUnidadEnElCodigo:
         """Un escáner roto devuelve cero: las puertas conocidas tienen que aparecer."""
         n = sum(1 for _ in _fuentes())
         assert n >= 200
+        # Las dos formas viejas, devueltas EN MEMORIA al código real, se ven.
+        for rel, sano, viejo, fn in (
+                ('app/services/mobile_service.py',
+                 'SesionConteo.producto_id == tarea.producto_id',
+                 'SesionConteo.ubicacion_id == tarea.ubicacion_id',
+                 'MobileService.get_tarea_actual'),
+                ('app/services/asignacion.py',
+                 'SesionConteo.almacen_id == cc2.almacen_id',
+                 'SesionConteo.ubicacion_id == cc2.ubicacion_id',
+                 'elegir_para_segundo_conteo')):
+            real = (RAIZ / rel).read_text(encoding='utf-8')
+            assert real.count(sano) == 1, (rel, 'la mutación tiene que aplicar una vez')
+            _, _, _, ph = _escanear([(rel, real.replace(sano, viejo))])
+            assert (rel, fn) in ph, (rel, fn)
+            _, _, _, ph = _escanear([(rel, real)])
+            assert (rel, fn) not in ph, (rel, fn)
         arbol = ast.parse((APP / 'services' / 'abc_service.py').read_text(encoding='utf-8'))
         con_nueva_raiz = [nm for nm, fn in _funciones(arbol) if _llama(fn, 'nueva_raiz')]
         assert {'ABCService.generar_tareas_conteo_diario',
@@ -620,15 +634,15 @@ class TestElDetectorMuerde:
 DOMINIO_CONTEO = ('app/services/conteo_service.py', 'app/services/abc_service.py',
                   'app/models/conteo.py', 'app/services/conteo_politica.py',
                   'app/services/conteo_listado.py', 'app/services/tablero_lider_conteo.py',
-                  'app/services/metricas/conteo.py', 'app/routes/conteo.py')
+                  'app/services/metricas/conteo.py', 'app/routes/conteo.py',
+                  'app/services/asignacion.py')
 
 #: Filtros por la ubicación de un objeto en el dominio de conteo. Solo encoge.
-POR_HUECO_DE_UN_OBJETO = {
-    ('app/services/conteo_service.py', 'ConteoService._crear_conteo_verificacion'):
-        'El mismo del inventario de arriba: excluye del CC2 a quien ya tiene una tarea '
-        'del mismo producto y hueco. Es reparto de personas; la asignación por '
-        'presencia (v3) lo reemplaza entero.',
-}
+POR_HUECO_DE_UN_OBJETO = {}
+# Vacío desde la integración final (2026-09-29): el único que quedaba
+# (`_crear_conteo_verificacion`, el conflicto de hueco del CC2) se mudó a
+# `asignacion.elegir_para_segundo_conteo` y ahí mide SKU × almacén. Por eso
+# `asignacion.py` entra al dominio del escáner: es donde vive ahora el reparto.
 
 
 def _es_ubicacion_de_un_objeto(v):
@@ -699,9 +713,20 @@ class TestLaCantidadDelWmsEsDelSku:
         assert escrituras == [], f'la rama del job escribe .cantidad a mano: líneas {escrituras}'
 
     def test_piso_el_escaner_ve_el_dominio(self):
+        """El inventario quedó vacío: un escáner roto también devolvería vacío.
+        Se le devuelve EN MEMORIA la forma vieja al código real (el conflicto
+        del CC2 por hueco) y tiene que verla."""
         assert len(_fuentes_dominio()) == len(DOMINIO_CONTEO)
-        assert ('app/services/conteo_service.py', 'ConteoService._crear_conteo_verificacion') \
-            in _por_hueco_de_un_objeto(_fuentes_dominio())
+        fuentes = dict(_fuentes_dominio())
+        real = fuentes['app/services/asignacion.py']
+        sano = 'SesionConteo.almacen_id == cc2.almacen_id'
+        assert real.count(sano) == 1, 'la mutación tiene que aplicar exactamente una vez'
+        fuentes['app/services/asignacion.py'] = real.replace(
+            sano, 'SesionConteo.ubicacion_id == cc2.ubicacion_id')
+        assert ('app/services/asignacion.py', 'elegir_para_segundo_conteo') \
+            in _por_hueco_de_un_objeto(list(fuentes.items()))
+        assert ('app/services/asignacion.py', 'elegir_para_segundo_conteo') \
+            not in _por_hueco_de_un_objeto(_fuentes_dominio())
 
 
 class TestElDetectorDeHuecoDeUnObjetoMuerde:

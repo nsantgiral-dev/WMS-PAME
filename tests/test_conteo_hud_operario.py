@@ -453,6 +453,32 @@ class TestLoQuePintaElHud:
         assert d['tipo'] == 'PICKING' and d['conteo_intercalado'] is None
         assert _sesion(db, conteo).operario_id is None, 'le colgó el conteo igual'
 
+    def test_se_intercala_la_cadena_del_sku_que_se_pickea_aunque_viva_en_otro_lugar(
+            self, db, tienda, conteo):
+        """La unidad es SKU × almacén (C1): la cadena vive en SIESA-GENERAL o en
+        el hueco mayor, no en el hueco del picking. El intercalado ofrece la del
+        SKU que se está pickeando en ese almacén (integración final, 2026-09-29);
+        filtrar por el hueco la ofrecía solo si por azar vivía ahí."""
+        from app.models.picking import TareaPicking
+        from app.models.ubicacion import Ubicacion
+        s = _sesion(db, conteo)
+        s.operario_id = None
+        s.estado = 'PENDIENTE'
+        hueco = Ubicacion(codigo='A-09-01', almacen_id=s.almacen_id, tipo_zona='PICKING',
+                          stock_minimo=0, stock_maximo=999, secuencia_ruteo=1, activo=True)
+        db.session.add(hueco)
+        db.session.flush()
+        assert hueco.id != s.ubicacion_id and hueco.es_fisica
+        t = TareaPicking(codigo='PK-HUD-3', producto_id=s.producto_id, cantidad_solicitada=1,
+                         ubicacion_id=hueco.id, almacen_id=s.almacen_id,
+                         estado='PENDIENTE', tipo_documento='PEDIDO', referencia_documento='PDY')
+        db.session.add(t)
+        db.session.commit()
+        d = _mob().get_tarea_actual(tienda['b'].id)
+        assert d['tipo'] == 'PICKING'
+        assert d['conteo_intercalado'] and d['conteo_intercalado']['id'] == conteo
+        assert _sesion(db, conteo).operario_id == tienda['b'].id
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 6 · Mercancía sin código: nota para el líder, no toca el conteo
