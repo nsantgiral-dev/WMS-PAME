@@ -6528,31 +6528,30 @@ La validación del 2026-09-27 rechazó las tandas por P1
 | **P1-E** sin año | Sin un año, el promedio de 12 meses (un producto de 120 días daba 3,3/día vendiendo 10) | `METODO_RECIENTE` (`ULTIMAS_SEMANAS`): las últimas 13 semanas —o los días que existe— sobre días observados, declarado (`SIN_ANO_ANTERIOR` / `PRODUCTO_NUEVO`); con < 8 días con venta en 13 semanas completas («vende de a ratos»), su venta del año |
 | **P1-C** «ya se pidió» | Contaba 7 días fijos | Hasta que la OC aparece en el espejo o **LT + 2σ del proveedor** (`compras_decisiones.dias_pedido_en_camino`, calculado al leer; se retiró `COMPRAS_PEDIDO_EN_CAMINO_DIAS`). Vencido, deja de contar y la línea vuelve marcada: «Ya se pidió el … (OC n.º …) … No ha llegado ni aparece en Siesa: confírmelo con el proveedor» (`pedido_sin_llegar`) |
 | **P1-D** lo decidido | «Ya decidido» mostraba 14 días: una pospuesta de 30 no se podía ver ni deshacer | `recientes()` = lo de los últimos días **más toda decisión vigente** (`_ultimas`, 120 días). `reaparece()`: una pospuesta que se vuelve URGENTE o cuyo faltante crece > 50 % vuelve marcada (`decision_reaparece.texto`) |
-| **P1-F / G** rendimiento | La venta se leía dos veces por corrida y se recalculaba en cada clic | `lectura_demanda`: UNA lectura (suma de red en SQL, por tramos de 45 días) para la demanda de 12 meses y la del horizonte. Caché por proceso en dos capas: el **ROP** por (nivel, día, `sello_de_datos_rop`: existencias, OCs, contenedores, decisiones, catálogo, variables, registros) y la **lectura de la venta** hasta que llega venta nueva (`sello_de_la_venta`; techo 6 h). `COMPRAS_CACHE_ROP=false` las apaga; en tests, apagadas salvo `COMPRAS_CACHE_ROP_EN_TESTS`. `verificar_oc` en una consulta (era N+1: 12 s) |
+| **P1-F / G** rendimiento | La venta se leía dos veces por corrida y se recalculaba en cada clic: la bandeja fría tardaba 32–62 s contra los 60 s de gunicorn | **Ningún request calcula lo caro** (m052comprasg). El ROP se partió: `ArmadorService.calcular_demanda_rop` (la venta —UNA lectura, `lectura_demanda`, suma de red en SQL por tramos de 45 días—, el horizonte, el lead time y el régimen de cada SKU) se guarda en `compras_rop_calculo` (una fila por nivel, reescrita); `componer_rop` le suma al leer la posición de AHORA (existencias, OCs, contenedores, «ya se pidió»). La calcula el cron `[COMPRAS_ROP]` (cada 10 min, solo si quedó vieja; `COMPRAS_ROP_CRON=false` lo apaga; lock 2085) o un hilo que encola el request que la encuentra vieja. Vieja = cambió `compras_rop.sello_de_la_demanda`: el día, la venta (solo los registros que escriben venta: el de pedidos abre uno por minuto), el catálogo, las variables, el LT por defecto. Vieja → se muestra con su fecha y «recalculando»; sin ninguna → la bandeja `RECALCULANDO` sin líneas y el contenedor NO APTO; un recálculo que falla queda escrito y no borra lo guardado. Trinquete AST: solo `compras_rop` llama a lo caro y ninguna ruta a la puerta del worker. `verificar_oc` en una consulta (era N+1: 12 s) |
 | **P2** | Pedir y después «No pedir» seguía contando; un SKU solo de licitación se bloqueaba en recompra | Manda la última decisión; `venta_proyecto > 0` cuenta como «se vende» para el bloqueo (`solo_venta_de_proyecto_no_bloqueados`) |
 
-**Medido** (5.500 filas/día × 430 días = 2,37 M filas, 6.000 SKU, en el Mac de
-8 GB con carga 18–20 y memoria en swap; **no es la máquina de producción**):
-
-| | SQLite | PostgreSQL 17 |
-|---|---|---|
-| Bandeja fría (lee la venta) | 62 s · 204 MB | 32 s · 254 MB (el 2026-09-28, carga 11–17); hoy la consulta única pasó de 25 s |
-| Segunda vez (caché del ROP) | 0,6 s | — |
-| Tras una OC nueva (recalcula el ROP, la venta sale de la caché) | 7,8 s | — |
-| Tras venta nueva (todo de nuevo) | 94 s | — |
-
-**< 400 MB: se cumple. < 15 s en frío: NO se cumple en esta máquina**; sí en
-toda consulta que no es la primera después de la lectura diaria de la venta.
-El `GROUP BY` sobre 2,3 M filas eligió el índice (referencia, fecha) y con la
-memoria en swap tardó 248 s; forzando el scan secuencial, 30 s. De ahí los
-tramos de 45 días: ninguna sentencia cerca del corte de 25 s de producción.
+**Medido** en PostgreSQL 17 (5.500 filas/día × 430 días = 2,37 M filas, 6.000
+SKU, en el Mac de 8 GB con carga 19–21; **no es la máquina de producción**): el
+recálculo del worker **23,5 s** (JSON de 10,5 MB); la bandeja leyendo lo
+guardado **1,4–2,1 s** (el ROP 0,25 s; el resto es la propia bandeja: costos,
+empaques); tras una OC nueva, 2,1 s y sin recalcular. Antes de persistir, la
+bandeja fría era 32 s en PG y 62 s en SQLite. El `GROUP BY` de la venta, en una
+sola sentencia y con la memoria en swap, pasó de 248 s: de ahí los tramos de
+45 días (cada sentencia lejos del corte de 25 s de producción).
 
 **Lo que NO cubre, dicho:**
-- **La caché es por proceso**: cada worker de gunicorn paga la lectura en frío
-  una vez por día (y por venta nueva). Con gunicorn cortando a los 60 s, una
-  bandeja fría más lenta que eso en producción moriría. **No se midió en
-  producción.** Las salidas —calentar la caché en el worker web después de la
-  lectura diaria, o guardarla en la base— no se hicieron.
+- **La demanda puede estar horas vieja** si el worker no corre
+  (`HEAVY_SCHEDULERS` apagado): la recalcula el primer request que la
+  encuentra vieja, en un hilo del proceso web. Lo guardado no se invalida por
+  un cambio de lead time medido (OCs cumplidas nuevas) ni por las existencias
+  que usa la censura: se rehace al día siguiente.
+- **No se midió en producción**; el recálculo (23,5 s aquí) corre fuera del
+  request, así que no choca con el corte de 60 s.
+- **El agotado de hoy** se reconoce con la red entera en cero, no con las
+  bodegas donde el SKU vende (P2 de la validación, declarado): si solo queda
+  stock en una bodega que no lo vende, la racha final no cuenta como agotado y
+  la demanda sale baja — el lado que se corrige.
 - La censura inferida **no ve** un agotado que dura más de 13 semanas (se lee
   como fuera de temporada) ni uno en un vendedor muy lento (un hueco de 10
   días en 1 u cada 5 días es azar); la racha final solo cuenta si hoy la red
@@ -6564,15 +6563,12 @@ tramos de 45 días: ninguna sentencia cerca del corte de 25 s de producción.
   del origen): con el default nacional 10 ± 5 son 20 días.
 - El tope de 120 días de `_ultimas`: una decisión más vieja ya no oculta nada.
 
-**Mutaciones de este trabajo: 30, las 30 rojas** (tres sobrevivían al primer
+**Mutaciones de este trabajo: 42, las 42 rojas** (30 de la validación, 12 de la persistencia) (tres sobrevivían al primer
 intento y obligaron a tres tests: la venta normal como piso con agotado, el
 producto nuevo sin 13 semanas y «no pedir» sin rastro de pedido; la del tramo que repite el borde cuelga la lectura y cuenta roja por tiempo, 240 s).
 
 **Decisiones para el dueño (nuevas):**
-6. **¿Calentar la bandeja** después de la lectura diaria de la venta (un cron
-   en el web), o guardar el ROP en la base? Hasta entonces la primera consulta
-   del día es lenta.
-7. **Umbral de «reaparece»** (faltante +50 %) y de la censura (1 %, 7–91 días,
+6. **Umbral de «reaparece»** (faltante +50 %) y de la censura (1 %, 7–91 días,
    25 %): provisionales.
 
 ---
