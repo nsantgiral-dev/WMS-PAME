@@ -7397,7 +7397,8 @@ Tests: `tests/test_existencias_revalidacion.py` (el reintento, el interruptor y
 el ensayo, el cero solo del espejo con la reconciliación, la caché de
 traslados, y en Node con `util.js` real el tablero de movimientos y la fecha de
 Pedir) y `tests/test_val_compras_ac_20260929.py` (el xfail del validador, en
-verde).
+verde). **14 mutaciones, las 14 rojas** (el interruptor sobrevivía: el test de
+«apagada» no probaba que encendida sí corriera).
 
 **Lo que NO cubre, dicho:**
 - **Un inventario que cambia de forma balanceada entre dos páginas** (una fila
