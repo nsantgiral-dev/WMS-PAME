@@ -257,6 +257,7 @@ class TestLaDemandaSeGuarda:
             r = ArmadorService.armar_contenedor()
         assert guardada['calculos'] == 0
         assert r.get('apta') is False
+        assert 'todavía no se calculó' in str(r.get('no_apta_por')), r.get('no_apta_por')
 
     def test_recalcular_si_hace_falta(self, app, db, guardada):
         from app.models.registro_sync import RegistroSync
