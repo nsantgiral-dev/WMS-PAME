@@ -18,14 +18,18 @@ escribe las filas del libro a mano prueba que la base las acepta, que es
 exactamente lo que ya hacen los ~1900 tests y por eso ninguno ve un defecto de
 frontera.
 
-## Y la violación también
+## Y la violación también — hasta que el defecto se arregló (2026-09-29)
 
-`test_ve_una_cantidad_movida_sin_movimiento` no escribe el descuadre: **corre el
-job `AJUSTE_CONTEO` de verdad** (`siesa_job_service._ejecutar_job`), que muta
-`UbicacionProducto.cantidad` en su rama de recuperación sin escribir ningún
-`MovimientoInventario`. Si mañana alguien le agrega el movimiento que le falta,
-este test se pone rojo — y eso es correcto: el detector deja de tener qué ver
-porque el defecto se arregló, y hay que venir a leer esto antes de tocarlo.
+`test_ve_una_cantidad_movida_sin_movimiento` corría el job `AJUSTE_CONTEO` de
+verdad, que mutaba `UbicacionProducto.cantidad` en su rama de recuperación sin
+escribir ningún `MovimientoInventario`. Este párrafo avisaba que el día que
+alguien le agregara el movimiento el test se pondría rojo. Pasó: conteo C1
+(VAL-2) hizo que el job mueva el WMS por `aplicar_ajuste_al_wms`, que deja el
+movimiento de cada hueco. Ya no queda en `app/` un escritor conocido que mueva
+el estante sin libro, así que la violación la escribe el test **como la
+escribiría ese escritor** (una asignación a `.cantidad`, sin movimiento), y
+`test_el_job_del_ajuste_ya_escribe_el_libro` fija que el job arreglado no
+vuelve a producirla.
 """
 import json
 from datetime import datetime
@@ -149,17 +153,29 @@ class TestElDetectorNoEstaCiego:
     """Se rompe el libro a propósito y se exige que el invariante lo vea."""
 
     def test_ve_una_cantidad_movida_sin_movimiento(self, db, kardex, usuario):
-        """**La violación la escribe el código roto, no el test.**
+        """Un escritor mueve el estante y no escribe el libro.
 
-        `siesa_job_service`, rama de recuperación de `AJUSTE_CONTEO`, muta
-        `UbicacionProducto.cantidad` y **no escribe ningún
-        `MovimientoInventario`** — ni ahí ni en la rama principal del mismo job.
-        El stock del WMS cambia y el libro no se entera.
-
-        Y es la asimetría que hace que este guard pueda fallar: el camino roto
-        no toca `movimientos_inventario`, así que **no puede mover el último
-        `saldo_despues` para taparse**.
+        Era el job `AJUSTE_CONTEO` (rama de recuperación) hasta el 2026-09-29;
+        ver el encabezado. La asimetría que hace que este guard pueda fallar
+        sigue igual: el camino roto no toca `movimientos_inventario`, así que
+        **no puede mover el último `saldo_despues` para taparse**.
         """
+        from app.models.inventario import MovimientoInventario
+        movs_antes = MovimientoInventario.query.count()
+        kardex.registro.cantidad -= 6          # lo que hacía el escritor sin libro
+        db.session.commit()
+        assert MovimientoInventario.query.count() == movs_antes
+
+        r = _res('INV-01')
+        assert r['total'] == 1, 'INV-01 no vio un ajuste que movió stock sin libro'
+        assert r['hallazgos'][0]['datos']['diferencia'] == -6
+        assert r['hallazgos'][0]['datos']['saldo_despues'] == 38
+        assert r['hallazgos'][0]['datos']['cantidad_actual'] == 32
+
+    def test_el_job_del_ajuste_ya_escribe_el_libro(self, db, kardex, usuario):
+        """El defecto que este test antes ejercía, arreglado: la rama de
+        recuperación del job `AJUSTE_CONTEO` mueve el estante **y** deja el
+        movimiento (`aplicar_ajuste_al_wms`), así que INV-01 no tiene qué ver."""
         from app.models.conteo import EstadoConteo, SesionConteo
         from app.models.inventario import MovimientoInventario
         from app.models.siesa_job import SiesaJob
@@ -169,8 +185,6 @@ class TestElDetectorNoEstaCiego:
             codigo='CNT-INV01', tipo='MANUAL', ubicacion_id=kardex.ubicacion.id,
             almacen_id=kardex.almacen_id, producto_id=kardex.producto.id,
             estado=EstadoConteo.AJUSTANDO, siesa_triggered=True,
-            # Con su desenlace (2026-09-26): bandera sola ya es «no sé» y la
-            # rama de recuperación solo corre si el ajuste entró a Siesa.
             siesa_response='{"codigo": 0}',
             operario_id=usuario.id)
         db.session.add(sesion)
@@ -184,17 +198,10 @@ class TestElDetectorNoEstaCiego:
 
         movs_antes = MovimientoInventario.query.count()
         _ejecutar_job(job)
-
-        # El job movió el stock y no dejó rastro en el libro: las dos mitades
-        # del defecto, verificadas antes de mirar al auditor.
+        db.session.expire_all()
         assert kardex.registro.cantidad == 32
-        assert MovimientoInventario.query.count() == movs_antes
-
-        r = _res('INV-01')
-        assert r['total'] == 1, 'INV-01 no vio un ajuste que movió stock sin libro'
-        assert r['hallazgos'][0]['datos']['diferencia'] == -6
-        assert r['hallazgos'][0]['datos']['saldo_despues'] == 38
-        assert r['hallazgos'][0]['datos']['cantidad_actual'] == 32
+        assert MovimientoInventario.query.count() == movs_antes + 1
+        assert _res('INV-01')['total'] == 0
 
     def test_ve_la_cadena_rota_entre_dos_movimientos(self, db, kardex):
         """El escritor fantasma de la mitad de la cadena.

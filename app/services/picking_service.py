@@ -1101,6 +1101,16 @@ class PickingService:
         if dueno is not None and presencia.esta_disponible(dueno):
             raise ValueError(f'{dueno.nombre} está en turno recogiendo esta línea: no se le quita. '
                              'Si no la va a terminar, que la reporte o la suelte él.')
+        # Volver al pool es otra puerta de «un picking de pedido listo para
+        # recoger» (integración final, 2026-09-29): si la caja del pedido ya no
+        # recibe líneas, lo que se recoja restaría del hueco unidades que
+        # ninguna caja puede llevar. No vuelve; la salida es Reabrir, que cierra
+        # lo recogido y declara el faltante.
+        no_recibe = PickingService.motivo_caja_no_recibe(tarea.referencia_documento)
+        if no_recibe and (tarea.tipo_documento or '').upper() != 'TRASLADO':
+            raise ValueError(f'No vuelve a la cola: {no_recibe}. Lo que se recoja no tendría '
+                             'caja. Repórtela como problema y use Reabrir: cierra lo recogido y '
+                             'declara el faltante.')
         antes = foto(tarea, ['estado', 'operario_id', 'cantidad_recogida', 'empaques_escaneados'])
         recogido = tarea.cantidad_recogida or 0
         PickingService._soltar_operario(tarea)

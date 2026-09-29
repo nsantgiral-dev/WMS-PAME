@@ -97,10 +97,20 @@ def tarea_actual():
 def regrese():
     """«Ya volví»: la persona que figura ausente (sin fecha de regreso) vuelve
     a trabajar. Abrir la aplicación no cierra la ausencia; esto sí
-    (`presencia.registrar_regreso`)."""
+    (`presencia.registrar_regreso`).
+
+    Solo personal de almacén (`_opera_almacen`, la lista blanca): la presencia
+    decide a quién se le da trabajo de almacén —conteo, picking, reposición— y
+    las dos pantallas que lo llaman son de ese oficio. Un conductor o una
+    tienda no tienen ausencia que cerrar acá (integración final, 2026-09-29)."""
+    from app.extensions import db
+    from app.models.usuario import Usuario
     from app.services.presencia import registrar_regreso
+    operario_id = _operario_id()
+    if not _opera_almacen(db.session.get(Usuario, operario_id)):
+        return jsonify({'error': 'Sin permiso: solo el personal de almacén figura en la presencia'}), 403
     try:
-        return jsonify(registrar_regreso(_operario_id())), 200
+        return jsonify(registrar_regreso(operario_id)), 200
     except LookupError as e:
         return jsonify({'error': str(e)}), 404
     except ValueError as e:

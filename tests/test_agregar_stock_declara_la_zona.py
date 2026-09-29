@@ -127,6 +127,15 @@ DECLARADAS = {
         '2026-09-14 · la reconciliación compara bodega contra bodega. Filtrar '
         'averías acá rompería el cuadre a propósito: Siesa las tiene dentro de '
         'la misma bodega mientras nadie las mueva a AV1.'),
+    'app/services/conteo_service.py::existencia_wms_del_sku': (
+        '2026-09-29 · el total del SKU en el almacén, todas las zonas: es la '
+        'unidad del conteo (C1) y va de la mano con `lugares_del_sku` (el HUD '
+        'nombra todo lugar donde el WMS lo tiene) y `aplicar_ajuste_al_wms` '
+        '(reparte sobre todas sus filas). APLAZAMIENTO, no absolución: si una '
+        'avería ya se trasladó a AV1 en Siesa y el WMS la sigue teniendo en la '
+        'zona de averías de la bodega, este total la cuenta y Siesa no. Filtrarla '
+        'solo acá haría divergir las tres; la decisión es del frente de conteo '
+        '(integración final, sin medir en producción).'),
     'app/services/layout_service.py::_stock_activo': (
         '2026-09-14 · guard de remodulación: pregunta «¿este hueco tiene algo?» '
         'y la respuesta no puede depender de la zona. Quién puede moverse lo '
@@ -140,7 +149,7 @@ DECLARADAS = {
 #: Piso EXACTO, no holgado. Una versión anterior lo dejó tres por debajo del
 #: real y una mutación plausible —saltarse dos archivos— se comía la holgura
 #: dejando los cuatro tests en verde.
-PISO_SITIOS = 20
+PISO_SITIOS = 22   # 2026-09-29: + plan_de_ceros (carga física) y existencia_wms_del_sku (conteo C1)
 
 
 # ── El scanner ─────────────────────────────────────────────────────────────

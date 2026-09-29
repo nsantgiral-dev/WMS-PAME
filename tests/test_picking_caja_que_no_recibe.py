@@ -158,6 +158,43 @@ class TestLaCajaQueNoRecibe:
         assert r.status_code == 409, r.get_json()
         assert _pendientes('PD7207') == 0
 
+    def test_devolver_a_la_cola_un_picking_a_medio_recoger_tampoco(self, db, almacen):
+        """«Devolver a la cola» (asignación n1) es otra puerta al pool: con la
+        caja del pedido despachada se niega y la tarea sigue donde estaba."""
+        from app.models.picking import TareaPicking
+        from app.models.usuario import Usuario
+        from app.services.packing_service import PackingService
+        from app.services.picking_service import PickingService
+        from tests.flujo import conductor_de_flujo as cf
+        op = Usuario(nombre='Op cola', email='op-cola-7208@t.co', rol='operario',
+                     almacen_id=almacen.id, activo=True)
+        sup = Usuario(nombre='Sup cola', email='sup-cola-7208@t.co', rol='supervisor',
+                      almacen_id=almacen.id, activo=True)
+        op.set_password('x')
+        sup.set_password('x')
+        db.session.add_all([op, sup])
+        db.session.commit()
+        p = cf.sembrar_catalogo(db, almacen, n=1, con_stock=20)[0][0]
+        t = PickingService.crear_tareas(producto_id=p.id, cantidad=5, almacen_id=almacen.id,
+                                        referencia_documento='PD7208', tipo_documento='PEDIDO')[0]
+        PickingService.iniciar_picking(t.id, op.id)
+        caja = PackingService.crear_manual(
+            numero_pedido_siesa='PD7208', almacen_id=almacen.id,
+            items=[{'producto_id': p.id, 'cantidad': 5}],
+            tipo_docto_pedido_siesa='PD', consec_docto_pedido_siesa='7208')
+        caja.estado, caja.siesa_triggered = 'DESPACHADO', True
+        caja.rm_tipo, caja.rm_consec = 'RM', 57
+        caja.fe_confirmada_at = datetime.utcnow()
+        op.ultima_senal_at = None                      # el dueño no está
+        db.session.commit()
+        with pytest.raises(ValueError, match='despachada'):
+            PickingService.devolver_en_curso_a_la_cola(t.id, sup.id, 'se fue a medio recoger')
+        db.session.rollback()
+        db.session.expire_all()
+        t = db.session.get(TareaPicking, t.id)
+        assert (t.estado, t.operario_id) == ('EN_PROCESO', op.id)
+        assert _pendientes('PD7208') == 0
+
     def test_pwa_pide_el_motivo_y_muestra_el_mensaje(self):
         src = (RAIZ / 'app/static/pwa/app.js').read_text(encoding='utf-8')
         cuerpo = src[src.index('async function reabrirTareaPicking'):]

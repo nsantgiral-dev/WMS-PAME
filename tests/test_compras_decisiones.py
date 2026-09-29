@@ -459,6 +459,9 @@ ANULAN_OTRO_MODELO = {
     ('app/services/presencia.py', 'anular_ausencia'):
         'AusenciaUsuario.anulada_en (m051asignacion): cerrar una ausencia declarada '
         'cuando la persona vuelve. No es una decisión de compra.',
+    ('app/services/caja_conductor.py', 'anular_acta'):
+        'EntregaCaja.anulada_en (m051liqcaja): anular un acta de entrega de caja del '
+        'conductor. No es una decisión de compra.',
 }
 
 
@@ -486,7 +489,7 @@ class TestUnaDecisionUnDueno:
 
     def test_el_inventario_solo_encoge(self):
         assert sum(len(v) for v in PERMITIDOS.values()) <= 6
-        assert len(ANULAN_OTRO_MODELO) <= 1
+        assert len(ANULAN_OTRO_MODELO) <= 2
         assert all(len(m) >= 40 for m in ANULAN_OTRO_MODELO.values())
 
     def test_lo_ajeno_es_ajeno_de_verdad(self):

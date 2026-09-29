@@ -1015,12 +1015,24 @@ def _sesion(db, almacen, producto, estado, es_hijo=False, origen=None, nacio=Non
     return s
 
 
+def _otro_producto(db):
+    """Un SKU propio: desde m051conteo (C1) hay una sola cadena viva por SKU ×
+    almacén (`ix_sesion_conteo_sku_activa_unica`), así que dos raíces vivas
+    son dos productos."""
+    import uuid
+    from app.models.producto import Producto
+    p = Producto(codigo=f'DSH-{uuid.uuid4().hex[:6]}', nombre='Producto del tablero')
+    db.session.add(p)
+    db.session.flush()
+    return p
+
+
 class TestDashboard:
 
     def test_con_diferencia_cuenta_descuadres_y_no_segundo_conteo(self, db, almacen, producto, sin_corte):
         from app.services.dashboard_service import DashboardService
         _sesion(db, almacen, producto, 'SEGUNDO_CONTEO')
-        _sesion(db, almacen, producto, 'SEGUNDO_CONTEO')
+        _sesion(db, almacen, _otro_producto(db), 'SEGUNDO_CONTEO')
         raiz = _sesion(db, almacen, producto, 'DESCUADRE', nacio=datetime.utcnow() - timedelta(hours=30))
         # El CC2 que resolvió queda en DESCUADRE para siempre: no es una decisión.
         _sesion(db, almacen, producto, 'DESCUADRE', es_hijo=True, origen=raiz.id)
@@ -1033,7 +1045,7 @@ class TestDashboard:
     def test_la_cola_desde_el_corte_y_con_edad(self, db, almacen, producto, con_corte):
         from app.services.dashboard_service import DashboardService
         _sesion(db, almacen, producto, 'PENDIENTE', nacio=datetime(2026, 4, 2))
-        _sesion(db, almacen, producto, 'PENDIENTE', nacio=datetime.utcnow() - timedelta(hours=5))
+        _sesion(db, almacen, _otro_producto(db), 'PENDIENTE', nacio=datetime.utcnow() - timedelta(hours=5))
         con_corte('2026-06-01')
         k = DashboardService.kpis_operativos(almacen.id)
         assert k['conteo']['pendientes'] == 1 and k['conteo']['antes_del_corte'] == 1
